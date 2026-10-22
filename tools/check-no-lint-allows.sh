@@ -47,4 +47,4 @@ if [[ -z "${interpreter}" ]]; then
   exit 1
 fi
 
-exec "${interpreter}" "${script_dir}/check_no_lint_allows.py"
+exec "${interpreter}" -X utf8 "${script_dir}/check_no_lint_allows.py"

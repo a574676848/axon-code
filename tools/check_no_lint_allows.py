@@ -23,6 +23,13 @@ SKIP_SEGMENTS = ("/target/", "/node_modules/", "/.git/")
 ALLOW_PATTERN = re.compile(r"^\s*#!?\[\s*allow\s*\(([^)]*)\)")
 ALLOWLIST_PATH = Path(__file__).resolve().parent / "lint-allow-allowlist.txt"
 
+# Windows runner 的 stdout 默认使用 cp1252，直接打印中文会抛 UnicodeEncodeError。
+# 显式切到 UTF-8，使三平台输出一致，且不因 runner 的 locale 设置而失败。
+for _stream in (sys.stdout, sys.stderr):
+    _reconfigure = getattr(_stream, "reconfigure", None)
+    if _reconfigure is not None:
+        _reconfigure(encoding="utf-8", errors="replace")
+
 
 def load_allowlist() -> dict[tuple[str, str], int]:
     """读取白名单，返回 (相对路径, lint) 到登记次数的映射。"""

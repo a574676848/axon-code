@@ -68,6 +68,7 @@ crates/
 | **架构合规性** | `pwsh -File tools/verify-architecture.ps1` | 校验洋葱分层、命名一致性、单文件 ≤ 700 行 |
 | **文档与链接** | `pwsh -File tools/verify-docs.ps1` | 校验全仓 Markdown 零坏链、UTF-8 without BOM |
 | **桌面 UI 契约** | `pwsh -File tools/verify-ui-contract.ps1` | 校验无破折号、无全局滚动监听、动效与令牌合规 |
+| **编译期 lint 豁免** | `python tools/check_no_lint_allows.py` | 未登记的 `#[allow(...)]` 与 `#![allow(...)]` 一律失败，白名单见 `tools/lint-allow-allowlist.txt` |
 
 ### 桌面端开发与构建（`crates/axon-desktop/ui`）
 
