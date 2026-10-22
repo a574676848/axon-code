@@ -1,0 +1,11 @@
+# 编译期 lint 豁免白名单。
+#
+# 格式：仓库相对路径|lint 名称|登记理由（三段缺一不可）
+# 路径统一使用 / 分隔；lint 名称与源码中 #![allow(...)] / #[allow(...)] 的写法一致。
+# 新增条目必须写明无法在本轮消除的原因，脚本会拒绝没有理由的登记。
+#
+# 校验：python tools/check_no_lint_allows.py
+
+crates/axon-cli/src/workbench_http_adapter.rs|dead_code|with_answer_service 仅在启用问答注入的构建路径中被调用，feature 裁剪后该 setter 在部分目标里无调用点
+crates/axon-tui-runtime/src/loop/agent_tui/bottom_view/question.rs|dead_code|call_id、lane_id、deadline_at_ms 供测试与快照校验读取内部状态，非测试构建中无调用点
+crates/axon-session/src/ports/agent_continuation_store.rs|clippy::too_many_arguments|AgentContinuationRecord::pending 是已固化的构造契约，拆分参数会改变全部调用方的可读性

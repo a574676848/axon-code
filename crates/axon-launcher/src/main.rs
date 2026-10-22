@@ -9,8 +9,6 @@
 //! 命令行 launcher 使用控制台子系统，用户在已有终端输入 axon 时直接复用当前终端；
 //! 桌面入口通过 desktop 参数转发到工作台。
 
-#![allow(unsafe_code)]
-
 use serde::Deserialize;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
