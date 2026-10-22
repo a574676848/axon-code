@@ -14,19 +14,20 @@ import { ChevronRightIcon, SpinnerIcon } from '../../icons';
  */
 
 /**
- * 标签列宽度：两字标签（思考、执行、匹配、读取）的固定宽度。
+ * 标签列：按内容展开，不设固定宽度，也不截断。
  *
- * 不再用一个明显大于文字的 56px 列把标签与内容推开；标签之后紧跟一个圆点，
- * 恢复「指令 · 内容」的原始读法，同时所有行头的内容仍落在同一条竖线。
+ * 过程指令不只有两个字：终端执行、作业输出、更新计划都是四个字。
+ * 此前用一个 28px 的固定列，长指令会被截成「终...」「作...」；这里改成
+ * 内容宽度加不换行，正文缩进只锚定标签起点，因此长标签只影响右侧标题，
+ * 不会把展开正文推离指令左轴。
  */
-const LABEL_COLUMN = 'w-7 shrink-0';
+const LABEL_COLUMN = 'shrink-0 whitespace-nowrap';
 /**
  * 展开后正文的缩进。
  *
- * 正文与「指令」列对齐，而不是与右侧标题对齐：
- * 行头标签从 40px 开始（外 2px + 箭头 12 + 间距 6 + 图标 14 + 间距 6），
+ * 正文与「指令」标签的左轴对齐：外 2px + 箭头 12 + 间距 6 + 图标 14 + 间距 6 = 40px。
  * 引导线放在 34px（图标右缘），线宽 2px，再留 4px，正文正好从 40px 开始。
- * 这样展开内容直接落在「思考」「执行」这些指令下方，不再向右缩进到标题列。
+ * 标签按内容展开，宽度不参与这个计算，因此「终端执行」这类四字指令不会把正文推走。
  */
 export const DISCLOSURE_BODY_INDENT = 'ml-[34px]';
 
@@ -113,7 +114,7 @@ export const DisclosureRow: React.FC<DisclosureRowProps> = ({
       )}
       {label !== undefined && label.length > 0 && (
         <span
-          className={`${LABEL_COLUMN} truncate text-row ${danger ? 'text-danger' : 'text-text-primary'}`}
+          className={`${LABEL_COLUMN} text-row ${danger ? 'text-danger' : 'text-text-primary'}`}
         >
           {label}
         </span>
