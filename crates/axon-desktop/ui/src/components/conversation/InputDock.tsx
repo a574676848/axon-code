@@ -304,7 +304,9 @@ export const InputDock: React.FC<InputDockProps> = ({
     // 引用的正文照旧展示给用户，只有真正发出去的正文带上结构化输入块。
     // 链接占位在这里展开回原始地址：模型与消息记录拿到的都是一段完整 URL。
     const outgoing = links.expand(text);
-    onSubmit(outgoing, attachments, structuredInputBlock(outgoing, references.references));
+    // 附件同样进结构化输入块：只有附件、没有正文时，它就是这条消息的正文。
+    const paths = attachments.map((attachment) => attachment.path);
+    onSubmit(outgoing, attachments, structuredInputBlock(outgoing, references.references, paths));
     // 与 TUI 同一份历史：记下来，之后按上键就能取回（含发送失败的那一次）。
     recall.record(outgoing, setLocalError);
     // 清空草稿并丢弃撤销历史：这一份已经发出去了，撤销它只会让人以为消息没发出去。

@@ -152,7 +152,7 @@ const UserBubble: React.FC<{
           <MessageActionButton
             label="重新发送"
             title="重新发送这条消息"
-            onClick={() => actions.retry(text)}
+            onClick={() => actions.retry(text, attachments)}
           >
             <RetryIcon size={14} />
           </MessageActionButton>

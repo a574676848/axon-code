@@ -342,9 +342,31 @@ fn gateway_status_message(status: u16, body: &str) -> String {
         format!("（{code}）")
     };
     match status {
-        401 | 403 => format!("网关拒绝访问：凭据缺失或不匹配{suffix}"),
+        // 401 是凭据问题，403 是网关入口策略拒绝了这条事件（字段、附件或时效不合规）：
+        // 两者的修复动作不同，共用一句「凭据不匹配」会把内容问题报成配置问题。
+        401 => format!("网关拒绝访问：凭据缺失或不匹配{suffix}"),
+        403 if code == "event_rejected" => {
+            format!("网关拒绝了这条消息：内容、附件或时效不合规{suffix}")
+        }
+        403 => format!("网关拒绝访问：凭据缺失或不匹配{suffix}"),
         404 => format!("网关不含该接口，后台服务版本可能过旧{suffix}"),
         429 => format!("网关繁忙，请稍后重试{suffix}"),
         _ => format!("网关返回状态码 {status}{suffix}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gateway_status_message;
+
+    #[test]
+    fn credential_and_ingress_rejections_give_different_advice() {
+        let unauthorized = gateway_status_message(401, r#"{"error":"unauthorized"}"#);
+        assert!(unauthorized.contains("凭据"), "{unauthorized}");
+
+        let rejected = gateway_status_message(403, r#"{"error":"event_rejected"}"#);
+        assert!(rejected.contains("内容、附件或时效"), "{rejected}");
+        assert!(!rejected.contains("凭据"), "{rejected}");
+        assert!(rejected.contains("event_rejected"), "{rejected}");
     }
 }

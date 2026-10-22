@@ -1,4 +1,5 @@
 import React from 'react';
+import type { AttachmentRef } from '../../conversation/transcript';
 
 /*
  * 时间线单元可用的行内动作。
@@ -8,8 +9,13 @@ import React from 'react';
  */
 
 export interface ConversationActions {
-  /** 重新发送一条用户消息。 */
-  retry: (text: string) => void;
+  /**
+   * 重新发送一条用户消息。
+   *
+   * 附件必须随消息一起重发：只带图片的消息正文是空的，丢掉附件就等于把这条消息
+   * 变成了一条空消息，重发只会换来一句「消息内容不能为空」。
+   */
+  retry: (text: string, attachments: readonly AttachmentRef[]) => void;
   /** 在右侧栏打开工作区内的一个文件。 */
   openFile: (path: string) => void;
   /** 在右侧栏打开某一轮的改动对比，并落到该轮第 index 个文件。 */

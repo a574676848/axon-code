@@ -436,6 +436,9 @@ export function useConversation(target: ConversationTarget | null): Conversation
         setSubmitError(message);
         throw new Error(message);
       }
+      // 服务端会把正文首尾的空白裁掉：界面若留着它，回放就认领不上这一格，
+      // 同一条消息会在时间线上多出一个永远等不到回复的气泡。
+      const visibleText = text.trim();
       const workspace = laneCapability.workspaceId ?? '';
       const destination = laneCapability.destination ?? '';
       setSubmitting(true);
@@ -452,16 +455,16 @@ export function useConversation(target: ConversationTarget | null): Conversation
       const localTurnId = `pending-${nowMs}`;
       if (streaming) {
         // 运行中：注入当前轮次排队，等安全边界插入，不新开一轮。
-        dispatch({ type: 'steer', text, nowMs, attachments });
+        dispatch({ type: 'steer', text: visibleText, nowMs, attachments });
       } else {
-        dispatch({ type: 'submit', turnId: localTurnId, text, nowMs, attachments });
+        dispatch({ type: 'submit', turnId: localTurnId, text: visibleText, nowMs, attachments });
       }
       try {
         const receipt = await ipc.conversationSubmit(
           workspace,
           destination,
           // 结构化输入只进入发出去的正文：正文气泡仍显示用户自己敲的那一段。
-          structuredInput.length > 0 ? `${text}${structuredInput}` : text,
+          structuredInput.length > 0 ? `${visibleText}${structuredInput}` : visibleText,
           attachments.map((attachment) => attachment.path),
         );
         if (!streaming) {
@@ -484,7 +487,7 @@ export function useConversation(target: ConversationTarget | null): Conversation
         dispatch({
           type: 'submit-failed',
           turnId: streaming ? null : localTurnId,
-          text,
+          text: visibleText,
           message,
           nowMs: Date.now(),
         });

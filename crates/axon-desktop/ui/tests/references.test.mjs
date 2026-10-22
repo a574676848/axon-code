@@ -90,3 +90,27 @@ test('回放时只展示用户敲的那一段，不展示结构化输入块', ()
     assert.equal(visibleUserText(lookalike), lookalike);
     assert.equal(visibleUserText('普通消息'), '普通消息');
 });
+
+test('只有附件、没有正文时，附件路径成为这条消息的正文', () => {
+    const paths = ['C:\\tmp\\shot.png', 'C:\\tmp\\notes.txt'];
+    assert.equal(
+        structuredInputBlock('', [], paths),
+        '[结构化输入]\n已附加文件：C:\\tmp\\shot.png\n已附加文件：C:\\tmp\\notes.txt',
+    );
+    // 有正文时不再追加：消息本身已经说明了意图。
+    assert.equal(structuredInputBlock('看下这张图', [], paths), '');
+    // 没有附件也没有引用：这条消息确实没有可提交的内容。
+    assert.equal(structuredInputBlock('', [], []), '');
+});
+
+test('回放时同样剥掉附件块，气泡里只剩附件卡', () => {
+    assert.equal(visibleUserText('[结构化输入]\n已附加文件：/tmp/a.png'), '');
+    // 提交链路会裁掉前导空白，附带说明的消息块也可能跟在正文之后。
+    assert.equal(
+        visibleUserText('看下这张图\n\n[结构化输入]\n已附加文件：/tmp/a.png'),
+        '看下这张图',
+    );
+    // 同名标题后面不是块行时不能误剥。
+    const lookalike = '[结构化输入]\n这是我的说明';
+    assert.equal(visibleUserText(lookalike), lookalike);
+});

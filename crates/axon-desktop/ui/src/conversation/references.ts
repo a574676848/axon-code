@@ -27,6 +27,8 @@ const DIRECTORY_SCORE_BONUS = 8;
 const STRUCTURED_INPUT_TITLE = '[结构化输入]';
 /** 文件引用的展示前缀；与 TUI 提交投影逐字一致。 */
 const REFERENCE_LINE_PREFIX = '已引用文件：';
+/** 入站附件的展示前缀：只有附件、没有正文时，它承担这条消息的正文。 */
+const ATTACHMENT_LINE_PREFIX = '已附加文件：';
 
 /** 正文里一个活跃的 `@` 引用 token。 */
 export interface ReferenceToken {
@@ -124,21 +126,33 @@ export function referenceLabel(relativePath: string): string {
 }
 
 /**
- * 提交时把仍然可见的引用投影成结构化输入块。
+ * 提交时把引用与附件投影成结构化输入块。
  *
- * 与 TUI 的 `append_tui_mentions` 逐字一致（`[结构化输入]` 段 + 每条
+ * 引用部分与 TUI 的 `append_tui_mentions` 逐字一致（`[结构化输入]` 段 + 每条
  * `已引用文件：<相对路径>`）；正文里已经看不到的引用不提交，重复引用只提交一次。
+ *
+ * 只有附件、没有正文时，气泡上没有可读正文，而接口要求每条事件都带正文：这一段
+ * 改由 `已附加文件：<绝对路径>` 行承担，模型因此拿到附件的真实位置，不再因为正文
+ * 为空被入口策略拒收。它同样属于结构化输入，回放时由 [`visibleUserText`] 剥掉，
+ * 用户看到的气泡仍然只有附件卡。
  */
 export function structuredInputBlock(
   text: string,
   references: readonly string[],
+  attachments: readonly string[] = [],
 ): string {
   const visible = references.filter(
     (path, index) => references.indexOf(path) === index && text.includes(referenceLabel(path)),
   );
-  if (visible.length === 0) return '';
-  const lines = visible.map((path) => `${REFERENCE_LINE_PREFIX}${path}`);
-  return `\n\n${STRUCTURED_INPUT_TITLE}\n${lines.join('\n')}`;
+  if (visible.length > 0) {
+    const lines = visible.map((path) => `${REFERENCE_LINE_PREFIX}${path}`);
+    return `\n\n${STRUCTURED_INPUT_TITLE}\n${lines.join('\n')}`;
+  }
+  if (text.trim().length > 0 || attachments.length === 0) return '';
+  // 整条正文就是这一段块，因此标题落在第 0 位：提交链路会裁掉前置空白，
+  // 这里不写前导空行，回放时才剥得干净。
+  const lines = attachments.map((path) => `${ATTACHMENT_LINE_PREFIX}${path}`);
+  return `${STRUCTURED_INPUT_TITLE}\n${lines.join('\n')}`;
 }
 
 /**
@@ -156,11 +170,29 @@ export function visibleUserText(content: string): string {
 function stripStructuredInputBlock(content: string): string {
   const marker = `\n\n${STRUCTURED_INPUT_TITLE}\n`;
   const cut = content.lastIndexOf(marker);
-  if (cut < 0) return content;
-  // 只有当标记之后整段都是引用行时才算结构化输入块；正文里恰好写了同名标题的情况
-  // 不能被误剥掉。
-  const tail = content.slice(cut + marker.length);
-  const isReferenceBlock =
-    tail.length > 0 && tail.split('\n').every((line) => line.startsWith(REFERENCE_LINE_PREFIX));
-  return isReferenceBlock ? content.slice(0, cut) : content;
+  if (cut >= 0) {
+    const tail = content.slice(cut + marker.length);
+    if (isStructuredInputLines(tail)) return content.slice(0, cut);
+  }
+  // 只有附件、没有正文时整条正文就是这个块：提交链路会裁掉前置空白，
+  // 标题因此可能落在第 0 位。
+  const head = `${STRUCTURED_INPUT_TITLE}\n`;
+  if (!content.startsWith(head)) return content;
+  return isStructuredInputLines(content.slice(head.length)) ? '' : content;
+}
+
+/**
+ * 块尾部的判据：整段都是引用行或附加行才算结构化输入块。
+ *
+ * 正文里恰好写了同名标题、后面跟着自己的话时不算块，原样保留。
+ */
+function isStructuredInputLines(tail: string): boolean {
+  return (
+    tail.length > 0 &&
+    tail
+      .split('\n')
+      .every(
+        (line) => line.startsWith(REFERENCE_LINE_PREFIX) || line.startsWith(ATTACHMENT_LINE_PREFIX),
+      )
+  );
 }

@@ -147,6 +147,20 @@ test('带 @ 引用的消息按可见正文认领，不产生重复气泡', () =>
     assert.equal(state.turns[0].index['user-event'], 0);
 });
 
+test('只带图片的消息按附加块认领，气泡里仍是那一张图', () => {
+    const image = { path: 'C:\\tmp\\shot.png', name: 'shot.png', image: true };
+    const submitted = '[结构化输入]\n已附加文件：C:\\tmp\\shot.png';
+    let state = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'submit', turnId: 'local', text: '', nowMs: 1, attachments: [image],
+    });
+    state = applyUserMessage(state, 0, 'user-event', submitted, 2);
+
+    assert.equal(state.turns[0].cells.length, 1, '服务端事件必须认领本地那一格');
+    assert.equal(state.turns[0].cells[0].text, '', '气泡里没有正文，只有附件卡');
+    assert.deepEqual(state.turns[0].cells[0].attachments, [image]);
+    assert.equal(state.turns[0].index['user-event'], 0);
+});
+
 test('运行中继续发送进入排队，durable 事件到达才算落地', () => {
     let state = conversationReducer(INITIAL_CONVERSATION, {
         type: 'open-turn', turnId: 'interaction-1', nowMs: 0,

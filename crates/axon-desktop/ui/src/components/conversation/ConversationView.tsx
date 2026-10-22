@@ -18,6 +18,7 @@ import { SidebarRight } from '../../sidebarRight/SidebarRight';
 import { changesAddress, fileAddress } from '../../sidebarRight/registry';
 import { useRailLayout } from '../../sidebarRight/useRailLayout';
 import { ConversationActionsProvider, type ConversationActions } from './actions';
+import { structuredInputBlock } from '../../conversation/references';
 import {
   changedFilesOf,
   workingStatusPrimary,
@@ -291,8 +292,14 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   conversationRef.current = conversation;
   const actions = React.useMemo<ConversationActions>(
     () => ({
-      retry: (text: string) => {
-        void conversationRef.current.submit(text);
+      retry: (text: string, attachments: readonly AttachmentRef[]) => {
+        // 附件重新走一次结构化输入块：只带图片的消息没有正文，块就是它的正文。
+        const paths = attachments.map((attachment) => attachment.path);
+        void conversationRef.current.submit(
+          text,
+          [...attachments],
+          structuredInputBlock(text, [], paths),
+        );
       },
       openFile: (path: string) => {
         // 打开文件即打开对应的资源 tab：面板会自己展开，不需要先切视图。
