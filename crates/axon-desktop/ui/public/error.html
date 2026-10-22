@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>界面遇到问题 · Axon</title>
+    <!--
+      界面卡死或被系统回收时的兜底引导页。
+
+      这一页必须在**界面代码完全不可用**的前提下渲染：不引用应用 bundle，
+      不引用任何外部资源，字体与图形都随包发布。
+      样式里的取值与 src/tokens.css 保持一致，改动主题时两处要一起改。
+    -->
+    <style>
+      @font-face {
+        font-family: 'Axon Sans';
+        src: url('./axon-sans.woff2') format('woff2');
+        font-weight: 400 600;
+        font-display: swap;
+      }
+
+      :root {
+        --color-canvas: #ffffff;
+        --color-surface: #ffffff;
+        --color-surface-sunken: #f5f6f7;
+        --color-hover: rgba(38, 49, 72, 0.06);
+        --color-border-hairline: rgba(0, 0, 0, 0.04);
+        --color-border-strong: rgba(0, 0, 0, 0.12);
+        --color-text-primary: #0f1115;
+        --color-text-secondary: #61666b;
+        --color-text-tertiary: #6b7075;
+        --color-primary: #0f1115;
+        --color-primary-hover: #43454a;
+        --color-danger: #ec1313;
+        --color-danger-soft: rgba(236, 19, 19, 0.12);
+        --radius-sm: 8px;
+        --radius-md: 12px;
+        --radius-lg: 18px;
+        --radius-full: 9999px;
+        --sh-panel: 0 18px 48px rgba(15, 23, 42, 0.08), 0 2px 8px rgba(15, 23, 42, 0.04);
+        --font-sans: 'Axon Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+          'Microsoft YaHei', sans-serif;
+        --font-mono: 'Axon Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 56px 40px;
+        background-color: var(--color-canvas);
+        /* 一层极轻的径向底色：整屏有层次，而不是白底上孤零零一张卡。 */
+        background-image: radial-gradient(
+          120% 90% at 50% 0%,
+          rgba(38, 49, 72, 0.05) 0%,
+          rgba(38, 49, 72, 0) 62%
+        );
+        color: var(--color-text-primary);
+        font-family: var(--font-sans);
+        font-size: 16px;
+        line-height: 26px;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .card {
+        width: 100%;
+        max-width: 900px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 280px;
+        gap: 48px;
+        border: 1px solid var(--color-border-hairline);
+        border-radius: var(--radius-lg);
+        background-color: var(--color-surface);
+        padding: 48px 52px 44px;
+        box-shadow: var(--sh-panel);
+        /* 入场只动 transform 与 opacity：合成器友好，也不会在旧机器上抖。 */
+        animation: rise 220ms cubic-bezier(0.2, 0, 0, 1) both;
+      }
+
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(8px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .card {
+          animation: none;
+        }
+      }
+
+      /* 窄窗口退回单栏：分栏在窄屏只会把正文挤成一条。 */
+      @media (max-width: 860px) {
+        body {
+          padding: 32px 20px;
+        }
+
+        .card {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 28px;
+          padding: 30px 26px 26px;
+        }
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 30px;
+      }
+
+      .brand img {
+        width: 34px;
+        height: 34px;
+        border-radius: var(--radius-sm);
+      }
+
+      .brand span {
+        font-size: 17px;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+      }
+
+      .mark {
+        width: 56px;
+        height: 56px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: var(--radius-full);
+        background-color: var(--color-danger-soft);
+        color: var(--color-danger);
+        margin-bottom: 22px;
+      }
+
+      h1 {
+        margin: 0 0 14px;
+        font-size: 32px;
+        line-height: 44px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+
+      p {
+        margin: 0;
+        max-width: 46ch;
+        color: var(--color-text-secondary);
+        font-size: 16px;
+        line-height: 28px;
+      }
+
+      .reason {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 26px 0 0;
+        padding: 12px 14px;
+        border-radius: var(--radius-md);
+        background-color: var(--color-surface-sunken);
+        color: var(--color-text-tertiary);
+        font-size: 14px;
+        line-height: 20px;
+      }
+
+      .reason code {
+        font-family: var(--font-mono);
+        font-size: 13px;
+        color: var(--color-text-secondary);
+      }
+
+      .actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-top: 30px;
+      }
+
+      button {
+        font-family: inherit;
+        font-size: 15px;
+        height: 44px;
+        padding: 0 24px;
+        border-radius: var(--radius-md);
+        cursor: pointer;
+        /* 按下时只做轻微下压：与输入坞的按钮反馈同一套语言。 */
+        transition: background-color 100ms linear, transform 100ms linear;
+      }
+
+      button:active {
+        transform: translateY(1px);
+      }
+
+      button:focus-visible {
+        outline: 2px solid var(--color-text-primary);
+        outline-offset: 2px;
+      }
+
+      .primary {
+        border: 1px solid var(--color-primary);
+        background-color: var(--color-primary);
+        color: #ffffff;
+      }
+
+      .primary:hover {
+        background-color: var(--color-primary-hover);
+        border-color: var(--color-primary-hover);
+      }
+
+      .ghost {
+        border: 1px solid var(--color-border-strong);
+        background-color: var(--color-surface);
+        color: var(--color-text-primary);
+      }
+
+      .ghost:hover {
+        background-color: var(--color-hover);
+      }
+
+      .copied {
+        margin-left: 2px;
+        color: var(--color-text-tertiary);
+        font-size: 13px;
+      }
+
+      /* 右侧事实栏：把「重载会不会丢东西」一次说清，不必让读者自己猜。 */
+      .facts {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+        padding-left: 32px;
+        border-left: 1px solid var(--color-border-hairline);
+      }
+
+      @media (max-width: 860px) {
+        .facts {
+          gap: 16px;
+          padding-left: 0;
+          padding-top: 24px;
+          border-left: none;
+          border-top: 1px solid var(--color-border-hairline);
+        }
+      }
+
+      .fact dt {
+        margin-bottom: 4px;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+        color: var(--color-text-primary);
+      }
+
+      .fact dd {
+        margin: 0;
+        color: var(--color-text-tertiary);
+        font-size: 13px;
+        line-height: 21px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <section class="lead">
+        <div class="brand">
+          <img src="./axon-logo.svg" alt="" aria-hidden="true" />
+          <span>Axon</span>
+        </div>
+
+        <div class="mark" aria-hidden="true">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7.5v5.5" />
+            <path d="M12 16.4h.01" />
+          </svg>
+        </div>
+
+        <h1>界面遇到问题</h1>
+        <p id="detail">界面进程意外终止，需要重新加载才能继续。</p>
+
+        <div class="reason">
+          <span id="kind-label">原因未记录</span>
+          <code id="kind-code"></code>
+        </div>
+
+        <div class="actions">
+          <button type="button" class="primary" id="reload">重新加载界面</button>
+          <button type="button" class="ghost" id="copy">复制诊断信息</button>
+          <span class="copied" id="copied" hidden>已复制</span>
+        </div>
+      </section>
+
+      <aside class="facts">
+        <dl class="fact">
+          <dt>会话与历史</dt>
+          <dd>都保存在后台守护进程里，重新加载后照旧打开。</dd>
+        </dl>
+        <dl class="fact">
+          <dt>正在跑的任务</dt>
+          <dd>不依赖界面，会继续在后台推进。</dd>
+        </dl>
+        <dl class="fact">
+          <dt>若反复出现</dt>
+          <dd>先关掉占用内存较多的其它程序，再把这条会话与诊断信息一并反馈。</dd>
+        </dl>
+      </aside>
+    </main>
+
+    <script>
+      // 失败原因由宿主按失败类型拼进查询串；认不出来时按未记录处理。
+      const REASONS = {
+        'render-exited': {
+          detail: '界面的渲染进程被系统回收了，通常是本次打开的会话内容过大、内存不足。会话与运行状态都还在后台，重新加载即可继续。',
+          label: '渲染进程已退出',
+        },
+        'render-unresponsive': {
+          detail: '界面长时间没有响应，已被判定为卡死。会话与运行状态都还在后台，重新加载即可继续。',
+          label: '渲染进程无响应',
+        },
+        'memory-pressure': {
+          detail: '这个界面占用的内存增长过快，再继续下去会被系统回收。已先停在安全页：会话与运行状态都还在后台，重新加载即可继续。',
+          label: '界面内存占用过高',
+        },
+        'browser-exited': {
+          detail: '界面所在的浏览器进程意外退出，需要重新加载才能继续。',
+          label: '浏览器进程已退出',
+        },
+        'frame-render-exited': {
+          detail: '界面的子框架进程崩溃了，主进程仍在运行，重新加载即可恢复。',
+          label: '子框架进程已退出',
+        },
+        'utility-exited': {
+          detail: '界面的辅助进程退出，功能可能不完整，重新加载即可恢复。',
+          label: '辅助进程已退出',
+        },
+      };
+
+      const params = new URLSearchParams(location.search);
+      const kind = params.get('kind') || '';
+      const reason = REASONS[kind];
+      if (reason) {
+        document.getElementById('detail').textContent = reason.detail;
+        document.getElementById('kind-label').textContent = reason.label;
+      }
+      if (kind) document.getElementById('kind-code').textContent = kind;
+
+      // 用 replace 回应用根：错误页不该留在历史里，否则「后退」会回到它。
+      document.getElementById('reload').addEventListener('click', () => {
+        location.replace('./');
+      });
+
+      document.getElementById('copy').addEventListener('click', async () => {
+        const text = [
+          'Axon 界面异常',
+          '原因: ' + (reason ? reason.label : '未记录') + (kind ? ' (' + kind + ')' : ''),
+          '地址: ' + location.href,
+          '时间: ' + new Date().toISOString(),
+          '环境: ' + navigator.userAgent,
+        ].join('\n');
+        try {
+          await navigator.clipboard.writeText(text);
+          const hint = document.getElementById('copied');
+          hint.hidden = false;
+          setTimeout(() => {
+            hint.hidden = true;
+          }, 1800);
+        } catch {
+          // 剪贴板不可用时静默：这一页的首要任务是让用户回到界面。
+        }
+      });
+    </script>
+  </body>
+</html>

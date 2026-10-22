@@ -1,0 +1,292 @@
+[provider_auth]
+severity = "user_facing"
+action = "reconfigure"
+cell_kind = "runtime"
+http_statuses = [401, 403]
+markers = ["invalid_api_key", "unauthorized", "authentication", "incorrect api key"]
+
+[provider_auth.zh]
+title = "认证失败"
+message = "模型服务拒绝了当前凭据。"
+next_step = "检查 API Key、账号权限或重新运行 axon setup。"
+
+[provider_auth.en]
+title = "Authentication failed"
+message = "The model provider rejected the current credentials."
+next_step = "Check the API key, account permissions, or run axon setup again."
+
+[provider_rate_limit]
+severity = "recoverable"
+action = "retry"
+cell_kind = "runtime"
+http_statuses = [429]
+markers = ["rate_limit", "rate limit", "too many requests"]
+
+[provider_rate_limit.zh]
+title = "请求被限流"
+message = "模型服务暂时限制了请求频率。"
+next_step = "稍后重新提交，或切换到可用额度更高的模型。"
+
+[provider_rate_limit.en]
+title = "Rate limited"
+message = "The model provider is temporarily limiting request frequency."
+next_step = "Retry later, or switch to a model with more available quota."
+
+[provider_offline]
+severity = "recoverable"
+action = "retry"
+cell_kind = "runtime"
+http_statuses = [500, 502, 503, 504]
+markers = ["offline", "connection refused", "network unreachable", "timed out", "timeout", "bad gateway", "service unavailable", "gateway timeout"]
+
+[provider_offline.zh]
+title = "模型服务不可用"
+message = "当前模型服务或网络链路暂时不可用。"
+next_step = "检查网络与模型服务状态，或稍后重试。"
+
+[provider_offline.en]
+title = "Provider unavailable"
+message = "The model service or network path is temporarily unavailable."
+next_step = "Check network and provider status, or retry later."
+
+[provider_quota]
+severity = "user_facing"
+action = "reconfigure"
+cell_kind = "runtime"
+markers = ["insufficient_quota", "quota", "billing", "credit", "balance"]
+
+[provider_quota.zh]
+title = "额度不足"
+message = "当前账号或模型额度不足。"
+next_step = "检查账号额度、账单状态或切换模型。"
+
+[provider_quota.en]
+title = "Quota unavailable"
+message = "The current account or model quota is not available."
+next_step = "Check account quota, billing status, or switch models."
+
+[context_too_long]
+severity = "user_facing"
+action = "retry"
+cell_kind = "runtime"
+http_statuses = [413]
+markers = ["context_length_exceeded", "context window", "maximum context", "too many tokens", "token limit"]
+
+[context_too_long.zh]
+title = "上下文过长"
+message = "本次输入或会话上下文超过模型可处理范围。"
+next_step = "缩小输入、开启新会话，或减少需要携带的历史内容。"
+
+[context_too_long.en]
+title = "Context too long"
+message = "The prompt or conversation context is larger than the model can process."
+next_step = "Shorten the input, start a new session, or reduce retained history."
+
+[mcp_crash]
+severity = "recoverable"
+action = "retry"
+cell_kind = "runtime"
+markers = ["mcp crash", "mcp crashed", "mcp panic", "mcp transport closed", "mcp server closed", "mcp connection closed"]
+
+[mcp_crash.zh]
+title = "MCP 服务异常"
+message = "MCP server 在调用期间退出或连接中断。"
+next_step = "重启对应 MCP server 后重新提交。"
+
+[mcp_crash.en]
+title = "MCP service failed"
+message = "The MCP server exited or disconnected during the call."
+next_step = "Restart the MCP server and retry the request."
+
+[snapshot_corrupt]
+severity = "user_facing"
+action = "new_session"
+cell_kind = "snapshot"
+markers = ["snapshot_corrupt", "snapshot corrupt", "invalid snapshot", "invalid data", "expected value"]
+
+[snapshot_corrupt.zh]
+title = "会话快照已损坏"
+message = "当前会话快照无法可靠恢复。"
+next_step = "新建会话；如需排查，可生成报告并保留损坏快照。"
+
+[snapshot_corrupt.en]
+title = "Session snapshot is corrupt"
+message = "The current session snapshot cannot be restored reliably."
+next_step = "Start a new session; generate a report and keep the snapshot if investigation is needed."
+
+[snapshot_permission]
+severity = "user_facing"
+action = "reconfigure"
+cell_kind = "snapshot"
+markers = ["snapshot_permission", "permission denied", "access is denied", "readonly", "read-only"]
+
+[snapshot_permission.zh]
+title = "会话快照无法访问"
+message = "Axon 没有权限读取或写入会话快照。"
+next_step = "检查工作区权限、杀毒拦截或只读目录设置。"
+
+[snapshot_permission.en]
+title = "Session snapshot is not accessible"
+message = "Axon cannot read or write the session snapshot."
+next_step = "Check workspace permissions, security software, or read-only directory settings."
+
+[provider_tool_call_incomplete]
+severity = "recoverable"
+action = "retry"
+cell_kind = "runtime"
+markers = ["provider_tool_call_incomplete"]
+
+[provider_tool_call_incomplete.zh]
+title = "模型响应不完整"
+message = "模型服务返回了不完整的工具调用，本次未执行该调用。"
+next_step = "从当前会话继续，或切换模型后重新提交。"
+
+[provider_tool_call_incomplete.en]
+title = "Model response incomplete"
+message = "The model provider returned an incomplete tool call, so the call was not executed."
+next_step = "Continue from the current session, or switch models and submit again."
+
+[runtime_configuration]
+severity = "user_facing"
+action = "reconfigure"
+cell_kind = "runtime"
+markers = ["configuration", "runtime_configuration"]
+
+[runtime_configuration.zh]
+title = "配置不可用"
+message = "当前运行配置无法完成请求。"
+next_step = "运行 axon setup，或检查模型、provider 与工作区配置。"
+
+[runtime_configuration.en]
+title = "Configuration unavailable"
+message = "The current runtime configuration cannot complete the request."
+next_step = "Run axon setup, or check model, provider, and workspace configuration."
+
+[runtime_schema_mismatch]
+severity = "user_facing"
+action = "reconfigure"
+cell_kind = "runtime"
+markers = ["runtime_adapter_schema_mismatch", "schema mismatch"]
+
+[runtime_schema_mismatch.zh]
+title = "RuntimeAdapter 版本不匹配"
+message = "当前 runtime adapter 与 TUI 契约版本不一致。"
+next_step = "升级 Axon runtime adapter 后重新启动。"
+
+[runtime_schema_mismatch.en]
+title = "RuntimeAdapter version mismatch"
+message = "The runtime adapter does not match the TUI contract version."
+next_step = "Upgrade the Axon runtime adapter and restart."
+
+[runtime_interrupted]
+severity = "hint"
+action = "none"
+cell_kind = "runtime"
+markers = ["interrupted", "cancelled", "canceled", "user interrupted"]
+
+[runtime_interrupted.zh]
+title = "任务已取消"
+message = "当前任务已按用户操作停止。"
+next_step = ""
+
+[runtime_interrupted.en]
+title = "Task cancelled"
+message = "The current task was stopped by user action."
+next_step = ""
+
+[runtime_worker_panic]
+severity = "fatal"
+action = "new_session"
+cell_kind = "runtime"
+markers = ["runtime_worker_panic", "worker panic", "panic"]
+
+[runtime_worker_panic.zh]
+title = "Runtime worker 已崩溃"
+message = "当前任务运行线程异常终止。"
+next_step = "新建会话后重试；如重复出现，请生成报告。"
+
+[runtime_worker_panic.en]
+title = "Runtime worker crashed"
+message = "The current runtime worker terminated unexpectedly."
+next_step = "Start a new session and retry; generate a report if it repeats."
+
+[cell_payload_missing_field]
+severity = "internal"
+action = "inspect_details"
+cell_kind = "cell_payload"
+markers = ["cell_payload_missing_field", "missing field"]
+
+[cell_payload_missing_field.zh]
+title = "渲染数据不完整"
+message = "某个结构化 cell 缺少必需字段，已阻止不可靠渲染。"
+next_step = "生成报告并附带 debug dump。"
+
+[cell_payload_missing_field.en]
+title = "Render data is incomplete"
+message = "A structured cell is missing required data, so unreliable rendering was blocked."
+next_step = "Generate a report with the debug dump."
+
+[terminal_io]
+severity = "fatal"
+action = "exit"
+cell_kind = "terminal"
+markers = ["terminal_io_failed", "terminal io", "terminal i/o"]
+
+[terminal_io.zh]
+title = "终端 I/O 失败"
+message = "当前终端无法继续可靠绘制。"
+next_step = "退出 TUI 后检查终端环境。"
+
+[terminal_io.en]
+title = "Terminal I/O failed"
+message = "The current terminal can no longer render reliably."
+next_step = "Exit the TUI and check the terminal environment."
+
+[runtime_generic]
+severity = "recoverable"
+action = "retry"
+cell_kind = "runtime"
+markers = ["runtime"]
+
+[runtime_generic.zh]
+title = "运行时失败"
+message = "当前任务未能完成，但会话仍可继续。"
+next_step = "调整输入或稍后重新提交。"
+
+[runtime_generic.en]
+title = "Runtime failed"
+message = "The current task did not complete, but the session can continue."
+next_step = "Adjust the input or retry later."
+
+[unknown]
+severity = "user_facing"
+action = "inspect_details"
+cell_kind = "runtime"
+markers = []
+
+[unknown.zh]
+title = "运行失败"
+message = "操作未完成，底层错误已收起以避免展示调试噪声。"
+next_step = "生成报告或查看结构化详情。"
+
+[unknown.en]
+title = "Run failed"
+message = "The operation did not complete; low-level debug text was hidden."
+next_step = "Generate a report or inspect structured details."
+
+[memory_persistence]
+severity = "recoverable"
+action = "retry"
+cell_kind = "runtime"
+use_raw_message = true
+markers = ["memory_persistence"]
+
+[memory_persistence.zh]
+title = "Memory 持久化失败"
+message = "Memory 数据未能写入本地存储。"
+next_step = "检查 Axon 数据目录权限、磁盘空间和 SQLite 文件状态后重试。"
+
+[memory_persistence.en]
+title = "Memory persistence failed"
+message = "Memory data could not be written to local storage."
+next_step = "Check Axon data directory permissions, disk space, and SQLite state, then retry."

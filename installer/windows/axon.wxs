@@ -1,0 +1,220 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Axon WiX 5 MSI 安装包配方
+  构建命令（CI 中执行）：
+    wix build axon.wxs -d "Version=$(VERSION)" -d "BinaryPath=$(BINARY_PATH)" -d "SoulTemplatePath=$(SOUL_TEMPLATE_PATH)" -o axon-$(VERSION)-x86_64-pc-windows-msvc.msi
+
+  特性：
+    - 标准 Add/Remove Programs 注册（控制面板可见、可卸载）
+    - 用户级 PATH 写入（无需管理员权限的 Per-User 安装变体）
+    - 升级切换 current.json，并按 CLI 版本复用 `versions/<Version>` 目录
+    - 支持静默安装：msiexec /i axon.msi /quiet
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package
+    Name="Axon"
+    Manufacturer="Alex.Z"
+    Version="$(Version)"
+    UpgradeCode="3E8A1F2B-7C4D-4A6E-B9F0-1D2E3F4A5B6C"
+    Language="2052"
+    Codepage="936"
+    InstallerVersion="500"
+    Scope="perUser"
+    Compressed="yes">
+
+    <!-- 升级策略：版本目录名只使用 CLI 版本；由安装器负责先停服务再替换目录。 -->
+    <MajorUpgrade
+      Schedule="afterInstallInitialize"
+      DowngradeErrorMessage="已安装更新版本的 Axon，无法降级。请先卸载当前版本。" />
+
+    <!-- 媒体 -->
+    <Media Id="1" Cabinet="axon.cab" EmbedCab="yes" />
+
+    <!-- 目录结构：TARGETDIR 在 AppSearch 阶段绑定当前用户 USERPROFILE。 -->
+    <StandardDirectory Id="TARGETDIR">
+      <Directory Id="AXON_USER_ROOT" Name=".axon">
+        <Directory Id="INSTALLDIR" Name="bin">
+          <!-- 快捷方式指向稳定 launcher，而不是某个具体版本的二进制。 -->
+          <Directory Id="SHORTCUTDIR" Name="shortcuts" />
+          <Directory Id="VERSIONSDIR" Name="versions">
+            <Directory Id="VERSIONDIR" Name="$(Version)" />
+          </Directory>
+          <Directory Id="LAUNCHERDIR" Name="launcher" />
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AxonMenuDir" Name="Axon" />
+    </StandardDirectory>
+    <StandardDirectory Id="DesktopFolder" />
+
+    <!-- 每个 CLI 版本使用固定目录，服务和 PATH 均通过稳定 launcher 进入。 -->
+    <ComponentGroup Id="AxonBinaries" Directory="VERSIONDIR">
+      <Component Id="AxonExe" Guid="1A2B3C4D-5E6F-7081-92A3-B4C5D6E7F809">
+        <File
+          Id="AxonExeFile"
+          Name="axon.exe"
+          Source="$(BinaryPath)"
+          KeyPath="yes" />
+      </Component>
+
+      <Component Id="AxonDesktopExe" Guid="2B3C4D5E-6F70-8192-A3B4-C5D6E7F8091A">
+        <File
+          Id="AxonDesktopExeFile"
+          Name="axon-desktop.exe"
+          Source="$(DesktopBinaryPath)"
+          KeyPath="yes" />
+      </Component>
+
+      <!--
+        程序文件随 MSI 生命周期管理；用户配置和运行数据位于安装目录之外，卸载不会触碰。
+      -->
+      <Component Id="AxonLauncher" Directory="LAUNCHERDIR" Guid="C3D4E5F6-A7B8-9012-CDEF-123456789012">
+        <File Id="AxonLauncherFile" Name="axon-launcher.exe" Source="$(LauncherPath)" KeyPath="yes" />
+      </Component>
+
+      <Component Id="AxonCommand" Directory="INSTALLDIR" Guid="D4E5F6A7-B8C9-0123-DEF0-123456789012">
+        <File Id="AxonCommandFile" Name="axon.cmd" Source="installer\windows\axon.cmd" KeyPath="yes" />
+      </Component>
+
+      <Component Id="AxonCurrentManifest" Directory="INSTALLDIR" Guid="E5F6A7B8-C9D0-1234-EF01-234567890123">
+        <File Id="AxonCurrentManifestFile" Name="current.json" Source="$(CurrentManifestPath)" KeyPath="yes" />
+      </Component>
+
+      <!-- 组件：用户级 PATH 环境变量 -->
+      <Component Id="AxonPath" Guid="B2C3D4E5-F6A7-8901-BCDE-F12345678901">
+        <Environment
+          Id="AxonPathEntry"
+          Name="PATH"
+          Value="[INSTALLDIR]"
+          Permanent="no"
+          Part="last"
+          Action="set"
+          System="no" />
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\Axon"
+          Name="InstallDir"
+          Value="[INSTALLDIR]"
+          Type="string"
+          KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- 功能定义 -->
+    <Feature Id="AxonCore" Title="Axon 核心" Level="1">
+      <ComponentGroupRef Id="AxonBinaries" />
+      <ComponentGroupRef Id="AxonNotificationIdentity" />
+    </Feature>
+
+    <!--
+      桌面快捷方式做成独立功能：安装向导里可以勾掉，
+      不需要的人不必在桌面上多一个图标。
+    -->
+    <Feature Id="DesktopShortcut" Title="桌面快捷方式" Description="在桌面创建 Axon 启动图标。" Level="1">
+      <ComponentGroupRef Id="AxonShortcuts" />
+    </Feature>
+
+    <ComponentGroup Id="AxonShortcuts" Directory="SHORTCUTDIR">
+      <Component Id="AxonDesktopShortcut" Guid="F6A7B8C9-D0E1-2345-F012-345678901234">
+        <!--
+          快捷方式进的是桌面子命令，而不是 launcher 的默认行为：
+          默认行为是命令行入口，点开只会看到 CLI 帮助，不是「打开应用」。
+        -->
+        <Shortcut
+          Id="AxonDesktopLink"
+          Directory="DesktopFolder"
+          Name="Axon"
+          Description="Axon 工作台"
+          Target="[LAUNCHERDIR]axon-launcher.exe"
+          Arguments="desktop"
+          WorkingDirectory="INSTALLDIR"
+          Icon="AxonIco" />
+        <Shortcut
+          Id="AxonStartMenuLink"
+          Directory="AxonMenuDir"
+          Name="Axon"
+          Description="Axon 工作台"
+          Target="[LAUNCHERDIR]axon-launcher.exe"
+          Arguments="desktop"
+          WorkingDirectory="INSTALLDIR"
+          Icon="AxonIco" />
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\Axon"
+          Name="Shortcuts"
+          Value="1"
+          Type="integer"
+          KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- 图标资源：快捷方式与「应用和功能」列表共用品牌图标。 -->
+    <Icon Id="AxonIco" SourceFile="$(IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="AxonIco" />
+
+    <!--
+      未打包应用的系统通知身份。
+
+      Windows 只给「有身份」的应用投递 toast：要么是 MSIX 打包应用，
+      要么在注册表里登记过 AppUserModelId。MSI 的 Shortcut 表没有该列，
+      因此按官方对桌面应用的做法登记这个键，通知才有归属与显示名。
+    -->
+    <ComponentGroup Id="AxonNotificationIdentity" Directory="INSTALLDIR">
+      <Component Id="AxonAppUserModelId" Guid="0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9">
+        <RegistryKey Root="HKCU" Key="Software\Classes\AppUserModelId\com.axon.desktop">
+          <RegistryValue Name="DisplayName" Type="string" Value="Axon" KeyPath="yes" />
+        </RegistryKey>
+      </Component>
+    </ComponentGroup>
+
+    <!-- 安装或升级后注册同一 Axon 二进制提供的 Daemon 用户服务。服务管理器会
+         检测已有运行实例，不会因升级而停止正在执行的 Daemon。
+
+         这里按「目录 + 可执行文件名」调用，而不是 FileRef：launcher 组件带
+         NeverOverwrite，升级时文件已存在、组件不会被重新安装，FileRef 形式会让
+         延迟动作在 2753（文件未标记安装）上失败，等于每次升级都装不上。 -->
+    <CustomAction
+      Id="InstallAxonDaemon"
+      Directory="LAUNCHERDIR"
+      ExeCommand="axon-launcher.exe daemon install"
+      Execute="deferred"
+      Impersonate="yes"
+      Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="InstallAxonDaemon" After="InstallFiles" />
+    </InstallExecuteSequence>
+
+    <!--
+      安装向导：WixUI_Advanced 同时提供安装路径选择与功能勾选，
+      是 per-user 安装下唯一能同时满足这两件事的内置向导。
+      静默安装仍可用：msiexec /i axon.msi /quiet INSTALLLOCATION=...
+    -->
+    <Property Id="ApplicationFolderName" Value="Axon" />
+    <Property Id="WixAppFolder" Value="WixPerUserFolder" />
+    <Property Id="AXON_USERPROFILE">
+      <RegistrySearch
+        Id="AxonUserProfileSearch"
+        Root="HKCU"
+        Key="Volatile Environment"
+        Name="USERPROFILE"
+        Type="raw" />
+    </Property>
+    <SetProperty
+      Id="TARGETDIR"
+      Value="[AXON_USERPROFILE]"
+      Before="CostFinalize"
+      Sequence="first" />
+    <!-- InstallDirectory 由 WixUI_Advanced 内部绑定 INSTALLDIR，重复声明会冲突。 -->
+    <ui:WixUI Id="WixUI_Advanced" />
+    <UIRef Id="WixUI_ErrorProgressText" />
+
+    <!-- 安装条件 -->
+    <Launch
+      Condition="VersionNT >= 603"
+      Message="Axon 需要 Windows 8.1 或更高版本。" />
+
+  </Package>
+</Wix>

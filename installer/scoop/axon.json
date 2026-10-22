@@ -1,0 +1,33 @@
+{
+  "version": "__VERSION__",
+  "description": "Model-routed agentic coding TUI with provider load balancing, memory, and accurate tool calls",
+  "homepage": "https://github.com/a574676848/axon-code",
+  "license": "MIT",
+  "url": "https://github.com/a574676848/axon-code/releases/download/v__VERSION__/axon-v__VERSION__-x86_64-pc-windows-msvc.zip",
+  "hash": "__WINDOWS_ZIP_SHA256__",
+  "bin": [
+    "axon.exe",
+    [
+      "launcher\\axon-launcher.exe",
+      "axon-launcher"
+    ]
+  ],
+  "post_install": [
+    "& \"$dir\\axon-scoop-install.ps1\" -PackageRoot \"$dir\" -Version \"$version\" -Target 'x86_64-pc-windows-msvc'"
+  ],
+  "extract_dir": "axon-v__VERSION__-x86_64-pc-windows-msvc",
+  "checkver": {
+    "github": "https://github.com/a574676848/axon-code"
+  },
+  "autoupdate": {
+    "url": "https://github.com/a574676848/axon-code/releases/download/v$version/axon-v$version-x86_64-pc-windows-msvc.zip",
+    "hash": {
+      "url": "$url.sha256"
+    }
+  },
+  "notes": [
+    "Axon 是一款模型路由与记忆驱动的 Agentic 编码工作台，提供多供应商负载、Memory 自进化、高缓存复用和高准确率工具调用。",
+    "运行 'axon --help' 开始使用。",
+    "更新：scoop update axon"
+  ]
+}

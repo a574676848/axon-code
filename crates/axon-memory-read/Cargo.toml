@@ -1,0 +1,31 @@
+[package]
+name = "axon-memory-read"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axon-config = { path = "../axon-config" }
+axon-domain = { path = "../axon-domain" }
+axon-memory = { path = "../axon-memory" }
+axon-logger = { path = "../axon-logger" }
+axon-rustls-provider = { path = "../axon-rustls-provider" }
+ureq.workspace = true
+sha2.workspace = true
+serde_json.workspace = true
+
+[features]
+default = []
+memory-text-index = ["axon-memory/memory-text-index"]
+memory-vector-index = ["axon-memory/memory-vector-index"]
+memory-indexes = ["memory-text-index", "memory-vector-index"]
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+[dev-dependencies]
+axon-test-support = { path = "../axon-test-support" }

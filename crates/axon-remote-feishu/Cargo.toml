@@ -1,0 +1,39 @@
+[package]
+name = "axon-remote-feishu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axon-agent-runtime = { path = "../axon-agent-runtime" }
+axon-crypto = { path = "../axon-crypto" }
+axon-display = { path = "../axon-display" }
+axon-domain = { path = "../axon-domain" }
+axon-jsonl = { path = "../axon-jsonl" }
+axon-logger = { path = "../axon-logger" }
+axon-rustls-provider = { path = "../axon-rustls-provider" }
+axon-session = { path = "../axon-session" }
+axon-protocol = { path = "../axon-protocol" }
+axon-remote-runtime = { path = "../axon-remote-runtime" }
+axon-time = { path = "../axon-time" }
+futures-util.workspace = true
+reqwest = { workspace = true, features = ["http2", "rustls", "stream"] }
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["net", "time"] }
+tokio-tungstenite.workspace = true
+ureq.workspace = true
+url.workspace = true
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[dev-dependencies]
+axon-test-support = { path = "../axon-test-support" }
+tempfile.workspace = true
+
+[lints]
+workspace = true

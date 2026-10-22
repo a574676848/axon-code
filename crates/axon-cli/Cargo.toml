@@ -1,0 +1,87 @@
+[package]
+name = "axon-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Model-routed agentic coding assistant with provider load balancing, memory, and accurate tool calls"
+keywords = ["cli", "ai", "agent", "coding", "tui"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "README.md"
+homepage = "https://github.com/a574676848/axon-code"
+documentation = "https://github.com/a574676848/axon-code/tree/master/docs"
+
+[dependencies]
+axon-client-identity = { path = "../axon-client-identity" }
+axon-apply = { path = "../axon-apply" }
+axon-agent-runtime = { path = "../axon-agent-runtime" }
+axon-patch-model = { path = "../axon-patch-model" }
+axon-remote-runtime = { path = "../axon-remote-runtime" }
+axon-config = { path = "../axon-config" }
+axon-crypto = { path = "../axon-crypto" }
+axon-display = { path = "../axon-display" }
+axon-domain = { path = "../axon-domain" }
+axon-daemon = { path = "../axon-daemon" }
+axon-fs-walk = { path = "../axon-fs-walk" }
+axon-jsonl = { path = "../axon-jsonl" }
+axon-logger = { path = "../axon-logger" }
+axon-memory = { path = "../axon-memory" }
+axon-memory-read = { path = "../axon-memory-read" }
+axon-memory-ops = { path = "../axon-memory-ops" }
+axon-mcp-runtime = { path = "../axon-mcp-runtime" }
+axon-protocol = { path = "../axon-protocol" }
+axon-provider-transport = { path = "../axon-provider-transport" }
+axon-process = { path = "../axon-process" }
+axon-remote-feishu = { path = "../axon-remote-feishu" }
+axon-rustls-provider = { path = "../axon-rustls-provider" }
+axon-session = { path = "../axon-session" }
+axon-session-runtime = { path = "../axon-session-runtime" }
+axon-time = { path = "../axon-time" }
+axon-tui-runtime = { path = "../axon-tui-runtime", optional = true }
+async-trait = "0.1"
+base64.workspace = true
+clap.workspace = true
+clap_complete = "4"
+chrono.workspace = true
+encoding_rs.workspace = true
+crossterm.workspace = true
+fs4.workspace = true
+hex.workspace = true
+notify.workspace = true
+rusqlite = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["net", "time"] }
+thiserror.workspace = true
+toml.workspace = true
+ureq.workspace = true
+url.workspace = true
+unicode-width.workspace = true
+uuid.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+
+[features]
+default = ["tui", "memory-indexes"]
+memory-text-index = ["axon-agent-runtime/memory-text-index", "axon-memory-read/memory-text-index"]
+memory-vector-index = ["axon-agent-runtime/memory-vector-index", "axon-memory-read/memory-vector-index"]
+memory-indexes = ["memory-text-index", "memory-vector-index"]
+tui = [
+    "dep:axon-tui-runtime",
+]
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[[bin]]
+name = "axon"
+path = "src/main.rs"
+test = false
+
+[lints]
+workspace = true
+[dev-dependencies]
+axon-test-support = { path = "../axon-test-support" }

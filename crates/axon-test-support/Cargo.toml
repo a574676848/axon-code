@@ -1,0 +1,14 @@
+[package]
+name = "axon-test-support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Test-only temp artifact isolation support for the Axon workspace"
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true

@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Axon macOS .pkg postinstall 脚本
+set -euo pipefail
+
+PACKAGE_ROOT="/usr/local/share/axon"
+VERSION="__VERSION__"
+RELEASE_NAME="__RELEASE_NAME__"
+
+resolve_target_user() {
+    if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+        printf '%s\n' "${SUDO_USER}"
+        return 0
+    fi
+    CONSOLE_USER="$(stat -f '%Su' /dev/console 2>/dev/null || true)"
+    case "${CONSOLE_USER}" in
+        ""|root|loginwindow) return 1 ;;
+        *) printf '%s\n' "${CONSOLE_USER}" ;;
+    esac
+}
+
+TARGET_USER="$(resolve_target_user || true)"
+TARGET_HOME="$(dscl . -read "/Users/${TARGET_USER}" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+TARGET_HOME="${TARGET_HOME:-/root}"
+TARGET_GROUP="$(id -gn "${TARGET_USER}" 2>/dev/null || id -gn)"
+INSTALL_ROOT="${TARGET_HOME}/.axon/bin"
+INSTALL_BIN="${INSTALL_ROOT}/axon"
+LAUNCHER="${INSTALL_ROOT}/launcher/axon-launcher"
+SOUL_TEMPLATE="${PACKAGE_ROOT}/defaults/SOUL.md"
+PAYLOAD_RELEASE="${PACKAGE_ROOT}/versions/${RELEASE_NAME}/axon"
+PAYLOAD_LAUNCHER="${PACKAGE_ROOT}/launcher/axon-launcher"
+
+install -d -m 755 -o "${TARGET_USER:-root}" -g "${TARGET_GROUP}" "${INSTALL_ROOT}/versions/${RELEASE_NAME}" "${INSTALL_ROOT}/launcher"
+install -m 755 -o "${TARGET_USER:-root}" -g "${TARGET_GROUP}" "${PAYLOAD_RELEASE}" "${INSTALL_ROOT}/versions/${RELEASE_NAME}/axon"
+install -m 755 -o "${TARGET_USER:-root}" -g "${TARGET_GROUP}" "${PAYLOAD_LAUNCHER}" "${LAUNCHER}"
+
+SOUL_DIR="${TARGET_HOME}/.axon"
+SOUL_FILE="${SOUL_DIR}/SOUL.md"
+if [ -f "${SOUL_TEMPLATE}" ] && [ ! -e "${SOUL_FILE}" ] && [ ! -L "${SOUL_FILE}" ]; then
+    install -d -m 700 -o "${TARGET_USER:-root}" -g "${TARGET_GROUP}" "${SOUL_DIR}"
+    install -m 600 -o "${TARGET_USER:-root}" -g "${TARGET_GROUP}" "${SOUL_TEMPLATE}" "${SOUL_FILE}"
+fi
+
+CURRENT_NEXT="${INSTALL_ROOT}/.current.$$"
+printf '{"versionId":"%s"}\n' "${RELEASE_NAME}" > "${CURRENT_NEXT}"
+chown "${TARGET_USER:-root}:${TARGET_GROUP}" "${CURRENT_NEXT}"
+mv -f "${CURRENT_NEXT}" "${INSTALL_ROOT}/current.json"
+for RELEASE_DIR in "${INSTALL_ROOT}/versions"/*; do
+    [ -d "${RELEASE_DIR}" ] || continue
+    [ "$(basename "${RELEASE_DIR}")" = "${RELEASE_NAME}" ] || rm -rf -- "${RELEASE_DIR}"
+done
+ln -sfn "${LAUNCHER}" "${INSTALL_BIN}"
+chown -h "${TARGET_USER:-root}:${TARGET_GROUP}" "${INSTALL_BIN}" 2>/dev/null || true
+
+PATH_PROFILE="${TARGET_HOME}/.profile"
+PATH_LINE='export PATH="$HOME/.axon/bin:$PATH"'
+if ! grep -Fqx "${PATH_LINE}" "${PATH_PROFILE}" 2>/dev/null; then
+    printf '\n%s\n' "${PATH_LINE}" >> "${PATH_PROFILE}"
+fi
+chown "${TARGET_USER:-root}:${TARGET_GROUP}" "${PATH_PROFILE}" 2>/dev/null || true
+
+if [ -n "${TARGET_USER}" ]; then
+    su -l "${TARGET_USER}" -c "\"${LAUNCHER}\" daemon install" || echo "警告：Daemon 用户服务注册失败，请运行 axon daemon install 重试。" >&2
+else
+    echo "提示：未识别到交互用户，已跳过 Daemon 用户服务注册。" >&2
+fi
+
+echo ""
+echo "Axon 已安装到 ${INSTALL_BIN}"
+echo "运行 'axon --help' 开始使用。"
+echo ""
+
+exit 0

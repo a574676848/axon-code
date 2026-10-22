@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>axon</title>
+  </head>
+  <!-- 正文默认可选：标签、说明、弹窗里的文字都要能拖选、双击选词与复制。
+       需要屏蔽选区的只剩控件本身（按钮、菜单项、拖拽行），它们各自声明 select-none。 -->
+  <body class="bg-canvas text-primary antialiased overflow-hidden m-0 p-0 font-sans">
+    <!-- overflow-clip 而不是 overflow-hidden：外壳层不该成为可滚动容器，
+         否则焦点进入内部控件时会被浏览器悄悄滚走，整块界面被推到侧栏底下。 -->
+    <div id="root" class="h-full w-full flex flex-col overflow-clip"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

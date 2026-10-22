@@ -1,0 +1,35 @@
+{
+  "name": "axon-desktop-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "lint": "eslint src",
+    "test": "node --import ./tests/typescript-loader.mjs --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@shikijs/langs": "^4.5.0",
+    "@tauri-apps/api": "2.12.1",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "mermaid": "^12.1.0",
+    "motion": "13.4.6",
+    "pdfjs-dist": "^6.3.289",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "shiki": "^4.5.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "eslint": "10.11.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.71.0",
+    "vite": "8.3.1"
+  }
+}

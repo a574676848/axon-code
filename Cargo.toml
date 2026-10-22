@@ -1,0 +1,204 @@
+[workspace]
+members = [
+    "crates/axon-jsonl",
+    "crates/axon-crypto",
+    "crates/axon-display",
+    "crates/axon-domain",
+    "crates/axon-client-identity",
+    "crates/axon-time",
+    "crates/axon-process",
+    "crates/axon-shell-assoc",
+    "crates/axon-fs-walk",
+    "crates/axon-config",
+    "crates/axon-tui-runtime",
+    "crates/axon-memory",
+    "crates/axon-memory-read",
+    "crates/axon-memory-write",
+    "crates/axon-memory-ops",
+    "crates/axon-context-fragments",
+    "crates/axon-prompts",
+    "crates/axon-session",
+    "crates/axon-session-runtime",
+    "crates/axon-protocol",
+    "crates/axon-daemon",
+    "crates/axon-agent-runtime",
+    "crates/axon-remote-runtime",
+    "crates/axon-patch-model",
+    "crates/axon-apply",
+    "crates/axon-output-filter",
+    "crates/axon-provider-transport",
+    "crates/axon-rustls-provider",
+    "crates/axon-mcp-runtime",
+    "crates/axon-remote-feishu",
+    "crates/axon-cli",
+    "crates/axon-launcher",
+    "crates/axon-fixtures",
+    "crates/axon-test-support",
+    "crates/axon-desktop",
+    "crates/axon-webview2-failure",
+    "tools/output-filter-acceptance",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/a574676848/axon-code"
+rust-version = "1.98.1"
+
+[workspace.dependencies]
+axon-crypto = { path = "crates/axon-crypto" }
+tree-sitter = "0.25"
+tree-sitter-astro = { version = "0.1.1", package = "tree-sitter-astro-next" }
+tree-sitter-bash = "0.25"
+tree-sitter-c = "0.24"
+tree-sitter-c-sharp = "0.23"
+tree-sitter-clojure = "0.1"
+tree-sitter-cmake = "0.7.4"
+tree-sitter-cpp = "0.23"
+tree-sitter-css = "0.25"
+tree-sitter-dart = "0.2"
+tree-sitter-diff = "0.1"
+tree-sitter-dockerfile = { version = "0.2.0", package = "tree-sitter-dockerfile-updated" }
+tree-sitter-elixir = "0.3"
+tree-sitter-elisp = "1.7.2"
+tree-sitter-erlang = "0.20.0"
+tree-sitter-fortran = "0.6.0"
+tree-sitter-go = "0.25"
+tree-sitter-graphql = "0.2.1"
+tree-sitter-haskell = "0.23"
+tree-sitter-hcl = "1.1"
+tree-sitter-html = "0.23"
+tree-sitter-ini = "1.4.0"
+tree-sitter-java = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-json = "0.24"
+tree-sitter-julia = "0.23"
+tree-sitter-just = "0.2.0"
+tree-sitter-kotlin = { version = "0.4", package = "tree-sitter-kotlin-sg" }
+tree-sitter-lua = "0.5"
+tree-sitter-make = "1.1"
+tree-sitter-md = "0.5"
+tree-sitter-nix = "0.3"
+tree-sitter-objc = "3.0"
+tree-sitter-ocaml = "0.25.0"
+tree-sitter-odin = "1.3"
+tree-sitter-php = "0.24"
+tree-sitter-powershell = "0.26.4"
+tree-sitter-proto = "0.6.0"
+tree-sitter-python = "0.25"
+tree-sitter-r = "1.3.0"
+tree-sitter-regex = "0.25"
+tree-sitter-ruby = "0.23"
+tree-sitter-rust = "0.24"
+tree-sitter-scala = "0.26"
+tree-sitter-solidity = "1.2"
+tree-sitter-sql = { version = "0.3.11", package = "tree-sitter-sequel" }
+tree-sitter-starlark = "1.3"
+tree-sitter-svelte = { version = "0.1.1", package = "tree-sitter-svelte-next" }
+tree-sitter-swift = "0.7"
+tree-sitter-tlaplus = "1.5"
+tree-sitter-toml-ng = "0.7"
+tree-sitter-typescript = "0.23"
+tree-sitter-verilog = "1.0"
+tree-sitter-vue = { version = "0.1.0", package = "tree-sitter-vue-next" }
+tree-sitter-xml = "0.7"
+tree-sitter-yaml = "0.7"
+tree-sitter-zig = "1.1"
+libsqlite3-sys = { version = "0.38.2", default-features = false }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+
+# Async runtime
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+
+# HTTP 网关承载：只取 1.1 与 tokio 运行时两项能力，默认特性里的表单、
+# 路由追踪在网关上用不到，不引入多余依赖。
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+yaml-rust = "0.4.5"
+jsonschema = { version = "0.55.0", default-features = false }
+
+# Error handling
+thiserror = "2"
+
+# Utilities
+base64 = "0.23.1"
+chrono = "0.4"
+encoding_rs = "0.8"
+clap = { version = "4", features = ["derive"] }
+ed25519-dalek = "3"
+futures-util = "0.3"
+getrandom = "0.4.3"
+hex = "0.4.3"
+interprocess = { version = "2.4.4", features = ["tokio"] }
+hmac = "0.13"
+httpdate = "1"
+ignore = "0.4"
+libc = "0.2"
+grep-matcher = "0.1.9"
+grep-regex = "0.1.14"
+grep-searcher = "0.1.17"
+notify = "8.2.0"
+portable-pty = "0.9.0"
+regex = "1"
+flate2 = "1"
+fs4 = "1.1"
+pdf-extract = "0.12"
+quick-xml = "0.42"
+tar = "0.4"
+uuid = { version = "1", features = ["v4"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
+reqwest = { version = "0.13", default-features = false }
+sha2 = "0.11"
+tempfile = "3"
+toml = "1.1.5"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+url = "2"
+widestring = "1.2.1"
+windows-sys = { version = "0.61", default-features = false }
+zstd = "0.14"
+
+# TUI
+ratatui = { version = "0.30.2", features = ["crossterm_0_29", "scrolling-regions", "unstable-rendered-line-info"] }
+crossterm = { version = "0.29.0", features = ["bracketed-paste", "event-stream"] }
+unicode-width = "0.2"
+unicode-segmentation = "1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+
+[profile.dev]
+debug = 0
+incremental = true
+codegen-units = 32
+lto = "off"
+opt-level = 0
+
+# 依赖包使用轻度优化，加速运行但编译时间几乎不变
+[profile.dev.package."*"]
+opt-level = 1
+
+[profile.test]
+debug = 0
+incremental = true
+codegen-units = 32
+lto = "off"
+opt-level = 0
+
+[profile.dev.build-override]
+debug = 0
+codegen-units = 32
+# proc macro / build script 每次构建都要执行，轻度优化的编译开销是一次性的
+opt-level = 1
+
+[profile.test.build-override]
+debug = 0
+codegen-units = 32
+opt-level = 1

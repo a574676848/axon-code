@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+# Axon .deb prerm — 卸载前执行
+set -e
+
+TARGET_USER="${SUDO_USER:-${USER:-root}}"
+TARGET_HOME="$(getent passwd "${TARGET_USER}" 2>/dev/null | cut -d: -f6)"
+TARGET_HOME="${TARGET_HOME:-/root}"
+INSTALL_BIN="${TARGET_HOME}/.axon/bin/axon"
+
+echo "正在卸载 Axon..."
+
+if [ -x "${INSTALL_BIN}" ]; then
+    "${INSTALL_BIN}" daemon uninstall || true
+fi
+
+exit 0

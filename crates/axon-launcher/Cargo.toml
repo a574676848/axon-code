@@ -1,0 +1,26 @@
+[package]
+name = "axon-launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Stable Axon version launcher"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+windows-sys = { workspace = true, features = ["Win32_System_Console"] }
+
+[dev-dependencies]
+axon-test-support = { path = "../axon-test-support" }
+tempfile.workspace = true
+
+[[bin]]
+name = "axon-launcher"
+path = "src/main.rs"
+
+[lints]
+# 桌面入口释放控制台需要调用 Windows FreeConsole；unsafe 仅限该单一 FFI 调用。
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "warn"

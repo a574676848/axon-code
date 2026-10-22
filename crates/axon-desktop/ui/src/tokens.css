@@ -1,0 +1,783 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: 'Axon Sans';
+  src: url('/fonts/axon-sans.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Axon Mono';
+  src: url('/fonts/axon-mono.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/*
+ * 工作台设计令牌（浅色）
+ * 中性纸白基底，近黑碳墨承担主操作，半透明发丝描边建立层级，
+ * 单一蓝色只用于键盘聚焦环，选中态使用模块底加中性描边。
+ */
+@theme {
+  /*
+   * 三级中性面：画布、侧栏、卡片。
+   *
+   * 三者必须彼此可分辨：卡片是纯白，画布退半档，侧栏再退一档。
+   * 此前画布与卡片同为纯白，整块界面只能靠 0.5px 发丝线分家，
+   * 主从层级在低亮度屏上直接消失。
+   */
+  --color-canvas: #fafafa;
+  --color-sidebar: #f7f8fa;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #f4f5f7;
+  --color-hover: rgba(38, 49, 72, 0.06);
+  --color-active: rgba(38, 49, 72, 0.1);
+  /* 模态遮罩：只此一档，嵌套弹窗不叠第二层。 */
+  --color-scrim: rgba(15, 17, 21, 0.36);
+
+  --color-border: rgba(0, 0, 0, 0.1);
+  --color-border-hairline: rgba(0, 0, 0, 0.04);
+  --color-border-muted: rgba(0, 0, 0, 0.10);
+--color-border-strong: rgba(0, 0, 0, 0.12);
+  --color-border-input: rgba(0, 0, 0, 0.16);
+  --color-border-selected: #adb2b8;
+
+  --color-text-primary: #0f1115;
+  --color-text-secondary: #61666b;
+  --color-text-tertiary: #6b7075;
+  --color-text-placeholder: #6f747a;
+  /* 说明与时间戳层级：比三级更弱，只承载辅助信息；仍按正文 AA 取值。 */
+  --color-text-caption: #6d7278;
+  /* 链接与品牌交互色：与技能蓝同值，白底 6.39:1。 */
+  --color-text-link: #0b57d0;
+  /*
+   * 技能指令高亮：正文里精确命中已安装技能名的 `/name` 用这一个取值，
+   * 输入框与用户消息气泡两处共用。比链接色深一档是实算的要求：
+   * 对白底 6.39:1、对用户气泡底 5.73:1，两处都过正文 AA。
+   */
+  --color-skill-ink: #0b57d0;
+  /* 用户气泡底、代码块底与行内代码底：与内容层级同源，不用描边堆层级。 */
+  --color-bubble: #edf3fe;
+  --color-code-block: #f6f7f9;
+  --color-code-inline: #f1f2f4;
+
+  --color-primary: #0f1115;
+  --color-primary-hover: #43454a;
+  --color-focus: #4176e6;
+  /* 状态语义色：取值与工作台参考实现的状态色对齐（error 取它的 red-600 加深一档）。
+   * 加深是实算要求：原 #ec1313 对画布只有 4.31:1，低于正文 AA。 */
+  --color-danger: #d91111;
+  /* 成功与完成语义色：全站唯一的绿色，终态圆点、连接状态点、计划完成点共用。 */
+  --color-ok: #22c55e;
+  /*
+   * 成功语义的墨水档：只用于文字，例如改动卡的 +N 计数。
+   * 标记继续用 --color-ok，两者同语义、不同用途；+N 对白底 5.02:1。
+   */
+  --color-ok-ink: #15803d;
+  /*
+   * 需要注意的语义色：与参考实现同名同值（它的状态告警色），用作标记、圆点与描边。
+   * 该取值对白底只有 2.15:1，达不到正文 AA，**不得直接用于文字**；文字用下面的墨水档。
+   */
+  --color-gold: #f59e0b;
+  /*
+   * 琥珀墨水档：琥珀语义的**文字**专用取值，对白底 4.67:1，满足正文 AA。
+   * 标记继续用 --color-gold，两者同语义、不同用途，改动时不要互相顶替。
+   */
+  --color-gold-ink: #b45309;
+  /* 空闲标记：既没有在跑、也没有结果的中间态。 */
+  --color-state-idle: #d4d4d4;
+  /*
+   * 水印记号：引导页顶部的罗盘这类「不是控件、只是方位感」的图形。
+   * 取中性灰阶里最浅的一档，纯灰不走蓝调，否则这个尺寸下偏色会显出来。
+   */
+  --color-watermark: #e5e5e5;
+  /* 引导页罗盘：比水印色深一档，保证 44px 下仍看得出方位感。 */
+  --color-watermark-strong: #c9c9c9;
+  /* 语义色的浅底：取值由各自的语义色配透明度派生，组件里不再写 rgba。 */
+  --color-danger-soft: rgba(217, 17, 17, 0.12);
+  /* 成功浅底：健康时间线这类大面积填充用它，避免满饱和绿铺满整屏。 */
+  --color-ok-soft: rgba(34, 197, 94, 0.14);
+  /* 琥珀的浅底：与 danger-soft 同款派生，用于「等你处理」这类提示条的底，
+     墨水档文字压在上面仍有 4.57:1，满足正文 AA。 */
+  --color-gold-soft: rgba(245, 158, 11, 0.12);
+  --color-focus-soft: rgba(65, 118, 230, 0.08);
+  /*
+   * 改动对比的新增与删除行底色。行文一律用 --color-text-primary：
+   * 实测对新增底 17.5:1、对删除底 16.8:1，行号用 --color-text-secondary 时仍有 5.37:1 与 5.14:1。
+   */
+  --color-diff-add: #eef9f1;
+  --color-diff-delete: #fdeeee;
+  /* 反色面：压在正文之上的深色浮层，例如行悬浮卡。 */
+  --color-inverse: #2c2c2e;
+  --color-inverse-secondary: #cfd3d6;
+  /* 图形渲染的次级面：比 surface-sunken 略偏冷，用于区分图形里的第二类节点。 */
+  --color-surface-tint: #eef2f7;
+  /*
+   * 用量看板的图表色板。
+   *
+   * 三类 Token 走同一蓝色谱系（越浅越便宜：缓存命中比未缓存输入浅一档），
+   * 生成与推理另立青、紫两支色相，请求数是另一套量纲因此取中性灰。
+   * 这些取值只用于图形填充、描边与图例色块，**不承载文字**：所有读数与
+   * 标签一律走 --color-text-*，因此不受正文 AA 约束；图例也逐项带名称，
+   * 信息不依赖颜色本身。语义色（ok / gold / danger）不参与序列配色，
+   * 绿色与红色在整个界面里只表示成功与失败。
+   */
+  --color-chart-input: #3b6fe0;
+  --color-chart-cache-read: #9dbdf0;
+  --color-chart-cache-write: #2f9d8f;
+  --color-chart-output: #7d6bd6;
+  --color-chart-reasoning: #b4762a;
+  --color-chart-requests: #6b7280;
+  /* 绘图区底板与网格：比 surface 深半档，让白色网格线成为可读的分度。 */
+  --color-chart-plot: #f7f8fa;
+  --color-chart-grid: rgba(15, 17, 21, 0.06);
+  /* 条形图与进度条的底槽。 */
+  --color-chart-track: rgba(15, 17, 21, 0.06);
+  /* 品牌标识的自有美术色：底板与渐变的起点、中点、终点。 */
+  --color-brand-plate: #1a202c;
+  --color-brand-start: #4299e1;
+  --color-brand-middle: #51d3d9;
+  --color-brand-end: #9f7aea;
+  /* 正文列最大宽度：设计系统 §1.2 默认 840px，支持用户拖拽调节，读作 max-w-chat。 */
+  --container-chat: var(--axon-chat-user-width, 840px);
+  /* 非对话页的内容定宽：管理页与看板共用一条版心。 */
+  --container-page: 1080px;
+
+  --font-sans: 'Axon Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --font-mono: 'Axon Mono', 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'PingFang SC',
+    monospace;
+
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+
+  /*
+   * 排版阶梯：与既有工作台产品同为「14px 内容轴 + 13px 次级轴」双轨。
+   * 10 / 11 / 12 三档是组件级事实惯例（时间戳、代码块、侧栏 meta 与作业行），
+   * 不随视口变化。
+   */
+  --text-2xs: 10px;
+  --text-2xs--line-height: 16px;
+  /* 代码正文：对话代码块、侧栏预览与行号共用。12px 是 DPR=1 下的可读下限。 */
+  --text-code: 12px;
+  --text-code--line-height: 20px;
+  --text-meta: 12px;
+  --text-meta--line-height: 20px;
+  --text-row: 13px;
+  --text-row--line-height: 20px;
+  --text-row-loose: 13px;
+  --text-row-loose--line-height: 1.5;
+  --text-body: 14px;
+  --text-body--line-height: 22px;
+  --text-content: 14px;
+  --text-content--line-height: 24px;
+
+  /*
+   * 标题刻度：与既有工作台产品的标题档一致，h4 由 text-content 承担。
+   */
+  --text-heading-1: 21px;
+  --text-heading-1--line-height: 30px;
+  --text-heading-2: 19px;
+  --text-heading-2--line-height: 28px;
+  --text-heading-3: 18px;
+  --text-heading-3--line-height: 26px;
+  /* 四级标题：对话正文里的小节标题，与正文 14px 拉开一档但不再叠字重堆层级。 */
+  --text-heading-4: 15px;
+  --text-heading-4--line-height: 24px;
+  /* 首屏品牌标题。 */
+  --text-display: 26px;
+  --text-display--line-height: 32px;
+  /*
+   * 输入坞正文：输入框里的文字，比助手正文大一号。
+   * 名字不得与任何 --color-* 同名：text-* 同时命中字号与颜色两个命名空间时，
+   * Tailwind 按颜色解析，token 就会被静默当成文字颜色（text-bubble 曾踩过）。
+   */
+  --text-input: 15px;
+  --text-input--line-height: 22px;
+
+  /* 发丝线宽度：设计系统里唯一的 0.5px 角色，读作 h-hairline。 */
+  --spacing-hairline: 0.5px;
+}
+
+:root {
+  /* 浮层高度：半像素描边承担分离，柔光几乎不可见 */
+  --elevation-stroke: 0 0 0 0.5px rgba(0, 0, 0, 0.12);
+  --elevation-prominent: var(--elevation-stroke), 0 3px 8px 0 rgba(0, 0, 0, 0.04),
+    0 0 20px 0 rgba(0, 0, 0, 0.05);
+  --elevation-panel: var(--elevation-stroke), 0 4px 16px 0 rgba(0, 0, 0, 0.03),
+    0 0 24px 0 rgba(0, 0, 0, 0.03);
+  /*
+   * 模态面板：全站最高一层。它必须明显高于卡片与浮层，
+   * 否则 896×640 的白面板在浅色遮罩上会读成「另一块页面」。
+   */
+  --elevation-modal: 0 0 0 0.5px rgba(0, 0, 0, 0.14), 0 24px 64px 0 rgba(15, 17, 21, 0.18),
+    0 8px 24px 0 rgba(15, 17, 21, 0.08);
+
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+
+  font-family: var(--font-sans);
+  color: var(--color-text-primary);
+  background-color: var(--color-canvas);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 键盘焦点：统一蓝色聚焦环，鼠标点击不显示。
+ * 表单控件由自身容器承担聚焦反馈（描边变蓝），因此排除在外，
+ * 避免出现「容器细描边加输入框粗蓝框」的双重聚焦。 */
+*:not(input):not(textarea):not(select):focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 1px;
+}
+
+/*
+ * 代码高亮色板：高亮引擎把每个记号的取色写成 var(--shiki-*)，颜色集中在这里，
+ * 换配色只改这一段，不用碰渲染代码。取值沿用既有色板，只补一个函数名色相，
+ * 让「关键字蓝、字符串绿、常量琥珀、注释灰、函数紫」五类能同时区分开。
+ */
+:root {
+  --shiki-foreground: var(--color-text-primary);
+  --shiki-background: transparent;
+  --shiki-token-comment: var(--color-text-tertiary);
+  --shiki-token-string: #1f7a4d;
+  --shiki-token-string-expression: #1f7a4d;
+  --shiki-token-constant: #8a5a00;
+  --shiki-token-keyword: var(--color-text-link);
+  --shiki-token-function: #6f42c1;
+  --shiki-token-parameter: var(--color-text-primary);
+  --shiki-token-punctuation: var(--color-text-secondary);
+  --shiki-token-link: var(--color-text-link);
+}
+
+/*
+ * 外壳尺寸链：整窗一屏到底，不出现窗口级滚动条。
+ * 用 100% 而不是 100vw 与 100vh：视口单位会把滚动条宽度算进去，反过来触发横向溢出。
+ */
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+}
+
+/*
+ * 滚动条皮肤：全站只有这一份，滚动区只重绑下面的几何与配色变量。
+ *
+ * 两条路径互斥，门控是必须的而不是防御性的：`scrollbar-width` 或 `scrollbar-color`
+ * 一旦取非 auto 值，Chromium 与 Safari 会丢弃该元素上所有 `::-webkit-scrollbar*`
+ * 规则（含 `:hover`），细条样式会整体失效并回落到系统原生滚动条。
+ * `not selector(::-webkit-scrollbar)` 只在未实现该伪元素的引擎（Firefox）成立，
+ * 于是 WebKit 系走伪元素路径，Firefox 走标准属性路径，两条路径都有皮肤。
+ */
+:root {
+  /*
+   * 滚动条几何与配色：宽度保留，滑块与轨道都取透明，因此肉眼看不到滚动条。
+   * 宽度不置 0 是有意的：占位恒定，滚动区不会因为内容变长而横向跳动；
+   * 滚轮、键盘、触控板与拖拽都照常可用，只是不绘制滑块与轨道。
+   * 与既有工作台产品的静默滚动条同款：把滑块令牌整体置为透明。
+   */
+  --scrollbar-width: 3px;
+  --scrollbar-thumb: transparent;
+  --scrollbar-thumb-hover: transparent;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  /*
+   * 逐元素声明而不是从 body 继承：继承会把颜色在 body 处定死，
+   * 后代重绑 --scrollbar-thumb 就再也改不动自己的滚动条。
+   */
+  body,
+  body * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+}
+
+::-webkit-scrollbar {
+  width: var(--scrollbar-width);
+  height: var(--scrollbar-width);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* 两轴滚动条交汇的角：与透明轨道一致，不留系统的不透明角。 */
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.shadow-menu {
+  box-shadow: var(--elevation-prominent);
+}
+
+.shadow-panel {
+  box-shadow: var(--elevation-panel);
+}
+
+.shadow-modal {
+  box-shadow: var(--elevation-modal);
+}
+
+/*
+ * 模态入场：只动 opacity 与 transform。
+ * 出场不做动画（React 卸载即消失），因为把关闭也做成两段会让返回操作变慢。
+ */
+@keyframes overlay-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.995);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.overlay-panel-in {
+  animation: overlay-panel-in 140ms var(--ease-standard) both;
+}
+
+@keyframes overlay-scrim-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.overlay-scrim-in {
+  animation: overlay-scrim-in 140ms var(--ease-standard) both;
+}
+
+@keyframes token-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.token-chunk {
+  display: inline;
+  animation: token-fade-in 120ms ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+    transform: none !important;
+  }
+}
+
+/* 无显式滚动条：滚动能力保留，但不绘制滚动条轨道与滑块。 */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  &::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+}
+
+/*
+ * 可见滚动条：默认皮肤把滑块置为透明（静默滚动），但长列表与输出区需要看得见
+ * 「下面还有内容」，因此这些区域重绑滑块令牌。几何不变，只换配色，
+ * 与既有工作台产品的浮层滚动条同款：滑块是中性灰，悬浮时加深一档。
+ */
+@utility scroll-visible {
+  --scrollbar-thumb: var(--color-border-strong);
+  --scrollbar-thumb-hover: var(--color-border-selected);
+}
+
+/*
+ * 发丝线：0.5px 是设计系统里唯一的线宽角色，因此给它具名工具类，
+ * 组件里不再散落 0.5px 字面量。用法与内建 border-* 一致，颜色照常由 border-* 给：
+ * `hairline border-border-hairline`。写法与内建的 border-[0.5px] 保持一致：
+ * 先立 border-style（初值为 solid），再给宽度。
+ */
+@utility hairline {
+  border-style: var(--tw-border-style);
+  border-width: 0.5px;
+}
+
+@utility hairline-t {
+  border-top-style: var(--tw-border-style);
+  border-top-width: 0.5px;
+}
+
+@utility hairline-b {
+  border-bottom-style: var(--tw-border-style);
+  border-bottom-width: 0.5px;
+}
+
+@utility hairline-l {
+  border-left-style: var(--tw-border-style);
+  border-left-width: 0.5px;
+}
+
+@utility hairline-r {
+  border-right-style: var(--tw-border-style);
+  border-right-width: 0.5px;
+}
+
+@utility hairline-x {
+  border-inline-style: var(--tw-border-style);
+  border-inline-width: 0.5px;
+}
+
+@utility hairline-y {
+  border-block-style: var(--tw-border-style);
+  border-block-width: 0.5px;
+}
+
+/* 纵向分隔线：给除末项外的子项加下边线，语义与内建 divide-y-* 完全一致。 */
+@utility divide-hairline {
+  & > :not(:last-child) {
+    --tw-divide-y-reverse: 0;
+    border-bottom-style: var(--tw-border-style);
+    border-top-style: var(--tw-border-style);
+    border-top-width: calc(0.5px * var(--tw-divide-y-reverse));
+    border-bottom-width: calc(0.5px * calc(1 - var(--tw-divide-y-reverse)));
+  }
+}
+
+/*
+ * 状态转圈：环加一段呼吸弧，整体匀速旋转。
+ * 画面里同时出现多个转圈时由一个共同起点对齐相位，否则它们会各转各的；
+ * 起点在组件挂载时钉到时间零点，弧长与转速与参考实现逐值一致。
+ */
+.state-spinner {
+  flex: none;
+}
+
+.state-spinner-motion {
+  transform-origin: center;
+  animation: state-spinner-spin 1.5s linear infinite;
+}
+
+.state-spinner-track,
+.state-spinner-arc {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.state-spinner-track {
+  opacity: 0.25;
+}
+
+.state-spinner-arc {
+  stroke-dasharray: 12 150;
+  animation: state-spinner-dash 1.5s ease-in-out infinite;
+}
+
+/*
+ * 流式光标：贴在正文最后一段的末尾，而不是另起一行。
+ *
+ * 光标必须落在最后一个块级子元素的内部（::after），兄弟节点会被 Markdown 的块流
+ * 挤到下一行，看起来像正文断了一行。只做透明度呼吸，不占布局宽度以外的东西。
+ */
+.streaming-caret > :last-child::after {
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 14px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  border-radius: 9999px;
+  background: var(--color-text-tertiary);
+  animation: caret-breathe 1.2s ease-in-out infinite;
+}
+
+@keyframes caret-breathe {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+/*
+ * 工作状态行的扫光：一条中性亮带从左向右缓慢掠过，只动 transform 与 opacity。
+ * 它说明「还在跑」，因此必须克制：宽度三分之一、亮度 4%，不参与任何布局。
+ */
+.working-sweep {
+  animation: working-sweep 2.4s linear infinite;
+}
+
+@keyframes working-sweep {
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(400%);
+  }
+}
+
+/* 减弱动效：光标停在常亮，扫光不出现。 */
+@media (prefers-reduced-motion: reduce) {
+  .streaming-caret > :last-child::after {
+    animation: none;
+    opacity: 0.8;
+  }
+
+  .working-sweep {
+    display: none;
+  }
+}
+
+@keyframes state-spinner-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes state-spinner-dash {
+  0% {
+    stroke-dasharray: 12 150;
+    stroke-dashoffset: 0;
+  }
+
+  50% {
+    stroke-dasharray: 24 150;
+    stroke-dashoffset: -6;
+  }
+
+  100% {
+    stroke-dasharray: 12 150;
+    stroke-dashoffset: 0;
+  }
+}
+
+/* 减弱动效下不打转：弧停在固定角度，状态照样看得见。 */
+@media (prefers-reduced-motion: reduce) {
+  .state-spinner-motion,
+  .state-spinner-arc {
+    animation: none;
+  }
+
+  .state-spinner-arc {
+    stroke-dasharray: 18 150;
+    stroke-dashoffset: -3;
+  }
+}
+
+/*
+ * 条形图的入场：条从左边长到自己的长度。
+ * 只动 transform（横向缩放），宽度本身不变：动画 width 会触发布局，
+ * 而这批条子有十几行，逐行重排是看得见的抖动。
+ */
+.bar-grow {
+  transform-origin: left center;
+  animation: bar-grow 320ms var(--ease-standard);
+}
+
+@keyframes bar-grow {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
+/*
+ * tab 标题的裁切渐隐：不留省略号，在裁切边用遮罩收尾。
+ * 与既有工作台产品同款：判定在 JS（scrollWidth 多出一像素以上即算裁切），
+ * 绘制在 CSS（右侧 16px 渐变），两者分开，样式不参与判定。
+ */
+.tab-title-clip {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.tab-title-clip[data-clipped] {
+  mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
+}
+
+.tab-chip:hover .tab-title-clip[data-clipped],
+.tab-chip:focus-within .tab-title-clip[data-clipped],
+.tab-chip[data-active] .tab-title-clip[data-clipped] {
+  mask-image: linear-gradient(
+    to right,
+    #000 calc(100% - 30px),
+    transparent calc(100% - 14px)
+  );
+}
+
+.tab-name-clip-placeholder-removed {
+  display: none;
+}
+
+/*
+ * 路径标签：目录弱化、文件名主色，溢出时左端固定 28px 渐隐。
+ * 渐隐方向与标题相反：这里裁掉的是路径开头，文件名必须完整。
+ */
+.path-label {
+  display: block;
+  overflow: hidden;
+}
+
+.path-label > span {
+  white-space: nowrap;
+}
+
+.path-label[data-clipped] {
+  mask-image: linear-gradient(to right, transparent, #000 28px);
+}
+
+/*
+ * 文件查看页的代码正文：行号槽与既有工作台产品逐值一致。
+ *
+ * 行号不是 DOM 节点，而是行元素上的 ::before 计数器：复制正文时 textContent
+ * 里天然没有行号（计数器内容不进选区），也不必为每一行多渲染一个元素。
+ * 槽宽由 --code-gutter-width 给出（按行数位数取 ch），行文本按「槽宽 + 12px」缩进。
+ */
+.code-lines {
+  display: block;
+  counter-reset: source-line;
+  white-space: normal;
+}
+
+.code-lines > .line {
+  position: relative;
+  display: block;
+  min-height: 1lh;
+  padding-inline-start: calc(var(--code-gutter-width, 2ch) + 12px);
+  counter-increment: source-line;
+  white-space: var(--code-line-white-space, pre);
+}
+
+.code-lines > .line::before {
+  position: absolute;
+  inset-inline-start: 0;
+  width: var(--code-gutter-width, 2ch);
+  color: var(--color-text-tertiary);
+  text-align: end;
+  content: counter(source-line);
+  user-select: none;
+}
+
+/* 自动换行：整段按容器宽度折返，行号槽与缩进都不受影响。 */
+.code-wrap {
+  --code-line-white-space: pre-wrap;
+}
+
+.code-wrap .code-lines > .line {
+  overflow-wrap: anywhere;
+}
+
+.marquee-title {
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.marquee-title[data-scrolled] {
+  mask-image: linear-gradient(to right, transparent, #000 12px);
+}
+
+.marquee-title[data-clipped] {
+  mask-image: linear-gradient(to left, transparent, #000 12px);
+}
+
+.marquee-title[data-scrolled][data-clipped] {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 12px,
+    #000 calc(100% - 12px),
+    transparent
+  );
+}
+
+/*
+ * 对话正文宽度拖拽手柄：对齐设计系统与既有工作台产品。
+ * 绝对定位在正文列两侧各 24px 处，10px 抓取条，hover 或拖拽时显示 2px 渐变光柱。
+ */
+.conversation-width-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 25;
+  width: min(10px, max(0px, calc((100% - var(--axon-chat-user-width, 840px)) / 2 - 48px)));
+  cursor: col-resize;
+  user-select: none;
+  touch-action: none;
+}
+
+.conversation-width-handle[data-side='left'] {
+  right: calc(50% + var(--axon-chat-user-width, 840px) / 2 + 24px);
+}
+
+.conversation-width-handle[data-side='right'] {
+  left: calc(50% + var(--axon-chat-user-width, 840px) / 2 + 24px);
+}
+
+.conversation-width-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to bottom,
+    transparent calc(var(--axon-width-handle-pointer-y, 50%) - 36px),
+    var(--color-border-selected) calc(var(--axon-width-handle-pointer-y, 50%) - 8px),
+    var(--color-border-selected) calc(var(--axon-width-handle-pointer-y, 50%) + 8px),
+    transparent calc(var(--axon-width-handle-pointer-y, 50%) + 36px)
+  );
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+  pointer-events: none;
+}
+
+.conversation-width-handle[data-side='left']::after {
+  right: 4px;
+}
+
+.conversation-width-handle[data-side='right']::after {
+  left: 4px;
+}
+
+.conversation-width-handle:hover::after,
+.conversation-width-handle[data-dragging='true']::after {
+  opacity: 1;
+}

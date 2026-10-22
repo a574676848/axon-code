@@ -1,0 +1,43 @@
+start: hashline_patch | pathdiff_patch
+
+hashline_patch: file_patch+
+file_patch: hashline_header hashline_hunk+
+hashline_header: HASHLINE_HEADER
+HASHLINE_HEADER: /\[[^\r\n]+#[0-9A-Fa-f]{6}\]\r?\n/
+
+hashline_hunk: swap | swap_block | delete | delete_block | insert_before | insert_after | insert_after_block | insert_head | insert_tail | remove | move
+swap: "SWAP " line_range ":" NL body_line*
+swap_block: "SWAP.BLK " line_number ":" NL body_line+
+delete: "DEL " line_range NL?
+delete_block: "DEL.BLK " line_number NL?
+insert_before: "INS.PRE " line_number ":" NL body_line+
+insert_after: "INS.POST " line_number ":" NL body_line+
+insert_after_block: "INS.BLK.POST " line_number ":" NL body_line+
+insert_head: "INS.HEAD:" NL body_line+
+insert_tail: "INS.TAIL:" NL body_line+
+remove: "REM" NL?
+move: "MV " hashline_path NL?
+body_line: ("+" | "-") /(.*)/ NL?
+line_range: line_number (".=" line_number)?
+line_number: /[1-9]\d*/
+
+pathdiff_patch: begin_patch pathdiff_hunk+ end_patch
+begin_patch: "*** Begin Patch" NL
+end_patch: "*** End Patch" NL?
+pathdiff_hunk: add_hunk | delete_hunk | update_hunk
+add_hunk: "*** Add File: " patch_path NL add_line+
+delete_hunk: "*** Delete File: " patch_path NL
+update_hunk: "*** Update File: " patch_path NL change_move? change?
+add_line: "+" /(.*)/ NL
+change_move: "*** Move to: " patch_path NL
+change: (change_context | change_line | lazy_edit_marker)+ eof_line?
+change_context: ("@@" | "@@ " /(.+)/) NL
+change_line: ("+" | "-" | " ") /(.*)/ NL
+lazy_edit_marker: LAZY_EDIT_PLACEHOLDER NL
+eof_line: "*** End of File" NL
+LAZY_EDIT_PLACEHOLDER: /\/\/ \.\.\. existing code \.\.\.|# \.\.\. existing code \.\.\./
+hashline_path: /[^\r\n]+/
+patch_path: /[^\r\n]+/
+NL: /\r?\n/
+
+%import common.LF

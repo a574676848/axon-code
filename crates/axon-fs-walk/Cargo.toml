@@ -1,0 +1,19 @@
+[package]
+name = "axon-fs-walk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axon-domain = { path = "../axon-domain" }
+ignore.workspace = true
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+[dev-dependencies]
+axon-test-support = { path = "../axon-test-support" }

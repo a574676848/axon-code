@@ -1,0 +1,42 @@
+[package]
+name = "axon-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Axon Workbench Desktop Shell"
+keywords = ["desktop", "tauri", "workbench", "ai"]
+categories = ["development-tools"]
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+arboard = "3"
+axon-config = { path = "../axon-config" }
+axon-jsonl = { path = "../axon-jsonl" }
+axon-shell-assoc = { path = "../axon-shell-assoc" }
+axon-webview2-failure = { path = "../axon-webview2-failure" }
+base64 = { workspace = true }
+futures-util = { workspace = true }
+portable-pty = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tauri = { version = "2.12.1", features = ["custom-protocol", "tray-icon"] }
+tauri-plugin-dialog = "2.8.1"
+tauri-plugin-opener = "2.7.0"
+tauri-plugin-notification = "2.5.1"
+tauri-plugin-single-instance = "2.5.2"
+tokio = { workspace = true, features = ["rt", "net", "time"] }
+tokio-tungstenite = { workspace = true }
+ureq = { workspace = true }
+url = { workspace = true }
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+
+[build-dependencies]
+tauri-build = { version = "2.7.1" }
+
+[dev-dependencies]
+axon-test-support = { path = "../axon-test-support" }

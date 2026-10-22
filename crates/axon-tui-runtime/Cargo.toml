@@ -1,0 +1,50 @@
+[package]
+name = "axon-tui-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axon-agent-runtime = { path = "../axon-agent-runtime" }
+axon-config = { path = "../axon-config" }
+axon-display = { path = "../axon-display" }
+axon-domain = { path = "../axon-domain" }
+axon-fs-walk = { path = "../axon-fs-walk" }
+axon-jsonl = { path = "../axon-jsonl" }
+axon-logger = { path = "../axon-logger" }
+axon-memory = { path = "../axon-memory" }
+axon-process = { path = "../axon-process" }
+axon-protocol = { path = "../axon-protocol" }
+axon-session-runtime = { path = "../axon-session-runtime" }
+axon-time = { path = "../axon-time" }
+crossterm.workspace = true
+arboard = "3"
+diffy = "0.5"
+image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
+pulldown-cmark = "0.13.4"
+ratatui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-default-fancy"] }
+toml.workspace = true
+unicode-width.workspace = true
+unicode-segmentation.workspace = true
+textwrap = "0.16"
+tempfile.workspace = true
+url.workspace = true
+shlex = "2.0.1"
+winsplit = "0.1.0"
+which = "8.0.6"
+
+[dev-dependencies]
+axon-test-support = { path = "../axon-test-support" }
+serde_json.workspace = true
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true

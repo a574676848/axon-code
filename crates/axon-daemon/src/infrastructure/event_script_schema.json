@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Axon 外部事件解析脚本输出契约",
+  "description": "provider 解析脚本 stdout 必须输出的唯一 JSON 对象；除下列字段外不接受任何额外字段。event_id 必须 provider 命名空间化（以 {provider}: 开头），且严禁掺入接收时间或随机数，否则 durable ingress 的幂等键失效。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "title", "content"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "provider 命名空间化的稳定事件标识，格式为 {provider}:{业务标识}。"
+    },
+    "correlation_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "业务关联键，用于 Gateway 滑窗防抖；缺省时回落到 event_id。"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "description": "事件简报标题，进入 Interaction 正文首行。"
+    },
+    "content": {
+      "type": "string",
+      "minLength": 1,
+      "description": "事件正文。超长正文由 Daemon 统一归档为 Markdown，脚本无需自行裁剪。"
+    }
+  }
+}

@@ -1,0 +1,134 @@
+[package]
+name = "axon-agent-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axon-client-identity = { path = "../axon-client-identity" }
+axon-config = { path = "../axon-config" }
+axon-context-fragments = { path = "../axon-context-fragments" }
+axon-crypto = { path = "../axon-crypto" }
+axon-display = { path = "../axon-display" }
+axon-domain = { path = "../axon-domain" }
+axon-fs-walk = { path = "../axon-fs-walk" }
+axon-jsonl = { path = "../axon-jsonl" }
+axon-prompts = { path = "../axon-prompts" }
+axon-memory = { path = "../axon-memory" }
+axon-memory-read = { path = "../axon-memory-read" }
+axon-memory-write = { path = "../axon-memory-write" }
+axon-patch-model = { path = "../axon-patch-model" }
+axon-protocol = { path = "../axon-protocol" }
+axon-remote-runtime = { path = "../axon-remote-runtime" }
+axon-output-filter = { path = "../axon-output-filter" }
+axon-process = { path = "../axon-process" }
+axon-rustls-provider = { path = "../axon-rustls-provider" }
+axon-time = { path = "../axon-time" }
+ed25519-dalek.workspace = true
+futures-util.workspace = true
+globset = "0.4"
+grep-matcher.workspace = true
+grep-regex.workspace = true
+grep-searcher.workspace = true
+ignore.workspace = true
+portable-pty.workspace = true
+regex.workspace = true
+flate2.workspace = true
+fs4.workspace = true
+rusqlite.workspace = true
+pdf-extract.workspace = true
+quick-xml.workspace = true
+tar.workspace = true
+thiserror.workspace = true
+tempfile.workspace = true
+async-trait = "0.1"
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+yaml-rust.workspace = true
+jsonschema.workspace = true
+tiktoken-rs = "0.12.0"
+tokio = { workspace = true, features = ["fs", "io-util", "net", "process", "sync", "time"] }
+url = "2"
+chrono.workspace = true
+httpdate.workspace = true
+uuid = { workspace = true, features = ["serde"] }
+reqwest = { workspace = true, features = ["blocking", "form", "rustls"] }
+urlencoding = "2"
+zip.workspace = true
+tree-sitter.workspace = true
+tree-sitter-astro.workspace = true
+tree-sitter-bash.workspace = true
+tree-sitter-c.workspace = true
+tree-sitter-c-sharp.workspace = true
+tree-sitter-clojure.workspace = true
+tree-sitter-cmake.workspace = true
+tree-sitter-cpp.workspace = true
+tree-sitter-css.workspace = true
+tree-sitter-dart.workspace = true
+tree-sitter-diff.workspace = true
+tree-sitter-dockerfile.workspace = true
+tree-sitter-elixir.workspace = true
+tree-sitter-elisp.workspace = true
+tree-sitter-erlang.workspace = true
+tree-sitter-fortran.workspace = true
+tree-sitter-go.workspace = true
+tree-sitter-graphql.workspace = true
+tree-sitter-haskell.workspace = true
+tree-sitter-hcl.workspace = true
+tree-sitter-html.workspace = true
+tree-sitter-ini.workspace = true
+tree-sitter-java.workspace = true
+tree-sitter-javascript.workspace = true
+tree-sitter-json.workspace = true
+tree-sitter-julia.workspace = true
+tree-sitter-just.workspace = true
+tree-sitter-kotlin.workspace = true
+tree-sitter-lua.workspace = true
+tree-sitter-make.workspace = true
+tree-sitter-md.workspace = true
+tree-sitter-nix.workspace = true
+tree-sitter-objc.workspace = true
+tree-sitter-ocaml.workspace = true
+tree-sitter-odin.workspace = true
+tree-sitter-php.workspace = true
+tree-sitter-powershell.workspace = true
+tree-sitter-proto.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-r.workspace = true
+tree-sitter-regex.workspace = true
+tree-sitter-ruby.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-scala.workspace = true
+tree-sitter-solidity.workspace = true
+tree-sitter-sql.workspace = true
+tree-sitter-starlark.workspace = true
+tree-sitter-svelte.workspace = true
+tree-sitter-swift.workspace = true
+tree-sitter-tlaplus.workspace = true
+tree-sitter-toml-ng.workspace = true
+tree-sitter-typescript.workspace = true
+tree-sitter-verilog.workspace = true
+tree-sitter-vue.workspace = true
+tree-sitter-xml.workspace = true
+tree-sitter-yaml.workspace = true
+tree-sitter-zig.workspace = true
+
+[features]
+default = []
+memory-text-index = ["axon-memory/memory-text-index", "axon-memory-write/memory-text-index"]
+memory-vector-index = ["axon-memory/memory-vector-index", "axon-memory-write/memory-vector-index"]
+memory-indexes = ["memory-text-index", "memory-vector-index"]
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+axon-test-support = { path = "../axon-test-support" }

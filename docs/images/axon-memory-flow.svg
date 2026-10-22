@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+    <title id="title">Axon Memory 检索、使用与治理数据流</title>
+    <desc id="desc">展示工作区请求如何检索作用域内 Memory、复核当前事实、进入 Agent turn，并将高价值结论写入 SQLite 权威存储与全文、向量索引投影</desc>
+
+    <defs>
+        <style>
+            text { font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", "Segoe UI Emoji", -apple-system, BlinkMacSystemFont, sans-serif; }
+            .title { font-size: 34px; font-weight: 750; fill: #172033; }
+            .subtitle { font-size: 16px; fill: #526078; }
+            .lane-title { font-size: 16px; font-weight: 700; fill: #172033; }
+            .step { font-size: 12px; font-weight: 700; fill: #ffffff; }
+            .node-title { font-size: 18px; font-weight: 700; fill: #172033; }
+            .node-copy { font-size: 13px; fill: #526078; }
+            .node-note { font-size: 12px; fill: #68758b; }
+            .arrow { fill: none; stroke: #6b7a91; stroke-width: 2.2; marker-end: url(#arrowhead); }
+            .return-arrow { fill: none; stroke: #147d73; stroke-width: 2.4; stroke-dasharray: 7 6; marker-end: url(#arrowhead-green); }
+            .node { fill: #ffffff; stroke: #c9d2df; stroke-width: 1.5; rx: 8; }
+            .node-blue { stroke: #76a9e8; }
+            .node-green { stroke: #62b7a7; }
+            .node-amber { stroke: #d6aa53; }
+            .pill-blue { fill: #2769b3; }
+            .pill-green { fill: #147d73; }
+            .pill-amber { fill: #a56b12; }
+        </style>
+        <marker id="arrowhead" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+            <path d="M0,0 L10,4 L0,8 Z" fill="#6b7a91"/>
+        </marker>
+        <marker id="arrowhead-green" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+            <path d="M0,0 L10,4 L0,8 Z" fill="#147d73"/>
+        </marker>
+    </defs>
+
+    <rect width="1600" height="900" fill="#f4f6f9"/>
+
+    <g transform="translate(64, 58)">
+        <text x="0" y="0" class="title">Axon 个人智能体长效记忆与认知进化数据流</text>
+        <text x="0" y="30" class="subtitle">权威事实与检索投影解耦：用户意图与召回记忆结合当前工作区上下文进入 Agent 执行回路</text>
+    </g>
+
+    <g transform="translate(64, 122)">
+        <rect width="1472" height="300" rx="8" fill="#edf4fc" stroke="#c4d8ee"/>
+        <text x="24" y="36" class="lane-title">当前回合：检索与使用</text>
+
+        <g transform="translate(24, 64)">
+            <rect width="250" height="190" class="node node-blue"/>
+            <rect x="18" y="18" width="62" height="24" rx="12" class="pill-blue"/>
+            <text x="49" y="35" class="step" text-anchor="middle">01</text>
+            <text x="18" y="74" class="node-title">用户意图与任务目标</text>
+            <text x="18" y="104" class="node-copy">Goal Anchor、当前 Thread</text>
+            <text x="18" y="128" class="node-copy">工作目录与运行上下文</text>
+            <text x="18" y="164" class="node-note">确定 Memory 查询作用域</text>
+        </g>
+
+        <path d="M338 218 H382" class="arrow"/>
+
+        <g transform="translate(382, 64)">
+            <rect width="250" height="190" class="node node-blue"/>
+            <rect x="18" y="18" width="62" height="24" rx="12" class="pill-blue"/>
+            <text x="49" y="35" class="step" text-anchor="middle">02</text>
+            <text x="18" y="74" class="node-title">作用域内检索</text>
+            <text x="18" y="104" class="node-copy">全文与向量召回候选</text>
+            <text x="18" y="128" class="node-copy">保留来源与 Citation</text>
+            <text x="18" y="164" class="node-note">索引只承担检索投影</text>
+        </g>
+
+        <path d="M696 218 H740" class="arrow"/>
+
+        <g transform="translate(740, 64)">
+            <rect width="250" height="190" class="node node-blue"/>
+            <rect x="18" y="18" width="62" height="24" rx="12" class="pill-blue"/>
+            <text x="49" y="35" class="step" text-anchor="middle">03</text>
+            <text x="18" y="74" class="node-title">当前事实复核</text>
+            <text x="18" y="104" class="node-copy">读取源码、配置与运行状态</text>
+            <text x="18" y="128" class="node-copy">识别过期或冲突的记录</text>
+            <text x="18" y="164" class="node-note">Memory 不是代码事实替代品</text>
+        </g>
+
+        <path d="M1054 218 H1098" class="arrow"/>
+
+        <g transform="translate(1098, 64)">
+            <rect width="326" height="190" class="node node-green"/>
+            <rect x="18" y="18" width="62" height="24" rx="12" class="pill-green"/>
+            <text x="49" y="35" class="step" text-anchor="middle">04</text>
+            <text x="18" y="74" class="node-title">副官执行脑使用证据</text>
+            <text x="18" y="104" class="node-copy">召回记录与当前事实共同进入上下文</text>
+            <text x="18" y="128" class="node-copy">生成回答、修改或工具调用</text>
+            <text x="18" y="164" class="node-note">读取信号用于后续治理与排序</text>
+        </g>
+    </g>
+
+    <path d="M1325 422 V482" class="arrow"/>
+
+    <g transform="translate(64, 482)">
+        <rect width="1472" height="338" rx="8" fill="#f8f4ea" stroke="#dfcfad"/>
+        <text x="24" y="36" class="lane-title">结算与维护：准入、权威写入和索引投影</text>
+
+        <g transform="translate(24, 64)">
+            <rect width="300" height="218" class="node node-amber"/>
+            <rect x="18" y="18" width="62" height="24" rx="12" class="pill-amber"/>
+            <text x="49" y="35" class="step" text-anchor="middle">05</text>
+            <text x="18" y="74" class="node-title">事实沉淀与证据准入</text>
+            <text x="18" y="106" class="node-copy">已验证的结论与工程共识</text>
+            <text x="18" y="130" class="node-copy">长官偏好、Citation 与用量</text>
+            <text x="18" y="170" class="node-note">临时日志与低价值候选不进入长期记忆</text>
+        </g>
+
+        <path d="M388 655 H430" class="arrow"/>
+
+        <g transform="translate(430, 64)">
+            <rect width="300" height="218" class="node node-amber"/>
+            <rect x="18" y="18" width="62" height="24" rx="12" class="pill-amber"/>
+            <text x="49" y="35" class="step" text-anchor="middle">06</text>
+            <text x="18" y="74" class="node-title">准入与语义替代</text>
+            <text x="18" y="106" class="node-copy">检查价值、证据、类别与作用域</text>
+            <text x="18" y="130" class="node-copy">新结论可显式替代冲突旧记录</text>
+            <text x="18" y="170" class="node-note">相关但不冲突的记录继续保留</text>
+        </g>
+
+        <path d="M794 655 H836" class="arrow"/>
+
+        <g transform="translate(836, 64)">
+            <rect width="270" height="218" class="node node-green"/>
+            <rect x="18" y="18" width="62" height="24" rx="12" class="pill-green"/>
+            <text x="49" y="35" class="step" text-anchor="middle">07</text>
+            <text x="18" y="74" class="node-title">Global Brain / SQLite</text>
+            <text x="18" y="106" class="node-copy">Memory、Evidence 与替代关系</text>
+            <text x="18" y="130" class="node-copy">通过事务提交权威记录</text>
+            <text x="18" y="170" class="node-note">索引可由这里重新构建</text>
+        </g>
+
+        <path d="M1170 655 H1212" class="arrow"/>
+
+        <g transform="translate(1212, 64)">
+            <rect width="212" height="218" class="node node-green"/>
+            <rect x="18" y="18" width="62" height="24" rx="12" class="pill-green"/>
+            <text x="49" y="35" class="step" text-anchor="middle">08</text>
+            <text x="18" y="74" class="node-title">索引投影</text>
+            <text x="18" y="106" class="node-copy">全文检索索引</text>
+            <text x="18" y="130" class="node-copy">向量 Embedding</text>
+            <text x="18" y="170" class="node-note">维护任务负责更新与自愈</text>
+        </g>
+    </g>
+
+    <path d="M1382 546 V452 H507 V422" class="return-arrow"/>
+    <rect x="795" y="438" width="300" height="30" rx="15" fill="#e6f2ef"/>
+    <text x="945" y="458" font-size="12" font-weight="700" fill="#147d73" text-anchor="middle">为后续回合提供可追溯召回</text>
+</svg>

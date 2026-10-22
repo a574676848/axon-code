@@ -1,0 +1,12 @@
+[package]
+name = "axon-logger"
+version.workspace = true
+edition = "2021"
+
+[dependencies]
+axon-domain = { path = "../axon-domain" }
+chrono.workspace = true
+
+[dev-dependencies]
+axon-test-support = { path = "../axon-test-support" }
+tempfile.workspace = true

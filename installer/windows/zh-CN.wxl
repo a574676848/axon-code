@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Axon 安装向导的简体中文本地化覆盖。未覆盖的系统错误文本由 WiX zh-cn 资源提供。 -->
+<WixLocalization Culture="zh-cn" Codepage="936" xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <String Id="WixUIBack" Overridable="yes" Value="上一步(&amp;B)" />
+  <String Id="WixUINext" Overridable="yes" Value="下一步(&amp;N)" />
+  <String Id="WixUICancel" Overridable="yes" Value="取消" />
+  <String Id="WixUIFinish" Overridable="yes" Value="完成(&amp;F)" />
+  <String Id="WixUIRetry" Overridable="yes" Value="重试(&amp;R)" />
+  <String Id="WixUIIgnore" Overridable="yes" Value="忽略(&amp;I)" />
+  <String Id="WixUIYes" Overridable="yes" Value="是(&amp;Y)" />
+  <String Id="WixUINo" Overridable="yes" Value="否(&amp;N)" />
+  <String Id="WixUIOK" Overridable="yes" Value="确定" />
+
+  <String Id="AdvancedWelcomeEulaDlg_Title" Overridable="yes" Value="[ProductName] 安装程序" />
+  <String Id="AdvancedWelcomeEulaDlgTitle" Overridable="yes" Value="欢迎使用 [ProductName] 安装向导" />
+  <String Id="AdvancedWelcomeEulaDlgDescriptionPerUser" Overridable="yes" Value="单击“安装”仅为当前用户安装 Axon。单击“高级”可更改安装选项。" />
+  <String Id="AdvancedWelcomeEulaDlgInstall" Overridable="yes" Value="安装(&amp;I)" />
+  <String Id="AdvancedWelcomeEulaDlgAdvanced" Overridable="yes" Value="高级(&amp;D)" />
+
+  <String Id="InstallDirDlg_Title" Overridable="yes" Value="[ProductName] 安装程序" />
+  <String Id="InstallDirDlgTitle" Overridable="yes" Value="选择安装位置" />
+  <String Id="InstallDirDlgDescription" Overridable="yes" Value="单击“下一步”安装到默认位置，或单击“更改”选择其他位置。" />
+  <String Id="InstallDirDlgChange" Overridable="yes" Value="更改(&amp;C)..." />
+  <String Id="InstallDirDlgFolderLabel" Overridable="yes" Value="[ProductName] 安装位置:" />
+
+  <String Id="CustomizeDlg_Title" Overridable="yes" Value="[ProductName] 安装程序" />
+  <String Id="CustomizeDlgTitle" Overridable="yes" Value="自定义安装" />
+  <String Id="CustomizeDlgDescription" Overridable="yes" Value="选择要安装的功能。" />
+  <String Id="CustomizeDlgText" Overridable="yes" Value="单击下面列表中的功能可更改其安装方式。" />
+  <String Id="CustomizeDlgBrowse" Overridable="yes" Value="浏览(&amp;R)..." />
+  <String Id="CustomizeDlgReset" Overridable="yes" Value="重置(&amp;S)" />
+
+  <String Id="VerifyReadyDlg_Title" Overridable="yes" Value="[ProductName] 安装程序" />
+  <String Id="VerifyReadyDlgInstall" Overridable="yes" Value="安装(&amp;I)" />
+  <String Id="VerifyReadyDlgInstallTitle" Overridable="yes" Value="已准备好安装 [ProductName]" />
+  <String Id="VerifyReadyDlgInstallText" Overridable="yes" Value="单击“安装”开始安装。单击“上一步”查看或更改安装设置，单击“取消”退出向导。" />
+
+  <String Id="ProgressDlg_Title" Overridable="yes" Value="[ProductName] 安装程序" />
+  <String Id="ProgressDlgTextInstalling" Overridable="yes" Value="安装向导正在安装 [ProductName]，请稍候。" />
+  <String Id="ProgressDlgTitleInstalling" Overridable="yes" Value="正在安装 [ProductName]" />
+  <String Id="ProgressDlgStatusLabel" Overridable="yes" Value="状态:" />
+  <String Id="ProgressDlgProgressBar" Overridable="yes" Value="安装进度" />
+
+  <String Id="ExitDialog_Title" Overridable="yes" Value="[ProductName] 安装程序" />
+  <String Id="ExitDialogTitle" Overridable="yes" Value="[ProductName] 安装向导已完成" />
+  <String Id="ExitDialogDescription" Overridable="yes" Value="单击“完成”退出安装向导。" />
+  <String Id="WelcomeDlg_Title" Overridable="yes" Value="[ProductName] 安装程序" />
+  <String Id="WelcomeDlgTitle" Overridable="yes" Value="欢迎使用 [ProductName] 安装向导" />
+  <String Id="WelcomeDlgDescription" Overridable="yes" Value="安装向导将在计算机上安装 [ProductName]。单击“下一步”继续，或单击“取消”退出。" />
+  <String Id="CancelDlgText" Overridable="yes" Value="确定要取消 [ProductName] 的安装吗？" />
+</WixLocalization>

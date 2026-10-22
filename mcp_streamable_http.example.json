@@ -1,0 +1,7 @@
+{
+  "type": "streamable_http",
+  "url": "https://mcp.example.com/mcp",
+  "headers": {
+    "Authorization": "Bearer ${MCP_TOKEN}"
+  }
+}

@@ -1,0 +1,27 @@
+[package]
+name = "axon-mcp-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axon-agent-runtime = { path = "../axon-agent-runtime" }
+axon-config = { path = "../axon-config" }
+axon-crypto = { path = "../axon-crypto" }
+axon-domain = { path = "../axon-domain" }
+axon-logger = { path = "../axon-logger" }
+axon-time = { path = "../axon-time" }
+serde.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+tokio = { workspace = true, features = ["macros"] }
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+[dev-dependencies]
+axon-test-support = { path = "../axon-test-support" }

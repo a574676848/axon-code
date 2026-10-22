@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 使用文档
+    url: https://github.com/a574676848/axon-code/blob/master/docs/README.md
+    about: 安装、配置、CLI 参数、故障排查与设计规范
+  - name: 安全问题
+    url: https://github.com/a574676848/axon-code/security/advisories/new
+    about: 请通过私密渠道报告安全漏洞，不要使用公开 Issue

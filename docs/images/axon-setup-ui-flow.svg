@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1540" height="960" viewBox="0 0 1540 960" role="img" aria-labelledby="title desc">
+    <title id="title">Axon Setup 交互式向导与受锁原子事务流程</title>
+    <desc id="desc">展示 axon setup 交互控制台、变更摘要、确认键位以及受文件锁保护的配置提交事务</desc>
+
+    <defs>
+        <style>
+            text { font-family: "Cascadia Code", "Consolas", "Microsoft YaHei", "Segoe UI Emoji", monospace; }
+            .title { fill: #f0f6fc; font-size: 28px; font-weight: 700; }
+            .subtitle { fill: #8b949e; font-size: 14px; }
+
+            /* 终端拟真卡片 */
+            .term-window { fill: #0d1117; stroke: #30363d; stroke-width: 1.5; rx: 10; filter: drop-shadow(0 8px 24px rgba(0,0,0,0.4)); }
+            .term-header { fill: #161b22; }
+            .term-title { fill: #58a6ff; font-size: 14px; font-weight: 700; }
+            .term-text { fill: #c9d1d9; font-size: 13px; }
+            .term-muted { fill: #8b949e; font-size: 12px; }
+
+            /* 状态颜色 */
+            .c-green { fill: #3fb950; font-weight: 700; }
+            .c-yellow { fill: #d29922; font-weight: 700; }
+            .c-red { fill: #f85149; font-weight: 700; }
+            .c-blue { fill: #58a6ff; font-weight: 700; }
+            .c-purple { fill: #bc8cff; font-weight: 700; }
+
+            /* 流程指示箭头 */
+            .flow-arrow { fill: none; stroke: #58a6ff; stroke-width: 2.5; marker-end: url(#arrow-blue); }
+            .commit-arrow { fill: none; stroke: #3fb950; stroke-width: 2.5; marker-end: url(#arrow-green); }
+            .cancel-arrow { fill: none; stroke: #f85149; stroke-width: 2; stroke-dasharray: 6 5; marker-end: url(#arrow-red); }
+            .back-arrow { fill: none; stroke: #d29922; stroke-width: 2; stroke-dasharray: 6 5; marker-end: url(#arrow-yellow); }
+        </style>
+
+        <marker id="arrow-blue" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+            <path d="M0,0 L8,3 L0,6 Z" fill="#58a6ff"/>
+        </marker>
+        <marker id="arrow-green" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+            <path d="M0,0 L8,3 L0,6 Z" fill="#3fb950"/>
+        </marker>
+        <marker id="arrow-red" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+            <path d="M0,0 L8,3 L0,6 Z" fill="#f85149"/>
+        </marker>
+        <marker id="arrow-yellow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+            <path d="M0,0 L8,3 L0,6 Z" fill="#d29922"/>
+        </marker>
+    </defs>
+
+    <!-- 背景画布 (Dark Theme) -->
+    <rect width="1540" height="960" fill="#010409"/>
+
+    <!-- 顶部主标题 -->
+    <g transform="translate(60, 45)">
+        <text x="0" y="0" class="title">Axon Setup 交互式向导与受锁原子事务流程</text>
+        <text x="0" y="26" class="subtitle">模块化配置向导、变更摘要与提交确认；确认后通过独占文件锁、journal、备份和临时文件完成事务</text>
+    </g>
+
+    <!-- ==================== 区域 1: 交互向导控制台 ==================== -->
+    <g transform="translate(60, 100)">
+        <rect width="680" height="380" class="term-window"/>
+        <path d="M0 10 Q0 0 10 0 H670 Q680 0 680 10 V40 H0 Z" class="term-header"/>
+
+        <!-- Window controls -->
+        <circle cx="20" cy="20" r="6" fill="#f85149"/>
+        <circle cx="38" cy="20" r="6" fill="#d29922"/>
+        <circle cx="56" cy="20" r="6" fill="#3fb950"/>
+        <text x="75" y="24" class="term-title">1. axon setup - 交互式配置主面板 (Interactive TUI)</text>
+
+        <g transform="translate(24, 60)">
+            <text x="0" y="0" class="term-muted">配置文件目标: ~/.axon/config.toml (用户级权威事实源)</text>
+            <text x="0" y="20" class="term-muted">密钥文件目标: ~/.axon/.env (API Keys &amp; Secrets，不入 Git)</text>
+            <line x1="0" y1="35" x2="630" y2="35" stroke="#30363d" stroke-width="1"/>
+
+            <!-- 模块清单 (严格对齐 interactive_views 5 项配置) -->
+            <text x="0" y="68" class="term-text"><tspan class="c-blue">[1]</tspan> Providers &amp; Gateways   <tspan class="term-muted">（OpenAI / Anthropic / DashScope 等通道）</tspan></text>
+            <text x="0" y="102" class="term-text"><tspan class="c-blue">[2]</tspan> Models &amp; Context       <tspan class="term-muted">（默认模型、上下文窗口、Vision、Reasoning）</tspan></text>
+            <text x="0" y="136" class="term-text"><tspan class="c-blue">[3]</tspan> Agent Behaviors         <tspan class="term-muted">（审批策略：ask / agent / allow）</tspan></text>
+            <text x="0" y="170" class="term-text"><tspan class="c-blue">[4]</tspan> Remote (Feishu)        <tspan class="term-muted">（飞书远控 App ID / Secret / 鉴权门禁）</tspan></text>
+            <text x="0" y="204" class="term-text"><tspan class="c-blue">[5]</tspan> Advanced Config         <tspan class="term-muted">（Memory、日志与运行参数）</tspan></text>
+
+            <line x1="0" y1="240" x2="630" y2="240" stroke="#30363d" stroke-width="1"/>
+
+            <!-- 操作按钮 -->
+            <text x="0" y="275" class="term-text"><tspan class="c-green">[S] Save &amp; Preview</tspan> 进入变更预览</text>
+            <text x="240" y="275" class="term-text"><tspan class="c-yellow">[R] Reset Defaults</tspan> 重置配置</text>
+            <text x="460" y="275" class="term-text"><tspan class="c-red">[Q] Quit</tspan> 放弃退出</text>
+        </g>
+    </g>
+
+    <!-- 流程指示 1 -> 2 (Save & Preview) -->
+    <path d="M740 280 H800" class="flow-arrow"/>
+    <text x="770" y="265" font-size="12" font-weight="700" fill="#58a6ff" text-anchor="middle">[S] 提交编辑</text>
+
+    <!-- ==================== 区域 2: 变更对比与差异预览 ==================== -->
+    <g transform="translate(800, 100)">
+        <rect width="680" height="380" class="term-window"/>
+        <path d="M0 10 Q0 0 10 0 H670 Q680 0 680 10 V40 H0 Z" class="term-header"/>
+
+        <circle cx="20" cy="20" r="6" fill="#f85149"/>
+        <circle cx="38" cy="20" r="6" fill="#d29922"/>
+        <circle cx="56" cy="20" r="6" fill="#3fb950"/>
+        <text x="75" y="24" class="term-title">2. 配置变更预览与提交确认 (Change Preview)</text>
+
+        <g transform="translate(24, 60)">
+            <text x="0" y="0" class="term-muted">以下变更将在确认后写入，密钥值始终隐藏：</text>
+
+            <!-- 变更摘要区域 -->
+            <rect x="0" y="15" width="630" height="190" rx="6" fill="#030712" stroke="#1f2937"/>
+            <g transform="translate(15, 35)">
+                <text x="0" y="0" font-size="12" fill="#4ade80">[UPDATED] ~/.axon/config.toml</text>
+                <text x="0" y="24" font-size="12" fill="#4ade80">[UPDATED] ~/.axon/.env (密钥值已隐藏)</text>
+                <text x="0" y="56" font-size="12" fill="#4ade80">+ Provider: openai</text>
+                <text x="0" y="80" font-size="12" fill="#4ade80">+ Model: gpt-4.1</text>
+                <text x="0" y="104" font-size="12" fill="#8b949e">实际摘要按本次配置变更生成</text>
+            </g>
+
+            <line x1="0" y1="230" x2="630" y2="230" stroke="#30363d" stroke-width="1"/>
+
+            <!-- 决策按钮 -->
+            <text x="0" y="265" class="term-text"><tspan class="c-green">[Enter/Y] 保存</tspan> 确认事务写入</text>
+            <text x="310" y="265" class="term-text"><tspan class="c-yellow">[Esc/N] 返回</tspan> 继续修改</text>
+        </g>
+    </g>
+
+    <!-- 返回指示 2 -> 1 [Esc/N] -->
+    <path d="M800 390 H740" class="back-arrow"/>
+    <text x="770" y="410" font-size="12" font-weight="700" fill="#d29922" text-anchor="middle">[Esc/N] 返回编辑</text>
+
+    <!-- ==================== 区域 3: 决策分流与事务保护 ==================== -->
+    <!-- 分支 1: [Enter/Y] 确认保存 -> 原子事务 -->
+    <path d="M960 480 V550" class="commit-arrow"/>
+
+    <g transform="translate(740, 550)">
+        <rect width="740" height="350" class="term-window" stroke="#238636"/>
+        <path d="M0 10 Q0 0 10 0 H730 Q740 0 740 10 V40 H0 Z" fill="#1c2c1e"/>
+        <text x="20" y="26" class="c-green" font-size="15">🔒 3A. 受文件锁保护的原子事务 (Atomic Transaction Commit)</text>
+
+        <g transform="translate(24, 60)">
+            <!-- Step 1: 锁 -->
+            <rect x="0" y="0" width="690" height="54" rx="6" fill="#161b22" stroke="#30363d"/>
+            <text x="18" y="24" class="c-purple">Step 1: 获取独占文件锁 (Exclusive Lock)</text>
+            <text x="18" y="42" class="term-muted">在 ~/.axon/ 目录建立事务互斥锁，杜绝多进程并发覆盖</text>
+
+            <!-- Step 2: 验证 -->
+            <rect x="0" y="66" width="690" height="54" rx="6" fill="#161b22" stroke="#30363d"/>
+            <text x="18" y="90" class="c-blue">Step 2: 严格配置 Schema 校验 (Validation)</text>
+            <text x="18" y="108" class="term-muted">在写入前验证 TOML 结构、模型映射与配置引用</text>
+
+            <!-- Step 3: 原子写入 -->
+            <rect x="0" y="132" width="690" height="66" rx="6" fill="#161b22" stroke="#238636"/>
+            <text x="18" y="156" class="c-green">Step 3: 原子落盘与备份轮转 (Atomic fsync &amp; Rotate)</text>
+            <text x="18" y="174" class="term-muted">• 写入临时文件 config.toml.tmp 并强制 fsync 落盘</text>
+            <text x="18" y="188" class="term-muted">• 原子重命名覆盖 ~/.axon/config.toml 与 ~/.axon/.env</text>
+
+            <!-- Step 4: 生效 -->
+            <rect x="0" y="210" width="690" height="50" rx="6" fill="#0d1117" stroke="#238636"/>
+            <text x="18" y="232" class="c-green">Step 4: 释放锁并输出成功回执 (Commit Complete)</text>
+            <text x="18" y="248" class="term-muted">后续 CLI、TUI、Daemon 命令执行时立即自动加载最新配置</text>
+        </g>
+    </g>
+
+    <!-- 分支 2: [Q] 放弃退出 -> 不提交配置事务 -->
+    <path d="M400 480 V550" class="cancel-arrow"/>
+
+    <g transform="translate(60, 550)">
+        <rect width="640" height="350" class="term-window" stroke="#da3633"/>
+        <path d="M0 10 Q0 0 10 0 H630 Q640 0 640 10 V40 H0 Z" fill="#321c1f"/>
+        <text x="20" y="26" class="c-red" font-size="15">3B. 放弃退出 / 不提交配置事务 (Discard Changes)</text>
+
+        <g transform="translate(24, 65)">
+            <rect x="0" y="0" width="590" height="60" rx="6" fill="#161b22" stroke="#30363d"/>
+            <text x="18" y="26" class="c-red">用户主动放弃 [Q] 或中断 [Ctrl+C]</text>
+            <text x="18" y="46" class="term-muted">在预览阶段或编辑阶段随时可以放弃更改</text>
+
+            <rect x="0" y="75" width="590" height="75" rx="6" fill="#161b22" stroke="#30363d"/>
+            <text x="18" y="100" class="c-yellow">内存暂存数据直接丢弃 (Drop In-Memory Staging)</text>
+            <text x="18" y="120" class="term-muted">• 确认提交前不启动配置写入事务</text>
+            <text x="18" y="138" class="term-muted">• 未保存变更需再次确认后放弃</text>
+
+            <rect x="0" y="165" width="590" height="70" rx="6" fill="#161b22" stroke="#30363d"/>
+            <text x="18" y="190" class="c-green">放弃内存中的本轮编辑 (Discard Staging)</text>
+            <text x="18" y="210" class="term-muted">• 返回时不提交 config.toml 与 .env 变更</text>
+            <text x="18" y="224" class="term-muted">• 现有配置继续作为后续命令的事实来源</text>
+        </g>
+    </g>
+</svg>

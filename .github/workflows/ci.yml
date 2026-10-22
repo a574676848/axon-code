@@ -1,0 +1,88 @@
+# Axon 编译检查流水线
+# 触发条件：push 以 v 开头的 tag（如 v0.2.0）+ 人工触发
+name: CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - master
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "1"
+
+jobs:
+  check:
+    name: Check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: cargo-${{ matrix.os }}
+          cache-targets: true
+
+      - name: 安装 Linux 系统依赖 (Tauri 2)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: 准备 Node 环境
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 前端构建 (axon-desktop UI)
+        run: |
+          npm --prefix crates/axon-desktop/ui ci
+          npm --prefix crates/axon-desktop/ui run build
+
+      - name: 校验 UI 契约门禁
+        shell: pwsh
+        run: pwsh -NoLogo -NoProfile -File tools/verify-ui-contract.ps1
+
+      - name: 格式检查
+        run: cargo fmt --all --check
+
+      - name: 编译期 lint 豁免检查
+        shell: bash
+        run: bash tools/check-no-lint-allows.sh
+
+      - name: 编译检查
+        run: cargo check --workspace --all-features
+
+      - name: Clippy 静态分析
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: 单元测试
+        run: cargo test --workspace --all-features
+
+      - name: CLI release smoke
+        shell: pwsh
+        run: pwsh -NoLogo -NoProfile -File tools/verify-cli-release-smoke.ps1
+
+      - name: Daemon 与 doctor smoke
+        shell: pwsh
+        run: cargo run -p axon-cli --all-features -- doctor --check runtime --format json
+
+      - name: TUI three-region smoke
+        shell: pwsh
+        run: pwsh -NoLogo -NoProfile -File tools/verify-tui-smoke.ps1

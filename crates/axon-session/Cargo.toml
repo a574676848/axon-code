@@ -1,0 +1,30 @@
+[package]
+name = "axon-session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axon-crypto = { workspace = true }
+axon-domain = { path = "../axon-domain" }
+axon-jsonl = { path = "../axon-jsonl" }
+axon-process = { path = "../axon-process" }
+axon-time = { path = "../axon-time" }
+fs4.workspace = true
+rusqlite = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[dev-dependencies]
+axon-test-support = { path = "../axon-test-support" }
+tempfile.workspace = true
+
+[lints]
+workspace = true

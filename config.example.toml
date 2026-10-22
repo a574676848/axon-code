@@ -1,0 +1,146 @@
+# Axon 完整配置示例
+# 用户级配置文件：~/.axon/config.toml；密钥建议写入同目录 .env。
+# 除特别说明外，省略字段即使用下方注明的默认值。
+
+[agent]
+# 默认主模型；可选值：已在 [[models]] 中声明的 name 或 id；默认值：""（有模型时必须填写）。
+default_model = "gpt-4o-coding"
+# 快速委托模型；可选值：已在 [[models]] 中声明的 name 或 id；默认值：""（有模型时必须填写）。
+fast_model = "gpt-4o-coding"
+# 主 Agent 推理强度；可选值：none、minimal、low、medium、high、xhigh、max；默认值："medium"。
+reasoning_effort = "medium"
+# 每个 run session 的最大子代理线程数；可选范围：>= 1 的整数；默认值：16。
+max_subagent_threads = 16
+# 每个 run session 可同时运行的子代理 turn 数；可选范围：>= 1 的整数；默认值：16。
+max_subagent_active_turns = 16
+# 子代理最大嵌套深度（root 深度为 0）；可选范围：>= 1 的整数；默认值：3。
+max_subagent_depth = 3
+# 自动压缩阈值（当前模型 context_window 的比例）；可选范围：0.0..=1.0；默认值：0.8。
+auto_compaction_threshold = 0.8
+# 闲暇压缩 debounce 窗口（毫秒）；可选范围：>= 1 的整数；默认值：2000。
+idle_compaction_debounce_ms = 2000
+# 日志级别；可选值：trace、debug、info、warn、error（默认值："warn"）。
+log_level = "warn"
+
+[channel_balancer]
+# 连续失败达到该次数后熔断渠道；可选范围：>= 1 的整数；默认值：3。
+failure_threshold = 3
+# 熔断冷却时间（毫秒）；可选范围：>= 1 的整数；默认值：30000。
+cooldown_ms = 30000
+# 会话渠道亲和 TTL（毫秒）；可选范围：>= 1 的整数；默认值：300000。
+affinity_ttl_ms = 300000
+# 是否持久化渠道遥测样本；可选值：true、false；默认值：false。
+telemetry_persistence_enabled = false
+
+[remote]
+# 远控吞吐模式；可选值：standard、high-throughput；默认值："standard"。
+mode = "standard"
+
+[remote.gateway]
+# Gateway API token 的环境变量名；可选值：字母、数字、下划线组成的非空名称；默认值："AXON_GATEWAY_API_TOKEN"。
+api_token_env = "AXON_GATEWAY_API_TOKEN"
+# HTTP Webhook 监听地址；可选值：有效的 IP:端口；默认值："127.0.0.1:3143"。
+http_bind = "127.0.0.1:3143"
+# 通用 WebSocket 监听地址；可选值：有效的 IP:端口；默认值："127.0.0.1:3144"。
+websocket_bind = "127.0.0.1:3144"
+
+[remote.feishu_websocket]
+# 是否启用 Feishu WebSocket adapter；可选值：true、false；默认值：false。
+enabled = false
+# Feishu app_id；可选值：飞书应用 ID；默认值：""。
+app_id = ""
+# Feishu app_secret 环境变量名；可选值：环境变量名；默认值：""。
+app_secret_env = ""
+# Feishu OpenAPI 基址；可选值：http/https URL；空字符串表示使用官方默认地址；默认值：""。
+api_base_url = ""
+# Feishu WebSocket 连接地址；可选值：WebSocket URL；空字符串表示使用官方默认地址；默认值：""。
+websocket_url = ""
+# 是否允许发送远控通知；可选值：true、false；默认值：false。
+enable_notification_sending = false
+# 全局 sender open_id 白名单；可选值：字符串数组；默认值：[]。
+allowed_sender_open_ids = []
+# 全局 sender open_id 黑名单（优先级高于白名单）；可选值：字符串数组；默认值：[]。
+blocked_sender_open_ids = []
+# 群聊是否要求显式 @ 机器人；可选值：true、false；默认值：false。
+require_mention = false
+
+# 单群治理策略数组表；可重复配置，默认值：[]（不配置任何群策略）。chat_id 必须非空。
+[[remote.feishu_websocket.chat_policies]]
+# Feishu chat_id；可选值：非空字符串；默认值：无（每条策略必须填写）。
+chat_id = "oc_example"
+# 当前群 sender 白名单；可选值：字符串数组；默认值：[]。
+allowed_sender_open_ids = []
+# 当前群 sender 黑名单；可选值：字符串数组；默认值：[]。
+blocked_sender_open_ids = []
+# 是否要求 @ 机器人；可选值：true、false 或省略（继承全局 require_mention）；默认值：省略。
+require_mention = true
+
+[memory.embedding]
+# 是否启用 Memory embedding 检索；可选值：true、false；默认值：false。
+enabled = false
+# embedding 模型；可选值：supports_embedding=true 模型的 name 或 id；默认值：""。
+model = ""
+
+[skills]
+# 禁用的 Skill 名称集合；可选值：任意 Skill name 字符串；默认值：[]。
+disabled = []
+
+[[providers]]
+# Provider 名称；可选值：非空且全局唯一字符串；默认值：""（必须填写）。
+name = "openai"
+# 是否参与模型路由；可选值：true、false；默认值：true。
+enabled = true
+# Provider 协议；可选值：openai、openai-chatcompletions、anthropic、dashscope、volcengine-ark-multimodal；默认值："openai"。
+protocol = "openai"
+# API 基址；可选值：http/https URL；默认值：按协议推导（openai 为 https://api.openai.com/v1）。
+base_url = "https://api.openai.com/v1"
+# API key 环境变量名；可选值：环境变量名或省略；默认值：无。
+api_key_env = "OPENAI_API_KEY"
+# 直接配置 API key（优先于 api_key_env）；可选值：非空密钥或省略；默认值：无。
+# api_key = "replace-with-secret"
+# Provider 底层传输；可选值：http、websocket；默认值："http"。
+wire_transport = "http"
+# WebSocket URL；可选值：ws/wss/http/https URL 或省略；默认值：省略（由 base_url 推导）。
+# websocket_url = "wss://api.example.com/v1/realtime"
+# 是否启用 zstd 请求体压缩；可选值：true、false；默认值：false。
+enable_request_compression = false
+# 渠道优先级；可选范围：任意 32 位整数，数值越大越优先；默认值：0。
+priority = 0
+# 同优先级渠道权重；可选范围：>= 0 的整数（0 按 1 参与）；默认值：1。
+weight = 1
+
+[[models]]
+# 模型路由名称；可选值：字符串；默认值：""（为空时按 id 路由）。
+name = "gpt-4o-coding"
+# 上游模型 ID；可选值：非空字符串；默认值：""（必须填写）。
+id = "gpt-4o"
+# Provider 名称；可选值：已配置 Provider 的 name；默认值：""（必须填写）。
+provider = "openai"
+# 上下文窗口 token 数；可选范围：> 0 的整数（embedding 模型可为 0）；默认值：128000。
+context_window = 128000
+# 最大输出 token 数；可选范围：> 0 的整数或省略；默认值：128000。
+max_output_tokens = 128000
+# 是否支持视觉输入；可选值：true、false；默认值：true。
+supports_vision = true
+# 是否支持 embedding；可选值：true、false；默认值：false。
+supports_embedding = false
+# embedding 维度；可选范围：supports_embedding=true 时为 > 0 的整数，否则必须为 0；默认值：0。
+embedding_dimension = 0
+
+[[models]]
+# embedding 模型路由名称；可选值：字符串；默认值：""（为空时按 id 路由）。
+name = "text-embedding-3-large"
+# 上游 embedding 模型 ID；可选值：非空字符串；默认值：""（必须填写）。
+id = "text-embedding-3-large"
+# Provider 名称；可选值：已配置 Provider 的 name；默认值：""（必须填写）。
+provider = "openai"
+# embedding 模型可将上下文窗口设为 0；可选范围：>= 0 的整数；schema 默认值：128000，此处按模型资料填写 8192。
+context_window = 8192
+# 最大输出 token 数；可选范围：> 0 的整数或省略；默认值：128000。
+max_output_tokens = 128000
+# 是否支持视觉输入；可选值：true、false；默认值：true。
+supports_vision = false
+# 是否支持 embedding；可选值：true、false；默认值：false。
+supports_embedding = true
+# embedding 维度；可选范围：> 0 的整数；默认值：0（启用 embedding 时必须按模型实际维度填写）。
+embedding_dimension = 3072

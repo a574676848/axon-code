@@ -1,0 +1,349 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1180" viewBox="0 0 1600 1180" role="img" aria-labelledby="title desc">
+    <title id="title">Axon Personal Agent 系统架构全景图 (Crate Architecture)</title>
+    <desc id="desc">展示 Axon Workspace 的 35 个 package：多端入口、运行时内核、状态契约与基础设施分层</desc>
+
+    <defs>
+        <style>
+            text { font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", "Segoe UI Emoji", -apple-system, BlinkMacSystemFont, sans-serif; }
+            .title { font-size: 34px; font-weight: 800; fill: #0f172a; letter-spacing: -0.5px; }
+            .subtitle { font-size: 16px; fill: #64748b; font-weight: 500; }
+            .layer-title { font-size: 20px; font-weight: 700; }
+            .layer-desc { font-size: 13px; fill: #64748b; font-weight: 400; }
+            .crate-name { font-size: 14px; font-weight: 700; fill: #1e293b; }
+            .crate-desc { font-size: 11px; fill: #64748b; font-weight: 400; }
+            .badge { font-size: 11px; font-weight: 700; }
+            .note { font-size: 12px; fill: #64748b; }
+
+            /* 层级背景容器 */
+            .layer-box { rx: 14; stroke-width: 1.5; filter: drop-shadow(0 4px 12px rgba(15, 23, 42, 0.04)); }
+            .entry-bg { fill: #f8fafc; stroke: #94a3b8; }
+            .adapter-bg { fill: #f0fdf4; stroke: #86efac; }
+            .app-bg { fill: #f0f9ff; stroke: #7dd3fc; }
+            .protocol-bg { fill: #fdf4ff; stroke: #f0abfc; }
+            .domain-bg { fill: #fefce8; stroke: #fde047; }
+            .infra-bg { fill: #f8fafc; stroke: #cbd5e1; stroke-dasharray: 4 4; }
+
+            /* Crate 卡片 */
+            .crate-card { fill: #ffffff; stroke-width: 1; rx: 8; filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.03)); }
+            .crate-entry { stroke: #cbd5e1; }
+            .crate-adapter { stroke: #bbf7d0; }
+            .crate-app { stroke: #bae6fd; }
+            .crate-protocol { stroke: #f5d0fe; }
+            .crate-domain { stroke: #fef08a; }
+            .crate-infra { stroke: #e2e8f0; }
+
+            /* 依赖箭头 */
+            .arrow { stroke: #94a3b8; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+            .rule-box { fill: #ffffff; stroke: #e2e8f0; stroke-width: 1; rx: 8; }
+        </style>
+
+        <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#f8fafc;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#f1f5f9;stop-opacity:1" />
+        </linearGradient>
+
+        <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+            <path d="M0,0 L8,3 L0,6 Z" fill="#94a3b8"/>
+        </marker>
+    </defs>
+
+    <!-- 背景 -->
+    <rect width="1600" height="1180" fill="url(#bg-grad)"/>
+
+    <!-- 头部标题 -->
+    <g transform="translate(60, 45)">
+        <text x="0" y="0" class="title">Axon Personal Agent 系统分层架构全景图 (35 Packages)</text>
+        <text x="0" y="28" class="subtitle">知你所想，办你所托：严格洋葱架构、统一多端运行时、持久化状态引擎与开放工具生态</text>
+    </g>
+
+    <!-- 图例与规范 -->
+    <g transform="translate(1180, 25)">
+        <rect width="360" height="70" class="rule-box"/>
+        <text x="18" y="26" font-size="12" font-weight="700" fill="#0f172a">📐 洋葱依赖规则 (Dependency Rule)</text>
+        <path d="M18 45 H120" class="arrow"/>
+        <text x="135" y="49" class="note">依赖方向：外层 → 内层</text>
+        <text x="18" y="62" class="note" fill="#dc2626">具体边界以 Cargo manifest 与架构守卫为准</text>
+    </g>
+
+    <!-- ==================== 第一层：入口与宿主层 ==================== -->
+    <g transform="translate(60, 115)">
+        <rect width="1480" height="140" class="layer-box entry-bg"/>
+        <text x="24" y="32" class="layer-title" fill="#1e293b">🎯 1. 入口与交互宿主层 (Entry &amp; Host Layer)</text>
+        <text x="700" y="30" class="layer-desc">命令行、全屏 TUI、后台宿主与升级调度</text>
+
+        <!-- Cards: 5 个模块 -->
+        <g transform="translate(24, 52)">
+            <!-- axon-cli -->
+            <g transform="translate(0, 0)">
+                <rect width="265" height="68" class="crate-card crate-entry"/>
+                <text x="14" y="26" class="crate-name">axon-cli</text>
+                <text x="14" y="44" class="crate-desc">CLI 命令解析、子命令编排</text>
+                <text x="14" y="58" class="crate-desc">格式化输出与控制面</text>
+            </g>
+            <!-- axon-tui-runtime -->
+            <g transform="translate(285, 0)">
+                <rect width="280" height="68" class="crate-card crate-entry"/>
+                <text x="14" y="26" class="crate-name">axon-tui-runtime</text>
+                <text x="14" y="44" class="crate-desc">Agent-first 全屏 TUI 交互</text>
+                <text x="14" y="58" class="crate-desc">结构化 Cell、Diff 渲染与输入状态机</text>
+            </g>
+            <!-- axon-daemon -->
+            <g transform="translate(585, 0)">
+                <rect width="280" height="68" class="crate-card crate-entry"/>
+                <text x="14" y="26" class="crate-name">axon-daemon</text>
+                <text x="14" y="44" class="crate-desc">后台常驻服务宿主与调度</text>
+                <text x="14" y="58" class="crate-desc">跨进程 IPC、租约维护与事件源</text>
+            </g>
+            <!-- axon-launcher -->
+            <g transform="translate(885, 0)">
+                <rect width="265" height="68" class="crate-card crate-entry"/>
+                <text x="14" y="26" class="crate-name">axon-launcher</text>
+                <text x="14" y="44" class="crate-desc">稳定 Launcher 引导入口</text>
+                <text x="14" y="58" class="crate-desc">不可变版本切换与零中断升级</text>
+            </g>
+        </g>
+    </g>
+
+    <!-- 依赖指示 1 -> 2 -->
+    <path d="M800 255 V280" class="arrow"/>
+
+    <!-- ==================== 第二层：适配与扩展接入层 ==================== -->
+    <g transform="translate(60, 280)">
+        <rect width="1480" height="135" class="layer-box adapter-bg"/>
+        <text x="24" y="32" class="layer-title" fill="#166534">🔌 2. 适配与跨平台接入层 (Adapters &amp; Remote Layer)</text>
+        <text x="760" y="30" class="layer-desc">模型传输、外部工具协议、远控平台与图像能力适配</text>
+
+        <g transform="translate(24, 50)">
+            <!-- axon-remote-feishu -->
+            <g transform="translate(0, 0)">
+                <rect width="280" height="65" class="crate-card crate-adapter"/>
+                <text x="14" y="24" class="crate-name">axon-remote-feishu</text>
+                <text x="14" y="42" class="crate-desc">飞书远控 WebSocket 长连、OpenAPI</text>
+                <text x="14" y="56" class="crate-desc">卡片交互、消息去重与媒体适配</text>
+            </g>
+            <!-- axon-mcp-runtime -->
+            <g transform="translate(300, 0)">
+                <rect width="280" height="65" class="crate-card crate-adapter"/>
+                <text x="14" y="24" class="crate-name">axon-mcp-runtime</text>
+                <text x="14" y="42" class="crate-desc">外部 MCP Client 运行时适配</text>
+                <text x="14" y="56" class="crate-desc">Stdio / Streamable-HTTP 工具发现</text>
+            </g>
+            <!-- axon-provider-transport -->
+            <g transform="translate(600, 0)">
+                <rect width="280" height="65" class="crate-card crate-adapter"/>
+                <text x="14" y="24" class="crate-name">axon-provider-transport</text>
+                <text x="14" y="42" class="crate-desc">模型 Provider 通信与流式传输</text>
+                <text x="14" y="56" class="crate-desc">OpenAI / Anthropic / WebSocket Wire</text>
+            </g>
+            <!-- axon-rustls-provider -->
+            <g transform="translate(900, 0)">
+                <rect width="260" height="65" class="crate-card crate-adapter"/>
+                <text x="14" y="24" class="crate-name">axon-rustls-provider</text>
+                <text x="14" y="42" class="crate-desc">进程级 Rustls TLS 证书与支持</text>
+                <text x="14" y="56" class="crate-desc">跨平台 TLS 初始化与证书加载</text>
+            </g>
+        </g>
+    </g>
+
+    <!-- 依赖指示 2 -> 3 -->
+    <path d="M800 415 V440" class="arrow"/>
+
+    <!-- ==================== 第三层：核心应用编排与运行时层 ==================== -->
+    <g transform="translate(60, 440)">
+        <rect width="1480" height="205" class="layer-box app-bg"/>
+        <text x="24" y="32" class="layer-title" fill="#0369a1">⚙️ 3. 核心应用与运行时层 (Application &amp; Runtime Layer)</text>
+        <text x="780" y="30" class="layer-desc">Agent、Session、Memory、输出过滤与补丁应用</text>
+
+        <g transform="translate(24, 48)">
+            <!-- Row 1: 4 crates -->
+            <g transform="translate(0, 0)">
+                <rect width="345" height="66" class="crate-card crate-app"/>
+                <text x="14" y="24" class="crate-name">axon-agent-runtime</text>
+                <text x="14" y="42" class="crate-desc">Agent 核心编排（Provider 循环、上下文组装</text>
+                <text x="14" y="56" class="crate-desc">工具分发、审批控制、子代理生命周期）</text>
+            </g>
+            <g transform="translate(365, 0)">
+                <rect width="345" height="66" class="crate-card crate-app"/>
+                <text x="14" y="24" class="crate-name">axon-session-runtime</text>
+                <text x="14" y="42" class="crate-desc">Session 运行时引擎与执行器</text>
+                <text x="14" y="56" class="crate-desc">Action 队列消费、Turn 边界管理、事件生成</text>
+            </g>
+            <g transform="translate(730, 0)">
+                <rect width="345" height="66" class="crate-card crate-app"/>
+                <text x="14" y="24" class="crate-name">axon-session</text>
+                <text x="14" y="42" class="crate-desc">Thread、Turn 与运行时数据持久化</text>
+                <text x="14" y="56" class="crate-desc">会话存储与应用服务</text>
+            </g>
+            <g transform="translate(1095, 0)">
+                <rect width="335" height="66" class="crate-card crate-app"/>
+                <text x="14" y="24" class="crate-name">axon-apply</text>
+                <text x="14" y="42" class="crate-desc">文件补丁与精确修改执行器</text>
+                <text x="14" y="56" class="crate-desc">Hashline、PathDiff 应用与安全校验</text>
+            </g>
+
+            <!-- Row 2: 4 crates (Memory 读写分层与过滤) -->
+            <g transform="translate(0, 78)">
+                <rect width="345" height="64" class="crate-card crate-app"/>
+                <text x="14" y="24" class="crate-name">axon-memory-read</text>
+                <text x="14" y="42" class="crate-desc">Memory 统一召回、检索投影与排序</text>
+                <text x="14" y="56" class="crate-desc">Citation 引用追踪与读取用量度量</text>
+            </g>
+            <g transform="translate(365, 78)">
+                <rect width="345" height="64" class="crate-card crate-app"/>
+                <text x="14" y="24" class="crate-name">axon-memory-write</text>
+                <text x="14" y="42" class="crate-desc">Memory 准入控制、显式写入与语义替代</text>
+                <text x="14" y="56" class="crate-desc">supersedes_memory_ids 覆盖与协调</text>
+            </g>
+            <g transform="translate(730, 78)">
+                <rect width="345" height="64" class="crate-card crate-app"/>
+                <text x="14" y="24" class="crate-name">axon-memory-ops</text>
+                <text x="14" y="42" class="crate-desc">Memory 治理原语与自愈流水线</text>
+                <text x="14" y="56" class="crate-desc">异步反思、碎片整理与投影维护</text>
+            </g>
+            <g transform="translate(1095, 78)">
+                <rect width="335" height="64" class="crate-card crate-app"/>
+                <text x="14" y="24" class="crate-name">axon-output-filter</text>
+                <text x="14" y="42" class="crate-desc">工具输出智能过滤与压缩</text>
+                <text x="14" y="56" class="crate-desc">多语言 AST 过滤与 Token 节省</text>
+            </g>
+        </g>
+    </g>
+
+    <!-- 依赖指示 3 -> 4 -->
+    <path d="M800 645 V670" class="arrow"/>
+
+    <!-- ==================== 第四层：协议契约层 ==================== -->
+    <g transform="translate(60, 670)">
+        <rect width="1480" height="135" class="layer-box protocol-bg"/>
+        <text x="24" y="32" class="layer-title" fill="#86198f">📋 4. 协议契约层 (Protocol Layer)</text>
+        <text x="720" y="30" class="layer-desc">Prompt、动态上下文与跨模块协议契约</text>
+
+        <g transform="translate(24, 48)">
+            <!-- axon-prompts -->
+            <g transform="translate(0, 0)">
+                <rect width="230" height="66" class="crate-card crate-protocol"/>
+                <text x="14" y="24" class="crate-name">axon-prompts</text>
+                <text x="14" y="42" class="crate-desc">系统 Prompt 模板</text>
+                <text x="14" y="56" class="crate-desc">角色与编码规范</text>
+            </g>
+            <!-- axon-context-fragments -->
+            <g transform="translate(245, 0)">
+                <rect width="240" height="66" class="crate-card crate-protocol"/>
+                <text x="14" y="24" class="crate-name">axon-context-fragments</text>
+                <text x="14" y="42" class="crate-desc">动态上下文 Fragment 投影</text>
+                <text x="14" y="56" class="crate-desc">Prompt Cache 友好布局</text>
+            </g>
+            <!-- axon-protocol -->
+            <g transform="translate(500, 0)">
+                <rect width="220" height="66" class="crate-card crate-protocol"/>
+                <text x="14" y="24" class="crate-name">axon-protocol</text>
+                <text x="14" y="42" class="crate-desc">跨 Crate 共享 DTO</text>
+                <text x="14" y="56" class="crate-desc">Wire 格式与通用协议</text>
+            </g>
+        </g>
+    </g>
+
+    <!-- 依赖指示 4 -> 5 -->
+    <path d="M800 805 V830" class="arrow"/>
+
+    <!-- ==================== 第五层：核心领域模型与权威存储 ==================== -->
+    <g transform="translate(60, 830)">
+        <rect width="1480" height="135" class="layer-box domain-bg"/>
+        <text x="24" y="32" class="layer-title" fill="#854d0e">5. 领域模型与权威状态基础 (Domain &amp; Authority Foundations)</text>
+        <text x="850" y="30" class="layer-desc">领域契约、配置事实与 Memory 权威存储</text>
+
+        <g transform="translate(24, 48)">
+            <!-- axon-domain -->
+            <g transform="translate(0, 0)">
+                <rect width="470" height="68" class="crate-card crate-domain"/>
+                <text x="16" y="25" class="crate-name" font-size="16">axon-domain</text>
+                <text x="16" y="44" class="crate-desc">核心领域模型、运行时错误、Value Objects 与核心 Traits 契约</text>
+                <text x="16" y="58" class="crate-desc" fill="#ca8a04">不引用 CLI、Provider、数据库、异步 Runtime 或文件系统实现</text>
+            </g>
+            <!-- axon-config -->
+            <g transform="translate(495, 0)">
+                <rect width="460" height="68" class="crate-card crate-domain"/>
+                <text x="16" y="25" class="crate-name" font-size="16">axon-config</text>
+                <text x="16" y="44" class="crate-desc">配置 Schema 定义、TOML 解析、校验器与 Setup 原子事务管理</text>
+                <text x="16" y="58" class="crate-desc">~/.axon/config.toml 与 .env 本机事实源管理</text>
+            </g>
+            <!-- axon-memory -->
+            <g transform="translate(980, 0)">
+                <rect width="450" height="68" class="crate-card crate-domain"/>
+                <text x="16" y="25" class="crate-name" font-size="16">axon-memory</text>
+                <text x="16" y="44" class="crate-desc">Memory 权威 SQLite 存储底座、Schema 迁移与实体模型</text>
+                <text x="16" y="58" class="crate-desc">知识存储权威事实源（全文与向量索引由外层建立投影）</text>
+            </g>
+        </g>
+    </g>
+
+    <!-- 依赖指示 5 -> 6 -->
+    <path d="M800 965 V990" class="arrow"/>
+
+    <!-- ==================== 第六层：通用基础设施与测试支持 ==================== -->
+    <g transform="translate(60, 990)">
+        <rect width="1480" height="135" class="layer-box infra-bg"/>
+        <text x="24" y="30" class="layer-title" fill="#475569">🛠️ 6. 通用基础设施与验证支持 (Infrastructure &amp; Acceptance Tools)</text>
+        <text x="850" y="28" class="layer-desc">跨平台基础能力与工程验收支持</text>
+
+        <g transform="translate(24, 46)">
+            <!-- axon-process -->
+            <g transform="translate(0, 0)">
+                <rect width="165" height="66" class="crate-card crate-infra"/>
+                <text x="12" y="24" class="crate-name">axon-process</text>
+                <text x="12" y="42" class="crate-desc">跨平台子进程隔离</text>
+                <text x="12" y="56" class="crate-desc">PTY 终端交互管理</text>
+            </g>
+            <!-- axon-fs-walk -->
+            <g transform="translate(179, 0)">
+                <rect width="165" height="66" class="crate-card crate-infra"/>
+                <text x="12" y="24" class="crate-name">axon-fs-walk</text>
+                <text x="12" y="42" class="crate-desc">高性能文件遍历</text>
+                <text x="12" y="56" class="crate-desc">fd 风格遍历底座</text>
+            </g>
+            <!-- axon-crypto -->
+            <g transform="translate(358, 0)">
+                <rect width="165" height="66" class="crate-card crate-infra"/>
+                <text x="12" y="24" class="crate-name">axon-crypto</text>
+                <text x="12" y="42" class="crate-desc">加密、签名算法</text>
+                <text x="12" y="56" class="crate-desc">随机数与哈希工具</text>
+            </g>
+            <!-- axon-display -->
+            <g transform="translate(537, 0)">
+                <rect width="165" height="66" class="crate-card crate-infra"/>
+                <text x="12" y="24" class="crate-name">axon-display</text>
+                <text x="12" y="42" class="crate-desc">终端显示单元</text>
+                <text x="12" y="56" class="crate-desc">样式与布局格式化</text>
+            </g>
+            <!-- axon-time -->
+            <g transform="translate(716, 0)">
+                <rect width="165" height="66" class="crate-card crate-infra"/>
+                <text x="12" y="24" class="crate-name">axon-time</text>
+                <text x="12" y="42" class="crate-desc">时间与时钟抽象</text>
+                <text x="12" y="56" class="crate-desc">调度与超时管理</text>
+            </g>
+            <!-- axon-logger -->
+            <g transform="translate(895, 0)">
+                <rect width="165" height="66" class="crate-card crate-infra"/>
+                <text x="12" y="24" class="crate-name">axon-logger</text>
+                <text x="12" y="42" class="crate-desc">分级日志输出</text>
+                <text x="12" y="56" class="crate-desc">文件写入与轮转</text>
+            </g>
+            <!-- axon-fixtures -->
+            <g transform="translate(1074, 0)">
+                <rect width="165" height="66" class="crate-card crate-infra"/>
+                <text x="12" y="24" class="crate-name">axon-fixtures</text>
+                <text x="12" y="42" class="crate-desc">测试 Fixture 辅助</text>
+                <text x="12" y="56" class="crate-desc">确定性测试样例与构建器</text>
+            </g>
+            <!-- tools/output-filter-acceptance -->
+            <g transform="translate(1253, 0)">
+                <rect width="165" height="66" class="crate-card crate-infra"/>
+                <text x="10" y="22" class="crate-name" font-size="12">output-filter-acceptance</text>
+                <text x="10" y="40" class="crate-desc">（独立验收工具）</text>
+                <text x="10" y="54" class="crate-desc">AST 过滤率回归</text>
+            </g>
+       </g>
+   </g>
+</svg>

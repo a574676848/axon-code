@@ -1,0 +1,18 @@
+[package]
+name = "axon-apply"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axon-patch-model = { path = "../axon-patch-model" }
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+[dev-dependencies]
+axon-test-support = { path = "../axon-test-support" }

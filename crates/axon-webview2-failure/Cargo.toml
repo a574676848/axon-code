@@ -1,0 +1,21 @@
+[package]
+name = "axon-webview2-failure"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "WebView2 process failure hook and built-in error page control"
+
+[dependencies]
+tauri = { version = "2.12.1" }
+
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39.1"
+windows-core = "0.62"
+
+[lints]
+# 关闭 WebView2 内置错误页与订阅进程失败事件都要经 COM 接口，而桌面端是
+# unsafe_code = "forbid"：把这两处调用隔离在本 crate，桌面端只消费安全 API。
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "warn"

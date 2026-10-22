@@ -1,0 +1,21 @@
+{
+    "intent_tools": [
+        "shell_command",
+        "write_stdin",
+        "update_plan",
+        "glob",
+        "search",
+        "notes_write_file",
+        "notes_append_to_file"
+    ],
+    "targets": {
+        "memory_search": { "fields": ["query"] },
+        "invoke_skill": { "fields": ["skill_name"] },
+        "delegate_to_fast": { "fields": ["task"] },
+        "spawn_agent": { "fields": ["task"] },
+        "send_message": { "fields": ["message"] },
+        "job_output": { "fields": ["job_id"], "template": "等待 {value} 结果" },
+        "new_context": { "fields": ["reason"] },
+        "get_context_remaining": { "silent": true }
+    }
+}

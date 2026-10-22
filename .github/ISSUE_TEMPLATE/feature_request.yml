@@ -1,0 +1,61 @@
+name: 功能建议
+description: 提出可落地的能力改进建议
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先说明要解决的**问题**，再描述期望的**方案**。只描述实现细节而缺少问题背景的建议较难评估。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决的问题
+      description: 当前在什么场景下受阻，现有替代方式为何不够用
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望方案
+      description: 期望的行为、命令或界面形态，尽量给出可验证的验收标准
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 备选方案
+      description: 你考虑过的其他做法，以及未采用的原因
+    validations:
+      required: false
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: 影响范围
+      multiple: true
+      options:
+        - 桌面工作台 (Desktop)
+        - 终端界面 (TUI)
+        - 命令行（axon run 与子命令）
+        - Daemon 与网关
+        - 飞书远程协同
+        - MCP 与 Skill
+        - 文档
+    validations:
+      required: true
+
+  - type: dropdown
+    id: willing
+    attributes:
+      label: 是否愿意提交 Pull Request
+      options:
+        - 愿意，我可以实现
+        - 愿意，但需要指导
+        - 暂不参与实现
+    validations:
+      required: true

@@ -1,0 +1,30 @@
+[package]
+name = "axon-memory-ops"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axon-agent-runtime = { path = "../axon-agent-runtime" }
+axon-config = { path = "../axon-config" }
+axon-crypto = { path = "../axon-crypto" }
+axon-display = { path = "../axon-display" }
+axon-domain = { path = "../axon-domain" }
+axon-jsonl = { path = "../axon-jsonl" }
+axon-time = { path = "../axon-time" }
+base64.workspace = true
+chacha20poly1305 = "0.11"
+clap.workspace = true
+ed25519-dalek.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+[dev-dependencies]
+axon-test-support = { path = "../axon-test-support" }

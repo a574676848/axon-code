@@ -1,0 +1,102 @@
+name: Bug 报告
+description: 报告可复现的缺陷，帮助定位与修复
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请先搜索既有 Issue，并按 [文档中心](https://github.com/a574676848/axon-code/blob/master/docs/README.md) 排查基础配置问题。
+        请勿粘贴 API Key、网关 Token、会话内容或任何未脱敏日志。
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已搜索过既有 Issue，未发现重复问题
+          required: true
+        - label: 我已移除日志与配置中的密钥、Token 与个人数据
+          required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: 操作系统
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Axon 版本
+      description: 粘贴 `axon --version` 的输出
+      placeholder: axon 0.1.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: 安装方式
+      options:
+        - 一键安装脚本（install.ps1 / install.sh）
+        - 源码构建（install-from-source）
+        - 发行包（Release 压缩包 / MSI / Homebrew）
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: 受影响的入口
+      multiple: true
+      options:
+        - 桌面工作台 (Desktop)
+        - 终端界面 (TUI)
+        - 命令行（axon run 与子命令）
+        - Daemon 与网关
+        - 飞书远程协同
+        - MCP 与 Skill
+        - 文档
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 执行 ...
+        2. 打开 ...
+        3. 观察到 ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 诊断输出
+      description: 可选。可粘贴 `axon doctor --check runtime --format json` 的脱敏结果
+      render: json
+    validations:
+      required: false

@@ -1,0 +1,13 @@
+Package: axon
+Version: __VERSION__
+Section: utils
+Priority: optional
+Architecture: __ARCH__
+Depends: libc6 (>= 2.31)
+Maintainer: Alex.Z <a574676848@users.noreply.github.com>
+Homepage: https://github.com/a574676848/axon-code
+Description: Model-routed agentic coding TUI with provider load balancing
+ Axon 是一款模型路由与记忆驱动的 Agentic 编码工作台，提供多供应商负载、Memory 自进化、高缓存复用和高准确率工具调用。
+ 基于 Rust 构建，面向多平台代码工作流，强调主链可脚本化、可验证和可持续优化。
+.
+ 内置类似 Codex 的 agent runtime，可在统一审批策略与 session timeline 中调用 AI 能力。
