@@ -12,7 +12,7 @@ axon-domain = { path = "../axon-domain" }
 hnsw_rs = { version = "0.3.4", optional = true }
 rusqlite = { workspace = true }
 serde_json.workspace = true
-tantivy = { version = "0.26", optional = true }
+tantivy = { version = "0.27", optional = true }
 
 [features]
 default = ["memory-core"]
