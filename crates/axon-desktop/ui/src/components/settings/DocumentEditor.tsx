@@ -77,31 +77,29 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
         </Button>
       </SettingsHeaderAction>
 
+      {/*
+        只在有未保存内容时给一句提示。保存成功不再回一句「已保存」：
+        按钮自身会因为 dirty 变空而禁用，那已经是「没有待保存」的证据，
+        再挂一个状态标签反而在标题行右下角多出一块要读的字。
+      */}
       <SettingsHeaderStatus>
         {dirty ? (
           <Text tone="tertiary" size="xs">
             有未保存的修改
           </Text>
-        ) : (
-          <span className="inline-flex items-center gap-1.5">
-            <CheckIcon size={14} className="text-text-tertiary" />
-            <Text tone="tertiary" size="xs">
-              已保存
-            </Text>
-          </span>
-        )}
+        ) : null}
       </SettingsHeaderStatus>
 
       {error !== null && <Banner tone="danger" icon={<AlertCircleIcon size={13} />} title={error} />}
 
-      <Panel className="p-2">
+      <Panel className="p-2 flex-1 min-h-0 flex flex-col">
         <Textarea
           value={content}
           rows={18}
           spellCheck={false}
           placeholder={placeholder}
           onChange={(event) => setContent(event.target.value)}
-          className="min-h-[380px]"
+          className="flex-1 min-h-[380px] resize-none"
         />
       </Panel>
 

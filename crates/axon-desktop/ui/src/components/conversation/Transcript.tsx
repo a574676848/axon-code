@@ -200,10 +200,17 @@ const ReasoningBlock: React.FC<{ text: string; done: boolean; durationMs: number
         meta={compactDuration(durationMs)}
       />
       {open && (
-        <DisclosureBody>
-          <p className="text-row-loose text-text-secondary whitespace-pre-wrap break-words">
-            {compactReasoningText(text)}
-          </p>
+        <DisclosureBody framed>
+          {/*
+            思考是过程，不是结论：读作页边批注，左侧一道标线加三级文本色。
+            不再铺整块底色：一段几十字的推理套上灰底会压成一块砖，
+            与下面的正式回答抢重量。三级文本在两种主题下都过正文 AA。
+          */}
+          <div className="border-l-2 border-border-strong pl-3">
+            <p className="text-row-loose text-text-tertiary whitespace-pre-wrap break-words">
+              {compactReasoningText(text)}
+            </p>
+          </div>
         </DisclosureBody>
       )}
     </div>

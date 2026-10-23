@@ -1,7 +1,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { Z_MENU } from './chatChrome';
-import { MENU_ANCHOR_GAP, MENU_PANEL_CLASS, MenuRow } from './MenuPanel';
+import { MENU_ANCHOR_GAP, MENU_PANEL_ATTACHED_CLASS, MenuRow } from './MenuPanel';
 
 /*
  * 输入坞的候选菜单：斜杠指令与 `@` 文件引用共用同一种形态。
@@ -150,7 +150,7 @@ export const ComposerCandidateMenu: React.FC<ComposerCandidateMenuProps> = ({
         bottom: geometry.bottom,
         maxHeight: geometry.maxHeight,
       }}
-      className={`fixed ${Z_MENU} ${MENU_PANEL_CLASS}`}
+      className={`fixed ${Z_MENU} ${MENU_PANEL_ATTACHED_CLASS}`}
     >
       {/*
         长列表要看得见「下面还有内容」，因此这里把滑块显出来；

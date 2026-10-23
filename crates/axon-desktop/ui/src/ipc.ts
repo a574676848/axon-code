@@ -59,6 +59,7 @@ import type {
   UsagePeriod,
   UsageRealtimeReport,
   UsageRealtimeWindow,
+  ThemeId,
 } from './types';
 
 /** 会话事件通道名，与 Rust 侧 `CONVERSATION_EVENT` 一致；车道流与会话流共用这一条。 */
@@ -562,6 +563,10 @@ export const desktopPreferences = (): Promise<DesktopPreferences> => call('deskt
 /** 设置是否发送系统通知。 */
 export const desktopSetNotifications = (enabled: boolean): Promise<DesktopPreferences> =>
   call('desktop_set_notifications', { enabled });
+
+/** 切换界面主题。 */
+export const desktopSetTheme = (theme: ThemeId): Promise<DesktopPreferences> =>
+  call('desktop_set_theme', { theme });
 
 const CRON_PAGE_SIZE = 20;
 export const cronList = (page = 1, pageSize = CRON_PAGE_SIZE, status = '', search = ''): Promise<CronListResult> =>

@@ -75,7 +75,7 @@ const SECTIONS: SectionSpec[] = [
     id: 'pricing',
     label: '模型定价',
     description: '按模型匹配式配置单价，用量看板据此计算成本',
-    footer: '价格规则保存在本地定价库，改动即时生效',
+    footer: '',
     icon: PriceTagIcon,
     prefixes: [],
   },
@@ -115,7 +115,7 @@ const SECTIONS: SectionSpec[] = [
     id: 'skills',
     label: '技能',
     description: '技能目录中的只读清单',
-    footer: '技能来自技能目录，此处为只读清单',
+    footer: '',
     icon: SkillIcon,
     prefixes: [],
   },
@@ -123,7 +123,7 @@ const SECTIONS: SectionSpec[] = [
     id: 'soul',
     label: '人设',
     description: '长期人设与价值观，作用于所有会话',
-    footer: '修改在点保存后原子写入源文件',
+    footer: '',
     icon: UserIcon,
     prefixes: [],
   },
@@ -131,7 +131,7 @@ const SECTIONS: SectionSpec[] = [
     id: 'agents',
     label: '行为',
     description: '全局行为约束，作用于所有会话',
-    footer: '修改在点保存后原子写入源文件',
+    footer: '',
     icon: ChecklistIcon,
     prefixes: [],
   },
@@ -147,7 +147,7 @@ const SECTIONS: SectionSpec[] = [
     id: 'system',
     label: '系统设置',
     description: '桌面外壳偏好与运行状态',
-    footer: '桌面偏好保存在本机，运行状态来自实时探测',
+    footer: '',
     icon: SettingsIcon,
     prefixes: [],
   },
@@ -156,7 +156,7 @@ const SECTIONS: SectionSpec[] = [
     id: 'about',
     label: '关于',
     description: '产品身份、版本与发布渠道',
-    footer: '版本与渠道信息来自构建期元数据',
+    footer: '',
     icon: GlobeIcon,
     prefixes: [],
   },
@@ -270,7 +270,7 @@ export const BasicSettingsPanel: React.FC<BasicSettingsPanelProps> = ({
    */
   const dashboard = section === 'usage' || section === 'pricing';
   // 关于页没有表单列：整块内容在正文区里居中，而不是缩在左侧 720px 里。
-  const wideContent = dashboard || section === 'about';
+  const wideContent = dashboard || section === 'about' || section === 'soul' || section === 'agents';
   const needsConfig = PREFIX_SECTIONS.has(section) || section === 'models';
 
   const configBody = needsConfig && config === null;
@@ -331,9 +331,9 @@ export const BasicSettingsPanel: React.FC<BasicSettingsPanelProps> = ({
       {/* 正文 */}
       <div className="flex-1 min-w-0 min-h-0 flex flex-col bg-surface">
         <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto scroll-visible">
-          <div className={dashboard ? 'min-h-full bg-surface-sunken' : 'min-h-full flex flex-col'}>
+          <div className={dashboard ? 'h-full bg-surface-sunken' : 'h-full flex flex-col'}>
             <div
-              className={`${wideContent ? 'max-w-none' : 'max-w-[720px]'} flex-1 flex flex-col pl-5 pr-6 pt-3 pb-5`}
+              className={`${wideContent ? 'max-w-none' : 'max-w-[720px]'} flex-1 flex flex-col pl-5 pr-12 pt-3 pb-5`}
             >
               {/* 分区身份：标题 16/24 500，说明 12/16 secondary，动作与内容右轴同轴 */}
               <div className="flex items-start justify-between gap-4">

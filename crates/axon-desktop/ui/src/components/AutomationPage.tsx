@@ -327,7 +327,7 @@ export const AutomationPage: React.FC<{
               loading={!loaded}
               showSystemChip={showSystemChip}
               className={
-                splitView ? "w-[360px] shrink-0 max-xl:hidden" : "flex-1"
+                splitView ? "w-[360px] shrink-0 max-xl:hidden" : "flex-1 self-start"
               }
               onQueryChange={setQuery}
               onFilterChange={setFilter}

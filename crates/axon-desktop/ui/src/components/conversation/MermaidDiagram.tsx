@@ -1,4 +1,5 @@
 import React from 'react';
+import { onThemeChange } from '../../theme';
 
 /*
  * 图形渲染：mermaid。
@@ -17,6 +18,11 @@ type MermaidApi = (typeof import('mermaid'))['default'];
 
 /** 引擎单例：初始化一次，后续复用。 */
 let engine: Promise<MermaidApi> | null = null;
+
+/** 主题切换后丢弃单例：themeVariables 是 initialize 时烘进去的，不重建就不生效。 */
+function resetEngine(): void {
+  engine = null;
+}
 
 /** 渲染用的唯一 id 计数器。 */
 let sequence = 0;
@@ -77,8 +83,18 @@ export interface MermaidDiagramProps {
 
 export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ code, onError }) => {
   const [svg, setSvg] = React.useState<string | null>(null);
+  const [themeEpoch, setThemeEpoch] = React.useState(0);
   const failure = React.useRef(onError);
   failure.current = onError;
+
+  React.useEffect(
+    () =>
+      onThemeChange(() => {
+        resetEngine();
+        setThemeEpoch((value) => value + 1);
+      }),
+    [],
+  );
 
   React.useEffect(() => {
     let cancelled = false;
@@ -99,7 +115,7 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ code, onError })
     return () => {
       cancelled = true;
     };
-  }, [code]);
+  }, [code, themeEpoch]);
 
   // 外框与留白由调用方的代码块容器提供，这里只负责图形本体。
   if (svg === null) {

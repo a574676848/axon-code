@@ -6,6 +6,7 @@ import '@xterm/xterm/css/xterm.css';
 import * as ipc from '../ipc';
 import { PlusIcon, TerminalIcon } from '../icons';
 import { EmptyState } from '../components/ui/surfaces';
+import { onThemeChange } from '../theme';
 
 /*
  * 终端正文：一个会话一个真实 PTY，屏幕由 xterm 绘制。
@@ -142,6 +143,13 @@ export const TerminalBody: React.FC<TerminalBodyProps> = ({ root, shellPath, onR
     let disposed = false;
     let pending: Array<{ id: string; data: string }> = [];
     const disposers: Array<() => void> = [];
+
+    // xterm 的主题是构造期对象，不跟 CSS 变量走：切主题必须重新读令牌再赋一次。
+    disposers.push(
+      onThemeChange(() => {
+        if (!disposed) terminal.options.theme = terminalTheme();
+      }),
+    );
 
     const fitScreen = () => {
       const dimensions = fit.proposeDimensions();

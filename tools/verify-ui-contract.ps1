@@ -119,9 +119,11 @@ if ($fontProblems.Count -gt 0) {
     Write-Host " [PASSED] (系统字体栈两支，零随包 webfont)" -ForegroundColor Green
 }
 
-# 6. Design tokens: 逐项从真实令牌文件读取并实算对比度
-#    令牌值不再硬编码在脚本里，避免令牌改名后门禁悄悄空转。
+# 6. Design tokens: 按主题块解析，逐主题实算对比度
+#    旧实现把整个文件扫进一个扁平哈希表，同名令牌后写覆盖先写：
+#    多主题共存时会静默只校验最后一个主题，因此改为按块解析并逐主题求值。
 Write-Host "6. Verifying Design Tokens Contrast Ratios (WCAG AA)..."
+
 function Get-Luminance([string]$hex) {
     $hex = $hex.TrimStart('#')
     $r = [Convert]::ToInt32($hex.Substring(0, 2), 16) / 255.0
@@ -138,86 +140,136 @@ function Get-Luminance([string]$hex) {
     return (0.2126 * $rl + 0.7152 * $gl + 0.0722 * $bl)
 }
 
-function Get-ContrastRatio([string]$hex1, [string]$hex2) {
-    $l1 = Get-Luminance $hex1
-    $l2 = Get-Luminance $hex2
+function Get-ContrastRatio([string]$foreground, [string]$background) {
+    $l1 = Get-Luminance $foreground
+    $l2 = Get-Luminance $background
     $brightest = [Math]::Max($l1, $l2)
     $darkest = [Math]::Min($l1, $l2)
     return [Math]::Round(($brightest + 0.05) / ($darkest + 0.05), 2)
 }
 
-$tokenFile = Join-Path $PSScriptRoot "..\crates\axon-desktop\ui\src\tokens.css"
-$tokenText = Get-Content $tokenFile -Raw
-$tokens = @{}
-foreach ($match in [regex]::Matches($tokenText, '(?m)^\s*(--color-[a-z0-9-]+)\s*:\s*(#[0-9a-fA-F]{6})\s*;')) {
-    $tokens[$match.Groups[1].Value] = $match.Groups[2].Value
+function Get-TokenMap([string]$block) {
+    $map = @{}
+    foreach ($match in [regex]::Matches($block, '(--color-[a-z0-9-]+)\s*:\s*(#[0-9a-fA-F]{6})\s*;')) {
+        $map[$match.Groups[1].Value] = $match.Groups[2].Value
+    }
+    return $map
 }
 
-# 每一项都声明自己的判定基准：正文字符要求 4.5:1，非文本的聚焦环按 1.4.11 要求 3:1。
-# 同一个前景落在多块底色上时各写一行，并用 Bg 指明底色令牌（缺省是画布）。
+$tokenFile = Join-Path $PSScriptRoot "..\crates\axon-desktop\ui\src\tokens.css"
+$tokenText = Get-Content $tokenFile -Raw
+
+$baseMatch = [regex]::Match($tokenText, '(?s)@theme\s*\{(.*?)\n\}')
+if (-not $baseMatch.Success) {
+    Write-Host "   [FAILED] tokens.css 里找不到 @theme 块" -ForegroundColor Red
+    $failed = $true
+}
+$baseTokens = Get-TokenMap $baseMatch.Groups[1].Value
+
+$themeMaps = [ordered]@{}
+$themeOverrides = @{}
+$themeMaps['纸白'] = $baseTokens
+foreach ($match in [regex]::Matches($tokenText, "(?s)html\[data-theme='([a-z0-9-]+)'\]\s*\{(.*?)\n\s*\}")) {
+    $name = $match.Groups[1].Value
+    $overrides = Get-TokenMap $match.Groups[2].Value
+    $resolved = @{}
+    foreach ($key in $baseTokens.Keys) { $resolved[$key] = $baseTokens[$key] }
+    foreach ($key in $overrides.Keys) { $resolved[$key] = $overrides[$key] }
+    $themeMaps[$name] = $resolved
+    $themeOverrides[$name] = $overrides
+}
+
+# 主题不能是空覆盖：只换了名字、值仍是纸白的那一套，对比度当然全过，
+# 但用户在设置里切过去看不到任何变化。画布必须与默认主题不同。
+foreach ($name in $themeOverrides.Keys) {
+    $overrides = $themeOverrides[$name]
+    $canvas = $overrides["--color-canvas"]
+    if ([string]::IsNullOrEmpty($canvas)) {
+        Write-Host ("   [FAILED] 主题 [" + $name + "] 没有声明 --color-canvas") -ForegroundColor Red
+        $failed = $true
+        continue
+    }
+    if ($canvas -eq $baseTokens["--color-canvas"]) {
+        Write-Host ("   [FAILED] 主题 [" + $name + "] 的画布与默认主题相同，切换后看不出变化") -ForegroundColor Red
+        $failed = $true
+    }
+}
+
+if ($themeMaps.Count -eq 0) {
+    Write-Host "   [FAILED] 一个主题都没解析出来" -ForegroundColor Red
+    $failed = $true
+}
+
+# 承载文字的底色只有画布与卡片两档，二者都校验。
+$surfaces = @("--color-canvas", "--color-surface")
 $contrastChecks = @(
-    @{ Token = "--color-canvas"; Label = "画布底色"; Req = 0.0 },
     @{ Token = "--color-text-primary"; Label = "主文本"; Req = 4.5 },
     @{ Token = "--color-text-secondary"; Label = "次要文本"; Req = 4.5 },
     @{ Token = "--color-text-tertiary"; Label = "三级文本"; Req = 4.5 },
     @{ Token = "--color-text-placeholder"; Label = "占位文本"; Req = 4.5 },
     @{ Token = "--color-text-caption"; Label = "说明与时间戳"; Req = 4.5 },
     @{ Token = "--color-text-link"; Label = "链接文本"; Req = 4.5 },
+    @{ Token = "--color-skill-ink"; Label = "技能指令高亮"; Req = 4.5 },
     @{ Token = "--color-ok-ink"; Label = "增量计数文字"; Req = 4.5 },
     @{ Token = "--color-danger"; Label = "危险语义色"; Req = 4.5 },
-    @{ Token = "--color-gold-ink"; Label = "琥珀告警文字"; Req = 4.5 },
-    @{ Token = "--color-skill-ink"; Label = "技能指令高亮"; Req = 4.5 },
-    @{ Token = "--color-skill-ink"; Label = "技能指令高亮"; Req = 4.5; Bg = "--color-bubble" },
-    @{ Token = "--color-focus"; Label = "键盘聚焦环"; Req = 3.0 }
+    @{ Token = "--color-gold-ink"; Label = "琥珀告警文字"; Req = 4.5 }
 )
 
-$canvas = $tokens["--color-canvas"]
-if ([string]::IsNullOrEmpty($canvas)) {
-    Write-Host "   [FAILED] 令牌文件缺少 --color-canvas，无法计算对比度" -ForegroundColor Red
-    $failed = $true
-}
+foreach ($themeName in $themeMaps.Keys) {
+    $tokens = $themeMaps[$themeName]
+    Write-Host ("   主题 [" + $themeName + "]") -ForegroundColor Cyan
 
-foreach ($check in $contrastChecks) {
-    $value = $tokens[$check.Token]
-    if ([string]::IsNullOrEmpty($value)) {
-        Write-Host ("   {0,-24}: [FAILED] 令牌文件中不存在该令牌" -f $check.Token) -ForegroundColor Red
+    foreach ($surfaceToken in $surfaces) {
+        $surfaceValue = $tokens[$surfaceToken]
+        if ([string]::IsNullOrEmpty($surfaceValue)) {
+            Write-Host ("      [FAILED] 主题缺少底色令牌 " + $surfaceToken) -ForegroundColor Red
+            $failed = $true
+            continue
+        }
+        foreach ($check in $contrastChecks) {
+            $value = $tokens[$check.Token]
+            if ([string]::IsNullOrEmpty($value)) {
+                Write-Host ("      [FAILED] 缺少令牌 " + $check.Token) -ForegroundColor Red
+                $failed = $true
+                continue
+            }
+            $ratio = Get-ContrastRatio $value $surfaceValue
+            $isOk = $ratio -ge $check.Req
+            if (-not $isOk) {
+                Write-Host ("      {0} 对 {1}: {2}:1 (要求 >= {3}) [FAILED]" -f $check.Token, $surfaceToken, $ratio, $check.Req) -ForegroundColor Red
+                $failed = $true
+            }
+        }
+    }
+
+    # 聚焦环属于非文本元素，按 1.4.11 要求 3:1。
+    $focusValue = $tokens["--color-focus"]
+    if ([string]::IsNullOrEmpty($focusValue)) {
+        Write-Host "      [FAILED] 缺少 --color-focus" -ForegroundColor Red
         $failed = $true
-        continue
+    } else {
+        $ratio = Get-ContrastRatio $focusValue $tokens["--color-canvas"]
+        if ($ratio -lt 3.0) {
+            Write-Host ("      --color-focus 对画布: {0}:1 (要求 >= 3) [FAILED]" -f $ratio) -ForegroundColor Red
+            $failed = $true
+        }
     }
-    if ($check.Req -eq 0.0) {
-        Write-Host ("   {0,-24}: {1} (画布基准)" -f $check.Token, $value)
-        continue
-    }
-    $bgToken = if ($check.ContainsKey("Bg")) { $check.Bg } else { "--color-canvas" }
-    $bgValue = $tokens[$bgToken]
-    if ([string]::IsNullOrEmpty($bgValue)) {
-        Write-Host ("   {0,-24}: [FAILED] 令牌文件中不存在底色令牌 {1}" -f $check.Token, $bgToken) -ForegroundColor Red
+
+    # 主操作是实心填充，必须单独核算白字。
+    $primaryValue = $tokens["--color-primary"]
+    if ([string]::IsNullOrEmpty($primaryValue)) {
+        Write-Host "      [FAILED] 缺少 --color-primary" -ForegroundColor Red
         $failed = $true
-        continue
+    } else {
+        $ratio = Get-ContrastRatio $primaryValue "#FFFFFF"
+        if ($ratio -lt 4.5) {
+            Write-Host ("      主按钮白字: {0}:1 (要求 >= 4.5) [FAILED]" -f $ratio) -ForegroundColor Red
+            $failed = $true
+        }
     }
-    $ratio = Get-ContrastRatio $value $bgValue
-    $isOk = $ratio -ge $check.Req
-    $status = if ($isOk) { "[PASSED]" } else { "[FAILED]" }
-    $fgColor = if ($isOk) { "Green" } else { "Red" }
-    $label = if ($bgToken -eq "--color-canvas") { $check.Label } else { "$($check.Label) 对 $bgToken" }
-    Write-Host ("   {0,-14} {1,-24}: {2,5}:1 (要求 >={3}:1) {4}" -f $label, $check.Token, $ratio, $check.Req, $status) -ForegroundColor $fgColor
-    if (-not $isOk) { $failed = $true }
 }
 
-# 主操作按钮使用白字实心填充，必须单独核算填充色与白字的对比度。
-$primary = $tokens["--color-primary"]
-if ([string]::IsNullOrEmpty($primary)) {
-    Write-Host "   [FAILED] 令牌文件缺少 --color-primary" -ForegroundColor Red
-    $failed = $true
-} else {
-    $ratio = Get-ContrastRatio $primary "#FFFFFF"
-    $isOk = $ratio -ge 4.5
-    $status = if ($isOk) { "[PASSED]" } else { "[FAILED]" }
-    $fgColor = if ($isOk) { "Green" } else { "Red" }
-    Write-Host ("   {0,-14} {1,-24}: {2,5}:1 (要求 >=4.5:1) {3}" -f "主按钮白字", "--color-primary", $ratio, $status) -ForegroundColor $fgColor
-    if (-not $isOk) { $failed = $true }
-}
-
+Write-Host ("   共校验 {0} 套主题，逐主题通过则本条通过" -f $themeMaps.Count) -ForegroundColor Green
 # 7. 源码不得出现外部设计系统品牌字样
 Write-Host "7. Checking zero third-party design-system brand wording in desktop sources..."
 $brandPattern = '(?i)\bdsh\b|deepseek-harness|deepseek harness'

@@ -57,6 +57,12 @@ pub struct DesktopState {
     /// 是否发送系统通知；缺省视为开启。
     #[serde(default = "default_notifications_enabled")]
     pub notifications_enabled: bool,
+    /// 界面主题标识。
+    ///
+    /// 空值就是默认的纸白主题：这样历史状态文件不需要迁移，
+    /// 任何遗漏写入的路径也会自然落在默认主题上。
+    #[serde(default)]
+    pub theme: Option<String>,
 }
 
 /// 通知默认开启：轮次结束提示是桌面应用的默认预期行为。
@@ -91,6 +97,7 @@ impl Default for DesktopState {
             pending_lanes: Vec::new(),
             last_workspace_dir: None,
             notifications_enabled: default_notifications_enabled(),
+            theme: None,
         }
     }
 }

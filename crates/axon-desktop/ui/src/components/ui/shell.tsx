@@ -107,13 +107,17 @@ export const PageShell: React.FC<PageShellProps> = ({
   children,
 }) => (
   <main className="flex-1 min-w-0 h-full flex flex-col bg-canvas overflow-clip">
-    <header className="shrink-0 h-9 px-4 flex items-center gap-3 hairline-b border-border-hairline">
-      <Text size="sm" strong truncate>
-        {title}
-      </Text>
-      {actions !== undefined && (
-        <div className="ml-auto shrink-0 flex items-center gap-1.5">{actions}</div>
-      )}
+    <header className="shrink-0 h-9 hairline-b border-border-hairline">
+      {/* 顶栏与正文共用同一条版心：宽屏下标题与内容左轴必须重合，
+          否则页头贴窗口左边、正文居中，中间会空出一道无主的留白。 */}
+      <div className="mx-auto flex h-9 w-full max-w-page items-center gap-3 px-6">
+        <Text size="sm" strong truncate>
+          {title}
+        </Text>
+        {actions !== undefined && (
+          <div className="ml-auto shrink-0 flex items-center gap-1.5">{actions}</div>
+        )}
+      </div>
     </header>
     <div className="flex-1 min-h-0 overflow-y-auto">
       <div className="mx-auto w-full max-w-page px-6 py-5">

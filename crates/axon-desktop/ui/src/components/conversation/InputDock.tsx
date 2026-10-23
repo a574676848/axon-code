@@ -514,7 +514,7 @@ export const InputDock: React.FC<InputDockProps> = ({
             */}
             <div
               ref={cardRef}
-              className={`rounded-[20px] bg-surface hairline shadow-panel transition-colors duration-100 focus-within:border-focus focus-within:shadow-[0_0_0_3px_var(--color-focus-soft)] ${
+              className={`rounded-[20px] bg-surface hairline shadow-dock transition-colors duration-100 focus-within:border-focus focus-within:shadow-[0_0_0_3px_var(--color-focus-soft)] ${
                 dragging ? 'border-focus bg-hover' : 'border-border'
               }`}
             >

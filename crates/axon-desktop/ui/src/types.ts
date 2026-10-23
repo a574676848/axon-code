@@ -378,10 +378,15 @@ export interface DocumentText {
   exists: boolean;
 }
 
+/** 界面主题标识。纸白是默认，森林是第二套。 */
+export type ThemeId = 'paper' | 'forest';
+
 /** 桌面偏好。 */
 export interface DesktopPreferences {
   /** 是否发送系统通知。 */
   notificationsEnabled: boolean;
+  /** 界面主题标识。 */
+  theme: ThemeId;
 }
 
 export interface FileTextItem {

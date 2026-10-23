@@ -189,6 +189,10 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
             crate::desktop_preferences::desktop_set_notifications(as_bool("enabled")?)?,
         )
         .map_err(stringify)?),
+        "desktop_set_theme" => Ok(serde_json::to_value(
+            crate::desktop_preferences::desktop_set_theme(as_str("theme")?)?,
+        )
+        .map_err(stringify)?),
         "pick_directory" => Ok(Value::Null),
         "document_catalog" => {
             Ok(serde_json::to_value(crate::documents::document_catalog()?).map_err(stringify)?)

@@ -171,9 +171,21 @@ export const DisclosureRow: React.FC<DisclosureRowProps> = ({
   );
 };
 
-/** 展开后的正文：统一缩进，与行头内容列对齐。 */
-export const DisclosureBody: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div className={`${DISCLOSURE_BODY_INDENT} mb-1 border-l-[2px] border-border-hairline pl-1`}>
+/**
+ * 展开后的正文：统一缩进，与行头内容列对齐。
+ *
+ * 默认带一条左侧标线，读作「这一段属于上面那一行」。思考块自带下沉面，
+ * 标线与凹槽会叠成两道边，因此用 framed 关掉标线，改由材料本身分区。
+ */
+export const DisclosureBody: React.FC<{ children: React.ReactNode; framed?: boolean }> = ({
+  children,
+  framed = false,
+}) => (
+  <div
+    className={`${DISCLOSURE_BODY_INDENT} mb-1 ${
+      framed ? '' : 'border-l-[2px] border-border-hairline pl-1'
+    }`}
+  >
     {children}
   </div>
 );

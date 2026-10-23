@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { App } from './App';
 import { TextSelectionMenuHost } from './components/ui/TextSelectionMenuHost';
+import { syncThemeFromBackend } from './theme';
 import './tokens.css';
 
 /*
@@ -15,6 +16,9 @@ import './tokens.css';
  */
 document.addEventListener('dragover', (event) => event.preventDefault());
 document.addEventListener('drop', (event) => event.preventDefault());
+
+/* 首帧已经按缓存上色，这里只与磁盘校正一次；失败时保持缓存值。 */
+void syncThemeFromBackend();
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>

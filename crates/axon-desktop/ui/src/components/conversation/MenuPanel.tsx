@@ -17,6 +17,13 @@ export const MENU_PADDING = 'p-1';
 export const MENU_ROW_HEIGHT = 'min-h-8';
 /** 卡片几何：白底、发丝描边、8px 圆角、菜单阴影。 */
 export const MENU_PANEL_CLASS = `flex flex-col overflow-hidden rounded-sm bg-surface shadow-menu hairline border-border-hairline ${MENU_PADDING}`;
+/*
+ * 贴着输入坞上沿的候选菜单。
+ *
+ * 它与输入坞是父子关系，不能和输入坞同一重量：阴影退一档（panel 而不是 menu），
+ * 圆角提到 12px 贴近卡片的 20px，读作「从输入坞里长出来的」而不是「另一块板」。
+ */
+export const MENU_PANEL_ATTACHED_CLASS = `flex flex-col overflow-hidden rounded-md bg-surface shadow-panel hairline border-border-hairline ${MENU_PADDING}`;
 /** 浮层定位的公共部分：portal 加 fixed，统一压到菜单档。 */
 export const MENU_SURFACE_CLASS = `fixed ${Z_MENU} shadow-menu rounded-sm bg-surface hairline border-border-hairline overflow-hidden`;
 

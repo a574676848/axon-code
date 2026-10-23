@@ -80,7 +80,7 @@ use conversation::{
     conversation_send_subagent_message, conversation_set_active_lane, conversation_stop_job,
     conversation_submit, conversation_unsubscribe, conversation_watch, conversation_watch_session,
 };
-use desktop_preferences::{desktop_preferences, desktop_set_notifications};
+use desktop_preferences::{desktop_preferences, desktop_set_notifications, desktop_set_theme};
 use discovery::discover_models;
 use documents::{
     document_catalog, document_read, document_write, mcp_list, mcp_remove, mcp_upsert,
@@ -280,6 +280,7 @@ pub fn run() {
             clipboard_write_text,
             desktop_preferences,
             desktop_set_notifications,
+            desktop_set_theme,
             usage_overview,
             usage_distribution,
             usage_diagnostics,

@@ -52,6 +52,7 @@ export const ChangedFilesCard: React.FC<ChangedFilesCardProps> = ({ files, onOpe
       data-changed-files-count={files.length}
     >
       <DisclosureRow
+        className="hairline-b border-border-hairline"
         onToggle={() => onOpen(0)}
         icon={
           single === null ? <CodeIcon size={14} /> : <FileTypeIcon path={single.path} size={14} />
@@ -64,7 +65,7 @@ export const ChangedFilesCard: React.FC<ChangedFilesCardProps> = ({ files, onOpe
       />
 
       {single === null && (
-        <ul className={`${BODY_INDENT} mr-1 mb-1 border-l-[2px] border-border-hairline pl-1 space-y-px`}>
+        <ul className={`${BODY_INDENT} mr-1 mb-1 border-l-[2px] border-border-hairline pl-1 divide-hairline`}>
           {rows.map((file, index) => (
             <li key={file.path}>
               <button

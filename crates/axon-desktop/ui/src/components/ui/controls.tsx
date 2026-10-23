@@ -122,7 +122,7 @@ export const SegmentedControl = <T extends string>({
   <div
     role="group"
     aria-label={label}
-    className={`inline-flex items-center gap-0.5 p-0.5 rounded-full bg-surface-sunken hairline border-border-hairline ${className}`}
+    className={`inline-flex items-center gap-0.5 p-0.5 rounded-full bg-surface-sunken hairline border-border-hairline well-sm ${className}`}
   >
     {options.map((option) => {
       const active = option.value === value;
@@ -136,7 +136,7 @@ export const SegmentedControl = <T extends string>({
           onClick={() => onChange(option.value)}
           className={`h-6 px-2.5 rounded-full text-row whitespace-nowrap transition-colors duration-100 disabled:cursor-not-allowed disabled:opacity-40 ${
             active
-              ? 'bg-surface text-text-primary font-medium shadow-panel'
+              ? 'bg-surface text-text-primary font-medium shadow-lift'
               : 'text-text-tertiary hover:text-text-primary hover:bg-hover'
           }`}
         >
