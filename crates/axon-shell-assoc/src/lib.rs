@@ -60,6 +60,8 @@ mod windows;
 mod windows_helpers;
 #[cfg(windows)]
 mod windows_icon;
+#[cfg(all(test, windows))]
+mod windows_tests;
 
 /// 候选图标的边长（像素）。
 ///

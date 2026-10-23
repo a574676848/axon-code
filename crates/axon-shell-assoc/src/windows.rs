@@ -15,7 +15,7 @@
 //! （调用方要保证接口指针有效、出参缓冲可写、返回的字符串所有权被接管）。本文件的每个
 //! `unsafe` 块都带 `// SAFETY:` 说明对应不变量。
 
-use std::path::Path;
+use std::{os::windows::ffi::OsStrExt, path::Path};
 
 // `::windows`（而不是 `windows`）显式指向外部 crate：本 crate 自己也有一个名为 `windows`
 // 的模块，加上前缀可免除歧义。
@@ -54,6 +54,24 @@ const SHELL_LAUNCH_QUIET_POLLS: u32 = 5;
 
 /// 空轮询之间的间隔。
 const SHELL_LAUNCH_POLL_MS: u64 = 10;
+
+/// 路径分隔符（反斜杠）。
+const BACKSLASH: u16 = b'\\' as u16;
+
+/// 路径分隔符（正斜杠）：Shell 注册表里历史上出现过这种写法。
+const FORWARD_SLASH: u16 = b'/' as u16;
+
+/// 扩展长度路径的前缀标记。
+const QUESTION_MARK: u16 = b'?' as u16;
+
+/// 盘符与名称之间的冒号。
+const COLON: u16 = b':' as u16;
+
+/// 扩展长度路径里 UNC 共享的标记段长度（`UNC\`）。
+const UNC_MARKER_LEN: usize = 4;
+
+/// 扩展长度路径的固定头长度（`\\?\`）。
+const EXTENDED_PREFIX_LEN: usize = 4;
 
 /// 枚举某个文件的候选打开方式。
 ///
@@ -100,11 +118,12 @@ pub(crate) fn open_with(path: &Path, application_id: &str) -> Result<(), String>
     let _apartment = ComApartment::enter()?;
     let handler = find_handler(&extension, application_id)?;
 
-    let wide_path = to_wide(&path.to_string_lossy());
-    // SAFETY: `wide_path` 是以 NUL 结尾的宽字符串且活到本函数结束；`None` 表示不借用任何绑定
+    let shell_path = shell_parsing_name(path)?;
+    // SAFETY: `shell_path` 是以 NUL 结尾的宽字符串且活到本函数结束；`None` 表示不借用任何绑定
     // 上下文。返回的 `IShellItem` 由 windows-rs 的接口类型持有，析构时 Release。
-    let item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR(wide_path.as_ptr()), None) }
-        .map_err(|error| format!("无法为文件建立 Shell 项：{error}"))?;
+    let item: IShellItem =
+        unsafe { SHCreateItemFromParsingName(PCWSTR(shell_path.as_ptr()), None) }
+            .map_err(|error| format!("无法为文件建立 Shell 项：{error}"))?;
     // SAFETY: `item` 是上面成功返回的有效接口；`BHID_DataObject` 是 Shell 公开定义的处理程序
     // 绑定标识。返回的数据对象由 `IDataObject` 持有，析构时 Release。
     let data_object: IDataObject = unsafe { item.BindToHandler(None, &BHID_DataObject) }
@@ -118,6 +137,85 @@ pub(crate) fn open_with(path: &Path, application_id: &str) -> Result<(), String>
     // 否则进程一退出就把还没交棒完的引用计数拆掉，用户看到的是「点了没反应」。
     pump_shell_messages();
     Ok(())
+}
+
+/// 把路径还原成 `SHCreateItemFromParsingName` 认得的解析名。
+///
+/// Rust 的 `Path::canonicalize` 在 Windows 上返回 `\\?\C:\...` 形式的扩展长度路径，
+/// 而 Shell 的解析名**不接受**这个前缀：实测把 `\\?\C:\...` 直接交给
+/// `SHCreateItemFromParsingName` 会得到 `E_INVALIDARG`（`0x80070057`，界面上即
+/// 「参数错误」）。这个前缀是文件系统层的载体（长路径与逐段解析），不是 Shell 的输入
+/// 形式，因此在交出去之前必须还原：
+///
+/// - `\\?\C:\dir\a.png` → `C:\dir\a.png`
+/// - `\\?\UNC\server\share\a.png` → `\\server\share\a.png`
+/// - `//?/C:/dir/a.png`（注册表里出现过的正斜杠写法）→ `C:\dir\a.png`
+///
+/// 无法还原成盘符或共享头的路径（如 `\\?\Volume{...}\a.png`）如实报错：Shell 本来就不
+/// 解析这类路径，继续调用只会把同一个 `E_INVALIDARG` 抛给用户。
+///
+/// 全程在 UTF-16 码位上进行，不经 `to_string_lossy`：文件名里无法表示成 UTF-8 的部分
+/// 必须原样交给系统，否则会变成另一个「文件不存在」。
+pub(crate) fn shell_parsing_name(path: &Path) -> Result<Vec<u16>, String> {
+    let units: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let stripped = strip_extended_prefix(&units)?;
+    Ok(stripped.into_iter().chain(std::iter::once(0)).collect())
+}
+
+/// 见 [`shell_parsing_name`]：只处理码位序列，不解释路径内容。
+fn strip_extended_prefix(units: &[u16]) -> Result<Vec<u16>, String> {
+    let prefixed = units.len() >= EXTENDED_PREFIX_LEN
+        && is_separator(units[0])
+        && is_separator(units[1])
+        && units[2] == QUESTION_MARK
+        && is_separator(units[3]);
+    if !prefixed {
+        return Ok(units.to_vec());
+    }
+    let rest = &units[EXTENDED_PREFIX_LEN..];
+    let is_unc = rest.len() >= UNC_MARKER_LEN
+        && eq_ascii_byte(rest[0], b'U')
+        && eq_ascii_byte(rest[1], b'N')
+        && eq_ascii_byte(rest[2], b'C')
+        && is_separator(rest[3]);
+    let body = if is_unc {
+        &rest[UNC_MARKER_LEN..]
+    } else {
+        rest
+    };
+    // 还原后必须是「盘符:」或「\\共享」形态：没有这个名字，Shell 无法建立解析名。
+    let has_drive = !is_unc && body.len() >= 2 && body[1] == COLON;
+    if !is_unc && !has_drive {
+        return Err(format!(
+            "Shell 无法解析这条扩展长度路径（不是盘符或共享路径）：{}",
+            String::from_utf16_lossy(units)
+        ));
+    }
+    let mut normalized = Vec::with_capacity(body.len() + 2);
+    if is_unc {
+        normalized.push(BACKSLASH);
+        normalized.push(BACKSLASH);
+    }
+    normalized.extend(body.iter().map(|unit| {
+        if *unit == FORWARD_SLASH {
+            BACKSLASH
+        } else {
+            *unit
+        }
+    }));
+    Ok(normalized)
+}
+
+/// 是否为路径分隔符（两种写法都算）。
+fn is_separator(unit: u16) -> bool {
+    unit == BACKSLASH || unit == FORWARD_SLASH
+}
+
+/// 比较一个 UTF-16 码位与一个 ASCII 字节，忽略字母大小写。
+///
+/// `UNC\` 标记在注册表里大小写并不固定（`UNC` / `unc`），逐字节比较会漏掉后者。
+fn eq_ascii_byte(unit: u16, value: u8) -> bool {
+    unit == u16::from(value) || unit == u16::from(value.to_ascii_uppercase())
 }
 
 /// 遍历某个扩展名的关联处理程序；回调返回 `false` 即提前停止。

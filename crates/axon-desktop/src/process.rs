@@ -99,6 +99,27 @@ pub fn spawn_detached(command: &mut Command) -> std::io::Result<()> {
         .map(|_| ())
 }
 
+/// 交给系统 Shell 的路径。
+///
+/// Windows 的 Shell（`ShellExecute` 系列与 `explorer.exe`）不接受 Rust 规范化后的
+/// `\\?\` 扩展长度前缀：它只认盘符或共享路径，带前缀会被判成参数错误。文件浏览给出的
+/// 正是规范化路径（[`crate::workspace_files::resolve_within`]），因此交出去之前统一还原。
+///
+/// 其他平台原样返回 `OsStr`：POSIX 文件名不保证是 UTF-8，经字符串中转会把非法字节换成
+/// 替换字符，交给 `open` / `xdg-open` 的就不再是原路径了。
+fn shell_path(path: &Path) -> std::ffi::OsString {
+    #[cfg(target_os = "windows")]
+    {
+        std::ffi::OsString::from(crate::workspace::strip_extended_prefix(
+            &path.to_string_lossy(),
+        ))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        path.as_os_str().to_os_string()
+    }
+}
+
 /// 用系统默认程序打开文件或目录。
 ///
 /// 优先走官方打开插件（其在 Windows 上直接调用系统 shell API，不经控制台，
@@ -109,7 +130,10 @@ pub fn open_path(path: &Path) -> Result<(), String> {
         use tauri_plugin_opener::OpenerExt;
         return app
             .opener()
-            .open_path(path.to_string_lossy().to_string(), None::<&str>)
+            .open_path(
+                shell_path(path).to_string_lossy().into_owned(),
+                None::<&str>,
+            )
             .map_err(|error| format!("无法打开目标：{error}"));
     }
     platform_open(path)
@@ -125,7 +149,7 @@ pub fn open_with(program: &str, path: &Path) -> Result<(), String> {
         return app
             .opener()
             .open_path(
-                path.to_string_lossy().to_string(),
+                shell_path(path).to_string_lossy().into_owned(),
                 Some(program.to_string()),
             )
             .map_err(|error| format!("无法用所选应用打开：{error}"));
@@ -139,7 +163,7 @@ pub fn reveal(path: &Path) -> Result<(), String> {
         use tauri_plugin_opener::OpenerExt;
         return app
             .opener()
-            .reveal_item_in_dir(path)
+            .reveal_item_in_dir(shell_path(path))
             .map_err(|error| format!("无法在文件管理器中定位：{error}"));
     }
     platform_reveal(path)
@@ -151,20 +175,21 @@ fn platform_open(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Err(format!("目标不存在：{}", path.display()));
     }
-    spawn_detached(Command::new("explorer").arg(path))
+    spawn_detached(Command::new("explorer").arg(shell_path(path)))
         .map_err(|error| format!("无法打开目标：{error}"))
 }
 
 /// 调试桥模式下的平台回落实现。
 #[cfg(target_os = "macos")]
 fn platform_open(path: &Path) -> Result<(), String> {
-    spawn_detached(Command::new("open").arg(path)).map_err(|error| format!("无法打开目标：{error}"))
+    spawn_detached(Command::new("open").arg(shell_path(path)))
+        .map_err(|error| format!("无法打开目标：{error}"))
 }
 
 /// 调试桥模式下的平台回落实现。
 #[cfg(target_os = "linux")]
 fn platform_open(path: &Path) -> Result<(), String> {
-    spawn_detached(Command::new("xdg-open").arg(path))
+    spawn_detached(Command::new("xdg-open").arg(shell_path(path)))
         .map_err(|error| format!("无法打开目标：{error}"))
 }
 
@@ -174,7 +199,7 @@ fn platform_open_with(program: &str, path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Err(format!("目标不存在：{}", path.display()));
     }
-    spawn_detached(Command::new(program).arg(path))
+    spawn_detached(Command::new(program).arg(shell_path(path)))
         .map_err(|error| format!("无法用所选应用打开：{error}"))
 }
 
@@ -187,14 +212,14 @@ fn platform_reveal(path: &Path) -> Result<(), String> {
         return Err(format!("目标不存在：{}", path.display()));
     }
     let mut command = Command::new("explorer");
-    command.arg(format!("/select,{}", path.display()));
+    command.arg(format!("/select,{}", shell_path(path).to_string_lossy()));
     spawn_detached(&mut command).map_err(|error| format!("无法在文件管理器中定位：{error}"))
 }
 
 /// 调试桥模式下的平台回落实现。
 #[cfg(target_os = "macos")]
 fn platform_open_with(program: &str, path: &Path) -> Result<(), String> {
-    spawn_detached(Command::new(program).arg(path))
+    spawn_detached(Command::new(program).arg(shell_path(path)))
         .map_err(|error| format!("无法用所选应用打开：{error}"))
 }
 
