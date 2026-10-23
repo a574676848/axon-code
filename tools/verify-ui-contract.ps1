@@ -90,16 +90,33 @@ if ($cdnHits.Count -gt 0) {
     Write-Host " [PASSED] (100% offline self-hosted; zero external CDN)" -ForegroundColor Green
 }
 
-# 5. No forbidden primary fonts (Inter, Roboto, Arial)
-Write-Host "5. Checking primary font compliance (no Inter, Roboto, Arial)..." -NoNewline
+# 5. 字体契约：界面只走系统字体栈，零随包 webfont
+Write-Host "5. Checking font contract (system stack only, zero bundled webfont)..." -NoNewline
 $tokensCss = Join-Path $uiRoot "src/tokens.css"
 $tokensContent = Get-Content -LiteralPath $tokensCss -Raw -Encoding utf8
-if ($tokensContent -match "--font-sans:\s*['""]?(Inter|Roboto|Arial)['""]?") {
+$fontProblems = @()
+if ($tokensContent -match "@font-face") {
+    $fontProblems += "tokens.css 仍在声明 @font-face（界面只走系统字体栈）"
+}
+if ($tokensContent -notmatch "(?m)^\s*--font-sans:\s*-apple-system\b") {
+    $fontProblems += "--font-sans 必须由系统字体栈 -apple-system 打头"
+}
+if ($tokensContent -match "--font-sans:\s*['""](Inter|Roboto|Arial)['""]") {
+    $fontProblems += "--font-sans 仍以禁止的字体族打头（Inter / Roboto / Arial）"
+}
+if ($tokensContent -notmatch "(?m)^\s*--font-mono:[^;]*'Microsoft YaHei'") {
+    $fontProblems += "--font-mono 缺少 Windows 中文兜底 'Microsoft YaHei'"
+}
+$bundledFonts = @(Get-ChildItem (Join-Path $uiRoot "public") -Recurse -File -Include *.woff2, *.woff, *.ttf, *.otf -ErrorAction SilentlyContinue)
+if ($bundledFonts.Count -gt 0) {
+    $fontProblems += ("随包字体文件：" + (($bundledFonts | ForEach-Object { $_.Name }) -join ", "))
+}
+if ($fontProblems.Count -gt 0) {
     Write-Host " [FAILED]" -ForegroundColor Red
-    Write-Error "tokens.css uses forbidden primary font (Inter/Roboto/Arial)"
+    Write-Error ("字体契约不满足：`n" + ($fontProblems -join "`n"))
     $failed = $true
 } else {
-    Write-Host " [PASSED] (Primary font locked to Axon Sans / Axon Mono)" -ForegroundColor Green
+    Write-Host " [PASSED] (系统字体栈两支，零随包 webfont)" -ForegroundColor Green
 }
 
 # 6. Design tokens: 逐项从真实令牌文件读取并实算对比度

@@ -1,21 +1,5 @@
 @import "tailwindcss";
 
-@font-face {
-  font-family: 'Axon Sans';
-  src: url('/fonts/axon-sans.woff2') format('woff2');
-  font-weight: 100 900;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Axon Mono';
-  src: url('/fonts/axon-mono.woff2') format('woff2');
-  font-weight: 100 900;
-  font-style: normal;
-  font-display: swap;
-}
-
 /*
  * 工作台设计令牌（浅色）
  * 中性纸白基底，近黑碳墨承担主操作，半透明发丝描边建立层级，
@@ -146,10 +130,20 @@
   /* 非对话页的内容定宽：管理页与看板共用一条版心。 */
   --container-page: 1080px;
 
-  --font-sans: 'Axon Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+  /*
+   * 字体族只有系统栈两支，不打包任何 webfont。
+   *
+   * 界面与代码都取宿主系统已有的字形：换一台机器看到的就是那台机器自己的
+   * 界面字体，随包体积里也不再多一份字体与它的子集化维护。
+   */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
     'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
-  --font-mono: 'Axon Mono', 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'PingFang SC',
-    monospace;
+  /*
+   * 等宽栈必须显式给出 Windows 中文兜底，且不以裸 `monospace` 收尾：
+   * 裸 monospace 会让代码块里的中文掉进 SimSun（宋体），与界面其余中文分家。
+   */
+  --font-mono: 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'Liberation Mono', Menlo,
+    Courier, 'PingFang SC', 'Microsoft YaHei';
 
   --radius-xs: 4px;
   --radius-sm: 8px;
@@ -225,8 +219,18 @@
   color: var(--color-text-primary);
   background-color: var(--color-canvas);
   font-variant-numeric: tabular-nums;
+  /* 中英混排：交给排版引擎在 CJK 与拉丁之间自动补间距，不靠手写空格。
+   * 不支持的引擎会忽略这一行，届时退回系统默认字距。 */
+  text-autospace: normal;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* 代码与等宽片段保留源文本的列对齐：中英之间不再插入自动间距。 */
+code,
+pre,
+.font-mono {
+  text-autospace: no-autospace;
 }
 
 /* 键盘焦点：统一蓝色聚焦环，鼠标点击不显示。

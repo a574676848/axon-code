@@ -20,8 +20,9 @@ import { EmptyState } from '../components/ui/surfaces';
  * 全屏程序（vim、top）据此重排。
  */
 
-/** 终端字体：与应用其余等宽文本同一族，取不到时回落到系统等宽。 */
-const TERMINAL_FONT = "'Axon Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+/** 终端字体：与 `--font-mono` 同一族，取不到时回落到系统等宽。 */
+const TERMINAL_FONT =
+  "'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'Liberation Mono', Menlo, Courier, 'PingFang SC', 'Microsoft YaHei'";
 
 /** 回滚缓冲行数。 */
 const SCROLLBACK_LINES = 4000;

@@ -221,17 +221,17 @@ export const Markdown: React.FC<{ source: string }> = ({ source }) => {
         if (block.kind === 'heading') {
           const level = block.level ?? 1;
           /*
-           * 标题刻度只用令牌：h1 21/30、h2 18/26、h3 15/24，全部 600 字重；
-           * h4 与正文同字号，只加字重与上间距。间距按「上大下小」成对给，
+           * 标题刻度只用令牌：h1 21/30、h2 18/26、h3 15/24，一至三级 700 字重；
+           * h4 与正文同字号，取 600，只加字重与上间距。间距按「上大下小」成对给，
            * 标题因此贴住它所属的正文，而不是与上一段等距。
            */
           const size =
             level === 1
-              ? 'text-heading-1 font-semibold'
+              ? 'text-heading-1 font-bold'
               : level === 2
-                ? 'text-heading-3 font-semibold'
+                ? 'text-heading-3 font-bold'
                 : level === 3
-                  ? 'text-heading-4 font-semibold'
+                  ? 'text-heading-4 font-bold'
                   : 'text-content font-semibold';
           const spacing =
             level <= 2 ? 'mt-6 mb-3' : level === 3 ? 'mt-4 mb-2' : 'mt-4 mb-0';
