@@ -215,8 +215,8 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
   return segments;
 }
 
-/** 指标条的三簇：身份、预算、性能。 */
-export type HeaderClusterKind = 'identity' | 'budget' | 'performance';
+/** 指标条的四簇：身份、预算、性能、辅助。 */
+export type HeaderClusterKind = 'identity' | 'budget' | 'performance' | 'aux';
 
 /** 指标条的一段成簇结果。 */
 export interface HeaderCluster {
@@ -229,26 +229,28 @@ const CLUSTER_OF: Record<HeaderSegmentKind, HeaderClusterKind> = {
   status: 'identity',
   cwd: 'identity',
   reasoning: 'identity',
-  lsp: 'identity',
   context: 'budget',
   cacheHit: 'budget',
-  plan: 'budget',
+  plan: 'aux',
+  lsp: 'aux',
   firstToken: 'performance',
   generationRate: 'performance',
   elapsed: 'performance',
 };
 
 /**
- * 把平铺的段按语义分成三簇。
+ * 把平铺的段按语义分成四簇。
  *
- * 三簇的关系是「谁在哪干活 · 还剩多少预算 · 跑得多快」，
+ * 四簇的关系是「谁在哪干活 · 还剩多少预算 · 跑得多快 · 辅助状态」，
  * 因此装不下时整簇收起，而不是从中间把某一簇切成两半。
+ * LSP 与计划是辅助读数，固定排在最后，窗口不够时先让位。
  */
 export function headerClusters(input: HeaderMetricsInput): HeaderCluster[] {
   const groups: HeaderCluster[] = [
     { kind: 'identity', segments: [] },
     { kind: 'budget', segments: [] },
     { kind: 'performance', segments: [] },
+    { kind: 'aux', segments: [] },
   ];
   for (const segment of headerSegments(input)) {
     groups.find((group) => group.kind === CLUSTER_OF[segment.kind])?.segments.push(segment);
