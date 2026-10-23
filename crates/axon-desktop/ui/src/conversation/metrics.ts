@@ -1,22 +1,26 @@
 /*
  * 顶部指标条视图模型。
  *
- * 与 TUI 的 HeaderBarViewModel::from_sources 逐段恒等：段序、标签、出现条件、
- * 截断规则与色调阈值全部一致。缺数据即不渲染该段，绝不填占位值。
+ * 段序、标签与出现条件与 TUI 的 HeaderBarViewModel 同源；桌面端省略模型段：
+ * 模型由输入坞右下角的选择器常驻承载，顶部不再重复。缺数据即不渲染该段，
+ * 绝不填占位值。
  */
 
 import {
   ellipsize,
+  formatBasisPointsPercent,
   formatDecimalCount,
   formatDurationMillisCompact,
   formatTokensPerSecondX10,
-  modelNameOnly,
 } from './format';
-import { currentContextTokens, type TokenUsage } from './transcript';
+import {
+  cacheHitRateBasisPoints,
+  completeInputTokens,
+  currentContextTokens,
+  type TokenUsage,
+} from './transcript';
 export { currentContextTokens };
 
-/** 模型名显示宽度预算，含省略号。 */
-const MODEL_VISIBLE_CHARS = 20;
 /** 工作目录显示宽度预算，含省略号。 */
 const CWD_VISIBLE_CHARS = 24;
 /** 上下文压力告警阈值（整数百分比）。 */
@@ -29,10 +33,10 @@ export const ACTIVITY_LABEL = 'Axon';
 /** 段标识。 */
 export type HeaderSegmentKind =
   | 'status'
-  | 'model'
   | 'cwd'
   | 'reasoning'
   | 'context'
+  | 'cacheHit'
   | 'firstToken'
   | 'generationRate'
   | 'elapsed'
@@ -99,8 +103,8 @@ function contextPressureTone(used: number, window: number): HeaderSegmentTone {
 /**
  * 上下文段文本：只给「已用/窗口」。
  *
- * 缓存读数（读取、写入、命中率）是展开后才会关心的明细，收进 ContextUsagePopover；
- * 顶部这一行因此不再出现「缓存 12K 命中 44.75% 写入 0」这种一串数字。
+ * 缓存读取与写入仍然收进 ContextUsagePopover；命中率是读者会直接看的预算指标，
+ * 在下一段直接给出，不再藏进浮层。
  */
 function contextText(usage: TokenUsage, contextWindow: number | null): string | null {
   const used = currentContextTokens(usage);
@@ -132,17 +136,7 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
     breath: false,
     icon: 'folder',
   });
-  // 3 模型：与目录同属「这是谁在哪干活」的身份信息。
-  const model = ellipsize(modelNameOnly(input.model), MODEL_VISIBLE_CHARS);
-  if (model.length > 0) {
-    segments.push({
-      kind: 'model',
-      text: model,
-      tone: 'default',
-      breath: false,
-    });
-  }
-  // 4 LSP：仅大于 0 时出现。
+  // 3 LSP：仅大于 0 时出现。
   if (input.lspActiveCount > 0) {
     segments.push({
       kind: 'lsp',
@@ -152,7 +146,7 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
       breath: false,
     });
   }
-  // 5 上下文：无用量观测时不出现。
+  // 4 上下文：无用量观测时不出现。
   if (input.usage !== null) {
     const text = contextText(input.usage, input.contextWindow);
     if (text !== null) {
@@ -168,6 +162,15 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
         icon: 'ring',
       });
     }
+  }
+  // 5 缓存命中率：有完整的输入 token 时才给出，避免新一轮刚开始时显示 0.00%。
+  if (input.usage !== null && completeInputTokens(input.usage) > 0) {
+    segments.push({
+      kind: 'cacheHit',
+      text: shortMetric('命中率', formatBasisPointsPercent(cacheHitRateBasisPoints(input.usage))),
+      tone: 'default',
+      breath: false,
+    });
   }
   // 6 计划：有步骤时才出现。
   if (input.plan !== null && input.plan.total > 0) {
@@ -225,10 +228,10 @@ export interface HeaderCluster {
 const CLUSTER_OF: Record<HeaderSegmentKind, HeaderClusterKind> = {
   status: 'identity',
   cwd: 'identity',
-  model: 'identity',
   reasoning: 'identity',
   lsp: 'identity',
   context: 'budget',
+  cacheHit: 'budget',
   plan: 'budget',
   firstToken: 'performance',
   generationRate: 'performance',

@@ -136,13 +136,9 @@ export const ConversationHeader: React.FC<ConversationHeaderProps> = ({
               const reading = (
                 <span
                   className={`min-w-0 ${
-                    segment.kind === 'cwd' || segment.kind === 'model' ? '' : 'shrink-0'
+                    segment.kind === 'cwd' ? '' : 'shrink-0'
                   } inline-flex items-center gap-1 text-row tabular-nums ${
-                    segment.kind === 'cwd'
-                      ? 'max-w-[260px]'
-                      : segment.kind === 'model'
-                        ? 'max-w-[200px]'
-                        : ''
+                    segment.kind === 'cwd' ? 'max-w-[260px]' : ''
                   } ${
                     segment.kind === 'status'
                       ? 'text-text-primary font-medium'

@@ -6,7 +6,7 @@ import type { TranscriptCell } from '../../conversation/transcript';
 /*
  * 每轮收尾的指标行。
  *
- * 收起态只给三项（用时 · Token · 速率）：这是读者真正会停下来看一眼的量。
+ * 收起态给四项（用时 · Token · 命中率 · 速率）：这是读者真正会停下来看一眼的量。
  * 展开后仍是 TUI 的全项同序（入、缓存命中、出、推理、命中率、首字），
  * 一项不少、顺序不变，只是不再默认铺在正文末尾当成调试输出。
  *
@@ -15,7 +15,7 @@ import type { TranscriptCell } from '../../conversation/transcript';
  */
 
 /** 收起态显示的指标；其余项收进「详情」。 */
-const PRIMARY_LABELS = new Set(['用时', 'Token', '速率']);
+const PRIMARY_LABELS = new Set(['用时', 'Token', '命中率', '速率']);
 
 export const SummaryBlock: React.FC<{ cell: Extract<TranscriptCell, { role: 'summary' }> }> = ({
   cell,
