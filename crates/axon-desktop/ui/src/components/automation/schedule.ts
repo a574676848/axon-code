@@ -100,16 +100,6 @@ export function scheduleText(value: string): string {
     }
 }
 
-/**
- * 设置页「模型定价」自动同步状态行的时刻读数：本地完整时刻，带秒。
- *
- * 自动化任务页统一改用 `pageFormat.formatDateTime`（同年 `10/21 17:14`，跨年带年份），
- * 因此这里的带秒写法只服务于那一条既有状态行，不再作为任务页的口径。
- */
-export function cronTimeText(value?: number | null): string {
-    return value == null ? '未安排' : new Date(value).toLocaleString();
-}
-
 function formatInterval(amountText: string, unit: string): string {
     const amount = Number(amountText);
     if (!Number.isFinite(amount) || amount < 0) {

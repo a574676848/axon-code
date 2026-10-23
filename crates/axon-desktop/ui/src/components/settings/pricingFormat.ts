@@ -1,4 +1,5 @@
 import type { PriceRule, PricingStyle } from '../../types';
+import { formatDateTime } from '../pageFormat';
 
 /*
  * 定价的读写换算，全部是纯函数。
@@ -102,12 +103,13 @@ export function normalizePricingStyle(style: string): PricingStyle {
   return style.trim().toLowerCase().startsWith('claude') ? 'claude' : 'openai';
 }
 
-/** 规则表里的更新时间：`10/21 16:04`。 */
-export function formatRuleTime(ms: number): string {
+/**
+ * 规则表与自动同步状态行里的时刻：与自动化任务页同一口径
+ * （同年 `10/21 16:04`，跨年 `2026年10月21日 16:04`，不显示秒；无记录写「无记录」）。
+ */
+export function formatRuleTime(ms: number, now: number = Date.now()): string {
   if (!Number.isFinite(ms) || ms <= 0) return '无记录';
-  const date = new Date(ms);
-  const clock = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-  return `${date.getMonth() + 1}/${date.getDate()} ${clock}`;
+  return formatDateTime(ms, now);
 }
 
 /** 按月与天与小时分档的「多久以前」，用于同步状态行。 */
