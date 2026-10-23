@@ -87,7 +87,7 @@ jobs:
 
       - name: 准备 Node 环境并构建前端 (axon-desktop UI)
         if: matrix.os == 'windows-latest'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
 
@@ -355,7 +355,7 @@ jobs:
           cache-targets: true
 
       - name: 准备 Node 环境并构建前端 (axon-desktop UI)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
 
