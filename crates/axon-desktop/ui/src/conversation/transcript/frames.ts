@@ -498,17 +498,20 @@ function applyTurnCompleted(
         turn.cells.some(
           (cell) => cell.role === 'assistant' && cell.text.trim() === response.trim(),
         );
-      if (stated) return appendTurnSummary(settled, elapsed);
-      return appendTurnSummary(
-        upsertCell(settled, {
-          id: `turn-interrupted:${turn.id}`,
-          role: 'notice',
-          title: '已中断',
-          summary: response ?? '本轮已由用户中断。',
-          tone: 'info',
-        }),
-        elapsed,
-      );
+      const summarized = stated
+        ? appendTurnSummary(settled, elapsed)
+        : appendTurnSummary(
+            upsertCell(settled, {
+              id: `turn-interrupted:${turn.id}`,
+              role: 'notice',
+              title: '已中断',
+              summary: response ?? '本轮已由用户中断。',
+              tone: 'info',
+            }),
+            elapsed,
+          );
+      // 中断同样可能带着本轮已测到的首字与解码窗口，不能因为没跑完就把它们丢掉。
+      return generation === null ? summarized : withGenerationMetrics(summarized, generation);
     }
     /*
      * 失败终态：正文不是回答，而是后端写下的失败结论。

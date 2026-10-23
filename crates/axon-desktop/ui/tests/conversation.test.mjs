@@ -418,6 +418,79 @@ test('重放收尾负载里的生成指标：首字与速率不再依赖实时�
     assert.equal(completed.turns[0].firstTokenAvgMs !== null, true);
 });
 
+test('中断轮次也保留收尾负载里的首字与速率', () => {
+    const opened = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn', turnId: 'interaction-1', nowMs: 0,
+    });
+    // 中断轮次要留下分割线：先有一格助手正文，appendTurnSummary 才会认为这一轮真的干过活。
+    const working = conversationReducer(opened, {
+        type: 'frames',
+        nowMs: 1_000,
+        frames: [{
+            kind: 'frame',
+            subscribeId: 'interaction:interaction-1',
+            eventType: 'wire_event',
+            payloadJson: JSON.stringify({
+                schemaVersion: '1',
+                eventId: 'assistant-1',
+                correlationId: 'assistant',
+                session: { sessionId: 'session-1' },
+                sequence: 1,
+                recordedAtMs: 1_000,
+                kind: {
+                    type: 'assistantMessage',
+                    payload: { partId: 'assistant-1', messageId: 'assistant-1', content: '处理中', delta: false },
+                },
+            }),
+            cursor: null,
+            replay: true,
+        }],
+    });
+    const used = conversationReducer(working, {
+        type: 'frames',
+        nowMs: 9_000,
+        frames: [{
+            kind: 'frame',
+            subscribeId: 'interaction:interaction-1',
+            eventType: 'wire_event',
+            payloadJson: JSON.stringify({
+                schemaVersion: '1',
+                eventId: 'usage-1',
+                correlationId: 'usage',
+                session: { sessionId: 'session-1' },
+                sequence: 1,
+                recordedAtMs: 9_000,
+                kind: { type: 'usageUpdate', payload: { outputTokens: 4_600, inputTokens: 1_000 } },
+            }),
+            cursor: null,
+            replay: true,
+        }],
+    });
+    const interrupted = conversationReducer(used, {
+        type: 'frames',
+        nowMs: 10_000,
+        frames: [{
+            kind: 'frame',
+            subscribeId: 'interaction:interaction-1',
+            eventType: 'turn_completed',
+            payloadJson: JSON.stringify({
+                response: '本轮已由用户中断。',
+                status: 'interrupted',
+                generation: { ttftMs: 8_460, decodeMs: 10_000 },
+            }),
+            cursor: null,
+            replay: true,
+        }],
+    });
+    const turn = interrupted.turns[0];
+    assert.equal(turn.status, 'interrupted');
+    assert.equal(turn.firstTokenAvgMs, 8_460, '中断轮次也要留下已测到的首字');
+    assert.equal(turn.generationTpsX10, 4_600, '中断轮次也要按解码窗口算速率');
+    const summary = turn.cells.find((cell) => cell.role === 'summary');
+    assert.equal(summary.firstTokenAvgMs, 8_460, '指标要回填到中断轮次的分割线');
+    assert.equal(summary.generationTpsX10, 4_600);
+});
+
 /** 造一帧 wire 事件；订阅标识与轮次标识对齐，归属规则照生产路径走。 */
 function wireFrame(envelope) {
     return {
