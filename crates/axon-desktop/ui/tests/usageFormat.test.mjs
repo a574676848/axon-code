@@ -6,6 +6,7 @@ import {
     formatCount,
     formatLatency,
     formatPercent,
+    formatRate,
     formatRelative,
     formatTokens,
     sourceLabel,
@@ -26,6 +27,17 @@ test('计数带千分位，百分比由万分比换算', () => {
     assert.equal(formatCount(1234), '1,234');
     assert.equal(formatPercent(8789), '87.89%');
     assert.equal(formatPercent(8789, 0), '88%');
+});
+
+test('速率读数按两位有效数字收敛，既不成 0.00 也不留噪声精度', () => {
+    assert.equal(formatRate(0), '0');
+    assert.equal(formatRate(0.0028), '0.0028', '个人用量的量级必须看得出来');
+    assert.equal(formatRate(0.033333), '0.033', '不把无限小数原样倒出来');
+    assert.equal(formatRate(0.05), '0.05');
+    assert.equal(formatRate(0.5), '0.5');
+    assert.equal(formatRate(2.5), '2.50');
+    assert.equal(formatRate(12.34), '12');
+    assert.equal(formatRate(1e-9), '<0.0001');
 });
 
 test('延迟按量级切单位，缺观测如实写无观测', () => {

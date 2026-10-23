@@ -48,10 +48,23 @@ export function formatRatio(ratio: number, digits = 2): string {
   return `${(ratio * 100).toFixed(digits)}%`;
 }
 
-/** 速率读数：每分钟请求数保留两位，整数值不补零。 */
+/**
+ * 速率读数。
+ *
+ * 大于等于 10 取整，1 到 10 保留两位小数，小于 1 保留**两位有效数字**（最多四位小数）：
+ * 个人用量摊到每分钟常是千分之几次，固定两位小数会一律读成 `0.00`，看起来像坏了；
+ * 而按原始位数全写出来（`0.033333`）又是没有意义的精度。两位有效数字两头都避开。
+ */
 export function formatRate(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return '0';
-  return value >= 10 ? String(Math.round(value)) : value.toFixed(2);
+  if (value >= 10) return String(Math.round(value));
+  if (value >= 1) return value.toFixed(2);
+  const decimals = Math.min(4, Math.max(1, 1 - Math.floor(Math.log10(value))));
+  const text = value
+    .toFixed(decimals)
+    .replace(/0+$/, '')
+    .replace(/\.$/, '');
+  return text === '' || text === '0' ? '<0.0001' : text;
 }
 
 /** 延迟读数：毫秒、秒、分钟三档，单位跟着量级走。 */

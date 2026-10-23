@@ -265,6 +265,8 @@ impl WindowSlot {
     }
 }
 
+use super::observability_realtime::build_realtime_window_report;
+
 /// 内存无锁滑动窗口环形缓冲。
 ///
 /// 固定预分配 360 槽（40KB 内存，远低于 5MB 预算），零堆动态扩展，零互斥锁。
@@ -324,7 +326,6 @@ impl SlidingWindowRingBuffer {
         build_realtime_window_report(window_minutes, current_slot_id, &snapshots)
     }
 }
-
 /// 吞吐量时序点（支撑 SSOT §5.2 throughputSeries）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -411,134 +412,6 @@ pub struct RealtimeWindowReport {
     pub latency_current_ms: u64,
     /// 窗口平均提供方延迟（毫秒）。
     pub latency_average_ms: u64,
-}
-
-fn build_realtime_window_report(
-    window_minutes: u32,
-    current_slot_id: u64,
-    snapshots: &[SlotSnapshot],
-) -> RealtimeWindowReport {
-    let mut total_requests = 0_u64;
-    let mut total_success = 0_u64;
-    let mut total_failure = 0_u64;
-    let mut total_input = 0_u64;
-    let mut cache_read = 0_u64;
-    let mut cache_write = 0_u64;
-    let mut output = 0_u64;
-    let mut reasoning = 0_u64;
-    let mut total_duration_ms = 0_u64;
-    let mut total_calls = 0_u64;
-    let mut total_ttft_ms = 0_u64;
-    let mut total_ttft_count = 0_u64;
-    let mut total_cost = 0_u64;
-
-    let mut current_minute_requests = 0_u64;
-    let mut current_minute_tokens = 0_u64;
-    let recent_cutoff_slot_id = current_slot_id.saturating_sub(5); // 最近 6 槽 = 60 秒
-
-    let mut latest_slot_ttft: Option<(u64, u64)> = None;
-    let mut latest_slot_latency: Option<(u64, u64)> = None;
-
-    let mut throughput_series = Vec::with_capacity(snapshots.len());
-    let mut request_status_series = Vec::with_capacity(snapshots.len());
-
-    for snap in snapshots {
-        let snap_tokens = snap.total_input_tokens.saturating_add(snap.output_tokens);
-        total_requests = total_requests.saturating_add(snap.request_count);
-        total_success = total_success.saturating_add(snap.success_count);
-        total_failure = total_failure.saturating_add(snap.failure_count);
-        total_input = total_input.saturating_add(snap.total_input_tokens);
-        cache_read = cache_read.saturating_add(snap.cache_read_input_tokens);
-        cache_write = cache_write.saturating_add(snap.cache_write_input_tokens);
-        output = output.saturating_add(snap.output_tokens);
-        reasoning = reasoning.saturating_add(snap.reasoning_output_tokens);
-        total_duration_ms = total_duration_ms.saturating_add(snap.provider_duration_ms);
-        total_calls = total_calls.saturating_add(snap.provider_calls);
-        total_ttft_ms = total_ttft_ms.saturating_add(snap.ttft_duration_ms);
-        total_ttft_count = total_ttft_count.saturating_add(snap.measured_ttft_count);
-        total_cost = total_cost.saturating_add(snap.cost_micros);
-
-        if snap.slot_id >= recent_cutoff_slot_id {
-            current_minute_requests = current_minute_requests.saturating_add(snap.request_count);
-            current_minute_tokens = current_minute_tokens.saturating_add(snap_tokens);
-        }
-
-        if snap.measured_ttft_count > 0 {
-            latest_slot_ttft = Some((snap.ttft_duration_ms, snap.measured_ttft_count));
-        }
-        if snap.provider_calls > 0 {
-            latest_slot_latency = Some((snap.provider_duration_ms, snap.provider_calls));
-        }
-
-        let timestamp_ms = snap.slot_id * SLIDING_WINDOW_SLOT_DURATION_MS;
-        let token_rate_per_min = snap_tokens.saturating_mul(6);
-        let req_rate_per_min = snap.request_count.saturating_mul(6);
-        throughput_series.push(ThroughputPoint {
-            timestamp_ms,
-            token_per_min: token_rate_per_min,
-            request_per_min: req_rate_per_min,
-        });
-
-        let failure_rate = if snap.request_count > 0 {
-            snap.failure_count as f64 / snap.request_count as f64
-        } else {
-            0.0
-        };
-        request_status_series.push(RequestStatusPoint {
-            timestamp_ms,
-            success_count: snap.success_count,
-            failure_count: snap.failure_count,
-            failure_rate,
-        });
-    }
-
-    let window_total_tokens = total_input.saturating_add(output);
-    let uncached_input = total_input
-        .saturating_sub(cache_read)
-        .saturating_sub(cache_write);
-
-    let cache_hit_rate_basis_points = if total_input > 0 {
-        ((cache_read as u128 * 10_000) / total_input as u128) as u16
-    } else {
-        0
-    };
-
-    let ttft_current_ms = latest_slot_ttft
-        .map(|(d, c)| d.checked_div(c).unwrap_or(0))
-        .unwrap_or(0);
-    let ttft_average_ms = total_ttft_ms.checked_div(total_ttft_count).unwrap_or(0);
-
-    let latency_current_ms = latest_slot_latency
-        .map(|(d, c)| d.checked_div(c).unwrap_or(0))
-        .unwrap_or(0);
-    let latency_average_ms = total_duration_ms.checked_div(total_calls).unwrap_or(0);
-
-    RealtimeWindowReport {
-        window: format!("{window_minutes}m"),
-        window_request_count: total_requests,
-        window_total_tokens,
-        window_cache_hit_rate_basis_points: cache_hit_rate_basis_points,
-        window_cost_micros: total_cost,
-        metrics: RealtimeSummaryMetrics {
-            current_tpm: current_minute_tokens,
-            current_rpm: current_minute_requests,
-            average_tpm: window_total_tokens as f64 / window_minutes as f64,
-            average_rpm: total_requests as f64 / window_minutes as f64,
-        },
-        throughput_series,
-        request_status_series,
-        token_composition: TokenComposition {
-            uncached_input_tokens: uncached_input,
-            cache_read_tokens: cache_read,
-            cache_write_tokens: cache_write,
-            output_tokens: output,
-            reasoning_tokens: reasoning,
-        },
-        ttft_current_ms,
-        ttft_average_ms,
-        latency_current_ms,
-        latency_average_ms,
-    }
 }
 
 // ============================================================================

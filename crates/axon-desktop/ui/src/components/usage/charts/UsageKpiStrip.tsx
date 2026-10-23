@@ -1,6 +1,6 @@
 import React from 'react';
 import { Text } from '../../ui/surfaces';
-import type { UsageOverviewReport, UsageRealtimeReport } from '../../../types';
+import type { UsageOverviewReport } from '../../../types';
 import { costLabel, formatCount, formatPercent, formatRate, formatTokens } from '../usageFormat';
 
 /*
@@ -73,13 +73,10 @@ interface KpiCell {
 }
 
 /** 概览指标条：读数取自大盘汇总，走势取自同一份响应里的迷你序列。 */
-export const UsageKpiStrip: React.FC<{
-  overview: UsageOverviewReport | null;
-  realtime: UsageRealtimeReport | null;
-  periodLabel: string;
-}> = ({ overview, realtime, periodLabel }) => {
+export const UsageKpiStrip: React.FC<{ overview: UsageOverviewReport | null }> = ({
+  overview,
+}) => {
   const summary = overview?.summary;
-  const live = realtime;
   const cells: KpiCell[] = [
     {
       label: '请求总数',
@@ -122,15 +119,12 @@ export const UsageKpiStrip: React.FC<{
       series: [],
     },
     {
-      label: '平均 RPM / TPM',
-      value:
-        summary === undefined
-          ? '无观测'
-          : `${formatRate(summary.currentRpm)} / ${formatCount(summary.currentTpm)}`,
+      label: '平均 TPM',
+      value: summary === undefined ? '无观测' : formatTokens(summary.currentTpm),
       detail:
-        live === null
-          ? `${periodLabel}内的平均速率`
-          : `滑窗内 ${formatRate(live.metrics.averageRpm)} / ${formatCount(Math.round(live.metrics.averageTpm))}`,
+        summary === undefined
+          ? '这一周期还没有请求记录'
+          : `每分钟平均 Token；${formatCount(summary.requestCount)} 次请求摊平 ${formatRate(summary.currentRpm)} 次/分钟`,
       color: 'var(--color-chart-cache-write)',
       series: [],
     },

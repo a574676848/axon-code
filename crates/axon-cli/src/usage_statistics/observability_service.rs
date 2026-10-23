@@ -63,6 +63,9 @@ pub fn query_overview(
     let rollups = repo.rollups(&query)?;
     let hourly = repo.hourly_rollups(&query)?;
 
+    // 速率读数的分母：固定周期用周期起点，「全部」用第一条事实的时间。
+    let rate_start_ms = rate_window_start_ms(period, period_start_ms, &hourly, now_ms);
+
     let mut request_count = 0_u64;
     let mut success_count = 0_u64;
     let mut failure_count = 0_u64;
@@ -100,8 +103,10 @@ pub fn query_overview(
         0
     };
 
-    let duration_minutes = now_ms.saturating_sub(period_start_ms).max(60_000) as f64 / 60_000.0;
-    let current_rpm = (request_count as f64 / duration_minutes * 100.0).round() / 100.0;
+    let duration_minutes = now_ms.saturating_sub(rate_start_ms).max(60_000) as f64 / 60_000.0;
+    // 速率按原值返回，不在服务端四舍五入：个人用量常在千分之几次的量级，
+    // 先round到两位小数会把 0.004 变成 0，界面再想格式化也救不回来。
+    let current_rpm = request_count as f64 / duration_minutes;
     let current_tpm = (total_tokens as f64 / duration_minutes).round() as u64;
 
     let cost_dollars = total_cost_micros as f64 / 1_000_000.0;
@@ -244,6 +249,9 @@ pub fn query_distribution(
     let rollups = repo.rollups(&query)?;
     let hourly = repo.hourly_rollups(&query)?;
 
+    // 与概览同一口径：速率的分母在「全部」下取第一条事实的时间。
+    let rate_start_ms = rate_window_start_ms(period, period_start_ms, &hourly, now_ms);
+
     let mut total_tokens = 0_u64;
     let mut total_cost_micros = 0_u64;
 
@@ -282,7 +290,7 @@ pub fn query_distribution(
             .saturating_add(r.cache_read_input_tokens);
     }
 
-    let duration_minutes = now_ms.saturating_sub(period_start_ms).max(60_000) as f64 / 60_000.0;
+    let duration_minutes = now_ms.saturating_sub(rate_start_ms).max(60_000) as f64 / 60_000.0;
 
     let mut items = Vec::new();
     for (key, acc) in dim_map {
@@ -296,7 +304,8 @@ pub fn query_distribution(
         } else {
             0
         };
-        let rpm = (acc.requests as f64 / duration_minutes * 100.0).round() / 100.0;
+        // 与概览同一口径：速率按原值返回，由调用方决定怎么显示。
+        let rpm = acc.requests as f64 / duration_minutes;
         let tpm = (acc.tokens as f64 / duration_minutes).round() as u64;
 
         items.push(DistributionItem {
@@ -534,6 +543,28 @@ fn auto_sync_report(state: crate::cron_commands::PricingSyncCronState) -> Pricin
     }
 }
 
+/// 速率读数（RPM / TPM）的分母起点。
+///
+/// 固定周期的分母就是周期起点（该窗口内摊平）。「全部」没有固定窗口：起点取**第一条
+/// 事实所在的小时桶**，否则会拿 Unix 纪元当起点（约 2900 万分钟），任何真实用量摊到
+/// 那么长的时长里都读成 0，速率一栏形同虚设。窗口内没有任何事实时返回 `now_ms`，
+/// 分母退化为 1 分钟且分子为 0，读数仍是 0。
+fn rate_window_start_ms(
+    period: UsagePeriod,
+    period_start_ms: u64,
+    hourly: &[(u64, super::model::UsageRollupRow)],
+    now_ms: u64,
+) -> u64 {
+    if period != UsagePeriod::All {
+        return period_start_ms;
+    }
+    hourly
+        .iter()
+        .map(|(bucket_ms, _)| *bucket_ms)
+        .min()
+        .unwrap_or(now_ms)
+}
+
 fn parse_period(period_str: &str) -> Result<UsagePeriod, String> {
     match period_str.to_ascii_lowercase().as_str() {
         "today" => Ok(UsagePeriod::Today),
@@ -543,5 +574,70 @@ fn parse_period(period_str: &str) -> Result<UsagePeriod, String> {
         other => Err(format!(
             "未知 period 参数: {other}，白名单为 today, 7d, 30d, all"
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::usage_statistics::model::UsageRollupRow;
+
+    fn hourly_bucket(bucket_ms: u64) -> (u64, UsageRollupRow) {
+        (
+            bucket_ms,
+            UsageRollupRow {
+                provider: "p".to_owned(),
+                model: "m".to_owned(),
+                source: "axon_cli".to_owned(),
+                status: "completed".to_owned(),
+                request_count: 1,
+                provider_call_count: 1,
+                total_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+                provider_duration_ms: 0,
+                measured_latency_count: 0,
+                priced_cost_micros: 0,
+                unpriced_request_count: 0,
+            },
+        )
+    }
+
+    #[test]
+    fn rate_window_starts_at_the_first_fact_for_the_all_period() {
+        let now = 1_792_600_000_000;
+        let first = now - 3 * 86_400_000;
+        let hourly = vec![hourly_bucket(first), hourly_bucket(now - 3_600_000)];
+        assert_eq!(
+            rate_window_start_ms(UsagePeriod::All, 0, &hourly, now),
+            first,
+            "「全部」的分母从第一条事实起算，而不是 Unix 纪元"
+        );
+    }
+
+    #[test]
+    fn rate_window_keeps_the_period_start_for_fixed_windows() {
+        let now = 1_792_600_000_000;
+        let midnight = now - 12 * 3_600_000;
+        let hourly = vec![hourly_bucket(now - 3_600_000)];
+        for period in [
+            UsagePeriod::Today,
+            UsagePeriod::SevenDays,
+            UsagePeriod::ThirtyDays,
+        ] {
+            assert_eq!(
+                rate_window_start_ms(period, midnight, &hourly, now),
+                midnight,
+                "固定周期的分母是该周期的起点"
+            );
+        }
+    }
+
+    #[test]
+    fn rate_window_falls_back_to_now_when_the_window_is_empty() {
+        let now = 1_792_600_000_000;
+        assert_eq!(rate_window_start_ms(UsagePeriod::All, 0, &[], now), now);
     }
 }

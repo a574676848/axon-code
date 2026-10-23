@@ -67,7 +67,8 @@ export const HealthTimeline: React.FC<{ rows: HealthRow[] }> = ({ rows }) => {
       ]}
       meta={
         <Text tone="secondary" size="meta">
-          成功 {summary.healthy} · 异常 {summary.degraded + summary.failed} · 空闲 {summary.idle}
+          按小时 · 成功 {summary.healthy} · 异常 {summary.degraded + summary.failed} · 空闲{' '}
+          {summary.idle}
         </Text>
       }
       empty={rows.length === 0 ? '这一周期还没有请求记录' : undefined}

@@ -172,11 +172,7 @@ export const UsageStatistics: React.FC = () => {
         >
           {tab === 'overview' && (
             <div className="space-y-3">
-              <UsageKpiStrip
-                overview={data.overview}
-                realtime={data.realtime}
-                periodLabel={PERIOD_LABEL[period]}
-              />
+              <UsageKpiStrip overview={data.overview} />
               <TokenTrendChart
                 buckets={derived.buckets}
                 granularity={derived.granularity}

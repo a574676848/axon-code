@@ -49,6 +49,8 @@ mod model;
 mod model_channel;
 #[path = "model/observability.rs"]
 mod observability;
+#[path = "model/observability_realtime.rs"]
+mod observability_realtime;
 #[path = "model/observation.rs"]
 mod observation;
 #[path = "model/pane.rs"]
