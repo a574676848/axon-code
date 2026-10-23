@@ -30,6 +30,8 @@ pub mod question_sync;
 pub mod session_read;
 /// 车道事件订阅：一条连接并行服务多路订阅，逐帧推送给前端。
 pub mod stream;
+/// 下行事件的攒批投递：把逐帧推送合并成按窗口下发的批量载荷。
+pub mod stream_batch;
 /// 向正在运行的子代理投递用户消息。
 pub mod subagent_message;
 /// 交互事件提交。
@@ -51,5 +53,6 @@ pub use lane_jobs::LaneJobsRoster;
 pub use question_sync::QuestionSnapshot;
 pub use session_read::LaneSubagents;
 pub use stream::{ConversationStream, SubscribeTarget};
+pub use stream_batch::{StreamBatcher, StreamEventBatch};
 pub use subagent_message::SubagentMessageReceipt;
 pub use wire::SubmissionReceipt;

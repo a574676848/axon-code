@@ -10,6 +10,7 @@ import { applyUserMessage } from '../src/conversation/transcript/cells.ts';
 import { INITIAL_CONVERSATION } from '../src/conversation/transcript/state.ts';
 import { pendingSteerCount } from '../src/conversation/transcript/derive.ts';
 import { emptyTurn, refreshLiveElapsed, settleTurn } from '../src/conversation/transcript/turns.ts';
+import { expandStreamPayload } from '../src/conversation/wire.ts';
 
 test('只把明确的文件路径变为预览入口', () => {
     const text = 'p50/p95 I/O docs/guide.md `src/main.rs` E:\\zbg\\axon-code\\Cargo.toml';
@@ -672,4 +673,17 @@ test('拦截器：业务拒绝不弹窗，服务真不可用才弹窗', async ()
         restore();
         unsubscribe();
     }
+});
+
+test('攒批载荷按序展开，单帧载荷原样返回', () => {
+    const frame = (seq) => ({
+        kind: 'frame', subscribeId: 'interaction:a', eventType: 'wire_event',
+        payloadJson: String(seq), cursor: null,
+    });
+    const single = frame(1);
+    assert.deepEqual(expandStreamPayload(single), [single], '调试桥的单帧不能被包一层');
+
+    const batch = [frame(1), frame(2), frame(3)];
+    assert.deepEqual(expandStreamPayload({ batch }), batch, '批内顺序必须原样保留');
+    assert.deepEqual(expandStreamPayload({ batch: [] }), []);
 });

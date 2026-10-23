@@ -25,6 +25,23 @@ export type ConversationStreamEvent =
     }
   | { kind: 'failure'; subscribeId: string; message: string; retryable: boolean };
 
+/**
+ * 一条下行载荷：单帧，或桌面宿主攒批后的一次投递。
+ *
+ * 历史回放一次可能上万帧，逐帧投递会让宿主跟不上，因此桌面端按 16ms 窗口合并。
+ * 批量只合并、不重排，展开后与逐帧投递同序。
+ */
+export type ConversationStreamPayload =
+  | ConversationStreamEvent
+  | { batch: ConversationStreamEvent[] };
+
+/** 把一条下行载荷展开成按顺序逐帧的数组；调试桥的单帧载荷原样返回。 */
+export function expandStreamPayload(
+  payload: ConversationStreamPayload,
+): ConversationStreamEvent[] {
+  return 'batch' in payload ? payload.batch : [payload];
+}
+
 /** 服务端事件帧上出现的 durable 事件类型。 */
 export const EVENT_TYPE_WIRE = 'wire_event';
 export const EVENT_TYPE_TURN_COMPLETED = 'turn_completed';

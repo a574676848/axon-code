@@ -62,7 +62,8 @@ import type {
 } from './types';
 
 /** 会话事件通道名，与 Rust 侧 `CONVERSATION_EVENT` 一致；车道流与会话流共用这一条。 */
-import type { ConversationStreamEvent } from './conversation/wire';
+import type { ConversationStreamPayload, ConversationStreamEvent } from './conversation/wire';
+import { expandStreamPayload } from './conversation/wire';
 import type { AnswerItem, QuestionSnapshot } from './conversation/questions';
 import { BRIDGE_PORT, call, isDesktopHost } from './backend';
 
@@ -343,9 +344,11 @@ async function listenStream(
 ): Promise<() => void> {
   if (isDesktopHost()) {
     const { listen } = await import('@tauri-apps/api/event');
-    const unlisten = await listen<ConversationStreamEvent>(eventName, (event) =>
-      handler(event.payload),
-    );
+    // 桌面宿主把回放帧攒成一批下发：一次载荷里有几帧就按序喂几帧，
+    // 上层仍然只面对「逐帧」这一种形状。
+    const unlisten = await listen<ConversationStreamPayload>(eventName, (event) => {
+      for (const item of expandStreamPayload(event.payload)) handler(item);
+    });
     return unlisten;
   }
   // 浏览器调试走调试桥的同一条 SSE。

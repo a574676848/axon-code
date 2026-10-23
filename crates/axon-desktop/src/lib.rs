@@ -169,10 +169,18 @@ pub fn run() {
             // 会话事件经 Tauri 事件通道下发；订阅器是进程内唯一实例，
             // 并且不引用任何界面类型，界面只是它的一个消费者。
             // 车道流与子代理会话流共用这一条通道，帧内自带 subscribeId 由前端分发。
-            let handle = app.handle().clone();
+            // 投递按窗口攒批：历史回放一次上万帧，逐帧 emit 会让 WebView 跟不上，
+            // 丢掉的历史帧不会重来，界面就一直停在「生成中」。
+            let emit_handle = app.handle().clone();
+            let batcher =
+                conversation::stream_batch::StreamBatcher::start(Arc::new(move |batch| {
+                    let _ = emit_handle.emit(conversation::stream::CONVERSATION_EVENT, batch);
+                }));
+            let notify_handle = app.handle().clone();
             conversation::stream::shared().install_emitter(Arc::new(move |event| {
-                desktop_shell::notify_turn_finished(&handle, &event);
-                let _ = handle.emit(conversation::stream::CONVERSATION_EVENT, event);
+                // 完成通知是逐条事实，与投递频率无关，仍然按帧判定。
+                desktop_shell::notify_turn_finished(&notify_handle, &event);
+                batcher.push(event);
             }));
             // 托盘与关闭行为在窗口建好之后安装，此时主窗口已可解析。
             desktop_shell::install(app.handle())?;
