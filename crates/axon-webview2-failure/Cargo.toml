@@ -11,7 +11,7 @@ tauri = { version = "2.12.1" }
 
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.39.1"
-windows-core = "0.62"
+windows-core = "0.100"
 
 [lints]
 # 关闭 WebView2 内置错误页与订阅进程失败事件都要经 COM 接口，而桌面端是
