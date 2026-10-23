@@ -70,6 +70,19 @@ pub fn conversation_history(
     history::lane_interactions(&lane_id, limit, before.as_ref())
 }
 
+/// Tauri IPC 命令：读取一条 Interaction 的一段历史帧。
+///
+/// 历史不再逐帧穿过事件通道：客户端读完这一段后从 `nextAfter` 起订阅实时尾，
+/// 事件通道上只出现真正的增量。
+#[tauri::command]
+pub fn conversation_history_events(
+    interaction_id: String,
+    after: Option<u64>,
+    limit: Option<u32>,
+) -> Result<history::InteractionHistoryPage, String> {
+    history::interaction_events(&interaction_id, after, limit)
+}
+
 /// Tauri IPC 命令：按网关权威记录对账某条车道下的问答状态。
 ///
 /// 返回的每一条都已经完成字段适配（`state` 翻译成界面状态、作答内容取 `answer`、

@@ -125,6 +125,28 @@ pub(super) fn lane_questions_target(subpath: &str) -> Option<String> {
     (tail == "questions" && !lane_id.is_empty()).then(|| lane_id.to_owned())
 }
 
+/// 解析 `interactions/<interactionId>/events` 子路径。
+///
+/// 历史帧走这条 GET 通道：`after` 是继续读取的序号（缺省从头），`limit` 是这一页
+/// 的帧数上限。它与 WebSocket 订阅共用同一份 durable 语义，只是不再逐帧穿过事件通道。
+pub(super) fn interaction_events_target(
+    subpath: &str,
+    query: Option<&str>,
+) -> Option<(String, u64, u32)> {
+    let rest = subpath.strip_prefix("interactions/")?;
+    let (interaction_id, action) = rest.rsplit_once('/')?;
+    if interaction_id.is_empty() || interaction_id.contains('/') || action != "events" {
+        return None;
+    }
+    let after = query_param(query, "after")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    let limit = query_param(query, "limit")
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(DEFAULT_INTERACTION_EVENTS_LIMIT);
+    Some((interaction_id.to_owned(), after, limit))
+}
+
 /// 归属判据：owner 是车道本身，或车道当前运行会话的 `run_session_id`。
 pub(crate) fn owner_matches_lane(lane_id: &str, owner: &str, run_session_id: Option<&str>) -> bool {
     owner == lane_id || run_session_id == Some(owner)

@@ -41,10 +41,11 @@ pub mod wire;
 
 pub use attachment::{StagedAttachment, attachment_pick, attachment_preview, attachment_stage};
 pub use commands::{
-    conversation_answer_question, conversation_history, conversation_interrupt,
-    conversation_lane_jobs, conversation_lane_questions, conversation_lane_subagents,
-    conversation_send_subagent_message, conversation_set_active_lane, conversation_stop_job,
-    conversation_submit, conversation_unsubscribe, conversation_watch, conversation_watch_session,
+    conversation_answer_question, conversation_history, conversation_history_events,
+    conversation_interrupt, conversation_lane_jobs, conversation_lane_questions,
+    conversation_lane_subagents, conversation_send_subagent_message, conversation_set_active_lane,
+    conversation_stop_job, conversation_submit, conversation_unsubscribe, conversation_watch,
+    conversation_watch_session,
 };
 pub use history::InteractionSummary;
 pub use interrupt::InterruptReceipt;

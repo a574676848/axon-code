@@ -278,6 +278,37 @@ export const conversationHistory = (
     beforeId: before?.interactionId ?? null,
   });
 
+/** 历史帧页里的一帧；字段与事件通道上的帧同形。 */
+export interface HistoryFrame {
+  eventType: string;
+  payloadJson: string;
+  cursor: string | null;
+  replay: boolean;
+}
+
+/** 一条 Interaction 的一段历史帧。 */
+export interface HistoryPage {
+  interactionId: string;
+  events: HistoryFrame[];
+  nextAfter: number;
+  hasMore: boolean;
+  tailSequence: number;
+  tailCursor: string | null;
+}
+
+/**
+ * 读取一段历史帧。
+ *
+ * 正文走这条 HTTP 通道，事件通道只负责读完之后从 `tailCursor` 起的实时尾：
+ * 大会话的上万帧因此不再挤在事件通道上。
+ */
+export const conversationHistoryEvents = (
+  interactionId: string,
+  after = 0,
+  limit?: number,
+): Promise<HistoryPage> =>
+  call('conversation_history_events', { interactionId, after, limit });
+
 /** 订阅一条 Interaction 的事件流。 */
 export const conversationWatch = (
   workspaceId: string,

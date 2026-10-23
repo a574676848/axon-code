@@ -411,6 +411,16 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
             )?,
         )
         .map_err(stringify)?),
+        "conversation_history_events" => Ok(serde_json::to_value(
+            conversation::history::interaction_events(
+                &as_str("interactionId")?,
+                args.get("after").and_then(Value::as_u64),
+                args.get("limit")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u32::try_from(value).ok()),
+            )?,
+        )
+        .map_err(stringify)?),
         "conversation_watch" => {
             conversation::stream::shared().watch(conversation::SubscribeTarget::Interaction {
                 workspace_id: as_str("workspaceId")?,

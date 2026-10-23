@@ -75,10 +75,10 @@ use catalog::{provider_profile_remove, provider_profile_upsert};
 use clipboard::{clipboard_read_text, clipboard_write_text};
 use conversation::{
     attachment_pick, attachment_preview, attachment_stage, conversation_answer_question,
-    conversation_history, conversation_interrupt, conversation_lane_jobs,
-    conversation_lane_questions, conversation_lane_subagents, conversation_send_subagent_message,
-    conversation_set_active_lane, conversation_stop_job, conversation_submit,
-    conversation_unsubscribe, conversation_watch, conversation_watch_session,
+    conversation_history, conversation_history_events, conversation_interrupt,
+    conversation_lane_jobs, conversation_lane_questions, conversation_lane_subagents,
+    conversation_send_subagent_message, conversation_set_active_lane, conversation_stop_job,
+    conversation_submit, conversation_unsubscribe, conversation_watch, conversation_watch_session,
 };
 use desktop_preferences::{desktop_preferences, desktop_set_notifications};
 use discovery::discover_models;
@@ -262,6 +262,7 @@ pub fn run() {
             conversation_answer_question,
             conversation_set_active_lane,
             conversation_history,
+            conversation_history_events,
             conversation_lane_questions,
             conversation_watch,
             conversation_watch_session,

@@ -392,3 +392,93 @@ fn replay_leaves_running_interaction_open() {
         drop(subscription);
     }
 }
+
+/// 历史页在「本页凑满上限」时必须从**最后消费掉的那条**续读。
+///
+/// 回归：续读游标一度取的是读页末条序号，凑满上限就把同页剩下的匹配事件静默跳过，
+/// 表现为大会话正文少几段、工具行少一行，却看不出报错。
+#[test]
+fn history_page_resumes_at_the_last_consumed_event() {
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    let host_id = RuntimeHostId::new("gateway-history-host").expect("Host ID");
+    let host = store
+        .claim_host(&host_id, 1, None, 10, 10_000)
+        .expect("注册 Host");
+
+    let interaction_id = InteractionId::new("gateway-history-interaction").expect("Interaction ID");
+    let record = InteractionRecord::new(
+        interaction_id.clone(),
+        InteractionSource::new("desktop", "message-gateway-history").expect("有效来源"),
+        ScopeRef::workspace("workspace-history").expect("有效作用域"),
+        AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly),
+        ReplyRoute::new("desktop", "workbench-history").expect("有效路由"),
+        "历史帧页续读",
+        12,
+    )
+    .expect("Interaction 有效");
+    store.append(&record).expect("写入 Interaction");
+    let session_id = crate::application::primary_session_id_for_interaction(&record)
+        .expect("由 Interaction 派生会话");
+    store
+        .create_session(&session_id, ".", 10)
+        .expect("创建 Session");
+    store
+        .set_session_status(&session_id, &host, SessionRuntimeStatus::Running, 11)
+        .expect("启动 Session");
+
+    // 一次读页（100 条）装得下全部事件：分页上限只由调用方的 limit 决定。
+    let total: u64 = 30;
+    for _ in 0..total {
+        store
+            .append_event(
+                &session_id,
+                &host,
+                "wire_event",
+                &format!("{{\"interactionId\":\"{}\"}}", interaction_id.as_str()),
+                12,
+            )
+            .expect("追加 durable 事件");
+    }
+
+    let first = interaction_history_page(&store, &interaction_id, 0, 10).expect("第一页");
+    assert_eq!(first.events.len(), 10);
+    assert!(first.has_more, "还有更晚的事件时必须提示续读");
+    assert_eq!(
+        first.next_after, 10,
+        "续读游标必须停在最后消费掉的那一条，而不是读页末条"
+    );
+
+    let mut sequences: Vec<u64> = first
+        .events
+        .iter()
+        .map(|event| {
+            parse_cursor(event.cursor.as_deref().expect("事件应有 cursor"))
+                .expect("cursor 应有效")
+                .sequence
+        })
+        .collect();
+    let mut after = first.next_after;
+    let mut pages = 1;
+    loop {
+        let page = interaction_history_page(&store, &interaction_id, after, 10).expect("后续页");
+        pages += 1;
+        sequences.extend(page.events.iter().map(|event| {
+            parse_cursor(event.cursor.as_deref().expect("事件应有 cursor"))
+                .expect("cursor 应有效")
+                .sequence
+        }));
+        after = page.next_after;
+        if !page.has_more {
+            assert!(page.tail_cursor.is_some(), "补到尾时必须给出实时尾游标");
+            break;
+        }
+    }
+
+    assert_eq!(pages, 3, "30 条按每页 10 条正好三页");
+    assert_eq!(
+        sequences,
+        (1..=total).collect::<Vec<_>>(),
+        "分页不得漏读或重读任何一条"
+    );
+}

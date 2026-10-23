@@ -273,10 +273,16 @@ where
 }
 
 /// 判断 durable 事件是否属于目标 Interaction；payload 缺失该字段时视为不匹配。
+///
+/// 历史页要逐条扫过整段会话日志，先用子串做必要条件的粗筛：命中不了 Interaction
+/// 标识的载荷不必解析 JSON，长会话因此少掉绝大多数解析开销。
 pub(crate) fn event_matches_interaction(
     event: &axon_session::SessionEventRecord,
     interaction_id: &str,
 ) -> bool {
+    if !event.payload_json.contains(interaction_id) {
+        return false;
+    }
     serde_json::from_str::<serde_json::Value>(&event.payload_json)
         .ok()
         .and_then(|payload| {
@@ -286,6 +292,89 @@ pub(crate) fn event_matches_interaction(
                 .map(str::to_owned)
         })
         .is_some_and(|value| value == interaction_id)
+}
+
+/// 一次历史页读取的结论。
+#[derive(Debug, Clone)]
+pub struct InteractionHistoryPage {
+    /// 这一页的帧，按序号升序。
+    pub events: Vec<GatewayEvent>,
+    /// 下一次读取的起点：已扫描到的最大序号（含不属于该 Interaction 的事件）。
+    pub next_after: u64,
+    /// 是否还有更晚的事件没有读完；为假表示这一页已经补到 durable 尾。
+    pub has_more: bool,
+    /// 读取时该会话的 durable 尾序号。
+    pub tail_sequence: u64,
+    /// 从 durable 尾继续订阅时用的游标；为空表示会话还没有任何事件。
+    pub tail_cursor: Option<String>,
+}
+
+/// 读取一段历史帧：正文一次取回，实时尾才交给订阅流。
+///
+/// 与订阅回放共用同一份「按 Interaction 过滤 + 终态补帧」语义，区别只有一个：
+/// 这里不建立实时订阅，因此历史不再逐帧穿过事件通道；客户端读完历史后，从
+/// [`InteractionHistoryPage::next_after`] 起订阅，事件流上只会出现真正的增量。
+pub fn interaction_history_page<S>(
+    store: &S,
+    interaction_id: &InteractionId,
+    after_sequence: u64,
+    limit: u32,
+) -> Result<InteractionHistoryPage, GatewayKernelError>
+where
+    S: RuntimeStore,
+{
+    let interaction = store
+        .get_interaction(interaction_id)
+        .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?
+        .ok_or_else(|| GatewayKernelError::Ingress("历史目标 Interaction 不存在".to_owned()))?;
+    let session_id = crate::application::primary_session_id_for_interaction(&interaction)
+        .map_err(GatewayKernelError::Ingress)?;
+    let tail_sequence = live_ceiling_cursor(store, &session_id, None)?.sequence;
+    let limit = usize::try_from(limit.max(1)).unwrap_or(usize::MAX);
+    let mut pending = VecDeque::new();
+    let mut after = after_sequence.min(tail_sequence);
+    let mut tail_cursor = None;
+    while pending.len() < limit && after < tail_sequence {
+        let page = store
+            .replay_events(&session_id, after, DEFAULT_GATEWAY_REPLAY_PAGE_SIZE)
+            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
+        if page.is_empty() {
+            break;
+        }
+        for event in page {
+            // 游标要记在**所有**扫过的事件上：客户端据它订阅实时尾，跳过不匹配的
+            // 事件也必须从它们之后开始，否则会把别条交互的正文重复读一遍。
+            tail_cursor = serde_json::to_string(&event.cursor()).ok();
+            // 续读游标只推进到**真正消费过**的这一条：本页凑满上限就收工时，
+            // 同一读页里还没看的事件必须留到下一次，否则它们会被静默跳过。
+            after = event.sequence;
+            if !event_matches_interaction(&event, interaction_id.as_str()) {
+                continue;
+            }
+            let cursor = serde_json::to_string(&event.cursor()).ok();
+            pending.push_back(GatewayEvent {
+                event_type: event.event_type,
+                payload_json: event.payload_json,
+                cursor,
+                replay: true,
+            });
+            if pending.len() >= limit {
+                break;
+            }
+        }
+    }
+    let has_more = after < tail_sequence;
+    if !has_more {
+        // 补到尾才补终态：翻页中途收口会让界面提前把这一轮判成结束。
+        append_replayed_terminal_status(&mut pending, store, interaction_id)?;
+    }
+    Ok(InteractionHistoryPage {
+        events: pending.into_iter().collect(),
+        next_after: after,
+        has_more,
+        tail_sequence,
+        tail_cursor,
+    })
 }
 
 #[cfg(test)]

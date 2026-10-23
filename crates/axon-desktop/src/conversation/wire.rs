@@ -15,6 +15,8 @@ pub const WS_PATH: &str = "/gateway/v1/ws";
 pub const LANES_PATH: &str = "/api/v1/lanes";
 /// 工作台会话面前缀：按会话标识读取逐字稿。
 pub const SESSIONS_PATH: &str = "/api/v1/sessions";
+/// 工作台交互面前缀：按交互标识读取历史帧页。
+pub const INTERACTIONS_PATH: &str = "/api/v1/interactions";
 
 /// 提交信封。
 ///

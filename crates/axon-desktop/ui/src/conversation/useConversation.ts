@@ -33,8 +33,6 @@ import { useQuestionSync } from './useQuestionSync';
 
 /** 一帧的合并窗口，与 TUI 的助手增量归并窗口同量级。 */
 const FRAME_FLUSH_MS = 16;
-/** 历史回放时，等不到终态帧就继续下一条的空闲阈值。 */
-const REPLAY_IDLE_MS = 1_200;
 /**
  * 过渡窗口的上限。
  *
@@ -105,7 +103,6 @@ export function useConversation(target: ConversationTarget | null): Conversation
   const queueRef = useRef<string[]>([]);
   const replayingRef = useRef(false);
   const watchedRef = useRef<string | null>(null);
-  const idleTimerRef = useRef<number | null>(null);
   /**
    * 目标代次。
    *
@@ -141,7 +138,6 @@ export function useConversation(target: ConversationTarget | null): Conversation
   const playNextRef = useRef<
     (workspaceId: string, generation: number, leaving?: string | null) => void
   >(() => undefined);
-  const stopIdleTimerRef = useRef<() => void>(() => undefined);
   /** 中断请求是否在途：Esc 连发与长按只允许换来一次真实中断。 */
   const interruptingRef = useRef(false);
   /** 当前车道与工作区：会话目标下没有车道能力，分页与展开也随之不可用。 */
@@ -160,21 +156,57 @@ export function useConversation(target: ConversationTarget | null): Conversation
     onError: setSubmitError,
   });
 
-  const stopIdleTimer = useCallback(() => {
-    if (idleTimerRef.current !== null) {
-      window.clearTimeout(idleTimerRef.current);
-      idleTimerRef.current = null;
-    }
-  }, []);
-  stopIdleTimerRef.current = stopIdleTimer;
-
   /**
-   * 关闭某一条 Interaction 的订阅。
+   * 回放一条 Interaction 的正文：历史走 HTTP 帧页，读完只订阅实时尾。
    *
-   * 车道历史是逐条回放的，而每一路订阅都会在 daemon 侧占一个投递位；一条 30 条
-   * Interaction 的车道若一路攒下去就是 30 路并发投递。因此回放每推进一步就把
-   * 上一条的订阅还回去，与「车道同时只盯一条 Interaction」的既有口径一致。
+   * 历史不再逐帧穿过事件通道：通道上因此只出现真正的增量，大会话的上万帧也不会
+   * 再把 WebView 压垮。分页逐页落地，正文随页码推进逐步长出，不会先空一屏。
    */
+  const replayHistory = useCallback(
+    async (workspace: string, interactionId: string, generation: number) => {
+      const subscribeId = `interaction:${interactionId}`;
+      let after = 0;
+      let tailCursor: string | null = null;
+      let settled = false;
+      for (;;) {
+        const page = await ipc.conversationHistoryEvents(interactionId, after);
+        if (generation !== generationRef.current) return;
+        if (page.events.length > 0) {
+          paging.routeFrames(
+            page.events.map((event) => ({
+              kind: 'frame' as const,
+              subscribeId,
+              eventType: event.eventType,
+              payloadJson: event.payloadJson,
+              cursor: event.cursor,
+            })),
+            Date.now(),
+          );
+          // 终态帧只会在补到 durable 尾的那一页出现：它同时说明这一条已经收口。
+          settled = page.events.some(
+            (event) =>
+              event.eventType === 'turn_completed' ||
+              event.eventType === 'turn_failed' ||
+              event.eventType === 'interaction.status',
+          );
+        }
+        tailCursor = page.tailCursor;
+        after = page.nextAfter;
+        if (!page.hasMore) break;
+      }
+      if (generation !== generationRef.current) return;
+      if (settled) {
+        // 已经收口：不再订阅，直接把回放推进到下一条。
+        playNextRef.current(workspace, generation, null);
+        return;
+      }
+      // 还在跑：从 durable 尾订阅，事件通道上只会出现真正的增量。
+      rememberSubscribed(subscribeId);
+      await ipc.conversationWatch(workspace, interactionId, tailCursor);
+    },
+    [paging.routeFrames, rememberSubscribed],
+  );
+
   const releaseInteraction = useCallback(
     (interactionId: string) => {
       const subscribeId = `interaction:${interactionId}`;
@@ -198,7 +230,6 @@ export function useConversation(target: ConversationTarget | null): Conversation
         replayingRef.current = false;
         return;
       }
-      stopIdleTimer();
       if (leaving !== null) releaseInteraction(leaving);
       const next = paging.take(queueRef.current);
       if (next === undefined) {
@@ -221,20 +252,14 @@ export function useConversation(target: ConversationTarget | null): Conversation
           attachments: seed.attachments,
         });
       }
-      void ipc.conversationWatch(workspace, next, null).catch((error: unknown) => {
+      void replayHistory(workspace, next, generation).catch((error: unknown) => {
         if (generationRef.current !== generation) return;
-        setSubmitError(error instanceof Error ? error.message : '订阅会话失败');
+        setSubmitError(error instanceof Error ? error.message : '读取会话历史失败');
+        // 读不到正文也要继续推进，否则这一条会把整条车道的回放卡住。
+        playNextRef.current(workspace, generation, watchedRef.current);
       });
-      rememberSubscribed(`interaction:${next}`);
-      idleTimerRef.current = window.setTimeout(() => {
-        if (replayingRef.current && generationRef.current === generation) {
-          // 没等到终态帧就继续下一条：离开的这一条照样要还回订阅位，否则一条
-          // N 条 Interaction 的车道会一路攒下 N 路投递（实测确实会）。
-          playNextRef.current(workspace, generation, watchedRef.current);
-        }
-      }, REPLAY_IDLE_MS);
     },
-    [paging.applyAction, paging.seedOf, releaseInteraction, rememberSubscribed, stopIdleTimer],
+    [paging.applyAction, paging.seedOf, releaseInteraction, replayHistory],
   );
   playNextRef.current = playNext;
 
@@ -244,9 +269,6 @@ export function useConversation(target: ConversationTarget | null): Conversation
       // 一条连接承载多路订阅；只收属于自己的那几路，其余（别的视图的订阅）直接丢弃。
       if (!subscribedIdsRef.current.has(event.subscribeId)) return;
       pendingRef.current.push(event);
-      if (replayingRef.current && event.kind === 'frame') {
-        stopIdleTimerRef.current();
-      }
       if (flushRef.current !== null) return;
       const generation = generationRef.current;
       flushRef.current = window.setTimeout(() => {
@@ -313,7 +335,6 @@ export function useConversation(target: ConversationTarget | null): Conversation
   useEffect(() => {
     // 开新代次：上一次目标遗留的帧窗口与回放推进据此全部作废。
     generationRef.current += 1;
-    stopIdleTimer();
     queueRef.current = [];
     replayingRef.current = false;
     watchedRef.current = null;
@@ -359,7 +380,6 @@ export function useConversation(target: ConversationTarget | null): Conversation
           );
         });
       return () => {
-        stopIdleTimer();
         rememberUnsubscribed(watchedId);
         void ipc.conversationUnsubscribe(watchedId).catch(() => undefined);
       };
@@ -385,7 +405,6 @@ export function useConversation(target: ConversationTarget | null): Conversation
       });
     return () => {
       cancelled = true;
-      stopIdleTimer();
       // 实时续聊的订阅也属于当前视图，离开时全部释放，重新进入才能从头回放。
       for (const subscribeId of subscribedIdsRef.current) {
         void ipc.conversationUnsubscribe(subscribeId).catch(() => undefined);
@@ -399,7 +418,6 @@ export function useConversation(target: ConversationTarget | null): Conversation
     targetKind,
     targetKey,
     laneReattach.token,
-    stopIdleTimer,
   ]);
 
   /** 运行中按节拍刷新耗时。 */
@@ -443,7 +461,6 @@ export function useConversation(target: ConversationTarget | null): Conversation
       const destination = laneCapability.destination ?? '';
       setSubmitting(true);
       setSubmitError(null);
-      stopIdleTimer();
       queueRef.current = [];
       replayingRef.current = false;
       // 提交是用户自己的动作：正文立刻可见，不为它保留过渡窗口。
@@ -496,7 +513,7 @@ export function useConversation(target: ConversationTarget | null): Conversation
         setSubmitting(false);
       }
     },
-    [laneCapability, rememberSubscribed, stopIdleTimer],
+    [laneCapability, rememberSubscribed],
   );
 
   const retry = useCallback(() => {

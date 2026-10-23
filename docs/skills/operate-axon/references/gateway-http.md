@@ -84,6 +84,7 @@ Authorization: Bearer <token>
 | `GET /api/v1/lanes/<laneId>/subagents` | 该车道的子代理清单 |
 | `POST /api/v1/lanes/<laneId>/interrupt` | 中断该车道的运行 |
 | `GET /api/v1/lanes/<laneId>/interactions` | 该车道的交互记录；`?limit=<n>` 限制条数，`?before_ms=<毫秒>&before_id=<交互标识>` 向前翻页（取该条之前的一页，两个参数必须成对给出） |
+| `GET /api/v1/interactions/<interactionId>/events` | 该交互的历史帧页；`?after=<序号>` 从该序号之后续读（缺省从头），`?limit=<n>` 限制本页帧数。返回 `events`、`nextAfter`、`hasMore`、`tailSequence`、`tailCursor`：`hasMore` 为真时按 `nextAfter` 继续翻页，读完用 `tailCursor` 订阅 WebSocket 即可只收增量 |
 | `GET /api/v1/lanes/<laneId>/jobs` | 该车道的作业清单 |
 | `POST /api/v1/lanes/<laneId>/jobs/<jobId>/stop` | 停止指定作业 |
 | `POST /api/v1/lanes/<laneId>/subagents/<agent>/messages` | 给指定子代理追加消息 |
