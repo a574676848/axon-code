@@ -291,8 +291,10 @@ fn validated_script<'a>(script: &'a str, empty_error: &'static str) -> AxonResul
     Ok(script)
 }
 
+#[cfg(windows)]
 #[path = "wsl_launch.rs"]
 mod wsl_launch;
+#[cfg(windows)]
 use wsl_launch::*;
 
 #[cfg(not(windows))]

@@ -623,11 +623,16 @@ mod tests {
     #[test]
     fn extended_windows_absolute_glob_matches_entries() {
         let root = axon_test_support::test_temp_dir();
-        fs::create_dir_all(root.path().join("src")).unwrap();
-        fs::write(root.path().join("src").join("main.rs"), "").unwrap();
+        let canonical = root.path().canonicalize().expect("临时目录必须可规范化");
+        let plain_root = canonical
+            .to_string_lossy()
+            .trim_start_matches(r"\\?\")
+            .to_string();
+        fs::create_dir_all(canonical.join("src")).unwrap();
+        fs::write(canonical.join("src").join("main.rs"), "").unwrap();
 
-        let extended_root = PathBuf::from(format!(r"\\?\{}", root.path().display()));
-        let pattern = format!(r"\\?\{}\src\*.rs", root.path().display());
+        let extended_root = PathBuf::from(format!(r"\\?\{plain_root}"));
+        let pattern = format!(r"\\?\{plain_root}\src\*.rs");
         let report = WorkspaceWalker::walk(WorkspaceWalkInput {
             root: extended_root,
             paths: vec![pattern],

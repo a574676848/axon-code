@@ -558,7 +558,7 @@ mod tests {
     #[test]
     fn legacy_stream_holds_back_incomplete_tail_until_next_chunk() {
         assert!(
-            try_decode_console_code_page(&[0xA1]).is_none(),
+            try_decode_console_code_page(&[0x81]).is_none(),
             "单个首字节必须被判为不完整，否则流式解码会切坏字符"
         );
     }

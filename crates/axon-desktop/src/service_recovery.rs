@@ -270,6 +270,7 @@ fn run_start_with_install_fallback() -> Result<std::process::Output, String> {
 /// 复用系统既有的 `-Verb RunAs` 自举方式：由 PowerShell 弹 UAC，
 /// 用户确认后在新进程中执行，本进程等待其结束。
 /// 用户取消提权时不会假装成功，而是如实返回失败。
+#[cfg(windows)]
 fn run_cli_elevated(args: &[&str]) -> Result<std::process::Output, String> {
     let cli = installed_cli().ok_or_else(|| "未找到已安装的 axon 命令".to_string())?;
     let argument_list = args
@@ -301,7 +302,14 @@ fn run_cli_elevated(args: &[&str]) -> Result<std::process::Output, String> {
     .map_err(|error| format!("提权执行失败：{error}"))
 }
 
+/// 非 Windows 平台没有 UAC 提权通道：显式失败，不伪装成功。
+#[cfg(not(windows))]
+fn run_cli_elevated(_args: &[&str]) -> Result<std::process::Output, String> {
+    Err("当前平台不支持 UAC 提权：请使用系统服务管理器安装守护进程".to_string())
+}
+
 /// 标准 base64 编码；避免为一次编码引入依赖。
+#[cfg(windows)]
 fn base64_encode(input: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
