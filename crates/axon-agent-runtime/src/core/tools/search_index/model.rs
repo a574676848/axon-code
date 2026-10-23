@@ -37,11 +37,34 @@ pub(crate) struct IndexKey {
 impl IndexKey {
     pub(crate) fn new(root: &Path, hidden: bool, gitignore: bool) -> Self {
         Self {
-            root: root.to_path_buf(),
+            root: normalize_index_root(root),
             hidden,
             gitignore,
         }
     }
+}
+
+/// 统一工作区根路径的物理形态，作为索引身份的唯一来源。
+///
+/// 同一目录可能以 8.3 短名（例如 CI 的 `RUNNER~1`）、`\\?\` 扩展前缀或普通绝对
+/// 路径传入。若直接把调用方写法当作缓存键，同一份快照会因写法不同而互不命中，
+/// 表现为索引已构建却始终退化为完整扫描。这里统一解析为真实路径，并在 Windows
+/// 上剥离扩展前缀，使键与调用方传入的普通路径保持可比。
+fn normalize_index_root(root: &Path) -> PathBuf {
+    let Ok(canonical) = std::fs::canonicalize(root) else {
+        return root.to_path_buf();
+    };
+    #[cfg(windows)]
+    {
+        let text = canonical.to_string_lossy();
+        if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{rest}"));
+        }
+        if let Some(rest) = text.strip_prefix(r"\\?\") {
+            return PathBuf::from(rest);
+        }
+    }
+    canonical
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
