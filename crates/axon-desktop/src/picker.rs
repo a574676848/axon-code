@@ -95,6 +95,7 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
     Ok(first_non_empty_line(&output.stdout))
 }
 
+/// macOS 原生目录选择器：经 osascript 调起系统对话框。
 #[cfg(target_os = "macos")]
 pub fn pick_directory_native(initial: Option<&str>) -> Result<Option<String>, String> {
     let location = match initial.filter(|value| !value.is_empty()) {
@@ -107,6 +108,7 @@ pub fn pick_directory_native(initial: Option<&str>) -> Result<Option<String>, St
     Ok(first_non_empty_line(&output.stdout))
 }
 
+/// 其它 Unix 平台的原生目录选择器：经 zenity 调起对话框。
 #[cfg(all(unix, not(target_os = "macos")))]
 pub fn pick_directory_native(initial: Option<&str>) -> Result<Option<String>, String> {
     let prompt = format!("--title={PICKER_PROMPT}");

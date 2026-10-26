@@ -92,7 +92,7 @@ pub(crate) fn runtime_axon_log_path_static(config_path: &Path) -> Result<PathBuf
     axon_config::runtime_axon_log_path(config_path).map_err(|_| "无法解析 Axon 日志目录")
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
 

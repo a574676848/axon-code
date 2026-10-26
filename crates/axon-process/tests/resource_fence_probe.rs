@@ -17,6 +17,7 @@ use axon_process::resource_fence::{
     PROCESS_RLIMIT_AS_ENV, PROCESS_RLIMIT_FSIZE_ENV, PROCESS_RLIMIT_NOFILE_ENV,
     PROCESS_RLIMIT_NPROC_ENV, fence_pty_command,
 };
+#[cfg(any(windows, target_os = "linux"))]
 use axon_process::resource_fence::{
     ProcessResourceLimits, configure_process_resource_limits, fence_spawned_child,
 };

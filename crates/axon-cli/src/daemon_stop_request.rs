@@ -23,6 +23,10 @@ pub(super) fn stop_request_path(runtime_dir: &Path) -> PathBuf {
 /// 写入停止请求；重复请求幂等。
 ///
 /// 文件内容记录发起方 PID，仅用于排障，不参与判定。
+///
+/// 非 Windows 的守护进程由 systemd / launchd 收口，不产生请求文件，
+/// 因此该函数在那些平台只由测试驱动，需要显式抑制 dead_code。
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(super) fn request(runtime_dir: &Path) -> Result<(), String> {
     let path = stop_request_path(runtime_dir);
     if let Some(parent) = path.parent() {
