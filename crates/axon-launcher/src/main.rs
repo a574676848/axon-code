@@ -78,12 +78,16 @@ fn detach_desktop_console() {
 #[cfg(not(windows))]
 fn detach_desktop_console() {}
 
+/// Windows 侧把子进程挂到无窗口控制台；其它平台无对应概念，保持空实现。
+#[cfg(windows)]
 fn configure_child(command: &mut Command, daemon_run: bool) {
-    #[cfg(windows)]
     if daemon_run {
         command.creation_flags(CREATE_NO_WINDOW);
     }
 }
+
+#[cfg(not(windows))]
+fn configure_child(_command: &mut Command, _daemon_run: bool) {}
 
 fn resolve_target(launcher: &std::path::Path, desktop: bool) -> io::Result<PathBuf> {
     let root = launcher
