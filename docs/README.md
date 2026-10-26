@@ -18,7 +18,7 @@ Axon 是基于 Rust 构建的专属个人智能体（Personal Agent）与战术�
 | 管理记忆与长周期认知 | [记忆管理系统](./memory-management.md) |
 | 部署、排障与核算成本 | [Daemon 后台守护进程](./daemon.md) → [故障诊断与自愈](./troubleshooting.md) → [使用统计与用量看板](./usage-statistics.md) |
 | 修改桌面端界面 | [桌面端 UI 约束规范](./ui-constraints.md) → [工作台设计系统](./workbench-design-system.md) |
-| 参与源码开发 | [开源贡献指南](./CONTRIBUTING.md) |
+| 参与源码开发 | [开源贡献指南](../CONTRIBUTING.md) |
 
 ## 1. 概念与架构
 
@@ -60,7 +60,7 @@ Axon 是基于 Rust 构建的专属个人智能体（Personal Agent）与战术�
 
 - [使用统计与用量看板](./usage-statistics.md) - Token 消耗度量、审计日志与成本核算体系
 - [故障诊断与自愈](./troubleshooting.md) - 健康检查 `axon doctor`、常见异常与修复手段
-- [开源贡献指南](./CONTRIBUTING.md) - 代码结构、分层边界、门禁要求与贡献流程
+- [开源贡献指南](../CONTRIBUTING.md) - 代码结构、分层边界、门禁要求与贡献流程
 - [工作台设计系统](./workbench-design-system.md) - 跨平台桌面端极简浅色设计规范与令牌 SSOT
 - [桌面端 UI 约束规范](./ui-constraints.md) - UI 任务开工前置契约、令牌与组件约束、验收门禁与设计终检清单
 
@@ -86,7 +86,7 @@ Axon 是基于 Rust 构建的专属个人智能体（Personal Agent）与战术�
 
 - [安全策略](../SECURITY.md) - 漏洞报告的私密渠道、支持范围与处理流程
 - [行为准则](../CODE_OF_CONDUCT.md) - 社区协作的期望行为与执行方式
-- [贡献指南](./CONTRIBUTING.md) - 开发流程、门禁要求与提交规范
+- [贡献指南](../CONTRIBUTING.md) - 开发流程、门禁要求与提交规范
 - [Issue 入口](https://github.com/a574676848/axon-code/issues/new/choose) - 缺陷报告与功能建议的结构化模板
 
 ---

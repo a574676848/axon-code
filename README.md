@@ -182,7 +182,7 @@ axon usage                                      # 查看 Token 消耗与成本�
   - [故障排查](./docs/troubleshooting.md) - 常见问题诊断与修复建议
   - [工作台设计系统](./docs/workbench-design-system.md) - 跨平台桌面端极简浅色设计规范与令牌 SSOT
   - [桌面端 UI 约束规范](./docs/ui-constraints.md) - UI 任务开工前置契约与验收门禁
-  - [贡献指南](./docs/CONTRIBUTING.md) - 源码架构分层、规范与开发工作流
+  - [贡献指南](./CONTRIBUTING.md) - 源码架构分层、规范与开发工作流
 
 ## 示例与配置样板
 
@@ -232,13 +232,13 @@ npm test
 
 并在仓库根执行 `pwsh -File tools/verify-ui-contract.ps1`。桌面端二进制内嵌 `ui/dist`，必须先构建前端再构建 Rust 产物。
 
-详细规范请参阅 [贡献指南](./docs/CONTRIBUTING.md)。
+详细规范请参阅 [贡献指南](./CONTRIBUTING.md)。
 
 ## 贡献
 
 欢迎提交 Issue 与 Pull Request。参与开发前请阅读：
 
-- [贡献指南](./docs/CONTRIBUTING.md)：架构分层、目录职责、开发工作流与门禁要求。
+- [贡献指南](./CONTRIBUTING.md)：架构分层、目录职责、开发工作流与门禁要求。
 - [行为准则](./CODE_OF_CONDUCT.md)：社区协作的期望行为、适用范围与执行方式。
 - [安全策略](./SECURITY.md)：漏洞报告的私密渠道、支持范围与处理流程。
 - [AGENTS.md](./AGENTS.md)：仓库级开发实施准则，包含质量基线、跨平台约定与发布约束。

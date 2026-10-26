@@ -146,4 +146,4 @@ Provider 可见工具集合在同一 run 内保持不变。运行时从最终三
 - [CLI 参考](./cli.md)
 - [配置指南](./configuration.md)
 - [故障排查](./troubleshooting.md)
-- [开源贡献指南](./CONTRIBUTING.md)
+- [开源贡献指南](../CONTRIBUTING.md)
