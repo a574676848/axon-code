@@ -465,6 +465,7 @@ fn every_intent_tool_accepts_the_intent_field_before_execution() {
         "search",
         "notes_write_file",
         "notes_append_to_file",
+        "send_message",
     ];
     for name in axon_display::tool_intent_tool_names() {
         assert!(
@@ -541,6 +542,44 @@ fn every_intent_tool_accepts_the_intent_field_before_execution() {
             receipt.summary
         );
     }
+
+    // 子代理协作工具同属 intent 工具：它是子代理之间唯一的消息通道，
+    // 一个展示字段不得把这条通道堵死。
+    let mut control = axon_agent_runtime::AgentControlRuntime::default();
+    let subagent_runtime = axon_agent_runtime::SubagentToolRuntime;
+    subagent_runtime
+        .execute(
+            &mut control,
+            axon_agent_runtime::SubagentToolExecutionInput {
+                tool_call: ProviderToolCall::new(
+                    "call_intent_spawn",
+                    "builtin.spawn_agent",
+                    r#"{"task_name":"intent_probe","task":"检查 intent 接受性"}"#,
+                ),
+                current_path: axon_agent_runtime::AgentPath::root(),
+                remote_requested: false,
+                completed_at_ms: 0,
+            },
+        )
+        .expect("spawn 必须成功");
+    let sent = subagent_runtime.execute(
+        &mut control,
+        axon_agent_runtime::SubagentToolExecutionInput {
+            tool_call: ProviderToolCall::new(
+                "call_intent_send",
+                "builtin.send_message",
+                r#"{"target":"intent_probe","message":"继续","intent":"补充协作指令"}"#,
+            ),
+            current_path: axon_agent_runtime::AgentPath::root(),
+            remote_requested: false,
+            completed_at_ms: 0,
+        },
+    );
+    assert!(
+        sent.is_ok(),
+        "send_message 不得拒绝 intent：{:?}",
+        sent.err()
+    );
 
     let _ = std::fs::remove_dir_all(&temp_root);
 }

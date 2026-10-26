@@ -249,6 +249,10 @@ impl RunWireEventBuilder {
         for receipt in receipts {
             let tool_call_id = receipt.provider_call_id.clone();
             let part_id = receipt.part_id.clone();
+            let arguments_preview = metadata_text(
+                receipt.metadata.as_ref(),
+                TOOL_ARGUMENTS_PREVIEW_METADATA_KEY,
+            );
             let call_event_id = format!("{}:tool:{}:call", self.session.session_id, tool_call_id);
             let result_event_id =
                 format!("{}:tool:{}:result", self.session.session_id, tool_call_id);
@@ -262,13 +266,13 @@ impl RunWireEventBuilder {
                     tool_name: receipt.tool_name.clone(),
                     tool_kind: tool_kind(receipt),
                     summary: receipt.summary.clone(),
-                    arguments_summary: metadata_text(
-                        receipt.metadata.as_ref(),
-                        TOOL_ARGUMENTS_PREVIEW_METADATA_KEY,
+                    arguments_summary: arguments_preview.clone(),
+                    // 这条投影由收尾后的回执重建，没有实时调用事件里的 intent；
+                    // 从同一条参数预览反解，解得出就照样上屏，预览被截断时才回落。
+                    intent: axon_agent_runtime::tool_call_intent(
+                        &receipt.tool_name,
+                        arguments_preview.as_deref().unwrap_or_default(),
                     ),
-                    // 这条投影在回合收束后由回执重建：调用意图只存在于实时调用事件里，
-                    // 回执不带它，界面据此回落到参数投影而不是编一个概要。
-                    intent: None,
                     execution_permission: None,
                 }),
             );

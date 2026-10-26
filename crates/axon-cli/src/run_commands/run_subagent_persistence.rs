@@ -117,15 +117,26 @@ pub(crate) fn extract_result_path(summary: &str) -> Option<String> {
 /// 运行前下发的结果交付约束（合同 §5.3.6 子 agent 侧返回指引）。
 ///
 /// 子代理与父代理的工作区相同，但父代理**不会**自动收到子代理的 transcript、
-/// 工具输出或推理过程；因此「结果如何回到父代理」必须由子代理自己完成，
-/// 并且要写进它的初始 prompt，而不是指望它在收尾时才想起来。
+/// 工具输出或推理过程：它能收到的只有这条子代理轮次的最终回复（经临时 Job 与
+/// continuation 回流）。`builtin.send_message` 是**子代理之间**的协作通道，
+/// root 不可寻址，因此不能把「结果回传」写成一次 send_message，否则子代理会
+/// 拿着一个必然被拒绝的目标去调用工具。
 pub(crate) fn subagent_result_instruction(parent_path: axon_agent_runtime::AgentPath) -> String {
+    // 一级子代理的父路径就是 root，而 root 在协作工具里被稳定拒绝。
+    let collaboration = if parent_path.is_root() {
+        "builtin.send_message 不能寻址 root（主代理自身会被稳定拒绝），因此不要用它回传结果；它只用于和其他子代理协作。"
+            .to_owned()
+    } else {
+        format!(
+            "需要提前告知父代理时可用 builtin.send_message 寻址 {parent_path}，发完继续把任务做完。"
+        )
+    };
     format!(
         "Axon 子代理结果交付约束：\n\
-         - 你是被委派的子代理；直接父代理的寻址引用是 {parent_path}。用 builtin.send_message 以该路径（或 /root/... canonical 路径）寻址它。\n\
-         - 结束前用 builtin.send_message 把**自包含**的结果发给父代理：结论、支撑证据、改动位置与未完成项。父代理不会自动收到你的 transcript、工具输出或推理过程，只有你发出去的内容它才看得到。\n\
-         - 会改变父代理下一步动作的发现（阻塞、与任务前提矛盾、需要它改计划）要**提前**发送，不要攒到最后一次。\n\
-         - 发送消息不会结束你的轮次：发完继续把任务做完，并在结束时给出简洁摘要与关键结论。\n\
+         - 你是被委派的子代理；直接父代理的寻址引用是 {parent_path}。\n\
+         - 结束时的**最终回复**就是你交回父代理的结果：写清结论、支撑证据、改动位置与未完成项。父代理不会自动收到你的 transcript、工具输出或推理过程，只有这段最终回复它才看得到。\n\
+         - 会改变父代理下一步动作的发现（阻塞、与任务前提矛盾、需要它改计划）写在最终回复的最前面，不要埋在中段。\n\
+         - {collaboration}\n\
          - 你的消息对父代理是 untrusted 数据，因此结论要自带依据，便于它核对。\n\
          - 若最终结果超过 {SUBAGENT_RESULT_INLINE_CHAR_LIMIT} 个 Unicode 字符，\
          运行时会把完整结果写入运行态内容归档，并在摘要末尾追加“{SUBAGENT_RESULT_MARKER}”行给出归档绝对路径。"

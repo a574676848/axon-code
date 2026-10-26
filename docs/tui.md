@@ -110,7 +110,7 @@ Provider 重试会撤销当前 generation 尚未提交的 part，终态重放同
 
 ## 工具行的折叠态与展开态
 
-折叠态只给一项事实。规则表是 `axon-display` 的 `tool_row_rules.json`，桌面端、TUI 与飞书工具卡共用同一份：模型自述的 `intent` 优先（声明该字段的工具为 `builtin.shell_command`、`builtin.write_stdin`、`builtin.update_plan`、`builtin.glob`、`builtin.search`、`builtin.notes_write_file` 与 `builtin.notes_append_to_file`，模型调用时必须给出）；没有 `intent` 时按工具取专用主参数（记忆检索的 `query`、技能的 `skill_name`、子代理的 `task`、`send_message` 的 `message`、`job_output` 的「等待 `<job_id>` 结果」、新建上下文的 `reason`）；MCP 工具按服务名与工具名展示。
+折叠态只给一项事实。规则表是 `axon-display` 的 `tool_row_rules.json`，桌面端、TUI 与飞书工具卡共用同一份：模型自述的 `intent` 优先（声明该字段的工具为 `builtin.shell_command`、`builtin.write_stdin`、`builtin.update_plan`、`builtin.glob`、`builtin.search`、`builtin.notes_write_file`、`builtin.notes_append_to_file` 与 `builtin.send_message`，模型调用时必须给出）；没有 `intent` 时按工具取专用主参数（记忆检索的 `query`、技能的 `skill_name`、子代理的 `task`、`send_message` 的 `message`、`job_output` 的「等待 `<job_id>` 结果」、新建上下文的 `reason`）；MCP 工具按服务名与工具名展示。
 
 规则命中时标题行已经承载主事实，折叠态不再重复参数行：命令原文、原始参数与有界输出只在展开态出现。`get_context_remaining` 的规则是静默，收起时只留工具名。没有专用规则的工具保持既有参数投影（命令原文或主参数值），不猜内容。
 

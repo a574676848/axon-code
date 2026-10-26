@@ -350,7 +350,8 @@ fn subagent_send_message_stays_queue_only_without_triggering_executor() {
         "builtin.send_message",
         &serde_json::json!({
             "target": "/root/review",
-            "message": "只入队，不触发执行"
+            "message": "只入队，不触发执行",
+            "intent": "确认只入队不触发执行"
         }),
     );
     let message_receipts = super::execute_supported_tool_calls(&request, &[message], None);

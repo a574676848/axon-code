@@ -100,7 +100,11 @@ pub(super) fn parse_send_message_args(
 ) -> AxonResult<SendMessageArgs> {
     validate_allowed_fields(
         arguments,
-        &[SUBAGENT_TOOL_TARGET_FIELD, SUBAGENT_TOOL_MESSAGE_FIELD],
+        &[
+            SUBAGENT_TOOL_TARGET_FIELD,
+            SUBAGENT_TOOL_MESSAGE_FIELD,
+            crate::TOOL_INTENT_FIELD,
+        ],
     )?;
     Ok(SendMessageArgs {
         target: required_target_reference(arguments)?,

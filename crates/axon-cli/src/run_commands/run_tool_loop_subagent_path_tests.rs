@@ -121,7 +121,8 @@ fn child_subagent_tools_resolve_relative_paths_from_current_agent() {
         "builtin.send_message",
         &serde_json::json!({
             "target": "security",
-            "message": "补充检查依赖风险"
+            "message": "补充检查依赖风险",
+            "intent": "让安全子代理补查依赖"
         }),
     );
     let message_receipts = super::execute_supported_tool_calls(&request, &[message], None);
