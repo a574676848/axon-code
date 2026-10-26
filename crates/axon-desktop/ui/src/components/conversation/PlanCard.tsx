@@ -1,4 +1,5 @@
 import React from 'react';
+import { PLAN_LABEL, planHeading } from '../../conversation/transcript';
 import { ChecklistIcon } from '../../icons';
 import { StateDot, Text, type StateDotState } from '../ui/surfaces';
 import { DisclosureRow, DISCLOSURE_BODY_INDENT } from './DisclosureRow';
@@ -68,7 +69,7 @@ function planSummary(steps: readonly { status: string }[]): string {
 }
 
 export interface PlanCardProps {
-  /** 计划标题；为空时回落到「任务」。 */
+  /** 计划标题；为空或与固定标签「计划」同文时不重复显示。 */
   title: string;
   /** 步骤明细，顺序与后端下发一致。 */
   steps: readonly { step: string; status: string }[];
@@ -80,16 +81,19 @@ export interface PlanCardProps {
 export const PlanCard: React.FC<PlanCardProps> = ({ title, steps, defaultOpen }) => {
   const [open, setOpen] = React.useState(defaultOpen);
   const summary = React.useMemo(() => planSummary(steps), [steps]);
-  const heading = title.trim().length > 0 ? title : '任务';
+  const heading = planHeading(title);
+  const accessibleTitle = [heading ?? PLAN_LABEL, summary]
+    .filter((part) => part.length > 0)
+    .join(' ');
   return (
     <div className="w-full rounded-md hairline border-border-hairline bg-surface px-1 py-0.5">
       <DisclosureRow
         open={open}
         onToggle={() => setOpen((value) => !value)}
         icon={<ChecklistIcon size={14} />}
-        label="计划"
+        label={PLAN_LABEL}
         title={heading}
-        titleText={`${heading} ${summary}`.trim()}
+        titleText={accessibleTitle}
         meta={summary.length > 0 ? summary : undefined}
       />
       {open && (

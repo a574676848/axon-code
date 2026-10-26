@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyPlan } from '../src/conversation/transcript/cells.ts';
+import { applyPlan, planHeading } from '../src/conversation/transcript/cells.ts';
 import { INITIAL_CONVERSATION } from '../src/conversation/transcript/state.ts';
 import { emptyTurn } from '../src/conversation/transcript/turns.ts';
 
@@ -72,4 +72,12 @@ test('位置越界时不写入时间线单元，但仍不破坏既有状态', ()
 
     assert.equal(after.turns[0].cells.length, 0);
     assert.equal(after.plan.total, 1);
+});
+
+test('默认标题「计划」或空白标题不重复作为副标题渲染，自定义标题原样保留', () => {
+    assert.equal(planHeading('计划'), undefined);
+    assert.equal(planHeading('  计划  '), undefined);
+    assert.equal(planHeading(''), undefined);
+    assert.equal(planHeading('   '), undefined);
+    assert.equal(planHeading('文档事实源整理'), '文档事实源整理');
 });
