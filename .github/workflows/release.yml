@@ -198,7 +198,7 @@ jobs:
         shell: bash
 
       - name: 上传构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.target }}
           path: dist/
@@ -266,7 +266,7 @@ jobs:
         continue-on-error: true
 
       - name: 上传 .pkg 产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-macos-pkg-${{ matrix.target }}
           path: dist/
@@ -324,7 +324,7 @@ jobs:
           sha256sum "dist/${NAME}.deb" | awk '{print $1}' > "dist/${NAME}.deb.sha256"
 
       - name: 上传 .deb 产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-linux-deb-${{ matrix.target }}
           path: dist/
@@ -394,7 +394,7 @@ jobs:
           $hash | Out-File -NoNewline "dist/axon-$env:GITHUB_REF_NAME-x86_64-pc-windows-msvc.msi.sha256"
 
       - name: 上传 MSI 产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-msi
           path: dist/
