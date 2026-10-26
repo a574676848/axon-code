@@ -20,6 +20,7 @@ import { useRailLayout } from '../../sidebarRight/useRailLayout';
 import { ConversationActionsProvider, type ConversationActions } from './actions';
 import { structuredInputBlock } from '../../conversation/references';
 import { useConversationMcp } from '../../conversation/useConversationMcp';
+import { useTurnModelRoute } from '../../conversation/useTurnModelRoute';
 import {
   changedFilesOf,
   workingStatusPrimary,
@@ -230,10 +231,15 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    * 工作状态行在整轮运行期间都在：耗时与中断提示是这一行的职责，
    * 助手正文开始流式输出并不改变「这一轮还在跑」这个事实。
    */
+  const workingRoute = useTurnModelRoute(
+    runningTurn?.id ?? null,
+    runningTurn?.activity ?? null,
+    config?.route ?? config?.model ?? '',
+  );
   const workingLine =
     conversation.working && selection !== null
       ? {
-          primary: workingStatusPrimary(runningTurn?.activity ?? null, config?.model ?? ''),
+          primary: workingStatusPrimary(runningTurn?.activity ?? null, workingRoute),
           elapsedMs: runningTurn?.elapsedMs ?? null,
           queued: conversation.queued,
         }

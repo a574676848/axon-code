@@ -301,7 +301,7 @@ export const ConversationStream: React.FC<ConversationStreamProps> = ({
       */}
       <div
         ref={scrollRef}
-        className="absolute inset-0 overflow-y-auto overflow-x-hidden px-5 pt-4 pb-6 select-text"
+        className="absolute inset-0 overflow-y-auto overflow-x-hidden px-5 pt-4 pb-3 select-text"
       >
         <div ref={contentRef} className="w-full max-w-chat mx-auto flex flex-col gap-2.5">
           {hasOlder && (
