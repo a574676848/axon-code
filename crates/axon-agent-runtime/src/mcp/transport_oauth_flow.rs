@@ -334,12 +334,23 @@ pub(crate) fn oauth_code_challenge(verifier: &str) -> String {
 mod tests {
     use super::*;
 
+    /// 两个用例争用同一个固定回调端口，必须串行：并行时一方会把另一方的前置条件抢走。
+    static CALLBACK_PORT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// 取得回调端口的独占权；前一个用例 panic 时把锁从中毒状态里救回来。
+    fn serialize_callback_port() -> std::sync::MutexGuard<'static, ()> {
+        CALLBACK_PORT_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn preferred_redirect_uri() -> String {
         format!("http://{OAUTH_CALLBACK_HOST}:{OAUTH_CALLBACK_PREFERRED_PORT}{OAUTH_CALLBACK_PATH}")
     }
 
     #[test]
     fn callback_redirect_uri_prefers_stable_port_when_available() {
+        let _serial = serialize_callback_port();
         let Ok(probe) = TcpListener::bind((OAUTH_CALLBACK_HOST, OAUTH_CALLBACK_PREFERRED_PORT))
         else {
             // 端口被其他进程占用时无法断言首选端口，跳过该用例。
@@ -356,6 +367,7 @@ mod tests {
 
     #[test]
     fn callback_listener_falls_back_to_ephemeral_port_when_preferred_is_taken() {
+        let _serial = serialize_callback_port();
         let Ok(squatter) = TcpListener::bind((OAUTH_CALLBACK_HOST, OAUTH_CALLBACK_PREFERRED_PORT))
         else {
             // 首选端口本就不可用，无法构造占用场景，跳过该用例。

@@ -28,8 +28,6 @@ const CWD_VISIBLE_CHARS = 24;
 const CONTEXT_WARNING_PERCENT = 70;
 /** 上下文压力严重阈值（整数百分比）。 */
 const CONTEXT_CRITICAL_PERCENT = 85;
-/** 工作状态指示文本。图标由渲染层给，文本里不再带 emoji。 */
-export const ACTIVITY_LABEL = 'Axon';
 
 /** 段标识。 */
 export type HeaderSegmentKind =
@@ -125,11 +123,14 @@ function contextText(usage: TokenUsage, contextWindow: number | null): string | 
 export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
   const segments: HeaderSegment[] = [];
 
-  // 1 状态：仅工作态出现。
+  // 1 状态：仅工作态出现。品牌名不再占位：工作态只留一枚呼吸的活动点，
+  //   生成到哪一步已经由正文与输入坞那一行说清楚了。
   if (input.working) {
     segments.push({
       kind: 'status',
-      text: ACTIVITY_LABEL,
+      text: '',
+      title: '正在运行',
+      icon: 'spark',
       tone: 'default',
       breath: input.animationTick % 4 < 2,
     });

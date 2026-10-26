@@ -353,18 +353,100 @@ async fn read_until_subscribed(socket: &mut TestSocket, subscribe_id: &str) -> b
     }
 }
 
-/// 一次读取循环同时收两路事件，返回「第一路、第二路」各自按到达顺序排列的 cursor 序列。
+/// 两路订阅各自已收的游标，以及两路确认帧是否都已到达。
+struct TwoSubscriptionTaps {
+    first_confirmed: bool,
+    second_confirmed: bool,
+    first_cursors: Vec<String>,
+    second_cursors: Vec<String>,
+}
+
+/// 把一帧流事件按订阅标识分流；不属于这两路的帧一律忽略。
+fn route_stream_event(
+    value: &serde_json::Value,
+    first_id: &str,
+    second_id: &str,
+    first: &mut Vec<String>,
+    second: &mut Vec<String>,
+) {
+    if value.get("type").and_then(serde_json::Value::as_str) != Some("event") {
+        return;
+    }
+    let Some(id) = value.get("subscribeId").and_then(serde_json::Value::as_str) else {
+        return;
+    };
+    let bucket = if id == first_id {
+        first
+    } else if id == second_id {
+        second
+    } else {
+        return;
+    };
+    bucket.push(
+        value
+            .get("cursor")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+    );
+}
+
+/// 读到两路订阅都收到确认，并把期间夹带的流事件按标识缓冲下来。
+///
+/// 两路确认帧谁先到由服务端调度决定，不能按「先发的那一路先确认」去读：那样
+/// 一次调度抖动就会把第二路的确认读成第一路的。事件也可能先于确认帧到达，
+/// 因此这里把它们收下而不是丢掉，交给后面的收齐循环继续用。
+async fn read_until_two_subscribed(
+    socket: &mut TestSocket,
+    first_id: &str,
+    second_id: &str,
+) -> TwoSubscriptionTaps {
+    let mut taps = TwoSubscriptionTaps {
+        first_confirmed: false,
+        second_confirmed: false,
+        first_cursors: Vec::new(),
+        second_cursors: Vec::new(),
+    };
+    while !(taps.first_confirmed && taps.second_confirmed) {
+        let Some(text) = next_frame(socket).await else {
+            break;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        match value.get("type").and_then(serde_json::Value::as_str) {
+            Some("subscribed") => {
+                match value.get("subscribeId").and_then(serde_json::Value::as_str) {
+                    Some(id) if id == first_id => taps.first_confirmed = true,
+                    Some(id) if id == second_id => taps.second_confirmed = true,
+                    _ => {}
+                }
+            }
+            Some("event") => route_stream_event(
+                &value,
+                first_id,
+                second_id,
+                &mut taps.first_cursors,
+                &mut taps.second_cursors,
+            ),
+            _ => {}
+        }
+    }
+    taps
+}
+
+/// 一次读取循环同时收两路事件，返回「第一路、第二路」各自的 cursor 序列。
 ///
 /// 交错到达正是这个用例要固定的事实，因此不能按路分别读到收满为止：那会把
 /// 「另一路的帧插在中间」误判成超时，机器一忙就假失败。这里按每路各自的目标条数
-/// 收齐即止。
+/// 收齐即止；确认阶段已经收到的事件由调用方传进来，不重复等待。
 async fn collect_two_stream_cursors(
     socket: &mut TestSocket,
     first_id: &str,
     second_id: &str,
+    mut first: Vec<String>,
+    mut second: Vec<String>,
 ) -> (Vec<String>, Vec<String>) {
-    let mut first = Vec::new();
-    let mut second = Vec::new();
     while first.len() < MULTI_STREAM_EVENT_COUNT || second.len() < MULTI_STREAM_EVENT_COUNT {
         let Some(text) = next_frame(socket).await else {
             break;
@@ -372,26 +454,7 @@ async fn collect_two_stream_cursors(
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
             continue;
         };
-        if value.get("type").and_then(serde_json::Value::as_str) != Some("event") {
-            continue;
-        }
-        let Some(id) = value.get("subscribeId").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        let bucket = if id == first_id {
-            &mut first
-        } else if id == second_id {
-            &mut second
-        } else {
-            continue;
-        };
-        bucket.push(
-            value
-                .get("cursor")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-        );
+        route_stream_event(&value, first_id, second_id, &mut first, &mut second);
     }
     (first, second)
 }

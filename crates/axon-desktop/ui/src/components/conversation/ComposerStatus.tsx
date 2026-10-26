@@ -88,6 +88,9 @@ export interface ComposerWorkingLineProps {
  * 转圈与列表行是同一份，行高固定，底部一条不确定进度扫光说明它确实在动。
  * 内置指令复用这一行（`interruptible=false`）：它同样是「这件事正在做」，
  * 只是不能被打断，因此不承诺 ESC。
+ *
+ * 视觉上是一条下沉面药丸：生成中整行从画布上浮起一格，主文案取主文本色，
+ * 扫光取强调色，因此「正在干活」比一行灰字更容易被看见。
  */
 export const ComposerWorkingLine: React.FC<ComposerWorkingLineProps> = ({
   primary,
@@ -96,18 +99,18 @@ export const ComposerWorkingLine: React.FC<ComposerWorkingLineProps> = ({
   interruptible = true,
 }) => (
   <div
-    className="relative mb-1.5 px-1 h-6 flex items-center gap-2 overflow-hidden rounded-sm"
+    className="relative mb-2 px-2 h-7 flex items-center gap-2 overflow-hidden rounded-sm bg-surface-sunken hairline border-border-hairline"
     role="status"
     aria-live="polite"
   >
     <StateDot state="ongoing" />
-    <span className="min-w-0 truncate text-meta text-text-secondary">{primary}</span>
+    <span className="min-w-0 truncate text-meta font-medium text-text-primary">{primary}</span>
     <span className="shrink-0 text-meta tabular-nums text-text-tertiary">
       （{workingDetails({ elapsedMs, queued, interruptible })}）
     </span>
     <span
       aria-hidden="true"
-      className="working-sweep pointer-events-none absolute bottom-0 -left-1/3 h-[2px] w-1/3 rounded-full bg-text-primary/[0.08]"
+      className="working-sweep pointer-events-none absolute bottom-0 -left-1/3 h-[2px] w-1/3 bg-text-link/30"
     />
   </div>
 );

@@ -137,17 +137,32 @@ export const ConversationHeader: React.FC<ConversationHeaderProps> = ({
               // 上下文段挂了指标浮层：它的原生 title 会与浮层同时冒出来，
               // 因此这一段不设 title；其余段保留，读数被截断时它仍是全文入口。
               const withPopover = segment.kind === 'context' && contextUsage !== null;
+              /*
+               * 工作状态单独出一种形态：一枚带强调底色的活动点，不带文字。
+               * 品牌名写在正文与侧栏里已经够多了，指标条只回答「现在在不在干活」。
+               */
+              if (segment.kind === 'status') {
+                return (
+                  <span
+                    key={segment.kind}
+                    role="status"
+                    aria-label={segment.title ?? '正在运行'}
+                    title={segment.title ?? '正在运行'}
+                    className={`shrink-0 inline-flex items-center justify-center w-[22px] h-[22px] rounded-full bg-text-link/12 text-text-link transition-opacity duration-300 ${
+                      segment.breath ? 'opacity-100' : 'opacity-70'
+                    }`}
+                  >
+                    {metricIcon(segment, contextPercent)}
+                  </span>
+                );
+              }
               const reading = (
                 <span
                   className={`min-w-0 ${
                     segment.kind === 'cwd' ? '' : 'shrink-0'
                   } inline-flex items-center gap-1 text-row tabular-nums ${
                     segment.kind === 'cwd' ? 'max-w-[260px]' : ''
-                  } ${
-                    segment.kind === 'status'
-                      ? 'text-text-primary font-medium'
-                      : TONE_CLASS[segment.tone]
-                  }`}
+                  } ${TONE_CLASS[segment.tone]}`}
                   title={withPopover ? undefined : (segment.title ?? segment.text)}
                 >
                   {metricIcon(segment, contextPercent)}

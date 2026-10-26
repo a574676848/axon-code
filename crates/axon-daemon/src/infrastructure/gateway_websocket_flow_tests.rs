@@ -104,13 +104,25 @@ fn one_connection_serves_two_subscriptions_with_independent_cursors() {
             .await
             .expect("发送第二路订阅帧");
 
-        let first = read_until_subscribed(&mut socket, "interaction:interaction-1").await;
-        let second = read_until_subscribed(&mut socket, "session:sub-1").await;
-        // 两路事件交错到达：必须按标识分流，而不是按到达顺序切分。
-        let (lane_cursors, session_cursors) =
-            collect_two_stream_cursors(&mut socket, "interaction:interaction-1", "session:sub-1")
+        // 两路确认帧谁先到由服务端调度决定，必须等齐两路再往下走。
+        let taps =
+            read_until_two_subscribed(&mut socket, "interaction:interaction-1", "session:sub-1")
                 .await;
-        (first, second, lane_cursors, session_cursors)
+        // 两路事件交错到达：必须按标识分流，而不是按到达顺序切分。
+        let (lane_cursors, session_cursors) = collect_two_stream_cursors(
+            &mut socket,
+            "interaction:interaction-1",
+            "session:sub-1",
+            taps.first_cursors,
+            taps.second_cursors,
+        )
+        .await;
+        (
+            taps.first_confirmed,
+            taps.second_confirmed,
+            lane_cursors,
+            session_cursors,
+        )
     });
 
     stop.store(true, Ordering::Release);
