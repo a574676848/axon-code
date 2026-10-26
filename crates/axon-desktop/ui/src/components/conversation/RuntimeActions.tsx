@@ -398,8 +398,13 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
 
   if (ordered.length === 0 && jobs.length === 0) return null;
 
-  const triggerClass =
-    'h-7 px-1.5 inline-flex items-center gap-1 rounded-xs text-meta text-text-secondary tabular-nums transition-colors duration-100 hover:bg-hover hover:text-text-primary';
+  const totalVisibleJobs = jobs.length - Object.keys(dismissed).length;
+  const hasActiveJobs = active.length > 0;
+  const hasActiveSubagents = runningCount > 0;
+
+  const baseTriggerClass =
+    'h-7 px-2 inline-flex items-center gap-1.5 rounded-sm text-meta tabular-nums transition-colors duration-100';
+
   return (
     <>
       {ordered.length > 0 && (
@@ -407,10 +412,28 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
           align="end"
           menuClassName="w-[336px] max-w-[min(400px,100vw-32px)] p-1 flex flex-col gap-px max-h-[min(560px,100vh-140px)] overflow-y-auto scroll-visible"
           trigger={({ open, toggle }) => (
-            <button type="button" onClick={toggle} title="子代理" className={triggerClass}>
-              <AgentIcon size={14} className="shrink-0" />
+            <button
+              type="button"
+              onClick={toggle}
+              title="子代理"
+              className={`${baseTriggerClass} ${
+                hasActiveSubagents
+                  ? 'bg-focus-soft text-text-link font-medium hover:bg-active'
+                  : 'text-text-tertiary hover:bg-hover hover:text-text-primary'
+              }`}
+            >
+              {hasActiveSubagents ? (
+                <span className="relative inline-flex w-2 h-2 items-center justify-center shrink-0">
+                  <span aria-hidden="true" className="live-beacon-ring absolute inset-0 rounded-full bg-text-link" />
+                  <span className="relative w-1.5 h-1.5 rounded-full bg-text-link" />
+                </span>
+              ) : (
+                <AgentIcon size={14} className="shrink-0" />
+              )}
               <span>子代理</span>
-              <span className="mx-1">{runningCount}</span>
+              <span>
+                {hasActiveSubagents ? `${runningCount}/${ordered.length}` : ordered.length}
+              </span>
               <ChevronDownIcon
                 size={12}
                 className={`shrink-0 transition-transform duration-150 ease-out ${open ? 'rotate-180' : ''}`}
@@ -435,23 +458,34 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
           menuClassName="w-[500px] max-w-[min(560px,100vw-32px)] p-1 flex flex-col gap-px max-h-[min(480px,100vh-140px)] overflow-auto scroll-visible"
           onOpenChange={(open) => {
             setJobsOpen(open);
-            // 收起菜单即收起展开行：下次打开看到的是一份干净的列表。
             if (!open) setExpandedId(null);
           }}
           trigger={({ open, toggle }) => (
             <button
               type="button"
               onClick={() => {
-                // 与打开同一提交里取时刻：挂载时的旧值会让第一帧的耗时偏小。
                 setNowMs(Date.now());
                 toggle();
               }}
-              title="后台任务"
-              className={triggerClass}
+              title={hasActiveJobs ? `后台任务：${active.length} 个正在运行` : '后台任务'}
+              className={`${baseTriggerClass} ${
+                hasActiveJobs
+                  ? 'bg-ok-soft text-ok-ink font-medium hover:bg-active'
+                  : 'text-text-tertiary hover:bg-hover hover:text-text-primary'
+              }`}
             >
-              <TerminalIcon size={14} className="shrink-0" />
+              {hasActiveJobs ? (
+                <span className="relative inline-flex w-2 h-2 items-center justify-center shrink-0">
+                  <span aria-hidden="true" className="live-beacon-ring absolute inset-0 rounded-full bg-ok" />
+                  <span className="relative w-1.5 h-1.5 rounded-full bg-ok" />
+                </span>
+              ) : (
+                <TerminalIcon size={14} className="shrink-0" />
+              )}
               <span>后台任务</span>
-              <span className="mx-1">{jobs.length - Object.keys(dismissed).length}</span>
+              <span>
+                {hasActiveJobs ? `${active.length}/${totalVisibleJobs}` : totalVisibleJobs}
+              </span>
               <ChevronDownIcon
                 size={12}
                 className={`shrink-0 transition-transform duration-150 ease-out ${open ? 'rotate-180' : ''}`}

@@ -14,6 +14,7 @@ import { sameRuntimeFacts, type LaneRuntimeFacts } from './conversation/runtimeF
 import { Button } from './components/ui/controls';
 import { Banner, Chip, EmptyState, ListRow, LoadingState, Panel, Text } from './components/ui/surfaces';
 import { PageShell } from './components/ui/shell';
+import { WindowChrome } from './components/ui/WindowChrome';
 import { AlertCircleIcon, FolderIcon, RefreshIcon } from './icons';
 import { AutomationPage } from './components/AutomationPage';
 import { MemoryPage } from './components/MemoryPage';
@@ -294,11 +295,19 @@ export const App: React.FC = () => {
     (selectedLane?.pending_question_count ?? 0) > 0 ||
     (selection && laneMarks[selection.laneId]?.startsWith('question_')),
   );
+  const selectedRunning = Boolean(
+    selectedLane?.running ||
+    (selection !== null && laneRuntime?.laneId === selection.laneId && laneRuntime.turnRunning),
+  );
   const baseTitle = selectedLane?.title || selection?.title;
-  // 待答状态用文字前缀表达：窗口标题栏里不放彩色表情符号，与侧栏的状态语言同源。
+  // 待答与运行状态用文字前缀表达：窗口标题栏里不放彩色表情符号，与侧栏的状态语言同源。
   const windowTitle = selection === null
     ? undefined
-    : hasPendingQuestion ? `待答 · ${baseTitle}` : baseTitle;
+    : hasPendingQuestion
+      ? `待答 · ${baseTitle}`
+      : selectedRunning
+        ? `运行中 · ${baseTitle}`
+        : baseTitle;
 
   useWindowTitle(windowTitle);
 
@@ -367,9 +376,9 @@ export const App: React.FC = () => {
   }, [toggleSidebar]);
 
   return (
-    // `overflow-clip` 而不是 `overflow-hidden`：外壳层永远不该滚动，而 `hidden`
-    // 仍是一个可滚动容器，焦点进入内部控件时会被浏览器悄悄滚走。
-    <div className="h-full w-full flex bg-canvas overflow-clip">
+    // 外层是沉底托盘（bg-sidebar），主工作区是嵌在托盘里的圆角舞台（Inset Sheet）。
+    <div className="h-full w-full flex bg-sidebar overflow-clip">
+      <WindowChrome />
       <Sidebar
         currentTab={currentTab}
         onSelectTab={setCurrentTab}
@@ -383,53 +392,61 @@ export const App: React.FC = () => {
         runtime={laneRuntime}
       />
 
-      {health === null ? (
-        <main className="flex-1 min-w-0 h-full flex items-center justify-center bg-canvas">
-          <LoadingState label="正在连接 Axon 后台服务" />
-        </main>
-      ) : !health.connected ? (
-        <main className="flex-1 h-full overflow-clip bg-canvas">
-          {/* 弹窗可以被关掉，主区域不能因此变成一片空白：这里给出同样的结论与重试入口。 */}
-          <GatewayUnavailableState
-            health={health}
-            detail={lastFailure}
-            onRetry={async () => {
-              await probeGateway();
-              if (connectionRef.current === true) await refreshWorkspaces();
-            }}
-            onOpenSettings={() => openSettingsAt('remote')}
-          />
-        </main>
-      ) : currentTab === 'workspace' ? (
-        <WorkspaceOverview />
-      ) : currentTab === 'automation' ? (
-        <AutomationPage onOpenSession={(job: CronJob) => {
-          if (!job.workspaceId || !job.sessionId) return;
-          selectLane({
-            workspaceId: job.workspaceId,
-            workspacePath: job.workspacePath ?? '',
-            laneId: job.sessionId,
-            destination: job.destination ?? '',
-            title: job.name,
-            channel: 'cron',
-            fixedModel: job.model,
-            fixedReasoningEffort: job.reasoningEffort,
-          });
-          setCurrentTab('chat');
-        }} />
-      ) : currentTab === 'memory' ? (
-        <MemoryPage connected={health.connected} />
-      ) : (
-        <ErrorBoundary>
-          <ConversationView
-            selection={selection}
-            workspace={activeWorkspace}
-            configRevision={configRevision}
-            onSelectLane={selectLane}
-            onRuntimeFacts={applyRuntimeFacts}
-          />
-        </ErrorBoundary>
-      )}
+      <div className="flex-1 min-w-0 my-1.5 mr-1.5 ml-0 flex rounded-[12px] bg-canvas shadow-stage overflow-clip">
+        {health === null ? (
+          <main className="flex-1 min-w-0 h-full flex flex-col bg-canvas">
+            <div data-tauri-drag-region className="h-10 shrink-0" />
+            <div className="flex-1 flex items-center justify-center">
+              <LoadingState label="正在连接 Axon 后台服务" />
+            </div>
+          </main>
+        ) : !health.connected ? (
+          <main className="flex-1 h-full flex flex-col overflow-clip bg-canvas">
+            <div data-tauri-drag-region className="h-10 shrink-0" />
+            {/* 弹窗可以被关掉，主区域不能因此变成一片空白：这里给出同样的结论与重试入口。 */}
+            <div className="flex-1 min-h-0 flex flex-col">
+              <GatewayUnavailableState
+                health={health}
+                detail={lastFailure}
+                onRetry={async () => {
+                  await probeGateway();
+                  if (connectionRef.current === true) await refreshWorkspaces();
+                }}
+                onOpenSettings={() => openSettingsAt('remote')}
+              />
+            </div>
+          </main>
+        ) : currentTab === 'workspace' ? (
+          <WorkspaceOverview />
+        ) : currentTab === 'automation' ? (
+          <AutomationPage onOpenSession={(job: CronJob) => {
+            if (!job.workspaceId || !job.sessionId) return;
+            selectLane({
+              workspaceId: job.workspaceId,
+              workspacePath: job.workspacePath ?? '',
+              laneId: job.sessionId,
+              destination: job.destination ?? '',
+              title: job.name,
+              channel: 'cron',
+              fixedModel: job.model,
+              fixedReasoningEffort: job.reasoningEffort,
+            });
+            setCurrentTab('chat');
+          }} />
+        ) : currentTab === 'memory' ? (
+          <MemoryPage connected={health.connected} />
+        ) : (
+          <ErrorBoundary>
+            <ConversationView
+              selection={selection}
+              workspace={activeWorkspace}
+              configRevision={configRevision}
+              onSelectLane={selectLane}
+              onRuntimeFacts={applyRuntimeFacts}
+            />
+          </ErrorBoundary>
+        )}
+      </div>
 
       {health !== null && !health.connected && (
         <GatewayUnconnected

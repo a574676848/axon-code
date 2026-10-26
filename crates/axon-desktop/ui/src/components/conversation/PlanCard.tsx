@@ -86,7 +86,7 @@ export const PlanCard: React.FC<PlanCardProps> = ({ title, steps, defaultOpen })
     .filter((part) => part.length > 0)
     .join(' ');
   return (
-    <div className="w-full rounded-md hairline border-border-hairline bg-surface px-1 py-0.5">
+    <div className="w-full rounded-md hairline border-border shadow-card bg-surface px-1.5 py-0.5">
       <DisclosureRow
         open={open}
         onToggle={() => setOpen((value) => !value)}
@@ -97,7 +97,7 @@ export const PlanCard: React.FC<PlanCardProps> = ({ title, steps, defaultOpen })
         meta={summary.length > 0 ? summary : undefined}
       />
       {open && (
-        <ul className={`${DISCLOSURE_BODY_INDENT} mr-1 mb-1 border-l-[2px] border-border-hairline pl-3 space-y-1`}>
+        <ul className={`disclosure-enter ${DISCLOSURE_BODY_INDENT} mr-1 mb-1 border-l-[2px] border-border-hairline pl-3 space-y-1`}>
           {steps.map((step, index) => {
             const kind = planStepKind(step.status);
             return (

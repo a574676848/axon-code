@@ -19,6 +19,7 @@
         "center": true,
         "resizable": true,
         "decorations": true,
+        "hiddenTitle": true,
         "dragDropEnabled": false
       }
     ],

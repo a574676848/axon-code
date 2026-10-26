@@ -44,14 +44,14 @@ const TONE_CLASS: Record<HeaderSegmentTone, string> = {
 /**
  * 簇的可见断点。
  *
- * 以**主区域宽度**为基准而不是视口：右侧停靠栏展开后，视口没变但正文列只剩 504px，
- * 按视口判定会把四簇全画出来再从中间硬裁。容器查询让整簇按真实可用宽度退场。
+ * 容器查询直接挂在左侧弹性指标流容器上（扣除右侧子代理/后台任务胶囊与窗口控制按钮之后的真实剩余宽度），
+ * 确保空间不足时整簇提前退场，绝不把「耗时」等读数从汉字中间硬劈成两半。
  */
 const CLUSTER_VISIBILITY: Record<HeaderClusterKind, string> = {
   identity: 'flex',
-  budget: 'hidden @min-[560px]:flex',
-  performance: 'hidden @min-[700px]:flex',
-  aux: 'hidden @min-[820px]:flex',
+  budget: 'hidden @min-[380px]:flex',
+  performance: 'hidden @min-[620px]:flex',
+  aux: 'hidden @min-[760px]:flex',
 };
 
 /** 上下文占用百分比；无窗口定义时返回 null。 */
@@ -99,11 +99,14 @@ export interface ConversationHeaderProps extends HeaderMetricsInput {
   trailing?: React.ReactNode;
   /** 当前会话是否存在待答复提问。 */
   hasPendingQuestion?: boolean;
+  /** 是否需要避让右上角窗口控制区（右侧栏收起时为 true，展开后由右侧栏顶条避让）。 */
+  avoidWindowControls?: boolean;
 }
 
 export const ConversationHeader: React.FC<ConversationHeaderProps> = ({
   trailing,
   hasPendingQuestion = false,
+  avoidWindowControls = true,
   ...metrics
 }) => {
   const clusters = headerClusters(metrics);
@@ -113,12 +116,17 @@ export const ConversationHeader: React.FC<ConversationHeaderProps> = ({
   return (
     <header
       data-tauri-drag-region
-      className="@container shrink-0 h-9 px-4 flex items-center gap-3 hairline-b border-border-hairline bg-canvas select-text"
+      style={
+        avoidWindowControls
+          ? { paddingRight: 'calc(16px + var(--window-controls-inset, 0px))' }
+          : undefined
+      }
+      className="shrink-0 h-10 pl-4 pr-4 flex items-center gap-3 hairline-b border-border-hairline bg-canvas select-text"
     >
-      <div className="flex-1 min-w-0 flex items-center gap-3 overflow-hidden whitespace-nowrap">
+      <div className="@container flex-1 min-w-0 flex items-center gap-3.5 overflow-hidden whitespace-nowrap">
         {hasPendingQuestion && (
           <span
-            className="shrink-0 inline-flex items-center gap-1 rounded-xs px-1.5 text-xs text-gold-ink"
+            className="shrink-0 inline-flex items-center gap-1 rounded-xs px-1.5 py-0.5 bg-gold-soft text-xs text-gold-ink confirm-pop"
             title="当前会话存在待答复提问"
           >
             <ChecklistIcon size={14} className="shrink-0" aria-hidden="true" />
@@ -129,18 +137,12 @@ export const ConversationHeader: React.FC<ConversationHeaderProps> = ({
           <div
             key={cluster.kind}
             data-header-cluster={cluster.kind}
-            className={`${CLUSTER_VISIBILITY[cluster.kind]} min-w-0 items-center gap-1.5 ${
-              position > 0 ? 'pl-3 hairline-l border-border-hairline' : ''
+            className={`${CLUSTER_VISIBILITY[cluster.kind]} min-w-0 items-center gap-2.5 ${
+              position > 0 ? 'pl-3.5 hairline-l border-border-hairline' : ''
             }`}
           >
             {cluster.segments.map((segment) => {
-              // 上下文段挂了指标浮层：它的原生 title 会与浮层同时冒出来，
-              // 因此这一段不设 title；其余段保留，读数被截断时它仍是全文入口。
               const withPopover = segment.kind === 'context' && contextUsage !== null;
-              /*
-               * 工作状态单独出一种形态：一枚带强调底色的活动点，不带文字。
-               * 品牌名写在正文与侧栏里已经够多了，指标条只回答「现在在不在干活」。
-               */
               if (segment.kind === 'status') {
                 return (
                   <span
@@ -148,10 +150,14 @@ export const ConversationHeader: React.FC<ConversationHeaderProps> = ({
                     role="status"
                     aria-label={segment.title ?? '正在运行'}
                     title={segment.title ?? '正在运行'}
-                    className={`shrink-0 inline-flex items-center justify-center w-[22px] h-[22px] rounded-full bg-text-link/12 text-text-link transition-opacity duration-300 ${
-                      segment.breath ? 'opacity-100' : 'opacity-70'
+                    className={`relative shrink-0 inline-flex items-center justify-center w-[22px] h-[22px] rounded-full bg-text-link/12 text-text-link transition-opacity duration-300 ${
+                      segment.breath ? 'opacity-100' : 'opacity-75'
                     }`}
                   >
+                    <span
+                      aria-hidden="true"
+                      className="live-beacon-ring absolute inset-0 rounded-full bg-text-link/25"
+                    />
                     {metricIcon(segment, contextPercent)}
                   </span>
                 );

@@ -114,7 +114,9 @@ export const DisclosureRow: React.FC<DisclosureRowProps> = ({
       )}
       {label !== undefined && label.length > 0 && (
         <span
-          className={`${LABEL_COLUMN} text-row ${danger ? 'text-danger' : 'text-text-primary'}`}
+          className={`${LABEL_COLUMN} text-row ${
+            danger ? 'text-danger' : 'text-text-primary'
+          } ${active ? 'shimmer-text-active font-medium' : ''}`}
         >
           {label}
         </span>
@@ -182,7 +184,7 @@ export const DisclosureBody: React.FC<{ children: React.ReactNode; framed?: bool
   framed = false,
 }) => (
   <div
-    className={`${DISCLOSURE_BODY_INDENT} mb-1 ${
+    className={`disclosure-enter ${DISCLOSURE_BODY_INDENT} mb-1 ${
       framed ? '' : 'border-l-[2px] border-border-hairline pl-1'
     }`}
   >

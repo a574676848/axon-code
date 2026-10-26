@@ -19,7 +19,7 @@ type ButtonShape = 'rounded' | 'pill';
 
 const BUTTON_BASE =
   'inline-flex items-center justify-center gap-1.5 font-medium select-none whitespace-nowrap ' +
-  'transition-colors duration-100 disabled:cursor-not-allowed disabled:opacity-40';
+  'transition-colors duration-100 active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-40';
 
 const BUTTON_SIZE: Record<ButtonSize, string> = {
   md: 'h-8 px-3 text-row',
@@ -27,10 +27,10 @@ const BUTTON_SIZE: Record<ButtonSize, string> = {
 };
 
 const BUTTON_VARIANT: Record<ButtonVariant, string> = {
-  primary: 'bg-primary text-white hover:bg-primary-hover',
-  outline: `${HAIRLINE} bg-surface text-text-primary hover:bg-hover`,
+  primary: 'bg-primary text-white shadow-btn-primary hover:bg-primary-hover',
+  outline: `${HAIRLINE} bg-surface text-text-primary shadow-btn-outline hover:bg-hover hover:border-border-strong`,
   ghost: 'text-text-primary hover:bg-hover',
-  danger: `${HAIRLINE} bg-surface text-danger hover:bg-hover`,
+  danger: `${HAIRLINE} bg-surface text-danger shadow-btn-outline hover:bg-hover`,
 };
 
 const BUTTON_SHAPE: Record<ButtonShape, Record<ButtonSize, string>> = {

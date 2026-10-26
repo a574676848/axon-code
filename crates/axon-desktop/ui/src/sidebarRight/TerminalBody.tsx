@@ -6,7 +6,7 @@ import '@xterm/xterm/css/xterm.css';
 import * as ipc from '../ipc';
 import { PlusIcon, TerminalIcon } from '../icons';
 import { EmptyState } from '../components/ui/surfaces';
-import { onThemeChange } from '../theme';
+import { currentTheme, onThemeChange } from '../theme';
 
 /*
  * 终端正文：一个会话一个真实 PTY，屏幕由 xterm 绘制。
@@ -67,32 +67,32 @@ function flatten(color: string, background: string): string {
 }
 
 /**
- * 浅色终端主题。
- *
- * 背景不再落到 xterm 的默认纯黑：底色取卡片白，字色取主墨色，光标与选区同源。
- * ANSI 基础色按浅底重取一遍：默认调色板是为深底配的，黄色、青色与白色在浅底上
- * 几乎读不出来。只覆盖这八档基础色，亮色档保留 xterm 的默认值，剩余的低对比项
- * 由 minimumContrastRatio 兜住，因此不重造一整套 16 色。
+ * 终端主题：随当前工作台主题切换浅色或黑曜石深色色板。
  */
 function terminalTheme(): ITheme {
-  const background = readToken('--color-surface', '#ffffff');
-  const foreground = readToken('--color-text-primary', '#0f1115');
-  const selection = readToken('--color-focus-soft', 'rgba(65, 118, 230, 0.08)');
+  const dark = currentTheme() === 'obsidian';
+  const background = readToken('--color-surface', dark ? '#181c25' : '#ffffff');
+  const foreground = readToken('--color-text-primary', dark ? '#eceff4' : '#1c1917');
+  const selection = readToken(
+    '--color-focus-soft',
+    dark ? 'rgba(82, 139, 255, 0.16)' : 'rgba(46, 102, 166, 0.10)',
+  );
   return {
     background,
     foreground,
     cursor: foreground,
     cursorAccent: background,
     selectionBackground: flatten(selection, background),
-    black: readToken('--color-text-primary', '#0f1115'),
-    red: readToken('--color-danger', '#d91111'),
-    green: readToken('--color-ok-ink', '#15803d'),
-    yellow: readToken('--color-gold-ink', '#b45309'),
-    blue: readToken('--color-text-link', '#0b57d0'),
-    magenta: readToken('--shiki-token-function', '#6f42c1'),
-    cyan: readToken('--color-chart-cache-write', '#2f9d8f'),
-    white: readToken('--color-text-secondary', '#61666b'),
-    brightWhite: readToken('--color-text-primary', '#0f1115'),
+    black: dark ? '#0d1016' : foreground,
+    brightBlack: readToken('--color-text-tertiary', dark ? '#8b95a7' : '#615b53'),
+    red: readToken('--color-danger', dark ? '#f87171' : '#b91c1c'),
+    green: readToken('--color-ok-ink', dark ? '#4ade80' : '#0f6a31'),
+    yellow: readToken('--color-gold-ink', dark ? '#fbbf24' : '#8a5200'),
+    blue: readToken('--color-text-link', dark ? '#79a6ff' : '#24538a'),
+    magenta: readToken('--shiki-token-function', dark ? '#c4b5fd' : '#6345a8'),
+    cyan: readToken('--color-chart-cache-write', dark ? '#2dd4bf' : '#2b8a7e'),
+    white: readToken('--color-text-secondary', dark ? '#a6b0c0' : '#4a453e'),
+    brightWhite: foreground,
   };
 }
 

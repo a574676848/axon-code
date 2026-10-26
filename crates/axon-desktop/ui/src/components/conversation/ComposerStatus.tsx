@@ -35,7 +35,7 @@ export const ComposerNotice: React.FC<{ tone: 'danger' | 'secondary'; text: stri
   tone,
   text,
 }) => (
-  <div className="mb-2 px-1">
+  <div className="mb-2 px-1 popover-up-in">
     <span className={`text-meta ${tone === 'danger' ? 'text-danger' : 'text-text-secondary'}`}>
       {text}
     </span>
@@ -99,18 +99,20 @@ export const ComposerWorkingLine: React.FC<ComposerWorkingLineProps> = ({
   interruptible = true,
 }) => (
   <div
-    className="relative mb-2 px-2 h-7 flex items-center gap-2 overflow-hidden rounded-sm bg-surface-sunken hairline border-border-hairline"
+    className="popover-up-in relative mb-2 px-2.5 h-7 flex items-center gap-2 overflow-hidden rounded-sm bg-surface-sunken/85 hairline border-border"
     role="status"
     aria-live="polite"
   >
     <StateDot state="ongoing" />
-    <span className="min-w-0 truncate text-meta font-medium text-text-primary">{primary}</span>
+    <span className="shimmer-text-active min-w-0 truncate text-meta font-medium text-text-primary">
+      {primary}
+    </span>
     <span className="shrink-0 text-meta tabular-nums text-text-tertiary">
       （{workingDetails({ elapsedMs, queued, interruptible })}）
     </span>
     <span
       aria-hidden="true"
-      className="working-sweep pointer-events-none absolute bottom-0 -left-1/3 h-[2px] w-1/3 bg-text-link/30"
+      className="working-sweep pointer-events-none absolute bottom-0 -left-1/3 h-[2px] w-1/3 bg-text-link/40"
     />
   </div>
 );

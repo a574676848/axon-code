@@ -111,7 +111,7 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({ code, language, compact = 
 
   if (isDiagram(language) && diagramError === null) {
     return (
-      <div className="my-4 rounded-md hairline border-border bg-code-block overflow-hidden">
+      <div className="my-4 rounded-md hairline border-border shadow-card bg-code-block overflow-hidden">
         <MermaidDiagram code={code} onError={setDiagramError} />
       </div>
     );
@@ -119,9 +119,9 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({ code, language, compact = 
 
   return (
     <div
-      className={`${compact ? 'my-0' : 'my-4'} rounded-md hairline border-border bg-code-block overflow-hidden`}
+      className={`${compact ? 'my-0' : 'my-4'} rounded-md hairline border-border shadow-card bg-code-block overflow-hidden`}
     >
-      <div className="h-9 pl-4 pr-1.5 flex items-center gap-2 hairline-b border-border bg-code-block">
+      <div className="h-8 pl-3.5 pr-1.5 flex items-center gap-2 hairline-b border-border-hairline bg-surface-sunken/75">
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-text-tertiary">
           {diagramError === null ? label : `${label}（图形渲染失败，显示原始定义）`}
         </span>
@@ -134,7 +134,11 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({ code, language, compact = 
             copied ? 'text-ok-ink' : 'text-text-tertiary'
           }`}
         >
-          {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+          {copied ? (
+            <CheckIcon size={14} className="confirm-pop" />
+          ) : (
+            <CopyIcon size={14} />
+          )}
         </button>
       </div>
       <pre

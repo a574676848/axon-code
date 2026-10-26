@@ -504,16 +504,14 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   return (
     <ConversationActionsProvider value={actions}>
       {/*
-        外壳层一律用 `overflow-clip` 而不是 `overflow-hidden`：`hidden` 仍然是一个
-        可滚动容器，键盘把焦点移进面板内部控件时，浏览器会为「把焦点滚进视野」而
-        横向滚动它（实测 23px），整条指标条被推到侧栏底下。`clip` 让它彻底不是
-        滚动容器，再没有可滚动的对象；真正的滚动容器是正文与侧栏自己那几层。
+        外壳层一律用 overflow-clip 而不是 overflow-hidden：防止焦点滚动推偏顶栏。
       */}
       <div className="flex-1 min-w-0 flex h-full overflow-clip">
         <main className="flex-1 min-w-0 flex flex-col h-full overflow-clip bg-canvas">
           <ConversationHeader
             {...headerMetrics}
             hasPendingQuestion={Boolean(conversation.activeQuestion)}
+            avoidWindowControls={!rail.layout.expanded}
             trailing={
               <>
                 {/* 运行时事实收进 header：有子代理或后台任务时才出现，详情在下拉层里。 */}

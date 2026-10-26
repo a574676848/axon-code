@@ -204,12 +204,14 @@ if ($themeMaps.Count -eq 0) {
 $surfaces = @("--color-canvas", "--color-surface")
 $contrastChecks = @(
     @{ Token = "--color-text-primary"; Label = "主文本"; Req = 4.5 },
+    @{ Token = "--color-text-prose"; Label = "叙述正文"; Req = 4.5 },
     @{ Token = "--color-text-secondary"; Label = "次要文本"; Req = 4.5 },
     @{ Token = "--color-text-tertiary"; Label = "三级文本"; Req = 4.5 },
     @{ Token = "--color-text-placeholder"; Label = "占位文本"; Req = 4.5 },
     @{ Token = "--color-text-caption"; Label = "说明与时间戳"; Req = 4.5 },
     @{ Token = "--color-text-link"; Label = "链接文本"; Req = 4.5 },
     @{ Token = "--color-skill-ink"; Label = "技能指令高亮"; Req = 4.5 },
+    @{ Token = "--color-code-ink"; Label = "行内代码墨色"; Req = 4.5 },
     @{ Token = "--color-ok-ink"; Label = "增量计数文字"; Req = 4.5 },
     @{ Token = "--color-danger"; Label = "危险语义色"; Req = 4.5 },
     @{ Token = "--color-gold-ink"; Label = "琥珀告警文字"; Req = 4.5 }

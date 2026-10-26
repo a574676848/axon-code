@@ -69,14 +69,14 @@ export const AssistantBlock: React.FC<{
         作为兄弟节点插在 Markdown 后面会被块级流挤到下一行，像正文断了一行。
       */}
       <div className={streaming ? 'streaming-caret' : undefined}>
-        <Markdown source={text} />
+        <Markdown source={text} streaming={streaming} />
       </div>
       {!streaming && text.trim().length > 0 && (
         <MessageFooter
           atMs={atMs}
           status={
             saved !== null ? (
-              <span className="ml-1 min-w-0 truncate text-meta text-text-tertiary">
+              <span className="ml-1 min-w-0 truncate text-meta text-text-tertiary confirm-pop">
                 已导出到 {saved}
               </span>
             ) : failure !== null ? (
@@ -85,7 +85,11 @@ export const AssistantBlock: React.FC<{
           }
         >
           <MessageActionButton label="复制 Markdown" title="复制为 Markdown" onClick={copy}>
-            {copied ? <CheckIcon size={14} className="text-ok-ink" /> : <CopyIcon size={14} />}
+            {copied ? (
+              <CheckIcon size={14} className="text-ok-ink confirm-pop" />
+            ) : (
+              <CopyIcon size={14} />
+            )}
           </MessageActionButton>
           <MessageActionButton
             label="下载为 Markdown 文件"

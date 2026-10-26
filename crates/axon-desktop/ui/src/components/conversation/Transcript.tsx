@@ -118,7 +118,7 @@ const UserBubble: React.FC<{
       )}
       {text.trim().length > 0 && (
         <div
-          className="max-w-[75%] px-4 py-2.5 bg-bubble text-content text-text-primary whitespace-pre-wrap break-words"
+          className="max-w-[75%] px-4 py-2.5 bg-bubble hairline border-border-hairline shadow-card text-content text-text-primary whitespace-pre-wrap break-words"
           style={{ borderRadius: BUBBLE_RADIUS }}
         >
           {/* 叫技能的 `/name` 在这里也点亮，网页地址收敛成一枚可打开的链接芯片。 */}
@@ -180,9 +180,20 @@ const ReasoningBlock: React.FC<{ text: string; done: boolean; durationMs: number
   text,
   done,
   durationMs,
-}) => {  const [open, setOpen] = React.useState(!done);
+}) => {
+  const [open, setOpen] = React.useState(!done);
+  const wasRunningRef = React.useRef(!done);
   React.useEffect(() => {
-    if (done) setOpen(false);
+    if (!done) {
+      wasRunningRef.current = true;
+      setOpen(true);
+      return undefined;
+    }
+    if (!wasRunningRef.current) return undefined;
+    wasRunningRef.current = false;
+    // 思考刚收口时保留 180ms 视觉缓冲再自动折叠，避免正文突然上跳。
+    const timer = window.setTimeout(() => setOpen(false), 180);
+    return () => window.clearTimeout(timer);
   }, [done]);
   const firstLine = text.trim().split('\n')[0] ?? '';
   // 收起态拿首行当单行预览；展开后正文已完整呈现，行头不再重复这段内容。

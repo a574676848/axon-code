@@ -93,7 +93,7 @@ export const MenuItem: React.FC<MenuItemProps> = ({
     type="button"
     role="menuitem"
     onClick={onSelect}
-    className={`${ITEM} ${selected ? 'bg-hover' : 'hover:bg-hover'} ${
+    className={`${ITEM} ${selected ? 'bg-active font-medium' : 'hover:bg-hover'} ${
       danger ? 'text-danger' : 'text-text-primary'
     }`}
   >
@@ -102,7 +102,7 @@ export const MenuItem: React.FC<MenuItemProps> = ({
     {hint !== undefined && (
       <span className="shrink-0 text-code text-text-tertiary font-mono">{hint}</span>
     )}
-    {selected && <CheckIcon size={13} className="shrink-0 text-text-primary" />}
+    {selected && <CheckIcon size={13} className="shrink-0 text-text-link" />}
   </button>
 );
 
@@ -435,12 +435,12 @@ export const Select: React.FC<SelectProps> = ({
                     commit(index);
                   }}
                   className={`${ITEM} ${
-                    option.value === value ? 'bg-hover' : 'hover:bg-hover'
-                  } ${index === activeIndex ? 'bg-hover' : ''}`}
+                    option.value === value ? 'bg-active font-medium' : 'hover:bg-hover'
+                  } ${index === activeIndex && option.value !== value ? 'bg-hover' : ''}`}
                 >
                   <span className="flex-1 min-w-0 truncate">{option.label}</span>
                   {option.value === value && (
-                    <CheckIcon size={13} className="shrink-0 text-text-primary" />
+                    <CheckIcon size={13} className="shrink-0 text-text-link" />
                   )}
                 </button>
               ))

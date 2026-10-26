@@ -242,22 +242,20 @@ export function renderInline(
       nodes.push(renderImage(image.destination, image.alt, key, art));
     } else if (token.kind === 'code') {
       /*
-       * 行内代码：12px 等宽（与代码块同号）、浅灰底、0.5px 描边、4px 圆角。
-       * 不再用 `text-[0.875em]` 跟着正文缩放：正文 14px 时算出 12.25px，
-       * 与代码块的 12px 差半像素，同一段里的两处代码看起来不是一套。
-       * 基线对齐让它贴着文字坐下来，而不是顶起一整行。
+       * 行内代码：12px 等宽、无框柔和胶囊底配深钢蓝墨色（--color-code-ink），
+       * 消除密集描边造成的碎框眩光感，温润嵌入长文行间。
        */
       nodes.push(
         <code
           key={key}
-          className="mx-px rounded-xs bg-code-inline px-1 py-px align-baseline font-mono text-code text-text-primary hairline border-border"
+          className="mx-0.5 rounded-[5px] bg-code-inline px-1.5 py-0.5 align-baseline font-mono text-code text-code-ink"
         >
           {renderPlain(token.inner, key, art)}
         </code>,
       );
     } else if (token.kind === 'strong') {
       nodes.push(
-        <strong key={key} className="font-semibold">
+        <strong key={key} className="font-semibold text-text-primary">
           {renderInline(token.inner, key, art)}
         </strong>,
       );

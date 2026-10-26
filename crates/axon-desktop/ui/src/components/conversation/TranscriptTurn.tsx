@@ -85,7 +85,13 @@ export const TurnBlock = React.memo<TurnBlockProps>(
               position === groups.length - 1 &&
               group.process === false &&
               card}
-            <div className={group.process ? 'flex flex-col' : 'flex flex-col gap-2.5'}>
+            <div
+              className={
+                group.process
+                  ? `flex flex-col ${group.cells.length > 1 ? 'pl-2 hairline-l border-border' : ''}`
+                  : 'flex flex-col gap-2.5'
+              }
+            >
               {group.cells.map((cell) => (
                 <TranscriptCellView key={cell.id} cell={cell} />
               ))}

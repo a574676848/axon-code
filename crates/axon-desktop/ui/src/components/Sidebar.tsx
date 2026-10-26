@@ -1,25 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircleIcon,
-  AxonLogo,
   BrainIcon,
   ClockIcon,
-  FolderIcon,
-  IconPanelLeft,
-  ListIcon,
-  SearchIcon,
-  SettingsIcon,
-  ViewGroupTreeIcon,
-  WorkspaceAddIcon,
 } from '../icons';
 import type { GatewayHealth, LaneItem, NavTab, WorkspaceItem } from '../types';
 import * as ipc from '../ipc';
 import type { LaneSelection } from '../conversation/useConversation';
 import { isRunning, type LaneRuntimeFacts } from '../conversation/runtimeFacts';
-import { IconButton, Input } from './ui/controls';
 import { Banner, Text } from './ui/surfaces';
 import { NewSessionButton, SidebarColumn } from './ui/shell';
 import { SidebarRail } from './SidebarRail';
+import { SidebarBrandBar, SidebarSectionHeader } from './SidebarHeader';
 import {
   ROW_ICON_COLUMN,
   ROW_SELECTED_BAR,
@@ -28,8 +20,8 @@ import {
 } from './SidebarRows';
 import { ArchiveLaneDialog, RemoveWorkspaceDialog } from './SidebarConfirmations';
 import { WorkspaceTree } from './WorkspaceTree';
-import { ViewOptionsMenu, groupModeTitle } from './ViewOptionsMenu';
 import type { ArchivedFilter, GroupMode, OrderMode } from './ViewOptionsMenu';
+import { SettingsIcon } from '../icons';
 
 /** 侧栏默认宽度，与既有工作台产品一致。 */
 const DEFAULT_WIDTH = 280;
@@ -42,12 +34,6 @@ const MAX_WIDTH = 420;
 /** 拖拽到此阈值以下时自动收进图标轨。 */
 const COLLAPSE_THRESHOLD = 140;
 
-/**
- * 顶部导航行：与工作区、会话行共用同一套图标列与三态。
- *
- * 导航的选中态必须看得见：`aria-current` 只有对读屏器才是「当前页」，
- * 视力用户需要底色加左侧主色条才能读到同一个事实。
- */
 const NavRow: React.FC<{
   icon: React.ReactNode;
   label: string;
@@ -478,25 +464,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <SidebarColumn label="工作区与会话" width={width}>
-      {/* 品牌行：24px 图标列 + 8px 文字列，与下面所有行落在同一条竖线上。 */}
-      <div
-        data-tauri-drag-region
-        className="h-12 shrink-0 px-3 flex items-center justify-between"
-      >
-        <div className="flex items-center gap-2 min-w-0">
-          <span className={ROW_ICON_COLUMN}>
-            {/* 品牌名由紧邻的文字承担，图形对读屏器是装饰，避免读成两遍「Axon」。 */}
-            <AxonLogo size={24} aria-hidden="true" />
-          </span>
-          <span className="text-[15px] leading-5 font-medium text-text-primary truncate">Axon</span>
-        </div>
-        <IconButton label="收起侧边栏" onClick={onToggleSidebar}>
-          <IconPanelLeft size={14} />
-        </IconButton>
-      </div>
+      <SidebarBrandBar onToggleSidebar={onToggleSidebar} />
 
       {/* 新建会话与顶部导航 */}
-      <div className="shrink-0 px-3 pb-3 space-y-0.5">
+      <div className="shrink-0 px-3 pb-3 pt-1 space-y-0.5">
         <NewSessionButton onClick={() => void createLane()} />
         <NavRow
           icon={<ClockIcon size={14} />}
@@ -512,74 +483,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
         />
       </div>
 
-      {/*
-        区块头：标题 + 搜索 / 视图选项 / 添加工作区。
-        搜索态下输入框原位覆盖这一行，不额外插入一行把列表往下推。
-      */}
-      <div className="shrink-0 px-3">
-        <div className="relative h-8">
-          <div className={`h-8 flex items-center justify-between ${searching ? 'invisible' : ''}`}>
-            <div className="flex items-center gap-2 min-w-0">
-              {/* 区块头也占同一个 24px 图标列：标题因此与下面每一行的文字同轴。 */}
-              <span className={`${ROW_ICON_COLUMN} text-text-tertiary`}>
-                {groupBy === 'flat' ? (
-                  <ListIcon size={14} />
-                ) : groupBy === 'workspaceTree' ? (
-                  <ViewGroupTreeIcon size={14} />
-                ) : (
-                  <FolderIcon size={14} />
-                )}
-              </span>
-              <Text size="meta" strong tone="tertiary" truncate className="leading-4">
-                {groupModeTitle(groupBy)}
-              </Text>
-            </div>
-            <div className="flex items-center gap-0.5" ref={searchToggleRef}>
-              <IconButton
-                label="搜索会话"
-                onClick={() => {
-                  setSearching(true);
-                  window.setTimeout(() => searchInputRef.current?.focus(), 30);
-                }}
-              >
-                <SearchIcon size={14} />
-              </IconButton>
-
-              <ViewOptionsMenu
-                groupBy={groupBy}
-                orderBy={orderBy}
-                archivedFilter={archivedFilter}
-                onGroupPick={setGroupBy}
-                onOrderPick={setOrderBy}
-                onArchivedPick={setArchivedFilter}
-              />
-
-              <IconButton label="添加工作区" onClick={() => void addWorkspace()}>
-                <WorkspaceAddIcon size={14} />
-              </IconButton>
-            </div>
-          </div>
-
-          {searching && (
-            <div className="absolute inset-0 flex items-center">
-              <Input
-                ref={searchInputRef}
-                icon={<SearchIcon size={14} />}
-                value={query}
-                placeholder="搜索会话名称"
-                onChange={(event) => setQuery(event.target.value)}
-                onClear={() => setQuery('')}
-                onKeyDown={(event) => {
-                  if (event.key === 'Escape') {
-                    setQuery('');
-                    setSearching(false);
-                  }
-                }}
-              />
-            </div>
-          )}
-        </div>
-      </div>
+      <SidebarSectionHeader
+        groupBy={groupBy}
+        orderBy={orderBy}
+        archivedFilter={archivedFilter}
+        searching={searching}
+        query={query}
+        searchInputRef={searchInputRef}
+        searchToggleRef={searchToggleRef}
+        onStartSearch={() => {
+          setSearching(true);
+          window.setTimeout(() => searchInputRef.current?.focus(), 30);
+        }}
+        onStopSearch={() => {
+          setQuery('');
+          setSearching(false);
+        }}
+        onQueryChange={setQuery}
+        onGroupPick={setGroupBy}
+        onOrderPick={setOrderBy}
+        onArchivedPick={setArchivedFilter}
+        onAddWorkspace={() => void addWorkspace()}
+      />
 
       {/* 工作区与会话列表 */}
       <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar px-3 pb-2 pt-1">

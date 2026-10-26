@@ -188,9 +188,24 @@ function parseBlocks(source: string): Block[] {
 }
 
 /** 渲染一段 Markdown。 */
-export const Markdown: React.FC<{ source: string }> = ({ source }) => {
+export const Markdown: React.FC<{ source: string; streaming?: boolean }> = ({
+  source,
+  streaming = false,
+}) => {
   const blocks = React.useMemo(() => parseBlocks(source), [source]);
   const actions = useConversationActions();
+  /*
+   * 记录首次挂载或非流式稳态下的块数基线：
+   * 仅在流式输出（streaming=true）过程中新追加出来的块挂载柔光浮现动画，
+   * 历史回放与已完成消息直接稳态呈现，不产生整屏闪烁。
+   */
+  const baselineCountRef = React.useRef<number>(streaming ? 0 : blocks.length);
+  React.useEffect(() => {
+    if (!streaming) {
+      baselineCountRef.current = blocks.length;
+    }
+  }, [streaming, blocks.length]);
+
   /*
    * 行内渲染需要的外界能力。
    *
@@ -211,32 +226,31 @@ export const Markdown: React.FC<{ source: string }> = ({ source }) => {
     [art],
   );
   return (
-    <div className="text-content text-text-primary">
+    <div className="text-content text-text-prose">
       {blocks.map((block, index) => {
         const key = `block:${index}`;
+        const enterClass = streaming && index >= baselineCountRef.current ? 'stream-block-in' : '';
         if (block.kind === 'code') {
-          // 代码块的着色与图形渲染统一交给 CodeBlock：一处实现，正文与文件预览同源。
-          return <CodeBlock key={key} code={block.text} language={block.language ?? null} />;
+          return (
+            <div key={key} className={enterClass || undefined}>
+              <CodeBlock code={block.text} language={block.language ?? null} />
+            </div>
+          );
         }
         if (block.kind === 'heading') {
           const level = block.level ?? 1;
-          /*
-           * 标题刻度只用令牌：h1 21/30、h2 18/26、h3 15/24，一至三级 700 字重；
-           * h4 与正文同字号，取 600，只加字重与上间距。间距按「上大下小」成对给，
-           * 标题因此贴住它所属的正文，而不是与上一段等距。
-           */
           const size =
             level === 1
-              ? 'text-heading-1 font-bold'
+              ? 'text-heading-1 font-bold tracking-[-0.02em] text-text-primary'
               : level === 2
-                ? 'text-heading-3 font-bold'
+                ? 'text-heading-3 font-bold tracking-[-0.015em] text-text-primary'
                 : level === 3
-                  ? 'text-heading-4 font-bold'
-                  : 'text-content font-semibold';
+                  ? 'text-heading-4 font-semibold tracking-[-0.01em] text-text-primary'
+                  : 'text-content font-semibold text-text-primary';
           const spacing =
-            level <= 2 ? 'mt-6 mb-3' : level === 3 ? 'mt-4 mb-2' : 'mt-4 mb-0';
+            level <= 2 ? 'mt-6 mb-3' : level === 3 ? 'mt-4 mb-2' : 'mt-4 mb-1';
           return (
-            <p key={key} className={`${spacing} ${size}`}>
+            <p key={key} className={`${spacing} ${size} ${enterClass}`}>
               {render(block.text, key)}
             </p>
           );
@@ -245,7 +259,7 @@ export const Markdown: React.FC<{ source: string }> = ({ source }) => {
           return (
             <blockquote
               key={key}
-              className="my-4 border-l-[3px] border-border-strong pl-4 pr-2 py-1 bg-surface-sunken"
+              className={`my-4 rounded-r-sm border-l-[3px] border-border-selected pl-4 pr-3 py-1.5 bg-surface-sunken/60 text-text-secondary ${enterClass}`}
             >
               {block.text.split('\n').map((line, lineIndex) => (
                 <p key={`${key}:${lineIndex}`}>{render(line, `${key}:${lineIndex}`)}</p>
@@ -259,7 +273,9 @@ export const Markdown: React.FC<{ source: string }> = ({ source }) => {
           return (
             <ListTag
               key={key}
-              className={`my-4 pl-6 space-y-2 ${block.ordered === true ? 'list-decimal' : 'list-disc'}`}
+              className={`my-4 pl-6 space-y-2.5 marker:text-text-tertiary ${
+                block.ordered === true ? 'list-decimal' : 'list-disc'
+              } ${enterClass}`}
             >
               {items.map((item, itemIndex) => (
                 <li
@@ -274,7 +290,7 @@ export const Markdown: React.FC<{ source: string }> = ({ source }) => {
                   {block.taskChecks !== undefined && (
                     <span
                       aria-hidden="true"
-                      className={`shrink-0 mt-[3px] w-3.5 h-3.5 rounded-xs hairline flex items-center justify-center ${
+                      className={`shrink-0 mt-[4px] w-3.5 h-3.5 rounded-xs hairline flex items-center justify-center ${
                         block.taskChecks[itemIndex] === true
                           ? 'bg-primary border-primary text-white'
                           : 'border-border-strong'
@@ -283,7 +299,6 @@ export const Markdown: React.FC<{ source: string }> = ({ source }) => {
                       {block.taskChecks[itemIndex] === true && <CheckIcon size={12} />}
                     </span>
                   )}
-                  {/* 整项只有一张图时不套行内文本容器：图片是块级内容，套进去会被压成一行高。 */}
                   {isImageOnlyItem(item) ? (
                     <div className="min-w-0">{render(item, `${key}:${itemIndex}`)}</div>
                   ) : (
@@ -298,7 +313,7 @@ export const Markdown: React.FC<{ source: string }> = ({ source }) => {
           const rows = block.rows ?? [];
           const [header, ...body] = rows;
           return (
-            <div key={key} className="my-4 overflow-x-auto">
+            <div key={key} className={`my-4 overflow-x-auto ${enterClass}`}>
               <table className="w-full border-collapse text-row">
                 <thead>
                   <tr>
@@ -318,7 +333,7 @@ export const Markdown: React.FC<{ source: string }> = ({ source }) => {
                       {row.map((cell, cellIndex) => (
                         <td
                           key={`${key}:r:${rowIndex}:${cellIndex}`}
-                          className="px-3 py-1.5 align-top text-text-secondary hairline-b border-border-hairline"
+                          className="px-3 py-1.5 align-top text-text-prose hairline-b border-border-hairline"
                         >
                           {render(cell, `${key}:r:${rowIndex}:${cellIndex}`)}
                         </td>
@@ -331,17 +346,13 @@ export const Markdown: React.FC<{ source: string }> = ({ source }) => {
           );
         }
         if (block.kind === 'divider') {
-          return <hr key={key} className="my-8 border-0 h-px bg-border-strong" />;
+          return <hr key={key} className="my-7 border-0 h-hairline bg-border" />;
         }
-        /*
-         * 整段只有一张图片的段落不再套段落间距：图片自己带上下外边距，
-         * 两处都加会让图片在正文里飘出一大段空白。
-         */
         if (isImageOnlyParagraph(block.text)) {
-          return <div key={key}>{render(block.text, key)}</div>;
+          return <div key={key} className={enterClass || undefined}>{render(block.text, key)}</div>;
         }
         return (
-          <p key={key} className="my-4 whitespace-pre-wrap break-words">
+          <p key={key} className={`my-3.5 whitespace-pre-wrap break-words ${enterClass}`}>
             {render(block.text, key)}
           </p>
         );

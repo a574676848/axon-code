@@ -315,7 +315,7 @@ export const BasicSettingsPanel: React.FC<BasicSettingsPanelProps> = ({
               onClick={() => setSection(item.id)}
               className={`w-full flex items-center gap-2.5 h-8 px-2.5 rounded-sm text-left transition-colors duration-100 ${
                 active
-                  ? 'bg-active text-text-primary font-medium'
+                  ? 'bg-surface shadow-lift hairline border-border text-text-primary font-medium'
                   : 'text-text-secondary hover:text-text-primary hover:bg-hover'
               }`}
             >

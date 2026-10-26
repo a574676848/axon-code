@@ -40,14 +40,14 @@ export const ROW_TEXT_INDENT = 'pl-8';
 
 /*
  * 行状态只有三档，全站一套：静止、hover、selected。
- * selected 用 --color-active 加深一档，并由左侧 2px 主色条给出位置，
- * 因此「选中的是哪一个」不再只靠底色深浅去猜。
+ * selected 在沉底托盘上浮起一张白签（bg-surface + shadow-lift + 微描边），
+ * 并由左侧 2px 主色条给出位置，视觉层级干净明确。
  */
 export const ROW_STATE =
   'group relative flex items-center gap-2 rounded-sm transition-colors duration-100';
-export const ROW_SELECTED = 'bg-active';
+export const ROW_SELECTED = 'bg-surface shadow-lift hairline border-border font-medium';
 export const ROW_SELECTED_BAR =
-  'pointer-events-none absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary';
+  'pointer-events-none absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-primary';
 
 /**
  * 底色档位：选中不再叠加 hover，否则悬浮时选中行会比静止时更浅。
@@ -151,6 +151,12 @@ export const LaneRow: React.FC<LaneRowProps> = ({
   const [draft, setDraft] = useState(lane.title);
   const [menuOpen, setMenuOpen] = useState(false);
   const { titleRef, handlers: marqueeHandlers } = useRowTitleMarquee();
+  /*
+   * 侦测会话标题自动生成或外部重命名：首次挂载时不播动画，
+   * 运行中后端提炼出新标题时触发一次柔和上浮叠化（title-morph-in）。
+   */
+  const initialTitleRef = React.useRef(lane.title);
+  const titleChanged = lane.title !== initialTitleRef.current;
   /** 尚未产生任何交互的会话：按既有工作台产品的语义，它是一条安静的占位行。 */
   const blank = lane.pending;
   /** 前置状态槽里要画的状态；为空表示这一行不占状态位。 */
@@ -213,7 +219,12 @@ export const LaneRow: React.FC<LaneRowProps> = ({
           dragging ? 'opacity-40' : ''
         }`}
       >
-        {selected && <span aria-hidden="true" className={ROW_SELECTED_BAR} />}
+        {selected && (
+          <span
+            aria-hidden="true"
+            className={`${ROW_SELECTED_BAR} ${lane.running ? 'dock-ambient-glow' : ''}`}
+          />
+        )}
         {dropHint !== 'none' && (
           <span
             aria-hidden="true"
@@ -230,12 +241,12 @@ export const LaneRow: React.FC<LaneRowProps> = ({
               role="img"
               aria-label="有待答复提问"
               title="有待答复提问"
-              className={`${STATUS_SLOT} text-gold-ink`}
+              className={`${STATUS_SLOT} text-gold-ink confirm-pop`}
             >
               <AlertCircleIcon size={14} />
             </span>
           ) : status !== null ? (
-            <span className={STATUS_SLOT}>
+            <span className={`${STATUS_SLOT} ${status !== 'ongoing' ? 'confirm-pop' : ''}`}>
               <StateDot state={status} />
             </span>
           ) : null}
@@ -256,10 +267,11 @@ export const LaneRow: React.FC<LaneRowProps> = ({
           />
         ) : (
           <Text
+            key={titleChanged ? lane.title : 'initial'}
             ref={titleRef}
             size="row"
             truncate
-            className={`flex-1 min-w-0 ${MARQUEE_TITLE_CLASS}`}
+            className={`flex-1 min-w-0 ${MARQUEE_TITLE_CLASS} ${titleChanged ? 'title-morph-in' : ''}`}
           >
             {lane.title}
           </Text>

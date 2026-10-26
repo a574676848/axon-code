@@ -18,7 +18,7 @@ export interface SidebarColumnProps {
   children: React.ReactNode;
 }
 
-/** 侧边栏列：展开与收起共享同一底色、描边与层级。 */
+/** 侧边栏列：展开与收起共享同一托盘底色与层级。 */
 export const SidebarColumn: React.FC<SidebarColumnProps> = ({
   label,
   width,
@@ -29,8 +29,8 @@ export const SidebarColumn: React.FC<SidebarColumnProps> = ({
   <aside
     aria-label={label}
     style={variant === 'expanded' && width !== undefined ? { width } : undefined}
-    className={`relative flex flex-col shrink-0 h-full bg-sidebar hairline-r border-border-hairline z-10 ${
-      variant === 'rail' ? 'w-14 items-center py-3' : ''
+    className={`relative flex flex-col shrink-0 h-full bg-sidebar z-10 ${
+      variant === 'rail' ? 'w-14 items-center py-2.5' : ''
     } ${className}`}
   >
     {children}
@@ -53,7 +53,7 @@ export const NewSessionButton: React.FC<NewSessionButtonProps> = ({ onClick, com
         onClick={onClick}
         aria-label="新会话"
         title="新会话 (Ctrl + Alt + N)"
-        className={`w-9 h-9 flex items-center justify-center rounded-md hairline border-border-strong bg-surface text-text-primary ${INTERACTIVE_ROW}`}
+        className={`w-9 h-9 flex items-center justify-center rounded-md hairline border-border-strong bg-surface text-text-primary shadow-btn-outline active:scale-[0.98] ${INTERACTIVE_ROW}`}
       >
         <IconNewChat size={16} />
       </button>
@@ -64,7 +64,7 @@ export const NewSessionButton: React.FC<NewSessionButtonProps> = ({ onClick, com
     <button
       type="button"
       onClick={onClick}
-      className={`group relative w-full h-9 px-3 flex items-center justify-start rounded-md hairline border-border-strong bg-surface ${INTERACTIVE_ROW}`}
+      className={`group relative w-full h-9 px-3 flex items-center justify-start rounded-md hairline border-border-strong bg-surface shadow-btn-outline active:scale-[0.99] ${INTERACTIVE_ROW}`}
     >
       {/* 图标与文案整体居中，快捷键提示绝对定位，出现时不会把文案挤偏 */}
       <span className="flex items-center gap-1.5 min-w-0">
@@ -73,19 +73,15 @@ export const NewSessionButton: React.FC<NewSessionButtonProps> = ({ onClick, com
           新会话
         </Text>
       </span>
-      <Text
-        tone="tertiary"
-        size="xs"
-        className="absolute right-3 top-1/2 -translate-y-1/2 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
-      >
+      <span className="absolute right-2.5 top-1/2 -translate-y-1/2 px-1.5 py-0.5 rounded-xs bg-surface-sunken hairline border-border font-mono text-[10px] leading-3 text-text-tertiary opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100">
         Ctrl + Alt + N
-      </Text>
+      </span>
     </button>
   );
 };
 
 export interface PageShellProps {
-  /** 页面名称，进入 36px 顶栏。 */
+  /** 页面名称，进入 40px 顶栏。 */
   title: string;
   /** 一句说明，放在正文顶部。 */
   description?: string;
@@ -97,8 +93,7 @@ export interface PageShellProps {
 /**
  * 非对话页的统一外壳。
  *
- * 顶栏与对话页的指标条同高（36px）同线，正文走同一条居中版心：
- * 切页时顶部结构与左右轴线都不再改变，页面之间只剩内容差异。
+ * 顶栏与对话页的指标条同高（40px）同线，支持沉浸式窗口拖拽并自动避让右上角窗口控制区。
  */
 export const PageShell: React.FC<PageShellProps> = ({
   title,
@@ -107,10 +102,12 @@ export const PageShell: React.FC<PageShellProps> = ({
   children,
 }) => (
   <main className="flex-1 min-w-0 h-full flex flex-col bg-canvas overflow-clip">
-    <header className="shrink-0 h-9 hairline-b border-border-hairline">
-      {/* 顶栏与正文共用同一条版心：宽屏下标题与内容左轴必须重合，
-          否则页头贴窗口左边、正文居中，中间会空出一道无主的留白。 */}
-      <div className="mx-auto flex h-9 w-full max-w-page items-center gap-3 px-6">
+    <header
+      data-tauri-drag-region
+      style={{ paddingRight: 'var(--window-controls-inset, 0px)' }}
+      className="shrink-0 h-10 hairline-b border-border-hairline select-none"
+    >
+      <div className="mx-auto flex h-10 w-full max-w-page items-center gap-3 px-6">
         <Text size="sm" strong truncate>
           {title}
         </Text>

@@ -1,85 +1,25 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200" role="img" aria-labelledby="logo-title">
-    <title id="logo-title">Axon Logo - 神经元轴突抽象设计</title>
-    <defs>
-        <linearGradient id="gradient1" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" style="stop-color:#4299e1;stop-opacity:1" />
-            <stop offset="50%" style="stop-color:#51d3d9;stop-opacity:1" />
-            <stop offset="100%" style="stop-color:#9f7aea;stop-opacity:1" />
-        </linearGradient>
-        <filter id="glow">
-            <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
-            <feMerge>
-                <feMergeNode in="coloredBlur"/>
-                <feMergeNode in="SourceGraphic"/>
-            </feMerge>
-        </filter>
-    </defs>
-
-    <!-- 背景圆角矩形 -->
-    <rect x="10" y="10" width="180" height="180" rx="20" fill="#1a202c" opacity="0.95"/>
-    <rect x="15" y="15" width="170" height="170" rx="15" fill="none" stroke="url(#gradient1)" stroke-width="2" opacity="0.3"/>
-
-    <!-- 基于 ASCII art 的神经元轴突设计 -->
-    <g id="axon-neural" transform="translate(100, 70)" filter="url(#glow)">
-        <!-- 左侧分支 ╱╲ -->
-        <path d="M -40 0 L -25 -20 M -40 0 L -25 20"
-              stroke="url(#gradient1)"
-              stroke-width="3"
-              stroke-linecap="round"
-              fill="none"/>
-
-        <!-- 中间交叉 ╳ -->
-        <path d="M -15 -20 L 0 0 L -15 20 M -15 -20 L 0 0 L 15 -20 M -15 20 L 0 0 M 0 0 L 15 20"
-              stroke="url(#gradient1)"
-              stroke-width="3.5"
-              stroke-linecap="round"
-              fill="none"/>
-
-        <!-- 右侧分支 ╱╲ -->
-        <path d="M 25 -20 L 40 0 M 25 20 L 40 0"
-              stroke="url(#gradient1)"
-              stroke-width="3"
-              stroke-linecap="round"
-              fill="none"/>
-
-        <!-- 下方连接 ▁ -->
-        <line x1="-10" y1="35" x2="10" y2="35"
-              stroke="url(#gradient1)"
-              stroke-width="2.5"
-              stroke-linecap="round"/>
-
-        <!-- 神经元节点 -->
-        <circle cx="-40" cy="0" r="3" fill="#4299e1"/>
-        <circle cx="-25" cy="-20" r="2.5" fill="#51d3d9"/>
-        <circle cx="-25" cy="20" r="2.5" fill="#51d3d9"/>
-        <circle cx="0" cy="0" r="4" fill="#9f7aea"/>
-        <circle cx="25" cy="-20" r="2.5" fill="#51d3d9"/>
-        <circle cx="25" cy="20" r="2.5" fill="#51d3d9"/>
-        <circle cx="40" cy="0" r="3" fill="#4299e1"/>
-
-        <!-- 脉冲效果 -->
-        <circle cx="0" cy="0" r="6" fill="none" stroke="#9f7aea" stroke-width="1.5" opacity="0.6">
-            <animate attributeName="r" values="6;12;6" dur="2s" repeatCount="indefinite"/>
-            <animate attributeName="opacity" values="0.6;0;0.6" dur="2s" repeatCount="indefinite"/>
-        </circle>
-    </g>
-
-    <!-- 边框装饰 -->
-    <rect x="20" y="130" width="160" height="1" fill="url(#gradient1)" opacity="0.3"/>
-
-    <!-- 品牌文字 AXON -->
-    <text x="100" y="165"
-          font-family="'SF Mono', 'Consolas', 'Monaco', monospace"
-          font-size="28"
-          font-weight="700"
-          letter-spacing="8"
-          fill="url(#gradient1)"
-          text-anchor="middle">AXON</text>
-
-    <!-- 简化标识 ⚡ -->
-    <text x="30" y="40"
-          font-size="24"
-          fill="#4299e1"
-          opacity="0.4">⚡</text>
+  <title id="logo-title">Axon Logo</title>
+  <defs>
+    <linearGradient id="axon-etch" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="55%" stop-color="#CBD5E1" />
+      <stop offset="100%" stop-color="#94A3B8" />
+    </linearGradient>
+  </defs>
+  <rect x="10" y="10" width="180" height="180" rx="38" fill="#111827" />
+  <rect x="14" y="14" width="172" height="172" rx="34" fill="none" stroke="url(#axon-etch)" stroke-width="2" opacity="0.28" />
+  <g transform="translate(100, 100)" stroke="url(#axon-etch)" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M -44 0 L -26 -24 M -44 0 L -26 24" stroke-width="5" />
+    <path d="M -16 -24 L 0 0 L -16 24 M -16 -24 L 0 0 L 16 -24 M -16 24 L 0 0 M 0 0 L 16 24" stroke-width="5.5" />
+    <path d="M 26 -24 L 44 0 M 26 24 L 44 0" stroke-width="5" />
+    <circle cx="-44" cy="0" r="4.5" fill="#FFFFFF" stroke="none" />
+    <circle cx="-26" cy="-24" r="3.8" fill="#CBD5E1" stroke="none" />
+    <circle cx="-26" cy="24" r="3.8" fill="#CBD5E1" stroke="none" />
+    <circle cx="0" cy="0" r="5.5" fill="#FFFFFF" stroke="none" />
+    <circle cx="26" cy="-24" r="3.8" fill="#CBD5E1" stroke="none" />
+    <circle cx="26" cy="24" r="3.8" fill="#CBD5E1" stroke="none" />
+    <circle cx="44" cy="0" r="4.5" fill="#94A3B8" stroke="none" />
+  </g>
 </svg>

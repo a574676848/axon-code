@@ -1,5 +1,4 @@
 import React from 'react';
-import { ArrowUpIcon, PlusIcon, StopIcon } from '../../icons';
 import { structuredInputBlock } from '../../conversation/references';
 import { matchBuiltinCommand } from '../../conversation/builtinCommands';
 import type { AttachmentRef } from '../../conversation/transcript';
@@ -11,7 +10,7 @@ import { ComposerNotices, ComposerWorkingLine } from './ComposerStatus';
 import { ImageLightbox } from './ImageLightbox';
 import { ComposerCandidateLayer } from './ComposerCandidateLayer';
 import { composerOptionId } from './ComposerCandidates';
-import { ComposerPicker } from './ComposerPicker';
+import { ComposerActionBar } from './ComposerActionBar';
 import { ComposerTextArea } from './ComposerTextArea';
 import { useExpiringNotice } from './composerNotice';
 import { useComposerAttachments } from './useComposerAttachments';
@@ -507,154 +506,115 @@ export const InputDock: React.FC<InputDockProps> = ({
               />
             )}
             {/*
-              卡片浮在画布上：10% 描边加浮层阴影，比错误卡更轻；
-              聚焦时补一圈 3px 的聚焦柔光，与设计系统的输入控件同一套反馈。
-              拖拽悬停时给落点一圈聚焦色，让用户知道松手会发生什么。
+              双层同心倒角输入坞（Double-Bezel Architecture）：
+              外层是 22px 圆角的微下沉托槽，运行期间叠加一层克制的呼吸微光；
+              内层是 18px 圆角的浮起白卡核心，聚焦态保持立体投影绝不塌陷。
             */}
-            <div
-              ref={cardRef}
-              className={`rounded-[20px] bg-surface hairline shadow-dock transition-colors duration-100 focus-within:border-focus focus-within:shadow-[0_0_0_3px_var(--color-focus-soft)] ${
-                dragging ? 'border-focus bg-hover' : 'border-border'
-              }`}
-            >
-              {!compact && (links.links.length > 0 || attachments.length > 0) && (
-                <ComposerTray
-                  links={links.links}
-                  attachments={attachments}
-                  // 与消息气泡同一套动作：图片放大查看，文件在右侧栏打开。
-                  attachmentOpen={(attachment) =>
-                    attachment.image
-                      ? () => setPreviewing(attachment.path)
-                      : actions === null
-                        ? undefined
-                        : () => actions.openFile(attachment.path)
-                  }
-                  onRemoveAttachment={remove}
-                  onOpenLink={(url) => {
-                    // 打不开时把地址复制到剪贴板，回执落在输入坞的提示行上。
-                    void openWebLink(url).then((failure) => {
-                      if (failure !== null) notify(failure, 'danger');
-                    });
-                  }}
-                  onRemoveLink={links.remove}
+            <div className="relative p-1 rounded-[22px] bg-surface-sunken/70 hairline border-border-hairline">
+              {(working !== null || command.running !== null) && (
+                <span
+                  aria-hidden="true"
+                  className="dock-ambient-glow pointer-events-none absolute inset-0 rounded-[22px] hairline border-focus/45"
                 />
               )}
-
-              <ComposerTextArea
-                areaRef={areaRef}
-                text={text}
-                disabled={!enabled}
-                placeholder={
-                  !enabled
-                    ? PLACEHOLDER_DISABLED
-                    : placeholder ?? (occupiesDock ? PLACEHOLDER_OCCUPIED : PLACEHOLDER_READY)
-                }
-                skillNames={skillNames}
-                linkTokens={links.tokens}
-                height={LINE_HEIGHT + VERTICAL_PADDING}
-                onChange={editing.onChange}
-                onCaret={setCaret}
-                onPaste={(event) => {
-                  // 文件与大段文本照旧由附件控制器接管，剩下的地址粘成占位符。
-                  if (handlePaste(event) || compact) return;
-                  const area = event.currentTarget;
-                  const pasted = event.clipboardData.getData('text');
-                  if (
-                    links.paste(pasted, {
-                      start: area.selectionStart,
-                      end: area.selectionEnd,
-                    })
-                  ) {
-                    event.preventDefault();
-                  }
-                }}
-                onCompositionStart={() => {
-                  setComposing(true);
-                  editing.onCompositionStart();
-                }}
-                onCompositionEnd={(event) => {
-                  setComposing(false);
-                  editing.onCompositionEnd(event);
-                }}
-                onKeyDown={onKeyDown}
-                onContextMenu={(event) => menu.open(event, editing.buildMenu())}
-                ariaExpanded={openCandidates !== null}
-                ariaControls={openCandidates?.listId}
-                ariaActiveDescendant={
-                  openCandidates === null
-                    ? undefined
-                    : composerOptionId(openCandidates.listId, openCandidates.index)
-                }
-              />
-
-              <div className="flex items-center gap-1 px-2.5 pb-2.5">
-                {!compact && (
-                  <button
-                    type="button"
-                    aria-label="添加附件"
-                    title="添加附件"
-                    disabled={!enabled}
-                    onClick={() => {
-                      setLocalError(null);
-                      pick();
+              <div
+                ref={cardRef}
+                className={`relative rounded-[18px] bg-surface hairline shadow-dock transition-colors duration-100 focus-within:border-focus ${
+                  dragging ? 'border-focus bg-hover' : 'border-border'
+                }`}
+              >
+                {!compact && (links.links.length > 0 || attachments.length > 0) && (
+                  <ComposerTray
+                    links={links.links}
+                    attachments={attachments}
+                    attachmentOpen={(attachment) =>
+                      attachment.image
+                        ? () => setPreviewing(attachment.path)
+                        : actions === null
+                          ? undefined
+                          : () => actions.openFile(attachment.path)
+                    }
+                    onRemoveAttachment={remove}
+                    onOpenLink={(url) => {
+                      void openWebLink(url).then((failure) => {
+                        if (failure !== null) notify(failure, 'danger');
+                      });
                     }}
-                    className="shrink-0 w-7 h-7 rounded-sm flex items-center justify-center text-text-secondary transition-colors duration-100 hover:bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    <PlusIcon size={16} />
-                  </button>
-                )}
-
-                {/* 键盘提示挂在底部操作行内：贴着添加按钮，不落到卡片外成为脚注。 */}
-                {hintVisible && (
-                  <span className="shrink-0 pl-1 text-2xs text-text-tertiary">
-                    {hint ?? KEYBOARD_HINT}
-                  </span>
-                )}
-
-                <span className="flex-1" />
-
-                {!compact && (
-                  <ComposerPicker
-                    model={model}
-                    models={models}
-                    effort={effort}
-                    configBusy={configBusy}
-                    configLocked={configLocked}
-                    onModelChange={(value) => onModelChange?.(value)}
-                    onReasoningEffortChange={(value) => onReasoningEffortChange?.(value)}
+                    onRemoveLink={links.remove}
                   />
                 )}
 
-                <button
-                  type="button"
-                  aria-label={
-                    showStop ? '停止生成' : command.running !== null && !hasContent ? '正在重载 MCP 服务器' : '发送'
+                <ComposerTextArea
+                  areaRef={areaRef}
+                  text={text}
+                  disabled={!enabled}
+                  placeholder={
+                    !enabled
+                      ? PLACEHOLDER_DISABLED
+                      : placeholder ?? (occupiesDock ? PLACEHOLDER_OCCUPIED : PLACEHOLDER_READY)
                   }
-                  title={
-                    showStop
-                      ? '停止生成（Esc）'
-                      : command.running !== null && !hasContent
-                        ? '正在重载 MCP 服务器，请稍候'
-                        : working !== null
-                          ? '发送：Agent 运行中，消息进入排队并在安全边界插入'
-                          : '发送'
+                  skillNames={skillNames}
+                  linkTokens={links.tokens}
+                  height={LINE_HEIGHT + VERTICAL_PADDING}
+                  onChange={editing.onChange}
+                  onCaret={setCaret}
+                  onPaste={(event) => {
+                    if (handlePaste(event) || compact) return;
+                    const area = event.currentTarget;
+                    const pasted = event.clipboardData.getData('text');
+                    if (
+                      links.paste(pasted, {
+                        start: area.selectionStart,
+                        end: area.selectionEnd,
+                      })
+                    ) {
+                      event.preventDefault();
+                    }
+                  }}
+                  onCompositionStart={() => {
+                    setComposing(true);
+                    editing.onCompositionStart();
+                  }}
+                  onCompositionEnd={(event) => {
+                    setComposing(false);
+                    editing.onCompositionEnd(event);
+                  }}
+                  onKeyDown={onKeyDown}
+                  onContextMenu={(event) => menu.open(event, editing.buildMenu())}
+                  ariaExpanded={openCandidates !== null}
+                  ariaControls={openCandidates?.listId}
+                  ariaActiveDescendant={
+                    openCandidates === null
+                      ? undefined
+                      : composerOptionId(openCandidates.listId, openCandidates.index)
                   }
-                  disabled={showStop ? false : !sendable}
-                  onClick={showStop ? onInterrupt : submit}
-                  className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-colors duration-100 ${
-                    showStop || sendable || command.running !== null && !hasContent
-                      ? 'bg-primary text-white'
-                      : 'bg-surface-sunken text-text-tertiary opacity-40'
-                  } disabled:cursor-not-allowed`}
-                >
-                  {showStop ? (
-                    <StopIcon size={16} />
-                  ) : busy || command.running !== null && !hasContent ? (
-                    <span className="w-3.5 h-3.5 rounded-full border border-current border-t-transparent animate-spin" />
-                  ) : (
-                    <ArrowUpIcon size={16} />
-                  )}
-                </button>
+                />
+
+                <ComposerActionBar
+                  compact={compact}
+                  enabled={enabled}
+                  hintVisible={hintVisible}
+                  hintText={hint ?? KEYBOARD_HINT}
+                  model={model}
+                  models={models}
+                  effort={effort}
+                  configBusy={configBusy}
+                  configLocked={configLocked}
+                  showStop={showStop}
+                  sendable={sendable}
+                  busy={busy}
+                  commandRunning={command.running !== null}
+                  hasContent={hasContent}
+                  working={working !== null}
+                  onPickAttachment={() => {
+                    setLocalError(null);
+                    pick();
+                  }}
+                  onModelChange={onModelChange}
+                  onReasoningEffortChange={onReasoningEffortChange}
+                  onInterrupt={onInterrupt}
+                  onSubmit={submit}
+                />
               </div>
             </div>
             {/*

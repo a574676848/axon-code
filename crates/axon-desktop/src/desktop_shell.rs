@@ -87,6 +87,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     // 界面卡死或被系统回收时不把系统错误页留给用户：装上兜底引导页的看门狗。
     // 与托盘无关，但同属窗口级装配，放在这里可以保证主窗口一建好就生效。
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        configure_window_chrome(&window);
         crate::ui_failure::install_watchdog(&window);
     }
     // 原生菜单跟随系统主题，因此首屏就按当前主题取墨色。
@@ -149,6 +150,31 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         });
     }
     Ok(())
+}
+
+/// 装配跨平台沉浸式一体标题栏与初始窗口主题。
+fn configure_window_chrome(window: &tauri::WebviewWindow) {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window.set_decorations(false);
+        let _ = window.set_shadow(true);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = window.set_title_bar_style(tauri::TitleBarStyle::Overlay);
+    }
+    let stored = crate::state::load_state().theme;
+    let initial_theme = if stored
+        .as_deref()
+        .map(crate::desktop_preferences::normalize_theme)
+        .as_deref()
+        == Some(crate::desktop_preferences::THEME_OBSIDIAN)
+    {
+        tauri::Theme::Dark
+    } else {
+        tauri::Theme::Light
+    };
+    let _ = window.set_theme(Some(initial_theme));
 }
 
 /// 托盘菜单：回窗口、检查更新、退出三组，组间用分隔线断开，每项都带图形。

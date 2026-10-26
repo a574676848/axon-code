@@ -7,20 +7,24 @@ use serde::{Deserialize, Serialize};
 
 use crate::state::{DesktopState, load_state, save_state};
 
-/// 默认主题：纸白。
+/// 默认主题：暖石纸白。
 pub const THEME_PAPER: &str = "paper";
 
-/// 第二套主题：森林。
+/// 第二套主题：冷杉矿石。
 pub const THEME_FOREST: &str = "forest";
+
+/// 第三套主题：黑曜石暗色。
+pub const THEME_OBSIDIAN: &str = "obsidian";
 
 /// 把外部传入的主题标识归一化。
 ///
-/// 不认识的取值一律回落到纸白，而不是报错：主题属于外观偏好，
+/// 不认识的取值一律回落到暖石纸白，而不是报错：主题属于外观偏好，
 /// 一个旧版本或手改过的状态文件不该让设置页打不开。
 #[must_use]
 pub fn normalize_theme(raw: &str) -> String {
     match raw.trim().to_ascii_lowercase().as_str() {
         THEME_FOREST => THEME_FOREST.to_string(),
+        THEME_OBSIDIAN => THEME_OBSIDIAN.to_string(),
         _ => THEME_PAPER.to_string(),
     }
 }
@@ -47,7 +51,7 @@ fn snapshot(state: &DesktopState) -> DesktopPreferences {
 pub struct DesktopPreferences {
     /// 是否发送系统通知。
     pub notifications_enabled: bool,
-    /// 界面主题标识，取值为 `paper` 或 `forest`。
+    /// 界面主题标识，取值为 `paper`、`forest` 或 `obsidian`。
     pub theme: String,
 }
 
@@ -102,6 +106,8 @@ mod tests {
     fn unknown_theme_falls_back_to_paper() {
         assert_eq!(normalize_theme("forest"), THEME_FOREST);
         assert_eq!(normalize_theme(" Forest "), THEME_FOREST);
+        assert_eq!(normalize_theme("obsidian"), THEME_OBSIDIAN);
+        assert_eq!(normalize_theme(" Obsidian "), THEME_OBSIDIAN);
         assert_eq!(normalize_theme("solarized"), THEME_PAPER);
         assert_eq!(normalize_theme(""), THEME_PAPER);
     }
@@ -119,5 +125,11 @@ mod tests {
             ..DesktopState::default()
         };
         assert_eq!(theme_of(&state), THEME_FOREST);
+
+        let dark_state = DesktopState {
+            theme: Some(THEME_OBSIDIAN.to_string()),
+            ..DesktopState::default()
+        };
+        assert_eq!(theme_of(&dark_state), THEME_OBSIDIAN);
     }
 }

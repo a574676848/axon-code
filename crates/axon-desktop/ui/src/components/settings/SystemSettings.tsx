@@ -20,25 +20,49 @@ import { RuntimeStatusPanel } from './RuntimeStatusPanel';
 const THEME_CARDS: ReadonlyArray<{
   value: ThemeId;
   label: string;
+  subtitle: string;
+  sidebar: string;
   canvas: string;
   card: string;
-  /** 森林多一层草色薄雾，纸白没有。 */
+  accent: string;
+  /** 冷杉多一层松雾微光。 */
   wash?: string;
 }> = [
   {
     value: 'paper',
     label: '纸白',
+    subtitle: '清透纯净亮白',
+    sidebar: 'bg-swatch-paper-sidebar',
     canvas: 'bg-swatch-paper-canvas',
     card: 'bg-swatch-paper-card',
+    accent: 'bg-swatch-paper-accent',
   },
   {
     value: 'forest',
-    label: '森林',
+    label: '冷杉',
+    subtitle: '松雾冷矿青白',
+    sidebar: 'bg-swatch-forest-sidebar',
     canvas: 'bg-swatch-forest-canvas',
     card: 'bg-swatch-forest-card',
+    accent: 'bg-swatch-forest-accent',
     wash: 'bg-swatch-forest-wash',
   },
+  {
+    value: 'obsidian',
+    label: '黑曜石',
+    subtitle: '深邃钨钢暗色',
+    sidebar: 'bg-swatch-obsidian-sidebar',
+    canvas: 'bg-swatch-obsidian-canvas',
+    card: 'bg-swatch-obsidian-card',
+    accent: 'bg-swatch-obsidian-accent',
+  },
 ];
+
+function themeDisplayName(theme: ThemeId): string {
+  if (theme === 'obsidian') return '黑曜石';
+  if (theme === 'forest') return '冷杉';
+  return '纸白';
+}
 
 export const SystemSettings: React.FC = () => {
   const [notifications, setNotifications] = useState<boolean | null>(null);
@@ -127,10 +151,10 @@ export const SystemSettings: React.FC = () => {
             <div className="min-w-0 space-y-0.5">
               <Text size="sm">主题</Text>
               <Text tone="secondary" size="xs" className="block">
-                {theme === null ? '读取中' : `当前使用${theme === 'forest' ? '森林' : '纸白'}`}
+                {theme === null ? '读取中' : `当前使用${themeDisplayName(theme)}`}
               </Text>
             </div>
-            <div role="radiogroup" aria-label="界面主题" className="flex shrink-0 gap-2.5">
+            <div role="radiogroup" aria-label="界面主题" className="flex shrink-0 gap-2">
               {THEME_CARDS.map((item) => {
                 const active = theme === item.value;
                 return (
@@ -141,26 +165,44 @@ export const SystemSettings: React.FC = () => {
                     aria-checked={active}
                     disabled={theme === null}
                     onClick={() => void chooseTheme(item.value)}
-                    className={`w-[136px] rounded-md border p-1.5 text-left transition-colors duration-100 disabled:cursor-not-allowed disabled:opacity-50 ${
-                      active ? 'border-primary' : 'border-border hover:border-border-strong'
+                    className={`w-[124px] rounded-md border p-1.5 text-left transition-colors duration-100 disabled:cursor-not-allowed disabled:opacity-50 ${
+                      active
+                        ? 'border-primary bg-hover/60 shadow-lift'
+                        : 'border-border hover:border-border-strong'
                     }`}
                   >
-                    {/* 缩略界面：一块底色加两条白卡，够看出「更白」与「更绿」。 */}
-                    <span className={`relative block h-11 overflow-hidden rounded-sm ${item.canvas}`}>
-                      {item.wash !== undefined && (
-                        <span className={`absolute inset-0 opacity-40 ${item.wash}`} />
-                      )}
+                    {/* 微缩工作台：左侧托盘底座 + 右侧内嵌圆角画布 + 内容卡 + 底部输入坞与主色点 */}
+                    <span
+                      className={`relative flex h-12 overflow-hidden rounded-xs p-1 gap-1 hairline border-border-hairline ${item.sidebar}`}
+                    >
+                      <span className="w-4 h-full flex flex-col gap-1 pt-0.5 pl-0.5">
+                        <span className={`w-2.5 h-1.5 rounded-[1px] ${item.card}`} />
+                        <span className="w-2.5 h-1 rounded-[1px] opacity-40 bg-current" />
+                      </span>
                       <span
-                        className={`absolute left-2 right-2 top-2 h-2.5 rounded-[2px] ${item.card}`}
-                      />
-                      <span
-                        className={`absolute left-2 right-6 top-6 h-2.5 rounded-[2px] ${item.card}`}
-                      />
+                        className={`relative flex-1 h-full rounded-[3px] overflow-hidden ${item.canvas}`}
+                      >
+                        {item.wash !== undefined && (
+                          <span className={`absolute inset-0 opacity-35 ${item.wash}`} />
+                        )}
+                        <span
+                          className={`absolute left-1.5 right-1.5 top-1.5 h-2 rounded-[1.5px] ${item.card}`}
+                        />
+                        <span
+                          className={`absolute left-1.5 right-1.5 bottom-1.5 h-2.5 rounded-[2px] flex items-center justify-end pr-0.5 ${item.card}`}
+                        >
+                          <span className={`w-1.5 h-1.5 rounded-full ${item.accent}`} />
+                        </span>
+                      </span>
                     </span>
                     <span className="mt-1.5 flex items-center px-0.5">
-                      <Text size="xs">{item.label}</Text>
+                      <span className="min-w-0 flex-1">
+                        <Text size="xs" strong={active} truncate>
+                          {item.label}
+                        </Text>
+                      </span>
                       <span
-                        className={`ml-auto grid h-3.5 w-3.5 place-items-center rounded-full ${
+                        className={`ml-auto shrink-0 grid h-3.5 w-3.5 place-items-center rounded-full ${
                           active ? 'bg-primary text-white' : 'border border-border-strong'
                         }`}
                       >

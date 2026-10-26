@@ -39,38 +39,38 @@ export const AxonLogo: React.FC<IconProps> = ({ size = 20, className = '', ...pr
     >
       <defs>
         <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" style={brandStroke('--color-brand-start')} />
-          <stop offset="50%" style={brandStroke('--color-brand-middle')} />
+          <stop offset="0%" style={brandStroke('--color-brand-middle')} />
+          <stop offset="55%" style={brandStroke('--color-brand-start')} />
           <stop offset="100%" style={brandStroke('--color-brand-end')} />
         </linearGradient>
       </defs>
-      <rect x="10" y="10" width="180" height="180" rx="20" style={brandFill('--color-brand-plate')} opacity="0.95" />
+      <rect x="10" y="10" width="180" height="180" rx="38" style={brandFill('--color-brand-plate')} />
       <rect
-        x="15"
-        y="15"
-        width="170"
-        height="170"
-        rx="15"
+        x="14"
+        y="14"
+        width="172"
+        height="172"
+        rx="34"
         fill="none"
         stroke={`url(#${gradientId})`}
-        strokeWidth="2"
-        opacity="0.3"
+        strokeWidth="2.5"
+        opacity="0.28"
       />
       {/* 神经元轴突：树突分支、轴突交叉与突触节点 */}
       <g transform="translate(100, 100)" stroke={`url(#${gradientId})`} strokeLinecap="round" fill="none">
-        <path d="M -40 0 L -25 -20 M -40 0 L -25 20" strokeWidth="3" />
+        <path d="M -44 0 L -26 -24 M -44 0 L -26 24" strokeWidth="5" />
         <path
-          d="M -15 -20 L 0 0 L -15 20 M -15 -20 L 0 0 L 15 -20 M -15 20 L 0 0 M 0 0 L 15 20"
-          strokeWidth="3.5"
+          d="M -16 -24 L 0 0 L -16 24 M -16 -24 L 0 0 L 16 -24 M -16 24 L 0 0 M 0 0 L 16 24"
+          strokeWidth="5.5"
         />
-        <path d="M 25 -20 L 40 0 M 25 20 L 40 0" strokeWidth="3" />
-        <circle cx="-40" cy="0" r="3" style={brandFill('--color-brand-start')} stroke="none" />
-        <circle cx="-25" cy="-20" r="2.5" style={brandFill('--color-brand-middle')} stroke="none" />
-        <circle cx="-25" cy="20" r="2.5" style={brandFill('--color-brand-middle')} stroke="none" />
-        <circle cx="0" cy="0" r="4" style={brandFill('--color-brand-end')} stroke="none" />
-        <circle cx="25" cy="-20" r="2.5" style={brandFill('--color-brand-middle')} stroke="none" />
-        <circle cx="25" cy="20" r="2.5" style={brandFill('--color-brand-middle')} stroke="none" />
-        <circle cx="40" cy="0" r="3" style={brandFill('--color-brand-start')} stroke="none" />
+        <path d="M 26 -24 L 44 0 M 26 24 L 44 0" strokeWidth="5" />
+        <circle cx="-44" cy="0" r="4.5" style={brandFill('--color-brand-middle')} stroke="none" />
+        <circle cx="-26" cy="-24" r="3.8" style={brandFill('--color-brand-start')} stroke="none" />
+        <circle cx="-26" cy="24" r="3.8" style={brandFill('--color-brand-start')} stroke="none" />
+        <circle cx="0" cy="0" r="5.5" style={brandFill('--color-brand-middle')} stroke="none" />
+        <circle cx="26" cy="-24" r="3.8" style={brandFill('--color-brand-start')} stroke="none" />
+        <circle cx="26" cy="24" r="3.8" style={brandFill('--color-brand-start')} stroke="none" />
+        <circle cx="44" cy="0" r="4.5" style={brandFill('--color-brand-end')} stroke="none" />
       </g>
     </svg>
   );

@@ -86,9 +86,9 @@ const StopButton: React.FC<{ armed: boolean; pending: boolean; onStop: () => voi
     disabled={pending}
     onClick={onStop}
     title={armed ? '再点一次即停止该作业' : '停止该作业需要再确认一次'}
-    className={`shrink-0 self-center h-6 inline-flex items-center justify-center rounded-sm hairline transition-colors duration-100 disabled:cursor-not-allowed disabled:opacity-40 ${
+    className={`shrink-0 self-center h-6 inline-flex items-center justify-center rounded-sm hairline transition-colors duration-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 ${
       armed
-        ? 'gap-1 px-1.5 border-danger bg-danger-soft text-danger'
+        ? 'confirm-pop gap-1 px-1.5 border-danger bg-danger-soft text-danger font-medium'
         : 'w-6 border-border bg-surface text-text-secondary hover:border-danger hover:text-danger'
     }`}
   >
@@ -133,25 +133,17 @@ const JobTerminal: React.FC<{ job: JobRow; running: boolean }> = ({ job, running
   // 多行命令一行一个提示符：读起来就是它要跑的那几条命令。
   const body = job.command.endsWith('\n') ? job.command.slice(0, -1) : job.command;
   const lines = body.split('\n');
-  const hasBody = !running || job.output.length > 0;
+  const waitingFirstByte = running && job.output.length === 0;
 
   return (
-    <div className="mx-1 mb-1 rounded-md bg-code-block overflow-hidden">
+    <div className="disclosure-enter mx-1 mb-1 rounded-md hairline border-border bg-code-block overflow-hidden">
       <div
-        className={`flex items-start gap-3 pl-3 pr-3.5 py-2 ${COMMAND_CAP} overflow-auto scroll-visible ${
-          hasBody ? 'hairline-b border-border' : ''
-        }`}
+        className={`relative flex items-start gap-3 pl-3 pr-3.5 py-2 ${COMMAND_CAP} overflow-auto scroll-visible hairline-b border-border-hairline`}
       >
         <div className="flex-1 min-w-0 flex flex-col font-mono text-code">
           {lines.map((line, index) => (
             <div key={index} className="flex items-baseline gap-2 min-w-0">
-              {/* 工作目录只有一条，因此只有首行谈它，其余行只用 `$` 对齐。 */}
               <span className="shrink-0 text-text-tertiary">$</span>
-              {/*
-               * 按原样换行铺满：正常命令在有空格处折行（与参考实现同款），
-               * 而超长的不可断行片段（长路径、长参数）不强行折断，改为让横幅横向滚动，
-               * 因此指令既读得全，也随时能滚到手够不到的那一段。
-               */}
               <span className="min-w-0 text-text-primary whitespace-pre-wrap">{line}</span>
             </div>
           ))}
@@ -172,21 +164,33 @@ const JobTerminal: React.FC<{ job: JobRow; running: boolean }> = ({ job, running
         <button
           type="button"
           onClick={copyCommand}
-          className="shrink-0 sticky top-0 bg-code-block text-meta text-text-secondary transition-colors duration-100 hover:text-text-primary"
+          className={`shrink-0 sticky top-0 bg-code-block text-meta transition-colors duration-100 hover:text-text-primary ${
+            copied ? 'text-ok-ink font-medium confirm-pop' : 'text-text-secondary'
+          }`}
         >
           {copied ? '已复制' : '复制'}
         </button>
+        {running && (
+          <span
+            aria-hidden="true"
+            className="waiting-heartbeat-bar pointer-events-none absolute bottom-0 left-0 h-[1.5px] w-1/3 bg-text-link/55"
+          />
+        )}
       </div>
-      {hasBody &&
-        (job.output.length > 0 ? (
-          <pre
-            className={`${OUTPUT_CAP} pl-3 pr-3.5 py-3 overflow-auto scroll-visible font-mono text-code text-text-primary whitespace-pre-wrap break-words`}
-          >
-            {job.output}
-          </pre>
-        ) : (
-          <div className="pl-3 pr-3.5 py-3 font-mono text-code text-text-tertiary">（无输出）</div>
-        ))}
+      {waitingFirstByte ? (
+        <div className="px-3 py-2.5 flex items-center gap-2 text-meta text-text-tertiary">
+          <StateDot state="ongoing" />
+          <span className="shimmer-text-active">正在后台执行，等待输出流...</span>
+        </div>
+      ) : job.output.length > 0 ? (
+        <pre
+          className={`${OUTPUT_CAP} pl-3 pr-3.5 py-3 overflow-auto scroll-visible font-mono text-code text-text-prose whitespace-pre-wrap break-words`}
+        >
+          {job.output}
+        </pre>
+      ) : (
+        <div className="pl-3 pr-3.5 py-3 font-mono text-code text-text-tertiary">（无输出）</div>
+      )}
     </div>
   );
 };

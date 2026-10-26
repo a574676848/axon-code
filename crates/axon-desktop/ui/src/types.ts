@@ -381,8 +381,8 @@ export interface DocumentText {
   exists: boolean;
 }
 
-/** 界面主题标识。纸白是默认，森林是第二套。 */
-export type ThemeId = 'paper' | 'forest';
+/** 界面主题标识。暖石（paper）是默认，冷杉（forest）与黑曜石（obsidian）为可选主题。 */
+export type ThemeId = 'paper' | 'forest' | 'obsidian';
 
 /** 桌面偏好。 */
 export interface DesktopPreferences {

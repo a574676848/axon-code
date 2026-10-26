@@ -1,159 +1,124 @@
 @import "tailwindcss";
 
 /*
- * 工作台设计令牌（浅色）
- * 中性纸白基底，近黑碳墨承担主操作，半透明发丝描边建立层级，
- * 单一蓝色只用于键盘聚焦环，选中态使用模块底加中性描边。
+ * 工作台设计令牌（三主题：纸白 paper / 冷杉 forest / 黑曜石 obsidian）
+ * 清透亮白基底、四级表面景深（托盘底座、内嵌画布、浮起卡片、下沉凹槽）、
+ * 光学高光棱与双层倒角输入坞。
  */
 @theme {
   /*
-   * 三级中性面：画布、侧栏、卡片。
-   *
-   * 三者必须彼此可分辨：卡片是纯白，画布退半档，侧栏再退一档。
-   * 此前画布与卡片同为纯白，整块界面只能靠 0.5px 发丝线分家，
-   * 主从层级在低亮度屏上直接消失。
+   * 四级表面：托盘底座（sidebar）、主画布（canvas）、浮起卡片（surface）、下沉凹槽（surface-sunken）。
+   * 纸白主题采用柔光瓷白（Soft Alabaster）：
+   * 托盘底座 #ECEFF3 -> 内嵌主画布 #F6F7F9 -> 纯白卡片 #FFFFFF，既纯粹白亮又消除满白眩光。
    */
-  --color-canvas: #FBFBFB;
-  --color-sidebar: #F6F6F6;
+  --color-canvas: #F6F7F9;
+  --color-sidebar: #ECEFF3;
   --color-surface: #FFFFFF;
-  --color-surface-sunken: #F4F4F4;
-  --color-hover: rgba(28, 28, 28, 0.04);
-  --color-active: rgba(28, 28, 28, 0.07);
+  --color-surface-sunken: #E8ECF2;
+  --color-hover: rgba(15, 23, 42, 0.045);
+  --color-active: rgba(15, 23, 42, 0.075);
   /* 模态遮罩：只此一档，嵌套弹窗不叠第二层。 */
-  --color-scrim: rgba(15, 17, 21, 0.36);
+  --color-scrim: rgba(15, 23, 42, 0.36);
 
-  --color-border: rgba(28, 28, 28, 0.10);
-  --color-border-hairline: rgba(28, 28, 28, 0.07);
-  --color-border-muted: rgba(28, 28, 28, 0.10);
---color-border-strong: rgba(28, 28, 28, 0.13);
-  --color-border-input: rgba(28, 28, 28, 0.14);
-  --color-border-selected: #8A94A0;
+  --color-border: rgba(15, 23, 42, 0.085);
+  --color-border-hairline: rgba(15, 23, 42, 0.06);
+  --color-border-muted: rgba(15, 23, 42, 0.085);
+  --color-border-strong: rgba(15, 23, 42, 0.13);
+  --color-border-input: rgba(15, 23, 42, 0.14);
+  --color-border-selected: #8492A6;
+  --color-specular: rgba(255, 255, 255, 0.92);
+  --color-shimmer-beam: rgba(255, 255, 255, 0.72);
+  --color-window-close: #C42B1C;
 
-  --color-text-primary: #1D1D1F;
-  --color-text-secondary: #4E4E52;
-  --color-text-tertiary: #5E5E63;
-  --color-text-placeholder: #646469;
-  /* 说明与时间戳层级：比三级更弱，只承载辅助信息；仍按正文 AA 取值。 */
-  --color-text-caption: #5F5F64;
-  /* 链接与品牌交互色：与技能蓝同值，白底 6.39:1。 */
-  --color-text-link: #2D5F9E;
-  /*
-   * 技能指令高亮：正文里精确命中已安装技能名的 `/name` 用这一个取值，
-   * 输入框与用户消息气泡两处共用。比链接色深一档是实算的要求：
-   * 对白底 6.39:1、对用户气泡底 5.73:1，两处都过正文 AA。
-   */
-  --color-skill-ink: #2D5F9E;
-  /* 用户气泡底、代码块底与行内代码底：与内容层级同源，不用描边堆层级。 */
-  --color-bubble: #F5F5F5;
-  --color-code-block: #F4F4F4;
-  --color-code-inline: #EFEFEF;
+  --color-text-primary: #141820;
+  /* 叙述正文专用墨色：对比度约 11.8:1，解决长文阅读刺眼眩光，并让标题与加粗词自然跳出。 */
+  --color-text-prose: #2C3440;
+  --color-text-secondary: #475467;
+  --color-text-tertiary: #596579;
+  --color-text-placeholder: #637083;
+  /* 说明与时间戳层级：比三级略弱，仍严格满足正文 AA 对比度。 */
+  --color-text-caption: #5B677A;
+  /* 链接与品牌交互色：清澈皇家科技蓝，对画布 5.6:1。 */
+  --color-text-link: #1D5BD6;
+  /* 技能指令高亮：与链接同色相，输入框与用户消息气泡共用。 */
+  --color-skill-ink: #1D5BD6;
+  /* 用户气泡底、代码块底、无框行内代码胶囊底与代码墨色。 */
+  --color-bubble: #EDF1F7;
+  --color-code-block: #F1F4F8;
+  --color-code-inline: #E9EEF5;
+  --color-code-ink: #243B55;
 
-  --color-primary: #1D2129;
-  --color-primary-hover: #343A43;
-  --color-focus: #3B6EA5;
-  /* 状态语义色：取值与工作台参考实现的状态色对齐（error 取它的 red-600 加深一档）。
-   * 加深是实算要求：原 #ec1313 对画布只有 4.31:1，低于正文 AA。 */
-  --color-danger: #C01818;
-  /* 成功与完成语义色：全站唯一的绿色，终态圆点、连接状态点、计划完成点共用。 */
+  --color-primary: #141820;
+  --color-primary-hover: #232A36;
+  --color-focus: #2563EB;
+  /* 状态语义色：全部满足对画布与卡片的正文 AA 4.5:1。 */
+  --color-danger: #B91C1C;
   --color-ok: #22c55e;
-  /*
-   * 成功语义的墨水档：只用于文字，例如改动卡的 +N 计数。
-   * 标记继续用 --color-ok，两者同语义、不同用途；+N 对白底 5.02:1。
-   */
   --color-ok-ink: #0F6A31;
-  /*
-   * 需要注意的语义色：与参考实现同名同值（它的状态告警色），用作标记、圆点与描边。
-   * 该取值对白底只有 2.15:1，达不到正文 AA，**不得直接用于文字**；文字用下面的墨水档。
-   */
   --color-gold: #f59e0b;
-  /*
-   * 琥珀墨水档：琥珀语义的**文字**专用取值，对白底 4.67:1，满足正文 AA。
-   * 标记继续用 --color-gold，两者同语义、不同用途，改动时不要互相顶替。
-   */
-  --color-gold-ink: #8F5500;
-  /* 空闲标记：既没有在跑、也没有结果的中间态。 */
-  --color-state-idle: #C9D0D8;
-  /*
-   * 水印记号：引导页顶部的罗盘这类「不是控件、只是方位感」的图形。
-   * 取中性灰阶里最浅的一档，纯灰不走蓝调，否则这个尺寸下偏色会显出来。
-   */
-  --color-watermark: #E2E6EB;
-  /* 引导页罗盘：比水印色深一档，保证 44px 下仍看得出方位感。 */
-  --color-watermark-strong: #C6CDD6;
-  /* 语义色的浅底：取值由各自的语义色配透明度派生，组件里不再写 rgba。 */
-  --color-danger-soft: rgba(192, 24, 24, 0.12);
-  /* 成功浅底：健康时间线这类大面积填充用它，避免满饱和绿铺满整屏。 */
+  --color-gold-ink: #8A5200;
+  --color-state-idle: #CBD5E1;
+  --color-watermark: #E2E8F0;
+  --color-watermark-strong: #CBD5E1;
+  --color-danger-soft: rgba(185, 28, 28, 0.10);
   --color-ok-soft: rgba(34, 197, 94, 0.14);
-  /* 琥珀的浅底：与 danger-soft 同款派生，用于「等你处理」这类提示条的底，
-     墨水档文字压在上面仍有 4.57:1，满足正文 AA。 */
   --color-gold-soft: rgba(245, 158, 11, 0.12);
-  --color-focus-soft: rgba(45, 95, 158, 0.08);
-  /*
-   * 改动对比的新增与删除行底色。行文一律用 --color-text-primary：
-   * 实测对新增底 17.5:1、对删除底 16.8:1，行号用 --color-text-secondary 时仍有 5.37:1 与 5.14:1。
-   */
-  --color-diff-add: #EAF2EC;
-  --color-diff-delete: #FBECEC;
+  --color-focus-soft: rgba(37, 99, 235, 0.10);
+  --color-diff-add: #E8F5E9;
+  --color-diff-delete: #FDECEC;
   /* 反色面：压在正文之上的深色浮层，例如行悬浮卡。 */
-  --color-inverse: #22262B;
-  --color-inverse-secondary: #CBD0D6;
-  /* 图形渲染的次级面：比 surface-sunken 略偏冷，用于区分图形里的第二类节点。 */
-  --color-surface-tint: #EDF1F5;
-  /*
-   * 用量看板的图表色板。
-   *
-   * 三类 Token 走同一蓝色谱系（越浅越便宜：缓存命中比未缓存输入浅一档），
-   * 生成与推理另立青、紫两支色相，请求数是另一套量纲因此取中性灰。
-   * 这些取值只用于图形填充、描边与图例色块，**不承载文字**：所有读数与
-   * 标签一律走 --color-text-*，因此不受正文 AA 约束；图例也逐项带名称，
-   * 信息不依赖颜色本身。语义色（ok / gold / danger）不参与序列配色，
-   * 绿色与红色在整个界面里只表示成功与失败。
-   */
-  --color-chart-input: #3B6EA5;
-  --color-chart-cache-read: #7FA3C6;
-  --color-chart-cache-write: #2f9d8f;
-  --color-chart-output: #6B5B8A;
-  --color-chart-reasoning: #b4762a;
-  --color-chart-requests: #6b7280;
-  /* 绘图区底板与网格：比 surface 深半档，让白色网格线成为可读的分度。 */
-  --color-chart-plot: #F2F4F7;
-  --color-chart-grid: rgba(28, 28, 28, 0.06);
-  /* 条形图与进度条的底槽。 */
-  --color-chart-track: rgba(28, 28, 28, 0.06);
-  /*
-   * 主题预览色板：这两组值描述的是「另一套主题」长什么样，
-   * 因此不随当前主题变化，只在设置页的主题选择卡里使用。
-   */
-  --color-swatch-paper-canvas: #f8f8f8;
-  --color-swatch-paper-card: #ffffff;
-  --color-swatch-forest-canvas: #f7faf7;
-  --color-swatch-forest-card: #ffffff;
-  --color-swatch-forest-wash: #d6ead8;
+  --color-inverse: #1E293B;
+  --color-inverse-secondary: #CBD5E1;
+  --color-surface-tint: #EEF2F6;
 
-  /* 品牌标识的自有美术色：底板与渐变的起点、中点、终点。 */
-  --color-brand-plate: #1a202c;
-  --color-brand-start: #4299e1;
-  --color-brand-middle: #51d3d9;
-  --color-brand-end: #9f7aea;
+  /* 用量看板图表色板（不承载文字）。 */
+  --color-chart-input: #2563EB;
+  --color-chart-cache-read: #7BA3EB;
+  --color-chart-cache-write: #0D9488;
+  --color-chart-output: #7C3AED;
+  --color-chart-reasoning: #D97706;
+  --color-chart-requests: #64748B;
+  --color-chart-plot: #F3F5F8;
+  --color-chart-grid: rgba(15, 23, 42, 0.06);
+  --color-chart-track: rgba(15, 23, 42, 0.06);
+
+  /*
+   * 主题预览色板：固定描述三套主题各自的托盘、画布、卡片与主操作色，
+   * 不随当前激活主题变化，专供设置页主题选择缩略卡使用。
+   */
+  --color-swatch-paper-sidebar: #EEF1F6;
+  --color-swatch-paper-canvas: #F9FAFB;
+  --color-swatch-paper-card: #FFFFFF;
+  --color-swatch-paper-accent: #111827;
+  --color-swatch-forest-sidebar: #E7EEEA;
+  --color-swatch-forest-canvas: #F2F6F4;
+  --color-swatch-forest-card: #FCFEFD;
+  --color-swatch-forest-wash: #C9DDD2;
+  --color-swatch-forest-accent: #164E3B;
+  --color-swatch-obsidian-sidebar: #0B0D11;
+  --color-swatch-obsidian-canvas: #11141B;
+  --color-swatch-obsidian-card: #181C25;
+  --color-swatch-obsidian-accent: #2F5FD0;
+
+  /* 品牌标识色：深邃曜石底板配清亮银白金属蚀刻线条。 */
+  --color-brand-plate: #111827;
+  --color-brand-start: #CBD5E1;
+  --color-brand-middle: #FFFFFF;
+  --color-brand-end: #94A3B8;
   /* 正文列最大宽度：设计系统 §1.2 默认 840px，支持用户拖拽调节，读作 max-w-chat。 */
   --container-chat: var(--axon-chat-user-width, 840px);
   /* 非对话页的内容定宽：管理页与看板共用一条版心。 */
   --container-page: 88%;
 
   /*
-   * 字体族只有系统栈两支，不打包任何 webfont。
-   *
-   * 界面与代码都取宿主系统已有的字形：换一台机器看到的就是那台机器自己的
-   * 界面字体，随包体积里也不再多一份字体与它的子集化维护。
+   * 字体族只走系统栈两支，零随包 webfont。
+   * 优先启用 Windows 11 原生可变光学字体 Segoe UI Variable，笔画与字怀更细腻。
    */
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
-    'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
-  /*
-   * 等宽栈必须显式给出 Windows 中文兜底，且不以裸 `monospace` 收尾：
-   * 裸 monospace 会让代码块里的中文掉进 SimSun（宋体），与界面其余中文分家。
-   */
-  --font-mono: 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'Liberation Mono', Menlo,
-    Courier, 'PingFang SC', 'Microsoft YaHei';
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text',
+    'Segoe UI Variable Display', 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --font-mono: 'SF Mono', 'JetBrains Mono', 'Fira Code', 'Cascadia Mono', Consolas,
+    'Liberation Mono', Menlo, Courier, 'PingFang SC', 'Microsoft YaHei';
 
   --radius-xs: 4px;
   --radius-sm: 8px;
@@ -161,14 +126,8 @@
   --radius-lg: 16px;
   --radius-xl: 20px;
 
-  /*
-   * 排版阶梯：与既有工作台产品同为「14px 内容轴 + 13px 次级轴」双轨。
-   * 10 / 11 / 12 三档是组件级事实惯例（时间戳、代码块、侧栏 meta 与作业行），
-   * 不随视口变化。
-   */
   --text-2xs: 10px;
   --text-2xs--line-height: 16px;
-  /* 代码正文：对话代码块、侧栏预览与行号共用。12px 是 DPR=1 下的可读下限。 */
   --text-code: 12px;
   --text-code--line-height: 20px;
   --text-meta: 12px;
@@ -179,29 +138,19 @@
   --text-row-loose--line-height: 1.5;
   --text-body: 14px;
   --text-body--line-height: 22px;
-  --text-content: 14px;
-  --text-content--line-height: 24px;
+  --text-content: 14.5px;
+  --text-content--line-height: 26px;
 
-  /*
-   * 标题刻度：与既有工作台产品的标题档一致，h4 由 text-content 承担。
-   */
   --text-heading-1: 21px;
   --text-heading-1--line-height: 30px;
   --text-heading-2: 19px;
   --text-heading-2--line-height: 28px;
   --text-heading-3: 18px;
   --text-heading-3--line-height: 26px;
-  /* 四级标题：对话正文里的小节标题，与正文 14px 拉开一档但不再叠字重堆层级。 */
   --text-heading-4: 15px;
   --text-heading-4--line-height: 24px;
-  /* 首屏品牌标题。 */
   --text-display: 26px;
   --text-display--line-height: 32px;
-  /*
-   * 输入坞正文：输入框里的文字，比助手正文大一号。
-   * 名字不得与任何 --color-* 同名：text-* 同时命中字号与颜色两个命名空间时，
-   * Tailwind 按颜色解析，token 就会被静默当成文字颜色（text-bubble 曾踩过）。
-   */
   --text-input: 15px;
   --text-input--line-height: 22px;
 
@@ -210,145 +159,249 @@
 }
 
 /*
- * 森林主题：清新、呼吸、旷野。
- *
- * 画布是草甸白，天光由 :root 里的 --theme-glow 给出，从天空的冷雾过渡到草地的暖绿。
- * 只声明与纸白不同的令牌，其余全部继承：新增令牌不必在两套主题里各写一遍。
+ * 冷杉主题（forest）：松雾、冷矿、静谧。
+ * 采用北欧冷青松石色相（Hue ~162deg），搭配深松烟墨文字与高定冷杉绿主操作色。
  */
 html[data-theme='forest'] {
-  --color-canvas: #F7FAF7;
-  --color-sidebar: #EEF6EE;
-  --color-surface-sunken: #E3EFE4;
-  --color-hover: rgba(30, 80, 52, 0.05);
-  --color-active: rgba(30, 80, 52, 0.08);
+  color-scheme: light;
+  --color-canvas: #F1F5F3;
+  --color-sidebar: #E7EEEA;
+  --color-surface: #FCFEFD;
+  --color-surface-sunken: #E1EAE5;
+  --color-hover: rgba(17, 28, 24, 0.05);
+  --color-active: rgba(17, 28, 24, 0.08);
 
-  --color-border: rgba(30, 80, 52, 0.10);
-  --color-border-hairline: rgba(30, 80, 52, 0.07);
-  --color-border-muted: rgba(30, 80, 52, 0.10);
-  --color-border-strong: rgba(30, 80, 52, 0.12);
-  --color-border-input: rgba(30, 80, 52, 0.14);
-  --color-border-selected: #8FB59B;
+  --color-border: rgba(17, 28, 24, 0.10);
+  --color-border-hairline: rgba(17, 28, 24, 0.07);
+  --color-border-muted: rgba(17, 28, 24, 0.10);
+  --color-border-strong: rgba(17, 28, 24, 0.14);
+  --color-border-input: rgba(17, 28, 24, 0.16);
+  --color-border-selected: #7C9D8E;
+  --color-specular: rgba(255, 255, 255, 0.88);
+  --color-shimmer-beam: rgba(252, 254, 253, 0.72);
 
-  --color-text-primary: #1D1D1F;
-  --color-text-secondary: #4E4E52;
-  --color-text-tertiary: #5E5E63;
-  --color-text-placeholder: #646469;
-  --color-text-caption: #5F5F64;
+  --color-text-primary: #111C18;
+  --color-text-prose: #203029;
+  --color-text-secondary: #3B4B44;
+  --color-text-tertiary: #52635B;
+  --color-text-placeholder: #5C6D65;
+  --color-text-caption: #54655D;
 
-  --color-text-link: #1F7A52;
-  --color-skill-ink: #1F7A52;
-  --color-bubble: #E7F2E7;
-  --color-code-block: #E3EFE4;
-  --color-code-inline: #DFEDE0;
+  --color-text-link: #18634A;
+  --color-skill-ink: #18634A;
+  --color-bubble: #E3EDE7;
+  --color-code-block: #E8F0EC;
+  --color-code-inline: #DFEAE4;
+  --color-code-ink: #174B38;
 
-  --color-primary: #27794C;
-  --color-primary-hover: #1F6B45;
-  --color-focus: #2E8B57;
+  --color-primary: #164E3B;
+  --color-primary-hover: #1E604A;
+  --color-focus: #217658;
   --color-danger: #B3261E;
-  --color-ok-ink: #1E6B3F;
-  --color-gold-ink: #8A5A06;
+  --color-ok-ink: #156839;
+  --color-gold-ink: #855505;
 
-  --color-state-idle: #C7D6CB;
-  --color-watermark: #DFEAE1;
-  --color-watermark-strong: #C3D4C7;
+  --color-state-idle: #BCCBC3;
+  --color-watermark: #D9E5DF;
+  --color-watermark-strong: #BDD0C6;
   --color-danger-soft: rgba(179, 38, 30, 0.12);
   --color-gold-soft: rgba(227, 155, 34, 0.14);
-  --color-focus-soft: rgba(46, 139, 87, 0.10);
+  --color-focus-soft: rgba(33, 118, 88, 0.12);
 
-  --color-diff-add: #E6F2E8;
-  --color-diff-delete: #FAEAE8;
-  --color-inverse: #16301F;
-  --color-inverse-secondary: #C6D8CB;
-  --color-surface-tint: #E8F1E9;
+  --color-diff-add: #E2F0E6;
+  --color-diff-delete: #F9E8E6;
+  --color-inverse: #14241D;
+  --color-inverse-secondary: #C4D6CE;
+  --color-surface-tint: #E4EFE9;
 
-  --color-chart-input: #2F8B5C;
-  --color-chart-cache-read: #6BAE86;
-  --color-chart-output: #6B5B8A;
-  --color-chart-plot: #E9F2E9;
-  --color-chart-grid: rgba(30, 80, 52, 0.06);
-  --color-chart-track: rgba(30, 80, 52, 0.06);
+  --color-chart-input: #1E6F52;
+  --color-chart-cache-read: #5E9E84;
+  --color-chart-output: #5C648E;
+  --color-chart-plot: #E6EFEA;
+  --color-chart-grid: rgba(17, 28, 24, 0.06);
+  --color-chart-track: rgba(17, 28, 24, 0.06);
 
-  /* 高度阶梯同步换色相：绿影配绿底，不出现中性灰的投影压在草甸上。 */
-  --elevation-stroke: 0 0 0 0.5px rgba(30, 80, 52, 0.10);
-  --elevation-lift: 0 1px 0 0 rgba(255, 255, 255, 0.92) inset, 0 1px 3px 0 rgba(30, 80, 52, 0.10),
-    0 4px 10px 0 rgba(30, 80, 52, 0.07);
-  --elevation-panel: 0 1px 0 0 rgba(255, 255, 255, 0.94) inset, 0 2px 5px 0 rgba(30, 80, 52, 0.05),
-    0 14px 30px 0 rgba(30, 80, 52, 0.08);
-  --elevation-prominent: 0 1px 0 0 rgba(255, 255, 255, 0.96) inset, 0 4px 10px 0 rgba(30, 80, 52, 0.06),
-    0 24px 52px 0 rgba(30, 80, 52, 0.10);
-  --elevation-well: inset 2px 2px 6px rgba(30, 80, 52, 0.12), inset -2px -2px 6px rgba(255, 255, 255, 0.96);
-  --elevation-well-sm: inset 1.5px 1.5px 4px rgba(30, 80, 52, 0.11),
-    inset -1.5px -1.5px 4px rgba(255, 255, 255, 0.95);
-  --elevation-modal: 0 0 0 0.5px rgba(30, 80, 52, 0.12), 0 24px 64px 0 rgba(10, 26, 17, 0.20),
-    0 8px 24px 0 rgba(10, 26, 17, 0.09);
+  --color-brand-plate: #14382B;
+  --color-brand-start: #9ED1BE;
+  --color-brand-middle: #E6F4EE;
+  --color-brand-end: #65A88F;
+
+  --shiki-token-string: #16653E;
+  --shiki-token-string-expression: #16653E;
+  --shiki-token-constant: #855505;
+  --shiki-token-function: #4B5696;
+
+  --elevation-stage: 0 0 0 1px rgba(17, 28, 24, 0.08), 0 2px 6px 0 rgba(17, 28, 24, 0.04);
+  --elevation-card: 0 1px 0 0 rgba(255, 255, 255, 0.90) inset, 0 1px 2px 0 rgba(17, 28, 24, 0.04);
+  --elevation-stroke: 0 0 0 0.5px rgba(17, 28, 24, 0.10);
+  --elevation-lift: 0 1px 0 0 rgba(255, 255, 255, 0.92) inset, 0 1px 3px 0 rgba(17, 28, 24, 0.09),
+    0 3px 8px 0 rgba(17, 28, 24, 0.05);
+  --elevation-panel: 0 1px 0 0 rgba(255, 255, 255, 0.94) inset, 0 2px 5px 0 rgba(17, 28, 24, 0.05),
+    0 12px 28px 0 rgba(17, 28, 24, 0.07);
+  --elevation-prominent: 0 1px 0 0 rgba(255, 255, 255, 0.96) inset, 0 4px 12px 0 rgba(17, 28, 24, 0.06),
+    0 20px 44px 0 rgba(17, 28, 24, 0.09);
+  --elevation-dock-focus: 0 0 0 1px var(--color-focus), 0 0 0 4px var(--color-focus-soft),
+    0 1px 0 0 rgba(255, 255, 255, 0.96) inset, 0 12px 32px 0 rgba(17, 28, 24, 0.10);
+  --elevation-well: inset 1.5px 1.5px 4px rgba(17, 28, 24, 0.09), inset -1px -1px 3px rgba(255, 255, 255, 0.92);
+  --elevation-well-sm: inset 1px 1px 3px rgba(17, 28, 24, 0.08),
+    inset -1px -1px 2px rgba(255, 255, 255, 0.90);
+  --elevation-modal: 0 0 0 1px rgba(17, 28, 24, 0.12), 0 24px 64px 0 rgba(8, 18, 14, 0.22),
+    0 8px 24px 0 rgba(8, 18, 14, 0.10);
 }
+
+/*
+ * 黑曜石主题（obsidian）：深邃、钨钢、精密暗色座舱。
+ * 底座 #0B0D11 -> 内嵌舞台 #11141B -> 卡片 #181C25，靠微弱顶部镜面高光（6% 白）与深邃投影分层。
+ */
+html[data-theme='obsidian'] {
+  color-scheme: dark;
+  --color-canvas: #11141B;
+  --color-sidebar: #0B0D11;
+  --color-surface: #181C25;
+  --color-surface-sunken: #0D1016;
+  --color-hover: rgba(255, 255, 255, 0.05);
+  --color-active: rgba(255, 255, 255, 0.09);
+  --color-scrim: rgba(4, 6, 10, 0.62);
+
+  --color-border: rgba(255, 255, 255, 0.085);
+  --color-border-hairline: rgba(255, 255, 255, 0.065);
+  --color-border-muted: rgba(255, 255, 255, 0.085);
+  --color-border-strong: rgba(255, 255, 255, 0.13);
+  --color-border-input: rgba(255, 255, 255, 0.14);
+  --color-border-selected: #56637A;
+  --color-specular: rgba(255, 255, 255, 0.06);
+  --color-shimmer-beam: rgba(255, 255, 255, 0.14);
+
+  --color-text-primary: #ECEFF4;
+  --color-text-prose: #CBD5E1;
+  --color-text-secondary: #A6B0C0;
+  --color-text-tertiary: #8B95A7;
+  --color-text-placeholder: #838E9E;
+  --color-text-caption: #8892A4;
+
+  --color-text-link: #79A6FF;
+  --color-skill-ink: #79A6FF;
+  --color-bubble: #1E2430;
+  --color-code-block: #0D1016;
+  --color-code-inline: #1E2430;
+  --color-code-ink: #93C5FD;
+
+  --color-primary: #2F5FD0;
+  --color-primary-hover: #3B6CE0;
+  --color-focus: #528BFF;
+  --color-danger: #F87171;
+  --color-ok: #22c55e;
+  --color-ok-ink: #4ADE80;
+  --color-gold: #f59e0b;
+  --color-gold-ink: #FBBF24;
+
+  --color-state-idle: #3A4252;
+  --color-watermark: #1E2430;
+  --color-watermark-strong: #2C3444;
+  --color-danger-soft: rgba(248, 113, 113, 0.15);
+  --color-ok-soft: rgba(34, 197, 94, 0.18);
+  --color-gold-soft: rgba(251, 191, 36, 0.15);
+  --color-focus-soft: rgba(82, 139, 255, 0.16);
+
+  --color-diff-add: #12281E;
+  --color-diff-delete: #2D1619;
+  --color-inverse: #222938;
+  --color-inverse-secondary: #B4BECE;
+  --color-surface-tint: #1E2430;
+
+  --color-chart-input: #528BFF;
+  --color-chart-cache-read: #365B9E;
+  --color-chart-cache-write: #2DD4BF;
+  --color-chart-output: #A78BFA;
+  --color-chart-reasoning: #FBBF24;
+  --color-chart-requests: #8B95A7;
+  --color-chart-plot: #0D1016;
+  --color-chart-grid: rgba(255, 255, 255, 0.06);
+  --color-chart-track: rgba(255, 255, 255, 0.07);
+
+  --color-brand-plate: #1E2430;
+  --color-brand-start: #79A6FF;
+  --color-brand-middle: #C4D7FF;
+  --color-brand-end: #528BFF;
+
+  --shiki-token-string: #6EE7B7;
+  --shiki-token-string-expression: #6EE7B7;
+  --shiki-token-constant: #FCD34D;
+  --shiki-token-function: #C4B5FD;
+
+  --elevation-stage: 0 0 0 1px rgba(255, 255, 255, 0.07), 0 4px 16px 0 rgba(0, 0, 0, 0.45);
+  --elevation-card: 0 1px 0 0 rgba(255, 255, 255, 0.06) inset, 0 2px 6px 0 rgba(0, 0, 0, 0.28);
+  --elevation-stroke: 0 0 0 0.5px rgba(255, 255, 255, 0.10);
+  --elevation-lift: 0 1px 0 0 rgba(255, 255, 255, 0.08) inset, 0 1px 3px 0 rgba(0, 0, 0, 0.40),
+    0 4px 10px 0 rgba(0, 0, 0, 0.28);
+  --elevation-panel: 0 1px 0 0 rgba(255, 255, 255, 0.07) inset, 0 4px 10px 0 rgba(0, 0, 0, 0.35),
+    0 16px 36px 0 rgba(0, 0, 0, 0.45);
+  --elevation-prominent: 0 1px 0 0 rgba(255, 255, 255, 0.09) inset, 0 6px 16px 0 rgba(0, 0, 0, 0.42),
+    0 24px 52px 0 rgba(0, 0, 0, 0.55);
+  --elevation-dock-focus: 0 0 0 1px var(--color-focus), 0 0 0 4px var(--color-focus-soft),
+    0 1px 0 0 rgba(255, 255, 255, 0.09) inset, 0 16px 40px 0 rgba(0, 0, 0, 0.55);
+  --elevation-well: inset 1.5px 1.5px 4px rgba(0, 0, 0, 0.45), inset 0 -1px 0 rgba(255, 255, 255, 0.04);
+  --elevation-well-sm: inset 1px 1px 3px rgba(0, 0, 0, 0.40),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.04);
+  --elevation-modal: 0 0 0 1px rgba(255, 255, 255, 0.10), 0 28px 72px 0 rgba(0, 0, 0, 0.68),
+    0 10px 28px 0 rgba(0, 0, 0, 0.45);
+  --elevation-button-primary: 0 1px 0 0 rgba(255, 255, 255, 0.22) inset, 0 1px 3px 0 rgba(0, 0, 0, 0.45);
+  --elevation-button-outline: 0 1px 0 0 rgba(255, 255, 255, 0.06) inset, 0 1px 2px 0 rgba(0, 0, 0, 0.30);
+}
+
 :root {
+  color-scheme: light;
+  /* 跨平台窗口控制区避让量：由 WindowChrome 按宿主平台动态注入。 */
+  --window-controls-inset: 0px;
+  --macos-traffic-inset: 0px;
+
   /*
-   * 高度阶梯：一套光影，凸起与凹槽分明。
-   *
-   * lift 是小构件（分段选中项、图标按钮），panel 是内容卡，prominent 是输入坞与浮层。
-   * 三者都带顶部 1px 内高光：光源从上方打下来，材料棱上要有反光，否则白卡只是一张贴纸。
-   * well 用于输入面与代码块：左上压暗、右下反光，读作「嵌进去」。
+   * 光学高度阶梯：一套光影，凸起与凹槽分明。
+   * stage 是内嵌圆角主画布舞台，card 是常规内容面板，lift 是侧栏选中签与分段滑块，
+   * prominent 是双层倒角输入坞核心与弹出浮层，dock-focus 保证聚焦态叠加光晕而不丢失立体投影。
    */
-  --elevation-stroke: 0 0 0 0.5px rgba(28, 28, 28, 0.08);
-  --elevation-lift: 0 1px 0 0 rgba(255, 255, 255, 0.92) inset, 0 1px 3px 0 rgba(28, 28, 28, 0.10),
-    0 4px 10px 0 rgba(28, 28, 28, 0.06);
-  --elevation-panel: 0 1px 0 0 rgba(255, 255, 255, 0.94) inset, 0 2px 5px 0 rgba(28, 28, 28, 0.04),
-    0 14px 30px 0 rgba(28, 28, 28, 0.06);
-  --elevation-prominent: 0 1px 0 0 rgba(255, 255, 255, 0.96) inset, 0 4px 10px 0 rgba(28, 28, 28, 0.05),
-    0 24px 52px 0 rgba(28, 28, 28, 0.08);
-  --elevation-well: inset 2px 2px 6px rgba(28, 28, 28, 0.10), inset -2px -2px 6px rgba(255, 255, 255, 0.96);
-  --elevation-well-sm: inset 1.5px 1.5px 4px rgba(28, 28, 28, 0.09),
-    inset -1.5px -1.5px 4px rgba(255, 255, 255, 0.95);
-  /*
-   * 模态面板：全站最高一层。它必须明显高于卡片与浮层，
-   * 否则 896×640 的白面板在浅色遮罩上会读成「另一块页面」。
-   */
-  --elevation-modal: 0 0 0 0.5px rgba(28, 28, 28, 0.10), 0 24px 64px 0 rgba(15, 18, 22, 0.18),
-    0 8px 24px 0 rgba(15, 18, 22, 0.08);
+  --elevation-stage: 0 0 0 1px rgba(15, 23, 42, 0.07), 0 2px 8px 0 rgba(15, 23, 42, 0.035);
+  --elevation-card: 0 1px 0 0 rgba(255, 255, 255, 0.95) inset, 0 1px 2px 0 rgba(15, 23, 42, 0.03);
+  --elevation-stroke: 0 0 0 0.5px rgba(15, 23, 42, 0.08);
+  --elevation-lift: 0 1px 0 0 rgba(255, 255, 255, 0.96) inset, 0 1px 3px 0 rgba(15, 23, 42, 0.07),
+    0 3px 8px 0 rgba(15, 23, 42, 0.04);
+  --elevation-panel: 0 1px 0 0 rgba(255, 255, 255, 0.96) inset, 0 2px 5px 0 rgba(15, 23, 42, 0.04),
+    0 14px 30px 0 rgba(15, 23, 42, 0.06);
+  --elevation-prominent: 0 1px 0 0 rgba(255, 255, 255, 0.98) inset, 0 4px 12px 0 rgba(15, 23, 42, 0.05),
+    0 20px 44px 0 rgba(15, 23, 42, 0.075);
+  --elevation-dock-focus: 0 0 0 1px var(--color-focus), 0 0 0 4px var(--color-focus-soft),
+    0 1px 0 0 rgba(255, 255, 255, 0.98) inset, 0 12px 32px 0 rgba(15, 23, 42, 0.085);
+  --elevation-well: inset 1.5px 1.5px 4px rgba(15, 23, 42, 0.065), inset -1px -1px 3px rgba(255, 255, 255, 0.95);
+  --elevation-well-sm: inset 1px 1px 2.5px rgba(15, 23, 42, 0.055),
+    inset -1px -1px 2px rgba(255, 255, 255, 0.94);
+  --elevation-modal: 0 0 0 1px rgba(15, 23, 42, 0.09), 0 24px 64px 0 rgba(15, 23, 42, 0.16),
+    0 8px 24px 0 rgba(15, 23, 42, 0.07);
+  --elevation-button-primary: 0 1px 0 0 rgba(255, 255, 255, 0.18) inset, 0 1px 2px 0 rgba(15, 23, 42, 0.14);
+  --elevation-button-outline: 0 1px 0 0 var(--color-specular) inset, 0 1px 2px 0 rgba(15, 23, 42, 0.035);
 
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
 
   font-family: var(--font-sans);
   color: var(--color-text-primary);
-  background-color: var(--color-canvas);
+  background-color: var(--color-sidebar);
   font-variant-numeric: tabular-nums;
-  /* 中英混排：交给排版引擎在 CJK 与拉丁之间自动补间距，不靠手写空格。
-   * 不支持的引擎会忽略这一行，届时退回系统默认字距。 */
   text-autospace: normal;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* 代码与等宽片段保留源文本的列对齐：中英之间不再插入自动间距。 */
-code,
-pre,
-.font-mono {
-  text-autospace: no-autospace;
-}
-
-/* 键盘焦点：统一蓝色聚焦环，鼠标点击不显示。
- * 表单控件由自身容器承担聚焦反馈（描边变蓝），因此排除在外，
- * 避免出现「容器细描边加输入框粗蓝框」的双重聚焦。 */
-*:not(input):not(textarea):not(select):focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 1px;
-}
-
 /*
- * 代码高亮色板：高亮引擎把每个记号的取色写成 var(--shiki-*)，颜色集中在这里，
- * 换配色只改这一段，不用碰渲染代码。取值沿用既有色板，只补一个函数名色相，
- * 让「关键字蓝、字符串绿、常量琥珀、注释灰、函数紫」五类能同时区分开。
+ * 代码高亮色板：默认取清亮纸白代码色，冷杉与黑曜石在各自主题块中覆写。
  */
 :root {
   --shiki-foreground: var(--color-text-primary);
   --shiki-background: transparent;
   --shiki-token-comment: var(--color-text-tertiary);
-  --shiki-token-string: #1f7a4d;
-  --shiki-token-string-expression: #1f7a4d;
-  --shiki-token-constant: #8a5a00;
+  --shiki-token-string: #0F766E;
+  --shiki-token-string-expression: #0F766E;
+  --shiki-token-constant: #B45309;
   --shiki-token-keyword: var(--color-text-link);
-  --shiki-token-function: #6f42c1;
+  --shiki-token-function: #6D28D9;
   --shiki-token-parameter: var(--color-text-primary);
   --shiki-token-punctuation: var(--color-text-secondary);
   --shiki-token-link: var(--color-text-link);
@@ -425,6 +478,14 @@ body,
   box-shadow: var(--elevation-lift);
 }
 
+.shadow-card {
+  box-shadow: var(--elevation-card);
+}
+
+.shadow-stage {
+  box-shadow: var(--elevation-stage);
+}
+
 .shadow-menu {
   box-shadow: var(--elevation-prominent);
 }
@@ -433,9 +494,21 @@ body,
   box-shadow: var(--elevation-panel);
 }
 
-/* 输入坞与浮层同级：它是常驻的、面积最大的那块浮起面。 */
+/* 输入坞与浮层同级：它是常驻的、面积最大的那块浮起面；聚焦时保持投影并叠加柔光。 */
 .shadow-dock {
   box-shadow: var(--elevation-prominent);
+}
+
+.shadow-dock:focus-within {
+  box-shadow: var(--elevation-dock-focus);
+}
+
+.shadow-btn-primary {
+  box-shadow: var(--elevation-button-primary);
+}
+
+.shadow-btn-outline {
+  box-shadow: var(--elevation-button-outline);
 }
 
 /* 凹槽：只给输入面与代码块，不用于任何承载正文阅读的卡片。 */
@@ -618,37 +691,224 @@ body,
 }
 
 /*
- * 流式光标：贴在正文最后一段的末尾，而不是另起一行。
- *
- * 光标必须落在最后一个块级子元素的内部（::after），兄弟节点会被 Markdown 的块流
- * 挤到下一行，看起来像正文断了一行。只做透明度呼吸，不占布局宽度以外的东西。
+ * 流式光标：贴在正文最后一段末尾的圆润主题色脉冲胶囊。
  */
 .streaming-caret > :last-child::after {
   content: '';
   display: inline-block;
-  width: 2px;
-  height: 14px;
-  margin-left: 2px;
-  vertical-align: -2px;
+  width: 3px;
+  height: 15px;
+  margin-left: 3px;
+  vertical-align: -2.5px;
   border-radius: 9999px;
-  background: var(--color-text-tertiary);
-  animation: caret-breathe 1.2s ease-in-out infinite;
+  background: var(--color-text-link);
+  animation: caret-breathe 1.05s ease-in-out infinite;
 }
 
 @keyframes caret-breathe {
   0%,
   100% {
-    opacity: 0.2;
+    opacity: 0.22;
+    transform: scaleY(0.84);
   }
 
   50% {
     opacity: 1;
+    transform: scaleY(1);
   }
 }
 
 /*
+ * 流式新增块级单元柔光浮现：只作用于实时生成中的新段落/代码块，历史回放不触发。
+ */
+@keyframes stream-block-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.stream-block-in {
+  animation: stream-block-in 170ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/*
+ * 思考与慢速工具运行中的文字光泽掠影（合成器友好：只平移伪元素 transform）。
+ */
+.shimmer-text-active {
+  position: relative;
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: bottom;
+}
+
+.shimmer-text-active::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 20%,
+    var(--color-shimmer-beam) 50%,
+    transparent 80%
+  );
+  transform: translateX(-120%);
+  animation: text-shimmer-sweep 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  pointer-events: none;
+}
+
+@keyframes text-shimmer-sweep {
+  to {
+    transform: translateX(220%);
+  }
+}
+
+/*
+ * 折叠面板与上沿浮层微阻尼浮现（仅操作 opacity 与 transform）。
+ */
+@keyframes disclosure-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.disclosure-enter {
+  animation: disclosure-enter 150ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes popover-up-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px) scale(0.992);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.popover-up-in {
+  animation: popover-up-in 150ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/*
+ * 输入坞外托槽运行态慢呼吸微光。
+ */
+@keyframes dock-ambient-breathe {
+  0%,
+  100% {
+    opacity: 0.22;
+  }
+
+  50% {
+    opacity: 0.85;
+  }
+}
+
+.dock-ambient-glow {
+  animation: dock-ambient-breathe 2.6s ease-in-out infinite;
+}
+
+/*
+ * 顶栏运行状态点与活体后台作业胶囊的外扩脉冲涟漪。
+ */
+@keyframes live-beacon-pulse {
+  0% {
+    opacity: 0.5;
+    transform: scale(0.95);
+  }
+
+  75%,
+  100% {
+    opacity: 0;
+    transform: scale(1.85);
+  }
+}
+
+.live-beacon-ring {
+  animation: live-beacon-pulse 2.2s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+/*
+ * 长作业无输出等待期的双波段静默脉搏条。
+ */
+@keyframes waiting-heartbeat {
+  0% {
+    transform: translateX(-100%);
+    opacity: 0.35;
+  }
+
+  50% {
+    opacity: 0.9;
+  }
+
+  100% {
+    transform: translateX(280%);
+    opacity: 0.35;
+  }
+}
+
+.waiting-heartbeat-bar {
+  animation: waiting-heartbeat 2.1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/*
+ * 复制对勾、新结果绿点与确认停止胶囊的微弹性确认反馈。
+ */
+@keyframes confirm-pop {
+  0% {
+    opacity: 0.4;
+    transform: scale(0.72);
+  }
+
+  65% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.confirm-pop {
+  animation: confirm-pop 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/*
+ * 会话自动生成新标题时的交叉上浮叠化。
+ */
+@keyframes title-morph-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.title-morph-in {
+  animation: title-morph-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/*
  * 工作状态行的扫光：一条中性亮带从左向右缓慢掠过，只动 transform 与 opacity。
- * 它说明「还在跑」，因此必须克制：宽度三分之一、亮度 4%，不参与任何布局。
  */
 .working-sweep {
   animation: working-sweep 2.4s linear infinite;
@@ -664,14 +924,18 @@ body,
   }
 }
 
-/* 减弱动效：光标停在常亮，扫光不出现。 */
+/* 减弱动效：全部装饰循环与位移归于静止。 */
 @media (prefers-reduced-motion: reduce) {
   .streaming-caret > :last-child::after {
     animation: none;
-    opacity: 0.8;
+    opacity: 0.85;
   }
 
-  .working-sweep {
+  .working-sweep,
+  .shimmer-text-active::after,
+  .dock-ambient-glow,
+  .live-beacon-ring,
+  .waiting-heartbeat-bar {
     display: none;
   }
 }

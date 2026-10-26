@@ -88,7 +88,7 @@
 | MCP 与 Skill | `mcp_list`、`mcp_upsert`、`mcp_upsert_raw`、`mcp_remove`、`mcp_runtime_status`、`mcp_runtime_refresh`、`skills_list` |
 | 文档与输入历史 | `document_catalog`、`document_read`、`document_write`、`open_document`、`open_external_url`、`input_history_list`、`input_history_append` |
 | 凭据 | `secret_status_of`、`secret_set`、`secret_clear` |
-| 系统与偏好 | `system_info`、`check_update`、`gateway_health`、`gateway_start_service`、`desktop_preferences`、`desktop_set_notifications`、`pick_directory`、`attachment_stage` |
+| 系统与偏好 | `system_info`、`check_update`、`gateway_health`、`gateway_start_service`、`desktop_preferences`、`desktop_set_notifications`、`desktop_set_theme`、`pick_directory`、`attachment_stage` |
 
 - 读类命令可直接用于排障（`system_info`、`gateway_health`、`conversation_history`、`cron_history`）。
 - 写类命令（`config_write`、`config_apply_values`、`secret_set`、`mcp_upsert`、`cron_*`、`lane_*`、`conversation_submit`、`conversation_interrupt` 等）都是状态变更，先取得用户明确授权。

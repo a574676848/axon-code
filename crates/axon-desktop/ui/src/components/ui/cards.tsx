@@ -100,7 +100,7 @@ export const EntityCard: React.FC<EntityCardProps> = ({
   onInspect,
   inspectLabel = '查看配置',
 }) => (
-  <div className="flex flex-col rounded-md hairline border-border-hairline bg-surface overflow-hidden transition-colors duration-150">
+  <div className="flex flex-col rounded-md hairline border-border shadow-card bg-surface overflow-hidden transition-colors duration-150 hover:border-border-strong">
     <button
       type="button"
       onClick={onOpen}

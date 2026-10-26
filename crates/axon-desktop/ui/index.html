@@ -8,9 +8,11 @@
          磁盘是事实源，这里只读 localStorage 镜像，启动后由前端再校正一次。 -->
     <script>
       try {
-        if (window.localStorage.getItem('axon.theme') === 'forest') {
-          document.documentElement.setAttribute('data-theme', 'forest');
+        var cached = window.localStorage.getItem('axon.theme');
+        if (cached === 'forest' || cached === 'obsidian') {
+          document.documentElement.setAttribute('data-theme', cached);
         }
+        document.documentElement.style.colorScheme = cached === 'obsidian' ? 'dark' : 'light';
       } catch (error) {
         /* localStorage 不可用时保持默认主题，不影响界面可用性 */
       }
@@ -18,7 +20,7 @@
   </head>
   <!-- 正文默认可选：标签、说明、弹窗里的文字都要能拖选、双击选词与复制。
        需要屏蔽选区的只剩控件本身（按钮、菜单项、拖拽行），它们各自声明 select-none。 -->
-  <body class="bg-canvas text-primary antialiased overflow-hidden m-0 p-0 font-sans">
+  <body class="bg-sidebar text-primary antialiased overflow-hidden m-0 p-0 font-sans">
     <!-- overflow-clip 而不是 overflow-hidden：外壳层不该成为可滚动容器，
          否则焦点进入内部控件时会被浏览器悄悄滚走，整块界面被推到侧栏底下。 -->
     <div id="root" class="h-full w-full flex flex-col overflow-clip"></div>

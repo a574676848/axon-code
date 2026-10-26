@@ -150,7 +150,7 @@ export const ComposerCandidateMenu: React.FC<ComposerCandidateMenuProps> = ({
         bottom: geometry.bottom,
         maxHeight: geometry.maxHeight,
       }}
-      className={`fixed ${Z_MENU} ${MENU_PANEL_ATTACHED_CLASS}`}
+      className={`fixed ${Z_MENU} ${MENU_PANEL_ATTACHED_CLASS} popover-up-in`}
     >
       {/*
         长列表要看得见「下面还有内容」，因此这里把滑块显出来；

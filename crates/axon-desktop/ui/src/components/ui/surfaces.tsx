@@ -96,10 +96,10 @@ export interface PanelProps {
   children: React.ReactNode;
 }
 
-/** 描边容器：白底、发丝描边、模块圆角，是全站唯一的区块外观。 */
+/** 描边容器：白底、发丝描边、光学高光棱与模块圆角，是全站唯一的区块外观。 */
 export const Panel: React.FC<PanelProps> = ({ className = '', clip = false, children }) => (
   <div
-    className={`bg-surface hairline border-border-hairline rounded-md ${
+    className={`bg-surface hairline border-border shadow-card rounded-md ${
       clip ? 'overflow-hidden' : ''
     } ${className}`}
   >
@@ -363,7 +363,7 @@ export const Chip: React.FC<{ className?: string; children: React.ReactNode }> =
   children,
 }) => (
   <span
-    className={`shrink-0 inline-flex items-center px-1.5 py-px rounded-xs hairline border-border-hairline ${className}`}
+    className={`shrink-0 inline-flex items-center px-1.5 py-px rounded-xs bg-surface-sunken/60 hairline border-border-hairline ${className}`}
   >
     <Text tone="tertiary" size="xs">
       {children}

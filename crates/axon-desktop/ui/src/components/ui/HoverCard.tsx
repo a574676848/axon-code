@@ -98,7 +98,7 @@ export const HoverCard: React.FC<HoverCardProps> = ({
             }}
             className={`fixed z-[100] box-border rounded-md shadow-panel pointer-events-none overflow-y-auto ${
               tone === 'inverse'
-                ? 'px-4 py-3 bg-inverse'
+                ? 'px-4 py-3 bg-inverse hairline border-border-strong'
                 : 'px-3.5 py-3 bg-surface hairline border-border-muted'
             }`}
           >

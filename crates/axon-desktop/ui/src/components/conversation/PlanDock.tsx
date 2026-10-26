@@ -21,7 +21,7 @@ export const PlanDock: React.FC<{ plan: PlanProjection | null }> = ({ plan }) =>
     <section
       aria-label="计划"
       data-testid="plan-dock"
-      className="shrink-0 flex justify-center px-4 pt-2"
+      className="popover-up-in shrink-0 flex justify-center px-4 pt-2"
     >
       <div className="w-full max-w-chat">
         <PlanCard title={plan.title} steps={plan.steps} defaultOpen={false} />

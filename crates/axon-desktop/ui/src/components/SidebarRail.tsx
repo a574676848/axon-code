@@ -27,7 +27,7 @@ const RailButton: React.FC<{
     onClick={onClick}
     className={`relative w-9 h-9 flex items-center justify-center rounded-md transition-colors duration-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus ${
       active
-        ? 'bg-active text-text-primary'
+        ? 'bg-surface shadow-lift hairline border-border text-text-primary'
         : 'text-text-secondary hover:bg-hover hover:text-text-primary'
     }`}
   >
@@ -65,8 +65,16 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
   onSelectMemory,
   onOpenSettings,
 }) => (
-  <SidebarColumn label="折叠侧边栏" variant="rail" className="justify-between">
-    <div className="flex flex-col items-center gap-2">
+  <SidebarColumn
+    label="折叠侧边栏"
+    variant="rail"
+    className="justify-between"
+  >
+    <div
+      data-tauri-drag-region
+      style={{ paddingTop: 'var(--macos-traffic-inset, 0px)' }}
+      className="flex flex-col items-center gap-2"
+    >
       <RailButton label="展开侧边栏" onClick={onToggleSidebar}>
         <IconPanelLeft size={14} />
       </RailButton>

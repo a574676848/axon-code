@@ -227,9 +227,12 @@ export const RailTabStrip: React.FC<RailTabStripProps> = ({
   return (
     <div
       data-tauri-drag-region
-      className="shrink-0 h-9 pt-2 flex items-stretch gap-1 bg-surface-sunken hairline-b border-border-hairline"
+      style={
+        last ? { paddingRight: 'calc(4px + var(--window-controls-inset, 0px))' } : undefined
+      }
+      className="shrink-0 h-10 flex items-center gap-1 bg-surface-sunken hairline-b border-border-hairline select-none"
     >
-      <div className="flex-1 min-w-0 flex items-stretch gap-1 overflow-x-auto no-scrollbar pl-3">
+      <div className="flex-1 min-w-0 flex items-center gap-1 overflow-x-auto no-scrollbar pl-3">
         {pane.tabs.map((tab, index) => {
           const active = tab.id === pane.activeId;
           /*
@@ -248,7 +251,7 @@ export const RailTabStrip: React.FC<RailTabStripProps> = ({
                 /* 面板的焦点续接按这个标记找还活着的 tab 胶囊。 */
                 data-rail-tab={tab.id}
                 className={`tab-chip group relative shrink-0 h-7 min-w-[100px] max-w-[170px] flex items-center rounded-sm transition-colors duration-100 ${
-                  active ? 'bg-active' : 'hover:bg-hover'
+                  active ? 'bg-surface shadow-lift hairline border-border' : 'hover:bg-hover'
                 }`}
               >
                 <button
@@ -258,7 +261,7 @@ export const RailTabStrip: React.FC<RailTabStripProps> = ({
                   aria-pressed={active}
                   className={`h-full w-full pl-2.5 inline-flex items-center gap-1.5 text-row transition-colors duration-100 ${
                     closable ? 'pr-7' : 'pr-2.5'
-                  } ${active ? 'text-text-primary' : 'text-text-secondary'}`}
+                  } ${active ? 'text-text-primary font-medium' : 'text-text-secondary'}`}
                 >
                   <TabGlyph tab={tab} />
                   <ClippedTabTitle text={tab.title} />
