@@ -66,14 +66,16 @@ jobs:
         shell: bash
         run: bash tools/check-no-lint-allows.sh
 
+      # 依赖解析锁在 Cargo.lock：CI 不做实时重新解析，避免上游新版本发布
+      # 在无代码改动时把已绿的 master 变成红。升级依赖走 dependabot/显式 PR。
       - name: 编译检查
-        run: cargo check --workspace --all-features
+        run: cargo check --locked --workspace --all-features
 
       - name: Clippy 静态分析
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
       - name: 单元测试
-        run: cargo test --workspace --all-features
+        run: cargo test --locked --workspace --all-features
 
       - name: CLI release smoke
         shell: pwsh

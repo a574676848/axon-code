@@ -8,6 +8,7 @@ use super::*;
 use super::{
     WSL_BASH_PROGRAM, WSL_CANONICAL_LEGACY_PREFIX, WSL_CANONICAL_LOCALHOST_PREFIX, WSL_CWD_ARG,
     WSL_DISTRIBUTION_ARG, WSL_EXEC_ARG, WSL_LEGACY_PREFIX, WSL_LOCALHOST_PREFIX, WSL_PROGRAM,
+    valid_wsl_distribution,
 };
 use axon_domain::AxonResult;
 
@@ -49,13 +50,6 @@ pub(super) fn strip_ascii_case_prefix<'a>(value: &'a str, prefix: &str) -> Optio
         .get(..prefix.len())
         .filter(|candidate| candidate.eq_ignore_ascii_case(prefix))
         .and_then(|_| value.get(prefix.len()..))
-}
-
-pub(super) fn valid_wsl_distribution(distribution: &str) -> bool {
-    !distribution.is_empty()
-        && distribution.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
-        })
 }
 
 /// 组装 WSL 侧 argv：Linux 端固定是 `/bin/bash -lc <script>`。

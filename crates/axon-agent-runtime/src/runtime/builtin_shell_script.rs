@@ -344,6 +344,18 @@ fn is_canonical_posix_script_command(command: &[String]) -> bool {
             .is_some_and(|script| !script.trim().is_empty())
 }
 
+/// 校验 WSL 发行版名：非空且只含 ASCII 字母数字与 `-`、`_`、`.`。
+///
+/// 纯字符串判定，不依赖任何 Windows API；`is_canonical_wsl_script_command` 是跨平台
+/// 形态校验入口，因此校验器必须与它同处跨平台模块，不能留在只在 Windows 编译的
+/// `wsl_launch` 里——否则非 Windows 目标会因符号缺失报 E0425。
+fn valid_wsl_distribution(distribution: &str) -> bool {
+    !distribution.is_empty()
+        && distribution.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
+}
+
 pub(crate) fn is_canonical_wsl_script_command(command: &[String]) -> bool {
     command.len() == 9
         && command

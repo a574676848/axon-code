@@ -135,7 +135,9 @@ ed25519-dalek = "3"
 futures-util = "0.3"
 getrandom = "0.4.3"
 hex = "0.4.3"
-interprocess = { version = "2.4.4", features = ["tokio"] }
+# 只用同步 local_socket API；tokio 特性引入的 async 适配层与 tokio 1.53 的
+# AsyncFd API 变更不兼容（上游 interprocess 尚未跟进），且本项目无 async 用法。
+interprocess = "2.4.4"
 hmac = "0.13"
 httpdate = "1"
 ignore = "0.4"
