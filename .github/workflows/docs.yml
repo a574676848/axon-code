@@ -19,10 +19,12 @@ concurrency:
 jobs:
   verify:
     name: Docs & Architecture
-    runs-on: windows-latest
+    # 固定具体镜像：latest 会随 GitHub 迁移节奏漂移，而文档门禁依赖
+    # PowerShell 与仓库内脚本，运行环境不宜变化。
+    runs-on: windows-2022
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v5
         with:

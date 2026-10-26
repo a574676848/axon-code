@@ -9,6 +9,13 @@
 #
 # 注意：不要改用 workflow 级 paths-ignore。那样文档 PR 的必需检查永远不会上报，
 # 分支保护会把合并永久卡在 Waiting for status to be reported。
+# runner 与 action 版本（对应 2026-10 的 runner 镜像与 Node 运行时告警）：
+#   1. 矩阵里的 os 只作为**必需的检查名**（`Check (ubuntu-latest)` 等），实际镜像由
+#      runner 字段固定到具体版本：ubuntu-latest 将于 2026-10-19 迁到 Ubuntu 26，
+#      latest 自动漂移会同时改变运行时行为与分支保护的比对上下文。
+#   2. GitHub 已弃用 Node 20，checkout / setup-node 全部升到 v5（Node 24）。
+#   3. macOS arm64 机型存在平台侧容量排队，属 GitHub 侧限制，仓库无法消除，
+#      这里只固定具体机型以免 latest 迁移带来的额外变量。
 name: CI
 
 on:
@@ -36,12 +43,12 @@ jobs:
   changes:
     name: Detect Changes
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       code: ${{ steps.diff.outputs.code }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -87,11 +94,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          # os 是分支保护比对的必需检查名，必须保持不变；runner 才是真实镜像。
+          - os: ubuntu-latest
+            runner: ubuntu-24.04
+          - os: windows-latest
+            runner: windows-2022
+          - os: macos-latest
+            runner: macos-14
+    runs-on: ${{ matrix.runner }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # 纯文档改动不进入构建矩阵。这里刻意不用 job 级 if 跳过整个作业：
       # 被跳过的必需检查不会上报 success，分支保护会卡住合并。
@@ -118,7 +132,7 @@ jobs:
 
       - name: 准备 Node 环境
         if: needs.changes.outputs.code == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
 
