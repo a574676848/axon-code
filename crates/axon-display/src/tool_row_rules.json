@@ -6,7 +6,8 @@
         "glob",
         "search",
         "notes_write_file",
-        "notes_append_to_file"
+        "notes_append_to_file",
+        "send_message"
     ],
     "targets": {
         "memory_search": { "fields": ["query"] },

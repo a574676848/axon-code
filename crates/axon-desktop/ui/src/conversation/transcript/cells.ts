@@ -307,6 +307,17 @@ export function applyFileChange(turn: TurnState, change: WireFileChange): TurnSt
 }
 
 /** 计划更新：单元与指标条上的进度同源。 */
+export const PLAN_LABEL = '计划';
+
+/**
+ * 计划卡副标题：后端默认下发「计划」或空串时不重复渲染，
+ * 避免与固定标签拼成「计划 · 计划」；仅在给出独立标题时展示。
+ */
+export function planHeading(title: string): string | undefined {
+  const trimmed = title.trim();
+  return trimmed.length === 0 || trimmed === PLAN_LABEL ? undefined : trimmed;
+}
+
 export function applyPlan(
   state: ConversationState,
   position: number,

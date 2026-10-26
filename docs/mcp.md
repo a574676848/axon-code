@@ -206,6 +206,6 @@ axon doctor --check mcp --verbose
 ## 相关文档
 
 - [配置指南](./configuration.md#mcp-服务器配置)
-- [开源贡献指南](./CONTRIBUTING.md)
+- [开源贡献指南](../CONTRIBUTING.md)
 - [CLI 参考](./cli.md#扩展与工具)
 - [模型接入与配置](./providers.md)

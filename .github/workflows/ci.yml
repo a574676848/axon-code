@@ -1,10 +1,27 @@
 # Axon 编译检查流水线
-# 触发条件：push 以 v 开头的 tag（如 v0.2.0）+ 人工触发
+# 触发条件：push 到 master、PR、push 以 v 开头的 tag（如 v0.2.0）、人工触发
+#
+# 频率治理（避免"每次提交都跑半小时"）：
+#   1. concurrency 取消同一 ref 上已被新提交取代的运行，连推多次只跑最后一次。
+#   2. changes 任务先做路径判定：改动全部落在 docs/ 与根级 Markdown 时，
+#      Check 矩阵立即收工，但三个必需检查名照常上报 success，不阻塞合并。
+#   3. Draft PR 不跑矩阵，转为 ready_for_review 时才跑。
+#
+# 注意：不要改用 workflow 级 paths-ignore。那样文档 PR 的必需检查永远不会上报，
+# 分支保护会把合并永久卡在 Waiting for status to be reported。
+# runner 与 action 版本（对应 2026-10 的 runner 镜像与 Node 运行时告警）：
+#   1. 矩阵里的 os 只作为**必需的检查名**（`Check (ubuntu-latest)` 等），实际镜像由
+#      runner 字段固定到具体版本：ubuntu-latest 将于 2026-10-19 迁到 Ubuntu 26，
+#      latest 自动漂移会同时改变运行时行为与分支保护的比对上下文。
+#   2. GitHub 已弃用 Node 20，checkout / setup-node 全部升到 v5（Node 24）。
+#   3. macOS arm64 机型存在平台侧容量排队，属 GitHub 侧限制，仓库无法消除，
+#      这里只固定具体机型以免 latest 迁移带来的额外变量。
 name: CI
 
 on:
   workflow_dispatch:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches:
       - master
@@ -14,77 +31,156 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "1"
 
 jobs:
+  changes:
+    name: Detect Changes
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: 判定是否触及代码或构建配置
+        id: diff
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+
+          # 分支新建、tag 首次推送与人工触发时没有可比较的基线，按有代码改动处理
+          if [ -z "${BASE_SHA}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
+            echo "no base commit, running full matrix"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "base commit not fetched, running full matrix"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed=$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")
+          printf '%s\n' "$changed"
+
+          # 只有 docs/ 与根级社区文档算纯文档改动；其余任何路径都跑完整矩阵
+          code_paths=$(printf '%s\n' "$changed" |
+            grep -vE '^(docs/|(README|AGENTS|CHANGELOG|CONTRIBUTING|SECURITY|CODE_OF_CONDUCT)\.md$)' || true)
+
+          if [ -n "${code_paths}" ]; then
+            echo "code change detected"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "documentation-only change, skipping matrix"
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   check:
     name: Check (${{ matrix.os }})
+    needs: changes
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          # os 是分支保护比对的必需检查名，必须保持不变；runner 才是真实镜像。
+          - os: ubuntu-latest
+            runner: ubuntu-24.04
+          - os: windows-latest
+            runner: windows-2022
+          - os: macos-latest
+            runner: macos-14
+    runs-on: ${{ matrix.runner }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
+      # 纯文档改动不进入构建矩阵。这里刻意不用 job 级 if 跳过整个作业：
+      # 被跳过的必需检查不会上报 success，分支保护会卡住合并。
+      - name: 文档改动跳过构建矩阵
+        if: needs.changes.outputs.code != 'true'
+        run: echo "documentation-only change, build matrix skipped"
 
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.code == 'true'
         with:
           components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.code == 'true'
         with:
           shared-key: cargo-${{ matrix.os }}
           cache-targets: true
 
       - name: 安装 Linux 系统依赖 (Tauri 2)
-        if: runner.os == 'Linux'
+        if: needs.changes.outputs.code == 'true' && runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: 准备 Node 环境
-        uses: actions/setup-node@v4
+        if: needs.changes.outputs.code == 'true'
+        uses: actions/setup-node@v5
         with:
           node-version: 22
 
       - name: 前端构建 (axon-desktop UI)
+        if: needs.changes.outputs.code == 'true'
         run: |
           npm --prefix crates/axon-desktop/ui ci
           npm --prefix crates/axon-desktop/ui run build
 
       - name: 校验 UI 契约门禁
+        if: needs.changes.outputs.code == 'true'
         shell: pwsh
         run: pwsh -NoLogo -NoProfile -File tools/verify-ui-contract.ps1
 
       - name: 格式检查
+        if: needs.changes.outputs.code == 'true'
         run: cargo fmt --all --check
 
       - name: 编译期 lint 豁免检查
+        if: needs.changes.outputs.code == 'true'
         shell: bash
         run: bash tools/check-no-lint-allows.sh
 
       # 依赖解析锁在 Cargo.lock：CI 不做实时重新解析，避免上游新版本发布
       # 在无代码改动时把已绿的 master 变成红。升级依赖走 dependabot/显式 PR。
       - name: 编译检查
+        if: needs.changes.outputs.code == 'true'
         run: cargo check --locked --workspace --all-features
 
       - name: Clippy 静态分析
+        if: needs.changes.outputs.code == 'true'
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
       - name: 单元测试
+        if: needs.changes.outputs.code == 'true'
         run: cargo test --locked --workspace --all-features
 
       - name: CLI release smoke
+        if: needs.changes.outputs.code == 'true'
         shell: pwsh
         run: pwsh -NoLogo -NoProfile -File tools/verify-cli-release-smoke.ps1
 
       - name: Daemon 与 doctor smoke
+        if: needs.changes.outputs.code == 'true'
         shell: pwsh
         run: cargo run -p axon-cli --all-features -- doctor --check runtime --format json
 
       - name: TUI three-region smoke
+        if: needs.changes.outputs.code == 'true'
         shell: pwsh
         run: pwsh -NoLogo -NoProfile -File tools/verify-tui-smoke.ps1

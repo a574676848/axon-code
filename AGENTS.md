@@ -60,7 +60,7 @@
 **每次改完代码，必须逐项判定 `docs/` 与 `docs/skills/` 是否需要同步更新**；判定为「不需要」时也要在交付说明中给出依据，不得默认跳过。
 
 * **用户面文档**：根 `README.md`、`docs/README.md` 与 `docs/*.md`（CLI 命令、配置键、工具参数契约、守护进程与升级、故障排查等）。
-* **开发者规范**：`docs/CONTRIBUTING.md`、`docs/ui-constraints.md` 与 `docs/workbench-design-system.md`（架构、UI 约束、设计系统与贡献指南）。
+* **开发者规范**：`CONTRIBUTING.md`、`docs/ui-constraints.md` 与 `docs/workbench-design-system.md`（架构、UI 约束、设计系统与贡献指南）。
 * **索引同步**：新增、重命名或删除文档时，必须同步 `docs/README.md` 的索引条目；坏链会被门禁直接拦下。
 * **官方 Skill SSOT**：`docs/skills/operate-axon/`（`SKILL.md`、`references/*.md`、`agents/openai.yaml`）是随发行包内置的运行时操作手册。凡改动 CLI 命令面与参数、内置工具名与语义、配置键、Skill / Memory / MCP / Daemon / 安装升级行为，**必须同步该 Skill**，并始终以当前 `--help` 与工具回执为事实来源，不写未显示的行为。
 * **安装态副本**：安装脚本把 `docs/skills/` 投放到 `$HOME/.axon/skills/`。只改仓库副本运行时读不到：同步后必须重跑安装脚本（或显式同步安装目录），并核对两份内容一致。

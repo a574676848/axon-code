@@ -74,3 +74,5 @@ export {
   previewCommand,
   workingStatusPrimary,
 } from './derive';
+
+export { PLAN_LABEL, planHeading } from './cells';

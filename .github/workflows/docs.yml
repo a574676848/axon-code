@@ -1,0 +1,39 @@
+# Axon 文档与架构门禁流水线
+# 与 CI 解耦：只校验文档链接、术语与架构分层，不编译 Rust，因此固定跑在 windows-latest
+name: Docs
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Docs & Architecture
+    # 固定具体镜像：latest 会随 GitHub 迁移节奏漂移，而文档门禁依赖
+    # PowerShell 与仓库内脚本，运行环境不宜变化。
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 文档链接与术语门禁
+        shell: pwsh
+        run: ./tools/verify-docs.ps1
+
+      - name: 架构与文档一致性门禁
+        shell: pwsh
+        run: ./tools/verify-architecture.ps1

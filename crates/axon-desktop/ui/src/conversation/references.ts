@@ -131,10 +131,13 @@ export function referenceLabel(relativePath: string): string {
  * 引用部分与 TUI 的 `append_tui_mentions` 逐字一致（`[结构化输入]` 段 + 每条
  * `已引用文件：<相对路径>`）；正文里已经看不到的引用不提交，重复引用只提交一次。
  *
- * 只有附件、没有正文时，气泡上没有可读正文，而接口要求每条事件都带正文：这一段
- * 改由 `已附加文件：<绝对路径>` 行承担，模型因此拿到附件的真实位置，不再因为正文
- * 为空被入口策略拒收。它同样属于结构化输入，回放时由 [`visibleUserText`] 剥掉，
- * 用户看到的气泡仍然只有附件卡。
+ * 附件行（`已附加文件：<绝对路径>`）**只要有附件就写**，不区分正文是否为空：
+ * 附件在链路中途被丢弃时（运行中追加、历史回放）模型至少还能拿到真实路径，
+ * 而不是只看到一句「看下这张图」。只有附件、没有正文时这段块同时承担正文，
+ * 否则接口会以「正文为空」拒收。
+ *
+ * 它属于结构化输入，回放时由 [`visibleUserText`] 剥掉，用户看到的气泡仍然只有
+ * 自己敲的那一段与附件卡。
  */
 export function structuredInputBlock(
   text: string,
@@ -144,15 +147,22 @@ export function structuredInputBlock(
   const visible = references.filter(
     (path, index) => references.indexOf(path) === index && text.includes(referenceLabel(path)),
   );
-  if (visible.length > 0) {
-    const lines = visible.map((path) => `${REFERENCE_LINE_PREFIX}${path}`);
-    return `\n\n${STRUCTURED_INPUT_TITLE}\n${lines.join('\n')}`;
-  }
-  if (text.trim().length > 0 || attachments.length === 0) return '';
-  // 整条正文就是这一段块，因此标题落在第 0 位：提交链路会裁掉前置空白，
-  // 这里不写前导空行，回放时才剥得干净。
-  const lines = attachments.map((path) => `${ATTACHMENT_LINE_PREFIX}${path}`);
-  return `${STRUCTURED_INPUT_TITLE}\n${lines.join('\n')}`;
+  const uniqueAttachments = attachments.filter(
+    (path, index) => attachments.indexOf(path) === index,
+  );
+  const lines = [
+    ...visible.map((path) => `${REFERENCE_LINE_PREFIX}${path}`),
+    ...uniqueAttachments.map((path) => `${ATTACHMENT_LINE_PREFIX}${path}`),
+  ];
+  if (lines.length === 0) return '';
+  // 正文非空时这段块只是补充事实，因此带前导空行接在正文之后；
+  // 正文为空时它承担整条正文：提交链路会裁掉前置空白，标题必须落在第 0 位，
+  // 回放时才剥得干净。
+  const head =
+    text.trim().length > 0
+      ? `\n\n${STRUCTURED_INPUT_TITLE}\n`
+      : `${STRUCTURED_INPUT_TITLE}\n`;
+  return `${head}${lines.join('\n')}`;
 }
 
 /**

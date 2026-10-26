@@ -91,14 +91,24 @@ test('回放时只展示用户敲的那一段，不展示结构化输入块', ()
     assert.equal(visibleUserText('普通消息'), '普通消息');
 });
 
-test('只有附件、没有正文时，附件路径成为这条消息的正文', () => {
+test('有附件时正文非空也要带上附件路径，回放仍然只显示正文', () => {
     const paths = ['C:\\tmp\\shot.png', 'C:\\tmp\\notes.txt'];
     assert.equal(
         structuredInputBlock('', [], paths),
         '[结构化输入]\n已附加文件：C:\\tmp\\shot.png\n已附加文件：C:\\tmp\\notes.txt',
     );
-    // 有正文时不再追加：消息本身已经说明了意图。
-    assert.equal(structuredInputBlock('看下这张图', [], paths), '');
+    // 正文非空：块跟在正文之后，模型据此仍能定位附件真实路径。
+    const withText = structuredInputBlock('看下这张图', [], paths);
+    assert.equal(
+        withText,
+        '\n\n[结构化输入]\n已附加文件：C:\\tmp\\shot.png\n已附加文件：C:\\tmp\\notes.txt',
+    );
+    assert.equal(visibleUserText(`看下这张图${withText}`), '看下这张图');
+    // 同一路径只写一次。
+    assert.equal(
+        structuredInputBlock('', [], ['/tmp/a.png', '/tmp/a.png']),
+        '[结构化输入]\n已附加文件：/tmp/a.png',
+    );
     // 没有附件也没有引用：这条消息确实没有可提交的内容。
     assert.equal(structuredInputBlock('', [], []), '');
 });

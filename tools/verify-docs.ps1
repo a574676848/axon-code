@@ -97,6 +97,10 @@ function Test-WorkspacePathExcluded([string]$Root, [string]$Path) {
 function Get-QualityFiles([string]$Root, [string[]]$Extensions) {
     $rootFiles = @(
         (Join-Path $Root "README.md"),
+        (Join-Path $Root "CONTRIBUTING.md"),
+        (Join-Path $Root "SECURITY.md"),
+        (Join-Path $Root "CODE_OF_CONDUCT.md"),
+        (Join-Path $Root "CHANGELOG.md"),
         (Join-Path $Root "Cargo.toml"),
         (Join-Path $Root "Cargo.lock"),
         (Join-Path $Root "rust-toolchain.toml")
@@ -127,6 +131,10 @@ if ($bomHits.Count -gt 0) {
 
 $documentRoots = @(
     (Join-Path $WorkspaceRoot "README.md"),
+    (Join-Path $WorkspaceRoot "CONTRIBUTING.md"),
+    (Join-Path $WorkspaceRoot "SECURITY.md"),
+    (Join-Path $WorkspaceRoot "CODE_OF_CONDUCT.md"),
+    (Join-Path $WorkspaceRoot "CHANGELOG.md"),
     (Join-Path $WorkspaceRoot "docs")
 )
 

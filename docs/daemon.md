@@ -156,4 +156,4 @@ launcher 和服务管理模块提供版本原子切换、心跳保活与进程�
 ## 相关文档
 - [系统概览](./overview.md)
 - [核心概念](./concepts.md)
-- [开源贡献与分层架构](./CONTRIBUTING.md)
+- [开源贡献与分层架构](../CONTRIBUTING.md)

@@ -147,4 +147,4 @@ Daemon 是 Axon 的常驻后台运行核心：
 - [快速开始](./quickstart.md) - 安装与初次使用
 - [桌面工作台](./desktop.md) - Axon Desktop 交互体验
 - [Daemon 守护进程](./daemon.md) - 守护服务配置与运维
-- [开源贡献指南](./CONTRIBUTING.md) - 系统分层依赖与代码实现
+- [开源贡献指南](../CONTRIBUTING.md) - 系统分层依赖与代码实现

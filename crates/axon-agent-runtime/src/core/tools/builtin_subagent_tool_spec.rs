@@ -7,6 +7,7 @@ use axon_domain::{
 use serde_json::json;
 
 use crate::agent_tools::AGENT_TOOL_NAMESPACE;
+use crate::{TOOL_INTENT_FIELD, TOOL_INTENT_FIELD_DESCRIPTION};
 
 /// `spawn_agent` 工具 ID。
 pub const SPAWN_AGENT_TOOL_ID: ToolId = ToolId(40);
@@ -201,7 +202,12 @@ fn message_tool_definition(id: ToolId, name: &str, description: &str) -> ToolDef
         name,
         description,
         ToolConcurrencyPolicy::Exclusive,
-        vec![SUBAGENT_TOOL_TARGET_FIELD, SUBAGENT_TOOL_MESSAGE_FIELD],
+        // intent 与其余内置工具同契约：折叠态只显示这一句话，原始消息留在展开态。
+        vec![
+            SUBAGENT_TOOL_TARGET_FIELD,
+            SUBAGENT_TOOL_MESSAGE_FIELD,
+            TOOL_INTENT_FIELD,
+        ],
         vec![
             string_field(
                 SUBAGENT_TOOL_TARGET_FIELD,
@@ -211,6 +217,7 @@ fn message_tool_definition(id: ToolId, name: &str, description: &str) -> ToolDef
                 SUBAGENT_TOOL_MESSAGE_FIELD,
                 "要追加到目标邮箱的消息或任务。",
             ),
+            string_field(TOOL_INTENT_FIELD, TOOL_INTENT_FIELD_DESCRIPTION),
         ],
     )
 }
