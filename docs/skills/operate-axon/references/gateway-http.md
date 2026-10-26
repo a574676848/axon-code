@@ -93,6 +93,15 @@ Authorization: Bearer <token>
 
 `<agent>` 是单个路径段，其中的 `/` 与 `:` 必须先做百分号转义；转义非法按未命中处理。
 
+MCP 运行态（报文体为 `{"cwd": "<工作区路径>"}`，`cwd` 缺省时用 daemon 声明的工作区）：
+
+| 方法与路径 | 用途 |
+|---|---|
+| `POST /api/v1/mcp/status` | 当前工作区已加载的 MCP 服务器：`servers`（每台带 `serverId`、`toolCount`、`tools`、`failed`、`failure`、`disposition`）、`totalCount`、`loadedCount`、`failedCount`；读不到结论时带 `error` |
+| `POST /api/v1/mcp/refresh` | 清 MCP 健康负缓存并强制重建启动快照，返回同一份载荷外加 `refreshed` 与 `healthCacheCleared` |
+
+两台入口的加载结论都来自 daemon 的启动快照（与 turn 用的是同一份），不是另起一次探测；`refresh` 才会真的重连一遍 MCP 服务器。
+
 Cron：
 
 | 方法与路径 | 用途 |

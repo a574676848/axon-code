@@ -7,6 +7,7 @@ import {
     MATERIALIZED_TURN_WINDOW,
     foldTurn,
     foldedSummary,
+    isFoldCandidate,
     replaceTurnCells,
     shouldEvictFromWindow,
     shouldFold,
@@ -125,6 +126,39 @@ test('展开换回正文并标记保持展开', () => {
     assert.equal(restored.cells.length, heavy.cells.length);
     assert.equal(restored.index[heavy.cells[1].id], 1, '下标索引要跟着重建');
     assert.equal(shouldFold(restored), false);
+});
+
+test('发送新一轮不会折叠上一轮：最近两轮始终展开', () => {
+    const heavyTurn = () =>
+        turnOf([userCell('跑一遍'), toolCell('shell_command', 'x'.repeat(FOLD_TEXT_THRESHOLD))]);
+    /** 照 useAutoFoldTurns 的口径跑一遍：先过位置闸门，再按体量判。 */
+    const settle = (turns) =>
+        turns.map((turn, index) =>
+            isFoldCandidate(index, turns.length) && shouldFold(turn)
+                ? foldTurn(turn, foldedSummary(turn))
+                : turn,
+        );
+
+    const justSent = settle([heavyTurn(), turnOf([userCell('新一轮')])]);
+    assert.equal(justSent[0].folded, false, '按下发送的同一刻，上一轮必须仍然展开');
+    assert.equal(justSent[0].cells.length, 2, '上一轮的正文不能被摘要顶掉');
+
+    const later = settle([
+        heavyTurn(),
+        turnOf([userCell('第二轮')]),
+        turnOf([userCell('第三轮')]),
+    ]);
+    assert.equal(later[0].folded, true, '隔了两轮之后才按体量回收');
+    assert.equal(later[1].folded, false, '上一轮仍然展开');
+});
+
+test('位置闸门只认最近两轮之外的老轮次', () => {
+    assert.equal(isFoldCandidate(0, 1), false, '唯一的一轮永远不折');
+    assert.equal(isFoldCandidate(0, 2), false, '两条轮次时，上一轮不会被收');
+    assert.equal(isFoldCandidate(1, 2), false, '正在跑的一轮同样不折');
+    assert.equal(isFoldCandidate(0, 3), true, '再往前的一轮才轮到体量判据');
+    assert.equal(isFoldCandidate(1, 3), false);
+    assert.equal(isFoldCandidate(2, 3), false);
 });
 
 test('轮次窗口：超出保留窗口的老轮次一律淘汰，最新一轮永不淘汰', () => {

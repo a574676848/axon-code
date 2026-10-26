@@ -54,6 +54,9 @@ pub(crate) struct RunStartupMcpCacheStatus {
     /// 该 server 在本次构建中是否探测失败；用于 TTL 到期后决定是否重跑 MCP 探测。
     #[serde(default)]
     pub(crate) failed: bool,
+    /// 失败原因（已脱敏）；成功时为缺省。`/mcp` 的列表直接展示这一句。
+    #[serde(default)]
+    pub(crate) failure: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -478,6 +481,7 @@ fn mcp_cache_statuses(
             server_id: report.server_id.clone(),
             disposition: report.disposition.to_owned(),
             failed: report.failure.is_some(),
+            failure: report.failure.clone(),
         })
         .collect()
 }

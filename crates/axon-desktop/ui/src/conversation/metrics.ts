@@ -19,6 +19,7 @@ import {
   currentContextTokens,
   type TokenUsage,
 } from './transcript';
+import { mcpSegmentText, mcpSegmentTitle, type McpHeaderReading } from './mcpReading';
 export { currentContextTokens };
 
 /** 工作目录显示宽度预算，含省略号。 */
@@ -41,7 +42,8 @@ export type HeaderSegmentKind =
   | 'generationRate'
   | 'elapsed'
   | 'plan'
-  | 'lsp';
+  | 'lsp'
+  | 'mcp';
 
 /** 段色调。 */
 export type HeaderSegmentTone = 'default' | 'warning' | 'critical';
@@ -58,6 +60,8 @@ export interface HeaderSegment {
   breath: boolean;
   /** 指标图标名；无图标时省略。 */
   icon?: string;
+  /** 原生提示全文；缺省时渲染层用 `text`。 */
+  title?: string;
 }
 
 /** 指标条输入。 */
@@ -86,6 +90,8 @@ export interface HeaderMetricsInput {
   plan: { completed: number; total: number } | null;
   /** 活跃 LSP 客户端数。 */
   lspActiveCount: number;
+  /** MCP 运行态；没有服务器且没有错误时为空，指标条不画这一段。 */
+  mcp?: McpHeaderReading | null;
 }
 
 function shortMetric(label: string, value: string): string {
@@ -143,6 +149,18 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
       text: shortMetric('LSP', String(input.lspActiveCount)),
       icon: 'code',
       tone: 'default',
+      breath: false,
+    });
+  }
+  // 3.1 MCP：有服务器或读不到结论时出现。异常一台都不许沉默，用危险色顶出来；
+  // 正常时只报台数，与 LSP 同为辅助读数。
+  if (input.mcp !== null && input.mcp !== undefined) {
+    segments.push({
+      kind: 'mcp',
+      text: mcpSegmentText(input.mcp),
+      title: mcpSegmentTitle(input.mcp),
+      icon: 'mcp',
+      tone: input.mcp.failedCount > 0 || input.mcp.error !== null ? 'critical' : 'default',
       breath: false,
     });
   }
@@ -233,6 +251,7 @@ const CLUSTER_OF: Record<HeaderSegmentKind, HeaderClusterKind> = {
   cacheHit: 'budget',
   plan: 'aux',
   lsp: 'aux',
+  mcp: 'aux',
   firstToken: 'performance',
   generationRate: 'performance',
   elapsed: 'performance',

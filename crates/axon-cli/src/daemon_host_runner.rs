@@ -256,6 +256,13 @@ fn try_run_daemon_host(
                 command.config_path.clone(),
             )),
             observability_http_handler,
+            // MCP 运行态要先于工作台：工作台适配器对 /api/v1 前缀最宽，排在它后面才轮得到。
+            Arc::new(crate::mcp_http_adapter::McpHttpAdapter::new(
+                workbench_root.clone(),
+                command.config_path.clone(),
+                command.root.clone(),
+                startup_snapshots.clone(),
+            )),
             Arc::new(
                 crate::workbench_http_adapter::WorkbenchHttpAdapter::from_root(workbench_root)
                     // 中断入口要触达正在运行的主 turn，因此共享同一份注册表。

@@ -19,6 +19,7 @@ import { changesAddress, fileAddress } from '../../sidebarRight/registry';
 import { useRailLayout } from '../../sidebarRight/useRailLayout';
 import { ConversationActionsProvider, type ConversationActions } from './actions';
 import { structuredInputBlock } from '../../conversation/references';
+import { useConversationMcp } from '../../conversation/useConversationMcp';
 import {
   changedFilesOf,
   workingStatusPrimary,
@@ -365,6 +366,9 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     [conversation.state.turns],
   );
 
+  // MCP 运行态：指标条读数与输入坞的 `/mcp` 同源（见 useConversationMcp）。
+  const mcp = useConversationMcp(workspace?.path ?? null);
+
   const liveHeaderMetrics = {
     working: conversation.working,
     animationTick: conversation.state.turns.length,
@@ -378,6 +382,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     elapsedMs: lastTurn?.elapsedMs ?? null,
     plan: conversation.state.plan,
     lspActiveCount: conversation.state.lspActiveCount,
+    mcp: mcp.reading,
   };
 
   /*
@@ -651,6 +656,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                         void conversation.submit(text, attachments, structuredInput);
                       }
                 }
+                onRunCommand={mcp.run}
                 error={dockError}
                 working={dockWorking}
                 onInterrupt={() => void conversation.interrupt()}

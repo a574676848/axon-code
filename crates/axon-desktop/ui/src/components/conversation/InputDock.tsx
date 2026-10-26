@@ -1,12 +1,13 @@
 import React from 'react';
 import { ArrowUpIcon, PlusIcon, StopIcon } from '../../icons';
 import { structuredInputBlock } from '../../conversation/references';
+import { matchBuiltinCommand } from '../../conversation/builtinCommands';
 import type { AttachmentRef } from '../../conversation/transcript';
 import { caretOnFirstLine, caretOnLastLine } from '../../conversation/inputHistory';
 import { openWebLink } from '../../conversation/openWebLink';
 import { ComposerTray } from './ComposerTray';
 import { useConversationActions } from './actions';
-import { ComposerNotice, ComposerWorkingLine } from './ComposerStatus';
+import { ComposerNotices, ComposerWorkingLine } from './ComposerStatus';
 import { ImageLightbox } from './ImageLightbox';
 import { ComposerCandidateLayer } from './ComposerCandidateLayer';
 import { composerOptionId } from './ComposerCandidates';
@@ -22,9 +23,12 @@ import { useSkillNames } from '../../conversation/skillCatalog';
 import { useSlashCompletion } from './useSlashCompletion';
 import { ContextMenu, useContextMenu } from '../ui/ContextMenu';
 import type { AnswerItem, PendingQuestion } from '../../conversation/questions';
-import type { AnswerDraftMap } from '../../conversation/questionDraft';
 import { ComposerQuestionCard } from './ComposerQuestionCard';
+import { useQuestionCard } from './useQuestionCard';
 import { Dialog } from '../ui/overlays';
+import { McpServerPanel } from './McpServerPanel';
+import { useComposerCommandRun } from './useComposerCommandRun';
+import type { McpCommandReceipt } from '../../conversation/mcpReading';
 
 /*
  * 悬浮输入坞。
@@ -51,9 +55,6 @@ const PLACEHOLDER_OCCUPIED = '请在上方向模型回复，或收起卡片自�
 const PLACEHOLDER_DISABLED = '会话未就绪...';
 /** 键盘提示：只在列宽足够时出现。 */
 const KEYBOARD_HINT = 'Shift + Enter 换行';
-
-/** 无草稿时的稳定空值：每次渲染换一个新对象只会让受控的卡片白重渲染。 */
-const EMPTY_DRAFT: AnswerDraftMap = {};
 
 /** 两组候选菜单的列表 id：输入框用它声明 aria-controls 与 aria-activedescendant。 */
 const SLASH_LIST_ID = 'composer-slash-candidates';
@@ -92,6 +93,12 @@ export interface InputDockProps {
   onModelChange?: (value: string) => void;
   /** 切换推理等级。 */
   onReasoningEffortChange?: (value: string) => void;
+  /**
+   * 执行一条内置指令（`/mcp` 这类不进会话的本机动作），返回回执与可展开的清单。
+   *
+   * 不接这根线时指令不会被吞掉，正文原样留给会话。
+   */
+  onRunCommand?: (name: string) => Promise<McpCommandReceipt>;
   /** 提交正文。 */
   onSubmit: (text: string, attachments: AttachmentRef[], structuredInput: string) => void;
   /** 外部错误提示。 */
@@ -135,6 +142,7 @@ export const InputDock: React.FC<InputDockProps> = ({
   reasoningEffort = null,
   onModelChange,
   onReasoningEffortChange,
+  onRunCommand,
   onSubmit,
   error,
   working,
@@ -145,36 +153,11 @@ export const InputDock: React.FC<InputDockProps> = ({
   questionError = null,
   onDismissQuestionError,
 }) => {
-  /** 占座卡是否被用户显式收起。 */
-  const [cardDismissed, setCardDismissed] = React.useState(false);
-  /** 卡片是否由外部入口叫回主展示位；它同时让挂起的提问也能作答。 */
-  const [cardForced, setCardForced] = React.useState(false);
-  /** 上一次看到的提问标识，用于在出现新提问时自动重新弹出占座卡。 */
-  const lastQuestionCallId = React.useRef<string | null>(null);
-  /** 作答草稿：按提问标识持有，卡片收起再打开时已选项仍在。 */
-  const [drafts, setDrafts] = React.useState<Record<string, AnswerDraftMap>>({});
-
-  React.useEffect(() => {
-    if (activeQuestion && activeQuestion.callId !== lastQuestionCallId.current) {
-      lastQuestionCallId.current = activeQuestion.callId;
-      setCardDismissed(false);
-      setCardForced(false);
-    }
-  }, [activeQuestion]);
-
-  /** 外部叫回：收起的卡片重新占座，挂起中的提问也因此可以作答。 */
-  React.useEffect(() => {
-    if (reopenToken === 0) return;
-    setCardDismissed(false);
-    setCardForced(true);
-  }, [reopenToken]);
-
-  /** 没有待答提问时不留草稿：结算过的作答留着既没有消费者，也会随会话时长堆积。 */
-  React.useEffect(() => {
-    if (activeQuestion !== null) return;
-    setCardForced(false);
-    setDrafts((current) => (Object.keys(current).length === 0 ? current : {}));
-  }, [activeQuestion]);
+  /*
+   * 问答占座卡：何时占位、草稿存在哪、外部入口怎么叫回来，与输入和提交无关，
+   * 因此整套状态在 useQuestionCard 里。
+   */
+  const question = useQuestionCard(activeQuestion, reopenToken);
 
   /** 光标位置：`@` 与 `/` 两种 token 的判定都依赖它，而 textarea 的值本身不携带光标。 */
   const [caret, setCaret] = React.useState(0);
@@ -227,6 +210,8 @@ export const InputDock: React.FC<InputDockProps> = ({
   });
   const menu = useContextMenu();
   const text = editing.text;
+  /** 本机指令（`/mcp`）的执行态、回执与清单：按下即转圈，结束换回执与清单。 */
+  const command = useComposerCommandRun(onRunCommand, notify);
   /** 链接占位：粘贴时收成短占位符，提交时展开回完整地址。 */
   const links = useComposerLinks({
     text,
@@ -299,17 +284,12 @@ export const InputDock: React.FC<InputDockProps> = ({
     setPendingCaret(null);
   }, [pendingCaret]);
 
-  const submit = () => {
-    if ((!hasText && attachments.length === 0) || busy || !enabled) return;
-    // 引用的正文照旧展示给用户，只有真正发出去的正文带上结构化输入块。
-    // 链接占位在这里展开回原始地址：模型与消息记录拿到的都是一段完整 URL。
-    const outgoing = links.expand(text);
-    // 附件同样进结构化输入块：只有附件、没有正文时，它就是这条消息的正文。
-    const paths = attachments.map((attachment) => attachment.path);
-    onSubmit(outgoing, attachments, structuredInputBlock(outgoing, references.references, paths));
-    // 与 TUI 同一份历史：记下来，之后按上键就能取回（含发送失败的那一次）。
-    recall.record(outgoing, setLocalError);
-    // 清空草稿并丢弃撤销历史：这一份已经发出去了，撤销它只会让人以为消息没发出去。
+  /**
+   * 提交或执行指令之后复位输入坞：草稿、附件、候选、输入历史与编辑历史一起回到初值。
+   *
+   * 高度同时收回一行，否则空输入框会留着上一次撑开的高度。
+   */
+  const resetComposer = React.useCallback(() => {
     editing.reset();
     clear();
     links.reset();
@@ -320,6 +300,29 @@ export const InputDock: React.FC<InputDockProps> = ({
     if (areaRef.current !== null) {
       areaRef.current.style.height = `${LINE_HEIGHT + VERTICAL_PADDING}px`;
     }
+  }, [editing, clear, links, references, slash, recall]);
+
+  const submit = () => {
+    if ((!hasText && attachments.length === 0) || busy || !enabled) return;
+    /*
+     * 内置指令是界面自己的动作，不进会话：草稿清空，回执与清单都落在卡片上方。
+     * 只认「正文恰好是一条指令」；带附件时照常发给模型，没有接执行器时按普通正文处理。
+     */
+    const matched = attachments.length === 0 ? matchBuiltinCommand(text) : null;
+    if (matched !== null && onRunCommand !== undefined) {
+      resetComposer();
+      command.run(matched.name);
+      return;
+    }
+    // 引用的正文照旧展示给用户，只有真正发出去的正文带上结构化输入块。
+    // 链接占位在这里展开回原始地址：模型与消息记录拿到的都是一段完整 URL。
+    const outgoing = links.expand(text);
+    // 附件同样进结构化输入块：只有附件、没有正文时，它就是这条消息的正文。
+    const paths = attachments.map((attachment) => attachment.path);
+    onSubmit(outgoing, attachments, structuredInputBlock(outgoing, references.references, paths));
+    // 与 TUI 同一份历史：记下来，之后按上键就能取回（含发送失败的那一次）。
+    recall.record(outgoing, setLocalError);
+    resetComposer();
   };
 
   /** 采纳一个 `@` 候选项：目录继续下钻，文件结束这一次引用。 */
@@ -461,11 +464,7 @@ export const InputDock: React.FC<InputDockProps> = ({
 
   // 判定是否占座：处于 pending/extended 且未被用户收起时占座；
   // 由外部入口叫回来的卡片同样占座，挂起中的提问只有这一条路径能回到主展示位。
-  const occupiesDock = Boolean(
-    activeQuestion !== null &&
-      !cardDismissed &&
-      (cardForced || activeQuestion.status === 'pending' || activeQuestion.status === 'extended'),
-  );
+  const occupiesDock = question.visible;
 
   return (
     /*
@@ -478,27 +477,27 @@ export const InputDock: React.FC<InputDockProps> = ({
         compact ? 'px-2 pb-2.5 pt-2' : 'px-4 pb-4 pt-3'
       }`}
     >
-      <div className="w-full max-w-chat">
+      <div className="w-full max-w-chat relative">
+        {command.servers !== null && (
+          <McpServerPanel servers={command.servers} onClose={command.close} />
+        )}
         {/* 占座卡：抢占输入坞主展示位 */}
         {occupiesDock && activeQuestion ? (
           <ComposerQuestionCard
             question={activeQuestion}
             busy={busy}
-            draft={drafts[activeQuestion.callId] ?? EMPTY_DRAFT}
-            onDraftChange={(next) =>
-              setDrafts((current) => ({ ...current, [activeQuestion.callId]: next }))
-            }
+            draft={question.draft}
+            onDraftChange={question.setDraft}
             onSubmit={(answers) => onAnswerQuestion?.(activeQuestion.callId, answers)}
-            onDismiss={() => setCardDismissed(true)}
+            onDismiss={question.dismiss}
           />
         ) : (
           <>
-            {error !== null && <ComposerNotice tone="danger" text={error} />}
-            {localError !== null && <ComposerNotice tone="danger" text={localError} />}
-            {/* 附件与拖放的提示：说明刚才发生了什么，不是错误，因此按语气分色。 */}
-            {notice !== null && (
-              <ComposerNotice tone={notice.tone === 'danger' ? 'danger' : 'secondary'} text={notice.text} />
+            {/* 本机指令的执行态：按下即出现，结束后换成回执与清单。 */}
+            {command.label !== null && (
+              <ComposerWorkingLine primary={command.label} elapsedMs={command.elapsedMs} queued={0} interruptible={false} />
             )}
+            <ComposerNotices error={error} localError={localError} notice={notice} />
             {/* 工作状态行：与 TUI 的 composer dock 同位置同口径，运行期间一直保留。 */}
             {working !== null && (
               <ComposerWorkingLine
@@ -628,25 +627,29 @@ export const InputDock: React.FC<InputDockProps> = ({
 
                 <button
                   type="button"
-                  aria-label={showStop ? '停止生成' : '发送'}
+                  aria-label={
+                    showStop ? '停止生成' : command.running !== null && !hasContent ? '正在重载 MCP 服务器' : '发送'
+                  }
                   title={
                     showStop
                       ? '停止生成（Esc）'
-                      : working !== null
-                        ? '发送：Agent 运行中，消息进入排队并在安全边界插入'
-                        : '发送'
+                      : command.running !== null && !hasContent
+                        ? '正在重载 MCP 服务器，请稍候'
+                        : working !== null
+                          ? '发送：Agent 运行中，消息进入排队并在安全边界插入'
+                          : '发送'
                   }
                   disabled={showStop ? false : !sendable}
                   onClick={showStop ? onInterrupt : submit}
                   className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-colors duration-100 ${
-                    showStop || sendable
+                    showStop || sendable || command.running !== null && !hasContent
                       ? 'bg-primary text-white'
                       : 'bg-surface-sunken text-text-tertiary opacity-40'
                   } disabled:cursor-not-allowed`}
                 >
                   {showStop ? (
                     <StopIcon size={16} />
-                  ) : busy ? (
+                  ) : busy || command.running !== null && !hasContent ? (
                     <span className="w-3.5 h-3.5 rounded-full border border-current border-t-transparent animate-spin" />
                   ) : (
                     <ArrowUpIcon size={16} />

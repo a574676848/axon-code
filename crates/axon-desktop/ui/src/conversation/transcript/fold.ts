@@ -6,7 +6,8 @@
  * 工具输出与推理正文随即失去引用、被回收；展开时按标识重新回放该 Interaction，
  * 把算好的单元整段换回来。
  *
- * 判据只看体量，不看新旧：体量小的一轮折起来只会让人多按一次，没有收益。
+ * 判据先看位置、再看体量：最近两轮始终展开，更早的轮次才按体量回收；体量小的一轮
+ * 折起来只会让人多按一次，没有收益。
  */
 
 import type { TranscriptCell, TurnState } from './state';
@@ -28,6 +29,14 @@ const SUMMARY_PHRASE_LIMIT = 3;
  * 两者叠加后界面内存随会话变长不再无限增长。
  */
 export const MATERIALIZED_TURN_WINDOW = 8;
+
+/**
+ * 自动折叠不碰的最近轮次数。
+ *
+ * 上一轮是按下发送之后仍要对照着读的那一段：把它收成一行，等于在发送的同一刻抽走
+ * 阅读对象。因此最近两轮（正在跑的一轮与上一轮）只受轮次窗口约束，不参与体量折叠。
+ */
+export const RECENT_EXPANDED_TURNS = 2;
 
 /** 工具类别到摘要短语的映射；认不出来的一律并进兜底短语。 */
 const TOOL_PHRASES: Record<string, string> = {
@@ -128,6 +137,16 @@ export function shouldEvictFromWindow(
 function isFoldable(turn: TurnState): boolean {
   if (turn.folded || turn.keepExpanded) return false;
   return turn.status !== 'streaming' && turn.status !== 'pending';
+}
+
+/**
+ * 这一轮是否落在自动折叠的范围内。
+ *
+ * 最近两轮一律不算：发送新一轮的那一刻，上一轮正被对照着读，收成摘要会让人丢掉刚
+ * 看完的上下文。判据按位置计算，同一轮因此会随着更新的轮次到来才进入范围。
+ */
+export function isFoldCandidate(position: number, total: number): boolean {
+  return position < total - RECENT_EXPANDED_TURNS;
 }
 
 /** 折叠时保留的用户那一句；取首行并截断。 */

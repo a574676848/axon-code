@@ -1,15 +1,19 @@
 import React from 'react';
 
-import type { SkillItem } from '../../types';
 import { useSkillCatalog } from '../../conversation/skillCatalog';
+import { BUILTIN_COMMANDS } from '../../conversation/builtinCommands';
 import {
   activeSlashToken,
   rankCandidateList,
+  type SlashCandidate,
   type SlashToken,
 } from '../../conversation/composerCandidates';
 
 /*
- * `/` 指令补全控制器（真实来源是已安装技能，不是前端硬编码清单）。
+ * `/` 指令补全控制器（真实来源是已安装技能加内置指令，不是前端硬编码的完整清单）。
+ *
+ * 内置指令排在技能之前：它们由界面自己执行，与本机运行态直接相关，先露出来更实用；
+ * 技能那段接在后面，排序规则对两段一视同仁（前缀命中优先，见 rankCandidateList）。
  *
  * 只负责取数、缓存与采纳写回：token 判定与候选排序都在
  * conversation/composerCandidates 里，技能清单本身在 conversation/skillCatalog
@@ -36,7 +40,7 @@ export interface SlashCompletion {
   /** 浮层是否该出现：有活跃 token、没被收起、且确实有候选。 */
   open: boolean;
   /** 当前候选；为空表示没有可展示的东西。 */
-  options: SkillItem[];
+  options: SlashCandidate[];
   /** 当前选中项。 */
   index: number;
   setIndex: (index: number) => void;
@@ -49,7 +53,7 @@ export interface SlashCompletion {
 }
 
 export function useSlashCompletion({ text, caret }: SlashCompletionInput): SlashCompletion {
-  const skills = useSkillCatalog();
+  const catalog = useSkillCatalog();
   const [index, setIndex] = React.useState(0);
   /** 被 Esc 收起的那一条 token；身份变了就自动失效。 */
   const [dismissed, setDismissed] = React.useState<SlashToken | null>(null);
@@ -67,10 +71,20 @@ export function useSlashCompletion({ text, caret }: SlashCompletionInput): Slash
     setIndex(0);
   }, [key]);
 
-  const options = React.useMemo(
-    () => (skills === null || token === null ? [] : rankCandidateList(skills, token.query)),
-    [skills, token],
-  );
+  const options = React.useMemo(() => {
+    if (token === null) return [];
+    const commands: SlashCandidate[] = BUILTIN_COMMANDS.map((command) => ({
+      id: `command:${command.name}`,
+      name: command.name,
+      description: command.description,
+    }));
+    const skills: SlashCandidate[] = (catalog ?? []).map((skill) => ({
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+    }));
+    return rankCandidateList([...commands, ...skills], token.query);
+  }, [catalog, token]);
 
   /** 选中的行：两次渲染之间列表变短时当场夹回末行，不会指到不存在的行上。 */
   const activeIndex = options.length === 0 ? 0 : Math.min(index, options.length - 1);

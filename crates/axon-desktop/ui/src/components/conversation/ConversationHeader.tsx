@@ -17,6 +17,7 @@ import {
   GaugeIcon,
   ListIcon,
   RingIcon,
+  ToolIcon,
 } from '../../icons';
 import { ContextUsagePopover } from './ContextUsagePopover';
 
@@ -86,6 +87,8 @@ function metricIcon(segment: HeaderSegment, contextPercent: number | null): Reac
       return <ListIcon size={size} className="shrink-0" />;
     case 'code':
       return <CodeIcon size={size} className="shrink-0" />;
+    case 'mcp':
+      return <ToolIcon size={size} className="shrink-0" />;
     default:
       return null;
   }
@@ -145,7 +148,7 @@ export const ConversationHeader: React.FC<ConversationHeaderProps> = ({
                       ? 'text-text-primary font-medium'
                       : TONE_CLASS[segment.tone]
                   }`}
-                  title={withPopover ? undefined : segment.text}
+                  title={withPopover ? undefined : (segment.title ?? segment.text)}
                 >
                   {metricIcon(segment, contextPercent)}
                   <span className="truncate">{segment.text}</span>

@@ -35,6 +35,8 @@ pub mod ipc;
 pub mod lane_context;
 /// 车道数据源与表现层端口。
 pub mod lane_source;
+/// MCP 运行态转发：真正的加载结论由 daemon 的启动快照给出。
+pub mod mcp_runtime;
 /// 原生目录选择器。
 pub mod picker;
 /// 模型定价：经网关读写价格规则。
@@ -93,6 +95,7 @@ use ipc::{
     config_write, open_config_file,
 };
 use lane_source::GatewayLaneSource;
+use mcp_runtime::{mcp_runtime_refresh, mcp_runtime_status};
 use picker::pick_directory;
 use pricing::{
     pricing_auto_sync, pricing_delete_rule, pricing_recalculate, pricing_rules, pricing_save_rule,
@@ -209,6 +212,8 @@ pub fn run() {
             mcp_upsert,
             mcp_remove,
             mcp_upsert_raw,
+            mcp_runtime_status,
+            mcp_runtime_refresh,
             skills_list,
             document_read,
             document_write,

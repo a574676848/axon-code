@@ -114,8 +114,10 @@ mod tests {
 
     #[test]
     fn stored_theme_survives_round_trip() {
-        let mut state = DesktopState::default();
-        state.theme = Some(THEME_FOREST.to_string());
+        let state = DesktopState {
+            theme: Some(THEME_FOREST.to_string()),
+            ..DesktopState::default()
+        };
         assert_eq!(theme_of(&state), THEME_FOREST);
     }
 }

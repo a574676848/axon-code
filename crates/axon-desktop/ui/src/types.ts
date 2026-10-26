@@ -358,6 +358,9 @@ export interface McpServerInput {
   env: Record<string, string>;
 }
 
+/** MCP 运行态载荷；定义在 mcpTypes，这里只做类型出口。 */
+export type { McpRuntimeServer, McpRuntimeStatus } from './mcpTypes';
+
 /** 一项已安装技能。 */
 export interface SkillItem {
   id: string;

@@ -37,6 +37,8 @@ mod mcp_command_plan;
 mod mcp_commands;
 #[path = "commands/mcp/config_file.rs"]
 mod mcp_config_file;
+#[path = "mcp_http_adapter.rs"]
+mod mcp_http_adapter;
 #[path = "commands/mcp/local_store.rs"]
 mod mcp_local_store;
 mod memory_commands;

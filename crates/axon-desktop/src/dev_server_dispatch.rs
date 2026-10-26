@@ -230,6 +230,8 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
             crate::documents::mcp_upsert_raw(as_str("name")?, as_str("entryJson")?)?;
             Ok(Value::Null)
         }
+        "mcp_runtime_status" => crate::mcp_runtime::load_status(&as_str("cwd")?),
+        "mcp_runtime_refresh" => crate::mcp_runtime::reload(&as_str("cwd")?),
         "skills_list" => {
             Ok(serde_json::to_value(crate::documents::skills_list()?).map_err(stringify)?)
         }

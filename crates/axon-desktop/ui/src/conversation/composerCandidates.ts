@@ -23,6 +23,18 @@ export interface RankableCandidate {
   name: string;
 }
 
+/**
+ * 斜杠菜单的一项。
+ *
+ * 内置指令与已安装技能共用这一种形态：菜单只读名字与说明，两边的差别由提交时的
+ * 分流承担（指令不发给模型）。
+ */
+export interface SlashCandidate {
+  id: string;
+  name: string;
+  description: string;
+}
+
 /** 词字符：紧跟其后的斜杠属于普通文本，不是指令。 */
 const WORD_CHAR = /[\p{L}\p{N}_]/u;
 const WHITESPACE = /\s/u;
