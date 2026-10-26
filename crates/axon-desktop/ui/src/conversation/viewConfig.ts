@@ -15,7 +15,10 @@ export const KEY_REASONING_EFFORT = 'agent.reasoning_effort';
 
 /** 会话视图需要的配置取值。 */
 export interface ResolvedConfig {
+  /** 主模型的展示名；输入坞选择器用它。 */
   model: string;
+  /** 主模型的完整路由（`供应商/模型 id`）；工作状态行用它，缺路由时回落到展示名。 */
+  route: string;
   reasoningEffort: string;
   contextWindow: number | null;
   /** 可选模型清单：取配置目录里的模型名，去重后保持配置顺序。 */
@@ -41,8 +44,15 @@ export function resolveConfig(
   const models = Array.from(new Set(config.models
     .filter((candidate) => !isEmbeddingModel(candidate))
     .map((candidate) => candidate.name)));
+  /*
+   * 路由：配置里已经写成 `供应商/模型` 时原样沿用（用户明确指定了走哪一家），
+   * 否则按配置目录里那一条补全。同名模型可能有多条（不同供应商），这里取第一条，
+   * 与运行时的解析规则一致。
+   */
+  const explicitRoute = model.includes('/') ? model : null;
   return {
     model,
+    route: explicitRoute ?? (matched === undefined ? model : `${matched.provider}/${matched.id}`),
     reasoningEffort,
     contextWindow: matched?.context_window !== undefined && matched.context_window > 0
       ? matched.context_window
