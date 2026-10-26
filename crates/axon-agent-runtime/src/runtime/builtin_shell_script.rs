@@ -348,7 +348,7 @@ fn is_canonical_posix_script_command(command: &[String]) -> bool {
 ///
 /// 纯字符串判定，不依赖任何 Windows API；`is_canonical_wsl_script_command` 是跨平台
 /// 形态校验入口，因此校验器必须与它同处跨平台模块，不能留在只在 Windows 编译的
-/// `wsl_launch` 里——否则非 Windows 目标会因符号缺失报 E0425。
+/// `wsl_launch` 里，否则非 Windows 目标会因符号缺失报 E0425。
 fn valid_wsl_distribution(distribution: &str) -> bool {
     !distribution.is_empty()
         && distribution.chars().all(|character| {
