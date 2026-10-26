@@ -2,7 +2,9 @@ use super::*;
 use axon_domain::ToolCallInput;
 #[cfg(windows)]
 use std::path::PathBuf;
-use std::{fs, time::Duration};
+use std::fs;
+#[cfg(windows)]
+use std::time::Duration;
 
 #[path = "builtin_shell_tool_pty_readiness.rs"]
 mod pty_readiness;
