@@ -159,7 +159,19 @@ impl SearchIndexPolicy {
 }
 
 pub(crate) fn relative_path(root: &Path, path: &Path) -> Option<String> {
-    let relative = path.strip_prefix(root).ok()?;
+    if let Ok(relative) = path.strip_prefix(root) {
+        return normalize_relative(relative);
+    }
+    // 慢路径：根已经被 `normalize_index_root` 解析为真实路径，而条目仍带着调用方写法。
+    // macOS 的 `/var` → `/private/var` 与 Windows CI 的 `RUNNER~1` 8.3 短名都会落到这里。
+    // 不补这一次规范化，整份快照的条目会被全部丢弃，表现为「索引已建，但每次 prepare
+    // 都退化成全量扫描」。
+    let canonical = normalize_index_root(path);
+    normalize_relative(canonical.strip_prefix(root).ok()?)
+}
+
+/// 把相对路径转成快照使用的正斜杠文本形态；空路径表示条目就是根本身。
+fn normalize_relative(relative: &Path) -> Option<String> {
     if relative.as_os_str().is_empty() {
         return None;
     }
