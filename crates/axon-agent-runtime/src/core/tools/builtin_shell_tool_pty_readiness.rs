@@ -21,8 +21,10 @@
 //! 5 秒这个值本身就足以掐断正常路径。
 
 #[cfg(windows)]
+use std::fs;
+#[cfg(windows)]
 use std::process::Command;
-use std::{fs, thread, time::Duration, time::Instant};
+use std::{thread, time::Duration, time::Instant};
 
 use super::*;
 
