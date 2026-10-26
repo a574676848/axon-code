@@ -419,7 +419,9 @@ pub async fn gateway_start_service(mode: String) -> ServiceActionDto {
         })
 }
 
-#[cfg(test)]
+// 被测函数只在 Windows 编译（UAC 提权路径专用）：测试同样按平台收敛，
+// 否则 Linux/macOS 的 `--all-targets` 会因符号被 cfg 掉而报 E0432。
+#[cfg(all(test, windows))]
 mod tests {
     use super::base64_encode;
 
