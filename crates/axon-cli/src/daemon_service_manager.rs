@@ -15,14 +15,14 @@ const LAUNCHD_LABEL: &str = "com.axon.daemon";
 use windows_definition::WINDOWS_TASK_NAME;
 pub(super) const DAEMON_PID_FILE_NAME: &str = "daemon.pid";
 const DEFAULT_SOUL_CONTENT: &str = include_str!("../../../assets/defaults/SOUL.md");
-#[cfg(any(unix, windows))]
+#[cfg(any(target_os = "macos", windows))]
 const PROCESS_STOP_TIMEOUT_MS: u64 = 10_000;
 /// 优雅停止的等待窗口：够守护进程 drain 收口，又不至于让 stop 长时间无响应。
 #[cfg(windows)]
 const GRACEFUL_STOP_TIMEOUT_MS: u64 = 15_000;
-#[cfg(any(unix, windows))]
+#[cfg(any(target_os = "macos", windows))]
 const PROCESS_START_TIMEOUT_MS: u64 = 60_000;
-#[cfg(any(unix, windows))]
+#[cfg(any(target_os = "macos", windows))]
 const PROCESS_STOP_POLL_MS: u64 = 100;
 
 #[cfg(windows)]
@@ -229,6 +229,8 @@ pub(super) fn stop(_runtime_dir: &Path) -> Result<(), String> {
 }
 
 pub(super) fn restart(config_path: &Path, runtime_dir: &Path) -> Result<(), String> {
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let _ = (config_path, runtime_dir);
     #[cfg(target_os = "macos")]
     {
         stop(runtime_dir)?;
@@ -247,7 +249,7 @@ pub(super) fn restart(config_path: &Path, runtime_dir: &Path) -> Result<(), Stri
     Err("当前平台暂不支持 daemon 用户服务".to_owned())
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 fn wait_for_daemon_exit(runtime_dir: &Path) -> Result<(), String> {
     let Some(pid) = fs::read_to_string(daemon_pid_path(runtime_dir))
         .ok()

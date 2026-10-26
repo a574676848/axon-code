@@ -23,6 +23,7 @@ pub(super) fn stop_request_path(runtime_dir: &Path) -> PathBuf {
 /// 写入停止请求；重复请求幂等。
 ///
 /// 文件内容记录发起方 PID，仅用于排障，不参与判定。
+#[cfg(windows)]
 pub(super) fn request(runtime_dir: &Path) -> Result<(), String> {
     let path = stop_request_path(runtime_dir);
     if let Some(parent) = path.parent() {

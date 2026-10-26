@@ -1,6 +1,8 @@
 use super::*;
 use axon_domain::ToolCallInput;
-use std::{fs, path::PathBuf, time::Duration};
+#[cfg(windows)]
+use std::path::PathBuf;
+use std::{fs, time::Duration};
 
 #[path = "builtin_shell_tool_pty_readiness.rs"]
 mod pty_readiness;
@@ -562,6 +564,7 @@ fn interruptible_tty_command() -> Vec<String> {
     .unwrap()
 }
 
+#[cfg(windows)]
 fn temp_root(tag: &str) -> PathBuf {
     let root = axon_test_support::test_temp_root().join(format!(
         "axon-shell-{tag}-{}-{}",
