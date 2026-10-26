@@ -94,6 +94,21 @@ test('格式化 JSON 不改变数据，Shell 不改变换行和转义', () => {
     assert.equal(formatToolContent('{"incomplete":').code, '{"incomplete":');
 });
 
+test('裸换行 JSON 仍可格式化，shell 回执按字段拆行', () => {
+    const multiline = '{"intent":"整理","path":"checkpoint.md","text":"# 路线\n\n- 第一条\n- 第二条"}';
+    const formattedJson = formatToolContent(multiline);
+    assert.equal(formattedJson.language, 'json');
+    assert.equal(JSON.parse(formattedJson.code).text, '# 路线\n\n- 第一条\n- 第二条');
+    assert.match(formattedJson.code, /"text": "# 路线\\n\\n- 第一条/);
+
+    const receipt = 'shell command=git status exit_code=0 timed_out=false output_tokens=12/34 stdout=## main\n M file.txt stderr=';
+    const formattedShell = formatToolContent(receipt);
+    assert.equal(formattedShell.language, 'shell');
+    assert.match(formattedShell.code, /^shell command=git status\nexit_code=0\n/);
+    assert.match(formattedShell.code, /\nstdout=## main\n M file.txt\nstderr=$/);
+    assert.equal(formattedShell.code.includes('\r'), false);
+});
+
 test('后端字符串和结构化错误保留具体原因', () => {
     assert.equal(backendError('原子写配置失败: 权限不足').message, '原子写配置失败: 权限不足');
     assert.equal(backendError({ message: '配置值非法' }).message, '配置值非法');

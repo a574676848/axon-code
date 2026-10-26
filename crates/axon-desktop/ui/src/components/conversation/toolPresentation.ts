@@ -70,14 +70,95 @@ export function extractFilePath(value: string): string | null {
     }
 }
 
+/**
+ * 模型偶尔把多行文本直接塞进 JSON 字符串，换行与制表符没有转义。
+ * 严格解析失败时，只把字符串内部的裸控制字符补成转义，再试一次；
+ * 字符串本身没有闭合时返回空串，保持原文，不猜结构。
+ */
+function escapeStringControls(text: string): string {
+    let repaired = '';
+    let inString = false;
+    let escaped = false;
+    for (const char of text) {
+        if (inString) {
+            if (escaped) {
+                repaired += char;
+                escaped = false;
+                continue;
+            }
+            if (char === '\\') {
+                repaired += char;
+                escaped = true;
+                continue;
+            }
+            if (char === '"') {
+                repaired += char;
+                inString = false;
+                continue;
+            }
+            if (char === '\n') {
+                repaired += '\\n';
+                continue;
+            }
+            if (char === '\r') {
+                repaired += '\\r';
+                continue;
+            }
+            if (char === '\t') {
+                repaired += '\\t';
+                continue;
+            }
+            if (char === '\b') {
+                repaired += '\\b';
+                continue;
+            }
+            if (char === '\f') {
+                repaired += '\\f';
+                continue;
+            }
+            repaired += char;
+            continue;
+        }
+        if (char === '"') inString = true;
+        repaired += char;
+    }
+    return inString || escaped ? '' : repaired;
+}
+
+/** 严格解析优先；失败时只修复字符串内的裸控制字符。 */
+function parseToolJson(text: string): unknown | null {
+    try {
+        return JSON.parse(text) as unknown;
+    } catch {
+        const repaired = escapeStringControls(text);
+        if (repaired.length === 0) return null;
+        try {
+            return JSON.parse(repaired) as unknown;
+        } catch {
+            return null;
+        }
+    }
+}
+
+/** shell 工具回执的字段分隔：只在这些键前换行，不改写字段值。 */
+const SHELL_RECEIPT_FIELDS =
+    / (exit_code=|timed_out=|output_handler=|output_tokens=|output_savings_pct=|stdout_truncated=|stdout_chars=|stderr_truncated=|stderr_chars=|full_output_available=|full_output_truncated=|full_output_failed=|stdout=|stderr=)/g;
+
+/** 把单行的 shell 回执按字段拆行；PowerShell 的裸 CR 一并归一成 LF。 */
+function formatShellReceipt(value: string): string {
+    return value.replace(/\r\n?/g, '\n').replace(SHELL_RECEIPT_FIELDS, '\n$1');
+}
+
 /** JSON 只调整缩进，Shell 与其他文本不改写原始语义。 */
 export function formatToolContent(value: string): { code: string; language: string | null } {
     const text = value.trim();
+    if (text.startsWith('shell command=')) {
+        return { code: formatShellReceipt(value), language: 'shell' };
+    }
     if (text.startsWith('{') || text.startsWith('[')) {
-        try {
-            return { code: JSON.stringify(JSON.parse(text), null, 2), language: 'json' };
-        } catch {
-            // 流式或截断的 JSON 保持原文。
+        const parsed = parseToolJson(text);
+        if (parsed !== null) {
+            return { code: JSON.stringify(parsed, null, 2), language: 'json' };
         }
     }
     return { code: value, language: null };
