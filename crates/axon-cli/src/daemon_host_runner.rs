@@ -39,6 +39,10 @@ pub(super) use support::{
 #[path = "daemon_host_runner_workers.rs"]
 mod workers;
 
+#[path = "daemon_host_runner_steer_input.rs"]
+mod steer_input;
+use steer_input::steer_message;
+
 /// 把网关访问日志接到 Axon 统一日志上。
 ///
 /// 访问日志的可见级别由 `[agent] log_level` 决定：想事后归因偶发卡顿，把它设为
@@ -92,9 +96,9 @@ impl ActiveTurnSteerSink for DaemonPrimaryTurnSteerSink {
         let lane_id = interaction_session_lane_id(interaction)
             .ok_or_else(|| "Primary Turn steer 必须绑定 Workspace".to_owned())?;
         self.active_primary_turns
-            .try_send(
+            .try_send_message(
                 &ActivePrimaryTurnRegistry::affinity_key(&lane_id),
-                interaction.content.clone(),
+                steer_message(interaction),
             )
             .map(|result| result.is_some())
     }
@@ -108,9 +112,9 @@ impl ActiveTurnSteerSink for DaemonPrimaryTurnSteerSink {
         }
         let lane_id = interaction_session_lane_id(interaction)
             .ok_or_else(|| "Primary Turn append 必须绑定 Workspace".to_owned())?;
-        self.active_primary_turns.try_send(
+        self.active_primary_turns.try_send_message(
             &ActivePrimaryTurnRegistry::affinity_key(&lane_id),
-            interaction.content.clone(),
+            steer_message(interaction),
         )
     }
 }

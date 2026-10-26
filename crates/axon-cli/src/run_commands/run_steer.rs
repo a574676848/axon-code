@@ -422,6 +422,18 @@ impl ActivePrimaryTurnRegistry {
         affinity_key: &str,
         content: String,
     ) -> Result<Option<InteractionId>, String> {
+        self.try_send_message(affinity_key, AgentModelMessage::text("user", content))
+    }
+
+    /// 把一条已构造好的用户消息注入活跃轮次。
+    ///
+    /// 附件必须随消息一起进入轮次：只传正文会让图片与大段文本落地成一句
+    /// 「已附加文件：<路径>」，模型拿不到素材也读不出二进制内容。
+    pub(crate) fn try_send_message(
+        &self,
+        affinity_key: &str,
+        message: AgentModelMessage,
+    ) -> Result<Option<InteractionId>, String> {
         let turn = self
             .entries
             .lock()
@@ -432,7 +444,7 @@ impl ActivePrimaryTurnRegistry {
             return Ok(None);
         };
         match turn.inbox.try_send_input(AgentTurnSteerInput {
-            message: AgentModelMessage::text("user", content),
+            message,
             quoted_message: None,
         }) {
             Ok(()) => Ok(Some(turn.interaction_id)),
