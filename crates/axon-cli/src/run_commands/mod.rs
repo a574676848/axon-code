@@ -91,7 +91,6 @@ mod run_thread_title;
 mod run_tool_loop;
 mod run_tool_pool;
 mod run_tool_result_cache;
-mod run_tool_workspace_lock;
 mod run_turn_outcome;
 pub(crate) mod run_workspace_identity;
 pub(crate) use run_tool_result_cache::workspace_revision;

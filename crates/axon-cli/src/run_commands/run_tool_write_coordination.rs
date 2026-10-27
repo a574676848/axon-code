@@ -17,8 +17,6 @@ use axon_domain::ToolConcurrencyPolicy;
 
 use crate::tool_orchestrator::ToolExecutionRequest;
 
-use super::run_tool_workspace_lock::{FairWorkspaceLock, WorkspaceWriteGuard};
-
 /// 执行域（`T-4`）：由声明派生的五类之一。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ExecutionDomain {
@@ -137,7 +135,7 @@ impl ToolAccessScope {
 
 #[derive(Debug, Default)]
 pub(super) struct WorkspaceWriteCoordinator {
-    workspace: FairWorkspaceLock,
+    workspace: RwLock<()>,
     path_locks: Mutex<HashMap<PathBuf, Arc<RwLock<()>>>>,
 }
 
@@ -168,8 +166,10 @@ impl WorkspaceWriteCoordinator {
         }
     }
 
-    fn workspace_write(&self) -> WorkspaceWriteGuard<'_> {
-        self.workspace.write()
+    fn workspace_write(&self) -> std::sync::RwLockWriteGuard<'_, ()> {
+        self.workspace
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// 先取工作区读闸，再按字典序取路径锁。
@@ -183,7 +183,10 @@ impl WorkspaceWriteCoordinator {
         exclusive: bool,
         operation: impl FnOnce() -> T,
     ) -> T {
-        let _workspace = self.workspace.read();
+        let _workspace = self
+            .workspace
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let entries = lock_entries(paths, exclusive);
         let locks = self.path_locks(&entries);
         let modes = entries.iter().map(|(_, write)| *write).collect::<Vec<_>>();
