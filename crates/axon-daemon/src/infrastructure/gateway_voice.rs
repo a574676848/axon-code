@@ -29,7 +29,7 @@ use std::time::Duration;
 use tokio::sync::mpsc as tokio_mpsc;
 
 /// 预热超时，与 PROTOCOL §5 对齐。
-const WARMUP_TIMEOUT: Duration = Duration::from_secs(10);
+const WARMUP_TIMEOUT: Duration = Duration::from_secs(45);
 /// 默认请求的识别模型名，与合同示例一致。
 const DEFAULT_ASR_MODEL: &str = "sherpa-streaming-zh-en";
 /// 协议版本。
@@ -297,9 +297,12 @@ fn run_worker(
     rx: std_mpsc::Receiver<Command>,
     out: tokio_mpsc::UnboundedSender<String>,
 ) {
-    let Ok(client) = HostClient::spawn(&config.host) else {
-        let _ = out.send(error_json("worker_unavailable", "arming"));
-        return;
+    let client = match HostClient::spawn(&config.host) {
+        Ok(client) => client,
+        Err(_) => {
+            let _ = out.send(error_json("worker_unavailable", "arming"));
+            return;
+        }
     };
     let mut bridge = VoiceBridge::new(client);
     if let Err(error) = bridge.warmup(
@@ -416,8 +419,14 @@ fn host_exe() -> Option<PathBuf> {
     } else {
         "axon-voice-host"
     };
-    let candidate = dir.join(name);
-    candidate.is_file().then_some(candidate)
+    // 生产是版本目录同级；开发树里测试二进制在 target/debug/deps，宿主在上一级。
+    for base in [dir.to_path_buf(), dir.parent()?.to_path_buf()] {
+        let candidate = base.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 fn model_root() -> PathBuf {

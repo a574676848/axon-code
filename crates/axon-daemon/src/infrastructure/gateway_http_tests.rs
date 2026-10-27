@@ -632,7 +632,7 @@ where
 {
     use futures_util::StreamExt;
     for _ in 0..8 {
-        let next = tokio::time::timeout(Duration::from_secs(5), socket.next())
+        let next = tokio::time::timeout(Duration::from_secs(90), socket.next())
             .await
             .unwrap_or_else(|_| panic!("等待文本帧超时"));
         match next {
@@ -644,4 +644,88 @@ where
         }
     }
     panic!("文本帧数量超预期");
+}
+
+#[test]
+#[ignore = "需要本地运行时与模型，用 AXON_RUNTIME_ROOT 与 AXON_VOICE_SAMPLE_WAV 指定"]
+fn voice_ws_transcribes_real_audio() {
+    use futures_util::SinkExt;
+
+    let sample_path = std::env::var("AXON_VOICE_SAMPLE_WAV").expect("缺少 AXON_VOICE_SAMPLE_WAV");
+    let wav = std::fs::read(&sample_path).expect("读取样例 WAV");
+    assert!(wav.len() > 44, "样例 WAV 过短");
+    let pcm = wav[44..].to_vec();
+
+    let server = TestServer::start(RecordingIngress::idle());
+    let address = server.address;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("测试运行时");
+    runtime.block_on(async move {
+        let url = format!("ws://{address}/api/v1/voice?api_token={TEST_AUTH_TOKEN}");
+        let (mut socket, _) = tokio_tungstenite::connect_async(url)
+            .await
+            .expect("WS 握手应成功");
+        let ready: serde_json::Value =
+            serde_json::from_str(&next_ws_text(&mut socket).await).expect("ready 是 JSON");
+        assert_eq!(ready["type"], "ready");
+
+        let start = r#"{"type":"start","protocolVersion":1,"clientSessionId":"c-real","workspaceId":"w-1","replyDestination":"desktop","mode":"full_duplex","lang":"zh","tts":false}"#;
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::Text(start.into()))
+            .await
+            .expect("发送 start");
+
+        // 等宿主预热并进入 listening。
+        let mut listening = false;
+        for _ in 0..120 {
+            let text = next_ws_text(&mut socket).await;
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+            if value["type"] == "state" && value["phase"] == "listening" {
+                listening = true;
+                break;
+            }
+            if value["type"] == "error" {
+                panic!("预热失败：{text}");
+            }
+        }
+        assert!(listening, "未进入 listening");
+
+        for chunk in pcm.chunks(6_400) {
+            let mut frame = Vec::with_capacity(chunk.len() + 1);
+            frame.push(0x01u8);
+            frame.extend_from_slice(chunk);
+            socket
+                .send(tokio_tungstenite::tungstenite::Message::Binary(frame.into()))
+                .await
+                .expect("发送音频");
+        }
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                r#"{"type":"stop","utteranceSeq":1}"#.into(),
+            ))
+            .await
+            .expect("发送 stop");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        loop {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "等待 final 超时"
+            );
+            let text = next_ws_text(&mut socket).await;
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+            match value["type"].as_str() {
+                Some("final") => {
+                    let transcript = value["text"].as_str().unwrap_or_default();
+                    println!("ws transcript: {transcript}");
+                    assert!(!transcript.is_empty(), "转写不应为空");
+                    return;
+                }
+                Some("error") => panic!("合成/识别失败：{text}"),
+                _ => {}
+            }
+        }
+    });
 }
