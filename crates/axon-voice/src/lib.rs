@@ -1,0 +1,31 @@
+//! Axon 语音能力的领域合同。
+//!
+//! 本 crate 只承载纯逻辑：相位状态机、失败分类、音色与韵律画像、配置模型与端口 trait。
+//! 零 IO、零网络、零 FFI；模型推理、音频采集与协议编解码分别由 `axon-voice-host`、
+//! `axon-voice-protocol` 与 daemon/desktop 的适配层承担。
+//!
+//! 合同的唯一事实源是 `E:\zbg\axon-voice-contract`：
+//!
+//! - 相位与合法迁移：`ARCHITECTURE.md` §3（32 条边）。
+//! - 失败分类：`PROTOCOL.md` §4.2（21 个错误码 → 17 个变体）。
+//! - 音色与韵律字段：`ARCHITECTURE.md` §9 与 WP-01/WP-14。
+
+pub mod config;
+pub mod constants;
+pub mod domain;
+pub mod port;
+
+pub use config::{
+    AsrConfig, AudioConfig, ConfigError, MeetingMode, TtsConfig, TtsFallback, VoiceConfig,
+    VoiceMode, VoicePersonaConfig, WorkerConfig,
+};
+pub use constants::{PITCH_MAX_SEMITONES, PITCH_MIN_SEMITONES, RATE_MAX, RATE_MIN};
+pub use domain::{
+    CueKind, HumorLevel, IdlePhase, ModelFamily, PersonaMode, PersonaSnapshot, Phase, PhaseError,
+    PresetReason, ProfileError, ProfileSource, ProtocolReason, SpeechProfile, TransitionTrigger,
+    UserAffect, Verbosity, VoiceFailure, WorkerSubStage,
+};
+pub use port::{
+    Clock, PcmChunk, SAMPLE_RATE_HZ, SpeechRenderer, SpeechToText, SttEvent, SttSession,
+    TextToSpeech,
+};
