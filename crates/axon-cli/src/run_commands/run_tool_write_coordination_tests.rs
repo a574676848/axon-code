@@ -185,20 +185,23 @@ fn parent_directory_write_excludes_nested_path_access() {
 }
 
 #[test]
-fn distinct_paths_remain_parallel_while_same_paths_serialize() {
+fn reads_stay_parallel_while_every_write_serializes() {
     let coordinator = Arc::new(WorkspaceWriteCoordinator::default());
+    // 同路径写必须串行。
     assert_scope_blocking(
         Arc::clone(&coordinator),
         write_scope(&["same.rs"]),
         write_scope(&["same.rs"]),
         true,
     );
+    // PAR-1：不同路径的写也一律串行，不做写并行。
     assert_scope_blocking(
         Arc::clone(&coordinator),
         write_scope(&["left.rs"]),
         write_scope(&["right.rs"]),
-        false,
+        true,
     );
+    // 读读仍可并行。
     assert_scope_blocking(
         coordinator,
         read_scope(&["left.rs"]),

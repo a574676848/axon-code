@@ -110,11 +110,13 @@ impl ToolAccessScope {
             || !self.write_paths.is_empty()
     }
 
-    /// 本次访问是否需要前后屏障：独占与整工作区写都不能被邻居夹在中间。
+    /// 本次访问是否需要前后屏障：任何写都不能被邻居夹在中间（PAR-1 写一律独占）。
     pub(super) fn is_isolated(&self) -> bool {
         matches!(
             self.domain,
-            ExecutionDomain::Exclusive | ExecutionDomain::ExclusiveWrite
+            ExecutionDomain::Exclusive
+                | ExecutionDomain::ExclusiveWrite
+                | ExecutionDomain::WritePaths
         )
     }
 
@@ -159,7 +161,9 @@ impl WorkspaceWriteCoordinator {
                 self.with_workspace_and_paths(&scope.read_paths, false, operation)
             }
             ExecutionDomain::WritePaths => {
-                self.with_workspace_and_paths(&scope.write_paths, true, operation)
+                // PAR-1：写与编辑一律独占，不按路径细分。
+                let _workspace = self.workspace_write();
+                operation()
             }
         }
     }
