@@ -248,6 +248,7 @@ fn rules_json(core: &PersonaCore) -> Value {
             .map(|rule| json!({
                 "mode": rule.when.mode.map(PersonaMode::as_token),
                 "audience": rule.when.audience.map(Audience::as_token),
+                "userAffect": rule.when.user_affect.map(|affect| affect.as_token()),
                 "warmth": rule.voice.warmth,
                 "formality": rule.voice.formality,
                 "humor": rule.voice.humor.map(HumorLevel::as_token),

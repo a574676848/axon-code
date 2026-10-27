@@ -36,6 +36,14 @@ const AUDIENCE_LABEL: Record<string, string> = {
   group: '群聊',
 };
 
+
+const AFFECT_LABEL: Record<string, string> = {
+  neutral: '中性',
+  positive: '积极',
+  frustrated: '受挫',
+  urgent: '紧急',
+};
+
 /** 表达基线的一格：上标签、下读数。 */
 const BaselineCell: React.FC<{ label: string; value: string }> = ({ label, value }) => (
   <div className="min-w-0">
@@ -62,6 +70,7 @@ const describeRule = (rule: PersonaRule): string => {
   const scope = [
     rule.mode ? `${MODE_LABEL[rule.mode] ?? rule.mode}模式` : '',
     rule.audience ? AUDIENCE_LABEL[rule.audience] ?? rule.audience : '',
+    rule.userAffect ? `${AFFECT_LABEL[rule.userAffect] ?? rule.userAffect}时` : '',
   ]
     .filter(Boolean)
     .join(' · ');

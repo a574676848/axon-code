@@ -67,6 +67,7 @@ export interface PersonaPortrait {
 export interface PersonaRule {
   mode?: string | null;
   audience?: string | null;
+  userAffect?: string | null;
   warmth?: number | null;
   formality?: number | null;
   humor?: string | null;

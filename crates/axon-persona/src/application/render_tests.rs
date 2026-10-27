@@ -26,6 +26,7 @@ fn core() -> PersonaCore {
             when: RuleCondition {
                 mode: Some(PersonaMode::Incident),
                 audience: None,
+                user_affect: None,
             },
             voice: VoicePatch {
                 humor: Some(HumorLevel::Off),
@@ -166,6 +167,7 @@ fn rules_are_dropped_before_backstory_is_trimmed() {
             when: RuleCondition {
                 mode: Some(PersonaMode::Incident),
                 audience: None,
+                user_affect: None,
             },
             voice: VoicePatch {
                 humor: Some(HumorLevel::Off),
@@ -242,4 +244,28 @@ fn dynamic_readings_never_appear_in_stable_segment() {
         );
     }
     assert!(dynamic.contains("上一轮过度寒暄"));
+}
+
+#[test]
+fn worst_case_dynamic_segment_stays_within_token_budget() {
+    // 最坏情况：事故模式、最长原因与纠偏提示都写满。
+    let directive = ExpressionDirective {
+        mode: PersonaMode::Incident,
+        voice: Voice::new(20, 80, HumorLevel::Off, Verbosity::Detailed),
+        cause: "连续第 9 次失败".repeat(8),
+        guard: Some("上一轮过度寒暄并且结论后置".repeat(8)),
+        allow_reunion_greeting: false,
+    };
+
+    let text = render_dynamic(&directive);
+    let bytes = text.len();
+    let chars = text.chars().count();
+
+    assert!(
+        bytes <= DYNAMIC_RENDER_MAX_BYTES,
+        "动态段超字节上限：{bytes}"
+    );
+    // 中文按一字一 token 保守折算，300 token 对应 300 字。
+    assert!(chars <= 300, "动态段超 token 预算：{chars} 字");
+    println!("dynamic_bytes={bytes} dynamic_chars={chars}");
 }

@@ -7,7 +7,7 @@ use crate::{
     constants::{GROUP_FORMALITY_BONUS, REUNION_IDLE_MS, REUNION_MIN_FAMILIARITY},
     domain::{
         persona_core::PersonaCore,
-        persona_state::PersonaState,
+        persona_state::{PersonaState, UserAffect},
         scene_frame::{Audience, Daypart, PersonaMode, SceneFrame, resolve_mode},
         voice::{HumorLevel, Verbosity, Voice},
     },
@@ -42,7 +42,7 @@ pub fn resolve_expression(
     now_ms: u64,
 ) -> ExpressionDirective {
     let mode = resolve_mode(state, scene);
-    let voice = base_voice(core, mode, scene);
+    let voice = base_voice(core, mode, scene, state.user_affect);
     let voice = apply_state_offset(voice, state, mode, now_ms);
     let voice = converge(voice, scene.daypart);
     let group = scene.audience.is_group();
@@ -66,7 +66,12 @@ pub fn resolve_expression(
     }
 }
 
-fn base_voice(core: &PersonaCore, mode: PersonaMode, scene: &SceneFrame) -> Voice {
+fn base_voice(
+    core: &PersonaCore,
+    mode: PersonaMode,
+    scene: &SceneFrame,
+    user_affect: UserAffect,
+) -> Voice {
     let base = match mode {
         PersonaMode::Focus => Voice {
             humor: core.voice.humor.downgrade(),
@@ -83,7 +88,7 @@ fn base_voice(core: &PersonaCore, mode: PersonaMode, scene: &SceneFrame) -> Voic
         },
         PersonaMode::Casual => core.voice,
     };
-    match core.first_matching_rule(mode, scene.audience) {
+    match core.first_matching_rule(mode, scene.audience, user_affect) {
         Some(rule) => base.apply(rule.voice),
         None => base,
     }

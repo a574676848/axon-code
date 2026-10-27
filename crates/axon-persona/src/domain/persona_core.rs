@@ -1,6 +1,7 @@
 //! 人格内核：身份、来处、不可违背项、特质、表达基线与场景规则。
 
 use crate::domain::{
+    persona_state::UserAffect,
     scene_frame::{Audience, PersonaMode},
     voice::{Voice, VoicePatch},
 };
@@ -25,20 +26,25 @@ pub struct RuleCondition {
     pub mode: Option<PersonaMode>,
     /// 命中的受众。
     pub audience: Option<Audience>,
+    /// 命中的用户状态。
+    pub user_affect: Option<UserAffect>,
 }
 
 impl RuleCondition {
     /// 条件是否为空；空条件在解析阶段即被拒绝。
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.mode.is_none() && self.audience.is_none()
+        self.mode.is_none() && self.audience.is_none() && self.user_affect.is_none()
     }
 
     /// 判断当前模式与受众是否命中本条件。
     #[must_use]
-    pub fn matches(&self, mode: PersonaMode, audience: Audience) -> bool {
+    pub fn matches(&self, mode: PersonaMode, audience: Audience, user_affect: UserAffect) -> bool {
         self.mode.is_none_or(|expected| expected == mode)
             && self.audience.is_none_or(|expected| expected == audience)
+            && self
+                .user_affect
+                .is_none_or(|expected| expected == user_affect)
     }
 }
 
@@ -73,10 +79,15 @@ pub struct PersonaCore {
 impl PersonaCore {
     /// 返回首条命中的场景规则。
     #[must_use]
-    pub fn first_matching_rule(&self, mode: PersonaMode, audience: Audience) -> Option<&SceneRule> {
+    pub fn first_matching_rule(
+        &self,
+        mode: PersonaMode,
+        audience: Audience,
+        user_affect: UserAffect,
+    ) -> Option<&SceneRule> {
         self.rules
             .iter()
-            .find(|rule| rule.when.matches(mode, audience))
+            .find(|rule| rule.when.matches(mode, audience, user_affect))
     }
 }
 
@@ -92,6 +103,7 @@ mod tests {
             when: RuleCondition {
                 mode,
                 audience: None,
+                user_affect: None,
             },
             voice: VoicePatch {
                 humor,
@@ -107,6 +119,7 @@ mod tests {
             !RuleCondition {
                 mode: Some(PersonaMode::Focus),
                 audience: None,
+                user_affect: None,
             }
             .is_empty()
         );
@@ -117,16 +130,18 @@ mod tests {
         let mode_only = RuleCondition {
             mode: Some(PersonaMode::Incident),
             audience: None,
+            user_affect: None,
         };
-        assert!(mode_only.matches(PersonaMode::Incident, Audience::Group));
-        assert!(!mode_only.matches(PersonaMode::Focus, Audience::Private));
+        assert!(mode_only.matches(PersonaMode::Incident, Audience::Group, UserAffect::Unknown));
+        assert!(!mode_only.matches(PersonaMode::Focus, Audience::Private, UserAffect::Unknown));
 
         let audience_only = RuleCondition {
             mode: None,
             audience: Some(Audience::Group),
+            user_affect: None,
         };
-        assert!(audience_only.matches(PersonaMode::Focus, Audience::Group));
-        assert!(!audience_only.matches(PersonaMode::Focus, Audience::Private));
+        assert!(audience_only.matches(PersonaMode::Focus, Audience::Group, UserAffect::Unknown));
+        assert!(!audience_only.matches(PersonaMode::Focus, Audience::Private, UserAffect::Unknown));
     }
 
     #[test]
@@ -157,7 +172,7 @@ mod tests {
         };
 
         let first = core
-            .first_matching_rule(PersonaMode::Focus, Audience::Private)
+            .first_matching_rule(PersonaMode::Focus, Audience::Private, UserAffect::Unknown)
             .expect("应命中首条规则");
         assert_eq!(
             first.voice.humor,
@@ -165,7 +180,7 @@ mod tests {
         );
 
         assert!(
-            core.first_matching_rule(PersonaMode::Casual, Audience::Private)
+            core.first_matching_rule(PersonaMode::Casual, Audience::Private, UserAffect::Unknown)
                 .is_some(),
             "无 mode 限定的规则应作为兜底命中"
         );

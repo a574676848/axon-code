@@ -195,6 +195,14 @@ fn load_persona_context_from_root(
             .push(format!("人格稳定段接近上限（{stable_len} B）"));
     }
 
+    let stable_bytes = context
+        .stable
+        .as_ref()
+        .map_or(0, |message| message.content.len());
+    let dynamic_bytes = context
+        .dynamic
+        .as_ref()
+        .map_or(0, |message| message.content.len());
     let total_us = elapsed_us(started);
     if total_us >= PERSONA_ASSEMBLY_BUDGET_MS.saturating_mul(1_000) {
         context.degraded = true;
@@ -207,7 +215,7 @@ fn load_persona_context_from_root(
 
     if first_token_telemetry_enabled() {
         axon_logger::debug(&format!(
-            "persona_context_telemetry={{\"soul_read_us\":{soul_read_us},\"soul_parse_us\":{soul_parse_us},\"state_query_us\":{state_query_us},\"policy_us\":{policy_us},\"total_us\":{total_us},\"degraded\":{}}}",
+            "persona_context_telemetry={{\"soul_read_us\":{soul_read_us},\"soul_parse_us\":{soul_parse_us},\"state_query_us\":{state_query_us},\"policy_us\":{policy_us},\"total_us\":{total_us},\"stable_bytes\":{stable_bytes},\"dynamic_bytes\":{dynamic_bytes},\"degraded\":{}}}",
             context.degraded
         ));
     }

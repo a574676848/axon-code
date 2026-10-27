@@ -218,13 +218,17 @@ fn parse_rule(item: &Yaml, index: usize) -> Result<SceneRule, SoulError> {
         get(rule, "when").ok_or_else(|| invalid(&when_path, "缺少该字段"))?,
         &when_path,
     )?;
-    reject_unknown_keys(when, &["mode", "audience"], &when_path)?;
+    reject_unknown_keys(when, &["mode", "audience", "user_affect"], &when_path)?;
     let condition = RuleCondition {
         mode: optional_parse(when, "mode", &when_path, parse_mode)?,
         audience: optional_parse(when, "audience", &when_path, parse_audience)?,
+        user_affect: optional_parse(when, "user_affect", &when_path, parse_user_affect)?,
     };
     if condition.is_empty() {
-        return Err(invalid(&when_path, "必须至少声明 mode 或 audience"));
+        return Err(invalid(
+            &when_path,
+            "必须至少声明 mode、audience 或 user_affect",
+        ));
     }
     let voice_path = format!("{path}.voice");
     let voice = as_hash(
@@ -351,6 +355,18 @@ fn optional_parse<T>(
     parse(text)
         .map(Some)
         .ok_or_else(|| invalid(&format!("{path}.{key}"), "取值不在允许范围内"))
+}
+
+fn parse_user_affect(token: &str) -> Option<crate::domain::persona_state::UserAffect> {
+    use crate::domain::persona_state::UserAffect;
+
+    match token.trim() {
+        "neutral" => Some(UserAffect::Neutral),
+        "positive" => Some(UserAffect::Positive),
+        "frustrated" => Some(UserAffect::Frustrated),
+        "urgent" => Some(UserAffect::Urgent),
+        _ => None,
+    }
 }
 
 fn parse_mode(token: &str) -> Option<PersonaMode> {

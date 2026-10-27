@@ -101,6 +101,7 @@ fn first_matching_rule_wins_over_mode_defaults() {
             when: RuleCondition {
                 mode: Some(PersonaMode::Focus),
                 audience: None,
+                user_affect: None,
             },
             voice: VoicePatch {
                 verbosity: Some(Verbosity::Minimal),
