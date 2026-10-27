@@ -481,6 +481,7 @@ pub(super) async fn voice_status(
             "presets": presets::PRESETS.len(),
             "idleTimeoutSec": 30,
             "sessionTimeoutSec": 120,
+            "warmupTimeoutSec": 45,
         }),
     )
 }
