@@ -69,6 +69,7 @@ impl AgentToolRegistryRuntime {
         let tools = tools
             .into_iter()
             .chain(subagent_tool_definitions())
+            .map(with_parallel_note)
             .collect::<Vec<_>>();
         let mut candidate = registry.clone();
         for tool in &tools {
@@ -88,6 +89,48 @@ impl AgentToolRegistryRuntime {
     ) -> AxonResult<crate::ProviderToolCallScheduleReport> {
         crate::ProviderToolCallScheduleRuntime::schedule(registry, input)
     }
+}
+
+/// 只读、可与其他只读调用同批发出的工具（PAR-1 第 2 节）。
+const PARALLEL_CALL_TOOLS: [&str; 8] = [
+    "read_file",
+    "glob",
+    "search",
+    "memory_search",
+    "list_agents",
+    "job_output",
+    "list_mcp_resources",
+    "read_mcp_resource",
+];
+
+/// 会改变运行态或工作区、必须单独一批的工具。
+const EXCLUSIVE_CALL_TOOLS: [&str; 7] = [
+    "edit",
+    "write_stdin",
+    "job_kill",
+    "update_plan",
+    "ask_user_question",
+    "send_message",
+    "memory_write",
+];
+
+/// 给工具描述补一句并行属性，模型据此决定同批还是单发。
+fn with_parallel_note(mut tool: ToolDefinition) -> ToolDefinition {
+    let note = if PARALLEL_CALL_TOOLS.contains(&tool.name.as_str()) {
+        "只读，可与其他只读调用同批发出。"
+    } else if EXCLUSIVE_CALL_TOOLS.contains(&tool.name.as_str()) {
+        "会改变运行态或工作区，必须单独一批。"
+    } else if tool.name == "shell_command" {
+        "只读命令可与其他只读调用同批；写命令必须单独一批。"
+    } else {
+        return tool;
+    };
+    if !tool.description.contains(note) {
+        tool.description.push('（');
+        tool.description.push_str(note);
+        tool.description.push('）');
+    }
+    tool
 }
 
 fn list_mcp_resources_tool_definition() -> ToolDefinition {
