@@ -57,6 +57,8 @@ pub struct HostConfig {
     pub heartbeat_timeout: Duration,
     /// 自动重启上限。
     pub max_restart: u32,
+    /// 追加给子进程的命令行参数。
+    pub args: Vec<String>,
     /// 追加给子进程的环境变量（测试与诊断用）。
     pub env: Vec<(String, String)>,
 }
@@ -71,6 +73,7 @@ impl HostConfig {
             handshake_timeout: Duration::from_secs(5),
             heartbeat_timeout: Duration::from_secs(3),
             max_restart: 3,
+            args: Vec::new(),
             env: Vec::new(),
         }
     }
@@ -102,6 +105,7 @@ impl HostClient {
         for (key, value) in &config.env {
             command.env(key, value);
         }
+        command.args(&config.args);
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

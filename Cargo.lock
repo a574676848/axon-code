@@ -1029,6 +1029,8 @@ name = "axon-voice-host"
 version = "0.1.0"
 dependencies = [
  "axon-voice-protocol",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

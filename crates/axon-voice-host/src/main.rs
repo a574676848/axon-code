@@ -1,9 +1,10 @@
-//! 宿主进程：严格握手、单活跃会话、心跳、关闭确认。
+//! 宿主进程：严格握手、模型预检、单活跃会话、心跳与关闭确认。
 //!
-//! 不接受命令行参数；构建号由 `build.rs` 注入。回执队列容量为 1，
-//! 队列已满即按控制通道溢出退出 12，避免父进程不读时无限排队。
+//! 命令行只接受 `--model-root <dir>`；构建号由 `build.rs` 注入。
+//! 回执队列容量为 1，队列已满立即退出 12，避免父进程不读时无限排队。
 
 use std::io::{self, BufReader, BufWriter};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,9 +14,10 @@ use std::time::Duration;
 
 use axon_voice_host::BUILD_COMMIT;
 use axon_voice_host::exit_code;
+use axon_voice_host::model::{ModelFamily, ModelResolution, ModelStore};
 use axon_voice_protocol::{
     Control, ErrorDetail, ErrorMsg, Frame, FrameError, Heartbeat, Hello, PROTOCOL_VERSION, Ready,
-    Warmup, read_frame, write_frame,
+    Warm, Warmup, read_frame, write_frame,
 };
 
 /// 心跳间隔。
@@ -23,18 +25,59 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 /// 回执队列容量；满即退出，保证控制不被音频拖死。
 const OUTBOX_CAPACITY: usize = 1;
 
+#[derive(Debug, Default)]
+struct Options {
+    model_root: Option<PathBuf>,
+}
+
 fn main() -> ExitCode {
-    if std::env::args().nth(1).is_some() {
-        eprintln!("axon-voice-host 不接受命令行参数");
-        return ExitCode::from(exit_code::HANDSHAKE as u8);
-    }
-    match run() {
+    let options = match parse_args() {
+        Ok(options) => options,
+        Err(code) => return ExitCode::from(code),
+    };
+    match run(options) {
         Ok(code) => ExitCode::from(code),
         Err(code) => ExitCode::from(code),
     }
 }
 
-fn run() -> Result<u8, u8> {
+fn parse_args() -> Result<Options, u8> {
+    let mut args = std::env::args().skip(1);
+    let mut options = Options::default();
+    while let Some(flag) = args.next() {
+        match flag.as_str() {
+            "--model-root" => {
+                let Some(value) = args.next() else {
+                    eprintln!("--model-root 缺少目录参数");
+                    return Err(exit_code::MODEL as u8);
+                };
+                if options.model_root.is_some() {
+                    eprintln!("--model-root 只能出现一次");
+                    return Err(exit_code::HANDSHAKE as u8);
+                }
+                options.model_root = Some(PathBuf::from(value));
+            }
+            other => {
+                eprintln!("不支持的参数：{other}");
+                return Err(exit_code::HANDSHAKE as u8);
+            }
+        }
+    }
+    Ok(options)
+}
+
+fn run(options: Options) -> Result<u8, u8> {
+    let store = match options.model_root {
+        Some(root) => {
+            let store = ModelStore::new(root);
+            if store.preflight().is_err() {
+                return Err(exit_code::MODEL as u8);
+            }
+            Some(store)
+        }
+        None => None,
+    };
+
     let (outbox, inbox) = mpsc::sync_channel::<Control>(OUTBOX_CAPACITY);
     let writer = thread::spawn(move || writer_loop(inbox));
 
@@ -50,9 +93,10 @@ fn run() -> Result<u8, u8> {
     }
     send(&outbox, ready());
 
+    let warm = Arc::new(AtomicBool::new(false));
     let stop = Arc::new(AtomicBool::new(false));
-    let heartbeat = spawn_heartbeat(outbox.clone(), Arc::clone(&stop));
-    let outcome = serve(&mut reader, &outbox);
+    let heartbeat = spawn_heartbeat(outbox.clone(), Arc::clone(&stop), Arc::clone(&warm));
+    let outcome = serve(&mut reader, &outbox, store.as_ref(), &warm);
     stop.store(true, Ordering::SeqCst);
     if let Err(code) = outcome {
         // writer 可能正阻塞在 stdout，不能 join；由进程退出兜底。
@@ -78,7 +122,11 @@ fn ready() -> Control {
     })
 }
 
-fn spawn_heartbeat(outbox: SyncSender<Control>, stop: Arc<AtomicBool>) -> thread::JoinHandle<()> {
+fn spawn_heartbeat(
+    outbox: SyncSender<Control>,
+    stop: Arc<AtomicBool>,
+    warm: Arc<AtomicBool>,
+) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         while !stop.load(Ordering::SeqCst) {
             thread::sleep(HEARTBEAT_INTERVAL);
@@ -88,7 +136,11 @@ fn spawn_heartbeat(outbox: SyncSender<Control>, stop: Arc<AtomicBool>) -> thread
             let beat = Control::Heartbeat(Heartbeat {
                 pid: std::process::id(),
                 rss_kb: resident_kb(),
-                model_state: "cold".to_owned(),
+                model_state: if warm.load(Ordering::SeqCst) {
+                    "warm".to_owned()
+                } else {
+                    "cold".to_owned()
+                },
                 queue_in: 0,
                 queue_out: 0,
             });
@@ -117,7 +169,12 @@ fn resident_kb() -> u64 {
     0
 }
 
-fn serve(reader: &mut impl io::BufRead, outbox: &SyncSender<Control>) -> Result<u8, u8> {
+fn serve(
+    reader: &mut impl io::BufRead,
+    outbox: &SyncSender<Control>,
+    store: Option<&ModelStore>,
+    warm: &Arc<AtomicBool>,
+) -> Result<u8, u8> {
     let mut session: Option<String> = None;
     loop {
         let frame = match read_frame(reader) {
@@ -139,7 +196,10 @@ fn serve(reader: &mut impl io::BufRead, outbox: &SyncSender<Control>) -> Result<
         };
         match control {
             Control::Hello(_) | Control::Ready(_) => return Err(exit_code::SEQUENCE as u8),
-            Control::Warmup(message) => send(outbox, model_missing(&message)),
+            Control::Warmup(message) => {
+                let reply = warmup_reply(store, &message, warm);
+                send(outbox, reply);
+            }
             Control::SessionStart(message) => {
                 if session.is_some() {
                     return Err(exit_code::SEQUENCE as u8);
@@ -180,13 +240,43 @@ fn serve(reader: &mut impl io::BufRead, outbox: &SyncSender<Control>) -> Result<
     }
 }
 
-fn model_missing(message: &Warmup) -> Control {
+fn warmup_reply(store: Option<&ModelStore>, message: &Warmup, warm: &Arc<AtomicBool>) -> Control {
+    let Some(family) = ModelFamily::parse(&message.family) else {
+        return simple_error("cue_unavailable", "arming");
+    };
+    let Some(store) = store else {
+        return model_missing(&message.family);
+    };
+    match store.resolve(family, &message.model) {
+        ModelResolution::Ready { manifest, .. } => {
+            warm.store(true, Ordering::SeqCst);
+            Control::Warm(Warm {
+                family: message.family.clone(),
+                model: message.model.clone(),
+                rtf_p50: manifest.rtf_p50,
+                rss_kb: resident_kb(),
+            })
+        }
+        ModelResolution::Missing => model_missing(&message.family),
+        ModelResolution::Unusable { .. } => Control::Error(ErrorMsg {
+            code: "model_unusable".to_owned(),
+            stage: "arming".to_owned(),
+            retryable: false,
+            detail: Some(ErrorDetail {
+                family: Some(message.family.clone()),
+                ..ErrorDetail::default()
+            }),
+        }),
+    }
+}
+
+fn model_missing(family: &str) -> Control {
     Control::Error(ErrorMsg {
         code: "model_missing".to_owned(),
         stage: "arming".to_owned(),
         retryable: true,
         detail: Some(ErrorDetail {
-            family: Some(message.family.clone()),
+            family: Some(family.to_owned()),
             ..ErrorDetail::default()
         }),
     })
