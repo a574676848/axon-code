@@ -148,7 +148,8 @@ fn subagent_spawn_calls_can_run_in_parallel_but_mixed_control_calls_stay_serial(
         }),
     );
 
-    assert!(super::tool_calls_can_run_in_parallel(&spawn_requests));
+    // PAR-1：隐藏的 spawn_agent 不再进并行组，只有 delegate_to_fast 可以。
+    assert!(!super::tool_calls_can_run_in_parallel(&spawn_requests));
     assert!(!super::tool_calls_can_run_in_parallel(&duplicate_requests));
     assert!(!super::tool_calls_can_run_in_parallel(&mixed_requests));
 }

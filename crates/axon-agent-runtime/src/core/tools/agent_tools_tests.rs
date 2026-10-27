@@ -59,7 +59,7 @@ fn builtin_tools_register_model_visible_entries() {
     assert!(!spawn_agent.enabled);
     assert_eq!(
         spawn_agent.concurrency_policy,
-        axon_domain::ToolConcurrencyPolicy::ParallelSafe
+        axon_domain::ToolConcurrencyPolicy::Exclusive
     );
     assert!(
         registry

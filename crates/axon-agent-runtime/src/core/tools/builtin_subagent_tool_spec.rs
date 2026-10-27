@@ -105,8 +105,9 @@ pub fn spawn_agent_tool_definition() -> ToolDefinition {
         ),
         // 内部协作能力：spawn_agent 保留在执行注册表，但不向模型暴露；
         // 创建子代理统一由 delegate_to_fast 与内部编排驱动。
+        // PAR-1 §1.4：隐藏工具 fail-closed 为独占。
         enabled: false,
-        concurrency_policy: ToolConcurrencyPolicy::ParallelSafe,
+        concurrency_policy: ToolConcurrencyPolicy::Exclusive,
         output_policy: ToolOutputPolicy::BoundedSummary,
         permission_policy: ToolPermissionPolicy::ReadOnly,
     }

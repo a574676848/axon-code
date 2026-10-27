@@ -72,16 +72,17 @@ fn provider_tool_call_batch_schedules_stable_ids_and_requirements() {
 }
 
 #[test]
-fn hidden_spawn_agent_call_cannot_be_dispatched_but_definition_keeps_policy() {
+fn hidden_spawn_agent_call_cannot_be_dispatched_and_stays_exclusive() {
     let mut registry = ToolRegistry::new();
     AgentToolRegistryRuntime::register_builtin_tools(&mut registry).unwrap();
     let spawn_agent = registry
         .tool_by_qualified_name("builtin.spawn_agent")
         .expect("builtin.spawn_agent 定义必须保留在执行注册表");
     assert!(!spawn_agent.enabled);
+    // PAR-1 §1.4：隐藏工具 fail-closed 为独占。
     assert_eq!(
         spawn_agent.concurrency_policy,
-        ToolConcurrencyPolicy::ParallelSafe
+        ToolConcurrencyPolicy::Exclusive
     );
 
     let report = ProviderToolCallScheduleRuntime::schedule(
