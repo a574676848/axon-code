@@ -9,6 +9,7 @@ use super::gateway_http_response::{bearer, unauthorized};
 use crate::infrastructure::gateway_auth::query_token;
 use axon_voice_bridge::{BridgeError, VoiceBridge};
 use axon_voice_host::BUILD_COMMIT;
+use axon_voice_host::model::sha256::hex_digest;
 use axon_voice_host::supervisor::{HostClient, HostConfig};
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -86,14 +87,16 @@ async fn warmup_error() -> String {
         return error_json("worker_unavailable", "arming", true);
     };
     let config = HostConfig::new(exe, BUILD_COMMIT.to_owned());
+    let root = model_root();
+    let manifest_sha = manifest_digest(&root);
     let outcome = tokio::task::spawn_blocking(move || -> Result<(), BridgeError> {
         let client = HostClient::spawn(&config).map_err(|error| {
             BridgeError::Transport(axon_voice_bridge::TransportError::Write(error.to_string()))
         })?;
         let mut bridge = VoiceBridge::new(client);
-        bridge.warmup("asr", DEFAULT_ASR_MODEL, &"0".repeat(64), WARMUP_TIMEOUT)?;
+        let result = bridge.warmup("asr", DEFAULT_ASR_MODEL, &manifest_sha, WARMUP_TIMEOUT);
         bridge.shutdown();
-        Ok(())
+        result
     })
     .await;
     match outcome {
@@ -113,6 +116,17 @@ fn host_exe() -> Option<PathBuf> {
     };
     let candidate = dir.join(name);
     candidate.is_file().then_some(candidate)
+}
+
+fn manifest_digest(root: &std::path::Path) -> String {
+    let path = root
+        .join("asr")
+        .join(DEFAULT_ASR_MODEL)
+        .join("manifest.json");
+    match std::fs::read(path) {
+        Ok(bytes) => hex_digest(&bytes),
+        Err(_) => "0".repeat(64),
+    }
 }
 
 fn model_root() -> PathBuf {

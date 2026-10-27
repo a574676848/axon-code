@@ -10,8 +10,8 @@
 | Stage 1 | WP-01 领域合同（`axon-voice`） | 完成 | `6b582ea5e` |
 | Stage 2 | WP-05 协议与宿主骨架（`axon-voice-protocol`、`axon-voice-host`） | 完成 | `833ccd232` |
 | Stage 3 | WP-02 清单与校验 + WAV 输入 | 完成 | `40e3a6cab` |
-| Stage 4 | WP-06 桥接内核（`axon-voice-bridge`） | 完成 | 本次提交 |
-| Stage 5 | `/api/v1/voice` WS 接线 | 未开始 | — |
+| Stage 4 | WP-06 桥接内核（`axon-voice-bridge`） | 完成 | `90fcc459c` |
+| Stage 5 | `/api/v1/voice` WS 入口（握手 + 预热错误） | 实现完成，审计中 | `96f9307e6` |
 
 ## Stage 4 范围声明
 
@@ -32,3 +32,11 @@
 
 ASR 运行时尚未接入：真实宿主对合法模型回 `model_unusable`（原因注明运行时未接入），
 心跳恒 `cold`；桥会把它作为 `BridgeError::Host` 上抛，不会伪造就绪。
+## Stage 5 交付与边界
+
+已交付：axum `ws` feature、`/api/v1/voice` 路由（在 `/api/v1/{*rest}` 兜底之前）、网关 token 鉴权、
+连接后 `ready`、客户端控制帧严格解析、`start` 时拉起宿主并预热、错误帧按合同字段回传。
+
+未交付（Stage 6）：音频二进制帧上行、partial/final 转写事件、`state` 相位帧、playbackDrained、
+WS 端到端测试（真实 socket + 客户端）、桌面端接入。原因：这些依赖 ASR 运行时，当前宿主只能回
+`model_unusable`，先打通控制面与错误面，避免用假转写撑门面。
