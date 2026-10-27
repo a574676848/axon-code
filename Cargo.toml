@@ -120,7 +120,7 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = ["c
 
 # HTTP 网关承载：只取 1.1 与 tokio 运行时两项能力，默认特性里的表单、
 # 路由追踪在网关上用不到，不引入多余依赖。
-axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

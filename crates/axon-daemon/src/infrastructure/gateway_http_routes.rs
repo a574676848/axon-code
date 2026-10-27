@@ -31,6 +31,7 @@ pub(super) fn router(state: Arc<GatewayHttpState>, max_body_bytes: usize) -> Rou
             "/gateway/v1/interactions/{interaction_id}",
             any(interaction),
         )
+        .route("/api/v1/voice", any(super::gateway_voice::voice_ws))
         .route("/api/v1/{*rest}", any(custom))
         .fallback(unknown)
         .with_state(Arc::clone(&state))

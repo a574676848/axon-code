@@ -13,6 +13,8 @@ mod gateway_http_events;
 mod gateway_http_response;
 #[path = "gateway_http_routes.rs"]
 mod gateway_http_routes;
+#[path = "gateway_voice.rs"]
+mod gateway_voice;
 
 pub use super::gateway_http_handler::{GatewayHttpResponse, GatewayHttpRouteHandler};
 
