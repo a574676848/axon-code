@@ -30,7 +30,7 @@ pub struct VoicePreset {
 }
 
 /// 全部预设。
-pub const PRESETS: [VoicePreset; 5] = [
+pub const PRESETS: [VoicePreset; 4] = [
     VoicePreset {
         id: "calm-elegant",
         name: "冷静知性",
@@ -63,17 +63,6 @@ pub const PRESETS: [VoicePreset; 5] = [
         is_default: false,
         thinking_text: "嗯哼，等我一下",
         ack_text: "来啦",
-    },
-    VoicePreset {
-        id: "warm-taiwan",
-        name: "甜软台腔",
-        speaker: 0,
-        rate: 1.0,
-        pitch_semitones: 0.0,
-        required_model: Some("vits-zh-tw-soft"),
-        is_default: false,
-        thinking_text: "等我一下下哦",
-        ack_text: "好呀",
     },
     VoicePreset {
         id: "capable-assistant",
@@ -144,25 +133,18 @@ mod tests {
     use crate::domain::profile::Verbosity;
 
     #[test]
-    fn has_five_presets_with_unique_ids() {
-        assert_eq!(PRESETS.len(), 5);
+    fn has_four_presets_with_unique_ids() {
+        assert_eq!(PRESETS.len(), 4);
         let mut ids: Vec<&str> = PRESETS.iter().map(|preset| preset.id).collect();
         ids.sort_unstable();
         ids.dedup();
-        assert_eq!(ids.len(), 5);
+        assert_eq!(ids.len(), 4);
     }
 
     #[test]
     fn default_is_calm_elegant() {
         assert_eq!(default_preset().id, "calm-elegant");
         assert!(default_preset().is_default);
-    }
-
-    #[test]
-    fn taiwan_requires_extra_model() {
-        let preset = resolve("warm-taiwan").expect("存在");
-        assert!(!preset.available());
-        assert_eq!(preset.required_model, Some("vits-zh-tw-soft"));
     }
 
     #[test]
