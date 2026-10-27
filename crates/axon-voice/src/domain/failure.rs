@@ -281,6 +281,63 @@ impl VoiceFailure {
         }
     }
 
+    /// 由错误码还原失败变体；未知码返回 `None`。
+    #[must_use]
+    pub fn from_code(code: &str) -> Option<Self> {
+        let failure = match code {
+            "unauthorized" => Self::Unauthorized,
+            "voice_busy" => Self::Busy,
+            "protocol_version" => Self::Protocol {
+                reason: ProtocolReason::Version,
+            },
+            "protocol_unknown_field" => Self::Protocol {
+                reason: ProtocolReason::UnknownField,
+            },
+            "protocol_sequence" => Self::Protocol {
+                reason: ProtocolReason::Sequence,
+            },
+            "frame_oversize" => Self::Protocol {
+                reason: ProtocolReason::Oversize,
+            },
+            "model_missing" => Self::ModelMissing {
+                family: ModelFamily::Asr,
+            },
+            "model_unusable" => Self::ModelUnusable {
+                family: ModelFamily::Asr,
+            },
+            "device_unavailable" => Self::DeviceUnavailable {
+                detail: String::new(),
+            },
+            "worker_unavailable" => Self::WorkerUnavailable,
+            "worker_crashed" => Self::WorkerCrashed {
+                sub_stage: WorkerSubStage::Warmup,
+                exit_code: 0,
+            },
+            "backpressure" => Self::Backpressure { dropped_frames: 0 },
+            "asr_overloaded" => Self::Overloaded,
+            "tts_failed" => Self::TtsFailed,
+            "submit_rejected" => Self::TurnRejected {
+                code: String::new(),
+            },
+            "idle_timeout" => Self::IdleTimeout {
+                phase: IdlePhase::Connect,
+            },
+            "session_idle" => Self::IdleTimeout {
+                phase: IdlePhase::Session,
+            },
+            "internal" => Self::Internal {
+                detail: String::new(),
+            },
+            "preset_unavailable" => Self::PresetUnavailable {
+                preset_id: String::new(),
+                reason: PresetReason::MissingModel,
+            },
+            "preview_timeout" => Self::PreviewTimeout,
+            "cue_unavailable" => Self::CueUnavailable,
+            _ => return None,
+        };
+        Some(failure)
+    }
     /// 是否可重试。
     #[must_use]
     pub const fn retryable(&self) -> bool {
@@ -645,6 +702,39 @@ mod tests {
                 reason: ProtocolReason::Sequence
             }
         );
+    }
+
+    #[test]
+    fn from_code_roundtrips_every_code() {
+        let codes = [
+            "unauthorized",
+            "voice_busy",
+            "protocol_version",
+            "protocol_unknown_field",
+            "protocol_sequence",
+            "frame_oversize",
+            "model_missing",
+            "model_unusable",
+            "device_unavailable",
+            "worker_unavailable",
+            "worker_crashed",
+            "backpressure",
+            "asr_overloaded",
+            "tts_failed",
+            "submit_rejected",
+            "idle_timeout",
+            "session_idle",
+            "internal",
+            "preset_unavailable",
+            "preview_timeout",
+            "cue_unavailable",
+        ];
+        for code in codes {
+            let failure = VoiceFailure::from_code(code).expect("码表内应有变体");
+            assert_eq!(failure.code(), code, "往返失败：{code}");
+            assert!(!failure.user_message().is_empty());
+        }
+        assert!(VoiceFailure::from_code("nope").is_none());
     }
 
     #[test]
