@@ -56,7 +56,7 @@ fn run_batch(
     let mut commit_log = Vec::new();
     if concurrent {
         let latencies = vec![READ_DELAY_MS; requests.len()];
-        let _ = super::run_tool_loop::execute_parallel_for_tests(
+        let _ = super::run_tool_loop::parallel_test_seam::execute_parallel_for_tests(
             requests,
             &latencies,
             None,
@@ -64,7 +64,7 @@ fn run_batch(
         );
     } else {
         for request in requests {
-            let _ = super::run_tool_loop::execute_parallel_for_tests(
+            let _ = super::run_tool_loop::parallel_test_seam::execute_parallel_for_tests(
                 std::slice::from_ref(request),
                 &[READ_DELAY_MS],
                 None,

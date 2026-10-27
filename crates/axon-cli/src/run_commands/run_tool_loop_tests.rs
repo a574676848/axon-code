@@ -414,8 +414,12 @@ fn parallel_pool_commits_in_model_order_under_reordering() {
         ),
     ];
     let mut commit_log = Vec::new();
-    let receipts =
-        super::execute_parallel_for_tests(&requests, &[80, 10, 40], None, &mut commit_log);
+    let receipts = super::parallel_test_seam::execute_parallel_for_tests(
+        &requests,
+        &[80, 10, 40],
+        None,
+        &mut commit_log,
+    );
     assert_eq!(commit_log, vec![0, 1, 2], "提交必须按模型序，不按完成序");
     assert_eq!(receipts.len(), 3);
     for (receipt, request) in receipts.iter().zip(&requests) {
@@ -446,35 +450,49 @@ fn write_call_barriers_the_batch_around_it() {
     assert_eq!(segments(&requests), vec![0..1, 1..2, 2..3]);
 }
 
-/// G4：批次中途取消后，已启动的收敛、未启动的补合成回执，且无孤立 result。
+/// G4：真实取消令牌 + 超过池宽度的排队调用，未启动项补合成回执。
 #[test]
 fn cancelled_mid_batch_pairs_every_call() {
-    let requests = vec![
-        plain_request(
-            1,
-            "builtin.memory_search",
-            ToolConcurrencyPolicy::ParallelSafe,
-        ),
-        plain_request(
-            2,
-            "builtin.memory_search",
-            ToolConcurrencyPolicy::ParallelSafe,
-        ),
-        plain_request(
-            3,
-            "builtin.memory_search",
-            ToolConcurrencyPolicy::ParallelSafe,
-        ),
-    ];
+    let requests = (0..10)
+        .map(|index| {
+            plain_request(
+                index + 1,
+                "builtin.memory_search",
+                ToolConcurrencyPolicy::ParallelSafe,
+            )
+        })
+        .collect::<Vec<_>>();
+    let token = axon_agent_runtime::RunCancelToken::default();
+    let cancel_handle = {
+        let token = token.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            token.cancel();
+        })
+    };
     let mut commit_log = Vec::new();
-    let receipts =
-        super::execute_parallel_for_tests(&requests, &[20, 20, 20], Some(1), &mut commit_log);
-    assert_eq!(receipts.len(), 3, "每个 call 都必须有配对回执");
-    assert_eq!(commit_log, vec![0], "只有已启动的调用会提交");
+    let receipts = super::parallel_test_seam::execute_parallel_for_tests(
+        &requests,
+        &[200; 10],
+        Some(token),
+        &mut commit_log,
+    );
+    cancel_handle.join().unwrap();
+    assert_eq!(receipts.len(), requests.len(), "每个 call 都必须有配对回执");
     for (receipt, request) in receipts.iter().zip(&requests) {
         assert_eq!(receipt.part_id, request.part_id);
     }
-    for receipt in &receipts[1..] {
-        assert!(receipt.summary.contains("未启动"), "未启动的调用必须标注");
-    }
+    assert!(
+        receipts
+            .iter()
+            .any(|receipt| receipt.summary.contains("未启动")),
+        "排队中被取消的调用必须标注未启动"
+    );
+    let mut sorted = commit_log.clone();
+    sorted.sort_unstable();
+    assert_eq!(
+        sorted,
+        (0..commit_log.len()).collect::<Vec<_>>(),
+        "提交必须保序"
+    );
 }

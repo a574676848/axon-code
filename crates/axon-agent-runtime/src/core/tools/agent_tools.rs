@@ -104,9 +104,9 @@ const PARALLEL_CALL_TOOLS: [&str; 19] = [
     "invoke_skill",
     "goal_list",
     "goal_get",
-    "notes_read",
-    "notes_list",
-    "notes_search",
+    "notes_read_file",
+    "notes_list_files_by_prefix",
+    "notes_search_contents",
     "history_list_windows",
     "history_list_items",
     "history_read_item",
@@ -127,8 +127,8 @@ const EXCLUSIVE_CALL_TOOLS: [&str; 14] = [
     "goal_update",
     "goal_cancel",
     "goal_start",
-    "notes_write",
-    "notes_append",
+    "notes_write_file",
+    "notes_append_to_file",
     "new_context",
 ];
 

@@ -97,7 +97,7 @@ fn fixture_request() -> RunRequest {
 }
 
 #[test]
-fn subagent_spawn_calls_can_run_in_parallel_but_mixed_control_calls_stay_serial() {
+fn hidden_spawn_calls_stay_serial_while_fast_delegates_parallel() {
     let spawn_requests = vec![
         ToolExecutionRequest {
             tool_call: provider_tool_call("builtin.spawn_agent"),
