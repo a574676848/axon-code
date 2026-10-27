@@ -3,9 +3,9 @@
 //! 数值来自 `limits.yaml` 的内部预设，不进入用户配置；提示词渲染、准入判定与
 //! 遥测都读同一份快照，禁止各自计算或硬编码。
 
-/// 单批工具调用并发宽度（`limits.yaml` 的 `agent.max_parallel_tool_calls.preset`）。
+/// 单批工具调用并发宽度（`limits.yaml` 的 `scheduler.call_width`）。
 const PRESET_CALL_WIDTH: usize = 8;
-/// 扇出单元宽度（`agent.max_fan_out_units.preset`）。
+/// 扇出单元宽度预设（与 `scheduler.call_width` 同值，预留）。
 const PRESET_UNIT_WIDTH: usize = 8;
 /// 子代理线程上限（`agent.max_subagent_threads.preset`）。
 const PRESET_THREAD_LIMIT: usize = 16;
