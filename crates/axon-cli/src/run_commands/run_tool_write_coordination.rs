@@ -119,8 +119,8 @@ pub(super) fn workspace_write_coordinator(cwd: &Path) -> Arc<WorkspaceWriteCoord
 
 /// 判定一次工具调用的执行域（PAR-1 第 1 节）。
 ///
-/// 判定只看本次调用的参数：声明为 `Exclusive` 不降级；`WorkspaceCoordinated`
-/// 只有明确只读才算并行；读盘但推导不出读路径按独占处理。
+/// 工作区闸是粗粒度的：只读调用共享读闸，写与未知调用独占据写闸。
+/// 因此只读工具无需解析路径，只要声明只读就安全并行。
 pub(super) fn tool_access_scope(cwd: &Path, request: &ToolExecutionRequest) -> ToolAccessScope {
     if request.concurrency_policy == ToolConcurrencyPolicy::Exclusive {
         // 写进程输入会改运行态，必须与工作区写者互斥；控制类工具不加闸。
@@ -131,142 +131,36 @@ pub(super) fn tool_access_scope(cwd: &Path, request: &ToolExecutionRequest) -> T
     }
     let name = request.tool_call.dispatch_name();
     match request.concurrency_policy {
-        ToolConcurrencyPolicy::WorkspaceCoordinated => {
-            match name {
-                "builtin.shell_command" => {
-                    let evaluation =
-                        ShellCommandPolicyEvaluator::evaluate(&request.tool_call.input, cwd);
-                    if evaluation.is_read_only && !evaluation.affected_paths.is_empty() {
-                        ToolAccessScope::read_paths()
-                    } else {
-                        // 写命令、重定向或读路径未知：一律独占。
-                        ToolAccessScope::exclusive_over_workspace()
-                    }
+        ToolConcurrencyPolicy::WorkspaceCoordinated => match name {
+            "builtin.shell_command" => {
+                let evaluation =
+                    ShellCommandPolicyEvaluator::evaluate(&request.tool_call.input, cwd);
+                if evaluation.is_read_only {
+                    ToolAccessScope::read_paths()
+                } else {
+                    ToolAccessScope::exclusive_over_workspace()
                 }
-                _ => ToolAccessScope::exclusive_over_workspace(),
+            }
+            _ => ToolAccessScope::exclusive_over_workspace(),
+        },
+        ToolConcurrencyPolicy::ParallelSafe => {
+            if is_disk_read_tool(name) {
+                ToolAccessScope::read_paths()
+            } else {
+                ToolAccessScope::parallel_safe()
             }
         }
-        ToolConcurrencyPolicy::ParallelSafe => match read_intent(name, &request.tool_call.input) {
-            ReadIntent::Safe => ToolAccessScope::parallel_safe(),
-            ReadIntent::Paths => ToolAccessScope::read_paths(),
-            ReadIntent::Unknown => ToolAccessScope::exclusive_over_workspace(),
-        },
         ToolConcurrencyPolicy::Exclusive => ToolAccessScope::exclusive(),
     }
 }
 
-/// 只读工具的读意图。
-enum ReadIntent {
-    /// 不读盘。
-    Safe,
-    /// 读盘且能声明出路径。
-    Paths,
-    /// 读盘但推导不出路径。
-    Unknown,
-}
-
-fn read_intent(name: &str, input: &axon_domain::ToolCallInput) -> ReadIntent {
-    match name {
-        "builtin.read_file" => {
-            let Some(path) = input_json(input).and_then(|value| {
-                value
-                    .get("path")
-                    .and_then(serde_json::Value::as_str)
-                    .map(ToOwned::to_owned)
-            }) else {
-                return ReadIntent::Unknown;
-            };
-            if valid_scope(&path) {
-                ReadIntent::Paths
-            } else {
-                ReadIntent::Unknown
-            }
-        }
-        // glob / search 允许通配：取组件边界的静态前缀，前缀为空即读整个工作区。
-        "builtin.glob" | "builtin.search" => {
-            let declared = input_json(input)
-                .map(|value| declared_paths_value(&value))
-                .unwrap_or_default();
-            if declared.is_empty() {
-                return ReadIntent::Unknown;
-            }
-            let mut valid = true;
-            for pattern in &declared {
-                match static_path_prefix(pattern) {
-                    Some(root) if valid_scope(&root) => {}
-                    _ => {
-                        valid = false;
-                        break;
-                    }
-                }
-            }
-            if valid {
-                ReadIntent::Paths
-            } else {
-                ReadIntent::Unknown
-            }
-        }
-        _ => ReadIntent::Safe,
-    }
-}
-
-fn declared_paths_value(value: &serde_json::Value) -> Vec<String> {
-    match value.get("paths") {
-        Some(serde_json::Value::String(path)) => vec![path.clone()],
-        Some(serde_json::Value::Array(paths)) => paths
-            .iter()
-            .filter_map(serde_json::Value::as_str)
-            .map(ToOwned::to_owned)
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-/// 取通配模式里按组件边界成立的静态前缀；第一个组件就含通配符时返回 `None`。
-fn static_path_prefix(pattern: &str) -> Option<String> {
-    let trimmed = pattern.trim_start_matches("./");
-    let mut anchor = Vec::new();
-    for component in trimmed.split(['/', '\\']) {
-        if component.is_empty() || component == "." {
-            continue;
-        }
-        if component.contains(['*', '?', '[', '{']) {
-            break;
-        }
-        anchor.push(component);
-    }
-    if anchor.is_empty() {
-        None
-    } else {
-        Some(anchor.join("/"))
-    }
-}
-
-/// 只接受仓库相对路径：拒绝绝对路径、`..` 与通配符。
-fn valid_scope(scope: &str) -> bool {
-    let trimmed = scope.trim();
-    if trimmed.is_empty()
-        || trimmed.starts_with('/')
-        || trimmed.starts_with('\\')
-        || trimmed.contains("..")
-        || trimmed.contains(['*', '?', '[', '{'])
-    {
-        return false;
-    }
-    let mut chars = trimmed.chars();
-    !matches!(
-        (chars.next(), chars.next()),
-        (Some(drive), Some(':')) if drive.is_ascii_alphabetic()
+/// 声明为 `ParallelSafe` 且确实读盘的只读工具。
+fn is_disk_read_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "builtin.read_file" | "builtin.glob" | "builtin.search"
     )
 }
-
-fn input_json(input: &axon_domain::ToolCallInput) -> Option<serde_json::Value> {
-    if let Some(value) = input.as_json() {
-        return Some(value.clone());
-    }
-    serde_json::from_str(input.as_text()?).ok()
-}
-
 fn normalized_path(cwd: &Path, relative: &Path) -> PathBuf {
     let root = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
     let mut normalized = PathBuf::new();

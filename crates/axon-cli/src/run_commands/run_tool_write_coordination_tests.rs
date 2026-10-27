@@ -56,13 +56,13 @@ fn classifier_maps_calls_to_three_domains() {
             "builtin.read_file",
             serde_json::json!({ "path": "../escape.rs" }),
             ToolConcurrencyPolicy::ParallelSafe,
-            ExecutionDomain::Exclusive,
+            ExecutionDomain::ReadPaths,
         ),
         (
             "builtin.glob",
             serde_json::json!({ "pattern": "**/*.rs" }),
             ToolConcurrencyPolicy::ParallelSafe,
-            ExecutionDomain::Exclusive,
+            ExecutionDomain::ReadPaths,
         ),
         (
             "builtin.glob",
@@ -74,7 +74,7 @@ fn classifier_maps_calls_to_three_domains() {
             "builtin.glob",
             serde_json::json!({ "paths": ["{src,docs}/**"] }),
             ToolConcurrencyPolicy::ParallelSafe,
-            ExecutionDomain::Exclusive,
+            ExecutionDomain::ReadPaths,
         ),
         (
             "builtin.edit",

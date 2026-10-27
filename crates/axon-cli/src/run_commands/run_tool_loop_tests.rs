@@ -157,8 +157,12 @@ fn isolated_requests_split_the_batch_into_sequential_segments() {
             "builtin.memory_search",
             ToolConcurrencyPolicy::ParallelSafe,
         ),
-        // 读盘但没有声明 paths：fail-closed 成隔离段，不能与相邻调用并发。
-        plain_request(4, "builtin.glob", ToolConcurrencyPolicy::ParallelSafe),
+        // 写调用自成隔离段。
+        plain_request(
+            4,
+            "builtin.edit",
+            ToolConcurrencyPolicy::WorkspaceCoordinated,
+        ),
     ];
 
     assert_eq!(segments(&requests), vec![0..1, 1..2, 2..3, 3..4]);
