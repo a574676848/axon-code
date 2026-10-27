@@ -1025,6 +1025,14 @@ name = "axon-voice"
 version = "0.1.0"
 
 [[package]]
+name = "axon-voice-bridge"
+version = "0.1.0"
+dependencies = [
+ "axon-voice-host",
+ "axon-voice-protocol",
+]
+
+[[package]]
 name = "axon-voice-host"
 version = "0.1.0"
 dependencies = [

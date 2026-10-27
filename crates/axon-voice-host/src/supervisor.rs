@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use axon_voice_protocol::{
     Control, ErrorDetail, ErrorMsg, Frame, FrameError, Hello, PROTOCOL_VERSION, read_frame,
-    write_frame,
+    write_bytes, write_frame,
 };
 
 /// 监督错误。
@@ -179,6 +179,16 @@ impl HostClient {
     /// 写管道失败。
     pub fn send(&mut self, control: &Control) -> Result<(), SupervisorError> {
         write_frame(&mut self.stdin, control)
+            .map_err(|error: FrameError| SupervisorError::Write(error.to_string()))
+    }
+
+    /// 写原始帧（音频）并刷新。
+    ///
+    /// # Errors
+    ///
+    /// 写管道失败。
+    pub fn send_bytes(&mut self, bytes: &[u8]) -> Result<(), SupervisorError> {
+        write_bytes(&mut self.stdin, bytes)
             .map_err(|error: FrameError| SupervisorError::Write(error.to_string()))
     }
 

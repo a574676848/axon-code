@@ -1,0 +1,17 @@
+[package]
+name = "axon-voice-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axon-voice-host = { path = "../axon-voice-host" }
+axon-voice-protocol = { path = "../axon-voice-protocol" }
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
