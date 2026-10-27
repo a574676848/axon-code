@@ -600,14 +600,6 @@ pub(super) fn tool_batch_ranges(scopes: &[ToolAccessScope]) -> Vec<Range<usize>>
             segment_start = index + 1;
             continue;
         }
-        if index > segment_start
-            && scopes[segment_start..index]
-                .iter()
-                .any(|prior| prior.conflicts_with(scope))
-        {
-            ranges.push(segment_start..index);
-            segment_start = index;
-        }
     }
     if segment_start < scopes.len() {
         ranges.push(segment_start..scopes.len());
