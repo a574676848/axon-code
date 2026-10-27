@@ -83,6 +83,16 @@ impl HostTransport for ScriptedHost {
                     finalize_ms: 20,
                 })));
             }
+            Control::Cancel(_) => {
+                let _ = self
+                    .replies_tx
+                    .send(Frame::Control(Control::Error(ErrorMsg {
+                        code: "tts_failed".to_owned(),
+                        stage: "speaking".to_owned(),
+                        retryable: true,
+                        detail: None,
+                    })));
+            }
             Control::Close => {
                 let _ = self.replies_tx.send(Frame::Control(Control::Closed));
             }
@@ -231,4 +241,39 @@ fn poll_returns_none_on_timeout() {
             .expect("应超时")
             .is_none()
     );
+}
+#[test]
+fn host_error_frame_becomes_event() {
+    let mut bridge = bridge(Mode::Warm);
+    bridge
+        .warmup("asr", "demo", &"0".repeat(64), Duration::from_secs(1))
+        .expect("预热应成功");
+    bridge.start("s-1", "full_duplex", "zh", &[]).expect("开始");
+    let _ = bridge.poll(Duration::from_millis(20));
+    bridge.cancel("barge").expect("取消应成功");
+    let mut found = None;
+    for _ in 0..4 {
+        match bridge.poll(Duration::from_secs(1)).expect("应有事件") {
+            Some(VoiceEvent::Error(error)) => {
+                found = Some(error.code);
+                break;
+            }
+            Some(_) => continue,
+            None => break,
+        }
+    }
+    assert_eq!(found.as_deref(), Some("tts_failed"));
+}
+
+#[test]
+fn empty_audio_is_rejected() {
+    let mut bridge = bridge(Mode::Warm);
+    bridge
+        .warmup("asr", "demo", &"0".repeat(64), Duration::from_secs(1))
+        .expect("预热应成功");
+    bridge.start("s-1", "full_duplex", "zh", &[]).expect("开始");
+    assert!(matches!(
+        bridge.push_audio(&[]),
+        Err(BridgeError::Protocol(_))
+    ));
 }

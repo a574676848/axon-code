@@ -142,6 +142,8 @@ pub enum VoiceEvent {
         /// s16le 载荷。
         audio: Vec<u8>,
     },
+    /// 宿主错误帧。
+    Error(ErrorMsg),
     /// 心跳。
     Heartbeat(Heartbeat),
     /// 关闭确认。
@@ -267,6 +269,9 @@ impl<T: HostTransport> VoiceBridge<T> {
         if self.state != BridgeState::InSession {
             return Err(BridgeError::NoSession);
         }
+        if pcm.is_empty() {
+            return Err(BridgeError::Protocol("音频为空".to_owned()));
+        }
         let frame =
             encode_audio_in(pcm).map_err(|error| BridgeError::Protocol(error.to_string()))?;
         self.transport
@@ -294,13 +299,14 @@ impl<T: HostTransport> VoiceBridge<T> {
     ///
     /// 没有会话或传输失败。
     pub fn end_session(&mut self, reason: &str) -> Result<(), BridgeError> {
-        let Some(session_id) = self.session_id.take() else {
+        let Some(session_id) = self.session_id.clone() else {
             return Err(BridgeError::NoSession);
         };
         self.send_control(&Control::SessionEnd(SessionEnd {
             session_id,
             reason: reason.to_owned(),
         }))?;
+        self.session_id = None;
         self.state = BridgeState::Ready;
         Ok(())
     }
@@ -338,7 +344,7 @@ fn map_frame(frame: Frame) -> Option<VoiceEvent> {
         Frame::Control(Control::Final(final_message)) => Some(VoiceEvent::Final(final_message)),
         Frame::Control(Control::Heartbeat(beat)) => Some(VoiceEvent::Heartbeat(beat)),
         Frame::Control(Control::Closed) => Some(VoiceEvent::Closed),
-        Frame::Control(Control::Error(_)) => None,
+        Frame::Control(Control::Error(error)) => Some(VoiceEvent::Error(error)),
         Frame::Control(_) => None,
         Frame::AudioOut { epoch, seq, audio } => Some(VoiceEvent::Audio { epoch, seq, audio }),
         Frame::CueAudio { cue_id, seq, audio } => Some(VoiceEvent::CueAudio { cue_id, seq, audio }),
