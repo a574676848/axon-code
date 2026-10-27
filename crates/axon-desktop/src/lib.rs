@@ -93,7 +93,7 @@ use export::export_markdown;
 use input_history::{input_history_append, input_history_list};
 use ipc::{
     config_apply_values, config_read, config_reset_key, config_validate, config_validate_values,
-    config_write, open_config_file,
+    config_write, open_config_file, voice_tts,
 };
 use lane_source::GatewayLaneSource;
 use mcp_runtime::{mcp_runtime_refresh, mcp_runtime_status};
@@ -203,6 +203,7 @@ pub fn run() {
             config_validate_values,
             open_config_file,
             open_external_url,
+            voice_tts,
             input_history_list,
             input_history_append,
             provider_profile_upsert,

@@ -6,14 +6,17 @@
 use super::GatewayHttpState;
 use super::gateway_http_response::{bearer, unauthorized};
 use crate::infrastructure::gateway_auth::query_token;
-use axon_voice::VoiceFailure;
+use axon_voice::render::render_for_speech;
+use axon_voice::{Verbosity, VoiceFailure, presets};
 use axon_voice_bridge::{BridgeError, VoiceBridge};
 use axon_voice_host::BUILD_COMMIT;
+use axon_voice_host::inference::{Inference, encode_wav};
 use axon_voice_host::model::sha256::hex_digest;
 use axon_voice_host::supervisor::{HostClient, HostConfig};
+use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::http::{HeaderMap, Uri};
+use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::response::Response;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -537,12 +540,164 @@ pub(crate) fn parse_client_frame(text: &str) -> Result<ClientFrame, ()> {
     }
 }
 
+/// 一次合成请求的上限。
+const TTS_MAX_CHARS: usize = 4_000;
+
+/// `POST /api/v1/voice/tts`：用当前音色预设合成一段朗读音频。
+pub(super) async fn voice_tts(
+    State(state): State<Arc<GatewayHttpState>>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.context.authorize_request(
+        bearer(&headers),
+        query_token(
+            uri.path_and_query()
+                .map(|value| value.as_str())
+                .unwrap_or("/"),
+        ),
+    ) {
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            serde_json::json!({"error":"unauthorized"}),
+        );
+    }
+    let (text, preset_id) = match parse_tts_body(&body) {
+        Ok(parsed) => parsed,
+        Err((status, error)) => {
+            return json_response(status, serde_json::json!({"error": error}));
+        }
+    };
+    let preset = match preset_id.as_deref() {
+        Some(id) if !id.is_empty() => match presets::resolve(id) {
+            Some(preset) => preset,
+            None => {
+                return json_response(
+                    StatusCode::BAD_REQUEST,
+                    serde_json::json!({"error":"unknown_preset"}),
+                );
+            }
+        },
+        _ => presets::default_preset(),
+    };
+    if !preset.available() {
+        return json_response(
+            StatusCode::CONFLICT,
+            serde_json::json!({"error":"preset_unavailable","presetId":preset.id}),
+        );
+    }
+
+    let outcome = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, &'static str> {
+        let root = model_root();
+        let runtime = Inference::discover(&root).ok_or("voice_unavailable")?;
+        let spoken = render_for_speech(&text, Verbosity::Concise);
+        if spoken.trim().is_empty() {
+            return Err("empty_speech");
+        }
+        let samples = runtime
+            .synthesize_with(&spoken, preset.speaker, preset.rate)
+            .map_err(|_| "tts_failed")?;
+        Ok(encode_wav(&samples))
+    })
+    .await;
+
+    match outcome {
+        Ok(Ok(bytes)) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "audio/wav")
+            .body(Body::from(bytes))
+            .unwrap_or_else(|_| {
+                json_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    serde_json::json!({"error":"internal"}),
+                )
+            }),
+        Ok(Err(error)) => json_response(
+            StatusCode::CONFLICT,
+            serde_json::json!({ "error": error, "message": message_for_tts(error) }),
+        ),
+        Err(_) => json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({"error":"internal"}),
+        ),
+    }
+}
+
+/// `GET /api/v1/voice/presets`：给设置页列出音色与可用性。
+pub(super) async fn voice_presets(
+    State(state): State<Arc<GatewayHttpState>>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response {
+    if !state.context.authorize_request(
+        bearer(&headers),
+        query_token(
+            uri.path_and_query()
+                .map(|value| value.as_str())
+                .unwrap_or("/"),
+        ),
+    ) {
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            serde_json::json!({"error":"unauthorized"}),
+        );
+    }
+    let items: Vec<serde_json::Value> = presets::PRESETS
+        .iter()
+        .map(|preset| {
+            serde_json::json!({
+                "id": preset.id,
+                "name": preset.name,
+                "available": preset.available(),
+                "default": preset.is_default,
+            })
+        })
+        .collect();
+    json_response(StatusCode::OK, serde_json::json!({ "presets": items }))
+}
+
+fn json_response(status: StatusCode, value: serde_json::Value) -> Response {
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(value.to_string()))
+        .unwrap_or_else(|_| Response::new(Body::empty()))
+}
+
+fn parse_tts_body(body: &Bytes) -> Result<(String, Option<String>), (StatusCode, &'static str)> {
+    let value: serde_json::Value =
+        serde_json::from_slice(body).map_err(|_| (StatusCode::BAD_REQUEST, "invalid_json"))?;
+    let text = value
+        .get("text")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .ok_or((StatusCode::BAD_REQUEST, "missing_text"))?;
+    if text.chars().count() > TTS_MAX_CHARS {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, "text_too_long"));
+    }
+    let preset = value
+        .get("presetId")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned);
+    Ok((text.to_owned(), preset))
+}
+
+fn message_for_tts(error: &str) -> &'static str {
+    match error {
+        "voice_unavailable" => "语音运行时未就绪，请先完成语音依赖安装",
+        "empty_speech" => "这条回复没有可朗读的内容",
+        _ => "朗读失败，请稍后重试",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        CancelReason, Classified, ClientFrame, classify, error_json, parse_client_frame, ready_json,
+        CancelReason, Classified, ClientFrame, classify, error_json, parse_client_frame,
+        parse_tts_body, ready_json,
     };
-
     fn start_json() -> &'static str {
         r#"{"type":"start","protocolVersion":1,"clientSessionId":"c-1","workspaceId":"w-1","replyDestination":"desktop","mode":"full_duplex","lang":"zh","tts":false}"#
     }
@@ -664,5 +819,31 @@ mod tests {
             classify(true, r#"{"type":"setTts","enabled":true}"#),
             Ok(Classified::Ignored)
         ));
+    }
+
+    #[test]
+    fn tts_body_requires_text() {
+        use axum::body::Bytes;
+        assert!(parse_tts_body(&Bytes::from_static(b"{}")).is_err());
+        assert!(parse_tts_body(&Bytes::from_static(b"{\"text\":\"   \"}")).is_err());
+    }
+
+    #[test]
+    fn tts_body_reads_preset() {
+        use axum::body::Bytes;
+        let (text, preset) = parse_tts_body(&Bytes::from_static(
+            b"{\"text\":\"\\u4f60\\u597d\",\"presetId\":\"calm-elegant\"}",
+        ))
+        .expect("合法请求");
+        assert_eq!(text, "你好");
+        assert_eq!(preset.as_deref(), Some("calm-elegant"));
+    }
+
+    #[test]
+    fn tts_body_rejects_oversize() {
+        use axum::body::Bytes;
+        let long = "好".repeat(4_001);
+        let body = format!("{{\"text\":\"{long}\"}}");
+        assert!(parse_tts_body(&Bytes::from(body)).is_err());
     }
 }

@@ -35,6 +35,13 @@ export interface ConversationActions {
    * 指向同一张图。没有工作区时为空。
    */
   workspaceRoot: string | null;
+  /**
+   * 这一条会话是否自动朗读新回复。
+   *
+   * 由会话外壳算好（会话开关没有显式设置时继承全局开关），时间线只读结论：
+   * 让每条消息自己去翻本地存储，会话隔离这件事就会散成多份实现。
+   */
+  autoReadReplies: boolean;
 }
 
 const ConversationActionsContext = React.createContext<ConversationActions | null>(null);

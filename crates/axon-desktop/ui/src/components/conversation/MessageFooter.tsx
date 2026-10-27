@@ -15,24 +15,30 @@ export const MessageActionButton: React.FC<{
   title: string;
   onClick: () => void;
   disabled?: boolean;
-  /** 回执态配色：成功取成功墨水档，失败取危险色，「等你处理」取琥珀墨水档。 */
-  tone?: 'default' | 'ok' | 'danger' | 'gold';
+  /** 按下态：朗读进行中的那一枚按钮要用它表达「再点一次即停止」。 */
+  pressed?: boolean;
+  /** 回执态配色：成功取成功墨水档，失败取危险色，「等你处理」取琥珀墨水档，
+   *  按下态取主文本色加选中底。 */
+  tone?: 'default' | 'ok' | 'danger' | 'gold' | 'active';
   children: React.ReactNode;
-}> = ({ label, title, onClick, disabled = false, tone = 'default', children }) => (
+}> = ({ label, title, onClick, disabled = false, pressed, tone = 'default', children }) => (
   <button
     type="button"
     aria-label={label}
+    aria-pressed={pressed}
     title={title}
     disabled={disabled}
     onClick={onClick}
-    className={`${MESSAGE_ACTION_SIZE} flex items-center justify-center rounded-sm transition-colors duration-100 hover:bg-hover hover:text-text-primary disabled:cursor-wait disabled:opacity-40 ${
+    className={`${MESSAGE_ACTION_SIZE} flex items-center justify-center rounded-sm transition-colors duration-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus hover:bg-hover hover:text-text-primary disabled:cursor-wait disabled:opacity-40 ${
       tone === 'ok'
         ? 'text-ok-ink'
         : tone === 'danger'
           ? 'text-danger'
           : tone === 'gold'
             ? 'text-gold-ink'
-            : 'text-text-tertiary'
+            : tone === 'active'
+              ? 'bg-active text-text-primary'
+              : 'text-text-tertiary'
     }`}
   >
     {children}
@@ -46,6 +52,12 @@ export interface MessageFooterProps {
   align?: 'start' | 'end';
   /** 常显的回执（例如「已导出到 …」）：不属于悬浮才出现的操作区。 */
   status?: React.ReactNode;
+  /**
+   * 强制显示操作区。
+   *
+   * 朗读进行中时用：停止入口必须看得见，不能等指针悬停才出现。
+   */
+  revealActions?: boolean;
   /** 操作按钮；为空时页脚只承载时间。 */
   children?: React.ReactNode;
 }
@@ -54,6 +66,7 @@ export const MessageFooter: React.FC<MessageFooterProps> = ({
   atMs,
   align = 'start',
   status,
+  revealActions = false,
   children,
 }) => (
   <div
@@ -64,7 +77,9 @@ export const MessageFooter: React.FC<MessageFooterProps> = ({
     {atMs !== null && <span className={MESSAGE_TIME_CLASS}>{formatMessageTime(atMs)}</span>}
     {status}
     {children !== undefined && (
-      <div className="hidden group-hover:flex group-focus-within:flex items-center gap-0.5">
+      <div
+        className={`${revealActions ? 'flex' : 'hidden group-hover:flex group-focus-within:flex'} items-center gap-0.5`}
+      >
         {children}
       </div>
     )}

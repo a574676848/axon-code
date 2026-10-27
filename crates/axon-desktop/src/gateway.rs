@@ -370,3 +370,64 @@ mod tests {
         assert!(rejected.contains("event_rejected"), "{rejected}");
     }
 }
+
+/// 语音合成失败分类：409 归为运行时不可用，其余归为请求失败。
+#[derive(Debug)]
+pub enum VoiceTtsError {
+    /// 语音运行时或音色未就绪。
+    Unavailable(String),
+    /// 其它失败。
+    Failed(String),
+}
+
+impl std::fmt::Display for VoiceTtsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unavailable(reason) | Self::Failed(reason) => f.write_str(reason),
+        }
+    }
+}
+
+/// 调用网关合成一段朗读音频，返回 WAV 字节。
+///
+/// # Errors
+///
+/// 网关不可达、鉴权失败、语音运行时未就绪或合成失败。
+pub fn post_voice_tts(text: &str, preset_id: Option<&str>) -> Result<Vec<u8>, VoiceTtsError> {
+    let url = endpoint("/voice/tts").map_err(VoiceTtsError::Failed)?;
+    let mut request = agent()
+        .post(&url)
+        .header("accept", "audio/wav")
+        .header("content-type", "application/json");
+    if let Some(token) = api_token() {
+        request = request.header("authorization", &format!("Bearer {token}"));
+    }
+    let payload = serde_json::json!({
+        "text": text,
+        "presetId": preset_id.unwrap_or(""),
+    });
+    let response = match request.send(payload.to_string()) {
+        Ok(response) => response,
+        Err(ureq::Error::StatusCode(status)) => {
+            return Err(classify_voice_status(status, String::new()));
+        }
+        Err(error) => return Err(VoiceTtsError::Failed(format!("网关不可达：{error}"))),
+    };
+    let status = response.status().as_u16();
+    if !(200..300).contains(&status) {
+        let body = response.into_body().read_to_string().unwrap_or_default();
+        return Err(classify_voice_status(status, body));
+    }
+    let mut body = response.into_body();
+    body.read_to_vec()
+        .map_err(|error| VoiceTtsError::Failed(format!("读取音频失败：{error}")))
+}
+
+fn classify_voice_status(status: u16, body: String) -> VoiceTtsError {
+    let reason = gateway_status_message(status, &body);
+    if status == 409 || status == 503 {
+        VoiceTtsError::Unavailable(reason)
+    } else {
+        VoiceTtsError::Failed(reason)
+    }
+}

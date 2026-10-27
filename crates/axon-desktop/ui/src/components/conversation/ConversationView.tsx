@@ -4,16 +4,15 @@ import type { CronJob, WorkspaceItem } from '../../types';
 import { targetOfLane, useConversation, type LaneSelection } from '../../conversation/useConversation';
 import { sessionGenerationMetrics } from '../../conversation/sessionGeneration';
 import { coverFace, type StageFrame } from '../../conversation/stage';
-import { IconButton } from '../ui/controls';
+import { useLaneAutoRead, useStopSpeechOnLaneChange } from '../../speech';
 import { Dialog } from '../ui/overlays';
-import { PanelRightIcon } from '../../icons';
 import { ConversationHeader } from './ConversationHeader';
+import { ConversationHeaderActions } from './ConversationHeaderActions';
 import { ConversationStream } from './ConversationStream';
 import { ConversationCover } from './ConversationCover';
 import { ErrorCard } from './ErrorCard';
 import { InputDock } from './InputDock';
 import { PlanDock } from './PlanDock';
-import { RuntimeActions } from './RuntimeActions';
 import { SidebarRight } from '../../sidebarRight/SidebarRight';
 import { changesAddress, fileAddress } from '../../sidebarRight/registry';
 import { useRailLayout } from '../../sidebarRight/useRailLayout';
@@ -85,6 +84,13 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   const conversation = useConversation(target);
   // 右侧栏按会话持有停靠面：开关、tab 与分栏都在这一份状态里。
   const rail = useRailLayout(selection?.laneId ?? null);
+  /*
+   * 语音播报按会话生效：偏好键由工作区与会话拼成，正文舞台与指标条里的
+   * 开关读的都是这一个键，因此两处不会各说一套。
+   */
+  const laneKey = selection === null ? null : `${selection.workspaceId}:${selection.laneId}`;
+  const voiceAutoRead = useLaneAutoRead(laneKey);
+  useStopSpeechOnLaneChange(laneKey);
   const [config, setConfig] = React.useState<ResolvedConfig | null>(null);
   const [cronConfig, setCronConfig] = React.useState<CronJob | null>(null);
   const cronJobId = selection?.destination.startsWith(CRON_DESTINATION_PREFIX)
@@ -323,8 +329,9 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
       unfoldTurn: (interactionId: string) => conversationRef.current.unfoldTurn(interactionId),
       // 正文里的相对图片路径以当前工作区为准，与输入坞的 `@` 引用同作用域。
       workspaceRoot: workspace?.path ?? null,
+      autoReadReplies: voiceAutoRead,
     }),
-    [rail, workspace],
+    [rail, voiceAutoRead, workspace],
   );
 
   /*
@@ -476,7 +483,6 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    * 两者都不该上屏。取值按提交记录（过渡窗口内不刷新），因此切换那一帧取到的就是
    * 切换前正在看的那一屏。
    */
-  const laneKey = selection === null ? null : `${selection.workspaceId}:${selection.laneId}`;
   const shown = useSettledValue<StageFrame>(
     { key: laneKey, turns: conversation.state.turns },
     settling,
@@ -513,25 +519,15 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
             hasPendingQuestion={Boolean(conversation.activeQuestion)}
             avoidWindowControls={!rail.layout.expanded}
             trailing={
-              <>
-                {/* 运行时事实收进 header：有子代理或后台任务时才出现，详情在下拉层里。 */}
-                <RuntimeActions
-                  subagents={runtimeFacts.subagents}
-                  jobs={runtimeFacts.jobs}
-                  laneId={selection?.laneId ?? null}
-                  onOpenSubagent={setOpenSubagentId}
-                />
-                {/*
-                 * 入口只画在收起态：展开后收起动作归面板自己的 tab 条末端，
-                 * 同一件事不在两处各摆一个开关，与既有工作台产品一致。
-                 * 收起态才存在的东西点完就没了，因此要留一个标记给面板的焦点续接。
-                 */}
-                {!rail.layout.expanded && (
-                  <IconButton label="展开资源面板" data-rail-expand onClick={rail.toggleExpanded}>
-                    <PanelRightIcon size={16} />
-                  </IconButton>
-                )}
-              </>
+              <ConversationHeaderActions
+                subagents={runtimeFacts.subagents}
+                jobs={runtimeFacts.jobs}
+                laneId={selection?.laneId ?? null}
+                laneKey={laneKey}
+                onOpenSubagent={setOpenSubagentId}
+                railExpanded={rail.layout.expanded}
+                onToggleRail={rail.toggleExpanded}
+              />
             }
           />
 

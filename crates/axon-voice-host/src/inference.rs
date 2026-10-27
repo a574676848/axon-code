@@ -106,6 +106,15 @@ impl Inference {
     ///
     /// 写临时文件、执行命令或解析 WAV 失败。
     pub fn synthesize(&self, text: &str) -> Result<Vec<i16>, String> {
+        self.synthesize_with(text, 0, 1.0)
+    }
+
+    /// 按音色参数合成：speaker 走多说话人编号，rate 走语速。
+    ///
+    /// # Errors
+    ///
+    /// 写临时文件、执行命令或解析 WAV 失败。
+    pub fn synthesize_with(&self, text: &str, speaker: u32, rate: f32) -> Result<Vec<i16>, String> {
         let wav_path = self.temp_dir.join("tts-output.wav");
         let _ = std::fs::remove_file(&wav_path);
         let output = run(
@@ -129,6 +138,8 @@ impl Inference {
                     self.tts_dir.join("number.fst").display()
                 ),
                 format!("--output-filename={}", wav_path.display()),
+                format!("--sid={speaker}"),
+                format!("--speed={rate}"),
                 text.to_owned(),
             ],
             TTS_TIMEOUT_MS,
@@ -243,6 +254,12 @@ fn parse_transcript(stdout: &str) -> Result<String, String> {
 ///
 /// 写入失败。
 pub fn write_wav(path: &Path, samples: &[i16]) -> Result<(), String> {
+    std::fs::write(path, encode_wav(samples)).map_err(|e| format!("写 WAV 失败：{e}"))
+}
+
+/// 编码 16 kHz 单声道 PCM16 WAV。
+#[must_use]
+pub fn encode_wav(samples: &[i16]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(44 + samples.len() * 2);
     let data_len = (samples.len() * 2) as u32;
     bytes.extend_from_slice(b"RIFF");
@@ -261,7 +278,7 @@ pub fn write_wav(path: &Path, samples: &[i16]) -> Result<(), String> {
     for sample in samples {
         bytes.extend_from_slice(&sample.to_le_bytes());
     }
-    std::fs::write(path, bytes).map_err(|error| format!("写 WAV 失败：{error}"))
+    bytes
 }
 
 #[cfg(test)]

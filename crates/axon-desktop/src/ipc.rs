@@ -468,3 +468,40 @@ pub fn open_config_file() -> Result<(), String> {
     }
     crate::process::open_path(&path).map_err(|error| format!("无法打开配置文件：{error}"))
 }
+
+/// 朗读音频：base64 编码的 WAV 与 MIME 类型。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceAudioPayload {
+    /// base64 编码的 WAV 字节。
+    pub audio_base64: String,
+    /// MIME 类型，固定 `audio/wav`。
+    pub mime_type: String,
+}
+
+/// 合成一段朗读音频，由 Rust 侧带网关凭据发起请求。
+///
+/// # Errors
+///
+/// 参数为空、网关不可达、语音运行时未就绪或合成失败。
+#[tauri::command]
+pub fn voice_tts(text: String, preset_id: Option<String>) -> Result<VoiceAudioPayload, String> {
+    use base64::Engine as _;
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("没有可朗读的内容".to_owned());
+    }
+    let bytes =
+        crate::gateway::post_voice_tts(text, preset_id.as_deref()).map_err(
+            |error| match error {
+                crate::gateway::VoiceTtsError::Unavailable(reason) => {
+                    format!("voice_unavailable: {reason}")
+                }
+                crate::gateway::VoiceTtsError::Failed(reason) => reason,
+            },
+        )?;
+    Ok(VoiceAudioPayload {
+        audio_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        mime_type: "audio/wav".to_owned(),
+    })
+}

@@ -14,6 +14,7 @@ pub mod config;
 pub mod constants;
 pub mod domain;
 pub mod port;
+pub mod presets;
 pub mod render;
 
 pub use config::{
@@ -30,6 +31,7 @@ pub use port::{
     Clock, PcmChunk, SAMPLE_RATE_HZ, SpeechRenderer, SpeechToText, SttEvent, SttSession,
     TextToSpeech,
 };
+pub use presets::{PRESETS, VoicePreset, default_preset, resolve};
 pub use render::{
     SpeechStream, render_for_speech, render_for_speech_with_override, render_sentences,
     render_sentences_with_override,

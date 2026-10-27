@@ -670,3 +670,12 @@ export const PulseIcon: React.FC<IconProps> = ({ size = 14, className = '', ...p
     <path d="M2 8H4.5L6 4.5L8.5 11.5L10 8H14" stroke="currentColor" />
   </svg>
 );
+
+// 语音播报：喇叭与两道声波
+export const SpeakerIcon: React.FC<IconProps> = ({ size = 14, className = '', ...props }) => (
+  <svg width={size} height={size} viewBox="0 0 16 16" fill="none" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className} {...props}>
+    <path d="M8.5 2.5L5 5.5H2.5C2.22386 5.5 2 5.72386 2 6V10C2 10.2761 2.22386 10.5 2.5 10.5H5L8.5 13.5V2.5Z" stroke="currentColor" />
+    <path d="M11 5.6C11.7 6.3 12.1 7.1 12.1 8C12.1 8.9 11.7 9.7 11 10.4" stroke="currentColor" />
+    <path d="M13 3.6C14.3 4.8 15 6.3 15 8C15 9.7 14.3 11.2 13 12.4" stroke="currentColor" />
+  </svg>
+);

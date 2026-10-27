@@ -159,3 +159,25 @@ fn next_non_heartbeat(reader: &mut BufReader<std::process::ChildStdout>) -> Fram
         }
     }
 }
+
+#[test]
+#[ignore = "需要本地 sherpa-onnx 运行时与模型"]
+fn preset_speaker_and_rate_are_applied() {
+    use axon_voice_host::inference::Inference;
+
+    let root = model_root();
+    let runtime = Inference::discover(std::path::Path::new(&root)).expect("运行时应可用");
+    let calm = runtime
+        .synthesize_with("你好，我是 Axon。", 3, 0.95)
+        .expect("冷静知性应可合成");
+    let bright = runtime
+        .synthesize_with("你好，我是 Axon。", 7, 1.05)
+        .expect("明朗邻家应可合成");
+    assert!(!calm.is_empty() && !bright.is_empty());
+    println!(
+        "calm samples={} bright samples={}",
+        calm.len(),
+        bright.len()
+    );
+    assert_ne!(calm, bright, "不同说话人与语速应产生不同音频");
+}
