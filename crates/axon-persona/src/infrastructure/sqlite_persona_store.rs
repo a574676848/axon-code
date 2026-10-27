@@ -208,6 +208,7 @@ impl PersonaStore {
         ))?;
         ensure_wal(&connection)?;
         ensure_schema(&mut connection)?;
+        ensure_fatigue_column(&connection)?;
         Ok(Self { connection })
     }
 
@@ -242,7 +243,7 @@ impl PersonaStore {
             .connection
             .query_row(
                 "SELECT revision, warmth_offset, familiarity, user_affect, failure_streak,
-                        drift_guard, last_cause, updated_at_ms
+                        drift_guard, last_cause, updated_at_ms, fatigue_level
                  FROM persona_state WHERE owner_id = ?1",
                 params![owner_id],
                 |row| {
@@ -255,6 +256,7 @@ impl PersonaStore {
                         row.get::<_, Option<String>>(5)?,
                         row.get::<_, String>(6)?,
                         row.get::<_, i64>(7)?,
+                        row.get::<_, String>(8)?,
                     ))
                 },
             )
@@ -482,13 +484,14 @@ impl PersonaStore {
         transaction.execute(
             "INSERT INTO persona_state (
                 owner_id, revision, warmth_offset, familiarity, user_affect,
-                failure_streak, drift_guard, last_cause, updated_at_ms
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                fatigue_level, failure_streak, drift_guard, last_cause, updated_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(owner_id) DO UPDATE SET
                 revision = excluded.revision,
                 warmth_offset = excluded.warmth_offset,
                 familiarity = excluded.familiarity,
                 user_affect = excluded.user_affect,
+                fatigue_level = excluded.fatigue_level,
                 failure_streak = excluded.failure_streak,
                 drift_guard = excluded.drift_guard,
                 last_cause = excluded.last_cause,
@@ -499,6 +502,7 @@ impl PersonaStore {
                 i64::from(next.warmth_offset),
                 i64::from(next.familiarity),
                 next.user_affect.as_token(),
+                next.fatigue_level.as_token(),
                 i64::from(next.failure_streak),
                 next.drift_guard,
                 next.last_cause,
@@ -552,10 +556,29 @@ fn prune_transitions(
 }
 
 fn decode_state(
-    raw: (i64, i64, i64, String, i64, Option<String>, String, i64),
+    raw: (
+        i64,
+        i64,
+        i64,
+        String,
+        i64,
+        Option<String>,
+        String,
+        i64,
+        String,
+    ),
 ) -> Result<PersonaState, PersonaStoreError> {
-    let (revision, warmth_offset, familiarity, affect, failure_streak, drift_guard, cause, updated) =
-        raw;
+    let (
+        revision,
+        warmth_offset,
+        familiarity,
+        affect,
+        failure_streak,
+        drift_guard,
+        cause,
+        updated,
+        fatigue,
+    ) = raw;
     Ok(PersonaState {
         revision: u64::try_from(revision)
             .map_err(|error| PersonaStoreError::Storage(error.to_string()))?,
@@ -564,6 +587,8 @@ fn decode_state(
         familiarity: u8::try_from(familiarity)
             .map_err(|error| PersonaStoreError::Storage(error.to_string()))?,
         user_affect: crate::domain::persona_state::UserAffect::parse(&affect),
+        fatigue_level: crate::domain::persona_state::FatigueLevel::parse(&fatigue)
+            .unwrap_or(crate::domain::persona_state::FatigueLevel::Normal),
         failure_streak: u8::try_from(failure_streak)
             .map_err(|error| PersonaStoreError::Storage(error.to_string()))?,
         drift_guard,
@@ -589,6 +614,21 @@ fn ensure_wal(connection: &Connection) -> Result<(), PersonaStoreError> {
     if !current.eq_ignore_ascii_case("wal") {
         let _mode: String =
             connection.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
+    }
+    Ok(())
+}
+
+/// 旧库补列：`fatigue_level` 缺失时补上并回填 `normal`。
+fn ensure_fatigue_column(connection: &Connection) -> Result<(), PersonaStoreError> {
+    let mut statement = connection.prepare("PRAGMA table_info(persona_state)")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    if !columns.iter().any(|column| column == "fatigue_level") {
+        connection.execute(
+            "ALTER TABLE persona_state ADD COLUMN fatigue_level TEXT NOT NULL DEFAULT 'normal'",
+            [],
+        )?;
     }
     Ok(())
 }

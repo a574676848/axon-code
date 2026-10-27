@@ -1,8 +1,8 @@
 //! 人格内核：身份、来处、不可违背项、特质、表达基线与场景规则。
 
 use crate::domain::{
-    persona_state::UserAffect,
-    scene_frame::{Audience, PersonaMode},
+    persona_state::{FatigueLevel, UserAffect},
+    scene_frame::{Audience, PersonaDomain, PersonaMode},
     voice::{Voice, VoicePatch},
 };
 
@@ -28,26 +28,56 @@ pub struct RuleCondition {
     pub audience: Option<Audience>,
     /// 命中的用户状态。
     pub user_affect: Option<UserAffect>,
+    /// 命中的场域。
+    pub domain: Option<PersonaDomain>,
+    /// 命中的疲劳度。
+    pub fatigue_level: Option<FatigueLevel>,
 }
 
 impl RuleCondition {
     /// 条件是否为空；空条件在解析阶段即被拒绝。
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.mode.is_none() && self.audience.is_none() && self.user_affect.is_none()
+        self.mode.is_none()
+            && self.audience.is_none()
+            && self.user_affect.is_none()
+            && self.domain.is_none()
+            && self.fatigue_level.is_none()
     }
 
     /// 判断当前模式与受众是否命中本条件。
     #[must_use]
-    pub fn matches(&self, mode: PersonaMode, audience: Audience, user_affect: UserAffect) -> bool {
-        self.mode.is_none_or(|expected| expected == mode)
-            && self.audience.is_none_or(|expected| expected == audience)
+    pub fn matches(&self, context: RuleContext) -> bool {
+        self.mode.is_none_or(|expected| expected == context.mode)
+            && self
+                .audience
+                .is_none_or(|expected| expected == context.audience)
             && self
                 .user_affect
-                .is_none_or(|expected| expected == user_affect)
+                .is_none_or(|expected| expected == context.user_affect)
+            && self
+                .domain
+                .is_none_or(|expected| expected == context.domain)
+            && self
+                .fatigue_level
+                .is_none_or(|expected| expected == context.fatigue_level)
     }
 }
 
+/// 规则匹配所需的本轮事实。
+#[derive(Debug, Clone, Copy)]
+pub struct RuleContext {
+    /// 当前模式。
+    pub mode: PersonaMode,
+    /// 当前受众。
+    pub audience: Audience,
+    /// 当前用户状态。
+    pub user_affect: UserAffect,
+    /// 当前场域。
+    pub domain: PersonaDomain,
+    /// 当前疲劳度。
+    pub fatigue_level: FatigueLevel,
+}
 /// 一条场景规则。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SceneRule {
@@ -79,15 +109,8 @@ pub struct PersonaCore {
 impl PersonaCore {
     /// 返回首条命中的场景规则。
     #[must_use]
-    pub fn first_matching_rule(
-        &self,
-        mode: PersonaMode,
-        audience: Audience,
-        user_affect: UserAffect,
-    ) -> Option<&SceneRule> {
-        self.rules
-            .iter()
-            .find(|rule| rule.when.matches(mode, audience, user_affect))
+    pub fn first_matching_rule(&self, context: RuleContext) -> Option<&SceneRule> {
+        self.rules.iter().find(|rule| rule.when.matches(context))
     }
 }
 
@@ -104,6 +127,8 @@ mod tests {
                 mode,
                 audience: None,
                 user_affect: None,
+                domain: None,
+                fatigue_level: None,
             },
             voice: VoicePatch {
                 humor,
@@ -120,6 +145,8 @@ mod tests {
                 mode: Some(PersonaMode::Focus),
                 audience: None,
                 user_affect: None,
+                domain: None,
+                fatigue_level: None,
             }
             .is_empty()
         );
@@ -131,17 +158,45 @@ mod tests {
             mode: Some(PersonaMode::Incident),
             audience: None,
             user_affect: None,
+            domain: None,
+            fatigue_level: None,
         };
-        assert!(mode_only.matches(PersonaMode::Incident, Audience::Group, UserAffect::Unknown));
-        assert!(!mode_only.matches(PersonaMode::Focus, Audience::Private, UserAffect::Unknown));
+        assert!(mode_only.matches(RuleContext {
+            mode: PersonaMode::Incident,
+            audience: Audience::Group,
+            user_affect: UserAffect::Unknown,
+            domain: PersonaDomain::Office,
+            fatigue_level: FatigueLevel::Normal
+        }));
+        assert!(!mode_only.matches(RuleContext {
+            mode: PersonaMode::Focus,
+            audience: Audience::Private,
+            user_affect: UserAffect::Unknown,
+            domain: PersonaDomain::Office,
+            fatigue_level: FatigueLevel::Normal
+        }));
 
         let audience_only = RuleCondition {
             mode: None,
             audience: Some(Audience::Group),
             user_affect: None,
+            domain: None,
+            fatigue_level: None,
         };
-        assert!(audience_only.matches(PersonaMode::Focus, Audience::Group, UserAffect::Unknown));
-        assert!(!audience_only.matches(PersonaMode::Focus, Audience::Private, UserAffect::Unknown));
+        assert!(audience_only.matches(RuleContext {
+            mode: PersonaMode::Focus,
+            audience: Audience::Group,
+            user_affect: UserAffect::Unknown,
+            domain: PersonaDomain::Office,
+            fatigue_level: FatigueLevel::Normal
+        }));
+        assert!(!audience_only.matches(RuleContext {
+            mode: PersonaMode::Focus,
+            audience: Audience::Private,
+            user_affect: UserAffect::Unknown,
+            domain: PersonaDomain::Office,
+            fatigue_level: FatigueLevel::Normal
+        }));
     }
 
     #[test]
@@ -172,7 +227,13 @@ mod tests {
         };
 
         let first = core
-            .first_matching_rule(PersonaMode::Focus, Audience::Private, UserAffect::Unknown)
+            .first_matching_rule(RuleContext {
+                mode: PersonaMode::Focus,
+                audience: Audience::Private,
+                user_affect: UserAffect::Unknown,
+                domain: PersonaDomain::Office,
+                fatigue_level: FatigueLevel::Normal,
+            })
             .expect("应命中首条规则");
         assert_eq!(
             first.voice.humor,
@@ -180,9 +241,40 @@ mod tests {
         );
 
         assert!(
-            core.first_matching_rule(PersonaMode::Casual, Audience::Private, UserAffect::Unknown)
-                .is_some(),
+            core.first_matching_rule(RuleContext {
+                mode: PersonaMode::Casual,
+                audience: Audience::Private,
+                user_affect: UserAffect::Unknown,
+                domain: PersonaDomain::Office,
+                fatigue_level: FatigueLevel::Normal
+            })
+            .is_some(),
             "无 mode 限定的规则应作为兜底命中"
         );
     }
+}
+
+#[test]
+fn rule_matches_domain_and_fatigue() {
+    let condition = RuleCondition {
+        mode: None,
+        audience: None,
+        user_affect: None,
+        domain: Some(PersonaDomain::DailyLife),
+        fatigue_level: Some(FatigueLevel::High),
+    };
+    let hit = RuleContext {
+        mode: PersonaMode::Casual,
+        audience: Audience::Private,
+        user_affect: UserAffect::Unknown,
+        domain: PersonaDomain::DailyLife,
+        fatigue_level: FatigueLevel::High,
+    };
+    let miss = RuleContext {
+        domain: PersonaDomain::Office,
+        ..hit
+    };
+
+    assert!(condition.matches(hit));
+    assert!(!condition.matches(miss));
 }

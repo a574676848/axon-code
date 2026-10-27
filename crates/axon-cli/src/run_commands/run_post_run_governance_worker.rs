@@ -412,6 +412,7 @@ fn execute_governance_payload(
             disclosure,
             final_status: axon_persona::TurnFinalStatus::Completed,
             user_affect: assessment.and_then(|item| item.user_affect.as_deref()),
+            user_fatigue: assessment.and_then(|item| item.user_fatigue.as_deref()),
             persona_drift_bp: assessment.and_then(|item| item.persona_drift_bp),
             drift_reason: assessment.and_then(|item| item.drift_reason.as_deref()),
             scene_audience: payload

@@ -27,6 +27,8 @@ fn core() -> PersonaCore {
                 mode: Some(PersonaMode::Incident),
                 audience: None,
                 user_affect: None,
+                domain: None,
+                fatigue_level: None,
             },
             voice: VoicePatch {
                 humor: Some(HumorLevel::Off),
@@ -168,6 +170,8 @@ fn rules_are_dropped_before_backstory_is_trimmed() {
                 mode: Some(PersonaMode::Incident),
                 audience: None,
                 user_affect: None,
+                domain: None,
+                fatigue_level: None,
             },
             voice: VoicePatch {
                 humor: Some(HumorLevel::Off),

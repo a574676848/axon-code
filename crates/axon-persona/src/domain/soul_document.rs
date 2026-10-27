@@ -218,16 +218,22 @@ fn parse_rule(item: &Yaml, index: usize) -> Result<SceneRule, SoulError> {
         get(rule, "when").ok_or_else(|| invalid(&when_path, "缺少该字段"))?,
         &when_path,
     )?;
-    reject_unknown_keys(when, &["mode", "audience", "user_affect"], &when_path)?;
+    reject_unknown_keys(
+        when,
+        &["mode", "audience", "user_affect", "domain", "fatigue_level"],
+        &when_path,
+    )?;
     let condition = RuleCondition {
         mode: optional_parse(when, "mode", &when_path, parse_mode)?,
         audience: optional_parse(when, "audience", &when_path, parse_audience)?,
         user_affect: optional_parse(when, "user_affect", &when_path, parse_user_affect)?,
+        domain: optional_parse(when, "domain", &when_path, parse_domain)?,
+        fatigue_level: optional_parse(when, "fatigue_level", &when_path, parse_fatigue)?,
     };
     if condition.is_empty() {
         return Err(invalid(
             &when_path,
-            "必须至少声明 mode、audience 或 user_affect",
+            "必须至少声明 mode、audience、user_affect、domain 或 fatigue_level",
         ));
     }
     let voice_path = format!("{path}.voice");
@@ -355,6 +361,14 @@ fn optional_parse<T>(
     parse(text)
         .map(Some)
         .ok_or_else(|| invalid(&format!("{path}.{key}"), "取值不在允许范围内"))
+}
+
+fn parse_domain(token: &str) -> Option<crate::domain::scene_frame::PersonaDomain> {
+    crate::domain::scene_frame::PersonaDomain::parse(token)
+}
+
+fn parse_fatigue(token: &str) -> Option<crate::domain::persona_state::FatigueLevel> {
+    crate::domain::persona_state::FatigueLevel::parse(token)
 }
 
 fn parse_user_affect(token: &str) -> Option<crate::domain::persona_state::UserAffect> {

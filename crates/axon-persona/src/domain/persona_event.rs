@@ -32,6 +32,8 @@ pub struct TurnSettledInput {
     pub final_status: TurnFinalStatus,
     /// 评估器推断出的用户状态。
     pub user_affect: UserAffect,
+    /// 评估器推断出的用户疲劳度。
+    pub fatigue_level: crate::domain::persona_state::FatigueLevel,
     /// 助手回复相对人格底色的漂移程度，单位 basis point。
     pub persona_drift_bp: u16,
     /// 漂移原因；达到阈值时必填。

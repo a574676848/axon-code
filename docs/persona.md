@@ -98,7 +98,7 @@ rules:
 1. 取人格内核的 `voice` 基线。
 2. 按模式套默认：`focus` 幽默降一档；`incident` 幽默关闭且篇幅取 `minimal`；`group` 正式度加 20 且幽默关闭；`casual` 不变。
 3. 按声明顺序匹配场景规则，首条命中生效，覆盖对应表达字段。
-   规则条件支持 `mode`、`audience` 与 `user_affect`（neutral / positive / frustrated / urgent），三者可组合，至少声明一项。
+   规则条件支持 `mode`、`audience`、`user_affect`（neutral / positive / frustrated / urgent）、`domain`（office / daily_life）与 `fatigue_level`（low / normal / high），可组合，至少声明一项。场域由是否存在工作区判定，疲劳度由轮后评估写入人格状态。
 4. 仅 `casual` 模式叠加衰减后的温度偏移。
 5. 安全收敛：深夜时段篇幅不超过 `concise`。
 

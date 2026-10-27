@@ -23,5 +23,5 @@ pub use domain::{
     Audience, Channel, Daypart, ExpressionDirective, HumorLevel, Identity, PersonaCore,
     PersonaError, PersonaEvent, PersonaMode, PersonaState, RuleCondition, SceneFrame, SceneRule,
     SoulDocument, SoulError, Transition, TurnFinalStatus, TurnSettledInput, UserAffect, Verbosity,
-    Voice, VoicePatch, resolve_expression, resolve_mode, transition,
+    Voice, VoicePatch, persona_state::FatigueLevel, resolve_expression, resolve_mode, transition,
 };

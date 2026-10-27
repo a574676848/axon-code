@@ -14,6 +14,7 @@ fn settled(
     PersonaEvent::TurnSettled(TurnSettledInput {
         final_status,
         user_affect: affect,
+        fatigue_level: crate::domain::persona_state::FatigueLevel::Normal,
         persona_drift_bp: drift_bp,
         drift_reason: drift_reason.map(ToOwned::to_owned),
         now_ms,

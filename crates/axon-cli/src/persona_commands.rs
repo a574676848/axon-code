@@ -501,6 +501,7 @@ fn status(root: &Path, json: bool) -> CliRunResult {
                 "warmthOffset": state.warmth_offset,
                 "familiarity": state.familiarity,
                 "userAffect": state.user_affect.as_token(),
+                "fatigueLevel": state.fatigue_level.as_token(),
                 "failureStreak": state.failure_streak,
                 "lastCause": state.last_cause,
                 "driftGuard": state.drift_guard,
@@ -528,11 +529,12 @@ fn status(root: &Path, json: bool) -> CliRunResult {
     }
     match &state {
         Some(state) => stdout.push_str(&format!(
-            "状态版本：{}\n熟悉度：{}\n温度偏移：{}\n用户状态：{}\n连续失败：{}\n最近变化：{}\n",
+            "状态版本：{}\n熟悉度：{}\n温度偏移：{}\n用户状态：{}\n疲劳度：{}\n连续失败：{}\n最近变化：{}\n",
             state.revision,
             state.familiarity,
             state.warmth_offset,
             state.user_affect.as_token(),
+            state.fatigue_level.as_token(),
             state.failure_streak,
             state.last_cause
         )),

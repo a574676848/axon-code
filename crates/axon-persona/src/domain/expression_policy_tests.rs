@@ -55,6 +55,7 @@ fn focus_downgrades_humor_one_level() {
 fn incident_forces_minimal_verbosity_and_no_humor() {
     let state = PersonaState {
         user_affect: UserAffect::Frustrated,
+        fatigue_level: crate::domain::persona_state::FatigueLevel::Normal,
         ..PersonaState::baseline(0)
     };
 
@@ -74,6 +75,7 @@ fn incident_forces_minimal_verbosity_and_no_humor() {
 fn group_hides_private_inference_and_raises_formality() {
     let state = PersonaState {
         user_affect: UserAffect::Frustrated,
+        fatigue_level: crate::domain::persona_state::FatigueLevel::Normal,
         last_cause: "用户受挫，先致意再解决".to_owned(),
         drift_guard: Some("上一轮过度寒暄".to_owned()),
         ..PersonaState::baseline(0)
@@ -102,6 +104,8 @@ fn first_matching_rule_wins_over_mode_defaults() {
                 mode: Some(PersonaMode::Focus),
                 audience: None,
                 user_affect: None,
+                domain: None,
+                fatigue_level: None,
             },
             voice: VoicePatch {
                 verbosity: Some(Verbosity::Minimal),

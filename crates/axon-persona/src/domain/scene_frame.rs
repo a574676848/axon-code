@@ -152,6 +152,8 @@ pub struct SceneFrame {
     pub daypart: Daypart,
     /// 是否存在 Workspace。
     pub has_workspace: bool,
+    /// 当前场域：有工作区为办公，否则为生活。
+    pub domain: PersonaDomain,
     /// 与上一轮结算之间的空闲毫秒数。
     pub idle_gap_ms: u64,
 }
@@ -171,6 +173,11 @@ impl SceneFrame {
             audience,
             daypart,
             has_workspace,
+            domain: if has_workspace {
+                PersonaDomain::Office
+            } else {
+                PersonaDomain::DailyLife
+            },
             idle_gap_ms,
         }
     }
@@ -280,5 +287,35 @@ mod tests {
         }
         assert_eq!(Channel::parse("CLI"), Channel::Cli);
         assert_eq!(Channel::parse("web"), Channel::Other);
+    }
+}
+
+/// 场域：办公与生活两档，由是否存在工作区决定。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PersonaDomain {
+    /// 办公：在工作区内处理代码、评审与交付。
+    Office,
+    /// 生活：在 Home 根处理日程、起居与日常事务。
+    DailyLife,
+}
+
+impl PersonaDomain {
+    /// 返回持久化与遥测使用的规范记号。
+    #[must_use]
+    pub const fn as_token(self) -> &'static str {
+        match self {
+            Self::Office => "office",
+            Self::DailyLife => "daily_life",
+        }
+    }
+
+    /// 从规范记号解析。
+    #[must_use]
+    pub fn parse(token: &str) -> Option<Self> {
+        match token.trim() {
+            "office" => Some(Self::Office),
+            "daily_life" => Some(Self::DailyLife),
+            _ => None,
+        }
     }
 }

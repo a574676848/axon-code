@@ -25,6 +25,8 @@ pub(super) struct PersonaSettlementInput<'a> {
     pub(super) final_status: TurnFinalStatus,
     /// 评估器推断出的用户状态。
     pub(super) user_affect: Option<&'a str>,
+    /// 评估器推断出的用户疲劳度。
+    pub(super) user_fatigue: Option<&'a str>,
     /// 表达漂移程度。
     pub(super) persona_drift_bp: Option<u16>,
     /// 漂移原因。
@@ -62,6 +64,10 @@ pub(super) fn settle_persona_turn(input: &PersonaSettlementInput<'_>) {
         user_affect: input
             .user_affect
             .map_or(UserAffect::Unknown, UserAffect::parse),
+        fatigue_level: input
+            .user_fatigue
+            .and_then(axon_persona::FatigueLevel::parse)
+            .unwrap_or(axon_persona::FatigueLevel::Normal),
         persona_drift_bp: input.persona_drift_bp.unwrap_or(0),
         drift_reason: input.drift_reason.map(ToOwned::to_owned),
         now_ms: axon_time::unix_now_ms(),

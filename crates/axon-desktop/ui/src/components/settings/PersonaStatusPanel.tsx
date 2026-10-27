@@ -44,6 +44,17 @@ const AFFECT_LABEL: Record<string, string> = {
   urgent: '紧急',
 };
 
+const DOMAIN_LABEL: Record<string, string> = {
+  office: '办公',
+  daily_life: '生活',
+};
+
+const FATIGUE_LABEL: Record<string, string> = {
+  low: '精力充沛',
+  normal: '常态',
+  high: '明显疲劳',
+};
+
 /** 表达基线的一格：上标签、下读数。 */
 const BaselineCell: React.FC<{ label: string; value: string }> = ({ label, value }) => (
   <div className="min-w-0">
@@ -71,6 +82,8 @@ const describeRule = (rule: PersonaRule): string => {
     rule.mode ? `${MODE_LABEL[rule.mode] ?? rule.mode}模式` : '',
     rule.audience ? AUDIENCE_LABEL[rule.audience] ?? rule.audience : '',
     rule.userAffect ? `${AFFECT_LABEL[rule.userAffect] ?? rule.userAffect}时` : '',
+    rule.domain ? `${DOMAIN_LABEL[rule.domain] ?? rule.domain}场域` : '',
+    rule.fatigueLevel ? `疲劳${FATIGUE_LABEL[rule.fatigueLevel] ?? rule.fatigueLevel}` : '',
   ]
     .filter(Boolean)
     .join(' · ');

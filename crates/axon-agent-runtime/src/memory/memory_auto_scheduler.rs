@@ -487,6 +487,7 @@ mod tests {
             evidence_refs: vec!["receipt:test".to_owned()],
             reason: "已验证的执行经验".to_owned(),
             user_affect: None,
+            user_fatigue: None,
             persona_drift_bp: None,
             drift_reason: None,
             style_candidate: None,

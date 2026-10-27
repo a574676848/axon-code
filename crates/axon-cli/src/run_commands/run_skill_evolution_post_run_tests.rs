@@ -618,6 +618,7 @@ fn assessment_for_outcome(outcome: &TurnOutcomeEnvelope) -> SemanticSalienceAsse
             "普通任务没有长期价值".to_owned()
         },
         user_affect: None,
+        user_fatigue: None,
         persona_drift_bp: None,
         drift_reason: None,
         style_candidate: None,

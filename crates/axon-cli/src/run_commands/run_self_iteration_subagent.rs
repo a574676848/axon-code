@@ -32,7 +32,7 @@ const SELF_ITERATION_SESSION_SETUP_FAILED: &str = "自我迭代子代理会话�
 const SEMANTIC_SALIENCE_LABEL: &str = "semantic_salience";
 const SEMANTIC_SALIENCE_SUMMARY: &str = "轻量语义显著性评估";
 const SEMANTIC_SALIENCE_MAX_RUNTIME_MS: u64 = 15_000;
-const SEMANTIC_SALIENCE_SYSTEM_PROMPT: &str = "你是 AXON 的轻量语义显著性评估器。只判断随附 turn outcome 是否包含值得跨会话复用的长期信息，不执行工具、不延续任务、不依据关键词或正则做判断。执行事实只能来自 runtimeVerified=true 的 evidence；assistantOutcomeSummary 不能单独证明执行。用户明确、稳定、可复用的画像或偏好可引用 userMessageRef；experience、knowledge、procedure 必须同时有运行时执行证据。普通任务、临时状态和一次性事实必须 shouldReflect=false，此时 candidateTypes 与 evidenceRefs 必须为空。userAffect 判断用户在本轮表达出的状态，证据不足写 unknown。personaDrift 判断助手回复偏离人格底色的程度（0 至 10000 基点），正常遵循基线时写 0。用户明确表达对说话方式、措辞、语气或详略的偏好时，candidateTypes 使用 style，并把这条偏好本身写进 styleCandidate（不超过 120 字），不要把判断理由写进去。personaDrift 达到 7000 时必须同时给出 driftReason（不超过 80 字），说明偏在哪。只输出符合 schema 的 JSON。";
+const SEMANTIC_SALIENCE_SYSTEM_PROMPT: &str = "你是 AXON 的轻量语义显著性评估器。只判断随附 turn outcome 是否包含值得跨会话复用的长期信息，不执行工具、不延续任务、不依据关键词或正则做判断。执行事实只能来自 runtimeVerified=true 的 evidence；assistantOutcomeSummary 不能单独证明执行。用户明确、稳定、可复用的画像或偏好可引用 userMessageRef；experience、knowledge、procedure 必须同时有运行时执行证据。普通任务、临时状态和一次性事实必须 shouldReflect=false，此时 candidateTypes 与 evidenceRefs 必须为空。userAffect 判断用户在本轮表达出的状态，证据不足写 unknown。personaDrift 判断助手回复偏离人格底色的程度（0 至 10000 基点），正常遵循基线时写 0。用户疲劳度写进 userFatigue（low / normal / high）：从措辞、时段与连轴转迹象判断，拿不准填 normal。用户明确表达对说话方式、措辞、语气或详略的偏好时，candidateTypes 使用 style，并把这条偏好本身写进 styleCandidate（不超过 120 字），不要把判断理由写进去。personaDrift 达到 7000 时必须同时给出 driftReason（不超过 80 字），说明偏在哪。只输出符合 schema 的 JSON。";
 
 #[derive(Debug, Default)]
 pub(super) struct PostRunSelfIterationReport {
@@ -269,6 +269,7 @@ fn semantic_salience_output_schema() -> serde_json::Value {
             "evidenceRefs": { "type": "array", "items": { "type": "string" } },
             "reason": { "type": "string", "minLength": 1, "maxLength": 500 },
             "userAffect": { "type": "string", "enum": ["neutral", "positive", "frustrated", "urgent", "unknown"] },
+            "userFatigue": { "type": "string", "enum": ["low", "normal", "high"] },
             "personaDrift": { "type": "integer", "minimum": 0, "maximum": 10_000 },
             "driftReason": { "type": "string", "minLength": 1, "maxLength": 80 },
             "styleCandidate": { "type": "string", "minLength": 1, "maxLength": 120 }

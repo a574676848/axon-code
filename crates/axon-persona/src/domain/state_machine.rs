@@ -120,6 +120,7 @@ fn settle(
         warmth_offset,
         familiarity,
         user_affect: input.user_affect,
+        fatigue_level: input.fatigue_level,
         failure_streak,
         drift_guard,
         last_cause: cause.clone(),

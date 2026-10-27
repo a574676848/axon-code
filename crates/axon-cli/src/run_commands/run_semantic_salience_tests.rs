@@ -41,6 +41,7 @@ fn forged_evidence_ref_is_conservatively_rejected() {
         evidence_refs: vec!["receipt:forged".to_owned()],
         reason: "用户表达了长期偏好".to_owned(),
         user_affect: None,
+        user_fatigue: None,
         persona_drift_bp: None,
         drift_reason: None,
         style_candidate: None,

@@ -68,6 +68,8 @@ pub struct PersonaState {
     pub familiarity: u8,
     /// 上一轮推断出的用户状态。
     pub user_affect: UserAffect,
+    /// 上一轮推断出的用户疲劳度。
+    pub fatigue_level: FatigueLevel,
     /// 连续失败或中断的轮数。
     pub failure_streak: u8,
     /// 上一轮表达漂移的纠偏提示，下一轮消费后清空。
@@ -90,6 +92,7 @@ impl PersonaState {
             warmth_offset: 0,
             familiarity: 0,
             user_affect: UserAffect::Unknown,
+            fatigue_level: FatigueLevel::Normal,
             failure_streak: 0,
             drift_guard: None,
             last_cause: BASELINE_CAUSE.to_owned(),
@@ -223,5 +226,39 @@ mod tests {
         assert!(UserAffect::Frustrated.is_distressed());
         assert!(UserAffect::Urgent.is_distressed());
         assert!(!UserAffect::Positive.is_distressed());
+    }
+}
+
+/// 用户疲劳度：由轮后评估给出，影响表达收敛强度。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum FatigueLevel {
+    /// 精力充沛。
+    Low,
+    /// 常态。
+    Normal,
+    /// 明显疲劳。
+    High,
+}
+
+impl FatigueLevel {
+    /// 返回持久化与遥测使用的规范记号。
+    #[must_use]
+    pub const fn as_token(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Normal => "normal",
+            Self::High => "high",
+        }
+    }
+
+    /// 从规范记号解析。
+    #[must_use]
+    pub fn parse(token: &str) -> Option<Self> {
+        match token.trim() {
+            "low" => Some(Self::Low),
+            "normal" => Some(Self::Normal),
+            "high" => Some(Self::High),
+            _ => None,
+        }
     }
 }

@@ -27,6 +27,7 @@ export interface PersonaState {
   warmthOffset: number;
   familiarity: number;
   userAffect: string;
+  fatigueLevel: string;
   failureStreak: number;
   lastCause: string;
   driftGuard: string | null;
@@ -68,6 +69,8 @@ export interface PersonaRule {
   mode?: string | null;
   audience?: string | null;
   userAffect?: string | null;
+  domain?: string | null;
+  fatigueLevel?: string | null;
   warmth?: number | null;
   formality?: number | null;
   humor?: string | null;

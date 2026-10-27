@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 /// 语义显著性输出 schema 版本。
-pub const SEMANTIC_SALIENCE_SCHEMA_VERSION: u32 = 2;
+pub const SEMANTIC_SALIENCE_SCHEMA_VERSION: u32 = 3;
 /// 信号最大值，单位 basis point。
 pub const SEMANTIC_SALIENCE_MAX_BASIS_POINTS: u16 = 10_000;
 
@@ -242,6 +242,9 @@ pub struct SemanticSalienceAssessment {
     /// 本轮推断出的用户状态；取值见 [`USER_AFFECT_TOKENS`]。
     #[serde(default)]
     pub user_affect: Option<String>,
+    /// 用户疲劳度：low / normal / high。
+    #[serde(default)]
+    pub user_fatigue: Option<String>,
     /// 助手回复相对人格底色的漂移程度，单位 basis point。
     #[serde(default)]
     pub persona_drift_bp: Option<u16>,
@@ -278,6 +281,14 @@ impl SemanticSalienceAssessment {
             .is_none_or(|affect| USER_AFFECT_TOKENS.contains(&affect))
     }
 
+    /// 疲劳度只接受三个规范记号；缺省视为未给出。
+    #[must_use]
+    pub fn user_fatigue_is_valid(&self) -> bool {
+        self.user_fatigue
+            .as_deref()
+            .is_none_or(|fatigue| matches!(fatigue, "low" | "normal" | "high"))
+    }
+
     /// 严格校验模型输出，任何越界或伪造引用都保守拒绝。
     #[must_use]
     pub fn is_valid_for(&self, envelope: &TurnOutcomeEnvelope) -> bool {
@@ -288,6 +299,7 @@ impl SemanticSalienceAssessment {
             || has_duplicates(&self.candidate_types)
             || has_duplicates(&self.evidence_refs)
             || !self.user_affect_is_valid()
+            || !self.user_fatigue_is_valid()
             || !self.drift_and_style_are_valid()
             || self.persona_drift_bp.is_some_and(|drift| drift > SEMANTIC_SALIENCE_MAX_BASIS_POINTS)
         {

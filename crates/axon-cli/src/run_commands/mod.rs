@@ -392,6 +392,7 @@ fn finish_failed_run(
         disclosure: request.goal_disclosure_policy,
         final_status,
         user_affect: None,
+        user_fatigue: None,
         persona_drift_bp: None,
         drift_reason: None,
         scene_audience: None,
