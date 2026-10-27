@@ -205,6 +205,9 @@ impl StreamingAsr {
         self.client =
             WsClient::connect(address, &format!("127.0.0.1:{port}"), "/", CONNECT_TIMEOUT)
                 .map_err(|error| error.to_string())?;
+        // 服务端的流内时间随重连归零，本地基准必须同步重置，
+        // 否则下一句的 `start_ms` 会回落到旧基准之下（时间倒流）。
+        self.started = Instant::now();
         self.last_partial.clear();
         Ok(())
     }
@@ -324,13 +327,14 @@ impl StreamingAsr {
                     .unwrap_or(0.0);
                 let finalize_ms = self.started.elapsed().as_millis() as u64;
                 let start_ms = (start_seconds * 1_000.0).round() as u64;
-                let end_ms = observed_ms.clamp(start_ms, finalize_ms);
+                let end_ms = observed_ms.max(start_ms).min(finalize_ms.max(start_ms));
+                let finalize_ms = finalize_ms.max(end_ms);
                 events.push(AsrEvent::Final {
                     utterance_seq: self.utterance_seq,
                     text: content,
                     start_ms,
                     end_ms,
-                    finalize_ms: finalize_ms.max(end_ms),
+                    finalize_ms,
                 });
                 self.utterance_seq += 1;
             }

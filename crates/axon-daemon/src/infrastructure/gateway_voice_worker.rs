@@ -470,6 +470,8 @@ pub(super) fn ready_json() -> String {
         (true, false) => Some("本地合成模型未安装".to_owned()),
         (false, false) => Some("本地语音模型未安装".to_owned()),
     };
+    // 严格按 PROTOCOL §2.1：`degraded.asr` 只允许 null，具体原因进 `detail`；
+    // `degraded.tts` 取 null 或 "none"。
     serde_json::json!({
         "type": "ready",
         "asrModel": asr_model,
@@ -480,9 +482,9 @@ pub(super) fn ready_json() -> String {
         "sessionId": "",
         "epoch": 0,
         "phase": "idle",
-        "tts": false,
+        "tts": tts_ready,
         "degraded": {
-            "asr": if asr_ready { serde_json::Value::Null } else { serde_json::json!("model_missing") },
+            "asr": serde_json::Value::Null,
             "tts": if tts_ready { serde_json::Value::Null } else { serde_json::json!("none") },
             "detail": detail,
         },
@@ -492,19 +494,30 @@ pub(super) fn ready_json() -> String {
 }
 
 /// 只做文件存在性探测，不读模型内容，避免建连被 0.5 GB 哈希拖住。
-fn runtime_probe() -> (bool, bool) {
+///
+/// 与 `/api/v1/voice/status` 的 `runtimeAvailable` 共用 `asr_ready`，避免
+/// 「建连说可用、status 说不可用」两套口径。
+pub(super) fn asr_ready() -> bool {
     let root = model_root();
-    let asr = root
+    let has_model = root
         .join("asr")
         .join(DEFAULT_ASR_MODEL)
         .join("manifest.json")
         .is_file();
-    let tts = root
+    let has_runtime = axon_voice_host::inference::Inference::discover(&root).is_some();
+    has_model && has_runtime
+}
+
+fn tts_ready() -> bool {
+    model_root()
         .join("tts")
         .join(axon_voice_host::inference::TTS_MODEL)
         .join("manifest.json")
-        .is_file();
-    (asr, tts)
+        .is_file()
+}
+
+fn runtime_probe() -> (bool, bool) {
+    (asr_ready(), tts_ready())
 }
 
 pub(super) fn error_json(code: &str, stage: &str) -> String {
