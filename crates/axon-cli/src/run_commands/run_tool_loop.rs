@@ -361,6 +361,7 @@ fn execute_parallel_tool_calls(
                     &mut committed,
                     execution_requests,
                     progress,
+                    &mut |_| {},
                 );
             }
             Err(_) => break,
@@ -372,6 +373,7 @@ fn execute_parallel_tool_calls(
         &mut committed,
         execution_requests,
         progress,
+        &mut |_| {},
     );
     // 游标之后可能还有已到达但未提交的回执，先按序落位，再给真正未启动的调用补合成回执。
     fill_unstarted_receipts(
@@ -452,13 +454,14 @@ fn fill_unstarted_receipts(
     }
 }
 
-/// 连续提交游标（`S-4`）：只有游标槽位就绪才提交并前进。
+/// 连续提交游标：只有游标槽位就绪才提交并前进。
 fn commit_ready_receipts(
     slots: &mut [Option<TimedToolReceipt>],
     receipts: &mut [Option<RunToolReceipt>],
     committed: &mut usize,
     execution_requests: &[ToolExecutionRequest],
     progress: Option<&RunProgressSink<'_>>,
+    on_commit: &mut dyn FnMut(usize),
 ) {
     while *committed < slots.len() {
         let Some(timed) = slots[*committed].take() else {
@@ -472,10 +475,69 @@ fn commit_ready_receipts(
             );
         }
         receipts[*committed] = Some(timed.receipt);
+        on_commit(*committed);
         *committed += 1;
     }
 }
 
+/// 测试缝：用可注入延迟的假执行器跑真实的池调度与提交游标。
+///
+/// 只用于门禁证据，生产路径仍走 `execute_pooled_tool`。
+#[cfg(test)]
+pub(super) fn execute_parallel_for_tests(
+    execution_requests: &[ToolExecutionRequest],
+    latency_ms: &[u64],
+    commit_log: &mut Vec<usize>,
+) -> Vec<RunToolReceipt> {
+    let total = execution_requests.len();
+    let pool = session_tool_pool("parallel-seam-test", CapacitySnapshot::preset());
+    let (event_tx, event_rx) = mpsc::channel();
+    for (index, execution_request) in execution_requests.iter().enumerate() {
+        let event_tx = event_tx.clone();
+        let delay = latency_ms.get(index).copied().unwrap_or(0);
+        let call = execution_request.tool_call.clone();
+        let part_id = execution_request.part_id.clone();
+        let call_id = execution_request.tool_call_id.0;
+        pool.submit(move || {
+            std::thread::sleep(std::time::Duration::from_millis(delay));
+            let mut receipt = crate::tool_orchestrator::tool_receipt_from_runtime(
+                agent_run_failed_tool_receipt(&call, "seam"),
+            );
+            receipt.tool_call_id = call_id;
+            receipt.part_id = part_id;
+            let _ = event_tx.send(ParallelToolProgress::Finished {
+                index,
+                receipt: TimedToolReceipt {
+                    receipt,
+                    duration_ms: Some(delay),
+                },
+            });
+        })
+        .expect("测试池应接受任务");
+    }
+    drop(event_tx);
+
+    let mut slots: Vec<Option<TimedToolReceipt>> = (0..total).map(|_| None).collect();
+    let mut receipts: Vec<Option<RunToolReceipt>> = (0..total).map(|_| None).collect();
+    let mut committed = 0usize;
+    let mut finished = 0usize;
+    while finished < total {
+        let Ok(ParallelToolProgress::Finished { index, receipt }) = event_rx.recv() else {
+            break;
+        };
+        finished += 1;
+        slots[index] = Some(receipt);
+        commit_ready_receipts(
+            &mut slots,
+            &mut receipts,
+            &mut committed,
+            execution_requests,
+            None,
+            &mut |index| commit_log.push(index),
+        );
+    }
+    receipts.into_iter().flatten().collect()
+}
 fn is_run_cancelled(context: &ToolOrchestratorContext) -> bool {
     context
         .run_cancel_token

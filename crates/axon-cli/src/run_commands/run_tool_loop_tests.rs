@@ -326,15 +326,36 @@ fn ordered_commit_follows_model_order_not_completion_order() {
     let mut committed = 0usize;
 
     slots[2] = Some(timed_receipt("c"));
-    super::commit_ready_receipts(&mut slots, &mut receipts, &mut committed, &requests, None);
+    super::commit_ready_receipts(
+        &mut slots,
+        &mut receipts,
+        &mut committed,
+        &requests,
+        None,
+        &mut |_| {},
+    );
     assert_eq!(committed, 0, "前序未就绪时不得提交后序结果");
 
     slots[0] = Some(timed_receipt("a"));
-    super::commit_ready_receipts(&mut slots, &mut receipts, &mut committed, &requests, None);
+    super::commit_ready_receipts(
+        &mut slots,
+        &mut receipts,
+        &mut committed,
+        &requests,
+        None,
+        &mut |_| {},
+    );
     assert_eq!(committed, 1, "游标只前进到连续就绪处");
 
     slots[1] = Some(timed_receipt("b"));
-    super::commit_ready_receipts(&mut slots, &mut receipts, &mut committed, &requests, None);
+    super::commit_ready_receipts(
+        &mut slots,
+        &mut receipts,
+        &mut committed,
+        &requests,
+        None,
+        &mut |_| {},
+    );
     assert_eq!(committed, 3);
 
     let order = receipts
@@ -370,4 +391,56 @@ fn cancel_fills_unstarted_calls_with_paired_synthetic_receipts() {
         real.provider_call_id, "real-c",
         "不得用合成回执覆盖真实结果"
     );
+}
+
+/// G3：真实池调度下，完成序 2→1→0，提交序必须是 0→1→2。
+#[test]
+fn parallel_pool_commits_in_model_order_under_reordering() {
+    let requests = vec![
+        plain_request(
+            1,
+            "builtin.memory_search",
+            ToolConcurrencyPolicy::ParallelSafe,
+        ),
+        plain_request(
+            2,
+            "builtin.memory_search",
+            ToolConcurrencyPolicy::ParallelSafe,
+        ),
+        plain_request(
+            3,
+            "builtin.memory_search",
+            ToolConcurrencyPolicy::ParallelSafe,
+        ),
+    ];
+    let mut commit_log = Vec::new();
+    let receipts = super::execute_parallel_for_tests(&requests, &[80, 10, 40], &mut commit_log);
+    assert_eq!(commit_log, vec![0, 1, 2], "提交必须按模型序，不按完成序");
+    assert_eq!(receipts.len(), 3);
+    for (receipt, request) in receipts.iter().zip(&requests) {
+        assert_eq!(receipt.part_id, request.part_id);
+    }
+}
+
+/// G2：写调用把批次切成前后屏障段，读调用不能被夹在写中间并发。
+#[test]
+fn write_call_barriers_the_batch_around_it() {
+    let requests = vec![
+        plain_request(
+            1,
+            "builtin.memory_search",
+            ToolConcurrencyPolicy::ParallelSafe,
+        ),
+        plain_request(
+            2,
+            "builtin.edit",
+            ToolConcurrencyPolicy::WorkspaceCoordinated,
+        ),
+        plain_request(
+            3,
+            "builtin.memory_search",
+            ToolConcurrencyPolicy::ParallelSafe,
+        ),
+    ];
+    assert_eq!(segments(&requests), vec![0..1, 1..2, 2..3]);
 }
