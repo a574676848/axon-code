@@ -356,10 +356,18 @@ fn decode_payload(payload: &[u8]) -> Result<Control, FrameError> {
         type_name::CANCEL => Control::Cancel(from_value(value)?),
         type_name::HEARTBEAT => Control::Heartbeat(from_value(value)?),
         type_name::ERROR => Control::Error(from_value(value)?),
-        type_name::CLOSE => Control::Close,
-        type_name::CLOSED => Control::Closed,
+        type_name::CLOSE => require_empty(value, Control::Close)?,
+        type_name::CLOSED => require_empty(value, Control::Closed)?,
         other => return Err(FrameError::UnknownType(other.to_owned())),
     };
+    Ok(control)
+}
+
+fn require_empty(value: serde_json::Value, control: Control) -> Result<Control, FrameError> {
+    let map = value.as_object().ok_or(FrameError::Truncated)?;
+    if let Some(field) = map.keys().next() {
+        return Err(FrameError::UnknownField(field.clone()));
+    }
     Ok(control)
 }
 
@@ -411,6 +419,18 @@ mod tests {
         assert!(matches!(
             Control::decode(br#"{"type":"nope"}"#),
             Err(FrameError::UnknownType(_))
+        ));
+    }
+
+    #[test]
+    fn fieldless_messages_reject_unknown_fields() {
+        assert!(matches!(
+            Control::decode(br#"{"type":"close","extra":1}"#),
+            Err(FrameError::UnknownField(_))
+        ));
+        assert!(matches!(
+            Control::decode(br#"{"type":"closed","extra":1}"#),
+            Err(FrameError::UnknownField(_))
         ));
     }
 

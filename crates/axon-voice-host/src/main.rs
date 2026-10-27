@@ -145,14 +145,33 @@ fn serve(reader: &mut impl io::BufRead, outbox: &SyncSender<Control>) -> Result<
                 session = Some(message.session_id);
             }
             Control::SessionEnd(message) => {
-                if session.as_deref() != Some(message.session_id.as_str()) {
+                if session.as_deref() != Some(message.session_id.as_str())
+                    || !matches!(message.reason.as_str(), "client_close" | "idle" | "error")
+                {
                     return Err(exit_code::SEQUENCE as u8);
                 }
                 session = None;
             }
-            Control::Cancel(_) => {}
-            Control::Speak(_) => reply(outbox, simple_error("tts_failed", "speaking"))?,
-            Control::CueSpeak(_) => reply(outbox, simple_error("cue_unavailable", "speaking"))?,
+            Control::Cancel(message) => {
+                if !matches!(
+                    message.reason.as_str(),
+                    "barge" | "user_cancel" | "turn_end"
+                ) {
+                    return Err(exit_code::SEQUENCE as u8);
+                }
+            }
+            Control::Speak(_) => {
+                if session.is_none() {
+                    return Err(exit_code::SEQUENCE as u8);
+                }
+                reply(outbox, simple_error("tts_failed", "speaking"))?;
+            }
+            Control::CueSpeak(_) => {
+                if session.is_none() {
+                    return Err(exit_code::SEQUENCE as u8);
+                }
+                reply(outbox, simple_error("cue_unavailable", "speaking"))?;
+            }
             Control::Close => {
                 reply(outbox, Control::Closed)?;
                 return Ok(exit_code::OK as u8);
@@ -173,6 +192,11 @@ fn valid_session_start(message: &SessionStart) -> bool {
         && message.sample_rate == 16_000
         && matches!(message.mode.as_str(), "push_to_talk" | "full_duplex")
         && matches!(message.lang.as_str(), "zh" | "en" | "auto")
+        && message.hot_words.len() <= 200
+        && message
+            .hot_words
+            .iter()
+            .all(|word| word.chars().count() <= 64)
 }
 
 fn model_missing(message: &Warmup) -> Control {
@@ -219,6 +243,7 @@ fn map_frame_error(error: &FrameError) -> u8 {
         | FrameError::UnknownKind(_)
         | FrameError::InvalidJson(_)
         | FrameError::UnknownType(_)
+        | FrameError::UnknownField(_)
         | FrameError::Serialize(_) => exit_code::SEQUENCE as u8,
     }
 }

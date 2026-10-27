@@ -52,6 +52,8 @@ pub enum FrameError {
     InvalidJson(serde_json::Error),
     /// 消息类型未知。
     UnknownType(String),
+    /// 出现未知字段（无字段消息专用）。
+    UnknownField(String),
     /// 序列化失败。
     Serialize(serde_json::Error),
 }
@@ -66,6 +68,7 @@ impl std::fmt::Display for FrameError {
             Self::UnknownKind(kind) => write!(f, "未知帧类型 {kind:#04x}"),
             Self::InvalidJson(error) => write!(f, "json 非法：{error}"),
             Self::UnknownType(kind) => write!(f, "未知消息类型：{kind}"),
+            Self::UnknownField(field) => write!(f, "未知字段：{field}"),
             Self::Serialize(error) => write!(f, "序列化失败：{error}"),
         }
     }

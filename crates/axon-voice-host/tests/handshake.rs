@@ -180,3 +180,39 @@ fn closed_process_stops_reading() {
     let status = host.child.wait().expect("等待退出");
     assert_eq!(status.code(), Some(0));
 }
+#[test]
+fn invalid_cancel_reason_exits_11() {
+    let mut host = RawHost::spawn(BUILD_COMMIT);
+    assert!(matches!(
+        host.read(),
+        Frame::Control(Control::Ready(Ready { .. }))
+    ));
+    write_frame(
+        &mut host.stdin,
+        &Control::Cancel(axon_voice_protocol::Cancel {
+            reason: "not-a-reason".to_owned(),
+        }),
+    )
+    .expect("写 cancel");
+    assert_eq!(host.code(), 11);
+}
+
+#[test]
+fn speak_without_session_exits_11() {
+    let mut host = RawHost::spawn(BUILD_COMMIT);
+    assert!(matches!(
+        host.read(),
+        Frame::Control(Control::Ready(Ready { .. }))
+    ));
+    write_frame(
+        &mut host.stdin,
+        &Control::Speak(axon_voice_protocol::Speak {
+            turn_id: "t".to_owned(),
+            epoch: 1,
+            seq: 1,
+            text: "好".to_owned(),
+        }),
+    )
+    .expect("写 speak");
+    assert_eq!(host.code(), 11);
+}
