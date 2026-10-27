@@ -89,12 +89,23 @@ impl StreamingAsr {
     pub fn start(layout: &Inference) -> Result<Self, String> {
         let files = asr_files(&layout.asr_dir)?;
         let port = free_port()?;
-        let child = spawn_server(&layout.bin_dir, &files, port)?;
+        let mut child = spawn_server(&layout.bin_dir, &files, port)?;
         let address = SocketAddr::from(([127, 0, 0, 1], port));
-        let mut child = child;
-        wait_listening(address, &mut child)?;
-        let client = WsClient::connect(address, &format!("127.0.0.1:{port}"), "/", CONNECT_TIMEOUT)
-            .map_err(|error| error.to_string())?;
+        if let Err(error) = wait_listening(address, &mut child) {
+            // 起不来的识别服务必须当场回收，不能留成孤儿继续占着模型内存。
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+        let client =
+            match WsClient::connect(address, &format!("127.0.0.1:{port}"), "/", CONNECT_TIMEOUT) {
+                Ok(client) => client,
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(error.to_string());
+                }
+            };
         Ok(Self {
             child,
             client,

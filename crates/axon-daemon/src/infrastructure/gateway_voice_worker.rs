@@ -26,6 +26,8 @@ pub(super) const MAX_AUDIO_FRAME_BYTES: usize = 8 * 1024 + 1;
 const WORKER_TICK: Duration = Duration::from_millis(20);
 /// 丢帧时最多每秒上报一次 `backpressure`，避免错误帧自己形成洪水。
 const BACKPRESSURE_REPORT_INTERVAL: Duration = Duration::from_secs(1);
+/// 连续超限的恢复间隔：超过这个时长没有新的丢帧才算恢复。
+const OVERLOAD_RECOVERY_GAP: Duration = Duration::from_secs(2);
 
 /// 会话开始后要处理的命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,8 +68,10 @@ struct CommandQueue {
 #[derive(Debug, Default)]
 struct QueueState {
     commands: VecDeque<Command>,
-    /// 首次丢帧的时刻；队列重新排空后清空。
+    /// 首次丢帧的时刻；持续丢帧期间保持，恢复后清空。
     overload_since: Option<Instant>,
+    /// 最近一次丢帧时刻。
+    last_drop: Option<Instant>,
 }
 
 impl CommandQueue {
@@ -114,6 +118,7 @@ impl CommandQueue {
             self.dropped_bytes
                 .fetch_add(oldest.len() as u64, Ordering::Relaxed);
             state.overload_since.get_or_insert_with(Instant::now);
+            state.last_drop = Some(Instant::now());
             dropped = PushOutcome::Dropped {
                 frames: 1,
                 bytes: oldest.len() as u64,
@@ -129,12 +134,11 @@ impl CommandQueue {
     }
 
     /// 取走当前全部命令。
+    ///
+    /// 注意：排空不等于恢复。持续超限时每轮都会排空，若在这里清计时，
+    /// 「连续 10 s 超限才断连」永远不可达，因此恢复判定按丢帧间隔做。
     fn drain(&self) -> Vec<Command> {
-        let mut state = self.guard();
-        let drained: Vec<Command> = state.commands.drain(..).collect();
-        // 队列排空即视为消费方追上生产方，连续超限计时重置。
-        state.overload_since = None;
-        drained
+        self.guard().commands.drain(..).collect()
     }
 
     fn depth(&self) -> u64 {
@@ -143,7 +147,15 @@ impl CommandQueue {
 
     /// 连续超限时长；未超限时为 `None`。
     fn overload_for(&self) -> Option<Duration> {
-        self.guard().overload_since.map(|since| since.elapsed())
+        let mut state = self.guard();
+        let last_drop = state.last_drop?;
+        if last_drop.elapsed() >= OVERLOAD_RECOVERY_GAP {
+            // 已经有一个恢复间隔没有新丢帧，视为恢复。
+            state.overload_since = None;
+            state.last_drop = None;
+            return None;
+        }
+        state.overload_since.map(|since| since.elapsed())
     }
 
     fn totals(&self) -> (u64, u64) {
@@ -300,7 +312,6 @@ fn run_worker(
                 Command::Cancel => bridge.cancel("user_cancel"),
                 Command::Shutdown => {
                     bridge.shutdown();
-                    metrics.session_finished();
                     return;
                 }
             };
@@ -308,7 +319,6 @@ fn run_worker(
                 metrics.record_error("protocol_sequence");
                 let _ = out.send(error_json("protocol_sequence", "listening"));
                 bridge.shutdown();
-                metrics.session_finished();
                 return;
             }
         }
@@ -320,11 +330,15 @@ fn run_worker(
                 }
             }
             Ok(None) => {}
-            Err(_) => break,
+            Err(_) => {
+                // 桥断了必须让客户端看见，不能静默等到超时。
+                metrics.record_error("worker_crashed");
+                let _ = out.send(error_json("worker_crashed", "worker"));
+                break;
+            }
         }
     }
     bridge.shutdown();
-    metrics.session_finished();
 }
 
 fn event_json(event: axon_voice_bridge::VoiceEvent) -> Option<String> {
@@ -523,14 +537,21 @@ mod tests {
     }
 
     #[test]
-    fn overload_window_clears_after_drain() {
+    fn overload_window_clears_after_recovery_gap() {
         let queue = CommandQueue::new(1);
         queue.push_audio(audio(0));
         let dropped = queue.push_audio(audio(1));
         assert!(matches!(dropped, PushOutcome::Dropped { .. }));
         assert!(queue.overload_for().is_some(), "丢帧后应开始计时");
+        // 排空不等于恢复：持续超限时每轮都会排空。
         let _ = queue.drain();
-        assert!(queue.overload_for().is_none(), "排空后不再算超限");
+        assert!(
+            queue.overload_for().is_some(),
+            "刚排空仍然算超限，否则 10 s 断连不可达"
+        );
+        // 一个恢复间隔内没有新丢帧才算恢复。
+        std::thread::sleep(super::OVERLOAD_RECOVERY_GAP + std::time::Duration::from_millis(50));
+        assert!(queue.overload_for().is_none(), "恢复间隔后可清空");
     }
 
     #[test]

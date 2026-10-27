@@ -34,8 +34,8 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 /// 容量给到 64 帧（JSON 都很小）足以吸收父进程一次轮询周期的抖动。队列满即退出 12，
 /// 保持「父进程不读就不能假装正常」的失败语义。
 const OUTBOX_CAPACITY: usize = 64;
-/// 单会话音频上限（60 s）。
-const MAX_SESSION_SAMPLES: usize = 16_000 * 60;
+/// 单会话音频上限（120 s，与 daemon 的会话时长一致）。
+const MAX_SESSION_SAMPLES: usize = 16_000 * 120;
 /// 每个下行音频帧的样本数（200 ms）。
 const AUDIO_CHUNK_SAMPLES: usize = 3_200;
 /// 入站帧队列容量；满了说明主循环卡住，按溢出处理。
