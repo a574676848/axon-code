@@ -1,11 +1,10 @@
 import React from 'react';
 import { CheckIcon, CopyIcon, DownloadIcon } from '../../icons';
 import { exportMarkdownName } from '../../conversation/textExport';
-import { speak, stop, useSpeechState } from '../../speech';
+import { stop, useSpeechState } from '../../speech';
 import { Markdown } from './Markdown';
 import { MessageActionButton, MessageFooter } from './MessageFooter';
 import { SpeechButton } from './SpeechButton';
-import { useConversationActions } from './actions';
 import * as ipc from '../../ipc';
 
 /*
@@ -25,35 +24,20 @@ export const AssistantBlock: React.FC<{
   streaming: boolean;
   /** 这一格第一次被看到的服务端记录时间；与用户气泡同款时间标记。 */
   atMs: number | null;
-}> = ({ text, streaming, atMs }) => {
+  /** 这一格在时间线里的标识；朗读状态按它回认「正在念的是这一条」。 */
+  source: string;
+}> = ({ text, streaming, atMs, source }) => {
   const [copied, setCopied] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [saved, setSaved] = React.useState<string | null>(null);
   const [failure, setFailure] = React.useState<string | null>(null);
-  const actions = useConversationActions();
   const speech = useSpeechState();
-  /** 这一格在朗读状态里的身份：自动朗读与手动点击共用同一个来源标识。 */
-  const speechSource = React.useId();
-  const speaking = speech.source === speechSource;
+  const speaking = speech.source === source;
   /*
    * 朗读中或朗读失败时把操作区摊开：停止入口与「语音运行时未就绪」都必须看得见，
    * 不能等指针悬停才出现。
    */
   const revealing = speaking;
-
-  /*
-   * 自动朗读只在「这一条刚刚念完」时接手：历史回放的正文挂载时 streaming 一直
-   * 为 false，没有这一次翻转，因此切会话不会把旧回复从头念一遍。
-   */
-  const wasStreaming = React.useRef(streaming);
-  const autoSpoken = React.useRef(false);
-  React.useEffect(() => {
-    const justFinished = wasStreaming.current && !streaming;
-    wasStreaming.current = streaming;
-    if (!justFinished || autoSpoken.current || actions?.autoReadReplies !== true) return;
-    autoSpoken.current = true;
-    speak(text, { source: speechSource });
-  }, [actions, speechSource, streaming, text]);
 
   /*
    * 这一格被删除或整段卸载时停止朗读：声音不该跟着一条已经不存在的消息走。
@@ -142,7 +126,7 @@ export const AssistantBlock: React.FC<{
           >
             <DownloadIcon size={14} />
           </MessageActionButton>
-          <SpeechButton text={text} source={speechSource} />
+          <SpeechButton text={text} source={source} />
         </MessageFooter>
       )}
     </div>

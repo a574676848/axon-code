@@ -63,6 +63,18 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
                 .ok_or_else(|| "参数 values 缺失或类型错误".to_string())?;
             Ok(serde_json::to_value(ipc::config_validate_values(values)).map_err(stringify)?)
         }
+        "voice_tts" => {
+            let text = args
+                .get("text")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_owned();
+            let preset_id = args
+                .get("presetId")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned);
+            Ok(serde_json::to_value(ipc::voice_tts(text, preset_id)).map_err(stringify)?)
+        }
         "open_config_file" => {
             ipc::open_config_file()?;
             Ok(Value::Null)

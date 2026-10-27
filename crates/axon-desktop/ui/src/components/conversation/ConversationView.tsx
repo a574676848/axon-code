@@ -8,6 +8,7 @@ import { useLaneAutoRead, useStopSpeechOnLaneChange } from '../../speech';
 import { Dialog } from '../ui/overlays';
 import { ConversationHeader } from './ConversationHeader';
 import { ConversationHeaderActions } from './ConversationHeaderActions';
+import { useAutoReadReply } from './useAutoReadReply';
 import { ConversationStream } from './ConversationStream';
 import { ConversationCover } from './ConversationCover';
 import { ErrorCard } from './ErrorCard';
@@ -91,6 +92,8 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   const laneKey = selection === null ? null : `${selection.workspaceId}:${selection.laneId}`;
   const voiceAutoRead = useLaneAutoRead(laneKey);
   useStopSpeechOnLaneChange(laneKey);
+  // 一轮收口时朗读这一轮的回复：流式与收口补齐两种落地方式都覆盖。
+  useAutoReadReply(laneKey, conversation.working, conversation.state.turns, voiceAutoRead);
   const [config, setConfig] = React.useState<ResolvedConfig | null>(null);
   const [cronConfig, setCronConfig] = React.useState<CronJob | null>(null);
   const cronJobId = selection?.destination.startsWith(CRON_DESTINATION_PREFIX)
@@ -329,9 +332,8 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
       unfoldTurn: (interactionId: string) => conversationRef.current.unfoldTurn(interactionId),
       // 正文里的相对图片路径以当前工作区为准，与输入坞的 `@` 引用同作用域。
       workspaceRoot: workspace?.path ?? null,
-      autoReadReplies: voiceAutoRead,
     }),
-    [rail, voiceAutoRead, workspace],
+    [rail, workspace],
   );
 
   /*

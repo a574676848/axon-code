@@ -488,7 +488,14 @@ export const TranscriptCellView: React.FC<{ cell: TranscriptCell }> = React.memo
         />
       );
     case 'assistant':
-      return <AssistantBlock text={cell.text} streaming={cell.streaming} atMs={cell.atMs} />;
+      return (
+        <AssistantBlock
+          text={cell.text}
+          streaming={cell.streaming}
+          atMs={cell.atMs}
+          source={cell.id}
+        />
+      );
     case 'reasoning':
       return <ReasoningBlock text={cell.text} done={cell.done} durationMs={cell.durationMs} />;
     case 'tool':
