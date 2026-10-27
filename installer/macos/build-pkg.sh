@@ -14,6 +14,7 @@ VERSION="${1:-$(sed -n 's/^version = "\([^"]*\)"/\1/p' "${ROOT_DIR}/Cargo.toml" 
 [ -n "${VERSION}" ] || { echo "无法从 Cargo.toml 读取工作区版本号" >&2; exit 1; }
 BINARY="${2:?缺少二进制路径}"
 LAUNCHER="${3:?缺少 launcher 路径}"
+VOICE_HOST="${5:-}"
 NAME="${4:?缺少包名}"
 
 WORK_DIR="$(mktemp -d)"
@@ -40,8 +41,13 @@ RELEASE_NAME="${VERSION}"
 mkdir -p "${INSTALL_ROOT}/versions/${RELEASE_NAME}" "${INSTALL_ROOT}/launcher" "${DEFAULTS_DIR}"
 cp "${BINARY}" "${INSTALL_ROOT}/versions/${RELEASE_NAME}/axon"
 cp "${LAUNCHER}" "${INSTALL_ROOT}/launcher/axon-launcher"
+if [ -n "${VOICE_HOST}" ]; then
+    if [ ! -x "${VOICE_HOST}" ]; then echo "缺少语音宿主：${VOICE_HOST}" >&2; exit 1; fi
+    cp "${VOICE_HOST}" "${INSTALL_ROOT}/versions/${RELEASE_NAME}/axon-voice-host"
+fi
 cp "${ROOT_DIR}/assets/defaults/SOUL.md" "${DEFAULTS_DIR}/SOUL.md"
 chmod 755 "${INSTALL_ROOT}/versions/${RELEASE_NAME}/axon" "${INSTALL_ROOT}/launcher/axon-launcher"
+if [ -n "${VOICE_HOST}" ]; then chmod 755 "${INSTALL_ROOT}/versions/${RELEASE_NAME}/axon-voice-host"; fi
 chmod 644 "${DEFAULTS_DIR}/SOUL.md"
 
 # ── 构建组件 pkg ────────────────────────────

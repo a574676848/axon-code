@@ -60,6 +60,14 @@
           KeyPath="yes" />
       </Component>
 
+      <Component Id="AxonVoiceHostExe" Guid="3C4D5E6F-7081-92A3-B4C5-D6E7F8091A2B">
+        <File
+          Id="AxonVoiceHostExeFile"
+          Name="axon-voice-host.exe"
+          Source="$(VoiceHostBinaryPath)"
+          KeyPath="yes" />
+      </Component>
+
       <Component Id="AxonDesktopExe" Guid="2B3C4D5E-6F70-8192-A3B4-C5D6E7F8091A">
         <File
           Id="AxonDesktopExeFile"

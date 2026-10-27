@@ -19,6 +19,7 @@ $version            = "<版本号>"
 $binaryPath         = "target\x86_64-pc-windows-msvc\release\axon.exe"
 $desktopBinaryPath  = "target\x86_64-pc-windows-msvc\release\axon-desktop.exe"
 $launcherPath       = "target\x86_64-pc-windows-msvc\release\axon-launcher.exe"
+$voiceHostPath      = "target\x86_64-pc-windows-msvc\release\axon-voice-host.exe"
 $manifestPath       = "dist\current.json"
 @{ versionId = $version } | ConvertTo-Json -Compress | Set-Content -NoNewline $manifestPath
 
@@ -29,6 +30,7 @@ wix build installer/windows/axon.wxs `
   -d "Version=$version" `
   -d "BinaryPath=$binaryPath" `
   -d "DesktopBinaryPath=$desktopBinaryPath" `
+  -d "VoiceHostBinaryPath=$voiceHostPath" `
   -d "LauncherPath=$launcherPath" `
   -d "CurrentManifestPath=$manifestPath" `
   -d "IconPath=crates\axon-desktop\icons\icon.ico" `
