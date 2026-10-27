@@ -23,6 +23,9 @@ use std::sync::Arc;
 /// 一次合成请求的上限。
 const TTS_MAX_CHARS: usize = 4_000;
 
+/// 试听合成超时（PROTOCOL §5 的 preview_timeout）。
+const PREVIEW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// `POST /api/v1/voice/tts`：用当前音色预设合成一段朗读音频。
 pub(super) async fn voice_tts(
     State(state): State<Arc<GatewayHttpState>>,
@@ -524,17 +527,29 @@ pub(super) async fn voice_preview(
     let hour = chrono::Local::now().hour() as u8;
     let planned = voice_plan(persona, requested, hour);
     let profile = planned.profile;
-    let outcome = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, &'static str> {
-        let root = model_root();
-        let runtime = Inference::discover(&root).ok_or("voice_unavailable")?;
-        let mut samples = runtime
-            .synthesize_with("你好，这是当前音色的试听。", profile.speaker, profile.rate)
-            .map_err(|_| "tts_failed")?;
-        apply_gain(&mut samples, profile.energy_db);
-        let samples = shift_pitch(&samples, profile.pitch_semitones);
-        Ok(encode_wav(&samples))
-    })
+    let outcome = tokio::time::timeout(
+        PREVIEW_TIMEOUT,
+        tokio::task::spawn_blocking(move || -> Result<Vec<u8>, &'static str> {
+            let root = model_root();
+            let runtime = Inference::discover(&root).ok_or("voice_unavailable")?;
+            let mut samples = runtime
+                .synthesize_with("你好，这是当前音色的试听。", profile.speaker, profile.rate)
+                .map_err(|_| "tts_failed")?;
+            apply_gain(&mut samples, profile.energy_db);
+            let samples = shift_pitch(&samples, profile.pitch_semitones);
+            Ok(encode_wav(&samples))
+        }),
+    )
     .await;
+    let outcome = match outcome {
+        Ok(result) => result,
+        Err(_) => {
+            return json_response(
+                StatusCode::GATEWAY_TIMEOUT,
+                serde_json::json!({"error":"preview_timeout"}),
+            );
+        }
+    };
     match outcome {
         Ok(Ok(bytes)) => Response::builder()
             .status(StatusCode::OK)
