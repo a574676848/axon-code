@@ -58,7 +58,7 @@ fn crashed_host_is_detected() {
 
     let mut supervisor = Supervisor::new(config);
     for _ in 0..3 {
-        assert_eq!(supervisor.after_exit(), SupervisorAction::Restart);
+        assert_eq!(supervisor.after_exit(Some(1)).0, SupervisorAction::Restart);
     }
-    assert_eq!(supervisor.after_exit(), SupervisorAction::GiveUp);
+    assert_eq!(supervisor.after_exit(Some(1)).0, SupervisorAction::GiveUp);
 }

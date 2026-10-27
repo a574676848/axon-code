@@ -8,7 +8,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use axon_voice_protocol::{
-    Control, Frame, FrameError, Hello, PROTOCOL_VERSION, read_frame, write_frame,
+    Control, ErrorDetail, ErrorMsg, Frame, FrameError, Hello, PROTOCOL_VERSION, read_frame,
+    write_frame,
 };
 
 /// 监督错误。
@@ -217,17 +218,34 @@ impl HostClient {
     ///
     /// 写失败或等待失败。
     pub fn close(mut self) -> Result<ExitStatus, SupervisorError> {
-        let sent = self.send(&Control::Close).is_ok();
-        let acknowledged = sent
-            && matches!(
-                self.recv_timeout(Duration::from_secs(2)),
-                Ok(Frame::Control(Control::Closed))
-            );
+        let _ = self.send(&Control::Close);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut acknowledged = false;
+        while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+            match self.frames.recv_timeout(remaining) {
+                Ok(Ok(Frame::Control(Control::Closed))) => {
+                    acknowledged = true;
+                    break;
+                }
+                // 心跳等无关帧跳过，直到关闭回执或超时。
+                Ok(Ok(_)) => continue,
+                Ok(Err(_)) | Err(_) => break,
+            }
+        }
         if !acknowledged {
             let _ = self.child.kill();
         }
         drop(self.stdin);
         self.child.wait().map_err(SupervisorError::Spawn)
+    }
+
+    /// 进程是否仍在运行。
+    ///
+    /// # Errors
+    ///
+    /// 查询失败。
+    pub fn alive(&mut self) -> Result<bool, SupervisorError> {
+        Ok(self.try_wait()?.is_none())
     }
 
     /// 终止并回收；返回退出码。
@@ -321,11 +339,18 @@ impl Supervisor {
     }
 
     /// 进程退出后的动作。
-    pub fn after_exit(&mut self) -> SupervisorAction {
+    pub fn after_exit(
+        &mut self,
+        exit_code: Option<i32>,
+    ) -> (SupervisorAction, Option<HostFailure>) {
+        let failure = HostFailure {
+            sub_stage: "warmup",
+            exit_code,
+        };
         if self.restart_allowed() {
-            SupervisorAction::Restart
+            (SupervisorAction::Restart, Some(failure))
         } else {
-            SupervisorAction::GiveUp
+            (SupervisorAction::GiveUp, Some(failure))
         }
     }
 
@@ -338,6 +363,10 @@ impl Supervisor {
         now: Instant,
     ) -> (SupervisorAction, Option<HostFailure>) {
         if client.heartbeat_ok(now) {
+            return (SupervisorAction::Continue, None);
+        }
+        // 已经退出的进程不再消耗重启额度。
+        if !client.alive().unwrap_or(false) {
             return (SupervisorAction::Continue, None);
         }
         let exit_code = client.terminate();
@@ -375,9 +404,24 @@ fn hello(build_commit: &str) -> Control {
     })
 }
 
+/// 把宿主失败映射为协议错误帧，供 daemon 直接下发。
+#[must_use]
+pub fn worker_crashed(failure: &HostFailure) -> Control {
+    Control::Error(ErrorMsg {
+        code: "worker_crashed".to_owned(),
+        stage: "worker".to_owned(),
+        retryable: true,
+        detail: Some(ErrorDetail {
+            exit_code: failure.exit_code,
+            reason: Some(failure.sub_stage.to_owned()),
+            ..ErrorDetail::default()
+        }),
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::{HostConfig, Supervisor, SupervisorAction};
+    use axon_voice_protocol::{Control, ErrorMsg};
 
     #[test]
     fn restart_limit_is_enforced() {
@@ -398,7 +442,30 @@ mod tests {
         assert_eq!(supervisor.tick(false), SupervisorAction::Restart);
         assert_eq!(supervisor.tick(false), SupervisorAction::Restart);
         assert_eq!(supervisor.tick(false), SupervisorAction::GiveUp);
-        assert_eq!(supervisor.after_exit(), SupervisorAction::GiveUp);
+        assert_eq!(supervisor.after_exit(Some(1)).0, SupervisorAction::GiveUp);
+    }
+
+    #[test]
+    fn crash_maps_to_worker_crashed_error() {
+        let failure = super::HostFailure {
+            sub_stage: "asr",
+            exit_code: Some(13),
+        };
+        match super::worker_crashed(&failure) {
+            Control::Error(ErrorMsg {
+                code,
+                stage,
+                detail,
+                ..
+            }) => {
+                assert_eq!(code, "worker_crashed");
+                assert_eq!(stage, "worker");
+                let detail = detail.expect("应有 detail");
+                assert_eq!(detail.exit_code, Some(13));
+                assert_eq!(detail.reason.as_deref(), Some("asr"));
+            }
+            other => panic!("期望错误帧，得到 {other:?}"),
+        }
     }
 
     #[test]

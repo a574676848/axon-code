@@ -204,13 +204,12 @@ fn invalid_cancel_reason_exits_11() {
         host.read(),
         Frame::Control(Control::Ready(Ready { .. }))
     ));
-    write_frame(
-        &mut host.stdin,
-        &Control::Cancel(axon_voice_protocol::Cancel {
-            reason: "not-a-reason".to_owned(),
-        }),
-    )
-    .expect("写 cancel");
+    // 绕过客户端校验，直接发送非法 reason，验证宿主侧仍拒绝。
+    let payload = br#"{"type":"cancel","reason":"not-a-reason"}"#;
+    let mut frame = vec![0x10u8];
+    frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    frame.extend_from_slice(payload);
+    write_bytes(&mut host.stdin, &frame).expect("写原始帧");
     assert_eq!(host.code(), 11);
 }
 

@@ -48,16 +48,20 @@ fn run() -> Result<u8, u8> {
     if !valid_hello(&hello) {
         return Err(exit_code::HANDSHAKE as u8);
     }
-    send(&outbox, ready())?;
+    send(&outbox, ready());
 
     let stop = Arc::new(AtomicBool::new(false));
     let heartbeat = spawn_heartbeat(outbox.clone(), Arc::clone(&stop));
     let outcome = serve(&mut reader, &outbox);
     stop.store(true, Ordering::SeqCst);
+    if let Err(code) = outcome {
+        // writer 可能正阻塞在 stdout，不能 join；由进程退出兜底。
+        std::process::exit(i32::from(code));
+    }
     drop(outbox);
     let _ = writer.join();
     heartbeat.join().ok();
-    outcome
+    Ok(exit_code::OK as u8)
 }
 
 fn valid_hello(hello: &Hello) -> bool {
@@ -135,7 +139,7 @@ fn serve(reader: &mut impl io::BufRead, outbox: &SyncSender<Control>) -> Result<
         };
         match control {
             Control::Hello(_) | Control::Ready(_) => return Err(exit_code::SEQUENCE as u8),
-            Control::Warmup(message) => send(outbox, model_missing(&message))?,
+            Control::Warmup(message) => send(outbox, model_missing(&message)),
             Control::SessionStart(message) => {
                 if session.is_some() {
                     return Err(exit_code::SEQUENCE as u8);
@@ -153,16 +157,16 @@ fn serve(reader: &mut impl io::BufRead, outbox: &SyncSender<Control>) -> Result<
                 if session.is_none() {
                     return Err(exit_code::SEQUENCE as u8);
                 }
-                send(outbox, simple_error("tts_failed", "speaking"))?;
+                send(outbox, simple_error("tts_failed", "speaking"));
             }
             Control::CueSpeak(_) => {
                 if session.is_none() {
                     return Err(exit_code::SEQUENCE as u8);
                 }
-                send(outbox, simple_error("cue_unavailable", "speaking"))?;
+                send(outbox, simple_error("cue_unavailable", "speaking"));
             }
             Control::Close => {
-                send(outbox, Control::Closed)?;
+                send(outbox, Control::Closed);
                 return Ok(exit_code::OK as u8);
             }
             Control::Warm(_)
@@ -197,11 +201,12 @@ fn simple_error(code: &str, stage: &str) -> Control {
     })
 }
 
-fn send(outbox: &SyncSender<Control>, control: Control) -> Result<(), u8> {
+fn send(outbox: &SyncSender<Control>, control: Control) {
     match outbox.try_send(control) {
-        Ok(()) => Ok(()),
-        Err(TrySendError::Full(_)) => Err(exit_code::FRAME as u8),
-        Err(TrySendError::Disconnected(_)) => Err(exit_code::SEQUENCE as u8),
+        Ok(()) => {}
+        // writer 阻塞在 stdout 时不能等它，直接按控制通道溢出退出。
+        Err(TrySendError::Full(_)) => std::process::exit(exit_code::FRAME),
+        Err(TrySendError::Disconnected(_)) => std::process::exit(exit_code::SEQUENCE),
     }
 }
 

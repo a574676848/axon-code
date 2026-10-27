@@ -291,7 +291,7 @@ pub struct ErrorMsg {
 }
 
 impl Control {
-    /// 字段取值与长度校验；编解码两侧共用。
+    /// 字段取值与长度校验；编码与解码都会调用。
     ///
     /// # Errors
     ///
@@ -440,6 +440,7 @@ fn encode_payload(control: &Control) -> Result<Vec<u8>, FrameError> {
         "type".to_owned(),
         serde_json::Value::String(control.type_name().to_owned()),
     );
+    control.validate()?;
     let payload = serde_json::to_vec(&value).map_err(FrameError::Serialize)?;
     if payload.len() > MAX_FRAME_BYTES {
         return Err(FrameError::TooLarge { len: payload.len() });
