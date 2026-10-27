@@ -276,6 +276,9 @@ impl HostState {
                 }
                 // 没预热成功时不在会话首帧就回错：daemon 已在 warmup 阶段拿到
                 // `model_missing`/`model_unusable`；这里等真的有音频进来再告警一次。
+                if let Some(asr) = self.asr.as_mut() {
+                    asr.begin_session();
+                }
                 self.session = Some(SessionState {
                     id: message.session_id,
                     samples_pushed: 0,
@@ -417,6 +420,11 @@ impl HostState {
         let Some(family) = ModelFamily::parse(&message.family) else {
             return unusable(None, "cue 模型预热尚未接入");
         };
+        // 只有 ASR 接了常驻识别服务；其余族如实回「不可用」，
+        // 不允许用 ASR 的指标冒充别的族（S-08 不伪造 warm）。
+        if family != ModelFamily::Asr {
+            return unusable(Some(&message.family), "该族运行时尚未接入");
+        }
         let Some(store) = store else {
             return missing(None, "使用 --model-root 指定模型目录");
         };

@@ -269,10 +269,20 @@ impl StreamingAsr {
         let _ = self.child.wait();
     }
 
+    /// 会话开始：时间戳基准与句序号都从 `sessionStart` 重新起算（PROTOCOL §2.6）。
+    pub fn begin_session(&mut self) {
+        self.started = Instant::now();
+        self.utterance_seq = 1;
+        self.last_partial.clear();
+    }
+
     fn drain(&mut self, budget: Duration, events: &mut Vec<AsrEvent>) -> Result<(), String> {
         let deadline = Instant::now() + budget;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
+            // 端点时刻取「读到这一帧之前」的时刻：`end_ms` 是端点判定，
+            // `finalize_ms` 是解析出定稿之后，两者之差就是定稿处理时间（P-03）。
+            let observed_ms = self.started.elapsed().as_millis() as u64;
             let message = self
                 .client
                 .read_message(remaining.max(Duration::from_millis(1)))
@@ -281,7 +291,7 @@ impl StreamingAsr {
                     other => other.to_string(),
                 })?;
             match message {
-                Some(WsMessage::Text(text)) => self.handle_json(&text, events),
+                Some(WsMessage::Text(text)) => self.handle_json(&text, observed_ms, events),
                 Some(WsMessage::Binary(_)) => {}
                 Some(WsMessage::Close) => return Err("识别服务关闭了连接".to_owned()),
                 None => return Ok(()),
@@ -292,7 +302,7 @@ impl StreamingAsr {
         }
     }
 
-    fn handle_json(&mut self, text: &str, events: &mut Vec<AsrEvent>) {
+    fn handle_json(&mut self, text: &str, observed_ms: u64, events: &mut Vec<AsrEvent>) {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
             return;
         };
@@ -312,14 +322,15 @@ impl StreamingAsr {
                     .get("start_time")
                     .and_then(serde_json::Value::as_f64)
                     .unwrap_or(0.0);
-                let now_ms = self.started.elapsed().as_millis() as u64;
+                let finalize_ms = self.started.elapsed().as_millis() as u64;
                 let start_ms = (start_seconds * 1_000.0).round() as u64;
+                let end_ms = observed_ms.clamp(start_ms, finalize_ms);
                 events.push(AsrEvent::Final {
                     utterance_seq: self.utterance_seq,
                     text: content,
-                    start_ms: start_ms.min(now_ms),
-                    end_ms: now_ms,
-                    finalize_ms: now_ms,
+                    start_ms,
+                    end_ms,
+                    finalize_ms: finalize_ms.max(end_ms),
                 });
                 self.utterance_seq += 1;
             }

@@ -447,11 +447,33 @@ fn manifest_digest(root: &Path) -> String {
     }
 }
 
+/// 连接级 `ready`：模型与降级字段必须来自真实探测，不能写占位。
+///
+/// `workspaceId`/`replyDestination`/`sessionId`/`epoch`/`phase`/`tts` 是**会话级**
+/// 数据，建连时还没有 `start`，按 PROTOCOL §2.5 保留初始值，`start` 之后由
+/// `state`/`turn` 帧承载真实值。
 pub(super) fn ready_json() -> String {
+    let (asr_ready, tts_ready) = runtime_probe();
+    let asr_model = if asr_ready {
+        DEFAULT_ASR_MODEL
+    } else {
+        "unavailable"
+    };
+    let tts_model = if tts_ready {
+        axon_voice_host::inference::TTS_MODEL
+    } else {
+        "none"
+    };
+    let detail = match (asr_ready, tts_ready) {
+        (true, true) => None,
+        (false, true) => Some("本地识别模型未安装".to_owned()),
+        (true, false) => Some("本地合成模型未安装".to_owned()),
+        (false, false) => Some("本地语音模型未安装".to_owned()),
+    };
     serde_json::json!({
         "type": "ready",
-        "asrModel": "unavailable",
-        "ttsModel": "none",
+        "asrModel": asr_model,
+        "ttsModel": tts_model,
         "sampleRate": 16_000,
         "workspaceId": "",
         "replyDestination": "",
@@ -460,13 +482,29 @@ pub(super) fn ready_json() -> String {
         "phase": "idle",
         "tts": false,
         "degraded": {
-            "asr": null,
-            "tts": "none",
-            "detail": "语音运行时尚未接入"
+            "asr": if asr_ready { serde_json::Value::Null } else { serde_json::json!("model_missing") },
+            "tts": if tts_ready { serde_json::Value::Null } else { serde_json::json!("none") },
+            "detail": detail,
         },
         "cues": false
     })
     .to_string()
+}
+
+/// 只做文件存在性探测，不读模型内容，避免建连被 0.5 GB 哈希拖住。
+fn runtime_probe() -> (bool, bool) {
+    let root = model_root();
+    let asr = root
+        .join("asr")
+        .join(DEFAULT_ASR_MODEL)
+        .join("manifest.json")
+        .is_file();
+    let tts = root
+        .join("tts")
+        .join(axon_voice_host::inference::TTS_MODEL)
+        .join("manifest.json")
+        .is_file();
+    (asr, tts)
 }
 
 pub(super) fn error_json(code: &str, stage: &str) -> String {
