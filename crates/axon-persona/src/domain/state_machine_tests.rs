@@ -270,7 +270,11 @@ fn fatigue_decays_toward_normal_then_accepts_a_fresh_signal() {
             now_ms: two_half_lives,
         },
     );
-    assert_eq!(next.fatigue_level, FatigueLevel::Normal, "两个半衰期应回落到常态");
+    assert_eq!(
+        next.fatigue_level,
+        FatigueLevel::Normal,
+        "两个半衰期应回落到常态"
+    );
 
     // 本轮给出明确信号时，覆盖衰减结果。
     let (next, _) = settle(

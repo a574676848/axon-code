@@ -63,26 +63,6 @@ impl PersonaContext {
     }
 }
 
-/// 代码目录特征：出现任一即视为办公场域，无需先注册工作区。
-const CODE_MARKERS: [&str; 8] = [
-    ".git",
-    "Cargo.toml",
-    "package.json",
-    "pyproject.toml",
-    "go.mod",
-    "pom.xml",
-    "build.gradle",
-    "build.gradle.kts",
-];
-
-/// 当前目录是否具备代码目录特征。
-#[must_use]
-pub(crate) fn has_code_markers(path: &Path) -> bool {
-    CODE_MARKERS
-        .iter()
-        .any(|marker| path.join(marker).exists())
-}
-
 /// 读取人格上下文。
 ///
 /// 根目录与 CLI、网关、doctor 保持同一解析口径（`runtime_axon_root_path`）。

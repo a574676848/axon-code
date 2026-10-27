@@ -148,16 +148,3 @@ fn unreadable_soul_degrades_to_a_warning_instead_of_failing_the_turn() {
         context.warnings
     );
 }
-
-#[test]
-fn code_markers_turn_any_directory_into_an_office_scene() {
-    let root = axon_test_support::test_temp_dir();
-    assert!(!has_code_markers(root.path()), "空目录不算办公场域");
-
-    fs::create_dir(root.path().join(".git")).expect("创建 .git");
-    assert!(has_code_markers(root.path()), "出现 .git 即按办公处理");
-
-    let other = axon_test_support::test_temp_dir();
-    fs::write(other.path().join("Cargo.toml"), "[package]").expect("写入 Cargo.toml");
-    assert!(has_code_markers(other.path()), "出现 Cargo.toml 即按办公处理");
-}

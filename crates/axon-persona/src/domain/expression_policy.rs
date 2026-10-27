@@ -73,11 +73,7 @@ pub fn resolve_expression(
     }
 }
 
-fn base_voice(
-    core: &PersonaCore,
-    mode: PersonaMode,
-    context: RuleContext,
-) -> Voice {
+fn base_voice(core: &PersonaCore, mode: PersonaMode, context: RuleContext) -> Voice {
     let base = match mode {
         PersonaMode::Focus => Voice {
             humor: core.voice.humor.downgrade(),
