@@ -393,7 +393,11 @@ impl std::fmt::Display for VoiceTtsError {
 /// # Errors
 ///
 /// 网关不可达、鉴权失败、语音运行时未就绪或合成失败。
-pub fn post_voice_tts(text: &str, preset_id: Option<&str>) -> Result<Vec<u8>, VoiceTtsError> {
+pub fn post_voice_tts(
+    text: &str,
+    preset_id: Option<&str>,
+    persona: Option<&serde_json::Value>,
+) -> Result<Vec<u8>, VoiceTtsError> {
     let url = endpoint("/voice/tts").map_err(VoiceTtsError::Failed)?;
     let mut request = agent()
         .post(&url)
@@ -405,6 +409,7 @@ pub fn post_voice_tts(text: &str, preset_id: Option<&str>) -> Result<Vec<u8>, Vo
     let payload = serde_json::json!({
         "text": text,
         "presetId": preset_id.unwrap_or(""),
+        "persona": persona,
     });
     let response = match request.send(payload.to_string()) {
         Ok(response) => response,
@@ -430,4 +435,13 @@ fn classify_voice_status(status: u16, body: String) -> VoiceTtsError {
     } else {
         VoiceTtsError::Failed(reason)
     }
+}
+
+/// 读取音色预设清单。
+///
+/// # Errors
+///
+/// 网关不可达、鉴权失败或响应不是合法 JSON。
+pub fn get_voice_presets() -> Result<serde_json::Value, String> {
+    get_json("/voice/presets")
 }

@@ -14,6 +14,7 @@ pub mod config;
 pub mod constants;
 pub mod domain;
 pub mod expression;
+pub mod fusion;
 pub mod port;
 pub mod presets;
 pub mod render;
@@ -31,6 +32,7 @@ pub use domain::{
 pub use expression::{
     ExpressionStyle, SpeechSegment, parse_expression, render_with_expression, segments_with_pauses,
 };
+pub use fusion::{PersonaVoiceInput, VoicePlan, plan};
 pub use port::{
     Clock, PcmChunk, SAMPLE_RATE_HZ, SpeechRenderer, SpeechToText, SttEvent, SttSession,
     TextToSpeech,

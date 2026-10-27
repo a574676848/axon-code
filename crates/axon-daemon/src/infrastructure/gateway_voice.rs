@@ -7,6 +7,8 @@ use super::GatewayHttpState;
 use super::gateway_http_response::{bearer, unauthorized};
 use crate::infrastructure::gateway_auth::query_token;
 use axon_voice::expression::render_with_expression;
+use axon_voice::fusion::{PersonaVoiceInput, plan as voice_plan};
+use axon_voice::{HumorLevel, PersonaMode};
 use axon_voice::{Verbosity, VoiceFailure, presets};
 use axon_voice_bridge::{BridgeError, VoiceBridge};
 use axon_voice_host::BUILD_COMMIT;
@@ -564,15 +566,18 @@ pub(super) async fn voice_tts(
             serde_json::json!({"error":"unauthorized"}),
         );
     }
-    let (text, preset_id) = match parse_tts_body(&body) {
+    let request = match parse_tts_body(&body) {
         Ok(parsed) => parsed,
         Err((status, error)) => {
             return json_response(status, serde_json::json!({"error": error}));
         }
     };
-    let preset = match preset_id.as_deref() {
+    let text = request.text;
+    let preset_id = request.preset_id;
+    let persona = request.persona;
+    let preset_override = match preset_id.as_deref() {
         Some(id) if !id.is_empty() => match presets::resolve(id) {
-            Some(preset) => preset,
+            Some(preset) => Some(preset),
             None => {
                 return json_response(
                     StatusCode::BAD_REQUEST,
@@ -580,36 +585,41 @@ pub(super) async fn voice_tts(
                 );
             }
         },
-        _ => presets::default_preset(),
+        _ => None,
     };
-    if !preset.available() {
+    if let Some(preset) = preset_override
+        && !preset.available()
+    {
         return json_response(
             StatusCode::CONFLICT,
             serde_json::json!({"error":"preset_unavailable","presetId":preset.id}),
         );
     }
 
-    let outcome = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, &'static str> {
-        let root = model_root();
-        let runtime = Inference::discover(&root).ok_or("voice_unavailable")?;
-        let (spoken, style) = render_with_expression(&text, Verbosity::Concise);
-        if spoken.trim().is_empty() {
-            return Err("empty_speech");
-        }
-        let hour = chrono::Local::now().hour() as u8;
-        let mut profile = preset.profile_for(Verbosity::Concise, hour);
-        profile.rate = (profile.rate * style.rate).clamp(0.85, 1.15);
-        let samples = runtime
-            .synthesize_with(&spoken, profile.speaker, profile.rate)
-            .map_err(|_| "tts_failed")?;
-        Ok(encode_wav(&samples))
-    })
-    .await;
+    let outcome =
+        tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, &'static str), &'static str> {
+            let root = model_root();
+            let runtime = Inference::discover(&root).ok_or("voice_unavailable")?;
+            let (spoken, style) = render_with_expression(&text, Verbosity::Concise);
+            if spoken.trim().is_empty() {
+                return Err("empty_speech");
+            }
+            let hour = chrono::Local::now().hour() as u8;
+            let planned = voice_plan(persona, preset_override, hour);
+            let mut profile = planned.profile;
+            profile.rate = (profile.rate * style.rate).clamp(0.85, 1.15);
+            let samples = runtime
+                .synthesize_with(&spoken, profile.speaker, profile.rate)
+                .map_err(|_| "tts_failed")?;
+            Ok((encode_wav(&samples), planned.preset.id))
+        })
+        .await;
 
     match outcome {
-        Ok(Ok(bytes)) => Response::builder()
+        Ok(Ok((bytes, preset_id))) => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "audio/wav")
+            .header("x-voice-preset", preset_id)
             .body(Body::from(bytes))
             .unwrap_or_else(|_| {
                 json_response(
@@ -669,7 +679,13 @@ fn json_response(status: StatusCode, value: serde_json::Value) -> Response {
         .unwrap_or_else(|_| Response::new(Body::empty()))
 }
 
-fn parse_tts_body(body: &Bytes) -> Result<(String, Option<String>), (StatusCode, &'static str)> {
+struct TtsRequest {
+    text: String,
+    preset_id: Option<String>,
+    persona: Option<PersonaVoiceInput>,
+}
+
+fn parse_tts_body(body: &Bytes) -> Result<TtsRequest, (StatusCode, &'static str)> {
     let value: serde_json::Value =
         serde_json::from_slice(body).map_err(|_| (StatusCode::BAD_REQUEST, "invalid_json"))?;
     let text = value
@@ -685,7 +701,49 @@ fn parse_tts_body(body: &Bytes) -> Result<(String, Option<String>), (StatusCode,
         .get("presetId")
         .and_then(|value| value.as_str())
         .map(str::to_owned);
-    Ok((text.to_owned(), preset))
+    let persona = value.get("persona").and_then(parse_persona_input);
+    Ok(TtsRequest {
+        text: text.to_owned(),
+        preset_id: preset,
+        persona,
+    })
+}
+
+fn parse_persona_input(value: &serde_json::Value) -> Option<PersonaVoiceInput> {
+    let mode = match value.get("mode").and_then(|value| value.as_str()) {
+        Some("focus") => PersonaMode::Focus,
+        Some("incident") => PersonaMode::Incident,
+        Some("group") => PersonaMode::Group,
+        Some("casual") | None => PersonaMode::Casual,
+        Some(_) => return None,
+    };
+    let warmth = value
+        .get("warmth")
+        .and_then(|value| value.as_u64())
+        .map(|value| value.min(100) as u8)?;
+    let formality = value
+        .get("formality")
+        .and_then(|value| value.as_u64())
+        .map(|value| value.min(100) as u8)?;
+    let humor = match value.get("humor").and_then(|value| value.as_str()) {
+        Some("off") => HumorLevel::Off,
+        Some("subtle") | None => HumorLevel::Subtle,
+        Some("playful") => HumorLevel::Playful,
+        Some(_) => return None,
+    };
+    let verbosity = match value.get("verbosity").and_then(|value| value.as_str()) {
+        Some("minimal") => Verbosity::Minimal,
+        Some("concise") | None => Verbosity::Concise,
+        Some("detailed") => Verbosity::Detailed,
+        Some(_) => return None,
+    };
+    Some(PersonaVoiceInput {
+        mode,
+        warmth,
+        formality,
+        humor,
+        verbosity,
+    })
 }
 
 fn message_for_tts(error: &str) -> &'static str {
@@ -835,12 +893,12 @@ mod tests {
     #[test]
     fn tts_body_reads_preset() {
         use axum::body::Bytes;
-        let (text, preset) = parse_tts_body(&Bytes::from_static(
+        let request = parse_tts_body(&Bytes::from_static(
             b"{\"text\":\"\\u4f60\\u597d\",\"presetId\":\"calm-elegant\"}",
         ))
         .expect("合法请求");
-        assert_eq!(text, "你好");
-        assert_eq!(preset.as_deref(), Some("calm-elegant"));
+        assert_eq!(request.text, "你好");
+        assert_eq!(request.preset_id.as_deref(), Some("calm-elegant"));
     }
 
     #[test]
@@ -849,5 +907,17 @@ mod tests {
         let long = "好".repeat(4_001);
         let body = format!("{{\"text\":\"{long}\"}}");
         assert!(parse_tts_body(&Bytes::from(body)).is_err());
+    }
+
+    #[test]
+    fn tts_body_reads_persona() {
+        use axum::body::Bytes;
+        let body = Bytes::from_static(
+            br#"{"text":"\\u4f60\\u597d","persona":{"mode":"group","warmth":80,"formality":70,"humor":"off","verbosity":"minimal"}}"#,
+        );
+        let request = parse_tts_body(&body).expect("合法请求");
+        let persona = request.persona.expect("应解析人格");
+        assert_eq!(persona.warmth, 80);
+        assert_eq!(persona.formality, 70);
     }
 }

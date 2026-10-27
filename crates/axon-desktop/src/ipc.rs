@@ -491,17 +491,53 @@ pub fn voice_tts(text: String, preset_id: Option<String>) -> Result<VoiceAudioPa
     if text.is_empty() {
         return Err("没有可朗读的内容".to_owned());
     }
-    let bytes =
-        crate::gateway::post_voice_tts(text, preset_id.as_deref()).map_err(
-            |error| match error {
-                crate::gateway::VoiceTtsError::Unavailable(reason) => {
-                    format!("voice_unavailable: {reason}")
-                }
-                crate::gateway::VoiceTtsError::Failed(reason) => reason,
-            },
-        )?;
+    let persona = persona_payload();
+    let bytes = crate::gateway::post_voice_tts(text, preset_id.as_deref(), persona.as_ref())
+        .map_err(|error| match error {
+            crate::gateway::VoiceTtsError::Unavailable(reason) => {
+                format!("voice_unavailable: {reason}")
+            }
+            crate::gateway::VoiceTtsError::Failed(reason) => reason,
+        })?;
     Ok(VoiceAudioPayload {
         audio_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
         mime_type: "audio/wav".to_owned(),
     })
+}
+
+/// 列出音色预设与可用性，供设置页渲染。
+///
+/// # Errors
+///
+/// 网关不可达或鉴权失败。
+#[tauri::command]
+pub fn voice_presets() -> Result<serde_json::Value, String> {
+    crate::gateway::get_voice_presets()
+}
+
+/// 从人格摘要里取语音需要的表达参数；字段缺失时返回 `None`，交给默认基线。
+fn persona_payload() -> Option<serde_json::Value> {
+    let summary = crate::persona::persona_summary().ok()?;
+    let voice = summary
+        .get("voice")
+        .or_else(|| summary.get("expression"))
+        .unwrap_or(&summary);
+    let mode = summary
+        .get("mode")
+        .or_else(|| voice.get("mode"))
+        .and_then(|value| value.as_str());
+    let warmth = voice.get("warmth").and_then(|value| value.as_u64());
+    let formality = voice.get("formality").and_then(|value| value.as_u64());
+    let humor = voice.get("humor").and_then(|value| value.as_str());
+    let verbosity = voice.get("verbosity").and_then(|value| value.as_str());
+    if mode.is_none() && warmth.is_none() && formality.is_none() {
+        return None;
+    }
+    Some(serde_json::json!({
+        "mode": mode.unwrap_or("casual"),
+        "warmth": warmth.unwrap_or(50),
+        "formality": formality.unwrap_or(60),
+        "humor": humor.unwrap_or("subtle"),
+        "verbosity": verbosity.unwrap_or("concise"),
+    }))
 }

@@ -63,6 +63,7 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
                 .ok_or_else(|| "参数 values 缺失或类型错误".to_string())?;
             Ok(serde_json::to_value(ipc::config_validate_values(values)).map_err(stringify)?)
         }
+        "voice_presets" => Ok(serde_json::to_value(ipc::voice_presets()).map_err(stringify)?),
         "voice_tts" => {
             let text = args
                 .get("text")
