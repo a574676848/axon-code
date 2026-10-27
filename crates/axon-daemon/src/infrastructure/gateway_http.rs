@@ -15,6 +15,8 @@ mod gateway_http_response;
 mod gateway_http_routes;
 #[path = "gateway_voice.rs"]
 mod gateway_voice;
+#[path = "gateway_voice_tts.rs"]
+mod gateway_voice_tts;
 
 pub use super::gateway_http_handler::{GatewayHttpResponse, GatewayHttpRouteHandler};
 

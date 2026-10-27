@@ -519,7 +519,9 @@ pub fn voice_presets() -> Result<serde_json::Value, String> {
 fn persona_payload() -> Option<serde_json::Value> {
     let summary = crate::persona::persona_summary().ok()?;
     let voice = summary
-        .get("voice")
+        .get("soul")
+        .and_then(|soul| soul.get("voice"))
+        .or_else(|| summary.get("voice"))
         .or_else(|| summary.get("expression"))
         .unwrap_or(&summary);
     let mode = summary

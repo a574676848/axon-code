@@ -32,11 +32,17 @@ pub(super) fn router(state: Arc<GatewayHttpState>, max_body_bytes: usize) -> Rou
             any(interaction),
         )
         .route("/api/v1/voice", any(super::gateway_voice::voice_ws))
-        .route("/api/v1/voice/tts", any(super::gateway_voice::voice_tts))
-        .route("/api/v1/voice/cue", any(super::gateway_voice::voice_cue))
+        .route(
+            "/api/v1/voice/tts",
+            any(super::gateway_voice_tts::voice_tts),
+        )
+        .route(
+            "/api/v1/voice/cue",
+            any(super::gateway_voice_tts::voice_cue),
+        )
         .route(
             "/api/v1/voice/presets",
-            any(super::gateway_voice::voice_presets),
+            any(super::gateway_voice_tts::voice_presets),
         )
         .route("/api/v1/{*rest}", any(custom))
         .fallback(unknown)

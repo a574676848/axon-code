@@ -6,21 +6,15 @@
 use super::GatewayHttpState;
 use super::gateway_http_response::{bearer, unauthorized};
 use crate::infrastructure::gateway_auth::query_token;
-use axon_voice::expression::render_with_expression;
-use axon_voice::fusion::{PersonaVoiceInput, plan as voice_plan};
-use axon_voice::{HumorLevel, PersonaMode};
-use axon_voice::{Verbosity, VoiceFailure, presets};
+use axon_voice::VoiceFailure;
 use axon_voice_bridge::{BridgeError, VoiceBridge};
 use axon_voice_host::BUILD_COMMIT;
-use axon_voice_host::inference::{Inference, encode_wav};
 use axon_voice_host::model::sha256::hex_digest;
 use axon_voice_host::supervisor::{HostClient, HostConfig};
-use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::http::{HeaderMap, StatusCode, Uri, header};
+use axum::http::{HeaderMap, Uri};
 use axum::response::Response;
-use chrono::Timelike;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -429,7 +423,7 @@ fn host_exe() -> Option<PathBuf> {
     None
 }
 
-fn model_root() -> PathBuf {
+pub(super) fn model_root() -> PathBuf {
     if let Ok(root) = std::env::var("AXON_RUNTIME_ROOT") {
         return PathBuf::from(root).join("voice").join("models");
     }
@@ -552,318 +546,11 @@ pub(crate) fn parse_client_frame(text: &str) -> Result<ClientFrame, ()> {
     }
 }
 
-/// 一次合成请求的上限。
-const TTS_MAX_CHARS: usize = 4_000;
-
-/// `POST /api/v1/voice/tts`：用当前音色预设合成一段朗读音频。
-pub(super) async fn voice_tts(
-    State(state): State<Arc<GatewayHttpState>>,
-    headers: HeaderMap,
-    uri: Uri,
-    body: Bytes,
-) -> Response {
-    if !state.context.authorize_request(
-        bearer(&headers),
-        query_token(
-            uri.path_and_query()
-                .map(|value| value.as_str())
-                .unwrap_or("/"),
-        ),
-    ) {
-        return json_response(
-            StatusCode::UNAUTHORIZED,
-            serde_json::json!({"error":"unauthorized"}),
-        );
-    }
-    let request = match parse_tts_body(&body) {
-        Ok(parsed) => parsed,
-        Err((status, error)) => {
-            return json_response(status, serde_json::json!({"error": error}));
-        }
-    };
-    let text = request.text;
-    let preset_id = request.preset_id;
-    let persona = request.persona;
-    let preset_override = match preset_id.as_deref() {
-        Some(id) if !id.is_empty() => match presets::resolve(id) {
-            Some(preset) => Some(preset),
-            None => {
-                return json_response(
-                    StatusCode::BAD_REQUEST,
-                    serde_json::json!({"error":"unknown_preset"}),
-                );
-            }
-        },
-        _ => None,
-    };
-    if let Some(preset) = preset_override
-        && !preset.available()
-    {
-        return json_response(
-            StatusCode::CONFLICT,
-            serde_json::json!({"error":"preset_unavailable","presetId":preset.id}),
-        );
-    }
-
-    let outcome =
-        tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, &'static str), &'static str> {
-            let root = model_root();
-            let runtime = Inference::discover(&root).ok_or("voice_unavailable")?;
-            let (spoken, style) = render_with_expression(&text, Verbosity::Concise);
-            if spoken.trim().is_empty() {
-                return Err("empty_speech");
-            }
-            let hour = chrono::Local::now().hour() as u8;
-            let planned = voice_plan(persona, preset_override, hour);
-            let mut profile = planned.profile;
-            profile.rate = (profile.rate * style.rate).clamp(0.85, 1.15);
-            let samples = runtime
-                .synthesize_with(&spoken, profile.speaker, profile.rate)
-                .map_err(|_| "tts_failed")?;
-            Ok((encode_wav(&samples), planned.preset.id))
-        })
-        .await;
-
-    match outcome {
-        Ok(Ok((bytes, preset_id))) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "audio/wav")
-            .header("x-voice-preset", preset_id)
-            .body(Body::from(bytes))
-            .unwrap_or_else(|_| {
-                json_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    serde_json::json!({"error":"internal"}),
-                )
-            }),
-        Ok(Err(error)) => json_response(
-            StatusCode::CONFLICT,
-            serde_json::json!({ "error": error, "message": message_for_tts(error) }),
-        ),
-        Err(_) => json_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            serde_json::json!({"error":"internal"}),
-        ),
-    }
-}
-
-/// cue 种类与对应文案。
-fn cue_text(preset: presets::VoicePreset, kind: &str) -> Option<&'static str> {
-    match kind {
-        "ack" => Some(preset.ack_text),
-        "thinking" => Some(preset.thinking_text),
-        "interrupted_ack" => Some("好，你说"),
-        "reunion" => Some("好久不见"),
-        "done" => Some("好了"),
-        "error_ack" => Some("出了点问题，我再看一下"),
-        _ => None,
-    }
-}
-
-/// `POST /api/v1/voice/cue`：用角色口癖合成一条短反馈。
-pub(super) async fn voice_cue(
-    State(state): State<Arc<GatewayHttpState>>,
-    headers: HeaderMap,
-    uri: Uri,
-    body: Bytes,
-) -> Response {
-    if !state.context.authorize_request(
-        bearer(&headers),
-        query_token(
-            uri.path_and_query()
-                .map(|value| value.as_str())
-                .unwrap_or("/"),
-        ),
-    ) {
-        return json_response(
-            StatusCode::UNAUTHORIZED,
-            serde_json::json!({"error":"unauthorized"}),
-        );
-    }
-    let value: serde_json::Value = match serde_json::from_slice(&body) {
-        Ok(value) => value,
-        Err(_) => {
-            return json_response(
-                StatusCode::BAD_REQUEST,
-                serde_json::json!({"error":"invalid_json"}),
-            );
-        }
-    };
-    let kind = value
-        .get("kind")
-        .and_then(|value| value.as_str())
-        .unwrap_or_default();
-    let preset = value
-        .get("presetId")
-        .and_then(|value| value.as_str())
-        .filter(|id| !id.is_empty())
-        .and_then(presets::resolve)
-        .unwrap_or_else(presets::default_preset);
-    if !preset.available() {
-        return json_response(
-            StatusCode::CONFLICT,
-            serde_json::json!({"error":"preset_unavailable","presetId":preset.id}),
-        );
-    }
-    let Some(spoken) = cue_text(preset, kind) else {
-        return json_response(
-            StatusCode::BAD_REQUEST,
-            serde_json::json!({"error":"unknown_cue"}),
-        );
-    };
-    let text = spoken.to_owned();
-    let outcome = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, &'static str> {
-        let root = model_root();
-        let runtime = Inference::discover(&root).ok_or("voice_unavailable")?;
-        let hour = chrono::Local::now().hour() as u8;
-        let profile = preset.profile_for(Verbosity::Concise, hour);
-        let samples = runtime
-            .synthesize_with(&text, profile.speaker, profile.rate)
-            .map_err(|_| "tts_failed")?;
-        Ok(encode_wav(&samples))
-    })
-    .await;
-    match outcome {
-        Ok(Ok(bytes)) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "audio/wav")
-            .header("x-voice-preset", preset.id)
-            .body(Body::from(bytes))
-            .unwrap_or_else(|_| Response::new(Body::empty())),
-        Ok(Err(error)) => json_response(
-            StatusCode::CONFLICT,
-            serde_json::json!({ "error": error, "message": message_for_tts(error) }),
-        ),
-        Err(_) => json_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            serde_json::json!({"error":"internal"}),
-        ),
-    }
-}
-
-/// `GET /api/v1/voice/presets`：给设置页列出音色与可用性。
-pub(super) async fn voice_presets(
-    State(state): State<Arc<GatewayHttpState>>,
-    headers: HeaderMap,
-    uri: Uri,
-) -> Response {
-    if !state.context.authorize_request(
-        bearer(&headers),
-        query_token(
-            uri.path_and_query()
-                .map(|value| value.as_str())
-                .unwrap_or("/"),
-        ),
-    ) {
-        return json_response(
-            StatusCode::UNAUTHORIZED,
-            serde_json::json!({"error":"unauthorized"}),
-        );
-    }
-    let items: Vec<serde_json::Value> = presets::PRESETS
-        .iter()
-        .map(|preset| {
-            serde_json::json!({
-                "id": preset.id,
-                "name": preset.name,
-                "available": preset.available(),
-                "default": preset.is_default,
-            })
-        })
-        .collect();
-    json_response(StatusCode::OK, serde_json::json!({ "presets": items }))
-}
-
-fn json_response(status: StatusCode, value: serde_json::Value) -> Response {
-    Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(value.to_string()))
-        .unwrap_or_else(|_| Response::new(Body::empty()))
-}
-
-struct TtsRequest {
-    text: String,
-    preset_id: Option<String>,
-    persona: Option<PersonaVoiceInput>,
-}
-
-fn parse_tts_body(body: &Bytes) -> Result<TtsRequest, (StatusCode, &'static str)> {
-    let value: serde_json::Value =
-        serde_json::from_slice(body).map_err(|_| (StatusCode::BAD_REQUEST, "invalid_json"))?;
-    let text = value
-        .get("text")
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .ok_or((StatusCode::BAD_REQUEST, "missing_text"))?;
-    if text.chars().count() > TTS_MAX_CHARS {
-        return Err((StatusCode::PAYLOAD_TOO_LARGE, "text_too_long"));
-    }
-    let preset = value
-        .get("presetId")
-        .and_then(|value| value.as_str())
-        .map(str::to_owned);
-    let persona = value.get("persona").and_then(parse_persona_input);
-    Ok(TtsRequest {
-        text: text.to_owned(),
-        preset_id: preset,
-        persona,
-    })
-}
-
-fn parse_persona_input(value: &serde_json::Value) -> Option<PersonaVoiceInput> {
-    let mode = match value.get("mode").and_then(|value| value.as_str()) {
-        Some("focus") => PersonaMode::Focus,
-        Some("incident") => PersonaMode::Incident,
-        Some("group") => PersonaMode::Group,
-        Some("casual") | None => PersonaMode::Casual,
-        Some(_) => return None,
-    };
-    let warmth = value
-        .get("warmth")
-        .and_then(|value| value.as_u64())
-        .map(|value| value.min(100) as u8)?;
-    let formality = value
-        .get("formality")
-        .and_then(|value| value.as_u64())
-        .map(|value| value.min(100) as u8)?;
-    let humor = match value.get("humor").and_then(|value| value.as_str()) {
-        Some("off") => HumorLevel::Off,
-        Some("subtle") | None => HumorLevel::Subtle,
-        Some("playful") => HumorLevel::Playful,
-        Some(_) => return None,
-    };
-    let verbosity = match value.get("verbosity").and_then(|value| value.as_str()) {
-        Some("minimal") => Verbosity::Minimal,
-        Some("concise") | None => Verbosity::Concise,
-        Some("detailed") => Verbosity::Detailed,
-        Some(_) => return None,
-    };
-    Some(PersonaVoiceInput {
-        mode,
-        warmth,
-        formality,
-        humor,
-        verbosity,
-    })
-}
-
-fn message_for_tts(error: &str) -> &'static str {
-    match error {
-        "voice_unavailable" => "语音运行时未就绪，请先完成语音依赖安装",
-        "empty_speech" => "这条回复没有可朗读的内容",
-        _ => "朗读失败，请稍后重试",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        CancelReason, Classified, ClientFrame, classify, cue_text, error_json, parse_client_frame,
-        parse_tts_body, ready_json,
+        CancelReason, Classified, ClientFrame, classify, error_json, parse_client_frame, ready_json,
     };
-    use axon_voice::presets;
 
     fn start_json() -> &'static str {
         r#"{"type":"start","protocolVersion":1,"clientSessionId":"c-1","workspaceId":"w-1","replyDestination":"desktop","mode":"full_duplex","lang":"zh","tts":false}"#
@@ -986,55 +673,5 @@ mod tests {
             classify(true, r#"{"type":"setTts","enabled":true}"#),
             Ok(Classified::Ignored)
         ));
-    }
-
-    #[test]
-    fn tts_body_requires_text() {
-        use axum::body::Bytes;
-        assert!(parse_tts_body(&Bytes::from_static(b"{}")).is_err());
-        assert!(parse_tts_body(&Bytes::from_static(b"{\"text\":\"   \"}")).is_err());
-    }
-
-    #[test]
-    fn tts_body_reads_preset() {
-        use axum::body::Bytes;
-        let request = parse_tts_body(&Bytes::from_static(
-            b"{\"text\":\"\\u4f60\\u597d\",\"presetId\":\"calm-elegant\"}",
-        ))
-        .expect("合法请求");
-        assert_eq!(request.text, "你好");
-        assert_eq!(request.preset_id.as_deref(), Some("calm-elegant"));
-    }
-
-    #[test]
-    fn tts_body_rejects_oversize() {
-        use axum::body::Bytes;
-        let long = "好".repeat(4_001);
-        let body = format!("{{\"text\":\"{long}\"}}");
-        assert!(parse_tts_body(&Bytes::from(body)).is_err());
-    }
-
-    #[test]
-    fn tts_body_reads_persona() {
-        use axum::body::Bytes;
-        let body = Bytes::from_static(
-            br#"{"text":"\\u4f60\\u597d","persona":{"mode":"group","warmth":80,"formality":70,"humor":"off","verbosity":"minimal"}}"#,
-        );
-        let request = parse_tts_body(&body).expect("合法请求");
-        let persona = request.persona.expect("应解析人格");
-        assert_eq!(persona.warmth, 80);
-        assert_eq!(persona.formality, 70);
-    }
-
-    #[test]
-    fn cue_text_is_character_specific() {
-        let calm = presets::resolve("calm-elegant").expect("存在");
-        assert_eq!(cue_text(calm, "ack"), Some("嗯，我在听"));
-        assert!(
-            cue_text(calm, "thinking")
-                .unwrap_or_default()
-                .contains("想想")
-        );
-        assert!(cue_text(calm, "nope").is_none());
     }
 }

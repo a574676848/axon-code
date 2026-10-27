@@ -58,38 +58,43 @@ pub fn plan(
     let preset = preset_override.unwrap_or_else(|| choose_preset(persona));
     let mut profile = preset.profile_for(persona.verbosity, hour);
 
-    let warmth = (f32::from(persona.warmth) - 50.0) / 50.0;
-    let formality = (f32::from(persona.formality) - 50.0) / 50.0;
-    profile.rate += warmth * 0.03 - formality * 0.02;
-    profile.energy_db += warmth * 1.2;
-    profile.pitch_semitones += warmth * 0.4;
-    profile.pause_scale += formality * 0.12;
+    // 显式预设时，人格只保留详略与时段；声学参数完全听预设（WP-14）。
+    if from_persona {
+        let warmth = (f32::from(persona.warmth) - 50.0) / 50.0;
+        let formality = (f32::from(persona.formality) - 50.0) / 50.0;
+        profile.rate -= warmth * 0.02;
+        profile.rate -= formality * 0.02;
+        profile.energy_db += warmth * 1.0;
+        profile.pitch_semitones += warmth * 0.4;
+        profile.sentence_tail_semitones += warmth * 0.5;
+        profile.pause_scale += formality * 0.1;
 
-    match persona.mode {
-        PersonaMode::Focus => profile.pause_scale += 0.05,
-        PersonaMode::Incident => {
-            profile.rate += 0.03;
-            profile.pause_scale -= 0.05;
+        match persona.mode {
+            PersonaMode::Focus => profile.pause_scale *= 0.9,
+            PersonaMode::Incident => {
+                profile.rate += 0.03;
+                profile.pause_scale *= 1.1;
+            }
+            PersonaMode::Group => {
+                profile.energy_db -= 1.0;
+                profile.rate -= 0.02;
+            }
+            PersonaMode::Casual => {}
         }
-        PersonaMode::Group => {
-            profile.energy_db -= 1.0;
-            profile.rate -= 0.02;
+        if persona.humor == HumorLevel::Playful {
+            profile.pitch_semitones += 0.3;
+            profile.rate += 0.02;
         }
-        PersonaMode::Casual => {}
-    }
-    if persona.humor == HumorLevel::Playful {
-        profile.pitch_semitones += 0.3;
-        profile.rate += 0.02;
     }
 
     profile.rate = profile.rate.clamp(0.85, 1.15);
     profile.pitch_semitones = profile.pitch_semitones.clamp(-3.0, 3.0);
     profile.energy_db = profile.energy_db.clamp(-3.0, 1.0);
     profile.pause_scale = profile.pause_scale.clamp(0.8, 1.4);
-    profile.source = if from_persona {
-        ProfileSource::Persona
-    } else {
-        ProfileSource::Settings
+    profile.source = match (preset_override.is_some(), input.is_some()) {
+        (true, _) => ProfileSource::Settings,
+        (false, true) => ProfileSource::Persona,
+        (false, false) => ProfileSource::Builtin,
     };
 
     VoicePlan {
@@ -169,20 +174,35 @@ mod tests {
     }
 
     #[test]
-    fn warmth_and_formality_shift_profile() {
+    fn warmth_shifts_rate_energy_and_tail() {
         let cool = plan(
-            Some(persona(PersonaMode::Casual, 10, 90, HumorLevel::Off)),
+            Some(persona(PersonaMode::Casual, 45, 50, HumorLevel::Off)),
             None,
             14,
         );
         let warm = plan(
-            Some(persona(PersonaMode::Casual, 90, 10, HumorLevel::Off)),
+            Some(persona(PersonaMode::Casual, 55, 50, HumorLevel::Off)),
             None,
             14,
         );
-        assert!(warm.profile.rate > cool.profile.rate);
+        assert!(warm.profile.rate < cool.profile.rate);
         assert!(warm.profile.energy_db > cool.profile.energy_db);
-        assert!(warm.profile.pause_scale < cool.profile.pause_scale);
+        assert!(warm.profile.sentence_tail_semitones > cool.profile.sentence_tail_semitones);
+    }
+
+    #[test]
+    fn formality_lengthens_pauses() {
+        let casual = plan(
+            Some(persona(PersonaMode::Casual, 50, 30, HumorLevel::Off)),
+            None,
+            14,
+        );
+        let formal = plan(
+            Some(persona(PersonaMode::Casual, 50, 70, HumorLevel::Off)),
+            None,
+            14,
+        );
+        assert!(formal.profile.pause_scale > casual.profile.pause_scale);
     }
 
     #[test]
@@ -193,6 +213,7 @@ mod tests {
         let plan = plan(Some(input), Some(preset), 14);
         assert_eq!(plan.profile.speaker, 15);
         assert_eq!(plan.profile.verbosity, Verbosity::Detailed);
+        assert!((plan.profile.rate - preset.rate).abs() < 1e-6);
         assert!(!plan.from_persona);
     }
 

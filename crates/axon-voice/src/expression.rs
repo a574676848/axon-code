@@ -164,7 +164,7 @@ pub fn render_with_expression(markdown: &str, verbosity: Verbosity) -> (String, 
     (sentences.join("，"), style)
 }
 
-/// 按句切分并给出句后停顿：省略号 400 ms，破折号 150 ms，普通句 120 ms。
+/// 按句切分并给出句后停顿：省略号 480 ms，破折号 260 ms，普通句 120 ms（WP-14）。
 #[must_use]
 pub fn segments_with_pauses(markdown: &str, verbosity: Verbosity) -> Vec<SpeechSegment> {
     let (cleaned, _) = parse_expression(markdown);
@@ -172,9 +172,9 @@ pub fn segments_with_pauses(markdown: &str, verbosity: Verbosity) -> Vec<SpeechS
         .into_iter()
         .map(|text| {
             let pause_ms = if text.contains('…') {
-                400
+                480
             } else if text.contains('—') {
-                150
+                260
             } else {
                 120
             };
@@ -234,7 +234,7 @@ mod tests {
             Verbosity::Detailed,
         );
         assert_eq!(segments.len(), 2);
-        assert_eq!(segments[0].pause_ms, 400);
-        assert_eq!(segments[1].pause_ms, 150);
+        assert_eq!(segments[0].pause_ms, 480);
+        assert_eq!(segments[1].pause_ms, 260);
     }
 }
