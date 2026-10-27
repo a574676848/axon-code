@@ -11,48 +11,26 @@
 | Stage 2 | WP-05 协议与宿主骨架（`axon-voice-protocol`、`axon-voice-host`） | 完成 | `833ccd232` |
 | Stage 3 | WP-02 清单与校验 + WAV 输入 | 完成 | `40e3a6cab` |
 | Stage 4 | WP-06 桥接内核（`axon-voice-bridge`） | 完成 | `90fcc459c` |
-| Stage 5 | `/api/v1/voice` WS 控制面（握手 + 预热错误） | 完成 | `96f9307e6`、`4ce38d629`、`530d07411` |\n| Stage 6 | WS 端到端测试 + 安装链纳入宿主 | 实现完成，审计中 | `88ba36410` |
+| Stage 5 | `/api/v1/voice` WS 控制面 | 完成 | `530d07411` |
+| Stage 6 | WS 端到端测试、会话状态、安装链 | 实现完成，审计中 | `88ba36410`、`c7e087493` |
 
 ## Stage 4 范围声明
 
-本阶段交付 WP-06 的可独立验证内核：`HostTransport` 抽象与 `VoiceBridge` 状态机，
+Stage 4 交付 WP-06 的可独立验证内核：`HostTransport` 抽象与 `VoiceBridge` 状态机，
 覆盖预热、会话、音频推入、取消、结束、事件映射、关闭与错误分类。
 
-**不包含** `/api/v1/voice` 的 WS 路由。原因：
+## Stage 5 范围声明
 
-- 仓库当前 axum 只启用了 `http1`、`tokio`，没有 `ws` feature，也没有入站
-  `WebSocketUpgrade`/`on_upgrade` 处理器可复用；
-- 现有 `gateway_websocket` 是出站客户端适配器，不是入站服务端。
-
-接线点已确认（`gateway_http_routes.rs` 的 `router()` 增路由，handler 用
-`WebSocketUpgrade`，`on_upgrade` 内以阻塞任务独占 `VoiceBridge`），预计 2 人日，
-放在 Stage 5，与桌面端链路一起验证。
-
-## 当前限制
-
-ASR 运行时尚未接入：真实宿主对合法模型回 `model_unusable`（原因注明运行时未接入），
-心跳恒 `cold`；桥会把它作为 `BridgeError::Host` 上抛，不会伪造就绪。
-'## Stage 5 交付与边界
-
-已按 S5 审计修复：`start/stop/cancel` 严格建模（cancel 仅 `user_cancel|client_close`）、
-`ready` 补齐 11 个合同字段、错误帧复用 `VoiceFailure` 文案、协议错误断连、重复 `start` 报
-`protocol_sequence`、预热注入 `--model-root` 与真实清单摘要、失败路径保底回收宿主。'
-
-已交付：axum `ws` feature、`/api/v1/voice` 路由（在 `/api/v1/{*rest}` 兜底之前）、网关 token 鉴权、
-连接后 `ready`、客户端控制帧严格解析、`start` 时拉起宿主并预热、错误帧按合同字段回传。
-
-未交付（Stage 6）：音频二进制帧上行、partial/final 转写事件、`state` 相位帧、playbackDrained、
-WS 端到端测试（真实 socket + 客户端）、桌面端接入。原因：这些依赖 ASR 运行时，当前宿主只能回
-`model_unusable`，先打通控制面与错误面，避免用假转写撑门面。'
-仍待 Stage 6：音频二进制帧上行、partial/final/state/playbackDrained、WS 端到端测试、
-`axon-voice-host` 纳入安装链、桌面端接入、ASR 运行时。
-''
+Stage 5 交付 `/api/v1/voice` 的 WS 控制面：鉴权、升级、`ready`、严格客户端帧、
+`start` 时拉起宿主并预热、合同错误帧与协议错误断连。音频与转写链路不在本阶段。
 
 ## Stage 6 进展
 
-- 真 socket 端到端：错 token 拒绝升级、`ready` 首帧、`start` 返回合同错误帧（198 项 daemon 单测含此用例）。
-- 会话状态：`stop`/`cancel` 必须先 `start`；`client_close` 主动收线；音频帧必须是 `0x01` 开头且已 `start`。
+- 真 socket 端到端：错 token 拒绝升级、`ready` 首帧、`start` 返回合同错误帧（199 项 daemon 单测含此用例）。
+- 会话状态：`stop`/`cancel` 必须先 `start`；`client_close` 主动收线；音频帧必须是 `0x01` 开头、长度合法且已 `start`；
+  预热失败后连接关闭，不留在半开状态。
+- 预热与宿主握手在阻塞池执行，不占 tokio 工作线程。
 - 安装链：`install-from-source.ps1` 与 `install-from-source.sh` 均构建并安装 `axon-voice-host`。
 
-未完成：音频转写事件（依赖 ASR 运行时）、桌面端采集与播放、`playbackDrained` 等播放态协议。
-'
+未完成：音频转写事件（依赖 ASR 运行时）、桌面端采集与播放、`playbackDrained` 等播放态协议、
+release 产物与 MSI 安装包纳入宿主。
