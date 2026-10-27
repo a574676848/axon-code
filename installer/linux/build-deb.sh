@@ -62,7 +62,10 @@ if [ -n "${VOICE_HOST}" ]; then
     if [ ! -x "${VOICE_HOST}" ]; then printf '%s\n' "缺少语音宿主：${VOICE_HOST}" >&2; exit 1; fi
     cp "${VOICE_HOST}" "${INSTALL_ROOT}/versions/${RELEASE_NAME}/axon-voice-host"
 fi
-cp "${ROOT_DIR}/assets/defaults/SOUL.md" "${DEFAULTS_DIR}/SOUL.md"
+'cp "${ROOT_DIR}/assets/defaults/SOUL.md" "${DEFAULTS_DIR}/SOUL.md"
+mkdir -p "${INSTALL_ROOT}/scripts/voice"
+cp "${ROOT_DIR}/scripts/voice/install-voice-runtime.sh" "${INSTALL_ROOT}/scripts/voice/"
+chmod 755 "${INSTALL_ROOT}/scripts/voice/install-voice-runtime.sh"'
 chmod 755 "${INSTALL_ROOT}/versions/${RELEASE_NAME}/axon" "${INSTALL_ROOT}/launcher/axon-launcher"
 if [ -n "${VOICE_HOST}" ]; then chmod 755 "${INSTALL_ROOT}/versions/${RELEASE_NAME}/axon-voice-host"; fi
 chmod 644 "${DEFAULTS_DIR}/SOUL.md"

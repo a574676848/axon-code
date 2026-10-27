@@ -53,7 +53,10 @@ chmod 644 "${DEFAULTS_DIR}/SOUL.md"
 # ── 构建组件 pkg ────────────────────────────
 COMPONENT_PKG="${WORK_DIR}/axon-component.pkg"
 SCRIPTS_DIR="${WORK_DIR}/scripts"
-cp -R "${SCRIPT_DIR}/scripts" "${SCRIPTS_DIR}"
+'cp -R "${SCRIPT_DIR}/scripts" "${SCRIPTS_DIR}"
+mkdir -p "${INSTALL_ROOT}/scripts/voice"
+cp "${ROOT_DIR}/scripts/voice/install-voice-runtime.sh" "${INSTALL_ROOT}/scripts/voice/"
+chmod 755 "${INSTALL_ROOT}/scripts/voice/install-voice-runtime.sh"'
 sed -i '' "s/__VERSION__/${VERSION}/g" "${SCRIPTS_DIR}/postinstall"
 sed -i '' "s/__RELEASE_NAME__/${RELEASE_NAME}/g" "${SCRIPTS_DIR}/postinstall"
 pkgbuild \

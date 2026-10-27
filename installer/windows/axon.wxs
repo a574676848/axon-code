@@ -50,13 +50,33 @@
     </StandardDirectory>
     <StandardDirectory Id="DesktopFolder" />
 
-    <!-- 每个 CLI 版本使用固定目录，服务和 PATH 均通过稳定 launcher 进入。 -->
+'    <!-- 首次安装自动拉取语音运行时与模型；失败不阻塞安装。 -->
+    <CustomAction
+      Id="ProvisionVoiceRuntime"
+      FileRef="AxonVoiceProvisionScriptFile"
+      ExeCommand="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;[#AxonVoiceProvisionScriptFile]&quot;"
+      Execute="deferred"
+      Impersonate="yes"
+      Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="ProvisionVoiceRuntime" After="InstallFiles" Condition="NOT Installed" />
+    </InstallExecuteSequence>
+
+    <!-- 每个 CLI 版本使用固定目录，服务和 PATH 均通过稳定 launcher 进入。 -->'
     <ComponentGroup Id="AxonBinaries" Directory="VERSIONDIR">
       <Component Id="AxonExe" Guid="1A2B3C4D-5E6F-7081-92A3-B4C5D6E7F809">
         <File
           Id="AxonExeFile"
           Name="axon.exe"
           Source="$(BinaryPath)"
+          KeyPath="yes" />
+      </Component>
+
+      <Component Id="AxonVoiceProvisionScript" Guid="4D5E6F70-8192-A3B4-C5D6-E7F8091A2B3C">
+        <File
+          Id="AxonVoiceProvisionScriptFile"
+          Name="install-voice-runtime.ps1"
+          Source="..\..\scripts\voice\install-voice-runtime.ps1"
           KeyPath="yes" />
       </Component>
 

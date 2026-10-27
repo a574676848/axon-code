@@ -156,7 +156,11 @@ try {
         & $launcherPath setup --provider-name openai --model gpt-4o --non-interactive --no-validate | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "Axon 默认配置初始化失败，退出码：$LASTEXITCODE" }
     }
-    if (-not $BinariesOnly) { & $launcherPath daemon install | Out-Host; if ($LASTEXITCODE -ne 0) { throw "Daemon 安装失败，退出码：$LASTEXITCODE" } }
+    $voiceProvision = Join-Path $root 'scripts\voice\install-voice-runtime.ps1'
+    if (Test-Path $voiceProvision) {
+        Write-Host "[axon] 安装语音运行时与模型（首次约 750 MB，可离线跳过）。" -ForegroundColor Cyan
+        try { & $voiceProvision | Out-Host } catch { Write-Host "[axon] 语音运行时安装失败，语音功能暂不可用：$($_.Exception.Message)" -ForegroundColor Yellow }
+    }    if (-not $BinariesOnly) { & $launcherPath daemon install | Out-Host; if ($LASTEXITCODE -ne 0) { throw "Daemon 安装失败，退出码：$LASTEXITCODE" } }
     & $launcherPath daemon start | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Daemon 启动失败，退出码：$LASTEXITCODE" }
     $status = & $launcherPath daemon status | Out-String | ConvertFrom-Json

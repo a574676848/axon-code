@@ -6,6 +6,7 @@
 //! `model_missing`，不会伪造 `warm`。
 
 pub mod audio;
+pub mod inference;
 pub mod model;
 pub mod supervisor;
 

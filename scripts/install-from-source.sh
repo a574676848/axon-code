@@ -79,7 +79,12 @@ rm -rf "${RELEASE_DIR}"
 mv "${STAGED_RELEASE}" "${RELEASE_DIR}"
 cp "${BUILT_LAUNCHER}" "${LAUNCHER_BIN}"
 chmod 755 "${LAUNCHER_BIN}"
-printf '{"versionId":"%s"}\n' "${RELEASE_ID}" > "${INSTALL_ROOT}/.current.$$"
+# 首次安装自动拉取语音运行时与模型；失败不阻塞安装。
+VOICE_PROVISION="${REPO_ROOT}/scripts/voice/install-voice-runtime.sh"
+if [ -f "${VOICE_PROVISION}" ]; then
+    echo "[axon] 安装语音运行时与模型（首次约 750 MB）。"
+    bash "${VOICE_PROVISION}" || echo "[axon] 语音运行时安装失败，语音功能暂不可用。" >&2
+fiprintf '{"versionId":"%s"}\n' "${RELEASE_ID}" > "${INSTALL_ROOT}/.current.$$"
 mv -f "${INSTALL_ROOT}/.current.$$" "${CURRENT_FILE}"
 rm -f "${HOME}/.cargo/bin/axon" "${HOME}/.cargo/bin/axon-desktop"
 cat > "${INSTALL_DIR}/axon" <<EOF

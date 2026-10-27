@@ -84,7 +84,13 @@ if ! grep -Fqx "${PATH_LINE}" "${PATH_PROFILE}" 2>/dev/null; then
 fi
 chown "${TARGET_USER}:${TARGET_GROUP}" "${PATH_PROFILE}" 2>/dev/null || true
 
-run_as_target "${LAUNCHER}" daemon install || echo "警告：Daemon 用户服务注册失败，请运行 axon daemon install 重试。" >&2
+'run_as_target "${LAUNCHER}" daemon install || echo "警告：Daemon 用户服务注册失败，请运行 axon daemon install 重试。" >&2
+
+VOICE_PROVISION="${PACKAGE_ROOT}/scripts/voice/install-voice-runtime.sh"
+if [ -f "${VOICE_PROVISION}" ]; then
+    echo "正在安装语音运行时与模型（首次约 750 MB）。"
+    run_as_target sh "${VOICE_PROVISION}" || echo "警告：语音运行时安装失败，语音功能暂不可用。" >&2
+fi'
 
 echo ""
 echo "Axon 安装完成：${INSTALL_BIN}"
