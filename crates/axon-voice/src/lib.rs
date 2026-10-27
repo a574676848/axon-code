@@ -13,6 +13,7 @@
 pub mod config;
 pub mod constants;
 pub mod domain;
+pub mod expression;
 pub mod port;
 pub mod presets;
 pub mod render;
@@ -26,6 +27,9 @@ pub use domain::{
     CueKind, HumorLevel, IdlePhase, ModelFamily, PersonaMode, PersonaSnapshot, Phase, PhaseError,
     PresetReason, ProfileError, ProfileSource, ProtocolReason, SpeechProfile, Stage,
     TransitionTrigger, UserAffect, Verbosity, VoiceFailure, WorkerSubStage,
+};
+pub use expression::{
+    ExpressionStyle, SpeechSegment, parse_expression, render_with_expression, segments_with_pauses,
 };
 pub use port::{
     Clock, PcmChunk, SAMPLE_RATE_HZ, SpeechRenderer, SpeechToText, SttEvent, SttSession,

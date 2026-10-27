@@ -6,7 +6,7 @@
 use super::GatewayHttpState;
 use super::gateway_http_response::{bearer, unauthorized};
 use crate::infrastructure::gateway_auth::query_token;
-use axon_voice::render::render_for_speech;
+use axon_voice::expression::render_with_expression;
 use axon_voice::{Verbosity, VoiceFailure, presets};
 use axon_voice_bridge::{BridgeError, VoiceBridge};
 use axon_voice_host::BUILD_COMMIT;
@@ -18,6 +18,7 @@ use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::response::Response;
+use chrono::Timelike;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -591,12 +592,15 @@ pub(super) async fn voice_tts(
     let outcome = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, &'static str> {
         let root = model_root();
         let runtime = Inference::discover(&root).ok_or("voice_unavailable")?;
-        let spoken = render_for_speech(&text, Verbosity::Concise);
+        let (spoken, style) = render_with_expression(&text, Verbosity::Concise);
         if spoken.trim().is_empty() {
             return Err("empty_speech");
         }
+        let hour = chrono::Local::now().hour() as u8;
+        let mut profile = preset.profile_for(Verbosity::Concise, hour);
+        profile.rate = (profile.rate * style.rate).clamp(0.85, 1.15);
         let samples = runtime
-            .synthesize_with(&spoken, preset.speaker, preset.rate)
+            .synthesize_with(&spoken, profile.speaker, profile.rate)
             .map_err(|_| "tts_failed")?;
         Ok(encode_wav(&samples))
     })

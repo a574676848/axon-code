@@ -1,6 +1,7 @@
 //! 音色预设（WP-13）：五个名字只调音色与节奏，不做角色表演。
 //!
 //! `sweet-taiwan` 需要单独模型，未安装时标记为不可用，不冒充成别的音色。
+//! 每个预设自带角色口癖，供 cue 使用；深夜会降能量与降速（低语感）。
 
 use crate::domain::ProfileSource;
 use crate::domain::profile::{SpeechProfile, Verbosity};
@@ -22,6 +23,10 @@ pub struct VoicePreset {
     pub required_model: Option<&'static str>,
     /// 是否默认。
     pub is_default: bool,
+    /// 思考时的口癖。
+    pub thinking_text: &'static str,
+    /// 收到回执时的口癖。
+    pub ack_text: &'static str,
 }
 
 /// 全部预设。
@@ -34,6 +39,8 @@ pub const PRESETS: [VoicePreset; 5] = [
         pitch_semitones: -1.0,
         required_model: None,
         is_default: true,
+        thinking_text: "让我想想……",
+        ack_text: "嗯，我在听",
     },
     VoicePreset {
         id: "bright-neighbor",
@@ -43,6 +50,8 @@ pub const PRESETS: [VoicePreset; 5] = [
         pitch_semitones: 1.0,
         required_model: None,
         is_default: false,
+        thinking_text: "我看看哦",
+        ack_text: "好嘞",
     },
     VoicePreset {
         id: "playful-lively",
@@ -52,6 +61,8 @@ pub const PRESETS: [VoicePreset; 5] = [
         pitch_semitones: 2.0,
         required_model: None,
         is_default: false,
+        thinking_text: "嗯哼，等我一下",
+        ack_text: "来啦",
     },
     VoicePreset {
         id: "warm-taiwan",
@@ -61,6 +72,8 @@ pub const PRESETS: [VoicePreset; 5] = [
         pitch_semitones: 0.0,
         required_model: Some("vits-zh-tw-soft"),
         is_default: false,
+        thinking_text: "等我一下下哦",
+        ack_text: "好呀",
     },
     VoicePreset {
         id: "capable-assistant",
@@ -70,6 +83,8 @@ pub const PRESETS: [VoicePreset; 5] = [
         pitch_semitones: -0.5,
         required_model: None,
         is_default: false,
+        thinking_text: "收到，处理中",
+        ack_text: "明白",
     },
 ];
 
@@ -110,6 +125,17 @@ impl VoicePreset {
             source: ProfileSource::Settings,
         }
     }
+
+    /// 按时段落地：深夜（22 点到 6 点）降能量、降速，形成低语感。
+    #[must_use]
+    pub fn profile_for(self, verbosity: Verbosity, hour: u8) -> SpeechProfile {
+        let mut profile = self.to_profile(verbosity);
+        if !(6..22).contains(&hour) {
+            profile.rate = (profile.rate * 0.95).max(0.85);
+            profile.energy_db = -2.0;
+        }
+        profile
+    }
 }
 
 #[cfg(test)]
@@ -147,5 +173,26 @@ mod tests {
         assert!((profile.rate - 1.06).abs() < f32::EPSILON);
         assert!((profile.pitch_semitones + 0.5).abs() < f32::EPSILON);
         assert_eq!(profile.verbosity, Verbosity::Concise);
+    }
+
+    #[test]
+    fn late_night_is_lower_and_slower() {
+        let preset = default_preset();
+        let day = preset.profile_for(Verbosity::Concise, 14);
+        let night = preset.profile_for(Verbosity::Concise, 23);
+        assert!(night.rate < day.rate);
+        assert!((night.energy_db + 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn cues_are_character_specific() {
+        assert_eq!(
+            resolve("calm-elegant").expect("存在").thinking_text,
+            "让我想想……"
+        );
+        assert_ne!(
+            resolve("calm-elegant").expect("存在").ack_text,
+            resolve("playful-lively").expect("存在").ack_text
+        );
     }
 }
