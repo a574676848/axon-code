@@ -136,8 +136,17 @@ impl Manifest {
         if !self.rtf_p50.is_finite() || self.rtf_p50 <= 0.0 {
             return Err(ManifestError::Invalid("rtfP50"));
         }
-        if !self.rtf_p95.is_finite() || self.rtf_p95 < self.rtf_p50 {
+        if !self.rtf_p95.is_finite() || self.rtf_p95 < self.rtf_p50 || self.rtf_p95 > 0.6 {
             return Err(ManifestError::Invalid("rtfP95"));
+        }
+        if self.ram_mb == 0 {
+            return Err(ManifestError::Invalid("ramMb"));
+        }
+        if self.languages.is_empty() || self.languages.iter().any(|lang| lang.trim().is_empty()) {
+            return Err(ManifestError::Invalid("languages"));
+        }
+        if self.license.trim().is_empty() {
+            return Err(ManifestError::Invalid("license"));
         }
         if self.files.is_empty() {
             return Err(ManifestError::Invalid("files"));
@@ -211,6 +220,10 @@ mod tests {
         let cases = [
             ("\"sampleRate\": 16000", "\"sampleRate\": 8000"),
             ("\"rtfP50\": 0.2", "\"rtfP50\": 0.0"),
+            ("\"rtfP95\": 0.3", "\"rtfP95\": 0.7"),
+            ("\"ramMb\": 100", "\"ramMb\": 0"),
+            ("\"languages\": [\"zh\"]", "\"languages\": []"),
+            ("\"license\": \"MIT\"", "\"license\": \"  \""),
             ("\"family\": \"asr\"", "\"family\": \"image\""),
             ("\"path\": \"model.bin\"", "\"path\": \"../model.bin\""),
             (

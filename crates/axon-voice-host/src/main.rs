@@ -2,6 +2,8 @@
 //!
 //! 命令行只接受 `--model-root <dir>`；构建号由 `build.rs` 注入。
 //! 回执队列容量为 1，队列已满立即退出 12，避免父进程不读时无限排队。
+//! 本地推理尚未接入：清单与文件校验通过后仍回 `model_unusable`（原因注明运行时未接入），
+//! 不伪造 `warm`；运行时接入在 Stage 4。
 
 use std::io::{self, BufReader, BufWriter};
 use std::path::PathBuf;
@@ -17,7 +19,7 @@ use axon_voice_host::exit_code;
 use axon_voice_host::model::{ModelFamily, ModelResolution, ModelStore};
 use axon_voice_protocol::{
     Control, ErrorDetail, ErrorMsg, Frame, FrameError, Heartbeat, Hello, PROTOCOL_VERSION, Ready,
-    Warm, Warmup, read_frame, write_frame,
+    Warmup, read_frame, write_frame,
 };
 
 /// 心跳间隔。
@@ -93,10 +95,9 @@ fn run(options: Options) -> Result<u8, u8> {
     }
     send(&outbox, ready());
 
-    let warm = Arc::new(AtomicBool::new(false));
     let stop = Arc::new(AtomicBool::new(false));
-    let heartbeat = spawn_heartbeat(outbox.clone(), Arc::clone(&stop), Arc::clone(&warm));
-    let outcome = serve(&mut reader, &outbox, store.as_ref(), &warm);
+    let heartbeat = spawn_heartbeat(outbox.clone(), Arc::clone(&stop));
+    let outcome = serve(&mut reader, &outbox, store.as_ref());
     stop.store(true, Ordering::SeqCst);
     if let Err(code) = outcome {
         // writer 可能正阻塞在 stdout，不能 join；由进程退出兜底。
@@ -122,11 +123,7 @@ fn ready() -> Control {
     })
 }
 
-fn spawn_heartbeat(
-    outbox: SyncSender<Control>,
-    stop: Arc<AtomicBool>,
-    warm: Arc<AtomicBool>,
-) -> thread::JoinHandle<()> {
+fn spawn_heartbeat(outbox: SyncSender<Control>, stop: Arc<AtomicBool>) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         while !stop.load(Ordering::SeqCst) {
             thread::sleep(HEARTBEAT_INTERVAL);
@@ -136,11 +133,8 @@ fn spawn_heartbeat(
             let beat = Control::Heartbeat(Heartbeat {
                 pid: std::process::id(),
                 rss_kb: resident_kb(),
-                model_state: if warm.load(Ordering::SeqCst) {
-                    "warm".to_owned()
-                } else {
-                    "cold".to_owned()
-                },
+                // 推理未接入，心跳始终如实上报 cold。
+                model_state: "cold".to_owned(),
                 queue_in: 0,
                 queue_out: 0,
             });
@@ -173,7 +167,6 @@ fn serve(
     reader: &mut impl io::BufRead,
     outbox: &SyncSender<Control>,
     store: Option<&ModelStore>,
-    warm: &Arc<AtomicBool>,
 ) -> Result<u8, u8> {
     let mut session: Option<String> = None;
     loop {
@@ -197,7 +190,10 @@ fn serve(
         match control {
             Control::Hello(_) | Control::Ready(_) => return Err(exit_code::SEQUENCE as u8),
             Control::Warmup(message) => {
-                let reply = warmup_reply(store, &message, warm);
+                if session.is_some() {
+                    return Err(exit_code::SEQUENCE as u8);
+                }
+                let reply = warmup_reply(store, &message);
                 send(outbox, reply);
             }
             Control::SessionStart(message) => {
@@ -217,13 +213,13 @@ fn serve(
                 if session.is_none() {
                     return Err(exit_code::SEQUENCE as u8);
                 }
-                send(outbox, simple_error("tts_failed", "speaking"));
+                send(outbox, simple_error("tts_failed", "speaking", true));
             }
             Control::CueSpeak(_) => {
                 if session.is_none() {
                     return Err(exit_code::SEQUENCE as u8);
                 }
-                send(outbox, simple_error("cue_unavailable", "speaking"));
+                send(outbox, simple_error("cue_unavailable", "speaking", false));
             }
             Control::Close => {
                 send(outbox, Control::Closed);
@@ -240,53 +236,60 @@ fn serve(
     }
 }
 
-fn warmup_reply(store: Option<&ModelStore>, message: &Warmup, warm: &Arc<AtomicBool>) -> Control {
+fn warmup_reply(store: Option<&ModelStore>, message: &Warmup) -> Control {
     let Some(family) = ModelFamily::parse(&message.family) else {
-        return simple_error("cue_unavailable", "arming");
+        return unusable(None, "cue 模型在 Stage 4 接入");
     };
     let Some(store) = store else {
-        return model_missing(&message.family);
+        return missing(None, "使用 --model-root 指定模型目录");
     };
-    match store.resolve(family, &message.model) {
-        ModelResolution::Ready { manifest, .. } => {
-            warm.store(true, Ordering::SeqCst);
-            Control::Warm(Warm {
-                family: message.family.clone(),
-                model: message.model.clone(),
-                rtf_p50: manifest.rtf_p50,
-                rss_kb: resident_kb(),
-            })
-        }
-        ModelResolution::Missing => model_missing(&message.family),
-        ModelResolution::Unusable { .. } => Control::Error(ErrorMsg {
-            code: "model_unusable".to_owned(),
-            stage: "arming".to_owned(),
-            retryable: false,
-            detail: Some(ErrorDetail {
-                family: Some(message.family.clone()),
-                ..ErrorDetail::default()
-            }),
-        }),
+    match store.resolve_verified(family, &message.model, &message.manifest_sha256) {
+        ModelResolution::Ready { .. } => unusable(
+            Some(&message.family),
+            "运行时尚未接入，无法完成预热（Stage 4 接入）",
+        ),
+        ModelResolution::Missing => missing(
+            Some(&message.family),
+            &format!(
+                "安装到 {}",
+                store.model_dir(family, &message.model).display()
+            ),
+        ),
+        ModelResolution::Unusable { reason } => unusable(Some(&message.family), &reason),
     }
 }
 
-fn model_missing(family: &str) -> Control {
+fn missing(family: Option<&str>, hint: &str) -> Control {
     Control::Error(ErrorMsg {
         code: "model_missing".to_owned(),
         stage: "arming".to_owned(),
         retryable: true,
         detail: Some(ErrorDetail {
-            family: Some(family.to_owned()),
+            family: family.map(str::to_owned),
+            reason: Some(hint.to_owned()),
             ..ErrorDetail::default()
         }),
     })
 }
 
-fn simple_error(code: &str, stage: &str) -> Control {
+fn unusable(family: Option<&str>, reason: &str) -> Control {
+    Control::Error(ErrorMsg {
+        code: "model_unusable".to_owned(),
+        stage: "arming".to_owned(),
+        retryable: false,
+        detail: Some(ErrorDetail {
+            family: family.map(str::to_owned),
+            reason: Some(reason.to_owned()),
+            ..ErrorDetail::default()
+        }),
+    })
+}
+
+fn simple_error(code: &str, stage: &str, retryable: bool) -> Control {
     Control::Error(ErrorMsg {
         code: code.to_owned(),
         stage: stage.to_owned(),
-        retryable: true,
+        retryable,
         detail: None,
     })
 }

@@ -1,4 +1,4 @@
-//! 模型目录：退出码 13、预热成功与缺失路径。
+//! 模型目录：退出码 13、清单绑定、缺失与不可用分类。
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -7,9 +7,7 @@ use std::time::Duration;
 use axon_voice_host::BUILD_COMMIT;
 use axon_voice_host::model::sha256::hex_digest;
 use axon_voice_host::supervisor::{HostClient, HostConfig};
-use axon_voice_protocol::{
-    Control, Frame, PROTOCOL_VERSION, Ready, Warmup, read_frame, write_frame,
-};
+use axon_voice_protocol::{Control, Frame, Warmup};
 
 fn exe() -> &'static str {
     env!("CARGO_BIN_EXE_axon-voice-host")
@@ -45,12 +43,12 @@ impl Drop for TempRoot {
     }
 }
 
-fn manifest(name: &str, sha: &str, bytes: u64) -> String {
+fn manifest(name: &str, sha: &str, bytes: u64, version: &str) -> String {
     format!(
         r#"{{
             "family": "asr",
             "name": "{name}",
-            "version": "1.0.0",
+            "version": "{version}",
             "runtime": "fixture",
             "sampleRate": 16000,
             "languages": ["zh"],
@@ -63,12 +61,11 @@ fn manifest(name: &str, sha: &str, bytes: u64) -> String {
     )
 }
 
-fn install_model(root: &TempRoot) {
+fn install_model(root: &TempRoot) -> String {
     root.write("asr/demo/model.bin", b"data");
-    root.write(
-        "asr/demo/manifest.json",
-        manifest("demo", &hex_digest(b"data"), 4).as_bytes(),
-    );
+    let json = manifest("demo", &hex_digest(b"data"), 4, "1.0.0");
+    root.write("asr/demo/manifest.json", json.as_bytes());
+    hex_digest(json.as_bytes())
 }
 
 fn exit_code_of(root: &Path) -> i32 {
@@ -81,6 +78,35 @@ fn exit_code_of(root: &Path) -> i32 {
         .status()
         .expect("宿主应能启动");
     status.code().unwrap_or(-1)
+}
+
+fn client_for(root: &Path) -> HostClient {
+    let mut config = HostConfig::new(exe(), BUILD_COMMIT);
+    config.args.push("--model-root".to_owned());
+    config.args.push(root.display().to_string());
+    config.handshake_timeout = Duration::from_secs(5);
+    HostClient::spawn(&config).expect("握手应成功")
+}
+
+fn warmup(manifest_sha256: &str) -> Control {
+    Control::Warmup(Warmup {
+        family: "asr".to_owned(),
+        model: "demo".to_owned(),
+        manifest_sha256: manifest_sha256.to_owned(),
+    })
+}
+
+fn expect_error(client: &mut HostClient, code: &str) -> (bool, Option<String>) {
+    match client.recv_timeout(Duration::from_secs(2)).expect("响应") {
+        Frame::Control(Control::Error(error)) => {
+            assert_eq!(error.code, code);
+            (
+                error.retryable,
+                error.detail.and_then(|detail| detail.reason),
+            )
+        }
+        other => panic!("期望 {code}，得到 {other:?}"),
+    }
 }
 
 #[test]
@@ -99,30 +125,75 @@ fn non_directory_root_exits_13() {
 }
 
 #[test]
-fn valid_model_warmup_returns_warm_and_heartbeat() {
-    let root = TempRoot::new("warm");
-    install_model(&root);
-    let mut config = HostConfig::new(exe(), BUILD_COMMIT);
-    config.args.push("--model-root".to_owned());
-    config.args.push(root.path().display().to_string());
-    config.handshake_timeout = Duration::from_secs(5);
-    let mut client = HostClient::spawn(&config).expect("握手应成功");
+fn verified_model_reports_runtime_unavailable() {
+    let root = TempRoot::new("verified");
+    let manifest_sha = install_model(&root);
+    let mut client = client_for(root.path());
+    client.send(&warmup(&manifest_sha)).expect("写 warmup");
+    let (retryable, reason) = expect_error(&mut client, "model_unusable");
+    assert!(!retryable);
+    let reason = reason.expect("应带原因");
+    assert!(
+        reason.contains("运行时"),
+        "原因应说明运行时未接入：{reason}"
+    );
 
-    client
-        .send(&Control::Warmup(Warmup {
-            family: "asr".to_owned(),
-            model: "demo".to_owned(),
-            manifest_sha256: hex_digest(b"data"),
-        }))
-        .expect("写 warmup");
-    match client.recv_timeout(Duration::from_secs(2)).expect("响应") {
-        Frame::Control(Control::Warm(warm)) => {
-            assert_eq!(warm.model, "demo");
-            assert!((warm.rtf_p50 - 0.2).abs() < f64::EPSILON);
-        }
-        other => panic!("期望 warm，得到 {other:?}"),
+    // 心跳必须如实报 cold，而不是伪造 warm。
+    match client.recv_timeout(Duration::from_secs(3)).expect("心跳") {
+        Frame::Control(Control::Heartbeat(beat)) => assert_eq!(beat.model_state, "cold"),
+        other => panic!("期望心跳，得到 {other:?}"),
     }
+    assert_eq!(client.close().expect("关闭").code(), Some(0));
+}
 
+#[test]
+fn manifest_digest_mismatch_is_unusable() {
+    let root = TempRoot::new("manifest-sha");
+    install_model(&root);
+    let mut client = client_for(root.path());
+    client.send(&warmup(&"0".repeat(64))).expect("写 warmup");
+    let (_, reason) = expect_error(&mut client, "model_unusable");
+    assert_eq!(reason.as_deref(), Some("清单摘要与请求不一致"));
+    assert_eq!(client.close().expect("关闭").code(), Some(0));
+}
+
+#[test]
+fn missing_model_reports_install_path() {
+    let root = TempRoot::new("missing");
+    let mut client = client_for(root.path());
+    client.send(&warmup(&"0".repeat(64))).expect("写 warmup");
+    let (retryable, reason) = expect_error(&mut client, "model_missing");
+    assert!(retryable);
+    let reason = reason.expect("应带安装提示");
+    assert!(reason.contains("asr"), "安装提示应包含模型族：{reason}");
+    assert_eq!(client.close().expect("关闭").code(), Some(0));
+}
+
+#[test]
+fn digest_mismatch_fails_preflight_with_13() {
+    let root = TempRoot::new("digest");
+    root.write("asr/demo/model.bin", b"data");
+    root.write(
+        "asr/demo/manifest.json",
+        manifest("demo", &"0".repeat(64), 4, "1.0.0").as_bytes(),
+    );
+    assert_eq!(exit_code_of(root.path()), 13);
+}
+
+#[test]
+fn future_version_fails_preflight_with_13() {
+    let root = TempRoot::new("future");
+    root.write("asr/demo/model.bin", b"data");
+    let json = manifest("demo", &hex_digest(b"data"), 4, "2.0.0");
+    root.write("asr/demo/manifest.json", json.as_bytes());
+    assert_eq!(exit_code_of(root.path()), 13);
+}
+
+#[test]
+fn warmup_after_session_is_rejected() {
+    let root = TempRoot::new("late-warmup");
+    let manifest_sha = install_model(&root);
+    let mut client = client_for(root.path());
     client
         .send(&Control::SessionStart(axon_voice_protocol::SessionStart {
             session_id: "s-1".to_owned(),
@@ -132,92 +203,19 @@ fn valid_model_warmup_returns_warm_and_heartbeat() {
             sample_rate: 16_000,
         }))
         .expect("写 sessionStart");
-    match client.recv_timeout(Duration::from_secs(3)).expect("心跳") {
-        Frame::Control(Control::Heartbeat(beat)) => assert_eq!(beat.model_state, "warm"),
-        other => panic!("期望心跳，得到 {other:?}"),
-    }
-    assert_eq!(client.close().expect("关闭").code(), Some(0));
+    // 会话中预热属于序列错误，宿主直接退出 11。
+    let _ = client.send(&warmup(&manifest_sha));
+    assert_eq!(wait_for_exit(&mut client), Some(11));
 }
 
-#[test]
-fn missing_model_reports_model_missing() {
-    let root = TempRoot::new("missing");
-    let mut config = HostConfig::new(exe(), BUILD_COMMIT);
-    config.args.push("--model-root".to_owned());
-    config.args.push(root.path().display().to_string());
-    let mut client = HostClient::spawn(&config).expect("握手应成功");
-    client
-        .send(&Control::Warmup(Warmup {
-            family: "asr".to_owned(),
-            model: "demo".to_owned(),
-            manifest_sha256: "0".repeat(64),
-        }))
-        .expect("写 warmup");
-    match client.recv_timeout(Duration::from_secs(2)).expect("响应") {
-        Frame::Control(Control::Error(error)) => assert_eq!(error.code, "model_missing"),
-        other => panic!("期望 model_missing，得到 {other:?}"),
-    }
-    assert_eq!(client.close().expect("关闭").code(), Some(0));
-}
-
-#[test]
-fn digest_mismatch_reports_model_unusable() {
-    let root = TempRoot::new("digest");
-    root.write("asr/demo/model.bin", b"data");
-    root.write(
-        "asr/demo/manifest.json",
-        manifest("demo", &"0".repeat(64), 4).as_bytes(),
-    );
-    let mut config = HostConfig::new(exe(), BUILD_COMMIT);
-    config.args.push("--model-root".to_owned());
-    config.args.push(root.path().display().to_string());
-    let mut client = HostClient::spawn(&config).expect("握手应成功");
-    client
-        .send(&Control::Warmup(Warmup {
-            family: "asr".to_owned(),
-            model: "demo".to_owned(),
-            manifest_sha256: "0".repeat(64),
-        }))
-        .expect("写 warmup");
-    match client.recv_timeout(Duration::from_secs(2)).expect("响应") {
-        Frame::Control(Control::Error(error)) => {
-            assert_eq!(error.code, "model_unusable");
-            assert!(!error.retryable);
+fn wait_for_exit(client: &mut HostClient) -> Option<i32> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if let Some(status) = client.try_wait().expect("查询") {
+            return status.code();
         }
-        other => panic!("期望 model_unusable，得到 {other:?}"),
+        std::thread::sleep(Duration::from_millis(50));
     }
-    assert_eq!(client.close().expect("关闭").code(), Some(0));
-}
-
-#[test]
-fn handshake_still_required_with_model_root() {
-    let root = TempRoot::new("handshake");
-    install_model(&root);
-    let mut child = Command::new(exe())
-        .arg("--model-root")
-        .arg(root.path())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("启动");
-    let mut stdin = child.stdin.take().expect("stdin");
-    let mut stdout = std::io::BufReader::new(child.stdout.take().expect("stdout"));
-    write_frame(
-        &mut stdin,
-        &Control::Hello(axon_voice_protocol::Hello {
-            protocol: PROTOCOL_VERSION,
-            build_commit: BUILD_COMMIT.to_owned(),
-            role: "daemon".to_owned(),
-            pid: std::process::id(),
-        }),
-    )
-    .expect("写 hello");
-    assert!(matches!(
-        read_frame(&mut stdout).expect("读取").expect("帧"),
-        Frame::Control(Control::Ready(Ready { .. }))
-    ));
-    drop(stdin);
-    let status = child.wait().expect("等待");
-    assert_eq!(status.code(), Some(0));
+    client.terminate();
+    None
 }

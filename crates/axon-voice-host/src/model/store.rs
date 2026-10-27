@@ -5,7 +5,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use super::manifest::{Manifest, ManifestError, ModelFamily};
-use super::sha256::Sha256;
+use super::sha256::{self, Sha256};
 
 /// 宿主支持的清单主版本。
 const SUPPORTED_MAJOR: u64 = 1;
@@ -13,14 +13,16 @@ const SUPPORTED_MAJOR: u64 = 1;
 /// 解析结果。
 #[derive(Debug)]
 pub enum ModelResolution {
-    /// 可用。
+    /// 清单与文件均通过校验。
     Ready {
         /// 清单。
         manifest: Manifest,
         /// 模型目录。
         dir: PathBuf,
+        /// 清单字节的 SHA-256。
+        manifest_sha256: String,
     },
-    /// 目录不存在。
+    /// 模型或清单文件缺失。
     Missing,
     /// 存在但不可用。
     Unusable {
@@ -48,6 +50,12 @@ impl ModelStore {
         &self.root
     }
 
+    /// 指定模型的目录。
+    #[must_use]
+    pub fn model_dir(&self, family: ModelFamily, name: &str) -> PathBuf {
+        self.root.join(family.as_token()).join(name)
+    }
+
     /// 根目录是否可读且是目录。
     ///
     /// # Errors
@@ -63,11 +71,11 @@ impl ModelStore {
         Ok(())
     }
 
-    /// 启动预检：根目录可读，且已存在目录里的清单都能解析。
+    /// 启动预检：根目录可读，且已存在模型都能通过全量校验。
     ///
     /// # Errors
     ///
-    /// 根目录不可读，或任一已存在模型的清单非法。
+    /// 根目录不可读，或任一已存在模型不可用。
     pub fn preflight(&self) -> Result<(), String> {
         self.check_root()?;
         for family in [ModelFamily::Vad, ModelFamily::Asr, ModelFamily::Tts] {
@@ -82,13 +90,13 @@ impl ModelStore {
                 if !entry.path().is_dir() {
                     continue;
                 }
-                let manifest_path = entry.path().join("manifest.json");
-                if !manifest_path.is_file() {
-                    continue;
+                let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                    return Err("模型目录名不是合法 UTF-8".to_owned());
+                };
+                match self.resolve(family, &name) {
+                    ModelResolution::Ready { .. } | ModelResolution::Missing => {}
+                    ModelResolution::Unusable { reason } => return Err(reason),
                 }
-                let bytes = std::fs::read(&manifest_path)
-                    .map_err(|error| format!("清单不可读：{error}"))?;
-                Manifest::parse(&bytes).map_err(|error| describe(&error))?;
             }
         }
         Ok(())
@@ -97,13 +105,21 @@ impl ModelStore {
     /// 解析并校验指定模型。
     #[must_use]
     pub fn resolve(&self, family: ModelFamily, name: &str) -> ModelResolution {
-        let dir = self.root.join(family.as_token()).join(name);
+        if !valid_name(name) {
+            return ModelResolution::Unusable {
+                reason: "模型名非法".to_owned(),
+            };
+        }
+        let dir = self.model_dir(family, name);
         if !dir.is_dir() {
             return ModelResolution::Missing;
         }
         let manifest_path = dir.join("manifest.json");
         let bytes = match std::fs::read(&manifest_path) {
             Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return ModelResolution::Missing;
+            }
             Err(error) => {
                 return ModelResolution::Unusable {
                     reason: format!("清单不可读：{error}"),
@@ -129,11 +145,54 @@ impl ModelStore {
             };
         }
         match verify(&dir, &manifest) {
-            Ok(()) => ModelResolution::Ready { manifest, dir },
+            Ok(()) => ModelResolution::Ready {
+                manifest,
+                dir,
+                manifest_sha256: sha256::hex_digest(&bytes),
+            },
             Err(VerifyError::Missing) => ModelResolution::Missing,
             Err(VerifyError::Unusable(reason)) => ModelResolution::Unusable { reason },
         }
     }
+
+    /// 解析并校验，同时要求清单摘要与调用方给出的值一致。
+    #[must_use]
+    pub fn resolve_verified(
+        &self,
+        family: ModelFamily,
+        name: &str,
+        expected_manifest_sha256: &str,
+    ) -> ModelResolution {
+        match self.resolve(family, name) {
+            ModelResolution::Ready {
+                manifest,
+                dir,
+                manifest_sha256,
+            } => {
+                if manifest_sha256.eq_ignore_ascii_case(expected_manifest_sha256) {
+                    ModelResolution::Ready {
+                        manifest,
+                        dir,
+                        manifest_sha256,
+                    }
+                } else {
+                    ModelResolution::Unusable {
+                        reason: "清单摘要与请求不一致".to_owned(),
+                    }
+                }
+            }
+            other => other,
+        }
+    }
+}
+
+fn valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains(':')
 }
 
 fn describe(error: &ManifestError) -> String {
@@ -162,7 +221,15 @@ fn verify(dir: &Path, manifest: &Manifest) -> Result<(), VerifyError> {
         let path = dir.join(&entry.path);
         let metadata = match std::fs::metadata(&path) {
             Ok(metadata) => metadata,
-            Err(_) => return Err(VerifyError::Missing),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(VerifyError::Missing);
+            }
+            Err(error) => {
+                return Err(VerifyError::Unusable(format!(
+                    "{} 不可读：{error}",
+                    entry.path
+                )));
+            }
         };
         if !metadata.is_file() {
             return Err(VerifyError::Unusable(format!("{} 不是文件", entry.path)));
@@ -189,6 +256,7 @@ fn verify(dir: &Path, manifest: &Manifest) -> Result<(), VerifyError> {
     }
     Ok(())
 }
+
 #[cfg(test)]
 mod tests {
     use super::{ModelResolution, ModelStore};
@@ -222,12 +290,12 @@ mod tests {
         }
     }
 
-    fn manifest_json(name: &str, sha: &str, bytes: u64, family: &str) -> String {
+    fn manifest_json(name: &str, sha: &str, bytes: u64, family: &str, version: &str) -> String {
         format!(
             r#"{{
                 "family": "{family}",
                 "name": "{name}",
-                "version": "1.0.0",
+                "version": "{version}",
                 "runtime": "fixture",
                 "sampleRate": 16000,
                 "languages": ["zh"],
@@ -240,17 +308,28 @@ mod tests {
         )
     }
 
+    fn install(temp: &TempRoot, name: &str, version: &str) {
+        temp.write(&format!("asr/{name}/model.bin"), b"data");
+        temp.write(
+            &format!("asr/{name}/manifest.json"),
+            manifest_json(name, &hex_digest(b"data"), 4, "asr", version).as_bytes(),
+        );
+    }
+
     #[test]
     fn ready_when_files_match() {
         let temp = TempRoot::new("ready");
-        temp.write("asr/demo/model.bin", b"data");
-        temp.write(
-            "asr/demo/manifest.json",
-            manifest_json("demo", &hex_digest(b"data"), 4, "asr").as_bytes(),
-        );
+        install(&temp, "demo", "1.0.0");
         let store = ModelStore::new(&temp.0);
         match store.resolve(ModelFamily::Asr, "demo") {
-            ModelResolution::Ready { manifest, .. } => assert_eq!(manifest.name, "demo"),
+            ModelResolution::Ready {
+                manifest,
+                manifest_sha256,
+                ..
+            } => {
+                assert_eq!(manifest.name, "demo");
+                assert_eq!(manifest_sha256.len(), 64);
+            }
             other => panic!("期望 Ready，得到 {other:?}"),
         }
     }
@@ -266,41 +345,11 @@ mod tests {
     }
 
     #[test]
-    fn unusable_when_digest_mismatches() {
-        let temp = TempRoot::new("digest");
-        temp.write("asr/demo/model.bin", b"data");
-        temp.write(
-            "asr/demo/manifest.json",
-            manifest_json("demo", &"0".repeat(64), 4, "asr").as_bytes(),
-        );
-        let store = ModelStore::new(&temp.0);
-        assert!(matches!(
-            store.resolve(ModelFamily::Asr, "demo"),
-            ModelResolution::Unusable { .. }
-        ));
-    }
-
-    #[test]
-    fn unusable_when_manifest_mismatches_directory() {
-        let temp = TempRoot::new("mismatch");
-        temp.write("asr/demo/model.bin", b"data");
-        temp.write(
-            "asr/demo/manifest.json",
-            manifest_json("other", &hex_digest(b"data"), 4, "asr").as_bytes(),
-        );
-        let store = ModelStore::new(&temp.0);
-        assert!(matches!(
-            store.resolve(ModelFamily::Asr, "demo"),
-            ModelResolution::Unusable { .. }
-        ));
-    }
-
-    #[test]
-    fn missing_file_is_reported_as_missing() {
+    fn missing_when_listed_file_absent() {
         let temp = TempRoot::new("no-file");
         temp.write(
             "asr/demo/manifest.json",
-            manifest_json("demo", &"0".repeat(64), 4, "asr").as_bytes(),
+            manifest_json("demo", &"0".repeat(64), 4, "asr", "1.0.0").as_bytes(),
         );
         let store = ModelStore::new(&temp.0);
         assert!(matches!(
@@ -310,15 +359,115 @@ mod tests {
     }
 
     #[test]
-    fn future_major_version_is_unusable() {
-        let temp = TempRoot::new("future");
+    fn unusable_when_digest_mismatches() {
+        let temp = TempRoot::new("digest");
         temp.write("asr/demo/model.bin", b"data");
-        let json = manifest_json("demo", &hex_digest(b"data"), 4, "asr")
-            .replace("\"version\": \"1.0.0\"", "\"version\": \"2.0.0\"");
-        temp.write("asr/demo/manifest.json", json.as_bytes());
+        temp.write(
+            "asr/demo/manifest.json",
+            manifest_json("demo", &"0".repeat(64), 4, "asr", "1.0.0").as_bytes(),
+        );
         let store = ModelStore::new(&temp.0);
         assert!(matches!(
             store.resolve(ModelFamily::Asr, "demo"),
+            ModelResolution::Unusable { .. }
+        ));
+    }
+
+    #[test]
+    fn unusable_when_byte_count_mismatches() {
+        let temp = TempRoot::new("bytes");
+        temp.write("asr/demo/model.bin", b"data");
+        temp.write(
+            "asr/demo/manifest.json",
+            manifest_json("demo", &hex_digest(b"data"), 5, "asr", "1.0.0").as_bytes(),
+        );
+        let store = ModelStore::new(&temp.0);
+        assert!(matches!(
+            store.resolve(ModelFamily::Asr, "demo"),
+            ModelResolution::Unusable { .. }
+        ));
+    }
+
+    #[test]
+    fn uppercase_digest_is_accepted() {
+        let temp = TempRoot::new("upper");
+        temp.write("asr/demo/model.bin", b"data");
+        temp.write(
+            "asr/demo/manifest.json",
+            manifest_json(
+                "demo",
+                &hex_digest(b"data").to_uppercase(),
+                4,
+                "asr",
+                "1.0.0",
+            )
+            .as_bytes(),
+        );
+        let store = ModelStore::new(&temp.0);
+        assert!(matches!(
+            store.resolve(ModelFamily::Asr, "demo"),
+            ModelResolution::Ready { .. }
+        ));
+    }
+
+    #[test]
+    fn unusable_when_manifest_mismatches_directory() {
+        let temp = TempRoot::new("mismatch");
+        temp.write("asr/demo/model.bin", b"data");
+        temp.write(
+            "asr/demo/manifest.json",
+            manifest_json("other", &hex_digest(b"data"), 4, "asr", "1.0.0").as_bytes(),
+        );
+        let store = ModelStore::new(&temp.0);
+        assert!(matches!(
+            store.resolve(ModelFamily::Asr, "demo"),
+            ModelResolution::Unusable { .. }
+        ));
+    }
+
+    #[test]
+    fn future_major_version_is_unusable() {
+        let temp = TempRoot::new("future");
+        install(&temp, "demo", "2.0.0");
+        let store = ModelStore::new(&temp.0);
+        assert!(matches!(
+            store.resolve(ModelFamily::Asr, "demo"),
+            ModelResolution::Unusable { .. }
+        ));
+    }
+
+    #[test]
+    fn traversal_names_are_rejected() {
+        let temp = TempRoot::new("traversal");
+        let store = ModelStore::new(&temp.0);
+        for name in ["..", ".", "a/b", "a\\b", "C:demo", ""] {
+            assert!(
+                matches!(
+                    store.resolve(ModelFamily::Asr, name),
+                    ModelResolution::Unusable { .. }
+                ),
+                "应拒绝 {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_digest_is_bound_to_request() {
+        let temp = TempRoot::new("manifest-sha");
+        install(&temp, "demo", "1.0.0");
+        let store = ModelStore::new(&temp.0);
+        let ModelResolution::Ready {
+            manifest_sha256, ..
+        } = store.resolve(ModelFamily::Asr, "demo")
+        else {
+            panic!("应可用");
+        };
+        assert!(matches!(
+            store.resolve_verified(ModelFamily::Asr, "demo", &manifest_sha256),
+            ModelResolution::Ready { .. }
+        ));
+        assert!(matches!(
+            store.resolve_verified(ModelFamily::Asr, "demo", &"0".repeat(64)),
             ModelResolution::Unusable { .. }
         ));
     }

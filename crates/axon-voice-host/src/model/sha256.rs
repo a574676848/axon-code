@@ -279,6 +279,15 @@ mod tests {
     }
 
     #[test]
+    fn matches_nist_million_byte_vector() {
+        let payload = vec![0x61u8; 1_000_000];
+        assert_eq!(
+            hex_digest(&payload),
+            "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
+        );
+    }
+
+    #[test]
     fn boundary_lengths_are_stable() {
         for length in [55usize, 56, 57, 63, 64, 65, 119, 120] {
             let payload = vec![0x61u8; length];
