@@ -632,7 +632,10 @@ where
 {
     use futures_util::StreamExt;
     for _ in 0..8 {
-        match socket.next().await {
+        let next = tokio::time::timeout(Duration::from_secs(5), socket.next())
+            .await
+            .unwrap_or_else(|_| panic!("等待文本帧超时"));
+        match next {
             Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
                 return text.to_string();
             }

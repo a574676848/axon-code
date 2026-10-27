@@ -113,47 +113,80 @@ pub(super) async fn voice_ws(
     upgrade.on_upgrade(session)
 }
 
+/// 文本帧分类结果。
+enum Classified {
+    /// 开始会话。
+    Start,
+    /// 结束当前句。
+    Stop,
+    /// 取消。
+    Cancel(CancelReason),
+    /// 已知但暂不处理。
+    Ignored,
+}
+
+fn classify(started: bool, text: &str) -> Result<Classified, ()> {
+    match parse_client_frame(text)? {
+        ClientFrame::Start { .. } => {
+            if started {
+                Err(())
+            } else {
+                Ok(Classified::Start)
+            }
+        }
+        ClientFrame::Stop { .. } => {
+            if started {
+                Ok(Classified::Stop)
+            } else {
+                Err(())
+            }
+        }
+        ClientFrame::Cancel { reason } => {
+            if started {
+                Ok(Classified::Cancel(reason))
+            } else {
+                Err(())
+            }
+        }
+        ClientFrame::Ignored => Ok(Classified::Ignored),
+    }
+}
+
 async fn session(mut socket: WebSocket) {
     send_json(&mut socket, ready_json()).await;
     let mut started = false;
     while let Some(Ok(message)) = socket.recv().await {
         match message {
-            Message::Text(text) => match parse_client_frame(&text) {
-                Ok(ClientFrame::Start { .. }) => {
-                    if started {
-                        reject(&mut socket, "protocol_sequence").await;
-                        return;
-                    }
+            Message::Text(text) => match classify(started, &text) {
+                Ok(Classified::Start) => {
                     started = true;
-                    let error = warmup_error(client_state()).await;
+                    let (error, ready) = warmup_outcome(client_state()).await;
                     send_json(&mut socket, error).await;
-                }
-                Ok(ClientFrame::Stop { .. }) => {
-                    if !started {
-                        reject(&mut socket, "protocol_sequence").await;
-                        return;
-                    }
-                }
-                Ok(ClientFrame::Cancel { reason }) => {
-                    if !started {
-                        reject(&mut socket, "protocol_sequence").await;
-                        return;
-                    }
-                    if reason == CancelReason::ClientClose {
+                    if !ready {
                         close(&mut socket).await;
                         return;
                     }
                 }
-                Ok(ClientFrame::Ignored) => {}
+                Ok(Classified::Stop) => {}
+                Ok(Classified::Cancel(CancelReason::ClientClose)) => {
+                    close(&mut socket).await;
+                    return;
+                }
+                Ok(Classified::Cancel(CancelReason::UserCancel)) => {}
+                Ok(Classified::Ignored) => {}
                 Err(()) => {
-                    reject(&mut socket, "protocol_unknown_field").await;
+                    reject(&mut socket, "protocol_sequence").await;
                     return;
                 }
             },
             Message::Binary(payload) => {
-                // 音频帧必须是 0x01 开头且已 start；本阶段无推理，收下后不产生转写。
+                // 音频帧必须是 0x01 开头、长度合法且已 start；本阶段无推理，不产生转写。
                 if !started || payload.first() != Some(&0x01) {
                     reject(&mut socket, "protocol_sequence").await;
+                    return;
+                }
+                if payload.len() > 8 * 1024 + 1 {
+                    reject(&mut socket, "frame_oversize").await;
                     return;
                 }
             }
@@ -162,7 +195,6 @@ async fn session(mut socket: WebSocket) {
         }
     }
 }
-
 async fn reject(socket: &mut WebSocket, code: &str) {
     send_json(socket, error_json(code, "connect")).await;
     close(socket).await;
@@ -180,18 +212,18 @@ fn client_state() -> ClientState {
     }
 }
 
-async fn warmup_error(state: ClientState) -> String {
+async fn warmup_outcome(state: ClientState) -> (String, bool) {
     if !state.model_root.is_dir() {
-        return error_json("model_missing", "arming");
+        return (error_json("model_missing", "arming"), false);
     }
     let Some(exe) = state.host_exe.clone() else {
-        return error_json("worker_unavailable", "arming");
+        return (error_json("worker_unavailable", "arming"), false);
     };
     let mut config = HostConfig::new(exe, BUILD_COMMIT.to_owned());
     config.args.push("--model-root".to_owned());
     config.args.push(state.model_root.display().to_string());
     let manifest_sha = manifest_digest(&state.model_root);
-    let outcome = std::thread::spawn(move || -> Result<(), BridgeError> {
+    let outcome = tokio::task::spawn_blocking(move || -> Result<(), BridgeError> {
         let client = HostClient::spawn(&config).map_err(|error| {
             BridgeError::Transport(axon_voice_bridge::TransportError::Write(error.to_string()))
         })?;
@@ -200,11 +232,11 @@ async fn warmup_error(state: ClientState) -> String {
         bridge.shutdown();
         result
     })
-    .join();
+    .await;
     match outcome {
-        Ok(Ok(())) => error_json("internal", "arming"),
-        Ok(Err(BridgeError::Host(error))) => error_json(&error.code, &error.stage),
-        Ok(Err(_)) | Err(_) => error_json("worker_unavailable", "arming"),
+        Ok(Ok(())) => (ready_json(), true),
+        Ok(Err(BridgeError::Host(error))) => (error_json(&error.code, &error.stage), false),
+        Ok(Err(_)) | Err(_) => (error_json("worker_unavailable", "arming"), false),
     }
 }
 
@@ -345,7 +377,9 @@ pub(crate) fn parse_client_frame(text: &str) -> Result<ClientFrame, ()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CancelReason, ClientFrame, error_json, parse_client_frame, ready_json};
+    use super::{
+        CancelReason, Classified, ClientFrame, classify, error_json, parse_client_frame, ready_json,
+    };
 
     fn start_json() -> &'static str {
         r#"{"type":"start","protocolVersion":1,"clientSessionId":"c-1","workspaceId":"w-1","replyDestination":"desktop","mode":"full_duplex","lang":"zh","tts":false}"#
@@ -439,5 +473,34 @@ mod tests {
         assert_eq!(value["message"], "本地语音模型未安装，点此查看安装指引");
         assert_eq!(value["detail"]["family"], "asr");
         assert_eq!(value["retryable"], true);
+    }
+    #[test]
+    fn classify_enforces_session_state() {
+        assert!(matches!(
+            classify(false, start_json()),
+            Ok(Classified::Start)
+        ));
+        assert!(classify(true, start_json()).is_err(), "重复 start 应拒绝");
+        assert!(classify(false, r#"{"type":"stop","utteranceSeq":1}"#).is_err());
+        assert!(
+            classify(false, r#"{"type":"cancel","reason":"user_cancel"}"#).is_err(),
+            "未 start 不能 cancel"
+        );
+        assert!(matches!(
+            classify(true, r#"{"type":"stop","utteranceSeq":1}"#),
+            Ok(Classified::Stop)
+        ));
+        assert!(matches!(
+            classify(true, r#"{"type":"cancel","reason":"user_cancel"}"#),
+            Ok(Classified::Cancel(CancelReason::UserCancel))
+        ));
+        assert!(matches!(
+            classify(true, r#"{"type":"cancel","reason":"client_close"}"#),
+            Ok(Classified::Cancel(CancelReason::ClientClose))
+        ));
+        assert!(matches!(
+            classify(true, r#"{"type":"setTts","enabled":true}"#),
+            Ok(Classified::Ignored)
+        ));
     }
 }
