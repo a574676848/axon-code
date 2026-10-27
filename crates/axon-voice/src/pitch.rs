@@ -77,7 +77,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn pitch_shift_changes_waveform_without_changing_length() {
         let input = tone(220.0);
         let output = shift_pitch(&input, 2.0);
