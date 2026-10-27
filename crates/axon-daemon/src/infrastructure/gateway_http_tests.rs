@@ -643,6 +643,27 @@ where
             other => panic!("未收到文本帧：{other:?}"),
         }
     }
+    #[test]
+    #[ignore = "需要 AXON_VOICE_IDLE_TIMEOUT_SECS=1 以缩短等待"]
+    fn voice_ws_idle_sends_session_idle() {
+        let server = TestServer::start(RecordingIngress::idle());
+        let address = server.address;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("测试运行时");
+        runtime.block_on(async move {
+            let url = format!("ws://{address}/api/v1/voice?api_token={TEST_AUTH_TOKEN}");
+            let (mut socket, _) = tokio_tungstenite::connect_async(url)
+                .await
+                .expect("WS 握手应成功");
+            let _ready = next_ws_text(&mut socket).await;
+            let text = next_ws_text(&mut socket).await;
+            println!("idle frame: {text}");
+            let value: serde_json::Value = serde_json::from_str(&text).expect("错误帧是 JSON");
+            assert_eq!(value["code"], "session_idle");
+        });
+    }
     panic!("文本帧数量超预期");
 }
 

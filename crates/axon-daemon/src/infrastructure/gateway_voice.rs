@@ -33,23 +33,6 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// 单次会话最长 120 s。
 const SESSION_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// 读取可覆盖的空闲超时。
-fn idle_timeout() -> Duration {
-    env_secs("AXON_VOICE_IDLE_TIMEOUT_SECS", IDLE_TIMEOUT)
-}
-
-/// 读取可覆盖的会话超时。
-fn session_timeout() -> Duration {
-    env_secs("AXON_VOICE_SESSION_TIMEOUT_SECS", SESSION_TIMEOUT)
-}
-
-fn env_secs(name: &str, fallback: Duration) -> Duration {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map_or(fallback, Duration::from_secs)
-}
-
 /// 取消原因，客户端只允许这两个。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancelReason {
@@ -207,10 +190,10 @@ struct WorkerConfig {
 
 /// 超时判定：返回触发关闭的阶段；`idle` 为距上一帧的时长，`session` 为会话时长。
 fn timeout_stage(idle: Duration, session: Option<Duration>) -> Option<&'static str> {
-    if idle >= idle_timeout() {
+    if idle >= IDLE_TIMEOUT {
         return Some("connect");
     }
-    if session.is_some_and(|elapsed| elapsed >= session_timeout()) {
+    if session.is_some_and(|elapsed| elapsed >= SESSION_TIMEOUT) {
         return Some("listening");
     }
     None
@@ -231,7 +214,7 @@ async fn session(mut socket: WebSocket) {
             return;
         }
         tokio::select! {
-            message = tokio::time::timeout(idle_timeout(), socket.recv()) => {
+            message = tokio::time::timeout(IDLE_TIMEOUT, socket.recv()) => {
                 let Ok(message) = message else {
                     send_json(&mut socket, error_json("session_idle", "connect")).await;
                     close(&mut socket).await;
