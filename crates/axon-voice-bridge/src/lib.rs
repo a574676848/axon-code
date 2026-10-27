@@ -3,12 +3,12 @@
 //! 只依赖 [`HostTransport`]，不自己启动进程；进程监督留在宿主 crate 的 supervisor。
 //! 上层（daemon 的 `/api/v1/voice`）负责把 [`VoiceEvent`] 映射成 WS 帧。
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axon_voice_host::supervisor::{HostClient, SupervisorError};
 use axon_voice_protocol::{
-    Control, ErrorMsg, Final, Frame, Heartbeat, Partial, SessionEnd, SessionStart, Warm, Warmup,
-    encode_audio_in,
+    Control, CueStatus, ErrorMsg, Final, Frame, Heartbeat, Partial, SessionEnd, SessionStart, Warm,
+    Warmup, encode_audio_in,
 };
 
 /// 宿主传输层错误。
@@ -55,8 +55,14 @@ pub trait HostTransport {
     ///
     /// 超时、通道关闭或读取失败。
     fn recv(&mut self, timeout: Duration) -> Result<Frame, TransportError>;
-    /// 请求关闭。
-    fn close(&mut self);
+    /// 心跳是否仍在窗口内。
+    fn heartbeat_ok(&self, now: Instant) -> bool;
+    /// 进程是否仍在运行。
+    fn alive(&mut self) -> bool;
+    /// 终止并回收，返回退出码。
+    fn terminate(&mut self) -> Option<i32>;
+    /// 发 close 并等待回执，必要时强杀回收。
+    fn shutdown(&mut self);
 }
 
 impl HostTransport for HostClient {
@@ -78,8 +84,20 @@ impl HostTransport for HostClient {
         })
     }
 
-    fn close(&mut self) {
-        let _ = self.send(&Control::Close);
+    fn heartbeat_ok(&self, now: Instant) -> bool {
+        HostClient::heartbeat_ok(self, now)
+    }
+
+    fn alive(&mut self) -> bool {
+        self.try_wait().ok().flatten().is_none()
+    }
+
+    fn terminate(&mut self) -> Option<i32> {
+        HostClient::terminate(self)
+    }
+
+    fn shutdown(&mut self) {
+        let _ = HostClient::shutdown(self);
     }
 }
 
@@ -98,6 +116,8 @@ pub enum BridgeError {
     NoSession,
     /// 协议编码失败。
     Protocol(String),
+    /// 桥已关闭。
+    Closed,
 }
 
 impl std::fmt::Display for BridgeError {
@@ -109,6 +129,7 @@ impl std::fmt::Display for BridgeError {
             Self::Busy => f.write_str("已有会话"),
             Self::NoSession => f.write_str("当前没有会话"),
             Self::Protocol(reason) => write!(f, "协议编码失败：{reason}"),
+            Self::Closed => f.write_str("桥已关闭"),
         }
     }
 }
@@ -144,8 +165,12 @@ pub enum VoiceEvent {
     },
     /// 宿主错误帧。
     Error(ErrorMsg),
+    /// cue 缓存状态。
+    CueStatus(CueStatus),
     /// 心跳。
     Heartbeat(Heartbeat),
+    /// 已收到但当前不消费的控制消息。
+    Ignored(Control),
     /// 关闭确认。
     Closed,
 }
@@ -198,11 +223,11 @@ impl<T: HostTransport> VoiceBridge<T> {
         manifest_sha256: &str,
         timeout: Duration,
     ) -> Result<(), BridgeError> {
-        if self.state == BridgeState::Ready {
-            return Ok(());
-        }
-        if self.state != BridgeState::Idle {
-            return Err(BridgeError::NotReady);
+        match self.state {
+            BridgeState::Ready => return Ok(()),
+            BridgeState::Closed => return Err(BridgeError::Closed),
+            BridgeState::InSession => return Err(BridgeError::Busy),
+            BridgeState::Idle => {}
         }
         self.send_control(&Control::Warmup(Warmup {
             family: family.to_owned(),
@@ -242,11 +267,11 @@ impl<T: HostTransport> VoiceBridge<T> {
         lang: &str,
         hot_words: &[String],
     ) -> Result<(), BridgeError> {
-        if self.state == BridgeState::InSession {
-            return Err(BridgeError::Busy);
-        }
-        if self.state != BridgeState::Ready {
-            return Err(BridgeError::NotReady);
+        match self.state {
+            BridgeState::InSession => return Err(BridgeError::Busy),
+            BridgeState::Closed => return Err(BridgeError::Closed),
+            BridgeState::Ready => {}
+            BridgeState::Idle => return Err(BridgeError::NotReady),
         }
         self.send_control(&Control::SessionStart(SessionStart {
             session_id: session_id.to_owned(),
@@ -266,6 +291,9 @@ impl<T: HostTransport> VoiceBridge<T> {
     ///
     /// 没有会话或传输失败。
     pub fn push_audio(&mut self, pcm: &[u8]) -> Result<(), BridgeError> {
+        if self.state == BridgeState::Closed {
+            return Err(BridgeError::Closed);
+        }
         if self.state != BridgeState::InSession {
             return Err(BridgeError::NoSession);
         }
@@ -317,17 +345,30 @@ impl<T: HostTransport> VoiceBridge<T> {
     ///
     /// 传输失败。
     pub fn poll(&mut self, timeout: Duration) -> Result<Option<VoiceEvent>, BridgeError> {
+        if self.state == BridgeState::Closed {
+            return Err(BridgeError::Closed);
+        }
         match self.transport.recv(timeout) {
+            Ok(Frame::Control(Control::Closed)) => {
+                self.state = BridgeState::Closed;
+                Ok(Some(VoiceEvent::Closed))
+            }
             Ok(frame) => Ok(map_frame(frame)),
             Err(TransportError::Timeout) => Ok(None),
             Err(error) => Err(BridgeError::Transport(error)),
         }
     }
 
-    /// 请求宿主关闭。
-    pub fn close(&mut self) {
-        self.transport.close();
+    /// 关闭并等待回执，必要时强杀回收。
+    pub fn shutdown(&mut self) {
+        self.transport.shutdown();
         self.state = BridgeState::Closed;
+    }
+
+    /// 取出底层传输。
+    #[must_use]
+    pub fn into_inner(self) -> T {
+        self.transport
     }
 
     fn send_control(&mut self, control: &Control) -> Result<(), BridgeError> {
@@ -345,7 +386,7 @@ fn map_frame(frame: Frame) -> Option<VoiceEvent> {
         Frame::Control(Control::Heartbeat(beat)) => Some(VoiceEvent::Heartbeat(beat)),
         Frame::Control(Control::Closed) => Some(VoiceEvent::Closed),
         Frame::Control(Control::Error(error)) => Some(VoiceEvent::Error(error)),
-        Frame::Control(_) => None,
+        Frame::Control(other) => Some(VoiceEvent::Ignored(other)),
         Frame::AudioOut { epoch, seq, audio } => Some(VoiceEvent::Audio { epoch, seq, audio }),
         Frame::CueAudio { cue_id, seq, audio } => Some(VoiceEvent::CueAudio { cue_id, seq, audio }),
         Frame::AudioIn(_) => None,

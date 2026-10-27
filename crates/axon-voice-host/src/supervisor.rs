@@ -226,6 +226,27 @@ impl HostClient {
         self.child.try_wait().map_err(SupervisorError::Spawn)
     }
 
+    /// 就地关闭：发 close、等 closed 回执（2 s），必要时强杀并回收。
+    pub fn shutdown(&mut self) -> Option<i32> {
+        let _ = self.send(&Control::Close);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut acknowledged = false;
+        while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+            match self.frames.recv_timeout(remaining) {
+                Ok(Ok(Frame::Control(Control::Closed))) => {
+                    acknowledged = true;
+                    break;
+                }
+                Ok(Ok(_)) => continue,
+                Ok(Err(_)) | Err(_) => break,
+            }
+        }
+        if !acknowledged {
+            let _ = self.child.kill();
+        }
+        self.child.wait().ok().and_then(|status| status.code())
+    }
+
     /// 请求关闭并等待进程退出；超时则强杀。
     ///
     /// # Errors

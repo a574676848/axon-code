@@ -1,7 +1,8 @@
 //! 桥的状态机测试：用进程内脚本宿主验证编排，不启动真实进程。
 
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axon_voice_protocol::{Control, ErrorDetail, ErrorMsg, Final, Frame, Heartbeat, Partial, Warm};
 
@@ -18,84 +19,73 @@ struct ScriptedHost {
     mode: Mode,
     replies_tx: Sender<Frame>,
     replies: Receiver<Frame>,
-    _received: Receiver<Control>,
+    sent: Arc<Mutex<Vec<Control>>>,
 }
 
 impl ScriptedHost {
     fn new(mode: Mode) -> Self {
         let (replies_tx, replies) = mpsc::channel();
-        let (received_tx, received) = mpsc::channel();
-        let _ = received_tx;
         Self {
             mode,
             replies_tx,
             replies,
-            _received: received,
+            sent: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    fn sent_handle(&self) -> Arc<Mutex<Vec<Control>>> {
+        Arc::clone(&self.sent)
+    }
+
+    fn reply(&self, frame: Frame) {
+        let _ = self.replies_tx.send(frame);
     }
 }
 
 impl HostTransport for ScriptedHost {
     fn send_control(&mut self, control: &Control) -> Result<(), TransportError> {
+        self.sent.lock().expect("锁").push(control.clone());
         match control {
             Control::Warmup(_) => match self.mode {
-                Mode::Warm => {
-                    let _ = self.replies_tx.send(Frame::Control(Control::Warm(Warm {
-                        family: "asr".to_owned(),
-                        model: "demo".to_owned(),
-                        rtf_p50: 0.2,
-                        rss_kb: 0,
-                    })));
-                }
-                Mode::Reject => {
-                    let _ = self
-                        .replies_tx
-                        .send(Frame::Control(Control::Error(ErrorMsg {
-                            code: "model_unusable".to_owned(),
-                            stage: "arming".to_owned(),
-                            retryable: false,
-                            detail: Some(ErrorDetail {
-                                family: Some("asr".to_owned()),
-                                reason: Some("运行时尚未接入".to_owned()),
-                                ..ErrorDetail::default()
-                            }),
-                        })));
-                }
+                Mode::Warm => self.reply(Frame::Control(Control::Warm(Warm {
+                    family: "asr".to_owned(),
+                    model: "demo".to_owned(),
+                    rtf_p50: 0.2,
+                    rss_kb: 0,
+                }))),
+                Mode::Reject => self.reply(Frame::Control(Control::Error(ErrorMsg {
+                    code: "model_unusable".to_owned(),
+                    stage: "arming".to_owned(),
+                    retryable: false,
+                    detail: Some(ErrorDetail {
+                        family: Some("asr".to_owned()),
+                        reason: Some("运行时尚未接入".to_owned()),
+                        ..ErrorDetail::default()
+                    }),
+                }))),
                 Mode::Silent => {}
             },
-            Control::SessionStart(_) => {
-                let _ = self
-                    .replies_tx
-                    .send(Frame::Control(Control::Heartbeat(Heartbeat {
-                        pid: 1,
-                        rss_kb: 0,
-                        model_state: "cold".to_owned(),
-                        queue_in: 0,
-                        queue_out: 0,
-                    })));
-            }
-            Control::SessionEnd(_) => {
-                let _ = self.replies_tx.send(Frame::Control(Control::Final(Final {
-                    utterance_seq: 1,
-                    text: "你好".to_owned(),
-                    start_ms: 0,
-                    end_ms: 10,
-                    finalize_ms: 20,
-                })));
-            }
-            Control::Cancel(_) => {
-                let _ = self
-                    .replies_tx
-                    .send(Frame::Control(Control::Error(ErrorMsg {
-                        code: "tts_failed".to_owned(),
-                        stage: "speaking".to_owned(),
-                        retryable: true,
-                        detail: None,
-                    })));
-            }
-            Control::Close => {
-                let _ = self.replies_tx.send(Frame::Control(Control::Closed));
-            }
+            Control::SessionStart(_) => self.reply(Frame::Control(Control::Heartbeat(Heartbeat {
+                pid: 1,
+                rss_kb: 0,
+                model_state: "cold".to_owned(),
+                queue_in: 0,
+                queue_out: 0,
+            }))),
+            Control::SessionEnd(_) => self.reply(Frame::Control(Control::Final(Final {
+                utterance_seq: 1,
+                text: "你好".to_owned(),
+                start_ms: 0,
+                end_ms: 10,
+                finalize_ms: 20,
+            }))),
+            Control::Cancel(_) => self.reply(Frame::Control(Control::Error(ErrorMsg {
+                code: "tts_failed".to_owned(),
+                stage: "speaking".to_owned(),
+                retryable: true,
+                detail: None,
+            }))),
+            Control::Close => self.reply(Frame::Control(Control::Closed)),
             _ => {}
         }
         Ok(())
@@ -107,12 +97,10 @@ impl HostTransport for ScriptedHost {
         if let Frame::AudioIn(payload) = frame
             && !payload.is_empty()
         {
-            let _ = self
-                .replies_tx
-                .send(Frame::Control(Control::Partial(Partial {
-                    utterance_seq: 1,
-                    text: "你好".to_owned(),
-                })));
+            self.reply(Frame::Control(Control::Partial(Partial {
+                utterance_seq: 1,
+                text: "你好".to_owned(),
+            })));
         }
         Ok(())
     }
@@ -126,11 +114,45 @@ impl HostTransport for ScriptedHost {
             })
     }
 
-    fn close(&mut self) {}
+    fn heartbeat_ok(&self, _now: Instant) -> bool {
+        true
+    }
+
+    fn alive(&mut self) -> bool {
+        true
+    }
+
+    fn terminate(&mut self) -> Option<i32> {
+        None
+    }
+
+    fn shutdown(&mut self) {
+        self.reply(Frame::Control(Control::Closed));
+    }
 }
 
 fn bridge(mode: Mode) -> VoiceBridge<ScriptedHost> {
     VoiceBridge::new(ScriptedHost::new(mode))
+}
+
+fn bridge_with_sent(mode: Mode) -> (VoiceBridge<ScriptedHost>, Arc<Mutex<Vec<Control>>>) {
+    let host = ScriptedHost::new(mode);
+    let sent = host.sent_handle();
+    (VoiceBridge::new(host), sent)
+}
+
+fn drain_events(bridge: &mut VoiceBridge<ScriptedHost>, want: usize) -> Vec<VoiceEvent> {
+    let mut events = Vec::new();
+    for _ in 0..8 {
+        if events.len() >= want {
+            break;
+        }
+        match bridge.poll(Duration::from_secs(1)).expect("应有事件") {
+            Some(event) => events.push(event),
+            None => break,
+        }
+    }
+    events
 }
 
 #[test]
@@ -142,39 +164,76 @@ fn warmup_then_session_reaches_final() {
     assert_eq!(bridge.state(), BridgeState::Ready);
 
     bridge
-        .start("s-1", "full_duplex", "zh", &[])
+        .start("s-1", "full_duplex", "zh", &["车道".to_owned()])
         .expect("应能开始");
     assert_eq!(bridge.state(), BridgeState::InSession);
 
     bridge.push_audio(&[0u8; 640]).expect("应能推音频");
-    bridge.push_audio(&[0u8; 640]).expect("应能推音频");
-    assert_eq!(next_partial(&mut bridge), "你好");
+    let events = drain_events(&mut bridge, 3);
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, VoiceEvent::Partial(partial) if partial.text == "你好")),
+        "应有 partial：{events:?}"
+    );
 
     bridge.end_session("client_close").expect("应能结束");
     assert_eq!(bridge.state(), BridgeState::Ready);
-    assert_eq!(next_final(&mut bridge), "你好");
+    let events = drain_events(&mut bridge, 3);
+    assert!(
+        events.iter().any(
+            |event| matches!(event, VoiceEvent::Final(final_message) if final_message.text == "你好")
+        ),
+        "应有 final：{events:?}"
+    );
 }
 
-fn next_partial(bridge: &mut VoiceBridge<ScriptedHost>) -> String {
-    for _ in 0..4 {
-        match bridge.poll(Duration::from_secs(1)).expect("应有事件") {
-            Some(VoiceEvent::Partial(partial)) => return partial.text,
-            Some(_) => continue,
-            None => break,
-        }
-    }
-    panic!("没有 partial");
+#[test]
+fn outbound_controls_carry_fields() {
+    let (mut bridge, sent) = bridge_with_sent(Mode::Warm);
+    bridge
+        .warmup("asr", "demo", &"a".repeat(64), Duration::from_secs(1))
+        .expect("预热应成功");
+    bridge
+        .start("s-1", "full_duplex", "zh", &["车道".to_owned()])
+        .expect("开始");
+    bridge.cancel("barge").expect("取消");
+
+    let sent = sent.lock().expect("锁");
+    assert!(matches!(
+        sent.first(),
+        Some(Control::Warmup(warmup)) if warmup.manifest_sha256 == "a".repeat(64)
+    ));
+    assert!(sent.iter().any(|control| matches!(
+        control,
+        Control::SessionStart(start)
+            if start.session_id == "s-1"
+                && start.mode == "full_duplex"
+                && start.sample_rate == 16_000
+                && start.hot_words == vec!["车道".to_owned()]
+    )));
+    assert!(sent.iter().any(|control| matches!(
+        control,
+        Control::Cancel(cancel) if cancel.reason == "barge"
+    )));
 }
 
-fn next_final(bridge: &mut VoiceBridge<ScriptedHost>) -> String {
-    for _ in 0..4 {
-        match bridge.poll(Duration::from_secs(1)).expect("应有事件") {
-            Some(VoiceEvent::Final(final_message)) => return final_message.text,
-            Some(_) => continue,
-            None => break,
-        }
-    }
-    panic!("没有 final");
+#[test]
+fn warmup_is_idempotent_once_ready() {
+    let (mut bridge, sent) = bridge_with_sent(Mode::Warm);
+    bridge
+        .warmup("asr", "demo", &"0".repeat(64), Duration::from_secs(1))
+        .expect("预热应成功");
+    bridge
+        .warmup("asr", "demo", &"0".repeat(64), Duration::from_secs(1))
+        .expect("重复预热应直接成功");
+    let warmups = sent
+        .lock()
+        .expect("锁")
+        .iter()
+        .filter(|control| matches!(control, Control::Warmup(_)))
+        .count();
+    assert_eq!(warmups, 1, "重复预热不应再次下发");
 }
 
 #[test]
@@ -205,6 +264,10 @@ fn state_guards_are_enforced() {
         bridge.start("s-2", "full_duplex", "zh", &[]),
         Err(BridgeError::Busy)
     );
+    assert_eq!(
+        bridge.warmup("asr", "demo", &"0".repeat(64), Duration::from_secs(1)),
+        Err(BridgeError::Busy)
+    );
     bridge.cancel("barge").expect("取消应成功");
 }
 
@@ -218,30 +281,24 @@ fn timeout_on_silent_host() {
 }
 
 #[test]
-fn heartbeat_and_close_are_mapped() {
+fn shutdown_closes_and_rejects_later_calls() {
     let mut bridge = bridge(Mode::Warm);
     bridge
         .warmup("asr", "demo", &"0".repeat(64), Duration::from_secs(1))
         .expect("预热应成功");
-    bridge.start("s-1", "full_duplex", "zh", &[]).expect("开始");
-    match bridge.poll(Duration::from_secs(1)).expect("应有事件") {
-        Some(VoiceEvent::Heartbeat(beat)) => assert_eq!(beat.model_state, "cold"),
-        other => panic!("期望心跳，得到 {other:?}"),
-    }
-    bridge.close();
+    bridge.shutdown();
     assert_eq!(bridge.state(), BridgeState::Closed);
+    assert_eq!(
+        bridge.poll(Duration::from_millis(10)),
+        Err(BridgeError::Closed)
+    );
+    assert_eq!(
+        bridge.start("s", "full_duplex", "zh", &[]),
+        Err(BridgeError::Closed)
+    );
+    assert_eq!(bridge.push_audio(&[0, 0]), Err(BridgeError::Closed));
 }
 
-#[test]
-fn poll_returns_none_on_timeout() {
-    let mut bridge = bridge(Mode::Warm);
-    assert!(
-        bridge
-            .poll(Duration::from_millis(20))
-            .expect("应超时")
-            .is_none()
-    );
-}
 #[test]
 fn host_error_frame_becomes_event() {
     let mut bridge = bridge(Mode::Warm);
@@ -249,20 +306,15 @@ fn host_error_frame_becomes_event() {
         .warmup("asr", "demo", &"0".repeat(64), Duration::from_secs(1))
         .expect("预热应成功");
     bridge.start("s-1", "full_duplex", "zh", &[]).expect("开始");
-    let _ = bridge.poll(Duration::from_millis(20));
+    let _ = drain_events(&mut bridge, 1);
     bridge.cancel("barge").expect("取消应成功");
-    let mut found = None;
-    for _ in 0..4 {
-        match bridge.poll(Duration::from_secs(1)).expect("应有事件") {
-            Some(VoiceEvent::Error(error)) => {
-                found = Some(error.code);
-                break;
-            }
-            Some(_) => continue,
-            None => break,
-        }
-    }
-    assert_eq!(found.as_deref(), Some("tts_failed"));
+    let events = drain_events(&mut bridge, 3);
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, VoiceEvent::Error(error) if error.code == "tts_failed")),
+        "应出现错误事件：{events:?}"
+    );
 }
 
 #[test]
@@ -276,4 +328,22 @@ fn empty_audio_is_rejected() {
         bridge.push_audio(&[]),
         Err(BridgeError::Protocol(_))
     ));
+}
+
+#[test]
+fn poll_returns_none_on_timeout() {
+    let mut bridge = bridge(Mode::Warm);
+    assert!(
+        bridge
+            .poll(Duration::from_millis(20))
+            .expect("应超时")
+            .is_none()
+    );
+}
+
+#[test]
+fn into_inner_returns_transport() {
+    let bridge = bridge(Mode::Warm);
+    let host = bridge.into_inner();
+    assert!(matches!(host.mode, Mode::Warm));
 }
