@@ -89,3 +89,29 @@ fn tts_ready() -> bool {
 fn runtime_probe() -> (bool, bool) {
     (asr_ready(), tts_ready())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ready_json;
+
+    #[test]
+    fn ready_has_contract_fields() {
+        let value: serde_json::Value = serde_json::from_str(&ready_json()).expect("合法 JSON");
+        for field in [
+            "asrModel",
+            "ttsModel",
+            "sampleRate",
+            "workspaceId",
+            "replyDestination",
+            "sessionId",
+            "epoch",
+            "phase",
+            "tts",
+            "degraded",
+            "cues",
+        ] {
+            assert!(value.get(field).is_some(), "ready 缺字段 {field}");
+        }
+        assert_eq!(value["sampleRate"], 16_000);
+    }
+}

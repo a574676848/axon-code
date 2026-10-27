@@ -3,17 +3,19 @@
 //! 只服务于 `#[cfg(test)]`：这里不出现生产逻辑，测试脚手架不得反向污染适配器。
 //! 断言留在各测试文件里，本模块只提供「造服务、发请求、记日志」三件事。
 
+use super::gateway_voice_worker::HostLauncher;
 use super::*;
 use crate::application::ExternalEventEnvelope;
 use crate::infrastructure::gateway_auth::GatewayAuth;
 use crate::infrastructure::gateway_kernel::{
-    GatewayEgress, GatewayEventStream, GatewayIngress, GatewayKernel, GatewayKernelError,
-    GatewaySubscriptionRequest,
+    GatewayEgress, GatewayEvent, GatewayEventStream, GatewayIngress, GatewayKernel,
+    GatewayKernelError, GatewaySubscriptionRequest,
 };
 use axon_domain::InteractionId;
 use axon_protocol::SubmitInteractionReceipt;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc as std_mpsc;
 use std::sync::{Condvar, Mutex as StdMutex};
 
@@ -84,6 +86,14 @@ impl RecordingIngress {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .len()
     }
+
+    /// 已提交事件快照：语音用例据此核对车道键与渠道没有另起一套。
+    pub(super) fn submitted(&self) -> Vec<ExternalEventEnvelope> {
+        self.submitted
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
 }
 
 impl GatewayIngress for RecordingIngress {
@@ -131,6 +141,69 @@ impl GatewayEgress for RejectingEgress {
     }
 }
 
+/// 由测试脚本推送事件的出口：订阅后即可收到脚本投递的帧。
+pub(super) struct ScriptedEgress {
+    senders: StdMutex<Vec<std_mpsc::Sender<GatewayEvent>>>,
+    registered: AtomicUsize,
+}
+
+impl ScriptedEgress {
+    pub(super) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            senders: StdMutex::new(Vec::new()),
+            registered: AtomicUsize::new(0),
+        })
+    }
+
+    /// 向当前所有订阅者投递一帧；已断开的订阅自动清退。
+    pub(super) fn push(&self, event: GatewayEvent) {
+        let mut senders = self
+            .senders
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        senders.retain(|sender| sender.send(event.clone()).is_ok());
+    }
+
+    /// 已建立的订阅数；测试据此等待订阅线程就绪后再投递，避免竞态。
+    pub(super) fn subscriber_count(&self) -> usize {
+        self.registered.load(Ordering::Relaxed)
+    }
+}
+
+impl GatewayEgress for ScriptedEgress {
+    fn subscribe(
+        &self,
+        _request: GatewaySubscriptionRequest,
+    ) -> Result<Box<dyn GatewayEventStream>, GatewayKernelError> {
+        let (sender, receiver) = std_mpsc::channel();
+        self.senders
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(sender);
+        self.registered.fetch_add(1, Ordering::Relaxed);
+        Ok(Box::new(ScriptedEventStream { receiver }))
+    }
+}
+
+struct ScriptedEventStream {
+    receiver: std_mpsc::Receiver<GatewayEvent>,
+}
+
+impl GatewayEventStream for ScriptedEventStream {
+    fn recv_timeout(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<GatewayEvent>, GatewayKernelError> {
+        match self.receiver.recv_timeout(timeout) {
+            Ok(event) => Ok(Some(event)),
+            Err(std_mpsc::RecvTimeoutError::Timeout) => Ok(None),
+            Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+                Err(GatewayKernelError::Ingress("测试事件流已关闭".to_owned()))
+            }
+        }
+    }
+}
+
 /// 收集访问日志的 sink。
 #[derive(Default)]
 pub(super) struct RecordingSink {
@@ -175,9 +248,34 @@ impl TestServer {
         ingress: Arc<RecordingIngress>,
         timeouts: VoiceTimeouts,
     ) -> Self {
+        Self::start_with(ingress, timeouts, Arc::new(RejectingEgress), None)
+    }
+
+    /// 用脚本出口与进程内脚本宿主启动服务：语音回合闭环用例走这里。
+    pub(super) fn start_scripted(
+        ingress: Arc<RecordingIngress>,
+        timeouts: VoiceTimeouts,
+        host: HostLauncher,
+    ) -> (Self, Arc<ScriptedEgress>) {
+        let egress = ScriptedEgress::new();
+        let server = Self::start_with(
+            ingress,
+            timeouts,
+            Arc::clone(&egress) as Arc<dyn GatewayEgress>,
+            Some(host),
+        );
+        (server, egress)
+    }
+
+    fn start_with(
+        ingress: Arc<RecordingIngress>,
+        timeouts: VoiceTimeouts,
+        egress: Arc<dyn GatewayEgress>,
+        host: Option<HostLauncher>,
+    ) -> Self {
         let kernel = GatewayKernel::new_with_auth(
             Arc::clone(&ingress) as Arc<dyn GatewayIngress>,
-            Arc::new(RejectingEgress),
+            egress,
             TEST_CONNECTION_LIMIT,
             Some(Arc::new(
                 GatewayAuth::from_token(TEST_AUTH_TOKEN).expect("测试 token"),
@@ -186,9 +284,12 @@ impl TestServer {
         kernel.start().expect("启动测试 Gateway Kernel");
         let context = kernel.context().expect("运行中的 Gateway 上下文");
         let sink = Arc::new(RecordingSink::default());
-        let adapter = HttpGatewayAdapter::new("127.0.0.1:0", test_providers())
+        let mut adapter = HttpGatewayAdapter::new("127.0.0.1:0", test_providers())
             .with_log_sink(Arc::clone(&sink) as Arc<dyn LogSink>)
             .with_voice_timeouts(timeouts);
+        if let Some(host) = host {
+            adapter = adapter.with_voice_host(host);
+        }
         adapter.start(context).expect("启动 HTTP 适配器");
         let address = adapter.local_addr().expect("已绑定监听地址");
         Self {

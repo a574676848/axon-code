@@ -360,3 +360,7 @@ pub(super) fn drain_timeout_json() -> String {
     })
     .to_string()
 }
+
+#[cfg(test)]
+#[path = "gateway_voice_turn_tests.rs"]
+mod tests;

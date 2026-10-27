@@ -504,6 +504,22 @@ fn main() { println!("secret"); }
     }
 
     #[test]
+    fn stream_does_not_split_inside_a_code_fence() {
+        let mut stream = SpeechStream::new();
+        let sentences = stream.feed("```rust\nfn secret() {}\n```\n执行完成。");
+        let joined = sentences.join(" ");
+        assert!(
+            !joined.contains("fn secret"),
+            "围栏内的代码不得被当成正文读出来：{joined}"
+        );
+        assert!(joined.contains("代码已写入"), "围栏只读概括：{joined}");
+        assert!(
+            joined.contains("执行完成"),
+            "围栏后的正文必须保留：{joined}"
+        );
+    }
+
+    #[test]
     fn stream_emits_complete_sentences() {
         let mut stream = SpeechStream::new();
         assert!(stream.feed("第一句还没结束").is_empty());

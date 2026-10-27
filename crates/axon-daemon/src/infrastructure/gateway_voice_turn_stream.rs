@@ -131,3 +131,55 @@ fn response_of(payload_json: &str) -> Option<String> {
         .filter(|text| !text.is_empty())
         .map(str::to_owned)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ParsedEvent, parse_turn_event};
+    use crate::infrastructure::gateway_kernel::GatewayEvent;
+
+    fn event(event_type: &str, payload_json: &str) -> GatewayEvent {
+        GatewayEvent {
+            event_type: event_type.to_owned(),
+            payload_json: payload_json.to_owned(),
+            cursor: None,
+            replay: false,
+        }
+    }
+
+    #[test]
+    fn assistant_delta_is_extracted() {
+        let payload = r#"{"interactionId":"interaction-1","kind":{"type":"assistantMessage","payload":{"partId":"p1","messageId":"m1","content":"第一句。","delta":true}}}"#;
+        assert_eq!(
+            parse_turn_event(&event("wire_event", payload)),
+            Some(ParsedEvent::Delta("第一句。".to_owned()))
+        );
+    }
+
+    #[test]
+    fn non_delta_and_other_kinds_are_ignored() {
+        let complete = r#"{"kind":{"type":"assistantMessage","payload":{"content":"最终消息","delta":false}}}"#;
+        assert_eq!(parse_turn_event(&event("wire_event", complete)), None);
+        let tool = r#"{"kind":{"type":"toolCall","payload":{"name":"shell"}}}"#;
+        assert_eq!(parse_turn_event(&event("wire_event", tool)), None);
+    }
+
+    #[test]
+    fn terminal_events_carry_the_closing_response() {
+        let completed = r#"{"interactionId":"interaction-1","response":"结果已经写进报告。"}"#;
+        assert_eq!(
+            parse_turn_event(&event("turn_completed", completed)),
+            Some(ParsedEvent::Completed(Some(
+                "结果已经写进报告。".to_owned()
+            )))
+        );
+        assert_eq!(
+            parse_turn_event(&event("interaction.status", r#""understood""#)),
+            Some(ParsedEvent::Completed(None))
+        );
+        assert_eq!(
+            parse_turn_event(&event("interaction.status", r#""processing""#)),
+            None,
+            "非终态不得触发收口"
+        );
+    }
+}

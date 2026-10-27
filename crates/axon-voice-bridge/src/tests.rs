@@ -219,6 +219,42 @@ fn outbound_controls_carry_fields() {
 }
 
 #[test]
+fn speak_carries_turn_epoch_and_sequence() {
+    let (mut bridge, sent) = bridge_with_sent(Mode::Warm);
+    bridge
+        .warmup("asr", "demo", &"a".repeat(64), Duration::from_secs(1))
+        .expect("预热应成功");
+    assert!(
+        matches!(
+            bridge.speak("turn-1", 1, 1, "你好"),
+            Err(BridgeError::NoSession)
+        ),
+        "未开始会话不得下发朗读稿"
+    );
+    bridge.start("s-1", "full_duplex", "zh", &[]).expect("开始");
+    bridge
+        .speak("interaction-1:1", 1, 1, "第一句。")
+        .expect("应能下发朗读稿");
+    assert!(
+        matches!(
+            bridge.speak("turn", 1, 2, "  "),
+            Err(BridgeError::Protocol(_))
+        ),
+        "空朗读稿必须拒绝"
+    );
+
+    let sent = sent.lock().expect("锁");
+    assert!(sent.iter().any(|control| matches!(
+        control,
+        Control::Speak(message)
+            if message.turn_id == "interaction-1:1"
+                && message.epoch == 1
+                && message.seq == 1
+                && message.text == "第一句。"
+    )));
+}
+
+#[test]
 fn warmup_is_idempotent_once_ready() {
     let (mut bridge, sent) = bridge_with_sent(Mode::Warm);
     bridge

@@ -299,6 +299,9 @@ async fn wait_for_shutdown(mut shutdown: watch::Receiver<bool>) {
 #[path = "gateway_http_tests.rs"]
 mod gateway_http_tests;
 #[cfg(test)]
+#[path = "gateway_voice_closed_loop_tests.rs"]
+mod gateway_voice_closed_loop_tests;
+#[cfg(test)]
 #[path = "gateway_voice_ws_tests.rs"]
 mod gateway_voice_ws_tests;
 #[cfg(test)]
