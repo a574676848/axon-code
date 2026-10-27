@@ -19,8 +19,6 @@ pub struct VoicePreset {
     pub rate: f32,
     /// 音高（半音）。
     pub pitch_semitones: f32,
-    /// 需要的模型目录名；`None` 表示当前主模型即可。
-    pub required_model: Option<&'static str>,
     /// 是否默认。
     pub is_default: bool,
     /// 思考时的口癖。
@@ -37,7 +35,6 @@ pub const PRESETS: [VoicePreset; 4] = [
         speaker: 3,
         rate: 0.95,
         pitch_semitones: -1.0,
-        required_model: None,
         is_default: true,
         thinking_text: "让我想想……",
         ack_text: "嗯，我在听",
@@ -48,7 +45,6 @@ pub const PRESETS: [VoicePreset; 4] = [
         speaker: 7,
         rate: 1.05,
         pitch_semitones: 1.0,
-        required_model: None,
         is_default: false,
         thinking_text: "我看看哦",
         ack_text: "好嘞",
@@ -59,7 +55,6 @@ pub const PRESETS: [VoicePreset; 4] = [
         speaker: 11,
         rate: 1.08,
         pitch_semitones: 2.0,
-        required_model: None,
         is_default: false,
         thinking_text: "嗯哼，等我一下",
         ack_text: "来啦",
@@ -70,7 +65,6 @@ pub const PRESETS: [VoicePreset; 4] = [
         speaker: 15,
         rate: 1.06,
         pitch_semitones: -0.5,
-        required_model: None,
         is_default: false,
         thinking_text: "收到，处理中",
         ack_text: "明白",
@@ -94,10 +88,10 @@ pub fn default_preset() -> VoicePreset {
 }
 
 impl VoicePreset {
-    /// 是否可以在当前模型下使用。
+    /// 内置音色均可用；保留能力探测口径。
     #[must_use]
     pub fn available(self) -> bool {
-        self.required_model.is_none()
+        true
     }
 
     /// 落到合成画像；详略取人格派生值。
