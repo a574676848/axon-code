@@ -94,7 +94,6 @@ pub(super) async fn voice_tts(
                 .map_err(|_| "tts_failed")?;
             apply_gain(&mut samples, profile.energy_db);
             let samples = shift_pitch(&samples, profile.pitch_semitones);
-            let samples = shift_pitch(&samples, profile.pitch_semitones);
             Ok((encode_wav(&samples), planned.preset.id))
         })
         .await;
