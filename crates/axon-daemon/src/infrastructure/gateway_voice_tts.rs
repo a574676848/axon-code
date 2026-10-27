@@ -162,12 +162,14 @@ pub(super) async fn voice_cue(
         .get("kind")
         .and_then(|value| value.as_str())
         .unwrap_or_default();
-    let preset = value
+    let persona = value.get("persona").and_then(parse_persona_input);
+    let requested = value
         .get("presetId")
         .and_then(|value| value.as_str())
         .filter(|id| !id.is_empty())
-        .and_then(presets::resolve)
-        .unwrap_or_else(presets::default_preset);
+        .and_then(presets::resolve);
+    let hour = chrono::Local::now().hour() as u8;
+    let preset = voice_plan(persona, requested, hour).preset;
     if !preset.available() {
         return json_response(
             StatusCode::CONFLICT,
