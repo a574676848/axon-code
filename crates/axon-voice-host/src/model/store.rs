@@ -5,7 +5,10 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use super::manifest::{Manifest, ManifestError, ModelFamily};
-use super::sha256;
+use super::sha256::Sha256;
+
+/// 宿主支持的清单主版本。
+const SUPPORTED_MAJOR: u64 = 1;
 
 /// 解析结果。
 #[derive(Debug)]
@@ -120,9 +123,15 @@ impl ModelStore {
                 reason: "清单与目录不匹配".to_owned(),
             };
         }
+        if major_version(&manifest.version) > SUPPORTED_MAJOR {
+            return ModelResolution::Unusable {
+                reason: "模型版本高于宿主支持范围，请升级 Axon".to_owned(),
+            };
+        }
         match verify(&dir, &manifest) {
             Ok(()) => ModelResolution::Ready { manifest, dir },
-            Err(reason) => ModelResolution::Unusable { reason },
+            Err(VerifyError::Missing) => ModelResolution::Missing,
+            Err(VerifyError::Unusable(reason)) => ModelResolution::Unusable { reason },
         }
     }
 }
@@ -135,55 +144,51 @@ fn describe(error: &ManifestError) -> String {
     }
 }
 
-fn verify(dir: &Path, manifest: &Manifest) -> Result<(), String> {
+enum VerifyError {
+    Missing,
+    Unusable(String),
+}
+
+fn major_version(version: &str) -> u64 {
+    version
+        .split('.')
+        .next()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0)
+}
+
+fn verify(dir: &Path, manifest: &Manifest) -> Result<(), VerifyError> {
     for entry in &manifest.files {
         let path = dir.join(&entry.path);
-        let metadata =
-            std::fs::metadata(&path).map_err(|error| format!("{} 不可读：{error}", entry.path))?;
+        let metadata = match std::fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(_) => return Err(VerifyError::Missing),
+        };
         if !metadata.is_file() {
-            return Err(format!("{} 不是文件", entry.path));
+            return Err(VerifyError::Unusable(format!("{} 不是文件", entry.path)));
         }
         if metadata.len() != entry.bytes {
-            return Err(format!("{} 字节数不符", entry.path));
+            return Err(VerifyError::Unusable(format!("{} 字节数不符", entry.path)));
         }
-        let mut file =
-            File::open(&path).map_err(|error| format!("{} 不可读：{error}", entry.path))?;
+        let mut file = File::open(&path)
+            .map_err(|error| VerifyError::Unusable(format!("{} 不可读：{error}", entry.path)))?;
+        let mut hasher = Sha256::new();
         let mut buffer = vec![0u8; 64 * 1024];
-        let mut hasher = Sha256Stream::new();
         loop {
-            let read = file
-                .read(&mut buffer)
-                .map_err(|error| format!("{} 读取失败：{error}", entry.path))?;
+            let read = file.read(&mut buffer).map_err(|error| {
+                VerifyError::Unusable(format!("{} 读取失败：{error}", entry.path))
+            })?;
             if read == 0 {
                 break;
             }
             hasher.update(&buffer[..read]);
         }
         if hasher.finish_hex() != entry.sha256.to_lowercase() {
-            return Err(format!("{} 摘要不符", entry.path));
+            return Err(VerifyError::Unusable(format!("{} 摘要不符", entry.path)));
         }
     }
     Ok(())
 }
-
-struct Sha256Stream {
-    buffer: Vec<u8>,
-}
-
-impl Sha256Stream {
-    fn new() -> Self {
-        Self { buffer: Vec::new() }
-    }
-
-    fn update(&mut self, bytes: &[u8]) {
-        self.buffer.extend_from_slice(bytes);
-    }
-
-    fn finish_hex(&self) -> String {
-        sha256::hex_digest(&self.buffer)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{ModelResolution, ModelStore};
@@ -283,6 +288,34 @@ mod tests {
             "asr/demo/manifest.json",
             manifest_json("other", &hex_digest(b"data"), 4, "asr").as_bytes(),
         );
+        let store = ModelStore::new(&temp.0);
+        assert!(matches!(
+            store.resolve(ModelFamily::Asr, "demo"),
+            ModelResolution::Unusable { .. }
+        ));
+    }
+
+    #[test]
+    fn missing_file_is_reported_as_missing() {
+        let temp = TempRoot::new("no-file");
+        temp.write(
+            "asr/demo/manifest.json",
+            manifest_json("demo", &"0".repeat(64), 4, "asr").as_bytes(),
+        );
+        let store = ModelStore::new(&temp.0);
+        assert!(matches!(
+            store.resolve(ModelFamily::Asr, "demo"),
+            ModelResolution::Missing
+        ));
+    }
+
+    #[test]
+    fn future_major_version_is_unusable() {
+        let temp = TempRoot::new("future");
+        temp.write("asr/demo/model.bin", b"data");
+        let json = manifest_json("demo", &hex_digest(b"data"), 4, "asr")
+            .replace("\"version\": \"1.0.0\"", "\"version\": \"2.0.0\"");
+        temp.write("asr/demo/manifest.json", json.as_bytes());
         let store = ModelStore::new(&temp.0);
         assert!(matches!(
             store.resolve(ModelFamily::Asr, "demo"),
