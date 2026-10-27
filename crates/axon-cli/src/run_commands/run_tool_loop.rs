@@ -6,7 +6,7 @@ use std::{
     time::Instant,
 };
 
-use axon_agent_runtime::{ProviderToolCall, SPAWN_AGENT_TOOL_NAME, agent_run_failed_tool_receipt};
+use axon_agent_runtime::{ProviderToolCall, agent_run_failed_tool_receipt};
 use axon_domain::{CellId, SessionId, ToolConcurrencyPolicy};
 
 use super::{
