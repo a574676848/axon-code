@@ -93,15 +93,42 @@ impl ModelStore {
                 let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
                     return Err("模型目录名不是合法 UTF-8".to_owned());
                 };
-                match self.resolve(family, &name) {
-                    ModelResolution::Ready { .. } | ModelResolution::Missing => {}
-                    ModelResolution::Unusable { reason } => return Err(reason),
-                }
+                self.preflight_model(family, &name)?;
             }
         }
         Ok(())
     }
 
+    /// 预检单个模型：只校验清单与文件元信息，不做全量哈希。
+    ///
+    /// 启动阶段不读整模型，哈希留给 `warmup`，避免 100 到 300 MB 模型拖垮握手。
+    fn preflight_model(&self, family: ModelFamily, name: &str) -> Result<(), String> {
+        if !valid_name(name) {
+            return Err("模型名非法".to_owned());
+        }
+        let dir = self.model_dir(family, name);
+        let manifest_path = dir.join("manifest.json");
+        if !manifest_path.is_file() {
+            return Ok(());
+        }
+        let bytes =
+            std::fs::read(&manifest_path).map_err(|error| format!("清单不可读：{error}"))?;
+        let manifest = Manifest::parse(&bytes).map_err(|error| describe(&error))?;
+        if manifest.family != family.as_token() || manifest.name != name {
+            return Err("清单与目录不匹配".to_owned());
+        }
+        if major_version(&manifest.version) > SUPPORTED_MAJOR {
+            return Err("模型版本高于宿主支持范围，请升级 Axon".to_owned());
+        }
+        for entry in &manifest.files {
+            let metadata = std::fs::metadata(dir.join(&entry.path))
+                .map_err(|error| format!("{} 不可读：{error}", entry.path))?;
+            if !metadata.is_file() || metadata.len() != entry.bytes {
+                return Err(format!("{} 字节数不符", entry.path));
+            }
+        }
+        Ok(())
+    }
     /// 解析并校验指定模型。
     #[must_use]
     pub fn resolve(&self, family: ModelFamily, name: &str) -> ModelResolution {

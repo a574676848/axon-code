@@ -174,6 +174,7 @@ fn safe_relative(path: &str) -> bool {
     !path.is_empty()
         && !path.starts_with('/')
         && !path.starts_with('\\')
+        && !path.contains('\\')
         && !path.contains("..")
         && !path.contains(':')
 }

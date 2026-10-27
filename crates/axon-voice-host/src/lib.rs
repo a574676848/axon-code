@@ -1,8 +1,9 @@
 //! 语音宿主的控制面与父进程侧监督。
 //!
 //! 本 crate 同时提供二进制 `axon-voice-host` 与父进程使用的 [`supervisor`]。
-//! 当前具备：握手、会话开关、严格序列、心跳、关闭、退出码、模型清单校验与 WAV 解析；
-//! 本地推理在 Stage 4 接入，未接入时 `warmup` 返回 `model_missing`，不是占位实现。
+//! 当前具备：握手、会话开关、严格序列、心跳、关闭、退出码、模型清单校验与 WAV 解析。
+//! 本地推理在 Stage 4 接入：清单校验通过但无运行时回 `model_unusable`，模型缺失回
+//! `model_missing`，不会伪造 `warm`。
 
 pub mod audio;
 pub mod model;

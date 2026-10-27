@@ -170,14 +170,32 @@ fn missing_model_reports_install_path() {
 }
 
 #[test]
-fn digest_mismatch_fails_preflight_with_13() {
+fn digest_mismatch_is_detected_at_warmup() {
     let root = TempRoot::new("digest");
     root.write("asr/demo/model.bin", b"data");
-    root.write(
-        "asr/demo/manifest.json",
-        manifest("demo", &"0".repeat(64), 4, "1.0.0").as_bytes(),
-    );
-    assert_eq!(exit_code_of(root.path()), 13);
+    let json = manifest("demo", &"0".repeat(64), 4, "1.0.0");
+    root.write("asr/demo/manifest.json", json.as_bytes());
+    let mut client = client_for(root.path());
+    client
+        .send(&warmup(&hex_digest(json.as_bytes())))
+        .expect("写 warmup");
+    let (retryable, reason) = expect_error(&mut client, "model_unusable");
+    assert!(!retryable);
+    assert!(reason.unwrap_or_default().contains("摘要"));
+    assert_eq!(client.close().expect("关闭").code(), Some(0));
+}
+
+#[test]
+fn uppercase_manifest_digest_is_accepted() {
+    let root = TempRoot::new("manifest-upper");
+    let manifest_sha = install_model(&root);
+    let mut client = client_for(root.path());
+    client
+        .send(&warmup(&manifest_sha.to_uppercase()))
+        .expect("写 warmup");
+    let (_, reason) = expect_error(&mut client, "model_unusable");
+    assert!(reason.unwrap_or_default().contains("运行时"));
+    assert_eq!(client.close().expect("关闭").code(), Some(0));
 }
 
 #[test]
