@@ -132,7 +132,7 @@ pub fn list_agents_tool_definition() -> ToolDefinition {
         LIST_AGENTS_TOOL_ID,
         LIST_AGENTS_TOOL_NAME,
         "需要查看当前有哪些子代理及其状态时，列出任务路径、状态和摘要。",
-        ToolConcurrencyPolicy::Exclusive,
+        ToolConcurrencyPolicy::ParallelSafe,
         Vec::new(),
         vec![string_field(
             SUBAGENT_TOOL_PATH_PREFIX_FIELD,

@@ -325,7 +325,7 @@ mod tests {
             "计划状态机必须限定单 in_progress"
         );
         assert!(tool_policy.contains("多个互不依赖的 sidecar 应在同一条消息里一次发出"));
-        assert!(tool_policy.contains("同一文件的多次修改要么合成一个单元，要么串行"));
+        assert!(tool_policy.contains("写与编辑一律独占"));
         assert!(
             tool_policy.contains("仅当下一步动作依赖该结果时用 `run_in_background: false`"),
             "委托判据必须写明同步等待的唯一条件"

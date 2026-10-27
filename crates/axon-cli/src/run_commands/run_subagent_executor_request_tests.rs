@@ -176,13 +176,21 @@ fn provider_child_request_inherits_parent_runtime_context() {
             .any(|tool| axon_agent_runtime::GoalToolRuntime::is_goal_tool(&tool.qualified_name)),
         "Goal 账本只属于主 turn，子代理 payload 必须过滤 builtin.goal_*"
     );
-    assert!(
-        child_request
-            .model_payload
-            .model_tools
-            .iter()
-            .any(|tool| tool.qualified_name == "builtin.delegate_to_fast")
-    );
+    // PAR-1 §8.2：委派与控制类工具只在主代理面。
+    for hidden in [
+        "builtin.delegate_to_fast",
+        "builtin.send_message",
+        "builtin.list_agents",
+    ] {
+        assert!(
+            !child_request
+                .model_payload
+                .model_tools
+                .iter()
+                .any(|tool| tool.qualified_name == hidden),
+            "子代理 payload 必须过滤 {hidden}"
+        );
+    }
     assert!(
         child_request
             .model_payload

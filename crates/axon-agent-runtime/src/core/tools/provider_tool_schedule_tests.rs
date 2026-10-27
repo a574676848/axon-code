@@ -302,10 +302,14 @@ fn provider_job_tool_calls_are_evaluated_without_blocking() {
             "{} 不得被「缺少调用级权限判定器」的兜底分支禁止",
             entry.tool_call.name
         );
+        let expected = if entry.tool_call.name == "builtin.job_output" {
+            ToolConcurrencyPolicy::ParallelSafe
+        } else {
+            ToolConcurrencyPolicy::Exclusive
+        };
         assert_eq!(
-            entry.concurrency_policy,
-            ToolConcurrencyPolicy::ParallelSafe,
-            "{} 必须保持并行安全，否则后台任务仍会拖垮整批工具",
+            entry.concurrency_policy, expected,
+            "{} 的并发声明必须与 PAR-1 第 2 节一致",
             entry.tool_call.name
         );
     }

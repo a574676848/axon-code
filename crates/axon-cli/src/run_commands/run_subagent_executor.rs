@@ -139,6 +139,10 @@ pub(crate) struct ProviderRunSubagentEnvironment {
 const MAIN_TURN_ONLY_TOOL_QUALIFIED_NAMES: &[&str] = &[
     axon_agent_runtime::UPDATE_PLAN_TOOL_QUALIFIED_NAME,
     axon_agent_runtime::ASK_USER_QUESTION_TOOL_QUALIFIED_NAME,
+    // PAR-1 §8.2：委派与控制类工具只属于主代理面。
+    "builtin.send_message",
+    "builtin.list_agents",
+    "builtin.delegate_to_fast",
 ];
 
 /// 默认 provider 子代理执行器。

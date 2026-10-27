@@ -94,7 +94,7 @@ pub(crate) fn job_kill_tool_definition() -> ToolDefinition {
         description: "终止一个临时 Job（Shell 后台作业或后台子代理）。job_id 必须逐字复制最近一次回执中的 job_id；job_id 与 session_id、AgentPath 属于不同通道，不可互传。对后台子代理执行完整中断语义：中止当前 turn、关闭会话、投影终态并触发完成通知。作业已进入终态时返回提示而非重复终止。终止后仍可用 job_output 读取已产生的输出与终态。".to_owned(),
         schema,
         enabled: true,
-        concurrency_policy: axon_domain::ToolConcurrencyPolicy::ParallelSafe,
+        concurrency_policy: axon_domain::ToolConcurrencyPolicy::Exclusive,
         output_policy: ToolOutputPolicy::BoundedSummary,
         permission_policy: ToolPermissionPolicy::CallEvaluated,
     }
@@ -104,18 +104,17 @@ pub(crate) fn job_kill_tool_definition() -> ToolDefinition {
 mod tests {
     use super::*;
 
-    /// 作业工具必须是 `ParallelSafe`：这正是本 WP 的核心收益：
-    /// 含作业工具的批次不再因为后台任务而被强制串行。
+    /// `job_output` 只读快照可并行；`job_kill` 改运行态，必须独占。
     #[test]
-    fn job_tools_are_parallel_safe() {
-        for definition in [job_output_tool_definition(), job_kill_tool_definition()] {
-            assert_eq!(
-                definition.concurrency_policy,
-                axon_domain::ToolConcurrencyPolicy::ParallelSafe,
-                "{} 必须是 ParallelSafe，否则后台任务仍会拖垮整批工具",
-                definition.name
-            );
-        }
+    fn job_tools_split_read_and_mutation() {
+        assert_eq!(
+            job_output_tool_definition().concurrency_policy,
+            axon_domain::ToolConcurrencyPolicy::ParallelSafe
+        );
+        assert_eq!(
+            job_kill_tool_definition().concurrency_policy,
+            axon_domain::ToolConcurrencyPolicy::Exclusive
+        );
     }
 
     /// 两个工具的 ID 与名字不得重复或与既有工具冲突。
