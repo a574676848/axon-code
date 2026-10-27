@@ -233,3 +233,34 @@ fn speak_without_session_exits_11() {
     .expect("写 speak");
     assert_eq!(host.code(), 11);
 }
+#[test]
+fn outbox_overflow_exits_12() {
+    let mut host = RawHost::spawn(BUILD_COMMIT);
+    assert!(matches!(
+        host.read(),
+        Frame::Control(Control::Ready(Ready { .. }))
+    ));
+    // 不再读取 stdout，持续灌入 warmup：宿主回执队列（容量 1）与管道写满后应退出 12。
+    let warmup = Control::Warmup(Warmup {
+        family: "asr".to_owned(),
+        model: "fixture".to_owned(),
+        manifest_sha256: "0".repeat(64),
+    });
+    for _ in 0..2000 {
+        if write_frame(&mut host.stdin, &warmup).is_err() {
+            break;
+        }
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = host.child.try_wait().expect("查询应成功") {
+            assert_eq!(status.code(), Some(12), "应以控制通道溢出退出");
+            return;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = host.child.kill();
+            panic!("宿主未在 10 s 内因回执队列溢出退出");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
