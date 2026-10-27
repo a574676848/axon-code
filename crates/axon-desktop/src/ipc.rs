@@ -516,7 +516,7 @@ pub fn voice_presets() -> Result<serde_json::Value, String> {
 }
 
 /// 从人格摘要里取语音需要的表达参数；字段缺失时返回 `None`，交给默认基线。
-fn persona_payload() -> Option<serde_json::Value> {
+pub(crate) fn persona_payload() -> Option<serde_json::Value> {
     let summary = crate::persona::persona_summary().ok()?;
     let voice = summary
         .get("soul")

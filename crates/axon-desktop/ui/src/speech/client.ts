@@ -73,3 +73,67 @@ export async function requestVoiceAudio(
     mimeType: stringField(record, 'mimeType', 'mime_type') || 'audio/wav',
   };
 }
+
+/*
+ * 试听请求。
+ *
+ * 试听与朗读共用同一副嗓子，但失败口径更细：宿主把 504、409 与 400 分成
+ * `preview_timeout:`、`voice_unavailable:` 与 `preview_invalid:` 三个前缀，
+ * 这一层只把前缀翻译成分类与中文结论，界面不解析错误字符串。
+ */
+
+/** 试听失败分类。 */
+export type VoicePreviewFailureKind = 'timeout' | 'unavailable' | 'invalid' | 'failed';
+
+/** 试听超时的固定文案，与 PROTOCOL §4.2 的 `preview_timeout` 一致。 */
+export const PREVIEW_TIMEOUT_MESSAGE = '试听超时，请重试或换一个音色';
+
+/** 试听失败：带分类，调用方据此决定展示哪一句。 */
+export class VoicePreviewFailure extends Error {
+  readonly kind: VoicePreviewFailureKind;
+
+  constructor(kind: VoicePreviewFailureKind, message: string) {
+    super(message);
+    this.name = 'VoicePreviewFailure';
+    this.kind = kind;
+  }
+}
+
+/** 把宿主抛出的前缀翻译成试听失败分类。 */
+export function classifyPreviewFailure(failure: unknown): VoicePreviewFailure {
+  const message =
+    failure instanceof Error
+      ? failure.message
+      : typeof failure === 'string'
+        ? failure
+        : '';
+  if (message.startsWith('preview_timeout:')) {
+    return new VoicePreviewFailure('timeout', PREVIEW_TIMEOUT_MESSAGE);
+  }
+  if (message.startsWith('voice_unavailable:')) {
+    const reason = message.slice('voice_unavailable:'.length).trim();
+    return new VoicePreviewFailure('unavailable', reason || '该音色当前不可用');
+  }
+  if (message.startsWith('preview_invalid:')) {
+    const reason = message.slice('preview_invalid:'.length).trim();
+    return new VoicePreviewFailure('invalid', reason || '试听参数不正确');
+  }
+  return new VoicePreviewFailure('failed', message || '试听失败，请稍后重试');
+}
+
+/** 试听一个音色；`presetId` 为 null 表示跟随人格。 */
+export async function requestVoicePreview(presetId: string | null): Promise<VoiceAudioPayload> {
+  let raw: unknown;
+  try {
+    raw = await call<Record<string, unknown>>('voice_preview', { presetId });
+  } catch (failure) {
+    throw classifyPreviewFailure(failure);
+  }
+  const record = (raw ?? {}) as Record<string, unknown>;
+  const audioBase64 = stringField(record, 'audioBase64', 'audio_base64');
+  if (audioBase64.length === 0) throw new VoicePreviewFailure('failed', '试听没有返回音频');
+  return {
+    audioBase64,
+    mimeType: stringField(record, 'mimeType', 'mime_type') || 'audio/wav',
+  };
+}

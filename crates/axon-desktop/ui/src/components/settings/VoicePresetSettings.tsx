@@ -1,6 +1,15 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { AlertCircleIcon, CheckIcon, RetryIcon } from '../../icons';
+import {
+  AlertCircleIcon,
+  CheckIcon,
+  RetryIcon,
+  SpeakerIcon,
+  SpinnerIcon,
+  StopIcon,
+} from '../../icons';
 import * as ipc from '../../ipc';
+import { createAudioPlayer } from '../../speech/audioPlayer';
+import { requestVoicePreview } from '../../speech/client';
 import {
   FOLLOW_PERSONA_ID,
   parseVoicePresets,
@@ -10,7 +19,7 @@ import {
   type VoicePreset,
   type VoicePresetRow,
 } from '../../speech';
-import { Button } from '../ui/controls';
+import { Button, IconButton } from '../ui/controls';
 import { Chip, EmptyState, ListRow, LoadingState, Text } from '../ui/surfaces';
 
 /*
@@ -45,7 +54,7 @@ const RadioMark: React.FC<{ checked: boolean }> = ({ checked }) => (
 function rowShell(row: VoicePresetRow): string {
   const base = 'flex w-full items-center gap-2 rounded-md border px-3 py-2 transition-colors duration-100';
   if (row.checked) return `${base} border-primary bg-hover/60 shadow-lift`;
-  return `${base} border-border`;
+  return `${base} border-border ${row.available ? 'hover:border-border-strong' : ''}`;
 }
 
 /** 行内方向键：上下一项或首末项，可选项之间循环。 */
@@ -57,55 +66,90 @@ interface PresetRowProps {
   register: (element: HTMLButtonElement | null) => void;
   onNavigate: RowNavigate;
   onSelect: (id: string) => void;
+  /** 这一行正在播放试听。 */
+  previewing: boolean;
+  /** 这一行正在等待试听音频。 */
+  previewBusy: boolean;
+  /** 试听入口；未接入时整行不渲染试听按钮。 */
+  onPreview?: () => void;
+  /** 试听按钮是否禁用（停用预设或清单未就绪）。 */
+  previewDisabled: boolean;
 }
 
-const PresetRow: React.FC<PresetRowProps> = ({ row, register, onNavigate, onSelect }) => (
-  <button
-    ref={register}
-    type="button"
-    role="radio"
-    aria-checked={row.checked}
-    aria-disabled={row.available ? undefined : true}
-    tabIndex={row.checked ? 0 : -1}
-    disabled={!row.available}
-    onClick={() => onSelect(row.id)}
-    onKeyDown={(event) => {
-      if (event.key === 'ArrowDown' || event.key === 'ArrowRight') {
-        event.preventDefault();
-        onNavigate(1);
-        return;
-      }
-      if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
-        event.preventDefault();
-        onNavigate(-1);
-        return;
-      }
-      if (event.key === 'Home') {
-        event.preventDefault();
-        onNavigate('first');
-        return;
-      }
-      if (event.key === 'End') {
-        event.preventDefault();
-        onNavigate('last');
-      }
-    }}
-    className={`${rowShell(row)} text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus ${
-      row.available ? 'cursor-pointer hover:border-border-strong' : 'cursor-not-allowed'
-    }`}
-  >
-    <RadioMark checked={row.checked} />
-    <Text
-      size="sm"
-      tone={row.available ? 'primary' : 'tertiary'}
-      strong={row.checked}
-      truncate
-      className="min-w-0 flex-1"
+const PresetRow: React.FC<PresetRowProps> = ({
+  row,
+  register,
+  onNavigate,
+  onSelect,
+  previewing,
+  previewBusy,
+  onPreview,
+  previewDisabled,
+}) => (
+  <div className={rowShell(row)}>
+    <button
+      ref={register}
+      type="button"
+      role="radio"
+      aria-checked={row.checked}
+      aria-disabled={row.available ? undefined : true}
+      tabIndex={row.checked ? 0 : -1}
+      disabled={!row.available}
+      onClick={() => onSelect(row.id)}
+      onKeyDown={(event) => {
+        if (event.key === 'ArrowDown' || event.key === 'ArrowRight') {
+          event.preventDefault();
+          onNavigate(1);
+          return;
+        }
+        if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
+          event.preventDefault();
+          onNavigate(-1);
+          return;
+        }
+        if (event.key === 'Home') {
+          event.preventDefault();
+          onNavigate('first');
+          return;
+        }
+        if (event.key === 'End') {
+          event.preventDefault();
+          onNavigate('last');
+        }
+      }}
+      className={`flex min-w-0 flex-1 items-center gap-2 rounded-xs text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus ${
+        row.available ? 'cursor-pointer' : 'cursor-not-allowed'
+      }`}
     >
-      {row.name}
-    </Text>
-    {!row.available && <Chip>当前不可用</Chip>}
-  </button>
+      <RadioMark checked={row.checked} />
+      <Text
+        size="sm"
+        tone={row.available ? 'primary' : 'tertiary'}
+        strong={row.checked}
+        truncate
+        className="min-w-0 flex-1"
+      >
+        {row.name}
+      </Text>
+      {!row.available && <Chip>当前不可用</Chip>}
+    </button>
+    {onPreview !== undefined && (
+      <IconButton
+        label={previewing ? `停止试听 ${row.name}` : `试听 ${row.name}`}
+        disabled={previewDisabled || previewBusy}
+        onClick={onPreview}
+        className={previewing ? 'bg-active text-text-primary' : ''}
+      >
+        {previewBusy ? (
+          <SpinnerIcon size={14} className="animate-spin" />
+        ) : previewing ? (
+          <StopIcon size={14} />
+        ) : (
+          <SpeakerIcon size={14} />
+        )}
+      </IconButton>
+    )}
+  </div>
 );
 
 export interface VoicePresetChoicesProps {
@@ -121,6 +165,12 @@ export interface VoicePresetChoicesProps {
   onSelect: (id: string) => void;
   /** 清单失败后重试。 */
   onRetry: () => void;
+  /** 正在播放试听的预设 id；null 表示没有音频在放。 */
+  previewingId?: string | null;
+  /** 正在等待试听音频的预设 id。 */
+  previewBusyId?: string | null;
+  /** 试听动作；不传时不渲染试听按钮。 */
+  onPreview?: (id: string) => void;
 }
 
 /** 一列单选项：就绪时渲染整组，加载与失败各有自己的形态。 */
@@ -131,6 +181,9 @@ export const VoicePresetChoices: React.FC<VoicePresetChoicesProps> = ({
   selectedId,
   onSelect,
   onRetry,
+  previewingId = null,
+  previewBusyId = null,
+  onPreview,
 }) => {
   const rows = voicePresetRows(presets, selectedId);
   const refs = React.useRef<Array<HTMLButtonElement | null>>([]);
@@ -183,6 +236,10 @@ export const VoicePresetChoices: React.FC<VoicePresetChoicesProps> = ({
           }}
           onNavigate={(offset) => navigate(index, offset)}
           onSelect={onSelect}
+          previewing={previewingId === row.id}
+          previewBusy={previewBusyId === row.id}
+          onPreview={onPreview === undefined ? undefined : () => onPreview(row.id)}
+          previewDisabled={!row.available}
         />
       ))}
     </div>
@@ -200,6 +257,76 @@ export const VoicePresetSettings: React.FC = () => {
   const [status, setStatus] = useState<VoicePresetStatus>('loading');
   const [presets, setPresets] = useState<VoicePreset[]>([]);
   const [message, setMessage] = useState('');
+  /** 正在播放试听的预设 id；null 表示没有音频在放。 */
+  const [previewingId, setPreviewingId] = useState<string | null>(null);
+  /** 正在等待试听音频的预设 id。 */
+  const [previewBusyId, setPreviewBusyId] = useState<string | null>(null);
+  /** 试听失败的中文结论；成功或换一行即清空。 */
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  /** 当前播放器；同一时刻只保留一段试听音频。 */
+  const playerRef = React.useRef<ReturnType<typeof createAudioPlayer> | null>(null);
+  /** 请求代次：连点或换行时旧回执直接作废，不覆盖新的试听。 */
+  const requestRef = React.useRef(0);
+
+  const stopPreview = useCallback(() => {
+    requestRef.current += 1;
+    playerRef.current?.stop();
+    playerRef.current = null;
+    setPreviewingId(null);
+    setPreviewBusyId(null);
+  }, []);
+
+  const togglePreview = useCallback(
+    async (id: string) => {
+      if (previewingId === id) {
+        stopPreview();
+        return;
+      }
+      stopPreview();
+      setPreviewError(null);
+      const generation = requestRef.current;
+      setPreviewBusyId(id);
+      try {
+        const payload = await requestVoicePreview(id === FOLLOW_PERSONA_ID ? null : id);
+        if (requestRef.current !== generation) return;
+        const player = createAudioPlayer(payload, {
+          onEnded: () => {
+            if (requestRef.current !== generation) return;
+            playerRef.current = null;
+            setPreviewingId(null);
+          },
+          onFailed: (failure) => {
+            if (requestRef.current !== generation) return;
+            playerRef.current = null;
+            setPreviewingId(null);
+            setPreviewError(
+              failure instanceof Error && failure.message.length > 0
+                ? failure.message
+                : '试听播放失败',
+            );
+          },
+        });
+        playerRef.current = player;
+        setPreviewingId(id);
+        await player.play();
+      } catch (failure) {
+        if (requestRef.current !== generation) return;
+        setPreviewError(failure instanceof Error ? failure.message : '试听失败，请稍后重试');
+      } finally {
+        if (requestRef.current === generation) setPreviewBusyId(null);
+      }
+    },
+    [previewingId, stopPreview],
+  );
+
+  useEffect(
+    () => () => {
+      requestRef.current += 1;
+      playerRef.current?.stop();
+      playerRef.current = null;
+    },
+    [],
+  );
 
   const load = useCallback(async () => {
     setStatus('loading');
@@ -237,9 +364,22 @@ export const VoicePresetSettings: React.FC = () => {
           presets={presets}
           message={message}
           selectedId={selectedId}
-          onSelect={(id) => voicePreferences.setPresetId(id)}
+          onSelect={(id) => {
+            stopPreview();
+            voicePreferences.setPresetId(id);
+          }}
           onRetry={() => void load()}
+          previewingId={previewingId}
+          previewBusyId={previewBusyId}
+          onPreview={(id) => void togglePreview(id)}
         />
+        {previewError !== null && (
+          <div role="status" aria-live="polite" className="max-w-[420px] pt-1">
+            <Text size="xs" tone="danger">
+              {previewError}
+            </Text>
+          </div>
+        )}
       </div>
     </ListRow>
   );

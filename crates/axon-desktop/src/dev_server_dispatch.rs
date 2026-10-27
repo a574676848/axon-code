@@ -64,6 +64,10 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
             Ok(serde_json::to_value(ipc::config_validate_values(values)).map_err(stringify)?)
         }
         "voice_presets" => Ok(serde_json::to_value(ipc::voice_presets()).map_err(stringify)?),
+        "voice_preview" => Ok(serde_json::to_value(crate::voice::preview_blocking(
+            optional_string("presetId"),
+        ))
+        .map_err(stringify)?),
         "voice_tts" => {
             let text = args
                 .get("text")

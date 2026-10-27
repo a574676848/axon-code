@@ -369,6 +369,36 @@ mod tests {
         assert!(!rejected.contains("凭据"), "{rejected}");
         assert!(rejected.contains("event_rejected"), "{rejected}");
     }
+
+    #[test]
+    fn preview_status_classification_follows_protocol_codes() {
+        use super::{VoicePreviewError, classify_preview_status};
+
+        let unavailable = classify_preview_status(
+            409,
+            r#"{"error":"voice_unavailable","message":"语音运行时未就绪，请先完成语音依赖安装"}"#,
+        );
+        assert!(
+            matches!(unavailable, VoicePreviewError::Unavailable(ref reason) if reason.contains("语音运行时未就绪")),
+            "{unavailable:?}"
+        );
+
+        let timeout = classify_preview_status(504, r#"{"error":"preview_timeout"}"#);
+        assert!(matches!(timeout, VoicePreviewError::Timeout));
+
+        let invalid = classify_preview_status(400, r#"{"error":"invalid_json"}"#);
+        assert!(
+            matches!(invalid, VoicePreviewError::Invalid(ref reason) if !reason.is_empty()),
+            "{invalid:?}"
+        );
+
+        // 没有服务端文案时按错误码兜底，不把空串交给界面。
+        let fallback = classify_preview_status(409, r#"{"error":"tts_failed"}"#);
+        assert!(
+            matches!(fallback, VoicePreviewError::Unavailable(ref reason) if reason.contains("朗读失败")),
+            "{fallback:?}"
+        );
+    }
 }
 
 /// 语音合成失败分类：409 归为运行时不可用，其余归为请求失败。
@@ -444,4 +474,132 @@ fn classify_voice_status(status: u16, body: String) -> VoiceTtsError {
 /// 网关不可达、鉴权失败或响应不是合法 JSON。
 pub fn get_voice_presets() -> Result<serde_json::Value, String> {
     get_json("/voice/presets")
+}
+
+/// 试听音频：WAV 字节与网关实际采用的音色。
+pub struct VoicePreviewAudio {
+    /// WAV 字节。
+    pub bytes: Vec<u8>,
+    /// 网关响应头给出的实际音色；缺失时为空串。
+    pub preset_id: String,
+}
+
+/// 试听失败分类：超时、不可用、参数非法与其它失败各有各的文案。
+#[derive(Debug)]
+pub enum VoicePreviewError {
+    /// 504：合成超时。
+    Timeout,
+    /// 409：语音运行时或音色不可用。
+    Unavailable(String),
+    /// 400：请求体不合法。
+    Invalid(String),
+    /// 其它失败。
+    Failed(String),
+}
+
+impl std::fmt::Display for VoicePreviewError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Timeout => f.write_str("试听超时，请重试或换一个音色"),
+            Self::Unavailable(reason) | Self::Invalid(reason) | Self::Failed(reason) => {
+                f.write_str(reason)
+            }
+        }
+    }
+}
+
+/// 调用网关合成一句试听，返回 WAV 字节。
+///
+/// # Errors
+///
+/// 网关不可达、鉴权失败、语音运行时未就绪或合成超时。
+pub fn post_voice_preview(
+    preset_id: Option<&str>,
+    persona: Option<&serde_json::Value>,
+) -> Result<VoicePreviewAudio, VoicePreviewError> {
+    let url = endpoint("/voice/preview").map_err(VoicePreviewError::Failed)?;
+    let mut request = agent()
+        .post(&url)
+        .header("accept", "audio/wav")
+        .header("content-type", "application/json");
+    if let Some(token) = api_token() {
+        request = request.header("authorization", &format!("Bearer {token}"));
+    }
+    let payload = serde_json::json!({
+        "presetId": preset_id.unwrap_or(""),
+        "persona": persona,
+    });
+    let response = match request.send(payload.to_string()) {
+        Ok(response) => response,
+        Err(ureq::Error::StatusCode(status)) => {
+            return Err(classify_preview_status(status, ""));
+        }
+        Err(error) => return Err(VoicePreviewError::Failed(format!("网关不可达：{error}"))),
+    };
+    let status = response.status().as_u16();
+    let preset_id = response
+        .headers()
+        .get("x-voice-preset")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    if !(200..300).contains(&status) {
+        let body = response.into_body().read_to_string().unwrap_or_default();
+        return Err(classify_preview_status(status, &body));
+    }
+    let mut body = response.into_body();
+    let bytes = body
+        .read_to_vec()
+        .map_err(|error| VoicePreviewError::Failed(format!("读取试听音频失败：{error}")))?;
+    Ok(VoicePreviewAudio { bytes, preset_id })
+}
+
+/// 把试听接口的非 2xx 响应翻译成可执行结论。
+///
+/// 409 与 400 的响应体带服务端中文文案，优先原样展示；没有文案时按错误码兜底。
+fn classify_preview_status(status: u16, body: &str) -> VoicePreviewError {
+    let value = serde_json::from_str::<serde_json::Value>(body).ok();
+    let code = value
+        .as_ref()
+        .and_then(|value| value.get("error"))
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let message = value
+        .as_ref()
+        .and_then(|value| value.get("message"))
+        .and_then(|value| value.as_str())
+        .filter(|text| !text.is_empty());
+    let fallback = match code {
+        "voice_unavailable" => Some("语音运行时未就绪，请先完成语音依赖安装"),
+        "tts_failed" => Some("朗读失败，请稍后重试"),
+        _ => None,
+    };
+    match status {
+        409 => VoicePreviewError::Unavailable(
+            message
+                .or(fallback)
+                .unwrap_or("该音色当前不可用")
+                .to_owned(),
+        ),
+        504 => VoicePreviewError::Timeout,
+        400 => {
+            VoicePreviewError::Invalid(message.or(fallback).unwrap_or("试听参数不正确").to_owned())
+        }
+        _ => VoicePreviewError::Failed(gateway_status_message(status, body)),
+    }
+}
+
+/// 语音 WebSocket 地址：与工作台 HTTP 面同端口，凭据走查询串。
+///
+/// 浏览器 WebSocket 不能携带握手头，因此语音上行由宿主建立连接；
+/// 地址解析与凭据读取集中在这里，命令里不另拼一份。
+pub fn voice_websocket_url() -> Result<String, String> {
+    let bind = config_text(KEY_HTTP_BIND).unwrap_or_else(|| FALLBACK_HTTP_BIND.to_string());
+    let host = probe_target(&bind);
+    let mut url = url::Url::parse(&format!("ws://{host}/api/v1/voice"))
+        .map_err(|error| format!("构造语音连接地址失败：{error}"))?;
+    if let Some(token) = api_token() {
+        url.query_pairs_mut().append_pair("api_token", &token);
+    }
+    Ok(url.to_string())
 }

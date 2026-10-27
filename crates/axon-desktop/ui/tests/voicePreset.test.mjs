@@ -5,7 +5,11 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { FOLLOW_PERSONA_ID, parseVoicePresets, voicePresetRows } from '../src/speech/presets.ts';
 import { createVoicePreferences } from '../src/speech/preferences.ts';
 import { VOICE_STORAGE_KEYS } from '../src/speech/keys.ts';
-import { currentPresetId } from '../src/speech/client.ts';
+import {
+  classifyPreviewFailure,
+  currentPresetId,
+  PREVIEW_TIMEOUT_MESSAGE,
+} from '../src/speech/client.ts';
 import { VoicePresetChoices } from '../src/components/settings/VoicePresetSettings.tsx';
 
 /*
@@ -169,4 +173,49 @@ test('回执形状不对时只留跟随人格，读取中给加载态', () => {
     { id: '', name: '跟随人格（默认）', available: true, checked: true },
   ]);
   assert.match(renderChoices({ status: 'loading', presets: [] }), /正在读取音色预设/);
+});
+
+test('试听失败按协议前缀分类，504 与 409 各有中文结论', () => {
+  const timeout = classifyPreviewFailure(new Error('preview_timeout: 网关超时'));
+  assert.equal(timeout.kind, 'timeout');
+  assert.equal(timeout.message, PREVIEW_TIMEOUT_MESSAGE);
+
+  const unavailable = classifyPreviewFailure(
+    'voice_unavailable: 语音运行时未就绪，请先完成语音依赖安装',
+  );
+  assert.equal(unavailable.kind, 'unavailable');
+  assert.match(unavailable.message, /语音运行时未就绪/);
+
+  const invalid = classifyPreviewFailure('preview_invalid: 试听参数不正确');
+  assert.equal(invalid.kind, 'invalid');
+  assert.match(invalid.message, /试听参数/);
+
+  const failed = classifyPreviewFailure('');
+  assert.equal(failed.kind, 'failed');
+  assert.match(failed.message, /试听失败/);
+});
+
+test('每行一个试听按钮，正在播放换成停止，停用预设的试听入口禁用', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(VoicePresetChoices, {
+      status: 'ready',
+      presets: parseVoicePresets({ presets: GATEWAY_PRESETS }),
+      message: '',
+      selectedId: FOLLOW_PERSONA_ID,
+      onSelect: () => undefined,
+      onRetry: () => undefined,
+      previewingId: 'calm-elegant',
+      previewBusyId: null,
+      onPreview: () => undefined,
+    }),
+  );
+  // 六行里正在播放的一行显示停止，其余五行是试听。
+  assert.match(html, /aria-label="停止试听 冷静知性"/);
+  assert.equal((html.match(/aria-label="试听 /g) ?? []).length, 5);
+  assert.equal((html.match(/aria-label="停止试听 /g) ?? []).length, 1);
+  // 停用预设的试听按钮与单选项都禁用。
+  assert.match(html, /aria-label="试听 甜软台腔"[^>]*disabled/s);
+  // 试听按钮不改变单选组的语义：仍然只有一个选中项。
+  assert.equal((html.match(/role="radio"/g) ?? []).length, 6);
+  assert.equal((html.match(/aria-checked="true"/g) ?? []).length, 1);
 });
