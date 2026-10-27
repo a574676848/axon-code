@@ -66,8 +66,7 @@ pub(super) fn settle_persona_turn(input: &PersonaSettlementInput<'_>) {
             .map_or(UserAffect::Unknown, UserAffect::parse),
         fatigue_level: input
             .user_fatigue
-            .and_then(axon_persona::FatigueLevel::parse)
-            .unwrap_or(axon_persona::FatigueLevel::Normal),
+            .and_then(axon_persona::FatigueLevel::parse),
         persona_drift_bp: input.persona_drift_bp.unwrap_or(0),
         drift_reason: input.drift_reason.map(ToOwned::to_owned),
         now_ms: axon_time::unix_now_ms(),

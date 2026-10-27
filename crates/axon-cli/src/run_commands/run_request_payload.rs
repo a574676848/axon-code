@@ -98,7 +98,8 @@ pub(super) fn build_run_model_payload(
                             } else {
                                 Audience::Group
                             },
-                            has_workspace: input.startup.workspace_root.is_some(),
+                            has_workspace: input.startup.workspace_root.is_some()
+                                || crate::runtime_persona_context::has_code_markers(input.cwd),
                         },
                     )
                 } else {

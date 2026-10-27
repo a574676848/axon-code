@@ -6,7 +6,7 @@ use crate::{
     constants::{PERSONA_DRIFT_GUARD_BP, WARMTH_DELTA_FRUSTRATED, WARMTH_DELTA_POSITIVE},
     domain::{
         persona_event::{PersonaEvent, TurnFinalStatus},
-        persona_state::{PersonaState, UserAffect},
+        persona_state::{FatigueLevel, PersonaState, UserAffect},
         scene_frame::Audience,
     },
 };
@@ -107,6 +107,7 @@ fn settle(
         UserAffect::Neutral | UserAffect::Urgent | UserAffect::Unknown => 0,
     };
     let warmth_offset = PersonaState::clamped_offset(decayed + delta);
+    let fatigue_level = decayed_fatigue(state, input);
     let drift_guard = guard_for(input);
     let cause = cause_for(
         final_status,
@@ -120,7 +121,7 @@ fn settle(
         warmth_offset,
         familiarity,
         user_affect: input.user_affect,
-        fatigue_level: input.fatigue_level,
+        fatigue_level,
         failure_streak,
         drift_guard,
         last_cause: cause.clone(),
@@ -133,12 +134,39 @@ fn guard_for(input: &crate::domain::persona_event::TurnSettledInput) -> Option<S
     if input.persona_drift_bp < PERSONA_DRIFT_GUARD_BP {
         return None;
     }
-    let reason = input
+    input
         .drift_reason
         .as_deref()
         .map(str::trim)
-        .filter(|reason| !reason.is_empty())?;
-    Some(reason.to_owned())
+        .filter(|reason| !reason.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// 疲劳度半衰：先把上一轮的值按经过时间向常态回撤，再让本轮评估覆盖它。
+fn decayed_fatigue(
+    state: &PersonaState,
+    input: &crate::domain::persona_event::TurnSettledInput,
+) -> FatigueLevel {
+    if let Some(level) = input.fatigue_level {
+        return level;
+    }
+    let elapsed_ms = input.now_ms.saturating_sub(state.updated_at_ms);
+    let half_lives = elapsed_ms as f64 / crate::constants::FATIGUE_HALF_LIFE_MS as f64;
+    let factor = 0.5_f64.powf(half_lives);
+    let baseline = 1.0;
+    let severity = match state.fatigue_level {
+        FatigueLevel::Low => 0.0,
+        FatigueLevel::Normal => 1.0,
+        FatigueLevel::High => 2.0,
+    };
+    let decayed = baseline + (severity - baseline) * factor;
+    if decayed < 0.5 {
+        FatigueLevel::Low
+    } else if decayed < 1.5 {
+        FatigueLevel::Normal
+    } else {
+        FatigueLevel::High
+    }
 }
 
 fn cause_for(

@@ -14,7 +14,7 @@ fn settled(
     PersonaEvent::TurnSettled(TurnSettledInput {
         final_status,
         user_affect: affect,
-        fatigue_level: crate::domain::persona_state::FatigueLevel::Normal,
+        fatigue_level: Some(crate::domain::persona_state::FatigueLevel::Normal),
         persona_drift_bp: drift_bp,
         drift_reason: drift_reason.map(ToOwned::to_owned),
         now_ms,
@@ -247,4 +247,43 @@ fn revision_increases_by_exactly_one_per_settlement() {
     assert_eq!(first.state.revision, 1);
     assert_eq!(second.state.revision, 2);
     assert_eq!(second.state.updated_at_ms, 20);
+}
+
+#[test]
+fn fatigue_decays_toward_normal_then_accepts_a_fresh_signal() {
+    use crate::domain::persona_state::FatigueLevel;
+
+    let mut state = PersonaState::baseline(0);
+    state.fatigue_level = FatigueLevel::High;
+
+    // 两个半衰期后回落到常态。
+    let two_half_lives = crate::constants::FATIGUE_HALF_LIFE_MS * 2;
+    let (next, _) = settle(
+        &state,
+        TurnFinalStatus::Completed,
+        &TurnSettledInput {
+            final_status: TurnFinalStatus::Completed,
+            user_affect: UserAffect::Unknown,
+            fatigue_level: None,
+            persona_drift_bp: 0,
+            drift_reason: None,
+            now_ms: two_half_lives,
+        },
+    );
+    assert_eq!(next.fatigue_level, FatigueLevel::Normal, "两个半衰期应回落到常态");
+
+    // 本轮给出明确信号时，覆盖衰减结果。
+    let (next, _) = settle(
+        &state,
+        TurnFinalStatus::Completed,
+        &TurnSettledInput {
+            final_status: TurnFinalStatus::Completed,
+            user_affect: UserAffect::Unknown,
+            fatigue_level: Some(FatigueLevel::Low),
+            persona_drift_bp: 0,
+            drift_reason: None,
+            now_ms: 1_000,
+        },
+    );
+    assert_eq!(next.fatigue_level, FatigueLevel::Low, "新信号应覆盖衰减值");
 }

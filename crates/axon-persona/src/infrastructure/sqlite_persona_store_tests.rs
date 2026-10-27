@@ -10,7 +10,7 @@ fn settled(now_ms: u64) -> PersonaEvent {
     PersonaEvent::TurnSettled(TurnSettledInput {
         final_status: TurnFinalStatus::Completed,
         user_affect: UserAffect::Neutral,
-        fatigue_level: crate::domain::persona_state::FatigueLevel::Normal,
+        fatigue_level: Some(crate::domain::persona_state::FatigueLevel::Normal),
         persona_drift_bp: 0,
         drift_reason: None,
         now_ms,

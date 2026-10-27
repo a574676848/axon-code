@@ -23,6 +23,9 @@ pub const WARMTH_OFFSET_CLAMP: i8 = 20;
 /// 温度偏移的衰减半衰期，单位毫秒，取 6 小时。
 pub const WARMTH_HALF_LIFE_MS: u64 = 6 * 60 * 60 * 1_000;
 
+/// 疲劳度的半衰期：每过这段时间，向常态回撤一半。
+pub const FATIGUE_HALF_LIFE_MS: u64 = 8 * 60 * 60 * 1_000;
+
 /// 衰减最多折算的次数上限，避免超大间隔下无界循环。
 pub const WARMTH_DECAY_MAX_HALVINGS: u32 = 16;
 
