@@ -488,11 +488,22 @@ fn cancelled_mid_batch_pairs_every_call() {
             .any(|receipt| receipt.summary.contains("未启动")),
         "排队中被取消的调用必须标注未启动"
     );
-    let mut sorted = commit_log.clone();
-    sorted.sort_unstable();
+    // 池宽 8：前 8 个已启动，后 2 个在 30ms 取消时仍在排队。
+    assert!(
+        receipts[..8]
+            .iter()
+            .all(|receipt| !receipt.summary.contains("未启动")),
+        "已启动的调用不得标注未启动"
+    );
+    assert!(
+        receipts[8..]
+            .iter()
+            .all(|receipt| receipt.summary.contains("未启动")),
+        "排队中被取消的两个调用必须标注未启动"
+    );
     assert_eq!(
-        sorted,
+        commit_log,
         (0..commit_log.len()).collect::<Vec<_>>(),
-        "提交必须保序"
+        "提交必须严格按模型序"
     );
 }
