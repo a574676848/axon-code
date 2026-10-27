@@ -32,7 +32,7 @@ Stage 5 交付 `/api/v1/voice` 的 WS 控制面：鉴权、升级、`ready`、�
 - 预热与宿主握手在阻塞池执行，不占 tokio 工作线程。
 - 安装链：`install-from-source.ps1` 与 `install-from-source.sh` 均构建并安装 `axon-voice-host`。
 
-未完成：音频转写事件（依赖 ASR 运行时）、桌面端采集与播放、`playbackDrained` 等播放态协议、
+未完成：音频转写事件（依赖 ASR 运行时）、桌面端播放与 `playbackDrained` 等播放态协议、
 release 产物与 MSI 安装包纳入宿主。'
 
 ## Stage 8：自动安装与真实推理
@@ -41,7 +41,7 @@ release 产物与 MSI 安装包纳入宿主。'
 - 自动接入：源码安装、MSI、deb、macOS pkg；zip/tar 附带脚本。
 - 宿主调用官方命令行完成预热、转写与合成；心跳按真实状态上报。
 - 真机测试：`cargo test -p axon-voice-host --test real_inference -- --ignored --nocapture` 通过（转写「你也好世界今天天气不错」，合成 6400 字节音频）。
-- 未完成：daemon WS 会话保活/音频转发、桌面端采集播放、zip/tar 无安装钩子的自动补齐。
+- 未完成：daemon WS 会话保活/音频转发、桌面端播放、zip/tar 无安装钩子的自动补齐。
 ''
 
 ## Stage 9：朗读稿渲染

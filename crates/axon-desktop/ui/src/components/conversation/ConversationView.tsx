@@ -635,6 +635,8 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
               <PlanDock key={shown.key} plan={dockPlan} />
               <InputDock
                 workspaceRoot={workspace?.path ?? null}
+                workspaceId={selection?.workspaceId ?? workspace?.id ?? null}
+                replyDestination={selection?.destination ?? ''}
                 enabled={workspace !== null || selection !== null}
                 busy={conversation.submitting || creating}
                 hintVisible={hintVisible}

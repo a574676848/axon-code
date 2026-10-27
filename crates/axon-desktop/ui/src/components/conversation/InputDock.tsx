@@ -12,6 +12,8 @@ import { ComposerCandidateLayer } from './ComposerCandidateLayer';
 import { composerOptionId } from './ComposerCandidates';
 import { ComposerActionBar } from './ComposerActionBar';
 import { ComposerTextArea } from './ComposerTextArea';
+import { ComposerVoiceError, ComposerVoiceOverlay, ComposerVoiceStatus } from './ComposerVoiceLayer';
+import { useComposerVoice } from './useComposerVoice';
 import { useExpiringNotice } from './composerNotice';
 import { useComposerAttachments } from './useComposerAttachments';
 import { useComposerEditing, type CaretRange } from './useComposerEditing';
@@ -62,6 +64,10 @@ const REFERENCE_LIST_ID = 'composer-reference-candidates';
 export interface InputDockProps {
   /** 当前工作区根目录；`@` 文件引用按它做作用域索引。 */
   workspaceRoot: string | null;
+  /** 当前工作区标识；语音会话首帧需要它。 */
+  workspaceId?: string | null;
+  /** 当前会话的回复目的地；语音会话首帧需要它。 */
+  replyDestination?: string;
   /** 是否可提交。 */
   enabled: boolean;
   /** 正在提交。 */
@@ -128,6 +134,8 @@ export interface InputDockProps {
 
 export const InputDock: React.FC<InputDockProps> = ({
   workspaceRoot,
+  workspaceId = null,
+  replyDestination = '',
   enabled,
   busy,
   compact = false,
@@ -209,6 +217,14 @@ export const InputDock: React.FC<InputDockProps> = ({
   });
   const menu = useContextMenu();
   const text = editing.text;
+  /** 语音输入：采集、六态与定稿写入都在这个控制器里，紧凑子代理条不接。 */
+  const voice = useComposerVoice({
+    enabled: !compact && enabled,
+    workspaceId,
+    replyDestination,
+    text,
+    commit: editing.commit,
+  });
   /** 本机指令（`/mcp`）的执行态、回执与清单：按下即转圈，结束换回执与清单。 */
   const command = useComposerCommandRun(onRunCommand, notify);
   /** 链接占位：粘贴时收成短占位符，提交时展开回完整地址。 */
@@ -472,10 +488,12 @@ export const InputDock: React.FC<InputDockProps> = ({
      */
     <div
       {...dropHandlers}
-      className={`shrink-0 flex justify-center bg-canvas ${
+      className={`relative shrink-0 flex justify-center bg-canvas ${
         compact ? 'px-2 pb-2.5 pt-2' : 'px-4 pb-4 pt-3'
       }`}
     >
+      {/* 中间识别结果：固定 20px 浮层，贴在输入坞上沿，不参与布局。 */}
+      {!compact && <ComposerVoiceOverlay text={voice.partial} />}
       <div className="w-full max-w-chat relative">
         {command.servers !== null && (
           <McpServerPanel servers={command.servers} onClose={command.close} />
@@ -492,6 +510,10 @@ export const InputDock: React.FC<InputDockProps> = ({
           />
         ) : (
           <>
+            {!compact && voice.error !== null && <ComposerVoiceError message={voice.error} />}
+            {!compact && (
+              <ComposerVoiceStatus phase={voice.phase} droppedFrames={voice.droppedFrames} />
+            )}
             {/* 本机指令的执行态：按下即出现，结束后换成回执与清单。 */}
             {command.label !== null && (
               <ComposerWorkingLine primary={command.label} elapsedMs={command.elapsedMs} queued={0} interruptible={false} />
@@ -606,6 +628,9 @@ export const InputDock: React.FC<InputDockProps> = ({
                   commandRunning={command.running !== null}
                   hasContent={hasContent}
                   working={working !== null}
+                  voiceAvailable={voice.available}
+                  voiceActive={voice.active}
+                  onToggleVoice={voice.toggle}
                   onPickAttachment={() => {
                     setLocalError(null);
                     pick();

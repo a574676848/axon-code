@@ -1,6 +1,6 @@
 import React from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { ArrowUpIcon, PlusIcon, StopIcon } from '../../icons';
+import { ArrowUpIcon, MicrophoneIcon, PlusIcon, StopIcon } from '../../icons';
 import { ComposerPicker } from './ComposerPicker';
 
 /*
@@ -27,6 +27,12 @@ export interface ComposerActionBarProps {
   commandRunning: boolean;
   hasContent: boolean;
   working: boolean;
+  /** 麦克风入口是否可用；紧凑子代理条不渲染。 */
+  voiceAvailable: boolean;
+  /** 麦克风是否处于采集态。 */
+  voiceActive: boolean;
+  /** 点击麦克风开始或结束。 */
+  onToggleVoice: () => void;
   onPickAttachment: () => void;
   onModelChange?: (value: string) => void;
   onReasoningEffortChange?: (value: string) => void;
@@ -50,6 +56,9 @@ export const ComposerActionBar: React.FC<ComposerActionBarProps> = ({
   commandRunning,
   hasContent,
   working,
+  voiceAvailable,
+  voiceActive,
+  onToggleVoice,
   onPickAttachment,
   onModelChange,
   onReasoningEffortChange,
@@ -76,6 +85,24 @@ export const ComposerActionBar: React.FC<ComposerActionBarProps> = ({
           className="shrink-0 w-7 h-7 rounded-sm flex items-center justify-center text-text-secondary transition-colors duration-100 active:scale-95 hover:bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
         >
           <PlusIcon size={16} />
+        </button>
+      )}
+
+      {!compact && (
+        <button
+          type="button"
+          aria-label={voiceActive ? '结束语音输入' : '开始语音输入'}
+          aria-pressed={voiceActive}
+          title={voiceActive ? '结束语音输入' : '开始语音输入'}
+          disabled={!voiceAvailable}
+          onClick={onToggleVoice}
+          className={`shrink-0 w-7 h-7 rounded-sm flex items-center justify-center transition-colors duration-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 ${
+            voiceActive
+              ? 'bg-active text-text-primary'
+              : 'text-text-secondary hover:bg-hover hover:text-text-primary'
+          }`}
+        >
+          <MicrophoneIcon size={16} />
         </button>
       )}
 

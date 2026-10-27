@@ -679,3 +679,12 @@ export const SpeakerIcon: React.FC<IconProps> = ({ size = 14, className = '', ..
     <path d="M13 3.6C14.3 4.8 15 6.3 15 8C15 9.7 14.3 11.2 13 12.4" stroke="currentColor" />
   </svg>
 );
+
+// 麦克风输入：取自 Lucide 的 Mic（ISC），按 16 视窗与 1px 描边等比缩放
+export const MicrophoneIcon: React.FC<IconProps> = ({ size = 14, className = '', ...props }) => (
+  <svg width={size} height={size} viewBox="0 0 16 16" fill="none" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className} {...props}>
+    <path d="M8 12.667V14.667" stroke="currentColor" />
+    <path d="M12.667 6.667V8A4.667 4.667 0 0 1 3.333 8V6.667" stroke="currentColor" />
+    <rect x="6" y="1.333" width="4" height="8.667" rx="2" stroke="currentColor" />
+  </svg>
+);

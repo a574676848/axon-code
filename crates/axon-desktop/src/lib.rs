@@ -114,7 +114,7 @@ use system_info::system_info;
 use tauri::Emitter;
 use terminal::{terminal_close, terminal_open, terminal_resize, terminal_shells, terminal_write};
 use usage::{usage_diagnostics, usage_distribution, usage_events, usage_overview, usage_realtime};
-use voice::voice_preview;
+use voice::{voice_audio, voice_preview, voice_start, voice_stop};
 use workspace::{
     lane_create, lane_rename, lane_reorder, lane_set_archived, lane_set_pinned, workspace_add,
     workspace_list, workspace_remove,
@@ -209,6 +209,9 @@ pub fn run() {
             voice_presets,
             voice_tts,
             voice_preview,
+            voice_start,
+            voice_audio,
+            voice_stop,
             input_history_list,
             input_history_append,
             provider_profile_upsert,
