@@ -12,7 +12,7 @@
 | Stage 3 | WP-02 清单与校验 + WAV 输入 | 完成 | `40e3a6cab` |
 | Stage 4 | WP-06 桥接内核（`axon-voice-bridge`） | 完成 | `90fcc459c` |
 | Stage 5 | `/api/v1/voice` WS 控制面 | 完成 | `530d07411` |
-| Stage 6 | WS 端到端测试、会话状态、安装链 | 完成 | `88ba36410`、`c7e087493` |\n| Stage 7 | 发布链纳入宿主 | 完成 | `f57b9969c` |\n| Stage 8 | 自动安装语音运行时/模型 + 真实推理 | 完成，待审计 | `12b3311bf` |
+| Stage 6 | WS 端到端测试、会话状态、安装链 | 完成 | `88ba36410`、`c7e087493` |\n| Stage 7 | 发布链纳入宿主 | 完成 | `f57b9969c` |\n| Stage 8 | 自动安装语音运行时/模型 + 真实推理 | 完成 | `12b3311bf` |\n| Stage 9 | 朗读稿渲染（对齐 Codex 口语化做法） | 完成 | `f64791219` |
 
 ## Stage 4 范围声明
 
@@ -42,4 +42,13 @@ release 产物与 MSI 安装包纳入宿主。'
 - 宿主调用官方命令行完成预热、转写与合成；心跳按真实状态上报。
 - 真机测试：`cargo test -p axon-voice-host --test real_inference -- --ignored --nocapture` 通过（转写「你也好世界今天天气不错」，合成 6400 字节音频）。
 - 未完成：daemon WS 会话保活/音频转发、桌面端采集播放、zip/tar 无安装钩子的自动补齐。
+''
+
+## Stage 9：朗读稿渲染
+
+- 新增 `axon-voice::render`：六条规则（think/工具行、代码块与 diff 概括、表格不逐格、路径取文件名、URL 只读域名、脱敏），以及句子合并与 4 KiB 上限。
+- 与 Codex 对齐：Codex 的实时语音由一个独立语音代理按提示词「不朗读表格/diff/代码块，只讲关键结论」生成口语内容；Axon 侧对应为「模型可提供专门朗读稿（spoken override）优先，缺失时由渲染器按规则生成」，正文与朗读稿分离。
+- 详略：Minimal 只读结论，Concise 读开头结论与结尾，Detailed 全读。
+- 宿主在 TTS 前做防御性二次渲染，避免任何路径直读 markdown。
+- 单测 50 项（含 golden 规则、脱敏、短句合并、流式分块、override）；真机推理复验通过。
 '

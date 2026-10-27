@@ -18,7 +18,9 @@ use axum::response::Response;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
+use tokio::sync::mpsc as tokio_mpsc;
 
 /// 预热超时，与 PROTOCOL §5 对齐。
 const WARMUP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -152,54 +154,6 @@ fn classify(started: bool, text: &str) -> Result<Classified, ()> {
     }
 }
 
-async fn session(mut socket: WebSocket) {
-    send_json(&mut socket, ready_json()).await;
-    let mut started = false;
-    while let Some(Ok(message)) = socket.recv().await {
-        match message {
-            Message::Text(text) => match classify(started, &text) {
-                Ok(Classified::Start) => {
-                    started = true;
-                    let (error, ready) = warmup_outcome(client_state()).await;
-                    send_json(&mut socket, error).await;
-                    if !ready {
-                        close(&mut socket).await;
-                        return;
-                    }
-                }
-                Ok(Classified::Stop) => {}
-                Ok(Classified::Cancel(CancelReason::ClientClose)) => {
-                    close(&mut socket).await;
-                    return;
-                }
-                Ok(Classified::Cancel(CancelReason::UserCancel)) => {}
-                Ok(Classified::Ignored) => {}
-                Err(()) => {
-                    reject(&mut socket, "protocol_sequence").await;
-                    return;
-                }
-            },
-            Message::Binary(payload) => {
-                // 音频帧必须是 0x01 开头、长度合法且已 start；本阶段无推理，不产生转写。
-                if !started || payload.first() != Some(&0x01) {
-                    reject(&mut socket, "protocol_sequence").await;
-                    return;
-                }
-                if payload.len() > 8 * 1024 + 1 {
-                    reject(&mut socket, "frame_oversize").await;
-                    return;
-                }
-            }
-            Message::Close(_) => break,
-            Message::Ping(_) | Message::Pong(_) => {}
-        }
-    }
-}
-async fn reject(socket: &mut WebSocket, code: &str) {
-    send_json(socket, error_json(code, "connect")).await;
-    close(socket).await;
-}
-
 struct ClientState {
     model_root: PathBuf,
     host_exe: Option<PathBuf>,
@@ -212,32 +166,240 @@ fn client_state() -> ClientState {
     }
 }
 
-async fn warmup_outcome(state: ClientState) -> (String, bool) {
+/// 会话开始后要处理的命令。'
+enum Command {
+    /// 上行音频。
+    Audio(Vec<u8>),
+    /// 结束当前句。
+    Stop,
+    /// 取消当前轮。
+    Cancel,
+    /// 收线。
+    Shutdown,
+}
+
+struct WorkerConfig {
+    host: HostConfig,
+    manifest_sha: String,
+    session_id: String,
+}
+
+async fn session(mut socket: WebSocket) {
+    send_json(&mut socket, ready_json()).await;
+    let mut started = false;
+    let mut worker: Option<std_mpsc::Sender<Command>> = None;
+    let (out_tx, mut out_rx) = tokio_mpsc::unbounded_channel::<String>();
+
+    loop {
+        tokio::select! {
+            message = socket.recv() => {
+                let Some(Ok(message)) = message else { break };
+                match message {
+                    Message::Text(text) => match classify(started, &text) {
+                        Ok(Classified::Start) => {
+                            started = true;
+                            let session_id = format!("ws-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+                            match spawn_worker(&session_id, out_tx.clone()) {
+                                Ok(sender) => worker = Some(sender),
+                                Err((error, ready)) => {
+                                    send_json(&mut socket, error).await;
+                                    if !ready {
+                                        close(&mut socket).await;
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        Ok(Classified::Stop) => send_command(&worker, Command::Stop),
+                        Ok(Classified::Cancel(CancelReason::ClientClose)) => {
+                            send_command(&worker, Command::Shutdown);
+                            close(&mut socket).await;
+                            return;
+                        }
+                        Ok(Classified::Cancel(CancelReason::UserCancel)) => {
+                            send_command(&worker, Command::Cancel);
+                        }
+                        Ok(Classified::Ignored) => {}
+                        Err(()) => {
+                            reject(&mut socket, "protocol_sequence").await;
+                            return;
+                        }
+                    },
+                    Message::Binary(payload) => {
+                        if !started || payload.first() != Some(&0x01) {
+                            reject(&mut socket, "protocol_sequence").await;
+                            return;
+                        }
+                        if payload.len() > 8 * 1024 + 1 {
+                            reject(&mut socket, "frame_oversize").await;
+                            return;
+                        }
+                        send_command(&worker, Command::Audio(payload[1..].to_vec()));
+                    }
+                    Message::Close(_) => break,
+                    Message::Ping(_) | Message::Pong(_) => {}
+                }
+            }
+            Some(text) = out_rx.recv() => {
+                send_json(&mut socket, text).await;
+            }
+            else => break,
+        }
+    }
+    if let Some(sender) = worker {
+        let _ = sender.send(Command::Shutdown);
+    }
+}
+
+async fn reject(socket: &mut WebSocket, code: &str) {
+    send_json(socket, error_json(code, "connect")).await;
+    close(socket).await;
+}
+
+fn send_command(worker: &Option<std_mpsc::Sender<Command>>, command: Command) {
+    if let Some(sender) = worker {
+        let _ = sender.send(command);
+    }
+}
+
+fn spawn_worker(
+    session_id: &str,
+    out: tokio_mpsc::UnboundedSender<String>,
+) -> Result<std_mpsc::Sender<Command>, (String, bool)> {
+    let state = client_state();
     if !state.model_root.is_dir() {
-        return (error_json("model_missing", "arming"), false);
+        return Err((error_json("model_missing", "arming"), false));
     }
     let Some(exe) = state.host_exe.clone() else {
-        return (error_json("worker_unavailable", "arming"), false);
+        return Err((error_json("worker_unavailable", "arming"), false));
     };
-    let mut config = HostConfig::new(exe, BUILD_COMMIT.to_owned());
-    config.args.push("--model-root".to_owned());
-    config.args.push(state.model_root.display().to_string());
-    let manifest_sha = manifest_digest(&state.model_root);
-    let outcome = tokio::task::spawn_blocking(move || -> Result<(), BridgeError> {
-        let client = HostClient::spawn(&config).map_err(|error| {
-            BridgeError::Transport(axon_voice_bridge::TransportError::Write(error.to_string()))
-        })?;
-        let mut bridge = VoiceBridge::new(client);
-        let result = bridge.warmup("asr", DEFAULT_ASR_MODEL, &manifest_sha, WARMUP_TIMEOUT);
+    let mut host = HostConfig::new(exe, BUILD_COMMIT.to_owned());
+    host.args.push("--model-root".to_owned());
+    host.args.push(state.model_root.display().to_string());
+    let config = WorkerConfig {
+        host,
+        manifest_sha: manifest_digest(&state.model_root),
+        session_id: session_id.to_owned(),
+    };
+    let (tx, rx) = std_mpsc::channel::<Command>();
+    std::thread::spawn(move || run_worker(config, rx, out));
+    Ok(tx)
+}
+
+fn run_worker(
+    config: WorkerConfig,
+    rx: std_mpsc::Receiver<Command>,
+    out: tokio_mpsc::UnboundedSender<String>,
+) {
+    let Ok(client) = HostClient::spawn(&config.host) else {
+        let _ = out.send(error_json("worker_unavailable", "arming"));
+        return;
+    };
+    let mut bridge = VoiceBridge::new(client);
+    if let Err(error) = bridge.warmup(
+        "asr",
+        DEFAULT_ASR_MODEL,
+        &config.manifest_sha,
+        WARMUP_TIMEOUT,
+    ) {
+        let code = match error {
+            BridgeError::Host(error) => error.code,
+            _ => "worker_unavailable".to_owned(),
+        };
+        let _ = out.send(error_json(&code, "arming"));
         bridge.shutdown();
-        result
-    })
-    .await;
-    match outcome {
-        Ok(Ok(())) => (ready_json(), true),
-        Ok(Err(BridgeError::Host(error))) => (error_json(&error.code, &error.stage), false),
-        Ok(Err(_)) | Err(_) => (error_json("worker_unavailable", "arming"), false),
+        return;
     }
+    if bridge
+        .start(&config.session_id, "full_duplex", "zh", &[])
+        .is_err()
+    {
+        let _ = out.send(error_json("protocol_sequence", "arming"));
+        bridge.shutdown();
+        return;
+    }
+    let _ = out.send(state_json("listening"));
+
+    loop {
+        while let Ok(command) = rx.try_recv() {
+            let outcome = match command {
+                Command::Audio(bytes) => bridge.push_audio(&bytes),
+                Command::Stop => bridge.end_session("client_close"),
+                Command::Cancel => bridge.cancel("user_cancel"),
+                Command::Shutdown => {
+                    bridge.shutdown();
+                    return;
+                }
+            };
+            if outcome.is_err() {
+                let _ = out.send(error_json("protocol_sequence", "listening"));
+                bridge.shutdown();
+                return;
+            }
+        }
+        match bridge.poll(Duration::from_millis(20)) {
+            Ok(Some(event)) => {
+                if let Some(text) = event_json(event) {
+                    let _ = out.send(text);
+                }
+            }
+            Ok(None) => {}
+            Err(_) => break,
+        }
+    }
+    bridge.shutdown();
+}
+
+fn event_json(event: axon_voice_bridge::VoiceEvent) -> Option<String> {
+    use axon_voice_bridge::VoiceEvent;
+    match event {
+        VoiceEvent::Partial(partial) => Some(
+            serde_json::json!({
+                "type": "partial",
+                "utteranceSeq": partial.utterance_seq,
+                "text": partial.text,
+            })
+            .to_string(),
+        ),
+        VoiceEvent::Final(final_message) => Some(
+            serde_json::json!({
+                "type": "final",
+                "utteranceSeq": final_message.utterance_seq,
+                "text": final_message.text,
+                "startMs": final_message.start_ms,
+                "endMs": final_message.end_ms,
+                "finalizeMs": final_message.finalize_ms,
+            })
+            .to_string(),
+        ),
+        VoiceEvent::Error(error) => Some(
+            serde_json::json!({
+                "type": "error",
+                "code": error.code,
+                "stage": error.stage,
+                "retryable": error.retryable,
+                "message": message_for(&error.code),
+            })
+            .to_string(),
+        ),
+        VoiceEvent::CueStatus(_)
+        | VoiceEvent::Heartbeat(_)
+        | VoiceEvent::Warm(_)
+        | VoiceEvent::Audio { .. }
+        | VoiceEvent::CueAudio { .. }
+        | VoiceEvent::Closed
+        | VoiceEvent::Ignored(_) => None,
+    }
+}
+
+fn state_json(phase: &str) -> String {
+    serde_json::json!({ "type": "state", "phase": phase }).to_string()
+}
+
+fn message_for(code: &str) -> String {
+    VoiceFailure::from_code(code)
+        .map(|failure| failure.user_message())
+        .unwrap_or_else(|| "出现内部错误，请重试".to_owned())
 }
 
 fn host_exe() -> Option<PathBuf> {
