@@ -142,27 +142,33 @@ fn plain_request(
     }
 }
 
-/// 并发子段切分：`Exclusive` 请求自成一段，其余请求合并成可并发的一段。
+/// 并发子段切分：隔离调用（独占、整工作区写、读盘但无路径声明）各自成段。
 #[test]
-fn exclusive_requests_split_the_batch_into_sequential_segments() {
+fn isolated_requests_split_the_batch_into_sequential_segments() {
     let requests = vec![
-        plain_request(1, "builtin.read_file", ToolConcurrencyPolicy::ParallelSafe),
+        plain_request(
+            1,
+            "builtin.memory_search",
+            ToolConcurrencyPolicy::ParallelSafe,
+        ),
         plain_request(2, "builtin.write_stdin", ToolConcurrencyPolicy::Exclusive),
-        plain_request(3, "builtin.read_file", ToolConcurrencyPolicy::ParallelSafe),
+        plain_request(
+            3,
+            "builtin.memory_search",
+            ToolConcurrencyPolicy::ParallelSafe,
+        ),
+        // 读盘但没有声明 paths：fail-closed 成隔离段，不能与相邻调用并发。
         plain_request(4, "builtin.glob", ToolConcurrencyPolicy::ParallelSafe),
     ];
 
-    assert_eq!(
-        super::parallel_tool_batch_ranges(&requests),
-        vec![0..1, 1..2, 2..4]
-    );
+    assert_eq!(segments(&requests), vec![0..1, 1..2, 2..3, 3..4]);
 
     // 段必须完整覆盖批次且顺序不重叠：任何请求都不能被跳过，也不能被重排。
     for requests in [
         Vec::new(),
         vec![plain_request(
             1,
-            "builtin.glob",
+            "builtin.memory_search",
             ToolConcurrencyPolicy::ParallelSafe,
         )],
         vec![
@@ -170,7 +176,7 @@ fn exclusive_requests_split_the_batch_into_sequential_segments() {
             plain_request(2, "builtin.write_stdin", ToolConcurrencyPolicy::Exclusive),
         ],
     ] {
-        let ranges = super::parallel_tool_batch_ranges(&requests);
+        let ranges = segments(&requests);
         let mut cursor = 0usize;
         for range in &ranges {
             assert_eq!(range.start, cursor, "段之间不得留下空洞或重叠");
@@ -178,6 +184,35 @@ fn exclusive_requests_split_the_batch_into_sequential_segments() {
         }
         assert_eq!(cursor, requests.len(), "段必须覆盖到批次末尾");
     }
+}
+
+/// 同批两个只读调用应合并成一段并发，而不是被拆开。
+#[test]
+fn sibling_reads_share_one_parallel_segment() {
+    let requests = vec![
+        plain_request(
+            1,
+            "builtin.memory_search",
+            ToolConcurrencyPolicy::ParallelSafe,
+        ),
+        plain_request(
+            2,
+            "builtin.memory_search",
+            ToolConcurrencyPolicy::ParallelSafe,
+        ),
+        plain_request(3, "builtin.job_output", ToolConcurrencyPolicy::ParallelSafe),
+    ];
+    assert_eq!(segments(&requests), vec![0..3]);
+}
+
+/// 按执行域与读写交叉切段：独占请求自成一段，其余按路径冲突断开。
+fn segments(requests: &[ToolExecutionRequest]) -> Vec<std::ops::Range<usize>> {
+    let cwd = std::path::Path::new(".");
+    let scopes = requests
+        .iter()
+        .map(|request| super::tool_access_scope(cwd, request))
+        .collect::<Vec<_>>();
+    super::tool_batch_ranges(&scopes)
 }
 
 fn registry_with_builtin_tools() -> axon_agent_runtime::ToolRegistry {
@@ -208,4 +243,127 @@ fn scheduled_requests(
     )
     .expect("批次应调度成功")
     .requests
+}
+
+fn fake_receipt(name: &str) -> super::RunToolReceipt {
+    super::RunToolReceipt {
+        tool_call_id: 0,
+        part_id: name.to_owned(),
+        provider_call_id: name.to_owned(),
+        tool_name: name.to_owned(),
+        status: "completed".to_owned(),
+        summary: name.to_owned(),
+        metadata: None,
+        error_type: None,
+        remote_trigger_allowed: false,
+        filesystem_write_performed: false,
+        output_ref: None,
+        duration_ms: None,
+    }
+}
+
+fn timed_receipt(name: &str) -> super::TimedToolReceipt {
+    super::TimedToolReceipt {
+        receipt: fake_receipt(name),
+        duration_ms: Some(1),
+    }
+}
+
+/// `S-6`：整批已取消时，回执数量必须等于调用数量，且每条都带配对 id。
+#[test]
+fn cancelled_batch_returns_one_paired_receipt_per_call() {
+    let requests = vec![
+        plain_request(1, "builtin.read_file", ToolConcurrencyPolicy::ParallelSafe),
+        plain_request(2, "builtin.read_file", ToolConcurrencyPolicy::ParallelSafe),
+        plain_request(3, "builtin.read_file", ToolConcurrencyPolicy::ParallelSafe),
+    ];
+    let receipts = super::cancelled_receipts(&requests, None);
+    assert_eq!(receipts.len(), requests.len());
+    for (receipt, request) in receipts.iter().zip(&requests) {
+        assert_eq!(receipt.tool_call_id, request.tool_call_id.0);
+        assert_eq!(receipt.part_id, request.part_id);
+        assert!(receipt.summary.contains("未启动"));
+    }
+}
+
+/// `S-2`：整工作区写（写入集不完整）必须自成一段。
+#[test]
+fn workspace_write_is_isolated_into_its_own_segment() {
+    let requests = vec![
+        plain_request(
+            1,
+            "builtin.memory_search",
+            ToolConcurrencyPolicy::ParallelSafe,
+        ),
+        plain_request(
+            2,
+            "builtin.shell_command",
+            ToolConcurrencyPolicy::WorkspaceCoordinated,
+        ),
+        plain_request(
+            3,
+            "builtin.memory_search",
+            ToolConcurrencyPolicy::ParallelSafe,
+        ),
+    ];
+    assert_eq!(segments(&requests), vec![0..1, 1..2, 2..3]);
+}
+
+/// `S-4`：完成顺序 C、A、B，提交顺序必须是 A、B、C。
+#[test]
+fn ordered_commit_follows_model_order_not_completion_order() {
+    let requests = vec![
+        plain_request(1, "builtin.read_file", ToolConcurrencyPolicy::ParallelSafe),
+        plain_request(2, "builtin.read_file", ToolConcurrencyPolicy::ParallelSafe),
+        plain_request(3, "builtin.read_file", ToolConcurrencyPolicy::ParallelSafe),
+    ];
+    let mut slots = vec![None, None, None];
+    let mut receipts = vec![None, None, None];
+    let mut committed = 0usize;
+
+    slots[2] = Some(timed_receipt("c"));
+    super::commit_ready_receipts(&mut slots, &mut receipts, &mut committed, &requests, None);
+    assert_eq!(committed, 0, "前序未就绪时不得提交后序结果");
+
+    slots[0] = Some(timed_receipt("a"));
+    super::commit_ready_receipts(&mut slots, &mut receipts, &mut committed, &requests, None);
+    assert_eq!(committed, 1, "游标只前进到连续就绪处");
+
+    slots[1] = Some(timed_receipt("b"));
+    super::commit_ready_receipts(&mut slots, &mut receipts, &mut committed, &requests, None);
+    assert_eq!(committed, 3);
+
+    let order = receipts
+        .into_iter()
+        .map(|receipt| receipt.expect("每个槽位都应有回执").provider_call_id)
+        .collect::<Vec<_>>();
+    assert_eq!(order, vec!["a", "b", "c"]);
+}
+
+/// `S-6`：取消后未启动的调用必须有合成回执；游标之后已到达的真实回执不得被覆盖。
+#[test]
+fn cancel_fills_unstarted_calls_with_paired_synthetic_receipts() {
+    let requests = vec![
+        plain_request(1, "builtin.read_file", ToolConcurrencyPolicy::ParallelSafe),
+        plain_request(2, "builtin.read_file", ToolConcurrencyPolicy::ParallelSafe),
+        plain_request(3, "builtin.read_file", ToolConcurrencyPolicy::ParallelSafe),
+    ];
+    let mut slots = vec![None, None, None];
+    // 第 3 个调用的真实回执已到达，但游标还停在第 2 个。
+    slots[2] = Some(timed_receipt("real-c"));
+    let mut receipts = vec![None, None, None];
+    receipts[0] = Some(fake_receipt("a"));
+
+    super::fill_unstarted_receipts(&mut slots, &mut receipts, 1, &requests, None);
+
+    assert!(receipts.iter().all(Option::is_some), "不得留下孤立的 call");
+    let receipt = receipts[1].as_ref().expect("未启动的调用必须有合成回执");
+    assert!(receipt.summary.contains("未启动"));
+    assert_eq!(receipt.part_id, requests[1].part_id);
+    assert_eq!(receipt.tool_call_id, requests[1].tool_call_id.0);
+    let real = receipts[2].as_ref().expect("真实回执必须保留");
+    assert_eq!(
+        real.provider_call_id, "real-c",
+        "不得用合成回执覆盖真实结果"
+    );
 }

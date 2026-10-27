@@ -22,6 +22,7 @@ mod interactive_tui;
 mod question_answer_wake_tests;
 mod run_agent_identity;
 mod run_agent_store;
+mod run_capacity;
 pub(crate) mod run_channel_affinity;
 mod run_compaction;
 mod run_compaction_notice;
@@ -88,12 +89,18 @@ mod run_thread_history;
 mod run_thread_store;
 mod run_thread_title;
 mod run_tool_loop;
+mod run_tool_pool;
 mod run_tool_result_cache;
+mod run_tool_workspace_lock;
 mod run_turn_outcome;
 pub(crate) mod run_workspace_identity;
 pub(crate) use run_tool_result_cache::workspace_revision;
 mod run_tool_result_wire;
 mod run_tool_write_coordination;
+
+#[cfg(test)]
+#[path = "run_tool_benchmark_tests.rs"]
+mod run_tool_benchmark_tests;
 
 pub(crate) use axon_agent_runtime::RunCancelToken;
 pub(crate) use daemon_interaction_client::{execute_daemon_interaction, run_daemon_interaction};
