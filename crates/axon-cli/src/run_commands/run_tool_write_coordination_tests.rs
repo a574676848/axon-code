@@ -176,3 +176,22 @@ fn assert_scope_blocking(
     first_handle.join().unwrap();
     second_handle.join().unwrap();
 }
+
+/// G2：编辑、shell 写与读取之间必须互斥（控制类独占不占工作区闸）。
+#[test]
+fn edits_and_shell_writes_block_reads() {
+    let coordinator = Arc::new(WorkspaceWriteCoordinator::default());
+    let shell_write = scope(
+        "builtin.shell_command",
+        serde_json::json!({ "command": "cargo test > out.log" }),
+        ToolConcurrencyPolicy::WorkspaceCoordinated,
+    );
+    assert_scope_blocking(Arc::clone(&coordinator), write_scope(), write_scope(), true);
+    assert_scope_blocking(
+        Arc::clone(&coordinator),
+        shell_write.clone(),
+        read_scope(),
+        true,
+    );
+    assert_scope_blocking(Arc::clone(&coordinator), read_scope(), shell_write, true);
+}

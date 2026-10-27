@@ -92,7 +92,7 @@ impl AgentToolRegistryRuntime {
 }
 
 /// 只读、可与其他只读调用同批发出的工具（PAR-1 第 2 节）。
-const PARALLEL_CALL_TOOLS: [&str; 8] = [
+const PARALLEL_CALL_TOOLS: [&str; 19] = [
     "read_file",
     "glob",
     "search",
@@ -101,10 +101,21 @@ const PARALLEL_CALL_TOOLS: [&str; 8] = [
     "job_output",
     "list_mcp_resources",
     "read_mcp_resource",
+    "invoke_skill",
+    "goal_list",
+    "goal_get",
+    "notes_read",
+    "notes_list",
+    "notes_search",
+    "history_list_windows",
+    "history_list_items",
+    "history_read_item",
+    "history_search_contents",
+    "get_context_remaining",
 ];
 
 /// 会改变运行态或工作区、必须单独一批的工具。
-const EXCLUSIVE_CALL_TOOLS: [&str; 7] = [
+const EXCLUSIVE_CALL_TOOLS: [&str; 14] = [
     "edit",
     "write_stdin",
     "job_kill",
@@ -112,6 +123,13 @@ const EXCLUSIVE_CALL_TOOLS: [&str; 7] = [
     "ask_user_question",
     "send_message",
     "memory_write",
+    "goal_create",
+    "goal_update",
+    "goal_cancel",
+    "goal_start",
+    "notes_write",
+    "notes_append",
+    "new_context",
 ];
 
 /// 给工具描述补一句并行属性，模型据此决定同批还是单发。
@@ -120,6 +138,8 @@ fn with_parallel_note(mut tool: ToolDefinition) -> ToolDefinition {
         "只读，可与其他只读调用同批发出。"
     } else if EXCLUSIVE_CALL_TOOLS.contains(&tool.name.as_str()) {
         "会改变运行态或工作区，必须单独一批。"
+    } else if tool.name == "delegate_to_fast" {
+        "互不依赖的任务可同批委派；子代理看不到本次对话。"
     } else if tool.name == "shell_command" {
         "只读命令可与其他只读调用同批；写命令必须单独一批。"
     } else {
