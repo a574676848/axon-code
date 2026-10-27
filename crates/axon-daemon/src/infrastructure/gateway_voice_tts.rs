@@ -12,6 +12,7 @@ use axon_voice::pitch::shift_pitch;
 use axon_voice::presets;
 use axon_voice::render::apply_gain;
 use axon_voice::{HumorLevel, PersonaMode, Verbosity};
+use axon_voice_host::BUILD_COMMIT;
 use axon_voice_host::inference::{Inference, encode_wav};
 use axum::body::{Body, Bytes};
 use axum::extract::State;
@@ -362,6 +363,8 @@ pub(super) async fn voice_status(
         StatusCode::OK,
         serde_json::json!({
             "runtimeAvailable": available,
+            "buildCommit": BUILD_COMMIT,
+            "presetIds": presets::PRESETS.iter().map(|preset| preset.id).collect::<Vec<_>>(),
             "defaultPreset": presets::default_preset().id,
             "presets": presets::PRESETS.len(),
             "idleTimeoutSec": 30,

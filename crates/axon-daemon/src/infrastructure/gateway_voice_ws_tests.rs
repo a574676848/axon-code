@@ -3,7 +3,7 @@
 //! 这里只断言对外契约（鉴权、`ready` 字段、阶段错误帧、转写事件），不断言内部
 //! 线程结构；宿主缺失时的错误码来自运行环境，按合同允许的取值集合断言。
 
-use super::test_support::{RecordingIngress, TEST_AUTH_TOKEN, TestServer, request};
+use super::test_support::{RecordingIngress, TEST_AUTH_TOKEN, TestServer, get, request};
 use std::time::Duration;
 
 /// 取下一帧文本；跳过二进制与控制帧，超过轮数即判失败。
@@ -30,6 +30,33 @@ where
         }
     }
     panic!("文本帧数量超预期");
+}
+
+/// `/api/v1/voice/status` 是排障唯一入口：构建号与预设清单必须直接可读。
+#[test]
+fn voice_status_reports_build_commit_and_presets() {
+    let server = TestServer::start(RecordingIngress::idle());
+    let (status, body) = request(&server, &get("/api/v1/voice/status", Some(TEST_AUTH_TOKEN)));
+    assert_eq!(status, 200, "{body}");
+
+    let value: serde_json::Value = serde_json::from_str(&body).expect("status 是 JSON");
+    assert!(
+        value["buildCommit"]
+            .as_str()
+            .is_some_and(|commit| !commit.is_empty()),
+        "status 必须给出构建号：{body}"
+    );
+    let presets = value["presetIds"].as_array().expect("presetIds 是数组");
+    assert_eq!(presets.len(), 4, "预设清单长度应与 PRESETS 一致");
+    assert!(
+        presets.iter().any(|id| id == "calm-elegant"),
+        "默认音色必须在清单内"
+    );
+    assert_eq!(value["defaultPreset"], "calm-elegant");
+    assert!(
+        value["runtimeAvailable"].is_boolean(),
+        "运行时可可用性必须显式可见，不静默"
+    );
 }
 
 #[test]
