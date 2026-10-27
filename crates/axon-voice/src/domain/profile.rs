@@ -34,9 +34,9 @@ impl Verbosity {
 /// 画像来源。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProfileSource {
-    /// 人格派生。
+    /// 用户设置选中了预设。
     Settings,
-    /// 用户选中的预设。
+    /// 人格派生。
     Persona,
     /// 人格快照缺失时的兜底。
     Builtin,

@@ -49,7 +49,7 @@ impl PcmChunk {
     ///
     /// # Errors
     ///
-    /// 采样数不是 16 kHz 或样本为空时返回 [`VoiceFailure::Internal`]。
+    /// 样本为空时返回 [`VoiceFailure::Internal`]；采样率由协议固定为 16 kHz。
     pub fn new(samples: Vec<i16>) -> Result<Self, VoiceFailure> {
         if samples.is_empty() {
             return Err(VoiceFailure::Internal {

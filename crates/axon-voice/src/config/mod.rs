@@ -300,8 +300,11 @@ impl VoiceConfig {
         if !bounds::LANGUAGES.contains(&self.language.as_str()) {
             return Err(err("language", "只允许 zh、en、auto"));
         }
-        if self.asr.model.trim().is_empty() || self.tts.model.trim().is_empty() {
+        if self.asr.model.trim().is_empty() {
             return Err(err("asr.model", "模型标识不能为空"));
+        }
+        if self.tts.model.trim().is_empty() {
+            return Err(err("tts.model", "模型标识不能为空"));
         }
         let audio = &self.audio;
         range_u32("audio.pre_roll_ms", audio.pre_roll_ms, bounds::PRE_ROLL_MS)?;
