@@ -19,8 +19,12 @@ mod gateway_voice;
 mod gateway_voice_frames;
 #[path = "gateway_voice_metrics.rs"]
 mod gateway_voice_metrics;
+#[path = "gateway_voice_ready.rs"]
+mod gateway_voice_ready;
 #[path = "gateway_voice_tts.rs"]
 mod gateway_voice_tts;
+#[path = "gateway_voice_turn.rs"]
+mod gateway_voice_turn;
 #[path = "gateway_voice_worker.rs"]
 mod gateway_voice_worker;
 

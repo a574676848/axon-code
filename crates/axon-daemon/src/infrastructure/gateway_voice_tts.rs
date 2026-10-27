@@ -4,7 +4,7 @@
 
 use super::GatewayHttpState;
 use super::gateway_http_response::bearer;
-use super::gateway_voice_worker::model_root;
+use super::gateway_voice_ready::model_root;
 use crate::infrastructure::gateway_auth::query_token;
 use axon_voice::expression::render_with_expression;
 use axon_voice::fusion::{PersonaVoiceInput, plan as voice_plan};
@@ -358,7 +358,7 @@ pub(super) async fn voice_status(
         );
     }
     // 与 `ready` 帧共用同一判据：模型清单 + 运行时都在才算可用。
-    let available = super::gateway_voice_worker::asr_ready();
+    let available = super::gateway_voice_ready::asr_ready();
     let metrics = state.voice_metrics.snapshot();
     // 降级必须显式可见（INV-4）：运行时不可用时给出稳定原因码，不静默。
     let degraded = (!available).then_some("voice_runtime_unavailable");

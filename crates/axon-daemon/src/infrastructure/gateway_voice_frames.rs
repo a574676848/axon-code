@@ -7,6 +7,17 @@ use serde::Deserialize;
 /// 协议版本。
 pub(super) const PROTOCOL_VERSION: u8 = 1;
 
+/// `start` 帧里会话循环需要的字段（模式与语言已在校验阶段限定）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct StartRequest {
+    /// 客户端会话 id。
+    pub(super) client_session_id: String,
+    /// 工作区 id。
+    pub(super) workspace_id: String,
+    /// 回复目的地，与文本入口同车道键。
+    pub(super) reply_destination: String,
+}
+
 /// 取消原因，客户端只允许这两个。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancelReason {
@@ -76,7 +87,7 @@ struct CancelWire {
 /// 文本帧分类结果。
 pub(crate) enum Classified {
     /// 开始会话。
-    Start,
+    Start(StartRequest),
     /// 结束当前句。
     Stop(u32),
     /// 取消。
@@ -88,11 +99,20 @@ pub(crate) enum Classified {
 /// 按会话态分类：`start` 只能一次，`stop`/`cancel` 必须在 `start` 之后。
 pub(crate) fn classify(started: bool, text: &str) -> Result<Classified, ()> {
     match parse_client_frame(text)? {
-        ClientFrame::Start { .. } => {
+        ClientFrame::Start {
+            client_session_id,
+            workspace_id,
+            reply_destination,
+            ..
+        } => {
             if started {
                 Err(())
             } else {
-                Ok(Classified::Start)
+                Ok(Classified::Start(StartRequest {
+                    client_session_id,
+                    workspace_id,
+                    reply_destination,
+                }))
             }
         }
         ClientFrame::Stop { utterance_seq } => {
@@ -237,7 +257,7 @@ mod tests {
     fn classify_enforces_session_state() {
         assert!(matches!(
             classify(false, start_json()),
-            Ok(Classified::Start)
+            Ok(Classified::Start(_))
         ));
         assert!(classify(true, start_json()).is_err(), "重复 start 应拒绝");
         assert!(classify(false, r#"{"type":"stop","utteranceSeq":1}"#).is_err());

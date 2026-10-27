@@ -4,6 +4,7 @@
 //! 控制命令（`stop`/`cancel`/`shutdown`）永不被丢弃，保证会话一定能收尾。
 
 use super::gateway_voice_metrics::{HostSnapshot, VoiceMetrics};
+use super::gateway_voice_ready::{DEFAULT_ASR_MODEL, model_root};
 use axon_voice::VoiceFailure;
 use axon_voice_bridge::{BridgeError, VoiceBridge};
 use axon_voice_host::BUILD_COMMIT;
@@ -16,8 +17,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc as tokio_mpsc;
 
-/// 默认请求的识别模型名，与合同示例一致。
-const DEFAULT_ASR_MODEL: &str = "sherpa-streaming-zh-en";
 /// 上行音频队列容量（帧）：每帧最多 256 ms，8 帧约 2 s 缓冲。
 const AUDIO_QUEUE_CAPACITY: usize = 8;
 /// 单帧音频上限（8 KiB + 1 字节帧头），与 PROTOCOL §2.2 一致。
@@ -53,6 +52,26 @@ pub(super) enum PushOutcome {
         frames: u64,
         /// 本次丢的字节数。
         bytes: u64,
+    },
+}
+
+/// 工作线程送往 WS 会话的输出。
+#[derive(Debug)]
+pub(super) enum VoiceOut {
+    /// 直接下发的 JSON 文本帧。
+    Text(String),
+    /// 定稿转写：由会话负责提交 durable ingress。
+    Final {
+        /// 句序号。
+        utterance_seq: u32,
+        /// 定稿文本。
+        text: String,
+        /// 本句起点（宿主单调毫秒）。
+        start_ms: u64,
+        /// 端点判定时刻。
+        end_ms: u64,
+        /// 定稿产出时刻。
+        finalize_ms: u64,
     },
 }
 
@@ -228,7 +247,7 @@ impl VoiceWorker {
 /// 拉起工作线程；返回可推音频与收线的句柄。
 pub(super) fn spawn_worker(
     session_id: &str,
-    out: tokio_mpsc::UnboundedSender<String>,
+    out: tokio_mpsc::UnboundedSender<VoiceOut>,
     warmup: Duration,
     metrics: Arc<VoiceMetrics>,
 ) -> Result<Arc<VoiceWorker>, (String, bool)> {
@@ -266,7 +285,7 @@ struct WorkerConfig {
 fn run_worker(
     config: WorkerConfig,
     queue: Arc<CommandQueue>,
-    out: tokio_mpsc::UnboundedSender<String>,
+    out: tokio_mpsc::UnboundedSender<VoiceOut>,
     warmup: Duration,
     metrics: Arc<VoiceMetrics>,
 ) {
@@ -274,7 +293,7 @@ fn run_worker(
         Ok(client) => client,
         Err(_) => {
             metrics.record_error("worker_unavailable");
-            let _ = out.send(error_json("worker_unavailable", "arming"));
+            let _ = out.send(VoiceOut::Text(error_json("worker_unavailable", "arming")));
             return;
         }
     };
@@ -288,7 +307,7 @@ fn run_worker(
                 _ => "worker_unavailable".to_owned(),
             };
             metrics.record_error(&code);
-            let _ = out.send(error_json(&code, "arming"));
+            let _ = out.send(VoiceOut::Text(error_json(&code, "arming")));
             bridge.shutdown();
             return;
         }
@@ -298,11 +317,11 @@ fn run_worker(
         .is_err()
     {
         metrics.record_error("protocol_sequence");
-        let _ = out.send(error_json("protocol_sequence", "arming"));
+        let _ = out.send(VoiceOut::Text(error_json("protocol_sequence", "arming")));
         bridge.shutdown();
         return;
     }
-    let _ = out.send(state_json("listening"));
+    let _ = out.send(VoiceOut::Text(state_json("listening")));
 
     loop {
         for command in queue.drain() {
@@ -317,7 +336,7 @@ fn run_worker(
             };
             if outcome.is_err() {
                 metrics.record_error("protocol_sequence");
-                let _ = out.send(error_json("protocol_sequence", "listening"));
+                let _ = out.send(VoiceOut::Text(error_json("protocol_sequence", "listening")));
                 bridge.shutdown();
                 return;
             }
@@ -328,7 +347,7 @@ fn run_worker(
                 if let Some(snapshot) = host_snapshot(&event) {
                     metrics.record_host(snapshot);
                 }
-                if let Some(text) = event_json(event) {
+                if let Some(text) = event_out(event) {
                     let _ = out.send(text);
                 }
             }
@@ -336,7 +355,7 @@ fn run_worker(
             Err(_) => {
                 // 桥断了必须让客户端看见，不能静默等到超时。
                 metrics.record_error("worker_crashed");
-                let _ = out.send(error_json("worker_crashed", "worker"));
+                let _ = out.send(VoiceOut::Text(error_json("worker_crashed", "worker")));
                 break;
             }
         }
@@ -362,29 +381,25 @@ fn host_snapshot(event: &axon_voice_bridge::VoiceEvent) -> Option<HostSnapshot> 
     }
 }
 
-fn event_json(event: axon_voice_bridge::VoiceEvent) -> Option<String> {
+fn event_out(event: axon_voice_bridge::VoiceEvent) -> Option<VoiceOut> {
     use axon_voice_bridge::VoiceEvent;
     match event {
-        VoiceEvent::Partial(partial) => Some(
+        VoiceEvent::Partial(partial) => Some(VoiceOut::Text(
             serde_json::json!({
                 "type": "partial",
                 "utteranceSeq": partial.utterance_seq,
                 "text": partial.text,
             })
             .to_string(),
-        ),
-        VoiceEvent::Final(final_message) => Some(
-            serde_json::json!({
-                "type": "final",
-                "utteranceSeq": final_message.utterance_seq,
-                "text": final_message.text,
-                "startMs": final_message.start_ms,
-                "endMs": final_message.end_ms,
-                "finalizeMs": final_message.finalize_ms,
-            })
-            .to_string(),
-        ),
-        VoiceEvent::Error(error) => Some(
+        )),
+        VoiceEvent::Final(final_message) => Some(VoiceOut::Final {
+            utterance_seq: final_message.utterance_seq,
+            text: final_message.text,
+            start_ms: final_message.start_ms,
+            end_ms: final_message.end_ms,
+            finalize_ms: final_message.finalize_ms,
+        }),
+        VoiceEvent::Error(error) => Some(VoiceOut::Text(
             serde_json::json!({
                 "type": "error",
                 "code": error.code,
@@ -393,7 +408,7 @@ fn event_json(event: axon_voice_bridge::VoiceEvent) -> Option<String> {
                 "message": message_for(&error.code),
             })
             .to_string(),
-        ),
+        )),
         VoiceEvent::CueStatus(_)
         | VoiceEvent::Heartbeat(_)
         | VoiceEvent::Warm(_)
@@ -445,18 +460,6 @@ fn host_exe() -> Option<PathBuf> {
     None
 }
 
-/// 模型根：优先运行态根，否则回落到用户目录下的安装位置。
-pub(super) fn model_root() -> PathBuf {
-    if let Ok(root) = std::env::var("AXON_RUNTIME_ROOT") {
-        return PathBuf::from(root).join("voice").join("models");
-    }
-    let home = std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
-        .unwrap_or_default();
-    home.join(".axon").join("voice").join("models")
-}
-
 fn manifest_digest(root: &Path) -> String {
     let path = root
         .join("asr")
@@ -466,79 +469,6 @@ fn manifest_digest(root: &Path) -> String {
         Ok(bytes) => hex_digest(&bytes),
         Err(_) => "0".repeat(64),
     }
-}
-
-/// 连接级 `ready`：模型与降级字段必须来自真实探测，不能写占位。
-///
-/// `workspaceId`/`replyDestination`/`sessionId`/`epoch`/`phase`/`tts` 是**会话级**
-/// 数据，建连时还没有 `start`，按 PROTOCOL §2.5 保留初始值，`start` 之后由
-/// `state`/`turn` 帧承载真实值。
-pub(super) fn ready_json() -> String {
-    let (asr_ready, tts_ready) = runtime_probe();
-    let asr_model = if asr_ready {
-        DEFAULT_ASR_MODEL
-    } else {
-        "unavailable"
-    };
-    let tts_model = if tts_ready {
-        axon_voice_host::inference::TTS_MODEL
-    } else {
-        "none"
-    };
-    let detail = match (asr_ready, tts_ready) {
-        (true, true) => None,
-        (false, true) => Some("本地识别模型未安装".to_owned()),
-        (true, false) => Some("本地合成模型未安装".to_owned()),
-        (false, false) => Some("本地语音模型未安装".to_owned()),
-    };
-    // 严格按 PROTOCOL §2.1：`degraded.asr` 只允许 null，具体原因进 `detail`；
-    // `degraded.tts` 取 null 或 "none"。
-    serde_json::json!({
-        "type": "ready",
-        "asrModel": asr_model,
-        "ttsModel": tts_model,
-        "sampleRate": 16_000,
-        "workspaceId": "",
-        "replyDestination": "",
-        "sessionId": "",
-        "epoch": 0,
-        "phase": "idle",
-        "tts": tts_ready,
-        "degraded": {
-            "asr": serde_json::Value::Null,
-            "tts": if tts_ready { serde_json::Value::Null } else { serde_json::json!("none") },
-            "detail": detail,
-        },
-        "cues": false
-    })
-    .to_string()
-}
-
-/// 只做文件存在性探测，不读模型内容，避免建连被 0.5 GB 哈希拖住。
-///
-/// 与 `/api/v1/voice/status` 的 `runtimeAvailable` 共用 `asr_ready`，避免
-/// 「建连说可用、status 说不可用」两套口径。
-pub(super) fn asr_ready() -> bool {
-    let root = model_root();
-    let has_model = root
-        .join("asr")
-        .join(DEFAULT_ASR_MODEL)
-        .join("manifest.json")
-        .is_file();
-    let has_runtime = axon_voice_host::inference::Inference::discover(&root).is_some();
-    has_model && has_runtime
-}
-
-fn tts_ready() -> bool {
-    model_root()
-        .join("tts")
-        .join(axon_voice_host::inference::TTS_MODEL)
-        .join("manifest.json")
-        .is_file()
-}
-
-fn runtime_probe() -> (bool, bool) {
-    (asr_ready(), tts_ready())
 }
 
 pub(super) fn error_json(code: &str, stage: &str) -> String {
@@ -561,9 +491,9 @@ pub(super) fn error_json(code: &str, stage: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::gateway_voice_ready::ready_json;
     use super::{
         AUDIO_QUEUE_CAPACITY, Command, CommandQueue, PushOutcome, backpressure_json, error_json,
-        ready_json,
     };
 
     fn audio(tag: u8) -> Vec<u8> {
