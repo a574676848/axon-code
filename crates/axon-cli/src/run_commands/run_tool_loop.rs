@@ -658,7 +658,7 @@ enum ParallelToolProgress {
 
 /// 按读写交叉把批次切成覆盖全部请求的连续子段。
 ///
-/// 独占请求独占一段；写集相交或读写同路径的两个请求必须落在不同段，
+/// 独占请求（含写与编辑）自成一段，段间严格保序；不做路径交叉判定。
 /// 段与段之间严格保持模型给出的调用顺序，因此切分不会翻转因果次序。
 pub(super) fn tool_batch_ranges(scopes: &[ToolAccessScope]) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();

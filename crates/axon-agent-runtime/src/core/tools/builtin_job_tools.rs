@@ -1,7 +1,7 @@
 //! 后台作业工具的 schema 与定义。
 //!
-//! 这两个工具是「后台长任务」这条通道的入口。它们与 `write_stdin` 的关键差别是
-//! **并发策略**：作业工具是 `ParallelSafe`，因此含它们的批次不会被强制串行。
+//! 这两个工具是「后台长任务」这条通道的入口。并发策略按 PAR-1 区分：
+//! `job_output` 是只读快照，`ParallelSafe`；`job_kill` 改运行态，`Exclusive`。
 //!
 //! 生命周期所有权在 `shell_command` 返回 `job_id` 的那一刻移交给作业系统：
 //! 作业不再绑定发起它的 tool call，只能通过 `job_kill` 或取消标记终止。
