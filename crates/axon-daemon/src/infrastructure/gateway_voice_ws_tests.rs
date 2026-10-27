@@ -307,7 +307,15 @@ fn voice_ws_transcribes_real_audio() {
                 Some("final") => {
                     finals.push(value["text"].as_str().unwrap_or_default().to_owned());
                 }
-                Some("error") => panic!("合成/识别失败：{text}"),
+                Some("error") => {
+                    // 本用例按最快速度灌音频，队列溢出属设计内行为：只允许 backpressure，
+                    // 其它错误码仍按失败处理（INV-7：失败必须可见，但不能被测试误判成致命）。
+                    let code = value["code"].as_str().unwrap_or_default();
+                    assert_eq!(
+                        code, "backpressure",
+                        "识别主链路只允许背压错误：{text}"
+                    );
+                }
                 _ => {}
             }
         }
