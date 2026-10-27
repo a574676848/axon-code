@@ -471,3 +471,24 @@ fn model_tool() -> ModelToolDefinition {
         input_format: axon_domain::ToolInputFormat::JsonSchema,
     }
 }
+
+/// G6：一轮预热 + 三轮编译，稳定前缀哈希必须逐轮一致。
+#[test]
+fn stable_prefix_hash_is_identical_after_warmup_and_three_rounds() {
+    let build = |question: &str| {
+        provider_prompt_cache_plan(vec![
+            AgentModelMessage::text("system", "稳定系统指令"),
+            AgentModelMessage::text("developer", "稳定开发者约束"),
+            AgentModelMessage::text("user", question),
+        ])
+    };
+    let _warmup = build("预热");
+    let rounds = [build("第一轮"), build("第二轮"), build("第三轮")];
+    for round in &rounds {
+        assert_eq!(
+            round.stable_prefix_hash, rounds[0].stable_prefix_hash,
+            "稳定前缀哈希跨轮必须一致"
+        );
+        assert_eq!(round.namespace_key, rounds[0].namespace_key);
+    }
+}
