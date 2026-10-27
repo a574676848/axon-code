@@ -167,6 +167,14 @@ pub(super) struct TestServer {
 
 impl TestServer {
     pub(super) fn start(ingress: Arc<RecordingIngress>) -> Self {
+        Self::start_with_timeouts(ingress, VoiceTimeouts::production())
+    }
+
+    /// 用注入的语音超时启动服务：断连用例不必真的等 30 s / 120 s。
+    pub(super) fn start_with_timeouts(
+        ingress: Arc<RecordingIngress>,
+        timeouts: VoiceTimeouts,
+    ) -> Self {
         let kernel = GatewayKernel::new_with_auth(
             Arc::clone(&ingress) as Arc<dyn GatewayIngress>,
             Arc::new(RejectingEgress),
@@ -179,7 +187,8 @@ impl TestServer {
         let context = kernel.context().expect("运行中的 Gateway 上下文");
         let sink = Arc::new(RecordingSink::default());
         let adapter = HttpGatewayAdapter::new("127.0.0.1:0", test_providers())
-            .with_log_sink(Arc::clone(&sink) as Arc<dyn LogSink>);
+            .with_log_sink(Arc::clone(&sink) as Arc<dyn LogSink>)
+            .with_voice_timeouts(timeouts);
         adapter.start(context).expect("启动 HTTP 适配器");
         let address = adapter.local_addr().expect("已绑定监听地址");
         Self {

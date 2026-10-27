@@ -15,10 +15,17 @@ mod gateway_http_response;
 mod gateway_http_routes;
 #[path = "gateway_voice.rs"]
 mod gateway_voice;
+#[path = "gateway_voice_frames.rs"]
+mod gateway_voice_frames;
+#[path = "gateway_voice_metrics.rs"]
+mod gateway_voice_metrics;
 #[path = "gateway_voice_tts.rs"]
 mod gateway_voice_tts;
+#[path = "gateway_voice_worker.rs"]
+mod gateway_voice_worker;
 
 pub use super::gateway_http_handler::{GatewayHttpResponse, GatewayHttpRouteHandler};
+pub use gateway_voice::VoiceTimeouts;
 
 use super::event_scripts::EventProviderRegistry;
 use super::gateway_kernel::{GatewayAdapter, GatewayContext};
@@ -62,6 +69,10 @@ pub(super) struct GatewayHttpState {
     log_sink: Option<Arc<dyn LogSink>>,
     /// 阻塞型业务的并发闸门。
     pub(super) blocking: Arc<Semaphore>,
+    /// 语音运行态指标。
+    pub(super) voice_metrics: Arc<gateway_voice_metrics::VoiceMetrics>,
+    /// 语音会话超时口径。
+    pub(super) voice_timeouts: gateway_voice::VoiceTimeouts,
 }
 
 impl GatewayHttpState {
@@ -83,6 +94,7 @@ pub struct HttpGatewayAdapter {
     local_addr: Mutex<Option<SocketAddr>>,
     route_handler: Option<Arc<dyn GatewayHttpRouteHandler>>,
     log_sink: Option<Arc<dyn LogSink>>,
+    voice_timeouts: gateway_voice::VoiceTimeouts,
 }
 
 impl HttpGatewayAdapter {
@@ -108,6 +120,7 @@ impl HttpGatewayAdapter {
             local_addr: Mutex::new(None),
             route_handler: None,
             log_sink: None,
+            voice_timeouts: gateway_voice::VoiceTimeouts::production(),
         }
     }
 
@@ -122,6 +135,13 @@ impl HttpGatewayAdapter {
     #[must_use]
     pub fn with_log_sink(mut self, sink: Arc<dyn LogSink>) -> Self {
         self.log_sink = Some(sink);
+        self
+    }
+
+    /// 注入语音会话超时（测试用更短的值，生产用合同值）。
+    #[must_use]
+    pub fn with_voice_timeouts(mut self, timeouts: VoiceTimeouts) -> Self {
+        self.voice_timeouts = timeouts;
         self
     }
 
@@ -178,6 +198,8 @@ impl GatewayAdapter for HttpGatewayAdapter {
             max_body_bytes: self.max_body_bytes,
             log_sink: self.log_sink.clone(),
             blocking: Arc::new(Semaphore::new(BLOCKING_CONCURRENCY)),
+            voice_metrics: Arc::new(gateway_voice_metrics::VoiceMetrics::default()),
+            voice_timeouts: self.voice_timeouts,
         });
         let handle = thread::spawn(move || run_server(listener, receiver, state));
         *self

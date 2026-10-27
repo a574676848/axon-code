@@ -211,7 +211,7 @@ impl<T: HostTransport> VoiceBridge<T> {
         self.state
     }
 
-    /// 预热到就绪。
+    /// 预热到就绪；返回宿主报告的预热指标（已就绪时返回 `None`）。
     ///
     /// # Errors
     ///
@@ -222,9 +222,9 @@ impl<T: HostTransport> VoiceBridge<T> {
         model: &str,
         manifest_sha256: &str,
         timeout: Duration,
-    ) -> Result<(), BridgeError> {
+    ) -> Result<Option<Warm>, BridgeError> {
         match self.state {
-            BridgeState::Ready => return Ok(()),
+            BridgeState::Ready => return Ok(None),
             BridgeState::Closed => return Err(BridgeError::Closed),
             BridgeState::InSession => return Err(BridgeError::Busy),
             BridgeState::Idle => {}
@@ -240,9 +240,9 @@ impl<T: HostTransport> VoiceBridge<T> {
                 .checked_duration_since(std::time::Instant::now())
                 .ok_or(BridgeError::Transport(TransportError::Timeout))?;
             match self.transport.recv(remaining) {
-                Ok(Frame::Control(Control::Warm(_))) => {
+                Ok(Frame::Control(Control::Warm(warm))) => {
                     self.state = BridgeState::Ready;
-                    return Ok(());
+                    return Ok(Some(warm));
                 }
                 Ok(Frame::Control(Control::Error(error))) => return Err(BridgeError::Host(error)),
                 Ok(Frame::Control(Control::Heartbeat(_))) => continue,

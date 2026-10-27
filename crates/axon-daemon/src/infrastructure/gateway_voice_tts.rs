@@ -4,7 +4,7 @@
 
 use super::GatewayHttpState;
 use super::gateway_http_response::bearer;
-use super::gateway_voice::model_root;
+use super::gateway_voice_worker::model_root;
 use crate::infrastructure::gateway_auth::query_token;
 use axon_voice::expression::render_with_expression;
 use axon_voice::fusion::{PersonaVoiceInput, plan as voice_plan};
@@ -359,6 +359,9 @@ pub(super) async fn voice_status(
     }
     let runtime = model_root();
     let available = Inference::discover(&runtime).is_some();
+    let metrics = state.voice_metrics.snapshot();
+    // 降级必须显式可见（INV-4）：运行时不可用时给出稳定原因码，不静默。
+    let degraded = (!available).then_some("voice_runtime_unavailable");
     json_response(
         StatusCode::OK,
         serde_json::json!({
@@ -367,9 +370,11 @@ pub(super) async fn voice_status(
             "presetIds": presets::PRESETS.iter().map(|preset| preset.id).collect::<Vec<_>>(),
             "defaultPreset": presets::default_preset().id,
             "presets": presets::PRESETS.len(),
-            "idleTimeoutSec": 30,
-            "sessionTimeoutSec": 120,
-            "warmupTimeoutSec": 45,
+            "idleTimeoutSec": state.voice_timeouts.idle.as_secs(),
+            "sessionTimeoutSec": state.voice_timeouts.session.as_secs(),
+            "warmupTimeoutSec": state.voice_timeouts.warmup.as_secs(),
+            "metrics": metrics,
+            "degraded": degraded,
         }),
     )
 }
