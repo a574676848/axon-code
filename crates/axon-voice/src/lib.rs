@@ -15,6 +15,7 @@ pub mod constants;
 pub mod domain;
 pub mod expression;
 pub mod fusion;
+pub mod pitch;
 pub mod port;
 pub mod presets;
 pub mod render;

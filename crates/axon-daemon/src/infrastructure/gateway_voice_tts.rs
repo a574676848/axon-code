@@ -8,6 +8,7 @@ use super::gateway_voice::model_root;
 use crate::infrastructure::gateway_auth::query_token;
 use axon_voice::expression::render_with_expression;
 use axon_voice::fusion::{PersonaVoiceInput, plan as voice_plan};
+use axon_voice::pitch::shift_pitch;
 use axon_voice::presets;
 use axon_voice::render::apply_gain;
 use axon_voice::{HumorLevel, PersonaMode, Verbosity};
@@ -89,6 +90,8 @@ pub(super) async fn voice_tts(
                 .synthesize_with(&spoken, profile.speaker, profile.rate)
                 .map_err(|_| "tts_failed")?;
             apply_gain(&mut samples, profile.energy_db);
+            let samples = shift_pitch(&samples, profile.pitch_semitones);
+            let samples = shift_pitch(&samples, profile.pitch_semitones);
             Ok((encode_wav(&samples), planned.preset.id))
         })
         .await;
@@ -192,6 +195,7 @@ pub(super) async fn voice_cue(
             .synthesize_with(&text, profile.speaker, profile.rate)
             .map_err(|_| "tts_failed")?;
         apply_gain(&mut samples, profile.energy_db);
+        let samples = shift_pitch(&samples, profile.pitch_semitones);
         Ok(encode_wav(&samples))
     })
     .await;
