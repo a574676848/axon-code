@@ -324,13 +324,13 @@ mod tests {
             tool_policy.contains("每次提交完整计划快照，全局仅允许存在至多一个 `in_progress`"),
             "计划状态机必须限定单 in_progress"
         );
-        assert!(tool_policy.contains("严禁将最终决策、验收或破坏性写入托付给子代理"));
-        assert!(tool_policy.contains("**异步后台 (`run_in_background: true`)**"));
+        assert!(tool_policy.contains("多个互不依赖的 sidecar 应在同一条消息里一次发出"));
+        assert!(tool_policy.contains("同一文件的多次修改要么合成一个单元，要么串行"));
         assert!(
-            tool_policy.contains("仅当下一步行动强依赖该核验或检索结果时方可启用"),
+            tool_policy.contains("仅当下一步动作依赖该结果时用 `run_in_background: false`"),
             "委托判据必须写明同步等待的唯一条件"
         );
-        assert!(tool_policy.contains("严禁 Busy-poll 轮询"));
+        assert!(tool_policy.contains("严禁轮询空转"));
         assert!(tool_policy.contains("builtin.goal_*"));
         assert!(tool_policy.contains("builtin.goal_create"));
         assert!(tool_policy.contains("builtin.goal_list"));
