@@ -109,7 +109,7 @@ pub enum TransitionTrigger {
     /// 定稿为空（噪声）。
     EmptyFinal,
     /// 服务端判定打断。
-    Barge,
+    Interrupt,
     /// 用户停止。
     Stop,
     /// 宿主或回合的不可恢复失败。
@@ -182,7 +182,7 @@ pub const LEGAL_EDGES: [(Phase, Phase, TransitionTrigger); 32] = [
     (
         Phase::Endpointing,
         Phase::Interrupted,
-        TransitionTrigger::Barge,
+        TransitionTrigger::Interrupt,
     ),
     (Phase::Endpointing, Phase::Idle, TransitionTrigger::Stop),
     (
@@ -203,7 +203,7 @@ pub const LEGAL_EDGES: [(Phase, Phase, TransitionTrigger); 32] = [
     (
         Phase::Thinking,
         Phase::Interrupted,
-        TransitionTrigger::Barge,
+        TransitionTrigger::Interrupt,
     ),
     (
         Phase::Thinking,
@@ -218,7 +218,7 @@ pub const LEGAL_EDGES: [(Phase, Phase, TransitionTrigger); 32] = [
     (
         Phase::Speaking,
         Phase::Interrupted,
-        TransitionTrigger::Barge,
+        TransitionTrigger::Interrupt,
     ),
     (
         Phase::Speaking,
@@ -277,6 +277,29 @@ mod tests {
     use super::{LEGAL_EDGES, Phase, PhaseError, TransitionTrigger};
     use std::collections::HashSet;
 
+    const TRIGGERS: [TransitionTrigger; 20] = [
+        TransitionTrigger::Start,
+        TransitionTrigger::Warm,
+        TransitionTrigger::ArmingFailed,
+        TransitionTrigger::SpeechEnd,
+        TransitionTrigger::StopWithoutSpeech,
+        TransitionTrigger::UserCancel,
+        TransitionTrigger::AsrFailure,
+        TransitionTrigger::FinalSubmitted,
+        TransitionTrigger::EmptyFinal,
+        TransitionTrigger::Interrupt,
+        TransitionTrigger::Stop,
+        TransitionTrigger::WorkerFailure,
+        TransitionTrigger::SpeakStarted,
+        TransitionTrigger::NoPlaybackNeeded,
+        TransitionTrigger::TurnFailure,
+        TransitionTrigger::PlaybackDrained,
+        TransitionTrigger::PlaybackFailure,
+        TransitionTrigger::Retry,
+        TransitionTrigger::CloseEntry,
+        TransitionTrigger::SessionClose,
+    ];
+
     #[test]
     fn edge_table_has_32_entries() {
         assert_eq!(LEGAL_EDGES.len(), 32);
@@ -291,6 +314,37 @@ mod tests {
                 "重复的 (from, trigger)：{from:?} {trigger:?}"
             );
         }
+    }
+
+    #[test]
+    fn every_edge_applies_exactly_once() {
+        for (from, to, trigger) in LEGAL_EDGES {
+            assert_eq!(from.apply(trigger), Ok(to), "{from:?} + {trigger:?}");
+        }
+    }
+
+    #[test]
+    fn non_table_combinations_are_rejected_and_cover_at_least_30() {
+        let table: HashSet<(Phase, TransitionTrigger)> =
+            LEGAL_EDGES.iter().map(|(from, _, t)| (*from, *t)).collect();
+        let mut illegal = 0;
+        for phase in Phase::ALL {
+            for trigger in TRIGGERS {
+                if table.contains(&(phase, trigger)) {
+                    continue;
+                }
+                illegal += 1;
+                assert_eq!(
+                    phase.apply(trigger),
+                    Err(PhaseError::IllegalTransition {
+                        from: phase,
+                        trigger
+                    }),
+                    "{phase:?} + {trigger:?} 应被拒绝"
+                );
+            }
+        }
+        assert!(illegal >= 30, "非法组合只覆盖了 {illegal} 条");
     }
 
     #[test]
@@ -326,55 +380,13 @@ mod tests {
     }
 
     #[test]
-    fn key_edges_match_contract() {
-        assert_eq!(
-            Phase::Listening.apply(TransitionTrigger::SpeechEnd),
-            Ok(Phase::Endpointing)
-        );
-        assert_eq!(
-            Phase::Endpointing.apply(TransitionTrigger::EmptyFinal),
-            Ok(Phase::Listening)
-        );
-        assert_eq!(
-            Phase::Thinking.apply(TransitionTrigger::NoPlaybackNeeded),
-            Ok(Phase::Listening)
-        );
-        assert_eq!(
-            Phase::Speaking.apply(TransitionTrigger::PlaybackDrained),
-            Ok(Phase::Listening)
-        );
-        assert_eq!(
-            Phase::Interrupted.apply(TransitionTrigger::Stop),
-            Ok(Phase::Idle)
-        );
-        assert_eq!(
-            Phase::Error.apply(TransitionTrigger::Retry),
-            Ok(Phase::Arming)
-        );
-    }
-
-    #[test]
-    fn illegal_transitions_are_rejected() {
-        assert_eq!(
-            Phase::Idle.apply(TransitionTrigger::Warm),
-            Err(PhaseError::IllegalTransition {
-                from: Phase::Idle,
-                trigger: TransitionTrigger::Warm,
-            })
-        );
-        assert!(Phase::Speaking.apply(TransitionTrigger::Start).is_err());
-        assert!(Phase::Closed.apply(TransitionTrigger::Retry).is_err());
-    }
-
-    #[test]
     fn closed_is_terminal_and_never_reenters() {
         assert!(Phase::Closed.is_terminal());
-        for trigger in [
-            TransitionTrigger::Start,
-            TransitionTrigger::Retry,
-            TransitionTrigger::SessionClose,
-        ] {
-            assert!(Phase::Closed.apply(trigger).is_err());
+        for trigger in TRIGGERS {
+            assert!(
+                Phase::Closed.apply(trigger).is_err(),
+                "closed 不应接受 {trigger:?}"
+            );
         }
     }
 
@@ -382,10 +394,17 @@ mod tests {
     fn status_row_occupancy_matches_ui_contract() {
         assert!(!Phase::Idle.occupies_status_row());
         assert!(!Phase::Closed.occupies_status_row());
-        assert!(Phase::Arming.occupies_status_row());
-        assert!(Phase::Listening.occupies_status_row());
-        assert!(Phase::Thinking.occupies_status_row());
-        assert!(Phase::Speaking.occupies_status_row());
-        assert!(Phase::Interrupted.occupies_status_row());
+        for phase in [
+            Phase::Arming,
+            Phase::Listening,
+            Phase::Endpointing,
+            Phase::Thinking,
+            Phase::Speaking,
+            Phase::Interrupted,
+            Phase::Error,
+        ] {
+            assert!(phase.occupies_status_row(), "{phase:?} 应占状态行");
+            assert!(!phase.is_terminal());
+        }
     }
 }

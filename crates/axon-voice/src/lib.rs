@@ -4,7 +4,7 @@
 //! 零 IO、零网络、零 FFI；模型推理、音频采集与协议编解码分别由 `axon-voice-host`、
 //! `axon-voice-protocol` 与 daemon/desktop 的适配层承担。
 //!
-//! 合同的唯一事实源是 `E:\zbg\axon-voice-contract`：
+//! 合同的唯一事实源是合同仓库 `axon-voice-contract`（与本仓库同级的独立目录）：
 //!
 //! - 相位与合法迁移：`ARCHITECTURE.md` §3（32 条边）。
 //! - 失败分类：`PROTOCOL.md` §4.2（21 个错误码 → 17 个变体）。
@@ -22,8 +22,8 @@ pub use config::{
 pub use constants::{PITCH_MAX_SEMITONES, PITCH_MIN_SEMITONES, RATE_MAX, RATE_MIN};
 pub use domain::{
     CueKind, HumorLevel, IdlePhase, ModelFamily, PersonaMode, PersonaSnapshot, Phase, PhaseError,
-    PresetReason, ProfileError, ProfileSource, ProtocolReason, SpeechProfile, TransitionTrigger,
-    UserAffect, Verbosity, VoiceFailure, WorkerSubStage,
+    PresetReason, ProfileError, ProfileSource, ProtocolReason, SpeechProfile, Stage,
+    TransitionTrigger, UserAffect, Verbosity, VoiceFailure, WorkerSubStage,
 };
 pub use port::{
     Clock, PcmChunk, SAMPLE_RATE_HZ, SpeechRenderer, SpeechToText, SttEvent, SttSession,

@@ -1,7 +1,9 @@
 //! 语音配置模型与校验。
 //!
 //! 字段与 `WP-10` 的骨架一一对应；采样率、采集帧长、合帧长度、VAD 输入形状属协议常量，
-//! 不在这里出现。
+//! 不在这里出现。取值边界集中在 [`bounds`]。
+
+pub mod bounds;
 
 /// 会话模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +34,17 @@ pub enum TtsFallback {
     None,
 }
 
+impl TtsFallback {
+    /// 规范记号。
+    #[must_use]
+    pub const fn as_token(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::None => "none",
+        }
+    }
+}
+
 /// 会议模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MeetingMode {
@@ -41,6 +54,18 @@ pub enum MeetingMode {
     On,
     /// 关闭检测。
     Off,
+}
+
+impl MeetingMode {
+    /// 规范记号。
+    #[must_use]
+    pub const fn as_token(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::On => "on",
+            Self::Off => "off",
+        }
+    }
 }
 
 /// 采集与打断参数。
@@ -76,7 +101,7 @@ impl Default for AudioConfig {
             pre_roll_ms: 1_200,
             endpoint_silence_ms: 500,
             vad_start_frames: 2,
-            barge_block_ms: 30,
+            barge_block_ms: crate::constants::BARGE_BLOCK_MS,
             barge_floor_window_ms: 450,
             barge_grace_ms: 500,
             barge_window_ms: 300,
@@ -243,7 +268,7 @@ impl Default for VoiceConfig {
             mode: VoiceMode::FullDuplex,
             language: "zh".to_owned(),
             interrupt_turn: true,
-            concurrent_limit: 1,
+            concurrent_limit: bounds::CONCURRENT_LIMIT,
             audio: AudioConfig::default(),
             asr: AsrConfig::default(),
             tts: TtsConfig::default(),
@@ -269,86 +294,100 @@ impl VoiceConfig {
     ///
     /// 返回第一个越界或非法字段。
     pub fn validate(&self) -> Result<(), ConfigError> {
-        if self.concurrent_limit != 1 {
+        if self.concurrent_limit != bounds::CONCURRENT_LIMIT {
             return Err(err("concurrent_limit", "本期固定为 1"));
         }
-        if !matches!(self.language.as_str(), "zh" | "en" | "auto") {
+        if !bounds::LANGUAGES.contains(&self.language.as_str()) {
             return Err(err("language", "只允许 zh、en、auto"));
         }
+        if self.asr.model.trim().is_empty() || self.tts.model.trim().is_empty() {
+            return Err(err("asr.model", "模型标识不能为空"));
+        }
         let audio = &self.audio;
-        range_u32("audio.pre_roll_ms", audio.pre_roll_ms, 600, 3_000)?;
+        range_u32("audio.pre_roll_ms", audio.pre_roll_ms, bounds::PRE_ROLL_MS)?;
         range_u32(
             "audio.endpoint_silence_ms",
             audio.endpoint_silence_ms,
-            300,
-            1_500,
+            bounds::ENDPOINT_SILENCE_MS,
         )?;
-        range_u32("audio.vad_start_frames", audio.vad_start_frames, 1, 5)?;
-        range_u32("audio.barge_block_ms", audio.barge_block_ms, 20, 40)?;
+        range_u32(
+            "audio.vad_start_frames",
+            audio.vad_start_frames,
+            bounds::VAD_START_FRAMES,
+        )?;
+        range_u32(
+            "audio.barge_block_ms",
+            audio.barge_block_ms,
+            bounds::BARGE_BLOCK_MS,
+        )?;
         range_u32(
             "audio.barge_floor_window_ms",
             audio.barge_floor_window_ms,
-            200,
-            1_000,
+            bounds::BARGE_FLOOR_WINDOW_MS,
         )?;
-        range_u32("audio.barge_grace_ms", audio.barge_grace_ms, 0, 1_000)?;
-        range_u32("audio.barge_window_ms", audio.barge_window_ms, 200, 600)?;
+        range_u32(
+            "audio.barge_grace_ms",
+            audio.barge_grace_ms,
+            bounds::BARGE_GRACE_MS,
+        )?;
+        range_u32(
+            "audio.barge_window_ms",
+            audio.barge_window_ms,
+            bounds::BARGE_WINDOW_MS,
+        )?;
         range_f32(
             "audio.barge_window_ratio",
             audio.barge_window_ratio,
-            0.6,
-            1.0,
+            bounds::BARGE_WINDOW_RATIO,
         )?;
         range_f32(
             "audio.barge_floor_multiplier",
             audio.barge_floor_multiplier,
-            2.0,
-            6.0,
+            bounds::BARGE_FLOOR_MULTIPLIER,
         )?;
         range_u32(
             "audio.barge_min_trigger",
             audio.barge_min_trigger,
-            800,
-            3_000,
+            bounds::BARGE_MIN_TRIGGER,
         )?;
         range_u32(
             "audio.barge_max_trigger",
             audio.barge_max_trigger,
-            3_000,
-            8_000,
+            bounds::BARGE_MAX_TRIGGER,
         )?;
         if audio.barge_min_trigger >= audio.barge_max_trigger {
             return Err(err("audio.barge_min_trigger", "必须小于 barge_max_trigger"));
         }
-        range_u32("tts.sentence_min_chars", self.tts.sentence_min_chars, 1, 40)?;
+        range_u32(
+            "tts.sentence_min_chars",
+            self.tts.sentence_min_chars,
+            bounds::SENTENCE_MIN_CHARS,
+        )?;
         range_u32(
             "persona.ack_after_ms",
             self.persona.ack_after_ms,
-            200,
-            2_000,
+            bounds::ACK_AFTER_MS,
         )?;
         range_u32(
             "persona.thinking_after_ms",
             self.persona.thinking_after_ms,
-            100,
-            2_000,
+            bounds::THINKING_AFTER_MS,
         )?;
         range_u32(
             "persona.ack_cooldown_ms",
             self.persona.ack_cooldown_ms,
-            0,
-            60_000,
+            bounds::ACK_COOLDOWN_MS,
         )?;
         range_u32(
             "worker.idle_timeout_seconds",
             self.worker.idle_timeout_seconds,
-            60,
-            3_600,
+            bounds::IDLE_TIMEOUT_SECONDS,
         )?;
-        range_u32("worker.max_restart", self.worker.max_restart, 0, 10)?;
-        if self.asr.model.trim().is_empty() || self.tts.model.trim().is_empty() {
-            return Err(err("asr.model", "模型标识不能为空"));
-        }
+        range_u32(
+            "worker.max_restart",
+            self.worker.max_restart,
+            bounds::MAX_RESTART,
+        )?;
         Ok(())
     }
 }
@@ -357,16 +396,16 @@ fn err(field: &'static str, reason: &'static str) -> ConfigError {
     ConfigError { field, reason }
 }
 
-fn range_u32(field: &'static str, value: u32, min: u32, max: u32) -> Result<(), ConfigError> {
-    if (min..=max).contains(&value) {
+fn range_u32(field: &'static str, value: u32, bounds: (u32, u32)) -> Result<(), ConfigError> {
+    if (bounds.0..=bounds.1).contains(&value) {
         Ok(())
     } else {
         Err(err(field, "取值越界"))
     }
 }
 
-fn range_f32(field: &'static str, value: f32, min: f32, max: f32) -> Result<(), ConfigError> {
-    if value.is_finite() && (min..=max).contains(&value) {
+fn range_f32(field: &'static str, value: f32, bounds: (f32, f32)) -> Result<(), ConfigError> {
+    if value.is_finite() && (bounds.0..=bounds.1).contains(&value) {
         Ok(())
     } else {
         Err(err(field, "取值越界"))
@@ -432,10 +471,19 @@ mod tests {
         let config = VoiceConfig::default();
         assert_eq!(config.mode, VoiceMode::FullDuplex);
         assert_eq!(config.audio.endpoint_silence_ms, 500);
+        assert_eq!(config.audio.barge_block_ms, 30);
         assert_eq!(config.audio.barge_min_trigger, 1_500);
         assert_eq!(config.audio.barge_max_trigger, 4_000);
         assert_eq!(config.tts.fallback, TtsFallback::System);
         assert_eq!(config.persona.meeting_mode, MeetingMode::Auto);
         assert!(!config.tts.read_text_turns);
+        assert!(config.tts.preset.is_empty());
+    }
+
+    #[test]
+    fn tokens_are_stable() {
+        assert_eq!(VoiceMode::FullDuplex.as_token(), "full_duplex");
+        assert_eq!(TtsFallback::None.as_token(), "none");
+        assert_eq!(MeetingMode::Auto.as_token(), "auto");
     }
 }

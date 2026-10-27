@@ -1,7 +1,10 @@
 //! 失败分类：17 个变体，与 `PROTOCOL.md` §4.2 的 21 个错误码唯一映射。
 //!
 //! 改码必须同时改本文件与 `PROTOCOL.md` §4.2；`code()` 与 `user_message()`
-//! 是运行时唯一来源，其它层不得另写一份文案。
+//! 是运行时唯一来源，其它层不得另写一份文案。`default_stage()` 只在失败本身
+//! 决定阶段时给出值，码表写「发生时的阶段值」的码返回 `None`，由调用方补实际阶段。
+
+use crate::domain::phase::PhaseError;
 
 /// 模型族。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -52,6 +55,56 @@ impl ProtocolReason {
     }
 }
 
+/// 阶段枚举，与 `PROTOCOL.md` §4.1 的 8 个值一致。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Stage {
+    /// 建连与准入。
+    Connect,
+    /// 准备模型与设备。
+    Arming,
+    /// 采集与识别。
+    Listening,
+    /// 等待模型与提交。
+    Thinking,
+    /// 合成与播放。
+    Speaking,
+    /// 客户端播放队列。
+    Playback,
+    /// 宿主进程。
+    Worker,
+    /// 收口。
+    Shutdown,
+}
+
+impl Stage {
+    /// 全部阶段。
+    pub const ALL: [Self; 8] = [
+        Self::Connect,
+        Self::Arming,
+        Self::Listening,
+        Self::Thinking,
+        Self::Speaking,
+        Self::Playback,
+        Self::Worker,
+        Self::Shutdown,
+    ];
+
+    /// 规范记号。
+    #[must_use]
+    pub const fn as_token(self) -> &'static str {
+        match self {
+            Self::Connect => "connect",
+            Self::Arming => "arming",
+            Self::Listening => "listening",
+            Self::Thinking => "thinking",
+            Self::Speaking => "speaking",
+            Self::Playback => "playback",
+            Self::Worker => "worker",
+            Self::Shutdown => "shutdown",
+        }
+    }
+}
+
 /// 空闲超时发生的阶段。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IdlePhase {
@@ -83,6 +136,17 @@ impl PresetReason {
             Self::SpeakerOutOfRange => "speaker_out_of_range",
             Self::FileInvalid => "file_invalid",
             Self::PolicyRejected => "policy_rejected",
+        }
+    }
+
+    /// 面向用户的中文原因；合规拒绝按 §4.3 不展示原因。
+    #[must_use]
+    pub const fn user_reason(self) -> &'static str {
+        match self {
+            Self::MissingModel => "需要先安装对应模型",
+            Self::SpeakerOutOfRange => "音色参数超出模型支持范围",
+            Self::FileInvalid => "音色清单无法解析",
+            Self::PolicyRejected => "",
         }
     }
 }
@@ -221,10 +285,9 @@ impl VoiceFailure {
     #[must_use]
     pub const fn retryable(&self) -> bool {
         match self {
-            Self::Unauthorized
-            | Self::Busy
-            | Self::Protocol { .. }
-            | Self::ModelUnusable { .. }
+            Self::Unauthorized | Self::Busy => true,
+            Self::Protocol { reason } => matches!(reason, ProtocolReason::Oversize),
+            Self::ModelUnusable { .. }
             | Self::TurnRejected { .. }
             | Self::PresetUnavailable { .. }
             | Self::CueUnavailable => false,
@@ -250,7 +313,47 @@ impl VoiceFailure {
         )
     }
 
-    /// 可直接展示的中文文案，与 `PROTOCOL.md` §4.2 逐字一致。
+    /// 失败本身能确定的阶段；码表写「发生时的阶段值」时返回 `None`。
+    #[must_use]
+    pub const fn default_stage(&self) -> Option<Stage> {
+        match self {
+            Self::Unauthorized
+            | Self::Busy
+            | Self::Protocol {
+                reason:
+                    ProtocolReason::Version | ProtocolReason::UnknownField | ProtocolReason::Sequence,
+            } => Some(Stage::Connect),
+            Self::ModelMissing { .. }
+            | Self::ModelUnusable { .. }
+            | Self::DeviceUnavailable { .. }
+            | Self::WorkerUnavailable => Some(Stage::Arming),
+            Self::WorkerCrashed { .. } => Some(Stage::Worker),
+            Self::Backpressure { .. } | Self::Overloaded => Some(Stage::Listening),
+            Self::TtsFailed => Some(Stage::Speaking),
+            Self::TurnRejected { .. } => Some(Stage::Thinking),
+            Self::IdleTimeout {
+                phase: IdlePhase::Connect,
+            } => Some(Stage::Connect),
+            Self::IdleTimeout {
+                phase: IdlePhase::Session,
+            } => Some(Stage::Shutdown),
+            Self::PreviewTimeout => Some(Stage::Playback),
+            Self::Protocol {
+                reason: ProtocolReason::Oversize,
+            }
+            | Self::Internal { .. }
+            | Self::PresetUnavailable { .. }
+            | Self::CueUnavailable => None,
+        }
+    }
+
+    /// 结合实际发生阶段得到上报值。
+    #[must_use]
+    pub fn stage_or(&self, observed: Stage) -> Stage {
+        self.default_stage().unwrap_or(observed)
+    }
+
+    /// 可直接展示的中文文案，与 `PROTOCOL.md` §4.2 逐字一致（仅拼装已脱敏细节）。
     #[must_use]
     pub fn user_message(&self) -> String {
         match self {
@@ -262,24 +365,12 @@ impl VoiceFailure {
                 ProtocolReason::Sequence => "控制序列非法，已断开".to_owned(),
                 ProtocolReason::Oversize => "音频包过大，已断开并重连".to_owned(),
             },
-            Self::ModelMissing { family } => {
-                format!(
-                    "本地语音模型未安装（{}），点此查看安装指引",
-                    family.as_token()
-                )
-            }
-            Self::ModelUnusable { family } => {
-                format!(
-                    "模型与运行时版本不匹配（{}），请重新安装",
-                    family.as_token()
-                )
-            }
+            Self::ModelMissing { .. } => "本地语音模型未安装，点此查看安装指引".to_owned(),
+            Self::ModelUnusable { .. } => "模型与运行时版本不匹配，请重新安装模型".to_owned(),
             Self::DeviceUnavailable { .. } => "麦克风不可用，请检查系统隐私设置或换设备".to_owned(),
             Self::WorkerUnavailable => "语音引擎未启动，请重试".to_owned(),
-            Self::WorkerCrashed { .. } => "语音引擎异常退出，已自动重启".to_owned(),
-            Self::Backpressure { dropped_frames } => {
-                format!("网络或处理跟不上，已丢弃 {dropped_frames} 帧音频")
-            }
+            Self::WorkerCrashed { .. } => "语音引擎异常退出，已自动重启（至多 3 次）".to_owned(),
+            Self::Backpressure { .. } => "网络或处理跟不上，已丢弃部分音频".to_owned(),
             Self::Overloaded => "识别跟不上，请放慢语速或改用推键".to_owned(),
             Self::TtsFailed => "朗读失败，已静音继续".to_owned(),
             Self::TurnRejected { code } => format!("本轮未能提交：{code}"),
@@ -288,8 +379,13 @@ impl VoiceFailure {
                 IdlePhase::Session => "长时间无输入，已结束".to_owned(),
             },
             Self::Internal { .. } => "出现内部错误，请重试".to_owned(),
-            Self::PresetUnavailable { preset_id, reason } => {
-                format!("音色 {preset_id} 不可用：{}", reason.as_token())
+            Self::PresetUnavailable { reason, .. } => {
+                let suffix = reason.user_reason();
+                if suffix.is_empty() {
+                    "该音色不可用".to_owned()
+                } else {
+                    format!("该音色不可用：{suffix}")
+                }
             }
             Self::PreviewTimeout => "试听超时，请重试或换一个音色".to_owned(),
             Self::CueUnavailable => "语音提示音不可用，已关闭".to_owned(),
@@ -297,10 +393,21 @@ impl VoiceFailure {
     }
 }
 
+impl From<PhaseError> for VoiceFailure {
+    fn from(_: PhaseError) -> Self {
+        Self::Protocol {
+            reason: ProtocolReason::Sequence,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{IdlePhase, ModelFamily, PresetReason, ProtocolReason, VoiceFailure};
-    use std::collections::HashSet;
+    use super::{
+        IdlePhase, ModelFamily, PresetReason, ProtocolReason, Stage, VoiceFailure, WorkerSubStage,
+    };
+    use crate::domain::phase::{Phase, PhaseError, TransitionTrigger};
+    use std::collections::{HashMap, HashSet};
 
     fn all_variants() -> Vec<VoiceFailure> {
         vec![
@@ -329,7 +436,7 @@ mod tests {
             },
             VoiceFailure::WorkerUnavailable,
             VoiceFailure::WorkerCrashed {
-                sub_stage: super::WorkerSubStage::Asr,
+                sub_stage: WorkerSubStage::Asr,
                 exit_code: 13,
             },
             VoiceFailure::Backpressure { dropped_frames: 3 },
@@ -357,7 +464,7 @@ mod tests {
     }
 
     #[test]
-    fn every_protocol_code_is_covered() {
+    fn every_protocol_code_is_covered_both_ways() {
         let expected = [
             "unauthorized",
             "voice_busy",
@@ -381,30 +488,79 @@ mod tests {
             "preview_timeout",
             "cue_unavailable",
         ];
-        let actual: HashSet<&str> = all_variants().iter().map(VoiceFailure::code).collect();
-        assert_eq!(actual.len(), expected.len());
+        let mut by_code: HashMap<&str, usize> = HashMap::new();
+        for failure in all_variants() {
+            *by_code.entry(failure.code()).or_default() += 1;
+        }
         for code in expected {
-            assert!(actual.contains(code), "缺少错误码 {code}");
+            assert_eq!(by_code.get(code), Some(&1), "错误码 {code} 未唯一映射");
+        }
+        assert_eq!(by_code.len(), expected.len());
+    }
+
+    #[test]
+    fn messages_match_protocol_and_never_leak_internal_detail() {
+        let exact = [
+            (
+                VoiceFailure::WorkerCrashed {
+                    sub_stage: WorkerSubStage::Io,
+                    exit_code: 9,
+                },
+                "语音引擎异常退出，已自动重启（至多 3 次）",
+            ),
+            (
+                VoiceFailure::Backpressure { dropped_frames: 12 },
+                "网络或处理跟不上，已丢弃部分音频",
+            ),
+            (
+                VoiceFailure::ModelUnusable {
+                    family: ModelFamily::Asr,
+                },
+                "模型与运行时版本不匹配，请重新安装模型",
+            ),
+            (
+                VoiceFailure::ModelMissing {
+                    family: ModelFamily::Tts,
+                },
+                "本地语音模型未安装，点此查看安装指引",
+            ),
+        ];
+        for (failure, message) in exact {
+            assert_eq!(failure.user_message(), message, "{:?}", failure.code());
+        }
+        for failure in all_variants() {
+            let message = failure.user_message();
+            assert!(!message.contains("unexpected") && !message.contains("busy"));
+            assert!(!message.contains("missing_model"));
         }
     }
 
     #[test]
-    fn messages_are_non_empty_and_do_not_leak_detail() {
-        for failure in all_variants() {
-            let message = failure.user_message();
-            assert!(!message.trim().is_empty(), "{:?} 文案为空", failure.code());
-            assert!(
-                !message.contains("unexpected") && !message.contains("busy"),
-                "{:?} 文案泄露了内部细节：{message}",
-                failure.code()
-            );
-        }
+    fn policy_rejected_hides_reason() {
+        let failure = VoiceFailure::PresetUnavailable {
+            preset_id: "x".to_owned(),
+            reason: PresetReason::PolicyRejected,
+        };
+        assert_eq!(failure.user_message(), "该音色不可用");
     }
 
     #[test]
     fn retry_and_close_flags_match_protocol_table() {
-        assert!(!VoiceFailure::Unauthorized.retryable());
+        assert!(VoiceFailure::Unauthorized.retryable());
+        assert!(VoiceFailure::Busy.retryable());
         assert!(VoiceFailure::Unauthorized.closes_connection());
+        assert!(
+            !VoiceFailure::Protocol {
+                reason: ProtocolReason::Version
+            }
+            .retryable()
+        );
+        assert!(
+            VoiceFailure::Protocol {
+                reason: ProtocolReason::Oversize
+            }
+            .retryable()
+        );
         assert!(
             VoiceFailure::DeviceUnavailable {
                 detail: String::new()
@@ -424,5 +580,76 @@ mod tests {
             .closes_connection()
         );
         assert!(!VoiceFailure::CueUnavailable.retryable());
+    }
+
+    #[test]
+    fn stages_follow_protocol_table() {
+        let fixed = [
+            (VoiceFailure::Unauthorized, Stage::Connect),
+            (
+                VoiceFailure::ModelMissing {
+                    family: ModelFamily::Vad,
+                },
+                Stage::Arming,
+            ),
+            (
+                VoiceFailure::WorkerCrashed {
+                    sub_stage: WorkerSubStage::Warmup,
+                    exit_code: 10,
+                },
+                Stage::Worker,
+            ),
+            (VoiceFailure::TtsFailed, Stage::Speaking),
+            (
+                VoiceFailure::TurnRejected {
+                    code: "x".to_owned(),
+                },
+                Stage::Thinking,
+            ),
+            (
+                VoiceFailure::IdleTimeout {
+                    phase: IdlePhase::Session,
+                },
+                Stage::Shutdown,
+            ),
+            (VoiceFailure::PreviewTimeout, Stage::Playback),
+        ];
+        for (failure, stage) in fixed {
+            assert_eq!(failure.default_stage(), Some(stage), "{:?}", failure.code());
+        }
+
+        for context_dependent in [
+            VoiceFailure::Protocol {
+                reason: ProtocolReason::Oversize,
+            },
+            VoiceFailure::Internal {
+                detail: "x".to_owned(),
+            },
+            VoiceFailure::CueUnavailable,
+        ] {
+            assert_eq!(context_dependent.default_stage(), None);
+            assert_eq!(context_dependent.stage_or(Stage::Speaking), Stage::Speaking);
+        }
+    }
+
+    #[test]
+    fn phase_error_converts_to_protocol_sequence() {
+        let failure: VoiceFailure = PhaseError::IllegalTransition {
+            from: Phase::Idle,
+            trigger: TransitionTrigger::Warm,
+        }
+        .into();
+        assert_eq!(
+            failure,
+            VoiceFailure::Protocol {
+                reason: ProtocolReason::Sequence
+            }
+        );
+    }
+
+    #[test]
+    fn stage_tokens_are_unique() {
+        let tokens: HashSet<&str> = Stage::ALL.iter().map(|stage| stage.as_token()).collect();
+        assert_eq!(tokens.len(), Stage::ALL.len());
     }
 }

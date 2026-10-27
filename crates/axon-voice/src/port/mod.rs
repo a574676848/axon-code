@@ -3,6 +3,7 @@
 //! 端口只描述能力，不含实现；适配器分别在 `axon-voice-host`（本地模型）与
 //! daemon/desktop（协议与播放）中实现。
 
+use crate::config::AsrConfig;
 use crate::domain::{SpeechProfile, VoiceFailure, cue::CueKind};
 
 /// 协议固定的采样率。
@@ -84,7 +85,7 @@ pub trait SpeechToText {
     /// # Errors
     ///
     /// 模型缺失或不可用时返回对应失败。
-    fn open(&self) -> Result<Box<dyn SttSession>, VoiceFailure>;
+    fn open(&self, cfg: &AsrConfig) -> Result<Box<dyn SttSession>, VoiceFailure>;
 }
 
 /// 单句识别会话。

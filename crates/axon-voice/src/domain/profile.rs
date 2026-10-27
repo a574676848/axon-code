@@ -35,11 +35,11 @@ impl Verbosity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProfileSource {
     /// 人格派生。
-    Persona,
+    Settings,
     /// 用户选中的预设。
-    Preset,
+    Persona,
     /// 人格快照缺失时的兜底。
-    Default,
+    Builtin,
 }
 
 impl ProfileSource {
@@ -47,9 +47,9 @@ impl ProfileSource {
     #[must_use]
     pub const fn as_token(self) -> &'static str {
         match self {
+            Self::Settings => "settings",
             Self::Persona => "persona",
-            Self::Preset => "preset",
-            Self::Default => "default",
+            Self::Builtin => "builtin",
         }
     }
 }
@@ -97,7 +97,7 @@ impl SpeechProfile {
             energy_db: 0.0,
             sentence_tail_semitones: 0.0,
             verbosity: Verbosity::Concise,
-            source: ProfileSource::Default,
+            source: ProfileSource::Builtin,
         }
     }
 
@@ -147,7 +147,7 @@ mod tests {
     fn fallback_is_within_range() {
         let profile = SpeechProfile::fallback();
         assert_eq!(profile.validate(), Ok(()));
-        assert_eq!(profile.source, ProfileSource::Default);
+        assert_eq!(profile.source, ProfileSource::Builtin);
         assert_eq!(profile.verbosity, Verbosity::Concise);
     }
 

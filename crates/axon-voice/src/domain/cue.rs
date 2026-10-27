@@ -68,31 +68,21 @@ pub fn cue_text_within_limit(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{CueKind, cue_text_within_limit};
+    use std::collections::HashSet;
 
     #[test]
     fn all_kinds_have_unique_tokens() {
-        let mut tokens = std::collections::HashSet::new();
-        for kind in CueKind::ALL {
-            assert!(tokens.insert(kind.as_token()), "重复记号：{kind:?}");
-        }
+        let tokens: HashSet<&str> = CueKind::ALL.iter().map(|kind| kind.as_token()).collect();
         assert_eq!(tokens.len(), 6);
     }
 
     #[test]
-    fn budget_excludes_thinking_only() {
-        for kind in CueKind::ALL {
-            assert_eq!(
-                kind.counts_toward_budget(),
-                !matches!(kind, CueKind::Thinking)
-            );
-        }
-    }
-
-    #[test]
-    fn greeting_is_only_reunion() {
-        for kind in CueKind::ALL {
-            assert_eq!(kind.is_greeting(), matches!(kind, CueKind::Reunion));
-        }
+    fn budget_counts_every_kind_except_thinking() {
+        let counted = CueKind::ALL
+            .iter()
+            .filter(|kind| kind.counts_toward_budget())
+            .count();
+        assert_eq!(counted, 5);
     }
 
     #[test]

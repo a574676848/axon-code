@@ -8,8 +8,10 @@ pub mod snapshot;
 
 pub use cue::CueKind;
 pub use failure::{
-    IdlePhase, ModelFamily, PresetReason, ProtocolReason, VoiceFailure, WorkerSubStage,
+    IdlePhase, ModelFamily, PresetReason, ProtocolReason, Stage, VoiceFailure, WorkerSubStage,
 };
 pub use phase::{Phase, PhaseError, TransitionTrigger};
 pub use profile::{ProfileError, ProfileSource, SpeechProfile, Verbosity};
-pub use snapshot::{HumorLevel, PersonaMode, PersonaSnapshot, UserAffect};
+pub use snapshot::{
+    HumorLevel, PersonaDirective, PersonaMode, PersonaSnapshot, PersonaStateView, UserAffect,
+};
