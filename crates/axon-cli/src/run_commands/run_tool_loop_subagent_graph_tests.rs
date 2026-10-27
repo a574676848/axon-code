@@ -175,3 +175,30 @@ fn subagent_control_isolated_between_run_requests() {
     assert_eq!(second_receipts[0].status, "completed");
     assert!(!second_receipts[0].summary.contains("/root/review"));
 }
+
+/// G4：整批开始前已取消时，每个 call 都必须有配对合成回执。
+#[test]
+fn pre_cancelled_run_returns_paired_synthetic_receipts() {
+    let mut request = fixture_request();
+    let token = axon_agent_runtime::RunCancelToken::default();
+    token.cancel();
+    request.cancel_token = Some(token);
+    let calls = (0..3)
+        .map(|index| {
+            ProviderToolCall::new(
+                format!("call-cancel-{index}"),
+                "builtin.read_file",
+                serde_json::json!({ "path": "Cargo.toml" }).to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let receipts = super::execute_supported_tool_calls_for_turn(&request, &calls, 1, None);
+    assert_eq!(receipts.len(), calls.len(), "每个 call 都必须有配对回执");
+    for receipt in &receipts {
+        assert!(
+            receipt.summary.contains("未启动"),
+            "已取消的调用必须标注未启动：{}",
+            receipt.summary
+        );
+    }
+}
