@@ -452,3 +452,35 @@ mod tests {
         assert!(request.persona.is_none(), "越界温度不应被当成合法人格");
     }
 }
+/// `GET /api/v1/voice/status`：运行时可观测面。
+pub(super) async fn voice_status(
+    State(state): State<Arc<GatewayHttpState>>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response {
+    if !state.context.authorize_request(
+        bearer(&headers),
+        query_token(
+            uri.path_and_query()
+                .map(|value| value.as_str())
+                .unwrap_or("/"),
+        ),
+    ) {
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            serde_json::json!({"error":"unauthorized"}),
+        );
+    }
+    let runtime = model_root();
+    let available = Inference::discover(&runtime).is_some();
+    json_response(
+        StatusCode::OK,
+        serde_json::json!({
+            "runtimeAvailable": available,
+            "defaultPreset": presets::default_preset().id,
+            "presets": presets::PRESETS.len(),
+            "idleTimeoutSec": 30,
+            "sessionTimeoutSec": 120,
+        }),
+    )
+}

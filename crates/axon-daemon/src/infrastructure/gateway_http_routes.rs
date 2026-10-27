@@ -33,6 +33,10 @@ pub(super) fn router(state: Arc<GatewayHttpState>, max_body_bytes: usize) -> Rou
         )
         .route("/api/v1/voice", any(super::gateway_voice::voice_ws))
         .route(
+            "/api/v1/voice/status",
+            any(super::gateway_voice_tts::voice_status),
+        )
+        .route(
             "/api/v1/voice/tts",
             any(super::gateway_voice_tts::voice_tts),
         )
