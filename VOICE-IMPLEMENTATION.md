@@ -12,7 +12,7 @@
 | Stage 3 | WP-02 清单与校验 + WAV 输入 | 完成 | `40e3a6cab` |
 | Stage 4 | WP-06 桥接内核（`axon-voice-bridge`） | 完成 | `90fcc459c` |
 | Stage 5 | `/api/v1/voice` WS 控制面 | 完成 | `530d07411` |
-| Stage 6 | WS 端到端测试、会话状态、安装链 | 实现完成，审计中 | `88ba36410`、`c7e087493` |
+| Stage 6 | WS 端到端测试、会话状态、安装链 | 完成 | `88ba36410`、`c7e087493` |\n| Stage 7 | 发布链纳入宿主 | 完成 | `f57b9969c` |\n| Stage 8 | 自动安装语音运行时/模型 + 真实推理 | 完成，待审计 | `12b3311bf` |
 
 ## Stage 4 范围声明
 
@@ -33,4 +33,13 @@ Stage 5 交付 `/api/v1/voice` 的 WS 控制面：鉴权、升级、`ready`、�
 - 安装链：`install-from-source.ps1` 与 `install-from-source.sh` 均构建并安装 `axon-voice-host`。
 
 未完成：音频转写事件（依赖 ASR 运行时）、桌面端采集与播放、`playbackDrained` 等播放态协议、
-release 产物与 MSI 安装包纳入宿主。
+release 产物与 MSI 安装包纳入宿主。'
+
+## Stage 8：自动安装与真实推理
+
+- 安装脚本自动下载 sherpa-onnx v2.0.1 与 VAD/ASR/TTS 模型（约 750 MB），生成 manifest；重复安装幂等。
+- 自动接入：源码安装、MSI、deb、macOS pkg；zip/tar 附带脚本。
+- 宿主调用官方命令行完成预热、转写与合成；心跳按真实状态上报。
+- 真机测试：`cargo test -p axon-voice-host --test real_inference -- --ignored --nocapture` 通过（转写「你也好世界今天天气不错」，合成 6400 字节音频）。
+- 未完成：daemon WS 会话保活/音频转发、桌面端采集播放、zip/tar 无安装钩子的自动补齐。
+'
