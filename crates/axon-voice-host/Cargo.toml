@@ -1,0 +1,20 @@
+[package]
+name = "axon-voice-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axon-voice-protocol = { path = "../axon-voice-protocol" }
+
+[[bin]]
+name = "axon-voice-host"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true

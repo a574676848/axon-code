@@ -1025,6 +1025,21 @@ name = "axon-voice"
 version = "0.1.0"
 
 [[package]]
+name = "axon-voice-host"
+version = "0.1.0"
+dependencies = [
+ "axon-voice-protocol",
+]
+
+[[package]]
+name = "axon-voice-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "axon-webview2-failure"
 version = "0.1.0"
 dependencies = [

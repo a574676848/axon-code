@@ -1,0 +1,311 @@
+//! 父进程侧宿主监督：启动、握手、收发、心跳判定与关闭。
+
+use std::io::BufReader;
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use axon_voice_protocol::{
+    Control, Frame, FrameError, Hello, PROTOCOL_VERSION, read_frame, write_frame,
+};
+
+/// 监督错误。
+#[derive(Debug)]
+pub enum SupervisorError {
+    /// 进程无法启动。
+    Spawn(std::io::Error),
+    /// 握手超时或失败。
+    Handshake(String),
+    /// 写管道失败。
+    Write(String),
+    /// 读管道失败。
+    Read(String),
+    /// 等不到期望的帧。
+    Timeout,
+    /// 子进程已退出。
+    Exited(ExitStatus),
+}
+
+impl std::fmt::Display for SupervisorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Spawn(error) => write!(f, "启动宿主失败：{error}"),
+            Self::Handshake(reason) => write!(f, "宿主握手失败：{reason}"),
+            Self::Write(reason) => write!(f, "写宿主失败：{reason}"),
+            Self::Read(reason) => write!(f, "读宿主失败：{reason}"),
+            Self::Timeout => f.write_str("等待宿主超时"),
+            Self::Exited(status) => write!(f, "宿主已退出：{status}"),
+        }
+    }
+}
+
+impl std::error::Error for SupervisorError {}
+
+/// 监督配置。
+#[derive(Debug, Clone)]
+pub struct HostConfig {
+    /// 宿主可执行文件路径。
+    pub exe: PathBuf,
+    /// 期望的构建号。
+    pub build_commit: String,
+    /// 握手超时。
+    pub handshake_timeout: Duration,
+    /// 心跳判定超时。
+    pub heartbeat_timeout: Duration,
+    /// 自动重启上限。
+    pub max_restart: u32,
+}
+
+impl HostConfig {
+    /// 以可执行文件构造配置，默认 5 s 握手、3 s 心跳、3 次重启。
+    #[must_use]
+    pub fn new(exe: impl Into<PathBuf>, build_commit: impl Into<String>) -> Self {
+        Self {
+            exe: exe.into(),
+            build_commit: build_commit.into(),
+            handshake_timeout: Duration::from_secs(5),
+            heartbeat_timeout: Duration::from_secs(3),
+            max_restart: 3,
+        }
+    }
+}
+
+/// 已握手的宿主客户端。
+pub struct HostClient {
+    child: Child,
+    stdin: ChildStdin,
+    frames: Receiver<Result<Frame, String>>,
+    last_frame: Instant,
+    heartbeat_timeout: Duration,
+}
+
+impl HostClient {
+    /// 启动宿主并完成握手。
+    ///
+    /// # Errors
+    ///
+    /// 启动失败、握手超时、版本不符或进程提前退出。
+    pub fn spawn(config: &HostConfig) -> Result<Self, SupervisorError> {
+        let mut child = Command::new(&config.exe)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(SupervisorError::Spawn)?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| SupervisorError::Handshake("缺少 stdin".to_owned()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| SupervisorError::Handshake("缺少 stdout".to_owned()))?;
+        let (tx, frames) = mpsc::channel();
+        thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            loop {
+                match read_frame(&mut reader) {
+                    Ok(Some(frame)) => {
+                        if tx.send(Ok(frame)).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(error) => {
+                        let _ = tx.send(Err(error.to_string()));
+                        break;
+                    }
+                }
+            }
+        });
+
+        let mut client = Self {
+            child,
+            stdin,
+            frames,
+            last_frame: Instant::now(),
+            heartbeat_timeout: config.heartbeat_timeout,
+        };
+        if let Err(error) = client.finish_handshake(config) {
+            let _ = client.child.kill();
+            let _ = client.child.wait();
+            return Err(error);
+        }
+        Ok(client)
+    }
+
+    fn finish_handshake(&mut self, config: &HostConfig) -> Result<(), SupervisorError> {
+        self.send(&hello(&config.build_commit))?;
+        match self.recv_timeout(config.handshake_timeout)? {
+            Frame::Control(Control::Ready(ready)) => {
+                if ready.protocol != PROTOCOL_VERSION {
+                    return Err(SupervisorError::Handshake("协议版本不符".to_owned()));
+                }
+                if ready.build_commit != config.build_commit {
+                    return Err(SupervisorError::Handshake("构建号不符".to_owned()));
+                }
+                Ok(())
+            }
+            other => Err(SupervisorError::Handshake(format!(
+                "期望 ready，得到 {other:?}"
+            ))),
+        }
+    }
+
+    /// 发送控制消息。
+    ///
+    /// # Errors
+    ///
+    /// 写管道失败。
+    pub fn send(&mut self, control: &Control) -> Result<(), SupervisorError> {
+        write_frame(&mut self.stdin, control)
+            .map_err(|error: FrameError| SupervisorError::Write(error.to_string()))
+    }
+
+    /// 在超时内读取一帧。
+    ///
+    /// # Errors
+    ///
+    /// 超时、通道关闭或协议错误。
+    pub fn recv_timeout(&mut self, timeout: Duration) -> Result<Frame, SupervisorError> {
+        match self.frames.recv_timeout(timeout) {
+            Ok(Ok(frame)) => {
+                self.last_frame = Instant::now();
+                Ok(frame)
+            }
+            Ok(Err(reason)) => Err(SupervisorError::Read(reason)),
+            Err(RecvTimeoutError::Timeout) => Err(SupervisorError::Timeout),
+            Err(RecvTimeoutError::Disconnected) => {
+                Err(SupervisorError::Read("通道关闭".to_owned()))
+            }
+        }
+    }
+
+    /// 心跳是否在容忍窗口内。
+    #[must_use]
+    pub fn heartbeat_ok(&self, now: Instant) -> bool {
+        now.duration_since(self.last_frame) <= self.heartbeat_timeout
+    }
+
+    /// 子进程是否已退出。
+    ///
+    /// # Errors
+    ///
+    /// 查询失败。
+    pub fn try_wait(&mut self) -> Result<Option<ExitStatus>, SupervisorError> {
+        self.child.try_wait().map_err(SupervisorError::Spawn)
+    }
+
+    /// 请求关闭并等待进程退出；超时则强杀。
+    ///
+    /// # Errors
+    ///
+    /// 写失败或等待失败。
+    pub fn close(mut self) -> Result<ExitStatus, SupervisorError> {
+        self.send(&Control::Close)?;
+        if let Ok(frame) = self.recv_timeout(Duration::from_secs(2))
+            && !matches!(frame, Frame::Control(Control::Closed))
+        {
+            let _ = self.child.kill();
+        }
+        drop(self.stdin);
+        self.child.wait().map_err(SupervisorError::Spawn)
+    }
+
+    /// 强制结束。
+    ///
+    /// # Errors
+    ///
+    /// 结束或回收失败。
+    pub fn kill(mut self) -> Result<ExitStatus, SupervisorError> {
+        self.child.kill().map_err(SupervisorError::Spawn)?;
+        self.child.wait().map_err(SupervisorError::Spawn)
+    }
+}
+
+/// 重启计数与策略。
+#[derive(Debug)]
+pub struct Supervisor {
+    config: HostConfig,
+    restarts: u32,
+}
+
+impl Supervisor {
+    /// 新建监督器。
+    #[must_use]
+    pub fn new(config: HostConfig) -> Self {
+        Self {
+            config,
+            restarts: 0,
+        }
+    }
+
+    /// 已重启次数。
+    #[must_use]
+    pub fn restarts(&self) -> u32 {
+        self.restarts
+    }
+
+    /// 崩溃后是否允许重启；允许时计数加一。
+    pub fn restart_allowed(&mut self) -> bool {
+        if self.restarts >= self.config.max_restart {
+            return false;
+        }
+        self.restarts += 1;
+        true
+    }
+
+    /// 启动一次宿主。
+    ///
+    /// # Errors
+    ///
+    /// 见 [`HostClient::spawn`]。
+    pub fn spawn(&self) -> Result<HostClient, SupervisorError> {
+        HostClient::spawn(&self.config)
+    }
+
+    /// 配置引用。
+    #[must_use]
+    pub fn config(&self) -> &HostConfig {
+        &self.config
+    }
+
+    /// 可执行文件是否存在。
+    #[must_use]
+    pub fn exe_exists(&self) -> bool {
+        Path::new(&self.config.exe).is_file()
+    }
+}
+
+fn hello(build_commit: &str) -> Control {
+    Control::Hello(Hello {
+        protocol: PROTOCOL_VERSION,
+        build_commit: build_commit.to_owned(),
+        role: "daemon".to_owned(),
+        pid: std::process::id(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HostConfig, Supervisor};
+
+    #[test]
+    fn restart_limit_is_enforced() {
+        let mut supervisor = Supervisor::new(HostConfig::new("missing", "dev"));
+        assert_eq!(supervisor.restarts(), 0);
+        assert!(supervisor.restart_allowed());
+        assert!(supervisor.restart_allowed());
+        assert!(supervisor.restart_allowed());
+        assert!(!supervisor.restart_allowed());
+        assert_eq!(supervisor.restarts(), 3);
+    }
+
+    #[test]
+    fn missing_exe_is_reported() {
+        let supervisor = Supervisor::new(HostConfig::new("definitely-missing", "dev"));
+        assert!(!supervisor.exe_exists());
+    }
+}
