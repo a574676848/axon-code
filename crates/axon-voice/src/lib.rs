@@ -14,6 +14,7 @@ pub mod config;
 pub mod constants;
 pub mod domain;
 pub mod port;
+pub mod render;
 
 pub use config::{
     AsrConfig, AudioConfig, ConfigError, MeetingMode, TtsConfig, TtsFallback, VoiceConfig,
@@ -28,4 +29,8 @@ pub use domain::{
 pub use port::{
     Clock, PcmChunk, SAMPLE_RATE_HZ, SpeechRenderer, SpeechToText, SttEvent, SttSession,
     TextToSpeech,
+};
+pub use render::{
+    SpeechStream, render_for_speech, render_for_speech_with_override, render_sentences,
+    render_sentences_with_override,
 };

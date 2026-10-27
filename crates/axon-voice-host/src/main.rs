@@ -13,6 +13,8 @@ use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use axon_voice::Verbosity;
+use axon_voice::render::render_for_speech;
 use axon_voice_host::BUILD_COMMIT;
 use axon_voice_host::exit_code;
 use axon_voice_host::inference::Inference;
@@ -282,7 +284,13 @@ fn serve(
                     send(outbox, simple_error("tts_failed", "speaking", true));
                     continue;
                 };
-                match runtime.synthesize(&message.text) {
+                // 防御性二次渲染：正常路径由 daemon 产出朗读稿，宿主不再直读正文。
+                let spoken = render_for_speech(&message.text, Verbosity::Concise);
+                if spoken.trim().is_empty() {
+                    send(outbox, simple_error("tts_failed", "speaking", true));
+                    continue;
+                }
+                match runtime.synthesize(&spoken) {
                     Ok(samples) => send_audio(outbox, message.epoch, &samples),
                     Err(_) => send(outbox, simple_error("tts_failed", "speaking", true)),
                 }
