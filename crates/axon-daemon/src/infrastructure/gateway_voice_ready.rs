@@ -37,14 +37,11 @@ pub(super) fn ready_json() -> String {
     } else {
         "none"
     };
-    let detail = match (asr_ready, tts_ready) {
-        (true, true) => None,
-        (false, true) => Some("本地识别模型未安装".to_owned()),
-        (true, false) => Some("本地合成模型未安装".to_owned()),
-        (false, false) => Some("本地语音模型未安装".to_owned()),
-    };
-    // 严格按 PROTOCOL §2.1：`degraded.asr` 只允许 null，具体原因进 `detail`；
-    // `degraded.tts` 取 null 或 "none"。
+    let detail = degraded_detail(asr_ready, tts_ready);
+    // 严格按 PROTOCOL §2.1：`degraded` 表达「降级到哪个替代方案」，不是可用性开关。
+    // `asr` 只允许 null；`tts` 的 "system"/"none" 需要真实的系统音色回退决策，当前
+    // 尚未接入系统音色，因此两族一律 null，具体原因统一进 `detail`（中文），不再
+    // 一族写 null、另一族写 "none" 的两套词汇。
     serde_json::json!({
         "type": "ready",
         "asrModel": asr_model,
@@ -58,12 +55,22 @@ pub(super) fn ready_json() -> String {
         "tts": tts_ready,
         "degraded": {
             "asr": serde_json::Value::Null,
-            "tts": if tts_ready { serde_json::Value::Null } else { serde_json::json!("none") },
+            "tts": serde_json::Value::Null,
             "detail": detail,
         },
         "cues": false
     })
     .to_string()
+}
+
+/// 降级原因：可用性一律写进 `detail`，不占用 `degraded.asr`/`degraded.tts` 的取值。
+fn degraded_detail(asr_ready: bool, tts_ready: bool) -> Option<String> {
+    match (asr_ready, tts_ready) {
+        (true, true) => None,
+        (false, true) => Some("本地识别模型未安装".to_owned()),
+        (true, false) => Some("本地合成模型未安装".to_owned()),
+        (false, false) => Some("本地语音模型未安装".to_owned()),
+    }
 }
 
 /// 识别可用性：模型清单与运行时都在才算可用。
@@ -92,7 +99,26 @@ fn runtime_probe() -> (bool, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::ready_json;
+    use super::{degraded_detail, ready_json};
+
+    #[test]
+    fn degraded_detail_is_chinese_for_every_unready_combination() {
+        assert_eq!(degraded_detail(true, true), None);
+        for (asr_ready, tts_ready) in [(false, true), (true, false), (false, false)] {
+            let detail = degraded_detail(asr_ready, tts_ready).expect("应有原因");
+            assert!(!detail.is_ascii(), "原因须为中文：{detail}");
+        }
+    }
+
+    #[test]
+    fn degraded_fields_never_carry_a_second_vocabulary() {
+        let value: serde_json::Value = serde_json::from_str(&ready_json()).expect("合法 JSON");
+        assert!(value["degraded"]["asr"].is_null(), "asr 只允许 null");
+        assert!(
+            value["degraded"]["tts"].is_null(),
+            "未接入系统音色时 tts 只能为 null，原因走 detail"
+        );
+    }
 
     #[test]
     fn ready_has_contract_fields() {

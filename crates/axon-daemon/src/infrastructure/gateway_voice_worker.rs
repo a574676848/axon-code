@@ -4,7 +4,7 @@
 //! 控制命令（`stop`/`cancel`/`shutdown`）永不被丢弃，保证会话一定能收尾。
 
 use super::gateway_voice_metrics::{HostSnapshot, VoiceMetrics};
-use super::gateway_voice_out_frames::{error_json, message_for, state_json};
+use super::gateway_voice_out_frames::{error_json, error_json_with_family, state_json};
 use super::gateway_voice_ready::{DEFAULT_ASR_MODEL, model_root};
 use axon_voice_bridge::{BridgeError, HostTransport, VoiceBridge};
 use axon_voice_host::BUILD_COMMIT;
@@ -398,12 +398,22 @@ fn run_worker(
         Ok(Some(warm)) => metrics.set_rtf(warm.rtf_p50),
         Ok(None) => {}
         Err(error) => {
-            let code = match error {
-                BridgeError::Host(error) => error.code,
-                _ => "worker_unavailable".to_owned(),
+            // 宿主回执里的 family 原样透传：预热失败可能是 tts/vad，不能一律记成 asr。
+            let (code, family) = match &error {
+                BridgeError::Host(host) => (
+                    host.code.clone(),
+                    host.detail
+                        .as_ref()
+                        .and_then(|detail| detail.family.clone()),
+                ),
+                _ => ("worker_unavailable".to_owned(), None),
             };
             metrics.record_error(&code);
-            let _ = out.send(VoiceOut::Text(error_json(&code, "arming")));
+            let _ = out.send(VoiceOut::Text(error_json_with_family(
+                &code,
+                "arming",
+                family.as_deref(),
+            )));
             bridge.shutdown();
             return;
         }
@@ -506,16 +516,14 @@ fn event_out(event: axon_voice_bridge::VoiceEvent) -> Option<VoiceOut> {
             seq,
             pcm: audio,
         }),
-        VoiceEvent::Error(error) => Some(VoiceOut::Text(
-            serde_json::json!({
-                "type": "error",
-                "code": error.code,
-                "stage": error.stage,
-                "retryable": error.retryable,
-                "message": message_for(&error.code),
-            })
-            .to_string(),
-        )),
+        VoiceEvent::Error(error) => Some(VoiceOut::Text(error_json_with_family(
+            &error.code,
+            &error.stage,
+            error
+                .detail
+                .as_ref()
+                .and_then(|detail| detail.family.as_deref()),
+        ))),
         VoiceEvent::CueStatus(_)
         | VoiceEvent::Heartbeat(_)
         | VoiceEvent::Warm(_)

@@ -10,13 +10,23 @@ pub(super) fn state_json(phase: &str) -> String {
 }
 
 /// 错误帧；未知错误码按 `internal` 文案兜底。
+///
+/// 旧签名只服务 ASR 语境：`model_missing`/`model_unusable` 的 `detail.family` 固定写
+/// `"asr"`。别的模型族必须走 [`error_json_with_family`]，由调用方给出真实 family，
+/// 不再由这里替调用方假定。
 pub(super) fn error_json(code: &str, stage: &str) -> String {
+    let family = matches!(code, "model_missing" | "model_unusable").then_some("asr");
+    error_json_with_family(code, stage, family)
+}
+
+/// 带 family 的错误帧：`family` 由调用方给出，宿主错误按宿主回执的
+/// `detail.family` 原样透传，避免把 tts/vad 的错误都记到 asr 头上。
+pub(super) fn error_json_with_family(code: &str, stage: &str, family: Option<&str>) -> String {
     let failure = VoiceFailure::from_code(code);
     let (message, retryable) = match &failure {
         Some(failure) => (failure.user_message(), failure.retryable()),
         None => ("出现内部错误，请重试".to_owned(), true),
     };
-    let family = matches!(code, "model_missing" | "model_unusable").then_some("asr");
     serde_json::json!({
         "type": "error",
         "code": code,
@@ -50,7 +60,7 @@ pub(super) fn message_for(code: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{backpressure_json, error_json};
+    use super::{backpressure_json, error_json, error_json_with_family};
 
     #[test]
     fn backpressure_frame_keeps_the_connection_alive() {
@@ -71,5 +81,17 @@ mod tests {
         assert_eq!(value["message"], "本地语音模型未安装，点此查看安装指引");
         assert_eq!(value["detail"]["family"], "asr");
         assert_eq!(value["retryable"], true);
+    }
+
+    #[test]
+    fn error_frame_carries_the_caller_family() {
+        let value: serde_json::Value = serde_json::from_str(&error_json_with_family(
+            "model_unusable",
+            "arming",
+            Some("tts"),
+        ))
+        .expect("合法 JSON");
+        assert_eq!(value["detail"]["family"], "tts");
+        assert_eq!(value["code"], "model_unusable");
     }
 }

@@ -58,6 +58,15 @@ impl ModelStore {
         self.root.join(family.as_token()).join(name)
     }
 
+    /// 清单是否存在：只做存在性判断，不读内容也不做哈希。
+    ///
+    /// 用于「模型已在盘上、但该族没有预热探针」这类回执：想要的是清单在不在，
+    /// 用不到全量校验的代价，也不该为非法模型名拼出越界路径。
+    #[must_use]
+    pub fn has_manifest(&self, family: ModelFamily, name: &str) -> bool {
+        valid_name(name) && self.model_dir(family, name).join("manifest.json").is_file()
+    }
+
     /// 根目录是否可读且是目录。
     ///
     /// # Errors
@@ -449,6 +458,19 @@ mod tests {
             }
             other => panic!("期望摘要不符，得到 {other:?}"),
         }
+    }
+
+    #[test]
+    fn manifest_probe_rejects_illegal_names_and_absent_files() {
+        let temp = TempRoot::new("has-manifest");
+        temp.write(
+            "tts/demo/manifest.json",
+            manifest_json("demo", &"0".repeat(64), 4, "tts", "1.0.0").as_bytes(),
+        );
+        let store = ModelStore::new(&temp.0);
+        assert!(store.has_manifest(ModelFamily::Tts, "demo"));
+        assert!(!store.has_manifest(ModelFamily::Tts, "absent"));
+        assert!(!store.has_manifest(ModelFamily::Tts, "../demo"));
     }
 
     #[test]

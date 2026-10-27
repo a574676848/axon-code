@@ -44,9 +44,13 @@ impl Drop for TempRoot {
 }
 
 fn manifest(name: &str, sha: &str, bytes: u64, version: &str) -> String {
+    manifest_family("asr", name, sha, bytes, version)
+}
+
+fn manifest_family(family: &str, name: &str, sha: &str, bytes: u64, version: &str) -> String {
     format!(
         r#"{{
-            "family": "asr",
+            "family": "{family}",
             "name": "{name}",
             "version": "{version}",
             "runtime": "fixture",
@@ -89,9 +93,13 @@ fn client_for(root: &Path) -> HostClient {
 }
 
 fn warmup(manifest_sha256: &str) -> Control {
+    warmup_family("asr", "demo", manifest_sha256)
+}
+
+fn warmup_family(family: &str, model: &str, manifest_sha256: &str) -> Control {
     Control::Warmup(Warmup {
-        family: "asr".to_owned(),
-        model: "demo".to_owned(),
+        family: family.to_owned(),
+        model: model.to_owned(),
         manifest_sha256: manifest_sha256.to_owned(),
     })
 }
@@ -205,6 +213,63 @@ fn future_version_fails_preflight_with_13() {
     let json = manifest("demo", &hex_digest(b"data"), 4, "2.0.0");
     root.write("asr/demo/manifest.json", json.as_bytes());
     assert_eq!(exit_code_of(root.path()), 13);
+}
+
+#[test]
+fn unknown_family_echoes_the_requested_token() {
+    let root = TempRoot::new("unknown-family");
+    let mut client = client_for(root.path());
+    client
+        .send(&warmup_family("cue", "whatever", &"0".repeat(64)))
+        .expect("写 warmup");
+    let (retryable, reason) = expect_error(&mut client, "model_unusable");
+    assert!(!retryable);
+    let reason = reason.expect("应带原因");
+    assert!(
+        reason.contains("未知模型族：cue"),
+        "应回传原族名而不是指向 cue：{reason}"
+    );
+    assert_eq!(client.close().expect("关闭").code(), Some(0));
+}
+
+#[test]
+fn tts_without_manifest_reports_missing_model() {
+    let root = TempRoot::new("tts-missing");
+    let mut client = client_for(root.path());
+    client
+        .send(&warmup_family("tts", "vits-demo", &"0".repeat(64)))
+        .expect("写 warmup");
+    let (retryable, reason) = expect_error(&mut client, "model_missing");
+    assert!(retryable);
+    let reason = reason.expect("应带安装提示");
+    assert!(reason.contains("tts"), "安装提示应包含模型族：{reason}");
+    assert_eq!(client.close().expect("关闭").code(), Some(0));
+}
+
+#[test]
+fn tts_with_manifest_reports_on_demand_synthesis_without_fake_warm() {
+    let root = TempRoot::new("tts-present");
+    root.write("tts/vits-demo/model.bin", b"data");
+    let json = manifest_family("tts", "vits-demo", &hex_digest(b"data"), 4, "1.0.0");
+    root.write("tts/vits-demo/manifest.json", json.as_bytes());
+    let mut client = client_for(root.path());
+    client
+        .send(&warmup_family(
+            "tts",
+            "vits-demo",
+            &hex_digest(json.as_bytes()),
+        ))
+        .expect("写 warmup");
+    let (retryable, reason) = expect_error(&mut client, "model_unusable");
+    assert!(!retryable);
+    let reason = reason.expect("应带原因");
+    assert!(reason.contains("按需加载"), "应说明合成按需加载：{reason}");
+    // 清单存在也不放弃真实状态：心跳仍报 cold，不伪造 warm。
+    match client.recv_timeout(Duration::from_secs(3)).expect("心跳") {
+        Frame::Control(Control::Heartbeat(beat)) => assert_eq!(beat.model_state, "cold"),
+        other => panic!("期望心跳，得到 {other:?}"),
+    }
+    assert_eq!(client.close().expect("关闭").code(), Some(0));
 }
 
 #[test]

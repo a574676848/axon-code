@@ -418,12 +418,15 @@ impl HostState {
 
     fn warm_up(&mut self, store: Option<&ModelStore>, message: &Warmup) -> Control {
         let Some(family) = ModelFamily::parse(&message.family) else {
-            return unusable(None, "cue 模型预热尚未接入");
+            // 未知族只回原族名：旧文案把它说成 cue，等于替调用方猜错了意图。
+            return unusable(None, &format!("未知模型族：{}", message.family));
         };
-        // 只有 ASR 接了常驻识别服务；其余族如实回「不可用」，
-        // 不允许用 ASR 的指标冒充别的族（S-08 不伪造 warm）。
-        if family != ModelFamily::Asr {
-            return unusable(Some(&message.family), "该族运行时尚未接入");
+        // 只有 ASR 接了常驻识别服务；合成按命令行走一次性加载、vad 还没有运行时，
+        // 其余族如实回「不可用」，不允许用 ASR 的指标冒充别的族（S-08 不伪造 warm）。
+        match family {
+            ModelFamily::Asr => {}
+            ModelFamily::Tts => return tts_warm_up(store, message),
+            ModelFamily::Vad => return unusable(Some(&message.family), "该族运行时尚未接入"),
         }
         let Some(store) = store else {
             return missing(None, "使用 --model-root 指定模型目录");
@@ -578,6 +581,19 @@ fn send_audio(outbox: &SyncSender<Outgoing>, epoch: u32, samples: &[i16]) {
             Err(_) => break,
         }
     }
+}
+
+/// 合成族的预热回执：合成按命令行走一次性加载，没有常驻预热探针，
+/// 所以只如实报清单状态，绝不伪造 warm（S-08）。
+fn tts_warm_up(store: Option<&ModelStore>, message: &Warmup) -> Control {
+    let Some(store) = store else {
+        return missing(None, "使用 --model-root 指定模型目录");
+    };
+    let dir = store.model_dir(ModelFamily::Tts, &message.model);
+    if !store.has_manifest(ModelFamily::Tts, &message.model) {
+        return missing(Some(&message.family), &format!("安装到 {}", dir.display()));
+    }
+    unusable(Some(&message.family), "合成按需加载，未提供预热探针")
 }
 
 fn missing(family: Option<&str>, hint: &str) -> Control {
