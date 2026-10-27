@@ -89,6 +89,7 @@ fn tool_kind_name(kind: ToolKind) -> &'static str {
         ToolKind::NewContext => "new_context",
         ToolKind::ListMcpResources | ToolKind::ReadMcpResource => "mcp_resource",
         ToolKind::UpdatePlan => "update_plan",
+        ToolKind::WorkContract => "work_contract",
         ToolKind::GoalTool => "goal",
         ToolKind::Subagent => "subagent",
         ToolKind::Mcp => "mcp",

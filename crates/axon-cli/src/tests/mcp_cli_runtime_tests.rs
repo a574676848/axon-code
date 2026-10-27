@@ -264,6 +264,7 @@ fn tool_context(
         ),
     ));
     crate::tool_orchestrator::ToolOrchestratorContext {
+        work_contract: std::sync::Arc::new(std::sync::Mutex::new(axon_agent_runtime::WorkContractRuntime::default())),
         config_path,
         cwd: cwd.to_path_buf(),
         session_id: SessionId(1),

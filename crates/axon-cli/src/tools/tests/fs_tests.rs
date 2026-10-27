@@ -388,6 +388,9 @@ pub(crate) fn tool_call(
 
 pub(crate) fn context(cwd: &Path) -> ToolOrchestratorContext {
     ToolOrchestratorContext {
+        work_contract: std::sync::Arc::new(std::sync::Mutex::new(
+            axon_agent_runtime::WorkContractRuntime::default(),
+        )),
         config_path: None,
         cwd: cwd.to_path_buf(),
         session_id: SessionId(1),

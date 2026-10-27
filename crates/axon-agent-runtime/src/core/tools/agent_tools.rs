@@ -23,6 +23,7 @@ use crate::builtin_skill_invoke_tool::invoke_skill_tool_definition;
 use crate::builtin_subagent_tools::subagent_tool_definitions;
 use crate::builtin_token_budget_tools::token_budget_tool_definitions;
 use crate::builtin_update_plan_tool::update_plan_tool_definition;
+use crate::builtin_work_contract_tool::work_contract_tool_definition;
 
 /// 内置 Agent tool namespace。
 pub const AGENT_TOOL_NAMESPACE: &str = "builtin";
@@ -58,6 +59,7 @@ impl AgentToolRegistryRuntime {
             glob_tool_definition(),
             invoke_skill_tool_definition(),
             update_plan_tool_definition(),
+            work_contract_tool_definition(),
             ask_user_question_tool_definition(),
             list_mcp_resources_tool_definition(),
             read_mcp_resource_tool_definition(),

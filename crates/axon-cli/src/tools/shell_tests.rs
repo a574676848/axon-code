@@ -308,6 +308,9 @@ fn temp_workspace(tag: &str) -> std::path::PathBuf {
 
 fn test_context(cwd: std::path::PathBuf) -> ToolOrchestratorContext {
     ToolOrchestratorContext {
+        work_contract: std::sync::Arc::new(std::sync::Mutex::new(
+            axon_agent_runtime::WorkContractRuntime::default(),
+        )),
         config_path: None,
         cwd,
         session_id: axon_domain::SessionId(1),
