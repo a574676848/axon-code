@@ -170,6 +170,8 @@ mod builtin_subagent_tools_tests;
 mod builtin_token_budget_tools;
 #[path = "core/tools/builtin_update_plan_tool.rs"]
 mod builtin_update_plan_tool;
+#[path = "core/tools/builtin_work_contract_tool.rs"]
+mod builtin_work_contract_tool;
 #[path = "core/context/canonical_checkpoint.rs"]
 mod canonical_checkpoint;
 #[cfg(test)]
@@ -518,6 +520,11 @@ pub use builtin_ask_user_question_tool::{
     ASK_USER_QUESTION_TOOL_SCHEMA_VERSION, AskUserQuestionToolInput, AskUserQuestionToolReceipt,
     ask_user_question_tool_definition,
     parse_and_validate_input as parse_and_validate_ask_user_question_input,
+};
+pub use builtin_work_contract_tool::{
+    WORK_CONTRACT_TOOL_ID, WORK_CONTRACT_TOOL_NAME, WORK_CONTRACT_TOOL_QUALIFIED_NAME,
+    WORK_CONTRACT_TOOL_SCHEMA_VERSION, WorkContractRuntime, WorkContractToolError,
+    apply_work_contract, work_contract_tool_definition,
 };
 pub use content_archive::{
     CONTENT_ARCHIVE_DEFAULT_FILE_SUFFIX, CONTENT_ARCHIVE_DEFAULT_PREVIEW_CHARS,
