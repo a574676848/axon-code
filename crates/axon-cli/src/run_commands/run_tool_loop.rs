@@ -487,12 +487,19 @@ fn commit_ready_receipts(
 pub(super) fn execute_parallel_for_tests(
     execution_requests: &[ToolExecutionRequest],
     latency_ms: &[u64],
+    start_limit: Option<usize>,
     commit_log: &mut Vec<usize>,
 ) -> Vec<RunToolReceipt> {
     let total = execution_requests.len();
     let pool = session_tool_pool("parallel-seam-test", CapacitySnapshot::preset());
     let (event_tx, event_rx) = mpsc::channel();
+    let mut started = 0usize;
     for (index, execution_request) in execution_requests.iter().enumerate() {
+        // 取消后不再启动新调用，未启动的调用稍后补合成回执。
+        if start_limit.is_some_and(|limit| started >= limit) {
+            break;
+        }
+        started += 1;
         let event_tx = event_tx.clone();
         let delay = latency_ms.get(index).copied().unwrap_or(0);
         let call = execution_request.tool_call.clone();
@@ -521,7 +528,7 @@ pub(super) fn execute_parallel_for_tests(
     let mut receipts: Vec<Option<RunToolReceipt>> = (0..total).map(|_| None).collect();
     let mut committed = 0usize;
     let mut finished = 0usize;
-    while finished < total {
+    while finished < started {
         let Ok(ParallelToolProgress::Finished { index, receipt }) = event_rx.recv() else {
             break;
         };
@@ -536,6 +543,13 @@ pub(super) fn execute_parallel_for_tests(
             &mut |index| commit_log.push(index),
         );
     }
+    fill_unstarted_receipts(
+        &mut slots,
+        &mut receipts,
+        committed,
+        execution_requests,
+        None,
+    );
     receipts.into_iter().flatten().collect()
 }
 fn is_run_cancelled(context: &ToolOrchestratorContext) -> bool {
