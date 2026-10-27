@@ -104,6 +104,16 @@ axon debug session list
 axon debug session show <SESSION_ID>
 axon debug session read <THREAD_ID>
 axon debug session doctor
+
+# 人格系统：校验人设与查看持久化状态
+axon persona validate [--file <PATH>]  # 校验 SOUL.md（或指定文件）是否符合 axon-soul/v1
+axon persona status                    # 展示人格库、当前状态与已发布习得风格
+axon persona status [--json]          # 展示人格库、当前状态、最近转移与已发布习得风格
+axon persona style list [--all]        # 列出习得风格
+axon persona style retire <STYLE_ID>   # 退役一条习得风格
+axon persona reset --yes               # 把人格状态重置为基线，不动人设与习得风格
 ```
 
 Axon 自行判断是否继续既有工作并按工作区车道自动管理上下文。`debug session` 仅作为系统诊断与数据恢复的底层接口。
+
+人设与人格状态的字段、模式与体积预算见 [人格系统](./persona.md)；`axon doctor --check persona` 给出同一条判定。

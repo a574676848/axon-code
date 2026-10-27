@@ -94,6 +94,8 @@ export interface WireTurnLifecycle {
   toolName?: string;
   attemptIndex?: number;
   summary?: string;
+  /** 本轮降级告警（含人格装配告警）；为空时不出现。 */
+  warnings?: string[];
   durationMs?: number;
   startedAtMs?: number;
   totalTokens?: number;

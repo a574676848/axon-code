@@ -507,14 +507,14 @@ export const InputDock: React.FC<InputDockProps> = ({
             )}
             {/*
               双层同心倒角输入坞（Double-Bezel Architecture）：
-              外层是 22px 圆角的微下沉托槽，运行期间叠加一层克制的呼吸微光；
-              内层是 18px 圆角的浮起白卡核心，聚焦态保持立体投影绝不塌陷。
+              外层采用 3px 极轻透微下沉托槽，运行期间叠加柔和呼吸微光；
+              内层是 18px 圆角的纯白浮起核心，聚焦态保持立体投影绝不塌陷。
             */}
-            <div className="relative p-1 rounded-[22px] bg-surface-sunken/70 hairline border-border-hairline">
+            <div className="relative p-[3px] rounded-[21px] bg-surface-sunken/45 hairline border-border-hairline">
               {(working !== null || command.running !== null) && (
                 <span
                   aria-hidden="true"
-                  className="dock-ambient-glow pointer-events-none absolute inset-0 rounded-[22px] hairline border-focus/45"
+                  className="dock-ambient-glow pointer-events-none absolute inset-0 rounded-[21px] hairline border-focus/45"
                 />
               )}
               <div

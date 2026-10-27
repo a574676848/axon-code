@@ -160,7 +160,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(function Inp
 ) {
   return (
     <div
-      className={`flex items-center gap-1.5 h-8 px-2.5 rounded-sm bg-surface ${HAIRLINE} focus-within:border-focus transition-colors duration-100 ${className}`}
+      className={`flex items-center gap-1.5 h-8 px-2.5 rounded-sm bg-surface ${HAIRLINE} focus-within:border-focus focus-within:shadow-[0_0_0_3px_var(--color-focus-soft)] transition-colors duration-100 ${className}`}
     >
       {icon !== undefined && <span className="text-text-tertiary shrink-0 flex">{icon}</span>}
       <input
@@ -318,7 +318,7 @@ export const Checkbox: React.FC<CheckboxProps> = ({
 
 export const Textarea: React.FC<TextareaProps> = ({ className = '', ...rest }) => (
   <textarea
-    className={`w-full p-2.5 rounded-sm bg-surface ${HAIRLINE} text-row leading-relaxed text-text-primary resize-none outline-none focus:border-focus transition-colors duration-100 ${className}`}
+    className={`w-full p-2.5 rounded-md bg-surface ${HAIRLINE} text-row leading-relaxed text-text-primary placeholder:text-text-placeholder resize-none outline-none focus:border-focus focus:shadow-[0_0_0_3px_var(--color-focus-soft)] transition-colors duration-100 ${className}`}
     {...rest}
   />
 );

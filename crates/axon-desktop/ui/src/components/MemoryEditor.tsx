@@ -131,24 +131,11 @@ export const MemoryEditor: React.FC<MemoryEditorProps> = ({
         />
       )}
 
-      {!editing && (
-        <SegmentedControl
-          label="录入方式"
-          options={ENTRY_MODES}
-          value={mode}
-          onChange={setMode}
-        />
-      )}
-
-      {mode === 'form' ? (
-        <>
-          {editing ? (
-            <Text size="xs" tone="secondary" className="block">
-              修改会写入一条新记录并标记替代关系，类型固定为「{memoryKindLabel(kind)}」；如需更换类型请新增一条。
-            </Text>
-          ) : (
-            <div className="space-y-1.5">
-              <Text tone="secondary" size="xs" className="block">
+      {!editing && mode === 'form' ? (
+        <div className="space-y-2 rounded-md bg-surface-sunken/45 hairline border-border-hairline p-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Text tone="secondary" size="xs">
                 记忆类型
               </Text>
               <SegmentedControl
@@ -157,16 +144,42 @@ export const MemoryEditor: React.FC<MemoryEditorProps> = ({
                 value={kind}
                 onChange={setKind}
               />
-              <Text tone="secondary" size="xs" className="block">
-                画像与偏好属于个人记忆；经验、知识、流程属于仓库记忆，需要文件夹目录。
-              </Text>
             </div>
+            <SegmentedControl
+              label="录入方式"
+              options={ENTRY_MODES}
+              value={mode}
+              onChange={setMode}
+            />
+          </div>
+          <Text tone="tertiary" size="xs" className="block">
+            画像与偏好属于个人记忆；经验、知识、流程属于仓库记忆，需要文件夹目录。
+          </Text>
+        </div>
+      ) : !editing ? (
+        <div className="flex items-center justify-end">
+          <SegmentedControl
+            label="录入方式"
+            options={ENTRY_MODES}
+            value={mode}
+            onChange={setMode}
+          />
+        </div>
+      ) : null}
+
+      {mode === 'form' ? (
+        <>
+          {editing && (
+            <Text size="xs" tone="secondary" className="block">
+              修改会写入一条新记录并标记替代关系，类型固定为「{memoryKindLabel(kind)}」；如需更换类型请新增一条。
+            </Text>
           )}
           <FormField label="摘要">
             <Textarea
               value={summary}
               onChange={(event) => setSummary(event.target.value)}
-              className="min-h-32"
+              placeholder="简明提炼这条记忆的核心结论或规则"
+              className="min-h-28"
               maxLength={2000}
               aria-label="记忆摘要"
             />
@@ -175,7 +188,8 @@ export const MemoryEditor: React.FC<MemoryEditorProps> = ({
             <Textarea
               value={evidence}
               onChange={(event) => setEvidence(event.target.value)}
-              className="min-h-24"
+              placeholder="记录结论来源、文件路径、命令输出或上下文依据"
+              className="min-h-22"
               maxLength={2000}
               aria-label="证据引用"
             />

@@ -348,17 +348,28 @@ fn render_completed_run(
     provider_turn_elapsed_ms: u64,
 ) -> CliRunResult {
     let response = completed.response;
-    let diagnostics = run_outcome_diagnostics::collect(&response, provider_turn_elapsed_ms);
+    let diagnostics = run_outcome_diagnostics::collect(
+        &response,
+        provider_turn_elapsed_ms,
+        &request.persona_warnings,
+    );
     match output {
-        OutputFormat::Text => CliRunResult {
-            exit_code: u8::from(diagnostics.status == "failed"),
-            stdout: format!(
+        OutputFormat::Text => {
+            let mut stdout = format!(
                 "运行终态：{}\n{}",
                 diagnostics.status,
                 super::run_text_render::render_text_run_summary(request, &response),
-            ),
-            stderr: String::new(),
-        },
+            );
+            // 文本输出同样承载降级告警：人格装配、校验与超时都在这里露出。
+            for warning in &diagnostics.warnings {
+                stdout.push_str(&format!("告警：{warning}\n"));
+            }
+            CliRunResult {
+                exit_code: u8::from(diagnostics.status == "failed"),
+                stdout,
+                stderr: String::new(),
+            }
+        }
         OutputFormat::Json => {
             let event = RunJsonEvent::completed(CompletedRunWireEventsInput {
                 request,

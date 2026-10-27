@@ -32,11 +32,15 @@ const SELF_ITERATION_SESSION_SETUP_FAILED: &str = "自我迭代子代理会话�
 const SEMANTIC_SALIENCE_LABEL: &str = "semantic_salience";
 const SEMANTIC_SALIENCE_SUMMARY: &str = "轻量语义显著性评估";
 const SEMANTIC_SALIENCE_MAX_RUNTIME_MS: u64 = 15_000;
-const SEMANTIC_SALIENCE_SYSTEM_PROMPT: &str = "你是 AXON 的轻量语义显著性评估器。只判断随附 turn outcome 是否包含值得跨会话复用的长期信息，不执行工具、不延续任务、不依据关键词或正则做判断。执行事实只能来自 runtimeVerified=true 的 evidence；assistantOutcomeSummary 不能单独证明执行。用户明确、稳定、可复用的画像或偏好可引用 userMessageRef；experience、knowledge、procedure 必须同时有运行时执行证据。普通任务、临时状态和一次性事实必须 shouldReflect=false，此时 candidateTypes 与 evidenceRefs 必须为空。只输出符合 schema 的 JSON。";
+const SEMANTIC_SALIENCE_SYSTEM_PROMPT: &str = "你是 AXON 的轻量语义显著性评估器。只判断随附 turn outcome 是否包含值得跨会话复用的长期信息，不执行工具、不延续任务、不依据关键词或正则做判断。执行事实只能来自 runtimeVerified=true 的 evidence；assistantOutcomeSummary 不能单独证明执行。用户明确、稳定、可复用的画像或偏好可引用 userMessageRef；experience、knowledge、procedure 必须同时有运行时执行证据。普通任务、临时状态和一次性事实必须 shouldReflect=false，此时 candidateTypes 与 evidenceRefs 必须为空。userAffect 判断用户在本轮表达出的状态，证据不足写 unknown。personaDrift 判断助手回复偏离人格底色的程度（0 至 10000 基点），正常遵循基线时写 0。用户明确表达对说话方式、措辞、语气或详略的偏好时，candidateTypes 使用 style，并把这条偏好本身写进 styleCandidate（不超过 120 字），不要把判断理由写进去。personaDrift 达到 7000 时必须同时给出 driftReason（不超过 80 字），说明偏在哪。只输出符合 schema 的 JSON。";
 
 #[derive(Debug, Default)]
 pub(super) struct PostRunSelfIterationReport {
     pub(super) skill_evolution: Option<SkillEvolutionEvent>,
+    /// 本轮语义评估结果；缺失表示评估未完成或不可信。
+    pub(super) semantic_assessment: Option<SemanticSalienceAssessment>,
+    /// 本轮用户消息的证据引用，用于校验风格候选的来源。
+    pub(super) user_message_ref: Option<String>,
     pub(super) failed_entry_count: usize,
     pub(super) quality: PostRunSelfIterationQuality,
 }
@@ -68,6 +72,9 @@ pub(super) fn run_post_run_self_iteration_subagents(
             false_memory_rejections: u64::from(semantic_outcome.rejected),
             ..PostRunSelfIterationQuality::default()
         },
+        // 评估结果先于钩子规划落到报告上：没有钩子的普通回合同样要把它交给人格结算。
+        semantic_assessment: semantic_outcome.assessment.clone(),
+        user_message_ref: Some(turn_outcome.user_message_ref.clone()),
         ..PostRunSelfIterationReport::default()
     };
     let input = self_iteration_input(request, turn_outcome, semantic_outcome.assessment);
@@ -142,6 +149,7 @@ pub(super) fn run_post_run_self_iteration_subagents(
         results.push(subagent_result(entry, hook, status, output.as_ref()));
     }
     let _ = SelfIterationRuntime.merge_delegation_results(&plan, 0, results);
+    report.semantic_assessment = input.semantic_assessment.clone();
     report.skill_evolution = skill_evolution;
     report.failed_entry_count = failed_entry_count;
     report
@@ -242,7 +250,7 @@ fn semantic_salience_output_schema() -> serde_json::Value {
             "shouldReflect": { "type": "boolean" },
             "candidateTypes": {
                 "type": "array",
-                "items": { "type": "string", "enum": ["profile", "preference", "experience", "knowledge", "procedure"] }
+                "items": { "type": "string", "enum": ["profile", "preference", "experience", "knowledge", "procedure", "style"] }
             },
             "signals": {
                 "type": "object",
@@ -259,9 +267,13 @@ fn semantic_salience_output_schema() -> serde_json::Value {
                 "required": ["identityRelevance", "stability", "futureUtility", "novelty", "correctionStrength", "verificationStrength", "scopeConfidence"]
             },
             "evidenceRefs": { "type": "array", "items": { "type": "string" } },
-            "reason": { "type": "string", "minLength": 1, "maxLength": 500 }
+            "reason": { "type": "string", "minLength": 1, "maxLength": 500 },
+            "userAffect": { "type": "string", "enum": ["neutral", "positive", "frustrated", "urgent", "unknown"] },
+            "personaDrift": { "type": "integer", "minimum": 0, "maximum": 10_000 },
+            "driftReason": { "type": "string", "minLength": 1, "maxLength": 80 },
+            "styleCandidate": { "type": "string", "minLength": 1, "maxLength": 120 }
         },
-        "required": ["schemaVersion", "shouldReflect", "candidateTypes", "signals", "evidenceRefs", "reason"]
+        "required": ["schemaVersion", "shouldReflect", "candidateTypes", "signals", "evidenceRefs", "reason", "userAffect", "personaDrift"]
     })
 }
 

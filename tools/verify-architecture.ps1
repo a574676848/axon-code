@@ -67,5 +67,7 @@ Assert-NoCargoDependency -Crate "axon-apply" -Forbidden @(
 Assert-NoCargoDependency -Crate "axon-desktop" -Forbidden @(
     "axon-cli", "axon-daemon", "axon-remote-feishu",
     # 表现层必须经网关协议访问运行态，禁止直连会话子系统或运行态数据库。
-    "axon-session", "axon-session-runtime", "axon-domain", "rusqlite"
+    "axon-session", "axon-session-runtime", "axon-domain", "rusqlite",
+    # 人格状态一律经网关读取，桌面端不得直接依赖人格 crate。
+    "axon-persona"
 )

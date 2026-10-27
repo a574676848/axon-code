@@ -171,7 +171,9 @@ Windows 侧的 PTY（ConPTY）会话不做围栏：`portable_pty` 不返回子�
 
 主代理在每次模型请求前重新读取 `SOUL.md`，因此保存后的内容从下一次请求开始生效，无需重启会话。子代理不加载 Soul。文件不存在或内容为空时直接跳过，不影响请求执行。
 
-Soul 以独立、可缓存的 session-stable user context 发送，不写入基础 system prompt。修改 Soul 只会更新该 session-stable 段的缓存标识，基础 system prefix 及其缓存命名空间保持稳定。
+`SOUL.md` 使用 `axon-soul/v1` 结构化格式（必填 YAML frontmatter 加可选正文），字段与校验规则见 [人格系统](./persona.md)。不符合该格式的文件不会被装配，回合继续并留下带字段路径的告警；可用 `axon persona validate` 就地校验。
+
+Soul 以独立、可缓存的 session-stable user context 发送，不写入基础 system prompt。修改 Soul 只会更新该 session-stable 段的缓存标识，基础 system prefix 及其缓存命名空间保持稳定。轮后的人格状态写入独立库 `~/.axon/data/persona/persona.sqlite3`，不改变该缓存段。
 
 ## 面向新用户的最小设置
 

@@ -4,6 +4,7 @@ import {
   BrainIcon,
   ChartIcon,
   ChecklistIcon,
+  CloseIcon,
   DatabaseIcon,
   GaugeIcon,
   GlobeIcon,
@@ -19,12 +20,13 @@ import type { ConfigReadResult, SettingsSection } from '../types';
 import { isEmbeddingModel } from '../modelCatalog';
 import * as ipc from '../ipc';
 import { Modal } from './ui/overlays';
-import { Button } from './ui/controls';
+import { Button, IconButton } from './ui/controls';
 import { Banner, EmptyState, HairlineStack, LoadingState, Text } from './ui/surfaces';
 import { ConfigFieldRow } from './ConfigFieldRow';
 import { ModelsSettings } from './settings/ProviderProfileCard';
 import { McpSettings } from './settings/McpSettings';
 import { SkillsSettings } from './settings/SkillsSettings';
+import { PersonaStatusPanel } from './settings/PersonaStatusPanel';
 import { DocumentEditor } from './settings/DocumentEditor';
 import { SystemInfoSettings } from './settings/SystemInfoSettings';
 import { SystemSettings } from './settings/SystemSettings';
@@ -296,7 +298,7 @@ export const BasicSettingsPanel: React.FC<BasicSettingsPanelProps> = ({
       open={open}
       onClose={onClose}
       title="设置"
-      variant="floating"
+      variant="headless"
       panelClassName="w-full max-w-[960px] h-[calc(100vh-64px)] max-h-[720px]"
     >
       {/* 二级分区导航 */}
@@ -328,117 +330,129 @@ export const BasicSettingsPanel: React.FC<BasicSettingsPanelProps> = ({
         })}
       </nav>
 
-      {/* 正文 */}
+      {/* 正文：顶部固定分区头（含对称动作与关闭按钮）+ 中部全高度对称滚动区 + 底部固定状态行 */}
       <div className="flex-1 min-w-0 min-h-0 flex flex-col bg-surface">
-        <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto scroll-visible">
-          <div className={dashboard ? 'h-full bg-surface-sunken' : 'h-full flex flex-col'}>
-            <div
-              className={`${wideContent ? 'max-w-none' : 'max-w-[720px]'} flex-1 flex flex-col pl-5 pr-12 pt-3 pb-5`}
-            >
-              {/* 分区身份：标题 16/24 500，说明 12/16 secondary，动作与内容右轴同轴 */}
-              <div className="flex items-start justify-between gap-4">
-                <Text size="base" strong truncate className="min-w-0">
-                  {spec.label}
-                </Text>
-                <div className="shrink-0 flex items-center gap-2">
-                  <HeaderDocumentAction section={section} />
-                  <div ref={setActionSlot} className="flex items-center gap-2" />
-                </div>
-              </div>
-              <div className="mt-0.5 flex items-start justify-between gap-3">
-                <Text tone="secondary" size="xs" className="min-w-0">
-                  {spec.description}
-                </Text>
-                <div ref={setStatusSlot} className="shrink-0 flex items-center gap-2" />
-              </div>
+        <header className="shrink-0 px-6 pt-3.5 pb-3 bg-surface hairline-b border-border-hairline">
+          <div className="flex items-center justify-between gap-4">
+            <Text size="base" strong truncate className="min-w-0">
+              {spec.label}
+            </Text>
+            <div className="shrink-0 flex items-center gap-2">
+              <HeaderDocumentAction section={section} />
+              <div ref={setActionSlot} className="flex items-center gap-2" />
+              <IconButton label="关闭" onClick={onClose} className="ml-1">
+                <CloseIcon size={14} />
+              </IconButton>
+            </div>
+          </div>
+          <div className="mt-0.5 flex items-center justify-between gap-3">
+            <Text tone="secondary" size="xs" className="min-w-0">
+              {spec.description}
+            </Text>
+            <div ref={setStatusSlot} className="shrink-0 flex items-center gap-2" />
+          </div>
+        </header>
 
-              {error !== null && (
-                <div className="mt-3">
-                  <Banner
-                    tone="danger"
-                    icon={<AlertCircleIcon size={13} />}
-                    title={`配置操作失败：${error}`}
-                    action={
-                      <Button variant="ghost" size="sm" onClick={() => setError(null)}>
-                        知道了
-                      </Button>
-                    }
-                  />
-                </div>
-              )}
+        <div
+          ref={scrollRef}
+          className={`flex-1 min-h-0 overflow-y-auto scroll-visible ${
+            dashboard ? 'bg-surface-sunken' : 'bg-surface'
+          }`}
+        >
+          <div
+            className={`${
+              wideContent ? 'max-w-none' : 'max-w-[720px]'
+            } min-h-full flex flex-col px-6 py-4`}
+          >
+            {error !== null && (
+              <div className="mb-3">
+                <Banner
+                  tone="danger"
+                  icon={<AlertCircleIcon size={13} />}
+                  title={`配置操作失败：${error}`}
+                  action={
+                    <Button variant="ghost" size="sm" onClick={() => setError(null)}>
+                      知道了
+                    </Button>
+                  }
+                />
+              </div>
+            )}
 
-              <div className="mt-4 flex-1 flex flex-col">
-                <SettingsHeaderProvider actionSlot={actionSlot} statusSlot={statusSlot}>
-                  {configBody ? (
-                    loading ? (
-                      <LoadingState label="正在读取配置" />
-                    ) : (
-                      <EmptyState
-                        title="无法读取配置"
-                        description={error ?? '配置暂时不可用，请稍后重试'}
-                      />
-                    )
+            <div className="flex-1 flex flex-col">
+              <SettingsHeaderProvider actionSlot={actionSlot} statusSlot={statusSlot}>
+                {configBody ? (
+                  loading ? (
+                    <LoadingState label="正在读取配置" />
                   ) : (
-                    <>
-                      {section === 'models' && config !== null && (
-                        <ModelsSettings
-                          providers={config.providers}
-                          models={config.models}
-                          protocols={config.provider_protocols}
-                          wireTransports={config.provider_wire_transports}
-                          onChanged={() => void load()}
-                        />
-                      )}
+                    <EmptyState
+                      title="无法读取配置"
+                      description={error ?? '配置暂时不可用，请稍后重试'}
+                    />
+                  )
+                ) : (
+                  <>
+                    {section === 'models' && config !== null && (
+                      <ModelsSettings
+                        providers={config.providers}
+                        models={config.models}
+                        protocols={config.provider_protocols}
+                        wireTransports={config.provider_wire_transports}
+                        onChanged={() => void load()}
+                      />
+                    )}
 
-                      {section === 'mcp' && <McpSettings />}
+                    {section === 'mcp' && <McpSettings />}
 
-                      {section === 'skills' && <SkillsSettings />}
+                    {section === 'skills' && <SkillsSettings />}
 
                       {section === 'soul' && (
-                        <DocumentEditor
-                          documentId="soul"
-                          placeholder="写下 Axon 的人设与长期偏好"
-                        />
+                        <div className="space-y-3">
+                          <PersonaStatusPanel />
+                          <DocumentEditor
+                            documentId="soul"
+                            placeholder="写下 Axon 的人设与长期偏好"
+                          />
+                        </div>
                       )}
 
-                      {section === 'agents' && (
-                        <DocumentEditor
-                          documentId="agents"
-                          placeholder="写下必须遵守的行为约束与工程规范"
-                        />
-                      )}
+                    {section === 'agents' && (
+                      <DocumentEditor
+                        documentId="agents"
+                        placeholder="写下必须遵守的行为约束与工程规范"
+                      />
+                    )}
 
-                      {section === 'system' && <SystemSettings />}
+                    {section === 'system' && <SystemSettings />}
 
-                      {section === 'usage' && <UsageStatistics />}
+                    {section === 'usage' && <UsageStatistics />}
 
-                      {section === 'pricing' && <PricingSettings />}
+                    {section === 'pricing' && <PricingSettings />}
 
-                      {section === 'about' && <SystemInfoSettings />}
+                    {section === 'about' && <SystemInfoSettings />}
 
-                      {PREFIX_SECTIONS.has(section) && (
-                        <>
-                          {fields.length === 0 ? (
-                            <EmptyState
-                              title="该分区下没有可配置项"
-                              description="配置文件里没有与这个分区匹配的键"
-                            />
-                          ) : (
-                            prefixedFields
-                          )}
-                        </>
-                      )}
-                    </>
-                  )}
-                </SettingsHeaderProvider>
-              </div>
+                    {PREFIX_SECTIONS.has(section) && (
+                      <>
+                        {fields.length === 0 ? (
+                          <EmptyState
+                            title="该分区下没有可配置项"
+                            description="配置文件里没有与这个分区匹配的键"
+                          />
+                        ) : (
+                          prefixedFields
+                        )}
+                      </>
+                    )}
+                  </>
+                )}
+              </SettingsHeaderProvider>
             </div>
           </div>
         </div>
 
         {/* 底部状态行：与内容无关，永远停在面板底部；没有状态文案时整条不出现。 */}
         {spec.footer.length > 0 && (
-          <footer className="shrink-0 h-8 px-5 flex items-center hairline-t border-border-hairline">
+          <footer className="shrink-0 h-8 px-6 flex items-center bg-surface hairline-t border-border-hairline">
             <Text tone="tertiary" size="xs" className="min-w-0 truncate">
               {spec.footer}
             </Text>

@@ -124,6 +124,8 @@ where
                     failure: report,
                     transport_context: transport_context.clone(),
                     recorded_at_ms: self.clock.now_ms(),
+                    // 失败回执里可能带着 CLI 的降级告警，原样透传给客户端。
+                    warnings: &failure_warnings(&message),
                 })
                 .map_err(runtime_error)?;
                 self.persist_and_publish(
@@ -450,3 +452,28 @@ use interaction_turn_payloads::{
 #[cfg(test)]
 #[path = "interaction_turn_runner_performance_tests.rs"]
 mod performance_tests;
+
+/// 从失败回执里取出本轮告警；取不到就是空。
+fn failure_warnings(message: &str) -> Vec<String> {
+    let Some(start) = message.find("{") else {
+        return Vec::new();
+    };
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(&message[start..]) else {
+        return Vec::new();
+    };
+    payload
+        .get("warnings")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+#[path = "interaction_turn_runner_warnings_tests.rs"]
+mod warnings_tests;

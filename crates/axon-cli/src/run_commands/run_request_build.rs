@@ -64,6 +64,7 @@ impl RunRequest {
         };
         let runtime_input = BuildRunModelPayloadInput {
             config_path,
+            client_channel: options.client_channel,
             config,
             cwd: &cwd,
             command,

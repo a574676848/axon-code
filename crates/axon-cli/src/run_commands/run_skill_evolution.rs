@@ -594,6 +594,7 @@ mod tests {
             config_path,
             session_id: session_id.clone(),
             invocation_id: format!("test-invocation:{session_id}"),
+            persona_warnings: Vec::new(),
             startup,
             execution_tools,
             resumed_from: None,

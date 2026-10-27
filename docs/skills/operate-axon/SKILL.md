@@ -58,6 +58,7 @@ description: 已安装 Axon 的运行时操作手册。用于配置和模型、A
 - 配置、认证和模型：用 `axon config path|env-path|validate|show|keys|get` 先检查，`config edit|set` 才会写入。用 `axon providers`、`axon models`、`axon auth status` 查看状态，只有用户要求时运行 `setup`、`providers add|remove` 或写入密钥。
 - Skill 与 MCP：用 `axon skills --summary` 查看有效 Skill；用 `axon mcp list|get` 检查 MCP server。添加、移除、登录或退出前必须读取相应子命令帮助并取得用户授权。
 - Memory 与使用统计：`axon memory stats|doctor|list|search|conflicts|compare|quality|review|inspect` 和 `axon usage` 是检查入口。`memory consolidate|consistency|recover-conflict|approve|archive-pending|quarantine|forget|import` 会改变状态，必须先确认范围。
+- 人格：`axon persona validate|status` 是只读入口，分别校验 `SOUL.md` 是否符合 `axon-soul/v1` 与读取人格库状态；`axon persona style list|retire` 管理习得风格，`axon persona reset --yes` 把状态重置为基线且不改动人设文件；`axon doctor --check persona` 给出与 `validate` 同一条判定。人设格式无效时该轮不装配人格，回合照常继续。
 - 诊断和导出：`axon doctor [--check <area>]`、`axon lsp servers|workspace-symbol|definition|references|diagnostics`、`axon debug builtin`、`axon debug channel-metrics` 用于定向检查。`axon debug channel-metrics` 按时间、模型和 Provider 查询已持久化的渠道性能、缓存与连接指标；`axon export` 输出运行数据；输出到文件前确认路径。
 - Daemon、Cron 和 Remote：`axon daemon status`、`axon daemon health`、`axon cron list`、`axon remote status|feishu-status|subscriptions|outbox|audit` 为只读检查。`axon daemon install|uninstall|start|stop|restart|drain`、`cron create|update|pause|resume|remove|run|tick`、远控订阅撤销和投递/worker 命令都会影响运行状态或外部服务，需用户明确授权。
 - 图片、服务、打包和升级：图片生成或编辑由已加载 Skill 完成，可能产生费用；`axon serve` 会监听本地端口；`axon package` 生成发布包；`axon upgrade --apply|--rollback` 改变后续 Axon 会话使用的版本。执行前都要确认目标与副作用。

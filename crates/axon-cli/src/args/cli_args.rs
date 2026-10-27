@@ -7,8 +7,8 @@ use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use super::{
     AuthCommand, CompletionCommand, ConfigCommand, CronCommand, DaemonCommand, DebugCommand,
     DoctorCommand, ExecCommand, ExportCommand, LspCommand, McpCommand, MemoryCommand,
-    ModelsCommand, PackageCommand, ProvidersCommand, RemoteCommand, SetupCommand, SkillsCommand,
-    StopCommand, UpgradeCommand, UsageCommand,
+    ModelsCommand, PackageCommand, PersonaCommand, ProvidersCommand, RemoteCommand, SetupCommand,
+    SkillsCommand, StopCommand, UpgradeCommand, UsageCommand,
 };
 
 /// Axon CLI 顶层参数。
@@ -138,6 +138,8 @@ pub enum AxonCommand {
     Package(PackageCommand),
     /// 导出数据。
     Export(ExportCommand),
+    /// 人格系统：校验与持久化状态。
+    Persona(PersonaCommand),
     /// 记忆管理。
     Memory(MemoryCommand),
     /// 通用后台 Daemon Host 与 Session IPC。
@@ -252,6 +254,7 @@ pub fn plan_invocation(cli: &AxonCli) -> CliInvocation {
         Some(AxonCommand::Upgrade(_)) => CliInvocation::Command { name: "upgrade" },
         Some(AxonCommand::Package(_)) => CliInvocation::Command { name: "package" },
         Some(AxonCommand::Export(_)) => CliInvocation::Command { name: "export" },
+        Some(AxonCommand::Persona(_)) => CliInvocation::Command { name: "persona" },
         Some(AxonCommand::Memory(_)) => CliInvocation::Command { name: "memory" },
         Some(AxonCommand::Daemon(_)) => CliInvocation::Command { name: "daemon" },
         Some(AxonCommand::Cron(_)) => CliInvocation::Command { name: "cron" },

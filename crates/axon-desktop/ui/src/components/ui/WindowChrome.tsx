@@ -123,7 +123,7 @@ export const WindowChrome: React.FC = () => {
     <div
       data-no-drag
       aria-label="窗口控制"
-      className="fixed top-1.5 right-2.5 z-[1050] h-10 flex items-center gap-0.5 select-none"
+      className="fixed top-1.5 right-2.5 z-[950] h-10 flex items-center gap-0.5 select-none"
     >
       <button
         type="button"

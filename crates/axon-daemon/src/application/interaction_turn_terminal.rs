@@ -295,6 +295,8 @@ pub(super) struct FailedTurnTerminalInput<'a> {
     pub(super) failure: TurnFailureReport,
     pub(super) transport_context: serde_json::Value,
     pub(super) recorded_at_ms: u64,
+    /// 本轮降级告警（含人格装配告警）；失败路径同样要透传。
+    pub(super) warnings: &'a [String],
 }
 
 pub(super) fn failed_turn_terminal_events(
@@ -343,6 +345,8 @@ pub(super) fn failed_turn_terminal_events(
             started_at_ms: None,
             total_tokens: None,
             cache_hit_rate_basis_points: None,
+
+            warnings: input.warnings.to_vec(),
         }),
     })?;
     let mut payload = serde_json::json!({
@@ -480,6 +484,7 @@ mod tests {
             failure: report,
             transport_context: serde_json::json!({ "channel": "desktop" }),
             recorded_at_ms: 1_000,
+            warnings: &[],
         })
         .expect("失败终态事件应可构造");
 
@@ -499,6 +504,38 @@ mod tests {
                 .unwrap_or_default()
                 .contains("{"),
             "正文里不再出现原始载荷"
+        );
+    }
+
+    #[test]
+    fn terminal_payload_carries_persona_warnings() {
+        let error = provider_failure(
+            r#"{"category":"provider_transport","code":"upstream_503","redactedMessage":"上游返回 503"}"#,
+        );
+        let (kind, response, report) = classify_turn_failure(&error);
+        let warnings = vec!["人格稳定段接近上限（5000 B）".to_owned()];
+        let events = failed_turn_terminal_events(FailedTurnTerminalInput {
+            action_id: "action-1",
+            action_kind: "user_input",
+            session_id: "session-1",
+            kind,
+            response: &response,
+            failure: report,
+            transport_context: serde_json::json!({ "channel": "desktop" }),
+            recorded_at_ms: 1_000,
+            warnings: &warnings,
+        })
+        .expect("失败终态事件应可构造");
+
+        // 告警挂在终态 lifecycle wire 事件里：序列化后必须能看到原文。
+        let emitted = events
+            .iter()
+            .map(|event| event.payload_json.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            emitted.contains("人格稳定段接近上限（5000 B）"),
+            "失败终态事件必须携带人格告警：{emitted}"
         );
     }
 
@@ -526,6 +563,7 @@ mod tests {
             failure: report,
             transport_context: serde_json::json!({ "channel": "desktop" }),
             recorded_at_ms: 1_000,
+            warnings: &[],
         })
         .expect("失败终态事件应可构造");
         let payload: serde_json::Value = serde_json::from_str(

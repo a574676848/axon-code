@@ -43,6 +43,8 @@ fn subagent_activity_event(status: WireLifecycleStatus, phase: &str) -> AgentTui
             started_at_ms: Some(1),
             total_tokens: Some(128),
             cache_hit_rate_basis_points: None,
+
+            warnings: Vec::new(),
         },
     ))
 }

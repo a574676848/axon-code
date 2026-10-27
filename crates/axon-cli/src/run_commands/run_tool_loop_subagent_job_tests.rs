@@ -67,6 +67,7 @@ fn fixture_request_with_executor(subagent_executor: Arc<dyn RunSubagentExecutor>
             agent_pane_included: false,
             injected_context_messages: Vec::new(),
         },
+        persona_warnings: Vec::new(),
         startup,
         execution_tools,
         workspace_files: Arc::new(axon_agent_runtime::WorkspaceFileSession::default()),

@@ -114,9 +114,9 @@ export const DisclosureRow: React.FC<DisclosureRowProps> = ({
       )}
       {label !== undefined && label.length > 0 && (
         <span
-          className={`${LABEL_COLUMN} text-row ${
-            danger ? 'text-danger' : 'text-text-primary'
-          } ${active ? 'shimmer-text-active font-medium' : ''}`}
+          className={`${LABEL_COLUMN} text-row font-medium ${
+            danger ? 'text-danger' : 'text-text-secondary'
+          } ${active ? 'shimmer-text-active text-text-primary' : ''}`}
         >
           {label}
         </span>
@@ -128,7 +128,7 @@ export const DisclosureRow: React.FC<DisclosureRowProps> = ({
       )}
       <span
         className={`min-w-0 flex-1 truncate text-row ${
-          danger ? 'text-danger' : 'text-text-primary'
+          danger ? 'text-danger' : 'text-text-prose'
         }`}
       >
         {title}

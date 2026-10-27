@@ -54,7 +54,12 @@ pub(super) fn completed_run_wire_events(
         builder.push_governance(receipt);
     }
     builder.push_assistant_message(&input.response.assistant_part_id, &input.response.content);
-    builder.push_run_lifecycle(WireLifecycleStatus::Completed, "Run completed", None);
+    builder.push_run_lifecycle(
+        WireLifecycleStatus::Completed,
+        "Run completed",
+        None,
+        input.request.persona_warnings.clone(),
+    );
     builder.into_events()
 }
 
@@ -77,6 +82,7 @@ pub(super) fn failed_run_wire_events(
         WireLifecycleStatus::Failed,
         "Run failed",
         Some(error.message.clone()),
+        request.persona_warnings.clone(),
     );
     builder.into_events()
 }
@@ -216,6 +222,7 @@ impl RunWireEventBuilder {
         status: WireLifecycleStatus,
         title: &'static str,
         summary: Option<String>,
+        warnings: Vec<String>,
     ) {
         self.push(
             format!(
@@ -237,6 +244,7 @@ impl RunWireEventBuilder {
                 tool_name: None,
                 attempt_index: None,
                 summary,
+                warnings,
                 duration_ms: None,
                 started_at_ms: None,
                 total_tokens: None,
@@ -534,165 +542,5 @@ impl RunWireEventBuilder {
 mod plan_tests;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn wire_builder_emits_reasoning_before_final_assistant_part() {
-        let mut builder = RunWireEventBuilder {
-            session: WireSessionRef {
-                session_id: "session-1".to_owned(),
-                run_id: None,
-                parent_session_id: None,
-            },
-            recorded_at_ms: 1,
-            next_sequence: 1,
-            events: Vec::new(),
-        };
-
-        builder.push_reasoning_messages(&[AgentRunReasoningMessage {
-            part_id: "reasoning-part:1".to_owned(),
-            reasoning_id: "provider-reasoning:1".to_owned(),
-            content: "先分析".to_owned(),
-        }]);
-        builder.push_assistant_message("assistant-part:1", "最终回答");
-
-        let events = builder.into_events();
-        assert!(matches!(
-            &events[0].kind,
-            WireEventKind::ReasoningStart(reasoning)
-                if reasoning.part_id == "reasoning-part:1"
-                    && reasoning.reasoning_id == "provider-reasoning:1"
-        ));
-        assert!(matches!(
-            &events[1].kind,
-            WireEventKind::ReasoningDelta(reasoning)
-                if reasoning.part_id == "reasoning-part:1"
-                    && reasoning.reasoning_id == "provider-reasoning:1"
-                    && reasoning.delta == "先分析"
-        ));
-        assert!(matches!(
-            &events[2].kind,
-            WireEventKind::ReasoningEnd(reasoning)
-                if reasoning.part_id == "reasoning-part:1"
-                    && reasoning.reasoning_id == "provider-reasoning:1"
-        ));
-        assert!(matches!(
-            &events[3].kind,
-            WireEventKind::AssistantMessage(message)
-                if message.part_id == "assistant-part:1"
-                    && message.message_id == ASSISTANT_FINAL_MESSAGE_ID
-                    && message.content == "最终回答"
-                    && !message.delta
-        ));
-    }
-
-    #[test]
-    fn wire_builder_emits_content_before_terminal_lifecycle() {
-        let mut builder = RunWireEventBuilder {
-            session: WireSessionRef {
-                session_id: "session-1".to_owned(),
-                run_id: None,
-                parent_session_id: None,
-            },
-            recorded_at_ms: 1,
-            next_sequence: 1,
-            events: Vec::new(),
-        };
-
-        builder.push_assistant_message("assistant-part:1", "最终回答");
-        builder.push_run_lifecycle(WireLifecycleStatus::Completed, "Run completed", None);
-
-        let events = builder.into_events();
-        assert!(matches!(
-            &events[0].kind,
-            WireEventKind::AssistantMessage(message)
-                if message.part_id == "assistant-part:1"
-                    && message.message_id == ASSISTANT_FINAL_MESSAGE_ID
-                    && message.content == "最终回答"
-                    && !message.delta
-        ));
-        assert!(matches!(
-            &events[1].kind,
-            WireEventKind::TurnLifecycle(lifecycle)
-                if lifecycle.status == WireLifecycleStatus::Completed
-                    && lifecycle.kind.as_deref() == Some("RunLifecycle")
-        ));
-    }
-
-    #[test]
-    fn wire_builder_emits_empty_canonical_assistant_before_terminal_lifecycle() {
-        let mut builder = RunWireEventBuilder {
-            session: WireSessionRef {
-                session_id: "session-1".to_owned(),
-                run_id: None,
-                parent_session_id: None,
-            },
-            recorded_at_ms: 1,
-            next_sequence: 1,
-            events: Vec::new(),
-        };
-
-        builder.push_assistant_message("assistant-part:1", "   ");
-        builder.push_run_lifecycle(WireLifecycleStatus::Completed, "Run completed", None);
-
-        let events = builder.into_events();
-        assert_eq!(events.len(), 2, "空正文回合仍必须产出 canonical assistant");
-        assert!(matches!(
-            &events[0].kind,
-            WireEventKind::AssistantMessage(message)
-                if message.part_id == "assistant-part:1"
-                    && message.content.trim().is_empty()
-                    && !message.delta
-        ));
-        assert!(matches!(
-            &events[1].kind,
-            WireEventKind::TurnLifecycle(lifecycle)
-                if lifecycle.status == WireLifecycleStatus::Completed
-                    && lifecycle.kind.as_deref() == Some("RunLifecycle")
-        ));
-    }
-
-    #[test]
-    fn wire_builder_uses_receipt_part_id_for_tool_events() {
-        let mut builder = RunWireEventBuilder {
-            session: WireSessionRef {
-                session_id: "session-1".to_owned(),
-                run_id: None,
-                parent_session_id: None,
-            },
-            recorded_at_ms: 1,
-            next_sequence: 1,
-            events: Vec::new(),
-        };
-
-        builder.push_tool_receipts(&[RunToolReceipt {
-            tool_call_id: 7,
-            part_id: "tool-part:receipt-stable".to_owned(),
-            provider_call_id: "provider-call-7".to_owned(),
-            tool_name: "builtin.search".to_owned(),
-            status: "completed".to_owned(),
-            summary: "ok".to_owned(),
-            metadata: None,
-            error_type: None,
-            remote_trigger_allowed: false,
-            filesystem_write_performed: false,
-            output_ref: None,
-            duration_ms: None,
-        }]);
-
-        let events = builder.into_events();
-        assert!(matches!(
-            &events[0].kind,
-            WireEventKind::ToolCall(call)
-                if call.part_id == "tool-part:receipt-stable"
-                    && call.tool_call_id == "provider-call-7"
-        ));
-        assert!(matches!(
-            &events[1].kind,
-            WireEventKind::ToolResult(result)
-                if result.part_id == "tool-part:receipt-stable"
-                    && result.tool_call_id == "provider-call-7"
-        ));
-    }
-}
+#[path = "run_json_wire_events_tests.rs"]
+mod tests;

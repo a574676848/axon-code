@@ -101,11 +101,25 @@ fn tool_kind_name(kind: ToolKind) -> &'static str {
     }
 }
 
+/// 便签工具的输入预览只保留模型自述的 intent，正文不进入预览投影。
+fn notes_arguments_summary(tool_name: &str, arguments_json: &str) -> Option<String> {
+    let name = axon_agent_runtime::bare_tool_name(tool_name);
+    if !name.starts_with("notes_") {
+        return None;
+    }
+    let intent = axon_agent_runtime::tool_call_intent(tool_name, arguments_json)?;
+    Some(serde_json::json!({ "intent": intent }).to_string())
+}
+
 /// 折叠摘要：能给出可读结论时就不摆原始 JSON。
 fn bounded_arguments_preview(tool_name: &str, arguments_json: &str) -> String {
+    if let Some(summary) = notes_arguments_summary(tool_name, arguments_json) {
+        return summary;
+    }
     if let Some(summary) = question_arguments_summary(tool_name, arguments_json) {
         return summary;
     }
+    // 性能优先：预览投影保持 600 字符，便签正文不进入这里。
     const MAX_CHARS: usize = 600;
     let normalized = arguments_json
         .lines()
@@ -137,4 +151,29 @@ fn question_arguments_summary(tool_name: &str, arguments_json: &str) -> Option<S
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bounded_arguments_preview;
+
+    #[test]
+    fn notes_preview_keeps_only_intent() {
+        let text = "长".repeat(500);
+        let arguments = format!(
+            r#"{{"intent":"固化并行开发内容的处置纪律","path":"checkpoint.md","text":"{text}"}}"#
+        );
+        assert_eq!(
+            bounded_arguments_preview("notes_write_file", &arguments),
+            r#"{"intent":"固化并行开发内容的处置纪律"}"#
+        );
+    }
+
+    #[test]
+    fn other_arguments_stay_bounded() {
+        let arguments = "x".repeat(700);
+        let preview = bounded_arguments_preview("other", &arguments);
+        assert!(preview.ends_with("..."));
+        assert_eq!(preview.chars().count(), 603);
+    }
 }

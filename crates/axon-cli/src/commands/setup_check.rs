@@ -39,6 +39,7 @@ fn command_needs_config(command: Option<&AxonCommand>) -> bool {
                 | AxonCommand::Upgrade(_)
                 | AxonCommand::Doctor(_)
                 | AxonCommand::Usage(_)
+                | AxonCommand::Persona(_)
         )
     )
 }

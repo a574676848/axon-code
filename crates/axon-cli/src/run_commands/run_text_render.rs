@@ -29,7 +29,16 @@ pub(super) fn render_text_run_failure(request: &RunRequest, error: &RunExecution
     ];
     push_if_some(&mut lines, render_tool_receipt_summary(tool_receipts));
     push_if_some(&mut lines, render_failure_next_step(tool_receipts));
+    // 失败同样要露出降级告警：人格装配、校验与超时都在这里可见。
+    push_persona_warnings(&mut lines, &request.persona_warnings);
     format!("{}\n", lines.join("\n"))
+}
+
+/// 把本轮告警逐条拼进文本输出。
+fn push_persona_warnings(lines: &mut Vec<String>, warnings: &[String]) {
+    for warning in warnings {
+        lines.push(format!("告警：{warning}"));
+    }
 }
 
 fn render_run_header(request: &RunRequest, response: &RunResponse) -> Vec<String> {
@@ -133,6 +142,13 @@ mod tests {
     #[test]
     fn empty_sections_do_not_render_low_value_labels() {
         assert_eq!(render_tool_receipt_summary(&[]), None);
+    }
+
+    #[test]
+    fn persona_warnings_are_rendered_as_lines() {
+        let mut lines = Vec::new();
+        push_persona_warnings(&mut lines, &["人格稳定段接近上限（5000 B）".to_owned()]);
+        assert_eq!(lines, vec!["告警：人格稳定段接近上限（5000 B）"]);
     }
 
     #[test]

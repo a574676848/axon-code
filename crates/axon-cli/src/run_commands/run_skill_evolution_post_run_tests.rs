@@ -440,6 +440,7 @@ fn request_fixture_with_executor(
             agent_pane_included: false,
             injected_context_messages: Vec::new(),
         },
+        persona_warnings: Vec::new(),
         startup,
         execution_tools,
         provider: ProviderConfig::default(),
@@ -616,6 +617,10 @@ fn assessment_for_outcome(outcome: &TurnOutcomeEnvelope) -> SemanticSalienceAsse
         } else {
             "普通任务没有长期价值".to_owned()
         },
+        user_affect: None,
+        persona_drift_bp: None,
+        drift_reason: None,
+        style_candidate: None,
     }
 }
 

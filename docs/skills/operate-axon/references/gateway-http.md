@@ -93,6 +93,13 @@ Authorization: Bearer <token>
 
 `<agent>` 是单个路径段，其中的 `/` 与 `:` 必须先做百分号转义；转义非法按未命中处理。
 
+人格状态（只读；桌面设置 › 人设 的状态面板经此读取）：
+
+| 方法与路径 | 用途 |
+|---|---|
+| `GET /api/v1/persona/summary` | 返回 `soul`（内核解析结论）、`owner`、`state`（无状态时为 null）、`transitions`（最近 10 条）、`style`（已发布习得风格）与 `database`（库状态与体积）。人格库不存在时如实报告未创建，不创建文件 |
+| `GET /api/v1/persona/portrait/<file>.png` | 读取 `~/.axon/persona/` 下的形象资产，返回 `{"file","mime","base64"}`；只接受该目录内的 `.png`，越界或缺失一律 404 |
+
 MCP 运行态（报文体为 `{"cwd": "<工作区路径>"}`，`cwd` 缺省时用 daemon 声明的工作区）：
 
 | 方法与路径 | 用途 |

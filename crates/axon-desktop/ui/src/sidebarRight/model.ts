@@ -9,7 +9,8 @@
  * 都随会话存下来，重启后回到离开时的样子；从未打开过的会话是折叠的默认形态。
  *
  * 开合时机与 既有工作台产品 的右侧栏同一套规则：默认折叠；只有用户主动展开、或打开一个
- * 资源时才展开；打开内容不先塞默认页；关掉整列最后一个 tab 即收起并退出全屏；
+ * 资源时才展开；打开内容不先塞默认页；关掉最后一个内容 tab 即收起并退出全屏
+ * （默认页不是内容，它跟着整列一起收，重新展开时原样回来）；
  * 独占停靠面的默认页不可关闭（关它等于关整列，这一手势归收起按钮）。
  */
 
@@ -147,6 +148,24 @@ function seedPane(layout: RailLayout): RailLayout {
   return { ...layout, panes: [{ id: 'pane-1', tabs: [], activeId: null }] };
 }
 
+/** 这一格只有默认页，且落进来的是别的内容：默认页让位。 */
+function yieldsDefaultPage(pane: RailPane, kind: string): boolean {
+  return kind !== DEFAULT_PAGE.kind && pane.tabs.length === 1 && pane.tabs[0]?.kind === DEFAULT_PAGE.kind;
+}
+
+/** 这一列是否只剩默认页；空列不算，它由调用方单独判定。 */
+function onlyDefaultPage(panes: readonly RailPane[]): boolean {
+  const tabs = panes.flatMap((pane) => pane.tabs);
+  return tabs.length > 0 && tabs.every((tab) => tab.kind === DEFAULT_PAGE.kind);
+}
+
+/** 关掉活跃 tab 之后落到它左边那一个；它本来就不活跃时保持原样。 */
+function neighbourOf(pane: RailPane, tabId: string, tabs: readonly RailTab[]): string | null {
+  if (pane.activeId !== tabId) return pane.activeId;
+  const index = pane.tabs.findIndex((tab) => tab.id === tabId);
+  return tabs[Math.max(0, index - 1)]?.id ?? tabs[0]?.id ?? null;
+}
+
 /**
  * 打开一个 tab。
  *
@@ -199,7 +218,13 @@ export function open(layout: RailLayout, request: OpenRequest): RailLayout {
     params: request.params ?? {},
     revision: 0,
   };
-  const tabs = [...pane.tabs, tab].slice(-MAX_TABS_PER_PANE);
+  /*
+   * 默认页让位：这一格只有默认页时，落进来的内容直接顶替它，而不是并排成两个 tab。
+   * 默认页是空列的立足点，因此从正文里点开一个文件得到的应当只有那个文件，
+   * 关掉它也就直接收起整列。
+   */
+  const kept = yieldsDefaultPage(pane, request.kind) ? [] : pane.tabs;
+  const tabs = [...kept, tab].slice(-MAX_TABS_PER_PANE);
   return {
     ...withPane(base, { ...pane, tabs, activeId: tab.id }),
     sequence,
@@ -253,26 +278,25 @@ export function replace(layout: RailLayout, request: OpenRequest): RailLayout {
 }
 
 /**
- * 关闭一个 tab；关掉某格最后一个 tab 时并掉该格，整列空了就收起。
+ * 关闭一个 tab；关掉某格最后一个 tab 时并掉该格，整列只剩默认页就收起。
  *
- * 关掉整列最后一个 tab 就是收起整列，因此同时退出全屏：否则下一次展开会把整个
- * 窗口让给刚播种的默认页。收起之后这一列保持空，播种等下一次展开。
+ * 关掉最后一个内容 tab 就是收起整列，因此同时退出全屏：否则下一次展开会把整个
+ * 窗口让给刚播种的默认页。默认页不是内容，整列只剩它时也跟着一起收，
+ * 重新展开时原样回来，因此「只开着一个文件」关掉它不会留下一块只画着引导页的空壳。
  */
 export function close(layout: RailLayout, tabId: string): RailLayout {
   if (!canCloseTab(layout, tabId)) return layout;
   const pane = paneOf(layout, tabId);
   if (pane === null) return layout;
   const tabs = pane.tabs.filter((tab) => tab.id !== tabId);
-  if (tabs.length === 0) {
-    const panes = layout.panes.filter((current) => current.id !== pane.id);
-    if (panes.length === 0) return { ...layout, panes, expanded: false, fullscreen: false };
-    return { ...layout, panes };
+  const next =
+    tabs.length === 0
+      ? { ...layout, panes: layout.panes.filter((current) => current.id !== pane.id) }
+      : withPane(layout, { ...pane, tabs, activeId: neighbourOf(pane, tabId, tabs) });
+  if (next.panes.length === 0 || onlyDefaultPage(next.panes)) {
+    return { ...next, expanded: false, fullscreen: false };
   }
-  const activeId =
-    pane.activeId === tabId
-      ? (tabs[Math.max(0, pane.tabs.findIndex((tab) => tab.id === tabId) - 1)]?.id ?? tabs[0]!.id)
-      : pane.activeId;
-  return withPane(layout, { ...pane, tabs, activeId });
+  return next;
 }
 
 /** 聚焦一个 tab。 */

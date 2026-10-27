@@ -591,6 +591,8 @@ fn subagent_lifecycle_with_title(input: SubagentLifecycleInput<'_>) -> crate::Ag
             started_at_ms: input.started_at_ms,
             total_tokens: input.total_tokens,
             cache_hit_rate_basis_points: None,
+
+            warnings: Vec::new(),
         },
     ))
 }

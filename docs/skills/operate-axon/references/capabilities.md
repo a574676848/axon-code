@@ -27,3 +27,5 @@
 | 诊断与升级 | `axon doctor`、`axon lsp`、`axon upgrade` | 从只读诊断开始，升级前检查候选与影响。 |
 
 不要把 TUI 里的斜杠命令当作 CLI 子命令。MCP 工具 schema 随每轮请求全量下发，外部能力直接在工具清单中按完整 MCP 工具名调用；清单中没有对应工具即判定该能力不可用，不得臆造。
+
+- 人格：`axon persona validate|status|style` 校验人设并查看人格状态，`axon doctor --check persona` 给出同一判定；人设格式无效时该轮不装配人格，回合照常继续，告警随终态 warnings 返回。

@@ -461,8 +461,8 @@ export interface ModalProps {
   title: string;
   /** 标题右侧操作区。 */
   actions?: React.ReactNode;
-  /** 顶部形态：独立标题栏，或标题内嵌正文并在右上角浮动关闭。 */
-  variant?: 'bar' | 'floating';
+  /** 顶部形态：独立标题栏、右上角浮动关闭，或无内置头部由子面板自行排布。 */
+  variant?: 'bar' | 'floating' | 'headless';
   /** 面板尺寸类名。 */
   panelClassName?: string;
   /** 内容。 */
@@ -497,7 +497,6 @@ export const Modal: React.FC<ModalProps> = ({
 
   if (!open) return null;
 
-  const floating = variant === 'floating';
   /*
    * 嵌套弹窗不再叠第二层遮罩：父弹窗已经把背景压暗，
    * 再叠一层会让整窗变成近半黑并两次模糊。深度来自 context，只统计祖先，
@@ -532,9 +531,9 @@ export const Modal: React.FC<ModalProps> = ({
          */
         className={`overlay-panel-in relative flex flex-col overflow-clip bg-surface rounded-lg shadow-modal hairline border-border-hairline max-h-full min-h-0 ${panelClassName}`}
       >
-        {!floating && (
-          <div className="shrink-0 px-4 py-2.5 flex items-center justify-between gap-4 hairline-b border-border-hairline">
-            <h2 className="text-sm font-medium text-text-primary">{title}</h2>
+        {variant === 'bar' && (
+          <div className="shrink-0 px-5 py-3 flex items-center justify-between gap-4 hairline-b border-border-hairline">
+            <h2 className="text-body font-semibold text-text-primary">{title}</h2>
             <div className="shrink-0 flex items-center gap-1.5">
               {actions}
               <IconButton label="关闭" onClick={onClose} className="ml-0.5">
@@ -543,7 +542,7 @@ export const Modal: React.FC<ModalProps> = ({
             </div>
           </div>
         )}
-        {floating && (
+        {variant === 'floating' && (
           <div className="absolute top-3 right-3 z-20 flex items-center gap-2">
             {actions}
             <IconButton label="关闭" onClick={onClose}>
@@ -622,9 +621,9 @@ export const Dialog: React.FC<DialogProps> = ({
   return (
     <Modal open={open} onClose={onClose} title={title} panelClassName={DIALOG_SIZE[size]}>
       <div className="w-full min-h-0 flex flex-col">
-        <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">{children}</div>
+        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-3.5">{children}</div>
         {hasFooter && (
-          <div className="shrink-0 flex items-center gap-2 px-4 py-3 hairline-t border-border-hairline">
+          <div className="shrink-0 flex items-center gap-2 px-5 py-3 bg-surface-sunken/30 hairline-t border-border-hairline">
             {hint !== undefined && (
               <span className="flex-1 min-w-0 truncate text-xs text-text-tertiary" title={hint}>
                 {hint}
@@ -634,7 +633,7 @@ export const Dialog: React.FC<DialogProps> = ({
               {secondary !== undefined && (
                 <Button
                   variant={secondary.danger === true ? 'danger' : 'outline'}
-                  size="sm"
+                  size="md"
                   disabled={secondary.disabled === true || secondary.busy === true}
                   onClick={secondary.onClick}
                 >
@@ -647,7 +646,7 @@ export const Dialog: React.FC<DialogProps> = ({
               {primary !== undefined && (
                 <Button
                   variant="primary"
-                  size="sm"
+                  size="md"
                   disabled={primary.disabled === true || primary.busy === true}
                   onClick={primary.onClick}
                 >

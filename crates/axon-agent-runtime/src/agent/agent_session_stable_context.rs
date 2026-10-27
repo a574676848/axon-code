@@ -78,7 +78,7 @@ pub(crate) fn contains_dynamic_workspace_marker(content: &str) -> bool {
     if content.contains(crate::agent_prompt_engineering::AXON_RUNTIME_CONSTRAINTS_HEADER) {
         return true;
     }
-    const DYNAMIC_MARKERS: [&str; 18] = [
+    const DYNAMIC_MARKERS: [&str; 19] = [
         WORKSPACE_INSTRUCTIONS_START_MARKER,
         AVAILABLE_SKILLS_START_MARKER,
         "<assistant-settings-context>",
@@ -97,6 +97,7 @@ pub(crate) fn contains_dynamic_workspace_marker(content: &str) -> bool {
         "<active-goal",
         "<prompt-context>",
         "<hook-additional-context>",
+        "<persona-state-context>",
     ];
     DYNAMIC_MARKERS
         .iter()

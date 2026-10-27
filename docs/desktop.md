@@ -163,6 +163,8 @@ axon-desktop --self-check
    - 每日自动同步开关：打开时创建或启用系统 Cron 任务 `axon.system.pricing-sync`（每天一次），关闭时转为暂停并保留运行记录。
 6. **Agent 人格与规则 (Soul & AGENTS)**：
    - 可视化编辑 `~/.axon/SOUL.md`（定义主代理人设）与全局 `AGENTS.md`（行为准则）。
+设置 › 人设 顶部展示当前形象与身份：形象照来自 `~/.axon/persona/art-halfbody.png`，经网关 `GET /api/v1/persona/portrait/<file>.png` 以 Base64 返回，桌面端不直接读文件；缺失时显示「未放置形象」占位。
+   - 人设分区顶部另有一块只读的人格状态面板：内核解析结论、持久化状态、最近转移与已发布习得风格，数据经网关 `/api/v1/persona/summary` 读取。
    - 保存时附带 Prompt Cache 影响提示。
 7. **自动化任务 (Cron Scheduler)**：
    - 图形化创建与维护 Agent 定时任务（支持 interval/cron/once 语法）。

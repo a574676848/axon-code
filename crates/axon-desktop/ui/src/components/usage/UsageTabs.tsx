@@ -51,8 +51,8 @@ export const UsageTabStrip = <T extends string>({
   };
 
   return (
-    <div className="sticky top-0 z-10 bg-surface-sunken pb-2.5 hairline-b border-border-hairline">
-      <div className="flex items-end justify-between gap-3 flex-wrap">
+    <div className="sticky top-0 z-10 -mx-6 -mt-4 px-6 pt-2.5 pb-2.5 mb-3 bg-surface-sunken/95 backdrop-blur-xs hairline-b border-border-hairline">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <div role="tablist" aria-label={label} className="flex items-center gap-4" onKeyDown={handleKeyDown}>
           {tabs.map((tab) => {
             const active = tab.value === value;
@@ -83,7 +83,7 @@ export const UsageTabStrip = <T extends string>({
           })}
         </div>
         {trailing !== undefined && (
-          <div className="flex items-center gap-2 shrink-0 pb-0.5">{trailing}</div>
+          <div className="flex items-center gap-2 shrink-0">{trailing}</div>
         )}
       </div>
     </div>

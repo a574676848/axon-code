@@ -546,6 +546,7 @@ dependencies = [
  "axon-memory-ops",
  "axon-memory-read",
  "axon-patch-model",
+ "axon-persona",
  "axon-process",
  "axon-protocol",
  "axon-provider-transport",
@@ -821,6 +822,17 @@ dependencies = [
 [[package]]
 name = "axon-patch-model"
 version = "0.1.0"
+
+[[package]]
+name = "axon-persona"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "yaml-rust",
+]
 
 [[package]]
 name = "axon-process"

@@ -37,6 +37,7 @@ pub mod lane_context;
 pub mod lane_source;
 /// MCP 运行态转发：真正的加载结论由 daemon 的启动快照给出。
 pub mod mcp_runtime;
+pub mod persona;
 /// 原生目录选择器。
 pub mod picker;
 /// 模型定价：经网关读写价格规则。
@@ -96,6 +97,7 @@ use ipc::{
 };
 use lane_source::GatewayLaneSource;
 use mcp_runtime::{mcp_runtime_refresh, mcp_runtime_status};
+use persona::{persona_portrait, persona_summary};
 use picker::pick_directory;
 use pricing::{
     pricing_auto_sync, pricing_delete_rule, pricing_recalculate, pricing_rules, pricing_save_rule,
@@ -217,6 +219,8 @@ pub fn run() {
             skills_list,
             document_read,
             document_write,
+            persona_summary,
+            persona_portrait,
             secret_status_of,
             secret_set,
             secret_clear,

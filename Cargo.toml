@@ -16,6 +16,7 @@ members = [
     "crates/axon-memory-write",
     "crates/axon-memory-ops",
     "crates/axon-context-fragments",
+    "crates/axon-persona",
     "crates/axon-prompts",
     "crates/axon-session",
     "crates/axon-session-runtime",

@@ -138,6 +138,7 @@ fn fixture_request() -> RunRequest {
             agent_pane_included: false,
             injected_context_messages: Vec::new(),
         },
+        persona_warnings: Vec::new(),
         startup,
         execution_tools,
         provider: ProviderConfig::default(),

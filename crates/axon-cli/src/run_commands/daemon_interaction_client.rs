@@ -84,6 +84,13 @@ struct DaemonRunReport<'a> {
     session_id: &'a str,
     content: &'a str,
     wire_events: &'a [WireEventEnvelope],
+    /// 本轮降级告警（含人格装配告警）。
+    #[serde(default, skip_serializing_if = "warnings_are_empty")]
+    warnings: &'a [String],
+}
+
+fn warnings_are_empty(warnings: &[String]) -> bool {
+    warnings.is_empty()
 }
 
 #[derive(Debug, Serialize)]
@@ -95,6 +102,9 @@ struct DaemonRunFailureReport<'a> {
     /// 被淘汰的增量只能由终态按 durable 顺序完整重放补齐。
     #[serde(default, skip_serializing_if = "wire_events_are_empty")]
     wire_events: &'a [WireEventEnvelope],
+    /// 失败回执里带出的本轮告警；空时不序列化。
+    #[serde(default, skip_serializing_if = "warnings_are_empty")]
+    warnings: &'a [String],
 }
 
 fn wire_events_are_empty(events: &[WireEventEnvelope]) -> bool {
@@ -134,6 +144,8 @@ impl DaemonTurnFailure {
             event: DAEMON_RUN_FAILED_EVENT,
             error: &self.message,
             wire_events: &self.wire_events,
+            // 失败回执的正文不含载荷，告警只能从已积累的终态事件里取。
+            warnings: &lifecycle_warnings(&self.wire_events),
         })
         .unwrap_or_else(|error| {
             axon_logger::error(&format!("序列化 Daemon 失败报告失败：{error}"));
@@ -216,6 +228,7 @@ pub(crate) fn resume_daemon_interaction(
     Ok(DaemonTurnProjection {
         session_id: session_id.to_string(),
         response,
+        warnings: lifecycle_warnings(&state.wire_events),
         wire_events: state.wire_events,
     })
 }
@@ -255,6 +268,7 @@ pub(crate) fn execute_daemon_interaction(
     Ok(DaemonTurnProjection {
         session_id: session_id.to_string(),
         response,
+        warnings: lifecycle_warnings(&state.wire_events),
         wire_events: state.wire_events,
     })
 }
@@ -289,6 +303,7 @@ fn render_failure(error: &str, output: OutputFormat) -> CliRunResult {
             event: DAEMON_RUN_FAILED_EVENT,
             error,
             wire_events: &[],
+            warnings: &failure_warnings_from(error),
         }) {
             Ok(json) => CliRunResult {
                 exit_code: 1,
@@ -304,17 +319,70 @@ fn render_failure(error: &str, output: OutputFormat) -> CliRunResult {
     }
 }
 
+/// 从终态生命周期事件里取出本轮告警。
+///
+///
+/// 只认 `RunLifecycle` 类别且处于终态的条目：子代理与过程阶段也会发 lifecycle，
+/// 取「最后一条」会拿到空告警。
+fn lifecycle_warnings(events: &[WireEventEnvelope]) -> Vec<String> {
+    events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.kind {
+            WireEventKind::TurnLifecycle(lifecycle) if lifecycle.is_terminal_run() => {
+                Some(lifecycle.warnings.clone())
+            }
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// 文本模式下的告警行：没有告警返回空串，避免多出空行。
+fn render_text_warnings(warnings: &[String]) -> String {
+    let mut text = String::new();
+    for warning in warnings {
+        text.push_str(&format!("告警：{warning}\n"));
+    }
+    text
+}
+
+/// 从失败回执里取出告警；daemon 与 CLI 的失败载荷可能都带这个字段。
+fn failure_warnings_from(message: &str) -> Vec<String> {
+    let Some(start) = message.find('{') else {
+        return Vec::new();
+    };
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(&message[start..]) else {
+        return Vec::new();
+    };
+    payload
+        .get("warnings")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn render_projection_output(
     projection: &DaemonTurnProjection,
     output: OutputFormat,
     live_text_emitted: bool,
 ) -> Result<String, String> {
     match output {
-        OutputFormat::Text if live_text_emitted => Ok(String::new()),
-        OutputFormat::Text => Ok(format!("{}\n", projection.response)),
+        OutputFormat::Text if live_text_emitted => Ok(render_text_warnings(&projection.warnings)),
+        OutputFormat::Text => Ok(format!(
+            "{}\n{}",
+            projection.response,
+            render_text_warnings(&projection.warnings)
+        )),
         OutputFormat::Json => serde_json::to_string(&DaemonRunReport {
             session_id: &projection.session_id,
             content: &projection.response,
+            warnings: &projection.warnings,
             wire_events: &projection.wire_events,
         })
         .map(|json| format!("{json}\n"))
@@ -476,3 +544,41 @@ impl<'a> DaemonTextLiveOutput<'a> {
 #[cfg(test)]
 #[path = "daemon_interaction_client_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+
+    fn projection(warnings: Vec<String>) -> DaemonTurnProjection {
+        DaemonTurnProjection {
+            session_id: "s-1".to_owned(),
+            response: "完成".to_owned(),
+            warnings,
+            wire_events: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn text_output_renders_persona_warnings() {
+        let text = render_projection_output(
+            &projection(vec!["人格稳定段接近上限（5000 B）".to_owned()]),
+            OutputFormat::Text,
+            false,
+        )
+        .expect("渲染成功");
+
+        assert!(text.contains("完成"));
+        assert!(
+            text.contains("告警：人格稳定段接近上限（5000 B）"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn empty_warnings_leave_no_extra_line() {
+        let text = render_projection_output(&projection(Vec::new()), OutputFormat::Text, false)
+            .expect("渲染成功");
+
+        assert_eq!(text, "完成\n");
+    }
+}

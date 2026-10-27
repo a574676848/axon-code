@@ -77,6 +77,7 @@ impl DoctorReport {
             Some(DOCTOR_CHECK_TOOL) => vec![doctor_tool_check()],
             Some(DOCTOR_CHECK_MCP) => vec![doctor_mcp_check()],
             Some(DOCTOR_CHECK_MEMORY) => vec![doctor_memory_check()],
+            Some(DOCTOR_CHECK_PERSONA) => vec![doctor_persona_check()],
             Some(DOCTOR_CHECK_LSP) => vec![doctor_lsp_check()],
             Some(DOCTOR_CHECK_RUNTIME) => vec![doctor_runtime_check(fix)],
             Some(DOCTOR_CHECK_SMOKE) => vec![doctor_smoke_check()],
@@ -92,6 +93,7 @@ impl DoctorReport {
                 doctor_tool_check(),
                 doctor_mcp_check(),
                 doctor_memory_check(),
+                doctor_persona_check(),
                 doctor_lsp_check(),
                 doctor_runtime_check(fix),
                 doctor_smoke_check(),
@@ -467,6 +469,51 @@ fn doctor_mcp_check() -> DoctorCheck {
     } else {
         DoctorCheck::failed(DOCTOR_CHECK_MCP, "MCP 命令注册表不可用")
     }
+}
+
+/// 人格检查：内核格式与人格库身份。
+///
+/// 人设缺失不算失败（人格可关闭），格式无效与库身份不符都必须显式报出。
+fn doctor_persona_check() -> DoctorCheck {
+    let Ok(config_path) = axon_config::ConfigLoader::default_user_config_path() else {
+        return DoctorCheck::failed(DOCTOR_CHECK_PERSONA, "无法解析用户配置路径");
+    };
+    let Ok(root) = axon_config::runtime_axon_root_path(&config_path) else {
+        return DoctorCheck::failed(DOCTOR_CHECK_PERSONA, "无法解析 Axon 运行根目录");
+    };
+    let soul = root.join("SOUL.md");
+    if !soul.exists() {
+        return DoctorCheck::ok(DOCTOR_CHECK_PERSONA, "未启用人设：SOUL.md 不存在");
+    }
+    let parsed = std::fs::read_to_string(&soul)
+        .map_err(|error| error.to_string())
+        .and_then(|raw| axon_persona::SoulDocument::parse(&raw).map_err(|error| error.to_string()));
+    let core = match parsed {
+        Ok(document) => document,
+        Err(error) => {
+            return DoctorCheck::failed(DOCTOR_CHECK_PERSONA, format!("人设无效：{error}"));
+        }
+    };
+    let store_path = axon_persona::infrastructure::persona_store_path(&root);
+    let library = if store_path.exists() {
+        match axon_persona::infrastructure::PersonaStore::open_read_only(&store_path) {
+            Ok(_) => "库就绪",
+            Err(error) => {
+                return DoctorCheck::failed(DOCTOR_CHECK_PERSONA, format!("人格库不可用：{error}"));
+            }
+        }
+    } else {
+        "库尚未创建"
+    };
+    DoctorCheck::ok(
+        DOCTOR_CHECK_PERSONA,
+        format!(
+            "{} · {} 项不可违背项 · {} 条场景规则 · {library}",
+            core.schema,
+            core.core.invariants.len(),
+            core.core.rules.len()
+        ),
+    )
 }
 
 fn doctor_memory_check() -> DoctorCheck {

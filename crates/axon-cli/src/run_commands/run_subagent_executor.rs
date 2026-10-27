@@ -210,6 +210,7 @@ impl ProviderRunSubagentExecutor {
             .subagent_stable_prefix;
         let runtime_input = BuildRunModelPayloadInput {
             config_path: &self.environment.config_path,
+            client_channel: axon_client_identity::ClientChannel::Cli,
             config: &self.environment.config,
             cwd: &self.environment.cwd,
             command: &command,

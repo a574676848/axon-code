@@ -184,6 +184,7 @@ fn text_render_skips_terminal_duplicate_after_live_output() {
     let projection = DaemonTurnProjection {
         session_id: "session".to_owned(),
         response: "最终回答".to_owned(),
+        warnings: Vec::new(),
         wire_events: Vec::new(),
     };
     assert_eq!(
@@ -276,6 +277,8 @@ fn compaction_lifecycle_event(session_id: &str, kind: &str, summary: &str) -> Wi
             started_at_ms: None,
             total_tokens: None,
             cache_hit_rate_basis_points: None,
+
+            warnings: Vec::new(),
         }),
     }
 }

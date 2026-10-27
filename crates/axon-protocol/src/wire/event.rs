@@ -172,6 +172,23 @@ pub enum WireLifecycleStatus {
     Blocked,
 }
 
+impl WireTurnLifecycle {
+    /// 是否为本轮的终态生命周期条目（完成或失败收尾）。
+    #[must_use]
+    pub fn is_terminal_run(&self) -> bool {
+        self.kind.as_deref() == Some("RunLifecycle")
+            && self.phase == WireLifecyclePhase::RegularTurn
+            && matches!(
+                self.status,
+                WireLifecycleStatus::Completed
+                    | WireLifecycleStatus::Failed
+                    | WireLifecycleStatus::Cancelled
+                    | WireLifecycleStatus::Aborted
+                    | WireLifecycleStatus::Blocked
+            )
+    }
+}
+
 /// Turn 生命周期事件。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -201,6 +218,9 @@ pub struct WireTurnLifecycle {
     /// 可展示摘要。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// 本轮降级告警（含人格装配告警）；为空时不序列化。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     /// 耗时毫秒。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,

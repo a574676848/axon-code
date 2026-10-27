@@ -88,6 +88,7 @@ fn build_payload(
         CliRunModelPayloadInput {
             memory_hits: &[],
             soul_context_message: Some(soul),
+            persona_state_message: None,
             include_personal_memory: true,
             memory_disclosure_policy: DisclosurePolicy::PrivateOnly,
             cwd: &cwd.to_string_lossy(),

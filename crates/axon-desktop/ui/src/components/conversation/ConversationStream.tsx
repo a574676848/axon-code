@@ -353,7 +353,7 @@ export const ConversationStream: React.FC<ConversationStreamProps> = ({
         外层放行指针事件，只有按钮本身可点，因此它压住的那几行照常可以交互。
       */}
       {!atBottom && (
-        <div className="absolute bottom-2 left-0 right-0 z-20 flex justify-center px-5 pointer-events-none">
+        <div className="absolute bottom-2.5 left-0 right-0 z-20 flex justify-center px-5 pointer-events-none">
           <div className="w-full max-w-chat flex justify-end">
             <button
               type="button"
@@ -361,9 +361,9 @@ export const ConversationStream: React.FC<ConversationStreamProps> = ({
                 setAtBottom(true);
                 scrollToBottom();
               }}
-              className="pointer-events-auto h-7 px-2.5 inline-flex items-center gap-1 rounded-full hairline border-border-strong bg-surface shadow-panel text-row text-text-secondary transition-colors duration-100 hover:text-text-primary"
+              className="popover-up-in pointer-events-auto h-7 px-3 inline-flex items-center gap-1 rounded-full hairline border-border-strong bg-surface/92 backdrop-blur-xs shadow-lift text-meta font-medium text-text-secondary transition-transform duration-100 active:scale-95 hover:bg-surface hover:text-text-primary"
             >
-              <ChevronDownIcon size={14} />
+              <ChevronDownIcon size={13} />
               回到最新
             </button>
           </div>

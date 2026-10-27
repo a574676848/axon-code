@@ -20,6 +20,7 @@ mod interactive_tui;
 #[cfg(test)]
 #[path = "question_answer_wake_tests.rs"]
 mod question_answer_wake_tests;
+mod run_agent_identity;
 mod run_agent_store;
 pub(crate) mod run_channel_affinity;
 mod run_compaction;
@@ -41,6 +42,7 @@ mod run_memory_write;
 mod run_model_payload;
 pub(crate) mod run_model_routing;
 mod run_outcome_diagnostics;
+mod run_persona_settlement;
 mod run_plan_projection;
 mod run_post_run_governance;
 mod run_post_run_governance_performance;
@@ -104,6 +106,7 @@ pub(crate) use interaction_adapter::{
 };
 #[cfg(feature = "tui")]
 pub(crate) use interactive_tui::run_agent_tui_entry;
+pub(crate) use run_agent_identity::RunAgentIdentity;
 use run_execution::{
     ProviderStreamingRunner, RunExecutionError, RunJsonEvent, RunResponse, new_run_session_id,
     now_ms,
@@ -129,7 +132,6 @@ pub(crate) use run_question_projection::{
     production_question_event_sink_with_durable_slot,
 };
 pub(crate) use run_remote_execution::{RemoteAgentExecutionInput, enqueue_remote_gateway_alert};
-pub(crate) use run_request::RunAgentIdentity;
 use run_request::RunRequest;
 use run_request_build_options::RunRequestBuildOptions;
 use run_request_session::RunRequestSession;
@@ -371,6 +373,29 @@ fn finish_failed_run(
     let partial_response =
         progress.map_or_else(String::new, |sink| sink.partial_assistant_content());
     let timestamp = run_execution::now_ms();
+    // 失败轮不入治理队列，因此人格结算在这里直接完成，保证失败转移在生产路径可达。
+    // 用户中断与真正的失败必须分开记账：前者按「本轮被中断」，后者才累加失败连击。
+    let final_status = if request
+        .cancel_token
+        .as_ref()
+        .is_some_and(axon_agent_runtime::RunCancelToken::is_cancelled)
+    {
+        axon_persona::TurnFinalStatus::Interrupted
+    } else {
+        axon_persona::TurnFinalStatus::Failed
+    };
+    let part_id = format!("failed:{timestamp}");
+    run_persona_settlement::settle_persona_turn(&run_persona_settlement::PersonaSettlementInput {
+        config_path,
+        session_id: &request.session_id,
+        assistant_part_id: &part_id,
+        disclosure: request.goal_disclosure_policy,
+        final_status,
+        user_affect: None,
+        persona_drift_bp: None,
+        drift_reason: None,
+        scene_audience: None,
+    });
     let failure = run_session_store::runtime_failure_from_execution_error(
         &request.session_id,
         error,

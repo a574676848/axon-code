@@ -22,6 +22,7 @@ axon-crypto = { path = "../axon-crypto" }
 axon-display = { path = "../axon-display" }
 axon-domain = { path = "../axon-domain" }
 axon-daemon = { path = "../axon-daemon" }
+axon-persona = { path = "../axon-persona" }
 axon-fs-walk = { path = "../axon-fs-walk" }
 axon-jsonl = { path = "../axon-jsonl" }
 axon-logger = { path = "../axon-logger" }

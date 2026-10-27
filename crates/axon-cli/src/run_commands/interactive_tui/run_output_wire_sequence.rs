@@ -451,6 +451,8 @@ mod tests {
                     started_at_ms: None,
                     total_tokens: None,
                     cache_hit_rate_basis_points: None,
+
+                    warnings: Vec::new(),
                 }),
             ),
         ];

@@ -134,7 +134,7 @@ export interface ListRowProps {
   children: React.ReactNode;
 }
 
-/** 列表行：悬浮与选中都是同一档浅灰底，是列表交互的唯一视觉规则。 */
+/** 列表行：悬浮浅灰底，选中带左侧 2px 主色锚点条，是列表交互的唯一视觉规则。 */
 export const ListRow: React.FC<ListRowProps> = ({
   selected = false,
   onClick,
@@ -143,10 +143,16 @@ export const ListRow: React.FC<ListRowProps> = ({
 }) => (
   <div
     onClick={onClick}
-    className={`group flex items-center gap-3 px-3 py-2.5 hairline-b border-border-hairline last:border-b-0 ${INTERACTIVE_ROW} ${
-      selected ? 'bg-active' : ''
+    className={`group relative flex items-center gap-3 px-3.5 py-2.5 hairline-b border-border-hairline last:border-b-0 ${INTERACTIVE_ROW} ${
+      selected ? 'bg-active/80' : ''
     } ${onClick !== undefined ? 'cursor-pointer' : ''} ${className}`}
   >
+    {selected && (
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-primary"
+      />
+    )}
     {children}
   </div>
 );

@@ -10,9 +10,15 @@ fn doctor_reports_release_and_runtime_health_by_default() {
     let value: serde_json::Value =
         serde_json::from_str(json_result.stdout.trim()).expect("doctor JSON 应可解析");
 
+    // 人设缺失按绿处理，格式无效才判红：本机若仍是旧格式就该修人设，不该放宽断言。
+    assert!(
+        !result.stdout.contains("persona: failed"),
+        "人设校验不得为红：{}",
+        result.stdout
+    );
     assert!(
         result.exit_code == 0 || result.stdout.contains("smoke: failed"),
-        "{}",
+        "doctor 仅允许在本机 smoke 不可用时整体判红：{}",
         result.stdout
     );
     assert!(result.stderr.is_empty());

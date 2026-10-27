@@ -164,6 +164,7 @@ axon usage                                      # 查看 Token 消耗与成本�
   - [系统概览](./docs/overview.md) - 系统全景与端到端执行流
   - [核心概念](./docs/concepts.md) - 状态机模型、车道概念与上下文装配
   - [记忆管理系统](./docs/memory-management.md) - 分层认知模型、检索投影与记忆治理
+  - [人格系统](./docs/persona.md) - 人设格式、模式推导、人格状态与体积预算
 - **使用指南**
   - [快速上手](./docs/quickstart.md) - 安装、配置向导与环境搭建
   - [桌面工作台](./docs/desktop.md) - Axon Desktop 完整操作手册

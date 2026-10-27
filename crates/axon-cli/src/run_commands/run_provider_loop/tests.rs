@@ -61,6 +61,7 @@ pub(super) fn fixture_request(root: PathBuf) -> RunRequest {
             agent_pane_included: false,
             injected_context_messages: Vec::new(),
         },
+        persona_warnings: Vec::new(),
         startup,
         execution_tools,
         workspace_files: std::sync::Arc::new(axon_agent_runtime::WorkspaceFileSession::default()),

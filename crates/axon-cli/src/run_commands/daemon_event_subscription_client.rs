@@ -37,6 +37,8 @@ pub(crate) enum DaemonTurnObservation {
 pub(crate) struct DaemonTurnProjection {
     pub(crate) session_id: String,
     pub(crate) response: String,
+    /// 终态生命周期事件携带的本轮告警。
+    pub(crate) warnings: Vec<String>,
     pub(crate) wire_events: Vec<WireEventEnvelope>,
 }
 

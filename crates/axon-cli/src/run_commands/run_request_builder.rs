@@ -72,6 +72,7 @@ pub(super) fn assemble_run_request(input: RunRequestAssemblyInput) -> RunRequest
         selected_skill_name: input.model_input.skill_selection.name,
         selected_skill_source_ref: input.model_input.skill_selection.source_ref,
         model_payload: input.model_input.model_payload,
+        persona_warnings: input.model_input.persona_warnings,
         startup: input.startup,
         execution_tools: input.execution_tools,
         workspace_files: input.workspace_files,

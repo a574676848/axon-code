@@ -49,6 +49,10 @@ mod memory_http_scope;
 #[path = "args/package_args.rs"]
 mod package_args;
 mod package_commands;
+mod persona_commands;
+pub use persona_commands::{PersonaCommand, PersonaSubcommand};
+#[path = "persona_http_adapter.rs"]
+mod persona_http_adapter;
 #[path = "commands/management/provider_report.rs"]
 mod provider_report;
 mod remote_commands;
@@ -59,6 +63,8 @@ mod runtime_capability_routing;
 mod runtime_memory_consolidation;
 #[path = "runtime/paths.rs"]
 mod runtime_paths;
+#[path = "runtime/persona_context.rs"]
+mod runtime_persona_context;
 #[path = "runtime/principal_context.rs"]
 mod runtime_principal_context;
 #[path = "runtime/prompt_fragments.rs"]
@@ -68,8 +74,6 @@ mod runtime_skill_context_fragments;
 mod runtime_tools;
 #[path = "runtime/user_agents.rs"]
 mod runtime_user_agents;
-#[path = "runtime/user_soul.rs"]
-mod runtime_user_soul;
 #[path = "runtime/workspace_instructions.rs"]
 mod runtime_workspace_instructions;
 #[path = "commands/serve.rs"]
@@ -142,8 +146,9 @@ pub use completion_args::{CompletionCommand, CompletionShell};
 use constants::provider_stream_idle_timeout;
 pub use constants::{
     DOCTOR_CHECK_CLI, DOCTOR_CHECK_CONFIG, DOCTOR_CHECK_LSP, DOCTOR_CHECK_MCP, DOCTOR_CHECK_MEMORY,
-    DOCTOR_CHECK_PREFLIGHT, DOCTOR_CHECK_PROVIDER, DOCTOR_CHECK_PROVIDER_RECOVERY,
-    DOCTOR_CHECK_RUNTIME, DOCTOR_CHECK_SMOKE, DOCTOR_CHECK_TOOL, PROVIDER_TEST_TIMEOUT_MS,
+    DOCTOR_CHECK_PERSONA, DOCTOR_CHECK_PREFLIGHT, DOCTOR_CHECK_PROVIDER,
+    DOCTOR_CHECK_PROVIDER_RECOVERY, DOCTOR_CHECK_RUNTIME, DOCTOR_CHECK_SMOKE, DOCTOR_CHECK_TOOL,
+    PROVIDER_TEST_TIMEOUT_MS,
 };
 pub use cron_commands::CronCommand;
 use cron_commands::run_cron;
@@ -182,6 +187,7 @@ pub use memory_commands::{
 };
 pub use package_args::PackageCommand;
 use package_commands::run_package;
+use persona_commands::run_persona;
 use remote_commands::run_remote;
 pub use remote_commands::{
     RemoteCommand, RemoteListCommand, RemoteRenderCommand, RemoteSimulateCommand, RemoteSubcommand,
@@ -280,6 +286,7 @@ fn run_parsed_cli_internal(
         Some(AxonCommand::Package(command)) => {
             run_package(command, command.format.unwrap_or(cli.global.format))
         }
+        Some(AxonCommand::Persona(command)) => run_persona(command, cli.global.config.as_deref()),
         Some(AxonCommand::Memory(command)) => {
             run_memory(command, cli.global.format, cli.global.config.as_deref())
         }

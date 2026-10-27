@@ -197,6 +197,7 @@ fn lifecycle_from_view(view: RunLifecycleStatusView) -> WireTurnLifecycle {
         started_at_ms: view.started_at_ms,
         total_tokens: view.total_tokens,
         cache_hit_rate_basis_points: view.cache_hit_rate_basis_points,
+        warnings: Vec::new(),
     }
 }
 

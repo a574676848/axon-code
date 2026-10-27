@@ -8,48 +8,47 @@
 @theme {
   /*
    * 四级表面：托盘底座（sidebar）、主画布（canvas）、浮起卡片（surface）、下沉凹槽（surface-sunken）。
-   * 纸白主题采用柔光瓷白（Soft Alabaster）：
-   * 托盘底座 #ECEFF3 -> 内嵌主画布 #F6F7F9 -> 纯白卡片 #FFFFFF，既纯粹白亮又消除满白眩光。
+   * 纸白主题采用高纯度清透雪白（Crisp Pure Paper，零灰雾感、零蓝偏色）：
+   * 托盘底座 #F6F6F7 -> 内嵌主画布 #FDFDFD -> 纯白卡片 #FFFFFF，通透明亮、干净纯粹。
    */
-  --color-canvas: #F6F7F9;
-  --color-sidebar: #ECEFF3;
+  --color-canvas: #FDFDFD;
+  --color-sidebar: #F6F6F7;
   --color-surface: #FFFFFF;
-  --color-surface-sunken: #E8ECF2;
-  --color-hover: rgba(15, 23, 42, 0.045);
-  --color-active: rgba(15, 23, 42, 0.075);
+  --color-surface-sunken: #F3F3F5;
+  --color-hover: rgba(24, 24, 27, 0.04);
+  --color-active: rgba(24, 24, 27, 0.068);
   /* 模态遮罩：只此一档，嵌套弹窗不叠第二层。 */
-  --color-scrim: rgba(15, 23, 42, 0.36);
+  --color-scrim: rgba(15, 16, 19, 0.36);
 
-  --color-border: rgba(15, 23, 42, 0.085);
-  --color-border-hairline: rgba(15, 23, 42, 0.06);
-  --color-border-muted: rgba(15, 23, 42, 0.085);
-  --color-border-strong: rgba(15, 23, 42, 0.13);
-  --color-border-input: rgba(15, 23, 42, 0.14);
-  --color-border-selected: #8492A6;
-  --color-specular: rgba(255, 255, 255, 0.92);
-  --color-shimmer-beam: rgba(255, 255, 255, 0.72);
+  --color-border: rgba(24, 24, 27, 0.08);
+  --color-border-hairline: rgba(24, 24, 27, 0.055);
+  --color-border-muted: rgba(24, 24, 27, 0.08);
+  --color-border-strong: rgba(24, 24, 27, 0.125);
+  --color-border-input: rgba(24, 24, 27, 0.14);
+  --color-border-selected: #8E8E96;
+  --color-specular: rgba(255, 255, 255, 0.96);
+  --color-shimmer-beam: rgba(255, 255, 255, 0.78);
   --color-window-close: #C42B1C;
 
-  --color-text-primary: #141820;
-  /* 叙述正文专用墨色：对比度约 11.8:1，解决长文阅读刺眼眩光，并让标题与加粗词自然跳出。 */
-  --color-text-prose: #2C3440;
-  --color-text-secondary: #475467;
-  --color-text-tertiary: #596579;
-  --color-text-placeholder: #637083;
+  --color-text-primary: #111113;
+  /* 叙述正文采用乌润醇正的碳素墨色（#242428）：在洁白画布上清亮锐利且去除了纯黑刺眼眩光。 */
+  --color-text-prose: #242428;
+  --color-text-secondary: #52525B;
+  --color-text-tertiary: #63636B;
+  --color-text-placeholder: #6E6E77;
   /* 说明与时间戳层级：比三级略弱，仍严格满足正文 AA 对比度。 */
-  --color-text-caption: #5B677A;
-  /* 链接与品牌交互色：清澈皇家科技蓝，对画布 5.6:1。 */
+  --color-text-caption: #65656D;
+  /* 链接与品牌交互色：纯粹皇家蓝，仅在链接与技能高亮处点睛。 */
   --color-text-link: #1D5BD6;
-  /* 技能指令高亮：与链接同色相，输入框与用户消息气泡共用。 */
   --color-skill-ink: #1D5BD6;
-  /* 用户气泡底、代码块底、无框行内代码胶囊底与代码墨色。 */
-  --color-bubble: #EDF1F7;
-  --color-code-block: #F1F4F8;
-  --color-code-inline: #E9EEF5;
-  --color-code-ink: #243B55;
+  /* 用户气泡、代码块与行内代码底色同步提亮至清透浅白阶，告别水泥灰块感。 */
+  --color-bubble: #F4F4F5;
+  --color-code-block: #F7F7F8;
+  --color-code-inline: #F1F1F3;
+  --color-code-ink: #27272A;
 
-  --color-primary: #141820;
-  --color-primary-hover: #232A36;
+  --color-primary: #18181B;
+  --color-primary-hover: #27272A;
   --color-focus: #2563EB;
   /* 状态语义色：全部满足对画布与卡片的正文 AA 4.5:1。 */
   --color-danger: #B91C1C;
@@ -57,41 +56,41 @@
   --color-ok-ink: #0F6A31;
   --color-gold: #f59e0b;
   --color-gold-ink: #8A5200;
-  --color-state-idle: #CBD5E1;
-  --color-watermark: #E2E8F0;
-  --color-watermark-strong: #CBD5E1;
+  --color-state-idle: #D4D4D8;
+  --color-watermark: #E4E4E7;
+  --color-watermark-strong: #D4D4D8;
   --color-danger-soft: rgba(185, 28, 28, 0.10);
   --color-ok-soft: rgba(34, 197, 94, 0.14);
   --color-gold-soft: rgba(245, 158, 11, 0.12);
   --color-focus-soft: rgba(37, 99, 235, 0.10);
-  --color-diff-add: #E8F5E9;
-  --color-diff-delete: #FDECEC;
+  --color-diff-add: #E7F4EA;
+  --color-diff-delete: #FCEBEC;
   /* 反色面：压在正文之上的深色浮层，例如行悬浮卡。 */
-  --color-inverse: #1E293B;
-  --color-inverse-secondary: #CBD5E1;
-  --color-surface-tint: #EEF2F6;
+  --color-inverse: #202024;
+  --color-inverse-secondary: #D4D4D8;
+  --color-surface-tint: #EFEFF1;
 
-  /* 用量看板图表色板（不承载文字）。 */
+  /* 用量看板图表色板：底板与轨道同步采用中性浅灰，消除图表发蓝感。 */
   --color-chart-input: #2563EB;
   --color-chart-cache-read: #7BA3EB;
   --color-chart-cache-write: #0D9488;
   --color-chart-output: #7C3AED;
   --color-chart-reasoning: #D97706;
-  --color-chart-requests: #64748B;
-  --color-chart-plot: #F3F5F8;
-  --color-chart-grid: rgba(15, 23, 42, 0.06);
-  --color-chart-track: rgba(15, 23, 42, 0.06);
+  --color-chart-requests: #71717A;
+  --color-chart-plot: #F7F7F8;
+  --color-chart-grid: rgba(24, 24, 27, 0.055);
+  --color-chart-track: rgba(24, 24, 27, 0.055);
 
   /*
    * 主题预览色板：固定描述三套主题各自的托盘、画布、卡片与主操作色，
    * 不随当前激活主题变化，专供设置页主题选择缩略卡使用。
    */
-  --color-swatch-paper-sidebar: #EEF1F6;
-  --color-swatch-paper-canvas: #F9FAFB;
+  --color-swatch-paper-sidebar: #F4F4F5;
+  --color-swatch-paper-canvas: #FDFDFD;
   --color-swatch-paper-card: #FFFFFF;
-  --color-swatch-paper-accent: #111827;
+  --color-swatch-paper-accent: #18181B;
   --color-swatch-forest-sidebar: #E7EEEA;
-  --color-swatch-forest-canvas: #F2F6F4;
+  --color-swatch-forest-canvas: #F1F5F3;
   --color-swatch-forest-card: #FCFEFD;
   --color-swatch-forest-wash: #C9DDD2;
   --color-swatch-forest-accent: #164E3B;
@@ -100,11 +99,11 @@
   --color-swatch-obsidian-card: #181C25;
   --color-swatch-obsidian-accent: #2F5FD0;
 
-  /* 品牌标识色：深邃曜石底板配清亮银白金属蚀刻线条。 */
-  --color-brand-plate: #111827;
-  --color-brand-start: #CBD5E1;
+  /* 品牌标识色：纯净深炭黑底板配银白蚀刻线条。 */
+  --color-brand-plate: #18181B;
+  --color-brand-start: #D4D4D8;
   --color-brand-middle: #FFFFFF;
-  --color-brand-end: #94A3B8;
+  --color-brand-end: #A1A1AA;
   /* 正文列最大宽度：设计系统 §1.2 默认 840px，支持用户拖拽调节，读作 max-w-chat。 */
   --container-chat: var(--axon-chat-user-width, 840px);
   /* 非对话页的内容定宽：管理页与看板共用一条版心。 */
@@ -356,28 +355,26 @@ html[data-theme='obsidian'] {
   --macos-traffic-inset: 0px;
 
   /*
-   * 光学高度阶梯：一套光影，凸起与凹槽分明。
-   * stage 是内嵌圆角主画布舞台，card 是常规内容面板，lift 是侧栏选中签与分段滑块，
-   * prominent 是双层倒角输入坞核心与弹出浮层，dock-focus 保证聚焦态叠加光晕而不丢失立体投影。
+   * 光学高度阶梯：全部采用纯净中性墨影 rgba(24, 24, 27, ...)，不带冷蓝杂色。
    */
-  --elevation-stage: 0 0 0 1px rgba(15, 23, 42, 0.07), 0 2px 8px 0 rgba(15, 23, 42, 0.035);
-  --elevation-card: 0 1px 0 0 rgba(255, 255, 255, 0.95) inset, 0 1px 2px 0 rgba(15, 23, 42, 0.03);
-  --elevation-stroke: 0 0 0 0.5px rgba(15, 23, 42, 0.08);
-  --elevation-lift: 0 1px 0 0 rgba(255, 255, 255, 0.96) inset, 0 1px 3px 0 rgba(15, 23, 42, 0.07),
-    0 3px 8px 0 rgba(15, 23, 42, 0.04);
-  --elevation-panel: 0 1px 0 0 rgba(255, 255, 255, 0.96) inset, 0 2px 5px 0 rgba(15, 23, 42, 0.04),
-    0 14px 30px 0 rgba(15, 23, 42, 0.06);
-  --elevation-prominent: 0 1px 0 0 rgba(255, 255, 255, 0.98) inset, 0 4px 12px 0 rgba(15, 23, 42, 0.05),
-    0 20px 44px 0 rgba(15, 23, 42, 0.075);
+  --elevation-stage: 0 0 0 1px rgba(24, 24, 27, 0.075), 0 2px 8px 0 rgba(24, 24, 27, 0.035);
+  --elevation-card: 0 1px 0 0 rgba(255, 255, 255, 0.95) inset, 0 1px 2px 0 rgba(24, 24, 27, 0.03);
+  --elevation-stroke: 0 0 0 0.5px rgba(24, 24, 27, 0.08);
+  --elevation-lift: 0 1px 0 0 rgba(255, 255, 255, 0.96) inset, 0 1px 3px 0 rgba(24, 24, 27, 0.07),
+    0 3px 8px 0 rgba(24, 24, 27, 0.04);
+  --elevation-panel: 0 1px 0 0 rgba(255, 255, 255, 0.96) inset, 0 2px 5px 0 rgba(24, 24, 27, 0.04),
+    0 14px 30px 0 rgba(24, 24, 27, 0.06);
+  --elevation-prominent: 0 1px 0 0 rgba(255, 255, 255, 0.98) inset, 0 4px 12px 0 rgba(24, 24, 27, 0.045),
+    0 18px 40px 0 rgba(24, 24, 27, 0.065);
   --elevation-dock-focus: 0 0 0 1px var(--color-focus), 0 0 0 4px var(--color-focus-soft),
-    0 1px 0 0 rgba(255, 255, 255, 0.98) inset, 0 12px 32px 0 rgba(15, 23, 42, 0.085);
-  --elevation-well: inset 1.5px 1.5px 4px rgba(15, 23, 42, 0.065), inset -1px -1px 3px rgba(255, 255, 255, 0.95);
-  --elevation-well-sm: inset 1px 1px 2.5px rgba(15, 23, 42, 0.055),
+    0 1px 0 0 rgba(255, 255, 255, 0.98) inset, 0 12px 32px 0 rgba(24, 24, 27, 0.08);
+  --elevation-well: inset 1.5px 1.5px 4px rgba(24, 24, 27, 0.06), inset -1px -1px 3px rgba(255, 255, 255, 0.95);
+  --elevation-well-sm: inset 1px 1px 2.5px rgba(24, 24, 27, 0.05),
     inset -1px -1px 2px rgba(255, 255, 255, 0.94);
-  --elevation-modal: 0 0 0 1px rgba(15, 23, 42, 0.09), 0 24px 64px 0 rgba(15, 23, 42, 0.16),
-    0 8px 24px 0 rgba(15, 23, 42, 0.07);
-  --elevation-button-primary: 0 1px 0 0 rgba(255, 255, 255, 0.18) inset, 0 1px 2px 0 rgba(15, 23, 42, 0.14);
-  --elevation-button-outline: 0 1px 0 0 var(--color-specular) inset, 0 1px 2px 0 rgba(15, 23, 42, 0.035);
+  --elevation-modal: 0 0 0 1px rgba(24, 24, 27, 0.09), 0 24px 64px 0 rgba(24, 24, 27, 0.16),
+    0 8px 24px 0 rgba(24, 24, 27, 0.07);
+  --elevation-button-primary: 0 1px 0 0 rgba(255, 255, 255, 0.18) inset, 0 1px 2px 0 rgba(24, 24, 27, 0.14);
+  --elevation-button-outline: 0 1px 0 0 var(--color-specular) inset, 0 1px 2px 0 rgba(24, 24, 27, 0.035);
 
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
 

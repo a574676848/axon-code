@@ -108,6 +108,10 @@ fn self_iteration_skips_memory_reflection_for_low_salience_turn() {
         signals: SemanticSalienceSignals::default(),
         evidence_refs: Vec::new(),
         reason: "普通任务没有长期价值".to_owned(),
+        user_affect: None,
+        persona_drift_bp: None,
+        drift_reason: None,
+        style_candidate: None,
     });
     let plan = SelfIterationRuntime.plan(&input);
 
@@ -222,6 +226,10 @@ fn base_input() -> SelfIterationInput {
             },
             evidence_refs: vec!["receipt:test".to_owned()],
             reason: "已验证的执行经验可跨会话复用".to_owned(),
+            user_affect: None,
+            persona_drift_bp: None,
+            drift_reason: None,
+            style_candidate: None,
         }),
         turn_outcome,
         skill_execution: None,

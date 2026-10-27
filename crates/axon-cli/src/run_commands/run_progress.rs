@@ -225,6 +225,8 @@ impl<'a> RunProgressSink<'a> {
                 started_at_ms: None,
                 total_tokens: None,
                 cache_hit_rate_basis_points: None,
+
+                warnings: Vec::new(),
             }),
         );
     }
@@ -254,6 +256,8 @@ impl<'a> RunProgressSink<'a> {
                 started_at_ms: None,
                 total_tokens: None,
                 cache_hit_rate_basis_points: None,
+
+                warnings: Vec::new(),
             }),
         );
     }
@@ -278,6 +282,8 @@ impl<'a> RunProgressSink<'a> {
                 started_at_ms: view.started_at_ms,
                 total_tokens: view.total_tokens,
                 cache_hit_rate_basis_points: view.cache_hit_rate_basis_points,
+
+                warnings: Vec::new(),
             }),
         );
     }

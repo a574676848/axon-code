@@ -213,12 +213,10 @@ const ReasoningBlock: React.FC<{ text: string; done: boolean; durationMs: number
       {open && (
         <DisclosureBody framed>
           {/*
-            思考是过程，不是结论：读作页边批注，左侧一道标线加三级文本色。
-            不再铺整块底色：一段几十字的推理套上灰底会压成一块砖，
-            与下面的正式回答抢重量。三级文本在两种主题下都过正文 AA。
+            思考是过程批注：限高内部滚动避免长篇思考撑爆整屏，左侧细标线加柔和次级墨色。
           */}
-          <div className="border-l-2 border-border-strong pl-3">
-            <p className="text-row-loose text-text-tertiary whitespace-pre-wrap break-words">
+          <div className="max-h-[320px] overflow-y-auto scroll-visible border-l-[1.5px] border-border-strong pl-3.5 pr-2 py-0.5">
+            <p className="text-row-loose text-text-secondary whitespace-pre-wrap break-words">
               {compactReasoningText(text)}
             </p>
           </div>
@@ -325,11 +323,11 @@ const ToolBlock: React.FC<{ cell: Extract<TranscriptCell, { role: 'tool' }> }> =
       />
       {open && (
         <DisclosureBody>
-          {(cell.arguments.length > 0 || cell.command.length > 0) && (
+          {cell.toolKind !== 'notes' && (cell.arguments.length > 0 || cell.command.length > 0) && (
             <ToolContent title="输入" value={cell.arguments || cell.command}
               shell={label === '执行'} />
           )}
-          {cell.summary.length > 0 && cell.summary !== cell.output && (
+          {cell.toolKind !== 'notes' && cell.summary.length > 0 && cell.summary !== cell.output && (
             <ToolContent title="摘要" value={cell.summary} />
           )}
           {cell.diff !== null && cell.diff.length > 0 && (

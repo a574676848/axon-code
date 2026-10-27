@@ -5,9 +5,9 @@ import { memoryKindLabel } from './memoryDraft';
 import { Panel, Text } from './ui/surfaces';
 
 /** 单条记忆的固定行高，时间轮几何按它推导。 */
-const ITEM_HEIGHT_PX = 96;
+const ITEM_HEIGHT_PX = 106;
 /** 相邻两条之间绕 X 轴旋转的角度。 */
-const STEP_DEG = 15;
+const STEP_DEG = 16;
 /** 视觉半径：由行高与步进角推导，让相邻行在中心保持等距。 */
 const RADIUS_PX = Math.round(ITEM_HEIGHT_PX / (2 * Math.tan((STEP_DEG * Math.PI) / 360)));
 /** 滚轮推进一格对应的像素量（支持连续亚像素跟手旋转）。 */
@@ -296,32 +296,18 @@ export const MemoryWheel: React.FC<MemoryWheelProps> = ({
   for (let i = start; i <= end; i += 1) mountedIndices.push(i);
 
   return (
-    <Panel clip className="relative bg-surface-sunken/35">
-      {/* 右上角精密刻度计：当前第几条 / 已载入总数 */}
-      <div className="pointer-events-none absolute top-2.5 right-3.5 z-30 px-2 py-0.5 rounded-full bg-surface/90 hairline border-border font-mono text-2xs tabular-nums text-text-tertiary">
-        {String(activeIndex + 1).padStart(2, '0')} / {String(records.length).padStart(2, '0')}
-      </div>
-
-      {/* 上下边缘光学景深雾化遮罩 */}
+    <Panel clip className="relative bg-surface-sunken/30">
+      {/* 上下边缘柔和景深雾化遮罩 */}
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 h-12 z-20"
+        className="pointer-events-none absolute inset-x-0 top-0 h-10 z-20"
         style={{ backgroundImage: 'linear-gradient(to bottom, var(--color-surface), transparent)' }}
       />
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 bottom-0 h-12 z-20"
+        className="pointer-events-none absolute inset-x-0 bottom-0 h-10 z-20"
         style={{ backgroundImage: 'linear-gradient(to top, var(--color-surface), transparent)' }}
       />
-
-      {/* 中央静止光学检视窗准星线 */}
-      <div
-        aria-hidden="true"
-        style={{ height: `${ITEM_HEIGHT_PX + 8}px` }}
-        className="pointer-events-none absolute inset-x-2 top-1/2 -translate-y-1/2 z-0 rounded-md hairline border-border-hairline bg-surface/40"
-      >
-        <span className="absolute left-0 top-3 bottom-3 w-0.5 rounded-full bg-primary/70" />
-      </div>
 
       <div
         ref={wheelRef}
@@ -329,11 +315,11 @@ export const MemoryWheel: React.FC<MemoryWheelProps> = ({
         role="listbox"
         aria-label="记忆时间轮，使用鼠标滚轮或上下方向键切换"
         onKeyDown={onKeyDown}
-        className="relative outline-none h-[min(460px,58vh)] select-none"
+        className="relative outline-none h-[min(340px,48vh)] select-none"
         style={{ perspective: `${RADIUS_PX * 3}px` }}
       >
         <div
-          className="absolute inset-x-0 top-1/2"
+          className="absolute inset-x-0 top-[46%]"
           style={{ transformStyle: 'preserve-3d', transform: `translateZ(-${RADIUS_PX}px)` }}
         >
           {mountedIndices.map((index) => {
@@ -353,16 +339,22 @@ export const MemoryWheel: React.FC<MemoryWheelProps> = ({
                 role="option"
                 aria-selected={active}
                 onClick={() => jumpToIndex(index)}
-                className="absolute inset-x-3.5 cursor-pointer will-change-[transform,opacity]"
+                className="absolute inset-x-4 cursor-pointer will-change-[transform,opacity]"
                 style={{ height: `${ITEM_HEIGHT_PX}px` }}
               >
                 <div
-                  className={`h-full overflow-hidden rounded-md px-4 py-2 hairline transition-colors duration-150 ${
+                  className={`relative h-full overflow-hidden rounded-md px-4 py-2.5 hairline transition-colors duration-150 ${
                     active
-                      ? 'bg-surface shadow-lift border-border-selected'
-                      : 'bg-surface/90 border-border-hairline hover:border-border-strong'
+                      ? 'bg-surface shadow-panel border-border-strong'
+                      : 'bg-surface/85 border-border-hairline hover:border-border'
                   }`}
                 >
+                  {active && (
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute left-0 top-3 bottom-3 w-[2.5px] rounded-full bg-primary"
+                    />
+                  )}
                   <WheelRow
                     record={record}
                     active={active}
@@ -374,7 +366,7 @@ export const MemoryWheel: React.FC<MemoryWheelProps> = ({
           })}
         </div>
         {loadingMore && (
-          <div className="pointer-events-none absolute inset-x-0 bottom-2.5 z-30 text-center">
+          <div className="pointer-events-none absolute inset-x-0 bottom-2 z-30 text-center">
             <Text tone="tertiary" size="xs" className="shimmer-text-active">
               正在加载更早的记忆
             </Text>
@@ -403,33 +395,37 @@ const WheelRow: React.FC<WheelRowProps> = ({ record, active, actions }) => {
   ].join(' · ');
   return (
     <div className="h-full flex items-center gap-3">
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 text-xs leading-4 text-text-secondary">
-          <span className="shrink-0 font-medium text-text-primary">
+      <div className="min-w-0 flex-1 space-y-1">
+        <div className="flex items-center gap-1.5 text-xs leading-4">
+          <span className="shrink-0 px-1.5 py-px rounded-xs bg-surface-sunken font-medium text-2xs text-text-secondary">
             {memoryKindLabel(record.memoryKind)}
           </span>
-          <span className="shrink-0 text-text-tertiary">
+          <span className="shrink-0 px-1.5 py-px rounded-xs bg-surface-sunken/70 text-2xs text-text-tertiary">
             {record.scope === 'personal' ? '个人' : '仓库'}
           </span>
+          {note !== null && (
+            <span className="shrink-0 px-1.5 py-px rounded-xs bg-gold-soft text-2xs text-gold-ink">
+              {note}
+            </span>
+          )}
           <time
             className="ml-auto shrink-0 tabular-nums text-text-caption"
             dateTime={new Date(record.updatedAtMs).toISOString()}
           >
             {formatDateTime(record.updatedAtMs)}
           </time>
-          {note !== null && <span className="shrink-0 text-gold-ink">{note}</span>}
         </div>
-        <p className="mt-0.5 text-sm leading-[22px] text-text-prose break-words line-clamp-2">
+        <p className="text-row leading-[20px] text-text-prose break-words line-clamp-2">
           {record.memorySummary || '无摘要'}
         </p>
         {active && (
-          <p className="disclosure-enter mt-0.5 truncate text-xs leading-4 text-text-tertiary">
+          <p className="disclosure-enter truncate text-xs leading-4 text-text-tertiary">
             {meta}
           </p>
         )}
       </div>
       {actions !== null && (
-        <div className="confirm-pop shrink-0 flex items-center gap-0.5">{actions}</div>
+        <div className="confirm-pop shrink-0 flex items-center gap-0.5 pl-1">{actions}</div>
       )}
     </div>
   );

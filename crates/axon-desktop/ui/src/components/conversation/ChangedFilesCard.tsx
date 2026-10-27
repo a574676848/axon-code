@@ -59,17 +59,19 @@ export const ChangedFilesCard: React.FC<ChangedFilesCardProps> = ({ files, onOpe
         label="改动"
         title={title}
         titleText={single === null ? '在右侧栏查看本轮改动' : single.path}
-        meta={<DiffStat added={totals.added} removed={totals.removed} />}
-        trailing={
-          <ChevronRightIcon
-            size={12}
-            className="shrink-0 text-text-tertiary transition-transform duration-150 group-hover:translate-x-0.5"
-          />
+        meta={
+          <span className="inline-flex items-center gap-1.5">
+            <DiffStat added={totals.added} removed={totals.removed} />
+            <ChevronRightIcon
+              size={12}
+              className="shrink-0 text-text-tertiary transition-transform duration-150 group-hover:translate-x-0.5"
+            />
+          </span>
         }
       />
 
       {single === null && (
-        <ul className={`${BODY_INDENT} mr-1 mb-0.5 border-l border-border-hairline pl-1.5 space-y-0.5`}>
+        <ul className={`${BODY_INDENT} mb-0.5 border-l border-border-hairline pl-1.5 space-y-0.5`}>
           {rows.map((file, index) => (
             <li key={file.path} className={index >= COLLAPSED_ROWS ? 'disclosure-enter' : undefined}>
               <button
@@ -77,7 +79,7 @@ export const ChangedFilesCard: React.FC<ChangedFilesCardProps> = ({ files, onOpe
                 onClick={() => onOpen(index)}
                 title={file.path}
                 aria-label={`查看 ${file.path} 的改动`}
-                className="w-full h-7 px-2 flex items-center gap-2 rounded-xs text-left transition-colors duration-100 hover:bg-hover"
+                className="group/file w-full h-7 pl-2 pr-1 flex items-center gap-1.5 rounded-xs text-left transition-colors duration-100 hover:bg-hover"
               >
                 <span className="flex-1 min-w-0 truncate text-row text-text-prose">
                   {file.path}
@@ -86,6 +88,10 @@ export const ChangedFilesCard: React.FC<ChangedFilesCardProps> = ({ files, onOpe
                   )}
                 </span>
                 <DiffStat added={file.added} removed={file.removed} className="shrink-0" />
+                <ChevronRightIcon
+                  size={12}
+                  className="shrink-0 text-text-tertiary opacity-0 transition-opacity duration-150 group-hover/file:opacity-100"
+                />
               </button>
             </li>
           ))}

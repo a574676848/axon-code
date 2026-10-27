@@ -26,6 +26,7 @@ crates/
 ├── axon-memory-ops/           # Memory 治理原语、维护任务与自愈流水线
 ├── axon-prompts/              # 系统提示词模板与装配
 ├── axon-context-fragments/    # 动态上下文 Fragment 投影
+├── axon-persona/              # 人格内核解析、状态机、表达策略与人格库
 ├── axon-protocol/             # 跨 Crate 共享协议与 Wire DTO 契约
 ├── axon-patch-model/          # 补丁数据模型与纯计算（无 I/O，零依赖）
 ├── axon-apply/                # 文件编辑应用执行器与安全审计

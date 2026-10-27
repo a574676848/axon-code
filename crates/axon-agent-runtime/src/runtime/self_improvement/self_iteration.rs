@@ -14,7 +14,7 @@ pub const SELF_ITERATION_SKILL_REFLECTION_MAX_RUNTIME_MS: u64 = 30_000;
 /// 记忆更新最长运行时间。
 pub const SELF_ITERATION_MEMORY_UPDATE_MAX_RUNTIME_MS: u64 = 30_000;
 /// 记忆更新 subagent 固定任务消息。
-pub const SELF_ITERATION_MEMORY_TASK_MESSAGE: &str = "仅复盘随附的 turn outcome 与 evidence refs，先使用 builtin.memory_search 核对相关既有记忆，再判断候选是否形成可跨会话复用的 profile、preference、experience、knowledge 或 procedure。只有候选通过 owner、scope、稳定性、证据与冲突门禁时才调用 builtin.memory_write；当前证据明确证明已召回的具体记忆失效或错误时，才能通过 supersedes_memory_ids 标注其真实 Memory ID。用户明确授权长期保存的敏感内容允许沿用普通 Memory 明文链路；偶然出现在源码、环境、日志或工具输出中的凭据不得自动记忆。不得继续父任务，不得猜测 Memory ID，不得写入 prompt 原文、未验证猜测、临时日志或一次性信息。完成后只简述本次反思结果。";
+pub const SELF_ITERATION_MEMORY_TASK_MESSAGE: &str = "仅复盘随附的 turn outcome 与 evidence refs，先使用 builtin.memory_search 核对相关既有记忆，再判断候选是否形成可跨会话复用的 profile、preference、experience、knowledge 或 procedure。只有候选通过 owner、scope、稳定性、证据与冲突门禁时才调用 builtin.memory_write；当前证据明确证明已召回的具体记忆失效或错误时，才能通过 supersedes_memory_ids 标注其真实 Memory ID。用户明确授权长期保存的敏感内容允许沿用普通 Memory 明文链路；偶然出现在源码、环境、日志或工具输出中的凭据不得自动记忆。不得继续父任务，不得猜测 Memory ID，不得写入 prompt 原文、未验证猜测、临时日志或一次性信息。表达风格类偏好由人格系统承接，不写入 Memory。完成后只简述本次反思结果。";
 /// 记忆更新 prompt mode。
 pub const SELF_ITERATION_MEMORY_PROMPT_MODE: &str = "memory_update";
 /// skill 反思 prompt mode。

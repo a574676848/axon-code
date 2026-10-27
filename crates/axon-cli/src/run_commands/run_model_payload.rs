@@ -28,6 +28,8 @@ const HOME_WITHOUT_WORKSPACE: &str = "未选择（当前目录位于 Home）";
 pub(super) struct CliRunModelPayloadInput<'a> {
     pub(super) memory_hits: &'a [MemoryHybridHit],
     pub(super) soul_context_message: Option<&'a AgentModelMessage>,
+    /// 本轮人格状态动态段；不进缓存，计入动态尾部。
+    pub(super) persona_state_message: Option<&'a AgentModelMessage>,
     pub(super) include_personal_memory: bool,
     pub(super) memory_disclosure_policy: DisclosurePolicy,
     pub(super) cwd: &'a str,
@@ -107,6 +109,14 @@ pub(super) fn build_cli_run_model_payload(
         input.include_personal_memory,
         input.startup.user_agents.as_ref(),
     );
+    let mut dynamic_context_messages = input
+        .startup
+        .prompt_context
+        .workspace_context_messages
+        .clone();
+    if let Some(persona) = input.persona_state_message {
+        dynamic_context_messages.push(persona.clone());
+    }
     let environment_context = cli_environment_context();
     let payload = ContextAssemblerRuntime
         .assemble_input(ContextAssemblerInput {
@@ -141,11 +151,7 @@ pub(super) fn build_cli_run_model_payload(
             ledger_context: input.ledger_context.cloned(),
             stable_prefix: input.stable_prefix.clone(),
             stable_context_messages,
-            dynamic_context_messages: input
-                .startup
-                .prompt_context
-                .workspace_context_messages
-                .clone(),
+            dynamic_context_messages,
             environment_context: Some(environment_context),
             history_messages,
             repo_structure: None,
@@ -408,6 +414,7 @@ mod tests {
             CliRunModelPayloadInput {
                 memory_hits: &[],
                 soul_context_message: Some(&soul_message),
+                persona_state_message: None,
                 include_personal_memory: true,
                 memory_disclosure_policy: DisclosurePolicy::PrivateOnly,
                 cwd: &cwd.to_string_lossy(),
@@ -532,6 +539,7 @@ mod tests {
             CliRunModelPayloadInput {
                 memory_hits: &[],
                 soul_context_message: None,
+                persona_state_message: None,
                 include_personal_memory: false,
                 memory_disclosure_policy: DisclosurePolicy::Workspace,
                 cwd: &cwd.to_string_lossy(),
@@ -611,5 +619,68 @@ mod tests {
             .as_nanos();
         axon_test_support::test_temp_root()
             .join(format!("axon-cli-{label}-{}-{nonce}", std::process::id()))
+    }
+
+    #[test]
+    fn cli_payload_carries_persona_state_only_when_provided() {
+        let root = temp_root("persona-state");
+        let config_path = root.join("runtime").join("config.toml");
+        let cwd = root.join("workspace");
+        fs::create_dir_all(&cwd).unwrap();
+        fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        ConfigLoader::save_to_path(&config_path, &AxonConfig::default()).unwrap();
+        let startup = RunStartupSnapshot::build(&config_path, &cwd).unwrap();
+        let prompt = "继续";
+        let registry = startup.execution_tools_for_session(&config_path, "session-1");
+        let registry = registry
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let persona_message = AgentModelMessage::cache_excluded(
+            "developer",
+            "<persona-state-context>\nmode: casual\n</persona-state-context>",
+        );
+
+        let build = |persona: Option<&AgentModelMessage>| {
+            let (payload, _) = build_cli_run_model_payload(
+                CliRunModelPayloadInput {
+                    memory_hits: &[],
+                    soul_context_message: None,
+                    persona_state_message: persona,
+                    include_personal_memory: false,
+                    memory_disclosure_policy: DisclosurePolicy::PrivateOnly,
+                    cwd: &cwd.to_string_lossy(),
+                    workspace_snapshot: None,
+                    startup: &startup,
+                    stable_prefix: &startup.prompt_context.stable_prefix,
+                    context_window: 128_000,
+                    max_subagent_threads: 16,
+                    max_subagent_active_turns: 16,
+                    model_history_json: None,
+                    ledger_context: None,
+                },
+                prepare_cli_run_skill_context(&startup, prompt, 128_000),
+                &registry,
+            )
+            .unwrap();
+            payload
+        };
+
+        let with_persona = build(Some(&persona_message));
+        let without_persona = build(None);
+
+        assert!(
+            with_persona
+                .messages
+                .iter()
+                .any(|message| message.content.contains("<persona-state-context>")),
+            "提供人格状态段时 payload 必须带上它"
+        );
+        assert!(
+            !without_persona
+                .messages
+                .iter()
+                .any(|message| message.content.contains("<persona-state-context>")),
+            "未提供时不得凭空出现人格状态段"
+        );
     }
 }

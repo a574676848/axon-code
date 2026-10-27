@@ -23,7 +23,9 @@ use super::run_model_payload::{
     prepare_cli_run_skill_context,
 };
 use super::{RunCommand, RunStartupSnapshot};
-use crate::runtime_user_soul::load_user_soul_message;
+use axon_persona::domain::scene_frame::Audience;
+
+use crate::runtime_persona_context::{PersonaContext, PersonaSceneInput, load_persona_context};
 
 const LOCAL_UPLOAD_SOURCE_PREFIX: &str = "local-upload://";
 const LEDGER_ACTIVE_GOAL_LIMIT: u32 = 32;
@@ -37,6 +39,8 @@ pub(super) use workspace_prewarm::RunWorkspaceSnapshotPrewarm;
 
 pub(super) struct BuildRunModelPayloadInput<'a> {
     pub(super) config_path: &'a Path,
+    /// 当前客户端渠道；人格场景帧据此区分终端、桌面与飞书。
+    pub(super) client_channel: axon_client_identity::ClientChannel,
     pub(super) config: &'a AxonConfig,
     pub(super) cwd: &'a Path,
     pub(super) command: &'a RunCommand,
@@ -57,6 +61,8 @@ pub(super) struct BuildRunModelPayloadInput<'a> {
 }
 
 pub(super) struct BuildRunModelPayloadOutput {
+    /// 人格装配产生的降级告警。
+    pub(super) persona_warnings: Vec<String>,
     pub(super) model_payload: AgentModelPayload,
     pub(super) skill_selection: CliRunSkillSelection,
     pub(super) memory_recall: Option<RunMemoryRecallEvent>,
@@ -68,7 +74,7 @@ pub(super) fn build_run_model_payload(
     registry: &ToolRegistry,
 ) -> Result<BuildRunModelPayloadOutput, String> {
     let skill_soul_ready = AtomicU8::new(0);
-    let (workspace_snapshot, memory_recall, skill_context, soul_context_message) =
+    let (workspace_snapshot, memory_recall, skill_context, persona_context) =
         thread::scope(|scope| {
             let skill = scope.spawn(|| {
                 let result = prepare_cli_run_skill_context(
@@ -79,11 +85,24 @@ pub(super) fn build_run_model_payload(
                 record_pair_ready(input.performance, &skill_soul_ready);
                 result
             });
-            let soul = scope.spawn(|| {
+            let persona = scope.spawn(|| {
                 let result = if input.include_user_soul {
-                    load_user_soul_message()
+                    load_persona_context(
+                        input.config_path,
+                        PersonaSceneInput {
+                            channel: super::run_agent_identity::persona_channel(
+                                input.client_channel,
+                            ),
+                            audience: if input.include_personal_memory {
+                                Audience::Private
+                            } else {
+                                Audience::Group
+                            },
+                            has_workspace: input.startup.workspace_root.is_some(),
+                        },
+                    )
                 } else {
-                    Ok(None)
+                    Ok(PersonaContext::empty())
                 };
                 record_pair_ready(input.performance, &skill_soul_ready);
                 result
@@ -113,16 +132,20 @@ pub(super) fn build_run_model_payload(
                 workspace_snapshot,
                 memory_recall,
                 join_dynamic(skill, "Skill route")?,
-                join_dynamic(soul, "Soul load")??,
+                join_dynamic(persona, "Persona load")??,
             ))
         })?;
+    for warning in &persona_context.warnings {
+        axon_logger::warning(&format!("persona_context: {warning}"));
+    }
     let ledger_context =
         rehydrate_ledger_context_with_snapshot(input.config_path, workspace_snapshot.as_ref())?;
     record_stage(input.performance, TurnPerformanceStage::LedgerReady);
     let (model_payload, skill_selection) = build_cli_run_model_payload(
         CliRunModelPayloadInput {
             memory_hits: &memory_recall.hits,
-            soul_context_message: soul_context_message.as_ref(),
+            soul_context_message: persona_context.stable.as_ref(),
+            persona_state_message: persona_context.dynamic.as_ref(),
             include_personal_memory: input.include_personal_memory,
             memory_disclosure_policy: input.memory_disclosure_policy,
             cwd: &input.cwd.to_string_lossy(),
@@ -150,6 +173,7 @@ pub(super) fn build_run_model_payload(
         skill_selection,
         memory_recall: memory_recall.event,
         memory_disclosure_policy: input.memory_disclosure_policy,
+        persona_warnings: persona_context.warnings.clone(),
     })
 }
 

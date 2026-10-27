@@ -242,6 +242,8 @@ pub fn remote_notification_wire_lifecycle_event(
             started_at_ms: None,
             total_tokens: None,
             cache_hit_rate_basis_points: None,
+
+            warnings: Vec::new(),
         }),
     )
 }

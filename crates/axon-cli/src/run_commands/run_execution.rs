@@ -70,7 +70,11 @@ impl RunJsonEvent {
     pub(super) fn completed(input: CompletedRunWireEventsInput<'_>) -> Self {
         let request = input.request;
         let response = input.response;
-        let diagnostics = super::run_outcome_diagnostics::collect(response, input.total_elapsed_ms);
+        let diagnostics = super::run_outcome_diagnostics::collect(
+            response,
+            input.total_elapsed_ms,
+            &request.persona_warnings,
+        );
         Self {
             event: "run_completed",
             status: diagnostics.status,
@@ -129,7 +133,7 @@ impl RunJsonEvent {
                 memory_autonomy,
                 wire_recorded_at_ms(),
             ),
-            warnings: Vec::new(),
+            warnings: request.persona_warnings.clone(),
             failed_tool_attempts: Vec::new(),
             provider_elapsed_ms: 0,
             orchestration_elapsed_ms: 0,

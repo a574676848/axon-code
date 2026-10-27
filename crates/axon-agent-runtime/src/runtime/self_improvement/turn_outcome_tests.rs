@@ -15,6 +15,10 @@ fn stable_user_preference_qualifies_without_tool_execution() {
         },
         evidence_refs: vec![envelope.user_message_ref.clone()],
         reason: "用户明确表达了稳定偏好".to_owned(),
+        user_affect: None,
+        persona_drift_bp: None,
+        drift_reason: None,
+        style_candidate: None,
     };
 
     assert!(assessment.qualifies_for_reflection(&envelope));
@@ -64,6 +68,10 @@ fn conservative_skip_requires_no_candidate_or_evidence() {
         signals: SemanticSalienceSignals::default(),
         evidence_refs: Vec::new(),
         reason: "没有跨会话价值".to_owned(),
+        user_affect: None,
+        persona_drift_bp: None,
+        drift_reason: None,
+        style_candidate: None,
     };
 
     assert!(assessment.is_valid_for(&envelope));
@@ -111,6 +119,10 @@ fn experience_assessment(
         },
         evidence_refs: vec![evidence_ref],
         reason: format!("{} 形成了可复用经验", envelope.turn_id),
+        user_affect: None,
+        persona_drift_bp: None,
+        drift_reason: None,
+        style_candidate: None,
     }
 }
 
@@ -126,4 +138,62 @@ fn envelope(records: Vec<ExecutionEvidenceRecord>) -> TurnOutcomeEnvelope {
         selected_skill: None,
         final_status: TurnFinalStatus::Completed,
     }
+}
+
+#[test]
+fn style_only_never_qualifies_for_memory_reflection() {
+    let envelope = envelope(Vec::new());
+    let assessment = SemanticSalienceAssessment {
+        schema_version: SEMANTIC_SALIENCE_SCHEMA_VERSION,
+        should_reflect: true,
+        candidate_types: vec![SemanticMemoryCandidateType::Style],
+        signals: SemanticSalienceSignals {
+            stability: 9_000,
+            future_utility: 9_000,
+            scope_confidence: 9_000,
+            ..SemanticSalienceSignals::default()
+        },
+        evidence_refs: vec![envelope.user_message_ref.clone()],
+        reason: "用户要求少寒暄".to_owned(),
+        user_affect: None,
+        persona_drift_bp: None,
+        drift_reason: None,
+        style_candidate: Some("少用寒暄，结论先行".to_owned()),
+    };
+
+    assert!(
+        !assessment.qualifies_for_reflection(&envelope),
+        "风格候选必须由人格系统承接，不得触发 Memory 反思"
+    );
+}
+
+#[test]
+fn style_mixed_with_preference_still_qualifies_through_the_preference() {
+    let envelope = envelope(Vec::new());
+    let mut assessment = SemanticSalienceAssessment {
+        schema_version: SEMANTIC_SALIENCE_SCHEMA_VERSION,
+        should_reflect: true,
+        candidate_types: vec![
+            SemanticMemoryCandidateType::Style,
+            SemanticMemoryCandidateType::Preference,
+        ],
+        signals: SemanticSalienceSignals {
+            stability: 9_000,
+            future_utility: 9_000,
+            scope_confidence: 9_000,
+            ..SemanticSalienceSignals::default()
+        },
+        evidence_refs: vec![envelope.user_message_ref.clone()],
+        reason: "用户同时给出了风格与行为偏好".to_owned(),
+        user_affect: None,
+        persona_drift_bp: None,
+        drift_reason: None,
+        style_candidate: Some("少用寒暄".to_owned()),
+    };
+    assessment.style_candidate = None;
+
+    assert!(
+        assessment.qualifies_for_reflection(&envelope),
+        "混合候选里只要含可反思类型就该触发，只是风格自身不参与判定"
+    );
 }

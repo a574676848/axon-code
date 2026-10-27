@@ -232,18 +232,15 @@ export const RailTabStrip: React.FC<RailTabStripProps> = ({
       }
       className="shrink-0 h-10 flex items-center gap-1 bg-surface-sunken hairline-b border-border-hairline select-none"
     >
-      <div className="flex-1 min-w-0 flex items-center gap-1 overflow-x-auto no-scrollbar pl-3">
+      <div className="flex-1 min-w-0 flex items-center gap-1 overflow-x-auto no-scrollbar pl-2.5">
         {pane.tabs.map((tab, index) => {
           const active = tab.id === pane.activeId;
-          /*
-           * 关闭按钮是绝对定位的：标题必须为它留出位置，否则短标题（`.qoder`）的尾部
-           * 会被 × 压住。留白按「按钮宽 20 + 右侧 4 + 与文字 4」计算。
-           */
+          const prevActive = index > 0 && pane.tabs[index - 1]?.id === pane.activeId;
           const closable = canClose(tab.id);
           return (
             <React.Fragment key={tab.id}>
-              {/* 槽内发丝线：与既有工作台产品同款，0.5×14px，作为 tab 之间的分组留白 */}
-              {index > 0 && (
+              {/* 仅在两个相邻非激活 tab 之间绘制槽内细分隔线；浮起的激活签自带边界，不画多余竖线 */}
+              {index > 0 && !active && !prevActive && (
                 <span aria-hidden="true" className="shrink-0 self-center w-hairline h-3.5 bg-border" />
               )}
               <div

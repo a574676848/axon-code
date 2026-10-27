@@ -24,14 +24,18 @@ pub(super) struct RunOutcomeDiagnostics {
     pub(super) total_elapsed_ms: u64,
 }
 
-pub(super) fn collect(response: &RunResponse, total_elapsed_ms: u64) -> RunOutcomeDiagnostics {
+pub(super) fn collect(
+    response: &RunResponse,
+    total_elapsed_ms: u64,
+    persona_warnings: &[String],
+) -> RunOutcomeDiagnostics {
     let provider_elapsed_ms = response
         .turn_events
         .iter()
         .filter(|event| event.kind == AgentTurnEventKind::ProviderCompleted)
         .filter_map(|event| event.duration_ms)
         .sum();
-    let mut warnings = Vec::new();
+    let mut warnings = persona_warnings.to_vec();
     let mut failed_tool_attempts = Vec::new();
     let mut optional_degradation = false;
     for receipt in &response.tool_receipts {
@@ -136,7 +140,7 @@ mod tests {
 
     #[test]
     fn required_tool_failure_is_an_audit_attempt_not_a_run_failure() {
-        let diagnostics = collect(&response("done", vec![receipt(false)]), 0);
+        let diagnostics = collect(&response("done", vec![receipt(false)]), 0, &[]);
 
         assert_eq!(diagnostics.status, "success");
         assert_eq!(diagnostics.failed_tool_attempts.len(), 1);
@@ -144,14 +148,14 @@ mod tests {
 
     #[test]
     fn optional_tool_failure_degrades_the_completed_run() {
-        let diagnostics = collect(&response("done", vec![receipt(true)]), 0);
+        let diagnostics = collect(&response("done", vec![receipt(true)]), 0, &[]);
 
         assert_eq!(diagnostics.status, "degraded");
     }
 
     #[test]
     fn empty_assistant_message_is_a_warning_not_a_failure() {
-        let diagnostics = collect(&response("  \n", Vec::new()), 0);
+        let diagnostics = collect(&response("  \n", Vec::new()), 0, &[]);
 
         assert_eq!(diagnostics.status, "success");
         assert_eq!(

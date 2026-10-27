@@ -27,6 +27,8 @@ export interface CodeBlockProps {
   language?: string | null;
   /** 工具详情使用紧凑间距和内部滚动。 */
   compact?: boolean;
+  /** 可选区块标题（如工具详情的「输入 / 命令 / 输出」），与语言名合并展示以消除双层冗余标题。 */
+  title?: string;
 }
 
 function isDiagram(language: string | null | undefined): boolean {
@@ -70,7 +72,12 @@ function languageLabel(language: string | null | undefined): string {
   return LANGUAGE_LABELS[label.toLowerCase()] ?? label;
 }
 
-export const CodeBlock: React.FC<CodeBlockProps> = ({ code, language, compact = false }) => {
+export const CodeBlock: React.FC<CodeBlockProps> = ({
+  code,
+  language,
+  compact = false,
+  title,
+}) => {
   const [lines, setLines] = React.useState<ThemedToken[][] | null>(null);
   const [diagramError, setDiagramError] = React.useState<string | null>(null);
   const [copied, setCopied] = React.useState(false);
@@ -108,6 +115,12 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({ code, language, compact = 
   };
 
   const label = languageLabel(language);
+  const headerText =
+    title !== undefined
+      ? label === UNKNOWN_LANGUAGE || label === '文本'
+        ? title
+        : `${title} · ${label}`
+      : label;
 
   if (isDiagram(language) && diagramError === null) {
     return (
@@ -119,11 +132,21 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({ code, language, compact = 
 
   return (
     <div
-      className={`${compact ? 'my-0' : 'my-4'} rounded-md hairline border-border shadow-card bg-code-block overflow-hidden`}
+      className={`${
+        compact ? 'my-0 rounded-sm bg-code-block hairline border-border-hairline' : 'my-4 rounded-md hairline border-border shadow-card bg-code-block'
+      } overflow-hidden`}
     >
-      <div className="h-8 pl-3.5 pr-1.5 flex items-center gap-2 hairline-b border-border-hairline bg-surface-sunken/75">
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-text-tertiary">
-          {diagramError === null ? label : `${label}（图形渲染失败，显示原始定义）`}
+      <div
+        className={`${
+          compact ? 'h-7 pl-3 pr-1' : 'h-8 pl-3.5 pr-1.5'
+        } flex items-center gap-2 hairline-b border-border-hairline bg-surface-sunken/70`}
+      >
+        <span
+          className={`min-w-0 flex-1 truncate text-xs text-text-tertiary ${
+            title !== undefined ? 'font-sans font-medium' : 'font-mono'
+          }`}
+        >
+          {diagramError === null ? headerText : `${headerText}（图形渲染失败，显示原始定义）`}
         </span>
         <button
           type="button"
@@ -135,18 +158,18 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({ code, language, compact = 
           }`}
         >
           {copied ? (
-            <CheckIcon size={14} className="confirm-pop" />
+            <CheckIcon size={13} className="confirm-pop" />
           ) : (
-            <CopyIcon size={14} />
+            <CopyIcon size={13} />
           )}
         </button>
       </div>
       <pre
         className={`${
           compact
-            ? 'px-3 py-2 max-h-80 overflow-auto whitespace-pre-wrap break-words'
+            ? 'px-3 py-2.5 max-h-80 overflow-auto scroll-visible whitespace-pre-wrap break-words leading-[19px]'
             : 'px-4 py-3 overflow-x-auto'
-        } font-mono text-code text-text-primary`}
+        } font-mono text-code text-text-prose`}
       >
         <code>
           {lines === null

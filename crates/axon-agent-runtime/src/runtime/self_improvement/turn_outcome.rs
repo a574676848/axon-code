@@ -5,9 +5,22 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 /// 语义显著性输出 schema 版本。
-pub const SEMANTIC_SALIENCE_SCHEMA_VERSION: u32 = 1;
+pub const SEMANTIC_SALIENCE_SCHEMA_VERSION: u32 = 2;
 /// 信号最大值，单位 basis point。
 pub const SEMANTIC_SALIENCE_MAX_BASIS_POINTS: u16 = 10_000;
+
+/// 漂移原因的最大字符数。
+pub const DRIFT_REASON_MAX_CHARS: usize = 80;
+
+/// 风格候选的最大字符数。
+pub const STYLE_CANDIDATE_MAX_CHARS: usize = 120;
+
+/// 触发纠偏的漂移阈值，单位 basis point。
+pub const PERSONA_DRIFT_GUARD_BASIS_POINTS: u16 = 7_000;
+
+/// 允许的用户状态记号。
+pub const USER_AFFECT_TOKENS: [&str; 5] =
+    ["neutral", "positive", "frustrated", "urgent", "unknown"];
 /// Personal 候选的稳定性阈值。
 pub const PERSONAL_STABILITY_MIN_BASIS_POINTS: u16 = 7_000;
 /// Personal 候选的未来复用价值阈值。
@@ -184,6 +197,8 @@ pub enum SemanticMemoryCandidateType {
     Knowledge,
     /// 可复用流程。
     Procedure,
+    /// 表达风格偏好；由人格系统承接，不写入 Memory。
+    Style,
 }
 
 /// 语义显著性信号，统一使用 basis point。
@@ -224,9 +239,45 @@ pub struct SemanticSalienceAssessment {
     pub evidence_refs: Vec<String>,
     /// 有界可审计原因。
     pub reason: String,
+    /// 本轮推断出的用户状态；取值见 [`USER_AFFECT_TOKENS`]。
+    #[serde(default)]
+    pub user_affect: Option<String>,
+    /// 助手回复相对人格底色的漂移程度，单位 basis point。
+    #[serde(default)]
+    pub persona_drift_bp: Option<u16>,
+    /// 漂移原因；漂移达到阈值时必填，限 80 字。
+    #[serde(default)]
+    pub drift_reason: Option<String>,
+    /// 用户显式表达的表达风格偏好原文；仅在 style 候选时给出。
+    #[serde(default)]
+    pub style_candidate: Option<String>,
 }
 
 impl SemanticSalienceAssessment {
+    /// 漂移原因与风格候选的长度与必填约束。
+    #[must_use]
+    fn drift_and_style_are_valid(&self) -> bool {
+        let drift = self.persona_drift_bp.unwrap_or(0);
+        let reason_ok = self.drift_reason.as_deref().is_none_or(|reason| {
+            !reason.trim().is_empty() && reason.chars().count() <= DRIFT_REASON_MAX_CHARS
+        });
+        // 达到阈值时必须给出原因，否则纠偏无从表达。
+        let reason_required =
+            drift < PERSONA_DRIFT_GUARD_BASIS_POINTS || self.drift_reason.is_some();
+        let style_ok = self.style_candidate.as_deref().is_none_or(|candidate| {
+            !candidate.trim().is_empty() && candidate.chars().count() <= STYLE_CANDIDATE_MAX_CHARS
+        });
+        reason_ok && reason_required && style_ok
+    }
+
+    /// 用户状态记号是否合法；缺失按未知处理。
+    #[must_use]
+    pub fn user_affect_is_valid(&self) -> bool {
+        self.user_affect
+            .as_deref()
+            .is_none_or(|affect| USER_AFFECT_TOKENS.contains(&affect))
+    }
+
     /// 严格校验模型输出，任何越界或伪造引用都保守拒绝。
     #[must_use]
     pub fn is_valid_for(&self, envelope: &TurnOutcomeEnvelope) -> bool {
@@ -236,6 +287,9 @@ impl SemanticSalienceAssessment {
             // Provider 兼容层不接受 schema 的 `uniqueItems`，去重约束改由运行时保守校验。
             || has_duplicates(&self.candidate_types)
             || has_duplicates(&self.evidence_refs)
+            || !self.user_affect_is_valid()
+            || !self.drift_and_style_are_valid()
+            || self.persona_drift_bp.is_some_and(|drift| drift > SEMANTIC_SALIENCE_MAX_BASIS_POINTS)
         {
             return false;
         }
@@ -282,6 +336,8 @@ impl SemanticSalienceAssessment {
                                 .execution_evidence
                                 .has_verified_evidence_ref(&self.evidence_refs)
                     }
+                    // 表达风格由人格系统承接，不通过 Memory 反思通道处理。
+                    SemanticMemoryCandidateType::Style => false,
                 })
     }
 }

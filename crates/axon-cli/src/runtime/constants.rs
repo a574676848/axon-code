@@ -18,6 +18,9 @@ pub const DOCTOR_CHECK_TOOL: &str = "tool";
 pub const DOCTOR_CHECK_MCP: &str = "mcp";
 /// doctor memory store 状态检查名称。
 pub const DOCTOR_CHECK_MEMORY: &str = "memory";
+
+/// 人格内核与人格库检查项。
+pub const DOCTOR_CHECK_PERSONA: &str = "persona";
 /// doctor LSP / diagnostics 基线检查名称。
 pub const DOCTOR_CHECK_LSP: &str = "lsp";
 /// doctor 本地运行目录与数据可写性检查名称。

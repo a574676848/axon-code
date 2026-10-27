@@ -61,6 +61,7 @@ import type {
   UsageRealtimeWindow,
   ThemeId,
 } from './types';
+import type { PersonaPortrait, PersonaSummary } from './personaTypes';
 
 /** 会话事件通道名，与 Rust 侧 `CONVERSATION_EVENT` 一致；车道流与会话流共用这一条。 */
 import type { ConversationStreamPayload, ConversationStreamEvent } from './conversation/wire';
@@ -162,6 +163,12 @@ export const laneReorder = (
 ): Promise<WorkspaceItem[]> => call('lane_reorder', { workspaceId, orderedIds });
 
 // ------------------------------------------------- 文档、目录与 MCP 管理
+
+/** 读取已持久化的人格状态摘要。 */
+export const personaSummary = (): Promise<PersonaSummary> => call('persona_summary');
+
+/** 读取形象资产；尚未放置形象时抛出可读错误。 */
+export const personaPortrait = (): Promise<PersonaPortrait> => call('persona_portrait');
 
 /** 列出设置内可打开的文件与目录及其存在状态。 */
 export const documentCatalog = (): Promise<DocumentItem[]> => call('document_catalog');

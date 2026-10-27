@@ -43,16 +43,16 @@ const ToolButton: React.FC<{
 /** 一行对比：旧行号、新行号、符号与正文；符号是配色的文本备份，色盲用户也读得出来。 */
 const DiffLine: React.FC<{ row: DiffRow; wrap: boolean }> = ({ row, wrap }) => (
   <div
-    className={`flex ${
+    className={`flex min-w-full ${
       row.kind === 'add' ? 'bg-diff-add' : row.kind === 'delete' ? 'bg-diff-delete' : ''
     }`}
   >
-    <span className={`${LINE_NUMBER_CLASS} pr-1.5`}>{row.oldLine ?? ''}</span>
+    <span className={`${LINE_NUMBER_CLASS} pl-2 pr-1.5`}>{row.oldLine ?? ''}</span>
     <span className={`${LINE_NUMBER_CLASS} pr-2`}>{row.newLine ?? ''}</span>
     <span className="shrink-0 select-none w-[2ch] text-text-secondary" aria-hidden="true">
       {row.kind === 'add' ? '+' : row.kind === 'delete' ? '-' : ' '}
     </span>
-    <span className={wrap ? 'flex-1 min-w-0 whitespace-pre-wrap break-words pr-3' : 'whitespace-pre pr-3'}>
+    <span className={wrap ? 'flex-1 min-w-0 whitespace-pre-wrap break-words pr-4' : 'whitespace-pre pr-4'}>
       {row.text}
     </span>
   </div>
@@ -119,13 +119,14 @@ export const ChangesReview: React.FC<ChangesReviewProps> = ({ root, files, index
   const label = CHANGE_KIND_LABEL[file.kind];
   const counts = (
     <span className="shrink-0 font-mono text-code tabular-nums">
-      <span className="text-ok">+{file.added}</span> <span className="text-danger">-{file.removed}</span>
+      <span className="text-ok-ink">+{file.added}</span>{' '}
+      <span className="text-danger">-{file.removed}</span>
     </span>
   );
 
   return (
     <div className="min-h-0 flex-1 flex flex-col" data-changes-review data-changes-file={path}>
-      <div className="shrink-0 h-9 pl-4 pr-1.5 flex items-center gap-1 hairline-b border-border-hairline">
+      <div className="shrink-0 h-9 pl-3 pr-2 flex items-center gap-1.5 hairline-b border-border-hairline bg-surface">
         {files.length === 1 ? (
           <span className="min-w-0 flex-1 truncate text-meta text-text-secondary" title={path}>
             {path}
@@ -133,6 +134,7 @@ export const ChangesReview: React.FC<ChangesReviewProps> = ({ root, files, index
         ) : (
           <Dropdown
             align="start"
+            className="flex-1 min-w-0"
             menuClassName="min-w-[280px] max-w-[420px]"
             trigger={({ toggle }) => (
               <button
@@ -141,10 +143,10 @@ export const ChangesReview: React.FC<ChangesReviewProps> = ({ root, files, index
                 aria-label="选择要查看的文件"
                 title={path}
                 onClick={toggle}
-                className="min-w-0 flex-1 h-7 px-1 -ml-1 flex items-center gap-1 rounded-sm text-left transition-colors duration-100 hover:bg-hover"
+                className="w-full min-w-0 h-7 px-1.5 -ml-1 flex items-center gap-1 rounded-sm text-left transition-colors duration-100 hover:bg-hover"
               >
-                <span className="min-w-0 flex-1 truncate text-meta text-text-secondary">{path}</span>
-                <ChevronDownIcon size={11} />
+                <span className="min-w-0 flex-1 truncate text-meta text-text-primary">{path}</span>
+                <ChevronDownIcon size={12} className="shrink-0 text-text-tertiary" />
               </button>
             )}
           >
@@ -155,10 +157,10 @@ export const ChangesReview: React.FC<ChangesReviewProps> = ({ root, files, index
                 selected={position === selected}
                 onSelect={() => setSelected(position)}
               >
-                <span className="flex items-center gap-3">
+                <span className="w-full min-w-0 flex items-center gap-3">
                   <span className="min-w-0 flex-1 truncate">{entry.path}</span>
                   <span className="shrink-0 font-mono text-code tabular-nums">
-                    <span className="text-ok">+{entry.added}</span>{' '}
+                    <span className="text-ok-ink">+{entry.added}</span>{' '}
                     <span className="text-danger">-{entry.removed}</span>
                   </span>
                 </span>
@@ -166,20 +168,22 @@ export const ChangesReview: React.FC<ChangesReviewProps> = ({ root, files, index
             ))}
           </Dropdown>
         )}
-        <span className="shrink-0 text-meta text-text-secondary">{label}</span>
+        <span className="shrink-0 text-meta text-text-tertiary">{label}</span>
         {counts}
-        <ToolButton label={wrap ? '取消换行' : '自动换行'} onClick={() => setWrap((value) => !value)}>
-          {wrap ? <NoWrapIcon size={14} /> : <WrapIcon size={14} />}
-        </ToolButton>
-        <ToolButton label="在侧栏打开整份文件" onClick={() => onOpenFile(path)}>
-          <FileIcon size={14} />
-        </ToolButton>
-        {root !== null && (
-          <OpenInAppAction root={root} path={path} onNotice={setNotice} />
-        )}
-        <ToolButton label="复制改动" onClick={copyDiff}>
-          {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
-        </ToolButton>
+        <div className="shrink-0 flex items-center gap-0.5">
+          <ToolButton label={wrap ? '取消换行' : '自动换行'} onClick={() => setWrap((value) => !value)}>
+            {wrap ? <NoWrapIcon size={14} /> : <WrapIcon size={14} />}
+          </ToolButton>
+          <ToolButton label="在侧栏打开整份文件" onClick={() => onOpenFile(path)}>
+            <FileIcon size={14} />
+          </ToolButton>
+          {root !== null && (
+            <OpenInAppAction root={root} path={path} onNotice={setNotice} />
+          )}
+          <ToolButton label="复制改动" onClick={copyDiff}>
+            {copied ? <CheckIcon size={14} className="text-ok-ink confirm-pop" /> : <CopyIcon size={14} />}
+          </ToolButton>
+        </div>
       </div>
 
       {notice !== null && (
@@ -190,33 +194,44 @@ export const ChangesReview: React.FC<ChangesReviewProps> = ({ root, files, index
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-auto scroll-visible font-mono text-code text-text-primary">
-        {sections.map(({ segment, parsed }, position) => (
-          <React.Fragment key={segment.partId}>
-            {sections.length > 1 && (
-              <div className="h-6 px-3 flex items-center bg-surface-sunken text-meta text-text-tertiary">
-                {CHANGE_KIND_LABEL[segment.kind]} · 第 {position + 1} 次
-              </div>
-            )}
-            {parsed.hunks.map((hunk, hunkIndex) => (
-              <React.Fragment key={hunkIndex}>
-                {hunk.header !== null && (
-                  <div className="h-6 px-3 flex items-center bg-surface-sunken text-meta text-text-secondary">
-                    {hunk.header}
-                  </div>
-                )}
-                {hunk.rows.map((row, rowIndex) => (
-                  <DiffLine key={rowIndex} row={row} wrap={wrap} />
-                ))}
-              </React.Fragment>
-            ))}
-            {parsed.truncated && (
-              <div className="px-3 py-1.5 text-meta text-text-tertiary">
-                只显示前 {MAX_DIFF_ROWS} 行
-              </div>
-            )}
-          </React.Fragment>
-        ))}
+      <div className="min-h-0 flex-1 overflow-auto scroll-visible font-mono text-code text-text-prose">
+        {/*
+         * 非换行模式下使用 min-w-full w-max 包裹整张对比表：
+         * 保证横向滚动查看超长代码行时，新增/删除/hunk 底色始终铺满最长行的完整宽度，绝不半途截断。
+         * hunk 头使用 whitespace-nowrap py-1 min-h-6，防止窄分栏下折行溢出压住首行代码。
+         */}
+        <div className={wrap ? 'w-full' : 'min-w-full w-max'}>
+          {sections.map(({ segment, parsed }, position) => (
+            <React.Fragment key={segment.partId}>
+              {sections.length > 1 && (
+                <div className="min-h-6 py-1 px-3 mt-2 first:mt-0 flex items-center min-w-full whitespace-nowrap bg-surface-sunken hairline-t border-border-hairline font-sans font-medium text-meta text-text-secondary">
+                  {CHANGE_KIND_LABEL[segment.kind]} · 第 {position + 1} 次
+                </div>
+              )}
+              {parsed.hunks.map((hunk, hunkIndex) => (
+                <React.Fragment key={hunkIndex}>
+                  {hunk.header !== null && (
+                    <div
+                      className={`min-h-6 py-1 px-3 flex items-center min-w-full bg-surface-sunken/75 hairline-y border-border-hairline text-meta text-text-tertiary ${
+                        wrap ? 'whitespace-pre-wrap break-all' : 'whitespace-nowrap'
+                      }`}
+                    >
+                      {hunk.header}
+                    </div>
+                  )}
+                  {hunk.rows.map((row, rowIndex) => (
+                    <DiffLine key={rowIndex} row={row} wrap={wrap} />
+                  ))}
+                </React.Fragment>
+              ))}
+              {parsed.truncated && (
+                <div className="px-3 py-1.5 text-meta text-text-tertiary">
+                  只显示前 {MAX_DIFF_ROWS} 行
+                </div>
+              )}
+            </React.Fragment>
+          ))}
+        </div>
       </div>
     </div>
   );

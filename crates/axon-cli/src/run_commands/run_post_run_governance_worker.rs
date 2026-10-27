@@ -29,7 +29,8 @@ use super::{
 };
 use crate::setup_commands::env_path_for_config;
 
-const GOVERNANCE_PAYLOAD_VERSION: u32 = 2;
+/// 治理载荷版本；v3 起携带执行身份与轮前场景帧，v2 及更早一律拒收。
+const GOVERNANCE_PAYLOAD_VERSION: u32 = 3;
 const GOVERNANCE_WORKER_BATCH_SIZE: usize = 8;
 const GOVERNANCE_HTTP_STATUS_COMPLETED: u16 = 200;
 const GOVERNANCE_RECALL_STATUS: &str = "durable";
@@ -58,6 +59,15 @@ struct DurableGovernancePayload {
     selected_skill_source_ref: Option<String>,
     memory_recall: Option<DurableMemoryRecall>,
     memory_usefulness: Option<RunMemoryUsefulnessEvent>,
+    /// 本轮受众信任域；决定人格状态是否可写。
+    #[serde(default)]
+    persona_disclosure: Option<axon_domain::DisclosurePolicy>,
+    /// 本轮执行身份记号，与受众互为印证。
+    #[serde(default)]
+    agent_identity: Option<String>,
+    /// 轮前场景帧快照，保证结算与轮前判断使用同一份事实。
+    #[serde(default)]
+    persona_scene: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,8 +115,62 @@ impl DurableGovernancePayload {
                 .as_ref()
                 .map(DurableMemoryRecall::from_event),
             memory_usefulness: job.memory_usefulness.clone(),
+            persona_disclosure: Some(job.request.goal_disclosure_policy),
+            agent_identity: Some(agent_identity_token(job.request.goal_disclosure_policy)),
+            persona_scene: Some(persona_scene_snapshot(&job.request)),
         }
     }
+}
+
+/// 由载荷里的身份记号还原执行身份；缺失时保守按主代理私有处理。
+fn payload_agent_identity(payload: &DurableGovernancePayload) -> RunAgentIdentity {
+    match payload.agent_identity.as_deref() {
+        Some("primary_workspace") => RunAgentIdentity::PrimaryWorkspace,
+        Some("goal_execution_subagent") => RunAgentIdentity::GoalExecutionSubagent,
+        _ => RunAgentIdentity::PrimaryPrivate,
+    }
+}
+
+/// 执行身份记号：私聊即主代理私有身份，其余按主代理受限身份处理。
+fn agent_identity_token(disclosure: axon_domain::DisclosurePolicy) -> String {
+    if disclosure == axon_domain::DisclosurePolicy::PrivateOnly {
+        "primary_private".to_owned()
+    } else {
+        "primary_workspace".to_owned()
+    }
+}
+
+/// 渠道记号，与人格场景帧的取值保持一致。
+fn client_channel_token(channel: axon_client_identity::ClientChannel) -> &'static str {
+    match channel {
+        axon_client_identity::ClientChannel::Tui => "tui",
+        axon_client_identity::ClientChannel::Cli => "cli",
+        axon_client_identity::ClientChannel::Desktop => "desktop",
+        axon_client_identity::ClientChannel::Feishu => "feishu",
+        axon_client_identity::ClientChannel::Memory => "memory",
+    }
+}
+
+/// 轮前场景帧快照：只记录轮前已经确定的事实，不引入模型推断。
+fn persona_scene_snapshot(request: &super::RunRequest) -> serde_json::Value {
+    use chrono::Timelike as _;
+    let hour = u8::try_from(chrono::Local::now().hour()).unwrap_or(0);
+    let daypart = match hour % 24 {
+        0..=5 => "late_night",
+        6..=11 => "morning",
+        12..=17 => "afternoon",
+        _ => "evening",
+    };
+    serde_json::json!({
+        "channel": client_channel_token(request.client_channel),
+        "audience": if request.goal_disclosure_policy == axon_domain::DisclosurePolicy::PrivateOnly {
+            "private"
+        } else {
+            "group"
+        },
+        "daypart": daypart,
+        "hasWorkspace": request.startup.workspace_root.is_some(),
+    })
 }
 
 impl DurableMemoryRecall {
@@ -328,7 +392,35 @@ fn execute_governance_payload(
 ) -> Result<(), String> {
     let response = response_from_payload(&payload.session_record, session_record);
     record_cited_memory_usage(&payload.config_path, config, request, &response.content);
+    // 先跑自我迭代拿到语义评估，再据其写人格状态：情绪与漂移是结算的输入。
     let self_iteration = run_post_run_self_iteration_subagents(request, &response);
+    let assessment = self_iteration.semantic_assessment.as_ref();
+    let disclosure = payload
+        .persona_disclosure
+        .unwrap_or(axon_domain::DisclosurePolicy::Workspace);
+    super::run_persona_settlement::capture_style_candidate(
+        &payload.config_path,
+        disclosure,
+        assessment,
+        self_iteration.user_message_ref.as_deref(),
+    );
+    super::run_persona_settlement::settle_persona_turn(
+        &super::run_persona_settlement::PersonaSettlementInput {
+            config_path: &payload.config_path,
+            session_id: &payload.session_record.session_id,
+            assistant_part_id: &payload.session_record.assistant_part_id,
+            disclosure,
+            final_status: axon_persona::TurnFinalStatus::Completed,
+            user_affect: assessment.and_then(|item| item.user_affect.as_deref()),
+            persona_drift_bp: assessment.and_then(|item| item.persona_drift_bp),
+            drift_reason: assessment.and_then(|item| item.drift_reason.as_deref()),
+            scene_audience: payload
+                .persona_scene
+                .as_ref()
+                .and_then(|scene| scene.get("audience"))
+                .and_then(serde_json::Value::as_str),
+        },
+    );
     if let Err(error) = record_runtime_quality(
         payload,
         session_record,
@@ -428,7 +520,7 @@ fn rebuild_request(
             cancel_token: None,
             subagent_event_bus: None,
             subagent_session_sinks: None,
-            agent_identity: RunAgentIdentity::PrimaryPrivate,
+            agent_identity: payload_agent_identity(payload),
             performance,
             workspace_snapshot_prewarm: None,
         },

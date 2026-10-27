@@ -259,6 +259,10 @@ fn try_run_daemon_host(
                 workbench_root.clone(),
                 command.config_path.clone(),
             )),
+            // 人格状态只读路由：桌面设置页的人设分区据此展示已持久化的状态。
+            Arc::new(crate::persona_http_adapter::PersonaHttpAdapter::new(
+                workbench_root.clone(),
+            )),
             observability_http_handler,
             // MCP 运行态要先于工作台：工作台适配器对 /api/v1 前缀最宽，排在它后面才轮得到。
             Arc::new(crate::mcp_http_adapter::McpHttpAdapter::new(

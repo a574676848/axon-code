@@ -1,7 +1,6 @@
 import React from "react";
 import type { CronHistoryResult, CronJob } from "../../types";
 import {
-  ArrowUpIcon,
   ClockIcon,
   CloseIcon,
   EditIcon,
@@ -90,31 +89,29 @@ export const AutomationDetail: React.FC<AutomationDetailProps> = ({
     onFormChange({ ...form, ...patch });
   return (
     <Panel clip className={`flex min-h-0 flex-col ${className}`}>
-      <header className="shrink-0 flex items-start gap-2 px-4 pt-4">
+      <header className="shrink-0 flex items-start gap-2 px-5 pt-4 pb-3 hairline-b border-border-hairline">
         <div className="min-w-0 flex-1">
           <h2
-            className="text-sm font-medium leading-5 text-text-primary line-clamp-2"
+            className="text-body font-semibold leading-5 text-text-primary line-clamp-2"
             title={title}
           >
             {title}
           </h2>
-          <div className="mt-1 flex items-center gap-1.5 min-w-0">
+          <div className="mt-1.5 flex items-center gap-2 min-w-0">
             {selected !== null ? (
               <>
-                <StateDot state={jobState(selected)} />
-                <Text tone="secondary" size="xs">
-                  {statusText(selected.status)}
-                </Text>
-                <Text
-                  tone="caption"
-                  size="xs"
-                  mono
-                  truncate
-                  className="ml-auto min-w-0"
+                <span className="inline-flex items-center gap-1.5">
+                  <StateDot state={jobState(selected)} />
+                  <Text tone="secondary" size="xs">
+                    {statusText(selected.status)}
+                  </Text>
+                </span>
+                <span
+                  className="ml-auto min-w-0 truncate px-1.5 py-0.5 rounded-xs bg-surface-sunken font-mono text-2xs text-text-tertiary"
                   title={selected.jobId}
                 >
                   {selected.jobId}
-                </Text>
+                </span>
               </>
             ) : (
               <Text tone="caption" size="xs">
@@ -127,7 +124,7 @@ export const AutomationDetail: React.FC<AutomationDetailProps> = ({
           <CloseIcon size={14} />
         </IconButton>
       </header>
-      <div className="flex-1 min-h-0 overflow-y-auto scroll-visible px-4 pt-4 pb-4">
+      <div className="flex-1 min-h-0 overflow-y-auto scroll-visible px-5 py-4">
         {editing ? (
           <AutomationEditor
             form={form}
@@ -153,14 +150,14 @@ export const AutomationDetail: React.FC<AutomationDetailProps> = ({
         ) : null}
       </div>
       {!editing && selected !== null && (
-        <footer className="shrink-0 flex items-center gap-2 px-4 py-3 hairline-t border-border-hairline">
+        <footer className="shrink-0 flex items-center gap-2 px-5 py-3 bg-surface-sunken/30 hairline-t border-border-hairline">
           <Button
             variant="outline"
             size="sm"
             disabled={busy || selected.running === true}
             onClick={onRun}
           >
-            <ArrowUpIcon size={14} />
+            <TriangleRightFillIcon size={10} />
             {selected.running === true ? "执行中" : "立即执行"}
           </Button>
           {selected.system === true ? null : (
@@ -227,19 +224,19 @@ const DetailBody: React.FC<{
   onHistory: (page?: number) => void;
 }> = ({ job, history, historyLoading, historyError, historyPage, pageSize, showHistory, busy, onHistory }) => (
   <div className="space-y-5">
-    <section className="space-y-2">
+    <section className="space-y-2.5">
       <SectionHeading
         title="调度"
         description="按 Gateway 所在设备的本地时区执行。"
       />
-      <div className="grid grid-cols-2 gap-3">
+      <div className="rounded-md bg-surface-sunken/45 hairline border-border-hairline p-3.5 grid grid-cols-2 gap-3.5">
         <FormField label="执行计划">
-          <Text size="sm">{scheduleText(job.schedule)}</Text>
+          <Text size="sm" strong>{scheduleText(job.schedule)}</Text>
         </FormField>
         <FormField label="状态">
           <span className="flex items-center gap-1.5">
             <StateDot state={jobState(job)} />
-            <Text size="sm">{statusText(job.status)}</Text>
+            <Text size="sm" strong>{statusText(job.status)}</Text>
           </span>
         </FormField>
         <FormField label="下次执行">
@@ -254,7 +251,7 @@ const DetailBody: React.FC<{
         </FormField>
       </div>
     </section>
-    <section className="space-y-2">
+    <section className="space-y-2.5">
       <SectionHeading
         title="任务内容"
         description={
@@ -264,7 +261,11 @@ const DetailBody: React.FC<{
         }
       />
       <FormField label={job.noAgent === true ? "脚本" : "提示词"}>
-        <pre className="text-sm leading-5 text-text-primary whitespace-pre-wrap break-words font-sans">
+        <pre
+          className={`rounded-md bg-code-block hairline border-border-hairline px-3.5 py-2.5 whitespace-pre-wrap break-words ${
+            job.noAgent === true ? "font-mono text-code text-code-ink" : "font-sans text-row text-text-prose"
+          }`}
+        >
           {job.noAgent === true ? job.script : job.prompt}
         </pre>
       </FormField>

@@ -43,6 +43,10 @@ axon daemon run --root <dir> --config-path <file> [--endpoint <name>]
 axon daemon attach [--endpoint <name>] [--sequence <n>] [--generation <id>]
 axon daemon schedule --session-id <id> --kind <kind> --prompt <text> [--workspace-id <id>] [--interval-ms <ms>] [--delivery-mode <mode>]
 
+axon persona validate [--file <path>]|status [--json]
+axon persona style list [--all]|retire <style-id>
+axon persona reset [--yes]
+
 axon doctor [--check <area>] [--verbose] [--fix]
 axon cron list [--limit <n>] [--include-removed] | create --name <NAME> --schedule <SCHEDULE> [--prompt <text>] [--skill <name>] [--workdir <dir>] [--no-agent --script <path>] [--feishu-chat-id <id>] | update <JOB_ID> ... | pause|resume|remove|run <JOB_ID> | tick [--limit <n>]
 axon remote status|subscriptions|outbox|audit|feishu-status|feishu-worklist|render-feishu|deliver-feishu|execute-feishu-sdk-loop|simulate-feishu ...
