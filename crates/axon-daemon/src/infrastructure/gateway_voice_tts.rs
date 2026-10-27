@@ -386,4 +386,58 @@ mod tests {
         );
         assert!(cue_text(calm, "nope").is_none());
     }
+
+    #[test]
+    #[ignore = "需要本地运行时与模型"]
+    fn persona_changes_audio() {
+        use axon_voice::fusion::{PersonaVoiceInput, plan};
+        use axon_voice::{HumorLevel, PersonaMode};
+        use axon_voice_host::inference::Inference;
+        use std::path::Path;
+        let root = std::env::var("AXON_RUNTIME_ROOT").expect("需要 AXON_RUNTIME_ROOT");
+        let models = Path::new(&root).join("voice").join("models");
+        let runtime = Inference::discover(&models).expect("运行时应可用");
+        let calm = plan(
+            Some(PersonaVoiceInput {
+                mode: PersonaMode::Casual,
+                warmth: 45,
+                formality: 50,
+                humor: HumorLevel::Off,
+                verbosity: Verbosity::Concise,
+            }),
+            None,
+            14,
+        );
+        let group = plan(
+            Some(PersonaVoiceInput {
+                mode: PersonaMode::Group,
+                warmth: 45,
+                formality: 70,
+                humor: HumorLevel::Off,
+                verbosity: Verbosity::Concise,
+            }),
+            None,
+            14,
+        );
+        assert_ne!(calm.preset.id, group.preset.id);
+        let a = runtime
+            .synthesize_with("你好，我是 Axon。", calm.profile.speaker, calm.profile.rate)
+            .expect("合成 A");
+        let b = runtime
+            .synthesize_with(
+                "你好，我是 Axon。",
+                group.profile.speaker,
+                group.profile.rate,
+            )
+            .expect("合成 B");
+        println!(
+            "persona audio: calm={} samples preset={} group={} samples preset={}",
+            a.len(),
+            calm.preset.id,
+            b.len(),
+            group.preset.id
+        );
+        assert!(!a.is_empty() && !b.is_empty());
+        assert_ne!(a, b);
+    }
 }
