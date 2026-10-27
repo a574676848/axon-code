@@ -9,6 +9,7 @@ use crate::infrastructure::gateway_auth::query_token;
 use axon_voice::expression::render_with_expression;
 use axon_voice::fusion::{PersonaVoiceInput, plan as voice_plan};
 use axon_voice::presets;
+use axon_voice::render::apply_gain;
 use axon_voice::{HumorLevel, PersonaMode, Verbosity};
 use axon_voice_host::inference::{Inference, encode_wav};
 use axum::body::{Body, Bytes};
@@ -84,9 +85,10 @@ pub(super) async fn voice_tts(
             let planned = voice_plan(persona, preset_override, hour);
             let mut profile = planned.profile;
             profile.rate = (profile.rate * style.rate).clamp(0.85, 1.15);
-            let samples = runtime
+            let mut samples = runtime
                 .synthesize_with(&spoken, profile.speaker, profile.rate)
                 .map_err(|_| "tts_failed")?;
+            apply_gain(&mut samples, profile.energy_db);
             Ok((encode_wav(&samples), planned.preset.id))
         })
         .await;
@@ -184,9 +186,10 @@ pub(super) async fn voice_cue(
         let runtime = Inference::discover(&root).ok_or("voice_unavailable")?;
         let hour = chrono::Local::now().hour() as u8;
         let profile = preset.profile_for(Verbosity::Concise, hour);
-        let samples = runtime
+        let mut samples = runtime
             .synthesize_with(&text, profile.speaker, profile.rate)
             .map_err(|_| "tts_failed")?;
+        apply_gain(&mut samples, profile.energy_db);
         Ok(encode_wav(&samples))
     })
     .await;

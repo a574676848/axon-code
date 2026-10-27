@@ -550,3 +550,35 @@ mod override_tests {
         assert!(sentences[1].contains("压测"));
     }
 }
+/// 按分贝调整 PCM16 能量，结果饱和到 i16 范围。
+pub fn apply_gain(samples: &mut [i16], energy_db: f32) {
+    if energy_db.abs() < f32::EPSILON {
+        return;
+    }
+    let factor = 10f32.powf(energy_db / 20.0);
+    for sample in samples.iter_mut() {
+        let scaled = f32::from(*sample) * factor;
+        *sample = scaled.clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16;
+    }
+}
+
+#[cfg(test)]
+mod gain_tests {
+    use super::apply_gain;
+
+    #[test]
+    fn gain_is_saturating() {
+        let mut samples = [1000i16, -1000, 30000];
+        apply_gain(&mut samples, 6.0);
+        assert!(samples[0] > 1000);
+        assert!(samples[1] < -1000);
+        assert_eq!(samples[2], i16::MAX);
+    }
+
+    #[test]
+    fn zero_gain_is_identity() {
+        let mut samples = [1i16, -2, 3];
+        apply_gain(&mut samples, 0.0);
+        assert_eq!(samples, [1, -2, 3]);
+    }
+}
