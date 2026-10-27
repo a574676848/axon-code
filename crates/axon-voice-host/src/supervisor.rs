@@ -230,6 +230,12 @@ impl HostClient {
         self.child.wait().map_err(SupervisorError::Spawn)
     }
 
+    /// 终止并回收；返回退出码。
+    pub fn terminate(&mut self) -> Option<i32> {
+        let _ = self.child.kill();
+        self.child.wait().ok().and_then(|status| status.code())
+    }
+
     /// 强制结束。
     ///
     /// # Errors
@@ -250,6 +256,15 @@ pub enum SupervisorAction {
     Restart,
     /// 超过上限，放弃。
     GiveUp,
+}
+
+/// 宿主失败信息，供上层映射为 `worker_crashed`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostFailure {
+    /// 子阶段。
+    pub sub_stage: &'static str,
+    /// 退出码；被强杀时为 None。
+    pub exit_code: Option<i32>,
 }
 
 /// 重启计数与策略。
@@ -312,6 +327,30 @@ impl Supervisor {
         } else {
             SupervisorAction::GiveUp
         }
+    }
+
+    /// 心跳判定并按需终止僵死进程。
+    ///
+    /// 返回动作与失败信息；失败信息由调用方映射为 `worker_crashed{subStage,exitCode}`。
+    pub fn guard(
+        &mut self,
+        client: &mut HostClient,
+        now: Instant,
+    ) -> (SupervisorAction, Option<HostFailure>) {
+        if client.heartbeat_ok(now) {
+            return (SupervisorAction::Continue, None);
+        }
+        let exit_code = client.terminate();
+        let failure = HostFailure {
+            sub_stage: "io",
+            exit_code,
+        };
+        let action = if self.restart_allowed() {
+            SupervisorAction::Restart
+        } else {
+            SupervisorAction::GiveUp
+        };
+        (action, Some(failure))
     }
 
     /// 配置引用。

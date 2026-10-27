@@ -4,6 +4,8 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-env-changed=AXON_VOICE_BUILD_COMMIT");
+    println!("cargo:rerun-if-changed=../../.git/HEAD");
+    println!("cargo:rerun-if-changed=../../.git/packed-refs");
     let commit = std::env::var("AXON_VOICE_BUILD_COMMIT")
         .ok()
         .filter(|value| !value.trim().is_empty())

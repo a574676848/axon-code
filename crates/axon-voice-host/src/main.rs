@@ -1,10 +1,13 @@
 //! 宿主进程：严格握手、单活跃会话、心跳、关闭确认。
+//!
+//! 不接受命令行参数；构建号由 `build.rs` 注入。回执队列容量为 1，
+//! 队列已满即按控制通道溢出退出 12，避免父进程不读时无限排队。
 
 use std::io::{self, BufReader, BufWriter};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::thread;
 use std::time::Duration;
 
@@ -12,26 +15,22 @@ use axon_voice_host::BUILD_COMMIT;
 use axon_voice_host::exit_code;
 use axon_voice_protocol::{
     Control, ErrorDetail, ErrorMsg, Frame, FrameError, Heartbeat, Hello, PROTOCOL_VERSION, Ready,
-    SessionStart, Warmup, read_frame, write_frame,
+    Warmup, read_frame, write_frame,
 };
 
 /// 心跳间隔。
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
-/// 回执队列容量；满即退出，避免控制被音频饿死。
+/// 回执队列容量；满即退出，保证控制不被音频拖死。
 const OUTBOX_CAPACITY: usize = 1;
 
 fn main() -> ExitCode {
-    let mut args = std::env::args().skip(1);
-    match (args.next(), args.next()) {
-        (Some(flag), None) if flag == "--build-commit" => {
-            println!("{BUILD_COMMIT}");
-            ExitCode::SUCCESS
-        }
-        (None, None) => match run() {
-            Ok(code) => ExitCode::from(code),
-            Err(code) => ExitCode::from(code),
-        },
-        _ => ExitCode::from(2),
+    if std::env::args().nth(1).is_some() {
+        eprintln!("axon-voice-host 不接受命令行参数");
+        return ExitCode::from(exit_code::HANDSHAKE as u8);
+    }
+    match run() {
+        Ok(code) => ExitCode::from(code),
+        Err(code) => ExitCode::from(code),
     }
 }
 
@@ -49,9 +48,7 @@ fn run() -> Result<u8, u8> {
     if !valid_hello(&hello) {
         return Err(exit_code::HANDSHAKE as u8);
     }
-    if outbox.send(ready()).is_err() {
-        return Err(exit_code::SEQUENCE as u8);
-    }
+    send(&outbox, ready())?;
 
     let stop = Arc::new(AtomicBool::new(false));
     let heartbeat = spawn_heartbeat(outbox.clone(), Arc::clone(&stop));
@@ -91,8 +88,10 @@ fn spawn_heartbeat(outbox: SyncSender<Control>, stop: Arc<AtomicBool>) -> thread
                 queue_in: 0,
                 queue_out: 0,
             });
-            if outbox.send(beat).is_err() {
-                break;
+            match outbox.try_send(beat) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => std::process::exit(exit_code::FRAME),
+                Err(TrySendError::Disconnected(_)) => break,
             }
         }
     })
@@ -108,8 +107,7 @@ fn resident_kb() -> u64 {
                 .nth(1)
                 .and_then(|value| value.parse::<u64>().ok())
                 .unwrap_or(0);
-            let page_kb = 4;
-            return pages.saturating_mul(page_kb);
+            return pages.saturating_mul(4);
         }
     }
     0
@@ -137,43 +135,34 @@ fn serve(reader: &mut impl io::BufRead, outbox: &SyncSender<Control>) -> Result<
         };
         match control {
             Control::Hello(_) | Control::Ready(_) => return Err(exit_code::SEQUENCE as u8),
-            Control::Warmup(message) => reply(outbox, model_missing(&message))?,
+            Control::Warmup(message) => send(outbox, model_missing(&message))?,
             Control::SessionStart(message) => {
-                if session.is_some() || !valid_session_start(&message) {
+                if session.is_some() {
                     return Err(exit_code::SEQUENCE as u8);
                 }
                 session = Some(message.session_id);
             }
             Control::SessionEnd(message) => {
-                if session.as_deref() != Some(message.session_id.as_str())
-                    || !matches!(message.reason.as_str(), "client_close" | "idle" | "error")
-                {
+                if session.as_deref() != Some(message.session_id.as_str()) {
                     return Err(exit_code::SEQUENCE as u8);
                 }
                 session = None;
             }
-            Control::Cancel(message) => {
-                if !matches!(
-                    message.reason.as_str(),
-                    "barge" | "user_cancel" | "turn_end"
-                ) {
-                    return Err(exit_code::SEQUENCE as u8);
-                }
-            }
+            Control::Cancel(_) => {}
             Control::Speak(_) => {
                 if session.is_none() {
                     return Err(exit_code::SEQUENCE as u8);
                 }
-                reply(outbox, simple_error("tts_failed", "speaking"))?;
+                send(outbox, simple_error("tts_failed", "speaking"))?;
             }
             Control::CueSpeak(_) => {
                 if session.is_none() {
                     return Err(exit_code::SEQUENCE as u8);
                 }
-                reply(outbox, simple_error("cue_unavailable", "speaking"))?;
+                send(outbox, simple_error("cue_unavailable", "speaking"))?;
             }
             Control::Close => {
-                reply(outbox, Control::Closed)?;
+                send(outbox, Control::Closed)?;
                 return Ok(exit_code::OK as u8);
             }
             Control::Warm(_)
@@ -185,18 +174,6 @@ fn serve(reader: &mut impl io::BufRead, outbox: &SyncSender<Control>) -> Result<
             | Control::Closed => return Err(exit_code::SEQUENCE as u8),
         }
     }
-}
-
-fn valid_session_start(message: &SessionStart) -> bool {
-    !message.session_id.trim().is_empty()
-        && message.sample_rate == 16_000
-        && matches!(message.mode.as_str(), "push_to_talk" | "full_duplex")
-        && matches!(message.lang.as_str(), "zh" | "en" | "auto")
-        && message.hot_words.len() <= 200
-        && message
-            .hot_words
-            .iter()
-            .all(|word| word.chars().count() <= 64)
 }
 
 fn model_missing(message: &Warmup) -> Control {
@@ -220,8 +197,12 @@ fn simple_error(code: &str, stage: &str) -> Control {
     })
 }
 
-fn reply(outbox: &SyncSender<Control>, control: Control) -> Result<(), u8> {
-    outbox.send(control).map_err(|_| exit_code::SEQUENCE as u8)
+fn send(outbox: &SyncSender<Control>, control: Control) -> Result<(), u8> {
+    match outbox.try_send(control) {
+        Ok(()) => Ok(()),
+        Err(TrySendError::Full(_)) => Err(exit_code::FRAME as u8),
+        Err(TrySendError::Disconnected(_)) => Err(exit_code::SEQUENCE as u8),
+    }
 }
 
 fn writer_loop(inbox: Receiver<Control>) {

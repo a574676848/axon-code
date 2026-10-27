@@ -477,6 +477,7 @@ fn decode_payload(payload: &[u8]) -> Result<Control, FrameError> {
         type_name::CLOSED => require_empty(value, Control::Closed)?,
         other => return Err(FrameError::UnknownType(other.to_owned())),
     };
+    control.validate()?;
     Ok(control)
 }
 
@@ -485,7 +486,6 @@ fn require_empty(value: serde_json::Value, control: Control) -> Result<Control, 
     if let Some(field) = map.keys().next() {
         return Err(FrameError::UnknownField(field.clone()));
     }
-    control.validate()?;
     Ok(control)
 }
 
