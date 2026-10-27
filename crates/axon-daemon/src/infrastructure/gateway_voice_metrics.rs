@@ -16,6 +16,22 @@ pub(crate) struct VoiceMetrics {
     dropped_bytes: AtomicU64,
     rtf_milli: AtomicU64,
     last_error: Mutex<Option<String>>,
+    host: Mutex<Option<HostSnapshot>>,
+}
+
+/// 宿主最近一次心跳。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct HostSnapshot {
+    /// 宿主进程 id。
+    pub(crate) pid: u32,
+    /// 宿主常驻内存。
+    pub(crate) rss_kb: u64,
+    /// 入站队列深度。
+    pub(crate) queue_in: u32,
+    /// 出站队列深度。
+    pub(crate) queue_out: u32,
+    /// 模型状态：cold / warming / warm。
+    pub(crate) model_state: &'static str,
 }
 
 impl VoiceMetrics {
@@ -62,9 +78,17 @@ impl VoiceMetrics {
         }
     }
 
+    /// 记录宿主心跳。
+    pub(crate) fn record_host(&self, snapshot: HostSnapshot) {
+        if let Ok(mut slot) = self.host.lock() {
+            *slot = Some(snapshot);
+        }
+    }
+
     /// 快照。
     pub(crate) fn snapshot(&self) -> serde_json::Value {
         let rtf = self.rtf_milli.load(Ordering::Relaxed);
+        let host = self.host.lock().ok().and_then(|slot| *slot);
         serde_json::json!({
             "sessionsStarted": self.sessions_started.load(Ordering::Relaxed),
             "sessionsActive": self.sessions_active.load(Ordering::Relaxed),
@@ -73,6 +97,13 @@ impl VoiceMetrics {
             "droppedBytes": self.dropped_bytes.load(Ordering::Relaxed),
             "rtfP50": (rtf > 0).then(|| rtf as f64 / 1_000.0),
             "lastError": self.last_error.lock().ok().and_then(|slot| slot.clone()),
+            "host": host.map(|host| serde_json::json!({
+                "pid": host.pid,
+                "rssKb": host.rss_kb,
+                "queueIn": host.queue_in,
+                "queueOut": host.queue_out,
+                "modelState": host.model_state,
+            })),
         })
     }
 }
@@ -97,6 +128,19 @@ mod tests {
         assert_eq!(value["lastError"], "backpressure");
         let rtf = value["rtfP50"].as_f64().expect("应有 RTF");
         assert!((rtf - 0.091).abs() < 1e-6, "{rtf}");
+
+        metrics.record_host(super::HostSnapshot {
+            pid: 42,
+            rss_kb: 1_024,
+            queue_in: 3,
+            queue_out: 0,
+            model_state: "warm",
+        });
+        let host = &metrics.snapshot()["host"];
+        assert_eq!(host["pid"], 42);
+        assert_eq!(host["rssKb"], 1_024);
+        assert_eq!(host["queueIn"], 3);
+        assert_eq!(host["modelState"], "warm");
 
         metrics.session_finished();
         assert_eq!(metrics.snapshot()["sessionsActive"], 0);

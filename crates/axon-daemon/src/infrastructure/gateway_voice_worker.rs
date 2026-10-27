@@ -3,7 +3,7 @@
 //! 上行音频进有界队列：满了丢最旧并计数（PROTOCOL §4.2 的 `backpressure`），
 //! 控制命令（`stop`/`cancel`/`shutdown`）永不被丢弃，保证会话一定能收尾。
 
-use super::gateway_voice_metrics::VoiceMetrics;
+use super::gateway_voice_metrics::{HostSnapshot, VoiceMetrics};
 use axon_voice::VoiceFailure;
 use axon_voice_bridge::{BridgeError, VoiceBridge};
 use axon_voice_host::BUILD_COMMIT;
@@ -325,6 +325,9 @@ fn run_worker(
         metrics.set_queue_depth(queue.depth());
         match bridge.poll(WORKER_TICK) {
             Ok(Some(event)) => {
+                if let Some(snapshot) = host_snapshot(&event) {
+                    metrics.record_host(snapshot);
+                }
                 if let Some(text) = event_json(event) {
                     let _ = out.send(text);
                 }
@@ -339,6 +342,24 @@ fn run_worker(
         }
     }
     bridge.shutdown();
+}
+
+/// 心跳只更新指标，不转成客户端帧。
+fn host_snapshot(event: &axon_voice_bridge::VoiceEvent) -> Option<HostSnapshot> {
+    match event {
+        axon_voice_bridge::VoiceEvent::Heartbeat(beat) => Some(HostSnapshot {
+            pid: beat.pid,
+            rss_kb: beat.rss_kb,
+            queue_in: beat.queue_in,
+            queue_out: beat.queue_out,
+            model_state: match beat.model_state.as_str() {
+                "warm" => "warm",
+                "warming" => "warming",
+                _ => "cold",
+            },
+        }),
+        _ => None,
+    }
 }
 
 fn event_json(event: axon_voice_bridge::VoiceEvent) -> Option<String> {
