@@ -299,11 +299,13 @@ fn parse_persona_input(value: &serde_json::Value) -> Option<PersonaVoiceInput> {
     let warmth = value
         .get("warmth")
         .and_then(|value| value.as_u64())
-        .map(|value| value.min(100) as u8)?;
+        .and_then(|value| u8::try_from(value).ok())
+        .filter(|value| *value <= 100)?;
     let formality = value
         .get("formality")
         .and_then(|value| value.as_u64())
-        .map(|value| value.min(100) as u8)?;
+        .and_then(|value| u8::try_from(value).ok())
+        .filter(|value| *value <= 100)?;
     let humor = match value.get("humor").and_then(|value| value.as_str()) {
         Some("off") => HumorLevel::Off,
         Some("subtle") | None => HumorLevel::Subtle,
@@ -439,5 +441,14 @@ mod tests {
         );
         assert!(!a.is_empty() && !b.is_empty());
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn tts_body_rejects_out_of_range_persona() {
+        let body = Bytes::from_static(
+            br#"{"text":"\\u4f60\\u597d","persona":{"mode":"casual","warmth":150,"formality":50}}"#,
+        );
+        let request = parse_tts_body(&body).expect("合法请求");
+        assert!(request.persona.is_none(), "越界温度不应被当成合法人格");
     }
 }
