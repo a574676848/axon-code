@@ -399,7 +399,7 @@ fn static_path_prefix(pattern: &str) -> Option<String> {
         if component.is_empty() || component == "." {
             continue;
         }
-        if component.contains(['*', '?', '[']) {
+        if component.contains(['*', '?', '[', '{']) {
             break;
         }
         anchor.push(component);
