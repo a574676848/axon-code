@@ -188,6 +188,17 @@ struct WorkerConfig {
     session_id: String,
 }
 
+/// 超时判定：返回触发关闭的阶段；`idle` 为距上一帧的时长，`session` 为会话时长。
+fn timeout_stage(idle: Duration, session: Option<Duration>) -> Option<&'static str> {
+    if idle >= IDLE_TIMEOUT {
+        return Some("connect");
+    }
+    if session.is_some_and(|elapsed| elapsed >= SESSION_TIMEOUT) {
+        return Some("listening");
+    }
+    None
+}
+
 async fn session(mut socket: WebSocket) {
     send_json(&mut socket, ready_json()).await;
     let mut started = false;
@@ -196,8 +207,9 @@ async fn session(mut socket: WebSocket) {
     let (out_tx, mut out_rx) = tokio_mpsc::unbounded_channel::<String>();
 
     loop {
-        if started && session_started.elapsed() >= SESSION_TIMEOUT {
-            send_json(&mut socket, error_json("session_idle", "listening")).await;
+        let session = started.then(|| session_started.elapsed());
+        if let Some(stage) = timeout_stage(Duration::ZERO, session) {
+            send_json(&mut socket, error_json("session_idle", stage)).await;
             close(&mut socket).await;
             return;
         }
@@ -688,5 +700,22 @@ mod tests {
             classify(true, r#"{"type":"setTts","enabled":true}"#),
             Ok(Classified::Ignored)
         ));
+    }
+
+    #[test]
+    fn timeout_stage_covers_idle_and_session() {
+        use std::time::Duration;
+        assert_eq!(
+            super::timeout_stage(Duration::from_secs(30), None),
+            Some("connect")
+        );
+        assert_eq!(
+            super::timeout_stage(Duration::ZERO, Some(Duration::from_secs(120))),
+            Some("listening")
+        );
+        assert_eq!(
+            super::timeout_stage(Duration::from_secs(1), Some(Duration::from_secs(1))),
+            None
+        );
     }
 }
