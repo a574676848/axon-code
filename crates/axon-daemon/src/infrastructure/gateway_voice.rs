@@ -128,15 +128,37 @@ async fn session(mut socket: WebSocket) {
                     let error = warmup_error(&client_state());
                     send_json(&mut socket, error).await;
                 }
-                Ok(ClientFrame::Stop { .. }) | Ok(ClientFrame::Cancel { .. }) => {}
+                Ok(ClientFrame::Stop { .. }) => {
+                    if !started {
+                        reject(&mut socket, "protocol_sequence").await;
+                        return;
+                    }
+                }
+                Ok(ClientFrame::Cancel { reason }) => {
+                    if !started {
+                        reject(&mut socket, "protocol_sequence").await;
+                        return;
+                    }
+                    if reason == CancelReason::ClientClose {
+                        close(&mut socket).await;
+                        return;
+                    }
+                }
                 Ok(ClientFrame::Ignored) => {}
                 Err(()) => {
                     reject(&mut socket, "protocol_unknown_field").await;
                     return;
                 }
             },
+            Message::Binary(payload) => {
+                // 音频帧必须是 0x01 开头且已 start；本阶段无推理，收下后不产生转写。
+                if !started || payload.first() != Some(&0x01) {
+                    reject(&mut socket, "protocol_sequence").await;
+                    return;
+                }
+            }
             Message::Close(_) => break,
-            Message::Binary(_) | Message::Ping(_) | Message::Pong(_) => {}
+            Message::Ping(_) | Message::Pong(_) => {}
         }
     }
 }

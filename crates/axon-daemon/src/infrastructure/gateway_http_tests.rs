@@ -563,3 +563,82 @@ fn local_addr_reports_the_bound_port() {
     assert!(server.address.port() > 0, "绑定 0 端口后应能取回真实端口");
     assert!(server.adapter.local_addr().is_some());
 }
+
+#[test]
+fn voice_ws_requires_token_and_reports_arming_error() {
+    let server = TestServer::start(RecordingIngress::idle());
+    // 非升级请求会被升级提取器直接拒绝，不进入鉴权分支。
+    let (status, _) = request(
+        &server,
+        "GET /api/v1/voice HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n",
+    );
+    assert!(
+        matches!(status, 400 | 401),
+        "非升级请求应被拒绝，实际 {status}"
+    );
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("测试运行时");
+    let address = server.address;
+    runtime.block_on(async move {
+        let bad = format!("ws://{address}/api/v1/voice?api_token=wrong-token");
+        assert!(
+            tokio_tungstenite::connect_async(bad).await.is_err(),
+            "错误 token 必须拒绝升级"
+        );
+        let url = format!("ws://{address}/api/v1/voice?api_token={TEST_AUTH_TOKEN}");
+        let (mut socket, _) = tokio_tungstenite::connect_async(url)
+            .await
+            .expect("WS 握手应成功");
+
+        let ready: serde_json::Value =
+            serde_json::from_str(&next_ws_text(&mut socket).await).expect("ready 是 JSON");
+        assert_eq!(ready["type"], "ready");
+        assert_eq!(ready["sampleRate"], 16_000);
+
+        use futures_util::SinkExt;
+        let start = r#"{"type":"start","protocolVersion":1,"clientSessionId":"c-1","workspaceId":"w-1","replyDestination":"desktop","mode":"full_duplex","lang":"zh","tts":false}"#;
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::Text(start.into()))
+            .await
+            .expect("发送 start");
+
+        let error: serde_json::Value =
+            serde_json::from_str(&next_ws_text(&mut socket).await).expect("error 是 JSON");
+        assert_eq!(error["type"], "error");
+        assert_eq!(error["stage"], "arming");
+        let code = error["code"].as_str().unwrap_or_default();
+        assert!(
+            matches!(code, "worker_unavailable" | "model_missing"),
+            "测试目录无宿主时应报宿主或模型缺失，实际 {code}"
+        );
+        assert!(
+            error["message"].as_str().is_some_and(|text| !text.is_empty()),
+            "错误帧必须带合同文案"
+        );
+    });
+}
+
+async fn next_ws_text<S>(socket: &mut S) -> String
+where
+    S: futures_util::Stream<
+            Item = Result<
+                tokio_tungstenite::tungstenite::Message,
+                tokio_tungstenite::tungstenite::Error,
+            >,
+        > + Unpin,
+{
+    use futures_util::StreamExt;
+    for _ in 0..8 {
+        match socket.next().await {
+            Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
+                return text.to_string();
+            }
+            Some(Ok(_)) => continue,
+            other => panic!("未收到文本帧：{other:?}"),
+        }
+    }
+    panic!("文本帧数量超预期");
+}

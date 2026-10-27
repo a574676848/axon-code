@@ -99,13 +99,14 @@ try {
     Write-Host "[axon] 正在编译 CLI、桌面端与稳定 launcher。" -ForegroundColor Cyan
     Push-Location $root
     try {
-        & $cargo.Source build --release --locked -p axon-cli -p axon-desktop -p axon-launcher
+        & $cargo.Source build --release --locked -p axon-cli -p axon-desktop -p axon-launcher -p axon-voice-host
         if ($LASTEXITCODE -ne 0) { throw "cargo build 失败，退出码：$LASTEXITCODE" }
     } finally { Pop-Location }
     $cli = Join-Path $releaseBin "axon.exe"
     $desktop = Join-Path $releaseBin "axon-desktop.exe"
     $builtLauncher = Join-Path $releaseBin "axon-launcher.exe"
-    foreach ($path in @($cli, $desktop, $builtLauncher)) { if (-not (Test-Path $path)) { throw "编译完成但缺少二进制：$path" } }
+    $voiceHost = Join-Path $releaseBin "axon-voice-host.exe"
+    foreach ($path in @($cli, $desktop, $builtLauncher, $voiceHost)) { if (-not (Test-Path $path)) { throw "编译完成但缺少二进制：$path" } }
     & $cli --version *> $null; if ($LASTEXITCODE -ne 0) { throw "CLI 自检失败" }
     & $desktop --self-check *> $null; if ($LASTEXITCODE -ne 0) { throw "桌面端自检失败" }
     $version = (& $cli --version).ToString().Trim().Split()[-1]
@@ -120,6 +121,7 @@ try {
     New-Item -ItemType Directory -Force $stagedRelease, $launcherDir, $installDir | Out-Null
     Copy-Item $cli (Join-Path $stagedRelease "axon.exe")
     Copy-Item $desktop (Join-Path $stagedRelease "axon-desktop.exe")
+    Copy-Item $voiceHost (Join-Path $stagedRelease "axon-voice-host.exe")
     $swapDeadline = [DateTime]::UtcNow.AddSeconds(30)
     while ($true) {
         $swapBlocked = $false
