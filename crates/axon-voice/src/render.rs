@@ -96,9 +96,27 @@ impl SpeechRenderer for SpeechStream {
 }
 
 fn find_boundary(text: &str) -> Option<usize> {
-    text.char_indices()
-        .find(|(_, ch)| matches!(ch, '。' | '！' | '？' | '\n'))
-        .map(|(index, ch)| index + ch.len_utf8())
+    // 代码块里的换行不是句子边界：流式增量可能把围栏拆到多次 feed 里，
+    // 若在围栏内切分，后半段会被当成正文读出（与「代码块不外读」相悖）。
+    let mut in_fence = false;
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            offset += line.len();
+            continue;
+        }
+        if !in_fence
+            && let Some(position) = line
+                .char_indices()
+                .find(|(_, ch)| matches!(ch, '。' | '！' | '？' | '\n'))
+                .map(|(index, ch)| index + ch.len_utf8())
+        {
+            return Some(offset + position);
+        }
+        offset += line.len();
+    }
+    None
 }
 
 /// 剥离 `think` 标签与工具过程行。

@@ -40,6 +40,7 @@ fn voice_ws_idle_timeout_really_disconnects() {
         idle: Duration::from_millis(300),
         session: Duration::from_secs(30),
         warmup: Duration::from_secs(5),
+        drained: Duration::from_secs(10),
     };
     let server = TestServer::start_with_timeouts(RecordingIngress::idle(), timeouts);
     let address = server.address;
@@ -89,6 +90,7 @@ fn voice_ws_session_timeout_really_disconnects() {
         idle: Duration::from_secs(30),
         session: Duration::from_secs(3),
         warmup: Duration::from_secs(10),
+        drained: Duration::from_secs(10),
     };
     let server = TestServer::start_with_timeouts(RecordingIngress::idle(), timeouts);
     let address = server.address;

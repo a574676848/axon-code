@@ -7,17 +7,6 @@ use serde::Deserialize;
 /// 协议版本。
 pub(super) const PROTOCOL_VERSION: u8 = 1;
 
-/// `start` 帧里会话循环需要的字段（模式与语言已在校验阶段限定）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct StartRequest {
-    /// 客户端会话 id。
-    pub(super) client_session_id: String,
-    /// 工作区 id。
-    pub(super) workspace_id: String,
-    /// 回复目的地，与文本入口同车道键。
-    pub(super) reply_destination: String,
-}
-
 /// 取消原因，客户端只允许这两个。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancelReason {
@@ -50,6 +39,11 @@ pub(crate) enum ClientFrame {
     Cancel {
         /// 原因。
         reason: CancelReason,
+    },
+    /// 客户端已播完或清空该轮队列。
+    PlaybackDrained {
+        /// 轮次。
+        epoch: u32,
     },
     /// 已识别但当前不处理的合法帧。
     Ignored,
@@ -84,6 +78,13 @@ struct CancelWire {
     reason: String,
 }
 
+/// `playbackDrained` 帧。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PlaybackDrainedWire {
+    epoch: u32,
+}
+
 /// 文本帧分类结果。
 pub(crate) enum Classified {
     /// 开始会话。
@@ -92,8 +93,23 @@ pub(crate) enum Classified {
     Stop(u32),
     /// 取消。
     Cancel(CancelReason),
+    /// 播放队列已清空。
+    PlaybackDrained(u32),
     /// 已知但暂不处理。
     Ignored,
+}
+
+/// `start` 帧里会话循环需要的字段（模式与语言已在校验阶段限定）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct StartRequest {
+    /// 客户端会话 id。
+    pub(super) client_session_id: String,
+    /// 工作区 id。
+    pub(super) workspace_id: String,
+    /// 回复目的地，与文本入口同车道键。
+    pub(super) reply_destination: String,
+    /// 本轮是否朗读。
+    pub(super) tts: bool,
 }
 
 /// 按会话态分类：`start` 只能一次，`stop`/`cancel` 必须在 `start` 之后。
@@ -103,7 +119,7 @@ pub(crate) fn classify(started: bool, text: &str) -> Result<Classified, ()> {
             client_session_id,
             workspace_id,
             reply_destination,
-            ..
+            tts,
         } => {
             if started {
                 Err(())
@@ -112,6 +128,7 @@ pub(crate) fn classify(started: bool, text: &str) -> Result<Classified, ()> {
                     client_session_id,
                     workspace_id,
                     reply_destination,
+                    tts,
                 }))
             }
         }
@@ -125,6 +142,13 @@ pub(crate) fn classify(started: bool, text: &str) -> Result<Classified, ()> {
         ClientFrame::Cancel { reason } => {
             if started {
                 Ok(Classified::Cancel(reason))
+            } else {
+                Err(())
+            }
+        }
+        ClientFrame::PlaybackDrained { epoch } => {
+            if started {
+                Ok(Classified::PlaybackDrained(epoch))
             } else {
                 Err(())
             }
@@ -180,8 +204,13 @@ pub(crate) fn parse_client_frame(text: &str) -> Result<ClientFrame, ()> {
             };
             Ok(ClientFrame::Cancel { reason })
         }
-        "setTts" | "setPreset" | "cancelPreview" | "cueEnded" | "cueAck" | "preview"
-        | "playbackDrained" => Ok(ClientFrame::Ignored),
+        "setTts" | "setPreset" | "cancelPreview" | "cueEnded" | "cueAck" | "preview" => {
+            Ok(ClientFrame::Ignored)
+        }
+        "playbackDrained" => {
+            let wire: PlaybackDrainedWire = serde_json::from_value(value).map_err(|_| ())?;
+            Ok(ClientFrame::PlaybackDrained { epoch: wire.epoch })
+        }
         _ => Err(()),
     }
 }
@@ -242,6 +271,23 @@ mod tests {
             parse_client_frame(r#"{"type":"cancel","reason":"barge"}"#),
             Err(())
         );
+    }
+
+    #[test]
+    fn playback_drained_requires_started_session() {
+        assert_eq!(
+            parse_client_frame(r#"{"type":"playbackDrained","epoch":2}"#),
+            Ok(ClientFrame::PlaybackDrained { epoch: 2 })
+        );
+        assert_eq!(parse_client_frame(r#"{"type":"playbackDrained"}"#), Err(()));
+        assert!(
+            classify(false, r#"{"type":"playbackDrained","epoch":1}"#).is_err(),
+            "未 start 不能回执"
+        );
+        assert!(matches!(
+            classify(true, r#"{"type":"playbackDrained","epoch":1}"#),
+            Ok(Classified::PlaybackDrained(1))
+        ));
     }
 
     #[test]

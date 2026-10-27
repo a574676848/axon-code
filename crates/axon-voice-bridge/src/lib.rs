@@ -3,12 +3,15 @@
 //! 只依赖 [`HostTransport`]，不自己启动进程；进程监督留在宿主 crate 的 supervisor。
 //! 上层（daemon 的 `/api/v1/voice`）负责把 [`VoiceEvent`] 映射成 WS 帧。
 
+/// 宿主协议随桥一起导出：消费者需要构造或匹配管道帧，但不必单独依赖协议 crate。
+pub use axon_voice_protocol;
+
 use std::time::{Duration, Instant};
 
 use axon_voice_host::supervisor::{HostClient, SupervisorError};
 use axon_voice_protocol::{
     Control, CueStatus, ErrorMsg, Final, Frame, Heartbeat, Partial, SessionEnd, SessionStart,
-    UtteranceEnd, Warm, Warmup, encode_audio_in,
+    Speak, UtteranceEnd, Warm, Warmup, encode_audio_in,
 };
 
 /// 宿主传输层错误。
@@ -98,6 +101,37 @@ impl HostTransport for HostClient {
 
     fn shutdown(&mut self) {
         let _ = HostClient::shutdown(self);
+    }
+}
+
+/// 擦除后的宿主传输：生产是真实子进程，测试可注入进程内脚本宿主。
+impl<T: HostTransport + ?Sized> HostTransport for Box<T> {
+    fn send_control(&mut self, control: &Control) -> Result<(), TransportError> {
+        (**self).send_control(control)
+    }
+
+    fn send_bytes(&mut self, bytes: &[u8]) -> Result<(), TransportError> {
+        (**self).send_bytes(bytes)
+    }
+
+    fn recv(&mut self, timeout: Duration) -> Result<Frame, TransportError> {
+        (**self).recv(timeout)
+    }
+
+    fn heartbeat_ok(&self, now: Instant) -> bool {
+        (**self).heartbeat_ok(now)
+    }
+
+    fn alive(&mut self) -> bool {
+        (**self).alive()
+    }
+
+    fn terminate(&mut self) -> Option<i32> {
+        (**self).terminate()
+    }
+
+    fn shutdown(&mut self) {
+        (**self).shutdown();
     }
 }
 
@@ -325,12 +359,38 @@ impl<T: HostTransport> VoiceBridge<T> {
     ///
     /// # Errors
     ///
-    /// 没有会话或传输失败。
+    /// 没有会话、朗读稿为空或传输失败。
     pub fn end_utterance(&mut self, utterance_seq: u32) -> Result<(), BridgeError> {
         if self.state != BridgeState::InSession {
             return Err(BridgeError::NoSession);
         }
         self.send_control(&Control::UtteranceEnd(UtteranceEnd { utterance_seq }))
+    }
+
+    /// 下发一句已渲染的朗读稿；`seq` 每轮从 1 起。
+    ///
+    /// # Errors
+    ///
+    /// 没有会话、朗读稿为空或传输失败。
+    pub fn speak(
+        &mut self,
+        turn_id: &str,
+        epoch: u32,
+        seq: u32,
+        text: &str,
+    ) -> Result<(), BridgeError> {
+        if self.state != BridgeState::InSession {
+            return Err(BridgeError::NoSession);
+        }
+        if text.trim().is_empty() {
+            return Err(BridgeError::Protocol("朗读稿为空".to_owned()));
+        }
+        self.send_control(&Control::Speak(Speak {
+            turn_id: turn_id.to_owned(),
+            epoch,
+            seq,
+            text: text.to_owned(),
+        }))
     }
 
     /// 结束会话。

@@ -15,6 +15,8 @@ pub(crate) struct VoiceMetrics {
     dropped_frames: AtomicU64,
     dropped_bytes: AtomicU64,
     rtf_milli: AtomicU64,
+    audio_flushed: AtomicU64,
+    drain_timeouts: AtomicU64,
     last_error: Mutex<Option<String>>,
     host: Mutex<Option<HostSnapshot>>,
 }
@@ -78,6 +80,16 @@ impl VoiceMetrics {
         }
     }
 
+    /// 记录一次 `playbackDrained` 回执：只有回执到达才算真正清空。
+    pub(crate) fn record_audio_flushed(&self) {
+        self.audio_flushed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// 记录一次停播回执超时的强制清理。
+    pub(crate) fn record_drain_timeout(&self) {
+        self.drain_timeouts.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// 记录宿主心跳。
     pub(crate) fn record_host(&self, snapshot: HostSnapshot) {
         if let Ok(mut slot) = self.host.lock() {
@@ -95,6 +107,8 @@ impl VoiceMetrics {
             "queueDepth": self.queue_depth.load(Ordering::Relaxed),
             "droppedFrames": self.dropped_frames.load(Ordering::Relaxed),
             "droppedBytes": self.dropped_bytes.load(Ordering::Relaxed),
+            "audioFlushed": self.audio_flushed.load(Ordering::Relaxed),
+            "playbackDrainsTimedOut": self.drain_timeouts.load(Ordering::Relaxed),
             "rtfP50": (rtf > 0).then(|| rtf as f64 / 1_000.0),
             "lastError": self.last_error.lock().ok().and_then(|slot| slot.clone()),
             "host": host.map(|host| serde_json::json!({
@@ -119,6 +133,8 @@ mod tests {
         metrics.record_drop(2, 4_800);
         metrics.set_rtf(0.0913);
         metrics.record_error("backpressure");
+        metrics.record_audio_flushed();
+        metrics.record_drain_timeout();
 
         let value = metrics.snapshot();
         assert_eq!(value["sessionsStarted"], 1);
@@ -126,6 +142,8 @@ mod tests {
         assert_eq!(value["droppedFrames"], 2);
         assert_eq!(value["droppedBytes"], 4_800);
         assert_eq!(value["lastError"], "backpressure");
+        assert_eq!(value["audioFlushed"], 1);
+        assert_eq!(value["playbackDrainsTimedOut"], 1);
         let rtf = value["rtfP50"].as_f64().expect("应有 RTF");
         assert!((rtf - 0.091).abs() < 1e-6, "{rtf}");
 

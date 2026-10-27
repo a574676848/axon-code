@@ -4,9 +4,9 @@
 //! 控制命令（`stop`/`cancel`/`shutdown`）永不被丢弃，保证会话一定能收尾。
 
 use super::gateway_voice_metrics::{HostSnapshot, VoiceMetrics};
+use super::gateway_voice_out_frames::{error_json, message_for, state_json};
 use super::gateway_voice_ready::{DEFAULT_ASR_MODEL, model_root};
-use axon_voice::VoiceFailure;
-use axon_voice_bridge::{BridgeError, VoiceBridge};
+use axon_voice_bridge::{BridgeError, HostTransport, VoiceBridge};
 use axon_voice_host::BUILD_COMMIT;
 use axon_voice_host::model::sha256::hex_digest;
 use axon_voice_host::supervisor::{HostClient, HostConfig};
@@ -35,24 +35,21 @@ enum Command {
     Audio(Vec<u8>),
     /// 结束当前句。
     Stop(u32),
-    /// 取消当前轮。
-    Cancel,
+    /// 取消当前轮；参数是合同原因值。
+    Cancel(String),
+    /// 下发一句朗读稿。
+    Speak {
+        /// 回合标识。
+        turn_id: String,
+        /// 轮次。
+        epoch: u32,
+        /// 句序号。
+        seq: u32,
+        /// 朗读稿。
+        text: String,
+    },
     /// 收线。
     Shutdown,
-}
-
-/// 入队结果。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PushOutcome {
-    /// 已入队。
-    Queued,
-    /// 队列已满，丢了最旧的一帧。
-    Dropped {
-        /// 本次丢的帧数（0 或 1）。
-        frames: u64,
-        /// 本次丢的字节数。
-        bytes: u64,
-    },
 }
 
 /// 工作线程送往 WS 会话的输出。
@@ -72,6 +69,29 @@ pub(super) enum VoiceOut {
         end_ms: u64,
         /// 定稿产出时刻。
         finalize_ms: u64,
+    },
+    /// 对话音频：会话原样封装成 WS `0x02` 帧。
+    Audio {
+        /// 轮次。
+        epoch: u32,
+        /// 宿主包序号，原样透传。
+        seq: u32,
+        /// s16le 载荷。
+        pcm: Vec<u8>,
+    },
+}
+
+/// 入队结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PushOutcome {
+    /// 已入队。
+    Queued,
+    /// 队列已满，丢了最旧的一帧。
+    Dropped {
+        /// 本次丢的帧数（0 或 1）。
+        frames: u64,
+        /// 本次丢的字节数。
+        bytes: u64,
     },
 }
 
@@ -209,8 +229,18 @@ impl VoiceWorker {
     }
 
     /// 取消当前轮。
-    pub(super) fn cancel(&self) {
-        self.queue.push_control(Command::Cancel);
+    pub(super) fn cancel(&self, reason: &str) {
+        self.queue.push_control(Command::Cancel(reason.to_owned()));
+    }
+
+    /// 下发一句朗读稿。
+    pub(super) fn speak(&self, turn_id: &str, epoch: u32, seq: u32, text: &str) {
+        self.queue.push_control(Command::Speak {
+            turn_id: turn_id.to_owned(),
+            epoch,
+            seq,
+            text: text.to_owned(),
+        });
     }
 
     /// 收线。
@@ -261,25 +291,91 @@ pub(super) fn spawn_worker(
     let mut host = HostConfig::new(exe, BUILD_COMMIT.to_owned());
     host.args.push("--model-root".to_owned());
     host.args.push(root.display().to_string());
-    let config = WorkerConfig {
-        host,
-        manifest_sha: manifest_digest(&root),
-        session_id: session_id.to_owned(),
-    };
+    Ok(spawn_worker_with(
+        session_id.to_owned(),
+        manifest_digest(&root),
+        out,
+        warmup,
+        metrics,
+        move || {
+            HostClient::spawn(&host)
+                .map(|client| Box::new(client) as BoxedTransport)
+                .map_err(|_| ())
+        },
+    ))
+}
+
+/// 宿主传输的擦除类型：生产是真实子进程，测试是进程内脚本宿主。
+pub(super) type BoxedTransport = Box<dyn HostTransport + Send>;
+
+/// 宿主传输工厂；测试用它把脚本宿主接进真实的 WS 会话循环。
+#[cfg(test)]
+pub(super) type HostLauncher = std::sync::Arc<dyn Fn() -> Result<BoxedTransport, ()> + Send + Sync>;
+
+/// 用给定的宿主启动工作线程。
+pub(super) fn spawn_worker_with<F>(
+    session_id: String,
+    manifest_sha: String,
+    out: tokio_mpsc::UnboundedSender<VoiceOut>,
+    warmup: Duration,
+    metrics: Arc<VoiceMetrics>,
+    launch: F,
+) -> Arc<VoiceWorker>
+where
+    F: FnOnce() -> Result<BoxedTransport, ()> + Send + 'static,
+{
     let queue = Arc::new(CommandQueue::new(AUDIO_QUEUE_CAPACITY));
     let worker = Arc::new(VoiceWorker {
         queue: Arc::clone(&queue),
         metrics: Arc::clone(&metrics),
         last_backpressure_at: Mutex::new(None),
     });
-    std::thread::spawn(move || run_worker(config, queue, out, warmup, metrics));
-    Ok(worker)
+    std::thread::spawn(move || {
+        run_worker(
+            WorkerConfig {
+                manifest_sha,
+                session_id,
+                launch: Box::new(launch),
+            },
+            queue,
+            out,
+            warmup,
+            metrics,
+        );
+    });
+    worker
+}
+
+impl super::GatewayHttpState {
+    /// 按运行态拉起本会话的工作线程；测试可注入进程内脚本宿主。
+    pub(super) fn spawn_voice_worker(
+        &self,
+        session_id: &str,
+        out: tokio_mpsc::UnboundedSender<VoiceOut>,
+        warmup: Duration,
+        metrics: Arc<VoiceMetrics>,
+    ) -> Result<Arc<VoiceWorker>, (String, bool)> {
+        #[cfg(test)]
+        if let Some(launcher) = self.voice_host.as_ref() {
+            let transport =
+                launcher().map_err(|()| (error_json("worker_unavailable", "arming"), false))?;
+            return Ok(spawn_worker_with(
+                session_id.to_owned(),
+                "0".repeat(64),
+                out,
+                warmup,
+                metrics,
+                move || Ok(transport),
+            ));
+        }
+        spawn_worker(session_id, out, warmup, metrics)
+    }
 }
 
 struct WorkerConfig {
-    host: HostConfig,
     manifest_sha: String,
     session_id: String,
+    launch: Box<dyn FnOnce() -> Result<BoxedTransport, ()> + Send>,
 }
 
 fn run_worker(
@@ -289,15 +385,15 @@ fn run_worker(
     warmup: Duration,
     metrics: Arc<VoiceMetrics>,
 ) {
-    let client = match HostClient::spawn(&config.host) {
-        Ok(client) => client,
-        Err(_) => {
+    let transport = match (config.launch)() {
+        Ok(transport) => transport,
+        Err(()) => {
             metrics.record_error("worker_unavailable");
             let _ = out.send(VoiceOut::Text(error_json("worker_unavailable", "arming")));
             return;
         }
     };
-    let mut bridge = VoiceBridge::new(client);
+    let mut bridge = VoiceBridge::new(transport);
     match bridge.warmup("asr", DEFAULT_ASR_MODEL, &config.manifest_sha, warmup) {
         Ok(Some(warm)) => metrics.set_rtf(warm.rtf_p50),
         Ok(None) => {}
@@ -328,7 +424,13 @@ fn run_worker(
             let outcome = match command {
                 Command::Audio(bytes) => bridge.push_audio(&bytes),
                 Command::Stop(utterance_seq) => bridge.end_utterance(utterance_seq),
-                Command::Cancel => bridge.cancel("user_cancel"),
+                Command::Cancel(reason) => bridge.cancel(&reason),
+                Command::Speak {
+                    turn_id,
+                    epoch,
+                    seq,
+                    text,
+                } => bridge.speak(&turn_id, epoch, seq, &text),
                 Command::Shutdown => {
                     bridge.shutdown();
                     return;
@@ -399,6 +501,11 @@ fn event_out(event: axon_voice_bridge::VoiceEvent) -> Option<VoiceOut> {
             end_ms: final_message.end_ms,
             finalize_ms: final_message.finalize_ms,
         }),
+        VoiceEvent::Audio { epoch, seq, audio } => Some(VoiceOut::Audio {
+            epoch,
+            seq,
+            pcm: audio,
+        }),
         VoiceEvent::Error(error) => Some(VoiceOut::Text(
             serde_json::json!({
                 "type": "error",
@@ -412,34 +519,10 @@ fn event_out(event: axon_voice_bridge::VoiceEvent) -> Option<VoiceOut> {
         VoiceEvent::CueStatus(_)
         | VoiceEvent::Heartbeat(_)
         | VoiceEvent::Warm(_)
-        | VoiceEvent::Audio { .. }
         | VoiceEvent::CueAudio { .. }
         | VoiceEvent::Closed
         | VoiceEvent::Ignored(_) => None,
     }
-}
-
-/// `backpressure` 错误帧：不关连接，带累计丢帧数。
-pub(super) fn backpressure_json(frames: u64, bytes: u64) -> String {
-    serde_json::json!({
-        "type": "error",
-        "code": "backpressure",
-        "stage": "listening",
-        "retryable": true,
-        "message": message_for("backpressure"),
-        "detail": { "droppedFrames": frames, "droppedBytes": bytes },
-    })
-    .to_string()
-}
-
-pub(super) fn state_json(phase: &str) -> String {
-    serde_json::json!({ "type": "state", "phase": phase }).to_string()
-}
-
-pub(super) fn message_for(code: &str) -> String {
-    VoiceFailure::from_code(code)
-        .map(|failure| failure.user_message())
-        .unwrap_or_else(|| "出现内部错误，请重试".to_owned())
 }
 
 fn host_exe() -> Option<PathBuf> {
@@ -471,130 +554,6 @@ fn manifest_digest(root: &Path) -> String {
     }
 }
 
-pub(super) fn error_json(code: &str, stage: &str) -> String {
-    let failure = VoiceFailure::from_code(code);
-    let (message, retryable) = match &failure {
-        Some(failure) => (failure.user_message(), failure.retryable()),
-        None => ("出现内部错误，请重试".to_owned(), true),
-    };
-    let family = matches!(code, "model_missing" | "model_unusable").then_some("asr");
-    serde_json::json!({
-        "type": "error",
-        "code": code,
-        "stage": stage,
-        "retryable": retryable,
-        "message": message,
-        "detail": { "family": family },
-    })
-    .to_string()
-}
-
 #[cfg(test)]
-mod tests {
-    use super::super::gateway_voice_ready::ready_json;
-    use super::{
-        AUDIO_QUEUE_CAPACITY, Command, CommandQueue, PushOutcome, backpressure_json, error_json,
-    };
-
-    fn audio(tag: u8) -> Vec<u8> {
-        vec![tag; 4]
-    }
-
-    #[test]
-    fn queue_drops_oldest_audio_and_keeps_controls() {
-        let queue = CommandQueue::new(4);
-        for tag in 0..4 {
-            assert_eq!(queue.push_audio(audio(tag)), PushOutcome::Queued);
-        }
-        queue.push_control(Command::Stop(1));
-        // 队列已满（4 条音频 + 1 条控制），第 5 帧音频必须丢掉最旧的一帧。
-        assert_eq!(
-            queue.push_audio(audio(9)),
-            PushOutcome::Dropped {
-                frames: 1,
-                bytes: 4
-            }
-        );
-        let drained = queue.drain();
-        let audios: Vec<u8> = drained
-            .iter()
-            .filter_map(|command| match command {
-                Command::Audio(bytes) => bytes.first().copied(),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(audios, vec![1, 2, 3, 9], "应丢第 0 帧，保留最新帧");
-        assert!(
-            drained
-                .iter()
-                .any(|command| matches!(command, Command::Stop(1))),
-            "控制命令不得丢"
-        );
-        assert_eq!(queue.totals(), (1, 4));
-    }
-
-    #[test]
-    fn queue_capacity_is_the_documented_value() {
-        assert_eq!(AUDIO_QUEUE_CAPACITY, 8);
-    }
-
-    #[test]
-    fn overload_window_clears_after_recovery_gap() {
-        let queue = CommandQueue::new(1);
-        queue.push_audio(audio(0));
-        let dropped = queue.push_audio(audio(1));
-        assert!(matches!(dropped, PushOutcome::Dropped { .. }));
-        assert!(queue.overload_for().is_some(), "丢帧后应开始计时");
-        // 排空不等于恢复：持续超限时每轮都会排空。
-        let _ = queue.drain();
-        assert!(
-            queue.overload_for().is_some(),
-            "刚排空仍然算超限，否则 10 s 断连不可达"
-        );
-        // 一个恢复间隔内没有新丢帧才算恢复。
-        std::thread::sleep(super::OVERLOAD_RECOVERY_GAP + std::time::Duration::from_millis(50));
-        assert!(queue.overload_for().is_none(), "恢复间隔后可清空");
-    }
-
-    #[test]
-    fn backpressure_frame_keeps_the_connection_alive() {
-        let value: serde_json::Value =
-            serde_json::from_str(&backpressure_json(3, 9_600)).expect("合法 JSON");
-        assert_eq!(value["code"], "backpressure");
-        assert_eq!(value["stage"], "listening");
-        assert_eq!(value["retryable"], true);
-        assert_eq!(value["detail"]["droppedFrames"], 3);
-        assert_eq!(value["detail"]["droppedBytes"], 9_600);
-    }
-
-    #[test]
-    fn ready_has_contract_fields() {
-        let value: serde_json::Value = serde_json::from_str(&ready_json()).expect("合法 JSON");
-        for field in [
-            "asrModel",
-            "ttsModel",
-            "sampleRate",
-            "workspaceId",
-            "replyDestination",
-            "sessionId",
-            "epoch",
-            "phase",
-            "tts",
-            "degraded",
-            "cues",
-        ] {
-            assert!(value.get(field).is_some(), "ready 缺字段 {field}");
-        }
-        assert_eq!(value["sampleRate"], 16_000);
-    }
-
-    #[test]
-    fn error_frame_uses_contract_message() {
-        let value: serde_json::Value =
-            serde_json::from_str(&error_json("model_missing", "arming")).expect("合法 JSON");
-        assert_eq!(value["code"], "model_missing");
-        assert_eq!(value["message"], "本地语音模型未安装，点此查看安装指引");
-        assert_eq!(value["detail"]["family"], "asr");
-        assert_eq!(value["retryable"], true);
-    }
-}
+#[path = "gateway_voice_worker_tests.rs"]
+mod tests;

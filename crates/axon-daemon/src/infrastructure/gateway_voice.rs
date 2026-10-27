@@ -1,21 +1,21 @@
 //! `/api/v1/voice` 的 WebSocket 入口：鉴权、升级、会话循环、超时与背压判决。
 //!
-//! 分工：本模块只管连接与判决；帧解析在 `gateway_voice_frames`，回合状态在
-//! `gateway_voice_turn`，宿主工作线程与有界上行队列在 `gateway_voice_worker`，
-//! 指标在 `gateway_voice_metrics`。
+//! 分工：本模块只管连接与编排；帧解析在 `gateway_voice_frames`，回合状态在
+//! `gateway_voice_turn`，事件订阅在 `gateway_voice_turn_stream`，宿主工作线程与
+//! 有界上行队列在 `gateway_voice_worker`，指标在 `gateway_voice_metrics`。
 
 use super::GatewayHttpState;
 use super::gateway_http_response::{bearer, unauthorized};
 use super::gateway_voice_frames::{CancelReason, Classified, StartRequest, classify};
 use super::gateway_voice_metrics::VoiceMetrics;
+use super::gateway_voice_out_frames::{backpressure_json, error_json, state_json};
 use super::gateway_voice_ready::ready_json;
 use super::gateway_voice_turn::{
-    TurnPhase, VoiceTurn, final_json, submit_rejected_json, turn_json,
+    DrainedOutcome, SpeakFrame, StopAudio, TurnPhase, VoiceTurn, drain_timeout_json, final_json,
+    stop_audio_json, submit_rejected_json, turn_json,
 };
-use super::gateway_voice_worker::{
-    MAX_AUDIO_FRAME_BYTES, PushOutcome, VoiceOut, VoiceWorker, backpressure_json, error_json,
-    state_json,
-};
+use super::gateway_voice_turn_stream::{TurnSignal, spawn_turn_subscription};
+use super::gateway_voice_worker::{MAX_AUDIO_FRAME_BYTES, PushOutcome, VoiceOut, VoiceWorker};
 use crate::application::ExternalEventEnvelope;
 use crate::infrastructure::gateway_auth::query_token;
 use crate::infrastructure::gateway_kernel::GatewayKernelError;
@@ -26,6 +26,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderMap, Uri};
 use axum::response::Response;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc as tokio_mpsc;
 
@@ -43,15 +44,18 @@ pub struct VoiceTimeouts {
     pub session: Duration,
     /// `start` 到宿主 `warm`。
     pub warmup: Duration,
+    /// `stopAudio` 到客户端 `playbackDrained` 的回执上限（PROTOCOL §5）。
+    pub drained: Duration,
 }
 
 impl VoiceTimeouts {
-    /// 合同值：30 s 空闲、120 s 会话、10 s 预热（PROTOCOL §5）。
+    /// 合同值：30 s 空闲、120 s 会话、10 s 预热、10 s 停播回执（PROTOCOL §5）。
     pub const fn production() -> Self {
         Self {
             idle: Duration::from_secs(30),
             session: Duration::from_secs(120),
             warmup: Duration::from_secs(10),
+            drained: Duration::from_secs(10),
         }
     }
 }
@@ -127,7 +131,10 @@ async fn serve_session(
     let session_started = Instant::now();
     let mut worker: Option<Arc<VoiceWorker>> = None;
     let (out_tx, mut out_rx) = tokio_mpsc::unbounded_channel::<VoiceOut>();
-    let mut voice = VoiceTurn::new();
+    let (turn_tx, mut turn_rx) = tokio_mpsc::unbounded_channel::<TurnSignal>();
+    let mut voice = VoiceTurn::new(timeouts.drained);
+    // 当前轮的事件订阅；换轮或收线时置位停止标志。
+    let mut subscription: Option<Arc<AtomicBool>> = None;
 
     loop {
         let session = started.then(|| session_started.elapsed());
@@ -136,11 +143,19 @@ async fn serve_session(
             close(&mut socket).await;
             break;
         }
-        // 会话总时长与空闲时长取较小者：会话到点时即使一直有帧也要收线。
-        let wait = match session {
+        // 回执超时必须在每轮循环开头判定：客户端持续发帧时不会走到 socket 超时分支。
+        if voice.on_drain_timeout(Instant::now()) {
+            force_drain_cleanup(&mut socket, metrics, &mut subscription).await;
+            continue;
+        }
+        // 会话总时长、空闲时长与停播回执三者取最小者作为本轮等待上限。
+        let mut wait = match session {
             Some(elapsed) => timeouts.session.saturating_sub(elapsed).min(timeouts.idle),
             None => timeouts.idle,
         };
+        if let Some(deadline) = voice.drain_deadline() {
+            wait = wait.min(deadline.saturating_duration_since(Instant::now()));
+        }
         if let Some(handle) = worker.as_ref()
             && handle
                 .overload_for()
@@ -156,6 +171,11 @@ async fn serve_session(
         tokio::select! {
             message = tokio::time::timeout(wait, socket.recv()) => {
                 let Ok(message) = message else {
+                    // 停播回执先于空闲/会话超时判定：到点必须记 internal 并强制清理。
+                    if voice.on_drain_timeout(Instant::now()) {
+                        force_drain_cleanup(&mut socket, metrics, &mut subscription).await;
+                        continue;
+                    }
                     // 等不到帧：先看是不是会话总时长到点，否则按空闲超时收线。
                     let stage = if started && session_started.elapsed() >= timeouts.session {
                         "listening"
@@ -172,10 +192,11 @@ async fn serve_session(
                         Ok(Classified::Start(request_wire)) => {
                             started = true;
                             metrics.session_started();
+                            voice.set_read_aloud(request_wire.tts);
                             connection_session_id = new_session_id();
                             let session_id = connection_session_id.clone();
                             request = Some(request_wire);
-                            match super::gateway_voice_worker::spawn_worker(
+                            match state.spawn_voice_worker(
                                 &session_id,
                                 out_tx.clone(),
                                 timeouts.warmup,
@@ -197,6 +218,13 @@ async fn serve_session(
                             }
                         }
                         Ok(Classified::Cancel(CancelReason::ClientClose)) => {
+                            if let Some(stop) = voice.on_client_cancel(Instant::now()) {
+                                send_json(&mut socket, stop_audio_json(&stop)).await;
+                                if let Some(handle) = worker.as_ref() {
+                                    handle.cancel(stop.reason);
+                                }
+                            }
+                            stop_subscription(&mut subscription);
                             if let Some(handle) = worker.as_ref() {
                                 handle.shutdown();
                             }
@@ -205,7 +233,18 @@ async fn serve_session(
                         }
                         Ok(Classified::Cancel(CancelReason::UserCancel)) => {
                             if let Some(handle) = worker.as_ref() {
-                                handle.cancel();
+                                handle.cancel("user_cancel");
+                            }
+                            if let Some(stop) = voice.on_client_cancel(Instant::now()) {
+                                send_json(&mut socket, stop_audio_json(&stop)).await;
+                                stop_subscription(&mut subscription);
+                            }
+                        }
+                        Ok(Classified::PlaybackDrained(epoch)) => {
+                            if voice.on_playback_drained(epoch) == DrainedOutcome::Accepted {
+                                metrics.record_audio_flushed();
+                                send_json(&mut socket, state_json(TurnPhase::Listening.as_str()))
+                                    .await;
                             }
                         }
                         Ok(Classified::Ignored) => {}
@@ -258,6 +297,8 @@ async fn serve_session(
                             &mut socket,
                             state,
                             &mut voice,
+                            &mut subscription,
+                            &turn_tx,
                             metrics,
                             request,
                             &connection_session_id,
@@ -270,10 +311,33 @@ async fn serve_session(
                         }
                     }
                 }
+                VoiceOut::Audio { epoch, seq, pcm } => {
+                    if voice.accepts_audio(epoch) {
+                        let _ = socket
+                            .send(Message::Binary(audio_frame(epoch, seq, &pcm).into()))
+                            .await;
+                    }
+                }
             },
+            Some(signal) = turn_rx.recv() => {
+                let phase_before = voice.phase();
+                let events = handle_turn_signal(
+                    &signal,
+                    &mut voice,
+                    &mut subscription,
+                    worker.as_ref(),
+                );
+                for event in events {
+                    send_json(&mut socket, event).await;
+                }
+                if phase_before != TurnPhase::Speaking && voice.phase() == TurnPhase::Speaking {
+                    send_json(&mut socket, state_json(TurnPhase::Speaking.as_str())).await;
+                }
+            }
             else => break,
         }
     }
+    stop_subscription(&mut subscription);
     if let Some(handle) = worker {
         handle.shutdown();
     }
@@ -285,6 +349,8 @@ async fn handle_final(
     socket: &mut WebSocket,
     state: &Arc<GatewayHttpState>,
     voice: &mut VoiceTurn,
+    subscription: &mut Option<Arc<AtomicBool>>,
+    turn_tx: &tokio_mpsc::UnboundedSender<TurnSignal>,
     metrics: &Arc<VoiceMetrics>,
     request: &StartRequest,
     connection_session_id: &str,
@@ -296,7 +362,7 @@ async fn handle_final(
         voice.rejected();
         return vec![
             submit_rejected_json("转写文本为空"),
-            state_json(voice.phase().as_str()),
+            state_json(TurnPhase::Listening.as_str()),
         ];
     }
     send_json(socket, state_json(TurnPhase::Thinking.as_str())).await;
@@ -309,14 +375,27 @@ async fn handle_final(
             let interaction_id = receipt.interaction_id.as_str().to_owned();
             let assigned = voice.submitted(&interaction_id);
             let lane_id = lane_id_for(request);
-            vec![turn_json(&interaction_id, &assigned, &lane_id, &lane_id)]
+            let frame = turn_json(&interaction_id, &assigned, &lane_id, &lane_id);
+            let stop = Arc::new(AtomicBool::new(false));
+            if let Some(previous) = subscription.replace(Arc::clone(&stop)) {
+                previous.store(true, Ordering::Relaxed);
+            }
+            spawn_turn_subscription(
+                state.context.clone(),
+                request.workspace_id.clone(),
+                interaction_id,
+                assigned.epoch,
+                turn_tx.clone(),
+                stop,
+            );
+            vec![frame]
         }
         Ok(Err(error)) => {
             voice.rejected();
             metrics.record_error("submit_rejected");
             vec![
                 submit_rejected_json(reject_reason(&error)),
-                state_json(voice.phase().as_str()),
+                state_json(TurnPhase::Listening.as_str()),
             ]
         }
         Err(_) => {
@@ -324,10 +403,85 @@ async fn handle_final(
             metrics.record_error("submit_rejected");
             vec![
                 submit_rejected_json("提交任务未能完成"),
-                state_json(voice.phase().as_str()),
+                state_json(TurnPhase::Listening.as_str()),
             ]
         }
     }
+}
+
+/// 处理订阅线程投递的助手增量与终态；返回还需要下发的帧。
+fn handle_turn_signal(
+    signal: &TurnSignal,
+    voice: &mut VoiceTurn,
+    subscription: &mut Option<Arc<AtomicBool>>,
+    worker: Option<&Arc<VoiceWorker>>,
+) -> Vec<String> {
+    match signal {
+        TurnSignal::Delta { epoch, text } => {
+            if *epoch != voice.epoch() {
+                return Vec::new();
+            }
+            let speaks = voice.on_assistant_delta(text);
+            send_speaks(worker, &speaks);
+            Vec::new()
+        }
+        TurnSignal::Completed { epoch, response } => {
+            if *epoch != voice.epoch() {
+                return Vec::new();
+            }
+            let (speaks, stop) = voice.on_turn_completed(Instant::now(), response.as_deref());
+            send_speaks(worker, &speaks);
+            finish_stop(stop, worker, subscription)
+        }
+        TurnSignal::Closed { epoch } => {
+            if *epoch != voice.epoch() {
+                return Vec::new();
+            }
+            // 订阅断开后不会再有任何增量：按本轮结束收口，避免相位永久停在说话。
+            let (speaks, stop) = voice.on_turn_completed(Instant::now(), None);
+            send_speaks(worker, &speaks);
+            finish_stop(stop, worker, subscription)
+        }
+    }
+}
+
+fn send_speaks(worker: Option<&Arc<VoiceWorker>>, speaks: &[SpeakFrame]) {
+    let Some(worker) = worker else {
+        return;
+    };
+    for speak in speaks {
+        worker.speak(&speak.turn_id, speak.epoch, speak.seq, &speak.text);
+    }
+}
+
+fn finish_stop(
+    stop: Option<StopAudio>,
+    worker: Option<&Arc<VoiceWorker>>,
+    subscription: &mut Option<Arc<AtomicBool>>,
+) -> Vec<String> {
+    let Some(stop) = stop else {
+        return Vec::new();
+    };
+    if let Some(worker) = worker {
+        worker.cancel(stop.reason);
+    }
+    stop_subscription(subscription);
+    vec![stop_audio_json(&stop)]
+}
+
+fn stop_subscription(slot: &mut Option<Arc<AtomicBool>>) {
+    if let Some(stop) = slot.take() {
+        stop.store(true, Ordering::Relaxed);
+    }
+}
+
+fn audio_frame(epoch: u32, seq: u32, pcm: &[u8]) -> Vec<u8> {
+    let mut frame = Vec::with_capacity(9 + pcm.len());
+    frame.push(0x02);
+    frame.extend_from_slice(&epoch.to_be_bytes());
+    frame.extend_from_slice(&seq.to_be_bytes());
+    frame.extend_from_slice(pcm);
+    frame
 }
 
 /// 语音转写提交到既有外部事件端口；渠道、车道键与文本入口一致（INV-1/INV-13）。
@@ -400,6 +554,19 @@ async fn reject(socket: &mut WebSocket, code: &str) {
     close(socket).await;
 }
 
+/// 停播回执超时：记 `internal` 并强制清理一侧的可见动作。
+async fn force_drain_cleanup(
+    socket: &mut WebSocket,
+    metrics: &Arc<VoiceMetrics>,
+    subscription: &mut Option<Arc<AtomicBool>>,
+) {
+    metrics.record_error("internal");
+    metrics.record_drain_timeout();
+    send_json(socket, drain_timeout_json()).await;
+    send_json(socket, state_json(TurnPhase::Listening.as_str())).await;
+    stop_subscription(subscription);
+}
+
 async fn send_json(socket: &mut WebSocket, payload: String) {
     let _ = socket.send(Message::Text(payload.into())).await;
 }
@@ -439,6 +606,7 @@ mod tests {
         assert_eq!(timeouts.idle, std::time::Duration::from_secs(30));
         assert_eq!(timeouts.session, std::time::Duration::from_secs(120));
         assert_eq!(timeouts.warmup, std::time::Duration::from_secs(10));
+        assert_eq!(timeouts.drained, std::time::Duration::from_secs(10));
     }
 
     #[test]
@@ -447,6 +615,7 @@ mod tests {
             idle: Duration::from_millis(50),
             session: Duration::from_millis(80),
             warmup: Duration::from_millis(20),
+            drained: Duration::from_millis(30),
         };
         assert_eq!(
             timeout_stage(Duration::from_millis(50), None, &timeouts),

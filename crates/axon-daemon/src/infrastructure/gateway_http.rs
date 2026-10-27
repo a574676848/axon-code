@@ -19,12 +19,16 @@ mod gateway_voice;
 mod gateway_voice_frames;
 #[path = "gateway_voice_metrics.rs"]
 mod gateway_voice_metrics;
+#[path = "gateway_voice_out_frames.rs"]
+mod gateway_voice_out_frames;
 #[path = "gateway_voice_ready.rs"]
 mod gateway_voice_ready;
 #[path = "gateway_voice_tts.rs"]
 mod gateway_voice_tts;
 #[path = "gateway_voice_turn.rs"]
 mod gateway_voice_turn;
+#[path = "gateway_voice_turn_stream.rs"]
+mod gateway_voice_turn_stream;
 #[path = "gateway_voice_worker.rs"]
 mod gateway_voice_worker;
 
@@ -77,6 +81,9 @@ pub(super) struct GatewayHttpState {
     pub(super) voice_metrics: Arc<gateway_voice_metrics::VoiceMetrics>,
     /// 语音会话超时口径。
     pub(super) voice_timeouts: gateway_voice::VoiceTimeouts,
+    /// 测试注入的宿主传输工厂；生产恒为 `None`。
+    #[cfg(test)]
+    pub(super) voice_host: Option<gateway_voice_worker::HostLauncher>,
 }
 
 impl GatewayHttpState {
@@ -99,6 +106,9 @@ pub struct HttpGatewayAdapter {
     route_handler: Option<Arc<dyn GatewayHttpRouteHandler>>,
     log_sink: Option<Arc<dyn LogSink>>,
     voice_timeouts: gateway_voice::VoiceTimeouts,
+    /// 测试注入的宿主传输工厂；生产恒为 `None`。
+    #[cfg(test)]
+    voice_host: Option<gateway_voice_worker::HostLauncher>,
 }
 
 impl HttpGatewayAdapter {
@@ -125,6 +135,8 @@ impl HttpGatewayAdapter {
             route_handler: None,
             log_sink: None,
             voice_timeouts: gateway_voice::VoiceTimeouts::production(),
+            #[cfg(test)]
+            voice_host: None,
         }
     }
 
@@ -146,6 +158,14 @@ impl HttpGatewayAdapter {
     #[must_use]
     pub fn with_voice_timeouts(mut self, timeouts: VoiceTimeouts) -> Self {
         self.voice_timeouts = timeouts;
+        self
+    }
+
+    /// 注入进程内脚本宿主（仅测试）：语音闭环用例不启动真实子进程。
+    #[cfg(test)]
+    #[must_use]
+    pub fn with_voice_host(mut self, host: gateway_voice_worker::HostLauncher) -> Self {
+        self.voice_host = Some(host);
         self
     }
 
@@ -204,6 +224,8 @@ impl GatewayAdapter for HttpGatewayAdapter {
             blocking: Arc::new(Semaphore::new(BLOCKING_CONCURRENCY)),
             voice_metrics: Arc::new(gateway_voice_metrics::VoiceMetrics::default()),
             voice_timeouts: self.voice_timeouts,
+            #[cfg(test)]
+            voice_host: self.voice_host.clone(),
         });
         let handle = thread::spawn(move || run_server(listener, receiver, state));
         *self
