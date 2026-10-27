@@ -195,6 +195,33 @@ const ReasoningBlock: React.FC<{ text: string; done: boolean; durationMs: number
     const timer = window.setTimeout(() => setOpen(false), 180);
     return () => window.clearTimeout(timer);
   }, [done]);
+
+  /*
+   * 思考正文的贴底跟随。
+   *
+   * 限高容器一旦出现滚动条，新吐出的思考只会追加在底部而视口停在顶上，
+   * 读者得不停手动下滑。这里在每次文本增长后把视口贴到底部，让正在生成的
+   * 那一段始终可见；判定放在布局阶段，量与写发生在同一帧，不会先闪一下顶部再跳到底。
+   *
+   * 只跟随「还没收口」的思考：收口后再写入就是历史正文，不能替读者挪动阅读位置。
+   * 读者主动上滑时让出跟随权，滑回底部再自动恢复，与正文区的贴底规则同一口径。
+   */
+  const bodyRef = React.useRef<HTMLDivElement>(null);
+  const pinnedRef = React.useRef(true);
+  React.useLayoutEffect(() => {
+    if (!open || done) return;
+    const body = bodyRef.current;
+    if (body === null) return;
+    if (pinnedRef.current) body.scrollTop = body.scrollHeight;
+  }, [text, open, done]);
+
+  const followLatest = React.useCallback(() => {
+    const body = bodyRef.current;
+    if (body === null) return;
+    // 距底 24px 以内算贴底：留出亚像素舍入与行高抖动的余量。
+    pinnedRef.current = body.scrollHeight - body.scrollTop - body.clientHeight <= 24;
+  }, []);
+
   const firstLine = text.trim().split('\n')[0] ?? '';
   // 收起态拿首行当单行预览；展开后正文已完整呈现，行头不再重复这段内容。
   const preview = open || firstLine.length === 0 ? undefined : firstLine;
@@ -215,7 +242,11 @@ const ReasoningBlock: React.FC<{ text: string; done: boolean; durationMs: number
           {/*
             思考是过程批注：限高内部滚动避免长篇思考撑爆整屏，左侧细标线加柔和次级墨色。
           */}
-          <div className="max-h-[320px] overflow-y-auto scroll-visible border-l-[1.5px] border-border-strong pl-3.5 pr-2 py-0.5">
+          <div
+            ref={bodyRef}
+            onScroll={followLatest}
+            className="max-h-[320px] overflow-y-auto scroll-visible border-l-[1.5px] border-border-strong pl-3.5 pr-2 py-0.5"
+          >
             <p className="text-row-loose text-text-secondary whitespace-pre-wrap break-words">
               {compactReasoningText(text)}
             </p>
