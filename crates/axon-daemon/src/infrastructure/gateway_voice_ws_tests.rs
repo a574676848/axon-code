@@ -214,19 +214,29 @@ fn voice_ws_requires_token_and_reports_arming_error() {
             .await
             .expect("发送 start");
 
-        let error: serde_json::Value =
-            serde_json::from_str(&next_ws_text(&mut socket).await).expect("error 是 JSON");
-        assert_eq!(error["type"], "error");
-        assert_eq!(error["stage"], "arming");
-        let code = error["code"].as_str().unwrap_or_default();
-        assert!(
-            matches!(code, "worker_unavailable" | "model_missing"),
-            "测试目录无宿主时应报宿主或模型缺失，实际 {code}"
-        );
-        assert!(
-            error["message"].as_str().is_some_and(|text| !text.is_empty()),
-            "错误帧必须带合同文案"
-        );
+        // 机器上装了语音运行时（例如本机已安装 Axon）时，`start` 会真的拉起宿主并回
+        // `state(listening)`；只有缺运行时/宿主时才回 arming 错误。两种都合法，
+        // 但都必须符合合同：要么是 arming 错误帧，要么是 listening 状态帧。
+        let first = next_ws_text(&mut socket).await;
+        let value: serde_json::Value = serde_json::from_str(&first).expect("首帧是 JSON");
+        match value["type"].as_str() {
+            Some("error") => {
+                assert_eq!(value["stage"], "arming");
+                let code = value["code"].as_str().unwrap_or_default();
+                assert!(
+                    matches!(code, "worker_unavailable" | "model_missing"),
+                    "缺少宿主或模型时应报对应错误，实际 {code}"
+                );
+                assert!(
+                    value["message"].as_str().is_some_and(|text| !text.is_empty()),
+                    "错误帧必须带合同文案"
+                );
+            }
+            Some("state") => {
+                assert_eq!(value["phase"], "listening", "本机有运行时时应直接进入聆听");
+            }
+            other => panic!("start 之后首帧非法：{other:?} / {first}"),
+        }
     });
 }
 
