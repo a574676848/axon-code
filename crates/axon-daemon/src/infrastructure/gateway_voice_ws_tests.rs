@@ -179,20 +179,35 @@ fn voice_ws_transcribes_real_audio() {
             .expect("发送 stop");
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
-        loop {
-            assert!(std::time::Instant::now() < deadline, "等待 final 超时");
+        let mut partials: Vec<String> = Vec::new();
+        let mut finals: Vec<String> = Vec::new();
+        while finals.is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "等待 final 超时；已收到 partial {partials:?}"
+            );
             let text = next_ws_text(&mut socket).await;
             let value: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
             match value["type"].as_str() {
+                Some("partial") => {
+                    partials.push(value["text"].as_str().unwrap_or_default().to_owned());
+                }
                 Some("final") => {
-                    let transcript = value["text"].as_str().unwrap_or_default();
-                    println!("ws transcript: {transcript}");
-                    assert!(!transcript.is_empty(), "转写不应为空");
-                    return;
+                    finals.push(value["text"].as_str().unwrap_or_default().to_owned());
                 }
                 Some("error") => panic!("合成/识别失败：{text}"),
                 _ => {}
             }
         }
+        println!("ws partials: {partials:?}");
+        println!("ws finals: {finals:?}");
+        assert!(
+            partials.iter().any(|text| !text.is_empty()),
+            "WP-09 要求真实 partial：{partials:?}"
+        );
+        assert!(
+            finals.iter().any(|text| !text.is_empty()),
+            "定稿不应为空：{finals:?}"
+        );
     });
 }

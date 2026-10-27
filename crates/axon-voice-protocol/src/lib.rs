@@ -10,7 +10,7 @@ pub mod frame;
 
 pub use control::{
     Cancel, Control, CueSpeak, CueStatus, ErrorDetail, ErrorMsg, Final, Heartbeat, Hello, Partial,
-    Ready, SessionEnd, SessionStart, Speak, Warm, Warmup,
+    Ready, SessionEnd, SessionStart, Speak, UtteranceEnd, Warm, Warmup,
 };
 pub use frame::{
     Frame, FrameError, decode_frame, encode_audio_in, encode_audio_out, encode_cue_audio,
@@ -44,6 +44,8 @@ pub mod type_name {
     pub const SESSION_START: &str = "sessionStart";
     /// 结束会话。
     pub const SESSION_END: &str = "sessionEnd";
+    /// 结束当前句（会话保持）。
+    pub const UTTERANCE_END: &str = "utteranceEnd";
     /// 中间识别结果。
     pub const PARTIAL: &str = "partial";
     /// 定稿。

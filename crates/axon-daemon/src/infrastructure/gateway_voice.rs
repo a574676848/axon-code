@@ -22,8 +22,8 @@ use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
 use tokio::sync::mpsc as tokio_mpsc;
 
-/// 预热超时，与 PROTOCOL §5 对齐。
-const WARMUP_TIMEOUT: Duration = Duration::from_secs(45);
+/// 预热超时，与 PROTOCOL §5 的 `start → warm ≤ 10 s` 对齐。
+const WARMUP_TIMEOUT: Duration = Duration::from_secs(10);
 /// 默认请求的识别模型名，与合同示例一致。
 const DEFAULT_ASR_MODEL: &str = "sherpa-streaming-zh-en";
 /// 协议版本。
@@ -124,7 +124,7 @@ enum Classified {
     /// 开始会话。
     Start,
     /// 结束当前句。
-    Stop,
+    Stop(u32),
     /// 取消。
     Cancel(CancelReason),
     /// 已知但暂不处理。
@@ -140,9 +140,9 @@ fn classify(started: bool, text: &str) -> Result<Classified, ()> {
                 Ok(Classified::Start)
             }
         }
-        ClientFrame::Stop { .. } => {
+        ClientFrame::Stop { utterance_seq } => {
             if started {
-                Ok(Classified::Stop)
+                Ok(Classified::Stop(utterance_seq))
             } else {
                 Err(())
             }
@@ -175,7 +175,7 @@ enum Command {
     /// 上行音频。
     Audio(Vec<u8>),
     /// 结束当前句。
-    Stop,
+    Stop(u32),
     /// 取消当前轮。
     Cancel,
     /// 收线。
@@ -237,7 +237,7 @@ async fn session(mut socket: WebSocket) {
                                 }
                             }
                         }
-                        Ok(Classified::Stop) => send_command(&worker, Command::Stop),
+                        Ok(Classified::Stop(utterance_seq)) => send_command(&worker, Command::Stop(utterance_seq)),
                         Ok(Classified::Cancel(CancelReason::ClientClose)) => {
                             send_command(&worker, Command::Shutdown);
                             close(&mut socket).await;
@@ -354,7 +354,7 @@ fn run_worker(
         while let Ok(command) = rx.try_recv() {
             let outcome = match command {
                 Command::Audio(bytes) => bridge.push_audio(&bytes),
-                Command::Stop => bridge.end_session("client_close"),
+                Command::Stop(utterance_seq) => bridge.end_utterance(utterance_seq),
                 Command::Cancel => bridge.cancel("user_cancel"),
                 Command::Shutdown => {
                     bridge.shutdown();
@@ -686,7 +686,7 @@ mod tests {
         );
         assert!(matches!(
             classify(true, r#"{"type":"stop","utteranceSeq":1}"#),
-            Ok(Classified::Stop)
+            Ok(Classified::Stop(1))
         ));
         assert!(matches!(
             classify(true, r#"{"type":"cancel","reason":"user_cancel"}"#),

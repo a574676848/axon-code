@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use axon_voice_host::supervisor::{HostClient, SupervisorError};
 use axon_voice_protocol::{
-    Control, CueStatus, ErrorMsg, Final, Frame, Heartbeat, Partial, SessionEnd, SessionStart, Warm,
-    Warmup, encode_audio_in,
+    Control, CueStatus, ErrorMsg, Final, Frame, Heartbeat, Partial, SessionEnd, SessionStart,
+    UtteranceEnd, Warm, Warmup, encode_audio_in,
 };
 
 /// 宿主传输层错误。
@@ -319,6 +319,18 @@ impl<T: HostTransport> VoiceBridge<T> {
         self.send_control(&Control::Cancel(axon_voice_protocol::Cancel {
             reason: reason.to_owned(),
         }))
+    }
+
+    /// 结束当前句，会话保持。
+    ///
+    /// # Errors
+    ///
+    /// 没有会话或传输失败。
+    pub fn end_utterance(&mut self, utterance_seq: u32) -> Result<(), BridgeError> {
+        if self.state != BridgeState::InSession {
+            return Err(BridgeError::NoSession);
+        }
+        self.send_control(&Control::UtteranceEnd(UtteranceEnd { utterance_seq }))
     }
 
     /// 结束会话。

@@ -1,8 +1,10 @@
 //! 模型目录解析与文件校验。
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use super::manifest::{Manifest, ManifestError, ModelFamily};
 use super::sha256::{self, Sha256};
@@ -171,7 +173,7 @@ impl ModelStore {
                 reason: "模型版本高于宿主支持范围，请升级 Axon".to_owned(),
             };
         }
-        match verify(&dir, &manifest) {
+        match verify(&dir, &manifest, &self.root, &sha256::hex_digest(&bytes)) {
             Ok(()) => ModelResolution::Ready {
                 manifest,
                 dir,
@@ -243,7 +245,14 @@ fn major_version(version: &str) -> u64 {
         .unwrap_or(0)
 }
 
-fn verify(dir: &Path, manifest: &Manifest) -> Result<(), VerifyError> {
+fn verify(
+    dir: &Path,
+    manifest: &Manifest,
+    root: &Path,
+    manifest_sha256: &str,
+) -> Result<(), VerifyError> {
+    let stamps = load_stamps(root, manifest_sha256);
+    let mut refreshed: HashMap<String, Stamp> = HashMap::new();
     for entry in &manifest.files {
         let path = dir.join(&entry.path);
         let metadata = match std::fs::metadata(&path) {
@@ -264,6 +273,17 @@ fn verify(dir: &Path, manifest: &Manifest) -> Result<(), VerifyError> {
         if metadata.len() != entry.bytes {
             return Err(VerifyError::Unusable(format!("{} 字节数不符", entry.path)));
         }
+        let stamp = Stamp {
+            bytes: metadata.len(),
+            modified_ms: modified_ms(&metadata),
+        };
+        // 大小与修改时刻都与上次成功校验一致时，跳过重复哈希：整份模型约 0.5 GB，
+        // 每次会话都全量重算会把 `start → warm` 顶出 10 s。任何字节改动都会改变
+        // 修改时刻，从而回到全量哈希；这不是完整性保证的替代，而是同一摘要下的缓存。
+        if stamps.get(&entry.path) == Some(&stamp) {
+            refreshed.insert(entry.path.clone(), stamp);
+            continue;
+        }
         let mut file = File::open(&path)
             .map_err(|error| VerifyError::Unusable(format!("{} 不可读：{error}", entry.path)))?;
         let mut hasher = Sha256::new();
@@ -280,8 +300,54 @@ fn verify(dir: &Path, manifest: &Manifest) -> Result<(), VerifyError> {
         if hasher.finish_hex() != entry.sha256.to_lowercase() {
             return Err(VerifyError::Unusable(format!("{} 摘要不符", entry.path)));
         }
+        refreshed.insert(entry.path.clone(), stamp);
     }
+    save_stamps(root, manifest_sha256, &refreshed);
     Ok(())
+}
+
+/// 单个文件的校验印章：字节数与修改时刻。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct Stamp {
+    /// 文件字节数。
+    bytes: u64,
+    /// 修改时刻（UNIX 毫秒）。
+    modified_ms: u64,
+}
+
+/// 校验印章的落盘位置：模型根下的 `.verify/<清单摘要>.json`。
+fn stamp_path(root: &Path, manifest_sha256: &str) -> PathBuf {
+    root.join(".verify").join(format!("{manifest_sha256}.json"))
+}
+
+fn load_stamps(root: &Path, manifest_sha256: &str) -> HashMap<String, Stamp> {
+    let Ok(bytes) = std::fs::read(stamp_path(root, manifest_sha256)) else {
+        return HashMap::new();
+    };
+    serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
+fn save_stamps(root: &Path, manifest_sha256: &str, stamps: &HashMap<String, Stamp>) {
+    let path = stamp_path(root, manifest_sha256);
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    if let Ok(bytes) = serde_json::to_vec(stamps) {
+        let _ = std::fs::write(&path, bytes);
+    }
+}
+
+fn modified_ms(metadata: &std::fs::Metadata) -> u64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |duration| {
+            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+        })
 }
 
 #[cfg(test)]
@@ -358,6 +424,30 @@ mod tests {
                 assert_eq!(manifest_sha256.len(), 64);
             }
             other => panic!("期望 Ready，得到 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verification_stamp_is_written_and_invalidated_by_mtime() {
+        let temp = TempRoot::new("stamp");
+        install(&temp, "demo", "1.0.0");
+        let store = ModelStore::new(&temp.0);
+        assert!(matches!(
+            store.resolve(ModelFamily::Asr, "demo"),
+            ModelResolution::Ready { .. }
+        ));
+        let stamps = std::fs::read_dir(temp.0.join(".verify"))
+            .expect("应写下校验印章")
+            .count();
+        assert_eq!(stamps, 1, "每个清单摘要一份印章");
+
+        // 内容变化但字节数不变：修改时刻必然变化，从而回到全量哈希并发现摘要不符。
+        temp.write("asr/demo/model.bin", b"DATA");
+        match store.resolve(ModelFamily::Asr, "demo") {
+            ModelResolution::Unusable { reason } => {
+                assert!(reason.contains("摘要不符"), "{reason}");
+            }
+            other => panic!("期望摘要不符，得到 {other:?}"),
         }
     }
 

@@ -20,6 +20,8 @@ pub enum Control {
     SessionStart(SessionStart),
     /// 结束会话。
     SessionEnd(SessionEnd),
+    /// 结束当前句，会话保持。
+    UtteranceEnd(UtteranceEnd),
     /// 中间识别结果。
     Partial(Partial),
     /// 定稿。
@@ -53,6 +55,7 @@ impl Control {
             Self::Warm(_) => type_name::WARM,
             Self::SessionStart(_) => type_name::SESSION_START,
             Self::SessionEnd(_) => type_name::SESSION_END,
+            Self::UtteranceEnd(_) => type_name::UTTERANCE_END,
             Self::Partial(_) => type_name::PARTIAL,
             Self::Final(_) => type_name::FINAL,
             Self::Speak(_) => type_name::SPEAK,
@@ -166,6 +169,14 @@ pub struct SessionEnd {
     pub session_id: String,
     /// 结束原因。
     pub reason: String,
+}
+
+/// `utteranceEnd` 消息。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UtteranceEnd {
+    /// 句序号，与随后 `final` 的 `utteranceSeq` 一致。
+    pub utterance_seq: u32,
 }
 
 /// `partial` 消息。
@@ -389,6 +400,7 @@ impl Control {
             }
             Self::Hello(_)
             | Self::Ready(_)
+            | Self::UtteranceEnd(_)
             | Self::CueStatus(_)
             | Self::Error(_)
             | Self::Close
@@ -415,6 +427,9 @@ fn encode_payload(control: &Control) -> Result<Vec<u8>, FrameError> {
             serde_json::to_value(message).map_err(FrameError::Serialize)?
         }
         Control::SessionEnd(message) => {
+            serde_json::to_value(message).map_err(FrameError::Serialize)?
+        }
+        Control::UtteranceEnd(message) => {
             serde_json::to_value(message).map_err(FrameError::Serialize)?
         }
         Control::Partial(message) => {
@@ -466,6 +481,7 @@ fn decode_payload(payload: &[u8]) -> Result<Control, FrameError> {
         type_name::WARM => Control::Warm(from_value(value)?),
         type_name::SESSION_START => Control::SessionStart(from_value(value)?),
         type_name::SESSION_END => Control::SessionEnd(from_value(value)?),
+        type_name::UTTERANCE_END => Control::UtteranceEnd(from_value(value)?),
         type_name::PARTIAL => Control::Partial(from_value(value)?),
         type_name::FINAL => Control::Final(from_value(value)?),
         type_name::SPEAK => Control::Speak(from_value(value)?),

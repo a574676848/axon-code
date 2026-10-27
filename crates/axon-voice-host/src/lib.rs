@@ -8,7 +8,9 @@
 pub mod audio;
 pub mod inference;
 pub mod model;
+pub mod streaming;
 pub mod supervisor;
+pub mod ws;
 
 /// 构建号：由 `build.rs` 注入（环境变量或 git 短提交），本地无 git 时为 `dev`。
 pub const BUILD_COMMIT: &str = env!("AXON_VOICE_BUILD_COMMIT");
