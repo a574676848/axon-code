@@ -297,3 +297,47 @@ fn provider_child_request_inherits_parent_runtime_context() {
     assert!(child_request.cancel_token.unwrap().is_cancelled());
     let _ = fs::remove_dir_all(root);
 }
+
+/// G5：默认子代理（不 fork）从空历史开始，看不到父对话，且工具面过滤委派与控制类工具。
+#[test]
+fn default_child_starts_with_empty_history_and_filtered_tools() {
+    let config_path = temp_config_path("empty-history");
+    let executor = ProviderRunSubagentExecutor::new(fixture_environment(config_path.clone()));
+    let mut input = fixture_execution_input("/root/default-child");
+    input.message = "只做被委托的检索".to_owned();
+
+    let child_request = executor
+        .child_request(&input, None)
+        .expect("子代理应复用普通 coding 子请求");
+
+    let messages = &child_request.model_payload.messages;
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.content.contains("父上下文")),
+        "默认子代理不得继承父对话历史"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.role == "user" && message.content == "只做被委托的检索"),
+        "单元任务必须以 user 消息出现在子代理历史里"
+    );
+    for hidden in [
+        "builtin.delegate_to_fast",
+        "builtin.send_message",
+        "builtin.list_agents",
+        "builtin.ask_user_question",
+        "builtin.update_plan",
+    ] {
+        assert!(
+            !child_request
+                .model_payload
+                .model_tools
+                .iter()
+                .any(|tool| tool.qualified_name == hidden),
+            "子代理工具面必须过滤 {hidden}"
+        );
+    }
+    let _ = fs::remove_dir_all(config_path.parent().unwrap());
+}
