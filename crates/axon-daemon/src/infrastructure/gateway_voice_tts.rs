@@ -338,6 +338,119 @@ fn message_for_tts(error: &str) -> &'static str {
     }
 }
 
+/// `GET /api/v1/voice/status`：运行时可观测面。
+pub(super) async fn voice_status(
+    State(state): State<Arc<GatewayHttpState>>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response {
+    if !state.context.authorize_request(
+        bearer(&headers),
+        query_token(
+            uri.path_and_query()
+                .map(|value| value.as_str())
+                .unwrap_or("/"),
+        ),
+    ) {
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            serde_json::json!({"error":"unauthorized"}),
+        );
+    }
+    let runtime = model_root();
+    let available = Inference::discover(&runtime).is_some();
+    json_response(
+        StatusCode::OK,
+        serde_json::json!({
+            "runtimeAvailable": available,
+            "defaultPreset": presets::default_preset().id,
+            "presets": presets::PRESETS.len(),
+            "idleTimeoutSec": 30,
+            "sessionTimeoutSec": 120,
+            "warmupTimeoutSec": 45,
+        }),
+    )
+}
+
+/// `POST /api/v1/voice/preview`：用指定音色合成一句试听。
+pub(super) async fn voice_preview(
+    State(state): State<Arc<GatewayHttpState>>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.context.authorize_request(
+        bearer(&headers),
+        query_token(
+            uri.path_and_query()
+                .map(|value| value.as_str())
+                .unwrap_or("/"),
+        ),
+    ) {
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            serde_json::json!({"error":"unauthorized"}),
+        );
+    }
+    let value: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => {
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                serde_json::json!({"error":"invalid_json"}),
+            );
+        }
+    };
+    let persona = value.get("persona").and_then(parse_persona_input);
+    let requested = value
+        .get("presetId")
+        .and_then(|value| value.as_str())
+        .filter(|id| !id.is_empty())
+        .and_then(presets::resolve);
+    let hour = chrono::Local::now().hour() as u8;
+    let planned = voice_plan(persona, requested, hour);
+    let profile = planned.profile;
+    let outcome = tokio::time::timeout(
+        PREVIEW_TIMEOUT,
+        tokio::task::spawn_blocking(move || -> Result<Vec<u8>, &'static str> {
+            let root = model_root();
+            let runtime = Inference::discover(&root).ok_or("voice_unavailable")?;
+            let mut samples = runtime
+                .synthesize_with("你好，这是当前音色的试听。", profile.speaker, profile.rate)
+                .map_err(|_| "tts_failed")?;
+            apply_gain(&mut samples, profile.energy_db);
+            let samples = shift_pitch(&samples, profile.pitch_semitones);
+            Ok(encode_wav(&samples))
+        }),
+    )
+    .await;
+    let outcome = match outcome {
+        Ok(result) => result,
+        Err(_) => {
+            return json_response(
+                StatusCode::GATEWAY_TIMEOUT,
+                serde_json::json!({"error":"preview_timeout"}),
+            );
+        }
+    };
+    match outcome {
+        Ok(Ok(bytes)) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "audio/wav")
+            .header("x-voice-preset", planned.preset.id)
+            .body(Body::from(bytes))
+            .unwrap_or_else(|_| Response::new(Body::empty())),
+        Ok(Err(error)) => json_response(
+            StatusCode::CONFLICT,
+            serde_json::json!({ "error": error, "message": message_for_tts(error) }),
+        ),
+        Err(_) => json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({"error":"internal"}),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,117 +566,5 @@ mod tests {
         );
         let request = parse_tts_body(&body).expect("合法请求");
         assert!(request.persona.is_none(), "越界温度不应被当成合法人格");
-    }
-}
-/// `GET /api/v1/voice/status`：运行时可观测面。
-pub(super) async fn voice_status(
-    State(state): State<Arc<GatewayHttpState>>,
-    headers: HeaderMap,
-    uri: Uri,
-) -> Response {
-    if !state.context.authorize_request(
-        bearer(&headers),
-        query_token(
-            uri.path_and_query()
-                .map(|value| value.as_str())
-                .unwrap_or("/"),
-        ),
-    ) {
-        return json_response(
-            StatusCode::UNAUTHORIZED,
-            serde_json::json!({"error":"unauthorized"}),
-        );
-    }
-    let runtime = model_root();
-    let available = Inference::discover(&runtime).is_some();
-    json_response(
-        StatusCode::OK,
-        serde_json::json!({
-            "runtimeAvailable": available,
-            "defaultPreset": presets::default_preset().id,
-            "presets": presets::PRESETS.len(),
-            "idleTimeoutSec": 30,
-            "sessionTimeoutSec": 120,
-            "warmupTimeoutSec": 45,
-        }),
-    )
-}
-
-/// `POST /api/v1/voice/preview`：用指定音色合成一句试听。
-pub(super) async fn voice_preview(
-    State(state): State<Arc<GatewayHttpState>>,
-    headers: HeaderMap,
-    uri: Uri,
-    body: Bytes,
-) -> Response {
-    if !state.context.authorize_request(
-        bearer(&headers),
-        query_token(
-            uri.path_and_query()
-                .map(|value| value.as_str())
-                .unwrap_or("/"),
-        ),
-    ) {
-        return json_response(
-            StatusCode::UNAUTHORIZED,
-            serde_json::json!({"error":"unauthorized"}),
-        );
-    }
-    let value: serde_json::Value = match serde_json::from_slice(&body) {
-        Ok(value) => value,
-        Err(_) => {
-            return json_response(
-                StatusCode::BAD_REQUEST,
-                serde_json::json!({"error":"invalid_json"}),
-            );
-        }
-    };
-    let persona = value.get("persona").and_then(parse_persona_input);
-    let requested = value
-        .get("presetId")
-        .and_then(|value| value.as_str())
-        .filter(|id| !id.is_empty())
-        .and_then(presets::resolve);
-    let hour = chrono::Local::now().hour() as u8;
-    let planned = voice_plan(persona, requested, hour);
-    let profile = planned.profile;
-    let outcome = tokio::time::timeout(
-        PREVIEW_TIMEOUT,
-        tokio::task::spawn_blocking(move || -> Result<Vec<u8>, &'static str> {
-            let root = model_root();
-            let runtime = Inference::discover(&root).ok_or("voice_unavailable")?;
-            let mut samples = runtime
-                .synthesize_with("你好，这是当前音色的试听。", profile.speaker, profile.rate)
-                .map_err(|_| "tts_failed")?;
-            apply_gain(&mut samples, profile.energy_db);
-            let samples = shift_pitch(&samples, profile.pitch_semitones);
-            Ok(encode_wav(&samples))
-        }),
-    )
-    .await;
-    let outcome = match outcome {
-        Ok(result) => result,
-        Err(_) => {
-            return json_response(
-                StatusCode::GATEWAY_TIMEOUT,
-                serde_json::json!({"error":"preview_timeout"}),
-            );
-        }
-    };
-    match outcome {
-        Ok(Ok(bytes)) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "audio/wav")
-            .header("x-voice-preset", planned.preset.id)
-            .body(Body::from(bytes))
-            .unwrap_or_else(|_| Response::new(Body::empty())),
-        Ok(Err(error)) => json_response(
-            StatusCode::CONFLICT,
-            serde_json::json!({ "error": error, "message": message_for_tts(error) }),
-        ),
-        Err(_) => json_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            serde_json::json!({"error":"internal"}),
-        ),
     }
 }
