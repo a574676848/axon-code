@@ -186,6 +186,8 @@ pub struct Final {
     pub utterance_seq: u32,
     /// 文本。
     pub text: String,
+    /// 起始时刻。
+    pub start_ms: u64,
     /// 端点判定时刻。
     pub end_ms: u64,
     /// 定稿产出时刻。
@@ -288,6 +290,121 @@ pub struct ErrorMsg {
     pub detail: Option<ErrorDetail>,
 }
 
+impl Control {
+    /// 字段取值与长度校验；编解码两侧共用。
+    ///
+    /// # Errors
+    ///
+    /// 越界或取值集不符时返回 [`FrameError::InvalidValue`]。
+    pub fn validate(&self) -> Result<(), FrameError> {
+        const PARTIAL_MAX: usize = 4 * 1024;
+        const FINAL_MAX: usize = 16 * 1024;
+        const CUE_MAX_CHARS: usize = 24;
+        const SESSION_ID_MAX: usize = 64;
+        match self {
+            Self::SessionStart(message) => {
+                if message.session_id.is_empty() || message.session_id.len() > SESSION_ID_MAX {
+                    return Err(invalid("sessionId"));
+                }
+                if message.sample_rate != 16_000 {
+                    return Err(invalid("sampleRate"));
+                }
+                if !matches!(message.mode.as_str(), "push_to_talk" | "full_duplex") {
+                    return Err(invalid("mode"));
+                }
+                if !matches!(message.lang.as_str(), "zh" | "en" | "auto") {
+                    return Err(invalid("lang"));
+                }
+                if message.hot_words.len() > 200
+                    || message
+                        .hot_words
+                        .iter()
+                        .any(|word| word.chars().count() > 64)
+                {
+                    return Err(invalid("hotWords"));
+                }
+            }
+            Self::SessionEnd(message) => {
+                if !matches!(message.reason.as_str(), "client_close" | "idle" | "error") {
+                    return Err(invalid("reason"));
+                }
+            }
+            Self::Warmup(message) => {
+                if !matches!(message.family.as_str(), "vad" | "asr" | "tts" | "cue") {
+                    return Err(invalid("family"));
+                }
+                if !is_sha256_hex(&message.manifest_sha256) {
+                    return Err(invalid("manifestSha256"));
+                }
+            }
+            Self::Warm(message) => {
+                if !matches!(message.family.as_str(), "vad" | "asr" | "tts" | "cue") {
+                    return Err(invalid("family"));
+                }
+                if !message.rtf_p50.is_finite() || message.rtf_p50 < 0.0 {
+                    return Err(invalid("rtfP50"));
+                }
+            }
+            Self::Partial(message) => {
+                if message.text.len() > PARTIAL_MAX {
+                    return Err(invalid("text"));
+                }
+            }
+            Self::Final(message) => {
+                if message.text.len() > FINAL_MAX {
+                    return Err(invalid("text"));
+                }
+                if message.end_ms < message.start_ms || message.finalize_ms < message.end_ms {
+                    return Err(invalid("timestamps"));
+                }
+            }
+            Self::Speak(message) => {
+                if message.text.len() > PARTIAL_MAX {
+                    return Err(invalid("text"));
+                }
+            }
+            Self::CueSpeak(message) => {
+                if message.text.chars().count() > CUE_MAX_CHARS {
+                    return Err(invalid("text"));
+                }
+                if !matches!(
+                    message.kind.as_str(),
+                    "ack" | "thinking" | "interrupted_ack" | "reunion" | "done" | "error_ack"
+                ) {
+                    return Err(invalid("kind"));
+                }
+            }
+            Self::Cancel(message) => {
+                if !matches!(
+                    message.reason.as_str(),
+                    "barge" | "user_cancel" | "turn_end"
+                ) {
+                    return Err(invalid("reason"));
+                }
+            }
+            Self::Heartbeat(message) => {
+                if !matches!(message.model_state.as_str(), "cold" | "warming" | "warm") {
+                    return Err(invalid("modelState"));
+                }
+            }
+            Self::Hello(_)
+            | Self::Ready(_)
+            | Self::CueStatus(_)
+            | Self::Error(_)
+            | Self::Close
+            | Self::Closed => {}
+        }
+        Ok(())
+    }
+}
+
+fn invalid(field: &'static str) -> FrameError {
+    FrameError::InvalidValue { field }
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
 fn encode_payload(control: &Control) -> Result<Vec<u8>, FrameError> {
     let mut value = match control {
         Control::Hello(message) => serde_json::to_value(message).map_err(FrameError::Serialize)?,
@@ -368,6 +485,7 @@ fn require_empty(value: serde_json::Value, control: Control) -> Result<Control, 
     if let Some(field) = map.keys().next() {
         return Err(FrameError::UnknownField(field.clone()));
     }
+    control.validate()?;
     Ok(control)
 }
 
@@ -423,6 +541,32 @@ mod tests {
     }
 
     #[test]
+    fn validation_rejects_bad_timestamps_and_text() {
+        let bad_order = Control::Final(Final {
+            utterance_seq: 1,
+            text: "好".to_owned(),
+            start_ms: 20,
+            end_ms: 10,
+            finalize_ms: 30,
+        });
+        assert!(matches!(
+            bad_order.validate(),
+            Err(FrameError::InvalidValue {
+                field: "timestamps"
+            })
+        ));
+
+        let huge = Control::Partial(Partial {
+            utterance_seq: 1,
+            text: "好".repeat(4 * 1024 + 1),
+        });
+        assert!(matches!(
+            huge.validate(),
+            Err(FrameError::InvalidValue { field: "text" })
+        ));
+    }
+
+    #[test]
     fn fieldless_messages_reject_unknown_fields() {
         assert!(matches!(
             Control::decode(br#"{"type":"close","extra":1}"#),
@@ -470,6 +614,7 @@ mod tests {
             Control::Final(Final {
                 utterance_seq: 1,
                 text: "嗯".to_owned(),
+                start_ms: 5,
                 end_ms: 10,
                 finalize_ms: 20,
             }),

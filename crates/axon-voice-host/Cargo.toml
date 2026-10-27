@@ -8,9 +8,17 @@ repository.workspace = true
 [dependencies]
 axon-voice-protocol = { path = "../axon-voice-protocol" }
 
+[features]
+fake-host = []
+
 [[bin]]
 name = "axon-voice-host"
 path = "src/main.rs"
+
+[[bin]]
+name = "axon-voice-fake-host"
+path = "src/bin/fake_host.rs"
+required-features = ["fake-host"]
 
 [lib]
 path = "src/lib.rs"

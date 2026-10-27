@@ -56,6 +56,8 @@ pub struct HostConfig {
     pub heartbeat_timeout: Duration,
     /// 自动重启上限。
     pub max_restart: u32,
+    /// 追加给子进程的环境变量（测试与诊断用）。
+    pub env: Vec<(String, String)>,
 }
 
 impl HostConfig {
@@ -68,6 +70,7 @@ impl HostConfig {
             handshake_timeout: Duration::from_secs(5),
             heartbeat_timeout: Duration::from_secs(3),
             max_restart: 3,
+            env: Vec::new(),
         }
     }
 }
@@ -88,7 +91,17 @@ impl HostClient {
     ///
     /// 启动失败、握手超时、版本不符或进程提前退出。
     pub fn spawn(config: &HostConfig) -> Result<Self, SupervisorError> {
-        let mut child = Command::new(&config.exe)
+        let mut command = Command::new(&config.exe);
+        command.env_clear();
+        for key in ["PATH", "SYSTEMROOT", "TEMP", "TMP"] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        for (key, value) in &config.env {
+            command.env(key, value);
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -204,10 +217,13 @@ impl HostClient {
     ///
     /// 写失败或等待失败。
     pub fn close(mut self) -> Result<ExitStatus, SupervisorError> {
-        self.send(&Control::Close)?;
-        if let Ok(frame) = self.recv_timeout(Duration::from_secs(2))
-            && !matches!(frame, Frame::Control(Control::Closed))
-        {
+        let sent = self.send(&Control::Close).is_ok();
+        let acknowledged = sent
+            && matches!(
+                self.recv_timeout(Duration::from_secs(2)),
+                Ok(Frame::Control(Control::Closed))
+            );
+        if !acknowledged {
             let _ = self.child.kill();
         }
         drop(self.stdin);
@@ -223,6 +239,17 @@ impl HostClient {
         self.child.kill().map_err(SupervisorError::Spawn)?;
         self.child.wait().map_err(SupervisorError::Spawn)
     }
+}
+
+/// 监督动作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SupervisorAction {
+    /// 继续运行。
+    Continue,
+    /// 需要重启。
+    Restart,
+    /// 超过上限，放弃。
+    GiveUp,
 }
 
 /// 重启计数与策略。
@@ -266,6 +293,27 @@ impl Supervisor {
         HostClient::spawn(&self.config)
     }
 
+    /// 心跳判定：超时则按重启上限给出动作。
+    pub fn tick(&mut self, heartbeat_ok: bool) -> SupervisorAction {
+        if heartbeat_ok {
+            return SupervisorAction::Continue;
+        }
+        if self.restart_allowed() {
+            SupervisorAction::Restart
+        } else {
+            SupervisorAction::GiveUp
+        }
+    }
+
+    /// 进程退出后的动作。
+    pub fn after_exit(&mut self) -> SupervisorAction {
+        if self.restart_allowed() {
+            SupervisorAction::Restart
+        } else {
+            SupervisorAction::GiveUp
+        }
+    }
+
     /// 配置引用。
     #[must_use]
     pub fn config(&self) -> &HostConfig {
@@ -290,7 +338,7 @@ fn hello(build_commit: &str) -> Control {
 
 #[cfg(test)]
 mod tests {
-    use super::{HostConfig, Supervisor};
+    use super::{HostConfig, Supervisor, SupervisorAction};
 
     #[test]
     fn restart_limit_is_enforced() {
@@ -301,6 +349,17 @@ mod tests {
         assert!(supervisor.restart_allowed());
         assert!(!supervisor.restart_allowed());
         assert_eq!(supervisor.restarts(), 3);
+    }
+
+    #[test]
+    fn tick_reports_restart_then_give_up() {
+        let mut supervisor = Supervisor::new(HostConfig::new("missing", "dev"));
+        assert_eq!(supervisor.tick(true), SupervisorAction::Continue);
+        assert_eq!(supervisor.tick(false), SupervisorAction::Restart);
+        assert_eq!(supervisor.tick(false), SupervisorAction::Restart);
+        assert_eq!(supervisor.tick(false), SupervisorAction::Restart);
+        assert_eq!(supervisor.tick(false), SupervisorAction::GiveUp);
+        assert_eq!(supervisor.after_exit(), SupervisorAction::GiveUp);
     }
 
     #[test]

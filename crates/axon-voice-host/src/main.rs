@@ -18,7 +18,7 @@ use axon_voice_protocol::{
 /// 心跳间隔。
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 /// 回执队列容量；满即退出，避免控制被音频饿死。
-const OUTBOX_CAPACITY: usize = 64;
+const OUTBOX_CAPACITY: usize = 1;
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
@@ -244,6 +244,7 @@ fn map_frame_error(error: &FrameError) -> u8 {
         | FrameError::InvalidJson(_)
         | FrameError::UnknownType(_)
         | FrameError::UnknownField(_)
+        | FrameError::InvalidValue { .. }
         | FrameError::Serialize(_) => exit_code::SEQUENCE as u8,
     }
 }

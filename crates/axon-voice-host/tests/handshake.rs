@@ -100,6 +100,23 @@ fn handshake_session_and_close() {
         }))
         .expect("写 sessionEnd");
 
+    // 第二个会话验证多会话复用。
+    client
+        .send(&Control::SessionStart(SessionStart {
+            session_id: "s-2".to_owned(),
+            mode: "push_to_talk".to_owned(),
+            lang: "en".to_owned(),
+            hot_words: vec!["lane".to_owned()],
+            sample_rate: 16_000,
+        }))
+        .expect("写第二个 sessionStart");
+    client
+        .send(&Control::SessionEnd(axon_voice_protocol::SessionEnd {
+            session_id: "s-2".to_owned(),
+            reason: "idle".to_owned(),
+        }))
+        .expect("写第二个 sessionEnd");
+
     let status = client.close().expect("关闭应成功");
     assert_eq!(status.code(), Some(0));
 }

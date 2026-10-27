@@ -6,11 +6,8 @@
 
 pub mod supervisor;
 
-/// 构建号：优先取构建期注入的值，本地开发构建为 `dev`。
-pub const BUILD_COMMIT: &str = match option_env!("AXON_VOICE_BUILD_COMMIT") {
-    Some(commit) => commit,
-    None => "dev",
-};
+/// 构建号：由 `build.rs` 注入（环境变量或 git 短提交），本地无 git 时为 `dev`。
+pub const BUILD_COMMIT: &str = env!("AXON_VOICE_BUILD_COMMIT");
 
 /// 退出码。
 pub mod exit_code {
