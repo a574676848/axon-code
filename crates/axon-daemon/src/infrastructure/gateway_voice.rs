@@ -28,6 +28,10 @@ const WARMUP_TIMEOUT: Duration = Duration::from_secs(45);
 const DEFAULT_ASR_MODEL: &str = "sherpa-streaming-zh-en";
 /// 协议版本。
 const PROTOCOL_VERSION: u8 = 1;
+/// 连接后 30 s 没有有效帧即关闭。
+const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+/// 单次会话最长 120 s。
+const SESSION_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// 取消原因，客户端只允许这两个。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,12 +191,23 @@ struct WorkerConfig {
 async fn session(mut socket: WebSocket) {
     send_json(&mut socket, ready_json()).await;
     let mut started = false;
+    let session_started = std::time::Instant::now();
     let mut worker: Option<std_mpsc::Sender<Command>> = None;
     let (out_tx, mut out_rx) = tokio_mpsc::unbounded_channel::<String>();
 
     loop {
+        if started && session_started.elapsed() >= SESSION_TIMEOUT {
+            send_json(&mut socket, error_json("session_idle", "listening")).await;
+            close(&mut socket).await;
+            return;
+        }
         tokio::select! {
-            message = socket.recv() => {
+            message = tokio::time::timeout(IDLE_TIMEOUT, socket.recv()) => {
+                let Ok(message) = message else {
+                    send_json(&mut socket, error_json("session_idle", "connect")).await;
+                    close(&mut socket).await;
+                    return;
+                };
                 let Some(Ok(message)) = message else { break };
                 match message {
                     Message::Text(text) => match classify(started, &text) {
