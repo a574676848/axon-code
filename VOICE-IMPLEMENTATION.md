@@ -11,7 +11,7 @@
 | Stage 2 | WP-05 协议与宿主骨架（`axon-voice-protocol`、`axon-voice-host`） | 完成 | `833ccd232` |
 | Stage 3 | WP-02 清单与校验 + WAV 输入 | 完成 | `40e3a6cab` |
 | Stage 4 | WP-06 桥接内核（`axon-voice-bridge`） | 完成 | `90fcc459c` |
-| Stage 5 | `/api/v1/voice` WS 控制面（握手 + 预热错误） | 实现完成 | `96f9307e6`、`4ce38d629`、`530d07411` |
+| Stage 5 | `/api/v1/voice` WS 控制面（握手 + 预热错误） | 完成 | `96f9307e6`、`4ce38d629`、`530d07411` |\n| Stage 6 | WS 端到端测试 + 安装链纳入宿主 | 实现完成，审计中 | `88ba36410` |
 
 ## Stage 4 范围声明
 
@@ -46,4 +46,13 @@ WS 端到端测试（真实 socket + 客户端）、桌面端接入。原因：�
 `model_unusable`，先打通控制面与错误面，避免用假转写撑门面。'
 仍待 Stage 6：音频二进制帧上行、partial/final/state/playbackDrained、WS 端到端测试、
 `axon-voice-host` 纳入安装链、桌面端接入、ASR 运行时。
+''
+
+## Stage 6 进展
+
+- 真 socket 端到端：错 token 拒绝升级、`ready` 首帧、`start` 返回合同错误帧（198 项 daemon 单测含此用例）。
+- 会话状态：`stop`/`cancel` 必须先 `start`；`client_close` 主动收线；音频帧必须是 `0x01` 开头且已 `start`。
+- 安装链：`install-from-source.ps1` 与 `install-from-source.sh` 均构建并安装 `axon-voice-host`。
+
+未完成：音频转写事件（依赖 ASR 运行时）、桌面端采集与播放、`playbackDrained` 等播放态协议。
 '

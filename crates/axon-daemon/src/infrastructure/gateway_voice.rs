@@ -125,7 +125,7 @@ async fn session(mut socket: WebSocket) {
                         return;
                     }
                     started = true;
-                    let error = warmup_error(&client_state());
+                    let error = warmup_error(client_state()).await;
                     send_json(&mut socket, error).await;
                 }
                 Ok(ClientFrame::Stop { .. }) => {
@@ -180,7 +180,7 @@ fn client_state() -> ClientState {
     }
 }
 
-fn warmup_error(state: &ClientState) -> String {
+async fn warmup_error(state: ClientState) -> String {
     if !state.model_root.is_dir() {
         return error_json("model_missing", "arming");
     }
