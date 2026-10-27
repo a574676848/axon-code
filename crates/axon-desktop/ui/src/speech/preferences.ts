@@ -9,6 +9,7 @@ import { VOICE_STORAGE_KEYS } from './keys';
  *
  * 两层开关：全局开关决定新回复默认是否朗读；会话开关按「工作区 + 会话」单独存。
  * 会话没有显式设置时继承全局值，点过就只作用于这一条会话。
+ * 音色预设另占一个键：空串表示跟随人格，合成时由后端按人格融合选音色。
  */
 
 /** 存取后端：测试注入内存实现，运行时是 localStorage。 */
@@ -25,8 +26,12 @@ export interface VoicePreferences {
   laneAutoRead(laneKey: string): boolean | null;
   /** 这一条会话此刻是否自动朗读；laneKey 为空时取全局值。 */
   effectiveAutoRead(laneKey: string | null): boolean;
+  /** 音色预设 id；没存过或存的是空串时为 ''，表示跟随人格。 */
+  presetId(): string;
   setGlobalAutoRead(next: boolean): void;
   setLaneAutoRead(laneKey: string, next: boolean): void;
+  /** 写入音色预设；空串表示跟随人格。 */
+  setPresetId(next: string): void;
   subscribe(listener: () => void): () => void;
 }
 
@@ -50,10 +55,10 @@ export function createVoicePreferences(storage: PreferenceStorage | null): Voice
     }
   };
 
-  const write = (key: string, value: boolean): void => {
+  const write = (key: string, value: string): void => {
     if (storage === null) return;
     try {
-      storage.setItem(key, value ? 'true' : 'false');
+      storage.setItem(key, value);
     } catch {
       // 写失败只影响下次启动的记住状态，当前这一次照常生效。
     }
@@ -68,17 +73,24 @@ export function createVoicePreferences(storage: PreferenceStorage | null): Voice
   const laneAutoRead = (laneKey: string): boolean | null =>
     parseFlag(read(VOICE_STORAGE_KEYS.lane(laneKey)));
 
+  const presetId = (): string => read(VOICE_STORAGE_KEYS.preset) ?? '';
+
   return {
     globalAutoRead,
     laneAutoRead,
+    presetId,
     effectiveAutoRead: (laneKey) =>
       laneKey === null ? globalAutoRead() : (laneAutoRead(laneKey) ?? globalAutoRead()),
     setGlobalAutoRead: (next) => {
-      write(VOICE_STORAGE_KEYS.global, next);
+      write(VOICE_STORAGE_KEYS.global, next ? 'true' : 'false');
       notify();
     },
     setLaneAutoRead: (laneKey, next) => {
-      write(VOICE_STORAGE_KEYS.lane(laneKey), next);
+      write(VOICE_STORAGE_KEYS.lane(laneKey), next ? 'true' : 'false');
+      notify();
+    },
+    setPresetId: (next) => {
+      write(VOICE_STORAGE_KEYS.preset, next);
       notify();
     },
     subscribe: (listener) => {
@@ -90,14 +102,19 @@ export function createVoicePreferences(storage: PreferenceStorage | null): Voice
   };
 }
 
-/** 浏览器存储：拿不到时退化为内存默认值，界面照常可用。 */
-const browserStorage: PreferenceStorage | null =
-  typeof window === 'undefined'
-    ? null
-    : {
-        getItem: (key) => window.localStorage.getItem(key),
-        setItem: (key, value) => window.localStorage.setItem(key, value),
-      };
+/**
+ * 浏览器存储：调用时才去取 localStorage。
+ *
+ * 不在模块加载时判定一次：那会把「没有 window」的结论钉死在整个进程里，
+ * 而真正需要的只是每次读写时确认宿主还在。存取本身失败由上面两层兜住。
+ */
+const browserStorage: PreferenceStorage = {
+  getItem: (key) => (typeof window === 'undefined' ? null : window.localStorage.getItem(key)),
+  setItem: (key, value) => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(key, value);
+  },
+};
 
 /** 全应用共用的一份语音偏好。 */
 export const voicePreferences = createVoicePreferences(browserStorage);

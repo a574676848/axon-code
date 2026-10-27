@@ -13,7 +13,15 @@ export type { SpeechState, SpeechStatus, VoiceAudioPayload } from './controller'
 export { speakableScript } from './sanitize';
 export { voicePreferences } from './preferences';
 export { VOICE_STORAGE_KEYS } from './keys';
-export { useGlobalAutoRead, useLaneAutoRead, useSpeechState, useStopSpeechOnLaneChange } from './hooks';
+export { FOLLOW_PERSONA_ID, parseVoicePresets, voicePresetRows } from './presets';
+export type { VoicePreset, VoicePresetRow, VoicePresetsPayload } from './presets';
+export {
+  useGlobalAutoRead,
+  useLaneAutoRead,
+  useSpeechState,
+  useStopSpeechOnLaneChange,
+  useVoicePresetId,
+} from './hooks';
 
 /** 开始朗读一条正文；同一时刻只保留一条，新的会先停掉旧的。 */
 export const speak = speech.speak;

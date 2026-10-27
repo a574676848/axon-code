@@ -244,7 +244,7 @@ export const SystemSettings: React.FC = () => {
             label="语音播报"
             description={
               voiceSupported
-                ? '新回复完成后自动朗读，音色取语音运行时的默认音色；每个会话还能在标题栏单独关闭'
+                ? '新回复完成后自动朗读，音色取人设页里选中的那一档；每个会话还能在标题栏单独关闭'
                 : '当前窗口不支持音频播放，语音播报不可用'
             }
             control={

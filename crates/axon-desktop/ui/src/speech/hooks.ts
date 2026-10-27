@@ -33,6 +33,15 @@ export function useLaneAutoRead(laneKey: string | null): boolean {
   );
 }
 
+/** 当前音色预设 id；空串表示跟随人格。 */
+export function useVoicePresetId(): string {
+  return React.useSyncExternalStore(
+    voicePreferences.subscribe,
+    () => voicePreferences.presetId(),
+    () => '',
+  );
+}
+
 /**
  * 切换会话或离开主区域时停止朗读。
  *

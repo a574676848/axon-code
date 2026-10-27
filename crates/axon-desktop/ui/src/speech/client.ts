@@ -1,5 +1,6 @@
 import { call } from '../backend';
 import { MAX_SPEECH_CHARS, VoiceFailure, type VoiceAudioPayload } from './controller';
+import { voicePreferences } from './preferences';
 
 /*
  * 语音合成请求。
@@ -18,12 +19,13 @@ const SYNTHESIZE_COMMAND = 'voice_tts';
 /**
  * 当前音色预设。
  *
- * 音色选择分区还没有落到桌面端，因此这里固定为空，由网关使用默认音色
- * （冷静知性）。等设置里有了音色，只改这一处：不在这里拼 speaker 或语速，
- * 那些参数属于合成侧的预设，前端不伪造。
+ * 取自本地存储（`axon.voice.preset`）。空串表示跟随人格：这时返回 null，
+ * 由后端按人格融合选音色；选过预设则把 id 原样带上，说话人、语速与音高
+ * 都属于合成侧的预设表，前端不伪造。
  */
 export function currentPresetId(): string | null {
-  return null;
+  const presetId = voicePreferences.presetId();
+  return presetId.length === 0 ? null : presetId;
 }
 
 /** 从宿主回执里取第一个非空字符串字段，兼容驼峰与下划线两种写法。 */

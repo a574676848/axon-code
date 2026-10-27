@@ -62,6 +62,7 @@ import type {
   ThemeId,
 } from './types';
 import type { PersonaPortrait, PersonaSummary } from './personaTypes';
+import type { VoicePresetsPayload } from './speech/presets';
 
 /** 会话事件通道名，与 Rust 侧 `CONVERSATION_EVENT` 一致；车道流与会话流共用这一条。 */
 import type { ConversationStreamPayload, ConversationStreamEvent } from './conversation/wire';
@@ -574,6 +575,11 @@ export const desktopSetNotifications = (enabled: boolean): Promise<DesktopPrefer
 /** 切换界面主题。 */
 export const desktopSetTheme = (theme: ThemeId): Promise<DesktopPreferences> =>
   call('desktop_set_theme', { theme });
+
+// ------------------------------------------------------------ 语音
+
+/** 音色预设清单：可用性由网关按模型安装情况给出，前端不改写。 */
+export const voicePresets = (): Promise<VoicePresetsPayload> => call('voice_presets');
 
 const CRON_PAGE_SIZE = 20;
 export const cronList = (page = 1, pageSize = CRON_PAGE_SIZE, status = '', search = ''): Promise<CronListResult> =>

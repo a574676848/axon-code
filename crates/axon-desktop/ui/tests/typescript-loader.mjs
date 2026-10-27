@@ -20,7 +20,12 @@ registerHooks({
             return {
                 format: 'module', shortCircuit: true,
                 source: ts.transpileModule(source, {
-                    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ESNext },
+                    compilerOptions: {
+                        module: ts.ModuleKind.ESNext,
+                        target: ts.ScriptTarget.ESNext,
+                        // 界面组件以 .tsx 落地：这里按 React 17 的自动运行时转译 JSX，测试才能直接渲染组件。
+                        jsx: ts.JsxEmit.ReactJSX,
+                    },
                 }).outputText,
             };
         }

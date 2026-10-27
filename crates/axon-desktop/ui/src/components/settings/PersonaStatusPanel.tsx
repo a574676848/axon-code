@@ -4,12 +4,16 @@ import { IconButton } from '../ui/controls';
 import type { PersonaPortrait, PersonaRule, PersonaSummary } from '../../personaTypes';
 import * as ipc from '../../ipc';
 import { Banner, Chip, EmptyHint, ListRow, LoadingState, Panel, Text } from '../ui/surfaces';
+import { VoicePresetSettings } from './VoicePresetSettings';
 
 /*
  * 人设：只呈现单一事实源（SOUL.md 与已发布的习得风格）。
  *
  * 运行读数（状态版本、温度偏移、失败连击、转移日志、库体积）属于支撑数据，
  * 不在这块面板展示；这里只回答「她是谁、怎么说话、守什么规矩」。
+ *
+ * 唯一的例外是「音色」：它是本机偏好（localStorage 的 axon.voice.preset），
+ * 不写回 SOUL.md，因此紧贴表达基线单独成行并自带读写，不与人设状态数据混排。
  */
 
 const HUMOR_LABEL: Record<string, string> = {
@@ -202,6 +206,8 @@ export const PersonaStatusPanel: React.FC = () => {
               )}
             </div>
           </ListRow>
+
+          <VoicePresetSettings />
 
           <ListRow className="py-4 items-start">
             <div className="flex-1 min-w-0 space-y-1.5">
