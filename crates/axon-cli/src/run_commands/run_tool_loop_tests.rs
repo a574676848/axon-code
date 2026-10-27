@@ -10,10 +10,6 @@ use std::time::Instant;
 fn classify_tool_accepts_only_canonical_names() {
     assert_eq!(classify_tool("builtin.lsp"), ToolKind::Unsupported);
     assert_eq!(classify_tool("builtin.update_plan"), ToolKind::UpdatePlan);
-    assert_eq!(
-        classify_tool("builtin.work_contract"),
-        ToolKind::WorkContract
-    );
     assert_eq!(classify_tool("builtin_lsp"), ToolKind::Unsupported);
     assert_eq!(classify_tool("builtin.spawn_agent"), ToolKind::Subagent);
 }

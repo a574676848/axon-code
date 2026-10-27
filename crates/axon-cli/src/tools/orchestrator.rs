@@ -47,8 +47,7 @@ pub(crate) use orchestrator_time::now_ms;
 use orchestrator_builtin::{
     TokenBudgetMeasurementSource, TokenBudgetSnapshot, clear_token_budget_snapshot,
     execute_get_context_remaining, execute_memory_search, execute_memory_write,
-    execute_new_context, execute_search, execute_update_plan, execute_work_contract,
-    record_token_budget_snapshot,
+    execute_new_context, execute_search, execute_update_plan, record_token_budget_snapshot,
 };
 use orchestrator_notes_history::{execute_history_tool, execute_notes_tool};
 use orchestrator_subagent::execute_subagent_tool;
@@ -68,7 +67,6 @@ pub(crate) fn classify_tool(name: &str) -> ToolKind {
         "builtin.list_mcp_resources" => ToolKind::ListMcpResources,
         "builtin.read_mcp_resource" => ToolKind::ReadMcpResource,
         UPDATE_PLAN_TOOL_QUALIFIED_NAME => ToolKind::UpdatePlan,
-        "builtin.work_contract" => ToolKind::WorkContract,
         ASK_USER_QUESTION_TOOL_QUALIFIED_NAME | "ask_user_question" => ToolKind::AskUserQuestion,
         _ if GoalToolRuntime::is_goal_tool(name) => ToolKind::GoalTool,
         _ if SubagentToolRuntime::is_subagent_tool(name) => ToolKind::Subagent,
@@ -343,7 +341,6 @@ pub(crate) fn execute_tool_call_with_observer(
             )
         }
         ToolKind::UpdatePlan => execute_update_plan(tool_call),
-        ToolKind::WorkContract => execute_work_contract(tool_call, context),
         ToolKind::GoalTool => crate::tool_orchestrator_goal::execute_goal_tool(tool_call, context),
         ToolKind::Subagent => execute_subagent_tool(tool_call, context),
         ToolKind::Mcp => crate::tool_orchestrator_runtime_capabilities::execute_mcp(
@@ -577,9 +574,6 @@ mod tests {
 
         let invalid_call = ProviderToolCall::new("call-inv", "builtin.ask_user_question", "{}");
         let context = ToolOrchestratorContext {
-            work_contract: std::sync::Arc::new(std::sync::Mutex::new(
-                axon_agent_runtime::WorkContractRuntime::default(),
-            )),
             config_path: None,
             cwd: std::path::PathBuf::from("."),
             session_id: SessionId(1),

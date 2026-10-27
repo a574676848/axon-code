@@ -105,45 +105,6 @@ pub(super) fn execute_update_plan(tool_call: &ProviderToolCall) -> ToolReceipt {
     }
 }
 
-/// 执行开工合同工具（`work_contract`）；状态机按会话持有。
-pub(super) fn execute_work_contract(
-    tool_call: &ProviderToolCall,
-    context: &ToolOrchestratorContext,
-) -> ToolReceipt {
-    let value = tool_call.input.as_json().cloned().or_else(|| {
-        tool_call
-            .input
-            .as_text()
-            .and_then(|text| serde_json::from_str(text).ok())
-    });
-    let Some(value) = value else {
-        return failed_tool_input_receipt(tool_call, "work_contract 参数必须是 JSON 对象");
-    };
-    let mut runtime = context
-        .work_contract
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    match axon_agent_runtime::apply_work_contract(&mut runtime, &value) {
-        Ok(outcome) => {
-            let action = value
-                .get("action")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("unknown");
-            let state = outcome
-                .get("state")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("unknown");
-            completed_tool_receipt(
-                tool_call,
-                format!("开工合同 {action} 完成：state={state}"),
-                Some(outcome),
-                false,
-            )
-        }
-        Err(error) => failed_tool_receipt_from_axon_error(tool_call, error),
-    }
-}
-
 pub(super) fn execute_get_context_remaining(
     tool_call: &ProviderToolCall,
     context: &ToolOrchestratorContext,

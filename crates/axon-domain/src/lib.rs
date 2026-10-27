@@ -85,8 +85,6 @@ mod token_budget;
 mod tool;
 #[path = "model/user_question.rs"]
 mod user_question;
-#[path = "model/work_contract.rs"]
-mod work_contract;
 
 pub use activity::{ActivityQuery, ActivitySnapshot};
 pub use attachment::{
@@ -215,8 +213,4 @@ pub use tool::{
 pub use user_question::{
     DEFAULT_SUSPENDED_HANDOFF, UserAnswerItem, UserQuestionItem, UserQuestionOption,
     UserQuestionRecord, UserQuestionState, UserQuestionValidationError,
-};
-pub use work_contract::{
-    ContractError, ContractState, MAX_CONTRACT_UNITS, MIN_UNIT_TASK_CHARS, PRESET_CALL_WIDTH,
-    PRESET_UNIT_WIDTH, WorkContract, WorkContractDraft, WorkUnit, WorkUnitKind, WorkUnitModel,
 };

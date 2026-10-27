@@ -307,7 +307,6 @@ fn cacheable_tool_name(request: &ToolExecutionRequest) -> Option<String> {
         | ToolKind::ListMcpResources
         | ToolKind::ReadMcpResource
         | ToolKind::UpdatePlan
-        | ToolKind::WorkContract
         | ToolKind::GoalTool
         | ToolKind::Subagent
         | ToolKind::Mcp

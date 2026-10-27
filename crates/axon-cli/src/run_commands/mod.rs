@@ -97,8 +97,6 @@ pub(crate) mod run_workspace_identity;
 pub(crate) use run_tool_result_cache::workspace_revision;
 mod run_tool_result_wire;
 mod run_tool_write_coordination;
-#[path = "run_work_contract_store.rs"]
-mod run_work_contract_store;
 
 #[cfg(test)]
 #[path = "run_tool_benchmark_tests.rs"]

@@ -37,8 +37,6 @@ pub(crate) enum ToolKind {
     ListMcpResources,
     ReadMcpResource,
     UpdatePlan,
-    /// 开工合同（`work_contract`）。
-    WorkContract,
     GoalTool,
     Subagent,
     Mcp,
@@ -81,8 +79,6 @@ pub(crate) struct ToolOrchestratorContext {
     pub(crate) subagent_executor: Arc<dyn RunSubagentExecutor>,
     pub(crate) subagent_cancel_tokens: Arc<Mutex<HashMap<AgentPath, RunCancelToken>>>,
     pub(crate) user_question_port: Option<Arc<dyn axon_agent_runtime::UserQuestionPort>>,
-    /// 会话级开工合同状态机；跨批次复用同一实例。
-    pub(crate) work_contract: Arc<Mutex<axon_agent_runtime::WorkContractRuntime>>,
 }
 
 impl std::fmt::Debug for ToolOrchestratorContext {

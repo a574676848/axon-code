@@ -273,9 +273,6 @@ fn long_script() -> String {
 
 fn test_context(owner: &str) -> ToolOrchestratorContext {
     ToolOrchestratorContext {
-        work_contract: std::sync::Arc::new(std::sync::Mutex::new(
-            axon_agent_runtime::WorkContractRuntime::default(),
-        )),
         config_path: None,
         cwd: test_workspace(),
         session_id: axon_domain::SessionId(1),

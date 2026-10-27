@@ -161,9 +161,6 @@ fn history_search_contents_dispatch_matches_text_and_tool_outputs() {
 
 fn make_test_context(config_path: std::path::PathBuf, session_id: &str) -> ToolOrchestratorContext {
     ToolOrchestratorContext {
-        work_contract: std::sync::Arc::new(std::sync::Mutex::new(
-            axon_agent_runtime::WorkContractRuntime::default(),
-        )),
         config_path: Some(config_path),
         cwd: std::env::current_dir().unwrap_or_default(),
         session_id: axon_domain::SessionId(1),

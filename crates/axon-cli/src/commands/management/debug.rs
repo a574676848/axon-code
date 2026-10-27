@@ -497,9 +497,6 @@ fn debug_tool_context(
     ));
     let memory_write_runtime = Arc::new(debug_memory_write_runtime(&config_path));
     ToolOrchestratorContext {
-        work_contract: std::sync::Arc::new(std::sync::Mutex::new(
-            axon_agent_runtime::WorkContractRuntime::default(),
-        )),
         config_path: Some(config_path),
         cwd,
         session_id: SessionId(1),

@@ -83,7 +83,6 @@ pub(super) fn execute_supported_tool_calls_for_turn(
         subagent_executor: request.subagent_executor.clone(),
         subagent_cancel_tokens: request.subagent_cancel_tokens.clone(),
         user_question_port: request.user_question_port.clone(),
-        work_contract: super::run_work_contract_store::session_work_contract(&request.session_id),
     };
     let registry = request
         .execution_tools

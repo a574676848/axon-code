@@ -279,12 +279,22 @@ fn prompt_control_fragments(
     fragments
 }
 
+/// 子代理不可见的工具（PAR-1 第 8 节）：委派与控制类工具只在主代理面。
+const SUBAGENT_HIDDEN_TOOLS: [&str; 3] = [
+    "builtin.send_message",
+    "builtin.list_agents",
+    "builtin.update_plan",
+];
+
 fn builtin_model_tools(include_goal_tools: bool) -> AxonResult<Vec<ModelToolDefinition>> {
     let mut registry = ToolRegistry::new();
     AgentToolRegistryRuntime::register_builtin_tools(&mut registry)?;
     let mut tools = registry.model_tools();
     if !include_goal_tools {
-        tools.retain(|tool| !tool.qualified_name.starts_with("builtin.goal_"));
+        tools.retain(|tool| {
+            !tool.qualified_name.starts_with("builtin.goal_")
+                && !SUBAGENT_HIDDEN_TOOLS.contains(&tool.qualified_name.as_str())
+        });
     }
     Ok(tools)
 }
@@ -662,5 +672,27 @@ mod tests {
                 weights: "test",
             },
         }
+    }
+    /// `T-4` 4.5：子代理不可见合同与委派控制类工具，主代理可见。
+    #[test]
+    fn subagent_model_tools_hide_contract_and_control_tools() {
+        let primary = builtin_model_tools(true).expect("主代理工具面");
+        let subagent = builtin_model_tools(false).expect("子代理工具面");
+        for name in SUBAGENT_HIDDEN_TOOLS {
+            assert!(
+                primary.iter().any(|tool| tool.qualified_name == name),
+                "{name} 应对主代理可见"
+            );
+            assert!(
+                !subagent.iter().any(|tool| tool.qualified_name == name),
+                "{name} 不应出现在子代理工具面"
+            );
+        }
+        assert!(
+            subagent
+                .iter()
+                .any(|tool| tool.qualified_name == "builtin.read_file"),
+            "普通只读工具仍应对子代理可见"
+        );
     }
 }
