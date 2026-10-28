@@ -89,15 +89,10 @@ fn card_view_uses_preview_and_reports_missing_workspace_as_empty() {
 fn card_view_fills_workspace_for_workspace_scope() {
     let mut goal = goal_record("修复登录回归", vec!["定位失败用例".to_owned()], 100);
     goal.scope = ScopeRef::workspace("workspace-1").expect("scope");
-    let card = goal_card_view(
-        &goal,
-        None,
-        None,
-        Some(&workspace("workspace-1", "E:/repo")),
-    );
+    let card = goal_card_view(&goal, None, None, Some(&workspace("workspace-1", "/repo")));
     assert_eq!(card.scope_kind, "workspace");
     assert_eq!(card.workspace_id.as_deref(), Some("workspace-1"));
-    assert_eq!(card.workspace_path.as_deref(), Some("E:/repo"));
+    assert_eq!(card.workspace_path.as_deref(), Some("/repo"));
 }
 
 #[test]

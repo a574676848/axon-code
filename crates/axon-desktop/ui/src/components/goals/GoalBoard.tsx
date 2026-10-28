@@ -18,8 +18,8 @@ export interface GoalBoardProps {
   /** 已展开的栏目；展开后该栏不再限制张数。 */
   expanded: readonly GoalColumnId[];
   onExpand: (column: GoalColumnId) => void;
+  /** 卡片唯一入口：能进会话就进会话，否则打开详情。页脚与卡片主体走同一个动作。 */
   onOpenGoal: (goal: GoalCardView) => void;
-  onOpenDetail: (goal: GoalCardView) => void;
   /** 当前时间，供时间格式化使用。 */
   now: number;
 }
@@ -29,7 +29,6 @@ export const GoalBoard: React.FC<GoalBoardProps> = ({
   expanded,
   onExpand,
   onOpenGoal,
-  onOpenDetail,
   now,
 }) => {
   const columns = boardColumns(goals, expanded);
@@ -59,7 +58,7 @@ export const GoalBoard: React.FC<GoalBoardProps> = ({
                   goal={goal}
                   now={now}
                   onOpen={() => onOpenGoal(goal)}
-                  onInspect={() => onOpenDetail(goal)}
+                  onInspect={() => onOpenGoal(goal)}
                 />
               ))
             )}

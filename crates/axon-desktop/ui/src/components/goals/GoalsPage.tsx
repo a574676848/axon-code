@@ -180,7 +180,6 @@ export const GoalsPage: React.FC = () => {
               expanded={expanded}
               onExpand={expandColumn}
               onOpenGoal={openGoal}
-              onOpenDetail={setDetailGoal}
               now={Date.now()}
             />
             <Text tone="tertiary" size="2xs" className="block">

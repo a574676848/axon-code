@@ -125,11 +125,11 @@ impl Fixture {
 #[test]
 fn goal_session_with_matching_workspace_is_allowed() {
     let fixture = Fixture::new();
-    fixture.register_workspace("workspace-a", "E:/repo-a");
+    fixture.register_workspace("workspace-a", "/repo-a");
     let session_id = fixture.goal_with_execution(
         "goal-ws",
         ScopeRef::workspace("workspace-a").expect("scope"),
-        "E:/repo-a",
+        "/repo-a",
     );
     assert!(fixture.subscribe("workspace-a", &session_id).is_ok());
 }
@@ -137,11 +137,11 @@ fn goal_session_with_matching_workspace_is_allowed() {
 #[test]
 fn goal_session_bound_to_another_workspace_is_rejected() {
     let fixture = Fixture::new();
-    fixture.register_workspace("workspace-a", "E:/repo-a");
+    fixture.register_workspace("workspace-a", "/repo-a");
     let session_id = fixture.goal_with_execution(
         "goal-ws",
         ScopeRef::workspace("workspace-a").expect("scope"),
-        "E:/repo-a",
+        "/repo-a",
     );
     // 会话与执行绑定都在，但请求工作区不符：必须拒绝，不能因为「有绑定」就放行任意工作区。
     let error = fixture
@@ -156,12 +156,12 @@ fn goal_session_bound_to_another_workspace_is_rejected() {
 #[test]
 fn session_without_execution_binding_is_rejected() {
     let fixture = Fixture::new();
-    fixture.register_workspace("workspace-a", "E:/repo-a");
+    fixture.register_workspace("workspace-a", "/repo-a");
     // 普通会话：既不是子代理会话，也没有执行绑定。
     let session_id = DaemonSessionId::new("lane-session-plain").expect("session id");
     fixture
         .store
-        .create_session(&session_id, "E:/repo-a", NOW_MS)
+        .create_session(&session_id, "/repo-a", NOW_MS)
         .expect("登记会话");
     let error = fixture
         .subscribe("workspace-a", &session_id)
@@ -175,12 +175,12 @@ fn session_without_execution_binding_is_rejected() {
 #[test]
 fn subagent_session_keeps_previous_behaviour() {
     let fixture = Fixture::new();
-    fixture.register_workspace("workspace-a", "E:/repo-a");
+    fixture.register_workspace("workspace-a", "/repo-a");
     // 子代理会话没有执行绑定，也不做工作区比对：这条分支的行为必须与改造前逐字一致。
     let session_id = DaemonSessionId::new("run-uuid--subagent--root").expect("subagent session id");
     fixture
         .store
-        .create_session(&session_id, "E:/elsewhere", NOW_MS)
+        .create_session(&session_id, "/elsewhere", NOW_MS)
         .expect("登记会话");
     assert!(fixture.subscribe("workspace-a", &session_id).is_ok());
 }
@@ -188,11 +188,11 @@ fn subagent_session_keeps_previous_behaviour() {
 #[test]
 fn subagent_session_without_parent_prefix_is_rejected() {
     let fixture = Fixture::new();
-    fixture.register_workspace("workspace-a", "E:/repo-a");
+    fixture.register_workspace("workspace-a", "/repo-a");
     let session_id = DaemonSessionId::new("--subagent--root").expect("session id");
     fixture
         .store
-        .create_session(&session_id, "E:/repo-a", NOW_MS)
+        .create_session(&session_id, "/repo-a", NOW_MS)
         .expect("登记会话");
     let error = fixture
         .subscribe("workspace-a", &session_id)
@@ -206,9 +206,9 @@ fn subagent_session_without_parent_prefix_is_rejected() {
 #[test]
 fn global_goal_resolves_workspace_from_session_cwd() {
     let fixture = Fixture::new();
-    fixture.register_workspace("workspace-a", "E:/repo-a");
+    fixture.register_workspace("workspace-a", "/repo-a");
     // 全局目标的 cwd 精确命中的唯一工作区即它的工作区。
-    let session_id = fixture.goal_with_execution("goal-global", ScopeRef::global(), "E:/repo-a");
+    let session_id = fixture.goal_with_execution("goal-global", ScopeRef::global(), "/repo-a");
     assert!(fixture.subscribe("workspace-a", &session_id).is_ok());
     assert!(fixture.subscribe(OTHER_WORKSPACE, &session_id).is_err());
 }
@@ -216,8 +216,8 @@ fn global_goal_resolves_workspace_from_session_cwd() {
 #[test]
 fn global_goal_with_unresolvable_cwd_is_rejected() {
     let fixture = Fixture::new();
-    fixture.register_workspace("workspace-a", "E:/repo-a");
-    let session_id = fixture.goal_with_execution("goal-global", ScopeRef::global(), "E:/nowhere");
+    fixture.register_workspace("workspace-a", "/repo-a");
+    let session_id = fixture.goal_with_execution("goal-global", ScopeRef::global(), "/nowhere");
     // 零个匹配一律拒绝，不做「猜一个最像的」。
     assert!(fixture.subscribe("workspace-a", &session_id).is_err());
 }
@@ -226,20 +226,20 @@ fn global_goal_with_unresolvable_cwd_is_rejected() {
 fn global_goal_with_ambiguous_cwd_is_rejected() {
     let fixture = Fixture::new();
     // 两个工作区登记同一根目录：匹配不唯一，因此拒绝。
-    fixture.register_workspace("workspace-a", "E:/repo-a");
-    fixture.register_workspace("workspace-b", "E:/repo-a");
-    let session_id = fixture.goal_with_execution("goal-global", ScopeRef::global(), "E:/repo-a");
+    fixture.register_workspace("workspace-a", "/repo-a");
+    fixture.register_workspace("workspace-b", "/repo-a");
+    let session_id = fixture.goal_with_execution("goal-global", ScopeRef::global(), "/repo-a");
     assert!(fixture.subscribe("workspace-a", &session_id).is_err());
 }
 
 #[test]
 fn execution_bound_to_missing_goal_is_rejected() {
     let fixture = Fixture::new();
-    fixture.register_workspace("workspace-a", "E:/repo-a");
+    fixture.register_workspace("workspace-a", "/repo-a");
     let session_id = DaemonSessionId::new("goal-session-orphan").expect("session id");
     fixture
         .store
-        .create_session(&session_id, "E:/repo-a", NOW_MS)
+        .create_session(&session_id, "/repo-a", NOW_MS)
         .expect("登记会话");
     let execution = {
         let mut record = ExecutionRecord::new(

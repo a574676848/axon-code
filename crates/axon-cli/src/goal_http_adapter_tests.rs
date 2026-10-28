@@ -48,7 +48,7 @@ fn workspace(workspace_id: &str) -> WorkspaceRecord {
     WorkspaceRecord {
         workspace_id: workspace_id.to_owned(),
         display_name: format!("显示名 {workspace_id}"),
-        workspace_root: format!("E:/{workspace_id}"),
+        workspace_root: format!("/{workspace_id}"),
         git_remote: None,
         default_branch: None,
         aliases: Vec::new(),
@@ -141,7 +141,7 @@ fn list_merges_scopes_and_sorts_by_last_activity() {
     assert_eq!(workspace_goal["scopeKind"], "workspace");
     assert_eq!(workspace_goal["workspaceId"], "workspace-a");
     assert_eq!(workspace_goal["workspaceName"], "显示名 workspace-a");
-    assert_eq!(workspace_goal["workspacePath"], "E:/workspace-a");
+    assert_eq!(workspace_goal["workspacePath"], "/workspace-a");
     assert_eq!(workspace_goal["stepCount"], 2);
     // 全局目标没有工作区事实：三段字段一律为空。
     let global_goal = body["goals"]
@@ -159,7 +159,7 @@ fn list_merges_scopes_and_sorts_by_last_activity() {
 
 /// 给目标挂一条已绑定会话的执行，用它改写该目标的最近活动时间。
 fn bind_execution(store: &SqliteRuntimeStore, goal_id: &str, activity_at_ms: u64) {
-    bind_execution_at(store, goal_id, activity_at_ms, "E:/workspace-a");
+    bind_execution_at(store, goal_id, activity_at_ms, "/workspace-a");
 }
 
 /// 同上，但显式给出会话 cwd：全局目标的工作区解析靠它匹配注册表根目录。
@@ -261,7 +261,7 @@ fn global_goal_resolves_workspace_from_its_execution_session() {
     assert_eq!(card["scopeKind"], "global");
     assert_eq!(card["workspaceId"], "workspace-a");
     assert_eq!(card["workspaceName"], "显示名 workspace-a");
-    assert_eq!(card["workspacePath"], "E:/workspace-a");
+    assert_eq!(card["workspacePath"], "/workspace-a");
 }
 
 #[test]
@@ -274,7 +274,7 @@ fn global_goal_without_matching_cwd_keeps_workspace_empty() {
         .create_goal(&goal("goal-global", ScopeRef::global(), 100))
         .expect("goal");
     // 会话 cwd 不在注册表里：解析失败时三段字段一律为空，不猜一个最像的工作区。
-    bind_execution_at(&store, "goal-global", 900, "E:/elsewhere");
+    bind_execution_at(&store, "goal-global", 900, "/elsewhere");
 
     let (status, body) = get(&adapter, &detail_path("goal-global"), None);
     assert_eq!(status, 200);

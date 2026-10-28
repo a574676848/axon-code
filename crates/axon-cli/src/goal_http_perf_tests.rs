@@ -54,7 +54,7 @@ fn workspace(workspace_id: &str) -> WorkspaceRecord {
     WorkspaceRecord {
         workspace_id: workspace_id.to_owned(),
         display_name: format!("工程 {workspace_id}"),
-        workspace_root: format!("E:/projects/{workspace_id}"),
+        workspace_root: format!("/projects/{workspace_id}"),
         git_remote: None,
         default_branch: None,
         aliases: Vec::new(),
@@ -155,8 +155,8 @@ fn fixture() -> Fixture {
         store.create_goal(&record).expect("落库目标");
         let session_id = DaemonSessionId::new(format!("goal-session-{index:03}")).expect("session");
         let cwd = match &scope {
-            ScopeRef::Workspace(id) => format!("E:/projects/{}", id.as_str()),
-            ScopeRef::Global => "E:/projects/workspace-perf-0".to_owned(),
+            ScopeRef::Workspace(id) => format!("/projects/{}", id.as_str()),
+            ScopeRef::Global => "/projects/workspace-perf-0".to_owned(),
         };
         store
             .create_session(&session_id, &cwd, 1_000 + index as u64)

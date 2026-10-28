@@ -36,7 +36,7 @@ function card(overrides) {
         scopeKind: 'workspace',
         workspaceId: 'workspace-1',
         workspaceName: 'axon-code',
-        workspacePath: 'E:/repo',
+        workspacePath: '/repo',
         createdAtMs: 1_000,
         updatedAtMs: 2_000,
         lastActivityAtMs: 3_000,
