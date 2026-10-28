@@ -41,7 +41,8 @@ import {
 import { ConversationWidthControls } from './ConversationWidthControls';
 import { useConversationWidth } from './useConversationWidth';
 import { useExpiringNotice } from './composerNotice';
-import { escOwnedByAnotherLayer, useSettledValue } from './conversationViewUtils';
+import { useSettledValue } from './conversationViewUtils';
+import { useInterruptOnEscape, useRailShortcuts } from './useConversationShortcuts';
 
 /*
  * 主区域：首屏、对话过程与右侧栏的组合根。
@@ -204,6 +205,18 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     }
   }, [onSelectLane, workspace]);
 
+  /**
+   * 首屏直接起语音时先建一条会话，返回这一轮可用的工作区与目的地。
+   *
+   * 语音定稿由网关直接提交，界面没有第二次机会去补建车道；因此入口必须在
+   * 采集开始之前就拿到一个真实目的地，否则用户说完话只会被告知「缺少工作区」。
+   */
+  const ensureVoiceSession = React.useCallback(async () => {
+    const created = await createSession();
+    if (created === null) return null;
+    return { workspaceId: created.workspaceId, replyDestination: created.destination };
+  }, [createSession]);
+
   /** 首屏直接提交：先建会话，等这一轮目标就绪后再发送。 */
   const submitFromHero = React.useCallback(
     (text: string, attachments: AttachmentRef[], structuredInput: string) => {
@@ -289,19 +302,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    * Esc 统一中断：与 TUI 同语义。本轮跑着的时候，Esc 就是中断当前请求，
    * 不需要先找到停止按钮。空闲时不接管这一键，它仍归各浮层与草稿使用。
    */
-  React.useEffect(() => {
-    if (!turnRunning) return undefined;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.isComposing) return;
-      // 长按 Esc 会连发 keydown；每一次都发中断请求只会得到一串「无需中断」。
-      if (event.repeat) return;
-      if (escOwnedByAnotherLayer(event.target)) return;
-      event.preventDefault();
-      void interruptTurn();
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [interruptTurn, turnRunning]);
+  useInterruptOnEscape(turnRunning, () => void interruptTurn());
 
   /** 行内动作：重发消息、打开文件、打开某一轮改动对比；控制器经 ref 取当前值。 */
   const conversationRef = React.useRef(conversation);
@@ -342,23 +343,10 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    * 沿用既有工作台产品的键位（工作区文件在桌面宿主里带 Alt，避免与浏览器/系统的打印键撞车；
    * 新建终端用 Ctrl+`，与主流终端产品一致）。绑定挂在窗口上：面板收起时也要能一键唤起。
    */
-  React.useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey)) return;
-      if (event.altKey && event.key.toLowerCase() === 'p') {
-        event.preventDefault();
-        rail.openPage('files');
-        return;
-      }
-      if (event.altKey || event.shiftKey) return;
-      if (event.key === '`' || event.code === 'Backquote') {
-        event.preventDefault();
-        rail.newTerminal();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [rail]);
+  useRailShortcuts(
+    () => rail.openPage('files'),
+    () => rail.newTerminal(),
+  );
 
   /**
    * 某一轮的改动文件。
@@ -637,6 +625,9 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 workspaceRoot={workspace?.path ?? null}
                 workspaceId={selection?.workspaceId ?? workspace?.id ?? null}
                 replyDestination={selection?.destination ?? ''}
+                voiceTarget={{
+                  ensureSession: ensureVoiceSession,
+                }}
                 enabled={workspace !== null || selection !== null}
                 busy={conversation.submitting || creating}
                 hintVisible={hintVisible}

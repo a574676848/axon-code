@@ -240,6 +240,10 @@ export interface SelectOption {
   value: string;
   /** 选项显示文本。 */
   label: string;
+  /** 是否不可选；不可选项仍然列出，并说明原因。 */
+  disabled?: boolean;
+  /** 选项右侧的补充说明（例如「当前不可用」）。 */
+  hint?: string;
 }
 
 export interface SelectProps {
@@ -332,10 +336,23 @@ export const Select: React.FC<SelectProps> = ({
 
   const commit = (index: number) => {
     const option = options[index];
-    if (option !== undefined) {
+    if (option !== undefined && option.disabled !== true) {
       onChange(option.value);
     }
     setOpen(false);
+  };
+
+  /** 方向键只在可选之间移动：停用项不该被键盘选中。 */
+  const move = (delta: number): void => {
+    if (options.length === 0) return;
+    let next = activeIndex;
+    for (let step = 0; step < options.length; step += 1) {
+      next = (next + delta + options.length) % options.length;
+      if (options[next]?.disabled !== true) {
+        setActiveIndex(next);
+        return;
+      }
+    }
   };
 
   /**
@@ -360,10 +377,10 @@ export const Select: React.FC<SelectProps> = ({
     if (!open) return;
     if (event.key === 'ArrowDown') {
       event.preventDefault();
-      setActiveIndex((index) => (index + 1) % Math.max(options.length, 1));
+      move(1);
     } else if (event.key === 'ArrowUp') {
       event.preventDefault();
-      setActiveIndex((index) => (index - 1 + options.length) % Math.max(options.length, 1));
+      move(-1);
     } else if (event.key === 'Enter') {
       event.preventDefault();
       commit(activeIndex);
@@ -429,16 +446,25 @@ export const Select: React.FC<SelectProps> = ({
                   type="button"
                   role="option"
                   aria-selected={option.value === value}
-                  onMouseEnter={() => setActiveIndex(index)}
+                  aria-disabled={option.disabled === true ? true : undefined}
+                  disabled={option.disabled === true}
+                  onMouseEnter={() => {
+                    if (option.disabled !== true) setActiveIndex(index);
+                  }}
                   onClick={(event) => {
                     stopLabelActivation(event);
                     commit(index);
                   }}
                   className={`${ITEM} ${
                     option.value === value ? 'bg-active font-medium' : 'hover:bg-hover'
-                  } ${index === activeIndex && option.value !== value ? 'bg-hover' : ''}`}
+                  } ${index === activeIndex && option.value !== value ? 'bg-hover' : ''} ${
+                    option.disabled === true ? 'cursor-not-allowed opacity-40' : ''
+                  }`}
                 >
                   <span className="flex-1 min-w-0 truncate">{option.label}</span>
+                  {option.hint !== undefined && (
+                    <span className="shrink-0 text-code text-text-tertiary">{option.hint}</span>
+                  )}
                   {option.value === value && (
                     <CheckIcon size={13} className="shrink-0 text-text-link" />
                   )}

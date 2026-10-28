@@ -562,6 +562,32 @@ export function useConversation(target: ConversationTarget | null): Conversation
     }
   }, [laneCapability.laneId]);
 
+  /**
+   * 接管网关语音回合：把这一轮接进当前对话流并订阅增量。
+   *
+   * 语音的定稿由网关经既有入口提交，界面在此之前并不知道这条 Interaction；
+   * 若不接管，用户说完话只能看到草稿里多了一段字，而回复其实已经在跑。
+   * 因此收到 `turn` 帧就补一条本地轮次并绑上它的 interactionId，
+   * 后续增量与收口都走与文本输入完全相同的订阅通道。
+   */
+  const attachVoiceTurn = useCallback(
+    async (interactionId: string, utterance: string) => {
+      const workspace = laneCapability.workspaceId ?? '';
+      if (!laneCapability.available || interactionId.length === 0) return;
+      const visibleText = utterance.trim();
+      const nowMs = Date.now();
+      const localTurnId = `voice-${nowMs}-${Math.random().toString(36).slice(2, 7)}`;
+      dispatch({ type: 'submit', turnId: localTurnId, text: visibleText, nowMs, attachments: [] });
+      dispatch({ type: 'bind', turnId: localTurnId, interactionId });
+      if (watchedRef.current !== interactionId) {
+        watchedRef.current = interactionId;
+        rememberSubscribed(`interaction:${interactionId}`);
+        await ipc.conversationWatch(workspace, interactionId, null);
+      }
+    },
+    [laneCapability, rememberSubscribed],
+  );
+
   const { activeQuestion, answerQuestion } = useQuestionSync({
     laneId: laneCapability.laneId,
     state,
@@ -602,6 +628,7 @@ export function useConversation(target: ConversationTarget | null): Conversation
     questionError,
     dismissQuestionError,
     submit,
+    attachVoiceTurn,
     retry,
     interrupt,
     loadOlder: paging.loadOlder,

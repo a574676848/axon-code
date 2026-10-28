@@ -29,6 +29,8 @@
 | `GET /api/v1/observability/*` | 指标与审计看板（设置 › 用量统计，按概览、实时、活动、诊断、请求日志分页签） |
 | `GET/POST /api/v1/observability/pricing/*` | 用量看板的成本口径与费率规则（设置 › 模型定价，含每日自动同步开关） |
 | `POST /api/v1/mcp/status`、`/refresh` | 指标条的 MCP 读数与输入坞的 `/mcp`：读 daemon 启动快照里的加载结论，`/refresh` 才会重探 |
+| `ws://<http 监听地址>/api/v1/voice` | 语音上行与朗读下行：鉴权后发 `start`（含 `tts` 与 `submit`），推 `0x01` 音频帧收 `final`；`submit=false` 是听写，只回文本，`submit=true` 才提交成一轮并下发 `turn` |
+| `POST /api/v1/voice/tts`、`/preview`、`/presets`、`GET /api/v1/voice/status` | 单条朗读、音色试听、音色清单与语音运行时读数 |
 
 工作台打开的车道订阅会计入 `axon daemon health` 的 `streamSubscribers`：切换车道与关闭窗口后该数应回落到 0，不回落说明订阅未释放。
 
@@ -84,6 +86,7 @@
 | Provider 与模型 | `provider_profile_upsert`、`provider_profile_remove`、`discover_models` |
 | 工作区与车道 | `workspace_list`、`workspace_add`、`workspace_remove`、`workspace_list_entries`、`workspace_read_file`、`workspace_read_bytes`、`workspace_stat_path`、`workspace_applications`、`workspace_open_default`、`workspace_open_with`、`workspace_reveal`、`lane_create`、`lane_rename`、`lane_reorder`、`lane_set_pinned`、`lane_set_archived` |
 | 会话 | `conversation_submit`、`conversation_history`、`conversation_watch`、`conversation_watch_session`、`conversation_unsubscribe`、`conversation_interrupt`、`conversation_stop_job`、`conversation_send_subagent_message`、`conversation_lane_jobs`、`conversation_lane_subagents` |
+| 语音 | `voice_presets`、`voice_preview`、`voice_tts`、`voice_start`、`voice_stop`、`voice_cancel`、`voice_playback_drained`、`voice_microphone_status`、`voice_open_microphone_settings` |
 | Cron | `cron_list`、`cron_config`、`cron_get`、`cron_history`、`cron_create`、`cron_update`、`cron_pause`、`cron_resume`、`cron_run`、`cron_remove` |
 | MCP 与 Skill | `mcp_list`、`mcp_upsert`、`mcp_upsert_raw`、`mcp_remove`、`mcp_runtime_status`、`mcp_runtime_refresh`、`skills_list` |
 | 文档与输入历史 | `document_catalog`、`document_read`、`document_write`、`open_document`、`open_external_url`、`input_history_list`、`input_history_append` |
@@ -111,6 +114,20 @@
 - 读数与 `/mcp` 都按**当前工作区**取数（各工程的 `.mcp.json` 各算各的），并且不轮询：进入工作区读一次，只有敲 `/mcp` 才会重探。
 - 读不到结论（网关不可达、daemon 未运行）时指标条显式写 `MCP 异常` 并给原因，不隐藏这一段。
 - `/mcp` 只在正文恰好是这一条指令时生效；`/mcp 带参数` 按普通消息发给模型。
+
+## 语音输入与朗读
+
+| 入口 | 可观察行为 |
+|---|---|
+| 输入坞麦克风 | 首次使用在应用内确认一次；宿主按系统麦克风隐私结论放行或拦截，被拦截时给出「打开系统麦克风设置」与「重新检测」，不出现浏览器式地址栏权限提示 |
+| 说话期 | 输入坞上方给一条 40px 白底录音条：实测振幅声波、分:秒计时，实时识别文字直接显示在条内（没有识别到时给一句下一步提示），右端提示「Esc 关闭」 |
+| 定稿 | 再点麦克风或按 Esc 即定稿：识别文字追加进输入框（保留撤销历史），不提交成一轮；单次上限 120 秒自动停止；网关拒收或空转写时安静收口，不报错 |
+| 关闭 | 再点一次麦克风，或在窗口任意位置按 Esc：立即关闭语音并让服务端对当前句定稿；这一下 Esc 不打断正在进行的回复，语音关掉之后 Esc 才回到中断语义。点麦克风前会先查 `GET /api/v1/voice/status` 的 `runtimeAvailable`，未就绪直接给「重新运行安装脚本」的结论 |
+| 朗读 | 助手消息底部单条朗读；顶栏会话开关控制自动朗读；开启时该轮回复由语音流直传 `0x02` 音频边生成边播，不再触发一次整段合成 |
+| 输入设备 | 设置 › 系统设置 › 语音输入设备：下拉列出系统真实枚举的麦克风并记住选择，右侧可试听实时电平（只读电平、不录音，离开设置页即释放） |
+
+- 语音会话只在桌面宿主内可用：音频采集与 `0x01` 帧头由宿主补，调试桥没有原始字节通道。
+- 语音定稿与文本输入共用同一条车道键 `(workspace, 私有信任域, desktop, destination)`，不新建渠道，也不新建轮次表。
 
 ## 界面级调试（CDP）
 

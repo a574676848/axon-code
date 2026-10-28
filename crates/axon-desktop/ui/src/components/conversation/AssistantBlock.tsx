@@ -5,6 +5,7 @@ import { stop, useSpeechState } from '../../speech';
 import { Markdown } from './Markdown';
 import { MessageActionButton, MessageFooter } from './MessageFooter';
 import { SpeechButton } from './SpeechButton';
+import { VoiceWave } from './VoiceWave';
 import * as ipc from '../../ipc';
 
 /*
@@ -33,6 +34,7 @@ export const AssistantBlock: React.FC<{
   const [failure, setFailure] = React.useState<string | null>(null);
   const speech = useSpeechState();
   const speaking = speech.source === source;
+  const reading = speaking && (speech.status === 'playing' || speech.status === 'preparing');
   /*
    * 朗读中或朗读失败时把操作区摊开：停止入口与「语音运行时未就绪」都必须看得见，
    * 不能等指针悬停才出现。
@@ -127,6 +129,13 @@ export const AssistantBlock: React.FC<{
             <DownloadIcon size={14} />
           </MessageActionButton>
           <SpeechButton text={text} source={source} />
+          {/* 朗读状态紧跟在喇叭之后：说的是这一枚按钮正在做的事。 */}
+          {reading && (
+            <span className="ml-1 flex items-center gap-1.5 text-meta text-text-tertiary">
+              <VoiceWave active size="xs" />
+              正在朗读
+            </span>
+          )}
         </MessageFooter>
       )}
     </div>

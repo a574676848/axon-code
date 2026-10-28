@@ -7,6 +7,7 @@ import { isSupported, useGlobalAutoRead, voicePreferences } from '../../speech';
 import { AlertCircleIcon, CheckIcon } from '../../icons';
 import type { ThemeId } from '../../types';
 import { RuntimeStatusPanel } from './RuntimeStatusPanel';
+import { VoiceInputSettings } from './VoiceInputSettings';
 
 /*
  * 系统设置：桌面外壳自身的偏好与运行状态。
@@ -238,6 +239,8 @@ export const SystemSettings: React.FC = () => {
             }
           />
         </div>
+
+        <VoiceInputSettings />
 
         <div className="px-3.5 py-3 hairline-b border-border-hairline">
           <ToggleField

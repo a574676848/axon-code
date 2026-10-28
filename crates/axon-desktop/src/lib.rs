@@ -64,6 +64,8 @@ pub mod ui_failure;
 pub mod usage;
 /// 语音：音色试听与麦克风上行。
 pub mod voice;
+/// 操作系统级麦克风隐私探测与系统设置跳转。
+pub mod voice_permission;
 /// 工作区与车道的真实扫描与状态维护。
 pub mod workspace;
 /// 「用其他应用打开」：按系统关联枚举候选并回放选中的一条。
@@ -95,7 +97,7 @@ use export::export_markdown;
 use input_history::{input_history_append, input_history_list};
 use ipc::{
     config_apply_values, config_read, config_reset_key, config_validate, config_validate_values,
-    config_write, open_config_file, voice_presets, voice_tts,
+    config_write, open_config_file, voice_presets, voice_runtime_status, voice_tts,
 };
 use lane_source::GatewayLaneSource;
 use mcp_runtime::{mcp_runtime_refresh, mcp_runtime_status};
@@ -114,7 +116,10 @@ use system_info::system_info;
 use tauri::Emitter;
 use terminal::{terminal_close, terminal_open, terminal_resize, terminal_shells, terminal_write};
 use usage::{usage_diagnostics, usage_distribution, usage_events, usage_overview, usage_realtime};
-use voice::{voice_audio, voice_preview, voice_start, voice_stop};
+use voice::{
+    voice_audio, voice_cancel, voice_playback_drained, voice_preview, voice_start, voice_stop,
+};
+use voice_permission::{voice_microphone_status, voice_open_microphone_settings};
 use workspace::{
     lane_create, lane_rename, lane_reorder, lane_set_archived, lane_set_pinned, workspace_add,
     workspace_list, workspace_remove,
@@ -207,11 +212,16 @@ pub fn run() {
             open_config_file,
             open_external_url,
             voice_presets,
+            voice_runtime_status,
             voice_tts,
             voice_preview,
             voice_start,
             voice_audio,
             voice_stop,
+            voice_cancel,
+            voice_playback_drained,
+            voice_microphone_status,
+            voice_open_microphone_settings,
             input_history_list,
             input_history_append,
             provider_profile_upsert,

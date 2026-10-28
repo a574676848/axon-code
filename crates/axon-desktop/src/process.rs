@@ -279,6 +279,17 @@ pub fn open_external_url(url: String) -> Result<(), String> {
     platform_open_url(parsed.as_str())
 }
 
+/// 打开受控的系统设置协议地址（仅限宿主内部白名单常量调用，不向前端开放任意 URI）。
+pub(crate) fn open_system_uri(uri: &'static str) -> Result<(), String> {
+    if let Some(app) = APP_HANDLE.get() {
+        use tauri_plugin_opener::OpenerExt;
+        if app.opener().open_url(uri.to_string(), None::<&str>).is_ok() {
+            return Ok(());
+        }
+    }
+    platform_open_url(uri)
+}
+
 /// 调试桥模式下的平台回落实现。
 #[cfg(target_os = "windows")]
 fn platform_open_url(url: &str) -> Result<(), String> {

@@ -10,7 +10,7 @@ import {
   currentPresetId,
   PREVIEW_TIMEOUT_MESSAGE,
 } from '../src/speech/client.ts';
-import { VoicePresetChoices } from '../src/components/settings/VoicePresetSettings.tsx';
+import { VoicePresetSelect } from '../src/components/settings/VoicePresetSettings.tsx';
 
 /*
  * 音色的端到端契约：默认跟随人格、选择落盘、停用项禁用、合成读到的 presetId，
@@ -46,7 +46,7 @@ function renderChoices({
   selectedId = '',
 } = {}) {
   return renderToStaticMarkup(
-    React.createElement(VoicePresetChoices, {
+    React.createElement(VoicePresetSelect, {
       status,
       presets,
       message,
@@ -69,12 +69,14 @@ test('默认跟随人格：没存过时第一项选中，其余预设都不选�
     [true, false, false, false, false, false],
   );
 
-  // 出图后整组只有一个 aria-checked，且它是可 Tab 进入的那一项。
+  // 音色是一个下拉而不是一行行单选：触发器只有一个，收起态不铺开候选项。
   const html = renderChoices();
-  assert.match(html, /role="radiogroup"/);
+  assert.match(html, /aria-haspopup="listbox"/);
   assert.match(html, /aria-label="音色"/);
-  assert.equal((html.match(/aria-checked="true"/g) ?? []).length, 1);
-  assert.equal((html.match(/tabindex="0"/g) ?? []).length, 1);
+  assert.match(html, /aria-expanded="false"/);
+  assert.match(html, /跟随人格（默认）/);
+  assert.doesNotMatch(html, /role="radiogroup"/);
+  assert.doesNotMatch(html, /role="radio"/);
 });
 
 test('选择落盘可复读，空串写回表示跟随人格', () => {
@@ -111,13 +113,9 @@ test('停用预设禁用并标注当前不可用，存着它也落回跟随人�
   assert.equal(taiwan.checked, false);
   assert.equal(rows[0].checked, true);
 
-  const html = renderChoices();
-  assert.match(html, /当前不可用/);
-  // 停用项仍然以单选框的身份出现，但只带 disabled 与 aria-disabled。
-  assert.equal((html.match(/aria-disabled="true"/g) ?? []).length, 1);
-  assert.equal((html.match(/disabled=""/g) ?? []).length, 1);
-  // 「跟随人格」加五个预设，六行都是单选按钮。
-  assert.equal((html.match(/role="radio"/g) ?? []).length, 6);
+  // 停用项不会成为当前值：界面显示的仍是「跟随人格」。
+  const html = renderChoices({ selectedId: 'warm-taiwan' });
+  assert.match(html, /跟随人格（默认）/);
   // 停用项里没有安装入口：模型随语音运行时提供，界面不负责下载。
   assert.doesNotMatch(html, /安装/);
 });
@@ -197,25 +195,19 @@ test('试听失败按协议前缀分类，504 与 409 各有中文结论', () =>
 
 test('每行一个试听按钮，正在播放换成停止，停用预设的试听入口禁用', () => {
   const html = renderToStaticMarkup(
-    React.createElement(VoicePresetChoices, {
+    React.createElement(VoicePresetSelect, {
       status: 'ready',
       presets: parseVoicePresets({ presets: GATEWAY_PRESETS }),
       message: '',
       selectedId: FOLLOW_PERSONA_ID,
       onSelect: () => undefined,
       onRetry: () => undefined,
-      previewingId: 'calm-elegant',
-      previewBusyId: null,
+      previewing: false,
+      previewBusy: false,
       onPreview: () => undefined,
     }),
   );
-  // 六行里正在播放的一行显示停止，其余五行是试听。
-  assert.match(html, /aria-label="停止试听 冷静知性"/);
-  assert.equal((html.match(/aria-label="试听 /g) ?? []).length, 5);
-  assert.equal((html.match(/aria-label="停止试听 /g) ?? []).length, 1);
-  // 停用预设的试听按钮与单选项都禁用。
-  assert.match(html, /aria-label="试听 甜软台腔"[^>]*disabled/s);
-  // 试听按钮不改变单选组的语义：仍然只有一个选中项。
-  assert.equal((html.match(/role="radio"/g) ?? []).length, 6);
-  assert.equal((html.match(/aria-checked="true"/g) ?? []).length, 1);
+  // 下拉右侧只有一枚试听入口，不是每行一枚。
+  assert.match(html, /aria-label="试听当前音色"/);
+  assert.equal((html.match(/aria-label="试听当前音色"/g) ?? []).length, 1);
 });

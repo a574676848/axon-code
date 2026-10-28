@@ -24,8 +24,11 @@ use std::sync::Arc;
 /// 一次合成请求的上限。
 const TTS_MAX_CHARS: usize = 4_000;
 
-/// 试听合成超时（PROTOCOL §5 的 preview_timeout）。
-const PREVIEW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// 试听合成超时。
+///
+/// 本地合成每次都要拉起命令行并加载模型，冷启动实测十余秒；按合同 10 秒卡会把
+/// 「第一次试听正在加载」误报成超时，因此这里给足冷启动余量。
+const PREVIEW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 
 /// `POST /api/v1/voice/tts`：用当前音色预设合成一段朗读音频。
 pub(super) async fn voice_tts(

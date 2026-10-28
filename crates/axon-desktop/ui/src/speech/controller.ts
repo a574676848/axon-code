@@ -1,4 +1,5 @@
 import { speakableScript } from './sanitize';
+import { splitSpeechSegments } from './segments';
 
 /*
  * 朗读控制器：同一时刻只允许一条朗读。
@@ -7,6 +8,9 @@ import { speakableScript } from './sanitize';
  * 开始新的一条先停旧的，任何一条收口（念完、播放失败、被顶掉、被停止）
  * 都会把状态清回静息并回调调用方。真正的音频与网关请求分别在
  * audioPlayer.ts 与 client.ts，测试可以换成内存实现。
+ *
+ * 长文按句分段逐段合成：整段一次送进本地合成既慢又容易超时，而朗读本来就是
+ * 一串句子。第一段合成完成即开始发声，同时预取下一段，段与段之间不留空拍。
  */
 
 /** 合成侧的入参上限，与网关契约一致；超出部分直接截断，不把必然被拒的请求发出去。 */
@@ -103,6 +107,11 @@ export function createSpeechController(options: SpeechControllerOptions): Speech
     source: string | null;
     onEnd?: () => void;
     player: VoicePlayerHandle | null;
+    segments: string[];
+    next: number;
+    /** 已预取但还没播的下一段。 */
+    ahead: Promise<VoiceAudioPayload> | null;
+    presetId: string | null;
   } | null = null;
   /** 不可用态的恢复计时器；不为空时下一次到点恢复可点。 */
   let cancelRetry: (() => void) | null = null;
@@ -148,15 +157,25 @@ export function createSpeechController(options: SpeechControllerOptions): Speech
 
   const speak = (text: string, speakOptions: SpeakOptions = {}): void => {
     const script = speakableScript(text).slice(0, MAX_SPEECH_CHARS);
-    if (script.length === 0) return;
+    const segments = splitSpeechSegments(script);
+    if (segments.length === 0) return;
     // 单实例：新的朗读先把旧的停掉，旧的一条按「被顶掉」收口。
     clearRetry();
     stop();
     const id = ++sequence;
     const source = speakOptions.source ?? null;
-    current = { id, source, onEnd: speakOptions.onEnd, player: null };
-    setState({ status: 'preparing', source, message: null });
     const presetId = options.presetId?.() ?? null;
+    current = {
+      id,
+      source,
+      onEnd: speakOptions.onEnd,
+      player: null,
+      segments,
+      next: 0,
+      ahead: null,
+      presetId,
+    };
+    setState({ status: 'preparing', source, message: null });
 
     const fail = (failure: unknown): void => {
       if (current === null || current.id !== id) return;
@@ -173,41 +192,74 @@ export function createSpeechController(options: SpeechControllerOptions): Speech
       finish(id, { status: 'error', source, message: voiceFailure.message });
     };
 
-    let request: Promise<VoiceAudioPayload>;
-    try {
-      request = options.requestAudio(script, presetId);
-    } catch (failure) {
-      fail(failure);
-      return;
-    }
+    /** 取第 index 段音频：优先用已经预取的那一份。 */
+    const requestAt = (index: number, preset: string | null): Promise<VoiceAudioPayload> => {
+      if (index === current?.next && current.ahead !== null) {
+        const ahead = current.ahead;
+        current.ahead = null;
+        return ahead;
+      }
+      return options.requestAudio(segments[index], preset);
+    };
 
-    void request.then((payload) => {
-      // 请求在途时被停止或顶掉：不再发声，也不留下音频地址。
+    /** 预取下一段；失败留给正片那一段处理，不在这里抢答。 */
+    const prefetchNext = (from: number, preset: string | null): void => {
+      const target = from + 1;
       if (current === null || current.id !== id) return;
-      const started = current;
-      let player: VoicePlayerHandle;
+      if (target >= segments.length || current.ahead !== null || target <= current.next) return;
+      current.ahead = options.requestAudio(segments[target], preset);
+      // 预取失败不该成为未处理的拒绝：真正的请求会在轮到它时重新发起。
+      current.ahead.catch(() => undefined);
+    };
+
+    const playAt = (index: number): void => {
+      if (current === null || current.id !== id) return;
+      if (index >= segments.length) {
+        finish(id, IDLE);
+        return;
+      }
+      let request: Promise<VoiceAudioPayload>;
       try {
-        player = options.createPlayer(payload, {
-          onEnded: () => finish(id, IDLE),
-          onFailed: (failure: unknown) => fail(failure),
-        });
+        request = requestAt(index, presetId);
       } catch (failure) {
         fail(failure);
         return;
       }
-      started.player = player;
-      setState({ status: 'playing', source, message: null });
-      player.play().catch((failure: unknown) => {
-        fail(
-          new VoiceFailure(
-            'blocked',
-            failure instanceof Error && failure.name === 'NotAllowedError'
-              ? '浏览器阻止了自动播放，点喇叭重试'
-              : messageOf(failure),
-          ),
-        );
-      });
-    }, fail);
+      request.then((payload) => {
+        // 请求在途时被停止或顶掉：不再发声，也不留下音频地址。
+        if (current === null || current.id !== id) return;
+        const started = current;
+        started.next = index + 1;
+        let player: VoicePlayerHandle;
+        try {
+          player = options.createPlayer(payload, {
+            onEnded: () => playAt(index + 1),
+            onFailed: (failure: unknown) => fail(failure),
+          });
+        } catch (failure) {
+          fail(failure);
+          return;
+        }
+        started.player = player;
+        if (stateValue.status !== 'playing') {
+          setState({ status: 'playing', source, message: null });
+        }
+        // 下一段在发声的同时开始合成，段与段之间不留空拍。
+        prefetchNext(index, presetId);
+        player.play().catch((failure: unknown) => {
+          fail(
+            new VoiceFailure(
+              'blocked',
+              failure instanceof Error && failure.name === 'NotAllowedError'
+                ? '浏览器阻止了自动播放，点喇叭重试'
+                : messageOf(failure),
+            ),
+          );
+        });
+      }, fail);
+    };
+
+    playAt(0);
   };
 
   return {

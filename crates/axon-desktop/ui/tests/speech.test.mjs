@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { speakableScript } from '../src/speech/sanitize.ts';
 import { createVoicePreferences } from '../src/speech/preferences.ts';
 import { VOICE_STORAGE_KEYS } from '../src/speech/keys.ts';
+import { SEGMENT_MAX_CHARS, splitSpeechSegments } from '../src/speech/segments.ts';
 import {
   MAX_SPEECH_CHARS,
   VoiceFailure,
@@ -257,7 +258,55 @@ test('没有可念的文字时不发请求，超长正文在客户端截断', as
   controller.speak('```\n只有代码\n```', { source: 'empty' });
   assert.equal(requests.length, 0);
 
+  // 超长正文在客户端截断，并按句分段请求：第一段立即发，下一段预取。
   controller.speak('文'.repeat(MAX_SPEECH_CHARS + 500), { source: 'long' });
-  assert.equal(requests.length, 1);
-  assert.equal(requests[0].length, MAX_SPEECH_CHARS);
+  assert.ok(requests.length >= 1, '应至少请求第一段');
+  const total = requests.reduce((sum, text) => sum + text.length, 0);
+  assert.ok(total <= MAX_SPEECH_CHARS, `总长应被截到 ${MAX_SPEECH_CHARS}，实际 ${total}`);
+  for (const text of requests) {
+    assert.ok(text.length <= SEGMENT_MAX_CHARS, '每段都应短于分段上限');
+  }
+});
+
+test('长文按句分段：每段都不超过上限，且拼回原文顺序不变', () => {
+  const long = '第一句话说明背景。第二句话给出结论！第三句话补充限制？' + '再来一段很长的描述，'.repeat(30) + '收尾。';
+  const segments = splitSpeechSegments(long, 60);
+  assert.ok(segments.length > 1, '长文应被切成多段');
+  for (const segment of segments) {
+    assert.ok(segment.length <= 60, `分段超长: ${segment.length}`);
+  }
+  assert.equal(segments.join(''), long);
+});
+
+test('短句合并成一段，避免一句一个合成请求', () => {
+  const segments = splitSpeechSegments('好。行。可以。', 120);
+  assert.deepEqual(segments, ['好。行。可以。']);
+  assert.deepEqual(splitSpeechSegments('   '), []);
+});
+
+test('分段朗读逐段合成：播完一段再请求下一段，不并发抢跑', async () => {
+  const requests = [];
+  const played = [];
+  const controller = createSpeechController({
+    requestAudio: (text) => {
+      requests.push(text);
+      return Promise.resolve({ audioBase64: 'AA==', mimeType: 'audio/wav' });
+    },
+    createPlayer: (_payload, events) => ({
+      play: () => {
+        played.push(1);
+        // 播完立刻收口，让控制器推进下一段。
+        queueMicrotask(() => events.onEnded());
+        return Promise.resolve();
+      },
+      stop: () => undefined,
+    }),
+    schedule: () => () => undefined,
+  });
+
+  const long = ['甲'.repeat(70) + '。', '乙'.repeat(70) + '。'].join('');
+  controller.speak(long);
+  for (let index = 0; index < 12; index += 1) await Promise.resolve();
+  assert.equal(played.length, 2, '两段都应被播放');
+  assert.equal(controller.state().status, 'idle');
 });

@@ -293,6 +293,16 @@ async fn serve_session(
                     )
                     .await;
                     if let Some(request) = request.as_ref() {
+                        /*
+                         * 听写模式只把文本交给客户端：定稿进输入坞，发不发由人决定。
+                         * 这时不分配 epoch、不订阅回合，也不下发 `turn`，
+                         * 因此不会在会话里凭空长出一轮。
+                         */
+                        if !request.submit {
+                            send_json(&mut socket, state_json(TurnPhase::Listening.as_str()))
+                                .await;
+                            continue;
+                        }
                         let phase_events = handle_final(
                             &mut socket,
                             state,

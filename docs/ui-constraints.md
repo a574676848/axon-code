@@ -129,6 +129,7 @@
 - 以下形态全站只有一份实现，出现第二份即视为缺陷：
   - 可展开行（`DisclosureRow`）
   - 菜单与候选列表（`MenuPanel` / `MenuRow`）
+  - 下拉选择（`Select`，含停用项与说明列；音色这类单选一律走它，不平铺成行）
   - 分页（`ui/pagination`）
   - 分段控件（`SegmentedControl`）
   - 表单字段（`FormField`）
@@ -136,6 +137,8 @@
   - 页级外壳（`PageShell`）
   - 条目卡外壳（`ComposerTile`，附件卡与链接卡共用）
   - 网址占位（输入框底衬占位符、链接卡与消息气泡里的链接芯片）
+  - 声学声波微动画（`VoiceWave`，输入坞麦克风、语音状态行、消息朗读按钮、顶栏自动朗读开关与音色试听行共用）
+  - 麦克风原生授权与隐私修复引导（`ComposerVoicePermissionDialog`，基于 `Dialog` 承载首次授权说明、系统隐私跳转与重新检测，宿主层静默接管本地源的 WebView 媒体权限，严禁露出浏览器 URL 权限条）
 - 同一内容在不同页面出现 80% 以上相似结构时，先抽共用组件，再写页面。
 - 禁止卡片套卡片套卡片；禁止用 div 拼假截图；禁止假数据、假按钮与不可用控件伪装成可用。
 
@@ -144,6 +147,7 @@
 ## 6. 动效与无障碍
 
 - 只允许对 `transform` 与 `opacity` 做动画；禁止动画 `top`、`left`、`width`、`height`、`margin`、`padding`。
+- 声学声波（`VoiceWave`）与朗读进度细线只允许驱动 `transform: scaleY(...)`、`transform: scaleX(...)` 与 `opacity`：麦克风采集与音频播放优先按实测振幅包络（`0..1`）驱动柱体缩放，静默间隙回落至低幅呼吸；`prefers-reduced-motion` 下冻结为静态错落刻度，保留活跃语义但零位移。
 - 禁止 `window.addEventListener('scroll')`。滚动位置相关逻辑用 `IntersectionObserver`、滚动容器自有回调或 ResizeObserver。
 - 必须实现 `prefers-reduced-motion` 降级：位移、缩放、旋转、循环扫光全部落到终态。
 - 常用时长：100ms 悬浮、140ms 模态、150ms 开关与回执、250ms 抽屉。

@@ -12,8 +12,8 @@ import { ComposerCandidateLayer } from './ComposerCandidateLayer';
 import { composerOptionId } from './ComposerCandidates';
 import { ComposerActionBar } from './ComposerActionBar';
 import { ComposerTextArea } from './ComposerTextArea';
-import { ComposerVoiceError, ComposerVoiceOverlay, ComposerVoiceStatus } from './ComposerVoiceLayer';
-import { useComposerVoice } from './useComposerVoice';
+import { ComposerVoiceLayer } from './ComposerVoiceLayer';
+import { useComposerVoice, type VoiceEntry } from './useComposerVoice';
 import { useExpiringNotice } from './composerNotice';
 import { useComposerAttachments } from './useComposerAttachments';
 import { useComposerEditing, type CaretRange } from './useComposerEditing';
@@ -41,20 +41,15 @@ import type { McpCommandReceipt } from '../../conversation/mcpReading';
  * 本组件只负责把它们摆到位并处理键盘。
  */
 
-/** 输入框最多向上伸展的行数。 */
+/** 输入框最多向上伸展 6 行；单行 22px、上下内边距合计 20px。 */
 const MAX_ROWS = 6;
-/** 单行高度（与 15px/22px 正文一致）。 */
 const LINE_HEIGHT = 22;
-/** 上下内边距合计。 */
 const VERTICAL_PADDING = 20;
 
-/** 窄列下的稳定占位文案：一行放得下，不在 472px 时折成两行再被裁掉。 */
+/* 占位文案：窄列下也要一行放得下；键盘提示只在列宽足够时出现。 */
 const PLACEHOLDER_READY = '给 Axon 发送消息，@ 引用文件';
-/** 占座卡展开时的占位：用户在卡片里作答，输入框让位。 */
 const PLACEHOLDER_OCCUPIED = '请在上方向模型回复，或收起卡片自由输入...';
-/** 会话未就绪。 */
 const PLACEHOLDER_DISABLED = '会话未就绪...';
-/** 键盘提示：只在列宽足够时出现。 */
 const KEYBOARD_HINT = 'Shift + Enter 换行';
 
 /** 两组候选菜单的列表 id：输入框用它声明 aria-controls 与 aria-activedescendant。 */
@@ -68,6 +63,15 @@ export interface InputDockProps {
   workspaceId?: string | null;
   /** 当前会话的回复目的地；语音会话首帧需要它。 */
   replyDestination?: string;
+  /**
+   * 语音入口的会话目标：首屏没有车道时由上层临时建一条。
+   *
+   * 输入坞固定是听写：识别结果只写进草稿，绝不直接提交成一轮对话。
+   */
+  voiceTarget?: {
+    /** 首屏起语音时先建会话，返回可用的工作区与目的地。 */
+    ensureSession?: () => Promise<VoiceEntry | null>;
+  };
   /** 是否可提交。 */
   enabled: boolean;
   /** 正在提交。 */
@@ -136,6 +140,7 @@ export const InputDock: React.FC<InputDockProps> = ({
   workspaceRoot,
   workspaceId = null,
   replyDestination = '',
+  voiceTarget,
   enabled,
   busy,
   compact = false,
@@ -224,6 +229,8 @@ export const InputDock: React.FC<InputDockProps> = ({
     replyDestination,
     text,
     commit: editing.commit,
+    mode: 'dictation',
+    ensureSession: voiceTarget?.ensureSession,
   });
   /** 本机指令（`/mcp`）的执行态、回执与清单：按下即转圈，结束换回执与清单。 */
   const command = useComposerCommandRun(onRunCommand, notify);
@@ -240,6 +247,16 @@ export const InputDock: React.FC<InputDockProps> = ({
   /** 已安装技能名：输入框用它点亮正文里的 `/name`，与候选菜单读同一份清单。 */
   const skillNames = useSkillNames();
   const recall = useInputHistory();
+  /*
+   * 语音关闭后把焦点还给输入框：声音停了就该能接着打字。
+   * 只在「从非待机变回待机」那一帧聚焦，首屏挂载不会抢焦点。
+   */
+  const voicePhaseRef = React.useRef(voice.phase);
+  React.useEffect(() => {
+    const before = voicePhaseRef.current;
+    voicePhaseRef.current = voice.phase;
+    if (before !== 'idle' && voice.phase === 'idle') areaRef.current?.focus();
+  }, [voice.phase]);
 
   const hasText = text.trim().length > 0;
   /** 有内容待发：运行中也照样成立；那时这条消息进入排队，由后端在安全边界插入。 */
@@ -492,8 +509,6 @@ export const InputDock: React.FC<InputDockProps> = ({
         compact ? 'px-2 pb-2.5 pt-2' : 'px-4 pb-4 pt-3'
       }`}
     >
-      {/* 中间识别结果：固定 20px 浮层，贴在输入坞上沿，不参与布局。 */}
-      {!compact && <ComposerVoiceOverlay text={voice.partial} />}
       <div className="w-full max-w-chat relative">
         {command.servers !== null && (
           <McpServerPanel servers={command.servers} onClose={command.close} />
@@ -510,10 +525,7 @@ export const InputDock: React.FC<InputDockProps> = ({
           />
         ) : (
           <>
-            {!compact && voice.error !== null && <ComposerVoiceError message={voice.error} />}
-            {!compact && (
-              <ComposerVoiceStatus phase={voice.phase} droppedFrames={voice.droppedFrames} />
-            )}
+            {!compact && <ComposerVoiceLayer voice={voice} />}
             {/* 本机指令的执行态：按下即出现，结束后换成回执与清单。 */}
             {command.label !== null && (
               <ComposerWorkingLine primary={command.label} elapsedMs={command.elapsedMs} queued={0} interruptible={false} />

@@ -12,17 +12,36 @@ import type { VoiceServerFrame } from './voiceProtocol';
 /** 与 Rust 侧 `VOICE_EVENT` 一致的事件名。 */
 const VOICE_EVENT = 'axon://voice';
 
+/** 语音会话的可选开关：朗读与是否提交成一轮。 */
+export interface VoiceSessionOptions {
+  /** 是否让本轮回复由语音流直接朗读；仅语音对话模式有效。 */
+  tts?: boolean;
+  /** 定稿是否提交成一轮对话；输入坞听写传 false，只把文本交给界面。 */
+  submit?: boolean;
+}
+
 /** 开始一轮语音会话；返回时连接已就绪。 */
 export async function startVoiceSession(
   workspaceId: string,
   replyDestination: string,
+  options: VoiceSessionOptions = {},
 ): Promise<void> {
-  await call('voice_start', { workspaceId, replyDestination });
+  await call('voice_start', {
+    workspaceId,
+    replyDestination,
+    tts: options.tts ?? false,
+    submit: options.submit ?? false,
+  });
 }
 
 /** 结束当前句；服务端随后回 `final`。 */
 export async function stopVoiceSession(): Promise<void> {
   await call('voice_stop');
+}
+
+/** 打断当前轮：服务端立即停播并回到聆听。 */
+export async function cancelVoiceSession(reason: 'user_cancel' | 'client_close' = 'user_cancel'): Promise<void> {
+  await call('voice_cancel', { reason });
 }
 
 /** 订阅服务端语音帧；非桌面宿主返回空订阅。 */

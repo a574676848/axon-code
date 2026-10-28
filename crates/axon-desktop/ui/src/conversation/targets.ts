@@ -131,6 +131,13 @@ export interface ConversationController {
   unfoldTurn: (interactionId: string) => void;
   /** 提交正文到当前目标；目标不具备车道能力时明确失败，不静默丢弃。 */
   submit: (text: string, attachments?: AttachmentRef[], structuredInput?: string) => Promise<void>;
+  /**
+   * 接管网关语音回合：把已经提交的这一轮接进对话流并订阅增量。
+   *
+   * 语音定稿由网关直接提交，界面收到 `turn` 帧时才知道这条 Interaction，
+   * 因此需要一条显式的接入通道，而不是伪造一次本地提交。
+   */
+  attachVoiceTurn: (interactionId: string, utterance: string) => Promise<void>;
   retry: () => void;
   /** 中断正在运行的一轮。 */
   interrupt: () => Promise<void>;

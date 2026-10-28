@@ -30,6 +30,15 @@ const FALLBACK_TOKEN_ENV: &str = "AXON_GATEWAY_API_TOKEN";
 /// 单次请求超时。
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// 朗读合成的总超时。
+///
+/// 本地语音合成是命令行逐次加载模型，长句在冷启动时要十几秒；用通用的 15 秒预算
+/// 会把「正在合成」误报成「网关不可达」。朗读本身也按句分段，单段很少接近这个上限。
+const VOICE_TTS_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// 试听合成的总超时；首次试听要加载模型，给足冷启动余量。
+const VOICE_PREVIEW_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// 把通配绑定地址映射成可连接的探测地址。
 #[must_use]
 pub fn probe_target(bind: &str) -> String {
@@ -429,7 +438,7 @@ pub fn post_voice_tts(
     persona: Option<&serde_json::Value>,
 ) -> Result<Vec<u8>, VoiceTtsError> {
     let url = endpoint("/voice/tts").map_err(VoiceTtsError::Failed)?;
-    let mut request = agent()
+    let mut request = agent_with_timeout(VOICE_TTS_TIMEOUT)
         .post(&url)
         .header("accept", "audio/wav")
         .header("content-type", "application/json");
@@ -445,6 +454,11 @@ pub fn post_voice_tts(
         Ok(response) => response,
         Err(ureq::Error::StatusCode(status)) => {
             return Err(classify_voice_status(status, String::new()));
+        }
+        Err(ureq::Error::Timeout(_)) => {
+            return Err(VoiceTtsError::Failed(
+                "朗读合成超时：这段文字较长，稍后重试或缩短内容".to_owned(),
+            ));
         }
         Err(error) => return Err(VoiceTtsError::Failed(format!("网关不可达：{error}"))),
     };
@@ -474,6 +488,18 @@ fn classify_voice_status(status: u16, body: String) -> VoiceTtsError {
 /// 网关不可达、鉴权失败或响应不是合法 JSON。
 pub fn get_voice_presets() -> Result<serde_json::Value, String> {
     get_json("/voice/presets")
+}
+
+/// 读取语音运行时状态：是否可用、降级原因与预设数量。
+///
+/// 与 `/api/v1/voice` 建连时给出的 `ready` 共用同一判据，因此「点麦克风之前」
+/// 就能知道本地语音是否装好，不必先等一次冷启动失败。
+///
+/// # Errors
+///
+/// 网关不可达、鉴权失败或响应不是合法 JSON。
+pub fn get_voice_runtime_status() -> Result<serde_json::Value, String> {
+    get_json("/voice/status")
 }
 
 /// 试听音频：WAV 字节与网关实际采用的音色。
@@ -518,7 +544,7 @@ pub fn post_voice_preview(
     persona: Option<&serde_json::Value>,
 ) -> Result<VoicePreviewAudio, VoicePreviewError> {
     let url = endpoint("/voice/preview").map_err(VoicePreviewError::Failed)?;
-    let mut request = agent()
+    let mut request = agent_with_timeout(VOICE_PREVIEW_TIMEOUT)
         .post(&url)
         .header("accept", "audio/wav")
         .header("content-type", "application/json");
@@ -534,6 +560,7 @@ pub fn post_voice_preview(
         Err(ureq::Error::StatusCode(status)) => {
             return Err(classify_preview_status(status, ""));
         }
+        Err(ureq::Error::Timeout(_)) => return Err(VoicePreviewError::Timeout),
         Err(error) => return Err(VoicePreviewError::Failed(format!("网关不可达：{error}"))),
     };
     let status = response.status().as_u16();

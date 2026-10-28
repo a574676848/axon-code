@@ -688,3 +688,12 @@ export const MicrophoneIcon: React.FC<IconProps> = ({ size = 14, className = '',
     <rect x="6" y="1.333" width="4" height="8.667" rx="2" stroke="currentColor" />
   </svg>
 );
+
+// 语音关闭：喇叭加一道叉，与开启态的声波喇叭成对
+export const SpeakerOffIcon: React.FC<IconProps> = ({ size = 14, className = '', ...props }) => (
+  <svg width={size} height={size} viewBox="0 0 16 16" fill="none" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className} {...props}>
+    <path d="M8.5 2.5L5 5.5H2.5C2.22386 5.5 2 5.72386 2 6V10C2 10.2761 2.22386 10.5 2.5 10.5H5L8.5 13.5V2.5Z" stroke="currentColor" />
+    <path d="M11.2 6.2L14.2 9.2" stroke="currentColor" />
+    <path d="M14.2 6.2L11.2 9.2" stroke="currentColor" />
+  </svg>
+);

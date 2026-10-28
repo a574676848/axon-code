@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { levelOfSamples, publishLevel, resetLevel } from './levelBus';
 import {
   BoundedFrameQueue,
   encodePcm16,
@@ -24,6 +25,14 @@ export interface VoiceCaptureEvents {
   onError: (message: string) => void;
   /** 累计丢弃帧数变化。 */
   onDropped?: (total: number) => void;
+  /** 实时音量包络（0..1），供输入坞声波使用。 */
+  onLevel?: (level: number) => void;
+}
+
+/** 采集参数。 */
+export interface VoiceCaptureOptions {
+  /** 指定输入设备；空串或省略表示跟随系统默认。明确指定的设备不会回退到别的输入。 */
+  deviceId?: string;
 }
 
 /** 一个可启停的采集器。 */
@@ -40,6 +49,9 @@ export interface VoiceCapture {
 
 /** 脚本处理器的缓冲区大小；2048 在 48 kHz 下约 42 ms，足够平滑。 */
 const PROCESSOR_BUFFER = 2048;
+
+/** 电平上报间隔：与视觉刷新率对齐，避免每个处理块都触发一次。 */
+const LEVEL_INTERVAL_MS = 90;
 
 function describeFailure(failure: unknown): string {
   if (failure instanceof DOMException) {
@@ -62,7 +74,10 @@ function describeFailure(failure: unknown): string {
 }
 
 /** 创建一个采集器；同一实例可以反复 start 与 stop。 */
-export function createVoiceCapture(events: VoiceCaptureEvents): VoiceCapture {
+export function createVoiceCapture(
+  events: VoiceCaptureEvents,
+  options: VoiceCaptureOptions = {},
+): VoiceCapture {
   let queue = new BoundedFrameQueue(MAX_QUEUED_FRAMES);
   let stream: MediaStream | null = null;
   let context: AudioContext | null = null;
@@ -74,6 +89,8 @@ export function createVoiceCapture(events: VoiceCaptureEvents): VoiceCapture {
   let reportedDropped = 0;
   /** 尚未凑满一帧的采样点。 */
   let pending: number[] = [];
+  /** 上一次上报电平的时刻。 */
+  let lastLevelAt = 0;
 
   const reportDropped = (): void => {
     if (queue.droppedFrames === reportedDropped) return;
@@ -139,6 +156,8 @@ export function createVoiceCapture(events: VoiceCaptureEvents): VoiceCapture {
       stream = null;
     }
     pending = [];
+    lastLevelAt = 0;
+    resetLevel();
   };
 
   const start = async (): Promise<void> => {
@@ -159,6 +178,9 @@ export function createVoiceCapture(events: VoiceCaptureEvents): VoiceCapture {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
+          ...(options.deviceId !== undefined && options.deviceId.length > 0
+            ? { deviceId: { exact: options.deviceId } }
+            : {}),
         },
       });
       context = new AudioContext({ sampleRate: VOICE_SAMPLE_RATE });
@@ -177,6 +199,13 @@ export function createVoiceCapture(events: VoiceCaptureEvents): VoiceCapture {
         for (let index = 0; index < samples.length; index += 1) {
           pending.push(samples[index]);
         }
+        const now = Date.now();
+        if (now - lastLevelAt >= LEVEL_INTERVAL_MS) {
+          lastLevelAt = now;
+          const level = levelOfSamples(samples);
+          publishLevel(level);
+          events.onLevel?.(level);
+        }
         flushFrames();
       };
       source.connect(processor);
@@ -191,6 +220,7 @@ export function createVoiceCapture(events: VoiceCaptureEvents): VoiceCapture {
   const stop = (): void => {
     stopped = true;
     forwarding = false;
+    resetLevel();
     release();
   };
 

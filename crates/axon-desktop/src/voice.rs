@@ -31,6 +31,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
 /// 上行音频帧头：与 PROTOCOL 的 `0x01` 一致。
 const AUDIO_FRAME_KIND: u8 = 0x01;
+/// 下行对话音频帧头：与 PROTOCOL 的 `0x02`（`[0x02][u32be epoch][u32be seq][s16le]`）一致。
+const AUDIO_OUT_FRAME_KIND: u8 = 0x02;
+/// 下行音频帧的最小头部长度（1 字节类型 + 4 字节 epoch + 4 字节 seq）。
+const AUDIO_OUT_HEADER_LEN: usize = 9;
 
 /// 试听回执：base64 音频、MIME 与网关实际采用的音色。
 #[derive(Debug, Clone, Serialize)]
@@ -114,6 +118,8 @@ pub async fn voice_start(
     app: tauri::AppHandle,
     workspace_id: String,
     reply_destination: String,
+    tts: Option<bool>,
+    submit: Option<bool>,
 ) -> Result<(), String> {
     let workspace_id = workspace_id.trim();
     let reply_destination = reply_destination.trim();
@@ -126,7 +132,13 @@ pub async fn voice_start(
     stop_current_session();
     let url = gateway::voice_websocket_url()?;
     let client_session_id = format!("desktop-{}", now_nanos());
-    let start = start_frame(workspace_id, reply_destination, &client_session_id);
+    let start = start_frame(
+        workspace_id,
+        reply_destination,
+        &client_session_id,
+        tts.unwrap_or(false),
+        submit.unwrap_or(false),
+    );
     let (tx, outbound) = mpsc::unbounded_channel();
     let (ready_tx, ready_rx) = oneshot::channel::<Result<(), String>>();
     let utterance_seq = Arc::new(AtomicU32::new(1));
@@ -197,6 +209,40 @@ pub fn voice_stop() -> Result<(), String> {
     forward(Message::Text(stop_frame(sequence).into()))
 }
 
+/// 取消当前轮或主动收线（`reason` 只允许 `"user_cancel"` 或 `"client_close"`）。
+///
+/// # Errors
+///
+/// 原因取值非法。
+#[tauri::command]
+pub fn voice_cancel(reason: Option<String>) -> Result<(), String> {
+    let normalized = match reason.as_deref().map(str::trim) {
+        None | Some("") | Some("user_cancel") => "user_cancel",
+        Some("client_close") => "client_close",
+        Some(other) => return Err(format!("不支持的取消原因：{other}")),
+    };
+    if normalized == "client_close" {
+        stop_current_session();
+        return Ok(());
+    }
+    let _ = forward(Message::Text(cancel_frame(normalized).into()));
+    Ok(())
+}
+
+/// 上报该轮下行音频已播放完毕或已清空队列（与服务端 `stopAudio` 闭环）。
+///
+/// # Errors
+///
+/// 会话已关闭时静默忽略并返回成功，避免收尾竞态报错。
+#[tauri::command]
+pub fn voice_playback_drained(epoch: u32) -> Result<(), String> {
+    if epoch == 0 {
+        return Ok(());
+    }
+    let _ = forward(Message::Text(playback_drained_frame(epoch).into()));
+    Ok(())
+}
+
 /// 结束上一路会话；没有会话时是幂等的。
 fn stop_current_session() {
     let previous = session_slot()
@@ -204,6 +250,9 @@ fn stop_current_session() {
         .map(|mut slot| slot.take())
         .unwrap_or(None);
     if let Some(session) = previous {
+        let _ = session
+            .tx
+            .send(Message::Text(cancel_frame("client_close").into()));
         session.task.abort();
     }
 }
@@ -299,7 +348,10 @@ async fn run_session(
                         {
                             update_utterance(&utterance_seq, seq);
                         }
-                        if matches!(kind, "state" | "partial" | "final" | "error") {
+                        if matches!(
+                            kind,
+                            "state" | "partial" | "final" | "turn" | "stopAudio" | "error"
+                        ) {
                             emit(&app, &value);
                         }
                         if kind == "closed" {
@@ -308,7 +360,11 @@ async fn run_session(
                         }
                     }
                     // 下行音频与播放属于后续增量，本切片不把它转成界面事件。
-                    Some(Ok(Message::Binary(_))) => {}
+                    Some(Ok(Message::Binary(bytes))) => {
+                        if let Some(frame) = decode_downlink_audio(&bytes) {
+                            emit(&app, &frame);
+                        }
+                    }
                     Some(Ok(Message::Ping(payload))) => {
                         let _ = sink.send(Message::Pong(payload)).await;
                     }
@@ -369,7 +425,13 @@ fn update_utterance(current: &Arc<AtomicU32>, final_seq: u64) {
 }
 
 /// `start` 首帧：字段与 PROTOCOL 2.1 一一对应。
-fn start_frame(workspace_id: &str, reply_destination: &str, client_session_id: &str) -> String {
+fn start_frame(
+    workspace_id: &str,
+    reply_destination: &str,
+    client_session_id: &str,
+    tts: bool,
+    submit: bool,
+) -> String {
     serde_json::json!({
         "type": "start",
         "protocolVersion": 1,
@@ -378,7 +440,12 @@ fn start_frame(workspace_id: &str, reply_destination: &str, client_session_id: &
         "replyDestination": reply_destination,
         "mode": "push_to_talk",
         "lang": "zh",
-        "tts": false,
+        "tts": tts,
+        /*
+         * 定稿的去向由调用方声明：输入坞麦克风是听写（false，只回文本），
+         * 语音对话入口传 true，由网关提交成一轮。
+         */
+        "submit": submit,
     })
     .to_string()
 }
@@ -390,6 +457,45 @@ fn stop_frame(utterance_seq: u32) -> String {
         "utteranceSeq": utterance_seq,
     })
     .to_string()
+}
+
+/// `cancel` 帧：用于打断当前说话轮次或通知服务端收线。
+fn cancel_frame(reason: &str) -> String {
+    serde_json::json!({
+        "type": "cancel",
+        "reason": reason,
+    })
+    .to_string()
+}
+
+/// `playbackDrained` 帧：通知服务端该轮音频已播完或清空。
+fn playback_drained_frame(epoch: u32) -> String {
+    serde_json::json!({
+        "type": "playbackDrained",
+        "epoch": epoch,
+    })
+    .to_string()
+}
+
+/// 解码服务端下行的 `0x02` 音频帧（`[0x02][u32be epoch][u32be seq][s16le]`）。
+fn decode_downlink_audio(bytes: &[u8]) -> Option<serde_json::Value> {
+    use base64::Engine as _;
+
+    if bytes.len() <= AUDIO_OUT_HEADER_LEN || bytes.first().copied() != Some(AUDIO_OUT_FRAME_KIND) {
+        return None;
+    }
+    let epoch = u32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
+    let seq = u32::from_be_bytes([bytes[5], bytes[6], bytes[7], bytes[8]]);
+    let pcm = &bytes[AUDIO_OUT_HEADER_LEN..];
+    if pcm.is_empty() || !pcm.len().is_multiple_of(2) {
+        return None;
+    }
+    Some(serde_json::json!({
+        "type": "audio",
+        "epoch": epoch,
+        "seq": seq,
+        "pcmBase64": base64::engine::general_purpose::STANDARD.encode(pcm),
+    }))
 }
 
 /// 上行音频帧：协议要求首字节为 `0x01`，其后是 s16le PCM。
@@ -415,22 +521,42 @@ fn now_nanos() -> u128 {
 
 #[cfg(test)]
 mod tests {
-    use super::{audio_frame, start_frame, stop_frame, update_utterance};
+    use super::{
+        audio_frame, cancel_frame, decode_downlink_audio, playback_drained_frame, start_frame,
+        stop_frame, update_utterance,
+    };
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     #[test]
     fn start_frame_carries_the_frozen_protocol_fields() {
-        let value: serde_json::Value =
-            serde_json::from_str(&start_frame("workspace-a", "desktop", "desktop-1"))
-                .expect("首帧应为合法 JSON");
+        let value: serde_json::Value = serde_json::from_str(&start_frame(
+            "workspace-a",
+            "desktop",
+            "desktop-1",
+            true,
+            false,
+        ))
+        .expect("首帧应为合法 JSON");
         assert_eq!(value["type"], "start");
         assert_eq!(value["protocolVersion"], 1);
         assert_eq!(value["workspaceId"], "workspace-a");
         assert_eq!(value["replyDestination"], "desktop");
         assert_eq!(value["mode"], "push_to_talk");
         assert_eq!(value["lang"], "zh");
-        assert_eq!(value["tts"], false);
+        assert_eq!(value["tts"], true);
+        assert_eq!(value["submit"], false);
+
+        // 对话入口显式声明提交：同一个首帧构造器覆盖两种模式。
+        let dialogue: serde_json::Value = serde_json::from_str(&start_frame(
+            "workspace-a",
+            "desktop",
+            "desktop-2",
+            true,
+            true,
+        ))
+        .expect("对话模式首帧");
+        assert_eq!(dialogue["submit"], true);
     }
 
     #[test]
@@ -438,6 +564,37 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&stop_frame(3)).expect("stop 帧");
         assert_eq!(value["type"], "stop");
         assert_eq!(value["utteranceSeq"], 3);
+    }
+
+    #[test]
+    fn cancel_and_drained_frames_match_gateway_wire_contract() {
+        let cancel: serde_json::Value =
+            serde_json::from_str(&cancel_frame("user_cancel")).expect("cancel 帧");
+        assert_eq!(cancel["type"], "cancel");
+        assert_eq!(cancel["reason"], "user_cancel");
+
+        let drained: serde_json::Value =
+            serde_json::from_str(&playback_drained_frame(2)).expect("playbackDrained 帧");
+        assert_eq!(drained["type"], "playbackDrained");
+        assert_eq!(drained["epoch"], 2);
+    }
+
+    #[test]
+    fn downlink_audio_frame_decodes_epoch_seq_and_pcm() {
+        let mut raw = vec![0x02];
+        raw.extend_from_slice(&3u32.to_be_bytes());
+        raw.extend_from_slice(&7u32.to_be_bytes());
+        raw.extend_from_slice(&[0x10, 0x20, 0x30, 0x40]);
+        let decoded = decode_downlink_audio(&raw).expect("合法 0x02 音频帧应能解码");
+        assert_eq!(decoded["type"], "audio");
+        assert_eq!(decoded["epoch"], 3);
+        assert_eq!(decoded["seq"], 7);
+        assert_eq!(decoded["pcmBase64"], "ECAwQA==");
+
+        // 非 0x02、空载荷或奇数长度字节一律拒绝。
+        assert!(decode_downlink_audio(&[0x01, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]).is_none());
+        assert!(decode_downlink_audio(&[0x02, 0, 0, 0, 1, 0, 0, 0, 1]).is_none());
+        assert!(decode_downlink_audio(&[0x02, 0, 0, 0, 1, 0, 0, 0, 1, 0x10]).is_none());
     }
 
     #[test]

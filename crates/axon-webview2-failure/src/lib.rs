@@ -91,6 +91,31 @@ pub struct FailureDetail {
     pub exit_code: Option<i32>,
 }
 
+/// 判断权限请求的来源是否为桌面工作台自身的本地受信任源。
+///
+/// 桌面端只对自身内嵌源自动放行麦克风权限，从而消除浏览器式的
+/// `tauri.localhost 想要使用您的麦克风` 顶部地址栏提示，外部未知站点一律不放行。
+#[must_use]
+pub fn is_trusted_app_origin(uri: &str) -> bool {
+    let trimmed = uri.trim().to_ascii_lowercase();
+    for prefix in [
+        "https://tauri.localhost",
+        "http://tauri.localhost",
+        "tauri://localhost",
+        "https://127.0.0.1",
+        "http://127.0.0.1",
+        "https://localhost",
+        "http://localhost",
+    ] {
+        if let Some(rest) = trimmed.strip_prefix(prefix)
+            && (rest.is_empty() || rest.starts_with('/') || rest.starts_with(':'))
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// 安装失败接管：关闭内置错误页，并在进程失败时回调。
 ///
 /// 返回 true 表示接管请求已提交到界面线程（`with_webview` 是异步派发，这里无法给出
@@ -102,7 +127,9 @@ where
 {
     use std::sync::Arc;
     use webview2_com::Microsoft::Web::WebView2::Win32::{
-        COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,
+        COREWEBVIEW2_PERMISSION_KIND, COREWEBVIEW2_PERMISSION_KIND_MICROPHONE,
+        COREWEBVIEW2_PERMISSION_STATE_ALLOW, COREWEBVIEW2_PROCESS_FAILED_KIND,
+        COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,
         COREWEBVIEW2_PROCESS_FAILED_KIND_FRAME_RENDER_PROCESS_EXITED,
         COREWEBVIEW2_PROCESS_FAILED_KIND_GPU_PROCESS_EXITED,
         COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
@@ -112,10 +139,11 @@ where
         COREWEBVIEW2_PROCESS_FAILED_REASON_OUT_OF_MEMORY,
         COREWEBVIEW2_PROCESS_FAILED_REASON_PROFILE_DELETED,
         COREWEBVIEW2_PROCESS_FAILED_REASON_TERMINATED,
-        COREWEBVIEW2_PROCESS_FAILED_REASON_UNRESPONSIVE, ICoreWebView2ProcessFailedEventArgs2,
+        COREWEBVIEW2_PROCESS_FAILED_REASON_UNRESPONSIVE,
+        ICoreWebView2PermissionRequestedEventArgs3, ICoreWebView2ProcessFailedEventArgs2,
     };
-    use webview2_com::ProcessFailedEventHandler;
-    use windows_core::Interface;
+    use webview2_com::{PermissionRequestedEventHandler, ProcessFailedEventHandler, take_pwstr};
+    use windows_core::{Interface, PWSTR};
 
     /// 把 WebView2 的失败类别映射成出事进程。
     fn classify(kind: COREWEBVIEW2_PROCESS_FAILED_KIND) -> FailureKind {
@@ -203,6 +231,37 @@ where
             let mut token = 0i64;
             // SAFETY: 处理器在窗口存活期间一直被 WebView2 持有，事件令牌无需保存。
             let _ = unsafe { core.add_ProcessFailed(&handler, &mut token) };
+
+            let permission_handler =
+                PermissionRequestedEventHandler::create(Box::new(|_sender, args| {
+                    let Some(args) = args else {
+                        return Ok(());
+                    };
+                    let mut kind = COREWEBVIEW2_PERMISSION_KIND(0);
+                    if unsafe { args.PermissionKind(&mut kind) }.is_err()
+                        || kind != COREWEBVIEW2_PERMISSION_KIND_MICROPHONE
+                    {
+                        return Ok(());
+                    }
+                    let mut raw_uri = PWSTR::null();
+                    let uri = if unsafe { args.Uri(&mut raw_uri) }.is_ok() {
+                        take_pwstr(raw_uri)
+                    } else {
+                        String::new()
+                    };
+                    if is_trusted_app_origin(&uri) {
+                        let _ = unsafe { args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW) };
+                        if let Ok(third) = args.cast::<ICoreWebView2PermissionRequestedEventArgs3>()
+                        {
+                            let _ = unsafe { third.SetSavesInProfile(true) };
+                        }
+                    }
+                    Ok(())
+                }));
+            let mut permission_token = 0i64;
+            // SAFETY: 注册窗口级麦克风权限静默放行处理器，避免弹出浏览器式权限栏。
+            let _ =
+                unsafe { core.add_PermissionRequested(&permission_handler, &mut permission_token) };
         })
         .is_ok()
 }
@@ -214,4 +273,21 @@ where
     F: Fn(FailureDetail) + Send + Sync + 'static,
 {
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_trusted_app_origin;
+
+    #[test]
+    fn trusted_origin_accepts_only_local_workbench_hosts() {
+        assert!(is_trusted_app_origin("https://tauri.localhost"));
+        assert!(is_trusted_app_origin("http://tauri.localhost/index.html"));
+        assert!(is_trusted_app_origin("tauri://localhost"));
+        assert!(is_trusted_app_origin("http://127.0.0.1:1420/"));
+        assert!(is_trusted_app_origin("http://localhost:1420"));
+        assert!(!is_trusted_app_origin("https://example.com"));
+        assert!(!is_trusted_app_origin("http://localhost.evil.com"));
+        assert!(!is_trusted_app_origin(""));
+    }
 }

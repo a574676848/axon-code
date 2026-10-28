@@ -481,11 +481,27 @@ pub struct VoiceAudioPayload {
 
 /// 合成一段朗读音频，由 Rust 侧带网关凭据发起请求。
 ///
+/// 合成是秒级到十几秒的操作：必须放在阻塞池里执行，否则会占住主线程，
+/// 窗口在这段时间内既不响应点击也不响应滚动。
+///
 /// # Errors
 ///
 /// 参数为空、网关不可达、语音运行时未就绪或合成失败。
 #[tauri::command]
-pub fn voice_tts(text: String, preset_id: Option<String>) -> Result<VoiceAudioPayload, String> {
+pub async fn voice_tts(
+    text: String,
+    preset_id: Option<String>,
+) -> Result<VoiceAudioPayload, String> {
+    tauri::async_runtime::spawn_blocking(move || synthesize(text, preset_id))
+        .await
+        .map_err(|error| format!("朗读任务失败：{error}"))?
+}
+
+/// 朗读合成的同步实现；命令通道放在阻塞池里调它，调试桥直接调。
+pub(crate) fn synthesize(
+    text: String,
+    preset_id: Option<String>,
+) -> Result<VoiceAudioPayload, String> {
     use base64::Engine as _;
     let text = text.trim();
     if text.is_empty() {
@@ -513,6 +529,16 @@ pub fn voice_tts(text: String, preset_id: Option<String>) -> Result<VoiceAudioPa
 #[tauri::command]
 pub fn voice_presets() -> Result<serde_json::Value, String> {
     crate::gateway::get_voice_presets()
+}
+
+/// 语音运行时状态：点麦克风之前先确认本地语音是否就绪。
+///
+/// # Errors
+///
+/// 网关不可达或鉴权失败。
+#[tauri::command]
+pub fn voice_runtime_status() -> Result<serde_json::Value, String> {
+    crate::gateway::get_voice_runtime_status()
 }
 
 /// 从人格摘要里取语音需要的表达参数；字段缺失时返回 `None`，交给默认基线。

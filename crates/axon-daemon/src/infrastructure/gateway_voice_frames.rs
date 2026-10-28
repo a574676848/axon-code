@@ -29,6 +29,8 @@ pub(crate) enum ClientFrame {
         reply_destination: String,
         /// 是否朗读文本轮。
         tts: bool,
+        /// 定稿是否提交为一轮对话；听写模式只回文本、不进会话。
+        submit: bool,
     },
     /// 结束当前句。
     Stop {
@@ -60,8 +62,16 @@ struct StartWire {
     mode: String,
     lang: String,
     tts: bool,
+    /// 缺省为提交：旧客户端不带这个字段时行为不变。
+    #[serde(default = "default_true")]
+    submit: bool,
     #[serde(default)]
     device_id: Option<String>,
+}
+
+/// `submit` 的缺省值。
+fn default_true() -> bool {
+    true
 }
 
 /// `stop` 帧。
@@ -110,6 +120,8 @@ pub(super) struct StartRequest {
     pub(super) reply_destination: String,
     /// 本轮是否朗读。
     pub(super) tts: bool,
+    /// 定稿是否提交为一轮对话。
+    pub(super) submit: bool,
 }
 
 /// 按会话态分类：`start` 只能一次，`stop`/`cancel` 必须在 `start` 之后。
@@ -120,6 +132,7 @@ pub(crate) fn classify(started: bool, text: &str) -> Result<Classified, ()> {
             workspace_id,
             reply_destination,
             tts,
+            submit,
         } => {
             if started {
                 Err(())
@@ -129,6 +142,7 @@ pub(crate) fn classify(started: bool, text: &str) -> Result<Classified, ()> {
                     workspace_id,
                     reply_destination,
                     tts,
+                    submit,
                 }))
             }
         }
@@ -187,6 +201,7 @@ pub(crate) fn parse_client_frame(text: &str) -> Result<ClientFrame, ()> {
                 workspace_id: wire.workspace_id,
                 reply_destination: wire.reply_destination,
                 tts: wire.tts,
+                submit: wire.submit,
             })
         }
         "stop" => {
@@ -251,6 +266,27 @@ mod tests {
             parse_client_frame(&start_json().replace("\"full_duplex\"", "\"half_duplex\"")),
             Err(())
         );
+    }
+
+    #[test]
+    fn start_submit_defaults_to_turn_mode_and_can_be_dictation() {
+        // 旧客户端不带 submit：按提交处理，行为不变。
+        match parse_client_frame(start_json()) {
+            Ok(ClientFrame::Start { submit, .. }) => assert!(submit, "缺省应提交"),
+            other => panic!("期望 start，得到 {other:?}"),
+        }
+        // 听写：只回文本，不提交成一轮。
+        let dictation = start_json().replace("\"tts\":false", "\"tts\":false,\"submit\":false");
+        match parse_client_frame(&dictation) {
+            Ok(ClientFrame::Start { submit, .. }) => assert!(!submit, "听写不应提交"),
+            other => panic!("期望 start，得到 {other:?}"),
+        }
+        // 显式提交同样成立。
+        let dialogue = start_json().replace("\"tts\":false", "\"tts\":false,\"submit\":true");
+        match parse_client_frame(&dialogue) {
+            Ok(ClientFrame::Start { submit, .. }) => assert!(submit),
+            other => panic!("期望 start，得到 {other:?}"),
+        }
     }
 
     #[test]

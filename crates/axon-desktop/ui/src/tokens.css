@@ -522,6 +522,25 @@ body,
 }
 
 /*
+ * 声波柱的静息呼吸：只动 transform 与 opacity。
+ * 正在发声的柱体由实测振幅直接写 transform，因此这里只负责「没有声音但还在场」的那一档。
+ */
+@keyframes voice-wave-idle {
+  0%,
+  100% {
+    transform: scaleY(0.34);
+  }
+
+  50% {
+    transform: scaleY(0.62);
+  }
+}
+
+.voice-wave-idle {
+  animation: voice-wave-idle 2.4s ease-in-out infinite;
+}
+
+/*
  * 模态入场：只动 opacity 与 transform。
  * 出场不做动画（React 卸载即消失），因为把关闭也做成两段会让返回操作变慢。
  */

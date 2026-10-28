@@ -64,10 +64,34 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
             Ok(serde_json::to_value(ipc::config_validate_values(values)).map_err(stringify)?)
         }
         "voice_presets" => Ok(serde_json::to_value(ipc::voice_presets()).map_err(stringify)?),
+        "voice_runtime_status" => {
+            Ok(serde_json::to_value(ipc::voice_runtime_status()).map_err(stringify)?)
+        }
         "voice_preview" => Ok(serde_json::to_value(crate::voice::preview_blocking(
             optional_string("presetId"),
         ))
         .map_err(stringify)?),
+        "voice_microphone_status" => Ok(serde_json::to_value(
+            crate::voice_permission::probe_microphone_status(),
+        )
+        .map_err(stringify)?),
+        "voice_open_microphone_settings" => {
+            crate::voice_permission::voice_open_microphone_settings()?;
+            Ok(Value::Null)
+        }
+        "voice_cancel" => {
+            crate::voice::voice_cancel(optional_string("reason"))?;
+            Ok(Value::Null)
+        }
+        "voice_playback_drained" => {
+            let epoch = args
+                .get("epoch")
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+                .unwrap_or(0);
+            crate::voice::voice_playback_drained(epoch)?;
+            Ok(Value::Null)
+        }
         "voice_tts" => {
             let text = args
                 .get("text")
@@ -78,7 +102,7 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
                 .get("presetId")
                 .and_then(|value| value.as_str())
                 .map(str::to_owned);
-            Ok(serde_json::to_value(ipc::voice_tts(text, preset_id)).map_err(stringify)?)
+            Ok(serde_json::to_value(ipc::synthesize(text, preset_id)).map_err(stringify)?)
         }
         "open_config_file" => {
             ipc::open_config_file()?;

@@ -38,6 +38,26 @@ import { call } from './backend';
 /** 音色预设清单：可用性由网关按模型安装情况给出，前端不改写。 */
 export const voicePresets = (): Promise<VoicePresetsPayload> => call('voice_presets');
 
+/** 查询本地语音运行时是否就绪（与建连时的 ready 同一判据）。 */
+export const voiceRuntimeStatus = (): Promise<Record<string, unknown>> =>
+  call('voice_runtime_status');
+
+/** 查询操作系统的麦克风隐私状态。 */
+export const voiceMicrophoneStatus = (): Promise<Record<string, unknown>> =>
+  call('voice_microphone_status');
+
+/** 打开操作系统的麦克风隐私设置。 */
+export const voiceOpenMicrophoneSettings = (): Promise<void> =>
+  call('voice_open_microphone_settings');
+
+/** 通知宿主该轮下行音频已播完或已清空。 */
+export const voicePlaybackDrained = (epoch: number): Promise<void> =>
+  call('voice_playback_drained', { epoch });
+
+/** 打断当前语音轮次或收线。 */
+export const voiceCancel = (reason: 'user_cancel' | 'client_close' = 'user_cancel'): Promise<void> =>
+  call('voice_cancel', { reason });
+
 const CRON_PAGE_SIZE = 20;
 export const cronList = (page = 1, pageSize = CRON_PAGE_SIZE, status = '', search = ''): Promise<CronListResult> =>
   call('cron_list', { page, pageSize, status, search });

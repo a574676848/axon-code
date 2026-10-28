@@ -1,6 +1,7 @@
 import React from 'react';
 import type { TranscriptCell, TurnState } from '../../conversation/transcript';
 import { speak } from '../../speech';
+import { wasStreamedTurn } from '../../speech/streamedTurns';
 
 /*
  * 自动朗读：一轮收口时读这一轮最后一段助手正文。
@@ -41,6 +42,8 @@ export function useAutoReadReply(
     const turn = turns[turns.length - 1];
     // 中断与失败留下的半截正文不是一条回复，不念。
     if (turn === undefined || turn.status !== 'completed') return;
+    // 这一轮刚才已经由语音流边生成边播报过：再读一遍会把同一段话念两次。
+    if (wasStreamedTurn(turn.id)) return;
     const cell = replyCellOf(turn);
     if (cell === null) return;
     speak(cell.text, { source: cell.id });
