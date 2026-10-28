@@ -143,7 +143,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, i
         aria-label="命令面板"
         data-state={lifecycle.state}
         style={{ width: PANEL_WIDTH }}
-        className="modal-spring-surface overlay-panel-in relative flex max-w-full flex-col overflow-clip rounded-lg bg-surface/96 backdrop-blur-md shadow-modal hairline border-border"
+        className="modal-spring-surface overlay-panel-in relative flex max-w-full flex-col overflow-clip rounded-lg bg-surface shadow-modal hairline border-border"
       >
         <div className="flex items-center gap-2 px-3 h-11 shrink-0 hairline-b border-border-hairline">
           <input

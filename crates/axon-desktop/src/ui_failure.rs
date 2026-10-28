@@ -194,9 +194,22 @@ fn webview_tree_memory() -> Option<u64> {
         if !is_descendant(processes, process.pid(), self_pid) {
             continue;
         }
+        /*
+         * GPU 进程不计入：它记的是合成器纹理的高水位，与「页面失控」不是一回事。
+         * 半透窗口与背景模糊会让它随窗口面积线性变大，算进阈值会在 4K 或高缩放下
+         * 把健康的界面误切成兜底页。
+         */
+        if !is_page_process(process) {
+            continue;
+        }
         total = total.saturating_add(process.memory());
     }
     Some(total)
+}
+
+/// 是否属于「页面」一侧的进程（浏览器宿主、渲染器与工具进程）。
+fn is_page_process(process: &Process) -> bool {
+    !process.cmd().iter().any(|arg| arg == "--type=gpu-process")
 }
 
 /// 这个进程是不是给定祖先的后代（自身也算）。
