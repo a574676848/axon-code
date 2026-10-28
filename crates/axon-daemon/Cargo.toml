@@ -16,7 +16,6 @@ axon-session = { path = "../axon-session" }
 axon-session-runtime = { path = "../axon-session-runtime" }
 axon-voice = { path = "../axon-voice" }
 axon-voice-bridge = { path = "../axon-voice-bridge" }
-axon-voice-host = { path = "../axon-voice-host" }
 serde.workspace = true
 axum.workspace = true
 chrono.workspace = true

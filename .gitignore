@@ -13,5 +13,5 @@ CLAUDE.md
 .zed/
 __pycache__/
 
-# 运行态日志（sherpa / 调试）不得入库
+# 运行态日志（调试与诊断）不得入库
 *.log

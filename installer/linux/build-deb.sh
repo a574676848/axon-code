@@ -18,7 +18,6 @@ VERSION="${AXON_VERSION:-$(sed -n 's/^version = "\([^"]*\)"/\1/p' "${ROOT_HINT}/
 ARCH="${AXON_ARCH:?缺少 AXON_ARCH}"
 BINARY="${AXON_BINARY:?缺少 AXON_BINARY}"
 LAUNCHER="${AXON_LAUNCHER:?缺少 AXON_LAUNCHER}"
-VOICE_HOST="${AXON_VOICE_HOST:-}"
 
 # 确定 Rust target triple
 case "${ARCH}" in
@@ -58,16 +57,8 @@ RELEASE_NAME="${VERSION}"
 mkdir -p "${INSTALL_ROOT}/versions/${RELEASE_NAME}" "${INSTALL_ROOT}/launcher" "${DEFAULTS_DIR}"
 cp "${BINARY}" "${INSTALL_ROOT}/versions/${RELEASE_NAME}/axon"
 cp "${LAUNCHER}" "${INSTALL_ROOT}/launcher/axon-launcher"
-if [ -n "${VOICE_HOST}" ]; then
-    if [ ! -x "${VOICE_HOST}" ]; then printf '%s\n' "缺少语音宿主：${VOICE_HOST}" >&2; exit 1; fi
-    cp "${VOICE_HOST}" "${INSTALL_ROOT}/versions/${RELEASE_NAME}/axon-voice-host"
-fi
-'cp "${ROOT_DIR}/assets/defaults/SOUL.md" "${DEFAULTS_DIR}/SOUL.md"
-mkdir -p "${INSTALL_ROOT}/scripts/voice"
-cp "${ROOT_DIR}/scripts/voice/install-voice-runtime.sh" "${INSTALL_ROOT}/scripts/voice/"
-chmod 755 "${INSTALL_ROOT}/scripts/voice/install-voice-runtime.sh"'
+cp "${ROOT_DIR}/assets/defaults/SOUL.md" "${DEFAULTS_DIR}/SOUL.md"
 chmod 755 "${INSTALL_ROOT}/versions/${RELEASE_NAME}/axon" "${INSTALL_ROOT}/launcher/axon-launcher"
-if [ -n "${VOICE_HOST}" ]; then chmod 755 "${INSTALL_ROOT}/versions/${RELEASE_NAME}/axon-voice-host"; fi
 chmod 644 "${DEFAULTS_DIR}/SOUL.md"
 
 # ── 替换 control 文件中的占位符 ───────────────

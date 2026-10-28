@@ -33,9 +33,9 @@ trap restore_daemon EXIT
 if command -v rustup >/dev/null 2>&1; then
     ACTIVE_TOOLCHAIN=$(CDPATH= cd -- "${REPO_ROOT}" && rustup show active-toolchain | awk '{print $1}')
     if [ -n "${ACTIVE_TOOLCHAIN}" ]; then
-        rustup run "${ACTIVE_TOOLCHAIN}" cargo build --release --locked -p axon-cli -p axon-desktop -p axon-launcher -p axon-voice-host
+        rustup run "${ACTIVE_TOOLCHAIN}" cargo build --release --locked -p axon-cli -p axon-desktop -p axon-launcher
     else
-        cargo build --release --locked -p axon-cli -p axon-desktop -p axon-launcher -p axon-voice-host
+        cargo build --release --locked -p axon-cli -p axon-desktop -p axon-launcher
     fi
 else
     CARGO_BIN=$(command -v cargo || true)
@@ -47,9 +47,8 @@ fi
 RELEASE_BIN="${REPO_ROOT}/target/release"
 CLI_BIN="${RELEASE_BIN}/axon"
 DESKTOP_BIN="${RELEASE_BIN}/axon-desktop"
-VOICE_HOST_BIN="${RELEASE_BIN}/axon-voice-host"
 BUILT_LAUNCHER="${RELEASE_BIN}/axon-launcher"
-for binary in "${CLI_BIN}" "${DESKTOP_BIN}" "${BUILT_LAUNCHER}" "${VOICE_HOST_BIN}"; do
+for binary in "${CLI_BIN}" "${DESKTOP_BIN}" "${BUILT_LAUNCHER}"; do
     if [ ! -x "${binary}" ]; then printf '%s\n' "编译完成但缺少二进制：${binary}" >&2; exit 1; fi
 done
 "${CLI_BIN}" --version >/dev/null
@@ -73,18 +72,12 @@ STAGED_RELEASE="${VERSIONS_DIR}/.staging.$$"
 mkdir -p "${STAGED_RELEASE}" "${LAUNCHER_DIR}" "${INSTALL_DIR}"
 cp "${CLI_BIN}" "${STAGED_RELEASE}/axon"
 cp "${DESKTOP_BIN}" "${STAGED_RELEASE}/axon-desktop"
-cp "${VOICE_HOST_BIN}" "${STAGED_RELEASE}/axon-voice-host"
-chmod 755 "${STAGED_RELEASE}/axon" "${STAGED_RELEASE}/axon-desktop" "${STAGED_RELEASE}/axon-voice-host"
+chmod 755 "${STAGED_RELEASE}/axon" "${STAGED_RELEASE}/axon-desktop"
 rm -rf "${RELEASE_DIR}"
 mv "${STAGED_RELEASE}" "${RELEASE_DIR}"
 cp "${BUILT_LAUNCHER}" "${LAUNCHER_BIN}"
 chmod 755 "${LAUNCHER_BIN}"
-# 首次安装自动拉取语音运行时与模型；失败不阻塞安装。
-VOICE_PROVISION="${REPO_ROOT}/scripts/voice/install-voice-runtime.sh"
-if [ -f "${VOICE_PROVISION}" ]; then
-    echo "[axon] 安装语音运行时与模型（首次约 750 MB）。"
-    bash "${VOICE_PROVISION}" || echo "[axon] 语音运行时安装失败，语音功能暂不可用。" >&2
-fiprintf '{"versionId":"%s"}\n' "${RELEASE_ID}" > "${INSTALL_ROOT}/.current.$$"
+printf '{"versionId":"%s"}\n' "${RELEASE_ID}" > "${INSTALL_ROOT}/.current.$$"
 mv -f "${INSTALL_ROOT}/.current.$$" "${CURRENT_FILE}"
 rm -f "${HOME}/.cargo/bin/axon" "${HOME}/.cargo/bin/axon-desktop"
 cat > "${INSTALL_DIR}/axon" <<EOF

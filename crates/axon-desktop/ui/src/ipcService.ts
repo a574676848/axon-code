@@ -35,10 +35,10 @@ import { call } from './backend';
 
 // ------------------------------------------------------------ 语音
 
-/** 音色预设清单：可用性由网关按模型安装情况给出，前端不改写。 */
+/** 音色预设清单：可用性由网关按提供方能力给出，前端不改写。 */
 export const voicePresets = (): Promise<VoicePresetsPayload> => call('voice_presets');
 
-/** 查询本地语音运行时是否就绪（与建连时的 ready 同一判据）。 */
+/** 查询语音提供方是否就绪（与建连时的 ready 同一判据）。 */
 export const voiceRuntimeStatus = (): Promise<Record<string, unknown>> =>
   call('voice_runtime_status');
 

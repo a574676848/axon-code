@@ -32,6 +32,7 @@ fn all_variants() -> Vec<VoiceFailure> {
             detail: "busy".to_owned(),
         },
         VoiceFailure::WorkerUnavailable,
+        VoiceFailure::ProviderUnavailable,
         VoiceFailure::WorkerCrashed {
             sub_stage: WorkerSubStage::Asr,
             exit_code: 13,
@@ -73,6 +74,7 @@ fn every_protocol_code_is_covered_both_ways() {
         "model_unusable",
         "device_unavailable",
         "worker_unavailable",
+        "provider_unavailable",
         "worker_crashed",
         "backpressure",
         "asr_overloaded",
@@ -113,13 +115,17 @@ fn messages_match_protocol_and_never_leak_internal_detail() {
             VoiceFailure::ModelUnusable {
                 family: ModelFamily::Asr,
             },
-            "模型与运行时版本不匹配，请重新安装模型",
+            "语音提供方拒绝了这个模型，请更换模型标识",
         ),
         (
             VoiceFailure::ModelMissing {
                 family: ModelFamily::Tts,
             },
-            "本地语音模型未安装，点此查看安装指引",
+            "所选语音模型不可用，请检查提供方配置",
+        ),
+        (
+            VoiceFailure::ProviderUnavailable,
+            "尚未接入云端语音提供方，请先配置阿里百炼或火山引擎",
         ),
     ];
     for (failure, message) in exact {
@@ -257,6 +263,7 @@ fn from_code_roundtrips_every_code() {
         "model_unusable",
         "device_unavailable",
         "worker_unavailable",
+        "provider_unavailable",
         "worker_crashed",
         "backpressure",
         "asr_overloaded",

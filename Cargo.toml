@@ -13,7 +13,6 @@ members = [
     "crates/axon-tui-runtime",
     "crates/axon-voice",
     "crates/axon-voice-bridge",
-    "crates/axon-voice-host",
     "crates/axon-voice-protocol",
     "crates/axon-memory",
     "crates/axon-memory-read",

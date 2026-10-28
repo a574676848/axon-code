@@ -3,14 +3,15 @@ import { IconButton } from '../ui/controls';
 import { PanelRightIcon } from '../../icons';
 import { RuntimeActions } from './RuntimeActions';
 import { VoiceLaneToggle } from './VoiceLaneToggle';
+import { VOICE_UI_ENABLED } from '../../speech/enabled';
 import type { JobRow, SubagentRow } from '../../conversation/transcript';
 
 /*
  * 指标条右侧的操作区。
  *
  * 三件东西按「会话自己的偏好、随会话走的过程事实、窗口的停靠面」排开：
- * 朗读开关常驻，运行时事实只在真的存在子代理或后台任务时出现，
- * 右侧栏入口只在收起态出现，展开后收起动作归面板自己的 tab 条末端。
+ * 朗读开关常驻（语音入口隐藏时整枚收起），运行时事实只在真的存在子代理或后台
+ * 任务时出现，右侧栏入口只在收起态出现，展开后收起动作归面板自己的 tab 条末端。
  */
 
 export const ConversationHeaderActions: React.FC<{
@@ -25,7 +26,7 @@ export const ConversationHeaderActions: React.FC<{
   onToggleRail: () => void;
 }> = ({ subagents, jobs, laneId, laneKey, onOpenSubagent, railExpanded, onToggleRail }) => (
   <>
-    <VoiceLaneToggle laneKey={laneKey} />
+    {VOICE_UI_ENABLED && <VoiceLaneToggle laneKey={laneKey} />}
     <RuntimeActions
       subagents={subagents}
       jobs={jobs}

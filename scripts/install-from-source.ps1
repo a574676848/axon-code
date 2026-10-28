@@ -99,14 +99,13 @@ try {
     Write-Host "[axon] 正在编译 CLI、桌面端与稳定 launcher。" -ForegroundColor Cyan
     Push-Location $root
     try {
-        & $cargo.Source build --release --locked -p axon-cli -p axon-desktop -p axon-launcher -p axon-voice-host
+        & $cargo.Source build --release --locked -p axon-cli -p axon-desktop -p axon-launcher
         if ($LASTEXITCODE -ne 0) { throw "cargo build 失败，退出码：$LASTEXITCODE" }
     } finally { Pop-Location }
     $cli = Join-Path $releaseBin "axon.exe"
     $desktop = Join-Path $releaseBin "axon-desktop.exe"
     $builtLauncher = Join-Path $releaseBin "axon-launcher.exe"
-    $voiceHost = Join-Path $releaseBin "axon-voice-host.exe"
-    foreach ($path in @($cli, $desktop, $builtLauncher, $voiceHost)) { if (-not (Test-Path $path)) { throw "编译完成但缺少二进制：$path" } }
+    foreach ($path in @($cli, $desktop, $builtLauncher)) { if (-not (Test-Path $path)) { throw "编译完成但缺少二进制：$path" } }
     & $cli --version *> $null; if ($LASTEXITCODE -ne 0) { throw "CLI 自检失败" }
     & $desktop --self-check *> $null; if ($LASTEXITCODE -ne 0) { throw "桌面端自检失败" }
     $version = (& $cli --version).ToString().Trim().Split()[-1]
@@ -121,7 +120,6 @@ try {
     New-Item -ItemType Directory -Force $stagedRelease, $launcherDir, $installDir | Out-Null
     Copy-Item $cli (Join-Path $stagedRelease "axon.exe")
     Copy-Item $desktop (Join-Path $stagedRelease "axon-desktop.exe")
-    Copy-Item $voiceHost (Join-Path $stagedRelease "axon-voice-host.exe")
     $swapDeadline = [DateTime]::UtcNow.AddSeconds(30)
     while ($true) {
         $swapBlocked = $false
@@ -156,11 +154,7 @@ try {
         & $launcherPath setup --provider-name openai --model gpt-4o --non-interactive --no-validate | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "Axon 默认配置初始化失败，退出码：$LASTEXITCODE" }
     }
-    $voiceProvision = Join-Path $root 'scripts\voice\install-voice-runtime.ps1'
-    if (Test-Path $voiceProvision) {
-        Write-Host "[axon] 安装语音运行时与模型（首次约 750 MB，可离线跳过）。" -ForegroundColor Cyan
-        try { & $voiceProvision | Out-Host } catch { Write-Host "[axon] 语音运行时安装失败，语音功能暂不可用：$($_.Exception.Message)" -ForegroundColor Yellow }
-    }    if (-not $BinariesOnly) { & $launcherPath daemon install | Out-Host; if ($LASTEXITCODE -ne 0) { throw "Daemon 安装失败，退出码：$LASTEXITCODE" } }
+    if (-not $BinariesOnly) { & $launcherPath daemon install | Out-Host; if ($LASTEXITCODE -ne 0) { throw "Daemon 安装失败，退出码：$LASTEXITCODE" } }
     & $launcherPath daemon start | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Daemon 启动失败，退出码：$LASTEXITCODE" }
     $status = & $launcherPath daemon status | Out-String | ConvertFrom-Json

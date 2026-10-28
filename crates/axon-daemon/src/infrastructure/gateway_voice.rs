@@ -1,7 +1,7 @@
 //! `/api/v1/voice` 的 WebSocket 入口：鉴权、升级、会话循环、超时与背压判决。
 //!
 //! 分工：本模块只管连接与编排；帧解析在 `gateway_voice_frames`，回合状态在
-//! `gateway_voice_turn`，事件订阅在 `gateway_voice_turn_stream`，宿主工作线程与
+//! `gateway_voice_turn`，事件订阅在 `gateway_voice_turn_stream`，提供方工作线程与
 //! 有界上行队列在 `gateway_voice_worker`，指标在 `gateway_voice_metrics`。
 
 use super::GatewayHttpState;
@@ -42,7 +42,7 @@ pub struct VoiceTimeouts {
     pub idle: Duration,
     /// 单次会话最长时长。
     pub session: Duration,
-    /// `start` 到宿主 `warm`。
+    /// `start` 到提供方 `warm`。
     pub warmup: Duration,
     /// `stopAudio` 到客户端 `playbackDrained` 的回执上限（PROTOCOL §5）。
     pub drained: Duration,

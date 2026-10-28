@@ -54,16 +54,16 @@ export function isRecoverableVoiceError(code: string | undefined): boolean {
  * 一句「出现内部错误」丢给用户。未知错误码才回落到服务端文案。
  */
 const VOICE_ERROR_TEXT: Record<string, string> = {
-  model_missing: '本地语音模型尚未安装，重新运行 Axon 安装脚本即可补齐',
-  model_unusable: '本地语音模型不可用，检查语音运行时安装后重试',
+  model_missing: '所选语音模型不可用，检查语音提供方配置后重试',
+  model_unusable: '语音提供方拒绝了这个模型，换一个模型标识再试',
+  provider_unavailable: '尚未接入云端语音提供方，请先配置阿里百炼或火山引擎',
   worker_unavailable: '语音引擎没能启动，稍后重试或重启 Axon',
   worker_crashed: '语音引擎意外退出，本次听写已停止',
   protocol_sequence: '语音会话状态异常，请重新开始',
   frame_oversize: '音频帧异常，本次听写已停止',
   session_idle: '语音会话长时间无操作，已自动结束',
-  tts_failed: '本机朗读合成失败，稍后重试',
+  tts_failed: '朗读合成失败，稍后重试',
   preset_unavailable: '当前音色不可用，换一个音色再试',
-  voice_unavailable: '语音运行时未就绪，完成语音依赖安装后重试',
 };
 
 /** 把错误码翻成一句可执行的中文；未知码用服务端文案兜底。 */

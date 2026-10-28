@@ -1,7 +1,7 @@
 //! 端口：识别、合成、朗读渲染与时钟。
 //!
-//! 端口只描述能力，不含实现；适配器分别在 `axon-voice-host`（本地模型）与
-//! daemon/desktop（协议与播放）中实现。
+//! 端口只描述能力，不含实现；本机模型已移除，识别与合成由云端提供方适配器
+//! （阿里百炼、火山引擎）实现，协议与播放在 daemon/desktop 中实现。
 
 use crate::config::AsrConfig;
 use crate::domain::{SpeechProfile, VoiceFailure, cue::CueKind};

@@ -114,7 +114,9 @@ impl Default for AudioConfig {
 }
 
 /// 识别配置。
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// 默认值即「未配置」：接入云端提供方后由提供方配置写入 `provider` 与 `model`。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AsrConfig {
     /// 提供方。
     pub provider: String,
@@ -122,16 +124,6 @@ pub struct AsrConfig {
     pub model: String,
     /// 热词。
     pub hot_words: Vec<String>,
-}
-
-impl Default for AsrConfig {
-    fn default() -> Self {
-        Self {
-            provider: "sherpa".to_owned(),
-            model: "sherpa-streaming-zh-en".to_owned(),
-            hot_words: Vec::new(),
-        }
-    }
 }
 
 /// 合成配置。
@@ -162,8 +154,8 @@ impl Default for TtsConfig {
             read_text_turns: false,
             preset: String::new(),
             presets_file: String::new(),
-            provider: "sherpa".to_owned(),
-            model: "vits-zh".to_owned(),
+            provider: String::new(),
+            model: String::new(),
             fallback: TtsFallback::System,
             sentence_min_chars: 6,
         }
@@ -300,11 +292,11 @@ impl VoiceConfig {
         if !bounds::LANGUAGES.contains(&self.language.as_str()) {
             return Err(err("language", "只允许 zh、en、auto"));
         }
-        if self.asr.model.trim().is_empty() {
-            return Err(err("asr.model", "模型标识不能为空"));
+        if self.asr.model.trim().is_empty() != self.asr.provider.trim().is_empty() {
+            return Err(err("asr.model", "提供方与模型必须同时配置或同时留空"));
         }
-        if self.tts.model.trim().is_empty() {
-            return Err(err("tts.model", "模型标识不能为空"));
+        if self.tts.model.trim().is_empty() != self.tts.provider.trim().is_empty() {
+            return Err(err("tts.model", "提供方与模型必须同时配置或同时留空"));
         }
         let audio = &self.audio;
         range_u32("audio.pre_roll_ms", audio.pre_roll_ms, bounds::PRE_ROLL_MS)?;
@@ -463,10 +455,24 @@ mod tests {
     }
 
     #[test]
-    fn empty_model_is_rejected() {
+    fn provider_and_model_are_configured_together() {
         let mut config = VoiceConfig::default();
+        config.tts.provider = "bailian".to_owned();
         config.tts.model = "  ".to_owned();
-        assert!(config.validate().is_err());
+        assert!(config.validate().is_err(), "配了提供方就必须给模型");
+
+        let mut config = VoiceConfig::default();
+        config.asr.model = "paraformer-realtime-v2".to_owned();
+        assert!(config.validate().is_err(), "只给模型不给提供方也必须拒绝");
+    }
+
+    #[test]
+    fn default_voice_config_is_unconfigured() {
+        let config = VoiceConfig::default();
+        assert!(config.asr.provider.is_empty());
+        assert!(config.asr.model.is_empty());
+        assert!(config.tts.provider.is_empty());
+        assert!(config.tts.model.is_empty());
     }
 
     #[test]

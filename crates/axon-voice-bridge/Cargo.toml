@@ -6,7 +6,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-axon-voice-host = { path = "../axon-voice-host" }
 axon-voice-protocol = { path = "../axon-voice-protocol" }
 
 [lib]

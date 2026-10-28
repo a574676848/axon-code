@@ -1,8 +1,9 @@
 //! Axon 语音能力的领域合同。
 //!
 //! 本 crate 只承载纯逻辑：相位状态机、失败分类、音色与韵律画像、配置模型与端口 trait。
-//! 零 IO、零网络、零 FFI；模型推理、音频采集与协议编解码分别由 `axon-voice-host`、
-//! `axon-voice-protocol` 与 daemon/desktop 的适配层承担。
+//! 零 IO、零网络、零 FFI；识别与合成由云端提供方适配器（阿里百炼、火山引擎）实现
+//! [`port::SpeechToText`] 与 [`port::TextToSpeech`]，音频采集与协议编解码分别由
+//! daemon/desktop 的适配层承担。
 //!
 //! 合同的唯一事实源是合同仓库 `axon-voice-contract`（与本仓库同级的独立目录）：
 //!

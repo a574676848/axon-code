@@ -159,7 +159,7 @@ fn drain_events(bridge: &mut VoiceBridge<ScriptedHost>, want: usize) -> Vec<Voic
 fn warmup_then_session_reaches_final() {
     let mut bridge = bridge(Mode::Warm);
     bridge
-        .warmup("asr", "demo", &"0".repeat(64), Duration::from_secs(1))
+        .warmup("asr", "demo", Duration::from_secs(1))
         .expect("预热应成功");
     assert_eq!(bridge.state(), BridgeState::Ready);
 
@@ -192,7 +192,7 @@ fn warmup_then_session_reaches_final() {
 fn outbound_controls_carry_fields() {
     let (mut bridge, sent) = bridge_with_sent(Mode::Warm);
     bridge
-        .warmup("asr", "demo", &"a".repeat(64), Duration::from_secs(1))
+        .warmup("asr", "demo", Duration::from_secs(1))
         .expect("预热应成功");
     bridge
         .start("s-1", "full_duplex", "zh", &["车道".to_owned()])
@@ -202,7 +202,7 @@ fn outbound_controls_carry_fields() {
     let sent = sent.lock().expect("锁");
     assert!(matches!(
         sent.first(),
-        Some(Control::Warmup(warmup)) if warmup.manifest_sha256 == "a".repeat(64)
+        Some(Control::Warmup(warmup)) if warmup.family == "asr" && warmup.model == "demo"
     ));
     assert!(sent.iter().any(|control| matches!(
         control,
@@ -222,7 +222,7 @@ fn outbound_controls_carry_fields() {
 fn speak_carries_turn_epoch_and_sequence() {
     let (mut bridge, sent) = bridge_with_sent(Mode::Warm);
     bridge
-        .warmup("asr", "demo", &"a".repeat(64), Duration::from_secs(1))
+        .warmup("asr", "demo", Duration::from_secs(1))
         .expect("预热应成功");
     assert!(
         matches!(
@@ -258,10 +258,10 @@ fn speak_carries_turn_epoch_and_sequence() {
 fn warmup_is_idempotent_once_ready() {
     let (mut bridge, sent) = bridge_with_sent(Mode::Warm);
     bridge
-        .warmup("asr", "demo", &"0".repeat(64), Duration::from_secs(1))
+        .warmup("asr", "demo", Duration::from_secs(1))
         .expect("预热应成功");
     bridge
-        .warmup("asr", "demo", &"0".repeat(64), Duration::from_secs(1))
+        .warmup("asr", "demo", Duration::from_secs(1))
         .expect("重复预热应直接成功");
     let warmups = sent
         .lock()
@@ -275,7 +275,7 @@ fn warmup_is_idempotent_once_ready() {
 #[test]
 fn host_error_is_surfaced() {
     let mut bridge = bridge(Mode::Reject);
-    match bridge.warmup("asr", "demo", &"0".repeat(64), Duration::from_secs(1)) {
+    match bridge.warmup("asr", "demo", Duration::from_secs(1)) {
         Err(BridgeError::Host(error)) => assert_eq!(error.code, "model_unusable"),
         other => panic!("期望宿主错误，得到 {other:?}"),
     }
@@ -293,7 +293,7 @@ fn state_guards_are_enforced() {
     assert_eq!(bridge.end_session("idle"), Err(BridgeError::NoSession));
 
     bridge
-        .warmup("asr", "demo", &"0".repeat(64), Duration::from_secs(1))
+        .warmup("asr", "demo", Duration::from_secs(1))
         .expect("预热应成功");
     bridge.start("s-1", "full_duplex", "zh", &[]).expect("开始");
     assert_eq!(
@@ -301,7 +301,7 @@ fn state_guards_are_enforced() {
         Err(BridgeError::Busy)
     );
     assert_eq!(
-        bridge.warmup("asr", "demo", &"0".repeat(64), Duration::from_secs(1)),
+        bridge.warmup("asr", "demo", Duration::from_secs(1)),
         Err(BridgeError::Busy)
     );
     bridge.cancel("barge").expect("取消应成功");
@@ -311,7 +311,7 @@ fn state_guards_are_enforced() {
 fn timeout_on_silent_host() {
     let mut bridge = bridge(Mode::Silent);
     assert_eq!(
-        bridge.warmup("asr", "demo", &"0".repeat(64), Duration::from_millis(50)),
+        bridge.warmup("asr", "demo", Duration::from_millis(50)),
         Err(BridgeError::Transport(TransportError::Timeout))
     );
 }
@@ -320,7 +320,7 @@ fn timeout_on_silent_host() {
 fn shutdown_closes_and_rejects_later_calls() {
     let mut bridge = bridge(Mode::Warm);
     bridge
-        .warmup("asr", "demo", &"0".repeat(64), Duration::from_secs(1))
+        .warmup("asr", "demo", Duration::from_secs(1))
         .expect("预热应成功");
     bridge.shutdown();
     assert_eq!(bridge.state(), BridgeState::Closed);
@@ -339,7 +339,7 @@ fn shutdown_closes_and_rejects_later_calls() {
 fn host_error_frame_becomes_event() {
     let mut bridge = bridge(Mode::Warm);
     bridge
-        .warmup("asr", "demo", &"0".repeat(64), Duration::from_secs(1))
+        .warmup("asr", "demo", Duration::from_secs(1))
         .expect("预热应成功");
     bridge.start("s-1", "full_duplex", "zh", &[]).expect("开始");
     let _ = drain_events(&mut bridge, 1);
@@ -357,7 +357,7 @@ fn host_error_frame_becomes_event() {
 fn empty_audio_is_rejected() {
     let mut bridge = bridge(Mode::Warm);
     bridge
-        .warmup("asr", "demo", &"0".repeat(64), Duration::from_secs(1))
+        .warmup("asr", "demo", Duration::from_secs(1))
         .expect("预热应成功");
     bridge.start("s-1", "full_duplex", "zh", &[]).expect("开始");
     assert!(matches!(

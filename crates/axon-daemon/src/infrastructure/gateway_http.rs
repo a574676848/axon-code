@@ -21,6 +21,8 @@ mod gateway_voice_frames;
 mod gateway_voice_metrics;
 #[path = "gateway_voice_out_frames.rs"]
 mod gateway_voice_out_frames;
+#[path = "gateway_voice_provider.rs"]
+mod gateway_voice_provider;
 #[path = "gateway_voice_ready.rs"]
 mod gateway_voice_ready;
 #[path = "gateway_voice_tts.rs"]

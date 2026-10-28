@@ -1,6 +1,7 @@
 import React from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { ArrowUpIcon, MicrophoneIcon, PlusIcon, StopIcon } from '../../icons';
+import { VOICE_UI_ENABLED } from '../../speech/enabled';
 import { ComposerPicker } from './ComposerPicker';
 
 /*
@@ -88,7 +89,7 @@ export const ComposerActionBar: React.FC<ComposerActionBarProps> = ({
         </button>
       )}
 
-      {!compact && (
+      {!compact && VOICE_UI_ENABLED && (
         <button
           type="button"
           aria-label={voiceActive ? '结束语音输入' : '开始语音输入'}

@@ -486,7 +486,7 @@ pub struct VoiceAudioPayload {
 ///
 /// # Errors
 ///
-/// 参数为空、网关不可达、语音运行时未就绪或合成失败。
+/// 参数为空、网关不可达、语音提供方未就绪或合成失败。
 #[tauri::command]
 pub async fn voice_tts(
     text: String,
@@ -531,7 +531,7 @@ pub fn voice_presets() -> Result<serde_json::Value, String> {
     crate::gateway::get_voice_presets()
 }
 
-/// 语音运行时状态：点麦克风之前先确认本地语音是否就绪。
+/// 语音提供方状态：点麦克风之前先确认语音是否就绪。
 ///
 /// # Errors
 ///

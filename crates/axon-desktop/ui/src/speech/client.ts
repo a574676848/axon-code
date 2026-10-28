@@ -37,7 +37,7 @@ function stringField(record: Record<string, unknown>, ...keys: string[]): string
   return '';
 }
 
-/** 宿主抛出的失败是字符串：运行时未就绪以 `voice_unavailable:` 开头，其余原样展示。 */
+/** 宿主抛出的失败是字符串：提供方未接入以 `voice_unavailable:` 开头，其余原样展示。 */
 function classifyFailure(failure: unknown): VoiceFailure {
   const message =
     failure instanceof Error
@@ -45,8 +45,11 @@ function classifyFailure(failure: unknown): VoiceFailure {
       : typeof failure === 'string' && failure.length > 0
         ? failure
         : '语音合成失败';
-  if (/^voice_unavailable\b/i.test(message) || /语音运行时未就绪|语音运行时不可用/.test(message)) {
-    return new VoiceFailure('unavailable', '语音运行时未就绪');
+  if (
+    /^voice_unavailable\b/i.test(message) ||
+    /尚未接入云端语音提供方|语音提供方未就绪/.test(message)
+  ) {
+    return new VoiceFailure('unavailable', '尚未接入云端语音提供方');
   }
   return new VoiceFailure('failed', message);
 }

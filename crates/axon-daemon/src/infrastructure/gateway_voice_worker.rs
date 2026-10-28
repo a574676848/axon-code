@@ -1,17 +1,13 @@
-//! 语音会话的宿主工作线程：命令队列、背压、桥接事件与对外 JSON。
+//! 语音会话的工作线程：命令队列、背压、桥接事件与对外 JSON。
 //!
-//! 上行音频进有界队列：满了丢最旧并计数（PROTOCOL §4.2 的 `backpressure`），
+//! 上行音频进有界队列：满了丢最旧并计数（协议 §4.2 的 `backpressure`），
 //! 控制命令（`stop`/`cancel`/`shutdown`）永不被丢弃，保证会话一定能收尾。
 
-use super::gateway_voice_metrics::{HostSnapshot, VoiceMetrics};
+use super::gateway_voice_metrics::VoiceMetrics;
 use super::gateway_voice_out_frames::{error_json, error_json_with_family, state_json};
-use super::gateway_voice_ready::{DEFAULT_ASR_MODEL, model_root};
+use super::gateway_voice_provider::{ProviderSession, open};
 use axon_voice_bridge::{BridgeError, HostTransport, VoiceBridge};
-use axon_voice_host::BUILD_COMMIT;
-use axon_voice_host::model::sha256::hex_digest;
-use axon_voice_host::supervisor::{HostClient, HostConfig};
 use std::collections::VecDeque;
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -63,7 +59,7 @@ pub(super) enum VoiceOut {
         utterance_seq: u32,
         /// 定稿文本。
         text: String,
-        /// 本句起点（宿主单调毫秒）。
+        /// 本句起点（提供方单调毫秒）。
         start_ms: u64,
         /// 端点判定时刻。
         end_ms: u64,
@@ -74,7 +70,7 @@ pub(super) enum VoiceOut {
     Audio {
         /// 轮次。
         epoch: u32,
-        /// 宿主包序号，原样透传。
+        /// 提供方包序号，原样透传。
         seq: u32,
         /// s16le 载荷。
         pcm: Vec<u8>,
@@ -281,49 +277,31 @@ pub(super) fn spawn_worker(
     warmup: Duration,
     metrics: Arc<VoiceMetrics>,
 ) -> Result<Arc<VoiceWorker>, (String, bool)> {
-    let root = model_root();
-    if !root.is_dir() {
-        return Err((error_json("model_missing", "arming"), false));
-    }
-    let Some(exe) = host_exe() else {
-        return Err((error_json("worker_unavailable", "arming"), false));
-    };
-    let mut host = HostConfig::new(exe, BUILD_COMMIT.to_owned());
-    host.args.push("--model-root".to_owned());
-    host.args.push(root.display().to_string());
+    let session = open().map_err(|code| (error_json(code, "arming"), false))?;
     Ok(spawn_worker_with(
+        session,
         session_id.to_owned(),
-        manifest_digest(&root),
         out,
         warmup,
         metrics,
-        move || {
-            HostClient::spawn(&host)
-                .map(|client| Box::new(client) as BoxedTransport)
-                .map_err(|_| ())
-        },
     ))
 }
 
-/// 宿主传输的擦除类型：生产是真实子进程，测试是进程内脚本宿主。
+/// 提供方传输的擦除类型：生产是云端提供方适配器，测试是进程内脚本提供方。
 pub(super) type BoxedTransport = Box<dyn HostTransport + Send>;
 
-/// 宿主传输工厂；测试用它把脚本宿主接进真实的 WS 会话循环。
+/// 提供方传输工厂；测试用它把脚本提供方接进真实的 WS 会话循环。
 #[cfg(test)]
 pub(super) type HostLauncher = std::sync::Arc<dyn Fn() -> Result<BoxedTransport, ()> + Send + Sync>;
 
-/// 用给定的宿主启动工作线程。
-pub(super) fn spawn_worker_with<F>(
+/// 用给定的提供方通道启动工作线程。
+pub(super) fn spawn_worker_with(
+    session: ProviderSession,
     session_id: String,
-    manifest_sha: String,
     out: tokio_mpsc::UnboundedSender<VoiceOut>,
     warmup: Duration,
     metrics: Arc<VoiceMetrics>,
-    launch: F,
-) -> Arc<VoiceWorker>
-where
-    F: FnOnce() -> Result<BoxedTransport, ()> + Send + 'static,
-{
+) -> Arc<VoiceWorker> {
     let queue = Arc::new(CommandQueue::new(AUDIO_QUEUE_CAPACITY));
     let worker = Arc::new(VoiceWorker {
         queue: Arc::clone(&queue),
@@ -333,9 +311,8 @@ where
     std::thread::spawn(move || {
         run_worker(
             WorkerConfig {
-                manifest_sha,
+                session,
                 session_id,
-                launch: Box::new(launch),
             },
             queue,
             out,
@@ -347,7 +324,7 @@ where
 }
 
 impl super::GatewayHttpState {
-    /// 按运行态拉起本会话的工作线程；测试可注入进程内脚本宿主。
+    /// 按运行态拉起本会话的工作线程；测试可注入进程内脚本提供方。
     pub(super) fn spawn_voice_worker(
         &self,
         session_id: &str,
@@ -360,12 +337,15 @@ impl super::GatewayHttpState {
             let transport =
                 launcher().map_err(|()| (error_json("worker_unavailable", "arming"), false))?;
             return Ok(spawn_worker_with(
+                ProviderSession {
+                    transport,
+                    family: "asr",
+                    model: "scripted".to_owned(),
+                },
                 session_id.to_owned(),
-                "0".repeat(64),
                 out,
                 warmup,
                 metrics,
-                move || Ok(transport),
             ));
         }
         spawn_worker(session_id, out, warmup, metrics)
@@ -373,9 +353,8 @@ impl super::GatewayHttpState {
 }
 
 struct WorkerConfig {
-    manifest_sha: String,
+    session: ProviderSession,
     session_id: String,
-    launch: Box<dyn FnOnce() -> Result<BoxedTransport, ()> + Send>,
 }
 
 fn run_worker(
@@ -385,20 +364,16 @@ fn run_worker(
     warmup: Duration,
     metrics: Arc<VoiceMetrics>,
 ) {
-    let transport = match (config.launch)() {
-        Ok(transport) => transport,
-        Err(()) => {
-            metrics.record_error("worker_unavailable");
-            let _ = out.send(VoiceOut::Text(error_json("worker_unavailable", "arming")));
-            return;
-        }
-    };
-    let mut bridge = VoiceBridge::new(transport);
-    match bridge.warmup("asr", DEFAULT_ASR_MODEL, &config.manifest_sha, warmup) {
+    let WorkerConfig {
+        session,
+        session_id,
+    } = config;
+    let mut bridge = VoiceBridge::new(session.transport);
+    match bridge.warmup(session.family, &session.model, warmup) {
         Ok(Some(warm)) => metrics.set_rtf(warm.rtf_p50),
         Ok(None) => {}
         Err(error) => {
-            // 宿主回执里的 family 原样透传：预热失败可能是 tts/vad，不能一律记成 asr。
+            // 提供方回执里的 family 原样透传：预热失败可能是 tts/vad，不能一律记成 asr。
             let (code, family) = match &error {
                 BridgeError::Host(host) => (
                     host.code.clone(),
@@ -418,10 +393,7 @@ fn run_worker(
             return;
         }
     }
-    if bridge
-        .start(&config.session_id, "full_duplex", "zh", &[])
-        .is_err()
-    {
+    if bridge.start(&session_id, "full_duplex", "zh", &[]).is_err() {
         metrics.record_error("protocol_sequence");
         let _ = out.send(VoiceOut::Text(error_json("protocol_sequence", "arming")));
         bridge.shutdown();
@@ -456,9 +428,6 @@ fn run_worker(
         metrics.set_queue_depth(queue.depth());
         match bridge.poll(WORKER_TICK) {
             Ok(Some(event)) => {
-                if let Some(snapshot) = host_snapshot(&event) {
-                    metrics.record_host(snapshot);
-                }
                 if let Some(text) = event_out(event) {
                     let _ = out.send(text);
                 }
@@ -473,24 +442,6 @@ fn run_worker(
         }
     }
     bridge.shutdown();
-}
-
-/// 心跳只更新指标，不转成客户端帧。
-fn host_snapshot(event: &axon_voice_bridge::VoiceEvent) -> Option<HostSnapshot> {
-    match event {
-        axon_voice_bridge::VoiceEvent::Heartbeat(beat) => Some(HostSnapshot {
-            pid: beat.pid,
-            rss_kb: beat.rss_kb,
-            queue_in: beat.queue_in,
-            queue_out: beat.queue_out,
-            model_state: match beat.model_state.as_str() {
-                "warm" => "warm",
-                "warming" => "warming",
-                _ => "cold",
-            },
-        }),
-        _ => None,
-    }
 }
 
 fn event_out(event: axon_voice_bridge::VoiceEvent) -> Option<VoiceOut> {
@@ -530,35 +481,6 @@ fn event_out(event: axon_voice_bridge::VoiceEvent) -> Option<VoiceOut> {
         | VoiceEvent::CueAudio { .. }
         | VoiceEvent::Closed
         | VoiceEvent::Ignored(_) => None,
-    }
-}
-
-fn host_exe() -> Option<PathBuf> {
-    let current = std::env::current_exe().ok()?;
-    let dir = current.parent()?;
-    let name = if cfg!(windows) {
-        "axon-voice-host.exe"
-    } else {
-        "axon-voice-host"
-    };
-    // 生产是版本目录同级；开发树里测试二进制在 target/debug/deps，宿主在上一级。
-    for base in [dir.to_path_buf(), dir.parent()?.to_path_buf()] {
-        let candidate = base.join(name);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
-}
-
-fn manifest_digest(root: &Path) -> String {
-    let path = root
-        .join("asr")
-        .join(DEFAULT_ASR_MODEL)
-        .join("manifest.json");
-    match std::fs::read(path) {
-        Ok(bytes) => hex_digest(&bytes),
-        Err(_) => "0".repeat(64),
     }
 }
 

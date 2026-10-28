@@ -1,20 +1,20 @@
-//! 语音桥：把宿主管道映射为 daemon 侧的会话状态机。
+//! 语音桥：把语音提供方的传输通道映射为 daemon 侧的会话状态机。
 //!
-//! 只依赖 [`HostTransport`]，不自己启动进程；进程监督留在宿主 crate 的 supervisor。
+//! 只依赖 [`HostTransport`]，不自己启动进程，也不持有任何模型；本机模型宿主已移除，
+//! 云端适配器（阿里百炼、火山引擎）或测试用的进程内脚本实现该 trait 即可接入。
 //! 上层（daemon 的 `/api/v1/voice`）负责把 [`VoiceEvent`] 映射成 WS 帧。
 
-/// 宿主协议随桥一起导出：消费者需要构造或匹配管道帧，但不必单独依赖协议 crate。
+/// 提供方协议随桥一起导出：消费者需要构造或匹配管道帧，但不必单独依赖协议 crate。
 pub use axon_voice_protocol;
 
 use std::time::{Duration, Instant};
 
-use axon_voice_host::supervisor::{HostClient, SupervisorError};
 use axon_voice_protocol::{
     Control, CueStatus, ErrorMsg, Final, Frame, Heartbeat, Partial, SessionEnd, SessionStart,
     Speak, UtteranceEnd, Warm, Warmup, encode_audio_in,
 };
 
-/// 宿主传输层错误。
+/// 语音提供方传输层错误。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransportError {
     /// 写失败。
@@ -30,15 +30,15 @@ pub enum TransportError {
 impl std::fmt::Display for TransportError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Write(reason) => write!(f, "写宿主失败：{reason}"),
-            Self::Read(reason) => write!(f, "读宿主失败：{reason}"),
-            Self::Timeout => f.write_str("等待宿主超时"),
-            Self::Closed => f.write_str("宿主通道已关闭"),
+            Self::Write(reason) => write!(f, "写语音提供方失败：{reason}"),
+            Self::Read(reason) => write!(f, "读语音提供方失败：{reason}"),
+            Self::Timeout => f.write_str("等待语音提供方超时"),
+            Self::Closed => f.write_str("语音提供方通道已关闭"),
         }
     }
 }
 
-/// 宿主传输。
+/// 语音提供方传输。
 pub trait HostTransport {
     /// 发送控制帧。
     ///
@@ -60,51 +60,15 @@ pub trait HostTransport {
     fn recv(&mut self, timeout: Duration) -> Result<Frame, TransportError>;
     /// 心跳是否仍在窗口内。
     fn heartbeat_ok(&self, now: Instant) -> bool;
-    /// 进程是否仍在运行。
+    /// 会话是否仍存活。
     fn alive(&mut self) -> bool;
-    /// 终止并回收，返回退出码。
+    /// 终止并回收，返回退出码（云端提供方通常为 `None`）。
     fn terminate(&mut self) -> Option<i32>;
-    /// 发 close 并等待回执，必要时强杀回收。
+    /// 发 close 并等待回执，必要时强制回收。
     fn shutdown(&mut self);
 }
 
-impl HostTransport for HostClient {
-    fn send_control(&mut self, control: &Control) -> Result<(), TransportError> {
-        self.send(control)
-            .map_err(|error: SupervisorError| TransportError::Write(error.to_string()))
-    }
-
-    fn send_bytes(&mut self, bytes: &[u8]) -> Result<(), TransportError> {
-        self.send_bytes(bytes)
-            .map_err(|error: SupervisorError| TransportError::Write(error.to_string()))
-    }
-
-    fn recv(&mut self, timeout: Duration) -> Result<Frame, TransportError> {
-        self.recv_timeout(timeout).map_err(|error| match error {
-            SupervisorError::Timeout => TransportError::Timeout,
-            SupervisorError::Read(reason) => TransportError::Read(reason),
-            other => TransportError::Read(other.to_string()),
-        })
-    }
-
-    fn heartbeat_ok(&self, now: Instant) -> bool {
-        HostClient::heartbeat_ok(self, now)
-    }
-
-    fn alive(&mut self) -> bool {
-        self.try_wait().ok().flatten().is_none()
-    }
-
-    fn terminate(&mut self) -> Option<i32> {
-        HostClient::terminate(self)
-    }
-
-    fn shutdown(&mut self) {
-        let _ = HostClient::shutdown(self);
-    }
-}
-
-/// 擦除后的宿主传输：生产是真实子进程，测试可注入进程内脚本宿主。
+/// 擦除后的传输：生产是云端提供方适配器，测试可注入进程内脚本实现。
 impl<T: HostTransport + ?Sized> HostTransport for Box<T> {
     fn send_control(&mut self, control: &Control) -> Result<(), TransportError> {
         (**self).send_control(control)
@@ -140,7 +104,7 @@ impl<T: HostTransport + ?Sized> HostTransport for Box<T> {
 pub enum BridgeError {
     /// 传输失败。
     Transport(TransportError),
-    /// 宿主返回错误帧。
+    /// 提供方返回错误帧。
     Host(ErrorMsg),
     /// 状态不允许。
     NotReady,
@@ -158,8 +122,8 @@ impl std::fmt::Display for BridgeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Transport(error) => write!(f, "{error}"),
-            Self::Host(error) => write!(f, "宿主错误：{}", error.code),
-            Self::NotReady => f.write_str("宿主未就绪"),
+            Self::Host(error) => write!(f, "提供方错误：{}", error.code),
+            Self::NotReady => f.write_str("提供方未就绪"),
             Self::Busy => f.write_str("已有会话"),
             Self::NoSession => f.write_str("当前没有会话"),
             Self::Protocol(reason) => write!(f, "协议编码失败：{reason}"),
@@ -197,7 +161,7 @@ pub enum VoiceEvent {
         /// s16le 载荷。
         audio: Vec<u8>,
     },
-    /// 宿主错误帧。
+    /// 提供方错误帧。
     Error(ErrorMsg),
     /// cue 缓存状态。
     CueStatus(CueStatus),
@@ -245,16 +209,15 @@ impl<T: HostTransport> VoiceBridge<T> {
         self.state
     }
 
-    /// 预热到就绪；返回宿主报告的预热指标（已就绪时返回 `None`）。
+    /// 预热到就绪；返回提供方报告的预热指标（已就绪时返回 `None`）。
     ///
     /// # Errors
     ///
-    /// 宿主返回错误、超时或传输失败。
+    /// 提供方返回错误、超时或传输失败。
     pub fn warmup(
         &mut self,
         family: &str,
         model: &str,
-        manifest_sha256: &str,
         timeout: Duration,
     ) -> Result<Option<Warm>, BridgeError> {
         match self.state {
@@ -266,7 +229,6 @@ impl<T: HostTransport> VoiceBridge<T> {
         self.send_control(&Control::Warmup(Warmup {
             family: family.to_owned(),
             model: model.to_owned(),
-            manifest_sha256: manifest_sha256.to_owned(),
         }))?;
         let deadline = std::time::Instant::now() + timeout;
         loop {

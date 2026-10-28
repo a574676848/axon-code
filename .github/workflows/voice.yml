@@ -1,4 +1,5 @@
-# 语音 crate 的定向门禁：默认 feature 与 fake-host feature 各跑一次。
+# 语音 crate 的定向门禁：领域合同、协议帧与桥状态机。
+# 本机模型宿主已移除，识别与合成由云端提供方承担，这里只跑纯逻辑与协议层。
 name: Voice
 
 on:
@@ -9,13 +10,13 @@ on:
     paths:
       - 'crates/axon-voice/**'
       - 'crates/axon-voice-protocol/**'
-      - 'crates/axon-voice-host/**'
+      - 'crates/axon-voice-bridge/**'
       - '.github/workflows/voice.yml'
   pull_request:
     paths:
       - 'crates/axon-voice/**'
       - 'crates/axon-voice-protocol/**'
-      - 'crates/axon-voice-host/**'
+      - 'crates/axon-voice-bridge/**'
       - '.github/workflows/voice.yml'
   workflow_dispatch:
 
@@ -39,8 +40,6 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
-        run: cargo clippy -p axon-voice -p axon-voice-protocol -p axon-voice-host --all-targets --features fake-host -- -D warnings
-      - name: Test (default features)
-        run: cargo test -p axon-voice -p axon-voice-protocol -p axon-voice-host
-      - name: Test (fake host)
-        run: cargo test -p axon-voice-host --features fake-host
+        run: cargo clippy -p axon-voice -p axon-voice-protocol -p axon-voice-bridge --all-targets -- -D warnings
+      - name: Test
+        run: cargo test -p axon-voice -p axon-voice-protocol -p axon-voice-bridge

@@ -127,8 +127,6 @@ pub struct Warmup {
     pub family: String,
     /// 模型标识。
     pub model: String,
-    /// 清单哈希。
-    pub manifest_sha256: String,
 }
 
 /// `warm` 消息。
@@ -344,8 +342,8 @@ impl Control {
                 if !matches!(message.family.as_str(), "vad" | "asr" | "tts" | "cue") {
                     return Err(invalid("family"));
                 }
-                if !is_sha256_hex(&message.manifest_sha256) {
-                    return Err(invalid("manifestSha256"));
+                if message.model.trim().is_empty() {
+                    return Err(invalid("model"));
                 }
             }
             Self::Warm(message) => {
@@ -414,9 +412,6 @@ fn invalid(field: &'static str) -> FrameError {
     FrameError::InvalidValue { field }
 }
 
-fn is_sha256_hex(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
 fn encode_payload(control: &Control) -> Result<Vec<u8>, FrameError> {
     let mut value = match control {
         Control::Hello(message) => serde_json::to_value(message).map_err(FrameError::Serialize)?,

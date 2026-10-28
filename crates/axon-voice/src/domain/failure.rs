@@ -1,4 +1,4 @@
-//! 失败分类：17 个变体，与 `PROTOCOL.md` §4.2 的 21 个错误码唯一映射。
+//! 失败分类：18 个变体，与 `PROTOCOL.md` §4.2 的 22 个错误码唯一映射。
 //!
 //! 改码必须同时改本文件与 `PROTOCOL.md` §4.2；`code()` 与 `user_message()`
 //! 是运行时唯一来源，其它层不得另写一份文案。`default_stage()` 只在失败本身
@@ -143,7 +143,7 @@ impl PresetReason {
     #[must_use]
     pub const fn user_reason(self) -> &'static str {
         match self {
-            Self::MissingModel => "需要先安装对应模型",
+            Self::MissingModel => "需要先配置对应模型",
             Self::SpeakerOutOfRange => "音色参数超出模型支持范围",
             Self::FileInvalid => "音色清单无法解析",
             Self::PolicyRejected => "",
@@ -209,6 +209,8 @@ pub enum VoiceFailure {
     },
     /// 宿主未启动或启动超时。
     WorkerUnavailable,
+    /// 尚未接入云端语音提供方。
+    ProviderUnavailable,
     /// 宿主异常退出。
     WorkerCrashed {
         /// 崩溃时所在子阶段。
@@ -265,6 +267,7 @@ impl VoiceFailure {
             Self::ModelUnusable { .. } => "model_unusable",
             Self::DeviceUnavailable { .. } => "device_unavailable",
             Self::WorkerUnavailable => "worker_unavailable",
+            Self::ProviderUnavailable => "provider_unavailable",
             Self::WorkerCrashed { .. } => "worker_crashed",
             Self::Backpressure { .. } => "backpressure",
             Self::Overloaded => "asr_overloaded",
@@ -309,6 +312,7 @@ impl VoiceFailure {
                 detail: String::new(),
             },
             "worker_unavailable" => Self::WorkerUnavailable,
+            "provider_unavailable" => Self::ProviderUnavailable,
             "worker_crashed" => Self::WorkerCrashed {
                 sub_stage: WorkerSubStage::Warmup,
                 exit_code: 0,
@@ -351,6 +355,7 @@ impl VoiceFailure {
             Self::ModelMissing { .. }
             | Self::DeviceUnavailable { .. }
             | Self::WorkerUnavailable
+            | Self::ProviderUnavailable
             | Self::WorkerCrashed { .. }
             | Self::Backpressure { .. }
             | Self::Overloaded
@@ -383,7 +388,8 @@ impl VoiceFailure {
             Self::ModelMissing { .. }
             | Self::ModelUnusable { .. }
             | Self::DeviceUnavailable { .. }
-            | Self::WorkerUnavailable => Some(Stage::Arming),
+            | Self::WorkerUnavailable
+            | Self::ProviderUnavailable => Some(Stage::Arming),
             Self::WorkerCrashed { .. } => Some(Stage::Worker),
             Self::Backpressure { .. } | Self::Overloaded => Some(Stage::Listening),
             Self::TtsFailed => Some(Stage::Speaking),
@@ -422,10 +428,13 @@ impl VoiceFailure {
                 ProtocolReason::Sequence => "控制序列非法，已断开".to_owned(),
                 ProtocolReason::Oversize => "音频包过大，已断开并重连".to_owned(),
             },
-            Self::ModelMissing { .. } => "本地语音模型未安装，点此查看安装指引".to_owned(),
-            Self::ModelUnusable { .. } => "模型与运行时版本不匹配，请重新安装模型".to_owned(),
+            Self::ModelMissing { .. } => "所选语音模型不可用，请检查提供方配置".to_owned(),
+            Self::ModelUnusable { .. } => "语音提供方拒绝了这个模型，请更换模型标识".to_owned(),
             Self::DeviceUnavailable { .. } => "麦克风不可用，请检查系统隐私设置或换设备".to_owned(),
             Self::WorkerUnavailable => "语音引擎未启动，请重试".to_owned(),
+            Self::ProviderUnavailable => {
+                "尚未接入云端语音提供方，请先配置阿里百炼或火山引擎".to_owned()
+            }
             Self::WorkerCrashed { .. } => "语音引擎异常退出，已自动重启（至多 3 次）".to_owned(),
             Self::Backpressure { .. } => "网络或处理跟不上，已丢弃部分音频".to_owned(),
             Self::Overloaded => "识别跟不上，请放慢语速或改用推键".to_owned(),

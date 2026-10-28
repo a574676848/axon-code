@@ -2,6 +2,7 @@ import React from 'react';
 import { CheckIcon, CopyIcon, DownloadIcon } from '../../icons';
 import { exportMarkdownName } from '../../conversation/textExport';
 import { stop, useSpeechState } from '../../speech';
+import { VOICE_UI_ENABLED } from '../../speech/enabled';
 import { Markdown } from './Markdown';
 import { MessageActionButton, MessageFooter } from './MessageFooter';
 import { SpeechButton } from './SpeechButton';
@@ -128,9 +129,9 @@ export const AssistantBlock: React.FC<{
           >
             <DownloadIcon size={14} />
           </MessageActionButton>
-          <SpeechButton text={text} source={source} />
+          {VOICE_UI_ENABLED && <SpeechButton text={text} source={source} />}
           {/* 朗读状态紧跟在喇叭之后：说的是这一枚按钮正在做的事。 */}
-          {reading && (
+          {VOICE_UI_ENABLED && reading && (
             <span className="ml-1 flex items-center gap-1.5 text-meta text-text-tertiary">
               <VoiceWave active size="xs" />
               正在朗读

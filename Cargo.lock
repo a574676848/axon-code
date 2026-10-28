@@ -626,7 +626,6 @@ dependencies = [
  "axon-test-support",
  "axon-voice",
  "axon-voice-bridge",
- "axon-voice-host",
  "axum",
  "chrono",
  "futures-util",
@@ -1031,18 +1030,7 @@ version = "0.1.0"
 name = "axon-voice-bridge"
 version = "0.1.0"
 dependencies = [
- "axon-voice-host",
  "axon-voice-protocol",
-]
-
-[[package]]
-name = "axon-voice-host"
-version = "0.1.0"
-dependencies = [
- "axon-voice",
- "axon-voice-protocol",
- "serde",
- "serde_json",
 ]
 
 [[package]]

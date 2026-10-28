@@ -32,7 +32,7 @@ export const VoiceInputSettings: React.FC = () => {
   ]);
   const [deviceId, setDeviceId] = useState<string>(() => selectedDeviceId());
   const [previewing, setPreviewing] = useState(false);
-  /** 本地语音运行时的就绪结论；读不到时为 null。 */
+  /** 语音提供方的就绪结论；读不到时为 null。 */
   const [runtime, setRuntime] = useState<VoiceRuntime | null>(null);
   const [error, setError] = useState<string | null>(null);
   const previewRef = useRef<LevelPreview | null>(null);
@@ -99,10 +99,10 @@ export const VoiceInputSettings: React.FC = () => {
           </Text>
           <Text size="xs" tone={runtime?.available === false ? 'danger' : 'tertiary'} className="block">
             {runtime === null
-              ? '读取本地语音运行时状态中'
+              ? '读取语音提供方状态中'
               : runtime.available
-                ? '本地语音运行时已就绪'
-                : '本地语音运行时未安装：重新运行 Axon 安装脚本补齐语音依赖'}
+                ? '语音提供方已就绪'
+                : '语音提供方尚未接入：配置阿里百炼或火山引擎的 ASR 与 TTS 后可用'}
           </Text>
         </div>
         <div className="flex shrink-0 items-center gap-2">

@@ -5,6 +5,7 @@ import type { PersonaPortrait, PersonaRule, PersonaSummary } from '../../persona
 import * as ipc from '../../ipc';
 import { Banner, Chip, EmptyHint, ListRow, LoadingState, Panel, Text } from '../ui/surfaces';
 import { VoicePresetSettings } from './VoicePresetSettings';
+import { VOICE_UI_ENABLED } from '../../speech/enabled';
 
 /*
  * 人设：只呈现单一事实源（SOUL.md 与已发布的习得风格）。
@@ -207,7 +208,7 @@ export const PersonaStatusPanel: React.FC = () => {
             </div>
           </ListRow>
 
-          <VoicePresetSettings />
+          {VOICE_UI_ENABLED && <VoicePresetSettings />}
 
           <ListRow className="py-4 items-start">
             <div className="flex-1 min-w-0 space-y-1.5">

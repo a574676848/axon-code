@@ -78,7 +78,7 @@ mod tests {
         let value: serde_json::Value =
             serde_json::from_str(&error_json("model_missing", "arming")).expect("合法 JSON");
         assert_eq!(value["code"], "model_missing");
-        assert_eq!(value["message"], "本地语音模型未安装，点此查看安装指引");
+        assert_eq!(value["message"], "所选语音模型不可用，请检查提供方配置");
         assert_eq!(value["detail"]["family"], "asr");
         assert_eq!(value["retryable"], true);
     }

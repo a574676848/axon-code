@@ -2,6 +2,7 @@ import React from 'react';
 import { AlertCircleIcon, MicrophoneIcon } from '../../icons';
 import type { ComposerPermissionPrompt, ComposerVoice } from './useComposerVoice';
 import type { VoicePhase } from '../../speech/voiceProtocol';
+import { VOICE_UI_ENABLED } from '../../speech/enabled';
 import { formatElapsedClock } from '../../conversation/format';
 import { VoiceWave } from './VoiceWave';
 import { ComposerStatusCell } from './ComposerStatusCell';
@@ -54,7 +55,7 @@ export const ComposerVoiceBar: React.FC<{ voice: ComposerVoice }> = ({ voice }) 
   const partial = voice.partial.trim();
   const hint =
     voice.phase === 'arming' && voice.elapsedMs >= COLD_START_HINT_MS
-      ? '首次连接要加载本地语音模型'
+      ? '首次连接语音提供方，正在准备'
       : partial.length > 0
         ? partial
         : BAR_HINT[voice.phase];
@@ -159,18 +160,21 @@ export const ComposerVoicePermissionDialog: React.FC<{
 };
 
 /** 输入坞里的语音组合：失败回执、录音条与授权引导。 */
-export const ComposerVoiceLayer: React.FC<{ voice: ComposerVoice }> = ({ voice }) => (
-  <>
-    {voice.error !== null && <ComposerVoiceError message={voice.error} />}
-    <ComposerVoiceBar voice={voice} />
-    {voice.permission !== null && (
-      <ComposerVoicePermissionDialog
-        prompt={voice.permission}
-        onConfirm={voice.confirmPermission}
-        onDismiss={voice.dismissPermission}
-        onOpenSettings={voice.openSettings}
-        onRetry={voice.retryPermission}
-      />
-    )}
-  </>
-);
+export const ComposerVoiceLayer: React.FC<{ voice: ComposerVoice }> = ({ voice }) => {
+  if (!VOICE_UI_ENABLED) return null;
+  return (
+    <>
+      {voice.error !== null && <ComposerVoiceError message={voice.error} />}
+      <ComposerVoiceBar voice={voice} />
+      {voice.permission !== null && (
+        <ComposerVoicePermissionDialog
+          prompt={voice.permission}
+          onConfirm={voice.confirmPermission}
+          onDismiss={voice.dismissPermission}
+          onOpenSettings={voice.openSettings}
+          onRetry={voice.retryPermission}
+        />
+      )}
+    </>
+  );
+};

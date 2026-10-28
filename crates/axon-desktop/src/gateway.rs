@@ -385,10 +385,10 @@ mod tests {
 
         let unavailable = classify_preview_status(
             409,
-            r#"{"error":"voice_unavailable","message":"语音运行时未就绪，请先完成语音依赖安装"}"#,
+            r#"{"error":"provider_unavailable","message":"尚未接入云端语音提供方，请先配置阿里百炼或火山引擎"}"#,
         );
         assert!(
-            matches!(unavailable, VoicePreviewError::Unavailable(ref reason) if reason.contains("语音运行时未就绪")),
+            matches!(unavailable, VoicePreviewError::Unavailable(ref reason) if reason.contains("尚未接入云端语音提供方")),
             "{unavailable:?}"
         );
 
@@ -413,7 +413,7 @@ mod tests {
 /// 语音合成失败分类：409 归为运行时不可用，其余归为请求失败。
 #[derive(Debug)]
 pub enum VoiceTtsError {
-    /// 语音运行时或音色未就绪。
+    /// 语音提供方或音色未就绪。
     Unavailable(String),
     /// 其它失败。
     Failed(String),
@@ -431,7 +431,7 @@ impl std::fmt::Display for VoiceTtsError {
 ///
 /// # Errors
 ///
-/// 网关不可达、鉴权失败、语音运行时未就绪或合成失败。
+/// 网关不可达、鉴权失败、语音提供方未就绪或合成失败。
 pub fn post_voice_tts(
     text: &str,
     preset_id: Option<&str>,
@@ -490,7 +490,7 @@ pub fn get_voice_presets() -> Result<serde_json::Value, String> {
     get_json("/voice/presets")
 }
 
-/// 读取语音运行时状态：是否可用、降级原因与预设数量。
+/// 读取语音提供方状态：是否可用、降级原因与预设数量。
 ///
 /// 与 `/api/v1/voice` 建连时给出的 `ready` 共用同一判据，因此「点麦克风之前」
 /// 就能知道本地语音是否装好，不必先等一次冷启动失败。
@@ -515,7 +515,7 @@ pub struct VoicePreviewAudio {
 pub enum VoicePreviewError {
     /// 504：合成超时。
     Timeout,
-    /// 409：语音运行时或音色不可用。
+    /// 409：语音提供方或音色不可用。
     Unavailable(String),
     /// 400：请求体不合法。
     Invalid(String),
@@ -538,7 +538,7 @@ impl std::fmt::Display for VoicePreviewError {
 ///
 /// # Errors
 ///
-/// 网关不可达、鉴权失败、语音运行时未就绪或合成超时。
+/// 网关不可达、鉴权失败、语音提供方未就绪或合成超时。
 pub fn post_voice_preview(
     preset_id: Option<&str>,
     persona: Option<&serde_json::Value>,
@@ -597,7 +597,7 @@ fn classify_preview_status(status: u16, body: &str) -> VoicePreviewError {
         .and_then(|value| value.as_str())
         .filter(|text| !text.is_empty());
     let fallback = match code {
-        "voice_unavailable" => Some("语音运行时未就绪，请先完成语音依赖安装"),
+        "provider_unavailable" => Some("尚未接入云端语音提供方，请先配置阿里百炼或火山引擎"),
         "tts_failed" => Some("朗读失败，请稍后重试"),
         _ => None,
     };

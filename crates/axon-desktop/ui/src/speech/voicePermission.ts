@@ -84,19 +84,19 @@ export function describeAccessBlock(access: MicrophoneAccess): string {
   return '系统麦克风权限尚未放行，Axon 无法采集语音';
 }
 
-/** 本地语音运行时的就绪结论。 */
+/** 语音提供方的就绪结论。 */
 export interface VoiceRuntime {
-  /** 运行时与模型都齐备。 */
+  /** 提供方可用：接入云端 ASR/TTS 并配置完成后为真。 */
   available: boolean;
   /** 不可用时的稳定原因码；可用时为 null。 */
   degraded: string | null;
 }
 
 /**
- * 读取本地语音运行时就绪状态。
+ * 读取语音提供方就绪状态。
  *
- * 与建连时的 `ready` 共用网关同一判据，所以在点麦克风之前就能知道「装了没装」，
- * 不必先等一次冷启动失败。网关读不到时返回 null，由调用方决定继续尝试还是提示。
+ * 与建连时的 `ready` 共用网关同一判据，所以在点麦克风之前就能知道「能不能用」，
+ * 不必先等一次连接失败。网关读不到时返回 null，由调用方决定继续尝试还是提示。
  */
 export async function readVoiceRuntime(): Promise<VoiceRuntime | null> {
   try {
@@ -110,6 +110,6 @@ export async function readVoiceRuntime(): Promise<VoiceRuntime | null> {
   }
 }
 
-/** 运行时不可用时的可执行结论。 */
+/** 提供方不可用时的可执行结论。 */
 export const VOICE_RUNTIME_MISSING_TEXT =
-  '本地语音运行时不可用：重新运行 Axon 安装脚本补齐语音依赖后重试';
+  '语音提供方尚未接入：配置阿里百炼或火山引擎的 ASR 与 TTS 后再用语音输入';
