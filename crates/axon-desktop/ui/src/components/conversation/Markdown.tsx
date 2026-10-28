@@ -251,9 +251,9 @@ export const Markdown: React.FC<{ source: string; streaming?: boolean }> = ({
           const level = block.level ?? 1;
           const size =
             level === 1
-              ? 'text-heading-1 font-bold tracking-[-0.02em] text-text-primary'
+              ? 'heading-precision text-heading-1 font-bold tracking-[-0.02em] text-text-primary'
               : level === 2
-                ? 'text-heading-3 font-bold tracking-[-0.015em] text-text-primary'
+                ? 'heading-precision text-heading-3 font-bold tracking-[-0.015em] text-text-primary'
                 : level === 3
                   ? 'text-heading-4 font-semibold tracking-[-0.01em] text-text-primary'
                   : 'text-content font-semibold text-text-primary';
