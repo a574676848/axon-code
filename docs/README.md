@@ -45,6 +45,7 @@ Axon 是基于 Rust 构建的专属个人智能体（Personal Agent）与战术�
 
 - [Provider 与模型路由](./providers.md) - 多供应商接入、负载均衡、容灾 Failover 与 Prompt Cache
 - [Daemon 后台守护进程](./daemon.md) - 网关通信、后台任务执行池、服务管理与原子升级
+- [语音能力](./voice.md) - 全本地识别与合成的进程模型、WebSocket 帧、超时背压与可观测面
 - [飞书远程协同](./feishu-remote.md) - 私有长连接远控、移动端交互卡片与群聊协作
 
 ## 4. 扩展生态与工具
