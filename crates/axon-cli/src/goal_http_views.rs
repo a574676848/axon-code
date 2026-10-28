@@ -173,8 +173,9 @@ pub(crate) struct GoalCardView {
 
 /// 把三个事实合成一张卡片视图。
 ///
-/// `workspace` 只对 Workspace 作用域给出；全局目标没有可解析的工作区时保持为空，
-/// 由界面降级为「查看详情」，不伪造归属。
+/// 工作区标识取解析结果，解析不到才回落到作用域标识；名称与路径完全依赖注册表记录。
+/// 列表与详情的解析深度不同：列表只按作用域命中注册表，全局目标因此三段字段为空；
+/// 详情会再按最近执行的会话 cwd 解析一次，唯一命中时回填。
 pub(crate) fn goal_card_view(
     goal: &GoalRecord,
     latest_execution: Option<&ExecutionRecord>,

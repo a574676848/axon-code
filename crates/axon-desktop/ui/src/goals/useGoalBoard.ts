@@ -144,6 +144,13 @@ export function useGoalDetail(goalId: string | null, active: boolean): GoalDetai
   const sequenceRef = useRef(0);
   /** 串行闸门：前一次未回来时不发第二次。 */
   const inFlightRef = useRef(false);
+  /** 当前活跃的目标标识；目标一换，在途响应就作废。 */
+  const activeGoalIdRef = useRef<string | null>(null);
+  activeGoalIdRef.current = goalId;
+
+  /** 响应是否仍然属于当前目标与当前请求序号。 */
+  const isCurrent = (requestedGoalId: string, sequence: number): boolean =>
+    sequence === sequenceRef.current && activeGoalIdRef.current === requestedGoalId;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -158,23 +165,29 @@ export function useGoalDetail(goalId: string | null, active: boolean): GoalDetai
     inFlightRef.current = true;
     const sequence = sequenceRef.current + 1;
     sequenceRef.current = sequence;
+    /** 发起这一请求时的目标；回来时目标已换就整批丢弃。 */
+    const requestedGoalId = id;
     try {
       const next = await ipc.goalGet(id);
-      if (!mountedRef.current || sequence !== sequenceRef.current) return;
+      if (!mountedRef.current || !isCurrent(requestedGoalId, sequence)) return;
       setDetail(next);
       setError(null);
     } catch (failure) {
-      if (!mountedRef.current || sequence !== sequenceRef.current) return;
+      if (!mountedRef.current || !isCurrent(requestedGoalId, sequence)) return;
       setError(failureMessage(failure));
     } finally {
-      inFlightRef.current = false;
-      if (mountedRef.current) setLoading(false);
+      if (sequence === sequenceRef.current) {
+        inFlightRef.current = false;
+        if (mountedRef.current) setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     if (!active || goalId === null) return undefined;
-    // 换目标先清空：旧目标的步骤与验收不能在新目标的面板上停留一拍。
+    // 换目标先作废在途请求并清空：旧目标的响应与内容都不能落到新目标上。
+    sequenceRef.current += 1;
+    inFlightRef.current = false;
     setDetail(null);
     setError(null);
     setLoading(true);

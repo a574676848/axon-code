@@ -196,9 +196,11 @@ export const GoalsPage: React.FC = () => {
         loading={detailFeed.loading}
         error={detailFeed.error}
         onClose={() => setDetailGoal(null)}
+        // 详情比列表多解析一步全局目标的工作区，因此「能否进会话」以详情为准：
+        // 列表卡上没有工作区时，用户在这里仍然拿得到入口。
         onEnterSession={
-          detailGoal !== null && hasSessionBinding(detailGoal)
-            ? () => enterSession(detailGoal)
+          detailGoal !== null && hasSessionBinding(detailFeed.detail?.goal ?? detailGoal)
+            ? () => enterSession(detailFeed.detail?.goal ?? detailGoal)
             : null
         }
       />

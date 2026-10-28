@@ -43,6 +43,8 @@ export const GoalDetailDialog: React.FC<GoalDetailDialogProps> = ({
     );
   }
   const meta = goalStatusMeta(goal.status);
+  // 详情比列表多解析一步全局目标的工作区，因此面板里的工作区与入口都以详情为准。
+  const located = detail?.goal ?? goal;
   const fields: DetailField[] = [
     { label: '状态', value: meta.label },
     { label: '目标', value: loading ? '正在读取' : (detail?.objective ?? goal.objectivePreview) },
@@ -66,9 +68,9 @@ export const GoalDetailDialog: React.FC<GoalDetailDialogProps> = ({
   fields.push({
     label: '工作区',
     value:
-      goal.workspaceName === null
+      located.workspaceName === null
         ? '全局目标，未绑定工作区'
-        : `${goal.workspaceName}（${goal.workspacePath ?? '路径未知'}）`,
+        : `${located.workspaceName}（${located.workspacePath ?? '路径未知'}）`,
   });
   fields.push({ label: '最近活动', value: formatDateTime(goal.lastActivityAtMs) });
   fields.push({
@@ -97,7 +99,7 @@ export const GoalDetailDialog: React.FC<GoalDetailDialogProps> = ({
       title={goal.title}
       fields={fields}
       primary={
-        onEnterSession !== null && hasSessionBinding(goal)
+        onEnterSession !== null && hasSessionBinding(located)
           ? { label: '进入会话', onClick: onEnterSession }
           : undefined
       }

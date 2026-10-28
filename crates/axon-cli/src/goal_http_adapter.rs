@@ -182,7 +182,11 @@ impl GoalHttpAdapter {
                 })
                 .transpose()?
                 .flatten();
-            let workspace = resolve_workspace(&store, goal, latest_execution.as_ref(), workspaces);
+            // 列表只按作用域标识取工作区：合同第 7.3 条把查询数上界固定为
+            // 1 + 2N + 1，逐个全局目标解析会话 cwd 会多出 N 条查询，因此这一步
+            // 留给详情。列表里全局目标的工作区三段字段因此为空，界面据此降级为
+            // 「查看详情」，由详情给出解析结果与进入会话的入口。
+            let workspace = scope_workspace(goal, workspaces);
             cards.push(goal_card_view(
                 goal,
                 latest_execution.as_ref(),
@@ -334,21 +338,32 @@ const fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-/// 解析目标所属的工作区。
+/// 目标所属的工作区：按作用域标识命中注册表。
+///
+/// 这是**列表**用的口径，只做一次表内查找，不触发额外查询。
+fn scope_workspace<'a>(
+    goal: &GoalRecord,
+    workspaces: &'a [WorkspaceRecord],
+) -> Option<&'a WorkspaceRecord> {
+    let workspace_id = goal.scope.workspace_id()?;
+    workspaces
+        .iter()
+        .find(|record| record.workspace_id == workspace_id.as_str())
+}
+
+/// 解析目标所属的工作区（**详情**口径）。
 ///
 /// Workspace 作用域的目标直接按标识命中注册表；**全局目标**按最近执行的会话 cwd
 /// 精确匹配注册表根目录，匹配必须唯一。零个或多个匹配都返回 `None`，
-/// 卡片上的工作区三段字段因此如实留空，由界面降级为「查看详情」。
+/// 卡片上的工作区三段字段因此如实留空。
 fn resolve_workspace<'a>(
     store: &SqliteRuntimeStore,
     goal: &GoalRecord,
     latest_execution: Option<&ExecutionRecord>,
     workspaces: &'a [WorkspaceRecord],
 ) -> Option<&'a WorkspaceRecord> {
-    if let Some(workspace_id) = goal.scope.workspace_id() {
-        return workspaces
-            .iter()
-            .find(|record| record.workspace_id == workspace_id.as_str());
+    if let Some(workspace) = scope_workspace(goal, workspaces) {
+        return Some(workspace);
     }
     let session_id = latest_execution?.session_id.as_ref()?;
     // 会话可能已被清理：取不到 cwd 就是「无法解析」，这是合法情形而不是错误。
