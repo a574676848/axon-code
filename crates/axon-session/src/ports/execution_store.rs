@@ -59,6 +59,17 @@ pub trait ExecutionStore: Send + Sync {
     ) -> Result<Vec<ExecutionRecord>, ExecutionStoreError> {
         Ok(Vec::new())
     }
+    /// 按运行时会话读取最近一条 Execution。
+    ///
+    /// 目标执行会话不靠标识前缀授权，而是靠这张账本里的 `session_id` 绑定：
+    /// 网关据此判断「这个会话是不是某个目标执行派生出来的」，因此本端口是目标执行
+    /// 会话订阅放行的唯一事实来源。
+    fn execution_for_session(
+        &self,
+        _session_id: &DaemonSessionId,
+    ) -> Result<Option<ExecutionRecord>, ExecutionStoreError> {
+        Ok(None)
+    }
     /// 幂等写入 Scheduler 触发的显式 Execution。
     fn enqueue_execution_trigger(
         &self,

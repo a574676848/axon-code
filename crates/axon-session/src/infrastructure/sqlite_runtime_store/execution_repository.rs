@@ -138,6 +138,27 @@ impl ExecutionStore for SqliteRuntimeStore {
             .map_err(storage_error)
     }
 
+    fn execution_for_session(
+        &self,
+        session_id: &DaemonSessionId,
+    ) -> Result<Option<ExecutionRecord>, ExecutionStoreError> {
+        self.initialize().map_err(runtime_error)?;
+        let connection = self.connection().map_err(runtime_error)?;
+        // 索引 `jarvis_executions_session_claim` 首列即 session_id；排序用临时 B 树，
+        // 单会话执行数极少（同一目标跨阶段复用同一会话标识），代价可忽略。
+        connection
+            .query_row(
+                &format!(
+                    "SELECT {EXECUTION_COLUMNS} FROM jarvis_executions WHERE session_id=?1 \
+                     ORDER BY created_at_ms DESC, execution_id DESC LIMIT 1"
+                ),
+                params![session_id.as_str()],
+                read_execution,
+            )
+            .optional()
+            .map_err(storage_error)
+    }
+
     fn claim_executions(
         &self,
         limit: u32,

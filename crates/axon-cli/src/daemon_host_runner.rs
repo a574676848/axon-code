@@ -271,6 +271,11 @@ fn try_run_daemon_host(
                 command.root.clone(),
                 startup_snapshots.clone(),
             )),
+            // 目标看板只读面：与工作台同前缀，因此必须排在工作台适配器之前，
+            // 否则 /api/v1/goals 会先撞上工作台的兜底分支。
+            Arc::new(crate::goal_http_adapter::GoalHttpAdapter::new(
+                workbench_root.clone(),
+            )),
             Arc::new(
                 crate::workbench_http_adapter::WorkbenchHttpAdapter::from_root(workbench_root)
                     // 中断入口要触达正在运行的主 turn，因此共享同一份注册表。

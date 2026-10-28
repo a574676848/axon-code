@@ -21,6 +21,9 @@ mod sqlite_runtime_store_event_batch_tests;
 #[path = "sqlite_runtime_store_execution_lease_tests.rs"]
 mod sqlite_runtime_store_execution_lease_tests;
 #[cfg(test)]
+#[path = "sqlite_runtime_store_execution_session_tests.rs"]
+mod sqlite_runtime_store_execution_session_tests;
+#[cfg(test)]
 #[path = "sqlite_runtime_store_goal_activity_tests.rs"]
 mod sqlite_runtime_store_goal_activity_tests;
 #[cfg(test)]

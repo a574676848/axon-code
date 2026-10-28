@@ -81,6 +81,12 @@ interface EntityCardProps {
   onInspect?: () => void;
   /** 查看配置的无障碍名称。 */
   inspectLabel?: string;
+  /** 行首节点，例如状态点；不给则标题从最左开始。 */
+  leading?: React.ReactNode;
+  /** 定位行是否等宽，默认等宽。 */
+  locatorMono?: boolean;
+  /** 页脚动作图标，默认齿轮。 */
+  actionIcon?: React.ReactNode;
 }
 
 /**
@@ -89,6 +95,9 @@ interface EntityCardProps {
  * 标题 14/20 500 单行截断，右上只留一个类型标签；说明 12/18 最多三行；
  * 底部左侧是有意义的次要信息，右下只有一处「查看配置」文字入口。
  * 卡片本身不再重复标题里的标识、命令或地址。
+ *
+ * 三个可选插槽（行首节点、定位行是否等宽、页脚动作图标）默认都不改变既有视觉：
+ * 不传时与引入插槽之前逐像素一致。
  */
 export const EntityCard: React.FC<EntityCardProps> = ({
   title,
@@ -99,14 +108,20 @@ export const EntityCard: React.FC<EntityCardProps> = ({
   onOpen,
   onInspect,
   inspectLabel = '查看配置',
+  leading,
+  locatorMono = true,
+  actionIcon,
 }) => (
   <div className="flex flex-col rounded-md hairline border-border shadow-card bg-surface overflow-hidden transition-colors duration-150 hover:border-border-strong">
     <button
       type="button"
       onClick={onOpen}
-      className="flex-1 min-w-0 text-left p-3.5 space-y-2 hover:bg-hover"
+      className="flex-1 min-w-0 text-left p-3.5 space-y-2 hover:bg-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
     >
       <span className="flex items-start gap-2 min-w-0">
+        {leading !== undefined && (
+          <span className="shrink-0 inline-flex items-center h-5">{leading}</span>
+        )}
         <Text strong truncate className="min-w-0 flex-1">
           {title}
         </Text>
@@ -123,7 +138,7 @@ export const EntityCard: React.FC<EntityCardProps> = ({
         <Text
           tone="tertiary"
           size="code"
-          mono
+          mono={locatorMono}
           truncate
           className="block"
           title={locator}
@@ -134,12 +149,18 @@ export const EntityCard: React.FC<EntityCardProps> = ({
     </button>
     <div className="shrink-0 flex items-center gap-2 px-3.5 py-2 hairline-t border-border-hairline">
       {meta !== undefined && (
-        <Text tone="tertiary" size="2xs" truncate className="flex-1 min-w-0" title={meta}>
+        <Text
+          tone="tertiary"
+          size="2xs"
+          truncate
+          className="flex-1 min-w-0 tabular-nums"
+          title={meta}
+        >
           {meta}
         </Text>
       )}
       <Button variant="ghost" size="sm" className="ml-auto" onClick={() => onInspect?.()}>
-        <SettingsIcon size={13} />
+        {actionIcon ?? <SettingsIcon size={13} />}
         {inspectLabel}
       </Button>
     </div>

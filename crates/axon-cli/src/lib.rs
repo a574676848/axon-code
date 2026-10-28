@@ -25,6 +25,7 @@ mod exec_commands;
 mod export_commands;
 #[path = "commands/export_report_contract.rs"]
 mod export_report_contract;
+mod goal_http_adapter;
 mod interactive_tui;
 #[path = "commands/lsp.rs"]
 mod lsp_commands;

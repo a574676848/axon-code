@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrainIcon, ClockIcon, FolderIcon, IconPanelLeft, SearchIcon, SettingsIcon } from '../icons';
+import { BrainIcon, ChecklistIcon, ClockIcon, FolderIcon, IconPanelLeft, SearchIcon, SettingsIcon } from '../icons';
 import { NavGlide, NewSessionButton, SidebarColumn } from './ui/shell';
 import type { NavTab } from '../types';
 
@@ -35,7 +35,7 @@ const RailButton: React.FC<{
 );
 
 /** 图标轨上各动作的序号：滑动指示标按它在整列里的位置平移。 */
-const RAIL_ORDER = ['expand', 'new', 'search', 'workspace', 'automation', 'memory'] as const;
+const RAIL_ORDER = ['expand', 'new', 'search', 'workspace', 'automation', 'goals', 'memory'] as const;
 /** 单格边长与格间距，与上面的类名一致。 */
 const RAIL_CELL = 36;
 const RAIL_GAP = 8;
@@ -55,6 +55,8 @@ interface SidebarRailProps {
   onSelectWorkspace: () => void;
   /** 展开侧边栏并切到自动化任务。 */
   onSelectAutomation: () => void;
+  /** 展开侧边栏并切到目标看板。 */
+  onSelectGoals: () => void;
   /** 展开侧边栏并切到记忆管理。 */
   onSelectMemory: () => void;
   /** 打开设置弹窗。 */
@@ -68,6 +70,7 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
   onOpenSearch,
   onSelectWorkspace,
   onSelectAutomation,
+  onSelectGoals,
   onSelectMemory,
   onOpenSettings,
 }) => (
@@ -92,9 +95,11 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
               ? RAIL_ORDER.indexOf('workspace')
               : currentTab === 'automation'
                 ? RAIL_ORDER.indexOf('automation')
-                : currentTab === 'memory'
-                  ? RAIL_ORDER.indexOf('memory')
-                  : null
+                : currentTab === 'goals'
+                  ? RAIL_ORDER.indexOf('goals')
+                  : currentTab === 'memory'
+                    ? RAIL_ORDER.indexOf('memory')
+                    : null
           }
           itemSize={RAIL_CELL}
           gap={RAIL_GAP}
@@ -112,6 +117,9 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
         </RailButton>
         <RailButton label="自动化任务" active={currentTab === 'automation'} onClick={onSelectAutomation}>
           <ClockIcon size={14} />
+        </RailButton>
+        <RailButton label="目标看板" active={currentTab === 'goals'} onClick={onSelectGoals}>
+          <ChecklistIcon size={14} />
         </RailButton>
         <RailButton label="记忆管理" active={currentTab === 'memory'} onClick={onSelectMemory}>
           <BrainIcon size={14} />

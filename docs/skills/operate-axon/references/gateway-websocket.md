@@ -51,7 +51,11 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
 订阅目标语义：
 
 - 给出 `sessionId` 时按**会话级**订阅处理，此时 `interactionId` 被忽略。
-- `sessionId` 是子代理会话的会话标识（形如 `parent--subagent--root`），**不是**车道标识；把车道标识当 `sessionId` 传会被拒为 `subscription_rejected`。主会话车道用 `interactionId` 订阅，交互标识可从 `GET /api/v1/lanes/<laneId>/interactions` 取得。
+- 会话级订阅接受两类会话：
+  - **子代理会话**，会话标识形如 `parent--subagent--root`；其中的 `parent` 是父的**运行会话标识**，不是车道标识。
+  - **目标执行会话**，即目标执行账本里绑定到该会话的执行记录所对应的会话（形如 `goal-session-<goalId>`）。服务端按执行绑定裁决，**不解析标识前缀**：没有执行绑定的会话即使标识看起来像目标会话也会被拒。
+- 目标执行会话还要通过工作区校验：工作区作用域的目标，其作用域工作区必须等于请求的 `workspaceId`；全局作用域的目标按会话 `cwd` 精确匹配工作区注册表根目录，匹配必须唯一（零个或多个都拒绝）。
+- 把车道标识当 `sessionId` 传会被拒为 `subscription_rejected`；既不是子代理会话、也没有执行绑定的普通会话同样被拒。主会话车道用 `interactionId` 订阅，交互标识可从 `GET /api/v1/lanes/<laneId>/interactions` 取得。
 - `subscribeId` 由客户端生成，必须在同一连接内唯一；建议直接由目标推导（`interaction:<id>` 或 `session:<id>`）。
 - `resumeCursor` 用于从既有游标续读；省略时从头回放。
 
@@ -88,7 +92,7 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
 | `event_rejected` | 提交的事件被入口策略拒绝，未入账 |
 | `subscribe_missing_id` | `subscribe` 未带 `subscribeId`；该帧不回显标识 |
 | `subscribe_duplicate_id` | 同一连接复用了 `subscribeId`；只拒这一次，连接保持 |
-| `subscription_rejected` | 目标不存在或不可订阅；回显 `subscribeId`，Daemon 侧日志留有具体原因 |
+| `subscription_rejected` | 目标不存在或不可订阅（含子代理会话、目标执行会话之外的普通会话，以及目标会话与请求工作区不匹配）；回显 `subscribeId`，Daemon 侧日志留有具体原因 |
 | `event_projection_failed` | 事件投影失败；服务端以错误帧显式回执，不静默丢帧 |
 
 ## 排障对照
@@ -99,7 +103,7 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
 | 连接直接失败并报 404 | 路径必须精确为 `/gateway/v1/ws` |
 | 连上后无任何回帧 | 这是正常行为：服务端不发欢迎帧，先发 `ping` 或 `subscribe` |
 | `subscribe` 回 `invalid_json` | 漏了 `workspaceId`，或字段名不是 camelCase |
-| `subscribe` 回 `subscription_rejected` | 目标标识类型用错（车道标识当 `sessionId`）或目标不存在 |
+| `subscribe` 回 `subscription_rejected` | 目标标识类型用错（车道标识当 `sessionId`）、目标不存在，或目标执行会话与请求工作区不匹配 |
 | 有 `subscribed` 但长时间没有事件帧 | 目标 Interaction 已结束且无历史帧；先用 `GET /gateway/v1/interactions/<id>` 确认状态 |
 | 事件帧解析失败 | `payload_json` 是字符串化 JSON，且同帧内命名风格混合 |
 | 界面报「连接被重置」（`WebSocket protocol error: Connection reset without closing handshake`） | `data/logs/axon-<日期>.log` 的 `[gateway-ws] 连接级失败 peer=... 原因=...`：有该行是服务端读到了非正常断开，无该行说明断在链路层 |

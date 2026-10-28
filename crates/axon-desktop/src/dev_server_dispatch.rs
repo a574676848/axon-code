@@ -378,6 +378,14 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
         "memory_remove" => Ok(crate::automation::memory_remove(
             as_str("memoryId")?.to_owned(),
         )?),
+        // 目标看板：只读两条，与桌面宿主的同名命令共用同一份实现。
+        "goal_list" => Ok(crate::goals::goal_list(
+            args.get("limit")
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok()),
+            optional_string("workspaceId"),
+        )?),
+        "goal_get" => Ok(crate::goals::goal_get(as_str("goalId")?)?),
         // 用量统计：浏览器调试桥与桌面宿主走同一批命令，只读。
         "usage_overview" => Ok(crate::usage::usage_overview(
             optional_string("period"),

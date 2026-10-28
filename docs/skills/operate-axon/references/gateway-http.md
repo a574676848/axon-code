@@ -93,6 +93,15 @@ Authorization: Bearer <token>
 
 `<agent>` 是单个路径段，其中的 `/` 与 `:` 必须先做百分号转义；转义非法按未命中处理。
 
+目标看板（只读；桌面侧栏「目标看板」经此读取，不写账本）：
+
+| 方法与路径 | 用途 |
+|---|---|
+| `GET /api/v1/goals` | 可见目标列表。`?limit=<1-256>`，缺省 256，越界返回 400 `invalid_query`；`?workspaceId=<id>` 只返回该工作区的目标。返回 `goals`、`returned`、`truncated`。每个目标带 `goalId`、`title`、`status`、`revision`、`objectivePreview`（按 160 字符截断）、`stepCount`、`nextStep`、`waitingReason`、`priority`、`deadlineMs`、`scopeKind`（`workspace` 或 `global`）、`workspaceId`、`workspaceName`、`workspacePath`、`createdAtMs`、`updatedAtMs`、`lastActivityAtMs`、`latestExecution`、`latestResult`。`lastActivityAtMs` 取更新时间、最近执行更新时间与最近结果时间三者最大；`truncated` 为真表示本次读取达到上限且仍有更多目标 |
+| `GET /api/v1/goals/<goalId>` | 单个目标详情。在列表同构的 `goal` 之上追加 `objective`（最多 20000 字符）、`steps`、`acceptance`（各最多 64 条、单条最多 2000 字符）、`cancellationReason`、`objectiveTruncated`、`listsTruncated`、`recentExecutions`（最多 8 条，按 `createdAtMs` 降序）与 `latestResult`。目标不存在或不可见返回 404 `goal_not_found` |
+
+目标执行会话的逐字稿不另立路由：走 WebSocket 的会话级订阅，见 `gateway-websocket.md`。
+
 人格状态（只读；桌面设置 › 人设 的状态面板经此读取）：
 
 | 方法与路径 | 用途 |
@@ -159,6 +168,16 @@ Cron：
 | 502、504 | `event_script_failed`、`event_script_timeout` | provider 解析脚本失败或超时，事件未入账 |
 | 503 | `gateway_unavailable`、`event_prepare_failed` | 生命周期或准备失败，稍后重试 |
 
+目标看板面另有三个错误码，取统一错误模型 `{"error":{"code":"...","message":"...","details":null}}`：
+
+| 状态 | `code` | 含义与处置 |
+|---|---|---|
+| 400 | `invalid_query` | `limit` 不在 1 到 256 之间，或 `workspaceId` 不是合法的 Workspace 标识；按提示改正查询串 |
+| 404 | `goal_not_found` | 目标不存在或对当前可见范围不可见；不要按「后台版本过旧」处置 |
+| 500 | `goal_query_failed` | 账本读取失败；把 `agent.log_level` 调到 `info`，再按 `path=/api/v1/goals` 与 `status=500` 检索 `data/logs/axon-<日期>.log` 的访问日志行。错误码只在响应体里，日志行不带 |
+
+无错误码的 404 仍表示路由不存在。桌面端对这两种 404 给不同结论：有 `goal_not_found` 时报「目标不存在或已被清理」，没有错误码时报「网关不含该接口，后台服务版本可能过旧」。
+
 ### 并发与背压
 
 - 传输由 axum（hyper + tokio）承载：HTTP 解析、连接管理与优雅停机都在框架内，网关自身不再持有固定数量的工作线程。
@@ -186,6 +205,8 @@ Gateway 面只在 Daemon 运行时可达：先用 `axon daemon status` 确认 `i
 | `GET /v1/sessions` | 会话摘要，可用 `?limit=<n>` 限制条数 |
 
 非 `GET` 方法返回 405；鉴权头格式为 `Authorization: Bearer <token>`，与 `--auth-token-file` 中的原文一致。
+
+`GET /v1/health` 的 `capabilities.protocolVersion` 是工作台协议版本，当前为 6；每新增一个扩展路由族或改动其字段语义时递增。它是服务端能力声明，桌面端不做客户端协商。
 
 ## 调用脚本
 

@@ -29,7 +29,7 @@ use crate::run_commands::run_steer::{ActivePrimaryTurnRegistry, SubagentSendOutc
 /// daemon 网关上的扩展路由前缀。
 pub const WORKBENCH_PATH_PREFIX: &str = "/api/v1";
 /// 协议版本；新增路由或改动字段语义时必须递增，供客户端协商。
-pub const WORKBENCH_PROTOCOL_VERSION: u32 = 5;
+pub const WORKBENCH_PROTOCOL_VERSION: u32 = 6;
 /// 单次车道 Interaction 回放查询的默认条数上限。
 const DEFAULT_LANE_INTERACTION_LIMIT: u32 = 200;
 /// 单次车道 Interaction 回放查询的条数硬上限。

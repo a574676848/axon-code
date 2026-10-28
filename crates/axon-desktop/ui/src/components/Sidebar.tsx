@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircleIcon,
   BrainIcon,
+  ChecklistIcon,
   ClockIcon,
 } from '../icons';
 import type { GatewayHealth, LaneItem, NavTab, WorkspaceItem } from '../types';
@@ -452,6 +453,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
           onToggleSidebar();
           onSelectTab('automation');
         }}
+        onSelectGoals={() => {
+          onToggleSidebar();
+          onSelectTab('goals');
+        }}
         onSelectMemory={() => {
           onToggleSidebar();
           onSelectTab('memory');
@@ -469,12 +474,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="shrink-0 px-3 pb-3 pt-1 space-y-0.5">
         <NewSessionButton onClick={() => void createLane()} />
         {/*
-          两行导航各自不再画静态指示条，整列共用一枚滑动指示标：
+          三行导航各自不再画静态指示条，整列共用一枚滑动指示标：
           切换视图时只有它在平移，行本身不重排。
         */}
         <div className="relative space-y-0.5">
           <NavGlide
-            activeIndex={currentTab === 'automation' ? 0 : currentTab === 'memory' ? 1 : null}
+            activeIndex={
+              currentTab === 'automation' ? 0 : currentTab === 'goals' ? 1 : currentTab === 'memory' ? 2 : null
+            }
             itemSize={32}
             gap={2}
           />
@@ -483,6 +490,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             label="自动化任务"
             active={currentTab === 'automation'}
             onClick={() => onSelectTab('automation')}
+          />
+          <NavRow
+            icon={<ChecklistIcon size={14} />}
+            label="目标看板"
+            active={currentTab === 'goals'}
+            onClick={() => onSelectTab('goals')}
           />
           <NavRow
             icon={<BrainIcon size={14} />}

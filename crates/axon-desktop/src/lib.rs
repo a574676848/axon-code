@@ -27,6 +27,8 @@ pub mod documents;
 pub mod export;
 /// 网关客户端：桌面端访问运行态的唯一入口。
 pub mod gateway;
+/// 目标看板：只读目标列表与详情的 IPC 命令。
+pub mod goals;
 /// 输入历史：与 TUI 共用 composer draft 历史。
 pub mod input_history;
 /// 基础配置权威 IPC 命令与数据模型。
@@ -98,6 +100,7 @@ use documents::{
     mcp_upsert_raw, open_document, skills_list,
 };
 use export::export_markdown;
+use goals::{goal_get, goal_list};
 use input_history::{input_history_append, input_history_list};
 use ipc::{
     config_apply_values, config_read, config_reset_key, config_validate, config_validate_values,
@@ -277,6 +280,8 @@ pub fn run() {
             memory_write,
             memory_forget,
             memory_remove,
+            goal_list,
+            goal_get,
             workspace_list,
             workspace_add,
             workspace_remove,
