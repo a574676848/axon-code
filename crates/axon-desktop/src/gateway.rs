@@ -331,7 +331,7 @@ pub fn post_json_at(path: &str, payload: &serde_json::Value) -> Result<serde_jso
 ///
 /// 401 是凭据问题、404 是服务端不含该接口（版本过旧），二者修复动作完全不同，
 /// 不能笼统报「调用失败」；网关自身的错误码原样附在后面，便于定位。
-fn gateway_status_message(status: u16, body: &str) -> String {
+pub(crate) fn gateway_status_message(status: u16, body: &str) -> String {
     let code = serde_json::from_str::<serde_json::Value>(body)
         .ok()
         .and_then(|value| {
@@ -358,6 +358,9 @@ fn gateway_status_message(status: u16, body: &str) -> String {
             format!("网关拒绝了这条消息：内容、附件或时效不合规{suffix}")
         }
         403 => format!("网关拒绝访问：凭据缺失或不匹配{suffix}"),
+        // 目标详情 404 说「这个目标不在了」，路由缺失 404 说「后台版本过旧」：
+        // 两者的下一步完全不同，因此这条分支必须排在通用 404 之前。
+        404 if code == "goal_not_found" => format!("目标不存在或已被清理{suffix}"),
         404 => format!("网关不含该接口，后台服务版本可能过旧{suffix}"),
         429 => format!("网关繁忙，请稍后重试{suffix}"),
         _ => format!("网关返回状态码 {status}{suffix}"),
@@ -377,6 +380,25 @@ mod tests {
         assert!(rejected.contains("内容、附件或时效"), "{rejected}");
         assert!(!rejected.contains("凭据"), "{rejected}");
         assert!(rejected.contains("event_rejected"), "{rejected}");
+    }
+
+    #[test]
+    fn goal_not_found_is_reported_as_a_missing_goal_not_an_old_service() {
+        // 目标详情 404 与路由缺失 404 是两件事：前者重试无用，后者要升级后台。
+        let missing = gateway_status_message(
+            404,
+            r#"{"error":{"code":"goal_not_found","message":"目标不存在或已被清理","details":null}}"#,
+        );
+        assert_eq!(missing, "目标不存在或已被清理（goal_not_found）");
+
+        // 通用 404 文案保持不变：没有错误码的路由缺失仍归因到版本过旧。
+        let no_route = gateway_status_message(404, "");
+        assert_eq!(no_route, "网关不含该接口，后台服务版本可能过旧");
+        let other_code = gateway_status_message(404, r#"{"error":{"code":"NOT_FOUND"}}"#);
+        assert_eq!(
+            other_code,
+            "网关不含该接口，后台服务版本可能过旧（NOT_FOUND）"
+        );
     }
 
     #[test]

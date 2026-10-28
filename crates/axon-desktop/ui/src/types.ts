@@ -139,7 +139,7 @@ export interface DiscoverModelsResult {
 }
 
 /** 顶层导航目标。 */
-export type NavTab = 'workspace' | 'chat' | 'automation' | 'memory';
+export type NavTab = 'workspace' | 'chat' | 'automation' | 'goals' | 'memory';
 
 export type MemoryKind = 'profile' | 'preference' | 'experience' | 'knowledge' | 'procedure';
 

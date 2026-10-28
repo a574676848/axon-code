@@ -15,6 +15,7 @@ import { LoadingState } from './components/ui/surfaces';
 import { WindowChrome } from './components/ui/WindowChrome';
 import { CommandPalette, type CommandPaletteItem } from './components/ui/CommandPalette';
 import { AutomationPage } from './components/AutomationPage';
+import { GoalsPage } from './components/goals/GoalsPage';
 import { MemoryPage } from './components/MemoryPage';
 import { WorkspaceOverview } from './components/WorkspaceOverview';
 import {
@@ -422,6 +423,12 @@ export const App: React.FC = () => {
         run: () => setCurrentTab('automation'),
       },
       {
+        id: 'nav-goals',
+        label: '前往目标看板',
+        group: '跳转',
+        run: () => setCurrentTab('goals'),
+      },
+      {
         id: 'nav-memory',
         label: '前往记忆管理',
         group: '跳转',
@@ -579,6 +586,8 @@ export const App: React.FC = () => {
           }} />
         ) : currentTab === 'memory' ? (
           <MemoryPage connected={health.connected} />
+        ) : currentTab === 'goals' ? (
+          <GoalsPage />
         ) : (
           <ErrorBoundary>
             <ConversationView

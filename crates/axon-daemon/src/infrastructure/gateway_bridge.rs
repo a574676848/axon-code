@@ -14,6 +14,7 @@ use super::gateway_replay::{
     DEFAULT_GATEWAY_REPLAY_PAGE_SIZE, interaction_status_event, live_ceiling_cursor,
     subscribe_and_replay, subscribe_and_replay_session,
 };
+use super::goal_trace::{GOAL_SESSION_FIELD, GoalTrace};
 use crate::application::event_stream_bridge::STREAM_RESET_REASON_GENERATION_CHANGE;
 use crate::application::{
     EventStreamBridge, EventStreamSubscription, ExternalEventEnvelope, ExternalEventIngress,
@@ -336,34 +337,43 @@ where
 {
     /// 建立一条会话级订阅（不按 Interaction 过滤）。
     ///
-    /// 只接受**子代理会话**：会话必须已在运行态登记（即由宿主为某次子代理执行创建过），
-    /// 且标识里带子代理前缀。子代理会话 ID 只能从主 turn 的子代理清单里拿到，
-    /// 因此「只能从主 turn 的子代理区域进入」在服务端同样成立，而不是只靠界面自觉。
+    /// 放行两类会话，其余一律拒绝：
+    ///
+    /// 1. **子代理会话**：会话必须已在运行态登记，且标识里带子代理分隔符。子代理会话 ID
+    ///    只能从主 turn 的子代理清单里拿到，因此「只能从主 turn 的子代理区域进入」在
+    ///    服务端同样成立，而不是只靠界面自觉。
+    /// 2. **目标执行会话**：必须能在执行账本里查到按该会话的绑定，且目标解析出的工作区
+    ///    与请求工作区一致。**不解析 `goal-session-` 前缀**：前缀只是生成约定，不是授权事实。
     ///
     /// 注意：子会话 ID 里嵌的是父的**运行会话 ID**（rollout 的 UUID），而不是车道 ID，
     /// 所以这里不能拿它去查 `session_runtimes`（那张表登记的是车道会话）。
     fn subscribe_session_stream(
         &self,
-        _workspace_id: &str,
+        workspace_id: &str,
         session_id: &str,
         resume_cursor: Option<String>,
     ) -> Result<Box<dyn GatewayEventStream>, GatewayKernelError> {
         let session_id = axon_domain::DaemonSessionId::new(session_id)
             .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
-        self.dependencies
+        // 第 1 条查询：会话必须已登记。全局目标的 cwd 也在这条记录里，
+        // 因此下面按工作区校验时不再重复读一次。
+        let session = self
+            .dependencies
             .store
             .get_session(&session_id)
             .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
-        let (parent_session_id, _) = session_id
+        match session_id
             .as_str()
             .split_once(SUBAGENT_SESSION_ID_SEPARATOR)
-            .ok_or_else(|| {
-                GatewayKernelError::Ingress("会话级订阅只适用于子代理会话".to_owned())
-            })?;
-        if parent_session_id.is_empty() {
-            return Err(GatewayKernelError::Ingress(
-                "子代理会话缺少父会话前缀".to_owned(),
-            ));
+        {
+            Some((parent_session_id, _)) => {
+                if parent_session_id.is_empty() {
+                    return Err(GatewayKernelError::Ingress(
+                        "子代理会话缺少父会话前缀".to_owned(),
+                    ));
+                }
+            }
+            None => self.authorize_goal_session(workspace_id, &session_id, &session)?,
         }
         let live_ceiling = live_ceiling_cursor(
             &self.dependencies.store,
@@ -396,6 +406,86 @@ where
             pending,
             replay_cursor,
         }))
+    }
+
+    /// 目标执行会话的订阅放行判定；除已登记的会话外只多三条按索引的读取。
+    fn authorize_goal_session(
+        &self,
+        workspace_id: &str,
+        session_id: &axon_domain::DaemonSessionId,
+        session: &axon_session::SessionRuntimeRecord,
+    ) -> Result<(), GatewayKernelError> {
+        let trace = GoalTrace::start(GOAL_SESSION_FIELD);
+        let outcome = self.check_goal_session(workspace_id, session_id, session);
+        if let Some(trace) = trace {
+            trace.finish(if outcome.is_ok() {
+                "allowed"
+            } else {
+                "rejected"
+            });
+        }
+        if let Err(error) = &outcome {
+            // 拒绝码对客户端只有一种，具体原因在这里留痕，便于分辨是绑定缺失还是工作区不符。
+            axon_logger::debug(&format!("目标执行会话订阅被拒：{error}"));
+        }
+        outcome
+    }
+
+    fn check_goal_session(
+        &self,
+        workspace_id: &str,
+        session_id: &axon_domain::DaemonSessionId,
+        session: &axon_session::SessionRuntimeRecord,
+    ) -> Result<(), GatewayKernelError> {
+        let Some(execution) = self
+            .dependencies
+            .store
+            .execution_for_session(session_id)
+            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?
+        else {
+            return Err(rejection("会话既不是子代理会话，也没有目标执行绑定"));
+        };
+        let Some(goal) = self
+            .dependencies
+            .store
+            .get_goal(&execution.goal_id)
+            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?
+        else {
+            return Err(rejection("目标执行绑定的目标已不存在"));
+        };
+        let resolved = match &goal.scope {
+            axon_domain::ScopeRef::Workspace(resolved) => resolved.as_str().to_owned(),
+            axon_domain::ScopeRef::Global => self.global_goal_workspace(session)?,
+        };
+        if resolved != workspace_id {
+            return Err(rejection("目标会话与请求工作区不匹配"));
+        }
+        Ok(())
+    }
+
+    /// 全局目标按会话 cwd 精确匹配 Workspace 注册表根目录；匹配必须唯一。
+    fn global_goal_workspace(
+        &self,
+        session: &axon_session::SessionRuntimeRecord,
+    ) -> Result<String, GatewayKernelError> {
+        let cwd = normalize_root(&session.cwd);
+        let workspaces = self
+            .dependencies
+            .store
+            .list_workspaces()
+            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
+        let matches: Vec<String> = workspaces
+            .into_iter()
+            .filter(|workspace| normalize_root(&workspace.workspace_root) == cwd)
+            .map(|workspace| workspace.workspace_id)
+            .collect();
+        match matches.len() {
+            1 => matches
+                .into_iter()
+                .next()
+                .ok_or_else(|| rejection("全局目标会话的 cwd 未匹配到工作区")),
+            _ => Err(rejection("全局目标会话的 cwd 无法唯一匹配工作区")),
+        }
     }
 }
 
@@ -536,6 +626,32 @@ fn non_empty(value: String, field: &str) -> Result<String, GatewayKernelError> {
         .ok_or_else(|| GatewayKernelError::Ingress(format!("{field} 不能为空")))
 }
 
+/// 订阅拒绝：客户端只看到 `subscription_rejected`，具体原因写进 Daemon 日志。
+fn rejection(reason: &str) -> GatewayKernelError {
+    GatewayKernelError::Ingress(reason.to_owned())
+}
+
+/// 根目录归一：统一分隔符并去掉尾部分隔符。
+///
+/// 只做路径形态归一，不解析符号链接，也不做大小写折叠：注册表里的根目录来自
+/// `WorkspaceResolver` 的规范化结果，两侧同源才谈得上「精确匹配」。
+/// 根目录归一：统一分隔符并去掉尾部分隔符。
+///
+/// 只做路径形态归一，不解析符号链接，也不做大小写折叠：注册表里的根目录来自
+/// `WorkspaceResolver` 的规范化结果，两侧同源才谈得上「精确匹配」。
+/// 订阅校验与目标看板的工作区解析共用这一份，避免两处各写一套比较口径。
+#[must_use]
+pub fn normalize_workspace_root(value: &str) -> String {
+    let unified = value.trim().replace('\\', "/");
+    let trimmed = unified.trim_end_matches('/');
+    trimmed.to_owned()
+}
+
+/// 本模块内的短别名。
+fn normalize_root(value: &str) -> String {
+    normalize_workspace_root(value)
+}
+
 fn resolve_default_workspace_id() -> Option<String> {
     let cwd = std::env::current_dir().ok()?;
     WorkspaceResolver
@@ -547,6 +663,10 @@ fn resolve_default_workspace_id() -> Option<String> {
 #[cfg(test)]
 #[path = "gateway_bridge_tests.rs"]
 mod gateway_bridge_tests;
+
+#[cfg(test)]
+#[path = "gateway_bridge_goal_session_tests.rs"]
+mod gateway_bridge_goal_session_tests;
 
 #[cfg(test)]
 #[path = "gateway_event_tests.rs"]

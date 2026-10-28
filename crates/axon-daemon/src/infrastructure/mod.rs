@@ -9,6 +9,7 @@ pub mod gateway_http_handler;
 pub mod gateway_kernel;
 pub mod gateway_replay;
 pub mod gateway_websocket;
+pub mod goal_trace;
 pub mod host_status;
 pub mod ipc;
 pub mod log_sink;

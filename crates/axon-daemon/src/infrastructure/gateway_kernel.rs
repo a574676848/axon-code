@@ -107,7 +107,7 @@ pub struct GatewaySubscriptionRequest {
     pub workspace_id: String,
     /// 目标 Interaction。
     pub interaction_id: String,
-    /// 目标会话；给出时按**会话级订阅**处理（子代理会话用它，不看 Interaction）。
+    /// 目标会话；给出时按**会话级订阅**处理（子代理会话或目标执行会话，不看 Interaction）。
     pub session_id: Option<String>,
     /// 上次已确认的 durable cursor。
     pub resume_cursor: Option<String>,

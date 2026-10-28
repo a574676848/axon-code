@@ -31,6 +31,7 @@
 | `POST /api/v1/mcp/status`、`/refresh` | 指标条的 MCP 读数与输入坞的 `/mcp`：读 daemon 启动快照里的加载结论，`/refresh` 才会重探 |
 | `ws://<http 监听地址>/api/v1/voice` | 语音上行与朗读下行：鉴权后发 `start`（含 `tts` 与 `submit`），推 `0x01` 音频帧收 `final`；`submit=false` 是听写，只回文本，`submit=true` 才提交成一轮并下发 `turn` |
 | `POST /api/v1/voice/tts`、`/preview`、`/presets`、`GET /api/v1/voice/status` | 单条朗读、音色试听、音色清单与语音运行时读数 |
+| `GET /api/v1/goals`、`/goals/<goalId>` | 目标看板的列表与详情；目标执行会话的逐字稿走 WS 的会话级订阅 |
 
 工作台打开的车道订阅会计入 `axon daemon health` 的 `streamSubscribers`：切换车道与关闭窗口后该数应回落到 0，不回落说明订阅未释放。
 
@@ -108,6 +109,7 @@
 | 文档与输入历史 | `document_catalog`、`document_read`、`document_write`、`open_document`、`open_external_url`、`input_history_list`、`input_history_append` |
 | 凭据 | `secret_status_of`、`secret_set`、`secret_clear` |
 | 系统与偏好 | `system_info`、`check_update`、`gateway_health`、`gateway_start_service`、`desktop_preferences`、`desktop_set_notifications`、`desktop_set_theme`、`pick_directory`、`attachment_stage` |
+| 目标看板 | `goal_list`（`limit`、`workspaceId`）、`goal_get`（`goalId`）；两条都只读，参数非法在本地直接返回中文错误，不发请求 |
 
 - 读类命令可直接用于排障（`system_info`、`gateway_health`、`conversation_history`、`cron_history`）。
 - 写类命令（`config_write`、`config_apply_values`、`secret_set`、`mcp_upsert`、`cron_*`、`lane_*`、`conversation_submit`、`conversation_interrupt` 等）都是状态变更，先取得用户明确授权。
@@ -148,6 +150,25 @@
 - 语音定稿与文本输入共用同一条车道键 `(workspace, 私有信任域, desktop, destination)`，不新建渠道，也不新建轮次表。
 - 提供方未接入时 `start` 回 `provider_unavailable`，三个合成接口回 409 `provider_unavailable`：界面不被这些错误挡住，直接给出下一步动作。
 
+## 目标看板
+
+侧栏「目标看板」在「自动化任务」下方，展开态与 56px 图标轨都有入口。它呈现主 turn 建立的目标，事实全部经网关只读 goals 面读取。
+
+| 项 | 可观察行为 |
+|---|---|
+| 分栏 | 待开始 / 进行中 / 已暂停 / 已结束四栏；等待中与进行中同栏，用状态点区分。栏目按容器宽度从一列逐级加到四列 |
+| 卡片 | 标题、状态标签、目标预览、下一步或等待原因、工作区与最近活动时间，右下只有一个入口 |
+| 入口文案 | 看板卡片上，目标同时有执行记录与可解析工作区时写「进入会话」，否则写「查看详情」。列表不为全局目标解析工作区（合同第 7.3 条把列表查询数上界固定为 1 + 2N + 1），因此全局目标在卡片上一律显示「查看详情」；详情弹窗会按最近执行的会话 cwd 解析一次，唯一命中时给出「进入会话」 |
+| 工具栏 | 搜索（标题、目标预览、工作区、下一步）、状态分段（全部 / 未收口 / 已收口）与计数；服务端读取达到上限时计数旁写「已达上限，仅显示 256 个」 |
+| 渲染上限 | 每栏最多 20 张，超出给「显示其余 N 个」；初始挂载上限 80 张 |
+| 刷新 | 有未收口目标时每 4 秒静默刷新，全部收口即停；请求串行、旧响应不覆盖新响应；窗口隐藏时跳过本轮；失败不弹窗，连续失败才由页面错误条说明 |
+| 只读会话 | 卡片入口进入该目标的执行会话（没有执行记录、或全局目标没解析出工作区的卡片先开详情，由详情给出进入入口）：36px 顶栏（返回、标题、状态点与状态、最近活动时间）、可展开的目标契约条、逐字稿。**不渲染输入坞**，写明「后台执行由守护进程推进，此视图只读」 |
+| 空态与错误 | 空态、加载、读取失败、目标已被清理、旧版后台（「网关不含该接口，后台服务版本可能过旧」）各有独立呈现；订阅被拒时给横幅并保留返回入口 |
+| 焦点 | 进入会话视图焦点落到返回按钮，返回后回到来源卡片 |
+
+- 详情读取失败为 `goal_not_found` 时文案是「目标不存在或已被清理」，与「后台版本过旧」区分开。
+- 目标看板不提供启动、暂停、取消与追发消息：这些在界面上没有合法投递目标。
+
 ## 界面级调试（CDP）
 
 启动窗口前设置调试端口，再启动桌面端：
@@ -170,3 +191,5 @@ axon desktop
 | 调试桥连不上 | 是否显式传了 `--serve`；端口是否被占用；基址必须是 `127.0.0.1` |
 | 界面内容与预期不符 | 桌面二进制内嵌前端产物：确认构建顺序为**先重建前端产物、再重建桌面端** |
 | 订阅数不回落 | `axon daemon health` 的 `streamSubscribers`；配合 [gateway-websocket.md](gateway-websocket.md) 的订阅脚本核对成对释放 |
+| 目标看板报「后台服务版本可能过旧」 | Daemon 是否为新版本：旧 daemon 没有 goals 路由，升级后重试 |
+| 目标卡片只能「查看详情」 | 该目标没有执行记录、执行记录没有绑定会话，或全局目标在详情里也解析不到工作区；这几种情况没有可订阅的会话 |
