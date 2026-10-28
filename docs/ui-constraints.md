@@ -148,6 +148,7 @@
   - 声学声波微动画（`VoiceWave`，输入坞麦克风、语音状态行、消息朗读按钮、顶栏自动朗读开关与音色试听行共用）
   - 快捷键角标（`Kbd`，菜单项、按钮提示与命令面板共用 11px 角标）
   - 命令面板（`CommandPalette`，`Ctrl + K` 的唯一入口）
+  - 快捷键速查（`ShortcutsDialog` + `src/shortcuts.ts`，设置 › 系统设置 的唯一入口；只读，不做键位自定义）
   - 弹出层退出生命周期（`useExitLifecycle`，模态与输入坞上沿面板共用）
   - 输入坞上沿状态条外壳（`ComposerStatusCell`，语音录音条与工作状态行共用；只定义高度、圆角、底色、阴影与内部节奏，左端标识与文案由各自给）
   - 麦克风原生授权与隐私修复引导（`ComposerVoicePermissionDialog`，基于 `Dialog` 承载首次授权说明、系统隐私跳转与重新检测，宿主层静默接管本地源的 WebView 媒体权限，严禁露出浏览器 URL 权限条）

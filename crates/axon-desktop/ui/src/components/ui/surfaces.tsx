@@ -9,7 +9,7 @@ import React from 'react';
 // ------------------------------------------------------------------ 文本
 
 type TextTone = 'primary' | 'secondary' | 'tertiary' | 'caption' | 'danger';
-type TextSize = 'xs' | 'sm' | 'base' | '2xs' | 'code' | 'meta' | 'row' | 'body' | 'content';
+type TextSize = 'xs' | 'sm' | 'base' | '2xs' | 'micro' | 'code' | 'meta' | 'row' | 'body' | 'content';
 
 const TEXT_TONE: Record<TextTone, string> = {
   primary: 'text-text-primary',
@@ -21,6 +21,7 @@ const TEXT_TONE: Record<TextTone, string> = {
 
 const TEXT_SIZE: Record<TextSize, string> = {
   '2xs': 'text-2xs',
+  micro: 'text-micro',
   code: 'text-code',
   xs: 'text-xs',
   meta: 'text-meta',

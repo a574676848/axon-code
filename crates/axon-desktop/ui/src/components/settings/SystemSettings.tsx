@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Switch } from '../ui/controls';
+import { Button, Switch } from '../ui/controls';
 import { Banner, Panel, Text, ToggleField } from '../ui/surfaces';
 import * as ipc from '../../ipc';
 import { applyTheme } from '../../theme';
@@ -9,6 +9,7 @@ import { AlertCircleIcon, CheckIcon } from '../../icons';
 import type { ThemeId } from '../../types';
 import { RuntimeStatusPanel } from './RuntimeStatusPanel';
 import { VoiceInputSettings } from './VoiceInputSettings';
+import { ShortcutsDialog } from './ShortcutsDialog';
 
 /*
  * 系统设置：桌面外壳自身的偏好与运行状态。
@@ -69,6 +70,8 @@ function themeDisplayName(theme: ThemeId): string {
 
 export const SystemSettings: React.FC = () => {
   const [notifications, setNotifications] = useState<boolean | null>(null);
+  /** 快捷键速查弹窗是否打开。 */
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [theme, setTheme] = useState<ThemeId | null>(null);
   const voiceAutoRead = useGlobalAutoRead();
   const voiceSupported = isSupported();
@@ -221,6 +224,21 @@ export const SystemSettings: React.FC = () => {
           </div>
         </div>
 
+        {/*
+          快捷键速查：只读清单，点开是「有哪些键可按」，不做键位自定义。
+          放在系统设置最前：它是外壳自身的操作约定，与下面的通知开关同一层级。
+        */}
+        <div className="flex items-center justify-between gap-3 px-3.5 py-3 hairline-b border-border-hairline">
+          <div className="min-w-0 space-y-0.5">
+            <Text size="sm">快捷键</Text>
+            <Text tone="secondary" size="xs" className="block">
+              查看当前支持的快捷键与输入操作
+            </Text>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => setShortcutsOpen(true)}>
+            查看快捷键
+          </Button>
+        </div>
         <div className="px-3.5 py-3 hairline-b border-border-hairline">
           <ToggleField
             label="消息通知"
@@ -265,6 +283,8 @@ export const SystemSettings: React.FC = () => {
         )}
 
         <RuntimeStatusPanel onError={handleError} onNotice={handleNotice} />
+
+      <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       </Panel>
     </div>
   );
