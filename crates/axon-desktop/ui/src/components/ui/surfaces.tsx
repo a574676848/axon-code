@@ -219,16 +219,22 @@ function alignSpinnerPhase(element: SVGSVGElement | null): void {
  *
  * 实心状态在 10px 的槽里画一颗 6px 的圆点，槽宽恒定，
  * 因此换成转圈或别的状态时行内文字不会横跳。
+ *
+ * `tone` 只给「正在进行」这一档换色：静息读数留在三级文本色里，
+ * 而顶栏活动点与输入坞工作状态行这类主动作需要强调色才被看见。
  */
-export const StateDot: React.FC<{ state: StateDotState; className?: string }> = ({
-  state,
-  className = '',
-}) => {
+export const StateDot: React.FC<{
+  state: StateDotState;
+  className?: string;
+  tone?: 'default' | 'accent';
+}> = ({ state, className = '', tone = 'default' }) => {
   if (state === 'ongoing') {
     return (
       <svg
         ref={alignSpinnerPhase}
-        className={`state-spinner shrink-0 text-text-tertiary ${className}`}
+        className={`state-spinner shrink-0 ${
+          tone === 'accent' ? 'text-text-link' : 'text-text-tertiary'
+        } ${className}`}
         width={ONGOING_EDGE}
         height={ONGOING_EDGE}
         viewBox="0 0 24 24"

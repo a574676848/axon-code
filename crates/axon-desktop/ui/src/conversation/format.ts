@@ -18,6 +18,8 @@ const MILLIS_PER_SECOND = 1_000;
 const MILLIS_PER_MINUTE = 60 * MILLIS_PER_SECOND;
 const MILLIS_PER_HOUR = 60 * MILLIS_PER_MINUTE;
 const MILLIS_PER_DAY = 24 * MILLIS_PER_HOUR;
+/** 一分钟的秒数：计时读数按六十进位拆分。 */
+const SECONDS_PER_MINUTE = 60;
 /** 秒级时长的显示小数位。 */
 const SECOND_DISPLAY_DECIMALS = 2;
 /** 万分比每百分点。 */
@@ -79,6 +81,23 @@ export function formatDurationMillisCompact(durationMs: number): string {
   const hours = Math.floor((durationMs % MILLIS_PER_DAY) / MILLIS_PER_HOUR);
   const minutes = Math.floor((durationMs % MILLIS_PER_HOUR) / MILLIS_PER_MINUTE);
   return `${days}d ${String(hours).padStart(2, '0')}h ${String(minutes).padStart(2, '0')}m`;
+}
+
+/**
+ * 计时器读数：分:秒，满一小时补上小时位，秒恒两位。
+ *
+ * 输入坞上沿的两条状态条（语音录音与工作生成）是同一列里的两种计时，
+ * 因此共用这一份写法：等宽数字下只变数字不变宽度。
+ */
+export function formatElapsedClock(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(durationMs / MILLIS_PER_SECOND));
+  const seconds = totalSeconds % SECONDS_PER_MINUTE;
+  const totalMinutes = Math.floor(totalSeconds / SECONDS_PER_MINUTE);
+  const minutes = totalMinutes % SECONDS_PER_MINUTE;
+  const hours = Math.floor(totalMinutes / SECONDS_PER_MINUTE);
+  const pad = (value: number): string => String(value).padStart(2, '0');
+  if (hours > 0) return `${hours}:${pad(minutes)}:${pad(seconds)}`;
+  return `${minutes}:${pad(seconds)}`;
 }
 
 /** 时长的进位拆分；天是最大档，再长的任务也只说到天。 */

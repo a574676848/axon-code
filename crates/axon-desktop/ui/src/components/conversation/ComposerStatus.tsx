@@ -1,6 +1,7 @@
 import React from 'react';
-import { formatDurationMillisCompact } from '../../conversation/format';
+import { formatElapsedClock } from '../../conversation/format';
 import { StateDot } from '../ui/surfaces';
+import { ComposerStatusCell } from './ComposerStatusCell';
 
 /*
  * 输入坞上方的三行提示：错误回执、操作回执、工作状态行。
@@ -11,24 +12,6 @@ import { StateDot } from '../ui/surfaces';
 
 /** 工作中的中断提示，与 TUI 的 composer dock 逐字一致。 */
 const WORKING_INTERRUPT_HINT = '按 ESC 中断';
-
-/** 工作状态行的明细段：已耗时 · 排队条数 · 中断提示。 */
-function workingDetails(working: {
-  elapsedMs: number | null;
-  queued: number;
-  interruptible: boolean;
-}): string {
-  const details: string[] = [];
-  if (working.elapsedMs !== null && working.elapsedMs > 0) {
-    details.push(formatDurationMillisCompact(working.elapsedMs));
-  }
-  if (working.queued > 0) {
-    details.push(`已有 ${working.queued} 条等待注入`);
-  }
-  // 本机指令（`/mcp` 重载）中途打断只会留下一半状态，因此这一档不给中断提示。
-  if (working.interruptible) details.push(WORKING_INTERRUPT_HINT);
-  return details.join(' · ');
-}
 
 /** 一行回执：错误与说明共用同一几何，只有颜色不同。 */
 export const ComposerNotice: React.FC<{ tone: 'danger' | 'secondary'; text: string }> = ({
@@ -85,34 +68,50 @@ export interface ComposerWorkingLineProps {
  * 工作状态行。
  *
  * 运行期间一直在，耗时与中断提示都写在这一行里，用户不必去别处找。
- * 转圈与列表行是同一份，行高固定，底部一条不确定进度扫光说明它确实在动。
+ * 与语音录音条共用 `ComposerStatusCell` 外壳：同一条状态列里两格同高同形，
+ * 只是语气不同（一格在收声，一格在干活）。
+ *
+ * 读数按「这一行正在做的事」从左到右排：进行态转圈、主文案、耗时、
+ * 排队条数，右端固定中断提示。底部一条扫光说明它确实在动。
  * 内置指令复用这一行（`interruptible=false`）：它同样是「这件事正在做」，
  * 只是不能被打断，因此不承诺 ESC。
- *
- * 视觉上是一条下沉面药丸：生成中整行从画布上浮起一格，主文案取主文本色，
- * 扫光取强调色，因此「正在干活」比一行灰字更容易被看见。
  */
 export const ComposerWorkingLine: React.FC<ComposerWorkingLineProps> = ({
   primary,
   elapsedMs,
   queued,
   interruptible = true,
-}) => (
-  <div
-    className="popover-up-in relative mb-2 px-2.5 h-7 flex items-center gap-2 overflow-hidden rounded-sm bg-surface-sunken/85 hairline border-border"
-    role="status"
-    aria-live="polite"
-  >
-    <StateDot state="ongoing" />
-    <span className="shimmer-text-active min-w-0 truncate text-meta font-medium text-text-primary">
-      {primary}
-    </span>
-    <span className="shrink-0 text-meta tabular-nums text-text-tertiary">
-      （{workingDetails({ elapsedMs, queued, interruptible })}）
-    </span>
-    <span
-      aria-hidden="true"
-      className="working-sweep pointer-events-none absolute bottom-0 -left-1/3 h-[2px] w-1/3 bg-text-link/40"
-    />
-  </div>
-);
+}) => {
+  const elapsed = elapsedMs !== null && elapsedMs > 0 ? formatElapsedClock(elapsedMs) : undefined;
+  return (
+    <ComposerStatusCell
+      role="status"
+      aria-live="polite"
+      className="mb-2"
+      glyph={
+        /*
+          转圈坐在一枚 20px 的强调浅底里，与顶栏那枚活动点同一种做法：
+          40px 的条上空悬一枚 14px 细环会显得轻，浅底给它一个落点，
+          又不至于像一枚可以按的按钮。
+        */
+        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-text-link/10">
+          <StateDot state="ongoing" tone="accent" />
+        </span>
+      }
+      hint={interruptible ? WORKING_INTERRUPT_HINT : undefined}
+      sweeping
+    >
+      <span className="shimmer-text-active min-w-0 truncate text-row font-medium text-text-primary">
+        {primary}
+      </span>
+      {elapsed !== undefined && (
+        <span className="shrink-0 text-meta tabular-nums text-text-tertiary">{elapsed}</span>
+      )}
+      {queued > 0 && (
+        <span className="shrink-0 text-meta tabular-nums text-text-tertiary">
+          另有 {queued} 条等待注入
+        </span>
+      )}
+    </ComposerStatusCell>
+  );
+};

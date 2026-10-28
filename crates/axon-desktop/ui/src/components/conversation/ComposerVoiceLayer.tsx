@@ -2,8 +2,10 @@ import React from 'react';
 import { AlertCircleIcon, MicrophoneIcon } from '../../icons';
 import type { ComposerPermissionPrompt, ComposerVoice } from './useComposerVoice';
 import type { VoicePhase } from '../../speech/voiceProtocol';
+import { formatElapsedClock } from '../../conversation/format';
 import { VoiceWave } from './VoiceWave';
-import { Banner } from '../ui/surfaces';
+import { ComposerStatusCell } from './ComposerStatusCell';
+import { Banner, StateDot } from '../ui/surfaces';
 import { Button } from '../ui/controls';
 import { Dialog } from '../ui/overlays';
 
@@ -40,18 +42,11 @@ const BAR_HINT: Record<Exclude<VoicePhase, 'idle'>, string> = {
 /** 准备期超过这个时长就说明是冷启动：给出诚实的等待预期。 */
 const COLD_START_HINT_MS = 3_000;
 
-/** 录音条上的时间读数：分:秒，秒恒两位。 */
-function formatClock(durationMs: number): string {
-  const total = Math.max(0, Math.floor(durationMs / 1000));
-  const minutes = Math.floor(total / 60);
-  const seconds = total % 60;
-  return `${minutes}:${String(seconds).padStart(2, '0')}`;
-}
-
 /**
  * 语音录音条；待机不占高度。
  *
  * 只讲用户能感知的事实：在做什么、还能做什么。丢帧这类内部指标不进这一条。
+ * 外壳与工作状态行共用 `ComposerStatusCell`，两格同高同形，只在语气上分开。
  */
 export const ComposerVoiceBar: React.FC<{ voice: ComposerVoice }> = ({ voice }) => {
   if (voice.phase === 'idle') return null;
@@ -64,26 +59,34 @@ export const ComposerVoiceBar: React.FC<{ voice: ComposerVoice }> = ({ voice }) 
         ? partial
         : BAR_HINT[voice.phase];
   return (
-    <div
+    <ComposerStatusCell
       role="status"
       aria-live="polite"
       data-voice-status={voice.phase}
-      className="popover-up-in relative mb-1.5 flex h-10 items-center gap-2 rounded-md bg-surface px-2.5 shadow-panel hairline border-border"
+      className="mb-1.5"
+      glyph={
+        /* 录音中：一枚品牌色小点加实测振幅声波，说明这一条正在收声。 */
+        recording ? (
+          <span className="flex items-center gap-1.5 text-text-link">
+            <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true" />
+            <VoiceWave active size="xs" />
+          </span>
+        ) : (
+          /* 准备与收口期改用全站那一枚进行态转圈，与工作状态行坐在同一个落点上。 */
+          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-text-link/10">
+            <StateDot state="ongoing" tone="accent" />
+          </span>
+        )
+      }
+      hint={
+        recording || voice.phase === 'thinking' || voice.phase === 'arming' ? 'Esc 关闭' : undefined
+      }
     >
-      {/* 录音中：一枚品牌色小点加实测振幅声波，说明这一条正在收声。 */}
-      {recording ? (
-        <span className="flex shrink-0 items-center gap-1.5 text-text-link">
-          <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true" />
-          <VoiceWave active size="xs" />
-        </span>
-      ) : (
-        <span className="h-3 w-3 shrink-0 animate-spin rounded-full border border-text-tertiary border-t-transparent" />
-      )}
       <span className="shrink-0 text-meta font-medium text-text-primary">
         {BAR_LABEL[voice.phase]}
       </span>
       <span className="shrink-0 text-meta tabular-nums text-text-tertiary">
-        {formatClock(voice.elapsedMs)}
+        {formatElapsedClock(voice.elapsedMs)}
       </span>
       {/*
         识别中的文字就长在这一条上：它属于「这次录音」的一部分，
@@ -96,10 +99,7 @@ export const ComposerVoiceBar: React.FC<{ voice: ComposerVoice }> = ({ voice }) 
       >
         {hint}
       </span>
-      {(recording || voice.phase === 'thinking' || voice.phase === 'arming') && (
-        <span className="shrink-0 text-meta text-text-tertiary">Esc 关闭</span>
-      )}
-    </div>
+    </ComposerStatusCell>
   );
 };
 /** 失败结论用 Banner 表达，入口随后由控制器复位。 */
