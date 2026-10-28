@@ -19,6 +19,9 @@ const MAXIMIZED_EVENT = 'axon://window-maximized-changed';
 /** 侧栏容器类名：焦点与最大化属性都落在这个节点上。 */
 export const APP_SHELL_SIDEBAR = '.app-shell-sidebar';
 
+/** 托盘外框类名：窗口圆角与材质回退都读它自己的状态属性。 */
+export const APP_SHELL_TRAY = '.app-shell-tray';
+
 /** 系统材质标识；`solid` 表示宿主没有可用材质。 */
 export type WindowMaterial = 'mica' | 'vibrancy' | 'solid';
 
@@ -104,6 +107,18 @@ export function useWindowDynamicSurfaces(rebindKey?: unknown): void {
     if (!isDesktopHost()) return undefined;
     let disposed = false;
     let unlisten: (() => void) | null = null;
+    /*
+     * 首帧先读一次真实状态。
+     *
+     * 宿主只在最大化「翻转」时推事件，因此以最大化状态启动时永远收不到那一帧；
+     * 不读初值的话托盘会一直留在半透档，最大化回退等于没做。
+     */
+    void import('@tauri-apps/api/window')
+      .then(async ({ getCurrentWindow }) => {
+        if (disposed) return;
+        setMaximized(await getCurrentWindow().isMaximized().catch(() => false));
+      })
+      .catch(() => undefined);
     void import('@tauri-apps/api/event')
       .then(({ listen }) => listen<boolean>(MAXIMIZED_EVENT, (event) => setMaximized(event.payload === true)))
       .then((stop) => {
@@ -117,12 +132,22 @@ export function useWindowDynamicSurfaces(rebindKey?: unknown): void {
     };
   }, []);
 
-  // 每次重建（含侧栏换形态）都把当前状态重新写到容器上。
+  /*
+   * 每次重建（含侧栏换形态）都把当前状态重新写到容器上。
+   *
+   * 托盘外框与侧栏各挂一份：圆角与材质回退都按属性选择器判定，
+   * 不依赖 `:has()`（macOS 12.0 的 WebKit 还没有它）。
+   */
   useEffect(() => {
-    const sidebar = document.querySelector(APP_SHELL_SIDEBAR);
-    if (sidebar === null) return;
-    sidebar.setAttribute('data-window-focused', String(focused));
-    sidebar.setAttribute('data-window-maximized', String(maximized));
+    const targets = [
+      document.querySelector(APP_SHELL_TRAY),
+      document.querySelector(APP_SHELL_SIDEBAR),
+    ];
+    for (const target of targets) {
+      if (target === null) continue;
+      target.setAttribute('data-window-focused', String(focused));
+      target.setAttribute('data-window-maximized', String(maximized));
+    }
   }, [focused, maximized, rebindKey]);
 }
 

@@ -187,7 +187,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, i
                 // 指针与键盘共用一个下标：只有一层高亮，不会出现「指针停一行、键盘选另一行」。
                 onMouseEnter={() => setActive(index)}
                 onClick={() => runItem(item)}
-                className={`w-full h-8 flex items-center gap-2 px-2.5 rounded-xs text-row text-left select-none ${
+                className={`focus-ring-soft w-full h-8 flex items-center gap-2 px-2.5 rounded-xs text-row text-left select-none ${
                   index === active ? 'bg-row-hover text-text-primary' : 'text-text-secondary'
                 }`}
               >

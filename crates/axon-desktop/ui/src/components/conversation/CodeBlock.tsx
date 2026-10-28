@@ -28,6 +28,8 @@ export interface CodeBlockProps {
   /** 工具详情使用紧凑间距和内部滚动。 */
   compact?: boolean;
   /** 可选区块标题（如工具详情的「输入 / 命令 / 输出」），与语言名合并展示以消除双层冗余标题。 */
+  /** 这一段的围栏还没闭合（流式输出中）：先按等宽纯文本渲染，闭合后再高亮。 */
+  streaming?: boolean;
   title?: string;
 }
 
@@ -77,6 +79,8 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({
   language,
   compact = false,
   title,
+  /** 这一段正文还在流式输出且围栏未闭合：先按等宽纯文本渲染。 */
+  streaming = false,
 }) => {
   const [diagramError, setDiagramError] = React.useState<string | null>(null);
   const [copied, setCopied] = React.useState(false);
@@ -85,7 +89,7 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({
    * 高亮按帧节流、未闭合围栏先退回纯文本：见 useThrottledHighlight。
    * 流式期间每帧至多解析一次，闭合之后才补上完整语法高亮。
    */
-  const lines = useThrottledHighlight(code, language, highlightCode);
+  const lines = useThrottledHighlight(code, language, highlightCode, { plain: streaming });
 
   React.useEffect(
     () => () => {

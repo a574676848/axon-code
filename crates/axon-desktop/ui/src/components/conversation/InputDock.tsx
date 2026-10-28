@@ -393,6 +393,11 @@ export const InputDock: React.FC<InputDockProps> = ({
               内层是 18px 圆角的纯白浮起核心，聚焦态保持立体投影绝不塌陷。
             */}
             <div className="dock-shell relative p-[3px] rounded-[21px] bg-surface-sunken/45 hairline border-border-hairline">
+              {/* 聚焦呼吸贴在托槽边框本身：inset-0 加同心 21px 圆角，既不内缩也不外扩。 */}
+              <span
+                aria-hidden="true"
+                className="dock-focus-frame pointer-events-none absolute inset-0 z-20 rounded-[21px]"
+              />
               {(working !== null || command.running !== null) && (
                 <span
                   aria-hidden="true"
@@ -405,11 +410,6 @@ export const InputDock: React.FC<InputDockProps> = ({
                   dragging ? 'border-focus bg-hover' : 'border-border'
                 }`}
               >
-                {/* 聚焦内圈：贴在内层核心边缘呼吸，不向窗口外扩一圈光环。 */}
-                <span
-                  aria-hidden="true"
-                  className="dock-focus-inner pointer-events-none absolute inset-[6px] z-20"
-                />
                 {!compact && (links.links.length > 0 || attachments.length > 0) && (
                   <ComposerTray
                     links={links.links}

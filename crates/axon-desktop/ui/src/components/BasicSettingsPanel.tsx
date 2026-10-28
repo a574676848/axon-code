@@ -276,7 +276,11 @@ export const BasicSettingsPanel: React.FC<BasicSettingsPanelProps> = ({
    */
   const dashboard = section === 'usage' || section === 'pricing';
   /** 只写一件东西的分区：正文给满高度，编辑器因此能吃掉余下的空白。 */
-  const fillSection = section === 'soul' || section === 'agents';
+  /*
+   * 只有「行为」这一屏是纯文档编辑：正文给满高度，编辑框才能吃掉余下的空白。
+   * 人设页在编辑器之上还有状态面板与音色，整页必须保持可滚动，因此不走这一档。
+   */
+  const fillSection = section === 'agents';
   // 关于页没有表单列：整块内容在正文区里居中，而不是缩在左侧 720px 里。
   const wideContent = dashboard || section === 'about' || section === 'soul' || section === 'agents';
   const needsConfig = PREFIX_SECTIONS.has(section) || section === 'models';

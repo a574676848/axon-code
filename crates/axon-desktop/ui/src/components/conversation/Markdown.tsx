@@ -40,6 +40,8 @@ interface Block {
   /** 任务列表每项的勾选状态；非任务列表时缺省。 */
   taskChecks?: boolean[];
   /** 每个列表项的嵌套层级；与 items 等长。 */
+  /** 代码围栏是否已经闭合；流式输出中未闭合时先按纯文本渲染。 */
+  closed?: boolean;
   depths?: number[];
   text: string;
 }
@@ -84,7 +86,11 @@ function parseBlocks(source: string): Block[] {
         body.push(lines[index]);
         index += 1;
       }
-      blocks.push({ kind: 'code', language, text: body.join('\n') });
+      /*
+       * 围栏是否闭合要在这里判定：while 循环只有撞到收尾围栏才会提前退出，
+       * 遍历到末尾仍未撞到，说明这是流式输出里还没写完的那一块。
+       */
+      blocks.push({ kind: 'code', language, text: body.join('\n'), closed: index < lines.length });
       continue;
     }
     /*
@@ -233,7 +239,11 @@ export const Markdown: React.FC<{ source: string; streaming?: boolean }> = ({
         if (block.kind === 'code') {
           return (
             <div key={key} className={enterClass || undefined}>
-              <CodeBlock code={block.text} language={block.language ?? null} />
+              <CodeBlock
+                code={block.text}
+                language={block.language ?? null}
+                streaming={streaming && block.closed === false}
+              />
             </div>
           );
         }

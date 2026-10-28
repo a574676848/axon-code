@@ -464,21 +464,18 @@
 
 ### 5.4 流式文本淡入
 
-文字不得生硬逐字刷出。每个批次只挂一次纯透明度淡入：
+文字不得生硬逐字刷出。块级单元（段落、代码块、表格）在流式期间新挂上来时做一次轻微的透明度淡入：
 
 ```css
-@keyframes token-fade-in {
-    from { opacity: 0; }
-    to   { opacity: 1; }
+@keyframes stream-block-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
 }
 
-.token-chunk-active {
-    display: inline;
-    animation: token-fade-in 100ms var(--ease-spring-smooth) forwards;
-}
+.stream-block-in { animation: stream-block-in 170ms cubic-bezier(0.22, 1, 0.36, 1) both; }
 ```
 
-**行内字块不做位移**：`display: inline` 的元素上挂 `transform` 会让每个行盒各自重算，50 token/s 的流式正文里这就是逐批重排。位移只发生在块级容器（换屏入场 `translateY(8px)`），与行内字块无关。
+**入场只发生在块级单元上**：段落、代码块与表格各是一个块，位移不会引起行内重排。`display: inline` 的元素上不挂任何 `transform` 动画，50 token/s 的流式正文里那样做等于逐批重排。
 
 流式光标为 2px 竖条，透明度 1s 缓入缓出循环；减弱动效下静止。
 

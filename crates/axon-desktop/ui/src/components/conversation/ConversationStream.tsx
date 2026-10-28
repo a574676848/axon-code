@@ -309,6 +309,11 @@ export const ConversationStream: React.FC<ConversationStreamProps> = ({
       <div
         ref={scrollRef}
         className="absolute inset-0 overflow-y-auto overflow-x-hidden px-5 pt-4 pb-3 select-text"
+        /*
+         * 原生滚动锚定：流式追加时由浏览器自己把视口钉住，
+         * 因此不需要任何滚动监听，也不会出现「内容长高、读的位置被顶走」。
+         */
+        style={{ overflowAnchor: 'auto' }}
       >
         <div ref={contentRef} className="w-full max-w-chat mx-auto flex flex-col gap-2.5">
           {hasOlder && (

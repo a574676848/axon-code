@@ -8,22 +8,19 @@ import React from 'react';
  *
  * 两条策略：
  * 1. **一帧至多一次**：变更先记进 ref，由 requestAnimationFrame 统一提交，
- *    因此再快的流也只会以显示屏的节奏解析；
- * 2. **未闭合围栏先不解析**：流式中的代码块还没有闭合的 ```，此时解析的是半截语法树，
- *    结果下一帧就被推翻。这一档先返回 null（由调用方退回等宽纯文本），
- *    等围栏闭合、正文稳定后再补一次完整高亮。
+ *    因此再快的流也只会以显示屏的节奏解析。已排期的那一帧读的是最新值，
+ *    因此同一帧内的多次变更不会互相丢弃；
+ * 2. **未闭合围栏先不解析**：流式中的代码块还没有闭合的围栏，此时解析的是半截语法树，
+ *    结果下一帧就被推翻。这一档由解析方（Markdown 的围栏切分）直接告知，
+ *    调用方渲染等宽纯文本，等围栏闭合后再补一次完整高亮。
  */
 
-/** 高亮函数签名：拿到 token 行或 null（null 表示暂时不做高亮）。 */
+/** 高亮函数签名：拿到这一版的 token 行。 */
 export type HighlightFn<T> = (code: string, language: string | null | undefined) => Promise<T>;
 
-/** 正文里是否还有没闭合的代码围栏。 */
-export function hasUnclosedFence(code: string): boolean {
-  let fences = 0;
-  for (const line of code.split('\n')) {
-    if (line.trimStart().startsWith('```')) fences += 1;
-  }
-  return fences % 2 === 1;
+export interface ThrottledHighlightOptions {
+  /** 这一段正文还没写完（围栏未闭合）：本帧不做高亮，先按纯文本渲染。 */
+  plain?: boolean;
 }
 
 /**
@@ -35,39 +32,53 @@ export function useThrottledHighlight<T>(
   code: string,
   language: string | null | undefined,
   highlight: HighlightFn<T>,
+  options: ThrottledHighlightOptions = {},
 ): T | null {
   const [lines, setLines] = React.useState<T | null>(null);
-  const pending = React.useRef<{ code: string; language: string | null | undefined } | null>(null);
+  const plain = options.plain === true;
+  const latest = React.useRef<{ code: string; language: string | null | undefined; plain: boolean }>({
+    code,
+    language,
+    plain,
+  });
   const frame = React.useRef(0);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    pending.current = { code, language };
-    if (frame.current === 0) {
-      frame.current = window.requestAnimationFrame(() => {
-        frame.current = 0;
-        const next = pending.current;
-        if (next === null) return;
-        if (hasUnclosedFence(next.code)) {
-          setLines(null);
-          return;
-        }
-        void highlight(next.code, next.language).then((value) => {
-          if (!cancelled) setLines(value);
-        });
-      });
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [code, highlight, language]);
+  const alive = React.useRef(true);
+  /** 请求序号：异步高亮可能乱序回来，只让最后一次落地。 */
+  const request = React.useRef(0);
 
   React.useEffect(
     () => () => {
+      alive.current = false;
       if (frame.current !== 0) window.cancelAnimationFrame(frame.current);
+      frame.current = 0;
     },
     [],
   );
+
+  React.useEffect(() => {
+    latest.current = { code, language, plain };
+    if (plain) {
+      // 未闭合：立刻退回纯文本，且不再排新帧。
+      setLines(null);
+      return;
+    }
+    if (frame.current !== 0) return;
+    frame.current = window.requestAnimationFrame(() => {
+      frame.current = 0;
+      const next = latest.current;
+      if (!alive.current) return;
+      if (next.plain) {
+        setLines(null);
+        return;
+      }
+      request.current += 1;
+      const ticket = request.current;
+      void highlight(next.code, next.language).then((value) => {
+        // 只有最后一次请求有权落地：更早的结果回来时正文已经又变了。
+        if (alive.current && ticket === request.current) setLines(value);
+      });
+    });
+  }, [code, highlight, language, plain]);
 
   return lines;
 }
