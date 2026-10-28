@@ -196,7 +196,12 @@ export function boardColumns(
 export const hasUnsettled = (goals: readonly GoalCardView[]): boolean =>
   goals.some((goal) => !isSettled(goal.status));
 
-/** 计数旁的口径说明；截断时写明只显示最近 N 个。 */
+/**
+ * 计数旁的口径说明。
+ *
+ * 服务端按更新时间升序出页，所以读满上限时拿到的是「最早的那一批」，不是「最近的」。
+ * 这里只如实说「仅显示 N 个」，不给一个方向性错误的话。
+ */
 export function countSummary(
   counts: GoalCounts,
   truncated: boolean,
@@ -204,5 +209,5 @@ export function countSummary(
 ): string {
   const base = `共 ${counts.total} 个目标 · 未收口 ${counts.open} · 已收口 ${counts.settled}`;
   if (!truncated) return base;
-  return `${base} · 仅显示最近 ${limit} 个`;
+  return `${base} · 已达上限，仅显示 ${limit} 个`;
 }

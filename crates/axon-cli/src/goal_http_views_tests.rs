@@ -62,7 +62,7 @@ fn preview_truncates_on_character_boundary() {
     let long = format!("{exact}标");
     let (truncated, cut) = truncate_chars(&long, PREVIEW_CHARS);
     assert!(cut);
-    assert_eq!(truncated.chars().count(), PREVIEW_CHARS + 1);
+    assert_eq!(truncated.chars().count(), PREVIEW_CHARS);
     assert!(truncated.ends_with('…'));
 }
 
@@ -74,7 +74,7 @@ fn card_view_uses_preview_and_reports_missing_workspace_as_empty() {
         100,
     );
     let card = goal_card_view(&goal, None, None, None);
-    assert_eq!(card.objective_preview.chars().count(), PREVIEW_CHARS + 1);
+    assert_eq!(card.objective_preview.chars().count(), PREVIEW_CHARS);
     assert_eq!(card.goal_id, "goal-view");
     assert_eq!(card.status, status_code(axon_domain::GoalStatus::Proposed));
     assert_eq!(card.step_count, 1);
@@ -159,7 +159,7 @@ fn result_summary_is_truncated_to_preview_length() {
         .as_ref()
         .map(|view| view.summary_preview.clone())
         .expect("result");
-    assert_eq!(preview.chars().count(), PREVIEW_CHARS + 1);
+    assert_eq!(preview.chars().count(), PREVIEW_CHARS);
     assert!(preview.ends_with('…'));
 }
 
@@ -180,10 +180,10 @@ fn detail_bounds_objective_lists_and_executions() {
     let detail = goal_detail_view(card, &goal, &executions, None);
 
     assert!(detail.objective_truncated);
-    assert_eq!(detail.objective.chars().count(), DETAIL_OBJECTIVE_CHARS + 1);
+    assert_eq!(detail.objective.chars().count(), DETAIL_OBJECTIVE_CHARS);
     assert_eq!(detail.steps.len(), DETAIL_LIST_ITEMS);
     assert!(detail.lists_truncated);
-    assert_eq!(detail.acceptance[0].chars().count(), DETAIL_ITEM_CHARS + 1);
+    assert_eq!(detail.acceptance[0].chars().count(), DETAIL_ITEM_CHARS);
     assert_eq!(
         detail.recent_executions.len(),
         DETAIL_EXECUTION_LIMIT as usize

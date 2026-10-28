@@ -7,15 +7,18 @@
 //! 可见范围由服务端决定，不接受客户端传入任意作用域：固定为全局作用域加
 //! Workspace 注册表里的全部工作区。
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use axon_daemon::GatewayHttpResponse;
 use axon_daemon::GatewayHttpRouteHandler;
+use axon_daemon::infrastructure::gateway_bridge::normalize_workspace_root;
 use axon_daemon::infrastructure::goal_trace::{GOAL_LIST_FIELD, GoalTrace};
-use axon_domain::{GoalDetailQuery, GoalId, GoalListQuery, GoalQueryScope, ScopeRef};
+use axon_domain::{
+    ExecutionRecord, GoalDetailQuery, GoalId, GoalListQuery, GoalQueryScope, GoalRecord, ScopeRef,
+};
 use axon_session::{
-    ExecutionStore, GoalPage, GoalQueryService, ResultStore, WorkspaceRecord, WorkspaceStore,
+    ExecutionStore, GoalPage, GoalQueryService, ResultStore, RuntimeStore, SqliteRuntimeStore,
+    WorkspaceRecord, WorkspaceStore,
 };
 use serde_json::json;
 
@@ -43,6 +46,9 @@ const NOT_FOUND_MESSAGE: &str = "目标不存在或已被清理";
 /// 工作区标识非法文案。
 const WORKSPACE_MESSAGE: &str = "workspaceId 不是合法的 Workspace 标识";
 
+/// 可见作用域集合，以及这些作用域对应的工作区记录。
+type VisibleScopes = (Vec<ScopeRef>, Vec<WorkspaceRecord>);
+
 /// 目标看板 HTTP 适配器。
 pub(crate) struct GoalHttpAdapter {
     axon_root: PathBuf,
@@ -55,22 +61,28 @@ impl GoalHttpAdapter {
     }
 
     /// 可见作用域：全局加全部已注册工作区，或客户端指定的单个工作区。
+    ///
+    /// 可见集合由服务端固定：客户端给 `workspaceId` 只是在这个固定集合里挑一个，
+    /// 因此它必须命中 Workspace 注册表。未命中时返回 `None`，调用方给出空结果，
+    /// 这样「已从注册表移除的工作区」里的目标不会因为客户端报出一个标识就被读到。
     fn visible_scopes(
         &self,
         workspace_id: Option<&str>,
-    ) -> Result<(Vec<ScopeRef>, Vec<WorkspaceRecord>), GatewayHttpResponse> {
-        let workspaces = runtime_store(&self.axon_root)
+    ) -> Result<Option<VisibleScopes>, GatewayHttpResponse> {
+        let workspaces: Vec<WorkspaceRecord> = runtime_store(&self.axon_root)
             .list_workspaces()
             .map_err(|error| query_failed(&format!("读取工作区注册表失败：{error}")))?;
         if let Some(requested) = workspace_id {
             let scope = ScopeRef::workspace(requested.to_owned()).map_err(|_| {
                 GatewayHttpResponse::error(400, INVALID_QUERY, WORKSPACE_MESSAGE, None)
             })?;
-            let kept: Vec<WorkspaceRecord> = workspaces
+            let Some(matched) = workspaces
                 .into_iter()
-                .filter(|record| record.workspace_id == requested)
-                .collect();
-            return Ok((vec![scope], kept));
+                .find(|record| record.workspace_id == requested)
+            else {
+                return Ok(None);
+            };
+            return Ok(Some((vec![scope], vec![matched])));
         }
         let mut scopes = Vec::with_capacity(workspaces.len().saturating_add(1));
         scopes.push(ScopeRef::global());
@@ -81,7 +93,7 @@ impl GoalHttpAdapter {
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|_| query_failed("工作区注册表里存在非法的 Workspace 标识"))?,
         );
-        Ok((scopes, workspaces))
+        Ok(Some((scopes, workspaces)))
     }
 
     /// 列表载荷。
@@ -103,7 +115,14 @@ impl GoalHttpAdapter {
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
         let (scopes, workspaces) = match self.visible_scopes(workspace_filter.as_deref()) {
-            Ok(visible) => visible,
+            Ok(Some(visible)) => visible,
+            // 指定的工作区不在注册表里：可见集合为空，不查库也不回 4xx。
+            Ok(None) => {
+                return GatewayHttpResponse::json(
+                    200,
+                    &json!({ "goals": Vec::<GoalCardView>::new(), "returned": 0, "truncated": false }),
+                );
+            }
             Err(response) => return response,
         };
         let store = runtime_store(&self.axon_root);
@@ -147,10 +166,6 @@ impl GoalHttpAdapter {
         workspaces: &[WorkspaceRecord],
     ) -> Result<Vec<GoalCardView>, String> {
         let store = runtime_store(&self.axon_root);
-        let by_id: HashMap<&str, &WorkspaceRecord> = workspaces
-            .iter()
-            .map(|record| (record.workspace_id.as_str(), record))
-            .collect();
         let mut cards = Vec::with_capacity(page.goals.len());
         for goal in &page.goals {
             let latest_execution = store
@@ -167,10 +182,7 @@ impl GoalHttpAdapter {
                 })
                 .transpose()?
                 .flatten();
-            let workspace = goal
-                .scope
-                .workspace_id()
-                .and_then(|id| by_id.get(id.as_str()).copied());
+            let workspace = resolve_workspace(&store, goal, latest_execution.as_ref(), workspaces);
             cards.push(goal_card_view(
                 goal,
                 latest_execution.as_ref(),
@@ -196,7 +208,10 @@ impl GoalHttpAdapter {
             }
         };
         let (scopes, workspaces) = match self.visible_scopes(None) {
-            Ok(visible) => visible,
+            Ok(Some(visible)) => visible,
+            Ok(None) => {
+                return GatewayHttpResponse::error(404, GOAL_NOT_FOUND, NOT_FOUND_MESSAGE, None);
+            }
             Err(response) => return response,
         };
         let store = runtime_store(&self.axon_root);
@@ -215,11 +230,12 @@ impl GoalHttpAdapter {
             }
             Err(error) => return query_failed(&error.to_string()),
         };
-        let workspace = view.goal.scope.workspace_id().and_then(|id| {
-            workspaces
-                .iter()
-                .find(|record| record.workspace_id == id.as_str())
-        });
+        let workspace = resolve_workspace(
+            &store,
+            &view.goal,
+            view.latest_execution.as_ref(),
+            &workspaces,
+        );
         let card = goal_card_view(
             &view.goal,
             view.latest_execution.as_ref(),
@@ -316,6 +332,33 @@ const fn hex_value(byte: u8) -> Option<u8> {
         b'A'..=b'F' => Some(byte - b'A' + 10),
         _ => None,
     }
+}
+
+/// 解析目标所属的工作区。
+///
+/// Workspace 作用域的目标直接按标识命中注册表；**全局目标**按最近执行的会话 cwd
+/// 精确匹配注册表根目录，匹配必须唯一。零个或多个匹配都返回 `None`，
+/// 卡片上的工作区三段字段因此如实留空，由界面降级为「查看详情」。
+fn resolve_workspace<'a>(
+    store: &SqliteRuntimeStore,
+    goal: &GoalRecord,
+    latest_execution: Option<&ExecutionRecord>,
+    workspaces: &'a [WorkspaceRecord],
+) -> Option<&'a WorkspaceRecord> {
+    if let Some(workspace_id) = goal.scope.workspace_id() {
+        return workspaces
+            .iter()
+            .find(|record| record.workspace_id == workspace_id.as_str());
+    }
+    let session_id = latest_execution?.session_id.as_ref()?;
+    // 会话可能已被清理：取不到 cwd 就是「无法解析」，这是合法情形而不是错误。
+    let session = store.get_session(session_id).ok()?;
+    let cwd = normalize_workspace_root(&session.cwd);
+    let mut matched = workspaces
+        .iter()
+        .filter(|record| normalize_workspace_root(&record.workspace_root) == cwd);
+    let first = matched.next()?;
+    matched.next().is_none().then_some(first)
 }
 
 /// 账本读取失败响应。

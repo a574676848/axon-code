@@ -66,6 +66,13 @@ export interface ConversationStreamProps {
    */
   subagentLane?: { interrupted: boolean };
   /**
+   * 只读会话（目标执行会话）：没有输入坞，也没有上层会话。
+   *
+   * 与 `subagentLane` 互斥，缺省即主会话车道。给出时失败结论只说「后台已停止推进」，
+   * 不给「重新发送」这类在这个视图里不存在的动作。
+   */
+  readOnly?: boolean;
+  /**
    * 更早的历史是否还没取完。
    *
    * 历史按「一次一条」向前翻：这里只表达「还有更早的可以取」，取完按钮即消失。
@@ -89,6 +96,7 @@ export const ConversationStream: React.FC<ConversationStreamProps> = ({
   followToken,
   sessionKey,
   subagentLane,
+  readOnly = false,
   hasOlder = false,
   loadingOlder = false,
   onLoadOlder,
@@ -193,7 +201,12 @@ export const ConversationStream: React.FC<ConversationStreamProps> = ({
     !turnConclusionExplained(lastTurn) &&
     (lastTurn.status === 'rejected' || lastTurn.status === 'failed')
       ? failureBanner({
-          lane: subagentLane === undefined ? 'primary' : 'subagent',
+          lane:
+            readOnly === true
+              ? 'readonly'
+              : subagentLane === undefined
+                ? 'primary'
+                : 'subagent',
           status: lastTurn.status,
           interrupted: subagentLane?.interrupted,
         })

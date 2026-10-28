@@ -22,16 +22,24 @@ pub(crate) const DETAIL_EXECUTION_LIMIT: u32 = 8;
 /// 按 Unicode 字符截断；超出时补省略号并报告已截断。
 ///
 /// 不按字节截断：多字节字符被切一半会变成替换符，中文目标尤其明显。
+/// **省略号计入配额**，因此返回值恒不超过 `limit` 个字符，正文上限因此可以逐字落实。
 pub(crate) fn truncate_chars(value: &str, limit: usize) -> (String, bool) {
-    match value.char_indices().nth(limit) {
-        None => (value.to_owned(), false),
-        Some((boundary, _)) => {
-            let mut truncated = String::with_capacity(boundary + '…'.len_utf8());
-            truncated.push_str(&value[..boundary]);
-            truncated.push('…');
-            (truncated, true)
-        }
+    if value.chars().count() <= limit {
+        return (value.to_owned(), false);
     }
+    if limit == 0 {
+        return (String::new(), true);
+    }
+    // 留一个字符位给省略号，剩下的才是正文配额。
+    let keep = limit - 1;
+    let boundary = value
+        .char_indices()
+        .nth(keep)
+        .map_or(value.len(), |(index, _)| index);
+    let mut truncated = String::with_capacity(boundary + '…'.len_utf8());
+    truncated.push_str(&value[..boundary]);
+    truncated.push('…');
+    (truncated, true)
 }
 
 /// Goal 状态在协议里的取值。
@@ -185,10 +193,13 @@ pub(crate) fn goal_card_view(
                 .map(|record| record.created_at_ms)
                 .unwrap_or(0),
         );
-    // 标识由作用域投影：Workspace 作用域恒有标识，全局目标恒为空。
-    // 名称与路径才依赖注册表，注册表缺这一项时留空而不是把标识一起丢掉。
-    let workspace_id = goal.scope.workspace_id().map(|id| id.as_str().to_owned());
-    let located = workspace.filter(|_| workspace_id.is_some());
+    // 标识取解析结果；解析不到时回落到作用域标识（Workspace 作用域恒有标识），
+    // 名称与路径才完全依赖注册表记录。
+    let workspace_id = workspace
+        .map(|record| record.workspace_id.clone())
+        .or_else(|| goal.scope.workspace_id().map(|id| id.as_str().to_owned()));
+    let workspace_name = workspace.map(|record| record.display_name.clone());
+    let workspace_path = workspace.map(|record| record.workspace_root.clone());
     GoalCardView {
         goal_id: goal.goal_id.as_str().to_owned(),
         title: goal.title.clone(),
@@ -202,8 +213,8 @@ pub(crate) fn goal_card_view(
         deadline_ms: goal.deadline_ms,
         scope_kind: scope_kind(&goal.scope),
         workspace_id,
-        workspace_name: located.map(|record| record.display_name.clone()),
-        workspace_path: located.map(|record| record.workspace_root.clone()),
+        workspace_name,
+        workspace_path,
         created_at_ms: goal.created_at_ms,
         updated_at_ms: goal.updated_at_ms,
         last_activity_at_ms,

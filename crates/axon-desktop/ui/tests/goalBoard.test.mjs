@@ -189,16 +189,16 @@ test('计数口径取回执的 returned，分段计数来自同一批目标', ()
     assert.equal(countGoals(goals.slice(0, 2), 3).total, 3);
 });
 
-test('截断时计数旁写明只显示最近 N 个', () => {
+test('截断时计数旁写明只显示 N 个，且不写方向', () => {
     const counts = { total: 3, open: 2, settled: 1 };
     assert.equal(
         countSummary(counts, false, 256),
         '共 3 个目标 · 未收口 2 · 已收口 1',
     );
-    assert.equal(
-        countSummary(counts, true, 256),
-        '共 3 个目标 · 未收口 2 · 已收口 1 · 仅显示最近 256 个',
-    );
+    const truncated = countSummary(counts, true, 256);
+    assert.equal(truncated, '共 3 个目标 · 未收口 2 · 已收口 1 · 已达上限，仅显示 256 个');
+    // 服务端按更新时间升序出页，读满上限拿到的是最早一批，「最近」会是错话。
+    assert.ok(!truncated.includes('最近'));
 });
 
 test('等待原因优先于下一步，都没有时定位行为空', () => {

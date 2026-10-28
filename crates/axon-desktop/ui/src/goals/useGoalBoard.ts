@@ -132,12 +132,18 @@ export interface GoalDetailFeed {
  * 单个目标的详情。
  *
  * `active` 为真时才拉取，并且只在目标未收口时继续刷新：收口的目标不会再有新事实。
+ * 与看板同一套纪律：请求串行化并带序号，旧响应不得覆盖新响应；隐藏窗口跳过本轮；
+ * 目标一换就先清空上一份详情，避免弹窗里短暂显示上一个目标的步骤与验收。
  */
 export function useGoalDetail(goalId: string | null, active: boolean): GoalDetailFeed {
   const [detail, setDetail] = useState<GoalDetailView | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
+  /** 请求序号：只有最后一次发出的响应可以落地。 */
+  const sequenceRef = useRef(0);
+  /** 串行闸门：前一次未回来时不发第二次。 */
+  const inFlightRef = useRef(false);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -146,24 +152,33 @@ export function useGoalDetail(goalId: string | null, active: boolean): GoalDetai
     };
   }, []);
 
-  const load = useCallback(async (id: string) => {
+  const load = useCallback(async (id: string, skipWhenHidden: boolean) => {
+    if (skipWhenHidden && isHidden()) return;
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    const sequence = sequenceRef.current + 1;
+    sequenceRef.current = sequence;
     try {
       const next = await ipc.goalGet(id);
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || sequence !== sequenceRef.current) return;
       setDetail(next);
       setError(null);
     } catch (failure) {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || sequence !== sequenceRef.current) return;
       setError(failureMessage(failure));
     } finally {
+      inFlightRef.current = false;
       if (mountedRef.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     if (!active || goalId === null) return undefined;
+    // 换目标先清空：旧目标的步骤与验收不能在新目标的面板上停留一拍。
+    setDetail(null);
+    setError(null);
     setLoading(true);
-    void load(goalId);
+    void load(goalId, false);
     return undefined;
   }, [active, goalId, load]);
 
@@ -171,7 +186,10 @@ export function useGoalDetail(goalId: string | null, active: boolean): GoalDetai
 
   useEffect(() => {
     if (!active || goalId === null || !unsettled) return undefined;
-    const timer = window.setInterval(() => void load(goalId), GOAL_POLL_INTERVAL_MS);
+    const timer = window.setInterval(
+      () => void load(goalId, true),
+      GOAL_POLL_INTERVAL_MS,
+    );
     return () => window.clearInterval(timer);
   }, [active, goalId, unsettled, load]);
 

@@ -159,10 +159,13 @@ fn list_merges_scopes_and_sorts_by_last_activity() {
 
 /// 给目标挂一条已绑定会话的执行，用它改写该目标的最近活动时间。
 fn bind_execution(store: &SqliteRuntimeStore, goal_id: &str, activity_at_ms: u64) {
+    bind_execution_at(store, goal_id, activity_at_ms, "E:/workspace-a");
+}
+
+/// 同上，但显式给出会话 cwd：全局目标的工作区解析靠它匹配注册表根目录。
+fn bind_execution_at(store: &SqliteRuntimeStore, goal_id: &str, activity_at_ms: u64, cwd: &str) {
     let session_id = DaemonSessionId::new(format!("goal-session-{goal_id}")).expect("session");
-    store
-        .create_session(&session_id, "E:/workspace-a", 10)
-        .expect("session");
+    store.create_session(&session_id, cwd, 10).expect("session");
     let mut execution = ExecutionRecord::new(
         ExecutionId::new(format!("execution-{goal_id}")).expect("execution id"),
         axon_domain::GoalId::new(goal_id).expect("goal id"),
@@ -224,6 +227,12 @@ fn list_filters_by_workspace_and_rejects_bad_query() {
     assert_eq!(body["returned"], 1);
     assert_eq!(body["goals"][0]["goalId"], "goal-a");
 
+    // 未注册的工作区标识不属于可见集合：给出空结果，而不是把它当作可达作用域去查。
+    let (status, body) = get(&adapter, &list_path(), Some("workspaceId=workspace-gone"));
+    assert_eq!(status, 200);
+    assert_eq!(body["returned"], 0);
+    assert_eq!(body["goals"].as_array().map(Vec::len), Some(0));
+
     for query in ["limit=0", "limit=257", "limit=abc"] {
         let (status, body) = get(&adapter, &list_path(), Some(query));
         assert_eq!(status, 400, "{query}");
@@ -231,6 +240,49 @@ fn list_filters_by_workspace_and_rejects_bad_query() {
         assert_eq!(body["error"]["message"], "limit 必须在 1 到 256 之间");
         assert!(body["error"]["details"].is_null());
     }
+}
+
+#[test]
+fn global_goal_resolves_workspace_from_its_execution_session() {
+    let (_directory, adapter, store) = fixture();
+    store
+        .register_workspace(&workspace("workspace-a"))
+        .expect("workspace");
+    // 全局目标自身没有作用域工作区，但它的执行会话 cwd 唯一命中 workspace-a，
+    // 因此三段工作区字段都要被回填，卡片才能进入会话。
+    store
+        .create_goal(&goal("goal-global", ScopeRef::global(), 100))
+        .expect("goal");
+    bind_execution(&store, "goal-global", 900);
+
+    let (status, body) = get(&adapter, &detail_path("goal-global"), None);
+    assert_eq!(status, 200);
+    let card = &body["goal"];
+    assert_eq!(card["scopeKind"], "global");
+    assert_eq!(card["workspaceId"], "workspace-a");
+    assert_eq!(card["workspaceName"], "显示名 workspace-a");
+    assert_eq!(card["workspacePath"], "E:/workspace-a");
+}
+
+#[test]
+fn global_goal_without_matching_cwd_keeps_workspace_empty() {
+    let (_directory, adapter, store) = fixture();
+    store
+        .register_workspace(&workspace("workspace-a"))
+        .expect("workspace");
+    store
+        .create_goal(&goal("goal-global", ScopeRef::global(), 100))
+        .expect("goal");
+    // 会话 cwd 不在注册表里：解析失败时三段字段一律为空，不猜一个最像的工作区。
+    bind_execution_at(&store, "goal-global", 900, "E:/elsewhere");
+
+    let (status, body) = get(&adapter, &detail_path("goal-global"), None);
+    assert_eq!(status, 200);
+    let card = &body["goal"];
+    assert_eq!(card["scopeKind"], "global");
+    assert!(card["workspaceId"].is_null());
+    assert!(card["workspaceName"].is_null());
+    assert!(card["workspacePath"].is_null());
 }
 
 #[test]

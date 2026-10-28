@@ -635,10 +635,21 @@ fn rejection(reason: &str) -> GatewayKernelError {
 ///
 /// 只做路径形态归一，不解析符号链接，也不做大小写折叠：注册表里的根目录来自
 /// `WorkspaceResolver` 的规范化结果，两侧同源才谈得上「精确匹配」。
-fn normalize_root(value: &str) -> String {
+/// 根目录归一：统一分隔符并去掉尾部分隔符。
+///
+/// 只做路径形态归一，不解析符号链接，也不做大小写折叠：注册表里的根目录来自
+/// `WorkspaceResolver` 的规范化结果，两侧同源才谈得上「精确匹配」。
+/// 订阅校验与目标看板的工作区解析共用这一份，避免两处各写一套比较口径。
+#[must_use]
+pub fn normalize_workspace_root(value: &str) -> String {
     let unified = value.trim().replace('\\', "/");
     let trimmed = unified.trim_end_matches('/');
     trimmed.to_owned()
+}
+
+/// 本模块内的短别名。
+fn normalize_root(value: &str) -> String {
+    normalize_workspace_root(value)
 }
 
 fn resolve_default_workspace_id() -> Option<String> {

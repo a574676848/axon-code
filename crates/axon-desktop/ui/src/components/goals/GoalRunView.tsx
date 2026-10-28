@@ -131,6 +131,7 @@ export const GoalRunView: React.FC<GoalRunViewProps> = ({ goal, onBack, backRef 
           sessionKey={`goal:${goal.goalId}`}
           turns={conversation.state.turns}
           followToken={conversation.state.turns.length}
+          readOnly
         />
       )}
     </div>
