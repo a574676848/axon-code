@@ -4,7 +4,7 @@ import { AxonLogo } from '../../icons';
 import type { GithubInfo, SystemInfo, UpdateCheck } from '../../types';
 import * as ipc from '../../ipc';
 import { Button } from '../ui/controls';
-import { Banner, Panel, Text } from '../ui/surfaces';
+import { Banner, Text } from '../ui/surfaces';
 
 /*
  * 关于页：产品身份、版本事实、发布渠道入口与版本检测。
@@ -51,7 +51,6 @@ export const SystemInfoSettings: React.FC = () => {
   const [update, setUpdate] = useState<UpdateCheck | null>(null);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [detailOpen, setDetailOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -69,7 +68,6 @@ export const SystemInfoSettings: React.FC = () => {
   const check = async () => {
     setChecking(true);
     setError(null);
-    setDetailOpen(false);
     try {
       setUpdate(await ipc.checkUpdate());
     } catch (failure) {
@@ -90,7 +88,6 @@ export const SystemInfoSettings: React.FC = () => {
   }, []);
 
   const github: GithubInfo | null = info?.github ?? null;
-  const failed = update !== null && update.error.length > 0;
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-6 pb-16 text-center">
@@ -134,25 +131,6 @@ export const SystemInfoSettings: React.FC = () => {
 
         {update !== null && update.update_available && update.download_url.length > 0 && (
           <ChannelLink label="前往下载" url={update.download_url} onOpen={openUrl} />
-        )}
-
-        {failed && (
-          <Button variant="ghost" size="sm" onClick={() => setDetailOpen((open) => !open)}>
-            {detailOpen ? '收起详情' : '详情'}
-          </Button>
-        )}
-
-        {failed && detailOpen && update !== null && (
-          <Panel className="w-full max-w-[520px] p-3 text-left space-y-1.5">
-            <Text size="xs" className="block">
-              {update.error}
-            </Text>
-            {update.hint.length > 0 && (
-              <Text tone="secondary" size="xs" className="block">
-                {update.hint}
-              </Text>
-            )}
-          </Panel>
         )}
       </div>
 

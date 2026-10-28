@@ -33,7 +33,8 @@ const RUN_POLL_MS = 2_000;
  * 高度必须在这里给定：只有容器高度确定，左列与右列才能各自成为独立滚动区，
  * 页面本身也就不会出现第二层滚动。
  */
-const CONTENT_HEIGHT = "h-[calc(100vh-7rem)]";
+/** 内容区直接吃满舞台余下高度：页壳已经给了确定高度，不再自己算 100vh。 */
+const CONTENT_HEIGHT = "h-full";
 
 const pageCount = (total: number, size: number) =>
   Math.max(1, Math.ceil(total / size));
@@ -303,6 +304,7 @@ export const AutomationPage: React.FC<{
             </Button>
           </>
         }
+        fill
       >
         <div className={`flex min-h-0 flex-col gap-3 ${CONTENT_HEIGHT}`}>
           {error !== null && (
@@ -327,7 +329,7 @@ export const AutomationPage: React.FC<{
               loading={!loaded}
               showSystemChip={showSystemChip}
               className={
-                splitView ? "w-[360px] shrink-0 max-xl:hidden" : "flex-1 self-start"
+                splitView ? "w-[360px] shrink-0 max-xl:hidden" : "flex-1 min-h-0"
               }
               onQueryChange={setQuery}
               onFilterChange={setFilter}

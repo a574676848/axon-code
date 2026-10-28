@@ -56,11 +56,11 @@ interface MemoryWheelProps {
 function applySlotTransform(node: HTMLDivElement, offset: number): void {
   const distance = Math.abs(offset);
   const scale = 1 - Math.min(0.06, distance * 0.016);
-  const opacity = distance > VISIBLE_DISTANCE + 0.6 ? 0 : Math.max(0.06, 1 - distance * 0.25);
+  /* 衰减放平一档：原来相邻项几乎看不见，整页读起来像只有一条记录浮在大片留白里。 */
+  const opacity = distance > VISIBLE_DISTANCE + 0.6 ? 0 : Math.max(0.14, 1 - distance * 0.17);
   node.style.transform = `translateY(-50%) rotateX(${(-offset * STEP_DEG).toFixed(2)}deg) translateZ(${RADIUS_PX}px) scale(${scale.toFixed(4)})`;
   node.style.opacity = opacity.toFixed(3);
   node.style.pointerEvents = distance <= 2.2 ? 'auto' : 'none';
-  node.style.zIndex = String(100 - Math.round(distance * 10));
 }
 
 /**
@@ -296,7 +296,7 @@ export const MemoryWheel: React.FC<MemoryWheelProps> = ({
   for (let i = start; i <= end; i += 1) mountedIndices.push(i);
 
   return (
-    <Panel clip className="relative bg-surface-sunken/30">
+    <Panel clip className="relative bg-surface-sunken/30 flex flex-1 min-h-0 flex-col">
       {/* 上下边缘柔和景深雾化遮罩 */}
       <div
         aria-hidden="true"
@@ -315,7 +315,7 @@ export const MemoryWheel: React.FC<MemoryWheelProps> = ({
         role="listbox"
         aria-label="记忆时间轮，使用鼠标滚轮或上下方向键切换"
         onKeyDown={onKeyDown}
-        className="relative outline-none h-[min(340px,48vh)] select-none"
+        className="relative outline-none flex-1 min-h-[280px] select-none"
         style={{ perspective: `${RADIUS_PX * 3}px` }}
       >
         <div

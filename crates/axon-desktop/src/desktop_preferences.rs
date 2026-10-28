@@ -74,6 +74,9 @@ pub fn desktop_set_notifications(enabled: bool) -> Result<DesktopPreferences, St
 ///
 /// 纸白存空值，森林存标识本身。入参先归一化，非法取值落回纸白，
 /// 状态文件里不会出现第三种取值。
+///
+/// 落盘之后顺带把窗口的深浅色模式同步给 DWM 与 AppKit：这一步极轻，
+/// 且不重建系统材质，因此可以随主题切换反复调用（重复应用材质才会留下黑斑）。
 #[tauri::command]
 pub fn desktop_set_theme(theme: String) -> Result<DesktopPreferences, String> {
     let normalized = normalize_theme(&theme);
@@ -81,9 +84,10 @@ pub fn desktop_set_theme(theme: String) -> Result<DesktopPreferences, String> {
     state.theme = if normalized == THEME_PAPER {
         None
     } else {
-        Some(normalized)
+        Some(normalized.clone())
     };
     save_state(&state)?;
+    crate::window_effects::update_window_material_mode(normalized == THEME_OBSIDIAN);
     Ok(snapshot(&state))
 }
 

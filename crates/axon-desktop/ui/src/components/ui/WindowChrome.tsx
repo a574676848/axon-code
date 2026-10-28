@@ -50,21 +50,31 @@ export const WindowChrome: React.FC = () => {
   // 同步最大化状态，并委托顶栏空白处的拖拽与双击缩放。
   useEffect(() => {
     if (!tauriHost) return undefined;
-    let unlistenResize: (() => void) | null = null;
+    let unlistenMaximized: (() => void) | null = null;
     let cancelled = false;
 
+    /*
+     * 最大化状态只订阅宿主推送的翻转事件，不再监听 resize 轮询 isMaximized()。
+     * 拖拽窗口边缘一秒内会产生上百次尺寸变化，逐个往返 IPC 是纯粹的浪费，
+     * 而这件事真正需要知道的时刻只有「最大化 / 还原」那一瞬。
+     */
+    void import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen<boolean>('axon://window-maximized-changed', (event) => {
+          if (!cancelled) setMaximized(event.payload === true);
+        }),
+      )
+      .then((stop) => {
+        if (cancelled) stop();
+        else unlistenMaximized = stop;
+      })
+      .catch(() => undefined);
+
+    // 首帧读一次真实状态：订阅只覆盖之后的翻转。
     void import('@tauri-apps/api/window')
       .then(async ({ getCurrentWindow }) => {
         if (cancelled) return;
-        const win = getCurrentWindow();
-        setMaximized(await win.isMaximized().catch(() => false));
-        const unlisten = await win.onResized(async () => {
-          if (!cancelled) {
-            setMaximized(await win.isMaximized().catch(() => false));
-          }
-        });
-        if (cancelled) unlisten();
-        else unlistenResize = unlisten;
+        setMaximized(await getCurrentWindow().isMaximized().catch(() => false));
       })
       .catch(() => undefined);
 
@@ -90,7 +100,7 @@ export const WindowChrome: React.FC = () => {
     window.addEventListener('mousedown', handleMouseDown);
     return () => {
       cancelled = true;
-      unlistenResize?.();
+      unlistenMaximized?.();
       window.removeEventListener('mousedown', handleMouseDown);
     };
   }, [tauriHost]);
@@ -119,18 +129,25 @@ export const WindowChrome: React.FC = () => {
 
   if (!showCustomControls) return null;
 
+  /*
+   * 三键画在主舞台的 40px 顶栏带里，而不是托盘外框上。
+   *
+   * 之前用 `fixed` 定位到托盘右上角的凹槽里，按钮与标题栏之间隔着一道舞台描边，
+   * 读起来像贴在窗口外面的一排附件。改成舞台内的绝对定位之后，三键与顶栏同属一个
+   * 表面：悬停底色贴着舞台右上角展开，关闭键的红底也在圆角内收。
+   */
   return (
     <div
       data-no-drag
       aria-label="窗口控制"
-      className="fixed top-1.5 right-2.5 z-[950] h-10 flex items-center gap-0.5 select-none"
+      className="absolute top-0 right-0 z-[950] h-10 flex items-center gap-0.5 pr-1 select-none"
     >
       <button
         type="button"
         aria-label="最小化窗口"
         title="最小化"
         onClick={handleMinimize}
-        className="w-8 h-7 rounded-sm inline-flex items-center justify-center text-text-secondary transition-colors duration-100 hover:bg-hover hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
+        className="btn-tactile w-8 h-7 rounded-sm inline-flex items-center justify-center text-text-secondary hover:bg-hover hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
       >
         <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
           <path d="M1.5 5H8.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
@@ -141,7 +158,7 @@ export const WindowChrome: React.FC = () => {
         aria-label={maximized ? '向下还原窗口' : '最大化窗口'}
         title={maximized ? '向下还原' : '最大化'}
         onClick={handleToggleMaximize}
-        className="w-8 h-7 rounded-sm inline-flex items-center justify-center text-text-secondary transition-colors duration-100 hover:bg-hover hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
+        className="btn-tactile w-8 h-7 rounded-sm inline-flex items-center justify-center text-text-secondary hover:bg-hover hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
       >
         {maximized ? (
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
@@ -180,7 +197,7 @@ export const WindowChrome: React.FC = () => {
         aria-label="关闭窗口"
         title="关闭"
         onClick={handleClose}
-        className="w-8 h-7 rounded-sm inline-flex items-center justify-center text-text-secondary transition-colors duration-100 hover:bg-window-close hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
+        className="btn-tactile w-8 h-7 rounded-sm inline-flex items-center justify-center text-text-secondary hover:bg-window-close hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
       >
         <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
           <path

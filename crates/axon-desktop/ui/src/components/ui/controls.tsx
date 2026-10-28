@@ -18,8 +18,8 @@ type ButtonSize = 'md' | 'sm';
 type ButtonShape = 'rounded' | 'pill';
 
 const BUTTON_BASE =
-  'inline-flex items-center justify-center gap-1.5 font-medium select-none whitespace-nowrap ' +
-  'transition-colors duration-100 active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-40';
+  'btn-tactile inline-flex items-center justify-center gap-1.5 font-medium select-none whitespace-nowrap ' +
+  'disabled:cursor-not-allowed disabled:opacity-40';
 
 const BUTTON_SIZE: Record<ButtonSize, string> = {
   md: 'h-8 px-3 text-row',
@@ -78,7 +78,7 @@ export const IconButton: React.FC<IconButtonProps> = ({
     type={type}
     aria-label={label}
     title={label}
-    className={`inline-flex items-center justify-center shrink-0 text-text-secondary hover:text-text-primary hover:bg-hover transition-colors duration-100 disabled:cursor-not-allowed disabled:opacity-40 ${
+    className={`btn-tactile inline-flex items-center justify-center shrink-0 text-text-secondary hover:text-text-primary hover:bg-hover disabled:cursor-not-allowed disabled:opacity-40 ${
       size === 'md' ? 'w-9 h-9 rounded-md' : 'w-7 h-7 rounded-sm'
     } ${FOCUS_RING} ${className}`}
     {...rest}
@@ -109,8 +109,12 @@ export interface SegmentedControlProps<T extends string> {
  * 分段控件：同一维度的少量互斥选项。
  *
  * 与「一排并列按钮」不同，它是一枚整体控件：底槽给出组的存在，选中项是槽里
- * 唯一一块白底，因此「当前选的是哪一个」在视觉上是一句话。用于周期、维度、
- * 指标这类必须在同一行内切换的场景。
+ * 唯一一块白底滑块。用于周期、维度、指标这类必须在同一行内切换的场景。
+ *
+ * 滑块是**等宽纯 transform 驱动**的实体胶囊（Glider）：
+ * 宽度固定为 `calc((100% - 4px) / N)`，位移只走 `translate3d(index * 100%)`。
+ * 因此既不重排也不拉伸，圆角在滑动全程恒定；外层托槽刻意不加 `overflow: hidden`，
+ * 否则回弹时的圆角会被裁成直角。
  */
 export const SegmentedControl = <T extends string>({
   label,
@@ -118,34 +122,50 @@ export const SegmentedControl = <T extends string>({
   value,
   onChange,
   className = '',
-}: SegmentedControlProps<T>): React.ReactElement => (
-  <div
-    role="group"
-    aria-label={label}
-    className={`inline-flex items-center gap-0.5 p-0.5 rounded-full bg-surface-sunken hairline border-border-hairline well-sm ${className}`}
-  >
-    {options.map((option) => {
-      const active = option.value === value;
-      return (
-        <button
-          key={option.value}
-          type="button"
-          aria-pressed={active}
-          disabled={option.disabled === true}
-          title={option.title ?? option.label}
-          onClick={() => onChange(option.value)}
-          className={`h-6 px-2.5 rounded-full text-row whitespace-nowrap transition-colors duration-100 disabled:cursor-not-allowed disabled:opacity-40 ${
-            active
-              ? 'bg-surface text-text-primary font-medium shadow-lift'
-              : 'text-text-tertiary hover:text-text-primary hover:bg-hover'
-          }`}
-        >
-          {option.label}
-        </button>
-      );
-    })}
-  </div>
-);
+}: SegmentedControlProps<T>): React.ReactElement => {
+  const count = options.length;
+  const found = options.findIndex((option) => option.value === value);
+  const activeIndex = found < 0 ? 0 : found;
+
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className={`relative inline-grid grid-flow-col auto-cols-fr p-0.5 rounded-full bg-surface-sunken hairline border-border-hairline well-sm isolate ${className}`}
+    >
+      {count > 0 && (
+        <span
+          aria-hidden="true"
+          data-segmented-glider=""
+          className="pointer-events-none absolute left-0.5 top-0.5 bottom-0.5 rounded-full bg-surface shadow-lift"
+          style={{
+            width: `calc((100% - 4px) / ${count})`,
+            transform: `translate3d(${activeIndex * 100}%, 0, 0)`,
+            transition: 'transform 180ms var(--ease-spring-smooth)',
+          }}
+        />
+      )}
+      {options.map((option) => {
+        const active = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            aria-pressed={active}
+            disabled={option.disabled === true}
+            title={option.title ?? option.label}
+            onClick={() => onChange(option.value)}
+            className={`relative z-10 h-6 px-2.5 rounded-full text-row whitespace-nowrap transition-colors duration-100 disabled:cursor-not-allowed disabled:opacity-40 ${
+              active ? 'text-text-primary font-medium' : 'text-text-tertiary hover:text-text-primary'
+            }`}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+};
 
 export interface InputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'size'> {
   /** 前置图标节点。 */
@@ -352,4 +372,31 @@ export const Switch: React.FC<SwitchProps> = ({ checked, onChange, disabled = fa
       }`}
     />
   </button>
+);
+
+export interface KbdProps {
+  /** 键名序列；多键组合按顺序给出，自动用 `+` 连接。 */
+  keys: readonly string[];
+  /** 附加类名，仅用于布局。 */
+  className?: string;
+}
+
+/**
+ * 快捷键角标：菜单项、按钮提示与命令面板共用的唯一键帽外观。
+ *
+ * 取 11px 角标档（不是 10px 微标签档：10px 只留给时间戳与坐标轴刻度），
+ * 等宽字体保证 `Ctrl` 与 `Esc` 这类不同长度的键名横向对齐。
+ * 图形本身不发声，名称由所在条目的文案承担，因此整块对辅助技术隐藏。
+ */
+export const Kbd: React.FC<KbdProps> = ({ keys, className = '' }) => (
+  <span aria-hidden="true" className={`inline-flex shrink-0 items-center gap-0.5 ${className}`}>
+    {keys.map((key, index) => (
+      <React.Fragment key={key}>
+        {index > 0 && <span className="text-micro text-text-tertiary">+</span>}
+        <kbd className="px-1 py-px rounded-xs bg-surface-sunken hairline border-border font-mono text-micro leading-4 text-text-tertiary">
+          {key}
+        </kbd>
+      </React.Fragment>
+    ))}
+  </span>
 );

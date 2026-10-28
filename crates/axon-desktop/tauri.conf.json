@@ -18,8 +18,10 @@
         "minHeight": 580,
         "center": true,
         "resizable": true,
-        "decorations": true,
+        "decorations": false,
         "hiddenTitle": true,
+        "transparent": true,
+        "visible": false,
         "dragDropEnabled": false
       }
     ],

@@ -224,8 +224,9 @@ export const MemoryPage: React.FC<MemoryPageProps> = ({ connected }) => {
             新增记忆
           </Button>
         }
+        fill
       >
-        <div className="space-y-4">
+        <div className="flex flex-1 min-h-0 flex-col gap-4">
           {error !== null && (
             <Banner
               tone="danger"
@@ -304,7 +305,7 @@ export const MemoryPage: React.FC<MemoryPageProps> = ({ connected }) => {
             </div>
           </div>
 
-          <section aria-live="polite">
+          <section aria-live="polite" className="flex flex-1 min-h-0 flex-col">
             {loading && records.length === 0 ? (
               <LoadingState label="正在读取记忆" />
             ) : records.length === 0 ? (

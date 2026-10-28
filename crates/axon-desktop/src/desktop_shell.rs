@@ -89,6 +89,8 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
         configure_window_chrome(&window);
         crate::ui_failure::install_watchdog(&window);
+        // 最大化状态只在这里挂一次：前端不再于每次尺寸变化时来回问一遍。
+        crate::window_effects::watch_maximized(&window);
     }
     // 原生菜单跟随系统主题，因此首屏就按当前主题取墨色。
     let theme = app
@@ -161,20 +163,16 @@ fn configure_window_chrome(window: &tauri::WebviewWindow) {
     }
     #[cfg(target_os = "macos")]
     {
+        /*
+         * 窗口配置统一声明 `decorations: false`（Windows 与 Linux 需要无边框），
+         * macOS 必须把原生边框加回来：左上角红绿灯是 macOS 的窗口语义，
+         * 去掉它应用就成了一块关不掉的面板。标题栏取 Overlay，保留交通灯但让出内容区。
+         */
+        let _ = window.set_decorations(true);
         let _ = window.set_title_bar_style(tauri::TitleBarStyle::Overlay);
     }
-    let stored = crate::state::load_state().theme;
-    let initial_theme = if stored
-        .as_deref()
-        .map(crate::desktop_preferences::normalize_theme)
-        .as_deref()
-        == Some(crate::desktop_preferences::THEME_OBSIDIAN)
-    {
-        tauri::Theme::Dark
-    } else {
-        tauri::Theme::Light
-    };
-    let _ = window.set_theme(Some(initial_theme));
+    // 初始深浅色与持久化主题同源，判定只在 window_effects 里写一份。
+    let _ = window.set_theme(Some(crate::window_effects::stored_window_theme()));
 }
 
 /// 托盘菜单：回窗口、检查更新、退出三组，组间用分隔线断开，每项都带图形。

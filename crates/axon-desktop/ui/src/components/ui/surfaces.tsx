@@ -96,10 +96,16 @@ export interface PanelProps {
   children: React.ReactNode;
 }
 
-/** 描边容器：白底、发丝描边、光学高光棱与模块圆角，是全站唯一的区块外观。 */
+/**
+ * 描边容器：白底、四重精密光影（顶光棱线、发丝内轮廓、1px 外描边、色相联动投影）
+ * 与模块圆角，是全站唯一的区块外观。
+ *
+ * 内轮廓与外描边都取 1px 物理宽度而不是 0.5px：Windows 1080p 100% 缩放会把
+ * 半像素的 box-shadow 截断成断续的线，1px 配低 Alpha 才是各缩放比下都不断线的做法。
+ */
 export const Panel: React.FC<PanelProps> = ({ className = '', clip = false, children }) => (
   <div
-    className={`bg-surface hairline border-border shadow-card rounded-md ${
+    className={`surface-precision-panel rounded-md ${
       clip ? 'overflow-hidden' : ''
     } ${className}`}
   >

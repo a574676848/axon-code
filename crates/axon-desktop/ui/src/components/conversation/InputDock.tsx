@@ -1,10 +1,11 @@
 import React from 'react';
 import { structuredInputBlock } from '../../conversation/references';
 import { matchBuiltinCommand } from '../../conversation/builtinCommands';
-import type { AttachmentRef } from '../../conversation/transcript';
-import { caretOnFirstLine, caretOnLastLine } from '../../conversation/inputHistory';
 import { openWebLink } from '../../conversation/openWebLink';
 import { ComposerTray } from './ComposerTray';
+import { useComposerKeyHandler } from './composerKeys';
+import { createComposerSubmit } from './composerSubmit';
+import { FIELD_SIZING_SUPPORTED } from './composerSizing';
 import { useConversationActions } from './actions';
 import { ComposerNotices, ComposerWorkingLine } from './ComposerStatus';
 import { ImageLightbox } from './ImageLightbox';
@@ -13,7 +14,7 @@ import { composerOptionId } from './ComposerCandidates';
 import { ComposerActionBar } from './ComposerActionBar';
 import { ComposerTextArea } from './ComposerTextArea';
 import { ComposerVoiceLayer } from './ComposerVoiceLayer';
-import { useComposerVoice, type VoiceEntry } from './useComposerVoice';
+import { useComposerVoice } from './useComposerVoice';
 import { useExpiringNotice } from './composerNotice';
 import { useComposerAttachments } from './useComposerAttachments';
 import { useComposerEditing, type CaretRange } from './useComposerEditing';
@@ -23,13 +24,14 @@ import { useReferenceCompletion } from './useReferenceCompletion';
 import { useSkillNames } from '../../conversation/skillCatalog';
 import { useSlashCompletion } from './useSlashCompletion';
 import { ContextMenu, useContextMenu } from '../ui/ContextMenu';
-import type { AnswerItem, PendingQuestion } from '../../conversation/questions';
 import { ComposerQuestionCard } from './ComposerQuestionCard';
 import { useQuestionCard } from './useQuestionCard';
 import { Dialog } from '../ui/overlays';
 import { McpServerPanel } from './McpServerPanel';
 import { useComposerCommandRun } from './useComposerCommandRun';
-import type { McpCommandReceipt } from '../../conversation/mcpReading';
+import type { InputDockProps } from './inputDockTypes';
+
+export type { InputDockProps } from './inputDockTypes';
 
 /*
  * 悬浮输入坞。
@@ -45,6 +47,8 @@ import type { McpCommandReceipt } from '../../conversation/mcpReading';
 const MAX_ROWS = 6;
 const LINE_HEIGHT = 22;
 const VERTICAL_PADDING = 20;
+/** 输入框高度上限，与 `tokens.css` 的 `.composer-input` 同一取值。 */
+const MAX_HEIGHT = LINE_HEIGHT * MAX_ROWS + VERTICAL_PADDING;
 
 /* 占位文案：窄列下也要一行放得下；键盘提示只在列宽足够时出现。 */
 const PLACEHOLDER_READY = '给 Axon 发送消息，@ 引用文件';
@@ -55,86 +59,6 @@ const KEYBOARD_HINT = 'Shift + Enter 换行';
 /** 两组候选菜单的列表 id：输入框用它声明 aria-controls 与 aria-activedescendant。 */
 const SLASH_LIST_ID = 'composer-slash-candidates';
 const REFERENCE_LIST_ID = 'composer-reference-candidates';
-
-export interface InputDockProps {
-  /** 当前工作区根目录；`@` 文件引用按它做作用域索引。 */
-  workspaceRoot: string | null;
-  /** 当前工作区标识；语音会话首帧需要它。 */
-  workspaceId?: string | null;
-  /** 当前会话的回复目的地；语音会话首帧需要它。 */
-  replyDestination?: string;
-  /**
-   * 语音入口的会话目标：首屏没有车道时由上层临时建一条。
-   *
-   * 输入坞固定是听写：识别结果只写进草稿，绝不直接提交成一轮对话。
-   */
-  voiceTarget?: {
-    /** 首屏起语音时先建会话，返回可用的工作区与目的地。 */
-    ensureSession?: () => Promise<VoiceEntry | null>;
-  };
-  /** 是否可提交。 */
-  enabled: boolean;
-  /** 正在提交。 */
-  busy: boolean;
-  /**
-   * 紧凑变体：子代理输入条共用这一份实现。
-   *
-   * 只关掉与主会话无关的两项（模型选择与附件），输入、提交、键盘与历史全部沿用，
-   * 因此不会再出现第三套字号与发送按钮。
-   */
-  compact?: boolean;
-  /** 键盘提示是否显示：列宽不足时收起，避免那一行先折行再被裁。 */
-  hintVisible?: boolean;
-  /** 占位文案覆盖（子代理输入条要给「把下一步交给谁」）。 */
-  placeholder?: string;
-  /** 卡片下方提示文案覆盖。 */
-  hint?: string;
-  /** 当前主模型；紧凑变体不需要。 */
-  model?: string;
-  /** 可选模型清单。 */
-  models?: string[];
-  /** 配置写入期间暂停模型与推理等级切换。 */
-  configBusy?: boolean;
-  configLocked?: boolean;
-  /** 当前推理等级。 */
-  reasoningEffort?: string | null;
-  /** 切换主模型。 */
-  onModelChange?: (value: string) => void;
-  /** 切换推理等级。 */
-  onReasoningEffortChange?: (value: string) => void;
-  /**
-   * 执行一条内置指令（`/mcp` 这类不进会话的本机动作），返回回执与可展开的清单。
-   *
-   * 不接这根线时指令不会被吞掉，正文原样留给会话。
-   */
-  onRunCommand?: (name: string) => Promise<McpCommandReceipt>;
-  /** 提交正文。 */
-  onSubmit: (text: string, attachments: AttachmentRef[], structuredInput: string) => void;
-  /** 外部错误提示。 */
-  error: string | null;
-  /** 工作状态行：与 TUI 的 composer dock 同位置同口径；为空时不渲染。 */
-  working: { primary: string; elapsedMs: number | null; queued: number } | null;
-  /** 中断正在运行的一轮。 */
-  onInterrupt: () => void;
-  /** 当前待决或挂起的模型提问。 */
-  activeQuestion?: PendingQuestion | null;
-  /** 提交问答作答。 */
-  onAnswerQuestion?: (callId: string, answers: AnswerItem[]) => void;
-  /**
-   * 重新打开卡片的请求：外部入口（时间线上的「重新打开」）每点一次就递增一次，
-   * 卡片据此从收起态回到输入坞的主展示位。
-   */
-  reopenToken?: number;
-  /**
-   * 作答提交失败的原因（例如提问已在别处结算）。
-   *
-   * 这类失败是服务端对一次操作的拒绝，不是输入坞的常态提示，因此用弹窗告知，
-   * 不占用输入框上方的错误位。
-   */
-  questionError?: string | null;
-  /** 关闭作答失败弹窗。 */
-  onDismissQuestionError?: () => void;
-}
 
 export const InputDock: React.FC<InputDockProps> = ({
   workspaceRoot,
@@ -287,11 +211,13 @@ export const InputDock: React.FC<InputDockProps> = ({
    * 输入框会留着一块空白。
    */
   const resize = React.useCallback(() => {
+    // 引擎支持 field-sizing 时高度完全由 CSS 决定：这里连读都不读，
+    // 因此打字换行全程零强制同步回流。
+    if (FIELD_SIZING_SUPPORTED) return;
     const area = areaRef.current;
     if (area === null) return;
     area.style.height = 'auto';
-    const max = LINE_HEIGHT * MAX_ROWS + VERTICAL_PADDING;
-    area.style.height = `${Math.min(area.scrollHeight, max)}px`;
+    area.style.height = `${Math.min(area.scrollHeight, MAX_HEIGHT)}px`;
   }, []);
 
   React.useEffect(() => {
@@ -329,33 +255,27 @@ export const InputDock: React.FC<InputDockProps> = ({
     slash.reset();
     recall.reset();
     setCaret(0);
-    if (areaRef.current !== null) {
+    if (!FIELD_SIZING_SUPPORTED && areaRef.current !== null) {
       areaRef.current.style.height = `${LINE_HEIGHT + VERTICAL_PADDING}px`;
     }
   }, [editing, clear, links, references, slash, recall]);
 
-  const submit = () => {
-    if ((!hasText && attachments.length === 0) || busy || !enabled) return;
-    /*
-     * 内置指令是界面自己的动作，不进会话：草稿清空，回执与清单都落在卡片上方。
-     * 只认「正文恰好是一条指令」；带附件时照常发给模型，没有接执行器时按普通正文处理。
-     */
-    const matched = attachments.length === 0 ? matchBuiltinCommand(text) : null;
-    if (matched !== null && onRunCommand !== undefined) {
-      resetComposer();
-      command.run(matched.name);
-      return;
-    }
-    // 引用的正文照旧展示给用户，只有真正发出去的正文带上结构化输入块。
-    // 链接占位在这里展开回原始地址：模型与消息记录拿到的都是一段完整 URL。
-    const outgoing = links.expand(text);
-    // 附件同样进结构化输入块：只有附件、没有正文时，它就是这条消息的正文。
-    const paths = attachments.map((attachment) => attachment.path);
-    onSubmit(outgoing, attachments, structuredInputBlock(outgoing, references.references, paths));
-    // 与 TUI 同一份历史：记下来，之后按上键就能取回（含发送失败的那一次）。
-    recall.record(outgoing, setLocalError);
-    resetComposer();
-  };
+  const submit = createComposerSubmit({
+    text,
+    attachments,
+    hasContent,
+    busy,
+    enabled,
+    expandLinks: links.expand,
+    buildStructuredInput: (outgoing, paths) =>
+      structuredInputBlock(outgoing, references.references, paths),
+    runCommand: onRunCommand,
+    runLocalCommand: command.run,
+    reset: resetComposer,
+    recordHistory: (outgoing) => recall.record(outgoing, setLocalError),
+    send: onSubmit,
+    matchCommand: matchBuiltinCommand,
+  });
 
   /** 采纳一个 `@` 候选项：目录继续下钻，文件结束这一次引用。 */
   const acceptReference = React.useCallback(
@@ -367,7 +287,6 @@ export const InputDock: React.FC<InputDockProps> = ({
     },
     [editing, references, text],
   );
-
   /** 采纳一条斜杠指令：把指令名写进正文，光标停在名字之后。 */
   const acceptSlash = React.useCallback(
     (index: number) => {
@@ -402,95 +321,25 @@ export const InputDock: React.FC<InputDockProps> = ({
           }
         : null;
 
-  const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.nativeEvent.isComposing) return;
-
-    /*
-     * 撤销与恢复由这里接管：语义见 composerHistory（逐字、粘贴整段、中文按词）。
-     * 复制、剪切与粘贴交给浏览器原生行为，它会照常派发一次变更，
-     * 因此撤销粒度自动正确，也不必自己实现剪贴板往返。
-     */
-    if (event.ctrlKey || event.metaKey) {
-      const key = event.key.toLowerCase();
-      if (key === 'z' && !event.shiftKey) {
-        event.preventDefault();
-        editing.undo();
-        return;
-      }
-      if (key === 'y' || (key === 'z' && event.shiftKey)) {
-        event.preventDefault();
-        editing.redo();
-        return;
-      }
-      if (key === 'a') {
-        event.preventDefault();
-        editing.selectAll();
-        return;
-      }
-    }
-
-    /*
-     * 候选项浮层打开时，键盘优先服务于选择，与 TUI 的 popup 一致：
-     * 上下移动、Enter 或 Tab 采纳、Esc 与 Shift + Tab 收起（收起只作用于这一条 token，
-     * 正文一变候选照常回来，因此它不会变成「这个功能以后都不弹了」）。
-     */
-    if (openCandidates !== null) {
-      const { isReference, count, index: active } = openCandidates;
-      const setActive = isReference ? (next: number) => references.setIndex(next) : slash.setIndex;
-      const accept = isReference ? acceptReference : acceptSlash;
-      const dismissCandidates = isReference ? references.dismiss : slash.dismiss;
-      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-        event.preventDefault();
-        const delta = event.key === 'ArrowDown' ? 1 : -1;
-        setActive((active + delta + count) % count);
-        return;
-      }
-      if (event.key === 'Enter' || (event.key === 'Tab' && !event.shiftKey)) {
-        event.preventDefault();
-        accept(active);
-        return;
-      }
-      if (event.key === 'Escape' || (event.key === 'Tab' && event.shiftKey)) {
-        event.preventDefault();
-        dismissCandidates();
-        return;
-      }
-    }
-    /*
-     * 历史输入：与 TUI 同口径，只有光标在第一行按上、最后一行按下才翻历史，
-     * 多行草稿里的方向键仍然用于移动光标。
-     */
-    if (
-      (event.key === 'ArrowUp' || event.key === 'ArrowDown') &&
-      !event.shiftKey &&
-      !event.altKey &&
-      !event.ctrlKey &&
-      !event.metaKey
-    ) {
-      if (event.key === 'ArrowUp' && caretOnFirstLine(text, caret)) {
-        // 上键在首行固定用于翻历史（与 TUI 一致）；没历史时只是什么也不发生。
-        event.preventDefault();
-        void recall.previous(text).then((recalled) => {
-          if (recalled === null) return;
-          editing.commit(recalled);
-          setPendingCaret(recalled.length);
-        });
-        return;
-      }
-      if (event.key === 'ArrowDown' && caretOnLastLine(text, caret)) {
-        const recalled = recall.next();
-        if (recalled !== null) {
-          event.preventDefault();
-          editing.commit(recalled);
-          setPendingCaret(recalled.length);
-          return;
-        }
-      }
-    }
-    if (event.key !== 'Enter' || event.shiftKey) return;
-    event.preventDefault();
-    submit();
-  };
+  /*
+   * 键盘约定全部交给 composerKeys 里的接线：撤销/恢复、候选选择、历史翻页与提交
+   * 只通过这份上下文往来，组件本身不再持有这些分支。
+   */
+  const onKeyDown = useComposerKeyHandler({
+    text,
+    caret,
+    references,
+    slash,
+    openCandidates,
+    undo: editing.undo,
+    redo: editing.redo,
+    selectAll: editing.selectAll,
+    commitText: editing.commit,
+    requestCaret: setPendingCaret,
+    previousHistory: recall.previous,
+    nextHistory: recall.next,
+    submit,
+  });
 
   const effort = reasoningEffort ?? 'medium';
 
@@ -510,9 +359,8 @@ export const InputDock: React.FC<InputDockProps> = ({
       }`}
     >
       <div className="w-full max-w-chat relative">
-        {command.servers !== null && (
-          <McpServerPanel servers={command.servers} onClose={command.close} />
-        )}
+        {/* 收起走面板内部的 110ms 退场，因此这里必须常驻渲染：条件挂载会让退场无从发生。 */}
+        <McpServerPanel servers={command.servers} onClose={command.close} />
         {/* 占座卡：抢占输入坞主展示位 */}
         {occupiesDock && activeQuestion ? (
           <ComposerQuestionCard
@@ -544,7 +392,7 @@ export const InputDock: React.FC<InputDockProps> = ({
               外层采用 3px 极轻透微下沉托槽，运行期间叠加柔和呼吸微光；
               内层是 18px 圆角的纯白浮起核心，聚焦态保持立体投影绝不塌陷。
             */}
-            <div className="relative p-[3px] rounded-[21px] bg-surface-sunken/45 hairline border-border-hairline">
+            <div className="dock-shell relative p-[3px] rounded-[21px] bg-surface-sunken/45 hairline border-border-hairline">
               {(working !== null || command.running !== null) && (
                 <span
                   aria-hidden="true"
@@ -553,10 +401,15 @@ export const InputDock: React.FC<InputDockProps> = ({
               )}
               <div
                 ref={cardRef}
-                className={`relative rounded-[18px] bg-surface hairline shadow-dock transition-colors duration-100 focus-within:border-focus ${
+                className={`relative rounded-[18px] bg-surface hairline shadow-dock transition-colors duration-100 ${
                   dragging ? 'border-focus bg-hover' : 'border-border'
                 }`}
               >
+                {/* 聚焦内圈：贴在内层核心边缘呼吸，不向窗口外扩一圈光环。 */}
+                <span
+                  aria-hidden="true"
+                  className="dock-focus-inner pointer-events-none absolute inset-[6px] z-20"
+                />
                 {!compact && (links.links.length > 0 || attachments.length > 0) && (
                   <ComposerTray
                     links={links.links}

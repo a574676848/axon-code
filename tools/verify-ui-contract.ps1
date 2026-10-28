@@ -292,6 +292,58 @@ if ($brandHits.Count -gt 0) {
     Write-Host "   [PASSED] (桌面端源码零第三方设计系统品牌字样)" -ForegroundColor Green
 }
 
+# 8. 契约增补：不对 display: inline 的元素声明 transform 动画
+#    行内盒的变换会按行盒逐段重算，流式正文每来一批 token 就重排一次。
+Write-Host "8. Checking no transform animation on display:inline rules..." -NoNewline
+$inlineAnimHits = @()
+foreach ($file in $srcFiles) {
+    $content = Get-Content -LiteralPath $file.FullName -Raw -Encoding utf8
+    foreach ($rule in [regex]::Matches($content, '(?s)([^{}]+)\{([^{}]*)\}')) {
+        $selector = $rule.Groups[1].Value
+        $body = $rule.Groups[2].Value
+        if ($body -notmatch 'display\s*:\s*inline\s*;') { continue }
+        if ($body -notmatch '(animation|transition)[^;]*transform') { continue }
+        $inlineAnimHits += ("{0}: {1}" -f $file.Name, ($selector.Trim() -replace '\s+', ' '))
+    }
+}
+if ($inlineAnimHits.Count -gt 0) {
+    Write-Host " [FAILED]" -ForegroundColor Red
+    Write-Error ("display:inline 元素上声明了 transform 动画：`n" + ($inlineAnimHits -join "`n"))
+    $failed = $true
+} else {
+    Write-Host " [PASSED] (行内元素只做 opacity，不做 transform)" -ForegroundColor Green
+}
+
+# 9. 契约增补：遮罩不得动画化 backdrop-filter 的模糊半径
+Write-Host "9. Checking backdrop-filter is never animated..." -NoNewline
+$backdropHits = @()
+foreach ($file in $srcFiles) {
+    $content = Get-Content -LiteralPath $file.FullName -Raw -Encoding utf8
+    foreach ($rule in [regex]::Matches($content, '(?s)([^{}]+)\{([^{}]*)\}')) {
+        $selector = $rule.Groups[1].Value
+        $body = $rule.Groups[2].Value
+        if ($body -notmatch '(animation|transition)[^;]*backdrop-filter') { continue }
+        $backdropHits += ("{0}: {1}" -f $file.Name, ($selector.Trim() -replace '\s+', ' '))
+    }
+}
+if ($backdropHits.Count -gt 0) {
+    Write-Host " [FAILED]" -ForegroundColor Red
+    Write-Error ("遮罩的 backdrop-filter 被动画化：`n" + ($backdropHits -join "`n"))
+    $failed = $true
+} else {
+    Write-Host " [PASSED] (模糊半径保持常量，遮罩只动 opacity)" -ForegroundColor Green
+}
+
+# 10. 契约增补：主题瞬切锁必须存在
+Write-Host "10. Checking theme transition lock (.disable-transitions)..." -NoNewline
+if ($tokensContent -match '\.disable-transitions') {
+    Write-Host " [PASSED] (tokens.css 含 .disable-transitions 瞬切锁)" -ForegroundColor Green
+} else {
+    Write-Host " [FAILED]" -ForegroundColor Red
+    Write-Error "tokens.css 缺少 .disable-transitions 主题瞬切锁"
+    $failed = $true
+}
+
 if ($failed) {
     Write-Error "UI contract verification failed."
     exit 1

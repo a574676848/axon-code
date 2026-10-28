@@ -21,6 +21,13 @@ import { failureBanner } from '../../conversation/failureBanner';
 const RENDER_WINDOW = 400;
 /** 解除贴底锁定的距底阈值。 */
 const UNLOCK_DISTANCE_PX = 80;
+/**
+ * 参与原生虚拟化的历史轮次数。
+ *
+ * 只把「末尾 15 轮之外」的历史挂上 `content-visibility: auto`：正在阅读的尾部
+ * 永远逐块真实渲染，因此不会出现「刚滚到的段落先空一块」的观感。
+ */
+const MEMOIZED_TURNS = 15;
 /** 换屏入场的位移、时长与曲线；与设计系统的通用缓动同值。 */
 const ENTRANCE_SHIFT_PX = 8;
 const ENTRANCE_MS = 200;
@@ -305,16 +312,25 @@ export const ConversationStream: React.FC<ConversationStreamProps> = ({
       >
         <div ref={contentRef} className="w-full max-w-chat mx-auto flex flex-col gap-2.5">
           {hasOlder && (
-            <div className="flex items-center justify-center">
+            /*
+             * 加载更早：与下面「更早的 N 条内容已折叠」同一套语言。
+             *
+             * 原先是一枚独立的描边胶囊，浮在正文顶部像一张贴纸；改成两侧发丝线夹住的
+             * 无边框文字按钮之后，它是这条时间线的一部分，而不是压在上面的控件。
+             * 文字取三级色、悬浮才转主色，因此静止时不会与正文抢注意力。
+             */
+            <div className="flex items-center gap-2 pt-1">
+              <span aria-hidden="true" className="flex-1 h-hairline bg-border-hairline" />
               <button
                 type="button"
                 onClick={onLoadOlder}
                 disabled={loadingOlder}
-                className="h-7 px-3 inline-flex items-center gap-1.5 rounded-full hairline border-border-strong bg-surface text-row text-text-secondary transition-colors duration-100 hover:text-text-primary disabled:cursor-wait disabled:opacity-40"
+                className="btn-tactile h-7 px-2.5 inline-flex items-center gap-1.5 rounded-full text-meta text-text-tertiary hover:text-text-primary hover:bg-hover disabled:cursor-wait disabled:opacity-60"
               >
-                {loadingOlder ? <SpinnerIcon size={14} /> : <ArrowUpIcon size={14} />}
+                {loadingOlder ? <SpinnerIcon size={13} /> : <ArrowUpIcon size={13} />}
                 {loadingOlder ? '正在加载更早的会话' : '加载更早'}
               </button>
+              <span aria-hidden="true" className="flex-1 h-hairline bg-border-hairline" />
             </div>
           )}
           {hidden > 0 && (
@@ -334,6 +350,7 @@ export const ConversationStream: React.FC<ConversationStreamProps> = ({
               hiddenCells={turnHidden}
               onAnchor={registerAnchor}
               onOpenChange={openChange}
+              memoized={index < windowedTurns.length - MEMOIZED_TURNS}
             />
           ))}
 

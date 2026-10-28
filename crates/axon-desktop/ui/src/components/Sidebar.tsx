@@ -9,12 +9,11 @@ import * as ipc from '../ipc';
 import type { LaneSelection } from '../conversation/useConversation';
 import { isRunning, type LaneRuntimeFacts } from '../conversation/runtimeFacts';
 import { Banner, Text } from './ui/surfaces';
-import { NewSessionButton, SidebarColumn } from './ui/shell';
+import { NewSessionButton, NavGlide, SidebarColumn } from './ui/shell';
 import { SidebarRail } from './SidebarRail';
 import { SidebarBrandBar, SidebarSectionHeader } from './SidebarHeader';
 import {
   ROW_ICON_COLUMN,
-  ROW_SELECTED_BAR,
   ROW_STATE,
   rowTone,
 } from './SidebarRows';
@@ -46,7 +45,7 @@ const NavRow: React.FC<{
     aria-current={active ? 'page' : undefined}
     className={`${ROW_STATE} ${rowTone(active)} w-full h-8 px-0 text-left`}
   >
-    {active && <span aria-hidden="true" className={ROW_SELECTED_BAR} />}
+    {/* 选中指示由整列的 NavGlide 承担，行内不再画静态条。 */}
     <span className={`${ROW_ICON_COLUMN} text-text-tertiary`}>{icon}</span>
     <Text size="body" className="leading-5" truncate>
       {label}
@@ -469,18 +468,29 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* 新建会话与顶部导航 */}
       <div className="shrink-0 px-3 pb-3 pt-1 space-y-0.5">
         <NewSessionButton onClick={() => void createLane()} />
-        <NavRow
-          icon={<ClockIcon size={14} />}
-          label="自动化任务"
-          active={currentTab === 'automation'}
-          onClick={() => onSelectTab('automation')}
-        />
-        <NavRow
-          icon={<BrainIcon size={14} />}
-          label="记忆管理"
-          active={currentTab === 'memory'}
-          onClick={() => onSelectTab('memory')}
-        />
+        {/*
+          两行导航各自不再画静态指示条，整列共用一枚滑动指示标：
+          切换视图时只有它在平移，行本身不重排。
+        */}
+        <div className="relative space-y-0.5">
+          <NavGlide
+            activeIndex={currentTab === 'automation' ? 0 : currentTab === 'memory' ? 1 : null}
+            itemSize={32}
+            gap={2}
+          />
+          <NavRow
+            icon={<ClockIcon size={14} />}
+            label="自动化任务"
+            active={currentTab === 'automation'}
+            onClick={() => onSelectTab('automation')}
+          />
+          <NavRow
+            icon={<BrainIcon size={14} />}
+            label="记忆管理"
+            active={currentTab === 'memory'}
+            onClick={() => onSelectTab('memory')}
+          />
+        </div>
       </div>
 
       <SidebarSectionHeader

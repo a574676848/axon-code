@@ -29,7 +29,7 @@ export const SidebarColumn: React.FC<SidebarColumnProps> = ({
   <aside
     aria-label={label}
     style={variant === 'expanded' && width !== undefined ? { width } : undefined}
-    className={`relative flex flex-col shrink-0 h-full bg-sidebar z-10 ${
+    className={`app-shell-sidebar relative flex flex-col shrink-0 h-full z-10 ${
       variant === 'rail' ? 'w-14 items-center py-2.5' : ''
     } ${className}`}
   >
@@ -37,8 +37,7 @@ export const SidebarColumn: React.FC<SidebarColumnProps> = ({
   </aside>
 );
 
-export interface NewSessionButtonProps {
-  /** 点击行为。 */
+export interface NewSessionButtonProps {  /** 点击行为。 */
   onClick: () => void;
   /** 图标轨形态：只显示图标，并改用方形控件。 */
   compact?: boolean;
@@ -80,6 +79,49 @@ export const NewSessionButton: React.FC<NewSessionButtonProps> = ({ onClick, com
   );
 };
 
+export interface NavGlideProps {
+  /** 当前选中项在导航列里的序号；没有选中项时传 null，指示标淡出。 */
+  activeIndex: number | null;
+  /** 单行高度。 */
+  itemSize: number;
+  /** 行间距。 */
+  gap: number;
+  /** 指示标自身高度，默认 16px。 */
+  barSize?: number;
+  /** 相对列容器左缘的水平偏移（图标轨上按钮居中，需要缩进）。 */
+  inset?: number;
+}
+
+/**
+ * 导航滑动指示标：整列只有一枚 2px 主色胶囊，在选中项之间平移。
+ *
+ * 与「每个按钮各画一条」相比，滑动只走一次 `transform`：切换导航时只有这枚胶囊
+ * 在动，行本身不重排，也不会出现两条指示条同时亮的中间帧。
+ * 容器需要 `relative`，且从第一行开始摆放（不要把它放进带内边距的包装层，
+ * 否则位移基准会跟着偏）。
+ */
+export const NavGlide: React.FC<NavGlideProps> = ({
+  activeIndex,
+  itemSize,
+  gap,
+  barSize = 16,
+  inset = 0,
+}) => (
+  <span
+    aria-hidden="true"
+    className="pointer-events-none absolute top-0 w-0.5 rounded-full bg-primary"
+    style={{
+      left: inset,
+      height: barSize,
+      opacity: activeIndex === null ? 0 : 1,
+      transform: `translateY(${
+        activeIndex === null ? 0 : activeIndex * (itemSize + gap) + (itemSize - barSize) / 2
+      }px)`,
+      transition: 'transform 220ms var(--ease-spring-smooth), opacity 120ms ease',
+    }}
+  />
+);
+
 export interface PageShellProps {
   /** 页面名称，进入 40px 顶栏。 */
   title: string;
@@ -87,6 +129,14 @@ export interface PageShellProps {
   description?: string;
   /** 顶栏右侧动作区。 */
   actions?: React.ReactNode;
+  /**
+   * 正文是否吃满余下高度。
+   *
+   * 默认是一块可滚动的普通文档流（列表、表单这类内容自己决定高度）。
+   * 传 true 时正文区改为固定高度的纵向 flex，页面内部再用 `flex-1` 分配空间：
+   * 编辑器、时间轮这类「主体本身就该占满」的页面用这一档。
+   */
+  fill?: boolean;
   children: React.ReactNode;
 }
 
@@ -99,6 +149,7 @@ export const PageShell: React.FC<PageShellProps> = ({
   title,
   description,
   actions,
+  fill = false,
   children,
 }) => (
   <main className="flex-1 min-w-0 h-full flex flex-col bg-canvas overflow-clip">
@@ -116,8 +167,12 @@ export const PageShell: React.FC<PageShellProps> = ({
         )}
       </div>
     </header>
-    <div className="flex-1 min-h-0 overflow-y-auto">
-      <div className="mx-auto w-full max-w-page px-6 py-5">
+    <div className={`flex-1 min-h-0 ${fill ? 'overflow-clip' : 'overflow-y-auto'}`}>
+      <div
+        className={`mx-auto w-full max-w-page px-6 py-5 ${
+          fill ? 'flex h-full min-h-0 flex-col' : ''
+        }`}
+      >
         {description !== undefined && (
           <Text tone="secondary" size="xs" className="mb-4 block">
             {description}

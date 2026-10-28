@@ -50,10 +50,17 @@ export interface TurnBlockProps {
   onAnchor: (turnId: string, node: HTMLElement | null) => void;
   /** 打开某一轮的改动对比，并落到第 index 个文件。 */
   onOpenChange: (turnId: string, turnNumber: number, index: number) => void;
+  /**
+   * 是否按历史段落做原生虚拟化。
+   *
+   * 只对滚动窗口之外的历史轮次成立：`content-visibility: auto` 让浏览器跳过
+   * 视口外内容的绘制与布局，百轮会话因此仍然满帧；正在流式输出的尾部永远不参与。
+   */
+  memoized?: boolean;
 }
 
 export const TurnBlock = React.memo<TurnBlockProps>(
-  ({ turn, turnNumber, hiddenCells, onAnchor, onOpenChange }) => {
+  ({ turn, turnNumber, hiddenCells, onAnchor, onOpenChange, memoized = false }) => {
     const files = changedFilesOf(turn.changes);
     const cells = hiddenCells > 0 ? turn.cells.slice(hiddenCells) : turn.cells;
     const tail = cells[cells.length - 1];
@@ -70,13 +77,31 @@ export const TurnBlock = React.memo<TurnBlockProps>(
         />
       );
     const groups = groupCells(cells);
+    const nodeRef = React.useRef<HTMLDivElement>(null);
+
+    /*
+     * 把真实高度写进 `--block-h`。
+     *
+     * `contain-intrinsic-size: auto var(--block-h)` 里的 `auto` 会记住上一次渲染的尺寸，
+     * 但首次进入虚拟化时还没有任何记忆，必须有一个可信的占位高度，否则滚动条滑块
+     * 会先按默认值算比例再跳一次。这里在轮次转为历史时量一次，之后不再读。
+     */
+    React.useLayoutEffect(() => {
+      if (!memoized) return;
+      const node = nodeRef.current;
+      if (node === null) return;
+      const height = Math.round(node.getBoundingClientRect().height);
+      if (height > 0) node.style.setProperty('--block-h', `${height}px`);
+    }, [memoized]);
+
     return (
       <div
         data-turn-id={turn.id}
         ref={(node) => {
+          nodeRef.current = node;
           onAnchor(turn.id, node);
         }}
-        className="flex flex-col gap-2.5"
+        className={`flex flex-col gap-2.5 ${memoized ? 'message-block-memoized' : ''}`}
       >
         {groups.map((group, position) => (
           <React.Fragment key={group.key}>

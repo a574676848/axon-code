@@ -185,6 +185,10 @@ interface BasicSettingsPanelProps {
   initialSection?: SettingsSection;
 }
 
+/** 设置分区目录（只含标识与文案）：命令面板直接读这一份，不再维护第二份分区名册。 */
+export const SETTINGS_SECTION_LABELS: readonly { id: SettingsSection; label: string }[] =
+  SECTIONS.map((spec) => ({ id: spec.id, label: spec.label }));
+
 export const BasicSettingsPanel: React.FC<BasicSettingsPanelProps> = ({
   open,
   onClose,
@@ -271,6 +275,8 @@ export const BasicSettingsPanel: React.FC<BasicSettingsPanelProps> = ({
    * 面板本身只有一套尺寸，切换分区不会让窗口左右跳。
    */
   const dashboard = section === 'usage' || section === 'pricing';
+  /** 只写一件东西的分区：正文给满高度，编辑器因此能吃掉余下的空白。 */
+  const fillSection = section === 'soul' || section === 'agents';
   // 关于页没有表单列：整块内容在正文区里居中，而不是缩在左侧 720px 里。
   const wideContent = dashboard || section === 'about' || section === 'soul' || section === 'agents';
   const needsConfig = PREFIX_SECTIONS.has(section) || section === 'models';
@@ -355,14 +361,18 @@ export const BasicSettingsPanel: React.FC<BasicSettingsPanelProps> = ({
 
         <div
           ref={scrollRef}
-          className={`flex-1 min-h-0 overflow-y-auto scroll-visible ${
+          className={`flex-1 min-h-0 scroll-visible ${
+            fillSection ? 'overflow-clip' : 'overflow-y-auto'
+          } ${
             dashboard ? 'bg-surface-sunken' : 'bg-surface'
           }`}
         >
           <div
             className={`${
               wideContent ? 'max-w-none' : 'max-w-[720px]'
-            } min-h-full flex flex-col px-6 py-4`}
+            } ${
+              fillSection ? 'flex h-full min-h-0 flex-col' : 'min-h-full flex flex-col'
+            } px-6 py-4`}
           >
             {error !== null && (
               <div className="mb-3">

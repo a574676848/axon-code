@@ -4,20 +4,22 @@ import * as ipc from './ipc';
 import { listenLaneActivity, listenOpenLane } from './laneEvents';
 import { useWindowTitle } from './useWindowTitle';
 import { Sidebar } from './components/Sidebar';
-import { BasicSettingsPanel } from './components/BasicSettingsPanel';
+import { BasicSettingsPanel, SETTINGS_SECTION_LABELS } from './components/BasicSettingsPanel';
 import { GatewayUnconnected, GatewayUnavailableState } from './components/GatewayUnconnected';
 import { ConversationView } from './components/conversation/ConversationView';
 import { ErrorBoundary } from './components/conversation/ErrorBoundary';
 import type { LaneSelection } from './conversation/useConversation';
 import { clearedAtSettle, markForNotice } from './conversation/laneMarks';
 import { sameRuntimeFacts, type LaneRuntimeFacts } from './conversation/runtimeFacts';
-import { Button } from './components/ui/controls';
-import { Banner, Chip, EmptyState, ListRow, LoadingState, Panel, Text } from './components/ui/surfaces';
-import { PageShell } from './components/ui/shell';
+import { LoadingState } from './components/ui/surfaces';
 import { WindowChrome } from './components/ui/WindowChrome';
-import { AlertCircleIcon, FolderIcon, RefreshIcon } from './icons';
+import { CommandPalette, type CommandPaletteItem } from './components/ui/CommandPalette';
 import { AutomationPage } from './components/AutomationPage';
 import { MemoryPage } from './components/MemoryPage';
+import { WorkspaceOverview } from './components/WorkspaceOverview';
+import { OPEN_COMMAND_PALETTE_EVENT, installDesktopGuards } from './desktopGuards';
+import { applyTheme, currentTheme, THEME_CHOICES } from './theme';
+import { notifyDesktopReady, useWindowDynamicSurfaces } from './windowSurfaces';
 
 /*
  * 应用外壳：左侧工作区与会话，右侧主区域，设置以浮层弹窗叠加。
@@ -85,6 +87,8 @@ export const App: React.FC = () => {
    * 跨启动保留会让旧标识永远挂在那里。
    */
   const [laneMarks, setLaneMarks] = useState<Record<string, string>>({});
+  /** 命令面板是否打开。 */
+  const [paletteOpen, setPaletteOpen] = useState(false);
   /** 订阅回调里要读当前选中会话，用 ref 避免每次选择变化都重订阅。 */
   const selectionRef = useRef<LaneSelection | null>(null);
   selectionRef.current = selection;
@@ -312,6 +316,26 @@ export const App: React.FC = () => {
   useWindowTitle(windowTitle);
 
   /*
+   * 桌面外壳三件装配（互不阻塞，各自回收自己的监听）：
+   * 1. 浏览器特征压制：右键菜单、刷新、打印、查看源码与开发者工具；
+   * 2. 窗口动态表面：焦点与最大化只在侧栏容器上落属性，不动根节点；
+   * 3. 首帧就绪：渲染完成才告诉宿主显示窗口，白底闪烁与窗口瞬移都不会出现。
+   */
+  useEffect(() => installDesktopGuards(), []);
+  // 侧栏在展开与图标轨之间切换时会整棵换掉，容器换了要重新落一次状态。
+  useWindowDynamicSurfaces(`${isSidebarOpen}:${currentTab}`);
+  useEffect(() => {
+    void notifyDesktopReady();
+  }, []);
+
+  /** 命令面板的打开手势来自全局压制器（Ctrl + K 与 Ctrl + F 都翻译到同一条事件）。 */
+  useEffect(() => {
+    const openPalette = () => setPaletteOpen(true);
+    window.addEventListener(OPEN_COMMAND_PALETTE_EVENT, openPalette);
+    return () => window.removeEventListener(OPEN_COMMAND_PALETTE_EVENT, openPalette);
+  }, []);
+
+  /*
    * 待答标识的清除：这条会话已经没有在等回答的提问了。
    *
    * 标识说明的是「有事等你做」而不是「有新结果没看」，因此它不随开关会话消失，
@@ -349,6 +373,80 @@ export const App: React.FC = () => {
   }, []);
 
   /**
+   * 命令面板的全部候选。
+   *
+   * 每一项都落到真实存在的动作上：跳转改顶层视图、设置分区开弹窗、主题走同一份
+   * 持久化接口、工作区与会话直接切订阅目标。没有占位项，也没有「未来会有」的入口。
+   */
+  const paletteItems = useMemo<CommandPaletteItem[]>(() => {
+    const navigation: CommandPaletteItem[] = [
+      { id: 'nav-chat', label: '前往对话', group: '跳转', run: () => setCurrentTab('chat') },
+      {
+        id: 'nav-workspace',
+        label: '前往工作区',
+        group: '跳转',
+        run: () => setCurrentTab('workspace'),
+      },
+      {
+        id: 'nav-automation',
+        label: '前往自动化任务',
+        group: '跳转',
+        run: () => setCurrentTab('automation'),
+      },
+      {
+        id: 'nav-memory',
+        label: '前往记忆管理',
+        group: '跳转',
+        run: () => setCurrentTab('memory'),
+      },
+    ];
+
+    const settings: CommandPaletteItem[] = SETTINGS_SECTION_LABELS.map((section) => ({
+      id: `settings-${section.id}`,
+      label: `设置：${section.label}`,
+      group: '设置',
+      run: () => openSettingsAt(section.id),
+    }));
+
+    const themes: CommandPaletteItem[] = THEME_CHOICES.map((choice) => ({
+      id: `theme-${choice.id}`,
+      label: `主题：${choice.label}`,
+      group: '外观',
+      run: () => {
+        // 与设置页同一条路径：先乐观上色，落盘回执再校正一次，失败回退到当前主题。
+        applyTheme(choice.id);
+        void ipc
+          .desktopSetTheme(choice.id)
+          .then((saved) => applyTheme(saved.theme))
+          .catch(() => applyTheme(currentTheme()));
+      },
+    }));
+
+    const lanes: CommandPaletteItem[] = workspaces.flatMap((workspace) =>
+      workspace.lanes.map((lane) => ({
+        id: `lane-${lane.id}`,
+        label: `${lane.title || '未命名会话'}`,
+        group: workspace.name || '会话',
+        run: () => {
+          selectLane({
+            workspaceId: workspace.id,
+            workspacePath: workspace.path,
+            laneId: lane.id,
+            destination: lane.destination,
+            title: lane.title,
+            channel: lane.channel,
+            pending: lane.pending,
+          });
+          setCurrentTab('chat');
+        },
+      })),
+    );
+
+    return [...navigation, ...settings, ...themes, ...lanes];
+  }, [openSettingsAt, selectLane, workspaces]);
+
+
+  /**
    * 接收会话视图上报的运行态事实。
    *
    * 值没变就保留原引用：上报方每轮都会新建一个事实对象，照单全收地换引用会让
@@ -377,8 +475,8 @@ export const App: React.FC = () => {
 
   return (
     // 外层是沉底托盘（bg-sidebar），主工作区是嵌在托盘里的圆角舞台（Inset Sheet）。
-    <div className="h-full w-full flex bg-sidebar overflow-clip">
-      <WindowChrome />
+    // 托盘同时承载系统材质：材质可用时它取半透色，失焦或最大化立刻退回实色。
+    <div className="app-shell-tray h-full w-full flex overflow-clip">
       <Sidebar
         currentTab={currentTab}
         onSelectTab={setCurrentTab}
@@ -392,7 +490,25 @@ export const App: React.FC = () => {
         runtime={laneRuntime}
       />
 
-      <div className="flex-1 min-w-0 my-1.5 mr-1.5 ml-0 flex rounded-[12px] bg-canvas shadow-stage overflow-clip">
+      {/*
+        主舞台。窗口三键画在这块舞台的顶栏里，而不是托盘外框上：按钮与标题栏同属
+        一个表面，才读得成「一体的窗口」，否则它们像贴在边框外的附件。
+        舞台自己只保留一圈发丝描边，不再叠投影：外框已有系统窗口阴影，
+        两道阴影并排会把窗口读成框套框。
+      */}
+      <div className="relative flex-1 min-w-0 my-1.5 mr-1.5 ml-0 flex flex-col rounded-[12px] bg-canvas hairline border-border-hairline overflow-clip">
+        <WindowChrome />
+        {/*
+          静态微晶纹理：一张 64x64 的 Base64 PNG 平铺，单次采样、零实时滤镜。
+          它盖在画布之上、正文之下感觉不到存在，但能抹掉大面积纯色与毛玻璃背景下的
+          色彩断层，读起来像阳极氧化铝表面而不是一块纯色塑料。
+        */}
+        <span aria-hidden="true" className="noise-underlay absolute inset-0" />
+        {/*
+          视图切换只动 opacity 与 transform：`key` 换掉整块内容，入场动画由
+          `.view-swap-in` 承担，因此切页没有白屏，也不会有上一屏残影。
+        */}
+        <div key={currentTab} className="view-swap-in flex-1 min-h-0 min-w-0 flex">
         {health === null ? (
           <main className="flex-1 min-w-0 h-full flex flex-col bg-canvas">
             <div data-tauri-drag-region className="h-10 shrink-0" />
@@ -446,6 +562,7 @@ export const App: React.FC = () => {
             />
           </ErrorBoundary>
         )}
+        </div>
       </div>
 
       {health !== null && !health.connected && (
@@ -465,6 +582,12 @@ export const App: React.FC = () => {
         />
       )}
 
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        items={paletteItems}
+      />
+
       <BasicSettingsPanel
         open={isSettingsOpen}
         onClose={() => {
@@ -475,87 +598,5 @@ export const App: React.FC = () => {
         initialSection={settingsSection}
       />
     </div>
-  );
-};
-
-/** 工作区概览：读取真实工作区与会话统计。 */
-const WorkspaceOverview: React.FC = () => {
-  const [workspaces, setWorkspaces] = useState<WorkspaceItem[]>([]);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      setWorkspaces(await ipc.fetchWorkspaces());
-      setError(null);
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '读取工作区失败');
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const lanes = useMemo(
-    () => workspaces.flatMap((workspace) => workspace.lanes),
-    [workspaces],
-  );
-
-  return (
-    <PageShell
-      title="工作区"
-      description={`共 ${workspaces.length} 个工作区，${lanes.length} 条会话，其中置顶 ${lanes.filter((lane) => lane.pinned).length} 条，已归档 ${lanes.filter((lane) => lane.archived).length} 条`}
-      actions={
-        <Button variant="outline" size="md" onClick={() => void load()}>
-          <RefreshIcon size={14} />
-          刷新
-        </Button>
-      }
-    >
-      {error !== null && (
-        <Banner
-          tone="danger"
-          icon={<AlertCircleIcon size={14} />}
-          title={error}
-          action={
-            <Button variant="outline" size="sm" onClick={() => void load()}>
-              重试
-            </Button>
-          }
-        />
-      )}
-
-      {workspaces.length === 0 && error === null ? (
-        <Panel clip>
-          <EmptyState
-            icon={<FolderIcon size={24} />}
-            title="还没有工作区"
-            description="用侧栏的「添加工作区」登记一个目录，这里会列出它的会话。"
-          />
-        </Panel>
-      ) : (
-        <Panel clip>
-          {workspaces.map((workspace) => (
-            <ListRow key={workspace.id}>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <Text size="row" strong truncate>
-                    {workspace.name}
-                  </Text>
-                  {workspace.active && <Chip>当前</Chip>}
-                </div>
-                {/* 路径是机器名：等宽、11/16，长路径从左端裁掉的是目录，文件名始终看得见。 */}
-                <span className="mt-0.5 block truncate font-mono text-[11px] leading-4 text-text-tertiary">
-                  {workspace.path}
-                </span>
-              </div>
-              <Text tone="tertiary" size="meta" className="shrink-0 leading-4 tabular-nums">
-                {workspace.lanes.length} 条会话
-              </Text>
-            </ListRow>
-          ))}
-        </Panel>
-      )}
-    </PageShell>
   );
 };

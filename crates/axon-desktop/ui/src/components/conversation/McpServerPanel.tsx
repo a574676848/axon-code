@@ -3,6 +3,7 @@ import React from 'react';
 import type { McpRuntimeServer } from '../../mcpTypes';
 import { CloseIcon } from '../../icons';
 import { IconButton } from '../ui/controls';
+import { useExitLifecycle } from '../ui/useExitLifecycle';
 import { Text } from '../ui/surfaces';
 import { Z_MENU } from './chatChrome';
 
@@ -19,7 +20,8 @@ import { Z_MENU } from './chatChrome';
 const MAX_BODY_HEIGHT = 260;
 
 export interface McpServerPanelProps {
-  servers: readonly McpRuntimeServer[];
+  /** 清单；为 null 表示收起。收起走 110ms 退场，不是瞬时消失。 */
+  servers: readonly McpRuntimeServer[] | null;
   onClose: () => void;
 }
 
@@ -66,13 +68,21 @@ const McpServerRow: React.FC<{ server: McpRuntimeServer }> = ({ server }) => {
 };
 
 export const McpServerPanel: React.FC<McpServerPanelProps> = ({ servers, onClose }) => {
-  const rows = ordered(servers);
+  const lifecycle = useExitLifecycle(servers !== null);
+  /*
+   * 退场期内容冻结：收起时父级会把清单置空，照单全收会让卡片在淡出过程中先塌成空壳。
+   */
+  const frozen = React.useRef<readonly McpRuntimeServer[]>([]);
+  if (servers !== null) frozen.current = servers;
+  if (!lifecycle.mounted) return null;
+  const rows = ordered(servers ?? frozen.current);
   const failed = rows.filter((server) => server.failed).length;
   const loaded = rows.length - failed;
   return (
     <section
       aria-label="MCP 服务器"
-      className={`absolute bottom-full left-0 right-0 mb-2 ${Z_MENU} rounded-md hairline border-border bg-surface shadow-panel`}
+      data-state={lifecycle.state}
+      className={`modal-spring-surface absolute bottom-full left-0 right-0 mb-2 ${Z_MENU} rounded-md hairline border-border bg-surface shadow-panel`}
     >
       <header className="flex items-center gap-2 px-3 pt-2 pb-1">
         <Text size="row" strong className="min-w-0 truncate">

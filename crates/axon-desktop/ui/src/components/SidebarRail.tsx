@@ -1,7 +1,6 @@
 import React from 'react';
 import { BrainIcon, ClockIcon, FolderIcon, IconPanelLeft, SearchIcon, SettingsIcon } from '../icons';
-import { NewSessionButton, SidebarColumn } from './ui/shell';
-import { ROW_SELECTED_BAR } from './SidebarRows';
+import { NavGlide, NewSessionButton, SidebarColumn } from './ui/shell';
 import type { NavTab } from '../types';
 
 /*
@@ -25,16 +24,23 @@ const RailButton: React.FC<{
     title={label}
     aria-current={active ? 'page' : undefined}
     onClick={onClick}
-    className={`relative w-9 h-9 flex items-center justify-center rounded-md transition-colors duration-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus ${
+    className={`btn-tactile relative w-9 h-9 flex items-center justify-center rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus ${
       active
         ? 'bg-surface shadow-lift hairline border-border text-text-primary'
         : 'text-text-secondary hover:bg-hover hover:text-text-primary'
     }`}
   >
-    {active && <span aria-hidden="true" className={ROW_SELECTED_BAR} />}
     {children}
   </button>
 );
+
+/** 图标轨上各动作的序号：滑动指示标按它在整列里的位置平移。 */
+const RAIL_ORDER = ['expand', 'new', 'search', 'workspace', 'automation', 'memory'] as const;
+/** 单格边长与格间距，与上面的类名一致。 */
+const RAIL_CELL = 36;
+const RAIL_GAP = 8;
+/** 按钮在 56px 栏里居中，因此左缘缩进 10px。 */
+const RAIL_INSET = 10;
 
 interface SidebarRailProps {
   /** 当前顶层视图；导航按钮据此给出选中态。 */
@@ -73,24 +79,44 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
     <div
       data-tauri-drag-region
       style={{ paddingTop: 'var(--macos-traffic-inset, 0px)' }}
-      className="flex flex-col items-center gap-2"
+      className="flex flex-col items-center"
     >
-      <RailButton label="展开侧边栏" onClick={onToggleSidebar}>
-        <IconPanelLeft size={14} />
-      </RailButton>
-      <NewSessionButton compact onClick={onNewSession} />
-      <RailButton label="搜索会话" onClick={onOpenSearch}>
-        <SearchIcon size={14} />
-      </RailButton>
-      <RailButton label="工作区" active={currentTab === 'workspace'} onClick={onSelectWorkspace}>
-        <FolderIcon size={14} />
-      </RailButton>
-      <RailButton label="自动化任务" active={currentTab === 'automation'} onClick={onSelectAutomation}>
-        <ClockIcon size={14} />
-      </RailButton>
-      <RailButton label="记忆管理" active={currentTab === 'memory'} onClick={onSelectMemory}>
-        <BrainIcon size={14} />
-      </RailButton>
+      {/*
+        整列只有一枚滑动指示标：切页时只有它在平移，图标本身不重排。
+        它从这里开始摆放（内边距在外层），因此位移基准与第一格严格对齐。
+      */}
+      <div className="relative flex flex-col items-center gap-2">
+        <NavGlide
+          activeIndex={
+            currentTab === 'workspace'
+              ? RAIL_ORDER.indexOf('workspace')
+              : currentTab === 'automation'
+                ? RAIL_ORDER.indexOf('automation')
+                : currentTab === 'memory'
+                  ? RAIL_ORDER.indexOf('memory')
+                  : null
+          }
+          itemSize={RAIL_CELL}
+          gap={RAIL_GAP}
+          inset={RAIL_INSET}
+        />
+        <RailButton label="展开侧边栏" onClick={onToggleSidebar}>
+          <IconPanelLeft size={14} />
+        </RailButton>
+        <NewSessionButton compact onClick={onNewSession} />
+        <RailButton label="搜索会话" onClick={onOpenSearch}>
+          <SearchIcon size={14} />
+        </RailButton>
+        <RailButton label="工作区" active={currentTab === 'workspace'} onClick={onSelectWorkspace}>
+          <FolderIcon size={14} />
+        </RailButton>
+        <RailButton label="自动化任务" active={currentTab === 'automation'} onClick={onSelectAutomation}>
+          <ClockIcon size={14} />
+        </RailButton>
+        <RailButton label="记忆管理" active={currentTab === 'memory'} onClick={onSelectMemory}>
+          <BrainIcon size={14} />
+        </RailButton>
+      </div>
     </div>
 
     <RailButton label="设置" onClick={onOpenSettings}>

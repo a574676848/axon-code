@@ -1,9 +1,9 @@
 import React from 'react';
-import type { ThemedToken } from 'shiki/core';
 import { CheckIcon, CopyIcon } from '../../icons';
 import * as ipc from '../../ipc';
 import { highlightCode, tokenStyle } from './codeHighlight';
 import { MermaidDiagram } from './MermaidDiagram';
+import { useThrottledHighlight } from './useThrottledHighlight';
 
 /*
  * 正文里的代码块：外框、语言条与着色统一在这里实现。
@@ -78,22 +78,14 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({
   compact = false,
   title,
 }) => {
-  const [lines, setLines] = React.useState<ThemedToken[][] | null>(null);
   const [diagramError, setDiagramError] = React.useState<string | null>(null);
   const [copied, setCopied] = React.useState(false);
   const receiptTimer = React.useRef<number | null>(null);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    setLines(null);
-    setDiagramError(null);
-    void highlightCode(code, language).then((value) => {
-      if (!cancelled) setLines(value);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [code, language]);
+  /*
+   * 高亮按帧节流、未闭合围栏先退回纯文本：见 useThrottledHighlight。
+   * 流式期间每帧至多解析一次，闭合之后才补上完整语法高亮。
+   */
+  const lines = useThrottledHighlight(code, language, highlightCode);
 
   React.useEffect(
     () => () => {

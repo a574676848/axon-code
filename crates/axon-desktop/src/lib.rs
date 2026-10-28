@@ -66,6 +66,10 @@ pub mod usage;
 pub mod voice;
 /// 操作系统级麦克风隐私探测与系统设置跳转。
 pub mod voice_permission;
+/// 窗口级系统材质、原生深浅色联动与最大化状态翻转。
+pub mod window_effects;
+/// 窗口几何记忆与静默呈现。
+pub mod window_state;
 /// 工作区与车道的真实扫描与状态维护。
 pub mod workspace;
 /// 「用其他应用打开」：按系统关联枚举候选并回放选中的一条。
@@ -149,6 +153,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        // 窗口状态插件只恢复尺寸、位置、最大化与全屏四项。
+        // 可见性必须排除在外：插件默认会在恢复几何时顺手 show 一次，
+        // 那一刻前端还没画完第一帧，用户看到的就是白底加一次位置跳动。
+        .plugin(window_state::plugin())
         // 单实例必须排在最前：第二次启动时它负责唤回既有窗口后立即退出，
         // 否则用户每点一次图标就会多出一个托盘图标与一份后台进程。
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -197,6 +205,11 @@ pub fn run() {
             }));
             // 托盘与关闭行为在窗口建好之后安装，此时主窗口已可解析。
             desktop_shell::install(app.handle())?;
+            // 材质底座在建窗之后、呈现之前建立：前端的首帧就绪信号要能问到结论。
+            window_effects::install(app.handle());
+            window_effects::init_window_material(app.handle());
+            // 兜底呈现：前端首帧就绪信号与 350ms 超时，两条路只会显示一次。
+            window_state::install_show_gate(app.handle());
             Ok(())
         })
         .manage(state)
@@ -309,6 +322,7 @@ pub fn run() {
             desktop_preferences,
             desktop_set_notifications,
             desktop_set_theme,
+            window_state::desktop_notify_ready,
             usage_overview,
             usage_distribution,
             usage_diagnostics,

@@ -29,10 +29,12 @@ tauri-plugin-dialog = "2.8.1"
 tauri-plugin-opener = "2.7.0"
 tauri-plugin-notification = "2.5.1"
 tauri-plugin-single-instance = "2.5.2"
+tauri-plugin-window-state = "2"
 tokio = { workspace = true, features = ["rt", "net", "time", "sync", "macros"] }
 tokio-tungstenite = { workspace = true }
 ureq = { workspace = true }
 url = { workspace = true }
+window-vibrancy = "0.5"
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 
 [build-dependencies]

@@ -9,14 +9,21 @@
   /*
    * 四级表面：托盘底座（sidebar）、主画布（canvas）、浮起卡片（surface）、下沉凹槽（surface-sunken）。
    * 纸白主题采用高纯度清透雪白（Crisp Pure Paper，零灰雾感、零蓝偏色）：
-   * 托盘底座 #F6F6F7 -> 内嵌主画布 #FDFDFD -> 纯白卡片 #FFFFFF，通透明亮、干净纯粹。
+   * 托盘底座 #F6F6F7 -> 内嵌主画布 #FAFAFC -> 纯白卡片 #FFFFFF，通透明亮、干净纯粹。
+   * 画布比卡片压暗半度（#FAFAFC 对 #FFFFFF）：低色域显示器上纯白卡片仍然浮得起来。
    */
-  --color-canvas: #FDFDFD;
+  --color-canvas: #FAFAFC;
   --color-sidebar: #F6F6F7;
+  /* 半透托盘底座：只在系统材质可用且窗口激活、未最大化时生效。 */
+  --color-sidebar-translucent: rgba(246, 246, 247, 0.70);
+  /* macOS Vibrancy 更浓一档：磨砂透光强，0.78 才压实。 */
+  --color-sidebar-translucent-macos: rgba(246, 246, 247, 0.78);
   --color-surface: #FFFFFF;
   --color-surface-sunken: #F3F3F5;
   --color-hover: rgba(24, 24, 27, 0.04);
   --color-active: rgba(24, 24, 27, 0.068);
+  /* 列表与命令项悬浮：专门给侧栏行与命令面板列表，比 --color-active 更轻。 */
+  --color-row-hover: rgba(24, 24, 27, 0.04);
   /* 模态遮罩：只此一档，嵌套弹窗不叠第二层。 */
   --color-scrim: rgba(15, 16, 19, 0.36);
 
@@ -29,6 +36,11 @@
   --color-specular: rgba(255, 255, 255, 0.96);
   --color-shimmer-beam: rgba(255, 255, 255, 0.78);
   --color-window-close: #C42B1C;
+  /* 键盘焦点微环：1px 实线加 2px 扩散微光，用于列表行与命令面板这类高频键盘流转动线。 */
+  --color-focus-ring: rgba(24, 24, 27, 0.25);
+  /* 消隐细滚动条滑块：常态低存在感，悬浮加深一档。 */
+  --color-scrollbar-thumb: rgba(24, 24, 27, 0.14);
+  --color-scrollbar-thumb-hover: rgba(24, 24, 27, 0.18);
 
   --color-text-primary: #111113;
   /* 叙述正文采用乌润醇正的碳素墨色（#242428）：在洁白画布上清亮锐利且去除了纯黑刺眼眩光。 */
@@ -86,14 +98,14 @@
    * 不随当前激活主题变化，专供设置页主题选择缩略卡使用。
    */
   --color-swatch-paper-sidebar: #F4F4F5;
-  --color-swatch-paper-canvas: #FDFDFD;
+  --color-swatch-paper-canvas: #FAFAFC;
   --color-swatch-paper-card: #FFFFFF;
   --color-swatch-paper-accent: #18181B;
   --color-swatch-forest-sidebar: #E7EEEA;
-  --color-swatch-forest-canvas: #F1F5F3;
+  --color-swatch-forest-canvas: #F2F5F4;
   --color-swatch-forest-card: #FCFEFD;
   --color-swatch-forest-wash: #C9DDD2;
-  --color-swatch-forest-accent: #164E3B;
+  --color-swatch-forest-accent: #144534;
   --color-swatch-obsidian-sidebar: #0B0D11;
   --color-swatch-obsidian-canvas: #11141B;
   --color-swatch-obsidian-card: #181C25;
@@ -127,6 +139,10 @@
 
   --text-2xs: 10px;
   --text-2xs--line-height: 16px;
+  /* 角标档：快捷键 Kbd 与分组小标题，字间距微微张开。 */
+  --text-micro: 11px;
+  --text-micro--line-height: 16px;
+  --text-micro--letter-spacing: 0.02em;
   --text-code: 12px;
   --text-code--line-height: 20px;
   --text-meta: 12px;
@@ -163,12 +179,15 @@
  */
 html[data-theme='forest'] {
   color-scheme: light;
-  --color-canvas: #F1F5F3;
+  --color-canvas: #F2F5F4;
   --color-sidebar: #E7EEEA;
+  --color-sidebar-translucent: rgba(231, 238, 234, 0.70);
+  --color-sidebar-translucent-macos: rgba(231, 238, 234, 0.78);
   --color-surface: #FCFEFD;
   --color-surface-sunken: #E1EAE5;
   --color-hover: rgba(17, 28, 24, 0.05);
   --color-active: rgba(17, 28, 24, 0.08);
+  --color-row-hover: rgba(17, 28, 24, 0.05);
 
   --color-border: rgba(17, 28, 24, 0.10);
   --color-border-hairline: rgba(17, 28, 24, 0.07);
@@ -178,6 +197,9 @@ html[data-theme='forest'] {
   --color-border-selected: #7C9D8E;
   --color-specular: rgba(255, 255, 255, 0.88);
   --color-shimmer-beam: rgba(252, 254, 253, 0.72);
+  --color-focus-ring: rgba(20, 69, 52, 0.35);
+  --color-scrollbar-thumb: rgba(17, 28, 24, 0.16);
+  --color-scrollbar-thumb-hover: rgba(17, 28, 24, 0.20);
 
   --color-text-primary: #111C18;
   --color-text-prose: #203029;
@@ -193,8 +215,8 @@ html[data-theme='forest'] {
   --color-code-inline: #DFEAE4;
   --color-code-ink: #174B38;
 
-  --color-primary: #164E3B;
-  --color-primary-hover: #1E604A;
+  --color-primary: #144534;
+  --color-primary-hover: #1B5742;
   --color-focus: #217658;
   --color-danger: #B3261E;
   --color-ok-ink: #156839;
@@ -230,6 +252,8 @@ html[data-theme='forest'] {
   --shiki-token-constant: #855505;
   --shiki-token-function: #4B5696;
 
+  /* 色相联动的环境遮蔽投影：冷杉带深冷青，与整块冷矿底座同源。 */
+  --shadow-surface-drop: 0 4px 12px -2px rgba(14, 30, 24, 0.06), 0 1px 2px 0 rgba(14, 30, 24, 0.05);
   --elevation-stage: 0 0 0 1px rgba(17, 28, 24, 0.08), 0 2px 6px 0 rgba(17, 28, 24, 0.04);
   --elevation-card: 0 1px 0 0 rgba(255, 255, 255, 0.90) inset, 0 1px 2px 0 rgba(17, 28, 24, 0.04);
   --elevation-stroke: 0 0 0 0.5px rgba(17, 28, 24, 0.10);
@@ -256,10 +280,14 @@ html[data-theme='obsidian'] {
   color-scheme: dark;
   --color-canvas: #11141B;
   --color-sidebar: #0B0D11;
+  --color-sidebar-translucent: rgba(11, 13, 17, 0.60);
+  /* 黑曜石的 Vibrancy 取 0.75：再淡就会从桌面透出灰雾。 */
+  --color-sidebar-translucent-macos: rgba(11, 13, 17, 0.75);
   --color-surface: #181C25;
   --color-surface-sunken: #0D1016;
   --color-hover: rgba(255, 255, 255, 0.05);
   --color-active: rgba(255, 255, 255, 0.09);
+  --color-row-hover: rgba(255, 255, 255, 0.045);
   --color-scrim: rgba(4, 6, 10, 0.62);
 
   --color-border: rgba(255, 255, 255, 0.085);
@@ -270,9 +298,12 @@ html[data-theme='obsidian'] {
   --color-border-selected: #56637A;
   --color-specular: rgba(255, 255, 255, 0.06);
   --color-shimmer-beam: rgba(255, 255, 255, 0.14);
+  --color-focus-ring: rgba(76, 130, 247, 0.45);
+  --color-scrollbar-thumb: rgba(255, 255, 255, 0.16);
+  --color-scrollbar-thumb-hover: rgba(255, 255, 255, 0.22);
 
   --color-text-primary: #ECEFF4;
-  --color-text-prose: #CBD5E1;
+  --color-text-prose: #D4D7DE;
   --color-text-secondary: #A6B0C0;
   --color-text-tertiary: #8B95A7;
   --color-text-placeholder: #838E9E;
@@ -286,7 +317,7 @@ html[data-theme='obsidian'] {
   --color-code-ink: #93C5FD;
 
   --color-primary: #2F5FD0;
-  --color-primary-hover: #3B6CE0;
+  --color-primary-hover: #3B6FE2;
   --color-focus: #528BFF;
   --color-danger: #F87171;
   --color-ok: #22c55e;
@@ -328,6 +359,8 @@ html[data-theme='obsidian'] {
   --shiki-token-constant: #FCD34D;
   --shiki-token-function: #C4B5FD;
 
+  /* 色相联动的环境遮蔽投影：黑曜石取纯黑，深邃立体，不掺冷蓝。 */
+  --shadow-surface-drop: 0 8px 20px -4px rgba(0, 0, 0, 0.55), 0 2px 6px -1px rgba(0, 0, 0, 0.40);
   --elevation-stage: 0 0 0 1px rgba(255, 255, 255, 0.07), 0 4px 16px 0 rgba(0, 0, 0, 0.45);
   --elevation-card: 0 1px 0 0 rgba(255, 255, 255, 0.06) inset, 0 2px 6px 0 rgba(0, 0, 0, 0.28);
   --elevation-stroke: 0 0 0 0.5px rgba(255, 255, 255, 0.10);
@@ -344,7 +377,9 @@ html[data-theme='obsidian'] {
     inset 0 -1px 0 rgba(255, 255, 255, 0.04);
   --elevation-modal: 0 0 0 1px rgba(255, 255, 255, 0.10), 0 28px 72px 0 rgba(0, 0, 0, 0.68),
     0 10px 28px 0 rgba(0, 0, 0, 0.45);
-  --elevation-button-primary: 0 1px 0 0 rgba(255, 255, 255, 0.22) inset, 0 1px 3px 0 rgba(0, 0, 0, 0.45);
+  /* 暗夜物理背光按键：顶部亮棱加底部暗棱，电光蓝从扁平色块变成精密发光键帽。 */
+  --elevation-button-primary: 0 1px 0 0 rgba(255, 255, 255, 0.22) inset,
+    0 -1px 0 0 rgba(0, 0, 0, 0.30) inset, 0 1px 3px 0 rgba(0, 0, 0, 0.45);
   --elevation-button-outline: 0 1px 0 0 rgba(255, 255, 255, 0.06) inset, 0 1px 2px 0 rgba(0, 0, 0, 0.30);
 }
 
@@ -378,6 +413,18 @@ html[data-theme='obsidian'] {
 
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
 
+  /*
+   * 物理弹簧三档曲线（三套主题完全一致，几何与动效不随主题变化）：
+   * tactile 用于按键、开关与图标交互，微弱过冲后回弹；
+   * smooth 用于滑块位移与面板停靠，高阻尼平稳；exit 用于气泡与弹出层收起。
+   */
+  --ease-spring-tactile: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-spring-smooth: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring-exit: cubic-bezier(0.4, 0, 1, 1);
+
+  /* 色相联动的环境遮蔽投影：默认取纯净中性墨影。 */
+  --shadow-surface-drop: 0 4px 12px -2px rgba(24, 24, 27, 0.05), 0 1px 2px 0 rgba(24, 24, 27, 0.04);
+
   font-family: var(--font-sans);
   color: var(--color-text-primary);
   background-color: var(--color-sidebar);
@@ -385,6 +432,102 @@ html[data-theme='obsidian'] {
   text-autospace: normal;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /*
+   * 排版纹理保持引擎默认：`optimizeLegibility` 会让流式长文每来一批字就重算连字，
+   * 50 token/s 下这是可观的持续开销。需要高精度微调的只有静态标题与徽标，
+   * 它们显式挂 `.heading-precision`。
+   */
+  text-rendering: auto;
+  font-synthesis: none;
+  overscroll-behavior: none;
+}
+
+/*
+ * 防穿帮基线：桌面应用不是网页。
+ *
+ * 1. 全局禁止文本误选与原生拖拽，光标退回系统默认箭头；
+ * 2. 只在明确的选区内开放选择与 I-Beam 光标（正文、代码、报错详情、表单）；
+ * 3. 交互组件保持桌面规范的默认光标，不用 pointer 制造网页感；
+ * 4. 消掉移动端与浏览器的原生反馈（点按高亮、overscroll 回弹）。
+ *
+ * 这些规则必须写在 `base` 层里：无层级的声明按级联层规则会压过 `utilities` 层，
+ * 那样 `.select-text`、`.cursor-col-resize` 与 `disabled:cursor-not-allowed`
+ * 之类逐处声明的工具类会集体失效，正文也再也选不中。
+ */
+@layer base {
+  /*
+   * 选区策略：**正文默认可选**，只有控件本身屏蔽选区。
+   *
+   * 反过来做（全局 none 再逐个开豁免）在长会话里是行不通的：豁免必须精确落到
+   * 每一个正文根上，漏一处就是「这段文字选不中」。因此这里只关掉控件，
+   * 正文、代码、说明文字全部沿用浏览器默认的可选行为。
+   */
+  *,
+  *::before,
+  *::after {
+    -webkit-user-drag: none;
+    -webkit-tap-highlight-color: transparent;
+    cursor: default;
+  }
+
+  button,
+  a,
+  [role='button'],
+  [role='tab'],
+  [role='menuitem'],
+  [role='option'],
+  [role='separator'],
+  label,
+  kbd,
+  [data-no-select] {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  input,
+  textarea,
+  [data-selectable='true'],
+  .selectable-text,
+  pre,
+  code {
+    -webkit-user-select: text;
+    user-select: text;
+    cursor: text;
+  }
+}
+
+/*
+ * 仅在静态标题与徽标上开启高精度排版微调。
+ */
+.heading-precision {
+  text-rendering: optimizeLegibility;
+}
+
+/*
+ * 文本划选高亮：覆盖浏览器默认的刺眼亮蓝，三套主题各自取与自身气场一致的低透色。
+ */
+:root ::selection {
+  background-color: rgba(24, 24, 27, 0.12);
+}
+
+html[data-theme='forest'] ::selection {
+  background-color: rgba(20, 69, 52, 0.15);
+}
+
+html[data-theme='obsidian'] ::selection {
+  background-color: rgba(47, 95, 208, 0.32);
+}
+
+/*
+ * 主题瞬切锁：切主题的那一帧屏蔽所有 CSS 插值过渡，单帧完成换色，不留颜色爬行残影。
+ * 由 theme.ts 的前后两帧 requestAnimationFrame 挂上再摘掉。
+ */
+.disable-transitions,
+.disable-transitions *,
+.disable-transitions *::before,
+.disable-transitions *::after {
+  transition: none !important;
+  animation: none !important;
 }
 
 /*
@@ -426,14 +569,15 @@ body,
  */
 :root {
   /*
-   * 滚动条几何与配色：宽度保留，滑块与轨道都取透明，因此肉眼看不到滚动条。
-   * 宽度不置 0 是有意的：占位恒定，滚动区不会因为内容变长而横向跳动；
-   * 滚轮、键盘、触控板与拖拽都照常可用，只是不绘制滑块与轨道。
-   * 与既有工作台产品的静默滚动条同款：把滑块令牌整体置为透明。
+   * 滚动条几何与配色：消隐式细滑块。
+   *
+   * 宽度恒定 8px，滑块本身再用 `background-clip: content-box` 加 2px 透明内缩边，
+   * 因此肉眼看到的是 4px 细条，与 macOS 原生悬浮滚动条同一量级。
+   * 宽度不置 0 是有意的：占位恒定，滚动区不会因为内容变长而横向跳动。
    */
-  --scrollbar-width: 3px;
-  --scrollbar-thumb: transparent;
-  --scrollbar-thumb-hover: transparent;
+  --scrollbar-width: 8px;
+  --scrollbar-thumb: var(--color-scrollbar-thumb);
+  --scrollbar-thumb-hover: var(--color-scrollbar-thumb-hover);
 }
 
 @supports not selector(::-webkit-scrollbar) {
@@ -458,12 +602,15 @@ body,
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
+  background-color: var(--scrollbar-thumb);
+  background-clip: content-box;
+  border: 2px solid transparent;
   border-radius: 9999px;
+  transition: background-color 140ms ease;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--scrollbar-thumb-hover);
+  background-color: var(--scrollbar-thumb-hover);
 }
 
 /* 两轴滚动条交汇的角：与透明轨道一致，不留系统的不透明角。 */
@@ -496,8 +643,13 @@ body,
   box-shadow: var(--elevation-prominent);
 }
 
+/*
+ * 聚焦时的额外光晕交给 `.dock-focus-halo`：这里不再叠 1px 硬边。
+ * 输入坞是横向很长的一块，小半径的描边环在它身上只会读出「四个角」，
+ * 柔光才是这个尺寸该用的聚焦表达。
+ */
 .shadow-dock:focus-within {
-  box-shadow: var(--elevation-dock-focus);
+  box-shadow: var(--elevation-prominent);
 }
 
 .shadow-btn-primary {
@@ -522,27 +674,261 @@ body,
 }
 
 /*
- * 声波柱的静息呼吸：只动 transform 与 opacity。
- * 正在发声的柱体由实测振幅直接写 transform，因此这里只负责「没有声音但还在场」的那一档。
+ * 工业精密感面板：三重光影叠加，替代网页式大范围模糊阴影。
+ *
+ * 1. 顶部 1px 镜面高光棱线（纸白与冷杉是纯白反光，黑曜石只取 6% 微反光）；
+ * 2. 内部 1px 超低透发丝轮廓：Windows 1080p 100% 缩放会把 0.5px box-shadow 截断，
+ *    因此轮廓统一取 1px 宽度，再靠低 Alpha 保持光学纤细感；
+ * 3. 底部色相联动的漫反射投影，与所在主题的墨色同源。
+ *
+ * 刻意不再叠第四层「外部 1px 暗边」：面板外面通常还有一层托盘或画布，
+ * 两道描边并排会把卡片读成一个框套一个框，层次反而变糊。
  */
-@keyframes voice-wave-idle {
+.surface-precision-panel {
+  background-color: var(--color-surface);
+  box-shadow:
+    inset 0 1px 0 0 var(--color-specular),
+    inset 0 0 0 1px var(--color-border-hairline),
+    var(--shadow-surface-drop);
+}
+
+/*
+ * 窗口托盘底座与系统材质状态机。
+ *
+ * 默认（材质未启用、材质不可用、窗口失焦、窗口最大化）一律 100% 实色：
+ * 实色是性能与可读性的保底，系统材质只是可选的点缀。
+ * 只有 `data-material` 明确为可用材质时，托盘才透出 Mica 或 Vibrancy 的微弱漫射光。
+ */
+.app-shell-tray,
+.app-shell-sidebar {
+  background-color: var(--color-sidebar);
+
+/*
+ * 窗口圆角：窗口本体是透明的，托盘底座自带 10px 圆角并裁掉溢出，
+ * 四角透出的就是桌面，读起来是一个圆角窗口。
+ * 这样不必调 DWM 的圆角属性（那需要 unsafe 调用），三平台同一份实现；
+ * 最大化时窗口铺满屏幕，圆角会切掉真实边角，因此按状态去掉。
+ */
+.app-shell-tray {
+  border-radius: 10px;
+}
+
+.app-shell-tray:has(.app-shell-sidebar[data-window-maximized='true']) {
+  border-radius: 0;
+}
+}
+
+:root[data-material] .app-shell-tray,
+:root[data-material] .app-shell-sidebar {
+  background-color: var(--color-sidebar-translucent);
+}
+
+/* 失焦：退回实色，读成自然的环境光衰减。 */
+:root[data-material] .app-shell-sidebar[data-window-focused='false'],
+/* 最大化：底层壁纸完全不可见，留着半透只多付 DWM 混合采样开销。 */
+:root[data-material] .app-shell-sidebar[data-window-maximized='true'],
+/*
+ * 托盘外框与侧栏必须同步回退：真正贴着系统材质的是外面那一圈 6px 托盘，
+ * 只把侧栏改实色会留下一道半透的边，窗口失焦时那道边最先露出来。
+ */
+:root[data-material] .app-shell-tray:has(.app-shell-sidebar[data-window-focused='false']),
+:root[data-material] .app-shell-tray:has(.app-shell-sidebar[data-window-maximized='true']) {
+  background-color: var(--color-sidebar);
+}
+
+/* macOS 的 Vibrancy 更浓一档：磨砂底透光强，遮罩必须比 Mica 更实才不发灰。 */
+:root[data-material='vibrancy'] .app-shell-tray,
+:root[data-material='vibrancy'] .app-shell-sidebar {
+  background-color: var(--color-sidebar-translucent-macos);
+}
+
+/* 材质不可用（Windows 10 与 Linux）：任何时候都是实色，绝不出现半透。 */
+:root[data-material-fallback='solid'] .app-shell-tray,
+:root[data-material-fallback='solid'] .app-shell-sidebar {
+  background-color: var(--color-sidebar);
+}
+
+/*
+ * 材质可用时窗口自身的底色必须透明，否则系统材质会被一层不透明底色整块盖住。
+ * 默认（不挂 data-material）保持不透明：任何降级路径都不会留下半透界面。
+ */
+html[data-material],
+html[data-material] body {
+  background-color: transparent;
+}
+
+/*
+ * 静态微噪点纹理：64x64 的 2% 白色微晶切片平铺，单次采样静态纹理，
+ * 算力开销趋近于零，用来抹掉大面积纯色与毛玻璃背景下的色彩断层。
+ * 严禁换成实时 feTurbulence 滤镜：那会让拖拽与滚动持续吃满像素着色器。
+ */
+.noise-underlay {
+  background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAPUlEQVR42u3PMQEAAAgEID/517WEnYEBpJJqTqVSoVAoFAqFQqFQKBQKhUKhUCgUCoVAoFAoFAqFQqFQKBTuXB8/AgF1GZqOAAAAAElFTkSuQmCC");
+  background-repeat: repeat;
+  opacity: 0.02;
+  pointer-events: none;
+}
+
+/*
+ * 控件触觉机械键程：非对称时间法则。
+ *
+ * 松开时柔和弹簧回位，按下时 50ms 极速沉到底，给出清脆的机械行程确认。
+ * `will-change: transform` 不在通用按钮上常驻：几百个按钮同时挂着它，
+ * 每块都会被提前提升成独立合成层，内存与合成开销反而更大。
+ */
+.btn-tactile {
+  transition:
+    transform 200ms var(--ease-spring-tactile),
+    background-color 100ms ease,
+    border-color 100ms ease,
+    box-shadow 120ms ease,
+    color 100ms ease;
+}
+
+.btn-tactile:hover:not(:disabled) {
+  transform: translateY(-0.5px);
+}
+
+.btn-tactile:active:not(:disabled) {
+  transition:
+    transform 50ms ease-out,
+    background-color 50ms ease,
+    box-shadow 50ms ease;
+  transform: translateY(1px) scale(0.985);
+}
+
+/*
+ * 弹出层双向生命周期：入场由 `.overlay-panel-in` 负责，退场由下面的 closed 态负责。
+ * 关闭时先进入 closed 态再等 110ms 卸载，否则弹出层会在 0ms 突然消失。
+ */
+.modal-spring-surface {
+  transition:
+    transform 110ms var(--ease-spring-exit),
+    opacity 110ms var(--ease-spring-exit);
+}
+
+.modal-spring-surface[data-state='open'] {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+}
+
+.modal-spring-surface[data-state='closed'] {
+  opacity: 0;
+  transform: scale(0.98) translateY(4px);
+  pointer-events: none;
+}
+
+/*
+ * 静态遮罩：只动透明度，模糊半径恒为 2px。
+ * 动画化 backdrop-filter 的模糊半径会让整屏每一帧都重新采样，是最典型的一处掉帧源。
+ */
+.modal-static-backdrop {
+  background-color: var(--color-scrim);
+  backdrop-filter: blur(2px);
+  transition: opacity 140ms ease;
+}
+
+.modal-static-backdrop[data-state='closed'] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+:root {
+  /*
+   * 历史段落高度缓存：段落闭合时由 TurnBlock 测量真实高度写进行内变量，
+   * 这里的默认值只服务于「还没量过」的那一瞬间（例如首屏直接打开一条长会话）。
+   */
+  --block-h: 120px;
+}
+
+/*
+ * 键盘焦点微环：1px 实线加 2px 扩散微光。
+ *
+ * 与 `outline` 那条通用聚焦环分工不同：outline 用于按钮与输入这类「有边界」的控件，
+ * 这一条用于列表行、命令面板候选这类整行可点的条目。整行上画 2px outline 太重，
+ * 会让密集列表读成一根根描边，所以只用一圈极淡的微光把焦点托起来。
+ */
+.focus-ring-soft:focus-visible {
+  outline: 1px solid var(--color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/*
+ * 输入坞聚焦内圈：一圈贴着内层核心边缘的焦点线，随输入光标同频呼吸。
+ *
+ * 只动 `opacity`：线本身是一次性的 inset box-shadow 绘制，呼吸改的是它的透明度，
+ * 因此全程留在合成器上，不会每帧重绘阴影。
+ * 减弱动效下由全局规则把动画压到单帧，停在 100% 那一档（静止的聚焦环）。
+ */
+@keyframes dock-focus-breathe {
   0%,
   100% {
-    transform: scaleY(0.34);
+    opacity: 0.4;
   }
 
   50% {
-    transform: scaleY(0.62);
+    opacity: 1;
   }
 }
 
-.voice-wave-idle {
-  animation: voice-wave-idle 2.4s ease-in-out infinite;
+.dock-focus-inner {
+  /* 从托槽内缘再缩进 6px：这样它读成「输入区自己的框」，而不是贴着窗口边缘的外圈。 */
+  border-radius: 15px;
+  box-shadow: inset 0 0 0 1.5px var(--color-focus);
+  opacity: 0;
+  transition: opacity 160ms var(--ease-spring-smooth);
+}
+
+.dock-shell:focus-within .dock-focus-inner {
+  opacity: 1;
+  animation: dock-focus-breathe 1.05s ease-in-out infinite;
+}
+
+/*
+ * 历史闭合段落原生 CSS 虚拟化。
+ *
+ * 段落闭合时测量真实高度写进 `--block-h` 行内变量，`contain-intrinsic-size` 因此拿到的是
+ * 真实高度而不是猜测值，滚动条滑块的物理比例在百轮会话里也不会跳变。
+ * 只对超过 15 轮的历史消息挂载，正在流式输出的尾部永远不参与。
+ */
+.message-block-memoized {
+  content-visibility: auto;
+  contain-intrinsic-size: auto var(--block-h, 120px);
+}
+
+.composer-input {
+  /* 高度随内容自撑，最多 6 行（22px 行高加 20px 上下内边距），超出由输入框自己滚动。 */
+  field-sizing: content;
+  max-height: 152px;
+  overflow-y: auto;
+}
+
+/*
+ * 视区切换入场：只动 opacity 与 transform。
+ *
+ * 位移只有 4px：切页需要的是「这一块确实换了」，不是一次过场动画。
+ * 减弱动效下由全局规则把时长压到 0.01ms，直接落到终态。
+ */
+@keyframes view-swap-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.view-swap-in {
+  animation: view-swap-in 150ms var(--ease-spring-smooth) both;
 }
 
 /*
  * 模态入场：只动 opacity 与 transform。
- * 出场不做动画（React 卸载即消失），因为把关闭也做成两段会让返回操作变慢。
+ * 退场由 `data-state="closed"` 的 110ms 缩放淡出负责（见 `.modal-spring-surface`）。
  */
 @keyframes overlay-panel-in {
   from {
@@ -574,21 +960,6 @@ body,
   animation: overlay-scrim-in 140ms var(--ease-standard) both;
 }
 
-@keyframes token-fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(2px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.token-chunk {
-  display: inline;
-  animation: token-fade-in 120ms ease-out forwards;
-}
 
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -598,7 +969,11 @@ body,
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
-    transform: none !important;
+    /*
+     * 这里刻意不写 `transform: none`：位移类组件（开关滑块、分段滑块）的位置本身就是
+     * 信息，清掉 transform 会把滑块钉在起点，读成「选中项在左边」。
+     * 减弱动效的要求是「不做过渡、直接落到终态」，不是「回到初始态」。
+     */
   }
 }
 

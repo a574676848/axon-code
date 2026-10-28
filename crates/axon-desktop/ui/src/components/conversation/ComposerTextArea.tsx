@@ -145,9 +145,13 @@ export const ComposerTextArea: React.FC<ComposerTextAreaProps> = ({
         /*
          * 高度只给下限：占位文案或正文折行时输入框自己长高，
          * 不会被一个固定高度裁成半行（窄列下曾出现「占位两行、只露一行半」）。
+         *
+         * 撑高由 CSS 的 `field-sizing: content` 负责（见 `.composer-input`），
+         * 上限 6 行后再由输入框自己滚动：全程不读 `scrollHeight`，
+         * 因此打字换行不付强制同步回流的代价。
          */
         style={{ minHeight: height }}
-        className={`relative w-full resize-none bg-transparent px-4 py-2.5 text-input placeholder:text-text-placeholder outline-none disabled:cursor-not-allowed caret-text-primary ${
+        className={`composer-input relative w-full resize-none bg-transparent px-4 py-2.5 text-input placeholder:text-text-placeholder outline-none disabled:cursor-not-allowed caret-text-primary ${
           composing ? 'text-text-primary' : 'text-transparent'
         }`}
       />

@@ -64,7 +64,12 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   };
 
   return (
-    <div className="space-y-3">
+    /*
+     * 整屏铺满：这一屏只有一件东西要写，编辑框因此吃满余下的高度。
+     * 根节点是 `flex-1 min-h-0` 的纵向 flex（父级本身就是 flex 容器），
+     * 面板与文本框各自再 `flex-1 min-h-0`；父级没有 flex 上下文时退回自然高度。
+     */
+    <div className="flex flex-1 min-h-0 flex-col gap-3">
       <SettingsHeaderAction>
         <Button
           variant="primary"
@@ -99,7 +104,7 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
           spellCheck={false}
           placeholder={placeholder}
           onChange={(event) => setContent(event.target.value)}
-          className="flex-1 min-h-[380px] resize-none"
+          className="flex-1 min-h-[320px] h-full resize-none scroll-visible"
         />
       </Panel>
 
