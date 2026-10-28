@@ -17,7 +17,12 @@ import { CommandPalette, type CommandPaletteItem } from './components/ui/Command
 import { AutomationPage } from './components/AutomationPage';
 import { MemoryPage } from './components/MemoryPage';
 import { WorkspaceOverview } from './components/WorkspaceOverview';
-import { OPEN_COMMAND_PALETTE_EVENT, installDesktopGuards } from './desktopGuards';
+import {
+  FOCUS_COMPOSER_EVENT,
+  FOCUS_COMPOSER_WINDOW_EVENT,
+  OPEN_COMMAND_PALETTE_EVENT,
+  installDesktopGuards,
+} from './desktopGuards';
 import { applyTheme, currentTheme, THEME_CHOICES } from './theme';
 import { notifyDesktopReady, useWindowDynamicSurfaces } from './windowSurfaces';
 
@@ -326,6 +331,29 @@ export const App: React.FC = () => {
   useWindowDynamicSurfaces(`${isSidebarOpen}:${currentTab}`);
   useEffect(() => {
     void notifyDesktopReady();
+  }, []);
+
+  /*
+   * 全局快捷键（Ctrl + Alt + Space）唤回窗口后的落点：回到对话页，并把焦点交给输入坞。
+   * 宿主只负责显示窗口与推送，具体落点由界面决定（它才知道当前视图与输入坞在哪）。
+   */
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void import('@tauri-apps/api/event')
+      .then(({ listen }) => listen(FOCUS_COMPOSER_EVENT, () => {
+        setCurrentTab('chat');
+        window.dispatchEvent(new CustomEvent(FOCUS_COMPOSER_WINDOW_EVENT));
+      }))
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, []);
 
   /** 命令面板的打开手势来自全局压制器（Ctrl + K 与 Ctrl + F 都翻译到同一条事件）。 */

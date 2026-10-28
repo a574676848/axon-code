@@ -153,6 +153,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        /*
+         * 全局快捷键：窗口收进托盘后，一条系统级组合键直接把主窗口唤回前台
+         * 并把光标送进输入坞。注册失败（组合键被别的应用占用）只记一行日志，
+         * 不影响应用启动。
+         */
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // 窗口状态插件只恢复尺寸、位置、最大化与全屏四项。
         // 可见性必须排除在外：插件默认会在恢复几何时顺手 show 一次，
         // 那一刻前端还没画完第一帧，用户看到的就是白底加一次位置跳动。
@@ -210,6 +216,7 @@ pub fn run() {
             window_effects::init_window_material(app.handle());
             // 兜底呈现：前端首帧就绪信号与 350ms 超时，两条路只会显示一次。
             window_state::install_show_gate(app.handle());
+            desktop_shell::install_global_shortcut(app.handle());
             Ok(())
         })
         .manage(state)

@@ -71,6 +71,11 @@ const MAIN_WINDOW: &str = "main";
 const NOTIFICATION_BODY_LIMIT: usize = 120;
 /// 轮次终态事件类型，与后端一致。
 const EVENT_TURN_COMPLETED: &str = "turn_completed";
+/// 全局快捷键：把窗口唤回前台并把光标送进输入坞。
+const GLOBAL_SHORTCUT: &str = "ctrl+alt+space";
+/// 聚焦输入坞事件的推送名，与前端 `App.tsx` 一致。
+pub const FOCUS_COMPOSER_EVENT: &str = "axon://focus-composer";
+
 /// 推给前端的「会话有新结果」事件名，与前端 `ipc.ts` 中的常量一致。
 pub const LANE_ACTIVITY_EVENT: &str = "axon://lane-activity";
 /// 运行过程事件类型：其中承载 durable 的轮次生命周期。
@@ -291,6 +296,33 @@ fn update_notice(result: &UpdateCheckDto) -> (String, String) {
         "已是最新版本".to_owned(),
         format!("当前版本 {}", result.current),
     )
+}
+
+/// 全局快捷键：把主窗口唤回前台并把光标送进输入坞。
+///
+/// 组合键取 Ctrl + Alt + Space：窗口收进托盘之后，这是唯一一条不必先找托盘图标的路。
+/// 注册失败（组合键已被别的应用占用）只留一行日志，不影响启动。
+pub fn install_global_shortcut(app: &AppHandle) {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    if let Err(error) =
+        app.global_shortcut()
+            .on_shortcut(GLOBAL_SHORTCUT, |app, _shortcut, event| {
+                if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                    focus_composer(app);
+                }
+            })
+    {
+        eprintln!("Axon 全局快捷键注册失败（{GLOBAL_SHORTCUT}）：{error}");
+    }
+}
+
+/// 唤回窗口并把焦点交给输入坞。
+fn focus_composer(app: &AppHandle) {
+    show_main_window(app);
+    if let Err(error) = app.emit(FOCUS_COMPOSER_EVENT, ()) {
+        eprintln!("Axon 聚焦输入坞事件下发失败：{error}");
+    }
 }
 
 /// 把主窗口显示到前台。

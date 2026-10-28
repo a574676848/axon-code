@@ -86,7 +86,11 @@ export const Text = React.forwardRef<HTMLSpanElement, TextProps>(function Text(
  * 可交互条目的唯一悬浮规则。
  * 列表行、菜单项、下拉选项、导航项都引用它，保证全站悬浮反馈完全一致。
  */
-export const INTERACTIVE_ROW = 'transition-colors duration-100 hover:bg-hover';
+/*
+ * 可交互条目的唯一悬浮规则：列表行取 `--color-row-hover`，
+ * 比通用的 `--color-hover` 更克制，专门给侧栏行、菜单项与命令面板。
+ */
+export const INTERACTIVE_ROW = 'transition-colors duration-100 hover:bg-row-hover';
 
 export interface PanelProps {
   /** 附加类名，仅用于布局。 */
@@ -97,11 +101,12 @@ export interface PanelProps {
 }
 
 /**
- * 描边容器：白底、四重精密光影（顶光棱线、发丝内轮廓、1px 外描边、色相联动投影）
- * 与模块圆角，是全站唯一的区块外观。
+ * 描边容器：白底、三重精密光影（顶光棱线、发丝内轮廓、色相联动投影）与模块圆角，
+ * 是全站唯一的区块外观。
  *
- * 内轮廓与外描边都取 1px 物理宽度而不是 0.5px：Windows 1080p 100% 缩放会把
- * 半像素的 box-shadow 截断成断续的线，1px 配低 Alpha 才是各缩放比下都不断线的做法。
+ * 不叠第四层「外部 1px 暗边」：面板外面通常还有一层托盘或画布，两道描边并排会把卡片
+ * 读成框套框。轮廓统一取 1px 物理宽度而不是 0.5px：Windows 1080p 100% 缩放会把半像素
+ * 的 box-shadow 截断成断续的线。
  */
 export const Panel: React.FC<PanelProps> = ({ className = '', clip = false, children }) => (
   <div

@@ -1,6 +1,7 @@
 import React from 'react';
 import { IconNewChat } from '../../icons';
 import { INTERACTIVE_ROW, Text } from './surfaces';
+import { Kbd } from './controls';
 /*
  * 外壳级共享组件：侧边栏列容器与新建会话按钮。
  * 这两个外观在展开态与图标轨两处都要用，因此收敛到一处定义。
@@ -72,8 +73,8 @@ export const NewSessionButton: React.FC<NewSessionButtonProps> = ({ onClick, com
           新会话
         </Text>
       </span>
-      <span className="absolute right-2.5 top-1/2 -translate-y-1/2 px-1.5 py-0.5 rounded-xs bg-surface-sunken hairline border-border font-mono text-[10px] leading-3 text-text-tertiary opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100">
-        Ctrl + Alt + N
+      <span className="absolute right-2.5 top-1/2 -translate-y-1/2 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100">
+        <Kbd keys={['Ctrl', 'Alt', 'N']} />
       </span>
     </button>
   );

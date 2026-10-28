@@ -28,6 +28,7 @@ import { ComposerQuestionCard } from './ComposerQuestionCard';
 import { useQuestionCard } from './useQuestionCard';
 import { Dialog } from '../ui/overlays';
 import { McpServerPanel } from './McpServerPanel';
+import { FOCUS_COMPOSER_WINDOW_EVENT } from '../../desktopGuards';
 import { useComposerCommandRun } from './useComposerCommandRun';
 import type { InputDockProps } from './inputDockTypes';
 
@@ -95,6 +96,17 @@ export const InputDock: React.FC<InputDockProps> = ({
    */
   const question = useQuestionCard(activeQuestion, reopenToken);
 
+  /*
+   * 全局快捷键（Ctrl + Alt + Space）唤回窗口后，App 会把聚焦请求转成一条窗口事件；
+   * 输入坞自己在这里接住它并聚焦：只有它知道自己的 textarea 是哪一个。
+   */
+  const areaRef = React.useRef<HTMLTextAreaElement>(null);
+  React.useEffect(() => {
+    const focusComposer = () => areaRef.current?.focus();
+    window.addEventListener(FOCUS_COMPOSER_WINDOW_EVENT, focusComposer);
+    return () => window.removeEventListener(FOCUS_COMPOSER_WINDOW_EVENT, focusComposer);
+  }, []);
+
   /** 光标位置：`@` 与 `/` 两种 token 的判定都依赖它，而 textarea 的值本身不携带光标。 */
   const [caret, setCaret] = React.useState(0);
   /** 程序化写入正文后要落到的光标位置；等 DOM 更新完再应用。 */
@@ -110,7 +122,6 @@ export const InputDock: React.FC<InputDockProps> = ({
   const [previewing, setPreviewing] = React.useState<string | null>(null);
   /** 会话动作：把附件在右侧栏打开。 */
   const actions = useConversationActions();
-  const areaRef = React.useRef<HTMLTextAreaElement>(null);
   /** 候选菜单的锚点：菜单贴在卡片上沿，与它同宽。 */
   const cardRef = React.useRef<HTMLDivElement>(null);
   const {

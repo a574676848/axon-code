@@ -179,6 +179,9 @@
  */
 html[data-theme='forest'] {
   color-scheme: light;
+  /* 噪点强度按主题成角色：冷杉的矿物晶体比纸白的纸纤维略强。 */
+  --noise-opacity: 0.018;
+  color-scheme: light;
   --color-canvas: #F2F5F4;
   --color-sidebar: #E7EEEA;
   --color-sidebar-translucent: rgba(231, 238, 234, 0.70);
@@ -275,6 +278,9 @@ html[data-theme='forest'] {
  */
 html[data-theme='obsidian'] {
   color-scheme: dark;
+  /* 黑曜石取阳极氧化铝的微晶强度。 */
+  --noise-opacity: 0.022;
+  color-scheme: dark;
   --color-canvas: #11141B;
   --color-sidebar: #0B0D11;
   --color-sidebar-translucent: rgba(11, 13, 17, 0.60);
@@ -360,7 +366,8 @@ html[data-theme='obsidian'] {
   --shadow-surface-drop: 0 8px 20px -4px rgba(0, 0, 0, 0.55), 0 2px 6px -1px rgba(0, 0, 0, 0.40);
   --elevation-card: 0 1px 0 0 rgba(255, 255, 255, 0.06) inset, 0 2px 6px 0 rgba(0, 0, 0, 0.28);
   --elevation-stroke: 0 0 0 0.5px rgba(255, 255, 255, 0.10);
-  --elevation-lift: 0 1px 0 0 rgba(255, 255, 255, 0.08) inset, 0 1px 3px 0 rgba(0, 0, 0, 0.40),
+  /* 黑曜石滑块底托取 6% 顶部微高光棱线。 */
+  --elevation-lift: 0 1px 0 0 rgba(255, 255, 255, 0.06) inset, 0 1px 3px 0 rgba(0, 0, 0, 0.40),
     0 4px 10px 0 rgba(0, 0, 0, 0.28);
   --elevation-panel: 0 1px 0 0 rgba(255, 255, 255, 0.07) inset, 0 4px 10px 0 rgba(0, 0, 0, 0.35),
     0 16px 36px 0 rgba(0, 0, 0, 0.45);
@@ -379,6 +386,9 @@ html[data-theme='obsidian'] {
 
 :root {
   color-scheme: light;
+  /* 静态噪点强度：纸白 1.5%，冷杉与黑曜石在各自主题块内覆写。 */
+  --noise-opacity: 0.015;
+
   /* 跨平台窗口控制区避让量：由 WindowChrome 按宿主平台动态注入。 */
   --window-controls-inset: 0px;
   --macos-traffic-inset: 0px;
@@ -399,8 +409,8 @@ html[data-theme='obsidian'] {
     inset -1px -1px 2px rgba(255, 255, 255, 0.94);
   --elevation-modal: 0 0 0 1px rgba(24, 24, 27, 0.09), 0 24px 64px 0 rgba(24, 24, 27, 0.16),
     0 8px 24px 0 rgba(24, 24, 27, 0.07);
-  --elevation-button-primary: 0 1px 0 0 rgba(255, 255, 255, 0.18) inset, 0 1px 2px 0 rgba(24, 24, 27, 0.14);
-  --elevation-button-outline: 0 1px 0 0 var(--color-specular) inset, 0 1px 2px 0 rgba(24, 24, 27, 0.035);
+  /* 主按钮：合同要求的 16% 顶部微高光（纸白）。 */
+  --elevation-button-primary: 0 1px 0 0 rgba(255, 255, 255, 0.16) inset, 0 1px 2px 0 rgba(24, 24, 27, 0.14);
 
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
 
@@ -731,7 +741,7 @@ html[data-material] body {
 .noise-underlay {
   background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAPUlEQVR42u3PMQEAAAgEID/517WEnYEBpJJqTqVSoVAoFAqFQqFQKBQKhUKhUCgUCoVAoFAoFAqFQqFQKBTuXB8/AgF1GZqOAAAAAElFTkSuQmCC");
   background-repeat: repeat;
-  opacity: 0.02;
+  opacity: var(--noise-opacity);
   pointer-events: none;
 }
 
@@ -756,6 +766,8 @@ html[data-material] body {
 }
 
 .btn-tactile:active:not(:disabled) {
+  /* 按下时给一条内阴影：机械行程的凹陷感来自这条，而不是位移本身。 */
+  box-shadow: var(--elevation-well-sm);
   transition:
     transform 50ms ease-out,
     background-color 50ms ease,

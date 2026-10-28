@@ -16,6 +16,12 @@
 /** 命令面板的打开事件名：拦截器只负责转义，谁来实现面板与它无关。 */
 export const OPEN_COMMAND_PALETTE_EVENT = 'axon:open-command-palette';
 
+/** 全局快捷键唤回窗口后的聚焦事件：宿主推送经 App 转发到这一条，由输入坞自行聚焦。 */
+export const FOCUS_COMPOSER_WINDOW_EVENT = 'axon:focus-composer';
+
+/** 宿主推送的聚焦事件名，与 Rust 侧 `FOCUS_COMPOSER_EVENT` 一致。 */
+export const FOCUS_COMPOSER_EVENT = 'axon://focus-composer';
+
 /** 是否处于开发构建：开发期保留 DevTools，生产期封掉。 */
 function isDevelopment(): boolean {
   return Boolean(import.meta.env?.DEV);
@@ -52,7 +58,8 @@ export function installDesktopGuards(): () => void {
     }
 
     // 打印与查看源码。
-    if (modifier && (key === 'p' || key === 'u')) {
+    // 带 Alt 的组合（例如 Ctrl + Alt + P）属于别的用途，不在这里吞。
+    if (modifier && !event.altKey && (key === 'p' || key === 'u')) {
       event.preventDefault();
       return;
     }

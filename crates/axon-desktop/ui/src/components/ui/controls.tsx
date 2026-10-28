@@ -137,7 +137,7 @@ export const SegmentedControl = <T extends string>({
         <span
           aria-hidden="true"
           data-segmented-glider=""
-          className="pointer-events-none absolute left-0.5 top-0.5 bottom-0.5 rounded-full bg-surface shadow-lift"
+          className="pointer-events-none absolute left-0.5 top-0.5 bottom-0.5 rounded-full bg-surface shadow-lift will-change-transform"
           style={{
             width: `calc((100% - 4px) / ${count})`,
             transform: `translate3d(${activeIndex * 100}%, 0, 0)`,
