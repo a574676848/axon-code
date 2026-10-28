@@ -38,7 +38,7 @@ const FILTER_OPTIONS: readonly { value: GoalFilter; label: string }[] = [
 
 const PAGE_TITLE = '目标看板';
 const PAGE_DESCRIPTION =
-  '按状态分栏呈现主 turn 建立的目标。点开卡片进入该目标的只读执行会话，后台推进由守护进程负责。';
+  '按状态分栏呈现主 turn 建立的目标。点开卡片进入该目标的只读执行会话，没有可订阅会话的目标先落到详情；后台推进由守护进程负责。';
 
 /** 看板里查找一张卡片；用于返回时把焦点交回来源。 */
 function findCardElement(goalId: string): HTMLElement | null {
