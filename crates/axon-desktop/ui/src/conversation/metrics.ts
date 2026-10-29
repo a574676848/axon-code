@@ -41,7 +41,8 @@ export type HeaderSegmentKind =
   | 'elapsed'
   | 'plan'
   | 'lsp'
-  | 'mcp';
+  | 'mcp'
+  | 'skill';
 
 /** 段色调。 */
 export type HeaderSegmentTone = 'default' | 'warning' | 'critical';
@@ -90,6 +91,8 @@ export interface HeaderMetricsInput {
   lspActiveCount: number;
   /** MCP 运行态；没有服务器且没有错误时为空，指标条不画这一段。 */
   mcp?: McpHeaderReading | null;
+  /** 已安装技能条数；未读到清单时为空，零条时指标条不画这一段。 */
+  skillCount?: number | null;
 }
 
 function shortMetric(label: string, value: string): string {
@@ -119,7 +122,7 @@ function contextText(usage: TokenUsage, contextWindow: number | null): string | 
   return formatDecimalCount(used);
 }
 
-/** 组装指标条的十段。 */
+/** 组装指标条的各段。 */
 export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
   const segments: HeaderSegment[] = [];
 
@@ -162,6 +165,18 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
       title: mcpSegmentTitle(input.mcp),
       icon: 'mcp',
       tone: input.mcp.failedCount > 0 || input.mcp.error !== null ? 'critical' : 'default',
+      breath: false,
+    });
+  }
+  // 3.2 技能：紧跟 MCP 报「装了多少条」。清单未读到或零条时不占位，
+  // 与 LSP、MCP 同一口径：辅助读数只报事实，不拿 0 占宽度。
+  if (input.skillCount !== null && input.skillCount !== undefined && input.skillCount > 0) {
+    segments.push({
+      kind: 'skill',
+      text: shortMetric('技能', String(input.skillCount)),
+      title: `共 ${input.skillCount} 项已安装技能`,
+      icon: 'skill',
+      tone: 'default',
       breath: false,
     });
   }
@@ -253,6 +268,7 @@ const CLUSTER_OF: Record<HeaderSegmentKind, HeaderClusterKind> = {
   plan: 'aux',
   lsp: 'aux',
   mcp: 'aux',
+  skill: 'aux',
   firstToken: 'performance',
   generationRate: 'performance',
   elapsed: 'performance',
@@ -263,7 +279,7 @@ const CLUSTER_OF: Record<HeaderSegmentKind, HeaderClusterKind> = {
  *
  * 四簇的关系是「谁在哪干活 · 还剩多少预算 · 跑得多快 · 辅助状态」，
  * 因此装不下时整簇收起，而不是从中间把某一簇切成两半。
- * LSP 与计划是辅助读数，固定排在最后，窗口不够时先让位。
+ * LSP、MCP、技能与计划是辅助读数，固定排在最后，窗口不够时先让位。
  */
 export function headerClusters(input: HeaderMetricsInput): HeaderCluster[] {
   const groups: HeaderCluster[] = [

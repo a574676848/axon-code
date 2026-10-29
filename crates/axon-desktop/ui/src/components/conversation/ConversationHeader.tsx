@@ -17,6 +17,7 @@ import {
   GaugeIcon,
   ListIcon,
   RingIcon,
+  SkillIcon,
   ToolIcon,
 } from '../../icons';
 import { ContextUsagePopover } from './ContextUsagePopover';
@@ -24,7 +25,7 @@ import { ContextUsagePopover } from './ContextUsagePopover';
 /*
  * 主区域顶部指标条。
  *
- * 四簇按语义排开：身份（在哪）、预算（上下文与缓存）、性能（首字、速率、耗时）、辅助（LSP、计划）。
+ * 四簇按语义排开：身份（在哪）、预算（上下文与缓存）、性能（首字、速率、耗时）、辅助（LSP、MCP、技能、计划）。
  * 此前是十段用「·」连成一条，装不下就从中间硬裁，读起来像一串调试输出。
  *
  * 装不下时整簇收起：断点由宽到窄依次让辅助、性能与预算退场，身份簇始终在。
@@ -89,6 +90,8 @@ function metricIcon(segment: HeaderSegment, contextPercent: number | null): Reac
       return <CodeIcon size={size} className="shrink-0" />;
     case 'mcp':
       return <ToolIcon size={size} className="shrink-0" />;
+    case 'skill':
+      return <SkillIcon size={size} className="shrink-0" />;
     default:
       return null;
   }

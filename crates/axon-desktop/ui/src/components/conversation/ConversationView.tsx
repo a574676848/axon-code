@@ -20,6 +20,7 @@ import { useRailLayout } from '../../sidebarRight/useRailLayout';
 import { ConversationActionsProvider, type ConversationActions } from './actions';
 import { structuredInputBlock } from '../../conversation/references';
 import { useConversationMcp } from '../../conversation/useConversationMcp';
+import { useSkillCatalog } from '../../conversation/skillCatalog';
 import { useTurnModelRoute } from '../../conversation/useTurnModelRoute';
 import {
   changedFilesOf,
@@ -371,6 +372,8 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
 
   // MCP 运行态：指标条读数与输入坞的 `/mcp` 同源（见 useConversationMcp）。
   const mcp = useConversationMcp(workspace?.path ?? null);
+  // 技能条数：与指令补全读同一份清单，清单未就绪时先不画这一段。
+  const skillCount = useSkillCatalog()?.length ?? null;
 
   const liveHeaderMetrics = {
     working: conversation.working,
@@ -386,12 +389,13 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     plan: conversation.state.plan,
     lspActiveCount: conversation.state.lspActiveCount,
     mcp: mcp.reading,
+    skillCount,
   };
 
   /*
    * 交接之前，顶部这一行也保持上一屏。
    *
-   * 指标条的十段里有六段（上下文、首字、速率、耗时、计划、LSP）以及右侧的后台任务与
+   * 指标条的各段里有六段（上下文、首字、速率、耗时、计划、LSP）以及右侧的后台任务与
    * 子代理入口，都是从投影里派生的；投影一空它们就整排消失再整排长回来，比正文的空档
    * 更显眼。输入坞的状态行同理：它一变高，正文视口也跟着抖一下。
    */
