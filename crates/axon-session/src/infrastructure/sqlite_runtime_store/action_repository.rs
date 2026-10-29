@@ -86,6 +86,51 @@ pub(super) fn claim_next_action(
     Ok(Some(action))
 }
 
+/// 续租当前 Host 正在执行的 Action 租约。
+///
+/// 只在 `claimed_by` 与 `claimed_generation` 都匹配、租约尚未过期、且没有取消请求时
+/// 生效；`lease_json` 里的 token 原样保留，因此续租不改变 claim 身份，只是把到期时间
+/// 推后一个租约时长。条件不成立返回 [`RuntimeStoreError::Fenced`]：调用方必须停止续租。
+pub(super) fn renew_action_lease(
+    store: &SqliteRuntimeStore,
+    action_id: &SessionActionId,
+    session_id: &DaemonSessionId,
+    host: &DaemonHostRecord,
+    now_ms: u64,
+    lease_duration_ms: u64,
+) -> Result<(), RuntimeStoreError> {
+    if lease_duration_ms == 0 {
+        return Err(RuntimeStoreError::Storage(
+            "lease 时长必须大于 0".to_owned(),
+        ));
+    }
+    let connection = store.connection()?;
+    let now = i64_value(now_ms)?;
+    let expires = i64_value(now_ms.saturating_add(lease_duration_ms))?;
+    let changed = connection
+        .execute(
+            "UPDATE jarvis_executions SET lease_expires_at_ms=?1,\
+             lease_json=json_object('owner',claimed_by,'token',json_extract(lease_json,'$.token'),'expires_at_ms',?1),\
+             updated_at_ms=?2 \
+             WHERE execution_id=?3 AND session_id=?4 AND status='running' \
+             AND cancellation_requested_at_ms IS NULL \
+             AND claimed_by=?5 AND claimed_generation=?6 AND lease_expires_at_ms>?2",
+            params![
+                expires,
+                now,
+                action_id.as_str(),
+                session_id.as_str(),
+                host.host_id.as_str(),
+                host.generation,
+            ],
+        )
+        .map_err(storage)?;
+    if changed == 1 {
+        return Ok(());
+    }
+    Err(RuntimeStoreError::Fenced)
+}
+
 /// 取消 Action。
 pub(super) fn cancel_action(
     store: &SqliteRuntimeStore,

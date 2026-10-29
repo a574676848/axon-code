@@ -7,6 +7,9 @@ use axon_domain::{
     SessionActionStatus, SessionRuntimeStatus,
 };
 use axon_session::{DaemonHostRecord, RuntimeStore, RuntimeStoreError, SessionActionRecord};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 use thiserror::Error;
 
 #[cfg(test)]
@@ -15,6 +18,119 @@ use crate::model::TurnExecutionOutcome;
 use axon_domain::GoalId;
 
 const MAX_EXECUTION_ATTEMPTS: u32 = 3;
+/// 续约周期与租约时长的比值：一半，因此一次失败仍有半程余量再试下一次。
+const LEASE_RENEWAL_INTERVAL_DIVISOR: u64 = 2;
+/// 停机时等待续约线程收口的时长上限。
+///
+/// 线程只在 `wait_timeout` 上睡眠，被唤醒后立即退出，正常路径收口在 1ms 量级；
+/// 上限只用于兜住「线程恰好卡在一次 SQLite 写锁等待里」的极端情况：超过即脱手，
+/// 线程持有自己的克隆，会在当前等待或写锁返回后自行退出，不拖住一轮的收尾。
+const LEASE_RENEWAL_JOIN_TIMEOUT: Duration = Duration::from_millis(500);
+/// 收口等待的轮询间隔。
+const LEASE_RENEWAL_JOIN_POLL: Duration = Duration::from_millis(1);
+
+/// 执行期的 Action 租约续约。
+///
+/// 设计要点（全部按「不拖慢一轮执行」取舍）：
+/// - **线程只在执行期存在**：`start` 在 turn 开始后调用，守卫在 turn 收口时 Drop，
+///   空闲期没有线程也没有写入；
+/// - **零轮询**：线程阻塞在 `Condvar::wait_timeout` 上，每个周期只醒一次，
+///   停机由 `notify_all` 立即放行，不靠短间隔空转；
+/// - **每个周期一次按主键的 UPDATE**：命中 `jarvis_executions` 主键，代价与目标数量无关；
+/// - **失败只记一次**：租约被抢（`Fenced`）时直接停表，其余错误记一行后继续等下一周期。
+struct LeaseRenewal {
+    stop: Arc<(Mutex<bool>, Condvar)>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl LeaseRenewal {
+    /// 在后台按租约的一半周期续租；租约时长为 0 时不启动。
+    fn start<S, C>(
+        store: S,
+        action_id: SessionActionId,
+        session_id: DaemonSessionId,
+        host: DaemonHostRecord,
+        clock: C,
+        lease_duration_ms: u64,
+    ) -> Option<Self>
+    where
+        S: RuntimeStore + Send + 'static,
+        C: RuntimeClock + Send + 'static,
+    {
+        if lease_duration_ms == 0 {
+            return None;
+        }
+        let interval =
+            Duration::from_millis((lease_duration_ms / LEASE_RENEWAL_INTERVAL_DIVISOR).max(1));
+        let stop = Arc::new((Mutex::new(false), Condvar::new()));
+        let thread_stop = Arc::clone(&stop);
+        let handle = thread::Builder::new()
+            .name("action-lease-renewal".to_owned())
+            .spawn(move || {
+                let mut reported = false;
+                loop {
+                    let (lock, cvar) = &*thread_stop;
+                    let guard = lock
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let (guard, _) = cvar
+                        .wait_timeout(guard, interval)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let stopping = *guard;
+                    drop(guard);
+                    if stopping {
+                        break;
+                    }
+                    match store.renew_action_lease(
+                        &action_id,
+                        &session_id,
+                        &host,
+                        clock.now_ms(),
+                        lease_duration_ms,
+                    ) {
+                        Ok(()) => {}
+                        // 租约已不属于本次 claim：再续也不会生效，停表即可。
+                        Err(RuntimeStoreError::Fenced) => break,
+                        Err(error) => {
+                            if !reported {
+                                reported = true;
+                                eprintln!(
+                                    "Action 租约续约失败，按原周期重试: action={} error={error}",
+                                    action_id.as_str()
+                                );
+                            }
+                        }
+                    }
+                }
+            })
+            .ok()?;
+        Some(Self {
+            stop,
+            handle: Some(handle),
+        })
+    }
+}
+
+impl Drop for LeaseRenewal {
+    fn drop(&mut self) {
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
+        let (lock, cvar) = &*self.stop;
+        *lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+        cvar.notify_all();
+        // 收口超时不阻塞调用方：线程只在等待上睡眠，唤醒后不会再持有连接。
+        let deadline = std::time::Instant::now() + LEASE_RENEWAL_JOIN_TIMEOUT;
+        while !handle.is_finished() && std::time::Instant::now() < deadline {
+            thread::sleep(LEASE_RENEWAL_JOIN_POLL);
+        }
+        if handle.is_finished() {
+            let _ = handle.join();
+        }
+    }
+}
 
 /// Session Worker 失败。
 #[derive(Debug, Error)]
@@ -46,10 +162,10 @@ pub struct ExecutionWorker<S, E, P, C> {
 
 impl<S, E, P, C> ExecutionWorker<S, E, P, C>
 where
-    S: RuntimeStore,
+    S: RuntimeStore + Clone + Send + 'static,
     E: TurnExecutor,
     P: EventPublisher,
-    C: RuntimeClock,
+    C: RuntimeClock + Clone + Send + 'static,
 {
     /// 创建单 Session Worker。
     pub fn new(
@@ -86,6 +202,17 @@ where
             return Ok(Some(action.action_id));
         }
         self.mark_running(&action, now_ms)?;
+        // 一次 provider 轮次可能长于租约：不续租时 supervisor 会把仍在跑的 Execution
+        // 判成 uncertain 并中断，产出一段没有逐字稿的空会话。续约只在执行期存在，
+        // 轮次一收口立即停表，因此空闲期零线程、零写入。
+        let _renewal = LeaseRenewal::start(
+            self.store.clone(),
+            action.action_id.clone(),
+            self.session_id.clone(),
+            self.host.clone(),
+            self.clock.clone(),
+            self.action_lease_duration_ms,
+        );
         let outcome = match self.executor.execute(ActionExecutionRequest {
             action: action.clone(),
             context: SessionExecutionContext {
@@ -337,3 +464,7 @@ mod goal_id_tests;
 #[cfg(test)]
 #[path = "execution_worker_failure_tests.rs"]
 mod failure_tests;
+
+#[cfg(test)]
+#[path = "execution_worker_lease_tests.rs"]
+mod lease_tests;

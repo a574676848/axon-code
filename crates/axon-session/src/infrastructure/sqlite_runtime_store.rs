@@ -358,6 +358,24 @@ impl RuntimeStore for SqliteRuntimeStore {
         action_repository::claim_next_action(self, session_id, host, now_ms, lease_duration_ms)
     }
 
+    fn renew_action_lease(
+        &self,
+        action_id: &SessionActionId,
+        session_id: &DaemonSessionId,
+        host: &DaemonHostRecord,
+        now_ms: u64,
+        lease_duration_ms: u64,
+    ) -> Result<(), RuntimeStoreError> {
+        action_repository::renew_action_lease(
+            self,
+            action_id,
+            session_id,
+            host,
+            now_ms,
+            lease_duration_ms,
+        )
+    }
+
     fn list_pending_actions(
         &self,
         session_id: &DaemonSessionId,

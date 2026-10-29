@@ -186,6 +186,24 @@ pub trait RuntimeStore:
         now_ms: u64,
         lease_duration_ms: u64,
     ) -> Result<Option<SessionActionRecord>, RuntimeStoreError>;
+    /// 续租当前 Host 正在执行的 Action 租约。
+    ///
+    /// 一次 provider 轮次可能长于租约时长：没有续租时，supervisor 的
+    /// `quarantine_interrupted_executions` 会把仍在跑的 Execution 判成 `uncertain`
+    /// 并中断它，产出一段没有逐字稿的空会话。执行期由工作线程按租约的一半周期
+    /// 调用本方法，把 `lease_expires_at_ms` 持续推后。
+    ///
+    /// 只延长 `claimed_by` 与 `claimed_generation` 都匹配的当前 claim，且要求租约
+    /// 尚未过期、没有被请求取消；任何一项不成立即返回 [`RuntimeStoreError::Fenced`]，
+    /// 调用方必须停止续租，不得当成可重试错误。
+    fn renew_action_lease(
+        &self,
+        action_id: &SessionActionId,
+        session_id: &DaemonSessionId,
+        host: &DaemonHostRecord,
+        now_ms: u64,
+        lease_duration_ms: u64,
+    ) -> Result<(), RuntimeStoreError>;
     /// 按索引读取 Session 的未完成 Action。
     fn list_pending_actions(
         &self,
