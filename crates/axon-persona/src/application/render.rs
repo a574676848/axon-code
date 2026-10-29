@@ -16,40 +16,34 @@ use crate::{
 /// 由调用方记录告警，也不静默截半最高优先级条款。
 #[must_use]
 pub fn render_stable(core: &PersonaCore, styles: &[StyleEntry]) -> String {
-    let mut include_style = !styles.is_empty();
-    let mut include_notes = core
-        .notes
-        .as_deref()
-        .is_some_and(|notes| !notes.trim().is_empty());
-    let mut include_rules = !core.rules.is_empty();
-    let mut include_support = true;
+    let mut flags = StableSectionFlags {
+        include_style: !styles.is_empty(),
+        include_notes: core
+            .notes
+            .as_deref()
+            .is_some_and(|notes| !notes.trim().is_empty()),
+        include_rules: !core.rules.is_empty(),
+        include_support: true,
+    };
     let mut backstory = core.backstory.trim().to_owned();
 
     loop {
-        let text = assemble_stable(
-            core,
-            styles,
-            &backstory,
-            include_style,
-            include_notes,
-            include_rules,
-            include_support,
-        );
+        let text = assemble_stable(core, styles, &backstory, flags);
         if text.len() <= STABLE_RENDER_MAX_BYTES {
             return text;
         }
-        if include_style {
-            include_style = false;
-        } else if include_notes {
-            include_notes = false;
-        } else if include_rules {
-            include_rules = false;
+        if flags.include_style {
+            flags.include_style = false;
+        } else if flags.include_notes {
+            flags.include_notes = false;
+        } else if flags.include_rules {
+            flags.include_rules = false;
         } else if !backstory.is_empty() {
             let overflow = text.len() - STABLE_RENDER_MAX_BYTES;
             let keep = backstory.len().saturating_sub(overflow + 8);
             backstory = truncate_to_bytes(&backstory, keep);
-        } else if include_support {
-            include_support = false;
+        } else if flags.include_support {
+            flags.include_support = false;
         } else {
             // 只剩 IDENTITY 与 INVARIANTS：按合同不得截断，原样返回并由调用方告警。
             return text;
@@ -63,15 +57,19 @@ pub fn exceeds_hard_limit(text: &str) -> bool {
     text.len() > STABLE_RENDER_MAX_BYTES
 }
 
-#[allow(clippy::too_many_arguments)]
-fn assemble_stable(
-    core: &PersonaCore,
-    styles: &[StyleEntry],
-    backstory: &str,
+#[derive(Debug, Clone, Copy)]
+struct StableSectionFlags {
     include_style: bool,
     include_notes: bool,
     include_rules: bool,
     include_support: bool,
+}
+
+fn assemble_stable(
+    core: &PersonaCore,
+    styles: &[StyleEntry],
+    backstory: &str,
+    flags: StableSectionFlags,
 ) -> String {
     let mut sections: Vec<String> = Vec::new();
     sections.push(format!(
@@ -80,14 +78,14 @@ fn assemble_stable(
     ));
     sections.push(format!("[BACKSTORY]\n{backstory}"));
     sections.push(format!("[INVARIANTS]\n{}", bullet_list(&core.invariants)));
-    if include_support {
+    if flags.include_support {
         sections.push(format!("[TRAITS] {}", core.traits.join("、")));
         sections.push(format!("[VOICE_BASELINE] {}", core.voice.render()));
     }
-    if include_rules {
+    if flags.include_rules {
         sections.push(format!("[SCENE_RULES]\n{}", rules_text(core)));
     }
-    if include_style {
+    if flags.include_style {
         let entries = styles
             .iter()
             .map(|entry| format!("- {}", entry.text.trim()))
@@ -103,7 +101,7 @@ fn assemble_stable(
         .as_deref()
         .map(str::trim)
         .filter(|notes| !notes.is_empty())
-        .filter(|_| include_notes)
+        .filter(|_| flags.include_notes)
     {
         sections.push(format!("[NOTES]\n{notes}"));
     }
