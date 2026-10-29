@@ -1,10 +1,10 @@
 import React from 'react';
 
-import { ChecklistIcon, ChevronRightIcon } from '../../icons';
+import { ChecklistIcon, ChevronRightIcon, FolderIcon } from '../../icons';
 import type { GoalCardView } from '../../goalTypes';
 import {
   cardActionLabel,
-  goalLocatorText,
+  goalProgressCue,
   goalStatusMeta,
   hasSessionBinding,
 } from '../../goals/model';
@@ -15,9 +15,9 @@ import { Chip, StateDot } from '../ui/surfaces';
 /*
  * 目标卡：看板里一张目标卡片。
  *
- * 复用条目卡外壳（`EntityCard`），只填既有的四个信息位，不新写第二套卡片视觉：
- * 行首状态点、标题与状态标签、目标预览、下一步或等待原因、
- * 工作区与最近活动时间、右下唯一入口。
+ * 复用条目卡外壳（`EntityCard`），锁定统一高度（`uniformHeight`）：
+ * 行首状态点、单行标题与语义状态标签、固定两行目标预览槽、单行行内进展提示、
+ * 36px 底栏（工作区与活动时刻 + 右下唯一入口），全看板卡片高度与比例完全一致。
  */
 
 export interface GoalCardProps {
@@ -30,22 +30,43 @@ export interface GoalCardProps {
   now: number;
 }
 
-const GOAL_ICON_SIZE = 13;
+const GOAL_ICON_SIZE = 12;
 
 export const GoalCard: React.FC<GoalCardProps> = ({ goal, onOpen, onInspect, now }) => {
   const meta = goalStatusMeta(goal.status);
   const activity = formatDateTime(goal.lastActivityAtMs, now);
-  const workspace = goal.workspaceName ?? '未绑定工作区';
+  const workspace = goal.workspaceName ?? '全局';
+  const cue = goalProgressCue(goal) ?? {
+    kind: 'next' as const,
+    label: '进度',
+    text: goal.stepCount > 0 ? `共 ${goal.stepCount} 个执行步骤` : meta.label,
+    tone: 'default' as const,
+  };
+  const metaTooltip = `${workspace} · ${activity}`;
+
   return (
-    <div data-goal-card="" data-goal-id={goal.goalId}>
+    <div data-goal-card="" data-goal-id={goal.goalId} className="goal-card-in">
       <EntityCard
-        leading={<StateDot state={meta.dot} />}
+        uniformHeight
+        leading={<StateDot state={meta.dot} tone={meta.dot === 'ongoing' ? 'accent' : 'default'} />}
         title={goal.title}
-        badges={<Chip>{meta.label}</Chip>}
+        badges={<Chip tone={meta.chipTone}>{meta.label}</Chip>}
         description={goal.objectivePreview}
-        locator={goalLocatorText(goal)}
-        locatorMono={false}
-        meta={`${workspace} · 最近活动 ${activity}`}
+        statusCue={cue}
+        meta={metaTooltip}
+        metaNode={
+          <span
+            title={metaTooltip}
+            className="flex items-center gap-1.5 min-w-0 text-micro text-text-tertiary tabular-nums"
+          >
+            <FolderIcon size={12} className="shrink-0 text-text-caption" />
+            <span className="truncate">{workspace}</span>
+            <span aria-hidden="true" className="shrink-0 text-text-caption">
+              ·
+            </span>
+            <span className="shrink-0 font-mono text-text-caption">{activity}</span>
+          </span>
+        }
         onOpen={onOpen}
         onInspect={onInspect}
         inspectLabel={cardActionLabel(goal)}

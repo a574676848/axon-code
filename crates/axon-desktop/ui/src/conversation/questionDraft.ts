@@ -28,9 +28,10 @@ export function draftOf(drafts: AnswerDraftMap, questionId: string): AnswerDraft
 /**
  * 选中或取消一个选项。
  *
- * 多选是勾选切换；单选是替换，并且清掉自定义回答：两者是同一道题的两种答法，
- * 同时留着会让提交结果取决于后端如何取舍。反向不成立，先选一项再补自定义说明
- * 是常见搭配，那时选项要留着。
+ * 两种题型都是切换：多选在勾选与取消之间来回，单选点已选中的那一项即取消选择，
+ * 点其他项即替换。选中一项会清掉自定义回答（同一道题的两种答法同时留着，提交结果
+ * 就取决于后端如何取舍）；取消选择不动自定义回答，它是用户另外输入的正文。
+ * 反向不成立：先选一项再补自定义说明是常见搭配，那时选项要留着。
  */
 export function toggleOption(draft: AnswerDraft, label: string, multiSelect: boolean): AnswerDraft {
   if (multiSelect) {
@@ -38,6 +39,9 @@ export function toggleOption(draft: AnswerDraft, label: string, multiSelect: boo
       ? draft.selected.filter((item) => item !== label)
       : [...draft.selected, label];
     return { ...draft, selected };
+  }
+  if (draft.selected.includes(label)) {
+    return { ...draft, selected: [] };
   }
   return { selected: [label], custom: '' };
 }

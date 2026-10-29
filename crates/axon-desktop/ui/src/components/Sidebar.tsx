@@ -554,11 +554,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             laneMarks={laneMarks}
             expanded={expanded}
             loading={health === null || (health.connected && !loadedOnce)}
-            emptyDescription={
-              health?.connected === false
-                ? '尚未连接到 Axon 后台服务，连接恢复后这里会自动列出工作区。'
-                : undefined
-            }
             onToggleWorkspace={(id) =>
               setExpanded((current) => ({ ...current, [id]: current[id] !== true }))
             }

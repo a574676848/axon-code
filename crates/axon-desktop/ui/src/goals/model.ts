@@ -10,22 +10,30 @@ import type { GoalCardView, GoalStatus } from '../goalTypes';
 /** 栏目标识：看板从左到右的四栏。 */
 export type GoalColumnId = 'proposed' | 'running' | 'paused' | 'settled';
 
-/** 一个目标状态在界面上的三件事：文案、状态点、归入哪一栏。 */
+/** 状态点语义，与 `StateDot` 一致。 */
+export type GoalDotState = 'done' | 'warning' | 'error' | 'idle' | 'ongoing';
+
+/** 状态标签色调，与 `Chip` 一致。 */
+export type GoalChipTone = 'neutral' | 'ok' | 'warning' | 'danger' | 'accent';
+
+/** 一个目标状态在界面上的四件事：文案、状态点、胶囊色调、归入哪一栏。 */
 export interface GoalStatusMeta {
   label: string;
   /** 与 `StateDot` 的取值一一对应。 */
-  dot: 'done' | 'warning' | 'error' | 'idle' | 'ongoing';
+  dot: GoalDotState;
+  /** 与 `Chip` 的语义色调一一对应。 */
+  chipTone: GoalChipTone;
   column: GoalColumnId;
 }
 
 const STATUS_META: Record<GoalStatus, GoalStatusMeta> = {
-  proposed: { label: '待开始', dot: 'idle', column: 'proposed' },
-  active: { label: '进行中', dot: 'ongoing', column: 'running' },
-  waiting: { label: '等待中', dot: 'warning', column: 'running' },
-  paused: { label: '已暂停', dot: 'warning', column: 'paused' },
-  completed: { label: '已完成', dot: 'done', column: 'settled' },
-  failed: { label: '已失败', dot: 'error', column: 'settled' },
-  cancelled: { label: '已取消', dot: 'idle', column: 'settled' },
+  proposed: { label: '待开始', dot: 'idle', chipTone: 'neutral', column: 'proposed' },
+  active: { label: '进行中', dot: 'ongoing', chipTone: 'accent', column: 'running' },
+  waiting: { label: '等待中', dot: 'warning', chipTone: 'warning', column: 'running' },
+  paused: { label: '已暂停', dot: 'warning', chipTone: 'warning', column: 'paused' },
+  completed: { label: '已完成', dot: 'done', chipTone: 'ok', column: 'settled' },
+  failed: { label: '已失败', dot: 'error', chipTone: 'danger', column: 'settled' },
+  cancelled: { label: '已取消', dot: 'idle', chipTone: 'neutral', column: 'settled' },
 };
 
 /** 状态映射；未知取值按「待开始」处理，界面永远不显示后端枚举。 */
@@ -87,15 +95,69 @@ export const hasSessionBinding = (goal: GoalCardView): boolean =>
 export const cardActionLabel = (goal: GoalCardView): string =>
   hasSessionBinding(goal) ? '进入会话' : '查看详情';
 
+/** 目标摘要去重：当预览与标题完全一致时不再重复展示第二遍。 */
+export function distinctObjectivePreview(
+  goal: Pick<GoalCardView, 'title' | 'objectivePreview'>,
+): string {
+  const preview = goal.objectivePreview.trim();
+  if (preview.length === 0 || preview === goal.title.trim()) return '';
+  return preview;
+}
+
+/** 卡片上的结构化进展提示（区分等待原因与下一步动作）。 */
+export interface GoalProgressCue {
+  kind: 'waiting' | 'next';
+  label: string;
+  text: string;
+  tone: 'default' | 'warning';
+}
+
+/** 提取卡片进展提示：等待原因优先于下一步，都没有时返回 null。 */
+export function goalProgressCue(
+  goal: Pick<GoalCardView, 'waitingReason' | 'nextStep'>,
+): GoalProgressCue | null {
+  const waiting = goal.waitingReason?.trim() ?? '';
+  if (waiting.length > 0) {
+    return { kind: 'waiting', label: '等待', text: waiting, tone: 'warning' };
+  }
+  const next = goal.nextStep?.trim() ?? '';
+  if (next.length > 0) {
+    return { kind: 'next', label: '下一步', text: next, tone: 'default' };
+  }
+  return null;
+}
+
 /** 卡片定位行文案：优先等待原因，其次下一步；都没有就是空串。 */
 export function goalLocatorText(goal: GoalCardView): string {
-  if (goal.waitingReason !== null && goal.waitingReason.length > 0) {
-    return `等待 · ${goal.waitingReason}`;
+  const cue = goalProgressCue(goal);
+  return cue === null ? '' : `${cue.label} · ${cue.text}`;
+}
+
+/** 目标概览条的右侧统计文案。 */
+export function goalContractSummary(stepCount: number, acceptanceCount: number): string {
+  const parts: string[] = [];
+  if (stepCount > 0) parts.push(`${stepCount} 步`);
+  if (acceptanceCount > 0) parts.push(`${acceptanceCount} 项验收`);
+  return parts.length > 0 ? parts.join(' · ') : '目标说明';
+}
+
+/** 栏目头部的状态点：空栏保持静息，非空栏反映栏内真实状态。 */
+export function columnHeaderDot(
+  columnId: GoalColumnId,
+  members: readonly Pick<GoalCardView, 'status'>[],
+): GoalDotState {
+  if (members.length === 0) return 'idle';
+  if (columnId === 'running') {
+    return members.some((goal) => goal.status === 'active') ? 'ongoing' : 'warning';
   }
-  if (goal.nextStep !== null && goal.nextStep.length > 0) {
-    return `下一步 · ${goal.nextStep}`;
+  if (columnId === 'paused') return 'warning';
+  if (columnId === 'settled') {
+    const hasCompleted = members.some((goal) => goal.status === 'completed');
+    const hasFailed = members.some((goal) => goal.status === 'failed');
+    if (hasFailed && !hasCompleted) return 'error';
+    return 'done';
   }
-  return '';
+  return 'idle';
 }
 
 /** 搜索命中：标题、目标预览、工作区名、下一步与等待原因都在检索范围内。 */
@@ -156,6 +218,8 @@ export function countGoals(
 export interface GoalColumnSlice {
   id: GoalColumnId;
   label: string;
+  /** 栏目头的状态点。 */
+  dot: GoalDotState;
   /** 该栏在过滤后的目标数。 */
   total: number;
   /** 本次实际渲染的卡片。 */
@@ -185,6 +249,7 @@ export function boardColumns(
     return {
       id: column.id,
       label: column.label,
+      dot: columnHeaderDot(column.id, members),
       total: members.length,
       visible: members.slice(0, cap),
       hidden: members.length - cap,
@@ -192,7 +257,7 @@ export function boardColumns(
   });
 }
 
-/** 是否还有未收口的目标；为真才继续 4 秒轮询。 */
+/** 是否还有未完成的目标；为真才继续 4 秒轮询。 */
 export const hasUnsettled = (goals: readonly GoalCardView[]): boolean =>
   goals.some((goal) => !isSettled(goal.status));
 
@@ -207,7 +272,7 @@ export function countSummary(
   truncated: boolean,
   limit: number,
 ): string {
-  const base = `共 ${counts.total} 个目标 · 未收口 ${counts.open} · 已收口 ${counts.settled}`;
+  const base = `共 ${counts.total} 个目标 · 未完成 ${counts.open} · 已结束 ${counts.settled}`;
   if (!truncated) return base;
   return `${base} · 已达上限，仅显示 ${limit} 个`;
 }

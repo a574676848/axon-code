@@ -7,10 +7,14 @@ import {
     INITIAL_CARD_LIMIT,
     boardColumns,
     cardActionLabel,
+    columnHeaderDot,
     countGoals,
     countSummary,
+    distinctObjectivePreview,
     executionStatusLabel,
+    goalContractSummary,
     goalLocatorText,
+    goalProgressCue,
     goalStatusMeta,
     hasSessionBinding,
     hasUnsettled,
@@ -55,18 +59,19 @@ function card(overrides) {
 
 test('状态映射覆盖七态，且文案只有中文', () => {
     const expected = [
-        ['proposed', '待开始', 'idle', 'proposed'],
-        ['active', '进行中', 'ongoing', 'running'],
-        ['waiting', '等待中', 'warning', 'running'],
-        ['paused', '已暂停', 'warning', 'paused'],
-        ['completed', '已完成', 'done', 'settled'],
-        ['failed', '已失败', 'error', 'settled'],
-        ['cancelled', '已取消', 'idle', 'settled'],
+        ['proposed', '待开始', 'idle', 'neutral', 'proposed'],
+        ['active', '进行中', 'ongoing', 'accent', 'running'],
+        ['waiting', '等待中', 'warning', 'warning', 'running'],
+        ['paused', '已暂停', 'warning', 'warning', 'paused'],
+        ['completed', '已完成', 'done', 'ok', 'settled'],
+        ['failed', '已失败', 'error', 'danger', 'settled'],
+        ['cancelled', '已取消', 'idle', 'neutral', 'settled'],
     ];
-    for (const [status, label, dot, column] of expected) {
+    for (const [status, label, dot, chipTone, column] of expected) {
         const meta = goalStatusMeta(status);
         assert.equal(meta.label, label, status);
         assert.equal(meta.dot, dot, status);
+        assert.equal(meta.chipTone, chipTone, status);
         assert.equal(meta.column, column, status);
         // 文案里不得出现后端枚举。
         assert.ok(!/[a-z]/i.test(meta.label), `${status} 的文案混进了枚举`);
@@ -189,22 +194,69 @@ test('计数口径取回执的 returned，分段计数来自同一批目标', ()
     assert.equal(countGoals(goals.slice(0, 2), 3).total, 3);
 });
 
-test('截断时计数旁写明只显示 N 个，且不写方向', () => {
+test('截断时计数旁写明只显示 N 个，且不写方向与非产品态术语', () => {
     const counts = { total: 3, open: 2, settled: 1 };
     assert.equal(
         countSummary(counts, false, 256),
-        '共 3 个目标 · 未收口 2 · 已收口 1',
+        '共 3 个目标 · 未完成 2 · 已结束 1',
     );
     const truncated = countSummary(counts, true, 256);
-    assert.equal(truncated, '共 3 个目标 · 未收口 2 · 已收口 1 · 已达上限，仅显示 256 个');
-    // 服务端按更新时间升序出页，读满上限拿到的是最早一批，「最近」会是错话。
+    assert.equal(truncated, '共 3 个目标 · 未完成 2 · 已结束 1 · 已达上限，仅显示 256 个');
+    // 服务端按更新时间升序出页，读满上限拿到的是最早一批，「最近」会是错话；也不出现「收口」等内部黑话。
     assert.ok(!truncated.includes('最近'));
+    assert.ok(!truncated.includes('收口'));
 });
 
 test('等待原因优先于下一步，都没有时定位行为空', () => {
     assert.equal(goalLocatorText(card({ waitingReason: '需要确认口径' })), '等待 · 需要确认口径');
     assert.equal(goalLocatorText(card()), '下一步 · 定位失败用例');
     assert.equal(goalLocatorText(card({ nextStep: null })), '');
+
+    assert.deepEqual(goalProgressCue(card({ waitingReason: '需要确认口径' })), {
+        kind: 'waiting',
+        label: '等待',
+        text: '需要确认口径',
+        tone: 'warning',
+    });
+    assert.deepEqual(goalProgressCue(card()), {
+        kind: 'next',
+        label: '下一步',
+        text: '定位失败用例',
+        tone: 'default',
+    });
+    assert.equal(goalProgressCue(card({ nextStep: null })), null);
+});
+
+test('目标摘要与标题完全相同时去重，不同时保留预览', () => {
+    assert.equal(
+        distinctObjectivePreview(card({ title: '目标看板验收', objectivePreview: '  目标看板验收  ' })),
+        '',
+    );
+    assert.equal(
+        distinctObjectivePreview(card({ title: '目标看板验收', objectivePreview: '把目标看板的数据态验收跑通' })),
+        '把目标看板的数据态验收跑通',
+    );
+});
+
+test('栏目头状态点按栏内真实成员状态投影，空栏保持静息', () => {
+    assert.equal(columnHeaderDot('running', []), 'idle');
+    assert.equal(columnHeaderDot('running', [card({ status: 'waiting' })]), 'warning');
+    assert.equal(
+        columnHeaderDot('running', [card({ status: 'waiting' }), card({ status: 'active' })]),
+        'ongoing',
+    );
+    assert.equal(columnHeaderDot('settled', [card({ status: 'failed' })]), 'error');
+    assert.equal(
+        columnHeaderDot('settled', [card({ status: 'failed' }), card({ status: 'completed' })]),
+        'done',
+    );
+});
+
+test('目标概览条统计文案按步骤与验收数量组合', () => {
+    assert.equal(goalContractSummary(2, 1), '2 步 · 1 项验收');
+    assert.equal(goalContractSummary(3, 0), '3 步');
+    assert.equal(goalContractSummary(0, 2), '2 项验收');
+    assert.equal(goalContractSummary(0, 0), '目标说明');
 });
 
 test('只有同时有执行会话与工作区才进入会话，否则退回详情', () => {

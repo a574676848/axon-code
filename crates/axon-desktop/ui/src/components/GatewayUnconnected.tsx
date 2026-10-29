@@ -189,6 +189,7 @@ const FailureBody: React.FC<FailureBodyProps> = ({ health, detail, repair, layou
       <span className="block text-[11px] leading-4 text-text-tertiary">
         服务状态：{health.responding ? '网关有响应' : '网关无响应'} ·{' '}
         {health.listening ? '端口已监听' : '端口未监听'}
+        {health.consecutive_failures > 1 ? ` · 连续 ${health.consecutive_failures} 轮` : ''}
       </span>
       {/* 拦截器带来的具体失败原因：探测结论说明「怎么了」，这一行说明「哪一次」。 */}
       {detail !== null && detail.trim().length > 0 && (
@@ -237,8 +238,17 @@ export const GatewayUnconnected: React.FC<GatewayUnconnectedProps> = ({
   const primary = repair.recommended ?? '重试';
 
   // 未连接时自动轮询，服务被外部修好后界面自行恢复。
+  // 单轮探活可长达十秒（预算加一次退避重试），在途时跳过这一拍：叠加探测只会让每一拍都更慢，
+  // 先发的旧结论还会盖掉后发的新结论。
   useEffect(() => {
-    const timer = window.setInterval(() => void onRetry(), POLL_INTERVAL_MS);
+    let inFlight = false;
+    const timer = window.setInterval(() => {
+      if (inFlight) return;
+      inFlight = true;
+      void Promise.resolve(onRetry()).finally(() => {
+        inFlight = false;
+      });
+    }, POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [onRetry]);
 

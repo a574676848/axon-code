@@ -12,7 +12,7 @@ const questions = [
   { id: 'q2', question: '要带哪些验证？' },
 ];
 
-test('多选是勾选切换，单选是替换并清掉自定义回答', () => {
+test('多选是勾选切换，单选点其他项是替换并清掉自定义回答', () => {
   const empty = EMPTY_ANSWER_DRAFT;
   assert.deepEqual(empty, { selected: [], custom: '' });
 
@@ -25,6 +25,26 @@ test('多选是勾选切换，单选是替换并清掉自定义回答', () => {
   // 单选：换一项即替换，且不与自定义回答并存。
   const withCustom = { selected: ['A'], custom: '补充说明' };
   assert.deepEqual(toggleOption(withCustom, 'B', false), { selected: ['B'], custom: '' });
+});
+
+test('单选再点已选中的那一项即取消选择，自定义回答按原文保留', () => {
+  // 单选也有反选：点第二下回到未答，不靠「换一项」绕。
+  assert.deepEqual(toggleOption({ selected: ['同意'], custom: '' }, '同意', false), {
+    selected: [],
+    custom: '',
+  });
+
+  // 取消只撤掉这一项：用户另外填写的说明不是选项，不被顺手清掉。
+  assert.deepEqual(
+    toggleOption({ selected: ['同意'], custom: '灰度先放 5%' }, '同意', false),
+    { selected: [], custom: '灰度先放 5%' },
+  );
+
+  // 换成另一项仍是替换，并清掉自定义回答（同一道题只留一种答法）。
+  assert.deepEqual(
+    toggleOption({ selected: ['同意'], custom: '灰度先放 5%' }, '拒绝', false),
+    { selected: ['拒绝'], custom: '' },
+  );
 });
 
 test('作答按题目定义汇编，空白自定义回答落成 null 而不是空串', () => {

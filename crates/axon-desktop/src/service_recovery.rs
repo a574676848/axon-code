@@ -11,20 +11,56 @@
 use serde::{Deserialize, Serialize};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 
 use crate::gateway;
 
+/// 运行态存储的单次等锁上限，与 `axon-session` 的 `BUSY_TIMEOUT_MS` 同值。
+///
+/// 网关 HTTP 面只有 4 个 worker：任何一个 handler 在等这把锁都会占着一个 worker，其它请求
+/// （包括探活）排在它后面。桌面端按架构契约不得依赖 `axon-session`，因此这里以镜像常量承载
+/// 该上限，并让探活预算直接由它派生：上限被调大时预算跟着走，不会重新短于上限。
+const RUNTIME_STORE_LOCK_CEILING_MS: u64 = 5_000;
+
 /// 单次连接探测超时。
 ///
-/// 网关的合法应答实测可到 1.9 秒，后台运行态存储的等锁上限是 5 秒；1.5 秒的预算
-/// 会把「网关正忙」误报成「网关无响应」。3 秒叠加一次退避重试，既能滤掉瞬时排队，
-/// 又能在真正不可用时及时给出提示。
-const PROBE_TIMEOUT: Duration = Duration::from_millis(3000);
+/// 预算取运行态存储的等锁上限：短于它，「网关在等锁」就必然被读成「网关无响应」，
+/// 这是这条判定过去最容易冤枉服务的地方。抗瞬时抖动交给下面的连续失败迟滞，
+/// 预算只回答「一次探活有多长」。
+const PROBE_TIMEOUT: Duration = Duration::from_millis(RUNTIME_STORE_LOCK_CEILING_MS);
 /// 协议确认失败后的重试次数。
 const PROBE_RETRY_LIMIT: usize = 1;
 /// 重试前的退避时长。
 const PROBE_RETRY_BACKOFF: Duration = Duration::from_millis(250);
+
+/// 连续多少轮探活失败才判定为「未连接」。
+///
+/// 单轮超时可能只是本机被编译或测试占满：整机满载时客户端与服务端一起被抢占，一轮探活
+/// 超时并不说明服务坏了。连续两轮（每轮都有一次退避重试）才切换界面形态，单轮只记瞬时。
+const UNAVAILABLE_CONFIRM_ROUNDS: u32 = 2;
+
+/// 累计的连续失败轮数；成功一轮即归零。
+static CONSECUTIVE_FAILURES: AtomicU32 = AtomicU32::new(0);
+
+/// 本进程是否连通过一次。冷启动从未连通过时不做迟滞，立刻如实报未连接。
+static EVER_CONNECTED: AtomicBool = AtomicBool::new(false);
+
+/// 记录一轮探活结论，给出迟滞后的可用性与累计轮数。
+///
+/// - 成功：清零失败数、标记「连通过」、立即可用。
+/// - 失败：累计失败轮数。**从未连通过**时立刻判不可用（服务确实没起来，不该让界面空等一轮）；
+///   从已连接掉下来的情况要连续失败到 [`UNAVAILABLE_CONFIRM_ROUNDS`] 才切换，单轮只记瞬时。
+fn record_probe(connected: bool) -> (bool, u32) {
+    if connected {
+        EVER_CONNECTED.store(true, Ordering::Relaxed);
+        CONSECUTIVE_FAILURES.store(0, Ordering::Relaxed);
+        return (true, 0);
+    }
+    let failures = CONSECUTIVE_FAILURES.fetch_add(1, Ordering::Relaxed) + 1;
+    let available = EVER_CONNECTED.load(Ordering::Relaxed) && failures < UNAVAILABLE_CONFIRM_ROUNDS;
+    (available, failures)
+}
 
 /// 网关可用性。
 ///
@@ -35,6 +71,10 @@ const PROBE_RETRY_BACKOFF: Duration = Duration::from_millis(250);
 pub struct GatewayHealthDto {
     /// 协议是否可用：监听且鉴权调用成功。
     pub connected: bool,
+    /// 界面是否应处在已连接形态：单轮失败按瞬时处理，连续多轮失败才切换成未连接。
+    pub available: bool,
+    /// 已连续失败多少轮；成功一轮即归零，界面据此说明「连续 N 轮」。
+    pub consecutive_failures: u32,
     /// 监听地址是否有人接受连接。
     pub listening: bool,
     /// 网关是否有 HTTP 响应（即便状态码不是 2xx）。
@@ -149,6 +189,7 @@ pub fn gateway_health_sync() -> GatewayHealthDto {
     }
     let responding = probe.is_some();
     let connected = matches!(&probe, Some((status, _)) if (200..300).contains(status));
+    let (available, consecutive_failures) = record_probe(connected);
 
     let (reason, actions) = if connected {
         ("网关已连接，运行态数据可用".to_string(), Vec::new())
@@ -199,6 +240,8 @@ pub fn gateway_health_sync() -> GatewayHealthDto {
 
     GatewayHealthDto {
         connected,
+        available,
+        consecutive_failures,
         listening,
         responding,
         target,
@@ -210,9 +253,10 @@ pub fn gateway_health_sync() -> GatewayHealthDto {
 /// 探活失败的一句话原因；分类缺失时退回原口径。
 fn probe_failure_reason(failure: Option<gateway::ProbeFailure>) -> String {
     match failure {
-        Some(gateway::ProbeFailure::Timeout) => {
-            "网关已监听，但请求未在探活预算内完成（网关正忙）".to_string()
-        }
+        Some(gateway::ProbeFailure::Timeout) => format!(
+            "网关已监听，但请求未在 {} 秒预算内完成：本机资源被占满或后台服务正忙于其它请求，都会让应答排队",
+            PROBE_TIMEOUT.as_secs()
+        ),
         Some(gateway::ProbeFailure::Unreachable) => "网关已监听，但请求未能送达".to_string(),
         Some(gateway::ProbeFailure::BodyRead) => "网关已响应，但响应体未读取完整".to_string(),
         None => "网关已监听，但请求未能完成".to_string(),
@@ -226,6 +270,8 @@ pub async fn gateway_health() -> GatewayHealthDto {
         .await
         .unwrap_or_else(|_| GatewayHealthDto {
             connected: false,
+            available: false,
+            consecutive_failures: 0,
             listening: false,
             responding: false,
             target: String::new(),
@@ -432,5 +478,64 @@ mod tests {
         assert_eq!(base64_encode(b"fo"), "Zm8=");
         assert_eq!(base64_encode(b"foo"), "Zm9v");
         assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+    }
+}
+
+/// 连续失败迟滞的口径。
+///
+/// 迟滞被人改成单轮，就会让步履正常的服务在满载机器上被报成未连接，因此钉一条断言。
+#[cfg(test)]
+mod probe_hysteresis_tests {
+    use super::{GatewayHealthDto, UNAVAILABLE_CONFIRM_ROUNDS, record_probe};
+
+    #[test]
+    fn single_failed_round_stays_available_but_cold_start_does_not() {
+        // 冷启动从未连通过：服务确实没起来，界面不该空等一轮。
+        let (available, failures) = record_probe(false);
+        assert!(!available, "冷启动首轮失败必须立刻判为不可用");
+        assert_eq!(failures, 1);
+
+        // 连上即清零，界面立刻回到可用。
+        assert_eq!(record_probe(true), (true, 0));
+
+        // 从已连接掉下来：单轮失败只是瞬时，界面保持原状。
+        let (available, failures) = record_probe(false);
+        assert!(available, "单轮失败不得切换成未连接态");
+        assert_eq!(failures, 1);
+
+        // 连续失败达到阈值才切换，且切换时轮数是真实累计值。
+        let mut last = (available, failures);
+        while last.1 < UNAVAILABLE_CONFIRM_ROUNDS {
+            last = record_probe(false);
+        }
+        assert!(!last.0, "连续失败达到阈值必须切换成未连接态");
+        assert_eq!(last.1, UNAVAILABLE_CONFIRM_ROUNDS);
+
+        // 恢复一轮就回到可用，计数归零，不留历史包袱。
+        assert_eq!(record_probe(true), (true, 0));
+    }
+
+    /// 界面门控读的是 `available` 与 `consecutive_failures` 两个键：回执里的序列化名一旦变了，
+    /// 前端会静默拿到 undefined 并永远停在已连接形态，因此把这条线钉在回执形状上。
+    #[test]
+    fn health_dto_serializes_the_keys_the_workbench_gates_on() {
+        let dto = GatewayHealthDto {
+            connected: false,
+            available: true,
+            consecutive_failures: 1,
+            listening: true,
+            responding: false,
+            target: "127.0.0.1:3143".to_string(),
+            reason: String::new(),
+            actions: Vec::new(),
+        };
+        let value = serde_json::to_value(&dto).expect("健康回执必须可序列化");
+        assert_eq!(value["connected"], serde_json::json!(false), "{value}");
+        assert_eq!(value["available"], serde_json::json!(true), "{value}");
+        assert_eq!(
+            value["consecutive_failures"],
+            serde_json::json!(1),
+            "{value}"
+        );
     }
 }

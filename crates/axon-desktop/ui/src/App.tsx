@@ -272,7 +272,7 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     void refreshWorkspaces();
-  }, [refreshWorkspaces, selection?.laneId, health?.connected]);
+  }, [refreshWorkspaces, selection?.laneId, health?.available]);
 
   // 静默轮询：只更新数据，不动界面状态，因此不会打断正在输入或翻历史的用户。
   useEffect(() => {
@@ -551,7 +551,7 @@ export const App: React.FC = () => {
               <LoadingState label="正在连接 Axon 后台服务" />
             </div>
           </main>
-        ) : !health.connected ? (
+        ) : !health.available ? (
           <main className="flex-1 h-full flex flex-col overflow-clip bg-canvas">
             <div data-tauri-drag-region className="h-10 shrink-0" />
             {/* 弹窗可以被关掉，主区域不能因此变成一片空白：这里给出同样的结论与重试入口。 */}
@@ -585,7 +585,7 @@ export const App: React.FC = () => {
             setCurrentTab('chat');
           }} />
         ) : currentTab === 'memory' ? (
-          <MemoryPage connected={health.connected} />
+          <MemoryPage connected={health.available} />
         ) : currentTab === 'goals' ? (
           <GoalsPage />
         ) : (
@@ -602,7 +602,7 @@ export const App: React.FC = () => {
         </div>
       </div>
 
-      {health !== null && !health.connected && (
+      {health !== null && !health.available && (
         <GatewayUnconnected
           health={health}
           detail={lastFailure}

@@ -541,24 +541,8 @@ export interface UpdateCheck {
   hint: string;
 }
 
-/** 网关可用性。 */
-export interface GatewayHealth {
-  connected: boolean;
-  listening: boolean;
-  /** 网关是否有 HTTP 响应（即便状态码不是 2xx）。 */
-  responding: boolean;
-  target: string;
-  reason: string;
-  /** 修复动作标识，由后端按故障类型给出。 */
-  actions: string[];
-}
-
-/** 服务操作结果。 */
-export interface ServiceAction {
-  success: boolean;
-  message: string;
-  output: string;
-}
+// 网关可用性与服务操作的契约类型独立成文件，这里回导出以保持既有导入路径不变。
+export type { GatewayHealth, ServiceAction } from './typesGateway';
 
 /** 已注册模型列表。 */
 export interface ConfigReadResult {

@@ -31,6 +31,12 @@ import { QuestionCountdown } from './QuestionCountdown';
  *
  * 作答草稿不在这里：卡片会被收起，收起即卸载，草稿由输入坞按提问标识持有，
  * 这里只把用户的选择回报上去（见 conversation/questionDraft）。
+ *
+ * 卡片何时占位由输入坞判定（见 useQuestionCard）：进入会话、新提问到达、时间线
+ * 上的回入口都会让卡片自己回来，只有用户当场收起才让出输入坞。挂起的提问同样占位，
+ * 它仍然可以回答。
+ *
+ * 选项按一次选中、再按一次取消，单选与多选同一套手感（见 toggleOption）。
  * 整卡可聚焦（tabIndex 为 -1）：卡片出现时它就是键盘的落点，Esc 因此
  * 在卡内任意位置都成立，而不是只有在输入框里才成立。
  */
@@ -166,6 +172,7 @@ export const ComposerQuestionCard: React.FC<ComposerQuestionCardProps> = ({
                 key={option.label}
                 type="button"
                 disabled={busy}
+                // 取消选择是同一个动作：再按一次已选中的选项即回到未选，不改自定义回答。
                 aria-pressed={isSelected}
                 onClick={() => handleSelectOption(option.label)}
                 className={`w-full flex items-start gap-2.5 px-3 py-2 rounded-md border text-left text-row transition-colors duration-100 disabled:cursor-not-allowed disabled:opacity-40 ${

@@ -393,5 +393,3 @@ mod wait_duration_tests {
         assert_eq!(backoff.delay(), initial);
     }
 }
-
-

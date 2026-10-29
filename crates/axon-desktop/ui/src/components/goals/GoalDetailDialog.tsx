@@ -1,16 +1,19 @@
 import React from 'react';
 
+import { FolderIcon } from '../../icons';
 import type { GoalCardView, GoalDetailView } from '../../goalTypes';
 import { executionStatusLabel, goalStatusMeta, hasSessionBinding } from '../../goals/model';
 import { formatDateTime } from '../pageFormat';
-import { CardDetailDialog, type DetailField } from '../ui/cards';
+import { Dialog } from '../ui/overlays';
+import { Chip, StateDot, Text } from '../ui/surfaces';
+import { GoalContractSections } from './GoalContractSections';
 
 /*
  * 目标详情弹窗。
  *
- * 复用条目卡的统一详情弹窗：字段名在上、值在下，没有第二套详情排版。
- * 无执行记录、全局目标解析不到工作区，或详情读取失败时，这里都是唯一的看处，
- * 因此字段必须如实说明「缺什么」，不补占位。
+ * 顶部以紧凑信息格呈现状态、所属工作区、最近活动与执行轮次，
+ * 主体直接复用 `GoalContractSections` 呈现目标内容、序号化步骤与验收标准，
+ * 与执行会话顶部的概览卡保持同一套阅读排版。
  */
 
 export interface GoalDetailDialogProps {
@@ -24,11 +27,6 @@ export interface GoalDetailDialogProps {
   onEnterSession: (() => void) | null;
 }
 
-/** 步骤与验收按行呈现，空集合给「无」。 */
-function listField(label: string, items: readonly string[]): DetailField {
-  return { label, value: items.length === 0 ? '无' : items.join('\n') };
-}
-
 export const GoalDetailDialog: React.FC<GoalDetailDialogProps> = ({
   goal,
   detail,
@@ -39,70 +37,89 @@ export const GoalDetailDialog: React.FC<GoalDetailDialogProps> = ({
 }) => {
   if (goal === null) {
     return (
-      <CardDetailDialog open={false} onClose={onClose} title="目标详情" fields={[]} />
+      <Dialog open={false} onClose={onClose} title="目标详情" size="lg">
+        {null}
+      </Dialog>
     );
   }
-  const meta = goalStatusMeta(goal.status);
+
   // 详情比列表多解析一步全局目标的工作区，因此面板里的工作区与入口都以详情为准。
   const located = detail?.goal ?? goal;
-  const fields: DetailField[] = [
-    { label: '状态', value: meta.label },
-    { label: '目标', value: loading ? '正在读取' : (detail?.objective ?? goal.objectivePreview) },
-  ];
-  if (detail !== null) {
-    fields.push(listField('步骤', detail.steps));
-    fields.push(listField('验收', detail.acceptance));
-    if (detail.objectiveTruncated) {
-      fields.push({ label: '截断说明', value: '目标正文超过 20000 字，此处已截断' });
-    }
-    if (detail.listsTruncated) {
-      fields.push({
-        label: '截断说明',
-        value: '步骤或验收超过 64 条或单条超过 2000 字，此处已截断',
-      });
-    }
-    if (detail.cancellationReason !== null) {
-      fields.push({ label: '取消原因', value: detail.cancellationReason });
-    }
-  }
-  fields.push({
-    label: '工作区',
-    value:
-      located.workspaceName === null
-        ? '全局目标，未绑定工作区'
-        : `${located.workspaceName}（${located.workspacePath ?? '路径未知'}）`,
-  });
-  fields.push({ label: '最近活动', value: formatDateTime(goal.lastActivityAtMs) });
-  fields.push({
-    label: '目标标识',
-    value: goal.goalId,
-    mono: true,
-  });
-  if (goal.latestExecution !== null) {
-    const attempt = goal.latestExecution.attempt;
-    fields.push({
-      label: '最近执行',
-      value: `${executionStatusLabel(goal.latestExecution.status)} · 第 ${attempt} 次 · ${formatDateTime(goal.latestExecution.createdAtMs)}`,
-    });
-  }
-  if (goal.latestResult !== null) {
-    fields.push({ label: '最近结果', value: goal.latestResult.summaryPreview });
-  }
-  if (error !== null) {
-    fields.push({ label: '读取失败', value: error });
-  }
+  const meta = goalStatusMeta(located.status);
+  const objective =
+    detail !== null && detail.objective.length > 0 ? detail.objective : located.objectivePreview;
+  const latestExecution = located.latestExecution;
+  const latestResult = detail?.latestResult ?? located.latestResult;
 
   return (
-    <CardDetailDialog
+    <Dialog
       open
       onClose={onClose}
-      title={goal.title}
-      fields={fields}
+      title={located.title}
+      size="lg"
       primary={
         onEnterSession !== null && hasSessionBinding(located)
           ? { label: '进入会话', onClick: onEnterSession }
           : undefined
       }
-    />
+    >
+      <div className="space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-stretch">
+          <div className="h-full rounded-sm bg-surface-sunken/55 hairline border-border-hairline p-3 flex flex-col justify-between gap-1.5 min-w-0">
+            <Text tone="secondary" size="xs">
+              当前状态
+            </Text>
+            <div className="flex items-center gap-1.5">
+              <StateDot
+                state={meta.dot}
+                tone={meta.dot === 'ongoing' ? 'accent' : 'default'}
+              />
+              <Chip tone={meta.chipTone}>{meta.label}</Chip>
+            </div>
+          </div>
+
+          <div className="h-full rounded-sm bg-surface-sunken/55 hairline border-border-hairline p-3 flex flex-col justify-between gap-1.5 min-w-0">
+            <Text tone="secondary" size="xs">
+              所属工作区
+            </Text>
+            <div
+              className="flex items-center gap-1.5 min-w-0"
+              title={located.workspacePath ?? undefined}
+            >
+              <FolderIcon size={13} className="shrink-0 text-text-tertiary" />
+              <Text size="row" strong truncate className="min-w-0">
+                {located.workspaceName ?? '全局'}
+              </Text>
+            </div>
+          </div>
+
+          <div className="h-full rounded-sm bg-surface-sunken/55 hairline border-border-hairline p-3 flex flex-col justify-between gap-1.5 min-w-0">
+            <Text tone="secondary" size="xs">
+              {latestExecution !== null ? `最近执行（第 ${latestExecution.attempt} 次）` : '最近活动'}
+            </Text>
+            <Text size="row" strong className="block tabular-nums truncate">
+              {latestExecution !== null
+                ? `${executionStatusLabel(latestExecution.status)} · ${formatDateTime(latestExecution.createdAtMs)}`
+                : formatDateTime(located.lastActivityAtMs)}
+            </Text>
+          </div>
+        </div>
+
+        <GoalContractSections
+          variant="dialog"
+          completed={located.status === 'completed'}
+          objective={objective}
+          steps={detail?.steps ?? []}
+          acceptance={detail?.acceptance ?? []}
+          objectiveTruncated={detail?.objectiveTruncated === true}
+          listsTruncated={detail?.listsTruncated === true}
+          cancellationReason={detail?.cancellationReason ?? null}
+          latestResultSummary={latestResult?.summaryPreview ?? null}
+          latestResultSucceeded={latestResult?.succeeded ?? null}
+          loading={loading}
+          error={error}
+        />
+      </div>
+    </Dialog>
   );
 };

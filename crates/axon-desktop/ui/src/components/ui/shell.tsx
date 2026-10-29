@@ -138,6 +138,8 @@ export interface PageShellProps {
    * 编辑器、时间轮这类「主体本身就该占满」的页面用这一档。
    */
   fill?: boolean;
+  /** 是否使用多栏看板宽版版心（max-w-board）。 */
+  wide?: boolean;
   children: React.ReactNode;
 }
 
@@ -151,36 +153,40 @@ export const PageShell: React.FC<PageShellProps> = ({
   description,
   actions,
   fill = false,
+  wide = false,
   children,
-}) => (
-  <main className="flex-1 min-w-0 h-full flex flex-col bg-canvas overflow-clip">
-    <header
-      data-tauri-drag-region
-      style={{ paddingRight: 'var(--window-controls-inset, 0px)' }}
-      className="shrink-0 h-10 hairline-b border-border-hairline select-none"
-    >
-      <div className="mx-auto flex h-10 w-full max-w-page items-center gap-3 px-6">
-        <Text size="sm" strong truncate>
-          {title}
-        </Text>
-        {actions !== undefined && (
-          <div className="ml-auto shrink-0 flex items-center gap-1.5">{actions}</div>
-        )}
-      </div>
-    </header>
-    <div className={`flex-1 min-h-0 ${fill ? 'overflow-clip' : 'overflow-y-auto'}`}>
-      <div
-        className={`mx-auto w-full max-w-page px-6 py-5 ${
-          fill ? 'flex h-full min-h-0 flex-col' : ''
-        }`}
+}) => {
+  const containerWidth = wide ? 'max-w-none' : 'max-w-page';
+  return (
+    <main className="flex-1 min-w-0 h-full flex flex-col bg-canvas overflow-clip">
+      <header
+        data-tauri-drag-region
+        style={{ paddingRight: 'var(--window-controls-inset, 0px)' }}
+        className="shrink-0 h-10 hairline-b border-border-hairline select-none"
       >
-        {description !== undefined && (
-          <Text tone="secondary" size="xs" className="mb-4 block">
-            {description}
+        <div className={`mx-auto flex h-10 w-full ${containerWidth} items-center gap-3 px-6`}>
+          <Text size="sm" strong truncate>
+            {title}
           </Text>
-        )}
-        {children}
+          {actions !== undefined && (
+            <div className="ml-auto shrink-0 flex items-center gap-1.5">{actions}</div>
+          )}
+        </div>
+      </header>
+      <div className={`flex-1 min-h-0 ${fill ? 'overflow-clip' : 'overflow-y-auto'}`}>
+        <div
+          className={`mx-auto w-full ${containerWidth} px-6 py-4 ${
+            fill ? 'flex h-full min-h-0 flex-col' : ''
+          }`}
+        >
+          {description !== undefined && (
+            <Text tone="secondary" size="xs" className="mb-4 block">
+              {description}
+            </Text>
+          )}
+          {children}
+        </div>
       </div>
-    </div>
-  </main>
-);
+    </main>
+  );
+};

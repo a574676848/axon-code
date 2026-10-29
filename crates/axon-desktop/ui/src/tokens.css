@@ -120,6 +120,8 @@
   --container-chat: var(--axon-chat-user-width, 840px);
   /* 非对话页的内容定宽：管理页与看板共用一条版心。 */
   --container-page: 88%;
+  /* 多栏看板版心：在宽屏下给足四栏横向呼吸空间，超宽屏下封顶防拉伸。 */
+  --container-board: 1480px;
 
   /*
    * 字体族只走系统栈两支，零随包 webfont。
@@ -773,6 +775,56 @@ html[data-material] body {
     background-color 50ms ease,
     box-shadow 50ms ease;
   transform: translateY(1px) scale(0.985);
+}
+
+/*
+ * 条目卡与目标卡的触觉微抬升：整卡作为一块完整面板浮起，不再只把上半截涂灰。
+ * 仅动画 transform、border-color 与 box-shadow，按压时给出 50ms 物理微沉反馈。
+ */
+.card-interactive {
+  transition:
+    transform 180ms var(--ease-spring-smooth),
+    border-color 120ms ease,
+    box-shadow 160ms var(--ease-spring-smooth);
+}
+
+.card-interactive:hover {
+  transform: translateY(-1px);
+  border-color: var(--color-border-strong);
+  box-shadow: var(--elevation-lift);
+}
+
+.card-interactive:active {
+  transition:
+    transform 50ms ease-out,
+    border-color 50ms ease,
+    box-shadow 50ms ease;
+  transform: translateY(0.5px) scale(0.995);
+}
+
+.card-action-icon {
+  display: inline-flex;
+  transition: transform 160ms var(--ease-spring-tactile);
+}
+
+.card-interactive:hover .card-action-icon {
+  transform: translateX(1.5px);
+}
+
+@keyframes goal-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.goal-card-in {
+  animation: goal-card-in 160ms var(--ease-spring-smooth) both;
 }
 
 /*

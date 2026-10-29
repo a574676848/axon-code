@@ -1,6 +1,6 @@
 import React from 'react';
 import { SearchIcon, SettingsIcon } from '../../icons';
-import { Button, Input } from './controls';
+import { Input } from './controls';
 import { Dialog } from './overlays';
 import { Chip, EmptyState, LoadingState, Text } from './surfaces';
 
@@ -64,17 +64,32 @@ export const CardList: React.FC<CardListProps> = ({
   );
 };
 
+export interface EntityCardStatusCue {
+  /** 标签，例如「下一步」「等待」。 */
+  label: string;
+  /** 说明正文。 */
+  text: string;
+  /** 语义色调：默认中性下沉槽，warning 取柔和琥珀提示槽。 */
+  tone?: 'default' | 'warning';
+}
+
 interface EntityCardProps {
   /** 卡片标题。 */
   title: string;
   /** 标题右侧唯一的类型标签。 */
   badges?: React.ReactNode;
-  /** 中部说明。 */
-  description: string;
+  /** 中部说明；为空时不占行。 */
+  description?: string;
   /** 命令或地址：整张卡片只出现一次，单行截断并带原生提示。 */
   locator?: string;
+  /** 结构化进展提示带（目标看板用于区分「下一步」与「等待」）。 */
+  statusCue?: EntityCardStatusCue | null;
+  /** 是否锁定固定卡片高度（看板卡片要求尺寸完全一致）。 */
+  uniformHeight?: boolean;
   /** 底部左侧的次要信息。 */
   meta?: string;
+  /** 底部左侧的结构化次要信息节点（优先于纯文本 meta）。 */
+  metaNode?: React.ReactNode;
   /** 点击卡片主体。 */
   onOpen?: () => void;
   /** 底部右下的查看配置入口。 */
@@ -92,80 +107,122 @@ interface EntityCardProps {
 /**
  * 条目卡片：一个对象只出现一次身份信息。
  *
- * 标题 14/20 500 单行截断，右上只留一个类型标签；说明 12/18 最多三行；
- * 底部左侧是有意义的次要信息，右下只有一处「查看配置」文字入口。
- * 卡片本身不再重复标题里的标识、命令或地址。
- *
- * 三个可选插槽（行首节点、定位行是否等宽、页脚动作图标）默认都不改变既有视觉：
- * 不传时与引入插槽之前逐像素一致。
+ * 标题 14/20 500 单行截断，右上只留一个类型或状态标签；说明 12/18 固定行槽；
+ * 底部左侧是有意义的次要信息，右下只有一处文字入口。
+ * 卡片本身不再重复标题里的标识、命令或地址，也不在卡片内再套带边框的子盒。
  */
 export const EntityCard: React.FC<EntityCardProps> = ({
   title,
   badges,
   description,
   locator,
+  statusCue,
+  uniformHeight = false,
   meta,
+  metaNode,
   onOpen,
   onInspect,
   inspectLabel = '查看配置',
   leading,
   locatorMono = true,
   actionIcon,
-}) => (
-  <div className="flex flex-col rounded-md hairline border-border shadow-card bg-surface overflow-hidden transition-colors duration-150 hover:border-border-strong">
-    <button
-      type="button"
-      onClick={onOpen}
-      className="flex-1 min-w-0 text-left p-3.5 space-y-2 hover:bg-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
+}) => {
+  const hasDescription = description !== undefined && description.trim().length > 0;
+  return (
+    <div
+      className={`card-interactive flex flex-col rounded-md hairline border-border shadow-card bg-surface overflow-hidden ${
+        uniformHeight ? 'h-[148px]' : ''
+      }`}
     >
-      <span className="flex items-start gap-2 min-w-0">
-        {leading !== undefined && (
-          <span className="shrink-0 inline-flex items-center h-5">{leading}</span>
-        )}
-        <Text strong truncate className="min-w-0 flex-1">
-          {title}
-        </Text>
-        {badges}
-      </span>
-      <Text
-        tone="secondary"
-        size="xs"
-        className="leading-[18px] line-clamp-3 break-words"
+      <button
+        type="button"
+        onClick={onOpen}
+        className={`flex-1 min-w-0 flex flex-col justify-between text-left px-3.5 pt-3 pb-2.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus ${
+          uniformHeight ? 'gap-1.5' : 'space-y-2'
+        }`}
       >
-        {description}
-      </Text>
-      {locator !== undefined && locator.length > 0 && (
-        <Text
-          tone="tertiary"
-          size="code"
-          mono={locatorMono}
-          truncate
-          className="block"
-          title={locator}
+        <span className="flex items-center gap-2 min-w-0">
+          {leading !== undefined && (
+            <span className="shrink-0 inline-flex items-center h-5">{leading}</span>
+          )}
+          <span className="min-w-0 flex-1 text-body font-medium leading-5 text-text-primary truncate">
+            {title}
+          </span>
+          {badges !== undefined && <span className="shrink-0">{badges}</span>}
+        </span>
+        {(hasDescription || uniformHeight) && (
+          <Text
+            tone="secondary"
+            size="xs"
+            className={`block leading-[18px] break-words text-pretty ${
+              uniformHeight ? 'line-clamp-2 min-h-[36px]' : 'line-clamp-3'
+            }`}
+          >
+            {hasDescription ? description : title}
+          </Text>
+        )}
+        {statusCue !== undefined && statusCue !== null && (
+          <span
+            title={`${statusCue.label} · ${statusCue.text}`}
+            className="flex items-center gap-1.5 min-w-0 h-5"
+          >
+            <span
+              className={`shrink-0 inline-flex items-center px-1.5 py-px rounded-xs text-micro font-medium leading-4 ${
+                statusCue.tone === 'warning'
+                  ? 'bg-gold-soft text-gold-ink'
+                  : 'bg-surface-sunken text-text-secondary'
+              }`}
+            >
+              {statusCue.label}
+            </span>
+            <span className="min-w-0 flex-1 text-xs leading-5 text-text-tertiary truncate">
+              {statusCue.text}
+            </span>
+          </span>
+        )}
+        {locator !== undefined && locator.length > 0 && (
+          <Text
+            tone="tertiary"
+            size="code"
+            mono={locatorMono}
+            truncate
+            className="block"
+            title={locator}
+          >
+            {locator}
+          </Text>
+        )}
+      </button>
+      <div className="shrink-0 h-9 flex items-center gap-2 px-3.5 bg-surface-sunken/25 hairline-t border-border-hairline">
+        {metaNode !== undefined ? (
+          <div className="flex-1 min-w-0">{metaNode}</div>
+        ) : (
+          meta !== undefined && (
+            <Text
+              tone="tertiary"
+              size="micro"
+              truncate
+              className="flex-1 min-w-0 tabular-nums"
+              title={meta}
+            >
+              {meta}
+            </Text>
+          )
+        )}
+        <button
+          type="button"
+          onClick={() => onInspect?.()}
+          className="ml-auto shrink-0 inline-flex items-center gap-1 h-6 px-2 rounded-xs text-xs font-medium text-text-secondary transition-colors duration-100 hover:bg-hover hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
         >
-          {locator}
-        </Text>
-      )}
-    </button>
-    <div className="shrink-0 flex items-center gap-2 px-3.5 py-2 hairline-t border-border-hairline">
-      {meta !== undefined && (
-        <Text
-          tone="tertiary"
-          size="2xs"
-          truncate
-          className="flex-1 min-w-0 tabular-nums"
-          title={meta}
-        >
-          {meta}
-        </Text>
-      )}
-      <Button variant="ghost" size="sm" className="ml-auto" onClick={() => onInspect?.()}>
-        {actionIcon ?? <SettingsIcon size={13} />}
-        {inspectLabel}
-      </Button>
+          <span>{inspectLabel}</span>
+          <span className="card-action-icon text-text-tertiary">
+            {actionIcon ?? <SettingsIcon size={12} />}
+          </span>
+        </button>
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 /** 详情弹窗中的一行字段。 */
 export interface DetailField {

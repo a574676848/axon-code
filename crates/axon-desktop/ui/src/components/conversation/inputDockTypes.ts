@@ -69,6 +69,13 @@ export interface InputDockProps {
   working: { primary: string; elapsedMs: number | null; queued: number } | null;
   /** 中断正在运行的一轮。 */
   onInterrupt: () => void;
+  /**
+   * 当前会话标识（工作区与会话拼成）。
+   *
+   * 问答占座卡只在「这一次进来」里听从收起：换一条会话再回来，还没答完的提问
+   * 要自己回到占位位，因此卡片状态需要认出会话换没换。
+   */
+  laneKey?: string | null;
   /** 当前待决或挂起的模型提问。 */
   activeQuestion?: PendingQuestion | null;
   /** 提交问答作答。 */

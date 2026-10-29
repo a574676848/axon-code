@@ -381,17 +381,36 @@ export const LoadingState: React.FC<{ label: string; className?: string }> = ({
   </div>
 );
 
-/** 小型状态标签（协议、只读、视觉支持等）。 */
-export const Chip: React.FC<{ className?: string; children: React.ReactNode }> = ({
-  className = '',
-  children,
-}) => (
+export type ChipTone = 'neutral' | 'ok' | 'warning' | 'danger' | 'accent';
+
+const CHIP_SURFACE: Record<ChipTone, string> = {
+  neutral: 'bg-surface-sunken/70 border-border-hairline',
+  ok: 'bg-ok-soft border-ok/25',
+  warning: 'bg-gold-soft border-gold/30',
+  danger: 'bg-danger-soft border-danger/25',
+  accent: 'bg-focus-soft border-focus/25',
+};
+
+const CHIP_TEXT: Record<ChipTone, string> = {
+  neutral: 'text-text-tertiary',
+  ok: 'text-ok-ink',
+  warning: 'text-gold-ink',
+  danger: 'text-danger',
+  accent: 'text-text-link',
+};
+
+/** 小型状态标签（协议、只读、状态等）。默认中性浅底，可选语义墨水档。 */
+export const Chip: React.FC<{
+  tone?: ChipTone;
+  className?: string;
+  children: React.ReactNode;
+}> = ({ tone = 'neutral', className = '', children }) => (
   <span
-    className={`shrink-0 inline-flex items-center px-1.5 py-px rounded-xs bg-surface-sunken/60 hairline border-border-hairline ${className}`}
+    className={`shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-xs hairline ${CHIP_SURFACE[tone]} ${className}`}
   >
-    <Text tone="tertiary" size="xs">
+    <span className={`text-micro font-medium leading-4 ${CHIP_TEXT[tone]}`}>
       {children}
-    </Text>
+    </span>
   </span>
 );
 

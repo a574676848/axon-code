@@ -655,6 +655,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 error={dockError}
                 working={dockWorking}
                 onInterrupt={() => void conversation.interrupt()}
+                laneKey={laneKey}
                 activeQuestion={conversation.activeQuestion}
                 onAnswerQuestion={conversation.answerQuestion}
                 reopenToken={questionReopenToken}

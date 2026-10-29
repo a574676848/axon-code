@@ -62,8 +62,6 @@ interface WorkspaceTreeProps {
   expanded: Record<string, boolean>;
   /** 网关探测尚未完成：显示骨架而不是「没有工作区」。 */
   loading?: boolean;
-  /** 空态的第二句：连接中断与「确实一个都没登记」要说不同的话。 */
-  emptyDescription?: string;
   /** 折叠或展开工作区。 */
   onToggleWorkspace: (id: string) => void;
   /** 选中车道。 */
@@ -89,7 +87,6 @@ export const WorkspaceTree: React.FC<WorkspaceTreeProps> = ({
   laneMarks,
   expanded,
   loading = false,
-  emptyDescription = '用上方的「添加工作区」登记一个目录，这里会列出它的会话。',
   onToggleWorkspace,
   onSelectLane,
   onTogglePin,
@@ -245,7 +242,7 @@ export const WorkspaceTree: React.FC<WorkspaceTreeProps> = ({
       <EmptyState
         icon={<FolderIcon size={20} />}
         title="未检测到可用工作区"
-        description={emptyDescription}
+        description="用上方的「添加工作区」登记一个目录，这里会列出它的会话。"
       />
     );
   }
