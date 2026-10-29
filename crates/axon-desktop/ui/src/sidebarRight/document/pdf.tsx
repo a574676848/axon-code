@@ -25,8 +25,21 @@ const INITIAL_ZOOM = 1;
 /** 一次最多画多少页：再多的部分不提供渲染，避免把面板拖垮。 */
 const MAX_PAGES = 500;
 
-/** 提前多少像素开始绘制：略大于一屏，滚动时不至于看见空白。 */
+/** 提前多少像素开始绘制：略大于一屏，滚动时不至于看见空白。进入与离开共用同一档。 */
 const PRELOAD_MARGIN = '600px';
+
+/**
+ * 把画布还回去。
+ *
+ * 画布位图不在 JS 堆里：只把状态翻成「未绘制」不会释放任何内存，必须把宽度与高度
+ * 归零，浏览器才会立刻丢掉这一页的位图后端。实测一页 A4 在 2x 屏上约 8 MiB，
+ * 一份三百页的文档一路滚过去，只画不还就是 1.2 GiB，足够把渲染进程吃到被回收。
+ */
+function releaseCanvas(canvas: HTMLCanvasElement | null): void {
+  if (canvas === null) return;
+  canvas.width = 0;
+  canvas.height = 0;
+}
 
 /** 把引擎抛出的东西压成一行可读说明；没有说明时给一句兜底。 */
 function describeFailure(failure: unknown): string {
@@ -51,10 +64,24 @@ const PdfPage: React.FC<{
 
   React.useEffect(() => {
     const element = host.current;
-    if (element === null || typeof IntersectionObserver === 'undefined') return undefined;
+    if (element === null) return undefined;
+    if (typeof IntersectionObserver === 'undefined') {
+      // 没有观察器时退化成「进页面就画」：宁可多占一页，也不要永远停在一块空白。
+      setPainted(true);
+      return undefined;
+    }
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) setPainted(true);
+        const entry = entries[entries.length - 1];
+        if (entry === undefined) return;
+        /*
+         * 进出都响应：看着的页才配占一块位图。
+         *
+         * 只按「进入」置位、从不复位，等于把读过一遍的每一页都钉在内存里；
+         * 面板开着滚一遍长文档就会一路堆到看门狗的高水位。
+         */
+        setPainted(entry.isIntersecting);
+        if (!entry.isIntersecting) releaseCanvas(canvas.current);
       },
       { rootMargin: PRELOAD_MARGIN },
     );

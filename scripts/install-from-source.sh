@@ -28,6 +28,11 @@ restore_daemon() {
 }
 trap restore_daemon EXIT
 
+# 准备阶段一律不动运行态。
+#
+# 编译要好几分钟，期间停掉 Daemon 等于把后台任务、定时调度与远控连接一起掐断；
+# 真正需要停机的只有「替换版本目录」那几步。凡是编译、自检、取版本号与暂存目录
+# 拷贝这类工作，全部排在停机之前完成。
 (cd "${REPO_ROOT}/crates/axon-desktop/ui" && npm ci && npm run build)
 
 if command -v rustup >/dev/null 2>&1; then
@@ -54,6 +59,24 @@ done
 "${CLI_BIN}" --version >/dev/null
 "${DESKTOP_BIN}" --self-check >/dev/null
 
+VERSION=$("${CLI_BIN}" --version | awk '{print $NF}')
+RELEASE_ID="${VERSION}"
+RELEASE_DIR="${VERSIONS_DIR}/${RELEASE_ID}"
+STAGED_RELEASE="${VERSIONS_DIR}/.staging.$$"
+# 上一次中断留下的暂存目录先清掉；它不在任何版本的生效路径上，删它不影响运行态。
+for leftover in "${VERSIONS_DIR}"/.staging.*; do
+    [ -d "${leftover}" ] || continue
+    rm -rf -- "${leftover}"
+done
+mkdir -p "${STAGED_RELEASE}" "${LAUNCHER_DIR}" "${INSTALL_DIR}"
+cp "${CLI_BIN}" "${STAGED_RELEASE}/axon"
+cp "${DESKTOP_BIN}" "${STAGED_RELEASE}/axon-desktop"
+chmod 755 "${STAGED_RELEASE}/axon" "${STAGED_RELEASE}/axon-desktop"
+
+# 停机窗口从这里开始，到版本目录替换完成为止。
+#
+# 顺序固定：先停 Daemon（它可能正在领取任务与写运行态），再停桌面端（它持有
+# versions 目录内的映像文件锁）。两者都停了，下面的删除与替换才不会被占用卡住。
 if [ -x "${LAUNCHER_BIN}" ]; then
     "${LAUNCHER_BIN}" daemon stop >/dev/null 2>&1 || true
     DAEMON_STOPPED=1
@@ -65,14 +88,6 @@ if [ -x "${LAUNCHER_BIN}" ]; then
 fi
 pkill -x axon-desktop >/dev/null 2>&1 || true
 
-VERSION=$("${CLI_BIN}" --version | awk '{print $NF}')
-RELEASE_ID="${VERSION}"
-RELEASE_DIR="${VERSIONS_DIR}/${RELEASE_ID}"
-STAGED_RELEASE="${VERSIONS_DIR}/.staging.$$"
-mkdir -p "${STAGED_RELEASE}" "${LAUNCHER_DIR}" "${INSTALL_DIR}"
-cp "${CLI_BIN}" "${STAGED_RELEASE}/axon"
-cp "${DESKTOP_BIN}" "${STAGED_RELEASE}/axon-desktop"
-chmod 755 "${STAGED_RELEASE}/axon" "${STAGED_RELEASE}/axon-desktop"
 rm -rf "${RELEASE_DIR}"
 mv "${STAGED_RELEASE}" "${RELEASE_DIR}"
 cp "${BUILT_LAUNCHER}" "${LAUNCHER_BIN}"
@@ -96,6 +111,9 @@ for release in "${VERSIONS_DIR}"/*; do
     [ "${release_id}" = "${RELEASE_ID}" ] || rm -rf -- "${release}"
 done
 
+# 停机窗口到此结束：新版本已经就位，马上把后台服务带回来。
+# 配置初始化排在这里而不是准备阶段，是因为它要用刚替换好的 launcher；
+# 它只在配置文件缺失或为空时才真的执行。
 PROFILE="${HOME}/.profile"
 case "${SHELL:-sh}" in */bash) PROFILE="${HOME}/.bashrc";; */zsh) PROFILE="${ZDOTDIR:-${HOME}}/.zshrc";; */fish) PROFILE="${HOME}/.config/fish/config.fish";; esac
 mkdir -p "$(dirname -- "${PROFILE}")"

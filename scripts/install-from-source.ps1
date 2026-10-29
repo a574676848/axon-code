@@ -74,20 +74,17 @@ function Set-AxonPath([string]$directory) {
 try {
     Remove-Item $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force $stagingRoot | Out-Null
-    if ($previousLauncher) {
-        & schtasks.exe /change /tn AxonDaemon /disable 2>$null | Out-Null
-        $taskDisabled = $true
-        & $launcherPath daemon stop 2>$null | Out-Host
-        if (-not (Wait-DaemonStopped $launcherPath)) { throw "Daemon 未能在 60 秒内停止" }
-        $daemonStopped = $true
-    }
-    # 编译产物在 Windows 上不能覆盖正在运行的映像，只停止本仓库的调试进程。
+    <#
+     * 准备阶段一律不动运行态。
+     *
+     * 编译要好几分钟，期间停掉 Daemon 等于把后台任务、定时调度与远控连接一起掐断；
+     * 真正需要停机的只有「替换版本目录」那几步。凡是编译、自检、暂存目录拷贝这类
+     * 工作，全部排在停机之前完成。
+    #>
     $releaseBin = Join-Path $root "target\release"
+    # 唯一必须提前停的是本仓库调试进程：cargo 要重写 target\release 里的同一批映像。
     Get-Process axon, axon-desktop -ErrorAction SilentlyContinue | Where-Object {
         $_.Path -and ([IO.Path]::GetDirectoryName($_.Path) -ieq $releaseBin)
-    } | Stop-Process -Force
-    Get-Process axon-desktop -ErrorAction SilentlyContinue | Where-Object {
-        $_.Path -and $_.Path.StartsWith($installRoot + '\', [StringComparison]::OrdinalIgnoreCase)
     } | Stop-Process -Force
     Push-Location (Join-Path $root "crates\axon-desktop\ui")
     try {
@@ -112,14 +109,31 @@ try {
     $releaseId = $version
     $releaseDir = Join-Path $versionsDir $releaseId
     $stagedRelease = Join-Path $versionsDir ".staging.$PID"
-    # 构建耗时数分钟，期间桌面端可能被重新拉起并锁住旧版本目录：替换前再停一次，
-    # 并以有界重试等待映像锁释放，避免安装半途失败留下 staging 残留。
+    # 上一次中断留下的暂存目录先清掉；它不在任何版本的生效路径上，删它不影响运行态。
     Get-ChildItem -LiteralPath $versionsDir -Directory -Force -ErrorAction SilentlyContinue |
         Where-Object { $_.Name.StartsWith('.staging.') } |
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force $stagedRelease, $launcherDir, $installDir | Out-Null
     Copy-Item $cli (Join-Path $stagedRelease "axon.exe")
     Copy-Item $desktop (Join-Path $stagedRelease "axon-desktop.exe")
+
+    <#
+     * 停机窗口从这里开始，到版本目录替换完成为止。
+     *
+     * 顺序固定：先停 Daemon（它可能正在领取任务与写运行态），再停桌面端（它持有
+     * versions 目录内的映像文件锁）。两者都停了，下面的删除与替换才不会被占用卡住。
+    #>
+    if ($previousLauncher) {
+        & schtasks.exe /change /tn AxonDaemon /disable 2>$null | Out-Null
+        $taskDisabled = $true
+        & $launcherPath daemon stop 2>$null | Out-Host
+        if (-not (Wait-DaemonStopped $launcherPath)) { throw "Daemon 未能在 60 秒内停止" }
+        $daemonStopped = $true
+    }
+    Get-Process axon-desktop -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -and $_.Path.StartsWith($installRoot + '\', [StringComparison]::OrdinalIgnoreCase)
+    } | Stop-Process -Force
+
     $swapDeadline = [DateTime]::UtcNow.AddSeconds(30)
     while ($true) {
         $swapBlocked = $false
@@ -149,6 +163,12 @@ try {
     Remove-Item (Join-Path $cargoHome "bin\axon-desktop.exe") -Force -ErrorAction SilentlyContinue
     Set-AxonPath $installDir
     [IO.File]::WriteAllText((Join-Path $installDir "axon.cmd"), "@echo off`r`n`"$launcherPath`" %*`r`n", [Text.UTF8Encoding]::new($false))
+
+    <#
+     * 停机窗口到此结束：新版本已经就位，马上把后台服务带回来。
+     * 配置初始化排在这里而不是准备阶段，是因为它要用刚替换好的 launcher；
+     * 它只在配置文件缺失或为空时才真的执行。
+    #>
     $configPath = Join-Path $HOME ".axon\config.toml"
     if (-not (Test-Path $configPath -PathType Leaf) -or (Get-Item $configPath).Length -eq 0) {
         & $launcherPath setup --provider-name openai --model gpt-4o --non-interactive --no-validate | Out-Null

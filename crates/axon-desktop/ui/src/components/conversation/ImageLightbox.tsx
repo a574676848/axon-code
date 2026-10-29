@@ -1,6 +1,6 @@
 import React from 'react';
-import * as ipc from '../../ipc';
 import { Z_MODAL } from './chatChrome';
+import { acquireImageUrl, type ImageHandle } from './imageSources';
 
 /*
  * 图片放大查看：点击遮罩或按 Esc 关闭。
@@ -22,15 +22,23 @@ export const ImageLightbox: React.FC<{
   const [fetched, setFetched] = React.useState<string | null>(null);
   React.useEffect(() => {
     if (source !== undefined || path === undefined) return undefined;
-    let cancelled = false;
-    void ipc
-      .attachmentSource(path)
-      .then((value) => {
-        if (!cancelled) setFetched(value);
-      })
-      .catch(() => undefined);
+    let disposed = false;
+    let handle: ImageHandle | null = null;
+    void acquireImageUrl(path).then(
+      (acquired) => {
+        if (disposed) {
+          acquired.release();
+          return;
+        }
+        handle = acquired;
+        setFetched(acquired.url);
+      },
+      () => undefined,
+    );
     return () => {
-      cancelled = true;
+      disposed = true;
+      setFetched(null);
+      handle?.release();
     };
   }, [source, path]);
   const resolved = source ?? fetched;

@@ -1,8 +1,8 @@
 import React from 'react';
 import { attachmentMeta, attachmentMetaText } from '../../conversation/attachmentMeta';
 import type { AttachmentRef } from '../../conversation/transcript';
-import * as ipc from '../../ipc';
 import { FileTypeIcon } from './fileIcons';
+import { acquireImageUrl, type ImageHandle } from './imageSources';
 import { ComposerBadge, ComposerTile } from './ComposerTile';
 
 /*
@@ -44,17 +44,29 @@ const AttachmentBadge: React.FC<{ attachment: AttachmentRef }> = ({ attachment }
   React.useEffect(() => {
     if (!attachment.image) {
       setThumbnail(null);
-      return;
+      return undefined;
     }
-    let cancelled = false;
-    void ipc
-      .attachmentSource(attachment.path)
-      .then((value) => {
-        if (!cancelled) setThumbnail(value);
-      })
-      .catch(() => undefined);
+    let disposed = false;
+    let handle: ImageHandle | null = null;
+    /*
+     * 缩略图只要一张 32px 的位图，但取字节这条路上走的仍是整份文件：
+     * 因此地址同样按持有者回收，卡片撤掉就还回去，不把原图扣在内存里。
+     */
+    void acquireImageUrl(attachment.path).then(
+      (acquired) => {
+        if (disposed) {
+          acquired.release();
+          return;
+        }
+        handle = acquired;
+        setThumbnail(acquired.url);
+      },
+      () => undefined,
+    );
     return () => {
-      cancelled = true;
+      disposed = true;
+      setThumbnail(null);
+      handle?.release();
     };
   }, [attachment.image, attachment.path]);
 

@@ -15,10 +15,9 @@ import { ErrorCard } from './ErrorCard';
 import { InputDock } from './InputDock';
 import { PlanDock } from './PlanDock';
 import { SidebarRight } from '../../sidebarRight/SidebarRight';
-import { changesAddress, fileAddress } from '../../sidebarRight/registry';
 import { useRailLayout } from '../../sidebarRight/useRailLayout';
-import { ConversationActionsProvider, type ConversationActions } from './actions';
-import { structuredInputBlock } from '../../conversation/references';
+import { ConversationActionsProvider } from './actions';
+import { useConversationActionsValue } from './useConversationActionsValue';
 import { useConversationMcp } from '../../conversation/useConversationMcp';
 import { useSkillCatalog } from '../../conversation/skillCatalog';
 import { useTurnModelRoute } from '../../conversation/useTurnModelRoute';
@@ -305,37 +304,29 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    */
   useInterruptOnEscape(turnRunning, () => void interruptTurn());
 
-  /** 行内动作：重发消息、打开文件、打开某一轮改动对比；控制器经 ref 取当前值。 */
+  /**
+   * 工作区根目录只取路径字符串。
+   *
+   * 工作区对象每换一次引用都让整条时间线重渲染是不划算的；只有路径真的变了，
+   * 正文里那些相对图片路径才需要重新解析。
+   */
+  const workspacePath = workspace?.path ?? null;
+
+  /** 会话控制器与右侧栏都只经 ref 取当前值：动作集合因此不会每帧重建。 */
   const conversationRef = React.useRef(conversation);
   conversationRef.current = conversation;
-  const actions = React.useMemo<ConversationActions>(
-    () => ({
-      retry: (text: string, attachments: readonly AttachmentRef[]) => {
-        // 附件重新走一次结构化输入块：只带图片的消息没有正文，块就是它的正文。
-        const paths = attachments.map((attachment) => attachment.path);
-        void conversationRef.current.submit(
-          text,
-          [...attachments],
-          structuredInputBlock(text, [], paths),
-        );
+  const railRef = React.useRef(rail);
+  railRef.current = rail;
+  const actions = useConversationActionsValue(
+    {
+      submit: (text, attachments, structuredInput) => {
+        void conversationRef.current.submit(text, [...attachments], structuredInput);
       },
-      openFile: (path: string) => {
-        // 打开文件即打开对应的资源 tab：面板会自己展开，不需要先切视图。
-        rail.openResource(fileAddress(path));
-      },
-      openChanges: (turnId: string, turnNumber: number, index: number) => {
-        // 改动对比按「轮次」落成资源地址：文件下标是导航参数，因此同一个 tab 反复
-        // 打开不同文件时只会切换落点，不会堆出一排标签。
-        rail.openResource(changesAddress(turnId, turnNumber), { index });
-      },
-      // 卡片只有一张，而且只承载当前待答的那条提问：入口因此只需把卡片叫回来。
+      unfoldTurn: (interactionId) => conversationRef.current.unfoldTurn(interactionId),
+      openResource: (address, params) => railRef.current.openResource(address, params),
       openQuestion: () => setQuestionReopenToken((value) => value + 1),
-      // 折叠行自带标识：展开时按它重新回放那一条 Interaction。
-      unfoldTurn: (interactionId: string) => conversationRef.current.unfoldTurn(interactionId),
-      // 正文里的相对图片路径以当前工作区为准，与输入坞的 `@` 引用同作用域。
-      workspaceRoot: workspace?.path ?? null,
-    }),
-    [rail, workspace],
+    },
+    workspacePath,
   );
 
   /*

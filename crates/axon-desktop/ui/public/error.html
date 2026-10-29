@@ -383,6 +383,28 @@
 
       const params = new URLSearchParams(location.search);
       const kind = params.get('kind') || '';
+
+      /**
+       * 内存分项：宿主在内存判据成立时把读数拼进查询串。
+       *
+       * 只认能解析成正数的项；渲染那一项缺失时整行不出现，因此进程崩溃那条路径
+       * （本来就读不到完整进程树）不会多出一行全零的读数。
+       */
+      function memoryReading() {
+        const render = Number(params.get('render'));
+        if (!Number.isFinite(render) || render <= 0) return null;
+        const pick = (key) => {
+          const value = Number(params.get(key));
+          return Number.isFinite(value) && value > 0 ? value : 0;
+        };
+        return {
+          render: render,
+          browser: pick('browser'),
+          utility: pick('utility'),
+          total: pick('total'),
+        };
+      }
+
       const reason = REASONS[kind];
       if (reason) {
         document.getElementById('detail').textContent = reason.detail;
@@ -396,13 +418,19 @@
       });
 
       document.getElementById('copy').addEventListener('click', async () => {
-        const text = [
-          'Axon 界面异常',
-          '原因: ' + (reason ? reason.label : '未记录') + (kind ? ' (' + kind + ')' : ''),
-          '地址: ' + location.href,
-          '时间: ' + new Date().toISOString(),
-          '环境: ' + navigator.userAgent,
-        ].join('\n');
+        const memory = memoryReading();
+        const lines = ['Axon 界面异常'];
+        lines.push('原因: ' + (reason ? reason.label : '未记录') + (kind ? ' (' + kind + ')' : ''));
+        if (memory !== null) {
+          lines.push(
+            '内存: 渲染 ' + memory.render + ' MB · 浏览器 ' + memory.browser +
+              ' MB · 工具 ' + memory.utility + ' MB · 合计 ' + memory.total + ' MB',
+          );
+        }
+        lines.push('地址: ' + location.href);
+        lines.push('时间: ' + new Date().toISOString());
+        lines.push('环境: ' + navigator.userAgent);
+        const text = lines.join('\n');
         try {
           await navigator.clipboard.writeText(text);
           const hint = document.getElementById('copied');

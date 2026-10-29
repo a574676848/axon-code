@@ -1,58 +1,26 @@
 import React from 'react';
-import * as ipc from '../../ipc';
 import { ImageLightbox } from './ImageLightbox';
+import { acquireFirstImage, type ImageHandle } from './imageSources';
 import { imagePathCandidates } from './localImage';
 
 /*
  * 正文里的一张本地图片。
  *
- * 与附件卡同一套取值通道（桌面窗口走 IPC 数据地址，浏览器调试桥走字节路由），
- * 因此「正文里看到的图」与「消息气泡上那张附件图」是同一份字节、同一套行为：
- * 读不出来时给一张破图占位并附上原路径，点开进同一盏灯箱。
+ * 与附件卡同一套取值通道（桌面窗口由宿主返回 data URL，界面转成 Blob 地址；
+ * 浏览器调试桥走字节路由），因此「正文里看到的图」与「消息气泡上那张附件图」
+ * 是同一份字节、同一套行为：读不出来时给一张破图占位并附上原路径，点开进同一盏灯箱。
  *
  * 待读路径按候选顺序逐个试：模型写的路径可能被引号包住、粘着中文标点或带空格，
  * 第一个能读出来的就是它。
  */
 
-/**
- * 同一个路径只读一次：正文里同一张图被引用多次时不再重复走一次 IPC。
+/*
+ * 图片地址由 imageSources 统一托管：读一次、按持有者计数回收。
  *
- * 表是有界的。桌面窗口这条通道回的是 data URL，一张 1.5 MB 的截图在 JS 里就是约
- * 2 MB 的字符串；一张图读出来之后组件自己还持有地址，这里只保留最近这些条，
- * 更早的被移出后如需再显示会重新读一次，代价是一次 IPC 而不是常驻内存。
+ * 这里不再自建缓存。曾经那张按路径去重的表在 24 条上封顶，可它存的是 data URL：
+ * 一条 8 MiB 的截图就是约 10.7 MiB 的字符串，而地址一旦进了表就与视野无关，
+ * 滚过去的图仍然整张留在堆上。现在地址跟着持有者走，看不见就还回去。
  */
-const SOURCE_CACHE_LIMIT = 24;
-
-const sources = new Map<string, Promise<string>>();
-
-/** 取一个本地图片路径的渲染地址；失败时从缓存里撤掉，允许后续重试。 */
-export function imageSource(path: string): Promise<string> {
-  const cached = sources.get(path);
-  if (cached !== undefined) return cached;
-  const pending = ipc.attachmentSource(path).catch((error: unknown) => {
-    sources.delete(path);
-    throw error;
-  });
-  sources.set(path, pending);
-  if (sources.size > SOURCE_CACHE_LIMIT) {
-    const oldest = sources.keys().next();
-    if (!oldest.done) sources.delete(oldest.value);
-  }
-  return pending;
-}
-
-/** 按候选顺序取第一张读得出来的图。 */
-export function firstReadableImage(candidates: string[]): Promise<string> {
-  let failure: unknown = new Error('没有可读取的图片路径');
-  const attempt = (index: number): Promise<string> => {
-    if (index >= candidates.length) return Promise.reject(failure);
-    return imageSource(candidates[index]).catch((error: unknown) => {
-      failure = error;
-      return attempt(index + 1);
-    });
-  };
-  return attempt(0);
-}
 
 /** 图片自身的展示尺寸上限；再大也只是把正文挤成一张图。 */
 const MAX_HEIGHT = 420;
@@ -138,23 +106,32 @@ export const MarkdownImage: React.FC<{
 
   React.useEffect(() => {
     if (!visible) return undefined;
-    let cancelled = false;
+    let disposed = false;
+    let handle: ImageHandle | null = null;
     setSource(null);
     setFailed(false);
     const current = candidatesRef.current;
     // 远程图片交给 webview 自己取：这里只负责本地图片的字节通道。
-    const pending =
-      current.length === 0 ? Promise.resolve(destination) : firstReadableImage(current);
-    void pending.then(
-      (value) => {
-        if (!cancelled) setSource(value);
+    if (current.length === 0) {
+      setSource(destination);
+      return undefined;
+    }
+    void acquireFirstImage(current).then(
+      (acquired) => {
+        if (disposed) {
+          acquired.release();
+          return;
+        }
+        handle = acquired;
+        setSource(acquired.url);
       },
       () => {
-        if (!cancelled) setFailed(true);
+        if (!disposed) setFailed(true);
       },
     );
     return () => {
-      cancelled = true;
+      disposed = true;
+      handle?.release();
     };
   }, [candidateKey, destination, visible]);
 
@@ -244,18 +221,30 @@ export const ImagePathChip: React.FC<{
   const [hover, setHover] = React.useState(false);
 
   React.useEffect(() => {
-    if (!thumbnail || !hover || preview !== null) return undefined;
-    let cancelled = false;
-    void firstReadableImage(imagePathCandidates(path)).then(
-      (value) => {
-        if (!cancelled) setPreview(value);
+    if (!thumbnail || !hover) return undefined;
+    let disposed = false;
+    let handle: ImageHandle | null = null;
+    void acquireFirstImage(imagePathCandidates(path)).then(
+      (acquired) => {
+        if (disposed) {
+          acquired.release();
+          return;
+        }
+        handle = acquired;
+        setPreview(acquired.url);
       },
       () => undefined,
     );
     return () => {
-      cancelled = true;
+      disposed = true;
+      /*
+       * 缩略图只在指针停着的时候有意义：指针一走就把地址还回去。
+       * 一枚芯片因此不会把一整张原图的字节扣在内存里。
+       */
+      setPreview(null);
+      handle?.release();
     };
-  }, [hover, path, preview, thumbnail]);
+  }, [hover, path, thumbnail]);
 
   return (
     <span
