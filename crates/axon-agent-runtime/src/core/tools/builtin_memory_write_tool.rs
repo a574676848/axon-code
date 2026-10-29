@@ -85,7 +85,7 @@ pub(crate) fn memory_write_tool_definition() -> ToolDefinition {
         id: MEMORY_WRITE_TOOL_ID,
         namespace: crate::AGENT_TOOL_NAMESPACE.to_owned(),
         name: MEMORY_WRITE_TOOL_NAME.to_owned(),
-        description: "仅在当前任务得到有证据、可跨会话复用的稳定结论时写入长期记忆；用户授权保存的敏感信息按明文进入普通 Memory，不提供加密隔离。".to_owned(),
+        description: "仅在当前任务得到有证据、可跨会话复用的稳定结论时写入长期记忆。作用域固定：profile 与 preference 写入个人记忆；experience、knowledge 与 procedure 写入当前工作地点（普通 Workspace 或其分支，以及在 ~/.axon 里写作时固定的 Axon 主目录桶），不得因为位于主目录就降级成个人记忆。用户授权保存的敏感信息按明文进入普通 Memory，不提供加密隔离。".to_owned(),
         schema,
         enabled: true,
         concurrency_policy: axon_domain::ToolConcurrencyPolicy::Exclusive,

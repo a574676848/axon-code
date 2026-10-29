@@ -33,9 +33,9 @@ pub use axon_memory::MemoryHybridScope;
 
 pub use embedding::{
     MEMORY_QUERY_EMBEDDING_DISABLED, MEMORY_QUERY_EMBEDDING_FALLBACK,
-    MEMORY_QUERY_EMBEDDING_GENERATED, MemoryReadAuthHeaderPlan, MemoryReadEmbeddingRequestInput,
-    MemoryReadEmbeddingRequestPlan, MemoryReadHttpHeader, QueryEmbeddingReport,
-    parse_memory_embedding_response, plan_memory_embedding, prewarm_memory_embedding,
+    MEMORY_QUERY_EMBEDDING_GENERATED, MemoryReadEmbeddingRequestInput,
+    MemoryReadEmbeddingRequestPlan, QueryEmbeddingReport, parse_memory_embedding_response,
+    plan_memory_embedding, plan_memory_embedding_multimodal, prewarm_memory_embedding,
 };
 pub use turn::{
     MemoryTurnCitationReport, MemoryTurnContext, MemoryTurnHit, memory_turn_citation_report,
@@ -194,7 +194,31 @@ pub fn hybrid_query_memory(
     timeout: Duration,
     scope: Option<MemoryHybridScope>,
 ) -> PreparedMemoryQuery {
-    let embedding = memory_query_embedding(config, prompt, timeout);
+    hybrid_query_memory_with_images(
+        config,
+        orchestrator,
+        prompt,
+        &[],
+        limit,
+        now_ms,
+        timeout,
+        scope,
+    )
+}
+
+/// 执行带图片引用的 Memory hybrid recall；带图时 embedding 走多模态接口。
+#[must_use]
+pub fn hybrid_query_memory_with_images(
+    config: &AxonConfig,
+    orchestrator: &MemoryOrchestrator,
+    prompt: &str,
+    image_urls: &[String],
+    limit: usize,
+    now_ms: u64,
+    timeout: Duration,
+    scope: Option<MemoryHybridScope>,
+) -> PreparedMemoryQuery {
+    let embedding = memory_query_embedding_with_images(config, prompt, image_urls, timeout);
     hybrid_query_memory_with_embedding(orchestrator, prompt, &embedding, limit, now_ms, scope)
 }
 
@@ -205,7 +229,18 @@ pub fn memory_query_embedding(
     prompt: &str,
     timeout: Duration,
 ) -> QueryEmbeddingReport {
-    embedding::generate_memory_query_embedding(config, prompt, timeout)
+    memory_query_embedding_with_images(config, prompt, &[], timeout)
+}
+
+/// 为 Memory 查询生成 embedding；带图且 provider 支持多模态时走多模态接口。
+#[must_use]
+pub fn memory_query_embedding_with_images(
+    config: &AxonConfig,
+    prompt: &str,
+    image_urls: &[String],
+    timeout: Duration,
+) -> QueryEmbeddingReport {
+    embedding::generate_memory_query_embedding_with_images(config, prompt, image_urls, timeout)
 }
 
 /// 执行带预计算 embedding 的 Memory hybrid recall，避免跨 namespace 重复生成 embedding。
@@ -219,13 +254,16 @@ pub fn hybrid_query_memory_with_embedding(
     scope: Option<MemoryHybridScope>,
 ) -> PreparedMemoryQuery {
     let hits = orchestrator
-        .hybrid_search(&MemoryHybridQuery {
-            query_text: prompt.to_owned(),
-            query_embedding: embedding.embedding.clone(),
-            limit,
-            now_ms,
-            scope,
-        })
+        .hybrid_search_with_image(
+            &MemoryHybridQuery {
+                query_text: prompt.to_owned(),
+                query_embedding: embedding.embedding.clone(),
+                limit,
+                now_ms,
+                scope,
+            },
+            embedding.image_embedding.as_deref(),
+        )
         .unwrap_or_default();
     PreparedMemoryQuery {
         hits,

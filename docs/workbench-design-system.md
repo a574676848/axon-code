@@ -344,7 +344,7 @@
 > | `warning` | `--color-gold`（`#F59E0B`） | 被中断、被杀、被停：按人的意思结束 |
 > | `error` | `--color-danger`（`#EC1313`） | 失败 |
 > | `idle` | `--color-state-idle`（`#D4D4D4`） | 既没在跑也没结果 |
-> | `ongoing` | `--color-text-tertiary` | 在跑：14px 的环加呼吸弧，匀速 1.5s，动画起点钉在时间零点所以同屏同步 |
+> | `ongoing` | `--color-text-tertiary` | 在跑：14px 的环加呼吸弧，匀速 1.5s，动画起点钉在时间零点所以同屏同步。旋转落在 `svg` 盒子上、弧的呼吸走 `opacity`，因此全程留在合成器与局部重绘里，不会带动整篇文档重排 |
 >
 > **状态色的来源**：`--color-ok`、`--color-danger`、`--color-gold`、`--color-state-idle` 四个取值直接采用参考实现的状态色（其 success / error / warn / idle）。标记沿用这四个取值，因此绿、红、琥珀各只有一个标记档：绿 `#22C55E`、红 `#EC1313`、琥珀 `#F59E0B`。**文字**另取可读档：红色文字直接用 `--color-danger`（对白底 4.5:1），琥珀文字用 `--color-gold-ink`（`#B45309`，对白底 5.02:1），标记继续用 `--color-gold`。
 >
@@ -459,6 +459,9 @@
 ### 5.3 动效铁律
 
 - **只允许对 `transform` 与 `opacity` 做动画**。禁止动画 `top`、`left`、`width`、`height`、`margin`、`padding`。
+- **禁止动画 SVG 的几何属性**（`stroke-dasharray`、`stroke-dashoffset` 一类）：它们进不了合成器，实测会让整篇文档每帧重排一次（约 60 次/秒）。旋转一律落在 HTML 盒子（`svg` 元素本身或它的外层 `span`）上，不落在 SVG 内部的 `<g>` 上；呼吸、明暗一律用 `opacity`。
+- **转圈只有一份实现**：全站转圈统一走 `.state-spinner`（1.5 秒匀速，旋转落在 `svg` 或外层 `span` 的盒子上），不再使用 Tailwind `animate-spin`，也不另写一条旋转关键帧。同时刻在转的元素数量因此有上界：输入坞工作状态行一枚，加每个进行中的过程行一枚。
+- **过程行不铺扫光**：思考、执行、工具这类过程行的运行态由状态转圈与耗时表达；扫光只属于输入坞工作状态行与作业面板的等待行，避免一轮里十几行同时扫光。
 - **`visibility` 可以参与过渡，但只作离散翻面**：它是「滑完之后再隐藏、滑入之前先现形」的实现手段，本身不产生逐帧的布局或绘制变化。用它时同一条过渡里必须另有一个真的在动的属性（位移或透明度），不得只翻可见性。
 - **禁止** `window.addEventListener('scroll')`；一律用 `IntersectionObserver` 或虚拟滚动自有回调。
 - 必须实现 `prefers-reduced-motion: reduce` 降级：位移与缩放全部去除，流式光标静止，自动滚动改为瞬时定位。

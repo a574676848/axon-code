@@ -8,11 +8,12 @@ use std::path::PathBuf;
 use super::*;
 use axon_config::AxonConfig;
 use axon_domain::{
-    CellId, MemoryCandidateId, MemoryRecord, MemorySourceOrigin, MemorySourceTrace, SessionId,
+    CellId, MemoryCandidateId, MemoryRecord, MemorySourceOrigin, MemorySourceTrace, MemoryState,
+    SessionId,
 };
 use axon_memory::MemorySqliteStore;
 
-fn test_adapter(test_name: &str) -> (MemoryHttpAdapter, PathBuf) {
+pub(super) fn test_adapter(test_name: &str) -> (MemoryHttpAdapter, PathBuf) {
     let root = axon_test_support::test_temp_root().join(format!("memory-http-{test_name}"));
     std::fs::create_dir_all(&root).expect("测试根目录应可创建");
     let config_path = root.join("config.toml");
@@ -21,7 +22,7 @@ fn test_adapter(test_name: &str) -> (MemoryHttpAdapter, PathBuf) {
     (MemoryHttpAdapter::new(&root, &config_path), root)
 }
 
-fn record(
+pub(super) fn record(
     id: u64,
     kind: MemoryKind,
     user_ref: Option<&str>,
@@ -60,7 +61,7 @@ fn record(
     }
 }
 
-fn seed(root: &std::path::Path, records: &[MemorySqliteRecord]) {
+pub(super) fn seed(root: &std::path::Path, records: &[MemorySqliteRecord]) {
     let config = MemoryConfig::from_config_dir(
         root,
         false,
@@ -78,14 +79,14 @@ fn response_json(response: GatewayHttpResponse) -> Value {
     serde_json::from_slice(&response.body).expect("Gateway 应返回 JSON")
 }
 
-fn get(adapter: &MemoryHttpAdapter, path: &str, query: Option<&str>) -> (u16, Value) {
+pub(super) fn get(adapter: &MemoryHttpAdapter, path: &str, query: Option<&str>) -> (u16, Value) {
     let response = adapter
         .handle_request("GET", path, query, &[])
         .expect("GET 路由应命中");
     (response.status, response_json(response))
 }
 
-fn post(adapter: &MemoryHttpAdapter, path: &str, body: &[u8]) -> (u16, Value) {
+pub(super) fn post(adapter: &MemoryHttpAdapter, path: &str, body: &[u8]) -> (u16, Value) {
     let response = adapter
         .handle_request("POST", path, None, body)
         .expect("POST 路由应命中");

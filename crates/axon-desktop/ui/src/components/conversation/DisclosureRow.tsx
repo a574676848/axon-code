@@ -94,7 +94,7 @@ export const DisclosureRow: React.FC<DisclosureRowProps> = ({
       {open !== undefined && (
         <span className="shrink-0 text-text-tertiary transition-colors duration-100 group-hover:text-text-primary">
           {active ? (
-            <SpinnerIcon size={12} className="animate-spin" />
+            <SpinnerIcon size={12} className="state-spinner" />
           ) : (
             <ChevronRightIcon
               size={12}
@@ -116,7 +116,7 @@ export const DisclosureRow: React.FC<DisclosureRowProps> = ({
         <span
           className={`${LABEL_COLUMN} text-row font-medium ${
             danger ? 'text-danger' : 'text-text-secondary'
-          } ${active ? 'shimmer-text-active text-text-primary' : ''}`}
+          } ${active ? 'text-text-primary' : ''}`}
         >
           {label}
         </span>

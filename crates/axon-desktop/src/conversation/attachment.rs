@@ -357,7 +357,7 @@ pub fn read_preview_data_url(path: &str) -> Result<String, String> {
 }
 
 /// Tauri IPC 命令：把图片附件读成数据地址。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn attachment_preview(path: String) -> Result<String, String> {
     read_preview_data_url(&path)
 }
@@ -401,7 +401,7 @@ pub fn path_from_scheme_uri(uri: &str) -> Result<String, String> {
 }
 
 /// Tauri IPC 命令：落地一个粘贴进来的附件。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn attachment_stage(name: String, data_base64: String) -> Result<StagedAttachment, String> {
     stage(&name, &data_base64)
 }
@@ -410,7 +410,7 @@ pub fn attachment_stage(name: String, data_base64: String) -> Result<StagedAttac
 ///
 /// 桌面窗口内不需要把字节绕一圈 base64：选中的就是磁盘上的真实文件，
 /// 直接把路径作为附件交出去即可，省掉一次读放大。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn attachment_pick() -> Result<Vec<StagedAttachment>, String> {
     let selected = crate::process::pick_files(None)?;
     selected

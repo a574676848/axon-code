@@ -28,6 +28,7 @@ fn run_request_uses_configured_control_limits() {
         supports_vision: false,
         supports_embedding: false,
         embedding_dimension: 0,
+        requires_reasoning_content_on_assistant_messages: false,
     });
     config.agent.default_model = "fixture-chat".to_owned();
     config.agent.fast_model = "fixture-chat".to_owned();
@@ -105,6 +106,7 @@ fn goal_execution_subagent_runs_fast_model_without_main_turn_reasoning() {
             supports_vision: false,
             supports_embedding: false,
             embedding_dimension: 0,
+            requires_reasoning_content_on_assistant_messages: false,
         });
     }
     config.agent.default_model = "main-model".to_owned();
@@ -272,6 +274,7 @@ fn subagent_graph_store_uses_session_root_thread_id() {
         supports_vision: false,
         supports_embedding: false,
         embedding_dimension: 0,
+        requires_reasoning_content_on_assistant_messages: false,
     });
     config.agent.default_model = "fixture-chat".to_owned();
     config.agent.fast_model = "fixture-chat".to_owned();

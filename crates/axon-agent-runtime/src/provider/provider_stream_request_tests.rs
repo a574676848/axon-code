@@ -211,6 +211,7 @@ fn provider_capability_combinations_gate_cache_state_and_protocol_fields() {
         supports_prompt_cache: true,
         supports_explicit_cache_breakpoint: false,
         supports_server_conversation_state: false,
+        requires_reasoning_content_on_assistant_messages: false,
     };
     prompt_only.server_conversation_state_ref = Some("ignored".to_owned());
     prompt_only.prompt_cache_plan = request_prompt_cache_plan(&prompt_only);
@@ -243,6 +244,7 @@ fn provider_capability_combinations_gate_cache_state_and_protocol_fields() {
         supports_prompt_cache: true,
         supports_explicit_cache_breakpoint: false,
         supports_server_conversation_state: false,
+        requires_reasoning_content_on_assistant_messages: false,
     };
     anthropic.prompt_cache_plan = request_prompt_cache_plan(&anthropic);
     let anthropic_body: serde_json::Value = serde_json::from_str(
@@ -609,4 +611,36 @@ fn cache_shape_marks_same_length_prefix_rewrite() {
         comparison.reason,
         ProviderVisibleCacheBreakReason::MessagePrefixChanged
     );
+}
+
+#[test]
+fn openai_chat_body_backfills_reasoning_content_when_provider_requires_passback() {
+    let mut input = request_input(Vec::new());
+    input.capabilities =
+        axon_config::ProviderCapabilities::for_protocol(axon_config::PROVIDER_PROTOCOL_OPENAI_CHAT);
+    input
+        .capabilities
+        .requires_reasoning_content_on_assistant_messages = true;
+    input.messages = vec![
+        AgentModelMessage::text("system", "系统指令"),
+        AgentModelMessage::text("user", "开始"),
+        AgentModelMessage::text("assistant", "先读 README"),
+        AgentModelMessage::text("assistant", "").with_tool_calls(vec![
+            crate::AgentModelToolCallMetadata {
+                id: "call_1".to_owned(),
+                name: "builtin.shell_command".to_owned(),
+                input: r#"{"command":"echo hi"}"#.into(),
+            },
+        ]),
+    ]
+    .into();
+    input.prompt_cache_plan = request_prompt_cache_plan(&input);
+
+    let plan = ProviderStreamingHttpRequestRuntime.plan(input).unwrap();
+    let body: serde_json::Value = serde_json::from_str(&plan.body_text).unwrap();
+    let messages = body["messages"].as_array().unwrap();
+
+    assert_eq!(messages[2]["reasoning_content"], "");
+    assert_eq!(messages[3]["reasoning_content"], "");
+    assert!(messages[1].get("reasoning_content").is_none());
 }

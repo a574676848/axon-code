@@ -63,6 +63,9 @@ pub const PROVIDER_PROTOCOL_DASHSCOPE: &str = "dashscope";
 /// 火山方舟多模态 embedding provider 协议。
 pub const PROVIDER_PROTOCOL_VOLCENGINE_ARK_MULTIMODAL: &str = "volcengine-ark-multimodal";
 
+/// OpenAI 兼容多模态 embeddings provider 协议（网关多向量返回）。
+pub const PROVIDER_PROTOCOL_OPENAI_MULTIMODAL_EMBEDDINGS: &str = "openai-multimodal-embeddings";
+
 /// Provider 请求历史与缓存能力。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderCapabilities {
@@ -72,6 +75,8 @@ pub struct ProviderCapabilities {
     pub supports_explicit_cache_breakpoint: bool,
     /// 是否支持服务端会话状态引用。
     pub supports_server_conversation_state: bool,
+    /// 是否要求每条历史 assistant 消息回传 `reasoning_content`。
+    pub requires_reasoning_content_on_assistant_messages: bool,
 }
 
 impl ProviderCapabilities {
@@ -83,11 +88,13 @@ impl ProviderCapabilities {
                 supports_prompt_cache: true,
                 supports_explicit_cache_breakpoint: false,
                 supports_server_conversation_state: true,
+                requires_reasoning_content_on_assistant_messages: false,
             },
             PROVIDER_PROTOCOL_ANTHROPIC => Self {
                 supports_prompt_cache: true,
                 supports_explicit_cache_breakpoint: true,
                 supports_server_conversation_state: false,
+                requires_reasoning_content_on_assistant_messages: false,
             },
             _ => Self::stateless(),
         }
@@ -100,7 +107,15 @@ impl ProviderCapabilities {
             supports_prompt_cache: false,
             supports_explicit_cache_breakpoint: false,
             supports_server_conversation_state: false,
+            requires_reasoning_content_on_assistant_messages: false,
         }
+    }
+
+    /// 应用模型级兼容声明：模型要求回传推理正文时打开对应能力位。
+    #[must_use]
+    pub fn with_model_reasoning_content_passback(mut self, required: bool) -> Self {
+        self.requires_reasoning_content_on_assistant_messages = required;
+        self
     }
 }
 /// Provider 默认 HTTP/SSE 传输。
@@ -318,7 +333,7 @@ fn resolved_memory_embedding_dimension(config: &AxonConfig) -> usize {
 
 /// Axon 总配置。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct AxonConfig {
     /// Agent 配置。
     pub agent: AgentConfig,
@@ -343,7 +358,7 @@ pub struct AxonConfig {
 
 /// 模型 provider 配置。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct ProviderConfig {
     /// provider 名称。
     pub name: String,
@@ -427,7 +442,7 @@ pub const fn default_provider_enabled() -> bool {
 
 /// 模型配置。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct ModelConfig {
     /// 模型名称（负载均衡路由键）；
     /// 同一 name 可对应多个 provider 渠道，运行时按 priority/weight 选择。
@@ -447,6 +462,11 @@ pub struct ModelConfig {
     pub supports_embedding: bool,
     /// embedding 维度；仅 supports_embedding=true 时有效。
     pub embedding_dimension: usize,
+    /// 是否要求每条历史 assistant 消息回传 `reasoning_content`。
+    ///
+    /// 仅对思考模式下强制回传推理正文的 OpenAI-compatible 网关开启；
+    /// 未保存推理正文的历史消息会补空串，避免上游以 400 拒绝整条请求。
+    pub requires_reasoning_content_on_assistant_messages: bool,
 }
 
 impl Default for ModelConfig {
@@ -460,7 +480,16 @@ impl Default for ModelConfig {
             supports_vision: true,
             supports_embedding: false,
             embedding_dimension: 0,
+            requires_reasoning_content_on_assistant_messages: false,
         }
+    }
+}
+
+impl ModelConfig {
+    /// 模型自身声明的历史推理回传兼容要求。
+    #[must_use]
+    pub const fn requires_reasoning_content_passback(&self) -> bool {
+        self.requires_reasoning_content_on_assistant_messages
     }
 }
 

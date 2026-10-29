@@ -31,9 +31,10 @@ const prefersReducedMotion = (): boolean =>
   window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /** 用户可见的状态文案；weak 与 strong 属于内部治理态，不对用户展示。 */
-const stateNote = (state: MemoryRecord['state']): string | null => {
-  if (state === 'tombstone') return '已遗忘';
-  if (state === 'quarantined') return '已隔离';
+const stateNote = (record: MemoryRecord): string | null => {
+  if (record.state === 'tombstone') return '已遗忘';
+  if (record.state === 'quarantined') return '已隔离';
+  if (record.archivedAtMs !== null && record.archivedAtMs !== undefined) return '已归档';
   return null;
 };
 
@@ -386,7 +387,7 @@ interface WheelRowProps {
 
 /** 单条记忆的展示行；只呈现用户可见事实。 */
 const WheelRow: React.FC<WheelRowProps> = ({ record, active, actions }) => {
-  const note = stateNote(record.state);
+  const note = stateNote(record);
   const meta = [
     `置信度 ${formatPercent(record.confidenceBasisPoints)}`,
     `衰减后权重 ${formatPercent(record.decayedScoreBasisPoints)}`,

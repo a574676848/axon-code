@@ -88,7 +88,7 @@ fn catalog() -> Result<Vec<DocumentDto>, String> {
 ///
 /// 界面据此决定是否渲染「打开文件/打开目录」按钮：目标不存在时不显示按钮，
 /// 而不是让用户点开一个报错。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn document_catalog() -> Result<Vec<DocumentDto>, String> {
     catalog()
 }
@@ -101,7 +101,7 @@ fn open_native(path: &Path, _is_dir: bool) -> Result<(), String> {
 }
 
 /// Tauri IPC 命令：按标识打开对应的文件或其所在目录。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn open_document(id: String) -> Result<(), String> {
     let entry = catalog()?
         .into_iter()
@@ -224,7 +224,7 @@ fn project_server(name: &str, entry: &serde_json::Value) -> McpServerDto {
 }
 
 /// Tauri IPC 命令：列出 MCP 服务器。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn mcp_list() -> Result<Vec<McpServerDto>, String> {
     let path = mcp_config_path()?;
     let document = read_mcp_document(&path)?;
@@ -317,7 +317,7 @@ fn build_server(
 }
 
 /// Tauri IPC 命令：新增或更新一台 MCP 服务器。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn mcp_upsert(input: McpServerInput, original_name: Option<String>) -> Result<(), String> {
     let path = mcp_config_path()?;
     let mut document = read_mcp_document(&path)?;
@@ -344,7 +344,7 @@ pub fn mcp_upsert(input: McpServerInput, original_name: Option<String>) -> Resul
 }
 
 /// Tauri IPC 命令：移除一台 MCP 服务器。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn mcp_remove(name: String) -> Result<(), String> {
     let path = mcp_config_path()?;
     let mut document = read_mcp_document(&path)?;
@@ -363,7 +363,7 @@ pub fn mcp_remove(name: String) -> Result<(), String> {
 /// 面向熟悉原始配置的使用者：直接给出该服务器的完整 JSON 片段，
 /// 因此不做字段级改写。仍然校验它必须是 JSON 对象，
 /// 并且**不会**因为键名不认识就丢掉内容。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn mcp_upsert_raw(name: String, entry_json: String) -> Result<(), String> {
     let trimmed_name = name.trim();
     if trimmed_name.is_empty() {
@@ -476,7 +476,7 @@ fn clamp_field(value: &str) -> String {
 }
 
 /// Tauri IPC 命令：列出已安装技能。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn skills_list() -> Result<Vec<SkillDto>, String> {
     let root = axon_root()?.join(SKILLS_DIR);
     let Ok(entries) = fs::read_dir(&root) else {
@@ -538,7 +538,7 @@ fn document_file(id: &str) -> Result<&'static str, String> {
 }
 
 /// Tauri IPC 命令：读取人设或行为准则文档。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn document_read(id: String) -> Result<DocumentTextDto, String> {
     let path = axon_root()?.join(document_file(&id)?);
     let exists = path.exists();
@@ -558,7 +558,7 @@ pub fn document_read(id: String) -> Result<DocumentTextDto, String> {
 }
 
 /// Tauri IPC 命令：写入人设或行为准则文档。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn document_write(id: String, content: String) -> Result<(), String> {
     if content.trim().is_empty() {
         return Err("文档内容不能为空".to_string());

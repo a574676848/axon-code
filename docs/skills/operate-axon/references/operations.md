@@ -48,7 +48,7 @@ axon debug session show <session-id>
 axon debug session read <session-id>
 axon debug session replay <session-id>
 axon memory stats
-axon memory search <query>
+axon memory search <query> [--image <URL_OR_PATH>]
 axon memory inspect <memory-id>
 ```
 

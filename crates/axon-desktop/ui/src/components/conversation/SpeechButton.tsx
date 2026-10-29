@@ -30,7 +30,7 @@ export const SpeechButton: React.FC<{ text: string; source: string }> = ({ text,
   if (preparing) {
     return (
       <MessageActionButton label="停止朗读" title="正在准备朗读，再点一次取消" onClick={stop} pressed>
-        <span className="h-3.5 w-3.5 animate-spin rounded-full border border-current border-t-transparent" />
+        <span className="h-3.5 w-3.5 state-spinner rounded-full border border-current border-t-transparent" />
       </MessageActionButton>
     );
   }

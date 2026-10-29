@@ -35,7 +35,8 @@
 
 1. **Workspace 记忆首发召回 (`builtin.memory_search`)**：
    - **触发时机**：选定 Workspace 准备开展实质性工作前，首个工具调用必须调用 `builtin.memory_search` 召回该工作区的 Profile、Preferences 与 Experiences。召回完成前，严禁调用其他实质修改该 Workspace 的工具。
-   - **免检例外**：从 Home 启动未选定 Workspace 时禁止触发；纯侦察类只读探查（如核验物理路径是否有效）不强制触发。
+   - **Home 同样召回**：在 `~/.axon`（Axon 主目录）里工作时也必须先召回，检索范围是个人记忆加「Axon 主目录」这个固定桶；不得因为未选定普通 Workspace 就跳过召回。
+   - **免检例外**：只有纯侦察类只读探查（如核验物理路径是否有效）不强制触发。
    - **切换重置**：切换 Workspace 必须注销旧记忆并针对新地点重新召回；旧 Workspace 记忆严禁跨项目沿用。
    - **证据效力**：记忆仅作为推演线索，不构成当轮事实证明。一旦与最新源码、配置或运行证据冲突，以当前证据为绝对基准。
 
@@ -45,7 +46,8 @@
      | 记忆分类 (kind) | 存储作用域 | 前置条件 |
      | :--- | :--- | :--- |
      | `profile` / `preference` | **Personal Memory (个人)** | 随时可写（即使未选定 Workspace） |
-     | `experience` / `knowledge` / `procedure` | **Workspace Memory (工作区)** | 必须在明确 Workspace 且经实际验证后方可写入 |
+     | `experience` / `knowledge` / `procedure` | **Workspace Memory (工作区)** | 必须在明确地点（普通 Workspace 或 Axon 主目录）且经实际验证后方可写入 |
+   - **主目录不得降级为个人记忆**：在 `~/.axon` 里沉淀的经验、知识与流程写入「Axon 主目录」工作区桶，与 Personal Memory 分开存放；严禁因为它们发生在主目录就改写成 `profile` 或 `preference`，也不要因为"没有 Workspace"而放弃写入。
    - **参数硬约束**：
      - `summary`：非空、高信噪比的可复用结论。
      - `evidence`：非空支撑证据（用户原话、事实调用或验证摘要）。

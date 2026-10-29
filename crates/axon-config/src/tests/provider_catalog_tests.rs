@@ -73,6 +73,7 @@ fn provider_and_model_catalog_validates_references() {
         supports_vision: false,
         supports_embedding: false,
         embedding_dimension: 0,
+        requires_reasoning_content_on_assistant_messages: false,
     });
     config.agent.default_model = "local-chat".to_owned();
     config.agent.fast_model = "local-chat".to_owned();
@@ -140,6 +141,7 @@ fn anthropic_model_allows_omitted_output_tokens_and_rejects_zero() {
         supports_vision: true,
         supports_embedding: false,
         embedding_dimension: 0,
+        requires_reasoning_content_on_assistant_messages: false,
     });
     config.agent.default_model = "claude".to_owned();
     config.agent.fast_model = "claude".to_owned();
@@ -232,6 +234,7 @@ fn memory_embedding_resolves_provider_from_model_catalog() {
         supports_vision: false,
         supports_embedding: true,
         embedding_dimension: 1_536,
+        requires_reasoning_content_on_assistant_messages: false,
     });
     config.agent.default_model = "text-embedding-3-small".to_owned();
     config.agent.fast_model = "text-embedding-3-small".to_owned();
@@ -286,6 +289,7 @@ fn memory_embedding_accepts_bailian_and_ark_provider_protocols() {
         supports_vision: false,
         supports_embedding: true,
         embedding_dimension: 1_536,
+        requires_reasoning_content_on_assistant_messages: false,
     });
     config.models.push(ModelConfig {
         name: "doubao-embedding-vision-251215".to_owned(),
@@ -296,6 +300,7 @@ fn memory_embedding_accepts_bailian_and_ark_provider_protocols() {
         supports_vision: false,
         supports_embedding: true,
         embedding_dimension: 2_048,
+        requires_reasoning_content_on_assistant_messages: false,
     });
     config.models.push(ModelConfig {
         name: "qwen3-vl-embedding".to_owned(),
@@ -306,6 +311,7 @@ fn memory_embedding_accepts_bailian_and_ark_provider_protocols() {
         supports_vision: true,
         supports_embedding: true,
         embedding_dimension: 1_024,
+        requires_reasoning_content_on_assistant_messages: false,
     });
     config.agent.default_model = "text-embedding-v4".to_owned();
     config.agent.fast_model = "text-embedding-v4".to_owned();
@@ -342,6 +348,7 @@ fn provider_model_protocol_capability_gate_matches_model_kind() {
         supports_vision: false,
         supports_embedding: false,
         embedding_dimension: 0,
+        requires_reasoning_content_on_assistant_messages: false,
     });
     chat_on_dashscope_provider.agent.default_model = "qwen-chat".to_owned();
     chat_on_dashscope_provider.agent.fast_model = "qwen-chat".to_owned();
@@ -365,6 +372,7 @@ fn provider_model_protocol_capability_gate_matches_model_kind() {
         supports_vision: false,
         supports_embedding: true,
         embedding_dimension: 1_536,
+        requires_reasoning_content_on_assistant_messages: false,
     });
     embedding_on_chat_only_provider.agent.default_model = "embedding-on-chat-provider".to_owned();
     embedding_on_chat_only_provider.agent.fast_model = "embedding-on-chat-provider".to_owned();
@@ -417,7 +425,7 @@ fn provider_capabilities_are_not_user_configurable_or_persisted() {
     assert!(!serialized.contains("supports_server_conversation_state"));
 
     let path = axon_test_support::test_temp_root().join(format!(
-        "axon-provider-capabilities-rejected-{}.toml",
+        "axon-provider-capabilities-ignored-{}.toml",
         std::process::id()
     ));
     let _ = std::fs::remove_file(&path);
@@ -437,6 +445,86 @@ supports_server_conversation_state = false
     )
     .unwrap();
 
-    assert!(ConfigLoader::load_from_path(&path).is_err());
+    // 能力块不是配置契约：未声明字段被忽略，能力仍按协议推导。
+    let loaded = ConfigLoader::load_from_path(&path).unwrap();
+    let provider = loaded.config.providers.first().expect("provider 已加载");
+    assert!(provider.capabilities().supports_prompt_cache);
+    assert!(!provider.capabilities().supports_explicit_cache_breakpoint);
+    let serialized = to_toml_string(&loaded.config).unwrap();
+    assert!(!serialized.contains("capabilities"));
+    assert!(!serialized.contains("supports_prompt_cache"));
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn model_reasoning_content_compat_defaults_off_and_round_trips() {
+    let default_model = ModelConfig::default();
+    assert!(!default_model.requires_reasoning_content_passback());
+    assert!(
+        !ProviderConfig::new(
+            "thinking-gateway",
+            super::PROVIDER_PROTOCOL_OPENAI_CHAT,
+            "https://provider.example/v1",
+        )
+        .capabilities()
+        .with_model_reasoning_content_passback(default_model.requires_reasoning_content_passback())
+        .requires_reasoning_content_on_assistant_messages
+    );
+
+    let path = axon_test_support::test_temp_root().join(format!(
+        "axon-model-reasoning-content-compat-{}.toml",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    std::fs::write(
+        &path,
+        r#"
+[agent]
+default_model = "thinking"
+fast_model = "thinking"
+
+[[providers]]
+name = "thinking-gateway"
+protocol = "openai-chatcompletions"
+base_url = "https://provider.example/v1"
+
+[[models]]
+name = "thinking"
+id = "thinking-model"
+provider = "thinking-gateway"
+context_window = 128000
+requires_reasoning_content_on_assistant_messages = true
+"#,
+    )
+    .unwrap();
+
+    let loaded = ConfigLoader::load_from_path(&path).unwrap();
+    let model = loaded
+        .config
+        .models
+        .iter()
+        .find(|model| model.name == "thinking")
+        .expect("model 已加载");
+    assert!(model.requires_reasoning_content_passback());
+
+    let serialized = to_toml_string(&loaded.config).unwrap();
+    assert!(serialized.contains("requires_reasoning_content_on_assistant_messages = true"));
+    let _ = std::fs::remove_file(path);
+
+    let mut config = AxonConfig::default();
+    config.agent.default_model = "plain".to_owned();
+    config.agent.fast_model = "plain".to_owned();
+    config.providers.push(ProviderConfig::new(
+        "thinking-gateway",
+        super::PROVIDER_PROTOCOL_OPENAI_CHAT,
+        "https://provider.example/v1",
+    ));
+    config.models.push(ModelConfig {
+        name: "plain".to_owned(),
+        id: "plain-model".to_owned(),
+        provider: "thinking-gateway".to_owned(),
+        ..ModelConfig::default()
+    });
+    let serialized = to_toml_string(&config).unwrap();
+    assert!(!serialized.contains("requires_reasoning_content_on_assistant_messages"));
 }

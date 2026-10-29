@@ -114,6 +114,7 @@ fn setup_quick_preserves_existing_provider_model_and_overwrites_explicit_secret(
         supports_vision: false,
         supports_embedding: false,
         embedding_dimension: 0,
+    requires_reasoning_content_on_assistant_messages: false,
     });
     config.agent.default_model = "alias".to_owned();
     config.agent.fast_model = "alias".to_owned();
@@ -426,6 +427,7 @@ fn setup_reset_provider_removes_provider_and_models() {
         supports_vision: true,
         supports_embedding: false,
         embedding_dimension: 0,
+    requires_reasoning_content_on_assistant_messages: false,
     });
     config.agent.default_model = "target-m".to_owned();
     config.agent.fast_model = "target-m".to_owned();

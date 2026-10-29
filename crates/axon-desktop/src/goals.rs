@@ -16,7 +16,7 @@ const MIN_LIST_LIMIT: u32 = 1;
 ///
 /// `limit` 在这里夹取到 1 至 256，越界不报错也不放行：网关会拒绝越界值，
 /// 而界面只有「看板固定取 256」这一种用法，夹取后请求总能成立。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn goal_list(limit: Option<u32>, workspace_id: Option<String>) -> Result<Value, String> {
     let limit = limit
         .unwrap_or(MAX_LIST_LIMIT)
@@ -37,7 +37,7 @@ pub fn goal_list(limit: Option<u32>, workspace_id: Option<String>) -> Result<Val
 ///
 /// 标识去掉首尾空白后必须非空；含路径分隔符、查询串或片段的标识直接拒绝，
 /// 不发请求，也不让一个畸形的标识把路由拼到别的资源上。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn goal_get(goal_id: String) -> Result<Value, String> {
     let goal_id = goal_id.trim();
     if goal_id.is_empty() {

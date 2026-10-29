@@ -21,6 +21,7 @@ const EMPTY_MODEL: Omit<ModelInput, 'provider'> = {
   supports_vision: true,
   supports_embedding: false,
   embedding_dimension: 0,
+  requires_reasoning_content_on_assistant_messages: false,
 };
 
 interface ModelListEditorProps {
@@ -187,6 +188,23 @@ export const ModelListEditor: React.FC<ModelListEditorProps> = ({
                       checked={model.supports_vision}
                       disabled={disabled}
                       onChange={(next) => patch(index, { supports_vision: next })}
+                    />
+                  }
+                />
+
+                <ToggleField
+                  label="回传推理内容"
+                  description="思考模式网关要求历史助手消息逐条携带推理内容，缺失时补空串；仅 OpenAI Chat Completions 生效"
+                  control={
+                    <Switch
+                      label={`模型 ${model.name} 回传推理内容`}
+                      checked={model.requires_reasoning_content_on_assistant_messages}
+                      disabled={disabled}
+                      onChange={(next) =>
+                        patch(index, {
+                          requires_reasoning_content_on_assistant_messages: next,
+                        })
+                      }
                     />
                   }
                 />

@@ -71,7 +71,7 @@ fn lower_openai_wire_messages(
     messages: &[AgentModelMessage],
     responses: bool,
 ) -> PromptCacheProviderWirePlan {
-    let openai_messages = messages
+    let mut openai_messages: Vec<serde_json::Value> = messages
         .iter()
         .map(|message| {
             if responses {
@@ -81,6 +81,13 @@ fn lower_openai_wire_messages(
             }
         })
         .collect();
+    if !responses
+        && input
+            .capabilities
+            .requires_reasoning_content_on_assistant_messages
+    {
+        fill_missing_reasoning_content(&mut openai_messages);
+    }
     PromptCacheProviderWirePlan {
         openai_messages,
         anthropic_system: Vec::new(),
@@ -89,6 +96,23 @@ fn lower_openai_wire_messages(
         applied_hints: Vec::new(),
         remote_raw_payload_allowed: false,
         reasons: provider_policy_reasons(input),
+    }
+}
+
+/// 思考模式强制回传推理正文时，为缺失字段的历史 assistant 消息补空串。
+///
+/// 真实推理正文由消息元数据投影；上游只校验字段存在性，空串不会改变语义。
+fn fill_missing_reasoning_content(messages: &mut [serde_json::Value]) {
+    for message in messages {
+        let Some(object) = message.as_object_mut() else {
+            continue;
+        };
+        if object.get("role").and_then(serde_json::Value::as_str) != Some("assistant")
+            || object.contains_key("reasoning_content")
+        {
+            continue;
+        }
+        object.insert("reasoning_content".to_owned(), serde_json::json!(""));
     }
 }
 

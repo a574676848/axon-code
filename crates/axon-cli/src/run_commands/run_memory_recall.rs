@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use axon_agent_runtime::{
     MemoryHybridHit, MemoryRetrievalMode, MemorySqliteRecord,
@@ -10,10 +13,12 @@ use axon_memory_read::{
     MEMORY_GLOBAL_NAMESPACE_REF, MEMORY_QUERY_EMBEDDING_DISABLED, MEMORY_QUERY_EMBEDDING_GENERATED,
     MemoryHybridScope, MemoryTurnContext, MemoryTurnHit, PreparedMemoryQuery,
     hybrid_query_memory_with_embedding, init_memory_orchestrator, injected_usage_events,
-    memory_query_embedding, recalled_usage_events, record_read_usage_async,
+    memory_query_embedding_with_images, recalled_usage_events, record_read_usage_async,
 };
 use axon_session::{WorkspaceSnapshot, WorkspaceSnapshotFieldState};
 use serde::Serialize;
+
+use crate::memory_image_ref::first_attachment_image_ref;
 
 use axon_session_runtime::{TurnPerformanceRecorder, TurnPerformanceStage};
 
@@ -85,6 +90,7 @@ pub(super) fn prepare_memory_recall_for_run(
     config_path: &Path,
     config: &AxonConfig,
     prompt: &str,
+    attached_files: &[PathBuf],
     command: &RunCommand,
     scope: RunMemoryScopeEvent,
     performance: Option<&dyn TurnPerformanceRecorder>,
@@ -94,9 +100,14 @@ pub(super) fn prepare_memory_recall_for_run(
     };
 
     let recall_now_ms = now_ms();
-    let query_embedding = memory_query_embedding(
+    // 本轮附件里的图片先归一化成多模态引用：带图时 embedding 走多模态接口，否则纯文本。
+    let image_refs = first_attachment_image_ref(attached_files)
+        .into_iter()
+        .collect::<Vec<_>>();
+    let query_embedding = memory_query_embedding_with_images(
         config,
         prompt,
+        &image_refs,
         provider_stream_idle_timeout(command.timeout),
     );
     if let Some(performance) = performance {

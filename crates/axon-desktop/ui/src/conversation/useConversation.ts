@@ -420,8 +420,11 @@ export function useConversation(target: ConversationTarget | null): Conversation
     laneReattach.token,
   ]);
 
-  /** 运行中按节拍刷新耗时。 */
-  useElapsedTick(dispatch);
+  /** 运行中按节拍刷新耗时：没有轮次在跑时不起表。 */
+  const ticking = state.turns.some(
+    (turn) => turn.status === 'pending' || turn.status === 'streaming',
+  );
+  useElapsedTick(dispatch, ticking);
 
   // 折叠生效：体量过大与超出窗口的老轮次折成一行摘要并释放正文（见 useAutoFoldTurns）。
   useAutoFoldTurns(state.turns, dispatch);
@@ -599,10 +602,8 @@ export function useConversation(target: ConversationTarget | null): Conversation
 
   const jobs = useMemo(() => deriveJobs(state), [state]);
   const queued = useMemo(() => pendingSteerCount(state.turns), [state.turns]);
-  const working = useMemo(
-    () => state.turns.some((turn) => turn.status === 'pending' || turn.status === 'streaming'),
-    [state.turns],
-  );
+  /** 是否有轮次在跑：与节拍同源，避免同一判断写两遍。 */
+  const working = ticking;
 
   /**
    * 对外的投影。

@@ -85,6 +85,8 @@ function toModelInput(model: ModelItem, provider: string): ModelInput {
     supports_vision: model.supports_vision,
     supports_embedding: model.supports_embedding,
     embedding_dimension: model.supports_embedding ? model.embedding_dimension : 0,
+    requires_reasoning_content_on_assistant_messages:
+      model.requires_reasoning_content_on_assistant_messages,
   };
 }
 

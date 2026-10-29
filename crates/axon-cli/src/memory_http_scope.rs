@@ -55,7 +55,8 @@ pub(crate) fn workspace_scope(
             cwd.display()
         )));
     }
-    // 与 Agent 写入链保持一致：Home 树内不注册 Workspace，其余走注册表 namespace。
+    // 与 Agent 写入链保持一致：Home 树内不注册普通 Workspace，改用 Axon 主目录的固定
+    // namespace；其余走注册表 namespace。
     let namespace = match crate::runtime_tools::resolve_workspace_cwd(config_path, Some(&cwd))
         .map_err(MemoryScopeError::Internal)?
     {
@@ -65,7 +66,7 @@ pub(crate) fn workspace_scope(
         )
         .ok()
         .map(|workspace| workspace.memory_namespace),
-        None => None,
+        None => Some(axon_memory::AXON_HOME_MEMORY_NAMESPACE.to_owned()),
     };
     Ok(MemoryToolScope::Workspace {
         scope: namespace.map_or_else(
@@ -95,17 +96,25 @@ pub(crate) fn scope_for_request(
 
 /// 已注册 Workspace 的显示名索引：`memory_namespace` → 可读标签。
 pub(crate) fn workspace_labels(axon_root: &Path) -> BTreeMap<String, String> {
-    let Ok(store) = crate::workbench_http_adapter::runtime_store(axon_root).list_workspaces()
-    else {
-        return BTreeMap::new();
-    };
-    store
-        .into_iter()
-        .map(|workspace| {
-            (
-                workspace.memory_namespace,
-                format!("{}（{}）", workspace.display_name, workspace.workspace_root),
-            )
+    let mut labels = crate::workbench_http_adapter::runtime_store(axon_root)
+        .list_workspaces()
+        .map(|store| {
+            store
+                .into_iter()
+                .map(|workspace| {
+                    (
+                        workspace.memory_namespace,
+                        format!("{}（{}）", workspace.display_name, workspace.workspace_root),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
         })
-        .collect()
+        .unwrap_or_default();
+    // 主目录桶不在 Workspace 注册表里，但管理页必须能把它读成「Axon 主目录」，
+    // 而不是一串 namespace 哈希。
+    labels.insert(
+        axon_memory::AXON_HOME_MEMORY_NAMESPACE.to_owned(),
+        format!("Axon 主目录（{}）", axon_root.display()),
+    );
+    labels
 }

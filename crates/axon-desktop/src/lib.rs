@@ -81,8 +81,8 @@ pub mod workspace_files;
 
 use automation::{
     cron_config, cron_create, cron_get, cron_history, cron_list, cron_pause, cron_remove,
-    cron_resume, cron_run, cron_update, memory_forget, memory_get, memory_list, memory_remove,
-    memory_scopes, memory_stats, memory_write,
+    cron_resume, cron_run, cron_update, memory_archive, memory_forget, memory_get, memory_list,
+    memory_remove, memory_scopes, memory_stats, memory_unarchive, memory_write,
 };
 use catalog::{provider_profile_remove, provider_profile_upsert};
 use clipboard::{clipboard_read_text, clipboard_write_text};
@@ -286,6 +286,8 @@ pub fn run() {
             memory_get,
             memory_write,
             memory_forget,
+            memory_archive,
+            memory_unarchive,
             memory_remove,
             goal_list,
             goal_get,

@@ -48,7 +48,7 @@ fn endpoint(path: &str, params: &[(&str, Option<String>)]) -> String {
 }
 
 /// 大盘概览：汇总指标、迷你走势、活动热力图与健康时间线。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn usage_overview(
     period: Option<String>,
     provider: Option<String>,
@@ -67,7 +67,7 @@ pub fn usage_overview(
 }
 
 /// 用量分布与排行：按模型或供应商维度，附时间序列与占比。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn usage_distribution(
     dimension: Option<String>,
     period: Option<String>,
@@ -79,19 +79,19 @@ pub fn usage_distribution(
 }
 
 /// 延迟与效率诊断：分位数、散点样本与模型单价效益。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn usage_diagnostics(period: Option<String>) -> Result<Value, String> {
     gateway::get_json(&endpoint("/diagnostics", &[("period", period)]))
 }
 
 /// 实时滑窗读数：进程内滑动窗口的每分钟吞吐与请求结果。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn usage_realtime(window: Option<String>) -> Result<Value, String> {
     gateway::get_json(&endpoint("/realtime", &[("window", window)]))
 }
 
 /// 请求事件日志：按模型、来源、状态过滤，游标分页。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn usage_events(
     model: Option<String>,
     source: Option<String>,

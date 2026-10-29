@@ -23,7 +23,7 @@ fn markdown_file_name(suggested: &str) -> String {
 /// Tauri IPC 命令：把正文另存为 Markdown 文件。
 ///
 /// 返回写入的绝对路径；用户在对话框里取消时返回 `None`，取消不是错误。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn export_markdown(
     app: tauri::AppHandle,
     suggested_name: String,

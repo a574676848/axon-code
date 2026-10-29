@@ -8,7 +8,7 @@ const EXPECTED_DIMENSION: usize = 3;
 #[test]
 fn memory_embedding_plan_is_openai_compatible_and_remote_closed() {
     let plan = MemoryEmbeddingProviderRuntime
-        .plan_openai(&MemoryEmbeddingRequestInput {
+        .plan_provider(&MemoryEmbeddingRequestInput {
             provider_protocol: MEMORY_EMBEDDING_PROVIDER_OPENAI.to_owned(),
             base_url: "https://memory.example/v1".to_owned(),
             model_id: "text-embedding".to_owned(),

@@ -356,13 +356,17 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
         "memory_list" => Ok(crate::automation::memory_list(
             as_str("memoryKind")?.to_owned(),
             optional_string("scope"),
+            optional_string("status"),
             args.get("limit")
                 .and_then(Value::as_u64)
                 .and_then(|value| usize::try_from(value).ok()),
             args.get("cursorUpdatedAtMs").and_then(Value::as_u64),
             optional_string("cursorMemoryId"),
         )?),
-        "memory_stats" => Ok(crate::automation::memory_stats(optional_string("scope"))?),
+        "memory_stats" => Ok(crate::automation::memory_stats(
+            optional_string("scope"),
+            optional_string("status"),
+        )?),
         "memory_scopes" => Ok(crate::automation::memory_scopes()?),
         "memory_get" => Ok(crate::automation::memory_get(
             as_str("memoryId")?.to_owned(),
@@ -373,6 +377,12 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
                 .ok_or_else(|| "参数 input 缺失".to_owned())?,
         )?),
         "memory_forget" => Ok(crate::automation::memory_forget(
+            as_str("memoryId")?.to_owned(),
+        )?),
+        "memory_archive" => Ok(crate::automation::memory_archive(
+            as_str("memoryId")?.to_owned(),
+        )?),
+        "memory_unarchive" => Ok(crate::automation::memory_unarchive(
             as_str("memoryId")?.to_owned(),
         )?),
         "memory_remove" => Ok(crate::automation::memory_remove(

@@ -57,6 +57,7 @@ fn untouched_interactive_defaults_leave_the_plan_unchanged() {
         supports_vision: true,
         supports_embedding: false,
         embedding_dimension: 0,
+        requires_reasoning_content_on_assistant_messages: false,
     });
 
     let plan = build_setup_plan(
@@ -159,6 +160,7 @@ fn selected_model_updates_agent_slots_only_after_plan_commit() {
             supports_vision: true,
             supports_embedding: false,
             embedding_dimension: 0,
+            requires_reasoning_content_on_assistant_messages: false,
         });
     }
 

@@ -66,7 +66,6 @@ Axon 使用以下用户级目录布局：
 | `providers[].websocket_url` | 字符串 | `ws`、`wss`、`http`、`https` URL 或省略 | 省略；由 `base_url` 推导 |
 | `providers[].enable_request_compression` | 布尔值 | `true`、`false` | `false` |
 | `providers[].priority` | 32 位整数 | 数值越大越优先 | `0` |
-| `providers[].weight` | 无符号整数 | `>= 0`；`0` 按 `1` 参与加权 | `1` |
 
 `base_url` 的协议推导默认值为：`openai`/`openai-chatcompletions` 使用 `https://api.openai.com/v1`，`anthropic` 使用 `https://api.anthropic.com/v1`，`dashscope` 使用 `https://dashscope.aliyuncs.com/api/v1`，`volcengine-ark-multimodal` 使用 `https://ark.cn-beijing.volces.com/api/v3`。
 
@@ -82,6 +81,7 @@ Axon 使用以下用户级目录布局：
 | `models[].supports_vision` | 布尔值 | `true`、`false` | `true` |
 | `models[].supports_embedding` | 布尔值 | `true`、`false` | `false` |
 | `models[].embedding_dimension` | 无符号整数 | embedding 模型必须 `> 0`，其他模型必须为 `0` | `0` |
+| `models[].requires_reasoning_content_on_assistant_messages` | 布尔值 | `true`、`false` | `false` |
 
 `supports_embedding = true` 的模型只能使用支持 embedding 的 Provider 协议（`openai`、`openai-chatcompletions`、`dashscope` 或 `volcengine-ark-multimodal`）。
 
@@ -127,7 +127,7 @@ Axon 使用以下用户级目录布局：
 | `memory.embedding.model` | 字符串 | `supports_embedding = true` 模型的 `name` 或 `id`；启用时不能为空 | `""` |
 | `skills.disabled` | 字符串数组 | 任意 Skill name | `[]` |
 
-完整可复制模板见仓库根目录的 [`config.example.toml`](../config.example.toml)。配置加载采用 `deny_unknown_fields`，拼写错误或已移除字段会直接拒绝加载。
+完整可复制模板见仓库根目录的 [`config.example.toml`](../config.example.toml)。配置加载忽略未声明字段：拼写错误或已移除的键不会阻断加载，但不会生效，并在下次保存时被丢弃。
 
 ### 子进程资源围栏
 
@@ -199,7 +199,7 @@ Soul 以独立、可缓存的 session-stable user context 发送，不写入基�
 
 Axon 支持 OpenAI-compatible、Anthropic、OpenRouter、本地模型（如 Ollama）以及多模型聚合平台。`enabled` 可省略，默认值为 `true`；设为 `false` 后，该 Provider 及其关联模型不会进入 CLI、TUI、图像生成或 Memory embedding 的运行时模型路由与模型目录。禁用只暂停使用，不删除 Provider、模型或密钥配置。
 
-Provider 的 prompt cache、显式 cache breakpoint 和服务端会话状态能力由运行时根据 `protocol` 统一推导，不属于 `config.toml` 配置契约。用户配置中出现 `[providers.capabilities]` 或对应的 `supports_*` 字段会被视为未知字段并拒绝加载，避免配置值与实际 wire 协议能力不一致。
+Provider 的 prompt cache、显式 cache breakpoint 和服务端会话状态能力由运行时根据 `protocol` 统一推导，不属于 `config.toml` 配置契约。用户配置中出现 `[providers.capabilities]` 或对应的 `supports_*` 字段属于未声明字段，会被忽略，不会改变运行时能力推导。
 
 ### OpenAI
 

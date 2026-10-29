@@ -2,8 +2,8 @@
 //!
 //! 读路径（列表、统计、详情、scope 面）只触碰 SQLite 事实源：连接按请求新开，
 //! schema 初始化在进程内只做一次，绝不为了读一页而重建 Tantivy/HNSW 运行时。
-//! 写路径继续复用 `MemoryToolDispatcher` 这一条统一流水线；只有遗忘与删除需要
-//! 清理投影，才启用完整的 `MemoryOrchestrator`，且进程内只构建一次。
+//! 写路径继续复用 `MemoryToolDispatcher` 这一条统一流水线；遗忘、归档与物理删除
+//! 在同目录的 `governance` 子模块里维护治理记录与检索投影。
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -16,10 +16,10 @@ use axon_agent_runtime::{
 };
 use axon_config::ConfigLoader;
 use axon_daemon::{GatewayHttpResponse, GatewayHttpRouteHandler};
-use axon_domain::{MemoryId, MemoryKind, MemoryState, MemoryTombstone};
+use axon_domain::{MemoryId, MemoryKind};
 use axon_memory::{
-    MEMORY_CONFIG_DEFAULT_EMBEDDING_DIMENSION, MemoryPipelineJobKind, MemoryPipelineStateStore,
-    MemorySqliteStore, MemoryVisibility,
+    MEMORY_CONFIG_DEFAULT_EMBEDDING_DIMENSION, MemoryArchiveStatus, MemoryPipelineJobKind,
+    MemoryPipelineStateStore, MemorySqliteStore, MemoryVisibility,
 };
 use serde_json::{Value, json};
 
@@ -30,6 +30,8 @@ use crate::memory_http_scope::{
 #[path = "memory_http_adapter_row.rs"]
 mod memory_http_adapter_row;
 pub(crate) use memory_http_adapter_row::{MemoryWriteItem, memory_view, parse_write_body};
+#[path = "memory_http_adapter_governance.rs"]
+mod governance;
 
 const MEMORY_PATH: &str = "/api/v1/memory";
 const DEFAULT_LIMIT: usize = 50;
@@ -141,7 +143,14 @@ impl MemoryHttpAdapter {
             .strip_prefix("workspace:")
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map(|namespace| ScopeChoice::Namespace(format!("workspace:{namespace}")))
+            // 契约：workspace scope 的值就是记录行里的 namespace 引用（本身已带
+            // `workspace:` 前缀）。这里只剥掉传输层前缀再原样还原，绝不能重复拼一层，
+            // 否则 SQL 会拿 `workspace:workspace:<ns>` 去比对 `workspace:<ns>`，
+            // 表现为「明明有记忆却筛不出来」。旧客户端可能传过双层前缀，顺手收敛一层。
+            .map(|namespace| {
+                let namespace = namespace.strip_prefix("workspace:").unwrap_or(namespace);
+                ScopeChoice::Namespace(format!("workspace:{namespace}"))
+            })
             .ok_or_else(|| {
                 MemoryHttpError::bad_request(
                     "scope 必须是 all、personal、workspace 或 workspace:<namespace>",
@@ -154,6 +163,7 @@ impl MemoryHttpAdapter {
             .or_else(|| query_value(query, "kind"))
             .and_then(|value| MemoryKind::from_code(value.trim()))
             .ok_or_else(|| MemoryHttpError::bad_request("memoryKind 必须是五种稳定类型之一"))?;
+        let status = parse_status(query)?;
         let limit = query_value(query, "limit")
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(DEFAULT_LIMIT)
@@ -163,8 +173,9 @@ impl MemoryHttpAdapter {
         let owner = self.owner()?;
         let choice = self.requested_scope(query)?;
         let records = store
-            .records_timeline_page(
+            .records_timeline_page_with_status(
                 kind,
+                status,
                 choice.namespace_ref(),
                 choice.visibility(&owner),
                 cursor,
@@ -186,6 +197,7 @@ impl MemoryHttpAdapter {
         Ok(json!({
             "status": "memory_ready",
             "memoryKind": kind.as_str(),
+            "archiveStatus": status.code(),
             "scope": choice.code(),
             "namespaceRef": choice.namespace_ref(),
             "limit": limit,
@@ -199,18 +211,24 @@ impl MemoryHttpAdapter {
         let store = self.store()?;
         let owner = self.owner()?;
         let choice = self.requested_scope(query)?;
+        let status = parse_status(query)?;
         let summary = store
             .memory_summary_scoped(choice.visibility(&owner), choice.namespace_ref())
             .map_err(|error| {
                 MemoryHttpError::internal(format!("读取 Memory 汇总失败：{error:?}"))
             })?;
         let counts = store
-            .memory_kind_counts(choice.visibility(&owner), choice.namespace_ref())
+            .memory_kind_counts_with_status(
+                choice.visibility(&owner),
+                choice.namespace_ref(),
+                status,
+            )
             .map_err(|error| {
                 MemoryHttpError::internal(format!("读取 Memory 类型统计失败：{error:?}"))
             })?;
         Ok(json!({
             "status": "memory_ready",
+            "archiveStatus": status.code(),
             "scope": choice.code(),
             "namespaceRef": choice.namespace_ref(),
             "totalRecords": summary.total_records,
@@ -241,10 +259,12 @@ impl MemoryHttpAdapter {
             .map(|facet| {
                 let personal = facet.scope_kind == "personal";
                 json!({
+                    // scope 值直接就是记录的 namespace 引用（已带 `workspace:` 前缀）：
+                    // 管理页把它原样回传即可精确命中同一个桶。
                     "scope": if personal {
                         "personal".to_owned()
                     } else {
-                        format!("workspace:{}", facet.namespace_ref)
+                        facet.namespace_ref.clone()
                     },
                     "scopeKind": facet.scope_kind,
                     "namespaceRef": facet.namespace_ref,
@@ -415,97 +435,6 @@ impl MemoryHttpAdapter {
         })
     }
 
-    fn forget(&self, id: &str) -> Result<Value, MemoryHttpError> {
-        let memory_id = parse_memory_id(id)?;
-        let store = self.store()?;
-        let mut record = store
-            .get_record(memory_id)
-            .map_err(|error| MemoryHttpError::internal(format!("读取 Memory 详情失败：{error:?}")))?
-            .ok_or_else(|| MemoryHttpError::not_found("未找到 Memory 记录"))?;
-        self.ensure_visible(&record)?;
-        let vector_ids = record.vector_id.into_iter().collect::<Vec<_>>();
-        let blocked_ref = record
-            .record
-            .content_ref
-            .clone()
-            .or_else(|| {
-                record
-                    .record
-                    .tombstone
-                    .as_ref()
-                    .map(|item| item.blocked_ref.clone())
-            })
-            .ok_or_else(|| MemoryHttpError::bad_request("目标 Memory 缺少可遗忘引用"))?;
-        record.record.state = MemoryState::Tombstone;
-        record.record.content_ref = None;
-        record.record.tombstone = Some(MemoryTombstone {
-            blocked_ref,
-            reason: "管理页显式遗忘".to_owned(),
-        });
-        record.updated_at_ms = axon_time::unix_now_ms();
-        record.last_active_at_ms = record.updated_at_ms;
-        record.archived_at_ms = Some(record.updated_at_ms);
-        store
-            .update_governance_records(&[record])
-            .map_err(|error| {
-                MemoryHttpError::internal(format!("写入遗忘 tombstone 失败：{error:?}"))
-            })?;
-        let needs_repair = !self.prune_projections(&[memory_id], &vector_ids);
-        Ok(
-            json!({ "status": "memory_forgotten", "memoryId": memory_id.0.to_string(), "needsRepair": needs_repair }),
-        )
-    }
-
-    fn remove(&self, id: &str) -> Result<Value, MemoryHttpError> {
-        let memory_id = parse_memory_id(id)?;
-        let store = self.store()?;
-        let record = store
-            .get_record(memory_id)
-            .map_err(|error| MemoryHttpError::internal(format!("读取 Memory 详情失败：{error:?}")))?
-            .ok_or_else(|| MemoryHttpError::not_found("未找到 Memory 记录"))?;
-        self.ensure_visible(&record)?;
-        let vector_ids = record.vector_id.into_iter().collect::<Vec<_>>();
-        let deleted = store
-            .delete_records(&[memory_id])
-            .map_err(|error| MemoryHttpError::internal(format!("删除 Memory 失败：{error:?}")))?;
-        if deleted == 0 {
-            return Err(MemoryHttpError::not_found("未找到 Memory 记录"));
-        }
-        let needs_repair = !self.prune_projections(&[memory_id], &vector_ids);
-        Ok(
-            json!({ "status": "memory_deleted", "memoryId": memory_id.0.to_string(), "needsRepair": needs_repair }),
-        )
-    }
-
-    /// 清理文本索引、向量投影与 HNSW；任一失败即要求修复，绝不伪报成功。
-    fn prune_projections(&self, memory_ids: &[MemoryId], vector_ids: &[i64]) -> bool {
-        let Ok(orchestrator) = self.projection_runtime() else {
-            return false;
-        };
-        let text_ok = orchestrator
-            .text_index()
-            .and_then(|index| index.delete_documents(memory_ids))
-            .is_ok();
-        let projection_ok = orchestrator
-            .vector_projection_store()
-            .and_then(|store| store.delete_projections_by_memory_ids(memory_ids))
-            .is_ok();
-        let vector_ok = if vector_ids.is_empty() {
-            true
-        } else {
-            orchestrator
-                .vector_index()
-                .and_then(|index| {
-                    index.ok_or_else(|| {
-                        axon_domain::AxonError::memory_persistence("Memory HNSW 索引不可用")
-                    })
-                })
-                .and_then(|index| index.remove_vectors(vector_ids))
-                .is_ok()
-        };
-        text_ok && projection_ok && vector_ok
-    }
-
     /// 是否存在需要异步修复的 Memory 投影。
     fn needs_repair(&self) -> Result<bool, MemoryHttpError> {
         let config = self.memory_config()?;
@@ -566,6 +495,8 @@ impl GatewayHttpRouteHandler for MemoryHttpAdapter {
                 Err(error) => Err(error),
             },
             ("POST", [id, "forget"]) => self.forget(id),
+            ("POST", [id, "archive"]) => self.archive(id),
+            ("POST", [id, "unarchive"]) => self.unarchive(id),
             ("DELETE", [id]) => self.remove(id),
             _ => return None,
         };
@@ -624,6 +555,15 @@ fn parse_memory_id(value: &str) -> Result<MemoryId, MemoryHttpError> {
         .filter(|id| *id > 0)
         .map(MemoryId)
         .ok_or_else(|| MemoryHttpError::bad_request("memoryId 无效"))
+}
+
+/// 解析时间轴归档状态筛选；缺省只列活跃记录，与页面的默认视图一致。
+fn parse_status(query: Option<&str>) -> Result<MemoryArchiveStatus, MemoryHttpError> {
+    match query_value(query, "status") {
+        None => Ok(MemoryArchiveStatus::Active),
+        Some(value) => MemoryArchiveStatus::from_code(&value)
+            .ok_or_else(|| MemoryHttpError::bad_request("status 必须是 active、archived 或 all")),
+    }
 }
 
 fn parse_cursor(query: Option<&str>) -> Result<Option<MemoryTimelineCursor>, MemoryHttpError> {
@@ -687,6 +627,9 @@ impl MemoryHttpError {
     }
 }
 
+#[cfg(test)]
+#[path = "memory_http_adapter_governance_tests.rs"]
+mod governance_tests;
 #[cfg(test)]
 #[path = "memory_http_adapter_tests.rs"]
 mod tests;

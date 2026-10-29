@@ -14,6 +14,8 @@ pub const MEMORY_EMBEDDING_PROVIDER_OPENAI_CHAT: &str = "openai-chatcompletions"
 pub const MEMORY_EMBEDDING_PROVIDER_DASHSCOPE: &str = "dashscope";
 /// 火山方舟多模态 embedding provider 协议。
 pub const MEMORY_EMBEDDING_PROVIDER_VOLCENGINE_ARK_MULTIMODAL: &str = "volcengine-ark-multimodal";
+/// OpenAI 兼容多模态 embeddings provider 协议（网关多向量返回：index0 文本、index1 图像）。
+pub const MEMORY_EMBEDDING_PROVIDER_OPENAI_MULTIMODAL: &str = "openai-multimodal-embeddings";
 /// 火山方舟多模态 embeddings 路径。
 pub const MEMORY_EMBEDDING_ARK_MULTIMODAL_PATH: &str = "embeddings/multimodal";
 /// 阿里云百炼原生多模态 embeddings 路径。
@@ -139,6 +141,15 @@ pub struct MemoryEmbeddingMultimodalContent {
     pub video_url: Option<String>,
 }
 
+/// Memory embedding 响应解析出的多向量：primary 为 index 最小的向量（文本路），secondary 为次条（图像路）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct MemoryEmbeddingResponseVectors {
+    /// 首条向量（文本路）。
+    pub primary: Vec<f32>,
+    /// 第二条向量（图像路）；只有单向量响应时为 None。
+    pub secondary: Option<Vec<f32>>,
+}
+
 /// Memory embedding provider runtime。
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MemoryEmbeddingProviderRuntime;
@@ -160,16 +171,6 @@ impl MemoryEmbeddingProviderRuntime {
         )
     }
 
-    /// 生成 OpenAI-compatible embeddings 请求计划。
-    pub fn plan_openai(
-        &self,
-        input: &MemoryEmbeddingRequestInput,
-    ) -> AxonResult<MemoryEmbeddingRequestPlan> {
-        let mut openai_input = input.clone();
-        MEMORY_EMBEDDING_PROVIDER_OPENAI.clone_into(&mut openai_input.provider_protocol);
-        self.plan_provider(&openai_input)
-    }
-
     /// 生成 provider-specific 多模态 embeddings 请求计划。
     pub fn plan_multimodal_provider(
         &self,
@@ -187,11 +188,25 @@ impl MemoryEmbeddingProviderRuntime {
     }
 
     /// 解析 OpenAI-compatible embeddings 响应。
+    /// 解析 OpenAI-compatible embeddings 响应；只取 index 最小的向量（写侧与预热路径）。
     pub fn parse_openai_response(
         &self,
         body_text: &str,
         expected_dimension: usize,
     ) -> AxonResult<Vec<f32>> {
+        self.parse_openai_vectors(body_text, expected_dimension)
+            .map(|vectors| vectors.primary)
+    }
+
+    /// 解析 OpenAI-compatible embeddings 响应中的多向量：按 index 升序，最多保留两条。
+    ///
+    /// 网关多模态实现会把同一请求拆成文本与图像两条向量返回（index 0 文本、index 1 图像），
+    /// 这里不做融合，交给检索层分别召回后再合并。
+    pub fn parse_openai_vectors(
+        &self,
+        body_text: &str,
+        expected_dimension: usize,
+    ) -> AxonResult<MemoryEmbeddingResponseVectors> {
         if expected_dimension == 0 {
             return Err(AxonError::invalid_input(
                 "Memory embedding 期望维度必须大于 0",
@@ -203,13 +218,27 @@ impl MemoryEmbeddingProviderRuntime {
                 "Memory embedding 响应 JSON 无效",
             )
         })?;
-        let embedding = embedding_array(&value)?;
-        let mut vector = Vec::with_capacity(embedding.len());
-        for value in embedding {
-            vector.push(parse_embedding_value(value)?);
+        let mut vectors = Vec::new();
+        for (index, embedding) in embedding_items(&value)? {
+            let mut vector = Vec::with_capacity(embedding.len());
+            for item in embedding {
+                vector.push(parse_embedding_value(item)?);
+            }
+            validate_embedding(&vector, expected_dimension)?;
+            vectors.push((index, vector));
         }
-        validate_embedding(&vector, expected_dimension)?;
-        Ok(vector)
+        vectors.sort_by_key(|(index, _)| *index);
+        let mut iter = vectors.into_iter().map(|(_, vector)| vector);
+        let primary = iter.next().ok_or_else(|| {
+            AxonError::provider_invalid_response(
+                MEMORY_EMBEDDING_PROVIDER_OPENAI,
+                "Memory embedding 响应缺少 embedding 向量",
+            )
+        })?;
+        Ok(MemoryEmbeddingResponseVectors {
+            primary,
+            secondary: iter.next(),
+        })
     }
 }
 
@@ -286,6 +315,7 @@ fn embedding_provider_supported(protocol: &str) -> bool {
             | MEMORY_EMBEDDING_PROVIDER_OPENAI_CHAT
             | MEMORY_EMBEDDING_PROVIDER_DASHSCOPE
             | MEMORY_EMBEDDING_PROVIDER_VOLCENGINE_ARK_MULTIMODAL
+            | MEMORY_EMBEDDING_PROVIDER_OPENAI_MULTIMODAL
     )
 }
 
@@ -315,6 +345,14 @@ fn request_body(input: &MemoryEmbeddingRequestInput) -> AxonResult<serde_json::V
                 "text": input.input_text.trim(),
             }],
             "encoding_format": MEMORY_EMBEDDING_ARK_ENCODING_FORMAT_FLOAT,
+            "dimensions": input.expected_dimension,
+        })),
+        MEMORY_EMBEDDING_PROVIDER_OPENAI_MULTIMODAL => Ok(serde_json::json!({
+            "model": input.model_id,
+            "input": [{
+                "type": "text",
+                "text": input.input_text.trim(),
+            }],
             "dimensions": input.expected_dimension,
         })),
         _ => Err(AxonError::invalid_input(
@@ -377,36 +415,47 @@ fn endpoint_path_for_protocol(protocol: &str) -> &'static str {
     }
 }
 
-fn embedding_array(value: &serde_json::Value) -> AxonResult<&Vec<serde_json::Value>> {
-    if let Some(embedding) = value
-        .get("data")
-        .and_then(|data| data.as_array())
-        .and_then(|data| data.first())
-        .and_then(|item| item.get("embedding"))
-        .and_then(|embedding| embedding.as_array())
-    {
-        return Ok(embedding);
-    }
-    if let Some(embedding) = value
+/// 收集响应里的所有 embedding 向量：`data[]` 与 `output.embeddings[]` 两种形态都支持。
+fn embedding_items(value: &serde_json::Value) -> AxonResult<Vec<(u64, &Vec<serde_json::Value>)>> {
+    let mut items = Vec::new();
+    if let Some(data) = value.get("data").and_then(serde_json::Value::as_array) {
+        collect_embedding_items(data, &mut items);
+    } else if let Some(embeddings) = value
         .get("output")
         .and_then(|output| output.get("embeddings"))
-        .and_then(|embeddings| embeddings.as_array())
-        .and_then(|embeddings| embeddings.first())
-        .and_then(|item| item.get("embedding"))
-        .and_then(|embedding| embedding.as_array())
+        .and_then(serde_json::Value::as_array)
     {
-        return Ok(embedding);
-    }
-    value
+        collect_embedding_items(embeddings, &mut items);
+    } else if let Some(embedding) = value
         .get("data")
         .and_then(|data| data.get("embedding"))
-        .and_then(|embedding| embedding.as_array())
-        .ok_or_else(|| {
-            AxonError::provider_invalid_response(
-                MEMORY_EMBEDDING_PROVIDER_OPENAI,
-                "Memory embedding 响应缺少 embedding 向量",
-            )
-        })
+        .and_then(serde_json::Value::as_array)
+    {
+        items.push((0, embedding));
+    }
+    if items.is_empty() {
+        return Err(AxonError::provider_invalid_response(
+            MEMORY_EMBEDDING_PROVIDER_OPENAI,
+            "Memory embedding 响应缺少 embedding 向量",
+        ));
+    }
+    Ok(items)
+}
+
+fn collect_embedding_items<'a>(
+    entries: &'a [serde_json::Value],
+    items: &mut Vec<(u64, &'a Vec<serde_json::Value>)>,
+) {
+    for (position, entry) in entries.iter().enumerate() {
+        let Some(embedding) = entry.get("embedding").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        let index = entry
+            .get("index")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(position as u64);
+        items.push((index, embedding));
+    }
 }
 
 fn header(name: &str, value: &str) -> MemoryEmbeddingHttpHeader {
@@ -435,10 +484,14 @@ fn validate_multimodal_input(input: &MemoryEmbeddingMultimodalRequestInput) -> A
     Ok(())
 }
 
-fn multimodal_embedding_provider_supported(protocol: &str) -> bool {
+/// 该 provider 协议是否支持多模态 embedding 请求体。
+#[must_use]
+pub fn multimodal_embedding_provider_supported(protocol: &str) -> bool {
     matches!(
         protocol,
-        MEMORY_EMBEDDING_PROVIDER_DASHSCOPE | MEMORY_EMBEDDING_PROVIDER_VOLCENGINE_ARK_MULTIMODAL
+        MEMORY_EMBEDDING_PROVIDER_DASHSCOPE
+            | MEMORY_EMBEDDING_PROVIDER_VOLCENGINE_ARK_MULTIMODAL
+            | MEMORY_EMBEDDING_PROVIDER_OPENAI_MULTIMODAL
     )
 }
 
@@ -483,10 +536,65 @@ fn multimodal_request_body(
     match input.provider_protocol.as_str() {
         MEMORY_EMBEDDING_PROVIDER_DASHSCOPE => dashscope_multimodal_body(input),
         MEMORY_EMBEDDING_PROVIDER_VOLCENGINE_ARK_MULTIMODAL => ark_multimodal_body(input),
+        MEMORY_EMBEDDING_PROVIDER_OPENAI_MULTIMODAL => openai_multimodal_body(input),
         _ => Err(AxonError::invalid_input(
             "Memory 多模态 embedding provider 协议不受支持",
         )),
     }
+}
+
+fn openai_multimodal_body(
+    input: &MemoryEmbeddingMultimodalRequestInput,
+) -> AxonResult<serde_json::Value> {
+    let mut contents = Vec::new();
+    for content in &input.contents {
+        contents.extend(openai_multimodal_content_items(content)?);
+    }
+    if contents.is_empty() {
+        return Err(AxonError::EmptyInput);
+    }
+    Ok(serde_json::json!({
+        "model": input.model_id,
+        "input": contents,
+        "dimensions": input.expected_dimension,
+    }))
+}
+
+/// 把一条已治理内容拆成 OpenAI 多模态 input 元素：文本与图片各占一条，顺序固定为文本在前。
+fn openai_multimodal_content_items(
+    content: &MemoryEmbeddingMultimodalContent,
+) -> AxonResult<Vec<serde_json::Value>> {
+    let mut items = Vec::new();
+    if let Some(text) = content
+        .text
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    {
+        items.push(serde_json::json!({ "type": "text", "text": text }));
+    }
+    if let Some(url) = content
+        .image_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+    {
+        items.push(serde_json::json!({
+            "type": "image_url",
+            "image_url": { "url": url },
+        }));
+    }
+    if content
+        .video_url
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|url| !url.is_empty())
+    {
+        return Err(AxonError::invalid_input(
+            "OpenAI 兼容多模态 embedding 不支持视频输入",
+        ));
+    }
+    Ok(items)
 }
 
 fn dashscope_multimodal_body(
@@ -616,5 +724,78 @@ fn push_ark_content_items(
                 "url": url,
             },
         }));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_PROTOCOL: &str = MEMORY_EMBEDDING_PROVIDER_OPENAI_MULTIMODAL;
+
+    fn multimodal_input() -> MemoryEmbeddingMultimodalRequestInput {
+        MemoryEmbeddingMultimodalRequestInput {
+            provider_protocol: TEST_PROTOCOL.to_owned(),
+            base_url: "http://gateway.local/v1".to_owned(),
+            model_id: "qwen3-vl-embedding".to_owned(),
+            contents: vec![MemoryEmbeddingMultimodalContent {
+                text: Some("检索图片资料".to_owned()),
+                image_url: Some("data:image/png;base64,AAAA".to_owned()),
+                video_url: None,
+            }],
+            api_key_env: None,
+            api_key: Some("fixture-key".to_owned()),
+            expected_dimension: 2,
+            dashscope_enable_fusion: true,
+        }
+    }
+
+    #[test]
+    fn openai_multimodal_body_splits_text_and_image() {
+        let plan = MemoryEmbeddingProviderRuntime
+            .plan_multimodal_provider(&multimodal_input())
+            .expect("plan 应成功");
+        assert_eq!(plan.url, "http://gateway.local/v1/embeddings");
+        let body: serde_json::Value = serde_json::from_str(&plan.body_text).unwrap();
+        assert_eq!(body["model"], "qwen3-vl-embedding");
+        assert_eq!(body["input"][0]["type"], "text");
+        assert_eq!(body["input"][1]["type"], "image_url");
+        assert_eq!(
+            body["input"][1]["image_url"]["url"],
+            "data:image/png;base64,AAAA"
+        );
+        assert_eq!(body["dimensions"], 2);
+        assert!(body.get("parameters").is_none());
+        assert!(body.get("enable_fusion").is_none());
+    }
+
+    #[test]
+    fn parse_openai_vectors_returns_text_and_image_paths() {
+        let runtime = MemoryEmbeddingProviderRuntime;
+        let body =
+            r#"{"data":[{"index":0,"embedding":[1.0,0.0]},{"index":1,"embedding":[0.0,1.0]}]}"#;
+        let vectors = runtime.parse_openai_vectors(body, 2).expect("解析应成功");
+        assert_eq!(vectors.primary, vec![1.0, 0.0]);
+        assert_eq!(vectors.secondary, Some(vec![0.0, 1.0]));
+
+        let single = r#"{"data":[{"index":0,"embedding":[0.5,0.5]}]}"#;
+        let vectors = runtime.parse_openai_vectors(single, 2).expect("解析应成功");
+        assert_eq!(vectors.primary, vec![0.5, 0.5]);
+        assert!(vectors.secondary.is_none());
+        assert_eq!(
+            runtime.parse_openai_response(single, 2).unwrap(),
+            vec![0.5, 0.5]
+        );
+    }
+
+    #[test]
+    fn openai_multimodal_rejects_video() {
+        let mut input = multimodal_input();
+        input.contents[0].video_url = Some("https://example.com/a.mp4".to_owned());
+        assert!(
+            MemoryEmbeddingProviderRuntime
+                .plan_multimodal_provider(&input)
+                .is_err()
+        );
     }
 }

@@ -19,6 +19,7 @@ fn planner_changes_only_novice_choices() {
         supports_vision: true,
         supports_embedding: false,
         embedding_dimension: 0,
+        requires_reasoning_content_on_assistant_messages: false,
     });
     let plan = SetupPlanner
         .plan(

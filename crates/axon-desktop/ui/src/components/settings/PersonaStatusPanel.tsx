@@ -179,7 +179,7 @@ export const PersonaStatusPanel: React.FC = () => {
                   )}
                 </div>
                 <IconButton label={loading ? '正在刷新人设' : '刷新人设'} disabled={loading} onClick={() => void load()}>
-                  {loading ? <SpinnerIcon size={14} className="animate-spin" /> : <RetryIcon size={14} />}
+                  {loading ? <SpinnerIcon size={14} className="state-spinner" /> : <RetryIcon size={14} />}
                 </IconButton>
               </div>
               {(soul?.traits ?? []).length > 0 && (

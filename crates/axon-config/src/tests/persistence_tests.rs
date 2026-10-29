@@ -108,7 +108,7 @@ fn runtime_root_uses_config_parent_for_explicit_custom_config() {
 }
 
 #[test]
-fn retired_agent_model_slot_fails_closed() {
+fn retired_agent_model_slot_is_ignored() {
     let path = axon_test_support::test_temp_root().join(format!(
         "axon-config-{}-unknown-fields.toml",
         std::process::id()
@@ -117,7 +117,10 @@ fn retired_agent_model_slot_fails_closed() {
     let retired_key = ["reasoning", "model"].join("_");
     std::fs::write(&path, format!("[agent]\n{retired_key} = \"retired\"\n")).unwrap();
 
-    assert!(ConfigLoader::load_from_path(&path).is_err());
+    // 已移除的槽位属于未声明字段：加载忽略，保存时被丢弃。
+    let loaded = ConfigLoader::load_from_path(&path).unwrap();
+    let serialized = crate::to_toml_string(&loaded.config).unwrap();
+    assert!(!serialized.contains(&retired_key));
 
     let _ = std::fs::remove_file(path);
 }

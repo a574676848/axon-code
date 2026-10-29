@@ -242,7 +242,7 @@ fn read_prefix(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
 }
 
 /// Tauri IPC 命令：列出工作区内某个目录的直接子项。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_list_entries(
     root: String,
     relative_path: Option<String>,
@@ -251,7 +251,7 @@ pub fn workspace_list_entries(
 }
 
 /// Tauri IPC 命令：读取工作区内的一个文本文件。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_read_file(root: String, relative_path: String) -> Result<FileTextDto, String> {
     read_text(&root, &relative_path)
 }
@@ -288,7 +288,7 @@ pub fn stat_path(root: &str, relative: &str) -> PathStatDto {
 }
 
 /// Tauri IPC 命令：探测工作区内的一个路径是文件还是目录。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_stat_path(root: String, relative_path: String) -> Result<PathStatDto, String> {
     Ok(stat_path(&root, &relative_path))
 }
@@ -348,7 +348,7 @@ pub fn read_bytes(root: &str, relative: &str) -> Result<FileBytesDto, String> {
 }
 
 /// Tauri IPC 命令：读取工作区内的一个文件的原始字节。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_read_bytes(root: String, relative_path: String) -> Result<FileBytesDto, String> {
     read_bytes(&root, &relative_path)
 }
@@ -366,13 +366,13 @@ pub fn reveal(root: &str, relative: &str) -> Result<(), String> {
 }
 
 /// Tauri IPC 命令：用系统默认程序打开工作区内的文件。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_open_default(root: String, relative_path: String) -> Result<(), String> {
     open_default(&root, &relative_path)
 }
 
 /// Tauri IPC 命令：在文件管理器中定位工作区内的文件。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_reveal(root: String, relative_path: String) -> Result<(), String> {
     reveal(&root, &relative_path)
 }

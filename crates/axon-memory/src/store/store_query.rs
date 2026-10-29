@@ -4,19 +4,42 @@ use axon_domain::{AxonError, AxonResult, MemoryKind, MemorySourceOrigin, MemoryS
 use rusqlite::{OptionalExtension as _, Params, params};
 
 use crate::store::{
-    MemoryKindCount, MemoryScopeFacet, MemorySqliteRecord, MemorySqliteRecordFilter,
-    MemorySqliteStore, MemorySqliteSummary, MemoryTimelineCursor, MemoryVisibility, bool_from_i64,
-    i64_from_u64, i64_from_usize, origin_code, row_to_record, state_code, usize_from_i64,
+    MemoryArchiveStatus, MemoryKindCount, MemoryScopeFacet, MemorySqliteRecord,
+    MemorySqliteRecordFilter, MemorySqliteStore, MemorySqliteSummary, MemoryTimelineCursor,
+    MemoryVisibility, bool_from_i64, i64_from_u64, i64_from_usize, origin_code, row_to_record,
+    state_code, usize_from_i64,
 };
 
 impl MemorySqliteStore {
-    /// 按类型、scope 与可见范围读取有界时间轴页面。
+    /// 按类型、scope 与可见范围读取有界时间轴页面（只看未归档记录）。
     ///
     /// 排序固定为 `updated_at_ms DESC, memory_id ASC`，游标在同一毫秒内用 `memory_id`
     /// 继续推进，避免跳页与重复。
     pub fn records_timeline_page(
         &self,
         memory_kind: MemoryKind,
+        namespace_ref: Option<&str>,
+        visibility: MemoryVisibility<'_>,
+        cursor: Option<MemoryTimelineCursor>,
+        limit: usize,
+    ) -> AxonResult<Vec<MemorySqliteRecord>> {
+        self.records_timeline_page_with_status(
+            memory_kind,
+            MemoryArchiveStatus::Active,
+            namespace_ref,
+            visibility,
+            cursor,
+            limit,
+        )
+    }
+
+    /// 按类型、归档状态、scope 与可见范围读取有界时间轴页面。
+    ///
+    /// 归档状态只接受白名单谓词，因此这里可以安全地拼接进 SQL。
+    pub fn records_timeline_page_with_status(
+        &self,
+        memory_kind: MemoryKind,
+        status: MemoryArchiveStatus,
         namespace_ref: Option<&str>,
         visibility: MemoryVisibility<'_>,
         cursor: Option<MemoryTimelineCursor>,
@@ -32,8 +55,9 @@ impl MemorySqliteStore {
         let cursor_predicate = cursor.map_or("1 = 1", |_| {
             "(updated_at_ms < :cursor_updated_at_ms OR (updated_at_ms = :cursor_updated_at_ms AND memory_id > :cursor_memory_id))"
         });
+        let status_predicate = status.predicate();
         let sql = format!(
-            "SELECT * FROM memory_records WHERE memory_kind = :kind AND {visibility_predicate} AND {namespace_predicate} AND {cursor_predicate} ORDER BY updated_at_ms DESC, memory_id ASC LIMIT :limit"
+            "SELECT * FROM memory_records WHERE memory_kind = :kind AND {status_predicate} AND {visibility_predicate} AND {namespace_predicate} AND {cursor_predicate} ORDER BY updated_at_ms DESC, memory_id ASC LIMIT :limit"
         );
         let cursor_updated_at_ms = i64_from_u64(cursor.map_or(0, |value| value.updated_at_ms))?;
         let cursor_memory_id = i64_from_u64(cursor.map_or(0, |value| value.memory_id))?;
@@ -106,11 +130,24 @@ impl MemorySqliteStore {
         self.query_limited_records(query.0, query.1)
     }
 
-    /// 按可见范围与 scope 聚合统计各类型记录数量。
+    /// 按可见范围与 scope 聚合统计各类型记录数量（不区分归档状态）。
     pub fn memory_kind_counts(
         &self,
         visibility: MemoryVisibility<'_>,
         namespace_ref: Option<&str>,
+    ) -> AxonResult<Vec<MemoryKindCount>> {
+        self.memory_kind_counts_with_status(visibility, namespace_ref, MemoryArchiveStatus::All)
+    }
+
+    /// 按可见范围、scope 与归档状态聚合统计各类型记录数量。
+    ///
+    /// 管理页的页签计数必须与同一筛选下的列表同口径，否则会出现「页签写着 5、
+    /// 列表只有 4」的读数打架。
+    pub fn memory_kind_counts_with_status(
+        &self,
+        visibility: MemoryVisibility<'_>,
+        namespace_ref: Option<&str>,
+        status: MemoryArchiveStatus,
     ) -> AxonResult<Vec<MemoryKindCount>> {
         if namespace_ref.is_some_and(|value| value.trim().is_empty()) {
             return Err(AxonError::memory_persistence(
@@ -119,8 +156,9 @@ impl MemorySqliteStore {
         }
         let namespace_predicate = namespace_ref.map_or("1 = 1", |_| "namespace_ref = :namespace");
         let sql = format!(
-            "SELECT memory_kind, COUNT(*) FROM memory_records WHERE {} AND {namespace_predicate} GROUP BY memory_kind ORDER BY memory_kind ASC",
-            visibility.predicate()
+            "SELECT memory_kind, COUNT(*) FROM memory_records WHERE {} AND {namespace_predicate} AND {} GROUP BY memory_kind ORDER BY memory_kind ASC",
+            visibility.predicate(),
+            status.predicate()
         );
         let mut statement = self
             .connection

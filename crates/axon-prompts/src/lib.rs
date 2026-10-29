@@ -351,11 +351,21 @@ mod tests {
             "Workspace 首发召回必须是该工作阶段的首个工具调用"
         );
         assert!(tool_policy.contains("召回该工作区的 Profile、Preferences 与 Experiences"));
-        assert!(tool_policy.contains("从 Home 启动未选定 Workspace 时禁止触发"));
+        assert!(
+            tool_policy.contains("在 `~/.axon`（Axon 主目录）里工作时也必须先召回"),
+            "主目录不是召回豁免：它有自己的固定桶"
+        );
         assert!(tool_policy.contains("旧 Workspace 记忆严禁跨项目沿用"));
         assert!(tool_policy.contains("记忆仅作为推演线索，不构成当轮事实证明"));
         assert!(tool_policy.contains("builtin.memory_write"));
-        assert!(tool_policy.contains("必须在明确 Workspace 且经实际验证后方可写入"));
+        assert!(
+            tool_policy
+                .contains("必须在明确地点（普通 Workspace 或 Axon 主目录）且经实际验证后方可写入")
+        );
+        assert!(
+            tool_policy.contains("主目录不得降级为个人记忆"),
+            "Home 里的经验、知识与流程必须写入主目录桶，模型不得改写成 profile 或 preference"
+        );
 
         assert!(tool_usage_guidance.contains("仅适用于已读取且持有有效 `[path#TAG]` 快照的文件"));
         assert!(

@@ -163,6 +163,7 @@
 ## 6. 动效与无障碍
 
 - 只允许对 `transform` 与 `opacity` 做动画；禁止动画 `top`、`left`、`width`、`height`、`margin`、`padding`。
+- 禁止动画 SVG 的几何属性（`stroke-dasharray`、`stroke-dashoffset` 一类）：它们进不了合成器，实测会让整篇文档每帧重排一次。旋转落在 HTML 盒子（`svg` 元素本身或外层 `span`）上，不落在 SVG 内部的 `<g>` 上；呼吸与明暗一律用 `opacity`。
 - 禁止对 `display: inline` 的元素声明 `transform` 动画：行内盒子的变换会按行盒逐段重算，流式正文每来一批 token 就重排一次。流式正文的入场因此只在块级单元上做（`.stream-block-in` 的 4px 上浮），行内文字不动。
 - 物理弹簧三档曲线（三套主题完全一致）：触觉 `--ease-spring-tactile: cubic-bezier(0.34, 1.56, 0.64, 1)`、稳健滑行 `--ease-spring-smooth: cubic-bezier(0.16, 1, 0.3, 1)`、柔和退场 `--ease-spring-exit: cubic-bezier(0.4, 0, 1, 1)`。
 - 按键遵循非对称时间法则：松开回位 200ms 弹簧，按下 50ms 极速下沉（`translateY(1px) scale(0.985)`）；通用按钮上不得常驻 `will-change: transform`。
@@ -175,6 +176,7 @@
 - 常用时长：100ms 悬浮、110ms 弹出层退场、140ms 模态入场、150ms 开关与回执、250ms 抽屉。
 - 所有可交互元素必须有 `:focus-visible` 反馈；图标按钮必须有 `aria-label`；列表与菜单要有正确的 role 与键盘行为。
 - 图标统一线性、`currentColor`、12/14/16/20/24 五档；禁止用 emoji 代替图标；同一语义只用一个图形。
+- 转圈只有一份实现：全站转圈统一走 `.state-spinner`（1.5 秒匀速），不得使用 Tailwind `animate-spin`，也不得另写旋转关键帧；过程行（思考、执行、工具）不铺扫光，扫光只属于输入坞工作状态行与作业面板等待行。
 
 ---
 
@@ -219,6 +221,7 @@
 - [ ] 零 en / em 破折号。
 - [ ] 无 `window.addEventListener('scroll')`。
 - [ ] 动画只作用于 `transform` 与 `opacity`，且不对 `display: inline` 元素声明 `transform` 动画。
+- [ ] `@keyframes` 里不出现 SVG 几何属性（`stroke-dasharray` 等）与其它非合成属性，旋转不落在 SVG 内部 `<g>` 上。
 - [ ] 遮罩不得动画化 `backdrop-filter` 模糊半径。
 - [ ] `tokens.css` 必须包含 `.disable-transitions` 主题瞬切锁。
 - [ ] 三套主题的 WCAG AA 对比度实算全绿。

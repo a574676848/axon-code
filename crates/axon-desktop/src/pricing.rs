@@ -14,25 +14,25 @@ use crate::gateway;
 use crate::usage::observability_endpoint;
 
 /// 列出全部价格规则，按服务端的四级全序返回。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pricing_rules() -> Result<Value, String> {
     gateway::get_json(&observability_endpoint("/pricing/rules", &[]))
 }
 
 /// 新建一条价格规则；返回服务端生成的规则 ID。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pricing_save_rule(payload: Value) -> Result<Value, String> {
     gateway::post_json(&observability_endpoint("/pricing/rules", &[]), &payload)
 }
 
 /// 读取每日自动同步任务的状态。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pricing_auto_sync() -> Result<Value, String> {
     gateway::get_json(&observability_endpoint("/pricing/auto-sync", &[]))
 }
 
 /// 打开或关闭每日自动同步；打开时由后端创建或启用系统 Cron 任务。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pricing_set_auto_sync(enabled: bool) -> Result<Value, String> {
     gateway::post_json(
         &observability_endpoint("/pricing/auto-sync", &[]),
@@ -41,7 +41,7 @@ pub fn pricing_set_auto_sync(enabled: bool) -> Result<Value, String> {
 }
 
 /// 按 ID 删除一条价格规则。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pricing_delete_rule(rule_id: String) -> Result<Value, String> {
     gateway::delete_json(&observability_endpoint(
         &format!("/pricing/rules/{}", encode_segment(&rule_id)),
@@ -50,13 +50,13 @@ pub fn pricing_delete_rule(rule_id: String) -> Result<Value, String> {
 }
 
 /// 从 models.dev 同步费率；服务端有 60 秒手动同步防抖。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pricing_sync() -> Result<Value, String> {
     gateway::post_json(&observability_endpoint("/pricing/sync", &[]), &Value::Null)
 }
 
 /// 按当前规则重算已落库的历史成本。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pricing_recalculate() -> Result<Value, String> {
     gateway::post_json(
         &observability_endpoint("/pricing/recalculate", &[]),

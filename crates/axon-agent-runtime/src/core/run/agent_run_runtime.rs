@@ -284,10 +284,16 @@ pub fn agent_run_provider_streaming_transport_input<ToolReceipt>(
         0
     };
     let messages = crate::AgentModelHistorySnapshot::from(input.messages);
+    let capabilities = input
+        .provider
+        .capabilities()
+        .with_model_reasoning_content_passback(
+            input.model.requires_reasoning_content_on_assistant_messages,
+        );
     let prompt_cache_plan = ProviderPromptCachePlanRuntime
         .plan(ProviderPromptCachePlanInput {
             provider_name: input.provider.name.clone(),
-            capabilities: input.provider.capabilities(),
+            capabilities,
             format: prompt_cache_wire_format_for_protocol(protocol),
             model_id: input.model.id.clone(),
             context_window: input.model.context_window,
@@ -303,7 +309,7 @@ pub fn agent_run_provider_streaming_transport_input<ToolReceipt>(
         client_channel: input.client_channel,
         turn_id: axon_domain::TurnId(0),
         provider_name: input.provider.name.clone(),
-        capabilities: input.provider.capabilities(),
+        capabilities,
         protocol,
         base_url: input.provider.base_url.clone(),
         api_key_env: input.provider.api_key_env.clone(),

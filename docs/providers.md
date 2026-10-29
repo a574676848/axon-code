@@ -135,6 +135,21 @@ api_key_env = "DASHSCOPE_API_KEY"
 - OpenAI Chat Completions：优先读取流式 `choices[].delta.reasoning`，并兼容 `choices[].delta.reasoning_content`。同一个 delta 同时包含两个字段时只读取 `reasoning`，避免重复展示。
 - Anthropic Messages：启用 reasoning 时显式请求 `thinking.display=summarized`，并将流式 `content_block_delta` 中的 `thinking_delta.thinking` 映射为可见思考。
 
+### 思考回传兼容
+
+部分 OpenAI-compatible 网关（例如以 DeepSeek 思考模式承载的网关）要求历史 assistant 消息逐条回传 `reasoning_content`，缺失时整条请求返回 `400 invalid_request_error`：`The reasoning_content in the thinking mode must be passed back to the API.` 该兼容要求按模型声明：
+
+```toml
+[[models]]
+name = "deepseek-v4.1-flash"
+id = "deepseek-v4.1-flash-1017"
+provider = "thinking-gateway"
+context_window = 1000000
+requires_reasoning_content_on_assistant_messages = true
+```
+
+开启后，Axon 在 OpenAI Chat Completions 请求体中为每条 assistant 消息回传推理正文：会话内已保存的真实推理正文原样回放，缺失时补空串（上游只校验字段存在性）。该开关只影响 Chat Completions 协议；未声明该兼容要求的模型保持原样，不发送空推理字段。
+
 ### 长会话缓存
 
 普通 Coding turn 按稳定前缀、会话稳定上下文、历史、当前轮注入上下文、当前用户输入的固定顺序装配。**当前轮注入上下文（Workspace 与 AGENTS.md、Skills 索引、环境与上下文快照、明文约束等）随该 turn 一并落库**，后续轮次按原位置原字节回放，因此同一会话内 Provider 可见消息只追加、不改写：每一轮都能命中上一轮的全部前缀，只有本轮新内容需要重新计算。历史、注入上下文与工具回执一律不得在下一轮重新推导或改写。

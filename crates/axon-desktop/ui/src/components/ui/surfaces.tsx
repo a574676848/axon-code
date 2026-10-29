@@ -252,10 +252,8 @@ export const StateDot: React.FC<{
         viewBox="0 0 24 24"
         aria-hidden="true"
       >
-        <g className="state-spinner-motion">
-          <circle className="state-spinner-track" cx="12" cy="12" r="9.5" />
-          <circle className="state-spinner-arc" cx="12" cy="12" r="9.5" />
-        </g>
+        <circle className="state-spinner-track" cx="12" cy="12" r="9.5" />
+        <circle className="state-spinner-arc" cx="12" cy="12" r="9.5" />
       </svg>
     );
   }
@@ -369,10 +367,8 @@ export const LoadingState: React.FC<{ label: string; className?: string }> = ({
   <div className={`flex items-center justify-center gap-2 px-6 py-10 ${className}`}>
     <span className="state-spinner text-text-tertiary" aria-hidden="true">
       <svg width="14" height="14" viewBox="0 0 24 24">
-        <g className="state-spinner-motion">
-          <circle className="state-spinner-track" cx="12" cy="12" r="9.5" />
-          <circle className="state-spinner-arc" cx="12" cy="12" r="9.5" />
-        </g>
+        <circle className="state-spinner-track" cx="12" cy="12" r="9.5" />
+        <circle className="state-spinner-arc" cx="12" cy="12" r="9.5" />
       </svg>
     </span>
     <Text tone="secondary" size="xs">

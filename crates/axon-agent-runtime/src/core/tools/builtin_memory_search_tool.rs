@@ -40,7 +40,7 @@ pub(crate) fn memory_search_tool_definition() -> ToolDefinition {
         namespace: crate::AGENT_TOOL_NAMESPACE.to_owned(),
         name: MEMORY_SEARCH_TOOL_NAME.to_owned(),
         description:
-            "当过去的用户偏好、项目决策或经验可能影响当前任务时，描述具体问题并检索相关长期记忆。"
+            "当过去的用户偏好、项目决策或经验可能影响当前任务时，描述具体问题并检索相关长期记忆。检索范围是个人记忆加当前工作地点：普通 Workspace（含其分支）或在 ~/.axon 里工作时的 Axon 主目录桶。"
                 .to_owned(),
         schema,
         enabled: true,

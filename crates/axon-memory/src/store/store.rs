@@ -180,6 +180,49 @@ pub enum MemorySqliteRecordFilter {
     Tombstone,
 }
 
+/// 时间轴与类型计数的归档状态筛选。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryArchiveStatus {
+    /// 仅未归档记录。
+    Active,
+    /// 仅已归档记录。
+    Archived,
+    /// 不筛选。
+    All,
+}
+
+impl MemoryArchiveStatus {
+    /// 返回白名单化的 SQL 谓词。
+    pub(crate) const fn predicate(self) -> &'static str {
+        match self {
+            Self::Active => "archived_at_ms IS NULL",
+            Self::Archived => "archived_at_ms IS NOT NULL",
+            Self::All => "1 = 1",
+        }
+    }
+
+    /// 对外状态代码。
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Archived => "archived",
+            Self::All => "all",
+        }
+    }
+
+    /// 解析请求传入的状态代码；未知值返回 `None`。
+    #[must_use]
+    pub fn from_code(value: &str) -> Option<Self> {
+        match value.trim() {
+            "active" => Some(Self::Active),
+            "archived" => Some(Self::Archived),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+}
+
 /// SQLite 结构化 Memory store。
 pub struct MemorySqliteStore {
     pub(crate) connection: Connection,

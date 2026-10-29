@@ -70,6 +70,52 @@ if ($animHits.Count -gt 0) {
     Write-Host " [PASSED] (Animations strictly limited to transform and opacity)" -ForegroundColor Green
 }
 
+# 3b. @keyframes 只允许合成属性：SVG 几何与盒模型属性会让整篇文档逐帧重排
+Write-Host "3b. Checking @keyframes properties (no SVG geometry or box-model)..." -NoNewline
+$keyframeHits = @()
+$forbiddenKeyframeProperty = '(?m)^\s*(?:top|right|bottom|left|width|height|min-width|min-height|max-width|max-height|margin|margin-top|margin-right|margin-bottom|margin-left|padding|padding-top|padding-right|padding-bottom|padding-left|stroke-dasharray|stroke-dashoffset|background-position|box-shadow|filter)\s*:'
+foreach ($file in $srcFiles) {
+    if ($file.Extension -ne '.css') { continue }
+    $content = Get-Content -LiteralPath $file.FullName -Raw -Encoding utf8
+    foreach ($open in [regex]::Matches($content, '@keyframes\s+([\w-]+)\s*\{')) {
+        $start = $open.Index + $open.Length
+        $depth = 1
+        $index = $start
+        while ($index -lt $content.Length -and $depth -gt 0) {
+            $char = $content[$index]
+            if ($char -eq '{') { $depth += 1 }
+            elseif ($char -eq '}') { $depth -= 1 }
+            $index += 1
+        }
+        $body = $content.Substring($start, [Math]::Max(0, $index - $start - 1))
+        if ($body -match $forbiddenKeyframeProperty) {
+            $keyframeHits += ("{0}: @keyframes {1}" -f $file.Name, $open.Groups[1].Value)
+        }
+    }
+}
+if ($keyframeHits.Count -gt 0) {
+    Write-Host " [FAILED]" -ForegroundColor Red
+    Write-Error ("@keyframes 里出现了非合成属性，它们进不了合成器并会带动逐帧重排：`n" + ($keyframeHits -join "`n"))
+    $failed = $true
+} else {
+    Write-Host " [PASSED] (@keyframes 只动 transform 与 opacity)" -ForegroundColor Green
+}
+
+# 3c. 转圈唯一实现：禁止 Tailwind animate-spin
+Write-Host "3c. Checking single spinner implementation (no animate-spin)..." -NoNewline
+$spinHits = @()
+foreach ($file in $srcFiles) {
+    $content = Get-Content -LiteralPath $file.FullName -Raw -Encoding utf8
+    if ($content -match 'animate-spin') { $spinHits += $file.Name }
+}
+if ($spinHits.Count -gt 0) {
+    Write-Host " [FAILED]" -ForegroundColor Red
+    Write-Error ("转圈必须统一走 .state-spinner，禁止 Tailwind animate-spin：`n" + ($spinHits -join "`n"))
+    $failed = $true
+} else {
+    Write-Host " [PASSED] (转圈只有 .state-spinner 一份实现)" -ForegroundColor Green
+}
+
 # 4. Zero external CDN dependencies (100% offline self-hosted)
 Write-Host "4. Checking zero external CDN dependencies..." -NoNewline
 $cdnPatterns = @("fonts.googleapis.com", "fonts.gstatic.com", "cdn.jsdelivr.net", "cdnjs.cloudflare.com", "unpkg.com")

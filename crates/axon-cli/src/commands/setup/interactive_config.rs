@@ -498,6 +498,7 @@ mod tests {
             supports_vision: true,
             supports_embedding: embedding,
             embedding_dimension: usize::from(embedding),
+            requires_reasoning_content_on_assistant_messages: false,
         }
     }
 

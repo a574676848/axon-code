@@ -266,7 +266,7 @@ fn parse_external_url(url: &str) -> Result<url::Url, String> {
 /// Tauri IPC 命令：用系统默认浏览器打开一个外部地址。
 ///
 /// 与打开文件同源：有应用句柄时走官方打开插件，调试桥没有句柄时回落到平台命令。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn open_external_url(url: String) -> Result<(), String> {
     let parsed = parse_external_url(&url)?;
     if let Some(app) = APP_HANDLE.get() {

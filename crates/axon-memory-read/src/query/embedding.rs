@@ -3,8 +3,10 @@ use std::{sync::OnceLock, time::Duration};
 use axon_config::{AxonConfig, ModelConfig, ProviderConfig, provider_credential};
 use axon_domain::AxonResult;
 use axon_memory::{
-    MemoryEmbeddingAuthHeaderPlan, MemoryEmbeddingCredentialPlan, MemoryEmbeddingHttpHeader,
-    MemoryEmbeddingProviderRuntime, MemoryEmbeddingRequestInput, MemoryEmbeddingRequestPlan,
+    MemoryEmbeddingCredentialPlan, MemoryEmbeddingMultimodalContent,
+    MemoryEmbeddingMultimodalRequestInput, MemoryEmbeddingProviderRuntime,
+    MemoryEmbeddingRequestInput, MemoryEmbeddingRequestPlan,
+    multimodal_embedding_provider_supported,
 };
 use axon_rustls_provider::ensure_rustls_crypto_provider;
 
@@ -16,10 +18,6 @@ pub const MEMORY_QUERY_EMBEDDING_DISABLED: &str = "disabled";
 pub const MEMORY_QUERY_EMBEDDING_FALLBACK: &str = "fallback";
 const MEMORY_EMBEDDING_PREWARM_INPUT: &str = "axon connection prewarm";
 
-/// 非敏感 HTTP header。
-pub type MemoryReadHttpHeader = MemoryEmbeddingHttpHeader;
-/// 鉴权 header 计划。
-pub type MemoryReadAuthHeaderPlan = MemoryEmbeddingAuthHeaderPlan;
 /// Memory read 鉴权凭据来源。
 pub type MemoryReadCredentialPlan = MemoryEmbeddingCredentialPlan;
 /// Memory embedding 请求输入。
@@ -32,6 +30,8 @@ pub type MemoryReadEmbeddingRequestPlan = MemoryEmbeddingRequestPlan;
 pub struct QueryEmbeddingReport {
     /// 向量数据。
     pub embedding: Option<Vec<f32>>,
+    /// 图像查询向量；网关多模态返回第二条向量时填充，单向量响应为 None。
+    pub image_embedding: Option<Vec<f32>>,
     /// 生成状态。
     pub status: &'static str,
     /// 降级或失败原因。
@@ -45,6 +45,32 @@ pub fn plan_memory_embedding(
     MemoryEmbeddingProviderRuntime.plan_provider(input)
 }
 
+/// 生成 provider-specific 多模态 embeddings 请求计划。
+pub fn plan_memory_embedding_multimodal(
+    input: &MemoryEmbeddingMultimodalRequestInput,
+) -> AxonResult<MemoryReadEmbeddingRequestPlan> {
+    MemoryEmbeddingProviderRuntime.plan_multimodal_provider(input)
+}
+
+/// 把查询文本与图片引用组装成多模态内容项。
+///
+/// 单次查询只取首张非空图片：多图会产出多条 embedding，而查询需要一个统一向量。
+fn query_embedding_contents(
+    prompt: &str,
+    image_urls: &[String],
+) -> Vec<MemoryEmbeddingMultimodalContent> {
+    let image_url = image_urls
+        .iter()
+        .map(|url| url.trim())
+        .find(|url| !url.is_empty())
+        .map(str::to_owned);
+    vec![MemoryEmbeddingMultimodalContent {
+        text: Some(prompt.to_owned()),
+        image_url,
+        video_url: None,
+    }]
+}
+
 /// 解析 OpenAI-compatible embeddings 响应。
 pub fn parse_memory_embedding_response(
     body_text: &str,
@@ -53,14 +79,33 @@ pub fn parse_memory_embedding_response(
     MemoryEmbeddingProviderRuntime.parse_openai_response(body_text, expected_dimension)
 }
 
+/// 解析多模态 embeddings 响应中的多向量：primary 文本路、secondary 图像路。
+pub fn parse_memory_embedding_vectors(
+    body_text: &str,
+    expected_dimension: usize,
+) -> AxonResult<axon_memory::MemoryEmbeddingResponseVectors> {
+    axon_memory::MemoryEmbeddingProviderRuntime.parse_openai_vectors(body_text, expected_dimension)
+}
+
 pub(crate) fn generate_memory_query_embedding(
     config: &AxonConfig,
     prompt: &str,
     timeout: Duration,
 ) -> QueryEmbeddingReport {
+    generate_memory_query_embedding_with_images(config, prompt, &[], timeout)
+}
+
+/// 生成查询 embedding；带图且 provider 支持多模态时路由到多模态接口。
+pub(crate) fn generate_memory_query_embedding_with_images(
+    config: &AxonConfig,
+    prompt: &str,
+    image_urls: &[String],
+    timeout: Duration,
+) -> QueryEmbeddingReport {
     if !config.memory.embedding.enabled {
         return QueryEmbeddingReport {
             embedding: None,
+            image_embedding: None,
             status: MEMORY_QUERY_EMBEDDING_DISABLED,
             reason: None,
         };
@@ -68,15 +113,20 @@ pub(crate) fn generate_memory_query_embedding(
     let Some((model, provider)) = resolve_memory_embedding_model(config) else {
         return embedding_fallback("memory embedding model missing", None);
     };
-    let plan = match plan_memory_embedding(&MemoryReadEmbeddingRequestInput {
-        provider_protocol: provider.protocol.clone(),
-        base_url: provider.base_url.clone(),
-        model_id: model.id.clone(),
-        input_text: prompt.to_owned(),
-        api_key_env: provider.api_key_env.clone(),
-        api_key: resolve_memory_embedding_api_key(provider),
-        expected_dimension: config.memory.embedding.dimension,
-    }) {
+    let images: &[String] = if image_urls.iter().any(|url| !url.trim().is_empty()) {
+        if multimodal_embedding_provider_supported(&provider.protocol) {
+            image_urls
+        } else {
+            axon_logger::warning(&format!(
+                "Memory embedding 忽略图片：provider 协议 {} 不支持多模态，按纯文本生成",
+                provider.protocol
+            ));
+            &[]
+        }
+    } else {
+        &[]
+    };
+    let plan = match build_query_embedding_plan(config, model, provider, prompt, images) {
         Ok(plan) => plan,
         Err(error) => {
             return embedding_fallback(
@@ -94,8 +144,7 @@ pub(crate) fn generate_memory_query_embedding(
             );
         }
     };
-    let embedding = match parse_memory_embedding_response(&body, config.memory.embedding.dimension)
-    {
+    let vectors = match parse_memory_embedding_vectors(&body, config.memory.embedding.dimension) {
         Ok(embedding) => embedding,
         Err(error) => {
             return embedding_fallback(
@@ -105,10 +154,42 @@ pub(crate) fn generate_memory_query_embedding(
         }
     };
     QueryEmbeddingReport {
-        embedding: Some(embedding),
+        embedding: Some(vectors.primary),
+        image_embedding: vectors.secondary,
         status: MEMORY_QUERY_EMBEDDING_GENERATED,
         reason: None,
     }
+}
+
+/// 按输入形态选择文本或多模态 embedding 请求计划。
+fn build_query_embedding_plan(
+    config: &AxonConfig,
+    model: &ModelConfig,
+    provider: &ProviderConfig,
+    prompt: &str,
+    image_urls: &[String],
+) -> AxonResult<MemoryReadEmbeddingRequestPlan> {
+    if image_urls.iter().any(|url| !url.trim().is_empty()) {
+        return plan_memory_embedding_multimodal(&MemoryEmbeddingMultimodalRequestInput {
+            provider_protocol: provider.protocol.clone(),
+            base_url: provider.base_url.clone(),
+            model_id: model.id.clone(),
+            contents: query_embedding_contents(prompt, image_urls),
+            api_key_env: provider.api_key_env.clone(),
+            api_key: resolve_memory_embedding_api_key(provider),
+            expected_dimension: config.memory.embedding.dimension,
+            dashscope_enable_fusion: true,
+        });
+    }
+    plan_memory_embedding(&MemoryReadEmbeddingRequestInput {
+        provider_protocol: provider.protocol.clone(),
+        base_url: provider.base_url.clone(),
+        model_id: model.id.clone(),
+        input_text: prompt.to_owned(),
+        api_key_env: provider.api_key_env.clone(),
+        api_key: resolve_memory_embedding_api_key(provider),
+        expected_dimension: config.memory.embedding.dimension,
+    })
 }
 
 fn resolve_memory_embedding_model(config: &AxonConfig) -> Option<(&ModelConfig, &ProviderConfig)> {
@@ -231,6 +312,7 @@ fn embedding_fallback(reason: impl Into<String>, detail: Option<String>) -> Quer
     }
     QueryEmbeddingReport {
         embedding: None,
+        image_embedding: None,
         status: MEMORY_QUERY_EMBEDDING_FALLBACK,
         reason: Some(reason),
     }
@@ -346,6 +428,7 @@ mod tests {
             supports_vision: false,
             supports_embedding: true,
             embedding_dimension: 2,
+            requires_reasoning_content_on_assistant_messages: false,
         });
         config.memory.embedding.enabled = true;
         config.memory.embedding.model = TEST_EMBEDDING_MODEL.to_owned();

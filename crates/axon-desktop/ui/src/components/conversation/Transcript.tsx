@@ -87,7 +87,7 @@ const UserBubble: React.FC<{
       {/* 排队态是这一条消息自己的事实：durable 事件认领它之后这个标记自行消失。 */}
       {pending && (
         <span className="mb-1 inline-flex items-center gap-1 text-meta text-text-tertiary">
-          <SpinnerIcon size={12} className="animate-spin" />
+          <SpinnerIcon size={12} className="state-spinner" />
           等待注入
         </span>
       )}

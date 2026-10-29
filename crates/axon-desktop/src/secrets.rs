@@ -47,14 +47,14 @@ fn validate_key(key: &str) -> Result<&str, String> {
 }
 
 /// Tauri IPC 命令：查询某个环境变量是否已经配置密钥。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn secret_status_of(key: String) -> Result<bool, String> {
     let path = env_file_path()?;
     Ok(secret_status(&path, key.trim()) == SETUP_SECRET_PRESENT)
 }
 
 /// Tauri IPC 命令：写入或更新一个密钥。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn secret_set(key: String, value: String) -> Result<(), String> {
     let key = validate_key(&key)?.to_string();
     if value.trim().is_empty() {
@@ -78,7 +78,7 @@ pub fn secret_set(key: String, value: String) -> Result<(), String> {
 }
 
 /// Tauri IPC 命令：清除一个密钥。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn secret_clear(key: String) -> Result<(), String> {
     let key = validate_key(&key)?.to_string();
     let path = env_file_path()?;

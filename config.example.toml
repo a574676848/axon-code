@@ -126,6 +126,8 @@ supports_vision = true
 supports_embedding = false
 # embedding 维度；可选范围：supports_embedding=true 时为 > 0 的整数，否则必须为 0；默认值：0。
 embedding_dimension = 0
+# 是否要求每条历史 assistant 消息回传 reasoning_content（仅 openai-chatcompletions）；可选值：true、false；默认值：false。
+# requires_reasoning_content_on_assistant_messages = true
 
 [[models]]
 # embedding 模型路由名称；可选值：字符串；默认值：""（为空时按 id 路由）。

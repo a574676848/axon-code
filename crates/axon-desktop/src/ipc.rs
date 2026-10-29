@@ -71,6 +71,8 @@ pub struct ModelDto {
     pub supports_embedding: bool,
     /// 向量维度；仅 supports_embedding 为 true 时有效。
     pub embedding_dimension: usize,
+    /// 是否要求历史助手消息逐条回传推理内容。
+    pub requires_reasoning_content_on_assistant_messages: bool,
 }
 
 /// 配置读取响应。
@@ -228,6 +230,8 @@ pub fn execute_config_read_at(config_path: &Path) -> Result<ConfigReadResponse, 
             supports_vision: m.supports_vision,
             supports_embedding: m.supports_embedding,
             embedding_dimension: m.embedding_dimension,
+            requires_reasoning_content_on_assistant_messages: m
+                .requires_reasoning_content_on_assistant_messages,
         })
         .collect();
 
@@ -411,31 +415,31 @@ pub fn execute_validate_values_at(
 }
 
 /// Tauri IPC 命令：读取基础配置。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn config_read() -> Result<ConfigReadResponse, String> {
     execute_config_read_at(&user_config_path()?)
 }
 
 /// Tauri IPC 命令：校验配置（纯内存，不落盘）。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn config_validate(toml_content: String) -> ConfigValidateResponse {
     execute_config_validate(&toml_content)
 }
 
 /// Tauri IPC 命令：备份后写入配置。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn config_write(toml_content: String) -> Result<ConfigWriteResponse, String> {
     execute_config_write_at(&user_config_path()?, &toml_content)
 }
 
 /// Tauri IPC 命令：批量应用配置键值并落盘。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn config_apply_values(values: HashMap<String, String>) -> Result<ConfigWriteResponse, String> {
     execute_apply_values_at(&user_config_path()?, &values)
 }
 
 /// Tauri IPC 命令：对一批待应用变更做纯内存试算校验，不落盘。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn config_validate_values(values: HashMap<String, String>) -> ConfigValidateResponse {
     match user_config_path() {
         Ok(path) => execute_validate_values_at(&path, &values),
@@ -449,13 +453,13 @@ pub fn config_validate_values(values: HashMap<String, String>) -> ConfigValidate
 }
 
 /// Tauri IPC 命令：把单个配置项恢复为内置默认值。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn config_reset_key(key: String) -> Result<ConfigWriteResponse, String> {
     execute_reset_key_at(&user_config_path()?, &key)
 }
 
 /// Tauri IPC 命令：在系统默认文本编辑器中打开配置文件。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn open_config_file() -> Result<(), String> {
     let path = user_config_path()?;
     if let Some(parent) = path.parent()
@@ -526,7 +530,7 @@ pub(crate) fn synthesize(
 /// # Errors
 ///
 /// 网关不可达或鉴权失败。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn voice_presets() -> Result<serde_json::Value, String> {
     crate::gateway::get_voice_presets()
 }
@@ -536,7 +540,7 @@ pub fn voice_presets() -> Result<serde_json::Value, String> {
 /// # Errors
 ///
 /// 网关不可达或鉴权失败。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn voice_runtime_status() -> Result<serde_json::Value, String> {
     crate::gateway::get_voice_runtime_status()
 }

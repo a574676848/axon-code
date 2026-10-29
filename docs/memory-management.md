@@ -119,6 +119,15 @@ SQLite 存储采用高内聚的数据模型（Schema v4）：
 
 ---
 
+### 3.3 查询嵌入与多模态召回
+
+- 查询向量按配置的 embedding provider 协议分流：`dashscope`（带 `enable_fusion`）与 `volcengine-ark-multimodal` 走原生多模态接口并取融合向量；`openai-multimodal-embeddings` 走网关 OpenAI 兼容 `/v1/embeddings`。协议不支持多模态时记 warning 后按纯文本降级，召回不中断。
+- 网关 `qwen3-vl-embedding` 一次请求返回多条向量：`index 0` 文本、`index 1` 图像，且不透传 `enable_fusion`。Axon 按 index 升序解析为文本路与图像路两条查询向量，不自行融合。
+- 检索阶段文本向量与图像向量各走一路向量召回，命中同一条记忆时按更优（更小）名次与距离合并成一个候选，再与 BM25、治理权重重排。
+- 图片来源与 `memory search --image` 共用同一套归一化：`https://` URL 与 `data:image` base64 原样透传，本地路径按扩展名编码成 data URL，单图上限 10 MiB。
+- 自动召回取本轮附件里的第一张可读图片（多模态 embedding 只消费一张图）；附件缺失或读取失败只跳过该图，不影响本轮召回。
+- 输出维度以 `model.embedding_dimension` 为准，网关协议通过请求体顶层 `dimensions` 传递（已验证生效）；实际维度与配置不一致时按响应校验失败降级，不写坏索引。
+
 ## 4. 记忆生命周期与治理
 
 记忆的全生命周期遵循严谨的准入、更新、遗忘与销毁流转逻辑：
@@ -142,6 +151,11 @@ SQLite 存储采用高内聚的数据模型（Schema v4）：
 ### 4.3 软遗忘机制 (Tombstone)
 - 调用遗忘接口（`POST /api/v1/memory/{id}/forget`）不会物理删除数据，而是将其状态标记为 `tombstone`。
 - 标记为遗忘的记录将立刻从 Tantivy 与 HNSW 检索投影中剔除，不再参与日常会话的上下文装配，但在审计日志与管理面板中保留可追溯标记。
+
+### 4.3.1 可逆归档 (Archive)
+- 归档（`POST /api/v1/memory/{id}/archive`）只写 `archived_at_ms`，正文保持不变：记录退出召回与活跃时间轴，但仍出现在「已归档」窗口里。
+- 取消归档（`POST /api/v1/memory/{id}/unarchive`）清空 `archived_at_ms`，记录重新参与召回与时间轴；低活跃与冲突治理归档的记录同样可以这样恢复。
+- 已被遗忘的记录正文与引用已清除，因此不能归档或取消归档，只能永久删除；接口以 `400` 明确拒绝，不静默恢复。
 
 ### 4.4 物理级销毁 (Hard Delete)
 - 调用删除接口（`DELETE /api/v1/memory/{id}`）执行彻底的级联清理：
@@ -182,14 +196,20 @@ $$S(t) = S_0 \times \left(\frac{1}{2}\right)^{\frac{\Delta t}{T_{half}}}$$
 
 | HTTP 方法与路径 | 功能描述 | 请求参数 / 请求体重点 |
 | :--- | :--- | :--- |
-| `GET /api/v1/memory` | 有界时间轴游标分页查询 | `memoryKind`（必填）、`scope`、`limit`（最大 100）、`cursorUpdatedAtMs`、`cursorMemoryId` |
-| `GET /api/v1/memory/stats` | 记忆全局/作用域聚合统计 | `scope`（可选，支持 `all`、`personal`、`workspace`、`workspace:<ns>`） |
-| `GET /api/v1/memory/scopes` | 动态获取真实存在的命名空间列表 | 返回当前 SQLite 中实际存在的有效作用域及统计分布 |
+| `GET /api/v1/memory` | 有界时间轴游标分页查询 | `memoryKind`（必填）、`scope`、`status`（`active` 缺省 / `archived` / `all`）、`limit`（最大 100）、`cursorUpdatedAtMs`、`cursorMemoryId` |
+| `GET /api/v1/memory/stats` | 记忆全局/作用域聚合统计 | `scope`（可选，支持 `all`、`personal`、`workspace`、`workspace:<ns>`）、`status`（决定 `memoryKindCounts` 的口径，缺省 `active`） |
+| `GET /api/v1/memory/scopes` | 动态获取真实存在的命名空间列表 | 返回当前 SQLite 中实际存在的有效作用域及统计分布；`scope` 值就是记录的 namespace 引用，可原样回传给 `GET /api/v1/memory` |
 | `GET /api/v1/memory/{memoryId}` | 单条记忆详情查询 | 路径参数 `memoryId`（64 位安全字符串） |
 | `POST /api/v1/memory` | 新建记忆（支持单条与批量） | 支持单对象、数组或 `{"records": [...]}`。Workspace 必填 `workspacePath` |
 | `POST /api/v1/memory/{memoryId}` | 替代更新记忆 | 自动建立 `supersedesMemoryIds` 演化关联，继承作用域 |
+| `POST /api/v1/memory/{memoryId}/archive` | 归档记忆 | 写 `archived_at_ms`，正文保留，可取消归档 |
+| `POST /api/v1/memory/{memoryId}/unarchive` | 取消归档 | 清空 `archived_at_ms`；已遗忘记录返回 `400` |
 | `POST /api/v1/memory/{memoryId}/forget`| 软遗忘指定记忆 | 写入 `tombstone`，同步清除检索投影 |
 | `DELETE /api/v1/memory/{memoryId}` | 物理删除记忆 | 原子级联删除 SQLite 记录与 Tantivy/HNSW 检索投影 |
+
+#### 作用域取值约定
+- `scope` 只接受 `all`、`personal`、`workspace` 与 `workspace:<namespace>`；`workspace:<namespace>` 里的 `<namespace>` 必须与 `GET /api/v1/memory/scopes` 返回的 `namespaceRef` 一致，适配层只剥掉一层传输前缀，绝不重复拼接 `workspace:`。
+- `~/.axon`（Axon 主目录）不是普通 Workspace，但它是 Workspace Memory 的合法地点：在 Home 里写入的经验、知识与流程固定落在 `workspace:axon-home`，管理页把它显示为「Axon 主目录」。
 
 #### 核心契约约定：大数 ID 字符串化
 由于 `memoryId` 是 64 位无符号整数（`u64`，上限约 $1.8 \times 10^{19}$），超出 JavaScript 浮点数安全整数范围（$2^{53} - 1$）。为防止前端在序列化传输中发生精度截断，**Gateway、Desktop IPC 与 CLI 的所有 JSON 通信中，`memoryId`、`cursorMemoryId` 以及 `supersedesMemoryIds` 均强制采用十进制字符串**。

@@ -330,6 +330,7 @@ fn write_embedding_config(root: &Path) -> PathBuf {
         supports_vision: false,
         supports_embedding: true,
         embedding_dimension: MEMORY_CONFIG_DEFAULT_EMBEDDING_DIMENSION,
+    requires_reasoning_content_on_assistant_messages: false,
     });
     "text-embedding-3-small".clone_into(&mut config.agent.default_model);
     "text-embedding-3-small".clone_into(&mut config.agent.fast_model);

@@ -11,7 +11,7 @@ use crate::gateway;
 /// # Errors
 ///
 /// 网关不可达、未授权或响应不是合法 JSON 时返回中文诊断。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn persona_summary() -> Result<Value, String> {
     gateway::get_json("/persona/summary")
 }
@@ -23,7 +23,7 @@ pub fn persona_summary() -> Result<Value, String> {
 /// # Errors
 ///
 /// 网关不可达、未授权或形象尚未放置时返回中文诊断。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn persona_portrait() -> Result<Value, String> {
     gateway::get_json("/persona/portrait/art-halfbody.png")
 }

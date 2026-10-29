@@ -3,9 +3,10 @@ use axon_domain::{AxonError, AxonResult};
 use crate::{
     AgentConfig, AxonConfig, ChannelBalancerConfig, MemoryConfig, ModelConfig,
     PROVIDER_PROTOCOL_ANTHROPIC, PROVIDER_PROTOCOL_DASHSCOPE, PROVIDER_PROTOCOL_OPENAI,
-    PROVIDER_PROTOCOL_OPENAI_CHAT, PROVIDER_PROTOCOL_VOLCENGINE_ARK_MULTIMODAL,
-    PROVIDER_WIRE_TRANSPORT_HTTP, PROVIDER_WIRE_TRANSPORT_WEBSOCKET, ProviderConfig,
-    REASONING_EFFORT_VALUES, normalize_reasoning_effort,
+    PROVIDER_PROTOCOL_OPENAI_CHAT, PROVIDER_PROTOCOL_OPENAI_MULTIMODAL_EMBEDDINGS,
+    PROVIDER_PROTOCOL_VOLCENGINE_ARK_MULTIMODAL, PROVIDER_WIRE_TRANSPORT_HTTP,
+    PROVIDER_WIRE_TRANSPORT_WEBSOCKET, ProviderConfig, REASONING_EFFORT_VALUES,
+    normalize_reasoning_effort,
 };
 
 pub(crate) fn validate_config(config: &AxonConfig) -> AxonResult<()> {
@@ -188,7 +189,7 @@ fn validate_providers(providers: &[ProviderConfig]) -> AxonResult<()> {
         }
         if !provider_protocol_supported(&provider.protocol) {
             return Err(AxonError::config_invalid(
-                "provider.protocol 必须为 openai、openai-chatcompletions、anthropic、dashscope 或 volcengine-ark-multimodal",
+                "provider.protocol 必须为 openai、openai-chatcompletions、anthropic、dashscope、openai-multimodal-embeddings 或 volcengine-ark-multimodal",
             ));
         }
         if !provider.base_url.starts_with("http://") && !provider.base_url.starts_with("https://") {
@@ -339,7 +340,7 @@ fn validate_memory_embedding(
         ))?;
     if !embedding_provider_protocol_supported(&provider.protocol) {
         return Err(AxonError::config_invalid(
-            "memory.embedding.model 的 provider 必须使用 openai、openai-chatcompletions、dashscope 或 volcengine-ark-multimodal 兼容协议",
+            "memory.embedding.model 的 provider 必须使用 openai、openai-chatcompletions、dashscope、openai-multimodal-embeddings 或 volcengine-ark-multimodal 兼容协议",
         ));
     }
     Ok(())
@@ -352,6 +353,7 @@ fn provider_protocol_supported(protocol: &str) -> bool {
             | PROVIDER_PROTOCOL_OPENAI_CHAT
             | PROVIDER_PROTOCOL_ANTHROPIC
             | PROVIDER_PROTOCOL_DASHSCOPE
+            | PROVIDER_PROTOCOL_OPENAI_MULTIMODAL_EMBEDDINGS
             | PROVIDER_PROTOCOL_VOLCENGINE_ARK_MULTIMODAL
     )
 }
@@ -362,6 +364,7 @@ fn embedding_provider_protocol_supported(protocol: &str) -> bool {
         PROVIDER_PROTOCOL_OPENAI
             | PROVIDER_PROTOCOL_OPENAI_CHAT
             | PROVIDER_PROTOCOL_DASHSCOPE
+            | PROVIDER_PROTOCOL_OPENAI_MULTIMODAL_EMBEDDINGS
             | PROVIDER_PROTOCOL_VOLCENGINE_ARK_MULTIMODAL
     )
 }

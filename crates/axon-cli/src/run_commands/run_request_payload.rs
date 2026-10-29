@@ -25,6 +25,7 @@ use super::run_model_payload::{
 use super::{RunCommand, RunStartupSnapshot};
 use axon_persona::domain::scene_frame::Audience;
 
+use crate::memory_image_ref::image_mime_type;
 use crate::runtime_persona_context::{PersonaContext, PersonaSceneInput, load_persona_context};
 
 const LOCAL_UPLOAD_SOURCE_PREFIX: &str = "local-upload://";
@@ -123,6 +124,7 @@ pub(super) fn build_run_model_payload(
                 input.config_path,
                 input.config,
                 input.prompt_for_model,
+                input.attached_files,
                 input.command,
                 memory_scope(workspace_snapshot.as_ref()),
                 input.performance,
@@ -324,23 +326,6 @@ fn attach_vision_files_to_payload_with_archive_root(
 
 fn local_upload_source_trace(session_id: &str, index: usize) -> String {
     format!("{LOCAL_UPLOAD_SOURCE_PREFIX}{session_id}/{index}")
-}
-
-fn image_mime_type(path: &Path) -> Option<&'static str> {
-    match path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "png" => Some("image/png"),
-        "jpg" | "jpeg" => Some("image/jpeg"),
-        "gif" => Some("image/gif"),
-        "webp" => Some("image/webp"),
-        "bmp" => Some("image/bmp"),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

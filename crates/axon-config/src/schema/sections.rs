@@ -16,7 +16,7 @@ use crate::{
 
 /// Agent 配置。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct AgentConfig {
     /// 默认主模型。
     pub default_model: String,
@@ -39,7 +39,7 @@ pub struct AgentConfig {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 /// TUI 配置段；三段式 TUI 不暴露终端原生历史兼容配置。
 pub struct TuiConfig {}
 
@@ -61,7 +61,7 @@ impl Default for AgentConfig {
 
 /// Skills 启用状态配置。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct SkillsConfig {
     /// 被用户禁用的 skill 名称。
     pub disabled: BTreeSet<String>,
@@ -101,7 +101,7 @@ impl RemoteMode {
 
 /// 远控配置。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct RemoteConfig {
     /// 统一 Gateway 配置；远控目标态始终启用。
     pub gateway: RemoteGatewayConfig,
@@ -113,7 +113,7 @@ pub struct RemoteConfig {
 
 /// 统一 Gateway 配置。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct RemoteGatewayConfig {
     /// API token 对应的环境变量名；token 原文只存在于用户级 env 文件。
     pub api_token_env: String,
@@ -155,7 +155,7 @@ impl RemoteConfig {
 
 /// 远控 Feishu WebSocket adapter 配置。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct RemoteFeishuWebSocketConfig {
     /// 是否启用 Feishu WebSocket adapter。
     pub enabled: bool,
@@ -183,7 +183,7 @@ pub struct RemoteFeishuWebSocketConfig {
 
 /// Feishu 单群治理策略配置。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct RemoteFeishuChatPolicyConfig {
     /// Feishu chat_id。
     pub chat_id: String,
@@ -197,7 +197,7 @@ pub struct RemoteFeishuChatPolicyConfig {
 
 /// 视觉配置。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct VisionConfig {
     /// 图片进入视觉模型前是否要求本机确认。
     #[serde(skip)]
@@ -222,7 +222,7 @@ impl Default for VisionConfig {
 
 /// Memory 配置。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct MemoryConfig {
     /// embedding provider 引用配置。
     pub embedding: MemoryEmbeddingConfig,
@@ -230,7 +230,7 @@ pub struct MemoryConfig {
 
 /// 渠道负载均衡配置。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct ChannelBalancerConfig {
     /// 连续失败几次熔断。
     pub failure_threshold: u32,
@@ -255,7 +255,7 @@ impl Default for ChannelBalancerConfig {
 
 /// Memory embedding 配置。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct MemoryEmbeddingConfig {
     /// 是否启用 embedding。
     pub enabled: bool,

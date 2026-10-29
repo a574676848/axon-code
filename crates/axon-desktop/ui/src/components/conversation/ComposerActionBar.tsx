@@ -165,7 +165,7 @@ export const ComposerActionBar: React.FC<ComposerActionBarProps> = ({
             {iconState === 'stop' ? (
               <StopIcon size={16} />
             ) : iconState === 'busy' ? (
-              <span className="w-3.5 h-3.5 rounded-full border border-current border-t-transparent animate-spin" />
+              <span className="w-3.5 h-3.5 rounded-full border border-current border-t-transparent state-spinner" />
             ) : (
               <ArrowUpIcon
                 size={16}

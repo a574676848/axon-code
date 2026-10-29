@@ -94,7 +94,17 @@ struct MergeHitInput {
 
 impl MemoryOrchestrator {
     /// 执行文本 + 向量 + SQLite 治理元数据的混合检索。
+    /// 只走文本与文本向量路的混合检索。
     pub fn hybrid_search(&self, query: &MemoryHybridQuery) -> AxonResult<Vec<MemoryHybridHit>> {
+        self.hybrid_search_with_image(query, None)
+    }
+
+    /// 混合检索；额外给出图像查询向量时，按第二路向量再召回一次，同一条记录取更优名次合并。
+    pub fn hybrid_search_with_image(
+        &self,
+        query: &MemoryHybridQuery,
+        image_query_embedding: Option<&[f32]>,
+    ) -> AxonResult<Vec<MemoryHybridHit>> {
         validate_query(query)?;
         if query.limit == 0 {
             return Ok(Vec::new());
@@ -144,42 +154,47 @@ impl MemoryOrchestrator {
             }
         }
 
-        if let Some(embedding) = query.query_embedding.as_deref()
-            && let Ok(Some(vector_index)) = self.vector_index()
-        {
-            let vector_hits = vector_index.search(embedding, index_candidate_limit)?;
-            let vector_ids = vector_hits
-                .iter()
-                .map(|hit| hit.vector_id)
-                .collect::<Vec<_>>();
-            let vector_records = store.records_by_vector_ids(&vector_ids)?;
-            let vector_records = records_by_vector_id(vector_records);
+        if let Ok(Some(vector_index)) = self.vector_index() {
+            // 文本向量与图像向量各走一路召回，命中同一记录时 merge_hit 取更优名次。
+            for embedding in [query.query_embedding.as_deref(), image_query_embedding]
+                .into_iter()
+                .flatten()
+            {
+                let vector_hits = vector_index.search(embedding, index_candidate_limit)?;
+                let vector_ids = vector_hits
+                    .iter()
+                    .map(|hit| hit.vector_id)
+                    .collect::<Vec<_>>();
+                let vector_records = store.records_by_vector_ids(&vector_ids)?;
+                let vector_records = records_by_vector_id(vector_records);
 
-            let mut scoped_rank = 0;
-            for (index, hit) in vector_hits.iter().enumerate() {
-                if let Some(record) = vector_records.get(&hit.vector_id) {
-                    let accepted = merge_hit(
-                        &mut candidates,
-                        MergeHitInput {
-                            record: record.clone(),
-                            text_score: None,
-                            vector_distance: Some(hit.distance),
-                            text_rank: None,
-                            vector_rank: Some(if query.scope.is_some() {
-                                scoped_rank + 1
-                            } else {
-                                index + 1
-                            }),
-                            now_ms: query.now_ms,
-                            scope: query.scope.clone(),
-                        },
-                    );
-                    if accepted && query.scope.is_some() {
-                        scoped_rank += 1;
+                let mut scoped_rank = 0;
+                for (index, hit) in vector_hits.iter().enumerate() {
+                    if let Some(record) = vector_records.get(&hit.vector_id) {
+                        let accepted = merge_hit(
+                            &mut candidates,
+                            MergeHitInput {
+                                record: record.clone(),
+                                text_score: None,
+                                vector_distance: Some(hit.distance),
+                                text_rank: None,
+                                vector_rank: Some(if query.scope.is_some() {
+                                    scoped_rank + 1
+                                } else {
+                                    index + 1
+                                }),
+                                now_ms: query.now_ms,
+                                scope: query.scope.clone(),
+                            },
+                        );
+                        if accepted && query.scope.is_some() {
+                            scoped_rank += 1;
+                        }
                     }
                 }
             }
         }
+
         if let Some(scope) = query.scope.as_ref() {
             let scoped_records = match scope.user_ref.as_deref() {
                 Some(user_ref) => store.recallable_records_by_scope(
@@ -295,13 +310,19 @@ fn merge_hit(candidates: &mut BTreeMap<MemoryId, Candidate>, input: MergeHitInpu
         candidate.text_score = Some(score);
     }
     if let Some(distance) = vector_distance {
-        candidate.vector_distance = Some(distance);
+        candidate.vector_distance = Some(match candidate.vector_distance {
+            Some(existing) => existing.min(distance),
+            None => distance,
+        });
     }
     if let Some(rank) = text_rank {
         candidate.text_rank = Some(rank);
     }
     if let Some(rank) = vector_rank {
-        candidate.vector_rank = Some(rank);
+        candidate.vector_rank = Some(match candidate.vector_rank {
+            Some(existing) => existing.min(rank),
+            None => rank,
+        });
     }
     true
 }
@@ -336,10 +357,16 @@ fn explain_candidate(candidate: &Candidate) -> MemoryHybridExplain {
         && candidate.vector_rank.is_none()
         && let Some(score) = candidate.text_score
     {
+        // 未进入任何索引 rank 的候选只携带兜底分：要么来自治理元数据，
+        // 要么来自文本索引缺失时的关键词退化匹配。这类分数按治理权重折算，
+        // 不得全额计入 text 分量，否则治理分高的记录会压过 rank=1 的强相关命中。
         return MemoryHybridExplain {
-            text_component_basis_points: f32_to_basis_points(score),
+            text_component_basis_points: 0,
             vector_component_basis_points: 0,
-            governance_component_basis_points: 0,
+            governance_component_basis_points: basis_points_to_u16(weighted_component(
+                u32::from(f32_to_basis_points(score)),
+                MEMORY_HYBRID_GOVERNANCE_WEIGHT_BASIS_POINTS,
+            )),
             weights: "core_fallback",
         };
     }
@@ -502,7 +529,58 @@ fn validate_query(query: &MemoryHybridQuery) -> AxonResult<()> {
 mod tests {
     use axon_domain::{MemoryId, MemoryRecord, MemoryState};
 
-    use super::{MemoryHybridScope, MemorySqliteRecord, record_matches_scope};
+    use super::{
+        Candidate, MemoryHybridScope, MemorySqliteRecord, MergeHitInput, candidate_to_hit,
+        merge_hit, record_matches_scope,
+    };
+
+    /// 文本向量与图像向量命中同一条记录时，名次与距离都取更优的一路。
+    #[test]
+    fn vector_rank_and_distance_keep_the_better_path() {
+        let record = MemorySqliteRecord {
+            memory_kind: axon_domain::MemoryKind::Knowledge,
+            record: MemoryRecord {
+                id: MemoryId(1),
+                candidate_id: axon_domain::MemoryCandidateId(1),
+                state: MemoryState::Strong,
+                content_ref: Some("memory://same".to_owned()),
+                source_trace: None,
+                tombstone: None,
+            },
+            namespace_ref: Some("workspace:current".to_owned()),
+            repo_ref: None,
+            user_ref: None,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            last_active_at_ms: 1,
+            ttl_expires_at_ms: None,
+            confidence_basis_points: 8_000,
+            importance_basis_points: 8_000,
+            vector_id: None,
+            archived_at_ms: None,
+            prompt_text_persisted: false,
+            raw_payload_persisted: false,
+            remote_write_allowed: false,
+        };
+        let mut candidates = std::collections::BTreeMap::new();
+        for (rank, distance) in [(5usize, 0.5f32), (2, 0.2)] {
+            assert!(merge_hit(
+                &mut candidates,
+                MergeHitInput {
+                    record: record.clone(),
+                    text_score: None,
+                    vector_distance: Some(distance),
+                    text_rank: None,
+                    vector_rank: Some(rank),
+                    now_ms: 100,
+                    scope: None,
+                },
+            ));
+        }
+        let candidate = candidates.get(&MemoryId(1)).expect("candidate 应存在");
+        assert_eq!(candidate.vector_rank, Some(2));
+        assert_eq!(candidate.vector_distance, Some(0.2));
+    }
 
     #[test]
     fn hybrid_scope_mismatch_fails_closed() {
@@ -537,5 +615,88 @@ mod tests {
             namespace_ref: "workspace:current".to_owned(),
         };
         assert!(!record_matches_scope(&record, Some(&scope)));
+    }
+
+    fn fixture_record(id: MemoryId, confidence: u16, importance: u16) -> MemorySqliteRecord {
+        MemorySqliteRecord {
+            memory_kind: axon_domain::MemoryKind::Knowledge,
+            record: MemoryRecord {
+                id,
+                candidate_id: axon_domain::MemoryCandidateId(1),
+                state: MemoryState::Strong,
+                content_ref: Some("memory://workspace".to_owned()),
+                source_trace: None,
+                tombstone: None,
+            },
+            namespace_ref: Some("workspace:current".to_owned()),
+            repo_ref: None,
+            user_ref: None,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            last_active_at_ms: 1,
+            ttl_expires_at_ms: None,
+            confidence_basis_points: confidence,
+            importance_basis_points: importance,
+            vector_id: None,
+            archived_at_ms: None,
+            prompt_text_persisted: false,
+            raw_payload_persisted: false,
+            remote_write_allowed: false,
+        }
+    }
+
+    #[test]
+    fn core_fallback_candidate_is_weighted_by_governance() {
+        let hit = candidate_to_hit(Candidate {
+            record: fixture_record(MemoryId(1), 8_500, 8_000),
+            text_score: Some(8_250.0),
+            vector_distance: None,
+            text_rank: None,
+            vector_rank: None,
+        });
+
+        assert_eq!(hit.explain.weights, "core_fallback");
+        assert_eq!(hit.explain.text_component_basis_points, 0);
+        assert_eq!(hit.explain.vector_component_basis_points, 0);
+        assert_eq!(hit.explain.governance_component_basis_points, 825);
+        assert_eq!(hit.score_basis_points, 825);
+    }
+
+    #[test]
+    fn core_fallback_never_outranks_primary_rank_hit() {
+        let fallback = candidate_to_hit(Candidate {
+            record: fixture_record(MemoryId(1), 8_500, 8_000),
+            text_score: Some(10_000.0),
+            vector_distance: None,
+            text_rank: None,
+            vector_rank: None,
+        });
+        let primary_text = candidate_to_hit(Candidate {
+            record: fixture_record(MemoryId(2), 8_500, 8_000),
+            text_score: Some(1.0),
+            vector_distance: None,
+            text_rank: Some(1),
+            vector_rank: None,
+        });
+        let primary_vector = candidate_to_hit(Candidate {
+            record: fixture_record(MemoryId(3), 8_500, 8_000),
+            text_score: None,
+            vector_distance: Some(0.1),
+            text_rank: None,
+            vector_rank: Some(1),
+        });
+
+        assert!(
+            fallback.score_basis_points < primary_text.score_basis_points,
+            "兜底分 {} 不得压过文本 rank=1 命中 {}",
+            fallback.score_basis_points,
+            primary_text.score_basis_points
+        );
+        assert!(
+            fallback.score_basis_points < primary_vector.score_basis_points,
+            "兜底分 {} 不得压过向量 rank=1 命中 {}",
+            fallback.score_basis_points,
+            primary_vector.score_basis_points
+        );
     }
 }

@@ -373,6 +373,7 @@ impl SetupPlanner {
                     supports_vision: vision,
                     supports_embedding: embedding,
                     embedding_dimension: dimension,
+                    requires_reasoning_content_on_assistant_messages: false,
                 });
                 changed.push("model.added".to_owned());
             }

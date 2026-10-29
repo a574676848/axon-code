@@ -367,7 +367,7 @@ fn humanize_duration(millis: u64) -> String {
 }
 
 /// Tauri IPC 命令：汇总系统信息。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn system_info() -> Result<SystemInfoDto, String> {
     let root = axon_root()?;
 

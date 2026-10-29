@@ -59,7 +59,8 @@ pub use embedding_provider::{
     MEMORY_EMBEDDING_REASON_REQUEST_PLANNED, MemoryEmbeddingAuthHeaderPlan,
     MemoryEmbeddingCredentialPlan, MemoryEmbeddingHttpHeader, MemoryEmbeddingMultimodalContent,
     MemoryEmbeddingMultimodalRequestInput, MemoryEmbeddingProviderRuntime,
-    MemoryEmbeddingRequestInput, MemoryEmbeddingRequestPlan,
+    MemoryEmbeddingRequestInput, MemoryEmbeddingRequestPlan, MemoryEmbeddingResponseVectors,
+    multimodal_embedding_provider_supported,
 };
 pub use file_lock::{MEMORY_FILE_LOCK_TIMEOUT_MS, MemoryFileLock};
 pub use index_rebuild::{MemoryIndexRebuildReport, MemoryIndexRebuildRuntime};
@@ -77,8 +78,9 @@ pub use retrieval::{
 };
 pub use store::{
     LEGACY_MEMORY_RECORD_TABLE_PREFIX, MEMORY_SQLITE_BUSY_TIMEOUT_MS, MEMORY_SQLITE_SCHEMA_VERSION,
-    MemoryKindCount, MemoryScopeFacet, MemorySqliteRecord, MemorySqliteRecordFilter,
-    MemorySqliteStore, MemorySqliteSummary, MemoryTimelineCursor, MemoryVisibility,
+    MemoryArchiveStatus, MemoryKindCount, MemoryScopeFacet, MemorySqliteRecord,
+    MemorySqliteRecordFilter, MemorySqliteStore, MemorySqliteSummary, MemoryTimelineCursor,
+    MemoryVisibility,
 };
 pub use store_supersession::{MEMORY_SUPERSESSION_REASON, MemorySupersession};
 pub use text_index::{
@@ -110,6 +112,14 @@ pub const MEMORY_GLOBAL_NAMESPACE_REF: &str = "memory-scope:local";
 pub fn personal_memory_namespace(user_ref: &str) -> String {
     format!("{MEMORY_PERSONAL_NAMESPACE_PREFIX}:{user_ref}")
 }
+
+/// Axon 主目录（`~/.axon`）的 Workspace Memory namespace。
+///
+/// Home 目录树内不注册普通 Workspace，但「在 Axon 主目录里沉淀的经验、知识与流程」
+/// 必须与个人画像分开存放：它们属于主目录这一固定地点，因此给一个与路径无关的稳定
+/// namespace。Agent 写入、管理页写入与检索必须共用这一处取值，任何一侧偏移都会让
+/// 记忆写进另一个桶。
+pub const AXON_HOME_MEMORY_NAMESPACE: &str = "workspace:axon-home";
 
 /// Memory 数据父目录名。
 pub const MEMORY_DATA_PARENT_DIR: &str = "data";

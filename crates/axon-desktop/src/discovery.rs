@@ -221,7 +221,7 @@ fn resolve_provider_target(provider: &str) -> Result<(String, String, Option<Str
 ///
 /// 传入已登记供应商名称即可；也可以直接给出地址与协议，
 /// 用于供应商尚未保存时的试探测。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn discover_models(
     provider: Option<String>,
     base_url: Option<String>,

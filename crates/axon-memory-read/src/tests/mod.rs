@@ -70,6 +70,7 @@ memory:99|note=[not injected]
 fn hybrid_query_with_precomputed_embedding_reuses_embedding_report() {
     let report = QueryEmbeddingReport {
         embedding: Some(vec![0.1, 0.2, 0.3]),
+        image_embedding: None,
         status: MEMORY_QUERY_EMBEDDING_GENERATED,
         reason: None,
     };

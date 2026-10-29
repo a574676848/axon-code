@@ -108,13 +108,13 @@ fn dedupe_keeping_latest(entries: &mut Vec<String>) {
 }
 
 /// Tauri IPC 命令：读取输入历史（最早在前）。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn input_history_list() -> Result<Vec<String>, String> {
     list_input_history()
 }
 
 /// Tauri IPC 命令：记录一条输入历史。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn input_history_append(text: String) -> Result<Vec<String>, String> {
     append_input_history(&text)
 }

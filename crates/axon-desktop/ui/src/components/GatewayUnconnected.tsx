@@ -212,7 +212,7 @@ const AdditionalActions: React.FC<{ repair: GatewayRepair }> = ({ repair }) => (
         disabled={repair.busy !== null}
         onClick={() => repair.run(action)}
       >
-        {repair.busy === action ? <SpinnerIcon size={14} className="animate-spin" /> : null}
+        {repair.busy === action ? <SpinnerIcon size={14} className="state-spinner" /> : null}
         {repair.busy === action ? `${action}中` : action}
       </Button>
     ))}
@@ -262,7 +262,7 @@ export const GatewayUnconnected: React.FC<GatewayUnconnectedProps> = ({
         disabled: repair.busy !== null,
         icon:
           repair.busy !== null ? (
-            <SpinnerIcon size={14} className="animate-spin" />
+            <SpinnerIcon size={14} className="state-spinner" />
           ) : (
             <SettingsIcon size={14} />
           ),
@@ -330,7 +330,7 @@ export const GatewayUnavailableState: React.FC<GatewayUnavailableStateProps> = (
                 disabled={repair.busy !== null}
                 onClick={() => repair.run('重试')}
               >
-                {repair.busy !== null ? <SpinnerIcon size={14} className="animate-spin" /> : null}
+                {repair.busy !== null ? <SpinnerIcon size={14} className="state-spinner" /> : null}
                 {repair.busy !== null ? '正在重试' : '重试连接'}
               </Button>
               <Button variant="outline" size="md" onClick={onOpenSettings}>

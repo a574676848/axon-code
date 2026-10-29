@@ -156,6 +156,9 @@ pub struct MemorySearchCommand {
     /// 返回数量上限。
     #[arg(long)]
     pub limit: Option<usize>,
+    /// 可选图片：https URL、data:image base64 或本地图片路径；带图时 embedding 走多模态接口。
+    #[arg(long = "image", value_name = "URL_OR_PATH")]
+    pub images: Vec<String>,
 }
 
 /// Memory list 状态过滤。

@@ -7,6 +7,7 @@ import type {
   CronJob,
   CronHistoryResult,
   CronConfigResult,
+  MemoryArchiveStatus,
   MemoryCursor,
   MemoryKind,
   MemoryScopesResult,
@@ -78,18 +79,20 @@ const MEMORY_PAGE_SIZE = 50;
 export const memoryList = (
   memoryKind: MemoryKind,
   scope: string | undefined,
+  status: MemoryArchiveStatus,
   limit = MEMORY_PAGE_SIZE,
   cursor?: MemoryCursor,
 ): Promise<MemoryTimelineResult> =>
   call('memory_list', {
     memoryKind,
     scope,
+    status,
     limit,
     cursorUpdatedAtMs: cursor?.updatedAtMs,
     cursorMemoryId: cursor?.memoryId,
   });
-export const memoryStats = (scope?: string): Promise<MemoryStatsResult> =>
-  call('memory_stats', { scope });
+export const memoryStats = (scope?: string, status?: MemoryArchiveStatus): Promise<MemoryStatsResult> =>
+  call('memory_stats', { scope, status });
 export const memoryScopes = (): Promise<MemoryScopesResult> => call('memory_scopes', {});
 export const memoryGet = (memoryId: string): Promise<{ record: MemoryTimelineResult['records'][number] }> =>
   call('memory_get', { memoryId });
@@ -99,6 +102,14 @@ export const memoryWriteBatch = (records: MemoryWriteInput[]): Promise<MemoryWri
   call('memory_write', { input: { records } });
 export const memoryForget = (memoryId: string): Promise<MemoryWriteReceipt> =>
   call('memory_forget', { memoryId });
+export const memoryArchive = (
+  memoryId: string,
+): Promise<{ status: string; memoryId: string; needsRepair: boolean }> =>
+  call('memory_archive', { memoryId });
+export const memoryUnarchive = (
+  memoryId: string,
+): Promise<{ status: string; memoryId: string; needsRepair: boolean }> =>
+  call('memory_unarchive', { memoryId });
 export const memoryRemove = (memoryId: string): Promise<MemoryWriteReceipt> =>
   call('memory_remove', { memoryId });
 

@@ -110,7 +110,7 @@ pub fn github_info() -> GithubInfoDto {
 ///
 /// 网络失败不是命令失败：结论连同归因一起回给界面，因此界面永远拿不到
 /// 「http status: 403」这种东西，首屏也只渲染产品口径的一句话。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn check_update() -> Result<UpdateCheckDto, String> {
     let current = env!("CARGO_PKG_VERSION").to_string();
     let info = github_info();

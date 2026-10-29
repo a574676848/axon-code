@@ -47,6 +47,7 @@ mod memory_commands;
 mod memory_http_adapter;
 #[path = "memory_http_scope.rs"]
 mod memory_http_scope;
+mod memory_image_ref;
 #[path = "args/package_args.rs"]
 mod package_args;
 mod package_commands;

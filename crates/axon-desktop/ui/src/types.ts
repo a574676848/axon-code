@@ -37,6 +37,8 @@ export interface ModelItem {
   supports_embedding: boolean;
   /** 向量维度；仅 supports_embedding 为 true 时有效。 */
   embedding_dimension: number;
+  /** 是否要求历史助手消息逐条回传推理内容。 */
+  requires_reasoning_content_on_assistant_messages: boolean;
 }
 
 /** 车道（等同通用工作台的会话）。 */
@@ -122,6 +124,8 @@ export interface ModelInput {
   /** 是否支持向量检索。 */
   supports_embedding: boolean;
   embedding_dimension: number;
+  /** 是否要求历史助手消息逐条回传推理内容。 */
+  requires_reasoning_content_on_assistant_messages: boolean;
 }
 
 /** 从上游探测到的候选模型。 */
@@ -142,6 +146,9 @@ export interface DiscoverModelsResult {
 export type NavTab = 'workspace' | 'chat' | 'automation' | 'goals' | 'memory';
 
 export type MemoryKind = 'profile' | 'preference' | 'experience' | 'knowledge' | 'procedure';
+
+/** 记忆时间轴的归档状态筛选。 */
+export type MemoryArchiveStatus = 'active' | 'archived' | 'all';
 
 export interface MemoryRecord {
   /** 记忆 ID 是 u64，超出 JS 安全整数区间，统一以十进制字符串传输。 */
@@ -169,6 +176,8 @@ export interface MemoryCursor {
 export interface MemoryTimelineResult {
   status: string;
   memoryKind: MemoryKind;
+  /** 本次读取使用的归档状态筛选。 */
+  archiveStatus?: MemoryArchiveStatus;
   scope: string;
   namespaceRef?: string | null;
   limit: number;
@@ -184,6 +193,8 @@ export interface MemoryKindCount {
 
 export interface MemoryStatsResult {
   status: string;
+  /** 本次统计使用的归档状态筛选；页签计数与列表同口径。 */
+  archiveStatus?: MemoryArchiveStatus;
   scope: string;
   namespaceRef?: string | null;
   totalRecords: number;

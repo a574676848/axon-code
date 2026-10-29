@@ -23,13 +23,13 @@ pub fn reload(cwd: &str) -> Result<serde_json::Value, String> {
 }
 
 /// Tauri IPC 命令：读取 MCP 运行态。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn mcp_runtime_status(cwd: String) -> Result<serde_json::Value, String> {
     load_status(&cwd)
 }
 
 /// Tauri IPC 命令：重新加载 MCP 列表。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn mcp_runtime_refresh(cwd: String) -> Result<serde_json::Value, String> {
     reload(&cwd)
 }

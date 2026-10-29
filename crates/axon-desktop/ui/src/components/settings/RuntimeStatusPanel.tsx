@@ -96,7 +96,7 @@ export const RuntimeStatusPanel: React.FC<RuntimeStatusPanelProps> = ({ onError,
             onClick={() => void restartDaemon()}
           >
             {restarting ? (
-              <SpinnerIcon size={14} className="animate-spin" />
+              <SpinnerIcon size={14} className="state-spinner" />
             ) : (
               <RetryIcon size={14} />
             )}

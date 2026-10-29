@@ -1083,14 +1083,17 @@ html[data-material] body {
 /*
  * 状态转圈：环加一段呼吸弧，整体匀速旋转。
  * 画面里同时出现多个转圈时由一个共同起点对齐相位，否则它们会各转各的；
- * 起点在组件挂载时钉到时间零点，弧长与转速与参考实现逐值一致。
+ * 起点在组件挂载时钉到时间零点，转速与参考实现逐值一致。
+ *
+ * 旋转落在 svg / 外层 span 这个 HTML 盒子上，不落在 SVG 内部的 <g> 上：<g> 的
+ * transform 进不了合成器，实测会把整篇文档每帧重排一次（约 60 次/秒，见
+ * docs/ui-constraints.md §6）。弧的呼吸因此也只走 opacity，弧长本身保持常量。
  */
 .state-spinner {
   flex: none;
-}
-
-.state-spinner-motion {
   transform-origin: center;
+  /* 常驻 will-change 只给这个一直在转的状态标识，不是通用按钮上的常态。 */
+  will-change: transform;
   animation: state-spinner-spin 1.5s linear infinite;
 }
 
@@ -1107,8 +1110,20 @@ html[data-material] body {
 }
 
 .state-spinner-arc {
-  stroke-dasharray: 12 150;
-  animation: state-spinner-dash 1.5s ease-in-out infinite;
+  stroke-dasharray: 18 150;
+  animation: state-spinner-breathe 1.5s ease-in-out infinite;
+}
+
+/* 弧的呼吸：明暗走 opacity，弧长不动，因此不触发布局。 */
+@keyframes state-spinner-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+
+  50% {
+    opacity: 1;
+  }
 }
 
 /*
@@ -1367,33 +1382,15 @@ html[data-material] body {
   }
 }
 
-@keyframes state-spinner-dash {
-  0% {
-    stroke-dasharray: 12 150;
-    stroke-dashoffset: 0;
-  }
-
-  50% {
-    stroke-dasharray: 24 150;
-    stroke-dashoffset: -6;
-  }
-
-  100% {
-    stroke-dasharray: 12 150;
-    stroke-dashoffset: 0;
-  }
-}
-
-/* 减弱动效下不打转：弧停在固定角度，状态照样看得见。 */
+/* 减弱动效下同时停掉状态转圈与弧呼吸：弧停在固定角度，状态照样看得见。 */
 @media (prefers-reduced-motion: reduce) {
-  .state-spinner-motion,
+  .state-spinner,
   .state-spinner-arc {
     animation: none;
   }
 
   .state-spinner-arc {
-    stroke-dasharray: 18 150;
-    stroke-dashoffset: -3;
+    opacity: 1;
   }
 }
 

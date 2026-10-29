@@ -116,7 +116,7 @@ export const VoicePresetSelect: React.FC<VoicePresetSelectProps> = ({
           className={previewing ? 'bg-active text-text-primary' : ''}
         >
           {previewBusy ? (
-            <SpinnerIcon size={14} className="animate-spin" />
+            <SpinnerIcon size={14} className="state-spinner" />
           ) : previewing ? (
             <span className="inline-flex items-center gap-1">
               <VoiceWave active size="xs" />

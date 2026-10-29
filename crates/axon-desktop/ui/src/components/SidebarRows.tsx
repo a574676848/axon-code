@@ -184,7 +184,7 @@ export const LaneRow: React.FC<LaneRowProps> = ({
           <HoverCardStatus
             icon={
               lane.running ? (
-                <SpinnerIcon size={14} className="animate-spin" />
+                <SpinnerIcon size={14} className="state-spinner" />
               ) : (
                 <GlobeIcon size={14} />
               )

@@ -1,7 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircleIcon, ArchiveIcon, BrainIcon, EditIcon, PlusIcon, TrashIcon } from '../icons';
+import { ArchiveRestoreIcon } from './memoryIcons';
 import * as ipc from '../ipc';
-import type { MemoryCursor, MemoryKind, MemoryRecord, MemoryScopeOption, MemoryStatsResult } from '../types';
+import type {
+  MemoryArchiveStatus,
+  MemoryCursor,
+  MemoryKind,
+  MemoryRecord,
+  MemoryScopeOption,
+  MemoryStatsResult,
+} from '../types';
 import { MEMORY_KINDS } from './memoryDraft';
 import { MemoryEditor } from './MemoryEditor';
 import { MemoryWheel } from './MemoryWheel';
@@ -12,6 +20,13 @@ import { Banner, EmptyState, LoadingState, Panel, StateDot, Text } from './ui/su
 
 const PAGE_SIZE = 50;
 const ALL_SCOPES = 'all';
+
+/** 归档状态筛选：默认只看活跃，已归档必须显式进入。 */
+const STATUS_OPTIONS: Array<{ value: MemoryArchiveStatus; label: string }> = [
+  { value: 'active', label: '活跃' },
+  { value: 'archived', label: '已归档' },
+  { value: 'all', label: '全部' },
+];
 
 interface MemoryPageProps {
   connected: boolean;
@@ -39,6 +54,7 @@ const StatCell: React.FC<{ label: string; value?: number; first: boolean }> = ({
 
 export const MemoryPage: React.FC<MemoryPageProps> = ({ connected }) => {
   const [kind, setKind] = useState<MemoryKind>('profile');
+  const [status, setStatus] = useState<MemoryArchiveStatus>('active');
   const [scope, setScope] = useState<string>(ALL_SCOPES);
   const [scopes, setScopes] = useState<MemoryScopeOption[]>([]);
   const [records, setRecords] = useState<MemoryRecord[]>([]);
@@ -53,12 +69,14 @@ export const MemoryPage: React.FC<MemoryPageProps> = ({ connected }) => {
   const [needsRepair, setNeedsRepair] = useState(false);
   const [legacyTables, setLegacyTables] = useState<string[]>([]);
   const [editorFor, setEditorFor] = useState<{ record: MemoryRecord | null } | null>(null);
-  const [pending, setPending] = useState<{ action: 'forget' | 'remove'; record: MemoryRecord } | null>(null);
+  const [pending, setPending] = useState<MemoryRecord | null>(null);
   const [actionId, setActionId] = useState<string | null>(null);
   const kindRef = useRef<MemoryKind>(kind);
   const scopeRef = useRef<string>(scope);
+  const statusRef = useRef<MemoryArchiveStatus>(status);
   kindRef.current = kind;
   scopeRef.current = scope;
+  statusRef.current = status;
 
   const loadScopes = useCallback(async () => {
     try {
@@ -70,9 +88,9 @@ export const MemoryPage: React.FC<MemoryPageProps> = ({ connected }) => {
     }
   }, []);
 
-  const loadStats = useCallback(async (activeScope: string) => {
+  const loadStats = useCallback(async (activeScope: string, activeStatus: MemoryArchiveStatus) => {
     try {
-      const result = await ipc.memoryStats(activeScope);
+      const result = await ipc.memoryStats(activeScope, activeStatus);
       setStats(result);
       setLegacyTables(result.legacyRecordTables);
       setNeedsRepair(result.needsRepair);
@@ -83,7 +101,7 @@ export const MemoryPage: React.FC<MemoryPageProps> = ({ connected }) => {
   }, []);
 
   const loadFirstPage = useCallback(
-    async (activeScope: string, activeKind: MemoryKind) => {
+    async (activeScope: string, activeKind: MemoryKind, activeStatus: MemoryArchiveStatus) => {
       setLoading(true);
       setError(null);
       setErrorDetails([]);
@@ -91,6 +109,7 @@ export const MemoryPage: React.FC<MemoryPageProps> = ({ connected }) => {
         const result = await ipc.memoryList(
           activeKind,
           activeScope === ALL_SCOPES ? undefined : activeScope,
+          activeStatus,
           PAGE_SIZE,
         );
         setRecords(result.records);
@@ -117,6 +136,7 @@ export const MemoryPage: React.FC<MemoryPageProps> = ({ connected }) => {
       const result = await ipc.memoryList(
         kindRef.current,
         scopeRef.current === ALL_SCOPES ? undefined : scopeRef.current,
+        statusRef.current,
         PAGE_SIZE,
         cursor,
       );
@@ -140,9 +160,9 @@ export const MemoryPage: React.FC<MemoryPageProps> = ({ connected }) => {
 
   useEffect(() => {
     if (!connected) return;
-    void loadFirstPage(scope, kind);
-    void loadStats(scope);
-  }, [connected, scope, kind, loadFirstPage, loadStats]);
+    void loadFirstPage(scope, kind, status);
+    void loadStats(scope, status);
+  }, [connected, scope, kind, status, loadFirstPage, loadStats]);
 
   const scopeOptions = useMemo(
     () => [
@@ -174,25 +194,46 @@ export const MemoryPage: React.FC<MemoryPageProps> = ({ connected }) => {
 
   const confirmPending = async () => {
     if (pending === null) return;
-    const { action, record } = pending;
+    const record = pending;
     setActionId(record.memoryId);
     setError(null);
     setErrorDetails([]);
     try {
-      const receipt =
-        action === 'forget'
-          ? await ipc.memoryForget(record.memoryId)
-          : await ipc.memoryRemove(record.memoryId);
+      const receipt = await ipc.memoryRemove(record.memoryId);
       setRecords((current) => current.filter((item) => item.memoryId !== record.memoryId));
       setActiveIndex((current) => Math.max(0, current - 1));
-      applyReceipt(receipt, action === 'forget' ? '已写入遗忘标记' : '已删除这条记忆');
-      await Promise.all([loadStats(scope), loadScopes()]);
+      applyReceipt(receipt, '已删除这条记忆');
+      await Promise.all([loadStats(scope, status), loadScopes()]);
     } catch (failure) {
-      setError(action === 'forget' ? '遗忘记忆失败' : '删除记忆失败');
+      setError('删除记忆失败');
       setErrorDetails([failure instanceof Error ? failure.message : '未知错误']);
     } finally {
       setActionId(null);
       setPending(null);
+    }
+  };
+
+  /** 归档与取消归档只切换归档位，正文不重写；完成后按当前筛选重读列表。 */
+  const toggleArchive = async (record: MemoryRecord) => {
+    const archived = record.archivedAtMs !== null && record.archivedAtMs !== undefined;
+    setActionId(record.memoryId);
+    setError(null);
+    setErrorDetails([]);
+    try {
+      const receipt = archived
+        ? await ipc.memoryUnarchive(record.memoryId)
+        : await ipc.memoryArchive(record.memoryId);
+      applyReceipt(receipt, archived ? '已取消归档，重新参与检索' : '已归档，移出召回与活跃列表');
+      await Promise.all([
+        loadFirstPage(scope, kind, status),
+        loadStats(scope, status),
+        loadScopes(),
+      ]);
+    } catch (failure) {
+      setError(archived ? '取消归档失败' : '归档失败');
+      setErrorDetails([failure instanceof Error ? failure.message : '未知错误']);
+    } finally {
+      setActionId(null);
     }
   };
 
@@ -208,7 +249,7 @@ export const MemoryPage: React.FC<MemoryPageProps> = ({ connected }) => {
     );
   }
 
-  const pendingSummary = pending?.record.memorySummary ?? '';
+  const pendingSummary = pending?.memorySummary ?? '';
   return (
     <>
       <PageShell
@@ -294,6 +335,12 @@ export const MemoryPage: React.FC<MemoryPageProps> = ({ connected }) => {
                   ? `${activeIndex + 1} / ${records.length}${nextCursor !== null ? '+' : ''}`
                   : ''}
               </Text>
+              <SegmentedControl
+                label="归档状态"
+                options={STATUS_OPTIONS}
+                value={status}
+                onChange={setStatus}
+              />
               <div className="w-64">
                 <Select
                   label="记忆作用域"
@@ -312,14 +359,22 @@ export const MemoryPage: React.FC<MemoryPageProps> = ({ connected }) => {
               <Panel>
                 <EmptyState
                   icon={<BrainIcon size={24} />}
-                  title={scope === ALL_SCOPES ? '这一类记忆还是空的' : '这个作用域下没有记忆'}
+                  title={
+                    status === 'archived'
+                      ? '没有已归档的记忆'
+                      : scope === ALL_SCOPES
+                        ? '这一类记忆还是空的'
+                        : '这个作用域下没有记忆'
+                  }
                   description={
-                    scope === ALL_SCOPES
-                      ? '新增一条，或者切换到其他类型看看。'
-                      : '切换到全部可见记忆，可以看到其他作用域的真实记录。'
+                    status === 'archived'
+                      ? '归档会把记忆移出召回与活跃列表，正文仍然保留；在这里可以取消归档或永久删除。'
+                      : scope === ALL_SCOPES
+                        ? '新增一条，或者切换到其他类型看看。'
+                        : '切换到全部可见记忆，可以看到其他作用域的真实记录。'
                   }
                   action={
-                    scope === ALL_SCOPES ? (
+                    status === 'archived' ? undefined : scope === ALL_SCOPES ? (
                       <Button
                         variant="primary"
                         size="sm"
@@ -347,30 +402,42 @@ export const MemoryPage: React.FC<MemoryPageProps> = ({ connected }) => {
                 onActiveIndexChange={setActiveIndex}
                 onPrefetch={() => void requestMore()}
                 loadingMore={loadingMore}
-                renderActions={(record) => (
-                  <>
-                    <IconButton
-                      label="修改记忆"
-                      onClick={() => setEditorFor({ record })}
-                    >
-                      <EditIcon size={14} />
-                    </IconButton>
-                    <IconButton
-                      label="遗忘记忆"
-                      disabled={actionId === record.memoryId}
-                      onClick={() => setPending({ action: 'forget', record })}
-                    >
-                      <ArchiveIcon size={14} />
-                    </IconButton>
-                    <IconButton
-                      label="永久删除记忆"
-                      disabled={actionId === record.memoryId}
-                      onClick={() => setPending({ action: 'remove', record })}
-                    >
-                      <TrashIcon size={14} />
-                    </IconButton>
-                  </>
-                )}
+                renderActions={(record) => {
+                  const archived = record.archivedAtMs !== null && record.archivedAtMs !== undefined;
+                  const forgotten = record.state === 'tombstone';
+                  const busy = actionId === record.memoryId;
+                  return (
+                    <>
+                      <IconButton
+                        label={forgotten ? '已遗忘的记忆不能修改' : '修改记忆'}
+                        disabled={forgotten || busy}
+                        onClick={() => setEditorFor({ record })}
+                      >
+                        <EditIcon size={14} />
+                      </IconButton>
+                      {forgotten ? null : (
+                        <IconButton
+                          label={archived ? '取消归档' : '归档记忆'}
+                          disabled={busy}
+                          onClick={() => void toggleArchive(record)}
+                        >
+                          {archived ? (
+                            <ArchiveRestoreIcon size={14} />
+                          ) : (
+                            <ArchiveIcon size={14} />
+                          )}
+                        </IconButton>
+                      )}
+                      <IconButton
+                        label="永久删除记忆"
+                        disabled={busy}
+                        onClick={() => setPending(record)}
+                      >
+                        <TrashIcon size={14} />
+                      </IconButton>
+                    </>
+                  );
+                }}
               />
             )}
           </section>
@@ -390,8 +457,8 @@ export const MemoryPage: React.FC<MemoryPageProps> = ({ connected }) => {
                 : `已写入 ${count} 条记忆`,
             );
             setNeedsRepair((current) => current || repair);
-            void loadFirstPage(scope, kind);
-            void loadStats(scope);
+            void loadFirstPage(scope, kind, status);
+            void loadStats(scope, status);
             void loadScopes();
           }}
         />
@@ -402,18 +469,13 @@ export const MemoryPage: React.FC<MemoryPageProps> = ({ connected }) => {
         onClose={() => {
           if (actionId === null) setPending(null);
         }}
-        title={pending?.action === 'remove' ? '永久删除这条记忆？' : '遗忘这条记忆？'}
+        title="永久删除这条记忆？"
         hint={pendingSummary.length > 0 ? pendingSummary : undefined}
         primary={{
-          label: pending?.action === 'remove' ? '确认删除' : '确认遗忘',
-          busyLabel: pending?.action === 'remove' ? '删除中' : '处理中',
+          label: '确认删除',
+          busyLabel: '删除中',
           busy: actionId !== null,
-          icon:
-            pending?.action === 'remove' ? (
-              <TrashIcon size={14} />
-            ) : (
-              <ArchiveIcon size={14} />
-            ),
+          icon: <TrashIcon size={14} />,
           onClick: () => void confirmPending(),
         }}
         secondary={{
@@ -423,9 +485,7 @@ export const MemoryPage: React.FC<MemoryPageProps> = ({ connected }) => {
         }}
       >
         <Text size="sm" tone="secondary" className="block leading-relaxed">
-          {pending?.action === 'remove'
-            ? '删除后无法恢复，也不会留下遗忘标记。'
-            : '遗忘后这条记忆不再参与检索，系统会保留一条遗忘标记，阻止它被重新写入。'}
+          删除后无法恢复，也不会留下遗忘标记。只想让它不再参与检索时，用旁边的归档即可。
         </Text>
       </Dialog>
     </>

@@ -81,6 +81,8 @@ pub struct ModelInput {
     pub supports_embedding: bool,
     /// embedding 维度。
     pub embedding_dimension: usize,
+    /// 是否要求历史助手消息逐条回传推理内容。
+    pub requires_reasoning_content_on_assistant_messages: bool,
 }
 
 impl Default for ModelInput {
@@ -95,6 +97,8 @@ impl Default for ModelInput {
             supports_vision: base.supports_vision,
             supports_embedding: base.supports_embedding,
             embedding_dimension: base.embedding_dimension,
+            requires_reasoning_content_on_assistant_messages: base
+                .requires_reasoning_content_on_assistant_messages,
         }
     }
 }
@@ -170,6 +174,8 @@ fn build_model(input: &ModelInput, provider_name: &str) -> Result<ModelConfig, S
         supports_vision: input.supports_vision,
         supports_embedding: input.supports_embedding,
         embedding_dimension: input.embedding_dimension,
+        requires_reasoning_content_on_assistant_messages: input
+            .requires_reasoning_content_on_assistant_messages,
     })
 }
 
@@ -323,7 +329,7 @@ pub fn provider_profile_remove_at(path: &Path, name: &str) -> Result<ConfigWrite
 }
 
 /// Tauri IPC 命令：整体保存一个供应商档案。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn provider_profile_upsert(
     input: ProviderInput,
     models: Vec<ModelInput>,
@@ -333,7 +339,7 @@ pub fn provider_profile_upsert(
 }
 
 /// Tauri IPC 命令：移除一个供应商档案及其全部模型。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn provider_profile_remove(name: String) -> Result<ConfigWriteResponse, String> {
     provider_profile_remove_at(&config_path()?, &name)
 }

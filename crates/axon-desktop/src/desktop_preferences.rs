@@ -56,13 +56,13 @@ pub struct DesktopPreferences {
 }
 
 /// Tauri IPC 命令：读取桌面偏好。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn desktop_preferences() -> Result<DesktopPreferences, String> {
     Ok(snapshot(&load_state()))
 }
 
 /// Tauri IPC 命令：设置是否发送系统通知。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn desktop_set_notifications(enabled: bool) -> Result<DesktopPreferences, String> {
     let mut state = load_state();
     state.notifications_enabled = enabled;
@@ -77,7 +77,7 @@ pub fn desktop_set_notifications(enabled: bool) -> Result<DesktopPreferences, St
 ///
 /// 落盘之后顺带把窗口的深浅色模式同步给 DWM 与 AppKit：这一步极轻，
 /// 且不重建系统材质，因此可以随主题切换反复调用（重复应用材质才会留下黑斑）。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn desktop_set_theme(theme: String) -> Result<DesktopPreferences, String> {
     let normalized = normalize_theme(&theme);
     let mut state = load_state();

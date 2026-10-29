@@ -9,6 +9,7 @@ use axon_agent_runtime::{
 use axon_config::ConfigLoader;
 use axon_domain::{MemoryKind, MemorySourceOrigin, MemoryState};
 
+use crate::memory_image_ref::memory_image_refs;
 use crate::{
     CliRunResult, OutputFormat,
     management_commands::{cli_config_error, cli_error},
@@ -18,7 +19,8 @@ use axon_memory::{
     MemoryVisibility,
 };
 use axon_memory_read::{
-    hybrid_query_memory, init_memory_orchestrator, injected_usage_events, record_read_usage,
+    hybrid_query_memory_with_images, init_memory_orchestrator, injected_usage_events,
+    record_read_usage,
 };
 
 use super::render::{
@@ -204,6 +206,10 @@ pub(super) fn run_memory_search(
         Ok(limit) => limit,
         Err(error) => return cli_error(error),
     };
+    let image_refs = match memory_image_refs(&command.images) {
+        Ok(image_refs) => image_refs,
+        Err(error) => return cli_error(format!("memory search --image {error}")),
+    };
     let loaded = match ConfigLoader::load_from_path(&context.config_path) {
         Ok(loaded) => loaded,
         Err(error) => return cli_config_error(&error),
@@ -213,10 +219,11 @@ pub(super) fn run_memory_search(
         Err(error) => return cli_error(error),
     };
     let recall_now_ms = now_ms();
-    let hits = hybrid_query_memory(
+    let hits = hybrid_query_memory_with_images(
         &loaded.config,
         &orchestrator,
         &command.query,
+        &image_refs,
         limit,
         recall_now_ms,
         Duration::from_secs(10),

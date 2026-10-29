@@ -423,7 +423,7 @@ fn config_backup_count(root: &std::path::Path) -> usize {
 }
 
 #[test]
-fn unknown_memory_pipeline_fields_fail_closed() {
+fn unknown_memory_pipeline_fields_are_ignored() {
     let path = axon_test_support::test_temp_root().join(format!(
         "axon-config-{}-memory-concurrency.toml",
         std::process::id()
@@ -438,7 +438,10 @@ concurrency = 8
     )
     .unwrap();
 
-    assert!(ConfigLoader::load_from_path(&path).is_err());
+    // 未声明字段只忽略，不阻断加载；保存时也不会被写回。
+    let loaded = ConfigLoader::load_from_path(&path).unwrap();
+    let serialized = crate::to_toml_string(&loaded.config).unwrap();
+    assert!(!serialized.contains("concurrency"));
 
     let _ = std::fs::remove_file(path);
 }

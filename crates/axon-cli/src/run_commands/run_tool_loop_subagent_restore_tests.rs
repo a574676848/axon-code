@@ -55,6 +55,7 @@ fn config_with_fixture_model() -> axon_config::AxonConfig {
         supports_vision: false,
         supports_embedding: false,
         embedding_dimension: 0,
+        requires_reasoning_content_on_assistant_messages: false,
     });
     config.agent.default_model = "fixture-chat".to_owned();
     config.agent.fast_model = "fixture-chat".to_owned();

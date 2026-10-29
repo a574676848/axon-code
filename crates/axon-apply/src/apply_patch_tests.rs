@@ -1,3 +1,9 @@
+use std::sync::atomic::Ordering;
+
+use super::transaction::{
+    TRANSACTION_SEQUENCE, TransactionRoot, build_entries, commit, stage_contents,
+    verify_preconditions,
+};
 use super::*;
 
 fn root(tag: &str) -> PathBuf {
@@ -278,4 +284,193 @@ fn rejects_symlink_source_and_target_parent() {
     assert!(!outside.join("escape.txt").exists());
     fs::remove_dir_all(workspace).unwrap();
     fs::remove_dir_all(outside).unwrap();
+}
+
+/// 找一个与 `workspace` 不同卷、且可写可执行的临时根。
+///
+/// 单卷环境（只有一块盘、或 CI 上的单一文件系统）返回 `None`，调用方按跳过处理。
+/// 跨卷判定直接使用事务依赖的真实原语：跨卷 `rename` 必然返回 `CrossesDevices`。
+fn cross_volume_root(workspace: &Path) -> Option<PathBuf> {
+    if let Some(configured) = std::env::var_os("AXON_TEST_CROSS_VOLUME_ROOT") {
+        let candidate = PathBuf::from(configured).join(format!(
+            "axon-apply-xdev-{}-{}",
+            std::process::id(),
+            TRANSACTION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&candidate).unwrap();
+        return probe_cross_volume(workspace, candidate);
+    }
+    #[cfg(windows)]
+    {
+        for letter in b'C'..=b'Z' {
+            let drive = PathBuf::from(format!("{}:\\", letter as char));
+            if fs::metadata(&drive).is_err() {
+                continue;
+            }
+            let candidate = drive.join(format!(
+                "axon-apply-xdev-{}-{}",
+                std::process::id(),
+                TRANSACTION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
+            if fs::create_dir(&candidate).is_err() {
+                continue;
+            }
+            if let Some(candidate) = probe_cross_volume(workspace, candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn probe_cross_volume(workspace: &Path, candidate: PathBuf) -> Option<PathBuf> {
+    let probe = candidate.join("probe.txt");
+    fs::write(&probe, "probe\n").unwrap();
+    let probe_target = workspace.join(format!(
+        "xdev-probe-{}.txt",
+        TRANSACTION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let same_volume = fs::rename(&probe, &probe_target).is_ok();
+    let _ = fs::remove_file(&probe_target);
+    let _ = fs::remove_file(&probe);
+    if same_volume {
+        let _ = fs::remove_dir_all(&candidate);
+        return None;
+    }
+    Some(candidate)
+}
+
+fn directory_entries(path: &Path) -> Vec<String> {
+    let mut names = fs::read_dir(path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
+#[test]
+fn applies_update_on_a_target_in_another_volume() {
+    let workspace = root("xdev-update");
+    let Some(other) = cross_volume_root(&workspace) else {
+        eprintln!("跳过跨卷回归：当前机器没有第二个可写卷");
+        fs::remove_dir_all(workspace).unwrap();
+        return;
+    };
+    let target = other.join("remote.txt");
+    fs::write(&target, "alpha\nbeta\n").unwrap();
+    let display = target.display().to_string().replace('\\', "/");
+    let patch = format!(
+        "*** Begin Patch\n*** Update File: {display}\n@@\n alpha\n-beta\n+gamma\n*** End Patch"
+    );
+
+    let report = ApplyPatchExecutor.apply(&workspace, &patch).unwrap();
+    assert_eq!(report.updated, 1);
+    assert_eq!(fs::read_to_string(&target).unwrap(), "alpha\ngamma\n");
+    // 跨卷备份与提升临时文件都不得残留，工作区也不得留下事务目录。
+    assert_eq!(directory_entries(&other), vec!["remote.txt".to_owned()]);
+    assert!(directory_entries(&workspace).is_empty());
+
+    fs::remove_dir_all(workspace).unwrap();
+    fs::remove_dir_all(other).unwrap();
+}
+
+#[test]
+fn creates_add_on_a_target_in_another_volume() {
+    let workspace = root("xdev-add");
+    let Some(other) = cross_volume_root(&workspace) else {
+        eprintln!("跳过跨卷回归：当前机器没有第二个可写卷");
+        fs::remove_dir_all(workspace).unwrap();
+        return;
+    };
+    let target = other.join("created").join("remote.txt");
+    let display = target.display().to_string().replace('\\', "/");
+    let patch = format!("*** Begin Patch\n*** Add File: {display}\n+alpha\n+beta\n*** End Patch");
+
+    let report = ApplyPatchExecutor.apply(&workspace, &patch).unwrap();
+    assert_eq!(report.added, 1);
+    assert_eq!(fs::read_to_string(&target).unwrap(), "alpha\nbeta\n");
+    assert_eq!(
+        directory_entries(&other.join("created")),
+        vec!["remote.txt".to_owned()]
+    );
+    assert!(directory_entries(&workspace).is_empty());
+
+    fs::remove_dir_all(workspace).unwrap();
+    fs::remove_dir_all(other).unwrap();
+}
+
+#[test]
+fn deletes_file_in_another_volume() {
+    let workspace = root("xdev-delete");
+    let Some(other) = cross_volume_root(&workspace) else {
+        eprintln!("跳过跨卷回归：当前机器没有第二个可写卷");
+        fs::remove_dir_all(workspace).unwrap();
+        return;
+    };
+    let target = other.join("doomed.txt");
+    fs::write(&target, "alpha\nbeta\n").unwrap();
+    let display = target.display().to_string().replace('\\', "/");
+    let patch = format!("*** Begin Patch\n*** Delete File: {display}\n*** End Patch");
+
+    let report = ApplyPatchExecutor.apply(&workspace, &patch).unwrap();
+    assert_eq!(report.deleted, 1);
+    assert!(!target.exists());
+    assert!(directory_entries(&other).is_empty());
+    assert!(directory_entries(&workspace).is_empty());
+
+    fs::remove_dir_all(workspace).unwrap();
+    fs::remove_dir_all(other).unwrap();
+}
+
+#[test]
+fn failed_promotion_restores_a_source_in_another_volume() {
+    use axon_patch_model::PatchFileOperation;
+    let workspace = root("xdev-rollback");
+    let Some(other) = cross_volume_root(&workspace) else {
+        eprintln!("跳过跨卷回归：当前机器没有第二个可写卷");
+        fs::remove_dir_all(workspace).unwrap();
+        return;
+    };
+    let remote = other.join("remote.txt");
+    fs::write(&remote, "alpha\nbeta\n").unwrap();
+    let remote_path = remote.display().to_string().replace('\\', "/");
+    let plan = PatchPlan {
+        operations: vec![
+            PatchFileOperation {
+                path: remote_path.clone(),
+                change: PatchFileChange::Update {
+                    move_path: None,
+                    new_content: "alpha\ngamma\n".to_owned(),
+                },
+            },
+            PatchFileOperation {
+                path: "local.txt".to_owned(),
+                change: PatchFileChange::Add {
+                    content: "created\n".to_owned(),
+                },
+            },
+        ],
+    };
+    let snapshot = HashMap::from([(remote_path, "alpha\nbeta\n".to_owned())]);
+    let mut transaction = TransactionRoot::create(&workspace).unwrap();
+    let transaction_path = transaction.path().to_path_buf();
+    let mut entries = build_entries(&workspace, &plan, &snapshot).unwrap();
+    verify_preconditions(&mut entries).unwrap();
+    stage_contents(&transaction_path, &mut entries).unwrap();
+    // 预检之后突然出现的本地目标：硬链提升必然失败，用于验证跨卷条目能被完整回滚。
+    fs::write(workspace.join("local.txt"), "external\n").unwrap();
+    let error = commit(&mut transaction, &mut entries).expect_err("提交失败后应回滚并报错");
+
+    assert!(
+        error.to_string().contains("已全部安全回滚"),
+        "回滚成功时必须明确告知：{error}"
+    );
+    assert_eq!(fs::read_to_string(&remote).unwrap(), "alpha\nbeta\n");
+    assert_eq!(directory_entries(&other), vec!["remote.txt".to_owned()]);
+    drop(transaction);
+    assert!(!transaction_path.exists(), "回滚成功后事务目录应被清理");
+
+    fs::remove_dir_all(workspace).unwrap();
+    fs::remove_dir_all(other).unwrap();
 }

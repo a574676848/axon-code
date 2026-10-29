@@ -74,7 +74,9 @@ impl AgentMemoryWriteRuntime {
     ) -> Result<MemoryWriteTriggerReport, String> {
         let namespace = self.registry_namespace(input.config_path, input.cwd);
         if !matches!(input.kind, "profile" | "preference") && namespace.is_none() {
-            return Err("当前位于 Home，未选择 Workspace，无法写入 Workspace Memory".to_owned());
+            return Err(
+                "当前工作目录不可访问，未能解析 Memory 作用域；请确认目录存在后重试".to_owned(),
+            );
         }
         let scope = self.resolve_scope_with_namespace(
             input.kind,
@@ -198,15 +200,19 @@ impl AgentMemoryWriteRuntime {
     }
 
     fn registry_namespace(&self, config_path: &Path, cwd: &Path) -> Option<String> {
-        let workspace_root = crate::runtime_tools::resolve_workspace_cwd(config_path, Some(cwd))
+        match crate::runtime_tools::resolve_workspace_cwd(config_path, Some(cwd)) {
+            Ok(Some(workspace_root)) => super::run_workspace_identity::workspace_record(
+                &workspace_root,
+                super::run_execution::now_ms(),
+            )
             .ok()
-            .flatten()?;
-        let workspace = super::run_workspace_identity::workspace_record(
-            &workspace_root,
-            super::run_execution::now_ms(),
-        )
-        .ok()?;
-        Some(workspace.memory_namespace)
+            .map(|workspace| workspace.memory_namespace),
+            // Home 目录树内没有可注册的普通 Workspace，但经验、知识与流程仍必须落在一个
+            // 稳定的桶里：取 Axon 主目录的固定 namespace，与个人画像严格分开，也让检索
+            // 与写入指向同一个位置。
+            Ok(None) => Some(axon_memory::AXON_HOME_MEMORY_NAMESPACE.to_owned()),
+            Err(_) => None,
+        }
     }
 
     fn personal_search_status(&self, is_root_agent: bool) -> Value {
@@ -431,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn home_search_does_not_add_workspace_scope() {
+    fn home_search_includes_the_axon_home_workspace_scope() {
         let root = axon_test_support::test_temp_dir();
         let home = root.path().join("home");
         let cwd = home.join("data");
@@ -441,12 +447,23 @@ mod tests {
 
         let scopes = runtime.resolve_search_scopes_with_namespace(&config_path, &cwd, true);
 
-        assert_eq!(scopes.len(), 1);
-        assert_eq!(scopes[0].0, PERSONAL_SCOPE_LABEL);
+        assert_eq!(
+            scopes.iter().map(|(label, _)| *label).collect::<Vec<_>>(),
+            vec![PERSONAL_SCOPE_LABEL, WORKSPACE_SCOPE_LABEL],
+            "Home 检索必须同时覆盖个人记忆与 Axon 主目录桶"
+        );
+        match &scopes[1].1 {
+            MemoryToolScope::Workspace { scope } => assert_eq!(
+                scope.namespace_ref,
+                axon_memory::AXON_HOME_MEMORY_NAMESPACE,
+                "主目录记忆必须落在固定的 Axon 主目录桶"
+            ),
+            MemoryToolScope::Personal { .. } => panic!("主目录检索不得退化为仅个人记忆"),
+        }
     }
 
     #[test]
-    fn home_rejects_workspace_memory_write() {
+    fn home_workspace_memory_resolves_to_the_axon_home_bucket() {
         let root = axon_test_support::test_temp_dir();
         let home = root.path().join("home");
         let cwd = home.join("data");
@@ -454,23 +471,10 @@ mod tests {
         let config_path = home.join("config.toml");
         let runtime = AgentMemoryWriteRuntime::new(Some(owner_id()), None);
 
-        let result = runtime.trigger(AgentMemoryWriteInput {
-            config_path: &config_path,
-            cwd: &cwd,
-            session_id: SessionId(1),
-            cell_id: CellId(1),
-            kind: "experience",
-            summary: "不应写入 Home Workspace",
-            evidence: "当前未选择 Workspace",
-            supersedes_memory_ids: &[],
-            now_ms: 1,
-            is_root_agent: true,
-        });
-
-        assert!(
-            result
-                .expect_err("Home Workspace Memory 写入应被拒绝")
-                .contains("未选择 Workspace")
+        assert_eq!(
+            runtime.registry_namespace(&config_path, &cwd).as_deref(),
+            Some(axon_memory::AXON_HOME_MEMORY_NAMESPACE),
+            "在 ~/.axon 里写经验、知识与流程必须落在 Axon 主目录桶，而不是被拒绝或降级成个人记忆"
         );
     }
 

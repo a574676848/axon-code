@@ -33,13 +33,13 @@ pub use mutation::{
 pub use projection::workspace_list_at;
 
 /// Tauri IPC 命令：获取真实工作区与车道列表。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_list(state: State<'_, AppState>) -> Result<Vec<WorkspaceDto>, String> {
     workspace_list_at(state.lanes.as_ref())
 }
 
 /// Tauri IPC 命令：登记一个真实存在的工作区目录。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_add(
     path: String,
     state: State<'_, AppState>,
@@ -48,7 +48,7 @@ pub fn workspace_add(
 }
 
 /// Tauri IPC 命令：移除已登记的工作区。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_remove(
     id: String,
     state: State<'_, AppState>,
@@ -57,7 +57,7 @@ pub fn workspace_remove(
 }
 
 /// Tauri IPC 命令：在指定工作区内新建一条车道。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn lane_create(
     workspace_id: String,
     state: State<'_, AppState>,
@@ -66,7 +66,7 @@ pub fn lane_create(
 }
 
 /// Tauri IPC 命令：设置或取消车道置顶。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn lane_set_pinned(
     lane_id: String,
     pinned: bool,
@@ -76,7 +76,7 @@ pub fn lane_set_pinned(
 }
 
 /// Tauri IPC 命令：设置或取消车道归档。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn lane_set_archived(
     lane_id: String,
     archived: bool,
@@ -86,7 +86,7 @@ pub fn lane_set_archived(
 }
 
 /// Tauri IPC 命令：重命名车道。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn lane_rename(
     lane_id: String,
     title: String,
@@ -96,7 +96,7 @@ pub fn lane_rename(
 }
 
 /// Tauri IPC 命令：保存某个工作区下车道的自定义顺序。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn lane_reorder(
     workspace_id: String,
     ordered_ids: Vec<String>,
