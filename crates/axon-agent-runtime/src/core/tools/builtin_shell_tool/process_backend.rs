@@ -1,14 +1,15 @@
 //! 持久 Shell 会话的 pipe 与 PTY 进程后端。
 
+#[cfg(windows)]
+use std::sync::mpsc;
 use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{Arc, Mutex},
     thread,
+    time::Duration,
 };
-#[cfg(windows)]
-use std::{sync::mpsc, time::Duration};
 
 use axon_process::{
     configure_managed_process_group, decode_console_bytes,
@@ -23,7 +24,7 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use super::{
     SHELL_COMMAND_IO_ERROR, SHELL_COMMAND_OUTPUT_CHUNK_BYTES, ShellCommandOutputStream,
-    output_buffer::SharedProcessOutput,
+    output_buffer::SharedProcessOutput, output_readers::OutputReaders,
 };
 
 const PTY_ROWS: u16 = 24;
@@ -47,11 +48,13 @@ pub(crate) enum ProcessBackend {
         stdin: ChildStdin,
         /// 资源围栏句柄；必须与子进程同生命周期，否则 Windows Job Object 会被提前释放。
         _fence: Option<ProcessFenceHandle>,
+        readers: OutputReaders,
     },
     Pty {
         child: Box<dyn portable_pty::Child + Send + Sync>,
         process_id: Option<u32>,
         writer: PtyWriter,
+        readers: OutputReaders,
         _master: Box<dyn portable_pty::MasterPty + Send>,
     },
 }
@@ -104,6 +107,15 @@ impl ProcessBackend {
         }
     }
 
+    /// 等输出读取线程把管道残余排干；终态收口前必须先调用。
+    ///
+    /// `try_wait` 报告退出只说明子进程结束，管道里可能仍有未取走的字节。
+    pub(crate) fn drain_output(&mut self, timeout: Duration) {
+        match self {
+            Self::Pipe { readers, .. } | Self::Pty { readers, .. } => readers.drain(timeout),
+        }
+    }
+
     pub(crate) fn terminate(&mut self) -> std::io::Result<()> {
         match self {
             Self::Pipe { child, .. } => terminate_managed_process_tree(child),
@@ -147,16 +159,22 @@ fn spawn_pipe(
     let stdin = child.stdin.take().ok_or_else(io_error)?;
     let stdout = child.stdout.take().ok_or_else(io_error)?;
     let stderr = child.stderr.take().ok_or_else(io_error)?;
-    spawn_reader(
+    let mut readers = OutputReaders::default();
+    readers.push(spawn_reader(
         stdout,
         ShellCommandOutputStream::Stdout,
         Arc::clone(&output),
-    );
-    spawn_reader(stderr, ShellCommandOutputStream::Stderr, output);
+    ));
+    readers.push(spawn_reader(
+        stderr,
+        ShellCommandOutputStream::Stderr,
+        output,
+    ));
     Ok(ProcessBackend::Pipe {
         child,
         stdin,
         _fence: fence,
+        readers,
     })
 }
 
@@ -195,11 +213,13 @@ fn spawn_pty(
     let reader = master.try_clone_reader().map_err(|_| io_error())?;
     let writer = Arc::new(Mutex::new(master.take_writer().map_err(|_| io_error())?));
     drop(slave);
-    spawn_pty_reader(reader, output, Arc::clone(&writer));
+    let mut readers = OutputReaders::default();
+    readers.push(spawn_pty_reader(reader, output, Arc::clone(&writer)));
     Ok(ProcessBackend::Pty {
         child,
         process_id,
         writer,
+        readers,
         _master: master,
     })
 }
@@ -245,7 +265,10 @@ fn spawn_reader(
     mut reader: impl Read + Send + 'static,
     stream: ShellCommandOutputStream,
     output: Arc<SharedProcessOutput>,
-) {
+) -> thread::JoinHandle<()> {
+    // 测试钩子的判定必须在**启动线程**时完成：它比较的是线程标识。
+    #[cfg(test)]
+    let hold = super::output_readers::test_hook::holds_current_thread();
     thread::spawn(move || {
         let mut buffer = [0_u8; SHELL_COMMAND_OUTPUT_CHUNK_BYTES];
         let mut decoder = Utf8StreamDecoder::default();
@@ -255,18 +278,22 @@ fn spawn_reader(
                     decoder.finish(|bytes| output.append(stream, bytes));
                     break;
                 }
-                Ok(read) => decoder.push(&buffer[..read], |bytes| output.append(stream, bytes)),
+                Ok(read) => {
+                    #[cfg(test)]
+                    super::output_readers::test_hook::wait_until_released(hold);
+                    decoder.push(&buffer[..read], |bytes| output.append(stream, bytes));
+                }
             }
         }
         output.notify_change();
-    });
+    })
 }
 
 fn spawn_pty_reader(
     mut reader: impl Read + Send + 'static,
     output: Arc<SharedProcessOutput>,
     writer: PtyWriter,
-) {
+) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut buffer = [0_u8; SHELL_COMMAND_OUTPUT_CHUNK_BYTES];
         let mut matched_query_bytes = 0;
@@ -302,7 +329,7 @@ fn spawn_pty_reader(
             }
         }
         output.notify_change();
-    });
+    })
 }
 
 /// Preserve Unix terminal input bytes; normalize model line endings for Windows ConPTY.

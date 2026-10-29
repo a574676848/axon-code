@@ -42,6 +42,13 @@ pub const LSP_WORKSPACE_COVERAGE_CACHE_MAX_ENTRIES: usize = 32;
 pub const LSP_WORKSPACE_COVERAGE_CACHE_TTL_SECS: u64 = 30;
 /// Shell 输出读取块大小。
 pub const SHELL_COMMAND_OUTPUT_CHUNK_BYTES: usize = 8 * 1024;
+/// Shell 终态收口时等待输出读取线程排干管道的上限。
+///
+/// 子进程退出信号**早于**管道 EOF，读取线程此刻可能尚未把残余字节写进共享缓冲；
+/// 终态回执必须等它排干，否则会发出 `exit_code=0` 却零输出的回执。
+/// 上限只约束「读取线程迟迟不结束」的情形（后台守护进程继承了管道），
+/// 正常命令在毫秒内返回。
+pub const SHELL_COMMAND_OUTPUT_DRAIN_TIMEOUT_MS: u64 = 2_000;
 /// Shell 命令完整输出归档的字节上限；达到上限后停止落盘并标记截断。
 ///
 /// 无上限时 `yes`、无限日志等命令会持续写入归档直至磁盘耗尽，

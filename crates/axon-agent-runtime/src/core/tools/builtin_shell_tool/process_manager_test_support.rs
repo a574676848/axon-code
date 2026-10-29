@@ -43,8 +43,17 @@ pub(super) fn terminal_session(id: &str, ended_at: Instant) -> Arc<Mutex<ShellPr
 
 /// 构造一个仍在运行、且最后一次触碰时间可注入的会话。
 pub(super) fn running_session(id: &str, last_touch: Instant) -> Arc<Mutex<ShellProcessSession>> {
-    let command = ShellCommandToolRuntime::command_from_script("echo idle-reclaim", false)
-        .expect("命令应规范化成功");
+    running_session_with_command(id, last_touch, "echo idle-reclaim")
+}
+
+/// 构造一个仍在运行、且命令由调用方指定的会话；用于需要真实进程输出的用例。
+pub(super) fn running_session_with_command(
+    id: &str,
+    last_touch: Instant,
+    script: &str,
+) -> Arc<Mutex<ShellProcessSession>> {
+    let command =
+        ShellCommandToolRuntime::command_from_script(script, false).expect("命令应规范化成功");
     session_with(id, last_touch, command, None)
 }
 

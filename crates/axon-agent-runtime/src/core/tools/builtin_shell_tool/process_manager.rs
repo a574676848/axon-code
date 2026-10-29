@@ -498,3 +498,7 @@ mod tombstone_tests;
 #[cfg(test)]
 #[path = "process_manager_reclaim_tests.rs"]
 mod idle_reclaim_tests;
+
+#[cfg(test)]
+#[path = "process_manager_output_drain_tests.rs"]
+mod output_drain_tests;

@@ -3,6 +3,10 @@
 #[path = "builtin_shell_tool/output_buffer.rs"]
 pub(crate) mod output_buffer;
 
+/// 子进程输出读取线程的句柄与终态收口。
+#[path = "builtin_shell_tool/output_readers.rs"]
+pub(crate) mod output_readers;
+
 #[path = "builtin_shell_tool/process_backend.rs"]
 pub(crate) mod process_backend;
 

@@ -21,6 +21,7 @@ use crate::runtime_limits::{
     MAX_BACKGROUND_TERMINAL_WAIT_MS, MAX_SHELL_INTERACTION_YIELD_MS,
     MIN_BACKGROUND_TERMINAL_WAIT_MS, SHELL_COMMAND_CANCEL_POLL_BACKOFF_FACTOR,
     SHELL_COMMAND_CANCEL_POLL_INTERVAL_MS, SHELL_COMMAND_CANCEL_POLL_MAX_INTERVAL_MS,
+    SHELL_COMMAND_OUTPUT_DRAIN_TIMEOUT_MS,
 };
 
 /// 空闲回收窗口：距 spawn 或最后一次 `write_stdin` 触碰满该时长，即判定模型已不再跟进，
@@ -87,6 +88,11 @@ impl ShellProcessSession {
     }
 
     pub(super) fn mark_terminal(&mut self, exit_code: i32, timed_out: bool, cancelled: bool) {
+        // 退出信号早于管道 EOF：先把读取线程排干，再让会话进入终态。
+        // 顺序反了就会发出「exit_code=0 但 stdout/stderr 均为 0 字符」的回执：
+        // 残余输出在回执取走之后才被 append，而终态回执只取一次。
+        self.backend
+            .drain_output(Duration::from_millis(SHELL_COMMAND_OUTPUT_DRAIN_TIMEOUT_MS));
         self.terminal = Some(TerminalState {
             exit_code,
             timed_out,
@@ -387,3 +393,5 @@ mod wait_duration_tests {
         assert_eq!(backoff.delay(), initial);
     }
 }
+
+
