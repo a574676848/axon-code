@@ -11,7 +11,10 @@
 //! [`smoke_lists_real_candidates`] 这类 `#[ignore]` 的只读冒烟用例在本机原样打出来观察，
 //! 而不是写成一组会在别的机器上翻车的断言。
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use super::{
     FileApplication, ICON_SIZE, desktop_entry,
@@ -24,6 +27,10 @@ const TEST_SOURCE_SUFFIX: &str = "_tests.rs";
 
 /// 仅有的两个允许出现 `unsafe` 的源文件（都是 Windows 平台适配器）。
 const UNSAFE_SOURCE_FILES: &[&str] = &["windows.rs", "windows_icon.rs"];
+
+/// 扫描源目录的重试次数与间隔：并行跑全量测试时可能短暂耗尽文件句柄。
+const SOURCE_SCAN_ATTEMPTS: usize = 3;
+const SOURCE_SCAN_RETRY_DELAY: Duration = Duration::from_millis(20);
 
 // ---------------------------------------------------------------------------
 // 候选去重与顺序
@@ -563,22 +570,30 @@ fn unsafe_code_is_confined_to_the_windows_adapters() {
 }
 
 /// 列出 `src` 下的生产源文件（排除测试源码）。
+///
+/// 目录读取失败必须重试、最终带上原始错误上报：全量测试并行时进程可能短暂耗尽
+/// 文件句柄，静默返回空集会把「环境抖动」伪装成「扫描逻辑失效」
+/// （实测 `未扫描到任何生产源文件` 就是这样产生的失败）。
 fn production_source_files() -> Vec<PathBuf> {
-    let mut files = Vec::new();
     let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-    collect_rust_sources(&source_root, &mut files);
-    files
+    let mut last_error = None;
+    for _ in 0..SOURCE_SCAN_ATTEMPTS {
+        let mut files = Vec::new();
+        match collect_rust_sources(&source_root, &mut files) {
+            Ok(()) => return files,
+            Err(error) => last_error = Some(error),
+        }
+        std::thread::sleep(SOURCE_SCAN_RETRY_DELAY);
+    }
+    panic!("扫描生产源文件失败，无法判定 unsafe 边界：{last_error:?}");
 }
 
 /// 递归收集 `.rs` 文件；`*_tests.rs` 是测试源码，不参与 `unsafe` 边界断言。
-fn collect_rust_sources(directory: &Path, files: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(directory) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
+fn collect_rust_sources(directory: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(directory)? {
+        let path = entry?.path();
         if path.is_dir() {
-            collect_rust_sources(&path, files);
+            collect_rust_sources(&path, files)?;
             continue;
         }
         let is_test_source = path
@@ -589,6 +604,7 @@ fn collect_rust_sources(directory: &Path, files: &mut Vec<PathBuf>) {
             files.push(path);
         }
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
