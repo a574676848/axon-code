@@ -62,6 +62,19 @@ pub(super) fn poll_until_ready(
     }
 }
 
+/// 等到会话离开 `Running`（子进程真的退出）为止，返回最后一次回执。
+///
+/// 与 [`poll_until_ready`] 共用同一套终止条件：会话一离开 `Running` 立即返回，
+/// 因此 [`HANG_GUARD`] 只在真挂死时才被走到，不会拖慢任何通过用例。
+///
+/// 需要「等命令跑完」的用例走这里，不要用「固定窗口 × 固定次数」预测耗时：
+/// 子进程启动耗时是环境的函数（机器速度、当前负载），不是被测系统的属性。
+pub(super) fn poll_until_exit(session_id: &str) -> ShellCommandExecutionReceipt {
+    poll_until_ready(session_id, HANG_GUARD, |receipt| {
+        receipt.status != ShellCommandExecutionStatus::Running
+    })
+}
+
 /// 等待孙进程把自己的 PID 写进约定文件。
 #[cfg(windows)]
 pub(super) fn wait_for_descendant_pid(path: &std::path::Path) -> Option<u32> {

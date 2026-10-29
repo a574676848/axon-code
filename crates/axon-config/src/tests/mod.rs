@@ -86,6 +86,25 @@ fn root_config_example_toml_is_loadable() {
         .expect("crate 应位于 workspace/crates/axon-config")
         .join("config.example.toml");
 
+    /*
+     * 先确认示例文件真的在，再解析。
+     *
+     * `ConfigLoader::load_from_path` 对不存在的路径回落到 `AxonConfig::default()`，
+     * 于是文件缺失只会表现成「default_model 是空串」这种看不出所以然的断言失败。
+     * 示例文件是仓库资产，缺失只可能是并发改动（git 操作、备份/索引进程）或真的被删：
+     * 短暂缺失先重试一次，仍然不在就带着确切路径失败。
+     */
+    let mut attempts = 0;
+    while !example_path.is_file() && attempts < 2 {
+        attempts += 1;
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        example_path.is_file(),
+        "仓库根的 config.example.toml 缺失：{}",
+        example_path.display()
+    );
+
     let loaded = ConfigLoader::load_from_path(&example_path).unwrap();
 
     assert_eq!(loaded.config.agent.default_model, "gpt-4o-coding");

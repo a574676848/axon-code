@@ -173,7 +173,32 @@ fn error_messages_are_chinese_and_actionable() {
 fn shipped_default_template_parses() {
     let path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/defaults/SOUL.md");
-    let raw = std::fs::read_to_string(&path).expect("默认模板必须存在");
+    /*
+     * 仓库资产在极端情况下会短暂读不到：并发执行的打包、备份或索引进程，以及同仓库的
+     * git 操作都可能让文件在毫秒级窗口里不可见。重试两次再判定缺失，缺失时给出确切
+     * 路径与「文件不存在」的结论，而不是让断言报一句与原因无关的话。
+     */
+    let mut attempts = 0;
+    let mut raw = String::new();
+    let mut last_error = None;
+    while attempts < 3 {
+        match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                raw = text;
+                break;
+            }
+            Err(error) => {
+                last_error = Some(error);
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    }
+    assert!(
+        !raw.is_empty(),
+        "默认模板读不到：{}（{last_error:?}）",
+        path.display()
+    );
 
     let document = SoulDocument::parse(&raw).expect("默认模板必须符合 axon-soul/v1");
 

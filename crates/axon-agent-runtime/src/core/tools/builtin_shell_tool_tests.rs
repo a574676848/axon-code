@@ -8,13 +8,12 @@ use std::time::Duration;
 
 #[path = "builtin_shell_tool_pty_readiness.rs"]
 mod pty_readiness;
-use pty_readiness::{HANG_GUARD, poll_until_ready};
+use pty_readiness::{HANG_GUARD, poll_until_exit, poll_until_ready};
 #[cfg(windows)]
 use pty_readiness::{wait_for_descendant_pid, wait_for_process_exit};
 
 const SHORT_YIELD_MS: u64 = 100;
 const COMPLETION_YIELD_MS: u64 = 3_000;
-const COMPLETION_POLL_LIMIT: usize = 5;
 const TEST_OWNER_ID: &str = "shell-tool-tests";
 /// 大输出用例的输出行数：显著超出输出预算即可验证截断与产物保全。
 const LARGE_OUTPUT_LAST_LINE: usize = 300;
@@ -121,9 +120,17 @@ fn short_shell_command_completes_and_still_reports_session_id() {
 /// `python -c`，中文与引号随即被 shell 拆成独立 token。
 #[test]
 fn multiline_script_carrier_executes_end_to_end() {
-    let receipt = ShellCommandToolRuntime
+    let mut receipt = ShellCommandToolRuntime
         .execute(execution_input(multiline_carrier_command()))
         .unwrap();
+    // 首次让出窗口只决定「先看到多少」，不决定成败：仍在跑就按子进程状态等到退出。
+    if receipt.status == ShellCommandExecutionStatus::Running {
+        let session_id = receipt
+            .session_id
+            .clone()
+            .expect("多行承载命令必须返回 session_id");
+        receipt = poll_until_exit(&session_id);
+    }
 
     assert_eq!(
         receipt.status,
@@ -190,9 +197,13 @@ fn pipe_ctrl_c_terminates_persistent_process() {
     let running = ShellCommandToolRuntime.execute(input).unwrap();
     let session_id = running.session_id.expect("睡眠命令必须保持运行");
 
-    let cancelled = ShellCommandToolRuntime
+    let mut cancelled = ShellCommandToolRuntime
         .write_stdin(write_input(&session_id, None, true, SHORT_YIELD_MS))
         .unwrap();
+    // 同一条纪律：Ctrl+C 之后等子进程自己的退出，不预测耗时。
+    if cancelled.status == ShellCommandExecutionStatus::Running {
+        cancelled = poll_until_exit(&session_id);
+    }
 
     assert_eq!(cancelled.status, ShellCommandExecutionStatus::Completed);
     assert_eq!(cancelled.exit_code, Some(SHELL_COMMAND_CANCELLED_EXIT_CODE));
@@ -220,9 +231,13 @@ fn tty_ctrl_c_projects_as_cancelled_session() {
         "PTY 命令未在有界时间内进入可中断状态"
     );
 
-    let cancelled = ShellCommandToolRuntime
+    let mut cancelled = ShellCommandToolRuntime
         .write_stdin(write_input(&session_id, None, true, COMPLETION_YIELD_MS))
         .unwrap();
+    // Ctrl+C 之后子进程还要走自己的退出路径：仍在跑就按状态等到退出，不预测耗时。
+    if cancelled.status == ShellCommandExecutionStatus::Running {
+        cancelled = poll_until_exit(&session_id);
+    }
 
     assert_eq!(cancelled.status, ShellCommandExecutionStatus::Completed);
     assert_eq!(cancelled.exit_code, Some(SHELL_COMMAND_CANCELLED_EXIT_CODE));
@@ -254,14 +269,8 @@ fn tty_command_uses_pty_and_completes() {
             .session_id
             .clone()
             .expect("运行中的 PTY 命令必须返回 session_id");
-        for _ in 0..COMPLETION_POLL_LIMIT {
-            if receipt.status != ShellCommandExecutionStatus::Running {
-                break;
-            }
-            receipt = ShellCommandToolRuntime
-                .write_stdin(write_input(&session_id, None, false, COMPLETION_YIELD_MS))
-                .unwrap();
-        }
+        // 按子进程状态等到退出：PTY 冷启动耗时随机器负载波动，不能用固定窗口预测。
+        receipt = poll_until_exit(&session_id);
     }
 
     assert_eq!(
@@ -305,14 +314,9 @@ fn tty_session_accepts_read_host_input() {
             COMPLETION_YIELD_MS,
         ))
         .unwrap();
-    // 并行测试下 PTY 子进程的完成时刻会波动，按有界轮询等待而不是单次固定等待。
-    for _ in 0..COMPLETION_POLL_LIMIT {
-        if completed.status == ShellCommandExecutionStatus::Completed {
-            break;
-        }
-        completed = ShellCommandToolRuntime
-            .write_stdin(write_input(&session_id, None, false, COMPLETION_YIELD_MS))
-            .unwrap();
+    // 子进程什么时候退由它自己决定：仍在跑就按状态等到退出，守卫只兜真挂死。
+    if completed.status == ShellCommandExecutionStatus::Running {
+        completed = poll_until_exit(&session_id);
     }
     assert_eq!(
         completed.status,
