@@ -75,6 +75,7 @@ pub(super) fn execute_supported_tool_calls_for_turn(
         }),
         run_cancel_token: request.cancel_token.clone(),
         model_profile_id: request.model_profile_id,
+        supports_vision: request.model.supports_vision,
         permission_snapshot_id: request.permission_snapshot_id,
         current_agent_path: request.current_agent_path.clone(),
         agent_control: request.agent_control.clone(),

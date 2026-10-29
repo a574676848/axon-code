@@ -17,6 +17,66 @@ use axon_domain::ToolExecutionPermission;
 mod tool_output_terminal_tests;
 
 #[test]
+fn image_read_file_receipt_renders_as_read_row_with_path() {
+    let receipt = tool_receipt(
+        "call-image",
+        "builtin.read_file",
+        AgentTuiToolReceiptDetails {
+            kind: AgentTuiToolKind::ReadFile,
+            status: "completed".to_owned(),
+            summary: "read_file path=shot.png content_kind=image mime=image/png bytes=68\n<path>shot.png</path>\n<type>image</type>\n<content>\nimage/png，68 字节；图片已随本条工具结果附上，请直接依据图片像素判断。\n</content>".to_owned(),
+            metadata: Some(serde_json::json!({
+                "kind": "read_file",
+                "contentKind": "image",
+                "path": "shot.png",
+                "mimeType": "image/png",
+                "byteLen": 68,
+            })),
+            error_type: None,
+            filesystem_write_performed: false,
+        },
+    );
+
+    let line = tool_result_line(&receipt);
+
+    let Some(RenderCellData::Exec(cell)) = line.data.as_ref() else {
+        panic!("图片读取回执必须渲染为 exec 单元");
+    };
+    // 成功的读取保持安静成功：只显示动作与路径，不把机器摘要灌进终端。
+    assert_eq!(cell.arguments_preview.as_deref(), Some("shot.png"));
+    assert!(cell.summary.is_none());
+}
+
+#[test]
+fn failed_image_read_receipt_surfaces_the_actionable_message() {
+    let receipt = tool_receipt(
+        "call-image-failed",
+        "builtin.read_file",
+        AgentTuiToolReceiptDetails {
+            kind: AgentTuiToolKind::ReadFile,
+            status: "failed".to_owned(),
+            summary: "当前模型未声明图片输入能力，图片无法交给模型判断".to_owned(),
+            metadata: Some(serde_json::json!({ "path": "shot.png" })),
+            error_type: Some("execution_failed".to_owned()),
+            filesystem_write_performed: false,
+        },
+    );
+
+    let line = tool_result_line(&receipt);
+
+    let Some(RenderCellData::Exec(cell)) = line.data.as_ref() else {
+        panic!("失败的图片读取必须渲染为 exec 单元");
+    };
+    assert!(
+        cell.summary
+            .as_deref()
+            .is_some_and(|summary| summary.contains("图片输入能力")),
+        "失败原因必须对用户可见，实际：{:?}",
+        cell.summary
+    );
+}
+
+#[test]
 fn tool_started_preview_redacts_bare_token_values() {
     let view = AgentTuiToolExecutionView {
         part_id: "tool-part:test:fixture".to_owned(),

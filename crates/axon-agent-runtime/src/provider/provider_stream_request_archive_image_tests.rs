@@ -18,6 +18,85 @@ const EXPECTED_IMAGE_BASE64: &str = "iVBORw0KGgo=";
 const TEST_CONTEXT_SECTION_COUNT: usize = 1;
 
 #[test]
+fn read_file_image_receipt_round_trips_into_provider_bodies() {
+    use crate::{
+        ProviderToolCall, ReadFileImageReceipt, agent_run_read_file_image_receipt,
+        agent_run_tool_result_messages,
+    };
+
+    let archive_root = temp_archive_root();
+    let bytes = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
+    let sha256 = axon_crypto::sha256_hex(bytes);
+    let archive_ref = format!("blobs/{sha256}.blob");
+    let blob_path = archive_root.join(&archive_ref);
+    std::fs::create_dir_all(blob_path.parent().expect("归档 blob 必须有父目录")).unwrap();
+    std::fs::write(&blob_path, bytes).unwrap();
+
+    // 闭环起点：read_file 的图片分支产出的工具回执。
+    let tool_call = ProviderToolCall::new(
+        "call-read-file-image",
+        "builtin.read_file",
+        r#"{"path":"shot.png"}"#,
+    );
+    let receipt = agent_run_read_file_image_receipt(
+        &tool_call,
+        &ReadFileImageReceipt {
+            path: "shot.png".to_owned(),
+            absolute_path: "C:\\workspace\\shot.png".to_owned(),
+            mime_type: IMAGE_MIME_TYPE.to_owned(),
+            byte_len: bytes.len(),
+            width: 1,
+            height: 1,
+            original_width: 1,
+            original_height: 1,
+            sha256: sha256.clone(),
+            archive_ref: archive_ref.clone(),
+            source_ref: "tool://builtin.read_file/shot.png".to_owned(),
+        },
+    );
+    let messages = agent_run_tool_result_messages(
+        std::slice::from_ref(&tool_call),
+        &[crate::AgentRunToolResultReceipt {
+            provider_call_id: receipt.provider_call_id.clone(),
+            tool_name: receipt.tool_name.clone(),
+            status: receipt.status.clone(),
+            summary: receipt.summary.clone(),
+            metadata: receipt.metadata.clone(),
+            output_ref: receipt.output_ref.clone(),
+            error_type: receipt.error_type.clone(),
+            remote_trigger_allowed: receipt.remote_trigger_allowed,
+            filesystem_write_performed: receipt.filesystem_write_performed,
+        }],
+        None,
+        crate::AgentRunToolOutputPolicy::default(),
+    )
+    .expect("图片回执应能生成下一轮消息");
+    assert!(
+        messages
+            .iter()
+            .any(|message| !message.local_images.is_empty()),
+        "回执必须带出图片消息"
+    );
+
+    // 闭环终点：三种 wire 都把该图片编码成可被模型读取的图片内容。
+    for protocol in [
+        ProviderStreamProtocol::OpenAiResponses,
+        ProviderStreamProtocol::OpenAiCompatible,
+        ProviderStreamProtocol::AnthropicMessages,
+    ] {
+        let body = body_for_messages(protocol, &archive_root, messages.clone());
+        let serialized = body.to_string();
+        assert!(
+            serialized.contains("data:image/png;base64,")
+                || serialized.contains(EXPECTED_IMAGE_BASE64),
+            "protocol={protocol:?} 未把图片编码进请求体"
+        );
+    }
+
+    std::fs::remove_dir_all(archive_root).unwrap();
+}
+
+#[test]
 fn archive_first_image_reaches_openai_responses_and_anthropic_bodies() {
     let archive_root = temp_archive_root();
     let bytes = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
@@ -151,7 +230,6 @@ fn request_body(
     sha256: &str,
     byte_len: u64,
 ) -> serde_json::Value {
-    let capabilities = provider_capabilities(protocol);
     let messages = vec![
         AgentModelMessage::text("user", "看归档图片").with_local_images(vec![
             AgentModelLocalImageRef {
@@ -164,6 +242,15 @@ fn request_body(
             },
         ]),
     ];
+    body_for_messages(protocol, archive_root, messages)
+}
+
+fn body_for_messages(
+    protocol: ProviderStreamProtocol,
+    archive_root: &Path,
+    messages: Vec<AgentModelMessage>,
+) -> serde_json::Value {
+    let capabilities = provider_capabilities(protocol);
     let prompt_cache_plan = ProviderPromptCachePlanRuntime
         .plan(ProviderPromptCachePlanInput {
             provider_name: TEST_PROVIDER_NAME.to_owned(),

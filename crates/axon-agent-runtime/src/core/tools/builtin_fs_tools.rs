@@ -23,6 +23,8 @@ use axon_output_filter::{
 mod builtin_document_reader;
 #[path = "builtin_fs_tools_paging.rs"]
 mod builtin_fs_tools_paging;
+#[path = "builtin_fs_tools_image.rs"]
+pub(crate) mod image;
 pub use builtin_document_reader::ReadFileContentKind;
 use builtin_document_reader::extract_document;
 use builtin_fs_tools_paging::{
@@ -300,7 +302,7 @@ pub(crate) fn read_file_tool_definition() -> ToolDefinition {
         id: READ_FILE_TOOL_ID,
         namespace: crate::AGENT_TOOL_NAMESPACE.to_owned(),
         name: READ_FILE_TOOL_NAME.to_owned(),
-        description: "读取一个本地文本或受支持文档；支持绝对路径和包含 .. 的路径。内容较长时用 offset 和 limit 继续分页，返回的行号、标签和 nextOffset 可用于继续读取或精确编辑。".to_owned(),
+        description: "读取一个本地文件。文本与受支持文档返回带原始行号的文本页，内容较长时用 offset 和 limit 分页，返回的行号、标签和 nextOffset 可用于继续读取或精确编辑；PNG/JPEG/WebP/GIF 图片返回图片本身，此时只用 path，offset、limit 与 filter_level 会被忽略。看图片不要去安装图像库、写解码脚本或生成缩略图，同一张图已在本轮读过就不要重复读取。图片会自动归一化为单帧 8-bit sRGB 并按像素与字节预算降采样，回执给出实际尺寸与坐标换算比例；源图上限为 50 MiB、6400 万像素、长边 65535 px，超过时按提示先缩小。支持绝对路径和包含 .. 的路径。".to_owned(),
         schema,
         enabled: true,
         concurrency_policy: axon_domain::ToolConcurrencyPolicy::ParallelSafe,

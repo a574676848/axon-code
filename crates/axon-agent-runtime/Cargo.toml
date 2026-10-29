@@ -32,6 +32,7 @@ grep-matcher.workspace = true
 grep-regex.workspace = true
 grep-searcher.workspace = true
 ignore.workspace = true
+image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 portable-pty.workspace = true
 regex.workspace = true
 flate2.workspace = true

@@ -62,4 +62,5 @@
    - **文件已被改动**：`builtin.edit` 若提示 Hashline 不匹配，说明文件版本已滞后，必须重新读取取得最新 `[path#TAG]` 后再重试，严禁硬套旧 TAG 盲目提交。
    - **LSP / nextActions**：若回执包含语言服务报错（LSP 诊断）或 `nextActions` 指引，必须作为第一优先级就地处理。
    - **文件分页未完**：`builtin.read_file` 若携带 `nextOffset`，说明文件内容未读完，必须按偏移量继续读取，严禁把单页片段误认为全文。
+    - **看图也用 `builtin.read_file`**：需要判断图片（截图、设计稿、报错弹窗、图表）里的实际内容时，用 `builtin.read_file` 读取该路径，它会把图片本身交给模型；图片分支只接受 PNG/JPEG/WebP/GIF，只用 `path`，并自动归一化为单帧 8-bit sRGB、按像素与字节预算降采样，回执给出实际尺寸与坐标换算比例（源图上限 50 MiB、6400 万像素、长边 65535 px，超过时按提示先缩小）。严禁为此安装图像库、写解码脚本或生成缩略图冒充原图；同一张图已在本轮读过就不要重复读取。
 </tool_execution_and_receipt_protocol>

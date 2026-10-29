@@ -18,6 +18,12 @@ pub(crate) fn execute_read_file(
     tool_call: &axon_agent_runtime::ProviderToolCall,
     context: &ToolOrchestratorContext,
 ) -> ToolReceipt {
+    // 图片是 read_file 的内容分支：命中即绕开文本分页与 Hashline 快照。
+    if let Some(receipt) =
+        crate::tool_orchestrator_image::execute_read_file_image(tool_call, context)
+    {
+        return receipt;
+    }
     let canonical_input = tool_call.canonical_input();
     let mut input =
         match agent_run_read_file_tool_input_from_provider_args(&context.cwd, &canonical_input) {

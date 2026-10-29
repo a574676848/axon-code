@@ -7,7 +7,7 @@
 | 交互式任务 | `axon` | 在终端中持续协作与审批；接续既有会话用 `axon run --continue` 或 `--session <id>`。 |
 | 有界 Agent 任务 | `axon run` | 指定模型、cwd 或工具范围；自动化使用 `--format json` 并读取到终态事件。每次调用是一条独立主 turn 车道（独立会话表面），延续上一轮上下文必须显式 `--continue` 或 `--session <id>`。 |
 | 会话诊断（运维面） | `axon debug session ...` | 先 list/show/read，再在用户授权下 resume、fork 或 delete；用户不需要也不应管理 session_id。 |
-| 本地命令和文件工作 | Agent builtin tools、`axon exec` | Agent 使用 `glob`、`read_file`、`edit`、`shell_command` 等当前可见工具。`read_file` 的派生投影覆盖 Notebook、PDF、Office、压缩包清单与 SQLite（只读，对象清单 + schema + 有界数据行）；派生文档不产生快照，不能直接参与 Hashline 编辑。 |
+| 本地命令和文件工作 | Agent builtin tools、`axon exec` | Agent 使用 `glob`、`read_file`、`edit`、`shell_command` 等当前可见工具。`read_file` 的派生投影覆盖 Notebook、PDF、Office、压缩包清单与 SQLite（只读，对象清单 + schema + 有界数据行）；派生文档不产生快照，不能直接参与 Hashline 编辑。`read_file` 命中 PNG/JPEG/WebP/GIF 时走图片分支，把图片本身随回执交给模型，只用 `path`，并自动归一化为单帧 8-bit sRGB、按像素与字节预算降采样（源图上限 50 MiB / 6400 万像素 / 长边 65535 px）；当前模型未声明图片输入能力时该分支直接失败。 |
 | 编辑契约与整文件重写 | Agent builtin tools | 改已存在的单个文件用 Hashline（`[path#TAG]` + 操作）；新建与**整文件重写**用 `*** Add File:`（目标已存在即整文件重写，回执 `operation` 为 `update` 并回传新 TAG）；删除、移动与必须原子的多文件批处理用 PathDiff。 |
 | 编辑观测与恢复 | Agent builtin tools | 陈旧快照按「统一位移 + 邻域校验」重放，失败即要求重新读取；编辑把文件从可解析变为解析失败时回执 warnings 出现 `[解析回归]`（不阻断写入，需立刻修正）；编辑载荷在流式生成期有只读 diff 预览（不落盘）。 |
 | 后台长任务 | Agent builtin tools | 预计长时间运行的命令用 `builtin.shell_command` 的 `run_in_background: true` 启动，回执返回 `job_id`；随后用 `builtin.job_output` 读取增量输出与终态、用 `builtin.job_kill` 终止作业。需要交互终端时改用 `tty: true` 并用 `builtin.write_stdin` 续接；`run_in_background` 与 `tty` 互斥，`job_id` 与 `session_id` 属于不同通道，不可互传。 |

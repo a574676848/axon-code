@@ -180,6 +180,7 @@ fn make_test_context(config_path: std::path::PathBuf, session_id: &str) -> ToolO
         cancel_token: None,
         run_cancel_token: None,
         model_profile_id: axon_domain::ModelProfileId(0),
+        supports_vision: true,
         permission_snapshot_id: axon_domain::PermissionSnapshotId(0),
         current_agent_path: axon_agent_runtime::AgentPath::root(),
         agent_control: std::sync::Arc::new(std::sync::Mutex::new(

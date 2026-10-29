@@ -37,6 +37,10 @@ pub use agent_run_tool_result_wire_provider_receipt::{
 const TOOL_RESULT_LOCAL_IMAGES_FIELD: &str = "localImages";
 const TOOL_RESULT_LOCAL_IMAGE_PATH_FIELD: &str = "path";
 const TOOL_RESULT_LOCAL_IMAGE_MIME_FIELD: &str = "mimeType";
+const TOOL_RESULT_LOCAL_IMAGE_BYTE_LEN_FIELD: &str = "byteLen";
+const TOOL_RESULT_LOCAL_IMAGE_SHA256_FIELD: &str = "sha256";
+const TOOL_RESULT_LOCAL_IMAGE_ARCHIVE_REF_FIELD: &str = "archiveRef";
+const TOOL_RESULT_LOCAL_IMAGE_SOURCE_REF_FIELD: &str = "sourceRef";
 const TOOL_RESULT_IMAGE_PROMPT: &str = "工具返回了本地图片，请结合图片像素继续处理当前任务。";
 
 /// Provider tool result 回灌到下一轮模型消息所需的 runtime receipt 投影。
@@ -386,22 +390,39 @@ fn tool_result_local_images(receipt: &AgentRunToolResultReceipt) -> Vec<AgentMod
         .filter_map(|image| {
             let path = image
                 .get(TOOL_RESULT_LOCAL_IMAGE_PATH_FIELD)
-                .and_then(serde_json::Value::as_str)?;
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
             let mime_type = image
                 .get(TOOL_RESULT_LOCAL_IMAGE_MIME_FIELD)
                 .and_then(serde_json::Value::as_str)?;
-            (!path.trim().is_empty() && mime_type.starts_with("image/")).then(|| {
-                AgentModelLocalImageRef {
-                    path: path.to_owned(),
-                    mime_type: mime_type.to_owned(),
-                    byte_len: None,
-                    sha256: None,
-                    archive_ref: None,
-                    source_ref: None,
-                }
+            let archive_ref =
+                optional_image_field(image, TOOL_RESULT_LOCAL_IMAGE_ARCHIVE_REF_FIELD);
+            // 路径与归档引用至少有一个可读来源，否则 provider 请求阶段无从取字节。
+            if (path.trim().is_empty() && archive_ref.is_none()) || !mime_type.starts_with("image/")
+            {
+                return None;
+            }
+            Some(AgentModelLocalImageRef {
+                path: path.to_owned(),
+                mime_type: mime_type.to_owned(),
+                byte_len: image
+                    .get(TOOL_RESULT_LOCAL_IMAGE_BYTE_LEN_FIELD)
+                    .and_then(serde_json::Value::as_u64),
+                sha256: optional_image_field(image, TOOL_RESULT_LOCAL_IMAGE_SHA256_FIELD),
+                archive_ref,
+                source_ref: optional_image_field(image, TOOL_RESULT_LOCAL_IMAGE_SOURCE_REF_FIELD),
             })
         })
         .collect()
+}
+
+fn optional_image_field(image: &serde_json::Value, field: &str) -> Option<String> {
+    image
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn validate_tool_receipt_pairing(

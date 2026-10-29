@@ -71,6 +71,8 @@ pub(crate) struct ToolOrchestratorContext {
     pub(crate) cancel_token: Option<ToolCancelToken>,
     pub(crate) run_cancel_token: Option<RunCancelToken>,
     pub(crate) model_profile_id: ModelProfileId,
+    /// 当前调用路线是否声明图片输入能力；图片类工具据此决定是否读取。
+    pub(crate) supports_vision: bool,
     pub(crate) permission_snapshot_id: PermissionSnapshotId,
     pub(crate) current_agent_path: AgentPath,
     pub(crate) agent_control: Arc<Mutex<AgentControlRuntime>>,
@@ -95,6 +97,7 @@ impl std::fmt::Debug for ToolOrchestratorContext {
             .field("has_cancel_token", &self.cancel_token.is_some())
             .field("has_run_cancel_token", &self.run_cancel_token.is_some())
             .field("model_profile_id", &self.model_profile_id)
+            .field("supports_vision", &self.supports_vision)
             .field("permission_snapshot_id", &self.permission_snapshot_id)
             .field("current_agent_path", &self.current_agent_path)
             .field("has_agent_control", &true)

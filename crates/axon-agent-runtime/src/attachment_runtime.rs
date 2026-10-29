@@ -35,6 +35,8 @@ pub const BLOB_DEFAULT_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
 pub const ATTACHMENT_ARCHIVE_DIR_NAME: &str = "attachments";
 const PNG_MAGIC: &[u8] = b"\x89PNG\r\n\x1a\n";
 const JPEG_MAGIC: &[u8] = b"\xff\xd8\xff";
+const GIF87A_MAGIC: &[u8] = b"GIF87a";
+const GIF89A_MAGIC: &[u8] = b"GIF89a";
 const PDF_MAGIC: &[u8] = b"%PDF-";
 const WEBP_RIFF_MAGIC: &[u8] = b"RIFF";
 const WEBP_FORMAT_MAGIC: &[u8] = b"WEBP";
@@ -458,7 +460,11 @@ impl AttachmentContentLimits {
 }
 
 fn is_valid_image(bytes: &[u8]) -> bool {
-    bytes.starts_with(PNG_MAGIC) || bytes.starts_with(JPEG_MAGIC) || is_valid_webp(bytes)
+    bytes.starts_with(PNG_MAGIC)
+        || bytes.starts_with(JPEG_MAGIC)
+        || bytes.starts_with(GIF87A_MAGIC)
+        || bytes.starts_with(GIF89A_MAGIC)
+        || is_valid_webp(bytes)
 }
 
 fn is_valid_webp(bytes: &[u8]) -> bool {

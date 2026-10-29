@@ -109,6 +109,7 @@ fn context(cwd: &Path, config_path: PathBuf) -> ToolOrchestratorContext {
         cancel_token: None,
         run_cancel_token: None,
         model_profile_id: ModelProfileId(0),
+        supports_vision: true,
         permission_snapshot_id: PermissionSnapshotId(0),
         current_agent_path: AgentPath::root(),
         agent_control: Arc::new(Mutex::new(AgentControlRuntime::default())),

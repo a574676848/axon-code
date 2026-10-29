@@ -102,6 +102,8 @@ mod tool_orchestrator_fs_write_effects;
 mod tool_orchestrator_goal;
 #[path = "tools/hashline.rs"]
 mod tool_orchestrator_hashline;
+#[path = "tools/image.rs"]
+mod tool_orchestrator_image;
 #[path = "tools/job.rs"]
 mod tool_orchestrator_job;
 #[path = "tools/runtime_capabilities.rs"]

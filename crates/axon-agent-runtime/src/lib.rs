@@ -123,6 +123,8 @@ mod apply_patch_invocation;
 mod atomic_commit_planner;
 #[path = "planning/atomic_commit_planner_support.rs"]
 mod atomic_commit_planner_support;
+#[path = "attachment_image.rs"]
+mod attachment_image;
 #[path = "attachment_runtime.rs"]
 mod attachment_runtime;
 #[path = "planning/auto_changelog.rs"]

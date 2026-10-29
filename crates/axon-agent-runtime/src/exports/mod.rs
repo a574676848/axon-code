@@ -137,6 +137,12 @@ pub use crate::atomic_commit_planner::{
     AtomicCommit, AtomicCommitPlanner, AtomicCommitType, CommitGroup, CommitGroupStrategy,
     FileChange, FileChangeStatus, FileHunk, difference, intersection,
 };
+pub use crate::attachment_image::{
+    IMAGE_ENCODING_QUALITIES, IMAGE_MIME_GIF, IMAGE_MIME_JPEG, IMAGE_MIME_PNG, IMAGE_MIME_WEBP,
+    IMAGE_NORMALIZED_MAX_BYTES, IMAGE_NORMALIZED_MAX_DIMENSION, IMAGE_NORMALIZED_MAX_PIXELS,
+    IMAGE_SOURCE_MAX_BYTES, IMAGE_SOURCE_MAX_DIMENSION, IMAGE_SOURCE_MAX_PIXELS,
+    ImageNormalizeError, NormalizedImage, can_pass_through, normalize_image,
+};
 pub use crate::attachment_runtime::{
     AgentModelAttachmentProjection, AttachmentBlobRecord, AttachmentBlobStore,
     AttachmentClipboardImageRecord, AttachmentClipboardImageRequest, AttachmentDragDropEntry,

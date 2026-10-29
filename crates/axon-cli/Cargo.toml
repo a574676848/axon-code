@@ -86,3 +86,4 @@ test = false
 workspace = true
 [dev-dependencies]
 axon-test-support = { path = "../axon-test-support" }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }

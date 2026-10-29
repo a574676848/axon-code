@@ -247,6 +247,84 @@ fn sibling_tool_results_stay_adjacent_when_an_earlier_receipt_carries_annotation
 }
 
 #[test]
+fn archive_backed_tool_image_keeps_its_durable_reference() {
+    let mut source = receipt("call-1");
+    source.metadata = Some(serde_json::json!({
+        "localImages": [{
+            "path": "C:\\workspace\\shot.png",
+            "mimeType": "image/png",
+            "byteLen": 68,
+            "sha256": "b".repeat(64),
+            "archiveRef": "blobs/bbbb.blob",
+            "sourceRef": "tool://builtin.read_image/shot.png"
+        }]
+    }));
+
+    let messages = agent_run_tool_result_messages(
+        &[tool_call("call-1")],
+        &[source],
+        None,
+        default_output_policy(),
+    )
+    .expect("归档图片应可生成下一轮消息");
+
+    let image = &messages[2].local_images[0];
+    assert_eq!(image.mime_type, "image/png");
+    assert_eq!(image.path, "C:\\workspace\\shot.png");
+    assert_eq!(image.byte_len, Some(68));
+    assert_eq!(image.sha256.as_deref(), Some("b".repeat(64).as_str()));
+    assert_eq!(image.archive_ref.as_deref(), Some("blobs/bbbb.blob"));
+    assert_eq!(
+        image.source_ref.as_deref(),
+        Some("tool://builtin.read_image/shot.png")
+    );
+}
+
+#[test]
+fn archive_only_tool_image_without_local_path_is_still_delivered() {
+    let mut source = receipt("call-1");
+    source.metadata = Some(serde_json::json!({
+        "localImages": [{
+            "mimeType": "image/jpeg",
+            "archiveRef": "blobs/cccc.blob"
+        }]
+    }));
+
+    let messages = agent_run_tool_result_messages(
+        &[tool_call("call-1")],
+        &[source],
+        None,
+        default_output_policy(),
+    )
+    .expect("仅带归档引用的图片应可投影");
+
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[2].local_images[0].mime_type, "image/jpeg");
+    assert_eq!(
+        messages[2].local_images[0].archive_ref.as_deref(),
+        Some("blobs/cccc.blob")
+    );
+}
+
+#[test]
+fn tool_image_without_path_or_archive_is_dropped() {
+    let mut source = receipt("call-1");
+    source.metadata = Some(serde_json::json!({
+        "localImages": [{ "mimeType": "image/png" }]
+    }));
+
+    let messages = agent_run_tool_result_messages(
+        &[tool_call("call-1")],
+        &[source],
+        None,
+        default_output_policy(),
+    )
+    .expect("无字节来源的图片不得中断批次");
+
+    assert_eq!(messages.len(), 2);
+}
+
+#[test]
 fn low_budget_tool_result_keeps_output_ref_in_minimal_fallback() {
     const TOOL_OUTPUT_BUDGET_BYTES: usize = 1_024;
     let mut source = receipt("call-1");
