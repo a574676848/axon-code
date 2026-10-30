@@ -16,23 +16,30 @@ fn finish(turn: ProgressTurn) -> ProgressCommand {
     let (ack, _receiver) = mpsc::channel();
     ProgressCommand::Finish {
         turn,
+        status: CardStatus::Completed,
         ack,
         settlement: Arc::new(ProgressSettlement::new()),
     }
 }
 
 fn delta(text: &str) -> ProgressCommand {
-    ProgressCommand::AssistantDelta {
+    ProgressCommand::Event {
         turn: turn("dispatch"),
-        text: text.to_owned(),
+        event: ProjectionEvent::AssistantDelta {
+            part_id: "part".to_owned(),
+            text: text.to_owned(),
+        },
     }
 }
 
-fn tool(body: &str) -> ProgressCommand {
-    ProgressCommand::ToolUpdate {
+fn tool(call_id: &str) -> ProgressCommand {
+    ProgressCommand::Event {
         turn: turn("dispatch"),
-        tool_call_id: "tool-call-1".to_owned(),
-        body: body.to_owned(),
+        event: ProjectionEvent::ToolStarted {
+            call_id: call_id.to_owned(),
+            label: "执行".to_owned(),
+            target: None,
+        },
     }
 }
 
@@ -40,27 +47,36 @@ fn tool(body: &str) -> ProgressCommand {
 fn finish_is_served_before_queued_projection_work() {
     let mut commands = VecDeque::new();
     commands.push_back(delta("delta-1"));
-    commands.push_back(tool("工具进行中"));
+    commands.push_back(tool("call-1"));
     commands.push_back(finish(turn("dispatch-settle")));
     commands.push_back(delta("delta-2"));
 
-    // 回合收口不能被其他 chat 的增量或工具卡排在后面。
+    // 回合收口不能被其他 chat 的投影事件排在后面。
     assert!(matches!(
         take_highest_priority(&mut commands),
         Some(ProgressCommand::Finish { .. })
     ));
-    // 其余命令保持入队顺序：工具卡（含完成语义）先于普通增量。
+    // 其余事件保持入队顺序：投影必须按 wire 到达顺序应用。
     assert!(matches!(
         take_highest_priority(&mut commands),
-        Some(ProgressCommand::ToolUpdate { .. })
+        Some(ProgressCommand::Event {
+            event: ProjectionEvent::AssistantDelta { text, .. },
+            ..
+        }) if text == "delta-1"
     ));
     assert!(matches!(
         take_highest_priority(&mut commands),
-        Some(ProgressCommand::AssistantDelta { text, .. }) if text == "delta-1"
+        Some(ProgressCommand::Event {
+            event: ProjectionEvent::ToolStarted { call_id, .. },
+            ..
+        }) if call_id == "call-1"
     ));
     assert!(matches!(
         take_highest_priority(&mut commands),
-        Some(ProgressCommand::AssistantDelta { text, .. }) if text == "delta-2"
+        Some(ProgressCommand::Event {
+            event: ProjectionEvent::AssistantDelta { text, .. },
+            ..
+        }) if text == "delta-2"
     ));
     assert!(take_highest_priority(&mut commands).is_none());
 }
@@ -87,9 +103,31 @@ fn mailbox_evicts_oldest_delta_before_finish() {
     assert!(
         matches!(
             state.commands.front(),
-            Some(ProgressCommand::AssistantDelta { text, .. }) if text == "delta-1"
+            Some(ProgressCommand::Event {
+                event: ProjectionEvent::AssistantDelta { text, .. },
+                ..
+            }) if text == "delta-1"
         ),
-        "满载时应淘汰最旧的增量而非收口命令"
+        "满载时应淘汰最旧的正文增量而非收口命令"
+    );
+}
+
+#[test]
+fn mailbox_never_evicts_tool_rows() {
+    let mailbox = ProgressMailbox::new();
+    for index in 0..PROGRESS_MAILBOX_CAPACITY {
+        assert!(mailbox.try_push(tool(&format!("call-{index}"))));
+    }
+    // 队列里全是不可淘汰的语义命令：允许超出一个单位，但一条都不能丢。
+    assert!(mailbox.try_push(delta("late-delta")));
+    let state = mailbox
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    assert_eq!(
+        state.commands.len(),
+        PROGRESS_MAILBOX_CAPACITY + 1,
+        "语义命令不可淘汰"
     );
 }
 

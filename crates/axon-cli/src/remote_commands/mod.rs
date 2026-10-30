@@ -28,6 +28,7 @@ mod remote_feishu_gateway_worker;
 mod remote_feishu_identity;
 mod remote_feishu_ingress_watermark;
 mod remote_feishu_progress_mailbox;
+mod remote_feishu_progress_model;
 mod remote_feishu_progress_projection;
 pub(crate) mod remote_feishu_progress_service;
 pub(crate) mod remote_feishu_question_action;

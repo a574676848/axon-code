@@ -80,15 +80,21 @@ impl RemoteFeishuProgressClient {
         })
     }
 
-    /// 创建首条执行进度消息并返回消息 ID。
-    pub fn create(
+    /// 创建首条执行进度卡片并返回消息 ID。
+    ///
+    /// `card_json` 由调用方渲染（卡片 JSON 2.0），原样作为消息 `content` 下发。
+    pub fn create_card(
         &self,
         target: &RemoteFeishuMessageTarget,
-        body: &str,
+        card_json: &str,
         dispatch_id: &str,
     ) -> AxonResult<String> {
-        let plan = progress_message_plan(body);
-        self.create_message(target, &plan.msg_type, &plan.content_json, dispatch_id)
+        self.create_message(
+            target,
+            REMOTE_FEISHU_OUTBOUND_MSG_TYPE_INTERACTIVE,
+            card_json,
+            dispatch_id,
+        )
     }
 
     /// 创建一条经过共享语义规范化的 Markdown 回合消息。
@@ -221,9 +227,13 @@ impl RemoteFeishuProgressClient {
         ensure_success(&response)
     }
 
-    /// 编辑已创建的进度消息。
-    pub fn edit(&self, message_id: &str, body: &str, dispatch_id: &str) -> AxonResult<()> {
-        let plan = progress_message_plan(body);
+    /// 用卡片 JSON 整体替换已创建的进度卡片。
+    pub fn edit_card(
+        &self,
+        message_id: &str,
+        card_json: &str,
+        dispatch_id: &str,
+    ) -> AxonResult<()> {
         let request = RemoteFeishuHttpRequestPlan {
             dispatch_id: dispatch_id.to_owned(),
             url: format!(
@@ -232,7 +242,7 @@ impl RemoteFeishuProgressClient {
             ),
             method: "PATCH".to_owned(),
             headers: json_headers(Some(&self.tenant_access_token()?)),
-            body_json: update_message_body(&plan),
+            body_json: card_update_body(card_json),
         };
         let response = self.execute_progress_request(&request)?;
         ensure_success(&response)
@@ -275,23 +285,6 @@ fn markdown_message_plan(body: &str) -> AxonResult<RemoteFeishuOutboundMessagePl
     })
 }
 
-fn progress_message_plan(body: &str) -> RemoteFeishuOutboundMessagePlan {
-    let normalized = normalize_markdown_source(body).trim().to_owned();
-    RemoteFeishuOutboundMessagePlan {
-        msg_type: REMOTE_FEISHU_OUTBOUND_MSG_TYPE_INTERACTIVE.to_owned(),
-        content_json: serde_json::json!({
-            "schema": "2.0",
-            "body": {
-                "elements": [{
-                    "tag": "markdown",
-                    "content": normalized,
-                }]
-            }
-        })
-        .to_string(),
-    }
-}
-
 fn message_body(message_type: &str, content_json: &str, dispatch_id: &str) -> String {
     serde_json::json!({
         "msg_type": message_type,
@@ -317,13 +310,6 @@ fn feishu_message_uuid(dispatch_id: &str) -> String {
     let digest =
         axon_crypto::sha256_hex_prefix(dispatch_id.as_bytes(), FEISHU_MESSAGE_UUID_DIGEST_CHARS);
     format!("{FEISHU_MESSAGE_UUID_PREFIX}{digest}")
-}
-
-fn update_message_body(plan: &RemoteFeishuOutboundMessagePlan) -> String {
-    serde_json::json!({
-        "content": plan.content_json,
-    })
-    .to_string()
 }
 
 /// 卡片整体替换请求体：只带 `content`，不带 `msg_type` 与 `uuid`。
@@ -396,17 +382,12 @@ mod tests {
     use axon_display::normalize_markdown_source;
 
     use super::{
-        FEISHU_MESSAGE_UUID_MAX_CHARS, feishu_message_uuid, markdown_message_plan,
-        progress_message_plan, update_message_body,
+        FEISHU_MESSAGE_UUID_MAX_CHARS, card_update_body, feishu_message_uuid, markdown_message_plan,
     };
     use crate::remote_feishu_delivery_http::parse_tenant_access_token_with_expiry;
-    use crate::{
-        REMOTE_FEISHU_OUTBOUND_MSG_TYPE_INTERACTIVE, REMOTE_FEISHU_OUTBOUND_MSG_TYPE_POST,
-        RemoteFeishuHttpResponse,
-    };
+    use crate::{REMOTE_FEISHU_OUTBOUND_MSG_TYPE_POST, RemoteFeishuHttpResponse};
 
-    /// 真机事故守卫：工具卡的 dispatch id 是
-    /// `feishu-progress-{24 位 dispatch}-{16 位工具哈希}` = 57 字符，越过飞书 `uuid`
+    /// 真机事故守卫：进度卡 dispatch id 曾因叠加工具哈希变成 57 字符，越过飞书 `uuid`
     /// 的 50 字符上界后被逐条拒绝（实测 954 次投影全部失败、飞书消息一条都没出去）。
     #[test]
     fn every_progress_uuid_stays_within_the_feishu_limit() {
@@ -471,26 +452,12 @@ mod tests {
     }
 
     #[test]
-    fn mutable_progress_uses_interactive_card_from_creation() {
-        let plan = progress_message_plan("Axon 执行中\n• 运行 shell_command");
-        let content: serde_json::Value =
-            serde_json::from_str(&plan.content_json).expect("content json");
-
-        assert_eq!(plan.msg_type, REMOTE_FEISHU_OUTBOUND_MSG_TYPE_INTERACTIVE);
-        assert_eq!(content["schema"], "2.0");
-        assert_eq!(content["body"]["elements"][0]["tag"], "markdown");
-        assert_eq!(
-            content["body"]["elements"][0]["content"],
-            "Axon 执行中\n• 运行 shell_command"
-        );
-    }
-
-    #[test]
-    fn progress_update_uses_card_api_body_without_create_uuid() {
-        let body = update_message_body(&progress_message_plan("Axon 执行中"));
+    fn card_update_carries_only_content_without_create_fields() {
+        // 进度卡是整卡替换：PATCH 只带 content，重发 msg_type / uuid 会被飞书拒绝。
+        let body = card_update_body(r#"{"schema":"2.0"}"#);
         let request: serde_json::Value = serde_json::from_str(&body).expect("request json");
 
-        assert!(request["content"].as_str().is_some());
+        assert_eq!(request["content"], r#"{"schema":"2.0"}"#);
         assert!(request.get("msg_type").is_none());
         assert!(request.get("uuid").is_none());
     }

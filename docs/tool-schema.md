@@ -303,7 +303,7 @@ Lazy 块内的漏写前缀容错：当某个 `*** Update File:` 块内出现独�
 
 `builtin.shell_command` 与 `builtin.write_stdin` 的 `max_output_tokens` 必须是正整数，默认 2000。
 
-`builtin.shell_command.intent` 是**必填**参数：一句话说明这次命令要达成什么目的，例如「校验代码格式」「确认依赖版本」。它是这次执行面向用户的说明，工具行与工具卡都以它作为标题，命令原文是详情。写目标、不复述命令原文、不加句号、40 字以内。
+`builtin.shell_command.intent` 是**必填**参数：一句话说明这次命令要达成什么目的，例如「校验代码格式」「确认依赖版本」。它是这次执行面向用户的说明，桌面端、TUI 与飞书的工具行都以它作为标题，命令原文是详情。写目标、不复述命令原文、不加句号、40 字以内。
 
 `intent` 是跨工具的展示契约，字段名与写法在所有声明它的工具上完全一致，当前包含 `builtin.shell_command`、`builtin.write_stdin`、`builtin.update_plan`、`builtin.glob`、`builtin.search`、`builtin.notes_write_file`、`builtin.notes_append_to_file` 与 `builtin.send_message`。它只影响展示，不参与执行语义：模型自述目的在参数被截断之前取出，因此再长的脚本、正文或计划都不会把它挤掉；未声明该字段的工具（含 MCP 工具与第三方 schema）不受影响。
 

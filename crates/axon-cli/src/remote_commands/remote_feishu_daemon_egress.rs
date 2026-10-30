@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 
 use axon_crypto::sha256_hex_prefix;
 use axon_domain::SessionId;
-use axon_protocol::wire::{WireEventEnvelope, WireEventKind, WireProviderStatusPhase};
+use axon_protocol::wire::{
+    WireEventEnvelope, WireEventKind, WireProviderStatus, WireProviderStatusPhase, WireToolResult,
+};
 use axon_remote_feishu::{
     FeishuEventAdapter, RemoteFeishuAgentReplyArtifactInput, RemoteFeishuAgentReplyArtifactRuntime,
     RemoteFeishuFeedbackTaskStoreRuntime, RemoteFeishuMessageTarget, RemoteFeishuProcessingOutcome,
@@ -22,6 +24,10 @@ use axon_session::SessionEventRecord;
 use axon_session_runtime::EventPublisher;
 use serde_json::Value;
 
+use super::remote_feishu_progress_model::{ProjectionEvent, RowStatus};
+use super::remote_feishu_progress_projection::{
+    bound_tool_meta, render_tool_label, render_tool_target,
+};
 use super::remote_feishu_transport_context::{is_feishu, parse as parse_feishu_transport_context};
 
 const TURN_COMPLETED_EVENT: &str = "turn_completed";
@@ -48,12 +54,10 @@ const FEISHU_REPLY_LOCAL_ACTION_HINT: &str = "Feishu 回复当前会话";
 /// Feishu 渠道标识；与入站 Interaction 的 `source.channel()` 保持同一契约。
 const FEISHU_DISPATCH_HASH_CHARS: usize = 16;
 const FEISHU_REPLY_PREVIEW_LIMIT: usize = 240;
-const FEISHU_PROVIDER_CONNECTING: &str = "🔌 正在连接供应商";
-const FEISHU_PROVIDER_CONNECTED: &str = "✅ 供应商已连接";
-const FEISHU_PROVIDER_GENERATING: &str = "💭 正在思考并生成回复";
-const FEISHU_PROVIDER_RETRYING: &str = "🔁 正在重试供应商请求";
-const FEISHU_PROVIDER_FAILED: &str = "⚠️ 供应商请求失败";
-const FEISHU_PROVIDER_FAILOVER: &str = "↪️ 正在切换供应商";
+/// 供应商提示行的覆盖键：重试与故障转移只保留最新一条，不累积成墙。
+const FEISHU_PROVIDER_NOTICE_KEY: &str = "provider";
+/// 短于该耗时的工具行不再显示读数：毫秒级耗时是噪声而不是信息。
+const FEISHU_TOOL_META_MIN_DURATION_MS: u64 = 100;
 
 /// 已提交 Session Event 的 Feishu 出站发布器。
 #[derive(Debug, Clone)]
@@ -96,19 +100,20 @@ impl FeishuDaemonEventPublisher {
                 }
             };
         // 实时投影：只做无阻塞入队，网络写入由后台 worker 完成，绝不阻塞本事件流。
-        project_committed_assistant_delta(event);
+        project_committed_wire_event(event);
+        let failed = event.event_type == TURN_FAILED_EVENT;
         let Some(input) = FeishuEgressInput::from_event(event)? else {
             // 非出站事件同样要收口投影登记，避免回合结束后登记表残留。
             if matches!(
                 event.event_type.as_str(),
                 TURN_COMPLETED_EVENT | TURN_FAILED_EVENT
             ) {
-                let _ = finish_projection(&event.session_id.to_string());
+                let _ = finish_projection(&event.session_id.to_string(), failed);
             }
             return Ok(feedback_created);
         };
         // 回合收口：正文若已完整投影到卡片，则不再写 durable outbox，避免同一正文投递两次。
-        let projection = finish_projection(&event.session_id.to_string());
+        let projection = finish_projection(&event.session_id.to_string(), failed);
         if event.event_type == TURN_COMPLETED_EVENT && projection.suppresses_durable_reply() {
             return Ok(true);
         }
@@ -117,11 +122,14 @@ impl FeishuDaemonEventPublisher {
     }
 }
 
-/// 把已提交的 assistant 增量与工具开始/完成交给实时投影；未登记的 session 静默忽略。
+/// 把已提交的 wire 事件折算成一条投影事件；未登记的 session 静默忽略。
+///
+/// 投影只承载折叠态事实：正文增量、工具行、思考耗时与少量提示。供应商的连接与
+/// 生成中状态**不进入卡片**，运行中由飞书 `Typing` reaction 承担；路由只记录到
+/// 投影字段，供终态页脚使用。
 ///
 /// 普通流式 wire 事件不携带 `transportContext`，归属由 turn 开始时的 session 登记决定。
-/// 工具卡只投影 wire 事件里已脱敏的 `summary`，**绝不投影 `output_preview` 等原始输出**。
-fn project_committed_assistant_delta(event: &SessionEventRecord) {
+fn project_committed_wire_event(event: &SessionEventRecord) {
     if event.event_type != WIRE_EVENT {
         return;
     }
@@ -131,89 +139,141 @@ fn project_committed_assistant_delta(event: &SessionEventRecord) {
     let Ok(envelope) = serde_json::from_value::<WireEventEnvelope>(payload) else {
         return;
     };
-    let session_id = event.session_id.to_string();
-    match &envelope.kind {
+    let Some(projection_event) = projection_event(&envelope.kind, event.emitted_at_ms) else {
+        return;
+    };
+    super::remote_feishu_progress_service::project_committed_event(
+        &event.session_id.to_string(),
+        projection_event,
+    );
+}
+
+/// wire 事件到投影事件的唯一映射。
+fn projection_event(kind: &WireEventKind, at_ms: u64) -> Option<ProjectionEvent> {
+    match kind {
         WireEventKind::AssistantMessage(message)
             if message.delta && !message.content.is_empty() =>
         {
-            super::remote_feishu_progress_service::project_committed_delta(
-                &session_id,
-                &message.content,
-            );
+            Some(ProjectionEvent::AssistantDelta {
+                part_id: message.part_id.clone(),
+                text: message.content.clone(),
+            })
         }
-        WireEventKind::ToolCall(call) => {
-            // 折叠态只给一项事实：模型自述目的 → 工具专用主参数 → 通用主参数 → 原始参数摘要。
-            // 规则要求静默的工具（参数没有信息量）不追加任何目标行。
-            let summary = super::remote_feishu_progress_projection::render_tool_target(
+        WireEventKind::ToolCall(call) => Some(ProjectionEvent::ToolStarted {
+            call_id: call.tool_call_id.clone(),
+            // 折叠态只给一行事实：工具显示名 + 模型自述目的 → 工具专用主参数 → 通用主参数。
+            label: render_tool_label(&call.tool_name),
+            target: render_tool_target(
                 &call.tool_name,
                 call.arguments_summary.as_deref(),
                 call.intent.as_deref(),
-            )
-            .unwrap_or_default();
-            super::remote_feishu_progress_service::project_committed_tool(
-                &session_id,
-                &call.tool_call_id,
-                super::remote_feishu_progress_projection::render_tool_body(
-                    &call.tool_name,
-                    &summary,
-                    super::remote_feishu_progress_projection::ToolProgressStatus::Running,
-                ),
-            );
-        }
-        WireEventKind::ToolResult(result) => {
-            let status = if result.status == WireLifecycleStatus::Completed {
-                super::remote_feishu_progress_projection::ToolProgressStatus::Completed
+            ),
+        }),
+        WireEventKind::ToolResult(result) => Some(ProjectionEvent::ToolFinished {
+            call_id: result.tool_call_id.clone(),
+            // 结果可能不带工具名：空标签表示沿用调用时已定的行。
+            label: result
+                .tool_name
+                .as_deref()
+                .map(render_tool_label)
+                .unwrap_or_default(),
+            status: if result.status == WireLifecycleStatus::Completed {
+                RowStatus::Completed
             } else {
-                super::remote_feishu_progress_projection::ToolProgressStatus::Failed
-            };
-            super::remote_feishu_progress_service::project_committed_tool(
-                &session_id,
-                &result.tool_call_id,
-                super::remote_feishu_progress_projection::render_tool_body(
-                    result.tool_name.as_deref().unwrap_or_default(),
-                    &result.summary,
-                    status,
-                ),
-            );
-        }
-        WireEventKind::ProviderStatus(status) => {
-            super::remote_feishu_progress_service::project_committed_delta(
-                &session_id,
-                &provider_status_text(status),
-            );
-        }
-        WireEventKind::ReasoningStart(_) => {
-            super::remote_feishu_progress_service::project_committed_delta(
-                &session_id,
-                "💭 正在思考…",
-            );
-        }
-        _ => {}
+                RowStatus::Failed
+            },
+            meta: tool_result_meta(result),
+        }),
+        WireEventKind::ReasoningStart(start) => Some(ProjectionEvent::ReasoningStarted {
+            part_id: start.part_id.clone(),
+            at_ms,
+        }),
+        WireEventKind::ReasoningEnd(end) => Some(ProjectionEvent::ReasoningFinished {
+            part_id: end.part_id.clone(),
+            at_ms,
+        }),
+        WireEventKind::ProviderStatus(status) => provider_projection_event(status),
+        WireEventKind::UsageUpdate(usage) => Some(ProjectionEvent::ContextTokens {
+            tokens: usage.current_context_tokens,
+        }),
+        _ => None,
     }
 }
 
-fn provider_status_text(status: &axon_protocol::wire::WireProviderStatus) -> String {
-    let phase = match status.phase {
-        WireProviderStatusPhase::Connecting => FEISHU_PROVIDER_CONNECTING,
-        WireProviderStatusPhase::Connected => FEISHU_PROVIDER_CONNECTED,
-        WireProviderStatusPhase::Generating => FEISHU_PROVIDER_GENERATING,
-        WireProviderStatusPhase::Retrying => FEISHU_PROVIDER_RETRYING,
-        WireProviderStatusPhase::Failed => FEISHU_PROVIDER_FAILED,
-        WireProviderStatusPhase::Failover => FEISHU_PROVIDER_FAILOVER,
-    };
-    if status.provider.trim().is_empty() && status.model.trim().is_empty() {
-        return phase.to_owned();
+/// 供应商状态：只有重试、失败与切换值得一行提示，其余只刷新路由。
+fn provider_projection_event(status: &WireProviderStatus) -> Option<ProjectionEvent> {
+    match status.phase {
+        WireProviderStatusPhase::Connecting | WireProviderStatusPhase::Connected => {
+            Some(ProjectionEvent::Route {
+                route: format!("{}/{}", status.provider.trim(), status.model.trim()),
+            })
+        }
+        WireProviderStatusPhase::Generating => None,
+        WireProviderStatusPhase::Retrying => Some(provider_notice(format!(
+            "供应商请求重试中（第 {} 次）",
+            status.attempt_index
+        ))),
+        WireProviderStatusPhase::Failed => Some(provider_notice("供应商请求失败".to_owned())),
+        WireProviderStatusPhase::Failover => {
+            let target = match (
+                status.next_provider.as_deref(),
+                status.next_model.as_deref(),
+            ) {
+                (Some(provider), Some(model)) => {
+                    format!("{} / {}", provider.trim(), model.trim())
+                }
+                _ => "下一渠道".to_owned(),
+            };
+            Some(provider_notice(format!("切换供应商：{target}")))
+        }
     }
-    format!(
-        "{phase}：{}/{}",
-        status.provider.trim(),
-        status.model.trim()
-    )
+}
+
+fn provider_notice(text: String) -> ProjectionEvent {
+    ProjectionEvent::Notice {
+        key: FEISHU_PROVIDER_NOTICE_KEY.to_owned(),
+        text,
+    }
+}
+
+/// 工具行尾读数：非零退出码 → 失败 → 已写入 → 耗时，按信息量取第一个。
+fn tool_result_meta(result: &WireToolResult) -> Option<String> {
+    if let Some(exit_code) = tool_exit_code(result)
+        && exit_code != 0
+    {
+        return Some(bound_tool_meta(&format!("exit {exit_code}")));
+    }
+    if result.status != WireLifecycleStatus::Completed {
+        return Some("失败".to_owned());
+    }
+    if result.filesystem_write_performed {
+        return Some("已写入".to_owned());
+    }
+    let duration_ms = result
+        .duration_ms
+        .filter(|value| *value >= FEISHU_TOOL_META_MIN_DURATION_MS)?;
+    Some(bound_tool_meta(
+        &crate::display_units::format_duration_millis_compact(duration_ms),
+    ))
+}
+
+fn tool_exit_code(result: &WireToolResult) -> Option<i64> {
+    let metadata = result.metadata.as_ref()?;
+    ["exitCode", "exit_code"]
+        .into_iter()
+        .find_map(|key| match metadata.get(key)? {
+            Value::Number(number) => number.as_i64(),
+            Value::String(text) => text.trim().parse().ok(),
+            _ => None,
+        })
 }
 
 /// 收口该 session 的投影回合并返回结论。
-fn finish_projection(session_id: &str) -> super::remote_feishu_progress_service::TurnProjection {
-    super::remote_feishu_progress_service::finish_registered_turn(session_id)
+fn finish_projection(
+    session_id: &str,
+    failed: bool,
+) -> super::remote_feishu_progress_service::TurnProjection {
+    super::remote_feishu_progress_service::finish_registered_turn(session_id, failed)
 }
 
 fn enqueue_control_processing_feedback(

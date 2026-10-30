@@ -1,15 +1,16 @@
 //! 飞书回合级实时进度投影服务。
 //!
 //! 投影消费 Daemon **已提交**的 Session Event 流，不另建重排或完成门禁：事件按共享
-//! durable sequence 到达，本服务只按到达顺序渲染与 PATCH。
+//! durable sequence 到达，本服务只按到达顺序归并、渲染与 PATCH。
+//!
+//! 一个回合只有**一张**进度卡：正文在前、过程行在后、终态页脚收尾，过程行不提供展开。
 //!
 //! 硬约束：
 //! - `publish` 路径只做**无阻塞入队**；网络写入全部在单后台 worker 内完成，绝不阻塞
 //!   provider / coding 主链；
-//! - 邮箱有界，assistant delta 在满载时按最旧优先淘汰（进度是增强视图，可丢帧不可阻塞）；
+//! - 邮箱有界，正文增量在满载时按最旧优先淘汰（进度是增强视图，可丢帧不可阻塞）；
 //! - `Finish` 命令优先出队：回合收口不能被其他 chat 的在队工作量拖延；
-//! - 渲染只覆盖「已确认稳定」的正文，尾部可能演化成 `MEDIA:` 协议行的半截内容会被
-//!   扣留，避免把协议行泄漏给用户；
+//! - 正文与过程行共用**同一个**合并窗口与同一张卡片，是否真的发 PATCH 由渲染指纹决定；
 //! - 回合结束时由 `finish` 同步收口：worker 强制 flush 后才返回投影结论，调用方据此
 //!   决定是否由 durable outbox 补偿未投影内容（避免同一正文投递两次）；收口等待有
 //!   硬上界，超时即让出结算权，改为完全由 durable outbox 投递。
@@ -24,9 +25,12 @@ use axon_agent_runtime::AgentReplyAttachmentRuntime;
 use axon_remote_feishu::{RemoteFeishuMessageTarget, RemoteFeishuProgressClient};
 
 use super::remote_feishu_progress_mailbox::{ProgressCommand, ProgressMailbox, ProgressSettlement};
-use super::remote_feishu_progress_projection::render_progress_body;
+use super::remote_feishu_progress_model::{ProgressProjection, ProjectionEvent};
+use super::remote_feishu_progress_projection::{
+    CardStatus, RenderedCard, render_card, render_progress_body,
+};
 
-/// 进度卡正文在两次 PATCH 之间的最小合并窗口。
+/// 卡片在两次 PATCH 之间的最小合并窗口。
 const PROGRESS_MERGE_WINDOW: Duration = Duration::from_millis(1_500);
 /// 进度 PATCH 的单次受限网络超时。
 const PROGRESS_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -45,8 +49,6 @@ const PROGRESS_FINISH_TIMEOUT: Duration = PROGRESS_REQUEST_TIMEOUT
 const PROGRESS_ACTIVE_TURNS: usize = 64;
 /// 已收口回合的短名单容量：同量级上界，用于丢弃收口后仍可能到达的迟到增量。
 const PROGRESS_FINISHED_TURNS: usize = PROGRESS_ACTIVE_TURNS;
-/// 工具卡 dispatch 后缀的哈希字符数：保证 create uuid 有界且对同一调用稳定。
-const TOOL_CARD_ID_CHARS: usize = 16;
 
 /// 单次回合的投影结论。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,14 +97,65 @@ pub(crate) struct ProgressTurn {
 }
 
 /// 单次回合的卡片状态。
-#[derive(Default)]
 struct TurnCard {
     card_message_id: Option<String>,
-    buffer: String,
-    projected_body: Option<String>,
+    projection: ProgressProjection,
+    started_at: Instant,
     last_patch_at: Option<Instant>,
-    /// 每个 `tool_call_id` 独占一张工具卡的 message_id。
-    tool_cards: HashMap<String, String>,
+    /// 最近一次成功 PATCH 的卡片指纹；相同即无需再写。
+    projected_fingerprint: Option<u64>,
+    /// 已投影账本：卡片承载的正文。
+    projected_body: String,
+    /// 已投影账本：卡片是否完整承载了正文。
+    projected_body_complete: bool,
+}
+
+impl TurnCard {
+    fn new() -> Self {
+        Self {
+            card_message_id: None,
+            projection: ProgressProjection::default(),
+            started_at: Instant::now(),
+            last_patch_at: None,
+            projected_fingerprint: None,
+            projected_body: String::new(),
+            projected_body_complete: false,
+        }
+    }
+
+    /// 归并一条投影事件。
+    fn apply(&mut self, event: ProjectionEvent) {
+        self.projection.apply(event);
+    }
+
+    /// 按当前投影渲染卡片。
+    fn render(&self, status: CardStatus) -> RenderedCard {
+        render_card(&self.projection, status, self.elapsed_ms())
+    }
+
+    /// 网络写入成功后提交账本与指纹。
+    fn adopt_ledger(&mut self, rendered: &RenderedCard) {
+        self.projected_fingerprint = Some(rendered.fingerprint);
+        self.projected_body.clone_from(&rendered.body_text);
+        self.projected_body_complete = rendered.body_complete;
+    }
+
+    /// 是否已越过合并窗口。
+    fn merge_window_elapsed(&self) -> bool {
+        self.last_patch_at
+            .is_none_or(|at| at.elapsed() >= PROGRESS_MERGE_WINDOW)
+    }
+
+    /// 本回合从首次投影到现在的耗时。
+    fn elapsed_ms(&self) -> u64 {
+        u64::try_from(self.started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+}
+
+impl Default for TurnCard {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// 进程级投影服务。
@@ -117,7 +170,7 @@ pub(crate) struct FeishuProgressService {
 
 static PROGRESS_SERVICE: OnceLock<FeishuProgressService> = OnceLock::new();
 
-/// 登记一个 Feishu 主 turn，使 egress 侧能按 session 归属已提交的 assistant 增量。
+/// 登记一个 Feishu 主 turn，使 egress 侧能按 session 归属已提交的投影事件。
 ///
 /// 已提交的普通流式事件不携带 `transportContext`，因此 turn 的目标必须在此登记。
 pub(crate) fn register_turn(
@@ -129,33 +182,23 @@ pub(crate) fn register_turn(
     FeishuProgressService::global(axon_root, config_path).register_turn(session_id, turn);
 }
 
-/// 投影一条已提交的 assistant 增量；未登记的 session（非 Feishu 回合）静默忽略。
-pub(crate) fn project_committed_delta(session_id: &str, text: &str) {
+/// 投影一条已提交的投影事件；未登记的 session（非 Feishu 回合）静默忽略。
+pub(crate) fn project_committed_event(session_id: &str, event: ProjectionEvent) {
     let Some(service) = PROGRESS_SERVICE.get() else {
         return;
     };
     if let Some(turn) = service.registered_turn(session_id) {
-        service.publish_assistant_delta(turn, text.to_owned());
-    }
-}
-
-/// 投影一次已提交的工具开始/完成；未登记的 session（非 Feishu 回合）静默忽略。
-pub(crate) fn project_committed_tool(session_id: &str, tool_call_id: &str, body: String) {
-    let Some(service) = PROGRESS_SERVICE.get() else {
-        return;
-    };
-    if let Some(turn) = service.registered_turn(session_id) {
-        service.publish_tool_update(turn, tool_call_id.to_owned(), body);
+        service.publish_event(turn, event);
     }
 }
 
 /// 收口该 session 的回合并返回投影结论；未登记时按不可用处理。
-pub(crate) fn finish_registered_turn(session_id: &str) -> TurnProjection {
+pub(crate) fn finish_registered_turn(session_id: &str, failed: bool) -> TurnProjection {
     let Some(service) = PROGRESS_SERVICE.get() else {
         return TurnProjection::unavailable();
     };
     match service.unregister_turn(session_id) {
-        Some(turn) => service.finish_turn(turn),
+        Some(turn) => service.finish_turn(turn, failed),
         None => TurnProjection::unavailable(),
     }
 }
@@ -211,8 +254,7 @@ impl FeishuProgressService {
             .map(|(_, turn)| turn)
     }
 
-    /// 飞书进度卡片在途登记数；仅用于流式卡片目标映射与单元测试。
-    /// 注：网关全局活跃并发回合自 M1 起为 Primary 口径；Feishu 活跃会话待接入（见 SSOT §10.1）。
+    /// 飞书进度卡片在途登记数；仅用于单元测试。
     #[cfg(test)]
     fn active_turn_count(&self) -> usize {
         self.active_turns
@@ -239,32 +281,11 @@ impl FeishuProgressService {
             .ok();
     }
 
-    /// 提交一条已确认的 assistant 增量；永不阻塞。
-    pub(crate) fn publish_assistant_delta(&self, turn: ProgressTurn, text: String) {
-        if text.is_empty() {
-            return;
-        }
+    /// 提交一条已确认的投影事件；永不阻塞。
+    pub(crate) fn publish_event(&self, turn: ProgressTurn, event: ProjectionEvent) {
         self.ensure_worker();
         self.mailbox
-            .try_push(ProgressCommand::AssistantDelta { turn, text });
-    }
-
-    /// 提交一次已确认的工具开始/完成；工具卡绕开合并窗口，立即刷新。
-    pub(crate) fn publish_tool_update(
-        &self,
-        turn: ProgressTurn,
-        tool_call_id: String,
-        body: String,
-    ) {
-        if tool_call_id.is_empty() || body.is_empty() {
-            return;
-        }
-        self.ensure_worker();
-        self.mailbox.try_push(ProgressCommand::ToolUpdate {
-            turn,
-            tool_call_id,
-            body,
-        });
+            .try_push(ProgressCommand::Event { turn, event });
     }
 
     /// 收口一个回合并返回投影结论。
@@ -273,12 +294,18 @@ impl FeishuProgressService {
     /// 卡片收口与 durable outbox 补偿会重复投递同一段正文。等待有由网络超时派生的硬
     /// 上界；一旦超时就让出结算权，worker 随即放弃卡片收口，正文完全由 durable outbox
     /// 投递：超时结论与真实投递路径因此始终一致。
-    pub(crate) fn finish_turn(&self, turn: ProgressTurn) -> TurnProjection {
+    pub(crate) fn finish_turn(&self, turn: ProgressTurn, failed: bool) -> TurnProjection {
         self.ensure_worker();
         let (ack, receiver) = mpsc::channel();
         let settlement = Arc::new(ProgressSettlement::new());
+        let status = if failed {
+            CardStatus::Failed
+        } else {
+            CardStatus::Completed
+        };
         if !self.mailbox.try_push(ProgressCommand::Finish {
             turn,
+            status,
             ack,
             settlement: Arc::clone(&settlement),
         }) {
@@ -336,24 +363,18 @@ impl ProgressWorker {
     fn run(mut self, mailbox: &ProgressMailbox) {
         while let Some(command) = mailbox.pop() {
             match command {
-                ProgressCommand::AssistantDelta { turn, text } => {
-                    self.apply_delta(&turn, &text);
-                }
-                ProgressCommand::ToolUpdate {
-                    turn,
-                    tool_call_id,
-                    body,
-                } => {
-                    self.apply_tool_update(&turn, &tool_call_id, body);
+                ProgressCommand::Event { turn, event } => {
+                    self.apply_event(&turn, event);
                 }
                 ProgressCommand::Finish {
                     turn,
+                    status,
                     ack,
                     settlement,
                 } => {
                     // `Finish` 优先出队，因此这里最多只等待一个在途网络调用。
                     let projection = if settlement.begin() {
-                        self.finish(&turn)
+                        self.finish(&turn, status)
                     } else {
                         // 调用方已超时弃权：丢弃该回合状态，正文改由 durable outbox 投递，
                         // 卡片保持既有内容，避免同一正文出现两条消息。
@@ -367,112 +388,76 @@ impl ProgressWorker {
         }
     }
 
-    /// 写入一次工具卡更新：同一 `tool_call_id` 复用同一张卡片，且绕开合并窗口立即刷新。
-    fn apply_tool_update(&mut self, turn: &ProgressTurn, tool_call_id: &str, body: String) {
-        if self.is_finished(&turn.dispatch_id) {
-            return;
-        }
-        // 工具卡与助手卡共用一个回合状态；取出后再写回，避免持有 `self.turns` 借用。
-        let mut card = std::mem::take(self.turns.entry(turn.dispatch_id.clone()).or_default());
-        let dispatch_id = format!(
-            "feishu-progress-{}-{}",
-            turn.dispatch_id,
-            axon_crypto::sha256_hex_prefix(tool_call_id.as_bytes(), TOOL_CARD_ID_CHARS)
-        );
-        let existing = card.tool_cards.get(tool_call_id).cloned();
-        let result = match (self.client(), existing) {
-            (None, _) => None,
-            (Some(client), Some(message_id)) => Some(client.edit(&message_id, &body, &dispatch_id)),
-            (Some(client), None) => Some(
-                client
-                    .create(&progress_target(turn), &body, &dispatch_id)
-                    .map(|message_id| {
-                        card.tool_cards.insert(tool_call_id.to_owned(), message_id);
-                    }),
-            ),
-        };
-        if let Some(Err(error)) = result {
-            axon_logger::warning(&format!(
-                "Feishu 工具卡投影失败，将由 durable outbox 兜底: dispatch={} error={error:?}",
-                turn.dispatch_id
-            ));
-        }
-        self.turns.insert(turn.dispatch_id.clone(), card);
-    }
-
-    fn apply_delta(&mut self, turn: &ProgressTurn, text: &str) {
-        if self.is_finished(&turn.dispatch_id) {
-            return;
-        }
-        // 先在同一临界区决定「是否需要 PATCH」，再取出卡片执行网络写入，
-        // 避免持有 `self.turns` 借用时调用 `&mut self`。
-        let body = {
-            let card = self.turns.entry(turn.dispatch_id.clone()).or_default();
-            card.buffer.push_str(text);
-            let body = render_progress_body(&card.buffer);
-            if body.is_empty() || card.projected_body.as_deref() == Some(body.as_str()) {
-                return;
-            }
-            if !card
-                .last_patch_at
-                .is_none_or(|at| at.elapsed() >= PROGRESS_MERGE_WINDOW)
-            {
-                return;
-            }
-            body
-        };
-        let mut card = std::mem::take(
-            self.turns
-                .get_mut(&turn.dispatch_id)
-                .expect("回合卡片在渲染期间始终存在"),
-        );
-        self.flush_card(turn, &mut card, body);
-        self.turns.insert(turn.dispatch_id.clone(), card);
-    }
-
-    /// 收口一个回合：写入最终正文并结算「已投影账本」。
+    /// 应用一条投影事件：归并到回合投影，再按合并窗口决定是否刷新卡片。
     ///
-    /// 正文与已投影账本一致时不再发起 PATCH：`Finish` 优先出队，落在此处的正文通常
-    /// 刚被增量 PATCH 覆盖，省掉这次冗余网络调用能显著缩短收口延迟。
-    fn finish(&mut self, turn: &ProgressTurn) -> TurnProjection {
+    /// 正文与过程行走同一个门：工具边界不再绕开合并窗口，避免一个多工具回合产生
+    /// 数十次额外的全量写入。
+    fn apply_event(&mut self, turn: &ProgressTurn, event: ProjectionEvent) {
+        if self.is_finished(&turn.dispatch_id) {
+            return;
+        }
+        let mut card = self.turns.remove(&turn.dispatch_id).unwrap_or_default();
+        card.apply(event);
+        if card.merge_window_elapsed() {
+            self.flush_card(turn, &mut card, CardStatus::Running);
+        }
+        self.turns.insert(turn.dispatch_id.clone(), card);
+    }
+
+    /// 收口一个回合：写入最终卡片并结算「已投影账本」。
+    fn finish(&mut self, turn: &ProgressTurn, status: CardStatus) -> TurnProjection {
         let Some(card) = self.turns.remove(&turn.dispatch_id) else {
-            // 从未收到增量：可能是空回复，也可能是投影不可用。
+            // 从未收到可渲染内容：可能是空回复，也可能是投影不可用。
             return TurnProjection::unavailable();
         };
         let mut card = card;
-        let body = render_progress_body(&card.buffer);
-        if !body.is_empty() && card.projected_body.as_deref() != Some(body.as_str()) {
-            self.flush_card(turn, &mut card, body.clone());
-        }
+        self.flush_card(turn, &mut card, status);
+
+        let raw_body = card.projection.body_text();
+        let visible = render_progress_body(&raw_body);
+        // 只有「卡片承载的正是当前可见正文、且未被任何预算截断」才算完整投影。
+        let fully_projected = card.card_message_id.is_some()
+            && !visible.text.is_empty()
+            && card.projected_body == visible.text
+            && card.projected_body_complete
+            && !visible.truncated;
         TurnProjection {
-            outcome: if card.card_message_id.is_some()
-                && card.projected_body.as_deref() == Some(body.as_str())
-            {
+            outcome: if fully_projected {
                 ProjectionOutcome::FullyProjected
             } else {
                 ProjectionOutcome::Unprojected
             },
-            has_media_directive: AgentReplyAttachmentRuntime::has_media_directive(&card.buffer),
+            has_media_directive: AgentReplyAttachmentRuntime::has_media_directive(&raw_body),
         }
     }
 
-    /// 把卡片正文写入飞书；成功才更新已投影账本。
-    fn flush_card(&mut self, turn: &ProgressTurn, card: &mut TurnCard, body: String) {
+    /// 把卡片写入飞书；成功才更新已投影账本与指纹。
+    fn flush_card(&mut self, turn: &ProgressTurn, card: &mut TurnCard, status: CardStatus) {
+        if card.projection.is_empty() {
+            // 没有任何可渲染内容时不建空卡。
+            return;
+        }
         let Some(client) = self.client() else {
             return;
         };
+        let rendered = card.render(status);
+        if card.card_message_id.is_some()
+            && card.projected_fingerprint == Some(rendered.fingerprint)
+        {
+            // 卡片内容与上次成功写入完全一致：不重复发网络请求。
+            card.adopt_ledger(&rendered);
+            return;
+        }
         let dispatch_id = format!("feishu-progress-{}", turn.dispatch_id);
-        let result = match card.card_message_id.as_deref() {
-            Some(message_id) => client.edit(message_id, &body, &dispatch_id),
+        let result = match card.card_message_id.clone() {
+            Some(message_id) => client.edit_card(&message_id, &rendered.content_json, &dispatch_id),
             None => client
-                .create(&progress_target(turn), &body, &dispatch_id)
-                .map(|message_id| {
-                    card.card_message_id = Some(message_id);
-                }),
+                .create_card(&progress_target(turn), &rendered.content_json, &dispatch_id)
+                .map(|message_id| card.card_message_id = Some(message_id)),
         };
         card.last_patch_at = Some(Instant::now());
         match result {
-            Ok(()) => card.projected_body = Some(body),
+            Ok(()) => card.adopt_ledger(&rendered),
             Err(error) => axon_logger::warning(&format!(
                 "Feishu 进度投影失败，将由 durable outbox 兜底: dispatch={} error={error:?}",
                 turn.dispatch_id
@@ -549,17 +534,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tool_update_coexists_with_assistant_card_state() {
-        // 工具卡必须挂在同一回合状态上，收口时随回合一起释放。
-        let mut card = TurnCard::default();
-        card.tool_cards
-            .insert("tool-call-1".to_owned(), "om_tool_card".to_owned());
-        card.buffer.push_str("正文");
-        assert_eq!(card.tool_cards.len(), 1);
-        assert_eq!(card.buffer, "正文");
-    }
-
-    #[test]
     fn suppression_requires_full_projection_without_media() {
         assert!(
             TurnProjection {
@@ -601,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn turn_registry_routes_deltas_and_releases_on_finish() {
+    fn turn_registry_routes_events_and_releases_on_finish() {
         let turn = ProgressTurn {
             dispatch_id: "dispatch-registry".to_owned(),
             chat_id: "oc_chat".to_owned(),
@@ -615,12 +589,24 @@ mod tests {
         );
         let service = PROGRESS_SERVICE.get().expect("登记必须初始化投影服务");
         assert_eq!(service.active_turn_count(), 1);
-        // 未登记 session 的增量必须静默忽略，不影响非 Feishu 回合。
-        project_committed_delta("session-unknown", "ignored");
-        project_committed_delta("session-registry", "实时正文");
+        // 未登记 session 的事件必须静默忽略，不影响非 Feishu 回合。
+        project_committed_event(
+            "session-unknown",
+            ProjectionEvent::AssistantDelta {
+                part_id: "p".to_owned(),
+                text: "ignored".to_owned(),
+            },
+        );
+        project_committed_event(
+            "session-registry",
+            ProjectionEvent::AssistantDelta {
+                part_id: "p".to_owned(),
+                text: "实时正文".to_owned(),
+            },
+        );
 
         // 无可用配置/凭据时投影整体降级：结论必须是「未投影」，由 durable outbox 兜底。
-        let projection = finish_registered_turn("session-registry");
+        let projection = finish_registered_turn("session-registry", false);
         assert_eq!(projection.outcome, ProjectionOutcome::Unprojected);
         assert!(!projection.suppresses_durable_reply());
         assert_eq!(

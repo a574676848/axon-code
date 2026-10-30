@@ -2,7 +2,7 @@
 //!
 //! 硬约束（与 `remote_feishu_progress_service` 的模块文档一致）：
 //! - 入队永不阻塞，满载时淘汰最旧的**可淘汰**命令；`Finish` 是收口屏障，绝不被淘汰；
-//! - `Finish` 优先出队：回合收口不能被其他 chat 的增量或工具卡排在其前面；
+//! - `Finish` 优先出队：回合收口不能被其他 chat 的投影事件排在其前面；
 //! - 收口结算只能被消费一次：调用方超时弃权后，worker 不得再写飞书，否则同一正文
 //!   会与 durable outbox 的补偿回复重复投递。
 
@@ -15,6 +15,8 @@ use std::{
     },
 };
 
+use super::remote_feishu_progress_model::ProjectionEvent;
+use super::remote_feishu_progress_projection::CardStatus;
 use super::remote_feishu_progress_service::{ProgressTurn, TurnProjection};
 
 /// 邮箱容量上限：满时优先淘汰最旧的未投影增量。
@@ -29,18 +31,22 @@ const SETTLEMENT_ABORTED: u8 = 2;
 
 /// 投影邮箱命令。
 pub(super) enum ProgressCommand {
-    /// 已提交的 assistant 增量。
-    AssistantDelta { turn: ProgressTurn, text: String },
-    /// 已提交的工具开始/完成；工具卡绕开合并窗口立即刷新。
-    ToolUpdate {
+    /// 已提交 wire 事件归一出的投影事件。
+    Event {
+        /// 回合身份。
         turn: ProgressTurn,
-        tool_call_id: String,
-        body: String,
+        /// 投影事件。
+        event: ProjectionEvent,
     },
     /// 回合收口：强制 flush 后回报投影结论。
     Finish {
+        /// 回合身份。
         turn: ProgressTurn,
+        /// 终态阶段。
+        status: CardStatus,
+        /// 投影结论回执。
         ack: mpsc::Sender<TurnProjection>,
+        /// 结算权。
         settlement: Arc<ProgressSettlement>,
     },
 }
@@ -50,8 +56,7 @@ impl ProgressCommand {
     fn priority(&self) -> u8 {
         match self {
             Self::Finish { .. } => 0,
-            Self::ToolUpdate { .. } => 1,
-            Self::AssistantDelta { .. } => 2,
+            Self::Event { .. } => 1,
         }
     }
 }
@@ -169,15 +174,20 @@ fn take_highest_priority(commands: &mut VecDeque<ProgressCommand>) -> Option<Pro
     commands.remove(index)
 }
 
-/// 满载时淘汰最旧的增量命令。
+/// 满载时淘汰最旧的正文增量。
 ///
-/// `Finish` 与工具卡更新都是语义命令，不能丢；极端情况下队列只含这两类命令时，
-/// 本次入队会让队列超出容量一个单位，随后由 worker 顺序排空。
+/// 工具与思考行都是语义命令，不能丢；极端情况下队列只含这些命令时，本次入队会让
+/// 队列超出容量一个单位，随后由 worker 顺序排空。
 fn evict_oldest_delta(commands: &mut VecDeque<ProgressCommand>) {
-    if let Some(index) = commands
-        .iter()
-        .position(|command| matches!(command, ProgressCommand::AssistantDelta { .. }))
-    {
+    if let Some(index) = commands.iter().position(|command| {
+        matches!(
+            command,
+            ProgressCommand::Event {
+                event: ProjectionEvent::AssistantDelta { .. },
+                ..
+            }
+        )
+    }) {
         commands.remove(index);
     }
 }
