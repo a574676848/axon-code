@@ -86,7 +86,7 @@ fn tool_row_target_is_bounded_to_one_line() {
 }
 
 #[test]
-fn card_puts_body_first_then_process_rows_then_terminal_footer() {
+fn card_puts_process_rows_first_then_body_then_terminal_footer() {
     let mut projection = projection_with_body("结论正文");
     projection.apply(ProjectionEvent::ToolStarted {
         call_id: "call-1".to_owned(),
@@ -105,7 +105,10 @@ fn card_puts_body_first_then_process_rows_then_terminal_footer() {
     let markdown = content["body"]["elements"][0]["content"]
         .as_str()
         .expect("markdown");
-    assert_eq!(markdown, "结论正文\n\n◌ **读取** · a.md");
+    assert_eq!(
+        markdown, "◌ **读取** · a.md\n\n结论正文",
+        "结论必须在过程行下方：卡片向下生长，读者不该为看结论向上回滚"
+    );
     assert!(
         !markdown.contains("cpa/gemini"),
         "运行期不渲染路由，避免状态变化触发无效 PATCH"
@@ -118,12 +121,12 @@ fn card_puts_body_first_then_process_rows_then_terminal_footer() {
         .expect("markdown");
     assert_eq!(
         markdown,
-        "结论正文\n\n◌ **读取** · a.md\n\n已完成 · 12.4s · cpa/gemini-3.8-flash-high"
+        "◌ **读取** · a.md\n\n结论正文\n\n已完成 · 12.4s · cpa/gemini-3.8-flash-high"
     );
 }
 
 #[test]
-fn card_window_drops_oldest_rows_and_reports_the_count() {
+fn card_window_keeps_only_the_latest_five_rows() {
     let mut projection = ProgressProjection::default();
     for index in 0..(PROCESS_WINDOW_ROWS + 5) {
         projection.apply(ProjectionEvent::ToolStarted {
@@ -138,13 +141,30 @@ fn card_window_drops_oldest_rows_and_reports_the_count() {
     let markdown = content["body"]["elements"][0]["content"]
         .as_str()
         .expect("markdown");
-    assert!(markdown.starts_with("… 更早 5 条过程已省略\n"));
-    assert!(markdown.contains("file-34.md"), "最近的行必须保留");
+    assert!(
+        markdown.starts_with("… 5 个动作已省略\n"),
+        "更早的 5 个动作必须压成一行计数：{markdown}"
+    );
+    assert!(markdown.contains("file-9.md"), "最近的行必须保留");
     assert!(!markdown.contains("file-4.md"), "窗口外的行必须让位");
 }
 
 #[test]
-fn card_stays_within_serialized_budget_by_shrinking_process_rows_first() {
+fn budget_shrink_drops_all_rows_before_touching_body() {
+    let rows = vec!["✓ **执行** · a".to_owned(), "✓ **执行** · b".to_owned()];
+    assert_eq!(
+        assemble("结论", &rows, None, 0),
+        "结论",
+        "预算极紧时过程行先让位，正文必须保住"
+    );
+    assert_eq!(
+        assemble("结论", &rows, None, rows.len()),
+        "✓ **执行** · a\n✓ **执行** · b\n\n结论"
+    );
+}
+
+#[test]
+fn maximal_body_and_window_stay_within_budget() {
     let mut projection = projection_with_body(&"结".repeat(PROGRESS_CARD_MAX_CHARS));
     for index in 0..PROCESS_WINDOW_ROWS {
         projection.apply(ProjectionEvent::ToolStarted {
@@ -159,19 +179,7 @@ fn card_stays_within_serialized_budget_by_shrinking_process_rows_first() {
         "卡片序列化 {} 字节越过预算",
         rendered.content_json.len()
     );
-    assert!(
-        rendered.body_complete,
-        "预算不足时必须先收过程行，正文不得被截断"
-    );
-    let content: serde_json::Value =
-        serde_json::from_str(&rendered.content_json).expect("卡片 JSON");
-    let markdown = content["body"]["elements"][0]["content"]
-        .as_str()
-        .expect("markdown");
-    assert!(
-        markdown.contains("条过程已省略"),
-        "过程行必须让位给正文：{markdown}"
-    );
+    assert!(rendered.body_complete, "正文未超字符上限时不得被预算截断");
 }
 
 #[test]

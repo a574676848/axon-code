@@ -1,6 +1,6 @@
 //! 飞书进度卡的折叠态渲染（纯函数，无 I/O、无状态）。
 //!
-//! 卡片结构固定：header + **一个** markdown 元素。正文在前、过程行在后、终态页脚收尾。
+//! 卡片结构固定：header + **一个** markdown 元素。过程行在上、结论在下、终态页脚收尾。
 //! 过程行不提供展开，因此每一行必须自足：
 //!
 //! ```text
@@ -32,10 +32,13 @@ const PROGRESS_CARD_MAX_CHARS: usize = 8_000;
 const TOOL_TARGET_MAX_CHARS: usize = 80;
 /// 行尾读数上限。
 const TOOL_META_MAX_CHARS: usize = 24;
-/// 过程行窗口：超出后只留最近的行，更早的压成一行计数。
-const PROCESS_WINDOW_ROWS: usize = 30;
+/// 过程行窗口：只留最近 5 行，更早的压成一行计数。
+///
+/// 卡片是一条向下生长的消息，结论始终在最底部；过程行留太多会把结论推远，
+/// 也会让长回合的卡片在手机端失去可读性。
+const PROCESS_WINDOW_ROWS: usize = 5;
 /// 收过程行窗口时的单次步长。
-const PROCESS_WINDOW_STEP: usize = 10;
+const PROCESS_WINDOW_STEP: usize = 5;
 /// 卡片序列化安全预算，低于飞书 30KB 上限。
 const CARD_BUDGET_BYTES: usize = 28_000;
 
@@ -323,21 +326,24 @@ fn compact_tokens(tokens: u64) -> String {
     }
 }
 
-/// 按到达顺序拼装卡片正文：正文块、过程行、页脚之间各留一个空行。
+/// 拼装卡片正文：过程行在上、结论在下、页脚收尾，块之间各留一个空行。
+///
+/// 顺序不能反过来：卡片是一条持续向下生长的消息，工具调用越多，正文越应留在
+/// 最下面，否则读者每来一个工具行都要向上回滚才能看到结论。
 fn assemble(body: &str, rows: &[String], footer: Option<&str>, window: usize) -> String {
     let mut out = String::new();
-    if !body.is_empty() {
-        out.push_str(body);
-    }
     if !rows.is_empty() && window > 0 {
         let start = rows.len().saturating_sub(window);
+        if start > 0 {
+            out.push_str(&format!("… {start} 个动作已省略\n"));
+        }
+        out.push_str(&rows[start..].join("\n"));
+    }
+    if !body.is_empty() {
         if !out.is_empty() {
             out.push_str("\n\n");
         }
-        if start > 0 {
-            out.push_str(&format!("… 更早 {start} 条过程已省略\n"));
-        }
-        out.push_str(&rows[start..].join("\n"));
+        out.push_str(body);
     }
     if let Some(footer) = footer {
         if !out.is_empty() {
