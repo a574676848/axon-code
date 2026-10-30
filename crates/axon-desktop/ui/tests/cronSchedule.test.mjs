@@ -42,6 +42,27 @@ test('连续小时逗号列表归一化为时段', () => {
     assert.equal(encodeSchedule(form), '0 9-20 * * *');
 });
 
+test('等差的小时逗号列表归一化为区间加步长', () => {
+    const expression = '0 9,12,15,18,21 * * *';
+    const form = parseSchedule(expression);
+    assert.equal(form.mode, 'daily');
+    assert.equal(form.span, true);
+    assert.equal(form.spanEvery, '3');
+    assert.equal(scheduleText(expression), '每天 9 点到 21 点每 3 小时');
+    assert.equal(encodeSchedule(form), '0 9-21/3 * * *');
+    assert.equal(parseSchedule('0 9,12,14 * * *').mode, 'custom', '非等差仍回落自定义');
+});
+
+test('不可编辑但合法的计划同样读成中文', () => {
+    assert.equal(scheduleText('* * * * *'), '每分钟');
+    assert.equal(scheduleText('0,30 * * * *'), '每小时的第 0、30 分');
+    assert.equal(scheduleText('0 */2 * * *'), '0 点到 22 点每 2 小时');
+    assert.equal(scheduleText('0 0 1,15 * *'), '每月 1、15 日 00:00');
+    assert.equal(scheduleText('0 0 1 1 *'), '每年 1 月 1 日 00:00');
+    assert.equal(scheduleText('0 9 1 * 1'), '每月 1 日或每周一 09:00');
+    assert.equal(scheduleText('0 9 * * 1,3,5'), '每周一、周三、周五 09:00');
+});
+
 test('一次执行按全站时刻口径展示', () => {
     assert.equal(scheduleText('once:2099-12-31T23:30:00'), '2099年12月31日 23:30 执行一次');
 });
