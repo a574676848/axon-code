@@ -17,6 +17,11 @@
 
 ### 阶段 I：实施与编码
 
+1. **代码操作工具优先级 (CRITICAL)**：检索、读取、修改代码一律按下列顺序选择工具，严禁跳过前两级直接用命令行。
+   * **第一优先：MCP 代码能力**。`codebase-memory-mcp` 可用时，结构、定义、调用拓扑与架构关系必须走 `search_graph` / `trace_path` / `get_code_snippet` / `query_graph` / `get_architecture`；`morph-mcp` 可用时，语义定位走 `codebase_search`，核心逻辑修改走 `edit_file`。
+   * **第二优先：内置工具**。MCP 不可用或未覆盖该内容时，用 `read` / `grep` / `glob` / `edit` / `write` 完成同类操作。
+   * **最后兜底：命令行**。仅在构建、测试、格式化、版本控制、运行态取证等 MCP 与内置工具都无法承担的场景才使用 shell；能用工具完成却改用 `Get-Content`、`Select-String`、`findstr`、`rg`、`sed`、`cat`、`echo >` 等命令读取或改写代码文件，属于违规。
+   * **降级须有证据**：声明 MCP 不可用前，必须依据当前会话可见的工具回执或一次真实调用失败，禁止凭猜测降级到命令行。
 2. **编码实现**：借鉴源码，可将优秀的源码转换成 Rust 编写完整逻辑，确保无缺失功能，移除所有临时占位符，避免重复造轮子。
 
 #### axon-desktop 桌面端开发约束 (必须执行)
