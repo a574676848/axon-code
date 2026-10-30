@@ -48,7 +48,15 @@ axon persona style list [--all]|retire <style-id>
 axon persona reset [--yes]
 
 axon doctor [--check <area>] [--verbose] [--fix]
-axon cron list [--limit <n>] [--include-removed] | create --name <NAME> --schedule <SCHEDULE> [--prompt <text>] [--skill <name>] [--workdir <dir>] [--no-agent --script <path>] [--wake feishu:<chat_id> | --wake session:<channel>:<destination>] | update <JOB_ID> [--wake ...|--clear-wake] ... | pause|resume|remove|run <JOB_ID> | tick [--limit <n>]
+axon cron list [--limit <n>] [--include-removed] | create --name <NAME> --schedule <SCHEDULE> [--prompt <text>] [--skill <name>] [--workdir <dir>] [--no-agent --script <path>] [--wake feishu:<chat_id> | --wake session:<channel>:<destination>] | update <JOB_ID> [--schedule <SCHEDULE>|--wake ...|--clear-wake] ... | pause|resume|remove|run <JOB_ID> | tick [--limit <n>] | holiday sync [--year <年份>]...|status
+                               # --schedule 三类写法，字段自由组合：
+                               #   interval:30m
+                               #   once:2026-11-01T09:00:00
+                               #   [workday:|weekday:|holiday:|weekend:]分 时 日 月 星期
+                               # 字段支持 * ? 单值 区间 1-9 步长 */5 范围步长 9-18/2 单值步长 9/2 逗号 9,12-14
+                               # 例：workday:0 8-20 * * *、workday:*/30 9-18 * * *、holiday:0 10 * * *
+                               # 别名 @hourly @daily @midnight @weekly @monthly @yearly @annually
+                               # 别名只压缩时间、不带日历语义、可叠前缀、不接受时刻后缀
 axon remote status|subscriptions|outbox|audit|feishu-status|feishu-worklist|render-feishu|deliver-feishu|execute-feishu-sdk-loop|simulate-feishu ...
 axon remote revoke <SESSION_ID> <SUBSCRIBER_ID>
 axon lsp servers|workspace-symbol|definition|references|diagnostics ...    # 通用参数：--workspace-root <dir>、--plan-only

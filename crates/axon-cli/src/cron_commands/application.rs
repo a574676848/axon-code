@@ -25,9 +25,10 @@ use super::{
         CronTickCommand, CronUpdateCommand,
     },
     execution::{CronExecutionAdapter, execute_cron_job},
+    holiday_commands,
     render::render_cron,
     repository::{CronClaim, CronRepository},
-    schedule::{next_run_after, parse_schedule},
+    schedule::{next_run_after, parse_schedule, require_next_run},
     wake::LEGACY_DELIVERY_ARGS_HINT,
 };
 
@@ -84,6 +85,9 @@ pub(crate) fn run_cron(
     format: OutputFormat,
     config_path: Option<&Path>,
 ) -> CliRunResult {
+    if let CronAction::Holiday(command) = &command.action {
+        return holiday_commands::run_holiday(command, format);
+    }
     let (_, context) = match load_remote_context(config_path) {
         Ok(context) => context,
         Err(error) => return cli_error(error),
@@ -100,6 +104,8 @@ pub(crate) fn run_cron(
         }
         CronAction::Run(command) => run_job(&adapter, command),
         CronAction::Tick(command) => tick_jobs(&adapter, command),
+        // 节假日命令已在函数入口提前返回，这里只为满足穷尽匹配。
+        CronAction::Holiday(_) => unreachable!("节假日命令已在入口处理"),
     };
     match report {
         Ok(report) => render_cron(format, &report),
@@ -316,7 +322,7 @@ fn create_job(
             script: command.script.clone(),
         },
         created_at_ms,
-        next_run_after(&schedule, created_at_ms),
+        Some(require_next_run(&schedule, created_at_ms)?),
     )
     .map_err(|error| error.to_string())?;
     repository.save_job(&job)?;
@@ -332,12 +338,13 @@ fn update_job(
     let updated_at_ms = now_ms();
     let schedule_text = command.schedule.as_deref().unwrap_or(&job.schedule);
     let schedule = parse_schedule(schedule_text)?;
+    let next_run_at_ms = if command.schedule.is_some() {
+        Some(require_next_run(&schedule, updated_at_ms)?)
+    } else {
+        job.next_run_at_ms
+    };
     let updated = job
-        .with_update(
-            update_input(command)?,
-            updated_at_ms,
-            next_run_after(&schedule, updated_at_ms),
-        )
+        .with_update(update_input(command)?, updated_at_ms, next_run_at_ms)
         .map_err(|error| error.to_string())?;
     repository.save_job(&updated)?;
     report(adapter, CRON_STATUS_UPDATED, &[updated], Vec::new(), false)

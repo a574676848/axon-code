@@ -8,7 +8,7 @@ use crate::cron_commands::{
     CRON_AGENT_CHANNEL, MEMORY_CONSOLIDATION_CRON_JOB_ID, SESSION_CLEANUP_CRON_JOB_ID,
     execute_and_persist, is_system_job, local_cron_session_key, parse_wake,
     repository::CronRepository,
-    schedule::{next_run_after, parse_schedule},
+    schedule::{parse_schedule, require_next_run},
     suggested_feishu_chat_id, wake_text,
 };
 use crate::remote_commands::{FeishuCronAdapter, load_remote_context};
@@ -246,7 +246,7 @@ impl CronHttpAdapter {
                 script: request.script,
             },
             now,
-            next_run_after(&schedule, now),
+            Some(require_next_run(&schedule, now).map_err(CronHttpError::bad_request)?),
         )
         .map_err(|e| CronHttpError::bad_request(e.to_string()))?;
         self.repository()?
@@ -268,6 +268,7 @@ impl CronHttpAdapter {
             .ok_or_else(|| CronHttpError::not_found("未找到 Cron 任务"))?;
         let schedule_text = request.schedule.as_deref().unwrap_or(&current.schedule);
         let schedule = parse_schedule(schedule_text).map_err(CronHttpError::bad_request)?;
+        let has_schedule = request.schedule.is_some();
         let wake = request
             .wake
             .as_deref()
@@ -287,12 +288,14 @@ impl CronHttpAdapter {
             script: request.script,
             replace_script: request.replace_script,
         };
+        let now = axon_time::unix_now_ms();
+        let next_run_at_ms = if has_schedule {
+            Some(require_next_run(&schedule, now).map_err(CronHttpError::bad_request)?)
+        } else {
+            current.next_run_at_ms
+        };
         let updated = current
-            .with_update(
-                update,
-                axon_time::unix_now_ms(),
-                next_run_after(&schedule, axon_time::unix_now_ms()),
-            )
+            .with_update(update, now, next_run_at_ms)
             .map_err(|e| CronHttpError::bad_request(e.to_string()))?;
         repository
             .save_job(&updated)

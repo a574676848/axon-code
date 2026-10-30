@@ -27,14 +27,62 @@ pub(crate) enum CronAction {
     Run(CronRunCommand),
     /// 执行一次用户级 Agent Cron tick。
     Tick(CronTickCommand),
+    /// 同步或查看法定节假日年历。
+    Holiday(CronHolidayCommand),
+}
+
+#[derive(Debug, Clone, Args, PartialEq, Eq)]
+pub(crate) struct CronHolidayCommand {
+    #[command(subcommand)]
+    pub(crate) action: CronHolidayAction,
+}
+
+#[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
+pub(crate) enum CronHolidayAction {
+    /// 从远端年历同步节假日安排。
+    Sync(CronHolidaySyncCommand),
+    /// 查看已同步年份、数据目录与数据源。
+    Status,
+}
+
+#[derive(Debug, Clone, Args, PartialEq, Eq)]
+pub(crate) struct CronHolidaySyncCommand {
+    /// 指定年份，可重复；省略时同步当前年与次年。
+    #[arg(long = "year")]
+    pub(crate) years: Vec<i32>,
 }
 
 #[derive(Debug, Clone, Args, PartialEq, Eq)]
 pub(crate) struct CronCreateCommand {
     #[arg(long)]
     pub(crate) name: String,
-    /// 计划表达式：`interval:5m`、本地时间 `once:YYYY-MM-DDTHH:MM:SS` 或五段 cron。
-    #[arg(long)]
+    /// 计划表达式，三类写法。
+    ///
+    /// 固定间隔：`interval:<数值><单位>`，单位 ms、s、m、h，例如 interval:30m。
+    ///
+    /// 一次性任务：`once:YYYY-MM-DDTHH:MM:SS`，按本机时区解析。
+    ///
+    /// cron 计划：`[日历前缀:]分 时 日 月 星期`，五个字段均支持 * 与 ?、
+    /// 单值、区间 1-9、步长 */5、范围步长 9-18/2、单值步长 9/2、逗号组合 9,12-14；
+    /// 星期 0 表示周日。日与星期一侧为 * 或 ? 时只按另一侧判定，
+    /// 两侧都具体时任一满足即触发。
+    ///
+    /// 日历前缀可选且能与任意字段自由组合，按中国日历筛选日期
+    /// （weekday 只按周一到周五，不读年历）：
+    /// workday 表示工作日（排除法定节假日，含调休上班日），
+    /// weekday 表示周一至周五（不看节假日），
+    /// holiday 表示法定节假日，weekend 表示周末（排除调休上班日）。
+    ///
+    /// 例：`workday:0 8-20 * * *` 工作日 8 点到 20 点每个整点；
+    /// `workday:*/30 9-18 * * *` 工作日 9 点到 18 点每半小时；
+    /// `holiday:0 10 * * *` 法定节假日 10 点；
+    /// `weekend:0 9 * * *` 周末 9 点。
+    ///
+    /// 另支持标准别名 @hourly、@daily、@midnight、@weekly、@monthly、
+    /// @yearly、@annually，也可加日历前缀，例如 `workday:@daily`。
+    ///
+    /// 日历按本机时区判定，年历数据用 axon cron holiday sync 更新。
+    #[arg(long, verbatim_doc_comment)]
     pub(crate) schedule: String,
     #[arg(long, default_value = "")]
     pub(crate) prompt: String,
@@ -69,8 +117,15 @@ pub(crate) struct CronUpdateCommand {
     pub(crate) job_id: String,
     #[arg(long)]
     pub(crate) name: Option<String>,
-    /// 计划表达式：`interval:5m`、本地时间 `once:YYYY-MM-DDTHH:MM:SS` 或五段 cron。
-    #[arg(long)]
+    /// 计划表达式，语法与 create 的 `--schedule` 完全一致：
+    /// `interval:<数值><单位>`、`once:YYYY-MM-DDTHH:MM:SS`、或
+    /// `[日历前缀:]分 时 日 月 星期`，也接受 @hourly、@daily 等标准别名。
+    ///
+    /// 五个字段均支持 * 与 ?、单值、区间 1-9、步长 */5、范围步长 9-18/2、
+    /// 单值步长 9/2、逗号组合 9,12-14；日与星期一侧为 * 或 ? 时只按另一侧判定。
+    /// 日历前缀 workday、weekday、holiday、weekend 可与任意字段组合，
+    /// 例如 workday:0 8-20 * * *；weekday 只按周一到周五，不读年历。
+    #[arg(long, verbatim_doc_comment)]
     pub(crate) schedule: Option<String>,
     #[arg(long)]
     pub(crate) prompt: Option<String>,
