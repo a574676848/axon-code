@@ -1,16 +1,15 @@
 use axon_daemon::{GatewayHttpResponse, GatewayHttpRouteHandler};
-use axon_domain::{
-    CronDeliveryTarget, CronJob, CronJobInput, CronJobStatus, CronJobUpdate, CronRunRecord,
-};
+use axon_domain::{CronJob, CronJobInput, CronJobStatus, CronJobUpdate, CronRunRecord};
 use axon_session::{WorkspaceResolver, session_lane_id};
 use serde::Deserialize;
 use std::path::PathBuf;
 
 use crate::cron_commands::{
-    CRON_AGENT_CHANNEL, CronExecutionAdapter, MEMORY_CONSOLIDATION_CRON_JOB_ID,
-    SESSION_CLEANUP_CRON_JOB_ID, execute_and_persist, is_system_job, local_cron_session_key,
+    CRON_AGENT_CHANNEL, MEMORY_CONSOLIDATION_CRON_JOB_ID, SESSION_CLEANUP_CRON_JOB_ID,
+    execute_and_persist, is_system_job, local_cron_session_key, parse_wake,
     repository::CronRepository,
     schedule::{next_run_after, parse_schedule},
+    suggested_feishu_chat_id, wake_text,
 };
 use crate::remote_commands::{FeishuCronAdapter, load_remote_context};
 use crate::usage_statistics::USAGE_ROLLUP_CRON_JOB_ID;
@@ -30,9 +29,8 @@ struct CronCreateRequest {
     prompt: String,
     #[serde(default)]
     skills: Vec<String>,
-    #[serde(default)]
-    recipient_id: String,
-    thread_id: Option<String>,
+    /// 唤醒目标：`feishu:<chat_id>` 或 `session:<channel>:<destination>`；省略时不投递。
+    wake: Option<String>,
     workdir: Option<String>,
     #[serde(default)]
     no_agent: bool,
@@ -46,10 +44,11 @@ struct CronUpdateRequest {
     schedule: Option<String>,
     prompt: Option<String>,
     skills: Option<Vec<String>>,
-    recipient_id: Option<String>,
-    thread_id: Option<String>,
+    /// 新的唤醒目标。
+    wake: Option<String>,
+    /// 是否替换唤醒目标；传 `wake` 时自动视为替换。
     #[serde(default)]
-    replace_thread: bool,
+    replace_wake: bool,
     workdir: Option<String>,
     #[serde(default)]
     replace_workdir: bool,
@@ -169,6 +168,15 @@ impl CronHttpAdapter {
         let mut payload =
             serde_json::to_value(&job).map_err(|e| CronHttpError::internal(e.to_string()))?;
         if let Some(object) = payload.as_object_mut() {
+            // 对外契约与 `--wake` 同款字符串；domain 的序列化形态是带标签对象，
+            // 直接透出会让前端与 CLI 拿到两种形状。
+            object.insert(
+                "wake".to_owned(),
+                match job.wake.as_ref() {
+                    Some(wake) => serde_json::Value::String(wake_text(wake)),
+                    None => serde_json::Value::Null,
+                },
+            );
             object.insert("system".to_owned(), serde_json::Value::Bool(system));
             object.insert(
                 "sessionId".to_owned(),
@@ -219,13 +227,12 @@ impl CronHttpAdapter {
             "axon.user.{}",
             axon_crypto::sha256_hex_prefix(format!("{}:{now}", request.name.trim()).as_bytes(), 20)
         );
-        let delivery = if request.recipient_id.trim().is_empty() {
-            CronDeliveryTarget::none()
-        } else {
-            let (_, context) =
-                load_remote_context(Some(&self.config_path)).map_err(CronHttpError::internal)?;
-            FeishuCronAdapter::new(context).delivery_target(request.recipient_id, request.thread_id)
-        };
+        let wake = request
+            .wake
+            .as_deref()
+            .map(parse_wake)
+            .transpose()
+            .map_err(CronHttpError::bad_request)?;
         let job = CronJob::new(
             CronJobInput {
                 job_id,
@@ -233,7 +240,7 @@ impl CronHttpAdapter {
                 schedule: request.schedule,
                 prompt: request.prompt,
                 skills: request.skills,
-                delivery,
+                wake,
                 workdir: request.workdir,
                 no_agent: request.no_agent,
                 script: request.script,
@@ -255,35 +262,25 @@ impl CronHttpAdapter {
         let request: CronUpdateRequest = serde_json::from_slice(body)
             .map_err(|e| CronHttpError::bad_request(format!("解析 Cron 更新请求失败：{e}")))?;
         let repository = self.repository()?;
-        let mut current = repository
+        let current = repository
             .find_job(job_id)
             .map_err(CronHttpError::internal)?
             .ok_or_else(|| CronHttpError::not_found("未找到 Cron 任务"))?;
         let schedule_text = request.schedule.as_deref().unwrap_or(&current.schedule);
         let schedule = parse_schedule(schedule_text).map_err(CronHttpError::bad_request)?;
-        if let Some(recipient) = request.recipient_id.as_deref() {
-            current.delivery = if recipient.trim().is_empty() {
-                CronDeliveryTarget::none()
-            } else {
-                let (_, context) = load_remote_context(Some(&self.config_path))?;
-                FeishuCronAdapter::new(context).delivery_target(
-                    recipient.trim().to_owned(),
-                    if request.replace_thread {
-                        request.thread_id.clone()
-                    } else {
-                        current.delivery.thread_id.clone()
-                    },
-                )
-            };
-        }
+        let wake = request
+            .wake
+            .as_deref()
+            .map(parse_wake)
+            .transpose()
+            .map_err(CronHttpError::bad_request)?;
         let update = CronJobUpdate {
             name: request.name,
             schedule: request.schedule,
             prompt: request.prompt,
             skills: request.skills,
-            recipient_id: request.recipient_id,
-            thread_id: request.thread_id,
-            replace_thread: request.replace_thread,
+            wake,
+            replace_wake: request.replace_wake || request.wake.is_some(),
             workdir: request.workdir,
             replace_workdir: request.replace_workdir,
             no_agent: request.no_agent,
@@ -377,9 +374,18 @@ impl CronHttpAdapter {
     }
 
     fn config(&self) -> Result<serde_json::Value, CronHttpError> {
-        Ok(
-            serde_json::json!({ "axonRoot": self.axon_root, "configPath": self.config_path, "storePath": self.repository()?.path(), "systemJobIds": [MEMORY_CONSOLIDATION_CRON_JOB_ID, SESSION_CLEANUP_CRON_JOB_ID, USAGE_ROLLUP_CRON_JOB_ID] }),
-        )
+        Ok(serde_json::json!({
+            "axonRoot": self.axon_root,
+            "configPath": self.config_path,
+            "storePath": self.repository()?.path(),
+            "systemJobIds": [
+                MEMORY_CONSOLIDATION_CRON_JOB_ID,
+                SESSION_CLEANUP_CRON_JOB_ID,
+                USAGE_ROLLUP_CRON_JOB_ID,
+            ],
+            // 仅作提示：任务的实际投递目标永远来自它自己声明的 wake。
+            "defaultNotificationChatId": suggested_feishu_chat_id(&self.config_path),
+        }))
     }
 }
 

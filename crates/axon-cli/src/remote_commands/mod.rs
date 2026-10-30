@@ -72,7 +72,9 @@ use remote_support::{
     subscription_view,
 };
 
-pub(crate) use remote_feishu_completion_inbox::drain_feishu_completion_inbox;
+pub(crate) use remote_feishu_completion_inbox::{
+    drain_feishu_completion_inbox, feishu_channel_enabled,
+};
 
 type DeliveryWakeHandler = dyn Fn() + Send + Sync + 'static;
 static DELIVERY_WAKE_HANDLER: OnceLock<Arc<DeliveryWakeHandler>> = OnceLock::new();

@@ -2,9 +2,7 @@
 
 use super::{
     DEFAULT_QUEUE_LIMIT, DaemonHost, DaemonHostError, UPGRADE_GRACE_PERIOD_MS,
-    completion_delivery::{
-        CLIENT_PRESENCE_TTL_MS, COMPLETION_DISPATCH_BATCH_LIMIT, settle_notification_results,
-    },
+    completion_delivery::{CLIENT_PRESENCE_TTL_MS, settle_notification_results},
     daemon_host_projection::{attach_cursor, snapshot_chunk_responses, snapshot_to_json},
 };
 use crate::ports::ProcessIdentity;
@@ -169,13 +167,9 @@ where
         self.store
             .register_client_presence(&presence)
             .map_err(|error| DaemonHostError::Worker(error.to_string()))?;
-        // 客户端上线后立即补投：此前因为没有可用渠道而保留在收件箱的通知必须
-        // 尽快派发，不能等到下一次维护 tick。
-        let dispatched = self.dispatch_pending_completions(COMPLETION_DISPATCH_BATCH_LIMIT)?;
         Ok(serde_json::json!({
             "clientId": client_id,
             "registered": true,
-            "dispatched": dispatched,
         }))
     }
 
@@ -285,16 +279,20 @@ where
 
     /// 登记一条正文已就绪的投递项，并返回它在持久收件箱里的稳定 ID。
     ///
-    /// 定时任务等系统发起的投递走这里：正文已经就绪，不需要再通知主 turn，只需要
-    /// 登记到所有可用渠道并由渠道消费者各自确认送达。
+    /// 定时任务等系统发起的投递走这里：正文已经就绪，不需要再通知主 turn；调用方
+    /// 必须显式给出唯一投递目标，服务端不再替它推断「谁可能在线」。
     fn enqueue_delivery_value(
         &self,
         request: axon_protocol::EnqueueDeliveryRequest,
     ) -> Result<serde_json::Value, DaemonHostError> {
+        let channel = required_target("channel", request.channel.as_deref())?;
+        let destination = required_target("destination", request.destination.as_deref())?;
         let (notification_id, targets) = self.enqueue_ready_delivery(
             &request.workspace_id,
             &request.goal_id,
             &request.delivery_id,
+            channel,
+            destination,
             &request.content,
         )?;
         serialize(axon_protocol::EnqueueDeliveryReceipt {
@@ -425,6 +423,17 @@ fn request_error(request_id: String, error: DaemonHostError) -> DaemonResponse {
         body: serde_json::json!({"error": error.to_string()}),
         cursor: None,
     }
+}
+
+/// 取必填的投递目标字段；缺省或空白一律视为请求不合法。
+///
+/// `EnqueueDelivery` 的唯一职责就是「把这段正文送到调用方指定的地方」，没有目标时
+/// 返回成功回执等于制造一次假投递：正文根本不会落库，调用方却以为已经登记。
+fn required_target<'a>(field: &str, value: Option<&'a str>) -> Result<&'a str, DaemonHostError> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| DaemonHostError::Worker(format!("EnqueueDelivery 必须提供非空 {field}")))
 }
 
 fn inbox_entry_json(entry: &axon_session::ClientInboxEntry) -> serde_json::Value {

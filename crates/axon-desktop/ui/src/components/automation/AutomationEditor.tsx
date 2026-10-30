@@ -1,36 +1,11 @@
 import React from "react";
 import { CheckIcon, CloseIcon } from "../../icons";
 import { Button, Checkbox, Input, Textarea } from "../ui/controls";
-import { FormField, ToggleField } from "../ui/surfaces";
+import { FormField, Text, ToggleField } from "../ui/surfaces";
 import { SkillsMultiSelect } from "./SkillsMultiSelect";
 import { ScheduleFields } from "./ScheduleFields";
 import type { ScheduleForm } from "./schedule";
-
-/** 编辑器持有的全部字段；页面在打开编辑时用它快照任务。 */
-export type FormState = {
-  name: string;
-  schedule: string;
-  prompt: string;
-  recipientId: string;
-  threadId: string;
-  workdir: string;
-  skills: string[];
-  noAgent: boolean;
-  script: string;
-};
-
-/** 新建任务时的空表单。 */
-export const EMPTY_FORM: FormState = {
-  name: "",
-  schedule: "0 9 * * *",
-  prompt: "",
-  recipientId: "",
-  threadId: "",
-  workdir: "",
-  skills: [],
-  noAgent: false,
-  script: "",
-};
+import type { FormState } from "./jobForm";
 
 /**
  * 任务编辑表单：字段标签 12/16，值 14/20，动作按钮统一 28。
@@ -64,13 +39,16 @@ export const AutomationEditor: React.FC<{
         aria-label="任务提示词"
       />
     </FormField>
-    <FormField label="投递目标">
+    <FormField label="投递目标（feishu:<chat_id> 或 session:<channel>:<destination>）">
       <Input
-        value={form.recipientId}
-        onChange={(event) => onFormChange({ recipientId: event.target.value })}
-        placeholder="可选，留空则仅在会话中查看结果"
-        aria-label="投递目标 ID"
+        value={form.wake}
+        onChange={(event) => onFormChange({ wake: event.target.value })}
+        placeholder="feishu:oc_xxx 或 session:desktop:workbench-1"
+        aria-label="投递目标 wake"
       />
+      <Text size="xs" tone="tertiary" className="block break-words">
+        channel 只能是 feishu 或 desktop。留空则不投递：任务执行完只记录运行事实。
+      </Text>
     </FormField>
     <FormField label="Skills">
       <SkillsMultiSelect

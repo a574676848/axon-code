@@ -2,8 +2,7 @@ use std::path::Path;
 
 use axon_crypto::sha256_hex_prefix;
 use axon_domain::{
-    CronDeliveryAdapter, CronDeliveryTarget, CronJob, CronJobInput, CronJobStatus, CronJobUpdate,
-    CronRunRecord,
+    CronJob, CronJobInput, CronJobStatus, CronJobUpdate, CronRunRecord, CronWakeTarget,
 };
 use serde::Serialize;
 
@@ -29,6 +28,7 @@ use super::{
     render::render_cron,
     repository::{CronClaim, CronRepository},
     schedule::{next_run_after, parse_schedule},
+    wake::LEGACY_DELIVERY_ARGS_HINT,
 };
 
 const CRON_DEFAULT_LIMIT: usize = 20;
@@ -75,10 +75,8 @@ pub(super) struct CronJobView {
     pub(super) next_run_at_ms: Option<u64>,
     pub(super) last_run_at_ms: Option<u64>,
     pub(super) revision: u64,
-    pub(super) delivery_adapter: CronDeliveryAdapter,
-    pub(super) session_id: u64,
-    pub(super) recipient_id: String,
-    pub(super) thread_id: Option<String>,
+    /// 唤醒目标展示文本；未声明目标时为 `None`。
+    pub(super) wake: Option<String>,
 }
 
 pub(crate) fn run_cron(
@@ -254,7 +252,7 @@ fn ensure_system_cron(axon_root: &Path, spec: SystemCronSpec) -> Result<String, 
             schedule,
             prompt: String::new(),
             skills: Vec::new(),
-            delivery: CronDeliveryTarget::none(),
+            wake: None,
             workdir: None,
             no_agent: true,
             script: Some(spec.script.to_owned()),
@@ -283,7 +281,7 @@ fn system_cron_matches(existing: &CronJob, desired: &CronJob) -> bool {
         && existing.schedule == desired.schedule
         && existing.prompt == desired.prompt
         && existing.skills == desired.skills
-        && existing.delivery == desired.delivery
+        && existing.wake == desired.wake
         && existing.workdir == desired.workdir
         && existing.no_agent == desired.no_agent
         && existing.script == desired.script
@@ -294,6 +292,10 @@ fn create_job(
     adapter: &dyn CronExecutionAdapter,
     command: &CronCreateCommand,
 ) -> Result<CronReport, String> {
+    reject_legacy_delivery_args(
+        command.feishu_chat_id.as_ref(),
+        command.feishu_thread_id.as_ref(),
+    )?;
     let repository = CronRepository::open(adapter.axon_root())?;
     let created_at_ms = now_ms();
     let schedule = parse_schedule(&command.schedule)?;
@@ -304,12 +306,11 @@ fn create_job(
             schedule: command.schedule.clone(),
             prompt: command.prompt.clone(),
             skills: command.skills.clone(),
-            delivery: command.feishu_chat_id.as_ref().map_or_else(
-                CronDeliveryTarget::none,
-                |recipient_id| {
-                    adapter.delivery_target(recipient_id.clone(), command.feishu_thread_id.clone())
-                },
-            ),
+            wake: command
+                .wake
+                .as_deref()
+                .map(super::wake::parse_wake)
+                .transpose()?,
             workdir: path_text(command.workdir.as_deref())?,
             no_agent: command.no_agent,
             script: command.script.clone(),
@@ -446,6 +447,10 @@ fn required_job(repository: &CronRepository, job_id: &str) -> Result<CronJob, St
 }
 
 fn update_input(command: &CronUpdateCommand) -> Result<CronJobUpdate, String> {
+    reject_legacy_delivery_args(
+        command.feishu_chat_id.as_ref(),
+        command.feishu_thread_id.as_ref(),
+    )?;
     Ok(CronJobUpdate {
         name: command.name.clone(),
         schedule: command.schedule.clone(),
@@ -457,9 +462,12 @@ fn update_input(command: &CronUpdateCommand) -> Result<CronJobUpdate, String> {
         } else {
             Some(command.skills.clone())
         },
-        recipient_id: command.feishu_chat_id.clone(),
-        thread_id: command.feishu_thread_id.clone(),
-        replace_thread: command.clear_thread || command.feishu_thread_id.is_some(),
+        wake: command
+            .wake
+            .as_deref()
+            .map(super::wake::parse_wake)
+            .transpose()?,
+        replace_wake: command.clear_wake || command.wake.is_some(),
         workdir: path_text(command.workdir.as_deref())?,
         replace_workdir: command.clear_workdir || command.workdir.is_some(),
         no_agent: command.no_agent,
@@ -502,11 +510,30 @@ fn job_view(job: &CronJob) -> CronJobView {
         next_run_at_ms: job.next_run_at_ms,
         last_run_at_ms: job.last_run_at_ms,
         revision: job.revision,
-        delivery_adapter: job.delivery.adapter,
-        session_id: job.delivery.session_id,
-        recipient_id: job.delivery.recipient_id.clone(),
-        thread_id: job.delivery.thread_id.clone(),
+        wake: job.wake.as_ref().map(wake_text),
     }
+}
+
+/// 唤醒目标的命令行展示文本；与 `--wake` 的输入格式一致。
+pub(crate) fn wake_text(wake: &CronWakeTarget) -> String {
+    match wake {
+        CronWakeTarget::Feishu(chat_id) => format!("feishu:{chat_id}"),
+        CronWakeTarget::Session {
+            channel,
+            destination,
+        } => format!("session:{channel}:{destination}"),
+    }
+}
+
+/// 拒绝已移除的投递参数，并给出中文迁移路径。
+fn reject_legacy_delivery_args(
+    chat_id: Option<&String>,
+    thread_id: Option<&String>,
+) -> Result<(), String> {
+    if chat_id.is_some() || thread_id.is_some() {
+        return Err(LEGACY_DELIVERY_ARGS_HINT.to_owned());
+    }
+    Ok(())
 }
 
 fn path_text(path: Option<&Path>) -> Result<Option<String>, String> {
@@ -566,7 +593,7 @@ mod tests {
             .into_iter()
             .find(|job| job.job_id == MEMORY_CONSOLIDATION_CRON_JOB_ID)
             .expect("系统 Cron 应存在");
-        assert_eq!(created.delivery.adapter, CronDeliveryAdapter::None);
+        assert_eq!(created.wake, None, "系统 Cron 不得声明唤醒目标");
         assert!(created.no_agent);
         assert_eq!(
             ensure_memory_consolidation_cron(root.path()).expect("重复启动应幂等"),

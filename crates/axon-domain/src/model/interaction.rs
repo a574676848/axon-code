@@ -19,23 +19,20 @@ pub const SYSTEM_SOURCE_CHANNEL: &str = "system";
 /// 不属于用户真实渠道使用记录，因此「最近使用渠道」扫描必须排除它们。
 pub const COMPLETION_STEER_SOURCE_PREFIX: &str = "completion-steer-";
 
-/// Cron 派发 Interaction 的来源 ID 前缀。
+/// Cron 唤醒回合的来源 ID 前缀。
 ///
-/// Cron 任务的回复同样属于系统发起的投递：正文必须进入持久收件箱并投递到当时
-/// 所有可用渠道，而不是只投给任务配置里的单一渠道。
-pub const CRON_DELIVERY_SOURCE_PREFIX: &str = "cron:";
+/// 唤醒回合由系统派生，不属于用户真实输入：它必须独立成一轮，绝不能插入用户正在
+/// 进行的回合。
+pub const CRON_WAKE_SOURCE_PREFIX: &str = "cron-wake:";
+
+/// Cron 投递项的稳定 ID 前缀。
+///
+/// 只用于任务投递项自身的身份派生，不参与 Interaction 来源判定：投递项与唤醒回合
+/// 是两套独立动作，混用前缀会让同一轮结果被重复登记。
+pub const CRON_DELIVERY_ID_PREFIX: &str = "cron:";
 
 /// Cron 投递项通知 ID 前缀。
 pub const CRON_DELIVERY_NOTIFICATION_PREFIX: &str = "cron-delivery-";
-
-/// 由 Cron 派发 Interaction 的 ID 派生投递项通知 ID。
-///
-/// 生产端（Daemon 主 turn 结算）与调用端（Cron 运行记录）共用同一派生规则，
-/// 使 Cron 运行记录里的投递标识可以直接对应到持久收件箱条目。
-#[must_use]
-pub fn cron_delivery_notification_id(interaction_id: &str) -> String {
-    format!("{CRON_DELIVERY_NOTIFICATION_PREFIX}{interaction_id}")
-}
 
 /// 交互记录标识。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]

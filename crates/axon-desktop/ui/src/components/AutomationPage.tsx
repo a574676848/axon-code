@@ -14,7 +14,13 @@ import { Dialog } from "./ui/overlays";
 import { PageShell } from "./ui/shell";
 import { Banner, FormField, LoadingState, Text } from "./ui/surfaces";
 import { AutomationDetail } from "./automation/AutomationDetail";
-import { EMPTY_FORM, type FormState } from "./automation/AutomationEditor";
+import {
+  EMPTY_FORM,
+  formFromJob,
+  requestFromForm,
+  wakeLabel,
+  type FormState,
+} from "./automation/jobForm";
 import { AutomationList, type JobFilter } from "./automation/AutomationList";
 import {
   emptySchedule,
@@ -38,31 +44,6 @@ const CONTENT_HEIGHT = "h-full";
 
 const pageCount = (total: number, size: number) =>
   Math.max(1, Math.ceil(total / size));
-
-const formFromJob = (job: CronJob): FormState => ({
-  ...EMPTY_FORM,
-  name: job.name,
-  schedule: job.schedule,
-  prompt: job.prompt,
-  recipientId: job.delivery.recipientId,
-  threadId: job.delivery.threadId ?? "",
-  workdir: job.workdir ?? "",
-  skills: job.skills,
-  noAgent: job.noAgent,
-  script: job.script ?? "",
-});
-
-const requestFromForm = (form: FormState) => ({
-  name: form.name.trim(),
-  schedule: form.schedule,
-  prompt: form.prompt,
-  recipientId: form.recipientId.trim(),
-  threadId: form.threadId.trim() || null,
-  workdir: form.workdir.trim() || null,
-  skills: form.skills,
-  noAgent: form.noAgent,
-  script: form.script || null,
-});
 
 export const AutomationPage: React.FC<{
   onOpenSession: (job: CronJob) => void;
@@ -223,7 +204,7 @@ export const AutomationPage: React.FC<{
         return selected
           ? ipc.cronUpdate(selected.jobId, {
               ...requestFromForm(next),
-              replaceThread: true,
+              replaceWake: true,
               replaceWorkdir: true,
               replaceScript: true,
             })
@@ -477,6 +458,19 @@ export const AutomationPage: React.FC<{
             <FormField label="系统任务">
               <Text size="sm" className="block break-all">
                 {config.systemJobIds.join("、")}
+              </Text>
+            </FormField>
+            <FormField label="默认通知 chat_id">
+              <Text
+                size="sm"
+                mono={config.defaultNotificationChatId != null}
+                className="block break-all"
+                tone={config.defaultNotificationChatId != null ? "primary" : "tertiary"}
+              >
+                {wakeLabel(config.defaultNotificationChatId)}
+              </Text>
+              <Text size="xs" tone="tertiary" className="block break-words">
+                仅作提示：任务的实际投递目标永远来自任务自己声明的 wake。
               </Text>
             </FormField>
           </div>

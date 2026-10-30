@@ -53,6 +53,10 @@ pub(super) struct BuildRunModelPayloadInput<'a> {
     pub(super) model_history_json: Option<&'a str>,
     pub(super) attached_files: &'a [PathBuf],
     pub(super) supports_vision: bool,
+    /// 本轮 Action 的运行时上下文；用于把会话车道标识并入动态环境上下文。
+    pub(super) transport_context: Option<&'a serde_json::Value>,
+    /// 本机全局通知飞书会话；仅作提示值注入。
+    pub(super) notification_chat_id: Option<&'a str>,
     pub(super) context_window: u64,
     pub(super) include_user_soul: bool,
     pub(super) include_personal_memory: bool,
@@ -145,6 +149,8 @@ pub(super) fn build_run_model_payload(
     record_stage(input.performance, TurnPerformanceStage::LedgerReady);
     let (model_payload, skill_selection) = build_cli_run_model_payload(
         CliRunModelPayloadInput {
+            transport_context: input.transport_context,
+            notification_chat_id: input.notification_chat_id,
             memory_hits: &memory_recall.hits,
             soul_context_message: persona_context.stable.as_ref(),
             persona_state_message: persona_context.dynamic.as_ref(),

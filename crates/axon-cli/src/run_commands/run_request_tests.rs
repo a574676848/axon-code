@@ -57,6 +57,7 @@ fn run_request_uses_configured_control_limits() {
         RunRequestSession::with_id(None, super::new_run_session_id()),
         Some(&workspace),
         RunRequestBuildOptions {
+            transport_context: None,
             client_channel: ClientChannel::Cli,
             startup,
             cancel_token: None,
@@ -137,6 +138,7 @@ fn goal_execution_subagent_runs_fast_model_without_main_turn_reasoning() {
             RunRequestSession::with_id(None, super::new_run_session_id()),
             Some(&workspace),
             RunRequestBuildOptions {
+                transport_context: None,
                 client_channel: ClientChannel::Cli,
                 startup: Arc::clone(&startup),
                 cancel_token: None,
@@ -297,6 +299,7 @@ fn subagent_graph_store_uses_session_root_thread_id() {
         RunRequestSession::with_id(None, super::new_run_session_id()),
         Some(&workspace),
         RunRequestBuildOptions {
+            transport_context: None,
             client_channel: ClientChannel::Cli,
             startup,
             cancel_token: None,

@@ -20,12 +20,13 @@ import {
   Text,
 } from "../ui/surfaces";
 import { formatMoment } from "../pageFormat";
-import { AutomationEditor, type FormState } from "./AutomationEditor";
+import { AutomationEditor } from "./AutomationEditor";
+import { wakeLabel, type FormState } from "./jobForm";
 import { AutomationHistory } from "./AutomationHistory";
 import { scheduleText, type ScheduleForm } from "./schedule";
 import { jobState, statusText } from "./status";
 
-export type { FormState } from "./AutomationEditor";
+export type { FormState } from "./jobForm";
 
 export interface AutomationDetailProps {
   selected: CronJob | null;
@@ -281,13 +282,16 @@ const DetailBody: React.FC<{
           </Text>
         </FormField>
       )}
-      {job.delivery.recipientId.length > 0 && (
-        <FormField label="投递目标">
-          <Text size="sm" mono className="block break-all">
-            {job.delivery.recipientId}
-          </Text>
-        </FormField>
-      )}
+      <FormField label="投递目标">
+        <Text
+          size="sm"
+          mono={job.wake != null}
+          className="block break-all"
+          tone={job.wake != null ? "primary" : "tertiary"}
+        >
+          {wakeLabel(job.wake)}
+        </Text>
+      </FormField>
       {job.lastRunSuccess === false && (
         <FormField label="上次失败原因">
           <Text size="sm" tone="danger" className="block break-words">

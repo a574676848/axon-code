@@ -21,8 +21,8 @@
 - **回合级进度投影**：入站消息在进入持久 Action 前立即添加 `Typing` reaction；gateway worker 只做本地 reaction 状态确认，把未启动的请求投入有界异步队列，从不在入站主链上同步等待飞书 reaction API。回合成功或失败都会清理 `Typing`，控制命令（如 `/status`）也由 Daemon 完成事件统一收口。回合执行期间只维护**一张** interactive 进度卡：卡片由 header 与一个 markdown 元素组成，过程行在上、结论在下、终态页脚收尾；首个可渲染事实（正文增量、工具行或思考行）创建卡片，后续事件用同一 `message_id` 原位 PATCH，正文与过程行共用 1.5 秒合并窗口，是否真的发 PATCH 由渲染指纹决定。过程行**不提供展开**，一行即全部信息：`{标记} **{类别}** · {目标} · {读数}`——目标取模型自述 `intent` 或该工具专用主参数（`memory_search` 的 `query`、`invoke_skill` 的 `skill_name`、子代理的 `task`、`send_message` 的 `message` 等，规则表与桌面端、TUI 共用 `axon-display`，上限 80 字符），读数取非零退出码、失败、已写入或耗时（上限 24 字符）；工具结果只补标记与读数，绝不覆写调用时已定的目标行，回执原文与 reasoning 正文都不投影，思考只留一行耗时。供应商的连接与生成中状态不进入卡片（运行中由 `Typing` 承担），只有重试、失败与故障转移各留一条提示行；供应商路由与上下文占用只出现在终态页脚。投影严格按共享 durable sequence 消费，不在飞书侧另建重排或完成门禁；`MEDIA:` 协议行整行隐藏，且尾部可能演化成协议行的半截内容会被扣留，不会泄漏给用户。
   - 回合结束时由 `finish` 同步收口（有硬上界），只有飞书 API 确认成功的正文才计入已投影账本；账本完整且回复不含附件指令时不再重复投递最终回复，其余情况一律由 durable outbox 补偿未投影内容。网络投影是纯增强能力：任意失败都只降级为「未投影」，绝不丢失正文。
   - 交互卡片容量与预算：正文受 8,000 字符上限约束，卡片序列化后受 28KB 预算约束。超出预算时先收过程行窗口（只保留最近 5 行，更早的压成一行「N 个动作已省略」），再收缩正文；正文一旦被截断即视为未完整投影，由 durable outbox 无损补投，长正文不会在卡片里静默丢尾。
-- **Cron 投递**：用户级 Cron 可选 `--feishu-chat-id`，任务结果投递到对应飞书会话。
-- **后台完成通知**：只有同时启用通知发送并配置 `notification_chat_id` 时，Goal/Cron 汇总才会投递到该会话。留空不会发送，也不会根据历史私聊或最近消息猜测收件人；群聊 Goal 仍只允许投递到原始群聊受众。
+- **Cron 投递**：用户级 Cron 用 `--wake feishu:<chat_id>` 声明结果投递目标；不带 `--wake` 的任务执行完只落运行记录，不产生任何投递。
+- **后台完成通知**：Goal/Cron 汇总只投递给创建时声明的目标，不再广播。`notification_chat_id` 是用户级全局配置，通过 `GET /api/v1/crons/config` 的 `defaultNotificationChatId` 暴露；用户没有特意指明目标时，Agent 以它作为 `--wake feishu:<chat_id>` 的默认值。后端不做隐式兜底。
 
 ## 配置
 
@@ -167,7 +167,7 @@ Daemon 常驻 runtime 同时运行用户级 Cron tick；Memory consolidation 作
 - **群聊消息不响应**：确认 `require_mention` 与该会话的 `chat_policies.require_mention` 均为 `true`，并且消息中 @ 了机器人。
 - **Sender 被静默拒绝**：检查全局 / 群聊的 `blocked_sender_open_ids` 与 `allowed_sender_open_ids` 是否同时命中。
 - **回复消息能执行但模型看不到父正文**：确认应用已发布“获取指定消息内容”权限，机器人仍在目标会话中，并检查日志里的 reply lookup failure stage。网络、权限或正文解析失败不会阻断当前消息。
-- **Cron 未投递到飞书**：确认 `axon cron create` 传入了 `--feishu-chat-id`，且 `chat_id` 在 `chat_policies` 中存在。
+- **Cron 未投递到飞书**：确认 `axon cron create` 传入了 `--wake feishu:<chat_id>`（`axon cron list` 的 `wake` 列可见），且 `chat_id` 在 `chat_policies` 中存在。
 
 ## 相关文档
 

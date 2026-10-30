@@ -84,6 +84,10 @@ Daemon 是 Axon 的常驻后台宿主，负责接收持久化 `Interaction`、�
 
 ```bash
 axon cron --help                       # 管理定时任务（list / create / update / pause / resume / run / remove）
+axon cron create --name 日报 --schedule interval:1h --prompt "总结进展" --wake feishu:oc_xxx
+axon cron create --name 巡检 --schedule "0 9 * * *" --prompt "巡检仓库" --wake session:desktop:workbench-xxx
+                                       # --wake 决定执行完做什么：feishu 直投正文，session 注入一轮主 turn；
+                                       # 省略时只记录运行事实，不产生任何投递
 axon usage --period 7d                 # 查询最近 7 天 Token 消耗与成本看板
 axon usage audit                       # 审计日志流水查询
 axon pricing --help                    # 模型计费规则与成本核算

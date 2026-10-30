@@ -1,18 +1,19 @@
 //! 普通用户回合与完成通知隔离测试。
 
-use super::super::completion_delivery::{
-    COMPLETION_DISPATCH_BATCH_LIMIT, resolve_completion_targets,
-};
+use super::super::completion_delivery::COMPLETION_DISPATCH_BATCH_LIMIT;
 use super::delivery_tests::{
-    RecordingSteerSink, append_feishu_interaction, notification_of, register_tui_presence,
-    register_workspace, seed_completion_request, start_host, unread_results,
+    RecordingSteerSink, notification_of, register_tui_presence, register_workspace,
+    seed_completion_request, start_host, unread_results,
 };
-use axon_domain::{DaemonSessionId, ExecutionId, GoalId, RuntimeHostId};
-use axon_session::{ClientDeliveryStore, NotificationDeliveryState, SqliteRuntimeStore};
+use axon_domain::{
+    AudienceContext, AudienceKind, DaemonSessionId, DisclosurePolicy, ExecutionId, GoalId,
+    InteractionId, InteractionRecord, InteractionSource, ReplyRoute, RuntimeHostId, ScopeRef,
+};
+use axon_session::{
+    ClientDeliveryStore, InteractionStore, NotificationDeliveryState, SqliteRuntimeStore,
+};
 
 const EXPIRED_NOW_MS: u64 = 10;
-/// 远未来时间戳：用于证明渠道可用，且不越过 SQLite INTEGER 上限。
-const FAR_FUTURE_NOW_MS: u64 = i64::MAX as u64;
 
 #[test]
 fn user_turn_without_notification_never_acknowledges_results() {
@@ -37,8 +38,6 @@ fn user_turn_without_notification_never_acknowledges_results() {
         RuntimeHostId::new("user-turn-host").expect("Host ID"),
         &steer_sink,
     );
-    host.set_feishu_notification_chat_id(Some("oc_delivery_chat"))
-        .expect("配置飞书通知目标");
     assert_eq!(
         host.pump_session_once(session_id).expect("pump"),
         Some(action.action_id)
@@ -52,7 +51,7 @@ fn user_turn_without_notification_never_acknowledges_results() {
     assert_eq!(unread_results(&store, &workspace), 1);
 
     // 普通用户输入的主 turn 与任何完成通知无关：不得确认未读 Result。
-    append_feishu_interaction(&store, &workspace, "om_user_turn");
+    append_plain_interaction(&store, &workspace, "om_user_turn");
     let tick = host
         .primary_turn_tick(COMPLETION_DISPATCH_BATCH_LIMIT)
         .expect("主 turn tick");
@@ -62,6 +61,26 @@ fn user_turn_without_notification_never_acknowledges_results() {
         NotificationDeliveryState::Dispatched
     );
     assert_eq!(unread_results(&store, &workspace), 1);
+}
+
+/// 追加一条普通用户输入，用于证明它不会误确认任何完成通知。
+fn append_plain_interaction(
+    store: &SqliteRuntimeStore,
+    workspace: &axon_session::WorkspaceRecord,
+    source_message_id: &str,
+) {
+    let interaction = InteractionRecord::new(
+        InteractionId::new(format!("plain-{source_message_id}")).expect("Interaction ID"),
+        InteractionSource::new("tui", source_message_id).expect("来源"),
+        ScopeRef::workspace(workspace.workspace_id.as_str().to_owned()).expect("作用域"),
+        AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly),
+        ReplyRoute::new("tui", "terminal-test").expect("回复路由"),
+        "普通用户输入",
+        0,
+    )
+    .expect("Interaction");
+    let receipt = store.append(&interaction).expect("追加 Interaction");
+    assert!(receipt.inserted, "普通用户输入必须首次写入");
 }
 
 #[test]
@@ -129,7 +148,7 @@ fn unread_completion_expires_without_delivery_and_marks_result_expired() {
 }
 
 #[test]
-fn delivered_notification_expires_only_remaining_channel_deliveries() {
+fn delivered_notification_expiry_keeps_settled_state() {
     let directory = axon_test_support::test_temp_dir();
     let database_path = directory.path().join("runtime.sqlite3");
     let store = SqliteRuntimeStore::new(database_path.clone());
@@ -144,7 +163,6 @@ fn delivered_notification_expires_only_remaining_channel_deliveries() {
         "execution-partial-expiry",
         "部分渠道失效任务",
     );
-    append_feishu_interaction(&store, &workspace, "om_partial_expiry");
     register_tui_presence(&store, &workspace);
 
     let steer_sink = RecordingSteerSink::default();
@@ -153,8 +171,6 @@ fn delivered_notification_expires_only_remaining_channel_deliveries() {
         RuntimeHostId::new("partial-expiry-host").expect("Host ID"),
         &steer_sink,
     );
-    host.set_feishu_notification_chat_id(Some("oc_delivery_chat"))
-        .expect("配置飞书通知目标");
     assert_eq!(
         host.pump_session_once(session_id).expect("pump"),
         Some(action.action_id)
@@ -188,7 +204,8 @@ fn delivered_notification_expires_only_remaining_channel_deliveries() {
     assert_eq!(
         host.expire_stale_completions(EXPIRED_NOW_MS, COMPLETION_DISPATCH_BATCH_LIMIT)
             .expect("失效扫描"),
-        1
+        0,
+        "已送达且没有剩余渠道时不存在需要失效的投递"
     );
     assert_eq!(
         notification_of(&store, &execution_id).state,
@@ -198,17 +215,9 @@ fn delivered_notification_expires_only_remaining_channel_deliveries() {
     let deliveries = store
         .completion_deliveries(&notification.notification_id)
         .expect("读取渠道投递");
-    assert!(deliveries.iter().any(|delivery| {
-        delivery.channel == "tui" && delivery.state == NotificationDeliveryState::Delivered
-    }));
-    assert!(deliveries.iter().any(|delivery| {
-        delivery.channel == "feishu" && delivery.state == NotificationDeliveryState::Expired
-    }));
-    assert!(
-        host.dispatched_channel_inbox("feishu", COMPLETION_DISPATCH_BATCH_LIMIT)
-            .expect("读取 Feishu 收件箱")
-            .is_empty()
-    );
+    assert_eq!(deliveries.len(), 1, "完成通知只投递给声明的会话表面");
+    assert_eq!(deliveries[0].channel, "tui");
+    assert_eq!(deliveries[0].state, NotificationDeliveryState::Delivered);
 }
 
 #[test]
@@ -274,95 +283,4 @@ fn summarized_completion_with_pending_delivery_is_recovered_by_sweep() {
         .expect("读取 TUI 收件箱");
     assert_eq!(inbox.len(), 1, "补偿后渠道必须可投递");
     assert_eq!(inbox[0].content, notification.summary);
-}
-
-#[test]
-fn settled_notification_still_delivers_to_newly_available_channel() {
-    let directory = axon_test_support::test_temp_dir();
-    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
-    let workspace = register_workspace(&store, directory.path());
-    let session_id = DaemonSessionId::new("settled-channel-session").expect("Session ID");
-    let goal_id = GoalId::new("settled-channel-task").expect("Goal ID");
-    let action = seed_completion_request(
-        &store,
-        &workspace,
-        &session_id,
-        &goal_id,
-        "execution-settled-channel",
-        "结算后渠道任务",
-    );
-    register_tui_presence(&store, &workspace);
-
-    let steer_sink = RecordingSteerSink::default();
-    let host = start_host(
-        &store,
-        RuntimeHostId::new("settled-channel-host").expect("Host ID"),
-        &steer_sink,
-    );
-    assert_eq!(
-        host.pump_session_once(session_id).expect("pump"),
-        Some(action.action_id)
-    );
-    host.primary_turn_tick(COMPLETION_DISPATCH_BATCH_LIMIT)
-        .expect("主 turn tick");
-    host.primary_turn_tick(COMPLETION_DISPATCH_BATCH_LIMIT)
-        .expect("继续运行主 turn");
-
-    let execution_id = ExecutionId::new("execution-settled-channel").expect("Execution ID");
-    let notification = notification_of(&store, &execution_id);
-    let tui_entry = host
-        .dispatched_channel_inbox("tui", COMPLETION_DISPATCH_BATCH_LIMIT)
-        .expect("读取 TUI 收件箱")
-        .into_iter()
-        .next()
-        .expect("TUI delivery");
-    host.acknowledge_channel_delivery(&tui_entry)
-        .expect("确认 TUI delivery");
-    assert_eq!(
-        notification_of(&store, &execution_id).state,
-        NotificationDeliveryState::Delivered
-    );
-
-    // 结算后飞书才成为可用渠道：必须补登记并在同一轮推进到可投递，不能停在 pending。
-    append_feishu_interaction(&store, &workspace, "om_settled_channel");
-    host.set_feishu_notification_chat_id(Some("oc_delivery_chat"))
-        .expect("配置飞书通知目标");
-    let targets = resolve_completion_targets(
-        &store,
-        &workspace.workspace_id,
-        FAR_FUTURE_NOW_MS,
-        Some("oc_delivery_chat"),
-    )
-    .expect("解析投递目标");
-    assert!(
-        targets.iter().any(|target| target.channel == "feishu"),
-        "飞书必须已是可用渠道"
-    );
-
-    assert_eq!(
-        host.dispatch_pending_completions(COMPLETION_DISPATCH_BATCH_LIMIT)
-            .expect("投递扫描"),
-        1,
-        "结算后补登记的渠道必须被推进"
-    );
-    let deliveries = store
-        .completion_deliveries(&notification.notification_id)
-        .expect("读取渠道投递");
-    assert!(deliveries.iter().any(|delivery| {
-        delivery.channel == "feishu" && delivery.state == NotificationDeliveryState::Dispatched
-    }));
-    let feishu_inbox = host
-        .dispatched_channel_inbox("feishu", COMPLETION_DISPATCH_BATCH_LIMIT)
-        .expect("读取 Feishu 收件箱");
-    assert_eq!(feishu_inbox.len(), 1, "补登记渠道必须真正可投递");
-    assert_eq!(feishu_inbox[0].content, notification.summary);
-
-    // 补登记渠道的确认是幂等的：已结算的通知与 Result 不因第二次确认而改变。
-    host.acknowledge_channel_delivery(&feishu_inbox[0])
-        .expect("确认 Feishu delivery");
-    assert_eq!(
-        notification_of(&store, &execution_id).state,
-        NotificationDeliveryState::Delivered
-    );
-    assert_eq!(unread_results(&store, &workspace), 0);
 }

@@ -22,71 +22,7 @@ fn new_goal(goal_id: &GoalId, scope: &ScopeRef, title: &str) -> GoalRecord {
 }
 
 #[test]
-fn offline_completion_stays_pending_until_client_registers() {
-    let directory = axon_test_support::test_temp_dir();
-    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
-    let workspace = register_workspace(&store, directory.path());
-    let session_id = DaemonSessionId::new("offline-session").expect("Session ID");
-    let goal_id = GoalId::new("offline-task").expect("Goal ID");
-    let action = seed_completion_request(
-        &store,
-        &workspace,
-        &session_id,
-        &goal_id,
-        "execution-offline",
-        "离线交付任务",
-    );
-
-    let steer_sink = RecordingSteerSink::default();
-    let mut host = start_host(
-        &store,
-        RuntimeHostId::new("offline-host").expect("Host ID"),
-        &steer_sink,
-    );
-
-    assert_eq!(
-        host.pump_session_once(session_id).expect("pump"),
-        Some(action.action_id)
-    );
-
-    // 没有任何可用渠道：通知留在持久收件箱，Result 不得被确认。
-    let execution_id = ExecutionId::new("execution-offline").expect("Execution ID");
-    let notification = notification_of(&store, &execution_id);
-    assert_eq!(notification.state, NotificationDeliveryState::Pending);
-    assert!(
-        store
-            .completion_deliveries(&notification.notification_id)
-            .expect("读取渠道投递")
-            .is_empty()
-    );
-    assert!(steer_sink.steered().is_empty());
-    assert_eq!(unread_results(&store, &workspace), 1);
-
-    // 客户端上线后立即补投，无需等待下一轮维护 tick。
-    let body = send_daemon_command(
-        &mut host,
-        axon_protocol::DaemonCommand::RegisterClient {
-            client_id: TUI_CLIENT_ID.to_owned(),
-            workspace_id: workspace.workspace_id.as_str().to_owned(),
-            channel: TUI_CHANNEL.to_owned(),
-            destination: TUI_DESTINATION.to_owned(),
-        },
-    );
-    assert_eq!(body["dispatched"].as_u64(), Some(1));
-    let dispatched = notification_of(&store, &execution_id);
-    assert_eq!(dispatched.state, NotificationDeliveryState::Dispatched);
-    let deliveries = store
-        .completion_deliveries(&dispatched.notification_id)
-        .expect("读取渠道投递");
-    assert_eq!(deliveries.len(), 1);
-    assert_eq!(deliveries[0].channel, TUI_CHANNEL);
-    assert_eq!(deliveries[0].destination, TUI_DESTINATION);
-    assert_eq!(steer_sink.steered().len(), 1);
-    assert_eq!(unread_results(&store, &workspace), 1);
-}
-
-#[test]
-fn configured_feishu_target_delivers_without_history_lookup() {
+fn declared_feishu_transport_context_delivers_without_global_config() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
     let workspace = register_workspace(&store, directory.path());
@@ -101,7 +37,6 @@ fn configured_feishu_target_delivers_without_history_lookup() {
         "飞书回落任务",
         private_transport_context(FEISHU_CHANNEL, FEISHU_DESTINATION),
     );
-    append_feishu_interaction(&store, &workspace, "om_feishu_fallback");
 
     let steer_sink = RecordingSteerSink::default();
     let host = start_host(
@@ -109,8 +44,6 @@ fn configured_feishu_target_delivers_without_history_lookup() {
         RuntimeHostId::new("feishu-fallback-host").expect("Host ID"),
         &steer_sink,
     );
-    host.set_feishu_notification_chat_id(Some(FEISHU_DESTINATION))
-        .expect("配置飞书通知目标");
 
     assert_eq!(
         host.pump_session_once(session_id).expect("pump"),
@@ -133,48 +66,6 @@ fn configured_feishu_target_delivers_without_history_lookup() {
     assert_eq!(deliveries[0].channel, FEISHU_CHANNEL);
     assert_eq!(deliveries[0].destination, FEISHU_DESTINATION);
     assert_eq!(deliveries[0].state, NotificationDeliveryState::Pending);
-    assert_eq!(unread_results(&store, &workspace), 1);
-}
-
-#[test]
-fn historical_feishu_interaction_does_not_enable_notifications() {
-    let directory = axon_test_support::test_temp_dir();
-    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
-    let workspace = register_workspace(&store, directory.path());
-    let session_id = DaemonSessionId::new("feishu-unconfigured-session").expect("Session ID");
-    let goal_id = GoalId::new("feishu-unconfigured-task").expect("Goal ID");
-    let action = seed_completion_request_for_transport(
-        &store,
-        &workspace,
-        &session_id,
-        &goal_id,
-        "execution-feishu-unconfigured",
-        "未配置飞书通知任务",
-        private_transport_context(FEISHU_CHANNEL, FEISHU_DESTINATION),
-    );
-    append_feishu_interaction(&store, &workspace, "om_historical_only");
-
-    let steer_sink = RecordingSteerSink::default();
-    let host = start_host(
-        &store,
-        RuntimeHostId::new("feishu-unconfigured-host").expect("Host ID"),
-        &steer_sink,
-    );
-    assert_eq!(
-        host.pump_session_once(session_id).expect("pump"),
-        Some(action.action_id)
-    );
-
-    let execution_id = ExecutionId::new("execution-feishu-unconfigured").expect("Execution ID");
-    let notification = notification_of(&store, &execution_id);
-    assert_eq!(notification.state, NotificationDeliveryState::Pending);
-    assert!(
-        store
-            .completion_deliveries(&notification.notification_id)
-            .expect("读取渠道投递")
-            .is_empty(),
-        "历史私聊不能推断飞书通知目标"
-    );
     assert_eq!(unread_results(&store, &workspace), 1);
 }
 
@@ -297,7 +188,6 @@ fn feishu_summary_turn_settles_delivery_and_acknowledges_results() {
         "飞书结算任务",
         private_transport_context(FEISHU_CHANNEL, FEISHU_DESTINATION),
     );
-    append_feishu_interaction(&store, &workspace, "om_feishu_settlement");
 
     // 无活跃主 turn：通知先进入持久收件箱并按飞书渠道派发。
     let mut host = DaemonHost::new(
@@ -311,8 +201,6 @@ fn feishu_summary_turn_settles_delivery_and_acknowledges_results() {
         TEST_LEASE_DURATION_MS,
     );
     host.start().expect("启动 Host");
-    host.set_feishu_notification_chat_id(Some(FEISHU_DESTINATION))
-        .expect("配置飞书通知目标");
     assert_eq!(
         host.pump_session_once(session_id).expect("pump"),
         Some(action.action_id)

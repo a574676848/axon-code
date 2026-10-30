@@ -10,18 +10,21 @@ mod runtime_cleanup_counts;
 mod runtime_cleanup_families;
 pub(crate) mod schedule;
 mod session_cleanup;
+mod wake;
 
 pub use args::CronCommand;
 
+pub(crate) use application::wake_text;
 pub(crate) use application::{
     PricingSyncCronState, ensure_memory_consolidation_cron, ensure_session_cleanup_cron,
     ensure_usage_rollup_cron, execute_and_persist, pricing_sync_cron_state, run_cron,
     run_due_cron_jobs, set_pricing_sync_cron_enabled,
 };
 pub(crate) use execution::{
-    CRON_AGENT_CHANNEL, CRON_AGENT_DESTINATION_PREFIX, CronExecutionAdapter, CronExecutionReceipt,
+    CRON_AGENT_CHANNEL, CRON_AGENT_DESTINATION_PREFIX, CronExecutionAdapter,
     execute_local_cron_agent, local_cron_session_key,
 };
+pub(crate) use wake::{CRON_WAKE_SOURCE_PREFIX, parse_wake, suggested_feishu_chat_id};
 
 pub(crate) const MEMORY_CONSOLIDATION_CRON_JOB_ID: &str = "axon.system.memory-consolidation";
 pub(crate) const MEMORY_CONSOLIDATION_CRON_NAME: &str = "Memory consolidation";

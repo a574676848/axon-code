@@ -155,7 +155,7 @@ impl CronRepository {
             .map_err(db_error("查询到期 cron job"))?;
         let claim = payload
             .map(|payload| {
-                let job: CronJob = decode(&payload, "cron job")?;
+                let job: CronJob = decode_job(&payload)?;
                 let claim_id = claim_id(&job.job_id, now_ms);
                 let changed = transaction
                     .execute(
@@ -323,7 +323,7 @@ impl CronRepository {
     }
 
     pub(super) fn connection(&self) -> Result<Connection, String> {
-        let connection = Connection::open(&self.path).map_err(db_error("打开 cron SQLite"))?;
+        let mut connection = Connection::open(&self.path).map_err(db_error("打开 cron SQLite"))?;
         connection
             .busy_timeout(Duration::from_millis(CRON_BUSY_TIMEOUT_MS))
             .map_err(db_error("配置 cron SQLite busy timeout"))?;
@@ -335,8 +335,10 @@ impl CronRepository {
         let schema_version = connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .map_err(db_error("读取 cron schema version"))?;
+        // 版本不匹配时只做「补齐 + 搬迁重建」，绝不清理业务表：这里曾经是整表 DROP
+        // 重建，一次版本号变更就会清空全部定时任务与运行历史。
         if schema_version != CRON_DATABASE_SCHEMA_VERSION {
-            rebuild_schema(&connection)?;
+            schema::align_schema(&mut connection, CRON_DATABASE_SCHEMA_VERSION)?;
         }
         connection
             .execute_batch(
@@ -443,62 +445,6 @@ impl Drop for CronClaimHeartbeat {
     }
 }
 
-fn rebuild_schema(connection: &Connection) -> Result<(), String> {
-    let mut statement = connection
-        .prepare(
-            "SELECT type, name FROM sqlite_master
-             WHERE type IN ('trigger', 'view', 'table')
-               AND name NOT LIKE 'sqlite_%'
-             ORDER BY CASE type WHEN 'trigger' THEN 1 WHEN 'view' THEN 2 ELSE 3 END",
-        )
-        .map_err(db_error("读取旧 cron schema"))?;
-    let objects = statement
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .map_err(db_error("查询旧 cron schema"))?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(db_error("解析旧 cron schema"))?;
-    drop(statement);
-    for (object_type, name) in objects {
-        let quoted_name = name.replace('"', "\"\"");
-        connection
-            .execute_batch(&format!(
-                "DROP {} IF EXISTS \"{quoted_name}\";",
-                object_type.to_ascii_uppercase()
-            ))
-            .map_err(db_error("清理旧 cron schema"))?;
-    }
-    connection
-        .execute_batch(&format!(
-            "CREATE TABLE cron_jobs (
-                job_id TEXT PRIMARY KEY,
-                payload_json TEXT NOT NULL,
-                status TEXT NOT NULL,
-                next_run_at_ms INTEGER,
-                revision INTEGER NOT NULL,
-                created_at_ms INTEGER GENERATED ALWAYS AS
-                    (json_extract(payload_json, '$.createdAtMs')) VIRTUAL,
-                updated_at_ms INTEGER NOT NULL,
-                claim_id TEXT,
-                claim_until_ms INTEGER
-             );
-             CREATE INDEX idx_cron_jobs_due
-                ON cron_jobs(status, next_run_at_ms, claim_until_ms);
-             CREATE TABLE cron_runs (
-                run_id TEXT PRIMARY KEY,
-                job_id TEXT NOT NULL,
-                payload_json TEXT NOT NULL,
-                started_at_ms INTEGER NOT NULL,
-                finished_at_ms INTEGER NOT NULL
-             );
-             CREATE INDEX idx_cron_runs_job ON cron_runs(job_id, started_at_ms DESC);
-             CREATE INDEX idx_cron_runs_finished_at ON cron_runs(finished_at_ms);
-             PRAGMA user_version = {CRON_DATABASE_SCHEMA_VERSION};"
-        ))
-        .map_err(db_error("重建 cron SQLite schema"))
-}
-
 /// 按有界批次回收过期 cron run。
 ///
 /// 每批独立 `IMMEDIATE` 事务并按 `finished_at_ms` 索引定位，单次写锁只覆盖
@@ -554,17 +500,40 @@ fn insert_run(connection: &Connection, run: &CronRunRecord) -> Result<(), String
     Ok(())
 }
 
+/// 解析 Cron 任务载荷，并强制校验持久化模型版本。
+///
+/// `wake` 在领域模型里是 `Option`，serde 会把「字段缺失」也算成 `None`：历史版本的
+/// 载荷因此会被静默降级成「不投递」，把用户声明过的目标丢掉。这里按版本号显式拒绝，
+/// 让调用方直接看到可执行的迁移提示。
+fn decode_job(payload: &str) -> Result<CronJob, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(payload).map_err(|error| format!("解析 cron job 失败：{error}"))?;
+    let version = value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if version != u64::from(axon_domain::CRON_SCHEMA_VERSION) {
+        return Err(format!(
+            "cron 任务载荷版本为 {version}，当前支持 {}；请先完成 wake 目标迁移",
+            axon_domain::CRON_SCHEMA_VERSION
+        ));
+    }
+    serde_json::from_value(value).map_err(|error| format!("解析 cron job 失败：{error}"))
+}
+
 fn decode_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CronJob> {
     let payload = row.get::<_, String>(0)?;
-    serde_json::from_str(&payload).map_err(|_| rusqlite::Error::InvalidQuery)
+    decode_job(&payload).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Text,
+            std::io::Error::new(std::io::ErrorKind::InvalidData, error).into(),
+        )
+    })
 }
 
 fn encode<T: serde::Serialize>(value: &T, label: &str) -> Result<String, String> {
     serde_json::to_string(value).map_err(|error| format!("序列化 {label} 失败：{error}"))
-}
-
-fn decode<T: serde::de::DeserializeOwned>(value: &str, label: &str) -> Result<T, String> {
-    serde_json::from_str(value).map_err(|error| format!("解析 {label} 失败：{error}"))
 }
 
 fn to_i64(value: u64) -> Result<i64, String> {
@@ -591,3 +560,5 @@ mod reads;
 #[cfg(test)]
 #[path = "repository_tests.rs"]
 mod repository_tests;
+#[path = "repository_schema.rs"]
+mod schema;

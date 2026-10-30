@@ -176,6 +176,7 @@ pub(crate) fn run_run_with_progress(
             client_channel: options.client_channel,
             performance: request_performance,
             workspace_snapshot_prewarm,
+            transport_context: options.transport_context.clone(),
         },
     ) {
         Ok(request) => request,

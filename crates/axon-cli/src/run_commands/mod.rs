@@ -29,6 +29,7 @@ mod run_compaction_notice;
 mod run_compaction_projection;
 mod run_completion_notice_subscription;
 mod run_continuation_assembly;
+mod run_environment_context;
 mod run_execution;
 mod run_failover;
 mod run_file_change_projection;

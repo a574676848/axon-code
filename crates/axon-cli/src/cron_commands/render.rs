@@ -21,8 +21,13 @@ pub(super) fn render_cron(format: OutputFormat, report: &CronReport) -> CliRunRe
             for job in &report.jobs {
                 let _ = writeln!(
                     stdout,
-                    "{}\t{}\t{}\tnext={:?}\tno_agent={}",
-                    job.job_id, job.status, job.schedule, job.next_run_at_ms, job.no_agent
+                    "{}\t{}\t{}\tnext={:?}\tno_agent={}\twake={}",
+                    job.job_id,
+                    job.status,
+                    job.schedule,
+                    job.next_run_at_ms,
+                    job.no_agent,
+                    job.wake.as_deref().unwrap_or("none")
                 );
             }
             CliRunResult {

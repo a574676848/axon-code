@@ -1,4 +1,4 @@
-//! Daemon Host Execution 完成交付（持久收件箱 / 全渠道投递）测试。
+//! Daemon Host Execution 完成交付（持久收件箱 / 显式目标定向）测试。
 
 use super::super::completion_delivery::{
     CLIENT_PRESENCE_TTL_MS, COMPLETION_DISPATCH_BATCH_LIMIT, completion_notification_id,
@@ -7,14 +7,13 @@ use super::super::queued_action;
 use super::*;
 use crate::ActiveTurnSteerSink;
 use axon_domain::{
-    AudienceContext, AudienceKind, DisclosurePolicy, ExecutionRecord, ExecutionStatus, GoalId,
-    GoalPlan, GoalRecord, GoalStatus, InteractionRecord, InteractionSource, JarvisEvent,
-    JarvisEventId, ReplyRoute, ResultId, ResultRecord, RuntimeHostId, ScopeRef,
+    ExecutionRecord, ExecutionStatus, GoalId, GoalPlan, GoalRecord, GoalStatus, InteractionRecord,
+    JarvisEvent, JarvisEventId, ResultId, ResultRecord, RuntimeHostId, ScopeRef,
 };
 use axon_session::{
     CheckpointTelemetry, ClientDeliveryStore, ClientPresenceRecord, DecisionStore, ExecutionStore,
-    GoalStore, InteractionStore, LedgerCommitStore, NotificationDeliveryState, ResultStore,
-    SqliteRuntimeStore, WorkspaceResolver, WorkspaceStore,
+    GoalStore, LedgerCommitStore, NotificationDeliveryState, ResultStore, SqliteRuntimeStore,
+    WorkspaceResolver, WorkspaceStore,
 };
 use axon_session_runtime::{
     ActionExecutionRequest, TurnExecutionError, TurnExecutionOutcome, model::RuntimeEvent,
@@ -237,27 +236,6 @@ pub(super) fn register_tui_presence(
         .expect("注册 TUI presence");
 }
 
-/// 写入一条历史飞书 Interaction，用于验证它不会自动成为通知目标。
-pub(super) fn append_feishu_interaction(
-    store: &SqliteRuntimeStore,
-    workspace: &axon_session::WorkspaceRecord,
-    source_message_id: &str,
-) {
-    let interaction = InteractionRecord::new(
-        axon_domain::InteractionId::new(format!("feishu-{source_message_id}"))
-            .expect("Interaction ID"),
-        InteractionSource::new(FEISHU_CHANNEL, source_message_id).expect("来源"),
-        scope_of(workspace),
-        AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly),
-        ReplyRoute::new(FEISHU_CHANNEL, FEISHU_DESTINATION).expect("回复路由"),
-        "飞书原始请求",
-        TEST_NOW_MS,
-    )
-    .expect("Interaction");
-    let receipt = store.append(&interaction).expect("追加 Interaction");
-    assert!(receipt.inserted, "外部渠道 Interaction 必须首次写入");
-}
-
 pub(super) fn unread_results(
     store: &SqliteRuntimeStore,
     workspace: &axon_session::WorkspaceRecord,
@@ -299,7 +277,7 @@ pub(super) fn start_host(
 }
 
 #[test]
-fn all_available_channels_receive_one_primary_turn_completion() {
+fn declared_channel_receives_one_primary_turn_completion() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
     let workspace = register_workspace(&store, directory.path());
@@ -313,8 +291,7 @@ fn all_available_channels_receive_one_primary_turn_completion() {
         "execution-all-channel",
         "多渠道任务",
     );
-    // TUI 与最近使用的飞书渠道都可用时，两者都必须登记投递。
-    append_feishu_interaction(&store, &workspace, "om_feishu_recent");
+    // 完成通知只投递给 Execution 自己的会话表面；历史飞书交互不再成为目标。
     register_tui_presence(&store, &workspace);
 
     let steer_sink = RecordingSteerSink::default();
@@ -323,9 +300,6 @@ fn all_available_channels_receive_one_primary_turn_completion() {
         RuntimeHostId::new("all-channel-host").expect("Host ID"),
         &steer_sink,
     );
-    host.set_feishu_notification_chat_id(Some(FEISHU_DESTINATION))
-        .expect("配置飞书通知目标");
-
     assert_eq!(
         host.pump_session_once(session_id).expect("pump"),
         Some(action.action_id)
@@ -344,17 +318,10 @@ fn all_available_channels_receive_one_primary_turn_completion() {
     let deliveries = store
         .completion_deliveries(&notification.notification_id)
         .expect("读取渠道投递");
-    assert_eq!(deliveries.len(), 2, "TUI 与 Feishu 都必须登记");
-    assert!(deliveries.iter().any(|delivery| {
-        delivery.channel == TUI_CHANNEL
-            && delivery.destination == TUI_DESTINATION
-            && delivery.state == NotificationDeliveryState::Pending
-    }));
-    assert!(deliveries.iter().any(|delivery| {
-        delivery.channel == FEISHU_CHANNEL
-            && delivery.destination == FEISHU_DESTINATION
-            && delivery.state == NotificationDeliveryState::Pending
-    }));
+    assert_eq!(deliveries.len(), 1, "只投递给声明的会话表面，不再广播");
+    assert_eq!(deliveries[0].channel, TUI_CHANNEL);
+    assert_eq!(deliveries[0].destination, TUI_DESTINATION);
+    assert_eq!(deliveries[0].state, NotificationDeliveryState::Pending);
     // 客户端确认展示之前，Result 必须保持未读：禁止静默 ack。
     assert_eq!(unread_results(&store, &workspace), 1);
 

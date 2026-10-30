@@ -80,6 +80,8 @@ fn build_contract_payload(
     include_user_soul: bool,
 ) -> BuildRunModelPayloadOutput {
     let input = BuildRunModelPayloadInput {
+        transport_context: None,
+        notification_chat_id: None,
         config_path,
         client_channel: axon_client_identity::ClientChannel::Cli,
         config,

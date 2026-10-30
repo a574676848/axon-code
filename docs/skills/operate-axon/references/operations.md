@@ -72,3 +72,31 @@ axon remote feishu-status
 - 运行态判据：`axon daemon status` 只回 `installed` 与 `running`；`axon daemon health` 才给出 `host.status`、`executionBacklog.pending`、`deliveries.backlog.pending` 与 `streamSubscribers`。
 - 优雅收口顺序：先 `axon daemon drain [--reason <text>]`，再用 `axon daemon health` 确认两个积压字段归零，最后才 `axon daemon stop`。`stop|restart` 先写停止请求让 Daemon 自行收口（等待窗口 15 秒），未响应才禁用并结束计划任务，Windows 上再强制结束进程树并中断在跑的任务。
 - 服务启停、创建或运行 Cron、远控投递和凭据变更都会产生状态变化。先检查目标状态和命令帮助，完成后重新读取状态或对应回执。
+
+### 定时任务的通知目标
+
+每轮运行上下文都会给出三个事实字段，直接用它们，不要自己猜或抄历史：
+
+| 字段 | 含义 |
+|---|---|
+| `session_channel` | 当前会话车道所属渠道 |
+| `session_destination` | 当前会话车道目标 |
+| `notification_chat_id` | 本机全局配置的通知飞书会话；未配置时该字段不出现 |
+
+两种典型用法：
+
+- 让任务执行完后**唤醒当前会话**继续跟进（查结果、补后续动作）：`--wake session:<session_channel>:<session_destination>`。
+- 让任务执行完**直接通知用户**（不跑回合、不消耗模型）：`--wake feishu:<notification_chat_id>`。
+
+判定顺序：
+
+1. 用户明确说了投到哪里，就按用户说的写。
+2. 用户没有特意指明时，用 `--wake feishu:<notification_chat_id>` 作为默认目标。
+3. 上下文里没有 `notification_chat_id`（本机未配置）时，才省略 `--wake`。
+
+其他口径：
+
+- 省略 `--wake` 时任务执行完只写运行记录，不产生任何投递。
+- 改或清空已有目标用 `axon cron update <JOB_ID> --wake <目标>` 或 `--clear-wake`；`axon cron list` 的 `wake` 列可核对当前值。
+- `session_channel` 只支持 `feishu` 与 `desktop`。TUI 的车道标识按进程随机生成，任务触发时已失效，因此不接受 `session:tui:...`。
+- `notification_chat_id` 是用户级全局配置，后端不会隐式采用；是否把它写成任务的 `wake` 由 Agent 在创建时决定。

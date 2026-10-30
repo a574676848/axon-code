@@ -479,16 +479,6 @@ fn build_daemon_host(
             axon_remote_feishu::remote_feishu_runtime_root(&command.root),
         ),
     )));
-    let notification_config = ConfigLoader::load_from_path(&command.config_path)
-        .map_err(|error| format!("读取飞书通知配置失败：{error:?}"))?
-        .config
-        .remote
-        .feishu_websocket;
-    host.set_feishu_notification_chat_id(
-        (notification_config.enabled && notification_config.enable_notification_sending)
-            .then_some(notification_config.notification_chat_id.as_str()),
-    )
-    .map_err(|error| error.to_string())?;
     Ok(host)
 }
 

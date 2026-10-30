@@ -193,6 +193,7 @@ fn new_run_request_reopens_file_graph_and_restores_child() {
         RunRequestSession::with_id(None, crate::run_commands::new_run_session_id()),
         Some(&workspace),
         RunRequestBuildOptions {
+            transport_context: None,
             client_channel: axon_client_identity::ClientChannel::Cli,
             startup: Arc::clone(&startup),
             cancel_token: None,
@@ -223,6 +224,7 @@ fn new_run_request_reopens_file_graph_and_restores_child() {
         RunRequestSession::with_id(Some(&previous), previous.record.session_id.clone()),
         Some(&workspace),
         RunRequestBuildOptions {
+            transport_context: None,
             client_channel: axon_client_identity::ClientChannel::Cli,
             startup,
             cancel_token: None,

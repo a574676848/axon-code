@@ -108,7 +108,7 @@ Axon 使用以下用户级目录布局：
 | `remote.feishu_websocket.api_base_url` | 字符串 | `http` 或 `https` URL；空值使用官方默认地址 | `""` |
 | `remote.feishu_websocket.websocket_url` | 字符串 | WebSocket URL；空值使用官方默认地址 | `""` |
 | `remote.feishu_websocket.enable_notification_sending` | 布尔值 | `true`、`false` | `false` |
-| `remote.feishu_websocket.notification_chat_id` | 字符串 | 飞书消息通知接收会话 `chat_id`；空值关闭后台通知 | `""` |
+| `remote.feishu_websocket.notification_chat_id` | 字符串 | 用户级全局通知会话 `chat_id`，经 `GET /api/v1/crons/config` 的 `defaultNotificationChatId` 暴露；用户未指明目标时由 Agent 作为默认 `wake` 采用，后端不做隐式兜底 | `""` |
 | `remote.feishu_websocket.allowed_sender_open_ids` | 字符串数组 | sender `open_id` 列表 | `[]` |
 | `remote.feishu_websocket.blocked_sender_open_ids` | 字符串数组 | sender `open_id` 列表；优先级高于 allowlist | `[]` |
 | `remote.feishu_websocket.require_mention` | 布尔值 | `true`、`false` | `false` |

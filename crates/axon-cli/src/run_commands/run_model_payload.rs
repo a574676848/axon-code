@@ -19,8 +19,8 @@ use axon_domain::{
     PaneSecurityBadgeLevel, PermissionSnapshotId,
 };
 use axon_session::WorkspaceSnapshot;
-use chrono::Local;
-use std::time::{SystemTime, UNIX_EPOCH};
+
+use super::run_environment_context::cli_environment_context;
 
 const HOME_WITHOUT_WORKSPACE: &str = "未选择（当前目录位于 Home）";
 
@@ -42,6 +42,10 @@ pub(super) struct CliRunModelPayloadInput<'a> {
     pub(super) max_subagent_active_turns: usize,
     pub(super) model_history_json: Option<&'a str>,
     pub(super) ledger_context: Option<&'a LedgerContextProjection>,
+    /// 本轮 Action 的运行时上下文；用于把会话车道标识并入动态环境上下文。
+    pub(super) transport_context: Option<&'a serde_json::Value>,
+    /// 本机全局通知飞书会话；仅作提示值注入。
+    pub(super) notification_chat_id: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -117,7 +121,8 @@ pub(super) fn build_cli_run_model_payload(
     if let Some(persona) = input.persona_state_message {
         dynamic_context_messages.push(persona.clone());
     }
-    let environment_context = cli_environment_context();
+    let environment_context =
+        cli_environment_context(input.transport_context, input.notification_chat_id);
     let payload = ContextAssemblerRuntime
         .assemble_input(ContextAssemblerInput {
             config: ContextAssemblerConfig {
@@ -164,34 +169,6 @@ pub(super) fn build_cli_run_model_payload(
     let mut model_payload = payload.payload;
     model_payload.model_tools = registry.model_tools_for_provider();
     Ok((model_payload, skill_selection))
-}
-
-fn cli_environment_context() -> axon_agent_runtime::EnvironmentContext {
-    let now = SystemTime::now();
-    let utc_now_ms = now.duration_since(UNIX_EPOCH).map_or(0, |duration| {
-        duration.as_millis().try_into().unwrap_or(u64::MAX)
-    });
-    let local_now: chrono::DateTime<Local> = now.into();
-    let timezone_name = local_now.format("%Z").to_string();
-    axon_agent_runtime::EnvironmentContext {
-        utc_now_ms,
-        local_time: Some(local_now.format("%Y-%m-%d %H:%M:%S").to_string()),
-        timezone_name: (!timezone_name.trim().is_empty()).then_some(timezone_name),
-        local_offset_minutes: Some(local_now.offset().local_minus_utc() / 60),
-        platform: std::env::consts::OS.to_owned(),
-        architecture: std::env::consts::ARCH.to_owned(),
-        shell: Some(axon_agent_runtime::default_shell_program()),
-        terminal: first_environment_value(&["TERM_PROGRAM", "TERM"]),
-    }
-}
-
-fn first_environment_value(names: &[&str]) -> Option<String> {
-    names.iter().find_map(|name| {
-        std::env::var(name)
-            .ok()
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty())
-    })
 }
 
 fn cli_dynamic_prompt_fragments(
@@ -323,7 +300,7 @@ mod tests {
 
     #[test]
     fn environment_context_reports_axon_shell_not_windows_command_interpreter() {
-        let context = cli_environment_context();
+        let context = cli_environment_context(None, None);
         let shell = context.shell.expect("环境感知必须提供 Axon 默认 Shell");
         let stem = Path::new(&shell)
             .file_stem()
@@ -412,6 +389,8 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (payload, skill_selection) = build_cli_run_model_payload(
             CliRunModelPayloadInput {
+                transport_context: None,
+                notification_chat_id: None,
                 memory_hits: &[],
                 soul_context_message: Some(&soul_message),
                 persona_state_message: None,
@@ -537,6 +516,8 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (payload, _) = build_cli_run_model_payload(
             CliRunModelPayloadInput {
+                transport_context: None,
+                notification_chat_id: None,
                 memory_hits: &[],
                 soul_context_message: None,
                 persona_state_message: None,
@@ -643,6 +624,8 @@ mod tests {
         let build = |persona: Option<&AgentModelMessage>| {
             let (payload, _) = build_cli_run_model_payload(
                 CliRunModelPayloadInput {
+                    transport_context: None,
+                    notification_chat_id: None,
                     memory_hits: &[],
                     soul_context_message: None,
                     persona_state_message: persona,
@@ -682,5 +665,31 @@ mod tests {
                 .any(|message| message.content.contains("<persona-state-context>")),
             "未提供时不得凭空出现人格状态段"
         );
+    }
+
+    #[test]
+    fn environment_context_carries_session_facts_from_transport() {
+        let transport = serde_json::json!({
+            "channel": "desktop",
+            "destination": "workbench-1",
+        });
+        let context = cli_environment_context(Some(&transport), Some("oc_notify"));
+        let rendered = context.render();
+
+        assert!(rendered.contains("session_channel: desktop"));
+        assert!(rendered.contains("session_destination: workbench-1"));
+        assert!(rendered.contains("notification_chat_id: oc_notify"));
+        // 提示词只给事实：具体用法由技能与文档解释，命令面变化时这里不用改。
+        assert!(!rendered.contains("axon cron"));
+    }
+
+    #[test]
+    fn environment_context_omits_absent_session_facts() {
+        let context = cli_environment_context(None, Some("   "));
+        let rendered = context.render();
+
+        assert!(!rendered.contains("session_channel:"));
+        assert!(!rendered.contains("session_destination:"));
+        assert!(!rendered.contains("notification_chat_id:"));
     }
 }

@@ -15,7 +15,9 @@ use axon_domain::{
     ExecutionId, GoalRecord, InteractionId, InteractionRecord, InteractionSource, ReplyRoute,
     ResultId, ScopeRef,
 };
-use axon_session::{CompletionNotificationRecord, NotificationDeliveryState, RuntimeStore};
+use axon_session::{
+    CompletionDeliveryTarget, CompletionNotificationRecord, NotificationDeliveryState, RuntimeStore,
+};
 use axon_session_runtime::{EventPublisher, RuntimeClock, TurnExecutor};
 
 use std::sync::Arc;
@@ -28,10 +30,7 @@ pub(super) use completion_delivery_content::{
     completion_expiry_at_ms, settle_notification_results,
 };
 
-pub(super) use completion_delivery_route::resolve_completion_targets;
-use completion_delivery_route::{
-    execution_completion_route, resolve_completion_targets_for_execution,
-};
+use completion_delivery_route::execution_completion_route;
 
 /// 单轮待派发通知的扫描上限：保证 sweep 的写锁持有时间与内存占用有界。
 pub(super) const COMPLETION_DISPATCH_BATCH_LIMIT: u32 = 32;
@@ -63,16 +62,6 @@ pub(super) fn completion_steer_source_id(execution_id: &ExecutionId) -> String {
         axon_domain::COMPLETION_STEER_SOURCE_PREFIX,
         execution_id.as_str()
     )
-}
-
-/// 从 Cron 派发 Interaction 的来源 ID 解析投递项身份。
-///
-/// 只有 Cron 派发的 Interaction 才返回 `Some`：这类主 turn 的汇总回复与 Goal 完成
-/// 消息共用同一套持久收件箱，渠道 egress 不再直接出站。
-pub(super) fn cron_delivery_id(source_message_id: &str) -> Option<&str> {
-    source_message_id
-        .strip_prefix(axon_domain::CRON_DELIVERY_SOURCE_PREFIX)
-        .filter(|value| !value.is_empty())
 }
 
 /// 正文已就绪投递项的通知 ID：由投递身份稳定派生。
@@ -231,68 +220,41 @@ where
             .store
             .upsert_completion_notification(&notification)
             .map_err(|error| DaemonHostError::Worker(error.to_string()))?;
-        self.refresh_completion_deliveries(
-            &notification_id,
-            &workspace_id,
-            Some(execution_id.as_str()),
-            now_ms,
-        )?;
+        self.refresh_completion_deliveries(&notification_id, execution_id.as_str(), now_ms)?;
         Ok(inserted)
     }
 
-    /// 按当前可用渠道刷新通知的投递目标。
+    /// 登记通知的唯一投递目标。
     ///
-    /// 幂等：已登记目标保留自身状态，新出现的渠道被追加。没有可用渠道时不写任何
-    /// 目标，通知保持 `pending`，绝不允许因为「暂时没人可投」而提前确认 Result。
+    /// 目标来自 Execution 的 `transportContext`，在创建时就已确定；这里不再扫描
+    /// 「谁可能在线」。已登记目标保留自身状态，因此该操作幂等。
     fn refresh_completion_deliveries(
         &self,
         notification_id: &str,
-        workspace_id: &str,
-        execution_id: Option<&str>,
+        execution_id: &str,
         now_ms: u64,
     ) -> Result<u32, DaemonHostError> {
-        let targets = execution_id
-            .map_or_else(
-                || {
-                    resolve_completion_targets(
-                        &self.store,
-                        workspace_id,
-                        now_ms,
-                        self.feishu_notification_target()?.as_deref(),
-                    )
-                },
-                |execution_id| {
-                    resolve_completion_targets_for_execution(
-                        &self.store,
-                        workspace_id,
-                        execution_id,
-                        now_ms,
-                        self.feishu_notification_target()?.as_deref(),
-                    )
-                },
-            )
+        let route = execution_completion_route(&self.store, execution_id)
             .map_err(DaemonHostError::Worker)?;
-        if targets.is_empty() {
-            return Ok(0);
-        }
         self.store
-            .upsert_completion_deliveries(notification_id, &targets, now_ms)
+            .upsert_completion_deliveries(
+                notification_id,
+                std::slice::from_ref(&route.target),
+                now_ms,
+            )
             .map_err(|error| DaemonHostError::Worker(error.to_string()))
     }
 
     /// 派发一批待投递的完成通知，返回本轮成功派发数量。
     ///
-    /// sweep 由客户端上线、RegisterClient 与维护 tick 触发；没有可用渠道的通知
-    /// 保持 pending，等待下一次机会。
+    /// 通知的投递目标在创建时即已确定，这里只负责把仍是 `pending` 的通知交给主
+    /// turn；目标通道离线时条目留在持久收件箱，等该通道自己重新消费。
     pub(super) fn dispatch_pending_completions(&self, limit: u32) -> Result<u32, DaemonHostError> {
         let now_ms = self.clock.now_ms();
-        // 先让隔天未读的通知失效，再派发：否则过期的完成消息会在客户端上线
+        // 先让隔天未读的通知失效，再派发：否则过期的完成消息会在客户端重新连上
         // 的瞬间被补发，违背「隔天未读自动失效，静默不再通知」。
         self.expire_stale_completions(now_ms, limit)?;
-        // 每轮先刷新所有仍可投递通知的目标，覆盖新上线的 TUI 或未来新增渠道。
-        self.refresh_deliverable_completion_targets(now_ms, limit)?;
-        let mut dispatched = self.dispatch_ready_completions(limit)?;
-        dispatched = dispatched.saturating_add(self.dispatch_summarized_completions(limit)?);
+        let mut dispatched = self.dispatch_summarized_completions(limit)?;
         let pending = self
             .store
             .pending_completion_notifications(limit)
@@ -308,51 +270,6 @@ where
                     );
                 }
             }
-        }
-        Ok(dispatched)
-    }
-
-    /// 为「正文已就绪但还没有渠道目标」的投递项补登记渠道并推进投递。
-    fn dispatch_ready_completions(&self, limit: u32) -> Result<u32, DaemonHostError> {
-        let now_ms = self.clock.now_ms();
-        let awaiting = self
-            .store
-            .notifications_awaiting_channel_delivery(now_ms, limit)
-            .map_err(|error| DaemonHostError::Worker(error.to_string()))?;
-        let mut dispatched = 0_u32;
-        for notification in awaiting {
-            let targets = if notification.result_ids.is_empty() {
-                resolve_completion_targets(
-                    &self.store,
-                    &notification.workspace_id,
-                    now_ms,
-                    self.feishu_notification_target()
-                        .map_err(DaemonHostError::Worker)?
-                        .as_deref(),
-                )
-            } else {
-                resolve_completion_targets_for_execution(
-                    &self.store,
-                    &notification.workspace_id,
-                    &notification.execution_id,
-                    now_ms,
-                    self.feishu_notification_target()
-                        .map_err(DaemonHostError::Worker)?
-                        .as_deref(),
-                )
-            }
-            .map_err(DaemonHostError::Worker)?;
-            if targets.is_empty() {
-                continue;
-            }
-            self.store
-                .upsert_completion_deliveries(&notification.notification_id, &targets, now_ms)
-                .map_err(|error| DaemonHostError::Worker(error.to_string()))?;
-            let advanced = self
-                .store
-                .dispatch_completion_deliveries(&notification.notification_id, now_ms)
-                .map_err(|error| DaemonHostError::Worker(error.to_string()))?;
-            dispatched = dispatched.saturating_add(advanced);
         }
         Ok(dispatched)
     }
@@ -378,41 +295,25 @@ where
         Ok(dispatched)
     }
 
-    /// 为有效通知登记当前全部可用渠道；已存在渠道状态保持不变。
-    fn refresh_deliverable_completion_targets(
-        &self,
-        now_ms: u64,
-        limit: u32,
-    ) -> Result<(), DaemonHostError> {
-        let notifications = self
-            .store
-            .deliverable_completion_notifications(now_ms, limit)
-            .map_err(|error| DaemonHostError::Worker(error.to_string()))?;
-        for notification in notifications {
-            self.refresh_completion_deliveries(
-                &notification.notification_id,
-                &notification.workspace_id,
-                Some(&notification.execution_id),
-                now_ms,
-            )?;
-        }
-        Ok(())
-    }
-
-    /// 登记一条正文已就绪的投递项，并推进到当时所有可用渠道。
+    /// 登记一条正文已就绪的投递项，并定向到调用方声明的渠道目标。
     ///
-    /// 用于定时任务等系统发起的投递：正文本身就是最终交付内容，不需要主 turn
-    /// 汇总。没有可用渠道时投递项保留在收件箱（`dispatched` 且无渠道目标），
-    /// 等渠道出现后由 sweep 补投，绝不静默丢弃。
+    /// 用于定时任务等系统发起的投递：正文本身就是最终交付内容，不需要主 turn 汇总。
+    /// 目标为空时直接返回，不写任何通知行：没有目标的条目留在收件箱既不会被消费，
+    /// 又要在每一轮 sweep 里被重新读出，只会污染有界批次。
     pub(super) fn enqueue_ready_delivery(
         &self,
         workspace_id: &str,
         goal_id: &str,
         delivery_id: &str,
+        channel: &str,
+        destination: &str,
         content: &str,
     ) -> Result<(String, u32), DaemonHostError> {
         let now_ms = self.clock.now_ms();
         let notification_id = ready_delivery_notification_id(delivery_id);
+        if channel.trim().is_empty() || destination.trim().is_empty() {
+            return Ok((notification_id, 0));
+        }
         let notification = CompletionNotificationRecord {
             notification_id: notification_id.clone(),
             workspace_id: workspace_id.to_owned(),
@@ -429,21 +330,13 @@ where
         self.store
             .upsert_completion_notification(&notification)
             .map_err(|error| DaemonHostError::Worker(error.to_string()))?;
-        let targets = resolve_completion_targets(
-            &self.store,
-            workspace_id,
-            now_ms,
-            self.feishu_notification_target()
-                .map_err(DaemonHostError::Worker)?
-                .as_deref(),
-        )
-        .map_err(DaemonHostError::Worker)?;
-        if targets.is_empty() {
-            return Ok((notification_id, 0));
-        }
+        let target = CompletionDeliveryTarget {
+            channel: channel.trim().to_owned(),
+            destination: destination.trim().to_owned(),
+        };
         let registered = self
             .store
-            .upsert_completion_deliveries(&notification_id, &targets, now_ms)
+            .upsert_completion_deliveries(&notification_id, std::slice::from_ref(&target), now_ms)
             .map_err(|error| DaemonHostError::Worker(error.to_string()))?;
         self.store
             .dispatch_completion_deliveries(&notification_id, now_ms)
@@ -463,23 +356,6 @@ where
         let now_ms = self.clock.now_ms();
         self.store
             .dispatched_channel_inbox(channel, now_ms, limit)
-            .map_err(|error| DaemonHostError::Worker(error.to_string()))
-    }
-
-    /// 按明确目标读取渠道收件箱，避免无关目标占满批次。
-    pub fn dispatched_channel_inbox_for_destination(
-        &self,
-        channel: &str,
-        destination: &str,
-        limit: u32,
-    ) -> Result<Vec<axon_session::ClientInboxEntry>, DaemonHostError> {
-        self.store
-            .dispatched_channel_inbox_for_destination(
-                channel,
-                destination,
-                self.clock.now_ms(),
-                limit,
-            )
             .map_err(|error| DaemonHostError::Worker(error.to_string()))
     }
 
@@ -579,20 +455,12 @@ where
         notification: &CompletionNotificationRecord,
         now_ms: u64,
     ) -> Result<bool, String> {
-        let completion_route = execution_completion_route(
-            &self.store,
-            &notification.workspace_id,
-            &notification.execution_id,
-            now_ms,
-            self.feishu_notification_target()?.as_deref(),
-        )?;
-        let Some(primary) = completion_route.primary else {
-            return Ok(false);
-        };
+        let completion_route = execution_completion_route(&self.store, &notification.execution_id)?;
+        let primary = completion_route.target;
         self.store
             .upsert_completion_deliveries(
                 &notification.notification_id,
-                &completion_route.targets,
+                std::slice::from_ref(&primary),
                 now_ms,
             )
             .map_err(|error| error.to_string())?;

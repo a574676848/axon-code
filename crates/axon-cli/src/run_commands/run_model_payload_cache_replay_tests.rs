@@ -86,6 +86,8 @@ fn build_payload(
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (payload, _) = build_cli_run_model_payload(
         CliRunModelPayloadInput {
+            transport_context: None,
+            notification_chat_id: None,
             memory_hits: &[],
             soul_context_message: Some(soul),
             persona_state_message: None,

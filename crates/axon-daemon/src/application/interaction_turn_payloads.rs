@@ -184,14 +184,8 @@ pub(super) fn interaction_transport_context(interaction: &InteractionRecord) -> 
 /// 覆盖两类系统投递：Goal/Execution 完成通知的 steer 主 turn，以及 Cron 任务派发
 /// 的主 turn。普通用户回合返回 `None`，其回复仍由渠道 egress 直接出站。
 pub(super) fn delivery_item_notification_id(interaction: &InteractionRecord) -> Option<String> {
-    let source_message_id = interaction.source.source_message_id();
-    if let Some(execution_id) = completion_steer_execution_id(source_message_id) {
-        return Some(completion_notification_id(&execution_id));
-    }
-    cron_delivery_id(source_message_id)?;
-    Some(axon_domain::cron_delivery_notification_id(
-        interaction.interaction_id.as_str(),
-    ))
+    completion_steer_execution_id(interaction.source.source_message_id())
+        .map(|execution_id| completion_notification_id(&execution_id))
 }
 
 pub(super) fn annotate_runtime_payload(

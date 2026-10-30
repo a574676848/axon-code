@@ -190,22 +190,6 @@ pub trait ClientDeliveryStore: Send + Sync {
     /// 注销客户端 presence；不存在时也是幂等的。
     fn unregister_client_presence(&self, client_id: &str) -> Result<(), ClientDeliveryStoreError>;
 
-    /// 读取 Workspace 内尚未过期的全部客户端 presence。
-    ///
-    /// 产品定义要求完成消息投递到所有可用渠道，因此这里必须返回全集而不是
-    /// 最近一个：漏掉任何一个在线客户端都等于让该渠道看不到完成消息。
-    fn active_client_presences(
-        &self,
-        workspace_id: &str,
-        now_ms: u64,
-    ) -> Result<Vec<ClientPresenceRecord>, ClientDeliveryStoreError>;
-
-    /// 读取 Home 范围内尚未过期的全部客户端 presence。
-    fn active_client_presences_all(
-        &self,
-        now_ms: u64,
-    ) -> Result<Vec<ClientPresenceRecord>, ClientDeliveryStoreError>;
-
     /// 按客户端 ID 读取 presence；不存在时返回 `None`。
     fn client_presence(
         &self,
@@ -235,16 +219,6 @@ pub trait ClientDeliveryStore: Send + Sync {
     /// 这些通知按产品定义「隔天未读自动失效」：调用方必须把它们结算为
     /// `expired` 并静默停止投递，而不是继续补发。
     fn stale_completion_notifications(
-        &self,
-        now_ms: u64,
-        limit: u32,
-    ) -> Result<Vec<CompletionNotificationRecord>, ClientDeliveryStoreError>;
-
-    /// 读取仍可投递且未过期的通知，用于刷新当前全部可用渠道。
-    ///
-    /// 通知级 `delivered` 只表示至少一个渠道已确认，不阻止其他渠道继续消费：
-    /// 新上线渠道仍可在失效前补登记，由补偿扫描推进到可投递状态。
-    fn deliverable_completion_notifications(
         &self,
         now_ms: u64,
         limit: u32,
@@ -309,18 +283,6 @@ pub trait ClientDeliveryStore: Send + Sync {
         limit: u32,
     ) -> Result<Vec<ClientInboxEntry>, ClientDeliveryStoreError>;
 
-    /// 按渠道和明确目标读取已就绪的收件箱条目。
-    ///
-    /// 渠道消费者应优先使用此查询，避免其他目标占满批次后再在内存中过滤，
-    /// 从而保证目标切换后的消息可以在固定批次内被处理。
-    fn dispatched_channel_inbox_for_destination(
-        &self,
-        channel: &str,
-        destination: &str,
-        now_ms: u64,
-        limit: u32,
-    ) -> Result<Vec<ClientInboxEntry>, ClientDeliveryStoreError>;
-
     /// 结算单个渠道的投递状态；返回是否确实从 `dispatched` 转为目标状态。
     fn settle_completion_delivery(
         &self,
@@ -358,16 +320,6 @@ pub trait ClientDeliveryStore: Send + Sync {
         state: NotificationDeliveryState,
         now_ms: u64,
     ) -> Result<(), ClientDeliveryStoreError>;
-
-    /// 读取「正文已就绪、但还没有任何渠道目标」的通知。
-    ///
-    /// 登记投递项时可能没有任何可用渠道（客户端离线且外部渠道不可用）。这类条目
-    /// 必须保留在收件箱，等渠道出现后补登记并投递；丢弃它们等同于静默丢失。
-    fn notifications_awaiting_channel_delivery(
-        &self,
-        now_ms: u64,
-        limit: u32,
-    ) -> Result<Vec<CompletionNotificationRecord>, ClientDeliveryStoreError>;
 
     /// 读取「汇总正文已就绪、但仍有渠道停留在 `pending`」的通知 ID。
     ///

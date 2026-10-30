@@ -75,6 +75,12 @@ impl RunRequest {
             model_history_json: model_history_json.as_deref(),
             attached_files: &attached_files,
             supports_vision: model.supports_vision,
+            transport_context: options.transport_context.as_ref(),
+            notification_chat_id: {
+                // 只作提示值：真正投到哪里由任务自己声明的 wake 决定。
+                let chat_id = config.remote.feishu_websocket.notification_chat_id.trim();
+                (!chat_id.is_empty()).then_some(chat_id)
+            },
             context_window: model.context_window,
             include_user_soul: agent_identity.includes_user_soul(),
             include_personal_memory: agent_identity.includes_personal_memory(),

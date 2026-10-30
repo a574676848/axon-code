@@ -11,7 +11,7 @@ const ENVIRONMENT_CONTEXT_FOOTER: &str = "</environment-context>";
 // 512 bytes covers Windows extended executable paths and long terminal labels;
 // values beyond that are treated as untrusted environment noise and omitted.
 const MAX_ENVIRONMENT_VALUE_BYTES: usize = 512;
-const MAX_ENVIRONMENT_CONTEXT_BYTES: usize = 1_024;
+const MAX_ENVIRONMENT_CONTEXT_BYTES: usize = 1_536;
 
 /// 当前 turn 的环境补充。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +32,14 @@ pub struct EnvironmentContext {
     pub shell: Option<String>,
     /// 受控的 Terminal 摘要。
     pub terminal: Option<String>,
+    /// 本轮所属会话车道的渠道标识。
+    ///
+    /// 只给事实，不给用法：这些字段由技能与文档解释，避免提示词随命令面变化而失效。
+    pub session_channel: Option<String>,
+    /// 本轮所属会话车道的目标标识。
+    pub session_destination: Option<String>,
+    /// 本机全局通知飞书会话；未配置时省略，仅作提示值。
+    pub notification_chat_id: Option<String>,
 }
 
 impl EnvironmentContext {
@@ -57,6 +65,22 @@ impl EnvironmentContext {
         append_complete_line(
             &mut lines,
             format_line("architecture", Some(&self.architecture)),
+            footer,
+        );
+        // 会话事实排在时间与 shell 之前：预算不足时它们是最后才该被丢弃的信息。
+        append_complete_line(
+            &mut lines,
+            format_line("session_channel", self.session_channel.as_deref()),
+            footer,
+        );
+        append_complete_line(
+            &mut lines,
+            format_line("session_destination", self.session_destination.as_deref()),
+            footer,
+        );
+        append_complete_line(
+            &mut lines,
+            format_line("notification_chat_id", self.notification_chat_id.as_deref()),
             footer,
         );
         append_complete_line(
@@ -139,6 +163,9 @@ mod tests {
                 "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe".to_owned(),
             ),
             terminal: Some("WindowsTerminal".to_owned()),
+            session_channel: Some("desktop".to_owned()),
+            session_destination: Some("workbench-1".to_owned()),
+            notification_chat_id: Some("oc_notify".to_owned()),
         }
     }
 
@@ -149,7 +176,7 @@ mod tests {
         assert!(message.cache_excluded);
         assert!(message.content.starts_with("<environment-context>"));
         assert!(message.content.contains("platform: windows"));
-        assert!(message.content.len() <= 1_024);
+        assert!(message.content.len() <= 1_536);
     }
 
     #[test]
@@ -157,10 +184,21 @@ mod tests {
         let mut value = context();
         value.shell = Some(format!("bad\n{}", "x".repeat(300)));
         let rendered = value.render();
-        assert!(rendered.len() <= 1_024);
+        assert!(rendered.len() <= 1_536);
         assert!(rendered.contains("shell: bad "));
         assert!(!rendered.contains("bad\n"));
         assert!(rendered.ends_with("</environment-context>"));
+        assert!(rendered.contains("session_channel: desktop"));
+        assert!(rendered.contains("session_destination: workbench-1"));
+        assert!(rendered.contains("notification_chat_id: oc_notify"));
+    }
+
+    #[test]
+    fn session_facts_are_emitted_as_plain_fields() {
+        let rendered = context().render();
+        // 只输出事实字段，不写死任何命令示例：用法由技能与文档解释。
+        assert!(rendered.contains("session_channel: desktop"));
+        assert!(!rendered.contains("axon cron"));
     }
 
     #[test]
@@ -171,7 +209,11 @@ mod tests {
         value.local_offset_minutes = None;
         value.shell = None;
         value.terminal = None;
+        value.session_channel = None;
+        value.session_destination = None;
+        value.notification_chat_id = None;
         let rendered = value.render();
+        assert!(!rendered.contains("session_channel:"));
         assert!(!rendered.contains("local_time:"));
         assert!(!rendered.contains("shell:"));
     }
@@ -184,7 +226,7 @@ mod tests {
         value.timezone_name = Some(format!("Asia/Shanghai-{}", "中".repeat(16)));
         let rendered = value.render();
 
-        assert!(rendered.len() <= 1_024);
+        assert!(rendered.len() <= 1_536);
         assert!(rendered.contains("shell: C:\\"));
         assert!(rendered.contains("terminal: WindowsTerminal-"));
         assert!(rendered.contains("timezone_name: Asia/Shanghai-"));
@@ -202,10 +244,13 @@ mod tests {
             architecture: "x86_64".to_owned(),
             shell: Some("/bin/bash".to_owned()),
             terminal: Some("xterm-256color".to_owned()),
+            session_channel: None,
+            session_destination: None,
+            notification_chat_id: None,
         };
         let rendered = value.render();
 
-        assert!(rendered.len() <= 1_024);
+        assert!(rendered.len() <= 1_536);
         assert!(rendered.contains("platform: linux"));
         assert!(rendered.contains("shell: /bin/bash"));
         assert!(rendered.contains("terminal: xterm-256color"));

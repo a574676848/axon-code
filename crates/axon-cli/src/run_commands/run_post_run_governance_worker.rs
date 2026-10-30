@@ -516,6 +516,7 @@ fn rebuild_request(
         RunRequestSession::explicit(payload.session_record.session_id.clone()),
         Some(cwd),
         RunRequestBuildOptions {
+            transport_context: None,
             client_channel: axon_client_identity::ClientChannel::Cli,
             startup: Arc::clone(&startup),
             cancel_token: None,

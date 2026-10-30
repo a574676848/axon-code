@@ -240,13 +240,6 @@ export interface MemoryWriteReceipt {
   needsRepair: boolean;
 }
 
-export interface CronDelivery {
-  adapter: string;
-  sessionId: number;
-  recipientId: string;
-  threadId?: string | null;
-}
-
 export interface CronJob {
   schemaVersion: number;
   jobId: string;
@@ -254,7 +247,11 @@ export interface CronJob {
   schedule: string;
   prompt: string;
   skills: string[];
-  delivery: CronDelivery;
+  /**
+   * 完成后的唤醒目标：`feishu:<chat_id>` 或 `session:<channel>:<destination>`。
+   * `null` 表示执行完只记录运行事实，不产生任何投递。
+   */
+  wake: string | null;
   workdir?: string | null;
   noAgent: boolean;
   script?: string | null;
@@ -314,6 +311,8 @@ export interface CronConfigResult {
   configPath: string;
   storePath: string;
   systemJobIds: string[];
+  /** 全局通知配置里的默认飞书 chat_id，只作提示，不参与投递决策。 */
+  defaultNotificationChatId: string | null;
 }
 
 export interface CronSessionTarget {

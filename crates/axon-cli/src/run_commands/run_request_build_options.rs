@@ -22,4 +22,6 @@ pub(super) struct RunRequestBuildOptions {
     pub(super) performance: Option<Arc<dyn TurnPerformanceRecorder>>,
     /// 在 history 准备前启动、由 payload 构建阶段一次消费的 Workspace 快照。
     pub(super) workspace_snapshot_prewarm: Option<RunWorkspaceSnapshotPrewarm>,
+    /// 本轮 Action 的运行时上下文；用于把会话车道标识并入动态环境上下文。
+    pub(super) transport_context: Option<serde_json::Value>,
 }

@@ -2,7 +2,106 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// 当前通用 Cron 持久化模型版本。
-pub const CRON_SCHEMA_VERSION: u32 = 1;
+pub const CRON_SCHEMA_VERSION: u32 = 2;
+
+/// 飞书投递渠道标识。
+pub const FEISHU_CHANNEL: &str = "feishu";
+
+/// Cron 自身主 turn 车道的 destination 前缀。
+///
+/// Cron 任务在自己的车道里执行，该车道没有人类消费者，因此不允许把唤醒目标指向它，
+/// 否则每轮执行都会唤醒一轮新的 Agent 回合。
+pub const CRON_LANE_DESTINATION_PREFIX: &str = "cron-";
+
+/// Cron 完成后要唤醒的目标。
+///
+/// 产品定义：定时任务只在创建时显式声明目标时才产生任何投递；没有目标就只落执行
+/// 事实。两类目标语义不同：`Feishu` 是正文直投，不产生 Agent 回合；`Session` 是主
+/// turn 注入，会真实执行一轮，因此有 provider 成本。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CronWakeTarget {
+    /// 飞书群或单聊，载荷为 chat_id。
+    Feishu(String),
+    /// 复合车道主 turn 注入。
+    Session {
+        /// 会话表面渠道，例如 `desktop`。
+        channel: String,
+        /// 渠道内会话表面标识。
+        destination: String,
+    },
+}
+
+impl CronWakeTarget {
+    /// 目标投递渠道。
+    #[must_use]
+    pub fn channel(&self) -> &str {
+        match self {
+            Self::Feishu(_) => FEISHU_CHANNEL,
+            Self::Session { channel, .. } => channel,
+        }
+    }
+
+    /// 渠道内的投递目标。
+    #[must_use]
+    pub fn destination(&self) -> &str {
+        match self {
+            Self::Feishu(chat_id) => chat_id,
+            Self::Session { destination, .. } => destination,
+        }
+    }
+
+    /// 目标是否要求注入一轮主 turn。
+    #[must_use]
+    pub const fn wakes_turn(&self) -> bool {
+        matches!(self, Self::Session { .. })
+    }
+
+    /// 校验目标形态；返回中文原因便于直接呈现给调用方。
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Feishu(chat_id) => {
+                if chat_id.trim().is_empty() {
+                    return Err("飞书唤醒目标的 chat_id 不能为空".to_owned());
+                }
+            }
+            Self::Session {
+                channel,
+                destination,
+            } => {
+                let channel = channel.trim();
+                let destination = destination.trim();
+                if channel.is_empty() {
+                    return Err("会话唤醒目标的渠道不能为空".to_owned());
+                }
+                if destination.is_empty() {
+                    return Err("会话唤醒目标的车道标识不能为空".to_owned());
+                }
+                // TUI 车道标识按进程随机生成，定时任务触发时早已失效，注入只会得到
+                // 一条无人消费的孤儿回合。
+                if channel != FEISHU_CHANNEL && channel != desktop_session_channel() {
+                    return Err(format!(
+                        "会话唤醒目标只支持 {} 与 {}，不支持 {channel}",
+                        FEISHU_CHANNEL,
+                        desktop_session_channel()
+                    ));
+                }
+                if channel == desktop_session_channel()
+                    && destination.starts_with(CRON_LANE_DESTINATION_PREFIX)
+                {
+                    return Err("会话唤醒目标不能指向 Cron 自身车道".to_owned());
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// 桌面会话表面渠道标识。
+#[must_use]
+pub const fn desktop_session_channel() -> &'static str {
+    "desktop"
+}
 
 /// Cron 任务生命周期状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,43 +130,6 @@ impl CronJobStatus {
     }
 }
 
-/// Cron 投递 adapter 类型。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CronDeliveryAdapter {
-    /// 不产生外部投递，用于 Axon 内建维护任务。
-    None,
-    /// 飞书消息投递。
-    Feishu,
-}
-
-/// 平台无关的 Cron 投递路由。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CronDeliveryTarget {
-    /// 负责投递的 adapter。
-    pub adapter: CronDeliveryAdapter,
-    /// Axon 会话命名空间。
-    pub session_id: u64,
-    /// adapter 内部的接收目标标识。
-    pub recipient_id: String,
-    /// adapter 内部的可选线程标识。
-    pub thread_id: Option<String>,
-}
-
-impl CronDeliveryTarget {
-    /// 创建不产生外部投递的路由。
-    #[must_use]
-    pub const fn none() -> Self {
-        Self {
-            adapter: CronDeliveryAdapter::None,
-            session_id: 0,
-            recipient_id: String::new(),
-            thread_id: None,
-        }
-    }
-}
-
 /// 用户级 Cron 任务。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -84,8 +146,11 @@ pub struct CronJob {
     pub prompt: String,
     /// 显式加载的 Skill 名称。
     pub skills: Vec<String>,
-    /// 投递路由。
-    pub delivery: CronDeliveryTarget,
+    /// 完成后的唤醒目标；`None` 表示执行完只落运行事实，不产生任何投递。
+    ///
+    /// 该字段没有 serde 默认值：历史版本 1 的载荷必须显式迁移，否则解析失败，
+    /// 避免把「显式声明过飞书目标」的任务静默降级成不投递。
+    pub wake: Option<CronWakeTarget>,
     /// 可选工作目录文本，由外层 adapter 解析。
     pub workdir: Option<String>,
     /// 是否跳过 Agent，仅运行脚本。
@@ -119,8 +184,8 @@ pub struct CronJobInput {
     pub prompt: String,
     /// 显式 Skill 名称。
     pub skills: Vec<String>,
-    /// 投递路由。
-    pub delivery: CronDeliveryTarget,
+    /// 完成后的唤醒目标。
+    pub wake: Option<CronWakeTarget>,
     /// 可选工作目录文本。
     pub workdir: Option<String>,
     /// 是否只运行脚本。
@@ -140,12 +205,10 @@ pub struct CronJobUpdate {
     pub prompt: Option<String>,
     /// 新 Skill 集合。
     pub skills: Option<Vec<String>>,
-    /// 新接收目标标识。
-    pub recipient_id: Option<String>,
-    /// 新线程标识。
-    pub thread_id: Option<String>,
-    /// 是否替换线程标识。
-    pub replace_thread: bool,
+    /// 新唤醒目标；配合 `replace_wake` 生效。
+    pub wake: Option<CronWakeTarget>,
+    /// 是否替换唤醒目标。
+    pub replace_wake: bool,
     /// 新工作目录文本。
     pub workdir: Option<String>,
     /// 是否替换工作目录。
@@ -178,7 +241,7 @@ pub struct CronRunRecord {
     pub success: bool,
     /// 是否执行了 Agent。
     pub agent_executed: bool,
-    /// 是否已将结果加入投递队列。
+    /// 是否已按 `wake` 目标产生一次外部动作（登记投递项或注入一轮主 turn）。
     pub delivery_enqueued: bool,
     /// 脚本标准输出是否为空。
     pub stdout_empty: bool,
@@ -204,8 +267,8 @@ pub enum CronValidationError {
     #[error("Agent cron prompt 不能为空")]
     EmptyPrompt,
     /// 投递目标为空。
-    #[error("cron 投递目标不能为空")]
-    EmptyRecipient,
+    #[error("cron 唤醒目标无效：{0}")]
+    InvalidWakeTarget(String),
     /// no-agent 任务缺少脚本。
     #[error("no-agent cron 必须提供 script")]
     MissingScript,
@@ -225,7 +288,7 @@ impl CronJob {
             schedule: input.schedule,
             prompt: input.prompt,
             skills: input.skills,
-            delivery: input.delivery,
+            wake: input.wake,
             workdir: input.workdir,
             no_agent: input.no_agent,
             script: input.script,
@@ -260,11 +323,8 @@ impl CronJob {
         if let Some(skills) = update.skills {
             next.skills = skills;
         }
-        if let Some(recipient_id) = update.recipient_id {
-            next.delivery.recipient_id = recipient_id;
-        }
-        if update.replace_thread {
-            next.delivery.thread_id = update.thread_id;
+        if update.replace_wake {
+            next.wake = update.wake;
         }
         if update.replace_workdir {
             next.workdir = update.workdir;
@@ -319,10 +379,9 @@ impl CronJob {
         if self.prompt.trim().is_empty() && !self.no_agent {
             return Err(CronValidationError::EmptyPrompt);
         }
-        if self.delivery.adapter != CronDeliveryAdapter::None
-            && self.delivery.recipient_id.trim().is_empty()
-        {
-            return Err(CronValidationError::EmptyRecipient);
+        if let Some(wake) = self.wake.as_ref() {
+            wake.validate()
+                .map_err(CronValidationError::InvalidWakeTarget)?;
         }
         if self.no_agent
             && self
@@ -341,12 +400,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cron_job_transition_preserves_generic_delivery_route() {
+    fn cron_job_transition_replaces_wake_target() {
         let job = CronJob::new(test_input(), 10, Some(20)).expect("合法任务应可创建");
+        assert_eq!(job.wake, Some(CronWakeTarget::Feishu("oc_test".to_owned())));
         let updated = job
             .with_update(
                 CronJobUpdate {
-                    recipient_id: Some("oc_next".to_owned()),
+                    wake: Some(CronWakeTarget::Session {
+                        channel: "desktop".to_owned(),
+                        destination: "workbench-1".to_owned(),
+                    }),
+                    replace_wake: true,
                     ..CronJobUpdate::default()
                 },
                 30,
@@ -354,11 +418,67 @@ mod tests {
             )
             .expect("合法更新应成功");
         let completed = updated.after_run(40, None, true);
+        let cleared = updated
+            .with_update(
+                CronJobUpdate {
+                    wake: None,
+                    replace_wake: true,
+                    ..CronJobUpdate::default()
+                },
+                50,
+                Some(60),
+            )
+            .expect("清空唤醒目标应成功");
 
-        assert_eq!(updated.delivery.adapter, CronDeliveryAdapter::Feishu);
-        assert_eq!(updated.delivery.recipient_id, "oc_next");
+        assert_eq!(
+            updated.wake,
+            Some(CronWakeTarget::Session {
+                channel: "desktop".to_owned(),
+                destination: "workbench-1".to_owned(),
+            })
+        );
+        assert_eq!(
+            updated.wake.as_ref().map(CronWakeTarget::channel),
+            Some("desktop")
+        );
+        assert_eq!(
+            updated.wake.as_ref().map(CronWakeTarget::destination),
+            Some("workbench-1")
+        );
+        assert!(
+            updated
+                .wake
+                .as_ref()
+                .is_some_and(CronWakeTarget::wakes_turn)
+        );
+        assert_eq!(cleared.wake, None);
         assert_eq!(completed.status, CronJobStatus::Completed);
         assert_eq!(completed.last_run_at_ms, Some(40));
+    }
+
+    #[test]
+    fn wake_target_rejects_unstable_or_self_lane() {
+        let tui = CronWakeTarget::Session {
+            channel: "tui".to_owned(),
+            destination: "terminal-1".to_owned(),
+        };
+        let self_lane = CronWakeTarget::Session {
+            channel: "desktop".to_owned(),
+            destination: format!("{CRON_LANE_DESTINATION_PREFIX}cron-abc"),
+        };
+        let empty_chat = CronWakeTarget::Feishu("   ".to_owned());
+        let valid = CronWakeTarget::Session {
+            channel: "desktop".to_owned(),
+            destination: "workbench-1".to_owned(),
+        };
+
+        assert!(
+            tui.validate().is_err(),
+            "TUI 车道标识不稳定，不得作为唤醒目标"
+        );
+        assert!(self_lane.validate().is_err(), "不得唤醒 Cron 自身车道");
+        assert!(empty_chat.validate().is_err());
+        assert!(valid.validate().is_ok());
     }
 
     #[test]
@@ -380,12 +500,7 @@ mod tests {
             schedule: "interval:1h".to_owned(),
             prompt: "执行测试".to_owned(),
             skills: Vec::new(),
-            delivery: CronDeliveryTarget {
-                adapter: CronDeliveryAdapter::Feishu,
-                session_id: 7,
-                recipient_id: "oc_test".to_owned(),
-                thread_id: None,
-            },
+            wake: Some(CronWakeTarget::Feishu("oc_test".to_owned())),
             workdir: None,
             no_agent: false,
             script: None,

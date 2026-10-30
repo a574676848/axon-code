@@ -284,10 +284,11 @@ fn run_feishu_inbox_tick(
     axon_root: &std::path::Path,
     config_path: &std::path::Path,
 ) {
+    let allow_outbound = crate::remote_commands::feishu_channel_enabled(config_path);
     match crate::remote_commands::drain_feishu_completion_inbox(
         host,
         axon_root,
-        config_path,
+        allow_outbound,
         SUPERVISOR_BATCH_LIMIT,
     ) {
         Ok(0) => {}

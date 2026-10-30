@@ -5,10 +5,7 @@ use super::super::event_stream_bridge::EventStreamBridge;
 use super::super::primary_turn_service::{
     PrimaryTurnRequest, PrimaryTurnRunner, PrimaryTurnRunnerError,
 };
-use super::completion_delivery::{
-    completion_notification_id, completion_steer_execution_id, cron_delivery_id,
-    resolve_completion_targets,
-};
+use super::completion_delivery::{completion_notification_id, completion_steer_execution_id};
 use super::daemon_host_projection::queued_action;
 #[path = "child_session_event_sink.rs"]
 mod child_session_event_sink;
@@ -21,8 +18,7 @@ mod interaction_turn_terminal;
 use axon_crypto::sha256_hex;
 use axon_domain::{DaemonSessionId, InteractionRecord, SessionActionId};
 use axon_session::{
-    DaemonHostRecord, NotificationDeliveryState, RuntimeStore, SessionRuntimeRecord,
-    interaction_session_lane_id,
+    DaemonHostRecord, RuntimeStore, SessionRuntimeRecord, interaction_session_lane_id,
 };
 use axon_session_runtime::model::{RuntimeEvent, TURN_COMPLETED_EVENT};
 use axon_session_runtime::{
@@ -34,7 +30,7 @@ use child_session_event_sink::ChildSessionSinkFactory;
 use interaction_turn_event_sink::RuntimeTurnEventSink;
 use interaction_turn_terminal::{FailedTurnTerminalInput, failed_turn_terminal_events};
 use interaction_turn_terminal::{TurnFailureKind, classify_turn_failure};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 /// Daemon Primary Turn 使用的稳定 Action 类型。
 pub const PRIMARY_TURN_ACTION_KIND: &str = "user_input";
 const PRIMARY_ACTION_ID_PREFIX: &str = "interaction-action-";
@@ -46,7 +42,6 @@ pub(super) struct InteractionTurnRunner<S, E, P, C> {
     pub(super) executor: E,
     pub(super) publisher: P,
     pub(super) stream_bridge: Arc<EventStreamBridge>,
-    pub(super) feishu_notification_chat_id: Arc<RwLock<Option<String>>>,
     pub(super) host: DaemonHostRecord,
     pub(super) clock: C,
     pub(super) now_ms: u64,
@@ -161,7 +156,6 @@ where
             generation,
         )?;
         self.settle_completion_delivery(&interaction, summary.as_deref());
-        self.record_cron_delivery(&interaction, summary.as_deref());
         Ok(())
     }
 }
@@ -351,70 +345,6 @@ where
                 .store
                 .record_completion_summary(&notification_id, summary, self.now_ms)
                 .is_err()
-        {
-            return;
-        }
-        let _ = self
-            .store
-            .dispatch_completion_deliveries(&notification_id, self.now_ms);
-    }
-
-    /// 把 Cron 派发主 turn 的汇总回复登记为投递项，并推进到所有可用渠道。
-    ///
-    /// Cron 投递与 Task 完成投递共用同一套持久收件箱：正文只在主 turn 产出后登记，
-    /// 因此不存在「先登记空正文、再补写」的竞态；没有可用渠道时投递项保留在收件箱，
-    /// 等渠道出现后补投。同一 Cron 运行重复结算命中唯一约束，只产生一条投递项。
-    fn record_cron_delivery(&self, interaction: &InteractionRecord, summary: Option<&str>) {
-        if cron_delivery_id(interaction.source.source_message_id()).is_none() {
-            return;
-        }
-        let Some(summary) = summary.filter(|text| !text.is_empty()) else {
-            return;
-        };
-        let Some(workspace_id) = interaction.scope.workspace_id() else {
-            return;
-        };
-        let notification_id =
-            axon_domain::cron_delivery_notification_id(interaction.interaction_id.as_str());
-        let notification = axon_session::CompletionNotificationRecord {
-            notification_id: notification_id.clone(),
-            workspace_id: workspace_id.as_str().to_owned(),
-            goal_id: interaction.source.source_message_id().to_owned(),
-            execution_id: interaction.source.source_message_id().to_owned(),
-            content: summary.to_owned(),
-            summary: summary.to_owned(),
-            result_ids: Vec::new(),
-            state: NotificationDeliveryState::Dispatched,
-            created_at_ms: self.now_ms,
-            updated_at_ms: self.now_ms,
-            expires_at_ms: super::completion_delivery::completion_expiry_at_ms(self.now_ms),
-        };
-        if self
-            .store
-            .upsert_completion_notification(&notification)
-            .is_err()
-        {
-            return;
-        }
-        let target = match self.feishu_notification_chat_id.read() {
-            Ok(target) => target.clone(),
-            Err(_) => return,
-        };
-        let Ok(targets) = resolve_completion_targets(
-            &self.store,
-            workspace_id.as_str(),
-            self.now_ms,
-            target.as_deref(),
-        ) else {
-            return;
-        };
-        if targets.is_empty() {
-            return;
-        }
-        if self
-            .store
-            .upsert_completion_deliveries(&notification_id, &targets, self.now_ms)
-            .is_err()
         {
             return;
         }

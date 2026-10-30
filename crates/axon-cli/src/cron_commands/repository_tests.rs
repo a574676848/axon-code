@@ -1,6 +1,6 @@
 //! Cron 仓储契约测试：通用 cron 根、任务声明去重、schema 版本重建与历史清理。
 
-use axon_domain::{CronDeliveryAdapter, CronDeliveryTarget, CronJobInput};
+use axon_domain::{CronJobInput, CronWakeTarget};
 
 use super::*;
 
@@ -100,7 +100,7 @@ fn agent_configuration_remains_fixed_when_defaults_change() {
 }
 
 #[test]
-fn schema_version_mismatch_rebuilds_without_legacy_payload() {
+fn schema_version_mismatch_aligns_without_dropping_unrelated_objects() {
     let root = axon_test_support::test_temp_dir();
     let path = root.path().join(CRON_RUNTIME_DIR).join(CRON_DATABASE_FILE);
     std::fs::create_dir_all(path.parent().expect("数据库应有父目录")).expect("父目录应可创建");
@@ -110,28 +110,77 @@ fn schema_version_mismatch_rebuilds_without_legacy_payload() {
         .expect("旧 schema 应可写入");
     drop(connection);
 
-    let repository = CronRepository::open(root.path()).expect("新 schema 应可重建");
-    let legacy_exists: i64 = repository
-        .connection()
-        .expect("数据库应可打开")
+    let repository = CronRepository::open(root.path()).expect("新 schema 应可对齐");
+    let connection = repository.connection().expect("数据库应可打开");
+    let legacy_exists: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='legacy'",
             [],
             |row| row.get(0),
         )
         .expect("应可检查旧表");
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("应可读取 schema version");
 
-    assert_eq!(legacy_exists, 0);
+    // 无关的遗留对象不属于 cron 的业务事实源，对齐过程不得顺手清理。
+    assert_eq!(legacy_exists, 1);
+    assert_eq!(version, CRON_DATABASE_SCHEMA_VERSION);
+}
+
+#[test]
+fn legacy_cron_tables_keep_rows_when_columns_change() {
+    let root = axon_test_support::test_temp_dir();
+    let path = root.path().join(CRON_RUNTIME_DIR).join(CRON_DATABASE_FILE);
+    std::fs::create_dir_all(path.parent().expect("数据库应有父目录")).expect("父目录应可创建");
+    let connection = Connection::open(&path).expect("旧数据库应可创建");
+    // 旧形态：缺 claim_id/claim_until_ms 与 created_at_ms 生成列。
+    connection
+        .execute_batch(
+            "CREATE TABLE cron_jobs (
+                 job_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL, status TEXT NOT NULL,
+                 next_run_at_ms INTEGER, revision INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL);
+             INSERT INTO cron_jobs VALUES ('legacy-job', '{}', 'active', 10, 3, 5);
+             CREATE TABLE cron_runs (
+                 run_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, payload_json TEXT NOT NULL,
+                 started_at_ms INTEGER NOT NULL, finished_at_ms INTEGER NOT NULL);
+             INSERT INTO cron_runs VALUES ('legacy-run', 'legacy-job', '{}', 1, 2);
+             PRAGMA user_version = 99;",
+        )
+        .expect("旧 schema 应可写入");
+    drop(connection);
+
+    let repository = CronRepository::open(root.path()).expect("旧库应可对齐");
+    let connection = repository.connection().expect("数据库应可打开");
+    let jobs: i64 = connection
+        .query_row("SELECT COUNT(*) FROM cron_jobs", [], |row| row.get(0))
+        .expect("应可统计 jobs");
+    let runs: i64 = connection
+        .query_row("SELECT COUNT(*) FROM cron_runs", [], |row| row.get(0))
+        .expect("应可统计 runs");
+    let (status, revision, claim_id): (String, i64, Option<String>) = connection
+        .query_row(
+            "SELECT status, revision, claim_id FROM cron_jobs WHERE job_id = 'legacy-job'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("历史行应可读取");
+
+    // 列形态变化只能搬迁，不能清空：任务定义与运行历史都是唯一事实源。
+    assert_eq!(jobs, 1);
+    assert_eq!(runs, 1);
+    assert_eq!(status, "active");
+    assert_eq!(revision, 3);
+    assert_eq!(claim_id, None);
 }
 
 #[test]
 fn cleanup_history_removes_expired_runs_and_removed_jobs_only() {
     let root = axon_test_support::test_temp_dir();
     let repository = CronRepository::open(root.path()).expect("repository 应可打开");
-    let old_job = test_job_with_delivery("old-removed", 1, CronDeliveryTarget::none())
-        .with_status(CronJobStatus::Removed, 1);
+    let old_job = test_job_with_wake("old-removed", 1, None).with_status(CronJobStatus::Removed, 1);
     repository.save_job(&old_job).expect("旧 job 应可保存");
-    let active = test_job_with_delivery("active", 1, CronDeliveryTarget::none());
+    let active = test_job_with_wake("active", 1, None);
     repository.save_job(&active).expect("活动 job 应可保存");
     repository
         .append_run(&CronRunRecord {
@@ -249,23 +298,14 @@ fn cron_history_cleanup_drains_large_backlog() {
 }
 
 fn test_job(next_run_at_ms: u64) -> CronJob {
-    test_job_with_delivery(
+    test_job_with_wake(
         "cron-test",
         next_run_at_ms,
-        CronDeliveryTarget {
-            adapter: CronDeliveryAdapter::Feishu,
-            session_id: 7,
-            recipient_id: "oc_test".to_owned(),
-            thread_id: None,
-        },
+        Some(CronWakeTarget::Feishu("oc_test".to_owned())),
     )
 }
 
-fn test_job_with_delivery(
-    job_id: &str,
-    next_run_at_ms: u64,
-    delivery: CronDeliveryTarget,
-) -> CronJob {
+fn test_job_with_wake(job_id: &str, next_run_at_ms: u64, wake: Option<CronWakeTarget>) -> CronJob {
     CronJob::new(
         CronJobInput {
             job_id: job_id.to_owned(),
@@ -273,7 +313,7 @@ fn test_job_with_delivery(
             schedule: "interval:1h".to_owned(),
             prompt: "执行".to_owned(),
             skills: Vec::new(),
-            delivery,
+            wake,
             workdir: None,
             no_agent: false,
             script: None,
@@ -282,4 +322,44 @@ fn test_job_with_delivery(
         Some(next_run_at_ms),
     )
     .expect("测试 job 应有效")
+}
+
+#[test]
+fn legacy_payload_version_is_rejected_before_migration() {
+    let root = axon_test_support::test_temp_dir();
+    let repository = CronRepository::open(root.path()).expect("repository 应可打开");
+    // v1 载荷：带 delivery、没有 wake。serde 会把缺失的 Option 字段当成 None，
+    // 所以必须靠版本门禁拦住它，否则任务会被静默降级成「不投递」。
+    let payload = serde_json::json!({
+        "schemaVersion": 1,
+        "jobId": "legacy-v1",
+        "name": "旧任务",
+        "schedule": "interval:1h",
+        "prompt": "执行",
+        "skills": [],
+        "delivery": {"adapter": "feishu", "sessionId": 0, "recipientId": "oc_legacy", "threadId": null},
+        "workdir": null,
+        "noAgent": false,
+        "script": null,
+        "status": "active",
+        "revision": 1,
+        "nextRunAtMs": 10,
+        "lastRunAtMs": null,
+        "createdAtMs": 1,
+        "updatedAtMs": 1,
+    })
+    .to_string();
+    repository
+        .connection()
+        .expect("连接应可打开")
+        .execute(
+            "INSERT INTO cron_jobs (job_id, payload_json, status, next_run_at_ms, revision, updated_at_ms)
+             VALUES (?1, ?2, 'active', 10, 1, 1)",
+            rusqlite::params!["legacy-v1", payload],
+        )
+        .expect("写入旧载荷");
+
+    let error = repository.jobs(false).expect_err("v1 载荷必须被拒绝");
+    assert!(error.contains("版本为 1"), "{error}");
+    assert!(error.contains("迁移"), "错误里必须给出迁移路径：{error}");
 }

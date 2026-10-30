@@ -20,7 +20,7 @@ use axon_session::{
 use axon_session_runtime::{EventPublisher, RuntimeClock, TurnExecutor};
 use std::{
     sync::{
-        Arc, RwLock,
+        Arc,
         atomic::{AtomicU8, AtomicU64, Ordering},
     },
     thread,
@@ -67,8 +67,6 @@ mod daemon_host_execution_runtime;
 mod daemon_host_execution_worker;
 #[path = "daemon_host_goal_tools.rs"]
 mod daemon_host_goal_tools;
-#[path = "daemon_host_notification.rs"]
-mod daemon_host_notification;
 #[path = "daemon_host_request.rs"]
 mod daemon_host_request;
 #[path = "goal_execution.rs"]
@@ -114,7 +112,6 @@ pub struct DaemonHost<S, E, P, C, I> {
     active_turn_steer_sink: Arc<dyn ActiveTurnSteerSink>,
     delivery_health: Option<Arc<dyn DeliveryHealthStore>>,
     /// 组合根提供的飞书通知目标；所有 Host 快照共享最新配置。
-    pub(super) feishu_notification_chat_id: Arc<RwLock<Option<String>>>,
     /// 最近一次成功写入的 Host lease 到期时间；健康快照据此报告真实剩余租期。
     lease_expires_at_ms: Arc<AtomicU64>,
 }
@@ -197,7 +194,6 @@ where
             stream_bridge,
             active_turn_steer_sink: Arc::new(NoActiveTurnSteerSink),
             delivery_health: None,
-            feishu_notification_chat_id: Arc::new(RwLock::new(None)),
             lease_expires_at_ms: Arc::new(AtomicU64::new(NO_LEASE_MS)),
         }
     }
@@ -452,7 +448,6 @@ where
                 executor: self.executor.clone(),
                 publisher: self.publisher.clone(),
                 stream_bridge: Arc::clone(&self.stream_bridge),
-                feishu_notification_chat_id: Arc::clone(&self.feishu_notification_chat_id),
                 host,
                 clock: self.clock.clone(),
                 now_ms,

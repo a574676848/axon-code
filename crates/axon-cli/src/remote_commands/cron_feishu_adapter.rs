@@ -1,12 +1,18 @@
 use std::path::Path;
 
+use axon_crypto::sha256_hex_prefix;
 use axon_daemon::infrastructure::ipc::JsonlIpcClient;
-use axon_domain::{CRON_DELIVERY_SOURCE_PREFIX, CronDeliveryAdapter, CronDeliveryTarget, CronJob};
-use axon_protocol::{DaemonCommand, DaemonRequest, EnqueueDeliveryRequest};
+use axon_domain::{
+    AudienceContext, AudienceKind, CRON_DELIVERY_ID_PREFIX, CronJob, DisclosurePolicy,
+    InteractionId, InteractionRecord, InteractionSource, ReplyRoute, ScopeRef,
+};
+use axon_protocol::{
+    DaemonCommand, DaemonRequest, EnqueueDeliveryRequest, SubmitInteractionRequest,
+};
 use axon_session::WorkspaceResolver;
 
 use crate::{
-    cron_commands::{CronExecutionAdapter, CronExecutionReceipt, execute_local_cron_agent},
+    cron_commands::{CRON_WAKE_SOURCE_PREFIX, CronExecutionAdapter, execute_local_cron_agent},
     runtime_paths::daemon_endpoint_for_root,
 };
 
@@ -23,14 +29,14 @@ impl FeishuCronAdapter {
         Self { context }
     }
 
-    /// Cron 运行身份：同时作为主 turn 来源 ID 与投递项身份，保证两者一一对应。
-    fn delivery_source_key(job_id: &str, now_ms: u64) -> String {
-        format!("{CRON_DELIVERY_SOURCE_PREFIX}{job_id}:{now_ms}")
+    /// 投递项身份：同一任务同一启动时刻只登记一次，重复登记命中唯一约束。
+    fn delivery_id(job_id: &str, now_ms: u64) -> String {
+        format!("{CRON_DELIVERY_ID_PREFIX}{job_id}:{now_ms}")
     }
 
     /// 通过 Daemon IPC 发送一条命令并返回成功响应正文。
     ///
-    /// Cron 投递的 durable 收件箱归 Daemon 所有，因此投递登记必须由 Daemon 执行；
+    /// 投递项与唤醒回合的 durable 事实都归 Daemon 所有，因此必须由 Daemon 落库；
     /// 失败一律向上返回错误，绝不在调用端制造一次「假装已投递」的成功。
     fn send_command(
         &self,
@@ -50,24 +56,42 @@ impl FeishuCronAdapter {
         Ok(response.body)
     }
 
-    /// 登记一条正文已就绪的 Cron 投递项，并投递到当时所有可用渠道。
-    fn enqueue_delivery(&self, job: &CronJob, body: &str, now_ms: u64) -> Result<String, String> {
-        let delivery_id = Self::delivery_source_key(&job.job_id, now_ms);
-        let workdir = job
-            .workdir
+    fn workdir<'a>(&'a self, job: &'a CronJob) -> &'a Path {
+        job.workdir
             .as_deref()
             .map(Path::new)
-            .unwrap_or(&self.context.axon_root);
+            .unwrap_or(&self.context.axon_root)
+    }
+
+    /// 解析并注册任务所属 Workspace；投递与唤醒都必须绑定已注册的 Workspace。
+    fn resolve_workspace_id(&self, job: &CronJob, now_ms: u64) -> Result<String, String> {
+        let workdir = self.workdir(job);
         crate::run_commands::register_workspace(workdir, now_ms, Some(&self.context.config_path))?;
-        let workspace = WorkspaceResolver
+        WorkspaceResolver
             .resolve(workdir, now_ms)
-            .map_err(|error| format!("解析 Feishu Cron Workspace 失败：{error}"))?;
+            .map(|workspace| workspace.workspace_id.as_str().to_owned())
+            .map_err(|error| format!("解析 Cron 任务 Workspace 失败：{error}"))
+    }
+
+    /// 登记一条正文已就绪的投递项，并定向到指定渠道目标。
+    fn enqueue_delivery(
+        &self,
+        job: &CronJob,
+        channel: &str,
+        destination: &str,
+        body: &str,
+        now_ms: u64,
+    ) -> Result<String, String> {
+        let delivery_id = Self::delivery_id(&job.job_id, now_ms);
+        let workspace_id = self.resolve_workspace_id(job, now_ms)?;
         let body_json = self.send_command(
             format!("{CRON_DAEMON_CLIENT_ID}-delivery-{delivery_id}"),
             DaemonCommand::EnqueueDelivery(EnqueueDeliveryRequest {
-                workspace_id: workspace.workspace_id.as_str().to_owned(),
+                workspace_id,
                 goal_id: job.job_id.clone(),
                 delivery_id,
+                channel: Some(channel.to_owned()),
+                destination: Some(destination.to_owned()),
                 content: body.to_owned(),
             }),
         )?;
@@ -76,6 +100,51 @@ impl FeishuCronAdapter {
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned)
             .ok_or_else(|| "Daemon 投递登记回执缺少 notificationId".to_owned())
+    }
+
+    /// 向目标复合车道提交一次主 turn 注入。
+    ///
+    /// 身份按「任务 + 启动时刻」稳定派生：同一轮重复提交命中来源幂等键，不会在目标
+    /// 会话里刷出两轮相同的唤醒回合。
+    fn submit_wake_turn(
+        &self,
+        job: &CronJob,
+        channel: &str,
+        destination: &str,
+        body: &str,
+        now_ms: u64,
+    ) -> Result<String, String> {
+        let workspace_id = self.resolve_workspace_id(job, now_ms)?;
+        let identity = format!("{}:{now_ms}", job.job_id);
+        let interaction_id = InteractionId::new(format!(
+            "cron-wake-{}",
+            sha256_hex_prefix(identity.as_bytes(), 20)
+        ))
+        .map_err(|error| error.to_string())?;
+        let source =
+            InteractionSource::new(channel, format!("{CRON_WAKE_SOURCE_PREFIX}{identity}"))
+                .map_err(|error| error.to_string())?;
+        let scope = ScopeRef::workspace(workspace_id).map_err(|error| error.to_string())?;
+        let route = ReplyRoute::new(channel, destination).map_err(|error| error.to_string())?;
+        let interaction = InteractionRecord::new(
+            interaction_id,
+            source,
+            scope,
+            AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly),
+            route,
+            body,
+            now_ms,
+        )
+        .map_err(|error| error.to_string())?;
+        let body_json = self.send_command(
+            format!("{CRON_DAEMON_CLIENT_ID}-wake-{identity}"),
+            DaemonCommand::SubmitInteraction(SubmitInteractionRequest { interaction }),
+        )?;
+        body_json
+            .get("interactionId")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| "Daemon 唤醒提交回执缺少 interactionId".to_owned())
     }
 }
 
@@ -88,47 +157,35 @@ impl CronExecutionAdapter for FeishuCronAdapter {
         &self.context.config_path
     }
 
-    fn delivery_target(
-        &self,
-        recipient_id: String,
-        thread_id: Option<String>,
-    ) -> CronDeliveryTarget {
-        CronDeliveryTarget {
-            adapter: CronDeliveryAdapter::Feishu,
-            session_id: self.context.gateway_session_id(),
-            recipient_id,
-            thread_id,
-        }
-    }
-
-    fn execute_agent(
-        &self,
-        job: &CronJob,
-        prompt: &str,
-        now_ms: u64,
-    ) -> Result<CronExecutionReceipt, String> {
-        let body = execute_local_cron_agent(
+    fn execute_agent(&self, job: &CronJob, prompt: &str) -> Result<String, String> {
+        execute_local_cron_agent(
             &self.context.config_path,
             &self.context.axon_root,
             job,
             prompt,
-        )?;
-        let dispatch_id =
-            if job.delivery.adapter != CronDeliveryAdapter::None && !body.trim().is_empty() {
-                Some(self.enqueue_delivery(job, &body, now_ms)?)
-            } else {
-                None
-            };
-        Ok(CronExecutionReceipt {
-            agent_executed: true,
-            delivery_enqueued: dispatch_id.is_some(),
-            stdout_empty: body.trim().is_empty(),
-            dispatch_id,
-        })
+        )
     }
 
-    fn enqueue_reply(&self, job: &CronJob, body: &str, now_ms: u64) -> Result<String, String> {
-        self.enqueue_delivery(job, body, now_ms)
+    fn enqueue_reply(
+        &self,
+        job: &CronJob,
+        channel: &str,
+        destination: &str,
+        body: &str,
+        now_ms: u64,
+    ) -> Result<String, String> {
+        self.enqueue_delivery(job, channel, destination, body, now_ms)
+    }
+
+    fn wake_session(
+        &self,
+        job: &CronJob,
+        channel: &str,
+        destination: &str,
+        body: &str,
+        now_ms: u64,
+    ) -> Result<String, String> {
+        self.submit_wake_turn(job, channel, destination, body, now_ms)
     }
 }
 

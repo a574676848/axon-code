@@ -78,13 +78,19 @@ pub(crate) fn load_persona_context(
     let started = Instant::now();
     let root = axon_config::runtime_axon_root_path(config_path)
         .map_err(|error| format!("无法解析 Axon 运行根目录：{error:?}"))?;
-    load_persona_context_from_root(&root, input, started)
+    load_persona_context_from_root(&root, input, started, PERSONA_ASSEMBLY_BUDGET_MS)
 }
 
+/// 在给定装配预算内读取人格上下文。
+///
+/// `budget_ms` 是显式依赖而非直接读常量：真实装配耗时会随机器负载浮动，调用方
+/// （尤其是测试）必须能自行决定本次允许花多久。写死常量会让「有动态段」这类结构
+/// 断言退化成「只在空闲机器上成立」，并行门禁下必然翻车。
 fn load_persona_context_from_root(
     root: &Path,
     input: PersonaSceneInput,
     started: Instant,
+    budget_ms: u64,
 ) -> Result<PersonaContext, String> {
     // 合同第 11.6 条：非 trace 级别不执行分段计时，只保留熔断预算所需的一次总计时。
     let telemetry = first_token_telemetry_enabled();
@@ -150,7 +156,7 @@ fn load_persona_context_from_root(
     };
 
     // 库查询已可能耗尽预算：先判一次，超预算就不再跑策略、直接降级。
-    if elapsed_us(started) >= PERSONA_ASSEMBLY_BUDGET_MS.saturating_mul(1_000) {
+    if elapsed_us(started) >= budget_ms.saturating_mul(1_000) {
         let stable = stable_message(&document.core, &styles);
         let mut context = PersonaContext {
             stable,
@@ -204,7 +210,7 @@ fn load_persona_context_from_root(
         .as_ref()
         .map_or(0, |message| message.content.len());
     let total_us = elapsed_us(started);
-    if total_us >= PERSONA_ASSEMBLY_BUDGET_MS.saturating_mul(1_000) {
+    if total_us >= budget_ms.saturating_mul(1_000) {
         context.degraded = true;
         context
             .warnings

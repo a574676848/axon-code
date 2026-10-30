@@ -12,7 +12,8 @@ pub struct SubmitInteractionRequest {
 /// 登记「正文已就绪」投递项的请求。
 ///
 /// 系统发起的投递（定时任务等）没有主 turn 汇总环节：正文本身就是最终交付内容，
-/// 由 Daemon 统一登记到持久收件箱并投递到当时所有可用渠道。
+/// 由 Daemon 统一登记到持久收件箱。调用方必须显式给出投递目标，Daemon 不再自行
+/// 解析「所有在线渠道」。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnqueueDeliveryRequest {
@@ -22,6 +23,12 @@ pub struct EnqueueDeliveryRequest {
     pub goal_id: String,
     /// 投递项稳定身份；同一身份重复登记幂等。
     pub delivery_id: String,
+    /// 投递渠道，必须显式给出；缺省视为请求不合法，不做任何假成功。
+    #[serde(default)]
+    pub channel: Option<String>,
+    /// 渠道内投递目标，必须与 `channel` 同时给出。
+    #[serde(default)]
+    pub destination: Option<String>,
     /// 已就绪的最终交付正文。
     pub content: String,
 }

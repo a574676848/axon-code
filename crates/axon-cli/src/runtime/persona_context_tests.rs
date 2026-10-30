@@ -3,6 +3,11 @@
 use super::*;
 use axon_persona::domain::scene_frame::Channel;
 
+/// 结构类用例的装配预算：永不降级，断言只观测结构，不受真实耗时与机器负载影响。
+const UNBOUNDED_BUDGET_MS: u64 = u64::MAX;
+/// 超预算用例的装配预算：任何耗时都算超限，把「超预算」变成确定输入而非判断依据。
+const ZERO_BUDGET_MS: u64 = 0;
+
 fn scene() -> PersonaSceneInput {
     PersonaSceneInput {
         channel: Channel::Cli,
@@ -16,8 +21,8 @@ fn missing_soul_yields_empty_context_without_warning() {
     let root = axon_test_support::test_temp_dir();
     let started = Instant::now();
 
-    let context =
-        load_persona_context_from_root(root.path(), scene(), started).expect("缺失文件不应报错");
+    let context = load_persona_context_from_root(root.path(), scene(), started, UNBOUNDED_BUDGET_MS)
+        .expect("缺失文件不应报错");
 
     assert!(context.stable.is_none());
     assert!(context.dynamic.is_none());
@@ -34,7 +39,7 @@ fn invalid_soul_degrades_with_warning_but_keeps_turn_alive() {
     )
     .unwrap();
 
-    let context = load_persona_context_from_root(root.path(), scene(), Instant::now())
+    let context = load_persona_context_from_root(root.path(), scene(), Instant::now(), UNBOUNDED_BUDGET_MS)
         .expect("无效人设不应报错");
 
     assert!(context.stable.is_none());
@@ -49,7 +54,7 @@ fn valid_soul_produces_stable_and_dynamic_messages() {
     let root = axon_test_support::test_temp_dir();
     fs::write(root.path().join(USER_SOUL_FILE_NAME), VALID_SOUL).unwrap();
 
-    let context = load_persona_context_from_root(root.path(), scene(), Instant::now())
+    let context = load_persona_context_from_root(root.path(), scene(), Instant::now(), UNBOUNDED_BUDGET_MS)
         .expect("合法人设应装配");
 
     let stable = context.stable.expect("应有稳定段");
@@ -70,8 +75,8 @@ fn stable_bytes_are_unchanged_across_loads() {
     let root = axon_test_support::test_temp_dir();
     fs::write(root.path().join(USER_SOUL_FILE_NAME), VALID_SOUL).unwrap();
 
-    let first = load_persona_context_from_root(root.path(), scene(), Instant::now()).unwrap();
-    let second = load_persona_context_from_root(root.path(), scene(), Instant::now()).unwrap();
+    let first = load_persona_context_from_root(root.path(), scene(), Instant::now(), UNBOUNDED_BUDGET_MS).unwrap();
+    let second = load_persona_context_from_root(root.path(), scene(), Instant::now(), UNBOUNDED_BUDGET_MS).unwrap();
 
     assert_eq!(
         first.stable.unwrap().content,
@@ -85,15 +90,13 @@ const VALID_SOUL: &str = "---\nschema: axon-soul/v1\nidentity:\n  name: Axon\n  
 fn assembly_over_budget_degrades_and_keeps_the_turn_alive() {
     let root = axon_test_support::test_temp_dir();
     fs::write(root.path().join(USER_SOUL_FILE_NAME), VALID_SOUL).unwrap();
-    // 把起点回拨 80 ms，等价于注入一次超预算装配（INV-12 的负向验证）。
-    let started = Instant::now()
-        .checked_sub(std::time::Duration::from_millis(80))
-        .expect("单调时钟可回拨");
-
+    // 零预算等价于「装配一定超限」：把超预算做成确定输入，而不是靠回拨单调时钟
+    // 去赌真实装配耗时能压住 50 ms 预算（INV-12 的负向验证）。
     let context =
-        load_persona_context_from_root(root.path(), scene(), started).expect("降级不应报错");
+        load_persona_context_from_root(root.path(), scene(), Instant::now(), ZERO_BUDGET_MS)
+            .expect("降级不应报错");
 
-    assert!(context.degraded, "超过 50 ms 必须置降级");
+    assert!(context.degraded, "零预算必须置降级");
     assert!(context.stable.is_some(), "稳定段照常装配");
     assert!(context.dynamic.is_none(), "降级时放弃动态段");
     assert!(
@@ -117,7 +120,7 @@ fn oversized_stable_segment_raises_a_visible_warning() {
     fs::write(root.path().join(USER_SOUL_FILE_NAME), oversized).unwrap();
 
     let context =
-        load_persona_context_from_root(root.path(), scene(), Instant::now()).expect("应装配");
+        load_persona_context_from_root(root.path(), scene(), Instant::now(), UNBOUNDED_BUDGET_MS).expect("应装配");
 
     assert!(
         context
@@ -135,7 +138,7 @@ fn unreadable_soul_degrades_to_a_warning_instead_of_failing_the_turn() {
     // 用目录顶替文件：读取必然失败，等价于权限或编码故障。
     fs::create_dir(root.path().join(USER_SOUL_FILE_NAME)).expect("创建同名目录");
 
-    let context = load_persona_context_from_root(root.path(), scene(), Instant::now())
+    let context = load_persona_context_from_root(root.path(), scene(), Instant::now(), UNBOUNDED_BUDGET_MS)
         .expect("读取失败不得让回合失败");
 
     assert!(context.stable.is_none(), "读不到人设就不装配人格");

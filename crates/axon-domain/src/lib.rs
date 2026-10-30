@@ -100,8 +100,9 @@ pub use cell::{
 pub use channel_breaker::BreakerPolicy;
 pub use channel_failure::{ChannelFailureKind, classify_channel_failure};
 pub use cron::{
-    CRON_SCHEMA_VERSION, CronDeliveryAdapter, CronDeliveryTarget, CronJob, CronJobInput,
-    CronJobStatus, CronJobUpdate, CronRunRecord, CronValidationError,
+    CRON_LANE_DESTINATION_PREFIX, CRON_SCHEMA_VERSION, CronJob, CronJobInput, CronJobStatus,
+    CronJobUpdate, CronRunRecord, CronValidationError, CronWakeTarget, FEISHU_CHANNEL,
+    desktop_session_channel,
 };
 pub use daemon::{
     ConsumerCursor, DaemonDomainError, DaemonSessionId, RunSessionId, RuntimeHostId, RuntimeLease,
@@ -128,10 +129,10 @@ pub use ids::{
     SuggestionUndoTokenId, ToolCallId, ToolId, TurnId,
 };
 pub use interaction::{
-    COMPLETION_STEER_SOURCE_PREFIX, CRON_DELIVERY_NOTIFICATION_PREFIX, CRON_DELIVERY_SOURCE_PREFIX,
-    InteractionError, InteractionId, InteractionRecord, InteractionSource, InteractionStatus,
-    MAX_INTERACTION_CONTENT_LENGTH, MAX_INTERACTION_ID_LENGTH, SYSTEM_SOURCE_CHANNEL,
-    cron_delivery_notification_id,
+    COMPLETION_STEER_SOURCE_PREFIX, CRON_DELIVERY_ID_PREFIX, CRON_DELIVERY_NOTIFICATION_PREFIX,
+    CRON_WAKE_SOURCE_PREFIX, InteractionError, InteractionId, InteractionRecord, InteractionSource,
+    InteractionStatus, MAX_INTERACTION_CONTENT_LENGTH, MAX_INTERACTION_ID_LENGTH,
+    SYSTEM_SOURCE_CHANNEL,
 };
 pub use ledger_id::{DecisionId, ExecutionId, GoalId, JarvisEventId, ResultId};
 pub use mcp::{MCP_CONFIG_FILE, McpServerDefinition};

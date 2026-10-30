@@ -124,7 +124,7 @@ Cron：
 |---|---|
 | `GET /api/v1/crons` | 列表，支持查询参数 |
 | `POST /api/v1/crons` | 创建 |
-| `GET /api/v1/crons/config` | 读取 Cron 配置 |
+| `GET /api/v1/crons/config` | 读取 Cron 配置，含 `defaultNotificationChatId`（用户未指明目标时的默认 `wake` 建议值） |
 | `GET /api/v1/crons/<id>` | 读取单个 Cron |
 | `POST /api/v1/crons/<id>` | 更新 |
 | `DELETE /api/v1/crons/<id>` | 移除 |

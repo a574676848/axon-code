@@ -13,10 +13,10 @@ Daemon 是 Axon 的后台长生命周期宿主。当前实现已经把 `PrimaryT
 - 维护内部 host generation、lease 与 fencing 状态。
 - 由 Execution Worker 线程池接管已提交 Execution，前台不活跃时写入未读 Result 并入队持久化 Delivery。
 
-Goal 创建后的执行已经收口：Execution 由 Daemon 的 Execution Worker 池领取，并通过 `ProviderRunSubagentExecutor` 作为隔离子代理执行；结果写入 Result 与持久 completion notification。一个 Execution 只通知主 turn 一次，通知包含来源（一次性 Goal 或 Axon cron）、Goal 目标、执行结果及结果文档路径；主 turn 产出的汇总回复随后登记到所有可用渠道的独立 delivery。TUI 只有真实展示后确认，Feishu 只有写入 durable outbox 后确认，任何渠道都不允许静默 ack。没有可用渠道时收件箱持久保留；跨过创建后的下一个本地自然日仍未读则自动失效并静默停止通知。
+Goal 创建后的执行已经收口：Execution 由 Daemon 的 Execution Worker 池领取，并通过 `ProviderRunSubagentExecutor` 作为隔离子代理执行；结果写入 Result 与持久 completion notification。一个 Execution 只通知主 turn 一次，通知包含来源（一次性 Goal 或 Axon cron）、Goal 目标、执行结果及结果文档路径；主 turn 产出的汇总回复随后登记到创建 Task 时声明的唯一投递目标，目标取自 Execution 的 `transportContext`，不再广播到当时在线的其它客户端。TUI 只有真实展示后确认，Feishu 只有写入 durable outbox 后确认，任何渠道都不允许静默 ack。跨过创建后的下一个本地自然日仍未读则自动失效并静默停止通知。
 
-Agent cron 按投递需求分流：需要投递的 cron 到期后创建 `GoalToolCommand::Create`，复用 Goal 的 Execution、Result、完成通知和多渠道投递；不需要投递的 cron 直接调用同一 `ProviderRunSubagentExecutor`，不进入用户渠道。子代理结果超过 4000 个 Unicode 字符时以 Markdown 原子写入统一内容归档 `.axon/data/archive/*.md`，主 turn 只接收有界预览和归档地址。
-主 turn 尚未产出汇总或执行失败时，后台 Execution 的原始回复不得作为渠道正文发送；通知继续留在持久收件箱，直到主 turn 汇总成功后投递，或按跨日未读规则自动失效。投递 sweep 每轮按有界批次补偿两类窗口：汇总已落库但渠道推进中断，以及通知结算后新上线渠道的补登记；正文为空的通知不得推进，渠道行不得永久滞留在 pending。
+Agent cron 按投递需求分流：需要投递的 cron 到期后创建 `GoalToolCommand::Create`，并把 `channel`/`destination` 写入 Execution 的 `transportContext`，复用 Goal 的 Execution、Result、完成通知与定向投递；不需要投递的 cron 直接调用同一 `ProviderRunSubagentExecutor`，不进入用户渠道。子代理结果超过 4000 个 Unicode 字符时以 Markdown 原子写入统一内容归档 `.axon/data/archive/*.md`，主 turn 只接收有界预览和归档地址。
+主 turn 尚未产出汇总或执行失败时，后台 Execution 的原始回复不得作为渠道正文发送；通知继续留在持久收件箱，直到主 turn 汇总成功后投递，或按跨日未读规则自动失效。投递 sweep 每轮按有界批次补偿「汇总已落库但渠道推进中断」这一窗口；正文为空的通知不得推进，渠道行不得永久滞留在 pending。目标在登记时即已确定，不存在「等渠道上线再补登记」的路径。
 
 Daemon 的维护清理覆盖 client presence、completion notification、completion delivery 以及既有 Interaction/Goal/Execution/Result 等运行态数据。清理使用索引、有界批次、IMMEDIATE 短事务和整轮时间预算；只删除 delivered/expired 且超过保留期的 delivery，随后删除无未终结子 delivery 的 notification，pending/dispatched 一律保留。
 

@@ -67,55 +67,6 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         Ok(())
     }
 
-    fn active_client_presences(
-        &self,
-        workspace_id: &str,
-        now_ms: u64,
-    ) -> Result<Vec<ClientPresenceRecord>, ClientDeliveryStoreError> {
-        self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
-        let mut statement = connection
-            .prepare(
-                "SELECT client_id,workspace_id,channel,destination,registered_at_ms,expires_at_ms
-                 FROM jarvis_client_presence INDEXED BY jarvis_client_presence_workspace
-                 WHERE workspace_id=?1 AND expires_at_ms>?2
-                 ORDER BY registered_at_ms DESC, client_id ASC",
-            )
-            .map_err(storage_error)?;
-        statement
-            .query_map(
-                params![workspace_id, i64_value(now_ms).map_err(storage_error)?],
-                read_presence,
-            )
-            .map_err(storage_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(storage_error)
-    }
-
-    fn active_client_presences_all(
-        &self,
-        now_ms: u64,
-    ) -> Result<Vec<ClientPresenceRecord>, ClientDeliveryStoreError> {
-        self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
-        let mut statement = connection
-            .prepare(
-                "SELECT client_id,workspace_id,channel,destination,registered_at_ms,expires_at_ms
-                 FROM jarvis_client_presence
-                 WHERE expires_at_ms>?1
-                 ORDER BY registered_at_ms DESC, client_id ASC",
-            )
-            .map_err(storage_error)?;
-        statement
-            .query_map(
-                params![i64_value(now_ms).map_err(storage_error)?],
-                read_presence,
-            )
-            .map_err(storage_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(storage_error)
-    }
-
     fn client_presence(
         &self,
         client_id: &str,
@@ -202,34 +153,6 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
             .map_err(storage_error)?;
         statement
             .query_map(params![i64::from(limit)], read_notification)
-            .map_err(storage_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(storage_error)
-    }
-
-    fn deliverable_completion_notifications(
-        &self,
-        now_ms: u64,
-        limit: u32,
-    ) -> Result<Vec<CompletionNotificationRecord>, ClientDeliveryStoreError> {
-        if limit == 0 {
-            return Ok(Vec::new());
-        }
-        self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
-        let mut statement = connection
-            .prepare(&format!(
-                "SELECT {NOTIFICATION_COLUMNS}
-                 FROM jarvis_completion_notifications
-                 WHERE state IN ('pending','dispatched','delivered') AND expires_at_ms>?1
-                 ORDER BY created_at_ms ASC, notification_id ASC LIMIT ?2"
-            ))
-            .map_err(storage_error)?;
-        statement
-            .query_map(
-                params![i64_value(now_ms).map_err(storage_error)?, i64::from(limit)],
-                read_notification,
-            )
             .map_err(storage_error)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(storage_error)
@@ -448,44 +371,6 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
             .map_err(storage_error)
     }
 
-    fn dispatched_channel_inbox_for_destination(
-        &self,
-        channel: &str,
-        destination: &str,
-        now_ms: u64,
-        limit: u32,
-    ) -> Result<Vec<ClientInboxEntry>, ClientDeliveryStoreError> {
-        if limit == 0 {
-            return Ok(Vec::new());
-        }
-        self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
-        let mut statement = connection
-            .prepare(&format!(
-                "SELECT {INBOX_COLUMNS}
-                 FROM jarvis_completion_deliveries AS d
-                 INDEXED BY jarvis_completion_deliveries_target_inbox
-                 JOIN jarvis_completion_notifications AS n ON n.notification_id=d.notification_id
-                 WHERE d.channel=?1 AND d.destination=?2
-                   AND d.state='dispatched' AND n.state<>'expired' AND n.expires_at_ms>?3
-                 ORDER BY n.created_at_ms ASC, n.notification_id ASC LIMIT ?4"
-            ))
-            .map_err(storage_error)?;
-        statement
-            .query_map(
-                params![
-                    channel,
-                    destination,
-                    i64_value(now_ms).map_err(storage_error)?,
-                    i64::from(limit)
-                ],
-                read_inbox_entry,
-            )
-            .map_err(storage_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(storage_error)
-    }
-
     fn settle_completion_delivery(
         &self,
         notification_id: &str,
@@ -576,38 +461,6 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
             )
             .map_err(storage_error)?;
         Ok(())
-    }
-
-    fn notifications_awaiting_channel_delivery(
-        &self,
-        now_ms: u64,
-        limit: u32,
-    ) -> Result<Vec<CompletionNotificationRecord>, ClientDeliveryStoreError> {
-        if limit == 0 {
-            return Ok(Vec::new());
-        }
-        self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
-        let mut statement = connection
-            .prepare(&format!(
-                "SELECT {NOTIFICATION_COLUMNS}
-                 FROM jarvis_completion_notifications
-                 WHERE state='dispatched' AND expires_at_ms>?1
-                   AND NOT EXISTS (
-                       SELECT 1 FROM jarvis_completion_deliveries AS d
-                       WHERE d.notification_id=jarvis_completion_notifications.notification_id
-                   )
-                 ORDER BY created_at_ms ASC, notification_id ASC LIMIT ?2"
-            ))
-            .map_err(storage_error)?;
-        statement
-            .query_map(
-                params![i64_value(now_ms).map_err(storage_error)?, i64::from(limit)],
-                read_notification,
-            )
-            .map_err(storage_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(storage_error)
     }
 
     fn notification_ids_with_pending_deliveries(

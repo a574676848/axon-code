@@ -48,7 +48,7 @@ axon persona style list [--all]|retire <style-id>
 axon persona reset [--yes]
 
 axon doctor [--check <area>] [--verbose] [--fix]
-axon cron list [--limit <n>] [--include-removed] | create --name <NAME> --schedule <SCHEDULE> [--prompt <text>] [--skill <name>] [--workdir <dir>] [--no-agent --script <path>] [--feishu-chat-id <id>] | update <JOB_ID> ... | pause|resume|remove|run <JOB_ID> | tick [--limit <n>]
+axon cron list [--limit <n>] [--include-removed] | create --name <NAME> --schedule <SCHEDULE> [--prompt <text>] [--skill <name>] [--workdir <dir>] [--no-agent --script <path>] [--wake feishu:<chat_id> | --wake session:<channel>:<destination>] | update <JOB_ID> [--wake ...|--clear-wake] ... | pause|resume|remove|run <JOB_ID> | tick [--limit <n>]
 axon remote status|subscriptions|outbox|audit|feishu-status|feishu-worklist|render-feishu|deliver-feishu|execute-feishu-sdk-loop|simulate-feishu ...
 axon remote revoke <SESSION_ID> <SUBSCRIBER_ID>
 axon lsp servers|workspace-symbol|definition|references|diagnostics ...    # 通用参数：--workspace-root <dir>、--plan-only

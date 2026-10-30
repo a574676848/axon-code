@@ -213,6 +213,8 @@ impl ProviderRunSubagentExecutor {
             .prompt_context
             .subagent_stable_prefix;
         let runtime_input = BuildRunModelPayloadInput {
+            transport_context: None,
+            notification_chat_id: None,
             config_path: &self.environment.config_path,
             client_channel: axon_client_identity::ClientChannel::Cli,
             config: &self.environment.config,
