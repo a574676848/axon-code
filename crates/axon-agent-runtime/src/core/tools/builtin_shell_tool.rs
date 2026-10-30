@@ -556,6 +556,24 @@ fn canonicalize_cwd(cwd: &Path) -> AxonResult<PathBuf> {
         .map_err(|_| AxonError::tool_invalid_arguments(SHELL_COMMAND_CWD_ERROR))
 }
 
+/// 真实派生子进程的用例共用的进程内闸门。
+///
+/// 这些用例的断言对象是真实子进程，代价是每次派生一个 pwsh（冷启动从数百毫秒到数秒）。
+/// 全仓门禁在十几线程上并行跑上千个用例时，同时存活的 pwsh 会把句柄、内存与 CPU 挤到
+/// `CreateProcess` 失败的边缘，于是失败会落在「与本用例契约无关」的地方：后台作业起不来、
+/// 终态回执还没等到输出线程收口。闸门把这类用例的派生峰值压到 1，让并行门禁下也确定。
+#[cfg(test)]
+pub(crate) mod spawn_gate {
+    use std::sync::{Mutex, MutexGuard, PoisonError};
+
+    static SPAWN_GATE: Mutex<()> = Mutex::new(());
+
+    /// 取得闸门；守卫释放即放行下一个用例。
+    pub(crate) fn acquire() -> MutexGuard<'static, ()> {
+        SPAWN_GATE.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
 #[cfg(test)]
 #[path = "builtin_shell_tool_tests.rs"]
 mod tests;

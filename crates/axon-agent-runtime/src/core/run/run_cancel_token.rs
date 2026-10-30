@@ -150,7 +150,11 @@ mod tests {
     use super::RunCancelToken;
 
     const CANCEL_TRIGGER_DELAY: Duration = Duration::from_millis(5);
-    const CANCEL_WAIT_TIMEOUT: Duration = Duration::from_millis(100);
+    /// 取消传播的等待上限。
+    ///
+    /// 断言的是「取消能唤醒等待方」，不是「取消在 100 ms 内完成」：并行门禁下测试线程
+    /// 会被抢占数百毫秒，窗口过窄会把实现正确的代码误判成唤醒失败。
+    const CANCEL_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 
     #[test]
     fn parent_cancellation_wakes_child_sync_waiter() {

@@ -31,6 +31,8 @@ const BACKGROUND_YIELD_MS: u64 = 3_000;
 /// 仅设 `run_in_background` 时必须被接受：否则「一律拒绝」也能骗过互斥用例。
 #[test]
 fn background_without_tty_starts_a_job() {
+    // 真实派生子进程的用例走同一闸门：并行门禁下同时拉起的 pwsh 会把进程创建挤到失败边缘。
+    let _gate = super::spawn_gate::acquire();
     let owner = "shell-background-accepted";
     let input = background_input(owner, BACKGROUND_COMMAND);
 
@@ -102,6 +104,8 @@ fn background_entry_requires_the_background_flag() {
 /// 禁止双通道：作业 ID 送入 `write_stdin` 必须报告「不存在」，而不是被当成会话。
 #[test]
 fn job_id_is_never_accepted_by_the_session_channel() {
+    // 与同模块的派生用例互斥：作业登记依赖真实 spawn 成功，不能被并发派生挤掉。
+    let _gate = super::spawn_gate::acquire();
     let owner = "shell-background-cross-channel";
     let job_id = ShellCommandToolRuntime
         .start_background(background_input(owner, BACKGROUND_COMMAND))
@@ -141,6 +145,7 @@ fn job_id_is_never_accepted_by_the_session_channel() {
 /// 那种改动编译通过、多数测试也通过，只会静默废掉整个后台能力。
 #[test]
 fn run_teardown_of_sessions_leaves_background_jobs_alive() {
+    let _gate = super::spawn_gate::acquire();
     let owner = "shell-background-run-teardown";
 
     let job_id = ShellCommandToolRuntime

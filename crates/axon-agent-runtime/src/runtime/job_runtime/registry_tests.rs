@@ -17,6 +17,8 @@ use crate::job_runtime::JOB_REASON_USER_STOP;
 const TERMINAL_COMMAND: &str = "echo job-baseline";
 /// 首次读取的等待窗口：足够本地短命令结束。
 const READ_YIELD_MS: u64 = 5_000;
+/// 等待作业进入终态的总上限；只兜真挂死，不用于预测耗时。
+const SETTLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// 不等待，仅取当前增量与状态的读取窗口。
 const NO_WAIT_MS: u64 = 0;
 
@@ -51,15 +53,23 @@ fn start_and_settle(runtime: &JobRuntime, owner: &str, script: &str) -> JobId {
     let job_id = runtime
         .start(job_spec(owner, script))
         .expect("启动作业必须成功");
-    let output = runtime
-        .read(job_id, owner, Some(READ_YIELD_MS))
-        .expect("刚启动的作业必须可按 owner 读取");
-    assert!(
-        matches!(output.status, JobStatus::Completed | JobStatus::Failed),
-        "短命令必须在等待窗口内进入终态：{:?}",
-        output.status
-    );
-    job_id
+    // 子进程冷启动与退出的耗时是环境的函数（机器速度、当前负载），不是被测系统的属性。
+    // 单次固定窗口会在并行门禁下翻车，因此按「进入终态」做有界轮询；每次读取仍用较长的
+    // 让出窗口，让内部等待通知机制承担唤醒，不空转。
+    let started = Instant::now();
+    loop {
+        let output = runtime
+            .read(job_id, owner, Some(READ_YIELD_MS))
+            .expect("刚启动的作业必须可按 owner 读取");
+        if matches!(output.status, JobStatus::Completed | JobStatus::Failed) {
+            return job_id;
+        }
+        assert!(
+            started.elapsed() < SETTLE_TIMEOUT,
+            "短命令必须在有界时间内进入终态：{:?}",
+            output.status
+        );
+    }
 }
 
 /// 超时命令：用于验证终止路径作用在**仍在运行**的作业上。

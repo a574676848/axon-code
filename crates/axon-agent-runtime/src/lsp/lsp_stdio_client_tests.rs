@@ -6,6 +6,12 @@ const TEST_NOTIFICATION_COUNT: usize = 5;
 const TEST_NOTIFICATION_WAIT: Duration = Duration::from_secs(2);
 #[cfg(windows)]
 const TEST_NOTIFICATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
+/// 写后诊断的有界重试窗口。
+///
+/// 断言的是「最终能看到 didSave 产生的诊断」，不是「一次查询就能拿到」：假 server 对
+/// didChange 与 didSave 各推一条，两条的到达间隔不是协议保证。
+#[cfg(windows)]
+const TEST_SAVE_DIAGNOSTIC_WAIT: Duration = Duration::from_secs(10);
 
 #[test]
 fn read_content_length_parses_header() {
@@ -239,16 +245,33 @@ while (($line = $reader.ReadLine()) -ne $null) {
     let document_changed = client.sync_and_notify_document_saved(&uri).unwrap();
     assert!(document_changed);
     assert!(!client.touch_document(&uri).unwrap());
-    let response = client
+    let after_save_request = LspDiagnosticRequest {
+        id: 10,
+        text_document_uri: uri.clone(),
+    };
+    // 写后诊断走 push 通道：假 server 对 didChange 与 didSave 各推一条，两条的到达间隔不是
+    // 协议保证（满载下 didSave 可能晚于一次 settle 窗口）。单次查询拿到的可能仍是上一条，
+    // 因此按「期望诊断出现」做有界重试，而不是把一次结果当结论。
+    let settle_deadline = Instant::now() + TEST_SAVE_DIAGNOSTIC_WAIT;
+    let mut response = client
         .document_diagnostic_after_save_with_timeout(
-            &LspDiagnosticRequest {
-                id: 10,
-                text_document_uri: uri.clone(),
-            },
+            &after_save_request,
             TEST_NOTIFICATION_WAIT,
             document_changed,
         )
         .unwrap();
+    while response["result"]["items"][0]["message"] != "save-diagnostic"
+        && Instant::now() < settle_deadline
+    {
+        thread::sleep(TEST_NOTIFICATION_POLL_INTERVAL);
+        response = client
+            .document_diagnostic_after_save_with_timeout(
+                &after_save_request,
+                TEST_NOTIFICATION_WAIT,
+                document_changed,
+            )
+            .unwrap();
+    }
     client
         .notify_workspace_file_changes(&[LspWorkspaceFileChange {
             uri: uri.clone(),

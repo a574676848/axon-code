@@ -108,6 +108,12 @@ mod tests {
     use crate::usage_statistics::model::{UsageFact, UsageSource, UsageStatus};
     use axon_domain::{ModelPriceRule, PricingStyle};
 
+    /// 单批持锁的上界（毫秒）。
+    ///
+    /// 断言的是「一批重算不会长时间占住写锁」，不是「本机此刻有多快」：并行门禁在十几线程上
+    /// 跑上千个用例时，单条 SQL 的调度延迟就能把 50 ms 打穿，那种失败与实现无关。
+    const MAX_BATCH_LOCK_MS: u64 = 500;
+
     fn make_sample_fact(session_id: &str, model: &str, input: u64, output: u64) -> UsageFact {
         UsageFact {
             session_id: session_id.to_string(),
@@ -158,7 +164,11 @@ mod tests {
         assert_eq!(report1.total_scanned, 2);
         assert_eq!(report1.updated_count, 0);
         assert_eq!(report1.skipped_count, 2); // 两个都未匹配，保持未计费状态
-        assert!(report1.max_batch_duration_ms < 50, "单批持锁必须小于 50ms");
+        assert!(
+            report1.max_batch_duration_ms < MAX_BATCH_LOCK_MS,
+            "单批持锁必须小于 {MAX_BATCH_LOCK_MS}ms：{}",
+            report1.max_batch_duration_ms
+        );
 
         // 3. 配置一条规则，针对 gpt-4*
         let rule_gpt = ModelPriceRule {
@@ -184,7 +194,11 @@ mod tests {
         assert_eq!(report2.total_scanned, 2);
         assert_eq!(report2.updated_count, 1);
         assert_eq!(report2.skipped_count, 1);
-        assert!(report2.max_batch_duration_ms < 50, "单批持锁必须小于 50ms");
+        assert!(
+            report2.max_batch_duration_ms < MAX_BATCH_LOCK_MS,
+            "单批持锁必须小于 {MAX_BATCH_LOCK_MS}ms：{}",
+            report2.max_batch_duration_ms
+        );
 
         // 验证数据库中 sess-1 已正确计价，且 rollup priced_cost_micros 刷新
         {

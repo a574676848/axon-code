@@ -21,8 +21,9 @@ fn missing_soul_yields_empty_context_without_warning() {
     let root = axon_test_support::test_temp_dir();
     let started = Instant::now();
 
-    let context = load_persona_context_from_root(root.path(), scene(), started, UNBOUNDED_BUDGET_MS)
-        .expect("缺失文件不应报错");
+    let context =
+        load_persona_context_from_root(root.path(), scene(), started, UNBOUNDED_BUDGET_MS)
+            .expect("缺失文件不应报错");
 
     assert!(context.stable.is_none());
     assert!(context.dynamic.is_none());
@@ -39,8 +40,9 @@ fn invalid_soul_degrades_with_warning_but_keeps_turn_alive() {
     )
     .unwrap();
 
-    let context = load_persona_context_from_root(root.path(), scene(), Instant::now(), UNBOUNDED_BUDGET_MS)
-        .expect("无效人设不应报错");
+    let context =
+        load_persona_context_from_root(root.path(), scene(), Instant::now(), UNBOUNDED_BUDGET_MS)
+            .expect("无效人设不应报错");
 
     assert!(context.stable.is_none());
     assert!(context.dynamic.is_none());
@@ -54,8 +56,9 @@ fn valid_soul_produces_stable_and_dynamic_messages() {
     let root = axon_test_support::test_temp_dir();
     fs::write(root.path().join(USER_SOUL_FILE_NAME), VALID_SOUL).unwrap();
 
-    let context = load_persona_context_from_root(root.path(), scene(), Instant::now(), UNBOUNDED_BUDGET_MS)
-        .expect("合法人设应装配");
+    let context =
+        load_persona_context_from_root(root.path(), scene(), Instant::now(), UNBOUNDED_BUDGET_MS)
+            .expect("合法人设应装配");
 
     let stable = context.stable.expect("应有稳定段");
     assert!(stable.content.starts_with(SESSION_STABLE_SOUL_START_MARKER));
@@ -75,8 +78,12 @@ fn stable_bytes_are_unchanged_across_loads() {
     let root = axon_test_support::test_temp_dir();
     fs::write(root.path().join(USER_SOUL_FILE_NAME), VALID_SOUL).unwrap();
 
-    let first = load_persona_context_from_root(root.path(), scene(), Instant::now(), UNBOUNDED_BUDGET_MS).unwrap();
-    let second = load_persona_context_from_root(root.path(), scene(), Instant::now(), UNBOUNDED_BUDGET_MS).unwrap();
+    let first =
+        load_persona_context_from_root(root.path(), scene(), Instant::now(), UNBOUNDED_BUDGET_MS)
+            .unwrap();
+    let second =
+        load_persona_context_from_root(root.path(), scene(), Instant::now(), UNBOUNDED_BUDGET_MS)
+            .unwrap();
 
     assert_eq!(
         first.stable.unwrap().content,
@@ -120,7 +127,8 @@ fn oversized_stable_segment_raises_a_visible_warning() {
     fs::write(root.path().join(USER_SOUL_FILE_NAME), oversized).unwrap();
 
     let context =
-        load_persona_context_from_root(root.path(), scene(), Instant::now(), UNBOUNDED_BUDGET_MS).expect("应装配");
+        load_persona_context_from_root(root.path(), scene(), Instant::now(), UNBOUNDED_BUDGET_MS)
+            .expect("应装配");
 
     assert!(
         context
@@ -138,8 +146,9 @@ fn unreadable_soul_degrades_to_a_warning_instead_of_failing_the_turn() {
     // 用目录顶替文件：读取必然失败，等价于权限或编码故障。
     fs::create_dir(root.path().join(USER_SOUL_FILE_NAME)).expect("创建同名目录");
 
-    let context = load_persona_context_from_root(root.path(), scene(), Instant::now(), UNBOUNDED_BUDGET_MS)
-        .expect("读取失败不得让回合失败");
+    let context =
+        load_persona_context_from_root(root.path(), scene(), Instant::now(), UNBOUNDED_BUDGET_MS)
+            .expect("读取失败不得让回合失败");
 
     assert!(context.stable.is_none(), "读不到人设就不装配人格");
     assert!(

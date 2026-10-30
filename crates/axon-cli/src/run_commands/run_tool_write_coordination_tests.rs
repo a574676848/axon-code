@@ -161,17 +161,32 @@ fn assert_scope_blocking(
     let second_handle = thread::spawn(move || {
         coordinator.execute(&second, || second_entered_tx.send(()).unwrap());
     });
-    let entered_before_release = second_entered_rx.recv_timeout(Duration::from_millis(100));
-    assert_eq!(
-        entered_before_release.is_err(),
-        should_block,
-        "并发窗口判定与预期不符"
-    );
+    /// 「不该阻塞」用例的进入等待上限：并行门禁下线程调度可达数百毫秒，
+    /// 窗口过窄会把「没有互斥」误判成「被阻塞」。
+    const READER_ENTRY_WAIT: Duration = Duration::from_secs(10);
+    /// 「该阻塞」用例的观察窗口：只需确认短时间内没有进入，
+    /// 误判方向是「判成阻塞」，因此可以短。
+    const BLOCK_PROBE: Duration = Duration::from_millis(100);
+    let probe = if should_block {
+        BLOCK_PROBE
+    } else {
+        READER_ENTRY_WAIT
+    };
+    let entered_before_release = second_entered_rx.recv_timeout(probe);
+    if should_block {
+        assert!(
+            entered_before_release.is_err(),
+            "写入必须阻塞并发访问：第二个调用在观察窗口内提前进入了"
+        );
+    } else {
+        assert!(
+            entered_before_release.is_ok(),
+            "并发读不得互相阻塞：第二个调用在等待窗口内没有进入"
+        );
+    }
     release_tx.send(()).unwrap();
     if should_block {
-        second_entered_rx
-            .recv_timeout(Duration::from_secs(1))
-            .unwrap();
+        second_entered_rx.recv_timeout(READER_ENTRY_WAIT).unwrap();
     }
     first_handle.join().unwrap();
     second_handle.join().unwrap();

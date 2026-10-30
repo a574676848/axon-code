@@ -48,10 +48,19 @@ pub(super) fn poll_until_ready(
     mut is_ready: impl FnMut(&ShellCommandExecutionReceipt) -> bool,
 ) -> ShellCommandExecutionReceipt {
     let started = Instant::now();
+    let mut stdout = String::new();
+    let mut stderr = String::new();
     loop {
-        let receipt = ShellCommandToolRuntime
+        let mut receipt = ShellCommandToolRuntime
             .write_stdin(write_input(session_id, None, false, 0))
             .unwrap();
+        // `write_stdin` 每次只返回**增量**：必须原地累加，否则中途到达的输出会被静默丢掉。
+        // 并行门禁下同一段输出常被拆成多次到达，只留最后一次的增量会让「输出里有标记」
+        // 这类断言假失败（实测 stdout 全空而 exit_code 为 0）。
+        stdout.push_str(&receipt.stdout.preview);
+        stderr.push_str(&receipt.stderr.preview);
+        receipt.stdout.preview.clone_from(&stdout);
+        receipt.stderr.preview.clone_from(&stderr);
         if is_ready(&receipt)
             || receipt.status != ShellCommandExecutionStatus::Running
             || started.elapsed() >= deadline

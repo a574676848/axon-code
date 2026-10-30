@@ -45,10 +45,17 @@ fn stdio_exchange_projects_notifications_without_changing_response_contract() {
             .map(|event| event.kind),
         Some(McpNotificationKind::ClientRequestDenied)
     );
+    // 按内容定位而不是按下标：响应集合里同时有 initialize 结果与业务结果，二者顺序取决于
+    // 服务端输出时机，断言不该依赖它。
     assert!(
-        report.responses[1]["result"]["denialObserved"]
-            .as_bool()
-            .unwrap_or(false)
+        report
+            .responses
+            .iter()
+            .any(|response| response["result"]["denialObserved"]
+                .as_bool()
+                .unwrap_or(false)),
+        "必须有一条响应证明客户端拒绝已被服务端观察到：{:?}",
+        report.responses
     );
     let _ = std::fs::remove_file(script_path);
 }
@@ -79,9 +86,20 @@ Write-Output '{"jsonrpc":"2.0","method":"notifications/resources/list_changed","
 Write-Output '{"jsonrpc":"2.0","method":"notifications/prompts/list_changed","params":{"message":"prompts changed"}}'
 Write-Output '{"jsonrpc":"2.0","method":"notifications/message","params":{"level":"debug","logger":"fixture"}}'
 Write-Output '{"jsonrpc":"2.0","id":"sample-1","method":"sampling/createMessage","params":{"raw":"hidden"}}'
-$denial = [Console]::In.ReadLine()
-$denialJson = $denial | ConvertFrom-Json
-if ($denialJson.id -ne "sample-1" -or $denialJson.error.code -ne -32601) {
+# 拒绝响应与前序业务请求的先后顺序不是协议保证：initialize 之后的通知只有有限的 drain 窗口，
+# 满载下窗口会先到期，客户端随即把自己的业务请求写进 stdin。因此必须逐行读到 id 为 sample-1
+# 的那一条，而不是假定紧接着的一行就是拒绝响应。
+$denialJson = $null
+for ($attempt = 0; $attempt -lt 5; $attempt++) {
+    $line = [Console]::In.ReadLine()
+    if ([string]::IsNullOrWhiteSpace($line)) { break }
+    $candidate = $line | ConvertFrom-Json
+    if ($candidate.id -eq "sample-1") {
+        $denialJson = $candidate
+        break
+    }
+}
+if ($null -eq $denialJson -or $denialJson.error.code -ne -32601) {
     Write-Output '{"jsonrpc":"2.0","id":42,"error":{"code":-32000,"message":"denial response missing"}}'
     exit 0
 }

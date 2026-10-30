@@ -11,6 +11,21 @@ use super::{
     commit_ready_receipts, fill_unstarted_receipts, session_tool_pool,
 };
 
+/// 测试缝的池名序列：每个用例独占一个池。
+static SEAM_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 生成本次调用独占的池会话名。
+///
+/// 池按会话名全局缓存，若所有用例共用同一个固定名字，就会共享同一批 worker：
+/// 「有多少调用在排队」于是取决于别的用例此刻占用了多少 worker，排队类断言随之随机翻车。
+fn seam_session() -> String {
+    let sequence = SEAM_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    format!("parallel-seam-test-{sequence}-{nanos}")
+}
+
 /// 跑一批假任务：延迟来自 `latency_ms`，取消令牌与生产同构（提交前与任务启动前各查一次）。
 pub(crate) fn execute_parallel_for_tests(
     execution_requests: &[ToolExecutionRequest],
@@ -19,7 +34,7 @@ pub(crate) fn execute_parallel_for_tests(
     commit_log: &mut Vec<usize>,
 ) -> Vec<RunToolReceipt> {
     let total = execution_requests.len();
-    let pool = session_tool_pool("parallel-seam-test", CapacitySnapshot::preset());
+    let pool = session_tool_pool(&seam_session(), CapacitySnapshot::preset());
     let (event_tx, event_rx) = mpsc::channel();
     let mut started = 0usize;
     for (index, execution_request) in execution_requests.iter().enumerate() {
