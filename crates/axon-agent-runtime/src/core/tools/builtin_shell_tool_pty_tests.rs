@@ -28,10 +28,11 @@ fn tty_ctrl_c_projects_as_cancelled_session() {
     let mut input = execution_input(interruptible_tty_command());
     input.yield_time_ms = SHORT_YIELD_MS;
     input.tty = true;
-    let running = ShellCommandToolRuntime.execute(input).unwrap();
-    let session_id = running.session_id.expect("PTY 睡眠命令必须保持运行");
-    // PTY 就绪标记晚于首次让出窗口，以零让出窗口轮询到可中断状态。
-    let running = poll_until_ready(&session_id, HANG_GUARD, |receipt| {
+    let opened = ShellCommandToolRuntime.execute(input).unwrap();
+    let session_id = opened.session_id.clone().expect("PTY 睡眠命令必须保持运行");
+    // 就绪标记可能落在首次让出窗口内，也可能晚于它：把已读走的增量作为累积起点，
+    // 再以零让出窗口轮询到可中断状态，两种时序都不会丢。
+    let running = poll_until_ready(&session_id, HANG_GUARD, Some(&opened), |receipt| {
         receipt.stdout.preview.contains(PTY_INTERRUPT_READY_MARKER)
     });
     assert_eq!(running.status, ShellCommandExecutionStatus::Running);

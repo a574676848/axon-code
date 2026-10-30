@@ -223,11 +223,15 @@ fn persistent_session_supports_polling_and_stdin() {
         echoed.interaction.as_ref().map(|value| value.kind),
         Some(ShellCommandInteractionKind::Input)
     );
-    // 回显可能晚于让出窗口，继续以零让出窗口轮询直到可见。
-    let visible = poll_until_ready(&session_id, HANG_GUARD, |receipt| {
+    // 回显可能已在上一次让出窗口里到达，也可能更晚：把已读走的增量作为累积起点，
+    // 再以零让出窗口轮询到可见，两种时序都不会丢。
+    let visible = poll_until_ready(&session_id, HANG_GUARD, Some(&echoed), |receipt| {
         receipt.stdout.preview.contains("got:axon-input")
     });
-    assert!(visible.stdout.preview.contains("got:axon-input"));
+    assert!(
+        visible.stdout.preview.contains("got:axon-input"),
+        "{visible:?}"
+    );
 }
 
 #[test]

@@ -42,14 +42,21 @@ pub(super) const HANG_GUARD: Duration = Duration::from_secs(120);
 /// 三条退出路径含义不同，调用方应据此给出可区分的断言：
 /// 条件满足 = 成功；会话不再 `Running` = 子进程已退出（**真失败**，应立即报错）；
 /// 越过守卫 = 仍未就绪（**挂死或极慢**）。把后两者分开，偶发失败才可诊断。
+///
+/// `seed` 是调用方**已经读走**的输出。每份回执只携带上次回执之后的增量，调用方在轮询前
+/// 用 `execute` 或 `write_stdin` 取走过的那一段不会再重放：不把它带进来就会永久丢掉，
+/// 「输出里有某个标记」的断言会随机器快慢假失败（快机上标记在首次让出窗口内就到了）。
+/// 纯状态等待传 `None`。
 pub(super) fn poll_until_ready(
     session_id: &str,
     deadline: Duration,
+    seed: Option<&ShellCommandExecutionReceipt>,
     mut is_ready: impl FnMut(&ShellCommandExecutionReceipt) -> bool,
 ) -> ShellCommandExecutionReceipt {
     let started = Instant::now();
-    let mut stdout = String::new();
-    let mut stderr = String::new();
+    // 调用方已读走的增量必须作为累积起点，否则早于轮询到达的字节永远不会再出现。
+    let mut stdout = seed.map_or_else(String::new, |first| first.stdout.preview.clone());
+    let mut stderr = seed.map_or_else(String::new, |first| first.stderr.preview.clone());
     loop {
         let mut receipt = ShellCommandToolRuntime
             .write_stdin(write_input(session_id, None, false, 0))
@@ -79,7 +86,7 @@ pub(super) fn poll_until_ready(
 /// 需要「等命令跑完」的用例走这里，不要用「固定窗口 × 固定次数」预测耗时：
 /// 子进程启动耗时是环境的函数（机器速度、当前负载），不是被测系统的属性。
 pub(super) fn poll_until_exit(session_id: &str) -> ShellCommandExecutionReceipt {
-    poll_until_ready(session_id, HANG_GUARD, |receipt| {
+    poll_until_ready(session_id, HANG_GUARD, None, |receipt| {
         receipt.status != ShellCommandExecutionStatus::Running
     })
 }
