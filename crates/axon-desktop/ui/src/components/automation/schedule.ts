@@ -1,26 +1,24 @@
-/** 计划表单只负责表达式与日历控件互转，调度规则由 Gateway 校验。 */
+/** 计划表单只负责表达式与控件互转，调度规则由 Gateway 校验。 */
 import { formatDateTime } from '../pageFormat';
+import { describeCronSchedule, describeLooseExpression } from './scheduleDescribe';
 
-export type ScheduleMode =
-    | 'once'
-    | 'daily'
-    | 'weekly'
-    | 'monthly'
-    | 'workday'
-    | 'weekday'
-    | 'weekend'
-    | 'holiday'
-    | 'interval'
-    | 'custom';
+/** 日历范围：与日期方式正交，两者组合即任意「哪天」语义。 */
+export type CalendarScope = '' | 'workday' | 'weekday' | 'weekend' | 'holiday';
+/** 日期方式：每天、每周几、每月几号、每年几月几号。 */
+export type DateMode = 'none' | 'weekly' | 'monthly' | 'yearly';
+export type ScheduleKind = 'once' | 'interval' | 'cron' | 'custom';
 
 export interface ScheduleForm {
-    mode: ScheduleMode;
+    kind: ScheduleKind;
     date: string;
     time: string;
-    weekdays: string[];
-    day: string;
     amount: string;
     unit: string;
+    calendar: CalendarScope;
+    dateMode: DateMode;
+    weekdays: string[];
+    monthDay: string;
+    month: string;
     span: boolean;
     spanStart: string;
     spanEnd: string;
@@ -34,43 +32,51 @@ const MINUTES_PER_HOUR = 60;
 const MAX_HOUR = HOURS_PER_DAY - 1;
 const MAX_MINUTE = MINUTES_PER_HOUR - 1;
 const MAX_MONTH_DAY = 31;
+const MAX_MONTH = 12;
 const MILLISECONDS_PER_SECOND = 1_000;
 const MILLISECONDS_PER_MINUTE = MILLISECONDS_PER_SECOND * 60;
 const MILLISECONDS_PER_HOUR = MILLISECONDS_PER_MINUTE * 60;
 const MILLISECONDS_PER_DAY = MILLISECONDS_PER_HOUR * HOURS_PER_DAY;
-const WEEKDAY_COUNT = 7;
-const WORKDAY_WEEKDAYS = '1,2,3,4,5';
 
 export const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-export const SCHEDULE_OPTIONS = [
-    { value: 'once', label: '一次执行' },
-    { value: 'daily', label: '每天执行' },
-    { value: 'weekly', label: '每周执行' },
-    { value: 'monthly', label: '每月执行' },
-    { value: 'workday', label: '每个工作日' },
-    { value: 'weekday', label: '周一到周五' },
-    { value: 'weekend', label: '每个周末' },
-    { value: 'holiday', label: '每个法定节假日' },
-    { value: 'interval', label: '固定间隔' },
-];
 export const INTERVAL_OPTIONS = [
     { value: 'm', label: '分钟' }, { value: 'h', label: '小时' },
     { value: 'd', label: '天' }, { value: 's', label: '秒' }, { value: 'ms', label: '毫秒' },
 ];
-export const CALENDAR_MODES: ScheduleMode[] = ['workday', 'weekday', 'weekend', 'holiday'];
+export const KIND_OPTIONS = [
+    { value: 'once', label: '一次执行' },
+    { value: 'cron', label: '按计划执行' },
+    { value: 'interval', label: '固定间隔' },
+];
+export const CALENDAR_OPTIONS = [
+    { value: '', label: '不限日历' },
+    { value: 'workday', label: '工作日' },
+    { value: 'weekday', label: '周一到周五' },
+    { value: 'weekend', label: '周末' },
+    { value: 'holiday', label: '法定节假日' },
+];
+export const DATE_MODE_OPTIONS = [
+    { value: 'none', label: '每天' },
+    { value: 'weekly', label: '每周' },
+    { value: 'monthly', label: '每月' },
+    { value: 'yearly', label: '每年' },
+];
 
 export function emptySchedule(): ScheduleForm {
     const now = new Date();
     const date = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'),
         String(now.getDate()).padStart(2, '0')].join('-');
     return {
-        mode: 'daily',
+        kind: 'cron',
         date,
         time: '09:00',
-        weekdays: ['1'],
-        day: '1',
         amount: '1',
         unit: 'h',
+        calendar: '',
+        dateMode: 'none',
+        weekdays: [],
+        monthDay: '1',
+        month: '1',
         span: false,
         spanStart: '09',
         spanEnd: '18',
@@ -83,46 +89,49 @@ export function emptySchedule(): ScheduleForm {
 /**
  * 解析计划表达式。
  *
- * 只有能被表单无损重建的表达式才返回结构化结果，其余一律回落 `custom` 并保留原文，
+ * 只有能被控件无损重建的表达式才给出结构化结果，其余一律回落 `custom` 并保留原文，
  * 避免打开编辑器再保存时改掉用户本来的计划。
  */
 export function parseSchedule(value: string): ScheduleForm {
     const base = { ...emptySchedule(), original: value };
     const trimmed = value.trim();
     const once = /^once:(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})$/.exec(trimmed);
-    if (once) return { ...base, mode: 'once', date: once[1], time: once[2] };
+    if (once) return { ...base, kind: 'once', date: once[1], time: once[2] };
     const interval = /^interval:(\d+)(ms|s|m|h)$/.exec(trimmed);
-    if (interval) return { ...base, mode: 'interval', amount: interval[1], unit: interval[2] };
+    if (interval) return { ...base, kind: 'interval', amount: interval[1], unit: interval[2] };
 
     const prefixed = /^(workday|weekday|weekend|holiday):(.+)$/.exec(trimmed);
     const cron = parseCronFields((prefixed ? prefixed[2] : trimmed).split(/\s+/));
-    if (!cron) return { ...base, mode: 'custom' };
+    if (!cron) return { ...base, kind: 'custom' };
 
-    const form: ScheduleForm = {
+    const dateMode: DateMode = cron.month !== null
+        ? 'yearly'
+        : cron.day !== null
+            ? 'monthly'
+            : cron.weekdays !== null
+                ? 'weekly'
+                : 'none';
+    return {
         ...base,
+        kind: 'cron',
         time: `${pad(cron.hourStart)}:${pad(cron.minuteValue ?? 0)}`,
+        calendar: prefixed ? (prefixed[1] as CalendarScope) : '',
+        dateMode,
+        weekdays: cron.weekdays ? cron.weekdays.map(String) : [],
+        monthDay: cron.day !== null ? String(cron.day) : base.monthDay,
+        month: cron.month !== null ? String(cron.month) : base.month,
         span: cron.minuteStep !== null || cron.hourStart !== cron.hourEnd,
         spanStart: pad(cron.hourStart),
         spanEnd: pad(cron.hourEnd),
         spanEvery: String(cron.minuteStep ?? cron.hourStep),
         spanUnit: cron.minuteStep !== null ? 'minute' : 'hour',
     };
-    if (prefixed) {
-        // 日历前缀与日、星期限定组合时表单无法同时表达，回落自定义以免丢字段。
-        if (cron.day !== null || cron.weekdays !== null) return { ...base, mode: 'custom' };
-        return { ...form, mode: prefixed[1] as ScheduleMode };
-    }
-    if (cron.day !== null) return { ...form, mode: 'monthly', day: String(cron.day) };
-    if (cron.weekdays) {
-        return { ...form, mode: 'weekly', weekdays: cron.weekdays.map(String) };
-    }
-    return { ...form, mode: 'daily' };
 }
 
 export function encodeSchedule(form: ScheduleForm): string {
-    if (form.mode === 'custom') return form.original;
-    if (form.mode === 'once') return `once:${form.date}T${form.time.length === 5 ? `${form.time}:00` : form.time}`;
-    if (form.mode === 'interval') {
+    if (form.kind === 'custom') return form.original;
+    if (form.kind === 'once') return `once:${form.date}T${form.time.length === 5 ? `${form.time}:00` : form.time}`;
+    if (form.kind === 'interval') {
         return `interval:${form.unit === 'd' ? Number(form.amount) * HOURS_PER_DAY : form.amount}${form.unit === 'd' ? 'h' : form.unit}`;
     }
     const [hour, minute] = form.time.split(':').map(Number);
@@ -139,15 +148,16 @@ export function encodeSchedule(form: ScheduleForm): string {
             hourField = start === end ? String(start) : every > 1 ? `${start}-${end}/${every}` : `${start}-${end}`;
         }
     }
-    const prefix = CALENDAR_MODES.includes(form.mode) ? `${form.mode}:` : '';
-    const dayField = form.mode === 'monthly' ? form.day : '*';
-    const weekdayField = form.mode === 'weekly' ? encodeWeekdays(form.weekdays) : '*';
-    return `${prefix}${minuteField} ${hourField} ${dayField} * ${weekdayField}`;
+    const dayField = form.dateMode === 'monthly' || form.dateMode === 'yearly' ? form.monthDay : '*';
+    const monthField = form.dateMode === 'yearly' ? form.month : '*';
+    const weekdayField = form.dateMode === 'weekly' ? encodeWeekdays(form.weekdays) : '*';
+    const prefix = form.calendar ? `${form.calendar}:` : '';
+    return `${prefix}${minuteField} ${hourField} ${dayField} ${monthField} ${weekdayField}`;
 }
 
 export function scheduleError(form: ScheduleForm, now = Date.now()): string | null {
-    if (form.mode === 'custom') return null;
-    if (form.mode === 'interval') {
+    if (form.kind === 'custom') return null;
+    if (form.kind === 'interval') {
         const amount = Number(form.amount);
         return Number.isSafeInteger(amount) && amount > 0 && Number.isSafeInteger(amount * HOURS_PER_DAY)
             ? null : '间隔必须是大于零的整数';
@@ -155,11 +165,19 @@ export function scheduleError(form: ScheduleForm, now = Date.now()): string | nu
     if (!/^\d{2}:\d{2}(:\d{2})?$/.test(form.time)) return '请选择执行时间';
     const [hour, minute, second = 0] = form.time.split(':').map(Number);
     if (hour > MAX_HOUR || minute > MAX_MINUTE || second > MAX_MINUTE) return '执行时间无效';
-    if (form.mode === 'once') {
+    if (form.kind === 'once') {
         const at = new Date(`${form.date}T${form.time}`).getTime();
         if (!Number.isFinite(at)) return '请选择执行日期';
         if (at <= now) return '一次执行的日期和时间必须晚于当前时间';
         return null;
+    }
+    if (form.dateMode === 'monthly' || form.dateMode === 'yearly') {
+        const day = Number(form.monthDay);
+        if (!Number.isInteger(day) || day < 1 || day > MAX_MONTH_DAY) return '每月执行日必须在 1 到 31 之间';
+    }
+    if (form.dateMode === 'yearly') {
+        const month = Number(form.month);
+        if (!Number.isInteger(month) || month < 1 || month > MAX_MONTH) return '每年执行的月份必须在 1 到 12 之间';
     }
     if (form.span) {
         const start = Number(form.spanStart);
@@ -175,53 +193,14 @@ export function scheduleError(form: ScheduleForm, now = Date.now()): string | nu
 
 export function scheduleText(value: string): string {
     const form = parseSchedule(value);
-    if (form.mode === 'custom') {
-        return describeExpression(value) ?? `自定义计划：${value}`;
+    if (form.kind === 'custom') return describeLooseExpression(value) ?? `自定义计划：${value}`;
+    if (form.kind === 'once') {
+        const at = new Date(`${form.date}T${form.time}`).getTime();
+        const clock = Number.isFinite(at) ? formatDateTime(at) : `${form.date} ${form.time}`;
+        return `${clock} 执行一次`;
     }
-    switch (form.mode) {
-        case 'once': {
-            const at = new Date(`${form.date}T${form.time}`).getTime();
-            const clock = Number.isFinite(at) ? formatDateTime(at) : `${form.date} ${form.time}`;
-            return `${clock} 执行一次`;
-        }
-        case 'interval': return `每 ${formatInterval(form.amount, form.unit)}`;
-        default: return describeCron(form);
-    }
-}
-
-function describeCron(form: ScheduleForm): string {
-    const base = form.mode === 'workday' ? '每个工作日'
-        : form.mode === 'weekday' ? '周一到周五'
-            : form.mode === 'weekend' ? '每个周末'
-                : form.mode === 'holiday' ? '每个法定节假日'
-                    : form.mode === 'weekly' ? describeWeekdays(form.weekdays)
-                        : form.mode === 'monthly' ? `每月 ${form.day} 日`
-                            : '每天';
-    if (!form.span) return `${base} ${form.time}`;
-    const start = Number(form.spanStart);
-    const end = Number(form.spanEnd);
-    const every = Number(form.spanEvery) || 1;
-    const cadence = form.spanUnit === 'minute'
-        ? (every > 1 ? `每 ${every} 分钟` : '每分钟')
-        : (every > 1 ? `每 ${every} 小时` : '每小时');
-    const minute = Number(form.time.split(':')[1] ?? '0');
-    const offset = minute > 0 ? `的第 ${minute} 分` : '';
-    if (start === end) {
-        return form.spanUnit === 'minute' ? `${base} ${start} 点起${cadence}` : `${base} ${start} 点`;
-    }
-    return `${base} ${start} 点到 ${end} 点${cadence}${offset}`;
-}
-
-function describeWeekdays(weekdays: string[]): string {
-    const sorted = [...weekdays].map(Number).sort((left, right) => left - right);
-    if (sorted.length === 0 || sorted.length === WEEKDAY_COUNT) return '每天';
-    if (sorted.join(',') === WORKDAY_WEEKDAYS) return '每个工作日';
-    return `每${sorted.map((day) => WEEKDAYS[day]).join('、')}`;
-}
-
-function encodeWeekdays(weekdays: string[]): string {
-    const sorted = [...new Set(weekdays.map(Number))].sort((left, right) => left - right);
-    return sorted.length > 0 ? sorted.join(',') : '*';
+    if (form.kind === 'interval') return `每 ${formatInterval(form.amount, form.unit)}`;
+    return describeCronSchedule(form);
 }
 
 interface ParsedCron {
@@ -231,17 +210,18 @@ interface ParsedCron {
     hourEnd: number;
     hourStep: number;
     day: number | null;
+    month: number | null;
     weekdays: number[] | null;
 }
 
 /**
- * 解析五段 cron。返回 `null` 表示表单无法无损表达，调用方必须回落 `custom`。
+ * 解析五段 cron。返回 `null` 表示控件无法无损表达，调用方必须回落 `custom`。
  *
- * 不可表达的形态：分钟或小时为 `*`、月份非 `*`、日与星期同时限定、分钟步长与小时步长并存、
- * 时段内分钟非零。它们都真实存在于网关侧，静默改写会直接改变触发频率。
+ * 不可表达的形态：分钟或小时为 `*`、分钟步长与小时步长并存、月份有值但日期不限、
+ * 日与星期同时限定。它们都真实存在于网关侧，静默改写会直接改变触发频率。
  */
 function parseCronFields(fields: string[]): ParsedCron | null {
-    if (fields.length !== 5 || fields[3] !== '*') return null;
+    if (fields.length !== 5) return null;
     if (fields[0] === '*' || fields[0] === '?') return null;
     if (fields[1] === '*' || fields[1] === '?') return null;
 
@@ -271,7 +251,6 @@ function parseCronFields(fields: string[]): ParsedCron | null {
         hourStart = Number(single[0]);
         hourEnd = hourStart;
     } else if (/^\d+(,\d+)+$/.test(fields[1])) {
-        // 等差的小时列表等价于区间加步长，归一化后交给时段控件表达
         const hours = fields[1].split(',').map(Number);
         const step = hours[1] - hours[0];
         if (step < 1) return null;
@@ -290,14 +269,22 @@ function parseCronFields(fields: string[]): ParsedCron | null {
     if (minuteStep !== null && hourStep > 1) return null;
 
     let day: number | null = null;
-    if (fields[2] !== '*') {
+    if (fields[2] !== '*' && fields[2] !== '?') {
         if (!/^\d+$/.test(fields[2])) return null;
         day = Number(fields[2]);
         if (day < 1 || day > MAX_MONTH_DAY) return null;
     }
 
+    let month: number | null = null;
+    if (fields[3] !== '*' && fields[3] !== '?') {
+        if (!/^\d+$/.test(fields[3])) return null;
+        month = Number(fields[3]);
+        if (month < 1 || month > MAX_MONTH) return null;
+    }
+    if (month !== null && day === null) return null;
+
     let weekdays: number[] | null = null;
-    if (fields[4] !== '*') {
+    if (fields[4] !== '*' && fields[4] !== '?') {
         const values: number[] = [];
         for (const part of fields[4].split(',')) {
             const weekdayRange = /^(\d)-(\d)$/.exec(part);
@@ -317,7 +304,12 @@ function parseCronFields(fields: string[]): ParsedCron | null {
     }
     if (day !== null && weekdays !== null) return null;
 
-    return { minuteValue, minuteStep, hourStart, hourEnd, hourStep, day, weekdays };
+    return { minuteValue, minuteStep, hourStart, hourEnd, hourStep, day, month, weekdays };
+}
+
+function encodeWeekdays(weekdays: string[]): string {
+    const sorted = [...new Set(weekdays.map(Number))].sort((left, right) => left - right);
+    return sorted.length > 0 ? sorted.join(',') : '*';
 }
 
 function pad(value: number): string {
@@ -348,171 +340,4 @@ function formatInterval(amountText: string, unit: string): string {
     if (readable) return `${milliseconds / readable.size} ${readable.label}`;
     if (milliseconds < MILLISECONDS_PER_SECOND) return `${milliseconds} 毫秒`;
     return `${(milliseconds / MILLISECONDS_PER_SECOND).toLocaleString('zh-CN', { maximumFractionDigits: 2 })} 秒`;
-}
-
-const CALENDAR_PREFIX_LABELS: Record<string, string> = {
-    workday: '每个工作日',
-    weekday: '周一到周五',
-    weekend: '每个周末',
-    holiday: '每个法定节假日',
-};
-
-type LooseField =
-    | { kind: 'any' }
-    | { kind: 'value'; value: number }
-    | { kind: 'list'; values: number[] }
-    | { kind: 'range'; start: number; end: number; step: number };
-
-/**
- * 宽松解析单个字段：只要是语法合法的写法就给出结构，供显示层翻译。
- *
- * 与 `parseCronFields` 不同，这里不要求表单能编辑，因此列表、单值步长等都能落到中文文案。
- */
-function parseLooseField(text: string, min: number, max: number): LooseField | null {
-    if (text === '*' || text === '?') return { kind: 'any' };
-    const anyStep = /^\*\/(\d+)$/.exec(text);
-    if (anyStep) {
-        const step = Number(anyStep[1]);
-        if (step < 1) return null;
-        return { kind: 'range', start: min, end: min + Math.floor((max - min) / step) * step, step };
-    }
-    const valueStep = /^(\d+)\/(\d+)$/.exec(text);
-    if (valueStep) {
-        const start = Number(valueStep[1]);
-        const step = Number(valueStep[2]);
-        if (start < min || start > max || step < 1) return null;
-        return { kind: 'range', start, end: start + Math.floor((max - start) / step) * step, step };
-    }
-    const range = /^(\d+)-(\d+)(?:\/(\d+))?$/.exec(text);
-    if (range) {
-        const start = Number(range[1]);
-        const end = Number(range[2]);
-        const step = range[3] ? Number(range[3]) : 1;
-        if (start < min || end > max || start > end || step < 1) return null;
-        return { kind: 'range', start, end, step };
-    }
-    if (/^\d+$/.test(text)) {
-        const value = Number(text);
-        return value >= min && value <= max ? { kind: 'value', value } : null;
-    }
-    if (/^\d+(,\d+)+$/.test(text)) {
-        const values = text.split(',').map(Number);
-        if (values.some((value) => value < min || value > max)) return null;
-        return { kind: 'list', values };
-    }
-    return null;
-}
-
-/** 把任意语法合法的计划翻译成中文；无法翻译时返回 null，由调用方回落原文。 */
-function describeExpression(value: string): string | null {
-    const trimmed = value.trim();
-    const prefixed = /^(workday|weekday|weekend|holiday):(.+)$/.exec(trimmed);
-    const fields = (prefixed ? prefixed[2] : trimmed).split(/\s+/);
-    if (fields.length !== 5) return null;
-    const minutes = parseLooseField(fields[0], 0, 59);
-    const hours = parseLooseField(fields[1], 0, 23);
-    const days = parseLooseField(fields[2], 1, 31);
-    const months = parseLooseField(fields[3], 1, 12);
-    const weekdays = parseLooseField(fields[4], 0, 6);
-    if (!minutes || !hours || !days || !months || !weekdays) return null;
-
-    const time = describeTimeOfDay(minutes, hours);
-    if (!time) return null;
-
-    const monthText = describeMonths(months);
-    const dayText = describeDays(days, weekdays, monthText.length > 0);
-    const pieces: string[] = [];
-    if (prefixed) pieces.push(CALENDAR_PREFIX_LABELS[prefixed[1]] ?? '');
-    if (monthText) pieces.push(dayText ? `每年 ${monthText} ${dayText}` : `每年 ${monthText}`);
-    else if (dayText) pieces.push(dayText);
-    const parts = pieces.filter(Boolean);
-    if (parts.length === 0) return time;
-    return `${parts.join('或')} ${time}`;
-}
-
-function describeMonths(field: LooseField): string {
-    switch (field.kind) {
-        case 'any': return '';
-        case 'value': return `${field.value} 月`;
-        case 'list': return `${field.values.join('、')} 月`;
-        case 'range':
-            if (field.step > 1 && field.start === 1) return `每 ${field.step} 个月`;
-            return field.step > 1
-                ? `${field.start} 月到 ${field.end} 月每 ${field.step} 个月`
-                : `${field.start} 月到 ${field.end} 月`;
-    }
-}
-
-function describeDays(days: LooseField, weekdays: LooseField, withMonth: boolean): string {
-    const dayText = describeDayPart(days, withMonth);
-    const weekText = describeWeekPart(weekdays);
-    if (dayText && weekText) return `${dayText}或${weekText}`;
-    return dayText || weekText;
-}
-
-function describeDayPart(field: LooseField, withMonth: boolean): string {
-    const prefix = withMonth ? '' : '每月 ';
-    switch (field.kind) {
-        case 'any': return '';
-        case 'value': return `${prefix}${field.value} 日`;
-        case 'list': return `${prefix}${field.values.join('、')} 日`;
-        case 'range':
-            return field.step > 1
-                ? `${prefix}${field.start} 日到 ${field.end} 日每 ${field.step} 天`
-                : `${prefix}${field.start} 日到 ${field.end} 日`;
-    }
-}
-
-function describeWeekPart(field: LooseField): string {
-    const labels = (days: number[]) => days.map((day) => WEEKDAYS[day]).join('、');
-    switch (field.kind) {
-        case 'any': return '';
-        case 'value': return `每${WEEKDAYS[field.value]}`;
-        case 'list': {
-            const sorted = [...new Set(field.values)].sort((left, right) => left - right);
-            return sorted.join(',') === WORKDAY_WEEKDAYS ? '每个工作日' : `每${labels(sorted)}`;
-        }
-        case 'range': {
-            const days: number[] = [];
-            for (let day = field.start; day <= field.end; day += field.step) days.push(day);
-            return days.join(',') === WORKDAY_WEEKDAYS ? '每个工作日' : `每${labels(days)}`;
-        }
-    }
-}
-
-function describeTimeOfDay(minutes: LooseField, hours: LooseField): string {
-    const clock = (hour: number, minute: number) => `${pad(hour)}:${pad(minute)}`;
-    if (hours.kind === 'any') {
-        if (minutes.kind === 'any') return '每分钟';
-        if (minutes.kind === 'range' && minutes.start === 0) {
-            return minutes.step > 1 ? `每 ${minutes.step} 分钟` : '每分钟';
-        }
-        if (minutes.kind === 'value') return `每小时的第 ${minutes.value} 分`;
-        if (minutes.kind === 'list') return `每小时的第 ${minutes.values.join('、')} 分`;
-        return '';
-    }
-    if (hours.kind === 'value') {
-        if (minutes.kind === 'any') return `${hours.value} 点内每分钟`;
-        if (minutes.kind === 'value') return clock(hours.value, minutes.value);
-        if (minutes.kind === 'range' && minutes.start === 0) {
-            return `${hours.value} 点内每 ${minutes.step} 分钟`;
-        }
-        return '';
-    }
-    const span = hours.kind === 'range' ? hours : linearHours(hours.values);
-    if (!span) return '';
-    const cadence = span.step > 1 ? `每 ${span.step} 小时` : '每小时';
-    const offset = minutes.kind === 'value' && minutes.value > 0 ? `的第 ${minutes.value} 分` : '';
-    return `${span.start} 点到 ${span.end} 点${cadence}${offset}`;
-}
-
-/** 等差的小时列表等价于区间加步长，其余列表不翻译。 */
-function linearHours(values: number[]): { start: number; end: number; step: number } | null {
-    if (values.length < 2) return null;
-    const step = values[1] - values[0];
-    if (step < 1) return null;
-    for (let index = 2; index < values.length; index += 1) {
-        if (values[index] - values[index - 1] !== step) return null;
-    }
-    return { start: values[0], end: values[values.length - 1], step };
 }

@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import { encodeSchedule, parseSchedule, scheduleError, scheduleText } from '../src/components/automation/schedule.ts';
 
 /*
- * Cron 周期文案：自动化任务页与「设置 > 模型定价」的自动同步状态行共用这一个函数，
- * 因此它的边界要在这里钉住：两处读同一批任务，说法必须一致。
+ * 计划文案与表单互转的回归网。
  *
- * 解析器只对能被表单无损重建的表达式给出结构化结果，其余回落 custom 并保留原文；
- * 下面的回落用例就是这条约束的回归网，任何一条被改写成等价但不同的表达式都算缺陷。
+ * 两条不变量：
+ * 1. 语法合法的表达式都要读成中文，哪怕控件编辑不了；
+ * 2. 控件能编辑的表达式，回填后原样还原，不能悄悄改掉触发频率。
  */
 
-test('周期文案把毫秒间隔收成人读得懂的单位', () => {
+test('固定间隔收成人读得懂的单位', () => {
     assert.equal(scheduleText('interval:86400000ms'), '每 1 天');
     assert.equal(scheduleText('interval:60m'), '每 1 小时');
     assert.equal(scheduleText('interval:60s'), '每 1 分钟');
@@ -24,43 +24,40 @@ test('常见计划读成中文', () => {
     assert.equal(scheduleText('0 20 * * 1,2,3,4,5'), '每个工作日 20:00');
     assert.equal(scheduleText('0 21 * * 5'), '每周五 21:00');
     assert.equal(scheduleText('0 0 1 * *'), '每月 1 日 00:00');
+    assert.equal(scheduleText('0 0 1 1 *'), '每年 1 月 1 日 00:00');
     assert.equal(scheduleText('workday:0 8-20 * * *'), '每个工作日 8 点到 20 点每小时');
     assert.equal(scheduleText('workday:0 8-20/2 * * *'), '每个工作日 8 点到 20 点每 2 小时');
     assert.equal(scheduleText('workday:*/30 9-18 * * *'), '每个工作日 9 点到 18 点每 30 分钟');
     assert.equal(scheduleText('30 9-18 * * *'), '每天 9 点到 18 点每小时的第 30 分');
-    assert.equal(scheduleText('weekday:0 9 * * *'), '周一到周五 09:00');
-    assert.equal(scheduleText('holiday:0 10 * * *'), '每个法定节假日 10:00');
-    assert.equal(scheduleText('weekend:0 9 * * *'), '每个周末 09:00');
 });
 
-test('连续小时逗号列表归一化为时段', () => {
-    const expression = '0 9,10,11,12,13,14,15,16,17,18,19,20 * * *';
-    const form = parseSchedule(expression);
-    assert.equal(form.mode, 'daily');
-    assert.equal(form.span, true);
-    assert.equal(scheduleText(expression), '每天 9 点到 20 点每小时');
-    assert.equal(encodeSchedule(form), '0 9-20 * * *');
+test('日历范围与日期方式自由组合', () => {
+    assert.equal(scheduleText('workday:0 9 * * 5'), '每个工作日里的周五 09:00');
+    assert.equal(scheduleText('holiday:0 8 * * *'), '每个法定节假日 08:00');
+    assert.equal(scheduleText('holiday:0 8 1 * *'), '每个法定节假日里的 1 日 08:00');
+    assert.equal(scheduleText('weekend:0 10 * * 6'), '每个周末里的周六 10:00');
+    assert.equal(scheduleText('workday:0 9 1 1 *'), '每个工作日里的 1 月 1 日 09:00');
+    assert.equal(scheduleText('weekday:0 9 * * 1-5'), '周一到周五 09:00', '星期等于工作日集合时不重复');
 });
 
-test('等差的小时逗号列表归一化为区间加步长', () => {
-    const expression = '0 9,12,15,18,21 * * *';
-    const form = parseSchedule(expression);
-    assert.equal(form.mode, 'daily');
-    assert.equal(form.span, true);
-    assert.equal(form.spanEvery, '3');
-    assert.equal(scheduleText(expression), '每天 9 点到 21 点每 3 小时');
-    assert.equal(encodeSchedule(form), '0 9-21/3 * * *');
-    assert.equal(parseSchedule('0 9,12,14 * * *').mode, 'custom', '非等差仍回落自定义');
+test('连续与等差的小时列表归一化为时段', () => {
+    const contiguous = '0 9,10,11,12,13,14,15,16,17,18,19,20 * * *';
+    assert.equal(scheduleText(contiguous), '每天 9 点到 20 点每小时');
+    assert.equal(encodeSchedule(parseSchedule(contiguous)), '0 9-20 * * *');
+
+    const stepped = '0 9,12,15,18,21 * * *';
+    assert.equal(scheduleText(stepped), '每天 9 点到 21 点每 3 小时');
+    assert.equal(encodeSchedule(parseSchedule(stepped)), '0 9-21/3 * * *');
+    assert.equal(parseSchedule('0 9,12,14 * * *').kind, 'custom', '非等差仍回落自定义');
 });
 
-test('不可编辑但合法的计划同样读成中文', () => {
+test('控件编辑不了但合法的计划同样读成中文', () => {
     assert.equal(scheduleText('* * * * *'), '每分钟');
+    assert.equal(scheduleText('0 * * * *'), '每小时的第 0 分');
     assert.equal(scheduleText('0,30 * * * *'), '每小时的第 0、30 分');
     assert.equal(scheduleText('0 */2 * * *'), '0 点到 22 点每 2 小时');
     assert.equal(scheduleText('0 0 1,15 * *'), '每月 1、15 日 00:00');
-    assert.equal(scheduleText('0 0 1 1 *'), '每年 1 月 1 日 00:00');
     assert.equal(scheduleText('0 9 1 * 1'), '每月 1 日或每周一 09:00');
-    assert.equal(scheduleText('0 9 * * 1,3,5'), '每周一、周三、周五 09:00');
 });
 
 test('一次执行按全站时刻口径展示', () => {
@@ -69,26 +66,31 @@ test('一次执行按全站时刻口径展示', () => {
 
 test('表单回填与还原对同一表达式收敛', () => {
     const expectations = [
-        ['workday:0 8-20 * * *', 'workday'],
-        ['workday:*/30 9-18 * * *', 'workday'],
-        ['holiday:0 10 * * *', 'holiday'],
-        ['0 20 * * 1,2,3,4,5', 'weekly'],
-        ['0 9 * * *', 'daily'],
-        ['0 9-18 * * *', 'daily'],
-        ['30 9-18 * * *', 'daily'],
-        ['30 9 * * *', 'daily'],
-        ['0 0 1 * *', 'monthly'],
-        ['interval:30m', 'interval'],
+        ['workday:0 8-20 * * *', 'workday', 'none'],
+        ['workday:0 9 * * 5', 'workday', 'weekly'],
+        ['holiday:0 8 1 * *', 'holiday', 'monthly'],
+        ['workday:0 9 1 1 *', 'workday', 'yearly'],
+        ['workday:*/30 9-18 * * *', 'workday', 'none'],
+        ['holiday:0 10 * * *', 'holiday', 'none'],
+        ['0 20 * * 1,2,3,4,5', '', 'weekly'],
+        ['0 9 * * *', '', 'none'],
+        ['0 9-18 * * *', '', 'none'],
+        ['30 9-18 * * *', '', 'none'],
+        ['30 9 * * *', '', 'none'],
+        ['0 0 1 * *', '', 'monthly'],
+        ['0 0 1 1 *', '', 'yearly'],
+        ['interval:30m', '', 'none'],
     ];
-    for (const [expression, mode] of expectations) {
+    for (const [expression, calendar, dateMode] of expectations) {
         const form = parseSchedule(expression);
-        assert.notEqual(form.mode, 'custom', expression);
-        assert.equal(form.mode, mode, expression);
+        assert.notEqual(form.kind, 'custom', expression);
+        assert.equal(form.calendar, calendar, expression);
+        assert.equal(form.dateMode, dateMode, expression);
         assert.equal(encodeSchedule(form), expression, expression);
     }
 });
 
-test('表单表达不了的计划回落自定义并原样保留', () => {
+test('控件表达不了的计划回落自定义并原样保留', () => {
     for (const expression of [
         '* * * * *',
         '0 * * * *',
@@ -97,13 +99,13 @@ test('表单表达不了的计划回落自定义并原样保留', () => {
         '0 9/2 * * *',
         '0 9 1 * 1',
         '0 9 1,15 1 *',
+        'holiday:0 8 1,15 * *',
+        'workday:0 8 * 1 *',
         '0 9-18/25 * * *',
-        'workday:0 9 1 * *',
-        'weekend:0 10 * * 6',
         'interval:2d',
     ]) {
         const form = parseSchedule(expression);
-        assert.equal(form.mode, 'custom', expression);
+        assert.equal(form.kind, 'custom', expression);
         assert.equal(encodeSchedule(form), expression, expression);
     }
 });
