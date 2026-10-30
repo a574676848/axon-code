@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import type React from 'react';
+import { caretLineBoundaryFallback, type CaretPlacement } from './composerCaretLine';
 
 /*
  * 输入坞的键盘约定（纯函数加一层薄接线）。
@@ -61,6 +62,13 @@ export interface ComposerKeyContext {
   previousHistory: (text: string) => Promise<string | null>;
   /** 取下一条输入历史。 */
   nextHistory: () => string | null;
+  /**
+   * 实测光标是否在首个 / 末个可见行；量为 null 表示这一帧量不出来。
+   *
+   * 判据必须落在**可见行**上：软折行不写进正文，只看换行符会把一段折成三行的
+   * 草稿当成一行，于是在第三行按上键也会翻历史。
+   */
+  caretPlacement: () => CaretPlacement | null;
   /** 提交正文。 */
   submit: () => void;
 }
@@ -83,6 +91,7 @@ export function createComposerKeyHandler(
     requestCaret,
     previousHistory,
     nextHistory,
+    caretPlacement,
     submit,
   } = context;
 
@@ -140,8 +149,8 @@ export function createComposerKeyHandler(
     }
 
     /*
-     * 历史输入：与 TUI 同口径，只有光标在第一行按上、最后一行按下才翻历史，
-     * 多行草稿里的方向键仍然用于移动光标。
+     * 历史输入：与 TUI 同口径，只有光标在首个可见行按上、末个可见行按下才翻历史，
+     * 多行草稿里的方向键仍然用于移动光标。可见行以实测为准，量不出来才退回换行符。
      */
     if (
       (event.key === 'ArrowUp' || event.key === 'ArrowDown') &&
@@ -150,9 +159,8 @@ export function createComposerKeyHandler(
       !event.ctrlKey &&
       !event.metaKey
     ) {
-      const firstLine = !text.slice(0, caret).includes('\n');
-      const lastLine = !text.slice(caret).includes('\n');
-      if (event.key === 'ArrowUp' && firstLine) {
+      const edges = caretPlacement() ?? caretLineBoundaryFallback(text, caret);
+      if (event.key === 'ArrowUp' && edges.first) {
         // 上键在首行固定用于翻历史（与 TUI 一致）；没历史时只是什么也不发生。
         event.preventDefault();
         void previousHistory(text).then((recalled) => {
@@ -162,7 +170,7 @@ export function createComposerKeyHandler(
         });
         return;
       }
-      if (event.key === 'ArrowDown' && lastLine) {
+      if (event.key === 'ArrowDown' && edges.last) {
         const recalled = nextHistory();
         if (recalled !== null) {
           event.preventDefault();
@@ -205,6 +213,8 @@ export interface ComposerKeyWiring {
   previousHistory: (text: string) => Promise<string | null>;
   /** 取下一条历史。 */
   nextHistory: () => string | null;
+  /** 实测光标所在的可见行；未接线时按换行符判断。 */
+  caretPlacement: () => CaretPlacement | null;
   /** 提交正文。 */
   submit: () => void;
 }
@@ -230,6 +240,7 @@ export function useComposerKeyHandler(
     requestCaret,
     previousHistory,
     nextHistory,
+    caretPlacement,
     submit,
   } = wiring;
   const isReference = openCandidates?.isReference === true;
@@ -261,11 +272,13 @@ export function useComposerKeyHandler(
         requestCaret,
         previousHistory,
         nextHistory,
+        caretPlacement,
         submit,
       }),
     [
       acceptCandidate,
       caret,
+      caretPlacement,
       commitText,
       isReference,
       nextHistory,

@@ -3,6 +3,7 @@ import { structuredInputBlock } from '../../conversation/references';
 import { matchBuiltinCommand } from '../../conversation/builtinCommands';
 import { openWebLink } from '../../conversation/openWebLink';
 import { ComposerTray } from './ComposerTray';
+import { caretLineBoundary, revealCaret } from './composerCaretLine';
 import { useComposerKeyHandler } from './composerKeys';
 import { createComposerSubmit } from './composerSubmit';
 import { FIELD_SIZING_SUPPORTED } from './composerSizing';
@@ -249,6 +250,9 @@ export const InputDock: React.FC<InputDockProps> = ({
     if (area !== null) {
       area.focus();
       area.setSelectionRange(pendingCaret, pendingCaret);
+      // 程序化落光标不会让输入框自己滚过去：不补这一下，翻回一条长历史之后
+      // 光标就停在框外，肉眼看到的是「光标不见了」。
+      revealCaret(area);
       setCaret(pendingCaret);
     }
     setPendingCaret(null);
@@ -337,6 +341,11 @@ export const InputDock: React.FC<InputDockProps> = ({
    * 键盘约定全部交给 composerKeys 里的接线：撤销/恢复、候选选择、历史翻页与提交
    * 只通过这份上下文往来，组件本身不再持有这些分支。
    */
+  const caretPlacement = React.useCallback(
+    () => (areaRef.current === null ? null : caretLineBoundary(areaRef.current)),
+    [],
+  );
+
   const onKeyDown = useComposerKeyHandler({
     text,
     caret,
@@ -350,6 +359,7 @@ export const InputDock: React.FC<InputDockProps> = ({
     requestCaret: setPendingCaret,
     previousHistory: recall.previous,
     nextHistory: recall.next,
+    caretPlacement,
     submit,
   });
 

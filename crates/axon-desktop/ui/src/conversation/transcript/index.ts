@@ -70,9 +70,13 @@ export {
   attachmentsFromPaths,
   compactDuration,
   deriveJobs,
+  mergeCarriedPrompts,
   pendingSteerCount,
   previewCommand,
+  requeueableSteers,
+  steerSequence,
   workingStatusPrimary,
+  type CarriedPrompt,
 } from './derive';
 
 export { PLAN_LABEL, planHeading } from './cells';

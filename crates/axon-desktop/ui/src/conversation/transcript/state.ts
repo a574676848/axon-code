@@ -20,6 +20,29 @@ export type TranscriptCell =
       attachments: AttachmentRef[];
       /** 服务端始终没有认领这条消息（发送失败，或中断时还没被注入）。 */
       undelivered?: boolean;
+      /**
+       * 提交时附上的结构化输入块（`[结构化输入]` 段）。
+       *
+       * 只在运行中排队这一格上存在：中断转投要按原样重发，而引用与附件行
+       * 在正文被裁成可见文本之后就再也算不回来了。
+       */
+      structuredInput?: string;
+      /**
+       * 这条消息是「本轮运行中追加」的。
+       *
+       * 与本地排队标识不同，服务端认领这一刻也会原样保留：认领只换标识与时间。
+       * 因此渲染层可以一直把它排在本轮末尾，而不是夹在思考与工具之间。
+       */
+      steer?: boolean;
+      /** 追加时的先后序号：认领与注入都可能打乱顺序，只认这一条。 */
+      steerSeq?: number;
+      /**
+       * 已经交给下一轮（中断时交接）。
+       *
+       * 气泡原地留着并标成「转投下一条」，交接那一帧才从旧轮次摘走，
+       * 因此正文里不会出现「先清空、再重写」的空档，也不会留下两份。
+       */
+      requeued?: boolean;
     }
   | {
       id: string;
@@ -372,7 +395,22 @@ export type ConversationAction =
   | { type: 'reset' }
   | { type: 'open-turn'; turnId: string; nowMs: number }
   | { type: 'submit'; turnId: string; text: string; nowMs: number; attachments: AttachmentRef[] }
-  | { type: 'steer'; text: string; nowMs: number; attachments: AttachmentRef[] }
+  | { type: 'steer'; text: string; nowMs: number; attachments: AttachmentRef[]; structuredInput: string }
+  /**
+   * 把还没被注入的排队消息从这一轮摘下。
+   *
+   * 中断时用：这些消息被调用方收进转投队列，等本轮真正收口后按原样重发。
+   * 与 TUI 的 `requeue_pending_steers_for_next_turn` 同语义，因此它们既不算
+   * 「已送达」，也不能被收口逻辑标成未送达。
+   */
+  | { type: 'detach-steers'; cellIds: string[] }
+  /**
+   * 把这些排队消息标成「已交给转投队列」。
+   *
+   * 与摘下不同：气泡原地留着，只是不再算「等待注入」、也不会被收口逻辑标成未送达；
+   * 真正离开本轮是在下一条消息提交的那一帧（见 detach-steers）。
+   */
+  | { type: 'mark-steers-carried'; cellIds: string[] }
   /**
    * 提交失败：撤销这一轮的乐观状态。
    *
@@ -407,4 +445,11 @@ export type ConversationAction =
    * 而这里没有出现的条目已经不再等用户了，按已结算收敛。
    */
   | { type: 'reconcile-questions'; questions: PendingQuestion[]; authoritative?: boolean }
-  | { type: 'tick'; nowMs: number };
+  | { type: 'tick'; nowMs: number }
+  /**
+   * 把这些追加消息标成「已交给下一轮」。
+   *
+   * 与摘下不同：气泡原地留着，只是不再算「等待注入」、也不会被收口逻辑标成未送达；
+   * 真正离开本轮是在下一条消息提交的那一帧（见 detach-steers）。
+   */
+  | { type: 'mark-steers-requeued'; cellIds: string[] };

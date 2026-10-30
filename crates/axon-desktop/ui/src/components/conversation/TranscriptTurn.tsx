@@ -1,5 +1,6 @@
 import React from 'react';
 import { changedFilesOf } from '../../conversation/transcript';
+import { steerSequence } from '../../conversation/transcript/derive';
 import type { TurnState } from '../../conversation/transcript/state';
 import { ChangedFilesCard } from './ChangedFilesCard';
 import { TranscriptCellView } from './Transcript';
@@ -18,6 +19,33 @@ import { TranscriptCellView } from './Transcript';
 
 /** 属于「过程」的单元：同一组内相邻时不再加间距。 */
 const PROCESS_ROLES = new Set(['reasoning', 'tool', 'fileChange', 'history']);
+
+/**
+ * 运行中追加的用户消息。
+ *
+ * 它不属于已经发生的过程：插在思考与工具之间会被读成「那一行的一部分」。
+ * 判据是单元自带的追加标记，服务端认领之后依然成立（认领只换标识与时间）。
+ */
+function appendedWhileRunning(cell: TurnState['cells'][number]): boolean {
+  return cell.role === 'user' && cell.steer === true;
+}
+
+/**
+ * 把运行中追加的消息排到本轮末尾，按用户敲的先后。
+ *
+ * 中断之后读起来就是「过程 → 已中断 → 这几条待转投」，下一轮接手时它们再整体
+ * 换到新轮次上；放在原插入点则会夹在过程行中间，顺序读着就乱了。
+ * 只有附件没有正文的消息同样在这条规则里：它也是用户敲的一条，只是正文为空。
+ */
+function withPendingLast(cells: TurnState['cells']): TurnState['cells'] {
+  if (!cells.some(appendedWhileRunning)) return cells;
+  return [
+    ...cells.filter((cell) => !appendedWhileRunning(cell)),
+    ...cells
+      .filter(appendedWhileRunning)
+      .sort((left, right) => steerSequence(left) - steerSequence(right)),
+  ];
+}
 
 interface CellGroup {
   key: string;
@@ -62,7 +90,7 @@ export interface TurnBlockProps {
 export const TurnBlock = React.memo<TurnBlockProps>(
   ({ turn, turnNumber, hiddenCells, onAnchor, onOpenChange, memoized = false }) => {
     const files = changedFilesOf(turn.changes);
-    const cells = hiddenCells > 0 ? turn.cells.slice(hiddenCells) : turn.cells;
+    const cells = withPendingLast(hiddenCells > 0 ? turn.cells.slice(hiddenCells) : turn.cells);
     const tail = cells[cells.length - 1];
     const endsWithSummary = tail !== undefined && tail.role === 'summary';
     /*

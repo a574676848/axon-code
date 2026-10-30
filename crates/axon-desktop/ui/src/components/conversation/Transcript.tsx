@@ -68,6 +68,8 @@ const UserBubble: React.FC<{
   attachments: AttachmentRef[];
   /** 仍在等待后端在安全边界插入：本地标识还没被 durable 事件认领。 */
   pending?: boolean;
+  /** 已交给中断转投队列：气泡原地留着，等下一轮接手。 */
+  carrying?: boolean;
   /** 服务端始终没有认领这条消息；内容还在，可直接重新发送。 */
   undelivered?: boolean;
 }> = ({
@@ -75,6 +77,7 @@ const UserBubble: React.FC<{
   atMs,
   attachments,
   pending = false,
+  carrying = false,
   undelivered = false,
 }) => {
   const actions = useConversationActions();
@@ -89,6 +92,12 @@ const UserBubble: React.FC<{
         <span className="mb-1 inline-flex items-center gap-1 text-meta text-text-tertiary">
           <SpinnerIcon size={12} className="state-spinner" />
           等待注入
+        </span>
+      )}
+      {/* 转投中：中断时交给下一轮，气泡留在原处，不再算本轮等待注入。 */}
+      {carrying && (
+        <span className="mb-1 inline-flex items-center gap-1 text-meta text-text-tertiary">
+          转投下一条
         </span>
       )}
       {/* 未送达同样是这一格自己的事实：轮次收口或提交失败后服务端仍未认领它。 */}
@@ -483,7 +492,12 @@ export const TranscriptCellView: React.FC<{ cell: TranscriptCell }> = React.memo
           text={cell.text}
           atMs={cell.atMs}
           attachments={cell.attachments}
-          pending={cell.id.startsWith(LOCAL_STEER_PREFIX) && cell.undelivered !== true}
+          pending={
+            cell.id.startsWith(LOCAL_STEER_PREFIX) &&
+            cell.undelivered !== true &&
+            cell.requeued !== true
+          }
+          carrying={cell.requeued === true && cell.undelivered !== true}
           undelivered={cell.undelivered === true}
         />
       );

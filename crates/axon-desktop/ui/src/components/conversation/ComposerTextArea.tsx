@@ -67,7 +67,8 @@ export const ComposerTextArea: React.FC<ComposerTextAreaProps> = ({
   ariaControls,
   ariaActiveDescendant,
 }) => {
-  const mirrorRef = React.useRef<HTMLDivElement>(null);
+  /** 底衬里真正承载正文的那一层：滚动由它整体上移来跟随，见下面的 syncScroll。 */
+  const followRef = React.useRef<HTMLDivElement>(null);
   /** 输入法组合中：底衬让位，文字交回输入框自己画。 */
   const [composing, setComposing] = React.useState(false);
   const segments = React.useMemo(
@@ -84,33 +85,58 @@ export const ComposerTextArea: React.FC<ComposerTextAreaProps> = ({
    */
   const reportCaret = (area: HTMLTextAreaElement) => onCaret(area.selectionStart ?? 0);
 
+  /*
+   * 底衬跟着输入框滚动。
+   *
+   * 不把底衬自己也做成滚动容器：底衬不是真实输入框，`scrollHeight` 对末尾那个空行
+   * 与内边距的算法与输入框不一致（实测可滚范围比输入框少二十几像素），滚到一半
+   * 就被夹住，于是画出来的字整体比光标与选区高出一截：多行时按 Shift + Enter
+   * 换行后光标看似没有另起一行，Ctrl + A 的选区压在别的行上，都是这一处脱节。
+   * 改成整体位移就没有上限问题，输入框滚多少就跟着移多少。
+   *
+   * 每次都重新对齐而不是只在 onScroll 里：输入框先滚、React 随后才把新正文画进
+   * 底衬，那一刻的偏移量已经是旧值，少补这一次就会一直差一行。
+   */
+  const syncScroll = React.useCallback(() => {
+    const area = areaRef.current;
+    const follow = followRef.current;
+    if (area === null || follow === null) return;
+    follow.style.transform = `translateY(${-area.scrollTop}px)`;
+  }, [areaRef]);
+
+  React.useLayoutEffect(() => {
+    syncScroll();
+  });
+
   return (
     <div className="relative">
       {/*
         底衬不接收指针、不进无障碍树：它只是同一段文字的另一次绘制。
-        滚动同步写在 textarea 的 onScroll 上（元素自己的滚动，不是全局滚动监听）。
+        滚动对齐写在 textarea 的 onScroll 与每一次提交之后（元素自己的滚动，
+        不是全局滚动监听）。
       */}
       <div
-        ref={mirrorRef}
         aria-hidden="true"
         data-composer-mirror=""
         style={{ visibility: composing ? 'hidden' : 'visible' }}
-        className="pointer-events-none absolute inset-0 overflow-hidden px-4 pt-[10px] pb-[10px] text-input whitespace-pre-wrap break-words"
+        className="pointer-events-none absolute inset-0 overflow-hidden text-input"
       >
-        {segments.map((segment, index) =>
-          segment.kind === 'link' ? (
-            // 占位符只换底色，不加内边距：字位与光标必须与真实输入框逐字对齐。
-            <span key={index} className="rounded-xs bg-surface-sunken text-text-link">
-              {segment.text}
-            </span>
-          ) : segment.kind === 'skill' ? (
-            <span key={index} className="text-skill-ink">
-              {segment.text}
-            </span>
-          ) : (
-            <React.Fragment key={index}>{segment.text}</React.Fragment>
-          ),
-        )}
+        <div ref={followRef} className="px-4 pt-[10px] pb-[10px] whitespace-pre-wrap break-words">
+          {segments.map((segment, index) =>
+            segment.kind === 'link' ? (
+              // 占位符只换底色，不加内边距：字位与光标必须与真实输入框逐字对齐。
+              <span key={index} className="rounded-xs bg-surface-sunken text-text-link">
+                {segment.text}
+              </span>
+            ) : segment.kind === 'skill' ? (
+              <span key={index} className="text-skill-ink">
+                {segment.text}
+              </span>
+            ) : (
+              <React.Fragment key={index}>{segment.text}</React.Fragment>
+            ),
+          )}
+        </div>
       </div>
       <textarea
         ref={areaRef}
@@ -133,10 +159,7 @@ export const ComposerTextArea: React.FC<ComposerTextAreaProps> = ({
         }}
         onSelect={(event) => reportCaret(event.currentTarget)}
         onClick={(event) => reportCaret(event.currentTarget)}
-        onScroll={(event) => {
-          const mirror = mirrorRef.current;
-          if (mirror !== null) mirror.scrollTop = event.currentTarget.scrollTop;
-        }}
+        onScroll={syncScroll}
         onKeyDown={onKeyDown}
         onContextMenu={onContextMenu}
         aria-expanded={ariaExpanded}

@@ -6,6 +6,7 @@
  */
 
 import { formatDurationMillisCompact } from '../format';
+import { mergeStructuredInput } from '../references';
 import { LOCAL_STEER_PREFIX, type AttachmentRef, type ConversationState, type JobRow, type TurnState } from './state';
 
 /** 派生：后台作业行；只收 shell 与作业类工具，事实源是订阅流本身。 */
@@ -58,24 +59,113 @@ export function workingStatusPrimary(activity: string | null, model: string): st
 }
 
 /**
- * 派生：仍在排队等待安全边界插入的消息条数。
+ * 中断时可交给下一轮的消息。
  *
- * 判据是本地乐观标识：durable 的用户消息事件按正文认领这一格后标识会换成
- * 服务端标识，计数自然归零，因此这里不需要第二份队列状态。已判定未送达的
- * 不再计入：它等的那次注入永远不会来了。
+ * 与 TUI 的 pending steer 同义：运行中追加、本轮还没给出答复。中断之后它必须按
+ * 原样重发，因此正文、附件与结构化输入块都要带上。
+ */
+export interface CarriedPrompt {
+  /** 正文里有那一格；交接时按标识把它从旧轮次摘走。 */
+  cellId: string;
+  text: string;
+  attachments: AttachmentRef[];
+  structuredInput: string;
+}
+
+/**
+ * 追加序号：用户敲下这些消息的先后。
+ *
+ * 认领会改写标识与时间，注入顺序也不保证与提交顺序一致，唯一靠得住的是这一条
+ * 自己带上的号。渲染与转投都按它排，历史帧里没有序号的老单元按 0 处理。
+ */
+export function steerSequence(cell: TurnState['cells'][number]): number {
+  return cell.role === 'user' ? (cell.steerSeq ?? 0) : 0;
+}
+
+/**
+ * 派生：仍在等安全边界注入的消息条数。
+ *
+ * 判据是本地排队标识：服务端认领（已注入本轮）之后标识换成 partId，计数随之归零。
+ * 已交给下一轮的不再计入，它已经不在等本轮这个边界了。
  */
 export function pendingSteerCount(turns: TurnState[]): number {
-  const position = [...turns]
-    .map((turn, index) => ({ turn, index }))
-    .reverse()
-    .find(({ turn }) => turn.status === 'pending' || turn.status === 'streaming');
-  if (position === undefined) return 0;
-  return position.turn.cells.filter(
+  return appendedCells(turns).filter(
     (cell) =>
       cell.role === 'user' &&
       cell.id.startsWith(LOCAL_STEER_PREFIX) &&
-      cell.undelivered !== true,
+      cell.undelivered !== true &&
+      cell.requeued !== true,
   ).length;
+}
+
+/**
+ * 中断时可交给下一轮的消息，按用户先后排序。
+ *
+ * 判据是「运行中追加」这一身份，而不是本地排队标识：已注入本轮的面试被服务端认领
+ * 了，可那一轮随后被中断、没给出答复，它们同样要接着跑，不能只转投还没被认领的。
+ * 已经交出去的（requeued）不再出现，否则会被重复发送。
+ */
+export function requeueableSteers(turns: TurnState[]): CarriedPrompt[] {
+  return appendedCells(turns)
+    .filter((cell) => cell.role === 'user' && cell.requeued !== true)
+    .sort((left, right) => steerSequence(left) - steerSequence(right))
+    .map(toCarriedPrompt);
+}
+
+/**
+ * 正在跑的那一轮里「运行中追加」的那些单元。
+ *
+ * 只看最后一条未收口的轮次：早先轮次里的追加消息都已经有结论了。
+ */
+function appendedCells(turns: TurnState[]): TurnState['cells'] {
+  const running = [...turns]
+    .reverse()
+    .find((turn) => turn.status === 'pending' || turn.status === 'streaming');
+  if (running === undefined) return [];
+  return running.cells.filter((cell) => cell.role === 'user' && cell.steer === true);
+}
+
+/** 把排队单元投影成可重发的载荷。 */
+function toCarriedPrompt(cell: TurnState['cells'][number]): CarriedPrompt {
+  const user = cell as Extract<TurnState['cells'][number], { role: 'user' }>;
+  return {
+    cellId: user.id,
+    text: user.text,
+    attachments: user.attachments,
+    structuredInput: user.structuredInput ?? '',
+  };
+}
+
+/**
+ * 把这一批待转投的消息并成一次提交。
+ *
+ * 后端一次提交只接受一条消息，而往运行中的轮次注入又只在安全边界发生：逐条发送
+ * 既不能保证到达顺序，也会让后面几条落在模型已经开始思考之后（读起来就是回复
+ * 夹在气泡中间）。并成一条提交则是一次原子的输入，顺序、位置与「回复在下面」
+ * 同时成立。
+ *
+ * 正文按用户敲的先后用空行拼接，附件按路径去重，引用行与附件行合成一段结构化输入。
+ */
+export function mergeCarriedPrompts(
+  prompts: readonly CarriedPrompt[],
+): { text: string; attachments: AttachmentRef[]; structuredInput: string } | null {
+  if (prompts.length === 0) return null;
+  const text = prompts
+    .map((prompt) => prompt.text.trim())
+    .filter((item) => item.length > 0)
+    .join('\n\n');
+  const attachments: AttachmentRef[] = [];
+  for (const prompt of prompts) {
+    for (const attachment of prompt.attachments) {
+      if (attachments.some((known) => known.path === attachment.path)) continue;
+      attachments.push(attachment);
+    }
+  }
+  const structuredInput = mergeStructuredInput(
+    prompts.map((prompt) => prompt.structuredInput).filter((block) => block.length > 0),
+    text,
+  );
+  return { text, attachments, structuredInput };
 }
 
 /** 由附件路径推导展示信息：文件名与是否可预览；历史事件只带路径，因此没有体量。 */

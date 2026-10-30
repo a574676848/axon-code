@@ -68,7 +68,7 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
         id: 'interrupt',
         label: '中断当前一轮',
         keys: ['Esc'],
-        note: '只在有轮次正在运行时接管；输入法组合中不触发',
+        note: '只在有轮次正在运行时接管；排队中还没注入的消息随中断立即送出；输入法组合中不触发',
       },
       { id: 'send', label: '发送消息', keys: ['Enter'] },
       { id: 'newline', label: '输入框内换行', keys: ['Shift', 'Enter'] },

@@ -206,3 +206,29 @@ function isStructuredInputLines(tail: string): boolean {
       )
   );
 }
+
+/**
+ * 把多段结构化输入块合成一段。
+ *
+ * 中断转投会把几条消息并成一次提交，而每一段都自带标题：直接拼接会出现多个
+ * `[结构化输入]` 标题，回放时只剥得掉最后一段，前面那几段会当正文露出来。
+ * 因此这里只保留一份标题，块尾的引用行与附件行按原顺序去重合并。
+ */
+export function mergeStructuredInput(blocks: readonly string[], text: string): string {
+  const lines: string[] = [];
+  for (const block of blocks) {
+    const head = `${STRUCTURED_INPUT_TITLE}\n`;
+    const body = block.startsWith(head)
+      ? block.slice(head.length)
+      : block.slice(block.lastIndexOf(`\n${STRUCTURED_INPUT_TITLE}\n`) + head.length + 1);
+    for (const line of body.split('\n')) {
+      if (line.length === 0 || lines.includes(line)) continue;
+      if (!line.startsWith(REFERENCE_LINE_PREFIX) && !line.startsWith(ATTACHMENT_LINE_PREFIX)) continue;
+      lines.push(line);
+    }
+  }
+  if (lines.length === 0) return '';
+  const head =
+    text.trim().length > 0 ? `\n\n${STRUCTURED_INPUT_TITLE}\n` : `${STRUCTURED_INPUT_TITLE}\n`;
+  return `${head}${lines.join('\n')}`;
+}

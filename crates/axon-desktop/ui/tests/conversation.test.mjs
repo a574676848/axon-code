@@ -8,7 +8,7 @@ import * as ipc from '../src/ipc.ts';
 import { conversationReducer } from '../src/conversation/transcript/reducer.ts';
 import { applyUserMessage } from '../src/conversation/transcript/cells.ts';
 import { INITIAL_CONVERSATION } from '../src/conversation/transcript/state.ts';
-import { pendingSteerCount } from '../src/conversation/transcript/derive.ts';
+import { mergeCarriedPrompts, pendingSteerCount, requeueableSteers } from '../src/conversation/transcript/derive.ts';
 import { emptyTurn, refreshLiveElapsed, settleTurn } from '../src/conversation/transcript/turns.ts';
 import { expandStreamPayload } from '../src/conversation/wire.ts';
 
@@ -197,7 +197,7 @@ test('轮次收口把未认领的排队消息标为未送达，而不是让它�
         type: 'open-turn', turnId: 'interaction-1', nowMs: 0,
     });
     state = conversationReducer(state, {
-        type: 'steer', text: '这条没赶上当前轮', nowMs: 5, attachments: [],
+        type: 'steer', text: '这条没赶上当前轮', nowMs: 5, attachments: [], structuredInput: '',
     });
 
     // 随本轮一起被取消的消息内容是找不回来的：必须留在正文里标成未送达，
@@ -209,6 +209,84 @@ test('轮次收口把未认领的排队消息标为未送达，而不是让它�
     assert.equal(settled.status, 'completed');
     assert.equal(settled.elapsedMs, 120);
 });
+
+test('中断时把运行中追加的消息交给下一轮，引用块与附件原样带走', () => {
+    const reference = '[结构化输入]\n已引用文件：src/main.rs';
+    let state = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn', turnId: 'interaction-1', nowMs: 0,
+    });
+    state = conversationReducer(state, {
+        type: 'steer', text: '顺便看看 @src/main.rs', nowMs: 5, attachments: [], structuredInput: reference,
+    });
+
+    // 交接之前：这一条还在等安全边界插入，正文与结构化块都完整。
+    const carrying = requeueableSteers(state.turns);
+    assert.equal(carrying.length, 1);
+    assert.equal(carrying[0].text, '顺便看看 @src/main.rs');
+    assert.equal(carrying[0].structuredInput, reference, '重发要带上引用行，正文被裁过之后就再也算不回来');
+
+    // 标成转投中：气泡原地留着，但不再算等待注入，也不会被收口标成未送达。
+    state = conversationReducer(state, {
+        type: 'mark-steers-requeued', cellIds: carrying.map(({ cellId }) => cellId),
+    });
+    assert.equal(pendingSteerCount(state.turns), 0, '已经交给下一轮的不再算等待注入');
+    assert.deepEqual(requeueableSteers(state.turns), [], '同一格不会被交接两次');
+    const settled = settleTurn(state.turns[0], 'interrupted', 80);
+    assert.equal(settled.cells[0].undelivered, undefined, '转投中的消息不能标成未送达');
+    assert.equal(settled.cells[0].requeued, true);
+
+    // 交接那一帧才从旧轮次摘走：不留重复气泡。
+    state = conversationReducer(state, {
+        type: 'detach-steers', cellIds: carrying.map(({ cellId }) => cellId),
+    });
+    assert.deepEqual(state.turns[0].cells, []);
+    assert.deepEqual(state.turns[0].index, {}, '索引必须跟着一起清掉');
+});
+
+test('只有附件没有正文的追加消息同样能转投：正文为空，附件与附加块都在', () => {
+    const image = { path: 'C:\\tmp\\shot.png', name: 'shot.png', image: true, bytes: 1024 };
+    const attachmentBlock = '[结构化输入]\n已附加文件：C:\\tmp\\shot.png';
+    let state = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn', turnId: 'interaction-1', nowMs: 0,
+    });
+    state = conversationReducer(state, {
+        type: 'steer', text: '', nowMs: 5, attachments: [image], structuredInput: attachmentBlock,
+    });
+    // 附件气泡认得出来：正文为空、附件在，结构化块承担正文，否则后端会以「正文为空」拒收。
+    const carrying = requeueableSteers(state.turns);
+    assert.equal(carrying.length, 1);
+    assert.equal(carrying[0].text, '');
+    assert.deepEqual(carrying[0].attachments, [image]);
+    assert.equal(carrying[0].structuredInput, attachmentBlock);
+
+    // 服务端认领这种消息时用可见正文（空串）比对：认领之后仍然留在同一个格子上。
+    state = applyUserMessage(state, 0, 'user-part-1', attachmentBlock, 6);
+    assert.deepEqual(state.turns[0].cells.map(({ id }) => id), ['user-part-1']);
+    assert.deepEqual(state.turns[0].cells[0].attachments, [image]);
+});
+
+test('已注入本轮的追加消息同样可转投：那一轮被中断后要接着跑，且只按标识摘除', () => {
+    let state = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn', turnId: 'interaction-1', nowMs: 0,
+    });
+    state = conversationReducer(state, {
+        type: 'steer', text: '要接着跑的消息', nowMs: 5, attachments: [], structuredInput: '',
+    });
+    const [carried] = requeueableSteers(state.turns);
+    // 服务端边界到了，这一条被注入并认领：标识换成服务端标识，等待注入归零。
+    state = applyUserMessage(state, 0, 'user-part-1', '要接着跑的消息', 6);
+    assert.equal(pendingSteerCount(state.turns), 0, '已注入的不再算等待注入');
+    const afterClaim = requeueableSteers(state.turns);
+    assert.equal(afterClaim.length, 1, '被中断后它要接着跑，不能只转投还没被注入的那几条');
+    assert.equal(afterClaim[0].cellId, 'user-part-1', '交接按认领后的标识摘除');
+
+    state = conversationReducer(state, { type: 'detach-steers', cellIds: [carried.cellId] });
+    assert.equal(state.turns[0].cells.length, 1, '认领之后旧标识已经作废，按它摘不掉这一格');
+
+    state = conversationReducer(state, { type: 'detach-steers', cellIds: [afterClaim[0].cellId] });
+    assert.deepEqual(state.turns[0].cells, [], '交接用交接那一刻的标识摘除');
+});
+
 
 test('提交失败撤销乐观轮次：不再显示生成中，消息标为未送达', () => {
     let state = conversationReducer(INITIAL_CONVERSATION, {
@@ -774,4 +852,35 @@ test('攒批载荷按序展开，单帧载荷原样返回', () => {
     const batch = [frame(1), frame(2), frame(3)];
     assert.deepEqual(expandStreamPayload({ batch }), batch, '批内顺序必须原样保留');
     assert.deepEqual(expandStreamPayload({ batch: [] }), []);
+});
+
+test('整队转投并成一次提交：正文按用户先后拼接，附件去重，结构化块只留一个标题', () => {
+    const image = { path: 'C:\\tmp\\shot.png', name: 'shot.png', image: true, bytes: 1 };
+    const doc = { path: 'C:\\tmp\\spec.md', name: 'spec.md', image: false, bytes: 2 };
+    const merged = mergeCarriedPrompts([
+        { cellId: 'a', text: '第一条', attachments: [], structuredInput: '' },
+        { cellId: 'b', text: '第二条', attachments: [image], structuredInput: '[结构化输入]\n已附加文件：C:\\tmp\\shot.png' },
+        { cellId: 'c', text: '', attachments: [image, doc], structuredInput: '[结构化输入]\n已附加文件：C:\\tmp\\shot.png\n已附加文件：C:\\tmp\\spec.md' },
+    ]);
+    assert.equal(merged.text, '第一条\n\n第二条', '只有正文的排在一起，附件那条的空正文不产生空行');
+    assert.deepEqual(merged.attachments.map(({ path }) => path), ['C:\\tmp\\shot.png', 'C:\\tmp\\spec.md'], '同一附件只带一次');
+    assert.equal(
+        merged.structuredInput,
+        '\n\n[结构化输入]\n已附加文件：C:\\tmp\\shot.png\n已附加文件：C:\\tmp\\spec.md',
+        '标题只留一个，引用与附件行按原顺序去重合并',
+    );
+});
+
+test('全部只有附件没有正文时，合并结果仍是一段可提交的结构化输入', () => {
+    const first = { path: 'C:\\tmp\\a.png', name: 'a.png', image: true, bytes: 1 };
+    const second = { path: 'C:\\tmp\\b.png', name: 'b.png', image: true, bytes: 2 };
+    const merged = mergeCarriedPrompts([
+        { cellId: 'a', text: '', attachments: [first], structuredInput: '[结构化输入]\n已附加文件：C:\\tmp\\a.png' },
+        { cellId: 'b', text: '', attachments: [second], structuredInput: '[结构化输入]\n已附加文件：C:\\tmp\\b.png' },
+    ]);
+    assert.equal(merged.text, '', '没有正文');
+    assert.deepEqual(merged.attachments.map(({ path }) => path), ['C:\\tmp\\a.png', 'C:\\tmp\\b.png']);
+    // 正文为空时标题必须落在第 0 位：提交链路会裁掉前置空白，回放也只认这个形态。
+    assert.equal(merged.structuredInput, '[结构化输入]\n已附加文件：C:\\tmp\\a.png\n已附加文件：C:\\tmp\\b.png');
+    assert.equal(mergeCarriedPrompts([]), null, '空队列不产生提交');
 });

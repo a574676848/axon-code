@@ -27,6 +27,7 @@ import type {
 } from './targets';
 import { useAutoFoldTurns } from './useAutoFoldTurns';
 import { useElapsedTick } from './useElapsedTick';
+import { useInterruptedCarry } from './useInterruptedCarry';
 import { useLanePaging } from './useLanePaging';
 import { useLaneReattach } from './useLaneReattach';
 import { useQuestionSync } from './useQuestionSync';
@@ -425,6 +426,8 @@ export function useConversation(target: ConversationTarget | null): Conversation
     (turn) => turn.status === 'pending' || turn.status === 'streaming',
   );
   useElapsedTick(dispatch, ticking);
+  /** 是否有轮次在跑：与节拍同源，避免同一判断写两遍。 */
+  const working = ticking;
 
   // 折叠生效：体量过大与超出窗口的老轮次折成一行摘要并释放正文（见 useAutoFoldTurns）。
   useAutoFoldTurns(state.turns, dispatch);
@@ -475,7 +478,7 @@ export function useConversation(target: ConversationTarget | null): Conversation
       const localTurnId = `pending-${nowMs}`;
       if (streaming) {
         // 运行中：注入当前轮次排队，等安全边界插入，不新开一轮。
-        dispatch({ type: 'steer', text: visibleText, nowMs, attachments });
+        dispatch({ type: 'steer', text: visibleText, nowMs, attachments, structuredInput });
       } else {
         dispatch({ type: 'submit', turnId: localTurnId, text: visibleText, nowMs, attachments });
       }
@@ -541,7 +544,42 @@ export function useConversation(target: ConversationTarget | null): Conversation
       });
   }, [laneCapability, paging]);
 
-  /** 中断当前车道正在运行的一轮；回执为假时如实提示，不假装成功。 */
+  /*
+   * 中断转投：装配在这里而不是 interrupt 内部，是因为它同时要读轮次快照、要
+   * 在收口后重新提交，而这两件事各自由本文件与归约器持有。
+   */
+  /**
+   * 车道上是否已经没有活跃轮次。
+   *
+   * 拿中断回执当探针：`interrupted` 为假即表示后端登记表里没有这条车道的活跃主
+   * turn，此刻提交才会开出一条新的 Interaction，而不是被注入那条正在收尾的轮次。
+   */  const laneIdle = useCallback(async () => {
+    const lane = laneCapability.laneId ?? watchedRef.current;
+    if (lane === null) return true;
+    try {
+      const receipt = await ipc.conversationInterrupt(lane);
+      return !receipt.interrupted;
+    } catch {
+      // 探测本身失败不拦转投：宁可把消息发出去，也不把它扣在本地。
+      return true;
+    }
+  }, [laneCapability.laneId]);
+
+  const handOverSteers = useInterruptedCarry({
+    targetKey,
+    working,
+    turnsRef,
+    dispatch,
+    submit,
+    laneIdle,
+  });
+
+  /**
+   * 中断当前车道正在运行的一轮；回执为假时如实提示，不假装成功。
+   *
+   * 中断之前先把还没被注入的排队消息摘下交给转投队列：后端只在安全边界把它们
+   * 插入本轮，取消之后它们再也等不到那次边界，内容就随本轮一起消失了。
+   */
   const interrupt = useCallback(async () => {
     const lane = laneCapability.laneId ?? watchedRef.current;
     if (lane === null) return;
@@ -553,6 +591,7 @@ export function useConversation(target: ConversationTarget | null): Conversation
      */
     if (interruptingRef.current) return;
     interruptingRef.current = true;
+    handOverSteers();
     try {
       const receipt = await ipc.conversationInterrupt(lane);
       if (!receipt.interrupted) {
@@ -563,7 +602,7 @@ export function useConversation(target: ConversationTarget | null): Conversation
     } finally {
       interruptingRef.current = false;
     }
-  }, [laneCapability.laneId]);
+  }, [handOverSteers, laneCapability.laneId]);
 
   /**
    * 接管网关语音回合：把这一轮接进当前对话流并订阅增量。
@@ -602,8 +641,6 @@ export function useConversation(target: ConversationTarget | null): Conversation
 
   const jobs = useMemo(() => deriveJobs(state), [state]);
   const queued = useMemo(() => pendingSteerCount(state.turns), [state.turns]);
-  /** 是否有轮次在跑：与节拍同源，避免同一判断写两遍。 */
-  const working = ticking;
 
   /**
    * 对外的投影。

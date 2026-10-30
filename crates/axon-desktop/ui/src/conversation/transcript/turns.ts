@@ -184,7 +184,13 @@ export function settleTurn(
 function markUnclaimedSteersUndelivered(turn: TurnState): TurnState {
   let changed = false;
   const cells = turn.cells.map((cell) => {
-    if (cell.role !== 'user' || !cell.id.startsWith(LOCAL_STEER_PREFIX) || cell.undelivered) {
+    if (
+      cell.role !== 'user' ||
+      !cell.id.startsWith(LOCAL_STEER_PREFIX) ||
+      cell.undelivered ||
+      // 已经交给转投队列的那几条不算未送达：它们马上会作为下一条消息送出。
+      cell.requeued
+    ) {
       return cell;
     }
     changed = true;
@@ -236,6 +242,23 @@ function closeRunningCells(turn: TurnState, status: TurnState['status']): TurnSt
     return cell;
   });
   return changed ? { ...turn, cells } : turn;
+}
+
+/**
+ * 摘掉指定单元并重建索引。
+ *
+ * 只有「这一格已经离开本轮」时才用：它必须连同索引一起消失，否则同一标识
+ * 再插回来会命中旧下标，正文里那一格就永远不会被替换。
+ */
+export function detachCells(turn: TurnState, cellIds: readonly string[]): TurnState {
+  const dropping = new Set(cellIds);
+  const cells = turn.cells.filter((cell) => !dropping.has(cell.id));
+  if (cells.length === turn.cells.length) return turn;
+  const index: Record<string, number> = {};
+  cells.forEach((cell, position) => {
+    index[cell.id] = position;
+  });
+  return { ...turn, cells, index };
 }
 
 /**

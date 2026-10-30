@@ -11,7 +11,7 @@ import { foldTurn, replaceTurnCells } from './fold';
 import { INITIAL_CONVERSATION, LOCAL_STEER_PREFIX, type AttachmentRef, type ConversationAction, type ConversationState, type TurnState } from './state';
 import { pruneSettledQuestions, type PendingQuestion } from '../questions';
 import { visibleUserText } from '../references';
-import { emptyTurn, localUserId, openTurn, refreshLiveElapsed, upsertCell, withTurn } from './turns';
+import { emptyTurn, detachCells, localUserId, openTurn, refreshLiveElapsed, upsertCell, withTurn } from './turns';
 
 /** 归约入口。 */
 export function conversationReducer(
@@ -28,7 +28,36 @@ export function conversationReducer(
     case 'submit':
       return submitTurn(state, action.turnId, action.text, action.nowMs, action.attachments);
     case 'steer':
-      return steerTurn(state, action.text, action.nowMs, action.attachments);
+      return steerTurn(state, action.text, action.nowMs, action.attachments, action.structuredInput);
+    case 'detach-steers': {
+      /*
+       * 按标识从**所有轮次**里摘掉：转投时这些格子可能还在上一轮（被中断的那一轮），
+       * 而此刻最新那一轮已经开跑。只摘「当前轮」的话，旧轮次里的副本会一直留着，
+       * 新轮次再收一份，正文里就出现两条一模一样的消息。
+       */
+      const dropping = new Set(action.cellIds);
+      let changed = false;
+      const turns = state.turns.map((turn) => {
+        if (!turn.cells.some((cell) => dropping.has(cell.id))) return turn;
+        changed = true;
+        return detachCells(turn, action.cellIds);
+      });
+      return changed ? { ...state, turns } : state;
+    }
+    case 'mark-steers-requeued': {
+      const position = activePosition(state);
+      if (position < 0) return state;
+      const handingOver = new Set(action.cellIds);
+      return withTurn(state, position, (turn) => {
+        let changed = false;
+        const cells = turn.cells.map((cell) => {
+          if (cell.role !== 'user' || !handingOver.has(cell.id) || cell.requeued === true) return cell;
+          changed = true;
+          return { ...cell, requeued: true };
+        });
+        return changed ? { ...turn, cells } : turn;
+      });
+    }
     case 'submit-failed':
       return failSubmit(state, action.turnId, action.text, action.message);
     case 'bind':
@@ -215,12 +244,16 @@ function mergeUserCells(target: TurnState, incoming: TurnState): TurnState {
  * 后端会把这条输入注入同车道正在运行的那一轮，并在安全边界（下一次 provider
  * 请求之前或工具批次收口处）插入对话，因此这里**不新开轮次**，只把用户消息
  * 追加到当前这一轮上；开新轮会让随后到达的流式帧被记到错误的轮次里。
+ *
+ * 结构化输入块跟着这一格走：中断时它要被原样转投到下一条消息上，而正文被裁成
+ * 可见文本之后，引用行与附件行再也算不回来。
  */
 function steerTurn(
   state: ConversationState,
   text: string,
   nowMs: number,
   attachments: AttachmentRef[],
+  structuredInput: string,
 ): ConversationState {
   const position = activePosition(state);
   if (position < 0) return state;
@@ -231,8 +264,24 @@ function steerTurn(
       text,
       atMs: nowMs,
       attachments,
+      structuredInput,
+      steer: true,
+      steerSeq: nextSteerSequence(),
     }),
   );
+}
+
+/**
+ * 追加消息的先后序号。
+ *
+ * 只需要在同一个客户端里单调递增：它唯一的用途是把「用户敲的顺序」固定下来，
+ * 因为认领会改写标识与时间，注入顺序也不保证与提交顺序一致。
+ */
+let steerSequence = 0;
+
+function nextSteerSequence(): number {
+  steerSequence += 1;
+  return steerSequence;
 }
 
 /** 最后一条未收口轮次的位置；没有则取最后一条。 */
