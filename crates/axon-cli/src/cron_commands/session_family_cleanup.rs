@@ -247,7 +247,12 @@ fn count_session_dir_context(session_dir: &Path) -> Result<SessionContextCounts,
 fn count_files_recursive(directory: &Path) -> Result<usize, String> {
     let entries = match std::fs::read_dir(directory) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(0),
+        // 路径不存在，或该路径被同名文件占用：里面都不可能有文件，一律按 0 计。
+        // 只认 `NotFound` 会让同一份数据在 unix 上变成硬错误（unix 报 `NotADirectory`），
+        // 于是「删除会话上下文目录失败」这条真正要向上传递的结论被提前的读取错误盖住。
+        Err(error) if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
+            return Ok(0);
+        }
         Err(error) => return Err(format!("读取会话上下文目录失败：{error}")),
     };
     let mut count = 0_usize;

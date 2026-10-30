@@ -302,7 +302,7 @@ fn write_body_accepts_single_array_and_records_wrapper() {
 
 #[test]
 fn workspace_write_requires_accessible_absolute_folder() {
-    let (adapter, _root) = test_adapter("workspace-path");
+    let (adapter, root) = test_adapter("workspace-path");
     let (status, payload) = post(
         &adapter,
         MEMORY_PATH,
@@ -316,11 +316,17 @@ fn workspace_write_requires_accessible_absolute_folder() {
         "{payload}"
     );
 
-    let (status, payload) = post(
-        &adapter,
-        MEMORY_PATH,
-        br#"{"memoryKind":"knowledge","summary":"s","evidence":"e","workspacePath":"E:/definitely/missing/axon-dir"}"#,
-    );
+    // 「绝对但不存在」的目录必须按平台构造：`E:/...` 在 unix 上不是绝对路径，
+    // 会先命中「必须是绝对路径」分支，覆盖不到本用例真正要验证的「不可访问」。
+    let missing = root.join("definitely-missing-axon-dir");
+    let body = serde_json::json!({
+        "memoryKind": "knowledge",
+        "summary": "s",
+        "evidence": "e",
+        "workspacePath": missing.display().to_string(),
+    })
+    .to_string();
+    let (status, payload) = post(&adapter, MEMORY_PATH, body.as_bytes());
     assert_eq!(status, 400);
     assert!(
         payload["error"]

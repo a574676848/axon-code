@@ -100,6 +100,12 @@ fn process_alive(pid: u32) -> bool {
     if pid == process::id() {
         return true;
     }
+    // `kill -0` 把参数按 pid_t（有符号 32 位）解析：0 指进程组、超出 i32 的取值会被截断成
+    // 负数（`u32::MAX` 变成 -1，即「探测所有进程」）。这两种形态都会让不存在的 pid 被判成
+    // 存活，因此必须在外面挡掉，只把合法的正 pid 交给 shell。
+    if pid == 0 || i32::try_from(pid).is_err() {
+        return false;
+    }
     #[cfg(windows)]
     {
         non_interactive_command("tasklist")

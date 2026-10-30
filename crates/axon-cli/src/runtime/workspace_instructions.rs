@@ -92,12 +92,18 @@ pub(crate) fn load_workspace_instructions(cwd: &Path) -> Result<Vec<WorkspaceIns
 }
 
 fn load_project_instructions(cwd: &Path) -> Result<Vec<WorkspaceInstruction>, String> {
-    let mut project_paths = instruction_paths(cwd)?;
+    // 相对路径的基准必须与候选路径同源：`instruction_paths` 用规范化后的 cwd 产出候选，
+    // 这里若拿未规范化的 cwd 去 `strip_prefix`，Windows 的 `\\?\` 前缀会让匹配落空，
+    // 同一份工作区在 Windows 上报绝对路径、在 unix 上报相对路径。
+    let root = cwd
+        .canonicalize()
+        .map_err(|_| format!("工作目录不可访问：{}", cwd.display()))?;
+    let mut project_paths = instruction_paths(&root)?;
     project_paths.reverse(); // 根 → 叶顺序
 
     project_paths
         .into_iter()
-        .map(|path| read_instruction_file(cwd, &path))
+        .map(|path| read_instruction_file(&root, &path))
         .filter_map(|result| match result {
             Ok(instruction) if instruction.content.is_empty() => None,
             other => Some(other),

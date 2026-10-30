@@ -257,6 +257,8 @@ mod tests {
 
         let paths = resolve_agent_tui_workspace_instruction_paths(&child);
 
+        // 契约：祖先目录的指令报绝对路径，就在 cwd 里的报相对路径。
+        // Windows 的 `\\?\` 前缀一度让 strip_prefix 落空，同一条用例在两平台上报出不同值。
         let expected_root_path = root
             .path()
             .canonicalize()
@@ -264,13 +266,7 @@ mod tests {
             .join("AGENTS.md")
             .to_string_lossy()
             .replace('\\', "/");
-        let expected_child_path = child
-            .canonicalize()
-            .expect("子工作区应可规范化")
-            .join("AGENTS.md")
-            .to_string_lossy()
-            .replace('\\', "/");
-        assert_eq!(paths, vec![expected_root_path, expected_child_path]);
+        assert_eq!(paths, vec![expected_root_path, "AGENTS.md".to_owned()]);
     }
 
     #[test]
