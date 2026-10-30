@@ -188,11 +188,11 @@ impl SearchIndexManager {
         let selection = candidate_filter::select_candidates(
             &state.snapshot,
             &state.overlay,
-            root,
+            &key.root,
             &walk.entries,
             &plan,
         );
-        let (upserts, removals) = stale_files(&state, &walk.entries, root);
+        let (upserts, removals) = stale_files(&state, &walk.entries, &key.root);
         let stale_count = upserts.len().saturating_add(removals.len());
 
         let update = if !allow_update || stale_count == 0 {

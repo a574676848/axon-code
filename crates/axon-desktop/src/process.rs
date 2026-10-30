@@ -280,6 +280,7 @@ pub fn open_external_url(url: String) -> Result<(), String> {
 }
 
 /// 打开受控的系统设置协议地址（仅限宿主内部白名单常量调用，不向前端开放任意 URI）。
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub(crate) fn open_system_uri(uri: &'static str) -> Result<(), String> {
     if let Some(app) = APP_HANDLE.get() {
         use tauri_plugin_opener::OpenerExt;

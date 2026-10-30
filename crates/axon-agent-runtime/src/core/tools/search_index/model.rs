@@ -162,12 +162,15 @@ pub(crate) fn relative_path(root: &Path, path: &Path) -> Option<String> {
     if let Ok(relative) = path.strip_prefix(root) {
         return normalize_relative(relative);
     }
-    // 慢路径：根已经被 `normalize_index_root` 解析为真实路径，而条目仍带着调用方写法。
-    // macOS 的 `/var` → `/private/var` 与 Windows CI 的 `RUNNER~1` 8.3 短名都会落到这里。
-    // 不补这一次规范化，整份快照的条目会被全部丢弃，表现为「索引已建，但每次 prepare
-    // 都退化成全量扫描」。
-    let canonical = normalize_index_root(path);
-    normalize_relative(canonical.strip_prefix(root).ok()?)
+    // 慢路径：根和条目可能分别处于 8.3 短路径、未解析软链接或规范化长路径形态。
+    // Windows CI 的 `RUNNER~1` 与 macOS 的 `/var` -> `/private/var` 均可能导致前缀写法不一致。
+    // 将两者都解析为规范化路径后再剥离，双向抹平短名与符号链接差异。
+    let canonical_root = normalize_index_root(root);
+    let canonical_path = normalize_index_root(path);
+    if let Ok(relative) = canonical_path.strip_prefix(&canonical_root) {
+        return normalize_relative(relative);
+    }
+    None
 }
 
 /// 把相对路径转成快照使用的正斜杠文本形态；空路径表示条目就是根本身。

@@ -361,3 +361,27 @@ fn manager_is_send_sync_and_policy_is_bounded() {
     assert!(policy.max_overlay_files > 0);
     assert!(policy.max_overlay_bytes > 0);
 }
+
+#[test]
+fn relative_path_matches_even_with_short_or_canonical_asymmetry() {
+    let directory = axon_test_support::test_temp_dir();
+    let root = directory.path();
+    let file = root.join("child.txt");
+    fs::write(&file, "test").unwrap();
+
+    let canonical_root = std::fs::canonicalize(root).unwrap();
+    let canonical_file = std::fs::canonicalize(&file).unwrap();
+
+    assert_eq!(
+        super::model::relative_path(root, &canonical_file).as_deref(),
+        Some("child.txt")
+    );
+    assert_eq!(
+        super::model::relative_path(&canonical_root, &file).as_deref(),
+        Some("child.txt")
+    );
+    assert_eq!(
+        super::model::relative_path(&canonical_root, &canonical_file).as_deref(),
+        Some("child.txt")
+    );
+}
