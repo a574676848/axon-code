@@ -5,10 +5,9 @@
 //! 都不同；混在同一文件里既不利于定位，也已超出单文件行数硬限。
 
 use super::*;
-use std::fs;
+// 这一组标准库设施只服务 Windows 用例：unix 侧照常导入会被 `-D warnings` 判为未使用。
 #[cfg(windows)]
-use std::path::PathBuf;
-use std::time::Duration;
+use std::{fs, path::PathBuf, time::Duration};
 
 use super::pty_readiness::{HANG_GUARD, poll_until_exit, poll_until_ready};
 #[cfg(windows)]
@@ -16,7 +15,8 @@ use super::pty_readiness::{wait_for_descendant_pid, wait_for_process_exit};
 
 /// PTY 会话就绪标记（由 [`tty_test_command`] 的脚本写出）。
 const PTY_READY_MARKER: &str = "pty-ready";
-/// `Read-Host` 读入后的回显标记。
+/// `Read-Host` 读入后的回显标记；只有 Windows 的 `Read-Host` 用例会见到它。
+#[cfg(windows)]
 const TTY_INPUT_MARKER: &str = "tty-input:axon-input";
 /// PTY 进入可中断状态的标记。
 const PTY_INTERRUPT_READY_MARKER: &str = "pty-interrupt-ready";
