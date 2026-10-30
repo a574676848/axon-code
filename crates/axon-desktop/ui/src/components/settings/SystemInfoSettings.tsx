@@ -1,8 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { AlertCircleIcon, RefreshIcon } from '../../icons';
 import { AxonLogo } from '../../icons';
-import type { GithubInfo, SystemInfo, UpdateCheck } from '../../types';
+import type { GithubInfo, SystemInfo } from '../../types';
 import * as ipc from '../../ipc';
+import { checkForUpdate, ensureUpdateChecked, useDesktopUpdate } from '../../desktopUpdate';
+import { downloadHref, updateStatusText } from '../../updateNotice';
+import { BRAND_SLOGAN } from '../../brand';
 import { Button } from '../ui/controls';
 import { Banner, Text } from '../ui/surfaces';
 
@@ -17,6 +20,9 @@ import { Banner, Text } from '../ui/surfaces';
  *
  * 检测结论只有三种：已是最新、发现新版本、暂时无法检测。第三种一律用产品口径的
  * 一句话，具体归因收在「详情」里，供需要排查的人展开，而不是糊在首屏。
+ *
+ * 检测事实不归这个页面独有：应用启动时已经检测过一次，侧栏底部的入口读的也是那一份，
+ * 这里只是把同一份结论讲成三句话，并允许用户再查一次。
  */
 
 /** 发布渠道的一项入口。 */
@@ -37,20 +43,11 @@ const ChannelLink: React.FC<{ label: string; url: string; onOpen: (url: string) 
   </button>
 );
 
-/** 检测结论的产品口径文案。 */
-function updateStatus(update: UpdateCheck | null, checking: boolean): string {
-  if (checking) return '正在检测…';
-  if (update === null) return '尚未检测';
-  if (update.error.length > 0) return '暂时无法检测新版本';
-  if (update.update_available) return `发现新版本 ${update.latest}`;
-  return '已是最新版本';
-}
-
 export const SystemInfoSettings: React.FC = () => {
   const [info, setInfo] = useState<SystemInfo | null>(null);
-  const [update, setUpdate] = useState<UpdateCheck | null>(null);
-  const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 更新事实由 desktopUpdate 统一持有：启动的自动检测与侧栏底部的入口读的是同一份。
+  const update = useDesktopUpdate();
 
   const load = useCallback(async () => {
     try {
@@ -63,19 +60,12 @@ export const SystemInfoSettings: React.FC = () => {
 
   useEffect(() => {
     void load();
+    // 直接打开关于页时也要有结论：这条调用是幂等的，启动那次已经跑过就不会重复请求。
+    ensureUpdateChecked();
   }, [load]);
 
-  const check = async () => {
-    setChecking(true);
-    setError(null);
-    try {
-      setUpdate(await ipc.checkUpdate());
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '检测更新失败');
-    } finally {
-      setChecking(false);
-    }
-  };
+  const checking = update.phase === 'checking';
+  const download = downloadHref(update.result);
 
   /** 打开外部地址：打不开时如实呈现，不留一个点了没反应的入口。 */
   const openUrl = useCallback((url: string) => {
@@ -88,14 +78,17 @@ export const SystemInfoSettings: React.FC = () => {
   }, []);
 
   const github: GithubInfo | null = info?.github ?? null;
+  /** 命令本身没跑通的原因与打开地址失败的原因共用一个提示位：都是「这一次没成功」。 */
+  const failure = update.error ?? error;
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-6 pb-16 text-center">
-      {/* 产品身份 */}
+      {/* 产品身份：标语与首屏同一句，版本与许可仍是构建期事实 */}
       <div className="flex flex-col items-center gap-4">
         <AxonLogo size={44} />
-        <div className="space-y-1">
+        <div className="flex flex-col items-center gap-1.5">
           <span className="block text-heading-3 leading-6 font-medium text-text-primary">Axon</span>
+          <p className="text-heading-4 leading-6 text-text-primary">{BRAND_SLOGAN}</p>
           <Text tone="secondary" size="xs" className="block">
             版本 {info?.app_version ?? '未知'}
             {github !== null ? ` · ${github.license}` : ''}
@@ -120,22 +113,20 @@ export const SystemInfoSettings: React.FC = () => {
           variant="primary"
           size="md"
           disabled={checking || info === null}
-          onClick={() => void check()}
+          onClick={() => void checkForUpdate()}
         >
           <RefreshIcon size={13} />
           {checking ? '检测中' : '检测更新'}
         </Button>
         <Text tone="secondary" size="xs">
-          {updateStatus(update, checking)}
+          {updateStatusText(update.result, checking)}
         </Text>
 
-        {update !== null && update.update_available && update.download_url.length > 0 && (
-          <ChannelLink label="前往下载" url={update.download_url} onOpen={openUrl} />
-        )}
+        {download.length > 0 && <ChannelLink label="前往下载" url={download} onOpen={openUrl} />}
       </div>
 
-      {error !== null && (
-        <Banner tone="danger" icon={<AlertCircleIcon size={13} />} title={error} />
+      {failure !== null && (
+        <Banner tone="danger" icon={<AlertCircleIcon size={13} />} title={failure} />
       )}
     </div>
   );

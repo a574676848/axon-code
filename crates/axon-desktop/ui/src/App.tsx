@@ -25,6 +25,7 @@ import {
   installDesktopGuards,
 } from './desktopGuards';
 import { applyTheme, currentTheme, THEME_CHOICES } from './theme';
+import { ensureUpdateChecked } from './desktopUpdate';
 import { notifyDesktopReady, useWindowDynamicSurfaces } from './windowSurfaces';
 
 /*
@@ -146,6 +147,16 @@ export const App: React.FC = () => {
     () => setSidebarPreference(!isSidebarOpen),
     [isSidebarOpen],
   );
+
+  /*
+   * 启动即检测一次新版本。
+   *
+   * 结论落在两个地方：侧栏底部的入口（确认有新版本时才出现）与设置 › 关于。
+   * 一次检测供两处读，因此侧栏不会在用户每次打开应用时各发一遍请求。
+   */
+  useEffect(() => {
+    ensureUpdateChecked();
+  }, []);
 
   /*
    * 通知点击回到对应会话。

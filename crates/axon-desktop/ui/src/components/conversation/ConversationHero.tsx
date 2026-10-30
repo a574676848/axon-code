@@ -1,10 +1,12 @@
 import React from 'react';
 import { AxonLogo } from '../../icons';
+import { BRAND_SLOGAN } from '../../brand';
 
 /*
  * 首屏。
  *
  * 品牌组（双层微立体徽标座 + 字标）与主张组（标语 + 中文使命）。
+ * 标语与设置 › 关于共用同一处定义。
  */
 
 export const ConversationHero: React.FC = () => (
@@ -19,7 +21,7 @@ export const ConversationHero: React.FC = () => (
     </div>
     <div className="flex flex-col items-center gap-2">
       <p className="text-heading-1 font-semibold tracking-[-0.02em] text-text-primary">
-        知你所想，办你所托
+        {BRAND_SLOGAN}
       </p>
       <p className="max-w-md text-body text-text-secondary leading-6">
         融入你的工作区与工作节奏，在每一次交互中持续深化认知的专属个人智能体。

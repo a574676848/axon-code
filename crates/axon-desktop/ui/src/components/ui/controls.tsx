@@ -12,7 +12,7 @@ const HAIRLINE = 'hairline border-border-input';
 /** 键盘聚焦环：蓝色描边，只对键盘可见。 */
 const FOCUS_RING = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus';
 
-type ButtonVariant = 'primary' | 'outline' | 'ghost' | 'danger';
+type ButtonVariant = 'primary' | 'outline' | 'ghost' | 'danger' | 'link';
 type ButtonSize = 'md' | 'sm';
 /** 形状：常规圆角，或完整胶囊。 */
 type ButtonShape = 'rounded' | 'pill';
@@ -31,6 +31,8 @@ const BUTTON_VARIANT: Record<ButtonVariant, string> = {
   outline: `${HAIRLINE} bg-surface text-text-primary shadow-btn-outline hover:bg-hover hover:border-border-strong`,
   ghost: 'text-text-primary hover:bg-hover',
   danger: `${HAIRLINE} bg-surface text-danger shadow-btn-outline hover:bg-hover`,
+  // 与 outline 同一几何，只把文字换成链接色：用于「有新版本」这类把人带出去、不在本界面完成的动作。
+  link: `${HAIRLINE} bg-surface text-text-link shadow-btn-outline hover:bg-hover hover:border-border-strong`,
 };
 
 const BUTTON_SHAPE: Record<ButtonShape, Record<ButtonSize, string>> = {

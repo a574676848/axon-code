@@ -22,6 +22,7 @@ import { ArchiveLaneDialog, RemoveWorkspaceDialog } from './SidebarConfirmations
 import { WorkspaceTree } from './WorkspaceTree';
 import type { ArchivedFilter, GroupMode, OrderMode } from './ViewOptionsMenu';
 import { SettingsIcon } from '../icons';
+import { UpdateHint } from './UpdateHint';
 
 /** 侧栏默认宽度，与既有工作台产品一致。 */
 const DEFAULT_WIDTH = 280;
@@ -591,20 +592,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
       </div>
 
-      {/* 底部设置入口，连接问题由统一弹窗呈现。 */}
+      {/* 底部设置入口，连接问题由统一弹窗呈现；确认有新版本时右端多一枚下载入口。 */}
       <div className="shrink-0 px-3 py-2">
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          className={`${ROW_STATE} hover:bg-hover w-full h-8 text-left`}
-        >
-          <span className={`${ROW_ICON_COLUMN} text-text-tertiary`}>
-            <SettingsIcon size={14} />
-          </span>
-          <Text size="body" className="leading-5" truncate>
-            设置
-          </Text>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className={`${ROW_STATE} hover:bg-hover flex-1 min-w-0 h-8 text-left`}
+          >
+            <span className={`${ROW_ICON_COLUMN} text-text-tertiary`}>
+              <SettingsIcon size={14} />
+            </span>
+            <Text size="body" className="leading-5" truncate>
+              设置
+            </Text>
+          </button>
+          <UpdateHint />
+        </div>
       </div>
 
       {/* 宽度拖拽把手：与既有工作台产品一致，做成不可见的命中区，
