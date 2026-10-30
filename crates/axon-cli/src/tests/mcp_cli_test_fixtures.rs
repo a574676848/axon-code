@@ -1,4 +1,6 @@
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::sync::Once;
 
 /// Windows Script Host 控制台宿主：以 JScript 引擎执行 stdio 假服务器脚本。
 #[cfg(windows)]
@@ -30,16 +32,43 @@ pub(super) fn collision_command(server_root: &Path) -> (Vec<String>, PathBuf) {
 
 #[cfg(windows)]
 fn script_command(server_root: &Path, file_name: &str) -> (Vec<String>, PathBuf) {
+    warm_powershell();
     let script_path = server_root.join(file_name);
     (
         vec![
             "powershell".to_owned(),
             "-NoProfile".to_owned(),
+            "-NonInteractive".to_owned(),
+            "-ExecutionPolicy".to_owned(),
+            "Bypass".to_owned(),
             "-File".to_owned(),
             script_path.to_string_lossy().to_string(),
         ],
         script_path,
     )
+}
+
+/// 先把 Windows PowerShell 5.1 的一次性启动成本付掉。
+///
+/// 首次启动要建模块分析缓存，再叠加杀毒软件扫描，在 CI 机器上远超 MCP 握手超时（10s）：
+/// 假服务器在被测代码的超时窗口内还一句话都没说，用例就会误判成「服务器无响应」。
+/// 预热在超时窗口之外完成，之后每次 `-File` 启动都只剩进程冷启动的常规开销。
+#[cfg(windows)]
+fn warm_powershell() {
+    static WARMED: Once = Once::new();
+    WARMED.call_once(|| {
+        let _ = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+            ])
+            .args(["-Command", "$null"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    });
 }
 
 /// 以 Windows Script Host 的 JScript 引擎承载极简 stdio 假服务器。
