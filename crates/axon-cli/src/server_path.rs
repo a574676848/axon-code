@@ -298,6 +298,7 @@ pub(crate) fn is_attachments_path(path: &Path, axon_root: &Path, dialect: PathDi
 
 /// 解析一条绝对路径：归一化后落到真实路径，目标不存在时给出最近存在祖先的等价路径。
 pub(crate) fn resolve_absolute(input: &str, dialect: PathDialect) -> Result<PathBuf, Rejection> {
+    reject_foreign_windows_form(input)?;
     let normalized = normalize_absolute(input, dialect)?;
     canonicalize_lenient(&normalized.to_path_buf(dialect), dialect)
 }
@@ -312,6 +313,7 @@ pub(crate) fn resolve_within(
     path: &str,
     dialect: PathDialect,
 ) -> Result<PathBuf, Rejection> {
+    reject_foreign_windows_form(path)?;
     let root_text = root.to_string_lossy().into_owned();
     let root_normalized = normalize_absolute(strip_verbatim_prefix(&root_text), dialect)?;
     let root_resolved = std::fs::canonicalize(root_normalized.to_path_buf(dialect))
@@ -407,6 +409,21 @@ fn split_absolute_root(
             None => Err(Rejection::NotAbsolute),
         },
     }
+}
+
+/// Windows 专有的越界形态：设备命名空间与 NTFS 备用数据流。
+///
+/// 在 unix 上它们只是普通文件名，但网关一律按非法形态拒绝（403）：同一条请求不该因为
+/// 宿主平台不同而得到不同状态码，也不该把「拒绝」泄漏成「不存在」。
+fn reject_foreign_windows_form(input: &str) -> Result<(), Rejection> {
+    let bytes = input.as_bytes();
+    if bytes.starts_with(b"\\\\") && bytes.get(2).is_some_and(|third| *third == b'.') {
+        return Err(Rejection::DeviceNamespace);
+    }
+    if input.contains("::$") {
+        return Err(Rejection::DataStream);
+    }
+    Ok(())
 }
 
 /// 拆分 Windows 绝对路径：只接受 `X:\` 一种盘符绝对形态。
