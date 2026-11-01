@@ -7,8 +7,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::{
-    ClientStateDocument, V1_BACKUP_NAME, V1_SUPERSEDED_NAME, V2_FILE_NAME, load_document_at,
-    platform_default_client_root, profile_draft_history_path, save_document_at,
+    ClientStateDocument, V1_BACKUP_NAME, V1_SUPERSEDED_NAME, V2_FILE_NAME,
+    is_inside_backend_root_at, load_document_at, platform_default_client_root,
+    profile_draft_history_path, save_document_at,
 };
 use crate::connection::profile::{CredentialSource, EndpointSpec};
 
@@ -282,46 +283,55 @@ fn cloud_profiles_are_deduplicated_by_address() {
 }
 
 #[test]
-fn platform_default_client_roots_match_the_contract_table() {
-    let windows = platform_default_client_root(
-        true,
-        false,
-        Some(OsStr::new("C:/Users/tester/AppData/Local")),
-        None,
-        Some(OsStr::new("C:/Users/tester")),
-        Some(OsStr::new("C:/Users/tester")),
-    );
-    assert!(windows.ends_with("Axon/client") || windows.ends_with("Axon\\client"));
+fn platform_default_client_root_sits_beside_the_backend_home() {
+    /*
+     * 三平台同一条规则：客户端状态落在 `~/.axon-desktop`，与后端运行时根
+     * `~/.axon` 平级、互不包含。用户与支持人员只有一个位置要找。
+     */
+    for (home, profile) in [
+        (Some(OsStr::new("C:/Users/tester")), Some(OsStr::new("C:/Users/tester"))),
+        (Some(OsStr::new("/Users/tester")), None),
+        (Some(OsStr::new("/home/tester")), None),
+    ] {
+        let root = platform_default_client_root(home, profile);
+        assert!(
+            slash_path(&root).ends_with(".axon-desktop"),
+            "客户端根必须落在 ~/.axon-desktop：{}",
+            root.display()
+        );
+        assert!(
+            !slash_path(&root).contains("/.axon/"),
+            "客户端根不得落在后端目录 ~/.axon 之下：{}",
+            root.display()
+        );
+    }
+    // 没有 HOME 时退回 USERPROFILE，仍然落回同一个位置。
+    let from_profile = platform_default_client_root(None, Some(OsStr::new("C:/Users/tester")));
+    assert!(slash_path(&from_profile).ends_with(".axon-desktop"));
+}
 
-    let macos = platform_default_client_root(
-        false,
-        true,
-        None,
-        None,
-        Some(OsStr::new("/Users/tester")),
-        None,
-    );
-    assert!(slash_path(&macos).contains("Library/Application Support/Axon/client"));
-
-    let linux_xdg = platform_default_client_root(
-        false,
-        false,
-        None,
-        Some(OsStr::new("/home/tester/.local/share")),
-        Some(OsStr::new("/home/tester")),
-        None,
-    );
-    assert!(slash_path(&linux_xdg).ends_with("axon/client"));
-
-    let linux_default = platform_default_client_root(
-        false,
-        false,
-        None,
-        None,
-        Some(OsStr::new("/home/tester")),
-        None,
-    );
-    assert!(slash_path(&linux_default).ends_with(".local/share/axon/client"));
+#[test]
+fn client_root_override_must_stay_out_of_the_backend_home() {
+    let axon_home = Path::new("C:/Users/tester/.axon");
+    // 客户端自己的位置不与后端根相交。
+    assert!(!is_inside_backend_root_at(
+        Path::new("C:/Users/tester/.axon-desktop"),
+        axon_home
+    ));
+    // 后端自己写的几层一律拒绝，避免与 daemon 抢同一批文件。
+    for owned in ["data", "sessions", "identity", "skills", "bin", "client"] {
+        assert!(
+            is_inside_backend_root_at(&axon_home.join(owned).join("state.json"), axon_home),
+            "客户端根不得落进后端的 {owned} 目录"
+        );
+    }
+    // 后端根本身也拒绝。
+    assert!(is_inside_backend_root_at(axon_home, axon_home));
+    // 完全在别处的路径不受影响。
+    assert!(!is_inside_backend_root_at(
+        Path::new("D:/axon-client"),
+        axon_home
+    ));
 }
 
 #[test]

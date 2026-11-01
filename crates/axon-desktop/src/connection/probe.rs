@@ -111,7 +111,7 @@ impl ProbeFailure {
 
     /// 归到健康点的哪一档：凭据与证书都是红点，连不上也是红点，协议不匹配算降级。
     #[must_use]
-    pub const fn is_outdated_backend(&self) -> bool {
+    pub const fn is_protocol_mismatch(&self) -> bool {
         matches!(self, Self::ProtocolUnsupported(_))
     }
 }
@@ -136,24 +136,17 @@ pub struct ProbeReady {
 pub enum ProbeOutcome {
     /// 取到能力位。
     Ready(Box<ProbeReady>),
-    /// 活着，但没有 `/meta`：老后端，按最小能力集并提示升级后台。
-    Outdated,
-    /// 连不上或凭据被拒。
+    /// 连不上、凭据被拒或协议不匹配。
     Failed(ProbeFailure),
 }
 
 impl ProbeOutcome {
-    /// 归到能力位三态。
+    /// 归到能力位两态。
     #[must_use]
     pub fn caps_state(&self) -> CapsState {
         match self {
             Self::Ready(ready) => CapsState::Known(KnownCaps {
                 set: ready.meta.capabilities,
-                backend_outdated: false,
-            }),
-            Self::Outdated => CapsState::Known(KnownCaps {
-                set: CapabilitySet::default(),
-                backend_outdated: true,
             }),
             Self::Failed(_) => CapsState::Unknown,
         }
@@ -205,7 +198,7 @@ pub(crate) fn probe_within(base: &str, token: Option<&str>, deadline: Deadline) 
     {
         Ok(response) => response,
         Err(ureq::Error::StatusCode(status)) => {
-            return classify_status_failure(base, token, status, deadline);
+            return classify_status_failure(status);
         }
         Err(error) => return ProbeOutcome::Failed(classify_transport_failure(&error)),
     };
@@ -219,11 +212,8 @@ pub(crate) fn probe_within(base: &str, token: Option<&str>, deadline: Deadline) 
             )));
         }
     };
-    if status == 404 {
-        return classify_status_failure(base, token, status, deadline);
-    }
     if status != 200 {
-        return ProbeOutcome::Failed(classify_status_failure_value(status));
+        return classify_status_failure(status);
     }
     match parse_meta(&body) {
         Ok(meta) => {
@@ -264,43 +254,17 @@ impl HeaderIfPresent for ureq::RequestBuilder<ureq::typestate::WithoutBody> {
     }
 }
 
-/// `/meta` 返回 404 时的后续判定：活着但没有本协议接口，才算老后端。
-fn classify_status_failure(
-    base: &str,
-    token: Option<&str>,
-    status: u16,
-    deadline: Deadline,
-) -> ProbeOutcome {
-    if status != 404 {
-        return ProbeOutcome::Failed(classify_status_failure_value(status));
-    }
-    match probe_legacy_route(base, token, deadline) {
-        Some(200) => ProbeOutcome::Outdated,
-        Some(legacy_status @ (401 | 403)) => {
-            ProbeOutcome::Failed(ProbeFailure::CredentialRejected {
-                status: legacy_status,
-            })
-        }
-        Some(_) | None => ProbeOutcome::Failed(ProbeFailure::Unreachable(
-            "该地址活着，但既有鉴权路由也调不通，无法判定为老后端".to_owned(),
-        )),
-    }
-}
-
-/// 用一个既有鉴权路由判断「活着但没有 `/meta`」。
-fn probe_legacy_route(base: &str, token: Option<&str>, deadline: Deadline) -> Option<u16> {
-    let timeout = deadline.remaining()?;
-    let url = format!("{}/api/v1/voice/presets", base.trim_end_matches('/'));
-    match endpoint::http_agent(timeout)
-        .get(&url)
-        .header("accept", "application/json")
-        .header_if_present(token)
-        .call()
-    {
-        Ok(response) => Some(response.status().as_u16()),
-        Err(ureq::Error::StatusCode(status)) => Some(status),
-        Err(_) => None,
-    }
+/// 把 `/meta` 的失败状态码翻成结论。
+///
+/// 项目未上线，后端与桌面端同版本发布，因此不再探测「老后端」：`/meta` 不在就是
+/// 这个地址上没有本协议的后端，按不可达处理，交给用户核对地址与端口。
+fn classify_status_failure(status: u16) -> ProbeOutcome {
+    ProbeOutcome::Failed(match status {
+        404 => ProbeFailure::Unreachable(
+            "该地址上没有 /api/v1/meta：请确认地址与端口指向 Axon 后端".to_owned(),
+        ),
+        _ => classify_status_failure_value(status),
+    })
 }
 
 /// 非 404 的状态码分类。

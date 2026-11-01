@@ -481,14 +481,6 @@ export interface TerminalExitFrame {
   closed: boolean;
 }
 
-/** 网关监听地址探测结果。 */
-export interface ServiceProbe {
-  name: string;
-  target: string;
-  listening: boolean;
-  detail: string;
-}
-
 /** 远控 adapter 状态。 */
 export interface RemoteStatus {
   connected: boolean;
@@ -533,10 +525,9 @@ export interface SystemInfo {
   daemon_health?: DaemonHealth | null;
   /** 后台健康快照读不到的原因；成功时为空串。 */
   daemon_health_error: string;
-  services: ServiceProbe[];
+  /** 飞书远控状态；无状态文件时为空。 */
   remote_feishu?: RemoteStatus;
   github: GithubInfo;
-  runtime_root: string;
 }
 
 /** 更新检查结果。 */

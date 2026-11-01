@@ -50,7 +50,6 @@ export interface ConnectionSnapshot {
   clockOffsetMs: number | null;
   clockVerified: boolean;
   capsKnown: boolean;
-  backendOutdated: boolean;
   capabilities: CapabilityView[];
   superAdmin: boolean;
   uploadLimitBytes: number;
@@ -92,7 +91,6 @@ export interface ConnectionTestResult {
   capabilities: CapabilityView[];
   certificate: 'trusted' | 'invalid' | 'unknown';
   plaintextPrivate: boolean;
-  backendOutdated: boolean;
 }
 
 /** 切档结果。 */

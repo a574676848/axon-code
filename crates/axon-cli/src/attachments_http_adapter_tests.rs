@@ -107,17 +107,17 @@ fn upload_flags_images_by_extension() {
 #[test]
 fn upload_converges_the_disk_name_but_keeps_the_display_name() {
     let (_directory, adapter, _attachments) = fixture();
-    let (status, payload) = upload(&adapter, &multipart("../../etc/passwd", b"x"));
+    let (status, payload) = upload(&adapter, &multipart("../../etc/passwd.txt", b"x"));
     assert_eq!(status, 200);
     assert_eq!(
         payload["name"],
-        json!("../../etc/passwd"),
+        json!("../../etc/passwd.txt"),
         "展示名保留用户原始写法"
     );
     let landed = PathBuf::from(payload["path"].as_str().expect("path 必须是字符串"));
     assert_eq!(
         landed.file_name().and_then(|value| value.to_str()),
-        Some("passwd"),
+        Some("passwd.txt"),
         "磁盘名必须收敛成单段安全名"
     );
 }
@@ -126,7 +126,7 @@ fn upload_converges_the_disk_name_but_keeps_the_display_name() {
 fn upload_accepts_exactly_sixteen_mebibytes() {
     let (_directory, adapter, _attachments) = fixture();
     let content = vec![b'a'; MAX_FILE_BYTES as usize];
-    let (status, payload) = upload(&adapter, &multipart("edge.bin", &content));
+    let (status, payload) = upload(&adapter, &multipart("edge.txt", &content));
     assert_eq!(status, 200, "恰好 64 MiB 必须成功");
     assert_eq!(payload["bytes"], json!(MAX_FILE_BYTES));
 }
@@ -135,7 +135,7 @@ fn upload_accepts_exactly_sixteen_mebibytes() {
 fn upload_rejects_sixteen_mebibytes_plus_one_without_leaving_anything_behind() {
     let (_directory, adapter, attachments) = fixture();
     let content = vec![b'a'; MAX_FILE_BYTES as usize + 1];
-    let (status, payload) = upload(&adapter, &multipart("over.bin", &content));
+    let (status, payload) = upload(&adapter, &multipart("over.txt", &content));
     assert_eq!(status, 413, "64 MiB 加 1 字节必须在读体过程中 413");
     assert_chinese(&payload);
     assert_eq!(payload["limit"], json!(MAX_FILE_BYTES), "回执必须说明上限");

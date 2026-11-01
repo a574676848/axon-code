@@ -267,14 +267,9 @@ export const ConnectionSettings: React.FC = () => {
           <ConnectionFactRow
             label="后端版本"
             value={
-              <span className="flex items-center gap-1.5 min-w-0">
-                <Text size="xs" truncate className="min-w-0">
-                  {snapshot.capsKnown ? (snapshot.backendVersion ?? '未知') : '未知'}
-                </Text>
-                {snapshot.capsKnown && snapshot.backendOutdated && (
-                  <Chip tone="warning">后台服务版本过旧</Chip>
-                )}
-              </span>
+              <Text size="xs" truncate className="min-w-0">
+                {snapshot.capsKnown ? (snapshot.backendVersion ?? '未知') : '未知'}
+              </Text>
             }
           />
           <ConnectionFactRow

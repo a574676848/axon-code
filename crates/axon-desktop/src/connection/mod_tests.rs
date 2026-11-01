@@ -28,22 +28,32 @@ fn active_profile_and_label_come_from_the_document() {
         Some(LOCAL_PROFILE_ID)
     );
     let active = runtime.active().expect("应有生效档案");
-    assert_eq!(super::display_label(&active.profile), "我的开发机");
+    // 本机档案的显示名由代码决定：状态文件里留着的旧名字（例如主机名派生的
+    // 「我的开发机」）不会漏到界面上。
+    assert_eq!(super::display_label(&active.profile), "本机");
     assert_eq!(runtime.profiles().len(), 1);
 }
 
 #[test]
-fn blank_labels_fall_back_to_a_visible_placeholder() {
-    let mut document = document_with_one_local_profile();
-    document
-        .profiles
-        .get_mut(LOCAL_PROFILE_ID)
-        .expect("档案存在")
-        .meta
-        .label = "   ".to_owned();
-    let runtime = Runtime::from_document(document, false);
-    let active = runtime.active().expect("应有生效档案");
-    assert_eq!(super::display_label(&active.profile), "未命名档案");
+fn blank_cloud_labels_fall_back_to_a_visible_placeholder() {
+    let profile = BackendProfile::cloud(
+        "   ",
+        "https://axon.example.com",
+        "wss://axon.example.com",
+        CredentialSource::SessionOnly,
+    );
+    assert_eq!(super::display_label(&profile), "未命名档案");
+}
+
+#[test]
+fn local_profile_label_is_fixed_by_the_app() {
+    // 本机档案就叫「本机」：状态文件里留着的旧名字（主机名派生的「我的开发机」）
+    // 不会漏到界面上，也不需要用户为了改个称呼去编辑状态文件。
+    assert_eq!(super::display_label(&BackendProfile::local("本机")), "本机");
+    assert_eq!(
+        super::display_label(&BackendProfile::local("我的开发机")),
+        "本机"
+    );
 }
 
 #[test]
@@ -66,7 +76,6 @@ fn caps_are_overridden_by_profile_mode() {
             service_control: true,
             ..crate::connection::profile::CapabilitySet::default()
         },
-        backend_outdated: false,
     }));
     let effective = runtime.effective_caps().set().expect("已知能力位");
     assert!(!effective.terminal);

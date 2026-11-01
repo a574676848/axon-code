@@ -124,16 +124,6 @@ impl HealthState {
             detail: "本机凭据库里没有这把 Key，请在档案里重新输入".to_owned(),
         }
     }
-
-    /// 后台需要升级。
-    #[must_use]
-    pub fn backend_outdated() -> Self {
-        Self {
-            dot: HealthDot::Warning,
-            label: "后台需升级".to_owned(),
-            detail: "后端不含 /api/v1/meta，能力位按最小集处理".to_owned(),
-        }
-    }
 }
 
 /// 连接运行态。
@@ -292,7 +282,6 @@ impl Runtime {
                     detail: format!("往返 {} 毫秒", ready.latency_ms),
                 }
             }
-            probe::ProbeOutcome::Outdated => HealthState::backend_outdated(),
             probe::ProbeOutcome::Failed(failure) => match failure {
                 probe::ProbeFailure::CredentialRejected { .. } => HealthState {
                     dot: HealthDot::Error,
@@ -653,6 +642,17 @@ pub fn active_label() -> String {
 /// 档案名称：空值回落到「未命名档案」，绝不把空串交给界面。
 #[must_use]
 pub fn display_label(profile: &BackendProfile) -> String {
+    /*
+     * 本机档案的名字由代码决定，不采信状态文件里的旧值：老版本用主机名派生过
+     * 默认名（「我的开发机」之类），那些字符串会一直留在盘上。显示名属于产品口径，
+     * 不该让用户为了改一个称呼去手工编辑状态文件。
+     */
+    if matches!(
+        profile.spec,
+        crate::connection::profile::EndpointSpec::Local
+    ) {
+        return crate::connection::store::LOCAL_PROFILE_LABEL.to_owned();
+    }
     let trimmed = profile.label.trim();
     if trimmed.is_empty() {
         "未命名档案".to_owned()

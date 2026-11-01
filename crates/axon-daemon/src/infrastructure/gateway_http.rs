@@ -287,10 +287,14 @@ fn run_server(
         let listener = tokio::net::TcpListener::from_std(listener)
             .map_err(|error| format!("接管监听失败：{error}"))?;
         let router = gateway_http_routes::router(state, max_body_bytes);
-        axum::serve(listener, router)
-            .with_graceful_shutdown(wait_for_shutdown(shutdown))
-            .await
-            .map_err(|error| format!("服务退出：{error}"))
+        // 带上连接对端地址：直连请求没有转发头，审计行要靠它记下来源 IP。
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(wait_for_shutdown(shutdown))
+        .await
+        .map_err(|error| format!("服务退出：{error}"))
     });
     if let Err(message) = outcome {
         failure_state.log_access("ERROR", &format!("gateway-http {message}"));

@@ -1,17 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CronJob, GatewayHealth, NavTab, SettingsSection, WorkspaceItem } from './types';
+import type { CronJob, NavTab, SettingsSection, WorkspaceItem } from './types';
 import * as ipc from './ipc';
 import { listenLaneActivity, listenOpenLane } from './laneEvents';
 import { useWindowTitle } from './useWindowTitle';
 import { Sidebar } from './components/Sidebar';
 import { BasicSettingsPanel, SETTINGS_SECTION_LABELS } from './components/BasicSettingsPanel';
-import { GatewayUnconnected, GatewayUnavailableState } from './components/GatewayUnconnected';
+import { GatewayUnconnected, GatewayUnavailableStage } from './components/GatewayUnconnected';
 import { ConversationView } from './components/conversation/ConversationView';
 import { ErrorBoundary } from './components/conversation/ErrorBoundary';
 import type { LaneSelection } from './conversation/useConversation';
 import { clearedAtSettle, markForNotice } from './conversation/laneMarks';
 import { sameRuntimeFacts, type LaneRuntimeFacts } from './conversation/runtimeFacts';
-import { LoadingState } from './components/ui/surfaces';
+import { LoadingState, Text } from './components/ui/surfaces';
+import { Dialog } from './components/ui/modal';
 import { WindowChrome } from './components/ui/WindowChrome';
 import { CommandPalette, type CommandPaletteItem } from './components/ui/CommandPalette';
 import { AutomationPage } from './components/AutomationPage';
@@ -26,7 +27,15 @@ import {
 } from './desktopGuards';
 import { applyTheme, currentTheme, THEME_CHOICES } from './theme';
 import { ensureUpdateChecked } from './desktopUpdate';
-import { ensureConnectionLoaded, loadConnectionState, switchProfile, useConnectionFact } from './connectionState';
+import {
+  ensureConnectionLoaded,
+  loadConnectionState,
+  registerSwitchGuard,
+  switchProfile,
+  useConnectionFact,
+} from './connectionState';
+import { useConnectionProbe } from './useConnectionProbe';
+import { composerHasDraft } from './composerDraft';
 import { OnboardingWindow } from './components/onboarding/OnboardingWindow';
 import { notifyDesktopReady, useWindowDynamicSurfaces } from './windowSurfaces';
 
@@ -37,13 +46,11 @@ import { notifyDesktopReady, useWindowDynamicSurfaces } from './windowSurfaces';
  * 业务数据仍由各视图自行从后端读取，壳层不做缓存也不维护第二份事实。
  */
 
-/** 网关心跳间隔。 */
-const GATEWAY_HEARTBEAT_MS = 5000;
 /**
  * 会话列表的静默刷新间隔。
  *
  * 会话可能由其它渠道产生（例如 TUI 新开一条），侧栏必须能自己发现；
- * 刷新全程不显示加载态、失败也不打扰用户，由下一次心跳统一报连接问题。
+ * 刷新全程不显示加载态、失败也不打扰用户，由下一次连接探活统一报连接问题。
  */
 const LANE_REFRESH_MS = 15000;
 /** 侧栏折叠组合键。 */
@@ -70,23 +77,28 @@ export const App: React.FC = () => {
   /** 窗口是否窄到该自动收起侧栏。 */
   const [autoCollapsed, setAutoCollapsed] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [health, setHealth] = useState<GatewayHealth | null>(null);
   /*
-   * 连接档案事实：首开引导与侧栏连接胶囊读的是同一份快照，壳层不另存第二份，
-   * 也不在这里发起探测。
+   * 连接档案事实：首开引导与侧栏连接胶囊读的是同一份快照，壳层不另存第二份。
+   * 探活本身也收敛在一处（useConnectionProbe），壳层只消费它的结论。
    */
   const connection = useConnectionFact();
   /** 还没有可用档案时整个窗口交给首开引导，背后不留可点可读的界面。 */
   const needsOnboarding = connection.snapshot?.needsOnboarding === true;
-  const [connectionDismissed, setConnectionDismissed] = useState(false);
-  /**
-   * 触发「服务未启用」判定的那次调用失败原因。
-   *
-   * 探测结论说明「怎么了」，这一行说明「哪一次请求、什么原因」，统一弹窗与主区域
-   * 的常驻状态都直接展示它，用户不必去翻各视图各自的报错。
+  const {
+    health,
+    lastFailure,
+    connectionDismissed,
+    setConnectionDismissed,
+    connectionRef,
+    probeGateway,
+    refreshConnection,
+  } = useConnectionProbe();
+  /*
+   * 切档确认：输入框有草稿时先问一次。resolve 存在 ref 里，弹窗开关才是 state，
+   * 避免把函数塞进 state 后触发不必要的重渲染。
    */
-  const [lastFailure, setLastFailure] = useState<string | null>(null);
-  const connectionRef = useRef<boolean | null>(null);
+  const [switchPromptOpen, setSwitchPromptOpen] = useState(false);
+  const switchResolveRef = useRef<((ok: boolean) => void) | null>(null);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general');
   // 启动一律落在首屏：会话目标是本次使用的临时上下文，
   // 自动恢复上次的会话会把「打开应用」变成「接着上次干活」，与首屏语义冲突。
@@ -231,60 +243,27 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  /** 上一次探测是否仍在途：单次探测可长达数秒，心跳不能叠加第二次。 */
-  const probingRef = useRef(false);
-
-  /** 启动即探测网关；未连接时展示可执行的修复引导而不是空侧栏。 */
-  const probeGateway = useCallback(async () => {
-    probingRef.current = true;
-    try {
-      const result = await ipc.gatewayHealth();
-      if (result.connected || connectionRef.current === true) setConnectionDismissed(false);
-      // 连上了就没有「最近一次失败」可讲：留着它只会让下一次断连的弹窗显示旧原因。
-      if (result.connected) setLastFailure(null);
-      connectionRef.current = result.connected;
-      setHealth(result);
-    } catch {
-      // 探测本身失败（例如桌面宿主不可用）时保持上一次结论，由引导页的重试接管。
-    } finally {
-      probingRef.current = false;
-    }
+  /** 结算一次切档确认。 */
+  const resolveSwitchPrompt = useCallback((ok: boolean) => {
+    const resolve = switchResolveRef.current;
+    switchResolveRef.current = null;
+    setSwitchPromptOpen(false);
+    resolve?.(ok);
   }, []);
 
+  // 切档守卫：输入框有未发送正文时先确认一次，三个入口共用这一处。
   useEffect(() => {
-    void probeGateway();
-  }, [probeGateway]);
+    registerSwitchGuard(() => {
+      if (!composerHasDraft()) return true;
+      return new Promise<boolean>((resolve) => {
+        switchResolveRef.current = resolve;
+        setSwitchPromptOpen(true);
+      });
+    });
+    return () => registerSwitchGuard(null);
+  }, []);
 
-  // 心跳：连接正常时也持续复探，服务中途挂掉能立刻反映到界面与状态入口。
-  // 单次探测最长可达数秒（探活预算加一次重试），因此在途时跳过这一拍，
-  // 既不让探测互相叠加，也避免先发的旧结论覆盖后发的新结论。
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      if (probingRef.current) return;
-      void probeGateway();
-    }, GATEWAY_HEARTBEAT_MS);
-    return () => window.clearInterval(timer);
-  }, [probeGateway]);
-
-  /*
-   * 网络请求拦截器：任何一个后端调用报「服务未启用」，都立即复探并弹出统一弹窗。
-   *
-   * 不依赖各视图各自解释同一个断连原因，也不必等下一次心跳：服务刚被停掉时，
-   * 用户看到的第一个失败就已经把结论带到这里。用户此前的手动关闭会被重新打开：
-   * 服务又断了一次是新的信息，不该被上一次的「知道了」永久压住。
-   */
-  useEffect(
-    () =>
-      ipc.onBackendUnavailable((detail) => {
-        setLastFailure(detail);
-        setConnectionDismissed(false);
-        void probeGateway();
-      }),
-    [probeGateway],
-  );
-
-  /** 工作区列表供主区域取当前工作区；侧栏自身仍独立持有一份用于渲染。 */
-  const refreshWorkspaces = useCallback(async () => {
+  /** 工作区列表供主区域取当前工作区；侧栏自身仍独立持有一份用于渲染。 */  const refreshWorkspaces = useCallback(async () => {
     if (connectionRef.current !== true) return;
     try {
       setWorkspaces(await ipc.fetchWorkspaces());
@@ -609,21 +588,15 @@ export const App: React.FC = () => {
             </div>
           </main>
         ) : !health.available ? (
-          <main className="flex-1 h-full flex flex-col overflow-clip bg-canvas">
-            <div data-tauri-drag-region className="h-10 shrink-0" />
-            {/* 弹窗可以被关掉，主区域不能因此变成一片空白：这里给出同样的结论与重试入口。 */}
-            <div className="flex-1 min-h-0 flex flex-col">
-              <GatewayUnavailableState
-                health={health}
-                detail={lastFailure}
-                onRetry={async () => {
-                  await probeGateway();
-                  if (connectionRef.current === true) await refreshWorkspaces();
-                }}
-                onOpenSettings={() => openSettingsAt('remote')}
-              />
-            </div>
-          </main>
+          <GatewayUnavailableStage
+            health={health}
+            detail={lastFailure}
+            onRetry={async () => {
+              await refreshConnection();
+              if (connectionRef.current === true) await refreshWorkspaces();
+            }}
+            onOpenSettings={() => openSettingsAt('connection')}
+          />
         ) : currentTab === 'workspace' ? (
           <WorkspaceOverview />
         ) : currentTab === 'automation' ? (
@@ -671,7 +644,7 @@ export const App: React.FC = () => {
           }}
           onOpenSettings={() => {
             setConnectionDismissed(true);
-            openSettingsAt('remote');
+            openSettingsAt('connection');
           }}
         />
       )}
@@ -695,6 +668,22 @@ export const App: React.FC = () => {
           />
         </>
       )}
+
+      {/*
+        切档确认：切档以重启应用实现，输入坞里没发出去的内容会丢。
+        三个入口都经 `switchProfile` 的守卫走到这里，因此确认只在一处实现。
+      */}
+      <Dialog
+        open={switchPromptOpen}
+        onClose={() => resolveSwitchPrompt(false)}
+        title="切换连接档案"
+        primary={{ label: '仍然切换', onClick: () => resolveSwitchPrompt(true) }}
+        secondary={{ label: '取消', onClick: () => resolveSwitchPrompt(false) }}
+      >
+        <Text tone="secondary" size="sm" className="block">
+          输入框里还有未发送的内容。切换档案会重启应用，这些内容会丢失。
+        </Text>
+      </Dialog>
     </div>
   );
 };

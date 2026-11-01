@@ -9,6 +9,7 @@ import {
   type ComposerHistory,
 } from '../../conversation/composerHistory';
 import { isLargeText } from '../../conversation/textExport';
+import { setComposerHasDraft } from '../../composerDraft';
 import { editingMenu } from '../ui/editingCommands';
 import type { ContextMenuItem } from '../ui/ContextMenu';
 import * as ipc from '../../ipc';
@@ -71,6 +72,14 @@ export function useComposerEditing({
   preparePaste,
 }: ComposerEditingOptions): ComposerEditing {
   const [text, setText] = React.useState('');
+  /*
+   * 草稿标记：切档会重启应用，输入坞里没发出去的内容会丢。
+   * 标记在这里维护，因为这里是正文的唯一事实源。
+   */
+  React.useEffect(() => {
+    setComposerHasDraft(text.trim().length > 0);
+    return () => setComposerHasDraft(false);
+  }, [text]);
   /**
    * 撤销与恢复历史。
    *

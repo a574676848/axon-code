@@ -98,6 +98,20 @@ impl AttachmentsHttpAdapter {
             );
         };
 
+        /*
+         * 落盘之前先过内容策略：类型白名单挡掉任意文件暂存，压缩炸弹检查读的是
+         * 文件头里声明的解压体积，两者都只看服务端自己读到的字节，不信客户端声明。
+         */
+        if let Err(rejection) = crate::attachments_policy::check(&original_name, part.content) {
+            return GatewayHttpResponse::json(
+                415,
+                &json!({
+                    "error": rejection.code(),
+                    "message": rejection.message(),
+                }),
+            );
+        }
+
         // 每次上传一个独立目录：同名附件互不覆盖，落盘路径可直接当标识用。
         let upload_id = uuid::Uuid::new_v4().to_string();
         let directory = attachments_dir(&self.axon_root).join(&upload_id);

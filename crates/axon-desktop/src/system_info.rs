@@ -27,22 +27,6 @@ use crate::release_channel::{GithubInfoDto, github_info};
 /// 远控 adapter 状态文件名。
 const GATEWAY_STATUS_FILE: &str = "gateway-status.json";
 
-/// 网关监听地址探测结果。
-///
-/// 本合同阶段已无产出：网关 HTTP 与 WebSocket 两行本机端口读数随运行状态面板一起
-/// 下线（§5.1）。字段为兼容既有界面保留，因此恒为空数组，不伪造读数。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServiceProbeDto {
-    /// 面名称，例如 HTTP 网关。
-    pub name: String,
-    /// 监听地址。
-    pub target: String,
-    /// 是否已在监听。
-    pub listening: bool,
-    /// 补充说明：版本、就绪状态或失败原因。
-    pub detail: String,
-}
-
 /// 键值对展示项。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyValueDto {
@@ -99,14 +83,10 @@ pub struct SystemInfoDto {
     pub daemon_health: Option<DaemonHealthDto>,
     /// 后台健康快照读不到的原因；成功时为空串。
     pub daemon_health_error: String,
-    /// 网关各面的探测结果；运行状态面板下线后恒为空数组。
-    pub services: Vec<ServiceProbeDto>,
     /// 飞书远控状态；无状态文件时为空。
     pub remote_feishu: Option<RemoteStatusDto>,
     /// 发布渠道坐标：关于面板的仓库、发布页与反馈入口都由它派生。
     pub github: GithubInfoDto,
-    /// 配置目录。
-    pub runtime_root: String,
 }
 
 /// 解析运行时根目录。
@@ -367,12 +347,8 @@ pub fn system_info() -> Result<SystemInfoDto, String> {
         daemon_state: daemon_state.to_string(),
         daemon_health: health.ok(),
         daemon_health_error: health_error,
-        // 网关两行本机端口读数随运行状态面板下线（§5.1）：这里不再产出读数，
-        // 字段留空而不是回一份没人消费的旧探测结果。
-        services: Vec::new(),
         remote_feishu: remote_feishu_status(&root),
         github: github_info(),
-        runtime_root: root.to_string_lossy().to_string(),
     })
 }
 

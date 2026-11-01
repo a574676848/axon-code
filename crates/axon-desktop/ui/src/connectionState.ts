@@ -135,8 +135,24 @@ export function renameProfile(id: string, label: string): Promise<void> {
   });
 }
 
+/**
+ * 切档前的确认：由外壳注册，返回 false 表示用户放弃切换。
+ *
+ * 切档以重启应用实现，输入坞里没发出去的内容会丢。三个入口（侧栏胶囊、设置 › 连接、
+ * 命令面板）都走这里，因此确认只需要一处实现，不会出现「从某个入口切就不问」。
+ */
+let switchGuard: (() => boolean | Promise<boolean>) | null = null;
+
+/** 注册或清除切档确认。 */
+export function registerSwitchGuard(guard: (() => boolean | Promise<boolean>) | null): void {
+  switchGuard = guard;
+}
+
 /** 切换档案。 */
-export function switchProfile(id: string): Promise<SwitchOutcome> {
+export async function switchProfile(id: string): Promise<SwitchOutcome> {
+  if (switchGuard !== null && !(await switchGuard())) {
+    return { started: false, message: '已取消切换：输入框里还有未发送的内容' };
+  }
   return ipc.connectionSwitchProfile(id);
 }
 

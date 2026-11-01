@@ -160,9 +160,24 @@ jobs:
         shell: pwsh
         run: pwsh -NoLogo -NoProfile -File tools/verify-ui-contract.ps1
 
+      # 风格检查与前端单测必须在这里真跑：只构建不检查等于把 lint 与断言留给本地。
+      - name: 前端风格检查与单测
+        if: needs.changes.outputs.code == 'true'
+        run: |
+          npm --prefix crates/axon-desktop/ui run lint
+          npm --prefix crates/axon-desktop/ui test
+
       - name: 格式检查
         if: needs.changes.outputs.code == 'true'
         run: cargo fmt --all --check
+
+      # 空白与冲突痕迹检查：只看本次推送范围，历史上已入库的行不再翻旧账。
+      - name: 空白与冲突痕迹检查
+        if: needs.changes.outputs.code == 'true'
+        shell: bash
+        run: |
+          base=$(git rev-parse HEAD^ 2>/dev/null || git rev-parse HEAD)
+          git diff --check "$base" HEAD
 
       - name: 编译期 lint 豁免检查
         if: needs.changes.outputs.code == 'true'
@@ -171,8 +186,13 @@ jobs:
 
       # 依赖解析锁在 Cargo.lock：CI 不做实时重新解析，避免上游新版本发布
       # 在无代码改动时把已绿的 master 变成红。升级依赖走 dependabot/显式 PR。
-      # 这里不再单跑 `cargo check`：下一步的 clippy 带 `-D warnings` 且覆盖 --all-targets，
-      # 是它的严格超集，重复编译一次只会把每条腿拉长 5 到 8 分钟。
+      #
+      # `cargo check` 与 clippy 的分工：clippy 是严格超集，但两者失败信息不同，
+      # 门禁矩阵要求两条都在，缺少 check 时「只有 clippy 报了才有人管」。
+      - name: 编译检查
+        if: needs.changes.outputs.code == 'true'
+        run: cargo check --locked --workspace --all-features
+
       - name: Clippy 静态分析
         if: needs.changes.outputs.code == 'true'
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings

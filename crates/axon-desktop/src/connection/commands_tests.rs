@@ -34,14 +34,17 @@ fn ready_http_and_ready_websocket_pass_the_gate() {
 }
 
 #[test]
-fn outdated_backend_is_rejected_because_meta_is_missing() {
-    let error = http_gate(&ProbeOutcome::Outdated).expect_err("老后端不得通过闸门");
+fn missing_meta_is_rejected_with_a_pointer_to_the_address() {
+    let outcome = ProbeOutcome::Failed(ProbeFailure::Unreachable(
+        "该地址上没有 /api/v1/meta：请确认地址与端口指向 Axon 后端".to_owned(),
+    ));
+    let error = http_gate(&outcome).expect_err("没有 /meta 不得通过闸门");
     assert!(
-        error.contains("版本过旧") && error.contains("/api/v1/meta"),
-        "拒绝理由必须指向缺失的 /meta，实际：{error}"
+        error.contains("/api/v1/meta"),
+        "拒绝理由必须点明缺的是哪条路由，实际：{error}"
     );
     assert!(
-        save_gate(&ProbeOutcome::Outdated, &WsProbeOutcome::Ready).is_err(),
+        save_gate(&outcome, &WsProbeOutcome::Ready).is_err(),
         "事件流端口可用也不能掩盖 HTTP 面缺 /meta"
     );
 }

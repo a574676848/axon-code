@@ -112,22 +112,23 @@ impl CapabilitySet {
     }
 }
 
-/// 已取到能力位之后的事实：集合本身，加上「后端版本过旧」这一独立结论。
+/// 已取到能力位之后的事实。
+///
+/// 项目未上线，后端与桌面端同版本发布，因此不再保留「老后端给最小集」这一子情形：
+/// 取到就是这一套，取不到就是未知。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KnownCaps {
     /// 覆盖后的能力位。
     pub set: CapabilitySet,
-    /// `/meta` 返回 404 但既有鉴权路由返回 200：活着，但没有本协议的接口。
-    pub backend_outdated: bool,
 }
 
-/// 能力位三态。
+/// 能力位两态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CapsState {
-    /// 尚未成功取到 `/meta`。入口可见但置灰，**不得**判为版本过旧。
+    /// 尚未成功取到 `/meta`。入口可见但置灰。
     #[default]
     Unknown,
-    /// 已取到（含「老后端」这一子情形）。
+    /// 已取到。
     Known(KnownCaps),
 }
 
@@ -151,12 +152,6 @@ impl CapsState {
             Self::Unknown => false,
             Self::Known(_) => !capability,
         }
-    }
-
-    /// 后端版本是否已判定为过旧。
-    #[must_use]
-    pub fn backend_outdated(self) -> bool {
-        matches!(self, Self::Known(known) if known.backend_outdated)
     }
 }
 
@@ -300,7 +295,6 @@ impl BackendProfile {
             CapsState::Unknown => CapsState::Unknown,
             CapsState::Known(known) => CapsState::Known(KnownCaps {
                 set: known.set.with_mode_override(self.is_cloud()),
-                backend_outdated: known.backend_outdated,
             }),
         }
     }
@@ -371,10 +365,7 @@ mod tests {
             },
         );
         let mut cloud = cloud;
-        cloud.caps = CapsState::Known(KnownCaps {
-            set: parsed(),
-            backend_outdated: false,
-        });
+        cloud.caps = CapsState::Known(KnownCaps { set: parsed() });
         let effective = cloud.effective_caps().set().expect("已知能力位");
         assert!(!effective.terminal, "云档案的终端必须被覆盖为 false");
         assert!(
@@ -391,18 +382,16 @@ mod tests {
     }
 
     #[test]
-    fn unknown_caps_show_entries_instead_of_reporting_outdated() {
+    fn unknown_caps_show_entries_instead_of_hiding_them() {
         let unknown = CapsState::Unknown;
         assert!(unknown.set().is_none());
-        assert!(!unknown.backend_outdated(), "未探测不得被判为版本过旧");
         assert!(!unknown.hides(false), "未探测时入口可见但置灰，不隐藏");
 
         let known_false = CapsState::Known(KnownCaps {
             set: CapabilitySet::default(),
-            backend_outdated: true,
         });
         assert!(known_false.hides(false), "已知为 false 时应隐藏");
-        assert!(known_false.backend_outdated());
+        assert!(!known_false.hides(true), "已知为 true 时正常显示");
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! Axon CLI 参数解析与命令注册。
 pub mod attachments_http_adapter;
+mod attachments_policy;
 #[path = "args/cli_args.rs"]
 mod cli_args;
 #[path = "args/command_surface.rs"]

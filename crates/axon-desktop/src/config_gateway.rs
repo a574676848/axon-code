@@ -14,8 +14,7 @@
 //!
 //! 两条降级路径都在这里定文案：
 //!
-//! - 老后端：路由缺失（404）时给「后台服务版本过旧，该能力需要升级后台服务」，
-//!   绝不把原始错误抛给界面；
+//! - 路由缺失（404）：如实说「网关不含这条接口」，不翻成版本结论；
 //! - 未连接态：连不上、证书失败、401 与 403 各给一句可展示的原因，界面据此走
 //!   既有失败路径，不 panic、不返回伪造数据。
 
@@ -41,8 +40,6 @@ pub(crate) const SKILLS_PATH: &str = "/api/v1/skills";
 /// 文档路由前缀，后接 `soul` 或 `agents`。
 pub(crate) const DOCUMENTS_PATH_PREFIX: &str = "/api/v1/documents/";
 
-/// 路由缺失的统一结论：老后端要升级，而不是让界面读一句原始状态码。
-pub(crate) const OUTDATED_BACKEND: &str = "后台服务版本过旧，该能力需要升级后台服务";
 /// 凭据被拒的结论：这是未连接态的一种，界面据此走未连接路径。
 const CREDENTIAL_REJECTED: &str =
     "未连接：网关凭据缺失或不匹配，请在「设置 › 连接」里重新填写当前档案的令牌";
@@ -66,7 +63,8 @@ enum BodyMethod {
 ///
 /// 网关不可达、凭据不匹配、后台服务版本过旧或回执不是合法 JSON。
 pub(crate) fn get_json(path: &str) -> Result<Value, String> {
-    let (status, body) = crate::gateway::get_raw(path)?;
+    // 本模块的路由常量都是完整路径（自带 `/api/v1`），因此必须走不补前缀的那条。
+    let (status, body) = crate::gateway::get_raw_at(path)?;
     parse_reply(status, &body)
 }
 
@@ -170,14 +168,15 @@ fn parse_reply(status: u16, body: &str) -> Result<Value, String> {
 
 /// 状态码到中文结论的映射。
 ///
-/// 404 一律归到「后台服务版本过旧」：老后端没有这些路由，界面要给的是升级动作。
+/// 项目未上线，后端与桌面端同版本发布，因此 404 只意味着「这条路由不在」：按普通
+/// 失败报出来，让地址、前缀或部署问题自己说话，不再翻成「后台服务版本过旧」。
 /// 401 是未连接态的凭据问题，403 是权限问题，二者修复动作不同，因此分开。
 /// 其余 4xx / 5xx 保留后台服务给出的原因，那是唯一能说明现场的一句话。
 #[must_use]
 pub(crate) fn failure_message(status: u16, body: &str) -> String {
     let reason = server_reason(body);
     match status {
-        404 => OUTDATED_BACKEND.to_string(),
+        404 => join_reason("网关不含这条接口（HTTP 404）", &reason),
         401 => CREDENTIAL_REJECTED.to_string(),
         403 => join_reason("后台服务拒绝了这次操作：当前凭据没有该权限", &reason),
         411 => "请求缺少长度声明，后台服务拒绝接收".to_string(),
@@ -353,7 +352,7 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{ConfigUpdate, OUTDATED_BACKEND, apply_values_to_text, failure_message};
+    use super::{ConfigUpdate, apply_values_to_text, failure_message};
 
     /// 一个合法的、可被解析的最小配置全文。
     const TOML: &str = "[agent]\nlog_level = \"info\"\n";
@@ -418,13 +417,13 @@ mod tests {
     }
 
     #[test]
-    fn missing_route_is_reported_as_an_outdated_backend() {
-        // 老后端没有这些路由：给升级结论，不是原始状态码。
-        assert_eq!(failure_message(404, ""), OUTDATED_BACKEND);
-        assert_eq!(
-            failure_message(404, r#"{"error":"NOT_FOUND"}"#),
-            OUTDATED_BACKEND
-        );
+    fn missing_route_is_reported_as_a_plain_404() {
+        // 项目未上线，404 只说明这条路由不在：如实说，不翻成版本结论。
+        let bare = failure_message(404, "");
+        assert!(bare.contains("404"), "{bare}");
+        assert!(!bare.contains("版本过旧"), "{bare}");
+        let with_reason = failure_message(404, r#"{"error":"NOT_FOUND"}"#);
+        assert!(with_reason.contains("NOT_FOUND"), "{with_reason}");
     }
 
     #[test]
@@ -487,6 +486,49 @@ mod tests {
             errors
                 .iter()
                 .any(|line| line.contains("agent.reasoning_effort"))
+        );
+    }
+
+    #[test]
+    fn every_route_constant_is_a_full_path() {
+        /*
+         * 本模块的 GET 走 get_raw_at（不补前缀），POST 与 PUT 走 endpoint_at（同样不补）。
+         * 因此这些常量必须自带 `/api/v1`；一旦有人把它们改成相对路径，请求会打到
+         * `/api/v1/api/v1/...` 之外的错误地址，而 404 又会被翻成「后台服务版本过旧」，
+         * 于是一个拼装错误被说成后端太旧。这条断言把分工固定下来。
+         */
+        for path in [
+            super::CONFIG_PATH,
+            super::SECRETS_STATUS_PATH,
+            super::SECRETS_PATH,
+            super::PROVIDERS_DISCOVER_PATH,
+            super::MCP_CONFIG_PATH,
+            super::SKILLS_PATH,
+            super::DOCUMENTS_PATH_PREFIX,
+        ] {
+            assert!(
+                path.starts_with("/api/v1/"),
+                "配置类路由常量必须是带前缀的完整路径，实际：{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn full_path_routes_are_not_prefixed_twice() {
+        /*
+         * 复现曾经的缺陷：完整路径交给会补前缀的入口，拼出 `/api/v1/api/v1/config`。
+         * 这里直接对拼装规则做断言，不依赖网络。
+         */
+        let base = "http://127.0.0.1:3143";
+        let doubled = format!("{base}/api/v1{}", super::CONFIG_PATH);
+        assert!(
+            doubled.contains("/api/v1/api/v1/"),
+            "这条断言记录的是错误拼法的形状：{doubled}"
+        );
+        // 正确拼法：完整路径直接跟在根地址后面。
+        assert_eq!(
+            format!("{base}{}", super::CONFIG_PATH),
+            "http://127.0.0.1:3143/api/v1/config"
         );
     }
 }

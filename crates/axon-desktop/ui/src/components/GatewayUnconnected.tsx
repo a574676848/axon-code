@@ -17,8 +17,9 @@ import { Dialog } from './ui/overlays';
  * 不该因为「从哪一扇门看进去」而有第二套说法。两处只换布局（居中页 / 弹窗正文）。
  */
 
-/** 探查间隔，未连接时轮询以自动感知恢复。 */
-const POLL_INTERVAL_MS = 4000;
+/** 轮询退避：从 4 秒起翻倍，最长 30 秒；连上后回到起点。 */
+const POLL_BASE_MS = 4000;
+const POLL_MAX_MS = 30000;
 
 /** 失败原因的最大展示长度；再长就截断，避免撑破弹窗。 */
 const FAILURE_DETAIL_MAX_CHARS = 160;
@@ -237,19 +238,41 @@ export const GatewayUnconnected: React.FC<GatewayUnconnectedProps> = ({
   const repair = useGatewayRepair(health, onRetry, onOpenSettings);
   const primary = repair.recommended ?? '重试';
 
-  // 未连接时自动轮询，服务被外部修好后界面自行恢复。
-  // 单轮探活可长达十秒（预算加一次退避重试），在途时跳过这一拍：叠加探测只会让每一拍都更慢，
-  // 先发的旧结论还会盖掉后发的新结论。
+  /*
+   * 未连接时自动探活，服务被外部修好后界面自行恢复。
+   *
+   * 三条约束：窗口隐藏时不发请求；每失败一次间隔翻倍（4 秒到 30 秒封顶），
+   * 避免服务长时间不可用时把轮询变成持续的负载；一旦探回成功就回到起点。
+   * 单轮探活可长达十秒（预算加一次退避重试），因此不在上一轮返回前再发一轮。
+   */
   useEffect(() => {
-    let inFlight = false;
-    const timer = window.setInterval(() => {
-      if (inFlight) return;
-      inFlight = true;
-      void Promise.resolve(onRetry()).finally(() => {
-        inFlight = false;
-      });
-    }, POLL_INTERVAL_MS);
-    return () => window.clearInterval(timer);
+    let disposed = false;
+    let timer = 0;
+    let delay = POLL_BASE_MS;
+    const schedule = () => {
+      if (disposed) return;
+      timer = window.setTimeout(() => {
+        if (disposed) return;
+        if (document.visibilityState !== 'visible') {
+          // 隐藏期间不探测，但仍要排下一拍：否则窗口再可见时轮询就停了。
+          schedule();
+          return;
+        }
+        void Promise.resolve(onRetry())
+          .then(() => {
+            delay = POLL_BASE_MS;
+          })
+          .catch(() => {
+            delay = Math.min(delay * 2, POLL_MAX_MS);
+          })
+          .finally(schedule);
+      }, delay);
+    };
+    schedule();
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
   }, [onRetry]);
 
   return (
@@ -347,3 +370,27 @@ export const GatewayUnavailableState: React.FC<GatewayUnavailableStateProps> = (
     </div>
   );
 };
+
+/**
+ * 服务不可用时整块主舞台的形态：拖拽区、居中的状态页。
+ *
+ * 抽出来是为了让外壳只保留「哪一屏」的分支，不再重复舞台容器与顶栏留白。
+ */
+export const GatewayUnavailableStage: React.FC<GatewayUnavailableStateProps> = ({
+  health,
+  detail = null,
+  onRetry,
+  onOpenSettings,
+}) => (
+  <main className="flex-1 h-full flex flex-col overflow-clip bg-canvas">
+    <div data-tauri-drag-region className="h-10 shrink-0" />
+    <div className="flex-1 min-h-0 flex flex-col">
+      <GatewayUnavailableState
+        health={health}
+        detail={detail}
+        onRetry={onRetry}
+        onOpenSettings={onOpenSettings}
+      />
+    </div>
+  </main>
+);

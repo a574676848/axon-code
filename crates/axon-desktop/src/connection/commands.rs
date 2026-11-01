@@ -47,15 +47,11 @@ const RELAUNCH_GRACE: Duration = Duration::from_millis(250);
 
 /// HTTP 面闸门：必须拿到 `/meta` 的 Ready 结论。
 ///
-/// 老后端（`/meta` 404、但既有鉴权路由确认活着）不算通过：没有 `/meta` 就没有协议
-/// 版本与能力位，云档案的界面能力只能靠猜，落盘等于把「看起来能用」当成「确认能用」。
+/// 没有 `/meta` 就没有协议版本与能力位，云档案的界面能力只能靠猜，落盘等于把
+/// 「看起来能用」当成「确认能用」。
 fn http_gate(outcome: &probe::ProbeOutcome) -> Result<(), String> {
     match outcome {
         probe::ProbeOutcome::Ready(_) => Ok(()),
-        probe::ProbeOutcome::Outdated => Err(
-            "后端版本过旧：没有 /api/v1/meta，无法确认协议版本与能力位，不能保存为云档案"
-                .to_owned(),
-        ),
         probe::ProbeOutcome::Failed(failure) => Err(failure.message()),
     }
 }
@@ -151,7 +147,6 @@ pub fn connection_test(input: ConnectionTestInput) -> ConnectionTestResult {
                 capabilities: Vec::new(),
                 certificate: "unknown".to_owned(),
                 plaintext_private: false,
-                backend_outdated: false,
             };
         }
     };

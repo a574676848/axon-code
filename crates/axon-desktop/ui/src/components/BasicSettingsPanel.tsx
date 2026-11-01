@@ -28,6 +28,7 @@ import { ConnectionSettings } from './settings/ConnectionSettings';
 import { McpSettings } from './settings/McpSettings';
 import { SkillsSettings } from './settings/SkillsSettings';
 import { PersonaStatusPanel } from './settings/PersonaStatusPanel';
+import { RemoteFeishuRow } from './settings/RemoteFeishuRow';
 import { DocumentEditor } from './settings/DocumentEditor';
 import { SystemInfoSettings } from './settings/SystemInfoSettings';
 import { SystemSettings } from './settings/SystemSettings';
@@ -477,6 +478,11 @@ export const BasicSettingsPanel: React.FC<BasicSettingsPanelProps> = ({
                         ) : (
                           prefixedFields
                         )}
+                        {/*
+                          远控分区底部补一行飞书读数：它来自适配器状态文件，不由
+                          config.toml 决定，因此放在表单之外、分区底部。
+                        */}
+                        {section === 'remote' && <RemoteFeishuRow />}
                       </>
                     )}
                   </>

@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::gateway;
@@ -40,26 +40,48 @@ const PROBE_RETRY_BACKOFF: Duration = Duration::from_millis(250);
 /// 超时并不说明服务坏了。连续两轮（每轮都有一次退避重试）才切换界面形态，单轮只记瞬时。
 const UNAVAILABLE_CONFIRM_ROUNDS: u32 = 2;
 
-/// 累计的连续失败轮数；成功一轮即归零。
-static CONSECUTIVE_FAILURES: AtomicU32 = AtomicU32::new(0);
+/// 迟滞状态：按档案隔离。
+///
+/// 两个字段都必须跟着档案走：切到另一个后端之后，上一个档案的失败轮数与
+/// 「连通过一次」都不再成立，混用会让新档案第一轮就被判成未连接（或反过来
+/// 被旧记录撑成已连接）。
+#[derive(Default)]
+struct Hysteresis {
+    /// 这份计数属于哪个档案。
+    profile_id: Option<String>,
+    /// 累计的连续失败轮数；成功一轮即归零。
+    consecutive_failures: u32,
+    /// 该档案是否连通过一次。冷启动从未连通过时不做迟滞，立刻如实报未连接。
+    ever_connected: bool,
+}
 
-/// 本进程是否连通过一次。冷启动从未连通过时不做迟滞，立刻如实报未连接。
-static EVER_CONNECTED: AtomicBool = AtomicBool::new(false);
+/// 迟滞状态的唯一存放处。
+static HYSTERESIS: Mutex<Option<Hysteresis>> = Mutex::new(None);
 
 /// 记录一轮探活结论，给出迟滞后的可用性与累计轮数。
 ///
 /// - 成功：清零失败数、标记「连通过」、立即可用。
 /// - 失败：累计失败轮数。**从未连通过**时立刻判不可用（服务确实没起来，不该让界面空等一轮）；
 ///   从已连接掉下来的情况要连续失败到 [`UNAVAILABLE_CONFIRM_ROUNDS`] 才切换，单轮只记瞬时。
-fn record_probe(connected: bool) -> (bool, u32) {
+/// - 档案变了：计数清零，两个档案之间不互相继承。
+fn record_probe(connected: bool, profile_id: Option<&str>) -> (bool, u32) {
+    let mut guard = HYSTERESIS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let state = guard.get_or_insert_with(Hysteresis::default);
+    if state.profile_id.as_deref() != profile_id {
+        state.profile_id = profile_id.map(str::to_owned);
+        state.consecutive_failures = 0;
+        state.ever_connected = false;
+    }
     if connected {
-        EVER_CONNECTED.store(true, Ordering::Relaxed);
-        CONSECUTIVE_FAILURES.store(0, Ordering::Relaxed);
+        state.ever_connected = true;
+        state.consecutive_failures = 0;
         return (true, 0);
     }
-    let failures = CONSECUTIVE_FAILURES.fetch_add(1, Ordering::Relaxed) + 1;
-    let available = EVER_CONNECTED.load(Ordering::Relaxed) && failures < UNAVAILABLE_CONFIRM_ROUNDS;
-    (available, failures)
+    state.consecutive_failures += 1;
+    let available = state.ever_connected && state.consecutive_failures < UNAVAILABLE_CONFIRM_ROUNDS;
+    (available, state.consecutive_failures)
 }
 
 /// 网关可用性。
@@ -189,7 +211,8 @@ pub fn gateway_health_sync() -> GatewayHealthDto {
     }
     let responding = probe.is_some();
     let connected = matches!(&probe, Some((status, _)) if (200..300).contains(status));
-    let (available, consecutive_failures) = record_probe(connected);
+    let active_profile = crate::connection::runtime().active_profile_id();
+    let (available, consecutive_failures) = record_probe(connected, active_profile.as_deref());
 
     let (reason, actions) = if connected {
         ("网关已连接，运行态数据可用".to_string(), Vec::new())
@@ -491,28 +514,47 @@ mod probe_hysteresis_tests {
     #[test]
     fn single_failed_round_stays_available_but_cold_start_does_not() {
         // 冷启动从未连通过：服务确实没起来，界面不该空等一轮。
-        let (available, failures) = record_probe(false);
+        let (available, failures) = record_probe(false, Some("local"));
         assert!(!available, "冷启动首轮失败必须立刻判为不可用");
         assert_eq!(failures, 1);
 
         // 连上即清零，界面立刻回到可用。
-        assert_eq!(record_probe(true), (true, 0));
+        assert_eq!(record_probe(true, Some("local")), (true, 0));
 
         // 从已连接掉下来：单轮失败只是瞬时，界面保持原状。
-        let (available, failures) = record_probe(false);
+        let (available, failures) = record_probe(false, Some("local"));
         assert!(available, "单轮失败不得切换成未连接态");
         assert_eq!(failures, 1);
 
         // 连续失败达到阈值才切换，且切换时轮数是真实累计值。
         let mut last = (available, failures);
         while last.1 < UNAVAILABLE_CONFIRM_ROUNDS {
-            last = record_probe(false);
+            last = record_probe(false, Some("local"));
         }
         assert!(!last.0, "连续失败达到阈值必须切换成未连接态");
         assert_eq!(last.1, UNAVAILABLE_CONFIRM_ROUNDS);
 
         // 恢复一轮就回到可用，计数归零，不留历史包袱。
-        assert_eq!(record_probe(true), (true, 0));
+        assert_eq!(record_probe(true, Some("local")), (true, 0));
+    }
+
+    #[test]
+    fn switching_profile_resets_the_hysteresis() {
+        // 档案 A 连通后掉线一轮，界面仍显示可用。
+        assert_eq!(record_probe(true, Some("a")), (true, 0));
+        let (available, failures) = record_probe(false, Some("a"));
+        assert!(available);
+        assert_eq!(failures, 1);
+
+        // 切到档案 B：计数与「连通过」都不继承，B 的首轮失败立刻判不可用。
+        let (available, failures) = record_probe(false, Some("b"));
+        assert!(!available, "切档后不得继承上一个档案的连通过记录");
+        assert_eq!(failures, 1);
+
+        // 切回 A 同样重新开始，不沿用 B 的失败累计。
+        let (available, failures) = record_probe(false, Some("a"));
+        assert!(!available, "再次切档同样从冷启动算起");
+        assert_eq!(failures, 1);
     }
 
     /// 界面门控读的是 `available` 与 `consecutive_failures` 两个键：回执里的序列化名一旦变了，

@@ -33,13 +33,17 @@ fn query_string_joins_pairs_with_encoded_keys_and_values() {
 }
 
 #[test]
-fn a_missing_route_is_reported_as_an_outdated_backend_not_a_missing_file() {
-    // 老后端：网关的嵌套错误模型。
-    let outdated = failure_message(
+fn a_missing_route_is_reported_as_a_plain_404_not_a_missing_file() {
+    // 网关自己的嵌套错误模型：说明这条路由不在，如实报 404。
+    let missing_route = failure_message(
         404,
         r#"{"error":{"code":"NOT_FOUND","message":"未找到指定的接口资源","details":null}}"#,
     );
-    assert_eq!(outdated, "后台服务版本过旧，该能力需要升级后台服务");
+    assert!(missing_route.contains("404"), "{missing_route}");
+    assert!(
+        !missing_route.contains("版本过旧"),
+        "路由缺失不是版本问题：{missing_route}"
+    );
 
     // 文件路由自己的结论：扁平错误模型，带中文原因。
     let missing = failure_message(404, r#"{"error":"not_found","message":"目标不是文件"}"#);
@@ -48,7 +52,7 @@ fn a_missing_route_is_reported_as_an_outdated_backend_not_a_missing_file() {
         !missing.contains("版本过旧"),
         "目标不存在不是版本问题：{missing}"
     );
-    assert_ne!(outdated, missing, "两种 404 必须给出不同结论");
+    assert_ne!(missing_route, missing, "两种 404 必须给出不同结论");
 }
 
 #[test]

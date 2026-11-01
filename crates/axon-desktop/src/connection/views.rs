@@ -96,8 +96,6 @@ pub struct ConnectionSnapshot {
     pub clock_verified: bool,
     /// 能力位是否已知。
     pub caps_known: bool,
-    /// 后端是否被判定为版本过旧。
-    pub backend_outdated: bool,
     /// 覆盖后的能力位清单。
     pub capabilities: Vec<CapabilityView>,
     /// 本次凭据是否超管。
@@ -142,8 +140,6 @@ pub struct ConnectionTestResult {
     pub certificate: String,
     /// 是否为明文 http 地址。
     pub plaintext_private: bool,
-    /// 后端是否被判定为版本过旧。
-    pub backend_outdated: bool,
 }
 
 /// 一次惰性探测的结论。
@@ -235,7 +231,6 @@ pub fn snapshot() -> ConnectionSnapshot {
             .as_ref()
             .is_some_and(|ready| ready.clock_verified),
         caps_known: caps.set().is_some(),
-        backend_outdated: caps.backend_outdated(),
         capabilities: capability_views(caps),
         super_admin: last_probe
             .as_ref()
@@ -365,28 +360,9 @@ pub fn build_test_result(
             latency_ms: Some(ready.latency_ms),
             capabilities: capability_views(CapsState::Known(super::profile::KnownCaps {
                 set: ready.meta.capabilities.with_mode_override(true),
-                backend_outdated: false,
             })),
             certificate: "trusted".to_owned(),
             plaintext_private,
-            backend_outdated: false,
-        },
-        ProbeOutcome::Outdated => ConnectionTestResult {
-            conclusion: "ok".to_owned(),
-            message: "连接成功，但后端不含 /api/v1/meta（后台服务版本过旧）".to_owned(),
-            endpoint: endpoint_text,
-            ws_endpoint: ws_text,
-            ws_conclusion,
-            ws_message,
-            backend_version: None,
-            latency_ms: None,
-            capabilities: capability_views(CapsState::Known(super::profile::KnownCaps {
-                set: CapabilitySet::default().with_mode_override(true),
-                backend_outdated: true,
-            })),
-            certificate: "trusted".to_owned(),
-            plaintext_private,
-            backend_outdated: true,
         },
         ProbeOutcome::Failed(failure) => ConnectionTestResult {
             conclusion: conclusion_name(failure).to_owned(),
@@ -404,7 +380,6 @@ pub fn build_test_result(
                 "unknown".to_owned()
             },
             plaintext_private,
-            backend_outdated: false,
         },
     }
 }
@@ -477,12 +452,6 @@ pub fn probe_view(id: String, outcome: &ProbeOutcome) -> ProfileProbeView {
             conclusion: "ok".to_owned(),
             message: format!("已连接，往返 {} 毫秒", ready.latency_ms),
             latency_ms: Some(ready.latency_ms),
-        },
-        ProbeOutcome::Outdated => ProfileProbeView {
-            id,
-            conclusion: "outdated".to_owned(),
-            message: "后台服务版本过旧".to_owned(),
-            latency_ms: None,
         },
         ProbeOutcome::Failed(failure) => ProfileProbeView {
             id,

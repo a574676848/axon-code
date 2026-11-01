@@ -393,25 +393,27 @@ axon setup --non-interactive --clear-websocket-url --clear-api-key
 | `AXON_PROCESS_RLIMIT_NPROC` | 子进程数上限，`off` 或 `0` 表示不限制 |
 | `AXON_PROCESS_RLIMIT_NOFILE` | 子进程打开文件数上限，`off` 或 `0` 表示不限制 |
 | `AXON_PROCESS_RLIMIT_AS_BYTES` | 子进程地址空间上限（字节），默认不限制 |
-| `AXON_CLIENT_ROOT` | 桌面端客户端数据根，覆盖平台默认位置；不得指向后端运行时根之内 |
+| `AXON_CLIENT_ROOT` | 桌面端客户端数据根，覆盖默认的 `$HOME/.axon-desktop`；不得指向后端运行时根之内 |
 | `AXON_RUNTIME_ROOT` | 后端运行时根，覆盖默认的 `$HOME/.axon`；只影响后端与草稿历史定位 |
 
 ### 两个根互不推导
 
-后端运行时根（`AXON_RUNTIME_ROOT` 或默认 `$HOME/.axon`）与桌面端客户端数据根（`AXON_CLIENT_ROOT` 或平台默认位置）是并列的两个目录，任一变量都不得改变另一方的解析结果：
+后端运行时根（`AXON_RUNTIME_ROOT` 或默认 `$HOME/.axon`）与桌面端客户端数据根（`AXON_CLIENT_ROOT` 或默认 `$HOME/.axon-desktop`）是平级的两个目录，任一变量都不得改变另一方的解析结果：
 
 ```text
 AXON_CLIENT_ROOT（桌面端数据根，最高）
-  > 平台默认位置：Windows %LOCALAPPDATA%\Axon\client
-                   macOS  $HOME/Library/Application Support/Axon/client
-                   Linux  $XDG_DATA_HOME/axon/client（缺省 $HOME/.local/share/axon/client）
+  > 默认位置：Windows %USERPROFILE%\.axon-desktop
+               macOS  $HOME/.axon-desktop
+               Linux  $HOME/.axon-desktop
 AXON_RUNTIME_ROOT（后端运行时根）
   > 后端默认 $HOME/.axon
 ```
 
 客户端数据根存放桌面端自己的状态与暂存数据：`desktop-state.v2.json`（连接档案、工作区与车道投影）、`attachments/`、`logs/desktop-ui-failure.jsonl` 与云档案的输入历史（按档案 id 分文件）。后端运行时根继续存放 `config.toml`、配置相邻的 `.env`、`data/`、`skills/`、`.mcp.json`、`SOUL.md` 与 `AGENTS.md`；本机档案的输入历史仍是后端根下的 `data/runtime/draft_history.jsonl`，与 TUI 共用同一份文件。
 
-`AXON_CLIENT_ROOT` 指向后端运行时根之内时会被忽略并退回平台默认位置，因为那会把桌面端状态写进 daemon 的运行态目录。
+`AXON_CLIENT_ROOT` 指向后端运行时根之内时会被忽略并退回默认位置，因为那会把桌面端状态写进 daemon 的运行态目录。
+
+历史版本把客户端数据放在别处（平台应用数据目录、短暂的 `~/.axon/client`，以及后端根下的 v1 状态 `~/.axon/desktop-state.json`）。代码不做自动迁移：需要保留旧数据的人由管理员手工跑一次一次性迁移脚本（不随仓库与发行包交付）。脚本语义固定为：默认只打印计划，加执行开关才复制，复制后逐字节校验，旧文件保持原样；目标已有 v2 时可显式选择「以 v1 为准」，此时先把现有 v2 改名备份，再放入 v1，由桌面端在下次启动完成 v1 到 v2 的格式迁移。
 
 首字链路性能遥测仅在 `config.toml` 的 `[agent].log_level = "trace"` 时启用。`AXON_LOG_LEVEL=trace` 仍可临时提高日志详细度，但不会开启遥测；修改配置后需重启当前 CLI 或 Daemon 进程。
 

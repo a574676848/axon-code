@@ -1,8 +1,8 @@
 //! 客户端自有根与 v2 状态文件：路径解析、v1 迁移、损坏护栏。
 //!
-//! 客户端自有根与后端运行时根**互不包含、互不推导**：前者是桌面端自己的数据目录，
-//! 后者是 daemon 存放 `config.toml`、`data/`、`skills/` 的目录。任一环境变量都不得
-//! 改变另一方的解析结果，否则用户主目录会跟着漂移。
+//! 客户端自有根固定落在用户主目录下的 `~/.axon-desktop`，与后端运行时根 `~/.axon`
+//! 平级、互不包含：一边是客户端自己的主题、档案、附件与草稿，另一边是 daemon 的
+//! 配置、数据、会话与凭据，任何一方的环境变量都不得把另一方的目录拉进自己下面。
 //!
 //! 状态文件用文件名隔离两代结构（[`V1_FILE_NAME`] 与 [`V2_FILE_NAME`]）：旧版
 //! `load_state()` 完全不校验版本号，读到新结构会得到「工作区全空」，随后任一次写入
@@ -41,6 +41,8 @@ pub const LOCAL_PROFILE_LABEL: &str = "本机";
 pub const ONBOARDING_VERSION: u32 = 1;
 /// 客户端自有根环境变量。
 pub const CLIENT_ROOT_ENV: &str = "AXON_CLIENT_ROOT";
+/// 客户端数据目录名：与后端运行时根 `~/.axon` 平级、互不包含。
+pub const CLIENT_HOME_DIR_NAME: &str = ".axon-desktop";
 
 /// 客户端层：全局一份的偏好与定位。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -184,8 +186,8 @@ pub struct LoadedDocument {
 
 /// 解析客户端自有根。
 ///
-/// 优先级：`AXON_CLIENT_ROOT` > 平台应用数据目录。它**不读** `AXON_RUNTIME_ROOT`：
-/// 两者互不推导，任一设置都不得改变另一方的解析结果。
+/// 优先级：`AXON_CLIENT_ROOT` > 用户主目录下的 `~/.axon/client`。它**不读**
+/// `AXON_RUNTIME_ROOT`：两者互不推导，任一设置都不得改变另一方的解析结果。
 #[must_use]
 pub fn client_root() -> PathBuf {
     static ROOT: OnceLock<PathBuf> = OnceLock::new();
@@ -193,7 +195,7 @@ pub fn client_root() -> PathBuf {
         .clone()
 }
 
-/// 解析客户端自有根的纯函数形态，便于按平台与环境组合逐项断言。
+/// 解析客户端自有根的纯函数形态，便于按环境组合逐项断言。
 #[must_use]
 pub fn resolve_client_root(override_root: Option<&OsStr>) -> PathBuf {
     if let Some(custom) = override_root.filter(|value| !value.is_empty()) {
@@ -201,60 +203,30 @@ pub fn resolve_client_root(override_root: Option<&OsStr>) -> PathBuf {
         if !is_inside_backend_root(&candidate) {
             return candidate;
         }
-        // 落在后端运行时根之下会污染 daemon 的运行态目录，直接退回平台默认位置。
+        // 落在后端自己的运行态目录里会与 daemon 抢同一批文件，直接退回默认位置。
         eprintln!(
-            "WARNING: {CLIENT_ROOT_ENV} 指向后端运行时根之内，已忽略并改用平台默认位置：{}",
+            "WARNING: {CLIENT_ROOT_ENV} 指向后端运行态目录，已忽略并改用默认位置：{}",
             candidate.display()
         );
     }
     platform_default_client_root(
-        cfg!(windows),
-        cfg!(target_os = "macos"),
-        std::env::var_os("LOCALAPPDATA").as_deref(),
-        std::env::var_os("XDG_DATA_HOME").as_deref(),
         std::env::var_os("HOME").as_deref(),
         std::env::var_os("USERPROFILE").as_deref(),
     )
 }
 
-/// 按平台规则算出默认客户端根。
+/// 默认客户端根：用户主目录下的 `.axon-desktop`。
+///
+/// 三平台同一条规则。它与后端运行时根 `~/.axon` 平级：客户端不往后端目录里写任何
+/// 文件，后端也不碰客户端目录，清理与迁移互不牵连。
 #[must_use]
-pub fn platform_default_client_root(
-    is_windows: bool,
-    is_macos: bool,
-    local_app_data: Option<&OsStr>,
-    xdg_data_home: Option<&OsStr>,
-    home: Option<&OsStr>,
-    user_profile: Option<&OsStr>,
-) -> PathBuf {
-    if is_windows {
-        if let Some(base) = local_app_data.filter(|value| !value.is_empty()) {
-            return PathBuf::from(base).join("Axon").join("client");
-        }
-        let home_dir = user_profile.or(home).map(PathBuf::from).unwrap_or_default();
-        return home_dir
-            .join("AppData")
-            .join("Local")
-            .join("Axon")
-            .join("client");
-    }
-    if is_macos {
-        let home_dir = home.or(user_profile).map(PathBuf::from).unwrap_or_default();
-        return home_dir
-            .join("Library")
-            .join("Application Support")
-            .join("Axon")
-            .join("client");
-    }
-    if let Some(base) = xdg_data_home.filter(|value| !value.is_empty()) {
-        return PathBuf::from(base).join("axon").join("client");
-    }
-    let home_dir = home.or(user_profile).map(PathBuf::from).unwrap_or_default();
-    home_dir
-        .join(".local")
-        .join("share")
-        .join("axon")
-        .join("client")
+pub fn platform_default_client_root(home: Option<&OsStr>, user_profile: Option<&OsStr>) -> PathBuf {
+    let base = home
+        .filter(|value| !value.is_empty())
+        .or_else(|| user_profile.filter(|value| !value.is_empty()))
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    base.join(CLIENT_HOME_DIR_NAME)
 }
 
 /// 后端运行时根（daemon 存放 `config.toml` 与 `data/` 的目录）。
@@ -263,13 +235,24 @@ pub fn backend_root() -> Option<PathBuf> {
     ConfigLoader::default_user_axon_root_path().ok()
 }
 
-/// 候选是否落在后端运行时根之内。
+/// 候选是否落在后端的运行态目录里。
 #[must_use]
 pub fn is_inside_backend_root(candidate: &Path) -> bool {
     let Some(root) = backend_root() else {
         return false;
     };
-    normalize_for_compare(candidate).starts_with(normalize_for_compare(&root))
+    is_inside_backend_root_at(candidate, &root)
+}
+
+/// 候选是否落在给定后端运行时根之内。
+///
+/// 两处目录是平级的（`~/.axon-desktop` 与 `~/.axon`），因此任何落在后端根之内的
+/// 候选都要拒绝：那里是 daemon 的配置、数据、会话与凭据，客户端写进去只会互相踩踏。
+#[must_use]
+pub fn is_inside_backend_root_at(candidate: &Path, root: &Path) -> bool {
+    let candidate = normalize_for_compare(candidate);
+    let root = normalize_for_compare(root);
+    candidate == root || candidate.starts_with(&root)
 }
 
 /// 比较用的路径归一：去掉尾部分隔符，Windows 下按小写比较。
@@ -368,6 +351,8 @@ pub fn load_document_at(root: &Path, backend: Option<&Path>) -> LoadedDocument {
             // v1 又出现（旧版二进制被再次运行过）时只记一行警告，不自动回灌：
             // 本期假设升级是单向的，真要合并由用户决定，提示里给出文件路径。
             warn_if_v1_returned(root, backend, &v2_path);
+            let mut document = document;
+            normalize_local_label(&mut document);
             LoadedDocument {
                 document,
                 read_only: false,
@@ -385,6 +370,20 @@ pub fn load_document_at(root: &Path, backend: Option<&Path>) -> LoadedDocument {
             migrated.corrupt_backup = corrupt_backup;
             migrated
         }
+    }
+}
+
+/// 本机档案的显示名由代码决定。
+///
+/// 老版本用主机名派生过默认名（「我的开发机」之类），那些字符串会一直留在盘上。
+/// 读到旧名字时就地改成当前口径，下一次写盘自然带上；不新增迁移步骤，也不要求
+/// 用户为了改一个称呼去编辑状态文件。
+fn normalize_local_label(document: &mut ClientStateDocument) {
+    let Some(section) = document.profiles.get_mut(LOCAL_PROFILE_ID) else {
+        return;
+    };
+    if section.meta.label != LOCAL_PROFILE_LABEL {
+        section.meta.label = LOCAL_PROFILE_LABEL.to_owned();
     }
 }
 

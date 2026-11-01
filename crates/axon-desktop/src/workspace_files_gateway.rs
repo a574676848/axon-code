@@ -150,7 +150,7 @@ fn transport_failure(error: &ureq::Error) -> String {
 ///
 /// 404 有两种含义，修复动作完全不同，靠回执形状区分：
 ///
-/// - 网关路由缺失（老后端）：嵌套错误模型 `{"error":{"code":"NOT_FOUND",...}}`；
+/// - 网关路由缺失：嵌套错误模型 `{"error":{"code":"NOT_FOUND",...}}`，如实报 404；
 /// - 文件路由自己的结论：扁平 `{"error":"not_found","message":"..."}`，原样带出原因。
 #[must_use]
 pub(crate) fn failure_message(status: u16, body: &str) -> String {

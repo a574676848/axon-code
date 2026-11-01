@@ -130,7 +130,28 @@ pub fn get_raw(path: &str) -> Result<(u16, String), String> {
 /// GET 一个网关接口，并使用调用方指定的总超时。
 pub fn get_raw_with_timeout(path: &str, timeout: Duration) -> Result<(u16, String), String> {
     let url = endpoint(path)?;
-    let request = authorized_get_with_timeout(&url, timeout);
+    execute_get(&url, timeout)
+}
+
+/// GET 一个**完整路径**的网关接口（路径自带 `/api/v1` 前缀）。
+///
+/// 与 [`get_raw`] 的分工必须写清楚：`get_raw` 收的是相对路径，由本模块补前缀；
+/// 本函数收的是完整路径，不再补。配置类客户端自己保管完整路由常量，两者混用会
+/// 拼出 `/api/v1/api/v1/...` 这种必然 404 的地址，而 404 又会被翻成「后台服务
+/// 版本过旧」，把一个拼装错误说成后端太旧。
+pub fn get_raw_at(path: &str) -> Result<(u16, String), String> {
+    get_raw_at_with_timeout(path, REQUEST_TIMEOUT)
+}
+
+/// GET 一个完整路径的网关接口，并使用调用方指定的总超时。
+pub fn get_raw_at_with_timeout(path: &str, timeout: Duration) -> Result<(u16, String), String> {
+    let url = endpoint_at(path)?;
+    execute_get(&url, timeout)
+}
+
+/// 发一次带鉴权的 GET 并读回状态码与正文。
+fn execute_get(url: &str, timeout: Duration) -> Result<(u16, String), String> {
+    let request = authorized_get_with_timeout(url, timeout);
     match request.call() {
         Ok(response) => {
             let status = response.status().as_u16();

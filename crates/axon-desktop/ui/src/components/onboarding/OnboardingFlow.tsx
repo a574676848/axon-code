@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AlertCircleIcon, CheckIcon, GlobeIcon, RefreshIcon, RetryIcon } from '../../icons';
+import { AlertCircleIcon, ApiIcon, CheckIcon, GlobeIcon, RefreshIcon, RetryIcon } from '../../icons';
 import type { ConnectionTestResult } from '../../connectionTypes';
 import * as ipc from '../../ipc';
 import { completeOnboarding, retryProbe, skipOnboarding, snapshot } from '../../connectionState';
@@ -230,25 +230,35 @@ export const OnboardingFlow: React.FC<{ onDone: () => void }> = ({ onDone }) => 
   );
 
   return (
-    <div className="flex h-full min-h-0 w-full items-center justify-center overflow-y-auto scroll-visible px-6 py-8">
-      <div className="w-full max-w-lg space-y-3">
-        <div className="space-y-1">
-          <Text tone="tertiary" size="micro" className="block">
-            {`第 ${STAGE_STEP[stage]} 步，共 4 步`}
-          </Text>
-          <Text size="base" strong className="block">
-            {STAGE_TITLE[stage]}
-          </Text>
-          <Text tone="secondary" size="xs" className="block">
-            {STAGE_DESCRIPTION[stage]}
-          </Text>
-        </div>
+    /*
+     * 排版沿用「未连接到 Axon 后台服务」那一页：整屏一列居中，图标块、标题、
+     * 一句说明、一行等宽小字、操作按钮组、底部一行状态说明。引导不是错误，
+     * 因此图标块取中性面而不是危险色；除此之外两页的间距阶梯与字号完全一致，
+     * 用户在同一扇窗口里看到的始终是同一种语言。
+     */
+    <div className="flex-1 min-h-0 h-full overflow-y-auto scroll-visible">
+      <div className="min-h-full flex flex-col items-center justify-center gap-3 px-6 py-8 text-center">
+        <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-md bg-surface-sunken text-text-secondary">
+          <ApiIcon size={36} />
+        </span>
+        <Text size="body" strong className="block">
+          连接 Axon 后台服务
+        </Text>
+        <Text tone="secondary" size="meta" className="block max-w-lg leading-5">
+          {STAGE_DESCRIPTION[stage]}
+        </Text>
+        <span className="block text-[11px] leading-4 text-text-tertiary">
+          第 {STAGE_STEP[stage]} 步，共 4 步 · {STAGE_TITLE[stage]}
+        </span>
 
         {actionError !== null && (
-          <Banner tone="danger" icon={<AlertCircleIcon size={13} />} title={actionError} />
+          <div className="w-full max-w-lg">
+            <Banner tone="danger" icon={<AlertCircleIcon size={13} />} title={actionError} />
+          </div>
         )}
 
-        <Panel clip>
+        <div className="w-full max-w-lg text-left space-y-3">
+          <Panel clip>
           <div className="px-3.5 py-3 space-y-3">
             {stage === 'mode' && (
               <div className="space-y-2">
@@ -325,74 +335,70 @@ export const OnboardingFlow: React.FC<{ onDone: () => void }> = ({ onDone }) => 
               />
             )}
           </div>
-
-          {stage !== 'finish' && (
-            <div className="px-3.5 py-3 hairline-t border-border-hairline flex flex-wrap items-center gap-2">
-              {stage === 'mode' ? (
-                <Button variant="primary" size="md" onClick={() => void choose()}>
-                  继续
-                </Button>
-              ) : (
-                <>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setStage('mode');
-                      setLocalError(null);
-                      setNotice(null);
-                    }}
-                  >
-                    返回
-                  </Button>
-                  {stage === 'local' && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={probing}
-                      onClick={() => void probeLocal()}
-                    >
-                      <RefreshIcon size={13} />
-                      {probing ? '正在探测' : '重新探测'}
-                    </Button>
-                  )}
-                  {stage === 'cloud' && (
-                    <Button
-                      variant="primary"
-                      size="md"
-                      onClick={() => {
-                        setActionError(null);
-                        setCloudDialogOpen(true);
-                      }}
-                    >
-                      {/* 实测通过只是结论，档案要保存才算写入：按钮名字随后改成这一步该做的事。 */}
-                      {cloudResult !== null &&
-                      cloudResult.conclusion === 'ok' &&
-                      cloudResult.wsConclusion === 'ok'
-                        ? '返回表单保存'
-                        : '填写地址与密钥'}
-                    </Button>
-                  )}
-                </>
-              )}
-            </div>
-          )}
         </Panel>
-
-        <div className="flex items-start justify-between gap-3">
-          <Text tone="tertiary" size="xs" className="min-w-0">
-            跳过后面板处于未连接状态，可随后在设置里的「连接」分区配置后端。
-          </Text>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={finishing}
-            className="shrink-0"
-            onClick={() => void skip()}
-          >
-            跳过
-          </Button>
         </div>
+
+        {/* 操作按钮组：与「未连接到 Axon 后台服务」同一套居中排布，主次一眼可分。 */}
+        <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+          {stage === 'mode' && (
+            <Button variant="primary" size="md" onClick={() => void choose()}>
+              继续
+            </Button>
+          )}
+          {stage === 'local' && (
+            <Button
+              variant="outline"
+              size="md"
+              disabled={probing}
+              onClick={() => void probeLocal()}
+            >
+              <RefreshIcon size={14} />
+              {probing ? '正在探测' : '重新探测'}
+            </Button>
+          )}
+          {stage === 'cloud' && (
+            <Button
+              variant="primary"
+              size="md"
+              onClick={() => {
+                setActionError(null);
+                setCloudDialogOpen(true);
+              }}
+            >
+              {/* 实测通过只是结论，档案要保存才算写入：按钮名字随后改成这一步该做的事。 */}
+              {cloudResult !== null &&
+              cloudResult.conclusion === 'ok' &&
+              cloudResult.wsConclusion === 'ok'
+                ? '返回表单保存'
+                : '填写地址与密钥'}
+            </Button>
+          )}
+          {stage !== 'mode' && stage !== 'finish' && (
+            <Button
+              variant="ghost"
+              size="md"
+              onClick={() => {
+                setStage('mode');
+                setLocalError(null);
+                setNotice(null);
+              }}
+            >
+              返回
+            </Button>
+          )}
+        </div>
+
+        <span className="block max-w-lg text-[11px] leading-4 text-text-tertiary">
+          跳过后面板处于未连接状态，可随后在设置里的「连接」分区配置后端。
+        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={finishing}
+          onClick={() => void skip()}
+        >
+          跳过
+        </Button>
 
         <ConnectionProfileDialog
           open={cloudDialogOpen}

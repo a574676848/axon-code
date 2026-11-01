@@ -127,23 +127,17 @@ fn unknown_protocol_version_asks_the_user_to_upgrade_the_client() {
         "{}",
         failure.message()
     );
-    assert!(failure.is_outdated_backend());
+    assert!(failure.is_protocol_mismatch());
 }
 
 #[test]
-fn outdated_backend_maps_to_a_minimal_capability_set_with_a_version_warning() {
-    let caps = ProbeOutcome::Outdated.caps_state();
-    assert!(caps.backend_outdated(), "老后端必须给出升级后台的结论");
-    let set = caps.set().expect("老后端仍属已知能力位");
-    assert!(!set.config, "老后端不含本协议的路由族");
-}
-
-#[test]
-fn failed_probe_maps_to_unknown_instead_of_outdated() {
+fn failed_probe_maps_to_unknown_capabilities() {
     let caps =
         ProbeOutcome::Failed(ProbeFailure::Unreachable("连接被拒绝".to_owned())).caps_state();
-    assert!(caps.set().is_none());
-    assert!(!caps.backend_outdated(), "连不上不得被判为版本过旧");
+    assert!(
+        caps.set().is_none(),
+        "连不上时能力位必须是未知，不能编一套出来"
+    );
 }
 
 #[test]

@@ -212,6 +212,15 @@ async fn custom(State(state): State<Arc<GatewayHttpState>>, request: Request) ->
         }
         Err(_) => return json_error(503, "gateway_unavailable"),
     };
+    /*
+     * 直连场景的来源 IP：由 `into_make_service_with_connect_info` 注入到请求扩展里。
+     *
+     * 必须在拆包之前取：拆包之后请求本体已经交出去了。它只用于审计，不参与鉴权。
+     */
+    let socket_peer = request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|axum::extract::ConnectInfo(address)| address.ip().to_string());
     let (parts, body) = request.into_parts();
     if request_head_bytes(&parts.method, &parts.uri, &parts.headers) > MAX_HEADER_BYTES {
         return json_error(431, "headers_too_large");
@@ -239,9 +248,8 @@ async fn custom(State(state): State<Arc<GatewayHttpState>>, request: Request) ->
     let method = parts.method.as_str().to_owned();
     let path = parts.uri.path().to_owned();
     let query = parts.uri.query().map(str::to_owned);
-    // 对端地址尽力而为：优先取反代转发的来源，其次取 `X-Forwarded-For` 的第一段。
-    // 直连时两者都可能缺失，此时审计行写 null，不虚构地址。
-    let peer = peer_address(&parts.headers);
+    // 对端地址：反代场景取转发头，直连场景取连接的对端地址。两者都只用于审计。
+    let peer = peer_address(&parts.headers).or(socket_peer);
     let body = match axum::body::to_bytes(body, limit).await {
         Ok(bytes) => bytes,
         Err(_) => return json_error(413, "body_too_large"),
