@@ -390,22 +390,31 @@ fn http_stream_idle_timeout_resets_after_each_event() {
                 b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: keep-alive\r\nTransfer-Encoding: chunked\r\n\r\n",
             )
             .unwrap();
-        for event in [
-            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"a\"}\n\n",
-            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"b\"}\n\n",
-            "data: {\"type\":\"response.completed\",\"response\":{}}\n\n",
-        ] {
+        // 事件间隔远小于 idle 超时、事件总数让总时长明显超过 idle 超时：
+        // 只有「每个事件都重置计时」的实现才能完整跑完，而单次间隔即便被调度抖动拉长一倍
+        // 也不会误报超时。
+        const EVENT_COUNT: usize = 10;
+        const EVENT_INTERVAL: Duration = Duration::from_millis(20);
+        for index in 0..EVENT_COUNT {
+            let event = if index + 1 == EVENT_COUNT {
+                "data: {\"type\":\"response.completed\",\"response\":{}}\n\n".to_owned()
+            } else {
+                format!(
+                    "data: {{\"type\":\"response.output_text.delta\",\"delta\":\"{index}\"}}\n\n"
+                )
+            };
             if try_write_http_chunk(&mut stream, event.as_bytes()).is_err() {
                 return;
             }
-            std::thread::sleep(Duration::from_millis(40));
+            std::thread::sleep(EVENT_INTERVAL);
         }
         let _ = stream.write_all(b"0\r\n\r\n");
         let _ = stream.flush();
     });
     let input = ProviderHttpTransportInput {
         request_plan: test_request_plan(&format!("http://{address}/v1/responses")),
-        timeout_ms: 70,
+        // 200ms 的流总长对 100ms 的 idle 超时：不重置计时的实现必然超时，重置的实现必然跑完。
+        timeout_ms: 100,
         enable_request_compression: false,
     };
 

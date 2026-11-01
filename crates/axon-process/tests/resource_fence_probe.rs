@@ -172,11 +172,14 @@ fn windows_job_object_without_limits_lets_a_normal_command_finish() {
 #[test]
 #[cfg(target_os = "linux")]
 fn probe_binary_applies_the_production_path_and_reports_limits() {
+    // 这里刻意不设 nproc：RLIMIT_NPROC 按 uid 计数，CI runner 上同一 uid 还有成千上万个
+    // 进程（同二进制里的并发派生用例也会把计数顶到它的上限），本机无法控制在跑「真实命令」
+    // 时还剩多少配额，断言会随兄弟用例的时序抖动。nproc 的报告口径由派生拒服用例覆盖。
     let limits = ProcessResourceLimits {
         max_file_bytes: Some(TEST_SMALL_FILE_BYTES),
-        max_processes: Some(TEST_SMALL_PROCESSES),
         max_open_files: Some(TEST_SMALL_OPEN_FILES),
         max_address_space_bytes: Some(TEST_SMALL_ADDRESS_SPACE_BYTES),
+        ..ProcessResourceLimits::off()
     };
     let output = probe(limits, Some("true")).expect("探针应可启动");
     let stdout = output_text(&output);
