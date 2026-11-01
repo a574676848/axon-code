@@ -430,7 +430,20 @@ fn split_absolute_root(
 /// 宿主平台不同而得到不同状态码，也不该把「拒绝」泄漏成「不存在」。
 fn reject_foreign_windows_form(input: &str) -> Result<(), Rejection> {
     let bytes = input.as_bytes();
-    if bytes.starts_with(b"\\\\") && bytes.get(2).is_some_and(|third| *third == b'.') {
+    // 反斜杠双分隔符开头的形态在 unix 上只是普通文件名，但它们全部是 Windows 专有的
+    // 越界写法：`\\?\`（verbatim）、`\\.\`（设备）、`\\server\share`（UNC）。
+    if input.starts_with("\\\\") {
+        return Err(match bytes.get(2).copied().unwrap_or(b'\0') {
+            b'?' => Rejection::VerbatimPrefix,
+            b'.' => Rejection::DeviceNamespace,
+            _ => Rejection::Unc,
+        });
+    }
+    // 正斜杠写法只认带 `?`/`.` 第三段的两种，`//foo` 在 POSIX 下仍是合法绝对路径。
+    if input.starts_with("//?/") {
+        return Err(Rejection::VerbatimPrefix);
+    }
+    if input.starts_with("//./") {
         return Err(Rejection::DeviceNamespace);
     }
     if input.contains("::$") {
