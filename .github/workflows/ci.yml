@@ -37,7 +37,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: "1"
+  # CI 上增量编译只会更慢并让缓存膨胀（rust-cache 同样建议 CI 关闭），
+  # 增量产物由本机的 target/ 承担，与门禁用例无关。
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   changes:
@@ -125,18 +127,27 @@ jobs:
         with:
           shared-key: cargo-${{ matrix.os }}
           cache-targets: true
+          # 只让 master 写缓存：PR 只读同一份，避免每次 PR 都覆盖导致互相抖动与提前淘汰。
+          save-if: ${{ github.ref == 'refs/heads/master' }}
 
-      - name: 安装 Linux 系统依赖 (Tauri 2)
+      # apt 依赖（webkit / rsvg / dbus 等）每次重装约 30s，按包列表缓存后命中即只做本地安装。
+      - name: 安装 Linux 系统依赖 (Tauri 2 与系统凭据库)
         if: needs.changes.outputs.code == 'true' && runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          # libdbus-1-dev 是桌面端 Linux 凭据库（Secret Service）的构建依赖；
+          # 桌面会话里通常已有运行期组件，CI 只编译，因此装开发头文件即可。
+          packages: libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev
+          version: 1.0
 
       - name: 准备 Node 环境
         if: needs.changes.outputs.code == 'true'
         uses: actions/setup-node@v5
         with:
           node-version: 22
+          # 缓存 npm 下载目录：`npm ci` 严格按锁文件还原，命中缓存时只剩本地链接。
+          cache: npm
+          cache-dependency-path: crates/axon-desktop/ui/package-lock.json
 
       - name: 前端构建 (axon-desktop UI)
         if: needs.changes.outputs.code == 'true'
@@ -160,10 +171,8 @@ jobs:
 
       # 依赖解析锁在 Cargo.lock：CI 不做实时重新解析，避免上游新版本发布
       # 在无代码改动时把已绿的 master 变成红。升级依赖走 dependabot/显式 PR。
-      - name: 编译检查
-        if: needs.changes.outputs.code == 'true'
-        run: cargo check --locked --workspace --all-features
-
+      # 这里不再单跑 `cargo check`：下一步的 clippy 带 `-D warnings` 且覆盖 --all-targets，
+      # 是它的严格超集，重复编译一次只会把每条腿拉长 5 到 8 分钟。
       - name: Clippy 静态分析
         if: needs.changes.outputs.code == 'true'
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
