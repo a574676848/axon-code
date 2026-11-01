@@ -110,6 +110,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          # 空白与冲突痕迹检查以 HEAD^ 为基线，浅克隆（默认 depth 1）下没有父母提交。
+          fetch-depth: 2
 
       # 纯文档改动不进入构建矩阵。这里刻意不用 job 级 if 跳过整个作业：
       # 被跳过的必需检查不会上报 success，分支保护会卡住合并。
@@ -182,7 +185,9 @@ jobs:
         if: needs.changes.outputs.code == 'true'
         shell: bash
         run: |
-          base=$(git rev-parse HEAD^ 2>/dev/null || git rev-parse HEAD)
+          # 浅克隆或根提交时 HEAD^ 不存在；git rev-parse 会把未解析的参数原样回显到 stdout，
+          # 于是 $(...) 会捕获到两行，后续 diff 直接 fatal。--verify --quiet 让失败时输出为空。
+          base=$(git rev-parse --verify --quiet HEAD^ || git rev-parse HEAD)
           git diff --check "$base" HEAD
 
       - name: 编译期 lint 豁免检查
