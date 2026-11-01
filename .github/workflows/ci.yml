@@ -103,6 +103,8 @@ jobs:
           - os: macos-latest
             runner: macos-14
     runs-on: ${{ matrix.runner }}
+    # 单腿墙钟上限：卡死的用例或交互式进程不该长期占用 runner。
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v5

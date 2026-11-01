@@ -121,3 +121,51 @@ cargo build -p axon-desktop --release --locked
 - **Pull Request**：按 PR 模板填写变更说明、影响面与验证证据；门禁未全绿的 PR 不进入评审。
 - **评审期望**：围绕正确性、边界条件、跨平台影响与文档一致性给结论；作者负责在合并前消除未决项。
 - **协作约定**：所有项目空间适用 [行为准则](./CODE_OF_CONDUCT.md)。
+
+---
+
+## 7. 分支模型与合并（trunk-based）
+
+`master` 是唯一长期分支，任何时刻都应处于可发布状态。
+
+| 分支 | 用途 | 生命周期 |
+|---|---|---|
+| `master` | 唯一集成分支，受保护 | 永久 |
+| `feat/<slug>` | 新功能 | 短命，建议不超过 5 天 |
+| `fix/<slug>` | 缺陷修复 | 短命 |
+| `chore/<slug>`、`docs/<slug>`、`deps/<slug>` | 工程杂务、文档、依赖升级 | 短命 |
+
+- 所有分支从 `master` 切出、合回 `master`，合并后立即删除，仓库长期只保留 `master`。
+- `master` 受分支保护：必须走 PR，且三项必需检查（`Check (ubuntu-latest)`、`Check (windows-latest)`、`Check (macos-latest)`）全绿。
+- 管理员账号当前保留绕过权限，只用于构建口径类紧急修复；常规改动一律走 PR。
+- 禁止强制推送 `master`；推送被拒时先 `pull --rebase` 再重试。
+
+## 8. 提交信息规范
+
+squash 合并时 PR 标题即最终提交信息：
+
+```text
+<type>(<scope>): <中文摘要>
+
+<正文：为什么改、影响面、验证方式>
+```
+
+- `type` 取值：`feat`、`fix`、`refactor`、`perf`、`docs`、`test`、`build`、`ci`、`chore`、`revert`。
+- `scope` 取值：crate 名或 `ci`、`docs`、`deps`，例如 `feat(desktop)`、`fix(agent-runtime)`。
+- 摘要不超过 50 字；全文不使用 en/em 破折号。
+- 破坏性变更在正文首行写 `BREAKING CHANGE:` 并说明迁移方式。
+
+## 9. 发布流程
+
+1. 版本号遵循语义化版本；0.x 阶段 MINOR 承载功能、PATCH 承载修复。
+2. 在 `master` 上打 annotated tag `vX.Y.Z`，由 `.github/workflows/release.yml` 出包。
+3. tag 只允许打在 `master` 上；指向其它分支的 tag 不进入发布。
+4. `CHANGELOG.md` 按 Keep a Changelog 维护，发布前补齐当次版本段落。
+
+## 10. 依赖升级
+
+- Dependabot 每周提一次，patch 与 minor 分组，单生态待处理上限 3。
+- 大版本不自动提，需维护者显式发起，并在 PR 中说明影响面与三平台检查结果。
+- 只接受稳定版；`alpha`、`beta`、`rc`、`canary`、`next` 一律不引入。
+- 改动 `Cargo.lock` 的 PR 必须核对三平台检查结果。
+- 功能 PR 不得夹带依赖升级。

@@ -1,12 +1,14 @@
 version: 2
 
+# 升级节奏与闸门：每周一次、按生态分组、只走稳定版。
+# 大版本不自动提，需维护者显式发起，避免把已绿的 master 顶红。
 updates:
   - package-ecosystem: cargo
     directory: "/"
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
     commit-message:
       prefix: "chore(deps)"
     groups:
@@ -15,13 +17,22 @@ updates:
           - "*"
         update-types:
           - patch
+      cargo-minor:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
 
   - package-ecosystem: npm
     directory: "/crates/axon-desktop/ui"
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
     commit-message:
       prefix: "chore(deps)"
     groups:
@@ -30,6 +41,15 @@ updates:
           - "*"
         update-types:
           - patch
+      npm-minor:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
 
   - package-ecosystem: github-actions
     directory: "/"

@@ -1,3 +1,11 @@
+## 提交信息（PR 标题）
+
+<!-- squash 合并后本标题即提交信息，格式：
+<type>(<scope>): <中文摘要>
+type 取 feat / fix / refactor / perf / docs / test / build / ci / chore / revert
+scope 取 crate 名或 ci / docs / deps
+摘要不超过 50 字，全文不使用 en/em 破折号 -->
+
 ## 变更说明
 
 <!-- 说明为什么改、改了什么，以及关键设计取舍 -->
