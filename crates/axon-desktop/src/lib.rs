@@ -135,6 +135,7 @@ use std::sync::Arc;
 use system_info::system_info;
 use tauri::Emitter;
 use terminal::{terminal_close, terminal_open, terminal_resize, terminal_shells, terminal_write};
+use ui_failure::ui_heartbeat;
 use usage::{usage_diagnostics, usage_distribution, usage_events, usage_overview, usage_realtime};
 use voice::{
     voice_audio, voice_cancel, voice_playback_drained, voice_preview, voice_start, voice_stop,
@@ -301,6 +302,7 @@ pub fn run() {
             secret_set,
             secret_clear,
             system_info,
+            ui_heartbeat,
             check_update,
             gateway_health,
             gateway_start_service,

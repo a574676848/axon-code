@@ -81,6 +81,9 @@ export const connectionState = (): Promise<ConnectionSnapshot> => call('connecti
 export const connectionRetryProbe = (): Promise<ConnectionSnapshot> =>
   call('connection_retry_probe');
 
+/** 界面存活报到：看门狗据此区分「界面还活着」与「渲染进程没了」。 */
+export const uiHeartbeat = (): Promise<void> => call('ui_heartbeat');
+
 /** 试连接：不落档案、不落凭据库。 */
 export const connectionTest = (input: ConnectionTestInput): Promise<ConnectionTestResult> =>
   call('connection_test', { input });

@@ -105,3 +105,23 @@ fn ws_base_converts_back_to_its_http_form_for_port_probing() {
         "http://127.0.0.1:3144"
     );
 }
+#[test]
+fn resolving_endpoints_sixty_times_reads_the_config_at_most_sixty_times() {
+    /*
+     * P1：一次请求只允许解析一次端点，60 次请求的读盘次数上限就是 60。
+     * 这里钉的是「没有隐藏的重复解析」，而不是具体耗时。
+     */
+    use crate::connection::endpoint::CONFIG_FILE_READS;
+    use std::sync::atomic::Ordering;
+
+    let before = CONFIG_FILE_READS.load(Ordering::Relaxed);
+    for _ in 0..60 {
+        let _ = super::local_endpoints();
+    }
+    let reads = CONFIG_FILE_READS.load(Ordering::Relaxed) - before;
+    assert!(
+        reads <= 60,
+        "60 次端点解析最多读 60 次配置，实际 {reads} 次"
+    );
+    assert_eq!(reads, 60, "每次解析恰好读一次配置，既不多也不少");
+}

@@ -1,0 +1,13 @@
+{
+  "recordedAt": "2026-11-01T07:28:46.4489841Z",
+  "measurements": {
+    "p1_endpoint_reads_assertion": 1,
+    "p12_file_route_hits": 0
+  },
+  "pending": [
+    "P2 断网启动到可见界面增量（毫秒）",
+    "P9 空闲 60 秒渲染进程 CPU（百分比）",
+    "P10 切档冷启动到可交互（毫秒，本机 / 云）",
+    "P11 上传 1/8/32 MiB 的相对成本（线性）"
+  ]
+}

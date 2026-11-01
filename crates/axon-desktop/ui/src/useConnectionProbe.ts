@@ -32,6 +32,9 @@ export interface ConnectionProbe {
   refreshConnection: () => Promise<void>;
 }
 
+/** 界面存活报到间隔。 */
+const HEARTBEAT_MS = 5000;
+
 /** 装配连接探活。 */
 export function useConnectionProbe(): ConnectionProbe {
   const [health, setHealth] = useState<GatewayHealth | null>(null);
@@ -95,6 +98,22 @@ export function useConnectionProbe(): ConnectionProbe {
       }),
     [refreshConnection],
   );
+
+  /*
+   * 存活报到：每 5 秒一条轻量 IPC，让宿主知道界面还活着。
+   *
+   * 它与探活是两件事：探活问「后端能用吗」，这条只报「界面还在」。看门狗在 20 秒
+   * 没收到报到时会把窗口切到兜底页，所以这条心跳必须常驻；探活则按事件触发，
+   * 不设定时器。
+   */
+  useEffect(() => {
+    const beat = () => {
+      void ipc.uiHeartbeat().catch(() => undefined);
+    };
+    beat();
+    const timer = window.setInterval(beat, HEARTBEAT_MS);
+    return () => window.clearInterval(timer);
+  }, []);
 
   return {
     health,

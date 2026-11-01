@@ -167,6 +167,12 @@ jobs:
           npm --prefix crates/axon-desktop/ui run lint
           npm --prefix crates/axon-desktop/ui test
 
+      # 性能契约：与基线比较，回退即失败；尚未人工测量的项在 CI 里放行并逐项列出。
+      - name: 性能契约门禁
+        if: needs.changes.outputs.code == 'true'
+        shell: pwsh
+        run: pwsh -NoLogo -NoProfile -File tools/verify-performance.ps1 -AllowIncomplete
+
       - name: 格式检查
         if: needs.changes.outputs.code == 'true'
         run: cargo fmt --all --check

@@ -17,6 +17,14 @@ use axon_config::{ConfigLoader, raw_string_values};
 
 use crate::connection::profile::EndpointSpec;
 
+/// 本机端点解析时读配置文件的次数（仅测试用）。
+///
+/// P1 要求「60 次请求不得重复全量解析状态文件与凭据」，而端点解析是唯一会读盘的
+/// 那一处；把次数记下来，测试才能断言它随请求线性且上限为 60。
+#[cfg(test)]
+pub(crate) static CONFIG_FILE_READS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 /// 网关 HTTP 监听地址配置键。
 pub const KEY_HTTP_BIND: &str = "remote.gateway.http_bind";
 /// 网关 WebSocket 监听地址配置键。
@@ -70,6 +78,8 @@ pub fn local_endpoints() -> ResolvedEndpoints {
         return fallback_endpoints();
     };
     let values = raw_string_values(&config_path, &[KEY_HTTP_BIND, KEY_WEBSOCKET_BIND]);
+    #[cfg(test)]
+    CONFIG_FILE_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let http_bind = values
         .first()
         .and_then(Clone::clone)

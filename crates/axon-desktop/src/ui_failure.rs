@@ -60,6 +60,16 @@ pub fn note_ui_alive() {
     LAST_SEEN_MS.store(now_ms(), Ordering::Release);
 }
 
+/// Tauri IPC 命令：界面存活报到。
+///
+/// 这是**存活信号**，不是探活：探活只在明确的事件上发生（启动、请求失败、恢复可见、
+/// 用户点重试），而看门狗需要一条持续的心跳才能区分「界面还活着」与「渲染进程没了」。
+/// 两者必须分开，否则删掉探活定时器会把存活监控一起静默掉，界面随后被误判为卡死。
+#[tauri::command]
+pub fn ui_heartbeat() {
+    note_ui_alive();
+}
+
 /// 安装看门狗；主窗口建好后调用一次。
 pub fn install_watchdog(window: &tauri::WebviewWindow) {
     note_ui_alive();
