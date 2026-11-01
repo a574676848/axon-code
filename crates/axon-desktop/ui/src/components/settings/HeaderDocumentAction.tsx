@@ -10,13 +10,15 @@ import { Text } from '../ui/surfaces';
  * 配置类分区打开 config.toml，MCP 打开 .mcp.json，技能打开技能目录，
  * 人设与准则打开各自源文件。
  *
- * 打开入口只属于**配置真正落地的分区**：系统设置、关于与用量统计没有对应的
+ * 打开入口只属于**配置真正落地的分区**：连接、系统设置、关于与用量统计没有对应的
  * 配置文件，这些分区不渲染任何按钮，而不是退回去开 config.toml 凑一个入口。
  * 目标不存在时同样不渲染，打开中禁用，失败时在按钮左侧就地报错。
  */
 
 /** 分区到打开目标的映射；没有可打开目标的分区取 null。 */
 const SECTION_TARGET: Record<SettingsSection, string | null> = {
+  // 连接分区没有对应的配置文件：档案由客户端自己的状态文件承载，不是 config.toml。
+  connection: null,
   general: 'config',
   models: 'config',
   balancer: 'config',

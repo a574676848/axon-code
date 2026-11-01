@@ -1,12 +1,24 @@
 //! 工作区文件浏览：右侧栏的文件树与文件查看。
 //!
-//! 只读，且**严格限定在工作区根目录内**：任何越出根目录的相对路径（`..`、
-//! 绝对路径、经符号链接跳出的真实路径）都被拒绝。这不是运行态数据，因此直接读
-//! 本地文件系统，不经网关；但边界判断必须自己做，不能指望调用方守规矩。
+//! 数据来源按生效档案分流（长官裁决：本机档案直读、云档案经网关）：
+//!
+//! - **本机档案**：直接读本机文件系统。文件列表与读取是热路径，同一台机器上再绕一次
+//!   HTTP 只多付一跳延迟，因此保留既有实现；
+//! - **云档案**：文件在远端，一律经网关（`/api/v1/files`、`/api/v1/files/content`、
+//!   `/api/v1/fs/dirs`）。
+//!
+//! 本机打开类动作（默认程序、打开方式、文件管理器定位）只能是本机动作：云档案生效时
+//! 一律拒绝，不启动任何本机进程（合同 §9 阶段 3）。
+//!
+//! 本机档案下，路径**严格限定在工作区根目录与用户主目录内**：任何越出范围的相对路径
+//! （`..`、绝对路径、经符号链接跳出的真实路径）都被拒绝。边界判断必须自己做，不能
+//! 指望调用方守规矩。
 
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+
+use crate::workspace_files_gateway as gateway;
 
 /// 单次列目录返回的最大条目数。
 const MAX_DIRECTORY_ENTRIES: usize = 500;
@@ -16,6 +28,49 @@ const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_BINARY_BYTES: u64 = 12 * 1024 * 1024;
 /// 判断二进制文件时检查的前缀字节数。
 const BINARY_SNIFF_BYTES: usize = 8 * 1024;
+
+/// 云档案下本机动作的统一拒绝文案。
+pub(crate) const CLOUD_LOCAL_ACTION_REJECTED: &str = "云档案下不支持在本机打开，请在远端服务上操作";
+
+/// 文件类命令的数据来源。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FileSource {
+    /// 本机档案：直读本机文件系统。
+    Local,
+    /// 云档案：经网关读写远端文件。
+    Gateway,
+}
+
+/// 只读判定：给定「当前是否为云档案」的结论，选出数据来源。
+///
+/// 单测直接断言这个函数，不需要起网关，也不依赖开发机上此刻生效的是哪个档案。
+#[must_use]
+pub(crate) fn file_source(is_cloud: bool) -> FileSource {
+    if is_cloud {
+        FileSource::Gateway
+    } else {
+        FileSource::Local
+    }
+}
+
+/// 当前生效档案的数据来源。
+fn current_file_source() -> FileSource {
+    file_source(crate::connection::active_is_cloud())
+}
+
+/// 只读判定：给定「当前是否为云档案」的结论，本机动作是否被拒绝。
+#[must_use]
+pub(crate) fn local_action_rejection(is_cloud: bool) -> Option<&'static str> {
+    is_cloud.then_some(CLOUD_LOCAL_ACTION_REJECTED)
+}
+
+/// 按当前生效档案判定本机动作是否允许。
+fn ensure_local_action_allowed() -> Result<(), String> {
+    match local_action_rejection(crate::connection::active_is_cloud()) {
+        Some(message) => Err(message.to_owned()),
+        None => Ok(()),
+    }
+}
 
 /// 目录项。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,7 +126,21 @@ pub struct FileBytesDto {
 /// - 绝对路径只有落在主目录或工作区内才接受，`C:\Windows` 这类自由路径仍然拒绝。
 ///
 /// `pub(crate)` 是给「用其他应用打开」共用的：那条路径同样必须先过这一关。
+///
+/// # Errors
+///
+/// 云档案生效时返回拒绝文案；本机档案下越界、`..` 跳转或目标不存在时返回原因。
 pub(crate) fn resolve_within(root: &str, relative: &str) -> Result<PathBuf, String> {
+    // 云档案下本机动作没有意义：远端文件不在本机，拉起本机进程只会打开一个同名的
+    // 本地文件。判定放在这里，是因为「用默认程序打开」「用其他应用打开」「枚举打开
+    // 方式」「在文件管理器中显示」四条命令都先经过这一关，四条命令因此共用同一句
+    // 拒绝文案，也不会各写一份。
+    ensure_local_action_allowed()?;
+    resolve_within_locally(root, relative)
+}
+
+/// 本机档案下的路径解析：工作区与用户主目录两级范围。
+fn resolve_within_locally(root: &str, relative: &str) -> Result<PathBuf, String> {
     let root_path = Path::new(root);
     if !root_path.is_dir() {
         return Err(format!("工作区目录不存在：{root}"));
@@ -155,10 +224,34 @@ fn relative_display(root: &Path, path: &Path) -> Result<String, String> {
     Err("路径越出工作区范围".to_string())
 }
 
+/// 目录在前、名称升序：两种数据来源共用同一套展示顺序，界面不会跳序。
+fn sort_entries(entries: &mut [FileEntryDto]) {
+    entries.sort_by(|left, right| {
+        right
+            .kind
+            .cmp(&left.kind)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+}
+
 /// 列出工作区内某个目录的直接子项：目录在前，随后按名称排序。
+///
+/// # Errors
+///
+/// 云档案下由网关给出结论；本机档案下目录不存在、越界或读取失败时返回原因。
 pub fn list_entries(root: &str, relative: &str) -> Result<Vec<FileEntryDto>, String> {
+    if current_file_source() == FileSource::Gateway {
+        let mut entries = gateway::list_entries(root, relative)?;
+        sort_entries(&mut entries);
+        return Ok(entries);
+    }
+    list_entries_locally(root, relative)
+}
+
+/// 本机档案下的目录列表。
+fn list_entries_locally(root: &str, relative: &str) -> Result<Vec<FileEntryDto>, String> {
     let root_path = Path::new(root);
-    let directory = resolve_within(root, relative)?;
+    let directory = resolve_within_locally(root, relative)?;
     if !directory.is_dir() {
         return Err("目标不是目录".to_string());
     }
@@ -182,12 +275,7 @@ pub fn list_entries(root: &str, relative: &str) -> Result<Vec<FileEntryDto>, Str
             kind: kind_label.to_string(),
         });
     }
-    entries.sort_by(|left, right| {
-        right
-            .kind
-            .cmp(&left.kind)
-            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
-    });
+    sort_entries(&mut entries);
     Ok(entries)
 }
 
@@ -195,8 +283,30 @@ pub fn list_entries(root: &str, relative: &str) -> Result<Vec<FileEntryDto>, Str
 ///
 /// 二进制文件不返回内容，只回一个可读结论；超出上限的文件截断到上限，
 /// 并如实标注 `truncated`，不假装内容完整。
+///
+/// # Errors
+///
+/// 云档案下由网关给出结论；本机档案下越界、目标不是文件或读取失败时返回原因。
 pub fn read_text(root: &str, relative: &str) -> Result<FileTextDto, String> {
-    let path = resolve_within(root, relative)?;
+    if current_file_source() == FileSource::Gateway {
+        let (text, truncated) = gateway::fetch_text(root, relative)?;
+        // 二进制判定与直读同一口径：前 8 KiB 出现 NUL 即按二进制处理，正文留空。
+        let bytes = text.as_bytes();
+        let binary = bytes[..bytes.len().min(BINARY_SNIFF_BYTES)].contains(&0);
+        return Ok(FileTextDto {
+            path: cloud_display(root, relative),
+            absolute_path: cloud_absolute(root, relative),
+            content: if binary { String::new() } else { text },
+            truncated: truncated && !binary,
+            binary,
+        });
+    }
+    read_text_locally(root, relative)
+}
+
+/// 本机档案下的文本读取。
+fn read_text_locally(root: &str, relative: &str) -> Result<FileTextDto, String> {
+    let path = resolve_within_locally(root, relative)?;
     let metadata =
         std::fs::metadata(&path).map_err(|error| format!("读取文件信息失败：{error}"))?;
     if !metadata.is_file() {
@@ -271,8 +381,17 @@ pub struct PathStatDto {
 ///
 /// 解析不出来（文件不存在、越出允许范围）时只回答「不是目录」：真正的错误由后续的
 /// 读取流程给出，这里多一种错误文案只会让同一件事有两种说法。
+#[must_use]
 pub fn stat_path(root: &str, relative: &str) -> PathStatDto {
-    let Ok(path) = resolve_within(root, relative) else {
+    if current_file_source() == FileSource::Gateway {
+        return stat_path_cloud(root, relative);
+    }
+    stat_path_locally(root, relative)
+}
+
+/// 本机档案下的路径探测。
+fn stat_path_locally(root: &str, relative: &str) -> PathStatDto {
+    let Ok(path) = resolve_within_locally(root, relative) else {
         return PathStatDto {
             is_dir: false,
             absolute_path: String::new(),
@@ -285,6 +404,94 @@ pub fn stat_path(root: &str, relative: &str) -> PathStatDto {
         display_path: relative_display(Path::new(root), &path)
             .unwrap_or_else(|_| relative.trim().to_string()),
     }
+}
+
+/// 云档案下的路径探测：用目录列表与目录路由组合判定。
+///
+/// 先列父目录，一次就同时得到「在不在」与「是目录还是文件」；列表里没有（父目录不在
+/// 已登记的根内、或条目不可见）再用目录路由问一次绝对路径。两处都得不出结论时如实
+/// 回报不可判定：`absolute_path` 留空，界面据此不走目录展开，绝不伪造「是文件」。
+fn stat_path_cloud(root: &str, relative: &str) -> PathStatDto {
+    let text = relative.trim();
+    let undecidable = || PathStatDto {
+        is_dir: false,
+        absolute_path: String::new(),
+        display_path: text.to_string(),
+    };
+    if text.is_empty() || text == "." {
+        return PathStatDto {
+            is_dir: true,
+            absolute_path: cloud_absolute(root, text),
+            display_path: String::new(),
+        };
+    }
+    let display = cloud_display(root, text);
+    let absolute = cloud_absolute(root, text);
+    let (parent, leaf) = match display.rsplit_once('/') {
+        Some((parent, leaf)) => (parent.to_string(), leaf.to_string()),
+        None => (String::new(), display.clone()),
+    };
+    if let Ok(entries) = gateway::list_entries(root, &parent)
+        && let Some(entry) = entries
+            .iter()
+            .find(|entry| entry.path == display || entry.name == leaf)
+    {
+        return PathStatDto {
+            is_dir: entry.kind == "dir",
+            absolute_path: absolute,
+            display_path: display,
+        };
+    }
+    match gateway::is_directory(&absolute) {
+        Ok(is_dir) => PathStatDto {
+            is_dir,
+            absolute_path: absolute,
+            display_path: display,
+        },
+        Err(_) => undecidable(),
+    }
+}
+
+/// 云档案的展示用相对路径：输入是根内绝对路径时还原成相对形式，否则原样返回。
+fn cloud_display(root: &str, relative: &str) -> String {
+    let text = relative.trim().replace('\\', "/");
+    let base = root.trim().replace('\\', "/");
+    let base = base.trim_end_matches('/');
+    if base.is_empty() {
+        return text;
+    }
+    let Some(prefix) = text.get(..base.len()) else {
+        return text;
+    };
+    if !prefix.eq_ignore_ascii_case(base) {
+        return text;
+    }
+    // 根之后必须紧跟分隔符或到此为止：`C:/work` 不是 `C:/workspace` 的前缀。
+    let rest = text.get(base.len()..).unwrap_or_default();
+    if rest.is_empty() || rest.starts_with('/') {
+        rest.trim_start_matches('/').to_string()
+    } else {
+        text
+    }
+}
+
+/// 云档案的绝对路径：相对输入拼到根下，绝对输入原样返回（统一正斜杠）。
+fn cloud_absolute(root: &str, relative: &str) -> String {
+    let text = relative.trim().replace('\\', "/");
+    let base = root.trim().replace('\\', "/");
+    let base = base.trim_end_matches('/');
+    if text.is_empty() || text == "." {
+        return base.to_string();
+    }
+    let is_absolute = text.starts_with('/')
+        || text
+            .as_bytes()
+            .get(1)
+            .is_some_and(|separator| *separator == b':');
+    if is_absolute {
+        return text;
+    }
+    format!("{base}/{}", text.trim_start_matches('/'))
 }
 
 /// Tauri IPC 命令：探测工作区内的一个路径是文件还是目录。
@@ -322,11 +529,32 @@ fn mime_of(path: &Path) -> &'static str {
 
 /// 读取工作区内一个文件的原始字节。
 ///
-/// 与文本读取同一套边界：路径必须先过工作区校验，符号链接跳出同样被拒绝。
-/// 二进制文件没有「截断后仍然可用」这一说，因此超限时如实标注 `truncated`，
-/// 由渲染器决定是提示还是拒绝。
+/// 与文本读取同一套边界：本机档案下路径必须先过工作区校验，符号链接跳出同样被拒绝；
+/// 云档案下由网关按服务端自己的路径边界判定。
+///
+/// 二进制文件没有「截断后仍然可用」这一说：本机档案超限时如实标注 `truncated`，
+/// 由渲染器决定是提示还是拒绝；网关对超出字节上限的文件直接拒绝，不回残缺字节。
+///
+/// # Errors
+///
+/// 云档案下由网关给出结论；本机档案下越界、目标不是文件或读取失败时返回原因。
 pub fn read_bytes(root: &str, relative: &str) -> Result<FileBytesDto, String> {
-    let path = resolve_within(root, relative)?;
+    if current_file_source() == FileSource::Gateway {
+        let (data_base64, mime) = gateway::fetch_bytes(root, relative)?;
+        return Ok(FileBytesDto {
+            path: cloud_display(root, relative),
+            absolute_path: cloud_absolute(root, relative),
+            mime,
+            data_base64,
+            truncated: false,
+        });
+    }
+    read_bytes_locally(root, relative)
+}
+
+/// 本机档案下的原始字节读取。
+fn read_bytes_locally(root: &str, relative: &str) -> Result<FileBytesDto, String> {
+    let path = resolve_within_locally(root, relative)?;
     let metadata =
         std::fs::metadata(&path).map_err(|error| format!("读取文件信息失败：{error}"))?;
     if !metadata.is_file() {
@@ -354,12 +582,20 @@ pub fn workspace_read_bytes(root: String, relative_path: String) -> Result<FileB
 }
 
 /// 用系统默认程序打开工作区内的文件。
+///
+/// # Errors
+///
+/// 云档案下返回拒绝文案；本机档案下越界或系统调用失败时返回原因。
 pub fn open_default(root: &str, relative: &str) -> Result<(), String> {
     let path = resolve_within(root, relative)?;
     crate::process::open_path(&path)
 }
 
 /// 在文件管理器中定位工作区内的文件。
+///
+/// # Errors
+///
+/// 云档案下返回拒绝文案；本机档案下越界或系统调用失败时返回原因。
 pub fn reveal(root: &str, relative: &str) -> Result<(), String> {
     let path = resolve_within(root, relative)?;
     crate::process::reveal(&path)
@@ -376,113 +612,6 @@ pub fn workspace_open_default(root: String, relative_path: String) -> Result<(),
 pub fn workspace_reveal(root: String, relative_path: String) -> Result<(), String> {
     reveal(&root, &relative_path)
 }
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn scratch() -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("系统时间")
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("axon-desktop-files-{nonce}"));
-        std::fs::create_dir_all(root.join("nested")).expect("创建测试目录");
-        std::fs::write(root.join("nested").join("readme.md"), "内容").expect("写入测试文件");
-        root
-    }
-
-    #[test]
-    fn listing_puts_directories_first_and_reports_relative_paths() {
-        let root = scratch();
-        let entries = list_entries(&root.to_string_lossy(), "").expect("列目录");
-        assert_eq!(entries[0].kind, "dir");
-        assert_eq!(entries[0].path, "nested");
-        let nested = list_entries(&root.to_string_lossy(), "nested").expect("列子目录");
-        assert_eq!(nested.len(), 1);
-        assert_eq!(nested[0].path, "nested/readme.md");
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn escaping_the_workspace_root_is_rejected() {
-        let root = scratch();
-        for escape in ["..", "../..", "nested/../../etc", "C:/Windows"] {
-            assert!(
-                resolve_within(&root.to_string_lossy(), escape).is_err(),
-                "{escape} 必须被拒绝"
-            );
-        }
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn tilde_paths_resolve_to_the_user_home() {
-        let root = scratch();
-        let home = axon_config::user_home_dir().expect("用户主目录");
-        let home = home.canonicalize().expect("主目录可解析");
-        // 主目录下的一个真实文件：`~` 前缀与 `~/` 前缀都要落到同一处。
-        let marker = home.join("axon-tilde-probe.txt");
-        std::fs::write(&marker, "tilde").expect("写入探针文件");
-        for value in ["~/axon-tilde-probe.txt", "~"] {
-            let resolved = resolve_within(&root.to_string_lossy(), value).expect("解析 ~ 路径");
-            let expected = if value == "~" {
-                home.clone()
-            } else {
-                marker.clone()
-            };
-            assert_eq!(resolved, expected, "{value} 必须解析到主目录");
-        }
-        // 主目录下的绝对路径同样接受，展示成 `~/` 形式。
-        let text = read_text(
-            &root.to_string_lossy(),
-            &marker.to_string_lossy().replace('\\', "/"),
-        )
-        .expect("按绝对路径读取主目录文件");
-        assert_eq!(text.path, "~/axon-tilde-probe.txt");
-        // 主目录之外的自由路径仍然拒绝。
-        assert!(
-            resolve_within(
-                &root.to_string_lossy(),
-                "C:/Windows/System32/drivers/etc/hosts"
-            )
-            .is_err(),
-            "主目录之外的绝对路径必须被拒绝"
-        );
-        let _ = std::fs::remove_file(&marker);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn binary_files_report_a_readable_conclusion_instead_of_content() {
-        let root = scratch();
-        std::fs::write(root.join("blob.bin"), [0_u8, 1, 2, 3]).expect("写入二进制文件");
-        let text = read_text(&root.to_string_lossy(), "blob.bin").expect("读取二进制文件");
-        assert!(text.binary);
-        assert!(text.content.is_empty());
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn a_text_file_reports_both_the_relative_and_the_absolute_path() {
-        let root = scratch();
-        let text = read_text(&root.to_string_lossy(), "nested/readme.md").expect("读取文本文件");
-        assert_eq!(text.path, "nested/readme.md", "相对路径走正斜杠");
-        assert!(
-            Path::new(&text.absolute_path).is_absolute(),
-            "绝对路径必须是绝对路径：{}",
-            text.absolute_path
-        );
-        assert!(
-            text.absolute_path.ends_with("readme.md"),
-            "绝对路径必须指向同一个文件：{}",
-            text.absolute_path
-        );
-        assert!(
-            !text.absolute_path.contains(r"\\?\") && !text.absolute_path.contains("//?/"),
-            "绝对路径不得残留 Windows 扩展前缀：{}",
-            text.absolute_path
-        );
-        let _ = std::fs::remove_dir_all(&root);
-    }
-}
+#[path = "workspace_files_tests.rs"]
+mod tests;

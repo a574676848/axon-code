@@ -13,6 +13,8 @@ mod gateway_http_events;
 mod gateway_http_response;
 #[path = "gateway_http_routes.rs"]
 mod gateway_http_routes;
+#[path = "gateway_route_limits.rs"]
+mod gateway_route_limits;
 #[path = "gateway_voice.rs"]
 mod gateway_voice;
 #[path = "gateway_voice_frames.rs"]
@@ -229,6 +231,13 @@ impl GatewayAdapter for HttpGatewayAdapter {
             #[cfg(test)]
             voice_host: self.voice_host.clone(),
         });
+        // 关闭旧 token 通道是显式配置的结果：启动时留一行中文说明，避免事后把 401 误判成凭据失效。
+        if !state.context.legacy_token_enabled() {
+            state.log_access(
+                "INFO",
+                "Gateway 已关闭旧 token 通道（remote.gateway.legacy_token_enabled=false）：业务路由只接受已签发的 Key，全局 token 不再生效，管理面同时不可达",
+            );
+        }
         let handle = thread::spawn(move || run_server(listener, receiver, state));
         *self
             .handle

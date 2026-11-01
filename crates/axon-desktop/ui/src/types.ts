@@ -323,6 +323,7 @@ export interface CronSessionTarget {
 
 /** 设置弹窗的二级分区。 */
 export type SettingsSection =
+  | 'connection'
   | 'general'
   | 'models'
   | 'pricing'

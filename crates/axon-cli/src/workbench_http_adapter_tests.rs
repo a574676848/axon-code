@@ -230,3 +230,77 @@ fn stop_records_user_reason_for_the_lane_run_session() {
         "终态原因必须落到注册表，随完成通知回到 Agent"
     );
 }
+
+/// 组合器必须把网关解析出的身份交给各适配器。
+///
+/// 这条守卫针对的是「身份在组合层被悄悄丢掉」：网关注入的处理器只有这一个组合器，
+/// 它如果不覆写 `handle_request_as`，`/api/v1/keys` 这类按身份分级的适配器拿到的永远
+/// 是 `None`，连超管也会被拒成 403，而适配器自己的单测依旧全绿。
+#[test]
+fn composite_forwards_identity_to_every_handler() {
+    use axon_daemon::infrastructure::gateway_auth::GatewayIdentity;
+    use std::sync::Mutex;
+
+    /// 只记录拿到什么身份的处理器。
+    struct IdentityRecorder {
+        seen: Mutex<Option<Option<GatewayIdentity>>>,
+    }
+
+    impl GatewayHttpRouteHandler for IdentityRecorder {
+        fn handle_request(
+            &self,
+            _method: &str,
+            _path: &str,
+            _query: Option<&str>,
+            _body: &[u8],
+        ) -> Option<GatewayHttpResponse> {
+            // 无身份入口在这里被选中即说明身份确实为 None。
+            *self.seen.lock().expect("记录锁可用") = Some(None);
+            Some(GatewayHttpResponse::json(
+                200,
+                &serde_json::json!({ "ok": true }),
+            ))
+        }
+
+        fn handle_request_as(
+            &self,
+            _method: &str,
+            _path: &str,
+            _query: Option<&str>,
+            _body: &[u8],
+            identity: Option<&GatewayIdentity>,
+            _peer: Option<&str>,
+        ) -> Option<GatewayHttpResponse> {
+            *self.seen.lock().expect("记录锁可用") = Some(identity.cloned());
+            Some(GatewayHttpResponse::json(
+                200,
+                &serde_json::json!({ "ok": true }),
+            ))
+        }
+    }
+
+    let recorder = Arc::new(IdentityRecorder {
+        seen: Mutex::new(None),
+    });
+    let composite = CompositeHttpAdapter::new(vec![recorder.clone()]);
+
+    let response = composite.handle_request_as(
+        "GET",
+        "/api/v1/keys",
+        None,
+        b"",
+        Some(&GatewayIdentity::SuperAdmin),
+        None,
+    );
+    assert!(response.is_some(), "命中处理器时必须给出响应");
+    assert_eq!(
+        *recorder.seen.lock().expect("记录锁可用"),
+        Some(Some(GatewayIdentity::SuperAdmin)),
+        "身份必须原样透传给适配器"
+    );
+
+    // 无身份的调用同样照原样传下去：适配器据此拒绝，而不是被组合层替换成超管。
+    let response = composite.handle_request("GET", "/api/v1/keys", None, b"");
+    assert!(response.is_some());
+    assert_eq!(*recorder.seen.lock().expect("记录锁可用"), Some(None));
+}

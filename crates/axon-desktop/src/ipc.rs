@@ -1,4 +1,11 @@
-use std::collections::HashMap;
+//! 基础配置的 IPC 命令与数据模型。
+//!
+//! 界面的配置读写一律经网关（`GET /api/v1/config` 与 `PUT /api/v1/config` 的
+//! 联合模式），桌面端不再解析本机 `config.toml`：同一份代码在云端档案下因而
+//! 同样成立。下面的 `execute_*_at` 系列是本地实现，只服务离线自检
+//! （`--self-check` 在临时根内做读、校验、写、复读往返）与单元测试。
+
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
 
@@ -7,6 +14,8 @@ use axon_config::{
     provider_credential, set_config_value, to_toml_string,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::config_gateway::{self, ConfigUpdate};
 
 /// 前端键规格传输模型。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,14 +145,20 @@ fn convert_config_value_to_json(val: ConfigValue) -> serde_json::Value {
 
 /// 加载配置相邻 `.env` 中的凭据。
 ///
-/// 运行时会话启动时会加载该文件；桌面宿主必须做同样的事，
-/// 否则界面上会把已经配好的密钥误报成「未配置」。
+/// 运行时会话启动时会加载该文件；离线自检与单元测试走同一份读取逻辑，
+/// 否则已配好的密钥会被误报成「未配置」。
 fn ensure_credentials_loaded(config_path: &Path) {
     let Some(parent) = config_path.parent() else {
         return;
     };
     let _ = axon_config::load_provider_credentials_from_env_file(&parent.join(".env"));
 }
+
+// ------------------------------------------------- 本地实现（离线自检与单测）
+//
+// 下面这组函数按给定路径读写本机文件，只在两条场合使用：`--self-check` 在临时
+// 根里做「读、校验、写、复读」往返，以及单元测试。界面的配置命令只经网关，
+// 不得调用这里。
 
 /// 执行真实配置读取。
 pub fn execute_config_read_at(config_path: &Path) -> Result<ConfigReadResponse, String> {
@@ -318,12 +333,6 @@ pub fn execute_config_write_at(
     })
 }
 
-/// 解析当前用户的配置文件路径。
-fn user_config_path() -> Result<std::path::PathBuf, String> {
-    ConfigLoader::default_user_config_path()
-        .map_err(|error| format!("获取用户配置路径失败: {error:?}"))
-}
-
 /// 在指定路径上批量应用配置键值，备份后直接写入原文件。
 pub fn execute_apply_values_at(
     path: &Path,
@@ -414,63 +423,122 @@ pub fn execute_validate_values_at(
     }
 }
 
+// ---------------------------------------------------------------- 网关命令
+//
+// 界面只有这一组命令：数据来源是后台服务，桌面端不再碰本机配置文件。
+
 /// Tauri IPC 命令：读取基础配置。
+///
+/// 回执与 [`ConfigReadResponse`] 逐字同构，因此直接反序列化成既有类型。
+///
+/// # Errors
+///
+/// 网关不可达、凭据不匹配或后台服务版本过旧（缺该路由）。
 #[tauri::command(async)]
 pub fn config_read() -> Result<ConfigReadResponse, String> {
-    execute_config_read_at(&user_config_path()?)
+    config_gateway::decode(config_gateway::get_json(config_gateway::CONFIG_PATH)?)
 }
 
 /// Tauri IPC 命令：校验配置（纯内存，不落盘）。
+///
+/// 判定权在后台：`validate` 模式只校验、不落盘。校验没跑成同样按不通过上报，
+/// 绝不因为网关不通就报成合法。
 #[tauri::command(async)]
 pub fn config_validate(toml_content: String) -> ConfigValidateResponse {
-    execute_config_validate(&toml_content)
+    let update = ConfigUpdate::Validate { toml_content };
+    match update.send() {
+        Ok(receipt) => config_gateway::decode(receipt).unwrap_or_else(invalid_report),
+        Err(error) => invalid_report(error),
+    }
 }
 
-/// Tauri IPC 命令：备份后写入配置。
+/// Tauri IPC 命令：校验并写入配置（文本模式）。
+///
+/// # Errors
+///
+/// 配置校验未通过（后台拒绝落盘）、网关不可达或后台服务版本过旧。
 #[tauri::command(async)]
 pub fn config_write(toml_content: String) -> Result<ConfigWriteResponse, String> {
-    execute_config_write_at(&user_config_path()?, &toml_content)
+    let receipt = (ConfigUpdate::Text { toml_content }).send()?;
+    config_gateway::decode(receipt)
 }
 
-/// Tauri IPC 命令：批量应用配置键值并落盘。
+/// Tauri IPC 命令：批量应用配置键值并落盘（按值模式）。
+///
+/// 键名升序整理后交给后台逐键应用；空变更集由后台回「没有需要应用的变更」，
+/// 与旧行为一致，因此桌面端不另判一次。
+///
+/// # Errors
+///
+/// 某个键的取值不合法、网关不可达或后台服务版本过旧。
 #[tauri::command(async)]
 pub fn config_apply_values(values: HashMap<String, String>) -> Result<ConfigWriteResponse, String> {
-    execute_apply_values_at(&user_config_path()?, &values)
-}
-
-/// Tauri IPC 命令：对一批待应用变更做纯内存试算校验，不落盘。
-#[tauri::command(async)]
-pub fn config_validate_values(values: HashMap<String, String>) -> ConfigValidateResponse {
-    match user_config_path() {
-        Ok(path) => execute_validate_values_at(&path, &values),
-        Err(error) => ConfigValidateResponse {
-            valid: false,
-            errors: vec![error],
-            warnings: Vec::new(),
-            diff_summary: Vec::new(),
-        },
-    }
+    let receipt = (ConfigUpdate::Values {
+        values: values.into_iter().collect(),
+    })
+    .send()?;
+    config_gateway::decode(receipt)
 }
 
 /// Tauri IPC 命令：把单个配置项恢复为内置默认值。
+///
+/// # Errors
+///
+/// 未知配置键、网关不可达或后台服务版本过旧。
 #[tauri::command(async)]
 pub fn config_reset_key(key: String) -> Result<ConfigWriteResponse, String> {
-    execute_reset_key_at(&user_config_path()?, &key)
+    let receipt = (ConfigUpdate::ResetKey { key }).send()?;
+    config_gateway::decode(receipt)
 }
 
-/// Tauri IPC 命令：在系统默认文本编辑器中打开配置文件。
+/// Tauri IPC 命令：对一批待应用变更做纯内存试算校验，不落盘。
+///
+/// 后台没有「按值校验」的联合模式，因此先取权威配置全文、在内存里把这批值应用
+/// 上去，再交给 `validate` 模式判定：判定权仍在后台，桌面端只负责拼出候选全文。
+/// 拼不出来时如实报失败，不猜也不跳过校验。
 #[tauri::command(async)]
-pub fn open_config_file() -> Result<(), String> {
-    let path = user_config_path()?;
-    if let Some(parent) = path.parent()
-        && !parent.exists()
+pub fn config_validate_values(values: HashMap<String, String>) -> ConfigValidateResponse {
+    if values.is_empty() {
+        // 没有待应用的变更：不打扰后台，直接给结论。
+        return ConfigValidateResponse {
+            valid: true,
+            errors: Vec::new(),
+            warnings: Vec::new(),
+            diff_summary: vec!["没有待应用的变更".to_string()],
+        };
+    }
+    let values: BTreeMap<String, String> = values.into_iter().collect();
+    let candidate = match config_gateway::compose_candidate_text(&values) {
+        Ok(candidate) => candidate,
+        Err(errors) => {
+            return ConfigValidateResponse {
+                valid: false,
+                errors,
+                warnings: Vec::new(),
+                diff_summary: Vec::new(),
+            };
+        }
+    };
+    match (ConfigUpdate::Validate {
+        toml_content: candidate,
+    })
+    .send()
     {
-        let _ = std::fs::create_dir_all(parent);
+        Ok(receipt) => config_gateway::decode(receipt).unwrap_or_else(invalid_report),
+        Err(error) => invalid_report(error),
     }
-    if !path.exists() {
-        let _ = std::fs::write(&path, "");
+}
+
+/// 校验结论的失败形态：原因进 errors，valid 为假。
+///
+/// 网关不通与回执结构不符都属于「没校验成」，不能报成通过。
+fn invalid_report(reason: String) -> ConfigValidateResponse {
+    ConfigValidateResponse {
+        valid: false,
+        errors: vec![reason],
+        warnings: Vec::new(),
+        diff_summary: Vec::new(),
     }
-    crate::process::open_path(&path).map_err(|error| format!("无法打开配置文件：{error}"))
 }
 
 /// 朗读音频：base64 编码的 WAV 与 MIME 类型。

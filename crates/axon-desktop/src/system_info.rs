@@ -1,4 +1,8 @@
-//! 系统信息：运行态服务、后台健康快照、远控状态与版本。
+//! 系统信息：产品身份、版本事实与后台健康快照。
+//!
+//! 运行状态面板已从系统设置移除（合同 §5.1）：网关 HTTP 与 WebSocket 两行本机
+//! 端口读数、配置目录行都已删除，读数归属设置 › 连接分区。因此本模块不再解析
+//! 本机 `config.toml` 去取网关端口，也不再探测那两个端口。
 //!
 //! 服务面一律经网关的 HTTP 协议读取：桌面端用已在依赖白名单内的 `ureq` 直接查询，
 //! 既不依赖 daemon crate，也不去直接读运行态数据库。
@@ -7,32 +11,26 @@
 //! 快照说得清（租约与排队读数）。因此本模块额外调用一次 `axon daemon health`：
 //! 这是唯一的子进程调用，只读快照，不改服务状态，失败原因原样上屏。
 //!
-//! 所有探测失败都如实呈现为「未监听」「读不到」或错误说明，绝不伪造成在线。
+//! 所有探测失败都如实呈现为「无响应」「读不到」或错误说明，绝不伪造成在线。
 //! 发布渠道与更新检测不在这里，见 [`crate::release_channel`]。
 
 use std::fs;
-use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use axon_config::ConfigLoader;
 use serde::{Deserialize, Serialize};
 
+use crate::connection::endpoint;
 use crate::gateway;
 use crate::release_channel::{GithubInfoDto, github_info};
-
-/// 单次探测超时，避免界面被不可达端点挂住。
-const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// 远控 adapter 状态文件名。
 const GATEWAY_STATUS_FILE: &str = "gateway-status.json";
 
-/// 网关配置键。
-const KEY_HTTP_BIND: &str = "remote.gateway.http_bind";
-/// 网关 WebSocket 配置键。
-const KEY_WEBSOCKET_BIND: &str = "remote.gateway.websocket_bind";
-
 /// 网关监听地址探测结果。
+///
+/// 本合同阶段已无产出：网关 HTTP 与 WebSocket 两行本机端口读数随运行状态面板一起
+/// 下线（§5.1）。字段为兼容既有界面保留，因此恒为空数组，不伪造读数。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceProbeDto {
     /// 面名称，例如 HTTP 网关。
@@ -101,7 +99,7 @@ pub struct SystemInfoDto {
     pub daemon_health: Option<DaemonHealthDto>,
     /// 后台健康快照读不到的原因；成功时为空串。
     pub daemon_health_error: String,
-    /// 网关各面的探测结果。
+    /// 网关各面的探测结果；运行状态面板下线后恒为空数组。
     pub services: Vec<ServiceProbeDto>,
     /// 飞书远控状态；无状态文件时为空。
     pub remote_feishu: Option<RemoteStatusDto>,
@@ -115,14 +113,6 @@ pub struct SystemInfoDto {
 fn axon_root() -> Result<PathBuf, String> {
     ConfigLoader::default_user_axon_root_path()
         .map_err(|error| format!("无法解析 Axon 运行时根目录：{error:?}"))
-}
-
-/// 纯 TCP 探测：能建立连接即视为在监听。
-fn tcp_listening(target: &str) -> bool {
-    let Ok(mut addresses) = target.to_socket_addrs() else {
-        return false;
-    };
-    addresses.any(|address| TcpStream::connect_timeout(&address, PROBE_TIMEOUT).is_ok())
 }
 
 /// daemon 结论标识：网关有响应，且后台租约有效。
@@ -139,17 +129,11 @@ const DAEMON_STATE_STOPPED: &str = "stopped";
 /// 判定只用两件事实：网关 HTTP 是否应答（进程在不在），以及后台健康快照里的租约
 /// （Worker 还在不在推进会话）。「网关应答但租约失效」正是界面可用、会话不回的那种
 /// 停摆，必须与正常态分开报，否则用户没有任何线索。
+///
+/// 探测目标取当前生效档案的端点，不再读本机 `config.toml`：运行状态面板已下线，
+/// 本模块只服务「关于」页与连接分区的后台健康卡片。
 fn daemon_status(health: &Result<DaemonHealthDto, String>) -> (bool, bool, &'static str, String) {
-    let bind = gateway::config_text(gateway::KEY_HTTP_BIND).unwrap_or_default();
-    if bind.trim().is_empty() {
-        return (
-            false,
-            false,
-            DAEMON_STATE_STOPPED,
-            "未配置网关监听地址".to_string(),
-        );
-    }
-    let target = gateway::probe_target(&bind);
+    let target = endpoint::http_base();
     match gateway::get_raw("/workspaces") {
         Ok((status, _)) if (200..300).contains(&status) => match health {
             Ok(snapshot) if snapshot.lease_remaining_ms > 0 => {
@@ -371,18 +355,9 @@ fn humanize_duration(millis: u64) -> String {
 pub fn system_info() -> Result<SystemInfoDto, String> {
     let root = axon_root()?;
 
-    // 网关各面只做监听探测：daemon 网关不提供 `/v1/health`（那是 serve 的路由），
-    // 拿它去探必然 404，会把在监听的面误判为未监听。
-    let http_bind =
-        gateway::config_text(KEY_HTTP_BIND).unwrap_or_else(|| "127.0.0.1:3143".to_string());
-    let ws_bind =
-        gateway::config_text(KEY_WEBSOCKET_BIND).unwrap_or_else(|| "127.0.0.1:3144".to_string());
-
     let health = daemon_health_snapshot();
     let health_error = health.as_ref().err().cloned().unwrap_or_default();
     let (installed, running, daemon_state, detail) = daemon_status(&health);
-    let http_listening = tcp_listening(&gateway::probe_target(&http_bind));
-    let ws_listening = tcp_listening(&gateway::probe_target(&ws_bind));
 
     Ok(SystemInfoDto {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -392,28 +367,9 @@ pub fn system_info() -> Result<SystemInfoDto, String> {
         daemon_state: daemon_state.to_string(),
         daemon_health: health.ok(),
         daemon_health_error: health_error,
-        services: vec![
-            ServiceProbeDto {
-                name: "网关 HTTP".to_string(),
-                target: http_bind,
-                listening: http_listening,
-                detail: if http_listening {
-                    "已监听".to_string()
-                } else {
-                    "未监听".to_string()
-                },
-            },
-            ServiceProbeDto {
-                name: "网关 WebSocket".to_string(),
-                target: ws_bind,
-                listening: ws_listening,
-                detail: if ws_listening {
-                    "已监听".to_string()
-                } else {
-                    "未监听".to_string()
-                },
-            },
-        ],
+        // 网关两行本机端口读数随运行状态面板下线（§5.1）：这里不再产出读数，
+        // 字段留空而不是回一份没人消费的旧探测结果。
+        services: Vec::new(),
         remote_feishu: remote_feishu_status(&root),
         github: github_info(),
         runtime_root: root.to_string_lossy().to_string(),

@@ -17,11 +17,16 @@ workspace = true
 arboard = "3"
 axon-config = { path = "../axon-config" }
 axon-jsonl = { path = "../axon-jsonl" }
+axon-rustls-provider = { path = "../axon-rustls-provider" }
 axon-shell-assoc = { path = "../axon-shell-assoc" }
 axon-webview2-failure = { path = "../axon-webview2-failure" }
 base64 = { workspace = true }
 futures-util = { workspace = true }
 portable-pty = { workspace = true }
+# 网关 WebSocket 需要自建 rustls 连接器：tokio-tungstenite 没有「平台验证器」
+# 这一档特性，只有 webpki-roots 与 native-roots，而后者只读根证书、不做平台策略校验。
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
+rustls-platform-verifier = "0.7"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tauri = { version = "2.12.1", features = ["custom-protocol", "tray-icon"] }
@@ -35,11 +40,27 @@ tokio = { workspace = true, features = ["rt", "net", "time", "sync", "macros"] }
 tokio-tungstenite = { workspace = true }
 ureq = { workspace = true }
 url = { workspace = true }
+uuid = { workspace = true }
 window-vibrancy = "0.5"
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+
+# 云档案凭据走系统凭据库：Windows 用凭据管理器，macOS 用钥匙串。
+# 三个平台各自只引入自己的后端。Linux 走 Secret Service（D-Bus）；桌面环境普遍
+# 提供它，拿不到时 `secret_store::status()` 会如实报告不可用并降级为「仅本次会话」。
+# 该系统库由 `.github/workflows/ci.yml` 的 apt 步骤安装（libdbus-1-dev）。
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 
 [build-dependencies]
 tauri-build = { version = "2.7.1" }
 
 [dev-dependencies]
 axon-test-support = { path = "../axon-test-support" }
+# 自签证书 fixture：阶段 1 的「证书有问题」结论需要一条真实握手失败的可重复证据。
+rcgen = "0.14"

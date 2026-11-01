@@ -417,6 +417,10 @@ pub fn terminal_shells() -> Vec<ShellChoice> {
 }
 
 /// Tauri IPC 命令：在工作区里开一个终端。
+///
+/// 云档案下**拒绝**：终端开在宿主这台机器上，而云档案连的是另一台后端，把本机
+/// shell 当成「云端的终端」会给出一个错误的执行环境。能力位里 `terminal` 在云档案
+/// 下被客户端强制覆盖为 false；这里是同一结论在命令层的兜底。
 #[tauri::command]
 pub fn terminal_open(
     app: tauri::AppHandle,
@@ -426,6 +430,9 @@ pub fn terminal_open(
     cols: Option<u16>,
     rows: Option<u16>,
 ) -> Result<TerminalInfo, String> {
+    if crate::connection::active_is_cloud() {
+        return Err("云档案下不提供终端：终端只能开在本机后端上".to_owned());
+    }
     registry.spawn(
         Arc::new(EventSink(app)),
         &root,

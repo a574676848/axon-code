@@ -40,6 +40,26 @@ axon --version
 
 源码安装会严格编译 release 产物，构建前端并替换当前版本目录，自动重启守护进程完成生效。
 
+#### 按组件安装
+
+`scripts/install-from-source.ps1` 用 `-Components` 选择装哪一侧，取值为 `backend`、`desktop`、`all`（可逗号分隔），缺省等价 `all`：
+
+```powershell
+# 只装后端：注册并启动 Daemon，不铺桌面二进制与快捷方式
+.\scripts\install-from-source.ps1 -Components backend
+
+# 只装桌面端：不注册 Daemon、不写 config.toml、不启动后台服务
+.\scripts\install-from-source.ps1 -Components desktop
+```
+
+`-BinariesOnly` 已移除，请改用 `-Components backend`（它原本的语义是「跳过提权与服务注册，但仍然启动 Daemon 并断言运行」，与只装一侧并不等价）。
+
+稳定 launcher 与 `current.json` 在任何组件组合下都会安装：它们是桌面入口与版本切换的硬前置。
+
+#### 只装桌面端之后
+
+没有后端时，首次启动会进入四步引导：选模式（本机安装 / 连接云电脑）、本机探活或云端试连接、写入连接档案并切换。引导可跳过，跳过后面板处于未连接态，设置 › 连接里随时可以补。引导期间整个窗口只显示引导本身，背后的侧栏与主界面不渲染，也不响应快捷键。
+
 ## 2. 初始化配置
 
 安装完成后，运行交互式配置向导：
@@ -64,6 +84,8 @@ axon setup
 ```bash
 axon desktop
 ```
+
+首次打开时，桌面端按三种情形决定落点：后端配置文件存在且网关可达，直接建出本机档案进主界面；配置存在但网关不可达，仍建本机档案并进主界面，连接态显示未连接（可「启动后台服务」或「重试连接」）；配置缺失则进入四步引导。
 
 详见 [Axon Desktop 指南](./desktop.md)。
 

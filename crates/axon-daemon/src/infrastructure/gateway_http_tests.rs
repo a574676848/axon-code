@@ -16,6 +16,8 @@ use super::*;
 const BLOCKED_SUBMIT_COUNT: usize = 8;
 /// 阻塞期间探针请求的允许耗时上限。
 const PROBE_BUDGET: Duration = Duration::from_secs(3);
+/// 读体前拒绝的耗时预算：远超一次本机往返，又远小于连接读取超时。
+const PRE_BODY_REJECT_BUDGET: Duration = Duration::from_secs(2);
 /// 合法事件报文。
 const EVENT_BODY: &str = r#"{"sourceChannel":"http","eventId":"event-1","observedAtMs":100,"expiresAtMs":200,"content":"hello","replyChannel":"http","replyDestination":"client-1"}"#;
 
@@ -224,6 +226,61 @@ fn custom_route_family_uses_the_unified_error_model() {
     let (status, body) = request(&server, &get("/api/v1/", Some(TEST_AUTH_TOKEN)));
     assert_eq!(status, 404, "{body}");
     assert!(body.contains("NOT_FOUND"), "{body}");
+}
+
+/// `/api/v1/*` 的正文上限按路由取值：声明 64 MiB 的配置写入必须在读体前被拒绝。
+///
+/// 这里只发请求头、不发正文：若服务端先收体，它要么等满声明的 64 MiB、要么等到连接
+/// 收尾，两种情形都拿不到 413。返回 413 且耗时远小于连接读取超时，即证明拒绝发生在
+/// 读体之前，内存也不会随声明体积增长。
+#[test]
+fn route_limits_reject_oversized_declared_length_before_reading_body() {
+    let server = TestServer::start(RecordingIngress::idle());
+
+    let started = std::time::Instant::now();
+    let (status, body) = request(
+        &server,
+        &format!(
+            "PUT /api/v1/config HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nAuthorization: Bearer {TEST_AUTH_TOKEN}\r\nContent-Type: application/json\r\nContent-Length: 67108864\r\n\r\n"
+        ),
+    );
+    assert_eq!(status, 413, "声明 64 MiB 必须在读体前被拒绝：{body}");
+    assert!(body.contains("body_too_large"), "{body}");
+    assert!(
+        started.elapsed() < PRE_BODY_REJECT_BUDGET,
+        "读体前拒绝必须立即返回，实际耗时 {:?}",
+        started.elapsed()
+    );
+
+    // 未超该路由上限的声明照常进入分派：本服务未挂处理器，因此得到统一 404。
+    let (status, body) = request(
+        &server,
+        &format!(
+            "PUT /api/v1/secrets HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nAuthorization: Bearer {TEST_AUTH_TOKEN}\r\nContent-Type: application/json\r\nContent-Length: 1024\r\n\r\n"
+        ),
+    );
+    assert_eq!(status, 404, "未超该路由上限应进入分派：{body}");
+    assert!(body.contains("NOT_FOUND"), "{body}");
+
+    // 同一族里的密钥写入按 64 KiB 收体：640 KiB 远低于 4 MiB，仍必须被拒绝。
+    let (status, body) = request(
+        &server,
+        &format!(
+            "PUT /api/v1/secrets HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nAuthorization: Bearer {TEST_AUTH_TOKEN}\r\nContent-Type: application/json\r\nContent-Length: 655360\r\n\r\n"
+        ),
+    );
+    assert_eq!(status, 413, "超过 64 KiB 的密钥写入必须被拒绝：{body}");
+    assert!(body.contains("body_too_large"), "{body}");
+
+    // 声明了分块传输却没有长度：411，同样不读体。
+    let (status, body) = request(
+        &server,
+        &format!(
+            "PUT /api/v1/config HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nAuthorization: Bearer {TEST_AUTH_TOKEN}\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n"
+        ),
+    );
+    assert_eq!(status, 411, "分块上传缺长度必须给 411：{body}");
+    assert!(body.contains("content_length_required"), "{body}");
 }
 
 /// 核心契约：慢提交不得让其他请求排队。

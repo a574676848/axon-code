@@ -6,9 +6,9 @@ use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 
 use super::{
     AuthCommand, CompletionCommand, ConfigCommand, CronCommand, DaemonCommand, DebugCommand,
-    DoctorCommand, ExecCommand, ExportCommand, LspCommand, McpCommand, MemoryCommand,
-    ModelsCommand, PackageCommand, PersonaCommand, ProvidersCommand, RemoteCommand, SetupCommand,
-    SkillsCommand, StopCommand, UpgradeCommand, UsageCommand,
+    DoctorCommand, ExecCommand, ExportCommand, GatewayCommand, LspCommand, McpCommand,
+    MemoryCommand, ModelsCommand, PackageCommand, PersonaCommand, ProvidersCommand, RemoteCommand,
+    SetupCommand, SkillsCommand, StopCommand, UpgradeCommand, UsageCommand,
 };
 
 /// Axon CLI 顶层参数。
@@ -144,6 +144,8 @@ pub enum AxonCommand {
     Memory(MemoryCommand),
     /// 通用后台 Daemon Host 与 Session IPC。
     Daemon(DaemonCommand),
+    /// 管理 Gateway 多 Key 凭据。
+    Gateway(GatewayCommand),
     /// 管理用户级 Agent Cron。
     Cron(CronCommand),
     /// 查询本机使用统计看板数据。
@@ -257,6 +259,7 @@ pub fn plan_invocation(cli: &AxonCli) -> CliInvocation {
         Some(AxonCommand::Persona(_)) => CliInvocation::Command { name: "persona" },
         Some(AxonCommand::Memory(_)) => CliInvocation::Command { name: "memory" },
         Some(AxonCommand::Daemon(_)) => CliInvocation::Command { name: "daemon" },
+        Some(AxonCommand::Gateway(_)) => CliInvocation::Command { name: "gateway" },
         Some(AxonCommand::Cron(_)) => CliInvocation::Command { name: "cron" },
         Some(AxonCommand::Usage(_)) => CliInvocation::Command { name: "usage" },
         Some(AxonCommand::Pricing(_)) => CliInvocation::Command { name: "pricing" },

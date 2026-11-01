@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 
 #[path = "atomic_write.rs"]
 pub mod atomic_write;
+/// 原始配置键的轻量读取：只取值，不做默认填充与全量校验。
+pub mod raw_keys;
+pub use raw_keys::{raw_string_value, raw_string_values};
 #[path = "config_paths.rs"]
 mod config_paths;
 mod config_persistence;

@@ -67,7 +67,7 @@
 * **用户面文档**：根 `README.md`、`docs/README.md` 与 `docs/*.md`（CLI 命令、配置键、工具参数契约、守护进程与升级、故障排查等）。
 * **开发者规范**：`CONTRIBUTING.md`、`docs/ui-constraints.md` 与 `docs/workbench-design-system.md`（架构、UI 约束、设计系统与贡献指南）。
 * **索引同步**：新增、重命名或删除文档时，必须同步 `docs/README.md` 的索引条目；坏链会被门禁直接拦下。
-* **官方 Skill SSOT**：`docs/skills/operate-axon/`（`SKILL.md`、`references/*.md`、`agents/openai.yaml`）是随发行包内置的运行时操作手册。凡改动 CLI 命令面与参数、内置工具名与语义、配置键、Skill / Memory / MCP / Daemon / 安装升级行为，**必须同步该 Skill**，并始终以当前 `--help` 与工具回执为事实来源，不写未显示的行为。
+* **官方 Skill SSOT**：`docs/skills/operate-axon/`（`SKILL.md` 与 `references/*.md`）是随发行包内置的运行时操作手册。凡改动 CLI 命令面与参数、内置工具名与语义、配置键、Skill / Memory / MCP / Daemon / 安装升级行为，**必须同步该 Skill**，并始终以当前 `--help` 与工具回执为事实来源，不写未显示的行为。
 * **安装态副本**：安装脚本把 `docs/skills/` 投放到 `$HOME/.axon/skills/`。只改仓库副本运行时读不到：同步后必须重跑安装脚本（或显式同步安装目录），并核对两份内容一致。
 * **单一事实来源 (SSOT)**：同一事实只在一处定义，其余位置引用；改动核心逻辑或 API 契约时同步更新对应文档，禁止文档与代码分叉。
 * **Skill 内容边界 (CRITICAL)**：`docs/skills/**`（尤其 `operate-axon`）是 **Axon 运行态的唯一事实源**。只允许写运行态事实：当前 `--help` 与子命令参数、可见工具及其回执、配置键与取值来源、HTTP/WS 路由与帧协议、可直接执行的调用方式。**严禁**写任何开发过程性语义：变更说明、新增/修复/更新记录、历史沿革、实施计划与阶段编号、提交号、仓库源码路径、内部实现细节、TODO 与占位。事实与运行态不符时**直接改成正确事实**，不做「本次改了什么」的解释，也不保留旧表述。
@@ -120,7 +120,7 @@ Copy-Item $built $target -Force
   * 证据形式：构建耗时行（`Finished 'release' profile ... in <时长>`）、覆盖后版本目录内二进制的时间戳、覆盖完成时间，三者一并登记。
   * 触及任何 Rust 侧文件或安装树结构时，本条立即失效，必须回到完整安装链（`scripts/install-from-source.ps1`）。
 * **安装后必须核验**：`current.json` 指向的版本目录内 `axon.exe` 与 `axon-desktop.exe` 同时存在；`Get-Command axon` 解析到安装根的稳定入口而非 cargo 目录；cargo 的 bin 目录下无 `axon*.exe` 残留；`axon --version` 与本次构建一致；Daemon 处于运行态。
-* **MSI 路径**：MSI 构建与安装说明见 `installer/windows/README.md`，必须从仓库根目录执行；MSI 不得写 `%USERPROFILE%\.axon`。
+* **MSI 路径**：MSI 构建与安装说明见 `installer/windows/README.md`，必须从仓库根目录执行；MSI 只写程序目录 `%USERPROFILE%\.axon\bin`，不写配置、skills、identity 与运行数据。
 
 ### 阶段 V：真机验证 (安装态与桌面 CDP)
 

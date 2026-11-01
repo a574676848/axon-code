@@ -118,6 +118,21 @@ pub(super) fn declared_length(headers: &HeaderMap) -> Option<usize> {
         .and_then(|value| value.trim().parse::<usize>().ok())
 }
 
+/// 是否声明了分块传输。
+///
+/// `Transfer-Encoding` 允许列表形态（`gzip, chunked`），因此逐项比对并忽略大小写；
+/// 头缺失或取值非法都按未声明处理，长度缺失才会走到分块判定。
+pub(super) fn chunked_transfer(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::TRANSFER_ENCODING)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|token| token.trim().eq_ignore_ascii_case("chunked"))
+        })
+}
+
 /// 请求行与请求头的总字节数；按线上口径估算（请求行也算在内）。
 ///
 /// 口径与既有实现一致：旧实现按已读缓冲区长度判断，缓冲区里既有请求行也有请求头，

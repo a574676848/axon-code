@@ -1,34 +1,30 @@
 //! 网关客户端：桌面端访问 Axon 运行态的唯一入口。
 //!
 //! 桌面端不直连运行态数据库，也不链接会话子系统，一律经网关 HTTP 协议读写，
-//! 从而与后端实现解耦。网关地址与凭据都取自权威配置：
-//! 监听地址读 `remote.gateway.http_bind`，凭据名读 `remote.gateway.api_token_env`，
-//! 凭据值从配置相邻的 `.env` 加载。
+//! 从而与后端实现解耦。
 //!
-//! 通配绑定地址（`0.0.0.0`、`::`）表示「所有网卡」，不能作为连接目标，
-//! 这里统一映射到回环地址后再发起请求。
-//!
+//! 本模块只保留 HTTP 动词层：地址、凭据与 TLS 信任来源都由
+//! [`crate::connection::endpoint`] 解析，连接档案一换，这里的所有请求自动跟着换。
 //! 网关有**两个协议面**：工作台扩展面以 [`API_PREFIX`] 为前缀，交互事件面则是
 //! `/gateway/v1/*`。两者共用同一份地址与凭据，因此地址组装只在这里实现一次。
 
 use std::time::Duration;
 
-use axon_config::{ConfigLoader, get_config_value};
+use axon_config::ConfigLoader;
 
-/// 网关 HTTP 监听地址配置键。
-pub const KEY_HTTP_BIND: &str = "remote.gateway.http_bind";
-/// 网关 WebSocket 监听地址配置键。
-pub const KEY_WEBSOCKET_BIND: &str = "remote.gateway.websocket_bind";
+use crate::connection::endpoint;
+
 /// 网关凭据环境变量名配置键。
-pub const KEY_API_TOKEN_ENV: &str = "remote.gateway.api_token_env";
-/// HTTP 监听地址缺失时的兜底值。
-const FALLBACK_HTTP_BIND: &str = "127.0.0.1:3143";
-/// WebSocket 监听地址缺失时的兜底值。
-const FALLBACK_WEBSOCKET_BIND: &str = "127.0.0.1:3144";
-/// 凭据变量名缺失时的兜底值。
-const FALLBACK_TOKEN_ENV: &str = "AXON_GATEWAY_API_TOKEN";
+pub use crate::connection::endpoint::KEY_API_TOKEN_ENV;
+/// 网关 HTTP 监听地址配置键。
+pub use crate::connection::endpoint::KEY_HTTP_BIND;
+/// 网关 WebSocket 监听地址配置键。
+pub use crate::connection::endpoint::KEY_WEBSOCKET_BIND;
+/// 把通配绑定地址映射成可连接的探测地址。
+pub use crate::connection::endpoint::probe_target;
+
 /// 单次请求超时。
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const REQUEST_TIMEOUT: Duration = endpoint::REQUEST_TIMEOUT;
 
 /// 朗读合成的总超时。
 ///
@@ -39,71 +35,45 @@ const VOICE_TTS_TIMEOUT: Duration = Duration::from_secs(60);
 /// 试听合成的总超时；首次试听要加载模型，给足冷启动余量。
 const VOICE_PREVIEW_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 把通配绑定地址映射成可连接的探测地址。
-#[must_use]
-pub fn probe_target(bind: &str) -> String {
-    let trimmed = bind.trim();
-    if let Some(port) = trimmed.strip_prefix("0.0.0.0:") {
-        return format!("127.0.0.1:{port}");
-    }
-    if let Some(port) = trimmed.strip_prefix("[::]:") {
-        return format!("[::1]:{port}");
-    }
-    if let Some(port) = trimmed.strip_prefix("::") {
-        return format!("[::1]:{port}");
-    }
-    trimmed.to_string()
-}
-
 /// 读取配置项文本值。
+///
+/// 只服务诊断类读数（系统信息、服务修复引导），**不在请求路径上**：请求路径的
+/// 地址与凭据一律取 [`crate::connection`] 的生效档案，不在这里读盘。
 pub fn config_text(key: &str) -> Option<String> {
     let path = ConfigLoader::default_user_config_path().ok()?;
-    let loaded = ConfigLoader::load_from_path(&path).ok()?;
-    get_config_value(&loaded.config, key).map(|value| value.to_string())
+    axon_config::raw_string_value(&path, key)
 }
 
 /// 网关根地址，形如 `http://127.0.0.1:3143`。
+///
+/// # Errors
+///
+/// 当前实现不会失败：地址总有兜底值。保留 `Result` 形态是为了不改变既有调用点。
 pub fn base_url() -> Result<String, String> {
-    let bind = config_text(KEY_HTTP_BIND).unwrap_or_else(|| FALLBACK_HTTP_BIND.to_string());
-    Ok(format!("http://{}", probe_target(&bind)))
+    Ok(endpoint::http_base())
 }
 
 /// 网关 WebSocket 根地址，形如 `ws://127.0.0.1:3144`。
+///
+/// # Errors
+///
+/// 同 [`base_url`]。
 pub fn websocket_base_url() -> Result<String, String> {
-    let bind =
-        config_text(KEY_WEBSOCKET_BIND).unwrap_or_else(|| FALLBACK_WEBSOCKET_BIND.to_string());
-    Ok(format!("ws://{}", probe_target(&bind)))
+    Ok(endpoint::websocket_base())
 }
 
 /// 网关凭据；未配置时返回 None。
-///
-/// 与供应商凭据同源：先把配置相邻 `.env` 加载进进程缓存，再按配置声明的
-/// 变量名取值，因此凭据只存在一份，不在桌面端另建存储。
 pub fn api_token() -> Option<String> {
-    let name = config_text(KEY_API_TOKEN_ENV).unwrap_or_else(|| FALLBACK_TOKEN_ENV.to_string());
-    if let Some(existing) = axon_config::provider_credential(&name) {
-        return Some(existing);
-    }
-    let config_path = ConfigLoader::default_user_config_path().ok()?;
-    let env_path = config_path.parent()?.join(".env");
-    let _ = axon_config::load_provider_credentials_from_env_file(&env_path);
-    axon_config::provider_credential(&name)
+    endpoint::api_token()
 }
 
 /// 构造带鉴权的请求代理。
 fn agent() -> ureq::Agent {
-    agent_with_timeout(REQUEST_TIMEOUT)
+    endpoint::http_agent(REQUEST_TIMEOUT)
 }
 
 fn agent_with_timeout(timeout: Duration) -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .timeout_global(Some(timeout))
-        // 非 2xx 也交回响应对象：工作台拒绝请求时会在响应体里给出原因
-        // （例如「该作业不属于这条车道」），把状态码当异常抛出会丢掉这句话，
-        // 用户只能看到一句无法行动的状态码。
-        .http_status_as_error(false)
-        .build()
-        .new_agent()
+    endpoint::http_agent(timeout)
 }
 
 /// 网关请求共用的路径前缀。
@@ -246,8 +216,11 @@ pub fn get_json_at(path: &str) -> Result<serde_json::Value, String> {
     serde_json::from_str(&body).map_err(|_| "网关响应不是合法 JSON".to_string())
 }
 
-/// POST 一个网关接口并解析 JSON。
-pub fn post_json(path: &str, payload: &serde_json::Value) -> Result<serde_json::Value, String> {
+/// POST 一个网关接口，返回状态码与响应体。
+///
+/// 需要按状态码分档的调用方走这一层：403 与 401 的修复动作不同，只拿到一句话就没法分开
+/// 告诉用户「换个超管凭据」还是「凭据失效了」。只关心成败的调用方继续用 [`post_json`]。
+pub fn post_raw(path: &str, payload: &serde_json::Value) -> Result<(u16, String), String> {
     let url = endpoint(path)?;
     let mut request = agent()
         .post(&url)
@@ -256,47 +229,61 @@ pub fn post_json(path: &str, payload: &serde_json::Value) -> Result<serde_json::
     if let Some(token) = api_token() {
         request = request.header("authorization", &format!("Bearer {token}"));
     }
-    let (status, body) = match request.send(payload.to_string()) {
+    match request.send(payload.to_string()) {
         Ok(response) => {
             let status = response.status().as_u16();
             let body = response
                 .into_body()
                 .read_to_string()
                 .map_err(|error| format!("读取网关响应失败：{error}"))?;
-            (status, body)
+            Ok((status, body))
         }
-        Err(ureq::Error::StatusCode(status)) => (status, String::new()),
-        Err(error) => return Err(format!("网关不可达或拒绝请求：{error}")),
-    };
-    if !(200..300).contains(&status) {
-        return Err(gateway_status_message(status, &body));
+        Err(ureq::Error::StatusCode(status)) => Ok((status, String::new())),
+        Err(error) => Err(format!("网关不可达或拒绝请求：{error}")),
     }
-    serde_json::from_str(&body).map_err(|_| "网关响应不是合法 JSON".to_string())
 }
 
-/// DELETE 一个网关接口并解析 JSON。
-pub fn delete_json(path: &str) -> Result<serde_json::Value, String> {
+/// POST 一个网关接口并解析 JSON。
+pub fn post_json(path: &str, payload: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let (status, body) = post_raw(path, payload)?;
+    decode_json(status, &body)
+}
+
+/// DELETE 一个网关接口，返回状态码与响应体。
+pub fn delete_raw(path: &str) -> Result<(u16, String), String> {
     let url = endpoint(path)?;
     let mut request = agent().delete(&url).header("accept", "application/json");
     if let Some(token) = api_token() {
         request = request.header("authorization", &format!("Bearer {token}"));
     }
-    let (status, body) = match request.call() {
+    match request.call() {
         Ok(response) => {
             let status = response.status().as_u16();
             let body = response
                 .into_body()
                 .read_to_string()
                 .map_err(|error| format!("读取网关响应失败：{error}"))?;
-            (status, body)
+            Ok((status, body))
         }
-        Err(ureq::Error::StatusCode(status)) => (status, String::new()),
-        Err(error) => return Err(format!("网关不可达或拒绝请求：{error}")),
-    };
-    if !(200..300).contains(&status) {
-        return Err(gateway_status_message(status, &body));
+        Err(ureq::Error::StatusCode(status)) => Ok((status, String::new())),
+        Err(error) => Err(format!("网关不可达或拒绝请求：{error}")),
     }
-    serde_json::from_str(&body).map_err(|_| "网关响应不是合法 JSON".to_string())
+}
+
+/// DELETE 一个网关接口并解析 JSON。
+pub fn delete_json(path: &str) -> Result<serde_json::Value, String> {
+    let (status, body) = delete_raw(path)?;
+    decode_json(status, &body)
+}
+
+/// 2xx 才解析 JSON；非 2xx 一律翻译成可执行的中文说明。
+///
+/// 动词层与需要自己看状态码的调用方共用这一处，避免出现两套错误口径。
+pub(crate) fn decode_json(status: u16, body: &str) -> Result<serde_json::Value, String> {
+    if !(200..300).contains(&status) {
+        return Err(gateway_status_message(status, body));
+    }
+    serde_json::from_str(body).map_err(|_| "网关响应不是合法 JSON".to_string())
 }
 
 /// POST 一个绝对路径接口，要求 2xx 并把响应解析为 JSON。
@@ -643,9 +630,15 @@ fn classify_preview_status(status: u16, body: &str) -> VoicePreviewError {
 /// 浏览器 WebSocket 不能携带握手头，因此语音上行由宿主建立连接；
 /// 地址解析与凭据读取集中在这里，命令里不另拼一份。
 pub fn voice_websocket_url() -> Result<String, String> {
-    let bind = config_text(KEY_HTTP_BIND).unwrap_or_else(|| FALLBACK_HTTP_BIND.to_string());
-    let host = probe_target(&bind);
-    let mut url = url::Url::parse(&format!("ws://{host}/api/v1/voice"))
+    let http_base = endpoint::http_base();
+    let ws_base = if let Some(rest) = http_base.strip_prefix("https://") {
+        format!("wss://{rest}")
+    } else if let Some(rest) = http_base.strip_prefix("http://") {
+        format!("ws://{rest}")
+    } else {
+        endpoint::websocket_base()
+    };
+    let mut url = url::Url::parse(&format!("{ws_base}/api/v1/voice"))
         .map_err(|error| format!("构造语音连接地址失败：{error}"))?;
     if let Some(token) = api_token() {
         url.query_pairs_mut().append_pair("api_token", &token);

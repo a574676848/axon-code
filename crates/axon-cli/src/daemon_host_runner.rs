@@ -4,7 +4,10 @@ use axon_daemon::{
     ActiveTurnSteerSink, DaemonGatewayBridge, DaemonHost, EventProviderRegistry, GatewayAuth,
     GatewayEgress, GatewayEventOptions, GatewayIngress, GatewayKernel, HttpGatewayAdapter, LogSink,
     WebSocketGatewayAdapter,
-    infrastructure::ipc::{IpcDispatch, JsonlIpcClient, JsonlIpcServer},
+    infrastructure::{
+        gateway_auth::GatewayKeyStore,
+        ipc::{IpcDispatch, JsonlIpcClient, JsonlIpcServer},
+    },
 };
 use axon_domain::{InteractionId, InteractionRecord, RuntimeHostId, SYSTEM_SOURCE_CHANNEL};
 use axon_remote_runtime::{DeliveryStore, RemoteNotificationOutboxRuntime};
@@ -15,7 +18,7 @@ use axon_session_runtime::AgentTurnExecutor;
 #[cfg(test)]
 use axon_session_runtime::EventPublisher;
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -159,9 +162,23 @@ fn try_run_daemon_host(
     crate::run_commands::cleanup_stale_run_controls(&command.config_path)
         .map_err(|error| format!("清理 stale run 控制文件失败: {error}"))?;
     let gateway_config = loaded_config.config.remote.gateway;
+    // 网关扩展路由与多 Key 存储同源：两处都取 Axon 运行时根，在这里解析一次、两处复用，
+    // 避免同一份路径被解析出两个结论。
+    let axon_root = axon_config::runtime_axon_root_path(&command.config_path)
+        .map_err(|error| format!("解析 Axon 运行时根目录失败: {error:?}"))?;
+    // 多 Key 存储与鉴权层、管理面适配器共享同一个句柄：签发与吊销因此对下一次鉴权立即生效。
+    let key_store = open_gateway_key_store(&axon_root, &gateway_config.auth_keys);
     let gateway_auth = axon_config::provider_credential(&gateway_config.api_token_env)
         .or_else(|| std::env::var(&gateway_config.api_token_env).ok())
         .and_then(|token| GatewayAuth::from_token(&token).ok())
+        .map(|auth| {
+            // 旧 token 通道默认保留：本地档案的凭据就是这把 token，自动退役会让人立刻 401。
+            let auth = auth.with_legacy_token_enabled(gateway_config.legacy_token_enabled);
+            match key_store.as_ref() {
+                Some(store) => auth.with_key_store(Arc::clone(store)),
+                None => auth,
+            }
+        })
         .map(Arc::new);
     ensure_system_crons(command)?;
     let runtime_root = daemon_runtime_root(command);
@@ -244,47 +261,24 @@ fn try_run_daemon_host(
         ),
     );
     // 网关只接受一个扩展处理器，各路由族在此按顺序组合：
-    // 可观测性在前，工作台其后，互不命中的路径由网关统一回 404。
-    let workbench_root = axon_config::runtime_axon_root_path(&command.config_path)
-        .map_err(|error| format!("解析 Axon 运行时根目录失败: {error:?}"))?;
-    let route_handler = Arc::new(crate::workbench_http_adapter::CompositeHttpAdapter::new(
-        vec![
-            // Cron 必须先于可观测性适配器：可观测性对未知子路径也返回统一 404，
-            // 若排在前面会截断后续 Cron 路由。
-            Arc::new(crate::cron_http_adapter::CronHttpAdapter::new(
-                workbench_root.clone(),
-                command.config_path.clone(),
-            )),
-            Arc::new(crate::memory_http_adapter::MemoryHttpAdapter::new(
-                workbench_root.clone(),
-                command.config_path.clone(),
-            )),
-            // 人格状态只读路由：桌面设置页的人设分区据此展示已持久化的状态。
-            Arc::new(crate::persona_http_adapter::PersonaHttpAdapter::new(
-                workbench_root.clone(),
-            )),
-            observability_http_handler,
-            // MCP 运行态要先于工作台：工作台适配器对 /api/v1 前缀最宽，排在它后面才轮得到。
-            Arc::new(crate::mcp_http_adapter::McpHttpAdapter::new(
-                workbench_root.clone(),
-                command.config_path.clone(),
-                command.root.clone(),
-                startup_snapshots.clone(),
-            )),
-            // 目标看板只读面：与工作台同前缀，因此必须排在工作台适配器之前，
-            // 否则 /api/v1/goals 会先撞上工作台的兜底分支。
-            Arc::new(crate::goal_http_adapter::GoalHttpAdapter::new(
-                workbench_root.clone(),
-            )),
-            Arc::new(
-                crate::workbench_http_adapter::WorkbenchHttpAdapter::from_root(workbench_root)
-                    // 中断入口要触达正在运行的主 turn，因此共享同一份注册表。
-                    .with_active_primary_turns(active_primary_turns.clone())
-                    // 作答入口复用同一份宿主单例，答案才能投给等待中的提问工具。
-                    .with_answer_service(questions.service.clone()),
-            ),
-        ],
-    ));
+    // 网关只接受一个扩展处理器：各路由族的排布集中在 route_handler_registry，
+    // 组合根本身只负责把工作台适配器接好并转交。
+    let workbench =
+        crate::workbench_http_adapter::WorkbenchHttpAdapter::from_root(axon_root.clone())
+            // 中断入口要触达正在运行的主 turn，因此共享同一份注册表。
+            .with_active_primary_turns(active_primary_turns.clone())
+            // 作答入口复用同一份宿主单例，答案才能投给等待中的提问工具。
+            .with_answer_service(questions.service.clone());
+    let route_handler =
+        crate::route_handler_registry::compose(crate::route_handler_registry::AdapterDeps {
+            runtime_root: &axon_root,
+            config_path: &command.config_path,
+            command_root: &command.root,
+            observability: observability_http_handler,
+            startup_snapshots: startup_snapshots.clone(),
+            workbench,
+            key_store,
+        });
     gateway_kernel
         .register_adapter(Arc::new(
             HttpGatewayAdapter::new(gateway_config.http_bind, Arc::clone(&event_providers))
@@ -408,6 +402,35 @@ fn daemon_runtime_root(command: &DaemonRunCommand) -> PathBuf {
         command.root.clone()
     } else {
         command.root.join(RUNTIME_DATA_DIR)
+    }
+}
+
+/// 打开 Gateway 多 Key 存储；失败时按「无 Key 支持」继续启动。
+///
+/// 构造失败时的取舍（两边的代价必须一起看）：
+///
+/// - 让 daemon 起不来：一次磁盘或权限问题就把整个后端带走，连业务路由都不可用，
+///   而这些问题往往与 Key 无关。
+/// - 静默降级到「无 Key 支持」：只有多 Key 这一层停用，业务路由照常服务。
+///
+/// 因此这里选**局部降级**，但绝不静默：WARNING 一行写清原因与后果，运维能立刻看到
+/// 「多 Key 不可用、管理面同时不可用」。已签发的 Key 在本次启动里一律校验不通过，
+/// 只有旧 token 通道（`remote.gateway.legacy_token_enabled`）继续生效。
+///
+/// # Arguments
+///
+/// * `root` - Axon 运行时根；`configured_path` 为空时存储落在其下的默认相对路径。
+/// * `configured_path` - `remote.gateway.auth_keys` 的取值。
+fn open_gateway_key_store(root: &Path, configured_path: &str) -> Option<Arc<GatewayKeyStore>> {
+    match GatewayKeyStore::open(root, configured_path) {
+        Ok(store) => Some(store),
+        Err(error) => {
+            axon_logger::warning(&format!(
+                "Gateway 多 Key 存储不可用，本次启动按「无 Key 支持」继续：已签发的 Key 一律校验不通过，\
+                 只有旧 token 通道生效，管理面 /api/v1/keys 同时不可用（{error}）"
+            ));
+            None
+        }
     }
 }
 

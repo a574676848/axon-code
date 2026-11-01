@@ -75,11 +75,17 @@ Gateway 把外部系统的事件收敛为同一条 durable Interaction 输入，
 - `POST /gateway/v1/events/{provider}`：provider 已完成归一化的信封，报文体即脚本输出契约。
 - `POST /gateway/v1/events/{provider}/raw`：provider 原生 Webhook 报文，交给该 provider 的 `parser.py` 归一化。
 
-三条路由共用既有鉴权、连接限额与 64KB 入站上限。凭据有两个通道，任一命中即通过：`Authorization: Bearer <token>`，或 URL 查询串 `?api_token=<token>`。查询串通道是为无法配置 HTTP header 的发送方（典型是 Jira Server WebHooks，其配置界面只能填 URL）准备的；它不做百分号解码，token 必须由 URL 安全字符构成。由于 token 会出现在 URL 里，该通道应只在受信内网或反向代理之后使用，并避免在中间层记录完整 URL。provider 名只允许小写 ASCII 字母、数字、`-` 与 `_`；未注册的 provider 直接按 404 拒绝，不进入耐久存储。
+三条路由共用既有鉴权、连接限额与入站上限。凭据有两个通道，任一命中即通过：`Authorization: Bearer <token>`，或 URL 查询串 `?api_token=<token>`。查询串通道是为无法配置 HTTP header 的发送方（典型是 Jira Server WebHooks，其配置界面只能填 URL）准备的；它不做百分号解码，token 必须由 URL 安全字符构成。由于 token 会出现在 URL 里，该通道应只在受信内网或反向代理之后使用，并避免在中间层记录完整 URL。多 Key 管理面（`/api/v1/keys`）只认 `Authorization` 头，不接受查询串。provider 名只允许小写 ASCII 字母、数字、`-` 与 `_`；未注册的 provider 直接按 404 拒绝，不进入耐久存储。
 
 以 Jira Server 为例，WebHook 地址填 `http://<axon 主机>:3143/gateway/v1/events/jira/raw?api_token=<token>` 即可，Jira 侧无需任何 header 配置。
 
-监听地址由两条配置项决定：`remote.gateway.http_bind`（默认 `127.0.0.1:3143`）与 `remote.gateway.websocket_bind`（默认 `127.0.0.1:3144`）。需要被跨网段的外部系统投递时，把 HTTP 入口改为 `0.0.0.0:3143`，并在主机防火墙上放行该端口的入站规则（例如开放 TCP 3143 端口）；WebSocket 入口保持环回，不对外放行。端口一旦暴露在网络上，凭据就是唯一访问门槛，务必使用高强度随机 token，并优先在反向代理之后只暴露该路径前缀。
+监听地址由两条配置项决定：`remote.gateway.http_bind`（默认 `127.0.0.1:3143`）与 `remote.gateway.websocket_bind`（默认 `127.0.0.1:3144`）。需要被跨网段的外部系统投递时，把 HTTP 入口改为 `0.0.0.0:3143`，并在主机防火墙上放行该端口的入站规则（例如开放 TCP 3143 端口）；事件流同理，把 `websocket_bind` 改为 `0.0.0.0:3144` 并放行该端口。端口一旦暴露在网络上，凭据就是唯一访问门槛，务必使用高强度随机 token。要用 TLS 还是明文、对外开放到哪一层，由部署方的网络与运维策略决定，程序本身不加额外的网络层限制。
+
+桌面端**只填一个 HTTP 地址**即可连接：它先用该地址请求 `/api/v1/meta`，再从 `GET /api/v1/system/status` 的 `webSocketPort` 拿到事件流端口，把 WebSocket 请求指到同一主机的该端口上。因此后端把两个协议面绑在不同端口时，客户端不需要额外配置，也不需要中间层做端口归一。细节见 [安全基线](./security-baseline.md)。
+
+`/api/v1/*` 的正文上限按**每路由**分别判定，未登记的路径统一按 4 MiB 收体（不回落到 router 级的既有上限）。判定顺序固定：先按 `(方法, 路径)` 查表，声明了 `Content-Length` 且超过该路由上限的，在读体之前直接 413；声明了分块传输又没有长度的返回 411；两者都没有的视为无正文，因此 GET、HEAD、DELETE 不受影响。附件上传的文件本体上限是 64 MiB，其请求体上限为 64 MiB 加 8 KiB 的 multipart 固定开销，文件字节数只在读体过程中判定。
+
+配置、密钥、模型发现、MCP、技能、人设与准则这些原先由桌面端直接读写本机文件的族，现在都有对应的 `/api/v1/*` 路由，桌面端因此不再直连本机配置文件、`.env`、`.mcp.json`、`SOUL.md`、`AGENTS.md` 与技能目录。后端自报支持哪些族由 `GET /api/v1/meta` 的 12 个能力位给出，运行态摘要由 `GET /api/v1/system/status` 给出（租约、排队、远端适配器、构建版本、服务器时间）。
 
 两条入口的接入路径都不承载单个慢客户端的等待，这条并发契约必须保持：HTTP 面由 axum（hyper + tokio）承载，框架负责连接循环与请求解析，网关自身不再持有固定数量的工作线程；请求头解析、正文读取与 durable 入站中的同步部分（运行态存储读写、provider 解析脚本、事件落库）一律在阻塞池执行，因此慢请求只占阻塞池的一个名额，不会停掉整条接入面。阻塞池并发上限 64，排队预算 5 秒，超时返回 429 `gateway_busy`；内核连接许可（默认 256）仍然是更外层的准入。WebSocket 入口的全部连接共享单线程 runtime，durable 桥调用（事件提交、订阅重放）同样只在阻塞池执行，连接收口先关闭事件接收端再回收投影线程。
 

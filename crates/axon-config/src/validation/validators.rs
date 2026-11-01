@@ -125,6 +125,12 @@ fn validate_remote_policy(config: &AxonConfig) -> AxonResult<()> {
             )));
         }
     }
+    // 空串表示走运行时根下的默认路径；非空时只做与平台无关的最小校验，不在这里探测文件系统。
+    if config.remote.gateway.auth_keys.contains('\0') {
+        return Err(AxonError::config_invalid(
+            "remote.gateway.auth_keys 不能包含空字符",
+        ));
+    }
     if !config
         .remote
         .feishu_websocket

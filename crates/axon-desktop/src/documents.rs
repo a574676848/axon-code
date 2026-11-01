@@ -1,18 +1,23 @@
 //! 设置内的文档与目录管理：MCP 配置、技能目录、人设与行为准则。
 //!
-//! 安全边界：MCP 配置里可能含明文密钥，因此**读取路径只透出环境变量名**，
-//! 绝不把已有值回传给界面；写入时界面只提交用户本次输入的键值，
-//! 已有键在未重新输入时保留原值，旧值不会被空串覆盖。
+//! 三个数据面都经网关：MCP 配置（`GET` / `PUT /api/v1/mcp/config`）、技能清单
+//! （`GET /api/v1/skills`）与人设/行为文档（`GET` / `PUT /api/v1/documents/{soul,agents}`）。
+//! 桌面端因此不再解析本机的 `.mcp.json`、`skills/`、`SOUL.md` 与 `AGENTS.md`，
+//! 同一份代码在云端档案下同样成立。
 //!
-//! 原子写与配置系统同源，一律复用
-//! `axon_config::atomic_write::replace_file_atomically`。
+//! 安全边界：MCP 配置里可能含明文密钥，因此**读取路径只透出环境变量名**，
+//! 绝不把已有值回传给界面；写入时界面只提交用户本次输入的键值，已有键在未重新
+//! 输入时保留原值，旧值不会被空串覆盖。配置原文是保留这些键值的唯一依据，
+//! 它整条都在网关鉴权之后。
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use axon_config::ConfigLoader;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
+
+use crate::config_gateway::{self, DOCUMENTS_PATH_PREFIX, MCP_CONFIG_PATH, SKILLS_PATH};
 
 /// 配置文件相对运行时根目录的名称。
 const CONFIG_FILE: &str = "config.toml";
@@ -26,10 +31,6 @@ const LOGS_DIR: &str = "data/logs";
 const SOUL_FILE: &str = "SOUL.md";
 /// 行为约束文件名。
 const AGENTS_FILE: &str = "AGENTS.md";
-/// 技能描述文件名。
-const SKILL_ENTRY_FILE: &str = "SKILL.md";
-/// 技能描述里单个字段允许的最大长度。
-const SKILL_FIELD_MAX_CHARS: usize = 160;
 
 /// 设置里可打开的目标。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,13 +53,10 @@ fn axon_root() -> Result<PathBuf, String> {
         .map_err(|error| format!("无法解析 Axon 运行时根目录：{error:?}"))
 }
 
-/// 把绝对路径原子写入，父目录按需创建。
-fn write_text(path: &Path, text: &str) -> Result<(), String> {
-    axon_config::atomic_write::replace_file_atomically(path, text.as_bytes())
-        .map_err(|error| format!("原子写入失败：{error:?}"))
-}
-
 /// 设置内四个可打开的目标。
+///
+/// 这是本机路径入口（用系统关联程序打开配置、目录与日志），不是配置读写通道：
+/// 云端档案下这几条本机路径没有意义，等阶段 3 的文件路由接上后由网关提供。
 fn catalog() -> Result<Vec<DocumentDto>, String> {
     let root = axon_root()?;
     let entries = [
@@ -147,22 +145,51 @@ pub struct McpServerInput {
     pub env: BTreeMap<String, String>,
 }
 
-/// MCP 配置文件路径。
-fn mcp_config_path() -> Result<PathBuf, String> {
-    Ok(axon_root()?.join(MCP_CONFIG_FILE))
+/// 读取 MCP 配置回执：原文（可缺）与服务器清单。
+///
+/// 兼容三种形状：后台当前回 `{"raw": ..., "servers": [...]}`；只回清单时按清单
+/// 用；只回原文时在本地按同一套字段投影出清单。原文是写入路径保留用户自有键值
+/// 的唯一依据，缺了它就不能安全保存。
+fn decode_mcp_receipt(receipt: &Value) -> Result<(Option<String>, Vec<McpServerDto>), String> {
+    let raw = receipt
+        .get("raw")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let servers = match receipt.get("servers").and_then(Value::as_array) {
+        Some(items) => decode_servers(items)?,
+        None => match receipt.as_array() {
+            Some(items) => decode_servers(items)?,
+            None => match raw.as_deref() {
+                Some(text) => project_document(&parse_mcp_document(text)?),
+                None => {
+                    return Err("后台服务回执不是预期的 JSON 结构：缺少 servers".to_string());
+                }
+            },
+        },
+    };
+    Ok((raw, servers))
 }
 
-/// 读取 MCP 配置根对象。
-fn read_mcp_document(path: &Path) -> Result<serde_json::Value, String> {
-    if !path.exists() {
-        return Ok(serde_json::json!({ "mcpServers": {} }));
-    }
-    let text = fs::read_to_string(path).map_err(|error| format!("读取 MCP 配置失败：{error}"))?;
-    let trimmed = text.trim_start_matches('\u{feff}');
+/// 把清单数组反序列化成既有 DTO。
+fn decode_servers(items: &[Value]) -> Result<Vec<McpServerDto>, String> {
+    items.iter().cloned().map(config_gateway::decode).collect()
+}
+
+/// 从原文投影出服务器清单。
+fn project_document(document: &Value) -> Vec<McpServerDto> {
+    servers_map(document)
+        .iter()
+        .map(|(name, entry)| project_server(name, entry))
+        .collect()
+}
+
+/// 解析 MCP 配置原文。
+fn parse_mcp_document(raw: &str) -> Result<Value, String> {
+    let trimmed = raw.trim_start_matches('\u{feff}');
     if trimmed.trim().is_empty() {
-        return Ok(serde_json::json!({ "mcpServers": {} }));
+        return Ok(json!({ "mcpServers": {} }));
     }
-    let parsed: serde_json::Value =
+    let parsed: Value =
         serde_json::from_str(trimmed).map_err(|error| format!("MCP 配置不是合法 JSON：{error}"))?;
     if parsed.get("mcpServers").is_none() {
         return Err("MCP 配置缺少 mcpServers 字段".to_string());
@@ -171,37 +198,37 @@ fn read_mcp_document(path: &Path) -> Result<serde_json::Value, String> {
 }
 
 /// 取服务器表。
-fn servers_map(document: &serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+fn servers_map(document: &Value) -> Map<String, Value> {
     document
         .get("mcpServers")
-        .and_then(serde_json::Value::as_object)
+        .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default()
 }
 
 /// 把一台服务器投影成界面视图。
-fn project_server(name: &str, entry: &serde_json::Value) -> McpServerDto {
+fn project_server(name: &str, entry: &Value) -> McpServerDto {
     let string_of = |key: &str| {
         entry
             .get(key)
-            .and_then(serde_json::Value::as_str)
+            .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string()
     };
     let args = entry
         .get("args")
-        .and_then(serde_json::Value::as_array)
+        .and_then(Value::as_array)
         .map(|items| {
             items
                 .iter()
-                .filter_map(serde_json::Value::as_str)
+                .filter_map(Value::as_str)
                 .map(ToString::to_string)
                 .collect()
         })
         .unwrap_or_default();
     let mut env_keys: Vec<String> = entry
         .get("env")
-        .and_then(serde_json::Value::as_object)
+        .and_then(Value::as_object)
         .map(|items| items.keys().cloned().collect())
         .unwrap_or_default();
     env_keys.sort();
@@ -224,23 +251,20 @@ fn project_server(name: &str, entry: &serde_json::Value) -> McpServerDto {
 }
 
 /// Tauri IPC 命令：列出 MCP 服务器。
+///
+/// # Errors
+///
+/// 网关不可达、凭据不匹配或后台服务版本过旧。
 #[tauri::command(async)]
 pub fn mcp_list() -> Result<Vec<McpServerDto>, String> {
-    let path = mcp_config_path()?;
-    let document = read_mcp_document(&path)?;
-    let mut servers: Vec<McpServerDto> = servers_map(&document)
-        .iter()
-        .map(|(name, entry)| project_server(name, entry))
-        .collect();
+    let receipt = config_gateway::get_json(MCP_CONFIG_PATH)?;
+    let (_, mut servers) = decode_mcp_receipt(&receipt)?;
     servers.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(servers)
 }
 
 /// 由入参构建一条服务器配置；已有同名条目用于保留未重输的密钥。
-fn build_server(
-    input: &McpServerInput,
-    previous: Option<&serde_json::Value>,
-) -> Result<serde_json::Value, String> {
+fn build_server(input: &McpServerInput, previous: Option<&Value>) -> Result<Value, String> {
     let name = input.name.trim();
     if name.is_empty() {
         return Err("MCP 服务器名称不能为空".to_string());
@@ -251,47 +275,38 @@ fn build_server(
         input.kind.trim()
     };
 
-    let mut entry = serde_json::Map::new();
-    entry.insert(
-        "type".to_string(),
-        serde_json::Value::String(kind.to_string()),
-    );
+    let mut entry = Map::new();
+    entry.insert("type".to_string(), Value::String(kind.to_string()));
 
     if kind == "http" {
         let url = input.url.trim();
         if url.is_empty() {
             return Err("HTTP 类型的 MCP 服务器必须填写地址".to_string());
         }
-        entry.insert(
-            "url".to_string(),
-            serde_json::Value::String(url.to_string()),
-        );
+        entry.insert("url".to_string(), Value::String(url.to_string()));
     } else {
         let command = input.command.trim();
         if command.is_empty() {
             return Err("stdio 类型的 MCP 服务器必须填写启动命令".to_string());
         }
-        entry.insert(
-            "command".to_string(),
-            serde_json::Value::String(command.to_string()),
-        );
-        let args: Vec<serde_json::Value> = input
+        entry.insert("command".to_string(), Value::String(command.to_string()));
+        let args: Vec<Value> = input
             .args
             .iter()
             .map(|value| value.trim())
             .filter(|value| !value.is_empty())
-            .map(|value| serde_json::Value::String(value.to_string()))
+            .map(|value| Value::String(value.to_string()))
             .collect();
         if !args.is_empty() {
-            entry.insert("args".to_string(), serde_json::Value::Array(args));
+            entry.insert("args".to_string(), Value::Array(args));
         }
     }
 
     // 环境变量：本次输入非空则覆盖，留空则沿用原值，避免把已配好的密钥写成空串。
     let previous_env = previous
         .and_then(|value| value.get("env"))
-        .and_then(serde_json::Value::as_object);
-    let mut env = serde_json::Map::new();
+        .and_then(Value::as_object);
+    let mut env = Map::new();
     for (key, value) in &input.env {
         let trimmed_key = key.trim();
         if trimmed_key.is_empty() {
@@ -301,7 +316,7 @@ fn build_server(
         if !trimmed_value.is_empty() {
             env.insert(
                 trimmed_key.to_string(),
-                serde_json::Value::String(trimmed_value.to_string()),
+                Value::String(trimmed_value.to_string()),
             );
             continue;
         }
@@ -310,52 +325,79 @@ fn build_server(
         }
     }
     if !env.is_empty() {
-        entry.insert("env".to_string(), serde_json::Value::Object(env));
+        entry.insert("env".to_string(), Value::Object(env));
     }
 
-    Ok(serde_json::Value::Object(entry))
+    Ok(Value::Object(entry))
+}
+
+/// 读原文、改服务器表、写回原文：MCP 编辑的唯一通道。
+///
+/// 读改写都在网关侧完成，桌面端只做一次转发；原文里用户自己写的键值原样保留，
+/// 落盘格式与用户手写的一致。
+fn edit_mcp_config(
+    edit: impl FnOnce(&mut Map<String, Value>) -> Result<(), String>,
+) -> Result<(), String> {
+    let receipt = config_gateway::get_json(MCP_CONFIG_PATH)?;
+    let (raw, _) = decode_mcp_receipt(&receipt)?;
+    let Some(raw) = raw else {
+        return Err(
+            "后台服务没有提供 MCP 配置原文，无法安全保存（请升级后台服务后再试）".to_string(),
+        );
+    };
+    let mut document = parse_mcp_document(&raw)?;
+    let mut servers = servers_map(&document);
+    edit(&mut servers)?;
+    document["mcpServers"] = Value::Object(servers);
+    let text = serde_json::to_string_pretty(&document)
+        .map_err(|error| format!("序列化 MCP 配置失败：{error}"))?;
+    let receipt =
+        config_gateway::put_json(MCP_CONFIG_PATH, &json!({ "raw": format!("{text}\n") }))?;
+    // 回执与读取同构：清单回得来才算这一份写成功。
+    decode_mcp_receipt(&receipt).map(|_| ())
 }
 
 /// Tauri IPC 命令：新增或更新一台 MCP 服务器。
+///
+/// # Errors
+///
+/// 入参不合法、同名冲突、网关不可达或后台服务版本过旧。
 #[tauri::command(async)]
 pub fn mcp_upsert(input: McpServerInput, original_name: Option<String>) -> Result<(), String> {
-    let path = mcp_config_path()?;
-    let mut document = read_mcp_document(&path)?;
-    let mut servers = servers_map(&document);
+    edit_mcp_config(move |servers| {
+        let name = input.name.trim().to_string();
+        if name.is_empty() {
+            return Err("MCP 服务器名称不能为空".to_string());
+        }
+        let previous_name = original_name
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| name.clone());
 
-    let name = input.name.trim().to_string();
-    let previous_name = original_name
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| name.clone());
+        if previous_name != name && servers.contains_key(&name) {
+            return Err(format!("已存在同名 MCP 服务器：{name}"));
+        }
 
-    if previous_name != name && servers.contains_key(&name) {
-        return Err(format!("已存在同名 MCP 服务器：{name}"));
-    }
-
-    let built = build_server(&input, servers.get(&previous_name))?;
-    servers.remove(&previous_name);
-    servers.insert(name, built);
-
-    document["mcpServers"] = serde_json::Value::Object(servers);
-    let text = serde_json::to_string_pretty(&document)
-        .map_err(|error| format!("序列化 MCP 配置失败：{error}"))?;
-    write_text(&path, &format!("{text}\n"))
+        let built = build_server(&input, servers.get(&previous_name))?;
+        servers.remove(&previous_name);
+        servers.insert(name, built);
+        Ok(())
+    })
 }
 
 /// Tauri IPC 命令：移除一台 MCP 服务器。
+///
+/// # Errors
+///
+/// 服务器不存在、网关不可达或后台服务版本过旧。
 #[tauri::command(async)]
 pub fn mcp_remove(name: String) -> Result<(), String> {
-    let path = mcp_config_path()?;
-    let mut document = read_mcp_document(&path)?;
-    let mut servers = servers_map(&document);
-    if servers.remove(name.trim()).is_none() {
-        return Err(format!("MCP 服务器不存在：{name}"));
-    }
-    document["mcpServers"] = serde_json::Value::Object(servers);
-    let text = serde_json::to_string_pretty(&document)
-        .map_err(|error| format!("序列化 MCP 配置失败：{error}"))?;
-    write_text(&path, &format!("{text}\n"))
+    edit_mcp_config(|servers| {
+        if servers.remove(name.trim()).is_none() {
+            return Err(format!("MCP 服务器不存在：{name}"));
+        }
+        Ok(())
+    })
 }
 
 /// Tauri IPC 命令：以完整 JSON 配置新增或更新一台 MCP 服务器。
@@ -363,27 +405,25 @@ pub fn mcp_remove(name: String) -> Result<(), String> {
 /// 面向熟悉原始配置的使用者：直接给出该服务器的完整 JSON 片段，
 /// 因此不做字段级改写。仍然校验它必须是 JSON 对象，
 /// 并且**不会**因为键名不认识就丢掉内容。
+///
+/// # Errors
+///
+/// 入参不是合法 JSON 对象、网关不可达或后台服务版本过旧。
 #[tauri::command(async)]
 pub fn mcp_upsert_raw(name: String, entry_json: String) -> Result<(), String> {
-    let trimmed_name = name.trim();
+    let trimmed_name = name.trim().to_string();
     if trimmed_name.is_empty() {
         return Err("MCP 服务器名称不能为空".to_string());
     }
-    let parsed: serde_json::Value = serde_json::from_str(entry_json.trim())
+    let parsed: Value = serde_json::from_str(entry_json.trim())
         .map_err(|error| format!("配置不是合法 JSON：{error}"))?;
     if !parsed.is_object() {
         return Err("配置必须是 JSON 对象".to_string());
     }
-
-    let path = mcp_config_path()?;
-    let mut document = read_mcp_document(&path)?;
-    let mut servers = servers_map(&document);
-    servers.insert(trimmed_name.to_string(), parsed);
-    document["mcpServers"] = serde_json::Value::Object(servers);
-
-    let text = serde_json::to_string_pretty(&document)
-        .map_err(|error| format!("序列化 MCP 配置失败：{error}"))?;
-    write_text(&path, &format!("{text}\n"))
+    edit_mcp_config(move |servers| {
+        servers.insert(trimmed_name, parsed);
+        Ok(())
+    })
 }
 
 // ------------------------------------------------------------------ 技能
@@ -403,114 +443,26 @@ pub struct SkillDto {
     pub entry_path: String,
 }
 
-/// 从 SKILL.md 的 YAML 前置块里取一个字段。
-///
-/// 支持两种写法：单行值，以及 YAML 的块标量（`description: |` 后面跟缩进正文）。
-/// 技能说明经常是一整段话，写成块标量很自然；只认单行会把 `|` 本身当成说明，
-/// 斜杠指令里就会出现一个只有竖线的候选。
-fn front_matter_field(text: &str, key: &str) -> Option<String> {
-    let mut lines = text.lines();
-    if lines.next()?.trim() != "---" {
-        return None;
-    }
-    let prefix = format!("{key}:");
-    while let Some(line) = lines.next() {
-        let trimmed = line.trim();
-        if trimmed == "---" {
-            break;
-        }
-        let Some(rest) = trimmed.strip_prefix(&prefix) else {
-            continue;
-        };
-        let value = rest.trim().trim_matches(['"', '\'']).trim();
-        if is_block_scalar_marker(value) {
-            return collect_block_scalar(&mut lines, line);
-        }
-        if !value.is_empty() {
-            return Some(clamp_field(value));
-        }
-    }
-    None
-}
-
-/// 该取值是否表示「正文在后面的缩进块里」。`|-`、`|+`、`>` 同理。
-fn is_block_scalar_marker(value: &str) -> bool {
-    matches!(value, "|" | "|-" | "|+" | ">" | ">-" | ">+")
-}
-
-/// 收集块标量正文：比 `key:` 那一行更深的缩进行，直到回到同级或块结束。
-fn collect_block_scalar<'a>(
-    lines: &mut impl Iterator<Item = &'a str>,
-    key_line: &str,
-) -> Option<String> {
-    let key_indent = key_line.len() - key_line.trim_start().len();
-    let mut parts: Vec<String> = Vec::new();
-    for line in lines.by_ref() {
-        let trimmed = line.trim();
-        if trimmed == "---" {
-            break;
-        }
-        let indent = line.len() - line.trim_start().len();
-        // 空行属于块内断行；缩进回到 key 同级则块已结束。
-        if trimmed.is_empty() {
-            if !parts.is_empty() {
-                parts.push(String::new());
-            }
-            continue;
-        }
-        if indent <= key_indent {
-            break;
-        }
-        parts.push(trimmed.to_string());
-    }
-    while parts.last().is_some_and(|part| part.is_empty()) {
-        parts.pop();
-    }
-    let joined = parts.join("\n").trim().to_string();
-    (!joined.is_empty()).then(|| clamp_field(&joined))
-}
-
-/// 截断到展示上限。
-fn clamp_field(value: &str) -> String {
-    value.chars().take(SKILL_FIELD_MAX_CHARS).collect()
-}
-
 /// Tauri IPC 命令：列出已安装技能。
+///
+/// 技能目录在后台的运行时根下，解析 YAML 前置块也在后台完成；桌面端只取清单。
+///
+/// # Errors
+///
+/// 网关不可达、凭据不匹配或后台服务版本过旧。
 #[tauri::command(async)]
 pub fn skills_list() -> Result<Vec<SkillDto>, String> {
-    let root = axon_root()?.join(SKILLS_DIR);
-    let Ok(entries) = fs::read_dir(&root) else {
-        return Ok(Vec::new());
-    };
-
-    let mut skills = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let Some(id) = path.file_name().and_then(|value| value.to_str()) else {
-            continue;
-        };
-        if id.starts_with('.') {
-            continue;
-        }
-        let entry_path = path.join(SKILL_ENTRY_FILE);
-        let text = fs::read_to_string(&entry_path).unwrap_or_default();
-        let name = front_matter_field(&text, "name").unwrap_or_else(|| id.to_string());
-        let description = front_matter_field(&text, "description").unwrap_or_default();
-        skills.push(SkillDto {
-            id: id.to_string(),
-            name,
-            description,
-            path: path.to_string_lossy().to_string(),
-            entry_path: if entry_path.exists() {
-                entry_path.to_string_lossy().to_string()
-            } else {
-                String::new()
-            },
-        });
-    }
+    let receipt = config_gateway::get_json(SKILLS_PATH)?;
+    let items = receipt
+        .get("skills")
+        .and_then(Value::as_array)
+        .or_else(|| receipt.as_array())
+        .ok_or_else(|| "后台服务回执不是预期的 JSON 结构：缺少 skills".to_string())?;
+    let mut skills: Vec<SkillDto> = items
+        .iter()
+        .cloned()
+        .map(config_gateway::decode)
+        .collect::<Result<Vec<SkillDto>, String>>()?;
     skills.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(skills)
 }
@@ -522,7 +474,7 @@ pub fn skills_list() -> Result<Vec<SkillDto>, String> {
 pub struct DocumentTextDto {
     /// 文档内容；文件不存在时为空串。
     pub content: String,
-    /// 文档绝对路径。
+    /// 文档在本机的绝对路径；云端档案下为空串。
     pub path: String,
     /// 文件是否已存在。
     pub exists: bool,
@@ -537,85 +489,77 @@ fn document_file(id: &str) -> Result<&'static str, String> {
     }
 }
 
+/// 文档在本机的落地路径。
+///
+/// 只有本机档案下这条路径真实可用：云档案的文档在后台，桌面端没有也不该有它的
+/// 本机路径，此时回空串，界面那一行就不会显示一个假路径。
+fn document_local_path(file_name: &str) -> String {
+    let is_local = crate::connection::runtime()
+        .active()
+        .is_some_and(|entry| !entry.profile.is_cloud());
+    if !is_local {
+        return String::new();
+    }
+    axon_root()
+        .map(|root| root.join(file_name).to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
 /// Tauri IPC 命令：读取人设或行为准则文档。
+///
+/// # Errors
+///
+/// 不支持的文档标识、网关不可达或后台服务版本过旧。
 #[tauri::command(async)]
 pub fn document_read(id: String) -> Result<DocumentTextDto, String> {
-    let path = axon_root()?.join(document_file(&id)?);
-    let exists = path.exists();
-    let content = if exists {
-        fs::read_to_string(&path)
-            .map_err(|error| format!("读取文档失败：{error}"))?
-            .trim_start_matches('\u{feff}')
-            .to_string()
-    } else {
-        String::new()
-    };
+    let file_name = document_file(&id)?;
+    let receipt = config_gateway::get_json(&format!("{DOCUMENTS_PATH_PREFIX}{id}"))?;
+    let content = config_gateway::string_field(&receipt, "text")?;
     Ok(DocumentTextDto {
+        // 网关只回全文，不回存在性；空正文等于这份文档还没有建好，
+        // 因为空内容写入会被拒。
+        exists: !content.is_empty(),
         content,
-        path: path.to_string_lossy().to_string(),
-        exists,
+        path: document_local_path(file_name),
     })
 }
 
 /// Tauri IPC 命令：写入人设或行为准则文档。
+///
+/// # Errors
+///
+/// 不支持的文档标识、正文为空、网关不可达或后台服务版本过旧。
 #[tauri::command(async)]
 pub fn document_write(id: String, content: String) -> Result<(), String> {
+    document_file(&id)?;
     if content.trim().is_empty() {
         return Err("文档内容不能为空".to_string());
     }
-    write_text(&axon_root()?.join(document_file(&id)?), &content)
+    let receipt = config_gateway::put_json(
+        &format!("{DOCUMENTS_PATH_PREFIX}{id}"),
+        &json!({ "text": content }),
+    )?;
+    // 回执与读取同构：正文回得来才算这一份写成功。
+    if config_gateway::string_field(&receipt, "text")?
+        .trim()
+        .is_empty()
+    {
+        return Err("后台服务回执的正文为空，写入可能未生效".to_string());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{front_matter_field, project_server};
+    use std::collections::BTreeMap;
 
-    #[test]
-    fn front_matter_reads_name_and_description() {
-        let text = "---\nname: 示例技能\ndescription: 一句话说明\n---\n正文";
-        assert_eq!(
-            front_matter_field(text, "name").as_deref(),
-            Some("示例技能")
-        );
-        assert_eq!(
-            front_matter_field(text, "description").as_deref(),
-            Some("一句话说明")
-        );
-        assert!(front_matter_field("没有前置块", "name").is_none());
-    }
+    use serde_json::json;
 
-    #[test]
-    fn front_matter_reads_block_scalar_descriptions() {
-        // 技能说明常写成 YAML 块标量：只认单行会把 `|` 本身当成说明，
-        // 斜杠指令里就会出现一个只有竖线的候选。
-        let text = "---\nname: browser-skill\ndescription: |\n  Use when the user asks to automate\n  their logged-in browser.\n---\n正文";
-        assert_eq!(
-            front_matter_field(text, "description").as_deref(),
-            Some("Use when the user asks to automate\ntheir logged-in browser.")
-        );
-
-        // 折叠标量（`>`）与截断标记（`|-`）同样按块处理。
-        let folded = "---\ndescription: >-\n  第一行\n  第二行\n---\n";
-        assert_eq!(
-            front_matter_field(folded, "description").as_deref(),
-            Some("第一行\n第二行")
-        );
-
-        // 块结束于同级字段：后面的字段不能被吃进说明里。
-        let with_tail = "---\ndescription: |\n  说明\nname: 之后的字段\n---\n";
-        assert_eq!(
-            front_matter_field(with_tail, "description").as_deref(),
-            Some("说明")
-        );
-        assert_eq!(
-            front_matter_field(with_tail, "name").as_deref(),
-            Some("之后的字段")
-        );
-    }
+    use super::{McpServerInput, build_server, decode_mcp_receipt, project_server};
 
     #[test]
     fn server_projection_never_exposes_env_values() {
-        let entry = serde_json::json!({
+        let entry = json!({
             "type": "stdio",
             "command": "npx",
             "args": ["-y", "pkg"],
@@ -623,10 +567,58 @@ mod tests {
         });
         let dto = project_server("demo", &entry);
         assert_eq!(dto.env_keys, vec!["SECRET_KEY".to_string()]);
-        let serialized = serde_json::to_string(&dto).unwrap();
+        let serialized = serde_json::to_string(&dto).expect("投影结果必须可序列化");
         assert!(
             !serialized.contains("sk-should-never-leak"),
             "投影结果绝不能携带环境变量值"
         );
+    }
+
+    #[test]
+    fn receipt_accepts_both_the_list_and_the_raw_document() {
+        // 后台当前回原文加清单；只回清单时按清单用；只回原文时本地投影。
+        let both = json!({
+            "raw": "{\"mcpServers\":{\"demo\":{\"type\":\"stdio\",\"command\":\"npx\"}}}",
+            "servers": [{"name": "demo", "kind": "stdio", "command": "npx", "args": [], "url": "", "env_keys": []}]
+        });
+        let (raw, servers) = decode_mcp_receipt(&both).expect("带清单的回执必须可解析");
+        assert!(raw.is_some(), "原文必须保留，写入路径要用它保值");
+        assert_eq!(servers.len(), 1);
+
+        let raw_only = json!({
+            "raw": "{\"mcpServers\":{\"demo\":{\"type\":\"stdio\",\"command\":\"npx\"}}}"
+        });
+        let (_, servers) = decode_mcp_receipt(&raw_only).expect("只回原文时必须能投影出清单");
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "demo");
+
+        assert!(decode_mcp_receipt(&json!({ "other": 1 })).is_err());
+    }
+
+    #[test]
+    fn empty_env_input_keeps_the_existing_secret() {
+        // 界面留空表示「不修改这把密钥」：旧值必须原样保留，绝不能被空串覆盖。
+        let mut env = BTreeMap::new();
+        env.insert("SECRET_KEY".to_string(), String::new());
+        let input = McpServerInput {
+            name: "demo".to_string(),
+            kind: "stdio".to_string(),
+            command: "npx".to_string(),
+            env,
+            ..McpServerInput::default()
+        };
+        let previous = json!({ "env": { "SECRET_KEY": "sk-existing" } });
+        let built = build_server(&input, Some(&previous)).expect("合法入参必须能建出条目");
+        assert_eq!(built["env"]["SECRET_KEY"], "sk-existing");
+    }
+
+    #[test]
+    fn http_server_requires_an_address() {
+        let input = McpServerInput {
+            name: "demo".to_string(),
+            kind: "http".to_string(),
+            ..McpServerInput::default()
+        };
+        assert!(build_server(&input, None).is_err());
     }
 }

@@ -587,6 +587,26 @@ impl GatewayHttpRouteHandler for CompositeHttpAdapter {
             .iter()
             .find_map(|handler| handler.handle_request(method, path, query, body))
     }
+
+    /// 带身份的入口：身份必须逐层透传。
+    ///
+    /// 网关路由层已经完成鉴权并按路径分级，本层不做第二次判定，只负责把身份送到需要它
+    /// 的适配器手上。少了这一层，`/api/v1/keys` 这类按身份分级的路由族拿到的永远是
+    /// `None`，管理面会对超管也回 403。未覆写 `handle_request_as` 的适配器由 trait 的
+    /// 默认实现回落，行为与改造前逐字一致。
+    fn handle_request_as(
+        &self,
+        method: &str,
+        path: &str,
+        query: Option<&str>,
+        body: &[u8],
+        identity: Option<&axon_daemon::infrastructure::gateway_auth::GatewayIdentity>,
+        peer: Option<&str>,
+    ) -> Option<GatewayHttpResponse> {
+        self.handlers.iter().find_map(|handler| {
+            handler.handle_request_as(method, path, query, body, identity, peer)
+        })
+    }
 }
 
 /// 注册（或刷新）一个工作区根目录，并返回其权威身份。

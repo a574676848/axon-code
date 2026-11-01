@@ -4,18 +4,20 @@
 //! 界面上一张卡片对应一个档案，保存时整卡一次提交，因此这里的所有写入
 //! 都是单次原子落盘，绝不会出现供应商已改而模型半新的中间态。
 //!
-//! 落盘一律复用 `ConfigLoader::save_to_path`，因此仍然走
-//! `axon_config::atomic_write::replace_file_atomically` 的原子替换路径，
-//! 并在替换前保留时间戳备份。
+//! 写入一律经网关：后台没有供应商档案专用路由，因此用配置读写换等价语义，
+//! 先 `GET /api/v1/config` 取权威全文，在内存里整卡改一处，再以文本模式
+//! `PUT /api/v1/config` 整份写回，落盘前由后台重新校验。这样同一份代码在
+//! 云端档案下同样成立：桌面端不再解析本机 `config.toml`。
 //!
 //! 安全边界：本模块只接受 `api_key_env`（环境变量名），
 //! 结构化参数里不存在 `api_key` 明文字段，密钥绝不穿越 IPC。
 
 use std::path::Path;
 
-use axon_config::{ConfigLoader, ModelConfig, ProviderConfig, add_provider};
+use axon_config::{ConfigLoader, ModelConfig, ProviderConfig, add_provider, to_toml_string};
 
-use crate::ipc::ConfigWriteResponse;
+use crate::config_gateway::{self, ConfigUpdate};
+use crate::ipc::{ConfigReadResponse, ConfigWriteResponse};
 
 /// 供应商写入入参。
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -103,13 +105,10 @@ impl Default for ModelInput {
     }
 }
 
-/// 解析当前用户配置文件路径。
-fn config_path() -> Result<std::path::PathBuf, String> {
-    ConfigLoader::default_user_config_path()
-        .map_err(|error| format!("获取用户配置路径失败：{error:?}"))
-}
-
 /// 校验并原子落盘。
+///
+/// 只服务按路径写入的离线场合（自检与单测）：界面命令一律经网关，由后台
+/// 校验后落盘。
 fn persist(path: &Path, config: &axon_config::AxonConfig) -> Result<ConfigWriteResponse, String> {
     config
         .validate()
@@ -220,6 +219,29 @@ pub fn provider_profile_upsert_at(
     models: Vec<ModelInput>,
     original_name: Option<String>,
 ) -> Result<ConfigWriteResponse, String> {
+    let mut loaded =
+        ConfigLoader::load_from_path(path).map_err(|error| format!("加载配置失败：{error:?}"))?;
+    upsert_into(&mut loaded.config, input, models, original_name)?;
+    persist(path, &loaded.config)
+}
+
+/// 在指定路径上移除一个供应商档案，连同它名下的全部模型。
+pub fn provider_profile_remove_at(path: &Path, name: &str) -> Result<ConfigWriteResponse, String> {
+    let mut loaded =
+        ConfigLoader::load_from_path(path).map_err(|error| format!("加载配置失败：{error:?}"))?;
+    remove_from(&mut loaded.config, name)?;
+    persist(path, &loaded.config)
+}
+
+/// 在内存里整体写入一个供应商档案；落盘由调用方负责。
+///
+/// 校验放在最前面：整卡里任何一处不合法，都不会留下半新半旧的中间态。
+fn upsert_into(
+    config: &mut axon_config::AxonConfig,
+    input: ProviderInput,
+    models: Vec<ModelInput>,
+    original_name: Option<String>,
+) -> Result<(), String> {
     let provider = build_provider(&input)?;
     let final_name = provider.name.clone();
     let previous_name = original_name
@@ -243,19 +265,14 @@ pub fn provider_profile_upsert_at(
         return Err("同一供应商下的模型名称不能重复".to_string());
     }
 
-    let mut loaded =
-        ConfigLoader::load_from_path(path).map_err(|error| format!("加载配置失败：{error:?}"))?;
-
     let target = previous_name.clone().unwrap_or_else(|| final_name.clone());
-    match loaded
-        .config
+    match config
         .providers
         .iter()
         .position(|existing| existing.name == target)
     {
         Some(index) => {
-            let duplicated = loaded
-                .config
+            let duplicated = config
                 .providers
                 .iter()
                 .enumerate()
@@ -263,11 +280,10 @@ pub fn provider_profile_upsert_at(
             if duplicated {
                 return Err("provider.name 不能重复".to_string());
             }
-            loaded.config.providers[index] = provider;
+            config.providers[index] = provider;
         }
         None => {
-            add_provider(&mut loaded.config, provider)
-                .map_err(|error| format!("新增供应商失败：{error:?}"))?;
+            add_provider(config, provider).map_err(|error| format!("新增供应商失败：{error:?}"))?;
         }
     }
 
@@ -275,7 +291,7 @@ pub fn provider_profile_upsert_at(
     if let Some(previous) = previous_name.as_deref()
         && previous != final_name
     {
-        for model in &mut loaded.config.models {
+        for model in &mut config.models {
             if model.provider == previous {
                 model.provider = final_name.clone();
             }
@@ -287,59 +303,140 @@ pub fn provider_profile_upsert_at(
         .iter()
         .map(|model| model.name.clone())
         .collect();
-    loaded
-        .config
+    config
         .models
         .retain(|model| !(model.provider == final_name && !keep.contains(&model.name)));
     for model in built_models {
-        match loaded
-            .config
+        match config
             .models
             .iter()
             .position(|existing| existing.name == model.name)
         {
-            Some(index) => loaded.config.models[index] = model,
-            None => loaded.config.models.push(model),
+            Some(index) => config.models[index] = model,
+            None => config.models.push(model),
         }
     }
 
-    reconcile_model_slots(&mut loaded.config);
-    persist(path, &loaded.config)
+    reconcile_model_slots(config);
+    Ok(())
 }
 
-/// 在指定路径上移除一个供应商档案，连同它名下的全部模型。
-pub fn provider_profile_remove_at(path: &Path, name: &str) -> Result<ConfigWriteResponse, String> {
-    let mut loaded =
-        ConfigLoader::load_from_path(path).map_err(|error| format!("加载配置失败：{error:?}"))?;
+/// 在内存里移除一个供应商档案，连同它名下的全部模型；落盘由调用方负责。
+fn remove_from(config: &mut axon_config::AxonConfig, name: &str) -> Result<(), String> {
     let trimmed = name.trim();
-    let before = loaded.config.providers.len();
-    loaded
-        .config
-        .providers
-        .retain(|entry| entry.name != trimmed);
-    if loaded.config.providers.len() == before {
+    let before = config.providers.len();
+    config.providers.retain(|entry| entry.name != trimmed);
+    if config.providers.len() == before {
         return Err("供应商不存在".to_string());
     }
-    loaded
-        .config
-        .models
-        .retain(|model| model.provider != trimmed);
-    reconcile_model_slots(&mut loaded.config);
-    persist(path, &loaded.config)
+    config.models.retain(|model| model.provider != trimmed);
+    reconcile_model_slots(config);
+    Ok(())
+}
+
+/// 取权威配置全文、在内存里改一处、整份写回后台。
+///
+/// 读改写都在网关侧：桌面端只做一次转发式的编辑，落盘与校验都由后台完成。
+fn edit_config(
+    edit: impl FnOnce(&mut axon_config::AxonConfig) -> Result<(), String>,
+) -> Result<ConfigWriteResponse, String> {
+    let receipt = config_gateway::get_json(config_gateway::CONFIG_PATH)?;
+    let read: ConfigReadResponse = config_gateway::decode(receipt)?;
+    let mut loaded = ConfigLoader::load_from_str(&read.toml_content)
+        .map_err(|error| format!("后台配置无法解析：{error:?}"))?;
+    edit(&mut loaded.config)?;
+    let toml_content =
+        to_toml_string(&loaded.config).map_err(|error| format!("规范化序列化失败：{error:?}"))?;
+    let receipt = (ConfigUpdate::Text { toml_content }).send()?;
+    config_gateway::decode(receipt)
 }
 
 /// Tauri IPC 命令：整体保存一个供应商档案。
+///
+/// # Errors
+///
+/// 入参不合法、网关不可达或后台服务版本过旧。
 #[tauri::command(async)]
 pub fn provider_profile_upsert(
     input: ProviderInput,
     models: Vec<ModelInput>,
     original_name: Option<String>,
 ) -> Result<ConfigWriteResponse, String> {
-    provider_profile_upsert_at(&config_path()?, input, models, original_name)
+    edit_config(move |config| upsert_into(config, input, models, original_name))
 }
 
 /// Tauri IPC 命令：移除一个供应商档案及其全部模型。
+///
+/// # Errors
+///
+/// 供应商不存在、网关不可达或后台服务版本过旧。
 #[tauri::command(async)]
 pub fn provider_profile_remove(name: String) -> Result<ConfigWriteResponse, String> {
-    provider_profile_remove_at(&config_path()?, &name)
+    edit_config(|config| remove_from(config, &name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ModelInput, ProviderInput, remove_from, upsert_into};
+
+    /// 一个待保存的供应商档案，字段取值与界面提交的同形。
+    fn profile() -> ProviderInput {
+        ProviderInput {
+            name: "demo-provider".to_string(),
+            enabled: true,
+            protocol: "openai".to_string(),
+            base_url: "https://example.com/v1".to_string(),
+            api_key_env: Some("DEMO_API_KEY".to_string()),
+            wire_transport: "http".to_string(),
+            priority: 10,
+            weight: 1,
+            ..ProviderInput::default()
+        }
+    }
+
+    /// 一个待保存的模型条目。
+    fn model() -> ModelInput {
+        ModelInput {
+            name: "demo-a".to_string(),
+            id: "demo-a-v1".to_string(),
+            provider: "demo-provider".to_string(),
+            context_window: 64000,
+            ..ModelInput::default()
+        }
+    }
+
+    #[test]
+    fn gateway_text_round_trip_keeps_profile_models_and_slots() {
+        // 网关路径把改动写成整份 TOML 交给后台，因此拼出来的文本必须仍可解析，
+        // 并且供应商、模型与模型槽位一个都不少。
+        let mut config = axon_config::AxonConfig::default();
+        upsert_into(&mut config, profile(), vec![model()], None).expect("整卡写入必须成功");
+
+        let text = axon_config::to_toml_string(&config).expect("必须能序列化成权威 TOML");
+        let reloaded =
+            axon_config::ConfigLoader::load_from_str(&text).expect("拼出的全文必须仍可解析");
+        assert_eq!(reloaded.config.providers.len(), 1);
+        assert_eq!(reloaded.config.models.len(), 1);
+        assert_eq!(reloaded.config.providers[0].name, "demo-provider");
+        assert_eq!(
+            reloaded.config.agent.default_model, "demo-a",
+            "模型目录非空时默认模型槽位必须绑到已配置模型"
+        );
+    }
+
+    #[test]
+    fn removing_an_unknown_profile_is_an_error() {
+        let mut config = axon_config::AxonConfig::default();
+        assert!(remove_from(&mut config, "不存在的档案").is_err());
+    }
+
+    #[test]
+    fn removing_the_only_profile_clears_the_model_slots() {
+        let mut config = axon_config::AxonConfig::default();
+        upsert_into(&mut config, profile(), vec![model()], None).expect("整卡写入必须成功");
+        remove_from(&mut config, "demo-provider").expect("移除已有档案必须成功");
+        assert!(config.providers.is_empty());
+        assert!(config.models.is_empty());
+        assert!(config.agent.default_model.is_empty());
+    }
 }

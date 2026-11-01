@@ -1,5 +1,6 @@
 //! HTTP Gateway 外部路由扩展处理器。
 
+use crate::infrastructure::gateway_auth::GatewayIdentity;
 use axon_protocol::SubmitInteractionReceipt;
 
 /// 自定义 HTTP 响应模型。
@@ -69,4 +70,22 @@ pub trait GatewayHttpRouteHandler: Send + Sync {
         query: Option<&str>,
         body: &[u8],
     ) -> Option<GatewayHttpResponse>;
+
+    /// 带身份与对端地址的请求入口。未命中对应路由时返回 None。
+    ///
+    /// 默认实现丢弃身份与地址并转调 [`Self::handle_request`]，因此既有适配器一行
+    /// 都不用改；需要按身份分级的路由族（例如 `/api/v1/keys` 只认超管）覆盖本方法
+    /// 即可。`peer` 只在需要写审计行的族里使用，取不到时为 `None`。
+    fn handle_request_as(
+        &self,
+        method: &str,
+        path: &str,
+        query: Option<&str>,
+        body: &[u8],
+        identity: Option<&GatewayIdentity>,
+        peer: Option<&str>,
+    ) -> Option<GatewayHttpResponse> {
+        let _ = (identity, peer);
+        self.handle_request(method, path, query, body)
+    }
 }

@@ -61,6 +61,7 @@ Axon 是基于 Rust 构建的专属个人智能体（Personal Agent）与战术�
 生产环境观测与源码开发：
 
 - [使用统计与用量看板](./usage-statistics.md) - Token 消耗度量、审计日志与成本核算体系
+- [安全基线](./security-baseline.md) - 连接形态与地址分流、TLS 信任来源、两级身份与多 Key 凭据、上传与路径校验、调试面与日志审计
 - [故障诊断与自愈](./troubleshooting.md) - 健康检查 `axon doctor`、常见异常与修复手段
 - [开源贡献指南](../CONTRIBUTING.md) - 代码结构、分层边界、门禁要求与贡献流程
 - [工作台设计系统](./workbench-design-system.md) - 跨平台桌面端极简浅色设计规范与令牌 SSOT

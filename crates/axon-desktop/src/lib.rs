@@ -9,6 +9,10 @@ pub mod automation;
 pub mod catalog;
 /// 剪贴板：原生通道读写，不经网页剪贴板权限。
 pub mod clipboard;
+/// 配置类能力经网关的共用客户端：请求组装、回执解析与降级判定。
+pub mod config_gateway;
+/// 连接档案：端点解析、状态分层、凭据存储与探活。
+pub mod connection;
 /// 会话：提交、订阅与历史索引。
 pub mod conversation;
 /// 桌面级偏好的 IPC：目前只有通知开关。
@@ -78,6 +82,8 @@ pub mod workspace;
 pub mod workspace_apps;
 /// 工作区文件的只读浏览。
 pub mod workspace_files;
+/// 云档案下的工作区文件与附件：经网关取字节（本机档案不走这里）。
+pub mod workspace_files_gateway;
 
 use automation::{
     cron_config, cron_create, cron_get, cron_history, cron_list, cron_pause, cron_remove,
@@ -86,6 +92,13 @@ use automation::{
 };
 use catalog::{provider_profile_remove, provider_profile_upsert};
 use clipboard::{clipboard_read_text, clipboard_write_text};
+use connection::commands::{
+    connection_complete_onboarding, connection_delete_profile, connection_probe_profiles,
+    connection_rename_profile, connection_retry_probe, connection_save_profile,
+    connection_set_session_secret, connection_skip_onboarding, connection_state,
+    connection_switch_profile, connection_test,
+};
+use connection::keys::{connection_keys_create, connection_keys_list, connection_keys_revoke};
 use conversation::{
     attachment_pick, attachment_preview, attachment_stage, conversation_answer_question,
     conversation_history, conversation_history_events, conversation_interrupt,
@@ -104,7 +117,7 @@ use goals::{goal_get, goal_list};
 use input_history::{input_history_append, input_history_list};
 use ipc::{
     config_apply_values, config_read, config_reset_key, config_validate, config_validate_values,
-    config_write, open_config_file, voice_presets, voice_runtime_status, voice_tts,
+    config_write, voice_presets, voice_runtime_status, voice_tts,
 };
 use lane_source::GatewayLaneSource;
 use mcp_runtime::{mcp_runtime_refresh, mcp_runtime_status};
@@ -147,6 +160,14 @@ pub struct AppState {
 
 /// 启动 Axon 桌面应用。
 pub fn run() {
+    // TLS 底座：网关与供应商两侧都必须用同一个 crypto provider（aws-lc-rs），
+    // 否则平台根证书验证与既有握手算法的签名能力会不一致。
+    axon_rustls_provider::ensure_rustls_crypto_provider();
+    // 上次切档是否拉起失败：消费一次并在启动早期回滚，界面随后只读最新结论。
+    let relaunch_notice = connection::commands::apply_pending_relaunch_failure();
+    if let Some(notice) = relaunch_notice {
+        connection::runtime().set_notice(Some(notice));
+    }
     let state = AppState {
         lanes: Arc::new(GatewayLaneSource::new()),
         conversation: conversation::stream::shared().clone(),
@@ -232,7 +253,20 @@ pub fn run() {
             config_apply_values,
             config_reset_key,
             config_validate_values,
-            open_config_file,
+            connection_state,
+            connection_retry_probe,
+            connection_test,
+            connection_save_profile,
+            connection_delete_profile,
+            connection_rename_profile,
+            connection_switch_profile,
+            connection_set_session_secret,
+            connection_complete_onboarding,
+            connection_skip_onboarding,
+            connection_probe_profiles,
+            connection_keys_create,
+            connection_keys_list,
+            connection_keys_revoke,
             open_external_url,
             voice_presets,
             voice_runtime_status,

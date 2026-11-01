@@ -24,6 +24,7 @@ import { Button, IconButton } from './ui/controls';
 import { Banner, EmptyState, HairlineStack, LoadingState, Text } from './ui/surfaces';
 import { ConfigFieldRow } from './ConfigFieldRow';
 import { ModelsSettings } from './settings/ProviderProfileCard';
+import { ConnectionSettings } from './settings/ConnectionSettings';
 import { McpSettings } from './settings/McpSettings';
 import { SkillsSettings } from './settings/SkillsSettings';
 import { PersonaStatusPanel } from './settings/PersonaStatusPanel';
@@ -56,6 +57,17 @@ interface SectionSpec {
 }
 
 const SECTIONS: SectionSpec[] = [
+  // 连接排在最前：它决定「此刻连的是谁」，其余分区都按这个前提才有意义。
+  // 它不写 config.toml（档案由客户端自己的状态文件承载），因此 prefixes 为空，
+  // 且**不得**加入 PREFIX_SECTIONS：拦住宿主读盘的正是那个集合，而不是空 prefixes。
+  {
+    id: 'connection',
+    label: '连接',
+    description: '当前连接的后端与可用档案',
+    footer: '',
+    icon: GlobeIcon,
+    prefixes: [],
+  },
   {
     id: 'general',
     label: '通用设置',
@@ -148,7 +160,7 @@ const SECTIONS: SectionSpec[] = [
   {
     id: 'system',
     label: '系统设置',
-    description: '桌面外壳偏好与运行状态',
+    description: '桌面外壳偏好',
     footer: '',
     icon: SettingsIcon,
     prefixes: [],
@@ -281,8 +293,16 @@ export const BasicSettingsPanel: React.FC<BasicSettingsPanelProps> = ({
    * 人设页在编辑器之上还有状态面板与音色，整页必须保持可滚动，因此不走这一档。
    */
   const fillSection = section === 'agents';
-  // 关于页没有表单列：整块内容在正文区里居中，而不是缩在左侧 720px 里。
-  const wideContent = dashboard || section === 'about' || section === 'soul' || section === 'agents';
+  /*
+   * 关于页没有表单列：整块内容在正文区里居中，而不是缩在左侧 720px 里。
+   * 连接分区同理：它是一屏卡片清单加一组读数，收在 720px 表单列里会把档案卡挤成单列。
+   */
+  const wideContent =
+    dashboard ||
+    section === 'connection' ||
+    section === 'about' ||
+    section === 'soul' ||
+    section === 'agents';
   const needsConfig = PREFIX_SECTIONS.has(section) || section === 'models';
 
   const configBody = needsConfig && config === null;
@@ -415,6 +435,8 @@ export const BasicSettingsPanel: React.FC<BasicSettingsPanelProps> = ({
                         onChanged={() => void load()}
                       />
                     )}
+
+                    {section === 'connection' && <ConnectionSettings />}
 
                     {section === 'mcp' && <McpSettings />}
 

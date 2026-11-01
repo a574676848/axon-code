@@ -26,6 +26,8 @@ import {
 } from './desktopGuards';
 import { applyTheme, currentTheme, THEME_CHOICES } from './theme';
 import { ensureUpdateChecked } from './desktopUpdate';
+import { ensureConnectionLoaded, loadConnectionState, switchProfile, useConnectionFact } from './connectionState';
+import { OnboardingWindow } from './components/onboarding/OnboardingWindow';
 import { notifyDesktopReady, useWindowDynamicSurfaces } from './windowSurfaces';
 
 /*
@@ -69,6 +71,13 @@ export const App: React.FC = () => {
   const [autoCollapsed, setAutoCollapsed] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [health, setHealth] = useState<GatewayHealth | null>(null);
+  /*
+   * 连接档案事实：首开引导与侧栏连接胶囊读的是同一份快照，壳层不另存第二份，
+   * 也不在这里发起探测。
+   */
+  const connection = useConnectionFact();
+  /** 还没有可用档案时整个窗口交给首开引导，背后不留可点可读的界面。 */
+  const needsOnboarding = connection.snapshot?.needsOnboarding === true;
   const [connectionDismissed, setConnectionDismissed] = useState(false);
   /**
    * 触发「服务未启用」判定的那次调用失败原因。
@@ -149,13 +158,16 @@ export const App: React.FC = () => {
   );
 
   /*
-   * 启动即检测一次新版本。
+   * 启动即检测一次新版本，并读一次连接档案事实。
    *
-   * 结论落在两个地方：侧栏底部的入口（确认有新版本时才出现）与设置 › 关于。
+   * 更新结论落在两个地方：侧栏底部的入口（确认有新版本时才出现）与设置 › 关于。
    * 一次检测供两处读，因此侧栏不会在用户每次打开应用时各发一遍请求。
+   * 连接读数同理，全世界只有 connectionState 那一份；两者都不阻塞首帧：先出界面，
+   * 结论回来再落到读数上（主窗口首帧不得以任何网络探测为前置）。
    */
   useEffect(() => {
     ensureUpdateChecked();
+    ensureConnectionLoaded();
   }, []);
 
   /*
@@ -447,6 +459,29 @@ export const App: React.FC = () => {
       },
     ];
 
+    /*
+     * 连接档案：非生效档案各给一条「切换到 <档案名>」，另给一条「管理连接…」。
+     * 切档会重启应用，因此这里只发一次请求，重试与错误由连接分区呈现。
+     */
+    const connections: CommandPaletteItem[] = [
+      ...(connection.snapshot?.profiles ?? [])
+        .filter((profile) => !profile.active)
+        .map((profile) => ({
+          id: `switch-${profile.id}`,
+          label: `切换到 ${profile.label}`,
+          group: '连接',
+          run: () => {
+            void switchProfile(profile.id);
+          },
+        })),
+      {
+        id: 'manage-connection',
+        label: '管理连接…',
+        group: '连接',
+        run: () => openSettingsAt('connection'),
+      },
+    ];
+
     const settings: CommandPaletteItem[] = SETTINGS_SECTION_LABELS.map((section) => ({
       id: `settings-${section.id}`,
       label: `设置：${section.label}`,
@@ -488,8 +523,8 @@ export const App: React.FC = () => {
       })),
     );
 
-    return [...navigation, ...settings, ...themes, ...lanes];
-  }, [openSettingsAt, selectLane, workspaces]);
+    return [...navigation, ...connections, ...settings, ...themes, ...lanes];
+  }, [connection.snapshot, openSettingsAt, selectLane, workspaces]);
 
 
   /**
@@ -505,6 +540,11 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      /*
+       * 首开引导独占整屏：背后的侧栏与设置面板都不渲染，快捷键也不能绕过它把
+       * 那些界面叫出来。判据与渲染分支同源，两处不会分叉。
+       */
+      if (needsOnboarding) return;
       const modifier = event.ctrlKey || event.metaKey;
       if (!modifier) return;
       if (event.key.toLowerCase() === SIDEBAR_TOGGLE_KEY) {
@@ -517,7 +557,12 @@ export const App: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [toggleSidebar]);
+  }, [toggleSidebar, needsOnboarding]);
+
+  // 零档案：整个窗口交给整屏引导，主界面一块都不渲染，因此没有可点可读的背后内容。
+  if (needsOnboarding) {
+    return <OnboardingWindow onDone={() => void loadConnectionState()} />;
+  }
 
   return (
     // 外层是沉底托盘（bg-sidebar），主工作区是嵌在托盘里的圆角舞台（Inset Sheet）。
@@ -529,6 +574,7 @@ export const App: React.FC = () => {
         isOpen={isSidebarOpen}
         onToggleSidebar={toggleSidebar}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenConnection={() => openSettingsAt('connection')}
         health={health}
         onSelectLane={selectLane}
         selectedLaneId={selection?.laneId ?? null}
@@ -630,21 +676,25 @@ export const App: React.FC = () => {
         />
       )}
 
-      <CommandPalette
-        open={paletteOpen}
-        onClose={() => setPaletteOpen(false)}
-        items={paletteItems}
-      />
+      {!needsOnboarding && (
+        <>
+          <CommandPalette
+            open={paletteOpen}
+            onClose={() => setPaletteOpen(false)}
+            items={paletteItems}
+          />
 
-      <BasicSettingsPanel
-        open={isSettingsOpen}
-        onClose={() => {
-          setIsSettingsOpen(false);
-          setConfigRevision((value) => value + 1);
-          void probeGateway();
-        }}
-        initialSection={settingsSection}
-      />
+          <BasicSettingsPanel
+            open={isSettingsOpen}
+            onClose={() => {
+              setIsSettingsOpen(false);
+              setConfigRevision((value) => value + 1);
+              void probeGateway();
+            }}
+            initialSection={settingsSection}
+          />
+        </>
+      )}
     </div>
   );
 };

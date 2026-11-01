@@ -2,7 +2,10 @@ import type { DaemonHealth } from '../../types';
 import type { StateDotState } from '../ui/surfaces';
 
 /*
- * 运行状态面板的纯视图模型：把后端给出的结论标识与后台健康快照翻成界面读数。
+ * 后台服务读数的纯视图模型：把后端给出的结论标识与后台健康快照翻成界面读数。
+ *
+ * 落点是设置 › 连接分区的「当前连接」卡片（本机档案专属）：系统设置不再有独立的
+ * 运行状态面板，因此这里只有一份读法，不允许在别处再抄一份。
  *
  * 与 React 无关，因此边界（认不出的结论、快照读不到、租约失效）可以直接单测。
  * 这几个分支平时看不见，出问题时恰恰是唯一能说明情况的东西，不能靠人眼看一遍
@@ -59,6 +62,9 @@ function readLease(millis: number): string {
  * 三种情况分开说：读不到快照（说明原因）、租约失效（点明后果与恢复动作）、
  * 正常续租（把排队读数摊开）。租约失效不是「读数异常」，而是后台真的停了：
  * 网关照样应答，会话却再也不会被领取。
+ *
+ * 恢复动作写成「重启后台服务」而不写「点右侧重启」：重启入口只在 service_control
+ * 能力位为真时才渲染，位置也由连接分区决定，这句话不替界面指定按钮位置。
  */
 export function daemonHealthView(
   health: DaemonHealth | null | undefined,
@@ -77,7 +83,7 @@ export function daemonHealthView(
   const queue = `待领取 ${health.interactions_pending} · 处理中 ${health.interactions_processing} · 待投递 ${health.deliveries_pending}`;
   if (health.lease_remaining_ms <= 0) {
     return {
-      text: `后台租约已失效，Worker 已停机（${queue}），点右侧重启可恢复`,
+      text: `后台租约已失效，Worker 已停机（${queue}），重启后台服务可恢复`,
       warning: true,
     };
   }

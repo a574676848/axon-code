@@ -1,13 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   Axon WiX 5 MSI 安装包配方
-  构建命令（CI 中执行）：
-    wix build axon.wxs -d "Version=$(VERSION)" -d "BinaryPath=$(BINARY_PATH)" -d "SoulTemplatePath=$(SOUL_TEMPLATE_PATH)" -o axon-$(VERSION)-x86_64-pc-windows-msvc.msi
+
+  构建命令（必须从仓库根执行，完整参数与前置二进制见 README.md）：
+    wix build installer/windows/axon.wxs `
+      -ext WixToolset.UI.wixext -culture zh-CN -loc installer/windows/zh-CN.wxl `
+      -d "Version=<版本号>" -d "BinaryPath=<axon.exe>" -d "DesktopBinaryPath=<axon-desktop.exe>" `
+      -d "LauncherPath=<axon-launcher.exe>" -d "CurrentManifestPath=<current.json>" `
+      -d "IconPath=crates\axon-desktop\icons\icon.ico" -o "<产物路径>"
 
   特性：
     - 标准 Add/Remove Programs 注册（控制面板可见、可卸载）
     - 用户级 PATH 写入（无需管理员权限的 Per-User 安装变体）
     - 升级切换 current.json，并按 CLI 版本复用 `versions/<Version>` 目录
+    - 组件可选：核心必装，后端与桌面端分别可勾选
     - 支持静默安装：msiexec /i axon.msi /quiet
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
@@ -50,41 +56,35 @@
     </StandardDirectory>
     <StandardDirectory Id="DesktopFolder" />
 
-    <!-- 每个 CLI 版本使用固定目录，服务和 PATH 均通过稳定 launcher 进入。 -->
-    <ComponentGroup Id="AxonBinaries" Directory="VERSIONDIR">
-      <Component Id="AxonExe" Guid="1A2B3C4D-5E6F-7081-92A3-B4C5D6E7F809">
-        <File
-          Id="AxonExeFile"
-          Name="axon.exe"
-          Source="$(BinaryPath)"
-          KeyPath="yes" />
-      </Component>
+    <!--
+      三个组件组，组级 Directory 统一声明为 VERSIONDIR，使组内未单独声明目录的
+      组件落在当前版本目录。组件需要别的位置时显式声明 Directory 覆盖，例如
+      launcher 落在 LAUNCHERDIR，axon.cmd 与 current.json 落在 INSTALLDIR。
 
-      <Component Id="AxonDesktopExe" Guid="2B3C4D5E-6F70-8192-A3B4-C5D6E7F8091A">
-        <File
-          Id="AxonDesktopExeFile"
-          Name="axon-desktop.exe"
-          Source="$(DesktopBinaryPath)"
-          KeyPath="yes" />
-      </Component>
+      归属唯一：每个组件组只被一个 Feature 引用，不依赖「同一组件被两个 Feature
+      同时引用」这种行为（它在 WiX 侧没有实测结论）。
+    -->
 
-      <!--
-        程序文件随 MSI 生命周期管理；用户配置和运行数据位于安装目录之外，卸载不会触碰。
-      -->
+    <!-- 核心组件：稳定入口、版本指针、PATH 与通知身份。任何安装组合都必须落地。 -->
+    <ComponentGroup Id="AxonCoreComponents" Directory="VERSIONDIR">
       <Component Id="AxonLauncher" Directory="LAUNCHERDIR" Guid="C3D4E5F6-A7B8-9012-CDEF-123456789012">
         <File Id="AxonLauncherFile" Name="axon-launcher.exe" Source="$(LauncherPath)" KeyPath="yes" />
-      </Component>
-
-      <Component Id="AxonCommand" Directory="INSTALLDIR" Guid="D4E5F6A7-B8C9-0123-DEF0-123456789012">
-        <File Id="AxonCommandFile" Name="axon.cmd" Source="installer\windows\axon.cmd" KeyPath="yes" />
       </Component>
 
       <Component Id="AxonCurrentManifest" Directory="INSTALLDIR" Guid="E5F6A7B8-C9D0-1234-EF01-234567890123">
         <File Id="AxonCurrentManifestFile" Name="current.json" Source="$(CurrentManifestPath)" KeyPath="yes" />
       </Component>
 
-      <!-- 组件：用户级 PATH 环境变量 -->
-      <Component Id="AxonPath" Guid="B2C3D4E5-F6A7-8901-BCDE-F12345678901">
+      <Component Id="AxonCommand" Directory="INSTALLDIR" Guid="D4E5F6A7-B8C9-0123-DEF0-123456789012">
+        <File Id="AxonCommandFile" Name="axon.cmd" Source="installer\windows\axon.cmd" KeyPath="yes" />
+      </Component>
+
+      <!-- 用户级 PATH 环境变量。
+           PATH 的值取自 INSTALLDIR，而本组的组级目录是 VERSIONDIR，两者不是同一个
+           位置，因此这里显式声明 Directory，不依赖组级目录继承：拆组或调整目录结构
+           时，漏写会让环境变量指向错误的目录。
+           axon.cmd 与本组件同属 AxonCore，保证 PATH 入口与它指向的稳定入口一起落地。 -->
+      <Component Id="AxonPath" Directory="VERSIONDIR" Guid="B2C3D4E5-F6A7-8901-BCDE-F12345678901">
         <Environment
           Id="AxonPathEntry"
           Name="PATH"
@@ -101,24 +101,45 @@
           Type="string"
           KeyPath="yes" />
       </Component>
+
+      <!--
+        未打包应用的系统通知身份。
+
+        Windows 只给「有身份」的应用投递 toast：要么是 MSIX 打包应用，
+        要么在注册表里登记过 AppUserModelId。MSI 的 Shortcut 表没有该列，
+        因此按官方对桌面应用的做法登记这个键，通知才有归属与显示名。
+      -->
+      <Component Id="AxonAppUserModelId" Directory="INSTALLDIR" Guid="0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9">
+        <RegistryKey Root="HKCU" Key="Software\Classes\AppUserModelId\com.axon.desktop">
+          <RegistryValue Name="DisplayName" Type="string" Value="Axon" KeyPath="yes" />
+        </RegistryKey>
+      </Component>
     </ComponentGroup>
 
-    <!-- 功能定义 -->
-    <Feature Id="AxonCore" Title="Axon 核心" Level="1">
-      <ComponentGroupRef Id="AxonBinaries" />
-      <ComponentGroupRef Id="AxonNotificationIdentity" />
-    </Feature>
+    <!-- 后端组件：只含 axon.exe。安装时同时决定 Daemon 用户服务是否注册。 -->
+    <ComponentGroup Id="AxonBackendComponents" Directory="VERSIONDIR">
+      <Component Id="AxonExe" Guid="1A2B3C4D-5E6F-7081-92A3-B4C5D6E7F809">
+        <File
+          Id="AxonExeFile"
+          Name="axon.exe"
+          Source="$(BinaryPath)"
+          KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
 
-    <!--
-      桌面快捷方式做成独立功能：安装向导里可以勾掉，
-      不需要的人不必在桌面上多一个图标。
-    -->
-    <Feature Id="DesktopShortcut" Title="桌面快捷方式" Description="在桌面创建 Axon 启动图标。" Level="1">
-      <ComponentGroupRef Id="AxonShortcuts" />
-    </Feature>
+    <!-- 桌面端组件：axon-desktop.exe 与桌面、开始菜单快捷方式。
+         快捷方式指向稳定 launcher，只有桌面端二进制同时安装时才有意义，
+         因此唯一父 Feature 是 AxonDesktop，不与空 Feature 共享归属。 -->
+    <ComponentGroup Id="AxonDesktopComponents" Directory="VERSIONDIR">
+      <Component Id="AxonDesktopExe" Guid="2B3C4D5E-6F70-8192-A3B4-C5D6E7F8091A">
+        <File
+          Id="AxonDesktopExeFile"
+          Name="axon-desktop.exe"
+          Source="$(DesktopBinaryPath)"
+          KeyPath="yes" />
+      </Component>
 
-    <ComponentGroup Id="AxonShortcuts" Directory="SHORTCUTDIR">
-      <Component Id="AxonDesktopShortcut" Guid="F6A7B8C9-D0E1-2345-F012-345678901234">
+      <Component Id="AxonDesktopShortcut" Directory="SHORTCUTDIR" Guid="F6A7B8C9-D0E1-2345-F012-345678901234">
         <!--
           快捷方式进的是桌面子命令，而不是 launcher 的默认行为：
           默认行为是命令行入口，点开只会看到 CLI 帮助，不是「打开应用」。
@@ -148,34 +169,60 @@
           Value="1"
           Type="integer"
           KeyPath="yes" />
+        <!-- 开始菜单目录位于用户配置目录内，卸载时必须显式列入 RemoveFile 表，
+             否则 MSI 语义校验会判定残留目录（ICE64）。目录为空时才删除，
+             用户自己放入的快捷方式不会被牵连。 -->
+        <RemoveFolder Id="AxonMenuDirRemove" Directory="AxonMenuDir" On="uninstall" />
       </Component>
     </ComponentGroup>
+
+    <!--
+      功能定义：四个 Feature，组件归属唯一。
+
+        AxonCore         AxonCoreComponents 全组，必装且不可取消
+        AxonBackend      AxonBackendComponents，可选
+        AxonDesktop      AxonDesktopComponents，可选
+        DesktopShortcut  空 Feature，保留 ID 以维持 MajorUpgrade 的 Feature 状态映射
+
+      AxonCore 与 DesktopShortcut 的 ID 沿用既有取值，改名或删除会中断
+      MajorUpgrade 的 Feature 状态迁移。
+    -->
+    <Feature Id="AxonCore" Title="Axon 核心" Description="稳定 launcher、版本指针、命令行入口与 PATH。必装。" Level="1" AllowAbsent="no">
+      <ComponentGroupRef Id="AxonCoreComponents" />
+    </Feature>
+
+    <Feature Id="AxonBackend" Title="Axon 后端服务" Description="安装 axon.exe，并注册当前用户的后台服务（计划任务）。" Level="1">
+      <ComponentGroupRef Id="AxonBackendComponents" />
+    </Feature>
+
+    <Feature Id="AxonDesktop" Title="Axon 桌面工作台" Description="安装 axon-desktop.exe，并创建桌面与开始菜单快捷方式。" Level="1">
+      <ComponentGroupRef Id="AxonDesktopComponents" />
+    </Feature>
+
+    <!--
+      仅保留 ID 的空 Feature：桌面快捷方式组件已归入 AxonDesktop，勾选粒度由
+      AxonDesktop 承担。此 Feature 不承载任何组件，也不在向导中显示，存在的意义
+      只有维持既有安装的 Feature 状态映射。
+    -->
+    <Feature Id="DesktopShortcut" Title="桌面快捷方式" Description="兼容保留项，不承载组件；桌面快捷方式随 Axon 桌面工作台安装。" Level="1" Display="hidden" />
 
     <!-- 图标资源：快捷方式与「应用和功能」列表共用品牌图标。 -->
     <Icon Id="AxonIco" SourceFile="$(IconPath)" />
     <Property Id="ARPPRODUCTICON" Value="AxonIco" />
 
-    <!--
-      未打包应用的系统通知身份。
+    <!-- 安装或升级后注册同一 Axon 二进制提供的 Daemon 用户服务。服务管理器会检测
+         已有运行实例，不会因升级而停止正在执行的 Daemon。
 
-      Windows 只给「有身份」的应用投递 toast：要么是 MSIX 打包应用，
-      要么在注册表里登记过 AppUserModelId。MSI 的 Shortcut 表没有该列，
-      因此按官方对桌面应用的做法登记这个键，通知才有归属与显示名。
-    -->
-    <ComponentGroup Id="AxonNotificationIdentity" Directory="INSTALLDIR">
-      <Component Id="AxonAppUserModelId" Guid="0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9">
-        <RegistryKey Root="HKCU" Key="Software\Classes\AppUserModelId\com.axon.desktop">
-          <RegistryValue Name="DisplayName" Type="string" Value="Axon" KeyPath="yes" />
-        </RegistryKey>
-      </Component>
-    </ComponentGroup>
+         条件只判组件选择状态 `&AxonBackend = 3`：后端组件未选中时不注册服务，
+         保证只装桌面组件或只装核心时不会留下一个常驻的后台任务。launcher 归入必装的
+         AxonCore，因此不再追加「launcher 已安装」这类恒真条件。
 
-    <!-- 安装或升级后注册同一 Axon 二进制提供的 Daemon 用户服务。服务管理器会
-         检测已有运行实例，不会因升级而停止正在执行的 Daemon。
+         这里按「目录 + 可执行文件名」调用，而不是 FileRef：延迟动作不依赖组件是否
+         在本次安装中被处理，升级时 launcher 文件常被判为无需重装，组件一旦未被
+         标记安装，FileRef 形式的动作就无法执行。
 
-         这里按「目录 + 可执行文件名」调用，而不是 FileRef：launcher 组件带
-         NeverOverwrite，升级时文件已存在、组件不会被重新安装，FileRef 形式会让
-         延迟动作在 2753（文件未标记安装）上失败，等于每次升级都装不上。 -->
+         Return="ignore" 表示动作失败不阻断安装，因此安装退出码不能用来判断服务注册
+         是否成功，必须用 `axon daemon status` 或计划任务列表核验。 -->
     <CustomAction
       Id="InstallAxonDaemon"
       Directory="LAUNCHERDIR"
@@ -184,7 +231,7 @@
       Impersonate="yes"
       Return="ignore" />
     <InstallExecuteSequence>
-      <Custom Action="InstallAxonDaemon" After="InstallFiles" />
+      <Custom Action="InstallAxonDaemon" After="InstallFiles" Condition="&amp;AxonBackend = 3" />
     </InstallExecuteSequence>
 
     <!--

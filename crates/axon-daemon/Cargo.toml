@@ -19,7 +19,9 @@ axon-voice-bridge = { path = "../axon-voice-bridge" }
 serde.workspace = true
 axum.workspace = true
 chrono.workspace = true
+hmac.workspace = true
 interprocess.workspace = true
+sha2.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true

@@ -73,6 +73,51 @@ Authorization: Bearer <token>
 
 ### 扩展路由族（`/api/v1`，全部需要鉴权）
 
+本前缀下**不存在免鉴权面**：鉴权在路由层无条件执行，adapter 拿不到豁免权。凭据有两个通道，`/api/v1` 业务路由任一命中即通过：`Authorization: Bearer <token>`，或 `?api_token=<token>`。管理面（`/api/v1/keys`）只认 `Authorization` 头，不接受查询串。
+
+连接与运行态（桌面端的连接档案经此判定可用能力）：
+
+| 方法与路径 | 用途 |
+|---|---|
+| `GET /api/v1/meta` | 协议版本与能力位。顶层恰好五个字段：`protocolVersion`（未识别时客户端应提示升级客户端）、`capabilities`（固定 12 个键：`files`、`dirs`、`attachments`、`config`、`secrets`、`providers`、`mcp`、`skills`、`documents`、`system_status`、`service_control`、`terminal`，缺键或多键都视为协议不合规）、`serverTimeMs`、`uploadLimitBytes`（文件本身上限，64 MiB）、`superAdmin`（本次请求所用凭据是否为全局 token）。不返回构建版本、主机名与路径 |
+| `GET /api/v1/system/status` | 运行态只读快照：`serverTimeMs`（与 `/meta` 同源，二者相差超过 1 秒即判 `/meta` 不可信）、`buildVersion`、`httpPort` 与 `webSocketPort`（后端自报的两条监听端口，取自 `remote.gateway.http_bind` / `remote.gateway.websocket_bind`，解析不出时为 `null`）、`lease`（`active` / `expiresInMs` / `owner`，取不到时为 `null`）、`queueDepth`、`remoteAdapters`、`uptimeMs` |
+
+配置类（桌面端的设置页经此读写，不再直连本机文件）：
+
+| 方法与路径 | 用途 |
+|---|---|
+| `GET /api/v1/config` | 配置聚合视图：配置文本、键规格、扁平取值与供应商 / 模型清单。桌面的 `config_read` 与 `config_apply_values` 都从这里取当前真值 |
+| `GET /api/v1/config/schema` | `specs`：配置键的权威规格 |
+| `PUT /api/v1/config` | 联合写入，按 `mode` 分派：`{"mode":"text","tomlContent":"..."}` 全文写入（服务端校验后落盘）、`{"mode":"values","values":{...}}` 逐键应用、`{"mode":"resetKey","key":"..."}` 恢复默认、`{"mode":"validate","tomlContent":"..."}` 只校验不落盘。未知 `mode` 返回 400 `invalid_mode` |
+| `GET /api/v1/secrets/status?name=<变量名>` | `{"name":..., "configured":bool}`；缺 `name` 返回 400 |
+| `PUT /api/v1/secrets` | `{"name":"...","value":"..."}` 写入配置相邻 `.env`；`value` 为空表示清空。响应与日志都不回显明文 |
+| `POST /api/v1/providers/discover` | 上游模型发现，报文体与桌面端「探查模型」入参同构 |
+| `GET /api/v1/mcp/config` / `PUT /api/v1/mcp/config` | `.mcp.json` 的文本与解析结果；写入体为 `{"raw":"<全文>"}` |
+| `GET /api/v1/skills` | 技能清单，只读 |
+| `GET /api/v1/documents/soul`、`GET /api/v1/documents/agents` | `SOUL.md` 与全局 `AGENTS.md` 原文；文件不存在时返回空串而不是 404 |
+| `PUT /api/v1/documents/soul`、`PUT /api/v1/documents/agents` | 写入体 `{"text":"..."}` |
+
+正文上限按路由分别判定，未登记的路径统一按 4 MiB 收体：声明了 `Content-Length` 且超限的，在读体之前直接 413；只有 `Transfer-Encoding: chunked` 而无长度的返回 411；两者都没有的视为无正文。
+
+文件与附件：
+
+| 方法与路径 | 用途 |
+|---|---|
+| `GET /api/v1/files?root=<工作区>&path=<相对路径>` | 服务端目录列表，一次一层，单层上限 500 条；回执 `entries`（`name` / `path` / `isDir` / `size` / `modifiedMs`）与 `truncated` |
+| `GET /api/v1/files/content?root=<工作区>&path=<相对路径>&encoding=text\|base64` | 文件内容；文本上限 2 MiB、二进制上限 12 MiB，超限 413 |
+| `GET /api/v1/fs/dirs?path=<绝对路径>` | 目录浏览：回执 `path`、`parent`、`dirs`、`truncated`，只列子目录；附件目录及其子目录一律 403 |
+| `POST /api/v1/attachments` | multipart 上传（字段 `file`），回执 `path`、`name`、`bytes`、`image`；文件本体上限 64 MiB，超限在读体过程中 413 且不落盘 |
+
+四条路由的入参都经服务端路径归一化：越界、NTFS 数据流、设备命名空间、UNC、驱动器相对路径、尾随点与空格、8.3 短名回退组合一律 403，路径不合法 400。附件目录自成一类根，不会被当成工作区或可浏览目录。
+
+凭据管理面（只接受超管凭据，普通 Key 一律 403；只认 `Authorization` 头，不接受查询串）：
+
+| 方法与路径 | 用途 |
+|---|---|
+| `GET /api/v1/keys` | `keys`：`id`、`label`、`createdAtMs`、`lastUsedAtMs`、`fingerprint`（前 6 位），不含明文与哈希 |
+| `POST /api/v1/keys` | 体 `{"label":"..."}`，回执 `id`、`label`、`plaintext`、`createdAtMs`；明文只出现一次 |
+| `DELETE /api/v1/keys/{id}` | 吊销该 Key；不存在 404 `key_not_found` |
+
 工作台与车道：
 
 | 方法与路径 | 用途 |

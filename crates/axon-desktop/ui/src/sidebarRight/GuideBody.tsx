@@ -5,6 +5,7 @@ import { ChevronDownIcon } from '../icons';
 import { Dropdown } from '../components/ui/overlays';
 import { CompassIcon, CubeIcon, GuideArtworkFiles, GuideArtworkTerminal } from './guideArtwork';
 import { guideEntries, type GuideArtworkId } from './registry';
+import { useConnectionFact } from '../connectionState';
 import type { RailController } from './useRailLayout';
 
 /*
@@ -26,6 +27,23 @@ const ARTWORK: Record<GuideArtworkId, React.FC<{ size?: number; className?: stri
   files: GuideArtworkFiles,
   terminal: GuideArtworkTerminal,
 };
+
+/**
+ * 页类型到能力位的映射。
+ *
+ * 只有「必须由后端提供」的入口才有能力位；列表里没有的类型一律按可见处理，
+ * 免得某个本地页面因为后端没登记能力位而凭空消失。
+ */
+function capabilityOfKind(kind: string): string {
+  switch (kind) {
+    case 'files':
+      return 'files';
+    case 'terminal':
+      return 'terminal';
+    default:
+      return '';
+  }
+}
 
 /*
  * 入口卡片：372px、最小 56px、12px 圆角、14/20 内边距，白底加发丝线与浮层柔光。
@@ -126,7 +144,21 @@ export interface GuideBodyProps {
 }
 
 export const GuideBody: React.FC<GuideBodyProps> = ({ controller }) => {
-  const entries = React.useMemo(() => guideEntries(), []);
+  const connection = useConnectionFact();
+  /*
+   * 按后端能力位过滤入口：`Known(false)` 的整块不渲染（那是后端的确定事实，
+   * 留着只会误导），`Unknown` 仍渲染但由命令层给「未连接」。终端在云档案下被
+   * 客户端强制覆盖为 false，因此云档案下这一格不会出现。
+   */
+  const entries = React.useMemo(() => {
+    const caps = connection.snapshot?.capabilities ?? [];
+    const allowed = (kind: string): boolean => {
+      if (connection.snapshot === null) return true;
+      const capability = caps.find((item) => item.key === capabilityOfKind(kind));
+      return capability === undefined ? true : !capability.hidden;
+    };
+    return guideEntries().filter((entry) => allowed(entry.kind));
+  }, [connection.snapshot]);
 
   return (
     <div
@@ -143,7 +175,14 @@ export const GuideBody: React.FC<GuideBodyProps> = ({ controller }) => {
 
       {entries.map((entry) => {
         const Artwork = ARTWORK[entry.artwork] ?? CubeIcon;
-        const pick = () => controller.openPage(entry.kind, { replaceActive: true });
+        /*
+         * 终端入口必须走 `newTerminal`：它是唯一带能力位闸门的入口，云档案与未知态
+         * 都在那里被挡住。整卡按钮因此单独给一个回调，不能复用其它入口的 `openPage`。
+         */
+        const pick = () =>
+          entry.kind === 'terminal'
+            ? controller.newTerminal(undefined, true)
+            : controller.openPage(entry.kind, { replaceActive: true });
         if (entry.kind !== 'terminal') {
           return (
             <button

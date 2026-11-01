@@ -104,10 +104,6 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
                 .map(str::to_owned);
             Ok(serde_json::to_value(ipc::synthesize(text, preset_id)).map_err(stringify)?)
         }
-        "open_config_file" => {
-            ipc::open_config_file()?;
-            Ok(Value::Null)
-        }
         "provider_profile_upsert" => {
             let input: ProviderInput = args
                 .get("input")

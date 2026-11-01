@@ -60,6 +60,12 @@ fn remote_key_detail(key: &str) -> Option<&'static str> {
         "remote.gateway.websocket_bind" => {
             Some("通用 WebSocket 监听地址，例如 127.0.0.1:3144 或 0.0.0.0:3144。")
         }
+        "remote.gateway.auth_keys" => Some(
+            "多 Key 存储文件路径；留空时用运行时根下的 data/gateway/auth-keys.json，文件只保存每把 Key 的盐与哈希。",
+        ),
+        "remote.gateway.legacy_token_enabled" => Some(
+            "是否仍接受全局 token 访问业务路由；关闭后只有签发的 Key 生效，本机连接档案需改用 Key。",
+        ),
         "remote.mode" => Some("远控运行模式：standard 或 high-throughput。"),
         "remote.feishu_websocket.enabled" => {
             Some("启用 Feishu WebSocket 长连接 adapter；远控 Gateway 目标态始终启用。")

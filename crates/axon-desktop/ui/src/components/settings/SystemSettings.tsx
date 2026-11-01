@@ -7,14 +7,15 @@ import { isSupported, useGlobalAutoRead, voicePreferences } from '../../speech';
 import { VOICE_UI_ENABLED } from '../../speech/enabled';
 import { AlertCircleIcon, CheckIcon } from '../../icons';
 import type { ThemeId } from '../../types';
-import { RuntimeStatusPanel } from './RuntimeStatusPanel';
 import { VoiceInputSettings } from './VoiceInputSettings';
 import { ShortcutsDialog } from './ShortcutsDialog';
 
 /*
- * 系统设置：桌面外壳自身的偏好与运行状态。
- * 前者是「改了立刻生效、且与运行态无关」的开关，后者是只读探测结论；
- * 需要重启或与后端协商的项不放这，产品身份与发布渠道属于「关于」。
+ * 系统设置：只放桌面外壳自身的偏好，即「改了立刻生效、且与运行态无关」的开关。
+ *
+ * 运行态读数（后台服务状态、租约与排队、往返延迟、能力摘要）与连接档案都在
+ * 设置 › 连接 分区，网关端口监听与配置目录这类本机实现细节不再出现在界面上；
+ * 产品身份与发布渠道属于「关于」。
  *
  * 主题用缩略卡而不是分段控件：两套主题的差别主要在底色与留白，
  * 光看名字选不出来，给一块缩小的界面比两个词更省判断。
@@ -76,7 +77,6 @@ export const SystemSettings: React.FC = () => {
   const voiceAutoRead = useGlobalAutoRead();
   const voiceSupported = isSupported();
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -94,16 +94,6 @@ export const SystemSettings: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  const handleError = useCallback((message: string) => {
-    setError(message);
-    setNotice(null);
-  }, []);
-
-  const handleNotice = useCallback((message: string) => {
-    setNotice(message);
-    setError(null);
   }, []);
 
   const toggleNotifications = useCallback(async (next: boolean) => {
@@ -148,7 +138,6 @@ export const SystemSettings: React.FC = () => {
 
   return (
     <div className="space-y-3">
-      {notice !== null && <Banner tone="success" icon={<CheckIcon size={13} />} title={notice} />}
       {error !== null && (
         <Banner tone="danger" icon={<AlertCircleIcon size={13} />} title={`系统设置不可用：${error}`} />
       )}
@@ -282,9 +271,7 @@ export const SystemSettings: React.FC = () => {
           </div>
         )}
 
-        <RuntimeStatusPanel onError={handleError} onNotice={handleNotice} />
-
-      <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+        <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       </Panel>
     </div>
   );

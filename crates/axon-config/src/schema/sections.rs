@@ -121,6 +121,10 @@ pub struct RemoteGatewayConfig {
     pub http_bind: String,
     /// 通用 WebSocket 监听地址。
     pub websocket_bind: String,
+    /// 多 Key 存储文件路径；空串表示运行时根下 `data/gateway/auth-keys.json`。
+    pub auth_keys: String,
+    /// 是否保留启动时那把全局 token 的旧通道。
+    pub legacy_token_enabled: bool,
 }
 
 impl Default for RemoteGatewayConfig {
@@ -129,6 +133,8 @@ impl Default for RemoteGatewayConfig {
             api_token_env: DEFAULT_GATEWAY_API_TOKEN_ENV.to_owned(),
             http_bind: DEFAULT_GATEWAY_HTTP_BIND.to_owned(),
             websocket_bind: DEFAULT_GATEWAY_WEBSOCKET_BIND.to_owned(),
+            auth_keys: String::new(),
+            legacy_token_enabled: true,
         }
     }
 }

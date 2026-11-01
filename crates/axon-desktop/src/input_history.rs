@@ -1,8 +1,11 @@
 //! 输入历史：与 TUI 共用同一份 composer draft 历史。
 //!
-//! 事实源只有一个：`~/.axon/data/runtime/draft_history.jsonl`。TUI 的
+//! 本机档案的事实源只有一个：`~/.axon/data/runtime/draft_history.jsonl`。TUI 的
 //! `history_store` 写的就是这一份，桌面端只读写同一个文件，因此「在终端里发过的
 //! 消息，桌面上按上键也能取回」，也不存在第二套历史需要同步。
+//!
+//! 云端档案的历史按档案 id 分文件放在客户端自有根下：那台远端机器上并没有这条
+//! 桌面输入历史，写过去既越界也没有意义。
 //!
 //! 归一化规则与 TUI 逐条一致：丢掉空串、按内容去重（保留最后一次出现的位置）、
 //! 上限 1000 条。物理分片由 `axon_jsonl` 负责，这里只认逻辑路径。
@@ -27,8 +30,24 @@ struct HistoryRecord {
     text: String,
 }
 
-/// 历史文件路径：`<axon 根>/data/runtime/draft_history.jsonl`。
+/// 历史文件路径：本机档案走 TUI 那一份，云端档案走客户端根下的按档案分文件。
 fn history_path() -> Result<PathBuf, String> {
+    history_path_for(
+        crate::connection::active_is_cloud(),
+        crate::connection::runtime().active_profile_id().as_deref(),
+    )
+}
+
+/// 路径解析的纯函数形态，便于按「本机 / 云端」两种情形逐条断言。
+fn history_path_for(cloud: bool, profile_id: Option<&str>) -> Result<PathBuf, String> {
+    if cloud {
+        let Some(profile_id) = profile_id else {
+            return Err("当前没有生效档案，无法定位输入历史".to_owned());
+        };
+        return Ok(crate::connection::store::profile_draft_history_path(
+            profile_id,
+        ));
+    }
     let root = ConfigLoader::default_user_axon_root_path()
         .map_err(|error| format!("无法解析 Axon 运行态根目录：{error:?}"))?;
     Ok(root
@@ -159,11 +178,30 @@ mod tests {
     }
 
     #[test]
-    fn history_path_is_the_tui_draft_history_file() {
-        let path = history_path().expect("应能解析历史路径");
+    fn history_path_for_local_profiles_is_the_tui_draft_history_file() {
+        let path = history_path_for(false, None).expect("应能解析历史路径");
         assert!(
             path.ends_with("data/runtime/draft_history.jsonl")
                 || path.ends_with(r"data\runtime\draft_history.jsonl")
         );
+    }
+
+    #[test]
+    fn history_path_for_cloud_profiles_lives_in_the_client_root() {
+        let path = history_path_for(true, Some("3f2b")).expect("应能解析历史路径");
+        assert!(
+            path.to_string_lossy().contains("draft-history"),
+            "{}",
+            path.display()
+        );
+        assert!(
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy() == "3f2b.jsonl"),
+            "{}",
+            path.display()
+        );
+
+        // 没有生效档案时给中文原因，而不是退回本机那一份。
+        assert!(history_path_for(true, None).is_err());
     }
 }

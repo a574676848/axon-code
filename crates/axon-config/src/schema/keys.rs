@@ -117,6 +117,8 @@ fn get_non_terminal_config_value(config: &AxonConfig, key: &str) -> Option<Confi
         | "remote.gateway.api_token_env"
         | "remote.gateway.http_bind"
         | "remote.gateway.websocket_bind"
+        | "remote.gateway.auth_keys"
+        | "remote.gateway.legacy_token_enabled"
         | "remote.feishu_websocket.enabled"
         | "remote.feishu_websocket.app_id"
         | "remote.feishu_websocket.app_secret_env"
@@ -142,6 +144,12 @@ fn get_remote_config_value(config: &AxonConfig, key: &str) -> Option<ConfigValue
         }
         "remote.gateway.websocket_bind" => Some(ConfigValue::String(
             config.remote.gateway.websocket_bind.clone(),
+        )),
+        "remote.gateway.auth_keys" => {
+            Some(ConfigValue::String(config.remote.gateway.auth_keys.clone()))
+        }
+        "remote.gateway.legacy_token_enabled" => Some(ConfigValue::Bool(
+            config.remote.gateway.legacy_token_enabled,
         )),
         "remote.feishu_websocket.enabled" => {
             Some(ConfigValue::Bool(config.remote.feishu_websocket.enabled))
@@ -265,6 +273,13 @@ fn set_remote_config_value(config: &mut AxonConfig, key: &str, raw_value: &str) 
         }
         "remote.gateway.websocket_bind" => {
             config.remote.gateway.websocket_bind = parse_string(raw_value)?;
+        }
+        "remote.gateway.auth_keys" => {
+            // 空串是合法取值：表示走运行时根下的默认路径，因此不走 parse_string 的非空校验。
+            config.remote.gateway.auth_keys = raw_value.trim().to_owned();
+        }
+        "remote.gateway.legacy_token_enabled" => {
+            config.remote.gateway.legacy_token_enabled = parse_bool(raw_value)?;
         }
         "remote.feishu_websocket.enabled" => {
             config.remote.feishu_websocket.enabled = parse_bool(raw_value)?;

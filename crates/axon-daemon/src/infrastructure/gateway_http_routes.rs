@@ -6,11 +6,14 @@
 
 use super::gateway_http_events::{GatewayRoute, normalized_event};
 use super::gateway_http_response::{
-    accepted, bearer, declared_length, from_extension, json_error, json_ok, media_type,
-    request_head_bytes, request_target, unauthorized, unified_not_found,
+    accepted, bearer, chunked_transfer, declared_length, from_extension, json_error, json_ok,
+    media_type, request_head_bytes, request_target, unauthorized, unified_not_found,
 };
-use super::{GatewayHttpState, MAX_HEADER_BYTES, SATURATION_WAIT, SLOW_REQUEST_MS};
-use crate::infrastructure::gateway_auth::query_token;
+use super::gateway_route_limits::{BodyAdmission, admit_body, body_limit};
+use super::{
+    GatewayHttpResponse, GatewayHttpState, MAX_HEADER_BYTES, SATURATION_WAIT, SLOW_REQUEST_MS,
+};
+use crate::infrastructure::gateway_auth::{GatewayIdentity, query_token};
 use crate::infrastructure::gateway_kernel::GatewayKernelError;
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, Path, Request, State};
@@ -213,32 +216,162 @@ async fn custom(State(state): State<Arc<GatewayHttpState>>, request: Request) ->
     if request_head_bytes(&parts.method, &parts.uri, &parts.headers) > MAX_HEADER_BYTES {
         return json_error(431, "headers_too_large");
     }
-    if !state.context.authorize_request(
-        bearer(&parts.headers),
-        query_token(request_target(&parts.uri)),
+    // 身份在路由层解析：管理面禁止查询串通道这条规则必须落在这里，适配器拿不到豁免权。
+    let identity = match identify_route(&state, &parts.headers, &parts.uri) {
+        Ok(identity) => identity,
+        Err(response) => return response,
+    };
+    // 正文上限逐路由取，不跟随 router 级取值：超限与非法分块都在读取正文之前拒绝，
+    // 内存占用由路由契约决定，不由对端声明的体积决定。
+    let route_limit = body_limit(parts.method.as_str(), parts.uri.path());
+    let limit = match admit_body(
+        route_limit,
+        declared_length(&parts.headers),
+        chunked_transfer(&parts.headers),
     ) {
-        return unauthorized();
-    }
-    if declared_length(&parts.headers).unwrap_or(0) > state.max_body_bytes {
-        return json_error(413, "body_too_large");
-    }
+        BodyAdmission::Allowed(limit) => limit,
+        BodyAdmission::TooLarge => return json_error(413, "body_too_large"),
+        BodyAdmission::LengthRequired => return json_error(411, "content_length_required"),
+    };
     let Some(handler) = state.route_handler.clone() else {
         return unified_not_found();
     };
     let method = parts.method.as_str().to_owned();
     let path = parts.uri.path().to_owned();
     let query = parts.uri.query().map(str::to_owned);
-    let body = match axum::body::to_bytes(body, state.max_body_bytes).await {
+    // 对端地址尽力而为：优先取反代转发的来源，其次取 `X-Forwarded-For` 的第一段。
+    // 直连时两者都可能缺失，此时审计行写 null，不虚构地址。
+    let peer = peer_address(&parts.headers);
+    let body = match axum::body::to_bytes(body, limit).await {
         Ok(bytes) => bytes,
         Err(_) => return json_error(413, "body_too_large"),
     };
     run_blocking(&state, move || {
         let _permit = permit;
         handler
-            .handle_request(&method, &path, query.as_deref(), &body)
+            .handle_request_as(
+                &method,
+                &path,
+                query.as_deref(),
+                &body,
+                Some(&identity),
+                peer.as_deref(),
+            )
             .map_or_else(unified_not_found, from_extension)
     })
     .await
+}
+
+/// 管理面路径前缀。
+const MANAGEMENT_PATH: &str = "/api/v1/keys";
+
+/// 取对端地址：优先 `X-Forwarded-For` 的第一段，其次 `X-Real-IP`。
+///
+/// 只在写审计行时使用，**不参与任何鉴权判断**：这些头可以被客户端伪造，
+/// 拿它做准入等于把安全策略交给对端。直连（没有反代）时两者都缺失，返回 None。
+fn peer_address(headers: &HeaderMap) -> Option<String> {
+    if let Some(value) = headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+    {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
+        }
+    }
+    headers
+        .get("x-real-ip")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+/// 是否命中管理面路由族（`/api/v1/keys` 与 `/api/v1/keys/{id}`）。
+///
+/// 同时按原始路径与百分号解码后的路径判定：`/api/v1/%6beys` 与 `/api/v1/keys` 必须落到
+/// 同一条规则上，否则编码一下就能绕过管理面的通道限制。
+fn is_management_route(path: &str) -> bool {
+    let decoded = percent_decoded(path);
+    let decoded = String::from_utf8_lossy(&decoded);
+    management_prefix(path) || management_prefix(decoded.as_ref())
+}
+
+/// 按前缀比对管理面路径。
+fn management_prefix(path: &str) -> bool {
+    path == MANAGEMENT_PATH || path.starts_with("/api/v1/keys/")
+}
+
+/// 把路径里的百分号转义还原成字节；不做 UTF-8 校验，非法转义按原样保留。
+fn percent_decoded(path: &str) -> Vec<u8> {
+    let bytes = path.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while let Some(byte) = bytes.get(index).copied() {
+        if byte == b'%'
+            && let Some(value) = bytes
+                .get(index + 1)
+                .copied()
+                .and_then(hex_value)
+                .zip(bytes.get(index + 2).copied().and_then(hex_value))
+                .map(|(high, low)| (high << 4) | low)
+        {
+            decoded.push(value);
+            index += 3;
+            continue;
+        }
+        decoded.push(byte);
+        index += 1;
+    }
+    decoded
+}
+
+/// 单个十六进制字符的取值。
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// 解析本次 `/api/v1/*` 请求的身份；未通过时直接给出响应。
+///
+/// 管理面只认 `Authorization` 头：带 `?api_token=` 的请求即使 token 正确也一律 401，不得先
+/// 按查询串通过再在适配器里拒。理由：各级访问日志与浏览器历史会留下完整 URL，
+/// 超管 token 一旦落到那里就等于后端完全失守。普通 Key 能访问全部业务路由，管理面是 403
+/// 而不是 401：它的凭据本身有效，缺的是权限级别。
+fn identify_route(
+    state: &GatewayHttpState,
+    headers: &HeaderMap,
+    uri: &Uri,
+) -> Result<GatewayIdentity, Response> {
+    if is_management_route(uri.path()) {
+        if query_token(request_target(uri)).is_some() {
+            return Err(unauthorized());
+        }
+        return match state.context.identify_header(bearer(headers)) {
+            Some(GatewayIdentity::SuperAdmin) => Ok(GatewayIdentity::SuperAdmin),
+            Some(GatewayIdentity::Key { .. }) => Err(forbidden()),
+            None => Err(unauthorized()),
+        };
+    }
+    state
+        .context
+        .identify_request(bearer(headers), query_token(request_target(uri)))
+        .ok_or_else(unauthorized)
+}
+
+/// 超管专用面的 403 响应；沿用扩展路由族的统一错误模型。
+fn forbidden() -> Response {
+    from_extension(GatewayHttpResponse::error(
+        403,
+        "FORBIDDEN",
+        "管理面只接受超管凭据，普通 Key 一律拒绝",
+        None,
+    ))
 }
 
 /// 未命中任何路由。

@@ -303,26 +303,40 @@ fn test_provider_profile_upsert_and_remove_are_atomic() {
 
 #[test]
 fn test_desktop_state_tolerates_utf8_bom() {
-    let (temp_dir, _) = scratch_config();
-    let state_file = temp_dir.join("desktop-state.json");
-    fs::write(
-        &state_file,
-        "\u{feff}{\"version\":1,\"workspaces\":[{\"path\":\"E:\\\\repo\",\"name\":\"repo\"}],\"lane_pinned\":[\"lane-a\"]}",
-    )
-    .unwrap();
+    // 会容忍外部编辑器写入的 UTF-8 BOM：带 BOM 的状态文件若直接解析会失败，
+    // 那会让用户已登记的工作区与车道状态被静默丢弃。两代文件都不例外。
+    let dir = std::env::temp_dir().join(format!(
+        "axon-bom-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|value| value.as_nanos())
+            .unwrap_or_default()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
 
-    let text = fs::read_to_string(&state_file).unwrap();
-    let parsed: super::state::DesktopState =
-        serde_json::from_str(text.trim_start_matches('\u{feff}')).unwrap();
-    assert_eq!(
-        parsed.workspaces.len(),
-        1,
-        "带 BOM 的状态必须仍能解析出已登记工作区"
+    let v1 = "\u{feff}{\"version\":1,\"workspaces\":[{\"path\":\"E:\\\\repo\",\"name\":\"repo\"}],\"lane_pinned\":[\"lane-a\"]}";
+    std::fs::write(dir.join(super::connection::store::V1_FILE_NAME), v1).unwrap();
+    let loaded = super::connection::store::load_document_at(&dir, None);
+    assert!(loaded.migrated_from_v1, "带 BOM 的 v1 必须仍能迁移");
+    let projection = loaded.document.projection("local");
+    assert_eq!(projection.workspaces.len(), 1);
+    assert_eq!(projection.workspaces[0].name, "repo");
+    assert_eq!(projection.lane_pinned, vec!["lane-a".to_string()]);
+
+    let v2 = format!(
+        "\u{feff}{}",
+        serde_json::to_string(&loaded.document).unwrap()
     );
-    assert_eq!(parsed.workspaces[0].name, "repo");
-    assert_eq!(parsed.lane_pinned, vec!["lane-a".to_string()]);
+    std::fs::write(dir.join(super::connection::store::V2_FILE_NAME), v2).unwrap();
+    let reloaded = super::connection::store::load_document_at(&dir, None);
+    assert_eq!(
+        reloaded.document.projection("local").workspaces.len(),
+        1,
+        "带 BOM 的 v2 必须仍能解析出已登记工作区"
+    );
 
-    let _ = fs::remove_dir_all(&temp_dir);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

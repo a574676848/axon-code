@@ -36,6 +36,15 @@ import type {
   ThemeId,
 } from './types';
 import type { PersonaPortrait, PersonaSummary } from './personaTypes';
+import type {
+  ConnectionSnapshot,
+  ConnectionTestInput,
+  ConnectionTestResult,
+  KeyIssueReceipt,
+  KeyView,
+  ProfileProbeView,
+  SwitchOutcome,
+} from './connectionTypes';
 
 /** 会话事件通道名，与 Rust 侧 `CONVERSATION_EVENT` 一致；车道流与会话流共用这一条。 */
 import type { ConversationStreamPayload, ConversationStreamEvent } from './conversation/wire';
@@ -58,6 +67,69 @@ export const inputHistoryAppend = (text: string): Promise<string[]> =>
  * 因此调用方仍然只从 `ipc` 取后端能力，不必知道传输细节。
  */
 export * from './backend';
+// ---------------------------------------------------------------- 连接档案
+
+/*
+ * 连接相关的命令只回一份快照或一份结论：界面不在本地推导健康态，也不自己拼地址。
+ * 凭据只以「输入一次」的形态出现，任何回执里都不含 Key 明文。
+ */
+
+/** 读取连接快照。 */
+export const connectionState = (): Promise<ConnectionSnapshot> => call('connection_state');
+
+/** 重新探测当前生效档案。 */
+export const connectionRetryProbe = (): Promise<ConnectionSnapshot> =>
+  call('connection_retry_probe');
+
+/** 试连接：不落档案、不落凭据库。 */
+export const connectionTest = (input: ConnectionTestInput): Promise<ConnectionTestResult> =>
+  call('connection_test', { input });
+
+/** 保存云档案（必须先试连接成功）。 */
+export const connectionSaveProfile = (
+  label: string,
+  address: string,
+): Promise<ConnectionSnapshot> => call('connection_save_profile', { input: { label, address } });
+
+/** 删除档案；生效中的档案不可删。 */
+export const connectionDeleteProfile = (id: string): Promise<ConnectionSnapshot> =>
+  call('connection_delete_profile', { id });
+
+/** 重命名档案。 */
+export const connectionRenameProfile = (id: string, label: string): Promise<ConnectionSnapshot> =>
+  call('connection_rename_profile', { id, label });
+
+/** 切换档案：写 id 后重启应用。 */
+export const connectionSwitchProfile = (id: string): Promise<SwitchOutcome> =>
+  call('connection_switch_profile', { id });
+
+/** 记录本次会话内输入的凭据（仅本次会话有效的档案用）。 */
+export const connectionSetSessionSecret = (secret: string): Promise<ConnectionSnapshot> =>
+  call('connection_set_session_secret', { secret });
+
+/** 记录引导完成。 */
+export const connectionCompleteOnboarding = (): Promise<ConnectionSnapshot> =>
+  call('connection_complete_onboarding');
+
+/** 跳过引导，进入未连接态。 */
+export const connectionSkipOnboarding = (): Promise<ConnectionSnapshot> =>
+  call('connection_skip_onboarding');
+
+/** 惰性探测全部档案。 */
+export const connectionProbeProfiles = (): Promise<ProfileProbeView[]> =>
+  call('connection_probe_profiles');
+
+/** 列出全部未吊销的 Gateway Key；回执不含明文与摘要。 */
+export const connectionKeysList = (): Promise<KeyView[]> => call('connection_keys_list');
+
+/** 签发一把 Gateway Key；明文只在回执里出现一次。 */
+export const connectionKeysCreate = (label: string): Promise<KeyIssueReceipt> =>
+  call('connection_keys_create', { label });
+
+/** 吊销一把 Gateway Key；对下一次鉴权立即生效。 */
+export const connectionKeysRevoke = (id: string): Promise<void> =>
+  call('connection_keys_revoke', { id });
+
 // ---------------------------------------------------------------- 配置读写
 
 export const readConfig = (): Promise<ConfigReadResult> => call('config_read');
@@ -80,9 +152,6 @@ export const resetConfigKey = (key: string): Promise<ConfigWriteResult> =>
 export const validateConfigValues = (
   values: Record<string, string>,
 ): Promise<ConfigValidateResult> => call('config_validate_values', { values });
-
-/** 在系统默认文本编辑器中打开配置文件。 */
-export const openConfigFile = (): Promise<void> => call('open_config_file');
 
 // ------------------------------------------------------- 供应商档案与模型
 

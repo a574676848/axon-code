@@ -296,11 +296,19 @@ async fn run_subscription(
     // 下行帧不设客户端上限：帧由网关按持久事件生成，一条大事件本来就可能很大，
     // 客户端自设上限只会掐断自己的订阅（64 KiB 是网关对客户端上行帧的限制，
     // 不是下行契约）。库自带的兜底上限仍在，用于挡住失控的对端。
-    let (mut socket, _) =
-        tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(request))
-            .await
-            .map_err(|_| "连接会话事件流超时".to_string())?
-            .map_err(|error| describe_handshake_error(&error))?;
+    let outcome = tokio::time::timeout(
+        CONNECT_TIMEOUT,
+        tokio_tungstenite::connect_async_tls_with_config(
+            request,
+            None,
+            false,
+            Some(tls_connector()?),
+        ),
+    )
+    .await
+    .map_err(|_| "连接会话事件流超时".to_string())?
+    .map_err(|error| describe_handshake_error(&error))?;
+    let (mut socket, _) = outcome;
 
     let subscribe = serde_json::to_string(&target.into_frame(subscribe_id.clone()))
         .map_err(|error| format!("构造订阅帧失败：{error}"))?;
@@ -414,6 +422,17 @@ fn build_request() -> Result<tokio_tungstenite::tungstenite::handshake::client::
         request.headers_mut().insert("authorization", value);
     }
     Ok(request)
+}
+
+/// 平台根证书的连接器。
+///
+/// `tokio-tungstenite` 没有「平台验证器」这一档特性，只有 webpki-roots 与
+/// native-roots，而后者只读根证书、不做平台策略校验，因此必须自建
+/// `Connector::Rustls`。配置由 [`crate::connection::tls`] 统一持有，HTTP 与 WS
+/// 两条链路共用同一套信任来源。
+fn tls_connector() -> Result<tokio_tungstenite::Connector, String> {
+    let config = crate::connection::tls::platform_client_config()?;
+    Ok(tokio_tungstenite::Connector::Rustls(config))
 }
 
 /// 把握手期错误翻译成可读结论；401/404 属于配置与版本问题，重试无益。

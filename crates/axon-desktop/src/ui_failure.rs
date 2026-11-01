@@ -52,12 +52,6 @@ const HIGH_WATER_FALLBACK: u64 = 1400 * 1024 * 1024;
 /// 追溯父链的层数上限，父链异常时也不会死循环。
 const ANCESTRY_LIMIT: usize = 16;
 
-/// 故障日志所在目录（相对 Axon 根），与 CLI 日志同处一室。
-const FAILURE_LOG_SUBDIR: [&str; 2] = ["data", "logs"];
-
-/// 故障日志文件名；一行一条，只追加不覆盖。
-const FAILURE_LOG_FILE: &str = "desktop-ui-failure.jsonl";
-
 /// 最后一次界面报到时间（毫秒）；0 表示尚未报到或刚刚切换过引导页。
 static LAST_SEEN_MS: AtomicU64 = AtomicU64::new(0);
 
@@ -327,14 +321,12 @@ fn mib(bytes: u64) -> u64 {
 /// 这条路是事后复盘唯一的事实源：引导页只留在屏幕上，刷新即失。写盘失败不阻断接管，
 /// 界面该回哪一页与日志无关。
 fn record_failure(kind: &str, reading: Option<MemoryReading>, high_water: u64) {
-    let Ok(root) = axon_config::ConfigLoader::default_user_axon_root_path() else {
+    // 客户端自有根：这份日志属于桌面端自己，与后端运行时目录无关。
+    let log_path = crate::connection::store::ui_failure_log_path();
+    let Some(directory) = log_path.parent() else {
         return;
     };
-    let mut directory = root;
-    for part in FAILURE_LOG_SUBDIR {
-        directory.push(part);
-    }
-    if std::fs::create_dir_all(&directory).is_err() {
+    if std::fs::create_dir_all(directory).is_err() {
         return;
     }
     let record = serde_json::json!({
@@ -350,7 +342,7 @@ fn record_failure(kind: &str, reading: Option<MemoryReading>, high_water: u64) {
     let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(directory.join(FAILURE_LOG_FILE))
+        .open(&log_path)
     else {
         return;
     };

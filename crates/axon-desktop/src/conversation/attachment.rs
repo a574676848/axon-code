@@ -1,22 +1,46 @@
 //! 输入区的附件：落地与预览。
 //!
-//! 粘贴进来的图片与文件必须先成为磁盘上的真实文件，才能作为附件路径提交给网关：
-//! 后端把附件投影为 Provider turn 的 `transportContext.files`，图片走 vision 输入，
-//! 文件走可读附件。这里只做两件事：把字节落到运行态目录，把图片读回成可渲染的
-//! 数据地址；不做任何格式转换，也不改写用户原始文件。
+//! 粘贴进来的图片与文件必须先成为真实文件，才能作为附件路径提交给网关：后端把附件
+//! 投影为 Provider turn 的 `transportContext.files`，图片走 vision 输入，文件走可读
+//! 附件。这里只做两件事：把附件落到可提交的位置，把图片读回成可渲染的数据地址；
+//! 不做任何格式转换，也不改写用户原始文件。
+//!
+//! 落地位置按生效档案分流（长官裁决：本机档案直读、云档案经网关）：
+//!
+//! - **本机档案**：落到客户端自有根，原路径直接交出去，省掉一次读放大；
+//! - **云档案**：本机路径在远端不存在，必须把字节 multipart 上传到
+//!   `POST /api/v1/attachments`，用回执里的路径作为提交给会话的附件路径。
+//!
+//! 上传侧遵守合同 §15.2 P6：base64 先解码成字节并立刻丢掉原串，multipart 按块写，
+//! 整份附件不会同时以原文与编码两种形式驻留内存。
 
 use std::path::{Path, PathBuf};
 
-use axon_config::ConfigLoader;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
+use crate::workspace_files::{FileSource, file_source};
+use crate::workspace_files_gateway::UploadBody;
+
 /// 单个附件的字节上限；超过即拒绝，避免把整条 IPC 通道拖垮。
-const MAX_ATTACHMENT_BYTES: usize = 16 * 1024 * 1024;
+///
+/// 与后端 `/meta.uploadLimitBytes` 同源同值（64 MiB），两个上限必须一起改。
+const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 /// 预览回传的字节上限。
 const MAX_PREVIEW_BYTES: u64 = 8 * 1024 * 1024;
-/// 附件落地目录名。
-const ATTACHMENT_DIR: &str = "attachments";
+
+/// 当前生效档案的附件数据来源。
+fn current_source() -> FileSource {
+    file_source(crate::connection::active_is_cloud())
+}
+
+/// 超过上限的固定文案；`subject` 区分「附件」（粘贴）与「文件」（选择）两种入口。
+fn too_large(subject: &str) -> String {
+    format!(
+        "{subject}超过 {} MiB，请改用更小的文件",
+        MAX_ATTACHMENT_BYTES / 1024 / 1024
+    )
+}
 
 /// 附件落地回执。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,10 +56,12 @@ pub struct StagedAttachment {
     pub bytes: u64,
 }
 
-/// 记录运行态根目录。
-fn axon_root() -> Result<PathBuf, String> {
-    ConfigLoader::default_user_axon_root_path()
-        .map_err(|error| format!("无法解析 Axon 运行时根目录：{error:?}"))
+/// 附件落地目录：客户端自有根下的 `attachments/`。
+///
+/// 附件是**桌面端自己的**数据：它由客户端暂存后随正文提交给网关，不属于后端运行时
+/// 目录。改到客户端根之后，云端档案的附件也不会被误当成后端本机文件。
+fn attachment_root() -> PathBuf {
+    crate::connection::store::attachments_dir()
 }
 
 /// 把文件名收敛成安全的单段名字，去掉任何目录成分。
@@ -251,11 +277,19 @@ fn read_header(path: &Path) -> Result<Vec<u8>, String> {
     Ok(buffer)
 }
 
-/// 落地一个粘贴进来的附件。
-pub fn stage(name: &str, data_base64: &str) -> Result<StagedAttachment, String> {
+/// 把 base64 内容解成字节，并做空值与上限校验。
+///
+/// 本机与云档案共用这一关：上限、空内容与编码错误三类结论必须一致，否则同一个文件
+/// 换个档案就会给出不同的拒绝文案。
+fn decode_payload(data_base64: &str) -> Result<Vec<u8>, String> {
     let payload = data_base64.trim();
     if payload.is_empty() {
         return Err("附件内容为空".to_string());
+    }
+    // 先按编码长度粗判上限：每 4 个 base64 字符对应 3 字节。这一步只是拦住必然被拒的
+    // 巨型负载，别为一个注定失败的请求先分配一整块解码缓冲；精确判定在解码之后。
+    if payload.len() / 4 * 3 > MAX_ATTACHMENT_BYTES {
+        return Err(too_large("附件"));
     }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(payload)
@@ -264,11 +298,30 @@ pub fn stage(name: &str, data_base64: &str) -> Result<StagedAttachment, String> 
         return Err("附件内容为空".to_string());
     }
     if bytes.len() > MAX_ATTACHMENT_BYTES {
-        return Err(format!(
-            "附件超过 {} MiB，请改用更小的文件",
-            MAX_ATTACHMENT_BYTES / 1024 / 1024
-        ));
+        return Err(too_large("附件"));
     }
+    Ok(bytes)
+}
+
+/// 落地一个粘贴进来的附件。
+///
+/// 云档案下走网关上传（调试桥按命令分派表调用这一条，入参是借用）；桌面窗口的命令另有
+/// [`stage_remote_owned`]，那条路径才能在解出字节后立刻丢弃原串。
+///
+/// # Errors
+///
+/// 内容为空、base64 非法、超过上限，或云档案下上传失败时返回原因。
+pub fn stage(name: &str, data_base64: &str) -> Result<StagedAttachment, String> {
+    if current_source() == FileSource::Gateway {
+        let bytes = decode_payload(data_base64)?;
+        return stage_remote(name, &bytes);
+    }
+    stage_locally(name, data_base64)
+}
+
+/// 本机档案下的附件落地：写进客户端自有根。
+fn stage_locally(name: &str, data_base64: &str) -> Result<StagedAttachment, String> {
+    let bytes = decode_payload(data_base64)?;
 
     let file_name = safe_name(name);
     // 过小的图片 Provider 一定会拒（真机回执：Image too small (area=64px)），
@@ -276,7 +329,7 @@ pub fn stage(name: &str, data_base64: &str) -> Result<StagedAttachment, String> 
     if let Some(mime) = image_mime(Path::new(&file_name)) {
         ensure_usable_image(&file_name, &bytes, mime)?;
     }
-    let directory = axon_root()?.join("data").join(ATTACHMENT_DIR);
+    let directory = attachment_root();
     // 一次附件一个子目录：同名文件不会互相覆盖，文件自身的名字也不带任何前缀，
     // 界面按路径取基名显示时看到的就是用户给的那个名字。
     let path = directory
@@ -294,6 +347,33 @@ pub fn stage(name: &str, data_base64: &str) -> Result<StagedAttachment, String> 
         // 展示用名保留用户原始写法：落盘名要安全，卡片上要认得出来。
         name: display_name(name),
     })
+}
+
+/// 云档案下的附件落地：字节上传到远端，用回执路径作为附件路径。
+fn stage_remote(name: &str, bytes: &[u8]) -> Result<StagedAttachment, String> {
+    let display = display_name(name);
+    // 与粘贴路径同一条判据：过小的图片在这里就拒，别等 Provider 回 400。
+    if let Some(mime) = image_mime(Path::new(&display)) {
+        ensure_usable_image(&display, bytes, mime)?;
+    }
+    let reply =
+        crate::workspace_files_gateway::upload_attachment(&display, UploadBody::Memory(bytes))?;
+    Ok(StagedAttachment {
+        image: image_mime(Path::new(&display)).is_some(),
+        bytes: reply.bytes,
+        path: reply.path,
+        name: display,
+    })
+}
+
+/// 云档案下的粘贴落地：持有 base64 串的调用方把所有权交进来。
+///
+/// 「丢原串」必须发生在发起上传之前，而不是函数结束时：合同 §15.2 P6 不允许附件同时
+/// 以原文与编码两种形式驻留内存，留到最后等于让两种形式在整个上传期间并存。
+fn stage_remote_owned(name: &str, data_base64: String) -> Result<StagedAttachment, String> {
+    let bytes = decode_payload(data_base64.as_str())?;
+    drop(data_base64);
+    stage_remote(name, &bytes)
 }
 
 /// 展示用文件名：去掉目录成分，其余原样保留。
@@ -339,7 +419,22 @@ pub fn resolve_preview(path: &str) -> Result<(PathBuf, &'static str), String> {
 }
 
 /// 读取一张待预览图片的字节与 MIME。
+///
+/// 本机档案直读本机文件；云档案经网关取字节。两条分支共用同一个 MIME 判据，返回给
+/// 自定义协议与 IPC 的都是同一份事实。
+///
+/// # Errors
+///
+/// 不是已知图片类型、目标不存在、超出预览上限，或云档案下网关失败。
 pub fn read_preview(path: &str) -> Result<(Vec<u8>, &'static str), String> {
+    // 先判类型再取字节：后缀不是已知图片时，两条分支给出的都是同一句话。
+    let mime =
+        image_mime(Path::new(path.trim())).ok_or_else(|| "该附件不是可预览的图片".to_string())?;
+    if current_source() == FileSource::Gateway {
+        // 远端附件不在本机，读本机同名文件只会显示成另一张图。
+        let bytes = crate::workspace_files_gateway::preview_bytes(path, MAX_PREVIEW_BYTES)?;
+        return Ok((bytes, mime));
+    }
     let (canonical, mime) = resolve_preview(path)?;
     let bytes = std::fs::read(&canonical).map_err(|error| format!("读取附件失败：{error}"))?;
     Ok((bytes, mime))
@@ -357,6 +452,8 @@ pub fn read_preview_data_url(path: &str) -> Result<String, String> {
 }
 
 /// Tauri IPC 命令：把图片附件读成数据地址。
+///
+/// 云档案下由 [`read_preview`] 经网关取字节，绝不直读本机文件。
 #[tauri::command(async)]
 pub fn attachment_preview(path: String) -> Result<String, String> {
     read_preview_data_url(&path)
@@ -403,12 +500,16 @@ pub fn path_from_scheme_uri(uri: &str) -> Result<String, String> {
 /// Tauri IPC 命令：落地一个粘贴进来的附件。
 #[tauri::command(async)]
 pub fn attachment_stage(name: String, data_base64: String) -> Result<StagedAttachment, String> {
-    stage(&name, &data_base64)
+    if current_source() == FileSource::Gateway {
+        // 云档案：远端没有本机路径可提交，只能把字节传上去。
+        return stage_remote_owned(&name, data_base64);
+    }
+    stage_locally(&name, &data_base64)
 }
 
 /// Tauri IPC 命令：选择本地文件并直接落地为附件。
 ///
-/// 桌面窗口内不需要把字节绕一圈 base64：选中的就是磁盘上的真实文件，
+/// 桌面窗口内不需要把字节绕一圈 base64：本机档案下选中的就是磁盘上的真实文件，
 /// 直接把路径作为附件交出去即可，省掉一次读放大。
 #[tauri::command(async)]
 pub fn attachment_pick() -> Result<Vec<StagedAttachment>, String> {
@@ -421,8 +522,9 @@ pub fn attachment_pick() -> Result<Vec<StagedAttachment>, String> {
 
 /// 把用户选中的文件登记为附件。
 ///
-/// 附件目录是运行态目录，用户文件不搬移：只做存在性与体积校验，
-/// 原路径直接交给后端，避免在本地留下第二份副本。
+/// 本机档案：附件目录在客户端根，用户文件不搬移，只做存在性与体积校验，原路径直接
+/// 交给后端，避免在本地留下第二份副本。云档案：远端拿不到这个路径，必须把文件读出去
+/// 上传，且按块读，几十 MiB 的文件不整份驻留内存。
 pub fn adopt(path: &str) -> Result<StagedAttachment, String> {
     let candidate = Path::new(path.trim());
     let metadata =
@@ -431,10 +533,7 @@ pub fn adopt(path: &str) -> Result<StagedAttachment, String> {
         return Err("只能附加文件".to_string());
     }
     if metadata.len() > u64::try_from(MAX_ATTACHMENT_BYTES).unwrap_or(u64::MAX) {
-        return Err(format!(
-            "文件超过 {} MiB，请改用更小的文件",
-            MAX_ATTACHMENT_BYTES / 1024 / 1024
-        ));
+        return Err(too_large("文件"));
     }
     let name = candidate
         .file_name()
@@ -445,6 +544,23 @@ pub fn adopt(path: &str) -> Result<StagedAttachment, String> {
         let header = read_header(candidate)?;
         ensure_usable_image(&name, &header, mime)?;
     }
+    if current_source() == FileSource::Gateway {
+        let file =
+            std::fs::File::open(candidate).map_err(|error| format!("打开文件失败：{error}"))?;
+        let reply = crate::workspace_files_gateway::upload_attachment(
+            &name,
+            UploadBody::Disk {
+                file,
+                len: metadata.len(),
+            },
+        )?;
+        return Ok(StagedAttachment {
+            image: image_mime(candidate).is_some(),
+            bytes: reply.bytes,
+            path: reply.path,
+            name,
+        });
+    }
     Ok(StagedAttachment {
         image: image_mime(candidate).is_some(),
         bytes: metadata.len(),
@@ -454,112 +570,5 @@ pub fn adopt(path: &str) -> Result<StagedAttachment, String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn file_names_are_reduced_to_a_single_safe_segment() {
-        assert_eq!(safe_name("../../etc/passwd"), "passwd");
-        assert_eq!(safe_name("C:\\tmp\\shot.png"), "shot.png");
-        assert_eq!(safe_name("   "), "attachment");
-        assert!(!safe_name("a:b*c?.png").contains([':', '*', '?']));
-    }
-
-    #[test]
-    fn display_names_keep_the_user_wording_and_drop_directories() {
-        // 落盘名会把全角括号等替换成下划线，但卡片上必须还是用户那个名字。
-        assert_eq!(
-            display_name("实时语音识别 V2（WebSocket）.md"),
-            "实时语音识别 V2（WebSocket）.md"
-        );
-        assert_eq!(display_name("C:\\tmp\\截图（1）.png"), "截图（1）.png");
-        assert_eq!(display_name("   "), "attachment");
-    }
-
-    #[test]
-    fn staging_rejects_invalid_payloads_before_touching_disk() {
-        assert!(stage("a.png", "").is_err());
-        assert!(stage("a.png", "不是 base64").is_err());
-    }
-
-    /// 造一个只带有效 PNG 头的字节串：宽高按 IHDR 写入。
-    fn png_bytes(width: u32, height: u32) -> Vec<u8> {
-        let mut bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
-        bytes.extend_from_slice(&width.to_be_bytes());
-        bytes.extend_from_slice(&height.to_be_bytes());
-        bytes
-    }
-
-    #[test]
-    fn image_dimensions_are_read_from_the_header() {
-        assert_eq!(
-            image_dimensions(&png_bytes(1_200, 800), "image/png"),
-            Some((1_200, 800))
-        );
-        let mut gif = b"GIF89a".to_vec();
-        gif.extend_from_slice(&40_u16.to_le_bytes());
-        gif.extend_from_slice(&30_u16.to_le_bytes());
-        assert_eq!(image_dimensions(&gif, "image/gif"), Some((40, 30)));
-        // JPEG：SOI + SOF0 段，高在前宽在后。
-        let jpeg = [
-            0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x02,
-            0x58, 0x03, 0x20,
-        ];
-        assert_eq!(image_dimensions(&jpeg, "image/jpeg"), Some((800, 600)));
-    }
-
-    #[test]
-    fn tiny_images_are_rejected_before_reaching_the_provider() {
-        // 真机回执：8×8 的图被 Provider 拒（Image too small (area=64px)），这里提前拦住。
-        let error = ensure_usable_image("tiny.png", &png_bytes(8, 8), "image/png")
-            .expect_err("过小的图片必须被拒");
-        assert!(error.contains("图片太小"), "{error}");
-        assert!(error.contains("8×8"), "{error}");
-        assert!(ensure_usable_image("ok.png", &png_bytes(16, 16), "image/png").is_ok());
-        // 尺寸读不出来时不拦：宁可交给 Provider 判，也不误杀正常图片。
-        assert!(
-            ensure_usable_image(
-                "vector.svg",
-                b"<svg viewBox=\"0 0 4 4\"></svg>",
-                "image/svg+xml"
-            )
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn preview_serves_any_image_path_and_still_rejects_non_images() {
-        assert!(resolve_preview("notes.txt").is_err());
-        assert!(resolve_preview("missing.png").is_err());
-    }
-
-    #[test]
-    fn preview_reads_an_image_outside_the_runtime_root() {
-        // 判据只有「图片后缀 + 体积」两条：工作区里的图片与控制台临时目录里的图片
-        // 走同一条路径，不再按目录设卡。
-        let root = axon_test_support::test_temp_root().join("preview-scope");
-        std::fs::create_dir_all(&root).expect("建临时目录");
-        let path = root.join("shot.png");
-        let bytes = png_bytes(8, 8);
-        std::fs::write(&path, &bytes).expect("写临时图片");
-        let (resolved, mime) =
-            resolve_preview(&path.to_string_lossy()).expect("运行态目录之外的图片必须可预览");
-        assert_eq!(mime, "image/png");
-        assert_eq!(std::fs::read(&resolved).expect("读回"), bytes);
-    }
-
-    #[test]
-    fn percent_decoding_round_trips_windows_paths() {
-        let encoded = "C%3A%5CUsers%5Cexample%5C.axon%5Cdata%5Ct.png";
-        assert_eq!(
-            percent_decode(encoded).expect("解码"),
-            r"C:\Users\example\.axon\data\t.png"
-        );
-        assert!(percent_decode("%zz").is_err());
-        assert!(percent_decode("%4").is_err());
-        assert_eq!(
-            path_from_scheme_uri("axon-attachment://local/C%3A%5Ca%5Cb.png").expect("解析"),
-            r"C:\a\b.png"
-        );
-    }
-}
+#[path = "attachment_tests.rs"]
+mod tests;

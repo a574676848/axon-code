@@ -13,11 +13,20 @@
 
 - 工作台是**网关的客户端**：数据一律经网关协议取得，不直连运行态数据库。
 - 直接调用版本目录二进制只用于自检与调试桥；日常启动一律走 `axon desktop`，以便升级换目录后快捷方式仍有效。
+- 工作台同一时刻只连一个后端，后端由「连接档案」描述（本机或云端）。档案记在客户端数据根的状态文件里，不写进 `config.toml`；切换档案等于重启应用，本进程经 `app.exit(0)` 退出后由中继进程经 launcher 重新拉起。
+- `--serve` 调试桥在云端档案生效时**拒绝启动**（非 0 退出并打印固定中文原因）：该桥零鉴权且分派表覆盖全部命令，其响应契约没有状态码通道，因此只能拒绝启动而不能返回 403。
 
 ## 它消费的运行态面
 
 | 面 | 用途 |
 |---|---|
+| `GET /api/v1/meta` | 连接档案的连接判定：一次请求同时拿到能力位、服务器时间与上传上限；失败区分凭据不匹配、证书有问题与连不上 |
+| `GET /api/v1/system/status` | 设置 › 连接的运行态读数（后端版本、租约、排队），并与 `/meta` 交叉校验服务器时间；同一响应里的 `webSocketPort` 是事件流端口的唯一来源，连接档案只填一个 HTTP 地址时由它校正事件流地址 |
+| `GET /api/v1/config`、`GET /api/v1/config/schema`、`PUT /api/v1/config` | 设置页的配置读写与校验 |
+| `GET/PUT /api/v1/secrets*` | 密钥状态与写入，值不回读 |
+| `POST /api/v1/providers/discover` | 「探查模型」 |
+| `GET/PUT /api/v1/mcp/config`、`GET /api/v1/skills` | MCP 配置与技能清单 |
+| `GET/PUT /api/v1/documents/soul`、`/documents/agents` | 人设与行为文件 |
 | `GET /api/v1/workspaces`、`GET /api/v1/lanes` | 工作区与车道列表 |
 | `POST /api/v1/workspaces`、`POST /api/v1/lanes/identity` | 注册工作区、推导车道标识 |
 | `POST /api/v1/lanes/<laneId>/interrupt` | 中断该车道当前运行 |
@@ -73,16 +82,21 @@
 
 ## 运行态文件
 
-相对 Axon 运行根（`axon config path` 所在目录的父级，通常为 `~/.axon`）：
+桌面端有自己的数据根，与后端运行时根并列、互不包含（`AXON_CLIENT_ROOT` 覆盖，缺省为平台应用数据目录下的 `Axon/client`）：
 
 | 路径 | 内容 |
 |---|---|
-| `desktop-state.json` | 桌面状态：最近工作区、通知开关等 |
-| `data/runtime/draft_history.jsonl` | 输入历史，与 TUI 同名同格式 |
-| `data/attachments/` | 附件暂存目录 |
-| `gateway-status.json` | 网关探测状态；缺失时按未探测处理 |
+| `desktop-state.v2.json` | 客户端状态：主题、通知开关、生效与上一次生效的档案 id、引导版本，以及每个档案的工作区与车道投影 |
+| `desktop-state.json.superseded` | 迁移前的 v1 状态归档，只生成一份，不再读写 |
+| `desktop-state.v1.json.bak` | 首次写入 v2 之前的 v1 备份 |
+| `attachments/` | 附件暂存目录，按一次附件一个子目录落盘 |
+| `logs/desktop-ui-failure.jsonl` | 界面接管日志，一行分项读数 |
+| `draft-history/<档案 id>.jsonl` | 云档案的输入历史（本机档案不用这里） |
+| `relaunch-failed.json` | 切档后拉起失败的一次性记录，启动时消费即改名为 `relaunch-failed.handled.json` |
 
-窗口几何（尺寸、位置、最大化、全屏）另存在系统的应用数据目录下的 `.window-state.json` 里，与 Axon 运行根分开：它描述的是窗口这一层，不参与运行态数据。
+后端运行时根下仍有两份属于后端的数据：`data/runtime/draft_history.jsonl`（本机档案的输入历史，与 TUI 同名同格式）与配置相邻的 `.env`（本机档案的凭据）。状态文件损坏时会另存 `<原文件名>.corrupt` 并回落默认值，不再静默清空。
+
+窗口几何（尺寸、位置、最大化、全屏）另存在系统的应用数据目录下的 `.window-state.json` 里，与两个根都分开：它描述的是窗口这一层，不参与运行态数据。
 
 ## 调试桥
 
@@ -99,7 +113,8 @@
 
 | 族 | 命令 |
 |---|---|
-| 配置 | `config_read`、`config_validate`、`config_validate_values`、`config_write`、`config_apply_values`、`config_reset_key`、`open_config_file` |
+| 连接档案 | `connection_state`、`connection_retry_probe`、`connection_test`、`connection_save_profile`、`connection_delete_profile`、`connection_rename_profile`、`connection_switch_profile`、`connection_set_session_secret`、`connection_complete_onboarding`、`connection_skip_onboarding`、`connection_probe_profiles` |
+| 配置 | `config_read`、`config_validate`、`config_validate_values`、`config_write`、`config_apply_values`、`config_reset_key` |
 | Provider 与模型 | `provider_profile_upsert`、`provider_profile_remove`、`discover_models` |
 | 工作区与车道 | `workspace_list`、`workspace_add`、`workspace_remove`、`workspace_list_entries`、`workspace_read_file`、`workspace_read_bytes`、`workspace_stat_path`、`workspace_applications`、`workspace_open_default`、`workspace_open_with`、`workspace_reveal`、`lane_create`、`lane_rename`、`lane_reorder`、`lane_set_pinned`、`lane_set_archived` |
 | 会话 | `conversation_submit`、`conversation_history`、`conversation_watch`、`conversation_watch_session`、`conversation_unsubscribe`、`conversation_interrupt`、`conversation_stop_job`、`conversation_send_subagent_message`、`conversation_lane_jobs`、`conversation_lane_subagents` |
@@ -112,9 +127,14 @@
 | 目标看板 | `goal_list`（`limit`、`workspaceId`）、`goal_get`（`goalId`）；两条都只读，参数非法在本地直接返回中文错误，不发请求 |
 
 - 读类命令可直接用于排障（`system_info`、`gateway_health`、`conversation_history`、`cron_history`）。
+- **数据通路按生效档案分流**：本机档案下文件列表、文件读取、目录探测、附件暂存与预览走本机原生路径，不经网关（同一台机器上再绕一次 HTTP 只是白付一跳）；云档案下同一批命令改走 `/api/v1/files`、`/files/content`、`/fs/dirs` 与 `POST /api/v1/attachments`，预览改由服务端取字节。命令名、参数与返回值在两种档案下完全一致，分流只发生在数据访问层。
+- 控制面（配置、密钥状态、供应商发现、MCP 配置、技能清单、人设与准则）两种档案都经网关，以保持单一数据来源。
+- 本机打开类动作（`workspace_open_default`、`workspace_open_with`、`workspace_applications`、`workspace_reveal`）只在**本机档案**下可用；云档案下统一拒绝并回「云档案下不支持在本机打开，请在远端服务上操作」。
+- 附件单文件上限 64 MiB：本机档案直接落到客户端自有根，云档案按块流式 multipart 上传，不把整份文件读进内存两次。
 - 写类命令（`config_write`、`config_apply_values`、`secret_set`、`mcp_upsert`、`cron_*`、`lane_*`、`conversation_submit`、`conversation_interrupt` 等）都是状态变更，先取得用户明确授权。
 - 凭据类命令只回报状态与掩码，不打印密钥原文。
-- `system_info` 的 `github` 字段给出本次构建对应的仓库、发布页、问题反馈与许可标识（都来自构建期元数据）；运行状态在同一条回执的 `services`、`daemon_running`、`remote_feishu` 里。
+- `system_info` 的 `github` 字段给出本次构建对应的仓库、发布页、问题反馈与许可标识（都来自构建期元数据）。
+- 连接读数只经 `connection_state` 取得：它给出生效档案、模式、后端地址与版本、往返延迟、能力位与健康结论。试连接（`connection_test`）只发一次 `GET /api/v1/meta`，失败按凭据不匹配、证书有问题、连不上三类分别回报；它不落档案也不落凭据库。
 - `check_update` 按该仓库读取最新发布。失败不是命令失败：`error` 是中文归因、`hint` 是下一步动作，两者都不含 HTTP 状态码或库内部字符串；界面上归因收在「关于」页的「详情」里。
 - 读取私有仓库需要令牌：配置目录 `.env` 中的 `AXON_GITHUB_TOKEN`（或 `GH_TOKEN`、`GITHUB_TOKEN`）。未配置时按匿名请求读取，额度为每小时 60 次，超限的 `hint` 会给出重置倒计时。
 - `open_external_url` 只接受 `http` 与 `https`，其余协议直接拒绝。

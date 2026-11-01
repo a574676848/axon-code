@@ -102,6 +102,8 @@ Axon 使用以下用户级目录布局：
 | `remote.gateway.api_token_env` | 字符串 | 仅含字母、数字、下划线的非空名称 | `"AXON_GATEWAY_API_TOKEN"` |
 | `remote.gateway.http_bind` | 字符串 | 有效的 IP:端口地址 | `"127.0.0.1:3143"` |
 | `remote.gateway.websocket_bind` | 字符串 | 有效的 IP:端口地址 | `"127.0.0.1:3144"` |
+| `remote.gateway.auth_keys` | 字符串 | 多 Key 存储文件路径；空串表示后端运行时根下 `data/gateway/auth-keys.json` | `""` |
+| `remote.gateway.legacy_token_enabled` | 布尔值 | `true`、`false`；关闭后全局 token 不再对业务路由生效，只有签发的 Key 生效 | `true` |
 | `remote.feishu_websocket.enabled` | 布尔值 | `true`、`false` | `false` |
 | `remote.feishu_websocket.app_id` | 字符串 | 飞书应用 ID | `""` |
 | `remote.feishu_websocket.app_secret_env` | 字符串 | 环境变量名 | `""` |
@@ -117,7 +119,19 @@ Axon 使用以下用户级目录布局：
 | `remote.feishu_websocket.chat_policies[].blocked_sender_open_ids` | 字符串数组 | sender `open_id` 列表 | `[]` |
 | `remote.feishu_websocket.chat_policies[].require_mention` | 可选布尔值 | `true`、`false` 或省略（继承全局值） | 省略 |
 
-`remote.mode` 只改变运行时内部的 cursor 与 payload 预算，不再单独配置事件数或字节上限。Gateway 默认仅监听本机地址；对外提供服务时应配合防火墙或反向代理。
+`remote.mode` 只改变运行时内部的 cursor 与 payload 预算，不再单独配置事件数或字节上限。Gateway 默认仅监听本机地址；对外提供服务时把两个 bind 改到需要的网卡，并按部署方的运维策略放行端口。
+
+#### 网关凭据分两级
+
+`remote.gateway.api_token_env` 指向的那把全局 token 是**超管凭据**：它既能访问全部业务路由，也能访问 `/api/v1/keys` 管理面。由超管签发出来的每把 Key 只能访问业务路由，调管理面一律 403。两级判定由鉴权层返回身份而不是布尔值，路由据此分级。
+
+- 全局 token 只存在配置相邻的 `.env` 里，绝不落进客户端档案或系统凭据库副本；它一旦泄漏等于后端完全失守，应立即轮换。
+- 多 Key 存储只保存每把 Key 的独立盐与强哈希，带 label 与创建、最后使用时间；明文只在签发回执里出现一次。文件权限在 Unix 上为 0600。
+- 管理面只认 `Authorization` 头，不接受 `?api_token=` 查询串，否则超管 token 会留在各级访问日志与浏览器历史里。
+- `remote.gateway.legacy_token_enabled` 默认 `true` 是为了不打断既有部署：本机连接档案的凭据就是这把全局 token，自动退役会让本机档案立刻 401。关闭前必须确认已有可用的 Key，且关闭后本地档案需要改用 Key。
+- 吊销一把 Key 只影响该 Key 本身；长连接上的 401 会在下一次请求时暴露，届时客户端的连接胶囊会跟着变成凭据无效。
+
+细节见 [安全基线](./security-baseline.md)。
 
 ### 图像、Memory 与 Skills
 
@@ -379,6 +393,25 @@ axon setup --non-interactive --clear-websocket-url --clear-api-key
 | `AXON_PROCESS_RLIMIT_NPROC` | 子进程数上限，`off` 或 `0` 表示不限制 |
 | `AXON_PROCESS_RLIMIT_NOFILE` | 子进程打开文件数上限，`off` 或 `0` 表示不限制 |
 | `AXON_PROCESS_RLIMIT_AS_BYTES` | 子进程地址空间上限（字节），默认不限制 |
+| `AXON_CLIENT_ROOT` | 桌面端客户端数据根，覆盖平台默认位置；不得指向后端运行时根之内 |
+| `AXON_RUNTIME_ROOT` | 后端运行时根，覆盖默认的 `$HOME/.axon`；只影响后端与草稿历史定位 |
+
+### 两个根互不推导
+
+后端运行时根（`AXON_RUNTIME_ROOT` 或默认 `$HOME/.axon`）与桌面端客户端数据根（`AXON_CLIENT_ROOT` 或平台默认位置）是并列的两个目录，任一变量都不得改变另一方的解析结果：
+
+```text
+AXON_CLIENT_ROOT（桌面端数据根，最高）
+  > 平台默认位置：Windows %LOCALAPPDATA%\Axon\client
+                   macOS  $HOME/Library/Application Support/Axon/client
+                   Linux  $XDG_DATA_HOME/axon/client（缺省 $HOME/.local/share/axon/client）
+AXON_RUNTIME_ROOT（后端运行时根）
+  > 后端默认 $HOME/.axon
+```
+
+客户端数据根存放桌面端自己的状态与暂存数据：`desktop-state.v2.json`（连接档案、工作区与车道投影）、`attachments/`、`logs/desktop-ui-failure.jsonl` 与云档案的输入历史（按档案 id 分文件）。后端运行时根继续存放 `config.toml`、配置相邻的 `.env`、`data/`、`skills/`、`.mcp.json`、`SOUL.md` 与 `AGENTS.md`；本机档案的输入历史仍是后端根下的 `data/runtime/draft_history.jsonl`，与 TUI 共用同一份文件。
+
+`AXON_CLIENT_ROOT` 指向后端运行时根之内时会被忽略并退回平台默认位置，因为那会把桌面端状态写进 daemon 的运行态目录。
 
 首字链路性能遥测仅在 `config.toml` 的 `[agent].log_level = "trace"` 时启用。`AXON_LOG_LEVEL=trace` 仍可临时提高日志详细度，但不会开启遥测；修改配置后需重启当前 CLI 或 Daemon 进程。
 
@@ -460,7 +493,9 @@ http_bind = "127.0.0.1:3143"
 websocket_bind = "127.0.0.1:3144"
 
 # 需要局域网/外部网络访问时，可分别改为 0.0.0.0:3143、0.0.0.0:3144
-# 或 IPv6 的 [::]:3143、[::]:3144；公网暴露前必须配置防火墙或反向代理。
+# 或 IPv6 的 [::]:3143、[::]:3144；两个端口各自放行，暴露范围由部署方的防火墙决定。
+# 桌面端只需填 http 这一个地址与端口，事件流端口由 GET /api/v1/system/status
+# 的 webSocketPort 自报，客户端据此把 WebSocket 请求指到同一主机的该端口。
 
 [remote.feishu_websocket]
 enabled = true

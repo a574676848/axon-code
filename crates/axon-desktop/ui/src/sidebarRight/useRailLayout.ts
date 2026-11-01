@@ -17,6 +17,7 @@ import {
   type RailLayout,
 } from './model';
 import { addressPath, claim, pageType, type ResourceParams } from './registry';
+import { useConnectionFact } from '../connectionState';
 
 /*
  * 右侧栏控制器。
@@ -52,7 +53,7 @@ export interface RailController {
   /** 打开一个页类型。 */
   openPage: (kind: string, options?: OpenPageOptions) => void;
   /** 新开一个终端；不给 shell 时由后端按配置顺序取第一个可用的。 */
-  newTerminal: (shellPath?: string) => void;
+  newTerminal: (shellPath?: string, replaceActive?: boolean) => void;
   closeTab: (tabId: string) => void;
   focusTab: (tabId: string) => void;
   /** 记下一个 tab 选定的呈现方式；跟 tab 一起持久化。 */
@@ -68,6 +69,7 @@ export interface RailController {
 }
 
 export function useRailLayout(laneId: string | null): RailController {
+  const connection = useConnectionFact();
   const key = storageKey(laneId);
   const [layout, setLayout] = React.useState<RailLayout>(() =>
     deserialize(window.localStorage.getItem(key)),
@@ -123,9 +125,22 @@ export function useRailLayout(laneId: string | null): RailController {
     });
   }, []);
 
-  const newTerminal = React.useCallback((shellPath?: string) => {
-    openPage('terminal', shellPath === undefined ? undefined : { params: { shellPath } });
-  }, [openPage]);
+  const newTerminal = React.useCallback((shellPath?: string, replaceActive?: boolean) => {
+    /*
+     * 终端只在后端**明确**支持时才有意义：云档案下 `terminal` 被客户端覆盖为 false，
+     * 客户端拿不到那台机器的 PTY；`Unknown`（还没探测出结论）同样不能放行，否则
+     * 快捷键会绕过置灰状态直接拉起本机 PTY。入口本身在未知态渲染成置灰，
+     * 这里把同一判据也用在快捷键上，两条路径不会分叉。
+     */
+    const capability = connection.snapshot?.capabilities?.find(
+      (item) => item.key === 'terminal',
+    );
+    if (capability === undefined || !capability.enabled) return;
+    openPage('terminal', {
+      ...(replaceActive === true ? { replaceActive: true } : {}),
+      ...(shellPath === undefined ? {} : { params: { shellPath } }),
+    });
+  }, [connection.snapshot, openPage]);
 
   const current = activeTab(layout);
   const activePath = current?.address == null ? null : addressPath(current.address);

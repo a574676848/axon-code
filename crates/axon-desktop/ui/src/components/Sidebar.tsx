@@ -23,6 +23,7 @@ import { WorkspaceTree } from './WorkspaceTree';
 import type { ArchivedFilter, GroupMode, OrderMode } from './ViewOptionsMenu';
 import { SettingsIcon } from '../icons';
 import { UpdateHint } from './UpdateHint';
+import { ConnectionCapsule } from './ConnectionCapsule';
 
 /** 侧栏默认宽度，与既有工作台产品一致。 */
 const DEFAULT_WIDTH = 280;
@@ -66,6 +67,8 @@ interface SidebarProps {
   onToggleSidebar: () => void;
   /** 打开设置弹窗。 */
   onOpenSettings: () => void;
+  /** 打开设置 › 连接；未传时连接胶囊的「管理连接…」退回调用 onOpenSettings。 */
+  onOpenConnection?: () => void;
   /** 网关连接状态；为空表示尚未探测完成。 */
   health?: GatewayHealth | null;
   /** 选中某条会话；主区域据此建立订阅。 */
@@ -84,6 +87,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isOpen,
   onToggleSidebar,
   onOpenSettings,
+  onOpenConnection,
   health = null,
   onSelectLane,
   selectedLaneId = null,
@@ -436,6 +440,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }));
   }, [workspaces, query, archivedFilter, orderBy, fullPaths, selectedLaneId, activeLaneId, activeWorkspaceId]);
 
+  /*
+   * 收轨态整块不渲染连接胶囊，也不给 RailButton 加状态槽：图标轨每一格都是一个
+   * 导航目标，混入一枚状态入口会被读成第二个视图（与设计系统 §14.1.1「图标轨不
+   * 混状态入口」同源）。收轨态下当前档案与健康态的常驻落点是设置 › 连接，展开
+   * 侧栏即可看到胶囊。
+   */
   if (!isOpen) {
     return (
       <SidebarRail
@@ -592,8 +602,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
       </div>
 
-      {/* 底部设置入口，连接问题由统一弹窗呈现；确认有新版本时右端多一枚下载入口。 */}
-      <div className="shrink-0 px-3 py-2">
+      {/*
+        底栏自上而下三层：连接胶囊、切档回执（仅在切档时出现）、设置行。
+        胶囊自占一行：设置行右端已被「新版本」入口占用，挤进同一行会把两个入口
+        压成一条，且胶囊是恒常驻的档案入口，不该跟着更新检测的结论出现或消失。
+      */}
+      <div className="shrink-0 px-3 py-2 space-y-1">
+        <ConnectionCapsule onManage={onOpenConnection ?? onOpenSettings} />
         <div className="flex items-center gap-2">
           <button
             type="button"

@@ -1,10 +1,12 @@
 //! Axon CLI 参数解析与命令注册。
+pub mod attachments_http_adapter;
 #[path = "args/cli_args.rs"]
 mod cli_args;
 #[path = "args/command_surface.rs"]
 mod command_surface;
 #[path = "args/completion_args.rs"]
 mod completion_args;
+pub mod config_http_adapter;
 #[path = "runtime/constants.rs"]
 mod constants;
 mod cron_commands;
@@ -17,6 +19,7 @@ mod doctor_cli_tests;
 #[cfg(feature = "tui")]
 #[path = "runtime/doctor_receipts.rs"]
 mod doctor_receipts;
+pub mod documents_http_adapter;
 #[path = "args/exec_args.rs"]
 mod exec_args;
 #[path = "commands/exec.rs"]
@@ -25,8 +28,13 @@ mod exec_commands;
 mod export_commands;
 #[path = "commands/export_report_contract.rs"]
 mod export_report_contract;
+pub mod files_http_adapter;
+pub mod fs_dirs_http_adapter;
+#[path = "commands/gateway_key.rs"]
+mod gateway_key_commands;
 mod goal_http_adapter;
 mod interactive_tui;
+pub mod keys_http_adapter;
 #[path = "commands/lsp.rs"]
 mod lsp_commands;
 #[path = "args/management_args.rs"]
@@ -38,6 +46,7 @@ mod mcp_command_plan;
 mod mcp_commands;
 #[path = "commands/mcp/config_file.rs"]
 mod mcp_config_file;
+pub mod mcp_config_http_adapter;
 #[path = "mcp_http_adapter.rs"]
 mod mcp_http_adapter;
 #[path = "commands/mcp/local_store.rs"]
@@ -57,7 +66,10 @@ pub use persona_commands::{PersonaCommand, PersonaSubcommand};
 mod persona_http_adapter;
 #[path = "commands/management/provider_report.rs"]
 mod provider_report;
+pub mod providers_http_adapter;
 mod remote_commands;
+/// 网关扩展路由的装配：各路由族的唯一组合点。
+mod route_handler_registry;
 mod run_commands;
 #[path = "runtime/capability_routing.rs"]
 mod runtime_capability_routing;
@@ -78,8 +90,10 @@ mod runtime_tools;
 mod runtime_user_agents;
 #[path = "runtime/workspace_instructions.rs"]
 mod runtime_workspace_instructions;
+pub mod secrets_http_adapter;
 #[path = "commands/serve.rs"]
 mod serve_commands;
+pub mod server_path;
 mod session_commands;
 #[path = "args/setup_args.rs"]
 mod setup_args;
@@ -89,8 +103,10 @@ mod setup_check;
 mod setup_commands;
 #[path = "commands/skills.rs"]
 mod skills_commands;
+pub mod skills_http_adapter;
 #[path = "runtime/stable_ids.rs"]
 mod stable_ids;
+pub mod system_http_adapter;
 #[path = "tools/orchestrator.rs"]
 mod tool_orchestrator;
 #[path = "tools/fs.rs"]
@@ -165,6 +181,11 @@ pub use exec_args::{ExecCommand, ExecKind};
 use exec_commands::run_exec;
 pub use export_commands::ExportCommand;
 use export_commands::run_export;
+use gateway_key_commands::run_gateway;
+pub use gateway_key_commands::{
+    GatewayCommand, GatewayKeyCommand, GatewayKeyCreateCommand, GatewayKeyRevokeCommand,
+    GatewayKeySubcommand, GatewaySubcommand,
+};
 #[cfg(feature = "tui")]
 use interactive_tui::run_doctor;
 #[cfg(not(feature = "tui"))]
@@ -415,6 +436,12 @@ fn run_management_command(cli: &AxonCli) -> Option<CliRunResult> {
             cli.global.cwd.as_deref(),
         )),
         Some(AxonCommand::Config(command)) => Some(run_config(
+            command,
+            cli.global.format,
+            cli.global.config.as_deref(),
+        )),
+        // Gateway 多 Key 管理面：运维在服务器上直接签发、列出与吊销，与守护进程同源同存储。
+        Some(AxonCommand::Gateway(command)) => Some(run_gateway(
             command,
             cli.global.format,
             cli.global.config.as_deref(),

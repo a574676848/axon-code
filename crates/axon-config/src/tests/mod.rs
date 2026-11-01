@@ -152,6 +152,8 @@ fn config_key_registry_exposes_editability() {
         "remote.gateway.api_token_env",
         "remote.gateway.http_bind",
         "remote.gateway.websocket_bind",
+        "remote.gateway.auth_keys",
+        "remote.gateway.legacy_token_enabled",
         "remote.mode",
     ];
 
