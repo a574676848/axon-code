@@ -300,7 +300,10 @@ pub(crate) fn is_attachments_path(path: &Path, axon_root: &Path, dialect: PathDi
 pub(crate) fn resolve_absolute(input: &str, dialect: PathDialect) -> Result<PathBuf, Rejection> {
     reject_foreign_windows_form(input)?;
     let normalized = normalize_absolute(input, dialect)?;
-    canonicalize_lenient(&normalized.to_path_buf(dialect), dialect)
+    // 真实路径只用于确认目标可达成（大小写、链接、联接等），对外的拼写仍按调用方给的形态：
+    // macOS 上 `/var` 是指向 `/private/var` 的软链，回真实路径会让同一个目录出现两种写法。
+    canonicalize_lenient(&normalized.to_path_buf(dialect), dialect)?;
+    Ok(normalized.to_path_buf(dialect))
 }
 
 /// 以 `root` 为界解析 `path`：`path` 可以是相对路径，也可以是落在根内的绝对路径。
@@ -323,14 +326,17 @@ pub(crate) fn resolve_within(
         dialect,
     )?;
 
+    // 第一道判定必须与调用方同一套拼写：macOS 上 `/var/...` 的真实路径是
+    // `/private/var/...`，拿词法候选去和真实根比会把根内路径判成越界。
+    // 真实路径只用于第二道判定，那才是能看见符号链接与目录联接的地方。
     let candidate = if path.is_empty() {
-        canonical_root.clone()
+        root_normalized.clone()
     } else if is_absolute_input(path, dialect) {
         normalize_absolute(path, dialect)?
     } else {
-        normalize_relative(&canonical_root, path, dialect)?
+        normalize_relative(&root_normalized, path, dialect)?
     };
-    if !is_within(&candidate, &canonical_root, dialect) {
+    if !is_within(&candidate, &root_normalized, dialect) {
         return Err(Rejection::OutsideRoot);
     }
 
@@ -340,7 +346,14 @@ pub(crate) fn resolve_within(
     if !is_within(&resolved_normalized, &canonical_root, dialect) {
         return Err(Rejection::OutsideRoot);
     }
-    Ok(resolved)
+    // 对外拼写跟调用方传入的根：真实路径只参与包含性判定，不改变调用方看到的目录写法。
+    // 这样 macOS 的 `/var` 与 `/private/var` 不会各回一种形态，Windows 也不会带长路径前缀。
+    let canonical_root_path = canonical_root.to_path_buf(dialect);
+    let tail = resolved_normalized
+        .to_path_buf(dialect)
+        .strip_prefix(&canonical_root_path)
+        .map_or_else(|_| PathBuf::new(), Path::to_path_buf);
+    Ok(root_normalized.to_path_buf(dialect).join(tail))
 }
 
 /// 把路径解析成真实路径；目标不存在时退到最近的既有祖先再拼回尾部组件。
