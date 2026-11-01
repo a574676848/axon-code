@@ -387,7 +387,7 @@ fn spawn_applies_the_fence_to_the_child_through_pre_exec() {
 #[test]
 #[cfg(target_os = "linux")]
 fn fence_rejects_fork_bursts_beyond_the_process_limit() {
-    if !std::path::Path::new(SETPRIV_PROGRAM).is_file() {
+    if is_superuser() && !std::path::Path::new(SETPRIV_PROGRAM).is_file() {
         return;
     }
     let limits = ProcessResourceLimits {
@@ -438,6 +438,12 @@ fn probe_as_unprivileged_user(
     limits: ProcessResourceLimits,
     action: Option<&str>,
 ) -> io::Result<std::process::Output> {
+    // 降权到 nobody 本身需要特权：CI runner 已经是普通用户，再套一层 setpriv 只会以 EPERM
+    // 失败，探针一个字节都不会输出，用例就会把「降权失败」误报成「限额没生效」。
+    // 已经是非 root 时直接启动探针：RLIMIT_NPROC 对非 root 本来就生效。
+    if !is_superuser() {
+        return configure_probe(Command::new(PROBE_BINARY), limits, action).output();
+    }
     let mut command = Command::new(SETPRIV_PROGRAM);
     command.args([
         &format!("--reuid={UNPRIVILEGED_ID}"),
@@ -446,6 +452,20 @@ fn probe_as_unprivileged_user(
         PROBE_BINARY,
     ]);
     configure_probe(command, limits, action).output()
+}
+
+/// 当前进程是否具备特权（有效 uid 为 0）。
+///
+/// 直接读 `/proc/self/status`：本文件已经依赖 `/proc` 的存在，不为此引入 libc 或额外进程。
+#[cfg(target_os = "linux")]
+fn is_superuser() -> bool {
+    std::fs::read_to_string("/proc/self/status").is_ok_and(|status| {
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix("Uid:"))
+            .and_then(|fields| fields.split_whitespace().nth(1))
+            .is_some_and(|effective| effective == "0")
+    })
 }
 
 /// 给探针命令装配生产路径的围栏与限额环境变量。
