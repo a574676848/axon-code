@@ -394,7 +394,7 @@ fn http_stream_idle_timeout_resets_after_each_event() {
         // 只有「每个事件都重置计时」的实现才能完整跑完，而单次间隔即便被调度抖动拉长一倍
         // 也不会误报超时。
         const EVENT_COUNT: usize = 10;
-        const EVENT_INTERVAL: Duration = Duration::from_millis(20);
+        const EVENT_INTERVAL: Duration = Duration::from_millis(60);
         for index in 0..EVENT_COUNT {
             let event = if index + 1 == EVENT_COUNT {
                 "data: {\"type\":\"response.completed\",\"response\":{}}\n\n".to_owned()
@@ -413,8 +413,9 @@ fn http_stream_idle_timeout_resets_after_each_event() {
     });
     let input = ProviderHttpTransportInput {
         request_plan: test_request_plan(&format!("http://{address}/v1/responses")),
-        // 200ms 的流总长对 100ms 的 idle 超时：不重置计时的实现必然超时，重置的实现必然跑完。
-        timeout_ms: 100,
+        // 600ms 的流总长对 400ms 的 idle 超时：不重置计时的实现必然超时，重置的实现必然跑完；
+        // 单次间隔留 6 倍余量，runner 抖动不会把「重置了计时」误判成超时。
+        timeout_ms: 400,
         enable_request_compression: false,
     };
 
@@ -427,7 +428,10 @@ fn http_stream_idle_timeout_resets_after_each_event() {
     server.join().unwrap();
 
     let ProviderStreamingTransportOutcome::StreamCompleted { .. } = outcome else {
-        panic!("持续事件流应完整完成");
+        panic!(
+            "持续事件流应完整完成：{outcome:?}，已收到 {} 条事件",
+            events.len()
+        );
     };
     assert!(
         events

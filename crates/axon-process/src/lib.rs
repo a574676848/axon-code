@@ -285,7 +285,7 @@ mod tests {
         use std::time::Duration;
 
         const CHILD_TITLE: &str = "axon-child-title";
-        const WRITE_TITLE: &str = "title axon-child-title & ping -n 2 127.0.0.1 >nul";
+        const WRITE_TITLE: &str = "title axon-child-title & ping -n 2 127.0.0.1 >nul & exit 0";
         let read_title = || {
             let output = Command::new("pwsh.exe")
                 .args([
