@@ -20,6 +20,8 @@ param(
     [string]$Baseline = '',
     # 把本次读数写回基线。
     [switch]$Record,
+    # 人工真机读数（JSON 对象，键为指标名）。与自动项一起写入基线并参与回退比较。
+    [string]$ManualJson = '',
     # 允许待测量项（CI 用）：存在未登记读数时只警告，不失败。
     [switch]$AllowIncomplete
 )
@@ -40,6 +42,23 @@ $REGRESSION_RATIO = 1.05
 
 $measurements = [ordered]@{}
 $pending = [System.Collections.Generic.List[string]]::new()
+
+# 人工真机读数：先继承基线里已有的，再用 -ManualJson 覆盖。
+$manual = [ordered]@{}
+if (Test-Path -LiteralPath $Baseline -PathType Leaf) {
+    $existing = Get-Content -LiteralPath $Baseline -Raw | ConvertFrom-Json
+    if ($null -ne $existing.manual) {
+        foreach ($property in $existing.manual.PSObject.Properties) {
+            $manual[$property.Name] = $property.Value
+        }
+    }
+}
+if ($ManualJson -ne '') {
+    $incoming = $ManualJson | ConvertFrom-Json
+    foreach ($property in $incoming.PSObject.Properties) {
+        $manual[$property.Name] = $property.Value
+    }
+}
 
 # P1：确认「60 次解析最多读 60 次配置」这条断言还在测试树里。
 $endpointTest = Join-Path $repo 'crates/axon-desktop/src/connection/endpoint_tests.rs'
@@ -70,22 +89,31 @@ if (Test-Path -LiteralPath $logPath -PathType Leaf) {
 }
 
 foreach ($item in @(
-    'P2 断网启动到可见界面增量（毫秒）',
-    'P9 空闲 60 秒渲染进程 CPU（百分比）',
-    'P10 切档冷启动到可交互（毫秒，本机 / 云）',
-    'P11 上传 1/8/32 MiB 的相对成本（线性）'
+    @('p2_offline_start_ms', 'P2 断网启动到可见界面（毫秒）'),
+    @('p9_idle_cpu_percent', 'P9 空闲 60 秒渲染进程 CPU（百分比）'),
+    @('p10_cold_start_ms', 'P10 冷启动到可交互（毫秒）'),
+    @('p11_upload_1mib_ms', 'P11 上传 1 MiB（毫秒）'),
+    @('p11_upload_8mib_ms', 'P11 上传 8 MiB（毫秒）'),
+    @('p11_upload_32mib_ms', 'P11 上传 32 MiB（毫秒）')
 )) {
-    $pending.Add($item)
+    if (-not $manual.Contains($item[0])) {
+        $pending.Add($item[1] + '（未登记读数）')
+    }
 }
 
-Write-Host '[perf] 本次读数：' -ForegroundColor Cyan
+Write-Host '[perf] 自动读数：' -ForegroundColor Cyan
 $measurements.GetEnumerator() | ForEach-Object { Write-Host ("  {0} = {1}" -f $_.Key, $_.Value) }
+if ($manual.Count -gt 0) {
+    Write-Host '[perf] 人工真机读数：' -ForegroundColor Cyan
+    $manual.GetEnumerator() | ForEach-Object { Write-Host ("  {0} = {1}" -f $_.Key, $_.Value) }
+}
 
 if ($Record) {
     $document = [pscustomobject]@{
-        recordedAt = (Get-Date).ToUniversalTime().ToString('o')
+        recordedAt  = (Get-Date).ToUniversalTime().ToString('o')
         measurements = $measurements
-        pending = @($pending)
+        manual      = $manual
+        pending     = @($pending)
     }
     $json = $document | ConvertTo-Json -Depth 6
     [IO.File]::WriteAllText($Baseline, $json + "`n", $utf8)
@@ -99,6 +127,15 @@ if (Test-Path -LiteralPath $Baseline -PathType Leaf) {
         $previous = $baselineDocument.measurements.$name
         if ($null -eq $previous) { continue }
         $current = $measurements[$name]
+        if ($current -gt [double]$previous * $REGRESSION_RATIO) {
+            Write-Host ("[perf] 回退：{0} 从 {1} 变成 {2}，超过 {3:P0} 容忍" -f $name, $previous, $current, ($REGRESSION_RATIO - 1)) -ForegroundColor Red
+            $failures += 1
+        }
+    }
+    foreach ($name in $manual.Keys) {
+        $previous = $baselineDocument.manual.$name
+        if ($null -eq $previous) { continue }
+        $current = $manual[$name]
         if ($current -gt [double]$previous * $REGRESSION_RATIO) {
             Write-Host ("[perf] 回退：{0} 从 {1} 变成 {2}，超过 {3:P0} 容忍" -f $name, $previous, $current, ($REGRESSION_RATIO - 1)) -ForegroundColor Red
             $failures += 1
