@@ -65,6 +65,7 @@ while ($true) {
   } elseif ($method -eq 'tools/call') {
     $arg = $msg.params.arguments.text
     if ($arg -eq 'delayed') { Start-Sleep -Milliseconds __DELAY_MILLIS__ }
+    if ($arg -eq 'hold') { continue }
     Write-Output ('{"jsonrpc":"2.0","id":' + $id + ',"result":{"content":[{"type":"text","text":"echo ' + $arg + '"}],"structuredContent":{"echo":"' + $arg + '"},"isError":false}}')
   }
 }
@@ -105,6 +106,7 @@ while IFS= read -r line; do
     *'"tools/call"'*)
       arg=$(printf '%s' "$line" | sed -n 's/.*"text":"\([^"]*\)".*/\1/p')
       [ "$arg" = "delayed" ] && sleep __DELAY_SECONDS__
+      if [ "$arg" = "hold" ]; then continue; fi
       printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"echo %s"}],"structuredContent":{"echo":"%s"},"isError":false}}\n' "$id" "$arg" "$arg" ;;
   esac
 done
@@ -245,10 +247,12 @@ fn active_cancel_token_still_honors_total_timeout() {
     let mut session = connect();
     let cancel_token: super::McpCancelToken = Arc::new(|| false);
 
+    // 用「服务器根本不回」验证总超时，而不是「回得比超时晚」：后者是两条时间线在比拼，
+    // 快机上偶尔会先收到响应，用例就会把「能按时结束」误判成「没受超时约束」。
     let error = session
         .call_tool(
             "echo",
-            r#"{"text":"delayed"}"#,
+            r#"{"text":"hold"}"#,
             Some(TEST_SHORT_TOOL_TIMEOUT),
             Some(&cancel_token),
         )

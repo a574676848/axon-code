@@ -113,7 +113,9 @@ fn registry_root_with_extended_prefix_matches_the_registered_path() {
     // 运行态注册表的根目录在 Windows 上带扩展长度前缀，本地登记项是普通路径；
     // 两者归一化之后必须相等，否则按标识移除仍然会落空。
     let target = PathBuf::from("work").join("target");
-    let extended = format!(r"\\?\{}", target.to_string_lossy().replace('/', r"\"));
+    // 前缀按当前平台的分隔符原样拼：unix 上再把分隔符换成反斜杠，等于让「归一化」多背一层
+    // 分隔符差异，本用例只验证扩展前缀不影响身份比较。
+    let extended = format!(r"\\?\{}", target.to_string_lossy());
     assert_eq!(
         normalize(Path::new(&extended)),
         normalize(&target),

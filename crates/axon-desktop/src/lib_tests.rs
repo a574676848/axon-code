@@ -365,13 +365,11 @@ fn test_workspace_list_only_exposes_user_registered_directories() {
 
 #[test]
 fn test_workspace_entries_strip_extended_path_prefix() {
+    // 前缀剥离与平台无关：注册表里历史上存在 `\\?\` 与 `//?/` 两种写法，两者都要还原成
+    // 可直接展示的普通路径；只有分隔符归一化按平台进行。
     assert_eq!(
         super::workspace::strip_extended_prefix(r"\\?\E:\zbg\axon-code"),
-        if cfg!(windows) {
-            r"E:\zbg\axon-code"
-        } else {
-            r"\\?\E:\zbg\axon-code"
-        }
+        r"E:\zbg\axon-code"
     );
     assert_eq!(
         super::workspace::strip_extended_prefix("//?/e:/zbg/axon-code"),
