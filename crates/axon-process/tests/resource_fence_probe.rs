@@ -402,7 +402,7 @@ fn fence_rejects_fork_bursts_beyond_the_process_limit() {
     // 永远碰不到限额。批量 `kill $(jobs -p)` 会在数千个作业时因命令行过长失败，
     // 因此这里只等它们自然结束（每个只活 `FORK_PROBE_HOLD_SECONDS` 秒）。
     let action = format!(
-        "for i in $(seq 1 {attempts}); do sleep {hold} & done; exit 0",
+        "for i in $(seq 1 {attempts}); do sleep {hold} & done; wait; exit 0",
         attempts = TEST_FORK_ATTEMPTS,
         hold = FORK_PROBE_HOLD_SECONDS,
     );
