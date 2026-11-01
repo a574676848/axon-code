@@ -45,6 +45,10 @@ impl Frame<'_> {
     }
 }
 
+/// 测试后端的兜底宽度：宿主报不出终端尺寸时用它构造视口。
+#[cfg(test)]
+const TEST_TERMINAL_WIDTH: u16 = 80;
+
 /// 支持全屏 AppShell 绘制的最小终端包装。
 pub(super) struct Terminal<B>
 where
@@ -79,8 +83,15 @@ where
     }
 
     #[cfg(test)]
-    pub(super) fn new_for_test(backend: B, _initial_height: u16) -> Result<Self, B::Error> {
-        let viewport_area = fullscreen_viewport(backend.size()?);
+    pub(super) fn new_for_test(backend: B, initial_height: u16) -> Result<Self, B::Error> {
+        // 测试里不依赖宿主终端：CI 没有 tty 时 `CrosstermBackend::size()` 会直接失败（WouldBlock），
+        // 让整组渲染用例连终端都建不起来。能报出尺寸就照旧用它，报不出就按调用方给的初始高度
+        // 与固定宽度构造视口，断言只依赖代码而不是宿主环境。
+        let size = backend.size().unwrap_or(ratatui::layout::Size {
+            width: TEST_TERMINAL_WIDTH,
+            height: initial_height,
+        });
+        let viewport_area = fullscreen_viewport(size);
         Ok(Self {
             backend,
             buffers: [Buffer::empty(viewport_area), Buffer::empty(viewport_area)],
