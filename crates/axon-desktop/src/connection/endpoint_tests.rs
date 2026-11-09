@@ -112,13 +112,12 @@ fn resolving_endpoints_sixty_times_reads_the_config_at_most_sixty_times() {
      * 这里钉的是「没有隐藏的重复解析」，而不是具体耗时。
      */
     use crate::connection::endpoint::CONFIG_FILE_READS;
-    use std::sync::atomic::Ordering;
 
-    let before = CONFIG_FILE_READS.load(Ordering::Relaxed);
+    let before = CONFIG_FILE_READS.with(|reads| reads.get());
     for _ in 0..60 {
         let _ = super::local_endpoints();
     }
-    let reads = CONFIG_FILE_READS.load(Ordering::Relaxed) - before;
+    let reads = CONFIG_FILE_READS.with(|reads| reads.get()) - before;
     assert!(
         reads <= 60,
         "60 次端点解析最多读 60 次配置，实际 {reads} 次"
