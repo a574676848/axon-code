@@ -18,6 +18,7 @@ mod daemon_host_runner;
 mod daemon_service_manager;
 #[path = "daemon_stop_request.rs"]
 pub(crate) mod daemon_stop_request;
+pub(crate) use daemon_service_manager::daemon_process_alive;
 pub(crate) use daemon_service_manager::process_alive;
 
 pub(crate) const DEFAULT_ENDPOINT: &str = crate::runtime_paths::DEFAULT_DAEMON_ENDPOINT;

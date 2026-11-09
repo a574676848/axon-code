@@ -4,13 +4,10 @@ use std::{
     process,
 };
 
-#[cfg(not(windows))]
-use std::process::Stdio;
-
 use axon_crypto::sha256_hex;
-#[cfg(windows)]
-use axon_process::non_interactive_command;
 use serde::{Deserialize, Serialize};
+
+use crate::daemon_commands::daemon_process_alive;
 
 const FEISHU_APP_LOCK_DIR: &str = "app_locks";
 
@@ -41,7 +38,9 @@ impl FeishuAppLockGuard {
                 .map_err(|error| format!("创建 Feishu app lock 目录失败: {error}"))?;
         }
         if let Some(existing) = read_lock(&path)? {
-            if existing.pid != pid && process_alive(existing.pid) {
+            // 判据必须是「该 PID 仍由 Axon 进程持有」：PID 被系统回收给无关进程后，
+            // 只看存活会让陈旧锁文件永久拒绝启动，Feishu 远控随之卡在 failed。
+            if existing.pid != pid && daemon_process_alive(existing.pid) {
                 return Err(format!(
                     "Feishu app_id 已被本机其他 gateway 使用，pid={}",
                     existing.pid
@@ -96,48 +95,55 @@ fn read_lock(path: &Path) -> Result<Option<FeishuAppLockRecord>, String> {
         .map_err(|error| format!("Feishu app lock JSON 无效: {error}"))
 }
 
-fn process_alive(pid: u32) -> bool {
-    if pid == process::id() {
-        return true;
-    }
-    // `kill -0` 把参数按 pid_t（有符号 32 位）解析：0 指进程组、超出 i32 的取值会被截断成
-    // 负数（`u32::MAX` 变成 -1，即「探测所有进程」）。这两种形态都会让不存在的 pid 被判成
-    // 存活，因此必须在外面挡掉，只把合法的正 pid 交给 shell。
-    if pid == 0 || i32::try_from(pid).is_err() {
-        return false;
-    }
-    #[cfg(windows)]
-    {
-        non_interactive_command("tasklist")
-            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
-            .output()
-            .ok()
-            .and_then(|output| String::from_utf8(output.stdout).ok())
-            .is_some_and(|stdout| stdout.contains(&pid.to_string()))
-    }
-    #[cfg(not(windows))]
-    {
-        std::process::Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success())
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::process_alive;
+    use super::*;
 
+    /// PID 被系统回收给无关进程时，陈旧锁文件不得继续阻塞 gateway 启动。
+    #[cfg(windows)]
     #[test]
-    fn process_alive_recognizes_current_process() {
-        assert!(process_alive(std::process::id()));
+    fn acquire_reclaims_lock_held_by_a_recycled_pid() {
+        let directory = axon_test_support::test_temp_dir();
+        let root = directory.path();
+        let path = lock_path(root, "cli_recycled_pid");
+        fs::create_dir_all(path.parent().expect("锁文件父目录")).expect("创建锁目录");
+        let mut foreign = std::process::Command::new("cmd")
+            .args(["/c", "ping -n 30 127.0.0.1 > nul"])
+            .spawn()
+            .expect("启动无关进程");
+        let stale = FeishuAppLockRecord {
+            pid: foreign.id(),
+            app_id_sha256: sha256_hex("cli_recycled_pid"),
+            started_at_ms: 1,
+        };
+        fs::write(&path, serde_json::to_string(&stale).expect("序列化陈旧锁")).expect("写入陈旧锁");
+
+        let guard =
+            FeishuAppLockGuard::acquire(root, "cli_recycled_pid", 42).expect("接管被回收的 PID");
+        let record = read_lock(&path).expect("读取锁").expect("锁应存在");
+        assert_eq!(record.pid, std::process::id());
+        drop(guard);
+        let _ = foreign.kill();
+        let _ = foreign.wait();
     }
 
-    #[cfg(not(windows))]
     #[test]
-    fn process_alive_rejects_missing_pid() {
-        assert!(!process_alive(u32::MAX));
+    fn acquire_reclaims_lock_left_by_a_dead_process() {
+        let directory = axon_test_support::test_temp_dir();
+        let root = directory.path();
+        let path = lock_path(root, "cli_dead_pid");
+        fs::create_dir_all(path.parent().expect("锁文件父目录")).expect("创建锁目录");
+        let stale = FeishuAppLockRecord {
+            pid: u32::MAX,
+            app_id_sha256: sha256_hex("cli_dead_pid"),
+            started_at_ms: 1,
+        };
+        fs::write(&path, serde_json::to_string(&stale).expect("序列化陈旧锁")).expect("写入陈旧锁");
+
+        let guard =
+            FeishuAppLockGuard::acquire(root, "cli_dead_pid", 42).expect("接管已退出进程的锁");
+        let record = read_lock(&path).expect("读取锁").expect("锁应存在");
+        assert_eq!(record.pid, std::process::id());
+        drop(guard);
     }
 }

@@ -687,7 +687,7 @@ use windows_definition::{parse_windows_user_sid, windows_task_xml};
 
 #[path = "daemon_process_probe.rs"]
 mod process_probe;
-pub(super) use process_probe::daemon_process_alive;
+pub(crate) use process_probe::daemon_process_alive;
 
 #[cfg(test)]
 #[path = "daemon_service_manager_tests.rs"]
