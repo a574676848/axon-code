@@ -24,11 +24,12 @@ use super::{
         CronAction, CronCommand, CronCreateCommand, CronListCommand, CronRunCommand,
         CronTickCommand, CronUpdateCommand,
     },
-    execution::{CronExecutionAdapter, execute_cron_job},
-    holiday_commands,
+    execution::CronExecutionAdapter,
+    holiday_commands, now_ms,
     render::render_cron,
-    repository::{CronClaim, CronRepository},
+    repository::CronRepository,
     schedule::{next_run_after, parse_schedule, require_next_run},
+    tick::{execute_and_persist, execute_due_jobs},
     wake::LEGACY_DELIVERY_ARGS_HINT,
 };
 
@@ -58,6 +59,8 @@ pub(super) struct CronReport {
     pub(super) total_jobs: usize,
     pub(super) listed_jobs: usize,
     pub(super) executed_jobs: usize,
+    /// 到期但已错过触发点、只顺延未执行的任务数。
+    pub(super) skipped_jobs: usize,
     pub(super) success_runs: usize,
     pub(super) failed_runs: usize,
     pub(super) delivery_executed: bool,
@@ -326,7 +329,7 @@ fn create_job(
     )
     .map_err(|error| error.to_string())?;
     repository.save_job(&job)?;
-    report(adapter, CRON_STATUS_CREATED, &[job], Vec::new(), false)
+    report(adapter, CRON_STATUS_CREATED, &[job], Vec::new(), 0, false)
 }
 
 fn update_job(
@@ -347,7 +350,14 @@ fn update_job(
         .with_update(update_input(command)?, updated_at_ms, next_run_at_ms)
         .map_err(|error| error.to_string())?;
     repository.save_job(&updated)?;
-    report(adapter, CRON_STATUS_UPDATED, &[updated], Vec::new(), false)
+    report(
+        adapter,
+        CRON_STATUS_UPDATED,
+        &[updated],
+        Vec::new(),
+        0,
+        false,
+    )
 }
 
 fn list_jobs(
@@ -358,7 +368,7 @@ fn list_jobs(
     let repository = CronRepository::open(adapter.axon_root())?;
     let mut visible = repository.jobs(command.include_removed)?;
     visible.truncate(limit);
-    report(adapter, CRON_STATUS_READY, &visible, Vec::new(), false)
+    report(adapter, CRON_STATUS_READY, &visible, Vec::new(), 0, false)
 }
 
 fn set_status(
@@ -377,6 +387,7 @@ fn set_status(
         CRON_STATUS_STATE_UPDATED,
         &[updated],
         Vec::new(),
+        0,
         false,
     )
 }
@@ -389,7 +400,7 @@ fn run_job(
     let claim = repository.claim_manual(&command.job_id, now_ms())?;
     let run = execute_and_persist(adapter, &repository, &claim, false)?;
     let job = required_job(&repository, &command.job_id)?;
-    report(adapter, CRON_STATUS_RUN_READY, &[job], vec![run], false)
+    report(adapter, CRON_STATUS_RUN_READY, &[job], vec![run], 0, false)
 }
 
 fn tick_jobs(
@@ -397,54 +408,15 @@ fn tick_jobs(
     command: &CronTickCommand,
 ) -> Result<CronReport, String> {
     let limit = bounded_limit(command.limit)?;
-    let (jobs, runs) = execute_due_jobs(adapter, limit)?;
-    report(adapter, CRON_STATUS_TICK_READY, &jobs, runs, false)
-}
-
-fn execute_due_jobs(
-    adapter: &dyn CronExecutionAdapter,
-    limit: usize,
-) -> Result<(Vec<CronJob>, Vec<CronRunRecord>), String> {
-    let repository = CronRepository::open(adapter.axon_root())?;
-    let mut jobs = Vec::with_capacity(limit);
-    let mut runs = Vec::with_capacity(limit);
-    while jobs.len() < limit {
-        let claim = repository.claim_due(now_ms())?;
-        let Some(claim) = claim else {
-            break;
-        };
-        jobs.push(claim.job.clone());
-        runs.push(execute_and_persist(adapter, &repository, &claim, true)?);
-    }
-    Ok((jobs, runs))
-}
-
-pub(crate) fn execute_and_persist(
-    adapter: &dyn CronExecutionAdapter,
-    repository: &CronRepository,
-    claim: &CronClaim,
-    scheduled: bool,
-) -> Result<CronRunRecord, String> {
-    let started_at_ms = now_ms();
-    let heartbeat = repository.start_heartbeat(claim.claim_id.clone());
-    let run = execute_cron_job(adapter, &claim.job, started_at_ms);
-    let finished_at_ms = now_ms();
-    let next_job = if scheduled {
-        let schedule = parse_schedule(&claim.job.schedule)?;
-        claim.job.after_run(
-            finished_at_ms,
-            next_run_after(&schedule, finished_at_ms),
-            schedule.is_one_shot(),
-        )
-    } else {
-        // 手动执行只更新执行事实，不消费一次性计划，也不推迟下一次定时执行。
-        claim
-            .job
-            .after_run(finished_at_ms, claim.job.next_run_at_ms, false)
-    };
-    heartbeat.finish()?;
-    repository.complete_claim(claim, &run, &next_job)?;
-    Ok(run)
+    let batch = execute_due_jobs(adapter, limit, now_ms())?;
+    report(
+        adapter,
+        CRON_STATUS_TICK_READY,
+        &batch.jobs,
+        batch.runs,
+        batch.skipped,
+        false,
+    )
 }
 
 fn required_job(repository: &CronRepository, job_id: &str) -> Result<CronJob, String> {
@@ -488,6 +460,7 @@ fn report(
     status: &'static str,
     jobs: &[CronJob],
     runs: Vec<CronRunRecord>,
+    skipped_jobs: usize,
     delivery_executed: bool,
 ) -> Result<CronReport, String> {
     let repository = CronRepository::open(adapter.axon_root())?;
@@ -499,6 +472,7 @@ fn report(
         total_jobs: repository.jobs(false)?.len(),
         listed_jobs: jobs.len(),
         executed_jobs: runs.len(),
+        skipped_jobs,
         success_runs,
         failed_runs,
         delivery_executed,
@@ -563,23 +537,6 @@ fn bounded_limit(limit: Option<usize>) -> Result<usize, String> {
 fn stable_job_id(name: &str, now_ms: u64) -> String {
     let source = format!("{name}:{now_ms}");
     format!("cron-{}", sha256_hex_prefix(source.as_bytes(), 16))
-}
-
-fn now_ms() -> u64 {
-    axon_time::unix_now_ms()
-}
-
-pub(crate) fn run_due_cron_jobs(
-    adapter: &dyn CronExecutionAdapter,
-    limit: usize,
-) -> Result<String, String> {
-    let (jobs, runs) = execute_due_jobs(adapter, limit)?;
-    let failed = runs.iter().filter(|run| !run.success).count();
-    Ok(format!(
-        "claimed={} completed={} failed={failed}",
-        jobs.len(),
-        runs.len()
-    ))
 }
 
 #[cfg(test)]

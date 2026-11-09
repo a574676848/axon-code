@@ -73,6 +73,16 @@ axon remote feishu-status
 - 优雅收口顺序：先 `axon daemon drain [--reason <text>]`，再用 `axon daemon health` 确认两个积压字段归零，最后才 `axon daemon stop`。`stop|restart` 先写停止请求让 Daemon 自行收口（等待窗口 15 秒），未响应才禁用并结束计划任务，Windows 上再强制结束进程树并中断在跑的任务。
 - 服务启停、创建或运行 Cron、远控投递和凭据变更都会产生状态变化。先检查目标状态和命令帮助，完成后重新读取状态或对应回执。
 
+### Cron 触发规则
+
+到期判定以运行设备的本地时钟为准，Daemon 的调度 worker 每秒推进一轮。每轮只执行「触发点仍然有效」的任务：
+
+- 触发点落在调度器本次在线期间：无论被同批任务排队多久都会执行。
+- 触发点早于调度器本次在线（停机期间到期）：只有在 5 分钟迟到容忍窗口内才执行。
+- 超出容忍窗口的触发点判定为已经错过：不执行、不补跑，直接顺延到计划给出的下一次，此后按新计划继续；一次性任务没有下一次，直接转为 `completed`。
+- `axon cron tick` 与 Daemon 走同一套判定，只回 `claimed`、`completed`、`failed`、`skipped` 计数；`skipped` 就是本轮错过并顺延的任务数。
+- `axon cron run <JOB_ID>` 是显式手动执行，不做触发点判定，只写执行事实，不推进也不消费计划。
+
 ### Cron 计划表达式
 
 `--schedule` 接受三类写法，字段层面可自由组合，没有预置组合白名单。

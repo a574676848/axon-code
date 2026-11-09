@@ -93,6 +93,7 @@ axon cron create --name 工时提醒 --schedule "workday:0 8-20 * * *" --prompt 
                                        # 日历前缀 workday、holiday、weekend 按中国年历筛选，
                                        # weekday 只按周一到周五，不看节假日
 axon cron create --name 节假问候 --schedule "holiday:0 10 * * *" --prompt "发送节日问候"
+axon cron tick --limit 20              # 手动推进一轮到期扫描；停机期间错过的触发点只顺延不执行
 axon cron holiday sync                 # 拉取当前年与次年的法定节假日与调休安排
 axon cron holiday sync --year 2026 --year 2027   # 指定年份，可重复
 axon cron holiday status               # 查看已同步年份、数据目录与数据源

@@ -9,13 +9,14 @@ pub(super) fn render_cron(format: OutputFormat, report: &CronReport) -> CliRunRe
         OutputFormat::Json => json_result(report),
         OutputFormat::Text => {
             let mut stdout = format!(
-                "Axon cron: {}\n- jobs: total={} listed={}\n- runs: executed={} success={} failed={}\n- delivery_executed: {}\n",
+                "Axon cron: {}\n- jobs: total={} listed={}\n- runs: executed={} success={} failed={}\n- skipped: {}\n- delivery_executed: {}\n",
                 report.status,
                 report.total_jobs,
                 report.listed_jobs,
                 report.executed_jobs,
                 report.success_runs,
                 report.failed_runs,
+                report.skipped_jobs,
                 report.delivery_executed
             );
             for job in &report.jobs {

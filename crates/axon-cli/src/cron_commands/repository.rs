@@ -187,6 +187,24 @@ impl CronRepository {
         run: &CronRunRecord,
         next_job: &CronJob,
     ) -> Result<(), String> {
+        self.settle_claim(claim, Some(run), next_job)
+    }
+
+    /// 顺延一次「触发点已错过、不执行」的认领：只推进计划，不写执行记录。
+    pub(crate) fn reschedule_claim(
+        &self,
+        claim: &CronClaim,
+        next_job: &CronJob,
+    ) -> Result<(), String> {
+        self.settle_claim(claim, None, next_job)
+    }
+
+    fn settle_claim(
+        &self,
+        claim: &CronClaim,
+        run: Option<&CronRunRecord>,
+        next_job: &CronJob,
+    ) -> Result<(), String> {
         let mut connection = self.connection()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -205,12 +223,16 @@ impl CronRepository {
             next_job.clone()
         } else {
             let mut latest = current;
-            latest.last_run_at_ms = Some(run.finished_at_ms);
+            if let Some(run) = run {
+                latest.last_run_at_ms = Some(run.finished_at_ms);
+            }
             latest.revision = latest.revision.saturating_add(1);
-            latest.updated_at_ms = latest.updated_at_ms.max(run.finished_at_ms);
+            latest.updated_at_ms = latest.updated_at_ms.max(next_job.updated_at_ms);
             latest
         };
-        insert_run(&transaction, run)?;
+        if let Some(run) = run {
+            insert_run(&transaction, run)?;
+        }
         let changed = transaction
             .execute(
                 "UPDATE cron_jobs SET

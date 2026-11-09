@@ -366,6 +366,22 @@ impl CronJob {
         next
     }
 
+    /// 生成「本次触发点已经错过、没有执行」后的任务版本。
+    ///
+    /// 只推进计划：不写 `last_run_at_ms`，因为任务确实没有跑过；没有下一次触发点的
+    /// 一次性任务直接收口为完成，避免留下一个永远到期的任务。
+    #[must_use]
+    pub fn after_missed_run(&self, now_ms: u64, next_run_at_ms: Option<u64>) -> Self {
+        let mut next = self.clone();
+        next.revision = next.revision.saturating_add(1);
+        next.updated_at_ms = now_ms;
+        next.next_run_at_ms = next_run_at_ms;
+        if next_run_at_ms.is_none() {
+            next.status = CronJobStatus::Completed;
+        }
+        next
+    }
+
     fn validate(&self) -> Result<(), CronValidationError> {
         if self.job_id.trim().is_empty() {
             return Err(CronValidationError::EmptyJobId);
@@ -479,6 +495,24 @@ mod tests {
         assert!(self_lane.validate().is_err(), "不得唤醒 Cron 自身车道");
         assert!(empty_chat.validate().is_err());
         assert!(valid.validate().is_ok());
+    }
+
+    #[test]
+    fn missed_trigger_advances_plan_without_recording_a_run() {
+        let job = CronJob::new(test_input(), 10, Some(20)).expect("合法任务应可创建");
+
+        let rescheduled = job.after_missed_run(30, Some(40));
+        let expired = job.after_missed_run(30, None);
+
+        assert_eq!(
+            rescheduled.last_run_at_ms, None,
+            "没有执行就不能记上次执行时间"
+        );
+        assert_eq!(rescheduled.next_run_at_ms, Some(40));
+        assert_eq!(rescheduled.status, CronJobStatus::Active);
+        assert!(rescheduled.revision > job.revision);
+        assert_eq!(expired.next_run_at_ms, None);
+        assert_eq!(expired.status, CronJobStatus::Completed);
     }
 
     #[test]

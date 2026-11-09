@@ -158,8 +158,10 @@ fn run_cron_loop(
     cron_adapter: crate::remote_commands::FeishuCronAdapter,
     running: Arc<AtomicBool>,
 ) {
+    // 停机期间错过的触发点不补跑：只有本进程在线期间到期的任务才会执行。
+    let scheduler_alive_since_ms = axon_time::unix_now_ms();
     while running.load(Ordering::Acquire) {
-        run_due_cron_jobs(&cron_adapter);
+        run_due_cron_jobs(&cron_adapter, scheduler_alive_since_ms);
         thread::sleep(Duration::from_millis(CRON_TICK_INTERVAL_MS));
     }
 }
@@ -248,10 +250,15 @@ fn handle_primary_turn_failures(
 }
 
 /// 持久 Cron tick：Claim 由 Cron 仓库保证幂等，失败只记录日志并等待下一轮。
-fn run_due_cron_jobs(adapter: &crate::remote_commands::FeishuCronAdapter) {
-    if let Err(error) =
-        crate::cron_commands::run_due_cron_jobs(adapter, SUPERVISOR_BATCH_LIMIT as usize)
-    {
+fn run_due_cron_jobs(
+    adapter: &crate::remote_commands::FeishuCronAdapter,
+    scheduler_alive_since_ms: u64,
+) {
+    if let Err(error) = crate::cron_commands::run_due_cron_jobs(
+        adapter,
+        SUPERVISOR_BATCH_LIMIT as usize,
+        scheduler_alive_since_ms,
+    ) {
         axon_logger::warning(&format!(
             "Daemon 持久 Cron tick 失败，将在下一轮重试: {error}"
         ));
