@@ -14,7 +14,7 @@ use std::{
 
 use serde::Serialize;
 
-use crate::daemon_commands::process_alive;
+use crate::daemon_commands::daemon_process_alive;
 use crate::runtime_paths::runtime_axon_data_path_static;
 
 use super::RunCancelToken;
@@ -246,7 +246,7 @@ fn select_active_session(directory: &Path, requested: Option<&str>) -> Result<St
     }
 }
 
-/// 返回 true 表示 stale 文件已清理；false 表示 PID 仍存活。
+/// 返回 true 表示 stale 文件已清理；false 表示 PID 仍由同一个 Axon run 持有。
 fn remove_stale_active_file(active_path: &Path) -> Result<bool, String> {
     let contents = fs::read_to_string(active_path)
         .map_err(|error| format!("无法读取 run 控制文件 PID: {error}"))?;
@@ -254,7 +254,9 @@ fn remove_stale_active_file(active_path: &Path) -> Result<bool, String> {
         .trim()
         .parse::<u32>()
         .map_err(|_| "run 控制文件 PID 无效".to_owned())?;
-    if process_alive(pid) {
+    // 只看存活会被 PID 回收击穿：记录里的进程早已退出、PID 却被系统分给无关进程时，
+    // 该 Session 会被永久当成仍在运行，`axon run` 起不来、`axon stop` 选中错误的会话。
+    if daemon_process_alive(pid) {
         return Ok(false);
     }
     fs::remove_file(active_path)
@@ -424,5 +426,32 @@ mod tests {
             control_directory(config_path).unwrap(),
             PathBuf::from("C:/axon/data/run-control")
         );
+    }
+
+    /// PID 被系统回收给无关进程后，陈旧 active 记录不得再把这个 Session 当成仍在运行。
+    #[cfg(windows)]
+    #[test]
+    fn cleanup_reclaims_active_control_recycled_to_a_foreign_process() {
+        let directory = axon_test_support::test_temp_root()
+            .join(format!("axon-stop-recycled-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let mut foreign = std::process::Command::new("cmd")
+            .args(["/c", "ping -n 30 127.0.0.1 > nul"])
+            .spawn()
+            .expect("启动无关进程");
+        let active = control_paths_for_directory(&directory, "recycled-run")
+            .unwrap()
+            .active_path;
+        fs::write(&active, foreign.id().to_string()).unwrap();
+
+        assert!(
+            remove_stale_active_file(&active).unwrap(),
+            "无关进程占用时记录必须判为陈旧"
+        );
+        assert!(!active.exists());
+        let _ = foreign.kill();
+        let _ = foreign.wait();
+        let _ = fs::remove_dir_all(directory);
     }
 }
