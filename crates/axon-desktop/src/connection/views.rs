@@ -88,7 +88,7 @@ pub struct ConnectionSnapshot {
     pub health: HealthView,
     /// 后端构建版本；未知为 None。
     pub backend_version: Option<String>,
-    /// 往返延迟（毫秒）；未知为 None。
+    /// 延迟（毫秒）；未知为 None。
     pub latency_ms: Option<u64>,
     /// 与本机的时钟偏移（毫秒）；未校验为 None。
     pub clock_offset_ms: Option<i64>,
@@ -132,7 +132,7 @@ pub struct ConnectionTestResult {
     pub ws_message: String,
     /// 后端构建版本。
     pub backend_version: Option<String>,
-    /// 往返延迟（毫秒）。
+    /// 延迟（毫秒）。
     pub latency_ms: Option<u64>,
     /// 覆盖后的能力位清单。
     pub capabilities: Vec<CapabilityView>,
@@ -140,20 +140,6 @@ pub struct ConnectionTestResult {
     pub certificate: String,
     /// 是否为明文 http 地址。
     pub plaintext_private: bool,
-}
-
-/// 一次惰性探测的结论。
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ProfileProbeView {
-    /// 档案 id。
-    pub id: String,
-    /// 连接结论：`ok` / `unreachable` / `credential` / `certificate` / `outdated` / `overBudget`。
-    pub conclusion: String,
-    /// 中文结论。
-    pub message: String,
-    /// 往返延迟。
-    pub latency_ms: Option<u64>,
 }
 
 /// 能力位的 12 个中文标签。
@@ -351,7 +337,7 @@ pub fn build_test_result(
     match outcome {
         ProbeOutcome::Ready(ready) => ConnectionTestResult {
             conclusion: "ok".to_owned(),
-            message: format!("连接成功，往返 {} 毫秒", ready.latency_ms),
+            message: format!("连接成功，延迟 {} 毫秒", ready.latency_ms),
             endpoint: endpoint_text,
             ws_endpoint: ws_text,
             ws_conclusion,
@@ -440,24 +426,5 @@ const fn conclusion_name(failure: &ProbeFailure) -> &'static str {
         ProbeFailure::CertificateInvalid(_) => "certificate",
         ProbeFailure::ProtocolUnsupported(_) => "protocol",
         ProbeFailure::Unreachable(_) | ProbeFailure::BodyInvalid(_) => "unreachable",
-    }
-}
-
-/// 把一次探测结论转成一条清单读数。
-#[must_use]
-pub fn probe_view(id: String, outcome: &ProbeOutcome) -> ProfileProbeView {
-    match outcome {
-        ProbeOutcome::Ready(ready) => ProfileProbeView {
-            id,
-            conclusion: "ok".to_owned(),
-            message: format!("已连接，往返 {} 毫秒", ready.latency_ms),
-            latency_ms: Some(ready.latency_ms),
-        },
-        ProbeOutcome::Failed(failure) => ProfileProbeView {
-            id,
-            conclusion: conclusion_name(failure).to_owned(),
-            message: failure.message(),
-            latency_ms: None,
-        },
     }
 }

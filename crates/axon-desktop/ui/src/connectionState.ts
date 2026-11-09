@@ -4,7 +4,6 @@ import type {
   ConnectionSnapshot,
   ConnectionTestInput,
   ConnectionTestResult,
-  ProfileProbeView,
   SwitchOutcome,
 } from './connectionTypes';
 
@@ -27,11 +26,9 @@ export interface ConnectionFact {
   busy: boolean;
   /** 命令本身没跑通的原因；与「连接结论是连不上」是两回事。 */
   error: string | null;
-  /** 切换面板展开时探测出的各档案结论。 */
-  probes: ProfileProbeView[];
 }
 
-const INITIAL: ConnectionFact = { snapshot: null, busy: false, error: null, probes: [] };
+const INITIAL: ConnectionFact = { snapshot: null, busy: false, error: null };
 
 let state: ConnectionFact = INITIAL;
 const listeners = new Set<() => void>();
@@ -97,16 +94,13 @@ export function retryProbe(): Promise<void> {
     });
 }
 
-/** 惰性探测全部档案：只在切换面板展开时调用。 */
-export function probeProfiles(): Promise<void> {
-  return ipc
-    .connectionProbeProfiles()
-    .then((probes) => {
-      publish({ ...state, probes });
-    })
-    .catch(() => {
-      // 探测失败不改写已有结论：失败本身由各档案的「连不上」呈现。
-    });
+/**
+ * 延迟读数的唯一口径：取到写「N 毫秒」，没取到返回 null 由调用方决定怎么呈现。
+ *
+ * 未取到能力位、尚未探测与连不上都属「没有读数」，绝不写 0 或伪造值。
+ */
+export function latencyText(latencyMs: number | null): string | null {
+  return latencyMs === null ? null : `${latencyMs} 毫秒`;
 }
 
 /** 试连接。 */

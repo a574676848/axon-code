@@ -7,15 +7,20 @@
 //! 状态文件用文件名隔离两代结构（[`V1_FILE_NAME`] 与 [`V2_FILE_NAME`]）：旧版
 //! `load_state()` 完全不校验版本号，读到新结构会得到「工作区全空」，随后任一次写入
 //! 都会把整份状态覆写成空。隔离让旧版永远只动它认识的文件。
+//!
+//! 写入方式是**直接覆盖**而不是「临时文件加原子替换」：Windows 上原子替换必须先拿到
+//! 目标文件的 DELETE 权限，同步盘、索引器与杀毒软件只要短暂持有它，替换就以「拒绝
+//! 访问 (os error 5)」失败，而同一时刻按共享写打开再截断是可以成功的。这里的代价
+//! 由读取侧兜住：读到坏内容会先另存 `.corrupt` 再回落默认值或迁移 v1。
 
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use axon_config::ConfigLoader;
-use axon_config::atomic_write::replace_file_atomically;
 use serde::{Deserialize, Serialize};
 
 use crate::connection::profile::BackendProfile;
@@ -43,6 +48,13 @@ pub const ONBOARDING_VERSION: u32 = 1;
 pub const CLIENT_ROOT_ENV: &str = "AXON_CLIENT_ROOT";
 /// 客户端数据目录名：与后端运行时根 `~/.axon` 平级、互不包含。
 pub const CLIENT_HOME_DIR_NAME: &str = ".axon-desktop";
+/// 状态文件写入的重试次数。
+///
+/// 目标文件被杀毒软件或索引器短暂持有是常态，一次性失败不代表真的写不进去；
+/// 三次之后仍失败才如实回报。
+const WRITE_ATTEMPTS: usize = 3;
+/// 两次写入之间的等待。
+const WRITE_RETRY_DELAY: Duration = Duration::from_millis(60);
 
 /// 客户端层：全局一份的偏好与定位。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -412,7 +424,7 @@ fn read_document(path: &Path) -> ReadOutcome {
 ///
 /// # Errors
 ///
-/// 序列化失败或原子写盘失败。
+/// 序列化失败或写盘失败。
 pub fn save_document(document: &ClientStateDocument) -> Result<(), String> {
     save_document_at(&client_root(), document)
 }
@@ -421,7 +433,7 @@ pub fn save_document(document: &ClientStateDocument) -> Result<(), String> {
 ///
 /// # Errors
 ///
-/// 序列化失败或原子写盘失败。
+/// 序列化失败或写盘失败。
 pub fn save_document_at(root: &Path, document: &ClientStateDocument) -> Result<(), String> {
     let path = root.join(V2_FILE_NAME);
     // 纵深防御：盘上那份若是更高的结构版本，任何调用点都不得覆写它。
@@ -435,8 +447,34 @@ pub fn save_document_at(root: &Path, document: &ClientStateDocument) -> Result<(
     }
     let text = serde_json::to_string_pretty(document)
         .map_err(|error| format!("序列化桌面状态失败：{error}"))?;
-    replace_file_atomically(&path, text.as_bytes())
-        .map_err(|error| format!("原子写入桌面状态失败：{error:?}"))
+    write_document(&path, text.as_bytes())
+}
+
+/// 直接覆盖写一份状态文件。
+///
+/// 先建目录、再按共享写打开并截断，因此不需要目标文件的 DELETE 权限，也就不会
+/// 被持有该文件的同步盘或杀毒软件拦成「拒绝访问」。失败按 [`WRITE_ATTEMPTS`]
+/// 次有限重试，仍失败才把最后一次的原因交回调用方。
+fn write_document(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).map_err(|error| format!("无法创建客户端数据目录：{error}"))?;
+    }
+    let mut reason = String::new();
+    for attempt in 0..WRITE_ATTEMPTS {
+        match fs::write(path, bytes) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                reason = error.to_string();
+                if attempt + 1 < WRITE_ATTEMPTS {
+                    std::thread::sleep(WRITE_RETRY_DELAY);
+                }
+            }
+        }
+    }
+    Err(format!("写入桌面状态失败：{reason}"))
 }
 
 /// 把损坏文件另存为 `.corrupt`；目标已存在时追加序号，不覆盖既有证据。

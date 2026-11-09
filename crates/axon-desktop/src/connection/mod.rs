@@ -52,6 +52,8 @@ pub fn runtime() -> &'static Runtime {
 struct Inner {
     /// v2 状态文档，进程内唯一一份。
     document: ClientStateDocument,
+    /// 落盘根；`None` 表示本次装配只改内存（测试用），任何写入都不碰真实路径。
+    root: Option<PathBuf>,
     /// 生效档案；`None` 表示当前没有可用档案（未连接态）。
     active: Option<ProfileEntry>,
     /// 状态文件来自更高的结构版本：只读，任何写入都被拒绝。
@@ -176,6 +178,7 @@ impl Runtime {
         Self {
             inner: RwLock::new(Inner {
                 document,
+                root: Some(store::client_root()),
                 active,
                 read_only: loaded.read_only,
                 token_env,
@@ -187,7 +190,11 @@ impl Runtime {
         }
     }
 
-    /// 建一个只用于测试的运行态：文档由调用方给定，不读写真实路径。
+    /// 建一个只用于测试的运行态：文档由调用方给定，**不读写真实路径**。
+    ///
+    /// 落盘根为 `None`，因此 `update_document` / `set_projection` 这类写操作只改内存。
+    /// 这一点必须有代码保证而不是注释承诺：这里的文档多半是夹具（旧默认名、演示工作区），
+    /// 一旦真的落盘就会把用户的状态文件整份换成夹具内容。
     #[must_use]
     pub fn from_document(document: ClientStateDocument, read_only: bool) -> Self {
         let active = document
@@ -196,6 +203,7 @@ impl Runtime {
         Self {
             inner: RwLock::new(Inner {
                 document,
+                root: None,
                 active,
                 read_only,
                 token_env: endpoint::FALLBACK_TOKEN_ENV.to_owned(),
@@ -279,7 +287,7 @@ impl Runtime {
                 HealthState {
                     dot: HealthDot::Done,
                     label: "已连接".to_owned(),
-                    detail: format!("往返 {} 毫秒", ready.latency_ms),
+                    detail: format!("延迟 {} 毫秒", ready.latency_ms),
                 }
             }
             probe::ProbeOutcome::Failed(failure) => match failure {
@@ -449,7 +457,7 @@ impl Runtime {
             return Err("桌面状态文件来自更高的结构版本，本次只读运行，无法保存改动".to_owned());
         }
         let outcome = update(&mut inner.document)?;
-        store::save_document(&inner.document)?;
+        persist(inner.root.as_deref(), &inner.document)?;
         refresh_active(&mut inner);
         Ok(outcome)
     }
@@ -500,7 +508,7 @@ impl Runtime {
         let previous = inner.document.client.last_profile_id.clone();
         inner.document.client.previous_profile_id = previous;
         inner.document.client.last_profile_id = Some(profile_id.to_owned());
-        store::save_document(&inner.document)?;
+        persist(inner.root.as_deref(), &inner.document)?;
         refresh_active(&mut inner);
         // 切档即重取能力位：迟滞计数与能力位都按档案隔离，切换即清零。
         Ok(())
@@ -531,7 +539,7 @@ impl Runtime {
             return Ok(false);
         }
         inner.document.client.last_profile_id = Some(previous);
-        store::save_document(&inner.document)?;
+        persist(inner.root.as_deref(), &inner.document)?;
         refresh_active(&mut inner);
         Ok(true)
     }
@@ -546,7 +554,7 @@ impl Runtime {
         if inner.read_only {
             return Err("桌面状态文件来自更高的结构版本，本次只读运行，无法保存改动".to_owned());
         }
-        store::save_document(&document)?;
+        persist(inner.root.as_deref(), &document)?;
         inner.document = document;
         refresh_active(&mut inner);
         Ok(())
@@ -579,6 +587,16 @@ impl Runtime {
 
 /// 从文档重新推导生效档案。
 ///
+/// 按运行态持有的落盘根写盘。
+///
+/// `root` 为 `None` 的是测试装配：文档是夹具，只改内存、绝不落到用户的状态文件上。
+fn persist(root: Option<&std::path::Path>, document: &ClientStateDocument) -> Result<(), String> {
+    match root {
+        Some(root) => store::save_document_at(root, document),
+        None => Ok(()),
+    }
+}
+
 /// 换档即清零：能力位、最近一次探活读数与健康结论都按档案隔离，迟滞计数同理。
 fn refresh_active(inner: &mut Inner) {
     inner.active = inner.document.active_profile_id().and_then(|id| {

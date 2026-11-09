@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import type { ProfileProbeView } from '../connectionTypes';
-import { probeProfiles, switchProfile, useConnectionFact } from '../connectionState';
+import { latencyText, switchProfile, useConnectionFact } from '../connectionState';
 import { ChevronDownIcon } from '../icons';
 import { ROW_ICON_COLUMN, ROW_STATE } from './SidebarRows';
 import { Dropdown, MenuItem, MenuLabel, MenuSeparator } from './ui/overlays';
@@ -14,7 +13,12 @@ import { StateDot, Text } from './ui/surfaces';
  *
  * 读数只取 useConnectionFact()：胶囊自己不发 ipc.connectionState()，也不起轮询；
  * 健康档位直接用快照里的 health.dot，不在本地二次推导，因此胶囊与设置 › 连接
- * 永远说同一句话。
+ * 永远说同一句话。右端固定给延迟读数，取不到延迟时才退回健康结论（未连接、连不上），
+ * 两者不会同时出现，也不会写成 0。
+ *
+ * 一级（胶囊本身）只负责展开清单，不承担切档：切档要重启应用，误触代价太大。
+ * 二级清单只在真有多份档案时才给出可切换项，且不复述任何连接状态：那些结论属于
+ * 生效档案本身，挂在别的档案名后面等于替它下结论。
  *
  * 键盘口径按开工合同 §5.2 降级后的那一档：Tab 可达、Enter 触发、Esc 关闭。
  * Dropdown 本期没有方向键导航（菜单宿主只监听 Escape），这里也不额外实现方向键，
@@ -23,18 +27,11 @@ import { StateDot, Text } from './ui/surfaces';
 
 /** 尚未取到快照时的占位读数：常驻入口不能因为一次读取还没回来就消失。 */
 const PLACEHOLDER_LABEL = '未连接';
-/** 档案还没有探测结论时的次要文字。 */
-const UNPROBED_LABEL = '未探测';
 /** 切档进入重启流程时的过渡文案。 */
 const SWITCHING_LABEL = '正在重启以切换后端';
 
-/** 取某条档案的探测结论；没有结论的档案如实写「未探测」。 */
-function probeLabel(probes: readonly ProfileProbeView[], id: string): string {
-  return probes.find((probe) => probe.id === id)?.message ?? UNPROBED_LABEL;
-}
-
 export const ConnectionCapsule: React.FC<{ onManage: () => void }> = ({ onManage }) => {
-  const { snapshot, probes } = useConnectionFact();
+  const { snapshot } = useConnectionFact();
   /** 切档回执：只在本行就地说明，不弹窗、不改主区域。 */
   const [notice, setNotice] = useState<string | null>(null);
   /**
@@ -45,15 +42,19 @@ export const ConnectionCapsule: React.FC<{ onManage: () => void }> = ({ onManage
   const triggerRef = useRef<HTMLButtonElement>(null);
 
   const label = snapshot?.activeLabel ?? PLACEHOLDER_LABEL;
-  /** 本机档案的名字与模式同为「本机」，重复一遍只是噪音，因此相等时只留名字。 */
-  const mode = snapshot !== null && snapshot.mode !== label ? snapshot.mode : null;
   const healthLabel = snapshot?.health.label ?? PLACEHOLDER_LABEL;
+  /** 右端读数：有延迟就写延迟，没有才写健康结论。 */
+  const latency = snapshot === null ? null : latencyText(snapshot.latencyMs);
+  const readout = latency ?? healthLabel;
   /*
-   * 原生提示与无障碍名称：档案名加一句健康结论。两者同值时只说一遍，免得读屏器
-   * 念出「未连接，未连接」；文字被截断时，完整档案名也由它兜住。
+   * 原生提示与无障碍名称：档案名加健康结论，有延迟时再补一句。两者同值时只说一遍，
+   * 免得读屏器念出「未连接，未连接」；文字被截断时，完整档案名也由它兜住。
    */
-  const announcement = healthLabel === label ? label : `${label}，${healthLabel}`;
-  const roster = snapshot?.profiles ?? [];
+  const summary = healthLabel === label ? label : `${label}，${healthLabel}`;
+  const announcement = latency === null ? summary : `${summary}，延迟 ${latency}`;
+  /** 可切换的档案：当前生效那一份不在其中，避免一次「选了自己」的重启。 */
+  const targets = (snapshot?.profiles ?? []).filter((profile) => !profile.active);
+  const rosterEmpty = snapshot !== null && (snapshot.profiles ?? []).length === 0;
 
   const handleSwitch = useCallback((id: string) => {
     /*
@@ -75,13 +76,6 @@ export const ConnectionCapsule: React.FC<{ onManage: () => void }> = ({ onManage
     if (menuEpoch > 0) triggerRef.current?.focus();
   }, [menuEpoch]);
 
-  const handleOpenChange = useCallback((open: boolean) => {
-    // 展开时探测一遍：结论只喂给菜单里的次要文字，胶囊自身仍只读快照。
-    // 回调必须是稳定引用：Dropdown 每次渲染都会回调一次展开状态，换引用会
-    // 让「一开只探一次」变成「每次渲染都探一次」，进而自激成无限探测。
-    if (open) void probeProfiles();
-  }, []);
-
   return (
     <>
       {/*
@@ -98,7 +92,6 @@ export const ConnectionCapsule: React.FC<{ onManage: () => void }> = ({ onManage
       <Dropdown
         key={menuEpoch}
         className="w-full"
-        onOpenChange={handleOpenChange}
         trigger={({ open, toggle }) => (
           <button
             ref={triggerRef}
@@ -117,11 +110,9 @@ export const ConnectionCapsule: React.FC<{ onManage: () => void }> = ({ onManage
             <Text size="row" truncate className="flex-1 min-w-0">
               {label}
             </Text>
-            {mode !== null && (
-              <Text size="micro" tone="tertiary" className="shrink-0">
-                · {mode}
-              </Text>
-            )}
+            <Text size="micro" tone="tertiary" className="shrink-0 tabular-nums">
+              {readout}
+            </Text>
             <ChevronDownIcon
               size={12}
               className={`shrink-0 text-text-tertiary transition-transform duration-150 ${
@@ -132,24 +123,19 @@ export const ConnectionCapsule: React.FC<{ onManage: () => void }> = ({ onManage
         )}
       >
         {/*
-          档案清单：每一项点一下就是一次切档。次要文字给探测结论，没有结论的档案
-          如实写「未探测」，不拿当前健康态去冒充别人的结论。
+          二级清单：多份档案时才列出可切换项，且只写名字，不复述连接状态。
+          只有一份档案（或一份都还没有）时不列条目，菜单只留「管理连接…」。
         */}
-        {roster.length === 0 ? (
-          <MenuLabel>{snapshot === null ? '正在读取连接档案' : '暂无连接档案'}</MenuLabel>
+        {rosterEmpty ? (
+          <MenuLabel>暂无连接档案</MenuLabel>
         ) : (
-          roster.map((profile) => (
-            <MenuItem
-              key={profile.id}
-              selected={profile.active}
-              hint={probeLabel(probes, profile.id)}
-              onSelect={() => handleSwitch(profile.id)}
-            >
+          targets.map((profile) => (
+            <MenuItem key={profile.id} onSelect={() => handleSwitch(profile.id)}>
               {profile.label}
             </MenuItem>
           ))
         )}
-        <MenuSeparator />
+        {targets.length > 0 && <MenuSeparator />}
         <MenuItem onSelect={onManage}>管理连接…</MenuItem>
       </Dropdown>
     </>

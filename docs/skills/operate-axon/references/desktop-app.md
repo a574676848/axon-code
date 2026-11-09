@@ -113,7 +113,7 @@
 
 | 族 | 命令 |
 |---|---|
-| 连接档案 | `connection_state`、`connection_retry_probe`、`connection_test`、`connection_save_profile`、`connection_delete_profile`、`connection_rename_profile`、`connection_switch_profile`、`connection_set_session_secret`、`connection_complete_onboarding`、`connection_skip_onboarding`、`connection_probe_profiles` |
+| 连接档案 | `connection_state`、`connection_retry_probe`、`connection_test`、`connection_save_profile`、`connection_delete_profile`、`connection_rename_profile`、`connection_switch_profile`、`connection_set_session_secret`、`connection_complete_onboarding`、`connection_skip_onboarding` |
 | 配置 | `config_read`、`config_validate`、`config_validate_values`、`config_write`、`config_apply_values`、`config_reset_key` |
 | Provider 与模型 | `provider_profile_upsert`、`provider_profile_remove`、`discover_models` |
 | 工作区与车道 | `workspace_list`、`workspace_add`、`workspace_remove`、`workspace_list_entries`、`workspace_read_file`、`workspace_read_bytes`、`workspace_stat_path`、`workspace_applications`、`workspace_open_default`、`workspace_open_with`、`workspace_reveal`、`lane_create`、`lane_rename`、`lane_reorder`、`lane_set_pinned`、`lane_set_archived` |
@@ -134,7 +134,7 @@
 - 写类命令（`config_write`、`config_apply_values`、`secret_set`、`mcp_upsert`、`cron_*`、`lane_*`、`conversation_submit`、`conversation_interrupt` 等）都是状态变更，先取得用户明确授权。
 - 凭据类命令只回报状态与掩码，不打印密钥原文。
 - `system_info` 的 `github` 字段给出本次构建对应的仓库、发布页、问题反馈与许可标识（都来自构建期元数据）。
-- 连接读数只经 `connection_state` 取得：它给出生效档案、模式、后端地址与版本、往返延迟、能力位与健康结论。试连接（`connection_test`）只发一次 `GET /api/v1/meta`，失败按凭据不匹配、证书有问题、连不上三类分别回报；它不落档案也不落凭据库。
+- 连接读数只经 `connection_state` 取得：它给出生效档案、模式、后端地址与版本、延迟、能力位与健康结论。试连接（`connection_test`）只发一次 `GET /api/v1/meta`，失败按凭据不匹配、证书有问题、连不上三类分别回报；它不落档案也不落凭据库。
 - `check_update` 按该仓库读取最新发布。失败不是命令失败：`error` 是中文归因、`hint` 是下一步动作，两者都不含 HTTP 状态码或库内部字符串；界面上归因收在「关于」页的「详情」里。
 - 读取私有仓库需要令牌：配置目录 `.env` 中的 `AXON_GITHUB_TOKEN`（或 `GH_TOKEN`、`GITHUB_TOKEN`）。未配置时按匿名请求读取，额度为每小时 60 次，超限的 `hint` 会给出重置倒计时。
 - `open_external_url` 只接受 `http` 与 `https`，其余协议直接拒绝。

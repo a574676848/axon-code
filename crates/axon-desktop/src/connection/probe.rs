@@ -121,7 +121,7 @@ impl ProbeFailure {
 pub struct ProbeReady {
     /// `/meta` 载荷。
     pub meta: MetaPayload,
-    /// 往返延迟（毫秒）。
+    /// 延迟（毫秒）。
     pub latency_ms: u64,
     /// 与本机的时钟偏移（毫秒）；未校验时为 0。
     pub clock_offset_ms: i64,

@@ -64,7 +64,7 @@ const SECTIONS: SectionSpec[] = [
   {
     id: 'connection',
     label: '连接',
-    description: '当前连接的后端与可用档案',
+    description: '连接档案与后台服务',
     footer: '',
     icon: GlobeIcon,
     prefixes: [],

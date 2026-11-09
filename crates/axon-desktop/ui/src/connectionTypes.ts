@@ -99,20 +99,6 @@ export interface SwitchOutcome {
   message: string;
 }
 
-/** 一次惰性探测的结论。 */
-export interface ProfileProbeView {
-  id: string;
-  conclusion:
-    | 'ok'
-    | 'unreachable'
-    | 'credential'
-    | 'certificate'
-    | 'outdated'
-    | 'overBudget';
-  message: string;
-  latencyMs: number | null;
-}
-
 /**
  * 一把 Gateway Key 的展示形态。
  *

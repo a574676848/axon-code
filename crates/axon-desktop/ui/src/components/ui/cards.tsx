@@ -13,14 +13,14 @@ import { Chip, EmptyState, LoadingState, Text } from './surfaces';
  */
 
 interface CardListProps {
-  /** 搜索关键字。 */
-  query: string;
+  /** 搜索关键字；与 `onQueryChange` 一起给才渲染搜索框。 */
+  query?: string;
   /** 关键字变化。 */
-  onQueryChange: (next: string) => void;
+  onQueryChange?: (next: string) => void;
   /** 搜索框占位文案。 */
-  placeholder: string;
-  /** 概览文案，例如「共 4 台服务器」。 */
-  summary: string;
+  placeholder?: string;
+  /** 概览文案，例如「共 4 台服务器」；不给就不占这一行。 */
+  summary?: string;
   /** 首屏加载中。 */
   loading?: boolean;
   /** 过滤后为空时的标题。 */
@@ -34,7 +34,7 @@ interface CardListProps {
 export const CardList: React.FC<CardListProps> = ({
   query,
   onQueryChange,
-  placeholder,
+  placeholder = '搜索',
   summary,
   loading = false,
   emptyTitle,
@@ -44,15 +44,19 @@ export const CardList: React.FC<CardListProps> = ({
   const empty = React.Children.count(children) === 0;
   return (
     <div className="@container space-y-3">
-      <Input
-        icon={<SearchIcon size={13} />}
-        value={query}
-        placeholder={placeholder}
-        onChange={(event) => onQueryChange(event.target.value)}
-      />
-      <Text tone="secondary" size="xs" className="block">
-        {summary}
-      </Text>
+      {onQueryChange !== undefined && (
+        <Input
+          icon={<SearchIcon size={13} />}
+          value={query ?? ''}
+          placeholder={placeholder}
+          onChange={(event) => onQueryChange(event.target.value)}
+        />
+      )}
+      {summary !== undefined && (
+        <Text tone="secondary" size="xs" className="block">
+          {summary}
+        </Text>
+      )}
       {loading ? (
         <LoadingState label="正在读取" />
       ) : empty ? (
@@ -90,6 +94,8 @@ interface EntityCardProps {
   meta?: string;
   /** 底部左侧的结构化次要信息节点（优先于纯文本 meta）。 */
   metaNode?: React.ReactNode;
+  /** 页脚动作组：给了就把页脚排成「读数一行 + 动作一行」，只在真有动作可做时用。 */
+  footerActions?: React.ReactNode;
   /** 点击卡片主体。 */
   onOpen?: () => void;
   /** 底部右下的查看配置入口。 */
@@ -120,6 +126,7 @@ export const EntityCard: React.FC<EntityCardProps> = ({
   uniformHeight = false,
   meta,
   metaNode,
+  footerActions,
   onOpen,
   onInspect,
   inspectLabel = '查看配置',
@@ -128,6 +135,35 @@ export const EntityCard: React.FC<EntityCardProps> = ({
   actionIcon,
 }) => {
   const hasDescription = description !== undefined && description.trim().length > 0;
+  /** 唯一的「查看配置」入口：页脚两种排法共用同一枚按钮。 */
+  const inspectEntry = (
+    <button
+      type="button"
+      onClick={() => onInspect?.()}
+      className="ml-auto shrink-0 inline-flex items-center gap-1 h-6 px-2 rounded-xs text-xs font-medium text-text-secondary transition-colors duration-100 hover:bg-hover hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
+    >
+      <span>{inspectLabel}</span>
+      <span className="card-action-icon text-text-tertiary">
+        {actionIcon ?? <SettingsIcon size={12} />}
+      </span>
+    </button>
+  );
+  const readout =
+    metaNode !== undefined ? (
+      <div className="flex-1 min-w-0">{metaNode}</div>
+    ) : (
+      meta !== undefined && (
+        <Text
+          tone="tertiary"
+          size="micro"
+          truncate
+          className="flex-1 min-w-0 tabular-nums"
+          title={meta}
+        >
+          {meta}
+        </Text>
+      )
+    );
   return (
     <div
       className={`card-interactive flex flex-col rounded-md hairline border-border shadow-card bg-surface overflow-hidden ${
@@ -193,33 +229,20 @@ export const EntityCard: React.FC<EntityCardProps> = ({
           </Text>
         )}
       </button>
-      <div className="shrink-0 h-9 flex items-center gap-2 px-3.5 bg-surface-sunken/25 hairline-t border-border-hairline">
-        {metaNode !== undefined ? (
-          <div className="flex-1 min-w-0">{metaNode}</div>
-        ) : (
-          meta !== undefined && (
-            <Text
-              tone="tertiary"
-              size="micro"
-              truncate
-              className="flex-1 min-w-0 tabular-nums"
-              title={meta}
-            >
-              {meta}
-            </Text>
-          )
-        )}
-        <button
-          type="button"
-          onClick={() => onInspect?.()}
-          className="ml-auto shrink-0 inline-flex items-center gap-1 h-6 px-2 rounded-xs text-xs font-medium text-text-secondary transition-colors duration-100 hover:bg-hover hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
-        >
-          <span>{inspectLabel}</span>
-          <span className="card-action-icon text-text-tertiary">
-            {actionIcon ?? <SettingsIcon size={12} />}
-          </span>
-        </button>
-      </div>
+      {footerActions !== undefined ? (
+        <div className="shrink-0 px-3.5 py-2 space-y-2 bg-surface-sunken/25 hairline-t border-border-hairline">
+          <div className="flex items-center gap-2 min-w-0">{readout}</div>
+          <div className="flex items-center gap-2 min-w-0">
+            {footerActions}
+            {inspectEntry}
+          </div>
+        </div>
+      ) : (
+        <div className="shrink-0 h-9 flex items-center gap-2 px-3.5 bg-surface-sunken/25 hairline-t border-border-hairline">
+          {readout}
+          {inspectEntry}
+        </div>
+      )}
     </div>
   );
 };

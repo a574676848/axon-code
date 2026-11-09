@@ -42,7 +42,6 @@ import type {
   ConnectionTestResult,
   KeyIssueReceipt,
   KeyView,
-  ProfileProbeView,
   SwitchOutcome,
 } from './connectionTypes';
 
@@ -117,10 +116,6 @@ export const connectionCompleteOnboarding = (): Promise<ConnectionSnapshot> =>
 /** 跳过引导，进入未连接态。 */
 export const connectionSkipOnboarding = (): Promise<ConnectionSnapshot> =>
   call('connection_skip_onboarding');
-
-/** 惰性探测全部档案。 */
-export const connectionProbeProfiles = (): Promise<ProfileProbeView[]> =>
-  call('connection_probe_profiles');
 
 /** 列出全部未吊销的 Gateway Key；回执不含明文与摘要。 */
 export const connectionKeysList = (): Promise<KeyView[]> => call('connection_keys_list');

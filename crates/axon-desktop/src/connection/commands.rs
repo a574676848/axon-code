@@ -1,4 +1,4 @@
-//! 连接分区的 IPC 面：状态快照、试连接、档案增删改、切换与探测。
+//! 连接分区的 IPC 面：状态快照、试连接、档案增删改与切换。
 //!
 //! 这里是界面唯一的数据来源：界面不发第二次探测、不自己拼地址、不缓存健康结论。
 //! 「一个事实源 + 明确的唯一入口 + 其余落点只引用不重取」是既有共用件先例
@@ -7,7 +7,7 @@
 //! 形状与文案在 [`super::views`]，本文件只做动作编排。
 
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +18,7 @@ use super::relaunch;
 use super::runtime;
 use super::secret_store::{self, PendingCredential, SecretStoreStatus};
 use super::store;
-use super::views::{self, ConnectionSnapshot, ConnectionTestResult, ProfileProbeView};
+use super::views::{self, ConnectionSnapshot, ConnectionTestResult};
 
 /// 试连接期的一次性凭据：只在这里存活，界面侧不留副本。
 fn pending_credential() -> &'static Mutex<Option<PendingCredential>> {
@@ -33,15 +33,11 @@ fn pending_guard() -> std::sync::MutexGuard<'static, Option<PendingCredential>> 
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// 惰性探测的总预算。
-const PROBE_BUDGET: Duration = Duration::from_millis(1500);
 /// 试连接与保存档案的总预算：HTTP 面与事件流面共享这一份。
 ///
-/// 它比惰性探测宽，因为这两条路径由用户点击触发、结果要等人看；但仍然是**一份**，
+/// 这两条路径由用户点击触发、结果要等人看，因此给得比探活宽；但仍然是**一份**，
 /// 第二个协议面只能用剩下的时间，不会把整次操作拖成两倍。
 const INTERACTIVE_BUDGET: Duration = Duration::from_millis(4_000);
-/// 惰性探测的并发路数。
-const PROBE_CONCURRENCY: usize = 2;
 /// 切档后留给界面显示过渡态的时间。
 const RELAUNCH_GRACE: Duration = Duration::from_millis(250);
 
@@ -401,84 +397,6 @@ pub fn connection_complete_onboarding() -> Result<ConnectionSnapshot, String> {
 pub fn connection_skip_onboarding() -> Result<ConnectionSnapshot, String> {
     runtime().complete_onboarding()?;
     Ok(views::snapshot())
-}
-
-/// 惰性探测全部档案：只在切换面板展开时调用，最多两路并发，总预算 1500 毫秒。
-#[tauri::command]
-#[must_use]
-pub fn connection_probe_profiles() -> Vec<ProfileProbeView> {
-    let profiles = runtime().profiles();
-    let started = Instant::now();
-    let mut results = Vec::with_capacity(profiles.len());
-    let mut index = 0;
-    while index < profiles.len() {
-        let batch_end = (index + PROBE_CONCURRENCY).min(profiles.len());
-        // 每一路只用「剩余预算」做超时：预算按总量算，不是按批各给一份。
-        let remaining = PROBE_BUDGET.saturating_sub(started.elapsed());
-        if remaining.is_zero() {
-            for entry in &profiles[index..] {
-                results.push(over_budget_view(&entry.id));
-            }
-            break;
-        }
-        let per_probe = remaining.min(endpoint::PROBE_TIMEOUT);
-        let handles: Vec<_> = profiles[index..batch_end]
-            .iter()
-            .map(|entry| {
-                let entry = entry.clone();
-                let token = token_for(&entry.profile.credential);
-                std::thread::spawn(move || {
-                    let endpoints = endpoint::resolve(&entry.profile.spec);
-                    (
-                        entry.id,
-                        probe::probe_base_with_token_timeout(
-                            &endpoints.http_base,
-                            token.as_deref(),
-                            per_probe,
-                        ),
-                    )
-                })
-            })
-            .collect();
-        for (offset, handle) in handles.into_iter().enumerate() {
-            let profile_id = profiles[index + offset].id.clone();
-            if started.elapsed() >= PROBE_BUDGET {
-                results.push(over_budget_view(&profile_id));
-                continue;
-            }
-            match handle.join() {
-                Ok((id, outcome)) => results.push(views::probe_view(id, &outcome)),
-                Err(_) => results.push(ProfileProbeView {
-                    id: profile_id,
-                    conclusion: "unreachable".to_owned(),
-                    message: "探测线程异常退出".to_owned(),
-                    latency_ms: None,
-                }),
-            }
-        }
-        index = batch_end;
-    }
-    results
-}
-
-/// 超过探测预算的档案读数。
-fn over_budget_view(id: &str) -> ProfileProbeView {
-    ProfileProbeView {
-        id: id.to_owned(),
-        conclusion: "overBudget".to_owned(),
-        message: "超过探测预算，按未连接呈现".to_owned(),
-        latency_ms: None,
-    }
-}
-
-/// 取某条档案的凭据。
-fn token_for(source: &CredentialSource) -> Option<String> {
-    match source {
-        CredentialSource::LocalEnvFile => endpoint::api_token(),
-        // 非生效档案的会话凭据不存在：探测会因为 401 落在「凭据无效」，这是真话。
-        CredentialSource::SessionOnly => None,
-        CredentialSource::Keychain { key_id } => secret_store::load(key_id).ok().flatten(),
-    }
 }
 
 /// 启动期消费失败记录并回滚档案。

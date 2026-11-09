@@ -90,9 +90,33 @@ fn projection_round_trips_through_the_runtime() {
         path: "D:/work/demo".to_owned(),
         name: "demo".to_owned(),
     });
-    // 只读运行态不写盘，因此这里只断言内存文档已被更新前的守卫拦住。
-    let outcome = runtime.set_projection(LOCAL_PROFILE_ID, projection.clone());
-    assert!(outcome.is_err() || outcome.is_ok());
+    // 测试装配不持有落盘根，因此这一步只改内存：它绝不允许把夹具写进用户的状态文件。
+    runtime
+        .set_projection(LOCAL_PROFILE_ID, projection)
+        .expect("内存装配必须允许写入");
+    let stored = runtime.projection(LOCAL_PROFILE_ID);
+    assert_eq!(stored.workspaces.len(), 1);
+    assert_eq!(stored.workspaces[0].path, "D:/work/demo");
+}
+
+/// 测试装配不得落真实路径：这是回归护栏，防止夹具内容整份覆盖用户的状态文件。
+#[test]
+fn test_runtime_never_holds_a_persist_root() {
+    let runtime = Runtime::from_document(document_with_one_local_profile(), false);
+    assert!(runtime.read().root.is_none(), "测试装配不得持有落盘根");
+    assert!(
+        runtime
+            .update_document(|document| {
+                document.client.theme = Some("forest".to_owned());
+                Ok(())
+            })
+            .is_ok(),
+        "只改内存的写入必须成功"
+    );
+    assert_eq!(
+        runtime.read().document.client.theme.as_deref(),
+        Some("forest")
+    );
 }
 
 #[test]

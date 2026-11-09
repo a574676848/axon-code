@@ -93,10 +93,9 @@ use automation::{
 use catalog::{provider_profile_remove, provider_profile_upsert};
 use clipboard::{clipboard_read_text, clipboard_write_text};
 use connection::commands::{
-    connection_complete_onboarding, connection_delete_profile, connection_probe_profiles,
-    connection_rename_profile, connection_retry_probe, connection_save_profile,
-    connection_set_session_secret, connection_skip_onboarding, connection_state,
-    connection_switch_profile, connection_test,
+    connection_complete_onboarding, connection_delete_profile, connection_rename_profile,
+    connection_retry_probe, connection_save_profile, connection_set_session_secret,
+    connection_skip_onboarding, connection_state, connection_switch_profile, connection_test,
 };
 use connection::keys::{connection_keys_create, connection_keys_list, connection_keys_revoke};
 use conversation::{
@@ -264,7 +263,6 @@ pub fn run() {
             connection_set_session_secret,
             connection_complete_onboarding,
             connection_skip_onboarding,
-            connection_probe_profiles,
             connection_keys_create,
             connection_keys_list,
             connection_keys_revoke,
