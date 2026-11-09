@@ -23,8 +23,10 @@ impl DaemonPidFileGuard {
         let existing_pid = fs::read_to_string(&path)
             .ok()
             .and_then(|value| value.trim().parse::<u32>().ok());
+        // 判据必须是「该 PID 仍由 Axon 守护进程持有」：PID 被系统回收给无关进程后，
+        // 只看存活会把陈旧 pid 文件当成活实例，启动将永久失败。
         if let Some(existing_pid) =
-            existing_pid.filter(|pid| daemon_service_manager::process_alive(*pid))
+            existing_pid.filter(|pid| daemon_service_manager::daemon_process_alive(*pid))
         {
             return Err(format!("Axon Daemon 已在运行: pid={existing_pid}"));
         }

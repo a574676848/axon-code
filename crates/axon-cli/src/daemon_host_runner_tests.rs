@@ -46,6 +46,29 @@ fn pid_guard_rejects_a_live_owner() {
     drop(guard);
 }
 
+/// PID 被系统回收给无关进程时，陈旧 pid 文件不得继续阻塞守护进程启动。
+#[cfg(windows)]
+#[test]
+fn pid_guard_reclaims_pid_recycled_to_a_foreign_process() {
+    let directory = axon_test_support::test_temp_dir();
+    let runtime_root = directory.path().to_path_buf();
+    let pid_path = runtime_root.join("daemon.pid");
+    let mut foreign = std::process::Command::new("cmd")
+        .args(["/c", "ping -n 30 127.0.0.1 > nul"])
+        .spawn()
+        .expect("启动无关进程");
+    std::fs::write(&pid_path, format!("{}\n", foreign.id())).expect("写入无关 PID");
+
+    let guard = DaemonPidFileGuard::acquire(&runtime_root).expect("接管被回收的 PID");
+    assert_eq!(
+        std::fs::read_to_string(&pid_path).expect("读取 PID").trim(),
+        std::process::id().to_string()
+    );
+    drop(guard);
+    let _ = foreign.kill();
+    let _ = foreign.wait();
+}
+
 #[test]
 fn daemon_event_publish_does_not_wait_for_process_stdout_lock() {
     let directory = axon_test_support::test_temp_dir();

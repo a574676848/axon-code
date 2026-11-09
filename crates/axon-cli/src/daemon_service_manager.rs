@@ -272,7 +272,7 @@ fn cleanup_stale_ipc_endpoint(runtime_dir: &Path) {
     let pid = fs::read_to_string(daemon_pid_path(runtime_dir))
         .ok()
         .and_then(|value| value.trim().parse::<u32>().ok());
-    if pid.is_some_and(process_alive) {
+    if pid.is_some_and(daemon_process_alive) {
         return;
     }
     let endpoint = runtime_dir.join("axon-daemon");
@@ -437,12 +437,11 @@ fn windows_task_exists() -> bool {
 
 /// 守护进程是否仍在运行。
 ///
-/// 判据是「`daemon.pid` 指向的 PID 存活且映像名是 Axon」，而不是计划任务状态：
+/// 判据是「`daemon.pid` 指向的 PID 仍由 Axon 进程持有」，而不是计划任务状态：
 /// 计划任务实例可能在守护进程仍存活时就已结束（提权进程不随外壳退出），只看任务会得出相反结论。
 #[cfg(windows)]
 fn windows_daemon_process_alive(runtime_dir: &Path) -> bool {
-    daemon_pid(runtime_dir)
-        .is_some_and(|pid| process_alive(pid) && windows_definition::process_image_is_axon(pid))
+    daemon_pid(runtime_dir).is_some_and(daemon_process_alive)
 }
 
 #[cfg(windows)]
@@ -685,6 +684,10 @@ use service_definitions::systemd_unit;
 mod windows_definition;
 #[cfg(test)]
 use windows_definition::{parse_windows_user_sid, windows_task_xml};
+
+#[path = "daemon_process_probe.rs"]
+mod process_probe;
+pub(super) use process_probe::daemon_process_alive;
 
 #[cfg(test)]
 #[path = "daemon_service_manager_tests.rs"]
