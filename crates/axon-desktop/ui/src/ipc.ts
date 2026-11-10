@@ -237,6 +237,9 @@ export const mcpRemove = (name: string): Promise<void> => call('mcp_remove', { n
 /** 列出已安装技能。 */
 export const skillsList = (): Promise<SkillItem[]> => call('skills_list');
 
+/** 移除一个已安装技能；技能目录会被删除，调用方必须先取得用户确认。 */
+export const skillsRemove = (id: string): Promise<void> => call('skills_remove', { id });
+
 /** 读取人设或行为准则文档。 */
 export const documentRead = (id: string): Promise<DocumentText> => call('document_read', { id });
 

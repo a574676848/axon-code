@@ -15,6 +15,13 @@ import type { SkillItem } from '../types';
 let pending: Promise<SkillItem[]> | null = null;
 /** 已结算的清单；未读完时为 null（渲染侧据此决定要不要等下再画高亮）。 */
 let cached: SkillItem[] | null = null;
+/** 清单更新订阅者：移除技能后，指标条计数与斜杠候选立刻跟着换。 */
+const listeners = new Set<(list: SkillItem[]) => void>();
+
+/** 通知所有订阅者。 */
+function notify(list: SkillItem[]) {
+  for (const listener of listeners) listener(list);
+}
 
 /** 读技能清单（首次调用发起读取，之后直接复用）。 */
 export function loadSkillCatalog(): Promise<SkillItem[]> {
@@ -22,20 +29,40 @@ export function loadSkillCatalog(): Promise<SkillItem[]> {
     pending = ipc.skillsList().then(
       (list) => {
         cached = list;
+        notify(list);
         return list;
       },
       () => {
         cached = [];
-        return [];
+        notify(cached);
+        return cached;
       },
     );
   }
   return pending;
 }
 
+/**
+ * 丢弃缓存并重新读取。
+ *
+ * 技能目录在应用之外也能被改动，因此设置页移除技能成功后要显式重读一次；
+ * 订阅者拿到的是新清单，不需要重启界面。
+ */
+export function reloadSkillCatalog(): Promise<SkillItem[]> {
+  pending = null;
+  cached = null;
+  return loadSkillCatalog();
+}
+
 /** 订阅技能清单：未就绪时返回 null 并触发一次读取。 */
 export function useSkillCatalog(): SkillItem[] | null {
   const [list, setList] = React.useState<SkillItem[] | null>(cached);
+  React.useEffect(() => {
+    listeners.add(setList);
+    return () => {
+      listeners.delete(setList);
+    };
+  }, []);
   React.useEffect(() => {
     if (list !== null) return undefined;
     let cancelled = false;

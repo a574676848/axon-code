@@ -25,7 +25,7 @@
 | `GET /api/v1/config`、`GET /api/v1/config/schema`、`PUT /api/v1/config` | 设置页的配置读写与校验 |
 | `GET/PUT /api/v1/secrets*` | 密钥状态与写入，值不回读 |
 | `POST /api/v1/providers/discover` | 「探查模型」 |
-| `GET/PUT /api/v1/mcp/config`、`GET /api/v1/skills` | MCP 配置与技能清单 |
+| `GET/PUT /api/v1/mcp/config`、`GET /api/v1/skills`、`DELETE /api/v1/skills/{id}` | MCP 配置、技能清单与技能移除（设置 › 技能 的「移除」经它删除技能目录，确认后才发请求） |
 | `GET/PUT /api/v1/documents/soul`、`/documents/agents` | 人设与行为文件 |
 | `GET /api/v1/workspaces`、`GET /api/v1/lanes` | 工作区与车道列表 |
 | `POST /api/v1/workspaces`、`POST /api/v1/lanes/identity` | 注册工作区、推导车道标识 |

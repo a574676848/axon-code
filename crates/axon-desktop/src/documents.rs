@@ -1,14 +1,16 @@
 //! 设置内的文档与目录管理：MCP 配置、技能目录、人设与行为准则。
 //!
-//! 三个数据面都经网关：MCP 配置（`GET` / `PUT /api/v1/mcp/config`）、技能清单
-//! （`GET /api/v1/skills`）与人设/行为文档（`GET` / `PUT /api/v1/documents/{soul,agents}`）。
+//! 三个数据面都经网关：MCP 配置（`GET` / `PUT /api/v1/mcp/config`）、技能清单与移除
+//! （`GET /api/v1/skills`、`DELETE /api/v1/skills/{id}`）与人设/行为文档
+//! （`GET` / `PUT /api/v1/documents/{soul,agents}`）。
 //! 桌面端因此不再解析本机的 `.mcp.json`、`skills/`、`SOUL.md` 与 `AGENTS.md`，
 //! 同一份代码在云端档案下同样成立。
 //!
 //! 安全边界：MCP 配置里可能含明文密钥，因此**读取路径只透出环境变量名**，
 //! 绝不把已有值回传给界面；写入时界面只提交用户本次输入的键值，已有键在未重新
 //! 输入时保留原值，旧值不会被空串覆盖。配置原文是保留这些键值的唯一依据，
-//! 它整条都在网关鉴权之后。
+//! 它整条都在网关鉴权之后。技能移除是破坏性写入：标识只接受技能根下的单层目录名，
+//! 删除范围由网关按同一套边界执行，界面只负责在调用前让用户确认。
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -467,6 +469,45 @@ pub fn skills_list() -> Result<Vec<SkillDto>, String> {
     Ok(skills)
 }
 
+/// 移除路由的完整路径：技能标识按 URL 规则编码后作为路径段。
+///
+/// 目录名可能带空格与中文，因此一律编码；非法形态在发请求之前就拒掉，坏标识不必
+/// 等一次往返。服务端执行同一套校验，这里只负责让错误尽早可见。
+fn skill_remove_path(id: &str) -> Result<String, String> {
+    let trimmed = id.trim();
+    if trimmed.is_empty()
+        || trimmed != id
+        || trimmed.starts_with('.')
+        || trimmed.contains(['/', '\\', '\0'])
+    {
+        return Err("技能标识不合法：只接受技能根下的单层目录名".to_string());
+    }
+    Ok(format!(
+        "{SKILLS_PATH}/{}",
+        crate::workspace_files_gateway::percent_encode(trimmed)
+    ))
+}
+
+/// Tauri IPC 命令：移除（删除）一个技能目录。
+///
+/// 技能的本体就是运行时根下 `skills/` 里的目录，删掉即不再加载，因此这条命令是
+/// 破坏性的：界面必须先让用户确认。删除范围钉在技能根之内，越界标识、软链接与
+/// 点开头的运行态目录都不在可删范围内。
+///
+/// # Errors
+///
+/// 标识不合法、技能不存在、网关不可达或后台服务不含该路由。
+#[tauri::command(async)]
+pub fn skills_remove(id: String) -> Result<(), String> {
+    let path = skill_remove_path(&id)?;
+    let receipt = crate::gateway::delete_json_at(&path)?;
+    // 回执必须点名这次移除的技能：字段对不上就等于没有真的删掉。
+    if receipt.get("removed").and_then(Value::as_str) != Some(id.trim()) {
+        return Err("后台服务回执与本次移除的技能不一致，删除可能未生效".to_string());
+    }
+    Ok(())
+}
+
 // ------------------------------------------------------------------ 文档
 
 /// 文本类文档的读取结果。
@@ -555,7 +596,9 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{McpServerInput, build_server, decode_mcp_receipt, project_server};
+    use super::{
+        McpServerInput, build_server, decode_mcp_receipt, project_server, skill_remove_path,
+    };
 
     #[test]
     fn server_projection_never_exposes_env_values() {
@@ -620,5 +663,34 @@ mod tests {
             ..McpServerInput::default()
         };
         assert!(build_server(&input, None).is_err());
+    }
+
+    #[test]
+    fn skill_removal_path_encodes_the_identifier_and_rejects_escapes() {
+        // 标识是技能目录名：合法形态原样进路径，空格与中文按 URL 规则编码。
+        assert_eq!(
+            skill_remove_path("web-search").expect("合法标识必须能拼出路由"),
+            "/api/v1/skills/web-search"
+        );
+        assert_eq!(
+            skill_remove_path("工作区 工具").expect("中文与空格必须编码"),
+            "/api/v1/skills/%E5%B7%A5%E4%BD%9C%E5%8C%BA%20%E5%B7%A5%E5%85%B7"
+        );
+        // 越界与运行态目录在发请求之前就拒掉，服务端还有同一套校验兜底。
+        for illegal in [
+            "",
+            " ",
+            "..",
+            ".revisions",
+            "a/b",
+            "a\\b",
+            " trailing",
+            "trailing ",
+        ] {
+            assert!(
+                skill_remove_path(illegal).is_err(),
+                "{illegal:?} 不是技能根下的单层目录名，必须被拒绝"
+            );
+        }
     }
 }

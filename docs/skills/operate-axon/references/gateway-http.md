@@ -93,7 +93,8 @@ Authorization: Bearer <token>
 | `PUT /api/v1/secrets` | `{"name":"...","value":"..."}` 写入配置相邻 `.env`；`value` 为空表示清空。响应与日志都不回显明文 |
 | `POST /api/v1/providers/discover` | 上游模型发现，报文体与桌面端「探查模型」入参同构 |
 | `GET /api/v1/mcp/config` / `PUT /api/v1/mcp/config` | `.mcp.json` 的文本与解析结果；写入体为 `{"raw":"<全文>"}` |
-| `GET /api/v1/skills` | 技能清单，只读 |
+| `GET /api/v1/skills` | 技能清单：`skills` 数组，每项 `id`（目录名）、`name`、`description`、`path`、`entry_path`；只回元数据，不回技能正文 |
+| `DELETE /api/v1/skills/{id}` | 移除技能：删除运行时根下 `skills/{id}` 整个目录，回执 `{"removed":"<id>"}`，**不可撤销**。`{id}` 只接受单层目录名：点开头目录、含路径分隔符或首尾空白的标识、软链接与技能根之外的目的一律 400 `invalid_skill_id`；目录不存在 404 `skill_not_found`；删除失败 500 `remove_failed`。请求不带正文 |
 | `GET /api/v1/documents/soul`、`GET /api/v1/documents/agents` | `SOUL.md` 与全局 `AGENTS.md` 原文；文件不存在时返回空串而不是 404 |
 | `PUT /api/v1/documents/soul`、`PUT /api/v1/documents/agents` | 写入体 `{"text":"..."}` |
 

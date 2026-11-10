@@ -1,9 +1,13 @@
-//! 技能清单 HTTP 适配器。
+//! 技能清单与移除 HTTP 适配器。
 //!
-//! 只读：列出运行时根下 `skills/` 里的技能目录，从每个 `SKILL.md` 的 YAML 前置块
+//! 清单：只读，列出运行时根下 `skills/` 里的技能目录，从每个 `SKILL.md` 的 YAML 前置块
 //! 读取名称与说明。字段名沿用桌面端 `skills_list` 的 `SkillDto`
 //! （`id`、`name`、`description`、`path`、`entry_path`），因此同一份界面代码在
 //! 直连宿主与经网关两条通道上拿到的是同一形状。
+//!
+//! 移除：`DELETE /api/v1/skills/{id}` 删除技能根下的**一个真实子目录**。技能的本体就是
+//! 磁盘目录，删掉即不再加载，因此这条路由是破坏性的，删除范围被钉死在 `skills/` 之内：
+//! 标识只接受单层普通文件名，目标必须是技能根的直接子目录，软链接与根外目标一律拒绝。
 //!
 //! 取值口径与桌面端一致：前置块缺失或字段缺失时，名称回退为目录名、说明为空串，
 //! 不因为某个技能写得潦草就把它从清单里藏起来。清单只回元数据，**不回技能正文**。
@@ -16,6 +20,8 @@ use serde_json::json;
 
 /// 技能清单路由。
 const SKILLS_PATH: &str = "/api/v1/skills";
+/// 技能移除路由前缀；其后一段是技能目录名。
+const SKILLS_ID_PREFIX: &str = "/api/v1/skills/";
 /// 技能目录相对运行时根目录的名称。
 const SKILLS_DIR: &str = "skills";
 /// 技能描述文件名。
@@ -26,6 +32,12 @@ const FIELD_MAX_CHARS: usize = 160;
 const METHOD_NOT_ALLOWED: &str = "method_not_allowed";
 /// 读取失败的错误码。
 const READ_FAILED: &str = "read_failed";
+/// 移除失败的错误码。
+const REMOVE_FAILED: &str = "remove_failed";
+/// 技能目录不存在（含已经移除）的错误码。
+const SKILL_NOT_FOUND: &str = "skill_not_found";
+/// 技能标识不合法的错误码。
+const INVALID_SKILL_ID: &str = "invalid_skill_id";
 
 /// 一项技能的界面视图；字段名与桌面端 `SkillDto` 逐字一致。
 #[derive(Debug, Serialize)]
@@ -60,9 +72,52 @@ impl SkillsHttpAdapter {
     fn list(&self) -> GatewayHttpResponse {
         match self.collect() {
             Ok(skills) => GatewayHttpResponse::json(200, &json!({ "skills": skills })),
-            Err(message) => {
-                GatewayHttpResponse::json(500, &json!({ "error": READ_FAILED, "message": message }))
-            }
+            Err(message) => error(500, READ_FAILED, &message),
+        }
+    }
+
+    /// `DELETE /api/v1/skills/{id}`：删除一个技能目录。
+    ///
+    /// 三道闸门缺一不可：标识必须是单层普通文件名，目标必须是真实目录（软链接不算），
+    /// 规范化后的父目录必须是技能根本身。删除用的是规范化之后的路径，因此判定与删除
+    /// 指向同一个对象，标识里的 `..` 一类写法无法把范围带出 `skills/`。
+    fn remove(&self, id: &str) -> GatewayHttpResponse {
+        if !is_safe_skill_id(id) {
+            return error(
+                400,
+                INVALID_SKILL_ID,
+                "技能标识不合法：只接受技能根下的单层目录名",
+            );
+        }
+        let root = self.axon_root.join(SKILLS_DIR);
+        let directory = root.join(id);
+        let Ok(metadata) = std::fs::symlink_metadata(&directory) else {
+            return error(404, SKILL_NOT_FOUND, "技能不存在或已被移除");
+        };
+        // 软链接与 junction 都指向别处：删它等于删别处的数据，不代劳。
+        if metadata.file_type().is_symlink() {
+            return error(
+                400,
+                INVALID_SKILL_ID,
+                "该技能是软链接，界面不代为删除，请在技能目录里手工处理",
+            );
+        }
+        if !metadata.is_dir() {
+            return error(404, SKILL_NOT_FOUND, "技能不存在或已被移除");
+        }
+        // 技能根自身也可能是软链接，只有两侧同时规范化，父目录才对得上。
+        let (Ok(real_root), Ok(real_directory)) = (
+            std::fs::canonicalize(&root),
+            std::fs::canonicalize(&directory),
+        ) else {
+            return error(404, SKILL_NOT_FOUND, "技能不存在或已被移除");
+        };
+        if real_directory.parent() != Some(real_root.as_path()) {
+            return error(400, INVALID_SKILL_ID, "技能标识不合法：目标不在技能目录内");
+        }
+        match std::fs::remove_dir_all(&real_directory) {
+            Ok(()) => GatewayHttpResponse::json(200, &json!({ "removed": id })),
+            Err(cause) => error(500, REMOVE_FAILED, &format!("删除技能目录失败：{cause}")),
         }
     }
 
@@ -118,16 +173,79 @@ impl GatewayHttpRouteHandler for SkillsHttpAdapter {
         _query: Option<&str>,
         _body: &[u8],
     ) -> Option<GatewayHttpResponse> {
-        // 精确匹配：未命中一律交回组合器，不得返回统一 404 截断后续适配器。
-        if path != SKILLS_PATH {
+        // 精确匹配：只认「技能集合」与「集合下的单个技能」两条路径。未命中一律交回
+        // 组合器，不得返回统一 404 截断后续适配器。
+        let id = skill_id(path);
+        if path != SKILLS_PATH && id.is_none() {
             return None;
         }
-        Some(if method == "GET" {
-            self.list()
-        } else {
-            GatewayHttpResponse::json(405, &json!({ "error": METHOD_NOT_ALLOWED }))
+        Some(match (id, method) {
+            (None, "GET") => self.list(),
+            (Some(id), "DELETE") => self.remove(&id),
+            _ => GatewayHttpResponse::json(405, &json!({ "error": METHOD_NOT_ALLOWED })),
         })
     }
+}
+
+/// 从请求路径里取出技能标识；不属于移除路由时为 None。
+///
+/// 与网关的每路由上限表同一口径：`{id}` 只匹配一段非空路径，因此 `/api/v1/skills/`
+/// 与 `/api/v1/skills/a/b` 都不属于本族。
+fn skill_id(path: &str) -> Option<String> {
+    let encoded = path.strip_prefix(SKILLS_ID_PREFIX)?;
+    if encoded.is_empty() || encoded.contains('/') {
+        return None;
+    }
+    let decoded = percent_decode(encoded);
+    (!decoded.is_empty()).then_some(decoded)
+}
+
+/// 技能标识的合法形态：技能根下的单层普通目录名。
+///
+/// 拒绝路径分隔符（含 Windows 的反斜杠）、点开头的运行态目录（`.`、`..` 与
+/// `.revisions` 一类都由这一条挡掉），以及首尾空白：Windows 会把尾随的点与空格
+/// 规范化掉，带着它们通过校验的标识与磁盘上的名字并不是同一个。
+fn is_safe_skill_id(id: &str) -> bool {
+    !id.is_empty() && id == id.trim() && !id.starts_with('.') && !id.contains(['/', '\\', '\0'])
+}
+
+/// 最小百分号解码：`%XX` 还原为字节，非法序列原样保留。
+///
+/// 只服务路由里的技能标识：目录名可能带空格与中文，客户端按 URL 规则编码后送来，
+/// 这里解回磁盘上的原名再比对。网关不提供解码器，各适配器自带一份同名口径。
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let (Some(high), Some(low)) =
+                (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
+        {
+            decoded.push(high * 16 + low);
+            index += 3;
+            continue;
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+/// 单个十六进制字符的取值。
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// 统一错误回执：错误码加一句可执行的中文原因。
+fn error(status: u16, code: &str, message: &str) -> GatewayHttpResponse {
+    GatewayHttpResponse::json(status, &json!({ "error": code, "message": message }))
 }
 
 /// 从 `SKILL.md` 的 YAML 前置块里取一个字段。

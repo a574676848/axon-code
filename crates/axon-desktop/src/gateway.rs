@@ -335,6 +335,34 @@ pub fn post_json_at(path: &str, payload: &serde_json::Value) -> Result<serde_jso
     serde_json::from_str(&body).map_err(|_| "网关响应不是合法 JSON".to_string())
 }
 
+/// DELETE 一个绝对路径接口，要求 2xx 并把响应解析为 JSON。
+///
+/// 与 [`post_json_at`] 同一套路径与错误口径：路径自带 `/api/v1` 前缀，因此走
+/// 不补前缀的那条组装；DELETE 不带请求体，网关对这类路由也不声明正文。
+pub(crate) fn delete_json_at(path: &str) -> Result<serde_json::Value, String> {
+    let url = endpoint_at(path)?;
+    let mut request = agent().delete(&url).header("accept", "application/json");
+    if let Some(token) = api_token() {
+        request = request.header("authorization", &format!("Bearer {token}"));
+    }
+    let (status, body) = match request.call() {
+        Ok(response) => {
+            let status = response.status().as_u16();
+            let body = response
+                .into_body()
+                .read_to_string()
+                .map_err(|error| format!("读取网关响应失败：{error}"))?;
+            (status, body)
+        }
+        Err(ureq::Error::StatusCode(status)) => (status, String::new()),
+        Err(error) => return Err(format!("网关不可达或拒绝请求：{error}")),
+    };
+    if !(200..300).contains(&status) {
+        return Err(gateway_status_message(status, &body));
+    }
+    serde_json::from_str(&body).map_err(|_| "网关响应不是合法 JSON".to_string())
+}
+
 /// 把非 2xx 响应翻译成可执行的中文说明。
 ///
 /// 401 是凭据问题、404 是服务端不含该接口（版本过旧），二者修复动作完全不同，

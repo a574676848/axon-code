@@ -272,6 +272,10 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
         "skills_list" => {
             Ok(serde_json::to_value(crate::documents::skills_list()?).map_err(stringify)?)
         }
+        "skills_remove" => {
+            crate::documents::skills_remove(as_str("id")?)?;
+            Ok(Value::Null)
+        }
         "document_read" => Ok(serde_json::to_value(crate::documents::document_read(as_str(
             "id",
         )?)?)

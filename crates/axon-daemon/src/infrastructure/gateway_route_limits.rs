@@ -60,6 +60,7 @@ const ROUTE_LIMITS: &[RouteLimit] = &[
     route("GET", "/api/v1/mcp/config", NO_BODY_LIMIT),
     route("PUT", "/api/v1/mcp/config", CONFIG_BODY_LIMIT),
     route("GET", "/api/v1/skills", NO_BODY_LIMIT),
+    route("DELETE", "/api/v1/skills/{id}", NO_BODY_LIMIT),
     route("GET", "/api/v1/files", NO_BODY_LIMIT),
     route("GET", "/api/v1/files/content", NO_BODY_LIMIT),
     route("GET", "/api/v1/fs/dirs", NO_BODY_LIMIT),

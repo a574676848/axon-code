@@ -20,6 +20,9 @@ fn declared_routes_report_their_own_limits() {
     assert_eq!(body_limit("POST", "/api/v1/keys"), 4 * 1024);
     assert_eq!(body_limit("GET", "/api/v1/keys"), 0);
     assert_eq!(body_limit("DELETE", "/api/v1/keys/abc123"), 0);
+    // 技能移除：标识走路径段，请求体不承载任何内容，因此同样不声明正文。
+    assert_eq!(body_limit("DELETE", "/api/v1/skills/alpha-skill"), 0);
+    assert_eq!(body_limit("GET", "/api/v1/skills"), 0);
 }
 
 #[test]
@@ -89,6 +92,17 @@ fn single_parameter_segment_matches_exactly_one_segment() {
         body_limit("DELETE", "/api/v1/keys/"),
         FALLBACK_BODY_LIMIT,
         "参数段不可为空，尾随斜杠不命中吊销路由"
+    );
+    assert_eq!(body_limit("DELETE", "/api/v1/skills/alpha-skill"), 0);
+    assert_eq!(
+        body_limit("DELETE", "/api/v1/skills/alpha-skill/extra"),
+        FALLBACK_BODY_LIMIT,
+        "技能标识同样只占一段路径"
+    );
+    assert_eq!(
+        body_limit("DELETE", "/api/v1/skills/"),
+        FALLBACK_BODY_LIMIT,
+        "尾随斜杠不命中技能移除路由"
     );
 }
 

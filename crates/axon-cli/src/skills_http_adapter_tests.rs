@@ -1,5 +1,5 @@
 //! 技能清单路由测试：清单形状、前置块两种写法、缺失 SKILL.md 的兜底、
-//! 正文不外泄、方法边界与未命中回落。
+//! 正文不外泄、移除的边界（越界标识、软链接、不存在）、方法边界与未命中回落。
 
 use axon_daemon::GatewayHttpRouteHandler;
 use serde_json::{Value, json};
@@ -125,15 +125,128 @@ fn list_projects_front_matter_and_falls_back_to_the_directory_name() {
 }
 
 #[test]
+fn removal_deletes_only_the_named_directory() {
+    let (directory, adapter) = fixture();
+    let root = directory.path();
+    write_skill(root, "alpha-skill", "---\nname: alpha\n---\n正文\n");
+    write_skill(root, "beta-skill", "---\nname: beta\n---\n正文\n");
+
+    let (status, payload) = call(&adapter, "DELETE", "/api/v1/skills/alpha-skill");
+    assert_eq!(status, 200, "{payload}");
+    assert_eq!(payload, json!({ "removed": "alpha-skill" }));
+    assert!(
+        !root.join("skills").join("alpha-skill").exists(),
+        "被移除的技能目录必须真的消失"
+    );
+    assert!(
+        root.join("skills").join("beta-skill").is_dir(),
+        "其它技能不得被波及"
+    );
+
+    let (status, payload) = call(&adapter, "GET", SKILLS_PATH);
+    assert_eq!(status, 200);
+    assert_eq!(
+        payload["skills"].as_array().map(Vec::len),
+        Some(1),
+        "清单必须立刻反映移除结果：{payload}"
+    );
+}
+
+#[test]
+fn removal_decodes_the_identifier_before_touching_disk() {
+    // 目录名带空格与中文时，客户端按 URL 规则编码后送来，服务端要解回原名再比对。
+    let (directory, adapter) = fixture();
+    let root = directory.path();
+    write_skill(root, "工作区 工具", "---\nname: 工作区工具\n---\n正文\n");
+
+    let (status, payload) = call(
+        &adapter,
+        "DELETE",
+        "/api/v1/skills/%E5%B7%A5%E4%BD%9C%E5%8C%BA%20%E5%B7%A5%E5%85%B7",
+    );
+    assert_eq!(status, 200, "{payload}");
+    assert_eq!(payload["removed"], "工作区 工具");
+    assert!(!root.join("skills").join("工作区 工具").exists());
+}
+
+#[test]
+fn removal_refuses_identifiers_that_escape_the_skill_root() {
+    let (directory, adapter) = fixture();
+    let root = directory.path();
+    write_skill(root, "alpha-skill", "---\nname: alpha\n---\n正文\n");
+    std::fs::create_dir_all(root.join("skills").join(".revisions")).expect("目录必须可创建");
+    // 写在技能根之外的文件：任何一次越界删除都会把它带走。
+    std::fs::write(root.join("keep.txt"), "不得删除").expect("文件必须可写");
+
+    for path in [
+        "/api/v1/skills/.",
+        "/api/v1/skills/..",
+        "/api/v1/skills/.revisions",
+        "/api/v1/skills/%2e%2e",
+        "/api/v1/skills/..%2Fkeep.txt",
+        "/api/v1/skills/alpha-skill%20",
+    ] {
+        let (status, payload) = call(&adapter, "DELETE", path);
+        assert_eq!(status, 400, "{path}：{payload}");
+        assert_eq!(payload["error"], "invalid_skill_id", "{path}");
+    }
+    assert!(
+        root.join("keep.txt").is_file(),
+        "技能根之外的文件不得被删除"
+    );
+    assert!(
+        root.join("skills").join(".revisions").is_dir(),
+        "点开头的运行态目录不得被删除"
+    );
+    assert!(
+        root.join("skills").join("alpha-skill").is_dir(),
+        "合法技能不得被误删"
+    );
+}
+
+#[test]
+fn removal_reports_missing_skills() {
+    let (_directory, adapter) = fixture();
+    let (status, payload) = call(&adapter, "DELETE", "/api/v1/skills/ghost");
+    assert_eq!(status, 404);
+    assert_eq!(payload["error"], "skill_not_found");
+}
+
+#[cfg(unix)]
+#[test]
+fn removal_refuses_symlinked_skills() {
+    // 软链接指向别处：删链接本身看似无害，但顺着删就会删到技能根之外。
+    use std::os::unix::fs::symlink;
+
+    let (directory, adapter) = fixture();
+    let root = directory.path();
+    write_skill(root, "real-skill", "---\nname: real\n---\n正文\n");
+    symlink(
+        root.join("skills").join("real-skill"),
+        root.join("skills").join("link-skill"),
+    )
+    .expect("软链接必须可创建");
+
+    let (status, payload) = call(&adapter, "DELETE", "/api/v1/skills/link-skill");
+    assert_eq!(status, 400, "{payload}");
+    assert_eq!(payload["error"], "invalid_skill_id");
+    assert!(
+        root.join("skills").join("real-skill").is_dir(),
+        "软链接背后的真实技能不得被删除"
+    );
+}
+
+#[test]
 fn unmatched_paths_are_not_swallowed() {
     let (_directory, adapter) = fixture();
     for path in [
         "/api/v1/skill",
-        "/api/v1/skills/alpha-skill",
+        "/api/v1/skills/",
+        "/api/v1/skills/alpha-skill/extra",
         "/api/v1/config",
     ] {
         assert!(
-            adapter.handle_request("GET", path, None, &[]).is_none(),
+            adapter.handle_request("DELETE", path, None, &[]).is_none(),
             "{path} 不属于技能族，必须交回组合器"
         );
     }
@@ -142,9 +255,15 @@ fn unmatched_paths_are_not_swallowed() {
 #[test]
 fn method_mismatch_returns_405_method_not_allowed() {
     let (_directory, adapter) = fixture();
-    for method in ["POST", "PUT", "DELETE"] {
-        let (status, payload) = call(&adapter, method, SKILLS_PATH);
-        assert_eq!(status, 405, "{method}");
+    for (method, path) in [
+        ("POST", SKILLS_PATH),
+        ("PUT", SKILLS_PATH),
+        ("DELETE", SKILLS_PATH),
+        ("GET", "/api/v1/skills/alpha-skill"),
+        ("POST", "/api/v1/skills/alpha-skill"),
+    ] {
+        let (status, payload) = call(&adapter, method, path);
+        assert_eq!(status, 405, "{method} {path}");
         assert_eq!(payload, json!({ "error": "method_not_allowed" }));
     }
 }

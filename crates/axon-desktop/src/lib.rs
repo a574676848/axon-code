@@ -109,7 +109,7 @@ use desktop_preferences::{desktop_preferences, desktop_set_notifications, deskto
 use discovery::discover_models;
 use documents::{
     document_catalog, document_read, document_write, mcp_list, mcp_remove, mcp_upsert,
-    mcp_upsert_raw, open_document, skills_list,
+    mcp_upsert_raw, open_document, skills_list, skills_remove,
 };
 use export::export_markdown;
 use goals::{goal_get, goal_list};
@@ -292,6 +292,7 @@ pub fn run() {
             mcp_runtime_status,
             mcp_runtime_refresh,
             skills_list,
+            skills_remove,
             document_read,
             document_write,
             persona_summary,
