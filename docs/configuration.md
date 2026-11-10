@@ -48,6 +48,8 @@ Axon 使用以下用户级目录布局：
 | `agent.idle_compaction_debounce_ms` | 无符号整数 | `>= 1`，单位毫秒 | `2000` |
 | `agent.log_level` | 字符串 | `trace`、`debug`、`info`、`warn`、`error` | `"warn"` |
 
+`agent.default_model` 是**没有更高优先级来源时**的兜底模型：显式 `--model` 永远优先；接续既有会话（`--continue`、`--session` 或同一会话的后续 turn）且未指定 `--model` 时，优先沿用该会话记录的模型，只有当该模型已从 `[[models]]` 移除、或所属 Provider 已停用导致会话模型在配置内不再可用时，才回退 `agent.default_model`。会话记录的模型按「同 Provider + 同 upstream `id`」匹配；Provider 改名或迁移后按 upstream `id` 兜底匹配。
+
 `[tui]` 当前为空配置段；视觉 MIME 与本地确认开关属于内部固定策略，不接受用户配置。
 
 ### Provider 目录

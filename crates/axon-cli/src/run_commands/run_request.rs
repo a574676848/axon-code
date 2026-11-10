@@ -244,30 +244,40 @@ fn resumed_command(
         return Ok(command.clone());
     };
     let mut effective = command.clone();
-    if effective.model.is_none() {
-        let current_default_is_available = config
-            .models
-            .iter()
-            .filter(|model| config.model_is_enabled(model))
-            .any(|model| model.name == config.agent.default_model)
-            || config
-                .models
-                .iter()
-                .filter(|model| config.model_is_enabled(model))
-                .any(|model| model.id == config.agent.default_model);
-        if !current_default_is_available {
-            let record = &previous.record;
-            if let Some(model) = config
-                .models
-                .iter()
-                .filter(|model| config.model_is_enabled(model))
-                .find(|model| model.provider == record.provider && model.id == record.model)
-            {
-                effective.model = Some(model.name.clone());
-            }
-        }
+    // 显式 --model 永远最高优先；未指定时沿用会话记录的模型，
+    // 只有该模型已从配置移除才回退 agent.default_model。
+    if effective.model.is_none()
+        && let Some(model) = resumed_session_model(config, &previous.record)
+    {
+        effective.model = Some(model.name.clone());
     }
     Ok(effective)
+}
+
+/// 恢复历史会话时应当沿用的模型。
+///
+/// 先按「同 Provider + 同 upstream model.id」精确匹配；Provider 改名或迁移后
+/// 再用 upstream model.id 兜底，避免仅因渠道改名就换掉会话原本的模型。
+/// 返回 `None` 表示会话模型在配置内已不存在，调用方回退 `agent.default_model`。
+fn resumed_session_model<'a>(
+    config: &'a AxonConfig,
+    record: &run_session_store::RunSessionRecord,
+) -> Option<&'a ModelConfig> {
+    let mut provider_migrated = None;
+    for model in config
+        .models
+        .iter()
+        .filter(|model| config.model_is_enabled(model))
+    {
+        if model.id != record.model {
+            continue;
+        }
+        if model.provider == record.provider {
+            return Some(model);
+        }
+        provider_migrated.get_or_insert(model);
+    }
+    provider_migrated
 }
 
 #[cfg(test)]

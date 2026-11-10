@@ -10,17 +10,7 @@ use super::*;
 fn resume_missing_historical_model_uses_current_config_default() {
     let config = current_config();
     let previous = historical_session();
-    let command = RunCommand {
-        prompt: "继续处理".to_owned(),
-        model: None,
-        reasoning_effort: None,
-        format: Some(OutputFormat::Json),
-        continue_last: true,
-        session: Some(previous.record.session_id.clone()),
-        file: Vec::new(),
-        timeout: None,
-        tool: Vec::new(),
-    };
+    let command = resume_command(None);
 
     let effective = resumed_command(&command, Some(&previous), &config).unwrap();
     assert_eq!(effective.model, None);
@@ -31,7 +21,7 @@ fn resume_missing_historical_model_uses_current_config_default() {
 }
 
 #[test]
-fn resume_prefers_current_config_model_over_historical_model() {
+fn resume_keeps_historical_model_when_it_still_exists() {
     let mut config = current_config();
     config.providers.push(ProviderConfig::new(
         "historical-provider",
@@ -46,46 +36,74 @@ fn resume_prefers_current_config_model_over_historical_model() {
         ..ModelConfig::default()
     });
     let previous = historical_session_with_model("historical-provider", "historical-model-id");
-    let command = RunCommand {
-        prompt: "继续处理".to_owned(),
-        model: None,
-        reasoning_effort: None,
-        format: Some(OutputFormat::Json),
-        continue_last: true,
-        session: Some(previous.record.session_id.clone()),
-        file: Vec::new(),
-        timeout: None,
-        tool: Vec::new(),
-    };
+    let command = resume_command(None);
 
     let effective = resumed_command(&command, Some(&previous), &config).unwrap();
 
-    assert_eq!(effective.model, None);
+    assert_eq!(effective.model.as_deref(), Some("historical-model"));
+    let selected = select_run_model(&effective, &config).unwrap();
+    assert_eq!(selected.name, "historical-model");
+    assert_eq!(selected.provider, "historical-provider");
+}
+
+#[test]
+fn resume_keeps_historical_model_when_provider_was_renamed() {
+    let mut config = current_config();
+    config.models.push(ModelConfig {
+        name: "moved-model".to_owned(),
+        id: "historical-model-id".to_owned(),
+        provider: "current-provider".to_owned(),
+        context_window: 200_000,
+        ..ModelConfig::default()
+    });
+    let previous = historical_session_with_model("removed-provider", "historical-model-id");
+    let command = resume_command(None);
+
+    let effective = resumed_command(&command, Some(&previous), &config).unwrap();
+
+    assert_eq!(effective.model.as_deref(), Some("moved-model"));
     assert_eq!(
-        select_run_model(&effective, &config).unwrap().name,
-        "current-model"
+        select_run_model(&effective, &config).unwrap().provider,
+        "current-provider"
     );
 }
 
 #[test]
-fn resumed_run_uses_explicit_workspace_instead_of_recorded_workspace() {
-    let first = axon_test_support::test_temp_dir();
-    let second = axon_test_support::test_temp_dir();
+fn resume_explicit_model_overrides_historical_model() {
+    let mut config = current_config();
+    config.providers.push(ProviderConfig::new(
+        "historical-provider",
+        "openai-chatcompletions",
+        "https://historical.invalid/v1",
+    ));
+    config.models.push(ModelConfig {
+        name: "historical-model".to_owned(),
+        id: "historical-model-id".to_owned(),
+        provider: "historical-provider".to_owned(),
+        context_window: 128_000,
+        ..ModelConfig::default()
+    });
+    let previous = historical_session_with_model("historical-provider", "historical-model-id");
+    let mut command = resume_command(None);
+    command.model = Some("current-model".to_owned());
 
-    let resolved =
-        super::resolve_effective_run_cwd(Some(second.path()), Some(first.path())).unwrap();
+    let effective = resumed_command(&command, Some(&previous), &config).unwrap();
 
-    assert_eq!(resolved, second.path().canonicalize().unwrap());
+    assert_eq!(effective.model.as_deref(), Some("current-model"));
 }
 
-#[test]
-fn resumed_run_reuses_recorded_workspace_without_explicit_override() {
-    let workspace = axon_test_support::test_temp_dir();
-    let canonical = workspace.path().canonicalize().unwrap();
-
-    let resolved = super::resolve_effective_run_cwd(None, Some(&canonical)).unwrap();
-
-    assert_eq!(resolved, canonical);
+fn resume_command(model: Option<&str>) -> RunCommand {
+    RunCommand {
+        prompt: "继续处理".to_owned(),
+        model: model.map(ToOwned::to_owned),
+        reasoning_effort: None,
+        format: Some(OutputFormat::Json),
+        continue_last: true,
+        session: Some("historical-session".to_owned()),
+        file: Vec::new(),
+        timeout: None,
+        tool: Vec::new(),
+    }
 }
 
 fn current_config() -> AxonConfig {
