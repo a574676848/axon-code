@@ -370,8 +370,6 @@ export interface SessionRunFacets {
   provider: string;
   /** 本轮 upstream 模型 ID；展示名由配置目录映射。 */
   model: string;
-  /** 本轮实际请求的思考强度；后端未给出时为空。 */
-  reasoningEffort: string | null;
 }
 
 /** 一条已结算提问的权威结论。 */

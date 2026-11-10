@@ -66,7 +66,6 @@ test('真实运行面按同 provider 同 id 精确映射展示名', () => {
         modelLabelFor(catalog, {
             provider: 'sm-wenwen-chat',
             model: 'deepseek-v4.1-flash-1017',
-            reasoningEffort: 'high',
         }),
         'deepseek-v4.1-flash',
     );
@@ -78,7 +77,6 @@ test('provider 改名或迁移后按 upstream id 兜底映射', () => {
         modelLabelFor(catalog, {
             provider: 'removed-provider',
             model: 'deepseek-v4.1-flash-1017',
-            reasoningEffort: null,
         }),
         'deepseek-v4.1-flash',
     );
@@ -90,7 +88,6 @@ test('会话模型已从配置移除时不显示它，交给调用方回退配�
         modelLabelFor(catalog, {
             provider: 'removed-provider',
             model: 'removed-model-id',
-            reasoningEffort: null,
         }),
         null,
     );
