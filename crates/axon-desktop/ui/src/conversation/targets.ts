@@ -130,7 +130,13 @@ export interface ConversationController {
   /** 展开一条被折叠的 Interaction：按标识重新回放后把正文换回来。 */
   unfoldTurn: (interactionId: string) => void;
   /** 提交正文到当前目标；目标不具备车道能力时明确失败，不静默丢弃。 */
-  submit: (text: string, attachments?: AttachmentRef[], structuredInput?: string) => Promise<void>;
+  submit: (
+    text: string,
+    attachments?: AttachmentRef[],
+    structuredInput?: string,
+    /** 本会话显式选定的模型；空表示由会话历史与配置决定。 */
+    model?: string | null,
+  ) => Promise<void>;
   /**
    * 接管网关语音回合：把已经提交的这一轮接进对话流并订阅增量。
    *

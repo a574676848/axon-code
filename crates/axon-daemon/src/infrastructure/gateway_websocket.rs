@@ -491,6 +491,9 @@ struct WsEventRequest {
     /// 客户端已落地的本地附件绝对路径。
     #[serde(default)]
     local_files: Vec<String>,
+    /// 客户端显式指定的本轮模型；与 HTTP 信封同语义。
+    #[serde(default)]
+    model: Option<String>,
 }
 
 impl WsEventRequest {
@@ -507,6 +510,7 @@ impl WsEventRequest {
             reply_channel: self.reply_channel,
             reply_destination: self.reply_destination,
             attachments: self.local_files,
+            model: self.model,
         }
     }
 }

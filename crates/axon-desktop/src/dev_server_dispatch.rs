@@ -438,6 +438,7 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
                 .get("attachments")
                 .and_then(|value| serde_json::from_value::<Vec<String>>(value.clone()).ok())
                 .unwrap_or_default(),
+            args.get("model").and_then(Value::as_str),
         )?)
         .map_err(stringify)?),
         "conversation_answer_question" => {

@@ -44,6 +44,12 @@ pub struct EventSubmission {
     pub reply_destination: String,
     /// 已落地到磁盘的本地附件绝对路径。
     pub local_files: Vec<String>,
+    /// 发起方显式指定的本轮模型（已配置模型的 `name` 或 `id`）。
+    ///
+    /// 桌面工作台的模型选择器把它随消息下发：只有用户在本会话里改过模型时才填写，
+    /// 未填写时交给会话历史与 `agent.default_model` 决定。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 /// 提交回执。
@@ -208,12 +214,14 @@ mod tests {
             reply_channel: "desktop".to_owned(),
             reply_destination: "workbench-1".to_owned(),
             local_files: Vec::new(),
+            model: Some("balanced".to_owned()),
         })
         .expect("提交信封应可序列化");
         assert_eq!(value["sourceChannel"], "desktop");
         assert_eq!(value["workspaceId"], "workspace-a");
         assert_eq!(value["replyDestination"], "workbench-1");
         assert!(value["localFiles"].is_array(), "附件字段必须存在且为数组");
+        assert_eq!(value["model"], "balanced");
     }
 
     #[test]

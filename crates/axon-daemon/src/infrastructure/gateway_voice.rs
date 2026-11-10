@@ -514,6 +514,7 @@ fn voice_envelope(
         reply_channel: VOICE_CHANNEL.to_owned(),
         reply_destination: request.reply_destination.clone(),
         attachments: Vec::new(),
+        model: None,
     }
 }
 

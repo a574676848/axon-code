@@ -58,13 +58,15 @@ Authorization: Bearer <token>
   "content": "事件正文",
   "replyChannel": "jira",
   "replyDestination": "AX-1024",
-  "localFiles": []
+  "localFiles": [],
+  "model": ""
 }
 ```
 
 - `sourceChannel`、`eventId`、`observedAtMs`、`expiresAtMs`、`content`、`replyChannel`、`replyDestination` 必填；时间戳为毫秒。
 - `workspaceId` 省略或仅空白时由服务端解析默认 Workspace；显式给出时必须已注册，否则整条事件被拒。
 - `localFiles` 为本地附件的绝对路径数组，可省略。
+- `model` 可省略；给出时表示这一轮显式使用该模型（引用已配置模型的 `name` 或 `id`）。它优先于会话记录的模型与 `agent.default_model`，空白值按未指定处理。桌面工作台在输入坞改过模型时才填它。
 - `sourceChannel` 为 `desktop` 时提交方同时给出显式 `workspaceId`。
 
 ### provider 路由的前置条件

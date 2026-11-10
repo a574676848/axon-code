@@ -21,6 +21,8 @@ pub const MAX_EXTERNAL_EVENT_ATTACHMENTS: usize = 8;
 pub const MAX_EXTERNAL_EVENT_TITLE_LENGTH: usize = 512;
 /// 外部事件业务关联键的最大字符数。
 pub const MAX_EXTERNAL_EVENT_CORRELATION_KEY_LENGTH: usize = 256;
+/// 外部事件显式模型引用的最大字符数。
+pub const MAX_EXTERNAL_EVENT_MODEL_LENGTH: usize = 256;
 const EXTERNAL_EVENT_SOURCE_PREFIX: &str = "external:";
 const EXTERNAL_EVENT_INTERACTION_PREFIX: &str = "external-interaction-";
 
@@ -51,6 +53,12 @@ pub struct ExternalEventEnvelope {
     ///
     /// 图片成为 vision 输入，文件成为可读附件；空表示纯文本事件。
     pub attachments: Vec<String>,
+    /// 发起方为本轮显式指定的模型（已配置模型的 `name` 或 `id`）。
+    ///
+    /// 只有自带模型选择界面的客户端（例如桌面工作台）才会填写：它表达「这一轮就用
+    /// 这个模型」，优先于会话记录的模型与 `agent.default_model`。`None` 表示没有显式
+    /// 选择，模型完全由会话历史与配置决定。
+    pub model: Option<String>,
 }
 
 /// 外部事件 ingress 错误。
@@ -234,6 +242,14 @@ where
             )?;
         }
         validate_attachments(&event.attachments)?;
+        if let Some(model) = event.model.as_deref() {
+            if model.trim().is_empty() {
+                return Err(ExternalEventIngressError::InvalidInput(
+                    "model 不能为空".to_owned(),
+                ));
+            }
+            bounded_field(model.trim(), "model", MAX_EXTERNAL_EVENT_MODEL_LENGTH)?;
+        }
         non_empty(event.reply_channel.clone(), "reply_channel")?;
         non_empty(event.reply_destination.clone(), "reply_destination")?;
         if event.reply_channel != event.source_channel {
@@ -285,6 +301,13 @@ where
         .map_err(|error| ExternalEventIngressError::InvalidInput(error.to_string()))?;
         // 附件只描述输入素材，原样带到 Provider turn 的 transportContext.files。
         record.attachments = event.attachments.clone();
+        // 显式模型只跟随本轮 turn：它不落 Workspace 或 lane 身份。
+        record.model = event
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+            .map(ToOwned::to_owned);
         Ok(record)
     }
 }
@@ -356,6 +379,7 @@ mod tests {
             reply_channel: "github".to_owned(),
             reply_destination: "issue-42".to_owned(),
             attachments: Vec::new(),
+            model: None,
         }
     }
 
@@ -493,5 +517,44 @@ mod tests {
                 .expect("读取 Workspace B 事件")
                 .is_some()
         );
+    }
+
+    #[test]
+    fn explicit_model_is_carried_by_the_interaction_and_absent_model_stays_empty() {
+        let directory = axon_test_support::test_temp_dir();
+        let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+        let adapter = ingress(store.clone());
+
+        let mut explicit = event("workspace-a");
+        explicit.event_id = "push-model".to_owned();
+        explicit.model = Some("  balanced  ".to_owned());
+        let receipt = adapter.submit(explicit).expect("提交带显式模型的事件");
+        let stored = store
+            .get_interaction(&receipt.interaction_id)
+            .expect("读取 Interaction")
+            .expect("Interaction 必须已持久化");
+        assert_eq!(stored.model.as_deref(), Some("balanced"));
+
+        // 没有显式模型的事件必须保持 None：模型由会话历史与配置决定。
+        let plain = adapter.submit(event("workspace-a")).expect("提交普通事件");
+        let plain_stored = store
+            .get_interaction(&plain.interaction_id)
+            .expect("读取 Interaction")
+            .expect("Interaction 必须已持久化");
+        assert_eq!(plain_stored.model, None);
+    }
+
+    #[test]
+    fn blank_model_is_rejected_before_durable_append() {
+        let directory = axon_test_support::test_temp_dir();
+        let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+        let adapter = ingress(store.clone());
+        let mut blank = event("workspace-a");
+        blank.model = Some("   ".to_owned());
+
+        assert!(matches!(
+            adapter.submit(blank),
+            Err(ExternalEventIngressError::InvalidInput(message)) if message.contains("model")
+        ));
     }
 }

@@ -42,6 +42,7 @@ import { ConversationWidthControls } from './ConversationWidthControls';
 import { useConversationWidth } from './useConversationWidth';
 import { useExpiringNotice } from './composerNotice';
 import { useSettledValue } from './conversationViewUtils';
+import { useExplicitModel } from './useExplicitModel';
 import { useInterruptOnEscape, useRailShortcuts } from './useConversationShortcuts';
 
 /*
@@ -93,6 +94,13 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   const laneKey = selection === null ? null : `${selection.workspaceId}:${selection.laneId}`;
   const voiceAutoRead = useLaneAutoRead(laneKey);
   useStopSpeechOnLaneChange(laneKey);
+  /*
+   * 用户在本会话里显式改过的模型：只有真在输入坞选过才随轮下发，换会话即作废。
+   * 没选过时留空，让后端按会话记录的模型继续，而不是让全局默认值覆盖它。
+   */
+  const { explicitModelRef, onModelChange } = useExplicitModel(laneKey, (value) =>
+    void applyConfig({ [KEY_DEFAULT_MODEL]: value }),
+  );
   // 一轮收口时朗读这一轮的回复：流式与收口补齐两种落地方式都覆盖。
   useAutoReadReply(laneKey, conversation.working, conversation.state.turns, voiceAutoRead);
   const [config, setConfig] = React.useState<ResolvedConfig | null>(null);
@@ -320,7 +328,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   const actions = useConversationActionsValue(
     {
       submit: (text, attachments, structuredInput) => {
-        void conversationRef.current.submit(text, [...attachments], structuredInput);
+        void conversationRef.current.submit(text, [...attachments], structuredInput, explicitModelRef.current);
       },
       unfoldTurn: (interactionId) => conversationRef.current.unfoldTurn(interactionId),
       openResource: (address, params) => railRef.current.openResource(address, params),
@@ -631,7 +639,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 configBusy={savingConfig}
                 configLocked={selection?.channel === 'cron' || cronJobId !== null}
                 reasoningEffort={fixedReasoningEffort ?? config?.reasoningEffort ?? null}
-                onModelChange={(value) => void applyConfig({ [KEY_DEFAULT_MODEL]: value })}
+                onModelChange={onModelChange}
                 onReasoningEffortChange={(value) =>
                   void applyConfig({ [KEY_REASONING_EFFORT]: value })
                 }
@@ -643,7 +651,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                       }
                     : (text, attachments, structuredInput) => {
                         setFollowToken((value) => value + 1);
-                        void conversation.submit(text, attachments, structuredInput);
+                        void conversation.submit(text, attachments, structuredInput, explicitModelRef.current);
                       }
                 }
                 onRunCommand={mcp.run}

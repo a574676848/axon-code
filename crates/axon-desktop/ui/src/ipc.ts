@@ -284,8 +284,10 @@ export const conversationSubmit = (
   destination: string,
   content: string,
   attachments: string[] = [],
+  // 用户在本会话里显式选定的模型；未选择时交给会话历史与配置决定。
+  model: string | null = null,
 ): Promise<SubmissionReceipt> =>
-  call('conversation_submit', { workspaceId, destination, content, attachments });
+  call('conversation_submit', { workspaceId, destination, content, attachments, model });
 
 /** 提交待决提问的答案。 */
 export const conversationAnswerQuestion = (

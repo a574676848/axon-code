@@ -453,7 +453,12 @@ export function useConversation(target: ConversationTarget | null): Conversation
   );
 
   const submit = useCallback(
-    async (text: string, attachments: AttachmentRef[] = [], structuredInput = '') => {
+    async (
+      text: string,
+      attachments: AttachmentRef[] = [],
+      structuredInput = '',
+      model: string | null = null,
+    ) => {
       // 会话目标不支持在这里发送：如实失败，不静默丢弃。
       if (!laneCapability.available) {
         const message = '该会话不支持在这里发送消息';
@@ -489,6 +494,7 @@ export function useConversation(target: ConversationTarget | null): Conversation
           // 结构化输入只进入发出去的正文：正文气泡仍显示用户自己敲的那一段。
           structuredInput.length > 0 ? `${visibleText}${structuredInput}` : visibleText,
           attachments.map((attachment) => attachment.path),
+          model,
         );
         if (!streaming) {
           dispatch({ type: 'bind', turnId: localTurnId, interactionId: receipt.interactionId });

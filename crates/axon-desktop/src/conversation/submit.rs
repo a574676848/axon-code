@@ -21,11 +21,15 @@ const EVENT_TTL_MS: u64 = 10 * 60 * 1_000;
 /// 正确的项目下，而不是 daemon 自己的默认工作区。
 /// `attachments` 是已经落地到磁盘的附件绝对路径，后端把它们投影为 Provider turn
 /// 的输入素材；空数组表示纯文本消息。
+/// `model` 是用户在本会话里显式选定的模型（`agent.default_model` 的 `name` 或 `id`）。
+/// 只有用户在输入坞改过模型时才给出：它随本轮下发，优先于会话记录的模型；
+/// 未给出时模型完全由会话历史与配置决定。
 pub fn submit_message(
     workspace_id: &str,
     destination: &str,
     content: &str,
     attachments: &[String],
+    model: Option<&str>,
 ) -> Result<SubmissionReceipt, String> {
     let content = content.trim();
     if content.is_empty() && attachments.is_empty() {
@@ -60,6 +64,10 @@ pub fn submit_message(
         reply_channel: DESKTOP_LANE_CHANNEL.to_string(),
         reply_destination: destination.to_string(),
         local_files: attachments.to_vec(),
+        model: model
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
     };
     let payload =
         serde_json::to_value(&envelope).map_err(|error| format!("构造提交载荷失败：{error}"))?;
@@ -74,26 +82,26 @@ mod tests {
 
     #[test]
     fn empty_content_is_rejected_before_any_request() {
-        assert!(submit_message("workspace-a", "workbench-1", "   ", &[]).is_err());
+        assert!(submit_message("workspace-a", "workbench-1", "   ", &[], None).is_err());
     }
 
     #[test]
     fn missing_workspace_or_destination_is_rejected_before_any_request() {
-        assert!(submit_message("", "workbench-1", "你好", &[]).is_err());
-        assert!(submit_message("workspace-a", "  ", "你好", &[]).is_err());
+        assert!(submit_message("", "workbench-1", "你好", &[], None).is_err());
+        assert!(submit_message("workspace-a", "  ", "你好", &[], None).is_err());
     }
 
     #[test]
     fn oversized_content_is_rejected_with_a_readable_reason() {
         let content = "好".repeat(MAX_CONTENT_CHARS + 1);
-        let error =
-            submit_message("workspace-a", "workbench-1", &content, &[]).expect_err("必须拒绝");
+        let error = submit_message("workspace-a", "workbench-1", &content, &[], None)
+            .expect_err("必须拒绝");
         assert!(error.contains("字符"), "错误必须指明是长度问题：{error}");
     }
 
     #[test]
     fn attachments_make_an_empty_caption_acceptable() {
         // 只发一张图不带文字是合法输入；空文本且无附件才应被拒绝。
-        assert!(submit_message("", "workbench-1", "", &["a.png".to_string()]).is_err());
+        assert!(submit_message("", "workbench-1", "", &["a.png".to_string()], None).is_err());
     }
 }

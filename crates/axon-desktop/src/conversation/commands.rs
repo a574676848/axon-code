@@ -28,12 +28,14 @@ pub fn conversation_submit(
     destination: String,
     content: String,
     attachments: Option<Vec<String>>,
+    model: Option<String>,
 ) -> Result<SubmissionReceipt, String> {
     submit::submit_message(
         &workspace_id,
         &destination,
         &content,
         attachments.as_deref().unwrap_or_default(),
+        model.as_deref(),
     )
 }
 

@@ -119,6 +119,7 @@ impl Fixture {
             reply_channel: "jira".to_owned(),
             reply_destination: "jira:AXON-1".to_owned(),
             attachments: Vec::new(),
+            model: None,
         }
     }
 }

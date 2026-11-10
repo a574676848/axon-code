@@ -136,6 +136,7 @@ fn provider_envelope(
         reply_channel: provider.to_owned(),
         reply_destination: correlation_key,
         attachments: Vec::new(),
+        model: None,
     }
 }
 
@@ -172,6 +173,9 @@ struct HttpEventRequest {
     /// 本次提交携带的本地附件绝对路径。
     #[serde(default)]
     local_files: Vec<String>,
+    /// 发起方显式指定的本轮模型（已配置模型的 `name` 或 `id`）。
+    #[serde(default)]
+    model: Option<String>,
 }
 
 impl HttpEventRequest {
@@ -188,6 +192,7 @@ impl HttpEventRequest {
             reply_channel: self.reply_channel,
             reply_destination: self.reply_destination,
             attachments: self.local_files,
+            model: self.model,
         })
     }
 }
@@ -252,6 +257,19 @@ mod tests {
                 .expect("事件映射")
                 .workspace_id
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn event_wire_carries_the_explicit_model() {
+        let request = serde_json::from_str::<HttpEventRequest>(
+            r#"{"sourceChannel":"desktop","eventId":"event-1","observedAtMs":100,"expiresAtMs":200,"content":"hello","replyChannel":"desktop","replyDestination":"client-1","model":"balanced"}"#,
+        )
+        .expect("显式模型应可解析");
+
+        assert_eq!(
+            request.into_event().expect("事件映射").model.as_deref(),
+            Some("balanced")
         );
     }
 
