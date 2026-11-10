@@ -9,6 +9,7 @@ import { conversationReducer } from '../src/conversation/transcript/reducer.ts';
 import { applyUserMessage } from '../src/conversation/transcript/cells.ts';
 import { INITIAL_CONVERSATION } from '../src/conversation/transcript/state.ts';
 import { mergeCarriedPrompts, pendingSteerCount, requeueableSteers } from '../src/conversation/transcript/derive.ts';
+import { orderTurnCells } from '../src/conversation/transcript/order.ts';
 import { emptyTurn, refreshLiveElapsed, settleTurn } from '../src/conversation/transcript/turns.ts';
 import { expandStreamPayload } from '../src/conversation/wire.ts';
 
@@ -190,6 +191,60 @@ test('运行中继续发送进入排队，durable 事件到达才算落地', () 
     state = applyUserMessage(state, 0, 'user-part-1', '顺便看一下日志', 6);
     assert.equal(pendingSteerCount(state.turns), 0);
     assert.deepEqual(state.turns[0].cells.map(({ id }) => id), ['user-part-1']);
+});
+
+test('运行中追加的消息被接住之后留在原位，回答排在气泡下面', () => {
+    // 一轮已经产出过程，用户在此期间追加了一条只有图片的消息，服务端随后认领并作答。
+    const shot = { path: 'C:\\tmp\\shot.png', name: 'shot.png', image: true, bytes: 1024 };
+    const opened = { id: 'user:1', role: 'user', text: '先看这一段', atMs: 1, attachments: [] };
+    const worked = { id: 'reasoning:1', role: 'reasoning', text: '先读代码', done: true, durationMs: 900, startedAtMs: 2 };
+    const picked = { id: 'user:2', role: 'user', text: '', atMs: 3, attachments: [shot], steer: true, steerSeq: 1 };
+    const answered = { id: 'answer:1', role: 'assistant', text: '这张图是深色主题', streaming: false, atMs: 4 };
+
+    assert.deepEqual(
+        orderTurnCells([opened, worked, picked, answered]).map(({ id }) => id),
+        ['user:1', 'reasoning:1', 'user:2', 'answer:1'],
+        '认领之后到达顺序就是真实顺序：回答必须在气泡下方',
+    );
+});
+
+test('还没被接住的追加消息仍然排在轮末，与中断结论一起读', () => {
+    const opened = { id: 'user:1', role: 'user', text: '先看这一段', atMs: 1, attachments: [] };
+    const worked = { id: 'tool:1', role: 'reasoning', text: '跑一下用例', done: true, durationMs: 900, startedAtMs: 2 };
+    const interrupted = { id: 'turn-interrupted:t', role: 'notice', title: '已中断', summary: '本轮已由用户中断。', tone: 'info' };
+    const summary = { id: 'turn-summary:t', role: 'summary', durationMs: 900, usage: null, firstTokenAvgMs: null, generationTpsX10: null };
+    // 仍在排队（本地标识还在）与已被认领但没有回答是两种情形，读法相同。
+    const queued = { id: 'local-steer:2-5', role: 'user', text: '再看看日志', atMs: 5, attachments: [], steer: true, steerSeq: 1 };
+    const claimed = { id: 'user:9', role: 'user', text: '这条没赶上', atMs: 6, attachments: [], steer: true, steerSeq: 2 };
+
+    assert.deepEqual(
+        orderTurnCells([opened, worked, queued, interrupted, summary]).map(({ id }) => id),
+        ['user:1', 'tool:1', 'turn-interrupted:t', 'turn-summary:t', 'local-steer:2-5'],
+    );
+    assert.deepEqual(
+        orderTurnCells([opened, worked, claimed, interrupted, summary]).map(({ id }) => id),
+        ['user:1', 'tool:1', 'turn-interrupted:t', 'turn-summary:t', 'user:9'],
+        '认领之后本轮没有继续产出，说明它还没被答复',
+    );
+});
+
+test('同一轮里多条待接手的追加消息按敲击先后排列', () => {
+    const opened = { id: 'user:1', role: 'user', text: '', atMs: 1, attachments: [] };
+    const later = { id: 'user:3', role: 'user', text: '第二句', atMs: 3, attachments: [], steer: true, steerSeq: 2 };
+    const earlier = { id: 'user:2', role: 'user', text: '第一句', atMs: 2, attachments: [], steer: true, steerSeq: 1 };
+
+    assert.deepEqual(
+        orderTurnCells([opened, later, earlier]).map(({ id }) => id),
+        ['user:1', 'user:2', 'user:3'],
+    );
+});
+
+test('没有追加消息的轮次原样返回同一个数组', () => {
+    const cells = [
+        { id: 'user:1', role: 'user', text: '看下这个', atMs: 1, attachments: [] },
+        { id: 'answer:1', role: 'assistant', text: '好的', streaming: false, atMs: 2 },
+    ];
+    assert.equal(orderTurnCells(cells), cells, '纯历史轮次不换引用，轮次的 memo 边界才成立');
 });
 
 test('轮次收口把未认领的排队消息标为未送达，而不是让它消失', () => {
