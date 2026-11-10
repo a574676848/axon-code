@@ -1,12 +1,16 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { latencyText, switchProfile, useConnectionFact } from '../connectionState';
-import { ChevronDownIcon } from '../icons';
+import { ChevronDownIcon, PulseIcon } from '../icons';
 import { ROW_ICON_COLUMN, ROW_STATE } from './SidebarRows';
 import { Dropdown, MenuItem, MenuLabel, MenuSeparator } from './ui/overlays';
 import { StateDot, Text } from './ui/surfaces';
 
 /*
  * 侧栏连接胶囊（设计系统 §14.1.2）。
+ *
+ * 形态与顶部导航、设置行同一套侧栏行：24px 图标列放线性连接图形，健康点与延迟
+ * 读数收在行尾读数簇，不再自带描边与卡片底。底栏只有它与设置行两行，两行长得
+ * 不一样会被读成两种控件。
  *
  * 它是当前生效档案的唯一常驻入口，不是「有事才出现」的提示：尚未连接、甚至快照
  * 还没有取回来时同样显示，因为换个后端只有这一个入口。
@@ -84,7 +88,7 @@ export const ConnectionCapsule: React.FC<{ onManage: () => void }> = ({ onManage
         请手动重启应用」正是必须被看见的那一档。
       */}
       {notice !== null && (
-        <p role="status" className="px-3 text-meta leading-5 text-text-secondary">
+        <p role="status" className="text-meta leading-5 text-text-secondary">
           {notice}
         </p>
       )}
@@ -101,24 +105,31 @@ export const ConnectionCapsule: React.FC<{ onManage: () => void }> = ({ onManage
             aria-expanded={open}
             aria-label={`连接：${announcement}`}
             title={announcement}
-            className={`${ROW_STATE} w-full h-8 px-3 bg-surface hairline border-border-input text-left select-none cursor-pointer hover:bg-hover hover:border-border-strong active:bg-active focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus`}
+            className={`${ROW_STATE} w-full h-8 text-left select-none cursor-pointer hover:bg-hover active:bg-active focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus`}
           >
-            {/* 健康点参与侧栏栅格：24px 图标列承载状态点，8px 间隔后接文字列。 */}
-            <span className={ROW_ICON_COLUMN}>
-              <StateDot state={snapshot?.health.dot ?? 'idle'} />
+            {/*
+              图标列承载「连接」这一语义本身：图形与档位点分工，图形说明这一行是什么，
+              档位点说明它此刻好不好，两者不挤在同一格里。
+            */}
+            <span className={`${ROW_ICON_COLUMN} text-text-tertiary`}>
+              <PulseIcon size={14} />
             </span>
-            <Text size="row" truncate className="flex-1 min-w-0">
+            <Text size="body" truncate className="flex-1 min-w-0 leading-5">
               {label}
             </Text>
-            <Text size="micro" tone="tertiary" className="shrink-0 tabular-nums">
-              {readout}
-            </Text>
-            <ChevronDownIcon
-              size={12}
-              className={`shrink-0 text-text-tertiary transition-transform duration-150 ${
-                open ? 'rotate-180' : ''
-              }`}
-            />
+            {/* 行尾读数簇：档位点、读数与箭头同组右对齐，槽宽恒定，读数变化不带动档案名抖动。 */}
+            <span className="shrink-0 flex items-center gap-1.5">
+              <StateDot state={snapshot?.health.dot ?? 'idle'} />
+              <Text size="micro" tone="tertiary" className="tabular-nums">
+                {readout}
+              </Text>
+              <ChevronDownIcon
+                size={12}
+                className={`shrink-0 text-text-tertiary transition-transform duration-150 ${
+                  open ? 'rotate-180' : ''
+                }`}
+              />
+            </span>
           </button>
         )}
       >
