@@ -167,6 +167,11 @@ pub(super) fn interaction_transport_context(interaction: &InteractionRecord) -> 
                 .collect(),
         );
     }
+    // 入口显式选定的模型随本轮下传：Provider turn 把它当作本轮显式模型，
+    // 优先于会话记录的模型与配置默认值；没有显式选择时不写该键。
+    if let Some(model) = interaction.model.as_deref() {
+        context["model"] = serde_json::Value::String(model.to_owned());
+    }
     // 由投递项派生的主 turn 携带投递项 ID：渠道 egress 据此把正文留给持久收件箱
     // 投递，而不是直接出站，保证同一个投递项在所有渠道只投递一次；真实外部来源
     // 则保留 sourceMessageId 供渠道回帖。
@@ -221,7 +226,41 @@ pub(super) fn annotate_runtime_payload(
 
 #[cfg(test)]
 mod tests {
-    use super::{TurnGenerationMetrics, annotate_runtime_payload};
+    use super::{TurnGenerationMetrics, annotate_runtime_payload, interaction_transport_context};
+    use axon_domain::{
+        AudienceContext, AudienceKind, DisclosurePolicy, InteractionId, InteractionRecord,
+        InteractionSource, ReplyRoute, ScopeRef,
+    };
+
+    fn interaction(model: Option<&str>) -> InteractionRecord {
+        let mut record = InteractionRecord::new(
+            InteractionId::new("interaction-model").expect("合法 ID"),
+            InteractionSource::new("tui", "message-model").expect("合法来源"),
+            ScopeRef::workspace("workspace-a").expect("合法作用域"),
+            AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly),
+            ReplyRoute::new("tui", "terminal-test").expect("合法路由"),
+            "继续",
+            1,
+        )
+        .expect("Interaction 应创建");
+        record.model = model.map(ToOwned::to_owned);
+        record
+    }
+
+    #[test]
+    fn explicit_model_is_projected_into_transport_context() {
+        let context = interaction_transport_context(&interaction(Some("balanced")));
+
+        assert_eq!(context["model"], serde_json::json!("balanced"));
+        assert_eq!(context["channel"], serde_json::json!("tui"));
+    }
+
+    #[test]
+    fn absent_explicit_model_keeps_transport_context_shape() {
+        let context = interaction_transport_context(&interaction(None));
+
+        assert!(context.get("model").is_none());
+    }
 
     #[test]
     fn annotated_payload_carries_generation_in_the_observation_shape() {

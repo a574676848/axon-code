@@ -121,55 +121,38 @@ fn interaction_attachments_round_trip_through_every_read_path() {
 }
 
 #[test]
-fn schema_initialization_adds_attachments_column_to_existing_database() {
+fn interaction_explicit_model_round_trips_and_stays_empty_for_implicit_turns() {
     let directory = axon_test_support::test_temp_dir();
-    let path = directory.path().join("runtime.sqlite3");
-    // identity 从全新库读取，避免与生产常量重复字面量：identity 变更时本测试会随之更新。
-    let identity = {
-        let seed_dir = axon_test_support::test_temp_dir();
-        let seed_path = seed_dir.path().join("seed.sqlite3");
-        let seed = SqliteRuntimeStore::new(&seed_path);
-        seed.initialize().expect("初始化 seed 库");
-        let connection = rusqlite::Connection::open(&seed_path).expect("打开 seed 库");
-        connection
-            .query_row("SELECT identity FROM jarvis_schema_identity LIMIT 1", [], {
-                |row| row.get::<_, String>(0)
-            })
-            .expect("读取 identity")
-    };
-    // 构造变更前的既有库：identity 有效、jarvis_interactions 已存在但没有 attachments_json。
-    {
-        let connection = rusqlite::Connection::open(&path).expect("打开既有库");
-        connection
-            .execute_batch(&format!(
-                "CREATE TABLE jarvis_schema_identity (identity TEXT PRIMARY KEY NOT NULL);
-                 INSERT INTO jarvis_schema_identity(identity) VALUES('{identity}');
-                 CREATE TABLE jarvis_interactions (
-                    interaction_id TEXT PRIMARY KEY NOT NULL,
-                    source_channel TEXT NOT NULL,
-                    source_message_id TEXT NOT NULL,
-                    scope_json TEXT NOT NULL,
-                    audience_json TEXT NOT NULL,
-                    reply_route_json TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    received_at_ms INTEGER NOT NULL,
-                    lease_token TEXT,
-                    lease_expires_at_ms INTEGER,
-                    updated_at_ms INTEGER NOT NULL
-                 );"
-            ))
-            .expect("既有库 schema");
-    }
-    let store = SqliteRuntimeStore::new(path);
-    let mut interaction = interaction_record("interaction-migrated", "message-migrated", 10);
-    interaction.attachments = vec!["/var/axon/media/image/migrated.png".to_owned()];
-    assert!(store.append(&interaction).expect("迁移后可写入").inserted);
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+
+    // 渠道与系统入站没有显式模型：必须读回 None，不能凭空造出模型。
+    let implicit = interaction_record("interaction-implicit", "message-implicit", 10);
+    assert!(store.append(&implicit).expect("追加").inserted);
     let read = store
-        .get_interaction(&interaction.interaction_id)
-        .expect("读取")
+        .get_interaction(&implicit.interaction_id)
+        .expect("按 ID 读取")
         .expect("记录应存在");
-    assert_eq!(read.attachments, interaction.attachments);
+    assert_eq!(read.model, None);
+
+    let mut explicit = interaction_record("interaction-explicit", "message-explicit", 11);
+    explicit.model = Some("balanced".to_owned());
+    assert!(store.append(&explicit).expect("追加").inserted);
+
+    // 显式模型必须穿过最近记录与领取路径：任一 SELECT 漏列都会在这里表现为列错位。
+    let latest = store
+        .latest_external_interaction("workspace-test")
+        .expect("读取最近外部交互")
+        .expect("记录应存在");
+    assert_eq!(latest.model.as_deref(), Some("balanced"));
+    let claimed = store
+        .claim_processing_by_id(
+            &explicit.interaction_id,
+            FIRST_CLAIM_AT_MS,
+            LEASE_DURATION_MS,
+        )
+        .expect("按 ID 领取")
+        .expect("应可领取");
+    assert_eq!(claimed.interaction.model.as_deref(), Some("balanced"));
 }
 
 #[test]

@@ -79,6 +79,11 @@ pub struct AgentTuiRunOverrides {
 pub struct AgentTuiSettingsChange {
     /// 当前选择的模型名称。
     pub model: Option<String>,
+    /// 本次变更是否来自用户显式选择模型（`/model`）。
+    ///
+    /// 宿主只在该标志为真时把模型当作本轮显式模型下传；推理强度、skill 开关
+    /// 等其他设置变更会带着当前模型一起写回配置，但那不是模型选择。
+    pub model_explicit: bool,
     /// 当前选择的 reasoning effort。
     pub reasoning_effort: Option<String>,
     /// 当前 TUI 会话变更的 skill 启用状态。
@@ -88,9 +93,10 @@ pub struct AgentTuiSettingsChange {
 impl AgentTuiSettingsChange {
     /// 从运行覆盖值创建可持久化设置快照。
     #[must_use]
-    pub fn from_overrides(overrides: &AgentTuiRunOverrides) -> Self {
+    pub fn from_overrides(overrides: &AgentTuiRunOverrides, model_explicit: bool) -> Self {
         Self {
             model: overrides.model.clone(),
+            model_explicit,
             reasoning_effort: overrides.reasoning_effort.clone(),
             skill_states: Vec::new(),
         }
@@ -101,6 +107,7 @@ impl AgentTuiSettingsChange {
     pub fn from_skill_states(skill_states: Vec<AgentTuiSkillStateChange>) -> Self {
         Self {
             model: None,
+            model_explicit: false,
             reasoning_effort: None,
             skill_states,
         }

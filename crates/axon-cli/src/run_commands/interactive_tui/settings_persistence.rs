@@ -101,6 +101,7 @@ mod tests {
         let mut config = fixture_config();
         let change = AgentTuiSettingsChange {
             model: Some("upstream-fast".to_owned()),
+            model_explicit: true,
             reasoning_effort: Some("high".to_owned()),
             skill_states: Vec::new(),
         };
@@ -122,6 +123,7 @@ mod tests {
             .push(model("alias-b", "shared-upstream-id", "local"));
         let change = AgentTuiSettingsChange {
             model: Some("alias-b".to_owned()),
+            model_explicit: true,
             reasoning_effort: None,
             skill_states: Vec::new(),
         };
@@ -140,6 +142,7 @@ mod tests {
         config.agent.default_model = "balanced".to_owned();
         let change = AgentTuiSettingsChange {
             model: Some("balanced".to_owned()),
+            model_explicit: true,
             reasoning_effort: Some("xhigh".to_owned()),
             skill_states: Vec::new(),
         };
@@ -163,6 +166,7 @@ mod tests {
             .enabled = false;
         let change = AgentTuiSettingsChange {
             model: Some("upstream-fast".to_owned()),
+            model_explicit: true,
             reasoning_effort: Some("high".to_owned()),
             skill_states: Vec::new(),
         };
@@ -179,6 +183,7 @@ mod tests {
         config.skills.disabled.insert("imagegen".to_owned());
         let change = AgentTuiSettingsChange {
             model: None,
+            model_explicit: false,
             reasoning_effort: None,
             skill_states: vec![
                 axon_tui_runtime::AgentTuiSkillStateChange {

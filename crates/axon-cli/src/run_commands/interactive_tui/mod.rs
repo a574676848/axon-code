@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use super::{
     AxonCli, CliRunResult, OutputFormat, json_result, run_session_store::resolved_axon_root,
@@ -88,11 +89,22 @@ pub(crate) fn run_agent_tui_entry(cli: &AxonCli, prompt: Option<&str>) -> CliRun
     let adapter = CliAgentTuiRuntimeAdapter {
         config_path: config_path.clone(),
         reply_destination: new_tui_reply_destination(),
+        explicit_model: Arc::new(Mutex::new(None)),
     };
+    let explicit_model = Arc::clone(&adapter.explicit_model);
     match axon_tui_runtime::run_agent_tui_cli_with_runtime_adapter_and_settings(
         &request,
         adapter,
         move |change| {
+            // `/model` 是显式模型选择：除写回配置外，还要随之后的每次提交下传，
+            // 否则既有会话会按会话记录的模型继续，用户的显式选择被静默忽略。
+            if change.model_explicit
+                && let Some(model) = change.model.clone()
+            {
+                *explicit_model
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(model);
+            }
             if let Some(path) = config_path.as_deref()
                 && let Err(error) = persist_tui_settings_change(path, &change)
             {

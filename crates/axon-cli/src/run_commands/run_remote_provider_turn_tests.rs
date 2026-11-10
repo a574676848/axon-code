@@ -1,4 +1,7 @@
-use super::{build_provider_turn_result, compact_structured_failure, run_agent_identity};
+use super::{
+    build_provider_turn_result, compact_structured_failure, provider_run_command,
+    run_agent_identity,
+};
 use crate::run_commands::RunAgentIdentity;
 use axon_protocol::wire::WireEventKind;
 use axon_session_runtime::{JarvisRuntimeProfile, ProviderTurnRequest};
@@ -48,6 +51,44 @@ fn provider_turn_request_with_audience(
     let mut request = provider_turn_request(action_kind);
     request.transport_context = Some(json!({ "audience": audience }));
     request
+}
+
+fn provider_turn_request_with_model(model: serde_json::Value) -> ProviderTurnRequest {
+    let mut request = provider_turn_request(axon_daemon::PRIMARY_TURN_ACTION_KIND);
+    request.transport_context = Some(json!({
+        "channel": "tui",
+        "destination": "terminal-test",
+        "model": model,
+    }));
+    request
+}
+
+#[test]
+fn explicit_turn_model_is_the_highest_priority_model_source() {
+    let request = provider_turn_request_with_model(json!("balanced"));
+
+    let command =
+        provider_run_command(Path::new("missing-config.toml"), &request).expect("命令应可构造");
+
+    assert_eq!(command.model.as_deref(), Some("balanced"));
+    assert_eq!(command.session.as_deref(), Some("run-identity"));
+}
+
+#[test]
+fn absent_or_blank_explicit_model_leaves_model_to_session_and_config() {
+    for context in [
+        json!({"channel": "tui", "destination": "terminal-test"}),
+        json!({"channel": "tui", "destination": "terminal-test", "model": "   "}),
+        json!({"channel": "tui", "destination": "terminal-test", "model": null}),
+    ] {
+        let mut request = provider_turn_request(axon_daemon::PRIMARY_TURN_ACTION_KIND);
+        request.transport_context = Some(context);
+
+        let command =
+            provider_run_command(Path::new("missing-config.toml"), &request).expect("命令应可构造");
+
+        assert_eq!(command.model, None);
+    }
 }
 
 #[test]

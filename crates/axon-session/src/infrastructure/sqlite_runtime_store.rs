@@ -53,6 +53,8 @@ mod helpers;
 mod host_process;
 #[path = "sqlite_runtime_store/interaction_repository.rs"]
 mod interaction_repository;
+#[path = "sqlite_runtime_store/interaction_repository_row.rs"]
+mod interaction_repository_row;
 #[path = "sqlite_runtime_store/interrupted_execution_repository.rs"]
 mod interrupted_execution_repository;
 #[path = "sqlite_runtime_store/interrupted_interaction_repository.rs"]

@@ -109,6 +109,11 @@ fn model_command_updates_header_bar_state_without_transcript_noise() {
     assert_eq!(state.header.config_status.model, "gpt-5.4");
     assert_eq!(state.header.overrides.model.as_deref(), Some("gpt-5.4"));
     assert_eq!(state.cells.transcript.len(), transcript_len_before);
+    // 显式模型选择必须带回执标志，宿主据此把它作为本轮显式模型下传。
+    let changes = state.take_settings_changes();
+    assert_eq!(changes.len(), 1);
+    assert!(changes[0].model_explicit);
+    assert_eq!(changes[0].model.as_deref(), Some("gpt-5.4"));
 }
 
 #[test]
@@ -162,6 +167,9 @@ fn think_command_accepts_max_and_rejects_non_api_ultra() {
         state.header.overrides.reasoning_effort.as_deref(),
         Some("max")
     );
+    // 推理强度变更会带着当前模型一起写回配置，但它不是模型选择。
+    let changes = state.take_settings_changes();
+    assert!(changes.iter().all(|change| !change.model_explicit));
 
     assert!(matches!(
         state.handle_command("/think ultra"),

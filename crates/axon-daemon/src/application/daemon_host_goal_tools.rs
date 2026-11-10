@@ -432,6 +432,11 @@ where
                 DaemonHostError::Worker("启动 Goal 需要可恢复的回复路由".to_owned())
             })?,
         };
+        // 入口显式选择的模型只属于创建 Goal 的那一轮，不写进 Execution 上下文：
+        // 否则这个 Goal 之后所有回合都会被钉死在当时的模型上。
+        if let Some(object) = transport_context.as_object_mut() {
+            object.remove("model");
+        }
         let audience: AudienceContext = serde_json::from_value(
             transport_context
                 .get("audience")

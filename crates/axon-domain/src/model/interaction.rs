@@ -155,6 +155,13 @@ pub struct InteractionRecord {
     /// 的 `transportContext.files`：图片成为 vision 输入，文件成为可读附件。它只描述
     /// 输入素材，不携带任何调用方运行态身份字段。
     pub attachments: Vec<String>,
+    /// 本轮显式指定的模型（已配置模型的 `name` 或 `id`）。
+    ///
+    /// 由入口在用户明确选择模型时填充，投影为 Provider turn 的 `transportContext.model`，
+    /// 优先级高于会话记录的模型与 `agent.default_model`。`None` 表示入口没有显式选择，
+    /// 模型完全由会话历史与配置决定。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// 当前处理状态。
     pub status: InteractionStatus,
     /// 接收时间（毫秒）。
@@ -177,6 +184,8 @@ impl<'de> Deserialize<'de> for InteractionRecord {
             content: String,
             #[serde(default)]
             attachments: Vec<String>,
+            #[serde(default)]
+            model: Option<String>,
             status: InteractionStatus,
             received_at_ms: u64,
         }
@@ -193,6 +202,7 @@ impl<'de> Deserialize<'de> for InteractionRecord {
         )
         .map_err(D::Error::custom)?;
         record.attachments = data.attachments;
+        record.model = data.model;
         record.status = data.status;
         Ok(record)
     }
@@ -224,6 +234,7 @@ impl InteractionRecord {
             reply_route,
             content,
             attachments: Vec::new(),
+            model: None,
             status: InteractionStatus::Received,
             received_at_ms,
         })
@@ -286,6 +297,22 @@ mod tests {
         let decoded: InteractionRecord =
             serde_json::from_value(encoded).expect("Interaction 应可反序列化");
         assert_eq!(decoded, record);
+    }
+
+    #[test]
+    fn explicit_model_survives_serialization_and_absent_model_stays_none() {
+        let mut record = sample();
+        record.model = Some("balanced".to_owned());
+        let encoded = serde_json::to_value(&record).expect("Interaction 应可序列化");
+        assert_eq!(encoded["model"], serde_json::json!("balanced"));
+
+        let decoded: InteractionRecord =
+            serde_json::from_value(encoded).expect("Interaction 应可反序列化");
+        assert_eq!(decoded.model.as_deref(), Some("balanced"));
+
+        // 没有显式模型的记录不写该键，既有载荷形状保持不变。
+        let encoded = serde_json::to_value(sample()).expect("Interaction 应可序列化");
+        assert!(encoded.get("model").is_none());
     }
 
     #[test]

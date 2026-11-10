@@ -205,6 +205,7 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             lease_expires_at_ms INTEGER,
             updated_at_ms INTEGER NOT NULL,
             attachments_json TEXT NOT NULL DEFAULT '[]',
+            model TEXT,
             lane_id TEXT NOT NULL DEFAULT ''
         );
         CREATE UNIQUE INDEX IF NOT EXISTS jarvis_interactions_source
@@ -534,6 +535,8 @@ fn migrate_additive_columns(connection: &Connection) -> rusqlite::Result<()> {
         "lane_id",
         "TEXT NOT NULL DEFAULT ''",
     )?;
+    // 本轮显式指定的模型（TUI `/model` 等入口）：可空，老记录读作 None。
+    add_column_if_missing(connection, "jarvis_interactions", "model", "TEXT")?;
     // lane 排他领取按 (lane_id, status, lease_expires_at_ms) 定位在途 processing。
     connection.execute_batch(
         "CREATE INDEX IF NOT EXISTS jarvis_interactions_lane_processing

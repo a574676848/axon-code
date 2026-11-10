@@ -128,7 +128,7 @@ impl AgentTuiState {
         };
         self.header.overrides.model = Some(model.label.clone());
         self.header.config_status.model.clone_from(&model.label);
-        self.record_settings_change();
+        self.record_settings_change(true);
     }
 
     fn model_catalog_labels(&self) -> Vec<String> {
@@ -146,7 +146,7 @@ impl AgentTuiState {
             return;
         }
         self.header.overrides.reasoning_effort = Some(value.to_owned());
-        self.record_settings_change();
+        self.record_settings_change(false);
         self.push_status("设置", vec![command_status_item("Think", value)]);
     }
 

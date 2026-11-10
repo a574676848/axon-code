@@ -424,11 +424,12 @@ impl AgentTuiState {
         std::mem::take(&mut self.header.settings_changes)
     }
 
-    pub(super) fn record_settings_change(&mut self) {
+    pub(super) fn record_settings_change(&mut self, model_explicit: bool) {
         self.header
             .settings_changes
             .push(AgentTuiSettingsChange::from_overrides(
                 &self.header.overrides,
+                model_explicit,
             ));
     }
 

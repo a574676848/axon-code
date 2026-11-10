@@ -1,6 +1,7 @@
 //! CLI 到 Agent TUI runtime adapter 的桥接。
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use axon_tui_runtime::{
     AgentTuiActiveTurn, AgentTuiCancelToken, AgentTuiCatalogLoader, AgentTuiCompletionInbox,
@@ -23,6 +24,8 @@ use crate::run_commands::{daemon_interaction_client, submit_prepared_daemon_inte
 pub(super) struct CliAgentTuiRuntimeAdapter {
     pub(super) config_path: Option<PathBuf>,
     pub(super) reply_destination: String,
+    /// 用户在本进程里显式选择过的模型（`/model`）；随每次提交下传为本轮显式模型。
+    pub(super) explicit_model: Arc<Mutex<Option<String>>>,
 }
 
 impl AgentTuiRuntimeAdapter for CliAgentTuiRuntimeAdapter {
@@ -221,7 +224,7 @@ impl AgentTuiRuntimeAdapter for CliAgentTuiRuntimeAdapter {
         emit: &mut RuntimeEventEmitter<'_, AgentTuiRuntimeEvent>,
     ) -> Result<AgentTuiRunOutput, AgentTuiSubmitFailure> {
         if let Some(config_path) = self.config_path.as_deref() {
-            let change = AgentTuiSettingsChange::from_overrides(&submission.overrides);
+            let change = AgentTuiSettingsChange::from_overrides(&submission.overrides, false);
             persist_tui_settings_change_if_needed(config_path, &change)
                 .map_err(RuntimeError::runtime)
                 .map_err(AgentTuiSubmitFailure::without_output)?;
@@ -252,7 +255,10 @@ impl AgentTuiRuntimeAdapter for CliAgentTuiRuntimeAdapter {
                 "TUI Interaction 内容不能为空",
             ))
         })?;
-        let interaction = prepared.interaction;
+        let mut interaction = prepared.interaction;
+        // 显式选择随本轮下传：Daemon 把它投影为 transportContext.model，
+        // Provider turn 据此覆盖会话模型与配置默认值。
+        interaction.model = self.current_explicit_model();
         let telemetry_enabled = axon_session_runtime::first_token_telemetry_enabled();
         let ipc_submit_started_at_ms = telemetry_enabled.then(axon_time::unix_now_ms);
         let (session_id, primary_interaction_id) = submit_prepared_daemon_interaction(
@@ -354,6 +360,16 @@ impl AgentTuiRuntimeAdapter for CliAgentTuiRuntimeAdapter {
         )
         .map(|_| AgentTuiSteerResult::Accepted)
         .map_err(RuntimeError::runtime)
+    }
+}
+
+impl CliAgentTuiRuntimeAdapter {
+    /// 当前生效的显式模型；未选择过时为 `None`。
+    fn current_explicit_model(&self) -> Option<String> {
+        self.explicit_model
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 
