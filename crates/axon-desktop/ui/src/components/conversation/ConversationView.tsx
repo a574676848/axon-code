@@ -35,6 +35,7 @@ import { SubagentRunView } from './SubagentRunView';
 import {
   KEY_DEFAULT_MODEL,
   KEY_REASONING_EFFORT,
+  modelLabelFor,
   resolveConfig,
   type ResolvedConfig,
 } from '../../conversation/viewConfig';
@@ -98,7 +99,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    * 用户在本会话里显式改过的模型：只有真在输入坞选过才随轮下发，换会话即作废。
    * 没选过时留空，让后端按会话记录的模型继续，而不是让全局默认值覆盖它。
    */
-  const { explicitModelRef, onModelChange } = useExplicitModel(laneKey, (value) =>
+  const { explicitModel, onModelChange } = useExplicitModel(laneKey, (value) =>
     void applyConfig({ [KEY_DEFAULT_MODEL]: value }),
   );
   // 一轮收口时朗读这一轮的回复：流式与收口补齐两种落地方式都覆盖。
@@ -110,6 +111,8 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     : null;
   const fixedModel = (cronConfig?.jobId === cronJobId ? cronConfig?.model : null) ?? selection?.fixedModel;
   const fixedReasoningEffort = (cronConfig?.jobId === cronJobId ? cronConfig?.reasoningEffort : null) ?? selection?.fixedReasoningEffort;
+  // 本会话真实跑过的模型（来自终态帧，回放历史时同样可得）：优先于配置默认值。
+  const sessionModelLabel = modelLabelFor(config?.catalog ?? [], conversation.state.lastRun);
   const [creating, setCreating] = React.useState(false);
   const [createError, setCreateError] = React.useState<string | null>(null);
   const [configError, setConfigError] = React.useState<string | null>(null);
@@ -328,7 +331,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   const actions = useConversationActionsValue(
     {
       submit: (text, attachments, structuredInput) => {
-        void conversationRef.current.submit(text, [...attachments], structuredInput, explicitModelRef.current);
+        void conversationRef.current.submit(text, [...attachments], structuredInput, explicitModel);
       },
       unfoldTurn: (interactionId) => conversationRef.current.unfoldTurn(interactionId),
       openResource: (address, params) => railRef.current.openResource(address, params),
@@ -634,7 +637,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 enabled={workspace !== null || selection !== null}
                 busy={conversation.submitting || creating}
                 hintVisible={hintVisible}
-                model={fixedModel ?? config?.model ?? ''}
+                model={fixedModel ?? explicitModel ?? sessionModelLabel ?? config?.model ?? ''}
                 models={config?.models ?? []}
                 configBusy={savingConfig}
                 configLocked={selection?.channel === 'cron' || cronJobId !== null}
@@ -651,7 +654,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                       }
                     : (text, attachments, structuredInput) => {
                         setFollowToken((value) => value + 1);
-                        void conversation.submit(text, attachments, structuredInput, explicitModelRef.current);
+                        void conversation.submit(text, attachments, structuredInput, explicitModel);
                       }
                 }
                 onRunCommand={mcp.run}

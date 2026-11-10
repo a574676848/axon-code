@@ -133,8 +133,11 @@ function applyFrame(
       response?: string;
       status?: string;
       generation?: GenerationMetricsPayload;
+      provider?: string;
+      model?: string;
+      reasoningEffort?: string | null;
     }>(frame.payloadJson);
-    return applyTurnCompleted(
+    const completed = applyTurnCompleted(
       withCursor,
       payload?.response ?? null,
       payload?.status ?? null,
@@ -143,6 +146,27 @@ function applyFrame(
       // 终态载荷里的结构化失败优先；没有时由正文里的回执解读兜底。
       failureReportFromPayload(payload),
     );
+    /*
+     * 终态帧是「这一轮真实跑了什么」的唯一权威来源，回放历史时同样会走到这里，
+     * 因此打开旧会话也能立刻显示它真正的模型与思考强度，而不是配置默认值。
+     * 只接受最新那一条 Interaction：向下翻页回放的旧轮次不能改写输入坞显示。
+     */
+    const newest = completed.turns[completed.turns.length - 1];
+    if (
+      payload?.model === undefined ||
+      payload.interactionId === undefined ||
+      newest?.interactionId !== payload.interactionId
+    ) {
+      return completed;
+    }
+    return {
+      ...completed,
+      lastRun: {
+        provider: payload.provider ?? '',
+        model: payload.model,
+        reasoningEffort: payload.reasoningEffort ?? null,
+      },
+    };
   }
   if (frame.eventType === EVENT_TYPE_TURN_FAILED) {
     return applyTurnFailed(withCursor, frame.payloadJson, nowMs);

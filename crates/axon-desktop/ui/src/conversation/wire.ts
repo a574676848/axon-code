@@ -248,6 +248,11 @@ export interface WireUserQuestion {
 export interface TurnCompletedPayload {
   interactionId?: string;
   response?: string;
+  /** 本轮实际使用的 provider 与模型；回放历史帧时同样存在。 */
+  provider?: string;
+  model?: string;
+  /** 本轮实际请求的思考强度；为空表示这一轮没有可用强度。 */
+  reasoningEffort?: string | null;
 }
 
 /** 生成性能快照。 */

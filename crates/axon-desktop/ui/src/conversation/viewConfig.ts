@@ -8,10 +8,18 @@
 
 import type { ConfigReadResult } from '../types';
 import { isEmbeddingModel } from '../modelCatalog';
+import type { SessionRunFacets } from './transcript/state';
 
 /** 后端配置里与指标条相关的键。 */
 export const KEY_DEFAULT_MODEL = 'agent.default_model';
 export const KEY_REASONING_EFFORT = 'agent.reasoning_effort';
+
+/** 配置目录里的一条模型；把运行时回传的 provider/id 映射回展示名要用它。 */
+export interface ConfigModelEntry {
+  name: string;
+  id: string;
+  provider: string;
+}
 
 /** 会话视图需要的配置取值。 */
 export interface ResolvedConfig {
@@ -23,6 +31,8 @@ export interface ResolvedConfig {
   contextWindow: number | null;
   /** 可选模型清单：取配置目录里的模型名，去重后保持配置顺序。 */
   models: string[];
+  /** 配置目录全量条目（含 id 与 provider），供真实运行面反查展示名。 */
+  catalog: ConfigModelEntry[];
 }
 
 /** 从配置读取结果里取出指标条与输入坞需要的项。 */
@@ -58,5 +68,25 @@ export function resolveConfig(
       ? matched.context_window
       : null,
     models,
+    catalog: config.models.map(({ name, id, provider }) => ({ name, id, provider })),
   };
+}
+
+/**
+ * 把一轮真实运行的模型映射回配置里的展示名。
+ *
+ * 与运行时同一套匹配规则：同 provider 同 upstream id 精确优先，其次只按 id
+ * （provider 改名或迁移时的兜底）。命中不了说明该模型已从配置移除，返回 null，
+ * 由调用方回退到配置默认模型，那正是运行时会选的东西。
+ */
+export function modelLabelFor(
+  catalog: ConfigModelEntry[],
+  run: SessionRunFacets | null,
+): string | null {
+  if (run === null) return null;
+  const exact = catalog.find(
+    (entry) => entry.provider === run.provider && entry.id === run.model,
+  );
+  if (exact !== undefined) return exact.name;
+  return catalog.find((entry) => entry.id === run.model)?.name ?? null;
 }

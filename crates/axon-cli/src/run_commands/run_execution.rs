@@ -44,6 +44,12 @@ pub(crate) struct RunJsonEvent {
     pub(crate) session_title: Option<String>,
     pub(crate) provider: String,
     pub(crate) model: String,
+    /// 本轮实际请求的思考强度。
+    ///
+    /// 客户端据此显示这一轮真正使用的强度，而不是再去猜配置值；为空表示这一轮
+    /// 没有可用的强度（配置与模型都不支持）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reasoning_effort: Option<String>,
     pub(crate) selected_skill_name: Option<String>,
     pub(crate) selected_skill_source_ref: Option<String>,
     pub(crate) http_status: Option<u16>,
@@ -83,6 +89,7 @@ impl RunJsonEvent {
             session_title: input.session_title.map(str::to_owned),
             provider: response.provider.clone(),
             model: response.model.clone(),
+            reasoning_effort: non_empty_reasoning_effort(request.reasoning_effort.as_deref()),
             selected_skill_name: request.selected_skill_name.clone(),
             selected_skill_source_ref: request.selected_skill_source_ref.clone(),
             http_status: Some(response.http_status),
@@ -116,6 +123,7 @@ impl RunJsonEvent {
             session_title: None,
             provider: request.provider.name.clone(),
             model: request.model.id.clone(),
+            reasoning_effort: non_empty_reasoning_effort(request.reasoning_effort.as_deref()),
             selected_skill_name: request.selected_skill_name.clone(),
             selected_skill_source_ref: request.selected_skill_source_ref.clone(),
             http_status: error.http_status,
@@ -162,9 +170,27 @@ fn completed_content(content: &str) -> Option<String> {
     (!content.trim().is_empty()).then(|| content.to_owned())
 }
 
+/// 去掉首尾空白的思考强度；缺失或空值按「没有强度」处理，而不是发一个空串。
+fn non_empty_reasoning_effort(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|effort| !effort.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::completed_content;
+    use super::{completed_content, non_empty_reasoning_effort};
+
+    #[test]
+    fn reasoning_effort_blank_values_are_omitted() {
+        assert_eq!(non_empty_reasoning_effort(None), None);
+        assert_eq!(non_empty_reasoning_effort(Some("  ")), None);
+        assert_eq!(
+            non_empty_reasoning_effort(Some(" high ")),
+            Some("high".to_owned())
+        );
+    }
 
     #[test]
     fn completed_content_omits_empty_assistant_message() {

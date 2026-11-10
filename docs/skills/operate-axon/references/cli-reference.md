@@ -103,6 +103,7 @@ axon upgrade [--manifest-url <url>] [--download] [--apply] [--rollback] [--outpu
 ## 运行与核验
 
 - `axon run --format json` 输出 JSONL。持续读取至 `run_completed` 或 `run_failed`，不要按单个 JSON 对象解析。
+- 终态载荷带本轮真实取值：`provider`、`model`（upstream id）与 `reasoningEffort`（本轮实际请求的思考强度）；显示与排障以这三个字段为准，不要回读配置去猜。
 - 需要限制一次任务的工具范围时重复传 `--tool <tool-name>`；只传当前可见工具列表中的完整名称。
 - 使用 `--cwd <path>` 让 Agent 在指定工作区开始；单条 shell 命令的 cwd 则由 `builtin.shell_command` 的 `workdir` 提供。
 - `--format` 既可作为顶层参数（`axon --format json <command> ...`），也可由支持它的子命令自己接收（如 `axon usage`、`axon models`、`axon pricing`、`axon skills`、`axon setup`、`axon providers`、`axon auth`、`axon upgrade`、`axon package`）。子命令帮助里没有 `--format` 的命令（如 `axon config get`、`axon debug session read`）必须用顶层写法。

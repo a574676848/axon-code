@@ -355,6 +355,23 @@ export interface ConversationState {
    * 因此它的体量随「答过的题」增长，而不是随问答载荷增长。
    */
   resolvedQuestions: Record<string, ResolvedQuestion>;
+  /**
+   * 本会话最近一轮真实运行面：本轮实际使用的 provider、模型与思考强度。
+   *
+   * 输入坞显示的就是这一份（而不是配置默认值），因此「看到的模型」与「实际跑的
+   * 模型」不会再分叉；新会话还没有任何一轮时为空，此时才回落到配置。
+   */
+  lastRun: SessionRunFacets | null;
+}
+
+/** 一轮真实运行面。 */
+export interface SessionRunFacets {
+  /** 本轮 Provider 名称。 */
+  provider: string;
+  /** 本轮 upstream 模型 ID；展示名由配置目录映射。 */
+  model: string;
+  /** 本轮实际请求的思考强度；后端未给出时为空。 */
+  reasoningEffort: string | null;
 }
 
 /** 一条已结算提问的权威结论。 */
@@ -389,6 +406,7 @@ export const INITIAL_CONVERSATION: ConversationState = {
   activeTurnCount: 0,
   pendingQuestions: {},
   resolvedQuestions: {},
+  lastRun: null,
 };
 
 /** 归约动作。 */

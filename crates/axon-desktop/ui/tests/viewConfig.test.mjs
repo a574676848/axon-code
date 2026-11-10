@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { KEY_DEFAULT_MODEL, resolveConfig } from '../src/conversation/viewConfig.ts';
+import { KEY_DEFAULT_MODEL, modelLabelFor, resolveConfig } from '../src/conversation/viewConfig.ts';
 import { routeFromActivity } from '../src/conversation/useTurnModelRoute.ts';
 
 /*
@@ -58,4 +58,41 @@ test('状态事件的第一段是路由时取出来，否则不凭空猜', () =>
     );
     assert.equal(routeFromActivity('生成回复中'), null);
     assert.equal(routeFromActivity(null), null);
+});
+
+test('真实运行面按同 provider 同 id 精确映射展示名', () => {
+    const catalog = resolveConfig(configOf('deepseek-v4.1-flash')).catalog;
+    assert.equal(
+        modelLabelFor(catalog, {
+            provider: 'sm-wenwen-chat',
+            model: 'deepseek-v4.1-flash-1017',
+            reasoningEffort: 'high',
+        }),
+        'deepseek-v4.1-flash',
+    );
+});
+
+test('provider 改名或迁移后按 upstream id 兜底映射', () => {
+    const catalog = resolveConfig(configOf('deepseek-v4.1-flash')).catalog;
+    assert.equal(
+        modelLabelFor(catalog, {
+            provider: 'removed-provider',
+            model: 'deepseek-v4.1-flash-1017',
+            reasoningEffort: null,
+        }),
+        'deepseek-v4.1-flash',
+    );
+});
+
+test('会话模型已从配置移除时不显示它，交给调用方回退配置默认值', () => {
+    const catalog = resolveConfig(configOf('deepseek-v4.1-flash')).catalog;
+    assert.equal(
+        modelLabelFor(catalog, {
+            provider: 'removed-provider',
+            model: 'removed-model-id',
+            reasoningEffort: null,
+        }),
+        null,
+    );
+    assert.equal(modelLabelFor(catalog, null), null);
 });
