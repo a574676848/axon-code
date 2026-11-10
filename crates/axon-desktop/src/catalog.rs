@@ -310,7 +310,7 @@ fn upsert_into(
         match config
             .models
             .iter()
-            .position(|existing| existing.name == model.name)
+            .position(|existing| existing.provider == final_name && existing.name == model.name)
         {
             Some(index) => config.models[index] = model,
             None => config.models.push(model),
@@ -377,7 +377,7 @@ pub fn provider_profile_remove(name: String) -> Result<ConfigWriteResponse, Stri
 
 #[cfg(test)]
 mod tests {
-    use super::{ModelInput, ProviderInput, remove_from, upsert_into};
+    use super::{ModelInput, ProviderInput, build_model, build_provider, remove_from, upsert_into};
 
     /// 一个待保存的供应商档案，字段取值与界面提交的同形。
     fn profile() -> ProviderInput {
@@ -438,5 +438,68 @@ mod tests {
         assert!(config.providers.is_empty());
         assert!(config.models.is_empty());
         assert!(config.agent.default_model.is_empty());
+    }
+
+    #[test]
+    fn saving_one_profile_leaves_other_providers_same_named_models_intact() {
+        // 供应商之间允许登记同名模型；整卡保存只能替换本供应商的条目。
+        // 若按全局名称匹配，会把另一家的同名模型改姓，并在本供应商下留下重复组合。
+        let mut alpha = profile();
+        alpha.name = "alpha".to_string();
+        let mut beta = profile();
+        beta.name = "beta".to_string();
+
+        let mut alpha_shared = model();
+        alpha_shared.name = "shared-model".to_string();
+        alpha_shared.id = "shared-alpha".to_string();
+        let mut beta_shared = model();
+        beta_shared.name = "shared-model".to_string();
+        beta_shared.id = "shared-beta".to_string();
+        let mut beta_only = model();
+        beta_only.name = "beta-only".to_string();
+        beta_only.id = "beta-only-v1".to_string();
+
+        let mut config = axon_config::AxonConfig::default();
+        config
+            .providers
+            .push(build_provider(&alpha).expect("alpha 必须可构建"));
+        config
+            .providers
+            .push(build_provider(&beta).expect("beta 必须可构建"));
+        config
+            .models
+            .push(build_model(&alpha_shared, "alpha").expect("alpha 模型必须可构建"));
+        config
+            .models
+            .push(build_model(&beta_shared, "beta").expect("beta 模型必须可构建"));
+        config
+            .models
+            .push(build_model(&beta_only, "beta").expect("beta-only 必须可构建"));
+
+        // 等价于界面移除 beta-only 后保存 beta 整卡。
+        upsert_into(
+            &mut config,
+            beta,
+            vec![beta_shared],
+            Some("beta".to_string()),
+        )
+        .expect("移除 beta-only 必须成功");
+
+        // 与界面保存路径一致：整份规范化序列化必须通过。
+        axon_config::to_toml_string(&config).expect("同名模型分属不同供应商时必须可序列化");
+        let alpha_models: Vec<_> = config
+            .models
+            .iter()
+            .filter(|entry| entry.provider == "alpha")
+            .collect();
+        assert_eq!(alpha_models.len(), 1, "alpha 的模型不得被 beta 的保存吞掉");
+        assert_eq!(alpha_models[0].id, "shared-alpha");
+        let beta_models: Vec<_> = config
+            .models
+            .iter()
+            .filter(|entry| entry.provider == "beta")
+            .collect();
+        assert_eq!(beta_models.len(), 1, "beta 只应保留本次提交的模型");
+        assert_eq!(beta_models[0].id, "shared-beta");
     }
 }
