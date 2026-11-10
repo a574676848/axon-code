@@ -103,6 +103,11 @@ export interface DropdownProps {
   children: React.ReactNode;
   /** 对齐方式。 */
   align?: 'start' | 'end';
+  /**
+   * 展开方向。默认向下；贴着窗口下缘的锚点（侧栏底栏）用向上：
+   * 向下展开时菜单会被下缘夹取，压在窗口边上并盖住被点的那一行。
+   */
+  placement?: 'below' | 'above';
   /** 菜单最小宽度类名。 */
   menuClassName?: string;
   /**
@@ -124,6 +129,7 @@ export const Dropdown: React.FC<DropdownProps> = ({
   trigger,
   children,
   align = 'start',
+  placement = 'below',
   menuClassName = 'min-w-[200px]',
   surfaceClassName = CARD,
   className = '',
@@ -173,7 +179,7 @@ export const Dropdown: React.FC<DropdownProps> = ({
       const menuWidth = menu.offsetWidth;
       const menuHeight = menu.offsetHeight;
       let left = align === 'end' ? anchorRect.right - menuWidth : anchorRect.left;
-      let top = anchorRect.bottom + 4;
+      let top = placement === 'above' ? anchorRect.top - menuHeight - 4 : anchorRect.bottom + 4;
       if (menuWidth > 0) {
         left = Math.min(Math.max(left, margin), window.innerWidth - menuWidth - margin);
       }
@@ -199,7 +205,7 @@ export const Dropdown: React.FC<DropdownProps> = ({
       window.removeEventListener('resize', place);
       window.removeEventListener('wheel', closeOnWheel);
     };
-  }, [open, align, ref, close]);
+  }, [open, align, placement, ref, close]);
 
   return (
     <div className={`relative inline-flex ${className}`} ref={ref}>

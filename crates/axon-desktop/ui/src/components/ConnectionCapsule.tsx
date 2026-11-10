@@ -96,6 +96,10 @@ export const ConnectionCapsule: React.FC<{ onManage: () => void }> = ({ onManage
       <Dropdown
         key={menuEpoch}
         className="w-full"
+        // 清单靠右缘对齐并向上展开：这一行的可点提示（读数与展开箭头）都在行尾，
+        // 菜单贴左缘会落在图标下方，向下展开又会压在窗口底缘并盖住被点的这一行。
+        align="end"
+        placement="above"
         trigger={({ open, toggle }) => (
           <button
             ref={triggerRef}
