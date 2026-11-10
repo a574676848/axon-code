@@ -71,6 +71,7 @@ pub fn agent_run_execution_error_from_axon_error<ToolReceipt: Clone>(
             provider_event_type: provider_event_type.clone(),
             upstream_request_id: upstream_request_id.clone(),
             committed_side_effects: false,
+            resumable_connect_failure: false,
         };
     }
     if let AxonError::Provider(ProviderError::InvalidResponse(invalid)) = error {
@@ -96,6 +97,7 @@ pub fn agent_run_execution_error_from_axon_error<ToolReceipt: Clone>(
             provider_event_type: None,
             upstream_request_id: None,
             committed_side_effects: false,
+            resumable_connect_failure: false,
         };
     }
     if let AxonError::Memory(MemoryError::Persistence(message)) = error {
@@ -116,6 +118,7 @@ pub fn agent_run_execution_error_from_axon_error<ToolReceipt: Clone>(
             provider_event_type: None,
             upstream_request_id: None,
             committed_side_effects: false,
+            resumable_connect_failure: false,
         };
     }
     let error_type = if matches!(error, AxonError::Config(_)) {
@@ -140,6 +143,7 @@ pub fn agent_run_execution_error_from_axon_error<ToolReceipt: Clone>(
         provider_event_type: None,
         upstream_request_id: None,
         committed_side_effects: false,
+        resumable_connect_failure: false,
     }
 }
 
@@ -164,6 +168,7 @@ pub fn agent_run_configuration_error<ToolReceipt>(
         provider_event_type: None,
         upstream_request_id: None,
         committed_side_effects: false,
+        resumable_connect_failure: false,
     }
 }
 
@@ -188,6 +193,7 @@ pub fn agent_run_interrupted_error<ToolReceipt: Clone>(
         provider_event_type: None,
         upstream_request_id: None,
         committed_side_effects: false,
+        resumable_connect_failure: false,
     }
 }
 

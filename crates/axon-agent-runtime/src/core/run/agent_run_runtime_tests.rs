@@ -64,6 +64,7 @@ fn transport_error(http_status: Option<u16>, message: &str) -> Box<AgentRunExecu
         provider_event_type: None,
         upstream_request_id: None,
         committed_side_effects: false,
+        resumable_connect_failure: false,
     })
 }
 
@@ -224,6 +225,7 @@ fn non_transport_error_is_permanent() {
             provider_event_type: None,
             upstream_request_id: None,
             committed_side_effects: false,
+            resumable_connect_failure: false,
         }))
     });
     trace.result.expect_err("非传输错误不应换渠道");
@@ -480,6 +482,34 @@ fn visible_output_failure_stops_after_committed_side_effects() {
     assert_eq!(error.channel_attempts.len(), 1);
     assert_eq!(error.channel_attempts[0].outcome, OUTCOME_VISIBLE_OUTPUT);
     assert_eq!(trace.failures, vec!["p-a"]);
+}
+
+#[test]
+fn connect_failure_after_committed_side_effects_switches_channel() {
+    let chain = chain(&[("m-a", "p-a"), ("m-b", "p-b")]);
+    let calls = Cell::new(0u32);
+    let trace = run(&chain, |_model, provider| {
+        calls.set(calls.get() + 1);
+        if provider.name == "p-a" {
+            let mut error =
+                *visible_transport_error_with_writes(None, "upstream header timeout after 30s");
+            error.resumable_connect_failure = true;
+            Err(Box::new(error))
+        } else {
+            Ok(ok_response(&provider.name, "m-b"))
+        }
+    });
+
+    let response = trace
+        .result
+        .expect("连不上且已留下续跑现场时，即使写过文件也必须换到下一渠道");
+    assert_eq!(calls.get(), 2);
+    assert_eq!(response.provider, "p-b");
+    assert_eq!(response.channel_attempts.len(), 2);
+    assert_eq!(response.channel_attempts[0].outcome, OUTCOME_VISIBLE_OUTPUT);
+    assert_eq!(response.channel_attempts[1].outcome, "success");
+    assert_eq!(trace.failures, vec!["p-a"]);
+    assert_eq!(trace.successes, vec!["p-b"]);
 }
 
 #[test]

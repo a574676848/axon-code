@@ -23,6 +23,9 @@ use self::retry::handle_transport_error;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderStreamingRetryPolicy {
     /// Provider stream 错误的最大重试次数。
+    ///
+    /// 与首次请求合计后，单个渠道最多尝试 3 次：连接不上属于渠道自身问题，
+    /// 更长的同渠道等待没有收益，预算必须留给外层切换渠道。
     pub stream_max_retries: u32,
     /// WebSocket 连续失败多少次后 sticky fallback 到 HTTP。
     pub websocket_failures_before_fallback: u32,
@@ -38,7 +41,7 @@ pub struct ProviderStreamingRetryPolicy {
 #[must_use]
 pub const fn provider_streaming_retry_policy() -> ProviderStreamingRetryPolicy {
     ProviderStreamingRetryPolicy {
-        stream_max_retries: 5,
+        stream_max_retries: 2,
         websocket_failures_before_fallback: 3,
         base_delay_ms: 250,
         max_delay_ms: 4_000,

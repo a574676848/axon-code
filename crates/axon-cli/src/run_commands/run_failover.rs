@@ -16,6 +16,7 @@ use axon_config::ChannelBalancerConfig;
 use axon_domain::BreakerPolicy;
 use axon_protocol::wire::{WireProviderStatus, WireProviderStatusPhase, WireProviderTransport};
 use axon_provider_transport::AgentRunProviderTransportSession;
+use std::cell::RefCell;
 use std::time::Instant;
 
 use super::RunRequest;
@@ -24,7 +25,7 @@ use super::run_channel_affinity::{
 };
 use super::run_execution::{RunExecutionError, RunResponse, now_ms};
 use super::run_progress::RunProgressSink;
-use super::run_provider_loop::run_provider_single_channel;
+use super::run_provider_loop::{ChannelResumeState, run_provider_single_channel};
 use super::run_steer::{RunSteerBridge, register_deferred_message_session};
 
 #[cfg(test)]
@@ -67,6 +68,8 @@ pub(super) fn run_with_failover(
             request.session_id
         ));
     }
+    // 渠道连接阶段失败时留下的续跑现场：由单渠道执行单元写入，下一次渠道尝试取走。
+    let resume_checkpoint: RefCell<Option<ChannelResumeState>> = RefCell::new(None);
     run_agent_channel_failover(
         AgentRunFailoverPlan {
             chain: &request.channel_chain,
@@ -93,8 +96,18 @@ pub(super) fn run_with_failover(
         |event| emit_channel_status(request, progress, event),
         |model, provider| {
             let started_at = Instant::now();
-            let result =
-                run_provider_single_channel(request, model, provider, progress, &turn_inbox);
+            // 上一渠道若是连接阶段失败，这里取出它留下的续跑现场：下一渠道从同一 turn
+            // 续跑，而不是从 run 起点重放已经落地的工具副作用。
+            let resume = resume_checkpoint.borrow_mut().take();
+            let result = run_provider_single_channel(
+                request,
+                model,
+                provider,
+                progress,
+                &turn_inbox,
+                resume,
+                &resume_checkpoint,
+            );
             let token_usage = result
                 .as_ref()
                 .ok()
@@ -255,6 +268,7 @@ mod tests {
             provider_event_type: None,
             upstream_request_id: None,
             committed_side_effects: false,
+            resumable_connect_failure: false,
         })
     }
 
@@ -425,6 +439,7 @@ mod tests {
                 provider_event_type: None,
                 upstream_request_id: None,
                 committed_side_effects: false,
+                resumable_connect_failure: false,
             }))
         });
         result.expect_err("工具循环错误不应换渠道");

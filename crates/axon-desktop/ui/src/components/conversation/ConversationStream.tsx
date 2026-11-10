@@ -375,6 +375,7 @@ export const ConversationStream: React.FC<ConversationStreamProps> = ({
               hiddenCells={turnHidden}
               onAnchor={registerAnchor}
               onOpenChange={openChange}
+              retryEnabled={turn.id === lastTurn?.id}
               memoized={index < windowedTurns.length - MEMOIZED_TURNS}
             />
           ))}

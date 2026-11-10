@@ -7,6 +7,7 @@ use axon_config::{ChannelBalancerConfig, ModelConfig, ProviderConfig};
 use axon_domain::{ModelProfileId, PermissionSnapshotId};
 use axon_protocol::wire::{WireEventKind, WireLifecycleStatus};
 use std::{
+    cell::RefCell,
     fs,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -139,6 +140,7 @@ fn failed_run_json_and_wire_runtime_error_share_failure_code() {
         provider_event_type: None,
         upstream_request_id: None,
         committed_side_effects: false,
+        resumable_connect_failure: false,
     };
     let failure = crate::run_commands::run_session_store::runtime_failure_from_execution_error(
         &request.session_id,
@@ -462,6 +464,8 @@ fn cancelled_request_stops_before_provider_channel_work() {
         &ProviderConfig::default(),
         None,
         &turn_inbox,
+        None,
+        &RefCell::new(None),
     )
     .expect_err("已取消请求应直接返回 interrupted");
 
@@ -469,6 +473,56 @@ fn cancelled_request_stops_before_provider_channel_work() {
     assert_eq!(error.message, "任务已由用户中断");
     assert!(error.tool_receipts.is_empty());
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn channel_link_failure_is_resumable_only_without_stream_output() {
+    use axon_agent_runtime::{
+        ProviderStreamingTransportError, ProviderStreamingTransportFailureKind,
+        ProviderStreamingTransportOutcome,
+    };
+
+    let outcome = |kind, event: Option<&str>| {
+        ProviderStreamingTransportOutcome::Error(
+            ProviderStreamingTransportError::new("upstream header timeout after 30s", Some(504))
+                .with_failure_kind(kind)
+                .with_provider_event_type(event.map(str::to_owned)),
+        )
+    };
+
+    assert!(is_resumable_channel_failure(&outcome(
+        ProviderStreamingTransportFailureKind::Timeout,
+        None
+    )));
+    assert!(is_resumable_channel_failure(&outcome(
+        ProviderStreamingTransportFailureKind::Connection,
+        None
+    )));
+    assert!(is_resumable_channel_failure(&outcome(
+        ProviderStreamingTransportFailureKind::Upstream,
+        None
+    )));
+    // 流内终态事件说明上游已经给出本 turn 的结论，不能当成「连不上」续跑。
+    assert!(!is_resumable_channel_failure(&outcome(
+        ProviderStreamingTransportFailureKind::Upstream,
+        Some("response.failed")
+    )));
+    // 参数与鉴权类失败属于渠道能力问题，换渠道续跑没有意义。
+    assert!(!is_resumable_channel_failure(&outcome(
+        ProviderStreamingTransportFailureKind::Request,
+        None
+    )));
+    assert!(!is_resumable_channel_failure(&outcome(
+        ProviderStreamingTransportFailureKind::Authentication,
+        None
+    )));
+    // 已经产生可见输出的尝试不得续跑：那一段正文已经投影给用户。
+    assert!(!is_resumable_channel_failure(
+        &ProviderStreamingTransportOutcome::VisibleOutput(Box::new(outcome(
+            ProviderStreamingTransportFailureKind::Timeout,
+            None
+        )))
+    ));
 }
 
 #[test]

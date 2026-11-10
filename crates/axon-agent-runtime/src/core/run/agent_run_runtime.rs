@@ -200,6 +200,13 @@ pub struct AgentRunExecutionError<ToolReceipt> {
     /// 与 `visible_output_emitted` 共同界定跨渠道重放边界：有可见输出但无副作用时，
     /// 换渠道续跑仍安全；已经写过文件则必须停下，否则重跑会把副作用做第二遍。
     pub committed_side_effects: bool,
+    /// 本次失败是否属于「连不上」且已留下可续跑现场。
+    ///
+    /// 失败发生在连接或上游链路阶段（连接超时、没等到响应头、上游流无法继续转发），
+    /// 本 turn 没有产出任何模型输出，调用方已经记录该 turn 的起始历史与已落地工具事实。
+    /// 此时换渠道从该现场续跑不会重放副作用，因此允许越过 `committed_side_effects`
+    /// 的停表线继续切换渠道。
+    pub resumable_connect_failure: bool,
 }
 
 impl<ToolReceipt> fmt::Display for AgentRunExecutionError<ToolReceipt> {

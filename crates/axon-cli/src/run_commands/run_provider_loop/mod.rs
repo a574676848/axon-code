@@ -84,6 +84,20 @@ struct PartialToolCallState<'a> {
     model_id: &'a str,
 }
 
+/// 跨渠道续跑现场。
+///
+/// 渠道在还没收到任何上游响应时失败，本次 provider turn 没有产生任何输出；把该 turn
+/// 的起始历史与已落地事实存下来，下一渠道就能从同一位置续跑，不会重放已经执行过的
+/// 工具副作用。
+#[derive(Clone)]
+pub(super) struct ChannelResumeState {
+    pub(super) messages: axon_agent_runtime::AgentModelHistorySnapshot,
+    pub(super) tool_receipts: Vec<RunToolReceipt>,
+    pub(super) tool_calls: Vec<axon_agent_runtime::ProviderToolCall>,
+    pub(super) reasoning: Vec<AgentRunReasoningMessage>,
+    pub(super) turn_events: Vec<AgentTurnEvent>,
+}
+
 impl ProviderTransportPlan {
     fn from_input(
         input: &axon_agent_runtime::ProviderStreamingTransportInput,
@@ -119,6 +133,8 @@ pub(super) fn run_provider_single_channel(
     channel_provider: &ProviderConfig,
     progress: Option<&RunProgressSink<'_>>,
     turn_inbox: &RunSteerInbox,
+    resume: Option<ChannelResumeState>,
+    resume_checkpoint: &RefCell<Option<ChannelResumeState>>,
 ) -> Result<RunResponse, Box<RunExecutionError>> {
     axon_logger::debug(&format!(
         "run_provider_single_channel 开始: provider={}, model={}, wire_transport={}",
@@ -132,7 +148,27 @@ pub(super) fn run_provider_single_channel(
             &request.session_id,
             &request.invocation_id,
         );
+    // 只有渠道链里还有下一个渠道时才值得留续跑现场，否则记下来也没人消费。
+    let has_next_channel = request
+        .channel_chain
+        .iter()
+        .position(|(model, provider)| {
+            model.id == channel_model.id && provider.name == channel_provider.name
+        })
+        .is_some_and(|index| index + 1 < request.channel_chain.len());
+    let connect_failure_checkpointed = Cell::new(false);
     let mut input = provider_streaming_transport_input(request, channel_model, channel_provider)?;
+    if let Some(state) = resume.as_ref() {
+        // 上一渠道连不上，本 turn 没有任何上游输出：从该 turn 的起始历史续跑。
+        input.messages = state.messages.clone();
+        input.prompt_cache_plan = axon_agent_runtime::provider_streaming_prompt_cache_plan(&input)
+            .map_err(|error| {
+                Box::new(agent_run_execution_error_from_axon_error::<RunToolReceipt>(
+                    &error,
+                    &[],
+                ))
+            })?;
+    }
     // 渠道 failover 会在同一个 run 内重跑整个 turn loop：本次尝试必须从上一尝试之后的
     // turn 序号起步，assistant/reasoning part 身份才不会跨尝试碰撞。
     input.turn_id = axon_domain::TurnId(begin_provider_turn_epoch(progress));
@@ -152,10 +188,30 @@ pub(super) fn run_provider_single_channel(
         &transport_plan.endpoint,
         transport_plan.wire_transport,
     );
-    let tool_receipts_accumulator = RefCell::new(Vec::<RunToolReceipt>::new());
-    let tool_calls_accumulator = RefCell::new(Vec::<axon_agent_runtime::ProviderToolCall>::new());
-    let reasoning_accumulator = RefCell::new(Vec::<AgentRunReasoningMessage>::new());
-    let turn_events_accumulator = RefCell::new(Vec::<AgentTurnEvent>::new());
+    let tool_receipts_accumulator = RefCell::new(
+        resume
+            .as_ref()
+            .map(|state| state.tool_receipts.clone())
+            .unwrap_or_default(),
+    );
+    let tool_calls_accumulator = RefCell::new(
+        resume
+            .as_ref()
+            .map(|state| state.tool_calls.clone())
+            .unwrap_or_default(),
+    );
+    let reasoning_accumulator = RefCell::new(
+        resume
+            .as_ref()
+            .map(|state| state.reasoning.clone())
+            .unwrap_or_default(),
+    );
+    let turn_events_accumulator = RefCell::new(
+        resume
+            .as_ref()
+            .map(|state| state.turn_events.clone())
+            .unwrap_or_default(),
+    );
     let visible_output_emitted = Cell::new(false);
     let partial_state = PartialToolCallState {
         tool_receipts: &tool_receipts_accumulator,
@@ -214,6 +270,17 @@ pub(super) fn run_provider_single_channel(
                     progress,
                     transport_request,
                 );
+                // 连接阶段失败才留现场：此时本 turn 一个 Provider 事件都没收到，
+                // 换渠道从同一历史续跑不会重放已经落地的工具副作用。
+                resume_checkpoint.replace(None);
+                connect_failure_checkpointed.set(false);
+                if has_next_channel
+                    && let Some(state) =
+                        connect_failure_resume_state(&outcome, transport_request, &partial_state)
+                {
+                    resume_checkpoint.replace(Some(state));
+                    connect_failure_checkpointed.set(true);
+                }
                 let provider_exchange_ms = u64::try_from(
                     provider_exchange_started.elapsed().as_millis(),
                 )
@@ -292,6 +359,7 @@ pub(super) fn run_provider_single_channel(
                 .borrow()
                 .iter()
                 .any(|receipt| receipt.filesystem_write_performed);
+            execution_error.resumable_connect_failure = connect_failure_checkpointed.get();
             Box::new(execution_error)
         })?;
     let turn_orchestration_total_ms =
@@ -311,11 +379,11 @@ pub(super) fn run_provider_single_channel(
         axon_logger::info(&turn_phase_summary);
     }
     emit_provider_reasoning_reports(progress, &report.turn_reports);
-    Ok(response_from_turn_report(
-        report,
-        channel_provider,
-        channel_model,
-    ))
+    let mut response = response_from_turn_report(report, channel_provider, channel_model);
+    if let Some(state) = resume.as_ref() {
+        prepend_resume_state(&mut response, state);
+    }
+    Ok(response)
 }
 
 fn send_provider_transport(
@@ -456,4 +524,68 @@ fn build_turn_tool_decision(
         transport_report.runner_report.reasoning_content.as_deref(),
     )
     .map_err(|_| axon_domain::AxonError::runtime_failure("run tool decision invalid"))
+}
+
+/// 连接或上游链路在产出任何模型输出之前失败：允许跨渠道续跑。
+///
+/// 只看失败类别，不看 HTTP 状态：中继把「上游 30 秒没回响应头」写成 504 响应体同样
+/// 属于链路失败。带流内终态事件（例如 `response.failed`）或已产生可见输出的尝试
+/// 都不在此列：前者是本 turn 已有上游结论，后者已经投影给用户。
+fn is_resumable_channel_failure(outcome: &ProviderStreamingTransportOutcome) -> bool {
+    let ProviderStreamingTransportOutcome::Error(error) = outcome else {
+        return false;
+    };
+    error.provider_event_type.is_none()
+        && matches!(
+            error.failure_kind,
+            axon_agent_runtime::ProviderStreamingTransportFailureKind::Timeout
+                | axon_agent_runtime::ProviderStreamingTransportFailureKind::Connection
+                | axon_agent_runtime::ProviderStreamingTransportFailureKind::Upstream
+        )
+}
+
+/// 连接或上游链路在产出任何模型输出之前就失败时，生成跨渠道续跑现场。
+///
+/// 判定不看 HTTP 状态：中继把「上游 30 秒没回响应头」写成 504 响应体同样属于链路失败，
+/// 关键是本 turn 没有产出正文与工具调用（`provider_event_type` 为空即没有流内终态事件，
+/// 带可见输出的尝试已被 `VisibleOutput` 包装排除）。此时从该 turn 的历史续跑不会重放副作用。
+fn connect_failure_resume_state(
+    outcome: &ProviderStreamingTransportOutcome,
+    transport_request: &ProviderStreamingTransportRequest,
+    state: &PartialToolCallState<'_>,
+) -> Option<ChannelResumeState> {
+    if !is_resumable_channel_failure(outcome) {
+        return None;
+    }
+    Some(ChannelResumeState {
+        messages: transport_request.attempt.messages.clone(),
+        tool_receipts: state.tool_receipts.borrow().clone(),
+        tool_calls: state.tool_calls.borrow().clone(),
+        reasoning: state.reasoning.borrow().clone(),
+        turn_events: state.turn_events.borrow().clone(),
+    })
+}
+
+/// 把续跑现场里已经落地的本轮事实并回响应，保证换渠道续跑后交付物不丢上一段成果。
+fn prepend_resume_state(response: &mut RunResponse, state: &ChannelResumeState) {
+    if !state.tool_receipts.is_empty() {
+        let mut tool_receipts = state.tool_receipts.clone();
+        tool_receipts.append(&mut response.tool_receipts);
+        response.tool_receipts = tool_receipts;
+    }
+    if !state.tool_calls.is_empty() {
+        let mut tool_calls = state.tool_calls.clone();
+        tool_calls.append(&mut response.tool_calls);
+        response.tool_calls = tool_calls;
+    }
+    if !state.reasoning.is_empty() {
+        let mut reasoning = state.reasoning.clone();
+        reasoning.append(&mut response.reasoning_messages);
+        response.reasoning_messages = reasoning;
+    }
+    if !state.turn_events.is_empty() {
+        let mut turn_events = state.turn_events.clone();
+        turn_events.append(&mut response.turn_events);
+        response.turn_events = turn_events;
+    }
 }

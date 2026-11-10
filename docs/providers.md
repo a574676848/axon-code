@@ -78,7 +78,9 @@ axon models --provider openai --format json
 
 同一 `session_id` 的渠道亲和在进程内跨线程共享，并在每次命中时按 `channel_balancer.affinity_ttl_ms` 滑动续期，因此长任务、自动压缩和子代理执行不会因线程切换或间隔较长而无故漂移到其他 Provider。只有亲和渠道过期、被健康熔断，或当前请求发生可转移的瞬时失败时，才会按候选链切换渠道；切换成功后会重新绑定该会话的亲和渠道。
 
-渠道故障转移会在同一个 run 内重跑整个 Provider turn loop。每次渠道尝试都从上一尝试之后的 turn 序号接着编号，assistant/reasoning/lifecycle 的 part 身份因此在整轮内唯一：新尝试的正文不会拼进上一尝试的流式单元，失败诊断记录也按尝试分段而不是无分隔拼接。
+渠道故障转移以单个渠道的 3 次尝试为界：首次请求加 2 次重试仍失败后，重试预算交给渠道链的下一个渠道，不再继续在同渠道等待。切换后会在同一个 run 内重跑 Provider turn loop。每次渠道尝试都从上一尝试之后的 turn 序号接着编号，assistant/reasoning/lifecycle 的 part 身份因此在整轮内唯一：新尝试的正文不会拼进上一尝试的流式单元，失败诊断记录也按尝试分段而不是无分隔拼接。
+
+失败属于连接或上游链路问题（连接超时、没等到响应头、上游流无法继续转发）且本轮还没产出任何模型输出时，渠道切换不会重放已落地的副作用：Runtime 保存失败 turn 的起始历史与本轮已完成的工具事实，下一渠道从同一位置续跑，因此即使本轮已经写过文件也允许换渠道。
 
 渠道性能遥测默认只保存在进程内。开启 `channel_balancer.telemetry_persistence_enabled` 后，样本会按 UTC 日期追加到 `~/.axon/data/channel-metrics/samples-YYYY-MM-DD.jsonl` 分片；可使用 `axon debug channel-metrics` 按时间、模型和 Provider 查询。内置 Cron 会按会话保留窗口清理过期分片。
 

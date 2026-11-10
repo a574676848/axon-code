@@ -172,7 +172,11 @@ where
                     error.as_ref(),
                 ));
                 let failure_kind = classify_agent_run_failover_error(&error);
-                let visible_output_failover = can_failover_after_visible_output(error.as_ref());
+                // 连不上且调用方已留下续跑现场：本 turn 没有收到任何上游响应，换渠道从该
+                // 现场续跑不会重放已经落地的副作用，因此不受副作用停表线限制。
+                let resumable_connect_failure = error.resumable_connect_failure;
+                let visible_output_failover =
+                    can_failover_after_visible_output(error.as_ref()) || resumable_connect_failure;
                 if error.visible_output_emitted && !visible_output_failover {
                     if failure_kind == ChannelFailureKind::Transient {
                         health_failure(&key, plan.now_ms);
@@ -259,6 +263,7 @@ where
         provider_event_type: None,
         upstream_request_id: None,
         committed_side_effects: false,
+        resumable_connect_failure: false,
     }))
 }
 

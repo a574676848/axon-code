@@ -25,11 +25,25 @@ export const ErrorCard: React.FC<{
   hint?: string;
   /** 是否可重试：可重试时标题右侧给一枚标记。 */
   retryable?: boolean;
+  /** 可重试标记的处置动作；给了才把标记做成可点按钮，否则只是标记。 */
+  onRetry?: () => void;
+  /** 重试已经发出：按钮转成已重试并锁住，避免同一条请求被重复提交。 */
+  retrySent?: boolean;
   /** 原始回执；有它才给展开入口。 */
   raw?: string;
   /** 卡片右下角的动作。 */
   action?: ErrorCardAction;
-}> = ({ title, reason, meta = [], hint = '', retryable = false, raw = '', action }) => {
+}> = ({
+  title,
+  reason,
+  meta = [],
+  hint = '',
+  retryable = false,
+  onRetry,
+  retrySent = false,
+  raw = '',
+  action,
+}) => {
   const [open, setOpen] = React.useState(false);
   const metaParts = meta.filter((part) => part.length > 0);
   return (
@@ -43,11 +57,22 @@ export const ErrorCard: React.FC<{
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-2">
             <span className="text-row font-medium text-text-primary">{title}</span>
-            {retryable && (
-              <span className="shrink-0 px-1.5 py-[1px] rounded-xs text-code text-gold-ink bg-gold-soft">
-                可重试
-              </span>
-            )}
+            {retryable &&
+              (onRetry === undefined ? (
+                <span className="shrink-0 px-1.5 py-[1px] rounded-xs text-code text-gold-ink bg-gold-soft">
+                  可重试
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onRetry}
+                  disabled={retrySent}
+                  title={retrySent ? '这一次重试已经发出' : '用同一条请求再跑一轮'}
+                  className="shrink-0 px-1.5 py-[1px] rounded-xs text-code text-gold-ink bg-gold-soft transition-opacity duration-100 hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus disabled:cursor-default disabled:opacity-60"
+                >
+                  {retrySent ? '已重试' : '可重试'}
+                </button>
+              ))}
           </div>
           {reason.length > 0 && (
             <p className="mt-1 mb-0 text-row-loose text-text-secondary break-words">{reason}</p>

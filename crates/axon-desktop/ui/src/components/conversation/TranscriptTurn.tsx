@@ -2,6 +2,7 @@ import React from 'react';
 import { changedFilesOf } from '../../conversation/transcript';
 import type { TurnState } from '../../conversation/transcript/state';
 import { orderTurnCells } from '../../conversation/transcript/order';
+import { retryPromptOf } from '../../conversation/transcript/retryPrompt';
 import { ChangedFilesCard } from './ChangedFilesCard';
 import { TranscriptCellView } from './Transcript';
 
@@ -51,8 +52,15 @@ export interface TurnBlockProps {
   hiddenCells: number;
   /** 登记轮次锚点；正文导航条据此定位与高亮。 */
   onAnchor: (turnId: string, node: HTMLElement | null) => void;
-  /** 打开某一轮的改动对比，并落到第 index 个文件。 */
+  /** 这一轮的改动对比入口。 */
   onOpenChange: (turnId: string, turnNumber: number, index: number) => void;
+  /**
+   * 这一轮是否轮次链的末轮。
+   *
+   * 只有末轮的失败才给重试入口：更早的失败已经被后续轮次接管，再点一次只会把旧请求
+   * 当成新的用户意图注入，或另开一条与当前进度无关的轮次。
+   */
+  retryEnabled?: boolean;
   /**
    * 是否按历史段落做原生虚拟化。
    *
@@ -63,9 +71,14 @@ export interface TurnBlockProps {
 }
 
 export const TurnBlock = React.memo<TurnBlockProps>(
-  ({ turn, turnNumber, hiddenCells, onAnchor, onOpenChange, memoized = false }) => {
+  ({ turn, turnNumber, hiddenCells, onAnchor, onOpenChange, retryEnabled = false, memoized = false }) => {
     const files = changedFilesOf(turn.changes);
     const cells = orderTurnCells(hiddenCells > 0 ? turn.cells.slice(hiddenCells) : turn.cells);
+    /*
+     * 重试要的是这一轮**发起时**的请求：取整轮（含被折叠窗口裁掉的前导单元），
+     * 窗口只影响正文可见性，不该让失败卡突然失去重试入口。
+     */
+    const retryPrompt = retryEnabled ? retryPromptOf(turn.cells) : null;
     const tail = cells[cells.length - 1];
     const endsWithSummary = tail !== undefined && tail.role === 'summary';
     /*
@@ -121,7 +134,11 @@ export const TurnBlock = React.memo<TurnBlockProps>(
               }
             >
               {group.cells.map((cell) => (
-                <TranscriptCellView key={cell.id} cell={cell} />
+                <TranscriptCellView
+                  key={cell.id}
+                  cell={cell}
+                  retryPrompt={cell.role === 'failure' ? retryPrompt : undefined}
+                />
               ))}
             </div>
           </React.Fragment>

@@ -568,6 +568,7 @@ mod runtime_failure_tests {
             provider_event_type: None,
             upstream_request_id: None,
             committed_side_effects: false,
+            resumable_connect_failure: false,
         }
     }
 

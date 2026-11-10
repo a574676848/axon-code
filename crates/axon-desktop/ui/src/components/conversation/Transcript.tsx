@@ -22,6 +22,7 @@ import {
   type TranscriptCell,
 } from '../../conversation/transcript';
 import * as ipc from '../../ipc';
+import type { RetryPrompt } from '../../conversation/transcript/retryPrompt';
 import { Text } from '../ui/surfaces';
 import { useConversationActions } from './actions';
 import { AssistantBlock } from './AssistantBlock';
@@ -484,7 +485,11 @@ const FoldedBlock: React.FC<{ cell: Extract<TranscriptCell, { role: 'folded' }> 
 };
 
 /** 单个单元的渲染入口。 */
-export const TranscriptCellView: React.FC<{ cell: TranscriptCell }> = React.memo(({ cell }) => {
+export const TranscriptCellView: React.FC<{
+  cell: TranscriptCell;
+  /** 失败单元的重试入口需要这一轮的原始请求；其余单元不用。 */
+  retryPrompt?: RetryPrompt | null;
+}> = React.memo(({ cell, retryPrompt = null }) => {
   switch (cell.role) {
     case 'user':
       return (
@@ -533,7 +538,7 @@ export const TranscriptCellView: React.FC<{ cell: TranscriptCell }> = React.memo
       return cell.report === null ? (
         <NoticeBlock cell={{ id: cell.id, role: 'notice', title: '轮次失败', summary: cell.text, tone: 'danger' }} />
       ) : (
-        <FailureCard report={cell.report} fallbackText={cell.text} />
+        <FailureCard report={cell.report} fallbackText={cell.text} retryPrompt={retryPrompt} />
       );
     case 'summary':
       return <SummaryBlock cell={cell} />;
