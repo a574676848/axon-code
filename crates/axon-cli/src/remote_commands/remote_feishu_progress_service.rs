@@ -31,7 +31,10 @@ use super::remote_feishu_progress_projection::{
 };
 
 /// 卡片在两次 PATCH 之间的最小合并窗口。
-const PROGRESS_MERGE_WINDOW: Duration = Duration::from_millis(1_500);
+///
+/// 800ms 是「打字机观感」与「飞书 PATCH 限流」之间的折中：更短会把同一段正文拆成
+/// 更多次全量卡片写入，更容易撞限流与 28KB 预算校验；更长则让长回答看起来一顿一顿。
+const PROGRESS_MERGE_WINDOW: Duration = Duration::from_millis(800);
 /// 进度 PATCH 的单次受限网络超时。
 const PROGRESS_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// 收口硬上界在两次受限网络调用之上额外留出的结算余量。
