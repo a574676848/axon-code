@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+axon-protocol = { path = "../axon-protocol" }
 serde.workspace = true
 
 [lib]

@@ -171,17 +171,19 @@ fn project_wire_payload(session_id: &str, payload_json: &str, at_ms: u64) {
     super::remote_feishu_progress_service::project_committed_event(session_id, projection_event);
 }
 
-/// wire 事件到投影事件的唯一映射。
+/// wire 事件到投影事件的映射：事实语义走共享 crate，展示规则留在飞书侧。
 fn projection_event(kind: &WireEventKind, at_ms: u64) -> Option<TurnEvent> {
+    // 飞书的正文只吃增量：整段提交（canonical 与边界快照）由 durable outbox 负责最终回复，
+    // 在卡片上再写一遍就是重复正文。
+    if matches!(kind, WireEventKind::AssistantMessage(message) if !message.delta) {
+        return None;
+    }
+    axon_turn_view::from_wire(kind, at_ms).or_else(|| feishu_specific_event(kind))
+}
+
+/// 飞书自己的两组折算：工具行需要展示名与目标规则，供应商失败需要中文文案。
+fn feishu_specific_event(kind: &WireEventKind) -> Option<TurnEvent> {
     match kind {
-        WireEventKind::AssistantMessage(message)
-            if message.delta && !message.content.is_empty() =>
-        {
-            Some(TurnEvent::AssistantDelta {
-                part_id: message.part_id.clone(),
-                text: message.content.clone(),
-            })
-        }
         WireEventKind::ToolCall(call) => Some(TurnEvent::ToolStarted {
             call_id: call.tool_call_id.clone(),
             // 折叠态只给一行事实：工具显示名 + 模型自述目的 → 工具专用主参数 → 通用主参数。
@@ -207,18 +209,7 @@ fn projection_event(kind: &WireEventKind, at_ms: u64) -> Option<TurnEvent> {
             },
             meta: tool_result_meta(result),
         }),
-        WireEventKind::ReasoningStart(start) => Some(TurnEvent::ReasoningStarted {
-            part_id: start.part_id.clone(),
-            at_ms,
-        }),
-        WireEventKind::ReasoningEnd(end) => Some(TurnEvent::ReasoningFinished {
-            part_id: end.part_id.clone(),
-            at_ms,
-        }),
         WireEventKind::ProviderStatus(status) => provider_projection_event(status),
-        WireEventKind::UsageUpdate(usage) => Some(TurnEvent::ContextTokens {
-            tokens: usage.current_context_tokens,
-        }),
         _ => None,
     }
 }

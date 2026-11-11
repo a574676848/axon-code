@@ -1080,6 +1080,7 @@ dependencies = [
 name = "axon-turn-view"
 version = "0.1.0"
 dependencies = [
+ "axon-protocol",
  "serde",
 ]
 

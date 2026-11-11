@@ -10,8 +10,53 @@
 //!   桌面的折叠与虚拟列表、TUI 的布局都留在各自渠道。
 //! - 渠道只需要把 wire 事件折算成 [`TurnEvent`]，归并规则不再各写一遍。
 
+use axon_protocol::wire::{WireEventKind, WireProviderStatusPhase};
 use serde::Serialize;
 use std::collections::HashMap;
+
+/// 把一条 wire 事件折算成投影事件；返回 None 表示它不进入折叠视图。
+///
+/// 只收与渠道展示无关的事实：正文（增量或整段）、思考边界、上下文占用与供应商路由。
+/// 工具行需要渠道自己的展示名、目标与读数规则，供应商失败提示也需要渠道自己的文案，
+/// 因此这两类留在各渠道折算，展示逻辑不进共享模型，避免为了统一而过度抽象。
+#[must_use]
+pub fn from_wire(kind: &WireEventKind, at_ms: u64) -> Option<TurnEvent> {
+    match kind {
+        WireEventKind::AssistantMessage(message) if !message.content.is_empty() => {
+            Some(if message.delta {
+                TurnEvent::AssistantDelta {
+                    part_id: message.part_id.clone(),
+                    text: message.content.clone(),
+                }
+            } else {
+                TurnEvent::AssistantText {
+                    part_id: message.part_id.clone(),
+                    text: message.content.clone(),
+                }
+            })
+        }
+        WireEventKind::ReasoningStart(start) => Some(TurnEvent::ReasoningStarted {
+            part_id: start.part_id.clone(),
+            at_ms,
+        }),
+        WireEventKind::ReasoningEnd(end) => Some(TurnEvent::ReasoningFinished {
+            part_id: end.part_id.clone(),
+            at_ms,
+        }),
+        WireEventKind::UsageUpdate(usage) => Some(TurnEvent::ContextTokens {
+            tokens: usage.current_context_tokens,
+        }),
+        WireEventKind::ProviderStatus(status) => match status.phase {
+            WireProviderStatusPhase::Connecting | WireProviderStatusPhase::Connected => {
+                Some(TurnEvent::Route {
+                    route: format!("{}/{}", status.provider.trim(), status.model.trim()),
+                })
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
 
 /// 过程行状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -113,6 +158,11 @@ pub enum TurnEvent {
         /// 整段正文。
         text: String,
     },
+    /// 丢弃该 part 已累积的正文：provider 重试后，失败那一代的片段不再展示。
+    Discard {
+        /// transcript part 身份。
+        part_id: String,
+    },
     /// 工具调用开始。
     ToolStarted {
         /// 工具调用 ID。
@@ -193,6 +243,8 @@ impl TurnView {
         match event {
             TurnEvent::AssistantDelta { part_id, text } => self.push_body(&part_id, &text),
             TurnEvent::AssistantText { part_id, text } => self.set_body(&part_id, &text),
+            // 丢弃只清空正文，单元格位置保留：索引表因此永远有效，渲染侧跳过空单元。
+            TurnEvent::Discard { part_id } => self.set_body(&part_id, ""),
             TurnEvent::ToolStarted {
                 call_id,
                 label,

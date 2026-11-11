@@ -1,4 +1,4 @@
-use axon_protocol::wire::{WireEventEnvelope, WireEventKind};
+use axon_protocol::wire::WireEventEnvelope;
 use axon_tui_runtime::AgentTuiMessagePart;
 
 use super::run_output_generation_renderer::RetryGenerationProjection;
@@ -71,66 +71,34 @@ pub(super) fn project_assistant_content(content: &str) -> Option<String> {
 }
 
 pub(super) fn wire_assistant_messages(events: &[WireEventEnvelope]) -> Vec<AgentTuiMessagePart> {
-    let mut messages = Vec::<ProjectedAssistantMessage>::new();
+    // 归并走共享 crate：正文追加、整段覆写与重试丢弃都是同一套语义，
+    // 这里只剩「单元格 → 一行展示」的取舍。
+    let mut view = axon_turn_view::TurnView::default();
     let mut generation = RetryGenerationProjection::default();
     for event in events {
         if let Some(failed_part_ids) = generation.failed_parts_for_event(event) {
-            messages.retain(|message| !failed_part_ids.contains(&message.part_id));
+            for part_id in failed_part_ids {
+                view.apply(axon_turn_view::TurnEvent::Discard { part_id });
+            }
             continue;
         }
-        let WireEventKind::AssistantMessage(message) = &event.kind else {
-            continue;
-        };
-        if message.delta {
-            generation.observe_part(&message.part_id);
-        }
-        let entry = upsert_projected_message(&mut messages, &message.part_id);
-        if message.delta {
-            entry.delta_content.push_str(&message.content);
-        } else {
-            entry.final_content = Some(message.content.clone());
+        if let Some(turn_event) = axon_turn_view::from_wire(
+            &event.kind,
+            u64::try_from(event.recorded_at_ms).unwrap_or_default(),
+        ) {
+            view.apply(turn_event);
         }
     }
-    messages
-        .into_iter()
-        .filter_map(ProjectedAssistantMessage::into_part)
-        .collect()
-}
-
-fn upsert_projected_message<'a>(
-    messages: &'a mut Vec<ProjectedAssistantMessage>,
-    part_id: &str,
-) -> &'a mut ProjectedAssistantMessage {
-    if let Some(index) = messages
+    view.cells()
         .iter()
-        .position(|message| message.part_id == part_id)
-    {
-        return &mut messages[index];
-    }
-    let index = messages.len();
-    messages.push(ProjectedAssistantMessage {
-        part_id: part_id.to_owned(),
-        delta_content: String::new(),
-        final_content: None,
-    });
-    &mut messages[index]
-}
-
-struct ProjectedAssistantMessage {
-    part_id: String,
-    delta_content: String,
-    final_content: Option<String>,
-}
-
-impl ProjectedAssistantMessage {
-    fn into_part(self) -> Option<AgentTuiMessagePart> {
-        let content = self
-            .final_content
-            .as_deref()
-            .unwrap_or(self.delta_content.as_str());
-        project_assistant_content(content)
-            .map(|content| AgentTuiMessagePart::assistant(self.part_id, content))
-    }
+        .filter_map(|cell| {
+            let axon_turn_view::Cell::Body { part_id, text } = cell else {
+                return None;
+            };
+            project_assistant_content(text)
+                .map(|content| AgentTuiMessagePart::assistant(part_id.clone(), content))
+        })
+        .collect()
 }
 
 fn is_generated_summary_footer(line: &str) -> bool {
