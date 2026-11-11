@@ -1,11 +1,11 @@
 //! 飞书折叠态卡片的渲染契约测试。
 
 use super::*;
-use crate::remote_commands::remote_feishu_progress_model::ProjectionEvent;
+use crate::remote_commands::remote_feishu_progress_model::TurnEvent;
 
-fn projection_with_body(text: &str) -> ProgressProjection {
-    let mut projection = ProgressProjection::default();
-    projection.apply(ProjectionEvent::AssistantDelta {
+fn projection_with_body(text: &str) -> TurnView {
+    let mut projection = TurnView::default();
+    projection.apply(TurnEvent::AssistantDelta {
         part_id: "part-1".to_owned(),
         text: text.to_owned(),
     });
@@ -88,12 +88,12 @@ fn tool_row_target_is_bounded_to_one_line() {
 #[test]
 fn card_puts_process_rows_first_then_body_then_terminal_footer() {
     let mut projection = projection_with_body("结论正文");
-    projection.apply(ProjectionEvent::ToolStarted {
+    projection.apply(TurnEvent::ToolStarted {
         call_id: "call-1".to_owned(),
         label: "读取".to_owned(),
         target: Some("a.md".to_owned()),
     });
-    projection.apply(ProjectionEvent::Route {
+    projection.apply(TurnEvent::Route {
         route: "cpa/gemini-3.8-flash-high".to_owned(),
     });
 
@@ -127,9 +127,9 @@ fn card_puts_process_rows_first_then_body_then_terminal_footer() {
 
 #[test]
 fn card_window_keeps_only_the_latest_five_rows() {
-    let mut projection = ProgressProjection::default();
+    let mut projection = TurnView::default();
     for index in 0..(PROCESS_WINDOW_ROWS + 5) {
-        projection.apply(ProjectionEvent::ToolStarted {
+        projection.apply(TurnEvent::ToolStarted {
             call_id: format!("call-{index}"),
             label: "读取".to_owned(),
             target: Some(format!("file-{index}.md")),
@@ -167,7 +167,7 @@ fn budget_shrink_drops_all_rows_before_touching_body() {
 fn maximal_body_and_window_stay_within_budget() {
     let mut projection = projection_with_body(&"结".repeat(PROGRESS_CARD_MAX_CHARS));
     for index in 0..PROCESS_WINDOW_ROWS {
-        projection.apply(ProjectionEvent::ToolStarted {
+        projection.apply(TurnEvent::ToolStarted {
             call_id: format!("call-{index}"),
             label: "执行".to_owned(),
             target: Some("模".repeat(TOOL_TARGET_MAX_CHARS)),
@@ -261,7 +261,11 @@ fn tool_target_uses_shared_rules_per_tool() {
             r#"{"skill_name":"open-source-docs"}"#,
             "open-source-docs",
         ),
-        ("delegate_to_fast", r#"{"task":"审计 docs"}"#, "审计 docs"),
+        (
+            "delegate_to_fast",
+            r#"{"run_in_background":true,"task":"只读审计 docs 全部 Markdown","intent":"审计文档展示契约"}"#,
+            "审计文档展示契约",
+        ),
         (
             "send_message",
             r#"{"message":"尽快返回结论"}"#,
@@ -307,6 +311,15 @@ fn tool_target_collapses_lines_and_bounds_length() {
     let target = render_tool_target("delegate_to_fast", Some(&long), None).expect("任务原文");
     assert_eq!(target.chars().count(), TOOL_TARGET_MAX_CHARS + 1);
     assert!(target.ends_with('…'));
+    // 委托的折叠态主事实是 intent：它同样受单行长度上限约束，且优先于任务原文。
+    let long_intent = "目".repeat(TOOL_TARGET_MAX_CHARS + 20);
+    let target = render_tool_target("delegate_to_fast", Some(&long), Some(&long_intent))
+        .expect("模型自述目的");
+    assert_eq!(target.chars().count(), TOOL_TARGET_MAX_CHARS + 1);
+    assert_eq!(
+        target,
+        format!("{}{}", "目".repeat(TOOL_TARGET_MAX_CHARS), '…')
+    );
     assert_eq!(
         render_tool_target(
             "send_message",

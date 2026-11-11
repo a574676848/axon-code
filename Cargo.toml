@@ -3,6 +3,7 @@ members = [
     "crates/axon-jsonl",
     "crates/axon-crypto",
     "crates/axon-display",
+    "crates/axon-turn-view",
     "crates/axon-domain",
     "crates/axon-client-identity",
     "crates/axon-time",

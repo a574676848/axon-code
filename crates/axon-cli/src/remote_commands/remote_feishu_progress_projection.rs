@@ -21,7 +21,7 @@ use axon_agent_runtime::AgentReplyAttachmentRuntime;
 use axon_display::builtin_tool_display_label;
 
 use super::remote_feishu_progress_model::{
-    Cell, NoticeRow, ProgressProjection, ReasoningRow, RowStatus, ToolRow,
+    Cell, NoticeRow, ReasoningRow, RowStatus, ToolRow, TurnView,
 };
 
 /// `MEDIA:` 协议行前缀；渲染时整行隐藏。
@@ -112,7 +112,7 @@ pub(crate) struct RenderedBody {
 /// `elapsed_ms` 只在终态页脚出现：运行期不渲染耗时，避免每秒一次的无效 PATCH。
 #[must_use]
 pub(crate) fn render_card(
-    projection: &ProgressProjection,
+    projection: &TurnView,
     status: CardStatus,
     elapsed_ms: u64,
 ) -> RenderedCard {
@@ -213,7 +213,14 @@ pub(crate) fn render_tool_target(
     intent: Option<&str>,
 ) -> Option<String> {
     let arguments = arguments_summary.map(str::trim).unwrap_or_default();
-    match axon_display::tool_row_target(tool_name, arguments, intent) {
+    // 与 TUI 同一取值顺序：显式目的优先，其次按声明该字段的工具从调用参数里取一次，
+    // 这样事件本身没带目的时（例如按回执重建的投影）折叠态仍只显示这一句话。
+    let intent = intent
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| axon_display::tool_call_intent(tool_name, arguments));
+    match axon_display::tool_row_target(tool_name, arguments, intent.as_deref()) {
         Some(axon_display::ToolRowTarget::Text(text)) => return Some(bound_target(&text)),
         Some(axon_display::ToolRowTarget::Silent) => return None,
         None => {}
@@ -242,7 +249,7 @@ pub(crate) fn bound_tool_meta(value: &str) -> String {
     bound(value, TOOL_META_MAX_CHARS)
 }
 
-fn row_lines(projection: &ProgressProjection) -> Vec<String> {
+fn row_lines(projection: &TurnView) -> Vec<String> {
     projection
         .cells()
         .iter()
@@ -300,7 +307,7 @@ fn status_mark(status: RowStatus) -> &'static str {
     }
 }
 
-fn footer_line(projection: &ProgressProjection, status: CardStatus, elapsed_ms: u64) -> String {
+fn footer_line(projection: &TurnView, status: CardStatus, elapsed_ms: u64) -> String {
     let mut parts = vec![status.word().to_owned()];
     if elapsed_ms > 0 {
         parts.push(crate::display_units::format_duration_millis_compact(

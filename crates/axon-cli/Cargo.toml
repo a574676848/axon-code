@@ -20,6 +20,7 @@ axon-remote-runtime = { path = "../axon-remote-runtime" }
 axon-config = { path = "../axon-config" }
 axon-crypto = { path = "../axon-crypto" }
 axon-display = { path = "../axon-display" }
+axon-turn-view = { path = "../axon-turn-view" }
 axon-domain = { path = "../axon-domain" }
 axon-daemon = { path = "../axon-daemon" }
 axon-persona = { path = "../axon-persona" }

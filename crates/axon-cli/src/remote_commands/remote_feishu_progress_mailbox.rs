@@ -15,7 +15,7 @@ use std::{
     },
 };
 
-use super::remote_feishu_progress_model::ProjectionEvent;
+use super::remote_feishu_progress_model::TurnEvent;
 use super::remote_feishu_progress_projection::CardStatus;
 use super::remote_feishu_progress_service::{ProgressTurn, TurnProjection};
 
@@ -36,7 +36,7 @@ pub(super) enum ProgressCommand {
         /// 回合身份。
         turn: ProgressTurn,
         /// 投影事件。
-        event: ProjectionEvent,
+        event: TurnEvent,
     },
     /// 回合收口：强制 flush 后回报投影结论。
     Finish {
@@ -183,7 +183,7 @@ fn evict_oldest_delta(commands: &mut VecDeque<ProgressCommand>) {
         matches!(
             command,
             ProgressCommand::Event {
-                event: ProjectionEvent::AssistantDelta { .. },
+                event: TurnEvent::AssistantDelta { .. },
                 ..
             }
         )

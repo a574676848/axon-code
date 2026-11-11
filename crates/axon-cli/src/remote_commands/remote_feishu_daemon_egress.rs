@@ -24,7 +24,7 @@ use axon_session::SessionEventRecord;
 use axon_session_runtime::EventPublisher;
 use serde_json::Value;
 
-use super::remote_feishu_progress_model::{ProjectionEvent, RowStatus};
+use super::remote_feishu_progress_model::{RowStatus, TurnEvent};
 use super::remote_feishu_progress_projection::{
     bound_tool_meta, render_tool_label, render_tool_target,
 };
@@ -172,17 +172,17 @@ fn project_wire_payload(session_id: &str, payload_json: &str, at_ms: u64) {
 }
 
 /// wire 事件到投影事件的唯一映射。
-fn projection_event(kind: &WireEventKind, at_ms: u64) -> Option<ProjectionEvent> {
+fn projection_event(kind: &WireEventKind, at_ms: u64) -> Option<TurnEvent> {
     match kind {
         WireEventKind::AssistantMessage(message)
             if message.delta && !message.content.is_empty() =>
         {
-            Some(ProjectionEvent::AssistantDelta {
+            Some(TurnEvent::AssistantDelta {
                 part_id: message.part_id.clone(),
                 text: message.content.clone(),
             })
         }
-        WireEventKind::ToolCall(call) => Some(ProjectionEvent::ToolStarted {
+        WireEventKind::ToolCall(call) => Some(TurnEvent::ToolStarted {
             call_id: call.tool_call_id.clone(),
             // 折叠态只给一行事实：工具显示名 + 模型自述目的 → 工具专用主参数 → 通用主参数。
             label: render_tool_label(&call.tool_name),
@@ -192,7 +192,7 @@ fn projection_event(kind: &WireEventKind, at_ms: u64) -> Option<ProjectionEvent>
                 call.intent.as_deref(),
             ),
         }),
-        WireEventKind::ToolResult(result) => Some(ProjectionEvent::ToolFinished {
+        WireEventKind::ToolResult(result) => Some(TurnEvent::ToolFinished {
             call_id: result.tool_call_id.clone(),
             // 结果可能不带工具名：空标签表示沿用调用时已定的行。
             label: result
@@ -207,16 +207,16 @@ fn projection_event(kind: &WireEventKind, at_ms: u64) -> Option<ProjectionEvent>
             },
             meta: tool_result_meta(result),
         }),
-        WireEventKind::ReasoningStart(start) => Some(ProjectionEvent::ReasoningStarted {
+        WireEventKind::ReasoningStart(start) => Some(TurnEvent::ReasoningStarted {
             part_id: start.part_id.clone(),
             at_ms,
         }),
-        WireEventKind::ReasoningEnd(end) => Some(ProjectionEvent::ReasoningFinished {
+        WireEventKind::ReasoningEnd(end) => Some(TurnEvent::ReasoningFinished {
             part_id: end.part_id.clone(),
             at_ms,
         }),
         WireEventKind::ProviderStatus(status) => provider_projection_event(status),
-        WireEventKind::UsageUpdate(usage) => Some(ProjectionEvent::ContextTokens {
+        WireEventKind::UsageUpdate(usage) => Some(TurnEvent::ContextTokens {
             tokens: usage.current_context_tokens,
         }),
         _ => None,
@@ -224,10 +224,10 @@ fn projection_event(kind: &WireEventKind, at_ms: u64) -> Option<ProjectionEvent>
 }
 
 /// 供应商状态：只有重试、失败与切换值得一行提示，其余只刷新路由。
-fn provider_projection_event(status: &WireProviderStatus) -> Option<ProjectionEvent> {
+fn provider_projection_event(status: &WireProviderStatus) -> Option<TurnEvent> {
     match status.phase {
         WireProviderStatusPhase::Connecting | WireProviderStatusPhase::Connected => {
-            Some(ProjectionEvent::Route {
+            Some(TurnEvent::Route {
                 route: format!("{}/{}", status.provider.trim(), status.model.trim()),
             })
         }
@@ -252,8 +252,8 @@ fn provider_projection_event(status: &WireProviderStatus) -> Option<ProjectionEv
     }
 }
 
-fn provider_notice(text: String) -> ProjectionEvent {
-    ProjectionEvent::Notice {
+fn provider_notice(text: String) -> TurnEvent {
+    TurnEvent::Notice {
         key: FEISHU_PROVIDER_NOTICE_KEY.to_owned(),
         text,
     }

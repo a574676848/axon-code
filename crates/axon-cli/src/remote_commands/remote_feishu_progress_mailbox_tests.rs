@@ -25,7 +25,7 @@ fn finish(turn: ProgressTurn) -> ProgressCommand {
 fn delta(text: &str) -> ProgressCommand {
     ProgressCommand::Event {
         turn: turn("dispatch"),
-        event: ProjectionEvent::AssistantDelta {
+        event: TurnEvent::AssistantDelta {
             part_id: "part".to_owned(),
             text: text.to_owned(),
         },
@@ -35,7 +35,7 @@ fn delta(text: &str) -> ProgressCommand {
 fn tool(call_id: &str) -> ProgressCommand {
     ProgressCommand::Event {
         turn: turn("dispatch"),
-        event: ProjectionEvent::ToolStarted {
+        event: TurnEvent::ToolStarted {
             call_id: call_id.to_owned(),
             label: "执行".to_owned(),
             target: None,
@@ -60,21 +60,21 @@ fn finish_is_served_before_queued_projection_work() {
     assert!(matches!(
         take_highest_priority(&mut commands),
         Some(ProgressCommand::Event {
-            event: ProjectionEvent::AssistantDelta { text, .. },
+            event: TurnEvent::AssistantDelta { text, .. },
             ..
         }) if text == "delta-1"
     ));
     assert!(matches!(
         take_highest_priority(&mut commands),
         Some(ProgressCommand::Event {
-            event: ProjectionEvent::ToolStarted { call_id, .. },
+            event: TurnEvent::ToolStarted { call_id, .. },
             ..
         }) if call_id == "call-1"
     ));
     assert!(matches!(
         take_highest_priority(&mut commands),
         Some(ProgressCommand::Event {
-            event: ProjectionEvent::AssistantDelta { text, .. },
+            event: TurnEvent::AssistantDelta { text, .. },
             ..
         }) if text == "delta-2"
     ));
@@ -104,7 +104,7 @@ fn mailbox_evicts_oldest_delta_before_finish() {
         matches!(
             state.commands.front(),
             Some(ProgressCommand::Event {
-                event: ProjectionEvent::AssistantDelta { text, .. },
+                event: TurnEvent::AssistantDelta { text, .. },
                 ..
             }) if text == "delta-1"
         ),

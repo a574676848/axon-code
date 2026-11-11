@@ -25,7 +25,7 @@ use axon_agent_runtime::AgentReplyAttachmentRuntime;
 use axon_remote_feishu::{RemoteFeishuMessageTarget, RemoteFeishuProgressClient};
 
 use super::remote_feishu_progress_mailbox::{ProgressCommand, ProgressMailbox, ProgressSettlement};
-use super::remote_feishu_progress_model::{ProgressProjection, ProjectionEvent};
+use super::remote_feishu_progress_model::{TurnEvent, TurnView};
 use super::remote_feishu_progress_projection::{
     CardStatus, RenderedCard, render_card, render_progress_body,
 };
@@ -102,7 +102,7 @@ pub(crate) struct ProgressTurn {
 /// 单次回合的卡片状态。
 struct TurnCard {
     card_message_id: Option<String>,
-    projection: ProgressProjection,
+    projection: TurnView,
     started_at: Instant,
     last_patch_at: Option<Instant>,
     /// 最近一次成功 PATCH 的卡片指纹；相同即无需再写。
@@ -117,7 +117,7 @@ impl TurnCard {
     fn new() -> Self {
         Self {
             card_message_id: None,
-            projection: ProgressProjection::default(),
+            projection: TurnView::default(),
             started_at: Instant::now(),
             last_patch_at: None,
             projected_fingerprint: None,
@@ -127,7 +127,7 @@ impl TurnCard {
     }
 
     /// 归并一条投影事件。
-    fn apply(&mut self, event: ProjectionEvent) {
+    fn apply(&mut self, event: TurnEvent) {
         self.projection.apply(event);
     }
 
@@ -186,7 +186,7 @@ pub(crate) fn register_turn(
 }
 
 /// 投影一条已提交的投影事件；未登记的 session（非 Feishu 回合）静默忽略。
-pub(crate) fn project_committed_event(session_id: &str, event: ProjectionEvent) {
+pub(crate) fn project_committed_event(session_id: &str, event: TurnEvent) {
     let Some(service) = PROGRESS_SERVICE.get() else {
         return;
     };
@@ -285,7 +285,7 @@ impl FeishuProgressService {
     }
 
     /// 提交一条已确认的投影事件；永不阻塞。
-    pub(crate) fn publish_event(&self, turn: ProgressTurn, event: ProjectionEvent) {
+    pub(crate) fn publish_event(&self, turn: ProgressTurn, event: TurnEvent) {
         self.ensure_worker();
         self.mailbox
             .try_push(ProgressCommand::Event { turn, event });
@@ -395,7 +395,7 @@ impl ProgressWorker {
     ///
     /// 正文与过程行走同一个门：工具边界不再绕开合并窗口，避免一个多工具回合产生
     /// 数十次额外的全量写入。
-    fn apply_event(&mut self, turn: &ProgressTurn, event: ProjectionEvent) {
+    fn apply_event(&mut self, turn: &ProgressTurn, event: TurnEvent) {
         if self.is_finished(&turn.dispatch_id) {
             return;
         }
@@ -595,14 +595,14 @@ mod tests {
         // 未登记 session 的事件必须静默忽略，不影响非 Feishu 回合。
         project_committed_event(
             "session-unknown",
-            ProjectionEvent::AssistantDelta {
+            TurnEvent::AssistantDelta {
                 part_id: "p".to_owned(),
                 text: "ignored".to_owned(),
             },
         );
         project_committed_event(
             "session-registry",
-            ProjectionEvent::AssistantDelta {
+            TurnEvent::AssistantDelta {
                 part_id: "p".to_owned(),
                 text: "实时正文".to_owned(),
             },
