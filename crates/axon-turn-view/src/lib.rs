@@ -9,6 +9,12 @@
 //! - 工具行的显示名、目标与读数由调用方按自己的展示规则填进来；飞书的 8000 字预算、
 //!   桌面的折叠与虚拟列表、TUI 的布局都留在各自渠道。
 //! - 渠道只需要把 wire 事件折算成 [`TurnEvent`]，归并规则不再各写一遍。
+//!
+//! 各渠道现状：飞书卡片与 CLI 的 `run` 摘要直接吃这一层；桌面的 `conversation/transcript`
+//! 是完整界面状态机（提问、计划、子代理、生命周期、折叠），正文规则虽与这里一致，但整体
+//! 迁移属于重写而非复用，收益不足以承担回归风险；TUI 消费的是运行时 `AgentTurnEvent`，
+//! 其流式注册表负责按宽度折行与提交轮转，也不在这一层。新增 wire 事实时先改这里，再让
+//! 各渠道按需取用。
 
 use axon_protocol::wire::{WireEventKind, WireProviderStatusPhase};
 use serde::Serialize;
@@ -585,6 +591,51 @@ mod tests {
         assert_eq!(view.cells().len(), 1);
     }
 
+    fn assistant_message(part_id: &str, content: &str, delta: bool) -> WireEventKind {
+        WireEventKind::AssistantMessage(axon_protocol::wire::WireAssistantMessage {
+            part_id: part_id.to_owned(),
+            message_id: format!("message:{part_id}"),
+            content: content.to_owned(),
+            delta,
+        })
+    }
+
+    #[test]
+    fn wire_mapping_keeps_delta_append_and_whole_replace_distinct() {
+        let mut view = TurnView::default();
+        for kind in [
+            assistant_message("assistant:a", "你", true),
+            assistant_message("assistant:a", "好", true),
+        ] {
+            view.apply(from_wire(&kind, 1).expect("增量必须进入视图"));
+        }
+        assert_eq!(view.body_text(), "你好");
+
+        let whole = assistant_message("assistant:a", "你好世界", false);
+        view.apply(from_wire(&whole, 2).expect("整段必须进入视图"));
+        assert_eq!(
+            view.body_text(),
+            "你好世界",
+            "整段是覆写而不是追加：飞书与桌面都靠这条规则避免正文重复"
+        );
+    }
+
+    #[test]
+    fn discard_clears_text_and_keeps_the_cell_in_place() {
+        let mut view = TurnView::default();
+        view.apply(from_wire(&assistant_message("assistant:a", "失败的一代", true), 1).unwrap());
+        view.apply(TurnEvent::Discard {
+            part_id: "assistant:a".to_owned(),
+        });
+        view.apply(from_wire(&assistant_message("assistant:b", "重试后的正文", true), 2).unwrap());
+
+        assert_eq!(view.body_text(), "重试后的正文");
+        assert_eq!(
+            view.cells().len(),
+            2,
+            "被丢弃的单元格留在原位，索引表因此永远有效"
+        );
+    }
     #[test]
     fn applying_one_hundred_thousand_events_stays_linear() {
         let started = std::time::Instant::now();
