@@ -102,6 +102,20 @@ pub trait EventPublisher: Send + Sync {
     ) -> Result<(), String> {
         Ok(())
     }
+
+    /// 发布瞬态实时帧（不落盘、不改变游标、允许丢弃）；默认空实现。
+    ///
+    /// 只有需要「边生成边投影」的渠道实现它（例如飞书进度卡片）：它拿到的是与客户端
+    /// 同一条实时流，因此不必等语义边界落库才能更新视图。
+    fn publish_live(
+        &self,
+        _session_id: &str,
+        _interaction_id: &str,
+        _event_type: &str,
+        _payload_json: &str,
+    ) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// 可注入时间源，避免持久状态依赖系统时钟细节。

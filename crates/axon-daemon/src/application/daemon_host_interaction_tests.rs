@@ -381,8 +381,8 @@ fn streamed_text_is_compacted_into_one_durable_snapshot() {
     );
     assert_eq!(
         snapshot["kind"]["payload"]["delta"],
-        serde_json::json!(true),
-        "快照沿用增量语义：回放从空单元格开始累积"
+        serde_json::json!(false),
+        "快照按替换语义落库：回放直接得到整段，不会与实时增量叠加"
     );
 }
 

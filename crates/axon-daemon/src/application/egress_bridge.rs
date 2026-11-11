@@ -51,6 +51,29 @@ where
         }
         Ok(())
     }
+
+    fn publish_live(
+        &self,
+        session_id: &str,
+        interaction_id: &str,
+        event_type: &str,
+        payload_json: &str,
+    ) -> Result<(), String> {
+        self.publisher
+            .publish_live(session_id, interaction_id, event_type, payload_json)?;
+        if let (Ok(session_id), Ok(interaction_id)) = (
+            DaemonSessionId::new(session_id),
+            axon_domain::InteractionId::new(interaction_id),
+        ) {
+            self.stream_bridge.publish_live(&LiveStreamEvent {
+                session_id,
+                interaction_id,
+                event_type: event_type.to_owned(),
+                payload_json: payload_json.to_owned(),
+            });
+        }
+        Ok(())
+    }
 }
 
 impl<'a, P> CommittedEventEgress<'a, P> {
@@ -91,8 +114,16 @@ where
         Ok(())
     }
 
-    /// 投递瞬态实时帧：只走内存广播，不落盘、不推进 durable cursor。
+    /// 投递瞬态实时帧：先交给需要实时投影的渠道（不落盘），再走内存广播。
     pub(crate) fn publish_live(&self, event: &LiveStreamEvent) {
+        if let Err(error) = self.publisher.publish_live(
+            event.session_id.as_str(),
+            event.interaction_id.as_str(),
+            &event.event_type,
+            &event.payload_json,
+        ) {
+            axon_logger::warning(&format!("实时帧出站失败（不影响本轮）: {error}"));
+        }
         self.stream_bridge.publish_live(event);
     }
 

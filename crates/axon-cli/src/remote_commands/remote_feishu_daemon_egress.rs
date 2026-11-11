@@ -85,6 +85,23 @@ impl EventPublisher for FeishuDaemonEventPublisher {
     ) -> Result<(), String> {
         self.publish_with_work(event).map(|_| ())
     }
+
+    /// 瞬态实时帧：与客户端拿到的是同一条流，直接喂进度投影。
+    ///
+    /// 进度卡片必须在生成过程中就往前走，不能等语义边界落库；这里只做无阻塞入队，
+    /// 合并窗口与网络写入仍由后台 worker 负责。
+    fn publish_live(
+        &self,
+        session_id: &str,
+        _interaction_id: &str,
+        event_type: &str,
+        payload_json: &str,
+    ) -> Result<(), String> {
+        if event_type == WIRE_EVENT {
+            project_wire_payload(session_id, payload_json, axon_time::unix_now_ms());
+        }
+        Ok(())
+    }
 }
 
 impl FeishuDaemonEventPublisher {
@@ -133,19 +150,25 @@ fn project_committed_wire_event(event: &SessionEventRecord) {
     if event.event_type != WIRE_EVENT {
         return;
     }
-    let Ok(payload) = serde_json::from_str::<Value>(&event.payload_json) else {
+    project_wire_payload(
+        &event.session_id.to_string(),
+        &event.payload_json,
+        event.emitted_at_ms,
+    );
+}
+
+/// 一条 wire 载荷折算成投影事件；实时帧与 durable 帧共用这一份映射。
+fn project_wire_payload(session_id: &str, payload_json: &str, at_ms: u64) {
+    let Ok(payload) = serde_json::from_str::<Value>(payload_json) else {
         return;
     };
     let Ok(envelope) = serde_json::from_value::<WireEventEnvelope>(payload) else {
         return;
     };
-    let Some(projection_event) = projection_event(&envelope.kind, event.emitted_at_ms) else {
+    let Some(projection_event) = projection_event(&envelope.kind, at_ms) else {
         return;
     };
-    super::remote_feishu_progress_service::project_committed_event(
-        &event.session_id.to_string(),
-        projection_event,
-    );
+    super::remote_feishu_progress_service::project_committed_event(session_id, projection_event);
 }
 
 /// wire 事件到投影事件的唯一映射。
