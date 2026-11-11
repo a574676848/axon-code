@@ -52,6 +52,69 @@ fn subscription_filters_resume_cursor_and_session() {
 }
 
 #[test]
+fn live_broadcast_reaches_the_matching_interaction_without_a_cursor() {
+    let bridge = EventStreamBridge::new();
+    let session = DaemonSessionId::new("live-session").expect("Session ID");
+    let subscription = bridge
+        .subscribe(session.clone(), interaction_id("interaction-a"), None)
+        .expect("订阅应成功");
+    let other = bridge
+        .subscribe(session.clone(), interaction_id("interaction-b"), None)
+        .expect("订阅应成功");
+
+    let live = LiveStreamEvent {
+        session_id: session.clone(),
+        interaction_id: interaction_id("interaction-a"),
+        event_type: "wire_event".to_owned(),
+        payload_json: r#"{"kind":{"type":"reasoningDelta"}}"#.to_owned(),
+    };
+    bridge.publish_live(&live);
+
+    assert_eq!(
+        subscription.recv().expect("实时帧应到达同一 Interaction"),
+        StreamNotification::LiveEvent(live)
+    );
+    assert!(
+        other.try_recv().is_err(),
+        "别的 Interaction 的订阅不得收到这条瞬态帧"
+    );
+}
+
+#[test]
+fn live_broadcast_does_not_advance_the_durable_cursor() {
+    let bridge = EventStreamBridge::new();
+    let session = DaemonSessionId::new("live-cursor-session").expect("Session ID");
+    let interaction = interaction_id("interaction-a");
+    let subscription = bridge
+        .subscribe(session.clone(), interaction.clone(), None)
+        .expect("订阅应成功");
+    bridge.publish_live(&LiveStreamEvent {
+        session_id: session.clone(),
+        interaction_id: interaction.clone(),
+        event_type: "wire_event".to_owned(),
+        payload_json: "{}".to_owned(),
+    });
+    // 实时帧不占 durable sequence：紧随其后的提交仍然从 1 开始推进。
+    bridge.publish_for_interaction(
+        &interaction,
+        &event(&session, 1, "generation-a"),
+        &ConsumerCursor::new("generation-a", 1),
+    );
+
+    assert!(matches!(
+        subscription.recv().expect("先收到实时帧"),
+        StreamNotification::LiveEvent(_)
+    ));
+    assert_eq!(
+        subscription.recv().expect("再收到 durable 事件"),
+        StreamNotification::SessionEvent(StreamEvent {
+            event: event(&session, 1, "generation-a"),
+            cursor: ConsumerCursor::new("generation-a", 1),
+        })
+    );
+}
+
+#[test]
 fn reset_terminates_old_subscription_after_queued_events_are_drained() {
     let bridge = EventStreamBridge::new();
     let session = DaemonSessionId::new("lag-session").expect("Session ID");

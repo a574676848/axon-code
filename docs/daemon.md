@@ -101,7 +101,7 @@ provider 内容资产位于 `~/.axon/events/{provider}/`，目录名即 provider
 
 ## Turn 投影时序
 
-Turn 执行过程中，Daemon 按 Provider 生产顺序消费 wire 事件。首个可见文本立即落库，后续连续 delta 在 20ms 窗口或 32 条上限内合成一个批次提交；距上一次提交已超过窗口的慢速流仍逐帧提交，不额外等待一个 token 的间隔；工具、审批、生命周期等语义边界会先强制刷新缓冲的增量批次。每个批次使用一次 SQLite 事务取得连续 durable sequence，并严格按该 sequence 发布到 TUI、飞书、HTTP 与 WebSocket 订阅。Interaction 的实时批次与终态收口都在同一事务内校验当前 processing lease；supervisor 收口为 interrupted 后，旧 worker 的 delta、usage 或 completed 事件不会再进入 durable sequence。
+Turn 执行过程中，Daemon 按 Provider 生产顺序消费 wire 事件。正文与推理增量、用量、供应商状态只走内存实时通道：订阅者收到即渲染，不写库、不带 cursor、不推进重放水位，慢消费者丢帧也不阻塞本轮。落库只发生在语义边界（工具调用前后、流结束、轮次收口）：边界上先把累积的正文压成一条快照事件（同一 part 的整段文本），再提交该语义事件，因此每个边界一次事务。回放读的是边界快照：整段正文仍可重建，但不再逐帧回放打字过程。Interaction 的实时帧与终态收口都在同一事务内校验当前 processing lease；supervisor 收口为 interrupted 后，旧 worker 的 delta、usage 或 completed 事件不会再进入 durable sequence。
 
 Provider 的每次成功流固定产生 `StreamingStarted -> delta/reasoning/usage/tool -> StreamingCompleted`。整轮收口只追加记忆、技能、治理、运行错误、canonical assistant 等不可由实时增量替代的稳定快照，最后追加唯一 terminal `RunLifecycle`，再写入 `turn_completed`。实时 reasoning、tool、file、plan 与 usage 不在收口阶段重建；投影异常也不会把旧过程事件迟到插回日志。CLI/TUI 与 Gateway 订阅在同一 Workspace lane 回放时均按 `interactionId` 过滤，并直接消费 durable sequence，不建立第二套重排或完成门禁。
 

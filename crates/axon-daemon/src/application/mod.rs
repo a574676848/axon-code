@@ -4,6 +4,7 @@ mod daemon_host;
 mod daemon_host_event_subscription;
 pub(super) mod egress_bridge;
 pub(super) mod event_stream_bridge;
+mod event_stream_bridge_notifications;
 mod event_stream_bridge_telemetry;
 mod external_event_ingress;
 mod interaction_ingress;

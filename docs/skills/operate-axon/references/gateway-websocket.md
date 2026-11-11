@@ -81,6 +81,14 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
 
 `payload` 是状态字符串（`"understood"`、`"rejected"`、`"interrupted"`），`cursor` 为空。终态平时只由实时通道在状态跃迁时发出；早已结束、甚至从未产生过事件的回合不会再跃迁，客户端只有靠这条补帧才能收口当前轮次。`received` 与 `processing` 不补这条帧：那一轮还在跑，由实时状态跃迁给出。
 
+轮次进行中的正文与推理增量走瞬态帧，`event_type` 与 durable 帧同名（`wire_event`），但 `cursor` 为空且 `replay` 为 `false`：
+
+```json
+{"type":"event","subscribeId":"interaction:<interaction-id>","event_type":"wire_event","payload":{"kind":{"type":"reasoningDelta",...}},"cursor":null,"replay":false}
+```
+
+瞬态帧不推进 `resumeCursor`，也不写进 durable 日志：断线重连后不回放它们，改由下一次边界快照补齐（同样是一条 `wire_event`，`payload` 里带该 part 的整段正文）。客户端可以按到达顺序直接渲染，但不得把它们当作可续读的进度；需要权威进度时只认 `cursor` 非空的事件帧。
+
 ## 错误码
 
 | `error` | 触发条件与处置 |

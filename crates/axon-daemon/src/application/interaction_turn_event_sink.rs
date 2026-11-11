@@ -1,7 +1,12 @@
-//! Primary Turn 实时事件的 durable 提交与顺序发布。
+//! Primary Turn 实时事件的瞬态投递与边界落库。
+//!
+//! 流式增量（推理、正文片段、用量、供应商状态）只走内存实时通道：客户端收到就渲染，
+//! 延迟与磁盘无关。落库只发生在语义边界：工具调用前后、流结束、轮次收口。边界上把
+//! 累积的正文压成一条快照事件落库，回放据此重建整段文本，因此回放等价，而写量从
+//! 「每个增量一行」降到「每个边界一行」。
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 use axon_domain::{DaemonSessionId, InteractionId};
 use axon_session::{DaemonHostRecord, RuntimeStore};
@@ -9,29 +14,40 @@ use axon_session_runtime::{
     AtomicTurnPerformanceRecorder, EventPublisher, RuntimeClock, RuntimeEvent,
     SubagentSessionSinkFactory, TurnEventSink, TurnPerformanceRecorder, TurnPerformanceStage,
 };
+use serde_json::Value;
 
 use super::interaction_turn_generation_watch::{
     GenerationSignal, TurnGenerationWatch, UsageObservation, generation_signal,
 };
 use crate::application::egress_bridge::CommittedEventEgress;
+use crate::application::event_stream_bridge::LiveStreamEvent;
 
-/// 后续高频流式增量的微小攒批窗口。
-///
-/// 窗口只作用于「首个增量之后」的帧：首帧始终同步落库保证 TTFR，之后同窗口内的
-/// 碎片合并成一次事务。20ms 仍远低于一帧的观感阈值，但把 provider 逐帧下发的
-/// 推理增量与用量帧合成一批，写事务与 fsync 次数随之下降一个量级：这两类帧在
-/// 长上下文会话里能到每秒上百条，逐帧一事务会把 SQLite 单写者锁占满整个进程。
-const MICRO_BATCH_WINDOW: Duration = Duration::from_millis(20);
-/// 微小批次的最大事件数（超过即提前提交，保证单事务的有界性）。
-const MICRO_BATCH_MAX_EVENTS: usize = 32;
+/// 累积中的正文 part 类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LivePartKind {
+    /// assistant 正文片段。
+    Assistant,
+    /// 模型推理片段。
+    Reasoning,
+}
 
-#[derive(Default)]
-struct MicroBatchState {
-    pending: Vec<RuntimeEvent>,
-    started_at: Option<Instant>,
-    first_event_dispatched: bool,
-    /// 上一次提交时刻；用于把「攒批只发生在高速流上」判定成事实而不是假设。
-    last_commit_at: Option<Instant>,
+/// 一个正在累积的正文 part。
+struct LivePartState {
+    kind: LivePartKind,
+    /// 该 part 的首帧信封：快照只在正文位置上替换，其余字段与实时帧保持一致。
+    envelope: Value,
+    /// 已累积的正文。
+    text: String,
+}
+
+/// 一帧的投递分类。
+enum FrameClass {
+    /// 正文增量：实时投递并累积成边界快照。
+    LivePart { key: String, kind: LivePartKind },
+    /// 仅实时投递：用量与供应商状态，不进快照。
+    LiveOnly,
+    /// 必须落库的语义事件。
+    Durable,
 }
 
 /// 单个 Primary Turn 的实时 durable sink。
@@ -39,7 +55,8 @@ pub(super) struct RuntimeTurnEventSink<'a, S, P, C> {
     pub(super) store: &'a S,
     pub(super) event_egress: CommittedEventEgress<'a, P>,
     pub(super) publish_lock: Mutex<()>,
-    micro_batch: Mutex<MicroBatchState>,
+    /// 正在累积的正文 part；键带类型前缀，避免正文与推理的 partId 撞车。
+    live_parts: Mutex<BTreeMap<String, LivePartState>>,
     pub(super) host: &'a DaemonHostRecord,
     pub(super) session_id: &'a DaemonSessionId,
     pub(super) interaction_id: &'a InteractionId,
@@ -50,7 +67,7 @@ pub(super) struct RuntimeTurnEventSink<'a, S, P, C> {
     pub(super) subagent_session_sinks: Arc<dyn SubagentSessionSinkFactory>,
     /// 本轮最后一条用量更新。
     ///
-    /// 流式事件经 sink 直接落库，不经过 `TurnExecutionOutcome`，因此收尾指标
+    /// 流式事件经 sink 直接投递，不经过 `TurnExecutionOutcome`，因此收尾指标
     /// 只能在这里留痕；否则速率永远算不出来。
     last_usage: Mutex<Option<TurnUsageSnapshot>>,
     /// 本轮生成账本：provider 流式窗口与累计输出。
@@ -99,7 +116,7 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             store,
             event_egress,
             publish_lock: Mutex::new(()),
-            micro_batch: Mutex::new(MicroBatchState::default()),
+            live_parts: Mutex::new(BTreeMap::new()),
             host,
             session_id,
             interaction_id,
@@ -152,54 +169,201 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
         }
     }
 
-    /// 强制排空任何待提交的流式微批事件。
+    /// 边界收口：把累积的正文压成快照事件落库。
+    ///
+    /// 空排空是常态（没有累积正文），因此它不会产生任何写入。
     pub(super) fn flush(&self) -> Result<(), String>
     where
         S: RuntimeStore + Send + Sync,
-        P: EventPublisher + Send + Sync,
         C: RuntimeClock,
     {
-        let pending = {
-            let mut state = self
-                .micro_batch
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            state.started_at = None;
-            let pending = std::mem::take(&mut state.pending);
-            if !pending.is_empty() {
-                // 排空也是一次提交：记下时刻，避免下一帧被误判成慢速流而跳过攒批。
-                state.last_commit_at = Some(Instant::now());
-            }
-            pending
-        };
-        self.commit_and_publish_slice(&pending)
+        self.flush_live_parts()
     }
 
-    /// 攒批入口：`publish` 与 `publish_batch` 共用同一份批次状态。
-    ///
-    /// 流式帧先入缓冲，凑满窗口或条数后一次事务提交；关键语义事件（终态、工具调用、
-    /// 错误）先排空缓冲再与自身一起同步提交，顺序与延迟都不变。此前 `publish_batch`
-    /// 绕过缓冲直接提交，provider 逐帧下发的推理增量与用量帧因此各占一次写事务。
-    fn enqueue(&self, events: &[RuntimeEvent]) -> Result<(), String>
+    /// 逐帧分派：实时帧立即投递，语义事件先落边界快照再落库。
+    fn dispatch(&self, events: &[RuntimeEvent]) -> Result<(), String>
     where
         S: RuntimeStore + Send + Sync,
         P: EventPublisher + Send + Sync,
         C: RuntimeClock,
     {
+        for event in events {
+            self.observe_generation_event(event);
+            match classify_frame(&event.payload_json) {
+                FrameClass::LivePart { key, kind } => {
+                    self.publish_live_frame(event, Some((key, kind)))?
+                }
+                FrameClass::LiveOnly => self.publish_live_frame(event, None)?,
+                FrameClass::Durable => {
+                    // 边界：先用快照把已累积的正文落库，再提交这个语义事件。
+                    self.retire_part_for(event);
+                    self.flush_live_parts()?;
+                    self.commit_and_publish_slice(std::slice::from_ref(event))?;
+                }
+            }
+            if self.take_stream_settled() {
+                // 每收口一条 provider 流就补一帧实时指标，指标帧失败不影响本轮投递。
+                super::interaction_turn_payloads::publish_stream_settled_generation(
+                    self,
+                    self.interaction_id,
+                    self.clock.now_ms(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// 投递一帧实时事件；正文增量同时进入累积缓冲。
+    fn publish_live_frame(
+        &self,
+        event: &RuntimeEvent,
+        part: Option<(String, LivePartKind)>,
+    ) -> Result<(), String>
+    where
+        P: EventPublisher + Send + Sync,
+    {
+        let payload_json = annotate_live_event(&event.payload_json, self.interaction_id)?;
+        self.event_egress.publish_live(&LiveStreamEvent {
+            session_id: self.session_id.clone(),
+            interaction_id: self.interaction_id.clone(),
+            event_type: event.event_type.clone(),
+            payload_json: payload_json.clone(),
+        });
+        if let Some((key, kind)) = part {
+            self.accumulate_part(key, kind, &payload_json)?;
+        }
+        if let Some(performance) = &self.performance
+            && !performance.has_recorded(TurnPerformanceStage::FirstEventPublished)
+        {
+            performance.record(TurnPerformanceStage::FirstEventPublished);
+        }
+        Ok(())
+    }
+
+    /// 把一帧正文计入累积缓冲。
+    fn accumulate_part(
+        &self,
+        key: String,
+        kind: LivePartKind,
+        payload_json: &str,
+    ) -> Result<(), String> {
+        let envelope: Value =
+            serde_json::from_str(payload_json).map_err(|error| error.to_string())?;
+        let text = live_part_text(&envelope, kind).unwrap_or_default();
+        let mut parts = self
+            .live_parts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match parts.get_mut(&key) {
+            Some(state) => state.text.push_str(&text),
+            None => {
+                parts.insert(
+                    key,
+                    LivePartState {
+                        kind,
+                        envelope,
+                        text,
+                    },
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// 把累积正文合成一条快照事件落库（不投递实时帧：实时侧已经看过增量）。
+    fn flush_live_parts(&self) -> Result<(), String>
+    where
+        S: RuntimeStore + Send + Sync,
+        C: RuntimeClock,
+    {
+        let parts = {
+            let mut accumulated = self
+                .live_parts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if accumulated.is_empty() {
+                return Ok(());
+            }
+            std::mem::take(&mut *accumulated)
+        };
+        let mut events = Vec::with_capacity(parts.len());
+        for state in parts.into_values() {
+            if state.text.is_empty() {
+                continue;
+            }
+            let mut envelope = state.envelope;
+            match state.kind {
+                LivePartKind::Assistant => {
+                    envelope["kind"]["payload"]["content"] = Value::String(state.text);
+                }
+                LivePartKind::Reasoning => {
+                    envelope["kind"]["payload"]["delta"] = Value::String(state.text);
+                }
+            }
+            events.push(RuntimeEvent {
+                event_type: "wire_event".to_owned(),
+                payload_json: serde_json::to_string(&envelope)
+                    .map_err(|error| error.to_string())?,
+            });
+        }
         if events.is_empty() {
             return Ok(());
         }
-        let to_commit = {
-            let mut state = self
-                .micro_batch
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            decide_batch(&mut state, events, Instant::now())
+        self.commit_durable_only(&events)
+    }
+
+    /// 只落库、不投递实时帧：回放读得到，实时订阅者已经看过同一段增量。
+    fn commit_durable_only(&self, events: &[RuntimeEvent]) -> Result<(), String>
+    where
+        S: RuntimeStore + Send + Sync,
+        C: RuntimeClock,
+    {
+        let payloads = events
+            .iter()
+            .map(|event| (event.event_type.clone(), event.payload_json.clone()))
+            .collect::<Vec<_>>();
+        self.store
+            .append_interaction_events(
+                self.session_id,
+                self.host,
+                self.interaction_id,
+                self.lease_token,
+                &payloads,
+                self.clock.now_ms(),
+            )
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    /// 终态正文到达后丢掉同名累积：它的全文已经由这条事件承载，不必再写快照。
+    fn retire_part_for(&self, event: &RuntimeEvent) {
+        let Ok(envelope) = serde_json::from_str::<Value>(&event.payload_json) else {
+            return;
         };
-        match to_commit {
-            Some(batch) => self.commit_and_publish_slice(&batch),
-            None => Ok(()),
+        let Some(kind) = envelope.get("kind") else {
+            return;
+        };
+        if kind.get("type").and_then(Value::as_str) != Some("assistantMessage") {
+            return;
         }
+        let payload = kind.get("payload");
+        if payload
+            .and_then(|payload| payload.get("delta"))
+            .and_then(Value::as_bool)
+            == Some(true)
+        {
+            return;
+        }
+        let Some(part_id) = payload
+            .and_then(|payload| payload.get("partId"))
+            .and_then(Value::as_str)
+        else {
+            return;
+        };
+        self.live_parts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&assistant_part_key(part_id));
     }
 
     fn commit_and_publish_slice(&self, events: &[RuntimeEvent]) -> Result<(), String>
@@ -215,11 +379,6 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             .publish_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // 生成账本在唯一提交口观测：provider 的流式事件走批处理通道（`publish_batch`），
-        // 收尾与提问事件走 `publish`，两边的入口都汇聚到这里，挂在一处才不会漏帧。
-        for event in events {
-            self.observe_generation_event(event);
-        }
         let payloads = events
             .iter()
             .map(|event| {
@@ -275,15 +434,6 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             });
             let _ = self.event_egress.publish_observation(&frame);
         }
-        // 每收口一条 provider 流就补一帧实时指标：在跑的这一轮不必等整轮收口才进
-        // 会话级速率，界面上的速率才能像首字那样随本轮推进。指标帧失败不影响本轮提交。
-        if self.take_stream_settled() {
-            super::interaction_turn_payloads::publish_stream_settled_generation(
-                self,
-                self.interaction_id,
-                self.clock.now_ms(),
-            );
-        }
         Ok(())
     }
 }
@@ -295,11 +445,11 @@ where
     C: RuntimeClock,
 {
     fn publish(&self, event: &RuntimeEvent) -> Result<(), String> {
-        self.enqueue(std::slice::from_ref(event))
+        self.dispatch(std::slice::from_ref(event))
     }
 
     fn publish_batch(&self, events: &[RuntimeEvent]) -> Result<(), String> {
-        self.enqueue(events)
+        self.dispatch(events)
     }
 
     fn performance_recorder(&self) -> Option<Arc<dyn TurnPerformanceRecorder>> {
@@ -337,75 +487,74 @@ fn compute_application_ttft_ms(recorder: &AtomicTurnPerformanceRecorder) -> Opti
     }
 }
 
-fn is_micro_batchable(event: &RuntimeEvent) -> bool {
-    !(event.event_type == "turn_completed"
-        || event.event_type == "toolCall"
-        || event.event_type == "toolResult"
-        || event.event_type == "error")
+/// 正文 part 的累积键。
+fn assistant_part_key(part_id: &str) -> String {
+    format!("assistant:{part_id}")
 }
 
-/// 攒批决策：返回需要立即提交的批次，返回 None 表示继续留在缓冲里。
-///
-/// 纯函数，只依赖批次状态、事件与当前时刻，因此攒批窗口与条数上限可以脱离
-/// store 与线程直接验证。
-fn decide_batch(
-    state: &mut MicroBatchState,
-    events: &[RuntimeEvent],
-    now: Instant,
-) -> Option<Vec<RuntimeEvent>> {
-    if events.iter().any(|event| !is_micro_batchable(event)) {
-        // 关键语义事件：先排空历史缓冲，再与自身一起提交，顺序不变。
-        state.started_at = None;
-        state.last_commit_at = Some(now);
-        let mut batch = std::mem::take(&mut state.pending);
-        batch.extend_from_slice(events);
-        return Some(batch);
+/// 推理 part 的累积键。
+fn reasoning_part_key(part_id: &str) -> String {
+    format!("reasoning:{part_id}")
+}
+
+/// 按 wire 载荷给一帧分类：哪些只走实时、哪些必须落库。
+fn classify_frame(payload_json: &str) -> FrameClass {
+    let Ok(envelope) = serde_json::from_str::<Value>(payload_json) else {
+        return FrameClass::Durable;
+    };
+    let Some(kind) = envelope.get("kind") else {
+        return FrameClass::Durable;
+    };
+    let kind_type = kind.get("type").and_then(Value::as_str).unwrap_or_default();
+    let payload = kind.get("payload");
+    let part_id = payload
+        .and_then(|payload| payload.get("partId"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match kind_type {
+        "reasoningDelta" => FrameClass::LivePart {
+            key: reasoning_part_key(part_id),
+            kind: LivePartKind::Reasoning,
+        },
+        "assistantMessage"
+            if payload
+                .and_then(|payload| payload.get("delta"))
+                .and_then(Value::as_bool)
+                == Some(true) =>
+        {
+            FrameClass::LivePart {
+                key: assistant_part_key(part_id),
+                kind: LivePartKind::Assistant,
+            }
+        }
+        // 用量与供应商状态是过程读数：实时有用，回放没有价值。
+        "usageUpdate" | "providerStatus" => FrameClass::LiveOnly,
+        _ => FrameClass::Durable,
     }
-    if !state.first_event_dispatched {
-        // 首个流式帧：零等待同步写，确保 TTFR 不因攒批而被推迟。
-        state.first_event_dispatched = true;
-        state.last_commit_at = Some(now);
-        return Some(events.to_vec());
-    }
-    // 慢速流不攒批：距上一次提交已经超过一个窗口，说明下一帧要等的时间自己就够长，
-    // 再压进缓冲只会让每个增量都多等一个 token 间隔（首字之后的观感延迟翻倍）。
-    // 高速流才会落到下面的缓冲分支。
-    if state.pending.is_empty()
-        && state
-            .last_commit_at
-            .is_some_and(|at| now.duration_since(at) >= MICRO_BATCH_WINDOW)
-    {
-        state.last_commit_at = Some(now);
-        return Some(events.to_vec());
-    }
-    state.pending.extend_from_slice(events);
-    if state.started_at.is_none() {
-        state.started_at = Some(now);
-    }
-    let should_flush = state.pending.len() >= MICRO_BATCH_MAX_EVENTS
-        || state
-            .started_at
-            .is_some_and(|started| now.duration_since(started) >= MICRO_BATCH_WINDOW);
-    if should_flush {
-        state.started_at = None;
-        state.last_commit_at = Some(now);
-        return Some(std::mem::take(&mut state.pending));
-    }
-    None
+}
+
+/// 从正文 part 的信封里取出这一帧的文本。
+fn live_part_text(envelope: &Value, kind: LivePartKind) -> Option<String> {
+    let payload = envelope.get("kind")?.get("payload")?;
+    let text = match kind {
+        LivePartKind::Assistant => payload.get("content")?,
+        LivePartKind::Reasoning => payload.get("delta")?,
+    };
+    Some(text.as_str()?.to_owned())
 }
 
 fn annotate_live_event(
     payload_json: &str,
     interaction_id: &InteractionId,
 ) -> Result<String, String> {
-    let mut payload: serde_json::Value =
+    let mut payload: Value =
         serde_json::from_str(payload_json).map_err(|error| error.to_string())?;
     let object = payload
         .as_object_mut()
         .ok_or_else(|| "Runtime 事件 payload 必须是 JSON 对象".to_owned())?;
     object.insert(
         "interactionId".to_owned(),
-        serde_json::Value::String(interaction_id.as_str().to_owned()),
+        Value::String(interaction_id.as_str().to_owned()),
     );
     serde_json::to_string(&payload).map_err(|error| error.to_string())
 }
@@ -420,7 +569,7 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
         if let GenerationSignal::Usage(observation) = signal {
             self.record_last_usage(observation);
         }
-        let now = Instant::now();
+        let now = std::time::Instant::now();
         let mut watch = self.generation_watch();
         match signal {
             GenerationSignal::StreamStarted => watch.begin_stream(now),
@@ -466,23 +615,23 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn interaction_id() -> InteractionId {
         InteractionId::new("interaction-projection-test").expect("Interaction ID 应合法")
     }
 
-    fn stream_event(payload: &str) -> RuntimeEvent {
-        RuntimeEvent {
-            event_type: "wire_event".to_owned(),
-            payload_json: payload.to_owned(),
-        }
-    }
-
-    fn critical_event() -> RuntimeEvent {
-        RuntimeEvent {
-            event_type: "turn_completed".to_owned(),
-            payload_json: "{}".to_owned(),
-        }
+    fn wire_payload(kind_type: &str, payload: Value) -> String {
+        json!({
+            "schemaVersion": "v1",
+            "eventId": "event-1",
+            "correlationId": "assistant",
+            "session": {"sessionId": "session-1"},
+            "sequence": 0,
+            "recordedAtMs": 1,
+            "kind": {"type": kind_type, "payload": payload},
+        })
+        .to_string()
     }
 
     #[test]
@@ -492,113 +641,59 @@ mod tests {
             &interaction_id(),
         )
         .expect("流事件应可标注");
-        let payload: serde_json::Value = serde_json::from_str(&payload).expect("payload 应合法");
+        let payload: Value = serde_json::from_str(&payload).expect("payload 应合法");
 
         assert_eq!(payload["interactionId"], "interaction-projection-test");
         assert!(payload.get("transportContext").is_none());
     }
 
     #[test]
-    fn first_stream_frame_commits_alone_then_window_batches_the_rest() {
-        let mut state = MicroBatchState::default();
-        let started = Instant::now();
-
-        // 首帧零等待落库：TTFR 不能因为攒批被推迟。
-        let first = decide_batch(&mut state, &[stream_event("a")], started).expect("首帧必须提交");
-        assert_eq!(first.len(), 1);
-
-        // 窗口内的后续帧留在缓冲，不产生写事务。
-        assert!(decide_batch(&mut state, &[stream_event("b")], started).is_none());
-        assert!(
-            decide_batch(
-                &mut state,
-                &[stream_event("c")],
-                started + Duration::from_millis(10)
-            )
-            .is_none()
+    fn stream_deltas_and_usage_stay_off_the_durable_path() {
+        let text = wire_payload(
+            "reasoningDelta",
+            json!({"partId": "reasoning-part:1", "reasoningId": "r1", "delta": "想"}),
         );
-
-        // 越过窗口后，缓冲里的三帧合成一次提交。
-        let batch = decide_batch(
-            &mut state,
-            &[stream_event("d")],
-            started + MICRO_BATCH_WINDOW + Duration::from_millis(1),
-        )
-        .expect("越过窗口必须提交");
-        assert_eq!(
-            batch
-                .iter()
-                .map(|event| event.payload_json.as_str())
-                .collect::<Vec<_>>(),
-            ["b", "c", "d"]
-        );
-    }
-
-    #[test]
-    fn critical_event_flushes_pending_before_itself() {
-        let mut state = MicroBatchState::default();
-        let started = Instant::now();
-        let _ = decide_batch(&mut state, &[stream_event("a")], started);
-        assert!(decide_batch(&mut state, &[stream_event("b")], started).is_none());
-
-        let batch =
-            decide_batch(&mut state, &[critical_event()], started).expect("关键事件必须立即提交");
-        let kinds = batch
-            .iter()
-            .map(|event| event.event_type.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            kinds,
-            ["wire_event", "turn_completed"],
-            "关键事件不得越过更早的增量"
-        );
-    }
-
-    #[test]
-    fn slow_stream_is_never_delayed_by_the_batch_window() {
-        let mut state = MicroBatchState::default();
-        let started = Instant::now();
-        let _ = decide_batch(&mut state, &[stream_event("a")], started);
-
-        // 间隔已经超过窗口：每一帧都必须当场提交，不能等下一帧到达才把它带出去。
-        let second = decide_batch(
-            &mut state,
-            &[stream_event("b")],
-            started + Duration::from_millis(200),
-        )
-        .expect("慢速流必须立即提交");
-        assert_eq!(second.len(), 1);
-
-        let third = decide_batch(
-            &mut state,
-            &[stream_event("c")],
-            started + Duration::from_millis(400),
-        )
-        .expect("慢速流必须立即提交");
-        assert_eq!(third.len(), 1);
-        assert!(state.pending.is_empty());
-    }
-
-    #[test]
-    fn pending_batch_is_bounded_by_max_events() {
-        let mut state = MicroBatchState::default();
-        let started = Instant::now();
-        let _ = decide_batch(&mut state, &[stream_event("0")], started);
-        let mut committed = 0_usize;
-        // 窗口始终未到（每条只推进 1ms），因此唯一的提交触发点就是条数上限。
-        for index in 1..=MICRO_BATCH_MAX_EVENTS {
-            if let Some(batch) = decide_batch(
-                &mut state,
-                &[stream_event(&index.to_string())],
-                started + Duration::from_millis(1),
-            ) {
-                committed = committed.saturating_add(batch.len());
+        assert!(matches!(
+            classify_frame(&text),
+            FrameClass::LivePart {
+                kind: LivePartKind::Reasoning,
+                ..
             }
-        }
-        assert_eq!(
-            committed, MICRO_BATCH_MAX_EVENTS,
-            "条数上限必须先于窗口生效，缓冲不能被无限推高"
+        ));
+
+        let usage = wire_payload("usageUpdate", json!({"inputTokens": 1}));
+        assert!(matches!(classify_frame(&usage), FrameClass::LiveOnly));
+
+        let tool_call = wire_payload("toolCall", json!({"partId": "tool-1"}));
+        assert!(matches!(classify_frame(&tool_call), FrameClass::Durable));
+
+        let canonical = wire_payload(
+            "assistantMessage",
+            json!({"partId": "assistant-1", "content": "done"}),
         );
-        assert!(state.pending.is_empty());
+        assert!(matches!(classify_frame(&canonical), FrameClass::Durable));
+    }
+
+    #[test]
+    fn snapshot_reuses_the_same_part_envelope() {
+        let first = wire_payload(
+            "reasoningDelta",
+            json!({"partId": "r-part", "reasoningId": "r1", "delta": "先想"}),
+        );
+        let envelope: Value = serde_json::from_str(&first).expect("信封");
+        assert_eq!(
+            live_part_text(&envelope, LivePartKind::Reasoning).as_deref(),
+            Some("先想")
+        );
+
+        let assistant = wire_payload(
+            "assistantMessage",
+            json!({"partId": "a-part", "messageId": "m1", "content": "答", "delta": true}),
+        );
+        let envelope: Value = serde_json::from_str(&assistant).expect("信封");
+        assert_eq!(
+            live_part_text(&envelope, LivePartKind::Assistant).as_deref(),
+            Some("答")
+        );
     }
 }

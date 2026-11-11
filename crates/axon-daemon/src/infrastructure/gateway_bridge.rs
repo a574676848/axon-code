@@ -574,6 +574,16 @@ where
                     self.replay_cursor = None;
                     return Ok(Some(session_event(event)));
                 }
+                Ok(StreamNotification::LiveEvent(live)) => {
+                    // 瞬态帧：与本轮 wire 事件同名，客户端沿用同一套投影；
+                    // 没有 cursor 表示它不推进重放水位。
+                    return Ok(Some(GatewayEvent {
+                        event_type: live.event_type,
+                        payload_json: live.payload_json,
+                        cursor: None,
+                        replay: false,
+                    }));
+                }
                 Ok(StreamNotification::InteractionStatus(status)) => {
                     return Ok(Some(interaction_status_event(status, false)));
                 }

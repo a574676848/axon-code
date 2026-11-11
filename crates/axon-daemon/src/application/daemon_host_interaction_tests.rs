@@ -1,5 +1,6 @@
 use super::*;
 
+use crate::application::event_stream_bridge::StreamNotification;
 use axon_domain::{
     AudienceContext, AudienceKind, ConsumerCursor, DisclosurePolicy, InteractionId,
     InteractionRecord, InteractionSource, InteractionStatus, ReplyRoute, ScopeRef,
@@ -81,9 +82,63 @@ impl TurnExecutor for LiveProjectionExecutor {
     }
 }
 
+/// 连续吐两段正文增量，用于验证边界快照能把整段文本压缩成一次落库。
+#[derive(Clone, Copy)]
+struct StreamingDeltaExecutor;
+
+impl TurnExecutor for StreamingDeltaExecutor {
+    fn execute(
+        &self,
+        _request: ActionExecutionRequest,
+    ) -> Result<TurnExecutionOutcome, TurnExecutionError> {
+        Err(TurnExecutionError::permanent(
+            "Primary Turn 必须走实时投影通道",
+        ))
+    }
+
+    fn execute_streaming(
+        &self,
+        _request: ActionExecutionRequest,
+        sink: Option<&dyn TurnEventSink>,
+    ) -> Result<TurnExecutionOutcome, TurnExecutionError> {
+        let sink = sink.expect("Primary Turn 必须注入实时投影通道");
+        for (index, piece) in ["你", "好"].iter().enumerate() {
+            sink.publish(&RuntimeEvent {
+                event_type: "wire_event".to_owned(),
+                payload_json: serde_json::json!({
+                    "schemaVersion": "v1",
+                    "eventId": format!("delta-{index}"),
+                    "correlationId": "assistant",
+                    "session": {"sessionId": "session"},
+                    "sequence": 0,
+                    "recordedAtMs": TEST_NOW_MS,
+                    "kind": {
+                        "type": "assistantMessage",
+                        "payload": {
+                            "partId": "assistant-part-1",
+                            "messageId": "message-1",
+                            "content": piece,
+                            "delta": true,
+                        },
+                    },
+                })
+                .to_string(),
+            })
+            .expect("正文增量必须可投递");
+        }
+        Ok(TurnExecutionOutcome {
+            events: vec![RuntimeEvent {
+                event_type: TURN_COMPLETED_EVENT_TYPE.to_owned(),
+                payload_json: serde_json::json!({"response": "你好"}).to_string(),
+            }],
+            next_execution: None,
+            checkpoint: CheckpointTelemetry::default(),
+        })
+    }
+}
+
 #[derive(Clone, Copy)]
 struct NoopPublisher;
-
 impl EventPublisher for NoopPublisher {
     fn publish(&self, _event: &SessionEventRecord, _cursor: &ConsumerCursor) -> Result<(), String> {
         Ok(())
@@ -183,37 +238,32 @@ fn primary_turn_projects_live_event_before_completion() {
         }),
     ));
     assert!(submit[0].ok);
+    let session_id = primary_session_id_for_interaction(&interaction).expect("主会话 ID");
+    let subscription = host
+        .stream_bridge()
+        .subscribe(session_id.clone(), interaction.interaction_id.clone(), None)
+        .expect("订阅实时投影");
     // Daemon 运行时由独立协调线程驱动主 turn；测试显式驱动同一入口。
     host.primary_turn_tick(TEST_TICK_LIMIT)
         .expect("驱动主 turn");
 
-    let session_id = primary_session_id_for_interaction(&interaction).expect("主会话 ID");
-    // 主 turn 在 worker pool 上执行：轮询等待实时投影与收口事件落库。
+    // 过程帧先到订阅者：它是瞬态投影，不进事件日志。
     let deadline = Instant::now() + TEST_WAIT_DURATION;
-    let events = loop {
-        let events = store
-            .replay_events(&session_id, 0, 16)
-            .expect("读取 Session 事件");
-        // 本轮的三条 durable 事实：用户消息、实时投影、收口。
-        if events.len() >= 3 || Instant::now() >= deadline {
-            break events;
+    let mut live_payload = None;
+    while Instant::now() < deadline {
+        if let Ok(StreamNotification::LiveEvent(live)) =
+            subscription.recv_timeout(TEST_POLL_INTERVAL)
+        {
+            assert_eq!(live.event_type, LIVE_WIRE_EVENT_TYPE);
+            assert_eq!(live.session_id, session_id);
+            assert_eq!(live.interaction_id, interaction.interaction_id);
+            live_payload = Some(live.payload_json);
+            break;
         }
-        thread::sleep(TEST_POLL_INTERVAL);
-    };
-    assert_eq!(
-        events
-            .iter()
-            .map(|event| event.event_type.as_str())
-            .collect::<Vec<_>>(),
-        [
-            LIVE_WIRE_EVENT_TYPE,
-            LIVE_WIRE_EVENT_TYPE,
-            TURN_COMPLETED_EVENT_TYPE
-        ],
-        "用户事实与实时投影必须早于收口批量事件落库"
-    );
+    }
     let live_payload: serde_json::Value =
-        serde_json::from_str(&events[1].payload_json).expect("解析实时 wire payload");
+        serde_json::from_str(&live_payload.expect("实时投影必须先于收口到达订阅者"))
+            .expect("解析实时 wire payload");
     let expected_payload: serde_json::Value =
         serde_json::from_str(LIVE_WIRE_EVENT_PAYLOAD).expect("解析期望 wire payload");
     assert_eq!(
@@ -227,16 +277,112 @@ fn primary_turn_projects_live_event_before_completion() {
             .and_then(serde_json::Value::as_str),
         Some(interaction.interaction_id.as_str())
     );
+
+    let events = loop {
+        let events = store
+            .replay_events(&session_id, 0, 16)
+            .expect("读取 Session 事件");
+        if events
+            .iter()
+            .any(|event| event.event_type == TURN_COMPLETED_EVENT_TYPE)
+            || Instant::now() >= deadline
+        {
+            break events;
+        }
+        thread::sleep(TEST_POLL_INTERVAL);
+    };
     assert_eq!(
-        live_payload
-            .get("recordedAtMs")
-            .and_then(serde_json::Value::as_u64),
-        Some(TEST_NOW_MS),
-        "wire payload 必须保留业务事件时间"
+        events
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect::<Vec<_>>(),
+        [LIVE_WIRE_EVENT_TYPE, TURN_COMPLETED_EVENT_TYPE],
+        "durable 日志只保留用户事实与收口，过程帧由实时通道承载"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !event.payload_json.contains("providerStatus")),
+        "供应商状态是过程读数，不得逐条落库"
     );
     assert_eq!(
         events[1].emitted_at_ms, LIVE_COMMIT_NOW_MS,
         "durable commit 时间必须取自提交前时钟"
+    );
+}
+
+#[test]
+fn streamed_text_is_compacted_into_one_durable_snapshot() {
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    let workspace = WorkspaceResolver
+        .resolve(directory.path(), TEST_NOW_MS)
+        .expect("解析 Workspace");
+    store
+        .register_workspace(&workspace)
+        .expect("注册 Workspace");
+    let interaction = interaction(workspace.workspace_id.as_str());
+    let mut host = DaemonHost::new(
+        store.clone(),
+        StreamingDeltaExecutor,
+        NoopPublisher,
+        FixedClock,
+        TestProcess,
+        RuntimeHostId::new("daemon-stream-compaction-host").expect("Host ID"),
+        TEST_LEASE_DURATION_MS,
+        TEST_LEASE_DURATION_MS,
+    );
+    host.start().expect("启动 Host");
+
+    let submit = host.handle_request(request(
+        "submit-stream",
+        DaemonCommand::SubmitInteraction(SubmitInteractionRequest {
+            interaction: interaction.clone(),
+        }),
+    ));
+    assert!(submit[0].ok);
+    host.primary_turn_tick(TEST_TICK_LIMIT)
+        .expect("驱动主 turn");
+
+    let session_id = primary_session_id_for_interaction(&interaction).expect("主会话 ID");
+    let deadline = Instant::now() + TEST_WAIT_DURATION;
+    let events = loop {
+        let events = store
+            .replay_events(&session_id, 0, 16)
+            .expect("读取 Session 事件");
+        if events
+            .iter()
+            .any(|event| event.event_type == TURN_COMPLETED_EVENT_TYPE)
+            || Instant::now() >= deadline
+        {
+            break events;
+        }
+        thread::sleep(TEST_POLL_INTERVAL);
+    };
+
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect::<Vec<_>>(),
+        [
+            LIVE_WIRE_EVENT_TYPE,
+            LIVE_WIRE_EVENT_TYPE,
+            TURN_COMPLETED_EVENT_TYPE
+        ],
+        "两段增量必须压成一条快照，而不是各占一行"
+    );
+    let snapshot: serde_json::Value =
+        serde_json::from_str(&events[1].payload_json).expect("解析快照 payload");
+    assert_eq!(
+        snapshot["kind"]["payload"]["content"],
+        serde_json::json!("你好"),
+        "快照必须携带整段正文，回放才能重建"
+    );
+    assert_eq!(
+        snapshot["kind"]["payload"]["delta"],
+        serde_json::json!(true),
+        "快照沿用增量语义：回放从空单元格开始累积"
     );
 }
 

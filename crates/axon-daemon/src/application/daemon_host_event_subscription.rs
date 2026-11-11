@@ -26,6 +26,8 @@ pub(crate) const STREAM_RESET_EVENT: &str = "stream_reset";
 pub(crate) const SUBSCRIPTION_READY_EVENT: &str = "subscription_ready";
 pub(crate) const RUNTIME_OBSERVATION_EVENT: &str = "runtime_observation";
 const SESSION_EVENT: &str = "session_event";
+/// 瞬态实时帧：不带 cursor，消费方按同一套 wire 投影处理。
+const LIVE_EVENT: &str = "live_event";
 const INTERACTION_STATUS_EVENT: &str = "interaction_status";
 
 struct OpenedEventSubscription {
@@ -252,6 +254,18 @@ impl IpcResponseStream for SessionEventResponseStream {
                     );
                     response.cursor = Some(stream_event.cursor);
                     return Ok(Some(response));
+                }
+                Ok(StreamNotification::LiveEvent(live)) => {
+                    // 瞬态帧不推进 durable cursor：消费方只按 wire 事件投影本轮正文，
+                    // 断线重连后由边界快照补齐，因此这里不带 cursor。
+                    return Ok(Some(DaemonResponse::success(
+                        self.request_id.clone(),
+                        serde_json::json!({
+                            "event": LIVE_EVENT,
+                            "eventType": live.event_type,
+                            "payloadJson": live.payload_json,
+                        }),
+                    )));
                 }
                 Ok(StreamNotification::InteractionStatus(status)) => {
                     return Ok(Some(self.status_response(status)));

@@ -4,7 +4,7 @@
 //! 订阅只是同一事件的非 durable 投影。桥先调用 durable publisher，成功后才
 //! 发布到内存流，避免订阅者看到尚未提交的事件，也避免渠道各自复制顺序逻辑。
 
-use super::event_stream_bridge::EventStreamBridge;
+use super::event_stream_bridge::{EventStreamBridge, LiveStreamEvent};
 use axon_domain::{ConsumerCursor, DaemonSessionId, InteractionId, RuntimeObservationFrame};
 use axon_session::SessionEventRecord;
 use axon_session_runtime::EventPublisher;
@@ -89,6 +89,11 @@ where
         self.stream_bridge
             .publish_for_interaction(interaction_id, event, cursor);
         Ok(())
+    }
+
+    /// 投递瞬态实时帧：只走内存广播，不落盘、不推进 durable cursor。
+    pub(crate) fn publish_live(&self, event: &LiveStreamEvent) {
+        self.stream_bridge.publish_live(event);
     }
 
     /// 发布非持久观测帧给实时订阅者。

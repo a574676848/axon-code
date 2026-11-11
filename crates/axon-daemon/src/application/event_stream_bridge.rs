@@ -41,32 +41,9 @@ mod telemetry_tests;
 #[path = "event_stream_bridge_tests.rs"]
 mod tests;
 
-/// 一个已提交事件及其 durable cursor。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StreamEvent {
-    /// 事件日志记录。
-    pub event: SessionEventRecord,
-    /// 事件提交后的 cursor。
-    pub cursor: ConsumerCursor,
-}
-
-/// 一个实时订阅通知。
-#[derive(Debug, Clone, PartialEq)]
-pub enum StreamNotification {
-    /// 已提交的 Session 事件。
-    SessionEvent(StreamEvent),
-    /// 实时流被裁剪，客户端应携带 cursor 重连并按 durable replay 重建。
-    StreamReset {
-        /// 客户端最近确认的 durable cursor。
-        cursor: Option<ConsumerCursor>,
-        /// 裁剪原因。
-        reason: &'static str,
-    },
-    /// Interaction 状态已完成 durable 提交。
-    InteractionStatus(InteractionStatus),
-    /// 运行时非持久观测帧（零落盘、可丢弃、不推进 durable cursor）。
-    Observation(RuntimeObservationFrame),
-}
+pub use super::event_stream_bridge_notifications::{
+    LiveStreamEvent, StreamEvent, StreamNotification,
+};
 
 #[derive(Debug)]
 struct Subscriber {
@@ -317,6 +294,62 @@ impl EventStreamBridge {
                 })) {
                 Ok(()) => {
                     subscriber.last_cursor = Some(cursor.clone());
+                    self.telemetry.record_delivered();
+                    true
+                }
+                Err(TrySendError::Full(_)) => {
+                    subscriber.request_reset(STREAM_RESET_REASON_SUBSCRIBER_LAG);
+                    self.telemetry.record_mailbox_full_prune();
+                    true
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    self.telemetry.record_disconnected_prune();
+                    false
+                }
+            }
+        });
+        let removed = before.saturating_sub(subscribers.len());
+        self.telemetry.record_subscribers_removed(removed);
+        let session_is_empty = subscribers.is_empty();
+        registry.total = registry.total.saturating_sub(removed);
+        if session_is_empty {
+            registry.by_session.remove(&event.session_id);
+        }
+    }
+
+    /// 投递一条瞬态实时帧。
+    ///
+    /// 慢消费者与断开连接只影响该消费者自己的投影：实时帧不推进重放水位，
+    /// 落后时由下一次 durable 边界快照补齐，因此这里不做乱序恢复判定。
+    pub fn publish_live(&self, event: &LiveStreamEvent) {
+        self.telemetry.record_publish();
+        let lock_started_at = self.telemetry.lock_started_at();
+        let mut registry = self
+            .subscribers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.telemetry.record_lock_acquired(lock_started_at);
+        let Some(subscribers) = registry.by_session.get_mut(&event.session_id) else {
+            return;
+        };
+        let before = subscribers.len();
+        subscribers.retain_mut(|subscriber| {
+            let matches = match subscriber.interaction_id.as_ref() {
+                None => true,
+                Some(interaction_id) => interaction_id == &event.interaction_id,
+            };
+            if !matches {
+                return true;
+            }
+            self.telemetry.record_match();
+            if subscriber.reset_pending() {
+                return true;
+            }
+            match subscriber
+                .sender
+                .try_send(StreamNotification::LiveEvent(event.clone()))
+            {
+                Ok(()) => {
                     self.telemetry.record_delivered();
                     true
                 }

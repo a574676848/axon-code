@@ -20,6 +20,9 @@ use super::daemon_subscription_recovery::{
     next_retry_delay, query_interaction_status, subscribe_daemon_events,
 };
 
+/// 瞬态帧与 durable 帧共用同一个 wire 事件类型名。
+const WIRE_EVENT_TYPE: &str = "wire_event";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum DaemonSubscriptionPhase {
     Connected,
@@ -101,6 +104,14 @@ pub(super) enum SubscriptionMessage {
     },
     #[serde(rename = "session_event")]
     SessionEvent { record: SessionEventRecord },
+    /// 瞬态实时帧：没有 durable cursor，只喂实时投影。
+    #[serde(rename = "live_event")]
+    LiveEvent {
+        #[serde(rename = "eventType")]
+        event_type: String,
+        #[serde(rename = "payloadJson")]
+        payload_json: String,
+    },
     #[serde(rename = "interaction_status")]
     InteractionStatus { status: InteractionStatus },
     #[serde(rename = "subscription_heartbeat")]
@@ -270,6 +281,19 @@ pub(super) fn handle_subscription_message(
                 SubscriptionControl::Continue,
                 SubscriptionControl::Completed,
             ))
+        }
+        SubscriptionMessage::LiveEvent {
+            event_type,
+            payload_json,
+        } => {
+            // 瞬态帧只喂实时投影：不推进 durable cursor，也不参与完成判定。
+            if event_type == WIRE_EVENT_TYPE
+                && let Some(observe) = state.on_event.as_deref_mut()
+                && let Ok(envelope) = serde_json::from_str::<WireEventEnvelope>(&payload_json)
+            {
+                observe(DaemonTurnObservation::Wire(envelope));
+            }
+            Ok(SubscriptionControl::Continue)
         }
         SubscriptionMessage::InteractionStatus { status } => {
             state.progress_serial = state.progress_serial.saturating_add(1);

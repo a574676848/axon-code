@@ -71,6 +71,43 @@ fn runtime_observation_message_delivers_to_subscriber() {
     assert_eq!(received, vec![frame]);
 }
 
+#[test]
+fn live_event_delivers_wire_projection_without_touching_cursor() {
+    let mut received = Vec::new();
+    let mut observe = |observation| match observation {
+        DaemonTurnObservation::Wire(envelope) => received.push(envelope),
+        DaemonTurnObservation::RuntimeObservation(_)
+        | DaemonTurnObservation::SubscriptionPhase(_) => {}
+    };
+    let mut state = DaemonTurnState::new("interaction".to_owned(), Some(&mut observe));
+    let cursor = ConsumerCursor::new("generation", 3);
+    state.cursor = Some(cursor.clone());
+    let payload = serde_json::json!({
+        "schemaVersion": "v1",
+        "eventId": "live-1",
+        "correlationId": "assistant",
+        "session": {"sessionId": "session-1"},
+        "sequence": 0,
+        "recordedAtMs": 1,
+        "kind": {
+            "type": "assistantMessage",
+            "payload": {"partId": "assistant-part", "messageId": "m", "content": "你", "delta": true},
+        },
+    })
+    .to_string();
+    let message = SubscriptionMessage::LiveEvent {
+        event_type: WIRE_EVENT_TYPE.to_owned(),
+        payload_json: payload,
+    };
+
+    let control = handle_subscription_message(message, &mut state).expect("处理瞬态帧");
+    let cursor_after = state.cursor.clone();
+
+    assert_eq!(control, SubscriptionControl::Continue);
+    assert_eq!(received.len(), 1, "瞬态帧必须进入实时投影");
+    assert_eq!(cursor_after, Some(cursor), "瞬态帧不得推进 durable cursor");
+}
+
 /// 静默不是失联：读超时不得被折算成「失去订阅」。
 #[test]
 fn silent_read_is_not_a_lost_subscription() {
