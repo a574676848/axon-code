@@ -199,6 +199,32 @@ Linux/macOS 安装器会将 `$HOME/.axon/bin`（或自定义 `AXON_INSTALL_DIR`�
 
 3. Daemon 正在重启窗口内提交的请求不会被持久化，服务就绪后重新提交同一请求即可。
 
+### 桌面端提示「本轮被后端拒绝」
+
+**症状**：对话区出现「本轮被后端拒绝，可重新发送这条消息。」，这一轮只产出部分推理，没有失败卡。
+
+**说明**：这条结论只表示 Daemon 没把这一轮跑完，不指向模型或凭据。常见来源是运行态库写锁：`session_events` 在长会话里增长很快，写入在 `busy_timeout` 之后返回 `database is locked`，宿主续租失败后按代际失效停止后台 Worker，在跑的轮次连同子代理一起中断，Interaction 落为 `rejected`。
+
+**解决方案**：
+
+1. 看宿主租约是否仍有效：
+
+   ```bash
+   axon daemon health
+   ```
+
+   `host.leaseRemainingMs` 为正即有效；`host.status` 仍是 `running` 而租约已过期，说明后台 Worker 已停。
+
+2. 在 `data/logs/axon-<日期>.log` 中检索 `database is locked`、`Daemon Host 续租失败`、`Daemon Primary Turn 拒绝 Interaction`。拒绝原因按 error 级留痕，带 `layer` 与 `message`，是这一条结论唯一能指向真因的地方。
+
+3. 恢复服务后重新发送：
+
+   ```bash
+   axon daemon restart
+   ```
+
+4. 运行态库长期偏大时，按 [daemon.md](daemon.md) 的清理说明核对 `axon.system.brain-cleanup` 的保留窗口与运行记录；保留期内的新事件不会被清理。
+
 ### 工具调用被禁止
 
 **症状**：工具没有执行，回执状态为 `blocked`，并包含明确的禁止原因。

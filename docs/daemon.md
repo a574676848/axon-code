@@ -10,7 +10,7 @@ Daemon 是 Axon 的后台长生命周期宿主。当前实现已经把 `PrimaryT
 - 使用 Workspace registry 将 `WorkspaceId` 解析为真实工作目录。
 - 调用 `InteractionTurnRunner` 完成普通问答或原子创建 Goal、首个 Execution 与 Event。
 - 托管 Scheduler、飞书 transport、事件桥、投递与维护 tick。
-- 维护内部 host generation、lease 与 fencing 状态。
+- 维护内部 host generation、lease 与 fencing 状态。Host lease 续租按 10 秒周期执行，租约有效期 30 秒；续租失败时按 750ms 退避重试至 8 次，只在实际失去代际（另一 Host 已接管或租约已过期）或重试预算耗尽时才停止全部后台 Worker，因此一次运行态库写锁抖动不会连带停掉在跑的轮次。
 - 由 Execution Worker 线程池接管已提交 Execution，前台不活跃时写入未读 Result 并入队持久化 Delivery。
 
 Goal 创建后的执行已经收口：Execution 由 Daemon 的 Execution Worker 池领取，并通过 `ProviderRunSubagentExecutor` 作为隔离子代理执行；结果写入 Result 与持久 completion notification。一个 Execution 只通知主 turn 一次，通知包含来源（一次性 Goal 或 Axon cron）、Goal 目标、执行结果及结果文档路径；主 turn 产出的汇总回复随后登记到创建 Task 时声明的唯一投递目标，目标取自 Execution 的 `transportContext`，不再广播到当时在线的其它客户端。TUI 只有真实展示后确认，Feishu 只有写入 durable outbox 后确认，任何渠道都不允许静默 ack。跨过创建后的下一个本地自然日仍未读则自动失效并静默停止通知。
@@ -101,7 +101,7 @@ provider 内容资产位于 `~/.axon/events/{provider}/`，目录名即 provider
 
 ## Turn 投影时序
 
-Turn 执行过程中，Daemon 按 Provider 生产顺序消费 wire 事件。首个可见文本立即落库，后续同一 assistant/reasoning part 的连续 delta 在 12ms 或 16KiB 边界内批量提交；工具、审批、生命周期等语义边界会先强制刷新文本批次。每个批次使用一次 SQLite 事务取得连续 durable sequence，并严格按该 sequence 发布到 TUI、飞书、HTTP 与 WebSocket 订阅。Interaction 的实时批次与终态收口都在同一事务内校验当前 processing lease；supervisor 收口为 interrupted 后，旧 worker 的 delta、usage 或 completed 事件不会再进入 durable sequence。
+Turn 执行过程中，Daemon 按 Provider 生产顺序消费 wire 事件。首个可见文本立即落库，后续连续 delta 在 20ms 窗口或 32 条上限内合成一个批次提交；工具、审批、生命周期等语义边界会先强制刷新缓冲的增量批次。每个批次使用一次 SQLite 事务取得连续 durable sequence，并严格按该 sequence 发布到 TUI、飞书、HTTP 与 WebSocket 订阅。Interaction 的实时批次与终态收口都在同一事务内校验当前 processing lease；supervisor 收口为 interrupted 后，旧 worker 的 delta、usage 或 completed 事件不会再进入 durable sequence。
 
 Provider 的每次成功流固定产生 `StreamingStarted -> delta/reasoning/usage/tool -> StreamingCompleted`。整轮收口只追加记忆、技能、治理、运行错误、canonical assistant 等不可由实时增量替代的稳定快照，最后追加唯一 terminal `RunLifecycle`，再写入 `turn_completed`。实时 reasoning、tool、file、plan 与 usage 不在收口阶段重建；投影异常也不会把旧过程事件迟到插回日志。CLI/TUI 与 Gateway 订阅在同一 Workspace lane 回放时均按 `interactionId` 过滤，并直接消费 durable sequence，不建立第二套重排或完成门禁。
 

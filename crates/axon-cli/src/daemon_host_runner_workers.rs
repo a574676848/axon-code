@@ -51,10 +51,18 @@ pub(super) fn start_background_workers(
     );
 }
 
+/// 续租失败的瞬时重试上限。
+///
+/// 租约 30s、续租间隔 10s：8 次 × 750ms 的退避最坏占 6s，仍能在租约到期前补上，
+/// 不会因为一次写锁抖动就把整个 Daemon 的后台能力停掉。
+const LEASE_RENEW_RETRY_ATTEMPTS: u32 = 8;
+/// 两次续租重试之间的退避。
+const LEASE_RENEW_RETRY_DELAY: Duration = Duration::from_millis(750);
+
 fn start_lease_worker(host: CliDaemonHost, running: Arc<AtomicBool>) {
     thread::spawn(move || {
         while running.load(Ordering::Acquire) {
-            if let Err(error) = host.renew() {
+            if let Err(error) = renew_with_retry(|| host.renew(), LEASE_RENEW_RETRY_DELAY) {
                 axon_logger::error(&format!(
                     "Daemon Host 续租失败，后台 Worker 将停止: {error}"
                 ));
@@ -64,6 +72,44 @@ fn start_lease_worker(host: CliDaemonHost, running: Arc<AtomicBool>) {
             thread::sleep(Duration::from_millis(HOST_RENEW_INTERVAL_MS));
         }
     });
+}
+
+/// 续租：只在代际失效时立刻放弃，其余错误按退避重试。
+///
+/// 续租与业务写共用同一个 SQLite 单写者锁：一次 checkpoint 或大事务就能让
+/// `renew_host` 在 busy_timeout 之后返回 `database is locked`。此前任何一次这样的
+/// 抖动都会把运行标志置 false，连带停掉全部后台 Worker 与在跑的轮次，用户侧只剩
+/// 一句「本轮被后端拒绝」。存储抖动可重试；代际失效（另一个 Host 已接管，或租约
+/// 已过期）不可重试，必须立刻 fail-closed。
+fn renew_with_retry<F>(mut renew: F, delay: Duration) -> Result<(), axon_daemon::DaemonHostError>
+where
+    F: FnMut() -> Result<(), axon_daemon::DaemonHostError>,
+{
+    let mut attempt = 0_u32;
+    loop {
+        match renew() {
+            Ok(()) => {
+                if attempt > 0 {
+                    axon_logger::warning(&format!(
+                        "Daemon Host 续租在第 {attempt} 次重试后恢复，后台 Worker 继续运行"
+                    ));
+                }
+                return Ok(());
+            }
+            Err(error) if error.is_fenced() => return Err(error),
+            Err(error) => {
+                if attempt >= LEASE_RENEW_RETRY_ATTEMPTS {
+                    return Err(error);
+                }
+                attempt = attempt.saturating_add(1);
+                axon_logger::warning(&format!(
+                    "Daemon Host 续租失败，第 {attempt} 次重试前退避 {}ms: {error}",
+                    delay.as_millis()
+                ));
+                thread::sleep(delay);
+            }
+        }
+    }
 }
 
 fn start_primary_turn_worker(
@@ -233,6 +279,9 @@ fn handle_host_tick<T>(
 }
 
 /// 主 turn 拒绝原因必须留下可诊断证据；用户可见失败由统一 durable terminal 投影。
+///
+/// 按 error 级留痕：这条日志是「本轮被后端拒绝」唯一能指向真因的地方，而默认
+/// `log_level = "error"` 会把 warn 整条吞掉，界面就只剩一句无法自查的结论。
 fn handle_primary_turn_failures(
     result: &Result<axon_daemon::PrimaryTurnTickReport, axon_daemon::DaemonHostError>,
 ) {
@@ -240,7 +289,7 @@ fn handle_primary_turn_failures(
         return;
     };
     for failure in &report.failures {
-        axon_logger::warning(&format!(
+        axon_logger::error(&format!(
             "Daemon Primary Turn 拒绝 Interaction {}: layer={:?} message={}",
             failure.interaction_id.as_str(),
             failure.layer,
@@ -325,5 +374,71 @@ fn run_delivery_tick(config_path: &std::path::Path, owner: &str) {
         axon_logger::warning(&format!(
             "Feishu Daemon feedback tick 失败，将在下一轮重试: {error}"
         ));
+    }
+}
+
+#[cfg(test)]
+mod lease_renew_tests {
+    use super::*;
+
+    fn storage_error() -> axon_daemon::DaemonHostError {
+        axon_daemon::DaemonHostError::Store(axon_session::RuntimeStoreError::Storage(
+            "database is locked".to_owned(),
+        ))
+    }
+
+    #[test]
+    fn transient_storage_failure_is_retried_until_it_succeeds() {
+        let mut calls = 0_u32;
+        let outcome = renew_with_retry(
+            || {
+                calls = calls.saturating_add(1);
+                if calls < 3 {
+                    Err(storage_error())
+                } else {
+                    Ok(())
+                }
+            },
+            Duration::ZERO,
+        );
+
+        assert!(
+            outcome.is_ok(),
+            "写锁抖动必须被重试吃掉，不得停掉后台 Worker"
+        );
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
+    fn fenced_lease_stops_immediately_without_retrying() {
+        let mut calls = 0_u32;
+        let outcome = renew_with_retry(
+            || {
+                calls = calls.saturating_add(1);
+                Err(axon_daemon::DaemonHostError::Store(
+                    axon_session::RuntimeStoreError::Fenced,
+                ))
+            },
+            Duration::ZERO,
+        );
+
+        assert!(outcome.is_err());
+        assert!(outcome.err().is_some_and(|error| error.is_fenced()));
+        assert_eq!(calls, 1, "代际失效不可重试：另一个 Host 已经接管");
+    }
+
+    #[test]
+    fn persistent_storage_failure_gives_up_after_the_bounded_budget() {
+        let mut calls = 0_u32;
+        let outcome = renew_with_retry(
+            || {
+                calls = calls.saturating_add(1);
+                Err(storage_error())
+            },
+            Duration::ZERO,
+        );
+
+        assert!(outcome.is_err(), "重试预算耗尽后仍须 fail-closed");
+        assert_eq!(calls, LEASE_RENEW_RETRY_ATTEMPTS + 1);
     }
 }

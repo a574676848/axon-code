@@ -15,10 +15,15 @@ use super::interaction_turn_generation_watch::{
 };
 use crate::application::egress_bridge::CommittedEventEgress;
 
-/// 后续高频流式增量的微小攒批窗口（对齐人眼不可见的 5ms）。
-const MICRO_BATCH_WINDOW: Duration = Duration::from_millis(5);
-/// 微小批次的最大事件数。
-const MICRO_BATCH_MAX_EVENTS: usize = 8;
+/// 后续高频流式增量的微小攒批窗口。
+///
+/// 窗口只作用于「首个增量之后」的帧：首帧始终同步落库保证 TTFR，之后同窗口内的
+/// 碎片合并成一次事务。20ms 仍远低于一帧的观感阈值，但把 provider 逐帧下发的
+/// 推理增量与用量帧合成一批，写事务与 fsync 次数随之下降一个量级：这两类帧在
+/// 长上下文会话里能到每秒上百条，逐帧一事务会把 SQLite 单写者锁占满整个进程。
+const MICRO_BATCH_WINDOW: Duration = Duration::from_millis(20);
+/// 微小批次的最大事件数（超过即提前提交，保证单事务的有界性）。
+const MICRO_BATCH_MAX_EVENTS: usize = 32;
 
 #[derive(Default)]
 struct MicroBatchState {
@@ -163,6 +168,33 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
         self.commit_and_publish_slice(&pending)
     }
 
+    /// 攒批入口：`publish` 与 `publish_batch` 共用同一份批次状态。
+    ///
+    /// 流式帧先入缓冲，凑满窗口或条数后一次事务提交；关键语义事件（终态、工具调用、
+    /// 错误）先排空缓冲再与自身一起同步提交，顺序与延迟都不变。此前 `publish_batch`
+    /// 绕过缓冲直接提交，provider 逐帧下发的推理增量与用量帧因此各占一次写事务。
+    fn enqueue(&self, events: &[RuntimeEvent]) -> Result<(), String>
+    where
+        S: RuntimeStore + Send + Sync,
+        P: EventPublisher + Send + Sync,
+        C: RuntimeClock,
+    {
+        if events.is_empty() {
+            return Ok(());
+        }
+        let to_commit = {
+            let mut state = self
+                .micro_batch
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            decide_batch(&mut state, events, Instant::now())
+        };
+        match to_commit {
+            Some(batch) => self.commit_and_publish_slice(&batch),
+            None => Ok(()),
+        }
+    }
+
     fn commit_and_publish_slice(&self, events: &[RuntimeEvent]) -> Result<(), String>
     where
         S: RuntimeStore + Send + Sync,
@@ -256,51 +288,11 @@ where
     C: RuntimeClock,
 {
     fn publish(&self, event: &RuntimeEvent) -> Result<(), String> {
-        if !is_micro_batchable(event) {
-            // 关键语义事件：先将历史微批排空，再立即同步提交当前事件，严防乱序或延迟。
-            self.flush()?;
-            return self.commit_and_publish_slice(std::slice::from_ref(event));
-        }
-
-        let to_commit = {
-            let mut state = self
-                .micro_batch
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if !state.first_event_dispatched {
-                // 首个 Delta：零等待立即同步写，确保 TTFR 0 毫秒附加延迟。
-                state.first_event_dispatched = true;
-                Some(vec![event.clone()])
-            } else {
-                state.pending.push(event.clone());
-                if state.started_at.is_none() {
-                    state.started_at = Some(Instant::now());
-                }
-                let should_flush = state.pending.len() >= MICRO_BATCH_MAX_EVENTS
-                    || state
-                        .started_at
-                        .is_some_and(|started| started.elapsed() >= MICRO_BATCH_WINDOW);
-                if should_flush {
-                    state.started_at = None;
-                    Some(std::mem::take(&mut state.pending))
-                } else {
-                    None
-                }
-            }
-        };
-
-        if let Some(events) = to_commit {
-            self.commit_and_publish_slice(&events)?;
-        }
-        Ok(())
+        self.enqueue(std::slice::from_ref(event))
     }
 
     fn publish_batch(&self, events: &[RuntimeEvent]) -> Result<(), String> {
-        if events.is_empty() {
-            return Ok(());
-        }
-        self.flush()?;
-        self.commit_and_publish_slice(events)
+        self.enqueue(events)
     }
 
     fn performance_recorder(&self) -> Option<Arc<dyn TurnPerformanceRecorder>> {
@@ -343,6 +335,42 @@ fn is_micro_batchable(event: &RuntimeEvent) -> bool {
         || event.event_type == "toolCall"
         || event.event_type == "toolResult"
         || event.event_type == "error")
+}
+
+/// 攒批决策：返回需要立即提交的批次，返回 None 表示继续留在缓冲里。
+///
+/// 纯函数，只依赖批次状态、事件与当前时刻，因此攒批窗口与条数上限可以脱离
+/// store 与线程直接验证。
+fn decide_batch(
+    state: &mut MicroBatchState,
+    events: &[RuntimeEvent],
+    now: Instant,
+) -> Option<Vec<RuntimeEvent>> {
+    if events.iter().any(|event| !is_micro_batchable(event)) {
+        // 关键语义事件：先排空历史缓冲，再与自身一起提交，顺序不变。
+        state.started_at = None;
+        let mut batch = std::mem::take(&mut state.pending);
+        batch.extend_from_slice(events);
+        return Some(batch);
+    }
+    if !state.first_event_dispatched {
+        // 首个流式帧：零等待同步写，确保 TTFR 不因攒批而被推迟。
+        state.first_event_dispatched = true;
+        return Some(events.to_vec());
+    }
+    state.pending.extend_from_slice(events);
+    if state.started_at.is_none() {
+        state.started_at = Some(now);
+    }
+    let should_flush = state.pending.len() >= MICRO_BATCH_MAX_EVENTS
+        || state
+            .started_at
+            .is_some_and(|started| now.duration_since(started) >= MICRO_BATCH_WINDOW);
+    if should_flush {
+        state.started_at = None;
+        return Some(std::mem::take(&mut state.pending));
+    }
+    None
 }
 
 fn annotate_live_event(
@@ -422,6 +450,20 @@ mod tests {
         InteractionId::new("interaction-projection-test").expect("Interaction ID 应合法")
     }
 
+    fn stream_event(payload: &str) -> RuntimeEvent {
+        RuntimeEvent {
+            event_type: "wire_event".to_owned(),
+            payload_json: payload.to_owned(),
+        }
+    }
+
+    fn critical_event() -> RuntimeEvent {
+        RuntimeEvent {
+            event_type: "turn_completed".to_owned(),
+            payload_json: "{}".to_owned(),
+        }
+    }
+
     #[test]
     fn stream_event_annotation_adds_only_interaction_id() {
         let payload = annotate_live_event(
@@ -433,5 +475,84 @@ mod tests {
 
         assert_eq!(payload["interactionId"], "interaction-projection-test");
         assert!(payload.get("transportContext").is_none());
+    }
+
+    #[test]
+    fn first_stream_frame_commits_alone_then_window_batches_the_rest() {
+        let mut state = MicroBatchState::default();
+        let started = Instant::now();
+
+        // 首帧零等待落库：TTFR 不能因为攒批被推迟。
+        let first = decide_batch(&mut state, &[stream_event("a")], started).expect("首帧必须提交");
+        assert_eq!(first.len(), 1);
+
+        // 窗口内的后续帧留在缓冲，不产生写事务。
+        assert!(decide_batch(&mut state, &[stream_event("b")], started).is_none());
+        assert!(
+            decide_batch(
+                &mut state,
+                &[stream_event("c")],
+                started + Duration::from_millis(10)
+            )
+            .is_none()
+        );
+
+        // 越过窗口后，缓冲里的三帧合成一次提交。
+        let batch = decide_batch(
+            &mut state,
+            &[stream_event("d")],
+            started + MICRO_BATCH_WINDOW + Duration::from_millis(1),
+        )
+        .expect("越过窗口必须提交");
+        assert_eq!(
+            batch
+                .iter()
+                .map(|event| event.payload_json.as_str())
+                .collect::<Vec<_>>(),
+            ["b", "c", "d"]
+        );
+    }
+
+    #[test]
+    fn critical_event_flushes_pending_before_itself() {
+        let mut state = MicroBatchState::default();
+        let started = Instant::now();
+        let _ = decide_batch(&mut state, &[stream_event("a")], started);
+        assert!(decide_batch(&mut state, &[stream_event("b")], started).is_none());
+
+        let batch =
+            decide_batch(&mut state, &[critical_event()], started).expect("关键事件必须立即提交");
+        let kinds = batch
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            ["wire_event", "turn_completed"],
+            "关键事件不得越过更早的增量"
+        );
+    }
+
+    #[test]
+    fn pending_batch_is_bounded_by_max_events() {
+        let mut state = MicroBatchState::default();
+        let started = Instant::now();
+        let _ = decide_batch(&mut state, &[stream_event("0")], started);
+        let mut committed = 0_usize;
+        // 窗口始终未到（每条只推进 1ms），因此唯一的提交触发点就是条数上限。
+        for index in 1..=MICRO_BATCH_MAX_EVENTS {
+            if let Some(batch) = decide_batch(
+                &mut state,
+                &[stream_event(&index.to_string())],
+                started + Duration::from_millis(1),
+            ) {
+                committed = committed.saturating_add(batch.len());
+            }
+        }
+        assert_eq!(
+            committed, MICRO_BATCH_MAX_EVENTS,
+            "条数上限必须先于窗口生效，缓冲不能被无限推高"
+        );
+        assert!(state.pending.is_empty());
     }
 }

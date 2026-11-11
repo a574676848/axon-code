@@ -5,6 +5,10 @@
  * 它没跑完通常是父轮失败的连坐结果（父轮一停，运行时连同它的子代理一起收口）。
  * 只读会话（目标执行会话）没有输入坞，因此既不能「重新发送」也不能「回到上层会话」，
  * 它只说清后台已停止推进。
+ *
+ * 横幅只陈述已知事实，不猜原因：拒绝可能来自 Provider，也可能来自 Daemon 自身的
+ * 存储、租约或 Worker 层。真实原因由终态载荷画成失败卡，横幅不再把「检查模型与
+ * 凭据」当成默认结论。
  */
 
 /** 横幅所属的车道类型。 */
@@ -24,11 +28,11 @@ export interface FailureBanner {
   text: string;
 }
 
-const PRIMARY_REJECTED = '本轮被后端拒绝，请检查模型与凭据配置后重试。';
+const PRIMARY_REJECTED = '本轮被后端拒绝，可重新发送这条消息。';
 const PRIMARY_FAILED = '本轮执行失败，可重新发送这条消息。';
 const SUBAGENT_INTERRUPTED = '父轮失败导致本子代理被中断，请在上层会话重发。';
 const SUBAGENT_FAILED = '本子代理执行失败，请在上层会话查看原因后重发。';
-const SUBAGENT_REJECTED = '本子代理请求被后端拒绝，请在上层会话检查模型与凭据配置。';
+const SUBAGENT_REJECTED = '本子代理请求被后端拒绝，请在上层会话重新发送。';
 const READONLY_REJECTED = '本轮被后端拒绝，后台已停止推进，此视图只读。';
 const READONLY_FAILED = '本轮执行失败，后台已停止推进，此视图只读。';
 
