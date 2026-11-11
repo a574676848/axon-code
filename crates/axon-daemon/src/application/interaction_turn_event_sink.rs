@@ -30,6 +30,8 @@ struct MicroBatchState {
     pending: Vec<RuntimeEvent>,
     started_at: Option<Instant>,
     first_event_dispatched: bool,
+    /// 上一次提交时刻；用于把「攒批只发生在高速流上」判定成事实而不是假设。
+    last_commit_at: Option<Instant>,
 }
 
 /// 单个 Primary Turn 的实时 durable sink。
@@ -163,7 +165,12 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.started_at = None;
-            std::mem::take(&mut state.pending)
+            let pending = std::mem::take(&mut state.pending);
+            if !pending.is_empty() {
+                // 排空也是一次提交：记下时刻，避免下一帧被误判成慢速流而跳过攒批。
+                state.last_commit_at = Some(Instant::now());
+            }
+            pending
         };
         self.commit_and_publish_slice(&pending)
     }
@@ -349,6 +356,7 @@ fn decide_batch(
     if events.iter().any(|event| !is_micro_batchable(event)) {
         // 关键语义事件：先排空历史缓冲，再与自身一起提交，顺序不变。
         state.started_at = None;
+        state.last_commit_at = Some(now);
         let mut batch = std::mem::take(&mut state.pending);
         batch.extend_from_slice(events);
         return Some(batch);
@@ -356,6 +364,18 @@ fn decide_batch(
     if !state.first_event_dispatched {
         // 首个流式帧：零等待同步写，确保 TTFR 不因攒批而被推迟。
         state.first_event_dispatched = true;
+        state.last_commit_at = Some(now);
+        return Some(events.to_vec());
+    }
+    // 慢速流不攒批：距上一次提交已经超过一个窗口，说明下一帧要等的时间自己就够长，
+    // 再压进缓冲只会让每个增量都多等一个 token 间隔（首字之后的观感延迟翻倍）。
+    // 高速流才会落到下面的缓冲分支。
+    if state.pending.is_empty()
+        && state
+            .last_commit_at
+            .is_some_and(|at| now.duration_since(at) >= MICRO_BATCH_WINDOW)
+    {
+        state.last_commit_at = Some(now);
         return Some(events.to_vec());
     }
     state.pending.extend_from_slice(events);
@@ -368,6 +388,7 @@ fn decide_batch(
             .is_some_and(|started| now.duration_since(started) >= MICRO_BATCH_WINDOW);
     if should_flush {
         state.started_at = None;
+        state.last_commit_at = Some(now);
         return Some(std::mem::take(&mut state.pending));
     }
     None
@@ -531,6 +552,31 @@ mod tests {
             ["wire_event", "turn_completed"],
             "关键事件不得越过更早的增量"
         );
+    }
+
+    #[test]
+    fn slow_stream_is_never_delayed_by_the_batch_window() {
+        let mut state = MicroBatchState::default();
+        let started = Instant::now();
+        let _ = decide_batch(&mut state, &[stream_event("a")], started);
+
+        // 间隔已经超过窗口：每一帧都必须当场提交，不能等下一帧到达才把它带出去。
+        let second = decide_batch(
+            &mut state,
+            &[stream_event("b")],
+            started + Duration::from_millis(200),
+        )
+        .expect("慢速流必须立即提交");
+        assert_eq!(second.len(), 1);
+
+        let third = decide_batch(
+            &mut state,
+            &[stream_event("c")],
+            started + Duration::from_millis(400),
+        )
+        .expect("慢速流必须立即提交");
+        assert_eq!(third.len(), 1);
+        assert!(state.pending.is_empty());
     }
 
     #[test]
