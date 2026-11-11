@@ -203,7 +203,7 @@ Linux/macOS 安装器会将 `$HOME/.axon/bin`（或自定义 `AXON_INSTALL_DIR`�
 
 **症状**：对话区出现「本轮被后端拒绝，可重新发送这条消息。」，这一轮只产出部分推理，没有失败卡。
 
-**说明**：这条结论只表示 Daemon 没把这一轮跑完，不指向模型或凭据。常见来源是运行态库写锁：`session_events` 在长会话里增长很快，写入在 `busy_timeout` 之后返回 `database is locked`，宿主续租失败后按代际失效停止后台 Worker，在跑的轮次连同子代理一起中断，Interaction 落为 `rejected`。
+**说明**：这条结论只表示 Daemon 没把这一轮跑完，不指向模型或凭据。常见来源是运行态库写锁：`session_events` 在长会话里增长很快，写入在 `busy_timeout` 之后返回 `database is locked`，在跑的轮次连同子代理一起中断，Interaction 落为 `rejected`。存储抖动本身不再停后台 Worker：续租遇到 `database is locked` 会按 750ms 持续重试，只有真正失去代际（另一个 Host 已接管）才会停。
 
 **解决方案**：
 
@@ -224,6 +224,23 @@ Linux/macOS 安装器会将 `$HOME/.axon/bin`（或自定义 `AXON_INSTALL_DIR`�
    ```
 
 4. 运行态库长期偏大时，按 [daemon.md](daemon.md) 的清理说明核对 `axon.system.brain-cleanup` 的保留窗口与运行记录；保留期内的新事件不会被清理。
+
+### 所有会话都停在「生成回复中」，且中断提示本轮已结束
+
+**症状**：任意一条消息发出去后，输入坞一直显示「生成回复中」且没有任何输出；按 ESC 提示「本轮已经结束，无需中断」。重启桌面端无效，重启 Daemon 后立刻恢复。
+
+**说明**：这是 Daemon 已被 fence 但进程还在的情况。宿主租约过期后后台 Worker 全部停止，进程继续接受 HTTP 提交，于是 Interaction 只落成 `received`，没有任何 Worker 领取。判定依据（全部只读）：
+
+1. `axon daemon health` 的 `host.leaseRemainingMs` 为负，或 `host.status` 仍是 `running` 而租约已过期。
+2. 运行态库里 `jarvis_interactions.status = 'received'` 且 `received_at_ms` 不断变新，`lease_token` 为空。
+3. 日志里最后一次 `Daemon Host 已失去 lease，后台 Worker 将停止` 之后没有任何 tick 记录。
+
+**根因与已修项**：
+
+- 写锁风暴会持续数十秒，而旧版续租预算只有 8 次 × 750ms（约 6 秒），耗尽即停全部 Worker 且进程不退。现在续租遇到存储抖动按 750ms **持续重试**，只有失去代际才停，停机请求在下一个重试点生效。
+- 风暴的来源是 WAL 无限增长：连接级 PRAGMA 从未设置 `journal_size_limit`，一次 checkpoint 要把整库回写主库并独占写锁。现在连接统一设置 `journal_size_limit = 64 MiB` 与显式 `wal_autocheckpoint`，WAL 体积有硬上限。
+
+**现场处置**：`axon daemon restart`。停机落盘后若要一次性收回历史 WAL，可直接执行 `PRAGMA wal_checkpoint(TRUNCATE)`（无进程占用时最快，不改变数据）。
 
 ### 工具调用被禁止
 

@@ -328,6 +328,14 @@ where
         Ok(self.started_host()?.clone())
     }
 
+    /// 宿主自己的事实源存储。
+    ///
+    /// 只给宿主的维护动作使用：维护动作必须与业务写共用同一份连接池，
+    /// 不能在进程内另建一份连接去竞争同一个写锁。
+    pub fn store(&self) -> &S {
+        &self.store
+    }
+
     /// 创建可持久恢复的 Session。
     pub fn create_session(
         &self,

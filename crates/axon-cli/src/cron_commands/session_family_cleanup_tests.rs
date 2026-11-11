@@ -472,7 +472,7 @@ fn create_runtime_family(root: &Path, child_status: &str, with_execution: bool) 
             .expect("runtime Session 应可写入");
         connection
             .execute(
-                "INSERT INTO session_events VALUES(?1,1,'generation','turn','{}',1)",
+                "INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,emitted_at_ms) VALUES(?1,1,'generation','turn','{}',1)",
                 [id],
             )
             .expect("runtime event 应可写入");

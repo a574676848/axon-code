@@ -12,6 +12,7 @@
 use super::*;
 use crate::builtin_shell_tool::ShellCommandToolRuntime;
 use crate::job_runtime::JOB_REASON_USER_STOP;
+use std::sync::atomic::AtomicBool;
 
 /// 立即结束的命令；用于确认作业确实被启动并进入终态。
 const TERMINAL_COMMAND: &str = "echo job-baseline";
@@ -512,5 +513,76 @@ fn tombstone_capacity_evicts_oldest_first() {
         tombstones.back().map(|tombstone| tombstone.job_id),
         Some(job_id),
         "最新回收的墓碑必须位于队尾"
+    );
+}
+
+// ---------- 等待可被调用方取消 ----------
+
+/// 取消探针命中后，`job_output` 的等待必须立刻结束。
+///
+/// 缺陷现场：一次等待窗口（`yield_time_ms`，上界 30 分钟）期间没有任何可取消点，
+/// 用户按下中断之后整轮仍被扣在等待里，只能等窗口自然结束；界面侧表现为
+/// 「正在生成」永不收口，中断回执却说本轮已经结束。
+#[test]
+fn read_stops_waiting_when_the_caller_is_cancelled() {
+    let runtime = isolated_runtime();
+    let owner = "cancel-wait";
+    let job_id = runtime
+        .start(job_spec(owner, SLEEP_COMMAND))
+        .expect("启动长时间运行的作业");
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let probe = Arc::clone(&cancelled);
+    let canceller = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(200));
+        probe.store(true, Ordering::SeqCst);
+    });
+    let probe = Arc::clone(&cancelled);
+
+    let started = Instant::now();
+    let output = runtime
+        .read_until_cancelled(
+            job_id,
+            owner,
+            Some(READ_YIELD_MS),
+            Some(&|| probe.load(Ordering::SeqCst)),
+        )
+        .expect("取消只结束等待，不得把读取变成错误");
+    let waited = started.elapsed();
+    canceller.join().expect("取消线程必须正常结束");
+
+    assert!(
+        waited < Duration::from_secs(5),
+        "取消探针命中后必须立刻返回，实测等了 {waited:?}"
+    );
+    assert!(
+        matches!(output.status, JobStatus::Running),
+        "取消结束的是等待而不是作业，回执必须如实反映作业仍在运行：{:?}",
+        output.status
+    );
+}
+
+/// 未取消时，等待窗口仍然照旧：取消通道不得把正常等待变成立即返回。
+#[test]
+fn read_keeps_waiting_without_cancellation() {
+    let runtime = isolated_runtime();
+    let owner = "cancel-wait-idle";
+    let job_id = runtime
+        .start(job_spec(owner, SLEEP_COMMAND))
+        .expect("启动长时间运行的作业");
+
+    let started = Instant::now();
+    let output = runtime
+        .read_until_cancelled(job_id, owner, Some(300), Some(&|| false))
+        .expect("未取消的等待必须正常返回");
+    let waited = started.elapsed();
+
+    assert!(
+        matches!(output.status, JobStatus::Running),
+        "长时间运行的作业在窗口内不得被判为终态：{:?}",
+        output.status
+    );
+    assert!(
+        waited >= Duration::from_millis(250),
+        "等待窗口未命中任何变化时必须等满，实测只有 {waited:?}"
     );
 }

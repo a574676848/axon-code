@@ -51,20 +51,19 @@ pub(super) fn start_background_workers(
     );
 }
 
-/// 续租失败的瞬时重试上限。
-///
-/// 租约 30s、续租间隔 10s：8 次 × 750ms 的退避最坏占 6s，仍能在租约到期前补上，
-/// 不会因为一次写锁抖动就把整个 Daemon 的后台能力停掉。
-const LEASE_RENEW_RETRY_ATTEMPTS: u32 = 8;
 /// 两次续租重试之间的退避。
 const LEASE_RENEW_RETRY_DELAY: Duration = Duration::from_millis(750);
+/// 持续失败的告警节流：每约 30 秒留一条 WARNING，风暴期间不刷日志。
+const LEASE_RENEW_WARN_EVERY: u32 = 40;
 
 fn start_lease_worker(host: CliDaemonHost, running: Arc<AtomicBool>) {
     thread::spawn(move || {
         while running.load(Ordering::Acquire) {
-            if let Err(error) = renew_with_retry(|| host.renew(), LEASE_RENEW_RETRY_DELAY) {
+            if let Err(error) =
+                renew_until_fenced(|| host.renew(), &running, LEASE_RENEW_RETRY_DELAY)
+            {
                 axon_logger::error(&format!(
-                    "Daemon Host 续租失败，后台 Worker 将停止: {error}"
+                    "Daemon Host 已失去 lease，后台 Worker 将停止: {error}"
                 ));
                 running.store(false, Ordering::Release);
                 break;
@@ -74,18 +73,26 @@ fn start_lease_worker(host: CliDaemonHost, running: Arc<AtomicBool>) {
     });
 }
 
-/// 续租：只在代际失效时立刻放弃，其余错误按退避重试。
+/// 续租直到成功或被 fence。
+///
+/// 只有 `is_fenced()` 才是终态：它表示另一个 Host 已经接管，继续运行必须立刻停。
+/// 存储抖动（`database is locked` 这类）**不是**终态，必须一直按固定退避重试：
+/// 上一版把重试次数钉成 8 次（约 6 秒），于是任何一次几十秒的写锁风暴都会把所有
+/// 后台 Worker 永久停掉，而进程既不退出也不再干活，`daemon status` 仍报 running。
+/// 用户侧表现为「每一条消息都发不出去、界面停在生成中」，只能重启 Daemon 才能恢复。
 ///
 /// 续租与业务写共用同一个 SQLite 单写者锁：一次 checkpoint 或大事务就能让
-/// `renew_host` 在 busy_timeout 之后返回 `database is locked`。此前任何一次这样的
-/// 抖动都会把运行标志置 false，连带停掉全部后台 Worker 与在跑的轮次，用户侧只剩
-/// 一句「本轮被后端拒绝」。存储抖动可重试；代际失效（另一个 Host 已接管，或租约
-/// 已过期）不可重试，必须立刻 fail-closed。
-fn renew_with_retry<F>(mut renew: F, delay: Duration) -> Result<(), axon_daemon::DaemonHostError>
+/// `renew_host` 在 busy_timeout 之后返回 `database is locked`。抖动可重试；
+/// 代际失效（另一个 Host 已接管，或租约已过期）不可重试，必须立刻 fail-closed。
+fn renew_until_fenced<F>(
+    mut renew: F,
+    running: &AtomicBool,
+    retry_delay: Duration,
+) -> Result<(), axon_daemon::DaemonHostError>
 where
     F: FnMut() -> Result<(), axon_daemon::DaemonHostError>,
 {
-    let mut attempt = 0_u32;
+    let mut attempt: u32 = 0;
     loop {
         match renew() {
             Ok(()) => {
@@ -98,15 +105,17 @@ where
             }
             Err(error) if error.is_fenced() => return Err(error),
             Err(error) => {
-                if attempt >= LEASE_RENEW_RETRY_ATTEMPTS {
-                    return Err(error);
-                }
                 attempt = attempt.saturating_add(1);
-                axon_logger::warning(&format!(
-                    "Daemon Host 续租失败，第 {attempt} 次重试前退避 {}ms: {error}",
-                    delay.as_millis()
-                ));
-                thread::sleep(delay);
+                if attempt % LEASE_RENEW_WARN_EVERY == 1 {
+                    axon_logger::warning(&format!(
+                        "Daemon Host 续租遇到存储抖动，按 {}ms 持续重试（累计 {attempt} 次）: {error}",
+                        LEASE_RENEW_RETRY_DELAY.as_millis()
+                    ));
+                }
+                if !running.load(Ordering::Acquire) {
+                    return Ok(());
+                }
+                thread::sleep(retry_delay);
             }
         }
     }
@@ -165,10 +174,12 @@ fn run_supervisor_loop(
 ) {
     let mut last_release_gc = Instant::now();
     let mut last_lsp_sample = Instant::now();
+    let mut last_wal_checkpoint = Instant::now();
     let mut last_lsp_active = None;
     let mut last_active_turns = None;
     while running.load(Ordering::Acquire) {
         cleanup_releases_if_due(&mut last_release_gc);
+        checkpoint_wal_if_due(&host, &mut last_wal_checkpoint);
         sample_and_broadcast_lsp_if_due(
             &host,
             &active_primary_turns,
@@ -221,6 +232,34 @@ fn cleanup_releases_if_due(last_release_gc: &mut Instant) {
 }
 
 const LSP_OBSERVATION_SAMPLE_INTERVAL_MS: u64 = 3_000;
+
+/// WAL 回写周期。
+///
+/// 持续写入下 WAL 会一直漂大，漂到与主库同量级后一次全量回写要独占写锁数十秒，
+/// 所有写者按 `busy_timeout` 排队失败，续租与业务写一起被拉下水。周期性地做
+/// `PASSIVE` 回写把这件事摊平：不阻塞读写，拿不到干净窗口就留给下一轮。
+const WAL_CHECKPOINT_INTERVAL_MS: u64 = 5 * 60 * 1_000;
+
+fn checkpoint_wal_if_due(host: &CliDaemonHost, last_checkpoint_at: &mut Instant) {
+    if last_checkpoint_at.elapsed() < Duration::from_millis(WAL_CHECKPOINT_INTERVAL_MS) {
+        return;
+    }
+    *last_checkpoint_at = Instant::now();
+    match host.store().checkpoint_wal() {
+        Ok(checkpoint) if checkpoint.busy => axon_logger::debug(&format!(
+            "WAL 回写被并发读者挡住，剩余 {} 帧留给下一轮",
+            checkpoint
+                .log_frames
+                .saturating_sub(checkpoint.checkpointed_frames)
+        )),
+        Ok(checkpoint) if checkpoint.checkpointed_frames > 0 => axon_logger::debug(&format!(
+            "WAL 回写完成：{} 帧已落主库",
+            checkpoint.checkpointed_frames
+        )),
+        Ok(_) => {}
+        Err(error) => axon_logger::warning(&format!("WAL 回写失败，将在下一轮重试: {error}")),
+    }
+}
 
 fn sample_and_broadcast_lsp_if_due(
     host: &CliDaemonHost,
@@ -380,6 +419,7 @@ fn run_delivery_tick(config_path: &std::path::Path, owner: &str) {
 #[cfg(test)]
 mod lease_renew_tests {
     use super::*;
+    use std::sync::atomic::AtomicBool;
 
     fn storage_error() -> axon_daemon::DaemonHostError {
         axon_daemon::DaemonHostError::Store(axon_session::RuntimeStoreError::Storage(
@@ -387,10 +427,14 @@ mod lease_renew_tests {
         ))
     }
 
+    fn running() -> AtomicBool {
+        AtomicBool::new(true)
+    }
+
     #[test]
     fn transient_storage_failure_is_retried_until_it_succeeds() {
         let mut calls = 0_u32;
-        let outcome = renew_with_retry(
+        let outcome = renew_until_fenced(
             || {
                 calls = calls.saturating_add(1);
                 if calls < 3 {
@@ -399,6 +443,7 @@ mod lease_renew_tests {
                     Ok(())
                 }
             },
+            &running(),
             Duration::ZERO,
         );
 
@@ -412,13 +457,14 @@ mod lease_renew_tests {
     #[test]
     fn fenced_lease_stops_immediately_without_retrying() {
         let mut calls = 0_u32;
-        let outcome = renew_with_retry(
+        let outcome = renew_until_fenced(
             || {
                 calls = calls.saturating_add(1);
                 Err(axon_daemon::DaemonHostError::Store(
                     axon_session::RuntimeStoreError::Fenced,
                 ))
             },
+            &running(),
             Duration::ZERO,
         );
 
@@ -427,18 +473,28 @@ mod lease_renew_tests {
         assert_eq!(calls, 1, "代际失效不可重试：另一个 Host 已经接管");
     }
 
+    /// 存储长期不可用也不许「放弃」：那正是僵尸 Daemon 的成因。
+    ///
+    /// 上一版在 8 次重试后直接返回错误并停掉全部 Worker，进程却继续收任务。
+    /// 现在只有停机请求（`running` 置假）或代际失效才能让续租线程退出。
     #[test]
-    fn persistent_storage_failure_gives_up_after_the_bounded_budget() {
+    fn persistent_storage_failure_keeps_retrying_until_stop_is_requested() {
+        let running = std::sync::Arc::new(AtomicBool::new(true));
         let mut calls = 0_u32;
-        let outcome = renew_with_retry(
+        let stopper = std::sync::Arc::clone(&running);
+        let outcome = renew_until_fenced(
             || {
                 calls = calls.saturating_add(1);
+                if calls == 5 {
+                    stopper.store(false, Ordering::Release);
+                }
                 Err(storage_error())
             },
+            &running,
             Duration::ZERO,
         );
 
-        assert!(outcome.is_err(), "重试预算耗尽后仍须 fail-closed");
-        assert_eq!(calls, LEASE_RENEW_RETRY_ATTEMPTS + 1);
+        assert!(outcome.is_ok(), "停机请求是正常退出路径，不是失败");
+        assert_eq!(calls, 5, "停机请求必须在下一个重试点生效");
     }
 }

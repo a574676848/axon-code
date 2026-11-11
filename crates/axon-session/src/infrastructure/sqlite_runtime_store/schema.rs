@@ -129,6 +129,7 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
         CREATE TABLE IF NOT EXISTS session_events (
             session_id TEXT NOT NULL, sequence INTEGER NOT NULL, generation TEXT NOT NULL,
             event_type TEXT NOT NULL, payload_json TEXT NOT NULL, emitted_at_ms INTEGER NOT NULL,
+            payload_ref TEXT,
             PRIMARY KEY(session_id, sequence),
             FOREIGN KEY(session_id) REFERENCES session_runtimes(session_id)
         );

@@ -101,7 +101,7 @@ fn cleanup_covers_r1_to_r7_runtime_tables() {
     connection
         .execute_batch(
             "INSERT INTO session_runtimes VALUES('s-old','s-old','s-old','/w','completed',NULL,NULL,0,0,0,0,1,1,1);
-             INSERT INTO session_events VALUES('s-old',1,'g','turn','{}',1);
+             INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,emitted_at_ms) VALUES('s-old',1,'g','turn','{}',1);
              INSERT INTO session_checkpoints VALUES('s-old',1,'a',0,0,NULL,NULL,NULL,NULL,NULL,1);
              INSERT INTO runtime_schedules VALUES('sch-1','s-old','interval','1m','{}','none','created',1,NULL,NULL,0,NULL,NULL);
              INSERT INTO jarvis_interactions(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,updated_at_ms,attachments_json)
@@ -248,7 +248,7 @@ fn stale_family_dry_run_subtracts_rolling_event_overlap() {
     for sequence in 1..=EVENT_COUNT {
         transaction
             .execute(
-                "INSERT INTO session_events VALUES('stale',?1,'g','turn','{}',1)",
+                "INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,emitted_at_ms) VALUES('stale',?1,'g','turn','{}',1)",
                 [sequence],
             )
             .expect("stale event 应可写入");

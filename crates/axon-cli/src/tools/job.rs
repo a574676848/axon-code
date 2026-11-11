@@ -40,7 +40,17 @@ pub(crate) fn execute_job_output(
         Ok(args) => args,
         Err(message) => return failed_tool_input_receipt(tool_call, message),
     };
-    match JobRuntime::global().read(args.job_id, &context.thread_session_id, args.yield_time_ms) {
+    // 取消探针只结束本次等待：作业本身有独立生命周期，不随本轮取消而终止。
+    let cancelled = context
+        .cancel_token
+        .as_ref()
+        .map(|token| &**token as &dyn Fn() -> bool);
+    match JobRuntime::global().read_until_cancelled(
+        args.job_id,
+        &context.thread_session_id,
+        args.yield_time_ms,
+        cancelled,
+    ) {
         Ok(output) => tool_receipt_from_runtime(agent_run_job_output_tool_receipt(
             tool_call,
             &output,

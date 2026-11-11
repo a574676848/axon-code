@@ -21,6 +21,7 @@ use super::runtime_cleanup_families::{
     delete_settled_completion_deliveries, delete_settled_completion_notifications,
     delete_terminal_goals, delete_terminal_interactions,
 };
+use super::runtime_event_archive;
 
 const RUNTIME_DATABASE_FILE: &str = "runtime.sqlite3";
 /// 单批删除的行数上限：直接决定单次 IMMEDIATE 事务的写锁持有时间。
@@ -151,6 +152,22 @@ fn run_runtime_cleanup_with_budget(
     }
     let deadline = Instant::now() + time_budget;
     let mut counts = RuntimeCleanupCounts::default();
+    let archive_root = runtime_event_archive::event_archive_root(&path);
+    // 先归档再删行：删除不可逆，.jsonl.zst 是事后唯一的回看手段。
+    let archived = runtime_event_archive::archive_expired_session_events(
+        &mut connection,
+        &archive_root,
+        cutoff_ms,
+        deadline,
+    )?;
+    if archived.rows > 0 {
+        // 归档即清理的一部分：删掉的行必须体现在同一份计数里，否则报告会少算。
+        counts.session_events = counts.session_events.saturating_add(archived.rows);
+        axon_logger::info(&format!(
+            "运行态事件归档完成：{} 行 / {} 个 lane 文件",
+            archived.rows, archived.files
+        ));
+    }
     counts.merge(delete_expired_upgrade_admissions(
         &mut connection,
         cutoff_ms,
@@ -211,7 +228,22 @@ fn run_runtime_cleanup_with_budget(
         cutoff_ms,
         deadline,
     )?);
-    if !counts.is_empty() {
+    // 时间维度清理之后再看磁盘水位：越过上限就按最旧优先继续淘汰到低水位。
+    let evicted = runtime_event_archive::enforce_disk_budget(
+        &mut connection,
+        &path,
+        &archive_root,
+        axon_time::unix_now_ms(),
+        deadline,
+    )?;
+    if evicted.rows > 0 {
+        counts.session_events = counts.session_events.saturating_add(evicted.rows);
+        axon_logger::warning(&format!(
+            "运行态库越过磁盘高水位，已归档并淘汰 {} 行最旧事件",
+            evicted.rows
+        ));
+    }
+    if !counts.is_empty() || !evicted.is_empty() {
         reclaim_database_space(&connection)?;
     }
     Ok(counts)

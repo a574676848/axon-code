@@ -303,10 +303,31 @@ impl JobRuntime {
 
     /// 读取作业的增量输出，必要时等待到终态或等待窗口结束。
     pub fn read(&self, id: JobId, owner: &str, yield_ms: Option<u64>) -> AxonResult<JobOutput> {
+        self.read_until_cancelled(id, owner, yield_ms, None)
+    }
+
+    /// 与 [`Self::read`] 相同，但等待期间持续观测调用方的取消探针。
+    ///
+    /// 取消结束的是**本次等待**，不是作业：作业的生命周期独立于发起它的 tool call，
+    /// 因此探针命中时立即按作业当前真实状态投影回执（通常仍是 `Running`），
+    /// 由调用方决定是否把本轮收口。没有这条通道，一次 `job_output` 的让出窗口
+    /// （上界为 [`JOB_MAX_READ_YIELD`]）会把整轮的工具循环扣在等待里，
+    /// 用户的中断请求要等到窗口结束才可能生效。
+    pub fn read_until_cancelled(
+        &self,
+        id: JobId,
+        owner: &str,
+        yield_ms: Option<u64>,
+        cancelled: Option<&dyn Fn() -> bool>,
+    ) -> AxonResult<JobOutput> {
         let job = self.owned_job(id, owner)?;
         let deadline = Instant::now() + bounded_yield(yield_ms);
         let mut newly_terminal = false;
         loop {
+            // 探针在每次推进前检查：等待粒度是 `JOB_POLL_INTERVAL`，取消延迟不会超过它。
+            if cancelled.is_some_and(|cancelled| cancelled()) {
+                break;
+            }
             let (generation, now) = {
                 let mut job = job
                     .lock()

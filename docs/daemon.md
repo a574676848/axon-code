@@ -10,7 +10,7 @@ Daemon 是 Axon 的后台长生命周期宿主。当前实现已经把 `PrimaryT
 - 使用 Workspace registry 将 `WorkspaceId` 解析为真实工作目录。
 - 调用 `InteractionTurnRunner` 完成普通问答或原子创建 Goal、首个 Execution 与 Event。
 - 托管 Scheduler、飞书 transport、事件桥、投递与维护 tick。
-- 维护内部 host generation、lease 与 fencing 状态。Host lease 续租按 10 秒周期执行，租约有效期 30 秒；续租失败时按 750ms 退避重试至 8 次，只在实际失去代际（另一 Host 已接管或租约已过期）或重试预算耗尽时才停止全部后台 Worker，因此一次运行态库写锁抖动不会连带停掉在跑的轮次。
+- 维护内部 host generation、lease 与 fencing 状态。Host lease 续租按 10 秒周期执行，租约有效期 30 秒；续租遇到存储抖动（`database is locked`）时按 750ms 持续重试，只有实际失去代际（另一 Host 已接管）才停止全部后台 Worker。停机请求在下一个重试点生效，不等待退避结束。
 - 由 Execution Worker 线程池接管已提交 Execution，前台不活跃时写入未读 Result 并入队持久化 Delivery。
 
 Goal 创建后的执行已经收口：Execution 由 Daemon 的 Execution Worker 池领取，并通过 `ProviderRunSubagentExecutor` 作为隔离子代理执行；结果写入 Result 与持久 completion notification。一个 Execution 只通知主 turn 一次，通知包含来源（一次性 Goal 或 Axon cron）、Goal 目标、执行结果及结果文档路径；主 turn 产出的汇总回复随后登记到创建 Task 时声明的唯一投递目标，目标取自 Execution 的 `transportContext`，不再广播到当时在线的其它客户端。TUI 只有真实展示后确认，Feishu 只有写入 durable outbox 后确认，任何渠道都不允许静默 ack。跨过创建后的下一个本地自然日仍未读则自动失效并静默停止通知。
@@ -153,7 +153,15 @@ Windows 实测基线（`--release`，1k/10k backlog 与 8 线程并发入口）�
 | 10k backlog | 2.22ms | 3.51ms | 23.34s | 11.61MB → 11.87MB | 4.17MB |
 | 并发入口 8 线程/1000 动作 | 1.19ms | 1.62ms | 2.29s（另有 2.04s 结算） | 8.87MB → 13.63MB | 4.15MB |
 
-事实源存储策略固定为：进程内连接池 + WAL + `synchronous=FULL`。`synchronous=FULL` 是因为已提交的外部副作用事实必须承受断电级故障，崩溃恢复只依赖已提交记录，不做重放猜测。写事务统一使用 `TransactionBehavior::Immediate`，使写锁争用落到 `busy_timeout` 上而不是立即返回 `SQLITE_BUSY`。写锁等待上限生产默认为 5 秒；`SqliteRuntimeStore::with_busy_timeout` 允许注入更小的上限，使「超过等待上限后有界失败且不留下幽灵 claim」的确定性验证不必空转完整生产超时。
+事实源存储策略固定为：进程内连接池 + WAL + `synchronous=FULL`。`synchronous=FULL` 是因为已提交的外部副作用事实必须承受断电级故障，崩溃恢复只依赖已提交记录，不做重放猜测。写事务统一使用 `TransactionBehavior::Immediate`，使写锁争用落到 `busy_timeout` 上而不是立即返回 `SQLITE_BUSY`。写锁等待上限生产默认为 5 秒；`SqliteRuntimeStore::with_busy_timeout` 允许注入更小的上限，使「超过等待上限后有界失败且不留下幽灵 claim」的确定性验证不必空转完整生产超时。WAL 体积有硬上限：连接统一设置 `journal_size_limit = 64 MiB`，并显式钉住 `wal_autocheckpoint = 1000` 页。没有上限时 WAL 会随每次写入增长到与主库同量级（实测 708 MiB / 703 MiB），一次 checkpoint 需要回写整库并独占写锁数十秒，所有写者按 `busy_timeout` 排队失败。
+
+### 事件正文外置与归档
+
+`session_events.payload_json` 只承载定长元数据：正文超过 4 KiB 时写到 `data/archive/session-events/<session_id>/<sequence>.json`，表里保留 `payload_ref`，回放时按引用取回。这样大段 tool 结果、diff 与终端输出不再撑大主库与 WAL。
+
+清理走「先归档再删行」：过期事件按 lane 追加写入 `data/archive/session-events/<session_id>.jsonl.zst`（zstd 多帧串联，可分批中断），归档成功后才删除对应行。归档目录与事件正文外置目录同一处，备份与清理只需看一个路径。
+
+磁盘水位淘汰在时间维度清理之后执行，常量先写死：硬上限 2 GiB、高水位 1.6 GiB、低水位 1 GiB；只淘汰一小时以前且不属于运行中 lane 的事件，同样先归档再删除，随后由 `incremental_vacuum` 归还空闲页。上限刻意留出 4 倍余量（实测 7 天约 385 MiB），避免水位淘汰先于 7 天保留期触发，把保留窗口悄悄缩短。
 
 ## 升级与恢复边界
 

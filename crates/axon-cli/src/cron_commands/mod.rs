@@ -11,6 +11,7 @@ pub(crate) mod repository;
 mod runtime_cleanup;
 mod runtime_cleanup_counts;
 mod runtime_cleanup_families;
+mod runtime_event_archive;
 pub(crate) mod schedule;
 mod session_cleanup;
 mod tick;

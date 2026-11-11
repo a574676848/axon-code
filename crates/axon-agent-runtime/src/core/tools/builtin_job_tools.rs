@@ -47,7 +47,7 @@ pub(crate) fn job_output_tool_definition() -> ToolDefinition {
             ToolSchemaField::new(
                 JOB_TOOL_YIELD_TIME_FIELD,
                 ToolSchemaFieldKind::Integer,
-                "可选等待增量输出时长，单位毫秒；省略时立即返回本批输出。作业仍在运行且已在等待窗口内有新输出、进入终态或窗口结束时返回。",
+                "可选等待增量输出时长，单位毫秒；省略时立即返回本批输出。作业仍在运行且已在等待窗口内有新输出、进入终态、本轮被中断或窗口结束时返回；被中断只结束本次等待，作业本身继续运行。",
             ),
             ToolSchemaField::new(
                 JOB_TOOL_MAX_OUTPUT_TOKENS_FIELD,

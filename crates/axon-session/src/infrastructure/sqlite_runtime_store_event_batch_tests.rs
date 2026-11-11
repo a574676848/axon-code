@@ -189,3 +189,53 @@ fn batch_append_rolls_back_all_events_when_later_insert_fails() {
         .expect("read runtime");
     assert_eq!(runtime.last_event_sequence, 0);
 }
+
+/// 超过内联上限的事件正文必须外置，回放时按引用取回。
+///
+/// 这条契约是「存算分离」的落点：库里只留定长元数据，大正文进归档文件；
+/// 少任何一半都会变成「库被大正文撑大」或「回放读不到正文」。
+#[test]
+fn oversized_event_payload_is_archived_and_replay_rehydrates_it() {
+    use super::sqlite_runtime_store::SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES;
+
+    let fixture = event_batch_fixture("payload-offload");
+    let payload = format!(
+        "{{\"text\":\"{}\"}}",
+        "x".repeat(SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES)
+    );
+    fixture
+        .store
+        .append_event(
+            &fixture.session_id,
+            &fixture.host,
+            "provider.delta",
+            &payload,
+            BATCH_EVENT_AT_MS,
+        )
+        .expect("append oversized event");
+
+    let (inline, reference) = {
+        let connection = fixture.store.connection().expect("open connection");
+        connection
+            .query_row(
+                "SELECT payload_json,payload_ref FROM session_events WHERE session_id=?1",
+                [fixture.session_id.as_str()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .expect("read stored row")
+    };
+    assert!(inline.is_empty(), "外置后内联列必须为空，正文只留一份");
+    let reference = reference.expect("超限正文必须外置");
+    let archived = fixture.store.event_archive_root().join(&reference);
+    assert_eq!(
+        std::fs::read_to_string(&archived).expect("归档正文应可读"),
+        payload
+    );
+
+    let replayed = fixture
+        .store
+        .replay_events(&fixture.session_id, 0, 10)
+        .expect("replay rehydrates archived payload");
+    assert_eq!(replayed.len(), 1);
+    assert_eq!(replayed[0].payload_json, payload);
+}

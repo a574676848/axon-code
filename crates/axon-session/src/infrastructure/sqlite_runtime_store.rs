@@ -89,6 +89,27 @@ mod user_question_repository;
 const DATABASE_FILE_NAME: &str = "runtime.sqlite3";
 const HOST_STATE_RUNNING: &str = "running";
 
+/// Session 事件正文的内联上限（字节）。
+///
+/// 超过上限的正文写到 `<库目录>/archive/session-events/<session>/<sequence>.json`，
+/// 库里只留引用：B-Tree 只承载定长元数据，大段 tool 结果、diff 与终端输出不再撑大
+/// 主库与 WAL。上限取 4 KiB：实测事件正文平均 605 B，只有少数大事件需要外置。
+pub const SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES: usize = 4 * 1024;
+
+/// 一次 WAL 回写的结果。
+///
+/// `log_frames` 与 `checkpointed_frames` 一起回答「WAL 里还有多少帧没回写」；
+/// `busy` 表示这一次被并发读者挡住，剩余部分留给下一次维护周期。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WalCheckpoint {
+    /// 是否被并发读者挡住。
+    pub busy: bool,
+    /// checkpoint 开始前 WAL 的帧数。
+    pub log_frames: i64,
+    /// 本次已回写到主库的帧数。
+    pub checkpointed_frames: i64,
+}
+
 /// SQLite Runtime Store。
 ///
 /// Store 在进程内共享连接池：SQLite 单写者模型下，逐操作重建连接会反复承担
@@ -157,7 +178,38 @@ impl SqliteRuntimeStore {
     pub fn reap_dead_hosts(&self, now_ms: u64) -> Result<u32, RuntimeStoreError> {
         runtime_repository::reap_dead_hosts(self, now_ms)
     }
+
+    /// 在空闲窗口把 WAL 回写主库。
+    ///
+    /// `PASSIVE` 不阻塞并发读写：能回写的帧立即回写，拿不到干净窗口就把剩余部分留给
+    /// 下一次。没有这一步，持续写入会让 WAL 漂到与主库同量级（实测 708 MiB / 703 MiB），
+    /// 随后一次全量回写独占写锁数十秒，所有写者按 `busy_timeout` 排队失败。
+    pub fn checkpoint_wal(&self) -> Result<WalCheckpoint, RuntimeStoreError> {
+        let connection = self.connection()?;
+        connection
+            .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+                Ok(WalCheckpoint {
+                    busy: row.get::<_, i64>(0)? != 0,
+                    log_frames: row.get(1)?,
+                    checkpointed_frames: row.get(2)?,
+                })
+            })
+            .map_err(storage)
+    }
+
+    /// 事件正文归档根目录：`<库目录>/archive/session-events`。
+    ///
+    /// 与网关事件归档同处 `data/archive` 下，便于运维按一个目录做备份与清理。
+    #[must_use]
+    pub fn event_archive_root(&self) -> PathBuf {
+        let parent = self.path.parent().unwrap_or(Path::new("."));
+        parent.join(EVENT_ARCHIVE_DIR).join(EVENT_ARCHIVE_SUBDIR)
+    }
 }
+
+/// 事件正文归档的目录层级：`data/archive/session-events`。
+const EVENT_ARCHIVE_DIR: &str = "archive";
+const EVENT_ARCHIVE_SUBDIR: &str = "session-events";
 
 impl RuntimeStore for SqliteRuntimeStore {
     fn initialize(&self) -> Result<(), RuntimeStoreError> {

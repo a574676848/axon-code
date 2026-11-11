@@ -31,11 +31,11 @@ pub use domain::{
     ThreadListQuery, ThreadSettings, ThreadSource, ThreadStatus, ThreadSummary, ThreadSummaryPage,
     Turn, TurnId, TurnStatus,
 };
-pub use infrastructure::SqliteRuntimeStore;
 pub use infrastructure::{
     AXON_RUNTIME_DATA_DIR, JsonlThreadEventStore, SESSION_STORE_DIR, THREAD_EVENTS_FILE,
     ThreadEventReadIssue, ThreadEventScan, session_store_path,
 };
+pub use infrastructure::{SqliteRuntimeStore, WalCheckpoint};
 pub use ports::ExecutionSettlement;
 pub use ports::ThreadActivationSnapshot;
 pub use ports::ThreadEventStore;

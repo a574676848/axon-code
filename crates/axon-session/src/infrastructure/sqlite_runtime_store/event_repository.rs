@@ -1,4 +1,5 @@
 //! Session Event repository 边界。
+use super::SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES;
 use super::SqliteRuntimeStore;
 use super::helpers::{i64_value, parse_session_id, storage, u64_value};
 use crate::domain::runtime::{DaemonHostRecord, SessionEventRecord};
@@ -134,24 +135,34 @@ fn append_event_refs<'a>(
         .map_err(|_| RuntimeStoreError::Storage("事件序号超出范围".to_owned()))?;
     let emitted_at_ms = i64_value(now_ms)?;
     let mut records = Vec::with_capacity(events.len());
+    let archive_root = store.event_archive_root();
     {
         let mut statement = transaction
             .prepare_cached(
-                "INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,emitted_at_ms) VALUES(?1,?2,?3,?4,?5,?6)",
+                "INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,emitted_at_ms,payload_ref) VALUES(?1,?2,?3,?4,?5,?6,?7)",
             )
             .map_err(storage)?;
         for (event_type, payload_json) in events {
             next_sequence = next_sequence
                 .checked_add(1)
                 .ok_or_else(|| RuntimeStoreError::Storage("事件序号溢出".to_owned()))?;
+            let payload_ref =
+                persist_event_payload(&archive_root, session_id, next_sequence, payload_json)?;
+            // 正文已外置的行把内联列清空：正文只有一份真相，读侧一律按引用取回。
+            let inline_payload = if payload_ref.is_some() {
+                ""
+            } else {
+                payload_json
+            };
             statement
                 .execute(params![
                     session_id.as_str(),
                     i64_value(next_sequence)?,
                     host.generation,
                     event_type,
-                    payload_json,
-                    emitted_at_ms
+                    inline_payload,
+                    emitted_at_ms,
+                    payload_ref
                 ])
                 .map_err(storage)?;
             records.push(SessionEventRecord {
@@ -180,6 +191,33 @@ fn append_event_refs<'a>(
     Ok(records)
 }
 
+/// 把超限的事件正文写到归档文件，返回相对引用。
+///
+/// 返回 `None` 表示正文留在库里：写文件失败时宁可多占一点数据库空间，也不能让一条
+/// 已经发生的运行事件落不了库。
+fn persist_event_payload(
+    archive_root: &std::path::Path,
+    session_id: &DaemonSessionId,
+    sequence: u64,
+    payload_json: &str,
+) -> Result<Option<String>, RuntimeStoreError> {
+    if payload_json.len() <= SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES {
+        return Ok(None);
+    }
+    let relative = format!("{}/{sequence}.json", session_id.as_str());
+    let directory = archive_root.join(session_id.as_str());
+    if std::fs::create_dir_all(&directory).is_err() {
+        return Ok(None);
+    }
+    match std::fs::write(
+        directory.join(format!("{sequence}.json")),
+        payload_json.as_bytes(),
+    ) {
+        Ok(()) => Ok(Some(relative)),
+        Err(_) => Ok(None),
+    }
+}
+
 /// 读取 cursor 之后按序号升序排列的 Session 事件。
 pub(super) fn replay_events(
     store: &SqliteRuntimeStore,
@@ -187,26 +225,60 @@ pub(super) fn replay_events(
     after_sequence: u64,
     limit: u32,
 ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
-    let connection = store.connection()?;
-    let mut statement = connection.prepare("SELECT session_id,sequence,generation,event_type,payload_json,emitted_at_ms FROM session_events WHERE session_id=?1 AND sequence>?2 ORDER BY sequence ASC LIMIT ?3").map_err(storage)?;
-    let rows = statement
-        .query_map(
-            params![
-                session_id.as_str(),
-                i64_value(after_sequence)?,
-                i64::from(limit)
-            ],
-            |row| {
-                Ok(SessionEventRecord {
-                    session_id: parse_session_id(row.get(0)?)?,
-                    sequence: u64_value(row.get(1)?)?,
-                    generation: row.get(2)?,
-                    event_type: row.get(3)?,
-                    payload_json: row.get(4)?,
-                    emitted_at_ms: u64_value(row.get(5)?)?,
-                })
-            },
-        )
-        .map_err(storage)?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(storage)
+    // 先把整页读进内存再逐条取正文：档案读取是文件 I/O，不能让它占着数据库连接与语句。
+    let raw = {
+        let connection = store.connection()?;
+        let mut statement = connection.prepare("SELECT session_id,sequence,generation,event_type,payload_json,emitted_at_ms,payload_ref FROM session_events WHERE session_id=?1 AND sequence>?2 ORDER BY sequence ASC LIMIT ?3").map_err(storage)?;
+        let rows = statement
+            .query_map(
+                params![
+                    session_id.as_str(),
+                    i64_value(after_sequence)?,
+                    i64::from(limit)
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                    ))
+                },
+            )
+            .map_err(storage)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(storage)?
+    };
+    let archive_root = store.event_archive_root();
+    let mut records = Vec::with_capacity(raw.len());
+    for (
+        raw_session_id,
+        sequence,
+        generation,
+        event_type,
+        inline_payload,
+        emitted_at_ms,
+        payload_ref,
+    ) in raw
+    {
+        let payload_json = match payload_ref {
+            Some(reference) => {
+                std::fs::read_to_string(archive_root.join(&reference)).map_err(|_| {
+                    RuntimeStoreError::Storage(format!("事件正文归档不可读：{reference}"))
+                })?
+            }
+            None => inline_payload,
+        };
+        records.push(SessionEventRecord {
+            session_id: parse_session_id(raw_session_id).map_err(storage)?,
+            sequence: u64_value(sequence).map_err(storage)?,
+            generation,
+            event_type,
+            payload_json,
+            emitted_at_ms: u64_value(emitted_at_ms).map_err(storage)?,
+        });
+    }
+    Ok(records)
 }
