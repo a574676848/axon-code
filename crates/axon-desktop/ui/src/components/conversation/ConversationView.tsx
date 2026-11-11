@@ -20,7 +20,6 @@ import { ConversationActionsProvider } from './actions';
 import { useConversationActionsValue } from './useConversationActionsValue';
 import { useConversationMcp } from '../../conversation/useConversationMcp';
 import { useSkillCatalog } from '../../conversation/skillCatalog';
-import { useTurnModelRoute } from '../../conversation/useTurnModelRoute';
 import {
   changedFilesOf,
   workingStatusPrimary,
@@ -263,16 +262,12 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   /*
    * 工作状态行在整轮运行期间都在：耗时与中断提示是这一行的职责，
    * 助手正文开始流式输出并不改变「这一轮还在跑」这个事实。
+   * 文案只认 provider 阶段事实，没有事实时由状态行写中性句，不猜供应商。
    */
-  const workingRoute = useTurnModelRoute(
-    runningTurn?.id ?? null,
-    runningTurn?.activity ?? null,
-    config?.route ?? config?.model ?? '',
-  );
   const workingLine =
     conversation.working && selection !== null
       ? {
-          primary: workingStatusPrimary(runningTurn?.activity ?? null, workingRoute),
+          primary: workingStatusPrimary(runningTurn?.activity ?? null),
           elapsedMs: runningTurn?.elapsedMs ?? null,
           queued: conversation.queued,
         }

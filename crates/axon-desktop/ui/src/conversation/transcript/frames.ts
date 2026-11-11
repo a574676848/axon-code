@@ -369,10 +369,12 @@ function applyLifecycle(
     return withTurn(state, position, (turn) => foldStreamUsage(turn));
   }
   if (lifecycle.kind === 'StreamingCompleted') {
-    return withTurn(state, position, (turn) => ({
-      ...foldStreamUsage(turn),
-      activity: null,
-    }));
+    /*
+     * 一条 provider 流收口了，但这一轮还在跑（可能接着跑工具、接着换渠道）：
+     * 阶段行保留最后一次真实供应商事实，不退回配置里那条从未被请求过的路由。
+     * 下一次尝试的 provider 帧会原位覆盖它。
+     */
+    return withTurn(state, position, (turn) => foldStreamUsage(turn));
   }
   /*
    * 只有 RunLifecycle 是整轮自己的终态事实（一次 run 一条），它比收口事件更可靠：
@@ -450,8 +452,12 @@ function providerActivity(status: WireProviderStatus): string {
       return status.errorMessage !== undefined
         ? `${route} 请求失败：${status.errorMessage}`
         : `${route} 请求失败`;
-    case 'failover':
-      return `切换供应商：${status.nextProvider ?? ''}/${status.nextModel ?? ''}`;
+    case 'failover': {
+      // 换渠道要把「从哪家换到哪家」都写出来：只写目标的话，前一家已经失败的
+      // 事实就从这一行消失了，读起来像是凭空多出一个供应商。
+      const next = `${status.nextProvider ?? ''}/${status.nextModel ?? ''}`;
+      return next === '/' ? `${route} 正在切换渠道` : `${route} → ${next} 正在切换渠道`;
+    }
     default:
       return route;
   }

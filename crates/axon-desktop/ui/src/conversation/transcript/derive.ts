@@ -32,11 +32,19 @@ export function deriveJobs(state: ConversationState): JobRow[] {
   return jobs;
 }
 
+/** 作业读取类工具：它们读的是**别的**作业，本身不是后台任务。 */
+const JOB_READER_TOOLS = new Set(['job_output', 'job_kill']);
+
 /** 该工具是否属于后台作业类。 */
 function isJobTool(toolKind: string, toolName: string): boolean {
+  const name = toolName.toLowerCase();
+  const bare = name.slice(name.lastIndexOf('.') + 1);
+  // `job_output` / `job_kill` 只是作业的读写入口：把它们也列成后台任务，会让同一个
+  // 作业在列表里重复出现多次，并且带着「未正常退出」这类只对有退出码的作业成立的
+  // 结论（读取工具本来就没有退出码）。作业行只由发起作业的那一次调用代表。
+  if (JOB_READER_TOOLS.has(bare)) return false;
   const kind = toolKind.toLowerCase();
   if (kind === 'shell' || kind === 'job') return true;
-  const name = toolName.toLowerCase();
   return name.includes('shell') || name.includes('job_') || name.endsWith('.job');
 }
 
@@ -48,14 +56,15 @@ export function compactDuration(durationMs: number | null): string {
 /**
  * 工作状态行文案。
  *
- * 与 TUI 的 composer dock 同口径：优先取 provider 实时阶段的完整文案，
- * 尚无阶段事件时回落到「{模型} 生成回复中」。中断提示由状态行自己拼装
- * （`按 ESC 中断`），不混进主文案里。
+ * 只有一个事实源：provider 阶段事件。一个阶段事实都还没到时写中性的
+ * 「正在连接供应商…」，不拿配置投影出来的路由顶替，因为渠道是运行时按池、
+ * 亲和与健康选出来的，配置里的第一条不一定就是真正被请求的那一家，写上去
+ * 等于编造。
+ * 中断提示由状态行自己拼装（`按 ESC 中断`），不混进主文案里。
  */
-export function workingStatusPrimary(activity: string | null, model: string): string {
+export function workingStatusPrimary(activity: string | null): string {
   if (activity !== null && activity.trim().length > 0) return activity;
-  const route = model.trim().length > 0 ? model.trim() : '主 Agent';
-  return `${route} 生成回复中`;
+  return '正在连接供应商…';
 }
 
 /**
