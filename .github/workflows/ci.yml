@@ -189,6 +189,16 @@ jobs:
           sudo apt-get install -y libayatana-appindicator3-dev ||
             sudo apt-get install -y libappindicator3-dev
 
+      # `tauri::generate_context!()` 在编译期要求 build.frontendDist（ui/dist）存在，否则直接 panic。
+      # 真实前端产物由 Frontend job 构建与校验；这里只放一个占位目录，让 axon-desktop 能过编译、clippy 与 test。
+      # 少了这一步，把前端拆出矩阵后三条腿都会以 "ui/dist this path doesn't exist" 失败。
+      - name: 准备 axon-desktop 前端占位目录
+        if: needs.changes.outputs.code == 'true'
+        shell: bash
+        run: |
+          mkdir -p crates/axon-desktop/ui/dist
+          printf '<!doctype html><title>ci placeholder</title>\n' > crates/axon-desktop/ui/dist/index.html
+
       # 性能契约：与基线比较，回退即失败；尚未人工测量的项在 CI 里放行并逐项列出。
       - name: 性能契约门禁
         if: needs.changes.outputs.code == 'true'

@@ -39,8 +39,8 @@ jobs:
             ext: ''
             archive: tar.gz
 
-          # macOS Intel
-          - os: macos-13
+          # macOS Intel（macos-13 已退役，改用 macos-15-intel 保持 x64 架构不变）
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             ext: ''
             archive: tar.gz
@@ -175,7 +175,7 @@ jobs:
 
       # ── macOS 代码签名 + 公证 ──────────────────
       - name: macOS codesign
-        if: matrix.os == 'macos-latest' || matrix.os == 'macos-13'
+        if: matrix.os == 'macos-latest' || matrix.os == 'macos-15-intel'
         env:
           MACOS_CERT_BASE64: ${{ secrets.MACOS_CERT_BASE64 }}
           MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
