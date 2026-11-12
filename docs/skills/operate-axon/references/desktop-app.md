@@ -130,6 +130,7 @@
 - **数据通路按生效档案分流**：本机档案下文件列表、文件读取、目录探测、附件暂存与预览走本机原生路径，不经网关（同一台机器上再绕一次 HTTP 只是白付一跳）；云档案下同一批命令改走 `/api/v1/files`、`/files/content`、`/fs/dirs` 与 `POST /api/v1/attachments`，预览改由服务端取字节。命令名、参数与返回值在两种档案下完全一致，分流只发生在数据访问层。
 - 控制面（配置、密钥状态、供应商发现、MCP 配置、技能清单、人设与准则）两种档案都经网关，以保持单一数据来源。
 - 本机打开类动作（`workspace_open_default`、`workspace_open_with`、`workspace_applications`、`workspace_reveal`）只在**本机档案**下可用；云档案下统一拒绝并回「云档案下不支持在本机打开，请在远端服务上操作」。
+- 本机档案下 `workspace_read_file`、`workspace_read_bytes`、`workspace_stat_path`、`workspace_list_entries` 与上述四条打开类动作接受任意绝对路径（含 `~` 路径），工作区之外的文件同样可以预览、定位与用其他应用打开；纯相对路径仍以工作区根为准，不得含 `..`，也不得经符号链接跳出工作区。
 - 附件单文件上限 64 MiB：本机档案直接落到客户端自有根，云档案按块流式 multipart 上传，不把整份文件读进内存两次。
 - 写类命令（`config_write`、`config_apply_values`、`secret_set`、`mcp_upsert`、`cron_*`、`lane_*`、`conversation_submit`、`conversation_interrupt` 等）都是状态变更，先取得用户明确授权。
 - 凭据类命令只回报状态与掩码，不打印密钥原文。

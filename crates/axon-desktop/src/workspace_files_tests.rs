@@ -48,13 +48,80 @@ fn listing_puts_directories_first_and_reports_relative_paths() {
 #[test]
 fn escaping_the_workspace_root_is_rejected() {
     let root = scratch();
-    for escape in ["..", "../..", "nested/../../etc", "C:/Windows"] {
+    // 相对路径属于文件树：`..` 与经它逃出的路径一律拒绝。绝对路径不走这一支，
+    // 它由下方的工作区外用例覆盖。
+    for escape in ["..", "../..", "nested/../../etc"] {
         assert!(
             resolve_within_locally(&root.to_string_lossy(), escape).is_err(),
             "{escape} 必须被拒绝"
         );
     }
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn absolute_paths_outside_the_workspace_and_home_are_previewable() {
+    let root = scratch();
+    let probe = file_outside_home().expect("找一份主目录之外的系统文件");
+    let canonical = probe.canonicalize().expect("探针文件可解析");
+    let expected =
+        crate::workspace::strip_extended_prefix(&canonical.to_string_lossy()).replace('\\', "/");
+    let requested = probe.to_string_lossy().replace('\\', "/");
+    // 文本与字节两条读取路径都要放开：Markdown 走文本，图片与 PDF 走字节。
+    let text = read_text_locally(&root.to_string_lossy(), &requested).expect("读取工作区外的文本");
+    assert_eq!(
+        text.path, expected,
+        "工作区与主目录之外的路径按绝对路径展示"
+    );
+    assert_eq!(
+        text.absolute_path,
+        crate::workspace::strip_extended_prefix(&canonical.to_string_lossy()),
+        "绝对路径给规范化后的系统路径"
+    );
+    assert!(
+        read_bytes_locally(&root.to_string_lossy(), &requested).is_ok(),
+        "工作区外的文件同样要给原始字节"
+    );
+    // 探测口径与读取一致：否则目录展开与路径栏会和读取结果对不上。
+    let stat = stat_path_locally(&root.to_string_lossy(), &requested);
+    assert_eq!(stat.display_path, expected);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn absolute_paths_inside_the_workspace_still_display_relative() {
+    let root = scratch();
+    let absolute = root
+        .join("nested")
+        .join("readme.md")
+        .canonicalize()
+        .expect("工作区内的文件可解析");
+    let text = read_text_locally(&root.to_string_lossy(), &absolute.to_string_lossy())
+        .expect("按绝对路径读取工作区内的文件");
+    assert_eq!(text.path, "nested/readme.md", "工作区内仍显示相对路径");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 找一份既不落在工作区、也不落在主目录下的真实系统文件。
+///
+/// 「工作区与主目录之外」这件事造不出来：多数平台把临时目录放在主目录下。因此取各平台
+/// 自带的只读文件；一个都取不到时用例直接失败，不静默放过这条断言。
+fn file_outside_home() -> Option<PathBuf> {
+    let home = home_directory()?;
+    let candidates: &[&str] = if cfg!(windows) {
+        &[
+            "C:/Windows/System32/drivers/etc/hosts",
+            "C:/Windows/win.ini",
+        ]
+    } else {
+        &["/etc/hosts", "/etc/hostname"]
+    };
+    candidates.iter().map(PathBuf::from).find(|path| {
+        path.is_file()
+            && path
+                .canonicalize()
+                .is_ok_and(|real| !real.starts_with(&home))
+    })
 }
 
 #[test]
@@ -81,15 +148,6 @@ fn tilde_paths_resolve_to_the_user_home() {
     )
     .expect("按绝对路径读取主目录文件");
     assert_eq!(text.path, "~/axon-tilde-probe.txt");
-    // 主目录之外的自由路径仍然拒绝。
-    assert!(
-        resolve_within_locally(
-            &root.to_string_lossy(),
-            "C:/Windows/System32/drivers/etc/hosts"
-        )
-        .is_err(),
-        "主目录之外的绝对路径必须被拒绝"
-    );
     let _ = std::fs::remove_file(&marker);
     let _ = std::fs::remove_dir_all(&root);
 }

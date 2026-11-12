@@ -6,7 +6,8 @@
 //! 处理程序，界面无法借这个入口启动任意程序。
 //!
 //! 路径边界与文件浏览共用一套判断：[`crate::workspace_files::resolve_within`]
-//! 把目标钳在工作区根目录内，任何越界路径在这里就被拒绝，不会走到系统调用。
+//! 先把目标规范化成真实路径，相对路径仍钳在工作区根目录内，越界请求在这里就被拒绝，
+//! 不会走到系统调用。
 
 use axon_shell_assoc::FileApplication;
 
@@ -14,7 +15,7 @@ use axon_shell_assoc::FileApplication;
 ///
 /// # Errors
 ///
-/// 目标越出工作区、不存在，或系统关联枚举整体失败时返回错误描述（中文，可直接展示）。
+/// 目标不存在、相对路径越出工作区，或系统关联枚举整体失败时返回错误描述（中文，可直接展示）。
 /// 单条候选取不到图标不会变成错误，只会让那条候选没有图标。
 pub fn applications(root: &str, relative: &str) -> Result<Vec<FileApplication>, String> {
     let path = crate::workspace_files::resolve_within(root, relative)?;
@@ -27,7 +28,7 @@ pub fn applications(root: &str, relative: &str) -> Result<Vec<FileApplication>, 
 ///
 /// # Errors
 ///
-/// 目标越出工作区，或该标识不属于这个文件的关联列表时返回错误描述。
+/// 目标不存在、相对路径越出工作区，或该标识不属于这个文件的关联列表时返回错误描述。
 pub fn open_with(root: &str, relative: &str, application: &str) -> Result<(), String> {
     let path = crate::workspace_files::resolve_within(root, relative)?;
     axon_shell_assoc::open_with(&path, application)
@@ -78,7 +79,9 @@ mod tests {
         let root = scratch();
         let root = root.path().to_path_buf();
         let outside = root.to_string_lossy().to_string();
-        for escape in ["../outside.txt", "C:/Windows/win.ini", ".."] {
+        // 绝对路径按本机预览语义放行（验收在工作区文件那组用例里），这里只守相对路径：
+        // `..` 必须在触碰系统之前就被拒绝。
+        for escape in ["../outside.txt", ".."] {
             assert!(
                 applications(&outside, escape).is_err(),
                 "越界路径 {escape} 必须在触碰系统之前被拒绝"

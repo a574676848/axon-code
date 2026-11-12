@@ -10,9 +10,10 @@
 //! 本机打开类动作（默认程序、打开方式、文件管理器定位）只能是本机动作：云档案生效时
 //! 一律拒绝，不启动任何本机进程（合同 §9 阶段 3）。
 //!
-//! 本机档案下，路径**严格限定在工作区根目录与用户主目录内**：任何越出范围的相对路径
-//! （`..`、绝对路径、经符号链接跳出的真实路径）都被拒绝。边界判断必须自己做，不能
-//! 指望调用方守规矩。
+//! 本机档案下，绝对路径与 `~` 路径**不再设根集合**：助手常在正文里给出工作区之外的
+//! 绝对路径，本机预览要能打开磁盘上的任何一份文件。纯相对路径仍以工作区根为基准，
+//! 且不得含 `..`（那是文件树的命名空间）或经符号链接跳出工作区。边界判断必须自己做，
+//! 不能指望调用方守规矩。
 
 use std::path::{Component, Path, PathBuf};
 
@@ -77,7 +78,7 @@ fn ensure_local_action_allowed() -> Result<(), String> {
 pub struct FileEntryDto {
     /// 文件或目录名。
     pub name: String,
-    /// 相对工作区根目录的路径，统一用正斜杠。
+    /// 展示用路径：工作区内相对工作区，工作区外为绝对路径，统一用正斜杠。
     pub path: String,
     /// `dir` 或 `file`。
     pub kind: String,
@@ -86,9 +87,9 @@ pub struct FileEntryDto {
 /// 文件内容。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileTextDto {
-    /// 相对工作区根目录的路径。
+    /// 展示用路径：工作区内相对工作区，主目录内是 `~/` 形式，其余是绝对路径。
     pub path: String,
-    /// 工作区内的绝对路径；查看页的路径栏显示这一份。
+    /// 规范化后的绝对路径；查看页的路径栏显示这一份。
     pub absolute_path: String,
     /// 文本内容；二进制文件时为空。
     pub content: String,
@@ -104,9 +105,9 @@ pub struct FileTextDto {
 /// 部分替换成占位符，渲染出来的图或文档就是坏的。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileBytesDto {
-    /// 相对工作区根目录的路径。
+    /// 展示用路径：工作区内相对工作区，主目录内是 `~/` 形式，其余是绝对路径。
     pub path: String,
-    /// 工作区内的绝对路径。
+    /// 规范化后的绝对路径。
     pub absolute_path: String,
     /// 由扩展名判定的 MIME 类型；判不出来时是 `application/octet-stream`。
     pub mime: String,
@@ -116,20 +117,21 @@ pub struct FileBytesDto {
     pub truncated: bool,
 }
 
-/// 把相对路径规范化为可读取的绝对路径。
+/// 把路径规范化为可读取的绝对路径。
 ///
-/// 允许的范围只有两级：**工作区**与**用户主目录**。
-/// - 工作区内一律用相对路径（纯相对、不得含 `..`）；
+/// 允许的范围是**任何一份真实存在的文件**：
+/// - 绝对路径直接规范化后接受，工作区内外一视同仁；
 /// - `~` 开头（以及 `~/`、`~\`）解析到用户主目录：助手正文里常写 `~\.qoder`
 ///   这类路径，芯片点开时若按工作区相对路径拼接（`<工作区>\~\.qoder`）必然
 ///   找不到文件（表现为 os error 3）；
-/// - 绝对路径只有落在主目录或工作区内才接受，`C:\Windows` 这类自由路径仍然拒绝。
+/// - 纯相对路径以工作区根为基准，不得含 `..`，也不得经符号链接跳出工作区。
 ///
 /// `pub(crate)` 是给「用其他应用打开」共用的：那条路径同样必须先过这一关。
 ///
 /// # Errors
 ///
-/// 云档案生效时返回拒绝文案；本机档案下越界、`..` 跳转或目标不存在时返回原因。
+/// 云档案生效时返回拒绝文案；本机档案下目标不存在、相对路径含 `..` 或跳出工作区时
+/// 返回原因。
 pub(crate) fn resolve_within(root: &str, relative: &str) -> Result<PathBuf, String> {
     // 云档案下本机动作没有意义：远端文件不在本机，拉起本机进程只会打开一个同名的
     // 本地文件。判定放在这里，是因为「用默认程序打开」「用其他应用打开」「枚举打开
@@ -139,63 +141,58 @@ pub(crate) fn resolve_within(root: &str, relative: &str) -> Result<PathBuf, Stri
     resolve_within_locally(root, relative)
 }
 
-/// 本机档案下的路径解析：工作区与用户主目录两级范围。
+/// 本机档案下的路径解析：绝对路径与 `~` 路径不受根集合限制，相对路径留在工作区内。
 fn resolve_within_locally(root: &str, relative: &str) -> Result<PathBuf, String> {
+    let trimmed = relative.trim().replace('\\', "/");
+    if trimmed.is_empty() || trimmed == "." {
+        return canonical_root(root);
+    }
+    if let Some(rest) = trimmed.strip_prefix('~') {
+        let home =
+            home_directory().ok_or_else(|| "无法解析用户主目录，不能打开 `~` 路径".to_string())?;
+        let rest = rest.strip_prefix('/').unwrap_or(rest);
+        return canonicalize_or_report(&home.join(rest));
+    }
+    let relative_path = Path::new(&trimmed);
+    if relative_path.is_absolute() {
+        /*
+         * 绝对路径不再判根集合：本机预览要能打开磁盘上的任何一份文件。
+         * Windows 上规范化会带上 `\\?\` 扩展前缀，展示侧统一由
+         * [`crate::workspace::strip_extended_prefix`] 去掉。
+         */
+        return canonicalize_or_report(relative_path);
+    }
+    for component in relative_path.components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            _ => return Err("路径不得包含上级跳转".to_string()),
+        }
+    }
+    let canonical_root = canonical_root(root)?;
+    let candidate = canonicalize_or_report(&canonical_root.join(relative_path))?;
+    // 相对路径属于文件树：经符号链接跳出工作区时如实拒绝，界面不会拿到一条与树无关的
+    // 绝对路径。
+    if !candidate.starts_with(&canonical_root) {
+        return Err("路径越出允许范围".to_string());
+    }
+    Ok(candidate)
+}
+
+/// 规范化工作区根目录；目录不存在或解析失败时给出可读原因。
+fn canonical_root(root: &str) -> Result<PathBuf, String> {
     let root_path = Path::new(root);
     if !root_path.is_dir() {
         return Err(format!("工作区目录不存在：{root}"));
     }
-    let canonical_root = root_path
+    root_path
         .canonicalize()
-        .map_err(|error| format!("解析工作区目录失败：{error}"))?;
-    let home = home_directory();
+        .map_err(|error| format!("解析工作区目录失败：{error}"))
+}
 
-    let trimmed = relative.trim().replace('\\', "/");
-    let (candidate, scope) = if trimmed.is_empty() || trimmed == "." {
-        (canonical_root.clone(), canonical_root.clone())
-    } else if let Some(rest) = trimmed.strip_prefix('~') {
-        let rest = rest.strip_prefix('/').unwrap_or(rest);
-        let home = home.ok_or_else(|| "无法解析用户主目录，不能打开 `~` 路径".to_string())?;
-        (home.join(rest), home)
-    } else {
-        let relative_path = Path::new(&trimmed);
-        if relative_path.is_absolute() {
-            /*
-             * 先把绝对路径规范化再判范围：Windows 上规范化会带上 `\\?\` 扩展前缀，
-             * 拿未规范化的字符串与已规范化的主目录比对必然不相等。
-             */
-            let canonical = relative_path
-                .canonicalize()
-                .map_err(|error| format!("读取路径失败：{error}"))?;
-            let scope = if canonical.starts_with(&canonical_root) {
-                canonical_root.clone()
-            } else if home
-                .as_deref()
-                .is_some_and(|home| canonical.starts_with(home))
-            {
-                home.clone().unwrap_or_default()
-            } else {
-                return Err("只接受工作区或用户主目录内的路径".to_string());
-            };
-            (canonical, scope)
-        } else {
-            for component in relative_path.components() {
-                match component {
-                    Component::Normal(_) | Component::CurDir => {}
-                    _ => return Err("路径不得包含上级跳转".to_string()),
-                }
-            }
-            (canonical_root.join(relative_path), canonical_root.clone())
-        }
-    };
-
-    let canonical = candidate
-        .canonicalize()
-        .map_err(|error| format!("读取路径失败：{error}"))?;
-    if !canonical.starts_with(&scope) {
-        return Err("路径越出允许范围".to_string());
-    }
-    Ok(canonical)
+/// 规范化一个候选路径；失败时给出可读原因（目标不存在是其中最常见的一种）。
+fn canonicalize_or_report(path: &Path) -> Result<PathBuf, String> {
+    path.canonicalize()
+        .map_err(|error| format!("读取路径失败：{error}"))
 }
 
 /// 用户主目录的规范化路径；解析不出来时返回 None（此时 `~` 路径会明确报错）。
@@ -205,23 +202,22 @@ fn home_directory() -> Option<PathBuf> {
         .and_then(|home| home.canonicalize().ok())
 }
 
-/// 把绝对路径还原成展示用的正斜杠路径：工作区内相对工作区，主目录内用 `~/` 形式。
-fn relative_display(root: &Path, path: &Path) -> Result<String, String> {
-    let canonical_root = root
-        .canonicalize()
-        .map_err(|error| format!("解析工作区目录失败：{error}"))?;
-    if let Ok(relative) = path.strip_prefix(&canonical_root) {
-        return Ok(relative.to_string_lossy().replace('\\', "/"));
+/// 展示用路径：工作区内相对工作区，主目录内用 `~/` 形式，其余给绝对路径。
+///
+/// 绝对路径那一支是放开根集合后补的：工作区与主目录之外的文件同样要有一个看得懂的
+/// 路径，而不是一条「越出范围」。
+fn display_path(root: &Path, path: &Path) -> String {
+    if let Ok(canonical_root) = root.canonicalize()
+        && let Ok(relative) = path.strip_prefix(&canonical_root)
+    {
+        return relative.to_string_lossy().replace('\\', "/");
     }
     if let Some(home) = home_directory()
         && let Ok(relative) = path.strip_prefix(&home)
     {
-        return Ok(format!(
-            "~/{}",
-            relative.to_string_lossy().replace('\\', "/")
-        ));
+        return format!("~/{}", relative.to_string_lossy().replace('\\', "/"));
     }
-    Err("路径越出工作区范围".to_string())
+    crate::workspace::strip_extended_prefix(&path.to_string_lossy()).replace('\\', "/")
 }
 
 /// 目录在前、名称升序：两种数据来源共用同一套展示顺序，界面不会跳序。
@@ -266,12 +262,9 @@ fn list_entries_locally(root: &str, relative: &str) -> Result<Vec<FileEntryDto>,
         };
         let name = item.file_name().to_string_lossy().to_string();
         let kind_label = if kind.is_dir() { "dir" } else { "file" };
-        let Ok(path) = relative_display(root_path, &item.path()) else {
-            continue;
-        };
         entries.push(FileEntryDto {
             name,
-            path,
+            path: display_path(root_path, &item.path()),
             kind: kind_label.to_string(),
         });
     }
@@ -312,7 +305,7 @@ fn read_text_locally(root: &str, relative: &str) -> Result<FileTextDto, String> 
     if !metadata.is_file() {
         return Err("目标不是文件".to_string());
     }
-    let display = relative_display(Path::new(root), &path)?;
+    let display = display_path(Path::new(root), &path);
     // 规范化后的绝对路径在 Windows 上带 `\\?\` 扩展前缀；那是文件系统的细节，
     // 不该出现在界面上的路径栏里，因此按工作区展示的同一口径去掉它。
     let absolute = crate::workspace::strip_extended_prefix(&path.to_string_lossy());
@@ -373,13 +366,13 @@ pub struct PathStatDto {
     pub is_dir: bool,
     /// 规范化后的绝对路径；解析不出来时为空串。
     pub absolute_path: String,
-    /// 展示用路径：工作区内相对工作区，主目录内是 `~/` 形式。
+    /// 展示用路径：工作区内相对工作区，主目录内是 `~/` 形式，其余是绝对路径。
     pub display_path: String,
 }
 
 /// 探测路径是不是目录。
 ///
-/// 解析不出来（文件不存在、越出允许范围）时只回答「不是目录」：真正的错误由后续的
+/// 解析不出来（文件不存在、相对路径跳出工作区）时只回答「不是目录」：真正的错误由后续的
 /// 读取流程给出，这里多一种错误文案只会让同一件事有两种说法。
 #[must_use]
 pub fn stat_path(root: &str, relative: &str) -> PathStatDto {
@@ -401,8 +394,7 @@ fn stat_path_locally(root: &str, relative: &str) -> PathStatDto {
     PathStatDto {
         is_dir: path.is_dir(),
         absolute_path: crate::workspace::strip_extended_prefix(&path.to_string_lossy()),
-        display_path: relative_display(Path::new(root), &path)
-            .unwrap_or_else(|_| relative.trim().to_string()),
+        display_path: display_path(Path::new(root), &path),
     }
 }
 
@@ -529,8 +521,8 @@ fn mime_of(path: &Path) -> &'static str {
 
 /// 读取工作区内一个文件的原始字节。
 ///
-/// 与文本读取同一套边界：本机档案下路径必须先过工作区校验，符号链接跳出同样被拒绝；
-/// 云档案下由网关按服务端自己的路径边界判定。
+/// 与文本读取同一套边界：本机档案下绝对路径与 `~` 路径不受根集合限制，相对路径仍留在
+/// 工作区内且不得经符号链接跳出；云档案下由网关按服务端自己的路径边界判定。
 ///
 /// 二进制文件没有「截断后仍然可用」这一说：本机档案超限时如实标注 `truncated`，
 /// 由渲染器决定是提示还是拒绝；网关对超出字节上限的文件直接拒绝，不回残缺字节。
@@ -560,7 +552,7 @@ fn read_bytes_locally(root: &str, relative: &str) -> Result<FileBytesDto, String
     if !metadata.is_file() {
         return Err("目标不是文件".to_string());
     }
-    let display = relative_display(Path::new(root), &path)?;
+    let display = display_path(Path::new(root), &path);
     let absolute = crate::workspace::strip_extended_prefix(&path.to_string_lossy());
     let length = metadata.len();
     let read_limit = length.min(MAX_BINARY_BYTES);
