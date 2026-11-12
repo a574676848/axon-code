@@ -1,8 +1,11 @@
 /*
  * 顶部指标条视图模型。
  *
- * 段序、标签与出现条件与 TUI 的 HeaderBarViewModel 同源；桌面端省略模型段：
- * 模型由输入坞右下角的选择器常驻承载，顶部不再重复。缺数据即不渲染该段，
+ * 段序与标签与 TUI 的 HeaderBarViewModel 同源；桌面端省略模型段：
+ * 模型由输入坞右下角的选择器常驻承载，顶部不再重复。
+ *
+ * 出现条件按簇分工：预算簇（上下文、命中率）从进入会话起常驻，
+ * 新会话读作「0/窗口」与「命中率 0.00%」；性能簇与辅助簇缺数据即不渲染该段，
  * 绝不填占位值。
  */
 
@@ -14,8 +17,8 @@ import {
   formatTokensPerSecondX10,
 } from './format';
 import {
+  EMPTY_USAGE,
   cacheHitRateBasisPoints,
-  completeInputTokens,
   currentContextTokens,
   type TokenUsage,
 } from './transcript';
@@ -75,7 +78,7 @@ export interface HeaderMetricsInput {
   cwd: string;
   /** 推理强度。 */
   reasoningEffort: string | null;
-  /** 最近一轮的令牌用量。 */
+  /** 最近一轮的令牌用量；还没跑过任何一轮时为空，预算簇按零读数渲染。 */
   usage: TokenUsage | null;
   /** 当前模型的上下文窗口。 */
   contextWindow: number | null;
@@ -111,11 +114,11 @@ function contextPressureTone(used: number, window: number): HeaderSegmentTone {
  * 上下文段文本：只给「已用/窗口」。
  *
  * 缓存读取与写入仍然收进 ContextUsagePopover；命中率是读者会直接看的预算指标，
- * 在下一段直接给出，不再藏进浮层。
+ * 在下一段直接给出，不再藏进浮层。已用为零时同样给出读数（`0/窗口`），
+ * 因为「这一轮还没花预算」本身就是要看的事实。
  */
-function contextText(usage: TokenUsage, contextWindow: number | null): string | null {
+function contextText(usage: TokenUsage, contextWindow: number | null): string {
   const used = currentContextTokens(usage);
-  if (used === 0) return null;
   if (contextWindow !== null && contextWindow > 0) {
     return `${formatDecimalCount(used)}/${formatDecimalCount(contextWindow)}`;
   }
@@ -125,6 +128,13 @@ function contextText(usage: TokenUsage, contextWindow: number | null): string | 
 /** 组装指标条的各段。 */
 export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
   const segments: HeaderSegment[] = [];
+  /*
+   * 预算簇的读数基准：没有用量观测就是零用量。
+   *
+   * 新建会话、刚进入会话都还没有任何一轮的观测，此时预算不是「未知」而是「还没用」，
+   * 因此它照样参与渲染，不能靠隐藏这一段来表达未知。
+   */
+  const usage = input.usage ?? EMPTY_USAGE;
 
   // 1 状态：仅工作态出现。品牌名不再占位：工作态只留一枚呼吸的活动点，
   //   生成到哪一步已经由正文与输入坞那一行说清楚了。
@@ -180,32 +190,25 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
       breath: false,
     });
   }
-  // 4 上下文：无用量观测时不出现。
-  if (input.usage !== null) {
-    const text = contextText(input.usage, input.contextWindow);
-    if (text !== null) {
-      const used = currentContextTokens(input.usage);
-      segments.push({
-        kind: 'context',
-        text,
-        tone:
-          input.contextWindow !== null && input.contextWindow > 0
-            ? contextPressureTone(used, input.contextWindow)
-            : 'default',
-        breath: false,
-        icon: 'ring',
-      });
-    }
-  }
-  // 5 缓存命中率：有完整的输入 token 时才给出，避免新一轮刚开始时显示 0.00%。
-  if (input.usage !== null && completeInputTokens(input.usage) > 0) {
-    segments.push({
-      kind: 'cacheHit',
-      text: shortMetric('命中率', formatBasisPointsPercent(cacheHitRateBasisPoints(input.usage))),
-      tone: 'default',
-      breath: false,
-    });
-  }
+  // 4 上下文：预算簇从进入会话起常驻，没有观测时读作 0/窗口。
+  segments.push({
+    kind: 'context',
+    text: contextText(usage, input.contextWindow),
+    tone:
+      input.contextWindow !== null && input.contextWindow > 0
+        ? contextPressureTone(currentContextTokens(usage), input.contextWindow)
+        : 'default',
+    breath: false,
+    icon: 'ring',
+  });
+  // 5 缓存命中率：与上下文段同一生命周期，没有完整输入 token 时命中率就是 0%。
+  //   藏起来会让新会话的指标条凭空少一段，读者只能猜是没命中还是没测到。
+  segments.push({
+    kind: 'cacheHit',
+    text: shortMetric('命中率', formatBasisPointsPercent(cacheHitRateBasisPoints(usage))),
+    tone: 'default',
+    breath: false,
+  });
   // 6 计划：有步骤时才出现。
   if (input.plan !== null && input.plan.total > 0) {
     segments.push({
