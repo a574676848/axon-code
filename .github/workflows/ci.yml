@@ -91,6 +91,38 @@ jobs:
             echo "code=false" >> "$GITHUB_OUTPUT"
           fi
 
+  frontend:
+    name: Frontend
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: 准备 Node 环境
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          # 缓存 npm 下载目录：`npm ci` 严格按锁文件还原，命中缓存时只剩本地链接。
+          cache: npm
+          cache-dependency-path: crates/axon-desktop/ui/package-lock.json
+
+      - name: 前端构建 (axon-desktop UI)
+        run: |
+          npm --prefix crates/axon-desktop/ui ci
+          npm --prefix crates/axon-desktop/ui run build
+
+      - name: 校验 UI 契约门禁
+        run: python3 tools/verify_ui_contract.py
+
+      # 风格检查与前端单测必须在这里真跑：只构建不检查等于把 lint 与断言留给本地。
+      - name: 前端风格检查与单测
+        run: |
+          npm --prefix crates/axon-desktop/ui run lint
+          npm --prefix crates/axon-desktop/ui test
+
   check:
     name: Check (${{ matrix.os }})
     needs: changes
@@ -157,32 +189,6 @@ jobs:
           sudo apt-get install -y libayatana-appindicator3-dev ||
             sudo apt-get install -y libappindicator3-dev
 
-      - name: 准备 Node 环境
-        if: needs.changes.outputs.code == 'true'
-        uses: actions/setup-node@v5
-        with:
-          node-version: 22
-          # 缓存 npm 下载目录：`npm ci` 严格按锁文件还原，命中缓存时只剩本地链接。
-          cache: npm
-          cache-dependency-path: crates/axon-desktop/ui/package-lock.json
-
-      - name: 前端构建 (axon-desktop UI)
-        if: needs.changes.outputs.code == 'true'
-        run: |
-          npm --prefix crates/axon-desktop/ui ci
-          npm --prefix crates/axon-desktop/ui run build
-
-      - name: 校验 UI 契约门禁
-        if: needs.changes.outputs.code == 'true'
-        run: ${{ matrix.python }} tools/verify_ui_contract.py
-
-      # 风格检查与前端单测必须在这里真跑：只构建不检查等于把 lint 与断言留给本地。
-      - name: 前端风格检查与单测
-        if: needs.changes.outputs.code == 'true'
-        run: |
-          npm --prefix crates/axon-desktop/ui run lint
-          npm --prefix crates/axon-desktop/ui test
-
       # 性能契约：与基线比较，回退即失败；尚未人工测量的项在 CI 里放行并逐项列出。
       - name: 性能契约门禁
         if: needs.changes.outputs.code == 'true'
@@ -217,23 +223,29 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          if cargo check --locked --workspace --all-features 2>&1 | tee cargo-check.log; then
+          # --all-targets 与 clippy 对齐 target 集合：否则本仓 43 个 crate 要编两遍，
+          # clippy 阶段几乎全部无法复用 check 的元数据。
+          if cargo check --locked --workspace --all-targets --all-features 2>&1 | tee cargo-check.log; then
             exit 0
           fi
           detail=$(grep -A6 -m1 -E '^error' cargo-check.log | tr '\n' ' ')
           echo "::error title=cargo-check::${detail:0:900}"
           exit 1
 
+      # clippy 的 lint 结论与 OS 关系很小，真正平台相关的是 cfg 分支；ubuntu 与 windows
+      # 已覆盖 cfg(unix) 与 cfg(windows) 两侧。macOS 腿只跑 check + test，省下最贵那腿的 lint 时间。
       - name: Clippy 静态分析
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.code == 'true' && runner.os != 'macOS'
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
       - name: 单元测试
         if: needs.changes.outputs.code == 'true'
         run: cargo test --locked --workspace --all-features
 
+      # release 全量编译（43 crate + tauri）是整条腿最贵的一步。发行包结构在各平台一致，
+      # 没必要在 3 条腿各跑一次 release；Windows/macOS 只用 debug 产物验证运行时。
       - name: CLI release smoke
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.code == 'true' && runner.os == 'Linux'
         run: ${{ matrix.python }} tools/verify_cli_release_smoke.py
 
       - name: Daemon 与 doctor smoke
