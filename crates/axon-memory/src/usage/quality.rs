@@ -86,13 +86,16 @@ impl MemoryRuntimeQualityStore {
                     reflection_yields INTEGER NOT NULL,
                     semantic_assessments INTEGER NOT NULL,
                     false_memory_rejections INTEGER NOT NULL,
+                    merged_from_count INTEGER NOT NULL DEFAULT 0,
+                    downgrade_count INTEGER NOT NULL DEFAULT 0,
                     recorded_at_ms INTEGER NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_memory_runtime_quality_recorded
                     ON memory_runtime_quality(recorded_at_ms DESC);
                 ",
             )
-            .map_err(|_| AxonError::memory_persistence("Memory 质量 schema 初始化失败"))
+            .map_err(|_| AxonError::memory_persistence("Memory 质量 schema 初始化失败"))?;
+        ensure_consolidation_columns(&self.connection)
     }
 
     /// 按 turn 幂等写入质量观测。
@@ -166,6 +169,88 @@ impl MemoryRuntimeQualityStore {
             .map_err(|_| AxonError::memory_persistence("Memory 质量指标聚合失败"))?;
         quality_report(values)
     }
+}
+
+impl MemoryRuntimeQualityStore {
+    /// 记录一次整合统计（`merged_from_count` / `downgrade_count`）。
+    pub fn record_consolidation_stats(
+        &self,
+        merged_from_count: u64,
+        downgrade_count: u64,
+        recorded_at_ms: u64,
+    ) -> AxonResult<()> {
+        if recorded_at_ms == 0 {
+            return Err(AxonError::memory_persistence("Memory 整合统计时间无效"));
+        }
+        self.initialize_schema()?;
+        let observation_id = format!("consolidation-{recorded_at_ms}");
+        self.connection
+            .execute(
+                r"
+                INSERT INTO memory_runtime_quality (
+                    observation_id, cache_read_input_tokens, complete_input_tokens,
+                    reflection_attempts, reflection_yields, semantic_assessments,
+                    false_memory_rejections, merged_from_count, downgrade_count, recorded_at_ms
+                ) VALUES (?1, 0, 0, 0, 0, 0, 0, ?2, ?3, ?4)
+                ON CONFLICT(observation_id) DO UPDATE SET
+                    merged_from_count = excluded.merged_from_count,
+                    downgrade_count = excluded.downgrade_count,
+                    recorded_at_ms = excluded.recorded_at_ms
+                ",
+                params![
+                    observation_id,
+                    i64_from_u64(merged_from_count)?,
+                    i64_from_u64(downgrade_count)?,
+                    i64_from_u64(recorded_at_ms)?,
+                ],
+            )
+            .map_err(|_| AxonError::memory_persistence("Memory 整合统计写入失败"))?;
+        Ok(())
+    }
+
+    /// 汇总整合统计：`(merged_from_count, downgrade_count)`。
+    pub fn consolidation_stats(&self) -> AxonResult<(u64, u64)> {
+        self.initialize_schema()?;
+        let (merged, downgraded) = self
+            .connection
+            .query_row(
+                "SELECT COALESCE(SUM(merged_from_count), 0), \
+                 COALESCE(SUM(downgrade_count), 0) FROM memory_runtime_quality",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .map_err(|_| AxonError::memory_persistence("Memory 整合统计聚合失败"))?;
+        Ok((
+            u64::try_from(merged).unwrap_or(0),
+            u64::try_from(downgraded).unwrap_or(0),
+        ))
+    }
+}
+
+/// 旧库补列：SQLite 的 `ALTER TABLE ADD COLUMN` 不支持 `IF NOT EXISTS`，先探测再补。
+fn ensure_consolidation_columns(connection: &Connection) -> AxonResult<()> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(memory_runtime_quality)")
+        .map_err(|_| AxonError::memory_persistence("Memory 质量 schema 探测失败"))?;
+    let existing = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|_| AxonError::memory_persistence("Memory 质量 schema 探测失败"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| AxonError::memory_persistence("Memory 质量 schema 探测失败"))?;
+    for column in ["merged_from_count", "downgrade_count"] {
+        if existing.iter().any(|name| name == column) {
+            continue;
+        }
+        connection
+            .execute(
+                &format!(
+                    "ALTER TABLE memory_runtime_quality ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"
+                ),
+                [],
+            )
+            .map_err(|_| AxonError::memory_persistence("Memory 质量 schema 补列失败"))?;
+    }
+    Ok(())
 }
 
 fn validate_observation(observation: &MemoryRuntimeQualityObservation) -> AxonResult<()> {
@@ -278,3 +363,6 @@ mod tests {
         }
     }
 }
+#[cfg(test)]
+#[path = "quality_consolidation_tests.rs"]
+mod consolidation_tests;
