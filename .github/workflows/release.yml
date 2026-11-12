@@ -26,7 +26,7 @@ jobs:
   gate:
     name: Gate (CI green)
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 100
 
     steps:
       - name: 校验该提交的 CI 已通过
@@ -37,7 +37,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          deadline=$((SECONDS + 1800))
+          deadline=$((SECONDS + 5400))
           while :; do
             runs=$(gh run list --repo "$REPO" --commit "$SHA" --workflow ci.yml \
                      --limit 20 --json status,conclusion 2>/dev/null || echo '[]')
@@ -54,7 +54,7 @@ jobs:
               exit 1
             fi
             if [ "${SECONDS}" -ge "${deadline}" ]; then
-              echo "::error::等待 CI 超时（30 分钟），拒绝发布"
+              echo "::error::等待 CI 超时（90 分钟），拒绝发布"
               exit 1
             fi
             sleep 30
