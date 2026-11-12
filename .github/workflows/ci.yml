@@ -99,18 +99,25 @@ jobs:
       matrix:
         include:
           # os 是分支保护比对的必需检查名，必须保持不变；runner 才是真实镜像。
+          # timeout 按腿给：Rust 全量编译 + 测试在 Windows / macOS 上明显更慢，
+          # 首次无缓存时实测会撞满 45 分钟（ubuntu 约 41 分钟跑完 24 步）。
           - os: ubuntu-latest
             runner: ubuntu-24.04
             python: python3
+            timeout: 60
           - os: windows-latest
             runner: windows-2022
             python: python
+            timeout: 90
           - os: macos-latest
             runner: macos-15-intel
             python: python3
+            timeout: 90
     runs-on: ${{ matrix.runner }}
     # 单腿墙钟上限：卡死的用例或交互式进程不该长期占用 runner。
-    timeout-minutes: 45
+    # 数值来自实测：ubuntu 41 分钟通过；windows/macos 无缓存时 45 分钟不够，
+    # 会被平台直接掐断并记为 cancelled（看起来像取消，其实是超时）。
+    timeout-minutes: ${{ matrix.timeout }}
 
     steps:
       - uses: actions/checkout@v5
