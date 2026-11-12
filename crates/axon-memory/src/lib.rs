@@ -4,6 +4,8 @@
 mod artifacts;
 #[path = "citation/citation.rs"]
 mod citation;
+#[path = "consolidate/mod.rs"]
+mod consolidate;
 #[path = "embedding/provider.rs"]
 mod embedding_provider;
 #[path = "store/file_lock.rs"]
@@ -12,10 +14,6 @@ mod file_lock;
 mod index_rebuild;
 #[path = "pipeline/pipeline_state.rs"]
 mod pipeline_state;
-#[path = "query/temporal.rs"]
-mod temporal;
-#[path = "thread/mod.rs"]
-mod thread;
 #[path = "usage/quality.rs"]
 mod quality;
 #[path = "retrieval/retrieval.rs"]
@@ -30,8 +28,12 @@ mod store_supersession;
 mod store_thread;
 #[path = "store/store_write.rs"]
 mod store_write;
+#[path = "query/temporal.rs"]
+mod temporal;
 #[path = "index/text_index.rs"]
 mod text_index;
+#[path = "thread/mod.rs"]
+mod thread;
 #[path = "usage/usage.rs"]
 mod usage;
 #[path = "index/vector_index.rs"]
@@ -55,6 +57,13 @@ pub use artifacts::{
 pub use citation::{
     MEMORY_CITATION_END_TAG, MEMORY_CITATION_START_TAG, MemoryCitation, MemoryCitationParseIssue,
     MemoryCitationParseReport, MemoryCitationParser, project_memory_citation_text,
+};
+pub use consolidate::{
+    CONSOLIDATE_BATCH_LIMIT, CONSOLIDATE_ENABLED_DEFAULT, ConsolidationOp, ConsolidationPlan,
+    ConsolidationReport, LESSON_NORMAL_MAX_DAYS, LESSON_STALE_MAX_DAYS, LESSON_STALE_WEIGHT_BP,
+    LessonFreshness, MIN_IMPORTANCE_BP, PERSON_CARD_TAG, PlanRejection, apply_plan,
+    effective_importance_bp, is_lesson_kind, is_person_card_like, lesson_freshness, parse_plan,
+    profile_inference_inputs, should_inject_actively,
 };
 pub use embedding_provider::{
     MEMORY_EMBEDDING_ARK_MULTIMODAL_PATH, MEMORY_EMBEDDING_DASHSCOPE_PATH,
@@ -82,13 +91,6 @@ pub use retrieval::{
     MEMORY_HYBRID_TEXT_WEIGHT_BASIS_POINTS, MEMORY_HYBRID_VECTOR_WEIGHT_BASIS_POINTS,
     MemoryHybridExplain, MemoryHybridHit, MemoryHybridQuery, MemoryHybridScope,
 };
-pub use temporal::{TimeRange, parse_temporal_hint};
-pub use thread::{
-    P2_COMMITMENT_MAX_BYTES, P2_MAX_COMMITMENTS, P2_THREAD_MAX_BYTES, Reference, ThreadScope,
-    classify_reference, close_commitments, commitment_id_for, detects_closure, detects_commitment,
-    ensure_foreground, format_local_minute, is_one_off_leaf, open_commitment, record_commitment,
-    render_p2_context, touch_foreground,
-};
 pub use store::{
     LEGACY_MEMORY_RECORD_TABLE_PREFIX, MEMORY_SQLITE_BUSY_TIMEOUT_MS, MEMORY_SQLITE_SCHEMA_VERSION,
     MemoryArchiveStatus, MemoryKindCount, MemoryScopeFacet, MemorySqliteRecord,
@@ -100,9 +102,16 @@ pub use store_thread::{
     COMMITMENT_STATUS_DONE, COMMITMENT_STATUS_OPEN, MemoryCommitment, MemoryThread,
     THREAD_STATUS_ARCHIVED, THREAD_STATUS_OPEN,
 };
+pub use temporal::{TimeRange, parse_temporal_hint};
 pub use text_index::{
     MEMORY_TANTIVY_DEFAULT_LIMIT, MEMORY_TANTIVY_SCHEMA_VERSION, MEMORY_TANTIVY_WRITER_HEAP_BYTES,
     MemoryTextDocument, MemoryTextHit, MemoryTextIndex,
+};
+pub use thread::{
+    P2_COMMITMENT_MAX_BYTES, P2_MAX_COMMITMENTS, P2_THREAD_MAX_BYTES, Reference, ThreadScope,
+    classify_reference, close_commitments, commitment_id_for, detects_closure, detects_commitment,
+    ensure_foreground, format_local_minute, is_one_off_leaf, open_commitment, record_commitment,
+    render_p2_context, touch_foreground,
 };
 pub use usage::{
     MEMORY_USAGE_KIND_CITED, MEMORY_USAGE_KIND_INJECTED, MEMORY_USAGE_KIND_RECALLED,
