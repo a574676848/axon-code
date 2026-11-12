@@ -20,6 +20,8 @@ use crate::builtin_shell_script::shell_env_overrides;
 const BACKEND_EXIT_DEADLINE: Duration = Duration::from_secs(10);
 /// 后端探测用例的轮询间隔。
 const BACKEND_POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// 终态收口时等待输出读取线程排干的期限。
+const BACKEND_DRAIN_DEADLINE: Duration = Duration::from_secs(5);
 /// 分页器变量名。
 const PAGER_KEY: &str = "PAGER";
 /// git 分页器变量名。
@@ -157,6 +159,10 @@ fn backend_env_probe(tty: bool, overrides: &[(String, String)]) -> String {
     let mut backend = ProcessBackend::spawn(&command, &cwd, tty, Arc::clone(&output), overrides)
         .expect("后端应启动成功");
     wait_for_exit(&mut backend);
+    // 收口顺序必须与生产路径一致（见 `session.rs` 的终态组装）：`try_wait` 只说明子进程
+    // 已退出，读取线程未必已把字节写进共享缓冲。少这一步在 macOS / Windows 上可能靠线程
+    // 调度侥幸通过，Linux PTY 上则稳定取到空预览 —— 那是假阴性，不是注入失效。
+    backend.drain_output(BACKEND_DRAIN_DEADLINE);
     let preview = output.take_receipt(None).stdout.preview;
     let _ = fs::remove_file(&path);
     preview
