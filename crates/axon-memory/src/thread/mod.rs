@@ -4,8 +4,10 @@
 //! 不做 mergeThreads、不做结论压缩。`signature` 字段预留给后续语义去重，本期只写入。
 
 mod reference;
+mod commitment;
 
 pub use reference::{Reference, classify_reference, is_one_off_leaf};
+pub use commitment::{close_commitments, detects_closure, detects_commitment, record_commitment};
 
 use crate::store_thread::{MemoryThread, THREAD_STATUS_OPEN};
 use crate::{MemorySqliteStore, store_thread::MemoryCommitment};
