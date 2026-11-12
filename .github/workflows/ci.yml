@@ -1,7 +1,9 @@
 # Axon 编译检查流水线
-# 触发条件：push 到 master、PR、push 以 v 开头的 tag（如 v0.2.0）、人工触发
+# 触发条件：PR、push 以 v 开头的 tag（如 v0.2.0）、人工触发
+# 刻意不在 master 提交上跑：日常提交不占 CI 时长，门禁只在 PR 与发版 tag 上执行；
+# tag 上的 CI 同时是 Release 的前置门禁（release 的 gate job 会校验它通过）。
 #
-# 频率治理（避免"每次提交都跑半小时"）：
+# 频率治理：
 #   1. concurrency 取消同一 ref 上已被新提交取代的运行，连推多次只跑最后一次。
 #   2. changes 任务先做路径判定：改动全部落在 docs/ 与根级 Markdown 时，
 #      Check 矩阵立即收工，但三个必需检查名照常上报 success，不阻塞合并。
@@ -9,14 +11,6 @@
 #
 # 注意：不要改用 workflow 级 paths-ignore。那样文档 PR 的必需检查永远不会上报，
 # 分支保护会把合并永久卡在 Waiting for status to be reported。
-# runner 与 action 版本（对应 2026-10 的 runner 镜像与 Node 运行时告警）：
-#   1. 矩阵里的 os 只作为**必需的检查名**（`Check (ubuntu-latest)` 等），实际镜像由
-#      runner 字段固定到具体版本：ubuntu-latest 将于 2026-10-19 迁到 Ubuntu 26，
-#      latest 自动漂移会同时改变运行时行为与分支保护的比对上下文。
-#   2. GitHub 已弃用 Node 20，checkout / setup-node 全部升到 v5（Node 24）。
-#   3. macOS 14 镜像已于 2026-11-02 全量退役（见 actions/runner-images#15226），
-#      继续用 macos-14 会调度不到 runner 并在数秒内被平台取消；这里固定到
-#      macos-15-intel，保持 x64 架构不变、只把系统版本升一档，减少架构切换变量。
 name: CI
 
 on:
@@ -24,8 +18,6 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   push:
-    branches:
-      - master
     tags:
       - 'v*'
 
@@ -284,14 +276,3 @@ jobs:
       - name: TUI three-region smoke
         if: needs.changes.outputs.code == 'true'
         run: ${{ matrix.python }} tools/verify_tui_smoke.py
-
-  # 发布只在 CI 全绿之后发生：tag 推送先跑完整门禁，docs 与三端 Check 全部通过后才调用
-  # release 工作流。“先过 CI 再出包”由流水线结构保证，而不是靠人工顺序。
-  release:
-    name: Release
-    needs: [docs, frontend, check]
-    if: startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      contents: write
-    uses: ./.github/workflows/release.yml
-    secrets: inherit

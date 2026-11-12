@@ -1,14 +1,18 @@
 # Axon 正式发布流水线
-# 触发条件：由 CI 在 tag 上全绿后调用（workflow_call）+ 人工触发
+# 触发条件：push 以 v 开头的 tag（如 v0.2.0）+ 人工触发
+# 前置门禁：gate job 会先确认该提交的 CI 已经全绿，未通过则整条发布流水线拒绝执行
 # 产物：三平台六 target 的预编译二进制（后端 axon 与桌面端 axon-desktop 分开打包）+ MSI/pkg/deb + SHA256SUMS
 name: Release
 
 on:
   workflow_dispatch:
-  workflow_call:
+  push:
+    tags:
+      - 'v*'
 
 permissions:
   contents: write
+  actions: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,10 +21,51 @@ env:
 
 jobs:
   # ──────────────────────────────────────────────
+  # 阶段零：发布前置门禁——该提交的 CI 必须已经通过
+  # ──────────────────────────────────────────────
+  gate:
+    name: Gate (CI green)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+
+    steps:
+      - name: 校验该提交的 CI 已通过
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 1800))
+          while :; do
+            runs=$(gh run list --repo "$REPO" --commit "$SHA" --workflow ci.yml \
+                     --limit 20 --json status,conclusion 2>/dev/null || echo '[]')
+            ok=$(printf '%s' "$runs" | python3 -c 'import json,sys;print(sum(1 for r in json.load(sys.stdin) if r.get("conclusion")=="success"))')
+            pending=$(printf '%s' "$runs" | python3 -c 'import json,sys;print(sum(1 for r in json.load(sys.stdin) if r.get("status")!="completed"))')
+            bad=$(printf '%s' "$runs" | python3 -c 'import json,sys;print(sum(1 for r in json.load(sys.stdin) if r.get("conclusion") in ("failure","cancelled","timed_out","startup_failure")))')
+            echo "CI runs for ${SHA}: success=${ok} pending=${pending} failed=${bad}"
+            if [ "${ok}" -gt 0 ]; then
+              echo "CI 已通过，放行发布"
+              exit 0
+            fi
+            if [ "${pending}" -eq 0 ]; then
+              echo "::error::该提交没有通过的 CI 记录（failed=${bad}），拒绝发布"
+              exit 1
+            fi
+            if [ "${SECONDS}" -ge "${deadline}" ]; then
+              echo "::error::等待 CI 超时（30 分钟），拒绝发布"
+              exit 1
+            fi
+            sleep 30
+          done
+
+  # ──────────────────────────────────────────────
   # 阶段一：多平台并行构建 + 打包
   # ──────────────────────────────────────────────
   build:
     name: Build (${{ matrix.target }})
+    needs: gate
     strategy:
       fail-fast: false
       matrix:
@@ -251,6 +296,7 @@ jobs:
   # ──────────────────────────────────────────────
   macos_pkg:
     name: Build macOS .pkg (${{ matrix.target }})
+    needs: gate
     strategy:
       fail-fast: false
       matrix:
@@ -323,6 +369,7 @@ jobs:
   # ──────────────────────────────────────────────
   linux_deb:
     name: Build Linux .deb (${{ matrix.target }})
+    needs: gate
     strategy:
       fail-fast: false
       matrix:
