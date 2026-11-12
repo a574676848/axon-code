@@ -24,6 +24,8 @@ mod store;
 mod store_query;
 #[path = "store/store_supersession.rs"]
 mod store_supersession;
+#[path = "store/store_thread.rs"]
+mod store_thread;
 #[path = "store/store_write.rs"]
 mod store_write;
 #[path = "index/text_index.rs"]
@@ -86,6 +88,10 @@ pub use store::{
     MemoryVisibility,
 };
 pub use store_supersession::{MEMORY_SUPERSESSION_REASON, MemorySupersession};
+pub use store_thread::{
+    COMMITMENT_STATUS_DONE, COMMITMENT_STATUS_OPEN, MemoryCommitment, MemoryThread,
+    THREAD_STATUS_ARCHIVED, THREAD_STATUS_OPEN,
+};
 pub use text_index::{
     MEMORY_TANTIVY_DEFAULT_LIMIT, MEMORY_TANTIVY_SCHEMA_VERSION, MEMORY_TANTIVY_WRITER_HEAP_BYTES,
     MemoryTextDocument, MemoryTextHit, MemoryTextIndex,

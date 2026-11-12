@@ -19,7 +19,7 @@ pub(crate) use store_codec::{
 };
 
 /// SQLite schema 版本。
-pub const MEMORY_SQLITE_SCHEMA_VERSION: i64 = 4;
+pub const MEMORY_SQLITE_SCHEMA_VERSION: i64 = 5;
 /// SQLite busy timeout，单位毫秒。
 pub const MEMORY_SQLITE_BUSY_TIMEOUT_MS: u64 = 5_000;
 const MEMORY_SQLITE_WAL_INIT_RETRIES: usize = 5;
@@ -294,6 +294,7 @@ impl MemorySqliteStore {
             )
             .map_err(|_| AxonError::memory_persistence("Memory SQLite 索引初始化失败"))?;
         crate::store_supersession::initialize_supersession_schema(&self.connection)?;
+        crate::store_thread::initialize_thread_schema(&self.connection)?;
         self.connection
             .pragma_update(None, "user_version", MEMORY_SQLITE_SCHEMA_VERSION)
             .map_err(|_| AxonError::memory_persistence("Memory SQLite schema 版本写入失败"))
