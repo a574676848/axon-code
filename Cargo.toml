@@ -11,6 +11,7 @@ members = [
     "crates/axon-shell-assoc",
     "crates/axon-fs-walk",
     "crates/axon-config",
+    "crates/axon-env",
     "crates/axon-tui-runtime",
     "crates/axon-voice",
     "crates/axon-voice-bridge",
