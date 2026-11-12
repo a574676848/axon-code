@@ -1,53 +1,24 @@
-param(
-    [string]$WorkspaceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-)
+# CLI 发行包冒烟的 Windows 入口。
+#
+# 判定逻辑只有一份，在 tools/verify_cli_release_smoke.py。
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = 'Stop'
 
-function Invoke-CheckedCommand {
-    param(
-        [string]$Label,
-        [string]$Command,
-        [string[]]$Arguments
-    )
-
-    Write-Output "==> $Label"
-    & $Command @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "$Label failed."
-        exit 1
+$python = $null
+foreach ($candidate in @('python', 'py')) {
+    $command = Get-Command $candidate -ErrorAction SilentlyContinue
+    if ($null -eq $command) { continue }
+    & $command.Source -c 'import sys; raise SystemExit(0 if sys.version_info[0] == 3 else 1)' 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        $python = $command.Source
+        break
     }
 }
 
-Set-Location $WorkspaceRoot
-
-Invoke-CheckedCommand "cargo build release axon-cli" "cargo" @("build", "-p", "axon-cli", "--release")
-Invoke-CheckedCommand "axon doctor provider" "cargo" @("run", "--quiet", "-p", "axon-cli", "--", "doctor", "--check", "provider")
-Invoke-CheckedCommand "axon doctor smoke" "cargo" @("run", "--quiet", "-p", "axon-cli", "--", "doctor", "--check", "smoke")
-
-$distRoot = Join-Path $WorkspaceRoot "dist"
-$packageDir = Join-Path $distRoot "smoke"
-if (Test-Path -LiteralPath $packageDir) {
-    Remove-Item -LiteralPath $packageDir -Recurse -Force
-}
-
-Invoke-CheckedCommand "axon package" "cargo" @("run", "--quiet", "-p", "axon-cli", "--", "package", "--output-dir", $packageDir)
-
-$manifest = Get-ChildItem -LiteralPath $packageDir -Recurse -Filter "axon-release-manifest.json" | Select-Object -First 1
-if (-not $manifest) {
-    Write-Error "package smoke failed: manifest not found."
+if ($null -eq $python) {
+    Write-Error 'Python 3 is required to run the cross-platform CLI release smoke.'
     exit 1
 }
 
-Invoke-CheckedCommand "axon package verify" "cargo" @(
-    "run",
-    "--quiet",
-    "-p",
-    "axon-cli",
-    "--",
-    "package",
-    "--verify-manifest",
-    $manifest.FullName
-)
-
-Write-Output "CLI release smoke OK"
+& $python -X utf8 (Join-Path $PSScriptRoot 'verify_cli_release_smoke.py')
+exit $LASTEXITCODE

@@ -100,10 +100,13 @@ jobs:
           # os 是分支保护比对的必需检查名，必须保持不变；runner 才是真实镜像。
           - os: ubuntu-latest
             runner: ubuntu-24.04
+            python: python3
           - os: windows-latest
             runner: windows-2022
+            python: python
           - os: macos-latest
             runner: macos-14
+            python: python3
     runs-on: ${{ matrix.runner }}
     # 单腿墙钟上限：卡死的用例或交互式进程不该长期占用 runner。
     timeout-minutes: 45
@@ -163,8 +166,7 @@ jobs:
 
       - name: 校验 UI 契约门禁
         if: needs.changes.outputs.code == 'true'
-        shell: pwsh
-        run: pwsh -NoLogo -NoProfile -File tools/verify-ui-contract.ps1
+        run: ${{ matrix.python }} tools/verify_ui_contract.py
 
       # 风格检查与前端单测必须在这里真跑：只构建不检查等于把 lint 与断言留给本地。
       - name: 前端风格检查与单测
@@ -176,8 +178,7 @@ jobs:
       # 性能契约：与基线比较，回退即失败；尚未人工测量的项在 CI 里放行并逐项列出。
       - name: 性能契约门禁
         if: needs.changes.outputs.code == 'true'
-        shell: pwsh
-        run: pwsh -NoLogo -NoProfile -File tools/verify-performance.ps1 -AllowIncomplete
+        run: ${{ matrix.python }} tools/verify_performance.py --allow-incomplete
 
       - name: 格式检查
         if: needs.changes.outputs.code == 'true'
@@ -225,15 +226,12 @@ jobs:
 
       - name: CLI release smoke
         if: needs.changes.outputs.code == 'true'
-        shell: pwsh
-        run: pwsh -NoLogo -NoProfile -File tools/verify-cli-release-smoke.ps1
+        run: ${{ matrix.python }} tools/verify_cli_release_smoke.py
 
       - name: Daemon 与 doctor smoke
         if: needs.changes.outputs.code == 'true'
-        shell: pwsh
         run: cargo run -p axon-cli --all-features -- doctor --check runtime
 
       - name: TUI three-region smoke
         if: needs.changes.outputs.code == 'true'
-        shell: pwsh
-        run: pwsh -NoLogo -NoProfile -File tools/verify-tui-smoke.ps1
+        run: ${{ matrix.python }} tools/verify_tui_smoke.py
