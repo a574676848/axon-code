@@ -586,3 +586,47 @@ fn read_keeps_waiting_without_cancellation() {
         "等待窗口未命中任何变化时必须等满，实测只有 {waited:?}"
     );
 }
+
+/// 短睡命令：用于验证「作业先结束、窗口还没到」的返回时机。
+///
+/// 故意以非零退出码收口：这正是「未正常退出」那一类结局，用来证明异常退出的感知
+/// 同样是即时的，不需要等让出窗口自然结束。
+#[cfg(windows)]
+const SHORT_SLEEP_COMMAND: &str = "Start-Sleep -Milliseconds 800; exit 3";
+/// 短睡命令（Unix）。
+#[cfg(unix)]
+const SHORT_SLEEP_COMMAND: &str = "sleep 0.8; exit 3";
+
+/// 作业进入终态必须立刻结束等待，而不是等满 `yield_time_ms`。
+///
+/// 这条契约决定了「agent 起一个 job，再给 120 秒让出窗口」到底会不会空等：
+/// 循环每轮都 `poll` 一次作业状态，`wait_for_change` 在终态时被唤醒，循环尾再判
+/// 一次 `is_terminal`，因此最坏只多等一个 `JOB_POLL_INTERVAL`（100 ms）。
+/// completion notice 解决的是另一件事：作业在没人轮询时结束，终态随下一轮请求回流。
+#[test]
+fn read_returns_when_the_job_finishes_not_when_the_window_ends() {
+    let runtime = isolated_runtime();
+    let owner = "terminal-short-circuit";
+    let job_id = runtime
+        .start(job_spec(owner, SHORT_SLEEP_COMMAND))
+        .expect("启动短睡作业");
+
+    let started = Instant::now();
+    let output = runtime
+        .read_until_cancelled(job_id, owner, Some(120_000), None)
+        .expect("读取必须成功");
+    let waited = started.elapsed();
+    println!("作业在 {waited:?} 后结束，让出窗口设定为 120s");
+
+    assert!(
+        matches!(output.status, JobStatus::Completed | JobStatus::Failed),
+        "作业退出后必须投影为终态：{:?}",
+        output.status
+    );
+    assert_eq!(
+        output.exit_code,
+        Some(3),
+        "异常退出的退出码必须原样带回：{:?}",
+        output.exit_code
+    );
+}
