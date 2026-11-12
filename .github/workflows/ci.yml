@@ -14,8 +14,9 @@
 #      runner 字段固定到具体版本：ubuntu-latest 将于 2026-10-19 迁到 Ubuntu 26，
 #      latest 自动漂移会同时改变运行时行为与分支保护的比对上下文。
 #   2. GitHub 已弃用 Node 20，checkout / setup-node 全部升到 v5（Node 24）。
-#   3. macOS arm64 机型存在平台侧容量排队，属 GitHub 侧限制，仓库无法消除，
-#      这里只固定具体机型以免 latest 迁移带来的额外变量。
+#   3. macOS 14 镜像已于 2026-11-02 全量退役（见 actions/runner-images#15226），
+#      继续用 macos-14 会调度不到 runner 并在数秒内被平台取消；这里固定到
+#      macos-15-intel，保持 x64 架构不变、只把系统版本升一档，减少架构切换变量。
 name: CI
 
 on:
@@ -105,7 +106,7 @@ jobs:
             runner: windows-2022
             python: python
           - os: macos-latest
-            runner: macos-14
+            runner: macos-15-intel
             python: python3
     runs-on: ${{ matrix.runner }}
     # 单腿墙钟上限：卡死的用例或交互式进程不该长期占用 runner。
