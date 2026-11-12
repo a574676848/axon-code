@@ -161,7 +161,7 @@ fn backend_env_probe(tty: bool, overrides: &[(String, String)]) -> String {
     wait_for_exit(&mut backend);
     // 收口顺序必须与生产路径一致（见 `session.rs` 的终态组装）：`try_wait` 只说明子进程
     // 已退出，读取线程未必已把字节写进共享缓冲。少这一步在 macOS / Windows 上可能靠线程
-    // 调度侥幸通过，Linux PTY 上则稳定取到空预览 —— 那是假阴性，不是注入失效。
+    // 调度侥幸通过，Linux PTY 上则稳定取到空预览，那是假阴性，不是注入失效。
     backend.drain_output(BACKEND_DRAIN_DEADLINE);
     let preview = output.take_receipt(None).stdout.preview;
     let _ = fs::remove_file(&path);

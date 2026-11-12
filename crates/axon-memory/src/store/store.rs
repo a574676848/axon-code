@@ -241,7 +241,7 @@ impl MemorySqliteStore {
         //
         // 1. 多个进程/线程同时打开同一个 Memory 库都会跑这段 DDL。自动提交模式下每条语句先
         //    取读快照再升级写锁，一旦别的连接在此期间提交了 schema 变更，SQLite 直接返回
-        //    `SQLITE_BUSY_SNAPSHOT` —— 该错误**不进 busy handler**（无法等待，只能回滚重来），
+        //    `SQLITE_BUSY_SNAPSHOT`，该错误**不进 busy handler**（无法等待，只能回滚重来），
         //    并发初始化就会随机报「schema 初始化失败」。`BEGIN IMMEDIATE` 一开始就取写锁，
         //    不存在读→写升级路径，等待由 busy_timeout 统一负责。
         // 2. 一次性提交让「表 + 索引 + 版本号」对其它进程原子可见，不会看到半成品 schema。
