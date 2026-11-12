@@ -56,11 +56,17 @@ pub(crate) fn spawn_intent_fingerprint(tool_call: &ProviderToolCall) -> Option<S
     let task = first_text(arguments, &["task"])?;
     let task_name = first_text(arguments, &["task_name"]).unwrap_or(model_intent);
     let fork_turns = first_text(arguments, &["fork_turns"]).unwrap_or("none");
+    // 模型与档位是调用语义的一部分：同一任务换模型是两次不同的委派，
+    // 不能被幂等判定折叠成一次。
+    let model = first_text(arguments, &["model"]).unwrap_or("");
+    let reasoning_effort = first_text(arguments, &["reasoning_effort"]).unwrap_or("");
     let normalized = serde_json::json!({
         "task_name": normalize_task_name(task_name),
         "task": normalize_intent_text(task),
         "fork_turns": normalize_intent_text(fork_turns),
         "model_intent": model_intent,
+        "model": normalize_intent_text(model),
+        "reasoning_effort": normalize_intent_text(reasoning_effort),
     });
     Some(sha256_hex(normalized.to_string().as_bytes()))
 }

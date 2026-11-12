@@ -46,6 +46,8 @@ export function expandStreamPayload(
 export const EVENT_TYPE_WIRE = 'wire_event';
 export const EVENT_TYPE_TURN_COMPLETED = 'turn_completed';
 export const EVENT_TYPE_TURN_FAILED = 'turn_failed';
+/** 执行结果不确定（进程中断、租约失效这类无法证明外部副作用的终态）。 */
+export const EVENT_TYPE_TURN_UNCERTAIN = 'turn_uncertain';
 export const EVENT_TYPE_INTERACTION_STATUS = 'interaction.status';
 export const EVENT_TYPE_RUNTIME_OBSERVATION = 'runtime_observation';
 

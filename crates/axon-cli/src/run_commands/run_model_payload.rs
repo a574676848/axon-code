@@ -6,23 +6,49 @@ use crate::{
     runtime_capability_routing::CapabilityRoutingFragment,
     runtime_prompt_fragments::assemble_cross_workspace_stable_context_messages,
     runtime_skill_context_fragments::SelectedSkillDeveloperFragment,
-    runtime_workspace_instructions::WorkspaceInstruction,
 };
 use axon_agent_runtime::{
     AgentMemoryRecallInput, AgentModelMessage, AgentModelPayload, AgentModelStablePrefix,
-    AgentPaneProjection, AgentPaneProjectionInput, ContextAssemblerConfig, ContextAssemblerInput,
-    ContextAssemblerRuntime, LedgerContextProjection, MemoryHybridHit, ToolRegistry,
-    agent_model_runtime_constraints, model_context_snapshot_budgets,
+    ContextAssemblerConfig, ContextAssemblerInput, ContextAssemblerRuntime,
+    LedgerContextProjection, MemoryHybridHit, ToolRegistry, model_context_snapshot_budgets,
 };
-use axon_domain::{
-    AudienceContext, AudienceKind, DisclosurePolicy, PaneId, PaneSecurityBadge,
-    PaneSecurityBadgeLevel, PermissionSnapshotId,
-};
+use axon_domain::{AudienceContext, AudienceKind, DisclosurePolicy, PaneId};
 use axon_session::WorkspaceSnapshot;
 
 use super::run_environment_context::cli_environment_context;
 
+#[path = "run_model_payload_dynamic_text.rs"]
+mod dynamic_text;
+use dynamic_text::{anomaly_state_text, cli_pane_projection, cli_runtime_constraints};
+
 const HOME_WITHOUT_WORKSPACE: &str = "未选择（当前目录位于 Home）";
+
+fn cli_dynamic_prompt_fragments(
+    skill_selection: &CliRunSkillSelection,
+    relevant_skills: &str,
+) -> Vec<Box<dyn axon_agent_runtime::PromptFragment>> {
+    let mut fragments: Vec<Box<dyn axon_agent_runtime::PromptFragment>> = Vec::new();
+    if let Some(fragment) = skill_selection
+        .prompt
+        .clone()
+        .and_then(SelectedSkillDeveloperFragment::optional)
+    {
+        fragments.push(Box::new(fragment));
+    }
+    if let Some(fragment) = CapabilityRoutingFragment::from_runtime(relevant_skills) {
+        fragments.push(Box::new(fragment));
+    }
+    fragments
+}
+
+fn model_history_messages(history_json: Option<&str>) -> Result<Vec<AgentModelMessage>, String> {
+    history_json.map_or_else(
+        || Ok(Vec::new()),
+        |history_json| {
+            serde_json::from_str(history_json).map_err(|error| format!("模型历史格式无效：{error}"))
+        },
+    )
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct CliRunModelPayloadInput<'a> {
@@ -50,6 +76,8 @@ pub(super) struct CliRunModelPayloadInput<'a> {
     pub(super) transport_context: Option<&'a serde_json::Value>,
     /// 本机全局通知飞书会话；仅作提示值注入。
     pub(super) notification_chat_id: Option<&'a str>,
+    /// 可供子代理选型的模型名；空表示本轮不注入选型事实（子代理身份）。
+    pub(super) delegatable_models: &'a [String],
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -153,8 +181,11 @@ pub(super) fn build_cli_run_model_payload(
             format!("<anomaly-state-context>\n{state}\n</anomaly-state-context>"),
         ));
     }
-    let environment_context =
-        cli_environment_context(input.transport_context, input.notification_chat_id);
+    let environment_context = cli_environment_context(
+        input.transport_context,
+        input.notification_chat_id,
+        input.delegatable_models,
+    );
     let payload = ContextAssemblerRuntime
         .assemble_input(ContextAssemblerInput {
             config: ContextAssemblerConfig {
@@ -201,120 +232,6 @@ pub(super) fn build_cli_run_model_payload(
     let mut model_payload = payload.payload;
     model_payload.model_tools = registry.model_tools_for_provider();
     Ok((model_payload, skill_selection))
-}
-
-/// 由最近助手输出与问答对推导异常状态段；未命中阈值时返回 `None`。
-fn anomaly_state_text(prompt: &str, history: &[AgentModelMessage]) -> Option<String> {
-    let recent_assistant = history
-        .iter()
-        .rev()
-        .filter(|message| message.role == "assistant")
-        .map(|message| message.content.as_str())
-        .take(axon_agent_runtime::anomaly::ANOMALY_STYLE_WINDOW)
-        .collect::<Vec<_>>();
-    let recent_pairs = recent_user_assistant_pairs(history);
-    axon_agent_runtime::anomaly::detect(prompt, &recent_assistant, &recent_pairs).state_text()
-}
-
-/// 按时间正序配对 user 与紧随其后的 assistant，再反转为最近优先。
-fn recent_user_assistant_pairs(history: &[AgentModelMessage]) -> Vec<(&str, &str)> {
-    let mut pairs = Vec::new();
-    let mut pending_user: Option<&str> = None;
-    for message in history {
-        match message.role.as_str() {
-            "user" => pending_user = Some(message.content.as_str()),
-            "assistant" => {
-                if let Some(user) = pending_user.take() {
-                    pairs.push((user, message.content.as_str()));
-                }
-            }
-            _ => {}
-        }
-    }
-    pairs.reverse();
-    pairs
-}
-
-fn cli_dynamic_prompt_fragments(
-    skill_selection: &CliRunSkillSelection,
-    relevant_skills: &str,
-) -> Vec<Box<dyn axon_agent_runtime::PromptFragment>> {
-    let mut fragments: Vec<Box<dyn axon_agent_runtime::PromptFragment>> = Vec::new();
-    if let Some(fragment) = skill_selection
-        .prompt
-        .clone()
-        .and_then(SelectedSkillDeveloperFragment::optional)
-    {
-        fragments.push(Box::new(fragment));
-    }
-    if let Some(fragment) = CapabilityRoutingFragment::from_runtime(relevant_skills) {
-        fragments.push(Box::new(fragment));
-    }
-    fragments
-}
-
-fn model_history_messages(history_json: Option<&str>) -> Result<Vec<AgentModelMessage>, String> {
-    history_json.map_or_else(
-        || Ok(Vec::new()),
-        |history_json| {
-            serde_json::from_str(history_json).map_err(|error| format!("模型历史格式无效：{error}"))
-        },
-    )
-}
-
-fn cli_pane_projection(
-    pane_id: PaneId,
-    cwd: &str,
-    git_state: Option<axon_agent_runtime::AgentPaneGitState>,
-) -> AgentPaneProjection {
-    AgentPaneProjection::from_input(AgentPaneProjectionInput {
-        pane_id,
-        cwd: cwd.to_owned(),
-        shell_kind: "cli".to_owned(),
-        git_state,
-        recent_command: None,
-        permission_snapshot_id: PermissionSnapshotId(0),
-        backend_badge: PaneSecurityBadge {
-            level: PaneSecurityBadgeLevel::Normal,
-            label: "cli".to_owned(),
-            reasons: Vec::new(),
-        },
-        runtime_cell: None,
-        response: None,
-        apply_execution: None,
-    })
-}
-
-fn cli_runtime_constraints(
-    selected_skill_name: Option<&str>,
-    home_root: &str,
-    workspace_root: Option<&str>,
-    workspace_instructions: &[WorkspaceInstruction],
-    memory_hits: &[MemoryHybridHit],
-    max_subagent_threads: usize,
-    max_subagent_active_turns: usize,
-) -> String {
-    let mut constraints =
-        agent_model_runtime_constraints(axon_agent_runtime::AgentModelRuntimeConstraintsInput {
-            surface: "cli_run",
-            selected_skill_name,
-            home_root,
-            workspace_root: workspace_root.unwrap_or(HOME_WITHOUT_WORKSPACE),
-            workspace_instruction_paths: workspace_instructions
-                .iter()
-                .map(|instruction| instruction.path.clone())
-                .collect(),
-            capability_lines: Vec::new(),
-            memory_hits,
-        });
-    constraints.push('\n');
-    constraints.push_str(&axon_agent_runtime::agent_delegation_runtime_guidance(
-        max_subagent_threads,
-        0,
-        max_subagent_active_turns,
-        0,
-    ));
-    constraints
 }
 
 #[cfg(test)]
@@ -364,7 +281,7 @@ mod tests {
 
     #[test]
     fn environment_context_reports_axon_shell_not_windows_command_interpreter() {
-        let context = cli_environment_context(None, None);
+        let context = cli_environment_context(None, None, &[]);
         let shell = context.shell.expect("环境感知必须提供 Axon 默认 Shell");
         let stem = Path::new(&shell)
             .file_stem()
@@ -455,6 +372,7 @@ mod tests {
             CliRunModelPayloadInput {
                 transport_context: None,
                 notification_chat_id: None,
+                delegatable_models: &[],
                 memory_hits: &[],
                 soul_context_message: Some(&soul_message),
                 persona_state_message: None,
@@ -584,6 +502,7 @@ mod tests {
             CliRunModelPayloadInput {
                 transport_context: None,
                 notification_chat_id: None,
+                delegatable_models: &[],
                 memory_hits: &[],
                 soul_context_message: None,
                 persona_state_message: None,
@@ -694,6 +613,7 @@ mod tests {
                 CliRunModelPayloadInput {
                     transport_context: None,
                     notification_chat_id: None,
+                    delegatable_models: &[],
                     memory_hits: &[],
                     soul_context_message: None,
                     persona_state_message: persona,
@@ -743,7 +663,7 @@ mod tests {
             "channel": "desktop",
             "destination": "workbench-1",
         });
-        let context = cli_environment_context(Some(&transport), Some("oc_notify"));
+        let context = cli_environment_context(Some(&transport), Some("oc_notify"), &[]);
         let rendered = context.render();
 
         assert!(rendered.contains("session_channel: desktop"));
@@ -755,7 +675,7 @@ mod tests {
 
     #[test]
     fn environment_context_omits_absent_session_facts() {
-        let context = cli_environment_context(None, Some("   "));
+        let context = cli_environment_context(None, Some("   "), &[]);
         let rendered = context.render();
 
         assert!(!rendered.contains("session_channel:"));

@@ -2,7 +2,8 @@
 //!
 //! 覆盖四件事：后台子代理可经 `job_id` 读取与终止；`job_kill` 执行完整中断语义；
 //! 跨 owner 访问稳定拒绝；`job_id` 是生命周期通道、与 `session_id` 硬互斥。
-//! 另有两条守恒断言：`delegate_to_fast` 不产生 `job_id`；超阈值结果只回传有界摘要。
+//! 另有两条守恒断言：`delegate_to_fast` 默认后台并产生 `job_id`、显式
+//! `run_in_background: false` 时不产生；超阈值结果只回传有界摘要。
 
 use axon_agent_runtime::{
     AgentPath, AgentStatus, JobRuntime, JobStatus, ProviderToolCall, SubagentSessionStatus,
@@ -109,7 +110,7 @@ fn spawn_call(task_name: &str) -> ProviderToolCall {
         "builtin.spawn_agent",
         &serde_json::json!({
             "task_name": task_name,
-            "task": "审查当前改动"
+            "task": "审查当前改动", "intent": "复核当前改动"
         }),
     )
 }

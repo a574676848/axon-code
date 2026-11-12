@@ -42,7 +42,12 @@ fn thread(id: &str, hit_count: i64, last_event_at_ms: i64) -> MemoryThread {
     }
 }
 
-fn commitment(id: &str, thread_id: Option<&str>, text: &str, created_at_ms: i64) -> MemoryCommitment {
+fn commitment(
+    id: &str,
+    thread_id: Option<&str>,
+    text: &str,
+    created_at_ms: i64,
+) -> MemoryCommitment {
     MemoryCommitment {
         commitment_id: id.to_owned(),
         thread_id: thread_id.map(str::to_owned),
@@ -152,9 +157,18 @@ fn open_commitment_is_singleton_per_thread() {
         .upsert_open_commitment(&commitment("c-1", Some("t-1"), "明天提醒我交周报", 100))
         .unwrap();
     store
-        .upsert_open_commitment(&commitment("c-2", Some("t-1"), "明天提醒我交周报和日报", 200))
+        .upsert_open_commitment(&commitment(
+            "c-2",
+            Some("t-1"),
+            "明天提醒我交周报和日报",
+            200,
+        ))
         .unwrap();
-    assert_eq!(store.commitment_count().unwrap(), 1, "同一线索只保留一条 open 承诺");
+    assert_eq!(
+        store.commitment_count().unwrap(),
+        1,
+        "同一线索只保留一条 open 承诺"
+    );
     let open = store
         .open_commitments("workspace:current", "user:local", 5)
         .unwrap();
@@ -169,9 +183,11 @@ fn closed_commitment_leaves_open_list() {
     store
         .upsert_open_commitment(&commitment("c-1", None, "明天提醒我交周报", 100))
         .unwrap();
-    assert!(store
-        .close_commitment("c-1", COMMITMENT_STATUS_DONE, 200)
-        .unwrap());
+    assert!(
+        store
+            .close_commitment("c-1", COMMITMENT_STATUS_DONE, 200)
+            .unwrap()
+    );
     assert!(
         store
             .open_commitments("workspace:current", "user:local", 5)

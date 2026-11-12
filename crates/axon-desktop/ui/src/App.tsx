@@ -4,7 +4,7 @@ import * as ipc from './ipc';
 import { listenLaneActivity, listenOpenLane } from './laneEvents';
 import { useWindowTitle } from './useWindowTitle';
 import { Sidebar } from './components/Sidebar';
-import { BasicSettingsPanel, SETTINGS_SECTION_LABELS } from './components/BasicSettingsPanel';
+import { BasicSettingsPanel } from './components/BasicSettingsPanel';
 import { GatewayUnconnected, GatewayUnavailableStage } from './components/GatewayUnconnected';
 import { ConversationView } from './components/conversation/ConversationView';
 import { ErrorBoundary } from './components/conversation/ErrorBoundary';
@@ -14,9 +14,11 @@ import { sameRuntimeFacts, type LaneRuntimeFacts } from './conversation/runtimeF
 import { LoadingState, Text } from './components/ui/surfaces';
 import { Dialog } from './components/ui/modal';
 import { WindowChrome } from './components/ui/WindowChrome';
-import { CommandPalette, type CommandPaletteItem } from './components/ui/CommandPalette';
+import { CommandPalette } from './components/ui/CommandPalette';
 import { AutomationPage } from './components/AutomationPage';
 import { GoalsPage } from './components/goals/GoalsPage';
+import { goalSessionSelection, originBarFor } from './sessionOpening';
+import { buildPaletteItems } from './paletteItems';
 import { MemoryPage } from './components/MemoryPage';
 import { WorkspaceOverview } from './components/WorkspaceOverview';
 import {
@@ -25,7 +27,6 @@ import {
   OPEN_COMMAND_PALETTE_EVENT,
   installDesktopGuards,
 } from './desktopGuards';
-import { applyTheme, currentTheme, THEME_CHOICES } from './theme';
 import { ensureUpdateChecked } from './desktopUpdate';
 import {
   ensureConnectionLoaded,
@@ -403,107 +404,21 @@ export const App: React.FC = () => {
     setIsSettingsOpen(true);
   }, []);
 
-  /**
-   * 命令面板的全部候选。
-   *
-   * 每一项都落到真实存在的动作上：跳转改顶层视图、设置分区开弹窗、主题走同一份
-   * 持久化接口、工作区与会话直接切订阅目标。没有占位项，也没有「未来会有」的入口。
-   */
-  const paletteItems = useMemo<CommandPaletteItem[]>(() => {
-    const navigation: CommandPaletteItem[] = [
-      { id: 'nav-chat', label: '前往对话', group: '跳转', run: () => setCurrentTab('chat') },
-      {
-        id: 'nav-workspace',
-        label: '前往工作区',
-        group: '跳转',
-        run: () => setCurrentTab('workspace'),
-      },
-      {
-        id: 'nav-automation',
-        label: '前往自动化任务',
-        group: '跳转',
-        run: () => setCurrentTab('automation'),
-      },
-      {
-        id: 'nav-goals',
-        label: '前往目标看板',
-        group: '跳转',
-        run: () => setCurrentTab('goals'),
-      },
-      {
-        id: 'nav-memory',
-        label: '前往记忆管理',
-        group: '跳转',
-        run: () => setCurrentTab('memory'),
-      },
-    ];
-
-    /*
-     * 连接档案：非生效档案各给一条「切换到 <档案名>」，另给一条「管理连接…」。
-     * 切档会重启应用，因此这里只发一次请求，重试与错误由连接分区呈现。
-     */
-    const connections: CommandPaletteItem[] = [
-      ...(connection.snapshot?.profiles ?? [])
-        .filter((profile) => !profile.active)
-        .map((profile) => ({
-          id: `switch-${profile.id}`,
-          label: `切换到 ${profile.label}`,
-          group: '连接',
-          run: () => {
-            void switchProfile(profile.id);
-          },
-        })),
-      {
-        id: 'manage-connection',
-        label: '管理连接…',
-        group: '连接',
-        run: () => openSettingsAt('connection'),
-      },
-    ];
-
-    const settings: CommandPaletteItem[] = SETTINGS_SECTION_LABELS.map((section) => ({
-      id: `settings-${section.id}`,
-      label: `设置：${section.label}`,
-      group: '设置',
-      run: () => openSettingsAt(section.id),
-    }));
-
-    const themes: CommandPaletteItem[] = THEME_CHOICES.map((choice) => ({
-      id: `theme-${choice.id}`,
-      label: `主题：${choice.label}`,
-      group: '外观',
-      run: () => {
-        // 与设置页同一条路径：先乐观上色，落盘回执再校正一次，失败回退到当前主题。
-        applyTheme(choice.id);
-        void ipc
-          .desktopSetTheme(choice.id)
-          .then((saved) => applyTheme(saved.theme))
-          .catch(() => applyTheme(currentTheme()));
-      },
-    }));
-
-    const lanes: CommandPaletteItem[] = workspaces.flatMap((workspace) =>
-      workspace.lanes.map((lane) => ({
-        id: `lane-${lane.id}`,
-        label: `${lane.title || '未命名会话'}`,
-        group: workspace.name || '会话',
-        run: () => {
-          selectLane({
-            workspaceId: workspace.id,
-            workspacePath: workspace.path,
-            laneId: lane.id,
-            destination: lane.destination,
-            title: lane.title,
-            channel: lane.channel,
-            pending: lane.pending,
-          });
-          setCurrentTab('chat');
+  /** 命令面板候选：清单与动作由 `paletteItems` 独占，壳层只注入依赖。 */
+  const paletteItems = useMemo(
+    () =>
+      buildPaletteItems({
+        workspaces,
+        profiles: connection.snapshot?.profiles ?? [],
+        navigate: setCurrentTab,
+        openSettingsAt,
+        switchProfile: (profileId) => {
+          void switchProfile(profileId);
         },
-      })),
-    );
-
-    return [...navigation, ...connections, ...settings, ...themes, ...lanes];
-  }, [connection.snapshot, openSettingsAt, selectLane, workspaces]);
+        selectLane,
+      }),
+    [connection.snapshot, openSettingsAt, selectLane, workspaces],
+  );
 
 
   /**
@@ -617,7 +532,13 @@ export const App: React.FC = () => {
         ) : currentTab === 'memory' ? (
           <MemoryPage connected={health.available} />
         ) : currentTab === 'goals' ? (
-          <GoalsPage />
+          <GoalsPage
+            /* 目标执行会话交给主舞台：与自动化页共用同一套 session 目标口径。 */
+            onOpenSession={(target) => {
+              selectLane(goalSessionSelection(target));
+              setCurrentTab('chat');
+            }}
+          />
         ) : (
           <ErrorBoundary>
             <ConversationView
@@ -626,6 +547,7 @@ export const App: React.FC = () => {
               configRevision={configRevision}
               onSelectLane={selectLane}
               onRuntimeFacts={applyRuntimeFacts}
+              originBar={originBarFor(selection, setCurrentTab)}
             />
           </ErrorBoundary>
         )}

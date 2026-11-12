@@ -173,102 +173,134 @@ fn fixture_execution_input(task_path: &str) -> RunSubagentExecutionInput {
         started_at_ms: 1,
         max_runtime_ms: None,
         model_intent: RunSubagentModelIntent::Inherit,
+        model_override: None,
+        reasoning_effort_override: None,
         structured_output: None,
         system_prompt_override: None,
         tools_enabled: true,
     }
 }
 
-#[test]
-fn memory_write_count_only_accepts_completed_receipts_with_persisted_ids() {
-    let receipt = |tool_name: &str, status: &str, memory_id: serde_json::Value| {
-        crate::run_commands::run_tool_loop::RunToolReceipt {
-            tool_call_id: 0,
-            part_id: "tool-part:memory-write".to_owned(),
-            provider_call_id: format!("{tool_name}:{status}"),
-            tool_name: tool_name.to_owned(),
-            status: status.to_owned(),
-            summary: "memory receipt".to_owned(),
-            metadata: Some(serde_json::json!({ "memoryId": memory_id })),
-            error_type: None,
-            remote_trigger_allowed: false,
-            filesystem_write_performed: false,
-            output_ref: None,
-            duration_ms: None,
-        }
-    };
-    let response = crate::run_commands::run_execution::RunResponse {
-        content: "done".to_owned(),
-        assistant_part_id: "assistant-part:memory-write".to_owned(),
-        http_status: 200,
-        token_usage: None,
-        tool_receipts: vec![
-            receipt("builtin.memory_write", "completed", serde_json::json!(7)),
-            receipt("builtin.memory_write", "completed", serde_json::Value::Null),
-            receipt("builtin.memory_write", "failed", serde_json::json!(8)),
-            receipt("builtin.search", "completed", serde_json::json!(9)),
-        ],
-        tool_calls: Vec::new(),
-        provider: "fixture".to_owned(),
-        model: "fixture-chat".to_owned(),
-        channel_attempts: Vec::new(),
-        reasoning_messages: Vec::new(),
-        turn_events: Vec::new(),
-        max_tokens_truncated: false,
-    };
+#[path = "run_subagent_executor_outcome_tests.rs"]
+mod outcome_tests;
 
-    assert_eq!(persisted_memory_write_count(&response), 1);
+#[path = "run_subagent_executor_request_tests.rs"]
+mod request_tests;
+
+/// 继承意图携带显式模型与档位时，子代理必须真的跑在指定模型与档位上。
+fn explicit_model_turn(
+    request: &RunRequest,
+    progress: Option<&RunProgressSink<'_>>,
+) -> Result<RunResponse, Box<RunExecutionError>> {
+    assert_eq!(
+        request.model.name, "fixture-second",
+        "显式指定的模型必须成为子代理请求模型"
+    );
+    assert_eq!(
+        request.reasoning_effort.as_deref(),
+        Some("low"),
+        "显式指定的档位必须成为子代理请求档位"
+    );
+    mock_provider_turn(request, progress)
 }
 
 #[test]
-fn empty_result_child_turn_is_marked_errored() {
-    fn empty_provider_turn(
-        request: &RunRequest,
-        _progress: Option<&RunProgressSink<'_>>,
-    ) -> Result<RunResponse, Box<RunExecutionError>> {
-        Ok(RunResponse {
-            content: String::new(),
-            assistant_part_id: MOCK_ASSISTANT_PART_ID.to_owned(),
-            http_status: MOCK_HTTP_STATUS,
-            token_usage: None,
-            tool_receipts: Vec::new(),
-            tool_calls: Vec::new(),
-            provider: request.provider.name.clone(),
-            model: request.model.name.clone(),
-            channel_attempts: Vec::new(),
-            reasoning_messages: Vec::new(),
-            turn_events: Vec::new(),
-            max_tokens_truncated: false,
-        })
-    }
-
-    let config_path = temp_config_path("empty-result");
+fn inherit_intent_applies_explicit_model_and_effort_override() {
+    let config_path = temp_config_path("explicit-model");
     fs::create_dir_all(config_path.parent().unwrap()).unwrap();
     fs::write(
         config_path.parent().unwrap().join("AGENTS.md"),
-        "子代理空结果规则",
+        "子代理显式选型规则",
     )
     .unwrap();
+
+    let mut environment = fixture_environment(config_path.clone());
+    environment.config.models.push(ModelConfig {
+        name: "fixture-second".to_owned(),
+        id: "upstream-second".to_owned(),
+        provider: "fixture".to_owned(),
+        context_window: 16_000,
+        ..ModelConfig::default()
+    });
+    let executor =
+        ProviderRunSubagentExecutor::with_provider_turn_runner(environment, explicit_model_turn);
+    let output = executor
+        .execute(RunSubagentExecutionInput {
+            task_path: AgentPath::parse("/root/review").unwrap(),
+            message: "审查当前改动".to_owned(),
+            fork_context: SubagentForkContextReport {
+                messages: Vec::new(),
+                original_count: 0,
+                retained_count: 0,
+                dropped_count: 0,
+                reasons: Vec::new(),
+            },
+            started_at_ms: 1,
+            max_runtime_ms: None,
+            model_intent: RunSubagentModelIntent::Inherit,
+            model_override: Some("fixture-second".to_owned()),
+            reasoning_effort_override: Some("low".to_owned()),
+            structured_output: None,
+            system_prompt_override: None,
+            tools_enabled: true,
+        })
+        .expect("provider executor 应返回子代理执行结果");
+
+    assert_eq!(output.status, RunSubagentExecutionStatus::Completed);
+    assert_eq!(output.model.as_deref(), Some("fixture-second"));
+    let _ = fs::remove_dir_all(config_path.parent().unwrap());
+}
+
+/// 模型名不可用时必须显式失败，并在摘要里给出可用清单。
+#[test]
+fn unknown_model_override_fails_with_available_catalog() {
+    let config_path = temp_config_path("unknown-model");
+    fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    fs::write(
+        config_path.parent().unwrap().join("AGENTS.md"),
+        "子代理选型失败规则",
+    )
+    .unwrap();
+
     let executor = ProviderRunSubagentExecutor::with_provider_turn_runner(
         fixture_environment(config_path.clone()),
-        empty_provider_turn,
+        mock_provider_turn,
     );
-    let input = fixture_execution_input("/root/review");
     let output = executor
-        .execute(input)
+        .execute(RunSubagentExecutionInput {
+            task_path: AgentPath::parse("/root/review").unwrap(),
+            message: "审查当前改动".to_owned(),
+            fork_context: SubagentForkContextReport {
+                messages: Vec::new(),
+                original_count: 0,
+                retained_count: 0,
+                dropped_count: 0,
+                reasons: Vec::new(),
+            },
+            started_at_ms: 1,
+            max_runtime_ms: None,
+            model_intent: RunSubagentModelIntent::Inherit,
+            model_override: Some("missing-model".to_owned()),
+            reasoning_effort_override: None,
+            structured_output: None,
+            system_prompt_override: None,
+            tools_enabled: true,
+        })
         .expect("provider executor 应返回子代理执行结果");
 
     assert_eq!(output.status, RunSubagentExecutionStatus::Errored);
     assert!(
-        output.summary.contains("未产生任何结果"),
-        "空结果摘要应说明未产生任何结果: {}",
+        output.summary.contains("未找到可用于子代理的模型"),
+        "摘要必须说明模型不可用：{}",
+        output.summary
+    );
+    assert!(
+        output.summary.contains("可用：fixture-chat"),
+        "摘要必须回列可用模型：{}",
         output.summary
     );
     let _ = fs::remove_dir_all(config_path.parent().unwrap());
 }
-
-#[path = "run_subagent_executor_request_tests.rs"]
-mod request_tests;
 
 #[test]
 fn provider_executor_runs_child_provider_turn() {
@@ -299,6 +331,8 @@ fn provider_executor_runs_child_provider_turn() {
             started_at_ms: 1,
             max_runtime_ms: None,
             model_intent: RunSubagentModelIntent::Inherit,
+            model_override: None,
+            reasoning_effort_override: None,
             structured_output: None,
             system_prompt_override: None,
             tools_enabled: true,
@@ -358,6 +392,8 @@ fn provider_executor_start_emits_running_lifecycle_before_completion() {
         started_at_ms: 123,
         max_runtime_ms: None,
         model_intent: RunSubagentModelIntent::Inherit,
+        model_override: None,
+        reasoning_effort_override: None,
         structured_output: None,
         system_prompt_override: None,
         tools_enabled: false,
@@ -501,6 +537,8 @@ fn provider_executor_persists_continuation_and_assembles_cleanly() {
         started_at_ms: 123,
         max_runtime_ms: None,
         model_intent: RunSubagentModelIntent::Inherit,
+        model_override: None,
+        reasoning_effort_override: None,
         structured_output: None,
         system_prompt_override: None,
         tools_enabled: true,

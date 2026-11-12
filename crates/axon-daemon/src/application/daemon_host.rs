@@ -67,6 +67,9 @@ mod daemon_host_execution_runtime;
 mod daemon_host_execution_worker;
 #[path = "daemon_host_goal_tools.rs"]
 mod daemon_host_goal_tools;
+#[path = "execution_session_sink.rs"]
+mod execution_session_sink;
+use execution_session_sink::execution_session_projection;
 #[path = "daemon_host_request.rs"]
 mod daemon_host_request;
 #[path = "goal_execution.rs"]

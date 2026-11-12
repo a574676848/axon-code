@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use axon_domain::{AxonError, AxonResult, MemoryId, MemoryState};
 use axon_domain::MemoryKind;
+use axon_domain::{AxonError, AxonResult, MemoryId, MemoryState};
 
 use crate::{MemoryOrchestrator, MemorySqliteRecord};
 

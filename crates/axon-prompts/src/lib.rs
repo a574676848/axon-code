@@ -330,6 +330,17 @@ mod tests {
             tool_policy.contains("仅当下一步动作依赖该结果时用 `run_in_background: false`"),
             "委托判据必须写明同步等待的唯一条件"
         );
+        // 两个委派工具的判据与选型契约必须写清：否则模型会把 spawn_agent 当
+        // delegate_to_fast 的别名，或者对每次委派都盲目切换模型。
+        assert!(tool_policy.contains("builtin.delegate_to_fast` / `builtin.spawn_agent"));
+        assert!(tool_policy.contains("固定使用快速模型槽位"));
+        assert!(tool_policy.contains("子代理默认继承当前模型与当前档位"));
+        assert!(tool_policy.contains("换一个模型交叉复核结论"));
+        assert!(tool_policy.contains("只能取环境上下文通告的可用模型与档位"));
+        assert!(
+            tool_policy.contains("清单之外的模型名会被工具直接拒绝"),
+            "选型取值越界时必须写明会被拒绝，而不是静默继承"
+        );
         assert!(tool_policy.contains("严禁轮询空转"));
         assert!(tool_policy.contains("builtin.goal_*"));
         assert!(tool_policy.contains("builtin.goal_create"));

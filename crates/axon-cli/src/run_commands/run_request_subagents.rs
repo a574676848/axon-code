@@ -26,6 +26,9 @@ use super::{
 };
 
 /// 运行独立子代理；Goal Execution 与 cron 共用完整子代理生命周期。
+///
+/// `session_sinks` 是宿主提供的逐字稿落点工厂：后台执行把它重定向到执行会话本身，
+/// 于是目标与 cron 的会话也能像普通子代理会话一样被界面读取。
 pub(crate) fn execute_standalone_subagent(
     config_path: &Path,
     cwd: &Path,
@@ -33,6 +36,7 @@ pub(crate) fn execute_standalone_subagent(
     task_path: AgentPath,
     prompt: &str,
     started_at_ms: u64,
+    session_sinks: Option<Arc<dyn SubagentSessionSinkFactory>>,
 ) -> Result<super::run_subagent_executor::RunSubagentExecutionOutput, String> {
     let loaded = ConfigLoader::load_from_path(config_path).map_err(|error| format!("{error:?}"))?;
     let command = RunCommand {
@@ -62,7 +66,9 @@ pub(crate) fn execute_standalone_subagent(
         cwd,
         provider: &selected.provider,
         model: &selected.model,
-        reasoning_effort: None,
+        // 后台执行没有父轮可继承，推理强度回落到主 Agent 默认档，
+        // 与 `Inherit` 拿到的 default_model 保持同一套口径。
+        reasoning_effort: Some(loaded.config.agent.reasoning_effort.clone()),
         channel_chain: &selected.chain,
         routing_key: &selected.routing_key,
         command: &command,
@@ -70,7 +76,7 @@ pub(crate) fn execute_standalone_subagent(
         cancel_token: None,
         workspace_files,
         subagent_event_bus: None,
-        subagent_session_sinks: None,
+        subagent_session_sinks: session_sinks,
     })?;
     let input = ChildExecutionInput {
         task_path,
@@ -87,7 +93,12 @@ pub(crate) fn execute_standalone_subagent(
         },
         started_at_ms,
         max_runtime_ms: None,
-        model_intent: axon_agent_runtime::ChildExecutionModelIntent::FastDelegate,
+        // 后台执行继承宿主快照（`agent.default_model` 槽 + 主 Agent 推理强度），
+        // 而不是钉死在快速委托模型上：Goal 与 cron 是长跑作业，不该用最省的模型跑。
+        model_intent: axon_agent_runtime::ChildExecutionModelIntent::Inherit,
+        // 后台作业没有调用方指定模型与档位：两者都继承宿主快照。
+        model_override: None,
+        reasoning_effort_override: None,
     };
     wiring
         .subagent_executor

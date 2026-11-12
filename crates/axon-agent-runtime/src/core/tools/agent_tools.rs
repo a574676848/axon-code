@@ -140,6 +140,8 @@ fn with_parallel_note(mut tool: ToolDefinition) -> ToolDefinition {
         "会改变运行态或工作区，必须单独一批。"
     } else if tool.name == "delegate_to_fast" {
         "互不依赖的任务可同批委派；子代理看不到本次对话。"
+    } else if tool.name == "spawn_agent" {
+        "互不依赖的任务可同批委派；可按模型名与思考强度单独为子代理选型，省略即继承当前模型。"
     } else if tool.name == "shell_command" {
         "只读命令可与其他只读调用同批；写命令必须单独一批。"
     } else {

@@ -164,11 +164,11 @@ fn core_fallback_never_outranks_primary_rank_hit() {
         primary_text.score_basis_points
     );
     assert!(
-       fallback.score_basis_points < primary_vector.score_basis_points,
-       "兜底分 {} 不得压过向量 rank=1 命中 {}",
-       fallback.score_basis_points,
-       primary_vector.score_basis_points
-   );
+        fallback.score_basis_points < primary_vector.score_basis_points,
+        "兜底分 {} 不得压过向量 rank=1 命中 {}",
+        fallback.score_basis_points,
+        primary_vector.score_basis_points
+    );
 }
 
 fn fixture_record_of_kind(

@@ -57,6 +57,10 @@ pub(super) fn run_subagent_provider_turn(
     // 界面因此能用与普通会话完全相同的一条管线渲染它，而不是另造一套摘要视图。
     //
     // 落库失败只降级为告警：父轮的进度可见性不该因为宿主端存储异常而中断。
+    // 失败终态的归属先问清楚：后台执行（Goal / cron）由调度侧结算，运行侧不写。
+    let failures_settled_by_scheduler = session_sinks
+        .as_ref()
+        .is_some_and(|factory| factory.failures_settled_by_scheduler());
     let child_sink =
         session_sinks.and_then(|factory| match factory.sink_for(&request.session_id) {
             Ok(sink) => Some(sink),
@@ -109,7 +113,14 @@ pub(super) fn run_subagent_provider_turn(
     let outcome = runner(request, Some(&progress));
     // 回合终态同样属于这条会话：主会话的轮次分割线与指标都来自它，
     // 子代理要「与普通会话完全一致」，就必须和普通会话一样留下这一条。
-    if let Some(sink) = &child_sink {
+    //
+    // 例外：后台执行（Goal / cron）的失败终态归调度侧结算，这里再写一条会让
+    // 同一轮出现两张失败卡，因此只在成功、或宿主明确由运行侧收口时才写。
+    let terminal_by_scheduler = failures_settled_by_scheduler;
+    let write_terminal = !(outcome.is_err() && terminal_by_scheduler);
+    if let Some(sink) = &child_sink
+        && write_terminal
+    {
         let terminal = SubagentTurnTerminal::from_outcome(request, &outcome);
         match subagent_turn_terminal_event(request, &terminal) {
             Ok(event) => {

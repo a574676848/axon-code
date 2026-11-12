@@ -7,12 +7,30 @@
 
 /// 指代最近上下文的标记词。
 const ANAPHORA_MARKERS: [&str; 10] = [
-    "这个", "那个", "它", "继续", "接着", "上面", "刚才", "然后呢", "再来", "同上",
+    "这个",
+    "那个",
+    "它",
+    "继续",
+    "接着",
+    "上面",
+    "刚才",
+    "然后呢",
+    "再来",
+    "同上",
 ];
 
 /// 精确回调锚点词。
 const ANCHOR_MARKERS: [&str; 10] = [
-    "上周", "昨天", "前天", "大前天", "本月", "上月", "第", "版", "方案", "文档",
+    "上周",
+    "昨天",
+    "前天",
+    "大前天",
+    "本月",
+    "上月",
+    "第",
+    "版",
+    "方案",
+    "文档",
 ];
 
 /// 一次性信息需求的标记词。
@@ -52,9 +70,7 @@ pub fn classify_reference(text: &str) -> Reference {
     if text.is_empty() {
         return Reference::None;
     }
-    let has_anaphora = ANAPHORA_MARKERS
-        .iter()
-        .any(|marker| text.contains(marker));
+    let has_anaphora = ANAPHORA_MARKERS.iter().any(|marker| text.contains(marker));
     let anchors = ANCHOR_MARKERS
         .iter()
         .filter(|marker| text.contains(**marker))
@@ -78,9 +94,7 @@ pub fn is_one_off_leaf(text: &str) -> bool {
     if text.is_empty() || text.chars().count() > ONE_OFF_MAX_CHARS {
         return false;
     }
-    ONE_OFF_MARKERS
-        .iter()
-        .any(|marker| text.contains(marker))
+    ONE_OFF_MARKERS.iter().any(|marker| text.contains(marker))
 }
 
 #[cfg(test)]

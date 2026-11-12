@@ -5,9 +5,7 @@ use std::{
 };
 
 use axon_agent_runtime::{
-    AgentModelAttachmentProjection, AgentModelMessage, AgentModelPayload, AgentModelStablePrefix,
-    AttachmentBlobStore, AttachmentIngressRuntime, LedgerContextProjection, ToolRegistry,
-    default_attachment_archive_root,
+    AgentModelPayload, AgentModelStablePrefix, LedgerContextProjection, ToolRegistry,
 };
 use axon_config::AxonConfig;
 use axon_domain::{DisclosurePolicy, GoalStatus, ScopeRef};
@@ -26,7 +24,6 @@ use super::run_model_payload::{
 use super::{RunCommand, RunStartupSnapshot};
 use axon_persona::domain::scene_frame::Audience;
 
-use crate::memory_image_ref::image_mime_type;
 use crate::runtime_persona_context::{PersonaContext, PersonaSceneInput, load_persona_context};
 
 const LOCAL_UPLOAD_SOURCE_PREFIX: &str = "local-upload://";
@@ -38,6 +35,14 @@ type WorkspaceSnapshotResult = Result<Option<WorkspaceSnapshot>, String>;
 #[path = "run_request_payload_workspace_prewarm.rs"]
 mod workspace_prewarm;
 pub(super) use workspace_prewarm::RunWorkspaceSnapshotPrewarm;
+
+#[path = "run_request_payload_vision.rs"]
+mod vision;
+#[cfg(test)]
+use axon_agent_runtime::AgentModelMessage;
+use vision::attach_vision_files_to_payload;
+#[cfg(test)]
+use vision::attach_vision_files_to_payload_with_archive_root;
 
 pub(super) struct BuildRunModelPayloadInput<'a> {
     pub(super) config_path: &'a Path,
@@ -64,6 +69,10 @@ pub(super) struct BuildRunModelPayloadInput<'a> {
     pub(super) memory_disclosure_policy: DisclosurePolicy,
     pub(super) performance: Option<&'a dyn TurnPerformanceRecorder>,
     pub(super) workspace_snapshot_prewarm: Option<RunWorkspaceSnapshotPrewarm>,
+    /// 是否向环境上下文注入子代理选型事实（可用模型清单）。
+    ///
+    /// 只有主 turn 需要：子代理身份的工具面里没有创建类工具。
+    pub(super) include_delegation_catalog: bool,
 }
 
 pub(super) struct BuildRunModelPayloadOutput {
@@ -168,6 +177,12 @@ pub(super) fn build_run_model_payload(
     let ledger_context =
         rehydrate_ledger_context_with_snapshot(input.config_path, workspace_snapshot.as_ref())?;
     record_stage(input.performance, TurnPerformanceStage::LedgerReady);
+    // 清单与工具校验共用同一个构造器：通告一套、执行另一套会让模型照着提示词踩空。
+    let delegatable_models = if input.include_delegation_catalog {
+        super::run_model_routing::delegatable_model_names(input.config)
+    } else {
+        Vec::new()
+    };
     let (model_payload, skill_selection) = build_cli_run_model_payload(
         CliRunModelPayloadInput {
             transport_context: input.transport_context,
@@ -188,6 +203,7 @@ pub(super) fn build_run_model_payload(
             max_subagent_active_turns: input.config.agent.max_subagent_active_turns,
             model_history_json: input.model_history_json,
             ledger_context: ledger_context.as_ref(),
+            delegatable_models: &delegatable_models,
         },
         skill_context,
         registry,
@@ -262,99 +278,6 @@ fn join_dynamic<T>(handle: thread::ScopedJoinHandle<'_, T>, goal: &str) -> Resul
     handle
         .join()
         .map_err(|_| format!("{goal} 动态准备任务异常退出"))
-}
-
-fn attach_vision_files_to_payload(
-    payload: AgentModelPayload,
-    files: &[PathBuf],
-    session_id: &str,
-    supports_vision: bool,
-) -> Result<AgentModelPayload, String> {
-    let archive_root =
-        default_attachment_archive_root().ok_or_else(|| "无法解析附件归档根目录".to_owned())?;
-    attach_vision_files_to_payload_with_archive_root(
-        payload,
-        files,
-        session_id,
-        supports_vision,
-        &archive_root,
-    )
-}
-
-fn attach_vision_files_to_payload_with_archive_root(
-    mut payload: AgentModelPayload,
-    files: &[PathBuf],
-    session_id: &str,
-    supports_vision: bool,
-    archive_root: &Path,
-) -> Result<AgentModelPayload, String> {
-    let mut ingress = AttachmentIngressRuntime::default();
-    let mut store = AttachmentBlobStore::new(archive_root);
-    let mut images = Vec::new();
-    let mut local_files = Vec::new();
-    for (index, path) in files.iter().enumerate() {
-        let mime_hint = image_mime_type(path);
-        if mime_hint.is_some() && !supports_vision {
-            continue;
-        }
-        let bytes = std::fs::read(path).map_err(|error| format!("读取附件失败：{error}"))?;
-        let file_name = path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| format!("附件文件名无效：{}", path.display()))?
-            .to_owned();
-        let record = ingress
-            .ingest_local_upload_with_blob_store(
-                axon_agent_runtime::AttachmentLocalUploadRequest {
-                    file_name: file_name.clone(),
-                    mime_hint: mime_hint.map(ToOwned::to_owned),
-                    bytes,
-                    source_trace: local_upload_source_trace(session_id, index),
-                    sensitivity: axon_domain::AttachmentSensitivity::Normal,
-                },
-                &mut store,
-                0,
-            )
-            .map_err(|error| error.to_string())?;
-        match AttachmentIngressRuntime::project_for_model(&record.attachment)
-            .map_err(|error| error.to_string())?
-        {
-            AgentModelAttachmentProjection::Image(image) if supports_vision => images.push(image),
-            AgentModelAttachmentProjection::Image(_) => {}
-            AgentModelAttachmentProjection::File(mut file) => {
-                file.name = file_name;
-                // 原始绝对路径随引用一起交给模型：预览被截断时它才是读取原文件的正路。
-                file.path = Some(path.to_string_lossy().to_string());
-                local_files.push(file);
-            }
-        }
-    }
-    if images.is_empty() && local_files.is_empty() {
-        return Ok(payload);
-    }
-    if let Some(message) = payload
-        .messages
-        .iter_mut()
-        .rev()
-        .find(|message| message.role == "user")
-    {
-        *message = message
-            .clone()
-            .with_local_images(images)
-            .with_local_files(local_files);
-    } else {
-        payload.messages.push(
-            AgentModelMessage::text("user", "")
-                .with_local_images(images)
-                .with_local_files(local_files),
-        );
-    }
-    Ok(payload)
-}
-
-fn local_upload_source_trace(session_id: &str, index: usize) -> String {
-    format!("{LOCAL_UPLOAD_SOURCE_PREFIX}{session_id}/{index}")
 }
 
 #[cfg(test)]

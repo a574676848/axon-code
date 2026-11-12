@@ -209,7 +209,7 @@ fn new_run_request_reopens_file_graph_and_restores_child() {
         "builtin.spawn_agent",
         &serde_json::json!({
             "task_name": "review",
-            "task": "审查当前改动"
+            "task": "审查当前改动", "intent": "复核当前改动"
         }),
     );
     let spawn_receipts = super::execute_supported_tool_calls(&first, &[spawn], None);
@@ -273,7 +273,7 @@ fn list_agents_restores_open_tree_visibility_after_control_reset() {
             "builtin.spawn_agent",
             &serde_json::json!({
                 "task_name": task_name,
-                "task": format!("处理 {task_name}")
+                "task": format!("处理 {task_name}"), "intent": "处理子任务"
             }),
         );
         super::execute_supported_tool_calls(&request, &[spawn], None);
@@ -315,7 +315,7 @@ fn restore_uses_current_root_thread_id_instead_of_fixed_zero() {
         "builtin.spawn_agent",
         &serde_json::json!({
             "task_name": "review",
-            "task": "审查当前改动"
+            "task": "审查当前改动", "intent": "复核当前改动"
         }),
     );
     super::execute_supported_tool_calls(&request, &[spawn], None);
@@ -344,13 +344,13 @@ fn restore_uses_current_agent_control_limits_instead_of_defaults() {
     let mut request = fixture_request();
     let spawn_review = provider_tool_call_with_args(
         "builtin.spawn_agent",
-        &serde_json::json!({"task_name": "review", "task": "审查当前改动"}),
+        &serde_json::json!({"task_name": "review", "task": "审查当前改动", "intent": "复核当前改动"}),
     );
     super::execute_supported_tool_calls(&request, &[spawn_review], None);
     request.current_agent_path = axon_agent_runtime::AgentPath::parse("/root/review").unwrap();
     let spawn_security = provider_tool_call_with_args(
         "builtin.spawn_agent",
-        &serde_json::json!({"task_name": "security", "task": "审查安全边界"}),
+        &serde_json::json!({"task_name": "security", "task": "审查安全边界", "intent": "复核安全边界"}),
     );
     let nested_receipts = super::execute_supported_tool_calls(&request, &[spawn_security], None);
     assert_eq!(nested_receipts[0].status, "completed");

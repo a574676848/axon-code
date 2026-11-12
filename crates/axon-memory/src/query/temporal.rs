@@ -240,8 +240,7 @@ mod tests {
     const TZ_EIGHT: i32 = 480;
 
     fn local_ms(year: i64, month: u32, day: u32, hour: i64, minute: i64) -> i64 {
-        days_from_civil(year, month, day) * 86_400_000
-            + (hour * 3_600 + minute * 60) * 1_000
+        days_from_civil(year, month, day) * 86_400_000 + (hour * 3_600 + minute * 60) * 1_000
             - i64::from(TZ_EIGHT) * 60_000
     }
 
@@ -367,7 +366,8 @@ mod tests {
         );
         assert_eq!(
             range.end_ms,
-            (local_day(2026, 12, 1) - 1) * 86_400_000 + 86_400_000 - 1
+            (local_day(2026, 12, 1) - 1) * 86_400_000 + 86_400_000
+                - 1
                 - i64::from(TZ_EIGHT) * 60_000
         );
     }
@@ -491,8 +491,7 @@ mod tests {
         let tz = -300;
         let utc_now = days_from_civil(2026, 11, 12) * 86_400_000 + 5 * 3_600_000 + 30 * 60_000;
         let range = parse_temporal_hint("今天", utc_now, tz).expect("应命中今天");
-        let expected_start =
-            days_from_civil(2026, 11, 12) * 86_400_000 + 300 * 60_000;
+        let expected_start = days_from_civil(2026, 11, 12) * 86_400_000 + 300 * 60_000;
         assert_eq!(range.start_ms, expected_start);
     }
 

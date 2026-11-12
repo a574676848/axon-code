@@ -86,8 +86,16 @@ fn promise_is_written_as_open_commitment() {
 fn same_thread_promise_updates_instead_of_adding() {
     let store = temp_store("singleton");
     let thread_id = ensure_foreground(&store, &SCOPE, "明天提醒我交周报", 100, true).unwrap();
-    record_commitment(&store, &SCOPE, thread_id.as_deref(), "明天提醒我交周报", "cli", 100, true)
-        .unwrap();
+    record_commitment(
+        &store,
+        &SCOPE,
+        thread_id.as_deref(),
+        "明天提醒我交周报",
+        "cli",
+        100,
+        true,
+    )
+    .unwrap();
     record_commitment(
         &store,
         &SCOPE,
@@ -123,9 +131,11 @@ fn closure_turns_commitment_into_done() {
 #[test]
 fn disabled_flag_skips_detection_and_writes() {
     let store = temp_store("disabled");
-    assert!(record_commitment(&store, &SCOPE, None, "明天提醒我交周报", "cli", 100, false)
-        .unwrap()
-        .is_none());
+    assert!(
+        record_commitment(&store, &SCOPE, None, "明天提醒我交周报", "cli", 100, false)
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(store.commitment_count().unwrap(), 0);
     assert_eq!(
         close_commitments(&store, &SCOPE, "搞定", 200, false).unwrap(),

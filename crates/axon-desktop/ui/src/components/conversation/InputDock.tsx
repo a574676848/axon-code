@@ -72,6 +72,7 @@ export const InputDock: React.FC<InputDockProps> = ({
   compact = false,
   hintVisible = false,
   placeholder,
+  disabledPlaceholder,
   hint,
   model = '',
   models = [],
@@ -459,7 +460,7 @@ export const InputDock: React.FC<InputDockProps> = ({
                   disabled={!enabled}
                   placeholder={
                     !enabled
-                      ? PLACEHOLDER_DISABLED
+                      ? disabledPlaceholder ?? PLACEHOLDER_DISABLED
                       : placeholder ?? (occupiesDock ? PLACEHOLDER_OCCUPIED : PLACEHOLDER_READY)
                   }
                   skillNames={skillNames}

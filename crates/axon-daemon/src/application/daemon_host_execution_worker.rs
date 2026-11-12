@@ -56,6 +56,15 @@ where
         session_id: DaemonSessionId,
     ) -> Result<Option<SessionActionId>, DaemonHostError> {
         let host = self.started_host()?.clone();
+        // 后台执行的逐字稿写进执行会话本身：运行侧经这条投影逐条落库并即时发布，
+        // 收口事件也由它写（Worker 据标记跳过重复追加）。
+        let projection = super::execution_session_projection(
+            self.store.clone(),
+            host.clone(),
+            session_id.clone(),
+            self.clock.clone(),
+            CommittedEventPublisher::new(self.publisher.clone(), Arc::clone(&self.stream_bridge)),
+        );
         let action_id = ExecutionWorker::new(
             self.store.clone(),
             self.executor.clone(),
@@ -65,6 +74,7 @@ where
             session_id,
             self.action_lease_duration_ms,
         )
+        .with_projection(Some(projection))
         .pump_once()
         .map_err(map_execution_worker_error)?;
 

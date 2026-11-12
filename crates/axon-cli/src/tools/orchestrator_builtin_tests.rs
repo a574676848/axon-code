@@ -468,6 +468,7 @@ fn every_intent_tool_accepts_the_intent_field_before_execution() {
         "notes_append_to_file",
         "send_message",
         "delegate_to_fast",
+        "spawn_agent",
         "goal_create",
         "goal_list",
         "goal_get",
@@ -562,7 +563,7 @@ fn every_intent_tool_accepts_the_intent_field_before_execution() {
                 tool_call: ProviderToolCall::new(
                     "call_intent_spawn",
                     "builtin.spawn_agent",
-                    r#"{"task_name":"intent_probe","task":"检查 intent 接受性"}"#,
+                    r#"{"task_name":"intent_probe","task":"检查 intent 接受性","intent":"验证 intent 接受性"}"#,
                 ),
                 current_path: axon_agent_runtime::AgentPath::root(),
                 remote_requested: false,

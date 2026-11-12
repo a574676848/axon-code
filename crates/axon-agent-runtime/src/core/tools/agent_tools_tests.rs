@@ -55,18 +55,18 @@ fn builtin_tools_register_model_visible_entries() {
     );
     let spawn_agent = registry
         .tool_by_qualified_name("builtin.spawn_agent")
-        .expect("builtin.spawn_agent 定义必须保留在执行注册表");
-    assert!(!spawn_agent.enabled);
+        .expect("builtin.spawn_agent 定义必须在执行注册表");
+    // 创建类工具对模型可见：与 delegate_to_fast 同为并行安全，才能同批发出。
+    assert!(spawn_agent.enabled);
     assert_eq!(
         spawn_agent.concurrency_policy,
-        axon_domain::ToolConcurrencyPolicy::Exclusive
+        axon_domain::ToolConcurrencyPolicy::ParallelSafe
     );
-    assert!(
-        registry
-            .model_tools()
-            .iter()
-            .all(|tool| tool.qualified_name != "builtin.spawn_agent")
-    );
+    assert!(registry.model_tools().iter().any(|tool| {
+        tool.qualified_name == "builtin.spawn_agent"
+            && tool.description.contains("model")
+            && !tool.schema_hash.is_empty()
+    }));
     assert!(registry.model_tools().iter().any(|tool| {
         tool.qualified_name == "builtin.delegate_to_fast"
             && tool.description.contains("快速子代理")

@@ -327,6 +327,9 @@ fn execute_self_iteration_subagent(
         started_at_ms,
         max_runtime_ms: entry.max_runtime_ms,
         model_intent: options.model_intent,
+        // 自迭代子任务不接受调用方选型：始终按 options 的意图继承或走快速槽位。
+        model_override: None,
+        reasoning_effort_override: None,
     };
     let completion = RunSubagentCompletionSink::new(
         request.agent_control.clone(),

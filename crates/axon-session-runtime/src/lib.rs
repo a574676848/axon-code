@@ -8,9 +8,9 @@ pub mod model;
 pub mod ports;
 
 pub use application::{
-    AgentTurnExecutor, ContinuationResult, ExecutionWorker, ExecutionWorkerError,
-    JarvisRuntimeProfile, JarvisRuntimeSelector, ProviderToolEnvironment, ProviderTurnRequest,
-    ProviderTurnResult, ProviderTurnRunner, SessionRecovery, SnapshotChunker,
+    AgentTurnExecutor, ContinuationResult, ExecutionProjection, ExecutionWorker,
+    ExecutionWorkerError, JarvisRuntimeProfile, JarvisRuntimeSelector, ProviderToolEnvironment,
+    ProviderTurnRequest, ProviderTurnResult, ProviderTurnRunner, SessionRecovery, SnapshotChunker,
     wire_event_to_runtime_event,
 };
 pub use model::{

@@ -34,10 +34,7 @@ fn five_anaphora_turns_keep_one_thread_id() {
         .unwrap()
         .expect("首轮应建立线索");
     let mut ids = vec![first];
-    for (index, text) in ["这个", "它", "继续", "接着", "刚才"]
-        .iter()
-        .enumerate()
-    {
+    for (index, text) in ["这个", "它", "继续", "接着", "刚才"].iter().enumerate() {
         ids.push(
             ensure_foreground(&store, &SCOPE, text, 200 + index as i64, true)
                 .unwrap()
@@ -45,7 +42,10 @@ fn five_anaphora_turns_keep_one_thread_id() {
         );
     }
     assert_eq!(store.thread_count().unwrap(), 1, "五轮指代只能有一条线索");
-    assert!(ids.iter().all(|id| id == &ids[0]), "thread_id 必须恒定：{ids:?}");
+    assert!(
+        ids.iter().all(|id| id == &ids[0]),
+        "thread_id 必须恒定：{ids:?}"
+    );
 }
 
 #[test]
@@ -62,9 +62,11 @@ fn one_off_leaf_does_not_touch_foreground() {
     let first = ensure_foreground(&store, &SCOPE, "帮我排查构建失败", 100, true)
         .unwrap()
         .expect("应建立线索");
-    assert!(ensure_foreground(&store, &SCOPE, "今天天气怎么样", 200, true)
-        .unwrap()
-        .is_none());
+    assert!(
+        ensure_foreground(&store, &SCOPE, "今天天气怎么样", 200, true)
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(store.thread_count().unwrap(), 1);
     let fg = store
         .foreground_thread(SCOPE.namespace_ref, SCOPE.user_ref)
@@ -78,9 +80,11 @@ fn one_off_leaf_does_not_touch_foreground() {
 #[test]
 fn disabled_flag_writes_nothing() {
     let store = temp_store("disabled");
-    assert!(ensure_foreground(&store, &SCOPE, "帮我排查构建失败", 100, false)
-        .unwrap()
-        .is_none());
+    assert!(
+        ensure_foreground(&store, &SCOPE, "帮我排查构建失败", 100, false)
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(store.thread_count().unwrap(), 0);
 }
 
@@ -164,7 +168,11 @@ fn commitment_id_and_open_commitment_are_stable() {
     assert_eq!(open[0].status, crate::COMMITMENT_STATUS_OPEN);
 
     store
-        .close_commitment(&commitment.commitment_id, crate::COMMITMENT_STATUS_DONE, 200)
+        .close_commitment(
+            &commitment.commitment_id,
+            crate::COMMITMENT_STATUS_DONE,
+            200,
+        )
         .unwrap();
     assert!(
         store

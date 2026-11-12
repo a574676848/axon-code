@@ -1,6 +1,6 @@
 //! 记忆代谢（M6）：merge-only 整合器与后置校验。
 //!
-//! 设计定稿：整合器**只允许**两种动作——
+//! 设计定稿：整合器**只允许**两种动作：
 //! * `merge`：保留较新的一条，把同主题旧条归档并写入 `memory_supersessions` 追溯边；
 //! * `downgrade`：下调 `importance_basis_points`，下限 `MIN_IMPORTANCE_BP`。
 //!

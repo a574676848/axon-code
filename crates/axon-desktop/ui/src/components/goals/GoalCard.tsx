@@ -4,6 +4,7 @@ import { ChecklistIcon, ChevronRightIcon, FolderIcon } from '../../icons';
 import type { GoalCardView } from '../../goalTypes';
 import {
   cardActionLabel,
+  distinctObjectivePreview,
   goalProgressCue,
   goalStatusMeta,
   hasSessionBinding,
@@ -16,8 +17,9 @@ import { Chip, StateDot } from '../ui/surfaces';
  * 目标卡：看板里一张目标卡片。
  *
  * 复用条目卡外壳（`EntityCard`），锁定统一高度（`uniformHeight`）：
- * 行首状态点、单行标题与语义状态标签、固定两行目标预览槽、单行行内进展提示、
- * 36px 底栏（工作区与活动时刻 + 右下唯一入口），全看板卡片高度与比例完全一致。
+ * 行首状态点、最多两行标题与语义状态标签、两行目标预览、单行行内进展提示、
+ * 36px 底栏（工作区与活动时刻 + 右下唯一入口）。标题与预览都在卡片内部截断，
+ * 全文交给原生 title 与详情视图，因此长信息既不会撑破卡片，也不会彻底读不到。
  */
 
 export interface GoalCardProps {
@@ -36,6 +38,8 @@ export const GoalCard: React.FC<GoalCardProps> = ({ goal, onOpen, onInspect, now
   const meta = goalStatusMeta(goal.status);
   const activity = formatDateTime(goal.lastActivityAtMs, now);
   const workspace = goal.workspaceName ?? '全局';
+  // 预览与标题同一句话时不再重复渲染第二遍；预览里的反引号与换行先收成一句。
+  const objective = distinctObjectivePreview(goal);
   const cue = goalProgressCue(goal) ?? {
     kind: 'next' as const,
     label: '进度',
@@ -51,7 +55,7 @@ export const GoalCard: React.FC<GoalCardProps> = ({ goal, onOpen, onInspect, now
         leading={<StateDot state={meta.dot} tone={meta.dot === 'ongoing' ? 'accent' : 'default'} />}
         title={goal.title}
         badges={<Chip tone={meta.chipTone}>{meta.label}</Chip>}
-        description={goal.objectivePreview}
+        description={objective}
         statusCue={cue}
         meta={metaTooltip}
         metaNode={

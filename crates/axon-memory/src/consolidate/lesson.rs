@@ -1,6 +1,6 @@
 //! 教训类记忆保质期（M6-2）。
 //!
-//! 主动注入按 `updated_at_ms` 分级：≤180d 正常；180–365d 重要度 ×0.5；>365d 不主动注入
+//! 主动注入按 `updated_at_ms` 分级：≤180d 正常；180-365d 重要度 ×0.5；>365d 不主动注入
 //! （仍可被 `memory_search` 检索到）。
 
 use axon_domain::MemoryKind;

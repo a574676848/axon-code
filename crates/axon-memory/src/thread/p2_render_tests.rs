@@ -72,7 +72,10 @@ fn commitments_are_capped_at_five() {
         .collect::<Vec<_>>();
     let rendered = render_p2_context(None, &items, 480);
     assert_eq!(
-        rendered.lines().filter(|line| line.starts_with("- ")).count(),
+        rendered
+            .lines()
+            .filter(|line| line.starts_with("- "))
+            .count(),
         5
     );
 }

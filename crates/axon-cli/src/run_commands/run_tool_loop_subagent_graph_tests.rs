@@ -110,7 +110,7 @@ fn subagent_tool_graph_store_restores_only_open_children() {
             "builtin.spawn_agent",
             &serde_json::json!({
                 "task_name": task_name,
-                "task": format!("处理 {task_name}")
+                "task": format!("处理 {task_name}"), "intent": "处理子任务"
             }),
         );
         let receipts = super::execute_supported_tool_calls(&request, &[spawn], None);
@@ -163,7 +163,7 @@ fn subagent_control_isolated_between_run_requests() {
         "builtin.spawn_agent",
         &serde_json::json!({
             "task_name": "review",
-            "task": "审查当前改动"
+            "task": "审查当前改动", "intent": "复核当前改动"
         }),
     );
     let _ = super::execute_supported_tool_calls(&first, &[spawn], None);

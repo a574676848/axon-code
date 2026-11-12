@@ -115,7 +115,11 @@ export const ComposerActionBar: React.FC<ComposerActionBarProps> = ({
 
       <span className="flex-1" />
 
-      {!compact && (
+      {/*
+        只读会话（目标执行这类后台会话）不留可用假控件：模型选择与发送都属于
+        「这一轮由谁、发什么」，禁用态下它们只会被读成坏掉的按钮。
+      */}
+      {!compact && enabled && (
         <ComposerPicker
           model={model}
           models={models}

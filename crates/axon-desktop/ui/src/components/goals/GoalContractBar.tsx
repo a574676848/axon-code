@@ -2,7 +2,7 @@ import React from 'react';
 
 import { ChecklistIcon } from '../../icons';
 import type { GoalDetailView } from '../../goalTypes';
-import { goalContractSummary } from '../../goals/model';
+import { cleanPreview, goalContractSummary } from '../../goals/model';
 import { DisclosureRow } from '../conversation/DisclosureRow';
 import { GoalContractSections } from './GoalContractSections';
 
@@ -36,6 +36,8 @@ export const GoalContractBar: React.FC<GoalContractBarProps> = ({
   const [open, setOpen] = React.useState(defaultOpen);
   const preview =
     detail !== null && detail.objective.length > 0 ? detail.objective : objectivePreview;
+  // 收起态只有一行位置：把 Markdown 痕迹收掉再铺，展开态仍按原文逐字呈现契约。
+  const summaryLine = cleanPreview(preview);
   const steps = detail?.steps ?? [];
   const acceptance = detail?.acceptance ?? [];
   const resolvedStepCount = detail?.goal.stepCount ?? stepCount;
@@ -53,8 +55,8 @@ export const GoalContractBar: React.FC<GoalContractBarProps> = ({
           onToggle={() => setOpen((current) => !current)}
           icon={<ChecklistIcon size={14} />}
           label={open ? '目标与验收标准' : '目标'}
-          title={open ? undefined : preview}
-          titleText={preview}
+          title={open ? undefined : summaryLine}
+          titleText={summaryLine}
           meta={summaryLabel}
         />
       </div>

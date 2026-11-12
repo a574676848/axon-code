@@ -32,7 +32,8 @@ fn trigger_words_gate_injection() {
 fn disabled_flag_never_renders() {
     let resources = sample_resources();
     assert!(render_block_if_enabled("帮我上服务器看磁盘", &resources, false).is_none());
-    assert!(MEMORY_ENV_ENABLED_DEFAULT, "本机资源感知常量默认必须开启");
+    // 常量断言写成 const 块：运行期没有任何信息量，编译期失败才是它的作用。
+    const { assert!(MEMORY_ENV_ENABLED_DEFAULT, "本机资源感知常量默认必须开启") };
 }
 
 #[test]

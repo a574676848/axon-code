@@ -88,6 +88,7 @@ fn build_payload(
         CliRunModelPayloadInput {
             transport_context: None,
             notification_chat_id: None,
+            delegatable_models: &[],
             memory_hits: &[],
             soul_context_message: Some(soul),
             persona_state_message: None,
