@@ -71,6 +71,8 @@ pub struct CanonicalMemorySearchInput<'a> {
     pub limit: usize,
     /// 查询时间。
     pub now_ms: u64,
+    /// 可选更新时间窗 `[start_ms, end_ms]`；`None` 表示不按时间收窄。
+    pub time_range: Option<(i64, i64)>,
 }
 
 /// canonical Memory 写入输入；scope 只能由可信运行时构造。
@@ -131,6 +133,33 @@ impl MemoryToolDispatcher {
         }
     }
 
+    /// 解析可选更新时间窗；两端必须成对出现且起点不晚于终点。
+    fn parse_time_range(value: &serde_json::Value) -> AxonResult<Option<(i64, i64)>> {
+        let since = Self::optional_i64_field(value, crate::MEMORY_SEARCH_SINCE_FIELD)?;
+        let until = Self::optional_i64_field(value, crate::MEMORY_SEARCH_UNTIL_FIELD)?;
+        match (since, until) {
+            (None, None) => Ok(None),
+            (Some(start), Some(end)) if start <= end => Ok(Some((start, end))),
+            (Some(_), Some(_)) => Err(AxonError::tool_invalid_arguments(
+                "memory_search 时间窗起点不得晚于终点",
+            )),
+            _ => Err(AxonError::tool_invalid_arguments(
+                "memory_search 时间窗必须同时给出 since_ms 与 until_ms",
+            )),
+        }
+    }
+
+    fn optional_i64_field(value: &serde_json::Value, field: &str) -> AxonResult<Option<i64>> {
+        match value.get(field) {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(raw) => raw.as_i64().map(Some).ok_or_else(|| {
+                AxonError::tool_invalid_arguments(format!(
+                    "memory_search {field} 必须是整数毫秒时间戳"
+                ))
+            }),
+        }
+    }
+
     fn search(
         &self,
         config_path: &Path,
@@ -158,6 +187,7 @@ impl MemoryToolDispatcher {
                         AxonError::tool_invalid_arguments("memory_search limit 必须为正整数")
                     })
             })?;
+        let time_range = Self::parse_time_range(value)?;
         let summary = memory_query_summary(
             config_path,
             config,
@@ -166,6 +196,7 @@ impl MemoryToolDispatcher {
             now_ms(),
             self.timeout,
             Some(scope.hybrid_scope()?),
+            time_range,
         )
         .map_err(AxonError::runtime_protocol)?;
         let projection = agent_run_completed_tool_receipt(call, summary, None, false);
@@ -188,6 +219,7 @@ impl MemoryToolDispatcher {
             input.now_ms,
             self.timeout,
             Some(input.scope.hybrid_scope()?),
+            input.time_range,
         )
         .map_err(AxonError::runtime_protocol)
     }

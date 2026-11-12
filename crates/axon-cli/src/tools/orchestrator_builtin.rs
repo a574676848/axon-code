@@ -223,6 +223,11 @@ pub(super) fn execute_memory_search(
         }
     };
 
+    let time_range = match memory_search_time_range(value) {
+        Ok(range) => range,
+        Err(message) => return failed_tool_input_receipt(tool_call, message),
+    };
+
     match context.memory_write_runtime.search(AgentMemorySearchInput {
         config_path,
         cwd: &context.cwd,
@@ -231,9 +236,29 @@ pub(super) fn execute_memory_search(
         now_ms: now_ms(),
         timeout: context.timeout,
         is_root_agent: context.current_agent_path.is_root(),
+        time_range,
     }) {
         Ok(summary) => completed_tool_receipt(tool_call, summary, None, false),
         Err(message) => failed_tool_receipt(tool_call, message),
+    }
+}
+
+/// 解析 memory_search 的可选时间窗；两端必须成对出现且起点不晚于终点。
+fn memory_search_time_range(value: &serde_json::Value) -> Result<Option<(i64, i64)>, &'static str> {
+    let read = |field: &str| match value.get(field) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(raw) => raw
+            .as_i64()
+            .map(Some)
+            .ok_or("memory_search 时间窗必须是整数毫秒时间戳"),
+    };
+    let since = read(axon_agent_runtime::MEMORY_SEARCH_SINCE_FIELD)?;
+    let until = read(axon_agent_runtime::MEMORY_SEARCH_UNTIL_FIELD)?;
+    match (since, until) {
+        (None, None) => Ok(None),
+        (Some(start), Some(end)) if start <= end => Ok(Some((start, end))),
+        (Some(_), Some(_)) => Err("memory_search 时间窗起点不得晚于终点"),
+        _ => Err("memory_search 时间窗必须同时给出 since_ms 与 until_ms"),
     }
 }
 

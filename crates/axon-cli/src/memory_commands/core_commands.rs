@@ -228,6 +228,7 @@ pub(super) fn run_memory_search(
         recall_now_ms,
         Duration::from_secs(10),
         None,
+        None,
     )
     .hits;
     let _ = record_read_usage(&orchestrator, &injected_usage_events(&hits, recall_now_ms));

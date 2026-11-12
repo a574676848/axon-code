@@ -80,8 +80,15 @@ fn hybrid_query_with_precomputed_embedding_reuses_embedding_report() {
     let memory_config =
         axon_memory::MemoryConfig::from_config_dir(test_dir.clone(), false, 1536).unwrap();
     let orchestrator = MemoryOrchestrator::init(memory_config).unwrap();
-    let query =
-        hybrid_query_memory_with_embedding(&orchestrator, "test query", &report, 5, 1_000, None);
+    let query = hybrid_query_memory_with_embedding(
+        &orchestrator,
+        "test query",
+        &report,
+        5,
+        1_000,
+        None,
+        None,
+    );
     assert_eq!(query.embedding_status, MEMORY_QUERY_EMBEDDING_GENERATED);
     assert!(query.reason.is_none());
     let _ = std::fs::remove_dir_all(&test_dir);
