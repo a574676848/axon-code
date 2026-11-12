@@ -1,17 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Axon macOS 安装包分发定义 -->
+<!-- 注：不引用 welcome/conclusion/background/license 资源 —— 仓库未提供 --resources 目录，
+     引用不存在的资源会让 productbuild 直接报错；版本号由下面的 pkg-ref 决定。 -->
 <installer-gui-script minSpecVersion="2">
     <title>Axon — 模型路由 Agentic 编码工作台</title>
-    <welcome file="welcome.html" />
-    <conclusion file="conclusion.html" />
-    <background file="background.png" scaling="proportional" alignment="center" />
-    <license file="license.html" />
 
-    <pkg-ref id="com.github.a574676848.axon">
-        <bundle-version>
-            <bundle id="com.github.a574676848.axon" CFBundleVersion="__VERSION__" />
-        </bundle-version>
-    </pkg-ref>
+    <pkg-ref id="com.github.a574676848.axon" version="__VERSION__">#axon-component.pkg</pkg-ref>
 
     <options
         hostArchitectures="x86_64,arm64"

@@ -48,6 +48,8 @@ chmod 644 "${DEFAULTS_DIR}/SOUL.md"
 COMPONENT_PKG="${WORK_DIR}/axon-component.pkg"
 SCRIPTS_DIR="${WORK_DIR}/scripts"
 cp -R "${SCRIPT_DIR}/scripts" "${SCRIPTS_DIR}"
+# 仓库里的安装脚本是普通文件（Windows 检出无法携带执行位），pkgbuild 要求脚本可执行。
+chmod 755 "${SCRIPTS_DIR}/postinstall" "${SCRIPTS_DIR}/preinstall"
 sed -i '' "s/__VERSION__/${VERSION}/g" "${SCRIPTS_DIR}/postinstall"
 sed -i '' "s/__RELEASE_NAME__/${RELEASE_NAME}/g" "${SCRIPTS_DIR}/postinstall"
 pkgbuild \
@@ -65,10 +67,10 @@ DIST_XML="${WORK_DIR}/Distribution.xml"
 sed "s/__VERSION__/${VERSION}/g" "${SCRIPT_DIR}/Distribution.xml" > "${DIST_XML}"
 
 OUTPUT="${DIST_DIR}/${NAME}.pkg"
+# productbuild 没有 --version 选项（那是 pkgbuild 的），版本号只由 Distribution.xml 里的 pkg-ref 决定。
 productbuild \
     --distribution "${DIST_XML}" \
     --package-path "${WORK_DIR}" \
-    --version "${VERSION}" \
     "${OUTPUT}"
 
 echo "=== .pkg 构建完成 ==="
