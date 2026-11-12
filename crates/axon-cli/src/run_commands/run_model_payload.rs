@@ -28,6 +28,10 @@ const HOME_WITHOUT_WORKSPACE: &str = "未选择（当前目录位于 Home）";
 pub(super) struct CliRunModelPayloadInput<'a> {
     pub(super) memory_hits: &'a [MemoryHybridHit],
     pub(super) soul_context_message: Option<&'a AgentModelMessage>,
+    /// 本轮本机资源注入块；未命中触发词时为 `None`，不进缓存。
+    pub(super) env_context_block: Option<&'a str>,
+    /// 本轮线索与承诺动态段；无内容时为 `None`，不进缓存。
+    pub(super) memory_thread_context: Option<&'a str>,
     /// 本轮人格状态动态段；不进缓存，计入动态尾部。
     pub(super) persona_state_message: Option<&'a AgentModelMessage>,
     pub(super) include_personal_memory: bool,
@@ -121,6 +125,34 @@ pub(super) fn build_cli_run_model_payload(
     if let Some(persona) = input.persona_state_message {
         dynamic_context_messages.push(persona.clone());
     }
+    if let Some(block) = input
+        .env_context_block
+        .map(str::trim)
+        .filter(|block| !block.is_empty())
+    {
+        dynamic_context_messages.push(AgentModelMessage::cache_excluded(
+            "developer",
+            format!("<local-resources-context>\n{block}\n</local-resources-context>"),
+        ));
+    }
+    if let Some(block) = input
+        .memory_thread_context
+        .map(str::trim)
+        .filter(|block| !block.is_empty())
+    {
+        dynamic_context_messages.push(AgentModelMessage::cache_excluded(
+            "developer",
+            format!("<memory-thread-context>\n{block}\n</memory-thread-context>"),
+        ));
+    }
+    if axon_agent_runtime::anomaly::ANOMALY_ENABLED_DEFAULT
+        && let Some(state) = anomaly_state_text(&prompt, &history_messages)
+    {
+        dynamic_context_messages.push(AgentModelMessage::cache_excluded(
+            "developer",
+            format!("<anomaly-state-context>\n{state}\n</anomaly-state-context>"),
+        ));
+    }
     let environment_context =
         cli_environment_context(input.transport_context, input.notification_chat_id);
     let payload = ContextAssemblerRuntime
@@ -169,6 +201,38 @@ pub(super) fn build_cli_run_model_payload(
     let mut model_payload = payload.payload;
     model_payload.model_tools = registry.model_tools_for_provider();
     Ok((model_payload, skill_selection))
+}
+
+/// 由最近助手输出与问答对推导异常状态段；未命中阈值时返回 `None`。
+fn anomaly_state_text(prompt: &str, history: &[AgentModelMessage]) -> Option<String> {
+    let recent_assistant = history
+        .iter()
+        .rev()
+        .filter(|message| message.role == "assistant")
+        .map(|message| message.content.as_str())
+        .take(axon_agent_runtime::anomaly::ANOMALY_STYLE_WINDOW)
+        .collect::<Vec<_>>();
+    let recent_pairs = recent_user_assistant_pairs(history);
+    axon_agent_runtime::anomaly::detect(prompt, &recent_assistant, &recent_pairs).state_text()
+}
+
+/// 按时间正序配对 user 与紧随其后的 assistant，再反转为最近优先。
+fn recent_user_assistant_pairs(history: &[AgentModelMessage]) -> Vec<(&str, &str)> {
+    let mut pairs = Vec::new();
+    let mut pending_user: Option<&str> = None;
+    for message in history {
+        match message.role.as_str() {
+            "user" => pending_user = Some(message.content.as_str()),
+            "assistant" => {
+                if let Some(user) = pending_user.take() {
+                    pairs.push((user, message.content.as_str()));
+                }
+            }
+            _ => {}
+        }
+    }
+    pairs.reverse();
+    pairs
 }
 
 fn cli_dynamic_prompt_fragments(
@@ -394,6 +458,8 @@ mod tests {
                 memory_hits: &[],
                 soul_context_message: Some(&soul_message),
                 persona_state_message: None,
+                env_context_block: None,
+                memory_thread_context: None,
                 include_personal_memory: true,
                 memory_disclosure_policy: DisclosurePolicy::PrivateOnly,
                 cwd: &cwd.to_string_lossy(),
@@ -521,6 +587,8 @@ mod tests {
                 memory_hits: &[],
                 soul_context_message: None,
                 persona_state_message: None,
+                env_context_block: None,
+                memory_thread_context: None,
                 include_personal_memory: false,
                 memory_disclosure_policy: DisclosurePolicy::Workspace,
                 cwd: &cwd.to_string_lossy(),
@@ -629,6 +697,8 @@ mod tests {
                     memory_hits: &[],
                     soul_context_message: None,
                     persona_state_message: persona,
+                    env_context_block: None,
+                    memory_thread_context: None,
                     include_personal_memory: false,
                     memory_disclosure_policy: DisclosurePolicy::PrivateOnly,
                     cwd: &cwd.to_string_lossy(),

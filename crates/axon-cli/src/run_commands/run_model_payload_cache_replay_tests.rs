@@ -91,6 +91,8 @@ fn build_payload(
             memory_hits: &[],
             soul_context_message: Some(soul),
             persona_state_message: None,
+            env_context_block: None,
+            memory_thread_context: None,
             include_personal_memory: true,
             memory_disclosure_policy: DisclosurePolicy::PrivateOnly,
             cwd: &cwd.to_string_lossy(),

@@ -578,6 +578,7 @@ dependencies = [
  "axon-daemon",
  "axon-display",
  "axon-domain",
+ "axon-env",
  "axon-fs-walk",
  "axon-jsonl",
  "axon-logger",

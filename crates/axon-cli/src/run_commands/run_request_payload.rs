@@ -18,6 +18,7 @@ use axon_session::{
 use axon_session_runtime::{TurnPerformanceRecorder, TurnPerformanceStage};
 
 use super::run_memory_recall::{RunMemoryRecallEvent, memory_scope, prepare_memory_recall_for_run};
+use super::run_memory_thread_context::{RunMemoryThreadInput, prepare_memory_thread_context};
 use super::run_model_payload::{
     CliRunModelPayloadInput, CliRunSkillSelection, build_cli_run_model_payload,
     prepare_cli_run_skill_context,
@@ -79,68 +80,90 @@ pub(super) fn build_run_model_payload(
     registry: &ToolRegistry,
 ) -> Result<BuildRunModelPayloadOutput, String> {
     let skill_soul_ready = AtomicU8::new(0);
-    let (workspace_snapshot, memory_recall, skill_context, persona_context) =
-        thread::scope(|scope| {
-            let skill = scope.spawn(|| {
-                let result = prepare_cli_run_skill_context(
-                    input.startup,
-                    input.prompt_for_model,
-                    input.context_window,
-                );
-                record_pair_ready(input.performance, &skill_soul_ready);
-                result
-            });
-            let persona = scope.spawn(|| {
-                let result = if input.include_user_soul {
-                    load_persona_context(
-                        input.config_path,
-                        PersonaSceneInput {
-                            channel: super::run_agent_identity::persona_channel(
-                                input.client_channel,
-                            ),
-                            audience: if input.include_personal_memory {
-                                Audience::Private
-                            } else {
-                                Audience::Group
-                            },
-                            has_workspace: input.startup.workspace_root.is_some(),
-                        },
-                    )
-                } else {
-                    Ok(PersonaContext::empty())
-                };
-                record_pair_ready(input.performance, &skill_soul_ready);
-                result
-            });
-            // 异步预热 Provider 连接池与 TLS 运行环境，使网络建连与本地 Memory 召回并行
-            let _prewarm_handle = scope.spawn(|| {
-                axon_rustls_provider::ensure_rustls_crypto_provider();
-            });
-            let workspace_snapshot = match input.workspace_snapshot_prewarm.as_ref() {
-                Some(prewarm) => prewarm.resolve()?,
-                None => resolve_run_workspace_snapshot_with_telemetry(
-                    input.config_path,
-                    input.cwd,
-                    input.performance,
-                )?,
-            };
-            let memory_recall = prepare_memory_recall_for_run(
-                input.config_path,
-                input.config,
+    let (
+        workspace_snapshot,
+        memory_recall,
+        skill_context,
+        persona_context,
+        env_context_block,
+        memory_thread_context,
+    ) = thread::scope(|scope| {
+        let skill = scope.spawn(|| {
+            let result = prepare_cli_run_skill_context(
+                input.startup,
                 input.prompt_for_model,
-                input.attached_files,
-                input.command,
-                memory_scope(workspace_snapshot.as_ref()),
-                input.performance,
+                input.context_window,
             );
-            record_stage(input.performance, TurnPerformanceStage::MemoryReady);
-            Ok::<_, String>((
-                workspace_snapshot,
-                memory_recall,
-                join_dynamic(skill, "Skill route")?,
-                join_dynamic(persona, "Persona load")??,
-            ))
-        })?;
+            record_pair_ready(input.performance, &skill_soul_ready);
+            result
+        });
+        let persona = scope.spawn(|| {
+            let result = if input.include_user_soul {
+                load_persona_context(
+                    input.config_path,
+                    PersonaSceneInput {
+                        channel: super::run_agent_identity::persona_channel(input.client_channel),
+                        audience: if input.include_personal_memory {
+                            Audience::Private
+                        } else {
+                            Audience::Group
+                        },
+                        has_workspace: input.startup.workspace_root.is_some(),
+                    },
+                )
+            } else {
+                Ok(PersonaContext::empty())
+            };
+            record_pair_ready(input.performance, &skill_soul_ready);
+            result
+        });
+        // 异步预热 Provider 连接池与 TLS 运行环境，使网络建连与本地 Memory 召回并行
+        let _prewarm_handle = scope.spawn(|| {
+            axon_rustls_provider::ensure_rustls_crypto_provider();
+        });
+        let workspace_snapshot = match input.workspace_snapshot_prewarm.as_ref() {
+            Some(prewarm) => prewarm.resolve()?,
+            None => resolve_run_workspace_snapshot_with_telemetry(
+                input.config_path,
+                input.cwd,
+                input.performance,
+            )?,
+        };
+        let memory_scope_event = memory_scope(workspace_snapshot.as_ref());
+        let memory_recall = prepare_memory_recall_for_run(
+            input.config_path,
+            input.config,
+            input.prompt_for_model,
+            input.attached_files,
+            input.command,
+            memory_scope_event.clone(),
+            input.performance,
+        );
+        record_stage(input.performance, TurnPerformanceStage::MemoryReady);
+        let memory_thread_context = prepare_memory_thread_context(&RunMemoryThreadInput {
+            axon_root: Path::new(&input.startup.home_root),
+            config: input.config,
+            namespace_ref: &memory_scope_event.namespace,
+            tz_offset_min: chrono::Local::now().offset().local_minus_utc() / 60,
+        })
+        .context;
+        // 本机资源扫描只读元数据：命中触发词才扫描，否则不触碰文件系统。
+        let env_context_block = scope.spawn(|| {
+            axon_env::maybe_inject(
+                Path::new(&input.startup.home_root),
+                input.prompt_for_model,
+                axon_env::MEMORY_ENV_ENABLED_DEFAULT,
+            )
+        });
+        Ok::<_, String>((
+            workspace_snapshot,
+            memory_recall,
+            join_dynamic(skill, "Skill route")?,
+            join_dynamic(persona, "Persona load")??,
+            join_dynamic(env_context_block, "本机资源感知")?,
+            memory_thread_context,
+        ))
+    })?;
     for warning in &persona_context.warnings {
         axon_logger::warning(&format!("persona_context: {warning}"));
     }
@@ -154,6 +177,8 @@ pub(super) fn build_run_model_payload(
             memory_hits: &memory_recall.hits,
             soul_context_message: persona_context.stable.as_ref(),
             persona_state_message: persona_context.dynamic.as_ref(),
+            env_context_block: env_context_block.as_deref(),
+            memory_thread_context: memory_thread_context.as_deref(),
             include_personal_memory: input.include_personal_memory,
             memory_disclosure_policy: input.memory_disclosure_policy,
             cwd: &input.cwd.to_string_lossy(),
