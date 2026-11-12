@@ -18,7 +18,7 @@ use axon_session::{
 use axon_session_runtime::{TurnPerformanceRecorder, TurnPerformanceStage};
 
 use super::run_memory_recall::{RunMemoryRecallEvent, memory_scope, prepare_memory_recall_for_run};
-use super::run_memory_thread_context::{RunMemoryThreadInput, prepare_memory_thread_context};
+use super::run_memory_thread_context::prepare_memory_thread_context;
 use super::run_model_payload::{
     CliRunModelPayloadInput, CliRunSkillSelection, build_cli_run_model_payload,
     prepare_cli_run_skill_context,
@@ -140,13 +140,11 @@ pub(super) fn build_run_model_payload(
             input.performance,
         );
         record_stage(input.performance, TurnPerformanceStage::MemoryReady);
-        let memory_thread_context = prepare_memory_thread_context(&RunMemoryThreadInput {
-            axon_root: Path::new(&input.startup.home_root),
-            config: input.config,
-            namespace_ref: &memory_scope_event.namespace,
-            tz_offset_min: chrono::Local::now().offset().local_minus_utc() / 60,
-        })
-        .context;
+        let memory_thread_context = prepare_memory_thread_context(
+            Path::new(&input.startup.home_root),
+            input.config,
+            chrono::Local::now().offset().local_minus_utc() / 60,
+        );
         // 本机资源扫描只读元数据：命中触发词才扫描，否则不触碰文件系统。
         let env_context_block = scope.spawn(|| {
             axon_env::maybe_inject(

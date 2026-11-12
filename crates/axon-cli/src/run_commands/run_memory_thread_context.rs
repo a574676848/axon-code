@@ -1,77 +1,128 @@
-//! 前台线索与未闭合承诺的读取与维护（M8-2 写入侧 / M8-3 读取侧接线）。
+//! 前台线索与未闭合承诺的读写（M8-2 写入侧 / M8-3 读取侧）。
 //!
-//! * 读取：把进入本轮之前的线索与未闭合承诺渲染成一段动态上下文，交给模型 payload；
-//! * 写入：本轮用户输入进入后维护命名空间内的单条前台线索，并把承诺句式落库。
+//! * 读取：把既有的前台线索与未闭合承诺渲染成一段动态上下文，交给模型 payload；
+//! * 写入：每轮进入时维护前台线索，并把承诺句式落库。
 //!
-//! 先读渲染、后写入，使本轮上下文只陈述既成事实，写入结果下一轮才可见。
-//! `memory.threads.enabled = false` 时零 SQLite 打开与读写，行为与未接线前完全一致。
+//! 读写分离是硬约束：payload 构造必须可重复（预热路径与同步路径会各构造一次并逐字段
+//! 比较），因此只有读侧可以进 payload，写入由每轮只执行一次的准备阶段调用。
+//!
+//! SQLite 句柄按线程缓存，进程内只 open 一次，避免每轮 payload 重新建连。
 
 use std::{
-    collections::BTreeSet,
+    cell::RefCell,
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
 };
 
 use axon_config::AxonConfig;
 use axon_memory::{
     MEMORY_CONFIG_DEFAULT_EMBEDDING_DIMENSION, MemoryConfig, MemorySqliteStore, P2_MAX_COMMITMENTS,
-    THREADS_ENABLED_DEFAULT, ThreadScope, render_p2_context,
+    THREADS_ENABLED_DEFAULT, ThreadScope, close_commitments, ensure_foreground, record_commitment,
+    render_p2_context,
 };
+use axon_memory_read::MEMORY_GLOBAL_NAMESPACE_REF;
 
 /// 本机单用户场景下线索与承诺的 owner principal。
 const LOCAL_USER_REF: &str = "user:local";
+/// 承诺来源渠道标识。
+const COMMITMENT_CHANNEL: &str = "cli_run";
 
-/// 已初始化 schema 的 SQLite 文件集合；同一进程内只建表一次。
-fn schema_ready_paths() -> &'static Mutex<BTreeSet<PathBuf>> {
-    static READY: OnceLock<Mutex<BTreeSet<PathBuf>>> = OnceLock::new();
-    READY.get_or_init(|| Mutex::new(BTreeSet::new()))
+thread_local! {
+    /// 进程内复用的 SQLite 句柄；键是 db 路径，切换安装根时自动重建。
+    static STORE_CACHE: RefCell<Option<(PathBuf, MemorySqliteStore)>> = const { RefCell::new(None) };
 }
 
-/// 线索与承诺装配输入。
-pub(super) struct RunMemoryThreadInput<'a> {
-    /// Axon 根目录；`data/memory` 位于其下。
-    pub(super) axon_root: &'a Path,
-    /// 已加载配置。
-    pub(super) config: &'a AxonConfig,
-    /// 本轮 Memory 归属命名空间。
-    pub(super) namespace_ref: &'a str,
-    /// 本地时区偏移（分钟）；用于承诺时间渲染。
-    pub(super) tz_offset_min: i32,
-}
-
-/// 线索与承诺装配结果。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(super) struct RunMemoryThreadOutput {
-    /// 动态上下文段；`None` 表示本轮无内容可注入。
-    pub(super) context: Option<String>,
-    /// 本轮写入的承诺 ID。
-    pub(super) recorded_commitment: Option<String>,
-}
-
-/// 读取既有线索与承诺并渲染成动态上下文段。
+/// 用线程缓存的 SQLite 句柄执行一次操作。
 ///
-/// 只读：payload 构造必须保持纯函数语义，重复调用产出必须一致。
-/// 写入侧尚未接入——它需要每轮只执行一次的钩子，不能放进可重复调用的 payload 构造。
-pub(super) fn prepare_memory_thread_context(
-    input: &RunMemoryThreadInput<'_>,
-) -> RunMemoryThreadOutput {
-    if !THREADS_ENABLED_DEFAULT {
-        return RunMemoryThreadOutput::default();
-    }
-    let Some(store) = open_store(input.axon_root, input.config) else {
-        return RunMemoryThreadOutput::default();
+/// 命中缓存时不建连、不重复建表；未命中时才 open 并初始化 schema。
+fn with_store<T>(
+    axon_root: &Path,
+    config: &AxonConfig,
+    apply: impl FnOnce(&MemorySqliteStore) -> T,
+) -> Option<T> {
+    let memory_config = memory_config_for(axon_root, config)?;
+    let expected_path = memory_config.db_path.clone();
+    STORE_CACHE.with(|cache| {
+        let mut cached = cache.borrow_mut();
+        let reusable = cached
+            .as_ref()
+            .is_some_and(|(path, _)| path == &expected_path);
+        if !reusable {
+            let store = MemorySqliteStore::open(&memory_config).ok()?;
+            store.initialize_schema().ok()?;
+            *cached = Some((expected_path, store));
+        }
+        let (_, store) = cached.as_ref()?;
+        Some(apply(store))
+    })
+}
+
+/// 按 Axon 根目录与配置推导 Memory 存储位置。
+fn memory_config_for(axon_root: &Path, config: &AxonConfig) -> Option<MemoryConfig> {
+    let dimension = if config.memory.embedding.enabled {
+        config.memory.embedding.dimension
+    } else {
+        MEMORY_CONFIG_DEFAULT_EMBEDDING_DIMENSION
     };
-    let scope = ThreadScope {
-        namespace_ref: input.namespace_ref,
+    MemoryConfig::from_config_dir(axon_root, config.memory.embedding.enabled, dimension).ok()
+}
+
+/// 线索与承诺统一挂在全局命名空间：本机单用户、单条前台线索，跨 Workspace 延续话题。
+fn local_scope() -> ThreadScope<'static> {
+    ThreadScope {
+        namespace_ref: MEMORY_GLOBAL_NAMESPACE_REF,
         user_ref: LOCAL_USER_REF,
-    };
-    RunMemoryThreadOutput {
-        context: render_existing(&store, &scope, input.tz_offset_min),
-        recorded_commitment: None,
     }
 }
 
-/// 渲染进入本轮之前的线索段与承诺段。
+/// 读取既有线索与承诺并渲染成动态上下文段；无内容时返回 `None`。
+///
+/// 只读，可重复调用且逐字节一致。
+pub(super) fn prepare_memory_thread_context(
+    axon_root: &Path,
+    config: &AxonConfig,
+    tz_offset_min: i32,
+) -> Option<String> {
+    if !THREADS_ENABLED_DEFAULT {
+        return None;
+    }
+    with_store(axon_root, config, |store| {
+        render_existing(store, &local_scope(), tz_offset_min)
+    })
+    .flatten()
+}
+
+/// 维护本轮前台线索与未闭合承诺，返回新写入的承诺 ID。
+///
+/// 有副作用：每轮只调用一次，且必须在 payload 构造之外。
+pub(super) fn maintain_memory_thread(
+    axon_root: &Path,
+    config: &AxonConfig,
+    prompt: &str,
+    now_ms: i64,
+) -> Option<String> {
+    if !THREADS_ENABLED_DEFAULT {
+        return None;
+    }
+    with_store(axon_root, config, |store| {
+        let scope = local_scope();
+        let thread_id = ensure_foreground(store, &scope, prompt, now_ms, true).ok()?;
+        let _ = close_commitments(store, &scope, prompt, now_ms, true);
+        record_commitment(
+            store,
+            &scope,
+            thread_id.as_deref(),
+            prompt,
+            COMMITMENT_CHANNEL,
+            now_ms,
+            true,
+        )
+        .ok()
+        .flatten()
+    })
+    .flatten()
+}
+
+/// 渲染线索段与承诺段。
 fn render_existing(
     store: &MemorySqliteStore,
     scope: &ThreadScope<'_>,
@@ -86,27 +137,6 @@ fn render_existing(
     let rendered = render_p2_context(thread.as_ref(), &commitments, tz_offset_min);
     let rendered = rendered.trim();
     (!rendered.is_empty()).then(|| rendered.to_owned())
-}
-
-/// 打开 SQLite 事实源，并保证 schema 在本进程内只初始化一次。
-fn open_store(axon_root: &Path, config: &AxonConfig) -> Option<MemorySqliteStore> {
-    let dimension = if config.memory.embedding.enabled {
-        config.memory.embedding.dimension
-    } else {
-        MEMORY_CONFIG_DEFAULT_EMBEDDING_DIMENSION
-    };
-    let memory_config =
-        MemoryConfig::from_config_dir(axon_root, config.memory.embedding.enabled, dimension)
-            .ok()?;
-    let store = MemorySqliteStore::open(&memory_config).ok()?;
-    let mut ready = schema_ready_paths()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if !ready.contains(&memory_config.db_path) {
-        store.initialize_schema().ok()?;
-        ready.insert(memory_config.db_path.clone());
-    }
-    Some(store)
 }
 
 #[cfg(test)]
