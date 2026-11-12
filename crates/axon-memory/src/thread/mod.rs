@@ -19,12 +19,17 @@ use crate::{MemorySqliteStore, store_thread::MemoryCommitment};
 use axon_domain::AxonResult;
 
 /// 线索与承诺的归属范围。
+///
+/// 会话是必须的归属维度：同一条对话只维护自己会话内的前台线索，
+/// 定时任务、子代理与其它客户端不会复用或覆盖彼此的线索。
 #[derive(Debug, Clone, Copy)]
 pub struct ThreadScope<'a> {
     /// 命名空间引用。
     pub namespace_ref: &'a str,
     /// owner principal。
     pub user_ref: &'a str,
+    /// 归属会话引用。
+    pub session_ref: &'a str,
 }
 
 /// 线索与承诺的默认状态：默认开启。
@@ -51,7 +56,9 @@ pub fn ensure_foreground(
     if !enabled || is_one_off_leaf(text) {
         return Ok(None);
     }
-    if let Some(current) = store.foreground_thread(scope.namespace_ref, scope.user_ref)? {
+    if let Some(current) =
+        store.foreground_thread(scope.namespace_ref, scope.user_ref, scope.session_ref)?
+    {
         store.touch_thread(&current.thread_id, now_ms)?;
         return Ok(Some(current.thread_id));
     }
@@ -65,6 +72,7 @@ pub fn ensure_foreground(
         thread_id: thread_id.clone(),
         namespace_ref: scope.namespace_ref.to_owned(),
         user_ref: scope.user_ref.to_owned(),
+        session_ref: scope.session_ref.to_owned(),
         topic: topic_of(text),
         signature,
         label: String::new(),
@@ -77,15 +85,6 @@ pub fn ensure_foreground(
     };
     store.upsert_thread(&thread)?;
     Ok(Some(thread_id))
-}
-
-/// 记录一次线索活跃（用于外部驱动场景）。
-pub fn touch_foreground(
-    store: &MemorySqliteStore,
-    thread_id: &str,
-    now_ms: i64,
-) -> AxonResult<bool> {
-    store.touch_thread(thread_id, now_ms)
 }
 
 /// 生成承诺 ID：`commitment-<sha256 前 16 位>`。
@@ -122,7 +121,10 @@ pub fn open_commitment(
 
 fn signature_of(scope: &ThreadScope<'_>, text: &str) -> String {
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    format!("{}|{}|{}", scope.namespace_ref, scope.user_ref, normalized)
+    format!(
+        "{}|{}|{}|{}",
+        scope.namespace_ref, scope.user_ref, scope.session_ref, normalized
+    )
 }
 
 fn thread_id_for(signature: &str) -> String {

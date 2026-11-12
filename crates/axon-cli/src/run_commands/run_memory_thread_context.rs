@@ -66,37 +66,43 @@ fn memory_config_for(axon_root: &Path, config: &AxonConfig) -> Option<MemoryConf
     MemoryConfig::from_config_dir(axon_root, config.memory.embedding.enabled, dimension).ok()
 }
 
-/// 线索与承诺统一挂在全局命名空间：本机单用户、单条前台线索，跨 Workspace 延续话题。
-fn local_scope() -> ThreadScope<'static> {
+/// 线索与承诺统一挂在全局命名空间，并按会话隔离：一段对话只维护自己的前台线索。
+///
+/// 会话维度是硬约束：定时任务、子代理与其它客户端各自有独立会话，
+/// 既不会覆盖别人的线索，也不会把系统提示当成用户话题带进别的会话。
+fn local_scope(session_ref: &str) -> ThreadScope<'_> {
     ThreadScope {
         namespace_ref: MEMORY_GLOBAL_NAMESPACE_REF,
         user_ref: LOCAL_USER_REF,
+        session_ref,
     }
 }
 
-/// 读取既有线索与承诺并渲染成动态上下文段；无内容时返回 `None`。
+/// 读取指定会话既有线索与承诺并渲染成动态上下文段；无内容时返回 `None`。
 ///
 /// 只读，可重复调用且逐字节一致。
 pub(super) fn prepare_memory_thread_context(
     axon_root: &Path,
     config: &AxonConfig,
+    session_ref: &str,
     tz_offset_min: i32,
 ) -> Option<String> {
     if !THREADS_ENABLED_DEFAULT {
         return None;
     }
     with_store(axon_root, config, |store| {
-        render_existing(store, &local_scope(), tz_offset_min)
+        render_existing(store, &local_scope(session_ref), tz_offset_min)
     })
     .flatten()
 }
 
-/// 维护本轮前台线索与未闭合承诺，返回新写入的承诺 ID。
+/// 维护本轮会话的前台线索与未闭合承诺，返回新写入的承诺 ID。
 ///
 /// 有副作用：每轮只调用一次，且必须在 payload 构造之外。
 pub(super) fn maintain_memory_thread(
     axon_root: &Path,
     config: &AxonConfig,
+    session_ref: &str,
     prompt: &str,
     now_ms: i64,
 ) -> Option<String> {
@@ -104,7 +110,7 @@ pub(super) fn maintain_memory_thread(
         return None;
     }
     with_store(axon_root, config, |store| {
-        let scope = local_scope();
+        let scope = local_scope(session_ref);
         let thread_id = ensure_foreground(store, &scope, prompt, now_ms, true).ok()?;
         let _ = close_commitments(store, &scope, prompt, now_ms, true);
         record_commitment(
@@ -129,7 +135,7 @@ fn render_existing(
     tz_offset_min: i32,
 ) -> Option<String> {
     let thread = store
-        .foreground_thread(scope.namespace_ref, scope.user_ref)
+        .foreground_thread(scope.namespace_ref, scope.user_ref, scope.session_ref)
         .unwrap_or_default();
     let commitments = store
         .open_commitments(scope.namespace_ref, scope.user_ref, P2_MAX_COMMITMENTS)

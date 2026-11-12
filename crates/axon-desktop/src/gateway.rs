@@ -25,8 +25,8 @@ pub use crate::connection::endpoint::probe_target;
 
 // 语音相关的网关调用在 `gateway_voice`；调用方仍按 `gateway::xxx` 取，路径不因拆分而变。
 pub use crate::gateway_voice::{
-    get_voice_presets, get_voice_runtime_status, post_voice_preview, post_voice_tts,
-    voice_websocket_url, VoicePreviewAudio, VoicePreviewError, VoiceTtsError,
+    VoicePreviewAudio, VoicePreviewError, VoiceTtsError, get_voice_presets,
+    get_voice_runtime_status, post_voice_preview, post_voice_tts, voice_websocket_url,
 };
 
 /// 单次请求超时。
@@ -483,7 +483,7 @@ mod tests {
 
     #[test]
     fn preview_status_classification_follows_protocol_codes() {
-        use crate::gateway_voice::{classify_preview_status, VoicePreviewError};
+        use crate::gateway_voice::{VoicePreviewError, classify_preview_status};
 
         let unavailable = classify_preview_status(
             409,
@@ -511,4 +511,3 @@ mod tests {
         );
     }
 }
-

@@ -30,6 +30,7 @@ fn thread(id: &str, hit_count: i64, last_event_at_ms: i64) -> MemoryThread {
         thread_id: id.to_owned(),
         namespace_ref: "workspace:current".to_owned(),
         user_ref: "user:local".to_owned(),
+        session_ref: "session-a".to_owned(),
         topic: "周报".to_owned(),
         signature: String::new(),
         label: String::new(),
@@ -117,7 +118,7 @@ fn foreground_thread_prefers_latest_event() {
     store.upsert_thread(&thread("t-old", 1, 10)).unwrap();
     store.upsert_thread(&thread("t-new", 1, 20)).unwrap();
     let fg = store
-        .foreground_thread("workspace:current", "user:local")
+        .foreground_thread("workspace:current", "user:local", "session-a")
         .unwrap()
         .expect("应存在前台线索");
     assert_eq!(fg.thread_id, "t-new");
@@ -129,7 +130,7 @@ fn touch_thread_increments_hit_count() {
     store.upsert_thread(&thread("t-1", 1, 10)).unwrap();
     assert!(store.touch_thread("t-1", 30).unwrap());
     let fg = store
-        .foreground_thread("workspace:current", "user:local")
+        .foreground_thread("workspace:current", "user:local", "session-a")
         .unwrap()
         .expect("应存在前台线索");
     assert_eq!(fg.hit_count, 2);
@@ -143,10 +144,48 @@ fn archived_thread_is_not_foreground_anymore() {
     assert!(store.archive_thread("t-1", 40).unwrap());
     assert!(
         store
-            .foreground_thread("workspace:current", "user:local")
+            .foreground_thread("workspace:current", "user:local", "session-a")
             .unwrap()
             .is_none()
     );
+}
+
+#[test]
+fn legacy_thread_table_gets_session_column_and_archives_stale_foreground() {
+    let (_root, store) = temp_store("session-migration");
+    store
+        .connection
+        .execute_batch(
+            "DROP TABLE memory_threads;
+             CREATE TABLE memory_threads (
+                 thread_id TEXT PRIMARY KEY,
+                 namespace_ref TEXT NOT NULL,
+                 user_ref TEXT NOT NULL,
+                 topic TEXT NOT NULL,
+                 signature TEXT NOT NULL,
+                 label TEXT NOT NULL DEFAULT '',
+                 summary TEXT NOT NULL DEFAULT '',
+                 status TEXT NOT NULL DEFAULT 'open',
+                 hit_count INTEGER NOT NULL DEFAULT 1,
+                 last_event_at_ms INTEGER NOT NULL,
+                 created_at_ms INTEGER NOT NULL,
+                 updated_at_ms INTEGER NOT NULL
+             );
+             INSERT INTO memory_threads (thread_id, namespace_ref, user_ref, topic, signature,
+                 status, hit_count, last_event_at_ms, created_at_ms, updated_at_ms)
+             VALUES ('t-legacy', 'workspace:current', 'user:local', '旧全局槽位', '', 'open', 16, 10, 10, 10);",
+        )
+        .unwrap();
+    store.initialize_schema().unwrap();
+
+    assert!(
+        store
+            .foreground_thread("workspace:current", "user:local", "session-a")
+            .unwrap()
+            .is_none(),
+        "无会话归属的历史线索不得成为任何会话的前台线索"
+    );
+    assert_eq!(store.thread_count().unwrap(), 1, "迁移不得删除历史行");
 }
 
 #[test]

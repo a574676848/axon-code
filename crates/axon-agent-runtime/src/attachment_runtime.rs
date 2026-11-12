@@ -16,7 +16,7 @@ use axon_domain::{
     AttachmentSensitivity, AttachmentSource,
 };
 
-use crate::{AgentModelLocalFileRef, AgentModelLocalImageRef};
+use crate::{AgentModelLocalFileRef, AgentModelLocalImageRef, truncate_utf8_bytes};
 
 pub use local::{
     AttachmentClipboardImageRecord, AttachmentClipboardImageRequest, AttachmentDragDropEntry,
@@ -27,8 +27,12 @@ pub use local::{
 
 /// 图片附件最大字节数。
 pub const MAX_IMAGE_SIZE: usize = 5 * 1024 * 1024;
-/// 文本、PDF 与工具输出附件最大字节数。
-pub const MAX_TOOL_OUTPUT: usize = 100 * 1024;
+/// 非图片附件（文本、PDF 与工具输出）最大字节数。
+///
+/// 模型只拿到有界预览与只读路径，原始体积不直接进入上下文，因此与图片保持同一上限。
+pub const MAX_TOOL_OUTPUT: usize = 5 * 1024 * 1024;
+/// 附件内联预览最大字节数；原始字节始终留在 BlobStore，模型按需读取。
+pub const MAX_INLINE_PREVIEW: usize = 100 * 1024;
 /// 默认 BlobStore TTL，单位毫秒。
 pub const BLOB_DEFAULT_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
 /// 用户级附件归档目录名。
@@ -378,11 +382,7 @@ impl AttachmentIngressRuntime {
     fn create_attachment_ref(&mut self, request: AttachmentIngressRequest) -> AttachmentRef {
         self.next_attachment_id += 1;
         let byte_len = request.bytes.len();
-        let preview = build_preview(
-            &request.bytes,
-            request.kind,
-            self.policy.max_tool_output_bytes,
-        );
+        let preview = build_preview(&request.bytes, request.kind, MAX_INLINE_PREVIEW);
 
         AttachmentRef {
             id: AttachmentId(self.next_attachment_id),
@@ -428,10 +428,11 @@ impl Default for AttachmentIngressRuntime {
 }
 
 fn build_preview(bytes: &[u8], kind: AttachmentKind, limit: usize) -> Option<String> {
-    if kind != AttachmentKind::Text || bytes.len() > limit {
+    if kind != AttachmentKind::Text {
         return None;
     }
-    String::from_utf8(bytes.to_vec()).ok()
+    let text = String::from_utf8(bytes.to_vec()).ok()?;
+    Some(truncate_utf8_bytes(&text, limit).to_owned())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

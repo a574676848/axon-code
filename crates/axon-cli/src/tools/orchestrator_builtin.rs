@@ -223,7 +223,7 @@ pub(super) fn execute_memory_search(
         }
     };
 
-    let time_range = match memory_search_time_range(value) {
+    let time_range = match resolve_memory_search_time_range(value, query) {
         Ok(range) => range,
         Err(message) => return failed_tool_input_receipt(tool_call, message),
     };
@@ -243,7 +243,21 @@ pub(super) fn execute_memory_search(
     }
 }
 
-/// 解析 memory_search 的可选时间窗；两端必须成对出现且起点不晚于终点。
+/// 解析 memory_search 的最终时间窗：显式字段优先，未给时按查询文本推断相对时间。
+///
+/// 相对时间推断的唯一实现在 `axon_agent_runtime::MemoryToolDispatcher`，
+/// 这里只负责把两条来源按优先级串起来，禁止在本文件再写一份解析器。
+fn resolve_memory_search_time_range(
+    value: &serde_json::Value,
+    query: &str,
+) -> Result<Option<(i64, i64)>, &'static str> {
+    match memory_search_time_range(value)? {
+        Some(range) => Ok(Some(range)),
+        None => Ok(axon_agent_runtime::MemoryToolDispatcher::infer_time_range_from_query(query)),
+    }
+}
+
+/// 解析 memory_search 的**显式**可选时间窗；两端必须成对出现且起点不晚于终点。
 fn memory_search_time_range(value: &serde_json::Value) -> Result<Option<(i64, i64)>, &'static str> {
     let read = |field: &str| match value.get(field) {
         None | Some(serde_json::Value::Null) => Ok(None),

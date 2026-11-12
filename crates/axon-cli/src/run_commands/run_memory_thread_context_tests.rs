@@ -6,6 +6,7 @@ use axon_memory::{COMMITMENT_STATUS_OPEN, MemoryCommitment, MemoryThread, THREAD
 use axon_memory_read::MEMORY_GLOBAL_NAMESPACE_REF;
 
 const USER_REF: &str = "user:local";
+const SESSION: &str = "session-a";
 const TZ_OFFSET_MIN: i32 = 480;
 
 fn temp_root(label: &str) -> PathBuf {
@@ -33,6 +34,7 @@ fn seed_existing_state(root: &Path, config: &AxonConfig) {
                 thread_id: "thread-seed".to_owned(),
                 namespace_ref: MEMORY_GLOBAL_NAMESPACE_REF.to_owned(),
                 user_ref: USER_REF.to_owned(),
+                session_ref: SESSION.to_owned(),
                 topic: "把并发锁的释放位置改掉".to_owned(),
                 signature: "signature-seed".to_owned(),
                 label: String::new(),
@@ -66,7 +68,7 @@ fn empty_store_yields_no_context() {
     let root = fresh_root("empty");
     let config = AxonConfig::default();
 
-    let context = prepare_memory_thread_context(&root, &config, TZ_OFFSET_MIN);
+    let context = prepare_memory_thread_context(&root, &config, SESSION, TZ_OFFSET_MIN);
 
     assert_eq!(context, None, "空库不得凭空生成线索段");
     let _ = std::fs::remove_dir_all(root);
@@ -78,8 +80,8 @@ fn seeded_thread_and_commitment_are_rendered() {
     let config = AxonConfig::default();
     seed_existing_state(&root, &config);
 
-    let context =
-        prepare_memory_thread_context(&root, &config, TZ_OFFSET_MIN).expect("应渲染既有线索与承诺");
+    let context = prepare_memory_thread_context(&root, &config, SESSION, TZ_OFFSET_MIN)
+        .expect("应渲染既有线索与承诺");
 
     assert!(context.contains("## 当前线索"));
     assert!(context.contains("命中 3 次"));
@@ -93,10 +95,10 @@ fn maintain_writes_thread_and_open_commitment() {
     let root = fresh_root("maintain");
     let config = AxonConfig::default();
 
-    let commitment = maintain_memory_thread(&root, &config, "明天提醒我交周报", 1_000);
+    let commitment = maintain_memory_thread(&root, &config, SESSION, "明天提醒我交周报", 1_000);
     assert!(commitment.is_some(), "承诺句式必须落库并返回承诺 ID");
 
-    let context = prepare_memory_thread_context(&root, &config, TZ_OFFSET_MIN)
+    let context = prepare_memory_thread_context(&root, &config, SESSION, TZ_OFFSET_MIN)
         .expect("写入后本轮应能读到线索与承诺");
     assert!(context.contains("## 当前线索"));
     assert!(context.contains("## 未完成承诺"));
@@ -109,10 +111,11 @@ fn closure_sentence_closes_open_commitment() {
     let root = fresh_root("closure");
     let config = AxonConfig::default();
 
-    maintain_memory_thread(&root, &config, "明天提醒我交周报", 1_000);
-    maintain_memory_thread(&root, &config, "周报交了", 2_000);
+    maintain_memory_thread(&root, &config, SESSION, "明天提醒我交周报", 1_000);
+    maintain_memory_thread(&root, &config, SESSION, "周报交了", 2_000);
 
-    let context = prepare_memory_thread_context(&root, &config, TZ_OFFSET_MIN).unwrap_or_default();
+    let context =
+        prepare_memory_thread_context(&root, &config, SESSION, TZ_OFFSET_MIN).unwrap_or_default();
     assert!(
         !context.contains("## 未完成承诺"),
         "已闭合的承诺不得继续渲染：{context}"
@@ -126,9 +129,25 @@ fn read_is_side_effect_free_across_repeated_calls() {
     let config = AxonConfig::default();
     seed_existing_state(&root, &config);
 
-    let first = prepare_memory_thread_context(&root, &config, TZ_OFFSET_MIN);
-    let second = prepare_memory_thread_context(&root, &config, TZ_OFFSET_MIN);
+    let first = prepare_memory_thread_context(&root, &config, SESSION, TZ_OFFSET_MIN);
+    let second = prepare_memory_thread_context(&root, &config, SESSION, TZ_OFFSET_MIN);
 
     assert_eq!(first, second, "重复调用必须产出逐字节一致的上下文段");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn other_session_does_not_see_the_thread_segment() {
+    let root = fresh_root("session-isolation");
+    let config = AxonConfig::default();
+    seed_existing_state(&root, &config);
+
+    let other = prepare_memory_thread_context(&root, &config, "session-b", TZ_OFFSET_MIN)
+        .unwrap_or_default();
+
+    assert!(
+        !other.contains("## 当前线索"),
+        "其它会话不得读到本会话的线索：{other}"
+    );
     let _ = std::fs::remove_dir_all(root);
 }

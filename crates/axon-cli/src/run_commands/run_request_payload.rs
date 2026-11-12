@@ -152,6 +152,7 @@ pub(super) fn build_run_model_payload(
         let memory_thread_context = prepare_memory_thread_context(
             Path::new(&input.startup.home_root),
             input.config,
+            input.session_id,
             chrono::Local::now().offset().local_minus_utc() / 60,
         );
         // 本机资源扫描只读元数据：命中触发词才扫描，否则不触碰文件系统。
@@ -446,6 +447,39 @@ mod tests {
             Some("local-upload://file-session/0")
         );
         assert!(file.archive_ref.is_some());
+    }
+
+    #[test]
+    fn large_text_attachment_is_accepted_with_bounded_preview() {
+        let root = axon_test_support::test_temp_dir();
+        let file_path = root.path().join("pasted-215k.md");
+        let body = "# 端口配置记录\n".repeat(16 * 1024);
+        std::fs::write(&file_path, &body).unwrap();
+        let archive_root = root.path().join("archive");
+        let payload = AgentModelPayload {
+            messages: vec![AgentModelMessage::text("user", "看附件")],
+            model_tools: Vec::new(),
+            context_section_count: 0,
+            agent_pane_included: false,
+            injected_context_messages: Vec::new(),
+        };
+
+        let payload = attach_vision_files_to_payload_with_archive_root(
+            payload,
+            std::slice::from_ref(&file_path),
+            "large-file-session",
+            false,
+            &archive_root,
+        )
+        .expect("超过 100 KiB 的文本附件必须被接收");
+
+        let file = &payload.messages[0].local_files[0];
+        let expected_path = file_path.to_string_lossy().to_string();
+        assert_eq!(file.path.as_deref(), Some(expected_path.as_str()));
+        assert_eq!(file.byte_len, Some(body.len() as u64));
+        assert!(file.preview.len() <= axon_agent_runtime::MAX_INLINE_PREVIEW);
+        assert!(file.preview.len() + 3 >= axon_agent_runtime::MAX_INLINE_PREVIEW);
+        assert!(body.starts_with(&file.preview));
     }
 
     #[test]

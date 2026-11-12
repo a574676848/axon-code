@@ -72,7 +72,8 @@ impl MemoryPhysicalConsistencyCheckRuntime {
         let probe_limit = probe_limit(input.max_probe_records);
         let sqlite_store = input.orchestrator.sqlite_store()?;
         let sqlite_recallable_records = sqlite_store.recallable_record_count(input.now_ms)?;
-        let recallable = sqlite_store.recallable_records_limited(input.now_ms, probe_limit + 1)?;
+        let recallable =
+            sqlite_store.recallable_records_limited(input.now_ms, None, probe_limit + 1)?;
         let checked_records = sqlite_recallable_records.min(probe_limit);
         let (text_index_missing_records, text_index_unreadable) =
             text_index_drift(input, &recallable, checked_records);

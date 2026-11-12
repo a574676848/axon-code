@@ -508,14 +508,20 @@ pub(crate) fn tool_result_source_ref(call_id: &str) -> String {
 /// 将文件预览限制在 Provider 传输边界内，避免历史消息重复放大。
 #[must_use]
 pub fn bound_provider_file_preview(preview: &str) -> String {
-    if preview.len() <= MAX_PROVIDER_FILE_PREVIEW_BYTES {
-        return preview.to_owned();
+    truncate_utf8_bytes(preview, MAX_PROVIDER_FILE_PREVIEW_BYTES).to_owned()
+}
+
+/// 按 UTF-8 字符边界把文本截断到 `max_bytes` 以内。
+#[must_use]
+pub fn truncate_utf8_bytes(text: &str, max_bytes: usize) -> &str {
+    if text.len() <= max_bytes {
+        return text;
     }
-    let mut end = MAX_PROVIDER_FILE_PREVIEW_BYTES;
-    while !preview.is_char_boundary(end) {
+    let mut end = max_bytes;
+    while !text.is_char_boundary(end) {
         end -= 1;
     }
-    preview[..end].to_owned()
+    &text[..end]
 }
 
 fn retention_class_for_role(role: &str) -> RetentionClass {

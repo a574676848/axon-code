@@ -27,6 +27,7 @@ fn temp_store(label: &str) -> MemorySqliteStore {
 const SCOPE: ThreadScope<'static> = ThreadScope {
     namespace_ref: "workspace:current",
     user_ref: "user:local",
+    session_ref: "session-a",
 };
 
 #[test]

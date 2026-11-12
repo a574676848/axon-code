@@ -15,8 +15,6 @@ use axon_memory_write::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::{AgentRunToolResultReceipt, ProviderToolCall, agent_run_completed_tool_receipt};
-
 const MEMORY_TOOL_CONFIDENCE_BASIS_POINTS: u16 = 8_500;
 const MEMORY_TOOL_IMPORTANCE_BASIS_POINTS: u16 = 8_000;
 const SQLITE_MAX_SAFE_ID: u64 = 9_223_372_036_854_775_806;
@@ -112,110 +110,19 @@ impl MemoryToolDispatcher {
         Self { timeout }
     }
 
-    /// 执行当前 scope 下的 memory_search 或 memory_write。
-    pub fn dispatch(
-        &self,
-        config_path: &Path,
-        config: &AxonConfig,
-        scope: &MemoryToolScope,
-        conversation_id: &str,
-        turn_id: &str,
-        call: &ProviderToolCall,
-    ) -> AxonResult<AgentRunToolResultReceipt> {
-        match call.dispatch_name() {
-            "builtin.memory_search" => self.search(config_path, config, scope, call),
-            "builtin.memory_write" => {
-                self.write(config_path, config, scope, conversation_id, turn_id, call)
-            }
-            _ => Err(AxonError::tool_invalid_definition(
-                "非 Memory canonical tool",
-            )),
-        }
-    }
-
-    /// 解析可选更新时间窗；两端必须成对出现且起点不晚于终点。
-    fn parse_time_range(value: &serde_json::Value) -> AxonResult<Option<(i64, i64)>> {
-        let since = Self::optional_i64_field(value, crate::MEMORY_SEARCH_SINCE_FIELD)?;
-        let until = Self::optional_i64_field(value, crate::MEMORY_SEARCH_UNTIL_FIELD)?;
-        match (since, until) {
-            (None, None) => Ok(None),
-            (Some(start), Some(end)) if start <= end => Ok(Some((start, end))),
-            (Some(_), Some(_)) => Err(AxonError::tool_invalid_arguments(
-                "memory_search 时间窗起点不得晚于终点",
-            )),
-            _ => Err(AxonError::tool_invalid_arguments(
-                "memory_search 时间窗必须同时给出 since_ms 与 until_ms",
-            )),
-        }
-    }
-
     /// 未显式给出毫秒时间窗时，从查询文本里的相对时间词推断闭区间。
     ///
     /// 只认 `parse_temporal_hint` 白名单里的可判定词（今天 / 昨天 / 上周 / 近3天…）；
     /// 「最近 / 之前 / 上次」这类模糊词一律不解析，宁可漏检也不能把范围收错。
-    fn infer_time_range_from_query(query: &str) -> Option<(i64, i64)> {
+    ///
+    /// 这是全仓唯一的相对时间推断入口：canonical 工具派发与 axon-cli 工具编排器
+    /// 都必须调它，禁止各自维护一份解析逻辑。
+    pub fn infer_time_range_from_query(query: &str) -> Option<(i64, i64)> {
         let now = i64::try_from(now_ms()).ok()?;
         let tz_offset_min =
             i32::try_from(chrono::Local::now().offset().local_minus_utc() / 60).ok()?;
         let range = axon_memory::parse_temporal_hint(query, now, tz_offset_min)?;
         Some((range.start_ms, range.end_ms))
-    }
-
-    fn optional_i64_field(value: &serde_json::Value, field: &str) -> AxonResult<Option<i64>> {
-        match value.get(field) {
-            None | Some(serde_json::Value::Null) => Ok(None),
-            Some(raw) => raw.as_i64().map(Some).ok_or_else(|| {
-                AxonError::tool_invalid_arguments(format!(
-                    "memory_search {field} 必须是整数毫秒时间戳"
-                ))
-            }),
-        }
-    }
-
-    fn search(
-        &self,
-        config_path: &Path,
-        config: &AxonConfig,
-        scope: &MemoryToolScope,
-        call: &ProviderToolCall,
-    ) -> AxonResult<AgentRunToolResultReceipt> {
-        let value = call.input.as_json().ok_or_else(|| {
-            AxonError::tool_invalid_arguments("builtin.memory_search 需要 JSON 参数")
-        })?;
-        let query = value
-            .get("query")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| AxonError::tool_invalid_arguments("memory_search query 必须非空"))?;
-        let limit = value
-            .get("limit")
-            .and_then(serde_json::Value::as_u64)
-            .map_or(Ok(crate::MEMORY_SEARCH_DEFAULT_LIMIT), |value| {
-                usize::try_from(value)
-                    .ok()
-                    .filter(|value| *value > 0)
-                    .ok_or_else(|| {
-                        AxonError::tool_invalid_arguments("memory_search limit 必须为正整数")
-                    })
-            })?;
-        let time_range = match Self::parse_time_range(value)? {
-            Some(range) => Some(range),
-            None => Self::infer_time_range_from_query(query),
-        };
-        let summary = memory_query_summary(
-            config_path,
-            config,
-            query,
-            limit,
-            now_ms(),
-            self.timeout,
-            Some(scope.hybrid_scope()?),
-            time_range,
-        )
-        .map_err(AxonError::runtime_protocol)?;
-        let projection = agent_run_completed_tool_receipt(call, summary, None, false);
-        Ok(receipt(projection))
     }
 
     /// 在单个可信 scope 内执行 canonical Memory 查询。
@@ -237,50 +144,6 @@ impl MemoryToolDispatcher {
             input.time_range,
         )
         .map_err(AxonError::runtime_protocol)
-    }
-
-    fn write(
-        &self,
-        config_path: &Path,
-        config: &AxonConfig,
-        scope: &MemoryToolScope,
-        conversation_id: &str,
-        turn_id: &str,
-        call: &ProviderToolCall,
-    ) -> AxonResult<AgentRunToolResultReceipt> {
-        let value = call.input.as_json().ok_or_else(|| {
-            AxonError::tool_invalid_arguments("builtin.memory_write 需要 JSON 参数")
-        })?;
-        let kind = value
-            .get("kind")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
-        let summary = non_blank(value, "summary")?;
-        let evidence = non_blank(value, "evidence")?;
-        let supersedes_memory_ids = parse_ids(value.get("supersedes_memory_ids"))?;
-        let report = self.write_canonical(CanonicalMemoryWriteInput {
-            config_path,
-            config,
-            scope,
-            conversation_id,
-            turn_id,
-            kind,
-            summary,
-            evidence,
-            supersedes_memory_ids,
-            now_ms: now_ms(),
-        })?;
-        let projection = agent_run_completed_tool_receipt(
-            call,
-            if report.record.is_some() {
-                "Memory 已写入"
-            } else {
-                "Memory 未通过准入"
-            },
-            None,
-            false,
-        );
-        Ok(receipt(projection))
     }
 
     /// 通过统一准入、SQLite 与索引投影流水线写入 Memory。
@@ -412,43 +275,6 @@ fn source_origin(kind: &str) -> MemorySourceOrigin {
     }
 }
 
-fn non_blank<'a>(value: &'a serde_json::Value, field: &str) -> AxonResult<&'a str> {
-    value
-        .get(field)
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| AxonError::tool_invalid_arguments(format!("memory_write {field} 必须非空")))
-}
-
-fn parse_ids(value: Option<&serde_json::Value>) -> AxonResult<Vec<MemoryId>> {
-    let Some(value) = value else {
-        return Ok(Vec::new());
-    };
-    let items = value
-        .as_array()
-        .map_or_else(|| std::slice::from_ref(value), |items| items);
-    items
-        .iter()
-        .map(|item| {
-            item.as_u64()
-                .or_else(|| {
-                    item.as_str().and_then(|text| {
-                        let text = text.trim();
-                        (!text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()))
-                            .then(|| text.parse::<u64>().ok())
-                            .flatten()
-                    })
-                })
-                .filter(|id| *id > 0)
-                .map(MemoryId)
-                .ok_or_else(|| {
-                    AxonError::tool_invalid_arguments("supersedes_memory_ids 包含无效 ID")
-                })
-        })
-        .collect()
-}
-
 fn stable_id(value: &str) -> u64 {
     let bytes = Sha256::digest(value.as_bytes());
     (u64::from_be_bytes(bytes[..8].try_into().expect("digest")) % SQLITE_MAX_SAFE_ID) + 1
@@ -465,20 +291,6 @@ fn now_ms() -> u64 {
         .as_millis()
         .try_into()
         .unwrap_or(u64::MAX)
-}
-
-fn receipt(projection: crate::AgentRunToolReceiptProjection) -> AgentRunToolResultReceipt {
-    AgentRunToolResultReceipt {
-        provider_call_id: projection.provider_call_id,
-        tool_name: projection.tool_name,
-        status: projection.status,
-        summary: projection.summary,
-        metadata: projection.metadata,
-        output_ref: projection.output_ref,
-        error_type: projection.error_type,
-        remote_trigger_allowed: projection.remote_trigger_allowed,
-        filesystem_write_performed: projection.filesystem_write_performed,
-    }
 }
 
 #[cfg(test)]

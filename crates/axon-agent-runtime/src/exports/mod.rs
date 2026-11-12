@@ -77,7 +77,7 @@ pub use crate::agent_model_message::{
     AgentModelHistorySnapshot, AgentModelLocalFileRef, AgentModelLocalImageRef, AgentModelMessage,
     AgentModelMessageKind, AgentModelMessageProviderMetadata, AgentModelMessageSource,
     AgentModelToolCallMetadata, AgentModelToolResultMetadata, AnthropicThinkingBlockMetadata,
-    RetentionClass, bound_provider_file_preview,
+    RetentionClass, bound_provider_file_preview, truncate_utf8_bytes,
 };
 pub use crate::agent_model_payload::{
     AgentModelMemoryGuidanceProjection, AgentModelPayload, AgentModelPayloadInput,
@@ -150,7 +150,7 @@ pub use crate::attachment_runtime::{
     AttachmentIngressPolicy, AttachmentIngressRequest, AttachmentIngressRuntime,
     AttachmentLocalUploadRequest, AttachmentPathKind, AttachmentRemoteUploadRequest,
     AttachmentScreenshotRecord, AttachmentScreenshotRequest, BLOB_DEFAULT_TTL_MS, MAX_IMAGE_SIZE,
-    MAX_TOOL_OUTPUT, default_attachment_archive_root,
+    MAX_INLINE_PREVIEW, MAX_TOOL_OUTPUT, default_attachment_archive_root,
 };
 pub use crate::auto_changelog::{
     ChangelogConfig, ChangelogEntry, ChangelogGenerator, ChangelogItem, ChangelogSection,

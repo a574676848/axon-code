@@ -363,8 +363,6 @@ mod memory_embedding_provider_tests;
 mod memory_experience;
 #[path = "memory/memory_governance.rs"]
 mod memory_governance;
-#[path = "memory/memory_governance_policy.rs"]
-mod memory_governance_policy;
 #[cfg(test)]
 #[path = "memory/memory_projection_reconcile_tests.rs"]
 mod memory_projection_reconcile_tests;

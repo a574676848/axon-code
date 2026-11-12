@@ -13,7 +13,6 @@ use crate::{
         MEMORY_CONSOLIDATION_REASON_CONFLICT_ARCHIVED, MemoryConflictRecord,
         MemoryConsolidationInput,
     },
-    memory_governance_policy::MEMORY_ARCHIVE_SCORE_THRESHOLD_BASIS_POINTS,
 };
 
 const MEMORY_DEFAULT_NAMESPACE_REF: &str = "memory-scope:local";
@@ -31,6 +30,10 @@ pub(super) fn is_expired_record(record: &MemorySqliteRecord, now_ms: u64) -> boo
         .is_some_and(|expires_at_ms| expires_at_ms <= now_ms)
 }
 
+/// 低活性归档：判定口径统一取 `axon_memory::aging::should_archive`。
+///
+/// 该判定自带活跃性前置条件（未归档 + Weak/Strong + content_ref 非空），
+/// 因此墓碑记录与空引用记录不会被重复改写 `updated_at_ms`。
 pub(super) fn archive_low_activity_records(
     records: Vec<MemorySqliteRecord>,
     now_ms: u64,
@@ -39,10 +42,7 @@ pub(super) fn archive_low_activity_records(
     let records = records
         .into_iter()
         .map(|mut record| {
-            let score = decayed_score_basis_points(&record, now_ms);
-            if record.archived_at_ms.is_none()
-                && score < MEMORY_ARCHIVE_SCORE_THRESHOLD_BASIS_POINTS
-            {
+            if axon_memory::should_archive(&record, now_ms) {
                 record.archived_at_ms = Some(now_ms);
                 record.updated_at_ms = now_ms;
                 archived = archived.saturating_add(1);

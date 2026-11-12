@@ -5,9 +5,7 @@ use std::collections::BTreeSet;
 use axon_domain::{AxonError, AxonResult, MemorySourceOrigin, MemoryState, MemoryTombstone};
 use serde::Serialize;
 
-use crate::{
-    MemorySqliteRecord, memory_governance_policy::MEMORY_ARCHIVE_SCORE_THRESHOLD_BASIS_POINTS,
-};
+use crate::MemorySqliteRecord;
 
 /// 记忆纠错：召回 scope 与当前任务不匹配。
 pub const MEMORY_AUTONOMY_REASON_SCOPE_MISMATCH: &str = "scopeMismatch";
@@ -158,7 +156,7 @@ impl MemoryAutonomyFeedbackRuntime {
                 if should_forget(record, strong) {
                     tombstone_record(record, &content_ref, now_ms);
                     report.forgotten_records = report.forgotten_records.saturating_add(1);
-                } else if should_archive(record) {
+                } else if should_archive_after_downrank(record, now_ms) {
                     record.archived_at_ms = Some(now_ms);
                     report.archived_records = report.archived_records.saturating_add(1);
                 }
@@ -232,16 +230,19 @@ fn downrank_record(record: &mut MemorySqliteRecord, now_ms: u64, strong: bool) {
     }
 }
 
-fn should_archive(record: &MemorySqliteRecord) -> bool {
-    record.archived_at_ms.is_none()
-        && governance_score_basis_points(record) < MEMORY_ARCHIVE_SCORE_THRESHOLD_BASIS_POINTS
-}
-
 fn should_forget(record: &MemorySqliteRecord, strong: bool) -> bool {
     strong
         && record.archived_at_ms.is_none()
         && governance_score_basis_points(record)
             < MEMORY_AUTONOMY_FORGET_SCORE_THRESHOLD_BASIS_POINTS
+}
+
+/// 降级后是否立即归档：与定时治理共用 `axon_memory::should_archive` 的衰减口径。
+///
+/// 不能用未经衰减的置信度/重要度中点：同一个 1500 阈值在中点口径下几乎永不触发，
+/// 会让自治反馈永远停在"只降不归档"，与定时治理形成两套互不相容的判定。
+fn should_archive_after_downrank(record: &MemorySqliteRecord, now_ms: u64) -> bool {
+    axon_memory::should_archive(record, now_ms)
 }
 
 fn governance_score_basis_points(record: &MemorySqliteRecord) -> u16 {

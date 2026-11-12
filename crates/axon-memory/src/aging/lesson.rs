@@ -9,8 +9,6 @@ use axon_domain::MemoryKind;
 pub const LESSON_NORMAL_MAX_DAYS: i64 = 180;
 /// 半权重注入的上限天数。
 pub const LESSON_STALE_MAX_DAYS: i64 = 365;
-/// 半权重系数（basis point）。
-pub const LESSON_STALE_WEIGHT_BP: u16 = 5_000;
 
 const MS_PER_DAY: i64 = 86_400_000;
 
@@ -47,28 +45,6 @@ pub fn lesson_freshness(kind: MemoryKind, updated_at_ms: u64, now_ms: u64) -> Le
         LessonFreshness::HalfWeight
     } else {
         LessonFreshness::Expired
-    }
-}
-
-/// 是否允许主动注入（P2 线索/教训注入用）。
-#[must_use]
-pub fn should_inject_actively(kind: MemoryKind, updated_at_ms: u64, now_ms: u64) -> bool {
-    !matches!(
-        lesson_freshness(kind, updated_at_ms, now_ms),
-        LessonFreshness::Expired
-    )
-}
-
-/// 按保质期折算后的重要度。
-#[must_use]
-pub fn effective_importance_bp(importance_bp: u16, freshness: LessonFreshness) -> u16 {
-    match freshness {
-        LessonFreshness::Fresh => importance_bp,
-        LessonFreshness::HalfWeight => {
-            u16::try_from(u32::from(importance_bp) * u32::from(LESSON_STALE_WEIGHT_BP) / 10_000)
-                .unwrap_or(0)
-        }
-        LessonFreshness::Expired => 0,
     }
 }
 
@@ -110,14 +86,13 @@ mod tests {
     }
 
     #[test]
-    fn four_hundred_day_old_lesson_is_not_injected_but_still_retrievable() {
+    fn four_hundred_day_old_lesson_is_expired() {
         let now = 1_000 * DAY;
         let updated = now - 400 * DAY;
         assert_eq!(
             lesson_freshness(MemoryKind::Procedure, updated, now),
             LessonFreshness::Expired
         );
-        assert!(!should_inject_actively(MemoryKind::Procedure, updated, now));
     }
 
     #[test]
@@ -127,23 +102,9 @@ mod tests {
             lesson_freshness(MemoryKind::Knowledge, now - 900 * DAY, now),
             LessonFreshness::Fresh
         );
-        assert!(should_inject_actively(
-            MemoryKind::Preference,
-            now - 900 * DAY,
-            now
-        ));
-    }
-
-    #[test]
-    fn half_weight_halves_importance() {
         assert_eq!(
-            effective_importance_bp(8_000, LessonFreshness::HalfWeight),
-            4_000
+            lesson_freshness(MemoryKind::Preference, now - 900 * DAY, now),
+            LessonFreshness::Fresh
         );
-        assert_eq!(
-            effective_importance_bp(8_000, LessonFreshness::Fresh),
-            8_000
-        );
-        assert_eq!(effective_importance_bp(8_000, LessonFreshness::Expired), 0);
     }
 }

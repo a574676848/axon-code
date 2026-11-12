@@ -25,6 +25,7 @@ fn temp_store(label: &str) -> MemorySqliteStore {
 const SCOPE: ThreadScope<'static> = ThreadScope {
     namespace_ref: "workspace:current",
     user_ref: "user:local",
+    session_ref: "session-a",
 };
 
 #[test]
@@ -69,7 +70,7 @@ fn one_off_leaf_does_not_touch_foreground() {
     );
     assert_eq!(store.thread_count().unwrap(), 1);
     let fg = store
-        .foreground_thread(SCOPE.namespace_ref, SCOPE.user_ref)
+        .foreground_thread(SCOPE.namespace_ref, SCOPE.user_ref, SCOPE.session_ref)
         .unwrap()
         .expect("前台线索应保持不变");
     assert_eq!(fg.thread_id, first);
@@ -99,7 +100,7 @@ fn normal_topic_continues_existing_foreground() {
         .expect("应沿用线索");
     assert_eq!(first, second);
     let fg = store
-        .foreground_thread(SCOPE.namespace_ref, SCOPE.user_ref)
+        .foreground_thread(SCOPE.namespace_ref, SCOPE.user_ref, SCOPE.session_ref)
         .unwrap()
         .expect("前台线索应存在");
     assert_eq!(fg.hit_count, 2);
@@ -125,6 +126,7 @@ fn thread_signature_is_namespace_scoped() {
     let other = ThreadScope {
         namespace_ref: "workspace:other",
         user_ref: "user:local",
+        session_ref: "session-a",
     };
     let left = ensure_foreground(&store, &SCOPE, "帮我排查构建失败", 100, true)
         .unwrap()
@@ -142,7 +144,7 @@ fn opened_thread_starts_open_with_single_hit() {
         .unwrap()
         .expect("应建立线索");
     let fg = store
-        .foreground_thread(SCOPE.namespace_ref, SCOPE.user_ref)
+        .foreground_thread(SCOPE.namespace_ref, SCOPE.user_ref, SCOPE.session_ref)
         .unwrap()
         .expect("前台线索应存在");
     assert_eq!(fg.thread_id, id);
@@ -183,15 +185,25 @@ fn commitment_id_and_open_commitment_are_stable() {
 }
 
 #[test]
-fn touch_foreground_bumps_hit_count() {
-    let store = temp_store("touch");
-    let id = ensure_foreground(&store, &SCOPE, "帮我排查构建失败", 100, true)
+fn other_session_keeps_its_own_foreground_thread() {
+    let store = temp_store("session-isolation");
+    let other = ThreadScope {
+        namespace_ref: "workspace:current",
+        user_ref: "user:local",
+        session_ref: "session-b",
+    };
+    let mine = ensure_foreground(&store, &SCOPE, "帮我排查构建失败", 100, true)
         .unwrap()
         .expect("应建立线索");
-    assert!(touch_foreground(&store, &id, 300).unwrap());
-    let fg = store
-        .foreground_thread(SCOPE.namespace_ref, SCOPE.user_ref)
+    let theirs = ensure_foreground(&store, &other, "帮我排查构建失败", 200, true)
         .unwrap()
-        .expect("前台线索应存在");
-    assert_eq!(fg.hit_count, 2);
+        .expect("另一会话应建立自己的线索");
+
+    assert_ne!(mine, theirs, "不同会话必须是不同线索");
+    let fg = store
+        .foreground_thread(SCOPE.namespace_ref, SCOPE.user_ref, SCOPE.session_ref)
+        .unwrap()
+        .expect("本会话线索应存在");
+    assert_eq!(fg.thread_id, mine);
+    assert_eq!(fg.hit_count, 1, "另一会话不得累加本会话的命中次数");
 }

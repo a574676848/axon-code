@@ -18,6 +18,9 @@ pub const THREAD_STATUS_OPEN: &str = "open";
 /// 线索已归档，不再作为前台线索复用。
 pub const THREAD_STATUS_ARCHIVED: &str = "archived";
 
+/// 线索的会话归属列名；旧库迁移时用于探测该列是否已存在。
+const THREAD_SESSION_COLUMN: &str = "session_ref";
+
 /// 一条承诺记录。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryCommitment {
@@ -50,6 +53,8 @@ pub struct MemoryThread {
     pub namespace_ref: String,
     /// owner principal。
     pub user_ref: String,
+    /// 归属会话：前台线索按会话隔离，不跨会话复用。
+    pub session_ref: String,
     /// 线索主题（用于 P2 渲染的兜底文本）。
     pub topic: String,
     /// 线索签名（预留给语义去重，本期只写入不参与判断）。
@@ -93,6 +98,7 @@ pub(crate) fn initialize_thread_schema(connection: &Connection) -> AxonResult<()
                 thread_id        TEXT PRIMARY KEY,
                 namespace_ref    TEXT NOT NULL,
                 user_ref         TEXT NOT NULL,
+                session_ref      TEXT NOT NULL DEFAULT '',
                 topic            TEXT NOT NULL,
                 signature        TEXT NOT NULL,
                 label            TEXT NOT NULL DEFAULT '',
@@ -103,11 +109,45 @@ pub(crate) fn initialize_thread_schema(connection: &Connection) -> AxonResult<()
                 created_at_ms    INTEGER NOT NULL,
                 updated_at_ms    INTEGER NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_threads_fg
-                ON memory_threads(namespace_ref, status, last_event_at_ms DESC);
             ",
         )
-        .map_err(|_| AxonError::memory_persistence("Memory 承诺/线索 schema 初始化失败"))
+        .map_err(|_| AxonError::memory_persistence("Memory 承诺/线索 schema 初始化失败"))?;
+    ensure_thread_session_column(connection)?;
+    connection
+        .execute_batch(
+            r"
+            DROP INDEX IF EXISTS idx_threads_fg;
+            CREATE INDEX IF NOT EXISTS idx_threads_session_fg
+                ON memory_threads(namespace_ref, user_ref, session_ref, status, last_event_at_ms DESC);
+            ",
+        )
+        .map_err(|_| AxonError::memory_persistence("Memory 线索索引初始化失败"))
+}
+
+/// 为旧库补齐 `session_ref` 列，并归档无法归属任何会话的遗留前台线索。
+///
+/// 迁移只发生一次：加列与归档在同一个事务性批内完成，历史行一条不删。
+fn ensure_thread_session_column(connection: &Connection) -> AxonResult<()> {
+    let mut statement = connection
+        .prepare("SELECT name FROM pragma_table_info('memory_threads')")
+        .map_err(|_| AxonError::memory_persistence("Memory 线索表结构读取失败"))?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|_| AxonError::memory_persistence("Memory 线索表结构读取失败"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| AxonError::memory_persistence("Memory 线索表结构读取失败"))?;
+    if columns.iter().any(|column| column == THREAD_SESSION_COLUMN) {
+        return Ok(());
+    }
+    // 旧库的前台线索没有会话归属，无法判断属于哪条对话：直接归档，
+    // 让新版按会话重建，避免历史全局槽位继续被任意会话复用。
+    connection
+        .execute_batch(&format!(
+            "ALTER TABLE memory_threads ADD COLUMN {THREAD_SESSION_COLUMN} TEXT NOT NULL DEFAULT '';\n\
+             UPDATE memory_threads SET status = '{THREAD_STATUS_ARCHIVED}' \
+             WHERE session_ref = '' AND status = '{THREAD_STATUS_OPEN}';"
+        ))
+        .map_err(|_| AxonError::memory_persistence("Memory 线索会话列迁移失败"))
 }
 
 impl MemorySqliteStore {
@@ -117,9 +157,9 @@ impl MemorySqliteStore {
             .execute(
                 r"
                 INSERT INTO memory_threads (
-                    thread_id, namespace_ref, user_ref, topic, signature, label, summary,
+                    thread_id, namespace_ref, user_ref, session_ref, topic, signature, label, summary,
                     status, hit_count, last_event_at_ms, created_at_ms, updated_at_ms
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                 ON CONFLICT(thread_id) DO UPDATE SET
                     topic = excluded.topic,
                     label = excluded.label,
@@ -133,6 +173,7 @@ impl MemorySqliteStore {
                     thread.thread_id,
                     thread.namespace_ref,
                     thread.user_ref,
+                    thread.session_ref,
                     thread.topic,
                     thread.signature,
                     thread.label,
@@ -148,20 +189,22 @@ impl MemorySqliteStore {
         Ok(())
     }
 
-    /// 取命名空间内最近活跃的前台线索（`status = open` 且 `last_event_at_ms` 最新）。
+    /// 取指定会话内最近活跃的前台线索（`status = open` 且 `last_event_at_ms` 最新）。
     pub fn foreground_thread(
         &self,
         namespace_ref: &str,
         user_ref: &str,
+        session_ref: &str,
     ) -> AxonResult<Option<MemoryThread>> {
         self.connection
             .query_row(
                 &format!(
                     "SELECT {THREAD_COLUMNS} FROM memory_threads \
-                     WHERE namespace_ref = ?1 AND user_ref = ?2 AND status = ?3 \
+                     WHERE namespace_ref = ?1 AND user_ref = ?2 AND session_ref = ?3 \
+                     AND status = ?4 \
                      ORDER BY last_event_at_ms DESC, thread_id ASC LIMIT 1"
                 ),
-                params![namespace_ref, user_ref, THREAD_STATUS_OPEN],
+                params![namespace_ref, user_ref, session_ref, THREAD_STATUS_OPEN],
                 row_to_thread,
             )
             .optional()
@@ -314,8 +357,8 @@ impl MemorySqliteStore {
     }
 }
 
-const THREAD_COLUMNS: &str = "thread_id, namespace_ref, user_ref, topic, signature, label, summary, \
-     status, hit_count, last_event_at_ms, created_at_ms, updated_at_ms";
+const THREAD_COLUMNS: &str = "thread_id, namespace_ref, user_ref, session_ref, topic, signature, \
+     label, summary, status, hit_count, last_event_at_ms, created_at_ms, updated_at_ms";
 
 const COMMITMENT_COLUMNS: &str = "commitment_id, thread_id, namespace_ref, user_ref, text, status, \
      channel, created_at_ms, closed_at_ms";
@@ -325,15 +368,16 @@ fn row_to_thread(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoryThread> {
         thread_id: row.get(0)?,
         namespace_ref: row.get(1)?,
         user_ref: row.get(2)?,
-        topic: row.get(3)?,
-        signature: row.get(4)?,
-        label: row.get(5)?,
-        summary: row.get(6)?,
-        status: row.get(7)?,
-        hit_count: row.get(8)?,
-        last_event_at_ms: row.get(9)?,
-        created_at_ms: row.get(10)?,
-        updated_at_ms: row.get(11)?,
+        session_ref: row.get(3)?,
+        topic: row.get(4)?,
+        signature: row.get(5)?,
+        label: row.get(6)?,
+        summary: row.get(7)?,
+        status: row.get(8)?,
+        hit_count: row.get(9)?,
+        last_event_at_ms: row.get(10)?,
+        created_at_ms: row.get(11)?,
+        updated_at_ms: row.get(12)?,
     })
 }
 

@@ -21,7 +21,6 @@ const VOICE_TTS_TIMEOUT: Duration = Duration::from_secs(60);
 /// 试听合成的总超时；首次试听要加载模型，给足冷启动余量。
 const VOICE_PREVIEW_TIMEOUT: Duration = Duration::from_secs(30);
 
-
 /// 语音合成失败分类：409 归为运行时不可用，其余归为请求失败。
 #[derive(Debug)]
 pub enum VoiceTtsError {

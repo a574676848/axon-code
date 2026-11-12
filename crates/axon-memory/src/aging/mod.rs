@@ -10,8 +10,8 @@ mod lesson;
 
 pub use decay::{MAX_BASIS_POINTS, MEMORY_DEFAULT_HALF_LIFE_DAYS, decayed_score_basis_points};
 pub use lesson::{
-    LESSON_NORMAL_MAX_DAYS, LESSON_STALE_MAX_DAYS, LESSON_STALE_WEIGHT_BP, LessonFreshness,
-    effective_importance_bp, is_lesson_kind, lesson_freshness, should_inject_actively,
+    LESSON_NORMAL_MAX_DAYS, LESSON_STALE_MAX_DAYS, LessonFreshness, is_lesson_kind,
+    lesson_freshness,
 };
 
 use axon_domain::MemoryState;

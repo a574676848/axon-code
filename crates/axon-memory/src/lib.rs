@@ -50,10 +50,10 @@ use std::{
 use axon_domain::{AxonError, AxonResult};
 
 pub use aging::{
-    LESSON_NORMAL_MAX_DAYS, LESSON_STALE_MAX_DAYS, LESSON_STALE_WEIGHT_BP, LessonFreshness,
-    MAX_BASIS_POINTS, MEMORY_ARCHIVE_SCORE_THRESHOLD_BASIS_POINTS, MEMORY_DEFAULT_HALF_LIFE_DAYS,
-    aging_score_basis_points, decayed_score_basis_points, effective_importance_bp, injection_rank,
-    is_active_recallable, is_lesson_kind, lesson_freshness, should_archive, should_inject_actively,
+    LESSON_NORMAL_MAX_DAYS, LESSON_STALE_MAX_DAYS, LessonFreshness, MAX_BASIS_POINTS,
+    MEMORY_ARCHIVE_SCORE_THRESHOLD_BASIS_POINTS, MEMORY_DEFAULT_HALF_LIFE_DAYS,
+    aging_score_basis_points, decayed_score_basis_points, injection_rank, is_active_recallable,
+    is_lesson_kind, lesson_freshness, should_archive,
 };
 pub use artifacts::{
     MEMORY_ARTIFACTS_EXTENSIONS_DIR, MEMORY_ARTIFACTS_PHASE2_DIFF_FILE,

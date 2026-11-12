@@ -6,6 +6,7 @@ fn thread(label: &str, topic: &str, hit_count: i64) -> MemoryThread {
         thread_id: "thread-1".to_owned(),
         namespace_ref: "workspace:current".to_owned(),
         user_ref: "user:local".to_owned(),
+        session_ref: "session-a".to_owned(),
         topic: topic.to_owned(),
         signature: String::new(),
         label: label.to_owned(),

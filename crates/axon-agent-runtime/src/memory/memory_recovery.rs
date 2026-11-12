@@ -161,7 +161,8 @@ impl MemoryPhysicalConsistencyRepairRuntime {
         let repair_limit = physical_repair_limit(input.max_repair_records);
         let sqlite_store = input.orchestrator.sqlite_store()?;
         let sqlite_recallable_records = sqlite_store.recallable_record_count(input.now_ms)?;
-        let recallable = sqlite_store.recallable_records_limited(input.now_ms, repair_limit + 1)?;
+        let recallable =
+            sqlite_store.recallable_records_limited(input.now_ms, None, repair_limit + 1)?;
         let repair_targets = recallable.iter().take(repair_limit).collect::<Vec<_>>();
         let text_documents = repair_targets
             .iter()

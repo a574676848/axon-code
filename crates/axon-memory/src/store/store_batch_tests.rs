@@ -132,14 +132,14 @@ fn concurrent_writers_preserve_records_and_scope_isolation() {
     assert_eq!(store.summary().unwrap().total_records, expected);
     assert_eq!(
         store
-            .recallable_records_by_namespace("workspace:even", expected as u64, expected)
+            .recallable_records_by_namespace("workspace:even", expected as u64, None, expected)
             .unwrap()
             .len(),
         expected / 2
     );
     assert_eq!(
         store
-            .recallable_records_by_namespace("workspace:odd", expected as u64, expected)
+            .recallable_records_by_namespace("workspace:odd", expected as u64, None, expected)
             .unwrap()
             .len(),
         expected / 2

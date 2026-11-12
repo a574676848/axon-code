@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use axon_domain::MemoryKind;
-use axon_domain::{AxonError, AxonResult, MemoryId, MemoryState};
+use axon_domain::{AxonError, AxonResult, MemoryId};
 
 use crate::{MemoryOrchestrator, MemorySqliteRecord};
 
@@ -233,11 +233,13 @@ impl MemoryOrchestrator {
                     user_ref,
                     &scope.namespace_ref,
                     query.now_ms,
+                    query.time_range,
                     index_candidate_limit,
                 )?,
                 None => store.recallable_records_by_namespace(
                     &scope.namespace_ref,
                     query.now_ms,
+                    query.time_range,
                     index_candidate_limit,
                 )?,
             };
@@ -272,15 +274,22 @@ impl MemoryOrchestrator {
                         user_ref,
                         &scope.namespace_ref,
                         query.now_ms,
+                        query.time_range,
                         candidate_limit,
                     )?,
                     None => store.recallable_records_by_namespace(
                         &scope.namespace_ref,
                         query.now_ms,
+                        query.time_range,
                         candidate_limit,
                     )?,
                 },
-                None => store.recallable_records_limited(query.now_ms, candidate_limit)?,
+                // 全局兜底路径同样要受时间窗约束，否则 scope=None 时时间窗被静默丢弃。
+                None => store.recallable_records_limited(
+                    query.now_ms,
+                    query.time_range,
+                    candidate_limit,
+                )?,
             };
             for record in records {
                 let fallback_score = core_fallback_score_basis_points(&record, &query.query_text);
@@ -438,17 +447,12 @@ fn weighted_component(score: u32, weight_basis_points: u32) -> u32 {
     score.saturating_mul(weight_basis_points) / MAX_BASIS_POINTS
 }
 
+/// 检索侧的可召回判定：活跃性统一取 `aging::is_active_recallable`，这里只补 TTL 一维。
 fn record_is_recallable(record: &MemorySqliteRecord, now_ms: u64) -> bool {
-    matches!(record.record.state, MemoryState::Weak | MemoryState::Strong)
-        && record.archived_at_ms.is_none()
+    crate::is_active_recallable(record)
         && record
             .ttl_expires_at_ms
             .is_none_or(|expires_at_ms| expires_at_ms > now_ms)
-        && record
-            .record
-            .content_ref
-            .as_ref()
-            .is_some_and(|value| !value.trim().is_empty())
 }
 
 fn core_fallback_score_basis_points(record: &MemorySqliteRecord, query_text: &str) -> u16 {
