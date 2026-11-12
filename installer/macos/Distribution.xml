@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Axon macOS 安装包分发定义 -->
-<!-- 注：不引用 welcome/conclusion/background/license 资源 —— 仓库未提供 --resources 目录，
-     引用不存在的资源会让 productbuild 直接报错；版本号由下面的 pkg-ref 决定。 -->
+<!-- Axon macOS 安装包分发定义。 -->
+<!-- 注：不引用 welcome / conclusion / background / license 资源（仓库未提供资源目录），
+     引用不存在的资源会让 productbuild 直接报错；版本号由下面的 pkg-ref 决定。
+     注意 XML 注释内不得出现连续两个短横线，写 flag 时请拆开。 -->
 <installer-gui-script minSpecVersion="2">
     <title>Axon — 模型路由 Agentic 编码工作台</title>
 
