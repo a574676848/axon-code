@@ -30,9 +30,17 @@ pub(crate) fn is_configured(config_path: Option<&Path>) -> bool {
 /// `axon gateway key` 同样不进这张表：签发的 Key 是网关凭据，与模型供应商配置无关，
 /// 而运维在服务器上往往是先签 Key 再配供应商。把它拦在 setup 引导后面，会让「这台机器
 /// 还没配模型」变成「这把 Key 签不出来」。
-fn command_needs_config(command: Option<&AxonCommand>) -> bool {
+///
+/// 本地打包与能力清单同理：`axon package` 只产出安装包与清单，无子命令的
+/// `--format json` 是机器可读自检报告，二者都不调用模型。干净环境（CI runner、
+/// 新装的机器）上把它们拦在 setup 引导后面，会让打包冒烟与 TUI 冒烟都拿不到输出。
+fn command_needs_config(cli: &AxonCli) -> bool {
+    if cli.command.is_none() && matches!(cli.global.format, OutputFormat::Json) {
+        return false;
+    }
+
     !matches!(
-        command,
+        cli.command.as_ref(),
         Some(
             AxonCommand::Setup(_)
                 | AxonCommand::Auth(_)
@@ -45,6 +53,7 @@ fn command_needs_config(command: Option<&AxonCommand>) -> bool {
                 | AxonCommand::Usage(_)
                 | AxonCommand::Persona(_)
                 | AxonCommand::Gateway(_)
+                | AxonCommand::Package(_)
         )
     )
 }
@@ -56,7 +65,7 @@ pub(crate) fn check_and_guide_setup(cli: &AxonCli) -> Option<CliRunResult> {
     }
 
     // 不需要配置检查的命令直接跳过
-    if !command_needs_config(cli.command.as_ref()) {
+    if !command_needs_config(cli) {
         return None;
     }
 
