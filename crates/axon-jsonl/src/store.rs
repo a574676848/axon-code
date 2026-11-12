@@ -16,7 +16,7 @@ pub const DEFAULT_SHARD_MAX_BYTES: u64 = 8 * 1024 * 1024;
 /// shard 预算是**分片**的目标，不是单条记录的合法性边界：一条比预算还大的记录
 /// （例如整段窗口归档）如果被拒绝，会让整笔业务失败。因此超预算的记录改为独占
 /// 一个 shard；只有超过这里才说明记录本身已经失控。
-const MAX_SINGLE_RECORD_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_SINGLE_RECORD_BYTES: u64 = 64 * 1024 * 1024;
 /// shard 序号的稳定显示宽度。
 pub const SHARD_SEQUENCE_WIDTH: usize = 6;
 /// 固定宽度 shard 序号的最大值。

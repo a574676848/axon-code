@@ -11,9 +11,9 @@ use crate::{
     application::THREAD_EVENT_SCHEMA_VERSION, domain::ThreadEventRecord,
     ports::ThreadActivationSnapshot, ports::ThreadEventStore,
 };
-#[cfg(test)]
-use axon_jsonl::DEFAULT_SHARD_MAX_BYTES;
 use axon_jsonl::ShardedJsonlStore;
+#[cfg(test)]
+use axon_jsonl::{DEFAULT_SHARD_MAX_BYTES, MAX_SINGLE_RECORD_BYTES};
 
 /// 保留旧路径编码的最大长度；更长的 thread ID 使用摘要文件名，避免 Windows 路径溢出。
 const MAX_LEGACY_THREAD_PREFIX_LENGTH: usize = 96;
@@ -555,19 +555,54 @@ mod tests {
     }
 
     #[test]
-    fn rejects_single_event_exceeding_shard_limit() {
+    fn oversize_event_occupies_its_own_shard() {
         let root = axon_test_support::test_temp_root().join(format!(
             "axon-thread-oversize-{}-{}",
             std::process::id(),
             axon_time::unix_now_ms()
         ));
         let store = JsonlThreadEventStore;
-        let mut event = record("oversize-thread", 0);
+        store.append(&root, &record("oversize-thread", 0)).unwrap();
+        assert!(JsonlThreadEventStore::shard_path(&root, "oversize-thread", 0).exists());
+
+        let mut oversize = record("oversize-thread", 1);
+        oversize.event = ThreadEvent::ThreadNamed {
+            name: Some("x".repeat(usize::try_from(THREAD_SHARD_MAX_BYTES).unwrap() + 1_024)),
+        };
+        store
+            .append(&root, &oversize)
+            .expect("超过分片预算的单条事件应独占新分片，而不是被拒绝");
+
+        assert!(
+            JsonlThreadEventStore::shard_path(&root, "oversize-thread", 1).exists(),
+            "超预算事件必须落进下一个分片"
+        );
+        assert_eq!(
+            store.read_thread(&root, "oversize-thread").unwrap().len(),
+            2,
+            "两条记录都必须保留"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_single_event_beyond_hard_record_limit() {
+        let root = axon_test_support::test_temp_root().join(format!(
+            "axon-thread-hard-limit-{}-{}",
+            std::process::id(),
+            axon_time::unix_now_ms()
+        ));
+        let store = JsonlThreadEventStore;
+        let mut event = record("hard-limit-thread", 0);
         event.event = ThreadEvent::ThreadNamed {
-            name: Some("x".repeat(9 * 1024 * 1024)),
+            name: Some("x".repeat(usize::try_from(MAX_SINGLE_RECORD_BYTES).unwrap() + 1)),
         };
 
-        assert!(store.append(&root, &event).is_err());
+        assert!(
+            store.append(&root, &event).is_err(),
+            "超过单条记录硬上限必须拒绝写入"
+        );
         assert!(!JsonlThreadEventStore::path(&root).exists());
 
         let _ = std::fs::remove_dir_all(root);
