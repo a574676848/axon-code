@@ -91,9 +91,17 @@ fn git_identity_requires_both_fields() {
 fn key_scan_lists_only_paired_file_names() {
     let home = temp_home("keys");
     let ssh = home.join(".ssh");
-    fs::write(ssh.join("id_rsa"), b"-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n").unwrap();
+    fs::write(
+        ssh.join("id_rsa"),
+        b"-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n",
+    )
+    .unwrap();
     fs::write(ssh.join("id_rsa.pub"), b"ssh-ed25519 AAAAexample\n").unwrap();
-    fs::write(ssh.join("id_ed25519"), b"-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n").unwrap();
+    fs::write(
+        ssh.join("id_ed25519"),
+        b"-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n",
+    )
+    .unwrap();
 
     let names = scan_ssh_key_names(&ssh);
     assert_eq!(names, vec!["id_rsa"], "没有 .pub 配对的私钥不应出现");
@@ -105,7 +113,11 @@ fn full_scan_collects_all_sections_without_leaking_secrets() {
     let ssh = home.join(".ssh");
     fs::write(ssh.join("config"), SSH_CONFIG).unwrap();
     fs::write(ssh.join("known_hosts"), KNOWN_HOSTS).unwrap();
-    fs::write(ssh.join("id_rsa"), b"-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n").unwrap();
+    fs::write(
+        ssh.join("id_rsa"),
+        b"-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n",
+    )
+    .unwrap();
     fs::write(ssh.join("id_rsa.pub"), b"ssh-ed25519 AAAAexample\n").unwrap();
     fs::write(home.join(".gitconfig"), GITCONFIG).unwrap();
 
@@ -122,7 +134,10 @@ fn full_scan_collects_all_sections_without_leaking_secrets() {
         !debug.contains("alice@example.com"),
         "调试输出不得包含完整 email"
     );
-    assert!(!debug.contains("AAAAC3"), "调试输出不得包含 known_hosts 指纹");
+    assert!(
+        !debug.contains("AAAAC3"),
+        "调试输出不得包含 known_hosts 指纹"
+    );
 }
 
 #[test]

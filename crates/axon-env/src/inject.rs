@@ -2,8 +2,10 @@
 
 use crate::local_resources::LocalResources;
 
-/// 开关名对应的默认值：`memory.env.enabled` 默认关闭。
-pub const MEMORY_ENV_ENABLED_DEFAULT: bool = false;
+/// 本机资源感知的默认状态：默认开启。
+///
+/// 需要停用时把该常量改为 `false` 并重编，或在调用点显式传入 `false`。
+pub const MEMORY_ENV_ENABLED_DEFAULT: bool = true;
 
 /// 注入块字节预算（≈400 token）。
 pub const ENV_BLOCK_MAX_BYTES: usize = 1_600;
@@ -28,9 +30,7 @@ pub const ENV_TRIGGER_WORDS: [&str; 12] = [
 #[must_use]
 pub fn should_inject(text: &str) -> bool {
     let lowered = text.to_lowercase();
-    ENV_TRIGGER_WORDS
-        .iter()
-        .any(|word| lowered.contains(word))
+    ENV_TRIGGER_WORDS.iter().any(|word| lowered.contains(word))
 }
 
 /// 开关打开且命中触发词时才渲染；否则返回 `None`，且不触发任何扫描。

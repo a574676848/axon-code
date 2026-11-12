@@ -6,6 +6,10 @@
 
 use std::cmp::Ordering;
 
+/// 边界异常感知的默认状态：默认开启。
+///
+/// 需要停用时把该常量改为 `false` 并重编，或在调用点显式传入 `false`。
+pub const ANOMALY_ENABLED_DEFAULT: bool = true;
 /// 自评镜像阈值（basis point）：当前发言与最近任一助手输出的重合度。
 pub const ANOMALY_MIRROR_THRESHOLD_BP: u16 = 6_000;
 /// 文风重合阈值（basis point）：当前发言与近 5 条助手输出的重合度。

@@ -72,8 +72,8 @@ pub fn scan(home: &Path) -> LocalResources {
     let known_hosts = read_text(&ssh_dir.join("known_hosts"))
         .map(|text| parse_known_hosts(&text))
         .unwrap_or_default();
-    let git_identity = read_text(&home.join(".gitconfig"))
-        .and_then(|text| parse_git_identity(&text));
+    let git_identity =
+        read_text(&home.join(".gitconfig")).and_then(|text| parse_git_identity(&text));
     LocalResources {
         ssh_hosts,
         ssh_keys,

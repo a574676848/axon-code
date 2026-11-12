@@ -23,8 +23,10 @@ use crate::MemorySqliteStore;
 pub const CONSOLIDATE_BATCH_LIMIT: usize = 20;
 /// 降级后的重要度下限。
 pub const MIN_IMPORTANCE_BP: u16 = 1_000;
-/// `memory.consolidate.enabled` 默认值（关闭）。
-pub const CONSOLIDATE_ENABLED_DEFAULT: bool = false;
+/// 记忆整合的默认状态：默认开启。
+///
+/// 需要停用时把该常量改为 `false` 并重编，或在调用点显式传入 `false`。
+pub const CONSOLIDATE_ENABLED_DEFAULT: bool = true;
 
 /// 一条整合动作。
 #[derive(Debug, Clone, PartialEq, Eq)]

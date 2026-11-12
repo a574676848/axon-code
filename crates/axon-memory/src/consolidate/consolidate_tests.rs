@@ -186,10 +186,7 @@ fn disabled_flag_writes_nothing() {
     let report = apply_plan(&store, &plan, 10_000, false).unwrap();
     assert_eq!(report, ConsolidationReport::default());
     assert_eq!(store.active_memory_count(NAMESPACE).unwrap(), 20);
-    assert!(
-        !CONSOLIDATE_ENABLED_DEFAULT,
-        "memory.consolidate.enabled 默认关闭"
-    );
+    assert!(CONSOLIDATE_ENABLED_DEFAULT, "记忆整合常量默认必须开启");
 }
 
 #[test]

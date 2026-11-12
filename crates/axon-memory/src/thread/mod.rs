@@ -3,16 +3,16 @@
 //! 设计定稿：只维护**一条**命名空间内的前台线索，不做多线索列表、不做温度三态、
 //! 不做 mergeThreads、不做结论压缩。`signature` 字段预留给后续语义去重，本期只写入。
 
-mod reference;
 mod commitment;
 mod p2_render;
+mod reference;
 
-pub use reference::{Reference, classify_reference, is_one_off_leaf};
 pub use commitment::{close_commitments, detects_closure, detects_commitment, record_commitment};
 pub use p2_render::{
     P2_COMMITMENT_MAX_BYTES, P2_MAX_COMMITMENTS, P2_THREAD_MAX_BYTES, format_local_minute,
     render_p2_context,
 };
+pub use reference::{Reference, classify_reference, is_one_off_leaf};
 
 use crate::store_thread::{MemoryThread, THREAD_STATUS_OPEN};
 use crate::{MemorySqliteStore, store_thread::MemoryCommitment};
@@ -26,6 +26,11 @@ pub struct ThreadScope<'a> {
     /// owner principal。
     pub user_ref: &'a str,
 }
+
+/// 线索与承诺的默认状态：默认开启。
+///
+/// 需要停用时把该常量改为 `false` 并重编，或在调用点显式传入 `false`。
+pub const THREADS_ENABLED_DEFAULT: bool = true;
 
 /// 线索话题的最大字符数。
 const THREAD_TOPIC_MAX_CHARS: usize = 40;

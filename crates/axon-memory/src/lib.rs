@@ -108,10 +108,10 @@ pub use text_index::{
     MemoryTextDocument, MemoryTextHit, MemoryTextIndex,
 };
 pub use thread::{
-    P2_COMMITMENT_MAX_BYTES, P2_MAX_COMMITMENTS, P2_THREAD_MAX_BYTES, Reference, ThreadScope,
-    classify_reference, close_commitments, commitment_id_for, detects_closure, detects_commitment,
-    ensure_foreground, format_local_minute, is_one_off_leaf, open_commitment, record_commitment,
-    render_p2_context, touch_foreground,
+    P2_COMMITMENT_MAX_BYTES, P2_MAX_COMMITMENTS, P2_THREAD_MAX_BYTES, Reference,
+    THREADS_ENABLED_DEFAULT, ThreadScope, classify_reference, close_commitments, commitment_id_for,
+    detects_closure, detects_commitment, ensure_foreground, format_local_minute, is_one_off_leaf,
+    open_commitment, record_commitment, render_p2_context, touch_foreground,
 };
 pub use usage::{
     MEMORY_USAGE_KIND_CITED, MEMORY_USAGE_KIND_INJECTED, MEMORY_USAGE_KIND_RECALLED,

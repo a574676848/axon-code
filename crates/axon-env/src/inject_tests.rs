@@ -32,7 +32,7 @@ fn trigger_words_gate_injection() {
 fn disabled_flag_never_renders() {
     let resources = sample_resources();
     assert!(render_block_if_enabled("帮我上服务器看磁盘", &resources, false).is_none());
-    assert!(!MEMORY_ENV_ENABLED_DEFAULT, "memory.env.enabled 默认必须关闭");
+    assert!(MEMORY_ENV_ENABLED_DEFAULT, "本机资源感知常量默认必须开启");
 }
 
 #[test]
@@ -94,7 +94,9 @@ fn rendered_block_respects_token_budget() {
             })
             .collect(),
         ssh_keys: Vec::new(),
-        known_hosts: (0..30).map(|index| format!("known-{index}.internal")).collect(),
+        known_hosts: (0..30)
+            .map(|index| format!("known-{index}.internal"))
+            .collect(),
         git_identity: None,
     };
     let block = render_block(&resources);
