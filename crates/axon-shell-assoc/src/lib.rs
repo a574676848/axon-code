@@ -92,6 +92,11 @@ pub struct FileApplication {
 /// 平台适配器报告枚举整体失败时返回错误描述（中文，可直接展示）。
 /// 单条候选的问题不会变成错误，只会让该候选被跳过或让它的图标为空。
 pub fn applications_for(path: &Path) -> Result<Vec<FileApplication>, String> {
+    // 端口级保底：拿不到文件名的路径在任何平台都不产生候选，也不该让平台差异漏成错误。
+    // macOS 的 UTI 查询对空路径直接失败，Linux 与 Windows 恰好返回空表；这里统一成空表。
+    if path.file_name().is_none() {
+        return Ok(Vec::new());
+    }
     #[cfg(target_os = "windows")]
     let candidates = windows::applications_for(path)?;
     #[cfg(target_os = "linux")]
