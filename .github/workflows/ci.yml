@@ -136,12 +136,15 @@ jobs:
       # apt 依赖（webkit / rsvg / dbus 等）每次重装约 30s，按包列表缓存后命中即只做本地安装。
       - name: 安装 Linux 系统依赖 (Tauri 2 与系统凭据库)
         if: needs.changes.outputs.code == 'true' && runner.os == 'Linux'
-        uses: awalsh128/cache-apt-pkgs-action@v1
-        with:
-          # libdbus-1-dev 是桌面端 Linux 凭据库（Secret Service）的构建依赖；
-          # 桌面会话里通常已有运行期组件，CI 只编译，因此装开发头文件即可。
-          packages: libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev
-          version: 1.0
+        shell: bash
+        run: |
+          sudo apt-get update
+          # libdbus-1-dev 是桌面端 Linux 凭据库（Secret Service）的构建依赖。
+          # libappindicator3-dev 在 Ubuntu 24.04 已改名为 libayatana-appindicator3-dev，
+          # 两个名字依次尝试，避免包名漂移把整步安装拖挂。
+          sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev patchelf libdbus-1-dev
+          sudo apt-get install -y libayatana-appindicator3-dev ||
+            sudo apt-get install -y libappindicator3-dev
 
       - name: 准备 Node 环境
         if: needs.changes.outputs.code == 'true'
@@ -202,7 +205,15 @@ jobs:
       # 门禁矩阵要求两条都在，缺少 check 时「只有 clippy 报了才有人管」。
       - name: 编译检查
         if: needs.changes.outputs.code == 'true'
-        run: cargo check --locked --workspace --all-features
+        shell: bash
+        run: |
+          set -o pipefail
+          if cargo check --locked --workspace --all-features 2>&1 | tee cargo-check.log; then
+            exit 0
+          fi
+          detail=$(grep -A6 -m1 -E '^error' cargo-check.log | tr '\n' ' ')
+          echo "::error title=cargo-check::${detail:0:900}"
+          exit 1
 
       - name: Clippy 静态分析
         if: needs.changes.outputs.code == 'true'
