@@ -149,6 +149,18 @@ impl MemoryToolDispatcher {
         }
     }
 
+    /// 未显式给出毫秒时间窗时，从查询文本里的相对时间词推断闭区间。
+    ///
+    /// 只认 `parse_temporal_hint` 白名单里的可判定词（今天 / 昨天 / 上周 / 近3天…）；
+    /// 「最近 / 之前 / 上次」这类模糊词一律不解析，宁可漏检也不能把范围收错。
+    fn infer_time_range_from_query(query: &str) -> Option<(i64, i64)> {
+        let now = i64::try_from(now_ms()).ok()?;
+        let tz_offset_min =
+            i32::try_from(chrono::Local::now().offset().local_minus_utc() / 60).ok()?;
+        let range = axon_memory::parse_temporal_hint(query, now, tz_offset_min)?;
+        Some((range.start_ms, range.end_ms))
+    }
+
     fn optional_i64_field(value: &serde_json::Value, field: &str) -> AxonResult<Option<i64>> {
         match value.get(field) {
             None | Some(serde_json::Value::Null) => Ok(None),
@@ -187,7 +199,10 @@ impl MemoryToolDispatcher {
                         AxonError::tool_invalid_arguments("memory_search limit 必须为正整数")
                     })
             })?;
-        let time_range = Self::parse_time_range(value)?;
+        let time_range = match Self::parse_time_range(value)? {
+            Some(range) => Some(range),
+            None => Self::infer_time_range_from_query(query),
+        };
         let summary = memory_query_summary(
             config_path,
             config,
@@ -529,5 +544,24 @@ mod tests {
                 .map(|source| source.summary.as_str()),
             Some(summary)
         );
+    }
+
+    #[test]
+    fn relative_time_hint_becomes_time_range_but_fuzzy_words_do_not() {
+        // 可判定词：解析成有序闭区间。
+        for query in ["昨天的日志", "上周三那个方案", "近3天", "本月的花费"] {
+            let range = MemoryToolDispatcher::infer_time_range_from_query(query)
+                .unwrap_or_else(|| panic!("{query} 应解析出时间窗"));
+            assert!(range.0 <= range.1, "{query} 的时间窗必须有序");
+        }
+
+        // 模糊词与无关文本：不解析，避免把范围收错。
+        for query in ["最近3天", "之前那个方案", "上次说的配置", "部署脚本", ""]
+        {
+            assert!(
+                MemoryToolDispatcher::infer_time_range_from_query(query).is_none(),
+                "{query} 不应被解析成时间窗"
+            );
+        }
     }
 }
