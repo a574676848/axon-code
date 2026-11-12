@@ -27,12 +27,12 @@ if ($normalizedVersion -ne $workspaceVersion) {
 }
 $wingetManifestDir = Join-Path $repoRoot "installer\winget\manifests\a\AlexZ\Axon\$normalizedVersion"
 
-$windowsZip = Join-Path $distRoot "axon-v$normalizedVersion-x86_64-pc-windows-msvc.zip"
-$windowsMsi = Join-Path $distRoot "axon-v$normalizedVersion-x86_64-pc-windows-msvc.msi"
-$macArmTar = Join-Path $distRoot "axon-v$normalizedVersion-aarch64-apple-darwin.tar.gz"
-$macX64Tar = Join-Path $distRoot "axon-v$normalizedVersion-x86_64-apple-darwin.tar.gz"
-$linuxX64Tar = Join-Path $distRoot "axon-v$normalizedVersion-x86_64-unknown-linux-gnu.tar.gz"
-$linuxArmTar = Join-Path $distRoot "axon-v$normalizedVersion-aarch64-unknown-linux-gnu.tar.gz"
+$windowsZip = Join-Path $distRoot "axon-$normalizedVersion-x86_64-pc-windows-msvc.zip"
+$windowsMsi = Join-Path $distRoot "axon-$normalizedVersion-x86_64-pc-windows-msvc.msi"
+$macArmTar = Join-Path $distRoot "axon-$normalizedVersion-aarch64-apple-darwin.tar.gz"
+$macX64Tar = Join-Path $distRoot "axon-$normalizedVersion-x86_64-apple-darwin.tar.gz"
+$linuxX64Tar = Join-Path $distRoot "axon-$normalizedVersion-x86_64-unknown-linux-gnu.tar.gz"
+$linuxArmTar = Join-Path $distRoot "axon-$normalizedVersion-aarch64-unknown-linux-gnu.tar.gz"
 
 $requiredArtifacts = @(
     $windowsZip,
@@ -63,8 +63,8 @@ Set-Content -LiteralPath $homebrewPath -Value $homebrewContent -Encoding utf8NoB
 
 $scoop = Get-Content -LiteralPath $scoopPath -Raw | ConvertFrom-Json
 $scoop.version = $normalizedVersion
-$scoop.url = "https://github.com/a574676848/axon-code/releases/download/v$normalizedVersion/axon-v$normalizedVersion-x86_64-pc-windows-msvc.zip"
-$scoop.extract_dir = "axon-v$normalizedVersion-x86_64-pc-windows-msvc"
+$scoop.url = "https://github.com/a574676848/axon-code/releases/download/v$normalizedVersion/axon-$normalizedVersion-x86_64-pc-windows-msvc.zip"
+$scoop.extract_dir = "axon-$normalizedVersion-x86_64-pc-windows-msvc"
 $scoop.hash = Get-Sha256Hex $windowsZip
 $scoop.autoupdate.url = $scoop.url.Replace($normalizedVersion, '$version')
 $scoopJson = $scoop | ConvertTo-Json -Depth 8

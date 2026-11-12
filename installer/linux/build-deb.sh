@@ -8,7 +8,7 @@
 #   AXON_BINARY   — 编译好的 Axon 二进制路径
 #   AXON_LAUNCHER — 编译好的稳定 launcher 路径
 #
-# 产物：dist/axon-v<VERSION>-<target>.deb
+# 产物：dist/axon-<VERSION>-<target>.deb
 
 set -euo pipefail
 

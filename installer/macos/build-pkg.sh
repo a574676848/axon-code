@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Axon macOS .pkg 构建脚本
 # 用法：bash build-pkg.sh <VERSION> <BINARY_PATH> <LAUNCHER_PATH> <PACKAGE_NAME>
-# 示例：bash build-pkg.sh 0.2.0 target/aarch64-apple-darwin/release/axon axon-v0.2.0-aarch64-apple-darwin
+# 示例：bash build-pkg.sh 0.2.0 target/aarch64-apple-darwin/release/axon axon-0.2.0-aarch64-apple-darwin
 #
 # 前置条件：macOS 系统，已安装 Xcode Command Line Tools
 # 产物：dist/<NAME>.pkg

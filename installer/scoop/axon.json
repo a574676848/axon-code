@@ -3,7 +3,7 @@
   "description": "Model-routed agentic coding TUI with provider load balancing, memory, and accurate tool calls",
   "homepage": "https://github.com/a574676848/axon-code",
   "license": "MIT",
-  "url": "https://github.com/a574676848/axon-code/releases/download/v__VERSION__/axon-v__VERSION__-x86_64-pc-windows-msvc.zip",
+  "url": "https://github.com/a574676848/axon-code/releases/download/v__VERSION__/axon-__VERSION__-x86_64-pc-windows-msvc.zip",
   "hash": "__WINDOWS_ZIP_SHA256__",
   "bin": [
     "axon.exe",
@@ -15,12 +15,12 @@
   "post_install": [
     "& \"$dir\\axon-scoop-install.ps1\" -PackageRoot \"$dir\" -Version \"$version\" -Target 'x86_64-pc-windows-msvc'"
   ],
-  "extract_dir": "axon-v__VERSION__-x86_64-pc-windows-msvc",
+  "extract_dir": "axon-__VERSION__-x86_64-pc-windows-msvc",
   "checkver": {
     "github": "https://github.com/a574676848/axon-code"
   },
   "autoupdate": {
-    "url": "https://github.com/a574676848/axon-code/releases/download/v$version/axon-v$version-x86_64-pc-windows-msvc.zip",
+    "url": "https://github.com/a574676848/axon-code/releases/download/v$version/axon-$version-x86_64-pc-windows-msvc.zip",
     "hash": {
       "url": "$url.sha256"
     }

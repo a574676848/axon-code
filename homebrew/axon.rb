@@ -21,14 +21,14 @@ class Axon < Formula
   # ── macOS Apple Silicon ────────────────────────────────────────────────────
   on_macos do
     on_arm do
-      url "https://github.com/a574676848/axon-code/releases/download/v#{version}/axon-v#{version}-aarch64-apple-darwin.tar.gz"
+      url "https://github.com/a574676848/axon-code/releases/download/v#{version}/axon-#{version}-aarch64-apple-darwin.tar.gz"
       # 在 CI 中由 release.yml 自动更新此 sha256
       sha256 "__MACOS_ARM64_SHA256__"
     end
 
     # ── macOS Intel ──────────────────────────────────────────────────────────
     on_intel do
-      url "https://github.com/a574676848/axon-code/releases/download/v#{version}/axon-v#{version}-x86_64-apple-darwin.tar.gz"
+      url "https://github.com/a574676848/axon-code/releases/download/v#{version}/axon-#{version}-x86_64-apple-darwin.tar.gz"
       sha256 "__MACOS_X64_SHA256__"
     end
   end
@@ -36,12 +36,12 @@ class Axon < Formula
   # ── Linux x86_64 ──────────────────────────────────────────────────────────
   on_linux do
     on_intel do
-      url "https://github.com/a574676848/axon-code/releases/download/v#{version}/axon-v#{version}-x86_64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/a574676848/axon-code/releases/download/v#{version}/axon-#{version}-x86_64-unknown-linux-gnu.tar.gz"
       sha256 "__LINUX_X64_SHA256__"
     end
 
     on_arm do
-      url "https://github.com/a574676848/axon-code/releases/download/v#{version}/axon-v#{version}-aarch64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/a574676848/axon-code/releases/download/v#{version}/axon-#{version}-aarch64-unknown-linux-gnu.tar.gz"
       sha256 "__LINUX_ARM64_SHA256__"
     end
   end

@@ -325,7 +325,7 @@ function Main {
     $InstallLockPath = Join-Path $InstallRoot "install.lock"
 
     # 构造下载 URL
-    $ArchiveName = "axon-v$VersionToInstall-$Target.zip"
+    $ArchiveName = "axon-$VersionToInstall-$Target.zip"
     $BaseUrl     = "https://github.com/$Repo/releases/download/v$VersionToInstall"
     $ArchiveUrl  = "$BaseUrl/$ArchiveName"
     $Sha256Url   = "$ArchiveUrl.sha256"

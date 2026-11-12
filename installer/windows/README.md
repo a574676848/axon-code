@@ -32,7 +32,7 @@ wix build installer/windows/axon.wxs `
   -d "LauncherPath=$launcherPath" `
   -d "CurrentManifestPath=$manifestPath" `
   -d "IconPath=crates\axon-desktop\icons\icon.ico" `
-  -o "dist/axon-v$version-x86_64-pc-windows-msvc.msi"
+  -o "dist/axon-$version-x86_64-pc-windows-msvc.msi"
 ```
 
 `WixToolset.UI.wixext` 是 `WixUI_Advanced` 向导的依赖，`zh-CN.wxl` 固定安装向导为简体中文，`IconPath` 是快捷方式与
@@ -52,7 +52,7 @@ cargo build -p axon-cli -p axon-launcher -p axon-desktop --release --target x86_
 构建产物可用 WiX 自带的 ICE 校验确认配方语义：
 
 ```powershell
-wix msi validate "dist/axon-v<版本号>-x86_64-pc-windows-msvc.msi"
+wix msi validate "dist/axon-<版本号>-x86_64-pc-windows-msvc.msi"
 ```
 
 它检查目录残留、组件 KeyPath、快捷方式指向等 Windows Installer 规则。改动配方后必须先跑通再提交。

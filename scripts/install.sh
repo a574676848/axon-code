@@ -316,7 +316,7 @@ main() {
     fi
 
     # 构造下载 URL
-    ARCHIVE_NAME="axon-v${VERSION}-${TARGET}.tar.gz"
+    ARCHIVE_NAME="axon-${VERSION}-${TARGET}.tar.gz"
     BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
     ARCHIVE_URL="${BASE_URL}/${ARCHIVE_NAME}"
     SHA256_URL="${ARCHIVE_URL}.sha256"
@@ -339,7 +339,7 @@ main() {
     tar xzf "${TMP_DIR}/${ARCHIVE_NAME}" -C "${TMP_DIR}"
 
     # 解析发行包根目录。后续只发布完整目录，绝不覆盖正在运行的版本文件。
-    PACKAGE_ROOT="${TMP_DIR}/axon-v${VERSION}-${TARGET}"
+    PACKAGE_ROOT="${TMP_DIR}/axon-${VERSION}-${TARGET}"
     EXTRACTED_BINARY="${PACKAGE_ROOT}/${BINARY_NAME}"
     if [ ! -f "${EXTRACTED_BINARY}" ]; then
         # 兼容直接放在根目录的结构

@@ -356,7 +356,7 @@ jobs:
           MACOS_NOTARY_USER: ${{ secrets.MACOS_NOTARY_USER }}
           MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
         run: |
-          NAME="axon-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          NAME="axon-${GITHUB_REF_NAME#v}-${{ matrix.target }}"
           bash installer/macos/notarize.sh "dist/${NAME}.pkg"
         continue-on-error: true
 
