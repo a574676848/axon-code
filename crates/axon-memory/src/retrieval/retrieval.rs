@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use axon_domain::{AxonError, AxonResult, MemoryId, MemoryState};
+use axon_domain::MemoryKind;
 
 use crate::{MemoryOrchestrator, MemorySqliteRecord};
 
@@ -30,6 +31,10 @@ pub struct MemoryHybridQuery {
     pub now_ms: u64,
     /// 可选作用域过滤；提供时只召回该用户命名空间内的记录。
     pub scope: Option<MemoryHybridScope>,
+    /// 可选记忆类型过滤；`None` 表示不按类型收窄（旧行为）。
+    pub kinds: Option<Vec<MemoryKind>>,
+    /// 可选更新时间闭区间 `[start_ms, end_ms]`，按 `updated_at_ms` 收窄；`None` 表示不按时间收窄。
+    pub time_range: Option<(i64, i64)>,
 }
 
 /// Memory hybrid 检索作用域。
@@ -92,6 +97,29 @@ struct MergeHitInput {
     scope: Option<MemoryHybridScope>,
 }
 
+/// 检索收窄条件；两端都为 `None` 时与新增字段之前的旧行为逐字节等价。
+#[derive(Debug, Clone, Copy, Default)]
+struct MergeFilters<'a> {
+    kinds: Option<&'a [MemoryKind]>,
+    time_range: Option<(i64, i64)>,
+}
+
+impl MergeFilters<'_> {
+    /// 记录是否满足全部收窄条件。
+    fn accepts(&self, record: &MemorySqliteRecord) -> bool {
+        let kind_accepted = self
+            .kinds
+            .is_none_or(|kinds| kinds.contains(&record.memory_kind));
+        if !kind_accepted {
+            return false;
+        }
+        self.time_range.is_none_or(|(start_ms, end_ms)| {
+            let updated_at_ms = i64::try_from(record.updated_at_ms).unwrap_or(i64::MAX);
+            updated_at_ms >= start_ms && updated_at_ms <= end_ms
+        })
+    }
+}
+
 impl MemoryOrchestrator {
     /// 执行文本 + 向量 + SQLite 治理元数据的混合检索。
     /// 只走文本与文本向量路的混合检索。
@@ -116,6 +144,10 @@ impl MemoryOrchestrator {
             .max(query.limit);
         let store = self.sqlite_store()?;
         let index_candidate_limit = candidate_limit;
+        let filters = MergeFilters {
+            kinds: query.kinds.as_deref(),
+            time_range: query.time_range,
+        };
         let mut candidates = BTreeMap::<MemoryId, Candidate>::new();
         if let Ok(text_index) = self.text_index() {
             let text_hits = text_index
@@ -272,6 +304,7 @@ impl MemoryOrchestrator {
 
         let mut hits = candidates
             .into_values()
+            .filter(|candidate| filters.accepts(&candidate.record))
             .map(candidate_to_hit)
             .collect::<Vec<_>>();
         hits.sort_by(|left, right| {

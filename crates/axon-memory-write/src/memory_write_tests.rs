@@ -232,6 +232,8 @@ fn semantic_supersession_archives_old_memory_and_is_idempotent() {
             limit: 10,
             now_ms: 3_000,
             scope: None,
+            kinds: None,
+            time_range: None,
         })
         .unwrap();
     assert!(hits.iter().all(|hit| hit.record.record.id != MemoryId(30)));

@@ -255,6 +255,8 @@ fn golden_case_hits(
                 limit: recallable_records,
                 now_ms,
                 scope: None,
+                kinds: None,
+                time_range: None,
             })
             .map_err(|error| format!("{error:?}"))?
             .into_iter()

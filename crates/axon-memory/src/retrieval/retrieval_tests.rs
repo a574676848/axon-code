@@ -1,8 +1,8 @@
 use axon_domain::{MemoryId, MemoryRecord, MemoryState};
 
 use super::{
-    Candidate, MemoryHybridScope, MemorySqliteRecord, MergeHitInput, candidate_to_hit, merge_hit,
-    record_matches_scope,
+    Candidate, MemoryHybridScope, MemorySqliteRecord, MergeFilters, MergeHitInput,
+    candidate_to_hit, merge_hit, record_matches_scope,
 };
 
 /// 文本向量与图像向量命中同一条记录时，名次与距离都取更优的一路。
@@ -164,9 +164,124 @@ fn core_fallback_never_outranks_primary_rank_hit() {
         primary_text.score_basis_points
     );
     assert!(
-        fallback.score_basis_points < primary_vector.score_basis_points,
-        "兜底分 {} 不得压过向量 rank=1 命中 {}",
-        fallback.score_basis_points,
-        primary_vector.score_basis_points
-    );
+       fallback.score_basis_points < primary_vector.score_basis_points,
+       "兜底分 {} 不得压过向量 rank=1 命中 {}",
+       fallback.score_basis_points,
+       primary_vector.score_basis_points
+   );
+}
+
+fn fixture_record_of_kind(
+    id: MemoryId,
+    kind: axon_domain::MemoryKind,
+    updated_at_ms: u64,
+) -> MemorySqliteRecord {
+    let mut record = fixture_record(id, 8_000, 8_000);
+    record.memory_kind = kind;
+    record.updated_at_ms = updated_at_ms;
+    record
+}
+
+#[test]
+fn empty_filters_keep_legacy_behaviour() {
+    let filters = MergeFilters::default();
+    assert!(filters.accepts(&fixture_record_of_kind(
+        MemoryId(1),
+        axon_domain::MemoryKind::Knowledge,
+        5
+    )));
+    assert!(filters.accepts(&fixture_record_of_kind(
+        MemoryId(2),
+        axon_domain::MemoryKind::Procedure,
+        9_999
+    )));
+}
+
+#[test]
+fn kinds_filter_keeps_only_requested_kinds() {
+    let kinds = [axon_domain::MemoryKind::Procedure];
+    let filters = MergeFilters {
+        kinds: Some(&kinds),
+        time_range: None,
+    };
+    assert!(filters.accepts(&fixture_record_of_kind(
+        MemoryId(1),
+        axon_domain::MemoryKind::Procedure,
+        1
+    )));
+    assert!(!filters.accepts(&fixture_record_of_kind(
+        MemoryId(2),
+        axon_domain::MemoryKind::Knowledge,
+        1
+    )));
+    assert!(!filters.accepts(&fixture_record_of_kind(
+        MemoryId(3),
+        axon_domain::MemoryKind::Preference,
+        1
+    )));
+}
+
+#[test]
+fn time_range_filter_is_inclusive_on_both_ends() {
+    let filters = MergeFilters {
+        kinds: None,
+        time_range: Some((100, 200)),
+    };
+    assert!(filters.accepts(&fixture_record_of_kind(
+        MemoryId(1),
+        axon_domain::MemoryKind::Knowledge,
+        100
+    )));
+    assert!(filters.accepts(&fixture_record_of_kind(
+        MemoryId(2),
+        axon_domain::MemoryKind::Knowledge,
+        200
+    )));
+    assert!(filters.accepts(&fixture_record_of_kind(
+        MemoryId(3),
+        axon_domain::MemoryKind::Knowledge,
+        150
+    )));
+}
+
+#[test]
+fn time_range_filter_rejects_outside_window() {
+    let filters = MergeFilters {
+        kinds: None,
+        time_range: Some((100, 200)),
+    };
+    assert!(!filters.accepts(&fixture_record_of_kind(
+        MemoryId(1),
+        axon_domain::MemoryKind::Knowledge,
+        99
+    )));
+    assert!(!filters.accepts(&fixture_record_of_kind(
+        MemoryId(2),
+        axon_domain::MemoryKind::Knowledge,
+        201
+    )));
+}
+
+#[test]
+fn kinds_and_time_range_compose() {
+    let kinds = [axon_domain::MemoryKind::Procedure];
+    let filters = MergeFilters {
+        kinds: Some(&kinds),
+        time_range: Some((100, 200)),
+    };
+    assert!(filters.accepts(&fixture_record_of_kind(
+        MemoryId(1),
+        axon_domain::MemoryKind::Procedure,
+        150
+    )));
+    assert!(!filters.accepts(&fixture_record_of_kind(
+        MemoryId(2),
+        axon_domain::MemoryKind::Procedure,
+        201
+    )));
+    assert!(!filters.accepts(&fixture_record_of_kind(
+        MemoryId(3),
+        axon_domain::MemoryKind::Knowledge,
+        150
+    )));
 }

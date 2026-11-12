@@ -261,6 +261,8 @@ pub fn hybrid_query_memory_with_embedding(
                 limit,
                 now_ms,
                 scope,
+                kinds: None,
+                time_range: None,
             },
             embedding.image_embedding.as_deref(),
         )
