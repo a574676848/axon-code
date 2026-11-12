@@ -164,8 +164,12 @@ pub(super) fn prepare_model_input_and_tools(
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
-    // 线索与承诺写入：每轮只执行一次，且必须在可重复的 payload 构造之外。
-    if let Ok(axon_root) = super::resolved_axon_root(input.config_path) {
+    // 线索与承诺写入：主 turn 每轮只执行一次，且必须在可重复的 payload 构造之外。
+    // 子代理不维护前台线索：它不承担会话话题，额外开一条 SQLite 连接只会拖慢并行执行。
+    // `include_delegation_catalog` 由身份判定产生，只有主 turn 为真。
+    if input.include_delegation_catalog
+        && let Ok(axon_root) = super::resolved_axon_root(input.config_path)
+    {
         let now_ms = i64::try_from(axon_time::unix_now_ms()).unwrap_or(i64::MAX);
         super::run_memory_thread_context::maintain_memory_thread(
             &axon_root,
