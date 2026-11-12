@@ -265,6 +265,24 @@ mod tests {
             ),
             Some(ToolRowTarget::Text("仓库文档重整".to_owned()))
         );
+        // 委托的 task 是一整份 prompt：折叠态只认模型自述目的，任务原文留在展开态。
+        assert_eq!(
+            tool_row_target(
+                "builtin.delegate_to_fast",
+                r#"{"run_in_background":true,"task":"目标: 只读审计 docs 全部 Markdown"}"#,
+                Some("审计文档展示契约")
+            ),
+            Some(ToolRowTarget::Text("审计文档展示契约".to_owned()))
+        );
+        assert_eq!(
+            tool_call_intent(
+                "builtin.delegate_to_fast",
+                r#"{"task":"只读审计 docs","intent":"审计文档展示契约"}"#
+            )
+            .as_deref(),
+            Some("审计文档展示契约"),
+            "委托工具与其余内置工具同一条 intent 契约"
+        );
         assert_eq!(
             tool_row_target("mcp__codebase-memory-mcp__get_architecture", "{}", None),
             Some(ToolRowTarget::Text(

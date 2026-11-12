@@ -1,4 +1,5 @@
 use super::*;
+use crate::TOOL_INTENT_FIELD;
 use crate::builtin_subagent_tool_spec::{
     SUBAGENT_TOOL_RUN_IN_BACKGROUND_FIELD, delegate_to_fast_tool_definition,
 };
@@ -185,7 +186,7 @@ fn delegate_rejects_non_boolean_wait_mode_and_unknown_fields() {
     }
 }
 
-/// 工具 schema 必须声明可选的 `run_in_background`，description 必须写清自包含与后台默认。
+/// 工具 schema 必须声明可选的 `run_in_background` 与必填的 `intent`，description 必须写清自包含与后台默认。
 #[test]
 fn delegate_schema_declares_optional_run_in_background() {
     let definition = delegate_to_fast_tool_definition();
@@ -196,15 +197,21 @@ fn delegate_schema_declares_optional_run_in_background() {
         "boolean"
     );
     assert_eq!(
+        properties[TOOL_INTENT_FIELD]["type"], "string",
+        "intent 是折叠态唯一展示字段，schema 必须声明它"
+    );
+    assert_eq!(
         definition.schema.input_schema["required"],
-        serde_json::json!([SUBAGENT_TOOL_TASK_FIELD]),
-        "等待模式必须可省略（默认后台）"
+        serde_json::json!([SUBAGENT_TOOL_TASK_FIELD, TOOL_INTENT_FIELD]),
+        "等待模式必须可省略（默认后台），intent 与 task 必填"
     );
     for expected in [
         "自包含",
         "子代理看不到本次对话",
         "默认后台执行",
         "run_in_background: false",
+        "intent 是每次委派必填的一句话目的",
+        "漏填 intent 会让整条调用被判为参数非法",
     ] {
         assert!(
             definition.description.contains(expected),
@@ -212,6 +219,14 @@ fn delegate_schema_declares_optional_run_in_background() {
             definition.description
         );
     }
+    // 模型实际漏填的是必填的 intent：示例里必须让 intent 与 task 同批出现。
+    let examples = definition.schema.input_schema["examples"]
+        .as_array()
+        .expect("delegate_to_fast 必须带一条完整调用示例");
+    assert_eq!(examples.len(), 1);
+    assert_eq!(examples[0][TOOL_INTENT_FIELD], "审计文档展示契约");
+    assert!(examples[0][SUBAGENT_TOOL_TASK_FIELD].is_string());
+    assert_eq!(examples[0][SUBAGENT_TOOL_RUN_IN_BACKGROUND_FIELD], false);
 }
 
 #[test]

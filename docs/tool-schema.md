@@ -305,7 +305,7 @@ Lazy 块内的漏写前缀容错：当某个 `*** Update File:` 块内出现独�
 
 `builtin.shell_command.intent` 是**必填**参数：一句话说明这次命令要达成什么目的，例如「校验代码格式」「确认依赖版本」。它是这次执行面向用户的说明，桌面端、TUI 与飞书的工具行都以它作为标题，命令原文是详情。写目标、不复述命令原文、不加句号、40 字以内。
 
-`intent` 是跨工具的展示契约，字段名与写法在所有声明它的工具上完全一致，当前包含 `builtin.shell_command`、`builtin.write_stdin`、`builtin.update_plan`、`builtin.glob`、`builtin.search`、`builtin.notes_write_file`、`builtin.notes_append_to_file` 与 `builtin.send_message`。它只影响展示，不参与执行语义：模型自述目的在参数被截断之前取出，因此再长的脚本、正文或计划都不会把它挤掉；未声明该字段的工具（含 MCP 工具与第三方 schema）不受影响。
+`intent` 是跨工具的展示契约，字段名与写法在所有声明它的工具上完全一致，当前包含 `builtin.shell_command`、`builtin.write_stdin`、`builtin.update_plan`、`builtin.glob`、`builtin.search`、`builtin.notes_write_file`、`builtin.notes_append_to_file`、`builtin.send_message` 与 `builtin.delegate_to_fast`。它只影响展示，不参与执行语义：模型自述目的在参数被截断之前取出，因此再长的脚本、正文或计划都不会把它挤掉；未声明该字段的工具（含 MCP 工具与第三方 schema）不受影响。
 
 两处内容分工固定，改任一处都要同步检查另一处：**写法与长度**（写目标、标点、字数、示例）属单次调用语义，写在该字段的 schema 描述里；**产品态承诺**（每次调用必填、它是这次执行面向用户的说明、不得复述命令）属跨调用约束，写在 `crates/axon-prompts/templates/agent/tool_usage_guidance.md` 的 `<tool_execution_and_receipt_protocol>` 片段里。界面机制（哪一端折叠、哪一端展开）两处都不写。
 
@@ -349,7 +349,7 @@ Axon 会为每次执行注入模型友好的环境变量：非 TTY 场景注入 
 | PTY 交互式会话 | `tty: true` | `session_id` | `Exclusive` | `builtin.write_stdin` |
 | 后台长任务 | `run_in_background: true` | `job_id` | `ParallelSafe` | `builtin.job_output` / `builtin.job_kill` |
 
-**后台子代理是同一类临时 Job**：`builtin.delegate_to_fast` 缺省后台执行（`run_in_background` 默认 true），回执带 `jobId`，其生命周期与 Shell 后台作业完全同构 —— 同一个注册表、同一套 owner 校验、同一保留与墓碑窗口，用 `builtin.job_output` 读取结果与终态、`builtin.job_kill` 完整中断（中止当前 turn → 关闭会话 → 投影统一终态 → 触发完成通知 → 回收）；显式传 `run_in_background: false` 时才走同步路径，直接返回回执且**不产生** `job_id`。`builtin.spawn_agent` 保留在执行注册表但**不向模型暴露**（不出现在模型工具清单里），模型侧没有调用它的路径。
+**后台子代理是同一类临时 Job**：`builtin.delegate_to_fast` 缺省后台执行（`run_in_background` 默认 true），回执带 `jobId`，其生命周期与 Shell 后台作业完全同构 —— 同一个注册表、同一套 owner 校验、同一保留与墓碑窗口，用 `builtin.job_output` 读取结果与终态、`builtin.job_kill` 完整中断（中止当前 turn → 关闭会话 → 投影统一终态 → 触发完成通知 → 回收）；显式传 `run_in_background: false` 时才走同步路径，直接返回回执且**不产生** `job_id`。该工具的 `intent` 必填（写法与长度同 `builtin.shell_command.intent`）：折叠态只显示这一句话，`task` 原文留在展开态。`builtin.spawn_agent` 保留在执行注册表但**不向模型暴露**（不出现在模型工具清单里），模型侧没有调用它的路径。
 
 寻址规则写死：**生命周期操作走 `job_id`，协作操作走 `AgentPath`**。`builtin.send_message` / `builtin.list_agents` 只接受 AgentPath（root 与当前代理自身都会被稳定拒绝）；`job_id` 传给这两个工具、或把 AgentPath 传给作业工具，都会被稳定拒绝。
 

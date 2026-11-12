@@ -27,8 +27,8 @@ pub const LIST_AGENTS_TOOL_NAME: &str = "list_agents";
 /// 快速模型委托工具名。
 pub const DELEGATE_TO_FAST_TOOL_NAME: &str = "delegate_to_fast";
 
-/// 子代理工具 schema 版本。
-pub const SUBAGENT_TOOL_SCHEMA_VERSION: u32 = 2;
+/// 子代理工具 schema 版本；`delegate_to_fast` 增加必填 `intent` 后升到 3。
+pub const SUBAGENT_TOOL_SCHEMA_VERSION: u32 = 3;
 
 /// 任务名字段。
 pub const SUBAGENT_TOOL_TASK_NAME_FIELD: &str = "task_name";
@@ -47,7 +47,7 @@ pub const SUBAGENT_TOOL_RUN_IN_BACKGROUND_FIELD: &str = "run_in_background";
 /// 创建子代理说明。
 const SPAWN_AGENT_TOOL_DESCRIPTION: &str = "创建可持续协作的通用子代理；把包含目标、范围、证据、交付与验证的完整首轮任务写入 task，task_name 只作为稳定任务名并仅使用小写字母、数字、'-' 或 '_'。子代理看不到本次对话，task 必须是一份完整独立的 prompt。默认后台执行：立即返回 jobId，完成时运行时把通知回流到下一轮；可用 builtin.job_output / builtin.job_kill 按 jobId 读取结果或终止该子代理。";
 /// 快速委托说明。
-const DELEGATE_TO_FAST_TOOL_DESCRIPTION: &str = "把一个自包含任务委派给在自身上下文里独立工作的快速子代理，用于卸载聚焦而独立的工作（调研、有边界的实现、分析），不消耗父对话上下文。返回结果而不是中间步骤。子代理看不到本次对话，task 必须是完整独立的 prompt。多个互不依赖的委派应在同一条消息里一次发出并行执行；有先后依赖的必须串行。写仓库时每个子代理的写集必须互不相交，同一文件禁止并发送改。默认后台执行：立即返回 jobId，完成时运行时把结果经通知回流到下一轮，用 builtin.job_output 按 jobId 读取；仅当下一步动作依赖该结果时才传 run_in_background: false 同步等待。";
+const DELEGATE_TO_FAST_TOOL_DESCRIPTION: &str = "把一个自包含任务委派给在自身上下文里独立工作的快速子代理，用于卸载聚焦而独立的工作（调研、有边界的实现、分析），不消耗父对话上下文。返回结果而不是中间步骤。子代理看不到本次对话，task 必须是完整独立的 prompt。多个互不依赖的委派应在同一条消息里一次发出并行执行；有先后依赖的必须串行。写仓库时每个子代理的写集必须互不相交，同一文件禁止并发送改。默认后台执行：立即返回 jobId，完成时运行时把结果经通知回流到下一轮，用 builtin.job_output 按 jobId 读取；仅当下一步动作依赖该结果时才传 run_in_background: false 同步等待。intent 与 task 必填，且必须在同一次调用的同一个参数对象里一起给出：intent 是每次委派必填的一句话目的，写法见该字段描述；漏填 intent 会让整条调用被判为参数非法，不会执行。";
 /// 委托任务字段说明。
 const DELEGATE_TO_FAST_TASK_FIELD_DESCRIPTION: &str = "自包含的委托任务：写明目标、范围、证据要求与交付格式。子代理看不到本次对话，这里必须是一份完整独立的 prompt。";
 /// 后台执行字段说明。
@@ -145,12 +145,12 @@ pub fn list_agents_tool_definition() -> ToolDefinition {
 /// `delegate_to_fast` 工具定义。
 #[must_use]
 pub fn delegate_to_fast_tool_definition() -> ToolDefinition {
-    tool_definition(
+    let mut definition = tool_definition(
         DELEGATE_TO_FAST_TOOL_ID,
         DELEGATE_TO_FAST_TOOL_NAME,
         DELEGATE_TO_FAST_TOOL_DESCRIPTION,
         ToolConcurrencyPolicy::ParallelSafe,
-        vec![SUBAGENT_TOOL_TASK_FIELD],
+        vec![SUBAGENT_TOOL_TASK_FIELD, TOOL_INTENT_FIELD],
         vec![
             string_field(
                 SUBAGENT_TOOL_TASK_FIELD,
@@ -160,8 +160,29 @@ pub fn delegate_to_fast_tool_definition() -> ToolDefinition {
                 SUBAGENT_TOOL_RUN_IN_BACKGROUND_FIELD,
                 DELEGATE_TO_FAST_RUN_IN_BACKGROUND_DESCRIPTION,
             ),
+            // intent 与其余内置工具同契约：折叠态只显示这一句话，原始任务留在展开态。
+            string_field(TOOL_INTENT_FIELD, TOOL_INTENT_FIELD_DESCRIPTION),
         ],
-    )
+    );
+    // 与声明 intent 的其余工具同一做法：给出一条完整调用示例固定参数形状。
+    // 模型实际漏填的正是必填的 intent，示例里必须让它与 task 同批出现。
+    definition.schema.input_schema["examples"] = json!([delegate_tool_example()]);
+    definition
+}
+
+/// `delegate_to_fast` 的一次完整合法调用示例。
+fn delegate_tool_example() -> serde_json::Value {
+    let mut example = serde_json::Map::new();
+    example.insert(TOOL_INTENT_FIELD.to_owned(), json!("审计文档展示契约"));
+    example.insert(
+        SUBAGENT_TOOL_TASK_FIELD.to_owned(),
+        json!("只读审计 docs 下全部 Markdown，逐份列出失效链接与标题层级，禁止修改任何文件。"),
+    );
+    example.insert(
+        SUBAGENT_TOOL_RUN_IN_BACKGROUND_FIELD.to_owned(),
+        json!(false),
+    );
+    serde_json::Value::Object(example)
 }
 
 fn tool_definition(

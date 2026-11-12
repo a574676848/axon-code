@@ -467,6 +467,7 @@ fn every_intent_tool_accepts_the_intent_field_before_execution() {
         "notes_write_file",
         "notes_append_to_file",
         "send_message",
+        "delegate_to_fast",
     ];
     for name in axon_display::tool_intent_tool_names() {
         assert!(
@@ -580,6 +581,26 @@ fn every_intent_tool_accepts_the_intent_field_before_execution() {
         sent.is_ok(),
         "send_message 不得拒绝 intent：{:?}",
         sent.err()
+    );
+
+    // 委托快速代理同样声明 intent：折叠态只展示这一句话，执行侧必须接受它。
+    let delegated = subagent_runtime.execute(
+        &mut control,
+        axon_agent_runtime::SubagentToolExecutionInput {
+            tool_call: ProviderToolCall::new(
+                "call_intent_delegate",
+                "builtin.delegate_to_fast",
+                r#"{"task":"只读审计 docs 的展示契约","intent":"审计文档展示契约"}"#,
+            ),
+            current_path: axon_agent_runtime::AgentPath::root(),
+            remote_requested: false,
+            completed_at_ms: 0,
+        },
+    );
+    assert!(
+        delegated.is_ok(),
+        "delegate_to_fast 不得拒绝 intent：{:?}",
+        delegated.err()
     );
 
     let _ = std::fs::remove_dir_all(&temp_root);

@@ -546,10 +546,14 @@ fn builtin_schema_validation_matches_conditional_runtime_contracts() {
             )
             .is_ok()
     );
-    // 折叠态只显示模型自述的一句话目的：search/glob/update_plan/便签写入/终端执行都必填 intent。
+    // 折叠态只显示模型自述的一句话目的：search/glob/update_plan/便签写入/终端执行/委派都必填 intent。
     for (tool, arguments) in [
         ("builtin.search", json!({ "query": "axon" })),
         ("builtin.glob", json!({ "paths": "src" })),
+        (
+            "builtin.delegate_to_fast",
+            json!({ "task": "审计 docs 与 src 的展示契约" }),
+        ),
         (
             "builtin.update_plan",
             json!({ "plan": [
@@ -605,7 +609,10 @@ fn builtin_schemas_reject_semantically_empty_strings_before_execution() {
             "builtin.read_mcp_resource",
             json!({ "server": "mcp", "uri": " " }),
         ),
-        ("builtin.delegate_to_fast", json!({ "task": " " })),
+        (
+            "builtin.delegate_to_fast",
+            json!({ "task": " ", "intent": "空任务被拒绝" }),
+        ),
         ("builtin.list_agents", json!({ "path_prefix": " " })),
     ];
 

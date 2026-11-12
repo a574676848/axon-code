@@ -332,9 +332,9 @@ mod tests {
             ),
             (
                 "builtin.delegate_to_fast",
-                r#"{"run_in_background":true,"task":"审计 docs"}"#,
+                r#"{"run_in_background":true,"task":"只读审计 docs 全部 Markdown 与 src 展示投影","intent":"审计文档展示契约"}"#,
                 "委托快速代理",
-                "审计 docs",
+                "审计文档展示契约",
             ),
             (
                 "builtin.send_message",

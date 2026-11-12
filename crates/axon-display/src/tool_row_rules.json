@@ -7,7 +7,8 @@
         "search",
         "notes_write_file",
         "notes_append_to_file",
-        "send_message"
+        "send_message",
+        "delegate_to_fast"
     ],
     "targets": {
         "memory_search": { "fields": ["query"] },

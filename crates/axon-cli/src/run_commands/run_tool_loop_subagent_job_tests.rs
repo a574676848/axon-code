@@ -414,7 +414,7 @@ fn delegate_to_fast_defaults_to_background_and_registers_a_job() {
     let request = fixture_request();
     let call = provider_tool_call_with_args(
         "builtin.delegate_to_fast",
-        &serde_json::json!({ "task": "扫描 auth 模块" }),
+        &serde_json::json!({ "task": "扫描 auth 模块", "intent": "审计 auth 越权写入" }),
     );
     let receipts = super::execute_supported_tool_calls(&request, &[call], None);
 
@@ -456,7 +456,11 @@ fn delegate_to_fast_sync_mode_returns_inline_receipt_without_a_job() {
     }));
     let call = provider_tool_call_with_args(
         "builtin.delegate_to_fast",
-        &serde_json::json!({ "task": "扫描 auth 模块", "run_in_background": false }),
+        &serde_json::json!({
+            "task": "扫描 auth 模块",
+            "run_in_background": false,
+            "intent": "审计 auth 越权写入"
+        }),
     );
     let receipts = super::execute_supported_tool_calls(&request, &[call], None);
 

@@ -144,6 +144,8 @@ pub(super) fn parse_delegate_args(arguments: &serde_json::Value) -> AxonResult<D
         &[
             SUBAGENT_TOOL_TASK_FIELD,
             SUBAGENT_TOOL_RUN_IN_BACKGROUND_FIELD,
+            // 与 schema 必填的展示字段同名同义：只影响折叠态，不进入执行语义。
+            crate::TOOL_INTENT_FIELD,
         ],
     )?;
     if let Some(value) = arguments.get(SUBAGENT_TOOL_RUN_IN_BACKGROUND_FIELD)
