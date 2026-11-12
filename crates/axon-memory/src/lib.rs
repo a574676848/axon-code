@@ -12,6 +12,8 @@ mod file_lock;
 mod index_rebuild;
 #[path = "pipeline/pipeline_state.rs"]
 mod pipeline_state;
+#[path = "query/temporal.rs"]
+mod temporal;
 #[path = "usage/quality.rs"]
 mod quality;
 #[path = "retrieval/retrieval.rs"]
@@ -76,6 +78,7 @@ pub use retrieval::{
     MEMORY_HYBRID_TEXT_WEIGHT_BASIS_POINTS, MEMORY_HYBRID_VECTOR_WEIGHT_BASIS_POINTS,
     MemoryHybridExplain, MemoryHybridHit, MemoryHybridQuery, MemoryHybridScope,
 };
+pub use temporal::{TimeRange, parse_temporal_hint};
 pub use store::{
     LEGACY_MEMORY_RECORD_TABLE_PREFIX, MEMORY_SQLITE_BUSY_TIMEOUT_MS, MEMORY_SQLITE_SCHEMA_VERSION,
     MemoryArchiveStatus, MemoryKindCount, MemoryScopeFacet, MemorySqliteRecord,
