@@ -386,6 +386,8 @@ jobs:
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          # dist 目录不会凭空存在：后续的 current.json / MSI / 校验和都往这里写。
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
           $binaryPath = "target\x86_64-pc-windows-msvc\release\axon.exe"
           $desktopBinaryPath = "target\x86_64-pc-windows-msvc\release\axon-desktop.exe"
           $launcherPath = "target\x86_64-pc-windows-msvc\release\axon-launcher.exe"
