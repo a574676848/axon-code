@@ -1,5 +1,6 @@
 //! 单 Session Action Pump。
 
+use super::execution_projection::ExecutionProjection;
 use crate::model::{ActionExecutionRequest, SessionExecutionContext};
 use crate::ports::{EventPublisher, RuntimeClock, TurnExecutor};
 use axon_domain::{
@@ -158,6 +159,8 @@ pub struct ExecutionWorker<S, E, P, C> {
     host: DaemonHostRecord,
     session_id: DaemonSessionId,
     action_lease_duration_ms: u64,
+    /// 执行期的外部会话投影；为空表示本轮不向外写逐字稿（纯本地结算）。
+    projection: Option<ExecutionProjection>,
 }
 
 impl<S, E, P, C> ExecutionWorker<S, E, P, C>
@@ -185,7 +188,18 @@ where
             host,
             session_id,
             action_lease_duration_ms,
+            projection: None,
         }
+    }
+
+    /// 绑定执行期的外部会话投影。
+    ///
+    /// 绑定后逐条事件由运行侧直接写进执行会话，收口事件也由运行侧落库；
+    /// Worker 只在投影**没有**写终态时补追加，避免同一轮被收口两次。
+    #[must_use]
+    pub fn with_projection(mut self, projection: Option<ExecutionProjection>) -> Self {
+        self.projection = projection;
+        self
     }
 
     /// 领取并执行至多一个 Action；同一 Session 绝不并发执行 Provider turn。
@@ -213,15 +227,18 @@ where
             self.clock.clone(),
             self.action_lease_duration_ms,
         );
-        let outcome = match self.executor.execute(ActionExecutionRequest {
-            action: action.clone(),
-            context: SessionExecutionContext {
-                run_session_id: runtime.run_session_id,
-                cwd: runtime.cwd,
-                context_version: runtime.context_version,
+        let outcome = match self.executor.execute_streaming(
+            ActionExecutionRequest {
+                action: action.clone(),
+                context: SessionExecutionContext {
+                    run_session_id: runtime.run_session_id,
+                    cwd: runtime.cwd,
+                    context_version: runtime.context_version,
+                },
+                runtime_profile: crate::JarvisRuntimeSelector::for_background_execution(),
             },
-            runtime_profile: crate::JarvisRuntimeSelector::for_background_execution(),
-        }) {
+            self.projection.as_ref().map(ExecutionProjection::sink),
+        ) {
             Ok(outcome) => outcome,
             Err(error) => {
                 self.settle_failure(&action, error.clone())?;
@@ -229,7 +246,12 @@ where
             }
         };
         let checkpoint = outcome.checkpoint.clone();
-        if let Err(error) = self.commit_outcome(&action, outcome, &checkpoint) {
+        // 投影已经写过终态时不能再追加一遍：界面会把同一轮收口两次。
+        let terminal_projected = self
+            .projection
+            .as_ref()
+            .is_some_and(ExecutionProjection::terminal_written);
+        if let Err(error) = self.commit_outcome(&action, outcome, &checkpoint, terminal_projected) {
             if matches!(error, ExecutionWorkerError::Gate(_)) {
                 let _ = self.cancel_for_gate(&action, self.clock.now_ms());
             }
@@ -468,3 +490,7 @@ mod failure_tests;
 #[cfg(test)]
 #[path = "execution_worker_lease_tests.rs"]
 mod lease_tests;
+
+#[cfg(test)]
+#[path = "execution_worker_projection_tests.rs"]
+mod projection_tests;

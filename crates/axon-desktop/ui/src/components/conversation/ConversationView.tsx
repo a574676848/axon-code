@@ -3,10 +3,13 @@ import * as ipc from '../../ipc';
 import type { CronJob, WorkspaceItem } from '../../types';
 import { targetOfLane, useConversation, type LaneSelection } from '../../conversation/useConversation';
 import { sessionGenerationMetrics } from '../../conversation/sessionGeneration';
+import { lastObservedUsage } from '../../conversation/sessionUsage';
 import { coverFace, type StageFrame } from '../../conversation/stage';
 import { useLaneAutoRead, useStopSpeechOnLaneChange } from '../../speech';
 import { Dialog } from '../ui/overlays';
 import { ConversationHeader } from './ConversationHeader';
+import { SessionOriginBar } from './SessionOriginBar';
+import { isReadOnlySession, READ_ONLY_PLACEHOLDER, type SessionOriginBarState } from '../../sessionOpening';
 import { ConversationHeaderActions } from './ConversationHeaderActions';
 import { useAutoReadReply } from './useAutoReadReply';
 import { ConversationStream } from './ConversationStream';
@@ -22,7 +25,7 @@ import { useConversationMcp } from '../../conversation/useConversationMcp';
 import { useSkillCatalog } from '../../conversation/skillCatalog';
 import {
   changedFilesOf,
-  workingStatusPrimary,
+  workingLineOf,
   type AttachmentRef,
 } from '../../conversation/transcript';
 import {
@@ -54,6 +57,7 @@ import { useInterruptOnEscape, useRailShortcuts } from './useConversationShortcu
 
 /** 后端配置里与指标条相关的键。 */
 const CRON_DESTINATION_PREFIX = 'cron-';
+/** 后台驱动的独立会话在输入坞里的禁用说明。 */
 /** 打开慢过这个时长才亮过渡面：快到看不出来时上一屏继续显示，不做多余的闪动。 */
 const OPENING_SURFACE_DELAY_MS = 140;
 /** 过渡面亮起后至少停留的时长：才亮就撤会读成一次闪动。 */
@@ -70,6 +74,8 @@ export interface ConversationViewProps {
   onSelectLane: (selection: LaneSelection) => void;
   /** 上报当前会话的运行时事实；外层据此判断归档是否需要二次确认。 */
   onRuntimeFacts?: (facts: LaneRuntimeFacts) => void;
+  /** 会话来源返回条；从页面进入的后台会话才有。 */
+  originBar?: SessionOriginBarState | null;
 }
 
 export const ConversationView: React.FC<ConversationViewProps> = ({
@@ -78,6 +84,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   configRevision,
   onSelectLane,
   onRuntimeFacts,
+  originBar = null,
 }) => {
   // 车道选择归一化成订阅目标：控制器本身与子代理会话视图共用同一个 hook。
   const target = React.useMemo(
@@ -266,11 +273,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    */
   const workingLine =
     conversation.working && selection !== null
-      ? {
-          primary: workingStatusPrimary(runningTurn?.activity ?? null),
-          elapsedMs: runningTurn?.elapsedMs ?? null,
-          queued: conversation.queued,
-        }
+      ? workingLineOf(runningTurn, conversation.queued, conversation.loadingHistory)
       : null;
 
   /*
@@ -308,7 +311,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    * Esc 统一中断：与 TUI 同语义。本轮跑着的时候，Esc 就是中断当前请求，
    * 不需要先找到停止按钮。空闲时不接管这一键，它仍归各浮层与草稿使用。
    */
-  useInterruptOnEscape(turnRunning, () => void interruptTurn());
+  useInterruptOnEscape(turnRunning && !conversation.loadingHistory, () => void interruptTurn());
 
   /**
    * 工作区根目录只取路径字符串。
@@ -378,7 +381,8 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     model: fixedModel ?? config?.model ?? '',
     cwd: workspace?.path ?? '',
     reasoningEffort: fixedReasoningEffort ?? config?.reasoningEffort ?? null,
-    usage: lastTurn?.usage ?? null,
+    /* 预算读数取会话里最近一次有观测的用量：新一轮刚提交时它还没有用量，用最后一条会清零。 */
+    usage: lastObservedUsage(conversation.state.turns),
     contextWindow: config?.contextWindow ?? null,
     firstTokenAvgMs: sessionGeneration.firstTokenAvgMs,
     generationTpsX10: sessionGeneration.generationTpsX10,
@@ -521,6 +525,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
               />
             }
           />
+          {originBar !== null && <SessionOriginBar {...originBar} model={sessionModelLabel || (config?.model ?? '')} />}
 
           {failure !== null && (
             <div className="shrink-0 px-4 pt-1">
@@ -629,7 +634,8 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 voiceTarget={{
                   ensureSession: ensureVoiceSession,
                 }}
-                enabled={workspace !== null || selection !== null}
+                enabled={!isReadOnlySession(selection) && (workspace !== null || selection !== null)}
+                disabledPlaceholder={isReadOnlySession(selection) ? READ_ONLY_PLACEHOLDER : undefined}
                 busy={conversation.submitting || creating}
                 hintVisible={hintVisible}
                 model={fixedModel ?? explicitModel ?? sessionModelLabel ?? config?.model ?? ''}

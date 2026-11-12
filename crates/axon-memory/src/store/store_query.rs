@@ -291,22 +291,40 @@ impl MemorySqliteStore {
     }
 
     /// 按可召回条件和数量上限读取治理记录。
+    ///
+    /// `time_range` 存在时把 `updated_at_ms` 区间下推进 SQL：否则近期记录会占满名额，
+    /// 被上层时间窗过滤清空后得到空结果。
     pub fn recallable_records_limited(
         &self,
         now_ms: u64,
+        time_range: Option<(i64, i64)>,
         limit: usize,
     ) -> AxonResult<Vec<MemorySqliteRecord>> {
-        self.query_limited_records(
-            "SELECT * FROM memory_records WHERE state IN (?1, ?2) AND archived_at_ms IS NULL AND (ttl_expires_at_ms IS NULL OR ttl_expires_at_ms > ?3) AND content_ref IS NOT NULL AND TRIM(content_ref) <> '' ORDER BY updated_at_ms DESC, memory_id ASC LIMIT ?4",
-            params![
-                state_code(MemoryState::Weak),
-                state_code(MemoryState::Strong),
-                i64::try_from(now_ms).map_err(|_| {
-                    AxonError::memory_persistence("Memory SQLite 数值溢出")
-                })?,
-                i64_from_usize(limit)?,
-            ],
-        )
+        let now = i64::try_from(now_ms)
+            .map_err(|_| AxonError::memory_persistence("Memory SQLite 数值溢出"))?;
+        let fetch_limit = i64_from_usize(limit)?;
+        match time_range {
+            Some((start_ms, end_ms)) => self.query_limited_records(
+                "SELECT * FROM memory_records WHERE state IN (?1, ?2) AND archived_at_ms IS NULL AND (ttl_expires_at_ms IS NULL OR ttl_expires_at_ms > ?3) AND updated_at_ms >= ?4 AND updated_at_ms <= ?5 AND content_ref IS NOT NULL AND TRIM(content_ref) <> '' ORDER BY updated_at_ms DESC, memory_id ASC LIMIT ?6",
+                params![
+                    state_code(MemoryState::Weak),
+                    state_code(MemoryState::Strong),
+                    now,
+                    start_ms,
+                    end_ms,
+                    fetch_limit,
+                ],
+            ),
+            None => self.query_limited_records(
+                "SELECT * FROM memory_records WHERE state IN (?1, ?2) AND archived_at_ms IS NULL AND (ttl_expires_at_ms IS NULL OR ttl_expires_at_ms > ?3) AND content_ref IS NOT NULL AND TRIM(content_ref) <> '' ORDER BY updated_at_ms DESC, memory_id ASC LIMIT ?4",
+                params![
+                    state_code(MemoryState::Weak),
+                    state_code(MemoryState::Strong),
+                    now,
+                    fetch_limit,
+                ],
+            ),
+        }
     }
 
     /// 统计指定 scope 内当前可召回治理记录数。

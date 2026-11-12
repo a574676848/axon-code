@@ -100,6 +100,8 @@ fn subagent_terminal_lifecycle_carries_runtime_metrics() {
         started_at_ms,
         max_runtime_ms: None,
         model_intent: RunSubagentModelIntent::Inherit,
+        model_override: None,
+        reasoning_effort_override: None,
     };
 
     completion

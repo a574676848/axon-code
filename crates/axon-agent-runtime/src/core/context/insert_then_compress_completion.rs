@@ -108,9 +108,10 @@ pub(super) fn complete_compaction(
             context.validation_mode,
             &error,
         ));
-        // durable 投影失败时继续当前 agent turn，但只发送已校验的 FreshWindow
-        // replacement history，避免把旧工具输出重新带回 Provider。
-        *messages = validated.compacted.messages.into();
+        // durable 投影失败时不能只改内存历史：窗口身份与归档都还停在旧窗口上，
+        // 界面读数却会跟着新窗口一起变小，下一轮又要把整段旧历史重新装回来。
+        // 保留原历史，让读数和持久事实指向同一个窗口；便签与换窗提示仍会下发，
+        // 由模型在同一个窗口内重试（归档问题修好后即可一次成功）。
         return CompressionOutcome::Prompted;
     }
 

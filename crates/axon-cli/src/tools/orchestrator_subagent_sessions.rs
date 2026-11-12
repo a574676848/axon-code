@@ -116,6 +116,9 @@ fn wake_recovered_subagent(
         },
         crate::tool_orchestrator::now_ms(),
         RunSubagentModelIntent::Inherit,
+        // 唤醒沿用该子代理既有会话的模型与档位，不带新的选型覆盖。
+        None,
+        None,
     )?;
     Ok(SubagentToolExecutionPlan::Run {
         receipt,

@@ -87,6 +87,8 @@ impl RunRequest {
             memory_disclosure_policy: agent_identity.memory_disclosure_policy(),
             performance: performance.as_deref(),
             workspace_snapshot_prewarm: options.workspace_snapshot_prewarm,
+            // 只有主 turn 能创建子代理：选型事实随同一身份判定注入。
+            include_delegation_catalog: agent_identity.is_primary(),
         };
         let (model_input, execution_tools) = prepare_model_input_and_tools(&runtime_input)?;
         let workspace_files = Arc::new(WorkspaceFileSession::default());

@@ -36,7 +36,7 @@ fn personal_and_workspace_queries_are_strictly_scope_isolated() {
     }
 
     let personal = store
-        .recallable_records_by_scope(OWNER_A, PERSONAL_A, 2, 8)
+        .recallable_records_by_scope(OWNER_A, PERSONAL_A, 2, None, 8)
         .unwrap();
     assert_eq!(
         personal
@@ -47,12 +47,12 @@ fn personal_and_workspace_queries_are_strictly_scope_isolated() {
     );
     assert!(
         store
-            .recallable_records_by_scope(OWNER_A, PERSONAL_B, 2, 8)
+            .recallable_records_by_scope(OWNER_A, PERSONAL_B, 2, None, 8)
             .unwrap()
             .is_empty()
     );
     let workspace = store
-        .recallable_records_by_namespace(WORKSPACE_A, 2, 8)
+        .recallable_records_by_namespace(WORKSPACE_A, 2, None, 8)
         .unwrap();
     assert_eq!(
         workspace

@@ -31,6 +31,7 @@ pub mod documents;
 pub mod export;
 /// 网关客户端：桌面端访问运行态的唯一入口。
 pub mod gateway;
+mod gateway_voice;
 /// 目标看板：只读目标列表与详情的 IPC 命令。
 pub mod goals;
 /// 输入历史：与 TUI 共用 composer draft 历史。

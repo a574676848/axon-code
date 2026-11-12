@@ -23,6 +23,7 @@ where
         action: &SessionActionRecord,
         outcome: TurnExecutionOutcome,
         checkpoint: &CheckpointTelemetry,
+        terminal_projected: bool,
     ) -> Result<(), ExecutionWorkerError> {
         let now_ms = self.clock.now_ms();
         let mut next = outcome
@@ -35,11 +36,14 @@ where
             .map(|event| (event.event_type, event.payload_json))
             .collect::<Vec<_>>();
         let settlement = self.outcome_settlement(action, &events, &mut next, now_ms)?;
+        // 运行侧已把本轮事件（含终态）逐条写进会话流时，这里只做结算，不再重复追加：
+        // 重叠的那一条会让界面把同一轮收口两次。
+        let appended: &[(String, String)] = if terminal_projected { &[] } else { &events };
         let records = self.store.commit_action(
             &action.action_id,
             &self.session_id,
             &self.host,
-            &events,
+            appended,
             next.as_ref(),
             settlement.as_ref(),
             checkpoint,

@@ -355,7 +355,9 @@ Axon 会为每次执行注入模型友好的环境变量：非 TTY 场景注入 
 | PTY 交互式会话 | `tty: true` | `session_id` | `Exclusive` | `builtin.write_stdin` |
 | 后台长任务 | `run_in_background: true` | `job_id` | `ParallelSafe` | `builtin.job_output` / `builtin.job_kill` |
 
-**后台子代理是同一类临时 Job**：`builtin.delegate_to_fast` 缺省后台执行（`run_in_background` 默认 true），回执带 `jobId`，其生命周期与 Shell 后台作业完全同构 —— 同一个注册表、同一套 owner 校验、同一保留与墓碑窗口，用 `builtin.job_output` 读取结果与终态、`builtin.job_kill` 完整中断（中止当前 turn → 关闭会话 → 投影统一终态 → 触发完成通知 → 回收）；显式传 `run_in_background: false` 时才走同步路径，直接返回回执且**不产生** `job_id`。该工具的 `intent` 必填（写法与长度同 `builtin.shell_command.intent`）：折叠态只显示这一句话，`task` 原文留在展开态。`builtin.spawn_agent` 保留在执行注册表但**不向模型暴露**（不出现在模型工具清单里），模型侧没有调用它的路径。
+**后台子代理是同一类临时 Job**：`builtin.delegate_to_fast` 缺省后台执行（`run_in_background` 默认 true），回执带 `jobId`，其生命周期与 Shell 后台作业完全同构 —— 同一个注册表、同一套 owner 校验、同一保留与墓碑窗口，用 `builtin.job_output` 读取结果与终态、`builtin.job_kill` 完整中断（中止当前 turn → 关闭会话 → 投影统一终态 → 触发完成通知 → 回收）；显式传 `run_in_background: false` 时才走同步路径，直接返回回执且**不产生** `job_id`。该工具的 `intent` 必填（写法与长度同 `builtin.shell_command.intent`）：折叠态只显示这一句话，`task` 原文留在展开态。
+
+`builtin.spawn_agent` 是模型可见的第二个创建类工具，一律后台执行：`intent`、`task_name`、`task` 必填，`model` 与 `reasoning_effort` 可选。省略两者时子代理继承当前模型、渠道链与思考强度（`modelPolicy: inherit`）；显式给出 `model` 时按模型名重新做渠道均衡选择（`modelPolicy: explicit`），并逐字写进回执。`model` 的取值必须落在环境上下文 `delegatable_models` 通告的清单内，越界在参数层被拒绝并回列可用值；`reasoning_effort` 取 `none|minimal|low|medium|high|xhigh|max`，协议不支持的档位由 provider 协商层按上限收敛而不报错。两个创建类工具都是 `ParallelSafe`，互不依赖的委派可以同批发出。
 
 寻址规则写死：**生命周期操作走 `job_id`，协作操作走 `AgentPath`**。`builtin.send_message` / `builtin.list_agents` 只接受 AgentPath（root 与当前代理自身都会被稳定拒绝）；`job_id` 传给这两个工具、或把 AgentPath 传给作业工具，都会被稳定拒绝。
 

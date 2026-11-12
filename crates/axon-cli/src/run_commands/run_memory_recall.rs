@@ -124,6 +124,7 @@ pub(super) fn prepare_memory_recall_for_run(
             user_ref: None,
             namespace_ref: MEMORY_GLOBAL_NAMESPACE_REF.to_owned(),
         }),
+        None,
     );
     let workspace_query = if scope.namespace == MEMORY_GLOBAL_NAMESPACE_REF {
         PreparedMemoryQuery {
@@ -142,6 +143,7 @@ pub(super) fn prepare_memory_recall_for_run(
                 user_ref: None,
                 namespace_ref: scope.namespace.clone(),
             }),
+            None,
         )
     };
     let embedding_status = global_query.embedding_status;

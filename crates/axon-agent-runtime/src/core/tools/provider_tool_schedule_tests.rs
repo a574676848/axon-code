@@ -72,17 +72,17 @@ fn provider_tool_call_batch_schedules_stable_ids_and_requirements() {
 }
 
 #[test]
-fn hidden_spawn_agent_call_cannot_be_dispatched_and_stays_exclusive() {
+fn spawn_agent_call_is_dispatched_and_scheduled_parallel_safe() {
     let mut registry = ToolRegistry::new();
     AgentToolRegistryRuntime::register_builtin_tools(&mut registry).unwrap();
     let spawn_agent = registry
         .tool_by_qualified_name("builtin.spawn_agent")
-        .expect("builtin.spawn_agent 定义必须保留在执行注册表");
-    assert!(!spawn_agent.enabled);
-    // PAR-1 §1.4：隐藏工具 fail-closed 为独占。
+        .expect("builtin.spawn_agent 定义必须在执行注册表");
+    assert!(spawn_agent.enabled);
+    // 创建类工具都在后台立即返回 jobId：互不依赖的委派必须能同批发出。
     assert_eq!(
         spawn_agent.concurrency_policy,
-        ToolConcurrencyPolicy::Exclusive
+        ToolConcurrencyPolicy::ParallelSafe
     );
 
     let report = ProviderToolCallScheduleRuntime::schedule(
@@ -91,7 +91,7 @@ fn hidden_spawn_agent_call_cannot_be_dispatched_and_stays_exclusive() {
             tool_calls: vec![provider_call(
                 "call-spawn",
                 "builtin_spawn_agent",
-                r#"{"task_name":"review","task":"检查当前改动"}"#,
+                r#"{"task_name":"review","task":"检查当前改动","intent":"复核改动","model":"gpt-6-astra"}"#,
             )],
             cwd: std::path::PathBuf::from("."),
             session_id: SessionId(1),
@@ -103,13 +103,13 @@ fn hidden_spawn_agent_call_cannot_be_dispatched_and_stays_exclusive() {
     )
     .unwrap();
 
-    assert!(matches!(
+    assert_eq!(
         report.entries[0].execution_permission,
-        ToolExecutionPermission::Forbidden { .. }
-    ));
+        ToolExecutionPermission::Allowed
+    );
     assert_eq!(
         report.entries[0].concurrency_policy,
-        ToolConcurrencyPolicy::Exclusive
+        ToolConcurrencyPolicy::ParallelSafe
     );
 }
 

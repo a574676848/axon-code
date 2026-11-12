@@ -9,6 +9,7 @@
         "notes_append_to_file",
         "send_message",
         "delegate_to_fast",
+        "spawn_agent",
         "goal_create",
         "goal_list",
         "goal_get",

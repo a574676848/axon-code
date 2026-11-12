@@ -193,6 +193,7 @@ pub fn hybrid_query_memory(
     now_ms: u64,
     timeout: Duration,
     scope: Option<MemoryHybridScope>,
+    time_range: Option<(i64, i64)>,
 ) -> PreparedMemoryQuery {
     hybrid_query_memory_with_images(
         config,
@@ -203,6 +204,7 @@ pub fn hybrid_query_memory(
         now_ms,
         timeout,
         scope,
+        time_range,
     )
 }
 
@@ -217,9 +219,18 @@ pub fn hybrid_query_memory_with_images(
     now_ms: u64,
     timeout: Duration,
     scope: Option<MemoryHybridScope>,
+    time_range: Option<(i64, i64)>,
 ) -> PreparedMemoryQuery {
     let embedding = memory_query_embedding_with_images(config, prompt, image_urls, timeout);
-    hybrid_query_memory_with_embedding(orchestrator, prompt, &embedding, limit, now_ms, scope)
+    hybrid_query_memory_with_embedding(
+        orchestrator,
+        prompt,
+        &embedding,
+        limit,
+        now_ms,
+        scope,
+        time_range,
+    )
 }
 
 /// 为 Memory 查询生成统一的 embedding 报告。
@@ -252,6 +263,7 @@ pub fn hybrid_query_memory_with_embedding(
     limit: usize,
     now_ms: u64,
     scope: Option<MemoryHybridScope>,
+    time_range: Option<(i64, i64)>,
 ) -> PreparedMemoryQuery {
     let hits = orchestrator
         .hybrid_search_with_image(
@@ -261,6 +273,8 @@ pub fn hybrid_query_memory_with_embedding(
                 limit,
                 now_ms,
                 scope,
+                kinds: None,
+                time_range,
             },
             embedding.image_embedding.as_deref(),
         )
@@ -305,13 +319,23 @@ pub fn memory_query_summary(
     now_ms: u64,
     timeout: Duration,
     scope: Option<MemoryHybridScope>,
+    time_range: Option<(i64, i64)>,
 ) -> Result<String, String> {
     if prompt.trim().is_empty() {
         return Err("memory_search query 不能为空".to_owned());
     }
     let orchestrator = init_memory_orchestrator(config_path, config)?;
     let scoped = scope.is_some();
-    let result = hybrid_query_memory(config, &orchestrator, prompt, limit, now_ms, timeout, scope);
+    let result = hybrid_query_memory(
+        config,
+        &orchestrator,
+        prompt,
+        limit,
+        now_ms,
+        timeout,
+        scope,
+        time_range,
+    );
     let hits = result.hits.iter().map(|hit| serde_json::json!({
         "memoryId": hit.record.record.id.0,
         "scoreBasisPoints": hit.score_basis_points,

@@ -23,6 +23,7 @@ axon-display = { path = "../axon-display" }
 axon-turn-view = { path = "../axon-turn-view" }
 axon-domain = { path = "../axon-domain" }
 axon-daemon = { path = "../axon-daemon" }
+axon-env = { path = "../axon-env" }
 axon-persona = { path = "../axon-persona" }
 axon-fs-walk = { path = "../axon-fs-walk" }
 axon-jsonl = { path = "../axon-jsonl" }

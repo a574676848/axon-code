@@ -88,6 +88,16 @@ pub trait TurnEventSink: Send + Sync {
 pub trait SubagentSessionSinkFactory: Send + Sync {
     /// 取（必要时先登记）某个子代理会话的 durable sink。
     fn sink_for(&self, session_id: &str) -> Result<std::sync::Arc<dyn TurnEventSink>, String>;
+
+    /// 失败终态是否由调度侧（Session Worker）结算并写事件。
+    ///
+    /// 默认由运行侧写：普通子代理只有运行侧一层，它不写就没人收口。
+    /// 后台执行（Goal / cron）另有 Worker 负责结算与重试，运行侧再写一条
+    /// `turn_completed` 会让同一轮出现两张失败卡，因此这类宿主返回 true，
+    /// 运行侧在出错时只投影过程事件，终态交给 Worker。
+    fn failures_settled_by_scheduler(&self) -> bool {
+        false
+    }
 }
 
 /// 发布事件给外部订阅者的端口。

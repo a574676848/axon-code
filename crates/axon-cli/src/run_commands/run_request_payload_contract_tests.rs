@@ -100,6 +100,7 @@ fn build_contract_payload(
         memory_disclosure_policy: DisclosurePolicy::PrivateOnly,
         performance: None,
         workspace_snapshot_prewarm,
+        include_delegation_catalog: true,
     };
     build_run_model_payload(&input, &ToolRegistry::new()).expect("构造合同 payload")
 }
@@ -192,5 +193,83 @@ fn persona_segments_follow_execution_identity() {
     assert!(
         !subagent_text.contains("<persona-state-context>"),
         "子代理不得继承人格状态段"
+    );
+}
+
+/// 主 turn 的环境上下文必须通告可委派模型与思考强度档位：
+/// 模型只能从这两行知道有哪些选型可用，且这两行不得写死任何工具名。
+#[test]
+fn main_turn_environment_context_advertises_the_subagent_model_catalog() {
+    let root = axon_test_support::test_temp_dir();
+    let home = root.path().join("home");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&home).expect("创建 Home 根目录");
+    std::fs::create_dir_all(&workspace).expect("创建 Workspace");
+    initialize_git_workspace(&workspace);
+    let config_path = home.join("config.toml");
+    let mut config = AxonConfig::default();
+    config.providers.push(axon_config::ProviderConfig::new(
+        "p-a",
+        "openai",
+        "https://provider.invalid/v1",
+    ));
+    config.models.push(axon_config::ModelConfig {
+        name: "gpt-6-astra".to_owned(),
+        id: "upstream-astra".to_owned(),
+        provider: "p-a".to_owned(),
+        ..axon_config::ModelConfig::default()
+    });
+    config.agent.default_model = "gpt-6-astra".to_owned();
+    config.agent.fast_model = "gpt-6-astra".to_owned();
+    axon_config::ConfigLoader::save_to_path(&config_path, &config).expect("写入测试配置");
+    let startup = RunStartupSnapshot::build(&config_path, &workspace).expect("构造启动快照");
+    let command = contract_command();
+
+    let payload = build_contract_payload(
+        &config_path,
+        &config,
+        &workspace,
+        &command,
+        &startup,
+        None,
+        true,
+    );
+    let rendered = payload
+        .model_payload
+        .messages
+        .iter()
+        .chain(payload.model_payload.injected_context_messages.iter())
+        .find(|message| message.content.starts_with(ENVIRONMENT_CONTEXT_PREFIX))
+        .map(|message| message.content.clone())
+        .unwrap_or_else(|| {
+            let dump = payload
+                .model_payload
+                .messages
+                .iter()
+                .chain(payload.model_payload.injected_context_messages.iter())
+                .map(|message| {
+                    let head = message.content.chars().take(40).collect::<String>();
+                    format!("[{}] {head}", message.role)
+                })
+                .collect::<Vec<_>>()
+                .join(" | ");
+            panic!("主 turn 必须注入环境上下文；实际消息：{dump}")
+        });
+
+    assert!(
+        rendered.contains("delegatable_models: gpt-6-astra"),
+        "可用模型必须进环境上下文：{rendered}"
+    );
+    assert!(
+        rendered.contains("reasoning_effort_tiers: none, minimal, low, medium, high, xhigh, max"),
+        "思考强度档位必须进环境上下文：{rendered}"
+    );
+    assert!(
+        rendered.contains("可根据任务场景与模型能力偏向选择对应的模型"),
+        "清单必须自带用途说明：{rendered}"
+    );
+    assert!(
+        !rendered.contains("spawn_agent"),
+        "环境上下文不得写死工具名：{rendered}"
     );
 }

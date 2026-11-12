@@ -13,6 +13,10 @@ pub const MEMORY_SEARCH_TOOL_ID: ToolId = ToolId(17);
 pub const MEMORY_SEARCH_TOOL_QUERY_FIELD: &str = "query";
 /// memory_search tool 可选 limit 字段。
 pub const MEMORY_SEARCH_TOOL_LIMIT_FIELD: &str = "limit";
+/// memory_search 可选 since_ms 字段。
+pub const MEMORY_SEARCH_SINCE_FIELD: &str = "since_ms";
+/// memory_search 可选 until_ms 字段。
+pub const MEMORY_SEARCH_UNTIL_FIELD: &str = "until_ms";
 /// memory_search 默认最大返回条目数。
 pub const MEMORY_SEARCH_DEFAULT_LIMIT: usize = 5;
 
@@ -30,6 +34,16 @@ pub(crate) fn memory_search_tool_definition() -> ToolDefinition {
                 MEMORY_SEARCH_TOOL_LIMIT_FIELD,
                 ToolSchemaFieldKind::Integer,
                 "可选最大返回条目数，必须为正整数，默认 5。",
+            ),
+            ToolSchemaField::new(
+                MEMORY_SEARCH_SINCE_FIELD,
+                ToolSchemaFieldKind::Integer,
+                "可选时间窗起点，单位毫秒 Unix 时间戳；与 until_ms 成对出现，只返回该区间内更新过的记忆。",
+            ),
+            ToolSchemaField::new(
+                MEMORY_SEARCH_UNTIL_FIELD,
+                ToolSchemaFieldKind::Integer,
+                "可选时间窗终点，单位毫秒 Unix 时间戳；与 since_ms 成对出现。",
             ),
         ],
     );

@@ -62,6 +62,15 @@ test('还没有供应商事实时写中性句，不伪造供应商', () => {
     assert.ok(!state.line.includes('/'), '没有事实时不能出现任何供应商/模型名');
 });
 
+test('正文装载中写加载句，装载完成才认供应商阶段', () => {
+    assert.equal(workingStatusPrimary(null, true), '正在加载会话…');
+    assert.equal(
+        workingStatusPrimary('sensenova/sensenova-6.8-flash-lite 生成中', true),
+        '正在加载会话…',
+    );
+    assert.equal(workingStatusPrimary(null, false), '正在连接供应商…');
+});
+
 test('连接、重试、失败、换渠道与生成各写自己的阶段', () => {
     let state = openTurn();
 

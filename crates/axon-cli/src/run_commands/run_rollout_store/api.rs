@@ -22,6 +22,19 @@ pub(crate) fn commit_session_to_rollout(
     RolloutSqliteStore::open(&path)?.commit_session(record, Some(title))
 }
 
+/// 确保当前轮的 rollout 记录存在（换窗用它定位本轮）。
+///
+/// 一条交互的首个 provider turn 就可能触发换窗，而这时的轮记录要到收尾才落地。
+/// 这里先补一条起始记录：换窗始终能找到当前轮，收尾提交再按同一幂等键覆盖成完整记录，
+/// sequence 因此保持稳定。未知轮次仍然不得推进窗口，该门禁在 store 层原样保留。
+pub(crate) fn ensure_current_turn_to_rollout(
+    config_path: &Path,
+    record: &super::super::run_session_store::RunSessionRecord,
+) -> Result<u64, String> {
+    let path = resolved_rollout_db_path(config_path).map_err(ToOwned::to_owned)?;
+    RolloutSqliteStore::open(&path)?.ensure_started_turn(record)
+}
+
 /// 读取指定 session 最新已提交记录中的 token usage。
 pub(crate) fn load_session_usage(
     config_path: &Path,

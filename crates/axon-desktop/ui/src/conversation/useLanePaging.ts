@@ -86,6 +86,8 @@ export interface LanePaging {
   routeFrames: (batch: ConversationStreamEvent[], nowMs: number) => void;
   /** 加载更早的一条 Interaction。 */
   loadOlder: () => Promise<void>;
+  /** 当前是否在独立回放里（翻页或展开）：此时不做首屏窗口，整条读起。 */
+  ownPage: () => boolean;
   /** 展开一条被折叠的 Interaction。 */
   unfoldTurn: (interactionId: string) => void;
   hasOlder: boolean;
@@ -169,6 +171,9 @@ export function useLanePaging(options: LanePagingOptions): LanePaging {
     const paging = pagingRef.current;
     return paging === null ? mainQueue.shift() : paging.queue.shift();
   }, []);
+
+  /** 当前是否在独立回放里：编排据此决定读整条还是只读尾部窗口。 */
+  const ownPage = useCallback(() => pagingRef.current !== null, []);
 
   const finish = useCallback(() => {
     const paging = pagingRef.current;
@@ -285,6 +290,7 @@ export function useLanePaging(options: LanePagingOptions): LanePaging {
       seedOf,
       applyAction,
       take,
+      ownPage,
       finish,
       routeFrames,
       loadOlder,
@@ -304,6 +310,7 @@ export function useLanePaging(options: LanePagingOptions): LanePaging {
       routeFrames,
       seedOf,
       take,
+      ownPage,
       unfoldTurn,
     ],
   );

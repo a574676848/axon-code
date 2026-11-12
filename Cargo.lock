@@ -578,6 +578,7 @@ dependencies = [
  "axon-daemon",
  "axon-display",
  "axon-domain",
+ "axon-env",
  "axon-fs-walk",
  "axon-jsonl",
  "axon-logger",
@@ -741,6 +742,10 @@ dependencies = [
  "sha2 0.11.1",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "axon-env"
+version = "0.1.0"
 
 [[package]]
 name = "axon-fixtures"

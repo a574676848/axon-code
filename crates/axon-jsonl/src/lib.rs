@@ -5,7 +5,9 @@
 
 mod store;
 
-pub use store::{DEFAULT_SHARD_MAX_BYTES, SHARD_SEQUENCE_WIDTH, ShardedJsonlStore};
+pub use store::{
+    DEFAULT_SHARD_MAX_BYTES, MAX_SINGLE_RECORD_BYTES, SHARD_SEQUENCE_WIDTH, ShardedJsonlStore,
+};
 
 #[cfg(test)]
 mod tests;

@@ -39,6 +39,13 @@ pub struct ChildExecutionInput {
     pub max_runtime_ms: Option<u64>,
     /// 子执行模型选择意图。
     pub model_intent: ChildExecutionModelIntent,
+    /// 显式指定的子代理模型名。
+    ///
+    /// 只在 [`ChildExecutionModelIntent::Inherit`] 下生效：`Some` 时替换继承来的模型与
+    /// 渠道链，`None` 表示沿用当前主代理。快速委托由槽位决定模型，忽略本字段。
+    pub model_override: Option<String>,
+    /// 显式指定的子代理思考强度档位；`None` 表示沿用当前档位。
+    pub reasoning_effort_override: Option<String>,
 }
 
 impl ChildExecutionInput {
@@ -163,6 +170,8 @@ mod tests {
             started_at_ms: 0,
             max_runtime_ms: None,
             model_intent: ChildExecutionModelIntent::Inherit,
+            model_override: None,
+            reasoning_effort_override: None,
         };
 
         assert_eq!(

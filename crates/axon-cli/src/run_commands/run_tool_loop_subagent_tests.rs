@@ -97,10 +97,17 @@ fn fixture_request() -> RunRequest {
 }
 
 #[test]
-fn hidden_spawn_calls_stay_serial_while_fast_delegates_parallel() {
+fn distinct_spawn_calls_run_parallel_while_duplicates_and_exclusive_tools_stay_serial() {
     let spawn_requests = vec![
         ToolExecutionRequest {
-            tool_call: provider_tool_call("builtin.spawn_agent"),
+            tool_call: provider_tool_call_with_args(
+                "builtin.spawn_agent",
+                &serde_json::json!({
+                    "task_name": "review",
+                    "task": "审查当前改动",
+                    "intent": "复核当前改动"
+                }),
+            ),
             tool_call_id: ToolCallId(1),
             part_id: "tool-part:test:subagent:1".to_owned(),
             execution_request_id: ExecutionRequestId(1),
@@ -109,7 +116,14 @@ fn hidden_spawn_calls_stay_serial_while_fast_delegates_parallel() {
             execution_permission: ToolExecutionPermission::Allowed,
         },
         ToolExecutionRequest {
-            tool_call: provider_tool_call("builtin.spawn_agent"),
+            tool_call: provider_tool_call_with_args(
+                "builtin.spawn_agent",
+                &serde_json::json!({
+                    "task_name": "security",
+                    "task": "审查安全边界",
+                    "intent": "复核安全边界"
+                }),
+            ),
             tool_call_id: ToolCallId(2),
             part_id: "tool-part:test:subagent:2".to_owned(),
             execution_request_id: ExecutionRequestId(2),
@@ -135,7 +149,7 @@ fn hidden_spawn_calls_stay_serial_while_fast_delegates_parallel() {
         "builtin.spawn_agent",
         &serde_json::json!({
             "task_name": "review",
-            "task": "审查当前改动",
+            "task": "审查当前改动", "intent": "复核当前改动",
             "fork_turns": "all"
         }),
     );
@@ -143,13 +157,14 @@ fn hidden_spawn_calls_stay_serial_while_fast_delegates_parallel() {
         "builtin.spawn_agent",
         &serde_json::json!({
             "task_name": "review_2",
-            "task": "  审查当前改动  ",
+            "task": "  审查当前改动  ", "intent": "复核当前改动",
             "fork_turns": "all"
         }),
     );
 
-    // PAR-1：隐藏的 spawn_agent 不再进并行组，只有 delegate_to_fast 可以。
-    assert!(!super::tool_calls_can_run_in_parallel(&spawn_requests));
+    // 创建类工具都是并行安全的：互不依赖的 spawn 必须能同批发出，
+    // 只有幂等重复与独占工具才退回串行。
+    assert!(super::tool_calls_can_run_in_parallel(&spawn_requests));
     assert!(!super::tool_calls_can_run_in_parallel(&duplicate_requests));
     assert!(!super::tool_calls_can_run_in_parallel(&mixed_requests));
 }
@@ -190,7 +205,7 @@ fn duplicate_spawn_intents_in_same_parent_turn_reuse_first_session() {
             "builtin.spawn_agent",
             &serde_json::json!({
                 "task_name": "review",
-                "task": "审查当前改动",
+                "task": "审查当前改动", "intent": "复核当前改动",
                 "fork_turns": "all"
             }),
         ),
@@ -198,7 +213,7 @@ fn duplicate_spawn_intents_in_same_parent_turn_reuse_first_session() {
             "builtin.spawn_agent",
             &serde_json::json!({
                 "task_name": "review_2",
-                "task": "  审查当前改动  ",
+                "task": "  审查当前改动  ", "intent": "复核当前改动",
                 "fork_turns": "all"
             }),
         ),
@@ -229,7 +244,7 @@ fn subagent_control_persists_across_tool_batches_in_same_run() {
         "builtin.spawn_agent",
         &serde_json::json!({
             "task_name": "review",
-            "task": "审查当前改动"
+            "task": "审查当前改动", "intent": "复核当前改动"
         }),
     );
     let spawn_receipts = super::execute_supported_tool_calls(&request, &[spawn], None);
@@ -298,7 +313,7 @@ fn spawn_with_unavailable_executor_is_blocked_terminal_state() {
         "builtin.spawn_agent",
         &serde_json::json!({
             "task_name": "review",
-            "task": "审查当前改动"
+            "task": "审查当前改动", "intent": "复核当前改动"
         }),
     );
     let spawn_receipts = super::execute_supported_tool_calls(&request, &[spawn], None);
@@ -342,7 +357,7 @@ fn subagent_send_message_stays_queue_only_without_triggering_executor() {
         "builtin.spawn_agent",
         &serde_json::json!({
             "task_name": "review",
-            "task": "审查当前改动"
+            "task": "审查当前改动", "intent": "复核当前改动"
         }),
     );
     super::execute_supported_tool_calls(&request, &[spawn], None);
@@ -393,7 +408,7 @@ fn subagent_completion_is_visible_through_the_job_channel() {
         "builtin.spawn_agent",
         &serde_json::json!({
             "task_name": "review",
-            "task": "审查当前改动"
+            "task": "审查当前改动", "intent": "复核当前改动"
         }),
     );
     let spawn_receipts = super::execute_supported_tool_calls(&request, &[spawn], None);

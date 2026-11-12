@@ -110,7 +110,7 @@ fn child_subagent_tools_resolve_relative_paths_from_current_agent() {
         "builtin.spawn_agent",
         &serde_json::json!({
             "task_name": "security",
-            "task": "审查安全风险"
+            "task": "审查安全风险", "intent": "复核安全风险"
         }),
     );
     let spawn_receipts = super::execute_supported_tool_calls(&request, &[spawn], None);
@@ -143,7 +143,7 @@ fn spawn_fork_context_injects_child_usage_hint_for_real_child_request() {
         "builtin.spawn_agent",
         &serde_json::json!({
             "task_name": "review",
-            "task": "审查当前改动",
+            "task": "审查当前改动", "intent": "复核当前改动",
             "fork_turns": "all"
         }),
     );

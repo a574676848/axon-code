@@ -222,14 +222,14 @@ impl TokenUsageTelemetry {
         axon_domain::ratio_basis_points(self.cache_read_input_tokens, self.complete_input_tokens())
     }
 
-    /// 当前上下文 token。provider 未返回原始 total 时回退到归一化总量。
+    /// 当前上下文 token；provider 没有给出该读数时返回 0（未知）。
+    ///
+    /// 绝不回退到 `total_tokens()`：一轮的累计量是跨请求相加的结果（缓存命中会被
+    /// 每个请求重复计入），量级可达真实上下文的十倍。换窗守卫与占用显示都读这里，
+    /// 兜底成累计值会让「换窗后上下文只剩几万」的会话再次被判成耗尽。
     #[must_use]
     pub const fn current_context_tokens(self) -> u64 {
-        if self.current_context_tokens > 0 {
-            self.current_context_tokens
-        } else {
-            self.total_tokens()
-        }
+        self.current_context_tokens
     }
 
     /// 计算总 token。
@@ -271,7 +271,7 @@ impl TokenUsageTelemetry {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProviderTokenUsage, ProviderTokenUsageSemantics};
+    use super::{ProviderTokenUsage, ProviderTokenUsageSemantics, TokenUsageTelemetry};
 
     #[test]
     fn openai_compatible_cache_is_included_in_prompt_tokens() {
@@ -336,5 +336,19 @@ mod tests {
         assert_eq!(usage.reasoning_output_tokens, 3);
         assert_eq!(usage.current_context_tokens(), 22);
         assert_eq!(usage.complete_input_tokens(), 13);
+    }
+
+    #[test]
+    fn unknown_context_is_never_the_cumulative_total() {
+        // 一轮累计量可以到上百万，而真实上下文只有几万：未知必须如实报未知。
+        let mut usage = TokenUsageTelemetry::new(1_000, 5_000_000, 0, 20_000, 0);
+        assert_eq!(usage.current_context_tokens(), 0);
+        assert!(usage.total_tokens() > 5_000_000);
+
+        usage = usage.with_current_context_tokens(70_000);
+        assert_eq!(usage.current_context_tokens(), 70_000);
+        // 多请求累加只影响累计量，不能污染当前上下文。
+        usage.add_assign(TokenUsageTelemetry::new(1_000, 5_000_000, 0, 20_000, 0));
+        assert_eq!(usage.current_context_tokens(), 70_000);
     }
 }

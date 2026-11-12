@@ -99,9 +99,20 @@ export const cardActionLabel = (goal: GoalCardView): string =>
 export function distinctObjectivePreview(
   goal: Pick<GoalCardView, 'title' | 'objectivePreview'>,
 ): string {
-  const preview = goal.objectivePreview.trim();
+  const preview = cleanPreview(goal.objectivePreview);
   if (preview.length === 0 || preview === goal.title.trim()) return '';
   return preview;
+}
+
+/**
+ * 纯文本预览：折叠换行与连续空白，去掉行内代码反引号。
+ *
+ * 目标的正文由模型写成 Markdown 片段，卡片与台账只有一两行的位置：
+ * 原样铺开会把 `E:\...` 的反引号与换行一起画出来，一眼看上去像坏了的排版。
+ * 这里只做「转成一句话」这一件事，不改动任何词句。
+ */
+export function cleanPreview(text: string): string {
+  return text.replace(/`+/g, '').replace(/\s+/g, ' ').trim();
 }
 
 /** 卡片上的结构化进展提示（区分等待原因与下一步动作）。 */
@@ -140,6 +151,7 @@ export function goalContractSummary(stepCount: number, acceptanceCount: number):
   if (acceptanceCount > 0) parts.push(`${acceptanceCount} 项验收`);
   return parts.length > 0 ? parts.join(' · ') : '目标说明';
 }
+
 
 /** 栏目头部的状态点：空栏保持静息，非空栏反映栏内真实状态。 */
 export function columnHeaderDot(

@@ -38,8 +38,15 @@ export interface InputDockProps {
   compact?: boolean;
   /** 键盘提示是否显示：列宽不足时收起，避免那一行先折行再被裁。 */
   hintVisible?: boolean;
-  /** 占位文案覆盖（子代理输入条要给「把下一步交给谁」）。 */
+  /** 输入框占位文案。 */
   placeholder?: string;
+  /**
+   * 禁用态占位文案。
+   *
+   * 后台执行的会话是只读的：输入坞仍然在位，但它不是在等用户输入，
+   * 因此这里要写明为什么不能输入，而不是笼统地写「会话未就绪」。
+   */
+  disabledPlaceholder?: string;
   /** 卡片下方提示文案覆盖。 */
   hint?: string;
   /** 当前主模型；紧凑变体不需要。 */
@@ -66,7 +73,13 @@ export interface InputDockProps {
   /** 外部错误提示。 */
   error: string | null;
   /** 工作状态行：与 TUI 的 composer dock 同位置同口径；为空时不渲染。 */
-  working: { primary: string; elapsedMs: number | null; queued: number } | null;
+  working: {
+    primary: string;
+    elapsedMs: number | null;
+    queued: number;
+    /** 这一行能不能被打断：正文装载期间不能，因此不承诺 ESC。 */
+    interruptible: boolean;
+  } | null;
   /** 中断正在运行的一轮。 */
   onInterrupt: () => void;
   /**

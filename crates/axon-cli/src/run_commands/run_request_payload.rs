@@ -5,9 +5,7 @@ use std::{
 };
 
 use axon_agent_runtime::{
-    AgentModelAttachmentProjection, AgentModelMessage, AgentModelPayload, AgentModelStablePrefix,
-    AttachmentBlobStore, AttachmentIngressRuntime, LedgerContextProjection, ToolRegistry,
-    default_attachment_archive_root,
+    AgentModelPayload, AgentModelStablePrefix, LedgerContextProjection, ToolRegistry,
 };
 use axon_config::AxonConfig;
 use axon_domain::{DisclosurePolicy, GoalStatus, ScopeRef};
@@ -18,6 +16,7 @@ use axon_session::{
 use axon_session_runtime::{TurnPerformanceRecorder, TurnPerformanceStage};
 
 use super::run_memory_recall::{RunMemoryRecallEvent, memory_scope, prepare_memory_recall_for_run};
+use super::run_memory_thread_context::prepare_memory_thread_context;
 use super::run_model_payload::{
     CliRunModelPayloadInput, CliRunSkillSelection, build_cli_run_model_payload,
     prepare_cli_run_skill_context,
@@ -25,7 +24,6 @@ use super::run_model_payload::{
 use super::{RunCommand, RunStartupSnapshot};
 use axon_persona::domain::scene_frame::Audience;
 
-use crate::memory_image_ref::image_mime_type;
 use crate::runtime_persona_context::{PersonaContext, PersonaSceneInput, load_persona_context};
 
 const LOCAL_UPLOAD_SOURCE_PREFIX: &str = "local-upload://";
@@ -37,6 +35,14 @@ type WorkspaceSnapshotResult = Result<Option<WorkspaceSnapshot>, String>;
 #[path = "run_request_payload_workspace_prewarm.rs"]
 mod workspace_prewarm;
 pub(super) use workspace_prewarm::RunWorkspaceSnapshotPrewarm;
+
+#[path = "run_request_payload_vision.rs"]
+mod vision;
+#[cfg(test)]
+use axon_agent_runtime::AgentModelMessage;
+use vision::attach_vision_files_to_payload;
+#[cfg(test)]
+use vision::attach_vision_files_to_payload_with_archive_root;
 
 pub(super) struct BuildRunModelPayloadInput<'a> {
     pub(super) config_path: &'a Path,
@@ -63,6 +69,10 @@ pub(super) struct BuildRunModelPayloadInput<'a> {
     pub(super) memory_disclosure_policy: DisclosurePolicy,
     pub(super) performance: Option<&'a dyn TurnPerformanceRecorder>,
     pub(super) workspace_snapshot_prewarm: Option<RunWorkspaceSnapshotPrewarm>,
+    /// 是否向环境上下文注入子代理选型事实（可用模型清单）。
+    ///
+    /// 只有主 turn 需要：子代理身份的工具面里没有创建类工具。
+    pub(super) include_delegation_catalog: bool,
 }
 
 pub(super) struct BuildRunModelPayloadOutput {
@@ -79,74 +89,101 @@ pub(super) fn build_run_model_payload(
     registry: &ToolRegistry,
 ) -> Result<BuildRunModelPayloadOutput, String> {
     let skill_soul_ready = AtomicU8::new(0);
-    let (workspace_snapshot, memory_recall, skill_context, persona_context) =
-        thread::scope(|scope| {
-            let skill = scope.spawn(|| {
-                let result = prepare_cli_run_skill_context(
-                    input.startup,
-                    input.prompt_for_model,
-                    input.context_window,
-                );
-                record_pair_ready(input.performance, &skill_soul_ready);
-                result
-            });
-            let persona = scope.spawn(|| {
-                let result = if input.include_user_soul {
-                    load_persona_context(
-                        input.config_path,
-                        PersonaSceneInput {
-                            channel: super::run_agent_identity::persona_channel(
-                                input.client_channel,
-                            ),
-                            audience: if input.include_personal_memory {
-                                Audience::Private
-                            } else {
-                                Audience::Group
-                            },
-                            has_workspace: input.startup.workspace_root.is_some(),
-                        },
-                    )
-                } else {
-                    Ok(PersonaContext::empty())
-                };
-                record_pair_ready(input.performance, &skill_soul_ready);
-                result
-            });
-            // 异步预热 Provider 连接池与 TLS 运行环境，使网络建连与本地 Memory 召回并行
-            let _prewarm_handle = scope.spawn(|| {
-                axon_rustls_provider::ensure_rustls_crypto_provider();
-            });
-            let workspace_snapshot = match input.workspace_snapshot_prewarm.as_ref() {
-                Some(prewarm) => prewarm.resolve()?,
-                None => resolve_run_workspace_snapshot_with_telemetry(
-                    input.config_path,
-                    input.cwd,
-                    input.performance,
-                )?,
-            };
-            let memory_recall = prepare_memory_recall_for_run(
-                input.config_path,
-                input.config,
+    let (
+        workspace_snapshot,
+        memory_recall,
+        skill_context,
+        persona_context,
+        env_context_block,
+        memory_thread_context,
+    ) = thread::scope(|scope| {
+        let skill = scope.spawn(|| {
+            let result = prepare_cli_run_skill_context(
+                input.startup,
                 input.prompt_for_model,
-                input.attached_files,
-                input.command,
-                memory_scope(workspace_snapshot.as_ref()),
-                input.performance,
+                input.context_window,
             );
-            record_stage(input.performance, TurnPerformanceStage::MemoryReady);
-            Ok::<_, String>((
-                workspace_snapshot,
-                memory_recall,
-                join_dynamic(skill, "Skill route")?,
-                join_dynamic(persona, "Persona load")??,
-            ))
-        })?;
+            record_pair_ready(input.performance, &skill_soul_ready);
+            result
+        });
+        let persona = scope.spawn(|| {
+            let result = if input.include_user_soul {
+                load_persona_context(
+                    input.config_path,
+                    PersonaSceneInput {
+                        channel: super::run_agent_identity::persona_channel(input.client_channel),
+                        audience: if input.include_personal_memory {
+                            Audience::Private
+                        } else {
+                            Audience::Group
+                        },
+                        has_workspace: input.startup.workspace_root.is_some(),
+                    },
+                )
+            } else {
+                Ok(PersonaContext::empty())
+            };
+            record_pair_ready(input.performance, &skill_soul_ready);
+            result
+        });
+        // 异步预热 Provider 连接池与 TLS 运行环境，使网络建连与本地 Memory 召回并行
+        let _prewarm_handle = scope.spawn(|| {
+            axon_rustls_provider::ensure_rustls_crypto_provider();
+        });
+        let workspace_snapshot = match input.workspace_snapshot_prewarm.as_ref() {
+            Some(prewarm) => prewarm.resolve()?,
+            None => resolve_run_workspace_snapshot_with_telemetry(
+                input.config_path,
+                input.cwd,
+                input.performance,
+            )?,
+        };
+        let memory_scope_event = memory_scope(workspace_snapshot.as_ref());
+        let memory_recall = prepare_memory_recall_for_run(
+            input.config_path,
+            input.config,
+            input.prompt_for_model,
+            input.attached_files,
+            input.command,
+            memory_scope_event.clone(),
+            input.performance,
+        );
+        record_stage(input.performance, TurnPerformanceStage::MemoryReady);
+        let memory_thread_context = prepare_memory_thread_context(
+            Path::new(&input.startup.home_root),
+            input.config,
+            input.session_id,
+            chrono::Local::now().offset().local_minus_utc() / 60,
+        );
+        // 本机资源扫描只读元数据：命中触发词才扫描，否则不触碰文件系统。
+        let env_context_block = scope.spawn(|| {
+            axon_env::maybe_inject(
+                Path::new(&input.startup.home_root),
+                input.prompt_for_model,
+                axon_env::MEMORY_ENV_ENABLED_DEFAULT,
+            )
+        });
+        Ok::<_, String>((
+            workspace_snapshot,
+            memory_recall,
+            join_dynamic(skill, "Skill route")?,
+            join_dynamic(persona, "Persona load")??,
+            join_dynamic(env_context_block, "本机资源感知")?,
+            memory_thread_context,
+        ))
+    })?;
     for warning in &persona_context.warnings {
         axon_logger::warning(&format!("persona_context: {warning}"));
     }
     let ledger_context =
         rehydrate_ledger_context_with_snapshot(input.config_path, workspace_snapshot.as_ref())?;
     record_stage(input.performance, TurnPerformanceStage::LedgerReady);
+    // 清单与工具校验共用同一个构造器：通告一套、执行另一套会让模型照着提示词踩空。
+    let delegatable_models = if input.include_delegation_catalog {
+        super::run_model_routing::delegatable_model_names(input.config)
+    } else {
+        Vec::new()
+    };
     let (model_payload, skill_selection) = build_cli_run_model_payload(
         CliRunModelPayloadInput {
             transport_context: input.transport_context,
@@ -154,6 +191,8 @@ pub(super) fn build_run_model_payload(
             memory_hits: &memory_recall.hits,
             soul_context_message: persona_context.stable.as_ref(),
             persona_state_message: persona_context.dynamic.as_ref(),
+            env_context_block: env_context_block.as_deref(),
+            memory_thread_context: memory_thread_context.as_deref(),
             include_personal_memory: input.include_personal_memory,
             memory_disclosure_policy: input.memory_disclosure_policy,
             cwd: &input.cwd.to_string_lossy(),
@@ -165,6 +204,7 @@ pub(super) fn build_run_model_payload(
             max_subagent_active_turns: input.config.agent.max_subagent_active_turns,
             model_history_json: input.model_history_json,
             ledger_context: ledger_context.as_ref(),
+            delegatable_models: &delegatable_models,
         },
         skill_context,
         registry,
@@ -239,99 +279,6 @@ fn join_dynamic<T>(handle: thread::ScopedJoinHandle<'_, T>, goal: &str) -> Resul
     handle
         .join()
         .map_err(|_| format!("{goal} 动态准备任务异常退出"))
-}
-
-fn attach_vision_files_to_payload(
-    payload: AgentModelPayload,
-    files: &[PathBuf],
-    session_id: &str,
-    supports_vision: bool,
-) -> Result<AgentModelPayload, String> {
-    let archive_root =
-        default_attachment_archive_root().ok_or_else(|| "无法解析附件归档根目录".to_owned())?;
-    attach_vision_files_to_payload_with_archive_root(
-        payload,
-        files,
-        session_id,
-        supports_vision,
-        &archive_root,
-    )
-}
-
-fn attach_vision_files_to_payload_with_archive_root(
-    mut payload: AgentModelPayload,
-    files: &[PathBuf],
-    session_id: &str,
-    supports_vision: bool,
-    archive_root: &Path,
-) -> Result<AgentModelPayload, String> {
-    let mut ingress = AttachmentIngressRuntime::default();
-    let mut store = AttachmentBlobStore::new(archive_root);
-    let mut images = Vec::new();
-    let mut local_files = Vec::new();
-    for (index, path) in files.iter().enumerate() {
-        let mime_hint = image_mime_type(path);
-        if mime_hint.is_some() && !supports_vision {
-            continue;
-        }
-        let bytes = std::fs::read(path).map_err(|error| format!("读取附件失败：{error}"))?;
-        let file_name = path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| format!("附件文件名无效：{}", path.display()))?
-            .to_owned();
-        let record = ingress
-            .ingest_local_upload_with_blob_store(
-                axon_agent_runtime::AttachmentLocalUploadRequest {
-                    file_name: file_name.clone(),
-                    mime_hint: mime_hint.map(ToOwned::to_owned),
-                    bytes,
-                    source_trace: local_upload_source_trace(session_id, index),
-                    sensitivity: axon_domain::AttachmentSensitivity::Normal,
-                },
-                &mut store,
-                0,
-            )
-            .map_err(|error| error.to_string())?;
-        match AttachmentIngressRuntime::project_for_model(&record.attachment)
-            .map_err(|error| error.to_string())?
-        {
-            AgentModelAttachmentProjection::Image(image) if supports_vision => images.push(image),
-            AgentModelAttachmentProjection::Image(_) => {}
-            AgentModelAttachmentProjection::File(mut file) => {
-                file.name = file_name;
-                // 原始绝对路径随引用一起交给模型：预览被截断时它才是读取原文件的正路。
-                file.path = Some(path.to_string_lossy().to_string());
-                local_files.push(file);
-            }
-        }
-    }
-    if images.is_empty() && local_files.is_empty() {
-        return Ok(payload);
-    }
-    if let Some(message) = payload
-        .messages
-        .iter_mut()
-        .rev()
-        .find(|message| message.role == "user")
-    {
-        *message = message
-            .clone()
-            .with_local_images(images)
-            .with_local_files(local_files);
-    } else {
-        payload.messages.push(
-            AgentModelMessage::text("user", "")
-                .with_local_images(images)
-                .with_local_files(local_files),
-        );
-    }
-    Ok(payload)
-}
-
-fn local_upload_source_trace(session_id: &str, index: usize) -> String {
-    format!("{LOCAL_UPLOAD_SOURCE_PREFIX}{session_id}/{index}")
 }
 
 #[cfg(test)]
@@ -500,6 +447,39 @@ mod tests {
             Some("local-upload://file-session/0")
         );
         assert!(file.archive_ref.is_some());
+    }
+
+    #[test]
+    fn large_text_attachment_is_accepted_with_bounded_preview() {
+        let root = axon_test_support::test_temp_dir();
+        let file_path = root.path().join("pasted-215k.md");
+        let body = "# 端口配置记录\n".repeat(16 * 1024);
+        std::fs::write(&file_path, &body).unwrap();
+        let archive_root = root.path().join("archive");
+        let payload = AgentModelPayload {
+            messages: vec![AgentModelMessage::text("user", "看附件")],
+            model_tools: Vec::new(),
+            context_section_count: 0,
+            agent_pane_included: false,
+            injected_context_messages: Vec::new(),
+        };
+
+        let payload = attach_vision_files_to_payload_with_archive_root(
+            payload,
+            std::slice::from_ref(&file_path),
+            "large-file-session",
+            false,
+            &archive_root,
+        )
+        .expect("超过 100 KiB 的文本附件必须被接收");
+
+        let file = &payload.messages[0].local_files[0];
+        let expected_path = file_path.to_string_lossy().to_string();
+        assert_eq!(file.path.as_deref(), Some(expected_path.as_str()));
+        assert_eq!(file.byte_len, Some(body.len() as u64));
+        assert!(file.preview.len() <= axon_agent_runtime::MAX_INLINE_PREVIEW);
+        assert!(file.preview.len() + 3 >= axon_agent_runtime::MAX_INLINE_PREVIEW);
+        assert!(body.starts_with(&file.preview));
     }
 
     #[test]

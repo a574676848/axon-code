@@ -1,5 +1,7 @@
 //! Axon Memory 的嵌入式配置拓扑与编排入口。
 
+#[path = "aging/mod.rs"]
+mod aging;
 #[path = "workspace/artifacts.rs"]
 mod artifacts;
 #[path = "citation/citation.rs"]
@@ -22,10 +24,16 @@ mod store;
 mod store_query;
 #[path = "store/store_supersession.rs"]
 mod store_supersession;
+#[path = "store/store_thread.rs"]
+mod store_thread;
 #[path = "store/store_write.rs"]
 mod store_write;
+#[path = "query/temporal.rs"]
+mod temporal;
 #[path = "index/text_index.rs"]
 mod text_index;
+#[path = "thread/mod.rs"]
+mod thread;
 #[path = "usage/usage.rs"]
 mod usage;
 #[path = "index/vector_index.rs"]
@@ -41,6 +49,12 @@ use std::{
 
 use axon_domain::{AxonError, AxonResult};
 
+pub use aging::{
+    LESSON_NORMAL_MAX_DAYS, LESSON_STALE_MAX_DAYS, LessonFreshness, MAX_BASIS_POINTS,
+    MEMORY_ARCHIVE_SCORE_THRESHOLD_BASIS_POINTS, MEMORY_DEFAULT_HALF_LIFE_DAYS,
+    aging_score_basis_points, decayed_score_basis_points, injection_rank, is_active_recallable,
+    is_lesson_kind, lesson_freshness, should_archive,
+};
 pub use artifacts::{
     MEMORY_ARTIFACTS_EXTENSIONS_DIR, MEMORY_ARTIFACTS_PHASE2_DIFF_FILE,
     MEMORY_ARTIFACTS_RAW_MEMORIES_FILE, MEMORY_ARTIFACTS_ROLLOUT_SUMMARIES_DIR,
@@ -83,9 +97,20 @@ pub use store::{
     MemoryVisibility,
 };
 pub use store_supersession::{MEMORY_SUPERSESSION_REASON, MemorySupersession};
+pub use store_thread::{
+    COMMITMENT_STATUS_DONE, COMMITMENT_STATUS_OPEN, MemoryCommitment, MemoryThread,
+    THREAD_STATUS_ARCHIVED, THREAD_STATUS_OPEN,
+};
+pub use temporal::{TimeRange, parse_temporal_hint};
 pub use text_index::{
     MEMORY_TANTIVY_DEFAULT_LIMIT, MEMORY_TANTIVY_SCHEMA_VERSION, MEMORY_TANTIVY_WRITER_HEAP_BYTES,
     MemoryTextDocument, MemoryTextHit, MemoryTextIndex,
+};
+pub use thread::{
+    P2_COMMITMENT_MAX_BYTES, P2_MAX_COMMITMENTS, P2_THREAD_MAX_BYTES, Reference,
+    THREADS_ENABLED_DEFAULT, ThreadScope, classify_reference, close_commitments, commitment_id_for,
+    detects_closure, detects_commitment, ensure_foreground, format_local_minute, is_one_off_leaf,
+    open_commitment, record_commitment, render_p2_context,
 };
 pub use usage::{
     MEMORY_USAGE_KIND_CITED, MEMORY_USAGE_KIND_INJECTED, MEMORY_USAGE_KIND_RECALLED,

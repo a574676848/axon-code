@@ -3,7 +3,7 @@ use std::fs;
 use axon_config::AxonConfig;
 use serde_json::Value;
 
-use super::{AxonCli, run_parsed_cli, seed_memory_records, test_root, write_config};
+use super::{run_parsed_cli, seed_memory_records, test_root, write_config, AxonCli};
 
 #[test]
 fn memory_list_filters_records_without_source_summary_raw_text() {
@@ -66,11 +66,9 @@ fn memory_list_filters_by_stable_memory_kind() {
     assert_eq!(body["memoryKind"], "knowledge");
     let records = body["records"].as_array().expect("records 应为数组");
     assert_eq!(records.len(), 4);
-    assert!(
-        records
-            .iter()
-            .all(|record| record["memoryKind"] == "knowledge")
-    );
+    assert!(records
+        .iter()
+        .all(|record| record["memoryKind"] == "knowledge"));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -171,13 +169,11 @@ fn memory_review_lists_pending_records_without_raw_text() {
         review_record["reviewReasons"][0],
         "weak_memory_requires_local_review"
     );
-    assert!(
-        review_record["recommendedActions"]
-            .as_array()
-            .expect("recommendedActions 应为数组")
-            .iter()
-            .any(|action| action == "quarantine")
-    );
+    assert!(review_record["recommendedActions"]
+        .as_array()
+        .expect("recommendedActions 应为数组")
+        .iter()
+        .any(|action| action == "quarantine"));
     assert!(!result.stdout.contains("secret-source-summary"));
     let _ = fs::remove_dir_all(root);
 }

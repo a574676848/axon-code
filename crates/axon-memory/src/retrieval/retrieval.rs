@@ -2,7 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use axon_domain::{AxonError, AxonResult, MemoryId, MemoryState};
+use axon_domain::MemoryKind;
+use axon_domain::{AxonError, AxonResult, MemoryId};
 
 use crate::{MemoryOrchestrator, MemorySqliteRecord};
 
@@ -30,6 +31,10 @@ pub struct MemoryHybridQuery {
     pub now_ms: u64,
     /// 可选作用域过滤；提供时只召回该用户命名空间内的记录。
     pub scope: Option<MemoryHybridScope>,
+    /// 可选记忆类型过滤；`None` 表示不按类型收窄（旧行为）。
+    pub kinds: Option<Vec<MemoryKind>>,
+    /// 可选更新时间闭区间 `[start_ms, end_ms]`，按 `updated_at_ms` 收窄；`None` 表示不按时间收窄。
+    pub time_range: Option<(i64, i64)>,
 }
 
 /// Memory hybrid 检索作用域。
@@ -92,6 +97,29 @@ struct MergeHitInput {
     scope: Option<MemoryHybridScope>,
 }
 
+/// 检索收窄条件；两端都为 `None` 时与新增字段之前的旧行为逐字节等价。
+#[derive(Debug, Clone, Copy, Default)]
+struct MergeFilters<'a> {
+    kinds: Option<&'a [MemoryKind]>,
+    time_range: Option<(i64, i64)>,
+}
+
+impl MergeFilters<'_> {
+    /// 记录是否满足全部收窄条件。
+    fn accepts(&self, record: &MemorySqliteRecord) -> bool {
+        let kind_accepted = self
+            .kinds
+            .is_none_or(|kinds| kinds.contains(&record.memory_kind));
+        if !kind_accepted {
+            return false;
+        }
+        self.time_range.is_none_or(|(start_ms, end_ms)| {
+            let updated_at_ms = i64::try_from(record.updated_at_ms).unwrap_or(i64::MAX);
+            updated_at_ms >= start_ms && updated_at_ms <= end_ms
+        })
+    }
+}
+
 impl MemoryOrchestrator {
     /// 执行文本 + 向量 + SQLite 治理元数据的混合检索。
     /// 只走文本与文本向量路的混合检索。
@@ -116,6 +144,10 @@ impl MemoryOrchestrator {
             .max(query.limit);
         let store = self.sqlite_store()?;
         let index_candidate_limit = candidate_limit;
+        let filters = MergeFilters {
+            kinds: query.kinds.as_deref(),
+            time_range: query.time_range,
+        };
         let mut candidates = BTreeMap::<MemoryId, Candidate>::new();
         if let Ok(text_index) = self.text_index() {
             let text_hits = text_index
@@ -201,11 +233,13 @@ impl MemoryOrchestrator {
                     user_ref,
                     &scope.namespace_ref,
                     query.now_ms,
+                    query.time_range,
                     index_candidate_limit,
                 )?,
                 None => store.recallable_records_by_namespace(
                     &scope.namespace_ref,
                     query.now_ms,
+                    query.time_range,
                     index_candidate_limit,
                 )?,
             };
@@ -240,15 +274,22 @@ impl MemoryOrchestrator {
                         user_ref,
                         &scope.namespace_ref,
                         query.now_ms,
+                        query.time_range,
                         candidate_limit,
                     )?,
                     None => store.recallable_records_by_namespace(
                         &scope.namespace_ref,
                         query.now_ms,
+                        query.time_range,
                         candidate_limit,
                     )?,
                 },
-                None => store.recallable_records_limited(query.now_ms, candidate_limit)?,
+                // 全局兜底路径同样要受时间窗约束，否则 scope=None 时时间窗被静默丢弃。
+                None => store.recallable_records_limited(
+                    query.now_ms,
+                    query.time_range,
+                    candidate_limit,
+                )?,
             };
             for record in records {
                 let fallback_score = core_fallback_score_basis_points(&record, &query.query_text);
@@ -272,6 +313,7 @@ impl MemoryOrchestrator {
 
         let mut hits = candidates
             .into_values()
+            .filter(|candidate| filters.accepts(&candidate.record))
             .map(candidate_to_hit)
             .collect::<Vec<_>>();
         hits.sort_by(|left, right| {
@@ -405,17 +447,12 @@ fn weighted_component(score: u32, weight_basis_points: u32) -> u32 {
     score.saturating_mul(weight_basis_points) / MAX_BASIS_POINTS
 }
 
+/// 检索侧的可召回判定：活跃性统一取 `aging::is_active_recallable`，这里只补 TTL 一维。
 fn record_is_recallable(record: &MemorySqliteRecord, now_ms: u64) -> bool {
-    matches!(record.record.state, MemoryState::Weak | MemoryState::Strong)
-        && record.archived_at_ms.is_none()
+    crate::is_active_recallable(record)
         && record
             .ttl_expires_at_ms
             .is_none_or(|expires_at_ms| expires_at_ms > now_ms)
-        && record
-            .record
-            .content_ref
-            .as_ref()
-            .is_some_and(|value| !value.trim().is_empty())
 }
 
 fn core_fallback_score_basis_points(record: &MemorySqliteRecord, query_text: &str) -> u16 {

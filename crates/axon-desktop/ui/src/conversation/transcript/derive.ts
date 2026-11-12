@@ -56,15 +56,47 @@ export function compactDuration(durationMs: number | null): string {
 /**
  * 工作状态行文案。
  *
- * 只有一个事实源：provider 阶段事件。一个阶段事实都还没到时写中性的
- * 「正在连接供应商…」，不拿配置投影出来的路由顶替，因为渠道是运行时按池、
- * 亲和与健康选出来的，配置里的第一条不一定就是真正被请求的那一家，写上去
- * 等于编造。
+ * 两个事实源，按先后：正文还在装载（打开会话、历史回放没落地）时确实一个请求都还没发，
+ * 写「正在加载会话…」；装载完成后才认 provider 阶段事件，一个阶段事实都没到时写中性的
+ * 「正在连接供应商…」，不拿配置投影出来的路由顶替，因为渠道是运行时按池、亲和与健康
+ * 选出来的，配置里的第一条不一定就是真正被请求的那一家，写上去等于编造。
  * 中断提示由状态行自己拼装（`按 ESC 中断`），不混进主文案里。
  */
-export function workingStatusPrimary(activity: string | null): string {
+export function workingStatusPrimary(activity: string | null, loading = false): string {
+  if (loading) return '正在加载会话…';
   if (activity !== null && activity.trim().length > 0) return activity;
   return '正在连接供应商…';
+}
+
+/** 输入坞工作状态行的完整载荷：文案、耗时、排队与能否中断。 */
+export interface WorkingLine {
+  /** 主文案。 */
+  primary: string;
+  /** 本轮已耗时；没有在跑的轮次时为空。 */
+  elapsedMs: number | null;
+  /** 另有几条消息在等安全边界注入。 */
+  queued: number;
+  /** 这一行能不能被打断：装载期间不能。 */
+  interruptible: boolean;
+}
+
+/**
+ * 派生：工作状态行的载荷。
+ *
+ * 四个读数同源：文案来自 `workingStatusPrimary`，中断提示与装载同源反转。因此
+ * 「正在加载会话」与「按 ESC 中断」不可能同时出现。
+ */
+export function workingLineOf(
+  turn: TurnState | null,
+  queued: number,
+  loading: boolean,
+): WorkingLine {
+  return {
+    primary: workingStatusPrimary(turn?.activity ?? null, loading),
+    elapsedMs: turn?.elapsedMs ?? null,
+    queued,
+    interruptible: !loading,
+  };
 }
 
 /**

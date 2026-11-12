@@ -215,27 +215,29 @@ fn two_inline_rollovers_restore_only_active_window_and_keep_archives() {
 }
 
 #[test]
-fn missing_current_turn_rolls_back_archive_and_window_identity() {
-    let root = temp_workspace("inline-projection-rollback");
+fn missing_current_turn_is_backfilled_so_the_rollover_still_commits() {
+    let root = temp_workspace("inline-projection-backfill");
     let mut request = request_with_rollover(root.clone());
     let session_dir = initialize_session(&request);
     SessionNotesRuntime::write_note_file(&session_dir, "progress.md", "已验证事实", 1).unwrap();
     let previous = SessionNotes::load_from_session(&session_dir)
         .unwrap()
         .unwrap();
+    // 换窗先于本轮收尾发生：轮记录还没落地。
     request.invocation_id = "unregistered-invocation".to_owned();
     run_rollover(&request).unwrap();
     let notes = SessionNotes::load_from_session(&session_dir)
         .unwrap()
         .unwrap();
-    assert_eq!(notes.window_number, previous.window_number);
-    assert_eq!(notes.current_window_id, previous.current_window_id);
-    assert_eq!(
+    // 起始记录被补上，这一次换窗不再白跑：窗口身份真的推进、旧窗口真的归档。
+    assert_eq!(notes.window_number, previous.window_number + 1);
+    assert_ne!(notes.current_window_id, previous.current_window_id);
+    assert_ne!(
         notes.last_rollover_lifecycle_id,
         previous.last_rollover_lifecycle_id
     );
     assert!(
-        WindowRolloverEngine::list_archive_shards(&session_dir)
+        !WindowRolloverEngine::list_archive_shards(&session_dir)
             .unwrap()
             .is_empty()
     );
@@ -244,8 +246,7 @@ fn missing_current_turn_rolls_back_archive_and_window_identity() {
         &request.session_id,
     )
     .unwrap();
-    assert!(window.compaction.is_none());
-    assert_eq!(window.turns.len(), 1);
+    assert!(window.compaction.is_some());
     std::fs::remove_dir_all(root).unwrap();
 }
 

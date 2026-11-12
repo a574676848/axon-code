@@ -4,8 +4,8 @@ use std::{
 };
 
 use axon_agent_runtime::{
-    MEMORY_CONFIG_DEFAULT_EMBEDDING_DIMENSION, MemoryConfig as AxonMemoryConfig,
-    MemoryOrchestrator, MemorySqliteRecord, MemoryTextDocument, MemoryVectorDocument,
+    MemoryConfig as AxonMemoryConfig, MemoryOrchestrator, MemorySqliteRecord, MemoryTextDocument,
+    MemoryVectorDocument, MEMORY_CONFIG_DEFAULT_EMBEDDING_DIMENSION,
 };
 use axon_config::{AxonConfig, ConfigLoader};
 #[cfg(feature = "memory-vector-index")]
@@ -14,10 +14,10 @@ use axon_domain::{
     CellId, MemoryCandidateId, MemoryId, MemoryKind, MemoryRecord, MemorySourceOrigin,
     MemorySourceTrace, MemoryState, SessionId,
 };
-use axon_memory::{MemoryVectorProjection, memory_embedding_hash};
+use axon_memory::{memory_embedding_hash, MemoryVectorProjection};
 use serde_json::Value;
 
-use super::{AxonCli, run_parsed_cli};
+use super::{run_parsed_cli, AxonCli};
 use crate::cli_test_helpers::{test_root, write_default_config as write_config};
 
 const BASE_NOW_MS: u64 = 1_800_000_000_000;
@@ -330,7 +330,7 @@ fn write_embedding_config(root: &Path) -> PathBuf {
         supports_vision: false,
         supports_embedding: true,
         embedding_dimension: MEMORY_CONFIG_DEFAULT_EMBEDDING_DIMENSION,
-    requires_reasoning_content_on_assistant_messages: false,
+        requires_reasoning_content_on_assistant_messages: false,
     });
     "text-embedding-3-small".clone_into(&mut config.agent.default_model);
     "text-embedding-3-small".clone_into(&mut config.agent.fast_model);

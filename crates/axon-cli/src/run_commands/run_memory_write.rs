@@ -29,6 +29,8 @@ pub(crate) struct AgentMemorySearchInput<'a> {
     pub(crate) now_ms: u64,
     pub(crate) timeout: Duration,
     pub(crate) is_root_agent: bool,
+    /// 可选更新时间窗 `[start_ms, end_ms]`；`None` 表示不按时间收窄。
+    pub(crate) time_range: Option<(i64, i64)>,
 }
 
 pub(crate) struct AgentMemoryWriteInput<'a> {
@@ -125,6 +127,7 @@ impl AgentMemoryWriteRuntime {
                     query: input.query,
                     limit: input.limit,
                     now_ms: input.now_ms,
+                    time_range: input.time_range,
                 })
                 .map_err(|error| format!("{error:?}"))?;
             scoped_summaries.push((scope_label, summary));

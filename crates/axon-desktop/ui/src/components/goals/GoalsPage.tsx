@@ -17,16 +17,24 @@ import { PageShell } from '../ui/shell';
 import { Banner, EmptyState, LoadingState, Panel, Text } from '../ui/surfaces';
 import { GoalBoard } from './GoalBoard';
 import { GoalDetailDialog } from './GoalDetailDialog';
-import { GoalRunView } from './GoalRunView';
 
 /*
  * 目标看板页。
  *
- * 两种页面状态共用一层外壳：看板（PageShell 40px 顶栏）与执行会话
- * （自带 40px 顶栏）。两态互斥，因此任何时候都只有一条顶栏，不会叠出两行标题。
+ * 页面只负责看板本身：进入执行会话不再在这里画第二个页面，而是把执行会话的
+ * 会话标识交给上层，由它选中 session 目标并切到真实会话视图。这样目标会话与
+ * 普通子代理会话共用同一条渲染管线，逐字稿、轮次分割线与只读输入坞都是同一套实现。
  *
  * 数据只有一条来源：网关的只读 goals 面。页面不直连数据库，也不缓存第二份事实。
  */
+
+/** 进入执行会话所需的会话目标。 */
+export interface GoalSessionTarget {
+  workspaceId: string;
+  workspacePath: string;
+  sessionId: string;
+  title: string;
+}
 
 const FILTER_OPTIONS: readonly { value: GoalFilter; label: string }[] = [
   { value: 'all', label: '全部' },
@@ -36,26 +44,18 @@ const FILTER_OPTIONS: readonly { value: GoalFilter; label: string }[] = [
 
 const PAGE_TITLE = '目标看板';
 
-/** 看板里查找一张卡片；用于返回时把焦点交回来源。 */
-function findCardElement(goalId: string): HTMLElement | null {
-  const cards = Array.from(
-    document.querySelectorAll<HTMLElement>('[data-goal-card]'),
-  );
-  const card = cards.find((element) => element.dataset.goalId === goalId);
-  return card?.querySelector<HTMLElement>('button') ?? null;
+export interface GoalsPageProps {
+  /** 进入执行会话：把会话目标交给上层，由它切到真实会话视图。 */
+  onOpenSession?: (target: GoalSessionTarget) => void;
 }
 
-export const GoalsPage: React.FC = () => {
+export const GoalsPage: React.FC<GoalsPageProps> = ({ onOpenSession }) => {
   const [query, setQuery] = React.useState('');
   const [filter, setFilter] = React.useState<GoalFilter>('all');
   const [expanded, setExpanded] = React.useState<GoalColumnId[]>([]);
-  const [activeGoal, setActiveGoal] = React.useState<GoalCardView | null>(null);
   const [detailGoal, setDetailGoal] = React.useState<GoalCardView | null>(null);
-  /** 返回看板后要聚焦的那张卡；为空表示不需要回位。 */
-  const [pendingFocusGoalId, setPendingFocusGoalId] = React.useState<string | null>(null);
-  const backRef = React.useRef<HTMLButtonElement | null>(null);
-  // 进入会话视图后看板不再轮询：这一屏不显示列表，继续拉只是白花一组请求。
-  const feed = useGoalBoard(activeGoal !== null);
+  // 看板始终是这一页的唯一视图，进入会话交给上层，因此看板不必为执行页暂停轮询。
+  const feed = useGoalBoard();
   const detailFeed = useGoalDetail(detailGoal?.goalId ?? null, detailGoal !== null);
 
   const goals = feed.view?.goals ?? [];
@@ -76,10 +76,21 @@ export const GoalsPage: React.FC = () => {
     setExpanded((current) => (current.includes(column) ? current : [...current, column]));
   }, []);
 
-  const enterSession = React.useCallback((goal: GoalCardView) => {
-    setDetailGoal(null);
-    setActiveGoal(goal);
-  }, []);
+  const enterSession = React.useCallback(
+    (goal: GoalCardView) => {
+      const workspaceId = goal.workspaceId;
+      const sessionId = goal.latestExecution?.sessionId ?? null;
+      if (workspaceId === null || sessionId === null) return;
+      setDetailGoal(null);
+      onOpenSession?.({
+        workspaceId,
+        workspacePath: goal.workspacePath ?? '',
+        sessionId,
+        title: goal.title,
+      });
+    },
+    [onOpenSession],
+  );
 
   const openGoal = React.useCallback(
     (goal: GoalCardView) => {
@@ -89,29 +100,10 @@ export const GoalsPage: React.FC = () => {
     [enterSession],
   );
 
-  const leaveSession = React.useCallback(() => {
-    setPendingFocusGoalId(activeGoal?.goalId ?? null);
-    setActiveGoal(null);
-  }, [activeGoal]);
-
   const clearFilters = React.useCallback(() => {
     setQuery('');
     setFilter('all');
   }, []);
-
-  // 焦点回位：只在真的切回看板之后执行一次，找得到卡片才移动焦点。
-  React.useEffect(() => {
-    if (activeGoal !== null || pendingFocusGoalId === null) return;
-    const target = findCardElement(pendingFocusGoalId);
-    setPendingFocusGoalId(null);
-    target?.focus();
-  }, [activeGoal, pendingFocusGoalId]);
-
-  if (activeGoal !== null) {
-    return (
-      <GoalRunView goal={activeGoal} onBack={leaveSession} backRef={backRef} />
-    );
-  }
 
   const refreshAction = (
     <Button variant="ghost" size="sm" onClick={feed.refresh}>

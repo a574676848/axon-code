@@ -23,17 +23,14 @@ pub use crate::connection::endpoint::KEY_WEBSOCKET_BIND;
 /// 把通配绑定地址映射成可连接的探测地址。
 pub use crate::connection::endpoint::probe_target;
 
+// 语音相关的网关调用在 `gateway_voice`；调用方仍按 `gateway::xxx` 取，路径不因拆分而变。
+pub use crate::gateway_voice::{
+    VoicePreviewAudio, VoicePreviewError, VoiceTtsError, get_voice_presets,
+    get_voice_runtime_status, post_voice_preview, post_voice_tts, voice_websocket_url,
+};
+
 /// 单次请求超时。
 const REQUEST_TIMEOUT: Duration = endpoint::REQUEST_TIMEOUT;
-
-/// 朗读合成的总超时。
-///
-/// 本地语音合成是命令行逐次加载模型，长句在冷启动时要十几秒；用通用的 15 秒预算
-/// 会把「正在合成」误报成「网关不可达」。朗读本身也按句分段，单段很少接近这个上限。
-const VOICE_TTS_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// 试听合成的总超时；首次试听要加载模型，给足冷启动余量。
-const VOICE_PREVIEW_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 读取配置项文本值。
 ///
@@ -72,7 +69,7 @@ fn agent() -> ureq::Agent {
     endpoint::http_agent(REQUEST_TIMEOUT)
 }
 
-fn agent_with_timeout(timeout: Duration) -> ureq::Agent {
+pub(crate) fn agent_with_timeout(timeout: Duration) -> ureq::Agent {
     endpoint::http_agent(timeout)
 }
 
@@ -80,7 +77,7 @@ fn agent_with_timeout(timeout: Duration) -> ureq::Agent {
 const API_PREFIX: &str = "/api/v1";
 
 /// 组装完整地址。
-fn endpoint(path: &str) -> Result<String, String> {
+pub(crate) fn endpoint(path: &str) -> Result<String, String> {
     Ok(format!("{}{API_PREFIX}{path}", base_url()?))
 }
 
@@ -93,10 +90,6 @@ pub fn endpoint_at(path: &str) -> Result<String, String> {
 }
 
 /// 构造带鉴权的 GET 请求。
-fn authorized_get(url: &str) -> ureq::RequestBuilder<ureq::typestate::WithoutBody> {
-    authorized_get_with_timeout(url, REQUEST_TIMEOUT)
-}
-
 fn authorized_get_with_timeout(
     url: &str,
     timeout: Duration,
@@ -162,7 +155,32 @@ fn execute_get(url: &str, timeout: Duration) -> Result<(u16, String), String> {
             Ok((status, body))
         }
         Err(ureq::Error::StatusCode(status)) => Ok((status, String::new())),
-        Err(error) => Err(format!("网关不可达：{error}")),
+        Err(error) => Err(transport_failure_message(&error)),
+    }
+}
+
+/// 传输层失败的结论。
+///
+/// 「超时」与「不可达」的修复动作完全不同：前者是这次请求在预算内没回来（网关正在
+/// 排队、或一条大会话的历史还没读完），后者是端口没人接受连接。把两者都说成
+/// 「网关不可达」，会让人去重启一个其实好好的后台服务，而这正是历史回放最容易
+/// 撞上的那一次失败。
+pub(crate) fn transport_failure_message(error: &ureq::Error) -> String {
+    match error {
+        // 连接阶段超时是「握手没等到」，等同于连不上；其余阶段超时都是「慢」。
+        ureq::Error::Timeout(ureq::Timeout::Connect) => format!("网关不可达：{error}"),
+        ureq::Error::Timeout(_) | ureq::Error::BodyStalled => format!("网关响应超时：{error}"),
+        _ => format!("网关不可达：{error}"),
+    }
+}
+
+/// 写请求的传输层结论：超时单独成句，其余沿用既有措辞。
+fn transport_failure_message_rejected(error: &ureq::Error) -> String {
+    match error {
+        // 连接阶段超时是「握手没等到」，等同于连不上；其余阶段超时都是「慢」。
+        ureq::Error::Timeout(ureq::Timeout::Connect) => format!("网关不可达：{error}"),
+        ureq::Error::Timeout(_) | ureq::Error::BodyStalled => format!("网关响应超时：{error}"),
+        _ => format!("网关不可达或拒绝请求：{error}"),
     }
 }
 
@@ -218,8 +236,19 @@ fn classify_transport_failure(error: &ureq::Error) -> ProbeFailure {
 
 /// GET 一个绝对路径接口，要求 2xx 并把响应解析为 JSON。
 pub fn get_json_at(path: &str) -> Result<serde_json::Value, String> {
+    get_json_at_with_timeout(path, REQUEST_TIMEOUT)
+}
+
+/// 同 [`get_json_at`]，但用调用方给的预算。
+///
+/// 历史帧页读的是持久日志：一条大会话的一页本身就要扫成千上万帧，通用的 15 秒预算
+/// 会把「还在读」报成「网关不可达」。这类调用方自己声明预算，别让通路口径替它决定。
+pub fn get_json_at_with_timeout(
+    path: &str,
+    timeout: Duration,
+) -> Result<serde_json::Value, String> {
     let url = endpoint_at(path)?;
-    let (status, body) = match authorized_get(&url).call() {
+    let (status, body) = match authorized_get_with_timeout(&url, timeout).call() {
         Ok(response) => {
             let status = response.status().as_u16();
             let body = response
@@ -229,7 +258,7 @@ pub fn get_json_at(path: &str) -> Result<serde_json::Value, String> {
             (status, body)
         }
         Err(ureq::Error::StatusCode(status)) => (status, String::new()),
-        Err(error) => return Err(format!("网关不可达：{error}")),
+        Err(error) => return Err(transport_failure_message(&error)),
     };
     if !(200..300).contains(&status) {
         return Err(gateway_status_message(status, &body));
@@ -260,7 +289,7 @@ pub fn post_raw(path: &str, payload: &serde_json::Value) -> Result<(u16, String)
             Ok((status, body))
         }
         Err(ureq::Error::StatusCode(status)) => Ok((status, String::new())),
-        Err(error) => Err(format!("网关不可达或拒绝请求：{error}")),
+        Err(error) => Err(transport_failure_message_rejected(&error)),
     }
 }
 
@@ -287,7 +316,7 @@ pub fn delete_raw(path: &str) -> Result<(u16, String), String> {
             Ok((status, body))
         }
         Err(ureq::Error::StatusCode(status)) => Ok((status, String::new())),
-        Err(error) => Err(format!("网关不可达或拒绝请求：{error}")),
+        Err(error) => Err(transport_failure_message_rejected(&error)),
     }
 }
 
@@ -327,7 +356,7 @@ pub fn post_json_at(path: &str, payload: &serde_json::Value) -> Result<serde_jso
             (status, body)
         }
         Err(ureq::Error::StatusCode(status)) => (status, String::new()),
-        Err(error) => return Err(format!("网关不可达或拒绝请求：{error}")),
+        Err(error) => return Err(transport_failure_message_rejected(&error)),
     };
     if !(200..300).contains(&status) {
         return Err(gateway_status_message(status, &body));
@@ -355,7 +384,7 @@ pub(crate) fn delete_json_at(path: &str) -> Result<serde_json::Value, String> {
             (status, body)
         }
         Err(ureq::Error::StatusCode(status)) => (status, String::new()),
-        Err(error) => return Err(format!("网关不可达或拒绝请求：{error}")),
+        Err(error) => return Err(transport_failure_message_rejected(&error)),
     };
     if !(200..300).contains(&status) {
         return Err(gateway_status_message(status, &body));
@@ -405,7 +434,22 @@ pub(crate) fn gateway_status_message(status: u16, body: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::gateway_status_message;
+    use super::{gateway_status_message, transport_failure_message};
+
+    #[test]
+    fn a_slow_gateway_is_not_reported_as_an_unreachable_one() {
+        // 慢与断是两件事：预算内没回来该等或该减少单页体量，连不上才该去重启后台。
+        let slow = ureq::Error::Timeout(ureq::Timeout::Global);
+        let message = transport_failure_message(&slow);
+        assert!(message.starts_with("网关响应超时"), "{message}");
+        assert!(!message.contains("网关不可达"), "{message}");
+
+        let handshake = ureq::Error::Timeout(ureq::Timeout::Connect);
+        assert!(
+            transport_failure_message(&handshake).starts_with("网关不可达"),
+            "连接阶段超时按不可达归类"
+        );
+    }
 
     #[test]
     fn credential_and_ingress_rejections_give_different_advice() {
@@ -439,7 +483,7 @@ mod tests {
 
     #[test]
     fn preview_status_classification_follows_protocol_codes() {
-        use super::{VoicePreviewError, classify_preview_status};
+        use crate::gateway_voice::{VoicePreviewError, classify_preview_status};
 
         let unavailable = classify_preview_status(
             409,
@@ -466,231 +510,4 @@ mod tests {
             "{fallback:?}"
         );
     }
-}
-
-/// 语音合成失败分类：409 归为运行时不可用，其余归为请求失败。
-#[derive(Debug)]
-pub enum VoiceTtsError {
-    /// 语音提供方或音色未就绪。
-    Unavailable(String),
-    /// 其它失败。
-    Failed(String),
-}
-
-impl std::fmt::Display for VoiceTtsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Unavailable(reason) | Self::Failed(reason) => f.write_str(reason),
-        }
-    }
-}
-
-/// 调用网关合成一段朗读音频，返回 WAV 字节。
-///
-/// # Errors
-///
-/// 网关不可达、鉴权失败、语音提供方未就绪或合成失败。
-pub fn post_voice_tts(
-    text: &str,
-    preset_id: Option<&str>,
-    persona: Option<&serde_json::Value>,
-) -> Result<Vec<u8>, VoiceTtsError> {
-    let url = endpoint("/voice/tts").map_err(VoiceTtsError::Failed)?;
-    let mut request = agent_with_timeout(VOICE_TTS_TIMEOUT)
-        .post(&url)
-        .header("accept", "audio/wav")
-        .header("content-type", "application/json");
-    if let Some(token) = api_token() {
-        request = request.header("authorization", &format!("Bearer {token}"));
-    }
-    let payload = serde_json::json!({
-        "text": text,
-        "presetId": preset_id.unwrap_or(""),
-        "persona": persona,
-    });
-    let response = match request.send(payload.to_string()) {
-        Ok(response) => response,
-        Err(ureq::Error::StatusCode(status)) => {
-            return Err(classify_voice_status(status, String::new()));
-        }
-        Err(ureq::Error::Timeout(_)) => {
-            return Err(VoiceTtsError::Failed(
-                "朗读合成超时：这段文字较长，稍后重试或缩短内容".to_owned(),
-            ));
-        }
-        Err(error) => return Err(VoiceTtsError::Failed(format!("网关不可达：{error}"))),
-    };
-    let status = response.status().as_u16();
-    if !(200..300).contains(&status) {
-        let body = response.into_body().read_to_string().unwrap_or_default();
-        return Err(classify_voice_status(status, body));
-    }
-    let mut body = response.into_body();
-    body.read_to_vec()
-        .map_err(|error| VoiceTtsError::Failed(format!("读取音频失败：{error}")))
-}
-
-fn classify_voice_status(status: u16, body: String) -> VoiceTtsError {
-    let reason = gateway_status_message(status, &body);
-    if status == 409 || status == 503 {
-        VoiceTtsError::Unavailable(reason)
-    } else {
-        VoiceTtsError::Failed(reason)
-    }
-}
-
-/// 读取音色预设清单。
-///
-/// # Errors
-///
-/// 网关不可达、鉴权失败或响应不是合法 JSON。
-pub fn get_voice_presets() -> Result<serde_json::Value, String> {
-    get_json("/voice/presets")
-}
-
-/// 读取语音提供方状态：是否可用、降级原因与预设数量。
-///
-/// 与 `/api/v1/voice` 建连时给出的 `ready` 共用同一判据，因此「点麦克风之前」
-/// 就能知道本地语音是否装好，不必先等一次冷启动失败。
-///
-/// # Errors
-///
-/// 网关不可达、鉴权失败或响应不是合法 JSON。
-pub fn get_voice_runtime_status() -> Result<serde_json::Value, String> {
-    get_json("/voice/status")
-}
-
-/// 试听音频：WAV 字节与网关实际采用的音色。
-pub struct VoicePreviewAudio {
-    /// WAV 字节。
-    pub bytes: Vec<u8>,
-    /// 网关响应头给出的实际音色；缺失时为空串。
-    pub preset_id: String,
-}
-
-/// 试听失败分类：超时、不可用、参数非法与其它失败各有各的文案。
-#[derive(Debug)]
-pub enum VoicePreviewError {
-    /// 504：合成超时。
-    Timeout,
-    /// 409：语音提供方或音色不可用。
-    Unavailable(String),
-    /// 400：请求体不合法。
-    Invalid(String),
-    /// 其它失败。
-    Failed(String),
-}
-
-impl std::fmt::Display for VoicePreviewError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Timeout => f.write_str("试听超时，请重试或换一个音色"),
-            Self::Unavailable(reason) | Self::Invalid(reason) | Self::Failed(reason) => {
-                f.write_str(reason)
-            }
-        }
-    }
-}
-
-/// 调用网关合成一句试听，返回 WAV 字节。
-///
-/// # Errors
-///
-/// 网关不可达、鉴权失败、语音提供方未就绪或合成超时。
-pub fn post_voice_preview(
-    preset_id: Option<&str>,
-    persona: Option<&serde_json::Value>,
-) -> Result<VoicePreviewAudio, VoicePreviewError> {
-    let url = endpoint("/voice/preview").map_err(VoicePreviewError::Failed)?;
-    let mut request = agent_with_timeout(VOICE_PREVIEW_TIMEOUT)
-        .post(&url)
-        .header("accept", "audio/wav")
-        .header("content-type", "application/json");
-    if let Some(token) = api_token() {
-        request = request.header("authorization", &format!("Bearer {token}"));
-    }
-    let payload = serde_json::json!({
-        "presetId": preset_id.unwrap_or(""),
-        "persona": persona,
-    });
-    let response = match request.send(payload.to_string()) {
-        Ok(response) => response,
-        Err(ureq::Error::StatusCode(status)) => {
-            return Err(classify_preview_status(status, ""));
-        }
-        Err(ureq::Error::Timeout(_)) => return Err(VoicePreviewError::Timeout),
-        Err(error) => return Err(VoicePreviewError::Failed(format!("网关不可达：{error}"))),
-    };
-    let status = response.status().as_u16();
-    let preset_id = response
-        .headers()
-        .get("x-voice-preset")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .to_owned();
-    if !(200..300).contains(&status) {
-        let body = response.into_body().read_to_string().unwrap_or_default();
-        return Err(classify_preview_status(status, &body));
-    }
-    let mut body = response.into_body();
-    let bytes = body
-        .read_to_vec()
-        .map_err(|error| VoicePreviewError::Failed(format!("读取试听音频失败：{error}")))?;
-    Ok(VoicePreviewAudio { bytes, preset_id })
-}
-
-/// 把试听接口的非 2xx 响应翻译成可执行结论。
-///
-/// 409 与 400 的响应体带服务端中文文案，优先原样展示；没有文案时按错误码兜底。
-fn classify_preview_status(status: u16, body: &str) -> VoicePreviewError {
-    let value = serde_json::from_str::<serde_json::Value>(body).ok();
-    let code = value
-        .as_ref()
-        .and_then(|value| value.get("error"))
-        .and_then(|value| value.as_str())
-        .unwrap_or_default();
-    let message = value
-        .as_ref()
-        .and_then(|value| value.get("message"))
-        .and_then(|value| value.as_str())
-        .filter(|text| !text.is_empty());
-    let fallback = match code {
-        "provider_unavailable" => Some("尚未接入云端语音提供方，请先配置阿里百炼或火山引擎"),
-        "tts_failed" => Some("朗读失败，请稍后重试"),
-        _ => None,
-    };
-    match status {
-        409 => VoicePreviewError::Unavailable(
-            message
-                .or(fallback)
-                .unwrap_or("该音色当前不可用")
-                .to_owned(),
-        ),
-        504 => VoicePreviewError::Timeout,
-        400 => {
-            VoicePreviewError::Invalid(message.or(fallback).unwrap_or("试听参数不正确").to_owned())
-        }
-        _ => VoicePreviewError::Failed(gateway_status_message(status, body)),
-    }
-}
-
-/// 语音 WebSocket 地址：与工作台 HTTP 面同端口，凭据走查询串。
-///
-/// 浏览器 WebSocket 不能携带握手头，因此语音上行由宿主建立连接；
-/// 地址解析与凭据读取集中在这里，命令里不另拼一份。
-pub fn voice_websocket_url() -> Result<String, String> {
-    let http_base = endpoint::http_base();
-    let ws_base = if let Some(rest) = http_base.strip_prefix("https://") {
-        format!("wss://{rest}")
-    } else if let Some(rest) = http_base.strip_prefix("http://") {
-        format!("ws://{rest}")
-    } else {
-        endpoint::websocket_base()
-    };
-    let mut url = url::Url::parse(&format!("{ws_base}/api/v1/voice"))
-        .map_err(|error| format!("构造语音连接地址失败：{error}"))?;
-    if let Some(token) = api_token() {
-        url.query_pairs_mut().append_pair("api_token", &token);
-    }
-    Ok(url.to_string())
 }

@@ -12,6 +12,7 @@ import { mergeCarriedPrompts, pendingSteerCount, requeueableSteers } from '../sr
 import { orderTurnCells } from '../src/conversation/transcript/order.ts';
 import { emptyTurn, refreshLiveElapsed, settleTurn } from '../src/conversation/transcript/turns.ts';
 import { expandStreamPayload } from '../src/conversation/wire.ts';
+import { turnSummaryText } from '../src/conversation/turnSummary.ts';
 
 test('只把明确的文件路径变为预览入口', () => {
     const text = 'p50/p95 I/O docs/guide.md `src/main.rs` E:\\zbg\\axon-code\\Cargo.toml';
@@ -566,6 +567,45 @@ test('重放收尾负载里的生成指标：首字与速率不再依赖实时�
     assert.equal(completed.turns[0].firstTokenAvgMs !== null, true);
 });
 
+test('重放收尾负载里的用量快照：分割线与指标条重新有 token 读数', () => {
+    // 用量帧是 LiveOnly，重放历史时收不到；收尾负载另存了一份同形快照。
+    const openTurnState = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn', turnId: 'interaction-1', nowMs: 0,
+    });
+    const completed = conversationReducer(openTurnState, {
+        type: 'frames',
+        nowMs: 10_000,
+        frames: [{
+            kind: 'frame',
+            subscribeId: 'interaction:interaction-1',
+            eventType: 'turn_completed',
+            payloadJson: JSON.stringify({
+                response: '做完了。',
+                status: 'completed',
+                generation: { ttftMs: 8_460, decodeMs: 10_000 },
+                usage: {
+                    inputTokens: 24_000,
+                    cachedInputTokens: 96_000,
+                    cacheWriteInputTokens: 0,
+                    outputTokens: 4_600,
+                    reasoningOutputTokens: 0,
+                    currentContextTokens: 782_531,
+                },
+            }),
+            cursor: null,
+            replay: true,
+        }],
+    });
+    const turn = completed.turns[0];
+    assert.equal(turn.usage.currentContextTokens, 782_531, '上下文读数来自收尾负载');
+    const summary = turn.cells.find((cell) => cell.role === 'summary');
+    assert.notEqual(summary.usage, null, '分割线必须拿到本轮用量');
+    const text = turnSummaryText(summary);
+    for (const label of ['Token', '入', '缓存命中', '出', '推理', '命中率']) {
+        assert.ok(text.includes(label), `分割线缺 ${label} 一项：${text}`);
+    }
+});
+
 test('中断轮次也保留收尾负载里的首字与速率', () => {
     const opened = conversationReducer(INITIAL_CONVERSATION, {
         type: 'open-turn', turnId: 'interaction-1', nowMs: 0,
@@ -938,4 +978,87 @@ test('全部只有附件没有正文时，合并结果仍是一段可提交的�
     // 正文为空时标题必须落在第 0 位：提交链路会裁掉前置空白，回放也只认这个形态。
     assert.equal(merged.structuredInput, '[结构化输入]\n已附加文件：C:\\tmp\\a.png\n已附加文件：C:\\tmp\\b.png');
     assert.equal(mergeCarriedPrompts([]), null, '空队列不产生提交');
+});
+
+/** 独立会话的一条用户消息帧：目标执行与 cron 的逐字稿就是这个形状。 */
+function sessionUserFrame(sessionId, partId, content, recordedAtMs) {
+    return {
+        kind: 'frame',
+        subscribeId: `session:${sessionId}`,
+        eventType: 'wire_event',
+        payloadJson: JSON.stringify({
+            schemaVersion: '1',
+            eventId: `event-${partId}`,
+            correlationId: 'turn',
+            session: { sessionId },
+            sequence: 1,
+            recordedAtMs,
+            kind: { type: 'userMessage', payload: { partId, content } },
+        }),
+        cursor: null,
+        replay: true,
+    };
+}
+
+test('独立会话里上一条收口后，新的用户消息开新轮', () => {
+    const sessionId = 'goal-session-g1';
+    // 第一轮：用户消息开场，随后收口。
+    const opened = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'frames',
+        nowMs: 1_000,
+        frames: [sessionUserFrame(sessionId, 'user:1', '第一阶段', 1_000)],
+    });
+    assert.equal(opened.turns.length, 1, '零轮次会话由用户消息开场');
+    const closed = conversationReducer(opened, {
+        type: 'frames',
+        nowMs: 2_000,
+        frames: [{
+            kind: 'frame',
+            subscribeId: `session:${sessionId}`,
+            eventType: 'turn_completed',
+            payloadJson: JSON.stringify({ response: '第一阶段完成', status: 'completed' }),
+            cursor: null,
+            replay: true,
+        }],
+    });
+    assert.equal(closed.turns[0].status, 'completed');
+
+    // 第二轮：同一个会话里再来一条用户消息，必须自成一轮，不能挤进上一轮。
+    const second = conversationReducer(closed, {
+        type: 'frames',
+        nowMs: 3_000,
+        frames: [sessionUserFrame(sessionId, 'user:2', '第二阶段', 3_000)],
+    });
+    assert.equal(second.turns.length, 2, '收口后的用户消息开新轮');
+    const round = second.turns[1];
+    assert.equal(round.status, 'streaming');
+    assert.deepEqual(round.cells.map((cell) => cell.text), ['第二阶段']);
+});
+
+test('结果不确定帧收口开放轮次，已收口的轮次不再被改写', () => {
+    const sessionId = 'goal-session-g2';
+    const opened = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'frames',
+        nowMs: 1_000,
+        frames: [sessionUserFrame(sessionId, 'user:1', '执行一次', 1_000)],
+    });
+    const uncertain = {
+        kind: 'frame',
+        subscribeId: `session:${sessionId}`,
+        eventType: 'turn_uncertain',
+        payloadJson: JSON.stringify({ classification: 'external_outcome_unknown', reason: 'process_interrupted' }),
+        cursor: null,
+        replay: true,
+    };
+    const closed = conversationReducer(opened, { type: 'frames', nowMs: 2_000, frames: [uncertain] });
+    const turn = closed.turns[0];
+    assert.equal(turn.status, 'failed', '不确定也是收口，不能一直停在运行态');
+    const notice = turn.cells.find((cell) => cell.role === 'notice');
+    assert.equal(notice.title, '结果不确定');
+    assert.match(notice.summary, /进程中断/);
+
+    // 迟到或重复的终态帧不得二次收口。
+    const repeated = conversationReducer(closed, { type: 'frames', nowMs: 3_000, frames: [uncertain] });
+    assert.equal(repeated.turns.length, 1);
+    assert.equal(repeated.turns[0].cells.filter((cell) => cell.role === 'notice').length, 1);
 });

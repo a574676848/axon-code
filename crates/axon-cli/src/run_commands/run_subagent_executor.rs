@@ -29,14 +29,9 @@ pub(crate) use super::run_subagent_completion::{
 use super::{
     RunCancelToken, RunCommand, RunRequest,
     run_execution::ProviderStreamingRunner,
-    run_model_routing::{
-        FAST_MODEL_SLOT_NAME, resolve_model_profile_id,
-        select_channel_balanced_model_for_agent_slot,
-    },
+    run_model_routing::resolve_model_profile_id,
     run_progress::RunProgressEventBus,
-    run_request::{
-        CLI_RUN_DEFAULT_MODEL_PROFILE_ID, hash_session_selector, prepare_model_input_and_tools,
-    },
+    run_request::{CLI_RUN_DEFAULT_MODEL_PROFILE_ID, prepare_model_input_and_tools},
     run_request_builder::{RunRequestAssemblyInput, assemble_run_request},
     run_request_payload::{
         BuildRunModelPayloadInput, RunWorkspaceSnapshotPrewarm, build_run_model_payload,
@@ -44,7 +39,7 @@ use super::{
     run_rollout_store::commit_session_to_rollout,
     run_session_store::{RunSessionPartialInput, RunSessionRecord},
     run_subagent_completion::log_completion_failure,
-    run_subagent_executor_support::{ChildModelSelection, child_session_id},
+    run_subagent_executor_support::child_session_id,
     run_subagent_lifecycle::{
         SubagentLifecyclePublisher, SubagentLifecycleRegistry,
         subagent_explicit_terminal_lifecycle, subagent_started_lifecycle,
@@ -64,6 +59,8 @@ use super::{
 mod child_persistence;
 #[path = "run_subagent_executor_helpers.rs"]
 mod helpers;
+#[path = "run_subagent_model_selection.rs"]
+mod model_selection;
 /// 子代理执行输入、输出和状态由 transport-neutral runtime 统一定义。
 pub(crate) use axon_agent_runtime::{
     ChildExecutionInput as RunSubagentExecutionInput,
@@ -233,6 +230,8 @@ impl ProviderRunSubagentExecutor {
             memory_disclosure_policy: input.memory_disclosure_policy(),
             performance: performance.as_deref(),
             workspace_snapshot_prewarm: Some(workspace_snapshot_prewarm),
+            // 子代理身份不能创建子代理，不需要选型事实。
+            include_delegation_catalog: false,
         };
         let (mut model_input, execution_tools) = if input.tools_enabled {
             prepare_model_input_and_tools(&runtime_input)?
@@ -337,50 +336,6 @@ impl ProviderRunSubagentExecutor {
             auto_compaction_threshold: self.environment.config.agent.auto_compaction_threshold,
             performance,
         }))
-    }
-
-    fn child_model_selection(
-        &self,
-        input: &RunSubagentExecutionInput,
-        session_id: &str,
-    ) -> Result<ChildModelSelection, String> {
-        match input.model_intent {
-            RunSubagentModelIntent::Inherit => Ok(ChildModelSelection {
-                provider: self.environment.provider.clone(),
-                model: self.environment.model.clone(),
-                channel_chain: self.environment.channel_chain.clone(),
-                routing_key: self.environment.routing_key.clone(),
-                reasoning_effort: self.environment.reasoning_effort.clone(),
-            }),
-            RunSubagentModelIntent::FastDelegate => self.agent_slot_child_model_selection(
-                &self.environment.config.agent.fast_model,
-                FAST_MODEL_SLOT_NAME,
-                session_id,
-            ),
-        }
-    }
-
-    fn agent_slot_child_model_selection(
-        &self,
-        slot: &str,
-        slot_name: &str,
-        session_id: &str,
-    ) -> Result<ChildModelSelection, String> {
-        let balanced = select_channel_balanced_model_for_agent_slot(
-            &self.environment.config,
-            slot,
-            slot_name,
-            session_id,
-            hash_session_selector(session_id),
-            crate::tool_orchestrator::now_ms(),
-        )?;
-        Ok(ChildModelSelection {
-            provider: balanced.provider,
-            model: balanced.model,
-            channel_chain: balanced.chain,
-            routing_key: balanced.routing_key,
-            reasoning_effort: None,
-        })
     }
 
     fn execute_child_request(

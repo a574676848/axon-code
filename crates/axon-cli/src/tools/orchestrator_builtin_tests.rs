@@ -468,6 +468,7 @@ fn every_intent_tool_accepts_the_intent_field_before_execution() {
         "notes_append_to_file",
         "send_message",
         "delegate_to_fast",
+        "spawn_agent",
         "goal_create",
         "goal_list",
         "goal_get",
@@ -562,7 +563,7 @@ fn every_intent_tool_accepts_the_intent_field_before_execution() {
                 tool_call: ProviderToolCall::new(
                     "call_intent_spawn",
                     "builtin.spawn_agent",
-                    r#"{"task_name":"intent_probe","task":"检查 intent 接受性"}"#,
+                    r#"{"task_name":"intent_probe","task":"检查 intent 接受性","intent":"验证 intent 接受性"}"#,
                 ),
                 current_path: axon_agent_runtime::AgentPath::root(),
                 remote_requested: false,
@@ -645,4 +646,35 @@ fn every_intent_tool_accepts_the_intent_field_before_execution() {
     }
 
     let _ = std::fs::remove_dir_all(&temp_root);
+}
+
+#[test]
+fn explicit_time_window_wins_over_query_text() {
+    let value = serde_json::json!({ "since_ms": 100, "until_ms": 200 });
+    assert_eq!(
+        resolve_memory_search_time_range(&value, "上周三那个方案").unwrap(),
+        Some((100, 200))
+    );
+}
+
+#[test]
+fn relative_time_words_fill_in_when_window_is_absent() {
+    let range = resolve_memory_search_time_range(&serde_json::json!({}), "上周三那个方案")
+        .unwrap()
+        .expect("白名单内的相对时间词应推断出时间窗");
+    assert!(range.0 <= range.1);
+}
+
+#[test]
+fn vague_time_words_keep_the_window_open() {
+    assert_eq!(
+        resolve_memory_search_time_range(&serde_json::json!({}), "最近改的那个限制").unwrap(),
+        None
+    );
+}
+
+#[test]
+fn half_specified_window_is_rejected() {
+    let value = serde_json::json!({ "since_ms": 100 });
+    assert!(resolve_memory_search_time_range(&value, "上周").is_err());
 }

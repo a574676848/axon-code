@@ -29,9 +29,9 @@ mod transaction;
 #[cfg(test)]
 pub(crate) use api::append_rollout_event_for_session;
 pub(crate) use api::{
-    commit_session_to_rollout, install_active_rollout_window, install_rollout_compaction,
-    load_rollout_history_window, load_rollout_history_window_from_root, load_session_turn,
-    load_session_usage, read_rollout_tool_output, replay_rollout_events,
+    commit_session_to_rollout, ensure_current_turn_to_rollout, install_active_rollout_window,
+    install_rollout_compaction, load_rollout_history_window, load_rollout_history_window_from_root,
+    load_session_turn, load_session_usage, read_rollout_tool_output, replay_rollout_events,
     restore_rollout_compaction, select_rollout_session,
 };
 #[cfg(test)]

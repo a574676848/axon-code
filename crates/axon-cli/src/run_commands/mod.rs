@@ -39,6 +39,7 @@ mod run_memory_autonomy;
 mod run_memory_citation;
 mod run_memory_recall;
 mod run_memory_surface;
+mod run_memory_thread_context;
 mod run_memory_usefulness;
 mod run_memory_write;
 mod run_model_payload;

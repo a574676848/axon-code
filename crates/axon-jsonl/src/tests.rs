@@ -123,14 +123,21 @@ fn remove_all_clears_physical_shards() {
 }
 
 #[test]
-fn rejects_newline_and_oversized_lines() {
+fn rejects_newline_and_isolates_oversized_lines() {
     let directory = axon_test_support::test_temp_dir();
     let logical = directory.path().join("invalid.jsonl");
     let store = ShardedJsonlStore::with_max_shard_bytes(4);
 
     assert!(store.append_line(&logical, "{\n}").is_err());
-    assert!(store.append_line(&logical, br#"{"too-long":1}"#).is_err());
-    assert!(store.shard_paths(&logical).expect("paths").is_empty());
+    // 单条超过 shard 预算不再拒绝：让它独占一个 shard，读回来仍是同一条记录。
+    store
+        .append_line(&logical, br#"{"too-long":1}"#)
+        .expect("oversized line is isolated");
+    assert_eq!(
+        store.read_lines(&logical).expect("lines"),
+        vec![br#"{"too-long":1}"#.to_vec()]
+    );
+    assert_eq!(store.shard_paths(&logical).expect("paths").len(), 1);
 }
 
 #[test]
@@ -139,14 +146,18 @@ fn line_budget_includes_jsonl_newline() {
     let logical = directory.path().join("budget.jsonl");
     let store = ShardedJsonlStore::with_max_shard_bytes(16);
 
-    assert!(store.append_line(&logical, br#"{"keys":"value"}"#).is_err());
-    assert!(!ShardedJsonlStore::physical_shard_path(&logical, 0).exists());
-
     store
         .append_line(&logical, br#"{"key":"value"}"#)
         .expect("line plus newline fits");
     let shard = ShardedJsonlStore::physical_shard_path(&logical, 0);
     assert_eq!(shard.metadata().expect("shard metadata").len(), 16);
+
+    // 多一个字符就越过预算：换行也算进体量，因此它独占下一个 shard。
+    store
+        .append_line(&logical, br#"{"keys":"value"}"#)
+        .expect("oversized line is isolated");
+    let next = ShardedJsonlStore::physical_shard_path(&logical, 1);
+    assert_eq!(next.metadata().expect("shard metadata").len(), 17);
 }
 
 #[test]

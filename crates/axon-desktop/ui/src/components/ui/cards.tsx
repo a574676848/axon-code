@@ -88,7 +88,13 @@ interface EntityCardProps {
   locator?: string;
   /** 结构化进展提示带（目标看板用于区分「下一步」与「等待」）。 */
   statusCue?: EntityCardStatusCue | null;
-  /** 是否锁定固定卡片高度（看板卡片要求尺寸完全一致）。 */
+  /**
+   * 是否锁定固定卡片高度（看板卡片要求尺寸完全一致）。
+   *
+   * 定高形态的行高完全固定：标题两行、说明两行、进展带一行、页脚 36px。
+   * 四者的高度之和不超过卡片高度，因此长内容只会被截断到末行，
+   * 不会把页脚挤出去，也不会溢出到卡片外面。
+   */
   uniformHeight?: boolean;
   /** 底部左侧的次要信息。 */
   meta?: string;
@@ -167,40 +173,54 @@ export const EntityCard: React.FC<EntityCardProps> = ({
   return (
     <div
       className={`card-interactive flex flex-col rounded-md hairline border-border shadow-card bg-surface overflow-hidden ${
-        uniformHeight ? 'h-[148px]' : ''
+        uniformHeight ? 'h-[172px]' : ''
       }`}
     >
       <button
         type="button"
         onClick={onOpen}
-        className={`flex-1 min-w-0 flex flex-col justify-between text-left px-3.5 pt-3 pb-2.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus ${
-          uniformHeight ? 'gap-1.5' : 'space-y-2'
+        className={`flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden text-left px-3.5 pt-3 pb-2.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus ${
+          // 定高卡片用固定节奏排布：`justify-between` 会把余量摊进行距，
+          // 同一看板里两行标题的卡与一行标题的卡因此出现不同的行间呼吸。
+          uniformHeight ? 'justify-start gap-1.5' : 'justify-between space-y-2'
         }`}
       >
-        <span className="flex items-center gap-2 min-w-0">
+        <span className={`flex gap-2 min-w-0 ${uniformHeight ? 'items-start' : 'items-center'}`}>
           {leading !== undefined && (
             <span className="shrink-0 inline-flex items-center h-5">{leading}</span>
           )}
-          <span className="min-w-0 flex-1 text-body font-medium leading-5 text-text-primary truncate">
+          <span
+            title={title}
+            className={`min-w-0 flex-1 text-body font-medium leading-5 text-text-primary ${
+              // 定高卡片给标题两行：四列窄栏里单行只有十来个字，长标题会退化成
+              // 「Axon 记忆增强 M0...」，同组的两个目标就此分不出来。
+              uniformHeight ? 'break-words text-pretty line-clamp-2' : 'truncate'
+            }`}
+          >
             {title}
           </span>
-          {badges !== undefined && <span className="shrink-0">{badges}</span>}
+          {badges !== undefined && (
+            <span className="shrink-0 inline-flex items-center h-5">{badges}</span>
+          )}
         </span>
         {(hasDescription || uniformHeight) && (
           <Text
             tone="secondary"
             size="xs"
-            className={`block leading-[18px] break-words text-pretty ${
-              uniformHeight ? 'line-clamp-2 min-h-[36px]' : 'line-clamp-3'
+            title={hasDescription ? description : undefined}
+            className={`leading-[18px] break-words text-pretty ${
+              // `line-clamp-*` 自带 `display:-webkit-box`；再叠 `block` 会被后者
+              // 覆盖掉显示类型，截断随之失效（实测整段溢出、页脚被挤出卡片）。
+              uniformHeight ? 'min-h-[36px] line-clamp-2' : 'line-clamp-3'
             }`}
           >
-            {hasDescription ? description : title}
+            {hasDescription ? description : ''}
           </Text>
         )}
         {statusCue !== undefined && statusCue !== null && (
           <span
             title={`${statusCue.label} · ${statusCue.text}`}
-            className="flex items-center gap-1.5 min-w-0 h-5"
+            className="shrink-0 flex items-center gap-1.5 min-w-0 h-5"
           >
             <span
               className={`shrink-0 inline-flex items-center px-1.5 py-px rounded-xs text-micro font-medium leading-4 ${

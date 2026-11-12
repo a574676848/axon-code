@@ -6,6 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use std::time::Duration;
+
 use crate::conversation::wire::{INTERACTIONS_PATH, LANES_PATH};
 use crate::gateway;
 
@@ -15,6 +17,11 @@ const MAX_HISTORY_LIMIT: u32 = 1_000;
 const DEFAULT_HISTORY_LIMIT: u32 = 200;
 /// 单次历史帧页的默认帧数：一次取够一屏正文，又不至于让单次响应过大。
 const DEFAULT_EVENT_PAGE: u32 = 800;
+/// 历史帧页的总超时。
+///
+/// 这里读的是持久日志：一条几十万帧的长轮次，一页本身就要扫上万行并序列化几百 KB，
+/// 通用的 15 秒预算会把「还在读」报成「网关不可达」。慢与断是两件事，预算与文案都要分开。
+const HISTORY_PAGE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// 一段历史帧页。
 ///
@@ -149,7 +156,7 @@ pub fn interaction_events(
     let encoded: String = url::form_urlencoded::byte_serialize(interaction_id.as_bytes()).collect();
     let after = after.unwrap_or(0);
     let path = format!("{INTERACTIONS_PATH}/{encoded}/events?after={after}&limit={limit}");
-    let payload = gateway::get_json_at(&path)?;
+    let payload = gateway::get_json_at_with_timeout(&path, HISTORY_PAGE_TIMEOUT)?;
     serde_json::from_value(payload).map_err(|error| format!("解析历史帧失败：{error}"))
 }
 

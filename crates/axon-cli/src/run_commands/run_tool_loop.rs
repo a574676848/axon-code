@@ -244,7 +244,10 @@ fn is_parallel_subagent_request(request: &ToolExecutionRequest) -> bool {
     request.kind == crate::tool_orchestrator::ToolKind::Subagent
         && matches!(
             request.tool_call.dispatch_name(),
-            axon_agent_runtime::DELEGATE_TO_FAST_TOOL_NAME | "builtin.delegate_to_fast"
+            axon_agent_runtime::DELEGATE_TO_FAST_TOOL_NAME
+                | "builtin.delegate_to_fast"
+                | axon_agent_runtime::SPAWN_AGENT_TOOL_NAME
+                | "builtin.spawn_agent"
         )
 }
 

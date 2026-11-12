@@ -22,6 +22,7 @@ use super::super::run_compaction_projection::{
 };
 use super::super::run_execution::now_ms;
 use super::super::run_progress::RunProgressSink;
+use super::super::run_session_store::RunSessionRecord;
 use super::super::run_session_store::resolved_axon_root;
 
 /// 门禁未通过且没有更具体原因时的失败说明。
@@ -339,6 +340,13 @@ impl InlineWindowRollover<'_, '_> {
             messages,
             prepared.persisted_at_ms,
         )?;
+        // 本轮记录还没落地时先补一条起始记录：窗口靠 assistant_part_id 定位当前轮，
+        // 缺这一行会让这次换窗直接判「缺少当前运行轮次」而白跑。
+        super::super::run_rollout_store::ensure_current_turn_to_rollout(
+            &self.request.config_path,
+            &RunSessionRecord::started(self.request),
+        )
+        .map_err(AxonError::runtime_failure)?;
         let projection = super::super::run_thread_store::install_active_compaction_projection(
             &self.request.config_path,
             &root,

@@ -163,6 +163,63 @@ pub(super) fn select_channel_balanced_model_for_agent_slot(
     )
 }
 
+/// 可供模型显式选型的子代理模型名（去重、保持配置顺序）。
+///
+/// 与 [`select_model_for_subagent_request`] 共用同一套过滤条件：启用的 Provider、
+/// 非 embedding 模型。环境上下文通告的清单与工具实际接受的清单必须是同一个集合，
+/// 否则模型会被告知一个工具并不接受的模型名。
+#[must_use]
+pub(super) fn delegatable_model_names(config: &AxonConfig) -> Vec<String> {
+    let mut names = Vec::new();
+    for model in config
+        .models
+        .iter()
+        .filter(|model| config.model_is_enabled(model))
+        .filter(|model| !model.supports_embedding)
+    {
+        let name = model_routing_key(model).to_owned();
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
+/// 按模型名解析子代理的渠道均衡选择。
+///
+/// 名称解析规则与 `axon run --model` 一致（先匹配路由键，再匹配模型 ID）；
+/// 找不到时以可用清单作错误正文，让错误回执本身可自解。
+pub(super) fn select_channel_balanced_model_by_name(
+    config: &AxonConfig,
+    requested: &str,
+    session_id: &str,
+    session_selector: u64,
+    now_ms: u64,
+) -> Result<ChannelBalancedModel, String> {
+    let candidates = config
+        .models
+        .iter()
+        .filter(|model| config.model_is_enabled(model))
+        .filter(|model| !model.supports_embedding);
+    let selected = candidates
+        .clone()
+        .find(|model| model_routing_key(model) == requested)
+        .or_else(|| candidates.into_iter().find(|model| model.id == requested))
+        .ok_or_else(|| {
+            format!(
+                "未找到可用于子代理的模型：{requested}；可用：{}",
+                delegatable_model_names(config).join(", ")
+            )
+        })?;
+    select_channel_balanced_model_for_selection(
+        config,
+        selected,
+        session_id,
+        session_selector,
+        now_ms,
+    )
+}
+
 /// 将亲和 provider 名称映射为 config.models 索引。
 ///
 /// 与 `resolve_channel_selection` 的候选索引规则一致（config.models 位置），
@@ -300,6 +357,82 @@ mod tests {
         assert_eq!(selected.model.name, "alias-b");
         assert_eq!(selected.model.id, "shared-upstream-id");
         assert_eq!(selected.model.context_window, 64_000);
+    }
+
+    /// 可委派清单必须与工具实际接受的值域同源：启用的 Provider、非 embedding、
+    /// 同名路由键只出现一次，且保持配置顺序。
+    #[test]
+    fn delegatable_model_names_filter_and_dedupe_like_the_resolver() {
+        let mut disabled = ProviderConfig::new("p-off", "openai", "https://provider.invalid/v1");
+        disabled.enabled = false;
+        let mut config = AxonConfig::default();
+        config.providers.push(ProviderConfig::new(
+            "p-a",
+            "openai",
+            "https://provider.invalid/v1",
+        ));
+        config.providers.push(disabled);
+        config.models.extend([
+            ModelConfig {
+                name: "gpt-6-astra".to_owned(),
+                id: "upstream-a".to_owned(),
+                provider: "p-a".to_owned(),
+                ..ModelConfig::default()
+            },
+            ModelConfig {
+                name: "gpt-6-astra".to_owned(),
+                id: "upstream-a".to_owned(),
+                provider: "p-a".to_owned(),
+                ..ModelConfig::default()
+            },
+            ModelConfig {
+                name: "qwen3-vl-embedding".to_owned(),
+                id: "embedding".to_owned(),
+                provider: "p-a".to_owned(),
+                supports_embedding: true,
+                ..ModelConfig::default()
+            },
+            ModelConfig {
+                name: "claude-opus-5-5".to_owned(),
+                id: "upstream-b".to_owned(),
+                provider: "p-a".to_owned(),
+                ..ModelConfig::default()
+            },
+            ModelConfig {
+                name: "off-model".to_owned(),
+                id: "upstream-off".to_owned(),
+                provider: "p-off".to_owned(),
+                ..ModelConfig::default()
+            },
+        ]);
+
+        assert_eq!(
+            delegatable_model_names(&config),
+            ["gpt-6-astra", "claude-opus-5-5"]
+        );
+    }
+
+    /// 模型名不可用时，错误正文必须自带可用清单，模型才能自解。
+    #[test]
+    fn unknown_subagent_model_reports_the_available_catalog() {
+        let mut config = AxonConfig::default();
+        config.providers.push(ProviderConfig::new(
+            "p-a",
+            "openai",
+            "https://provider.invalid/v1",
+        ));
+        config.models.push(ModelConfig {
+            name: "gpt-6-astra".to_owned(),
+            id: "upstream-a".to_owned(),
+            provider: "p-a".to_owned(),
+            ..ModelConfig::default()
+        });
+
+        let error = select_channel_balanced_model_by_name(&config, "claude-opus-5-5", "s", 0, 1)
+            .unwrap_err();
+
+        assert!(error.contains("claude-opus-5-5"), "{error}");
+        assert!(error.contains("可用：gpt-6-astra"), "{error}");
     }
 
     #[test]

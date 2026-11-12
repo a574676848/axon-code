@@ -117,6 +117,8 @@ mod agent_subagent_fork_context;
 mod agent_tools;
 #[path = "core/run/agent_turn_runtime.rs"]
 mod agent_turn_runtime;
+#[path = "core/context/anomaly.rs"]
+pub mod anomaly;
 #[path = "core/tools/apply_patch/apply_patch_invocation.rs"]
 mod apply_patch_invocation;
 #[path = "planning/atomic_commit_planner.rs"]
@@ -361,8 +363,6 @@ mod memory_embedding_provider_tests;
 mod memory_experience;
 #[path = "memory/memory_governance.rs"]
 mod memory_governance;
-#[path = "memory/memory_governance_policy.rs"]
-mod memory_governance_policy;
 #[cfg(test)]
 #[path = "memory/memory_projection_reconcile_tests.rs"]
 mod memory_projection_reconcile_tests;

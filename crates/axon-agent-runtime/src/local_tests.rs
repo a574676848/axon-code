@@ -1,9 +1,12 @@
 use std::{fs, path::PathBuf};
 
-use axon_domain::AttachmentSensitivity;
+use axon_domain::{AttachmentKind, AttachmentSensitivity, AttachmentSource};
 
 use super::{AttachmentDragDropEntryKind, AttachmentLocalUploadRequest, AttachmentPathKind};
-use crate::{AttachmentBlobStore, AttachmentIngressRuntime};
+use crate::{
+    AttachmentBlobStore, AttachmentIngressError, AttachmentIngressRequest,
+    AttachmentIngressRuntime, MAX_INLINE_PREVIEW, MAX_TOOL_OUTPUT,
+};
 
 #[test]
 fn local_upload_sniffs_mime_and_respects_blob_policy() {
@@ -188,6 +191,59 @@ fn remote_upload_enters_ready_and_remains_ref_only() {
     assert!(record.blob_path.exists());
 
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn large_text_upload_is_accepted_with_bounded_preview() {
+    let root = unique_test_blob_root("large-text-upload");
+    let mut store = AttachmentBlobStore::new(&root);
+    let mut runtime = AttachmentIngressRuntime::default();
+    let bytes = "a".repeat(256 * 1024).into_bytes();
+    let record = runtime
+        .ingest_local_upload_with_blob_store(
+            AttachmentLocalUploadRequest {
+                file_name: "spec.md".to_owned(),
+                mime_hint: None,
+                bytes: bytes.clone(),
+                source_trace: "local://pane/1/upload/spec.md".to_owned(),
+                sensitivity: AttachmentSensitivity::Normal,
+            },
+            &mut store,
+            6_000,
+        )
+        .expect("超过 100 KiB 的文本附件应被接收");
+
+    assert_eq!(record.attachment.byte_len, bytes.len());
+    assert_eq!(record.attachment.kind, AttachmentKind::Text);
+    let expected_preview = "a".repeat(MAX_INLINE_PREVIEW);
+    assert_eq!(
+        record.attachment.preview.as_deref(),
+        Some(expected_preview.as_str())
+    );
+    assert_eq!(fs::read(&record.blob_path).unwrap().len(), bytes.len());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn text_upload_above_cap_is_rejected_with_limit() {
+    let mut runtime = AttachmentIngressRuntime::default();
+    let result = runtime.ingest(AttachmentIngressRequest {
+        source: AttachmentSource::LocalUpload,
+        kind: AttachmentKind::Text,
+        mime_type: "text/plain".to_owned(),
+        bytes: "a".repeat(MAX_TOOL_OUTPUT + 1).into_bytes(),
+        source_trace: "local://pane/1/upload/spec.md".to_owned(),
+        sensitivity: AttachmentSensitivity::Normal,
+    });
+
+    match result {
+        Err(AttachmentIngressError::PayloadTooLarge { limit, actual }) => {
+            assert_eq!(limit, MAX_TOOL_OUTPUT);
+            assert_eq!(actual, MAX_TOOL_OUTPUT + 1);
+        }
+        other => panic!("超上限文本必须被拒绝：{other:?}"),
+    }
 }
 
 fn unique_test_blob_root(name: &str) -> PathBuf {

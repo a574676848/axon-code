@@ -24,7 +24,8 @@ pub use crate::builtin_subagent_tool_spec::SUBAGENT_TOOL_TARGET_FIELD;
 pub use crate::builtin_subagent_tool_spec::{
     DELEGATE_TO_FAST_TOOL_NAME, LIST_AGENTS_TOOL_ID, LIST_AGENTS_TOOL_NAME, SEND_MESSAGE_TOOL_ID,
     SEND_MESSAGE_TOOL_NAME, SPAWN_AGENT_TOOL_ID, SPAWN_AGENT_TOOL_NAME,
-    SUBAGENT_TOOL_FORK_TURNS_FIELD, SUBAGENT_TOOL_MESSAGE_FIELD, SUBAGENT_TOOL_PATH_PREFIX_FIELD,
+    SUBAGENT_TOOL_FORK_TURNS_FIELD, SUBAGENT_TOOL_MESSAGE_FIELD, SUBAGENT_TOOL_MODEL_FIELD,
+    SUBAGENT_TOOL_PATH_PREFIX_FIELD, SUBAGENT_TOOL_REASONING_EFFORT_FIELD,
     SUBAGENT_TOOL_SCHEMA_VERSION, SUBAGENT_TOOL_TASK_FIELD, SUBAGENT_TOOL_TASK_NAME_FIELD,
     list_agents_tool_definition, send_message_tool_definition, spawn_agent_tool_definition,
     subagent_tool_definitions,
@@ -58,6 +59,16 @@ const DELEGATE_FAST_MODEL_POLICY: &str = "fast_model";
 const SUBAGENT_FORK_TURNS_NONE: &str = "none";
 /// 委托模式字段：缺失时回执表示后台作业（带 `jobId`）。
 const SUBAGENT_PAYLOAD_RUN_IN_BACKGROUND: &str = "runInBackground";
+/// 回执中的子代理模型名字段。
+pub const SUBAGENT_PAYLOAD_MODEL: &str = "model";
+/// 回执中的子代理模型策略字段。
+pub const SUBAGENT_PAYLOAD_MODEL_POLICY: &str = "modelPolicy";
+/// 回执中的子代理思考强度字段。
+pub const SUBAGENT_PAYLOAD_REASONING_EFFORT: &str = "reasoningEffort";
+/// 模型策略：继承当前主代理。
+pub const SUBAGENT_MODEL_POLICY_INHERIT: &str = "inherit";
+/// 模型策略：按请求显式指定。
+pub const SUBAGENT_MODEL_POLICY_EXPLICIT: &str = "explicit";
 
 /// 子代理工具执行输入。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -232,6 +243,10 @@ struct SpawnAgentToolRequest {
     task_name: String,
     message: String,
     fork_turns: Option<String>,
+    /// 显式指定的子代理模型名；`None` 表示继承当前主代理。
+    model: Option<String>,
+    /// 显式指定的子代理思考强度；`None` 表示继承当前主代理档位。
+    reasoning_effort: Option<String>,
     role: Option<String>,
 }
 
@@ -267,12 +282,19 @@ fn execute_spawn(
             SUBAGENT_TOOL_TASK_NAME_FIELD,
             SUBAGENT_TOOL_TASK_FIELD,
             SUBAGENT_TOOL_FORK_TURNS_FIELD,
+            SUBAGENT_TOOL_MODEL_FIELD,
+            SUBAGENT_TOOL_REASONING_EFFORT_FIELD,
+            // 与 schema 必填的展示字段同名同义：只影响折叠态，不进入执行语义。
+            crate::TOOL_INTENT_FIELD,
         ],
     )?;
     let task_name = required_task_name(&arguments)?;
     let task = required_string(&arguments, SUBAGENT_TOOL_TASK_FIELD)?;
     let fork_turns = optional_string(&arguments, SUBAGENT_TOOL_FORK_TURNS_FIELD);
     validate_fork_turns(fork_turns.as_deref())?;
+    let model = optional_string(&arguments, SUBAGENT_TOOL_MODEL_FIELD);
+    let reasoning_effort = optional_string(&arguments, SUBAGENT_TOOL_REASONING_EFFORT_FIELD);
+    validate_reasoning_effort(reasoning_effort.as_deref())?;
     execute_spawn_agent_request(
         control,
         SpawnAgentToolRequest {
@@ -280,9 +302,29 @@ fn execute_spawn(
             task_name,
             message: task,
             fork_turns,
+            model,
+            reasoning_effort,
             role: None,
         },
     )
+}
+
+/// 校验子代理思考强度档位。
+///
+/// 值域取 OpenAI 与 Anthropic 官方值的并集：档位是协议无关的请求意图，单个模型
+/// 不支持的档位由 provider 协商层按协议上限收敛，不在参数层拒绝。参数层只拦
+/// 拼写错误的值，让非法输入得到明确的参数错误而不是静默忽略。
+fn validate_reasoning_effort(value: Option<&str>) -> AxonResult<()> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    if axon_config::REASONING_EFFORT_VALUES.contains(&value) {
+        return Ok(());
+    }
+    Err(AxonError::tool_invalid_arguments(format!(
+        "子代理 reasoning_effort 必须是 {} 之一",
+        axon_config::REASONING_EFFORT_ARGUMENT_HINT
+    )))
 }
 
 fn execute_spawn_agent_request(
@@ -296,7 +338,7 @@ fn execute_spawn_agent_request(
         nickname: None,
         role: request.role.clone(),
     })?;
-    Ok(serde_json::json!({
+    let mut payload = serde_json::json!({
         "taskName": report.path.to_string(),
         "task": request.message,
         "forkTurns": request.fork_turns.unwrap_or_else(|| SUBAGENT_FORK_TURNS_NONE.to_owned()),
@@ -304,7 +346,28 @@ fn execute_spawn_agent_request(
         "status": status_name(&report.status),
         "threadId": report.thread_id,
         "role": request.role,
-    }))
+        // 模型选择意图如实进载荷：缺省继承当前主代理，显式指定时才是 explicit。
+        "modelPolicy": SUBAGENT_MODEL_POLICY_INHERIT,
+    });
+    if let Some(object) = payload.as_object_mut() {
+        if let Some(model) = request.model.as_deref() {
+            object.insert(
+                SUBAGENT_PAYLOAD_MODEL.to_owned(),
+                serde_json::Value::String(model.to_owned()),
+            );
+            object.insert(
+                SUBAGENT_PAYLOAD_MODEL_POLICY.to_owned(),
+                serde_json::Value::String(SUBAGENT_MODEL_POLICY_EXPLICIT.to_owned()),
+            );
+        }
+        if let Some(effort) = request.reasoning_effort.as_deref() {
+            object.insert(
+                SUBAGENT_PAYLOAD_REASONING_EFFORT.to_owned(),
+                serde_json::Value::String(effort.to_owned()),
+            );
+        }
+    }
+    Ok(payload)
 }
 
 fn execute_message(
@@ -380,6 +443,9 @@ fn execute_delegate(
             task_name,
             message,
             fork_turns: Some(SUBAGENT_FORK_TURNS_NONE.to_owned()),
+            // 快速委托固定使用宿主配置的快速模型槽位，不接受模型名与档位覆盖。
+            model: None,
+            reasoning_effort: None,
             role: Some(DELEGATE_KIND_FAST.to_owned()),
         },
     )?;

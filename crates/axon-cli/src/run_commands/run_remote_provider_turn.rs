@@ -77,6 +77,9 @@ impl CliProviderTurnRunner {
                 sanitize_agent_path_segment(&request.session_id)
             ))
             .map_err(|error| TurnExecutionError::permanent(format!("{error:?}")))?;
+            // 后台执行的逐字稿落在执行会话本身：宿主在 sink 上暴露的工厂会把
+            // 派生子会话的事件重定向过去，界面因此用同一条会话管线就能读。
+            let session_sinks = sink.and_then(TurnEventSink::subagent_session_sinks);
             let output = execute_standalone_subagent(
                 &self.config_path,
                 Path::new(&request.cwd),
@@ -84,6 +87,7 @@ impl CliProviderTurnRunner {
                 task_path,
                 &request.prompt,
                 started_at_ms,
+                session_sinks,
             )
             .map_err(TurnExecutionError::retryable)?;
             let transcript_ref = output

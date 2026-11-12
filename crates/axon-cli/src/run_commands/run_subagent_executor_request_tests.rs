@@ -126,6 +126,8 @@ fn provider_child_request_inherits_parent_runtime_context() {
         started_at_ms: 1,
         max_runtime_ms: Some(2_000),
         model_intent: RunSubagentModelIntent::Inherit,
+        model_override: None,
+        reasoning_effort_override: None,
         structured_output: None,
         system_prompt_override: None,
         tools_enabled: true,

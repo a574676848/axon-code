@@ -124,7 +124,7 @@ fn consolidation_retries_projection_cleanup_without_deleting_supersession_audit(
 }
 
 #[test]
-fn consolidation_decays_tentative_and_counts_duplicates_and_conflicts() {
+fn consolidation_archives_only_by_decay_and_leaves_duplicates_and_conflicts() {
     let temp = axon_test_support::test_temp_dir();
     let orchestrator = MemoryOrchestrator::init(
         MemoryConfig::from_config_dir(
@@ -192,8 +192,36 @@ fn consolidation_decays_tentative_and_counts_duplicates_and_conflicts() {
         .unwrap();
 
     assert_eq!(report.low_activity_archived, 1);
-    assert_eq!(report.duplicate_tombstones, 1);
+    // 重复合并已下沉到写入侧：content_ref 幂等会拦住同一摘要的重复写入。
+    assert_eq!(report.duplicate_tombstones, 0);
     assert_eq!(report.conflict_archived, 1);
+    assert!(
+        store
+            .get_record(MemoryId(83))
+            .unwrap()
+            .unwrap()
+            .archived_at_ms
+            .is_none(),
+        "重复内容不再在巩固阶段被归档"
+    );
+    assert!(
+        store
+            .get_record(MemoryId(84))
+            .unwrap()
+            .unwrap()
+            .archived_at_ms
+            .is_some(),
+        "同证据冲突仍由巩固阶段归档旧事实"
+    );
+    assert!(
+        store
+            .get_record(MemoryId(85))
+            .unwrap()
+            .unwrap()
+            .archived_at_ms
+            .is_none(),
+        "冲突组里较新的那条保持活跃"
+    );
     assert!(
         store
             .get_record(MemoryId(81))

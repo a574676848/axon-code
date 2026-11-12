@@ -226,7 +226,8 @@ fn delegate_schema_declares_optional_run_in_background() {
     assert_eq!(examples.len(), 1);
     assert_eq!(examples[0][TOOL_INTENT_FIELD], "审计文档展示契约");
     assert!(examples[0][SUBAGENT_TOOL_TASK_FIELD].is_string());
-    assert_eq!(examples[0][SUBAGENT_TOOL_RUN_IN_BACKGROUND_FIELD], false);
+    // 示例即最强的行为暗示：写成 false 模型就会照抄同步等待，主线被委派阻塞。
+    assert_eq!(examples[0][SUBAGENT_TOOL_RUN_IN_BACKGROUND_FIELD], true);
 }
 
 #[test]
@@ -468,4 +469,93 @@ fn normal_child_can_delegate_fast_child() {
     assert_eq!(fast.status, SubagentToolExecutionStatus::Completed);
     assert_eq!(fast.payload["taskName"], "/root/analysis/delegate_fast_1");
     assert_eq!(fast.payload["delegateKind"], "fast");
+}
+
+/// 显式模型与档位必须逐字进回执：父代理只能靠它判断这次委派实际去了哪个模型。
+#[test]
+fn spawn_reports_explicit_model_and_reasoning_effort() {
+    let mut control = AgentControlRuntime::default();
+    let receipt = SubagentToolRuntime
+        .execute(
+            &mut control,
+            input(
+                SPAWN_AGENT_TOOL_NAME,
+                serde_json::json!({
+                    SUBAGENT_TOOL_TASK_NAME_FIELD: "cross_review",
+                    SUBAGENT_TOOL_TASK_FIELD: "换模型交叉复核",
+                    SUBAGENT_TOOL_MODEL_FIELD: "claude-opus-5-5",
+                    SUBAGENT_TOOL_REASONING_EFFORT_FIELD: "high",
+                }),
+            ),
+        )
+        .unwrap();
+
+    assert_eq!(receipt.status, SubagentToolExecutionStatus::Completed);
+    assert_eq!(receipt.payload[SUBAGENT_PAYLOAD_MODEL], "claude-opus-5-5");
+    assert_eq!(receipt.payload[SUBAGENT_PAYLOAD_REASONING_EFFORT], "high");
+    assert_eq!(
+        receipt.payload[SUBAGENT_PAYLOAD_MODEL_POLICY],
+        SUBAGENT_MODEL_POLICY_EXPLICIT
+    );
+    // 选型覆盖不改变模型意图：它仍然是一条继承语义的委派。
+    assert_eq!(receipt.model_intent, SubagentModelIntent::Inherit);
+}
+
+/// 省略选型参数时如实回报继承语义，不伪造模型名与档位。
+#[test]
+fn spawn_defaults_to_inherited_model_without_fabricating_a_name() {
+    let mut control = AgentControlRuntime::default();
+    let receipt = SubagentToolRuntime
+        .execute(
+            &mut control,
+            input(
+                SPAWN_AGENT_TOOL_NAME,
+                serde_json::json!({
+                    SUBAGENT_TOOL_TASK_NAME_FIELD: "review",
+                    SUBAGENT_TOOL_TASK_FIELD: "检查当前改动",
+                }),
+            ),
+        )
+        .unwrap();
+
+    assert_eq!(
+        receipt.payload[SUBAGENT_PAYLOAD_MODEL_POLICY],
+        SUBAGENT_MODEL_POLICY_INHERIT
+    );
+    assert!(receipt.payload.get(SUBAGENT_PAYLOAD_MODEL).is_none());
+    assert!(
+        receipt
+            .payload
+            .get(SUBAGENT_PAYLOAD_REASONING_EFFORT)
+            .is_none()
+    );
+}
+
+/// 档位拼写错误必须在参数层拒绝：静默透传会让模型收到一个它无法理解的失败。
+#[test]
+fn spawn_rejects_unknown_reasoning_effort_at_argument_layer() {
+    let mut control = AgentControlRuntime::default();
+    let error = SubagentToolRuntime
+        .execute(
+            &mut control,
+            input(
+                SPAWN_AGENT_TOOL_NAME,
+                serde_json::json!({
+                    SUBAGENT_TOOL_TASK_NAME_FIELD: "review",
+                    SUBAGENT_TOOL_TASK_FIELD: "检查当前改动",
+                    SUBAGENT_TOOL_REASONING_EFFORT_FIELD: "ultrathink",
+                }),
+            ),
+        )
+        .unwrap_err();
+
+    assert!(
+        format!("{error:?}").contains("reasoning_effort"),
+        "错误正文必须点名字段：{error:?}"
+    );
+    // 参数错误发生在创建之前：不得留下一个没有执行的子代理。
+    assert_eq!(
+        control.list_agents(&AgentPath::root(), None).unwrap().len(),
+        1
+    );
 }

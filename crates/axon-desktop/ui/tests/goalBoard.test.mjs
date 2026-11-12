@@ -7,6 +7,7 @@ import {
     INITIAL_CARD_LIMIT,
     boardColumns,
     cardActionLabel,
+    cleanPreview,
     columnHeaderDot,
     countGoals,
     countSummary,
@@ -235,6 +236,16 @@ test('目标摘要与标题完全相同时去重，不同时保留预览', () =>
     assert.equal(
         distinctObjectivePreview(card({ title: '目标看板验收', objectivePreview: '把目标看板的数据态验收跑通' })),
         '把目标看板的数据态验收跑通',
+    );
+});
+
+test('预览先收成一句纯文本：去反引号、折叠换行，再判重', () => {
+    assert.equal(cleanPreview('在 `E:\\repo` 上\n\n完成  23 个 Issue'), '在 E:\\repo 上 完成 23 个 Issue');
+    assert.equal(cleanPreview('  '), '');
+    // 反引号去掉之后与标题同句，说明确实是同一句话，因此照样去重。
+    assert.equal(
+        distinctObjectivePreview(card({ title: '跑通验收', objectivePreview: '跑通`验收`' })),
+        '',
     );
 });
 

@@ -63,6 +63,34 @@ test('技能条数紧跟 MCP，同为辅助读数', () => {
     assert.equal(skill.icon, 'skill');
 });
 
+test('预算簇从进入会话起常驻：新会话读作 0/窗口 与命中率 0.00%', () => {
+    const budget = headerClusters(baseInput({ usage: null })).find(
+        (cluster) => cluster.kind === 'budget',
+    );
+
+    assert.ok(budget, '还没有任何一轮观测时预算簇也要在');
+    assert.deepEqual(budget.segments.map((segment) => segment.kind), ['context', 'cacheHit']);
+    assert.equal(budget.segments[0].text, '0/10K');
+    assert.equal(budget.segments[0].tone, 'default');
+    assert.equal(budget.segments[1].text, '命中率 0.00%');
+});
+
+test('窗口未知时上下文只报已用，命中率照常给出', () => {
+    const budget = headerClusters(baseInput({ usage: null, contextWindow: null })).find(
+        (cluster) => cluster.kind === 'budget',
+    );
+
+    assert.equal(budget.segments[0].text, '0');
+    assert.equal(budget.segments[1].text, '命中率 0.00%');
+});
+
+test('有观测时两个读数照旧', () => {
+    const budget = headerClusters(baseInput()).find((cluster) => cluster.kind === 'budget');
+
+    assert.equal(budget.segments[0].text, '1K/10K');
+    assert.equal(budget.segments[1].text, '命中率 33.33%');
+});
+
 test('技能清单未就绪或零条时都不占位', () => {
     for (const skillCount of [null, undefined, 0]) {
         assert.deepEqual(

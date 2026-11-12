@@ -289,12 +289,19 @@ fn attach_spawned_subagent_session(
         merge_spawn_session_payload(&receipt.payload, &task_name, &handle, &fork_context);
     drop(sessions);
     let model_intent = delegate_model_intent(&receipt);
+    let model_override = payload_text(&receipt, axon_agent_runtime::SUBAGENT_PAYLOAD_MODEL);
+    let reasoning_effort_override = payload_text(
+        &receipt,
+        axon_agent_runtime::SUBAGENT_PAYLOAD_REASONING_EFFORT,
+    );
     let execution = subagent_execution_input(
         &task_name,
         initial_task,
         &fork_context,
         completed_at_ms,
         model_intent,
+        model_override,
+        reasoning_effort_override,
     )?;
     let run_in_background = spawn_run_in_background(&receipt);
     Ok(SubagentToolExecutionPlan::Run {
@@ -360,6 +367,8 @@ fn subagent_execution_input(
     fork_context: &SubagentForkContextReport,
     started_at_ms: u64,
     model_intent: RunSubagentModelIntent,
+    model_override: Option<String>,
+    reasoning_effort_override: Option<String>,
 ) -> axon_domain::AxonResult<RunSubagentExecutionInput> {
     Ok(RunSubagentExecutionInput {
         task_path: AgentPath::parse(task_path)?,
@@ -371,7 +380,18 @@ fn subagent_execution_input(
         started_at_ms,
         max_runtime_ms: None,
         model_intent,
+        model_override,
+        reasoning_effort_override,
     })
+}
+
+/// 读取回执载荷里的可选文本字段。
+fn payload_text(receipt: &SubagentToolExecutionReceipt, key: &str) -> Option<String> {
+    receipt
+        .payload
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
 }
 
 fn delegate_model_intent(receipt: &SubagentToolExecutionReceipt) -> RunSubagentModelIntent {

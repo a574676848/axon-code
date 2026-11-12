@@ -28,6 +28,7 @@ import type {
 import { useAutoFoldTurns } from './useAutoFoldTurns';
 import { useElapsedTick } from './useElapsedTick';
 import { useInterruptedCarry } from './useInterruptedCarry';
+import { replayInteractionHistory } from './interactionReplay';
 import { useLanePaging } from './useLanePaging';
 import { useLaneReattach } from './useLaneReattach';
 import { useQuestionSync } from './useQuestionSync';
@@ -103,6 +104,17 @@ export function useConversation(target: ConversationTarget | null): Conversation
   const flushRef = useRef<number | null>(null);
   const queueRef = useRef<string[]>([]);
   const replayingRef = useRef(false);
+  /**
+   * 正文装载中的镜像：目标刚打开，或历史回放还没把 durable 尾交完。
+   *
+   * 工作状态行据此写「正在加载会话…」。用状态而不是只读 ref：这一位要参与渲染，
+   * 回放落地那一刻文案就得跟着换，而 ref 的变化不会触发重渲染。
+   */
+  const [replaying, setReplaying] = useState(false);
+  /** 首屏被窗口截断的那一条：标识加窗口起点。 */
+  const [truncated, setTruncated] = useState<{ interactionId: string; start: number } | null>(
+    null,
+  );
   const watchedRef = useRef<string | null>(null);
   /**
    * 目标代次。
@@ -158,53 +170,32 @@ export function useConversation(target: ConversationTarget | null): Conversation
   });
 
   /**
-   * 回放一条 Interaction 的正文：历史走 HTTP 帧页，读完只订阅实时尾。
-   *
-   * 历史不再逐帧穿过事件通道：通道上因此只出现真正的增量，大会话的上万帧也不会
-   * 再把 WebView 压垮。分页逐页落地，正文随页码推进逐步长出，不会先空一屏。
+   * 回放一条 Interaction 的正文：取数、窗口与放行策略在 `interactionReplay`，
+   * 这里只把帧落点、代次与三个状态回执接上去。
    */
   const replayHistory = useCallback(
-    async (workspace: string, interactionId: string, generation: number) => {
-      const subscribeId = `interaction:${interactionId}`;
-      let after = 0;
-      let tailCursor: string | null = null;
-      let settled = false;
-      for (;;) {
-        const page = await ipc.conversationHistoryEvents(interactionId, after);
-        if (generation !== generationRef.current) return;
-        if (page.events.length > 0) {
-          paging.routeFrames(
-            page.events.map((event) => ({
-              kind: 'frame' as const,
-              subscribeId,
-              eventType: event.eventType,
-              payloadJson: event.payloadJson,
-              cursor: event.cursor,
-            })),
-            Date.now(),
-          );
-          // 终态帧只会在补到 durable 尾的那一页出现：它同时说明这一条已经收口。
-          settled = page.events.some(
-            (event) =>
-              event.eventType === 'turn_completed' ||
-              event.eventType === 'turn_failed' ||
-              event.eventType === 'interaction.status',
-          );
-        }
-        tailCursor = page.tailCursor;
-        after = page.nextAfter;
-        if (!page.hasMore) break;
-      }
-      if (generation !== generationRef.current) return;
-      if (settled) {
-        // 已经收口：不再订阅，直接把回放推进到下一条。
-        playNextRef.current(workspace, generation, null);
-        return;
-      }
-      // 还在跑：从 durable 尾订阅，事件通道上只会出现真正的增量。
-      rememberSubscribed(subscribeId);
-      await ipc.conversationWatch(workspace, interactionId, tailCursor);
-    },
+    (workspace: string, interactionId: string, generation: number, full: boolean) =>
+      replayInteractionHistory(
+        {
+          route: paging.routeFrames,
+          now: Date.now,
+          generation: () => generationRef.current,
+          painted: () => setOpening(false),
+          truncated: (id, start, live) => {
+            // 还在跑的轮次不记截断：整条重放会和实时增量抢同一轮次；收口过的才交给「加载更早」。
+            if (start > 0 && !live) setTruncated({ interactionId: id, start });
+            else setTruncated((current) => (current?.interactionId === id ? null : current));
+          },
+          drained: () => setReplaying(false),
+          subscribed: rememberSubscribed,
+          watch: (target, id, cursor) => ipc.conversationWatch(target, id, cursor),
+          advance: (target, current) => playNextRef.current(target, current, null),
+        },
+        workspace,
+        interactionId,
+        generation,
+        full,
+      ),
     [paging.routeFrames, rememberSubscribed],
   );
 
@@ -229,12 +220,14 @@ export function useConversation(target: ConversationTarget | null): Conversation
       // 永不释放的订阅（实测过：切三次会话订阅数从 2 涨到 5）。
       if (generation !== generationRef.current) {
         replayingRef.current = false;
+        setReplaying(false);
         return;
       }
       if (leaving !== null) releaseInteraction(leaving);
       const next = paging.take(queueRef.current);
       if (next === undefined) {
         replayingRef.current = false;
+        setReplaying(false);
         // 翻页或展开的一次回放排空：由分页接管收口（前置一页 / 换回正文）。
         if (paging.finish()) return;
         // 回放排空即正文完整：过渡窗口到此收口，正文一次交出。
@@ -242,6 +235,7 @@ export function useConversation(target: ConversationTarget | null): Conversation
         return;
       }
       replayingRef.current = true;
+      setReplaying(true);
       watchedRef.current = next;
       paging.applyAction({ type: 'open-turn', turnId: next, nowMs: Date.now() });
       const seed = paging.seedOf(next);
@@ -253,12 +247,14 @@ export function useConversation(target: ConversationTarget | null): Conversation
           attachments: seed.attachments,
         });
       }
-      void replayHistory(workspace, next, generation).catch((error: unknown) => {
-        if (generationRef.current !== generation) return;
-        setSubmitError(error instanceof Error ? error.message : '读取会话历史失败');
-        // 读不到正文也要继续推进，否则这一条会把整条车道的回放卡住。
-        playNextRef.current(workspace, generation, watchedRef.current);
-      });
+      void replayHistory(workspace, next, generation, paging.ownPage()).catch(
+        (error: unknown) => {
+          if (generationRef.current !== generation) return;
+          setSubmitError(error instanceof Error ? error.message : '读取会话历史失败');
+          // 读不到正文也要继续推进，否则这一条会把整条车道的回放卡住。
+          playNextRef.current(workspace, generation, watchedRef.current);
+        },
+      );
     },
     [paging.applyAction, paging.seedOf, releaseInteraction, replayHistory],
   );
@@ -338,6 +334,8 @@ export function useConversation(target: ConversationTarget | null): Conversation
     generationRef.current += 1;
     queueRef.current = [];
     replayingRef.current = false;
+    setReplaying(false);
+    setTruncated(null);
     watchedRef.current = null;
     pendingRef.current = [];
     subscribedIdsRef.current = new Set();
@@ -474,6 +472,7 @@ export function useConversation(target: ConversationTarget | null): Conversation
       setSubmitError(null);
       queueRef.current = [];
       replayingRef.current = false;
+      setReplaying(false);
       // 提交是用户自己的动作：正文立刻可见，不为它保留过渡窗口。
       setOpening(false);
       const nowMs = Date.now();
@@ -656,10 +655,26 @@ export function useConversation(target: ConversationTarget | null): Conversation
    */
   const projection = projectionKey === targetKey ? state : INITIAL_CONVERSATION;
 
+  /**
+   * 加载更早：先补被首屏窗口截掉的那一段，再退回车道级翻页。
+   *
+   * 截断的那一条只能整条重放补回：帧页是前向的，从窗口起点往前读不到东西。
+   */
+  const loadOlder = useCallback(async () => {
+    if (truncated !== null) {
+      paging.unfoldTurn(truncated.interactionId);
+      setTruncated(null);
+      return;
+    }
+    await paging.loadOlder();
+  }, [paging, truncated]);
+
   return {
     state: projection,
     jobs,
     working,
+    /** 正文装载中：工作状态行写「正在加载会话…」而不是供应商阶段。 */
+    loadingHistory: opening || replaying,
     activeQuestion,
     answerQuestion,
     watchedInteractionId: laneCapability.available ? watchedRef.current : null,
@@ -675,8 +690,8 @@ export function useConversation(target: ConversationTarget | null): Conversation
     attachVoiceTurn,
     retry,
     interrupt,
-    loadOlder: paging.loadOlder,
-    hasOlder: paging.hasOlder,
+    loadOlder,
+    hasOlder: truncated !== null || paging.hasOlder,
     loadingOlder: paging.loadingOlder,
     prependToken: paging.prependToken,
     unfoldTurn: paging.unfoldTurn,

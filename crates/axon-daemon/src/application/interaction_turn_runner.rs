@@ -282,7 +282,7 @@ where
                 };
                 // 生成指标同样只挂收尾事件：它描述的是这一轮，而不是某个中间步骤。
                 let event_generation = if event.event_type == TURN_COMPLETED_EVENT {
-                    generation
+                    generation.clone()
                 } else {
                     None
                 };

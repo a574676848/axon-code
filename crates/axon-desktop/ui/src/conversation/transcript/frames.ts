@@ -11,6 +11,7 @@ import {
   EVENT_TYPE_RUNTIME_OBSERVATION,
   EVENT_TYPE_TURN_COMPLETED,
   EVENT_TYPE_TURN_FAILED,
+  EVENT_TYPE_TURN_UNCERTAIN,
   EVENT_TYPE_WIRE,
   parsePayload,
   wirePayload,
@@ -49,6 +50,7 @@ import {
   foldStreamUsage,
 } from './cells';
 import { failureReportFromPayload, parseFailureReport, type FailureReport } from '../failureReport';
+import { applyTurnFailed, applyTurnUncertain, hasOpenTurn } from './terminal';
 import { pruneSettledQuestions } from '../questions';
 import { mergeSubagent, subagentRow } from './subagents';
 import type { ConversationState, TranscriptCell, TurnState } from './state';
@@ -133,9 +135,20 @@ function applyFrame(
       response?: string;
       status?: string;
       generation?: GenerationMetricsPayload;
+      usage?: WireUsageUpdate;
     }>(frame.payloadJson);
+    /*
+     * 用量帧是 LiveOnly，重放历史时收不到；收尾负载另存了一份同形快照。
+     * 它必须在分割线落地之前并入本轮，否则 Token 一行永远不会出现。
+     */
+    const withUsage =
+      payload?.usage === undefined || payload.usage === null
+        ? withCursor
+        : withTurn(withCursor, activeTurnIndex(withCursor), (turn) =>
+            applyUsage(turn, payload.usage as WireUsageUpdate),
+          );
     return applyTurnCompleted(
-      withCursor,
+      withUsage,
       payload?.response ?? null,
       payload?.status ?? null,
       nowMs,
@@ -146,6 +159,9 @@ function applyFrame(
   }
   if (frame.eventType === EVENT_TYPE_TURN_FAILED) {
     return applyTurnFailed(withCursor, frame.payloadJson, nowMs);
+  }
+  if (frame.eventType === EVENT_TYPE_TURN_UNCERTAIN) {
+    return applyTurnUncertain(withCursor, frame.payloadJson, nowMs);
   }
   return withCursor;
 }
@@ -188,12 +204,19 @@ function applyWireEvent(
 
   // 一条会话流可以从一条用户消息开始：子代理会话就是这样（它的第一条事实是
   // 委派给它的任务）。没有这条规则，零回合的会话流会被整段丢弃。
+  const incomingUser = wirePayload<{ partId: string; content: string }>(
+    envelope.kind,
+    'userMessage',
+  );
+  /*
+   * 独立会话（目标执行、cron）一轮一条轮次：上一条已经收口时，新的用户消息
+   * 就是下一轮的开场。没有这条规则，后台跑几轮都会挤进同一条轮次里。
+   */
+  if (incomingUser !== null && state.turns.length > 0 && !hasOpenTurn(state)) {
+    state = openTurn(state, incomingUser.partId, envelope.recordedAtMs);
+  }
   if (state.turns.length === 0) {
-    const opening = wirePayload<{ partId: string; content: string }>(
-      envelope.kind,
-      'userMessage',
-    );
-    if (opening === null && question === null) return state;
+    if (incomingUser === null && question === null) return state;
     state = openTurn(state, envelope.session.sessionId, envelope.recordedAtMs);
   }
   const position = activeTurnIndex(state);
@@ -565,26 +588,6 @@ function applyTurnCompleted(
      */
     const summarized = appendTurnSummary(settleTurn(settled, 'completed', elapsed), elapsed);
     return generation === null ? summarized : withGenerationMetrics(summarized, generation);
-  });
-}
-
-/** 轮次失败帧。 */
-function applyTurnFailed(state: ConversationState, payloadJson: string, nowMs: number): ConversationState {
-  const position = activeTurnIndex(state);
-  const payload = parsePayload<{ message?: string; reason?: string; failure?: FailureReport }>(
-    payloadJson,
-  );
-  const message = payload?.message ?? payload?.reason ?? '本轮执行失败';
-  return withTurn(state, position, (turn) => {
-    const elapsed = durationFromEvents(turn, nowMs);
-    const warned = upsertCell(turn, {
-      id: `turn-failed:${turn.id}`,
-      role: 'failure',
-      // 载荷里已有结构化失败时优先用它；否则从正文里的回执解读，解读不出就只显示原文。
-      report: payload?.failure ?? failureReportFromPayload(payload) ?? parseFailureReport(message),
-      text: message,
-    });
-    return appendTurnSummary(settleTurn(warned, 'failed', elapsed), elapsed);
   });
 }
 

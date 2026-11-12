@@ -4,8 +4,8 @@ use std::{
 };
 
 use axon_agent_runtime::{
-    MEMORY_CONFIG_DEFAULT_EMBEDDING_DIMENSION, MemoryConfig as AxonMemoryConfig,
-    MemoryOrchestrator, MemorySqliteRecord, MemoryTextDocument,
+    MemoryConfig as AxonMemoryConfig, MemoryOrchestrator, MemorySqliteRecord, MemoryTextDocument,
+    MEMORY_CONFIG_DEFAULT_EMBEDDING_DIMENSION,
 };
 use axon_config::{AxonConfig, ConfigLoader};
 use axon_domain::{
@@ -15,7 +15,7 @@ use axon_domain::{
 use serde_json::Value;
 
 use super::cli_test_helpers::test_root;
-pub(super) use super::{AxonCli, run_parsed_cli};
+pub(super) use super::{run_parsed_cli, AxonCli};
 
 const TEST_RECORD_ORDERING_WINDOW_MS: u64 = 1_000;
 
@@ -44,14 +44,9 @@ fn memory_consolidate_deduplicates_sqlite_records_without_raw_text() {
 
     assert_eq!(result.exit_code, 0, "{}", result.stderr);
     assert_eq!(body["status"], "memory_consolidation_ready");
-    assert_eq!(body["duplicateTombstones"], 1);
-    assert_eq!(body["explanations"][0]["action"], "duplicate_merge");
-    assert_eq!(body["explanations"][0]["affectedRecords"], 1);
-    assert!(
-        body["explanations"][0]["summary"]
-            .as_str()
-            .is_some_and(|summary| summary.contains("重复"))
-    );
+    // 重复合并已下沉到写入侧：content_ref 幂等会拦住同一摘要的第二次写入，
+    // 巩固阶段不再做重复合并，计数恒为 0，绕过写入路径直插的重复记录保持原状态。
+    assert_eq!(body["duplicateTombstones"], 0);
     assert_eq!(body["refOnly"], true);
     assert_eq!(body["remoteWriteAllowed"], false);
     assert!(!result.stdout.contains("secret-source-summary"));
@@ -66,9 +61,12 @@ fn memory_consolidate_deduplicates_sqlite_records_without_raw_text() {
         .get_record(MemoryId(21))
         .expect("SQLite 记录应可读取")
         .expect("重复 winner 应存在");
-    assert_eq!(loser.record.state, MemoryState::Tombstone);
-    assert!(loser.record.content_ref.is_none());
-    assert!(loser.archived_at_ms.is_some());
+    assert_eq!(
+        loser.record.state,
+        MemoryState::Strong,
+        "巩固不再改动重复记录"
+    );
+    assert!(loser.archived_at_ms.is_none());
     assert_eq!(winner.record.state, MemoryState::Strong);
     assert_eq!(
         winner.record.content_ref.as_deref(),
@@ -177,13 +175,11 @@ fn memory_conflicts_lists_ref_only_conflict_groups() {
     let archived_result = run_parsed_cli(&list_cli);
     let archived_body: Value =
         serde_json::from_str(&archived_result.stdout).expect("memory conflicts 应输出 JSON");
-    assert!(
-        archived_body["groups"][0]["records"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|record| record["status"] == "archived" && record["recoverableConflict"] == true)
-    );
+    assert!(archived_body["groups"][0]["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|record| record["status"] == "archived" && record["recoverableConflict"] == true));
     let _ = fs::remove_dir_all(root);
 }
 
