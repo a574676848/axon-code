@@ -84,8 +84,10 @@ pub use retrieval::{
 };
 pub use temporal::{TimeRange, parse_temporal_hint};
 pub use thread::{
-    Reference, ThreadScope, classify_reference, commitment_id_for, ensure_foreground,
-    is_one_off_leaf, open_commitment, touch_foreground,
+    P2_COMMITMENT_MAX_BYTES, P2_MAX_COMMITMENTS, P2_THREAD_MAX_BYTES, Reference, ThreadScope,
+    classify_reference, close_commitments, commitment_id_for, detects_closure, detects_commitment,
+    ensure_foreground, format_local_minute, is_one_off_leaf, open_commitment, record_commitment,
+    render_p2_context, touch_foreground,
 };
 pub use store::{
     LEGACY_MEMORY_RECORD_TABLE_PREFIX, MEMORY_SQLITE_BUSY_TIMEOUT_MS, MEMORY_SQLITE_SCHEMA_VERSION,

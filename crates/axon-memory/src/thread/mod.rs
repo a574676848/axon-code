@@ -5,9 +5,14 @@
 
 mod reference;
 mod commitment;
+mod p2_render;
 
 pub use reference::{Reference, classify_reference, is_one_off_leaf};
 pub use commitment::{close_commitments, detects_closure, detects_commitment, record_commitment};
+pub use p2_render::{
+    P2_COMMITMENT_MAX_BYTES, P2_MAX_COMMITMENTS, P2_THREAD_MAX_BYTES, format_local_minute,
+    render_p2_context,
+};
 
 use crate::store_thread::{MemoryThread, THREAD_STATUS_OPEN};
 use crate::{MemorySqliteStore, store_thread::MemoryCommitment};
