@@ -24,7 +24,13 @@ def run(label: str, args: list[str]) -> None:
 
 
 def main() -> int:
-    run("cargo build release axon-cli", ["cargo", "build", "-p", "axon-cli", "--release"])
+    # package 会把「与 axon 同目录的 axon-launcher」一起打进发行包，
+    # 干净机器（CI runner / 新环境）的 target/release 里没有它，
+    # 因此这里必须与 axon-cli 一起构建，否则 axon package 会直接报缺 launcher。
+    run(
+        "cargo build release axon-cli + axon-launcher",
+        ["cargo", "build", "-p", "axon-cli", "-p", "axon-launcher", "--release"],
+    )
     run(
         "axon doctor provider",
         ["cargo", "run", "--quiet", "-p", "axon-cli", "--", "doctor", "--check", "provider"],
