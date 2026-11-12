@@ -1,13 +1,11 @@
 # Axon 正式发布流水线
-# 触发条件：push 以 v 开头的 tag（如 v0.2.0）+ 人工触发
-# 产物：三平台六 target 的预编译二进制 + zip/tar.gz + MSI + SHA256SUMS
+# 触发条件：由 CI 在 tag 上全绿后调用（workflow_call）+ 人工触发
+# 产物：三平台六 target 的预编译二进制（后端 axon 与桌面端 axon-desktop 分开打包）+ MSI/pkg/deb + SHA256SUMS
 name: Release
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
+  workflow_call:
 
 permissions:
   contents: write

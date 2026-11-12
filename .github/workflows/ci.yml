@@ -284,3 +284,14 @@ jobs:
       - name: TUI three-region smoke
         if: needs.changes.outputs.code == 'true'
         run: ${{ matrix.python }} tools/verify_tui_smoke.py
+
+  # 发布只在 CI 全绿之后发生：tag 推送先跑完整门禁，docs 与三端 Check 全部通过后才调用
+  # release 工作流。“先过 CI 再出包”由流水线结构保证，而不是靠人工顺序。
+  release:
+    name: Release
+    needs: [docs, frontend, check]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    secrets: inherit
