@@ -22,6 +22,8 @@ mod retrieval;
 mod store;
 #[path = "store/store_query.rs"]
 mod store_query;
+#[path = "store/store_recall.rs"]
+mod store_recall;
 #[path = "store/store_supersession.rs"]
 mod store_supersession;
 #[path = "store/store_thread.rs"]

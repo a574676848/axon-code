@@ -1,5 +1,6 @@
 use super::test_fixtures::{personal_context_record, scoped_record};
 use super::*;
+use axon_domain::MemorySourceOrigin;
 
 #[test]
 fn personal_and_workspace_queries_are_strictly_scope_isolated() {

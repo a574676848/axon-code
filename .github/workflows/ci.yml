@@ -220,7 +220,7 @@ jobs:
       - name: Daemon 与 doctor smoke
         if: needs.changes.outputs.code == 'true'
         shell: pwsh
-        run: cargo run -p axon-cli --all-features -- doctor --check runtime --format json
+        run: cargo run -p axon-cli --all-features -- doctor --check runtime
 
       - name: TUI three-region smoke
         if: needs.changes.outputs.code == 'true'

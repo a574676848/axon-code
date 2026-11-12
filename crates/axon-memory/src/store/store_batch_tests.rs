@@ -1,4 +1,5 @@
 use super::*;
+use axon_domain::MemorySourceOrigin;
 
 const CONCURRENT_WRITER_COUNT: usize = 8;
 const CONCURRENT_RECORDS_PER_WRITER: usize = 32;

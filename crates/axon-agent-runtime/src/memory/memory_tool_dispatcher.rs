@@ -119,8 +119,7 @@ impl MemoryToolDispatcher {
     /// 都必须调它，禁止各自维护一份解析逻辑。
     pub fn infer_time_range_from_query(query: &str) -> Option<(i64, i64)> {
         let now = i64::try_from(now_ms()).ok()?;
-        let tz_offset_min =
-            i32::try_from(chrono::Local::now().offset().local_minus_utc() / 60).ok()?;
+        let tz_offset_min = chrono::Local::now().offset().local_minus_utc() / 60;
         let range = axon_memory::parse_temporal_hint(query, now, tz_offset_min)?;
         Some((range.start_ms, range.end_ms))
     }
