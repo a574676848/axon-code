@@ -13,6 +13,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONTRACT_PATH = Path(__file__).resolve().parent / "tui_smoke_contract.json"
 

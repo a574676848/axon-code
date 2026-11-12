@@ -11,6 +11,10 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REGRESSION_RATIO = 1.05
 GATEWAY_PREFIXES = ("/api/v1/files", "/api/v1/fs/dirs", "/api/v1/attachments")

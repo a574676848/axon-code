@@ -11,6 +11,10 @@ import re
 import sys
 from pathlib import Path
 
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 UI_ROOT = REPO_ROOT / "crates" / "axon-desktop" / "ui"
 
