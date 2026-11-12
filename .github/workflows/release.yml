@@ -197,11 +197,14 @@ jobs:
           tar czf "dist/${NAME}.tar.gz" -C dist "${NAME}"
           sha256sum "dist/${NAME}.tar.gz" | awk '{print $1}' > "dist/${NAME}.tar.gz.sha256"
 
-          mkdir -p "dist/${DESKTOP_NAME}"
-          cp "target/${{ matrix.target }}/release/axon-desktop" "dist/${DESKTOP_NAME}/"
-          cp README.md "dist/${DESKTOP_NAME}/" 2>/dev/null || true
-          tar czf "dist/${DESKTOP_NAME}.tar.gz" -C dist "${DESKTOP_NAME}"
-          sha256sum "dist/${DESKTOP_NAME}.tar.gz" | awk '{print $1}' > "dist/${DESKTOP_NAME}.tar.gz.sha256"
+          # musl 腿不产出桌面端（webkit2gtk 无 musl 构建），只有 desktop=true 的腿才打桌面端包。
+          if [ "${{ matrix.desktop }}" = "true" ]; then
+            mkdir -p "dist/${DESKTOP_NAME}"
+            cp "target/${{ matrix.target }}/release/axon-desktop" "dist/${DESKTOP_NAME}/"
+            cp README.md "dist/${DESKTOP_NAME}/" 2>/dev/null || true
+            tar czf "dist/${DESKTOP_NAME}.tar.gz" -C dist "${DESKTOP_NAME}"
+            sha256sum "dist/${DESKTOP_NAME}.tar.gz" | awk '{print $1}' > "dist/${DESKTOP_NAME}.tar.gz.sha256"
+          fi
 
           echo "ASSET_PATH=dist/${NAME}.tar.gz" >> "$GITHUB_ENV"
           echo "ASSET_SHA=dist/${NAME}.tar.gz.sha256" >> "$GITHUB_ENV"
