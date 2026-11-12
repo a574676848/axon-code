@@ -408,6 +408,7 @@ export const InputDock: React.FC<InputDockProps> = ({
                 primary={working.primary}
                 elapsedMs={working.elapsedMs}
                 queued={working.queued}
+                interruptible={working.interruptible}
               />
             )}
             {/*

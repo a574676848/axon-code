@@ -24,7 +24,7 @@ import { useConversationMcp } from '../../conversation/useConversationMcp';
 import { useSkillCatalog } from '../../conversation/skillCatalog';
 import {
   changedFilesOf,
-  workingStatusPrimary,
+  workingLineOf,
   type AttachmentRef,
 } from '../../conversation/transcript';
 import {
@@ -272,11 +272,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    */
   const workingLine =
     conversation.working && selection !== null
-      ? {
-          primary: workingStatusPrimary(runningTurn?.activity ?? null),
-          elapsedMs: runningTurn?.elapsedMs ?? null,
-          queued: conversation.queued,
-        }
+      ? workingLineOf(runningTurn, conversation.queued, conversation.loadingHistory)
       : null;
 
   /*
@@ -314,7 +310,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    * Esc 统一中断：与 TUI 同语义。本轮跑着的时候，Esc 就是中断当前请求，
    * 不需要先找到停止按钮。空闲时不接管这一键，它仍归各浮层与草稿使用。
    */
-  useInterruptOnEscape(turnRunning, () => void interruptTurn());
+  useInterruptOnEscape(turnRunning && !conversation.loadingHistory, () => void interruptTurn());
 
   /**
    * 工作区根目录只取路径字符串。

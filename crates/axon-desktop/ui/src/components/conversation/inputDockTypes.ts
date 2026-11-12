@@ -73,7 +73,13 @@ export interface InputDockProps {
   /** 外部错误提示。 */
   error: string | null;
   /** 工作状态行：与 TUI 的 composer dock 同位置同口径；为空时不渲染。 */
-  working: { primary: string; elapsedMs: number | null; queued: number } | null;
+  working: {
+    primary: string;
+    elapsedMs: number | null;
+    queued: number;
+    /** 这一行能不能被打断：正文装载期间不能，因此不承诺 ESC。 */
+    interruptible: boolean;
+  } | null;
   /** 中断正在运行的一轮。 */
   onInterrupt: () => void;
   /**

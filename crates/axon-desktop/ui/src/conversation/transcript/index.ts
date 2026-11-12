@@ -76,6 +76,7 @@ export {
   requeueableSteers,
   steerSequence,
   workingStatusPrimary,
+  workingLineOf,
   type CarriedPrompt,
 } from './derive';
 

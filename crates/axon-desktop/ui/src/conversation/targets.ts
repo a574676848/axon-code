@@ -109,6 +109,13 @@ export interface ConversationController {
    * 回放期间保持过渡面，回放落地后一次交出。
    */
   opening: boolean;
+  /**
+   * 正文还在装载：目标刚打开，或历史回放还没把 durable 尾交完。
+   *
+   * 这段时间里一个请求都还没发出，工作状态行据此写「正在加载会话…」；
+   * 装载完成后才进入供应商阶段文案。
+   */
+  loadingHistory: boolean;
   /** 本次目标是否具备车道能力（提交、重试、中断）。 */
   laneAvailable: boolean;
   /** 尚未被服务端确认的待发送消息条数。 */
