@@ -529,4 +529,71 @@ fn requested_rollover_requires_saved_state_before_prepare() {
     assert!(turn_events[0].summary.contains("换窗前任务状态未完成保存"));
 }
 
+#[test]
+fn commit_failure_keeps_the_current_history_for_the_next_turn() {
+    struct FailingCommit;
+
+    impl WindowRolloverTransaction for FailingCommit {
+        fn prepare(
+            &mut self,
+            messages: &[AgentModelMessage],
+        ) -> axon_domain::AxonResult<CanonicalCheckpoint> {
+            Ok(canonical_checkpoint(messages, "继续"))
+        }
+        fn commit(
+            &mut self,
+            _messages: &[AgentModelMessage],
+            _checkpoint: &CanonicalCheckpoint,
+            _replacement: &CompactedHistory,
+        ) -> axon_domain::AxonResult<()> {
+            Err(axon_domain::AxonError::runtime_failure(
+                "单条 JSONL 记录超过 shard 大小上限",
+            ))
+        }
+    }
+
+    let mut rollover = FailingCommit;
+    let mut compression = WindowRolloverRuntime::new(
+        WindowRolloverPolicyRuntime::new(policy(1_000)),
+        &mut rollover,
+    );
+    let mut messages: AgentModelHistorySnapshot = vec![
+        AgentModelMessage::context("system", "sys"),
+        message_with_chars("user", 400),
+        message_with_chars("assistant", 4_000),
+    ]
+    .into();
+    let original = messages.clone();
+    let mut turn_events = Vec::new();
+
+    let outcome = compression.maybe_compress_requested(
+        &mut messages,
+        Some(1_000),
+        TurnId(11),
+        &mut turn_events,
+    );
+
+    assert_eq!(outcome, CompressionOutcome::Prompted);
+    // 归档失败时窗口身份没有推进，历史必须原样留着：只在末尾多一条修复提示。
+    // 若这里换成新窗口，界面读数会与持久事实分叉，下一轮又把整段旧历史装回来。
+    assert_eq!(&messages[..original.len()], &original[..]);
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.content.contains("当前任务窗口已耗尽"))
+    );
+    let failed = turn_events
+        .iter()
+        .find(|event| event.summary.contains("窗口归档提交失败"))
+        .expect("必须留下归档失败的轮次事件");
+    assert_eq!(
+        failed
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("reason"))
+            .and_then(serde_json::Value::as_str),
+        Some("commit_failed")
+    );
+}
+
 mod insert_then_compress_projection_tests;

@@ -34,6 +34,36 @@ impl RolloutSqliteStore {
             .map_err(|_| "rollout SQLite 事务提交失败".to_owned())
     }
 
+    /// 确保当前轮存在一条起始记录；已存在时原样返回，不覆盖。
+    ///
+    /// 换窗用 `assistant_part_id` 定位当前轮，缺这一行只能报「缺少当前运行轮次」。
+    /// 交互的首个 provider turn 就可能触发换窗，而轮记录要到收尾才落地：先补一条起始
+    /// 记录，收尾提交再按同一幂等键覆盖成完整记录，因此 sequence 在整个轮内保持稳定。
+    pub(super) fn ensure_started_turn(&self, record: &RunSessionRecord) -> Result<u64, String> {
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|_| "启动轮事务启动失败".to_owned())?;
+        let existing = transaction
+            .query_row(
+                "SELECT sequence FROM rollout_turns WHERE session_id = ?1 AND assistant_part_id = ?2",
+                params![record.session_id, record.assistant_part_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(|_| "启动轮幂等键查询失败".to_owned())?;
+        if let Some(sequence) = existing {
+            return u64::try_from(sequence).map_err(|_| "启动轮 sequence 不能为负数".to_owned());
+        }
+        upsert_session(&transaction, record, None)?;
+        let record_json = serialize(record, "会话")?;
+        let sequence = upsert_turn(&transaction, record, &record_json)?;
+        transaction
+            .commit()
+            .map_err(|_| "启动轮事务提交失败".to_owned())?;
+        Ok(sequence)
+    }
+
     pub(super) fn install_compaction(
         &self,
         session_id: &str,

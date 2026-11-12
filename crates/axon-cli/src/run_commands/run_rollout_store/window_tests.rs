@@ -45,6 +45,31 @@ fn active_checkpoint_covers_the_current_turn_and_keeps_raw_history() {
 }
 
 #[test]
+fn started_turn_lets_the_active_window_cover_the_current_turn() {
+    let path = temp_db("started-active-window");
+    let store = RolloutSqliteStore::open(&path).unwrap();
+    let mut earlier = record("s1", None, 1);
+    earlier.assistant_part_id = "earlier-turn".to_owned();
+    store.commit_session(&earlier, None).unwrap();
+    let mut started = record("s1", None, 2);
+    started.assistant_part_id = "current-turn".to_owned();
+    let sequence = store.ensure_started_turn(&started).unwrap();
+
+    // 起始记录已足以定位当前轮：这条交互的首个 provider turn 触发换窗不会白跑。
+    store
+        .install_active_window("s1", "current-turn", checkpoint(sequence))
+        .expect("起始记录落地后窗口必须能覆盖当前轮");
+
+    // 收尾提交按同一幂等键覆盖成完整记录，sequence 保持稳定。
+    started.response = "换窗后的最终回复".to_owned();
+    store.commit_session(&started, None).unwrap();
+    let window = store.load_history_window("s1").unwrap();
+    assert_eq!(window.compaction.unwrap().through_sequence, sequence);
+    assert!(window.turns.is_empty());
+    cleanup(&path);
+}
+
+#[test]
 fn missing_current_turn_does_not_replace_an_existing_checkpoint() {
     let path = temp_db("missing-active-window");
     let store = RolloutSqliteStore::open(&path).unwrap();

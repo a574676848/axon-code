@@ -17,7 +17,7 @@ use axon_session_runtime::{
 use serde_json::Value;
 
 use super::interaction_turn_generation_watch::{
-    GenerationSignal, TurnGenerationWatch, UsageObservation, generation_signal,
+    GenerationSignal, TurnGenerationWatch, UsageObservation, generation_signal, usage_payload,
 };
 use crate::application::egress_bridge::CommittedEventEgress;
 use crate::application::event_stream_bridge::LiveStreamEvent;
@@ -70,6 +70,11 @@ pub(super) struct RuntimeTurnEventSink<'a, S, P, C> {
     /// 流式事件经 sink 直接投递，不经过 `TurnExecutionOutcome`，因此收尾指标
     /// 只能在这里留痕；否则速率永远算不出来。
     last_usage: Mutex<Option<TurnUsageSnapshot>>,
+    /// 本轮最后一条用量帧的原始载荷。
+    ///
+    /// 与 `last_usage` 分开留：收尾指标只要三个数，而重放要的是整段用量形状
+    /// （上下文 token 与上下文构成都在里面），少一项就等于重放后没有读数。
+    last_usage_payload: Mutex<Option<Value>>,
     /// 本轮生成账本：provider 流式窗口与累计输出。
     ///
     /// 它让在跑的这一轮不必等整轮收口就进会话级速率：每收口一条 provider 流，
@@ -125,6 +130,7 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             performance,
             subagent_session_sinks,
             last_usage: Mutex::new(None),
+            last_usage_payload: Mutex::new(None),
             generation_watch: Mutex::new(TurnGenerationWatch::default()),
         }
     }
@@ -571,6 +577,8 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
         let signal = generation_signal(&event.payload_json);
         if let GenerationSignal::Usage(observation) = signal {
             self.record_last_usage(observation);
+            // 同一帧既进收尾指标，也留一份原始形状供收尾事件落库。
+            self.record_last_usage_payload(&event.payload_json);
         }
         let now = std::time::Instant::now();
         let mut watch = self.generation_watch();
@@ -594,6 +602,17 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
         });
     }
 
+    /// 留一条用量帧的原始载荷：只在它能解析成用量帧时覆盖。
+    fn record_last_usage_payload(&self, payload_json: &str) {
+        let Some(payload) = usage_payload(payload_json) else {
+            return;
+        };
+        *self
+            .last_usage_payload
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(payload);
+    }
+
     /// 本轮生成账本。
     fn generation_watch(&self) -> std::sync::MutexGuard<'_, TurnGenerationWatch> {
         self.generation_watch
@@ -612,6 +631,14 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             .last_usage
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// 本轮最后一条用量帧的原始载荷。
+    pub(super) fn last_usage_payload(&self) -> Option<Value> {
+        self.last_usage_payload
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 

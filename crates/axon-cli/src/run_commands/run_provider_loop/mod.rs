@@ -501,7 +501,9 @@ fn build_turn_tool_decision(
         transport_report
             .runner_report
             .token_usage
-            .map(|usage| usage.current_context_tokens),
+            .map(|usage| usage.current_context_tokens)
+            // 未知（0）不写入快照：累计量不是当前上下文，不能拿来顶替。
+            .filter(|tokens| *tokens > 0),
         local_estimated_context_tokens,
     );
     let mut turn_tool_receipts = execute_supported_tool_calls_for_turn(

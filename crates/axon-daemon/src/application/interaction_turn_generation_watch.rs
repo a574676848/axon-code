@@ -94,6 +94,19 @@ pub(super) fn generation_signal(payload_json: &str) -> GenerationSignal {
     }
 }
 
+/// 取出一次用量帧的原始载荷。
+///
+/// 用量帧本身是 LiveOnly：重放历史时客户端收不到它，上下文与缓存读数就会整段消失。
+/// 收尾事件把这最后一次快照一起落库，重放才有与 TUI resume snapshot 同一定位的读数。
+pub(super) fn usage_payload(payload_json: &str) -> Option<serde_json::Value> {
+    let value: serde_json::Value = serde_json::from_str(payload_json).ok()?;
+    let kind = value.get("kind")?;
+    if kind.get("type").and_then(serde_json::Value::as_str) != Some(KIND_USAGE_UPDATE) {
+        return None;
+    }
+    kind.get("payload").cloned()
+}
+
 /// 读一个非负整数字段；缺失或类型不符按 0 计。
 fn read_u64(value: &serde_json::Value, field: &str) -> u64 {
     value

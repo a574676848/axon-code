@@ -239,9 +239,14 @@ export function totalTokens(usage: TokenUsage): number {
   );
 }
 
-/** 当前上下文 token；provider 未观测到时回落到归一化总量。 */
+/**
+ * 当前上下文 token；provider 没有给出该读数时返回 0（未知）。
+ *
+ * 不回落到 `totalTokens`：一轮的累计量跨请求相加、缓存命中被重复计入，
+ * 会是真实上下文的好几倍，拿它顶替会让换窗后的会话再次显示成「已满」。
+ */
 export function currentContextTokens(usage: TokenUsage): number {
-  return usage.currentContextTokens > 0 ? usage.currentContextTokens : totalTokens(usage);
+  return usage.currentContextTokens > 0 ? usage.currentContextTokens : 0;
 }
 
 /** 完整输入 token。 */

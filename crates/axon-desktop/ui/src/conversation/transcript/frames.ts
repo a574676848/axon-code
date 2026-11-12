@@ -135,9 +135,20 @@ function applyFrame(
       response?: string;
       status?: string;
       generation?: GenerationMetricsPayload;
+      usage?: WireUsageUpdate;
     }>(frame.payloadJson);
+    /*
+     * 用量帧是 LiveOnly，重放历史时收不到；收尾负载另存了一份同形快照。
+     * 它必须在分割线落地之前并入本轮，否则 Token 一行永远不会出现。
+     */
+    const withUsage =
+      payload?.usage === undefined || payload.usage === null
+        ? withCursor
+        : withTurn(withCursor, activeTurnIndex(withCursor), (turn) =>
+            applyUsage(turn, payload.usage as WireUsageUpdate),
+          );
     return applyTurnCompleted(
-      withCursor,
+      withUsage,
       payload?.response ?? null,
       payload?.status ?? null,
       nowMs,

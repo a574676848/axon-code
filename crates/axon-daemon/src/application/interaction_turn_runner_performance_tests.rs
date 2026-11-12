@@ -25,6 +25,14 @@ fn completion_payload_carries_generation_metrics_for_replay() {
             decode_ms: Some(3_000),
             output_tokens: Some(420),
             reasoning_output_tokens: None,
+            usage: Some(serde_json::json!({
+                "inputTokens": 24_000,
+                "cachedInputTokens": 96_000,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 420,
+                "reasoningOutputTokens": 0,
+                "currentContextTokens": 782_531,
+            })),
         }),
     )
     .expect("payload 应可标注");
@@ -39,6 +47,11 @@ fn completion_payload_carries_generation_metrics_for_replay() {
         payload["generation"]["reasoningOutputTokens"],
         serde_json::Value::Null
     );
+    // 用量快照与实时 usageUpdate 帧同形：重放历史才有上下文与缓存读数。
+    assert_eq!(payload["usage"]["currentContextTokens"], 782_531);
+    assert_eq!(payload["usage"]["cachedInputTokens"], 96_000);
+    // 它不混进 generation 对象：客户端两套键各解各的。
+    assert!(payload["generation"].get("usage").is_none());
     // 没有测得指标时不写该键，客户端据此区分「没测到」与「测得 0」。
     let bare = annotate_runtime_payload("{\"response\":\"ok\"}", &interaction_id, None, None)
         .expect("payload 应可标注");

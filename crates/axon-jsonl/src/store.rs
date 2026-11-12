@@ -10,6 +10,13 @@ use std::{
 
 /// 默认单个 shard 的大小上限。
 pub const DEFAULT_SHARD_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
+/// 单条记录体量硬上限。
+///
+/// shard 预算是**分片**的目标，不是单条记录的合法性边界：一条比预算还大的记录
+/// （例如整段窗口归档）如果被拒绝，会让整笔业务失败。因此超预算的记录改为独占
+/// 一个 shard；只有超过这里才说明记录本身已经失控。
+const MAX_SINGLE_RECORD_BYTES: u64 = 64 * 1024 * 1024;
 /// shard 序号的稳定显示宽度。
 pub const SHARD_SEQUENCE_WIDTH: usize = 6;
 /// 固定宽度 shard 序号的最大值。
@@ -251,7 +258,12 @@ impl ShardedJsonlStore {
             return shard_path(logical_path, 0);
         };
         let last_bytes = last_path.metadata()?.len();
-        if last_bytes == 0 || last_bytes.saturating_add(stored_bytes) <= self.max_shard_bytes {
+        // 单条记录本身就超过预算时，它只能独占一个 shard：写进任何已有分片都会
+        // 把分片撑过预算，而拒绝写入会让引用它的整笔业务一起失败。
+        let oversize_alone = stored_bytes > self.max_shard_bytes;
+        if last_bytes == 0
+            || (!oversize_alone && last_bytes.saturating_add(stored_bytes) <= self.max_shard_bytes)
+        {
             return Ok(last_path.clone());
         }
         let next_sequence = last_sequence
@@ -267,10 +279,10 @@ impl ShardedJsonlStore {
     }
 
     fn validate_line_bytes(&self, line_bytes: u64) -> io::Result<()> {
-        if line_bytes.saturating_add(1) > self.max_shard_bytes {
+        if line_bytes > MAX_SINGLE_RECORD_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "单条 JSONL 记录超过 shard 大小上限",
+                "单条 JSONL 记录超过记录体量硬上限",
             ));
         }
         Ok(())

@@ -12,6 +12,7 @@ import { mergeCarriedPrompts, pendingSteerCount, requeueableSteers } from '../sr
 import { orderTurnCells } from '../src/conversation/transcript/order.ts';
 import { emptyTurn, refreshLiveElapsed, settleTurn } from '../src/conversation/transcript/turns.ts';
 import { expandStreamPayload } from '../src/conversation/wire.ts';
+import { turnSummaryText } from '../src/conversation/turnSummary.ts';
 
 test('只把明确的文件路径变为预览入口', () => {
     const text = 'p50/p95 I/O docs/guide.md `src/main.rs` E:\\zbg\\axon-code\\Cargo.toml';
@@ -564,6 +565,45 @@ test('重放收尾负载里的生成指标：首字与速率不再依赖实时�
     assert.equal(summary.generationTpsX10, 4_600);
     // 没有观测帧时这两个数照样成立：它们不该依赖实时帧。
     assert.equal(completed.turns[0].firstTokenAvgMs !== null, true);
+});
+
+test('重放收尾负载里的用量快照：分割线与指标条重新有 token 读数', () => {
+    // 用量帧是 LiveOnly，重放历史时收不到；收尾负载另存了一份同形快照。
+    const openTurnState = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn', turnId: 'interaction-1', nowMs: 0,
+    });
+    const completed = conversationReducer(openTurnState, {
+        type: 'frames',
+        nowMs: 10_000,
+        frames: [{
+            kind: 'frame',
+            subscribeId: 'interaction:interaction-1',
+            eventType: 'turn_completed',
+            payloadJson: JSON.stringify({
+                response: '做完了。',
+                status: 'completed',
+                generation: { ttftMs: 8_460, decodeMs: 10_000 },
+                usage: {
+                    inputTokens: 24_000,
+                    cachedInputTokens: 96_000,
+                    cacheWriteInputTokens: 0,
+                    outputTokens: 4_600,
+                    reasoningOutputTokens: 0,
+                    currentContextTokens: 782_531,
+                },
+            }),
+            cursor: null,
+            replay: true,
+        }],
+    });
+    const turn = completed.turns[0];
+    assert.equal(turn.usage.currentContextTokens, 782_531, '上下文读数来自收尾负载');
+    const summary = turn.cells.find((cell) => cell.role === 'summary');
+    assert.notEqual(summary.usage, null, '分割线必须拿到本轮用量');
+    const text = turnSummaryText(summary);
+    for (const label of ['Token', '入', '缓存命中', '出', '推理', '命中率']) {
+        assert.ok(text.includes(label), `分割线缺 ${label} 一项：${text}`);
+    }
 });
 
 test('中断轮次也保留收尾负载里的首字与速率', () => {

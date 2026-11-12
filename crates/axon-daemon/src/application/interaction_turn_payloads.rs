@@ -41,7 +41,7 @@ pub(super) fn completion_summary_from_events(events: &[RuntimeEvent]) -> Option<
 ///
 /// 观测帧是广播投递、不进持久日志的，因此重放历史或重启客户端之后首字与速率就没了。
 /// 这几个数必须随收尾事件一起落库，才能在重放时还原成与 TUI 同口径的读数。
-#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct TurnGenerationMetrics {
     /// 首字耗时。
@@ -52,6 +52,13 @@ pub(super) struct TurnGenerationMetrics {
     pub output_tokens: Option<u64>,
     /// 本轮 Provider 实测推理输出 token；一条用量观测都没有时为 None。
     pub reasoning_output_tokens: Option<u64>,
+    /// 本轮最后一次用量帧的原始载荷。
+    ///
+    /// 不并进 `generation` 对象：它要落成与实时 `usageUpdate` 帧**同形**的独立键，
+    /// 客户端一套归约逻辑才能同时吃下实时帧与重放负载。用量帧是 LiveOnly，
+    /// 不在这里留一份，重放历史就没有上下文与缓存读数。
+    #[serde(skip_serializing)]
+    pub usage: Option<serde_json::Value>,
 }
 
 /// 发布本轮的收尾观测帧：解码速率、用量与缓存命中率。
@@ -85,6 +92,7 @@ pub(super) fn publish_turn_performance(
         output_tokens: (readout.output_tokens > 0).then_some(readout.output_tokens),
         reasoning_output_tokens: (readout.reasoning_output_tokens > 0)
             .then_some(readout.reasoning_output_tokens),
+        usage: sink.last_usage_payload(),
     })
 }
 
@@ -218,8 +226,12 @@ pub(super) fn annotate_runtime_payload(
         // 与观测帧同名字段：客户端一套解析逻辑即可同时吃下实时帧与重放负载。
         object.insert(
             "generation".to_owned(),
-            serde_json::to_value(generation).map_err(|error| error.to_string())?,
+            serde_json::to_value(&generation).map_err(|error| error.to_string())?,
         );
+        // 用量快照按实时帧的形状另存一档：客户端据此走与 live 相同的 applyUsage。
+        if let Some(usage) = generation.usage {
+            object.insert("usage".to_owned(), usage);
+        }
     }
     serde_json::to_string(&payload).map_err(|error| error.to_string())
 }
@@ -275,6 +287,7 @@ mod tests {
                 decode_ms: Some(10_000),
                 output_tokens: Some(1_204),
                 reasoning_output_tokens: Some(318),
+                usage: None,
             }),
         )
         .expect("注解应成功");
