@@ -337,6 +337,12 @@ mod tests {
                 "审计文档展示契约",
             ),
             (
+                "builtin.goal_create",
+                r#"{"scope":"current_workspace","acceptance":["清单可验收"],"intent":"拆解记忆增强目标"}"#,
+                "创建任务",
+                "拆解记忆增强目标",
+            ),
+            (
                 "builtin.send_message",
                 r#"{"message":"尽快返回结论"}"#,
                 "发送消息",

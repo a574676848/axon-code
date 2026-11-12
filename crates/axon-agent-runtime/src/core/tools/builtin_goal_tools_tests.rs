@@ -165,17 +165,25 @@ fn unknown_tool_names_and_invalid_arguments_are_rejected() {
     }
 }
 
-/// §5.4.3 守恒项：五工具的外部 schema 与目标态逐字段一致，无别名无兼容层。
+/// §5.4.3 守恒项：六个工具的外部 schema 与目标态逐字段一致，无别名无兼容层。
 #[test]
 fn goal_tool_definitions_freeze_the_six_external_schemas() {
     let definitions = goal_tool_definitions();
     let frozen: [(&str, &[&str], &[&str]); 6] = [
         (
             GOAL_CREATE_TOOL_NAME,
-            &["scope", "title", "objective", "steps", "acceptance"],
+            &[
+                "scope",
+                "title",
+                "objective",
+                "steps",
+                "acceptance",
+                "intent",
+            ],
             &[
                 "acceptance",
                 "createExecution",
+                "intent",
                 "objective",
                 "scope",
                 "steps",
@@ -184,20 +192,27 @@ fn goal_tool_definitions_freeze_the_six_external_schemas() {
         ),
         (
             GOAL_LIST_TOOL_NAME,
-            &["scope"],
-            &["cursor", "limit", "scope", "status"],
+            &["scope", "intent"],
+            &["cursor", "intent", "limit", "scope", "status"],
         ),
         (
             GOAL_GET_TOOL_NAME,
-            &["goalId"],
-            &["goalId", "includeEvents", "includeExecutions", "limit"],
+            &["goalId", "intent"],
+            &[
+                "goalId",
+                "includeEvents",
+                "includeExecutions",
+                "intent",
+                "limit",
+            ],
         ),
         (
             GOAL_UPDATE_TOOL_NAME,
-            &["goalId", "expectedRevision"],
+            &["goalId", "expectedRevision", "intent"],
             &[
                 "expectedRevision",
                 "goalId",
+                "intent",
                 "nextStep",
                 "priority",
                 "status",
@@ -207,13 +222,13 @@ fn goal_tool_definitions_freeze_the_six_external_schemas() {
         ),
         (
             GOAL_CANCEL_TOOL_NAME,
-            &["goalId", "expectedRevision", "reason"],
-            &["expectedRevision", "goalId", "reason"],
+            &["goalId", "expectedRevision", "reason", "intent"],
+            &["expectedRevision", "goalId", "intent", "reason"],
         ),
         (
             GOAL_START_TOOL_NAME,
-            &["goalId", "expectedRevision"],
-            &["expectedRevision", "goalId"],
+            &["goalId", "expectedRevision", "intent"],
+            &["expectedRevision", "goalId", "intent"],
         ),
     ];
     assert_eq!(
@@ -244,6 +259,74 @@ fn goal_tool_definitions_freeze_the_six_external_schemas() {
             "{name} 必须保持 object 入参"
         );
     }
+}
+
+/// `intent` 是 schema 必填的展示字段：解析必须接受它，且不得进入领域命令。
+#[test]
+fn intent_is_accepted_and_stripped_before_the_domain_command() {
+    let cases = [
+        (
+            GOAL_CREATE_TOOL_NAME,
+            json!({
+                "intent": "拆解记忆增强目标",
+                "scope": "current_workspace",
+                "title": "记忆增强",
+                "objective": "落地可交付的清单",
+                "steps": ["梳理", "拆解"],
+                "acceptance": ["清单可验收"],
+            }),
+        ),
+        (
+            GOAL_LIST_TOOL_NAME,
+            json!({"intent": "盘点进行中的目标", "scope": "current_context"}),
+        ),
+        (
+            GOAL_GET_TOOL_NAME,
+            json!({"intent": "确认目标进度", "goalId": "goal-1"}),
+        ),
+        (
+            GOAL_UPDATE_TOOL_NAME,
+            json!({
+                "intent": "标记等待输入",
+                "goalId": "goal-1",
+                "expectedRevision": 3,
+                "waitingReason": "等待用户确认"
+            }),
+        ),
+        (
+            GOAL_CANCEL_TOOL_NAME,
+            json!({
+                "intent": "取消过期目标",
+                "goalId": "goal-1",
+                "expectedRevision": 3,
+                "reason": "需求已变更"
+            }),
+        ),
+        (
+            GOAL_START_TOOL_NAME,
+            json!({"intent": "继续执行目标", "goalId": "goal-1", "expectedRevision": 3}),
+        ),
+    ];
+    for (bare_name, input) in cases {
+        let name = qualified(bare_name);
+        GoalToolRuntime::parse_command(&name, &input)
+            .unwrap_or_else(|error| panic!("{name} 必须接受 intent：{error:?}"));
+    }
+    // 只摘 intent：其余未知字段仍按严格 schema 拒绝。
+    let error = GoalToolRuntime::parse_command(
+        &qualified(GOAL_CREATE_TOOL_NAME),
+        &json!({
+            "intent": "拆解目标",
+            "scope": "global",
+            "title": "标题",
+            "objective": "目标",
+            "steps": ["步骤"],
+            "acceptance": ["验收"],
+            "createExecutionAlias": true,
+        }),
+    )
+    .expect_err("未知字段必须继续被拒绝");
+    assert_tool_invalid_arguments(error, "intent 之外的单别名字段");
 }
 
 /// 从 wire 命令取回其工具名，用于断言「一命令一变体」。
