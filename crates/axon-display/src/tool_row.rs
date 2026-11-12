@@ -283,6 +283,15 @@ mod tests {
             Some("审计文档展示契约"),
             "委托工具与其余内置工具同一条 intent 契约"
         );
+        // 任务管理类工具没有单一主参数：acceptance 之类的数组摆出来只是噪声。
+        assert_eq!(
+            tool_row_target(
+                "builtin.goal_create",
+                r#"{"scope":"current_workspace","acceptance":["清单可验收"],"title":"记忆增强"}"#,
+                Some("拆解记忆增强目标")
+            ),
+            Some(ToolRowTarget::Text("拆解记忆增强目标".to_owned()))
+        );
         assert_eq!(
             tool_row_target("mcp__codebase-memory-mcp__get_architecture", "{}", None),
             Some(ToolRowTarget::Text(

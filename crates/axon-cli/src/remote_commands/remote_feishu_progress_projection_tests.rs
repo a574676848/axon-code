@@ -267,6 +267,11 @@ fn tool_target_uses_shared_rules_per_tool() {
             "审计文档展示契约",
         ),
         (
+            "goal_create",
+            r#"{"scope":"current_workspace","acceptance":["清单可验收"],"intent":"拆解记忆增强目标"}"#,
+            "拆解记忆增强目标",
+        ),
+        (
             "send_message",
             r#"{"message":"尽快返回结论"}"#,
             "尽快返回结论",

@@ -8,7 +8,13 @@
         "notes_write_file",
         "notes_append_to_file",
         "send_message",
-        "delegate_to_fast"
+        "delegate_to_fast",
+        "goal_create",
+        "goal_list",
+        "goal_get",
+        "goal_update",
+        "goal_cancel",
+        "goal_start"
     ],
     "targets": {
         "memory_search": { "fields": ["query"] },

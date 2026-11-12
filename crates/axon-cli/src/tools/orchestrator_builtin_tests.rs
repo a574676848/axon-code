@@ -468,6 +468,12 @@ fn every_intent_tool_accepts_the_intent_field_before_execution() {
         "notes_append_to_file",
         "send_message",
         "delegate_to_fast",
+        "goal_create",
+        "goal_list",
+        "goal_get",
+        "goal_update",
+        "goal_cancel",
+        "goal_start",
     ];
     for name in axon_display::tool_intent_tool_names() {
         assert!(
@@ -602,6 +608,41 @@ fn every_intent_tool_accepts_the_intent_field_before_execution() {
         "delegate_to_fast 不得拒绝 intent：{:?}",
         delegated.err()
     );
+
+    // 六个 Goal 工具同属 intent 工具：展示字段不得堵死任务管理通道。
+    for (tool_name, arguments) in [
+        (
+            "builtin.goal_create",
+            r#"{"intent":"拆解记忆增强目标","scope":"current_workspace","title":"记忆增强","objective":"落地可交付清单","steps":["梳理"],"acceptance":["清单可验收"]}"#,
+        ),
+        (
+            "builtin.goal_list",
+            r#"{"intent":"盘点进行中的目标","scope":"current_context"}"#,
+        ),
+        (
+            "builtin.goal_get",
+            r#"{"intent":"确认目标进度","goalId":"goal-1"}"#,
+        ),
+        (
+            "builtin.goal_update",
+            r#"{"intent":"标记等待输入","goalId":"goal-1","expectedRevision":1,"waitingReason":"等待确认"}"#,
+        ),
+        (
+            "builtin.goal_cancel",
+            r#"{"intent":"取消过期目标","goalId":"goal-1","expectedRevision":1,"reason":"需求变更"}"#,
+        ),
+        (
+            "builtin.goal_start",
+            r#"{"intent":"继续执行目标","goalId":"goal-1","expectedRevision":1}"#,
+        ),
+    ] {
+        let parsed: serde_json::Value =
+            serde_json::from_str(arguments).expect("用例参数是合法 JSON");
+        assert!(
+            axon_agent_runtime::GoalToolRuntime::parse_command(tool_name, &parsed).is_ok(),
+            "{tool_name} 不得拒绝 intent"
+        );
+    }
 
     let _ = std::fs::remove_dir_all(&temp_root);
 }

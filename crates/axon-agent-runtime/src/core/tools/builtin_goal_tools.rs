@@ -24,8 +24,13 @@ pub const GOAL_CANCEL_TOOL_NAME: &str = "goal_cancel";
 pub const GOAL_START_TOOL_NAME: &str = "goal_start";
 /// Goal 查询单次最大记录数。
 pub const GOAL_QUERY_MAX_LIMIT: u32 = 256;
+/// Goal 工具 schema 版本；六个工具增加必填 `intent` 后升到 2。
+pub const GOAL_TOOL_SCHEMA_VERSION: u32 = 2;
 /// builtin 工具命名空间。
 const BUILTIN_TOOL_NAMESPACE: &str = "builtin";
+/// 六个 Goal 工具共用的 intent 说明后缀：intent 只服务折叠态，不进入领域命令。
+const GOAL_TOOL_INTENT_SENTENCE: &str =
+    "intent 是每次调用必填的一句话目的，写法见该字段描述；漏填会让整条调用被判为参数非法。";
 /// Goal 工具裸名清单，顺序与工具定义一致。
 const GOAL_TOOL_NAMES: [&str; 6] = [
     GOAL_CREATE_TOOL_NAME,
@@ -217,10 +222,17 @@ impl GoalToolRuntime {
 }
 
 /// 反序列化工具输入；失败统一映射为工具参数错误。
+///
+/// `intent` 是展示字段：Goal 命令类型严格拒绝未知字段，这里在解析前摘掉它，
+/// 让 schema 必填的 intent 不进领域命令，其余未知字段照旧被拒绝。
 fn deserialize_input<T: serde::de::DeserializeOwned>(
     value: &serde_json::Value,
 ) -> axon_domain::AxonResult<T> {
-    serde_json::from_value(value.clone())
+    let mut stripped = value.clone();
+    if let Some(object) = stripped.as_object_mut() {
+        object.remove(crate::TOOL_INTENT_FIELD);
+    }
+    serde_json::from_value(stripped)
         .map_err(|error| axon_domain::AxonError::tool_invalid_arguments(error.to_string()))
 }
 
@@ -256,10 +268,18 @@ pub fn goal_tool_definitions() -> [ToolDefinition; 6] {
 }
 
 fn goal_create() -> ToolDefinition {
-    let schema = object_schema(
-        1,
-        ["scope", "title", "objective", "steps", "acceptance"],
+    let mut schema = object_schema(
+        GOAL_TOOL_SCHEMA_VERSION,
+        [
+            "scope",
+            "title",
+            "objective",
+            "steps",
+            "acceptance",
+            "intent",
+        ],
         vec![
+            intent_field(),
             field(
                 "scope",
                 ToolSchemaFieldKind::NonBlankString,
@@ -288,6 +308,16 @@ fn goal_create() -> ToolDefinition {
             ),
         ],
     );
+    // 字段最多的写工具：用一条完整调用示例固定参数形状，intent 与其余必填字段同批出现。
+    schema.input_schema["examples"] = json!([{
+        "intent": "拆解记忆增强目标",
+        "scope": "current_workspace",
+        "title": "记忆增强",
+        "objective": "落地可直接交付的记忆增强清单",
+        "steps": ["梳理现状", "拆解 Issue", "逐项实施", "审计修复"],
+        "acceptance": ["23 个 Issue 全部有验收命令"],
+        "createExecution": false,
+    }]);
     definition(
         GOAL_CREATE_TOOL_ID,
         GOAL_CREATE_TOOL_NAME,
@@ -299,9 +329,10 @@ fn goal_create() -> ToolDefinition {
 
 fn goal_list() -> ToolDefinition {
     let mut schema = object_schema(
-        1,
-        ["scope"],
+        GOAL_TOOL_SCHEMA_VERSION,
+        ["scope", "intent"],
         vec![
+            intent_field(),
             field(
                 "scope",
                 ToolSchemaFieldKind::NonBlankString,
@@ -342,9 +373,10 @@ fn goal_list() -> ToolDefinition {
 
 fn goal_get() -> ToolDefinition {
     let schema = object_schema(
-        1,
-        ["goalId"],
+        GOAL_TOOL_SCHEMA_VERSION,
+        ["goalId", "intent"],
         vec![
+            intent_field(),
             field("goalId", ToolSchemaFieldKind::NonBlankString, "Goal 标识。"),
             field(
                 "includeExecutions",
@@ -370,9 +402,10 @@ fn goal_get() -> ToolDefinition {
 
 fn goal_update() -> ToolDefinition {
     let mut schema = object_schema(
-        1,
-        ["goalId", "expectedRevision"],
+        GOAL_TOOL_SCHEMA_VERSION,
+        ["goalId", "expectedRevision", "intent"],
         vec![
+            intent_field(),
             field("goalId", ToolSchemaFieldKind::NonBlankString, "Goal 标识。"),
             field(
                 "expectedRevision",
@@ -410,9 +443,10 @@ fn goal_update() -> ToolDefinition {
 
 fn goal_cancel() -> ToolDefinition {
     let schema = object_schema(
-        1,
-        ["goalId", "expectedRevision", "reason"],
+        GOAL_TOOL_SCHEMA_VERSION,
+        ["goalId", "expectedRevision", "reason", "intent"],
         vec![
+            intent_field(),
             field("goalId", ToolSchemaFieldKind::NonBlankString, "Goal 标识。"),
             field(
                 "expectedRevision",
@@ -437,9 +471,10 @@ fn goal_start() -> ToolDefinition {
         GOAL_START_TOOL_NAME,
         "启动尚未执行的 Goal，或继续等待、暂停的 Goal。由你自主决定，无需额外询问用户；结果未知时先核实外部事实。",
         object_schema(
-            1,
-            ["goalId", "expectedRevision"],
+            GOAL_TOOL_SCHEMA_VERSION,
+            ["goalId", "expectedRevision", "intent"],
             vec![
+                intent_field(),
                 field(
                     "goalId",
                     ToolSchemaFieldKind::NonBlankString,
@@ -468,6 +503,15 @@ fn field(name: &str, kind: ToolSchemaFieldKind, description: &str) -> ToolSchema
     ToolSchemaField::new(name, kind, description)
 }
 
+/// Goal 工具共用的展示字段：与其余内置工具同名同义，只影响折叠态。
+fn intent_field() -> ToolSchemaField {
+    field(
+        crate::TOOL_INTENT_FIELD,
+        ToolSchemaFieldKind::NonBlankString,
+        crate::TOOL_INTENT_FIELD_DESCRIPTION,
+    )
+}
+
 fn definition(
     id: ToolId,
     name: &str,
@@ -479,7 +523,8 @@ fn definition(
         id,
         namespace: BUILTIN_TOOL_NAMESPACE.to_owned(),
         name: name.to_owned(),
-        description: description.to_owned(),
+        // 六个工具统一带上 intent 说明：折叠态只显示这一句话，原始参数留在展开态。
+        description: format!("{description}{GOAL_TOOL_INTENT_SENTENCE}"),
         schema,
         enabled: true,
         concurrency_policy: if read_only {

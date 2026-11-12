@@ -80,7 +80,7 @@
 
 ## Goal 工具
 
-Goal 工具是主 turn 的持久工作能力。它们只装配到主 turn 的 `<tool_orchestration_protocol>` 和工具列表，后台 Goal Execution 与子代理不得调用。普通回答和澄清直接使用主 turn 的语义输出，不通过 Goal 工具伪装。
+Goal 工具是主 turn 的持久工作能力。它们只装配到主 turn 的 `<tool_orchestration_protocol>` 和工具列表，后台 Goal Execution 与子代理不得调用。普通回答和澄清直接使用主 turn 的语义输出，不通过 Goal 工具伪装。六个 Goal 工具都声明必填 `intent`（写法与长度同 `builtin.shell_command.intent`）：桌面端、TUI 与飞书的折叠态只显示这一句话，`goalId`、`acceptance` 等原始参数留在展开态。
 
 ### `builtin.goal_create`
 
@@ -88,6 +88,7 @@ Goal 工具是主 turn 的持久工作能力。它们只装配到主 turn 的 `<
 
 ```json
 {
+  "intent": "拆解记忆增强目标",
   "scope": "current_workspace",
   "title": "非空标题",
   "objective": "可验证的目标",
@@ -105,6 +106,7 @@ Goal 工具是主 turn 的持久工作能力。它们只装配到主 turn 的 `<
 
 ```json
 {
+  "intent": "盘点进行中的目标",
   "scope": "all_visible",
   "status": ["proposed", "active", "waiting", "paused"],
   "limit": 20,
@@ -120,6 +122,7 @@ Goal 工具是主 turn 的持久工作能力。它们只装配到主 turn 的 `<
 
 ```json
 {
+    "intent": "确认目标进度",
     "goalId": "goal-id",
   "includeExecutions": true,
   "includeEvents": true,
@@ -135,6 +138,7 @@ Goal 工具是主 turn 的持久工作能力。它们只装配到主 turn 的 `<
 
 ```json
 {
+  "intent": "继续执行目标",
   "goalId": "goal-id",
   "expectedRevision": 4
 }
@@ -148,6 +152,7 @@ Goal 工具是主 turn 的持久工作能力。它们只装配到主 turn 的 `<
 
 ```json
 {
+    "intent": "标记等待输入",
     "goalId": "goal-id",
   "expectedRevision": 4,
   "title": "新标题",
@@ -164,6 +169,7 @@ Goal 工具是主 turn 的持久工作能力。它们只装配到主 turn 的 `<
 
 ```json
 {
+    "intent": "取消过期目标",
     "goalId": "goal-id",
   "expectedRevision": 4,
   "reason": "用户要求停止"
@@ -305,7 +311,7 @@ Lazy 块内的漏写前缀容错：当某个 `*** Update File:` 块内出现独�
 
 `builtin.shell_command.intent` 是**必填**参数：一句话说明这次命令要达成什么目的，例如「校验代码格式」「确认依赖版本」。它是这次执行面向用户的说明，桌面端、TUI 与飞书的工具行都以它作为标题，命令原文是详情。写目标、不复述命令原文、不加句号、40 字以内。
 
-`intent` 是跨工具的展示契约，字段名与写法在所有声明它的工具上完全一致，当前包含 `builtin.shell_command`、`builtin.write_stdin`、`builtin.update_plan`、`builtin.glob`、`builtin.search`、`builtin.notes_write_file`、`builtin.notes_append_to_file`、`builtin.send_message` 与 `builtin.delegate_to_fast`。它只影响展示，不参与执行语义：模型自述目的在参数被截断之前取出，因此再长的脚本、正文或计划都不会把它挤掉；未声明该字段的工具（含 MCP 工具与第三方 schema）不受影响。
+`intent` 是跨工具的展示契约，字段名与写法在所有声明它的工具上完全一致，当前包含 `builtin.shell_command`、`builtin.write_stdin`、`builtin.update_plan`、`builtin.glob`、`builtin.search`、`builtin.notes_write_file`、`builtin.notes_append_to_file`、`builtin.send_message`、`builtin.delegate_to_fast` 与六个 `builtin.goal_*` 工具。它只影响展示，不参与执行语义：模型自述目的在参数被截断之前取出，因此再长的脚本、正文或计划都不会把它挤掉；未声明该字段的工具（含 MCP 工具与第三方 schema）不受影响。
 
 两处内容分工固定，改任一处都要同步检查另一处：**写法与长度**（写目标、标点、字数、示例）属单次调用语义，写在该字段的 schema 描述里；**产品态承诺**（每次调用必填、它是这次执行面向用户的说明、不得复述命令）属跨调用约束，写在 `crates/axon-prompts/templates/agent/tool_usage_guidance.md` 的 `<tool_execution_and_receipt_protocol>` 片段里。界面机制（哪一端折叠、哪一端展开）两处都不写。
 
