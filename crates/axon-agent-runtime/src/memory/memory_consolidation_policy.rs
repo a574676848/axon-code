@@ -4,21 +4,19 @@ use std::collections::BTreeMap;
 
 use axon_domain::{AxonError, AxonResult, MemoryState, MemoryTombstone};
 
+pub(super) use axon_memory::is_active_recallable;
+pub use axon_memory::{MEMORY_DEFAULT_HALF_LIFE_DAYS, decayed_score_basis_points};
+
 use crate::{
     MemorySqliteRecord,
     memory_consolidation::{
-        MEMORY_CONSOLIDATION_REASON_CONFLICT_ARCHIVED,
-        MEMORY_CONSOLIDATION_REASON_DUPLICATE_MERGED, MemoryConflictRecord,
+        MEMORY_CONSOLIDATION_REASON_CONFLICT_ARCHIVED, MemoryConflictRecord,
         MemoryConsolidationInput,
     },
     memory_governance_policy::MEMORY_ARCHIVE_SCORE_THRESHOLD_BASIS_POINTS,
 };
 
 const MEMORY_DEFAULT_NAMESPACE_REF: &str = "memory-scope:local";
-const MAX_BASIS_POINTS: u16 = 10_000;
-/// 记忆衰减半衰期，单位天；治理、合并与界面展示共用同一口径。
-pub const MEMORY_DEFAULT_HALF_LIFE_DAYS: u64 = 30;
-const SECONDS_PER_DAY: u64 = 86_400;
 
 pub(super) fn validate_consolidation_input(input: &MemoryConsolidationInput<'_>) -> AxonResult<()> {
     if input.now_ms == 0 {
@@ -55,43 +53,9 @@ pub(super) fn archive_low_activity_records(
     (records, archived)
 }
 
-pub(super) fn tombstone_duplicate_records(
-    mut records: Vec<MemorySqliteRecord>,
-    now_ms: u64,
-) -> (Vec<MemorySqliteRecord>, usize) {
-    let mut duplicate_count = 0usize;
-    let mut best_by_content_ref = BTreeMap::<String, usize>::new();
-
-    for index in 0..records.len() {
-        if !is_active_recallable(&records[index]) {
-            continue;
-        }
-        let Some(content_ref) = records[index].record.content_ref.clone() else {
-            continue;
-        };
-        if let Some(existing_index) = best_by_content_ref.get(&content_ref).copied() {
-            let winner = better_record_index(&records, existing_index, index, now_ms);
-            let loser = if winner == existing_index {
-                index
-            } else {
-                best_by_content_ref.insert(content_ref.clone(), index);
-                existing_index
-            };
-            mark_tombstone(
-                &mut records[loser],
-                content_ref,
-                MEMORY_CONSOLIDATION_REASON_DUPLICATE_MERGED,
-                now_ms,
-            );
-            duplicate_count = duplicate_count.saturating_add(1);
-        } else {
-            best_by_content_ref.insert(content_ref, index);
-        }
-    }
-
-    (records, duplicate_count)
-}
-
+/// 归档同证据链里的旧事实，只保留更新或更高置信的那条。
+///
+/// 这是 `memory recover-conflict` 的唯一数据来源，不能因为命中窗口窄就下线。
 pub(super) fn archive_conflicting_records(
     mut records: Vec<MemorySqliteRecord>,
     now_ms: u64,
@@ -129,16 +93,6 @@ pub(super) fn archive_conflicting_records(
     }
 
     (records, conflict_count)
-}
-
-pub(super) fn is_active_recallable(record: &MemorySqliteRecord) -> bool {
-    record.archived_at_ms.is_none()
-        && matches!(record.record.state, MemoryState::Weak | MemoryState::Strong)
-        && record
-            .record
-            .content_ref
-            .as_ref()
-            .is_some_and(|value| !value.trim().is_empty())
 }
 
 pub(super) fn conflict_key(record: &MemorySqliteRecord) -> Option<String> {
@@ -222,22 +176,6 @@ const fn state_rank(state: MemoryState) -> u8 {
     }
 }
 
-fn mark_tombstone(
-    record: &mut MemorySqliteRecord,
-    blocked_ref: String,
-    reason: &'static str,
-    now_ms: u64,
-) {
-    record.record.state = MemoryState::Tombstone;
-    record.record.content_ref = None;
-    record.record.tombstone = Some(MemoryTombstone {
-        blocked_ref,
-        reason: reason.to_owned(),
-    });
-    record.archived_at_ms = Some(now_ms);
-    record.updated_at_ms = now_ms;
-}
-
 fn archive_record(record: &mut MemorySqliteRecord, reason: &'static str, now_ms: u64) {
     let blocked_ref = record.record.content_ref.clone().unwrap_or_default();
     record.record.tombstone = Some(MemoryTombstone {
@@ -246,37 +184,4 @@ fn archive_record(record: &mut MemorySqliteRecord, reason: &'static str, now_ms:
     });
     record.archived_at_ms = Some(now_ms);
     record.updated_at_ms = now_ms;
-}
-
-/// 计算衰减后的有效权重（basis point）：置信度与重要度之积按半衰期指数衰减。
-pub fn decayed_score_basis_points(record: &MemorySqliteRecord, now_ms: u64) -> u16 {
-    let elapsed_ms =
-        std::time::Duration::from_millis(now_ms.saturating_sub(record.last_active_at_ms))
-            .as_secs_f64()
-            * 1_000.0;
-    let half_life_ms = std::time::Duration::from_secs(
-        MEMORY_DEFAULT_HALF_LIFE_DAYS.saturating_mul(SECONDS_PER_DAY),
-    )
-    .as_secs_f64()
-        * 1_000.0;
-    let base = f64::from(record.confidence_basis_points)
-        * f64::from(record.importance_basis_points)
-        / f64::from(MAX_BASIS_POINTS);
-    let decay = (-std::f64::consts::LN_2 * elapsed_ms / half_life_ms).exp();
-    rounded_basis_points(base * decay)
-}
-
-fn rounded_basis_points(score: f64) -> u16 {
-    let target = score.round().clamp(0.0, f64::from(MAX_BASIS_POINTS));
-    let mut lower = 0_u16;
-    let mut upper = MAX_BASIS_POINTS;
-    while lower < upper {
-        let middle = lower + (upper - lower) / 2;
-        if f64::from(middle) < target {
-            lower = middle + 1;
-        } else {
-            upper = middle;
-        }
-    }
-    lower
 }

@@ -1,11 +1,11 @@
 //! Axon Memory 的嵌入式配置拓扑与编排入口。
 
+#[path = "aging/mod.rs"]
+mod aging;
 #[path = "workspace/artifacts.rs"]
 mod artifacts;
 #[path = "citation/citation.rs"]
 mod citation;
-#[path = "consolidate/mod.rs"]
-mod consolidate;
 #[path = "embedding/provider.rs"]
 mod embedding_provider;
 #[path = "store/file_lock.rs"]
@@ -49,6 +49,12 @@ use std::{
 
 use axon_domain::{AxonError, AxonResult};
 
+pub use aging::{
+    LESSON_NORMAL_MAX_DAYS, LESSON_STALE_MAX_DAYS, LESSON_STALE_WEIGHT_BP, LessonFreshness,
+    MAX_BASIS_POINTS, MEMORY_ARCHIVE_SCORE_THRESHOLD_BASIS_POINTS, MEMORY_DEFAULT_HALF_LIFE_DAYS,
+    aging_score_basis_points, decayed_score_basis_points, effective_importance_bp, injection_rank,
+    is_active_recallable, is_lesson_kind, lesson_freshness, should_archive, should_inject_actively,
+};
 pub use artifacts::{
     MEMORY_ARTIFACTS_EXTENSIONS_DIR, MEMORY_ARTIFACTS_PHASE2_DIFF_FILE,
     MEMORY_ARTIFACTS_RAW_MEMORIES_FILE, MEMORY_ARTIFACTS_ROLLOUT_SUMMARIES_DIR,
@@ -57,13 +63,6 @@ pub use artifacts::{
 pub use citation::{
     MEMORY_CITATION_END_TAG, MEMORY_CITATION_START_TAG, MemoryCitation, MemoryCitationParseIssue,
     MemoryCitationParseReport, MemoryCitationParser, project_memory_citation_text,
-};
-pub use consolidate::{
-    CONSOLIDATE_BATCH_LIMIT, CONSOLIDATE_ENABLED_DEFAULT, ConsolidationOp, ConsolidationPlan,
-    ConsolidationReport, LESSON_NORMAL_MAX_DAYS, LESSON_STALE_MAX_DAYS, LESSON_STALE_WEIGHT_BP,
-    LessonFreshness, MIN_IMPORTANCE_BP, PERSON_CARD_TAG, PlanRejection, apply_plan,
-    effective_importance_bp, is_lesson_kind, is_person_card_like, lesson_freshness, parse_plan,
-    profile_inference_inputs, should_inject_actively,
 };
 pub use embedding_provider::{
     MEMORY_EMBEDDING_ARK_MULTIMODAL_PATH, MEMORY_EMBEDDING_DASHSCOPE_PATH,
@@ -111,7 +110,7 @@ pub use thread::{
     P2_COMMITMENT_MAX_BYTES, P2_MAX_COMMITMENTS, P2_THREAD_MAX_BYTES, Reference,
     THREADS_ENABLED_DEFAULT, ThreadScope, classify_reference, close_commitments, commitment_id_for,
     detects_closure, detects_commitment, ensure_foreground, format_local_minute, is_one_off_leaf,
-    open_commitment, record_commitment, render_p2_context, touch_foreground,
+    open_commitment, record_commitment, render_p2_context,
 };
 pub use usage::{
     MEMORY_USAGE_KIND_CITED, MEMORY_USAGE_KIND_INJECTED, MEMORY_USAGE_KIND_RECALLED,

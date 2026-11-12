@@ -6,6 +6,7 @@ use axon_domain::{AxonError, AxonResult, MemoryState};
 
 use axon_memory::{
     MemoryOrchestrator, MemoryRuntimeQualityReport, MemoryRuntimeQualityStore, MemorySqliteRecord,
+    is_active_recallable,
 };
 
 const MEMORY_DEFAULT_NAMESPACE_REF: &str = "memory-scope:local";
@@ -411,16 +412,6 @@ fn is_false_recall_risk(record: &MemorySqliteRecord, now_ms: u64) -> bool {
             .and_then(|trace| trace.evidence_ref.as_ref())
             .is_none_or(|value| value.trim().is_empty())
         && source.is_none_or(|trace| trace.summary.trim().is_empty())
-}
-
-fn is_active_recallable(record: &MemorySqliteRecord) -> bool {
-    record.archived_at_ms.is_none()
-        && matches!(record.record.state, MemoryState::Weak | MemoryState::Strong)
-        && record
-            .record
-            .content_ref
-            .as_ref()
-            .is_some_and(|value| !value.trim().is_empty())
 }
 
 fn scoped_evidence_key(record: &MemorySqliteRecord) -> Option<String> {

@@ -547,7 +547,7 @@ impl MemorySqliteStore {
             return Err(AxonError::memory_persistence("Memory scope 查询参数无效"));
         }
         self.query_limited_records(
-            "SELECT * FROM memory_records WHERE user_ref = ?1 AND namespace_ref = ?2 AND state IN (?3, ?4) AND archived_at_ms IS NULL AND (ttl_expires_at_ms IS NULL OR ttl_expires_at_ms > ?5) AND content_ref IS NOT NULL AND TRIM(content_ref) <> '' ORDER BY importance_basis_points DESC, updated_at_ms DESC, memory_id ASC LIMIT ?6",
+            "SELECT * FROM memory_records WHERE user_ref = ?1 AND namespace_ref = ?2 AND state IN (?3, ?4) AND archived_at_ms IS NULL AND (ttl_expires_at_ms IS NULL OR ttl_expires_at_ms > ?5) AND content_ref IS NOT NULL AND TRIM(content_ref) <> '' ORDER BY last_active_at_ms DESC, importance_basis_points DESC, updated_at_ms DESC, memory_id ASC LIMIT ?6",
             params![
                 user_ref,
                 namespace_ref,
@@ -572,7 +572,7 @@ impl MemorySqliteStore {
             ));
         }
         self.query_limited_records(
-            "SELECT * FROM memory_records WHERE user_ref IS NULL AND namespace_ref = ?1 AND state IN (?2, ?3) AND archived_at_ms IS NULL AND (ttl_expires_at_ms IS NULL OR ttl_expires_at_ms > ?4) AND content_ref IS NOT NULL AND TRIM(content_ref) <> '' ORDER BY importance_basis_points DESC, updated_at_ms DESC, memory_id ASC LIMIT ?5",
+            "SELECT * FROM memory_records WHERE user_ref IS NULL AND namespace_ref = ?1 AND state IN (?2, ?3) AND archived_at_ms IS NULL AND (ttl_expires_at_ms IS NULL OR ttl_expires_at_ms > ?4) AND content_ref IS NOT NULL AND TRIM(content_ref) <> '' ORDER BY last_active_at_ms DESC, importance_basis_points DESC, updated_at_ms DESC, memory_id ASC LIMIT ?5",
             params![
                 namespace_ref,
                 state_code(MemoryState::Weak),

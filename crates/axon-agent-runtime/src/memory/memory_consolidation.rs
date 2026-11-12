@@ -9,7 +9,7 @@ use crate::{
     memory_consolidation_policy::{
         archive_conflicting_records, archive_low_activity_records, conflict_key, conflict_record,
         has_conflicting_content, is_active_recallable, is_expired_record,
-        tombstone_duplicate_records, validate_consolidation_input,
+        validate_consolidation_input,
     },
 };
 
@@ -176,7 +176,8 @@ impl MemoryConsolidationRuntime {
             .collect::<Vec<_>>();
         let ttl_cleaned = before_ttl.saturating_sub(records.len());
         let (records, low_activity_archived) = archive_low_activity_records(records, input.now_ms);
-        let (records, duplicate_tombstones) = tombstone_duplicate_records(records, input.now_ms);
+        // 重复合并已下沉到写入侧：content_ref 幂等由 memory-write 拦截，此处计数恒为 0。
+        let duplicate_tombstones = 0usize;
         let (records, conflict_archived) = archive_conflicting_records(records, input.now_ms);
 
         persist_consolidated_records(&sqlite_store, &records, &before_ids)?;
