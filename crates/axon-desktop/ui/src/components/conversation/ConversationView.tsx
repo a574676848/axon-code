@@ -3,6 +3,7 @@ import * as ipc from '../../ipc';
 import type { CronJob, WorkspaceItem } from '../../types';
 import { targetOfLane, useConversation, type LaneSelection } from '../../conversation/useConversation';
 import { sessionGenerationMetrics } from '../../conversation/sessionGeneration';
+import { lastObservedUsage } from '../../conversation/sessionUsage';
 import { coverFace, type StageFrame } from '../../conversation/stage';
 import { useLaneAutoRead, useStopSpeechOnLaneChange } from '../../speech';
 import { Dialog } from '../ui/overlays';
@@ -380,7 +381,8 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     model: fixedModel ?? config?.model ?? '',
     cwd: workspace?.path ?? '',
     reasoningEffort: fixedReasoningEffort ?? config?.reasoningEffort ?? null,
-    usage: lastTurn?.usage ?? null,
+    /* 预算读数取会话里最近一次有观测的用量：新一轮刚提交时它还没有用量，用最后一条会清零。 */
+    usage: lastObservedUsage(conversation.state.turns),
     contextWindow: config?.contextWindow ?? null,
     firstTokenAvgMs: sessionGeneration.firstTokenAvgMs,
     generationTpsX10: sessionGeneration.generationTpsX10,
