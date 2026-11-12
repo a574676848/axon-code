@@ -26,7 +26,7 @@ case "${ARCH}" in
     *)     echo "不支持的架构：${ARCH}" >&2; exit 1 ;;
 esac
 
-NAME="axon-v${VERSION}-${TARGET}"
+NAME="axon-${VERSION}-${TARGET}"
 
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"

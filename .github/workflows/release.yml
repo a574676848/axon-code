@@ -32,36 +32,42 @@ jobs:
             target: x86_64-pc-windows-msvc
             ext: .exe
             archive: zip
+            desktop: 'true'
 
           # macOS Apple Silicon
           - os: macos-latest
             target: aarch64-apple-darwin
             ext: ''
             archive: tar.gz
+            desktop: 'true'
 
           # macOS Intel（macos-13 已退役，改用 macos-15-intel 保持 x64 架构不变）
           - os: macos-15-intel
             target: x86_64-apple-darwin
             ext: ''
             archive: tar.gz
+            desktop: 'true'
 
           # Linux x64 (glibc)
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             ext: ''
             archive: tar.gz
+            desktop: 'true'
 
           # Linux ARM64
           - os: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             ext: ''
             archive: tar.gz
+            desktop: 'true'
 
-          # Linux x64 (musl — Alpine/静态链接)
+          # Linux x64 (musl — Alpine/静态链接)。musl 没有 webkit2gtk，只能出后端。
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-musl
             ext: ''
             archive: tar.gz
+            desktop: 'false'
 
     runs-on: ${{ matrix.os }}
 
@@ -89,37 +95,53 @@ jobs:
           shared-key: release-${{ matrix.target }}
           cache-targets: true
 
-      - name: 准备 Node 环境并构建前端 (axon-desktop UI)
-        if: matrix.os == 'windows-latest'
+      - name: 安装 Linux 系统依赖 (Tauri 桌面端)
+        if: runner.os == 'Linux' && matrix.desktop == 'true'
+        shell: bash
+        run: |
+          sudo apt-get update
+          # 桌面端（axon-desktop）在 Linux 链接 webkit2gtk 与 rsvg，缺依赖会直接编译失败。
+          # libappindicator3-dev 在 Ubuntu 24.04 已改名为 libayatana-appindicator3-dev。
+          sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev patchelf libdbus-1-dev
+          sudo apt-get install -y libayatana-appindicator3-dev ||
+            sudo apt-get install -y libappindicator3-dev
+
+      - name: 准备 Node 环境 (axon-desktop UI)
+        if: matrix.desktop == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
       - name: 构建 axon-desktop 前端
-        if: matrix.os == 'windows-latest'
+        if: matrix.desktop == 'true'
         run: |
           npm --prefix crates/axon-desktop/ui ci
           npm --prefix crates/axon-desktop/ui run build
 
-      - name: 编译 release 二进制
+      - name: 编译 release 二进制（后端 + 桌面端）
+        shell: bash
         run: |
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+          # musl 腿只出后端：webkit2gtk 没有 musl 构建，GUI 无法静态链接。
+          if [ "${{ matrix.desktop }}" = "true" ]; then
             cargo build -p axon-cli -p axon-launcher -p axon-desktop --release --target ${{ matrix.target }} --all-features
           else
             cargo build -p axon-cli -p axon-launcher --release --target ${{ matrix.target }} --all-features
           fi
-        shell: bash
 
       - name: CLI doctor smoke
         run: cargo run -p axon-cli -- doctor --check provider
 
-      # ── Unix 打包 ──────────────────────────
+      # ── Unix 打包：后端与桌面端分开出包 ──────
       - name: 打包 tar.gz（Unix）
         if: matrix.archive == 'tar.gz'
         shell: bash
         run: |
+          # 产物命名统一为 <name>-<version>-<target>：name 只有 axon（后端）与 axon-desktop（桌面端），
+          # 版本不带 v 前缀，与 msi / pkg / deb 对齐。
           VERSION="${GITHUB_REF_NAME#v}"
-          NAME="axon-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          NAME="axon-${VERSION}-${{ matrix.target }}"
+          DESKTOP_NAME="axon-desktop-${VERSION}-${{ matrix.target }}"
+
           mkdir -p "dist/${NAME}"
           cp "target/${{ matrix.target }}/release/axon" "dist/${NAME}/"
           mkdir -p "dist/${NAME}/launcher"
@@ -131,19 +153,28 @@ jobs:
           cp "assets/defaults/SOUL.md" "dist/${NAME}/assets/defaults/"
           tar czf "dist/${NAME}.tar.gz" -C dist "${NAME}"
           sha256sum "dist/${NAME}.tar.gz" | awk '{print $1}' > "dist/${NAME}.tar.gz.sha256"
+
+          mkdir -p "dist/${DESKTOP_NAME}"
+          cp "target/${{ matrix.target }}/release/axon-desktop" "dist/${DESKTOP_NAME}/"
+          cp README.md "dist/${DESKTOP_NAME}/" 2>/dev/null || true
+          tar czf "dist/${DESKTOP_NAME}.tar.gz" -C dist "${DESKTOP_NAME}"
+          sha256sum "dist/${DESKTOP_NAME}.tar.gz" | awk '{print $1}' > "dist/${DESKTOP_NAME}.tar.gz.sha256"
+
           echo "ASSET_PATH=dist/${NAME}.tar.gz" >> "$GITHUB_ENV"
           echo "ASSET_SHA=dist/${NAME}.tar.gz.sha256" >> "$GITHUB_ENV"
 
-      # ── Windows 打包 ────────────────────────
+      # ── Windows 打包：后端 zip 与桌面端 zip 分开 ──
       - name: 打包 zip（Windows）
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
-          $name = "axon-$env:GITHUB_REF_NAME-${{ matrix.target }}"
+          $name = "axon-$version-${{ matrix.target }}"
+          $desktopName = "axon-desktop-$version-${{ matrix.target }}"
+
+          # 后端包：CLI + launcher + 技能文档 + 默认 Soul + scoop 安装脚本
           New-Item -Force "dist/$name" -Type Directory | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/axon.exe" "dist/$name/"
-          Copy-Item "target/${{ matrix.target }}/release/axon-desktop.exe" "dist/$name/" -ErrorAction SilentlyContinue
           New-Item -Force "dist/$name/launcher" -Type Directory | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/axon-launcher.exe" "dist/$name/launcher/"
           Copy-Item "README.md" "dist/$name/" -ErrorAction SilentlyContinue
@@ -153,8 +184,17 @@ jobs:
           Copy-Item "assets/defaults/SOUL.md" "dist/$name/assets/defaults/"
           Copy-Item "installer/scoop/axon-scoop-install.ps1" "dist/$name/"
           Compress-Archive "dist/$name" "dist/$name.zip"
-          $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower()
-          $hash | Out-File -NoNewline "dist/$name.zip.sha256"
+          (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower() |
+            Out-File -NoNewline "dist/$name.zip.sha256"
+
+          # 桌面端包：GUI 单独分发，避免把两种运行时塞进同一个 zip
+          New-Item -Force "dist/$desktopName" -Type Directory | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/axon-desktop.exe" "dist/$desktopName/"
+          Copy-Item "README.md" "dist/$desktopName/" -ErrorAction SilentlyContinue
+          Compress-Archive "dist/$desktopName" "dist/$desktopName.zip"
+          (Get-FileHash "dist/$desktopName.zip" -Algorithm SHA256).Hash.ToLower() |
+            Out-File -NoNewline "dist/$desktopName.zip.sha256"
+
           "ASSET_PATH=dist/$name.zip" | Out-File -Append $env:GITHUB_ENV
           "ASSET_SHA=dist/$name.zip.sha256" | Out-File -Append $env:GITHUB_ENV
 
@@ -250,7 +290,7 @@ jobs:
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          NAME="axon-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          NAME="axon-${VERSION}-${{ matrix.target }}"
           BINARY="target/${{ matrix.target }}/release/axon"
           LAUNCHER="target/${{ matrix.target }}/release/axon-launcher"
           bash installer/macos/build-pkg.sh "${VERSION}" "${BINARY}" "${LAUNCHER}" "${NAME}"
@@ -258,7 +298,7 @@ jobs:
       - name: 生成 SHA256
         shell: bash
         run: |
-          NAME="axon-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          NAME="axon-${GITHUB_REF_NAME#v}-${{ matrix.target }}"
           shasum -a 256 "dist/${NAME}.pkg" | awk '{print $1}' > "dist/${NAME}.pkg.sha256"
 
       - name: macOS .pkg 公证
@@ -332,7 +372,7 @@ jobs:
       - name: 生成 SHA256
         shell: bash
         run: |
-          NAME="axon-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          NAME="axon-${GITHUB_REF_NAME#v}-${{ matrix.target }}"
           sha256sum "dist/${NAME}.deb" | awk '{print $1}' > "dist/${NAME}.deb.sha256"
 
       - name: 上传 .deb 产物
@@ -393,6 +433,7 @@ jobs:
           $launcherPath = "target\x86_64-pc-windows-msvc\release\axon-launcher.exe"
           $manifestPath = "dist\current.json"
           @{ versionId = $version } | ConvertTo-Json -Compress | Set-Content -NoNewline $manifestPath
+          $msiPath = "dist/axon-$version-x86_64-pc-windows-msvc.msi"
           wix build installer/windows/axon.wxs `
             -ext WixToolset.UI.wixext `
             -culture zh-CN `
@@ -403,9 +444,9 @@ jobs:
             -d "LauncherPath=$launcherPath" `
             -d "CurrentManifestPath=$manifestPath" `
             -d "IconPath=crates\axon-desktop\icons\icon.ico" `
-            -o "dist/axon-$env:GITHUB_REF_NAME-x86_64-pc-windows-msvc.msi"
-          $hash = (Get-FileHash "dist/axon-$env:GITHUB_REF_NAME-x86_64-pc-windows-msvc.msi" -Algorithm SHA256).Hash.ToLower()
-          $hash | Out-File -NoNewline "dist/axon-$env:GITHUB_REF_NAME-x86_64-pc-windows-msvc.msi.sha256"
+            -o $msiPath
+          $hash = (Get-FileHash $msiPath -Algorithm SHA256).Hash.ToLower()
+          $hash | Out-File -NoNewline "$msiPath.sha256"
 
       - name: 上传 MSI 产物
         uses: actions/upload-artifact@v4
@@ -512,19 +553,26 @@ jobs:
 
             ### 平台支持
 
+            产物按**后端（CLI/Daemon）**与**桌面端（GUI）**分开打包，按需下载：
+
             | 文件 | 平台 |
             |------|------|
-            | `*-x86_64-pc-windows-msvc.zip` | Windows x64 (portable) |
-            | `*-x86_64-pc-windows-msvc.msi` | Windows x64 (installer) |
-            | `*-aarch64-apple-darwin.tar.gz` | macOS Apple Silicon |
-            | `*-x86_64-apple-darwin.tar.gz` | macOS Intel |
-            | `*-x86_64-unknown-linux-gnu.tar.gz` | Linux x64 (glibc) |
-            | `*-aarch64-unknown-linux-gnu.tar.gz` | Linux ARM64 |
-            | `*-x86_64-unknown-linux-musl.tar.gz` | Linux x64 (musl/静态链接) |
-            | `*-x86_64-unknown-linux-gnu.deb` | Linux x64 (.deb) |
-            | `*-aarch64-unknown-linux-gnu.deb` | Linux ARM64 (.deb) |
-            | `*-aarch64-apple-darwin.pkg` | macOS Apple Silicon (.pkg) |
-            | `*-x86_64-apple-darwin.pkg` | macOS Intel (.pkg) |
+            | `axon-*-x86_64-pc-windows-msvc.zip` | Windows x64 后端 (portable) |
+            | `axon-desktop-*-x86_64-pc-windows-msvc.zip` | Windows x64 桌面端 (GUI) |
+            | `axon-*-x86_64-pc-windows-msvc.msi` | Windows x64 安装包 (后端 + 桌面端) |
+            | `axon-*-aarch64-apple-darwin.tar.gz` | macOS Apple Silicon 后端 |
+            | `axon-desktop-*-aarch64-apple-darwin.tar.gz` | macOS Apple Silicon 桌面端 |
+            | `axon-*-x86_64-apple-darwin.tar.gz` | macOS Intel 后端 |
+            | `axon-desktop-*-x86_64-apple-darwin.tar.gz` | macOS Intel 桌面端 |
+            | `axon-*-x86_64-unknown-linux-gnu.tar.gz` | Linux x64 后端 (glibc) |
+            | `axon-desktop-*-x86_64-unknown-linux-gnu.tar.gz` | Linux x64 桌面端 |
+            | `axon-*-aarch64-unknown-linux-gnu.tar.gz` | Linux ARM64 后端 |
+            | `axon-desktop-*-aarch64-unknown-linux-gnu.tar.gz` | Linux ARM64 桌面端 |
+            | `axon-*-x86_64-unknown-linux-musl.tar.gz` | Linux x64 后端 (musl/静态链接，仅后端) |
+            | `axon-*-x86_64-unknown-linux-gnu.deb` | Linux x64 (.deb, 后端) |
+            | `axon-*-aarch64-unknown-linux-gnu.deb` | Linux ARM64 (.deb, 后端) |
+            | `axon-*-aarch64-apple-darwin.pkg` | macOS Apple Silicon (.pkg, 后端) |
+            | `axon-*-x86_64-apple-darwin.pkg` | macOS Intel (.pkg, 后端) |
             | `SHA256SUMS` | 所有文件校验和 |
             | `SHA256SUMS.asc` | GPG 分离签名 |
           draft: false

@@ -91,6 +91,25 @@ jobs:
             echo "code=false" >> "$GITHUB_OUTPUT"
           fi
 
+  docs:
+    name: Docs & Architecture
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: 文档链接与术语门禁
+        shell: pwsh
+        run: ./tools/verify-docs.ps1
+
+      - name: 架构与文档一致性门禁
+        shell: pwsh
+        run: ./tools/verify-architecture.ps1
+
   frontend:
     name: Frontend
     needs: changes
@@ -125,7 +144,7 @@ jobs:
 
   check:
     name: Check (${{ matrix.os }})
-    needs: changes
+    needs: [changes, docs]
     strategy:
       fail-fast: false
       matrix:
