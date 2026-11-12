@@ -14,6 +14,8 @@ mod index_rebuild;
 mod pipeline_state;
 #[path = "query/temporal.rs"]
 mod temporal;
+#[path = "thread/mod.rs"]
+mod thread;
 #[path = "usage/quality.rs"]
 mod quality;
 #[path = "retrieval/retrieval.rs"]
@@ -81,6 +83,10 @@ pub use retrieval::{
     MemoryHybridExplain, MemoryHybridHit, MemoryHybridQuery, MemoryHybridScope,
 };
 pub use temporal::{TimeRange, parse_temporal_hint};
+pub use thread::{
+    Reference, ThreadScope, classify_reference, commitment_id_for, ensure_foreground,
+    is_one_off_leaf, open_commitment, touch_foreground,
+};
 pub use store::{
     LEGACY_MEMORY_RECORD_TABLE_PREFIX, MEMORY_SQLITE_BUSY_TIMEOUT_MS, MEMORY_SQLITE_SCHEMA_VERSION,
     MemoryArchiveStatus, MemoryKindCount, MemoryScopeFacet, MemorySqliteRecord,
