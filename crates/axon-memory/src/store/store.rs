@@ -5,7 +5,9 @@ use std::{collections::BTreeSet, path::Path, thread, time::Duration};
 use axon_domain::{AxonError, AxonResult, MemoryId, MemoryKind, MemoryRecord};
 #[cfg(test)]
 use axon_domain::{CellId, MemoryCandidateId, SessionId};
-use rusqlite::{Connection, OptionalExtension as _, params, params_from_iter};
+use rusqlite::{
+    Connection, OptionalExtension as _, Transaction, TransactionBehavior, params, params_from_iter,
+};
 
 use crate::MemoryConfig;
 
@@ -235,7 +237,22 @@ impl MemorySqliteStore {
     /// 初始化 schema 与 WAL。
     pub fn initialize_schema(&self) -> AxonResult<()> {
         self.archive_incompatible_record_schema()?;
-        self.connection
+        // 建表与建索引必须整体落在**一个 IMMEDIATE 事务**里：
+        //
+        // 1. 多个进程/线程同时打开同一个 Memory 库都会跑这段 DDL。自动提交模式下每条语句先
+        //    取读快照再升级写锁，一旦别的连接在此期间提交了 schema 变更，SQLite 直接返回
+        //    `SQLITE_BUSY_SNAPSHOT` —— 该错误**不进 busy handler**（无法等待，只能回滚重来），
+        //    并发初始化就会随机报「schema 初始化失败」。`BEGIN IMMEDIATE` 一开始就取写锁，
+        //    不存在读→写升级路径，等待由 busy_timeout 统一负责。
+        // 2. 一次性提交让「表 + 索引 + 版本号」对其它进程原子可见，不会看到半成品 schema。
+        let transaction = Transaction::new_unchecked(
+            &self.connection,
+            TransactionBehavior::Immediate,
+        )
+        .map_err(|error| {
+            AxonError::memory_persistence(format!("Memory SQLite schema 事务开启失败: {error}"))
+        })?;
+        transaction
             .execute_batch(
                 r"
                 CREATE TABLE IF NOT EXISTS memory_records (
@@ -268,8 +285,10 @@ impl MemorySqliteStore {
                 );
                 ",
             )
-            .map_err(|_| AxonError::memory_persistence("Memory SQLite schema 初始化失败"))?;
-        self.connection
+            .map_err(|error| {
+                AxonError::memory_persistence(format!("Memory SQLite schema 初始化失败: {error}"))
+            })?;
+        transaction
             .execute_batch(
                 r"
                 CREATE INDEX IF NOT EXISTS idx_memory_records_active_score
@@ -290,12 +309,19 @@ impl MemorySqliteStore {
                     ON memory_records(namespace_ref, memory_kind, updated_at_ms DESC, memory_id ASC);
                 ",
             )
-            .map_err(|_| AxonError::memory_persistence("Memory SQLite 索引初始化失败"))?;
-        crate::store_supersession::initialize_supersession_schema(&self.connection)?;
-        crate::store_thread::initialize_thread_schema(&self.connection)?;
-        self.connection
+            .map_err(|error| {
+                AxonError::memory_persistence(format!("Memory SQLite 索引初始化失败: {error}"))
+            })?;
+        crate::store_supersession::initialize_supersession_schema(&transaction)?;
+        crate::store_thread::initialize_thread_schema(&transaction)?;
+        transaction
             .pragma_update(None, "user_version", MEMORY_SQLITE_SCHEMA_VERSION)
-            .map_err(|_| AxonError::memory_persistence("Memory SQLite schema 版本写入失败"))
+            .map_err(|error| {
+                AxonError::memory_persistence(format!("Memory SQLite schema 版本写入失败: {error}"))
+            })?;
+        transaction.commit().map_err(|error| {
+            AxonError::memory_persistence(format!("Memory SQLite schema 提交失败: {error}"))
+        })
     }
 
     /// 归档缺少必需列的旧 `memory_records`，返回归档表名。
