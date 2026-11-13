@@ -467,8 +467,10 @@ jobs:
       - name: 编译 Windows release 二进制
         run: cargo build -p axon-cli -p axon-launcher -p axon-desktop --release --target x86_64-pc-windows-msvc --all-features
 
-      - name: 安装 WiX Toolset v5
-        run: dotnet tool install --global wix --version 5.0.2
+      - name: 安装 WiX Toolset v5 与 UI 扩展
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add -g WixToolset.UI.wixext/5.0.2
 
       - name: 构建 MSI
         shell: pwsh
