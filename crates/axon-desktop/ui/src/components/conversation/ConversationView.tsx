@@ -255,7 +255,6 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     void conversation.submit(pending.text, pending.attachments, pending.structuredInput);
   }, [conversation, selection]);
 
-  const lastTurn = conversation.state.turns[conversation.state.turns.length - 1] ?? null;
   /**
    * 工作状态行的主语：最后一条真正在跑的轮次。
    *
@@ -379,14 +378,16 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     working: conversation.working,
     animationTick: conversation.state.turns.length,
     model: fixedModel ?? config?.model ?? '',
-    cwd: workspace?.path ?? '',
     reasoningEffort: fixedReasoningEffort ?? config?.reasoningEffort ?? null,
-    /* 预算读数取会话里最近一次有观测的用量：新一轮刚提交时它还没有用量，用最后一条会清零。 */
+    /* 首屏还没有会话：预算与会话读数一律不占位，只留运行态与辅助读数。 */
+    inSession: selection !== null,
+    /* 上下文读数取会话里最近一次有观测的用量：新一轮刚提交时它还没有用量，用最后一条会清零。 */
     usage: lastObservedUsage(conversation.state.turns),
+    /* 累计用量与累计耗时是整条会话的事实，由网关基线加本地增量合成，不随翻页或换轮退回。 */
+    sessionCumulative: conversation.sessionCumulative,
     contextWindow: config?.contextWindow ?? null,
     firstTokenAvgMs: sessionGeneration.firstTokenAvgMs,
     generationTpsX10: sessionGeneration.generationTpsX10,
-    elapsedMs: lastTurn?.elapsedMs ?? null,
     plan: conversation.state.plan,
     lspActiveCount: conversation.state.lspActiveCount,
     mcp: mcp.reading,

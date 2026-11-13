@@ -174,6 +174,8 @@ fn segment_style(segment: &HeaderBarSegment) -> Style {
         .add_modifier(Modifier::BOLD),
         (
             HeaderBarSegmentKind::Cwd
+            | HeaderBarSegmentKind::SessionTokens
+            | HeaderBarSegmentKind::CacheHit
             | HeaderBarSegmentKind::ReplaySnapshot
             | HeaderBarSegmentKind::ReplayInput
             | HeaderBarSegmentKind::Elapsed

@@ -272,13 +272,18 @@ fn header_bar_metrics(state: &AgentTuiState) -> HeaderBarMetrics {
     let status = derive_session_status(state);
     // 首字与速率按整个会话重算：只看最近一轮会把早期慢轮次抹掉。
     let generation = state.bridge.session_generation.metrics();
+    // 累计耗时按整个会话累计：已收口的轮次在摘要里结算，在跑的那一轮按实时补上。
+    let session_elapsed_ms = state.session_elapsed_ms(
+        std::time::Instant::now(),
+        matches!(status, HeaderBarStatus::Working),
+    );
     HeaderBarMetrics {
         token_usage: state.last_turn_usage(),
+        session_tokens: state.session_token_total(),
+        session_elapsed_ms,
+        session_cache_hit_basis_points: state.session_cache_hit_basis_points(),
         plan_progress: state.plan_progress(),
         lsp_active_count: state.lsp_active_count(),
-        elapsed: (!matches!(status, HeaderBarStatus::Working))
-            .then(|| state.display_elapsed(std::time::Instant::now()))
-            .flatten(),
         first_token_avg_ms: generation.first_token_avg_ms,
         generation_tps_x10: generation.generation_tps_x10,
         status,

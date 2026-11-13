@@ -13,7 +13,6 @@ import {
   ChecklistIcon,
   ClockIcon,
   CodeIcon,
-  FolderIcon,
   GaugeIcon,
   ListIcon,
   RingIcon,
@@ -21,13 +20,15 @@ import {
   ToolIcon,
 } from '../../icons';
 import { ContextUsagePopover } from './ContextUsagePopover';
+import { SessionUsagePopover } from './SessionUsagePopover';
 
 /*
  * 主区域顶部指标条。
  *
- * 四簇按语义排开：身份（在哪）、预算（上下文与缓存）、性能（首字、速率、耗时）、辅助（LSP、MCP、技能、计划）。
+ * 四簇按语义排开：身份（在不在干活）、预算（会话累计、上下文与缓存）、性能（首字、速率、耗时）、辅助（LSP、MCP、技能、计划）。
  * 此前是十段用「·」连成一条，装不下就从中间硬裁，读起来像一串调试输出。
  *
+ * 工作区路径不进这一行：侧栏与窗口标题已经说清楚当前在哪，指标条只留会变的读数。
  * 装不下时整簇收起：断点由宽到窄依次让辅助、性能与预算退场，身份簇始终在。
  * 行高恒 36px、字号恒 13/20，因此隐藏与出现都不会让下方正文跳位。
  *
@@ -50,7 +51,9 @@ const TONE_CLASS: Record<HeaderSegmentTone, string> = {
  */
 const CLUSTER_VISIBILITY: Record<HeaderClusterKind, string> = {
   identity: 'flex',
-  budget: 'hidden @min-[380px]:flex',
+  // 会话读数组四段（耗时、累计、命中率、上下文）比只有后两段时更宽，断点随之上调：
+  // 装不下就整簇收起，绝不把读数从数字中间裁断。
+  session: 'hidden @min-[520px]:flex',
   performance: 'hidden @min-[620px]:flex',
   aux: 'hidden @min-[760px]:flex',
 };
@@ -76,8 +79,6 @@ function metricIcon(segment: HeaderSegment, contextPercent: number | null): Reac
   switch (segment.icon) {
     case 'spark':
       return <AgentIcon size={size} className="shrink-0" />;
-    case 'folder':
-      return <FolderIcon size={size} className="shrink-0" />;
     case 'ring':
       return <RingIcon size={size} className="shrink-0" ratio={(contextPercent ?? 0) / 100} />;
     case 'clock':
@@ -113,8 +114,9 @@ export const ConversationHeader: React.FC<ConversationHeaderProps> = ({
   ...metrics
 }) => {
   const clusters = headerClusters(metrics);
-  /** 上下文段带弹窗：其余段是纯读数，悬停不展开任何东西。 */
+  /** 两段读数带弹窗：会话累计展开用量明细，上下文展开构成明细。其余段是纯读数。 */
   const contextUsage = contextUsageModel(metrics.usage, metrics.contextWindow);
+  const sessionCumulative = metrics.sessionCumulative ?? null;
   const contextPercent = contextPercentValue(metrics);
   return (
     <header
@@ -145,7 +147,8 @@ export const ConversationHeader: React.FC<ConversationHeaderProps> = ({
             }`}
           >
             {cluster.segments.map((segment) => {
-              const withPopover = segment.kind === 'context' && contextUsage !== null;
+              const withContextCard = segment.kind === 'context' && contextUsage !== null;
+              const withUsageCard = segment.kind === 'sessionTokens' && sessionCumulative !== null;
               if (segment.kind === 'status') {
                 return (
                   <span
@@ -167,24 +170,32 @@ export const ConversationHeader: React.FC<ConversationHeaderProps> = ({
               }
               const reading = (
                 <span
-                  className={`min-w-0 ${
-                    segment.kind === 'cwd' ? '' : 'shrink-0'
-                  } inline-flex items-center gap-1 text-row tabular-nums ${
-                    segment.kind === 'cwd' ? 'max-w-[260px]' : ''
-                  } ${TONE_CLASS[segment.tone]}`}
-                  title={withPopover ? undefined : (segment.title ?? segment.text)}
+                  className={`min-w-0 shrink-0 inline-flex items-center gap-1 text-row tabular-nums ${TONE_CLASS[segment.tone]}`}
+                  title={
+                    withContextCard || withUsageCard
+                      ? undefined
+                      : (segment.title ?? segment.text)
+                  }
                 >
                   {metricIcon(segment, contextPercent)}
                   <span className="truncate">{segment.text}</span>
                 </span>
               );
-              return withPopover ? (
-                <ContextUsagePopover key={segment.kind} model={contextUsage}>
-                  {reading}
-                </ContextUsagePopover>
-              ) : (
-                <React.Fragment key={segment.kind}>{reading}</React.Fragment>
-              );
+              if (withContextCard) {
+                return (
+                  <ContextUsagePopover key={segment.kind} model={contextUsage}>
+                    {reading}
+                  </ContextUsagePopover>
+                );
+              }
+              if (withUsageCard) {
+                return (
+                  <SessionUsagePopover key={segment.kind} cumulative={sessionCumulative}>
+                    {reading}
+                  </SessionUsagePopover>
+                );
+              }
+              return <React.Fragment key={segment.kind}>{reading}</React.Fragment>;
             })}
           </div>
         ))}

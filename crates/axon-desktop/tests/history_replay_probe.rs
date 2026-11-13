@@ -16,8 +16,8 @@ fn historical_target() -> (String, String) {
     let lanes = payload["lanes"].as_array().expect("车道列表必须有效");
     for lane in lanes {
         let lane_id = lane["laneId"].as_str().expect("车道标识");
-        let interactions = history::lane_interactions(lane_id, None, None).expect("读取历史交互");
-        if let Some(interaction) = interactions.first() {
+        let page = history::lane_interactions(lane_id, None, None).expect("读取历史交互");
+        if let Some(interaction) = page.interactions.first() {
             return (
                 lane["workspaceId"].as_str().expect("工作区标识").to_owned(),
                 interaction.interaction_id.clone(),

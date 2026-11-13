@@ -15,9 +15,9 @@ import type {
   TerminalOutputFrame,
   TerminalExitFrame,
   GatewayHealth,
-  InteractionSummary,
   InterruptReceipt,
   JobStopReceipt,
+  LaneInteractions,
   LaneJobsRoster,
   LaneSubagents,
   SubagentMessageReceipt,
@@ -319,12 +319,15 @@ export const conversationSetActiveLane = (laneId: string, title: string): Promis
  *
  * 分页口径是「一次一条」：不给游标取最近一条，给出游标取它之前的一条。
  * 会话正文靠逐条订阅回放，因此这里只负责按需把游标往前推。
+ *
+ * 回执里另带整条车道的累计 token 用量：这个数与会话翻到第几页无关，由网关按会话聚合，
+ * 界面据此在打开历史会话时就得到整条会话的消耗，而不必先把前面几十条都回放一遍。
  */
 export const conversationHistory = (
   laneId: string,
   limit = 1,
   before: { receivedAtMs: number; interactionId: string } | null = null,
-): Promise<InteractionSummary[]> =>
+): Promise<LaneInteractions> =>
   call('conversation_history', {
     laneId,
     limit,

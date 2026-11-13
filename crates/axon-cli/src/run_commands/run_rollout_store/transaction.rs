@@ -307,15 +307,24 @@ fn upsert_turn(
         },
         Ok,
     )?;
+    let usage = turn_usage_tokens(record);
     connection
         .execute(
             r"
             INSERT INTO rollout_turns (
-                session_id, sequence, assistant_part_id, recorded_at_ms, record_json
-            ) VALUES (?1, ?2, ?3, ?4, ?5)
+                session_id, sequence, assistant_part_id, recorded_at_ms, record_json,
+                usage_tokens, usage_input_tokens, usage_cache_read_tokens,
+                usage_cache_write_tokens, usage_output_tokens, usage_reasoning_tokens
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             ON CONFLICT(session_id, assistant_part_id) DO UPDATE SET
                 recorded_at_ms = excluded.recorded_at_ms,
-                record_json = excluded.record_json
+                record_json = excluded.record_json,
+                usage_tokens = excluded.usage_tokens,
+                usage_input_tokens = excluded.usage_input_tokens,
+                usage_cache_read_tokens = excluded.usage_cache_read_tokens,
+                usage_cache_write_tokens = excluded.usage_cache_write_tokens,
+                usage_output_tokens = excluded.usage_output_tokens,
+                usage_reasoning_tokens = excluded.usage_reasoning_tokens
             ",
             params![
                 record.session_id,
@@ -323,10 +332,25 @@ fn upsert_turn(
                 record.assistant_part_id,
                 timestamp(record.created_at_ms),
                 record_json,
+                to_i64(usage.total_tokens()),
+                to_i64(usage.input_tokens),
+                to_i64(usage.cache_read_input_tokens),
+                to_i64(usage.cache_write_input_tokens),
+                to_i64(usage.output_tokens),
+                to_i64(usage.reasoning_output_tokens),
             ],
         )
         .map_err(|_| "rollout turn 事务写入失败".to_owned())?;
     u64::try_from(sequence).map_err(|_| "rollout turn sequence 不能为负数".to_owned())
+}
+
+/// 这一轮落进用量列的数据：会话累计读数只读这些整数列，不碰 `record_json`。
+fn turn_usage_tokens(record: &RunSessionRecord) -> axon_agent_runtime::TokenUsageTelemetry {
+    record.usage.unwrap_or_default()
+}
+
+fn to_i64(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
 }
 
 fn replace_turn_events(

@@ -1,7 +1,5 @@
 //! HeaderBar 产品级状态聚合模型。
 
-use std::time::Duration;
-
 use crate::r#loop::agent_tui::{
     AgentTuiConfigStatus, AgentTuiModelCatalogItem, AgentTuiPlanProgress, AgentTuiRunOverrides,
     AgentTuiTokenUsage, display_units,
@@ -28,9 +26,14 @@ pub(crate) enum HeaderBarStatus {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct HeaderBarMetrics {
     pub(crate) token_usage: AgentTuiTokenUsage,
+    /// 整条会话的累计 token 消耗，排在上下文段之前。
+    pub(crate) session_tokens: u64,
+    /// 整条会话的累计墙钟耗时（毫秒），紧跟累计 token。
+    pub(crate) session_elapsed_ms: u64,
+    /// 整条会话的累计缓存命中率（basis points）；还没有输入观测时为空。
+    pub(crate) session_cache_hit_basis_points: Option<u16>,
     pub(crate) plan_progress: Option<AgentTuiPlanProgress>,
     pub(crate) lsp_active_count: usize,
-    pub(crate) elapsed: Option<Duration>,
     pub(crate) first_token_avg_ms: Option<u64>,
     pub(crate) generation_tps_x10: Option<u64>,
     pub(crate) status: HeaderBarStatus,
@@ -82,6 +85,35 @@ impl HeaderBarViewModel {
                 short_metric("思考", reasoning_effort(overrides, models, config_status)),
             ),
         ]);
+        // 会话累计：耗时 → 累计 → 命中率，三段回答同一件事「这条会话花了多少」。
+        // 耗时排在累计之前，命中率紧跟其后：先看花了多少时间与多少 token，再看其中省下多少。
+        if metrics.session_elapsed_ms > 0 {
+            primary.push(HeaderBarSegment::new(
+                HeaderBarSegmentKind::Elapsed,
+                short_metric(
+                    "耗时",
+                    display_units::format_duration_millis_compact(metrics.session_elapsed_ms),
+                ),
+            ));
+        }
+        if metrics.session_tokens > 0 {
+            primary.push(HeaderBarSegment::new(
+                HeaderBarSegmentKind::SessionTokens,
+                short_metric(
+                    "累计",
+                    AgentTuiTokenUsage::render_token_count(metrics.session_tokens),
+                ),
+            ));
+        }
+        if let Some(basis_points) = metrics.session_cache_hit_basis_points {
+            primary.push(HeaderBarSegment::new(
+                HeaderBarSegmentKind::CacheHit,
+                short_metric(
+                    "命中率",
+                    axon_display::format_basis_points_percent(basis_points),
+                ),
+            ));
+        }
         if let Some(context) = context_usage_value(metrics, config_status, overrides, models) {
             primary.push(
                 HeaderBarSegment::new(HeaderBarSegmentKind::Context, context.text)
@@ -101,12 +133,6 @@ impl HeaderBarViewModel {
             primary.push(HeaderBarSegment::new(
                 HeaderBarSegmentKind::GenerationRate,
                 short_metric("速率", format_tokens_per_second_x10(generation_tps_x10)),
-            ));
-        }
-        if let Some(elapsed) = elapsed_value(metrics.elapsed) {
-            primary.push(HeaderBarSegment::new(
-                HeaderBarSegmentKind::Elapsed,
-                elapsed,
             ));
         }
         if let Some(progress) = plan_progress_value(metrics.plan_progress) {
@@ -174,6 +200,8 @@ pub(crate) enum HeaderBarSegmentKind {
     Status,
     Model,
     Cwd,
+    SessionTokens,
+    CacheHit,
     Context,
     ReplaySnapshot,
     ReplayInput,
@@ -189,7 +217,9 @@ impl HeaderBarSegmentKind {
     const fn priority(self) -> HeaderBarPriority {
         match self {
             Self::Status | Self::Model | Self::Cwd => HeaderBarPriority::P0,
-            Self::Context
+            Self::SessionTokens
+            | Self::CacheHit
+            | Self::Context
             | Self::Elapsed
             | Self::FirstToken
             | Self::GenerationRate
@@ -305,10 +335,7 @@ fn context_usage_value(
             usage.cache_read_input_tokens,
         ));
     }
-    value.push_str(" 命中 ");
-    value.push_str(&axon_display::format_basis_points_percent(
-        usage.cache_hit_rate_basis_points(),
-    ));
+    // 命中率不在这里出现：它是整条会话累计读数的第三段（见 `SessionCacheHit`）。
     if usage.cache_write_input_tokens > 0 {
         value.push_str(" 写入 ");
         value.push_str(&AgentTuiTokenUsage::render_token_count(
@@ -350,17 +377,6 @@ fn current_model_catalog_item<'a>(
         .iter()
         .find(|candidate| candidate.label == display)
         .or_else(|| models.iter().find(|candidate| candidate.matches(&model)))
-}
-
-fn elapsed_value(elapsed: Option<Duration>) -> Option<String> {
-    elapsed.map(|value| {
-        short_metric(
-            "耗时",
-            display_units::format_duration_millis_compact(
-                u64::try_from(value.as_millis()).unwrap_or(u64::MAX),
-            ),
-        )
-    })
 }
 
 fn format_tokens_per_second_x10(value: u64) -> String {
@@ -432,6 +448,68 @@ mod tests {
     }
 
     #[test]
+    fn header_bar_view_model_surfaces_session_totals_before_context() {
+        let config = AgentTuiConfigStatus::new("openai", "gpt-5", "已认证");
+        let metrics = HeaderBarMetrics {
+            token_usage: AgentTuiTokenUsage::new(1_000, 2_000, 300, 400, 0)
+                .with_current_context_tokens(2_300),
+            session_tokens: 6_260_000,
+            session_elapsed_ms: 11_520_000,
+            session_cache_hit_basis_points: Some(6_060),
+            ..HeaderBarMetrics::default()
+        };
+
+        let model = HeaderBarViewModel::from_sources(
+            &config,
+            &AgentTuiRunOverrides::default(),
+            &metrics,
+            &[],
+        );
+
+        let kinds: Vec<_> = model.primary.iter().map(|segment| segment.kind).collect();
+        let elapsed = kinds
+            .iter()
+            .position(|kind| *kind == HeaderBarSegmentKind::Elapsed)
+            .expect("HeaderBar 应显示会话累计耗时");
+        let session = kinds
+            .iter()
+            .position(|kind| *kind == HeaderBarSegmentKind::SessionTokens)
+            .expect("HeaderBar 应显示会话累计用量");
+        let cache_hit = kinds
+            .iter()
+            .position(|kind| *kind == HeaderBarSegmentKind::CacheHit)
+            .expect("HeaderBar 应显示会话累计命中率");
+        let context = kinds
+            .iter()
+            .position(|kind| *kind == HeaderBarSegmentKind::Context)
+            .expect("HeaderBar 应显示上下文");
+        assert_eq!(session, elapsed + 1, "耗时排在累计用量之前");
+        assert_eq!(cache_hit, session + 1, "命中率紧跟累计用量");
+        assert!(cache_hit < context, "会话读数都在上下文段之前");
+        assert_eq!(model.primary[elapsed].text, "耗时 3h 12m 00s");
+        assert_eq!(model.primary[session].text, "累计 6.26M");
+        assert_eq!(model.primary[cache_hit].text, "命中率 60.60%");
+    }
+
+    #[test]
+    fn header_bar_view_model_omits_session_totals_until_any_usage() {
+        let config = AgentTuiConfigStatus::new("openai", "gpt-5", "已认证");
+        let model = HeaderBarViewModel::from_sources(
+            &config,
+            &AgentTuiRunOverrides::default(),
+            &HeaderBarMetrics::default(),
+            &[],
+        );
+
+        assert!(
+            !model.primary.iter().any(|segment| matches!(
+                segment.kind,
+                HeaderBarSegmentKind::SessionTokens | HeaderBarSegmentKind::Elapsed
+            )),
+            "一条会话都还没跑过时不渲染 `累计 0` 与 `耗时 0`"
+        );
+    }
+    #[test]
     fn header_bar_view_model_surfaces_context_cache_without_prompt_cache_side_effects() {
         let config = AgentTuiConfigStatus::new("openai", "gpt-5", "已认证");
         let metrics = HeaderBarMetrics {
@@ -454,8 +532,11 @@ mod tests {
             .expect("HeaderBar 应显示上下文/cache 状态");
         assert!(context.text.contains("上下文 2.3K"));
         assert!(context.text.contains("缓存 2K"));
-        assert!(context.text.contains("命中 60.60%"));
         assert!(context.text.contains("写入 300"));
+        assert!(
+            !context.text.contains("命中"),
+            "命中率是整条会话的读数，不挤在上下文段里"
+        );
     }
 
     #[test]

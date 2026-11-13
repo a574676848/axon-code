@@ -47,7 +47,7 @@ pub use commands::{
     conversation_stop_job, conversation_submit, conversation_unsubscribe, conversation_watch,
     conversation_watch_session,
 };
-pub use history::InteractionSummary;
+pub use history::{InteractionSummary, LaneInteractions, SessionUsageTotals};
 pub use interrupt::InterruptReceipt;
 pub use job_stop::JobStopReceipt;
 pub use lane_jobs::LaneJobsRoster;

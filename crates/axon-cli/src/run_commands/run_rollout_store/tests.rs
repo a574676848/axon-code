@@ -15,7 +15,7 @@ use std::collections::HashSet;
 
 const FIXTURE_ASSISTANT_TURN_ID: u64 = 1;
 
-fn temp_db(tag: &str) -> std::path::PathBuf {
+pub(super) fn temp_db(tag: &str) -> std::path::PathBuf {
     let mut dir = axon_test_support::test_temp_root();
     let unique = format!(
         "axon_rollout_{tag}_{}_{}",
@@ -37,23 +37,23 @@ fn temp_config(tag: &str) -> std::path::PathBuf {
         .join("config.toml")
 }
 
-fn record(session_id: &str, parent: Option<&str>, created_at_ms: u64) -> RunSessionRecord {
+pub(super) fn record(session: &str, parent: Option<&str>, created_at_ms: u64) -> RunSessionRecord {
     RunSessionRecord {
-        session_id: session_id.to_owned(),
+        session_id: session.to_owned(),
         parent_session_id: parent.map(ToOwned::to_owned),
         created_at_ms,
         startup_timeline: crate::run_commands::run_startup_snapshot::test_startup_timeline(),
         cwd: Some("/work".to_owned()),
         provider: "anthropic".to_owned(),
         model: "model-a".to_owned(),
-        prompt: format!("prompt-{session_id}"),
+        prompt: format!("prompt-{session}"),
         local_images: Vec::new(),
         local_files: Vec::new(),
         selected_skill_name: None,
         repo_context: None,
         session_context: None,
         durable_memory: None,
-        response: format!("response-{session_id}"),
+        response: format!("response-{session}"),
         assistant_part_id: agent_run_assistant_part_id(FIXTURE_ASSISTANT_TURN_ID),
         usage: None,
         tool_receipts: vec![],
@@ -691,7 +691,7 @@ fn persisted_tool_output_is_read_only_with_session_receipt_scope_after_resume_an
     let _ = std::fs::remove_dir_all(archive_root);
 }
 
-fn cleanup(path: &std::path::Path) {
+pub(super) fn cleanup(path: &std::path::Path) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::remove_dir_all(parent);
     }

@@ -23,6 +23,8 @@ use super::run_session_store::{RunSessionRecord, resolved_axon_root};
 mod api;
 #[path = "run_rollout_store/rollout_events.rs"]
 mod rollout_events;
+#[path = "run_rollout_store/session_usage.rs"]
+mod session_usage;
 #[path = "run_rollout_store/transaction.rs"]
 mod transaction;
 
@@ -31,13 +33,15 @@ pub(crate) use api::append_rollout_event_for_session;
 pub(crate) use api::{
     commit_session_to_rollout, ensure_current_turn_to_rollout, install_active_rollout_window,
     install_rollout_compaction, load_rollout_history_window, load_rollout_history_window_from_root,
-    load_session_turn, load_session_usage, read_rollout_tool_output, replay_rollout_events,
-    restore_rollout_compaction, select_rollout_session,
+    load_session_turn, load_session_usage, load_session_usage_totals_from_root,
+    read_rollout_tool_output, replay_rollout_events, restore_rollout_compaction,
+    select_rollout_session,
 };
 #[cfg(test)]
 pub(crate) use rollout_events::RolloutEventAppendInput;
 use rollout_events::events_for_session;
 pub(crate) use rollout_events::{RolloutEventRecord, RolloutEventType};
+pub(crate) use session_usage::SessionUsageTotals;
 
 /// rollout SQLite 文件名。
 pub(crate) const CLI_ROLLOUT_DB_FILE: &str = "rollout.sqlite3";
@@ -271,6 +275,7 @@ impl RolloutSqliteStore {
         self.connection
             .pragma_update(None, "user_version", ROLLOUT_SQLITE_SCHEMA_VERSION)
             .map_err(|_| "rollout SQLite schema 版本配置失败".to_owned())?;
+        session_usage::ensure_usage_columns(&self.connection)?;
         Ok(())
     }
 

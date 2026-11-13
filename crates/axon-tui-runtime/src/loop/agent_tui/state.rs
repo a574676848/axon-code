@@ -408,8 +408,44 @@ impl AgentTuiState {
         self.header.last_turn_usage
     }
 
+    /// 整条会话的累计 token 消耗，含正在生成的那一轮。
+    ///
+    /// 已收口的轮次在 `session_usage` 里，在跑的那一轮还只在 `live_turn_usage` 里；
+    /// 两者相加才是「到现在为止这一条会话花掉多少」，缺任一份都会在读着的时候掉数。
+    pub(super) fn session_token_total(&self) -> u64 {
+        self.header
+            .session_usage
+            .fold(self.header.live_turn_usage)
+            .total_tokens()
+    }
+
     pub(super) fn display_elapsed(&self, now: Instant) -> Option<Duration> {
         self.bridge.live_status.display_elapsed(now)
+    }
+
+    /// 整条会话的累计缓存命中率（basis points）；还没有输入观测时为空。
+    ///
+    /// 与累计 token 同一份折叠：已收口的轮次加上在跑的那一轮，因此换轮时不会掉数。
+    pub(super) fn session_cache_hit_basis_points(&self) -> Option<u16> {
+        let usage = self.header.session_usage.fold(self.header.live_turn_usage);
+        (usage.complete_input_tokens() > 0).then(|| usage.cache_hit_rate_basis_points())
+    }
+
+    /// 整条会话的累计墙钟耗时（毫秒），含正在跑的那一轮。
+    ///
+    /// 已收口的轮次在会话摘要里结算，在跑的那一轮只有实时读数；两者相加才是「到现在为止
+    /// 这一条会话跑了多久」，缺任一份都会在读着的时候停住。空闲时实时读数不再叠加：
+    /// 它此刻回报的是上一轮的旧值，加上去就重复计一次。
+    pub(super) fn session_elapsed_ms(&self, now: Instant, working: bool) -> u64 {
+        let settled = self.header.session_summary.elapsed_ms;
+        if !working {
+            return settled;
+        }
+        let live = self
+            .display_elapsed(now)
+            .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
+            .unwrap_or_default();
+        settled.saturating_add(live)
     }
 
     pub(super) fn session_summary(&self) -> AgentTuiSessionSummary {

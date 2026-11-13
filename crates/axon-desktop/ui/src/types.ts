@@ -1,3 +1,5 @@
+import type { SessionUsageTotals } from './conversation/sessionUsage';
+
 export type ConfigValueKind = 'bool' | 'unsigned' | 'string' | 'string_list';
 
 /** 单个配置键的权威规格。 */
@@ -579,6 +581,18 @@ export interface InteractionSummary {
   content: string;
   /** 入站时落地的本地附件绝对路径。 */
   attachments: string[];
+}
+
+/**
+ * 一页车道历史：这一页的 Interaction，加上整条车道的累计读数。
+ *
+ * 两个累计读数与翻到第几页无关，由网关按车道聚合；读不到结论时各自为 null。
+ * 用量的形状只定义一份（`conversation/sessionUsage`），这里只引用。
+ */
+export interface LaneInteractions {
+  interactions: InteractionSummary[];
+  sessionUsage: SessionUsageTotals | null;
+  sessionElapsedMs: number | null;
 }
 
 /** 中断回执。 */

@@ -53,6 +53,33 @@ pub(crate) fn load_session_usage(
         }))
 }
 
+/// 读取一条会话截至当前的累计用量（总量与各分桶）。
+///
+/// `session_id` 是运行时 session 标识（车道要先经 `session_runtimes` 解析成它的 run
+/// session）。与 [`load_session_usage`] 的区别在口径：那个取的是**最近一轮**的用量，用于
+/// 续接远程 provider；这里取的是整条会话各轮之和，用于界面上的会话累计读数。
+/// 账本尚未建立时读作全零。
+pub(crate) fn load_session_usage_totals_from_root(
+    root: &Path,
+    session_id: &str,
+) -> Result<super::SessionUsageTotals, String> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return Err("会话标识不能为空".to_owned());
+    }
+    let path = axon_session::session_store_path(root).join(CLI_ROLLOUT_DB_FILE);
+    if !path.exists() {
+        return Ok(super::SessionUsageTotals::default());
+    }
+    // 读侧不跑建表语句：这条路径挂在历史列表上，每次翻页都会走一遍，不该附带 schema 初始化。
+    let read_only = RolloutSqliteStore::open_read_only(&path)?;
+    match read_only.session_usage_totals(session_id) {
+        Ok(totals) => Ok(totals),
+        // 旧库还没有用量列：退回写连接补列并回填一次，之后一律走只读路径。
+        Err(_) => RolloutSqliteStore::open(&path)?.session_usage_totals(session_id),
+    }
+}
+
 /// 选择后续 `run --continue` 恢复的 rollout Thread。
 pub(crate) fn select_rollout_session(config_path: &Path, session_id: &str) -> Result<(), String> {
     let path = resolved_rollout_db_path(config_path).map_err(ToOwned::to_owned)?;
@@ -61,7 +88,6 @@ pub(crate) fn select_rollout_session(config_path: &Path, session_id: &str) -> Re
     }
     RolloutSqliteStore::open(&path)?.select_session(session_id)
 }
-
 pub(crate) fn install_rollout_compaction(
     config_path: &Path,
     session_id: &str,

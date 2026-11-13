@@ -48,10 +48,10 @@ fn real_target() -> Option<RealTarget> {
     for lane in lanes {
         let lane_id = lane.get("laneId")?.as_str()?.to_owned();
         let workspace_id = lane.get("workspaceId")?.as_str()?.to_owned();
-        let Ok(interactions) = history::lane_interactions(&lane_id, Some(200), None) else {
+        let Ok(page) = history::lane_interactions(&lane_id, Some(200), None) else {
             continue;
         };
-        let Some(first) = interactions.first() else {
+        let Some(first) = page.interactions.first() else {
             continue;
         };
         let subagent_session_id = session_read::lane_subagents(&lane_id)

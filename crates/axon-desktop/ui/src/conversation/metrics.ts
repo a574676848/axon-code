@@ -1,16 +1,15 @@
 /*
  * 顶部指标条视图模型。
  *
- * 段序与标签与 TUI 的 HeaderBarViewModel 同源；桌面端省略模型段：
- * 模型由输入坞右下角的选择器常驻承载，顶部不再重复。
+ * 段序与标签与 TUI 的 HeaderBarViewModel 同源；桌面端省略模型段与工作区路径：
+ * 模型由输入坞右下角的选择器常驻承载，工作区已由侧栏与窗口标题说清楚，顶部不再重复。
  *
- * 出现条件按簇分工：预算簇（上下文、命中率）从进入会话起常驻，
- * 新会话读作「0/窗口」与「命中率 0.00%」；性能簇与辅助簇缺数据即不渲染该段，
+ * 出现条件按簇分工：预算簇（会话累计、上下文、命中率）从进入会话起常驻，
+ * 新会话读作「累计 0」「0/窗口」与「命中率 0.00%」；性能簇与辅助簇缺数据即不渲染该段，
  * 绝不填占位值。
  */
 
 import {
-  ellipsize,
   formatBasisPointsPercent,
   formatDecimalCount,
   formatDurationMillisCompact,
@@ -18,15 +17,13 @@ import {
 } from './format';
 import {
   EMPTY_USAGE,
-  cacheHitRateBasisPoints,
   currentContextTokens,
   type TokenUsage,
 } from './transcript';
 import { mcpSegmentText, mcpSegmentTitle, type McpHeaderReading } from './mcpReading';
+import { cumulativeCacheHitBasisPoints, type SessionCumulative } from './sessionUsage';
 export { currentContextTokens };
 
-/** 工作目录显示宽度预算，含省略号。 */
-const CWD_VISIBLE_CHARS = 24;
 /** 上下文压力告警阈值（整数百分比）。 */
 const CONTEXT_WARNING_PERCENT = 70;
 /** 上下文压力严重阈值（整数百分比）。 */
@@ -35,8 +32,8 @@ const CONTEXT_CRITICAL_PERCENT = 85;
 /** 段标识。 */
 export type HeaderSegmentKind =
   | 'status'
-  | 'cwd'
   | 'reasoning'
+  | 'sessionTokens'
   | 'context'
   | 'cacheHit'
   | 'firstToken'
@@ -74,20 +71,31 @@ export interface HeaderMetricsInput {
   animationTick: number;
   /** 当前模型，允许带 provider 前缀。 */
   model: string;
-  /** 工作目录。 */
-  cwd: string;
   /** 推理强度。 */
   reasoningEffort: string | null;
-  /** 最近一轮的令牌用量；还没跑过任何一轮时为空，预算簇按零读数渲染。 */
+  /**
+   * 是否已经进入会话（首屏为 false）。
+   *
+   * 首屏没有会话可言，预算与会话累计读数一律不占位：那里只剩运行态与辅助读数，
+   * 一排 `0/1M`、`命中率 0.00%` 只会把「还没开始」说成「已经用光」。
+   */
+  inSession?: boolean;
+  /** 最近一轮的令牌用量；还没跑过任何一轮时为空，上下文段按零读数渲染。 */
   usage: TokenUsage | null;
+  /**
+   * 整条会话的累计读数（用量分桶与墙钟耗时）；基线还没取回时为空。
+   *
+   * 口径是各轮输入、缓存读写、输出与推理之和，以及各轮耗时之和，与上下文读数不同：
+   * 那个是「最近一次请求占了多少窗口」，这个是「这条会话一共花了多少」。取不到基线时
+   * 不画这一段，绝不拿单轮读数顶替。
+   */
+  sessionCumulative?: SessionCumulative | null;
   /** 当前模型的上下文窗口。 */
   contextWindow: number | null;
   /** 最近一轮首字耗时。 */
   firstTokenAvgMs: number | null;
   /** 最近一轮生成速率，单位 0.1 tok/s。 */
   generationTpsX10: number | null;
-  /** 最近一轮耗时；仅在工作结束时有值。 */
-  elapsedMs: number | null;
   /** 计划进度。 */
   plan: { completed: number; total: number } | null;
   /** 活跃 LSP 客户端数。 */
@@ -148,15 +156,7 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
       breath: input.animationTick % 4 < 2,
     });
   }
-  // 2 工作目录：恒出现，无标签，按显示宽度截断。
-  segments.push({
-    kind: 'cwd',
-    text: ellipsize(input.cwd, CWD_VISIBLE_CHARS),
-    tone: 'default',
-    breath: false,
-    icon: 'folder',
-  });
-  // 3 LSP：仅大于 0 时出现。
+  // 2 LSP：仅大于 0 时出现。
   if (input.lspActiveCount > 0) {
     segments.push({
       kind: 'lsp',
@@ -190,26 +190,62 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
       breath: false,
     });
   }
-  // 4 上下文：预算簇从进入会话起常驻，没有观测时读作 0/窗口。
-  segments.push({
-    kind: 'context',
-    text: contextText(usage, input.contextWindow),
-    tone:
-      input.contextWindow !== null && input.contextWindow > 0
-        ? contextPressureTone(currentContextTokens(usage), input.contextWindow)
-        : 'default',
-    breath: false,
-    icon: 'ring',
-  });
-  // 5 缓存命中率：与上下文段同一生命周期，没有完整输入 token 时命中率就是 0%。
-  //   藏起来会让新会话的指标条凭空少一段，读者只能猜是没命中还是没测到。
-  segments.push({
-    kind: 'cacheHit',
-    text: shortMetric('命中率', formatBasisPointsPercent(cacheHitRateBasisPoints(usage))),
-    tone: 'default',
-    breath: false,
-  });
-  // 6 计划：有步骤时才出现。
+  /*
+   * 4 会话读数组：耗时 → 累计 → 命中率 → 上下文。
+   *
+   * 前三段回答「这条会话一共花了多少」：累计用量是总量，命中率是它里面缓存省下来的比例，
+   * 耗时是花掉的时间，因此排在一起、彼此相邻；上下文是「最近一次请求占了多少窗口」，
+   * 口径不同，跟在后面不混进这一组。
+   *
+   * 首屏（还没进入会话）整组不占位：那里没有会话可言，摆一排 `0/1M`、`命中率 0.00%`
+   * 反而把「还没开始」说成「已经用光」。
+   */
+  const cumulative = input.sessionCumulative ?? null;
+  const inSession = input.inSession ?? true;
+  if (inSession) {
+    if (cumulative !== null && cumulative.elapsedMs > 0) {
+      segments.push({
+        kind: 'elapsed',
+        text: shortMetric('耗时', formatDurationMillisCompact(cumulative.elapsedMs)),
+        title: `本会话累计耗时 ${formatDurationMillisCompact(cumulative.elapsedMs)}`,
+        icon: 'clock',
+        tone: 'default',
+        breath: false,
+      });
+    }
+    if (cumulative !== null) {
+      segments.push({
+        kind: 'sessionTokens',
+        text: shortMetric('累计', formatDecimalCount(cumulative.totalTokens)),
+        title: `本会话累计消耗 ${formatDecimalCount(cumulative.totalTokens)} token`,
+        tone: 'default',
+        breath: false,
+      });
+      // 命中率按整条会话累计：与累计用量同一份基线，不是最近一轮的命中率。
+      segments.push({
+        kind: 'cacheHit',
+        text: shortMetric(
+          '命中率',
+          formatBasisPointsPercent(cumulativeCacheHitBasisPoints(cumulative)),
+        ),
+        title: '本会话累计缓存命中率',
+        tone: 'default',
+        breath: false,
+      });
+    }
+    // 上下文：进入会话即常驻，没有观测时读作 0/窗口。
+    segments.push({
+      kind: 'context',
+      text: contextText(usage, input.contextWindow),
+      tone:
+        input.contextWindow !== null && input.contextWindow > 0
+          ? contextPressureTone(currentContextTokens(usage), input.contextWindow)
+          : 'default',
+      breath: false,
+      icon: 'ring',
+    });
+  }
+  // 5 计划：有步骤时才出现。
   if (input.plan !== null && input.plan.total > 0) {
     segments.push({
       kind: 'plan',
@@ -239,21 +275,12 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
       breath: false,
     });
   }
-  // 9 耗时：只在工作结束后出现，与状态段互补。
-  if (!input.working && input.elapsedMs !== null && input.elapsedMs > 0) {
-    segments.push({
-      kind: 'elapsed',
-      text: shortMetric('耗时', formatDurationMillisCompact(input.elapsedMs)),
-      icon: 'clock',
-      tone: 'default',
-      breath: false,
-    });
-  }
+  // 9 耗时已并入上面的会话累计：这一行不再重复报单轮耗时。
   return segments;
 }
 
-/** 指标条的四簇：身份、预算、性能、辅助。 */
-export type HeaderClusterKind = 'identity' | 'budget' | 'performance' | 'aux';
+/** 指标条的四簇：身份、会话读数、性能、辅助。 */
+export type HeaderClusterKind = 'identity' | 'session' | 'performance' | 'aux';
 
 /** 指标条的一段成簇结果。 */
 export interface HeaderCluster {
@@ -264,30 +291,31 @@ export interface HeaderCluster {
 /** 段到簇的归属；不在表里的段不出现。 */
 const CLUSTER_OF: Record<HeaderSegmentKind, HeaderClusterKind> = {
   status: 'identity',
-  cwd: 'identity',
   reasoning: 'identity',
-  context: 'budget',
-  cacheHit: 'budget',
+  sessionTokens: 'session',
+  elapsed: 'session',
+  cacheHit: 'session',
+  context: 'session',
   plan: 'aux',
   lsp: 'aux',
   mcp: 'aux',
   skill: 'aux',
   firstToken: 'performance',
   generationRate: 'performance',
-  elapsed: 'performance',
 };
 
 /**
  * 把平铺的段按语义分成四簇。
  *
- * 四簇的关系是「谁在哪干活 · 还剩多少预算 · 跑得多快 · 辅助状态」，
+ * 四簇的关系是「在不在干活 · 这条会话花了多少 · 跑得多快 · 辅助状态」，
  * 因此装不下时整簇收起，而不是从中间把某一簇切成两半。
+ * 工作区路径不进指标条：侧栏与窗口标题已经说清楚当前在哪，顶部再写一遍只是重复。
  * LSP、MCP、技能与计划是辅助读数，固定排在最后，窗口不够时先让位。
  */
 export function headerClusters(input: HeaderMetricsInput): HeaderCluster[] {
   const groups: HeaderCluster[] = [
     { kind: 'identity', segments: [] },
-    { kind: 'budget', segments: [] },
+    { kind: 'session', segments: [] },
     { kind: 'performance', segments: [] },
     { kind: 'aux', segments: [] },
   ];

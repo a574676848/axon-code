@@ -7,7 +7,7 @@ use tauri::State;
 
 use crate::AppState;
 use crate::conversation::answer_question::{self, AnswerQuestionReceipt};
-use crate::conversation::history::{self, InteractionSummary};
+use crate::conversation::history::{self, LaneInteractions};
 use crate::conversation::interrupt::{self, InterruptReceipt};
 use crate::conversation::job_stop::{self, JobStopReceipt};
 use crate::conversation::lane_jobs::{self, LaneJobsRoster};
@@ -53,13 +53,14 @@ pub fn conversation_answer_question(
 ///
 /// `before_ms` 与 `before_id` 一起构成反向分页游标：给出时返回它**之前**的一条，
 /// 界面据此逐条向前翻，而不是一次把整条车道的历史读进来再全量渲染。
+/// 回执同时带上整条车道的累计 token 用量：会话读数要的是整条会话，与翻到第几页无关。
 #[tauri::command(async)]
 pub fn conversation_history(
     lane_id: String,
     limit: Option<u32>,
     before_ms: Option<u64>,
     before_id: Option<String>,
-) -> Result<Vec<InteractionSummary>, String> {
+) -> Result<LaneInteractions, String> {
     let before = match (before_ms, before_id) {
         (Some(received_at_ms), Some(interaction_id)) if !interaction_id.trim().is_empty() => {
             Some(history::HistoryCursor {

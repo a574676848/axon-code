@@ -29,9 +29,11 @@ import { useAutoFoldTurns } from './useAutoFoldTurns';
 import { useElapsedTick } from './useElapsedTick';
 import { useInterruptedCarry } from './useInterruptedCarry';
 import { replayInteractionHistory } from './interactionReplay';
+import { useLaneInterrupt } from './useLaneInterrupt';
 import { useLanePaging } from './useLanePaging';
 import { useLaneReattach } from './useLaneReattach';
 import { useQuestionSync } from './useQuestionSync';
+import { useSessionCumulative } from './useSessionCumulative';
 
 /** 一帧的合并窗口，与 TUI 的助手增量归并窗口同量级。 */
 const FRAME_FLUSH_MS = 16;
@@ -151,8 +153,6 @@ export function useConversation(target: ConversationTarget | null): Conversation
   const playNextRef = useRef<
     (workspaceId: string, generation: number, leaving?: string | null) => void
   >(() => undefined);
-  /** 中断请求是否在途：Esc 连发与长按只允许换来一次真实中断。 */
-  const interruptingRef = useRef(false);
   /** 当前车道与工作区：会话目标下没有车道能力，分页与展开也随之不可用。 */
   const pagingLaneId = target !== null && target.kind === 'interaction' ? target.interactionId : null;
 
@@ -582,32 +582,14 @@ export function useConversation(target: ConversationTarget | null): Conversation
   /**
    * 中断当前车道正在运行的一轮；回执为假时如实提示，不假装成功。
    *
-   * 中断之前先把还没被注入的排队消息摘下交给转投队列：后端只在安全边界把它们
-   * 插入本轮，取消之后它们再也等不到那次边界，内容就随本轮一起消失了。
+   * 中断之前先把还没被注入的排队消息摘下交给转投队列，具体口径见 `useLaneInterrupt`。
    */
-  const interrupt = useCallback(async () => {
-    const lane = laneCapability.laneId ?? watchedRef.current;
-    if (lane === null) return;
-    /*
-     * 一次按键只发一次中断。
-     *
-     * Esc 长按会连发 keydown，而每次中断都是一次真实的后端请求；在途期间的重复
-     * 请求只会换来「没有正在运行的一轮」这种噪声结论。
-     */
-    if (interruptingRef.current) return;
-    interruptingRef.current = true;
-    handOverSteers();
-    try {
-      const receipt = await ipc.conversationInterrupt(lane);
-      if (!receipt.interrupted) {
-        setSubmitError('本轮已经结束，无需中断');
-      }
-    } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : '中断失败');
-    } finally {
-      interruptingRef.current = false;
-    }
-  }, [handOverSteers, laneCapability.laneId]);
+  const interrupt = useLaneInterrupt({
+    laneId: laneCapability.laneId,
+    watchedRef,
+    onBeforeInterrupt: handOverSteers,
+    onNotice: setSubmitError,
+  });
 
   /**
    * 接管网关语音回合：把这一轮接进当前对话流并订阅增量。
@@ -655,6 +637,9 @@ export function useConversation(target: ConversationTarget | null): Conversation
    */
   const projection = projectionKey === targetKey ? state : INITIAL_CONVERSATION;
 
+  /** 会话累计读数：网关基线加本地增量；基线未就绪时为空，指标条不画这两段。 */
+  const sessionCumulative = useSessionCumulative(projection.turns, paging.sessionBaseline);
+
   /**
    * 加载更早：先补被首屏窗口截掉的那一段，再退回车道级翻页。
    *
@@ -678,6 +663,7 @@ export function useConversation(target: ConversationTarget | null): Conversation
     activeQuestion,
     answerQuestion,
     watchedInteractionId: laneCapability.available ? watchedRef.current : null,
+    sessionCumulative,
     laneReadyId,
     laneAvailable: laneCapability.available,
     opening,

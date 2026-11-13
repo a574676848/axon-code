@@ -29,7 +29,7 @@ use crate::run_commands::run_steer::{ActivePrimaryTurnRegistry, SubagentSendOutc
 /// daemon 网关上的扩展路由前缀。
 pub const WORKBENCH_PATH_PREFIX: &str = "/api/v1";
 /// 协议版本；新增路由或改动字段语义时必须递增，供客户端协商。
-pub const WORKBENCH_PROTOCOL_VERSION: u32 = 6;
+pub const WORKBENCH_PROTOCOL_VERSION: u32 = 8;
 /// 单次车道 Interaction 回放查询的默认条数上限。
 const DEFAULT_LANE_INTERACTION_LIMIT: u32 = 200;
 /// 单次车道 Interaction 回放查询的条数硬上限。
@@ -70,6 +70,10 @@ mod workbench_http_adapter_tests;
 ///
 /// `before` 是反向分页游标：为空取最近一页，给出则取它之前的一页。
 /// 客户端按「一次一条」向前翻，因此这里不需要额外的页号或总量。
+///
+/// 载荷同时给出整条车道的两个累计读数（token 用量与已收口轮次的墙钟耗时）：界面的
+/// 会话读数要的是整条会话，而不是客户端恰好翻到的那一页，因此这两个数按车道聚合，
+/// 与分页无关。取数失败不牵连历史列表：列表是主事实，累计读数缺了就不给。
 pub fn lane_interactions_payload(
     axon_root: &Path,
     lane_id: &str,
@@ -94,10 +98,28 @@ pub fn lane_interactions_payload(
             attachments: record.attachments.clone(),
         })
         .collect();
+    let session_usage = lane_run_session_id(axon_root, lane_id)
+        .and_then(|run_session| {
+            crate::run_commands::load_session_usage_totals_from_root(axon_root, &run_session).ok()
+        })
+        .map_or(serde_json::Value::Null, |usage| {
+            serde_json::json!({
+                "totalTokens": usage.total_tokens,
+                "inputTokens": usage.input_tokens,
+                "cacheReadTokens": usage.cache_read_tokens,
+                "cacheWriteTokens": usage.cache_write_tokens,
+                "outputTokens": usage.output_tokens,
+                "reasoningTokens": usage.reasoning_tokens,
+            })
+        });
+    let session_elapsed_ms = lane_settled_elapsed_ms(axon_root, lane_id)
+        .map_or(serde_json::Value::Null, serde_json::Value::from);
     Ok(serde_json::json!({
         "laneId": lane_id,
         "interactions": interactions,
         "totalRecords": interactions.len(),
+        "sessionUsage": session_usage,
+        "sessionElapsedMs": session_elapsed_ms,
         "rawPayloadPersisted": false,
     }))
 }
@@ -222,6 +244,43 @@ fn lane_pending_question_counts(
         map.insert(row.0, row.1);
     }
     Ok(map)
+}
+
+/// 车道上已收口轮次的累计墙钟耗时（毫秒）。
+///
+/// 每轮的耗时取「到达 → 收尾」这段墙钟差：`jarvis_interactions` 里一行就是一轮，两个
+/// 时间戳都是网关自己写的，因此按车道求和即可，不必回放正文，也不必解析事件载荷。
+/// 仍在排队或在跑的轮次不参与：它们还没收尾，读数由界面按实时帧自己补，避免同一轮
+/// 在基线与增量里各算一次。
+fn lane_settled_elapsed_ms(axon_root: &Path, lane_id: &str) -> Option<u64> {
+    let store = runtime_store(axon_root);
+    let connection = rusqlite::Connection::open(store.path()).ok()?;
+    connection
+        .query_row(
+            "SELECT COALESCE(SUM(updated_at_ms - received_at_ms), 0) FROM jarvis_interactions \
+             WHERE lane_id = ?1 AND status NOT IN ('received', 'processing')",
+            [lane_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .ok()
+        .and_then(|total| u64::try_from(total).ok())
+}
+
+/// 车道的运行时 session 标识。
+///
+/// 车道标识（`session-lane-<hash>`）是复合车道的稳定身份，每轮的用量却记在该车道当前的
+/// run session 名下（`session_runtimes.run_session_id`）。会话累计读数因此要先把车道解析
+/// 成 run session，再按它汇总；解析不到时返回 None，读数随之缺省而不是报 0。
+fn lane_run_session_id(axon_root: &Path, lane_id: &str) -> Option<String> {
+    let store = runtime_store(axon_root);
+    let connection = rusqlite::Connection::open(store.path()).ok()?;
+    connection
+        .query_row(
+            "SELECT run_session_id FROM session_runtimes WHERE session_id = ?1",
+            [lane_id],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
 }
 
 /// 新车道标识派生请求。

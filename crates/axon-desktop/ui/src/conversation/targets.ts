@@ -100,6 +100,14 @@ export interface ConversationController {
   answerQuestion: (callId: string, answers: import('./questions').AnswerItem[]) => Promise<void>;
   /** 当前订阅的 Interaction 标识；会话目标恒为 null。 */
   watchedInteractionId: string | null;
+  /**
+   * 整条会话的累计读数；基线还没取回时为 null。
+   *
+   * 口径是各轮输入、缓存读写、输出与推理之和，以及各轮墙钟耗时之和；与上下文读数不同：
+   * 那个是「最近一次请求占了多少窗口」，这个是「这条会话一共花了多少」。打开历史会话即
+   * 读作该会话既有消耗，在跑的那一轮边生成边进位。
+   */
+  sessionCumulative: import('./sessionUsage').SessionCumulative | null;
   /** 历史索引已经装载完成的车道标识；为空表示尚未就绪或目标不是车道。 */
   laneReadyId: string | null;
   /**

@@ -90,7 +90,51 @@ pub struct InteractionSummary {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LaneInteractionsPayload {
+    #[serde(default)]
     interactions: Vec<InteractionSummary>,
+    /// 整条车道的累计用量；网关没给结论时缺省为空。
+    #[serde(default)]
+    session_usage: Option<SessionUsageTotals>,
+    /// 整条车道已收口轮次的累计墙钟耗时；网关没给结论时缺省为空。
+    #[serde(default)]
+    session_elapsed_ms: Option<u64>,
+}
+
+/// 一条会话的累计用量：总量与分桶。
+///
+/// 分桶用于指标条上的用量浮层：读者要的是「这些 token 花在哪了」，只有总量答不了。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionUsageTotals {
+    /// 总量。
+    pub total_tokens: u64,
+    /// 未缓存输入。
+    pub input_tokens: u64,
+    /// 缓存读取。
+    pub cache_read_tokens: u64,
+    /// 缓存写入。
+    pub cache_write_tokens: u64,
+    /// 输出。
+    pub output_tokens: u64,
+    /// 推理输出。
+    pub reasoning_tokens: u64,
+}
+
+/// 一页车道历史：这一页的 Interaction，加上整条车道的累计读数。
+///
+/// 两个累计读数都会话翻到第几页无关：界面要的是整条会话的消耗与耗时，因此它们由网关
+/// 按车道聚合，客户端不靠自己已经回放到哪一条去推算。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaneInteractions {
+    /// 这一页的 Interaction，按接收时间升序。
+    pub interactions: Vec<InteractionSummary>,
+    /// 整条车道截至当前的累计用量；读不到结论时为空。
+    #[serde(default)]
+    pub session_usage: Option<SessionUsageTotals>,
+    /// 整条车道已收口轮次的累计墙钟耗时；读不到结论时为空。
+    #[serde(default)]
+    pub session_elapsed_ms: Option<u64>,
 }
 
 /// 反向分页游标：按「已加载窗口里最早那一条」的排序键向前翻。
@@ -112,7 +156,7 @@ pub fn lane_interactions(
     lane_id: &str,
     limit: Option<u32>,
     before: Option<&HistoryCursor>,
-) -> Result<Vec<InteractionSummary>, String> {
+) -> Result<LaneInteractions, String> {
     let lane_id = lane_id.trim();
     if lane_id.is_empty() {
         return Err("车道标识不能为空".to_string());
@@ -133,7 +177,11 @@ pub fn lane_interactions(
     }
     let payload = gateway::get_json_at(&path)?;
     serde_json::from_value::<LaneInteractionsPayload>(payload)
-        .map(|parsed| parsed.interactions)
+        .map(|parsed| LaneInteractions {
+            interactions: parsed.interactions,
+            session_usage: parsed.session_usage,
+            session_elapsed_ms: parsed.session_elapsed_ms,
+        })
         .map_err(|error| format!("解析车道历史失败：{error}"))
 }
 

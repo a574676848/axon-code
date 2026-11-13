@@ -22,6 +22,7 @@ import {
   type ConversationAction,
   type ConversationState,
 } from './transcript';
+import type { SessionTokenBaseline } from './sessionUsage';
 import type { ConversationStreamEvent } from './wire';
 
 /** 历史分页的页大小：一次一条 Interaction，向前翻就是逐条往前取。 */
@@ -74,7 +75,13 @@ export interface LanePagingOptions {
 export interface LanePaging {
   /** 取某一条的种子。 */
   seedOf: (interactionId: string) => HistorySeed | undefined;
-  /** 取最近一页历史：重置种子表、记住游标，返回这一页要回放的标识。 */
+  /**
+   * 最近一页历史带下来的会话累计用量基线；还没取回时为 null。
+   *
+   * 基线覆盖的轮次一并给出：界面据此只叠加基线之后发生的轮次，不把同一轮算两次。
+   */
+  sessionBaseline: SessionTokenBaseline | null;
+  /** 取最近一页历史：重置种子表与累计基线、记住游标，返回这一页要回放的标识。 */
   loadNewestPage: (laneId: string) => Promise<string[]>;
   /** 按当前模式派发动作：独立回放时进临时投影，其余进主投影。 */
   applyAction: (action: ConversationAction) => void;
@@ -109,6 +116,8 @@ export function useLanePaging(options: LanePagingOptions): LanePaging {
   const [prependToken, setPrependToken] = useState(0);
   /** 历史索引的种子表。 */
   const seedsRef = useRef(new Map<string, HistorySeed>());
+  /** 会话累计用量的基线；换车道时整份换掉。 */
+  const [sessionBaseline, setSessionBaseline] = useState<SessionTokenBaseline | null>(null);
 
   const seedHistoryEntries = useCallback((page: readonly HistoryPageEntry[]) => {
     for (const item of page) {
@@ -146,11 +155,20 @@ export function useLanePaging(options: LanePagingOptions): LanePaging {
    */
   const loadNewestPage = useCallback(
     async (laneId: string): Promise<string[]> => {
+      // 先丢旧基线：累计读数不能先按上一条会话的数画一帧，再跳到新会话。
+      setSessionBaseline(null);
       const page = await ipc.conversationHistory(laneId, HISTORY_PAGE_SIZE);
       seedsRef.current = new Map();
-      seedHistoryEntries(page);
-      rememberFirstPage(page);
-      return page.map((item) => item.interactionId);
+      seedHistoryEntries(page.interactions);
+      rememberFirstPage(page.interactions);
+      if (page.sessionUsage !== null) {
+        setSessionBaseline({
+          usage: page.sessionUsage,
+          elapsedMs: page.sessionElapsedMs ?? 0,
+          turnIds: new Set(page.interactions.map((item) => item.interactionId)),
+        });
+      }
+      return page.interactions.map((item) => item.interactionId);
     },
     [rememberFirstPage, seedHistoryEntries],
   );
@@ -232,17 +250,18 @@ export function useLanePaging(options: LanePagingOptions): LanePaging {
     try {
       const page = await ipc.conversationHistory(laneId, HISTORY_PAGE_SIZE, cursor);
       if (generationRef.current !== generation) return;
-      if (page.length === 0) {
+      const entries = page.interactions;
+      if (entries.length === 0) {
         olderCursorRef.current = null;
         setHasOlder(false);
         return;
       }
-      seedHistoryEntries(page);
-      rememberFirstPage(page);
+      seedHistoryEntries(entries);
+      rememberFirstPage(entries);
       pagingRef.current = {
         state: INITIAL_CONVERSATION,
-        queue: page.map((item) => item.interactionId),
-        ids: new Set(page.map((item) => `interaction:${item.interactionId}`)),
+        queue: entries.map((item) => item.interactionId),
+        ids: new Set(entries.map((item) => `interaction:${item.interactionId}`)),
       };
       replayingRef.current = true;
       playNextRef.current(workspaceId, generation);
@@ -298,6 +317,7 @@ export function useLanePaging(options: LanePagingOptions): LanePaging {
       hasOlder,
       loadingOlder,
       prependToken,
+      sessionBaseline,
     }),
     [
       applyAction,
@@ -309,6 +329,7 @@ export function useLanePaging(options: LanePagingOptions): LanePaging {
       prependToken,
       routeFrames,
       seedOf,
+      sessionBaseline,
       take,
       ownPage,
       unfoldTurn,
