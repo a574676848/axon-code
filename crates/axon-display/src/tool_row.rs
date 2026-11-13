@@ -283,6 +283,15 @@ mod tests {
             Some("审计文档展示契约"),
             "委托工具与其余内置工具同一条 intent 契约"
         );
+        // 记忆写入没有单一主参数：summary 与 evidence 摆出来只是噪声。
+        assert_eq!(
+            tool_row_target(
+                "builtin.memory_write",
+                r#"{"kind":"preference","summary":"并行改动必须隔离工作树","evidence":"用户要求"}"#,
+                Some("固化并行开发纪律")
+            ),
+            Some(ToolRowTarget::Text("固化并行开发纪律".to_owned()))
+        );
         // 任务管理类工具没有单一主参数：acceptance 之类的数组摆出来只是噪声。
         assert_eq!(
             tool_row_target(

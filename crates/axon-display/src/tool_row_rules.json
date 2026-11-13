@@ -15,7 +15,9 @@
         "goal_get",
         "goal_update",
         "goal_cancel",
-        "goal_start"
+        "goal_start",
+        "memory_search",
+        "memory_write"
     ],
     "targets": {
         "memory_search": { "fields": ["query"] },

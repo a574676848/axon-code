@@ -337,6 +337,12 @@ mod tests {
                 "审计文档展示契约",
             ),
             (
+                "builtin.memory_write",
+                r#"{"intent":"固化并行开发纪律","kind":"preference","summary":"并行改动必须隔离工作树","evidence":"用户要求"}"#,
+                "记忆写入",
+                "固化并行开发纪律",
+            ),
+            (
                 "builtin.goal_create",
                 r#"{"scope":"current_workspace","acceptance":["清单可验收"],"intent":"拆解记忆增强目标"}"#,
                 "创建任务",

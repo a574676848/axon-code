@@ -5,8 +5,8 @@ use axon_domain::{
 
 /// 内置 memory_write tool 名称。
 pub const MEMORY_WRITE_TOOL_NAME: &str = "memory_write";
-/// memory_write tool schema version。
-pub const MEMORY_WRITE_TOOL_SCHEMA_VERSION: u32 = 5;
+/// memory_write tool schema version；新增必填 `intent` 后升到 6。
+pub const MEMORY_WRITE_TOOL_SCHEMA_VERSION: u32 = 6;
 /// memory_write tool ID。
 pub const MEMORY_WRITE_TOOL_ID: ToolId = ToolId(19);
 /// memory_write 记忆类型字段。
@@ -33,8 +33,14 @@ pub(crate) fn memory_write_tool_definition() -> ToolDefinition {
             MEMORY_WRITE_TOOL_KIND_FIELD,
             MEMORY_WRITE_TOOL_SUMMARY_FIELD,
             MEMORY_WRITE_TOOL_EVIDENCE_FIELD,
+            crate::TOOL_INTENT_FIELD,
         ],
         vec![
+            ToolSchemaField::new(
+                crate::TOOL_INTENT_FIELD,
+                ToolSchemaFieldKind::NonBlankString,
+                crate::TOOL_INTENT_FIELD_DESCRIPTION,
+            ),
             ToolSchemaField::new(
                 MEMORY_WRITE_TOOL_KIND_FIELD,
                 ToolSchemaFieldKind::StringEnum(MEMORY_WRITE_TOOL_KINDS),
@@ -81,11 +87,18 @@ pub(crate) fn memory_write_tool_definition() -> ToolDefinition {
         "description": "可选单个正整数或十进制字符串 ID，或对应数组；大于 Provider 安全整数范围的 ID 必须使用十进制字符串。仅当新结论明确使已召回的旧记忆失效或错误时填写，相关但不矛盾的记忆不得替代。",
         "examples": ["8079221640628927909", [42, "8079221640628927909"]]
     });
+    // 写记忆的字段最多：一条完整调用示例固定形状，intent 与正文同批出现。
+    schema.input_schema["examples"] = serde_json::json!([{
+        "intent": "固化并行开发纪律",
+        "kind": "preference",
+        "summary": "并行改动必须隔离工作树，合并前跑全仓门禁",
+        "evidence": "用户 2026-11-12 明确要求",
+    }]);
     ToolDefinition {
         id: MEMORY_WRITE_TOOL_ID,
         namespace: crate::AGENT_TOOL_NAMESPACE.to_owned(),
         name: MEMORY_WRITE_TOOL_NAME.to_owned(),
-        description: "仅在当前任务得到有证据、可跨会话复用的稳定结论时写入长期记忆。作用域固定：profile 与 preference 写入个人记忆；experience、knowledge 与 procedure 写入当前工作地点（普通 Workspace 或其分支，以及在 ~/.axon 里写作时固定的 Axon 主目录桶），不得因为位于主目录就降级成个人记忆。用户授权保存的敏感信息按明文进入普通 Memory，不提供加密隔离。".to_owned(),
+        description: "仅在当前任务得到有证据、可跨会话复用的稳定结论时写入长期记忆。作用域固定：profile 与 preference 写入个人记忆；experience、knowledge 与 procedure 写入当前工作地点（普通 Workspace 或其分支，以及在 ~/.axon 里写作时固定的 Axon 主目录桶），不得因为位于主目录就降级成个人记忆。用户授权保存的敏感信息按明文进入普通 Memory，不提供加密隔离。intent 是每次写入必填的一句话目的，写法见该字段描述；漏填会让整条调用被判为参数非法。".to_owned(),
         schema,
         enabled: true,
         concurrency_policy: axon_domain::ToolConcurrencyPolicy::Exclusive,

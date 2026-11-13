@@ -460,7 +460,8 @@ fn builtin_schema_validation_matches_conditional_runtime_contracts() {
                     "kind": "experience",
                     "summary": "稳定结论",
                     "evidence": "已验证",
-                    "supersedes_memory_ids": 7
+                    "supersedes_memory_ids": 7,
+                    "intent": "固化稳定结论"
                 }))
             )
             .is_ok()
@@ -546,10 +547,15 @@ fn builtin_schema_validation_matches_conditional_runtime_contracts() {
             )
             .is_ok()
     );
-    // 折叠态只显示模型自述的一句话目的：search/glob/update_plan/便签写入/终端执行/委派都必填 intent。
+    // 折叠态只显示模型自述的一句话目的：检索、写入、终端、委派、Goal、记忆读写都必填 intent。
     for (tool, arguments) in [
         ("builtin.search", json!({ "query": "axon" })),
         ("builtin.glob", json!({ "paths": "src" })),
+        ("builtin.memory_search", json!({ "query": "仓库文档重整" })),
+        (
+            "builtin.memory_write",
+            json!({ "kind": "experience", "summary": "稳定结论", "evidence": "已验证" }),
+        ),
         (
             "builtin.delegate_to_fast",
             json!({ "task": "审计 docs 与 src 的展示契约" }),

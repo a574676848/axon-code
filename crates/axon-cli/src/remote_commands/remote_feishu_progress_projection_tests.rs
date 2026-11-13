@@ -267,6 +267,11 @@ fn tool_target_uses_shared_rules_per_tool() {
             "审计文档展示契约",
         ),
         (
+            "memory_write",
+            r#"{"intent":"固化并行开发纪律","kind":"preference","summary":"并行改动必须隔离工作树"}"#,
+            "固化并行开发纪律",
+        ),
+        (
             "goal_create",
             r#"{"scope":"current_workspace","acceptance":["清单可验收"],"intent":"拆解记忆增强目标"}"#,
             "拆解记忆增强目标",

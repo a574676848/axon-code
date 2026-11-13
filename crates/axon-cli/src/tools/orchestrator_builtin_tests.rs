@@ -475,6 +475,8 @@ fn every_intent_tool_accepts_the_intent_field_before_execution() {
         "goal_update",
         "goal_cancel",
         "goal_start",
+        "memory_search",
+        "memory_write",
     ];
     for name in axon_display::tool_intent_tool_names() {
         assert!(
@@ -536,6 +538,14 @@ fn every_intent_tool_accepts_the_intent_field_before_execution() {
             "builtin.notes_append_to_file",
             r#"{"path":"checkpoint.md","text":"下一步动作","intent":"补充交接便签"}"#,
         ),
+        (
+            "builtin.memory_search",
+            r#"{"intent":"回忆既有决策","query":"仓库文档重整的偏好与约束"}"#,
+        ),
+        (
+            "builtin.memory_write",
+            r#"{"intent":"固化并行开发纪律","kind":"preference","summary":"并行改动必须隔离工作树","evidence":"用户明确要求"}"#,
+        ),
     ];
     for (tool_name, arguments) in dispatched {
         let call = ProviderToolCall::new("call_intent_probe", tool_name, arguments);
@@ -543,6 +553,8 @@ fn every_intent_tool_accepts_the_intent_field_before_execution() {
             "builtin.update_plan" => execute_update_plan(&call),
             "builtin.glob" => crate::tool_orchestrator_fs::execute_glob(&call, &context),
             "builtin.search" => execute_search(&call, &context),
+            "builtin.memory_search" => execute_memory_search(&call, &context),
+            "builtin.memory_write" => execute_memory_write(&call, &context),
             _ => execute_notes_tool(&call, &context),
         };
         assert!(

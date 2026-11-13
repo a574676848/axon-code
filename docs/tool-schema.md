@@ -23,6 +23,8 @@
 
 `builtin.memory_write` 的 `kind` 必须是 `profile`、`preference`、`experience`、`knowledge` 或 `procedure`；`summary` 与 `evidence` 必须是非空字符串。运行时当前不执行敏感关键词过滤，内容通过基础校验后进入既有的 Memory 准入、合并与持久化流程。Personal scope 只接受前两类，Workspace scope 只接受后三类。写入后的 CLI/导出记录使用 `memoryKind` 返回同一稳定代码值。
 
+`builtin.memory_search` 与 `builtin.memory_write` 都声明必填 `intent`（写法与长度同 `builtin.shell_command.intent`）：桌面端、TUI 与飞书的折叠态只显示这一句话，`query`、`summary`、`evidence` 等原始参数留在展开态。
+
 桌面端记忆管理 Gateway 使用 `/api/v1/memory`：列表请求必须提供 `memoryKind`，并支持 `scope`、`limit`、`cursorUpdatedAtMs`、`cursorMemoryId`；统计使用 `/stats`（同样接受 `scope`）；实际存在的 scope 列表使用 `/scopes`；详情使用 `/{memoryId}`；创建使用 `POST /memory`；修改使用 `POST /memory/{memoryId}`，通过 `supersedesMemoryIds` 形成替代关系；遗忘使用 `POST /memory/{memoryId}/forget` 写入 tombstone；物理删除使用 `DELETE /memory/{memoryId}`。
 
 `scope` 取值为 `all`（默认）、`personal`、`workspace` 或 `workspace:<namespace>`；缺省时返回当前 owner 的 Personal 记录加全部 Workspace 记录，其他 owner 的 Personal 记录不出现在任何读取路径。Gateway 从当前 owner 派生 Personal scope，并拒绝客户端提交 `userRef`、`namespaceRef` 等身份字段。列表按 `updatedAtMs DESC, memoryId ASC` 排序，用 `(updatedAtMs, memoryId)` 游标翻页，单页上限 100 条。
@@ -311,7 +313,7 @@ Lazy 块内的漏写前缀容错：当某个 `*** Update File:` 块内出现独�
 
 `builtin.shell_command.intent` 是**必填**参数：一句话说明这次命令要达成什么目的，例如「校验代码格式」「确认依赖版本」。它是这次执行面向用户的说明，桌面端、TUI 与飞书的工具行都以它作为标题，命令原文是详情。写目标、不复述命令原文、不加句号、40 字以内。
 
-`intent` 是跨工具的展示契约，字段名与写法在所有声明它的工具上完全一致，当前包含 `builtin.shell_command`、`builtin.write_stdin`、`builtin.update_plan`、`builtin.glob`、`builtin.search`、`builtin.notes_write_file`、`builtin.notes_append_to_file`、`builtin.send_message`、`builtin.delegate_to_fast` 与六个 `builtin.goal_*` 工具。它只影响展示，不参与执行语义：模型自述目的在参数被截断之前取出，因此再长的脚本、正文或计划都不会把它挤掉；未声明该字段的工具（含 MCP 工具与第三方 schema）不受影响。
+`intent` 是跨工具的展示契约，字段名与写法在所有声明它的工具上完全一致，当前包含 `builtin.shell_command`、`builtin.write_stdin`、`builtin.update_plan`、`builtin.glob`、`builtin.search`、`builtin.notes_write_file`、`builtin.notes_append_to_file`、`builtin.send_message`、`builtin.delegate_to_fast`、`builtin.memory_search`、`builtin.memory_write` 与六个 `builtin.goal_*` 工具。它只影响展示，不参与执行语义：模型自述目的在参数被截断之前取出，因此再长的脚本、正文或计划都不会把它挤掉；未声明该字段的工具（含 MCP 工具与第三方 schema）不受影响。
 
 两处内容分工固定，改任一处都要同步检查另一处：**写法与长度**（写目标、标点、字数、示例）属单次调用语义，写在该字段的 schema 描述里；**产品态承诺**（每次调用必填、它是这次执行面向用户的说明、不得复述命令）属跨调用约束，写在 `crates/axon-prompts/templates/agent/tool_usage_guidance.md` 的 `<tool_execution_and_receipt_protocol>` 片段里。界面机制（哪一端折叠、哪一端展开）两处都不写。
 
