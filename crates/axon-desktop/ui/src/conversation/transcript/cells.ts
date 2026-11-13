@@ -193,6 +193,7 @@ export function applyToolCall(
       startedAtMs: recordedAtMs,
       exitCode: null,
       jobId: null,
+      jobStatus: null,
       fullOutputAvailable: false,
       filesystemWritePerformed: false,
       editPath: null,
@@ -212,6 +213,7 @@ export function applyToolResult(
 ): TurnState {
   const metadata = result.metadata ?? {};
   const jobId = stringField(metadata, 'jobId') ?? stringField(metadata, 'job_id');
+  const jobStatus = stringField(metadata, 'jobStatus');
   const exitCode = numberField(metadata, 'exitCode');
   const output = result.outputPreview ?? result.summary;
   const fullOutputAvailable = booleanField(nested(metadata, 'output'), 'fullOutputAvailable');
@@ -233,6 +235,7 @@ export function applyToolResult(
       startedAtMs: recordedAtMs,
       exitCode,
       jobId,
+      jobStatus,
       fullOutputAvailable,
       filesystemWritePerformed: result.filesystemWritePerformed === true,
       editPath: null,
@@ -253,6 +256,7 @@ export function applyToolResult(
       durationMs: result.durationMs ?? cell.durationMs,
       exitCode: exitCode ?? cell.exitCode,
       jobId: jobId ?? cell.jobId,
+      jobStatus: jobStatus ?? cell.jobStatus,
       fullOutputAvailable: fullOutputAvailable || cell.fullOutputAvailable,
       filesystemWritePerformed:
         result.filesystemWritePerformed === true || cell.filesystemWritePerformed,

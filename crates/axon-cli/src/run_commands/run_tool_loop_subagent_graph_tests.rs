@@ -132,7 +132,17 @@ fn subagent_tool_graph_store_restores_only_open_children() {
         &serde_json::json!({ "job_id": closed_job_id.expect("review 必须回带 jobId") }),
     );
     let close_receipts = super::execute_supported_tool_calls(&request, &[close], None);
-    assert_eq!(close_receipts[0].status, "killed");
+    // 调用状态描述这次终止调用本身（已经返回）；被终止后的作业状态在 jobStatus。
+    assert_eq!(close_receipts[0].status, "completed");
+    let close_metadata = close_receipts[0]
+        .metadata
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    assert!(
+        close_metadata.contains("\"killed\""),
+        "终止后的作业状态必须留在 jobStatus 里：{close_metadata}"
+    );
 
     let restored = tokio::runtime::Builder::new_current_thread()
         .enable_all()

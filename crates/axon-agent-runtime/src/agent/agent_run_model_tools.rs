@@ -192,26 +192,31 @@ pub fn agent_run_shell_tool_receipt_summary(receipt: &ShellCommandExecutionRecei
 ///
 /// INV-3：回执只承诺「作业已启动、当前仍在运行」。它不返回 `session_id`
 /// （作业通道给 `job_id`），也不返回退出码：启动不是成功。
+///
+/// 状态分工固定：`status` 描述**这次工具调用**（启动这一步已经完成，因此是
+/// `completed`），作业自身的状态在 `jobStatus` 里。两者不能合并：合并会让一次已经
+/// 返回的启动调用在记录里永远停在 `running`，面板随后只能靠活作业名册对账，最后
+/// 显示成「已结束（后端已不再持有）」+「未正常退出」。
 #[must_use]
 pub fn agent_run_job_started_tool_receipt(
     tool_call: &ProviderToolCall,
     job_id: JobId,
 ) -> AgentRunToolReceiptProjection {
-    let status = job_status_name(JobStatus::Running);
-    let summary = format!("job start job_id={job_id} status={status}");
+    let job_status = job_status_name(JobStatus::Running);
+    let summary = format!("job start job_id={job_id} status={job_status}");
     let metadata = serde_json::json!({
         "kind": JOB_RECEIPT_KIND,
         "toolName": short_tool_name(tool_call.dispatch_name()),
-        "status": status,
+        "status": TOOL_CALL_STATUS_COMPLETED,
         "summary": summary,
         "jobId": job_id.to_string(),
-        "jobStatus": status,
+        "jobStatus": job_status,
         "exitCode": serde_json::Value::Null,
     });
     AgentRunToolReceiptProjection {
         provider_call_id: tool_call.id.clone(),
         tool_name: tool_call.name.clone(),
-        status: status.to_owned(),
+        status: TOOL_CALL_STATUS_COMPLETED.to_owned(),
         summary,
         metadata: Some(metadata),
         output_ref: None,
@@ -243,7 +248,8 @@ pub fn agent_run_job_output_tool_receipt(
     AgentRunToolReceiptProjection {
         provider_call_id: tool_call.id.clone(),
         tool_name: tool_call.name.clone(),
-        status: status.to_owned(),
+        // 读取这一步本身已经完成；作业是否还在跑由 `jobStatus` 表达。
+        status: TOOL_CALL_STATUS_COMPLETED.to_owned(),
         summary: summary.clone(),
         metadata: Some(job_output_metadata(
             tool_call, output, &stdout, &stderr, status, &summary,
@@ -284,26 +290,29 @@ pub fn agent_run_job_output_tool_receipt_summary(
 }
 
 /// Project a completed `job_kill` into the provider-visible tool receipt contract.
+///
+/// 与启动回执同一分工：`status` 是这次终止调用（已经完成），被终止后的作业状态在
+/// `jobStatus`。调用状态永不复制作业状态，否则记录里的这一行同样无法收口。
 #[must_use]
 pub fn agent_run_job_kill_tool_receipt(
     tool_call: &ProviderToolCall,
     job_id: JobId,
     status: JobStatus,
 ) -> AgentRunToolReceiptProjection {
-    let status_name = job_status_name(status);
-    let summary = format!("job kill job_id={job_id} status={status_name}");
+    let job_status = job_status_name(status);
+    let summary = format!("job kill job_id={job_id} status={job_status}");
     let metadata = serde_json::json!({
         "kind": JOB_RECEIPT_KIND,
         "toolName": short_tool_name(tool_call.dispatch_name()),
-        "status": status_name,
+        "status": TOOL_CALL_STATUS_COMPLETED,
         "summary": summary,
         "jobId": job_id.to_string(),
-        "jobStatus": status_name,
+        "jobStatus": job_status,
     });
     AgentRunToolReceiptProjection {
         provider_call_id: tool_call.id.clone(),
         tool_name: tool_call.name.clone(),
-        status: status_name.to_owned(),
+        status: TOOL_CALL_STATUS_COMPLETED.to_owned(),
         summary,
         metadata: Some(metadata),
         output_ref: None,
@@ -324,11 +333,12 @@ fn job_output_metadata(
     serde_json::json!({
         "kind": JOB_RECEIPT_KIND,
         "toolName": short_tool_name(tool_call.dispatch_name()),
-        "status": status,
+        "status": TOOL_CALL_STATUS_COMPLETED,
         "summary": summary,
         "argumentsPreview": output.label,
         "outputPreview": job_output_preview(stdout, stderr),
         "jobId": output.job_id.to_string(),
+        "jobStatus": status,
         "elapsedMs": output.elapsed_ms,
         "exitCode": output.exit_code,
         "artifactPath": output.artifact_path.display().to_string(),
@@ -342,6 +352,8 @@ fn job_output_metadata(
 
 /// 作业回执的稳定 `kind`；TUI 与 wire 投影按它区分作业与 shell 会话回执。
 const JOB_RECEIPT_KIND: &str = "job";
+/// 工具调用自身的完成状态；作业状态另用 `jobStatus` 表达，两者不混用。
+const TOOL_CALL_STATUS_COMPLETED: &str = "completed";
 
 fn job_status_name(status: JobStatus) -> &'static str {
     match status {

@@ -103,11 +103,12 @@ fn job_output_reads_running_status_without_claiming_success() {
 
     let receipt = call_job_output(owner, job_id, 0);
 
-    assert_eq!(receipt.status, "running");
+    assert_eq!(receipt.status, "completed", "读取调用本身已经返回");
     assert_eq!(receipt.error_type, None);
     let metadata = receipt.metadata.expect("作业回执必须携带 metadata");
     assert_eq!(metadata["kind"], "job");
     assert_eq!(metadata["jobId"], job_id.to_string());
+    assert_eq!(metadata["jobStatus"], "running", "作业真实状态在 jobStatus");
     assert!(
         metadata["exitCode"].is_null(),
         "Running 时不得给出退出码：{metadata}"
@@ -127,12 +128,14 @@ fn job_kill_terminates_the_process() {
 
     let receipt = call_job_kill(owner, job_id);
 
-    assert_eq!(receipt.status, "killed");
+    assert_eq!(receipt.status, "completed", "终止调用本身已经返回");
     assert_eq!(receipt.error_type.as_deref(), Some("killed"));
     let metadata = receipt.metadata.expect("终止回执必须携带 metadata");
     assert_eq!(metadata["jobStatus"], "killed");
+    let read = call_job_output(owner, job_id, 0);
+    assert_eq!(read.status, "completed");
     assert_eq!(
-        call_job_output(owner, job_id, 0).status,
+        read.metadata.expect("读取回执必须携带 metadata")["jobStatus"],
         "killed",
         "终止后读取必须看到终态，而不是重新运行"
     );
@@ -155,8 +158,10 @@ fn job_tools_are_isolated_by_owner() {
         "越权读取必须报告 owner 不符：{}",
         read.summary
     );
+    let own_read = call_job_output(owner, job_id, 0);
+    assert_eq!(own_read.status, "completed");
     assert_eq!(
-        call_job_output(owner, job_id, 0).status,
+        own_read.metadata.expect("读取回执必须携带 metadata")["jobStatus"],
         "running",
         "越权调用不得影响原 owner 的作业"
     );
@@ -188,7 +193,14 @@ fn call_job_kill(owner: &str, job_id: JobId) -> ToolReceipt {
 /// `job_kill` 会报告「已进入终态」：同样证明作业曾被登记且回收目标已达成。
 fn reap_job_via_kill(owner: &str, job_id: JobId) {
     let receipt = call_job_kill(owner, job_id);
-    if receipt.status == "killed" {
+    // 调用状态是这次终止调用本身（completed）；作业是否真被终止看 jobStatus。
+    let killed = receipt
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("jobStatus"))
+        .and_then(serde_json::Value::as_str)
+        == Some("killed");
+    if killed {
         return;
     }
     let detail = format!(

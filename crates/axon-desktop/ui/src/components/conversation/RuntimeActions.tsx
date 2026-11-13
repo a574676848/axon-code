@@ -7,7 +7,7 @@ import {
   formatDurationPadded,
 } from '../../conversation/format';
 import type { JobRow, SubagentRow } from '../../conversation/transcript';
-import { isActiveJob } from '../../conversation/runtimeFacts';
+import { isActiveJob, JOB_ROSTER_REFRESH_MS } from '../../conversation/runtimeFacts';
 import { Dropdown } from '../ui/overlays';
 import { StateDot, type StateDotState } from '../ui/surfaces';
 import { JobLine, SectionHeader } from './JobPanel';
@@ -24,9 +24,6 @@ import { JobLine, SectionHeader } from './JobPanel';
 
 /** 停止确认窗口：首击武装，窗口内再击一次才真的停。 */
 const STOP_CONFIRM_MS = 3000;
-
-/** 活作业名册的对账间隔；比会话轮询密一档，作业状态变化更频繁。 */
-const JOB_ROSTER_REFRESH_MS = 10000;
 
 /** 子代理会话状态的对账间隔。 */
 const SUBAGENT_ROSTER_REFRESH_MS = 10000;

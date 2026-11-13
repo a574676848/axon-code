@@ -19,12 +19,15 @@ export function deriveJobs(state: ConversationState): JobRow[] {
       jobs.push({
         id: cell.id,
         command: cell.command.length > 0 ? cell.command : cell.summary,
-        status: cell.status,
+        // 行状态优先反映**作业**；工具调用状态只在这一格不是作业时才有意义。
+        // 启动回执返回后调用已经收口，用它当行状态会让这一行永远停在 running。
+        status: cell.jobStatus ?? cell.status,
         output: cell.output,
         durationMs: cell.durationMs,
         startedAtMs: cell.startedAtMs,
         exitCode: cell.exitCode,
         jobId: cell.jobId,
+        jobStatus: cell.jobStatus,
         fullOutputAvailable: cell.fullOutputAvailable,
       });
     }

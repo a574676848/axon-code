@@ -56,6 +56,37 @@ export function isActiveJob(status: string): boolean {
   return ACTIVE_JOB_STATUS.has(status);
 }
 
+/**
+ * 活作业名册的刷新周期。
+ *
+ * 名册是「后端此刻是否还持有」的唯一权威，转录里的状态只是历史快照，
+ * 所以面板与归档判断共用同一个周期。
+ */
+export const JOB_ROSTER_REFRESH_MS = 10_000;
+
+/**
+ * 真正还在跑的作业数量。
+ *
+ * 转录里的 `jobStatus` 是启动那一刻的快照：作业结束后这一行不会自己更新，
+ * 只看状态会把已经收口的任务永久算成进行中。后端名册才是权威判据；
+ * 名册尚未对账（`null`）时退回状态判断，宁可多算一次也不误判成「没有任务」。
+ */
+export function activeJobCount(
+  jobs: ReadonlyArray<{ status: string; jobId: string | null }>,
+  liveJobIds: Set<string> | null,
+): number {
+  let active = 0;
+  for (const job of jobs) {
+    if (!isActiveJob(job.status)) continue;
+    if (job.jobId === null || liveJobIds === null) {
+      active += 1;
+      continue;
+    }
+    if (liveJobIds.has(job.jobId)) active += 1;
+  }
+  return active;
+}
+
 /** 子代理是否仍在进行。 */
 export function isActiveSubagent(status: string): boolean {
   return status === 'starting' || status === 'running' || status === 'waiting';

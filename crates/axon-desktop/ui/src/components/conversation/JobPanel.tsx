@@ -27,6 +27,14 @@ const OUTPUT_CAP = 'max-h-72';
 /** 状态文本的最大宽度：失败原因是产出方的原文，没有长度上限。 */
 const STATUS_MAX = 'max-w-[60%]';
 
+/**
+ * 只有这些终态才代表「作业结束但没有退出码」。
+ *
+ * 启动回执与读取回执本来就不带退出码，拿「退出码为空」当结论会把每一次后台启动
+ * 都标成「未正常退出」。结论必须有证据：作业真的被判成失败、终止、超时才画这个标签。
+ */
+const ABNORMAL_JOB_TERMINAL = new Set(['failed', 'killed', 'timeout', 'unresponsive', 'refusal']);
+
 /** 作业状态到状态点的映射；表与参考实现的作业列表逐项一致。 */
 function jobDotState(status: string): StateDotState {
   if (status === 'running') return 'ongoing';
@@ -123,13 +131,15 @@ const JobTerminal: React.FC<{ job: JobRow; running: boolean }> = ({ job, running
     timer.current = window.setTimeout(() => setCopied(false), COPY_RECEIPT_MS);
   };
 
-  // 未跑完时不谈退出码；跑完且非零退出或没有退出码才给结论，干净退出不画标签。
+  // 未跑完时不谈退出码；跑完且非零退出才给结论，没有证据就不下结论。
   const exitPill =
     running || job.exitCode === 0
       ? null
-      : job.exitCode === null
-        ? '未正常退出'
-        : `退出码 ${job.exitCode}`;
+      : job.exitCode !== null
+        ? `退出码 ${job.exitCode}`
+        : ABNORMAL_JOB_TERMINAL.has(job.status)
+          ? '未正常退出'
+          : null;
   // 多行命令一行一个提示符：读起来就是它要跑的那几条命令。
   const body = job.command.endsWith('\n') ? job.command.slice(0, -1) : job.command;
   const lines = body.split('\n');
@@ -236,7 +246,7 @@ export const JobLine: React.FC<JobLineProps> = ({
     (job.exitCode !== null
       ? `exit ${job.exitCode}`
       : stale
-        ? '已结束（后端已不再持有）'
+        ? '已结束'
         : statusLabel(job.status));
   const statusDanger =
     stoppedReason !== null ||

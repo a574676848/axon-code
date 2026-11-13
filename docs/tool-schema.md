@@ -375,6 +375,7 @@ Axon 会为每次执行注入模型友好的环境变量：非 TTY 场景注入 
 回执契约：
 
 - 启动回执只承诺「作业已启动、当前仍在运行」：立即返回，不在 `shell_command` 的 `yield_time_ms` 上等待；返回 `job_id` 而**不返回** `session_id`，也不返回退出码。等待增量输出改由 `builtin.job_output` 的 `yield_time_ms` 控制。
+- 回执的 `status` 只描述**这次工具调用**：启动、读取、终止本身都已经返回，因此一律是 `completed`；作业自身的状态在 `jobStatus`（`running`、`completed`、`failed`、`killed`、`timeout`、`unresponsive`、`refusal`）。两者不得混用：把作业状态写进 `status` 会让记录里的这一行永远停在 `running`，面板随后只能靠活作业名册对账，最后退化成「已结束（后端已不再持有）」加一个没有证据的「未正常退出」。
 - `builtin.job_output` 的 `status` 为 `running` 只表示作业仍在运行；退出码只在终态出现。六类退出**互不合并**：`completed`、`refusal`（执行前的准入裁决拒绝，任务未被接受）、`failed`、`killed`（显式 `job_kill`）、`timeout`（墙钟超时）、`unresponsive`（空闲超时）；`refusal` 的 `error_type` 为 `refused`（不是 `execution_failed`），后三者的 `error_type` 为 `killed`。预算耗尽（模型输出 token 上限）落在失败类，但退出原因固定为「预算耗尽（模型输出 token 上限）」，不与普通失败混同。
 - `builtin.job_output` 的等待有四种终点：有新输出、作业进入终态、本轮被中断、等待窗口结束。中断只结束**本次等待**而不是作业：回执照旧按作业当前真实状态给出（通常仍是 `running`），作业继续运行，可用同一个 `job_id` 再次读取或直接终止。没有这条通道，一次让出窗口会把整轮扣在等待里，用户的中断请求要等窗口自然结束才可能生效。
 - 输出是**增量**的：每次读取消费并返回自上次读取以来新增的片段，单次回执不是全部输出。预览受 `max_output_tokens` 约束，超出时保留头尾并标记截断，完整内容按 `artifactPath` 读取；`fullOutputAvailable` 为假时归档本身已被容量上限截断。

@@ -368,6 +368,9 @@ fn edit_receipt_metadata(warnings: Vec<String>) -> serde_json::Value {
 }
 
 /// Running 只表示仍在运行：不得给出退出码，也不得混入会话通道字段。
+///
+/// 回执的 `status` 描述这次**读取调用**（已经返回，因此是 `completed`）；
+/// 作业是否还在跑看 `jobStatus`。合并两者会让记录里的调用永远停在 running。
 #[test]
 fn job_read_receipt_never_claims_success_while_running() {
     let tool_call = ProviderToolCall::new("call-job", "builtin.job_output", "{}");
@@ -375,7 +378,7 @@ fn job_read_receipt_never_claims_success_while_running() {
     let projection =
         agent_run_job_output_tool_receipt(&tool_call, &job_output(JobStatus::Running, None), None);
 
-    assert_eq!(projection.status, "running");
+    assert_eq!(projection.status, "completed");
     assert_eq!(
         projection.error_type, None,
         "仍在运行既不是失败，也不能编码成成功"
@@ -383,6 +386,10 @@ fn job_read_receipt_never_claims_success_while_running() {
     let metadata = projection.metadata.expect("作业回执必须携带 metadata");
     assert_eq!(metadata["kind"], "job");
     assert_eq!(metadata["jobId"], "7");
+    assert_eq!(
+        metadata["jobStatus"], "running",
+        "作业真实状态不能被调用状态覆盖"
+    );
     assert!(metadata["exitCode"].is_null(), "Running 时不得给出退出码");
     assert!(
         metadata.get("sessionId").is_none(),
@@ -403,14 +410,17 @@ fn job_terminal_receipt_reports_exit_code_and_honest_error_type() {
     let killed =
         agent_run_job_output_tool_receipt(&tool_call, &job_output(JobStatus::Killed, None), None);
 
-    assert_eq!(failed.status, "failed");
+    assert_eq!(failed.status, "completed");
+    assert_eq!(
+        failed.metadata.as_ref().expect("metadata")["jobStatus"],
+        "failed"
+    );
     assert_eq!(failed.error_type.as_deref(), Some("execution_failed"));
     assert_eq!(failed.metadata.expect("metadata")["exitCode"], 3);
-    assert_eq!(killed.status, "killed");
+    assert_eq!(killed.status, "completed");
     assert_eq!(
-        killed.error_type.as_deref(),
-        Some(AGENT_RUN_TOOL_ERROR_TYPE_KILLED),
-        "被终止的作业不得被报成执行失败，否则模型无法分辨两种结局"
+        killed.metadata.as_ref().expect("metadata")["jobStatus"],
+        "killed"
     );
     assert_eq!(
         killed.metadata.expect("metadata")["output"]["fullOutputAvailable"],
@@ -463,16 +473,20 @@ fn job_read_receipt_keeps_preview_within_budget_untouched() {
 }
 
 /// 启动回执只能承诺「作业已启动」，并给出作业通道的 ID。
+///
+/// 启动这一次调用已经返回，`status` 必须是 `completed`；作业本身还在跑，由
+/// `jobStatus = running` 表达。否则记录里这一行永远不会收口。
 #[test]
 fn job_started_receipt_reports_job_id_only() {
     let tool_call = ProviderToolCall::new("call-shell", "builtin.shell_command", "{}");
 
     let projection = agent_run_job_started_tool_receipt(&tool_call, JobId(11));
 
-    assert_eq!(projection.status, "running");
+    assert_eq!(projection.status, "completed");
     assert_eq!(projection.error_type, None);
     let metadata = projection.metadata.expect("启动回执必须携带 metadata");
     assert_eq!(metadata["jobId"], "11");
+    assert_eq!(metadata["jobStatus"], "running");
     assert!(metadata["exitCode"].is_null());
     assert!(
         metadata.get("sessionId").is_none(),

@@ -21,6 +21,7 @@ import { SidebarRight } from '../../sidebarRight/SidebarRight';
 import { useRailLayout } from '../../sidebarRight/useRailLayout';
 import { ConversationActionsProvider } from './actions';
 import { useConversationActionsValue } from './useConversationActionsValue';
+import { sessionReferenceIndex } from './referenceAnchors';
 import { useConversationMcp } from '../../conversation/useConversationMcp';
 import { useSkillCatalog } from '../../conversation/skillCatalog';
 import {
@@ -29,8 +30,9 @@ import {
   type AttachmentRef,
 } from '../../conversation/transcript';
 import {
-  isActiveJob,
   isActiveSubagent,
+  activeJobCount,
+  JOB_ROSTER_REFRESH_MS,
   type LaneRuntimeFacts,
 } from '../../conversation/runtimeFacts';
 import { SubagentRunView } from './SubagentRunView';
@@ -39,6 +41,7 @@ import {
   KEY_REASONING_EFFORT,
   modelLabelFor,
   resolveConfig,
+  resolveEffectiveModel,
   type ResolvedConfig,
 } from '../../conversation/viewConfig';
 import { ConversationWidthControls } from './ConversationWidthControls';
@@ -119,6 +122,16 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   const fixedReasoningEffort = (cronConfig?.jobId === cronJobId ? cronConfig?.reasoningEffort : null) ?? selection?.fixedReasoningEffort;
   // 本会话真实跑过的模型（来自终态帧，回放历史时同样可得）：优先于配置默认值。
   const sessionModelLabel = modelLabelFor(config?.catalog ?? [], conversation.state.lastRun);
+  /*
+   * 指标条与输入坞共用的生效模型：展示名与最大上下文必须同源，否则会出现
+   * 「模型是会话的、窗口却是 default_model 的」这种对不上的读数。
+   */
+  const effectiveModel = resolveEffectiveModel(
+    config,
+    fixedModel ?? null,
+    explicitModel,
+    conversation.state.lastRun,
+  );
   const [creating, setCreating] = React.useState(false);
   const [createError, setCreateError] = React.useState<string | null>(null);
   const [configError, setConfigError] = React.useState<string | null>(null);
@@ -333,6 +346,9 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
       unfoldTurn: (interactionId) => conversationRef.current.unfoldTurn(interactionId),
       openResource: (address, params) => railRef.current.openResource(address, params),
       openQuestion: () => setQuestionReopenToken((value) => value + 1),
+      // 正文里的相对路径要靠会话已知路径才能落到真路径上；真值在点击时从当前
+      // 投影拉取，渲染期不遍历任何单元，动作集合也不会因此重建。
+      referenceIndex: () => sessionReferenceIndex(conversationRef.current.state.turns),
     },
     workspacePath,
   );
@@ -377,7 +393,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   const liveHeaderMetrics = {
     working: conversation.working,
     animationTick: conversation.state.turns.length,
-    model: fixedModel ?? config?.model ?? '',
+    model: effectiveModel.label,
     reasoningEffort: fixedReasoningEffort ?? config?.reasoningEffort ?? null,
     /* 首屏还没有会话：预算与会话读数一律不占位，只留运行态与辅助读数。 */
     inSession: selection !== null,
@@ -385,7 +401,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     usage: lastObservedUsage(conversation.state.turns),
     /* 累计用量与累计耗时是整条会话的事实，由网关基线加本地增量合成，不随翻页或换轮退回。 */
     sessionCumulative: conversation.sessionCumulative,
-    contextWindow: config?.contextWindow ?? null,
+    contextWindow: effectiveModel.contextWindow,
     firstTokenAvgMs: sessionGeneration.firstTokenAvgMs,
     generationTpsX10: sessionGeneration.generationTpsX10,
     plan: conversation.state.plan,
@@ -441,7 +457,36 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   const activeSubagents = conversation.state.subagents.filter((row) =>
     isActiveSubagent(row.status),
   ).length;
-  const activeJobs = conversation.jobs.filter((job) => isActiveJob(job.status)).length;
+  /*
+   * 活作业名册：转录状态只是启动那一刻的快照，作业收口后这一行不会自己更新。
+   * 归档判断拿它当权威，避免把已经跑完的后台任务算成「还在运行」。
+   */
+  const [liveJobIds, setLiveJobIds] = React.useState<Set<string> | null>(null);
+  const selectedLaneId = selection?.laneId ?? null;
+  React.useEffect(() => {
+    if (selectedLaneId === null) {
+      setLiveJobIds(null);
+      return undefined;
+    }
+    let cancelled = false;
+    const refresh = () => {
+      void ipc
+        .conversationLaneJobs(selectedLaneId)
+        .then((roster) => {
+          if (!cancelled) setLiveJobIds(new Set(roster.jobIds));
+        })
+        .catch(() => {
+          // 对账失败保留上一次结论：宁可多提示一次，也不要误判成没有任务。
+        });
+    };
+    refresh();
+    const timer = window.setInterval(refresh, JOB_ROSTER_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [selectedLaneId]);
+  const activeJobs = activeJobCount(conversation.jobs, liveJobIds);
 
   React.useEffect(() => {
     onRuntimeFacts?.({
@@ -639,7 +684,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 disabledPlaceholder={isReadOnlySession(selection) ? READ_ONLY_PLACEHOLDER : undefined}
                 busy={conversation.submitting || creating}
                 hintVisible={hintVisible}
-                model={fixedModel ?? explicitModel ?? sessionModelLabel ?? config?.model ?? ''}
+                model={effectiveModel.label}
                 models={config?.models ?? []}
                 configBusy={savingConfig}
                 configLocked={selection?.channel === 'cron' || cronJobId !== null}

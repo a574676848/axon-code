@@ -86,6 +86,8 @@ export type TranscriptCell =
       startedAtMs: number | null;
       exitCode: number | null;
       jobId: string | null;
+      /** 作业自身状态；工具调用状态在 `status`，两者不混用。 */
+      jobStatus: string | null;
       fullOutputAvailable: boolean;
       filesystemWritePerformed: boolean;
       /** 该工具改动的文件路径；无写入时为 null。 */
@@ -189,6 +191,8 @@ export interface JobRow {
   startedAtMs: number | null;
   exitCode: number | null;
   jobId: string | null;
+  /** 作业自身状态；工具调用状态在 `status`，两者不混用。 */
+  jobStatus: string | null;
   fullOutputAvailable: boolean;
 }
 
