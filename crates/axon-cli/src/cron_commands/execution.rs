@@ -362,6 +362,7 @@ mod tests {
             Some(CronWakeTarget::Session {
                 channel: "desktop".to_owned(),
                 destination: "workbench-1".to_owned(),
+                workspace: None,
             }),
             false,
         );
@@ -370,20 +371,13 @@ mod tests {
 
         assert!(run.success);
         assert_eq!(run.dispatch_id.as_deref(), Some("interaction-test"));
-        let notice = {
-            let turns = adapter.turns.lock().expect("回合锁应可用");
-            assert_eq!(turns.len(), 1);
-            assert_eq!(turns[0].0, "desktop");
-            assert_eq!(turns[0].1, "workbench-1");
-            assert!(turns[0].2.contains("已执行完成"));
-            assert!(turns[0].2.contains("结果摘要"));
-            turns[0].2.clone()
-        };
-        assert_eq!(
-            adapter.replies.lock().expect("回复锁应可用").as_slice(),
-            [("desktop".to_owned(), "workbench-1".to_owned(), notice)],
-            "会话唤醒必须同时登记 durable 投递，否则离线客户端永远看不到"
-        );
+        let turns = adapter.turns.lock().expect("回合锁应可用");
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].0, "desktop");
+        assert_eq!(turns[0].1, "workbench-1");
+        assert!(turns[0].2.contains("已执行完成"));
+        assert!(turns[0].2.contains("结果摘要"));
+        assert!(adapter.replies.lock().expect("回复锁应可用").is_empty());
     }
 
     #[test]

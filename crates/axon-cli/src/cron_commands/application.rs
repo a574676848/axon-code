@@ -308,6 +308,11 @@ fn create_job(
     let repository = CronRepository::open(adapter.axon_root())?;
     let created_at_ms = now_ms();
     let schedule = parse_schedule(&command.schedule)?;
+    let wake = command
+        .wake
+        .as_deref()
+        .map(super::wake::parse_wake)
+        .transpose()?;
     let job = CronJob::new(
         CronJobInput {
             job_id: stable_job_id(&command.name, created_at_ms),
@@ -315,11 +320,7 @@ fn create_job(
             schedule: command.schedule.clone(),
             prompt: command.prompt.clone(),
             skills: command.skills.clone(),
-            wake: command
-                .wake
-                .as_deref()
-                .map(super::wake::parse_wake)
-                .transpose()?,
+            wake,
             workdir: path_text(command.workdir.as_deref())?,
             no_agent: command.no_agent,
             script: command.script.clone(),
@@ -502,7 +503,13 @@ pub(crate) fn wake_text(wake: &CronWakeTarget) -> String {
         CronWakeTarget::Session {
             channel,
             destination,
-        } => format!("session:{channel}:{destination}"),
+            workspace,
+        } => match workspace.as_deref().map(str::trim) {
+            Some(workspace) if !workspace.is_empty() => {
+                format!("session:{channel}:{destination}:{workspace}")
+            }
+            _ => format!("session:{channel}:{destination}"),
+        },
     }
 }
 

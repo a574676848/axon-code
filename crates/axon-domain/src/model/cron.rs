@@ -29,6 +29,14 @@ pub enum CronWakeTarget {
         channel: String,
         /// 渠道内会话表面标识。
         destination: String,
+        /// 目标会话所属的 Workspace。
+        ///
+        /// 车道身份由 `(workspace, trust_scope, channel, destination)` 派生，而
+        /// destination 只在渠道内唯一：同一个桌面会话标识可以同时出现在多个
+        /// Workspace 里。缺了这一维就只能按任务执行目录反推，唤醒便会落进另一个
+        /// 项目的同名会话。旧任务的载荷没有该字段，解析后退回按 workdir 反推。
+        #[serde(default)]
+        workspace: Option<String>,
     },
 }
 
@@ -39,6 +47,15 @@ impl CronWakeTarget {
         match self {
             Self::Feishu(_) => FEISHU_CHANNEL,
             Self::Session { channel, .. } => channel,
+        }
+    }
+
+    /// 会话目标显式声明的 Workspace；飞书目标与旧任务为 `None`。
+    #[must_use]
+    pub fn workspace(&self) -> Option<&str> {
+        match self {
+            Self::Feishu(_) => None,
+            Self::Session { workspace, .. } => workspace.as_deref(),
         }
     }
 
@@ -68,6 +85,7 @@ impl CronWakeTarget {
             Self::Session {
                 channel,
                 destination,
+                ..
             } => {
                 let channel = channel.trim();
                 let destination = destination.trim();
@@ -425,6 +443,7 @@ mod tests {
                     wake: Some(CronWakeTarget::Session {
                         channel: "desktop".to_owned(),
                         destination: "workbench-1".to_owned(),
+                        workspace: None,
                     }),
                     replace_wake: true,
                     ..CronJobUpdate::default()
@@ -451,6 +470,7 @@ mod tests {
             Some(CronWakeTarget::Session {
                 channel: "desktop".to_owned(),
                 destination: "workbench-1".to_owned(),
+                workspace: None,
             })
         );
         assert_eq!(
@@ -477,15 +497,18 @@ mod tests {
         let tui = CronWakeTarget::Session {
             channel: "tui".to_owned(),
             destination: "terminal-1".to_owned(),
+            workspace: None,
         };
         let self_lane = CronWakeTarget::Session {
             channel: "desktop".to_owned(),
             destination: format!("{CRON_LANE_DESTINATION_PREFIX}cron-abc"),
+            workspace: None,
         };
         let empty_chat = CronWakeTarget::Feishu("   ".to_owned());
         let valid = CronWakeTarget::Session {
             channel: "desktop".to_owned(),
             destination: "workbench-1".to_owned(),
+            workspace: None,
         };
 
         assert!(

@@ -145,7 +145,7 @@ weekend:0 9 * * *          周末 9 点
 
 两种典型用法：
 
-- 让任务执行完后**唤醒当前会话**继续跟进（查结果、补后续动作）：`--wake session:<session_channel>:<session_destination>`。
+- 让任务执行完后**唤醒当前会话**继续跟进（查结果、补后续动作）：`--wake session:<session_channel>:<session_destination>:<session_workspace>`。会话车道身份含 Workspace 维度，第四段取运行上下文里的 `session_workspace`；同一个会话标识在不同项目下是不同车道，漏了它就会投进别的项目的同名会话。
 - 让任务执行完**直接通知用户**（不跑回合、不消耗模型）：`--wake feishu:<notification_chat_id>`。
 
 判定顺序：

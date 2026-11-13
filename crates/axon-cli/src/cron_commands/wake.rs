@@ -18,8 +18,9 @@ const WAKE_NOTICE_SUMMARY_MAX_CHARS: usize = 1_200;
 
 /// 解析 `--wake` 参数。
 ///
-/// 支持 `feishu:<chat_id>` 与 `session:<channel>:<destination>` 两种形态。只按第一个
-/// 冒号切分，渠道内目标本身含冒号时保持完整。
+/// 支持 `feishu:<chat_id>` 与 `session:<channel>:<destination>[:<workspace>]` 两种形态。
+/// 会话目标只在第二层切分：`destination` 不含冒号时，第三段就是目标所属 Workspace；
+/// 飞书目标则整段保留，避免 chat_id 里的冒号被误切。
 pub(crate) fn parse_wake(value: &str) -> Result<CronWakeTarget, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -31,21 +32,33 @@ pub(crate) fn parse_wake(value: &str) -> Result<CronWakeTarget, String> {
         return Ok(target);
     }
     if let Some(rest) = trimmed.strip_prefix("session:") {
-        let Some((channel, destination)) = rest.split_once(':') else {
-            return Err("--wake session 目标格式必须是 session:<channel>:<destination>".to_owned());
+        let Some((channel, remainder)) = rest.split_once(':') else {
+            return Err(WAKE_FORMAT_HINT.to_owned());
+        };
+        // 第四段是目标会话所属的 Workspace：车道身份由
+        // (workspace, trust_scope, channel, destination) 派生，只给后两维无法
+        // 区分跨项目的同名会话。省略时退回按任务执行目录反推。
+        let (destination, workspace) = match remainder.split_once(':') {
+            Some((destination, workspace)) => (destination, Some(workspace.trim().to_owned())),
+            None => (remainder, None),
         };
         let target = CronWakeTarget::Session {
             channel: channel.trim().to_owned(),
             destination: destination.trim().to_owned(),
+            workspace: workspace.filter(|value| !value.is_empty()),
         };
         target.validate()?;
         return Ok(target);
     }
-    Err("--wake 目标格式必须是 feishu:<chat_id> 或 session:<channel>:<destination>".to_owned())
+    Err(WAKE_FORMAT_HINT.to_owned())
 }
 
+/// `--wake` 目标格式提示。
+const WAKE_FORMAT_HINT: &str =
+    "--wake 目标格式必须是 feishu:<chat_id> 或 session:<channel>:<destination>[:<workspace>]";
+
 /// 已知的旧投递参数中文迁移提示。
-pub(crate) const LEGACY_DELIVERY_ARGS_HINT: &str = "--feishu-chat-id / --feishu-thread-id 已移除：请改用 --wake feishu:<chat_id>；会话唤醒用 --wake session:<channel>:<destination>";
+pub(crate) const LEGACY_DELIVERY_ARGS_HINT: &str = "--feishu-chat-id / --feishu-thread-id 已移除：请改用 --wake feishu:<chat_id>；会话唤醒用 --wake session:<channel>:<destination>[:<workspace>]";
 
 /// 全局通知配置里的飞书 chat_id。
 ///
@@ -95,16 +108,14 @@ pub(crate) fn dispatch_wake(
         CronWakeTarget::Session {
             channel,
             destination,
-        } => {
-            let body = turn_injection_body(job, run_id, body, success);
-            let dispatch_id =
-                adapter.wake_session(job, channel.trim(), destination.trim(), &body, now_ms)?;
-            // 会话注入只对「当时正订阅这条会话」的客户端可见：桌面端同一时刻只订阅当前
-            // 会话的实时流，事后回放帧按设计不再通知。因此同一份正文必须再登记一份
-            // durable 投递，目标客户端上线后仍能读到这条完成事实。
-            adapter.enqueue_reply(job, channel.trim(), destination.trim(), &body, now_ms)?;
-            dispatch_id
-        }
+            ..
+        } => adapter.wake_session(
+            job,
+            channel.trim(),
+            destination.trim(),
+            &turn_injection_body(job, run_id, body, success),
+            now_ms,
+        )?,
     };
     Ok(Some(dispatch_id))
 }
@@ -174,6 +185,16 @@ mod tests {
             CronWakeTarget::Session {
                 channel: "desktop".to_owned(),
                 destination: "workbench-1".to_owned(),
+                workspace: None,
+            }
+        );
+        assert_eq!(
+            parse_wake("session:desktop:workbench-1:workspace-9d4b642b")
+                .expect("会话目标应可携带 Workspace"),
+            CronWakeTarget::Session {
+                channel: "desktop".to_owned(),
+                destination: "workbench-1".to_owned(),
+                workspace: Some("workspace-9d4b642b".to_owned()),
             }
         );
         assert!(parse_wake("feishu:").is_err());

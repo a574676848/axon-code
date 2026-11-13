@@ -58,8 +58,6 @@ mod memory_http_adapter;
 #[path = "memory_http_scope.rs"]
 mod memory_http_scope;
 mod memory_image_ref;
-// 后台完成通知收件箱：桌面端经网关拉取 Goal 与定时任务的完成结论。
-mod notifications_http_adapter;
 #[path = "args/package_args.rs"]
 mod package_args;
 mod package_commands;

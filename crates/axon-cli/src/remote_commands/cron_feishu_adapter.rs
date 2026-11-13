@@ -65,6 +65,17 @@ impl FeishuCronAdapter {
 
     /// 解析并注册任务所属 Workspace；投递与唤醒都必须绑定已注册的 Workspace。
     fn resolve_workspace_id(&self, job: &CronJob, now_ms: u64) -> Result<String, String> {
+        // 会话唤醒必须落在任务创建时的那条车道上：车道身份含 workspace 维度，
+        // 用任务执行目录反推会把结果投进另一个项目的同名会话。
+        if let Some(workspace_id) = job
+            .wake
+            .as_ref()
+            .and_then(axon_domain::CronWakeTarget::workspace)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Ok(workspace_id.to_owned());
+        }
         let workdir = self.workdir(job);
         crate::run_commands::register_workspace(workdir, now_ms, Some(&self.context.config_path))?;
         WorkspaceResolver

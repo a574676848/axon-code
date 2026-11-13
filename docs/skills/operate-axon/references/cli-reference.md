@@ -48,7 +48,7 @@ axon persona style list [--all]|retire <style-id>
 axon persona reset [--yes]
 
 axon doctor [--check <area>] [--verbose] [--fix]
-axon cron list [--limit <n>] [--include-removed] | create --name <NAME> --schedule <SCHEDULE> [--prompt <text>] [--skill <name>] [--workdir <dir>] [--no-agent --script <path>] [--wake feishu:<chat_id> | --wake session:<channel>:<destination>] | update <JOB_ID> [--schedule <SCHEDULE>|--wake ...|--clear-wake] ... | pause|resume|remove|run <JOB_ID> | tick [--limit <n>] | holiday sync [--year <年份>]...|status
+axon cron list [--limit <n>] [--include-removed] | create --name <NAME> --schedule <SCHEDULE> [--prompt <text>] [--skill <name>] [--workdir <dir>] [--no-agent --script <path>] [--wake feishu:<chat_id> | --wake session:<channel>:<destination>[:<workspace>]] | update <JOB_ID> [--schedule <SCHEDULE>|--wake ...|--clear-wake] ... | pause|resume|remove|run <JOB_ID> | tick [--limit <n>] | holiday sync [--year <年份>]...|status
                                # --schedule 三类写法，字段自由组合：
                                #   interval:30m
                                #   once:2026-11-01T09:00:00

@@ -47,6 +47,7 @@ pub(super) fn cli_environment_context(
         terminal: first_environment_value(&["TERM_PROGRAM", "TERM"]),
         session_channel: field("channel"),
         session_destination: field("destination"),
+        session_workspace: field("workspaceId"),
         notification_chat_id: notification_chat_id
             .map(str::trim)
             .filter(|value| !value.is_empty())

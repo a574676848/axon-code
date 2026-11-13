@@ -29,7 +29,8 @@ struct CronCreateRequest {
     prompt: String,
     #[serde(default)]
     skills: Vec<String>,
-    /// 唤醒目标：`feishu:<chat_id>` 或 `session:<channel>:<destination>`；省略时不投递。
+    /// 唤醒目标：`feishu:<chat_id>` 或 `session:<channel>:<destination>[:<workspace>]`；
+    /// 省略时不投递。
     wake: Option<String>,
     workdir: Option<String>,
     #[serde(default)]

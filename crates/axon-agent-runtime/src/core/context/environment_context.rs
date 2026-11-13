@@ -41,6 +41,11 @@ pub struct EnvironmentContext {
     pub session_channel: Option<String>,
     /// 本轮所属会话车道的目标标识。
     pub session_destination: Option<String>,
+    /// 当前会话所属的 Workspace。
+    ///
+    /// 会话车道的完整身份含 workspace 维度：同一个会话表面在不同项目下是不同的
+    /// 车道。只给 channel 与 destination，调用方无法表达「往哪个项目的这条会话发」。
+    pub session_workspace: Option<String>,
     /// 本机全局通知飞书会话；未配置时省略，仅作提示值。
     pub notification_chat_id: Option<String>,
     /// 可为子代理显式选型的模型名，已去重并保持配置顺序。
@@ -98,6 +103,11 @@ impl EnvironmentContext {
         append_complete_line(
             &mut lines,
             format_line("session_destination", self.session_destination.as_deref()),
+            footer,
+        );
+        append_complete_line(
+            &mut lines,
+            format_line("session_workspace", self.session_workspace.as_deref()),
             footer,
         );
         append_complete_line(
@@ -245,6 +255,7 @@ mod tests {
             terminal: Some("WindowsTerminal".to_owned()),
             session_channel: Some("desktop".to_owned()),
             session_destination: Some("workbench-1".to_owned()),
+            session_workspace: Some("workspace-1".to_owned()),
             notification_chat_id: Some("oc_notify".to_owned()),
             delegatable_models: vec!["gpt-6-astra".to_owned(), "claude-opus-5-5".to_owned()],
             reasoning_effort_tiers: vec![
@@ -352,6 +363,7 @@ mod tests {
         value.terminal = None;
         value.session_channel = None;
         value.session_destination = None;
+        value.session_workspace = None;
         value.notification_chat_id = None;
         value.delegatable_models = Vec::new();
         value.reasoning_effort_tiers = Vec::new();
@@ -391,6 +403,7 @@ mod tests {
             terminal: Some("xterm-256color".to_owned()),
             session_channel: None,
             session_destination: None,
+            session_workspace: None,
             notification_chat_id: None,
             delegatable_models: Vec::new(),
             reasoning_effort_tiers: Vec::new(),

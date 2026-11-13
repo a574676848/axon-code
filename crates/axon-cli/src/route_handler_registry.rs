@@ -82,12 +82,6 @@ pub(crate) fn compose(deps: AdapterDeps<'_>) -> Arc<dyn GatewayHttpRouteHandler>
         Arc::new(crate::goal_http_adapter::GoalHttpAdapter::new(
             runtime_root.to_path_buf(),
         )),
-        // 后台完成通知收件箱：桌面端据此拉取 Goal 与定时任务的完成结论。
-        Arc::new(
-            crate::notifications_http_adapter::NotificationsHttpAdapter::new(
-                runtime_root.to_path_buf(),
-            ),
-        ),
         // 系统元信息与运行态快照。
         Arc::new(crate::system_http_adapter::SystemHttpAdapter::new(
             runtime_root.to_path_buf(),
