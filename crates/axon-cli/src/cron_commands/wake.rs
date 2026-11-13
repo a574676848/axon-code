@@ -97,13 +97,8 @@ pub(crate) fn dispatch_wake(
             destination,
         } => {
             let body = turn_injection_body(job, run_id, body, success);
-            let dispatch_id = adapter.wake_session(
-                job,
-                channel.trim(),
-                destination.trim(),
-                &body,
-                now_ms,
-            )?;
+            let dispatch_id =
+                adapter.wake_session(job, channel.trim(), destination.trim(), &body, now_ms)?;
             // 会话注入只对「当时正订阅这条会话」的客户端可见：桌面端同一时刻只订阅当前
             // 会话的实时流，事后回放帧按设计不再通知。因此同一份正文必须再登记一份
             // durable 投递，目标客户端上线后仍能读到这条完成事实。

@@ -34,9 +34,7 @@ impl NotificationsHttpAdapter {
         Ok(SqliteRuntimeStore::from_root(&self.runtime_root))
     }
 
-    fn response(
-        result: Result<serde_json::Value, NotificationsHttpError>,
-    ) -> GatewayHttpResponse {
+    fn response(result: Result<serde_json::Value, NotificationsHttpError>) -> GatewayHttpResponse {
         match result {
             Ok(payload) => GatewayHttpResponse::json(200, &payload),
             Err(error) => GatewayHttpResponse::json(
