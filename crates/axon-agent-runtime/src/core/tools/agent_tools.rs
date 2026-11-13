@@ -160,7 +160,7 @@ fn list_mcp_resources_tool_definition() -> ToolDefinition {
         id: LIST_MCP_RESOURCES_TOOL_ID,
         namespace: AGENT_TOOL_NAMESPACE.to_owned(),
         name: "list_mcp_resources".to_owned(),
-        description: "需要读取 MCP 提供的外部上下文但还不知道 URI 时，列出可用资源；随后用 read_mcp_resource 读取。".to_owned(),
+        description: "需要读取 MCP 提供的外部上下文但还不知道 URI 时，列出可用资源；随后用 read_mcp_resource 读取。intent 是每次巡检必填的一句话目的，写法见该字段描述。".to_owned(),
         schema: mcp_list_tool_schema(),
         enabled: true,
         concurrency_policy: axon_domain::ToolConcurrencyPolicy::ParallelSafe,
@@ -201,9 +201,14 @@ fn read_mcp_resource_tool_definition() -> ToolDefinition {
 
 fn mcp_list_tool_schema() -> ToolSchema {
     let mut schema = ToolSchema::object(
-        1,
-        std::iter::empty::<&str>(),
+        2,
+        [crate::TOOL_INTENT_FIELD],
         vec![
+            schema_field(
+                crate::TOOL_INTENT_FIELD,
+                ToolSchemaFieldKind::NonBlankString,
+                crate::TOOL_INTENT_FIELD_DESCRIPTION,
+            ),
             schema_field(
                 "server",
                 ToolSchemaFieldKind::NonBlankString,
@@ -221,8 +226,8 @@ fn mcp_list_tool_schema() -> ToolSchema {
         "then": { "required": ["server"] }
     }]);
     schema.input_schema["examples"] = json!([
-        {},
-        { "server": "github", "cursor": "next-page-token" }
+        { "intent": "盘点可用的 MCP 资源" },
+        { "intent": "翻到该 server 的下一页资源", "server": "github", "cursor": "next-page-token" }
     ]);
     schema
 }
@@ -234,3 +239,8 @@ fn schema_field(name: &str, kind: ToolSchemaFieldKind, description: &str) -> Too
 #[cfg(test)]
 #[path = "agent_tools_tests.rs"]
 mod tests;
+
+/// 折叠态规则表与 schema 的一致性单独成文件：它横跨全部内置工具。
+#[cfg(test)]
+#[path = "agent_tools_intent_tests.rs"]
+mod intent_tests;

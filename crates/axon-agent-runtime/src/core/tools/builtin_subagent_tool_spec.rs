@@ -27,7 +27,7 @@ pub const LIST_AGENTS_TOOL_NAME: &str = "list_agents";
 /// 快速模型委托工具名。
 pub const DELEGATE_TO_FAST_TOOL_NAME: &str = "delegate_to_fast";
 
-/// 子代理工具 schema 版本；`spawn_agent` 增加模型与档位覆盖参数后升到 4。
+/// 子代理工具 schema 版本；`delegate_to_fast` 与 `list_agents` 增加必填 `intent` 后升到 4。
 pub const SUBAGENT_TOOL_SCHEMA_VERSION: u32 = 4;
 
 /// 任务名字段。
@@ -179,17 +179,24 @@ const SUBAGENT_TOOL_COLLABORATION_TARGET_DESCRIPTION: &str = "目标子代理的
 /// `list_agents` 工具定义。
 #[must_use]
 pub fn list_agents_tool_definition() -> ToolDefinition {
-    tool_definition(
+    let mut definition = tool_definition(
         LIST_AGENTS_TOOL_ID,
         LIST_AGENTS_TOOL_NAME,
-        "需要查看当前有哪些子代理及其状态时，列出任务路径、状态和摘要。",
+        "需要查看当前有哪些子代理及其状态时，列出任务路径、状态和摘要。intent 是每次巡检必填的一句话目的，写法见该字段描述。",
         ToolConcurrencyPolicy::ParallelSafe,
-        Vec::new(),
-        vec![string_field(
-            SUBAGENT_TOOL_PATH_PREFIX_FIELD,
-            "可选任务路径前缀，语义与 send_message 的 target 相同（root 与自己都会被拒绝）；省略时列出当前可见的全部子代理。",
-        )],
-    )
+        vec![TOOL_INTENT_FIELD],
+        vec![
+            string_field(TOOL_INTENT_FIELD, TOOL_INTENT_FIELD_DESCRIPTION),
+            string_field(
+                SUBAGENT_TOOL_PATH_PREFIX_FIELD,
+                "可选任务路径前缀，语义与 send_message 的 target 相同（root 与自己都会被拒绝）；省略时列出当前可见的全部子代理。",
+            ),
+        ],
+    );
+    definition.schema.input_schema["examples"] = json!([{
+        TOOL_INTENT_FIELD: "查看并行委派的进度",
+    }]);
+    definition
 }
 
 /// `delegate_to_fast` 工具定义。

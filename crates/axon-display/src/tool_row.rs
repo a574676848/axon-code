@@ -301,6 +301,20 @@ mod tests {
             ),
             Some(ToolRowTarget::Text("拆解记忆增强目标".to_owned()))
         );
+        // 历史回查没有单一主参数：折叠态只认模型自述目的。
+        assert_eq!(
+            tool_row_target(
+                "builtin.history_list_windows",
+                r#"{"limit":5,"recent_first":true}"#,
+                Some("找回上次构建失败原因")
+            ),
+            Some(ToolRowTarget::Text("找回上次构建失败原因".to_owned()))
+        );
+        // 代理巡检的 path_prefix 是可选的，收起时给目的比给 `{}` 有用。
+        assert_eq!(
+            tool_row_target("builtin.list_agents", "{}", Some("查看并行委派的进度")),
+            Some(ToolRowTarget::Text("查看并行委派的进度".to_owned()))
+        );
         assert_eq!(
             tool_row_target("mcp__codebase-memory-mcp__get_architecture", "{}", None),
             Some(ToolRowTarget::Text(
@@ -328,6 +342,22 @@ mod tests {
                 "job_output",
                 r#"{"job_id":"1","yield_time_ms":0}"#,
                 "等待 1 结果",
+            ),
+            ("job_kill", r#"{"job_id":"7"}"#, "终止 7"),
+            (
+                "read_mcp_resource",
+                r#"{"server":"github","uri":"repo://owner/name"}"#,
+                "repo://owner/name",
+            ),
+            (
+                "notes_search_contents",
+                r#"{"query":"并行改动","max_files":10}"#,
+                "并行改动",
+            ),
+            (
+                "notes_list_files_by_prefix",
+                r#"{"prefix":"checkpoint"}"#,
+                "checkpoint",
             ),
             (
                 "new_context",

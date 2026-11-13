@@ -286,6 +286,12 @@ fn tool_target_uses_shared_rules_per_tool() {
             r#"{"job_id":"1","yield_time_ms":0}"#,
             "等待 1 结果",
         ),
+        ("job_kill", r#"{"job_id":"7"}"#, "终止 7"),
+        (
+            "history_list_windows",
+            r#"{"limit":5,"intent":"找回上次构建失败原因"}"#,
+            "找回上次构建失败原因",
+        ),
         (
             "new_context",
             r#"{"reason":"清理已完成，准备换窗"}"#,

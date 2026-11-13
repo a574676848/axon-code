@@ -556,6 +556,13 @@ fn builtin_schema_validation_matches_conditional_runtime_contracts() {
             "builtin.memory_write",
             json!({ "kind": "experience", "summary": "稳定结论", "evidence": "已验证" }),
         ),
+        ("builtin.list_agents", json!({})),
+        ("builtin.list_mcp_resources", json!({})),
+        ("builtin.history_list_windows", json!({ "limit": 5 })),
+        (
+            "builtin.history_search_contents",
+            json!({ "query": "error[E0" }),
+        ),
         (
             "builtin.delegate_to_fast",
             json!({ "task": "审计 docs 与 src 的展示契约" }),
@@ -619,7 +626,10 @@ fn builtin_schemas_reject_semantically_empty_strings_before_execution() {
             "builtin.delegate_to_fast",
             json!({ "task": " ", "intent": "空任务被拒绝" }),
         ),
-        ("builtin.list_agents", json!({ "path_prefix": " " })),
+        (
+            "builtin.list_agents",
+            json!({ "path_prefix": " ", "intent": "空巡检前缀被拒绝" }),
+        ),
     ];
 
     for (tool_name, input) in invalid_json_calls {
@@ -664,33 +674,4 @@ fn builtin_schemas_reject_semantically_empty_strings_before_execution() {
             )
             .is_err()
     );
-}
-
-/// 折叠态规则表（`axon-display`）与真实工具 schema 必须逐项一致：
-/// 名单里的工具都必须声明必填 `intent`，声明了 `intent` 的工具也必须在名单里。
-#[test]
-fn intent_tool_list_matches_declared_schemas() {
-    let mut registry = ToolRegistry::new();
-    AgentToolRegistryRuntime::register_builtin_tools(&mut registry).unwrap();
-    let declared = crate::tool_intent_tool_names();
-
-    for tool in registry.tools() {
-        let requires_intent = tool
-            .schema
-            .required_field_names()
-            .iter()
-            .any(|field| field == crate::TOOL_INTENT_FIELD);
-        assert_eq!(
-            requires_intent,
-            declared.iter().any(|name| name == &tool.name),
-            "{} 的 intent 契约必须与折叠态规则表一致",
-            tool.name
-        );
-    }
-    for name in declared {
-        assert!(
-            registry.tools().iter().any(|tool| &tool.name == name),
-            "折叠态规则表里的 {name} 必须是已注册的内置工具"
-        );
-    }
 }

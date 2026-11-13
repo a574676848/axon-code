@@ -297,7 +297,10 @@ fn subagent_control_persists_across_tool_batches_in_same_run() {
         Some(("审查当前改动", ModelProfileId(41), PermissionSnapshotId(42)))
     );
 
-    let list = provider_tool_call_with_args("builtin.list_agents", &serde_json::json!({}));
+    let list = provider_tool_call_with_args(
+        "builtin.list_agents",
+        &serde_json::json!({"intent": "巡检子代理树"}),
+    );
     let list_receipts = super::execute_supported_tool_calls(&request, &[list], None);
 
     assert_eq!(list_receipts.len(), 1);

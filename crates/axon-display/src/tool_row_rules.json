@@ -17,7 +17,13 @@
         "goal_cancel",
         "goal_start",
         "memory_search",
-        "memory_write"
+        "memory_write",
+        "list_agents",
+        "list_mcp_resources",
+        "history_list_windows",
+        "history_list_items",
+        "history_read_item",
+        "history_search_contents"
     ],
     "targets": {
         "memory_search": { "fields": ["query"] },
@@ -26,6 +32,10 @@
         "spawn_agent": { "fields": ["task"] },
         "send_message": { "fields": ["message"] },
         "job_output": { "fields": ["job_id"], "template": "等待 {value} 结果" },
+        "job_kill": { "fields": ["job_id"], "template": "终止 {value}" },
+        "read_mcp_resource": { "fields": ["uri"] },
+        "notes_search_contents": { "fields": ["query"] },
+        "notes_list_files_by_prefix": { "fields": ["prefix"] },
         "new_context": { "fields": ["reason"] },
         "get_context_remaining": { "silent": true }
     }

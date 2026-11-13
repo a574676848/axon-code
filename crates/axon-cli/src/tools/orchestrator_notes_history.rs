@@ -598,6 +598,9 @@ struct NotesSearchContentsInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HistoryListWindowsInput {
+    /// 模型自述的调用目的；schema 必填，但只用于界面折叠态展示，执行侧接受并忽略。
+    #[serde(default, rename = "intent")]
+    _intent: String,
     #[serde(default)]
     limit: Option<usize>,
     #[serde(default)]
@@ -607,6 +610,9 @@ struct HistoryListWindowsInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HistoryListItemsInput {
+    /// 模型自述的调用目的；schema 必填，但只用于界面折叠态展示，执行侧接受并忽略。
+    #[serde(default, rename = "intent")]
+    _intent: String,
     #[serde(default)]
     limit: Option<usize>,
     #[serde(default)]
@@ -626,6 +632,9 @@ struct HistoryListItemsInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HistoryReadItemInput {
+    /// 模型自述的调用目的；schema 必填，但只用于界面折叠态展示，执行侧接受并忽略。
+    #[serde(default, rename = "intent")]
+    _intent: String,
     window_id: String,
     item_id: String,
     #[serde(default)]
@@ -637,6 +646,9 @@ struct HistoryReadItemInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HistorySearchContentsInput {
+    /// 模型自述的调用目的；schema 必填，但只用于界面折叠态展示，执行侧接受并忽略。
+    #[serde(default, rename = "intent")]
+    _intent: String,
     query: String,
     #[serde(default)]
     limit: Option<usize>,

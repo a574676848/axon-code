@@ -168,7 +168,10 @@ fn subagent_control_isolated_between_run_requests() {
     );
     let _ = super::execute_supported_tool_calls(&first, &[spawn], None);
 
-    let list = provider_tool_call_with_args("builtin.list_agents", &serde_json::json!({}));
+    let list = provider_tool_call_with_args(
+        "builtin.list_agents",
+        &serde_json::json!({"intent": "巡检子代理树"}),
+    );
     let second_receipts = super::execute_supported_tool_calls(&second, &[list], None);
 
     assert_eq!(second_receipts.len(), 1);

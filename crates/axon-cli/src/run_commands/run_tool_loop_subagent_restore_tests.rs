@@ -245,7 +245,10 @@ fn new_run_request_reopens_file_graph_and_restores_child() {
         axon_agent_runtime::AgentStatus::NotFound
     );
 
-    let list = provider_tool_call_with_args("builtin.list_agents", &serde_json::json!({}));
+    let list = provider_tool_call_with_args(
+        "builtin.list_agents",
+        &serde_json::json!({"intent": "巡检子代理树"}),
+    );
     let receipts = super::execute_supported_tool_calls(&second, &[list], None);
 
     assert_eq!(receipts.len(), 1);
@@ -284,7 +287,10 @@ fn list_agents_restores_open_tree_visibility_after_control_reset() {
         max_depth: 1,
     });
 
-    let list = provider_tool_call_with_args("builtin.list_agents", &serde_json::json!({}));
+    let list = provider_tool_call_with_args(
+        "builtin.list_agents",
+        &serde_json::json!({"intent": "巡检子代理树"}),
+    );
     let receipts = super::execute_supported_tool_calls(&request, &[list], None);
 
     assert_eq!(receipts.len(), 1);
@@ -322,7 +328,10 @@ fn restore_uses_current_root_thread_id_instead_of_fixed_zero() {
     *request.agent_control.lock().unwrap() =
         AgentControlRuntime::new_with_root_thread_id(AgentControlConfig::default(), 41);
 
-    let list = provider_tool_call_with_args("builtin.list_agents", &serde_json::json!({}));
+    let list = provider_tool_call_with_args(
+        "builtin.list_agents",
+        &serde_json::json!({"intent": "巡检子代理树"}),
+    );
     let receipts = super::execute_supported_tool_calls(&request, &[list], None);
 
     assert_eq!(receipts[0].status, "completed");
@@ -361,7 +370,10 @@ fn restore_uses_current_agent_control_limits_instead_of_defaults() {
         max_depth: 1,
     });
 
-    let list = provider_tool_call_with_args("builtin.list_agents", &serde_json::json!({}));
+    let list = provider_tool_call_with_args(
+        "builtin.list_agents",
+        &serde_json::json!({"intent": "巡检子代理树"}),
+    );
     let receipts = super::execute_supported_tool_calls(&request, &[list], None);
 
     assert_eq!(receipts.len(), 1);

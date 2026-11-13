@@ -355,6 +355,18 @@ mod tests {
                 "尽快返回结论",
             ),
             (
+                "builtin.history_list_windows",
+                r#"{"limit":5,"intent":"找回上次构建失败原因"}"#,
+                "列出历史窗口",
+                "找回上次构建失败原因",
+            ),
+            (
+                "builtin.list_agents",
+                r#"{"intent":"查看并行委派的进度"}"#,
+                "列出子代理",
+                "查看并行委派的进度",
+            ),
+            (
                 "job_output",
                 r#"{"job_id":"1","yield_time_ms":0}"#,
                 "作业输出",

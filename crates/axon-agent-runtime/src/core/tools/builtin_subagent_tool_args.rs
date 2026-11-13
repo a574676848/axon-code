@@ -120,7 +120,14 @@ pub(super) struct ListAgentsArgs {
 
 /// 解析 `list_agents` 参数。
 pub(super) fn parse_list_agents_args(arguments: &serde_json::Value) -> AxonResult<ListAgentsArgs> {
-    validate_allowed_fields(arguments, &[SUBAGENT_TOOL_PATH_PREFIX_FIELD])?;
+    validate_allowed_fields(
+        arguments,
+        &[
+            SUBAGENT_TOOL_PATH_PREFIX_FIELD,
+            // 与 schema 必填的展示字段同名同义：只影响折叠态，不进入执行语义。
+            crate::TOOL_INTENT_FIELD,
+        ],
+    )?;
     Ok(ListAgentsArgs {
         path_prefix: optional_string(arguments, SUBAGENT_TOOL_PATH_PREFIX_FIELD),
     })

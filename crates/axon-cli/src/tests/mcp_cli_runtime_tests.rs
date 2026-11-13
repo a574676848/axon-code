@@ -27,7 +27,7 @@ fn runtime_tool_registry_exposes_mcp_tool_for_turn_time_use() {
     let model_tools = registry.model_tools();
 
     assert!(model_tools.iter().any(|tool| {
-        tool.qualified_name == "builtin.list_mcp_resources" && required_fields(tool).is_empty()
+        tool.qualified_name == "builtin.list_mcp_resources" && required_fields(tool) == ["intent"]
     }));
     assert!(model_tools.iter().any(|tool| {
         tool.qualified_name == "builtin.read_mcp_resource"

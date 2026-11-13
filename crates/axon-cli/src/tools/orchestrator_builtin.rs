@@ -475,3 +475,14 @@ where
 #[cfg(test)]
 #[path = "orchestrator_builtin_tests.rs"]
 mod tests;
+
+/// 两个测试模块共用的上下文构造与拒绝文案判定。
+#[cfg(test)]
+#[path = "orchestrator_test_support.rs"]
+mod test_support;
+
+/// `intent` 展示契约的执行侧接受性单独成文件：它跨越所有带 intent 的工具，
+/// 与 orchestrator_builtin_tests 的解析细节用例不属于同一职责。
+#[cfg(test)]
+#[path = "orchestrator_intent_tests.rs"]
+mod intent_tests;

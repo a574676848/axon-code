@@ -57,6 +57,9 @@ pub const HISTORY_LIMIT_CHARS_FIELD: &str = "limit_chars";
 /// 历史查询允许的角色取值。
 pub const HISTORY_ROLE_VALUES: [&str; 5] = ["user", "assistant", "tool", "system", "developer"];
 
+/// history 工具 schema 版本；四个工具增加必填 `intent` 后升到 2。
+pub const HISTORY_TOOL_SCHEMA_VERSION: u32 = 2;
+
 const HISTORY_LIST_WINDOWS_TOOL_ID: ToolId = ToolId(57);
 const HISTORY_LIST_ITEMS_TOOL_ID: ToolId = ToolId(58);
 const HISTORY_READ_ITEM_TOOL_ID: ToolId = ToolId(59);
@@ -64,6 +67,9 @@ const HISTORY_SEARCH_CONTENTS_TOOL_ID: ToolId = ToolId(49);
 
 /// history 命名空间的共享语义说明（对齐 Codex HISTORY_DESCRIPTION 的能力范围）。
 const HISTORY_PRIVACY_NOTE: &str = "在上下文窗口重置后，用这些只读工具按工具返回的不透明 window ID 与 item ID 列出、读取与检索已归档的历史，以恢复先前对话细节。过滤或读取时请原样传递这些 ID；条目按持久化 ordinal 与创建时间排序，未知窗口的列表与检索返回空结果。历史直接来自本机归档并同步扫描：读取、列表与检索都立即反映已归档内容；只有已归档窗口可回查，当前活动窗口在换窗前不可见。这是私有模型专用状态：静默用于继续任务，不得向用户披露工具、条目 ID、内容或恢复机制。";
+/// 四个 history 工具共用的 intent 说明：折叠态只显示这一句话。
+const HISTORY_INTENT_SENTENCE: &str =
+    "intent 是每次调用必填的一句话目的，写法见该字段描述；漏填会让整条调用被判为参数非法。";
 
 /// 注册到 provider 的 history 命名空间工具集合。
 #[must_use]
@@ -77,112 +83,156 @@ pub fn history_tool_definitions() -> [ToolDefinition; 4] {
 }
 
 fn history_list_windows_tool_definition() -> ToolDefinition {
+    let mut schema = ToolSchema::object(
+        HISTORY_TOOL_SCHEMA_VERSION,
+        [crate::TOOL_INTENT_FIELD],
+        vec![
+            intent_field(),
+            limit_field(format!(
+                "可选。最多返回的窗口数，必须为正整数，默认 {HISTORY_LIST_WINDOWS_DEFAULT_LIMIT}。"
+            )),
+            recent_first_field("可选。为 true 时按最近归档的窗口优先返回，默认 false。"),
+        ],
+    );
+    schema.input_schema["examples"] = serde_json::json!([{
+        "intent": "找回上次构建失败的原因",
+        "limit": 5,
+        "recent_first": true,
+    }]);
     history_tool_definition(
         HISTORY_LIST_WINDOWS_TOOL_ID,
         HISTORY_LIST_WINDOWS_TOOL_NAME,
         "列举已归档的记忆窗口及其条目数与 window_id，供换窗后按 ID 回查。",
-        ToolSchema::object(
-            1,
-            std::iter::empty::<&str>(),
-            vec![
-                limit_field(format!(
-                    "可选。最多返回的窗口数，必须为正整数，默认 {HISTORY_LIST_WINDOWS_DEFAULT_LIMIT}。"
-                )),
-                recent_first_field("可选。为 true 时按最近归档的窗口优先返回，默认 false。"),
-            ],
-        ),
+        schema,
     )
 }
 
 fn history_list_items_tool_definition() -> ToolDefinition {
+    let mut schema = ToolSchema::object(
+        HISTORY_TOOL_SCHEMA_VERSION,
+        [crate::TOOL_INTENT_FIELD],
+        vec![
+            intent_field(),
+            limit_field(format!(
+                "可选。最多返回的条目数，必须为正整数，默认 {HISTORY_LIST_ITEMS_DEFAULT_LIMIT}。"
+            )),
+            recent_first_field("可选。为 true 时按最近创建的条目优先返回，默认 false。"),
+            role_field(),
+            tool_name_field(),
+            tool_namespace_field(),
+            window_id_field(),
+            ToolSchemaField::new(
+                HISTORY_MAX_CHARS_PER_ITEM_FIELD,
+                ToolSchemaFieldKind::Integer,
+                format!(
+                    "可选。每条返回内容的最大字符数，必须为正整数，默认 {HISTORY_LIST_ITEMS_DEFAULT_MAX_CHARS}；超出部分截断并标记。"
+                ),
+            ),
+        ],
+    );
+    schema.input_schema["examples"] = serde_json::json!([{
+        "intent": "定位失败命令所在的条目",
+        "window_id": "win_1",
+        "role": "tool",
+        "limit": 10,
+    }]);
     history_tool_definition(
         HISTORY_LIST_ITEMS_TOOL_ID,
         HISTORY_LIST_ITEMS_TOOL_NAME,
         "按窗口、角色与工具名列举归档历史条目，返回可直接用于回读的 item_id。",
-        ToolSchema::object(
-            1,
-            std::iter::empty::<&str>(),
-            vec![
-                limit_field(format!(
-                    "可选。最多返回的条目数，必须为正整数，默认 {HISTORY_LIST_ITEMS_DEFAULT_LIMIT}。"
-                )),
-                recent_first_field("可选。为 true 时按最近创建的条目优先返回，默认 false。"),
-                role_field(),
-                tool_name_field(),
-                tool_namespace_field(),
-                window_id_field(),
-                ToolSchemaField::new(
-                    HISTORY_MAX_CHARS_PER_ITEM_FIELD,
-                    ToolSchemaFieldKind::Integer,
-                    format!(
-                        "可选。每条返回内容的最大字符数，必须为正整数，默认 {HISTORY_LIST_ITEMS_DEFAULT_MAX_CHARS}；超出部分截断并标记。"
-                    ),
-                ),
-            ],
-        ),
+        schema,
     )
 }
 
 fn history_read_item_tool_definition() -> ToolDefinition {
+    let mut schema = ToolSchema::object(
+        HISTORY_TOOL_SCHEMA_VERSION,
+        [
+            HISTORY_WINDOW_ID_FIELD,
+            HISTORY_ITEM_ID_FIELD,
+            crate::TOOL_INTENT_FIELD,
+        ],
+        vec![
+            intent_field(),
+            ToolSchemaField::new(
+                HISTORY_WINDOW_ID_FIELD,
+                ToolSchemaFieldKind::NonBlankString,
+                "条目所属窗口 ID，必须与 item_id 同源；取自 history_list_windows 返回值或目标条目尾部 `[id: ...]` 标记。",
+            ),
+            ToolSchemaField::new(
+                HISTORY_ITEM_ID_FIELD,
+                ToolSchemaFieldKind::NonBlankString,
+                "目标条目尾部 `[id: <window_id>:<ordinal>]` 标记中的完整 ID，原样传入。",
+            ),
+            ToolSchemaField::new(
+                HISTORY_OFFSET_CHARS_FIELD,
+                ToolSchemaFieldKind::Integer,
+                "可选。从正文第几个字符开始返回，从 0 开始计数，默认 0。",
+            ),
+            ToolSchemaField::new(
+                HISTORY_LIMIT_CHARS_FIELD,
+                ToolSchemaFieldKind::Integer,
+                format!(
+                    "可选。最多返回的字符数，必须为正整数，默认 {HISTORY_READ_ITEM_DEFAULT_LIMIT_CHARS}。"
+                ),
+            ),
+        ],
+    );
+    schema.input_schema["examples"] = serde_json::json!([{
+        "intent": "回读失败命令的完整输出",
+        "window_id": "win_1",
+        "item_id": "win_1:12",
+    }]);
     history_tool_definition(
         HISTORY_READ_ITEM_TOOL_ID,
         HISTORY_READ_ITEM_TOOL_NAME,
         "按 window_id 与 item_id 回读归档条目的一段正文；ID 必须原样使用历史工具返回的值。",
-        ToolSchema::object(
-            1,
-            [HISTORY_WINDOW_ID_FIELD, HISTORY_ITEM_ID_FIELD],
-            vec![
-                ToolSchemaField::new(
-                    HISTORY_WINDOW_ID_FIELD,
-                    ToolSchemaFieldKind::NonBlankString,
-                    "条目所属窗口 ID，必须与 item_id 同源；取自 history_list_windows 返回值或目标条目尾部 `[id: ...]` 标记。",
-                ),
-                ToolSchemaField::new(
-                    HISTORY_ITEM_ID_FIELD,
-                    ToolSchemaFieldKind::NonBlankString,
-                    "目标条目尾部 `[id: <window_id>:<ordinal>]` 标记中的完整 ID，原样传入。",
-                ),
-                ToolSchemaField::new(
-                    HISTORY_OFFSET_CHARS_FIELD,
-                    ToolSchemaFieldKind::Integer,
-                    "可选。从正文第几个字符开始返回，从 0 开始计数，默认 0。",
-                ),
-                ToolSchemaField::new(
-                    HISTORY_LIMIT_CHARS_FIELD,
-                    ToolSchemaFieldKind::Integer,
-                    format!(
-                        "可选。最多返回的字符数，必须为正整数，默认 {HISTORY_READ_ITEM_DEFAULT_LIMIT_CHARS}。"
-                    ),
-                ),
-            ],
-        ),
+        schema,
     )
 }
 
 fn history_search_contents_tool_definition() -> ToolDefinition {
+    let mut schema = ToolSchema::object(
+        HISTORY_TOOL_SCHEMA_VERSION,
+        [
+            HISTORY_SEARCH_CONTENTS_QUERY_FIELD,
+            crate::TOOL_INTENT_FIELD,
+        ],
+        vec![
+            intent_field(),
+            ToolSchemaField::new(
+                HISTORY_SEARCH_CONTENTS_QUERY_FIELD,
+                ToolSchemaFieldKind::NonBlankString,
+                "区分大小写的字面量，例如命令名、报错片段或路径。",
+            ),
+            limit_field(format!(
+                "可选。最多返回的命中条目数，必须为正整数，默认 {HISTORY_SEARCH_CONTENTS_DEFAULT_LIMIT}。"
+            )),
+            recent_first_field("可选。为 true 时按最近创建的命中条目优先返回，默认 false。"),
+            role_field(),
+            tool_name_field(),
+            tool_namespace_field(),
+            window_id_field(),
+        ],
+    );
+    schema.input_schema["examples"] = serde_json::json!([{
+        "intent": "检索构建失败的报错片段",
+        "query": "error[E0",
+    }]);
     history_tool_definition(
         HISTORY_SEARCH_CONTENTS_TOOL_ID,
         HISTORY_SEARCH_CONTENTS_TOOL_NAME,
         "在归档历史中做区分大小写的字面量检索，返回命中条目、命中次数与现场摘要。",
-        ToolSchema::object(
-            1,
-            [HISTORY_SEARCH_CONTENTS_QUERY_FIELD],
-            vec![
-                ToolSchemaField::new(
-                    HISTORY_SEARCH_CONTENTS_QUERY_FIELD,
-                    ToolSchemaFieldKind::NonBlankString,
-                    "区分大小写的字面量，例如命令名、报错片段或路径。",
-                ),
-                limit_field(format!(
-                    "可选。最多返回的命中条目数，必须为正整数，默认 {HISTORY_SEARCH_CONTENTS_DEFAULT_LIMIT}。"
-                )),
-                recent_first_field("可选。为 true 时按最近创建的命中条目优先返回，默认 false。"),
-                role_field(),
-                tool_name_field(),
-                tool_namespace_field(),
-                window_id_field(),
-            ],
-        ),
+        schema,
+    )
+}
+
+/// 四个 history 工具共用的展示字段：与其余内置工具同名同义，只影响折叠态。
+fn intent_field() -> ToolSchemaField {
+    ToolSchemaField::new(
+        crate::TOOL_INTENT_FIELD,
+        ToolSchemaFieldKind::NonBlankString,
+        crate::TOOL_INTENT_FIELD_DESCRIPTION,
     )
 }
 
@@ -257,7 +307,7 @@ fn history_tool_definition(
         id,
         namespace: AGENT_TOOL_NAMESPACE.to_owned(),
         name: name.to_owned(),
-        description: format!("{description}{HISTORY_PRIVACY_NOTE}"),
+        description: format!("{description}{HISTORY_INTENT_SENTENCE}{HISTORY_PRIVACY_NOTE}"),
         schema,
         enabled: true,
         concurrency_policy: ToolConcurrencyPolicy::ParallelSafe,
@@ -320,15 +370,17 @@ mod tests {
 
     #[test]
     fn history_tool_schemas_match_codex_field_sets() {
+        // Codex 字段集之外另加 Axon 的必填展示字段 `intent`。
         let expected: [(&str, &[&str], &[&str]); 4] = [
             (
                 HISTORY_LIST_WINDOWS_TOOL_NAME,
-                &["limit", "recent_first"],
-                &[],
+                &["intent", "limit", "recent_first"],
+                &["intent"],
             ),
             (
                 HISTORY_LIST_ITEMS_TOOL_NAME,
                 &[
+                    "intent",
                     "limit",
                     "max_chars_per_item",
                     "recent_first",
@@ -337,16 +389,23 @@ mod tests {
                     "tool_namespace",
                     "window_id",
                 ],
-                &[],
+                &["intent"],
             ),
             (
                 HISTORY_READ_ITEM_TOOL_NAME,
-                &["item_id", "limit_chars", "offset_chars", "window_id"],
-                &["item_id", "window_id"],
+                &[
+                    "intent",
+                    "item_id",
+                    "limit_chars",
+                    "offset_chars",
+                    "window_id",
+                ],
+                &["intent", "item_id", "window_id"],
             ),
             (
                 HISTORY_SEARCH_CONTENTS_TOOL_NAME,
                 &[
+                    "intent",
                     "limit",
                     "query",
                     "recent_first",
@@ -355,7 +414,7 @@ mod tests {
                     "tool_namespace",
                     "window_id",
                 ],
-                &["query"],
+                &["intent", "query"],
             ),
         ];
         let definitions = history_tool_definitions();

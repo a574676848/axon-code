@@ -6,7 +6,7 @@
 
 ```text
 ┌──────────────────────────────────────────────────────────────────┐
-│ HeaderBar: 模型 · 上下文压力 · 首字/速率 · 计划/LSP 状态         │
+│ HeaderBar: 模型 · 思考 · 耗时/累计/命中率 · 上下文 · 首字/速率  │
 ├──────────────────────────────────────────────────────────────────┤
 │ RenderViewport (独立滚动视口):                                   │
 │   • 用户消息气泡                                                 │
@@ -21,11 +21,13 @@
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-- `HeaderBar`：模型、上下文、审批与运行状态。
+- `HeaderBar`：模型、思考强度、会话累计用量、上下文、审批与运行状态。
 - `RenderViewport`：用户消息、Agent 回复、工具、Diff、Reasoning、错误和用量。
 - `ComposerDock`：输入、附件、候选、审批与运行中控制。
 
 Header 在上下文信息之后显示会话级 generation 性能指标，随后按需显示计划与 LSP 指标。例如：`首字: 8s · 速率: 40 tok/s · 计划: 1/3 · LSP: 2`。段落因宽度不足换行时仍保持声明顺序；例如速率过长换行后，计划必须跟随换行，不能回填第一行。
+
+- `耗时` / `累计` / `命中率`：三段连在一起，回答「这条会话一共花了多少」。`耗时` 是各轮墙钟耗时之和（已收口的轮次在会话摘要里结算，在跑的那一轮按实时补上，空闲时不重复叠加）；`累计` 是各轮输入、缓存读、缓存写、输出与推理之和，排在上下文段之前，会话恢复与历史回放时随已回放的轮次一并入账；`命中率` 是缓存读取占完整输入的**会话累计**比例，与累计同一份折叠，不是单轮命中率。耗时为零、或一个 token 都还没观察到时，对应的段不显示，不渲染 `0`。上下文段里的 `缓存 <tokens>` 与 `写入 <tokens>` 仍是最近一次请求的构成，不与三段会话读数混算。
 
 Reasoning 流按 provider 的独立思考 block 投射为独立 transcript part；收到 block 结束事件后立即折叠，后续 block 会重新展开。
 
@@ -110,7 +112,7 @@ Provider 重试会撤销当前 generation 尚未提交的 part，终态重放同
 
 ## 工具行的折叠态与展开态
 
-折叠态只给一项事实。规则表是 `axon-display` 的 `tool_row_rules.json`，桌面端、TUI 与飞书工具行共用同一份：模型自述的 `intent` 优先（声明该字段的工具为 `builtin.shell_command`、`builtin.write_stdin`、`builtin.update_plan`、`builtin.glob`、`builtin.search`、`builtin.notes_write_file`、`builtin.notes_append_to_file`、`builtin.send_message`、`builtin.delegate_to_fast`、`builtin.memory_search`、`builtin.memory_write` 与六个 `builtin.goal_*`，模型调用时必须给出）；没有 `intent` 时按工具取专用主参数（记忆检索的 `query`、技能的 `skill_name`、子代理的 `task`、`send_message` 的 `message`、`job_output` 的「等待 `<job_id>` 结果」、新建上下文的 `reason`）；MCP 工具按服务名与工具名展示。
+折叠态只给一项事实。规则表是 `axon-display` 的 `tool_row_rules.json`，桌面端、TUI 与飞书工具行共用同一份：模型自述的 `intent` 优先（声明该字段的工具为 `builtin.shell_command`、`builtin.write_stdin`、`builtin.update_plan`、`builtin.glob`、`builtin.search`、`builtin.notes_write_file`、`builtin.notes_append_to_file`、`builtin.send_message`、`builtin.delegate_to_fast`、`builtin.memory_search`、`builtin.memory_write`、`builtin.list_agents`、`builtin.list_mcp_resources`、四个 `builtin.history_*` 与六个 `builtin.goal_*`，模型调用时必须给出）；没有 `intent` 时按工具取专用主参数（记忆检索的 `query`、技能的 `skill_name`、子代理的 `task`、`send_message` 的 `message`、`job_output` 的「等待 `<job_id>` 结果」、`job_kill` 的「终止 `<job_id>`」、`read_mcp_resource` 的 `uri`、便签检索的 `query` 与前缀列举的 `prefix`、新建上下文的 `reason`）；MCP 工具按服务名与工具名展示。
 
 规则命中时标题行已经承载主事实，折叠态不再重复参数行：命令原文、原始参数与有界输出只在展开态出现。`get_context_remaining` 的规则是静默，收起时只留工具名。没有专用规则的工具保持既有参数投影（命令原文或主参数值），不猜内容。
 
