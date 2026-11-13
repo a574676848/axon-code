@@ -25,6 +25,8 @@ const DOCUMENT_BODY_LIMIT: usize = 1024 * 1024;
 const ATTACHMENT_BODY_LIMIT: usize = 64 * 1024 * 1024 + 8 * 1024;
 /// 签发 Key 的请求体上限。
 const KEY_BODY_LIMIT: usize = 4 * 1024;
+/// 通知送达回执的请求体上限：只带通知标识与目标，几 KiB 足够。
+const NOTIFICATION_ACK_BODY_LIMIT: usize = 4 * 1024;
 
 /// 一条路由的正文上限登记。
 struct RouteLimit {
@@ -72,6 +74,8 @@ const ROUTE_LIMITS: &[RouteLimit] = &[
     route("POST", "/api/v1/keys", KEY_BODY_LIMIT),
     route("GET", "/api/v1/keys", NO_BODY_LIMIT),
     route("DELETE", "/api/v1/keys/{id}", NO_BODY_LIMIT),
+    route("GET", "/api/v1/notifications", NO_BODY_LIMIT),
+    route("POST", "/api/v1/notifications/ack", NOTIFICATION_ACK_BODY_LIMIT),
 ];
 
 /// 按 (方法, 路径) 取该路由的请求体上限；未登记时回落 [`FALLBACK_BODY_LIMIT`]。

@@ -9,6 +9,8 @@ pub mod automation;
 pub mod catalog;
 /// 剪贴板：原生通道读写，不经网页剪贴板权限。
 pub mod clipboard;
+/// 后台完成通知收件箱：把 Goal 与定时任务的完成结论变成系统通知。
+pub mod completion_inbox;
 /// 配置类能力经网关的共用客户端：请求组装、回执解析与降级判定。
 pub mod config_gateway;
 /// 连接档案：端点解析、状态分层、凭据存储与探活。
@@ -242,6 +244,8 @@ pub fn run() {
             // 兜底呈现：前端首帧就绪信号与 350ms 超时，两条路只会显示一次。
             window_state::install_show_gate(app.handle());
             desktop_shell::install_global_shortcut(app.handle());
+            // 后台任务的完成结论与当前会话无关：起一条常驻收件箱，切走会话也提醒。
+            completion_inbox::spawn(app.handle().clone());
             Ok(())
         })
         .manage(state)

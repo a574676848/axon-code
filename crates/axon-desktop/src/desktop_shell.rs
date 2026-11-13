@@ -554,7 +554,7 @@ pub(super) fn question_title(status: &str) -> &'static str {
 }
 
 /// 压平并截断通知正文。
-fn compact_body(text: &str) -> String {
+pub(crate) fn compact_body(text: &str) -> String {
     // 折叠连续空白：多行正文直接贴进通知会带出一串空格，读起来是断裂的。
     let mut flattened = String::with_capacity(text.len());
     let mut in_space = false;
