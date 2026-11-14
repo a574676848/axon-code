@@ -28,13 +28,7 @@ fn session_notes_renders_valid_canonical_checkpoint_from_notes_files() {
         GoalAnchor::new("执行压缩机制目标态重构", vec!["严禁使用 allow".to_string()]),
         3000,
     );
-    NotesStore::write_file(
-        &temp_dir,
-        "checkpoint.md",
-        "已验证: 分片存储落地\n未决: 完成 cron 清理 notes 升级\n下一步: 执行全仓 cargo test",
-        3001,
-    )
-    .expect("write notes file");
+    // 只写事实便签、不写交接便签 checkpoint.md：此时运行时按目标锚点与便签投影。
     NotesStore::write_file(&temp_dir, "files.md", "crates/axon-agent-runtime", 3002)
         .expect("write notes file");
 
@@ -44,9 +38,8 @@ fn session_notes_renders_valid_canonical_checkpoint_from_notes_files() {
     assert!(canonical_summary.contains("P0:"));
     assert!(canonical_summary.contains("TASK:\n执行压缩机制目标态重构"));
     assert!(canonical_summary.contains("CONSTRAINTS:\n- 严禁使用 allow"));
-    assert!(canonical_summary.contains("便签 checkpoint.md"));
-    assert!(canonical_summary.contains("已验证: 分片存储落地"));
-    assert!(canonical_summary.contains("未决: 完成 cron 清理 notes 升级"));
+    assert!(canonical_summary.contains("便签 files.md"));
+    assert!(canonical_summary.contains("crates/axon-agent-runtime"));
     assert!(canonical_summary.contains("VERIFIED:"));
     assert!(canonical_summary.contains("OPEN:"));
     assert!(canonical_summary.contains("builtin.notes_read_file"));
@@ -156,8 +149,8 @@ fn notes_store_rejects_path_traversal_and_local_paths() {
         assert!(normalize_note_path(path).is_err(), "路径必须被拒绝：{path}");
     }
     assert_eq!(
-        normalize_note_path(" handoff/open-issues.md ").expect("合法路径应通过"),
-        "handoff/open-issues.md"
+        normalize_note_path(" archive/old-notes.md ").expect("合法路径应通过"),
+        "archive/old-notes.md"
     );
     assert_eq!(
         normalize_note_path("~literal.md").expect("`~` 按字面量处理"),
@@ -235,44 +228,44 @@ fn notes_store_rejects_blank_queries_and_invalid_result_limits() {
     assert!(format!("{error:?}").contains("结果数量"));
 }
 
-/// 模型提交的 canonical 摘要必须原样采用：运行时不改写、不重排、不补段。
+/// 写入的便签必须原样采用：运行时不改写、不重排、不补段。
 #[test]
-fn session_notes_reuses_model_submitted_summary_verbatim() {
+fn session_notes_reuses_model_checkpoint_note_verbatim() {
     let directory = axon_test_support::test_temp_dir();
     let session_dir = directory.path();
     let notes = SessionNotes::new(
         GoalAnchor::new(
-            "目标锚点不得覆盖模型提交",
-            vec!["约束项不得覆盖模型提交".to_string()],
+            "目标锚点不得覆盖模型便签",
+            vec!["约束项不得覆盖模型便签".to_string()],
         ),
         4_000,
     );
     let submitted = "P0:\nTASK:\n模型自己写的任务\n\nCONSTRAINTS:\n- 模型自己写的约束\n\nVERIFIED:\n- 已验证事实\n\nOPEN:\n- 未决问题\n\nTOOLS:\n- none";
     NotesStore::write_file(
         session_dir,
-        SESSION_NOTES_SUBMITTED_SUMMARY_PATH,
+        SESSION_NOTES_CHECKPOINT_NOTE_PATH,
         submitted,
         4_001,
     )
-    .expect("写入模型提交摘要");
+    .expect("写入模型便签");
 
     let summary = notes
         .try_render_canonical_summary(session_dir, &[])
-        .expect("模型提交摘要应被采用");
+        .expect("模型便签应被采用");
 
     assert_eq!(
         summary, submitted,
-        "提交摘要必须逐字节原样采用，不得被运行时改写"
+        "便签必须逐字节原样采用，不得被运行时改写"
     );
     assert!(
-        !summary.contains("目标锚点不得覆盖模型提交"),
-        "提交摘要优先级必须高于目标锚点投影"
+        !summary.contains("目标锚点不得覆盖模型便签"),
+        "便签优先级必须高于目标锚点投影"
     );
 }
 
-/// 提交通道只看路径：内容怎么写都原样采用，不被改写成模板。
+/// 便签只看路径：内容怎么写都原样采用，不被改写成模板。
 #[test]
-fn session_notes_accepts_free_form_submitted_summary() {
+fn session_notes_accepts_free_form_checkpoint_note() {
     let directory = axon_test_support::test_temp_dir();
     let session_dir = directory.path();
     let notes = SessionNotes::new(
@@ -283,7 +276,7 @@ fn session_notes_accepts_free_form_submitted_summary() {
     let submitted = format!("# Goal Checkpoint\n{long_tail}");
     NotesStore::write_file(
         session_dir,
-        SESSION_NOTES_SUBMITTED_SUMMARY_PATH,
+        SESSION_NOTES_CHECKPOINT_NOTE_PATH,
         &submitted,
         5_001,
     )
@@ -293,10 +286,7 @@ fn session_notes_accepts_free_form_submitted_summary() {
         .try_render_canonical_summary(session_dir, &[])
         .expect("自由格式摘要必须被采用");
 
-    assert_eq!(
-        summary, submitted,
-        "提交摘要必须逐字节原样采用，不得改写成模板"
-    );
+    assert_eq!(summary, submitted, "便签必须逐字节原样采用，不得改写成模板");
     assert!(
         !summary.contains("投影目标"),
         "模型提交优先于目标锚点投影：{summary}"
@@ -305,7 +295,7 @@ fn session_notes_accepts_free_form_submitted_summary() {
 
 /// 超预算的提交摘要走投影而不是拒绝换窗：换窗是会话自救的唯一动作。
 #[test]
-fn over_budget_submitted_summary_falls_back_to_projection() {
+fn over_budget_checkpoint_note_falls_back_to_projection() {
     let directory = axon_test_support::test_temp_dir();
     let session_dir = directory.path();
     let notes = SessionNotes::new(GoalAnchor::new("预算目标", Vec::new()), 6_000);
@@ -314,7 +304,7 @@ fn over_budget_submitted_summary_falls_back_to_projection() {
     let oversized = "x".repeat(over_budget_bytes);
     NotesStore::write_file(
         session_dir,
-        SESSION_NOTES_SUBMITTED_SUMMARY_PATH,
+        SESSION_NOTES_CHECKPOINT_NOTE_PATH,
         &oversized,
         6_001,
     )
@@ -365,13 +355,14 @@ fn session_notes_fails_closed_when_projection_exceeds_budget() {
     );
 }
 
-/// 长便签只带路径与行数：自由格式工作便签可以放心写长，不必为换窗改写格式。
+/// 超过预算的便签走投影并只留路径：正文再长也不会整段顶进新窗口。
 #[test]
 fn session_notes_references_long_notes_instead_of_inlining_body() {
     let directory = axon_test_support::test_temp_dir();
     let session_dir = directory.path();
     let notes = SessionNotes::new(GoalAnchor::new("长便签目标", Vec::new()), 7_000);
-    let long_body = "长便签正文".repeat(1_000);
+    // 24_000 字符（约 72 KiB）超过 32 KiB 字节硬上限，必然回落投影。
+    let long_body = "长便签正文".repeat(4_000);
     NotesStore::write_file(session_dir, "checkpoint.md", &long_body, 7_001).expect("写入长便签");
 
     let summary = notes
@@ -380,38 +371,15 @@ fn session_notes_references_long_notes_instead_of_inlining_body() {
 
     assert!(
         summary.contains("便签 checkpoint.md"),
-        "长便签必须保留可定位的路径：{summary}"
+        "长便签必须保留可定位的路径"
     );
     assert!(
         summary.contains("builtin.notes_read_file"),
-        "长便签必须给出回读指引：{summary}"
+        "长便签必须给出回读指引"
     );
     assert!(
-        !summary.contains(&long_body),
+        !summary.contains(&"长便签正文".repeat(20)),
         "超过内联上限的便签正文不得整段带入摘要"
-    );
-}
-
-/// 自由格式工作便签不再占用提交通道：checkpoint.md 里写六段也不会被原样采用。
-#[test]
-fn session_notes_does_not_treat_working_note_as_submitted_summary() {
-    let directory = axon_test_support::test_temp_dir();
-    let session_dir = directory.path();
-    let notes = SessionNotes::new(GoalAnchor::new("工作便签目标", Vec::new()), 8_000);
-    let six_section = "P0:\nTASK:\n工作便签里的六段\n\nCONSTRAINTS:\n- 不是提交\n\nVERIFIED:\n- 不是提交\n\nOPEN:\n- 不是提交\n\nTOOLS:\n- none";
-    NotesStore::write_file(session_dir, "checkpoint.md", six_section, 8_001).expect("写入工作便签");
-
-    let summary = notes
-        .try_render_canonical_summary(session_dir, &[])
-        .expect("工作便签应走投影");
-
-    assert!(
-        summary.starts_with("P0:\nTASK:\n工作便签目标"),
-        "工作便签不得覆盖投影，摘要仍以目标锚点为准：{summary}"
-    );
-    assert!(
-        summary.contains("便签 checkpoint.md"),
-        "工作便签正文应以便签条目形式出现：{summary}"
     );
 }
 
@@ -513,51 +481,9 @@ fn notes_store_fails_closed_when_note_count_exceeds_limit() {
     );
 }
 
-/// 落后两窗以上的提交摘要必须被丢弃：旧文件描述的是更早的状态，改用投影而不是拒绝换窗。
-///
-/// 换窗是唯一能修好「来源缺失」的动作，所以这里既要不带旧事实，也不能失败。
+/// 相邻窗口写入的便签仍是有效交接：换窗只按预算取舍，不再做过期判定。
 #[test]
-fn stale_submitted_summary_is_dropped_in_favor_of_projection() {
-    let directory = axon_test_support::test_temp_dir();
-    let session_dir = directory.path();
-    let mut notes = SessionNotes::new(GoalAnchor::new("过期摘要目标", Vec::new()), 9_000);
-    notes.window_number = 3;
-    notes.checkpoint_window_number = Some(1);
-    NotesStore::write_file(
-        session_dir,
-        SESSION_NOTES_SUBMITTED_SUMMARY_PATH,
-        "P0:\nTASK:\n两窗前的旧任务\n\nCONSTRAINTS:\n- 旧约束\n\nVERIFIED:\n- 旧事实\n\nOPEN:\n- 旧未决\n\nTOOLS:\n- none",
-        9_001,
-    )
-    .expect("写入过期提交摘要");
-
-    assert!(notes.checkpoint_is_stale(), "落后两窗必须判过期");
-    let (summary, source) = notes
-        .render_canonical_summary_with_source(session_dir, &[])
-        .expect("过期摘要不得阻断换窗");
-
-    assert_eq!(
-        source,
-        CheckpointSource::Projection,
-        "过期摘要不得再标成模型来源"
-    );
-    assert!(
-        !summary.contains("两窗前的旧任务"),
-        "过期摘要内容不得带进新窗口：{summary}"
-    );
-    assert!(
-        !summary.contains("handoff/summary.md"),
-        "提交通道不得作为事实便签出现在投影里：{summary}"
-    );
-    assert!(
-        summary.contains("过期摘要目标"),
-        "投影必须落在当前目标锚点上：{summary}"
-    );
-}
-
-/// 相邻窗口的提交摘要仍是有效交接：过期判定不得误伤正常换窗。
-#[test]
-fn submitted_summary_from_previous_window_is_still_reused() {
+fn checkpoint_note_from_previous_window_is_still_reused() {
     let directory = axon_test_support::test_temp_dir();
     let session_dir = directory.path();
     let mut notes = SessionNotes::new(GoalAnchor::new("正常交接目标", Vec::new()), 9_100);
@@ -566,13 +492,12 @@ fn submitted_summary_from_previous_window_is_still_reused() {
     let submitted = "P0:\nTASK:\n上一窗提交的任务\n\nCONSTRAINTS:\n- 约束\n\nVERIFIED:\n- 事实\n\nOPEN:\n- 无\n\nTOOLS:\n- none";
     NotesStore::write_file(
         session_dir,
-        SESSION_NOTES_SUBMITTED_SUMMARY_PATH,
+        SESSION_NOTES_CHECKPOINT_NOTE_PATH,
         submitted,
         9_101,
     )
     .expect("写入提交摘要");
 
-    assert!(!notes.checkpoint_is_stale(), "相邻窗口不得判过期");
     let (summary, source) = notes
         .render_canonical_summary_with_source(session_dir, &[])
         .expect("正常交接必须成功");

@@ -157,9 +157,9 @@ Windows 实测基线（`--release`，1k/10k backlog 与 8 线程并发入口）�
 
 ### 事件正文外置与归档
 
-`session_events.payload_json` 只承载定长元数据：正文超过 4 KiB 时写到 `data/archive/session-events/<session_id>/<sequence>.json`，表里保留 `payload_ref`，回放时按引用取回。这样大段 tool 结果、diff 与终端输出不再撑大主库与 WAL。
+`session_events.payload_json` 只承载定长元数据：流式帧（`wire_event`）一律外置，其余事件正文超过 4 KiB 才外置。外置正文按会话追加写入 `data/archive/session-events/<session_id>/<分片>.jsonl`（每 2000 个序号一片），表里保留 `payload_ref`，形如 `<session_id>/<分片>.jsonl@<偏移>+<长度>`，回放时按偏移取回。单条 desktop 车道一天数十万帧，分片让文件数与「会话数 × 保留窗口内分片数」成正比，不会退化成百万小文件。
 
-清理走「先归档再删行」：过期事件按 lane 追加写入 `data/archive/session-events/<session_id>.jsonl.zst`（zstd 多帧串联，可分批中断），归档成功后才删除对应行。归档目录与事件正文外置目录同一处，备份与清理只需看一个路径。
+清理走「先归档再删行」：过期事件按 lane 追加写入 `data/archive/session-events/<session_id>.jsonl.zst`（zstd 多帧串联，可分批中断），归档成功后才删除对应行。分片被同一会话的多条事件共用，单条行过期不删整片，由会话族清理统一回收；该目录整体排除在 3 天文件保留期之外。归档目录与事件正文外置目录同一处，备份与清理只需看一个路径。
 
 磁盘水位淘汰在时间维度清理之后执行，常量先写死：硬上限 4 GiB、高水位 3.2 GiB、低水位 2 GiB；只淘汰一小时以前且不属于运行中 lane 的事件，同样先归档再删除，随后由 `incremental_vacuum` 归还空闲页。上限按实测高负载口径留出余量（desktop 车道单日约 400 MiB，7 天约 2.8 GiB），避免水位淘汰先于 7 天保留期触发，把保留窗口悄悄缩短。
 

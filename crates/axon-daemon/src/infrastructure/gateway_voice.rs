@@ -534,6 +534,7 @@ fn lane_id_for(request: &StartRequest) -> String {
 fn reject_reason(error: &GatewayKernelError) -> &'static str {
     match error {
         GatewayKernelError::Ingress(_) => "事件被网关拒绝",
+        GatewayKernelError::NotFound(_) => "目标不存在",
         GatewayKernelError::Preparation(_) => "事件预处理失败",
         GatewayKernelError::InvalidLifecycle(_) => "网关正在停止",
         GatewayKernelError::ConnectionLimitReached(_) => "网关繁忙",

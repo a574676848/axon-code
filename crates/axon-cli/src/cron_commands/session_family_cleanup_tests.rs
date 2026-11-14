@@ -15,22 +15,9 @@ const STALE_CHILD: &str = "stale-root::child";
 const RETAINED_SESSION: &str = "retained-session";
 const RETAINED_BYTES: &[u8] = b"retained-session-bytes\n";
 const RETAINED_UPDATED_AT_MS: i64 = 4_102_444_800_000;
-const REAL_DEVICE_ROOT_ENV: &str = "AXON_WP6_C2_FIXTURE_ROOT";
-const ISOLATION_CONFIG: &str = r#"[agent]
-default_model = "local-model"
-fast_model = "local-model"
 
-[[models]]
-id = "local-model"
-name = "local-model"
-provider = "local"
-
-[[providers]]
-api_key_env = "AXON_WP6_C2_KEY"
-base_url = "http://127.0.0.1:39123/v1"
-name = "local"
-protocol = "openai-chatcompletions"
-"#;
+#[path = "session_family_cleanup_source_tests.rs"]
+mod source_installed;
 
 #[test]
 fn stale_family_is_removed_from_all_associated_stores() {
@@ -353,83 +340,6 @@ fn stale_family_cleanup_reports_percentiles() {
     assert!(p99 < P99_BUDGET_MS, "p99={p99}ms 超出 {P99_BUDGET_MS}ms");
 }
 
-#[test]
-#[ignore = "真机隔离 fixture：需显式设置 AXON_WP6_C2_FIXTURE_ROOT"]
-fn seed_source_installed_cleanup_fixture() {
-    let root = real_device_root();
-    std::fs::create_dir_all(&root).expect("隔离根应可创建");
-    std::fs::write(root.join("config.toml"), ISOLATION_CONFIG).expect("隔离配置应可写入");
-    let rollout_path = rollout_path(&root);
-    create_rollout(&rollout_path, true);
-    create_runtime_family(&root, "idle", false);
-    create_governance(&root);
-    create_thread(&root, STALE_ROOT, b"stale-thread\n");
-    create_thread(&root, RETAINED_SESSION, RETAINED_BYTES);
-    create_context(&root, STALE_ROOT);
-    create_retained_context(&root);
-    create_feishu_records(&root);
-}
-
-#[test]
-#[ignore = "真机隔离 dry-run 校验：需先运行安装版 dry-run"]
-fn verify_source_installed_dry_run_fixture() {
-    let root = real_device_root();
-    let rollout_path = rollout_path(&root);
-    assert!(rollout_exists(&rollout_path, STALE_ROOT));
-    assert!(rollout_exists(&rollout_path, STALE_CHILD));
-    assert!(runtime_exists(&root, STALE_ROOT));
-    assert!(runtime_exists(&root, STALE_CHILD));
-    assert!(thread_path(&root, STALE_ROOT).exists());
-    assert!(root.join("sessions").join(STALE_ROOT).exists());
-    assert_eq!(
-        RemoteStateStoreRuntime::count_keys(
-            axon_remote_runtime::RemoteNotificationOutboxRuntime::resolve_store_path(
-                axon_remote_feishu::remote_feishu_runtime_root(&root),
-            ),
-            &["dispatch-stale".to_owned()],
-        )
-        .expect("Feishu outbox 应可统计"),
-        1
-    );
-}
-
-#[test]
-#[ignore = "真机隔离校验：需先运行安装版 cleanup"]
-fn verify_source_installed_cleanup_fixture() {
-    let root = real_device_root();
-    let rollout_path = rollout_path(&root);
-    assert!(!rollout_exists(&rollout_path, STALE_ROOT));
-    assert!(!rollout_exists(&rollout_path, STALE_CHILD));
-    assert!(rollout_exists(&rollout_path, RETAINED_SESSION));
-    assert!(!runtime_exists(&root, STALE_ROOT));
-    assert!(!runtime_exists(&root, STALE_CHILD));
-    assert!(!thread_path(&root, STALE_ROOT).exists());
-    assert!(!root.join("sessions").join(STALE_ROOT).exists());
-    assert_eq!(
-        std::fs::read(thread_path(&root, RETAINED_SESSION)).expect("retained JSONL 应可读"),
-        RETAINED_BYTES
-    );
-    assert_eq!(
-        std::fs::read(
-            root.join("sessions")
-                .join(RETAINED_SESSION)
-                .join("retained.txt")
-        )
-        .expect("retained context 应可读"),
-        RETAINED_BYTES
-    );
-    assert_eq!(
-        RemoteStateStoreRuntime::count_keys(
-            axon_remote_runtime::RemoteNotificationOutboxRuntime::resolve_store_path(
-                axon_remote_feishu::remote_feishu_runtime_root(&root),
-            ),
-            &["dispatch-stale".to_owned()],
-        )
-        .expect("Feishu outbox 应可统计"),
-        0
-    );
-}
-
 fn create_rollout(path: &Path, with_retained: bool) {
     let store = RolloutSqliteStore::open(path).expect("rollout 应可初始化");
     drop(store);
@@ -523,7 +433,7 @@ fn create_context(root: &Path, session_id: &str) {
     let session = root.join("sessions").join(session_id);
     let notes = session.join(axon_agent_runtime::NOTES_DIR_NAME);
     let archive = session.join(axon_agent_runtime::ARCHIVED_HISTORY_DIR_NAME);
-    std::fs::create_dir_all(notes.join("handoff")).expect("notes 目录应可创建");
+    std::fs::create_dir_all(notes.join("archive")).expect("notes 目录应可创建");
     std::fs::create_dir_all(&archive).expect("archive 目录应可创建");
     std::fs::write(
         session.join(axon_agent_runtime::SESSION_NOTES_FILE_NAME),
@@ -531,7 +441,11 @@ fn create_context(root: &Path, session_id: &str) {
     )
     .expect("notes 状态应可写入");
     std::fs::write(notes.join("checkpoint.md"), b"checkpoint").expect("notes 应可写入");
-    std::fs::write(notes.join("handoff").join("state.md"), b"handoff").expect("handoff 应可写入");
+    std::fs::write(
+        notes.join("archive").join("old-notes.md"),
+        b"archived notes",
+    )
+    .expect("归档便签应可写入");
     std::fs::write(
         axon_jsonl::ShardedJsonlStore::physical_shard_path(archive.join("window.jsonl"), 0),
         b"{}\n",
@@ -691,10 +605,4 @@ fn percentile(samples: &[u128], percentile: usize) -> u128 {
         .div_ceil(100)
         .saturating_sub(1);
     samples[index.min(samples.len().saturating_sub(1))]
-}
-
-fn real_device_root() -> PathBuf {
-    std::env::var_os(REAL_DEVICE_ROOT_ENV)
-        .map(PathBuf::from)
-        .expect("必须设置 AXON_WP6_C2_FIXTURE_ROOT")
 }

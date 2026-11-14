@@ -231,14 +231,6 @@ fn seed_interaction(
     let host = store
         .claim_host(&host_id, 1, None, 10, 10_000)
         .expect("注册 Host");
-    let session_id = DaemonSessionId::new("gateway-terminal-session").expect("Session ID");
-    store
-        .create_session(&session_id, ".", 10)
-        .expect("创建 Session");
-    store
-        .set_session_status(&session_id, &host, SessionRuntimeStatus::Running, 11)
-        .expect("启动 Session");
-
     let interaction_id = InteractionId::new(interaction_id).expect("Interaction ID");
     let record = InteractionRecord::new(
         interaction_id.clone(),
@@ -251,6 +243,16 @@ fn seed_interaction(
         12,
     )
     .expect("Interaction 有效");
+    // 会话必须就是 Interaction 推导出的那条车道：历史页按车道查事件，
+    // 自造一个 Session ID 会让上界停在 0，一条事件都读不到。
+    let session_id = crate::application::primary_session_id_for_interaction(&record)
+        .expect("Interaction 必须绑定 Workspace");
+    store
+        .create_session(&session_id, ".", 10)
+        .expect("创建 Session");
+    store
+        .set_session_status(&session_id, &host, SessionRuntimeStatus::Running, 11)
+        .expect("启动 Session");
     store.append(&record).expect("写入 Interaction");
 
     if status != InteractionStatus::Received {
@@ -480,5 +482,56 @@ fn history_page_resumes_at_the_last_consumed_event() {
         sequences,
         (1..=total).collect::<Vec<_>>(),
         "分页不得漏读或重读任何一条"
+    );
+}
+
+#[test]
+fn history_page_skips_missing_external_archive_from_another_interaction() {
+    use axon_session::SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES;
+
+    let directory = axon_test_support::test_temp_dir();
+    let (store, interaction_id, session_id, host) = seed_interaction(
+        directory.path(),
+        InteractionStatus::Understood,
+        "gateway-newer-interaction",
+    );
+    let oversized_other = format!(
+        "{{\"interactionId\":\"older-interaction\",\"body\":\"{}\"}}",
+        "x".repeat(SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES)
+    );
+    store
+        .append_event(&session_id, &host, "wire_event", &oversized_other, 12)
+        .expect("追加旧交互大事件");
+    // 分片整片消失：旧引用降级为占位记录，不能阻断同一会话其他交互的历史读取。
+    std::fs::remove_dir_all(store.event_archive_root().join(session_id.as_str()))
+        .expect("模拟外置正文分片缺失");
+
+    store
+        .append_event(
+            &session_id,
+            &host,
+            "wire_event",
+            &format!("{{\"interactionId\":\"{}\"}}", interaction_id.as_str()),
+            13,
+        )
+        .expect("追加目标交互事件");
+
+    let page = interaction_history_page(&store, &interaction_id, 0, 100)
+        .expect("旧交互缺失归档不得阻断读取新交互");
+    assert_eq!(page.events.len(), 2, "应包含目标事件与终态补帧");
+    assert_eq!(page.events[0].event_type, "wire_event");
+    assert_eq!(page.events[1].event_type, INTERACTION_STATUS_EVENT);
+}
+
+#[test]
+fn history_page_reports_not_found_for_missing_interaction() {
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    let missing = InteractionId::new("missing-interaction-id").expect("Interaction ID");
+    let error = interaction_history_page(&store, &missing, 0, 10)
+        .expect_err("不存在的 Interaction 必须返回 NotFound");
+    assert!(
+        matches!(error, GatewayKernelError::NotFound(_)),
+        "{error:?}"
     );
 }

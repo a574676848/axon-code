@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn automatic_rollover_requires_state_saved_in_current_window() {
         let session_dir = axon_test_support::test_temp_root()
-            .join(format!("axon_notes_handoff_test_{}", std::process::id()));
+            .join(format!("axon_notes_checkpoint_test_{}", std::process::id()));
         let notes = SessionNotes::new(Default::default(), 1);
         notes
             .save_to_session(&session_dir)

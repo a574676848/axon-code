@@ -226,9 +226,12 @@ fn oversized_event_payload_is_archived_and_replay_rehydrates_it() {
     };
     assert!(inline.is_empty(), "外置后内联列必须为空，正文只留一份");
     let reference = reference.expect("超限正文必须外置");
-    let archived = fixture.store.event_archive_root().join(&reference);
     assert_eq!(
-        std::fs::read_to_string(&archived).expect("归档正文应可读"),
+        super::sqlite_runtime_store::event_payload_store::read(
+            &fixture.store.event_archive_root(),
+            &reference,
+        )
+        .expect("归档正文应可读"),
         payload
     );
 
@@ -238,4 +241,67 @@ fn oversized_event_payload_is_archived_and_replay_rehydrates_it() {
         .expect("replay rehydrates archived payload");
     assert_eq!(replayed.len(), 1);
     assert_eq!(replayed[0].payload_json, payload);
+}
+
+#[test]
+fn missing_external_payload_file_degrades_without_aborting_replay() {
+    use super::sqlite_runtime_store::{
+        SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES, SESSION_EVENT_MISSING_ARCHIVE_TYPE,
+    };
+
+    let fixture = event_batch_fixture("missing-payload");
+    let oversized = format!(
+        "{{\"text\":\"{}\"}}",
+        "x".repeat(SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES)
+    );
+    fixture
+        .store
+        .append_event(
+            &fixture.session_id,
+            &fixture.host,
+            "wire_event",
+            &oversized,
+            BATCH_EVENT_AT_MS,
+        )
+        .expect("append oversized event");
+    fixture
+        .store
+        .append_event(
+            &fixture.session_id,
+            &fixture.host,
+            "turn_completed",
+            "{\"ok\":true}",
+            BATCH_EVENT_AT_MS + 1,
+        )
+        .expect("append following inline event");
+
+    let reference: String = {
+        let connection = fixture.store.connection().expect("open connection");
+        connection
+            .query_row(
+                "SELECT payload_ref FROM session_events WHERE session_id=?1 AND sequence=1",
+                [fixture.session_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("read payload_ref")
+    };
+    std::fs::remove_dir_all(
+        fixture
+            .store
+            .event_archive_root()
+            .join(fixture.session_id.as_str()),
+    )
+    .expect("remove shard dir to simulate reclaimed archive");
+
+    let replayed = fixture
+        .store
+        .replay_events(&fixture.session_id, 0, 10)
+        .expect("missing archive file must degrade instead of failing replay");
+    assert_eq!(replayed.len(), 2);
+    assert_eq!(replayed[0].sequence, 1);
+    assert_eq!(replayed[0].event_type, SESSION_EVENT_MISSING_ARCHIVE_TYPE);
+    assert!(replayed[0].payload_json.contains(&reference));
+    assert_eq!(replayed[1].sequence, 2);
+    assert_eq!(replayed[1].event_type, "turn_completed");
+    assert_eq!(replayed[1].payload_json, "{\"ok\":true}");
 }

@@ -69,6 +69,9 @@ pub enum GatewayKernelError {
     /// Adapter ingress 失败。
     #[error("Gateway ingress 失败：{0}")]
     Ingress(String),
+    /// 查询目标不存在。
+    #[error("{0}")]
+    NotFound(String),
     /// 事件进入 durable ingress 之前的预处理失败（正文归档等）。
     #[error("Gateway 事件预处理失败：{0}")]
     Preparation(String),

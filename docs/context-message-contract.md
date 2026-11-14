@@ -119,28 +119,13 @@ kind   == Regular
 
 ### 4.6 换窗交接摘要
 
-摘要的作者是当前模型，运行时不生成语义内容、不按栏目截断。提交通道与工作便签是两条独立通道：
+摘要的作者是当前模型，运行时不生成语义内容、不按栏目截断。整个会话只有一份便签承载交接，不存在第二条提交通道：
 
-**提交通道**：模型把交接摘要写入私有便签的保留路径 `handoff/summary.md`（`SESSION_NOTES_SUBMITTED_SUMMARY_PATH`）。识别只看路径，内容不限格式——没有固定段落、不必套模板，只要在预算内就原样带进新窗口；超预算时才回落到投影，且不影响换窗本身。该文件不会被当作事实便签内联进投影。
+**唯一便签**：模型把交接写进 `checkpoint.md`（`SESSION_NOTES_CHECKPOINT_NOTE_PATH`）。识别只看路径，内容不限格式——没有固定段落、不必套模板，只要在预算内就原样带进新窗口；超预算时才回落到投影，且不影响换窗本身。同一份文件既是会话期间的工作便签，也是这次换窗的交接载体，换窗前后模型只维护它。
 
-**工作便签**：`checkpoint.md` 等其余便签保持自由格式，模型可继续用任意 markdown 结构记录进展，不必为换窗改写结构。
+**预算**：总量 `4096` tokens（`SESSION_NOTES_CHECKPOINT_MAX_TOKENS`，常量，无配置项）与 `32 KiB` 字节硬上限（`SESSION_NOTES_CHECKPOINT_MAX_BYTES`）；token 由 `estimated_text_tokens` 按 UTF-8 字节数除以 4 向上取整估算。取值以压住换窗固定成本为先：这段摘要每次都要顶到新窗口最前面，4 096 tokens 已能容纳 4 KiB 便签内联（≈1024 tokens）与其余段落。超限一律 fail-closed 并返回「请压缩便签后重写摘要」，不截断、不降级采用部分内容。
 
-**正文结构**：提交摘要固定六段，顺序不可交换、不可重复：
-
-```text
-P0:
-TASK:
-CONSTRAINTS:
-VERIFIED:
-OPEN:
-TOOLS:
-```
-
-`TOOLS` 段每行写 `- ID: <provider-call-id>`，列出尚未回填结果的 tool call；没有时必须写 `- none`。结构与活动调用 ID 由 `CanonicalCheckpoint::parse`（`canonical_checkpoint.rs:40`）校验，缺段、空段、顺序错误、ID 缺失都会被拒绝。
-
-**预算**：总量 `4096` tokens（`SESSION_NOTES_CHECKPOINT_MAX_TOKENS`，常量，无配置项）与 `32 KiB` 字节硬上限（`SESSION_NOTES_CHECKPOINT_MAX_BYTES`）；token 由 `estimated_text_tokens` 按 UTF-8 字节数除以 4 向上取整估算。取值以压住换窗固定成本为先：这段摘要每次都要顶到新窗口最前面，4 096 tokens 已能容纳 4 KiB 便签内联（≈1024 tokens）加六段标题与其余段落。超限一律 fail-closed 并返回「请压缩便签后重写摘要」，不截断、不降级采用部分内容。
-
-**兼容回退**：模型未提交（没有 `handoff/summary.md`，或首行不是 `P0:`）时，`SessionNotes::try_render_canonical_summary`（`session_notes.rs:113`）按目标锚点与全部便签投影出同结构摘要。投影对单条便签分两档处理（`NOTES_INLINE_MAX_BYTES = 4 KiB`）：不超过阈值的便签内联正文，超过的只写「路径 + 字节数 + 行数 + 回读指引」，由新窗口用 `builtin.notes_read_file` 按行范围取回。短便签整段可读、长便签只留引用，两条路都不挤爆换窗预算，也不需要模型为换窗压缩或改写。投影与提交两条路径都不做行级截断；替换历史前 `validate_replacement`（`insert_then_compress_completion.rs:171`）再校验一次同一预算，并追加「新窗口 `after_tokens < trigger`」与自动换窗的收敛要求。
+**兼容回退**：模型未写便签（没有 `checkpoint.md`）时，`SessionNotes::try_render_canonical_summary`（`session_notes.rs`）按目标锚点与全部便签投影出 `P0:` / `TASK:` / `CONSTRAINTS:` / `VERIFIED:` / `OPEN:` / `TOOLS:` 六段摘要，`TOOLS` 段每行写 `- ID: <provider-call-id>`，没有未回填调用时写 `- none`。投影只是运行时兜底格式，不构成对模型写入内容的结构要求。投影对单条便签分两档处理（`NOTES_INLINE_MAX_BYTES = 4 KiB`）：不超过阈值的便签内联正文，超过的只写「路径 + 字节数 + 行数 + 回读指引」，由新窗口用 `builtin.notes_read_file` 按行范围取回。短便签整段可读、长便签只留引用，两条路都不挤爆换窗预算，也不需要模型为换窗压缩或改写。投影与提交两条路径都不做行级截断；替换历史前 `validate_replacement`（`insert_then_compress_completion.rs:171`）再校验一次同一预算，并追加「新窗口 `after_tokens < trigger`」与自动换窗的收敛要求。
 
 ## 5. 请求装配顺序
 

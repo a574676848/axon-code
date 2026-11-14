@@ -95,10 +95,13 @@ fn run_file_cleanup(
             cutoff_ms,
             dry_run,
         )?,
-        archive_files: cleanup_expired_files_recursive(
+        // `data/archive/session-events/` 存放运行态事件外置正文（与 SQLite 7 天保留期绑定）
+        // 及 `.jsonl.zst` 离线归档，必须由事件归档与会话族清理闭环回收，不得按 3 天文件期误删。
+        archive_files: cleanup_expired_files_recursive_excluding(
             &data_root.join(CONTENT_ARCHIVE_DIRECTORY),
             cutoff_ms,
             dry_run,
+            Some(axon_session::SESSION_EVENT_ARCHIVE_SUBDIR),
         )?,
         attachment_files: cleanup_expired_files_recursive(
             &data_root.join(ATTACHMENTS_DIRECTORY),
@@ -118,11 +121,20 @@ fn cleanup_expired_files_recursive(
     cutoff_ms: u64,
     dry_run: bool,
 ) -> Result<usize, String> {
+    cleanup_expired_files_recursive_excluding(dir, cutoff_ms, dry_run, None)
+}
+
+fn cleanup_expired_files_recursive_excluding(
+    dir: &Path,
+    cutoff_ms: u64,
+    dry_run: bool,
+    skip_root_subdir: Option<&str>,
+) -> Result<usize, String> {
     if !dir.is_dir() {
         return Ok(0);
     }
     let mut files = Vec::new();
-    collect_expired_files(dir, cutoff_ms, &mut files)?;
+    collect_expired_files(dir, cutoff_ms, skip_root_subdir, &mut files)?;
     let mut deleted = 0usize;
     for path in files {
         // 单个文件删除失败不阻断整轮清理（可能被并发持锁），与其余目录口径一致。
@@ -142,7 +154,7 @@ fn cleanup_expired_temp_entries(
         return Ok(0);
     }
     let mut files = Vec::new();
-    collect_expired_files(tmp_dir, cutoff_ms, &mut files)?;
+    collect_expired_files(tmp_dir, cutoff_ms, None, &mut files)?;
     let mut directories = Vec::new();
     collect_expired_directories(tmp_dir, cutoff_ms, &mut directories)?;
     // 目录按深度倒序回收，保证父目录在子目录之后删除。
@@ -172,6 +184,7 @@ fn cleanup_expired_temp_entries(
 fn collect_expired_files(
     dir: &Path,
     cutoff_ms: u64,
+    skip_root_subdir: Option<&str>,
     expired: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
     let entries = fs::read_dir(dir).map_err(|error| format!("读取临时目录失败：{error}"))?;
@@ -182,7 +195,10 @@ fn collect_expired_files(
             .file_type()
             .map_err(|error| format!("读取临时目录项失败：{error}"))?;
         if file_type.is_dir() {
-            collect_expired_files(&path, cutoff_ms, expired)?;
+            if skip_root_subdir.is_some_and(|skip| entry.file_name() == skip) {
+                continue;
+            }
+            collect_expired_files(&path, cutoff_ms, None, expired)?;
             continue;
         }
         if is_expired(&path, cutoff_ms) {
@@ -510,5 +526,32 @@ mod tests {
             elapsed.as_millis() < 1_000,
             "清理 dry-run 统计必须在一秒内完成"
         );
+    }
+
+    /// 回归：3 天文件清理不得误删 `data/archive/session-events/` 下的事件外置正文与离线归档。
+    #[test]
+    fn expired_content_archive_cleanup_preserves_session_events_dir() {
+        let root = axon_test_support::test_temp_dir();
+        let archive = root.path().join("data").join("archive");
+        let expired_content = archive.join("old.log");
+        let session_events = archive.join(axon_session::SESSION_EVENT_ARCHIVE_SUBDIR);
+        let external_payload = session_events.join("session-lane-a").join("16651.json");
+        let cold_archive = session_events.join("session-lane-a.jsonl.zst");
+        write_file(&expired_content, "旧工具输出");
+        write_file(&external_payload, "{\"ok\":true}");
+        write_file(&cold_archive, "zst-bytes");
+        age_file(&expired_content);
+        age_file(&external_payload);
+        age_file(&cold_archive);
+
+        let counts = cleanup_runtime_files_isolated(root.path(), 100).expect("清理应成功");
+
+        assert_eq!(counts.archive_files, 1, "只应清理普通内容归档");
+        assert!(!expired_content.exists(), "过期内容归档应被回收");
+        assert!(
+            external_payload.exists(),
+            "事件外置正文文件不得被 3 天清理误删"
+        );
+        assert!(cold_archive.exists(), "事件离线压缩归档不得被 3 天清理误删");
     }
 }

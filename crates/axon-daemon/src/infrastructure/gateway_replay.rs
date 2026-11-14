@@ -13,7 +13,7 @@
 use super::gateway_kernel::{GatewayEvent, GatewayKernelError};
 use crate::application::{EventStreamBridge, EventStreamSubscription};
 use axon_domain::{ConsumerCursor, InteractionId, InteractionStatus};
-use axon_session::{RuntimeStore, RuntimeStoreError};
+use axon_session::{RuntimeStore, RuntimeStoreError, SESSION_EVENT_MISSING_ARCHIVE_TYPE};
 use std::collections::VecDeque;
 
 /// Interaction 状态帧的事件类型；实时通知与回放补齐共用这一份定义。
@@ -158,6 +158,8 @@ where
     let mut pending = VecDeque::new();
     let mut after = after_sequence;
     let mut budget = MAX_GATEWAY_REPLAY_BYTES;
+    let mut missing_archives = 0usize;
+    let mut first_missing_seq = None;
     for _ in 0..MAX_GATEWAY_REPLAY_PAGES {
         if after >= ceiling_sequence {
             break;
@@ -172,6 +174,11 @@ where
         let page_len = page.len();
         for event in page {
             budget = budget.saturating_sub(event.payload_json.len());
+            if event.event_type == SESSION_EVENT_MISSING_ARCHIVE_TYPE {
+                missing_archives = missing_archives.saturating_add(1);
+                first_missing_seq.get_or_insert(event.sequence);
+                continue;
+            }
             let cursor = serde_json::to_string(&event.cursor()).ok();
             pending.push_back(GatewayEvent {
                 event_type: event.event_type,
@@ -183,6 +190,14 @@ where
         if page_len < replay_page_size as usize || budget == 0 {
             break;
         }
+    }
+    if missing_archives > 0 {
+        axon_logger::warning(&format!(
+            "[gateway-ws] session={} 回放跳过 {} 条缺失外置正文的事件（首条 sequence={}）",
+            session_id.as_str(),
+            missing_archives,
+            first_missing_seq.unwrap_or(0)
+        ));
     }
     if after < ceiling_sequence {
         axon_logger::warning(&format!(
@@ -235,6 +250,8 @@ where
     let mut pending = VecDeque::new();
     let mut after = after_sequence;
     let mut budget = MAX_GATEWAY_REPLAY_BYTES;
+    let mut missing_archives = 0usize;
+    let mut first_missing_seq = None;
     for _ in 0..MAX_GATEWAY_REPLAY_PAGES {
         if after >= ceiling_sequence {
             break;
@@ -249,6 +266,11 @@ where
         let page_len = page.len();
         for event in page {
             budget = budget.saturating_sub(event.payload_json.len());
+            if event.event_type == SESSION_EVENT_MISSING_ARCHIVE_TYPE {
+                missing_archives = missing_archives.saturating_add(1);
+                first_missing_seq.get_or_insert(event.sequence);
+                continue;
+            }
             if event_matches_interaction(&event, interaction_id.as_str()) {
                 let cursor = serde_json::to_string(&event.cursor()).ok();
                 pending.push_back(GatewayEvent {
@@ -262,6 +284,15 @@ where
         if page_len < replay_page_size as usize || budget == 0 {
             break;
         }
+    }
+    if missing_archives > 0 {
+        axon_logger::warning(&format!(
+            "[gateway-ws] session={} interaction={} 回放跳过 {} 条缺失外置正文的事件（首条 sequence={}）",
+            session_id.as_str(),
+            interaction_id.as_str(),
+            missing_archives,
+            first_missing_seq.unwrap_or(0)
+        ));
     }
     if after < ceiling_sequence {
         axon_logger::warning(&format!(
@@ -326,7 +357,7 @@ where
     let interaction = store
         .get_interaction(interaction_id)
         .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?
-        .ok_or_else(|| GatewayKernelError::Ingress("历史目标 Interaction 不存在".to_owned()))?;
+        .ok_or_else(|| GatewayKernelError::NotFound("历史目标 Interaction 不存在".to_owned()))?;
     let session_id = crate::application::primary_session_id_for_interaction(&interaction)
         .map_err(GatewayKernelError::Ingress)?;
     let tail_sequence = live_ceiling_cursor(store, &session_id, None)?.sequence;
@@ -334,6 +365,8 @@ where
     let mut pending = VecDeque::new();
     let mut after = after_sequence.min(tail_sequence);
     let mut tail_cursor = None;
+    let mut missing_archives = 0usize;
+    let mut first_missing_seq = None;
     while pending.len() < limit && after < tail_sequence {
         let page = store
             .replay_events(&session_id, after, DEFAULT_GATEWAY_REPLAY_PAGE_SIZE)
@@ -348,6 +381,11 @@ where
             // 续读游标只推进到**真正消费过**的这一条：本页凑满上限就收工时，
             // 同一读页里还没看的事件必须留到下一次，否则它们会被静默跳过。
             after = event.sequence;
+            if event.event_type == SESSION_EVENT_MISSING_ARCHIVE_TYPE {
+                missing_archives = missing_archives.saturating_add(1);
+                first_missing_seq.get_or_insert(event.sequence);
+                continue;
+            }
             if !event_matches_interaction(&event, interaction_id.as_str()) {
                 continue;
             }
@@ -362,6 +400,15 @@ where
                 break;
             }
         }
+    }
+    if missing_archives > 0 {
+        axon_logger::warning(&format!(
+            "[gateway-http] session={} interaction={} 历史页跳过 {} 条缺失外置正文的事件（首条 sequence={}）",
+            session_id.as_str(),
+            interaction_id.as_str(),
+            missing_archives,
+            first_missing_seq.unwrap_or(0)
+        ));
     }
     let has_more = after < tail_sequence;
     if !has_more {

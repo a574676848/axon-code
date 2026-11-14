@@ -6,8 +6,8 @@
   - **熔断红线**：当剩余 Token 降至安全警戒线（如低于 15% 或预估不足以支撑下一轮大工具调用/长文本输出）时，严禁透支，必须立即执行「固化便签 -> `builtin.new_context`」主动换窗。
   - 严禁在未成功写入便签前调用 `builtin.new_context`（未写入会被系统直接拦截）。
 
-- **增量接力便签 (Checkpoint)**：
-  - 统一维护当前会话相对路径下的 `checkpoint.md`（调用 `builtin.notes_write_file` 或 `builtin.notes_append_to_file`）。
+- **唯一便签 (Checkpoint)**：
+  - 全会话只有一份便签 `checkpoint.md`：会话中用作增量记录，换窗时用 `builtin.notes_write_file` 覆盖写入交接摘要，新窗口醒来第一步读的也是它。不要再另开 `handoff/*.md` 之类的第二份交接文件。
   - 采用增量记录，关键事实与决策即时沉淀，严禁拖延至窗口濒死。
   - 用户消息与工具返回末尾的 `[id: <window_id>:<ordinal>]` 必须随关键结论原样锚定在便签中，作为跨窗精准溯源的凭据。
   - **建议便签结构**：
@@ -21,7 +21,7 @@
     ```
 
 - **新窗口唤醒与状态重建 (Wake-up SOP)**：
-  - 凡检测到新记忆窗口唤醒，首要且唯一前置动作是读取 `checkpoint.md`。
+  - 凡检测到新记忆窗口唤醒，首要且唯一前置动作是读取 `checkpoint.md`；读到即视为拿到了完整交接。需要在本窗口内再次换窗时，用 `builtin.notes_append_to_file` 追加新进展即可满足归档门禁，不必整文件重写刚读到的交接。
   - 读回便签后，若关键上下文完备，直接推进「下一步动作」；
   - 若细节缺失，按优先级精准召回：
     1. **已知名确 ID**：首选 `builtin.history_read_item(window_id, ordinal)` 点对点读取；

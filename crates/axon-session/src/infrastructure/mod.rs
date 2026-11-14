@@ -62,7 +62,13 @@ pub fn session_store_path(root: &Path) -> PathBuf {
 pub use jsonl_store::{
     JsonlThreadEventStore, THREAD_EVENTS_FILE, ThreadEventReadIssue, ThreadEventScan,
 };
-pub use sqlite_runtime_store::{SqliteRuntimeStore, WalCheckpoint};
+pub use sqlite_runtime_store::event_payload_store::{
+    is_exclusive_payload_reference, read as read_event_payload,
+};
+pub use sqlite_runtime_store::{
+    SESSION_EVENT_ARCHIVE_SUBDIR, SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES,
+    SESSION_EVENT_MISSING_ARCHIVE_TYPE, SqliteRuntimeStore, WalCheckpoint,
+};
 pub use sqlite_runtime_store::{
     action_repository::ActionRepository, event_repository::EventRepository,
     lease_repository::LeaseRepository, runtime_repository::RuntimeRepository,

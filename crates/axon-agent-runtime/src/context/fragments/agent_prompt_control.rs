@@ -9,7 +9,7 @@ const DELEGATION_POLICY_BODY: &str = concat!(
     "- 委托任务必须写清目标、范围、证据要求、交付格式和验证标准；delegate_to_fast 默认不继承上下文，不能发送含糊指令。\n",
     "- 父 Agent 负责复杂推理、合并证据与最终 Check；fast 证据不足时由父 Agent 重新 Plan 并自行完成，禁止循环委托或把失败留给用户。\n",
     "- 用户交互、审批、共享写入或必须保持编辑连续性的工作不得委托。\n",
-    "- 默认在**后台**委派：delegate_to_fast 与 spawn_agent 都立即返回 job_id，子代理完成时运行时把结果经完成通知回流到下一轮，你不需要守着它。\n",
+    "- 默认在**后台**委派：delegate_to_fast 与 spawn_agent 都立即返回 job_id，子代理跑完后结果会作为一条新消息送到你这里，你不需要守着它。\n",
     "- 相互独立的委派放在**同一条 assistant 消息**里批量并发发起；它们彼此无依赖，串行发起只会白白拉长时间。\n",
     "- 子代理运行期间继续做有用的事：做与它不重叠的工作，或推进不依赖它的部分。禁止 busy-poll（反复 job_output 空转）或空等。\n",
     "- 仅当下一步动作**依赖**该结果时才同步等待：此时传 run_in_background: false 直接拿回执，或在后续轮用 builtin.job_output 按 job_id 收口。\n",

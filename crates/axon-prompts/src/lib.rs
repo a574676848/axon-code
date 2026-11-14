@@ -310,6 +310,14 @@ mod tests {
 
         let tool_policy = render_agent_tool_policy();
         let tool_usage_guidance = render_tool_usage_guidance();
+        // 面向模型的规约只写运行时能感知的话：事件队列、durable 回流、系统桌面这类
+        // 宿主实现术语对模型没有意义，写进来只会诱导它复述看不懂的机制。
+        for internal in ["事件队列", "durable", "系统桌面", "生命周期句柄"] {
+            assert!(
+                !tool_policy.contains(internal) && !tool_usage_guidance.contains(internal),
+                "面向模型的工具规约泄漏宿主实现术语：{internal}"
+            );
+        }
         assert!(tool_policy.contains(AXON_TOOL_ORCHESTRATION_PROTOCOL_TAG));
         assert!(
             tool_policy

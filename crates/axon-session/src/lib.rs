@@ -35,7 +35,11 @@ pub use infrastructure::{
     AXON_RUNTIME_DATA_DIR, JsonlThreadEventStore, SESSION_STORE_DIR, THREAD_EVENTS_FILE,
     ThreadEventReadIssue, ThreadEventScan, session_store_path,
 };
-pub use infrastructure::{SqliteRuntimeStore, WalCheckpoint};
+pub use infrastructure::{
+    SESSION_EVENT_ARCHIVE_SUBDIR, SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES,
+    SESSION_EVENT_MISSING_ARCHIVE_TYPE, SqliteRuntimeStore, WalCheckpoint,
+    is_exclusive_payload_reference, read_event_payload,
+};
 pub use ports::ExecutionSettlement;
 pub use ports::ThreadActivationSnapshot;
 pub use ports::ThreadEventStore;

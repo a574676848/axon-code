@@ -33,6 +33,8 @@ mod commit_repository;
 mod connection_pool;
 #[path = "sqlite_runtime_store/decision_repository.rs"]
 mod decision_repository;
+#[path = "sqlite_runtime_store/event_payload_store.rs"]
+pub mod event_payload_store;
 #[path = "sqlite_runtime_store/event_repository.rs"]
 pub mod event_repository;
 #[path = "sqlite_runtime_store/execution_repository.rs"]
@@ -91,9 +93,12 @@ const HOST_STATE_RUNNING: &str = "running";
 
 /// Session 事件正文的内联上限（字节）。
 ///
-/// 超过上限的正文写到 `<库目录>/archive/session-events/<session>/<sequence>.json`，
+/// 超过上限的正文按会话追加写入 `<库目录>/archive/session-events/<session>/<分片>.jsonl`，
 /// 库里只留引用：B-Tree 只承载定长元数据，大段 tool 结果、diff 与终端输出不再撑大
 /// 主库与 WAL。上限取 4 KiB：实测事件正文平均 605 B，只有少数大事件需要外置。
+///
+/// 流式帧（`wire_event`）不受这个上限约束，一律外置：它们单条只有数百字节，却占
+/// 每日写入量的 99% 以上，内联会让主库随帧数线性膨胀。
 pub const SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES: usize = 4 * 1024;
 
 /// 一次 WAL 回写的结果。
@@ -203,13 +208,18 @@ impl SqliteRuntimeStore {
     #[must_use]
     pub fn event_archive_root(&self) -> PathBuf {
         let parent = self.path.parent().unwrap_or(Path::new("."));
-        parent.join(EVENT_ARCHIVE_DIR).join(EVENT_ARCHIVE_SUBDIR)
+        parent
+            .join(EVENT_ARCHIVE_DIR)
+            .join(SESSION_EVENT_ARCHIVE_SUBDIR)
     }
 }
 
 /// 事件正文归档的目录层级：`data/archive/session-events`。
 const EVENT_ARCHIVE_DIR: &str = "archive";
-const EVENT_ARCHIVE_SUBDIR: &str = "session-events";
+/// 事件正文归档在 `data/archive/` 下的子目录名；供清理任务排除，避免按文件保留期误删。
+pub const SESSION_EVENT_ARCHIVE_SUBDIR: &str = "session-events";
+/// 外置正文文件缺失时回放产出的占位事件类型：保持游标与分页完整，不拖垮整条车道。
+pub const SESSION_EVENT_MISSING_ARCHIVE_TYPE: &str = "archive_missing";
 
 impl RuntimeStore for SqliteRuntimeStore {
     fn initialize(&self) -> Result<(), RuntimeStoreError> {

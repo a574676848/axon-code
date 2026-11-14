@@ -79,6 +79,9 @@ pub(super) fn archive_expired_session_events(
         }
         report.merge(write_archives(archive_root, &batch)?);
         let deleted = delete_rows_by_rowid(connection, &batch)?;
+        if deleted > 0 {
+            reclaim_external_payload_files(archive_root, &batch);
+        }
         if deleted < batch.len() {
             // 行在归档期间被并发删除：本轮到此为止，下一轮重新取候选。
             break;
@@ -118,6 +121,9 @@ pub(super) fn enforce_disk_budget(
         }
         report.merge(write_archives(archive_root, &batch)?);
         let deleted = delete_rows_by_rowid(connection, &batch)?;
+        if deleted > 0 {
+            reclaim_external_payload_files(archive_root, &batch);
+        }
         if deleted < batch.len() {
             break;
         }
@@ -205,9 +211,47 @@ fn write_archives(archive_root: &Path, batch: &[ArchiveRow]) -> Result<ArchiveRe
 /// 取回事件正文：外置正文读文件，读不到时留一条可诊断的标记而不是静默丢行。
 fn resolve_payload(archive_root: &Path, row: &ArchiveRow) -> String {
     match row.payload_ref.as_deref() {
-        Some(reference) => std::fs::read_to_string(archive_root.join(reference))
+        Some(reference) => axon_session::read_event_payload(archive_root, reference)
             .unwrap_or_else(|_| format!("<正文归档不可读：{reference}>")),
         None => row.payload_json.clone(),
+    }
+}
+
+/// 在数据库行确认删除之后，回收这一批引用的外置正文文件及已空的车道子目录。
+///
+/// 只有独占一个文件的引用才随之回收：分片正文与同会话其他事件共用文件，
+/// 单条行过期就删整片会把仍有效的正文一起毁掉，这类文件交给文件保留期统一清理。
+fn reclaim_external_payload_files(archive_root: &Path, batch: &[ArchiveRow]) {
+    for row in batch {
+        let Some(reference) = row.payload_ref.as_deref() else {
+            continue;
+        };
+        if !axon_session::is_exclusive_payload_reference(reference) {
+            continue;
+        }
+        let path = archive_root.join(reference);
+        let _ = std::fs::remove_file(&path);
+        if let Some(parent) = path.parent()
+            && parent != archive_root
+        {
+            let _ = std::fs::remove_dir(parent);
+        }
+    }
+}
+
+/// 整条会话家族已被删除后，回收该会话的外置事件正文目录（保留 `.jsonl.zst` 离线归档）。
+#[expect(dead_code, reason = "会话族清理接入分片目录回收前暂未调用")]
+pub(super) fn reclaim_session_archive_dir(archive_root: &Path, session_id: &str) {
+    if session_id.is_empty()
+        || session_id == "."
+        || session_id == ".."
+        || session_id.contains(['/', '\\'])
+    {
+        return;
+    }
+    let dir = archive_root.join(session_id);
+    if dir.is_dir() {
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
 
@@ -373,5 +417,43 @@ mod tests {
 
         assert_eq!(batch.len(), 1, "只应选中空闲 lane 的旧事件: {batch:?}");
         assert_eq!(batch[0].session_id, "session-idle");
+    }
+
+    #[test]
+    fn archiving_expired_events_reclaims_external_payload_files_and_empty_dirs() {
+        let (mut connection, directory) = fixture();
+        let lane = "session-lane-external";
+        insert_lane(&connection, lane, "completed", 1);
+        let archive_root = directory.path().join("archive");
+        let ref_rel = format!("{lane}/1.json");
+        let ext_path = archive_root.join(&ref_rel);
+        std::fs::create_dir_all(ext_path.parent().expect("parent")).expect("create dir");
+        std::fs::write(&ext_path, "{\"big\":true}").expect("write external payload");
+        connection
+            .execute(
+                "INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,emitted_at_ms,payload_ref) \
+                 VALUES(?1,1,'g','wire_event','',1,?2)",
+                params![lane, ref_rel],
+            )
+            .expect("insert event");
+
+        let report = archive_expired_session_events(
+            &mut connection,
+            &archive_root,
+            i64::MAX,
+            Instant::now() + std::time::Duration::from_secs(5),
+        )
+        .expect("归档应成功");
+
+        assert_eq!(report.rows, 1);
+        assert!(!ext_path.exists(), "归档并删行后必须回收外置正文文件");
+        assert!(
+            !archive_root.join(lane).exists(),
+            "外置文件全部回收后应清理空的 session 子目录"
+        );
+        assert!(
+            archive_root.join(format!("{lane}.jsonl.zst")).exists(),
+            "离线归档压缩文件必须保留"
+        );
     }
 }

@@ -424,7 +424,7 @@ fn successful_rollover_records_projected_checkpoint_source() {
     assert_eq!(
         notes.checkpoint_source,
         Some(CheckpointSource::Projection),
-        "没有 handoff/summary.md 时必须记录为投影来源"
+        "没有 checkpoint.md 时必须记录为投影来源"
     );
     assert_eq!(
         notes.checkpoint_window_number,
@@ -434,14 +434,14 @@ fn successful_rollover_records_projected_checkpoint_source() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// 模型提交摘要时，来源必须记为 Model，而不是笼统的投影。
+/// 模型写入便签时，来源必须记为 Model，而不是笼统的投影。
 #[test]
-fn submitted_summary_is_recorded_as_model_source() {
+fn checkpoint_note_is_recorded_as_model_source() {
     let root = temp_workspace("inline-rollover-source-model");
     let request = request_with_rollover(root.clone());
     let session_dir = initialize_session(&request);
     let submitted = "P0:\nTASK:\n模型提交的任务\n\nCONSTRAINTS:\n- 约束\n\nVERIFIED:\n- 事实\n\nOPEN:\n- 无\n\nTOOLS:\n- none";
-    SessionNotesRuntime::write_note_file(&session_dir, "handoff/summary.md", submitted, 1).unwrap();
+    SessionNotesRuntime::write_note_file(&session_dir, "checkpoint.md", submitted, 1).unwrap();
     SessionNotesRuntime::write_note_file(&session_dir, "progress.md", "已验证事实", 1).unwrap();
 
     run_rollover_with_progress(&request, None).unwrap();

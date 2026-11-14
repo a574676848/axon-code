@@ -1,6 +1,7 @@
 //! Session Event repository 边界。
-use super::SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES;
+use super::SESSION_EVENT_MISSING_ARCHIVE_TYPE;
 use super::SqliteRuntimeStore;
+use super::event_payload_store;
 use super::helpers::{i64_value, parse_session_id, storage, u64_value};
 use crate::domain::runtime::{DaemonHostRecord, SessionEventRecord};
 use crate::ports::{RuntimeStore, RuntimeStoreError};
@@ -153,8 +154,13 @@ fn append_event_refs<'a>(
             next_sequence = next_sequence
                 .checked_add(1)
                 .ok_or_else(|| RuntimeStoreError::Storage("事件序号溢出".to_owned()))?;
-            let payload_ref =
-                persist_event_payload(&archive_root, session_id, next_sequence, payload_json)?;
+            let payload_ref = event_payload_store::persist(
+                &archive_root,
+                session_id,
+                next_sequence,
+                event_type,
+                payload_json,
+            );
             // 正文已外置的行把内联列清空：正文只有一份真相，读侧一律按引用取回。
             let inline_payload = if payload_ref.is_some() {
                 ""
@@ -239,33 +245,6 @@ fn tool_call_name(event_type: &str, payload_json: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// 把超限的事件正文写到归档文件，返回相对引用。
-///
-/// 返回 `None` 表示正文留在库里：写文件失败时宁可多占一点数据库空间，也不能让一条
-/// 已经发生的运行事件落不了库。
-fn persist_event_payload(
-    archive_root: &std::path::Path,
-    session_id: &DaemonSessionId,
-    sequence: u64,
-    payload_json: &str,
-) -> Result<Option<String>, RuntimeStoreError> {
-    if payload_json.len() <= SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES {
-        return Ok(None);
-    }
-    let relative = format!("{}/{sequence}.json", session_id.as_str());
-    let directory = archive_root.join(session_id.as_str());
-    if std::fs::create_dir_all(&directory).is_err() {
-        return Ok(None);
-    }
-    match std::fs::write(
-        directory.join(format!("{sequence}.json")),
-        payload_json.as_bytes(),
-    ) {
-        Ok(()) => Ok(Some(relative)),
-        Err(_) => Ok(None),
-    }
-}
-
 /// 读取 cursor 之后按序号升序排列的 Session 事件。
 pub(super) fn replay_events(
     store: &SqliteRuntimeStore,
@@ -311,13 +290,27 @@ pub(super) fn replay_events(
         payload_ref,
     ) in raw
     {
-        let payload_json = match payload_ref {
-            Some(reference) => {
-                std::fs::read_to_string(archive_root.join(&reference)).map_err(|_| {
-                    RuntimeStoreError::Storage(format!("事件正文归档不可读：{reference}"))
-                })?
-            }
-            None => inline_payload,
+        let (event_type, payload_json) = match payload_ref {
+            Some(reference) => match event_payload_store::read(&archive_root, &reference) {
+                Ok(content) => (event_type, content),
+                // 文件已被清理或丢失时，只对这一帧降级为占位记录：保留序号与游标推进，
+                // 避免单个外置文件缺失把同一车道的其他交互乃至整条会话一起拖垮。
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (
+                    SESSION_EVENT_MISSING_ARCHIVE_TYPE.to_owned(),
+                    serde_json::json!({
+                        "archiveMissing": true,
+                        "payloadRef": reference,
+                        "originalEventType": event_type,
+                    })
+                    .to_string(),
+                ),
+                Err(_) => {
+                    return Err(RuntimeStoreError::Storage(format!(
+                        "事件正文归档不可读：{reference}"
+                    )));
+                }
+            },
+            None => (event_type, inline_payload),
         };
         records.push(SessionEventRecord {
             session_id: parse_session_id(raw_session_id).map_err(storage)?,

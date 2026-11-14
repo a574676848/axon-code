@@ -332,9 +332,8 @@ impl NotesStore {
 
     /// 渲染 canonical checkpoint 的便签事实区。
     ///
-    /// 短便签（不超过 `NOTES_INLINE_MAX_BYTES`）内联正文，长便签只留路径、字节数与行数，
-    /// 由模型换窗后按需回读：自由格式工作便签因此可以放心写长，也不必为换窗改写格式。
-    /// 这里不做任何截断，是否放得下由调用方的总量预算统一判定。
+    /// 便签不超过 `NOTES_INLINE_MAX_BYTES` 时内联正文，超过只留路径、字节数与行数，
+    /// 由模型换窗后按需回读。这里不做任何截断，是否放得下由调用方的总量预算统一判定。
     pub fn render_checkpoint(session_dir: &Path) -> AxonResult<String> {
         let entries = list_entries_by_prefix(
             session_dir,
@@ -358,12 +357,6 @@ impl NotesStore {
                     )));
                 }
             };
-            // 提交通道不是事实便签：handoff/summary.md 要么被原样采用，要么因过期被丢弃，
-            // 绝不能由投影再内联一次，否则旧摘要会绕过来源校验重新回到新窗口。
-            // 判定只看路径：摘要内容不限格式，不能靠 `P0:` 之类的标记来决定它是不是提交通道。
-            if entry.path == crate::session_notes::SESSION_NOTES_SUBMITTED_SUMMARY_PATH {
-                continue;
-            }
             if content.len() > NOTES_INLINE_MAX_BYTES {
                 push_line(
                     &mut rendered,
@@ -397,9 +390,6 @@ impl NotesStore {
         push_line(&mut rendered, NOTES_READ_BACK_HINT);
         push_line(&mut rendered, NOTES_HISTORY_HINT);
         for path in Self::list_note_paths(session_dir)? {
-            if path == crate::session_notes::SESSION_NOTES_SUBMITTED_SUMMARY_PATH {
-                continue;
-            }
             push_line(&mut rendered, &format!("- 便签文件: {path}"));
         }
         Ok(rendered)
