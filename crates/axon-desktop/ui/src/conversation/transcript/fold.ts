@@ -11,6 +11,7 @@
  */
 
 import type { TranscriptCell, TurnState } from './state';
+import { emptyTurn } from './turns';
 
 /** 折叠的体量阈值（字符数）。 */
 export const FOLD_TEXT_THRESHOLD = 4_000;
@@ -45,7 +46,7 @@ const TOOL_PHRASES: Record<string, string> = {
   edit: '修改了文件',
   search: '已搜索代码',
   glob: '已匹配文件',
-  shell_command: '已执行命令',
+  shell_command: '执行了命令',
   write_stdin: '已操作终端',
   invoke_skill: '已调用技能',
   memory_search: '已检索记忆',
@@ -153,8 +154,7 @@ export function isFoldCandidate(position: number, total: number): boolean {
 export function foldedPrompt(turn: TurnState): string {
   for (const cell of turn.cells) {
     if (cell.role !== 'user') continue;
-    const line = cell.text.split('\n').find((part) => part.trim().length > 0);
-    if (line !== undefined) return line.trim();
+    return firstLineText(cell.text);
   }
   return '';
 }
@@ -173,8 +173,7 @@ export function foldedSummary(turn: TurnState): string {
       ? '已生成长回复与推理'
       : '已生成长回复';
   }
-  const head = phrases.slice(0, SUMMARY_PHRASE_LIMIT).join('，');
-  return phrases.length > SUMMARY_PHRASE_LIMIT ? `${head}等` : head;
+  return phraseSummary(phrases);
 }
 
 /**
@@ -202,11 +201,125 @@ export function foldTurn(turn: TurnState, summary: string): TurnState {
   };
 }
 
-/** 展开一轮：换回重新算出来的单元，并记下「用户要它保持展开」。 */
+/**
+ * 展开一轮：换回重新算出来的单元，并记下「用户要它保持展开」。
+ */
 export function replaceTurnCells(turn: TurnState, cells: TranscriptCell[]): TurnState {
   const index: Record<string, number> = {};
   cells.forEach((cell, position) => {
     index[cell.id] = position;
   });
   return { ...turn, folded: false, keepExpanded: true, cells, index };
+}
+
+/** 取正文里第一处真正的文字：空白行不算，全空时给空串。 */
+function firstLineText(text: string): string {
+  const line = text.split('\n').find((part) => part.trim().length > 0);
+  return line === undefined ? '' : line.trim();
+}
+
+/** 索引里的处理状态到轮次终态的映射：读不出来的按已收口处理。 */
+function skeletonStatus(status: string): TurnState['status'] {
+  switch (status) {
+    case 'interrupted':
+      return 'interrupted';
+    case 'rejected':
+      return 'rejected';
+    default:
+      return 'completed';
+  }
+}
+
+/** 历史条目的状态短语；折叠行右侧那一列读的就是它。 */
+function stateText(status: string): string {
+  switch (status) {
+    case 'interrupted':
+      return '已中断';
+    case 'rejected':
+      return '未执行';
+    default:
+      return '已完成';
+  }
+}
+
+/** 动作短语收口：最多列三个，其余并成「等」。 */
+function phraseSummary(phrases: string[]): string {
+  const head = phrases.slice(0, SUMMARY_PHRASE_LIMIT).join('，');
+  return phrases.length > SUMMARY_PHRASE_LIMIT ? `${head}等` : head;
+}
+
+/**
+ * 折叠行摘要。
+ *
+ * 优先用索引带回来的工具串（那句「执行了命令，已读取文件等」），它由事件写入时
+ * 累加而来；老记录没有这一列时退回「状态 + 这一轮显式选的模型」，仍没有就留一句
+ * 可操作的提示，不留空列。
+ */
+function skeletonSummary(
+  status: string,
+  model?: string | null,
+  toolSummary?: string | null,
+): string {
+  const phrases = toolPhrasesOf(toolSummary);
+  if (phrases.length > 0) {
+    return phraseSummary(phrases);
+  }
+  const name = model === undefined || model === null ? '' : model.trim();
+  return name.length === 0 ? `${stateText(status)} · 点开加载` : `${stateText(status)} · ${name}`;
+}
+
+/** 索引里的工具名串（逗号分隔）折成动作短语；顺序按出现先后、同类去重。 */
+function toolPhrasesOf(raw?: string | null): string[] {
+  if (raw === undefined || raw === null) return [];
+  const phrases: string[] = [];
+  for (const name of raw.split(',')) {
+    const trimmed = name.trim();
+    if (trimmed.length === 0) continue;
+    const phrase = toolPhrase(trimmed);
+    if (!phrases.includes(phrase)) phrases.push(phrase);
+  }
+  return phrases;
+}
+
+/**
+ * 一条「只有索引、没有正文」的历史轮次。
+ *
+ * 打开长会话时不为更早的每一条都付回放的代价：实测一条 40 轮、12 万帧的车道，
+ * 逐条回放要走 124 次帧页、几百 MB。这里只按索引立起折叠行，正文留着点开再取。
+ *
+ * 形态与 [`foldTurn`] 的产物完全一致（一个 `folded` 单元、标识取自
+ * Interaction 标识），因此渲染与点击展开走的都是既有那条路径：展开时按
+ * `interactionId` 重新回放，再由 `replace-turn-cells` 整段换回。
+ */
+export function historySkeletonTurn(entry: {
+  interactionId: string;
+  content: string;
+  receivedAtMs: number;
+  status: string;
+  /** 这一轮显式选的模型；旧网关不返回时为空。 */
+  model?: string | null;
+  /** 这一轮显式选的推理强度；留作展示与后续扩展。 */
+  reasoningEffort?: string | null;
+  /** 这一轮用过的工具名（逗号分隔）；写入侧累加，老记录为空。 */
+  toolSummary?: string | null;
+}): TurnState {
+  const summary = skeletonSummary(entry.status, entry.model, entry.toolSummary);
+  const cell: TranscriptCell = {
+    id: `${entry.interactionId}:folded`,
+    role: 'folded',
+    interactionId: entry.interactionId,
+    prompt: firstLineText(entry.content),
+    summary,
+    atMs: entry.receivedAtMs,
+  };
+  return {
+    ...emptyTurn(entry.interactionId, entry.receivedAtMs),
+    interactionId: entry.interactionId,
+    status: skeletonStatus(entry.status),
+    cells: [cell],
+    index: { [cell.id]: 0 },
+    startedAtMs: entry.receivedAtMs,
+    folded: true,
+    summary,
+  };
 }

@@ -443,7 +443,6 @@ export type ConversationAction =
    * 摘要在派发前算好：折叠之后就没有可依据的单元了。
    */
   | { type: 'fold-turn'; turnId: string; summary: string }
-  /** 展开一轮：把重新回放算出来的单元整段换回来。 */
   | { type: 'replace-turn-cells'; turnId: string; cells: TranscriptCell[] }
   | { type: 'connecting' }
   | { type: 'frames'; frames: import('../wire').ConversationStreamEvent[]; nowMs: number }

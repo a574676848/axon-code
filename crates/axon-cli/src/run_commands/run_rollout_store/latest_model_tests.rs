@@ -27,6 +27,7 @@ fn latest_session_model_reads_only_the_newest_turn() {
     let mut second = record("lane-session", None, 200);
     second.provider = "deng".to_owned();
     second.model = "gpt-6-astra".to_owned();
+    second.model_name = Some("gpt-6-astra".to_owned());
     store.record_session(&second).unwrap();
 
     let facts = load_latest_session_model_from_root(&root, "lane-session")
@@ -34,6 +35,8 @@ fn latest_session_model_reads_only_the_newest_turn() {
         .expect("应读到最新一轮");
     assert_eq!(facts.provider, "deng");
     assert_eq!(facts.model, "gpt-6-astra");
+    // 同一 (provider, id) 可能对应多条别名，事实里必须带上用户当初选的那一条。
+    assert_eq!(facts.model_name.as_deref(), Some("gpt-6-astra"));
 
     let missing = root.join("no-such-root");
     assert!(

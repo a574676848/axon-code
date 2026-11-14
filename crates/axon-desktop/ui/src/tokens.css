@@ -1184,6 +1184,29 @@ html[data-material] body {
 }
 
 /*
+ * 历史骨架行入场。
+ *
+ * 首屏与翻页都是「一次性接进来一批行」，因此不做逐行错峰：一批同时淡入读起来是
+ * 「一段历史浮现」，也不会让最后一条等前面十九条。只动 opacity 与 2px 位移，
+ * 与 `popover-up-in` 同一条缓动曲线，读起来是同一套动效语言。
+ */
+@keyframes skeleton-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.skeleton-row-in {
+  animation: skeleton-row-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/*
  * 输入坞外托槽运行态慢呼吸微光。
  */
 @keyframes dock-ambient-breathe {

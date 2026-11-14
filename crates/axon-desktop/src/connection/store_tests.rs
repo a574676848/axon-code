@@ -65,6 +65,7 @@ fn v1_in_client_root_is_migrated_field_by_field() {
     assert_eq!(document.version, 2);
     assert_eq!(document.client.theme.as_deref(), Some("obsidian"));
     assert!(!document.client.notifications_enabled);
+    assert_eq!(document.client.sidebar_collapsed, None);
     assert_eq!(
         document.client.last_workspace_dir.as_deref(),
         Some("D:/work")
@@ -217,6 +218,19 @@ fn future_versions_are_read_only_and_never_rewritten() {
     let error = save_document_at(&root, &loaded.document).expect_err("只读时写入必须被拒绝");
     assert!(error.contains("只读"), "{error}");
 
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn sidebar_collapsed_round_trips_through_v2_state() {
+    let root = temp_dir("sidebar");
+    let mut document = ClientStateDocument::default();
+    document.client.sidebar_collapsed = Some(true);
+
+    save_document_at(&root, &document).expect("侧栏偏好应可写入 v2 状态");
+    let loaded = load_document_at(&root, None);
+
+    assert_eq!(loaded.document.client.sidebar_collapsed, Some(true));
     let _ = fs::remove_dir_all(&root);
 }
 

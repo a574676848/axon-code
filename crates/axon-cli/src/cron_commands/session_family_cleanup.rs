@@ -15,7 +15,8 @@ use super::{
     session_cleanup_feishu::{apply_feishu_cleanup, apply_feishu_cleanup_count},
 };
 use crate::cron_commands::runtime_cleanup::{
-    cleanup_runtime_session_families, count_runtime_session_families, protected_runtime_session_ids,
+    cleanup_runtime_session_families, count_runtime_session_families,
+    protected_runtime_session_ids, stale_runtime_session_ids,
 };
 use crate::run_commands::RolloutSqliteStore;
 
@@ -25,9 +26,12 @@ const GOVERNANCE_STATUS_COMPLETED: &str = "completed";
 const GOVERNANCE_STATUS_FAILED: &str = "failed";
 const GOVERNANCE_STATUS_QUEUED: &str = "queued";
 const GOVERNANCE_STATUS_RUNNING: &str = "running";
-const SESSION_FAMILY_BATCH_LIMIT: usize = 256;
-const SESSION_FAMILY_TIME_BUDGET: Duration = Duration::from_secs(20);
-const INCREMENTAL_VACUUM_PAGE_BATCH: u32 = 256;
+/// 单批会话数：单个会话可能持有数十万条事件，批次过大会让删除事务长时间持有写锁。
+const SESSION_FAMILY_BATCH_LIMIT: usize = 8;
+/// 单轮会话族清理的墙上时钟预算：预算耗尽只结束本轮，剩余会话由下一轮续跑。
+const SESSION_FAMILY_TIME_BUDGET: Duration = Duration::from_secs(120);
+/// 单轮增量回收的页数：4 KiB 页下约等于 16 MiB，避免删了行文件却不缩。
+const INCREMENTAL_VACUUM_PAGE_BATCH: u32 = 4_096;
 
 /// 会话上下文文件计数：notes 状态文件、便签文件与归档分片。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -37,19 +41,53 @@ pub(super) struct SessionContextCounts {
     pub(super) archived_shards: usize,
 }
 
+/// 过期会话家族候选：rollout 索引与运行态两侧取并集。
+///
+/// rollout 只索引交互式主会话，子代理车道与历史 desktop 车道不在其中；
+/// 只按 rollout 取候选会让这些会话的根记录永久滞留，其事件也就永远没有
+/// 回收入口。运行态侧按最后一次活动时间自判过期，并对受治理保护的会话去重。
 pub(super) fn stale_session_family_ids(
     root: &Path,
     rollout_path: &Path,
     cutoff_ms: u64,
 ) -> Result<Vec<String>, String> {
-    if !rollout_path.exists() {
-        return Ok(Vec::new());
-    }
     let mut protected = protected_governance_sessions(root)?;
-    let mut store = RolloutSqliteStore::open_read_only(rollout_path)?;
-    let initial = store.stale_session_family_ids(cutoff_ms, &protected)?;
-    extend_runtime_protection(root, &initial, &mut protected)?;
-    store.stale_session_family_ids(cutoff_ms, &protected)
+    let mut ids = Vec::new();
+    let mut rollout_ids = HashSet::new();
+    if rollout_path.exists() {
+        let mut store = RolloutSqliteStore::open_read_only(rollout_path)?;
+        let initial = store.stale_session_family_ids(cutoff_ms, &protected)?;
+        extend_runtime_protection(root, &initial, &mut protected)?;
+        ids = store.stale_session_family_ids(cutoff_ms, &protected)?;
+        // rollout 的家族保护是整族语义：只要有一个成员受保护，整族都不动。
+        // 因此运行态补充候选只覆盖 rollout 完全没索引的会话，不得越过家族边界。
+        rollout_ids = rollout_session_ids(rollout_path)?;
+    }
+    ids.extend(
+        stale_runtime_session_ids(root, cutoff_ms)?
+            .into_iter()
+            .filter(|session_id| {
+                !protected.contains(session_id) && !rollout_ids.contains(session_id)
+            }),
+    );
+    ids.sort();
+    ids.dedup();
+    Ok(ids)
+}
+
+/// rollout 索引里已登记的会话集合：运行态补充候选必须避开这些会话。
+fn rollout_session_ids(rollout_path: &Path) -> Result<HashSet<String>, String> {
+    let connection =
+        Connection::open_with_flags(rollout_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|_| "rollout 会话索引打开失败".to_owned())?;
+    let mut statement = connection
+        .prepare("SELECT session_id FROM rollout_sessions")
+        .map_err(|_| "rollout 会话索引查询失败".to_owned())?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|_| "rollout 会话索引查询失败".to_owned())?;
+    rows.collect::<rusqlite::Result<HashSet<_>>>()
+        .map_err(|_| "rollout 会话索引读取失败".to_owned())
 }
 
 pub(super) fn count_session_family_data(
@@ -80,9 +118,10 @@ pub(super) fn cleanup_session_family_data(
         .filter(|session_id| requested.contains(session_id))
         .collect::<Vec<_>>();
     let deadline = Instant::now() + SESSION_FAMILY_TIME_BUDGET;
+    let mut processed: Vec<String> = Vec::new();
     for ids in eligible.chunks(SESSION_FAMILY_BATCH_LIMIT) {
         if Instant::now() >= deadline {
-            return Err("Session family 清理超出时间预算".to_owned());
+            break;
         }
         super::apply_runtime_cleanup_counts(report, cleanup_runtime_session_families(root, ids)?);
         report.deleted_governance_count = report
@@ -91,8 +130,9 @@ pub(super) fn cleanup_session_family_data(
         apply_feishu_cleanup(root, ids, report)?;
         remove_thread_files(root, ids, report)?;
         remove_session_context_files(root, ids, report)?;
+        processed.extend(ids.iter().cloned());
     }
-    finalize_rollout_cleanup(root, rollout_path, cutoff_ms, &eligible, report)
+    finalize_rollout_cleanup(root, rollout_path, cutoff_ms, &processed, report)
 }
 
 fn protected_governance_sessions(root: &Path) -> Result<HashSet<String>, String> {

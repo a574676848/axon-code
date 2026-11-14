@@ -152,6 +152,7 @@ const SHELL_RECEIPT_FIELDS =
  */
 const SHELL_RECEIPT_META_KEYS = new Set([
     'shell command',
+    'job output job_id',
     'elapsed_ms',
     'exit_code',
     'timed_out',
@@ -165,10 +166,17 @@ const SHELL_RECEIPT_META_KEYS = new Set([
     'full_output_available',
     'full_output_truncated',
     'full_output_failed',
+    'artifact_path',
 ]);
 
-/** 以这些字段开头的文本就是 shell 回执；两者都是从回执自身认出来的，不靠工具名。 */
-const SHELL_RECEIPT_HEAD = /^(shell command=|output_handler=|full_output_available=|stdout_chars=)/;
+/**
+ * 以这些字段开头的文本就是命令/作业回执。
+ *
+ * 三种头都认：`shell command=`（前台命令）、`job output job_id=`（读作业）、
+ * `output_handler=`（处理器在前的新格式）。判据取自回执自身，不查工具名。
+ */
+const SHELL_RECEIPT_HEAD =
+    /^(shell command=|job output job_id=|output_handler=|full_output_available=|stdout_chars=)/;
 
 /** 回执首行是否 shell 回执。 */
 export function isShellReceipt(value: string): boolean {

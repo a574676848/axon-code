@@ -33,6 +33,8 @@ export interface LaneEffectiveModel {
   provider: string;
   /** 该轮使用的 upstream 模型 ID。 */
   model: string;
+  /** 用户当时选择的模型别名；旧记录没有别名时为 null 或省略。 */
+  name?: string | null;
   /** 该轮实际请求的思考强度；未设置时为 null。 */
   reasoningEffort?: string | null;
 }
@@ -92,19 +94,34 @@ export function resolveConfig(
 /**
  * 把一轮真实运行的模型映射回配置里的展示名。
  *
- * 与运行时同一套匹配规则：同 provider 同 upstream id 精确优先，其次只按 id
- * （provider 改名或迁移时的兜底）。命中不了说明该模型已从配置移除，返回 null，
- * 由调用方回退到配置默认模型，那正是运行时会选的东西。
+ * 与运行时同一套匹配规则：先认记录里的别名（同一 provider 与 upstream id 必须同时
+ * 对得上，别名才作数），再退回同 provider 同 id 精确匹配，其次「别名与 id 都对得上但
+ * provider 变了」（渠道改名或迁移），最后只按 id。别名优先是因为同一 (provider, id)
+ * 在配置里可能有多个别名，只按 id 取第一条会把用户当初选的那个别名显示成另一条。
+ * 命中不了说明该模型已从配置移除，返回 null，由调用方回退到配置默认模型，那正是
+ * 运行时会选的东西。
  */
 export function modelLabelFor(
   catalog: ConfigModelEntry[],
   run: LaneEffectiveModel | null,
 ): string | null {
   if (run === null) return null;
+  const name = run.name ?? null;
+  if (name !== null) {
+    const aliased = catalog.find(
+      (entry) =>
+        entry.name === name && entry.provider === run.provider && entry.id === run.model,
+    );
+    if (aliased !== undefined) return aliased.name;
+  }
   const exact = catalog.find(
     (entry) => entry.provider === run.provider && entry.id === run.model,
   );
   if (exact !== undefined) return exact.name;
+  if (name !== null) {
+    const migrated = catalog.find((entry) => entry.name === name && entry.id === run.model);
+    if (migrated !== undefined) return migrated.name;
+  }
   return catalog.find((entry) => entry.id === run.model)?.name ?? null;
 }
 

@@ -10,6 +10,15 @@
 
 import type { TurnState } from '../../conversation/transcript/state';
 
+/**
+ * 折叠轮最多同时保留多少条。
+ *
+ * 折叠轮不吃单元预算（见下），但不能因此没有上限：翻十页就是两百条，每条都是一个
+ * 真实的 DOM 块，再往下翻就会回到「越翻越慢」的老路上。超出部分按原有口径折成
+ * 「更早的 N 条内容已折叠」。
+ */
+const FOLDED_TURN_LIMIT = 120;
+
 /** 一轮在窗口里的形态。 */
 export interface WindowedTurn {
   /** 轮次在完整列表里的下标，用于展示轮次序号。 */
@@ -37,8 +46,25 @@ export function turnWindow(turns: readonly TurnState[], budget: number): TurnWin
   const kept: WindowedTurn[] = [];
   let remaining = Math.max(0, budget);
   let hiddenCells = 0;
+  let foldedKept = 0;
   for (let index = turns.length - 1; index >= 0; index -= 1) {
     const turn = turns[index];
+    /*
+     * 折叠轮不吃预算。
+     *
+     * 它只有一格，却是这一轮历史唯一的入口：按预算折掉之后只剩一句
+     * 「更早的 N 条内容已折叠」，用户连点开的地方都没有。历史骨架轮
+     * 更进一步：正文根本还没取，折掉等于彻底丢失。
+     */
+    if (turn.folded) {
+      if (foldedKept >= FOLDED_TURN_LIMIT) {
+        hiddenCells += turn.cells.length;
+        continue;
+      }
+      foldedKept += 1;
+      kept.push({ index, turn, hiddenCells: 0 });
+      continue;
+    }
     const count = turn.cells.length;
     if (remaining <= 0) {
       hiddenCells += count;

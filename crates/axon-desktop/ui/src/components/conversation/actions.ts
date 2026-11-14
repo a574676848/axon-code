@@ -59,3 +59,19 @@ export const ConversationActionsProvider = ConversationActionsContext.Provider;
 export function useConversationActions(): ConversationActions | null {
   return React.useContext(ConversationActionsContext);
 }
+
+/*
+ * 正在展开的那一条。
+ *
+ * 单独一条上下文而不是并进动作集合：动作集合是每一轮都会读的 props，它一变，
+ * 正文里所有轮次的 memo 就同时失效。展开状态只该让「那一条折叠行」重渲染，
+ * 因此这里只放一个标识，消费者也只有折叠行自己。
+ */
+const UnfoldingContext = React.createContext<string | null>(null);
+
+export const UnfoldingProvider = UnfoldingContext.Provider;
+
+/** 正在展开的 Interaction 标识；没有展开动作时为空。 */
+export function useUnfoldingInteractionId(): string | null {
+  return React.useContext(UnfoldingContext);
+}

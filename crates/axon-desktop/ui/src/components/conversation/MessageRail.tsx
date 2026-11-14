@@ -40,18 +40,31 @@ export interface MessageRailProps {
   onNavigate: () => void;
 }
 
+/**
+ * 这一轮用于导航的那一句。
+ *
+ * 正文轮取用户消息；骨架轮还没回放，用户那一句只存在于折叠单元的 `prompt` 里。
+ * 两种形态给同一句话，导航条才不会因为「这一轮还没打开」就少一个点。
+ */
+function turnNavLabel(turn: TurnState): string {
+  for (const cell of turn.cells) {
+    if (cell.role === 'user' && cell.text.trim().length > 0) return cell.text;
+    if (cell.role === 'folded' && cell.prompt.trim().length > 0) return cell.prompt;
+  }
+  return '';
+}
+
 export const MessageRail: React.FC<MessageRailProps> = ({ turns, scrollRef, anchors, atBottom, onNavigate }) => {
   const [activeId, setActiveId] = React.useState<string | null>(null);
   const [hoveredId, setHoveredId] = React.useState<string | null>(null);
 
-  /** 只有带用户消息的轮次才值得导航。 */
-  const navigable = React.useMemo(
-    () =>
-      turns.filter((turn) =>
-        turn.cells.some((cell) => cell.role === 'user' && cell.text.trim().length > 0),
-      ),
-    [turns],
-  );
+  /**
+   * 只有带「用户那一句」的轮次才值得导航。
+   *
+   * 折叠行也算：骨架轮还没回放，它的用户消息只存在于折叠单元的 `prompt` 里。
+   * 不认它的话，翻到第一百条时导航条上仍然只有那一两轮已展开的正文，等于废掉。
+   */
+  const navigable = React.useMemo(() => turns.filter((turn) => turnNavLabel(turn).length > 0), [turns]);
 
   React.useEffect(() => {
     const root = scrollRef.current;
@@ -99,8 +112,7 @@ export const MessageRail: React.FC<MessageRailProps> = ({ turns, scrollRef, anch
       {navigable.map((turn) => {
         const active = turn.id === (atBottom ? navigable[navigable.length - 1]?.id : activeId);
         const hovered = turn.id === hoveredId;
-        const preview = turn.cells.find((cell) => cell.role === 'user');
-        const label = preview !== undefined && preview.role === 'user' ? preview.text : '';
+        const label = turnNavLabel(turn);
         return (
           <button
             key={turn.id}

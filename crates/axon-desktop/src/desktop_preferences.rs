@@ -34,10 +34,11 @@ fn theme_of(state: &DesktopState) -> String {
 }
 
 /// 组成一次快照，避免读写两处各拼一遍字段。
-fn snapshot(state: &DesktopState) -> DesktopPreferences {
+fn snapshot(state: &DesktopState, sidebar_collapsed: Option<bool>) -> DesktopPreferences {
     DesktopPreferences {
         notifications_enabled: state.notifications_enabled,
         theme: theme_of(state),
+        sidebar_collapsed,
     }
 }
 
@@ -49,21 +50,28 @@ pub struct DesktopPreferences {
     pub notifications_enabled: bool,
     /// 界面主题标识，取值为 `paper` 或 `obsidian`。
     pub theme: String,
+    /// 左侧导航是否折叠；空值表示用户还没有手动表态。
+    pub sidebar_collapsed: Option<bool>,
 }
 
 /// Tauri IPC 命令：读取桌面偏好。
 #[tauri::command(async)]
 pub fn desktop_preferences() -> Result<DesktopPreferences, String> {
-    Ok(snapshot(&load_state()))
+    let state = load_state();
+    Ok(snapshot(
+        &state,
+        crate::connection::runtime().sidebar_collapsed(),
+    ))
 }
 
 /// Tauri IPC 命令：设置是否发送系统通知。
 #[tauri::command(async)]
 pub fn desktop_set_notifications(enabled: bool) -> Result<DesktopPreferences, String> {
+    let runtime = crate::connection::runtime();
     let mut state = load_state();
     state.notifications_enabled = enabled;
     save_state(&state)?;
-    Ok(snapshot(&state))
+    Ok(snapshot(&state, runtime.sidebar_collapsed()))
 }
 
 /// Tauri IPC 命令：切换界面主题。
@@ -73,6 +81,7 @@ pub fn desktop_set_notifications(enabled: bool) -> Result<DesktopPreferences, St
 #[tauri::command(async)]
 pub fn desktop_set_theme(theme: String) -> Result<DesktopPreferences, String> {
     let normalized = normalize_theme(&theme);
+    let runtime = crate::connection::runtime();
     let mut state = load_state();
     state.theme = if normalized == THEME_PAPER {
         None
@@ -81,7 +90,16 @@ pub fn desktop_set_theme(theme: String) -> Result<DesktopPreferences, String> {
     };
     save_state(&state)?;
     crate::window_effects::update_window_material_mode(normalized == THEME_OBSIDIAN);
-    Ok(snapshot(&state))
+    Ok(snapshot(&state, runtime.sidebar_collapsed()))
+}
+
+/// Tauri IPC 命令：设置左侧导航是否折叠。
+#[tauri::command(async)]
+pub fn desktop_set_sidebar_collapsed(collapsed: bool) -> Result<DesktopPreferences, String> {
+    let runtime = crate::connection::runtime();
+    runtime.set_sidebar_collapsed(collapsed)?;
+    let state = load_state();
+    Ok(snapshot(&state, runtime.sidebar_collapsed()))
 }
 
 #[cfg(test)]
@@ -93,10 +111,12 @@ mod tests {
         let value = serde_json::to_value(DesktopPreferences {
             notifications_enabled: true,
             theme: THEME_PAPER.to_string(),
+            sidebar_collapsed: Some(true),
         })
         .expect("序列化");
         assert_eq!(value["notificationsEnabled"], true);
         assert_eq!(value["theme"], THEME_PAPER);
+        assert_eq!(value["sidebarCollapsed"], true);
     }
 
     #[test]

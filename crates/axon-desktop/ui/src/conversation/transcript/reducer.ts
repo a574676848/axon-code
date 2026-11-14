@@ -66,11 +66,23 @@ export function conversationReducer(
       return attachHistory(state, action.interactionId, action.attachments);
     case 'seed-history':
       return seedHistory(state, action.interactionId, action.text, action.attachments);
-    case 'prepend-turns':
-      // 更早的一页已经在自己那份投影里回放完毕，这里只把它接在头部。
-      return action.turns.length === 0
-        ? state
-        : { ...state, turns: [...action.turns, ...state.turns] };
+    case 'prepend-turns': {
+      if (action.turns.length === 0) return state;
+      /*
+       * 去重后再接。
+       *
+       * 前置进来的既可能是回放算好的一页，也可能是按索引立起来的骨架行：
+       * 重连会再取一次首屏页，反复翻页也可能取到与已有窗口重叠的一段。
+       * 同一条 Interaction 只能有一个轮次：重复接进头部就是两份同样的历史。
+       */
+      const known = new Set(state.turns.map((turn) => turn.id));
+      const fresh = action.turns.filter((turn) => {
+        if (known.has(turn.id)) return false;
+        known.add(turn.id);
+        return true;
+      });
+      return fresh.length === 0 ? state : { ...state, turns: [...fresh, ...state.turns] };
+    }
     case 'fold-turn': {
       // 折叠即释放：正文单元在这一步被丢弃，摘要由调用方在派发前算好。
       const position = state.turns.findIndex((turn) => turn.id === action.turnId);

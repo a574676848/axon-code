@@ -101,3 +101,57 @@ test('没有会话事实时，生效模型与窗口都取配置默认值', () =>
     assert.equal(effective.label, 'deepseek-v4.1-flash');
     assert.equal(effective.contextWindow, 262_144);
 });
+
+/* 同一 upstream 模型在配置里挂两个别名：只按 provider 与 id 取第一条会显示错模型。 */
+const DUAL_ALIAS = [
+    { ...MODEL, name: 'fast_model', context_window: 131_072 },
+    { ...MODEL, name: 'deepseek-v4.1-flash', context_window: 262_144 },
+];
+
+test('同一 provider 与 upstream id 有多条别名时，按记录里的别名还原展示名', () => {
+    const config = resolveConfig(configOf('fast_model', DUAL_ALIAS));
+    const lane = {
+        provider: 'sm-wenwen-chat',
+        model: 'deepseek-v4.1-flash-1017',
+        name: 'deepseek-v4.1-flash',
+    };
+    assert.equal(modelLabelFor(config.catalog, lane), 'deepseek-v4.1-flash');
+    const effective = resolveEffectiveModel(config, null, null, lane);
+    assert.equal(effective.label, 'deepseek-v4.1-flash');
+    assert.equal(effective.contextWindow, 262_144, '窗口必须跟着别名走，不能取同 id 的另一条');
+});
+
+test('记录里的别名对不上 provider 或 id 时，仍退回 id 匹配', () => {
+    const config = resolveConfig(configOf('fast_model', DUAL_ALIAS));
+    assert.equal(
+        modelLabelFor(config.catalog, {
+            provider: 'sm-wenwen-chat',
+            model: 'deepseek-v4.1-flash-1017',
+            name: 'removed-alias',
+        }),
+        'fast_model',
+        '别名已从配置移除，只能按 provider 与 id 取第一条',
+    );
+    assert.equal(
+        modelLabelFor(config.catalog, {
+            provider: 'another-provider',
+            model: 'removed-model-id',
+            name: 'deepseek-v4.1-flash',
+        }),
+        null,
+        '别名与 id 都对不上时交给调用方回退配置默认模型',
+    );
+});
+
+test('渠道改名后，别名与 upstream id 同时对上仍然作数', () => {
+    const config = resolveConfig(configOf('fast_model', DUAL_ALIAS));
+    assert.equal(
+        modelLabelFor(config.catalog, {
+            provider: 'renamed-provider',
+            model: 'deepseek-v4.1-flash-1017',
+            name: 'deepseek-v4.1-flash',
+        }),
+        'deepseek-v4.1-flash',
+        'provider 变了但别名与 id 都指向同一条，不能退回同 id 的第一条',
+    );
+});

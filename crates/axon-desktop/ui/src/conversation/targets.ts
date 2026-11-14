@@ -101,6 +101,13 @@ export interface ConversationController {
   /** 当前订阅的 Interaction 标识；会话目标恒为 null。 */
   watchedInteractionId: string | null;
   /**
+   * 正在展开的折叠轮标识；没有展开动作时为空。
+   *
+   * 折叠行据此把箭头换成转圈：展开要先回放一窗帧，这段空档必须有可见反馈，
+   * 否则点下去的一秒里那一行毫无变化，读起来像点空了。
+   */
+  unfoldingId: string | null;
+  /**
    * 整条会话的累计读数；基线还没取回时为 null。
    *
    * 口径是各轮输入、缓存读写、输出与推理之和，以及各轮墙钟耗时之和；与上下文读数不同：

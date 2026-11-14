@@ -350,10 +350,14 @@ export const ConversationStream: React.FC<ConversationStreamProps> = ({
                 type="button"
                 onClick={onLoadOlder}
                 disabled={loadingOlder}
-                className="btn-tactile h-7 px-2.5 inline-flex items-center gap-1.5 rounded-full text-meta text-text-tertiary hover:text-text-primary hover:bg-hover disabled:cursor-wait disabled:opacity-60"
+                /*
+                 * 定宽而不是随文案伸缩：加载中的文案与静止时不同，按钮在时间线中央
+                 * 忽宽忽窄会把上下两段内容一起推走，读起来是一次没必要的抖动。
+                 */
+                className="btn-tactile h-7 min-w-32 px-2.5 inline-flex items-center justify-center gap-1.5 rounded-full text-meta text-text-tertiary hover:text-text-primary hover:bg-hover disabled:cursor-wait disabled:opacity-60"
               >
                 {loadingOlder ? <SpinnerIcon size={13} /> : <ArrowUpIcon size={13} />}
-                {loadingOlder ? '正在加载更早的会话' : '加载更早'}
+                {loadingOlder ? '正在加载更早' : '加载更早'}
               </button>
               <span aria-hidden="true" className="flex-1 h-hairline bg-border-hairline" />
             </div>

@@ -141,6 +141,19 @@ test('stderr 有内容时单独成段，没有输出时给一句无输出', () =
     assert.equal(empty.code, '（无输出）');
 });
 
+test('作业回执同样只留正文，作业标识与归档路径不铺版面', () => {
+    const receipt =
+        'job output job_id=8 status=completed elapsed_ms=211609 exit_code=0 stdout_truncated=false stdout_chars=70/70 stderr_truncated=false stderr_chars=0/0 full_output_available=true artifact_path=C:/Users/tester/.axon/data/logs/tee/job-8.shell.log stdout=TAG_CI_EXIT=1\n{"ci_tag_conclusion":"","ci_tag_status":"in_progress"}\n stderr=';
+    const formatted = formatToolContent(receipt);
+    assert.equal(formatted.language, 'shell');
+    assert.equal(
+        formatted.code,
+        'TAG_CI_EXIT=1\n{"ci_tag_conclusion":"","ci_tag_status":"in_progress"}',
+    );
+    assert.equal(formatted.code.includes('artifact_path'), false);
+    assert.equal(formatted.code.includes('job_id'), false);
+});
+
 test('后端字符串和结构化错误保留具体原因', () => {
     assert.equal(backendError('原子写配置失败: 权限不足').message, '原子写配置失败: 权限不足');
     assert.equal(backendError({ message: '配置值非法' }).message, '配置值非法');

@@ -1,55 +1,29 @@
-//! 压缩 checkpoint 的固定合同与提交前完整性门禁。
-
-use std::collections::BTreeSet;
+//! 交接摘要的提交前门禁。
+//!
+//! 摘要内容由模型自由撰写：运行时只要求非空，格式与段落结构都不限制。
+//! 曾经把六段式标题当硬门禁，模型把概述写在 `P0:` 同一行就判「缺少固定字段 P0:」，
+//! 而换窗是会话自救的唯一动作，在格式上 fail-closed 等于把会话永久钉死在满上下文。
+//! 篇幅由换窗层的预算校验统一把关（`ReplacementValidationError::CheckpointOverBudget`），
+//! 超预算只会要求重写或回落投影，不会在解析阶段就断死。
 
 use crate::AgentModelMessage;
 
-/// checkpoint 的 P0 分组标题。
-pub const CANONICAL_CHECKPOINT_P0_HEADER: &str = "P0:";
-/// checkpoint 的任务字段标题。
-pub const CANONICAL_CHECKPOINT_TASK_HEADER: &str = "TASK:";
-/// checkpoint 的约束字段标题。
-pub const CANONICAL_CHECKPOINT_CONSTRAINTS_HEADER: &str = "CONSTRAINTS:";
-/// checkpoint 的已验证事实字段标题。
-pub const CANONICAL_CHECKPOINT_VERIFIED_HEADER: &str = "VERIFIED:";
-/// checkpoint 的待办字段标题。
-pub const CANONICAL_CHECKPOINT_OPEN_HEADER: &str = "OPEN:";
-/// checkpoint 的活动工具字段标题。
-pub const CANONICAL_CHECKPOINT_TOOLS_HEADER: &str = "TOOLS:";
-
-const CANONICAL_CHECKPOINT_HEADERS: [&str; 6] = [
-    CANONICAL_CHECKPOINT_P0_HEADER,
-    CANONICAL_CHECKPOINT_TASK_HEADER,
-    CANONICAL_CHECKPOINT_CONSTRAINTS_HEADER,
-    CANONICAL_CHECKPOINT_VERIFIED_HEADER,
-    CANONICAL_CHECKPOINT_OPEN_HEADER,
-    CANONICAL_CHECKPOINT_TOOLS_HEADER,
-];
-const CHECKPOINT_EMPTY_LIST_ITEM: &str = "-";
-const CHECKPOINT_NO_ACTIVE_TOOLS: &str = "- none";
-const CHECKPOINT_TOOL_ID_PREFIX: &str = "- ID: ";
-
-/// 已通过完整性门禁的 canonical checkpoint。
+/// 已通过门禁的交接摘要。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CanonicalCheckpoint {
     summary: String,
 }
 
 impl CanonicalCheckpoint {
-    /// 解析并校验压缩摘要，确保 replacement history 只接受可恢复的 checkpoint。
-    pub fn parse(summary: &str, history: &[AgentModelMessage]) -> Result<Self, String> {
+    /// 校验交接摘要非空。内容格式与篇幅不在这里判定。
+    ///
+    /// `history` 只为兼容既有调用签名保留：活动 tool call 的一致性不再由摘要文本承担，
+    /// 带悬空调用的窗口在重建历史时按自身规则处理，不该由一段自由文本兜底。
+    pub fn parse(summary: &str, _history: &[AgentModelMessage]) -> Result<Self, String> {
         let summary = summary.trim();
-        let fields = CheckpointFields::parse(summary)?;
-        for (header, value) in [
-            (CANONICAL_CHECKPOINT_TASK_HEADER, fields.task),
-            (CANONICAL_CHECKPOINT_CONSTRAINTS_HEADER, fields.constraints),
-            (CANONICAL_CHECKPOINT_VERIFIED_HEADER, fields.verified),
-            (CANONICAL_CHECKPOINT_OPEN_HEADER, fields.open),
-            (CANONICAL_CHECKPOINT_TOOLS_HEADER, fields.tools),
-        ] {
-            validate_required_field(header, value)?;
+        if summary.is_empty() {
+            return Err("checkpoint 内容为空".to_owned());
         }
-        validate_tool_checkpoint(fields.tools, history)?;
         Ok(Self {
             summary: summary.to_owned(),
         })
@@ -66,146 +40,4 @@ impl CanonicalCheckpoint {
     pub fn into_inner(self) -> String {
         self.summary
     }
-}
-
-struct CheckpointFields<'a> {
-    task: &'a str,
-    constraints: &'a str,
-    verified: &'a str,
-    open: &'a str,
-    tools: &'a str,
-}
-
-impl<'a> CheckpointFields<'a> {
-    fn parse(summary: &'a str) -> Result<Self, String> {
-        let positions = CANONICAL_CHECKPOINT_HEADERS
-            .iter()
-            .map(|header| unique_header_position(summary, header))
-            .collect::<Result<Vec<_>, _>>()?;
-        if positions
-            .windows(2)
-            .any(|pair| pair[0].start >= pair[1].start)
-        {
-            return Err(
-                "checkpoint 固定字段顺序必须为 P0/TASK/CONSTRAINTS/VERIFIED/OPEN/TOOLS".to_owned(),
-            );
-        }
-        Ok(Self {
-            task: section_body(summary, positions[1], positions[2]),
-            constraints: section_body(summary, positions[2], positions[3]),
-            verified: section_body(summary, positions[3], positions[4]),
-            open: section_body(summary, positions[4], positions[5]),
-            tools: summary[positions[5].content_start..].trim(),
-        })
-    }
-}
-
-#[derive(Clone, Copy)]
-struct HeaderPosition {
-    start: usize,
-    content_start: usize,
-}
-
-fn unique_header_position(summary: &str, header: &str) -> Result<HeaderPosition, String> {
-    let positions = header_positions(summary, header);
-    match positions.as_slice() {
-        [position] => Ok(*position),
-        [] => Err(format!("checkpoint 缺少固定字段 {header}")),
-        _ => Err(format!("checkpoint 固定字段 {header} 重复")),
-    }
-}
-
-fn header_positions(summary: &str, header: &str) -> Vec<HeaderPosition> {
-    let mut positions = Vec::new();
-    let mut offset = 0;
-    for line in summary.split_inclusive('\n') {
-        let content = line.trim_end_matches(['\r', '\n']);
-        if content.trim() == header {
-            positions.push(HeaderPosition {
-                start: offset,
-                content_start: offset.saturating_add(line.len()),
-            });
-        }
-        offset = offset.saturating_add(line.len());
-    }
-    positions
-}
-
-fn section_body(summary: &str, start: HeaderPosition, end: HeaderPosition) -> &str {
-    summary[start.content_start..end.start].trim()
-}
-
-fn validate_required_field(header: &str, value: &str) -> Result<(), String> {
-    let has_content = value
-        .lines()
-        .map(str::trim)
-        .any(|line| !line.is_empty() && line != CHECKPOINT_EMPTY_LIST_ITEM);
-    has_content
-        .then_some(())
-        .ok_or_else(|| format!("checkpoint 固定字段 {header} 不能为空"))
-}
-
-fn validate_tool_checkpoint(tools: &str, history: &[AgentModelMessage]) -> Result<(), String> {
-    let active_ids = active_tool_call_ids(history)?;
-    if active_ids.is_empty() {
-        return (tools == CHECKPOINT_NO_ACTIVE_TOOLS)
-            .then_some(())
-            .ok_or_else(|| "没有活动 tool call 时，checkpoint TOOLS 必须为 - none".to_owned());
-    }
-    let checkpoint_ids = if tools == CHECKPOINT_NO_ACTIVE_TOOLS {
-        BTreeSet::new()
-    } else {
-        checkpoint_tool_ids(tools)?
-    };
-    let missing_ids = active_ids
-        .difference(&checkpoint_ids)
-        .cloned()
-        .collect::<Vec<_>>();
-    missing_ids.is_empty().then_some(()).ok_or_else(|| {
-        format!(
-            "checkpoint TOOLS 缺少活动 tool call ID：{}",
-            missing_ids.join(", ")
-        )
-    })
-}
-
-fn active_tool_call_ids(history: &[AgentModelMessage]) -> Result<BTreeSet<String>, String> {
-    let mut call_ids = BTreeSet::new();
-    let mut result_ids = BTreeSet::new();
-    for message in history {
-        let Some(metadata) = message.provider_metadata.as_ref() else {
-            continue;
-        };
-        for call in metadata.tool_calls.as_deref().unwrap_or_default() {
-            let call_id = call.id.trim();
-            if call_id.is_empty() {
-                return Err("压缩历史含无 ID 的活动 tool call，无法构建 checkpoint".to_owned());
-            }
-            call_ids.insert(call_id.to_owned());
-        }
-        if let Some(result) = metadata.tool_result.as_ref() {
-            let call_id = result.call_id.trim();
-            if !call_id.is_empty() {
-                result_ids.insert(call_id.to_owned());
-            }
-        }
-    }
-    Ok(call_ids.difference(&result_ids).cloned().collect())
-}
-
-fn checkpoint_tool_ids(tools: &str) -> Result<BTreeSet<String>, String> {
-    let mut ids = BTreeSet::new();
-    for line in tools.lines().map(str::trim).filter(|line| !line.is_empty()) {
-        let Some(call_id) = line.strip_prefix(CHECKPOINT_TOOL_ID_PREFIX) else {
-            return Err("checkpoint TOOLS 的活动项必须使用 - ID: <provider-call-id>".to_owned());
-        };
-        let call_id = call_id.trim();
-        if call_id.is_empty() {
-            return Err("checkpoint TOOLS 包含空的活动 tool call ID".to_owned());
-        }
-        ids.insert(call_id.to_owned());
-    }
-    (!ids.is_empty())
-        .then_some(ids)
-        .ok_or_else(|| "checkpoint TOOLS 缺少活动 tool call ID".to_owned())
 }

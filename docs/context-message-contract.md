@@ -121,7 +121,7 @@ kind   == Regular
 
 摘要的作者是当前模型，运行时不生成语义内容、不按栏目截断。提交通道与工作便签是两条独立通道：
 
-**提交通道**：模型需要精确控制摘要语义时，把摘要写入私有便签的保留路径 `handoff/summary.md`（`SESSION_NOTES_SUBMITTED_SUMMARY_PATH`），文件首行必须是 `P0:`（`SESSION_NOTES_SUBMITTED_SUMMARY_HEADER`）。首行不是 `P0:` 时该文件按普通便签处理，不参与原样采用。
+**提交通道**：模型把交接摘要写入私有便签的保留路径 `handoff/summary.md`（`SESSION_NOTES_SUBMITTED_SUMMARY_PATH`）。识别只看路径，内容不限格式——没有固定段落、不必套模板，只要在预算内就原样带进新窗口；超预算时才回落到投影，且不影响换窗本身。该文件不会被当作事实便签内联进投影。
 
 **工作便签**：`checkpoint.md` 等其余便签保持自由格式，模型可继续用任意 markdown 结构记录进展，不必为换窗改写结构。
 

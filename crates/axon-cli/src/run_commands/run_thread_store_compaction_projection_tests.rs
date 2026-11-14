@@ -154,6 +154,7 @@ fn fixture_session_record() -> RunSessionRecord {
         cwd: Some("E:\\fixture".to_owned()),
         provider: "openai".to_owned(),
         model: "gpt-5".to_owned(),
+        model_name: Some("gpt-5".to_owned()),
         selected_skill_name: None,
         repo_context: None,
         session_context: None,

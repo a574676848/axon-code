@@ -84,6 +84,18 @@ pub struct InteractionSummary {
     /// 入站时落地的本地附件绝对路径。
     #[serde(default)]
     pub attachments: Vec<String>,
+    /// 该轮显式指定的模型；入口没有选择时为空。
+    ///
+    /// 折叠成一行时它是最有信息量的那一项：索引不读事件流，模型是唯一能「不花一次
+    /// 扫描就说清这轮怎么跑的」的聚合事实。缺省即旧网关，界面退回状态短语。
+    #[serde(default)]
+    pub model: Option<String>,
+    /// 该轮显式指定的推理强度；入口没有选择时为空。
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    /// 该轮用过的工具名（逗号分隔、已去重）；老网关不返回时为空。
+    #[serde(default)]
+    pub tool_summary: String,
 }
 
 /// 网关载荷。
@@ -117,6 +129,9 @@ pub struct LaneEffectiveModel {
     pub provider: String,
     /// 该轮使用的 upstream 模型 ID。
     pub model: String,
+    /// 用户当时选择的模型别名；旧记录没有该字段时为空。
+    #[serde(default)]
+    pub name: Option<String>,
     /// 该轮实际请求的思考强度；未设置时为空。
     #[serde(default)]
     pub reasoning_effort: Option<String>,

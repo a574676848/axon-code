@@ -17,10 +17,11 @@ use super::runtime_cleanup::session_event_expiry_filter;
 
 /// 运行态库的磁盘硬上限。
 ///
-/// 取值必须明显高于「保留窗口内的正常体量」：实测 7 天约 385 MiB（约 55 MiB/天）。
-/// 上限压到这个量级会让水位淘汰先于 7 天保留期触发，等于悄悄把保留窗口缩短，
-/// 并且删掉仍可回放的历史。这里取 4 倍余量，只在异常增长时才动手。
-pub(super) const RUNTIME_MAX_DISK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// 取值必须明显高于「保留窗口内的正常体量」。实测口径按高负载重算：
+/// desktop 车道单日可写入 30 万到 45 万帧、约 400 MiB/天，7 天保留期对应
+/// 约 2.8 GiB。旧值 2 GiB 依据的是 55 MiB/天的旧基线，会让水位淘汰先于
+/// 保留期触发，把 7 天窗口悄悄压到 2 至 3 天，因此提高到 4 GiB。
+pub(super) const RUNTIME_MAX_DISK_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 /// 高水位：越过即按「最旧优先」开始淘汰。
 pub(super) const RUNTIME_HIGH_WATER_BYTES: u64 = RUNTIME_MAX_DISK_BYTES / 10 * 8;
 /// 低水位：淘汰到这里停止，避免每轮都贴着上限抖动。

@@ -21,7 +21,7 @@ const RETAINED_ARTIFACT_CONTENT: &[u8] = b"retained-session-artifact\n";
 const CLEANUP_PERFORMANCE_SAMPLE_COUNT: usize = 20;
 const CLEANUP_PERFORMANCE_P99_BUDGET_US: u128 = 2_000_000;
 
-fn open_fixture(root: &Path) -> Connection {
+pub(super) fn open_fixture(root: &Path) -> Connection {
     let path = root
         .join(axon_config::AXON_RUNTIME_DATA_DIR)
         .join(RUNTIME_DATABASE_FILE);
@@ -261,9 +261,13 @@ fn stale_family_dry_run_subtracts_rolling_event_overlap() {
     let overlap = count_runtime_session_event_overlap(root.path(), &["stale".to_owned()], 100)
         .expect("重叠应可统计");
 
+    // 会话状态是 idle，不属于活跃车道：事件保底不生效，超期事件整段可回收。
     assert_eq!(family.session_events, usize::try_from(EVENT_COUNT).unwrap());
-    assert_eq!(rolling.session_events, 1);
-    assert_eq!(overlap, 1);
+    assert_eq!(
+        rolling.session_events,
+        usize::try_from(EVENT_COUNT).unwrap()
+    );
+    assert_eq!(overlap, usize::try_from(EVENT_COUNT).unwrap());
     assert_eq!(
         family
             .session_events

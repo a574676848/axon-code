@@ -87,6 +87,8 @@ pub(crate) fn load_session_usage_totals_from_root(
 pub(crate) struct SessionModelFacts {
     pub(crate) provider: String,
     pub(crate) model: String,
+    /// 用户当时选择的别名；旧记录没有该字段时为 `None`。
+    pub(crate) model_name: Option<String>,
     pub(crate) reasoning_effort: Option<String>,
 }
 
@@ -111,6 +113,7 @@ pub(crate) fn load_latest_session_model_from_root(
         .map(|record| SessionModelFacts {
             provider: record.provider,
             model: record.model,
+            model_name: record.model_name,
             reasoning_effort: record.reasoning_effort,
         }))
 }

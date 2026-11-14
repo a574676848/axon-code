@@ -656,6 +656,10 @@ export const desktopPreferences = (): Promise<DesktopPreferences> => call('deskt
 export const desktopSetNotifications = (enabled: boolean): Promise<DesktopPreferences> =>
   call('desktop_set_notifications', { enabled });
 
+/** 设置左侧导航是否折叠。 */
+export const desktopSetSidebarCollapsed = (collapsed: boolean): Promise<DesktopPreferences> =>
+  call('desktop_set_sidebar_collapsed', { collapsed });
+
 /** 切换界面主题。 */
 export const desktopSetTheme = (theme: ThemeId): Promise<DesktopPreferences> =>
   call('desktop_set_theme', { theme });

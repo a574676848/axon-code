@@ -26,6 +26,7 @@ axon-process = { path = "../axon-process" }
 axon-rustls-provider = { path = "../axon-rustls-provider" }
 axon-time = { path = "../axon-time" }
 ed25519-dalek.workspace = true
+encoding_rs.workspace = true
 futures-util.workspace = true
 globset = "0.4"
 grep-matcher.workspace = true

@@ -64,6 +64,8 @@ pub struct ClientLayer {
     pub theme: Option<String>,
     /// 是否发送系统通知。
     pub notifications_enabled: bool,
+    /// 左侧导航是否折叠；空值表示用户还没有手动表态。
+    pub sidebar_collapsed: Option<bool>,
     /// 上一次在原生目录选择器中选中的目录。
     pub last_workspace_dir: Option<String>,
     /// 当前生效档案 id。
@@ -79,6 +81,7 @@ impl Default for ClientLayer {
         Self {
             theme: None,
             notifications_enabled: true,
+            sidebar_collapsed: None,
             last_workspace_dir: None,
             last_profile_id: None,
             previous_profile_id: None,

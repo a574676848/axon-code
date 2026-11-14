@@ -90,18 +90,34 @@ pub fn lane_interactions_payload(
     let records = runtime_store(axon_root)
         .interactions_for_lane(lane_id, limit, before)
         .map_err(|error| format!("读取车道 Interaction 失败：{error:?}"))?;
+    // 工具动作摘要一次批次查覆盖整页：名字在写入事件时已落列，这里不碰事件表。
+    let interaction_ids: Vec<&str> = records
+        .iter()
+        .map(|record| record.interaction_id.as_str())
+        .collect();
+    let tool_summaries = lane_readings::tool_summaries(axon_root, &interaction_ids);
     let interactions: Vec<InteractionView> = records
         .iter()
-        .map(|record| InteractionView {
-            interaction_id: record.interaction_id.as_str().to_owned(),
-            status: serde_json::to_value(record.status)
-                .ok()
-                .and_then(|value| value.as_str().map(str::to_owned))
-                .unwrap_or_else(|| "unknown".to_owned()),
-            channel: record.source.channel().to_owned(),
-            received_at_ms: record.received_at_ms,
-            content: record.content.clone(),
-            attachments: record.attachments.clone(),
+        .map(|record| {
+            let interaction_id = record.interaction_id.as_str().to_owned();
+            InteractionView {
+                tool_summary: tool_summaries
+                    .get(&interaction_id)
+                    .cloned()
+                    .unwrap_or_default(),
+                interaction_id,
+                status: serde_json::to_value(record.status)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| "unknown".to_owned()),
+                channel: record.source.channel().to_owned(),
+                received_at_ms: record.received_at_ms,
+                content: record.content.clone(),
+                attachments: record.attachments.clone(),
+                // 索引只读记录本身：模型与强度是记录上的现成字段，取它们不必扫事件流。
+                model: record.model.clone(),
+                reasoning_effort: record.reasoning_effort.clone(),
+            }
         })
         .collect();
     // 两个累计读数：用量走账本（按 run session 汇总），耗时走已收口轮次的墙钟差。

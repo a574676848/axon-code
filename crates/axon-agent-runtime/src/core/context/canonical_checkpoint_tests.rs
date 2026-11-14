@@ -1,4 +1,4 @@
-//! Canonical checkpoint 完整性门禁测试。
+//! 交接摘要合同测试：内容自由、只守预算，格式不得阻断换窗。
 
 use axon_domain::TurnId;
 
@@ -14,12 +14,6 @@ fn base_messages() -> Vec<AgentModelMessage> {
         AgentModelMessage::text("user", "完成当前任务"),
         AgentModelMessage::text("assistant", "正在处理".repeat(10000)),
     ]
-}
-
-fn checkpoint_summary(tools: &str) -> String {
-    format!(
-        "P0:\nTASK:\n完成当前任务\nCONSTRAINTS:\n保留用户约束\nVERIFIED:\n已完成基础验证\nOPEN:\n继续下一步\nTOOLS:\n{tools}"
-    )
 }
 
 fn compress(
@@ -46,45 +40,57 @@ fn compress(
     (outcome, messages.into_messages(), failure)
 }
 
+/// 自由格式摘要必须直接放行：六段标题不是合同。
 #[test]
-fn checkpoint_missing_or_empty_required_field_keeps_original_history() {
+fn checkpoint_accepts_free_form_summary() {
     let original = base_messages();
-    let missing_field_summary =
-        "P0:\nTASK:\n完成当前任务\nCONSTRAINTS:\n保留约束\nOPEN:\n继续\nTOOLS:\n- none";
-    let (outcome, messages, failure) = compress(original.clone(), missing_field_summary.to_owned());
-    assert_eq!(outcome, CompressionOutcome::Prompted);
-    assert!(&messages[..original.len()] == original.as_slice());
-    assert!(messages.len() > original.len());
-    assert!(failure.contains("VERIFIED:"));
+    let summary = "本轮把换窗门禁改成只看预算，正文随便写，结论已落盘。";
 
-    let empty_open_summary = "P0:\nTASK:\n完成当前任务\nCONSTRAINTS:\n保留约束\nVERIFIED:\n已验证\nOPEN:\nTOOLS:\n- none";
-    let (outcome, messages, failure) = compress(original.clone(), empty_open_summary.to_owned());
-    assert_eq!(outcome, CompressionOutcome::Prompted);
-    assert!(&messages[..original.len()] == original.as_slice());
-    assert!(messages.len() > original.len());
-    assert!(failure.contains("OPEN:"));
-}
+    let (outcome, messages, failure) = compress(original.clone(), summary.to_owned());
 
-#[test]
-fn canonical_checkpoint_requires_each_unsettled_tool_call_id() {
-    let mut original = base_messages();
-    original.push(
-        AgentModelMessage::text("assistant", "").with_tool_calls(vec![
-            AgentModelToolCallMetadata {
-                id: "pending-call".to_owned(),
-                name: "builtin.glob".to_owned(),
-                input: "{}".into(),
-            },
-        ]),
+    assert_eq!(outcome, CompressionOutcome::Compressed, "{failure}");
+    assert!(
+        messages.len() <= original.len(),
+        "压缩后不得比原窗口更长：{} vs {}",
+        messages.len(),
+        original.len()
     );
-
-    let error = CanonicalCheckpoint::parse(&checkpoint_summary("- none"), &original)
-        .expect_err("原始历史中的未配对 tool call 必须要求 checkpoint ID");
-    assert!(error.contains("pending-call"));
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.content.contains("本轮把换窗门禁改成只看预算")),
+        "摘要正文必须原样进入新窗口"
+    );
 }
 
+/// 空摘要仍然拒绝：没有任何交接内容时不能静默丢弃整段历史。
 #[test]
-fn checkpoint_accepts_each_unsettled_tool_call_id() {
+fn checkpoint_rejects_empty_summary() {
+    let original = base_messages();
+
+    let (outcome, messages, failure) = compress(original.clone(), "   ".to_owned());
+
+    assert_eq!(outcome, CompressionOutcome::Prompted);
+    assert!(&messages[..original.len()] == original.as_slice());
+    assert!(failure.contains("内容为空"), "{failure}");
+}
+
+/// 超预算摘要仍然拒绝换窗：新窗口一开就满额等于没换窗。
+#[test]
+fn checkpoint_rejects_summary_over_budget() {
+    let original = base_messages();
+    let oversized = "长".repeat(20_000);
+
+    let (outcome, messages, failure) = compress(original.clone(), oversized);
+
+    assert_eq!(outcome, CompressionOutcome::Prompted);
+    assert!(&messages[..original.len()] == original.as_slice());
+    assert!(failure.contains("超过预算"), "{failure}");
+}
+
+/// 悬空 tool call 不再要求摘要列出 ID：一致性由历史重建处理，不由自由文本兜底。
+#[test]
+fn checkpoint_accepts_unsettled_tool_call_without_listing_ids() {
     let mut messages = base_messages();
     messages[2].retention_class = crate::RetentionClass::P3Derivable;
     let mut pending = AgentModelMessage::text("assistant", "").with_tool_calls(vec![
@@ -98,62 +104,7 @@ fn checkpoint_accepts_each_unsettled_tool_call_id() {
     messages.push(pending);
     messages.push(AgentModelMessage::text("assistant", "尾部证据"));
 
-    let (outcome, compressed, _) = compress(messages, checkpoint_summary("- none"));
+    let (outcome, _, failure) = compress(messages, "只写自由文本，不列 call ID。".to_owned());
 
-    assert_eq!(outcome, CompressionOutcome::Compressed);
-    assert!(compressed.iter().all(|message| {
-        message
-            .provider_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.tool_result.as_ref())
-            .is_none()
-    }));
-}
-
-#[test]
-fn checkpoint_rejects_stale_tool_id_after_normalization() {
-    let mut original = base_messages();
-    original.push(
-        AgentModelMessage::text("assistant", "").with_tool_calls(vec![
-            AgentModelToolCallMetadata {
-                id: "pending-call".to_owned(),
-                name: "builtin.glob".to_owned(),
-                input: "{}".into(),
-            },
-        ]),
-    );
-
-    let (outcome, messages, failure) =
-        compress(original.clone(), checkpoint_summary("- ID: pending-call"));
-
-    assert_eq!(outcome, CompressionOutcome::Prompted);
-    assert!(&messages[..original.len()] == original.as_slice());
-    assert!(messages.len() > original.len());
-    assert!(failure.contains("TOOLS"));
-}
-
-#[test]
-fn checkpoint_uses_normalized_history_for_unsettled_tool_call() {
-    let mut original = base_messages();
-    original.push(
-        AgentModelMessage::text("assistant", "").with_tool_calls(vec![
-            AgentModelToolCallMetadata {
-                id: "pending-call".to_owned(),
-                name: "builtin.glob".to_owned(),
-                input: "{}".into(),
-            },
-        ]),
-    );
-
-    let (outcome, compressed, failure) = compress(original, checkpoint_summary("- none"));
-
-    assert_eq!(outcome, CompressionOutcome::Compressed);
-    assert!(failure.contains("记忆窗口切换完成"));
-    assert!(compressed.iter().all(|message| {
-        message
-            .provider_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.tool_result.as_ref())
-            .is_none()
-    }));
+    assert_eq!(outcome, CompressionOutcome::Compressed, "{failure}");
 }

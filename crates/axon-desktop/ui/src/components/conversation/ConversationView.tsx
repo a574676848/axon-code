@@ -18,7 +18,7 @@ import { InputDock } from './InputDock';
 import { PlanDock } from './PlanDock';
 import { SidebarRight } from '../../sidebarRight/SidebarRight';
 import { useRailLayout } from '../../sidebarRight/useRailLayout';
-import { ConversationActionsProvider } from './actions';
+import { ConversationActionsProvider, UnfoldingProvider } from './actions';
 import { useConversationActionsValue } from './useConversationActionsValue';
 import { sessionReferenceIndex } from './referenceAnchors';
 import { useConversationMcp } from '../../conversation/useConversationMcp';
@@ -503,15 +503,17 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                     inert={cover !== 'none'}
                     aria-hidden={cover !== 'none'}
                   >
-                    <ConversationStream
-                      sessionKey={shown.key}
-                      turns={shown.turns}
-                      followToken={followToken}
-                      hasOlder={conversation.hasOlder}
-                      loadingOlder={conversation.loadingOlder}
-                      onLoadOlder={() => void conversation.loadOlder()}
-                      prependToken={conversation.prependToken}
-                    />
+                    <UnfoldingProvider value={conversation.unfoldingId}>
+                      <ConversationStream
+                        sessionKey={shown.key}
+                        turns={shown.turns}
+                        followToken={followToken}
+                        hasOlder={conversation.hasOlder}
+                        loadingOlder={conversation.loadingOlder}
+                        onLoadOlder={() => void conversation.loadOlder()}
+                        prependToken={conversation.prependToken}
+                      />
+                    </UnfoldingProvider>
                   </div>
 
                   {/*

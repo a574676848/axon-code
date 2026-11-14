@@ -1,11 +1,17 @@
 /*
  * 车道历史的分页与展开。
  *
- * 两件事共用一个机制：**先在独立投影里回放，再把算好的轮次整段接回主投影**。
+ * 两件事分开走：
  *
- * 不能让它们直接在主投影里回放：帧的归属规则是「最后一条尚未收口的轮次」，而在主投影
- * 里回放历史会把帧记到最新的轮次上。因此这里自己持有一份临时投影与它自己的订阅标识
- * 集合，回放期间两路帧按订阅标识分流，回放排空后前置一页，或把某一轮的正文换回来。
+ * - **翻页只取索引**。一页 Interaction 一次到手，更早的直接按索引立成折叠行
+ *   （见 `historySkeletonTurn`），一条都不回放：长会话的历史是几十万帧，
+ *   逐条回放等于把翻页变成几十次串行读帧。
+ * - **展开才回放**。点开某一条折叠行时，才在独立投影里回放它的帧，排空后把
+ *   算好的单元整段换回主投影。
+ *
+ * 展开之所以必须走独立投影：帧的归属规则是「最后一条尚未收口的轮次」，在主投影
+ * 里回放历史会把帧记到最新的轮次上。这里因此自持一份临时投影与它自己的订阅标识
+ * 集合，回放期间两路帧按订阅标识分流。
  *
  * 编排层只通过四个接缝使用它：`take`（取下一个要回放的标识）、`finish`（排空收口）、
  * `routeFrames`（帧分流）、`applyAction`（按当前模式派发）。
@@ -18,6 +24,7 @@ import {
   applyFrames,
   attachmentsFromPaths,
   conversationReducer,
+  historySkeletonTurn,
   type AttachmentRef,
   type ConversationAction,
   type ConversationState,
@@ -26,18 +33,26 @@ import type { SessionTokenBaseline } from './sessionUsage';
 import type { ConversationStreamEvent } from './wire';
 import type { LaneEffectiveModel } from './viewConfig';
 
-/** 历史分页的页大小：一次一条 Interaction，向前翻就是逐条往前取。 */
-const HISTORY_PAGE_SIZE = 1;
+/**
+ * 历史分页的页大小。
+ *
+ * 取一页而不是取一条：索引接口的成本与条数无关（实测 limit=1 与 limit=40 同为
+ * 53ms、响应不足 13KB），而每多取一条就少一次点击、少一次往返。
+ *
+ * 整页到手后只有最新的一条进回放队列，更早的按索引直接立成折叠行；正文留给
+ * 点开某一条时再取。
+ */
+const HISTORY_PAGE_SIZE = 20;
 
-/** 一次独立回放。 */
+/** 一次独立回放：展开某一条折叠轮。 */
 interface PagingSession {
   /** 临时投影。 */
   state: ConversationState;
-  /** 这一页还要回放哪几条。 */
+  /** 这一路还要回放哪几条。 */
   queue: string[];
   /** 这一次回放自己的订阅标识集合。 */
   ids: Set<string>;
-  /** 给出时表示这次回放是为了展开某一轮，而不是向前翻页。 */
+  /** 展开的目标：回放排空后把正文换回这一轮。 */
   replaceTurnId?: string;
 }
 
@@ -86,22 +101,24 @@ export interface LanePaging {
    * 基线覆盖的轮次一并给出：界面据此只叠加基线之后发生的轮次，不把同一轮算两次。
    */
   sessionBaseline: SessionTokenBaseline | null;
-  /** 取最近一页历史：重置种子表与累计基线、记住游标，返回这一页要回放的标识。 */
+  /** 取最近一页历史：重置种子表与累计基线、记住游标，返回最新一条要回放的标识。 */
   loadNewestPage: (laneId: string) => Promise<string[]>;
   /** 按当前模式派发动作：独立回放时进临时投影，其余进主投影。 */
   applyAction: (action: ConversationAction) => void;
-  /** 取下一条要回放的标识：翻页时取这一页的队列，否则取主队列。 */
+  /** 取下一条要回放的标识：展开时取这一路的队列，否则取主队列。 */
   take: (mainQueue: string[]) => string | undefined;
   /** 独立回放排空后的收口；返回 true 表示这一次排空由这里处理完了。 */
   finish: () => boolean;
-  /** 按订阅标识分流一批帧：属于这一页的进临时投影，其余进主投影。 */
+  /** 按订阅标识分流一批帧：属于展开那一路的进临时投影，其余进主投影。 */
   routeFrames: (batch: ConversationStreamEvent[], nowMs: number) => void;
-  /** 加载更早的一条 Interaction。 */
+  /** 加载更早的一页 Interaction：按索引立成折叠行，正文点开再取。 */
   loadOlder: () => Promise<void>;
-  /** 当前是否在独立回放里（翻页或展开）：此时不做首屏窗口，整条读起。 */
-  ownPage: () => boolean;
-  /** 展开一条被折叠的 Interaction。 */
+  /** 展开一条被折叠的 Interaction：只读尾部一窗。 */
   unfoldTurn: (interactionId: string) => void;
+  /** 正在展开的那一条；没有时为空。 */
+  unfoldingId: string | null;
+  /** 丢弃在途的展开或补窗；目标切换时调用，否则守卫会让新会话点不动。 */
+  abort: () => void;
   hasOlder: boolean;
   loadingOlder: boolean;
   /** 前置计数：正文区据此补偿滚动位置。 */
@@ -119,6 +136,13 @@ export function useLanePaging(options: LanePagingOptions): LanePaging {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [hasOlder, setHasOlder] = useState(false);
   const [prependToken, setPrependToken] = useState(0);
+  /**
+   * 正在展开的那一条。
+   *
+   * 折叠行点开之后要先回放一窗帧，这段时间里它得有个可见的"在动"。只放一个标识：
+   * 它变化时该重渲染的只有那一条折叠行，正文各轮的 memo 不该被牵连。
+   */
+  const [unfoldingId, setUnfoldingId] = useState<string | null>(null);
   /** 历史索引的种子表。 */
   const seedsRef = useRef(new Map<string, HistorySeed>());
   /** 会话累计用量的基线；换车道时整份换掉。 */
@@ -177,9 +201,19 @@ export function useLanePaging(options: LanePagingOptions): LanePaging {
           turnIds: new Set(page.interactions.map((item) => item.interactionId)),
         });
       }
-      return page.interactions.map((item) => item.interactionId);
+      /*
+       * 只把最新一条交给回放：更早的整页先按索引立成折叠行。
+       *
+       * 打开长会话不该等几十次串行回放：实测一条 40 轮的车道共 12.4 万帧、96.7MB，
+       * 逐条走完要 124 次帧页；而这一页索引只要一次往返。
+       */
+      const newest = page.interactions[page.interactions.length - 1];
+      if (newest === undefined) return [];
+      const skeletons = page.interactions.slice(0, -1).map(historySkeletonTurn);
+      if (skeletons.length > 0) dispatch({ type: 'prepend-turns', turns: skeletons });
+      return [newest.interactionId];
     },
-    [rememberFirstPage, seedHistoryEntries],
+    [dispatch, rememberFirstPage, seedHistoryEntries],
   );
 
   const applyAction = useCallback(
@@ -199,26 +233,29 @@ export function useLanePaging(options: LanePagingOptions): LanePaging {
     return paging === null ? mainQueue.shift() : paging.queue.shift();
   }, []);
 
-  /** 当前是否在独立回放里：编排据此决定读整条还是只读尾部窗口。 */
-  const ownPage = useCallback(() => pagingRef.current !== null, []);
+  /**
+   * 丢弃在途的独立回放。
+   *
+   * 展开与补窗都会把一份临时投影挂在这里，而发起动作前有一道守卫：`pagingRef`
+   * 非空就拒绝新的展开与翻页。目标切换时若不把它清掉，新会话的骨架点不开、历史
+   * 也翻不动，且用户没有任何办法恢复，只能重启。
+   */
+  const abort = useCallback(() => {
+    pagingRef.current = null;
+    setUnfoldingId(null);
+    setLoadingOlder(false);
+  }, []);
 
   const finish = useCallback(() => {
     const paging = pagingRef.current;
     if (paging === null) return false;
     pagingRef.current = null;
-    if (paging.replaceTurnId === undefined) {
-      // 更早那一页回放完毕：整段前置，并让正文区补偿滚动位置。
-      dispatch({ type: 'prepend-turns', turns: paging.state.turns });
-      setPrependToken((value) => value + 1);
-      return true;
-    }
-    // 展开一条折叠的历史：把重新回放算出来的单元整段换回那一轮。
-    const restored = paging.state.turns.find((turn) => turn.id === paging.replaceTurnId);
-    dispatch({
-      type: 'replace-turn-cells',
-      turnId: paging.replaceTurnId,
-      cells: restored?.cells ?? [],
-    });
+    setUnfoldingId(null);
+    const turnId = paging.replaceTurnId;
+    // 独立投影只在展开时建立；没有目标标识就没有要落地的轮次。
+    if (turnId === undefined) return true;
+    const restored = paging.state.turns.find((turn) => turn.id === turnId);
+    dispatch({ type: 'replace-turn-cells', turnId, cells: restored?.cells ?? [] });
     return true;
   }, [dispatch]);
 
@@ -230,7 +267,7 @@ export function useLanePaging(options: LanePagingOptions): LanePaging {
         return;
       }
       /*
-       * 翻页期间两路帧同时在跑：属于这一页订阅的进临时投影，其余（实时会话）照旧进
+       * 展开期间两路帧同时在跑：属于这一路订阅的进临时投影，其余（实时会话）照旧进
        * 主投影。按订阅标识分流，不靠到达顺序猜。
        */
       const page: ConversationStreamEvent[] = [];
@@ -245,14 +282,14 @@ export function useLanePaging(options: LanePagingOptions): LanePaging {
   );
 
   /**
-   * 加载更早的一条 Interaction。
+   * 加载更早的一页 Interaction。
    *
-   * 逐条向前翻：取到的那一条先在独立投影里回放完，再整段前置到时间线头部，正文区
-   * 据此补偿滚动位置。取到空页即到底，按钮随之消失。
+   * 整页按索引立成折叠行，翻页时一条都不回放：一页二十条只有几 KB，而逐条回放
+   * 要按帧页把这段历史整个读一遍。正文留给点开某一条时再取（见 `unfoldTurn`）。
    */
   const loadOlder = useCallback(async () => {
     const cursor = olderCursorRef.current;
-    if (cursor === null || laneId === null || workspaceId === null) return;
+    if (cursor === null || laneId === null) return;
     if (pagingRef.current !== null) return;
     const generation = generationRef.current;
     setLoadingOlder(true);
@@ -267,34 +304,24 @@ export function useLanePaging(options: LanePagingOptions): LanePaging {
       }
       seedHistoryEntries(entries);
       rememberFirstPage(entries);
-      pagingRef.current = {
-        state: INITIAL_CONVERSATION,
-        queue: entries.map((item) => item.interactionId),
-        ids: new Set(entries.map((item) => `interaction:${item.interactionId}`)),
-      };
-      replayingRef.current = true;
-      playNextRef.current(workspaceId, generation);
+      dispatch({ type: 'prepend-turns', turns: entries.map(historySkeletonTurn) });
+      // 前置一页会让内容整体下移：正文区按同一高度差补偿滚动位置。
+      setPrependToken((value) => value + 1);
     } catch (error: unknown) {
       onError(error instanceof Error ? error.message : '加载更早的会话失败');
     } finally {
       setLoadingOlder(false);
     }
-  }, [
-    generationRef,
-    laneId,
-    onError,
-    playNextRef,
-    rememberFirstPage,
-    replayingRef,
-    seedHistoryEntries,
-    workspaceId,
-  ]);
+  }, [dispatch, generationRef, laneId, onError, rememberFirstPage, seedHistoryEntries]);
 
   /**
    * 展开一条被折叠的 Interaction。
    *
-   * 折叠时正文已经释放，因此这里重新订阅那一条、在独立投影里回放完，再把单元整段
-   * 换回去。回放落地之前该轮一直显示折叠行，不会先空一屏再长出内容。
+   * 折叠时正文已经释放，因此这里重新订阅那一条、在独立投影里回放**尾部一窗**，再把
+   * 单元整段换回去。回放落地之前该轮一直显示折叠行，不会先空一屏再长出内容。
+   *
+   * 只读一窗：一条几万帧的轮次整条重放要几十次串行往返，而读者打开它要的是「最近
+   * 发生了什么」；更早的部分不再往回补，只由时间线上那句「更早的 N 条内容已折叠」说明。
    */
   const unfoldTurn = useCallback(
     (interactionId: string) => {
@@ -306,6 +333,7 @@ export function useLanePaging(options: LanePagingOptions): LanePaging {
         ids: new Set([`interaction:${interactionId}`]),
         replaceTurnId: interactionId,
       };
+      setUnfoldingId(interactionId);
       replayingRef.current = true;
       playNextRef.current(workspaceId, generationRef.current);
     },
@@ -318,11 +346,12 @@ export function useLanePaging(options: LanePagingOptions): LanePaging {
       seedOf,
       applyAction,
       take,
-      ownPage,
       finish,
       routeFrames,
       loadOlder,
       unfoldTurn,
+      unfoldingId,
+      abort,
       hasOlder,
       loadingOlder,
       prependToken,
@@ -340,8 +369,9 @@ export function useLanePaging(options: LanePagingOptions): LanePaging {
       seedOf,
       sessionBaseline,
       take,
-      ownPage,
       unfoldTurn,
+      unfoldingId,
+      abort,
     ],
   );
 }

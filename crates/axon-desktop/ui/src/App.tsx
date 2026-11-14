@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CronJob, NavTab, SettingsSection, WorkspaceItem } from './types';
+import type { CronJob, DesktopPreferences, NavTab, SettingsSection, WorkspaceItem } from './types';
 import * as ipc from './ipc';
 import { listenLaneActivity, listenOpenLane } from './laneEvents';
 import { useWindowTitle } from './useWindowTitle';
@@ -75,6 +75,8 @@ export const App: React.FC = () => {
    * 窗口回宽也不会被自动值顶掉；反之亦然。
    */
   const [sidebarPreference, setSidebarPreference] = useState<boolean | null>(null);
+  const sidebarPreferenceGeneration = useRef(0);
+  const sidebarWriteQueue = useRef(Promise.resolve());
   /** 窗口是否窄到该自动收起侧栏。 */
   const [autoCollapsed, setAutoCollapsed] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -159,16 +161,58 @@ export const App: React.FC = () => {
       query.addEventListener('change', apply);
       return () => query.removeEventListener('change', apply);
     }
-    legacy.addListener?.(apply);
-    return () => legacy.removeListener?.(apply);
+    // MediaQueryList 的旧 WebKit 兼容入口已废弃，但 macOS 10.15 仍只提供它。
+    // 这里保留运行时兼容，避免把支持范围收窄到新 WebKit。
+    const addLegacyListener = legacy.addListener as unknown as
+      | ((listener: () => void) => void)
+      | undefined;
+    const removeLegacyListener = legacy.removeListener as unknown as
+      | ((listener: () => void) => void)
+      | undefined;
+    addLegacyListener?.call(query, apply);
+    return () => removeLegacyListener?.call(query, apply);
   }, []);
 
   /** 实际开合：用户表过态就听用户的，没表过态才按窗口宽度自动决定。 */
   const isSidebarOpen = sidebarPreference ?? !autoCollapsed;
   const toggleSidebar = useCallback(
-    () => setSidebarPreference(!isSidebarOpen),
+    () => {
+      const nextCollapsed = isSidebarOpen;
+      const generation = ++sidebarPreferenceGeneration.current;
+      setSidebarPreference(!nextCollapsed);
+      sidebarWriteQueue.current = sidebarWriteQueue.current
+        .catch(() => undefined)
+        .then(async () => {
+          const saved = await ipc.desktopSetSidebarCollapsed(nextCollapsed);
+          if (generation === sidebarPreferenceGeneration.current) {
+            setSidebarPreference(
+              saved.sidebarCollapsed === null ? !nextCollapsed : !saved.sidebarCollapsed,
+            );
+          }
+        })
+        .catch(() => {
+          if (generation === sidebarPreferenceGeneration.current) {
+            setSidebarPreference(nextCollapsed);
+          }
+        });
+    },
     [isSidebarOpen],
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    void ipc.desktopPreferences()
+      .then((preferences: DesktopPreferences) => {
+        if (cancelled || sidebarPreferenceGeneration.current !== 0) return;
+        setSidebarPreference(
+          preferences.sidebarCollapsed === null ? null : !preferences.sidebarCollapsed,
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   /*
    * 启动即检测一次新版本，并读一次连接档案事实。

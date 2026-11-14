@@ -114,6 +114,7 @@ fn record(session_id: &str, created_at_ms: u64) -> RunSessionRecord {
         cwd: Some("/work".to_owned()),
         provider: "anthropic".to_owned(),
         model: "model-a".to_owned(),
+        model_name: Some("model-a".to_owned()),
         selected_skill_name: None,
         repo_context: None,
         session_context: None,

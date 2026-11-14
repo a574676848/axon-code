@@ -6,8 +6,9 @@
 //! 2. 代际窗口身份链（first/previous/current window id）
 //! 3. 换窗前是否已成功写入便签的 fail-closed 标记
 //!
-//! 交接摘要的语义权归模型：模型把摘要写入保留便签 `handoff/summary.md` 且首行为
-//! `P0:` 时，运行时原样采用；缺失时才回退到目标锚点与便签的投影。
+//! 交接摘要的语义权归模型：模型把摘要写入保留便签 `handoff/summary.md` 时，
+//! 运行时在预算内原样采用，内容格式不做任何限制；缺失或超预算时才回退到
+//! 目标锚点与便签的投影。
 //! 投影对短便签内联正文、对长便签只给路径与行数，运行时只做总量预算校验，
 //! 两条路径都不按栏目截断模型内容。
 
@@ -36,10 +37,9 @@ pub const SESSION_NOTES_CHECKPOINT_MAX_BYTES: usize = 32 * 1024;
 /// 模型提交窗口交接摘要的保留便签路径。
 ///
 /// 与自由格式工作便签（如 `checkpoint.md`）分开：模型可以继续用任意 markdown 结构
-/// 记录工作便签，需要精确控制摘要语义时才额外写这个文件。
+/// 记录工作便签，需要单独控制摘要语义时才写这个文件。路径本身就是提交通道的识别
+/// 依据，内容不限格式、只受总预算约束。
 pub const SESSION_NOTES_SUBMITTED_SUMMARY_PATH: &str = "handoff/summary.md";
-/// 提交摘要的协议首行：以该行开头即视为模型已提交 canonical 摘要。
-pub const SESSION_NOTES_SUBMITTED_SUMMARY_HEADER: &str = "P0:";
 
 /// 换窗交接摘要的来源，用于复盘摘要由谁生成、是否被冒充。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,8 +134,8 @@ impl SessionNotes {
 
     /// 渲染窗口交接摘要：模型提交优先，缺失时回退投影，只做总预算校验。
     ///
-    /// 模型在保留便签 `handoff/summary.md` 写入以 `P0:` 开头的 canonical 六段摘要时，
-    /// 该文本被原样采用；否则按目标锚点与全部便签投影出等价结构。
+    /// 模型把摘要写进保留便签 `handoff/summary.md` 时，该文本被原样采用（内容不限格式）；
+    /// 缺失或超预算时按目标锚点与全部便签投影出等价交接。
     /// 两条路径都不截断内容：超出总预算直接 fail-closed，由模型压缩后重写。
     pub fn try_render_canonical_summary(
         &self,
@@ -167,8 +167,10 @@ impl SessionNotes {
             read_submitted_summary(session_dir)?
         };
         let (summary, source) = match submitted {
-            Some(submitted) => (submitted, CheckpointSource::Model),
-            None => (
+            Some(submitted) if submitted_fits_budget(&submitted) => {
+                (submitted, CheckpointSource::Model)
+            }
+            _ => (
                 self.render_projected_summary(session_dir, history)?,
                 CheckpointSource::Projection,
             ),
@@ -344,10 +346,9 @@ fn render_checkpoint_list(values: impl IntoIterator<Item = String>) -> String {
     lines.join("\n")
 }
 
-/// 读取模型提交的 canonical 交接摘要；未提交时返回 `None`。
+/// 读取模型提交的交接摘要；未提交或内容为空时返回 `None`。
 ///
-/// 只认保留便签路径与 `P0:` 首行标记：把模型主动提交与日常自由格式便签区分开，
-/// 避免把普通工作记录误当成已通过完整性门禁的摘要。
+/// 判定只看保留路径：内容不限格式，写什么就用什么。
 fn read_submitted_summary(session_dir: &Path) -> AxonResult<Option<String>> {
     let target = crate::session_notes_store::NotesStore::notes_root(session_dir)
         .join(SESSION_NOTES_SUBMITTED_SUMMARY_PATH);
@@ -361,10 +362,18 @@ fn read_submitted_summary(session_dir: &Path) -> AxonResult<Option<String>> {
         }
     };
     let text = text.trim();
-    if !text.starts_with(SESSION_NOTES_SUBMITTED_SUMMARY_HEADER) {
+    if text.is_empty() {
         return Ok(None);
     }
     Ok(Some(text.to_owned()))
+}
+
+/// 提交摘要能否直接带进新窗口：只受预算约束，内容不限。
+///
+/// 超预算时回落到投影而不是拒绝换窗：投影按当前便签实时生成、天然在预算内，
+/// 而换窗是解除上下文耗尽的唯一动作，在这里 fail-closed 会让会话再也换不了窗。
+fn submitted_fits_budget(submitted: &str) -> bool {
+    !submitted.trim().is_empty() && validate_checkpoint_budget(submitted).is_ok()
 }
 
 /// 校验交接摘要的总预算；超限 fail-closed，不截断内容。

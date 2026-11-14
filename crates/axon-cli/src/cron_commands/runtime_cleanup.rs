@@ -27,9 +27,14 @@ const RUNTIME_DATABASE_FILE: &str = "runtime.sqlite3";
 /// 单批删除的行数上限：直接决定单次 IMMEDIATE 事务的写锁持有时间。
 const RUNTIME_CLEANUP_BATCH_LIMIT: usize = 256;
 /// 单轮清理的墙上时钟预算：超出后停止本轮，剩余过期数据由下轮 Cron 继续。
-const RUNTIME_CLEANUP_TIME_BUDGET: Duration = Duration::from_secs(20);
+///
+/// 实测每批 256 行在一个 1.5 GiB 级库上约需 5 ms 到 15 ms，20 秒预算只够推进
+/// 千余批的一半，而单条 desktop 车道一天就能写入数十万帧。预算过小会让清理
+/// 永远追不上写入速率，因此放宽到 60 秒；批次上限不变，写锁持有时间不受影响。
+const RUNTIME_CLEANUP_TIME_BUDGET: Duration = Duration::from_secs(60);
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-const INCREMENTAL_VACUUM_PAGE_BATCH: u32 = 256;
+/// 单轮增量回收的页数：4 KiB 页下约等于 16 MiB，避免删了行文件却不缩。
+const INCREMENTAL_VACUUM_PAGE_BATCH: u32 = 4_096;
 
 /// 终态 Interaction 状态：只有终态记录参与按保留期回收。
 pub(super) const INTERACTION_TERMINAL_STATUSES: [&str; 2] = ["understood", "rejected"];
@@ -42,8 +47,12 @@ pub(super) const SESSION_ACTIVE_STATUSES: [&str; 5] =
     ["running", "compacting", "waiting", "recovering", "draining"];
 /// Event 保底保留条数：即使全部超出保留期也保留最新一段，避免 sequence 回退。
 pub(super) const LEDGER_EVENT_MIN_RETAINED: i64 = 1_000;
-/// 活跃 Session Event 保底保留条数：避免高频 Workspace 车道无限增长。
-pub(super) const SESSION_EVENT_MIN_RETAINED: i64 = 1_000;
+/// 活跃 Session 的事件保底保留条数：保住仍在推进车道的最近上下文。
+///
+/// 只对 `SESSION_ACTIVE_STATUSES` 里的会话生效。已终结会话的 sequence 不会再推进，
+/// 保底对它没有任何防回退价值，反而让每个死会话永久驻留最后若干条事件，
+/// 使 7 天保留期对这类会话完全失效。
+pub(super) const SESSION_EVENT_MIN_RETAINED: i64 = 200;
 
 /// 一次运行态清理的分表计数。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -353,21 +362,16 @@ pub(super) fn count_runtime_session_event_overlap(
     let cutoff_ms = i64::try_from(cutoff_ms).unwrap_or(i64::MAX);
     let mut count = 0_usize;
     for ids in session_ids.chunks(RUNTIME_CLEANUP_BATCH_LIMIT) {
+        // 复用同一份保留谓词，避免 dry-run 报告与真实删除出现口径漂移。
+        let id_placeholders = (2..=ids.len().saturating_add(1))
+            .map(|index| format!("?{index}"))
+            .collect::<Vec<_>>()
+            .join(",");
         let sql = format!(
             "SELECT COUNT(*) FROM session_events
-             WHERE emitted_at_ms < ?
-               AND session_id IN ({})
-               AND EXISTS (
-                   SELECT 1 FROM session_runtimes AS retained
-                   WHERE retained.session_id = session_events.session_id
-                     AND session_events.sequence <= CASE
-                         WHEN retained.last_event_sequence > {retained}
-                         THEN retained.last_event_sequence - {retained}
-                         ELSE 0
-                     END
-               )",
-            placeholders(ids.len()),
-            retained = SESSION_EVENT_MIN_RETAINED,
+             WHERE session_id IN ({id_placeholders})
+               AND {}",
+            session_event_expiry_predicate(),
         );
         let mut values = Vec::with_capacity(ids.len().saturating_add(1));
         values.push(rusqlite::types::Value::Integer(cutoff_ms));
@@ -394,7 +398,9 @@ pub(super) fn cleanup_runtime_session_families(
     let mut counts = RuntimeCleanupCounts::default();
     for ids in session_ids.chunks(RUNTIME_CLEANUP_BATCH_LIMIT) {
         if Instant::now() >= deadline {
-            return Err("Daemon runtime Session family 清理超出时间预算".to_owned());
+            // 预算耗尽只结束本轮，剩余会话由下一轮 Cron 幂等续跑；
+            // 直接报错会让整条清理链在 Daemon 侧记为失败。
+            break;
         }
         counts.merge(delete_session_families_by_ids(&mut connection, ids)?);
     }
@@ -421,20 +427,34 @@ fn count_ids_in(
 ///
 /// 所有 Session 都按事件年龄和 sequence 水位滚动回收；rollout stale family 随后
 /// 会继续删除剩余事件与根记录，二者共享报告计数但不共享候选判定。
-pub(super) fn session_event_expiry_filter() -> String {
+///
+/// 保底只作用于仍在推进的会话：它们可能因为长时间流式输出而把早期帧挤出保留期，
+/// 但最近若干条仍是上下文续跑的锚点。已终结会话一旦越过保留期就应当全量回收，
+/// 否则每个死会话都会永久驻留 `SESSION_EVENT_MIN_RETAINED` 条事件，
+/// 使 7 天保留期对这类会话彻底失效。
+pub(super) fn session_event_expiry_predicate() -> String {
     format!(
-        "FROM session_events
-         WHERE emitted_at_ms < ?1
-           AND EXISTS (
+        "emitted_at_ms < ?1
+           AND NOT EXISTS (
                SELECT 1 FROM session_runtimes AS retained
                WHERE retained.session_id = session_events.session_id
-                 AND session_events.sequence <= CASE
-                     WHEN retained.last_event_sequence > {retained}
-                     THEN retained.last_event_sequence - {retained}
+                 AND retained.status IN ({active})
+                 AND session_events.sequence > CASE
+                     WHEN retained.last_event_sequence > {retained_count}
+                     THEN retained.last_event_sequence - {retained_count}
                      ELSE 0
                  END
            )",
-        retained = SESSION_EVENT_MIN_RETAINED,
+        active = quoted_list(&SESSION_ACTIVE_STATUSES),
+        retained_count = SESSION_EVENT_MIN_RETAINED,
+    )
+}
+
+/// retained Session Event 清理的过滤子句（含 FROM，供计数与选择共用）。
+pub(super) fn session_event_expiry_filter() -> String {
+    format!(
+        "FROM session_events WHERE {}",
+        session_event_expiry_predicate()
     )
 }
 
@@ -567,6 +587,41 @@ fn runtime_database_path(root: &Path) -> std::path::PathBuf {
         .join(RUNTIME_DATABASE_FILE)
 }
 
+/// 运行态侧自判的过期会话：最后一次活动早于保留期、已不在推进、且无 Execution 引用。
+///
+/// rollout 索引只覆盖一部分会话（子代理车道与历史 desktop 车道不在其中），
+/// 只按 rollout 取候选会让这些会话根记录永久滞留，其事件也就永远没有回收入口。
+pub(super) fn stale_runtime_session_ids(
+    root: &Path,
+    cutoff_ms: u64,
+) -> Result<Vec<String>, String> {
+    let path = runtime_database_path(root);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let connection = open_read_only_database(&path)?;
+    let cutoff_ms = i64::try_from(cutoff_ms).unwrap_or(i64::MAX);
+    let sql = format!(
+        "SELECT session_id FROM session_runtimes
+         WHERE last_activity_at_ms < ?1
+           AND status NOT IN ({active})
+           AND NOT EXISTS (
+               SELECT 1 FROM jarvis_executions AS execution
+               WHERE execution.session_id = session_runtimes.session_id
+           )
+         ORDER BY last_activity_at_ms ASC",
+        active = quoted_list(&SESSION_ACTIVE_STATUSES),
+    );
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|_| "Daemon runtime 过期 Session 查询失败".to_owned())?;
+    let rows = statement
+        .query_map([cutoff_ms], |row| row.get::<_, String>(0))
+        .map_err(|_| "Daemon runtime 过期 Session 查询失败".to_owned())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|_| "Daemon runtime 过期 Session 读取失败".to_owned())
+}
+
 /// 直接内联状态白名单：取值来自本模块常量，不存在外部输入。
 pub(super) fn quoted_list(values: &[&str]) -> String {
     values
@@ -593,6 +648,9 @@ fn reclaim_database_space(connection: &Connection) -> Result<(), String> {
 #[cfg(test)]
 #[path = "runtime_cleanup_agent_state_tests.rs"]
 mod agent_state_tests;
+#[cfg(test)]
+#[path = "runtime_cleanup_retained_tests.rs"]
+mod retained_tests;
 #[cfg(test)]
 #[path = "runtime_cleanup_tests.rs"]
 mod tests;

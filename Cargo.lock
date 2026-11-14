@@ -441,7 +441,7 @@ dependencies = [
 
 [[package]]
 name = "axon-agent-runtime"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "async-trait",
  "axon-client-identity",
@@ -467,6 +467,7 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "ed25519-dalek",
+ "encoding_rs",
  "flate2",
  "fs4 1.1.0",
  "futures-util",
@@ -559,7 +560,7 @@ dependencies = [
 
 [[package]]
 name = "axon-apply"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-patch-model",
  "axon-test-support",
@@ -567,7 +568,7 @@ dependencies = [
 
 [[package]]
 name = "axon-cli"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "async-trait",
  "axon-agent-runtime",
@@ -627,11 +628,11 @@ dependencies = [
 
 [[package]]
 name = "axon-client-identity"
-version = "0.1.5"
+version = "0.1.7"
 
 [[package]]
 name = "axon-config"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-domain",
  "axon-test-support",
@@ -643,11 +644,11 @@ dependencies = [
 
 [[package]]
 name = "axon-context-fragments"
-version = "0.1.5"
+version = "0.1.7"
 
 [[package]]
 name = "axon-crypto"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "getrandom 0.4.3",
  "hex",
@@ -657,7 +658,7 @@ dependencies = [
 
 [[package]]
 name = "axon-daemon"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-agent-runtime",
  "axon-crypto",
@@ -689,7 +690,7 @@ dependencies = [
 
 [[package]]
 name = "axon-desktop"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "arboard",
  "axon-config",
@@ -726,7 +727,7 @@ dependencies = [
 
 [[package]]
 name = "axon-display"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "serde",
  "serde_json",
@@ -734,7 +735,7 @@ dependencies = [
 
 [[package]]
 name = "axon-domain"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "hex",
  "serde",
@@ -745,15 +746,15 @@ dependencies = [
 
 [[package]]
 name = "axon-env"
-version = "0.1.5"
+version = "0.1.7"
 
 [[package]]
 name = "axon-fixtures"
-version = "0.1.5"
+version = "0.1.7"
 
 [[package]]
 name = "axon-fs-walk"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-domain",
  "axon-test-support",
@@ -762,7 +763,7 @@ dependencies = [
 
 [[package]]
 name = "axon-jsonl"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-test-support",
  "fs4 1.1.0",
@@ -772,7 +773,7 @@ dependencies = [
 
 [[package]]
 name = "axon-launcher"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-test-support",
  "serde",
@@ -783,7 +784,7 @@ dependencies = [
 
 [[package]]
 name = "axon-logger"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-domain",
  "axon-test-support",
@@ -793,7 +794,7 @@ dependencies = [
 
 [[package]]
 name = "axon-mcp-runtime"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-agent-runtime",
  "axon-config",
@@ -810,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "axon-memory"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-client-identity",
  "axon-crypto",
@@ -824,7 +825,7 @@ dependencies = [
 
 [[package]]
 name = "axon-memory-ops"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-agent-runtime",
  "axon-config",
@@ -844,7 +845,7 @@ dependencies = [
 
 [[package]]
 name = "axon-memory-read"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-config",
  "axon-domain",
@@ -859,7 +860,7 @@ dependencies = [
 
 [[package]]
 name = "axon-memory-write"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-crypto",
  "axon-domain",
@@ -871,7 +872,7 @@ dependencies = [
 
 [[package]]
 name = "axon-output-filter"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-domain",
  "axon-test-support",
@@ -882,11 +883,11 @@ dependencies = [
 
 [[package]]
 name = "axon-patch-model"
-version = "0.1.5"
+version = "0.1.7"
 
 [[package]]
 name = "axon-persona"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "rusqlite",
  "serde",
@@ -897,7 +898,7 @@ dependencies = [
 
 [[package]]
 name = "axon-process"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "libc",
  "tokio",
@@ -906,11 +907,11 @@ dependencies = [
 
 [[package]]
 name = "axon-prompts"
-version = "0.1.5"
+version = "0.1.7"
 
 [[package]]
 name = "axon-protocol"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-domain",
  "serde",
@@ -919,7 +920,7 @@ dependencies = [
 
 [[package]]
 name = "axon-provider-transport"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-agent-runtime",
  "axon-config",
@@ -940,7 +941,7 @@ dependencies = [
 
 [[package]]
 name = "axon-remote-feishu"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-agent-runtime",
  "axon-crypto",
@@ -968,7 +969,7 @@ dependencies = [
 
 [[package]]
 name = "axon-remote-runtime"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-domain",
  "axon-jsonl",
@@ -984,14 +985,14 @@ dependencies = [
 
 [[package]]
 name = "axon-rustls-provider"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "rustls",
 ]
 
 [[package]]
 name = "axon-session"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-crypto",
  "axon-domain",
@@ -1010,7 +1011,7 @@ dependencies = [
 
 [[package]]
 name = "axon-session-runtime"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-agent-runtime",
  "axon-domain",
@@ -1025,7 +1026,7 @@ dependencies = [
 
 [[package]]
 name = "axon-shell-assoc"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-test-support",
  "base64 0.23.1",
@@ -1037,15 +1038,15 @@ dependencies = [
 
 [[package]]
 name = "axon-test-support"
-version = "0.1.5"
+version = "0.1.7"
 
 [[package]]
 name = "axon-time"
-version = "0.1.5"
+version = "0.1.7"
 
 [[package]]
 name = "axon-tui-runtime"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "arboard",
  "axon-agent-runtime",
@@ -1083,7 +1084,7 @@ dependencies = [
 
 [[package]]
 name = "axon-turn-view"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-protocol",
  "serde",
@@ -1091,18 +1092,18 @@ dependencies = [
 
 [[package]]
 name = "axon-voice"
-version = "0.1.5"
+version = "0.1.7"
 
 [[package]]
 name = "axon-voice-bridge"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-voice-protocol",
 ]
 
 [[package]]
 name = "axon-voice-protocol"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "serde",
  "serde_json",
@@ -1110,7 +1111,7 @@ dependencies = [
 
 [[package]]
 name = "axon-webview2-failure"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "tauri",
  "webview2-com",
@@ -5399,7 +5400,7 @@ dependencies = [
 
 [[package]]
 name = "output-filter-acceptance"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "axon-display",
  "axon-output-filter",

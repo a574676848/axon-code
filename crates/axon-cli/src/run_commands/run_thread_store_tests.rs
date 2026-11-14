@@ -612,6 +612,7 @@ fn session_record(user: &str, assistant: &str, at_ms: u64) -> RunSessionRecord {
         cwd: Some("E:/zbg/axon-code".to_owned()),
         provider: "provider-a".to_owned(),
         model: "model-a".to_owned(),
+        model_name: Some("model-a".to_owned()),
         selected_skill_name: None,
         repo_context: None,
         session_context: None,

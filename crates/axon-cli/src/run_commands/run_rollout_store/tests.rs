@@ -51,6 +51,7 @@ pub(super) fn record(session: &str, parent: Option<&str>, created_at_ms: u64) ->
         cwd: Some("/work".to_owned()),
         provider: "anthropic".to_owned(),
         model: "model-a".to_owned(),
+        model_name: Some("model-a".to_owned()),
         prompt: format!("prompt-{session}"),
         local_images: Vec::new(),
         local_files: Vec::new(),

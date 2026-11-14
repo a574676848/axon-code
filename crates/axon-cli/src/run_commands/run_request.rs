@@ -272,14 +272,15 @@ fn resumed_command(
 
 /// 恢复历史会话时应当沿用的模型。
 ///
-/// 先按「同 Provider + 同 upstream model.id」精确匹配；Provider 改名或迁移后
-/// 再用 upstream model.id 兜底，避免仅因渠道改名就换掉会话原本的模型。
+/// 优先级：同 Provider + 同别名（用户当初选的那条）> 同 Provider + 同 upstream
+/// model.id > 仅同 upstream model.id。同一 (provider, id) 在配置里可能对应多个
+/// 别名，只有按记录里的别名命中，才能还原用户当初选中的那一组参数。
 /// 返回 `None` 表示会话模型在配置内已不存在，调用方回退 `agent.default_model`。
 fn resumed_session_model<'a>(
     config: &'a AxonConfig,
     record: &run_session_store::RunSessionRecord,
 ) -> Option<&'a ModelConfig> {
-    let mut provider_migrated = None;
+    let mut best: Option<(u8, &'a ModelConfig)> = None;
     for model in config
         .models
         .iter()
@@ -288,12 +289,17 @@ fn resumed_session_model<'a>(
         if model.id != record.model {
             continue;
         }
-        if model.provider == record.provider {
-            return Some(model);
+        let score = u8::from(model.provider == record.provider) * 2
+            + u8::from(record.model_name.as_deref() == Some(model.name.as_str()));
+        let better = match best {
+            Some((current, _)) => score > current,
+            None => true,
+        };
+        if better {
+            best = Some((score, model));
         }
-        provider_migrated.get_or_insert(model);
     }
-    provider_migrated
+    best.map(|(_, model)| model)
 }
 
 #[cfg(test)]

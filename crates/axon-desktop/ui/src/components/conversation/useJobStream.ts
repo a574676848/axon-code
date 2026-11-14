@@ -138,6 +138,8 @@ export function useJobStream(
           const reason = failure instanceof Error ? failure.message : String(failure);
           setStream((current) => ({
             ...current,
+            // 运行态一起收口：否则「在跑」会盖住失败结论，界面永远停在等待。
+            running: false,
             unavailable: reason.trim().length > 0 ? reason.trim() : '读不到作业输出',
           }));
         });

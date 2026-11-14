@@ -134,6 +134,23 @@ fn read_only_runtime_refuses_every_write() {
 
     assert!(runtime.activate_profile(LOCAL_PROFILE_ID).is_err());
     assert!(runtime.rollback_profile().is_err());
+    assert!(runtime.set_sidebar_collapsed(true).is_err());
+}
+
+#[test]
+fn sidebar_preference_round_trips_without_resetting_connection_facts() {
+    let runtime = Runtime::from_document(document_with_one_local_profile(), false);
+    runtime
+        .set_sidebar_collapsed(true)
+        .expect("偏好应可写入内存状态");
+    assert_eq!(runtime.sidebar_collapsed(), Some(true));
+    runtime
+        .update_document(|document| {
+            document.client.theme = Some("obsidian".to_owned());
+            Ok(())
+        })
+        .expect("其它客户端偏好也应可写入");
+    assert_eq!(runtime.sidebar_collapsed(), Some(true));
 }
 
 #[test]
@@ -185,4 +202,5 @@ fn client_layer_defaults_keep_notifications_on() {
     assert!(layer.notifications_enabled);
     assert_eq!(layer.onboarding_version, 0, "0 表示尚未完成引导");
     assert_eq!(layer.theme, None);
+    assert_eq!(layer.sidebar_collapsed, None);
 }

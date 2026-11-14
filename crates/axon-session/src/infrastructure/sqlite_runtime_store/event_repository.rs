@@ -136,6 +136,13 @@ fn append_event_refs<'a>(
     let emitted_at_ms = i64_value(now_ms)?;
     let mut records = Vec::with_capacity(events.len());
     let archive_root = store.event_archive_root();
+    /*
+     * 工具动作摘要：历史列表不读事件流，顺手把这一批里的工具名记进该轮记录。
+     *
+     * 只有带 Interaction 租约的写入才有归属，会话级事件不参与。名字先在本批内去重，
+     * 落库那一条 SQL 再按列内已有内容判重，所以一轮里反复用同一个工具只会记一次。
+     */
+    let mut tool_names: Vec<String> = Vec::new();
     {
         let mut statement = transaction
             .prepare_cached(
@@ -173,6 +180,13 @@ fn append_event_refs<'a>(
                 payload_json: payload_json.to_owned(),
                 emitted_at_ms: now_ms,
             });
+            // 只在这一轮持有交互租约时记工具名：工具名来自事件载荷，不落库就没有可聚合的列。
+            if interaction_lease.is_some()
+                && let Some(name) = tool_call_name(event_type, payload_json)
+                && !tool_names.iter().any(|known| known == &name)
+            {
+                tool_names.push(name);
+            }
         }
     }
     transaction
@@ -187,8 +201,42 @@ fn append_event_refs<'a>(
             ],
         )
         .map_err(storage)?;
+    if let Some((interaction_id, _)) = interaction_lease {
+        for name in &tool_names {
+            transaction
+                .execute(
+                    "UPDATE jarvis_interactions SET tool_summary = CASE \
+                        WHEN tool_summary = '' THEN ?1 \
+                        WHEN instr(',' || tool_summary || ',', ',' || ?1 || ',') > 0 THEN tool_summary \
+                        ELSE tool_summary || ',' || ?1 END \
+                     WHERE interaction_id = ?2",
+                    params![name, interaction_id.as_str()],
+                )
+                .map_err(storage)?;
+        }
+    }
     transaction.commit().map_err(storage)?;
     Ok(records)
+}
+
+/// 从一帧 wire 事件里取工具名；只认 `toolCall`，其余一律 None。
+///
+/// 先用子串做廉价筛选：绝大多数事件不是工具调用，不该为它们付一次 JSON 解析。
+/// 判据必须带上字段名：`toolCallId` 里也含 `toolCall`，只搜裸词会把每一条工具
+/// 结果帧都拖进 JSON 解析（实测一条长轮次里工具结果帧是工具调用的十倍）。
+fn tool_call_name(event_type: &str, payload_json: &str) -> Option<String> {
+    if event_type != "wire_event" || !payload_json.contains("\"type\":\"toolCall\"") {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(payload_json).ok()?;
+    let kind = value.get("kind")?;
+    if kind.get("type")?.as_str()? != "toolCall" {
+        return None;
+    }
+    kind.get("payload")?
+        .get("toolName")?
+        .as_str()
+        .map(str::to_owned)
 }
 
 /// 把超限的事件正文写到归档文件，返回相对引用。

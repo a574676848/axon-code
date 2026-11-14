@@ -208,7 +208,8 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             attachments_json TEXT NOT NULL DEFAULT '[]',
             model TEXT,
             reasoning_effort TEXT,
-            lane_id TEXT NOT NULL DEFAULT ''
+            lane_id TEXT NOT NULL DEFAULT '',
+            tool_summary TEXT NOT NULL DEFAULT ''
         );
         CREATE UNIQUE INDEX IF NOT EXISTS jarvis_interactions_source
             ON jarvis_interactions(source_channel, source_message_id);
@@ -545,6 +546,19 @@ fn migrate_additive_columns(connection: &Connection) -> rusqlite::Result<()> {
         "jarvis_interactions",
         "reasoning_effort",
         "TEXT",
+    )?;
+    /*
+     * 本轮用过的工具名（逗号分隔、写入时已去重）。
+     *
+     * 历史列表不读事件流：工具名只在 `session_events` 的载荷里，没有可用的索引，
+     * 查询时聚合要把整条会话的十几万帧扫一遍。落成列之后，索引接口按主键取一次
+     * 就能给出「执行了命令、已读取文件」这类动作摘要。老记录为空，界面退回状态短语。
+     */
+    add_column_if_missing(
+        connection,
+        "jarvis_interactions",
+        "tool_summary",
+        "TEXT NOT NULL DEFAULT ''",
     )?;
     // lane 排他领取按 (lane_id, status, lease_expires_at_ms) 定位在途 processing。
     connection.execute_batch(

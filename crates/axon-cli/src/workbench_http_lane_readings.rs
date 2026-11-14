@@ -13,6 +13,42 @@ use std::path::Path;
 
 use super::runtime_store;
 
+/// 一页历史里每条 Interaction 的工具动作摘要（逗号分隔的工具名）。
+///
+/// 一次主键批次查覆盖整页：工具名在写入事件时就已累加进 `jarvis_interactions`
+/// 的 `tool_summary` 列，所以这里既不碰事件表，也不扫历史。老记录该列为空，
+/// 界面据此退回状态短语。
+pub(super) fn tool_summaries(
+    axon_root: &Path,
+    interaction_ids: &[&str],
+) -> std::collections::HashMap<String, String> {
+    let mut summaries = std::collections::HashMap::new();
+    if interaction_ids.is_empty() {
+        return summaries;
+    }
+    let store = runtime_store(axon_root);
+    let Ok(connection) = rusqlite::Connection::open(store.path()) else {
+        return summaries;
+    };
+    let placeholders = vec!["?"; interaction_ids.len()].join(",");
+    let sql = format!(
+        "SELECT interaction_id, tool_summary FROM jarvis_interactions \
+         WHERE interaction_id IN ({placeholders})"
+    );
+    let Ok(mut statement) = connection.prepare(&sql) else {
+        return summaries;
+    };
+    let Ok(rows) = statement.query_map(rusqlite::params_from_iter(interaction_ids.iter()), |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }) else {
+        return summaries;
+    };
+    for (interaction_id, tool_summary) in rows.flatten() {
+        summaries.insert(interaction_id, tool_summary);
+    }
+    summaries
+}
+
 /// 车道上已收口轮次的累计墙钟耗时（毫秒）。
 ///
 /// 每轮的耗时取「到达 → 收尾」这段墙钟差：`jarvis_interactions` 里一行就是一轮，两个
@@ -74,6 +110,7 @@ pub(super) fn effective_model_payload(axon_root: &Path, lane_id: &str) -> serde_
     serde_json::json!({
         "provider": facts.provider,
         "model": facts.model,
+        "name": facts.model_name,
         "reasoningEffort": facts.reasoning_effort,
     })
 }

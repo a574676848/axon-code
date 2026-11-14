@@ -358,13 +358,10 @@ impl NotesStore {
                     )));
                 }
             };
-            // 提交通道不是事实便签：`P0:` 开头的 handoff/summary.md 要么被原样采用，要么因过期
-            // 被丢弃，绝不能由投影再内联一次，否则旧摘要会绕过来源校验重新回到新窗口。
-            if entry.path == crate::session_notes::SESSION_NOTES_SUBMITTED_SUMMARY_PATH
-                && content
-                    .trim_start()
-                    .starts_with(crate::session_notes::SESSION_NOTES_SUBMITTED_SUMMARY_HEADER)
-            {
+            // 提交通道不是事实便签：handoff/summary.md 要么被原样采用，要么因过期被丢弃，
+            // 绝不能由投影再内联一次，否则旧摘要会绕过来源校验重新回到新窗口。
+            // 判定只看路径：摘要内容不限格式，不能靠 `P0:` 之类的标记来决定它是不是提交通道。
+            if entry.path == crate::session_notes::SESSION_NOTES_SUBMITTED_SUMMARY_PATH {
                 continue;
             }
             if content.len() > NOTES_INLINE_MAX_BYTES {

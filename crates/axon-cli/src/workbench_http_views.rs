@@ -104,4 +104,19 @@ pub struct InteractionView {
     pub content: String,
     /// 入站时落地的本地附件绝对路径；回放历史时据此还原图片与文件。
     pub attachments: Vec<String>,
+    /// 本轮显式指定的模型；入口没有选择时为空。
+    ///
+    /// 折叠成一行时它是最有信息量的那一项：历史索引不读事件流，模型是唯一能
+    /// 「不花一次扫描就说清这轮怎么跑的」的聚合事实。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// 本轮显式指定的推理强度；入口没有选择时为空。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    /// 本轮用过的工具名（逗号分隔、已去重）；老记录为空。
+    ///
+    /// 折叠成一行时它就是那句「执行了命令、已读取文件」；写成列而不是查询时聚合，
+    /// 是因为工具名只在事件载荷里，没有可用索引，聚合一次要扫完整条会话。
+    #[serde(default)]
+    pub tool_summary: String,
 }

@@ -98,6 +98,76 @@ fn resume_explicit_model_overrides_historical_model() {
     assert_eq!(effective.model.as_deref(), Some("current-model"));
 }
 
+#[test]
+fn resume_prefers_recorded_alias_when_one_id_has_many_aliases() {
+    let mut config = current_config();
+    // 同一 provider 与 upstream id 在配置里对应两个别名（先命中 builtin 的 fast_model）。
+    config.models.push(ModelConfig {
+        name: "fast_model".to_owned(),
+        id: "shared-model-id".to_owned(),
+        provider: "current-provider".to_owned(),
+        context_window: 100_000,
+        ..ModelConfig::default()
+    });
+    config.models.push(ModelConfig {
+        name: "deepseek-v4.1-flash".to_owned(),
+        id: "shared-model-id".to_owned(),
+        provider: "current-provider".to_owned(),
+        context_window: 400_000,
+        ..ModelConfig::default()
+    });
+    let previous = historical_session_with_alias(
+        "current-provider",
+        "shared-model-id",
+        Some("deepseek-v4.1-flash"),
+    );
+    let command = resume_command(None);
+
+    let effective = resumed_command(&command, Some(&previous), &config).unwrap();
+
+    assert_eq!(effective.model.as_deref(), Some("deepseek-v4.1-flash"));
+    let selected = select_run_model(&effective, &config).unwrap();
+    // 别名带回的不只是名字：上下文窗口等参数也必须取用户当初选中的那一条。
+    assert_eq!(selected.context_window, 400_000);
+}
+
+#[test]
+fn resume_without_recorded_alias_falls_back_to_same_provider_id() {
+    let mut config = current_config();
+    config.models.push(ModelConfig {
+        name: "fast_model".to_owned(),
+        id: "shared-model-id".to_owned(),
+        provider: "current-provider".to_owned(),
+        context_window: 100_000,
+        ..ModelConfig::default()
+    });
+    // 旧记录没有别名：按同 provider 同 id 匹配，取配置里第一条。
+    let previous = historical_session_with_alias("current-provider", "shared-model-id", None);
+    let command = resume_command(None);
+
+    let effective = resumed_command(&command, Some(&previous), &config).unwrap();
+
+    assert_eq!(effective.model.as_deref(), Some("fast_model"));
+}
+
+#[test]
+fn resume_ignores_alias_removed_from_config() {
+    let mut config = current_config();
+    config.models.push(ModelConfig {
+        name: "fast_model".to_owned(),
+        id: "shared-model-id".to_owned(),
+        provider: "current-provider".to_owned(),
+        ..ModelConfig::default()
+    });
+    let previous =
+        historical_session_with_alias("current-provider", "shared-model-id", Some("removed-alias"));
+    let command = resume_command(None);
+
+    let effective = resumed_command(&command, Some(&previous), &config).unwrap();
+
+    assert_eq!(effective.model.as_deref(), Some("fast_model"));
+}
+
 fn resume_command(model: Option<&str>) -> RunCommand {
     RunCommand {
         prompt: "继续处理".to_owned(),
@@ -135,6 +205,14 @@ fn historical_session() -> PreparedRunSession {
 }
 
 fn historical_session_with_model(provider: &str, model: &str) -> PreparedRunSession {
+    historical_session_with_alias(provider, model, Some(model))
+}
+
+fn historical_session_with_alias(
+    provider: &str,
+    model: &str,
+    alias: Option<&str>,
+) -> PreparedRunSession {
     let record = RunSessionRecord {
         session_id: "historical-session".to_owned(),
         parent_session_id: None,
@@ -143,6 +221,7 @@ fn historical_session_with_model(provider: &str, model: &str) -> PreparedRunSess
         cwd: None,
         provider: provider.to_owned(),
         model: model.to_owned(),
+        model_name: alias.map(ToOwned::to_owned),
         selected_skill_name: None,
         repo_context: None,
         session_context: None,

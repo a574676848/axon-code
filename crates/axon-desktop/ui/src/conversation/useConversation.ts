@@ -127,10 +127,6 @@ export function useConversation(target: ConversationTarget | null): Conversation
    * 回放落地那一刻文案就得跟着换，而 ref 的变化不会触发重渲染。
    */
   const [replaying, setReplaying] = useState(false);
-  /** 首屏被窗口截断的那一条：标识加窗口起点。 */
-  const [truncated, setTruncated] = useState<{ interactionId: string; start: number } | null>(
-    null,
-  );
   const watchedRef = useRef<string | null>(null);
   /**
    * 目标代次。
@@ -188,20 +184,17 @@ export function useConversation(target: ConversationTarget | null): Conversation
   /**
    * 回放一条 Interaction 的正文：取数、窗口与放行策略在 `interactionReplay`，
    * 这里只把帧落点、代次与三个状态回执接上去。
+   *
+   * 窗口终点由分页层给：首屏与展开都是尾部一窗，只有「往前补」时才把它钉在已知起点上。
    */
   const replayHistory = useCallback(
-    (workspace: string, interactionId: string, generation: number, full: boolean) =>
+    (workspace: string, interactionId: string, generation: number) =>
       replayInteractionHistory(
         {
           route: paging.routeFrames,
           now: Date.now,
           generation: () => generationRef.current,
           painted: () => setOpening(false),
-          truncated: (id, start, live) => {
-            // 还在跑的轮次不记截断：整条重放会和实时增量抢同一轮次；收口过的才交给「加载更早」。
-            if (start > 0 && !live) setTruncated({ interactionId: id, start });
-            else setTruncated((current) => (current?.interactionId === id ? null : current));
-          },
           drained: () => setReplaying(false),
           subscribed: rememberSubscribed,
           watch: (target, id, cursor) => ipc.conversationWatch(target, id, cursor),
@@ -210,7 +203,6 @@ export function useConversation(target: ConversationTarget | null): Conversation
         workspace,
         interactionId,
         generation,
-        full,
       ),
     [paging.routeFrames, rememberSubscribed],
   );
@@ -263,7 +255,7 @@ export function useConversation(target: ConversationTarget | null): Conversation
           attachments: seed.attachments,
         });
       }
-      void replayHistory(workspace, next, generation, paging.ownPage()).catch(
+      void replayHistory(workspace, next, generation).catch(
         (error: unknown) => {
           if (generationRef.current !== generation) return;
           setSubmitError(error instanceof Error ? error.message : '读取会话历史失败');
@@ -351,7 +343,13 @@ export function useConversation(target: ConversationTarget | null): Conversation
     queueRef.current = [];
     replayingRef.current = false;
     setReplaying(false);
-    setTruncated(null);
+    /*
+     * 在途的展开与补窗要就地作废。
+     *
+     * 分页层用「有没有正在跑的临时投影」当发起守卫；不清它，新会话里点骨架、翻历史
+     * 都会被静默拒绝，用户除了重启没有别的出路。
+     */
+    paging.abort();
     watchedRef.current = null;
     pendingRef.current = [];
     subscribedIdsRef.current = new Set();
@@ -429,6 +427,7 @@ export function useConversation(target: ConversationTarget | null): Conversation
       subscribedIdsRef.current.clear();
     };
   }, [
+    paging.abort,
     rememberSubscribed,
     rememberUnsubscribed,
     workspaceId,
@@ -634,18 +633,14 @@ export function useConversation(target: ConversationTarget | null): Conversation
   const sessionCumulative = useSessionCumulative(projection.turns, paging.sessionBaseline);
 
   /**
-   * 加载更早：先补被首屏窗口截掉的那一段，再退回车道级翻页。
+   * 加载更早的一页轮次。
    *
-   * 截断的那一条只能整条重放补回：帧页是前向的，从窗口起点往前读不到东西。
+   * 轮内不再提供「往前补」：补进来的正文会立刻被同一个渲染预算折掉，等于白读一窗帧。
+   * 一轮里更早的部分只由时间线上那句「更早的 N 条内容已折叠」说明。
    */
   const loadOlder = useCallback(async () => {
-    if (truncated !== null) {
-      paging.unfoldTurn(truncated.interactionId);
-      setTruncated(null);
-      return;
-    }
     await paging.loadOlder();
-  }, [paging, truncated]);
+  }, [paging]);
 
   return {
     state: projection,
@@ -653,6 +648,8 @@ export function useConversation(target: ConversationTarget | null): Conversation
     working,
     /** 正文装载中：工作状态行写「正在加载会话…」而不是供应商阶段。 */
     loadingHistory: opening || replaying,
+    /** 正在展开的折叠轮：折叠行据此把箭头换成转圈。 */
+    unfoldingId: paging.unfoldingId,
     activeQuestion,
     answerQuestion,
     watchedInteractionId: laneCapability.available ? watchedRef.current : null,
@@ -673,7 +670,7 @@ export function useConversation(target: ConversationTarget | null): Conversation
     retry,
     interrupt,
     loadOlder,
-    hasOlder: truncated !== null || paging.hasOlder,
+    hasOlder: paging.hasOlder,
     loadingOlder: paging.loadingOlder,
     prependToken: paging.prependToken,
     unfoldTurn: paging.unfoldTurn,

@@ -37,6 +37,16 @@ pub(crate) struct RunSessionRecord {
     pub(super) cwd: Option<String>,
     pub(super) provider: String,
     pub(super) model: String,
+    /// 用户当时选择的模型别名（配置里的 `name`）。
+    ///
+    /// `model` 只记上游模型 id，同一 (provider, id) 在配置里可能对应多个别名；
+    /// 恢复会话与界面显示都必须回到用户当初选的那个别名。
+    ///
+    /// 两者语义不同：`model` 是运行时实际观测到的上游 id（失败重试可能落到别的
+    /// 模型），`model_name` 是用户的选择事实。消费方必须同时校验 provider 与 id
+    /// 都对得上才可采用别名，否则退回按 id 匹配。
+    #[serde(default)]
+    pub(super) model_name: Option<String>,
     #[serde(default)]
     pub(super) selected_skill_name: Option<String>,
     #[serde(default)]
@@ -176,6 +186,7 @@ impl RunSessionRecord {
             cwd: Some(request.cwd.to_string_lossy().to_string()),
             provider: response.provider.clone(),
             model: response.model.clone(),
+            model_name: Some(request.model.name.clone()),
             selected_skill_name: request.selected_skill_name.clone(),
             repo_context: Some(repo_context_record(&request.cwd, workspace_instructions)),
             session_context: Some(session_context_record(
@@ -227,6 +238,7 @@ impl RunSessionRecord {
             cwd: Some(request.cwd.to_string_lossy().to_string()),
             provider: input.provider.clone(),
             model: input.model.clone(),
+            model_name: Some(request.model.name.clone()),
             selected_skill_name: request.selected_skill_name.clone(),
             repo_context: None,
             session_context: None,

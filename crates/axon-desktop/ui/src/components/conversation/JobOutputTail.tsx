@@ -13,26 +13,6 @@ import { useJobStream } from './useJobStream';
  * 完整归档路径都在里面。
  */
 
-/** 从 `job_output` 的调用参数里取作业标识；不是这个工具或参数认不出时返回 null。 */
-export function jobOutputJobId(toolName: string, args: string): string | null {
-  const name = toolName.toLowerCase();
-  if (name.slice(name.lastIndexOf('.') + 1) !== 'job_output') return null;
-  const text = args.trim();
-  if (text.length === 0) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return null;
-  }
-  if (parsed === null || typeof parsed !== 'object') return null;
-  const record = parsed as Record<string, unknown>;
-  const raw = record.job_id ?? record.jobId;
-  if (typeof raw === 'string' && raw.trim().length > 0) return raw.trim();
-  if (typeof raw === 'number' && Number.isFinite(raw)) return String(raw);
-  return null;
-}
-
 /** 作业输出区：跟随归档增量，读不到时退回本次调用自己的回执。 */
 export const JobOutputTail: React.FC<{
   laneId: string | null;
@@ -54,6 +34,15 @@ export const JobOutputTail: React.FC<{
     return (
       <>
         <ToolContent title="输出" value={stream.text} />
+        {note}
+      </>
+    );
+  }
+  // 失败先于「在跑」：读不到就把原因摆出来，不能让转圈把结论盖住。
+  if (stream.unavailable !== null) {
+    return (
+      <>
+        {fallback.length > 0 && <ToolContent title="输出" value={fallback} />}
         {note}
       </>
     );

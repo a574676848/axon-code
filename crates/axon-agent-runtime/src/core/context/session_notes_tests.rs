@@ -270,9 +270,9 @@ fn session_notes_reuses_model_submitted_summary_verbatim() {
     );
 }
 
-/// 自由格式便签不得冒充提交摘要：回退投影，且未超总预算时不得截断便签内容。
+/// 提交通道只看路径：内容怎么写都原样采用，不被改写成模板。
 #[test]
-fn session_notes_projects_full_notes_when_summary_not_submitted() {
+fn session_notes_accepts_free_form_submitted_summary() {
     let directory = axon_test_support::test_temp_dir();
     let session_dir = directory.path();
     let notes = SessionNotes::new(
@@ -280,38 +280,38 @@ fn session_notes_projects_full_notes_when_summary_not_submitted() {
         5_000,
     );
     let long_tail = "尾部事实".repeat(200);
+    let submitted = format!("# Goal Checkpoint\n{long_tail}");
     NotesStore::write_file(
         session_dir,
         SESSION_NOTES_SUBMITTED_SUMMARY_PATH,
-        &format!("# Goal Checkpoint\n{long_tail}"),
+        &submitted,
         5_001,
     )
-    .expect("写入自由格式便签");
+    .expect("写入自由格式摘要");
 
     let summary = notes
         .try_render_canonical_summary(session_dir, &[])
-        .expect("回退投影应成功");
+        .expect("自由格式摘要必须被采用");
 
-    assert!(
-        summary.starts_with("P0:"),
-        "回退路径必须产出 canonical 结构：{summary}"
+    assert_eq!(
+        summary, submitted,
+        "提交摘要必须逐字节原样采用，不得改写成模板"
     );
     assert!(
-        summary.contains("# Goal Checkpoint"),
-        "便签原始标题必须保留：{summary}"
+        !summary.contains("投影目标"),
+        "模型提交优先于目标锚点投影：{summary}"
     );
-    assert!(summary.contains(&long_tail), "未超总预算时不得截断便签内容");
 }
 
-/// 超过总预算必须 fail-closed，而不是静默截断成"看起来成功"的摘要。
+/// 超预算的提交摘要走投影而不是拒绝换窗：换窗是会话自救的唯一动作。
 #[test]
-fn session_notes_fails_closed_when_summary_exceeds_budget() {
+fn over_budget_submitted_summary_falls_back_to_projection() {
     let directory = axon_test_support::test_temp_dir();
     let session_dir = directory.path();
     let notes = SessionNotes::new(GoalAnchor::new("预算目标", Vec::new()), 6_000);
     let over_budget_bytes =
         usize::try_from(SESSION_NOTES_CHECKPOINT_MAX_TOKENS).expect("预算必须可转换") * 5;
-    let oversized = format!("P0:\nTASK:\n{}", "x".repeat(over_budget_bytes));
+    let oversized = "x".repeat(over_budget_bytes);
     NotesStore::write_file(
         session_dir,
         SESSION_NOTES_SUBMITTED_SUMMARY_PATH,
@@ -320,13 +320,48 @@ fn session_notes_fails_closed_when_summary_exceeds_budget() {
     )
     .expect("写入超预算摘要");
 
+    let (summary, source) = notes
+        .render_canonical_summary_with_source(session_dir, &[])
+        .expect("超预算摘要不得阻断换窗");
+
+    assert_eq!(
+        source,
+        CheckpointSource::Projection,
+        "超预算摘要必须降级为投影"
+    );
+    assert!(
+        summary.contains("预算目标"),
+        "投影必须落在当前目标锚点上：{summary}"
+    );
+    assert!(
+        !summary.contains(&"x".repeat(1_000)),
+        "超预算摘要的正文不得带进新窗口"
+    );
+}
+
+/// 投影自己也超预算时仍然 fail-closed：便签总量失控不能靠换窗掩盖。
+#[test]
+fn session_notes_fails_closed_when_projection_exceeds_budget() {
+    let directory = axon_test_support::test_temp_dir();
+    let session_dir = directory.path();
+    let notes = SessionNotes::new(GoalAnchor::new("投影预算目标", Vec::new()), 6_500);
+    for index in 0..12 {
+        NotesStore::write_file(
+            session_dir,
+            &format!("bulk{index}.md"),
+            &"事实".repeat(600),
+            6_501,
+        )
+        .expect("写入大号便签");
+    }
+
     let error = notes
         .try_render_canonical_summary(session_dir, &[])
-        .expect_err("超预算必须拒绝");
+        .expect_err("投影超预算必须拒绝");
 
     assert!(
         format!("{error:?}").contains("超出预算"),
-        "错误信息必须说明超出预算并要求重写：{error:?}"
+        "错误信息必须说明超出预算：{error:?}"
     );
 }
 

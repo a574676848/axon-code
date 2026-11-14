@@ -24,7 +24,7 @@ import {
 import * as ipc from '../../ipc';
 import type { RetryPrompt } from '../../conversation/transcript/retryPrompt';
 import { Text } from '../ui/surfaces';
-import { useConversationActions } from './actions';
+import { useConversationActions, useUnfoldingInteractionId } from './actions';
 import { AssistantBlock } from './AssistantBlock';
 import { AttachmentTile } from './AttachmentTile';
 import { BUBBLE_RADIUS } from './chatChrome';
@@ -35,7 +35,8 @@ import { MessageActionButton, MessageFooter } from './MessageFooter';
 import { QuestionCellBlock } from './QuestionCellBlock';
 import { SummaryBlock } from './SummaryBlock';
 import { ToolContent } from './ToolContent';
-import { JobOutputTail, jobOutputJobId } from './JobOutputTail';
+import { JobOutputTail } from './JobOutputTail';
+import { jobOutputJobId } from './jobFolding';
 import { UserText } from './UserText';
 import { extractFilePath, toolFailed, toolLabel, toolRowTitle } from './toolPresentation';
 
@@ -297,7 +298,13 @@ function toolIcon(label: string): React.ReactNode {
 }
 
 /** 工具块：类别前缀 + 命令或路径，行尾给退出码、耗时或增删行数。 */
-const ToolBlock: React.FC<{ cell: Extract<TranscriptCell, { role: 'tool' }> }> = ({ cell }) => {
+const ToolBlock: React.FC<{
+  cell: Extract<TranscriptCell, { role: 'tool' }>;
+  /** 这一行替掉了多少次同类读取；1 表示没有并。 */
+  repeats?: number;
+  /** 这些读取的耗时合计；取不到耗时时为空。 */
+  repeatsMs?: number | null;
+}> = ({ cell, repeats = 1, repeatsMs = null }) => {
   const running =
     cell.status === 'running' || cell.status === 'started' || cell.status === 'waiting';
   const [open, setOpen] = React.useState(false);
@@ -323,9 +330,19 @@ const ToolBlock: React.FC<{ cell: Extract<TranscriptCell, { role: 'tool' }> }> =
   const timing = [cell.exitCode !== null ? `exit ${cell.exitCode}` : null, compactDuration(cell.durationMs)]
     .filter((value): value is string => value !== null && value.length > 0)
     .join(' · ');
+  /*
+   * 并过读取的行只报次数与合计耗时：被丢掉的那几条读的是同一个作业，单报其中一条
+   * 既不代表全部也不代表最新。只有一次时照旧报退出码与耗时。
+   */
+  const foldTiming =
+    repeats > 1
+      ? [`×${repeats}`, compactDuration(repeatsMs)].filter((value) => value.length > 0).join(' · ')
+      : '';
   const meta =
     cell.added > 0 || cell.removed > 0 ? (
       <DiffStat added={cell.added} removed={cell.removed} />
+    ) : foldTiming.length > 0 ? (
+      foldTiming
     ) : timing.length > 0 ? (
       timing
     ) : undefined;
@@ -477,17 +494,29 @@ const NoticeBlock: React.FC<{ cell: Extract<TranscriptCell, { role: 'notice' }> 
  */
 const FoldedBlock: React.FC<{ cell: Extract<TranscriptCell, { role: 'folded' }> }> = ({ cell }) => {
   const actions = useConversationActions();
+  /*
+   * 展开要先回放一窗帧，这段时间里折叠行必须自己说"在动"：否则用户点下去看到的是
+   * 一秒钟毫无反应的一行，会以为点空了。转圈由共用的可展开行负责（`active` 会
+   * 把箭头换成转圈），这里只把状态递进去。
+   */
+  const unfolding = useUnfoldingInteractionId();
+  const expanding = unfolding === cell.interactionId;
   const label = cell.prompt.trim().length > 0 ? cell.prompt : '这一轮的历史记录';
   return (
-    <div className="w-full rounded-md hairline border-border-hairline bg-surface px-1 py-0.5">
+    <div className="skeleton-row-in w-full rounded-md hairline border-border-hairline bg-surface px-1 py-0.5">
       <DisclosureRow
         open={false}
-        onToggle={() => actions?.unfoldTurn(cell.interactionId)}
+        onToggle={() => {
+          // 同一条正在回放时不重复发起：第二次订阅会与第一路抢同一份临时投影。
+          if (expanding) return;
+          actions?.unfoldTurn(cell.interactionId);
+        }}
         icon={<ChecklistIcon size={14} />}
         label="历史"
         title={label}
         titleText={label}
         meta={cell.summary}
+        active={expanding}
       />
     </div>
   );
@@ -498,7 +527,11 @@ export const TranscriptCellView: React.FC<{
   cell: TranscriptCell;
   /** 失败单元的重试入口需要这一轮的原始请求；其余单元不用。 */
   retryPrompt?: RetryPrompt | null;
-}> = React.memo(({ cell, retryPrompt = null }) => {
+  /** 这一行替掉了多少次同类读取；1 表示没有并。 */
+  repeats?: number;
+  /** 这些读取的耗时合计；取不到耗时时为空。 */
+  repeatsMs?: number | null;
+}> = React.memo(({ cell, retryPrompt = null, repeats = 1, repeatsMs = null }) => {
   switch (cell.role) {
     case 'user':
       return (
@@ -527,7 +560,7 @@ export const TranscriptCellView: React.FC<{
     case 'reasoning':
       return <ReasoningBlock text={cell.text} done={cell.done} durationMs={cell.durationMs} />;
     case 'tool':
-      return <ToolBlock cell={cell} />;
+      return <ToolBlock cell={cell} repeats={repeats} repeatsMs={repeatsMs} />;
     case 'fileChange':
       return <FileChangeBlock cell={cell} />;
     case 'history':

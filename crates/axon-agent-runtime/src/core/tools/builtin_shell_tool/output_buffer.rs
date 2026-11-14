@@ -287,7 +287,8 @@ impl OutputAccumulator {
         self.total_bytes = self.total_bytes.saturating_add(bytes.len());
         self.original_chars = self
             .original_chars
-            .saturating_add(String::from_utf8_lossy(bytes).chars().count());
+            // 与展示同一口径：UTF-16 的 NUL 不该被算成字符，否则字符数虚高、容易误判截断。
+            .saturating_add(decode_process_output(bytes).chars().count());
         self.hasher.update(bytes);
         let head_remaining = OUTPUT_HEAD_BYTES.saturating_sub(self.head.len());
         let (head, tail) = bytes.split_at(head_remaining.min(bytes.len()));
@@ -327,15 +328,55 @@ impl OutputAccumulator {
         } else {
             stored
         };
-        let retained_chars = String::from_utf8_lossy(&preview).chars().count();
+        // 展示层解码一次，字符读数与正文取同一口径。
+        let text = decode_process_output(&preview);
+        let retained_chars = text.chars().count();
         OutputCapture {
-            preview,
+            preview: text.into_owned().into_bytes(),
             truncated,
             original_chars: accumulator.original_chars,
             retained_chars,
             sha256: accumulator.hasher.finalize_hex(),
         }
     }
+}
+
+/// 子进程输出的展示层解码。
+///
+/// 顺序有讲究：**UTF-16LE 必须先判**，它的 ASCII 片段（`w\0s\0l\0`）本身就是合法
+/// UTF-8，先按 UTF-8 解码会得到「逐字符带空格」的假文本，正是 `wsl.exe` 那类输出
+/// 在界面上散架的原因。UTF-8 严格解码失败时按 GB18030 兜底：Windows 原生命令按系统
+/// 代码页写中文，丢给 UTF-8 只剩替换符。
+///
+/// 归档与哈希仍用原始字节：解码只修正给人看的那一份，证据链不动。
+fn decode_process_output(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
+    if looks_like_utf16le(bytes) {
+        return encoding_rs::UTF_16LE.decode(bytes).0;
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(text) => std::borrow::Cow::Borrowed(text),
+        Err(_) => encoding_rs::GB18030.decode(bytes).0,
+    }
+}
+
+/// 是否像 UTF-16LE：NUL 密集，且几乎都落在奇数位（ASCII 字符的高字节）。
+fn looks_like_utf16le(bytes: &[u8]) -> bool {
+    let sample = &bytes[..bytes.len().min(512)];
+    if sample.len() < 4 {
+        return false;
+    }
+    let mut zeros = 0usize;
+    let mut zeros_on_high = 0usize;
+    for (index, byte) in sample.iter().enumerate() {
+        if *byte != 0 {
+            continue;
+        }
+        zeros += 1;
+        if index % 2 == 1 {
+            zeros_on_high += 1;
+        }
+    }
+    zeros.saturating_mul(8) >= sample.len() && zeros_on_high.saturating_mul(10) >= zeros * 9
 }
 
 fn output_byte_budgets(
@@ -496,5 +537,34 @@ mod tests {
                 "用例 {index}：尾部窗口必须与逐字节语义一致"
             );
         }
+    }
+
+    /// `wsl.exe` 的 stderr 是 UTF-16LE：按 UTF-8 解会得到逐字符带空格的假文本。
+    #[test]
+    fn utf16le_output_is_decoded_not_mangled() {
+        let text = "wsl: ERROR_FILE_NOT_FOUND";
+        let mut bytes = Vec::new();
+        for unit in text.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        assert_eq!(decode_process_output(&bytes), text);
+    }
+
+    /// 系统代码页写出的中文不是合法 UTF-8，必须走 GB18030 而不是留一串替换符。
+    #[test]
+    fn non_utf8_output_falls_back_to_gb18030() {
+        let (bytes, _, _) = encoding_rs::GB18030.encode("安装失败");
+        assert!(
+            std::str::from_utf8(bytes.as_ref()).is_err(),
+            "样本必须不是合法 UTF-8"
+        );
+        assert_eq!(decode_process_output(bytes.as_ref()), "安装失败");
+    }
+
+    /// 本来就是 UTF-8 的输出一个字节都不能动。
+    #[test]
+    fn utf8_output_is_left_untouched() {
+        let bytes = "构建完成".as_bytes();
+        assert_eq!(decode_process_output(bytes), "构建完成");
     }
 }

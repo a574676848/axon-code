@@ -51,8 +51,9 @@ export { conversationReducer } from './reducer';
 export { applyFrames } from './frames';
 
 /*
- * 折叠判据与摘要对外可见：控制器据此决定哪一轮折成一行，并在派发前把摘要算好
- * （折叠之后就没有可依据的单元了）。
+ * 折叠判据、摘要与历史骨架对外可见：控制器据此决定哪一轮折成一行，在派发前把摘要
+ * 算好（折叠之后就没有可依据的单元了），并按索引直接立起「只有摘要、没有正文」的
+ * 历史轮次。
  */
 export {
   FOLD_CELL_THRESHOLD,
@@ -60,6 +61,7 @@ export {
   MATERIALIZED_TURN_WINDOW,
   RECENT_EXPANDED_TURNS,
   foldedSummary,
+  historySkeletonTurn,
   isFoldCandidate,
   shouldEvictFromWindow,
   shouldFold,

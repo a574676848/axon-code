@@ -403,6 +403,8 @@ export interface DesktopPreferences {
   notificationsEnabled: boolean;
   /** 界面主题标识。 */
   theme: ThemeId;
+  /** 左侧导航是否折叠；空值表示用户还没有手动表态。 */
+  sidebarCollapsed: boolean | null;
 }
 
 /** 问答结算回执。 */
@@ -513,6 +515,12 @@ export interface InteractionSummary {
   content: string;
   /** 入站时落地的本地附件绝对路径。 */
   attachments: string[];
+  /** 该轮显式指定的模型；入口没有选择时缺省。 */
+  model?: string | null;
+  /** 该轮显式指定的推理强度；入口没有选择时缺省。 */
+  reasoningEffort?: string | null;
+  /** 该轮用过的工具名（逗号分隔、已去重）；老网关不返回时缺省。 */
+  toolSummary?: string;
 }
 
 /**

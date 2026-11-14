@@ -33,6 +33,9 @@ mod store_migration;
 pub mod tls;
 pub mod views;
 
+/// 客户端外壳偏好：不触碰连接探活事实。
+mod client_preferences;
+
 use std::path::PathBuf;
 use std::sync::{OnceLock, RwLock};
 

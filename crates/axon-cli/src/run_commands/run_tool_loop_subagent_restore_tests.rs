@@ -71,6 +71,7 @@ fn previous_session_record(session_id: &str) -> RunSessionRecord {
         cwd: None,
         provider: "fixture".to_owned(),
         model: "fixture-chat".to_owned(),
+        model_name: Some("fixture-chat".to_owned()),
         selected_skill_name: None,
         repo_context: None,
         session_context: None,
@@ -394,6 +395,32 @@ fn restore_uses_current_agent_control_limits_instead_of_defaults() {
     assert!(
         !agent_names.contains(&"/root/review/security"),
         "恢复必须使用当前 max_depth，而不是默认值"
+    );
+}
+
+/// 会话记录必须同时写下用户所选别名与 upstream id。
+///
+/// 只记 id 会让「同一 (provider, id) 配了多个别名」的会话在恢复与显示时串到
+/// 配置里的第一条；这里钉住写入点，防止将来只回填其中一个字段。
+#[test]
+fn started_session_record_keeps_the_selected_model_alias() {
+    let mut request = fixture_request();
+    request.provider.name = "alias-provider".to_owned();
+    request.model = ModelConfig {
+        name: "deepseek-v4.1-flash".to_owned(),
+        id: "deepseek-v4.1-flash-1017".to_owned(),
+        provider: "alias-provider".to_owned(),
+        ..ModelConfig::default()
+    };
+
+    let record = RunSessionRecord::started(&request);
+
+    assert_eq!(record.provider, "alias-provider");
+    assert_eq!(record.model, "deepseek-v4.1-flash-1017");
+    assert_eq!(
+        record.model_name.as_deref(),
+        Some("deepseek-v4.1-flash"),
+        "记录必须带上用户当时选的别名"
     );
 }
 

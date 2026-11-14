@@ -1,9 +1,10 @@
 import React from 'react';
 import { changedFilesOf } from '../../conversation/transcript';
-import type { TurnState } from '../../conversation/transcript/state';
+import type { TranscriptCell, TurnState } from '../../conversation/transcript/state';
 import { orderTurnCells } from '../../conversation/transcript/order';
 import { retryPromptOf } from '../../conversation/transcript/retryPrompt';
 import { ChangedFilesCard } from './ChangedFilesCard';
+import { foldJobReads } from './jobFolding';
 import { TranscriptCellView } from './Transcript';
 
 /*
@@ -23,23 +24,54 @@ import { TranscriptCellView } from './Transcript';
 /** 属于「过程」的单元：同一组内相邻时不再加间距。 */
 const PROCESS_ROLES = new Set(['reasoning', 'tool', 'fileChange', 'history']);
 
+/*
+ * 渲染行：一个单元，或一组并掉的同类作业读取。
+ *
+ * 身份取折叠组**第一条**单元：后续并进来的读取只是给这一行换最新内容，
+ * 换 key 会连展开态一起扔掉，正读着输出时来一条新读取就被重新收起。
+ */
+interface CellRow {
+  key: string;
+  cell: TranscriptCell;
+  /** 含自己在内的读取条数；1 表示没有并。 */
+  repeats: number;
+  /** 这些读取的耗时合计；一条都取不到耗时时为空。 */
+  repeatsMs: number | null;
+}
+
+/** 排序定稿后按相邻同作业读取折行，并为每行补上稳定身份。 */
+function foldRows(cells: TranscriptCell[]): CellRow[] {
+  const rows: CellRow[] = [];
+  let cursor = 0;
+  for (const item of foldJobReads(cells)) {
+    rows.push({
+      key: cells[cursor]?.id ?? item.cell.id,
+      cell: item.cell,
+      repeats: item.repeats,
+      repeatsMs: item.repeatsMs,
+    });
+    cursor += item.repeats;
+  }
+  return rows;
+}
+
 interface CellGroup {
   key: string;
   process: boolean;
-  cells: TurnState['cells'];
+  rows: CellRow[];
 }
 
-/** 把单元按「是否过程行」切成连续的组；非过程单元各自成组，保持原有的轮内间距。 */
-function groupCells(cells: TurnState['cells']): CellGroup[] {
+/** 把渲染行按「是否过程行」切成连续的组；非过程单元各自成组，保持原有的轮内间距。 */
+function groupCells(rows: CellRow[]): CellGroup[] {
   const groups: CellGroup[] = [];
-  for (const cell of cells) {
-    const process = PROCESS_ROLES.has(cell.role);
+  for (const row of rows) {
+    const process = PROCESS_ROLES.has(row.cell.role);
     const last = groups[groups.length - 1];
     if (process && last !== undefined && last.process) {
-      last.cells.push(cell);
+      last.rows.push(row);
       continue;
     }
-    groups.push({ key: `group:${cell.id}`, process, cells: [cell] });
+    groups.push({ key: `group:${row.key}`, process, rows: [row] });
   }
   return groups;
 }
@@ -75,6 +107,11 @@ export const TurnBlock = React.memo<TurnBlockProps>(
     const files = changedFilesOf(turn.changes);
     const cells = orderTurnCells(hiddenCells > 0 ? turn.cells.slice(hiddenCells) : turn.cells);
     /*
+     * 折行在排序之后：相邻说的是**显示上**相邻。排序会把待接手的用户消息挪到轮末，
+     * 若先折再看顺序，两次中间隔着别的东西的观察动作会被错并成一次。
+     */
+    const rows = foldRows(cells);
+    /*
      * 重试要的是这一轮**发起时**的请求：取整轮（含被折叠窗口裁掉的前导单元），
      * 窗口只影响正文可见性，不该让失败卡突然失去重试入口。
      */
@@ -92,7 +129,7 @@ export const TurnBlock = React.memo<TurnBlockProps>(
           onOpen={(index) => onOpenChange(turn.id, turnNumber, index)}
         />
       );
-    const groups = groupCells(cells);
+    const groups = groupCells(rows);
     const nodeRef = React.useRef<HTMLDivElement>(null);
 
     /*
@@ -129,15 +166,17 @@ export const TurnBlock = React.memo<TurnBlockProps>(
             <div
               className={
                 group.process
-                  ? `flex flex-col ${group.cells.length > 1 ? 'pl-2 hairline-l border-border' : ''}`
+                  ? `flex flex-col ${group.rows.length > 1 ? 'pl-2 hairline-l border-border' : ''}`
                   : 'flex flex-col gap-2.5'
               }
             >
-              {group.cells.map((cell) => (
+              {group.rows.map((row) => (
                 <TranscriptCellView
-                  key={cell.id}
-                  cell={cell}
-                  retryPrompt={cell.role === 'failure' ? retryPrompt : undefined}
+                  key={row.key}
+                  cell={row.cell}
+                  repeats={row.repeats}
+                  repeatsMs={row.repeatsMs}
+                  retryPrompt={row.cell.role === 'failure' ? retryPrompt : undefined}
                 />
               ))}
             </div>
