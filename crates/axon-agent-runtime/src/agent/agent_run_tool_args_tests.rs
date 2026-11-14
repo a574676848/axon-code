@@ -421,8 +421,8 @@ fn job_tool_arguments_reject_session_ids_and_non_positive_ids() {
     assert!(
         excessive
             .unwrap_err()
-            .contains("等待时长不得超过 10000 毫秒"),
-        "错误信息必须说明不得超过 10000 毫秒"
+            .contains("10000 毫秒（10 秒）"),
+        "错误信息必须点名 10000 毫秒（10 秒）这个上限，模型才知道该传多少"
     );
 }
 

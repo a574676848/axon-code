@@ -33,7 +33,7 @@ const JOB_OUTPUT_TOOL_SCHEMA_VERSION: u32 = 1;
 const JOB_KILL_TOOL_SCHEMA_VERSION: u32 = 1;
 
 /// `job_id` 字段的统一说明：两条产出通道（Shell 后台作业、后台子代理）共用同一注册表。
-const JOB_TOOL_JOB_ID_FIELD_DESCRIPTION: &str = "启动后台任务时回执给出的编号，后台子代理的 jobId 也走这里。照抄回执里的数字就行：不要自己编、不要改动，也不要把别的任务的编号拿来用。这个编号只给 job_output 和 job_kill 用，不能传给 write_stdin 或 send_message；反过来，会话 ID 也不能传给这两个工具。";
+const JOB_TOOL_JOB_ID_FIELD_DESCRIPTION: &str = "启动后台任务时回执给出的编号，后台子代理的 jobId 也走这里。照抄回执里的数字就行：不要自己编、不要改动，也不要把别的任务的编号拿来用。这个编号只给 job_output 和 job_kill 用，不能传给 write_stdin 或 send_message；反过来，会话 ID（session_id）也不能传给这两个工具。";
 
 /// 返回 `job_output` 工具定义。
 pub(crate) fn job_output_tool_definition() -> ToolDefinition {
@@ -149,22 +149,38 @@ mod tests {
         }
     }
 
-    /// 工具描述必须点明 `job_id` 与 `session_id` 不可互传，
-    /// 否则模型可能把作业 ID 拿去 write_stdin，形成双通道。
+    /// 通道隔离写在 `job_id` 字段说明里：模型填这个参数时必然读到，
+    /// 否则它可能把会话 ID 交给作业工具、或把作业 ID 拿去 write_stdin，形成双通道。
     #[test]
     fn job_output_description_forbids_cross_channel_ids() {
-        let description = job_output_tool_definition().description;
+        let definition = job_output_tool_definition();
+        let description = definition.description.clone();
+        let job_id = job_id_field_description(&definition);
 
-        assert!(description.contains("write_stdin"));
-        assert!(description.contains("session_id"));
+        // 工具描述只讲怎么用：跑完会自动通知、不要守着反复问。
+        assert!(description.contains("job_kill"));
+        // 两个方向的隔离在 job_id 字段上说清。
+        assert!(job_id.contains("write_stdin"));
+        assert!(job_id.contains("session_id"));
     }
 
-    /// 终止工具同属作业通道，必须给出同样的通道隔离说明。
+    /// 终止工具与读取共用同一个 `job_id` 字段说明，必须给出同样的通道隔离。
     #[test]
     fn job_kill_description_forbids_cross_channel_ids() {
-        let description = job_kill_tool_definition().description;
+        let definition = job_kill_tool_definition();
+        let description = definition.description.clone();
+        let job_id = job_id_field_description(&definition);
 
-        assert!(description.contains("session_id"));
-        assert!(description.contains("不可互传"));
+        assert!(description.contains("job_output"));
+        assert!(job_id.contains("session_id"));
+        assert!(job_id.contains("不能传给"));
+    }
+
+    /// 取 `job_id` 字段说明：两条作业工具共用同一份文案，隔离约束只写在它上面。
+    fn job_id_field_description(definition: &ToolDefinition) -> String {
+        definition.schema.input_schema["properties"][JOB_TOOL_JOB_ID_FIELD]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
     }
 }
