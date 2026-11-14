@@ -47,20 +47,12 @@ mod tests {
                 session_id: SessionId(1),
                 is_subagent: false,
                 remote_requested: false,
-                requests: vec![
-                    SubagentDelegationRequest {
-                        label: "memory_update".to_owned(),
-                        task_message: "persist memory".to_owned(),
-                        inheritance: SubagentInheritance::ModelToolsHistory,
-                        max_runtime_ms: None,
-                    },
-                    SubagentDelegationRequest {
-                        label: "skill_reflection".to_owned(),
-                        task_message: "reflect skill".to_owned(),
-                        inheritance: SubagentInheritance::ModelToolsHistory,
-                        max_runtime_ms: Some(30_000),
-                    },
-                ],
+                requests: vec![SubagentDelegationRequest {
+                    label: "memory_update".to_owned(),
+                    task_message: "persist memory".to_owned(),
+                    inheritance: SubagentInheritance::ModelToolsHistory,
+                    max_runtime_ms: None,
+                }],
             })
             .unwrap();
 
@@ -80,9 +72,9 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(report.entries.len(), 2);
-        assert_eq!(report.completed_count, 2);
-        assert_eq!(report.subagent_cost_micros, 50);
-        assert_eq!(report.merged_total_cost_micros, 150);
+        assert_eq!(report.entries.len(), 1);
+        assert_eq!(report.completed_count, 1);
+        assert_eq!(report.subagent_cost_micros, 25);
+        assert_eq!(report.merged_total_cost_micros, 125);
     }
 }

@@ -152,7 +152,9 @@ pub(super) fn run_subagent_execution_wiring(
             axon_agent_runtime::AgentControlConfig {
                 max_agents: input.config.agent.max_subagent_threads,
                 max_active_turns: input.config.agent.max_subagent_active_turns,
-                max_depth: input.config.agent.max_subagent_depth,
+                // 子代理不再持有派发工具，新树恒为一层；这里沿运行时默认值，
+                // 只用于恢复旧版本遗留的多层嵌套节点。
+                max_depth: axon_agent_runtime::AGENT_CONTROL_DEFAULT_MAX_DEPTH,
             },
             root_thread_id,
         )

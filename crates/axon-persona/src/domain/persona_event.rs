@@ -40,6 +40,16 @@ pub struct TurnSettledInput {
     pub drift_reason: Option<String>,
     /// 结算时刻，Unix 毫秒。
     pub now_ms: u64,
+    /// 规则层观测到的连续失败轮数；评估器缺席时的对齐依据。
+    ///
+    /// 缺省表示「没有观测」，状态机按本地计数推进，与旧行为一致。
+    #[serde(default)]
+    pub observed_failure_streak: Option<u8>,
+    /// 规则层给出的可读原因；评估器没给情绪判定时作为本轮结算原因。
+    ///
+    /// 它会进 `last_cause`，下一轮出现在人格状态段的 cause 里。
+    #[serde(default)]
+    pub rule_cause: Option<String>,
 }
 
 /// 人格状态机的事件。

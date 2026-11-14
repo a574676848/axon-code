@@ -20,6 +20,8 @@ pub struct MemoryRuntimeQualityObservation {
     pub complete_input_tokens: u64,
     /// 实际启动的深反思数量。
     pub reflection_attempts: u64,
+    /// 已入池但未触发批处理、本轮未跑的反思数量。
+    pub reflection_deferred: u64,
     /// 实际产生 Memory 或 Skill 材料的反思数量。
     pub reflection_yields: u64,
     /// 已完成的语义显著性评估数量。
@@ -43,6 +45,8 @@ pub struct MemoryRuntimeQualityReport {
     pub cache_hit_basis_points: u16,
     /// 深反思启动数量。
     pub reflection_attempts: u64,
+    /// 入池待跑、本轮未跑的反思数量。
+    pub reflection_deferred: u64,
     /// 深反思有效产出数量。
     pub reflection_yields: u64,
     /// 深反思有效产出率。
@@ -88,6 +92,7 @@ impl MemoryRuntimeQualityStore {
                     false_memory_rejections INTEGER NOT NULL,
                     merged_from_count INTEGER NOT NULL DEFAULT 0,
                     downgrade_count INTEGER NOT NULL DEFAULT 0,
+                    reflection_deferred INTEGER NOT NULL DEFAULT 0,
                     recorded_at_ms INTEGER NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_memory_runtime_quality_recorded
@@ -111,8 +116,8 @@ impl MemoryRuntimeQualityStore {
                 INSERT INTO memory_runtime_quality (
                     observation_id, cache_read_input_tokens, complete_input_tokens,
                     reflection_attempts, reflection_yields, semantic_assessments,
-                    false_memory_rejections, recorded_at_ms
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                    false_memory_rejections, reflection_deferred, recorded_at_ms
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                 ON CONFLICT(observation_id) DO UPDATE SET
                     cache_read_input_tokens = excluded.cache_read_input_tokens,
                     complete_input_tokens = excluded.complete_input_tokens,
@@ -120,6 +125,7 @@ impl MemoryRuntimeQualityStore {
                     reflection_yields = excluded.reflection_yields,
                     semantic_assessments = excluded.semantic_assessments,
                     false_memory_rejections = excluded.false_memory_rejections,
+                    reflection_deferred = excluded.reflection_deferred,
                     recorded_at_ms = excluded.recorded_at_ms
                 ",
                 params![
@@ -130,6 +136,7 @@ impl MemoryRuntimeQualityStore {
                     i64_from_u64(observation.reflection_yields)?,
                     i64_from_u64(observation.semantic_assessments)?,
                     i64_from_u64(observation.false_memory_rejections)?,
+                    i64_from_u64(observation.reflection_deferred)?,
                     i64_from_u64(observation.recorded_at_ms)?,
                 ],
             )
@@ -150,7 +157,8 @@ impl MemoryRuntimeQualityStore {
                        COALESCE(SUM(reflection_attempts), 0),
                        COALESCE(SUM(reflection_yields), 0),
                        COALESCE(SUM(semantic_assessments), 0),
-                       COALESCE(SUM(false_memory_rejections), 0)
+                       COALESCE(SUM(false_memory_rejections), 0),
+                       COALESCE(SUM(reflection_deferred), 0)
                 FROM memory_runtime_quality
                 ",
                 [],
@@ -163,6 +171,7 @@ impl MemoryRuntimeQualityStore {
                         row.get::<_, i64>(4)?,
                         row.get::<_, i64>(5)?,
                         row.get::<_, i64>(6)?,
+                        row.get::<_, i64>(7)?,
                     ))
                 },
             )
@@ -237,7 +246,11 @@ fn ensure_consolidation_columns(connection: &Connection) -> AxonResult<()> {
         .map_err(|_| AxonError::memory_persistence("Memory 质量 schema 探测失败"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| AxonError::memory_persistence("Memory 质量 schema 探测失败"))?;
-    for column in ["merged_from_count", "downgrade_count"] {
+    for column in [
+        "merged_from_count",
+        "downgrade_count",
+        "reflection_deferred",
+    ] {
         if existing.iter().any(|name| name == column) {
             continue;
         }
@@ -266,7 +279,7 @@ fn validate_observation(observation: &MemoryRuntimeQualityObservation) -> AxonRe
 }
 
 fn quality_report(
-    values: (i64, i64, i64, i64, i64, i64, i64),
+    values: (i64, i64, i64, i64, i64, i64, i64, i64),
 ) -> AxonResult<MemoryRuntimeQualityReport> {
     let observation_count = u64_from_i64(values.0)?;
     let cache_read_input_tokens = u64_from_i64(values.1)?;
@@ -275,6 +288,7 @@ fn quality_report(
     let reflection_yields = u64_from_i64(values.4)?;
     let semantic_assessments = u64_from_i64(values.5)?;
     let false_memory_rejections = u64_from_i64(values.6)?;
+    let reflection_deferred = u64_from_i64(values.7)?;
     Ok(MemoryRuntimeQualityReport {
         observation_count,
         cache_read_input_tokens,
@@ -295,6 +309,7 @@ fn quality_report(
             false_memory_rejections,
             semantic_assessments,
         ),
+        reflection_deferred,
     })
 }
 
@@ -324,8 +339,8 @@ mod tests {
         std::fs::create_dir_all(&config.memory_dir).unwrap();
         let store = MemoryRuntimeQualityStore::open(&config).unwrap();
         let observations = [
-            observation("turn-1", 60, 100, 1, 1, 1, 0, 1_000),
-            observation("turn-2", 20, 100, 1, 0, 1, 1, 2_000),
+            observation("turn-1", 60, 100, 1, 1, 1, 0, 0, 1_000),
+            observation("turn-2", 20, 100, 1, 0, 1, 1, 1, 2_000),
         ];
         for observation in &observations {
             store.record_observation(observation).unwrap();
@@ -349,6 +364,7 @@ mod tests {
         reflection_yields: u64,
         semantic_assessments: u64,
         false_memory_rejections: u64,
+        reflection_deferred: u64,
         recorded_at_ms: u64,
     ) -> MemoryRuntimeQualityObservation {
         MemoryRuntimeQualityObservation {
@@ -359,6 +375,7 @@ mod tests {
             reflection_yields,
             semantic_assessments,
             false_memory_rejections,
+            reflection_deferred,
             recorded_at_ms,
         }
     }

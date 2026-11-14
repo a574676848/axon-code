@@ -116,7 +116,7 @@ function semanticAgentPath(path: string): string {
     explore: '探索',
     plan: '规划',
   };
-  const name = label[base] ?? '子任务';
+  const name = label[base] ?? '子代理';
   return suffix === undefined ? name : `${name} ${suffix}`;
 }
 

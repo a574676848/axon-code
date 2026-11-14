@@ -9,6 +9,7 @@ use crate::AppState;
 use crate::conversation::answer_question::{self, AnswerQuestionReceipt};
 use crate::conversation::history::{self, LaneInteractions};
 use crate::conversation::interrupt::{self, InterruptReceipt};
+use crate::conversation::job_output::{self, JobOutputStream};
 use crate::conversation::job_stop::{self, JobStopReceipt};
 use crate::conversation::lane_jobs::{self, LaneJobsRoster};
 use crate::conversation::question_sync::{self, QuestionSnapshot};
@@ -29,6 +30,7 @@ pub fn conversation_submit(
     content: String,
     attachments: Option<Vec<String>>,
     model: Option<String>,
+    reasoning_effort: Option<String>,
 ) -> Result<SubmissionReceipt, String> {
     submit::submit_message(
         &workspace_id,
@@ -36,6 +38,7 @@ pub fn conversation_submit(
         &content,
         attachments.as_deref().unwrap_or_default(),
         model.as_deref(),
+        reasoning_effort.as_deref(),
     )
 }
 
@@ -122,6 +125,19 @@ pub fn conversation_stop_job(lane_id: String, job_id: String) -> Result<JobStopR
 #[tauri::command(async)]
 pub fn conversation_lane_jobs(lane_id: String) -> Result<LaneJobsRoster, String> {
     lane_jobs::lane_jobs(&lane_id)
+}
+
+/// Tauri IPC 命令：读取一次后台作业的输出增量。
+///
+/// 参数是**字节游标**而不是行号：归档是持续追加的字节流，行在写入过程中还可能
+/// 只写了一半，按字节续读既不丢内容也不会重复。
+#[tauri::command(async)]
+pub fn conversation_job_output(
+    lane_id: String,
+    job_id: String,
+    offset: u64,
+) -> Result<JobOutputStream, String> {
+    job_output::job_output(&lane_id, &job_id, offset)
 }
 
 /// Tauri IPC 命令：读取一条车道下的子代理会话清单。

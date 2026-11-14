@@ -9,7 +9,7 @@
     <script>
       try {
         var cached = window.localStorage.getItem('axon.theme');
-        if (cached === 'forest' || cached === 'obsidian') {
+        if (cached === 'obsidian') {
           document.documentElement.setAttribute('data-theme', cached);
         }
         document.documentElement.style.colorScheme = cached === 'obsidian' ? 'dark' : 'light';

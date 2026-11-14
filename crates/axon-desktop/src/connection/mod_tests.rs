@@ -107,7 +107,7 @@ fn test_runtime_never_holds_a_persist_root() {
     assert!(
         runtime
             .update_document(|document| {
-                document.client.theme = Some("forest".to_owned());
+                document.client.theme = Some("obsidian".to_owned());
                 Ok(())
             })
             .is_ok(),
@@ -115,7 +115,7 @@ fn test_runtime_never_holds_a_persist_root() {
     );
     assert_eq!(
         runtime.read().document.client.theme.as_deref(),
-        Some("forest")
+        Some("obsidian")
     );
 }
 
@@ -126,7 +126,7 @@ fn read_only_runtime_refuses_every_write() {
 
     let error = runtime
         .update_document(|document| {
-            document.client.theme = Some("forest".to_owned());
+            document.client.theme = Some("obsidian".to_owned());
             Ok(())
         })
         .expect_err("只读模式必须拒绝写入");

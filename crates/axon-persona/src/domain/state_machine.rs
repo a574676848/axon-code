@@ -90,8 +90,13 @@ fn settle(
     final_status: TurnFinalStatus,
     input: &crate::domain::persona_event::TurnSettledInput,
 ) -> (PersonaState, String) {
+    // 规则层观测值可能跨进程重启接续，取较大值对齐：否则重启后
+    // 「连续第 N 次失败」会从 1 重新数，连带把收敛语气的判据一起打回原形。
     let failure_streak = if final_status.is_failure() {
-        state.failure_streak.saturating_add(1)
+        state
+            .failure_streak
+            .saturating_add(1)
+            .max(input.observed_failure_streak.unwrap_or(0))
     } else {
         0
     };
@@ -114,6 +119,7 @@ fn settle(
         input.user_affect,
         failure_streak,
         drift_guard.as_deref(),
+        input.rule_cause.as_deref(),
     );
 
     let next = PersonaState {
@@ -174,6 +180,7 @@ fn cause_for(
     affect: UserAffect,
     failure_streak: u8,
     drift_guard: Option<&str>,
+    rule_cause: Option<&str>,
 ) -> String {
     if final_status == TurnFinalStatus::Interrupted {
         return "本轮被中断".to_owned();
@@ -183,6 +190,12 @@ fn cause_for(
     }
     if let Some(guard) = drift_guard {
         return format!("上一轮表达漂移：{guard}");
+    }
+    // 评估器没给情绪判定时用规则层的原因：它不是给日志看的，是给下一轮模型看的。
+    if matches!(affect, UserAffect::Neutral | UserAffect::Unknown)
+        && let Some(cause) = rule_cause.map(str::trim).filter(|value| !value.is_empty())
+    {
+        return cause.to_owned();
     }
     match affect {
         UserAffect::Positive => "用户反馈积极".to_owned(),

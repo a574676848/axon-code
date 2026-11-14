@@ -32,7 +32,7 @@ fn resume_keeps_historical_model_when_it_still_exists() {
         name: "historical-model".to_owned(),
         id: "historical-model-id".to_owned(),
         provider: "historical-provider".to_owned(),
-        context_window: 128_000,
+        context_window: 1_000_000,
         ..ModelConfig::default()
     });
     let previous = historical_session_with_model("historical-provider", "historical-model-id");
@@ -44,6 +44,12 @@ fn resume_keeps_historical_model_when_it_still_exists() {
     let selected = select_run_model(&effective, &config).unwrap();
     assert_eq!(selected.name, "historical-model");
     assert_eq!(selected.provider, "historical-provider");
+    // 运行侧读的就是这一份 ModelConfig：预算与压缩阈值都取它的 context_window，
+    // 所以「模型是会话的、窗口是默认模型的」只会出现在显示层，不会出现在执行层。
+    assert_eq!(
+        selected.context_window, 1_000_000,
+        "恢复会话后运行侧必须用会话模型的窗口"
+    );
 }
 
 #[test]
@@ -155,6 +161,8 @@ fn historical_session_with_model(provider: &str, model: &str) -> PreparedRunSess
         upstream_model: None,
         reasoning_effort: None,
         request_path: None,
+        reflection_notice: None,
+        turn_trace: None,
         speed_mode: None,
         ttft_ms: None,
         generation_speed_tps: None,

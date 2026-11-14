@@ -1,11 +1,10 @@
 use axon_agent_runtime::{
     AgentExecutionLease, AgentPath, AgentSpawnRequest, ProviderStructuredOutputContract,
-    ProviderStructuredOutputMode, SEMANTIC_SALIENCE_SCHEMA_VERSION, SelfIterationHookKind,
-    SelfIterationInput, SelfIterationRuntime, SelfIterationSkillExecution,
-    SelfIterationSkillSource, SelfIterationSubagentResult, SelfIterationSubagentStatus,
-    SemanticMemoryCandidateType, SemanticSalienceAssessment, SubagentDelegationEntry,
-    SubagentForkContextInput, SubagentForkContextRuntime, SubagentForkTurns, SubagentInheritance,
-    SubagentSessionStartInput, TurnOutcomeEnvelope,
+    ProviderStructuredOutputMode, ReflectionCard, ReflectionLedgerRuntime, SalienceVector,
+    SelfIterationHookKind, SelfIterationInput, SelfIterationRuntime, SelfIterationSubagentResult,
+    SelfIterationSubagentStatus, SemanticSalienceAssessment, SubagentForkContextInput,
+    SubagentForkContextRuntime, SubagentForkTurns, SubagentInheritance, SubagentSessionStartInput,
+    TurnOutcomeEnvelope, TurnTrace,
 };
 use axon_domain::{AxonResult, PaneId, SessionId};
 
@@ -14,7 +13,12 @@ use crate::stable_ids::stable_numeric_id;
 use super::{
     RunRequest,
     run_execution::{RunResponse, now_ms},
-    run_skill_evolution::{SkillEvolutionEvent, draft_skill_for_run, skill_evolution_for_run},
+    run_reflection_apply::apply_reflection_report,
+    run_reflection_batch::{BatchAdmission, admit_reflection_batch, reflection_cards},
+    run_semantic_salience::{
+        SEMANTIC_SALIENCE_LABEL, assess_semantic_salience, semantic_salience_output_schema,
+        semantic_salience_system_prompt,
+    },
     run_subagent_completion::log_completion_failure,
     run_subagent_executor::{
         RunSubagentCompletionSink, RunSubagentExecutionInput, RunSubagentExecutionOutput,
@@ -26,46 +30,90 @@ use super::{
 const SELF_ITERATION_AGENT_PREFIX: &str = "self_iteration";
 const SELF_ITERATION_AGENT_ROLE: &str = "self_iteration";
 const SELF_ITERATION_MEMORY_SUMMARY: &str = "自闭环记忆更新";
-const SELF_ITERATION_SKILL_SUMMARY: &str = "自闭环 Skill 反思";
 const SELF_ITERATION_EXECUTOR_UNAVAILABLE: &str = "自我迭代子代理执行器不可用";
 const SELF_ITERATION_SESSION_SETUP_FAILED: &str = "自我迭代子代理会话初始化失败";
-const SEMANTIC_SALIENCE_LABEL: &str = "semantic_salience";
 const SEMANTIC_SALIENCE_SUMMARY: &str = "轻量语义显著性评估";
-const SEMANTIC_SALIENCE_MAX_RUNTIME_MS: u64 = 15_000;
-const SEMANTIC_SALIENCE_SYSTEM_PROMPT: &str = "你是 AXON 的轻量语义显著性评估器。只判断随附 turn outcome 是否包含值得跨会话复用的长期信息，不执行工具、不延续任务、不依据关键词或正则做判断。执行事实只能来自 runtimeVerified=true 的 evidence；assistantOutcomeSummary 不能单独证明执行。用户明确、稳定、可复用的画像或偏好可引用 userMessageRef；experience、knowledge、procedure 必须同时有运行时执行证据。普通任务、临时状态和一次性事实必须 shouldReflect=false，此时 candidateTypes 与 evidenceRefs 必须为空。userAffect 判断用户在本轮表达出的状态，证据不足写 unknown。personaDrift 判断助手回复偏离人格底色的程度（0 至 10000 基点），正常遵循基线时写 0。用户疲劳度写进 userFatigue（low / normal / high）：从措辞、时段与连轴转迹象判断，拿不准填 normal。用户明确表达对说话方式、措辞、语气或详略的偏好时，candidateTypes 使用 style，并把这条偏好本身写进 styleCandidate（不超过 120 字），不要把判断理由写进去。personaDrift 达到 7000 时必须同时给出 driftReason（不超过 80 字），说明偏在哪。只输出符合 schema 的 JSON。";
 
 #[derive(Debug, Default)]
 pub(super) struct PostRunSelfIterationReport {
-    pub(super) skill_evolution: Option<SkillEvolutionEvent>,
     /// 本轮语义评估结果；缺失表示评估未完成或不可信。
     pub(super) semantic_assessment: Option<SemanticSalienceAssessment>,
     /// 本轮用户消息的证据引用，用于校验风格候选的来源。
     pub(super) user_message_ref: Option<String>,
     pub(super) failed_entry_count: usize,
+    /// 本轮反思实际写入的记忆条数合计。
+    pub(super) memory_write_count: u64,
+    /// 本轮反思此前已经跑过：治理队列重试同一条 payload 时置真，调用方据此跳过产物与计数的重复写入。
+    pub(super) already_processed: bool,
     pub(super) quality: PostRunSelfIterationQuality,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(super) struct PostRunSelfIterationQuality {
     pub(super) reflection_attempts: u64,
+    pub(super) reflection_deferred: u64,
+    /// 通过准入但未写入、或在准入处被拒的候选条数。
+    pub(super) reflection_skipped_candidates: u64,
     pub(super) reflection_yields: u64,
     pub(super) semantic_assessments: u64,
     pub(super) false_memory_rejections: u64,
 }
 
-#[derive(Debug, Default)]
-struct SemanticAssessmentOutcome {
-    assessment: Option<SemanticSalienceAssessment>,
-    completed: bool,
-    rejected: bool,
-}
-
 pub(super) fn run_post_run_self_iteration_subagents(
     request: &RunRequest,
     response: &RunResponse,
+    trace: &TurnTrace,
+) -> PostRunSelfIterationReport {
+    // 治理队列对失败 payload 会重试，重试会让评估与反思子代理整条重跑。台账按
+    // `session:turn` 记「这一轮跑过了」，重试直接返回，避免同一批候选被写两遍。
+    let ledger_root = super::run_session_store::resolved_axon_root(&request.config_path).ok();
+    let turn_key = format!("{}:{}", trace.session_id, trace.turn_id);
+    let processed_path = ledger_root
+        .as_deref()
+        .map(ReflectionLedgerRuntime::processed_path);
+    if let Some(path) = processed_path.as_deref()
+        && ReflectionLedgerRuntime::is_done(path, &turn_key)
+    {
+        return PostRunSelfIterationReport {
+            already_processed: true,
+            ..PostRunSelfIterationReport::default()
+        };
+    }
+    // 两态标记：跑前记 `started`，跑完才记 `done`，只有 `done` 会让重试整条跳过。
+    // 崩在子代理中途留下的只是 `started`，重试会重跑，但重复写入被 `written` 台账的
+    // 候选指纹挡住，用「可重跑 + 写去重」代替「宁可不跑」，不用拿合法重试换幂等。
+    if let Some(path) = processed_path.as_deref()
+        && let Err(error) = ReflectionLedgerRuntime::mark_started(path, &turn_key, now_ms())
+    {
+        axon_logger::warning(&format!("反思台账写入失败: {error}"));
+    }
+    let report = run_reflection_phase(request, response, trace);
+    if report.failed_entry_count == 0 {
+        if let Some(path) = processed_path.as_deref()
+            && let Err(error) = ReflectionLedgerRuntime::mark_done(path, &turn_key, now_ms())
+        {
+            axon_logger::warning(&format!("反思台账收尾失败: {error}"));
+        }
+        // 只有跑完这一批才清 inflight：失败时留着，让下一次入池把整批卡片放回队列。
+        if let Some(root) = ledger_root.as_deref() {
+            ReflectionLedgerRuntime::clear_inflight(
+                &ReflectionLedgerRuntime::inflight_path(root),
+                &trace.turn_id,
+            );
+        }
+    }
+    report
+}
+
+/// 反思的实际执行阶段：触发器、子代理与写入都发生在这里。
+fn run_reflection_phase(
+    request: &RunRequest,
+    response: &RunResponse,
+    trace: &TurnTrace,
 ) -> PostRunSelfIterationReport {
     let turn_outcome = build_turn_outcome(request, response);
     let semantic_outcome = assess_semantic_salience(request, &turn_outcome);
+    let cards = reflection_cards(trace, semantic_outcome.assessment.as_ref(), &request.cwd);
     let mut report = PostRunSelfIterationReport {
         quality: PostRunSelfIterationQuality {
             semantic_assessments: u64::from(semantic_outcome.completed),
@@ -77,7 +125,52 @@ pub(super) fn run_post_run_self_iteration_subagents(
         user_message_ref: Some(turn_outcome.user_message_ref.clone()),
         ..PostRunSelfIterationReport::default()
     };
-    let input = self_iteration_input(request, turn_outcome, semantic_outcome.assessment);
+    // 卡片先入池并判定批处理：未触发就留到下次，触发才跑，避免每轮都起一个子代理。
+    let cards = match admit_reflection_batch(
+        request,
+        trace,
+        cards,
+        semantic_outcome.assessment.as_ref(),
+        &turn_outcome,
+    ) {
+        BatchAdmission::Run(cards) => {
+            // 先记 1：后续 plan 失败等提前返回也要让本轮留下一条回执，
+            // 否则「决定了要跑却没跑成」在审计里完全不可见。
+            report.quality.reflection_attempts = 1;
+            cards
+        }
+        BatchAdmission::Deferred => {
+            report.quality.reflection_deferred = 1;
+            return report;
+        }
+        BatchAdmission::NotApplicable => return report,
+    };
+    // 攒批可能跨多轮，每张卡自带上轮的用户消息引用。个人类候选要求
+    // `evidence_refs` 含 user_message_ref，若一律拿「最后一轮」去比，批次里早期卡片的
+    // 候选会被判成缺引用而丢掉，所以把本批所有卡片的引用一起带进去。
+    // 批次键：本批所有 card_id 排序后取摘要。重试时池顺序可能变（inflight 恢复到
+    // 队尾），只取「第一张卡」会让批次号与 written 台账一起去重失效。
+    let batch_key = batch_key_for(&cards, trace);
+    let mut user_refs: Vec<String> = cards
+        .iter()
+        .map(|card| card.what.intent_ref.clone())
+        .filter(|reference| !reference.is_empty())
+        .collect();
+    user_refs.push(turn_outcome.user_message_ref.clone());
+    user_refs.sort();
+    user_refs.dedup();
+    // 批次显著度按维取最大：一批里只要有一张强卡，候选就按强卡的量级过准入；
+    // 若沿用最后一轮（常常是弱卡或 Skip 轮）的向量，早期强卡的候选会被判成不达标。
+    let batch_signals = cards
+        .iter()
+        .map(|card| card.signals)
+        .fold(SalienceVector::default(), SalienceVector::merge_max);
+    let input = self_iteration_input(
+        request,
+        turn_outcome,
+        semantic_outcome.assessment,
+        cards.clone(),
+    );
     let Ok(plan) = SelfIterationRuntime.plan_with_delegation(session_id(request), false, &input)
     else {
         return report;
@@ -89,8 +182,7 @@ pub(super) fn run_post_run_self_iteration_subagents(
         u64::try_from(delegation_plan.entries.len()).unwrap_or(u64::MAX);
 
     let mut results = Vec::with_capacity(delegation_plan.entries.len());
-    let mut skill_evolution = None;
-    let mut failed_entry_count = 0;
+    let mut failed_entry_count: usize = 0;
     for entry in &delegation_plan.entries {
         let output = execute_self_iteration_subagent(
             request,
@@ -103,60 +195,42 @@ pub(super) fn run_post_run_self_iteration_subagents(
         }
         let hook = match entry.label.as_str() {
             "memory_update" => SelfIterationHookKind::MemoryUpdate,
-            "skill_reflection" => SelfIterationHookKind::SkillReflection,
             _ => continue,
         };
-        let should_evolve_skill =
-            hook == SelfIterationHookKind::SkillReflection && request.selected_skill_name.is_some();
-        let mut entry_yielded = output
-            .as_ref()
-            .is_some_and(|result| result.memory_write_count > 0);
-        if subagent_completed(status) && should_evolve_skill {
-            let reflection = output
-                .as_ref()
-                .map(|result| result.summary.as_str())
-                .unwrap_or_default();
-            let event = skill_evolution_for_run(request, response, reflection);
-            entry_yielded |= event.is_some();
-            skill_evolution = skill_evolution.or(event);
+        // 写入不再由子代理自己发起：这里收候选、过准入与配额、统一落库。
+        let applied = apply_reflection_report(
+            request,
+            output.as_ref(),
+            input.semantic_assessment.as_ref(),
+            trace,
+            &cards,
+            &user_refs,
+            batch_signals,
+            &batch_key,
+        );
+        report.memory_write_count = report.memory_write_count.saturating_add(applied.written);
+        report.quality.reflection_skipped_candidates = report
+            .quality
+            .reflection_skipped_candidates
+            .saturating_add(applied.skipped);
+        // 真实失败（写入报错、报告解析失败）不能让本轮记成已完成，否则重试被永久跳过。
+        if applied.failed > 0 {
+            failed_entry_count = failed_entry_count
+                .saturating_add(usize::try_from(applied.failed).unwrap_or(usize::MAX));
         }
-        let should_draft_skill = hook == SelfIterationHookKind::MemoryUpdate
-            && input
-                .semantic_assessment
-                .as_ref()
-                .is_some_and(|assessment| {
-                    assessment
-                        .candidate_types
-                        .contains(&SemanticMemoryCandidateType::Procedure)
-                });
-        if subagent_completed(status) && should_draft_skill {
-            let reflection = output
-                .as_ref()
-                .map(|result| result.summary.as_str())
-                .unwrap_or_default();
-            let evidence_refs = input
-                .semantic_assessment
-                .as_ref()
-                .map(|assessment| assessment.evidence_refs.as_slice())
-                .unwrap_or_default();
-            let event = draft_skill_for_run(request, response, reflection, evidence_refs);
-            entry_yielded |= event.is_some();
-            skill_evolution = skill_evolution.or(event);
-        }
-        if entry_yielded {
+        if applied.written > 0 {
             report.quality.reflection_yields = report.quality.reflection_yields.saturating_add(1);
         }
         results.push(subagent_result(entry, hook, status, output.as_ref()));
     }
     let _ = SelfIterationRuntime.merge_delegation_results(&plan, 0, results);
     report.semantic_assessment = input.semantic_assessment.clone();
-    report.skill_evolution = skill_evolution;
     report.failed_entry_count = failed_entry_count;
     report
 }
 
 #[derive(Debug, Clone)]
-struct SelfIterationExecutionOptions {
+pub(super) struct SelfIterationExecutionOptions {
     structured_output: Option<ProviderStructuredOutputContract>,
     system_prompt_override: Option<String>,
     tools_enabled: bool,
@@ -173,7 +247,7 @@ impl SelfIterationExecutionOptions {
         }
     }
 
-    fn semantic_salience() -> Self {
+    pub(super) fn semantic_salience() -> Self {
         // 快速模型通道可能不支持 `json_schema` 严格模式；transport 会按需降级为
         // prompt-only 契约，输出仍由 `parse_semantic_assessment` 独立校验。
         let structured_output = ProviderStructuredOutputContract {
@@ -182,100 +256,11 @@ impl SelfIterationExecutionOptions {
         };
         Self {
             structured_output: Some(structured_output),
-            system_prompt_override: Some(SEMANTIC_SALIENCE_SYSTEM_PROMPT.to_owned()),
+            system_prompt_override: Some(semantic_salience_system_prompt()),
             tools_enabled: false,
             model_intent: RunSubagentModelIntent::FastDelegate,
         }
     }
-}
-
-fn assess_semantic_salience(
-    request: &RunRequest,
-    envelope: &TurnOutcomeEnvelope,
-) -> SemanticAssessmentOutcome {
-    if !request.current_agent_path.is_root() {
-        return SemanticAssessmentOutcome::default();
-    }
-    let Ok(envelope_json) = serde_json::to_string(envelope) else {
-        return SemanticAssessmentOutcome::default();
-    };
-    let message = format!("评估以下有界事实包：\n{envelope_json}");
-    let entry = SubagentDelegationEntry {
-        dispatch_order: 0,
-        label: SEMANTIC_SALIENCE_LABEL.to_owned(),
-        task_message: message,
-        inheritance: SubagentInheritance::ModelToolsOnly,
-        max_runtime_ms: Some(SEMANTIC_SALIENCE_MAX_RUNTIME_MS),
-    };
-    let Some(output) = execute_self_iteration_subagent(
-        request,
-        &entry,
-        SelfIterationExecutionOptions::semantic_salience(),
-    ) else {
-        return SemanticAssessmentOutcome::default();
-    };
-    if output.status != RunSubagentExecutionStatus::Completed {
-        return SemanticAssessmentOutcome::default();
-    }
-    completed_semantic_assessment(output.summary.trim(), envelope)
-}
-
-fn completed_semantic_assessment(
-    raw: &str,
-    envelope: &TurnOutcomeEnvelope,
-) -> SemanticAssessmentOutcome {
-    let assessment = parse_semantic_assessment(raw, envelope);
-    SemanticAssessmentOutcome {
-        rejected: assessment.is_none(),
-        assessment,
-        completed: true,
-    }
-}
-
-fn parse_semantic_assessment(
-    raw: &str,
-    envelope: &TurnOutcomeEnvelope,
-) -> Option<SemanticSalienceAssessment> {
-    let assessment: SemanticSalienceAssessment = serde_json::from_str(raw).ok()?;
-    assessment.is_valid_for(envelope).then_some(assessment)
-}
-
-fn semantic_salience_output_schema() -> serde_json::Value {
-    let signal = serde_json::json!({ "type": "integer", "minimum": 0, "maximum": 10_000 });
-    serde_json::json!({
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-            "schemaVersion": { "type": "integer", "const": SEMANTIC_SALIENCE_SCHEMA_VERSION },
-            "shouldReflect": { "type": "boolean" },
-            "candidateTypes": {
-                "type": "array",
-                "items": { "type": "string", "enum": ["profile", "preference", "experience", "knowledge", "procedure", "style"] }
-            },
-            "signals": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "identityRelevance": signal.clone(),
-                    "stability": signal.clone(),
-                    "futureUtility": signal.clone(),
-                    "novelty": signal.clone(),
-                    "correctionStrength": signal.clone(),
-                    "verificationStrength": signal.clone(),
-                    "scopeConfidence": signal
-                },
-                "required": ["identityRelevance", "stability", "futureUtility", "novelty", "correctionStrength", "verificationStrength", "scopeConfidence"]
-            },
-            "evidenceRefs": { "type": "array", "items": { "type": "string" } },
-            "reason": { "type": "string", "minLength": 1, "maxLength": 500 },
-            "userAffect": { "type": "string", "enum": ["neutral", "positive", "frustrated", "urgent", "unknown"] },
-            "userFatigue": { "type": "string", "enum": ["low", "normal", "high"] },
-            "personaDrift": { "type": "integer", "minimum": 0, "maximum": 10_000 },
-            "driftReason": { "type": "string", "minLength": 1, "maxLength": 80 },
-            "styleCandidate": { "type": "string", "minLength": 1, "maxLength": 120 }
-        },
-        "required": ["schemaVersion", "shouldReflect", "candidateTypes", "signals", "evidenceRefs", "reason", "userAffect", "personaDrift"]
-    })
 }
 
 fn subagent_result(
@@ -293,7 +278,7 @@ fn subagent_result(
     }
 }
 
-fn execute_self_iteration_subagent(
+pub(super) fn execute_self_iteration_subagent(
     request: &RunRequest,
     entry: &axon_agent_runtime::SubagentDelegationEntry,
     options: SelfIterationExecutionOptions,
@@ -470,7 +455,6 @@ const fn persisted_status(persisted: bool) -> SelfIterationSubagentStatus {
 const fn hook_summary(hook: SelfIterationHookKind) -> &'static str {
     match hook {
         SelfIterationHookKind::MemoryUpdate => SELF_ITERATION_MEMORY_SUMMARY,
-        SelfIterationHookKind::SkillReflection => SELF_ITERATION_SKILL_SUMMARY,
     }
 }
 
@@ -500,13 +484,12 @@ fn child_usage_hint(parent_path: &AgentPath, task_path: &AgentPath) -> String {
 fn session_summary(label: &str) -> &'static str {
     match label {
         "memory_update" => SELF_ITERATION_MEMORY_SUMMARY,
-        "skill_reflection" => SELF_ITERATION_SKILL_SUMMARY,
         SEMANTIC_SALIENCE_LABEL => SEMANTIC_SALIENCE_SUMMARY,
         _ => SELF_ITERATION_MEMORY_SUMMARY,
     }
 }
 
-fn session_id(request: &RunRequest) -> SessionId {
+pub(super) fn session_id(request: &RunRequest) -> SessionId {
     SessionId(stable_numeric_id(&request.session_id).max(1))
 }
 
@@ -514,40 +497,32 @@ pub(super) fn self_iteration_input(
     request: &RunRequest,
     turn_outcome: TurnOutcomeEnvelope,
     semantic_assessment: Option<SemanticSalienceAssessment>,
+    reflection_cards: Vec<ReflectionCard>,
 ) -> SelfIterationInput {
-    let skill_execution = request.selected_skill_name.as_ref().map(|skill_name| {
-        let selected = turn_outcome
-            .selected_skill
-            .as_ref()
-            .filter(|skill| skill.skill_name == *skill_name);
-        SelfIterationSkillExecution {
-            skill_name: skill_name.clone(),
-            source: skill_source(request.selected_skill_source_ref.as_deref()),
-            execution_verified: selected.is_some_and(|skill| skill.execution_verified),
-            evidence_refs: selected
-                .map(|skill| skill.evidence_refs.clone())
-                .unwrap_or_default(),
-        }
-    });
     SelfIterationInput {
         is_subagent: !request.current_agent_path.is_root(),
         turn_outcome,
+        reflection_cards,
         semantic_assessment,
-        skill_execution,
         parent_total_cost_micros: 0,
         subagent_results: Vec::new(),
     }
 }
 
-fn skill_source(source_ref: Option<&str>) -> SelfIterationSkillSource {
-    match source_ref.unwrap_or_default() {
-        value if value.starts_with("skill://axon-project-skills/") => {
-            SelfIterationSkillSource::Project
-        }
-        value if value.starts_with("skill://axon-system/") => SelfIterationSkillSource::Default,
-        value if value.starts_with("skill://axon-brand/") => SelfIterationSkillSource::Brand,
-        _ => SelfIterationSkillSource::User,
+/// 批次键：本批所有 card_id 排序后取摘要，顺序变化不影响结果。
+///
+/// 只取「第一张卡」会在重试时漂移，inflight 恢复把卡片放回队尾，首卡就换了人，
+/// 批次号与 written 台账的候选去重会一起失效，同一条结论被写第二遍。
+fn batch_key_for(cards: &[ReflectionCard], trace: &TurnTrace) -> String {
+    if cards.is_empty() {
+        return format!("reflection:{}", trace.turn_id);
     }
+    let mut ids: Vec<&str> = cards.iter().map(|card| card.card_id.as_str()).collect();
+    ids.sort_unstable();
+    format!(
+        "reflection:{}",
+        axon_agent_runtime::MessageRef::digest_text(&ids.join("\u{1}"))
+    )
 }
 
 #[cfg(test)]

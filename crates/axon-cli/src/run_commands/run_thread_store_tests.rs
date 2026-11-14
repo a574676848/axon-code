@@ -630,6 +630,8 @@ fn session_record(user: &str, assistant: &str, at_ms: u64) -> RunSessionRecord {
         upstream_model: None,
         reasoning_effort: None,
         request_path: None,
+        reflection_notice: None,
+        turn_trace: None,
         speed_mode: None,
         ttft_ms: None,
         generation_speed_tps: None,

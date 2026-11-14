@@ -40,6 +40,8 @@ pub(crate) enum ToolKind {
     GoalTool,
     Subagent,
     Mcp,
+    /// 单轮证据轨迹回取：按回执引用取回工具原文。
+    TurnTrace,
     InvokeSkill,
     Shell,
     /// 后台作业工具（`job_output` / `job_kill`）。

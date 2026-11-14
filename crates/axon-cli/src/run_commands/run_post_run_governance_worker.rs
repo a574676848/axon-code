@@ -4,8 +4,7 @@ use std::{path::Path, sync::Arc, thread, time::Duration};
 
 use axon_agent_runtime::{AgentRunReasoningMessage, AgentRunResponse};
 use axon_config::{ConfigLoader, provider_credential};
-use axon_memory::{MemoryRuntimeQualityObservation, MemoryRuntimeQualityStore};
-use axon_memory_read::{MemoryTurnHit, init_memory_orchestrator};
+use axon_memory_read::MemoryTurnHit;
 use axon_session_runtime::TurnPerformanceRecorder;
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +16,7 @@ use super::{
     run_memory_citation::record_cited_memory_usage,
     run_memory_recall::{RunMemoryRecallEvent, RunMemoryRecallTraceEvent, RunMemoryScopeEvent},
     run_memory_usefulness::RunMemoryUsefulnessEvent,
+    run_post_run_artifacts::{build_turn_trace, publish_turn_artifacts, record_runtime_quality},
     run_post_run_governance::PostRunGovernanceJob,
     run_post_run_governance_performance::{
         log_governance_performance, record_governance_config_ready,
@@ -52,9 +52,9 @@ pub(super) struct GovernanceSessionReference {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DurableGovernancePayload {
+pub(super) struct DurableGovernancePayload {
     version: u32,
-    config_path: std::path::PathBuf,
+    pub(super) config_path: std::path::PathBuf,
     session_record: GovernanceSessionReference,
     selected_skill_source_ref: Option<String>,
     memory_recall: Option<DurableMemoryRecall>,
@@ -81,7 +81,6 @@ struct DurableMemoryRecall {
     branch: Option<String>,
     scope_mismatch_refs: Vec<String>,
     debugging_experience_hit_count: usize,
-    skill_reflection_hit_count: usize,
     procedural_review_hit_count: usize,
     tool_guidance: Vec<String>,
 }
@@ -196,7 +195,6 @@ impl DurableMemoryRecall {
                 .map(|trace| trace.content_ref.clone())
                 .collect(),
             debugging_experience_hit_count: event.debugging_experience_hit_count,
-            skill_reflection_hit_count: event.skill_reflection_hit_count,
             procedural_review_hit_count: event.procedural_review_hit_count,
             tool_guidance: event.tool_guidance.clone(),
         }
@@ -244,7 +242,6 @@ impl DurableMemoryRecall {
             },
             trace,
             debugging_experience_hit_count: self.debugging_experience_hit_count,
-            skill_reflection_hit_count: self.skill_reflection_hit_count,
             procedural_review_hit_count: self.procedural_review_hit_count,
             embedding_status: GOVERNANCE_RECALL_EMBEDDING_STATUS,
             reason: None,
@@ -392,9 +389,25 @@ fn execute_governance_payload(
 ) -> Result<(), String> {
     let response = response_from_payload(&payload.session_record, session_record);
     record_cited_memory_usage(&payload.config_path, config, request, &response.content);
+    // 轨迹先建一次：反思卡片与轨迹落盘共用同一个 trace_id，避免两处各自推算序号。
+    let mut turn_trace = build_turn_trace(payload, session_record, request, &response);
     // 先跑自我迭代拿到语义评估，再据其写人格状态：情绪与漂移是结算的输入。
-    let self_iteration = run_post_run_self_iteration_subagents(request, &response);
+    let self_iteration = run_post_run_self_iteration_subagents(request, &response, &turn_trace);
+    if self_iteration.already_processed {
+        // 治理队列在重试同一条 payload：人格结算与质量计数首次已写过，重跑会把计数
+        // 重复累加，所以一律跳过。但产物要补：首次执行可能在提交产物之前就被中断，
+        // 而 `publish_turn_artifacts` 按 record 整条覆盖，补写是幂等的。
+        if session_record.turn_trace.is_none() {
+            publish_turn_artifacts(payload, session_record, &self_iteration, &turn_trace);
+        }
+        return Ok(());
+    }
     let assessment = self_iteration.semantic_assessment.as_ref();
+    // 评估出的用户状态要回写进轨迹信号序列：下一轮读回它，才能看出状态演进而非单点。
+    super::run_post_run_artifacts::append_turn_affect(
+        &mut turn_trace,
+        assessment.and_then(|item| item.user_affect.as_deref()),
+    );
     let disclosure = payload
         .persona_disclosure
         .unwrap_or(axon_domain::DisclosurePolicy::Workspace);
@@ -420,6 +433,7 @@ fn execute_governance_payload(
                 .as_ref()
                 .and_then(|scene| scene.get("audience"))
                 .and_then(serde_json::Value::as_str),
+            signals: Some(&turn_trace.signals),
         },
     );
     if let Err(error) = record_runtime_quality(
@@ -431,14 +445,15 @@ fn execute_governance_payload(
     ) {
         axon_logger::error(&format!("post-run quality metrics failed: {error}"));
     }
+    // 提示、回执与轨迹必须一次提交：`commit_session_to_rollout` 按
+    // `(session_id, assistant_part_id)` 整条覆盖 record，分两次提交会让后一次
+    // 拿旧 record 把前一次刚写的字段抹掉。
+    publish_turn_artifacts(payload, session_record, &self_iteration, &turn_trace);
     if self_iteration.failed_entry_count > 0 {
         return Err(format!(
             "governance 自我迭代有 {} 个子任务未完成",
             self_iteration.failed_entry_count
         ));
-    }
-    if self_iteration.skill_evolution.is_some() {
-        axon_logger::debug("post-run governance applied skill evolution");
     }
     let _ = apply_memory_autonomy_feedback(
         &payload.config_path,
@@ -448,33 +463,6 @@ fn execute_governance_payload(
         true,
     );
     Ok(())
-}
-
-fn record_runtime_quality(
-    payload: &DurableGovernancePayload,
-    session_record: &RunSessionRecord,
-    config: &axon_config::AxonConfig,
-    response: &RunResponse,
-    quality: &super::run_self_iteration_subagent::PostRunSelfIterationQuality,
-) -> Result<(), String> {
-    let orchestrator = init_memory_orchestrator(&payload.config_path, config)?;
-    let usage = response.token_usage.unwrap_or_default();
-    MemoryRuntimeQualityStore::open(orchestrator.config())
-        .map_err(|error| format!("{error:?}"))?
-        .record_observation(&MemoryRuntimeQualityObservation {
-            observation_id: format!(
-                "post-run-governance:{}:{}",
-                session_record.session_id, session_record.assistant_part_id
-            ),
-            cache_read_input_tokens: usage.cache_read_input_tokens,
-            complete_input_tokens: usage.complete_input_tokens(),
-            reflection_attempts: quality.reflection_attempts,
-            reflection_yields: quality.reflection_yields,
-            semantic_assessments: quality.semantic_assessments,
-            false_memory_rejections: quality.false_memory_rejections,
-            recorded_at_ms: axon_time::unix_now_ms(),
-        })
-        .map_err(|error| format!("{error:?}"))
 }
 
 #[cfg(test)]

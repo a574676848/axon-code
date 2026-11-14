@@ -90,6 +90,7 @@ fn settled_input<'a>(
         persona_drift_bp: None,
         drift_reason: None,
         scene_audience: scene,
+        signals: None,
     }
 }
 
@@ -197,8 +198,184 @@ fn style_fixture() -> (axon_test_support::TestTempDir, std::path::PathBuf) {
         root.path().join("SOUL.md"),
         "---\nschema: axon-soul/v1\nidentity:\n  name: Axon\n  address: 长官\n  role: 副官\nbackstory: 来处。\ninvariants:\n  - 依据事实作答\ntraits: [沉稳]\nvoice:\n  warmth: 40\n  formality: 60\n  humor: subtle\n  verbosity: concise\n---\n",
     )
-    .expect("写入人设");
+    .expect("写入 owner 身份");
     (root, config_path)
+}
+
+/// 带客观信号的结算输入：验证规则层补位用。
+fn settled_input_with_signals<'a>(
+    config_path: &'a std::path::Path,
+    status: TurnFinalStatus,
+    signals: &'a axon_agent_runtime::ExplicitSignals,
+) -> PersonaSettlementInput<'a> {
+    PersonaSettlementInput {
+        config_path,
+        session_id: "s-signals",
+        assistant_part_id: "part-signals",
+        disclosure: DisclosurePolicy::PrivateOnly,
+        final_status: status,
+        user_affect: None,
+        user_fatigue: None,
+        persona_drift_bp: None,
+        drift_reason: None,
+        scene_audience: None,
+        signals: Some(signals),
+    }
+}
+
+/// 深夜且近 30 分钟密集：规则层应给出最重档。
+fn dense_late_night_signals() -> axon_agent_runtime::ExplicitSignals {
+    axon_agent_runtime::ExplicitSignals {
+        hour_bucket: axon_agent_runtime::HourBucket::LateNight,
+        consecutive_turns: 9,
+        turns_last_30min: 7,
+        input_len_delta: -50,
+        affect_sequence: Vec::new(),
+        failure_streak: 0,
+    }
+}
+
+fn load_owner_state(root: &std::path::Path) -> axon_persona::domain::persona_state::PersonaState {
+    PersonaStore::open_read_only(&persona_store_path(root))
+        .expect("库应已创建")
+        .load_state("owner_123e4567-e89b-12d3-a456-426614174000")
+        .expect("读取状态")
+        .expect("状态应存在")
+}
+
+#[test]
+fn rule_layer_fills_fatigue_when_assessment_is_absent() {
+    let (root, config_path) = settle_fixture();
+    let signals = dense_late_night_signals();
+
+    settle_persona_turn(&settled_input_with_signals(
+        &config_path,
+        TurnFinalStatus::Completed,
+        &signals,
+    ));
+
+    assert_eq!(
+        load_owner_state(root.path()).fatigue_level,
+        axon_persona::FatigueLevel::High,
+        "密集深夜轮次应由规则层补出高疲劳"
+    );
+}
+
+#[test]
+fn assessment_fatigue_always_wins_over_rule_advice() {
+    let (root, config_path) = settle_fixture();
+    let signals = dense_late_night_signals();
+    let mut input = settled_input_with_signals(&config_path, TurnFinalStatus::Completed, &signals);
+    input.user_fatigue = Some("low");
+
+    settle_persona_turn(&input);
+
+    assert_eq!(
+        load_owner_state(root.path()).fatigue_level,
+        axon_persona::FatigueLevel::Low,
+        "模型判定优先，规则层不得覆盖"
+    );
+}
+
+#[test]
+fn rule_layer_observes_failure_streak_for_the_state_machine() {
+    let (root, config_path) = settle_fixture();
+    let signals = axon_agent_runtime::ExplicitSignals {
+        failure_streak: 4,
+        ..axon_agent_runtime::ExplicitSignals::default()
+    };
+
+    settle_persona_turn(&settled_input_with_signals(
+        &config_path,
+        TurnFinalStatus::Failed,
+        &signals,
+    ));
+
+    let state = load_owner_state(root.path());
+    assert_eq!(state.failure_streak, 4, "观测到的连败必须对齐进状态");
+    assert_eq!(state.last_cause, "连续第 4 次失败");
+}
+
+#[test]
+fn zero_signals_stay_equivalent_to_the_legacy_path() {
+    // 攒批开关只影响反思何时跑，不该影响人格状态；「全零信号」必须与
+    // 关闭规则层（旧路径）逐字段等价，否则关掉开关就是一次行为回归。
+    let (legacy_root, legacy_config) = settle_fixture();
+    let (signal_root, signal_config) = settle_fixture();
+    let zero = axon_agent_runtime::ExplicitSignals::default();
+    assert!(
+        rule_advice_for(Some(&zero)).is_none(),
+        "全零信号等于没采集，必须被闸掉"
+    );
+
+    settle_persona_turn(&settled_input(
+        &legacy_config,
+        TurnFinalStatus::Completed,
+        DisclosurePolicy::PrivateOnly,
+        None,
+    ));
+    // 两个构造器的默认 affect 不同：等价性比较必须先把输入对齐，
+    // 否则测到的是构造器差异而不是规则层差异。
+    let mut with_signals =
+        settled_input_with_signals(&signal_config, TurnFinalStatus::Completed, &zero);
+    with_signals.user_affect = Some("positive");
+    settle_persona_turn(&with_signals);
+
+    let legacy = load_owner_state(legacy_root.path());
+    let with_signals = load_owner_state(signal_root.path());
+    assert_eq!(legacy.fatigue_level, with_signals.fatigue_level);
+    assert_eq!(legacy.warmth_offset, with_signals.warmth_offset);
+    assert_eq!(legacy.failure_streak, with_signals.failure_streak);
+    assert_eq!(legacy.last_cause, with_signals.last_cause);
+}
+
+#[test]
+fn rule_cause_becomes_the_settlement_cause_when_assessment_is_silent() {
+    let (root, config_path) = settle_fixture();
+    let signals = axon_agent_runtime::ExplicitSignals {
+        hour_bucket: axon_agent_runtime::HourBucket::LateNight,
+        consecutive_turns: 5,
+        turns_last_30min: 7,
+        input_len_delta: 0,
+        affect_sequence: Vec::new(),
+        failure_streak: 0,
+    };
+
+    settle_persona_turn(&settled_input_with_signals(
+        &config_path,
+        TurnFinalStatus::Completed,
+        &signals,
+    ));
+
+    let state = load_owner_state(root.path());
+    assert!(
+        state.last_cause.contains("深夜时段"),
+        "规则层原因必须落到 last_cause，实际为：{}",
+        state.last_cause
+    );
+}
+
+#[test]
+fn assessment_cause_wins_over_rule_cause() {
+    let (root, config_path) = settle_fixture();
+    let signals = axon_agent_runtime::ExplicitSignals {
+        hour_bucket: axon_agent_runtime::HourBucket::LateNight,
+        consecutive_turns: 5,
+        turns_last_30min: 7,
+        input_len_delta: 0,
+        affect_sequence: Vec::new(),
+        failure_streak: 0,
+    };
+    let mut input = settled_input_with_signals(&config_path, TurnFinalStatus::Completed, &signals);
+    input.user_affect = Some("positive");
+
+    settle_persona_turn(&input);
+
+    assert_eq!(
+        load_owner_state(root.path()).last_cause,
+        "用户反馈积极",
+        "评估器给了判定时，规则层原因不得覆盖"
+    );
 }
 
 #[test]

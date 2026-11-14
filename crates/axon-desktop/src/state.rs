@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn state_round_trips_through_the_projection() {
         let mut state = DesktopState {
-            theme: Some("forest".to_owned()),
+            theme: Some("obsidian".to_owned()),
             notifications_enabled: false,
             ..DesktopState::default()
         };
@@ -219,7 +219,7 @@ mod tests {
         };
         let rebuilt = DesktopState::from_parts(&client, &projection);
         assert_eq!(rebuilt.version, super::DESKTOP_STATE_VERSION);
-        assert_eq!(rebuilt.theme.as_deref(), Some("forest"));
+        assert_eq!(rebuilt.theme.as_deref(), Some("obsidian"));
         assert!(!rebuilt.notifications_enabled);
         assert_eq!(rebuilt.lane_pinned, vec!["lane-1".to_owned()]);
     }

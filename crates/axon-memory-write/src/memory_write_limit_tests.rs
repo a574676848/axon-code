@@ -106,7 +106,7 @@ fn candidate(id: u64) -> MemoryCandidate {
     MemoryCandidate {
         id: MemoryCandidateId(id),
         source_trace: Some(MemorySourceTrace {
-            origin: MemorySourceOrigin::SkillReflection,
+            origin: MemorySourceOrigin::AgentProcedure,
             session_id: Some(SessionId(7)),
             cell_id: Some(CellId(id)),
             summary: format!("写入去重测试 {id}"),

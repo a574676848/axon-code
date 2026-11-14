@@ -591,3 +591,23 @@ fn prepend_resume_state(response: &mut RunResponse, state: &ChannelResumeState) 
         response.turn_events = turn_events;
     }
 }
+
+/// 把换窗摘要的来源记回会话便签。
+///
+/// 内联换窗与空闲换窗共用：两处都要保证「窗口推进」与「来源可追溯」同时成立，
+/// 写入失败必须让调用方回滚，否则后续窗口无法判断摘要究竟是谁写的。
+pub(super) fn record_checkpoint_source(
+    session_dir: &std::path::Path,
+    source: axon_agent_runtime::CheckpointSource,
+    window_number: u64,
+) -> Result<(), String> {
+    let mut notes = axon_agent_runtime::SessionNotes::load_from_session(session_dir)
+        .map_err(|error| format!("读取会话便签失败：{error:?}"))?
+        .ok_or_else(|| "会话便签在归档后丢失".to_owned())?;
+    notes.checkpoint_source = Some(source);
+    notes.checkpoint_window_number = Some(window_number);
+    notes
+        .save_to_session(session_dir)
+        .map(|_| ())
+        .map_err(|error| format!("写入摘要来源失败：{error:?}"))
+}

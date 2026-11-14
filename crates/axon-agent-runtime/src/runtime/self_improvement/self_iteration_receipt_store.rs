@@ -7,8 +7,7 @@ use axon_jsonl::ShardedJsonlStore;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    PROMPT_CACHE_ANCHOR_HASH_LEN, SELF_ITERATION_MEMORY_PROMPT_MODE,
-    SELF_ITERATION_SKILL_REFLECTION_PROMPT_MODE, SelfIterationHookKind,
+    PROMPT_CACHE_ANCHOR_HASH_LEN, SELF_ITERATION_MEMORY_PROMPT_MODE, SelfIterationHookKind,
     SelfIterationSubagentStatus,
     runtime_store_path::{append_retained_jsonl, runtime_store_file_path},
 };
@@ -59,8 +58,6 @@ pub struct SelfIterationReceiptInput {
     pub reason: String,
     /// 写入摘要 hash。
     pub summary_hash: Option<String>,
-    /// skill 名称。
-    pub skill_name: Option<String>,
     /// hook 内迭代数。
     pub hook_iterations: u64,
 }
@@ -93,8 +90,6 @@ pub struct SelfIterationReceiptRecord {
     pub reason: String,
     /// 写入摘要 hash。
     pub summary_hash: Option<String>,
-    /// skill 名称。
-    pub skill_name: Option<String>,
     /// hook 内迭代数。
     pub hook_iterations: u64,
     /// 是否持久化 prompt 原文。
@@ -114,8 +109,6 @@ pub struct SelfIterationReceiptSessionSummary {
     pub total_receipts: usize,
     /// memory update 回执数量。
     pub memory_update_receipts: usize,
-    /// skill reflection 回执数量。
-    pub skill_reflection_receipts: usize,
     /// 产生持久写入的数量。
     pub persisted_write_receipts: usize,
     /// subagent 成本合计。
@@ -153,7 +146,6 @@ impl SelfIterationReceiptRecord {
             write_decision: input.write_decision,
             reason: input.reason,
             summary_hash: input.summary_hash,
-            skill_name: input.skill_name,
             hook_iterations: input.hook_iterations,
             prompt_text_persisted: false,
             raw_transcript_persisted: false,
@@ -252,10 +244,6 @@ impl SelfIterationReceiptSessionSummary {
                 .iter()
                 .filter(|record| record.hook == SelfIterationHookKind::MemoryUpdate)
                 .count(),
-            skill_reflection_receipts: records
-                .iter()
-                .filter(|record| record.hook == SelfIterationHookKind::SkillReflection)
-                .count(),
             persisted_write_receipts: records
                 .iter()
                 .filter(|record| record.write_decision == SelfIterationWriteDecision::Persisted)
@@ -278,7 +266,6 @@ fn validate_input(input: &SelfIterationReceiptInput) -> AxonResult<()> {
         &input.source_trace,
         &input.reason,
         input.summary_hash.as_deref(),
-        input.skill_name.as_deref(),
     )
 }
 
@@ -301,7 +288,6 @@ fn validate_record(record: &SelfIterationReceiptRecord) -> AxonResult<()> {
         &record.source_trace,
         &record.reason,
         record.summary_hash.as_deref(),
-        record.skill_name.as_deref(),
     )
 }
 
@@ -312,7 +298,6 @@ fn validate_common(
     source_trace: &str,
     reason: &str,
     summary_hash: Option<&str>,
-    skill_name: Option<&str>,
 ) -> AxonResult<()> {
     validate_non_empty(parent_session_id, "自我迭代父 session 不能为空")?;
     if prompt_mode != prompt_mode_for_hook(hook) {
@@ -324,9 +309,6 @@ fn validate_common(
     validate_non_empty(reason, "自我迭代回执原因无效")?;
     if let Some(hash) = summary_hash {
         validate_bounded(hash, PROMPT_CACHE_ANCHOR_HASH_LEN, "自我迭代摘要 hash 无效")?;
-    }
-    if let Some(name) = skill_name {
-        validate_non_empty(name, "自我迭代 skill 名称无效")?;
     }
     Ok(())
 }
@@ -345,16 +327,10 @@ fn validate_bounded(value: &str, max_chars: usize, message: &'static str) -> Axo
     Ok(())
 }
 
-const fn prompt_mode_for_hook(hook: SelfIterationHookKind) -> &'static str {
-    match hook {
-        SelfIterationHookKind::MemoryUpdate => SELF_ITERATION_MEMORY_PROMPT_MODE,
-        SelfIterationHookKind::SkillReflection => SELF_ITERATION_SKILL_REFLECTION_PROMPT_MODE,
-    }
+const fn prompt_mode_for_hook(_hook: SelfIterationHookKind) -> &'static str {
+    SELF_ITERATION_MEMORY_PROMPT_MODE
 }
 
-const fn hook_rank(hook: SelfIterationHookKind) -> u8 {
-    match hook {
-        SelfIterationHookKind::MemoryUpdate => 0,
-        SelfIterationHookKind::SkillReflection => 1,
-    }
+const fn hook_rank(_hook: SelfIterationHookKind) -> u8 {
+    0
 }

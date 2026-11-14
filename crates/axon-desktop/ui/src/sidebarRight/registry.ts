@@ -13,6 +13,9 @@ const FILE_PREFIX = 'axon-resource://file/';
 /** 改动对比地址前缀：一轮一个地址，文件下标走导航参数。 */
 const CHANGES_PREFIX = 'axon-resource://changes/';
 
+/** 引用歧义的候选页地址前缀。 */
+const CHOICE_PREFIX = 'axon-resource://choice/';
+
 /** 打开资源时可带的导航参数。 */
 export interface ResourceParams {
   /** 定位到第几行（从 1 开始）。 */
@@ -111,6 +114,14 @@ const REGISTERED: TabType[] = [
     },
   },
   {
+    kind: 'choice',
+    patterns: [`${CHOICE_PREFIX}**`],
+    tier: 'specific',
+    // 认领前先解析：格式不对说明这不是候选页地址，兜底类型才有机会接手。
+    canOpen: (address) => parseChoiceAddress(address) !== null,
+    title: () => '选择文件',
+  },
+  {
     kind: 'preview',
     patterns: ['axon-resource://file/**', '*'],
     tier: 'fallback',
@@ -173,6 +184,38 @@ export function parseChangesAddress(address: string): ChangesAddress | null {
 /** 把文件相对路径变成资源地址。 */
 export function fileAddress(path: string): string {
   return `${FILE_PREFIX}${encodeURIComponent(path)}`;
+}
+
+/** 一份引用的候选集：同一条正文路径可能对上多份文件。 */
+export interface ReferenceChoice {
+  /** 正文里那一段原文，用来解释「在给什么选」。 */
+  reference: string;
+  /** 候选的绝对路径，按「更浅优先」排好。 */
+  candidates: string[];
+}
+
+/**
+ * 把引用与候选变成候选页地址。
+ *
+ * 每一段各自转义再用 `|` 连接：`encodeURIComponent` 会转义 `|` 与 `/`，
+ * 因此路径里出现分隔符也不会把地址切错。
+ */
+export function choiceAddress(reference: string, candidates: readonly string[]): string {
+  return `${CHOICE_PREFIX}${[reference, ...candidates].map(encodeURIComponent).join('|')}`;
+}
+
+/** 候选页地址还原成引用与候选；不是候选页地址或格式不合法时返回 null。 */
+export function parseChoiceAddress(address: string): ReferenceChoice | null {
+  if (!address.startsWith(CHOICE_PREFIX)) return null;
+  const parts = address.slice(CHOICE_PREFIX.length).split('|');
+  if (parts.length < 2) return null;
+  try {
+    const [reference, ...candidates] = parts.map((part) => decodeURIComponent(part));
+    if (reference === undefined || candidates.length === 0) return null;
+    return { reference, candidates };
+  } catch {
+    return null;
+  }
 }
 
 /** 资源地址还原成文件相对路径；不是文件地址时返回 null。 */

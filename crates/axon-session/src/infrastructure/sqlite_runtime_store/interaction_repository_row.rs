@@ -45,6 +45,7 @@ pub(super) fn read_record(row: &Row<'_>) -> rusqlite::Result<InteractionRecord> 
                 serde_json::from_str(&json).unwrap_or_default()
             }),
         model: row.get::<_, Option<String>>(10)?,
+        reasoning_effort: row.get::<_, Option<String>>(11)?,
         status,
         received_at_ms: u64_value(row.get(8)?)?,
     })

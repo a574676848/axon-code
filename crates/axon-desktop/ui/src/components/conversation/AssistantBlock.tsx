@@ -93,13 +93,8 @@ export const AssistantBlock: React.FC<{
 
   return (
     <div className="group w-full">
-      {/*
-        流式光标由 .streaming-caret 的 ::after 画在正文最后一段的末尾：
-        作为兄弟节点插在 Markdown 后面会被块级流挤到下一行，像正文断了一行。
-      */}
-      <div className={streaming ? 'streaming-caret' : undefined}>
-        <Markdown source={text} streaming={streaming} />
-      </div>
+      {/* 流式期间的“还在生成”提示由 Markdown 内部新增块的块级淡入承担，正文不再画光标。 */}
+      <Markdown source={text} streaming={streaming} />
       {!streaming && text.trim().length > 0 && (
         <MessageFooter
           atMs={atMs}

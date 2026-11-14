@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /*
- * 工作台设计令牌（三主题：纸白 paper / 冷杉 forest / 黑曜石 obsidian）
+ * 工作台设计令牌（两套主题：纸白 paper / 黑曜石 obsidian）
  * 清透亮白基底、四级表面景深（托盘底座、内嵌画布、浮起卡片、下沉凹槽）、
  * 光学高光棱与双层倒角输入坞。
  */
@@ -94,18 +94,13 @@
   --color-chart-track: rgba(24, 24, 27, 0.055);
 
   /*
-   * 主题预览色板：固定描述三套主题各自的托盘、画布、卡片与主操作色，
+   * 主题预览色板：固定描述两套主题各自的托盘、画布、卡片与主操作色，
    * 不随当前激活主题变化，专供设置页主题选择缩略卡使用。
    */
   --color-swatch-paper-sidebar: #F4F4F5;
   --color-swatch-paper-canvas: #FAFAFC;
   --color-swatch-paper-card: #FFFFFF;
   --color-swatch-paper-accent: #18181B;
-  --color-swatch-forest-sidebar: #E7EEEA;
-  --color-swatch-forest-canvas: #F2F5F4;
-  --color-swatch-forest-card: #FAFCFB;
-  --color-swatch-forest-wash: #C9DDD2;
-  --color-swatch-forest-accent: #144534;
   --color-swatch-obsidian-sidebar: #0B0D11;
   --color-swatch-obsidian-canvas: #11141B;
   --color-swatch-obsidian-card: #181C25;
@@ -173,105 +168,6 @@
 
   /* 发丝线宽度：设计系统里唯一的 0.5px 角色，读作 h-hairline。 */
   --spacing-hairline: 0.5px;
-}
-
-/*
- * 冷杉主题（forest）：松雾、冷矿、静谧。
- * 采用北欧冷青松石色相（Hue ~162deg），搭配深松烟墨文字与高定冷杉绿主操作色。
- */
-html[data-theme='forest'] {
-  color-scheme: light;
-  /* 噪点强度按主题成角色：冷杉的矿物晶体比纸白的纸纤维略强。 */
-  --noise-opacity: 0.018;
-  color-scheme: light;
-  --color-canvas: #F2F5F4;
-  --color-sidebar: #E7EEEA;
-  --color-sidebar-translucent: rgba(231, 238, 234, 0.70);
-  --color-sidebar-translucent-macos: rgba(231, 238, 234, 0.78);
-  --color-surface: #FAFCFB;
-  --color-surface-sunken: #E1EAE5;
-  --color-hover: rgba(17, 28, 24, 0.05);
-  --color-active: rgba(17, 28, 24, 0.08);
-  --color-row-hover: rgba(17, 28, 24, 0.05);
-
-  --color-border: rgba(17, 28, 24, 0.10);
-  --color-border-hairline: rgba(17, 28, 24, 0.07);
-  --color-border-muted: rgba(17, 28, 24, 0.10);
-  --color-border-strong: rgba(17, 28, 24, 0.14);
-  --color-border-input: rgba(17, 28, 24, 0.16);
-  --color-border-selected: #7C9D8E;
-  --color-specular: rgba(255, 255, 255, 0.88);
-  --color-shimmer-beam: rgba(252, 254, 253, 0.72);
-  --color-focus-ring: rgba(20, 69, 52, 0.35);
-  --color-scrollbar-thumb: rgba(17, 28, 24, 0.16);
-  --color-scrollbar-thumb-hover: rgba(17, 28, 24, 0.20);
-
-  --color-text-primary: #111C18;
-  --color-text-prose: #203029;
-  --color-text-secondary: #3B4B44;
-  --color-text-tertiary: #52635B;
-  --color-text-placeholder: #5C6D65;
-  --color-text-caption: #54655D;
-
-  --color-text-link: #18634A;
-  --color-skill-ink: #18634A;
-  --color-bubble: #E3EDE7;
-  --color-code-block: #E8F0EC;
-  --color-code-inline: #DFEAE4;
-  --color-code-ink: #174B38;
-
-  --color-primary: #144534;
-  --color-primary-hover: #1B5742;
-  --color-focus: #217658;
-  --color-danger: #B3261E;
-  --color-ok-ink: #156839;
-  --color-gold-ink: #855505;
-
-  --color-state-idle: #BCCBC3;
-  --color-watermark: #D9E5DF;
-  --color-watermark-strong: #BDD0C6;
-  --color-danger-soft: rgba(179, 38, 30, 0.12);
-  --color-gold-soft: rgba(227, 155, 34, 0.14);
-  --color-focus-soft: rgba(33, 118, 88, 0.12);
-
-  --color-diff-add: #E2F0E6;
-  --color-diff-delete: #F9E8E6;
-  --color-inverse: #14241D;
-  --color-inverse-secondary: #C4D6CE;
-  --color-surface-tint: #E4EFE9;
-
-  --color-chart-input: #1E6F52;
-  --color-chart-cache-read: #5E9E84;
-  --color-chart-output: #5C648E;
-  --color-chart-plot: #E6EFEA;
-  --color-chart-grid: rgba(17, 28, 24, 0.06);
-  --color-chart-track: rgba(17, 28, 24, 0.06);
-
-  --color-brand-plate: #14382B;
-  --color-brand-start: #9ED1BE;
-  --color-brand-middle: #E6F4EE;
-  --color-brand-end: #65A88F;
-
-  --shiki-token-string: #16653E;
-  --shiki-token-string-expression: #16653E;
-  --shiki-token-constant: #855505;
-  --shiki-token-function: #4B5696;
-
-  /* 色相联动的环境遮蔽投影：冷杉带深冷青，与整块冷矿底座同源。 */
-  --shadow-surface-drop: 0 4px 12px -2px rgba(14, 30, 24, 0.06), 0 1px 2px 0 rgba(14, 30, 24, 0.05);
-  --elevation-card: 0 1px 0 0 rgba(255, 255, 255, 0.90) inset, 0 1px 2px 0 rgba(17, 28, 24, 0.04);
-  --elevation-stroke: 0 0 0 0.5px rgba(17, 28, 24, 0.10);
-  --elevation-lift: 0 1px 0 0 rgba(255, 255, 255, 0.92) inset, 0 1px 3px 0 rgba(17, 28, 24, 0.09),
-    0 3px 8px 0 rgba(17, 28, 24, 0.05);
-  --elevation-panel: 0 1px 0 0 rgba(255, 255, 255, 0.94) inset, 0 2px 5px 0 rgba(17, 28, 24, 0.05),
-    0 12px 28px 0 rgba(17, 28, 24, 0.07);
-  --elevation-prominent: 0 1px 0 0 rgba(255, 255, 255, 0.96) inset, 0 4px 12px 0 rgba(17, 28, 24, 0.06),
-    0 20px 44px 0 rgba(17, 28, 24, 0.09);
-  --elevation-well: inset 1.5px 1.5px 4px rgba(17, 28, 24, 0.09), inset -1px -1px 3px rgba(255, 255, 255, 0.92);
-  --elevation-well-sm: inset 1px 1px 3px rgba(17, 28, 24, 0.08),
-    inset -1px -1px 2px rgba(255, 255, 255, 0.90);
-  --elevation-modal: 0 0 0 1px rgba(17, 28, 24, 0.12), 0 24px 64px 0 rgba(8, 18, 14, 0.22),
-    0 8px 24px 0 rgba(8, 18, 14, 0.10);
 }
 
 /*
@@ -388,7 +284,7 @@ html[data-theme='obsidian'] {
 
 :root {
   color-scheme: light;
-  /* 静态噪点强度：纸白 1.5%，冷杉与黑曜石在各自主题块内覆写。 */
+  /* 静态噪点强度：纸白 1.5%，黑曜石在主题块内覆写。 */
   --noise-opacity: 0.015;
 
   /* 跨平台窗口控制区避让量：由 WindowChrome 按宿主平台动态注入。 */
@@ -417,7 +313,7 @@ html[data-theme='obsidian'] {
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
 
   /*
-   * 物理弹簧三档曲线（三套主题完全一致，几何与动效不随主题变化）：
+   * 物理弹簧三档曲线（两套主题完全一致，几何与动效不随主题变化）：
    * tactile 用于按键、开关与图标交互，微弱过冲后回弹；
    * smooth 用于滑块位移与面板停靠，高阻尼平稳；exit 用于气泡与弹出层收起。
    */
@@ -507,14 +403,10 @@ html[data-theme='obsidian'] {
 }
 
 /*
- * 文本划选高亮：覆盖浏览器默认的刺眼亮蓝，三套主题各自取与自身气场一致的低透色。
+ * 文本划选高亮：覆盖浏览器默认的刺眼亮蓝，两套主题各自取与自身气场一致的低透色。
  */
 :root ::selection {
   background-color: rgba(24, 24, 27, 0.12);
-}
-
-html[data-theme='forest'] ::selection {
-  background-color: rgba(20, 69, 52, 0.15);
 }
 
 html[data-theme='obsidian'] ::selection {
@@ -534,7 +426,7 @@ html[data-theme='obsidian'] ::selection {
 }
 
 /*
- * 代码高亮色板：默认取清亮纸白代码色，冷杉与黑曜石在各自主题块中覆写。
+ * 代码高亮色板：默认取清亮纸白代码色，黑曜石在主题块中覆写。
  */
 :root {
   --shiki-foreground: var(--color-text-primary);
@@ -667,7 +559,7 @@ body,
 /*
  * 工业精密感面板：三重光影叠加，替代网页式大范围模糊阴影。
  *
- * 1. 顶部 1px 镜面高光棱线（纸白与冷杉是纯白反光，黑曜石只取 6% 微反光）；
+ * 1. 顶部 1px 镜面高光棱线（纸白是纯白反光，黑曜石只取 6% 微反光）；
  * 2. 内部 1px 超低透发丝轮廓：Windows 1080p 100% 缩放会把 0.5px box-shadow 截断，
  *    因此轮廓统一取 1px 宽度，再靠低 Alpha 保持光学纤细感；
  * 3. 底部色相联动的漫反射投影，与所在主题的墨色同源。
@@ -1141,31 +1033,69 @@ html[data-material] body {
 }
 
 /*
- * 流式光标：贴在正文最后一段末尾的圆润主题色脉冲胶囊。
+ * 工作脉搏：输入坞工作状态行的进行标识。
+ *
+ * 三根依次起伏的细柱，回答的是「正在产出」而不是「在等某个过程结束」，因此不用转圈：
+ * 转圈表达的是未知时长的等待，而这一行的时间就在旁边按秒走。动画只动 transform 与
+ * opacity，与 `.state-spinner` 一样留在这个文件里，全站只有这一份。
+ *
+ * 柱色取 `currentColor`，由使用方给墨水档：状态行是常驻读数条，不再叠一层强调色。
  */
-.streaming-caret > :last-child::after {
-  content: '';
-  display: inline-block;
-  width: 3px;
-  height: 15px;
-  margin-left: 3px;
-  vertical-align: -2.5px;
-  border-radius: 9999px;
-  background: var(--color-text-link);
-  animation: caret-breathe 1.05s ease-in-out infinite;
+.working-meter {
+  display: inline-flex;
+  flex: none;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 1.5px;
+  height: 12px;
 }
 
-@keyframes caret-breathe {
+.working-bar {
+  display: block;
+  width: 2px;
+  height: 100%;
+  border-radius: 9999px;
+  background: currentColor;
+  transform-origin: bottom center;
+  animation: working-bar-breathe 1.25s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+
+.working-bar:nth-child(1) {
+  height: 55%;
+  opacity: 0.55;
+  animation-delay: 0.06s;
+}
+
+.working-bar:nth-child(2) {
+  height: 100%;
+  opacity: 0.9;
+}
+
+.working-bar:nth-child(3) {
+  height: 72%;
+  opacity: 0.72;
+  animation-delay: 0.22s;
+}
+
+@keyframes working-bar-breathe {
   0%,
   100% {
-    opacity: 0.22;
-    transform: scaleY(0.84);
+    transform: scaleY(0.45);
   }
 
-  50% {
-    opacity: 1;
+  42% {
     transform: scaleY(1);
   }
+}
+
+/*
+ * 状态行底边的进度光泽。
+ *
+ * 一条恒定的发丝轨道加一束往返的墨色光泽：读数条只有 40px 高，底边这一条是唯一
+ * 允许的「它还在动」的提示，因此用中性墨色而不是强调色。
+ */
+.working-rail-track {
+  background: var(--color-border-hairline);
 }
 
 /*
@@ -1376,11 +1306,6 @@ html[data-material] body {
 
 /* 减弱动效：全部装饰循环与位移归于静止。 */
 @media (prefers-reduced-motion: reduce) {
-  .streaming-caret > :last-child::after {
-    animation: none;
-    opacity: 0.85;
-  }
-
   .working-sweep,
   .shimmer-text-active::after,
   .dock-ambient-glow,

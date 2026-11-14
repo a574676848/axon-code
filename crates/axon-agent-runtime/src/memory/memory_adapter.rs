@@ -208,9 +208,7 @@ fn memory_recall_applicability_scope(record: &MemoryRecord) -> MemoryRecallAppli
         MemorySourceOrigin::AgentExperience
         | MemorySourceOrigin::AgentKnowledge
         | MemorySourceOrigin::DebuggingExperience => MemoryRecallApplicabilityScope::Project,
-        MemorySourceOrigin::AgentProcedure | MemorySourceOrigin::SkillReflection => {
-            MemoryRecallApplicabilityScope::Project
-        }
+        MemorySourceOrigin::AgentProcedure => MemoryRecallApplicabilityScope::Project,
         MemorySourceOrigin::LocalTimeline
         | MemorySourceOrigin::RemoteUpload
         | MemorySourceOrigin::CommandCompletionFeedback => MemoryRecallApplicabilityScope::Session,

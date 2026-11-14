@@ -241,20 +241,16 @@ function applyWireEvent(
 
   const provider = wirePayload<WireProviderStatus>(kind, 'providerStatus');
   if (provider !== null) {
-    const next = withTurn(state, position, (turn) => ({
+    /*
+     * provider 状态帧只驱动本轮实时状态行。
+     *
+     * 输入坞显示的「会话真实模型」由网关按车道最新一轮记录单条给出（见 history
+     * 载荷的 effectiveModel）：它不受回放进度影响，也不会被更早轮次的帧改写。
+     */
+    return withTurn(state, position, (turn) => ({
       ...turn,
       activity: providerActivity(provider),
     }));
-    /*
-     * 本轮真实模型来自 provider 状态帧：实时与回放同源，因此打开旧会话也能立刻
-     * 拿到它真正在跑的模型，而不是配置默认值。只记最新那一轮：向下翻页回放的
-     * 旧轮次排在前排，不能把输入坞改回旧模型。
-     */
-    if (position !== next.turns.length - 1) return next;
-    return {
-      ...next,
-      lastRun: { provider: provider.provider, model: provider.model },
-    };
   }
 
   const assistant = wirePayload<WireAssistantMessage>(kind, 'assistantMessage');

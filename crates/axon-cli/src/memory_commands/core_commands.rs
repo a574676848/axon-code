@@ -342,7 +342,7 @@ fn memory_doctor_governance_audit(context: &MemoryCliContext) -> MemoryDoctorGov
             .record
             .source_trace
             .as_ref()
-            .is_some_and(|trace| trace.origin == MemorySourceOrigin::SkillReflection)
+            .is_some_and(|trace| trace.origin == MemorySourceOrigin::AgentProcedure)
             && record.importance_basis_points < 6_000
         {
             procedural_review_records += 1;

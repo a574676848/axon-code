@@ -98,6 +98,28 @@ struct LaneInteractionsPayload {
     /// 整条车道已收口轮次的累计墙钟耗时；网关没给结论时缺省为空。
     #[serde(default)]
     session_elapsed_ms: Option<u64>,
+    /// 车道当前模型的权威事实；网关读不到时缺省为空。
+    #[serde(default)]
+    effective_model: Option<LaneEffectiveModel>,
+    /// 最近一次记忆反思的提示文本；该会话还没有记忆动作时缺省为空。
+    #[serde(default)]
+    reflection_notice: Option<String>,
+}
+
+/// 车道当前模型的权威事实。
+///
+/// 网关只读该车道运行会话的**最新一轮**记录（一条 `ORDER BY sequence DESC LIMIT 1`），
+/// 不遍历历史轮次：界面打开会话时据此显示真实模型，不必等逐条回放。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaneEffectiveModel {
+    /// 该轮使用的 provider。
+    pub provider: String,
+    /// 该轮使用的 upstream 模型 ID。
+    pub model: String,
+    /// 该轮实际请求的思考强度；未设置时为空。
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
 }
 
 /// 一条会话的累计用量：总量与分桶。
@@ -135,6 +157,16 @@ pub struct LaneInteractions {
     /// 整条车道已收口轮次的累计墙钟耗时；读不到结论时为空。
     #[serde(default)]
     pub session_elapsed_ms: Option<u64>,
+    /// 车道当前模型的权威事实；读不到结论时为空。
+    #[serde(default)]
+    pub effective_model: Option<LaneEffectiveModel>,
+    /// 最近一次记忆反思的提示文本；该会话还没有记忆动作时为空。
+    ///
+    /// 与 `effective_model` 同一时机取回：都是「这条车道现在能对外展示的最新事实」，
+    /// 不随翻页回到更早的轮次。反思是轮后异步治理的产物，客户端按「上一次记忆动作」
+    /// 呈现，不承诺与当前轮同步。
+    #[serde(default)]
+    pub reflection_notice: Option<String>,
 }
 
 /// 反向分页游标：按「已加载窗口里最早那一条」的排序键向前翻。
@@ -181,6 +213,8 @@ pub fn lane_interactions(
             interactions: parsed.interactions,
             session_usage: parsed.session_usage,
             session_elapsed_ms: parsed.session_elapsed_ms,
+            effective_model: parsed.effective_model,
+            reflection_notice: parsed.reflection_notice,
         })
         .map_err(|error| format!("解析车道历史失败：{error}"))
 }

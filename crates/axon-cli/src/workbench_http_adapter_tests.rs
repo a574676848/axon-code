@@ -137,6 +137,25 @@ fn lane_jobs_target_parses_lane_only() {
     assert_eq!(lane_jobs_target("lanes//jobs"), None);
 }
 
+/// 尾随路由与名册、停止互不吞并：三者前缀相同，动作是唯一判据。
+#[test]
+fn job_output_target_parses_lane_and_job() {
+    assert_eq!(
+        lane_job_output_target("lanes/session-lane-a/jobs/256/output"),
+        Some(("session-lane-a".to_string(), "256".to_string()))
+    );
+    assert_eq!(
+        lane_job_output_target("lanes/session-lane-a/jobs/256/stop"),
+        None
+    );
+    assert_eq!(lane_job_output_target("lanes/session-lane-a/jobs"), None);
+    assert_eq!(
+        lane_job_output_target("lanes/session-lane-a/jobs//output"),
+        None
+    );
+    assert_eq!(lane_job_output_target("lanes//jobs/1/output"), None);
+}
+
 #[test]
 fn empty_roster_is_returned_for_a_lane_without_runtime() {
     let root = axon_test_support::test_temp_root();

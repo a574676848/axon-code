@@ -62,16 +62,6 @@ pub(crate) const CONFIG_KEY_SPECS: &[ConfigKeySpec] = &[
         depends_on: &["agent.max_subagent_threads"],
     },
     ConfigKeySpec {
-        key: "agent.max_subagent_depth",
-        kind: ConfigValueKind::Unsigned,
-        editable: true,
-        description: "子代理最大嵌套深度，root 深度为 0",
-        setup_module: "agent",
-        default_value: "3",
-        options: &[],
-        depends_on: &[],
-    },
-    ConfigKeySpec {
         key: "agent.idle_compaction_debounce_ms",
         kind: ConfigValueKind::Unsigned,
         editable: true,

@@ -39,7 +39,8 @@ pub use producer::{
     JOB_REASON_BUDGET_EXHAUSTED, JOB_REASON_USER_STOP, JobProducerKind, JobTerminalKind,
 };
 pub use registry::{
-    JobId, JobOutput, JobRuntime, JobStatus, bounded_job_label, job_reference, runtime_epoch,
+    JobId, JobOutput, JobRuntime, JobStatus, JobTail, bounded_job_label, job_reference,
+    runtime_epoch,
 };
 pub use shell_producer::JobSpec;
 pub use subagent_producer::{

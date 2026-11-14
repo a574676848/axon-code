@@ -48,6 +48,7 @@ impl AgentToolRegistryRuntime {
         let mut tools = vec![
             search_tool_definition(),
             memory_search_tool_definition(),
+            crate::builtin_turn_trace_tool::turn_trace_tool_definition(),
             memory_write_tool_definition(),
             shell_command_tool_definition(),
             write_stdin_tool_definition(),
@@ -92,7 +93,7 @@ impl AgentToolRegistryRuntime {
 }
 
 /// 只读、可与其他只读调用同批发出的工具（PAR-1 第 2 节）。
-const PARALLEL_CALL_TOOLS: [&str; 19] = [
+const PARALLEL_CALL_TOOLS: [&str; 20] = [
     "read_file",
     "glob",
     "search",
@@ -112,11 +113,11 @@ const PARALLEL_CALL_TOOLS: [&str; 19] = [
     "history_read_item",
     "history_search_contents",
     "get_context_remaining",
+    "turn_trace",
 ];
 
-/// 会改变运行态或工作区、必须单独一批的工具。
-const EXCLUSIVE_CALL_TOOLS: [&str; 14] = [
-    "edit",
+/// 会改变运行态、必须独占当前工具批次的工具。
+const EXCLUSIVE_CALL_TOOLS: [&str; 13] = [
     "write_stdin",
     "job_kill",
     "update_plan",
@@ -138,12 +139,14 @@ fn with_parallel_note(mut tool: ToolDefinition) -> ToolDefinition {
         "只读，可与其他只读调用同批发出。"
     } else if EXCLUSIVE_CALL_TOOLS.contains(&tool.name.as_str()) {
         "会改变运行态或工作区，必须单独一批。"
+    } else if tool.name == "edit" {
+        "可与其他调用同批，但同一文件禁止并批；跨文件并发安全。"
     } else if tool.name == "delegate_to_fast" {
         "互不依赖的任务可同批委派；子代理看不到本次对话。"
     } else if tool.name == "spawn_agent" {
         "互不依赖的任务可同批委派；可按模型名与思考强度单独为子代理选型，省略即继承当前模型。"
     } else if tool.name == "shell_command" {
-        "只读命令可与其他只读调用同批；写命令必须单独一批。"
+        "只读命令可与任何调用同批；写命令在写入集可判定时按路径协调，否则独占整批。"
     } else {
         return tool;
     };

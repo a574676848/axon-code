@@ -74,6 +74,39 @@ fn explicit_turn_model_is_the_highest_priority_model_source() {
     assert_eq!(command.session.as_deref(), Some("run-identity"));
 }
 
+/// 强度与模型同一条通道：随本轮下发的值优先于配置里的固定值。
+#[test]
+fn explicit_turn_reasoning_effort_is_taken_from_the_transport_context() {
+    let mut request = provider_turn_request(axon_daemon::PRIMARY_TURN_ACTION_KIND);
+    request.transport_context = Some(json!({
+        "channel": "tui",
+        "destination": "terminal-test",
+        "reasoningEffort": "high",
+    }));
+
+    let command =
+        provider_run_command(Path::new("missing-config.toml"), &request).expect("命令应可构造");
+
+    assert_eq!(command.reasoning_effort.as_deref(), Some("high"));
+}
+
+#[test]
+fn absent_or_blank_explicit_reasoning_effort_leaves_effort_to_config() {
+    for context in [
+        json!({"channel": "tui", "destination": "terminal-test"}),
+        json!({"channel": "tui", "destination": "terminal-test", "reasoningEffort": "   "}),
+        json!({"channel": "tui", "destination": "terminal-test", "reasoningEffort": null}),
+    ] {
+        let mut request = provider_turn_request(axon_daemon::PRIMARY_TURN_ACTION_KIND);
+        request.transport_context = Some(context);
+
+        let command =
+            provider_run_command(Path::new("missing-config.toml"), &request).expect("命令应可构造");
+
+        assert_eq!(command.reasoning_effort, None);
+    }
+}
+
 #[test]
 fn absent_or_blank_explicit_model_leaves_model_to_session_and_config() {
     for context in [

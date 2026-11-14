@@ -36,5 +36,6 @@
     "delegate_to_fast": "委托快速代理",
     "send_message": "发送消息",
     "list_agents": "列出子代理",
-    "ask_user_question": "询问用户"
+    "ask_user_question": "询问用户",
+    "turn_trace": "读取轨迹"
 }

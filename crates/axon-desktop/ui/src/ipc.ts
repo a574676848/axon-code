@@ -286,8 +286,17 @@ export const conversationSubmit = (
   attachments: string[] = [],
   // 用户在本会话里显式选定的模型；未选择时交给会话历史与配置决定。
   model: string | null = null,
+  // 用户在本会话里显式选定的推理强度；未选择时交给 agent.reasoning_effort 决定。
+  reasoningEffort: string | null = null,
 ): Promise<SubmissionReceipt> =>
-  call('conversation_submit', { workspaceId, destination, content, attachments, model });
+  call('conversation_submit', {
+    workspaceId,
+    destination,
+    content,
+    attachments,
+    model,
+    reasoningEffort,
+  });
 
 /** 提交待决提问的答案。 */
 export const conversationAnswerQuestion = (
@@ -408,6 +417,33 @@ export const conversationSendSubagentMessage = (
 /** 读取一条车道上仍在运行的后台作业名册。 */
 export const conversationLaneJobs = (laneId: string): Promise<LaneJobsRoster> =>
   call('conversation_lane_jobs', { laneId });
+
+/** 后台作业输出的一页：网关按字节游标增量给出。 */
+export interface JobOutputStream {
+  laneId: string;
+  jobId: string;
+  /** 本次读取的起始字节偏移（已在归档头部之后）。 */
+  offset: number;
+  /** 下一次读取的字节偏移。 */
+  nextOffset: number;
+  text: string;
+  /** 是否已到归档末尾；作业在跑时同样可能为真。 */
+  eof: boolean;
+  running: boolean;
+  status: string | null;
+  exitCode: number | null;
+  elapsedMs: number | null;
+  fullOutputAvailable: boolean;
+  /** 读不到的原因；为空表示这一页就是真实输出。 */
+  unavailable: string | null;
+}
+
+/** 读取一次后台作业的输出增量。 */
+export const conversationJobOutput = (
+  laneId: string,
+  jobId: string,
+  offset: number,
+): Promise<JobOutputStream> => call('conversation_job_output', { laneId, jobId, offset });
 
 /** 读取一条车道下的子代理会话清单。 */
 export const conversationLaneSubagents = (laneId: string): Promise<LaneSubagents> =>

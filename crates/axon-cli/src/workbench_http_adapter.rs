@@ -53,14 +53,20 @@ mod workbench_http_targets;
 pub(crate) use workbench_http_targets::owner_matches_lane;
 use workbench_http_targets::{
     interaction_events_target, lane_interactions_target, lane_interrupt_target,
-    lane_job_stop_target, lane_jobs_target, lane_question_answer_target, lane_questions_target,
-    lane_subagent_message_target, lane_subagents_target, query_param,
+    lane_job_output_target, lane_job_stop_target, lane_jobs_target, lane_question_answer_target,
+    lane_questions_target, lane_subagent_message_target, lane_subagents_target, query_param,
 };
 
 #[path = "workbench_http_subagents_jobs.rs"]
 mod workbench_http_subagents_jobs;
 
-use workbench_http_subagents_jobs::{lane_jobs_payload, lane_subagents_payload, stop_lane_job};
+#[path = "workbench_http_lane_readings.rs"]
+mod lane_readings;
+
+use workbench_http_subagents_jobs::{
+    JOB_OUTPUT_DEFAULT_MAX_BYTES, lane_job_output_payload, lane_jobs_payload,
+    lane_subagents_payload, stop_lane_job,
+};
 
 #[cfg(test)]
 #[path = "workbench_http_adapter_tests.rs"]
@@ -98,21 +104,9 @@ pub fn lane_interactions_payload(
             attachments: record.attachments.clone(),
         })
         .collect();
-    let session_usage = lane_run_session_id(axon_root, lane_id)
-        .and_then(|run_session| {
-            crate::run_commands::load_session_usage_totals_from_root(axon_root, &run_session).ok()
-        })
-        .map_or(serde_json::Value::Null, |usage| {
-            serde_json::json!({
-                "totalTokens": usage.total_tokens,
-                "inputTokens": usage.input_tokens,
-                "cacheReadTokens": usage.cache_read_tokens,
-                "cacheWriteTokens": usage.cache_write_tokens,
-                "outputTokens": usage.output_tokens,
-                "reasoningTokens": usage.reasoning_tokens,
-            })
-        });
-    let session_elapsed_ms = lane_settled_elapsed_ms(axon_root, lane_id)
+    // 两个累计读数：用量走账本（按 run session 汇总），耗时走已收口轮次的墙钟差。
+    let session_usage = lane_readings::session_usage_payload(axon_root, lane_id);
+    let session_elapsed_ms = lane_readings::settled_elapsed_ms(axon_root, lane_id)
         .map_or(serde_json::Value::Null, serde_json::Value::from);
     Ok(serde_json::json!({
         "laneId": lane_id,
@@ -120,6 +114,10 @@ pub fn lane_interactions_payload(
         "totalRecords": interactions.len(),
         "sessionUsage": session_usage,
         "sessionElapsedMs": session_elapsed_ms,
+        // 车道当前模型的权威事实：只读该车道最新一轮记录，供输入坞显示真实模型。
+        "effectiveModel": lane_readings::effective_model_payload(axon_root, lane_id),
+        // 最近一次记忆反思的提示文本：桌面端据此显示「上一次记忆动作」。
+        "reflectionNotice": lane_readings::reflection_notice_payload(axon_root, lane_id),
         "rawPayloadPersisted": false,
     }))
 }
@@ -244,43 +242,6 @@ fn lane_pending_question_counts(
         map.insert(row.0, row.1);
     }
     Ok(map)
-}
-
-/// 车道上已收口轮次的累计墙钟耗时（毫秒）。
-///
-/// 每轮的耗时取「到达 → 收尾」这段墙钟差：`jarvis_interactions` 里一行就是一轮，两个
-/// 时间戳都是网关自己写的，因此按车道求和即可，不必回放正文，也不必解析事件载荷。
-/// 仍在排队或在跑的轮次不参与：它们还没收尾，读数由界面按实时帧自己补，避免同一轮
-/// 在基线与增量里各算一次。
-fn lane_settled_elapsed_ms(axon_root: &Path, lane_id: &str) -> Option<u64> {
-    let store = runtime_store(axon_root);
-    let connection = rusqlite::Connection::open(store.path()).ok()?;
-    connection
-        .query_row(
-            "SELECT COALESCE(SUM(updated_at_ms - received_at_ms), 0) FROM jarvis_interactions \
-             WHERE lane_id = ?1 AND status NOT IN ('received', 'processing')",
-            [lane_id],
-            |row| row.get::<_, i64>(0),
-        )
-        .ok()
-        .and_then(|total| u64::try_from(total).ok())
-}
-
-/// 车道的运行时 session 标识。
-///
-/// 车道标识（`session-lane-<hash>`）是复合车道的稳定身份，每轮的用量却记在该车道当前的
-/// run session 名下（`session_runtimes.run_session_id`）。会话累计读数因此要先把车道解析
-/// 成 run session，再按它汇总；解析不到时返回 None，读数随之缺省而不是报 0。
-fn lane_run_session_id(axon_root: &Path, lane_id: &str) -> Option<String> {
-    let store = runtime_store(axon_root);
-    let connection = rusqlite::Connection::open(store.path()).ok()?;
-    connection
-        .query_row(
-            "SELECT run_session_id FROM session_runtimes WHERE session_id = ?1",
-            [lane_id],
-            |row| row.get::<_, String>(0),
-        )
-        .ok()
 }
 
 /// 新车道标识派生请求。
@@ -565,6 +526,29 @@ impl GatewayHttpRouteHandler for WorkbenchHttpAdapter {
                 .or_else(|| {
                     lane_jobs_target(subpath).map(|lane_id| {
                         match lane_jobs_payload(&self.axon_root, &lane_id) {
+                            Ok(payload) => GatewayHttpResponse::json(200, &payload),
+                            Err(error) => GatewayHttpResponse::json(
+                                500,
+                                &serde_json::json!({ "error": error }),
+                            ),
+                        }
+                    })
+                })
+                .or_else(|| {
+                    lane_job_output_target(subpath).map(|(lane_id, job_id)| {
+                        let offset = query_param(query, "offset")
+                            .and_then(|value| value.parse::<u64>().ok())
+                            .unwrap_or(0);
+                        let max_bytes = query_param(query, "max")
+                            .and_then(|value| value.parse::<usize>().ok())
+                            .unwrap_or(JOB_OUTPUT_DEFAULT_MAX_BYTES);
+                        match lane_job_output_payload(
+                            &self.axon_root,
+                            &lane_id,
+                            &job_id,
+                            offset,
+                            max_bytes,
+                        ) {
                             Ok(payload) => GatewayHttpResponse::json(200, &payload),
                             Err(error) => GatewayHttpResponse::json(
                                 500,

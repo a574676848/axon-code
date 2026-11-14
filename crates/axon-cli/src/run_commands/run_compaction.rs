@@ -17,6 +17,7 @@ use super::{
     RunCancelToken,
     run_compaction_projection::CompactionTrigger,
     run_execution::now_ms,
+    run_provider_loop::record_checkpoint_source,
     run_session_store::resolved_axon_root,
     run_thread_store::{
         install_compaction_projection, thread_event_sequence_snapshot, thread_model_history_json,
@@ -131,8 +132,8 @@ pub(super) fn compact_loaded_thread(
         session_id,
         current_window_number
     );
-    let checkpoint_text = notes
-        .try_render_canonical_summary(&session_dir, provider_history)
+    let (checkpoint_text, checkpoint_source) = notes
+        .render_canonical_summary_with_source(&session_dir, provider_history)
         .map_err(|error| format!("构造压缩 checkpoint 失败：{error:?}"))?;
     let checkpoint = CanonicalCheckpoint::parse(&checkpoint_text, provider_history)
         .map_err(|error| format!("压缩 checkpoint 未通过完整性门禁：{error:?}"))?;
@@ -175,6 +176,7 @@ pub(super) fn compact_loaded_thread(
     )
     .map_err(|e| format!("执行窗口轮转失败: {e:?}"))?;
 
+    // 投影与「摘要来源落库」同属一次提交：任一步失败都整体回滚。
     let projection_result = install_compaction_projection(
         config_path,
         &root,
@@ -182,7 +184,11 @@ pub(super) fn compact_loaded_thread(
         expected_thread_event_sequence,
         compaction,
         previous_compaction,
-    );
+    )
+    .and_then(|through_sequence| {
+        record_checkpoint_source(&session_dir, checkpoint_source, current_window_number)?;
+        Ok(through_sequence)
+    });
     if let Err(error) = projection_result {
         let rollback_result = WindowRolloverEngine::rollback_active_window(
             &session_dir,
@@ -193,9 +199,13 @@ pub(super) fn compact_loaded_thread(
             previous_archive.as_deref(),
         );
         return Err(match rollback_result {
-            Ok(()) => format!("Thread 压缩 projection 失败，窗口归档与 notes 已回滚：{error}"),
+            Ok(()) => {
+                format!(
+                    "Thread 压缩 projection 或摘要来源落库失败，窗口归档与 notes 已回滚：{error}"
+                )
+            }
             Err(rollback_error) => format!(
-                "Thread 压缩 projection 失败且窗口回滚失败：projection={error}，rollback={rollback_error:?}"
+                "Thread 压缩 projection 或摘要来源落库失败且窗口回滚失败：projection={error}，rollback={rollback_error:?}"
             ),
         });
     }

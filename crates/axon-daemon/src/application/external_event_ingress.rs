@@ -23,6 +23,8 @@ pub const MAX_EXTERNAL_EVENT_TITLE_LENGTH: usize = 512;
 pub const MAX_EXTERNAL_EVENT_CORRELATION_KEY_LENGTH: usize = 256;
 /// 外部事件显式模型引用的最大字符数。
 pub const MAX_EXTERNAL_EVENT_MODEL_LENGTH: usize = 256;
+/// 本轮推理强度的长度上限：档位是固定枚举，留出余量即可拒绝明显异常输入。
+const MAX_EXTERNAL_EVENT_REASONING_EFFORT_LENGTH: usize = 32;
 const EXTERNAL_EVENT_SOURCE_PREFIX: &str = "external:";
 const EXTERNAL_EVENT_INTERACTION_PREFIX: &str = "external-interaction-";
 
@@ -59,6 +61,11 @@ pub struct ExternalEventEnvelope {
     /// 这个模型」，优先于会话记录的模型与 `agent.default_model`。`None` 表示没有显式
     /// 选择，模型完全由会话历史与配置决定。
     pub model: Option<String>,
+    /// 本轮显式指定的推理强度（`agent.reasoning_effort` 的取值域）。
+    ///
+    /// 与 `model` 同源同生命周期：只跟随本轮 turn，不写进 `config.toml`。`None` 表示
+    /// 没有显式选择，强度完全由 `agent.reasoning_effort` 决定。
+    pub reasoning_effort: Option<String>,
 }
 
 /// 外部事件 ingress 错误。
@@ -250,6 +257,18 @@ where
             }
             bounded_field(model.trim(), "model", MAX_EXTERNAL_EVENT_MODEL_LENGTH)?;
         }
+        if let Some(reasoning_effort) = event.reasoning_effort.as_deref() {
+            if reasoning_effort.trim().is_empty() {
+                return Err(ExternalEventIngressError::InvalidInput(
+                    "reasoning_effort 不能为空".to_owned(),
+                ));
+            }
+            bounded_field(
+                reasoning_effort.trim(),
+                "reasoning_effort",
+                MAX_EXTERNAL_EVENT_REASONING_EFFORT_LENGTH,
+            )?;
+        }
         non_empty(event.reply_channel.clone(), "reply_channel")?;
         non_empty(event.reply_destination.clone(), "reply_destination")?;
         if event.reply_channel != event.source_channel {
@@ -307,6 +326,12 @@ where
             .as_deref()
             .map(str::trim)
             .filter(|model| !model.is_empty())
+            .map(ToOwned::to_owned);
+        record.reasoning_effort = event
+            .reasoning_effort
+            .as_deref()
+            .map(str::trim)
+            .filter(|effort| !effort.is_empty())
             .map(ToOwned::to_owned);
         Ok(record)
     }
@@ -380,6 +405,7 @@ mod tests {
             reply_destination: "issue-42".to_owned(),
             attachments: Vec::new(),
             model: None,
+            reasoning_effort: None,
         }
     }
 
@@ -520,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_model_is_carried_by_the_interaction_and_absent_model_stays_empty() {
+    fn explicit_turn_settings_are_carried_by_the_interaction_and_absent_values_stay_empty() {
         let directory = axon_test_support::test_temp_dir();
         let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
         let adapter = ingress(store.clone());
@@ -528,33 +554,46 @@ mod tests {
         let mut explicit = event("workspace-a");
         explicit.event_id = "push-model".to_owned();
         explicit.model = Some("  balanced  ".to_owned());
-        let receipt = adapter.submit(explicit).expect("提交带显式模型的事件");
+        explicit.reasoning_effort = Some("  high  ".to_owned());
+        let receipt = adapter.submit(explicit).expect("提交带显式设置的事件");
         let stored = store
             .get_interaction(&receipt.interaction_id)
             .expect("读取 Interaction")
             .expect("Interaction 必须已持久化");
         assert_eq!(stored.model.as_deref(), Some("balanced"));
+        assert_eq!(stored.reasoning_effort.as_deref(), Some("high"));
 
-        // 没有显式模型的事件必须保持 None：模型由会话历史与配置决定。
+        // 没有显式设置的事件必须保持 None：模型与强度由会话历史与配置决定。
         let plain = adapter.submit(event("workspace-a")).expect("提交普通事件");
         let plain_stored = store
             .get_interaction(&plain.interaction_id)
             .expect("读取 Interaction")
             .expect("Interaction 必须已持久化");
         assert_eq!(plain_stored.model, None);
+        assert_eq!(plain_stored.reasoning_effort, None);
     }
 
     #[test]
-    fn blank_model_is_rejected_before_durable_append() {
+    fn blank_turn_settings_are_rejected_before_durable_append() {
         let directory = axon_test_support::test_temp_dir();
         let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
         let adapter = ingress(store.clone());
-        let mut blank = event("workspace-a");
-        blank.model = Some("   ".to_owned());
+        let mut blank_model = event("workspace-a");
+        blank_model.model = Some("   ".to_owned());
 
         assert!(matches!(
-            adapter.submit(blank),
+            adapter.submit(blank_model),
             Err(ExternalEventIngressError::InvalidInput(message)) if message.contains("model")
+        ));
+
+        let mut blank_effort = event("workspace-a");
+        blank_effort.event_id = "push-blank-effort".to_owned();
+        blank_effort.reasoning_effort = Some("   ".to_owned());
+
+        assert!(matches!(
+            adapter.submit(blank_effort),
+            Err(ExternalEventIngressError::InvalidInput(message))
+                if message.contains("reasoning_effort")
         ));
     }
 }

@@ -23,7 +23,7 @@ fn memory_kind_codes_round_trip_without_aliases() {
 fn agent_verified_strong_candidate_writes_without_user_review() {
     let decision = MemoryAdmissionGate::evaluate_candidate(
         &candidate(
-            MemorySourceOrigin::SkillReflection,
+            MemorySourceOrigin::AgentProcedure,
             MemoryVerification::AgentVerified,
         ),
         MemoryAdmissionPolicy::default(),
@@ -38,7 +38,7 @@ fn agent_verified_strong_candidate_writes_without_user_review() {
 fn unverified_strong_candidate_requires_user_review() {
     let decision = MemoryAdmissionGate::evaluate_candidate(
         &candidate(
-            MemorySourceOrigin::SkillReflection,
+            MemorySourceOrigin::AgentProcedure,
             MemoryVerification::Unverified,
         ),
         MemoryAdmissionPolicy::default(),
@@ -69,7 +69,7 @@ fn remote_upload_still_requires_user_review() {
 #[test]
 fn secret_content_is_rejected_and_secret_adjacent_is_quarantined() {
     let mut secret = candidate(
-        MemorySourceOrigin::SkillReflection,
+        MemorySourceOrigin::AgentProcedure,
         MemoryVerification::AgentVerified,
     );
     secret.sensitivity = MemorySensitivity::Secret;
@@ -77,7 +77,7 @@ fn secret_content_is_rejected_and_secret_adjacent_is_quarantined() {
         MemoryAdmissionGate::evaluate_candidate(&secret, MemoryAdmissionPolicy::default());
 
     let mut adjacent = candidate(
-        MemorySourceOrigin::SkillReflection,
+        MemorySourceOrigin::AgentProcedure,
         MemoryVerification::AgentVerified,
     );
     adjacent.sensitivity = MemorySensitivity::SecretAdjacent;

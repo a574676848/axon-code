@@ -32,7 +32,7 @@
 | `POST /api/v1/lanes/<laneId>/interrupt` | 中断该车道当前运行 |
 | `POST /api/v1/lanes/<laneId>/jobs/<jobId>/stop` | 停止该车道的后台作业 |
 | `POST /api/v1/lanes/<laneId>/subagents/<agent>/messages` | 给该车道的子代理追加消息 |
-| `GET /api/v1/lanes/<laneId>/interactions`、`/jobs`、`/subagents` | 车道详情 |
+| `GET /api/v1/lanes/<laneId>/interactions`、`/jobs`、`/jobs/<jobId>/output`、`/subagents` | 车道详情与作业输出增量 |
 | `ws://<remote.gateway.websocket_bind>/gateway/v1/ws` | 会话事件流，按 `subscribeId` 并存多路订阅 |
 | `GET /api/v1/crons` 系列 | Cron 管理与运行历史 |
 | `GET /api/v1/observability/*` | 指标与审计看板（设置 › 用量统计，按概览、实时、活动、诊断、请求日志分页签） |
@@ -117,7 +117,7 @@
 | 配置 | `config_read`、`config_validate`、`config_validate_values`、`config_write`、`config_apply_values`、`config_reset_key` |
 | Provider 与模型 | `provider_profile_upsert`、`provider_profile_remove`、`discover_models` |
 | 工作区与车道 | `workspace_list`、`workspace_add`、`workspace_remove`、`workspace_list_entries`、`workspace_read_file`、`workspace_read_bytes`、`workspace_stat_path`、`workspace_applications`、`workspace_open_default`、`workspace_open_with`、`workspace_reveal`、`lane_create`、`lane_rename`、`lane_reorder`、`lane_set_pinned`、`lane_set_archived` |
-| 会话 | `conversation_submit`、`conversation_history`、`conversation_watch`、`conversation_watch_session`、`conversation_unsubscribe`、`conversation_interrupt`、`conversation_stop_job`、`conversation_send_subagent_message`、`conversation_lane_jobs`、`conversation_lane_subagents` |
+| 会话 | `conversation_submit`、`conversation_history`、`conversation_watch`、`conversation_watch_session`、`conversation_unsubscribe`、`conversation_interrupt`、`conversation_stop_job`、`conversation_send_subagent_message`、`conversation_lane_jobs`、`conversation_lane_subagents`、`conversation_job_output`（`laneId`、`jobId`、`offset`；按字节游标读一次作业输出增量，供后台任务卡的实时输出使用） |
 | 语音 | `voice_presets`、`voice_preview`、`voice_tts`、`voice_start`、`voice_stop`、`voice_cancel`、`voice_playback_drained`、`voice_microphone_status`、`voice_open_microphone_settings` |
 | Cron | `cron_list`、`cron_config`、`cron_get`、`cron_history`、`cron_create`、`cron_update`、`cron_pause`、`cron_resume`、`cron_run`、`cron_remove` |
 | MCP 与 Skill | `mcp_list`、`mcp_upsert`、`mcp_upsert_raw`、`mcp_remove`、`mcp_runtime_status`、`mcp_runtime_refresh`、`skills_list` |
@@ -144,16 +144,16 @@
 
 | 位置 | 内容 |
 |---|---|
-| 指标条会话读数组 | 顺序固定为 `耗时 <时长>` → `累计 <紧凑数值>` → `命中率 <百分比>` → `<已用>/<窗口>`（如 `耗时 3h 12m 00s 累计 6.26M 命中率 99.72% 554K/1M`，上下文档行首是环形图形）。耗时等于各轮墙钟耗时之和，累计等于各轮输入、缓存读写、输出与推理之和，命中率是缓存读取占完整输入的会话累计比例，三者都按整条会话聚合而不是最近一轮；基线取网关按车道聚合出的已收口轮次读数，打开历史会话即读作该会话的既有消耗，本视图内新发生的轮次（含正在生成的那一轮）再叠加增量，因此运行中都在进位。耗时为零时不占位，累计与命中率在基线未取回时不占位；上下文在进入会话后恒在，新建会话读作 `0/1M` |
-| 指标条浮层（累计） | 悬停 `累计` 展开 `Token 用量` 卡：右上角是本会话累计的总量（与指标条同一套压缩单位，如 `120M`），发丝线之下依次是 `缓存命中 <百分比>`、`未缓存输入`、`缓存读取`、`缓存写入`、`输出`、`推理`，为零的桶不占行，常见形态是「缓存命中 / 未缓存输入 / 缓存读取 / 输出」四行 |
-| 指标条浮层（上下文） | 悬停上下文段展开 `上下文已用` 卡：右上角是 `已用 / 窗口`，下面给出系统提示词、工具定义、对话消息与口径差额（估算值带 `~`），不画色带与色块；没有构成观测时写「本轮未观测到上下文构成」 |
-| 指标条首屏 | 还没进入会话时只保留工作态活动点与辅助簇（LSP、MCP、技能），不出现耗时、累计、命中率与上下文 |
+| 指标条会话读数组 | 顺序固定为 `耗时 <时长>` → `累计 <紧凑数值>` → `命中率 <百分比>` → `<已用>/<窗口>`（如 `耗时 3h 12m 00s 累计 6.26M 命中率 99.72% 554K/1M`，上下文档不带图形）。耗时等于各轮墙钟耗时之和，累计等于各轮输入、缓存读写、输出与推理之和，命中率是缓存读取占完整输入的会话累计比例，三者都按整条会话聚合而不是最近一轮；基线取网关按车道聚合出的已收口轮次读数，打开历史会话即读作该会话的既有消耗，本视图内新发生的轮次（含正在生成的那一轮）再叠加增量，因此第一轮还在生成时这三段就已经在进位。耗时为零时不占位；车道还没有 run session 时基线读作全零，不因此藏起读数；累计与命中率在还没有任何用量观测时整段不占位，有第一份用量帧之后即开始进位；上下文只在观测到窗口占用后才出现，新建会话没有数据时整段不占位 |
+| 指标条浮层（累计） | 悬停 `累计` 展开 `Token 用量` 卡：右上角是本会话累计的总量（与指标条同一套压缩单位，如 `120M`），中间一条按分桶占比铺开的色带，下面每行带同色块，依次是 `缓存命中 <百分比>`（比值，不带色块）、`未缓存输入`、`缓存读取`、`缓存写入`、`输出`、`推理`，为零的桶不占行 |
+| 指标条浮层（上下文） | 悬停上下文段展开 `上下文已用` 卡：标题带已用百分比，右上角是 `已用 / 窗口`，中间一条色带，下面每行带同色块，给出系统提示词、工具定义、对话消息与口径差额（估算值带 `~`）；没有构成观测时明细写「本轮未观测到上下文构成」 |
+| 指标条首屏 | 还没进入会话时只保留辅助簇（LSP、MCP、技能），不出现耗时、累计、命中率与上下文 |
 | 指标条辅助簇 | `MCP <已加载台数>`；有服务器没加载起来时写 `MCP <正常> · <异常> 异常` 并整段转危险色，悬停给出总台数与原因；一台都没有且没有错误时不占位 |
 | 指标条辅助簇（技能） | 紧跟 MCP 写 `技能 <条数>`，取自技能目录下的一级技能目录，与设置 › 技能页同一份清单，悬停写 `共 <条数> 项已安装技能`；清单未读到或零条时不占位 |
 | 输入坞 `/mcp` | 清 MCP 健康负缓存并强制重建启动快照，也就是重连一遍 MCP；执行期间输入坞上方显示 `正在重载 MCP 服务器…` 与已耗时，返回后换成一行回执，同时在输入坞上沿摊开服务器清单 |
 
 - `/mcp` 的回执只有四种口径：`已重载 MCP：N 台全部正常`、`已重载 MCP：N 台正常，M 台异常`、`已重载 MCP：这个工作区没有配置 MCP 服务器`、`重载 MCP 失败：<原因>`。
-- 执行态复用工作状态行（进行态转圈 + 文案 + 已耗时 + 底部扫光），但不给 `按 ESC 中断` 提示：本机指令不可打断；执行期间重复提交同一条指令会被忽略。
+- 执行态复用工作状态行（工作脉搏 + 文案 + 已耗时 + 底边墨色光泽），但不给 `按 ESC 中断` 提示：本机指令不可打断；执行期间重复提交同一条指令会被忽略。
 - 清单逐台列出：加载成功的写服务器名、工具数与工具名（等宽、最多两行）；失败的写服务器名与失败原因，并排在清单最前。清单贴输入坞上沿、与输入坞同宽，超出高度在清单内部滚动，关闭按钮或下一次提交即收起。
 - 读数与 `/mcp` 都按**当前工作区**取数（各工程的 `.mcp.json` 各算各的），并且不轮询：进入工作区读一次，只有敲 `/mcp` 才会重探。
 - 读不到结论（网关不可达、daemon 未运行）时指标条显式写 `MCP 异常` 并给原因，不隐藏这一段。

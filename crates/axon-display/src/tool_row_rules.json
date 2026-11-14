@@ -23,7 +23,8 @@
         "history_list_windows",
         "history_list_items",
         "history_read_item",
-        "history_search_contents"
+        "history_search_contents",
+        "turn_trace"
     ],
     "targets": {
         "memory_search": { "fields": ["query"] },

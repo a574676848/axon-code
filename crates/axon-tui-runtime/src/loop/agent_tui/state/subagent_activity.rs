@@ -353,7 +353,7 @@ fn semantic_agent_path(path: &str) -> String {
         "fix" => "修复",
         "explore" => "探索",
         "plan" => "规划",
-        _ => "子任务",
+        _ => "子代理",
     };
     suffix.map_or_else(|| label.to_owned(), |value| format!("{label} {value}"))
 }

@@ -177,7 +177,10 @@ fn provider_run_command(
         // （Cron / 远控）；都没有时留空，交给会话历史与 agent.default_model 决定。
         model: explicit_turn_model(request.transport_context.as_ref())
             .or_else(|| fixed.as_ref().map(|(model, _)| model.clone())),
-        reasoning_effort: fixed.map(|(_, effort)| effort),
+        // 推理强度同模型：本轮 transportContext 优先，其次目的地固定值；都没有时留空，
+        // 由 `agent.reasoning_effort` 决定。
+        reasoning_effort: explicit_turn_reasoning_effort(request.transport_context.as_ref())
+            .or_else(|| fixed.map(|(_, effort)| effort)),
         format: Some(OutputFormat::Json),
         continue_last: false,
         session: Some(request.run_session_id.clone()),
@@ -194,6 +197,16 @@ fn explicit_turn_model(transport_context: Option<&serde_json::Value>) -> Option<
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|model| !model.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// 本轮 transportContext 里显式指定的推理强度；空串按未指定处理。
+fn explicit_turn_reasoning_effort(transport_context: Option<&serde_json::Value>) -> Option<String> {
+    transport_context?
+        .get("reasoningEffort")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|effort| !effort.is_empty())
         .map(ToOwned::to_owned)
 }
 

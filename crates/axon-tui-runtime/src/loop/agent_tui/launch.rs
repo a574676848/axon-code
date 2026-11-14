@@ -81,8 +81,8 @@ pub struct AgentTuiSettingsChange {
     pub model: Option<String>,
     /// 本次变更是否来自用户显式选择模型（`/model`）。
     ///
-    /// 宿主只在该标志为真时把模型当作本轮显式模型下传；推理强度、skill 开关
-    /// 等其他设置变更会带着当前模型一起写回配置，但那不是模型选择。
+    /// 宿主只在该标志为真时把模型当作本轮显式模型下传；推理强度与 skill 开关
+    /// 等其他设置变更既不写回配置，也不构成一次模型选择。
     pub model_explicit: bool,
     /// 当前选择的 reasoning effort。
     pub reasoning_effort: Option<String>,

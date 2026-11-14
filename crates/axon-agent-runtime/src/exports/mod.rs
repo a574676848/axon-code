@@ -449,7 +449,9 @@ pub use crate::self_iteration_receipt_store::{
     SelfIterationReceiptInput, SelfIterationReceiptRecord, SelfIterationReceiptSessionSummary,
     SelfIterationReceiptStoreRuntime, SelfIterationWriteDecision,
 };
-pub use crate::session_notes::{GoalAnchor, SESSION_NOTES_FILE_NAME, SessionNotes};
+pub use crate::session_notes::{
+    CheckpointSource, GoalAnchor, SESSION_NOTES_FILE_NAME, SessionNotes,
+};
 pub use crate::session_notes_runtime::SessionNotesRuntime;
 pub use crate::session_notes_store::{
     NOTES_DIR_NAME, NOTES_LIST_MAX_RESULTS, NOTES_MAX_FILE_BYTES, NOTES_MAX_PATH_CHARS,

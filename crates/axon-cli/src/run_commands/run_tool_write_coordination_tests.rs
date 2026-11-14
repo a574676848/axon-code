@@ -37,8 +37,14 @@ fn scope(
     tool_access_scope(Path::new("."), &request(name, &arguments, policy))
 }
 
+fn edit_patch(path: &str) -> serde_json::Value {
+    serde_json::json!({
+        "input": format!("*** Begin Patch\n*** Update File: {path}\n@@\n-old\n+new\n*** End Patch"),
+    })
+}
+
 #[test]
-fn classifier_maps_calls_to_three_domains() {
+fn classifier_maps_calls_to_four_domains() {
     let cases = [
         (
             "builtin.memory_search",
@@ -66,22 +72,25 @@ fn classifier_maps_calls_to_three_domains() {
         ),
         (
             "builtin.glob",
-            serde_json::json!({ "paths": ["src/**/*.rs"] }),
-            ToolConcurrencyPolicy::ParallelSafe,
-            ExecutionDomain::ReadPaths,
-        ),
-        (
-            "builtin.glob",
             serde_json::json!({ "paths": ["{src,docs}/**"] }),
             ToolConcurrencyPolicy::ParallelSafe,
             ExecutionDomain::ReadPaths,
         ),
+        // 补丁写集可解析：落到路径写域，不再是整工作区独占。
         (
             "builtin.edit",
-            serde_json::json!({ "input": "*** Begin Patch\n*** Update File: src/lib.rs\n*** End Patch" }),
+            edit_patch("src/lib.rs"),
             ToolConcurrencyPolicy::WorkspaceCoordinated,
-            ExecutionDomain::Exclusive,
+            ExecutionDomain::WritePaths,
         ),
+        // 写入集可证完整的 shell 命令同样按路径写。
+        (
+            "builtin.shell_command",
+            serde_json::json!({ "command": "echo x > out.log" }),
+            ToolConcurrencyPolicy::WorkspaceCoordinated,
+            ExecutionDomain::WritePaths,
+        ),
+        // 构建工具的写入面无法枚举：仍独占整工作区。
         (
             "builtin.shell_command",
             serde_json::json!({ "command": "cargo test > out.log" }),
@@ -110,6 +119,51 @@ fn classifier_maps_calls_to_three_domains() {
     }
 }
 
+/// 写集解析失败时不能退化成"没有写入"：必须拿整工作区写闸。
+#[test]
+fn unparsable_edit_falls_back_to_whole_workspace() {
+    let unparsable = scope(
+        "builtin.edit",
+        serde_json::json!({ "input": "*** Begin Patch\n*** Update File:\n*** End Patch" }),
+        ToolConcurrencyPolicy::WorkspaceCoordinated,
+    );
+    assert_eq!(unparsable.domain, ExecutionDomain::Exclusive);
+    assert!(unparsable.exclusive_workspace);
+}
+
+/// shell 的写集相对命令自身 cwd：`workdir` 不同的同名文件不能算同一条路径。
+#[test]
+fn shell_write_paths_are_resolved_against_the_command_cwd() {
+    let in_sub = scope(
+        "builtin.shell_command",
+        serde_json::json!({ "command": "echo x > out.log", "workdir": "sub" }),
+        ToolConcurrencyPolicy::WorkspaceCoordinated,
+    );
+    assert_eq!(in_sub.domain, ExecutionDomain::WritePaths);
+
+    let edit_root_out = scope(
+        "builtin.edit",
+        edit_patch("out.log"),
+        ToolConcurrencyPolicy::WorkspaceCoordinated,
+    );
+    assert_ne!(
+        in_sub.write_paths(),
+        edit_root_out.write_paths(),
+        "workdir 下的 out.log 与会话根下的 out.log 不是同一文件"
+    );
+
+    let edit_sub_out = scope(
+        "builtin.edit",
+        edit_patch("sub/out.log"),
+        ToolConcurrencyPolicy::WorkspaceCoordinated,
+    );
+    assert_eq!(
+        in_sub.write_paths(),
+        edit_sub_out.write_paths(),
+        "workdir 下的 out.log 必须与 sub/out.log 判为同一文件"
+    );
+}
+
 fn read_scope() -> ToolAccessScope {
     scope(
         "builtin.read_file",
@@ -118,10 +172,34 @@ fn read_scope() -> ToolAccessScope {
     )
 }
 
+fn read_other_scope() -> ToolAccessScope {
+    scope(
+        "builtin.read_file",
+        serde_json::json!({ "path": "src/other.rs" }),
+        ToolConcurrencyPolicy::ParallelSafe,
+    )
+}
+
 fn write_scope() -> ToolAccessScope {
     scope(
         "builtin.edit",
-        serde_json::json!({ "input": "*** Begin Patch\n*** Update File: src/lib.rs\n*** End Patch" }),
+        edit_patch("src/lib.rs"),
+        ToolConcurrencyPolicy::WorkspaceCoordinated,
+    )
+}
+
+fn write_other_scope() -> ToolAccessScope {
+    scope(
+        "builtin.edit",
+        edit_patch("src/other.rs"),
+        ToolConcurrencyPolicy::WorkspaceCoordinated,
+    )
+}
+
+fn workspace_write_scope() -> ToolAccessScope {
+    scope(
+        "builtin.shell_command",
+        serde_json::json!({ "command": "cargo test > out.log" }),
         ToolConcurrencyPolicy::WorkspaceCoordinated,
     )
 }
@@ -130,14 +208,69 @@ fn write_scope() -> ToolAccessScope {
 fn readers_share_the_gate_and_do_not_block_each_other() {
     let coordinator = Arc::new(WorkspaceWriteCoordinator::default());
     assert_scope_blocking(Arc::clone(&coordinator), read_scope(), read_scope(), false);
+    assert_scope_blocking(
+        Arc::clone(&coordinator),
+        read_scope(),
+        read_other_scope(),
+        false,
+    );
 }
 
+/// 同一路径的写撞写、写撞读、读撞写都必须串行。
 #[test]
-fn writes_block_readers_and_other_writes() {
+fn same_path_access_is_serialized() {
     let coordinator = Arc::new(WorkspaceWriteCoordinator::default());
     assert_scope_blocking(Arc::clone(&coordinator), read_scope(), write_scope(), true);
     assert_scope_blocking(Arc::clone(&coordinator), write_scope(), read_scope(), true);
     assert_scope_blocking(Arc::clone(&coordinator), write_scope(), write_scope(), true);
+}
+
+/// 不同文件之间不再互相阻塞：这就是「写与命令可以同批」的运行时依据。
+#[test]
+fn different_paths_can_run_concurrently() {
+    let coordinator = Arc::new(WorkspaceWriteCoordinator::default());
+    assert_scope_blocking(
+        Arc::clone(&coordinator),
+        write_scope(),
+        write_other_scope(),
+        false,
+    );
+    assert_scope_blocking(
+        Arc::clone(&coordinator),
+        write_scope(),
+        read_other_scope(),
+        false,
+    );
+    assert_scope_blocking(
+        Arc::clone(&coordinator),
+        read_scope(),
+        write_other_scope(),
+        false,
+    );
+}
+
+/// 写入集无法判定的命令仍与一切读者和写者互斥。
+#[test]
+fn undecidable_writes_block_everything() {
+    let coordinator = Arc::new(WorkspaceWriteCoordinator::default());
+    assert_scope_blocking(
+        Arc::clone(&coordinator),
+        workspace_write_scope(),
+        read_scope(),
+        true,
+    );
+    assert_scope_blocking(
+        Arc::clone(&coordinator),
+        workspace_write_scope(),
+        write_other_scope(),
+        true,
+    );
+    assert_scope_blocking(
+        Arc::clone(&coordinator),
+        write_scope(),
+        workspace_write_scope(),
+        true,
+    );
 }
 
 fn assert_scope_blocking(
@@ -176,12 +309,12 @@ fn assert_scope_blocking(
     if should_block {
         assert!(
             entered_before_release.is_err(),
-            "写入必须阻塞并发访问：第二个调用在观察窗口内提前进入了"
+            "同路径访问必须互斥：第二个调用在观察窗口内提前进入了"
         );
     } else {
         assert!(
             entered_before_release.is_ok(),
-            "并发读不得互相阻塞：第二个调用在等待窗口内没有进入"
+            "不同路径不得互相阻塞：第二个调用在等待窗口内没有进入"
         );
     }
     release_tx.send(()).unwrap();
@@ -190,23 +323,4 @@ fn assert_scope_blocking(
     }
     first_handle.join().unwrap();
     second_handle.join().unwrap();
-}
-
-/// G2：编辑、shell 写与读取之间必须互斥（控制类独占不占工作区闸）。
-#[test]
-fn edits_and_shell_writes_block_reads() {
-    let coordinator = Arc::new(WorkspaceWriteCoordinator::default());
-    let shell_write = scope(
-        "builtin.shell_command",
-        serde_json::json!({ "command": "cargo test > out.log" }),
-        ToolConcurrencyPolicy::WorkspaceCoordinated,
-    );
-    assert_scope_blocking(Arc::clone(&coordinator), write_scope(), write_scope(), true);
-    assert_scope_blocking(
-        Arc::clone(&coordinator),
-        shell_write.clone(),
-        read_scope(),
-        true,
-    );
-    assert_scope_blocking(Arc::clone(&coordinator), read_scope(), shell_write, true);
 }

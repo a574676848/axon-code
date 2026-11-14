@@ -3,7 +3,7 @@ use axon_agent_runtime::{
     SemanticSalienceSignals, TurnFinalStatus, TurnOutcomeEnvelope,
 };
 
-use super::{
+use crate::run_commands::run_semantic_salience::{
     completed_semantic_assessment, parse_semantic_assessment, semantic_salience_output_schema,
 };
 
@@ -52,6 +52,49 @@ fn forged_evidence_ref_is_conservatively_rejected() {
     let outcome = completed_semantic_assessment(&raw, &envelope());
     assert!(outcome.completed);
     assert!(outcome.rejected);
+}
+
+#[test]
+fn reflection_cards_carry_the_folded_v3_specificity() {
+    let envelope = envelope();
+    let trace = axon_agent_runtime::TurnTrace::from_outcome(
+        &envelope,
+        "trace:conversation-1:0",
+        1_000,
+        axon_agent_runtime::ExplicitSignals::default(),
+    );
+    let assessment = SemanticSalienceAssessment {
+        schema_version: axon_agent_runtime::SEMANTIC_SALIENCE_ACCEPTED_MIN_VERSION,
+        should_reflect: true,
+        candidate_types: vec![SemanticMemoryCandidateType::Procedure],
+        signals: SemanticSalienceSignals {
+            verification_strength: 9_000,
+            future_utility: 8_000,
+            ..SemanticSalienceSignals::default()
+        },
+        evidence_refs: Vec::new(),
+        reason: "已验证的执行流程".to_owned(),
+        user_affect: None,
+        user_fatigue: None,
+        persona_drift_bp: None,
+        drift_reason: None,
+        style_candidate: None,
+    };
+
+    let cards = super::reflection_cards(
+        &trace,
+        Some(&assessment),
+        std::path::Path::new("E:/zbg/axon-code"),
+    );
+
+    assert_eq!(cards.len(), 1, "无回执的轮次也要给一张索引卡");
+    assert_eq!(cards[0].trace_id, "trace:conversation-1:0");
+    assert_eq!(
+        cards[0].signals.specificity,
+        axon_agent_runtime::EXECUTION_SPECIFICITY_MIN_BP,
+        "v3 输出没有 specificity 字段，必须折中到门槛，不能落 0"
+    );
+    assert_eq!(cards[0].location.workspace_kind, "project");
 }
 
 fn envelope() -> TurnOutcomeEnvelope {

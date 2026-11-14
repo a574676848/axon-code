@@ -28,10 +28,9 @@ const CONFIG_COPY: Record<string, ConfigCopy> = {
     detail: '单个会话可并发的子代理数量',
   },
   'agent.max_subagent_active_turns': {
-    label: '并发子任务上限',
-    detail: '单个会话同时运行的子任务数量',
+    label: '并发子代理上限',
+    detail: '单个会话同时运行的子代理数量',
   },
-  'agent.max_subagent_depth': { label: '子代理嵌套深度', detail: '子代理可继续派生的层数' },
   'agent.idle_compaction_debounce_ms': {
     label: '闲置压缩延迟',
     detail: '空闲多久后压缩上下文，单位毫秒',

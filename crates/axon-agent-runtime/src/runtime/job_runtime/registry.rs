@@ -112,6 +112,27 @@ pub struct JobOutput {
     pub full_output_available: bool,
 }
 
+/// 作业输出的只读快照。
+///
+/// 与 [`JobOutput`] 的区别是**不取走增量**：读走增量是模型侧 `job_output` 的语义，
+/// 界面尾随归档时若也按增量读，会把模型本该看到的内容吞掉。因此快照只给状态、
+/// 耗时与归档位置，内容由调用方自己按字节游标读归档。
+#[derive(Debug, Clone)]
+pub struct JobTail {
+    /// 作业 ID。
+    pub job_id: JobId,
+    /// 当前状态。
+    pub status: JobStatus,
+    /// 终态退出码；仍在运行或结局无退出码时为 `None`。
+    pub exit_code: Option<i32>,
+    /// 从启动作业到本次探测的已运行毫秒数。
+    pub elapsed_ms: u64,
+    /// 完整输出归档路径；作业启动时即创建。
+    pub artifact_path: PathBuf,
+    /// 归档是否完整（未被容量上限截断、写入未失败）。
+    pub full_output_available: bool,
+}
+
 /// 作业终态记录。
 struct JobTerminal {
     status: JobStatus,
@@ -299,6 +320,26 @@ impl JobRuntime {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id, Arc::new(Mutex::new(job)));
         Ok(id)
+    }
+
+    /// 作业输出的只读快照：状态、耗时与归档位置，不取走任何增量。
+    ///
+    /// 返回 `None` 表示作业已不在注册表里：从未存在，或已过保留窗口被回收。
+    /// 调用方据此退回收敛态，而不是把「读不到」当成「没有输出」。
+    #[must_use]
+    pub fn tail(&self, id: JobId) -> Option<JobTail> {
+        let job = self.job_handle(id)?;
+        let job = job
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Some(JobTail {
+            job_id: id,
+            status: job.status(),
+            exit_code: job.exit_code(),
+            elapsed_ms: u64::try_from(job.started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            artifact_path: job.execution.artifact_path(),
+            full_output_available: job.execution.full_output_available(),
+        })
     }
 
     /// 读取作业的增量输出，必要时等待到终态或等待窗口结束。

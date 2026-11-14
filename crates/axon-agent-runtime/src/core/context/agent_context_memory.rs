@@ -121,7 +121,6 @@ const fn memory_source_origin_label(origin: MemorySourceOrigin) -> &'static str 
         MemorySourceOrigin::DebuggingExperience => "debugging_experience",
         MemorySourceOrigin::RemoteUpload => "remote_upload",
         MemorySourceOrigin::CommandCompletionFeedback => "command_completion_feedback",
-        MemorySourceOrigin::SkillReflection => "skill_reflection",
     }
 }
 

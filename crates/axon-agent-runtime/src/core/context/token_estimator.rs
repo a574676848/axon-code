@@ -140,6 +140,16 @@ pub fn estimated_tool_definition_tokens(
     })
 }
 
+/// 纯文本 token 估算：按 UTF-8 字节数除以固定除数上取整。
+///
+/// 与消息级估算共用同一除数，用于交接摘要等尚未成为消息的文本预算校验。
+#[must_use]
+pub fn estimated_text_tokens(text: &str) -> u64 {
+    u64::try_from(text.len())
+        .unwrap_or(u64::MAX)
+        .div_ceil(TOKEN_ESTIMATE_DIVISOR)
+}
+
 /// 估算单条消息在指定 Provider 上的可见 token 数。
 #[must_use]
 pub fn estimated_message_tokens(

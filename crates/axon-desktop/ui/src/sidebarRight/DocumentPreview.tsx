@@ -1,6 +1,6 @@
 import React from 'react';
 import * as ipc from '../ipc';
-import { CheckIcon, FileIcon, NoWrapIcon, RefreshIcon, WrapIcon } from '../icons';
+import { CheckIcon, FileIcon, FolderIcon, NoWrapIcon, RefreshIcon, WrapIcon } from '../icons';
 import { Dropdown } from '../components/ui/overlays';
 import { EmptyState, LoadingState } from '../components/ui/surfaces';
 import { OpenInAppAction } from './OpenInAppAction';
@@ -9,6 +9,7 @@ import { FileTree } from '../components/conversation/fileTree';
 import { PathLabel, ToolButton } from './document/parts';
 import type { ViewerContent } from './document/contract';
 import { viewersFor } from './document/viewers';
+import { isAbsoluteReference } from '../resources/referenceIndex';
 
 /*
  * 文件查看页：右侧栏里每个文件一个 tab 的正文。
@@ -23,8 +24,12 @@ import { viewersFor } from './document/viewers';
  */
 
 export interface DocumentPreviewProps {
-  /** 工作区根目录绝对路径。 */
-  root: string;
+  /**
+   * 工作区根目录绝对路径；没有选中工作区时为空。
+   *
+   * 绝对路径不依赖它，因此无工作区时预览页照常能开；相对引用才需要它当基准。
+   */
+  root: string | null;
   /** 待预览的文件相对路径。 */
   path: string;
   /** 需要定位到的行号；为空则从顶部开始。 */
@@ -45,6 +50,10 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
   onViewer,
   onOpenFile,
 }) => {
+  /** 交给后端的根目录：没有工作区时是空串，只有相对引用会用到它。 */
+  const base = root ?? '';
+  /** 没有工作区又给的是相对引用：没有基准可拼，直接说明，不去读一个注定失败的路径。 */
+  const needsWorkspace = root === null && !isAbsoluteReference(path);
   const candidates = React.useMemo(() => viewersFor(path), [path]);
   const definition = candidates.find((candidate) => candidate.id === viewer) ?? candidates[0];
   const [text, setText] = React.useState<{ text: string; truncated: boolean } | null>(null);
@@ -78,9 +87,11 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
     setNotice(null);
     setAbsolute(null);
     setDirectory(null);
+    // 没有基准就不发请求：这里的空态会解释原因，而不是抛一句「系统找不到路径」。
+    if (needsWorkspace) return undefined;
     // 先问一句「这是目录吗」：目录不进读取流程，直接换成目录树。
     void ipc
-      .statWorkspacePath(root, path)
+      .statWorkspacePath(base, path)
       .then((stat) => {
         if (cancelled || !stat.is_dir) return;
         setDirectory({ root: stat.absolute_path, display: stat.display_path });
@@ -91,7 +102,7 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
     if (loading === 'none') return undefined;
     if (loading === 'text') {
       void ipc
-        .readWorkspaceFile(root, path)
+        .readWorkspaceFile(base, path)
         .then((value) => {
           if (cancelled) return;
           // 二进制文件按文本读只会得到一屏乱码：如实说明，并保留「用其他应用打开」的出路。
@@ -110,7 +121,7 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
       };
     }
     void ipc
-      .readWorkspaceBytes(root, path)
+      .readWorkspaceBytes(base, path)
       .then((value) => {
         if (!cancelled) {
           setAbsolute(value.absolute_path);
@@ -123,7 +134,7 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [root, path, loading, revision]);
+  }, [base, needsWorkspace, path, loading, revision]);
 
   const content: ViewerContent | null =
     bytes !== null
@@ -187,11 +198,22 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
       >
         <RefreshIcon size={14} />
       </ToolButton>
-      <OpenInAppAction root={root} path={path} onNotice={setNotice} />
+      <OpenInAppAction root={base} path={path} onNotice={setNotice} />
     </div>
   );
 
   const body = (): React.ReactNode => {
+    if (needsWorkspace) {
+      return (
+        <div className="flex-1 min-h-0 flex items-center justify-center">
+          <EmptyState
+            icon={<FolderIcon size={24} />}
+            title="先选择一个工作区"
+            description="这条路径是相对写法，需要一个工作区当基准；绝对路径可以直接预览。"
+          />
+        </div>
+      );
+    }
     // 目录：按目录树展开，点击里面的文件照常新开预览 tab。
     if (directory !== null) {
       return (
@@ -206,11 +228,11 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
      */
     if (definition === undefined) {
       return (
-        <UnpreviewableBody root={root} path={path} message="该格式文件暂时无法预览" />
+        <UnpreviewableBody root={base} path={path} message="该格式文件暂时无法预览" />
       );
     }
     if (error !== null) {
-      return <UnpreviewableBody root={root} path={path} message={error} />;
+      return <UnpreviewableBody root={base} path={path} message={error} />;
     }
     if (content === null && loading !== 'none') {
       return (
@@ -222,7 +244,7 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
     return (
       <ViewerOutlet
         viewer={viewerId}
-        root={root}
+        root={base}
         path={path}
         content={content ?? { kind: 'text', text: '', truncated: false }}
         wrap={definition.wrap && wrap}
@@ -259,4 +281,3 @@ const UnpreviewableBody: React.FC<{ root: string; path: string; message: string 
     />
   </div>
 );
-

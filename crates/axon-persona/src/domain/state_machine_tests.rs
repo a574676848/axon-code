@@ -18,6 +18,8 @@ fn settled(
         persona_drift_bp: drift_bp,
         drift_reason: drift_reason.map(ToOwned::to_owned),
         now_ms,
+        observed_failure_streak: None,
+        rule_cause: None,
     })
 }
 
@@ -268,6 +270,8 @@ fn fatigue_decays_toward_normal_then_accepts_a_fresh_signal() {
             persona_drift_bp: 0,
             drift_reason: None,
             now_ms: two_half_lives,
+            observed_failure_streak: None,
+            rule_cause: None,
         },
     );
     assert_eq!(
@@ -287,7 +291,57 @@ fn fatigue_decays_toward_normal_then_accepts_a_fresh_signal() {
             persona_drift_bp: 0,
             drift_reason: None,
             now_ms: 1_000,
+            observed_failure_streak: None,
+            rule_cause: None,
         },
     );
     assert_eq!(next.fatigue_level, FatigueLevel::Low, "新信号应覆盖衰减值");
+}
+
+#[test]
+fn observed_failure_streak_wins_over_the_local_counter() {
+    let state = PersonaState::baseline(0);
+
+    let (next, cause) = settle(
+        &state,
+        TurnFinalStatus::Failed,
+        &TurnSettledInput {
+            final_status: TurnFinalStatus::Failed,
+            user_affect: UserAffect::Unknown,
+            fatigue_level: None,
+            persona_drift_bp: 0,
+            drift_reason: None,
+            now_ms: 1_000,
+            observed_failure_streak: Some(5),
+            rule_cause: None,
+        },
+    );
+
+    assert_eq!(next.failure_streak, 5, "观测到的连败必须覆盖本地计数");
+    assert_eq!(cause, "连续第 5 次失败");
+}
+
+#[test]
+fn observed_failure_streak_never_pulls_the_counter_backwards() {
+    let state = PersonaState {
+        failure_streak: 4,
+        ..PersonaState::baseline(0)
+    };
+
+    let (next, _) = settle(
+        &state,
+        TurnFinalStatus::Failed,
+        &TurnSettledInput {
+            final_status: TurnFinalStatus::Failed,
+            user_affect: UserAffect::Unknown,
+            fatigue_level: None,
+            persona_drift_bp: 0,
+            drift_reason: None,
+            now_ms: 1_000,
+            observed_failure_streak: Some(2),
+            rule_cause: None,
+        },
+    );
+
+    assert_eq!(next.failure_streak, 5, "陈旧观测不得把连败数拉回去");
 }

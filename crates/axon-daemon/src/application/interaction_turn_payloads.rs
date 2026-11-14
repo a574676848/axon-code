@@ -180,6 +180,11 @@ pub(super) fn interaction_transport_context(interaction: &InteractionRecord) -> 
     if let Some(model) = interaction.model.as_deref() {
         context["model"] = serde_json::Value::String(model.to_owned());
     }
+    // 入口显式选定的推理强度同样随本轮下传，键名与其余载荷字段一致走 camelCase：
+    // Provider turn 据此覆盖 `agent.reasoning_effort`；没有显式选择时不写该键。
+    if let Some(reasoning_effort) = interaction.reasoning_effort.as_deref() {
+        context["reasoningEffort"] = serde_json::Value::String(reasoning_effort.to_owned());
+    }
     // 由投递项派生的主 turn 携带投递项 ID：渠道 egress 据此把正文留给持久收件箱
     // 投递，而不是直接出站，保证同一个投递项在所有渠道只投递一次；真实外部来源
     // 则保留 sourceMessageId 供渠道回帖。
@@ -268,10 +273,24 @@ mod tests {
     }
 
     #[test]
+    fn explicit_reasoning_effort_is_projected_into_transport_context() {
+        let mut record = interaction(Some("balanced"));
+        record.reasoning_effort = Some("high".to_owned());
+
+        let context = interaction_transport_context(&record);
+
+        assert_eq!(context["reasoningEffort"], serde_json::json!("high"));
+    }
+
+    #[test]
     fn absent_explicit_model_keeps_transport_context_shape() {
         let context = interaction_transport_context(&interaction(None));
 
         assert!(context.get("model").is_none());
+        assert!(
+            context.get("reasoningEffort").is_none(),
+            "没有显式强度时不得写入该键，强度必须继续由配置决定"
+        );
     }
 
     #[test]

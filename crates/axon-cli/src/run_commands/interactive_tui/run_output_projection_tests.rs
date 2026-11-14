@@ -311,6 +311,57 @@ fn format_tui_run_output_structures_stderr_runtime_reason() {
 }
 
 #[test]
+fn format_tui_run_output_projects_memory_reflection_notice() {
+    let result = CliRunResult {
+        stdout: json!({
+            "sessionId": "run-1",
+            "wireEvents": [],
+            "memoryReflectionNotice": "记忆反思：本轮新增、淘汰或归档 2 条记忆"
+        })
+        .to_string(),
+        stderr: String::new(),
+        exit_code: 0,
+    };
+
+    let output = format_tui_run_output(&result);
+    let status = output
+        .lines()
+        .iter()
+        .find_map(|line| match line {
+            AgentTuiRunLine::Status(status) => Some(status),
+            _ => None,
+        })
+        .expect("上一轮有记忆动作时必须投影出反思状态行");
+
+    assert_eq!(status.id, "status:memory-reflection");
+    assert!(status.items[0].summary.contains("2 条记忆"));
+}
+
+#[test]
+fn format_tui_run_output_omits_blank_memory_reflection_notice() {
+    let result = CliRunResult {
+        stdout: json!({
+            "sessionId": "run-1",
+            "wireEvents": [],
+            "memoryReflectionNotice": "   "
+        })
+        .to_string(),
+        stderr: String::new(),
+        exit_code: 0,
+    };
+
+    let output = format_tui_run_output(&result);
+
+    assert!(
+        output
+            .lines()
+            .iter()
+            .all(|line| !matches!(line, AgentTuiRunLine::Status(_))),
+        "空白提示不得渲染成状态行"
+    );
+}
+
+#[test]
 fn format_tui_run_output_does_not_compensate_provider_status_as_error_cell() {
     let result = CliRunResult {
         stdout: json!({

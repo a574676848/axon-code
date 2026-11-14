@@ -549,7 +549,7 @@ mod tests {
             memory_hit(
                 2,
                 Some("memory-ref:tool-guidance:verify the smallest relevant scope first"),
-                MemorySourceOrigin::SkillReflection,
+                MemorySourceOrigin::AgentProcedure,
             ),
             memory_hit(
                 3,

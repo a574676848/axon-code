@@ -43,8 +43,7 @@ pub use crate::memory_experience::{
     DebuggingExperienceDecision, DebuggingExperienceInput, DebuggingExperienceRejectReason,
     DebuggingExperienceRuntime, ExperienceDistillationDecision, ExperienceDistillationInput,
     ExperienceDistillationRuntime, ExperienceRecord, ExperienceRejectReason, ExperienceReusePolicy,
-    SkillReflectionDecision, SkillReflectionInput, SkillReflectionRejectReason,
-    SkillReflectionRuntime, debugging_experience_content_ref, skill_reflection_content_ref,
+    debugging_experience_content_ref,
 };
 pub use crate::memory_governance::{
     MemoryGovernanceAction, MemoryGovernanceBlockReason, MemoryGovernanceDecision,
@@ -71,11 +70,6 @@ pub use crate::memory_runtime::{
     MemoryFooterAdmissionObservation, MemoryFooterEvent, MemoryFooterInput, MemoryFooterProjection,
     MemoryFooterReasonHash, MemoryFooterRuntime, MemoryInspectorAction, MemoryInspectorEntry,
     MemoryInspectorEvent, MemoryInspectorInput, MemoryInspectorProjection, MemoryInspectorRuntime,
-};
-pub use crate::memory_skill_evolution::{
-    SkillDraftProposal, SkillDraftProposalInput, SkillEvolutionDecision,
-    SkillEvolutionRejectReason, SkillEvolutionRisk, SkillEvolutionRuntime,
-    SkillEvolutionSilentExperience, SkillImprovementProposal, SkillImprovementProposalInput,
 };
 pub use crate::memory_tool_dispatcher::{
     CanonicalMemorySearchInput, CanonicalMemoryWriteInput, MemoryToolDispatcher, MemoryToolScope,

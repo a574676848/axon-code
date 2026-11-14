@@ -38,7 +38,7 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
 {"type":"subscribe","subscribeId":"interaction:<interaction-id>","workspaceId":"<workspace-id>","interactionId":"<interaction-id>","resumeCursor":"<cursor>"}
 {"type":"subscribe","subscribeId":"session:<session-id>","workspaceId":"<workspace-id>","sessionId":"<session-id>"}
 {"type":"unsubscribe","subscribeId":"<subscribe-id>"}
-{"type":"submit","sourceChannel":"jira","eventId":"AX-1024","workspaceId":"<workspace-id>","observedAtMs":1730000000000,"expiresAtMs":1730086400000,"content":"事件正文","replyChannel":"jira","replyDestination":"AX-1024","localFiles":[]}
+{"type":"submit","sourceChannel":"jira","eventId":"AX-1024","workspaceId":"<workspace-id>","observedAtMs":1730000000000,"expiresAtMs":1730086400000,"content":"事件正文","replyChannel":"jira","replyDestination":"AX-1024","localFiles":[],"model":"","reasoningEffort":""}
 ```
 
 | 帧 | 必填字段 | 可选字段 | 回执 |
@@ -46,7 +46,7 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
 | `ping` | 无 | 无 | `{"type":"pong"}` |
 | `subscribe` | `subscribeId`、`workspaceId`，以及 `interactionId` 或 `sessionId` 之一 | `resumeCursor` | `{"type":"subscribed","subscribeId":"..."}` |
 | `unsubscribe` | `subscribeId` | 无 | `{"type":"unsubscribed","subscribeId":"..."}` |
-| `submit` | `sourceChannel`、`eventId`、`observedAtMs`、`expiresAtMs`、`content`、`replyChannel`、`replyDestination` | `workspaceId`、`localFiles` | `{"type":"accepted","receipt":{"interactionId":"...","accepted":true,"deduplicated":false}}` |
+| `submit` | `sourceChannel`、`eventId`、`observedAtMs`、`expiresAtMs`、`content`、`replyChannel`、`replyDestination` | `workspaceId`、`localFiles`、`model`、`reasoningEffort` | `{"type":"accepted","receipt":{"interactionId":"...","accepted":true,"deduplicated":false}}` |
 
 订阅目标语义：
 

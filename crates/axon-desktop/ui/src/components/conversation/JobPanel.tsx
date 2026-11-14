@@ -5,6 +5,7 @@ import type { JobRow } from '../../conversation/transcript';
 import { isActiveJob } from '../../conversation/runtimeFacts';
 import { StateDot, type StateDotState } from '../ui/surfaces';
 import { DisclosureRow } from './DisclosureRow';
+import { useJobStream } from './useJobStream';
 import * as ipc from '../../ipc';
 
 /*
@@ -112,9 +113,24 @@ const StopButton: React.FC<{ armed: boolean; pending: boolean; onStop: () => voi
  * 与复制入口贴住横幅顶端，命令滚走时它们还在。在跑且尚无输出的命令只有横幅，
  * 不画空的输出区；输出区同样限高内部滚动，中间行不折叠。
  */
-const JobTerminal: React.FC<{ job: JobRow; running: boolean }> = ({ job, running }) => {
+const JobTerminal: React.FC<{ job: JobRow; running: boolean; laneId: string | null }> = ({
+  job,
+  running,
+  laneId,
+}) => {
   const [copied, setCopied] = React.useState(false);
   const timer = React.useRef<number | null>(null);
+  // 输出只认作业自己的归档：发起作业的那条工具回执（`job start …`）不是作业输出。
+  const stream = useJobStream(laneId, job.jobId, running);
+  const outputRef = React.useRef<HTMLPreElement | null>(null);
+  /** 是否贴在底部：贴住就跟随新内容，用户上翻阅读时不抢滚动位置。 */
+  const stickRef = React.useRef(true);
+
+  React.useEffect(() => {
+    const node = outputRef.current;
+    if (node === null || !stickRef.current) return;
+    node.scrollTop = node.scrollHeight;
+  }, [stream.text]);
 
   React.useEffect(
     () => () => {
@@ -143,7 +159,9 @@ const JobTerminal: React.FC<{ job: JobRow; running: boolean }> = ({ job, running
   // 多行命令一行一个提示符：读起来就是它要跑的那几条命令。
   const body = job.command.endsWith('\n') ? job.command.slice(0, -1) : job.command;
   const lines = body.split('\n');
-  const waitingFirstByte = running && job.output.length === 0;
+  const output = stream.text;
+  const tailRunning = stream.running;
+  const waitingFirstByte = tailRunning && output.length === 0 && stream.unavailable === null;
 
   return (
     <div className="disclosure-enter mx-1 mb-1 rounded-md hairline border-border bg-code-block overflow-hidden">
@@ -192,14 +210,28 @@ const JobTerminal: React.FC<{ job: JobRow; running: boolean }> = ({ job, running
           <StateDot state="ongoing" />
           <span className="shimmer-text-active">正在后台执行，等待输出流...</span>
         </div>
-      ) : job.output.length > 0 ? (
-        <pre
-          className={`${OUTPUT_CAP} pl-3 pr-3.5 py-3 overflow-auto scroll-visible font-mono text-code text-text-prose whitespace-pre-wrap break-words`}
-        >
-          {job.output}
-        </pre>
+      ) : output.length > 0 || tailRunning ? (
+        <>
+          <pre
+            ref={outputRef}
+            onScroll={(event) => {
+              const node = event.currentTarget;
+              stickRef.current = node.scrollHeight - node.scrollTop - node.clientHeight < 16;
+            }}
+            className={`${OUTPUT_CAP} pl-3 pr-3.5 py-3 overflow-auto scroll-visible font-mono text-code text-text-prose whitespace-pre-wrap break-words`}
+          >
+            {output}
+          </pre>
+          {stream.unavailable !== null && (
+            <div className="px-3 pb-2 font-mono text-code text-text-tertiary">
+              {stream.unavailable}
+            </div>
+          )}
+        </>
       ) : (
-        <div className="pl-3 pr-3.5 py-3 font-mono text-code text-text-tertiary">（无输出）</div>
+        <div className="pl-3 pr-3.5 py-3 font-mono text-code text-text-tertiary">
+          {stream.unavailable ?? '（无输出）'}
+        </div>
       )}
     </div>
   );
@@ -207,6 +239,8 @@ const JobTerminal: React.FC<{ job: JobRow; running: boolean }> = ({ job, running
 
 export interface JobLineProps {
   job: JobRow;
+  /** 所属车道：作业输出按车道与作业标识取。 */
+  laneId: string | null;
   /** 已被用户停止时的终态原因；为空表示未停止。 */
   stoppedReason: string | null;
   /** 后端是否仍持有它；false 表示这一行只是历史记录。 */
@@ -226,6 +260,7 @@ export interface JobLineProps {
 /** 作业一行：状态点打头，行尾给状态与耗时，可展开出终端卡。 */
 export const JobLine: React.FC<JobLineProps> = ({
   job,
+  laneId,
   stoppedReason,
   live,
   expanded,
@@ -236,8 +271,8 @@ export const JobLine: React.FC<JobLineProps> = ({
   onStop,
 }) => {
   const running = live && isActiveJob(job.status) && stoppedReason === null;
-  // 有输出的行才可展开；在跑的行随时可能开始输出，因此一律可展开。
-  const observable = running || job.output.length > 0;
+  // 认得出作业的行都能展开看输出：在跑的行随时开始输出，跑完的行归档仍可读。
+  const observable = running || job.output.length > 0 || job.jobId !== null;
   // 行里仍声称在跑、后端却已不再持有：如实说明，不假装它还在跑。
   const stale = !live && isActiveJob(job.status);
   /** 行内状态：停止原因优先，其次是退出码，最后才是状态词。 */
@@ -293,7 +328,7 @@ export const JobLine: React.FC<JobLineProps> = ({
           <StopButton armed={armed} pending={stopping} onStop={() => onStop(job)} />
         )}
       </div>
-      {expanded && observable && <JobTerminal job={job} running={running} />}
+      {expanded && observable && <JobTerminal job={job} running={running} laneId={laneId} />}
     </div>
   );
 };

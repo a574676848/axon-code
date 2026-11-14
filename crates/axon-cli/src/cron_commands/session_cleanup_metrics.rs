@@ -24,6 +24,15 @@ pub(super) fn retention_ms() -> u64 {
         .saturating_mul(MILLISECONDS_PER_SECOND)
 }
 
+/// 文件面（logs / tmp / archive / attachments）的保留期。
+pub(super) fn file_retention_ms() -> u64 {
+    super::FILE_RETENTION_DAYS
+        .saturating_mul(HOURS_PER_DAY)
+        .saturating_mul(MINUTES_PER_HOUR)
+        .saturating_mul(SECONDS_PER_MINUTE)
+        .saturating_mul(MILLISECONDS_PER_SECOND)
+}
+
 pub(super) fn dry_run_channel_metrics_count(root: &Path, cutoff_ms: u64) -> Result<usize, String> {
     let directory = root
         .join(axon_config::AXON_RUNTIME_DATA_DIR)

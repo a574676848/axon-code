@@ -6,7 +6,6 @@ import { sessionGenerationMetrics } from '../../conversation/sessionGeneration';
 import { lastObservedUsage } from '../../conversation/sessionUsage';
 import { coverFace, type StageFrame } from '../../conversation/stage';
 import { useLaneAutoRead, useStopSpeechOnLaneChange } from '../../speech';
-import { Dialog } from '../ui/overlays';
 import { ConversationHeader } from './ConversationHeader';
 import { SessionOriginBar } from './SessionOriginBar';
 import { isReadOnlySession, READ_ONLY_PLACEHOLDER, type SessionOriginBarState } from '../../sessionOpening';
@@ -24,11 +23,7 @@ import { useConversationActionsValue } from './useConversationActionsValue';
 import { sessionReferenceIndex } from './referenceAnchors';
 import { useConversationMcp } from '../../conversation/useConversationMcp';
 import { useSkillCatalog } from '../../conversation/skillCatalog';
-import {
-  changedFilesOf,
-  workingLineOf,
-  type AttachmentRef,
-} from '../../conversation/transcript';
+import { changedFilesOf, workingLineOf } from '../../conversation/transcript';
 import {
   isActiveSubagent,
   activeJobCount,
@@ -37,9 +32,6 @@ import {
 } from '../../conversation/runtimeFacts';
 import { SubagentRunView } from './SubagentRunView';
 import {
-  KEY_DEFAULT_MODEL,
-  KEY_REASONING_EFFORT,
-  modelLabelFor,
   resolveConfig,
   resolveEffectiveModel,
   type ResolvedConfig,
@@ -48,8 +40,10 @@ import { ConversationWidthControls } from './ConversationWidthControls';
 import { useConversationWidth } from './useConversationWidth';
 import { useExpiringNotice } from './composerNotice';
 import { useSettledValue } from './conversationViewUtils';
-import { useExplicitModel } from './useExplicitModel';
+import { useExplicitTurnSettings } from './useExplicitTurnSettings';
+import { useOpeningStage } from './useOpeningStage';
 import { useInterruptOnEscape, useRailShortcuts } from './useConversationShortcuts';
+import { useSessionBootstrap } from './useSessionBootstrap';
 
 /*
  * 主区域：首屏、对话过程与右侧栏的组合根。
@@ -61,11 +55,6 @@ import { useInterruptOnEscape, useRailShortcuts } from './useConversationShortcu
 /** 后端配置里与指标条相关的键。 */
 const CRON_DESTINATION_PREFIX = 'cron-';
 /** 后台驱动的独立会话在输入坞里的禁用说明。 */
-/** 打开慢过这个时长才亮过渡面：快到看不出来时上一屏继续显示，不做多余的闪动。 */
-const OPENING_SURFACE_DELAY_MS = 140;
-/** 过渡面亮起后至少停留的时长：才亮就撤会读成一次闪动。 */
-const OPENING_SURFACE_MIN_MS = 160;
-
 export interface ConversationViewProps {
   /** 当前选中的会话；为空时展示首屏空态。 */
   selection: LaneSelection | null;
@@ -108,9 +97,8 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    * 用户在本会话里显式改过的模型：只有真在输入坞选过才随轮下发，换会话即作废。
    * 没选过时留空，让后端按会话记录的模型继续，而不是让全局默认值覆盖它。
    */
-  const { explicitModel, onModelChange } = useExplicitModel(laneKey, (value) =>
-    void applyConfig({ [KEY_DEFAULT_MODEL]: value }),
-  );
+  const { explicitModel, explicitReasoningEffort, onModelChange, onReasoningEffortChange } =
+    useExplicitTurnSettings(laneKey);
   // 一轮收口时朗读这一轮的回复：流式与收口补齐两种落地方式都覆盖。
   useAutoReadReply(laneKey, conversation.working, conversation.state.turns, voiceAutoRead);
   const [config, setConfig] = React.useState<ResolvedConfig | null>(null);
@@ -121,7 +109,6 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   const fixedModel = (cronConfig?.jobId === cronJobId ? cronConfig?.model : null) ?? selection?.fixedModel;
   const fixedReasoningEffort = (cronConfig?.jobId === cronJobId ? cronConfig?.reasoningEffort : null) ?? selection?.fixedReasoningEffort;
   // 本会话真实跑过的模型（来自终态帧，回放历史时同样可得）：优先于配置默认值。
-  const sessionModelLabel = modelLabelFor(config?.catalog ?? [], conversation.state.lastRun);
   /*
    * 指标条与输入坞共用的生效模型：展示名与最大上下文必须同源，否则会出现
    * 「模型是会话的、窗口却是 default_model 的」这种对不上的读数。
@@ -130,24 +117,19 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     config,
     fixedModel ?? null,
     explicitModel,
-    conversation.state.lastRun,
+    conversation.laneModel,
   );
-  const [creating, setCreating] = React.useState(false);
-  const [createError, setCreateError] = React.useState<string | null>(null);
-  const [configError, setConfigError] = React.useState<string | null>(null);
-  const [savingConfig, setSavingConfig] = React.useState(false);
-  const configWritePending = React.useRef(false);
+  /**
+   * 最近一次记忆反思提示。
+   *
+   * 它由「首页历史」带回，与权威模型同一时机、同一寿命：换目标时一起清空，翻页不回退。
+   * 空白一律当没有：网关偶尔会给出空串，渲染一行空白等于凭空造出一条提示。
+   */
+  const memoryReflection = conversation.laneReflectionNotice?.trim() || null;
   /** 递增即要求定位到最新消息：发送消息后必须看到自己刚发的那条。 */
   const [followToken, setFollowToken] = React.useState(0);
   /** 正在查看的子代理；非空时主区域让给它的运行轨迹。 */
   const [openSubagentId, setOpenSubagentId] = React.useState<string | null>(null);
-  /** 首屏直接输入时暂存的正文与附件；等新会话的历史索引装载完成后再发出。 */
-  const pendingHeroText = React.useRef<{
-    text: string;
-    attachments: AttachmentRef[];
-    /** 提交时附在正文之后的结构化输入块（`@` 文件引用）；为空表示没有引用。 */
-    structuredInput: string;
-  } | null>(null);
   /** 重新打开卡片的请求序号：时间线上的入口每点一次递增一次。 */
   const [questionReopenToken, setQuestionReopenToken] = React.useState(0);
   /** 正文舞台容器：供宽度拖拽手柄量测宽度并注入 CSS 变量。 */
@@ -181,92 +163,12 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     return () => { cancelled = true; };
   }, [cronJobId]);
 
-  /** 写回一个配置项并复读，供模型与推理等级切换共用。 */
-  const applyConfig = React.useCallback(async (values: Record<string, string>) => {
-    if (configWritePending.current) return;
-    configWritePending.current = true;
-    setSavingConfig(true);
-    setConfigError(null);
-    try {
-      await ipc.applyConfigValues(values);
-      setConfig(resolveConfig(await ipc.readConfig()));
-    } catch (error) {
-      setConfigError(error instanceof Error ? error.message : '保存配置失败');
-    } finally {
-      configWritePending.current = false;
-      setSavingConfig(false);
-    }
-  }, []);
-
-  /** 新建一条会话并把它设为当前目标。 */
-  const createSession = React.useCallback(async (): Promise<LaneSelection | null> => {
-    if (workspace === null) {
-      setCreateError('请先在左侧添加一个工作区');
-      return null;
-    }
-    setCreating(true);
-    setCreateError(null);
-    try {
-      const list = await ipc.createLane(workspace.id);
-      const target = list.find((item) => item.id === workspace.id) ?? list[0];
-      const pending = (target?.lanes ?? []).filter((lane) => lane.pending);
-      const created = pending.sort((left, right) => right.created_at - left.created_at)[0];
-      if (created === undefined) {
-        setCreateError('新建会话失败：后端未返回新车道');
-        return null;
-      }
-      const next: LaneSelection = {
-        workspaceId: workspace.id,
-        workspacePath: workspace.path,
-        laneId: created.id,
-        destination: created.destination,
-        title: created.title,
-        channel: created.channel,
-        // 刚建好的会话还没有内容：主区域继续留在首屏，直到第一条消息发出。
-        pending: true,
-      };
-      onSelectLane(next);
-      return next;
-    } catch (error) {
-      setCreateError(error instanceof Error ? error.message : '新建会话失败');
-      return null;
-    } finally {
-      setCreating(false);
-    }
-  }, [onSelectLane, workspace]);
-
-  /**
-   * 首屏直接起语音时先建一条会话，返回这一轮可用的工作区与目的地。
-   *
-   * 语音定稿由网关直接提交，界面没有第二次机会去补建车道；因此入口必须在
-   * 采集开始之前就拿到一个真实目的地，否则用户说完话只会被告知「缺少工作区」。
+  /*
+   * 会话引导：首屏直接输入与语音起手都先建会话再提交，时序收在
+   * `useSessionBootstrap` 里，本层只消费它的事实。
    */
-  const ensureVoiceSession = React.useCallback(async () => {
-    const created = await createSession();
-    if (created === null) return null;
-    return { workspaceId: created.workspaceId, replyDestination: created.destination };
-  }, [createSession]);
-
-  /** 首屏直接提交：先建会话，等这一轮目标就绪后再发送。 */
-  const submitFromHero = React.useCallback(
-    (text: string, attachments: AttachmentRef[], structuredInput: string) => {
-      pendingHeroText.current = { text, attachments, structuredInput };
-      void createSession().then((target) => {
-        if (target === null) pendingHeroText.current = null;
-      });
-    },
-    [createSession],
-  );
-
-  // 目标就绪才发送：新建会话会切换当前车道并触发一次投影重置，
-  // 若在重置之前把消息发出去，这一轮的本地消息与流式内容都会被重置吃掉。
-  React.useEffect(() => {
-    const pending = pendingHeroText.current;
-    if (pending === null || selection === null) return;
-    if (conversation.laneReadyId !== selection.laneId) return;
-    pendingHeroText.current = null;
-    void conversation.submit(pending.text, pending.attachments, pending.structuredInput);
-  }, [conversation, selection]);
+  const { creating, createError, clearCreateError, submitFromHero, ensureVoiceSession } =
+    useSessionBootstrap({ selection, workspace, conversation, onSelectLane });
 
   /**
    * 工作状态行的主语：最后一条真正在跑的轮次。
@@ -288,32 +190,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
       ? workingLineOf(runningTurn, conversation.queued, conversation.loadingHistory)
       : null;
 
-  /*
-   * 过渡相位：回放还没落地，或过渡面还没停够时长。
-   *
-   * 后半句是必需的：慢了才亮、亮了就撤，会让过渡面自己变成一次闪动。停够时长再交出
-   * 正文，回放的快慢就只体现在它停留的长短上。
-   */
-  const [slowOpening, setSlowOpening] = React.useState(false);
-  const [coverHeld, setCoverHeld] = React.useState(false);
-  React.useEffect(() => {
-    if (!conversation.opening) {
-      setSlowOpening(false);
-      setCoverHeld(false);
-      return undefined;
-    }
-    // 慢过阈值才亮过渡面；亮起后至少停留一个下限，不做「亮了就撤」。
-    const show = window.setTimeout(() => setSlowOpening(true), OPENING_SURFACE_DELAY_MS);
-    const hold = window.setTimeout(
-      () => setCoverHeld(true),
-      OPENING_SURFACE_DELAY_MS + OPENING_SURFACE_MIN_MS,
-    );
-    return () => {
-      window.clearTimeout(show);
-      window.clearTimeout(hold);
-    };
-  }, [conversation.opening]);
-  const settling = conversation.opening || (slowOpening && !coverHeld);
+  const { settling, slowOpening } = useOpeningStage(conversation.opening);
 
   /** 中断当前这一轮；Esc 与停止按钮共用同一个入口。 */
   const interruptTurn = conversation.interrupt;
@@ -341,7 +218,13 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   const actions = useConversationActionsValue(
     {
       submit: (text, attachments, structuredInput) => {
-        void conversationRef.current.submit(text, [...attachments], structuredInput, explicitModel);
+        void conversationRef.current.submit(
+          text,
+          [...attachments],
+          structuredInput,
+          explicitModel,
+          explicitReasoningEffort,
+        );
       },
       unfoldTurn: (interactionId) => conversationRef.current.unfoldTurn(interactionId),
       openResource: (address, params) => railRef.current.openResource(address, params),
@@ -351,6 +234,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
       referenceIndex: () => sessionReferenceIndex(conversationRef.current.state.turns),
     },
     workspacePath,
+    selection?.laneId ?? null,
   );
 
   /*
@@ -437,7 +321,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    * 因此这两个来源都到点自己退场，不长期占着输入框上方的位置。
    */
   useExpiringNotice(conversation.submitError, conversation.clearSubmitError);
-  useExpiringNotice(createError, () => setCreateError(null));
+  useExpiringNotice(createError, clearCreateError);
 
   const openSubagent = React.useMemo(
     () =>
@@ -571,7 +455,12 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
               />
             }
           />
-          {originBar !== null && <SessionOriginBar {...originBar} model={sessionModelLabel || (config?.model ?? '')} />}
+          {originBar !== null && <SessionOriginBar {...originBar} model={effectiveModel.label} />}
+          {memoryReflection !== null && (
+            <div aria-live="polite" className="shrink-0 px-4 pt-1">
+              {memoryReflection}
+            </div>
+          )}
 
           {failure !== null && (
             <div className="shrink-0 px-4 pt-1">
@@ -686,13 +575,12 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 hintVisible={hintVisible}
                 model={effectiveModel.label}
                 models={config?.models ?? []}
-                configBusy={savingConfig}
                 configLocked={selection?.channel === 'cron' || cronJobId !== null}
-                reasoningEffort={fixedReasoningEffort ?? config?.reasoningEffort ?? null}
-                onModelChange={onModelChange}
-                onReasoningEffortChange={(value) =>
-                  void applyConfig({ [KEY_REASONING_EFFORT]: value })
+                reasoningEffort={
+                  fixedReasoningEffort ?? explicitReasoningEffort ?? config?.reasoningEffort ?? null
                 }
+                onModelChange={onModelChange}
+                onReasoningEffortChange={onReasoningEffortChange}
                 onSubmit={
                   selection === null
                     ? (text, attachments, structuredInput) => {
@@ -701,7 +589,13 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                       }
                     : (text, attachments, structuredInput) => {
                         setFollowToken((value) => value + 1);
-                        void conversation.submit(text, attachments, structuredInput, explicitModel);
+                        void conversation.submit(
+                          text,
+                          attachments,
+                          structuredInput,
+                          explicitModel,
+                          explicitReasoningEffort,
+                        );
                       }
                 }
                 onRunCommand={mcp.run}
@@ -729,15 +623,6 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
           changesFor={changesFor}
         />
       </div>
-     <Dialog
-       open={configError !== null}
-       onClose={() => setConfigError(null)}
-       title="保存配置失败"
-       size="sm"
-       primary={{ label: '知道了', onClick: () => setConfigError(null) }}
-     >
-       <p className="text-sm text-danger whitespace-pre-wrap break-words">{configError}</p>
-     </Dialog>
-   </ConversationActionsProvider>
- );
+  </ConversationActionsProvider>
+);
 };

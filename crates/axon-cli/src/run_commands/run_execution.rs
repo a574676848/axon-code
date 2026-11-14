@@ -64,6 +64,9 @@ pub(crate) struct RunJsonEvent {
     pub(crate) turn_events: Vec<AgentTurnEvent>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) wire_events: Vec<WireEventEnvelope>,
+    /// 上一轮的记忆反思提示；无提示时整字段省略，客户端据此决定是否显示。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) memory_reflection_notice: Option<String>,
     pub(crate) warnings: Vec<String>,
     pub(crate) failed_tool_attempts:
         Vec<super::run_outcome_diagnostics::FailedToolAttemptDiagnostic>,
@@ -100,6 +103,7 @@ impl RunJsonEvent {
             reasoning_messages: response.reasoning_messages.clone(),
             turn_events: response.turn_events.clone(),
             wire_events: completed_run_wire_events(&input),
+            memory_reflection_notice: None,
             warnings: diagnostics.warnings,
             failed_tool_attempts: diagnostics.failed_tool_attempts,
             provider_elapsed_ms: diagnostics.provider_elapsed_ms,
@@ -141,6 +145,8 @@ impl RunJsonEvent {
                 memory_autonomy,
                 wire_recorded_at_ms(),
             ),
+            // 失败轮不展示记忆提示：先把注意力留给错误本身。
+            memory_reflection_notice: None,
             warnings: request.persona_warnings.clone(),
             failed_tool_attempts: Vec::new(),
             provider_elapsed_ms: 0,

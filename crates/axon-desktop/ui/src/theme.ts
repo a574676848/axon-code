@@ -15,13 +15,12 @@ import { desktopPreferences } from './ipc';
 const STORAGE_KEY = 'axon.theme';
 
 /**
- * 三套主题的标识与展示名。
+ * 两套主题的标识与展示名。
  *
  * 设置页与命令面板共用这一份：主题名是界面文案，写两遍就会在两处慢慢分叉。
  */
 export const THEME_CHOICES: readonly { id: ThemeId; label: string }[] = [
   { id: 'paper', label: '纸白' },
-  { id: 'forest', label: '冷杉' },
   { id: 'obsidian', label: '黑曜石' },
 ];
 
@@ -58,7 +57,7 @@ function lockThemeTransitions(): void {
 
 /** 归一化外部主题值。 */
 export function normalizeThemeId(raw: unknown): ThemeId {
-  if (raw === 'forest' || raw === 'obsidian') return raw;
+  if (raw === 'obsidian') return raw;
   return 'paper';
 }
 
@@ -90,7 +89,7 @@ export function applyTheme(theme: ThemeId): void {
   const normalized = normalizeThemeId(theme);
   // 先上锁再换色：顺序反过来的话，换色那一帧已经带着过渡跑出去了。
   lockThemeTransitions();
-  if (normalized === 'forest' || normalized === 'obsidian') {
+  if (normalized === 'obsidian') {
     document.documentElement.dataset.theme = normalized;
   } else {
     delete document.documentElement.dataset.theme;
@@ -109,7 +108,7 @@ export function applyTheme(theme: ThemeId): void {
 export function cachedTheme(): ThemeId | null {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw === 'forest' || raw === 'obsidian' || raw === 'paper' ? raw : null;
+    return raw === 'obsidian' || raw === 'paper' ? raw : null;
   } catch {
     return null;
   }

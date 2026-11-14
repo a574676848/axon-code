@@ -111,6 +111,11 @@ pub(super) fn dispatch_wire_event(state: &mut AgentTuiState, event: WireEventEnv
 }
 
 fn dispatch_provider_status(state: &mut AgentTuiState, status: WireProviderStatus) {
+    // provider 状态帧是「这一轮真实用哪个模型」的唯一来源：实时与回放同源，
+    // 头部据此显示真实模型与其上下文窗口，而不是配置默认模型的数据。
+    state
+        .header
+        .record_session_run_model(&status.provider, &status.model);
     state.bridge.provider_activity.push(status, Instant::now());
 }
 
@@ -532,4 +537,39 @@ fn subagent_result_summary(source_summary: &str) -> &str {
     summary
         .split_once('：')
         .map_or(summary, |(_, detail)| detail.trim())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::r#loop::agent_tui::state::runtime_flow_test_support::test_state;
+    use crate::r#loop::agent_tui::wire_event_test_support::wire_event;
+    use axon_protocol::wire::{
+        WireEventKind, WireProviderStatus, WireProviderStatusPhase, WireProviderTransport,
+    };
+
+    #[test]
+    fn provider_status_records_the_session_model_for_the_header() {
+        let mut state = test_state();
+        state.apply_runtime_event(wire_event(WireEventKind::ProviderStatus(
+            WireProviderStatus {
+                provider: "codex-onetoken".to_owned(),
+                model: "gpt-6-astra".to_owned(),
+                phase: WireProviderStatusPhase::Generating,
+                transport: WireProviderTransport::Http,
+                attempt_index: 1,
+                http_status: None,
+                error_message: None,
+                next_provider: None,
+                next_model: None,
+            },
+        )));
+
+        let run = state
+            .header
+            .session_run_model
+            .as_ref()
+            .expect("provider 状态帧应记录会话真实模型");
+        assert_eq!(run.provider, "codex-onetoken");
+        assert_eq!(run.model, "gpt-6-astra");
+    }
 }

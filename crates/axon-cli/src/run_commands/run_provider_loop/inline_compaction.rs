@@ -8,9 +8,9 @@
 use std::path::PathBuf;
 
 use axon_agent_runtime::{
-    AgentModelMessage, CanonicalCheckpoint, CompactedHistory, DEFAULT_WINDOW_ID, SessionNotes,
-    SessionNotesRuntime, WindowArchiveResult, WindowRolloverEngine, WindowRolloverTransaction,
-    WindowRolloverValidationMode,
+    AgentModelMessage, CanonicalCheckpoint, CheckpointSource, CompactedHistory, DEFAULT_WINDOW_ID,
+    SessionNotes, SessionNotesRuntime, WindowArchiveResult, WindowRolloverEngine,
+    WindowRolloverTransaction, WindowRolloverValidationMode,
 };
 use axon_domain::{AxonError, AxonResult};
 
@@ -30,6 +30,18 @@ const INLINE_ROLLOVER_ABORTED_REASON: &str = "窗口轮转未通过门禁";
 /// 内联轮转的 replacement history 必然携带 checkpoint 交接投影，否则 publish 会被拒绝。
 const CHECKPOINT_INJECTED_INTO_NEW_WINDOW: bool = true;
 
+#[cfg(test)]
+thread_local! {
+    /// 测试用故障注入：置位后本线程下一次投影安装强制失败，用于验证
+    /// 「归档已写、投影失败」时归档与 notes 是否按补偿路径回滚。
+    ///
+    /// 用线程局部而非全局开关：测试夹具共用同一个 session id 且并行执行，
+    /// 全局开关或按 session id 登记都会误伤同 id 的其他用例。
+    /// 仅在测试构建中生效，生产行为不变。
+    pub(super) static FORCE_PROJECTION_FAILURE: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
 struct PreparedInlineWindowRollover {
     session_dir: PathBuf,
     current_window_number: u64,
@@ -37,6 +49,8 @@ struct PreparedInlineWindowRollover {
     expected_revision: u64,
     lifecycle_id: String,
     checkpoint: CanonicalCheckpoint,
+    /// 本次摘要的来源：模型原样提交还是运行时投影，提交成功后落回 notes。
+    checkpoint_source: CheckpointSource,
     started_at_ms: u64,
     persisted_at_ms: i64,
 }
@@ -100,7 +114,8 @@ impl<'request, 'sink> InlineWindowRollover<'request, 'sink> {
         SessionNotesRuntime::initialize_goal_anchor(&session_dir, user_objective, persisted_at_ms)?;
         let notes = SessionNotes::load_from_session(&session_dir)?
             .unwrap_or_else(|| SessionNotes::new(Default::default(), persisted_at_ms));
-        let summary = notes.try_render_canonical_summary(&session_dir, messages)?;
+        let (summary, checkpoint_source) =
+            notes.render_canonical_summary_with_source(&session_dir, messages)?;
         let checkpoint = CanonicalCheckpoint::parse(&summary, messages).map_err(|error| {
             AxonError::runtime_failure(format!("窗口轮转 checkpoint 无效：{error}"))
         })?;
@@ -114,6 +129,7 @@ impl<'request, 'sink> InlineWindowRollover<'request, 'sink> {
                 self.request.session_id, notes.window_number
             ),
             checkpoint: checkpoint.clone(),
+            checkpoint_source,
             started_at_ms,
             persisted_at_ms,
         };
@@ -347,14 +363,18 @@ impl InlineWindowRollover<'_, '_> {
             &RunSessionRecord::started(self.request),
         )
         .map_err(AxonError::runtime_failure)?;
-        let projection = super::super::run_thread_store::install_active_compaction_projection(
-            &self.request.config_path,
-            &root,
-            &self.request.session_id,
-            &super::super::run_session_store::run_persistence_assistant_part_id(self.request),
-            expected_sequence,
-            compaction,
-        );
+        // 投影与「摘要来源落库」同属一次提交：任一步失败都整体回滚，
+        // 不留下「窗口已推进但来源未知」的半状态。
+        let projection =
+            install_compaction_projection(self.request, &root, expected_sequence, compaction)
+                .and_then(|through_sequence| {
+                    super::record_checkpoint_source(
+                        &prepared.session_dir,
+                        prepared.checkpoint_source,
+                        prepared.current_window_number,
+                    )?;
+                    Ok(through_sequence)
+                });
         match projection {
             Ok(through_sequence) => Ok((through_sequence, rollover)),
             Err(error) => {
@@ -367,14 +387,42 @@ impl InlineWindowRollover<'_, '_> {
                     previous_archive.as_deref(),
                 );
                 Err(AxonError::runtime_failure(match rollback {
-                    Ok(()) => format!("活动窗口投影失败，归档和窗口身份已回滚：{error}"),
+                    Ok(()) => {
+                        format!("活动窗口投影或摘要来源落库失败，归档和窗口身份已回滚：{error}")
+                    }
                     Err(rollback_error) => format!(
-                        "活动窗口投影失败且窗口回滚失败：projection={error}，rollback={rollback_error:?}"
+                        "活动窗口投影或摘要来源落库失败且窗口回滚失败：projection={error}，rollback={rollback_error:?}"
                     ),
                 }))
             }
         }
     }
+}
+
+/// 安装活动窗口投影；测试构建下可被 `FORCE_PROJECTION_FAILURE` 强制失败。
+///
+/// 抽成独立函数只为给补偿路径留一个可注入的失败点：生产路径一行不变，
+/// 测试则能在「归档已写、投影未落」这个唯一危险窗口里验证回滚。
+fn install_compaction_projection(
+    request: &RunRequest,
+    root: &std::path::Path,
+    expected_sequence: u64,
+    compaction: axon_session::ThreadCompaction,
+) -> Result<u64, String> {
+    #[cfg(test)]
+    {
+        if FORCE_PROJECTION_FAILURE.with(|flag| flag.replace(false)) {
+            return Err("注入的活动窗口投影失败".to_owned());
+        }
+    }
+    super::super::run_thread_store::install_active_compaction_projection(
+        &request.config_path,
+        root,
+        &request.session_id,
+        &super::super::run_session_store::run_persistence_assistant_part_id(request),
+        expected_sequence,
+        compaction,
+    )
 }
 
 fn read_archive_snapshot(prepared: &PreparedInlineWindowRollover) -> AxonResult<Option<Vec<u8>>> {

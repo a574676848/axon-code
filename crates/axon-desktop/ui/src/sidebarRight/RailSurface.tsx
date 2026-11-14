@@ -16,11 +16,12 @@ import { FileTree } from '../components/conversation/fileTree';
 import { FileTypeIcon } from '../components/conversation/fileIcons';
 import type { ChangedFile } from '../conversation/transcript';
 import { ChangesReview } from './ChangesReview';
+import { ChoiceBody } from './ChoiceBody';
 import { DocumentPreview } from './DocumentPreview';
 import { GuideBody } from './GuideBody';
 import { TerminalBody } from './TerminalBody';
 import { CompassIcon } from './guideArtwork';
-import { addressPath, parseChangesAddress } from './registry';
+import { addressPath, parseChangesAddress, parseChoiceAddress } from './registry';
 import type { RailPane, RailTab } from './model';
 import type { RailController } from './useRailLayout';
 
@@ -88,18 +89,42 @@ export const RailTabBody: React.FC<{
       />
     );
   }
-  if (root === null) {
+  if (tab.kind === 'choice') {
+    const choice = tab.address === null ? null : parseChoiceAddress(tab.address);
+    if (choice === null) {
+      return (
+        <EmptyState
+          className="flex-1"
+          icon={<FileIcon size={20} />}
+          title="没有可选的候选"
+          description="这个资源地址解析不出候选文件。"
+        />
+      );
+    }
     return (
-      <EmptyState
-        className="flex-1"
-        icon={<FolderIcon size={20} />}
-        title="先选择一个工作区"
-        description="选中工作区后才能在这里浏览文件与预览内容。"
+      <ChoiceBody
+        reference={choice.reference}
+        candidates={choice.candidates}
+        onOpen={onOpenFile}
       />
     );
   }
+  /*
+   * 文件树与终端都要一个工作区当基准；预览页不必：绝对路径与 `~` 开头的路径
+   * 不依赖任何根目录，后端本来就允许打开磁盘上的任意一份文件。
+   */
+  const missingWorkspace = (
+    <EmptyState
+      className="flex-1"
+      icon={<FolderIcon size={20} />}
+      title="先选择一个工作区"
+      description="选中工作区后才能在这里浏览文件与运行终端。"
+    />
+  );
   if (tab.kind === 'terminal') {
-    return (
+    return root === null ? (
+      missingWorkspace
+    ) : (
       <TerminalBody
         root={root}
         shellPath={tab.params.shellPath}
@@ -108,7 +133,11 @@ export const RailTabBody: React.FC<{
     );
   }
   if (tab.kind === 'files') {
-    return <FileTree root={root} activePath={activePath} onOpenFile={onOpenFile} />;
+    return root === null ? (
+      missingWorkspace
+    ) : (
+      <FileTree root={root} activePath={activePath} onOpenFile={onOpenFile} />
+    );
   }
   const path = tab.address === null ? null : addressPath(tab.address);
   if (path === null) {

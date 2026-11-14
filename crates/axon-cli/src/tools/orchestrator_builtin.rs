@@ -486,3 +486,5 @@ mod test_support;
 #[cfg(test)]
 #[path = "orchestrator_intent_tests.rs"]
 mod intent_tests;
+
+pub(super) use super::orchestrator_turn_trace::execute_turn_trace;

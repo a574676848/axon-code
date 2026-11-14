@@ -120,6 +120,7 @@ impl Fixture {
             reply_destination: "jira:AXON-1".to_owned(),
             attachments: Vec::new(),
             model: None,
+            reasoning_effort: None,
         }
     }
 }

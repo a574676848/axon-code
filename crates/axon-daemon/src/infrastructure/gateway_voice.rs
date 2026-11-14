@@ -515,6 +515,7 @@ fn voice_envelope(
         reply_destination: request.reply_destination.clone(),
         attachments: Vec::new(),
         model: None,
+        reasoning_effort: None,
     }
 }
 

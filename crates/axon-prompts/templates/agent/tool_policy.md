@@ -60,8 +60,8 @@
 
 1. **无依赖必须同批发完**：互不依赖的只读调用（`read_file`、`glob`、`search`、`memory_search`、`list_agents`、`job_output`）必须在同一条消息里一次发出；逐个发起只浪费时间与往返。
 2. **有依赖必须串行**：后一个调用的参数来自前一个结果时，禁止并行，也禁止先猜参数再补调用。
-3. **写与编辑一律独占**：任何写、编辑或未知写入集的调用都不与其他调用同批；写并行不存在，不要按写集猜测能否并发。
-4. **独占工具不与其他调用同批**：`update_plan`、`ask_user_question`、`send_message`、`memory_write`、`write_stdin` 永远单独一批。
+3. **写可以同批，前提是各写各的文件**：`edit` 与写入路径可判定的写命令只占用自己触碰的文件，所以不同文件的写、以及不同文件的读写都可以放进同一批并行。判断标准只有一条——本批内每个调用声明的目标路径互不相交；同一文件的读写、写写必须拆成不同批次，顺序按你写下的调用顺序。
+4. **写入集不可判定的命令仍独占整批**：构建、包管理、脚本解释器无法静态枚举写入面（`cargo test`、`npm install`、`python build.py`），这类命令单独成批；`update_plan`、`ask_user_question`、`send_message`、`memory_write`、`write_stdin` 等改运行态的工具同样永远单独一批。
 5. **委派也算并行**：多个独立 sidecar 用 `delegate_to_fast` 同批发出；不要一边自己串行做完、一边再派子代理。
 
 </tool_orchestration_protocol>

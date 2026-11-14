@@ -7,15 +7,12 @@
 //! - `replay_chain`：沿 parent_session_id 回溯，按时间正序回放整条会话链
 //! - `list_sessions`：列出会话摘要
 
-use std::time::Duration;
-use std::{
-    collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
-};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 use axon_agent_runtime::ContentArchiveRuntime;
 use axon_session::{ThreadCompaction, session_store_path};
-use rusqlite::{Connection, OpenFlags, OptionalExtension as _, params};
+use rusqlite::{Connection, OptionalExtension as _, params};
 
 use super::run_session_store::{RunSessionRecord, resolved_axon_root};
 
@@ -32,8 +29,10 @@ mod transaction;
 pub(crate) use api::append_rollout_event_for_session;
 pub(crate) use api::{
     commit_session_to_rollout, ensure_current_turn_to_rollout, install_active_rollout_window,
-    install_rollout_compaction, load_rollout_history_window, load_rollout_history_window_from_root,
-    load_session_turn, load_session_usage, load_session_usage_totals_from_root,
+    install_rollout_compaction, load_latest_reflection_notice_from_root,
+    load_latest_session_model_from_root, load_previous_reflection_notice, load_recent_turn_facts,
+    load_rollout_history_window, load_rollout_history_window_from_root, load_session_turn,
+    load_session_usage, load_session_usage_totals_from_root, load_turn_sequence,
     read_rollout_tool_output, replay_rollout_events, restore_rollout_compaction,
     select_rollout_session,
 };
@@ -43,32 +42,39 @@ use rollout_events::events_for_session;
 pub(crate) use rollout_events::{RolloutEventRecord, RolloutEventType};
 pub(crate) use session_usage::SessionUsageTotals;
 
+#[path = "run_rollout_store/retention.rs"]
+mod retention;
+#[path = "run_rollout_store/schema.rs"]
+mod schema;
+
 /// rollout SQLite 文件名。
 pub(crate) const CLI_ROLLOUT_DB_FILE: &str = "rollout.sqlite3";
 /// rollout SQLite schema 版本。
 pub(crate) const ROLLOUT_SQLITE_SCHEMA_VERSION: i64 = 6;
 /// 当前 Thread 选择表的单例键。
 const CURRENT_SESSION_SINGLETON_KEY: i64 = 1;
-/// rollout SQLite busy timeout，单位毫秒。
-const ROLLOUT_SQLITE_BUSY_TIMEOUT_MS: u64 = 5_000;
-/// 每轮会话清理最多回收的 SQLite 空闲页数。
-const ROLLOUT_INCREMENTAL_VACUUM_PAGE_BATCH: u32 = 256;
-const ROLLOUT_CLEANUP_BATCH_LIMIT: usize = 256;
-/// rollout_sessions 目标 schema 必需列。
-const ROLLOUT_SESSION_COLUMNS: &[&str] = &[
-    "session_id",
-    "parent_session_id",
-    "created_at_ms",
-    "updated_at_ms",
-    "provider",
-    "model",
-    "title",
-    "history_checkpoint_json",
-];
 
-pub(super) struct RolloutHistoryWindow {
-    pub(super) compaction: Option<ThreadCompaction>,
-    pub(super) turns: Vec<(u64, RunSessionRecord)>,
+pub(crate) struct RolloutHistoryWindow {
+    pub(crate) compaction: Option<ThreadCompaction>,
+    pub(crate) turns: Vec<(u64, RunSessionRecord)>,
+}
+
+/// 一轮的零模型事实摘要，供人格规则层与信号采集使用。
+///
+/// 只保留阈值判定需要的量：轮序、时间、输入长度、成败与既有状态序列。
+/// 正文与工具输出一律不进来，避免把历史整条搬进收口路径。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecentTurnFact {
+    /// 会话内轮序。
+    pub(crate) sequence: u64,
+    /// 落盘时间，Unix 毫秒。
+    pub(crate) recorded_at_ms: u64,
+    /// 该轮用户输入的字符数。
+    pub(crate) prompt_chars: u32,
+    /// 该轮是否以失败收场。
+    pub(crate) failed: bool,
+    /// 该轮轨迹里记录的用户状态序列；未采集过时为空。
+    pub(crate) affect_sequence: Vec<String>,
 }
 
 /// resume 链回放视图（可序列化，不泄漏内部 RunSessionRecord 结构）。
@@ -115,26 +121,10 @@ pub(crate) struct RolloutSqliteStore {
     connection: Connection,
 }
 
-/// rollout 会话清理结果。
-#[derive(Debug, Default)]
-pub(crate) struct RolloutCleanupReport {
-    /// 已删除的会话 ID。
-    pub(crate) session_ids: Vec<String>,
-    /// 是否完成空间回收。
-    pub(crate) vacuumed: bool,
-}
-
-#[derive(Debug)]
-struct RolloutSessionMetadata {
-    session_id: String,
-    parent_session_id: Option<String>,
-    updated_at_ms: i64,
-}
-
 impl RolloutSqliteStore {
     /// 打开并初始化 rollout store。
     pub(crate) fn open(path: &Path) -> Result<Self, String> {
-        let connection = open_connection(path)?;
+        let connection = schema::open_connection(path)?;
         let store = Self { connection };
         store.initialize_schema()?;
         Ok(store)
@@ -142,168 +132,8 @@ impl RolloutSqliteStore {
 
     /// 以只读方式打开既有 rollout store，供 dry-run 候选统计使用。
     pub(crate) fn open_read_only(path: &Path) -> Result<Self, String> {
-        let connection = open_read_only_connection(path)?;
+        let connection = schema::open_read_only_connection(path)?;
         Ok(Self { connection })
-    }
-
-    /// 只读查找已过期且不属于当前会话树的 rollout 会话家族。
-    pub(crate) fn stale_session_family_ids(
-        &mut self,
-        cutoff_ms: u64,
-        protected_session_ids: &HashSet<String>,
-    ) -> Result<Vec<String>, String> {
-        let cutoff_ms = i64::try_from(cutoff_ms).unwrap_or(i64::MAX);
-        let transaction = self
-            .connection
-            .transaction()
-            .map_err(|_| "rollout 清理查询事务启动失败".to_owned())?;
-        let stale_ids =
-            stale_session_ids_in_transaction(&transaction, cutoff_ms, protected_session_ids)?;
-        transaction
-            .commit()
-            .map_err(|_| "rollout 清理查询事务提交失败".to_owned())?;
-        Ok(stale_ids)
-    }
-
-    /// 在附属存储清理完成后，重新校验并原子删除仍过期的候选会话家族。
-    pub(crate) fn finalize_stale_session_family_removal(
-        &mut self,
-        candidate_session_ids: &[String],
-        cutoff_ms: u64,
-        protected_session_ids: &HashSet<String>,
-    ) -> Result<RolloutCleanupReport, String> {
-        if candidate_session_ids.is_empty() {
-            return Ok(RolloutCleanupReport::default());
-        }
-        let cutoff_ms = i64::try_from(cutoff_ms).unwrap_or(i64::MAX);
-        let candidates = candidate_session_ids.iter().collect::<HashSet<_>>();
-        let mut transaction = self
-            .connection
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .map_err(|_| "rollout 清理事务启动失败".to_owned())?;
-        let stale_ids =
-            stale_session_ids_in_transaction(&transaction, cutoff_ms, protected_session_ids)?
-                .into_iter()
-                .filter(|session_id| candidates.contains(session_id))
-                .collect::<Vec<_>>();
-        if stale_ids.is_empty() {
-            transaction
-                .commit()
-                .map_err(|_| "rollout 空清理事务提交失败".to_owned())?;
-            return Ok(RolloutCleanupReport::default());
-        }
-        let first_batch_len = stale_ids.len().min(ROLLOUT_CLEANUP_BATCH_LIMIT);
-        delete_rollout_session_rows(&transaction, &stale_ids[..first_batch_len])?;
-        transaction
-            .commit()
-            .map_err(|_| "rollout 会话清理事务提交失败".to_owned())?;
-        for ids in stale_ids[first_batch_len..].chunks(ROLLOUT_CLEANUP_BATCH_LIMIT) {
-            transaction = self
-                .connection
-                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-                .map_err(|_| "rollout 清理事务启动失败".to_owned())?;
-            delete_rollout_session_rows(&transaction, ids)?;
-            transaction
-                .commit()
-                .map_err(|_| "rollout 会话清理事务提交失败".to_owned())?;
-        }
-        reclaim_rollout_space(&self.connection)?;
-        Ok(RolloutCleanupReport {
-            session_ids: stale_ids,
-            vacuumed: true,
-        })
-    }
-
-    fn initialize_schema(&self) -> Result<(), String> {
-        self.connection
-            .pragma_update(None, "auto_vacuum", "INCREMENTAL")
-            .map_err(|_| "rollout SQLite 自动空间回收配置失败".to_owned())?;
-        if self.rollout_sessions_needs_rebuild()? {
-            self.connection
-                .execute_batch(
-                    r"
-                    DROP TABLE IF EXISTS rollout_events;
-                    DROP TABLE IF EXISTS rollout_turns;
-                    DROP TABLE IF EXISTS rollout_sessions;
-                    ",
-                )
-                .map_err(|_| "rollout SQLite 旧 schema 清理失败".to_owned())?;
-        }
-        self.connection
-            .execute_batch(
-                r"
-                CREATE TABLE IF NOT EXISTS rollout_sessions (
-                    session_id TEXT PRIMARY KEY NOT NULL,
-                    parent_session_id TEXT,
-                    created_at_ms INTEGER NOT NULL,
-                    updated_at_ms INTEGER NOT NULL,
-                    provider TEXT NOT NULL,
-                    model TEXT NOT NULL,
-                    title TEXT,
-                    history_checkpoint_json TEXT
-                );
-                CREATE TABLE IF NOT EXISTS rollout_turns (
-                    session_id TEXT NOT NULL,
-                    sequence INTEGER NOT NULL,
-                    assistant_part_id TEXT NOT NULL,
-                    recorded_at_ms INTEGER NOT NULL,
-                    record_json TEXT NOT NULL,
-                    PRIMARY KEY (session_id, sequence),
-                    UNIQUE (session_id, assistant_part_id),
-                    FOREIGN KEY (session_id) REFERENCES rollout_sessions(session_id) ON DELETE CASCADE
-                );
-                CREATE TABLE IF NOT EXISTS rollout_events (
-                    session_id TEXT NOT NULL,
-                    sequence INTEGER NOT NULL,
-                    event_type TEXT NOT NULL,
-                    recorded_at_ms INTEGER NOT NULL,
-                    event_json TEXT NOT NULL,
-                    PRIMARY KEY (session_id, sequence)
-                );
-                CREATE TABLE IF NOT EXISTS rollout_current_session (
-                    singleton_key INTEGER PRIMARY KEY NOT NULL CHECK (singleton_key = 1),
-                    session_id TEXT NOT NULL,
-                    FOREIGN KEY (session_id) REFERENCES rollout_sessions(session_id) ON DELETE CASCADE
-                );
-                CREATE INDEX IF NOT EXISTS idx_rollout_created_at
-                    ON rollout_sessions (updated_at_ms);
-                CREATE INDEX IF NOT EXISTS idx_rollout_parent
-                    ON rollout_sessions (parent_session_id);
-                ",
-            )
-            .map_err(|_| "rollout SQLite schema 初始化失败".to_owned())?;
-        self.connection
-            .pragma_update(None, "user_version", ROLLOUT_SQLITE_SCHEMA_VERSION)
-            .map_err(|_| "rollout SQLite schema 版本配置失败".to_owned())?;
-        session_usage::ensure_usage_columns(&self.connection)?;
-        Ok(())
-    }
-
-    fn rollout_sessions_needs_rebuild(&self) -> Result<bool, String> {
-        let current_version: i64 = self
-            .connection
-            .pragma_query_value(None, "user_version", |row| row.get(0))
-            .map_err(|_| "rollout SQLite schema 版本读取失败".to_owned())?;
-        let columns = self.rollout_session_columns()?;
-        if columns.is_empty() {
-            return Ok(current_version != ROLLOUT_SQLITE_SCHEMA_VERSION);
-        }
-        Ok(current_version != ROLLOUT_SQLITE_SCHEMA_VERSION
-            || ROLLOUT_SESSION_COLUMNS
-                .iter()
-                .any(|required| !columns.iter().any(|column| column == required)))
-    }
-
-    fn rollout_session_columns(&self) -> Result<Vec<String>, String> {
-        let mut statement = self
-            .connection
-            .prepare("PRAGMA table_info(rollout_sessions)")
-            .map_err(|_| "rollout SQLite schema 检查准备失败".to_owned())?;
-        let rows = statement
-            .query_map([], |row| row.get::<_, String>(1))
-            .map_err(|_| "rollout SQLite schema 检查失败".to_owned())?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|_| "rollout SQLite schema 列解析失败".to_owned())
     }
 
     /// 原子写入会话最新状态、turn、事件、标题与 wire resume snapshot。
@@ -353,6 +183,147 @@ impl RolloutSqliteStore {
             serde_json::from_str(&value).map_err(|_| "rollout turn JSON 无效".to_owned())
         })
         .transpose()
+    }
+
+    /// 按会话内轮序读取单轮记录。
+    ///
+    /// 这里的 `sequence` 是 `rollout_turns.sequence`，即同一会话内的轮次下标，
+    /// 与 `replay_chain` 的会话祖先链下标是两套编号，不可互换。
+    pub(crate) fn load_turn_by_sequence(
+        &self,
+        session_id: &str,
+        sequence: u64,
+    ) -> Result<Option<RunSessionRecord>, String> {
+        let json = self
+            .connection
+            .query_row(
+                "SELECT record_json FROM rollout_turns
+                 WHERE session_id = ?1 AND sequence = ?2
+                 LIMIT 1",
+                params![session_id, i64::try_from(sequence).unwrap_or(i64::MAX)],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|_| "rollout turn 读取失败".to_owned())?;
+        json.map(|value| {
+            serde_json::from_str(&value).map_err(|_| "rollout turn JSON 无效".to_owned())
+        })
+        .transpose()
+    }
+
+    /// 读取某一轮在会话内的轮序；该轮未落盘时返回 `None`。
+    pub(crate) fn turn_sequence(
+        &self,
+        session_id: &str,
+        assistant_part_id: &str,
+    ) -> Result<Option<u64>, String> {
+        let sequence = self
+            .connection
+            .query_row(
+                "SELECT sequence FROM rollout_turns
+                 WHERE session_id = ?1 AND assistant_part_id = ?2
+                 LIMIT 1",
+                params![session_id, assistant_part_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(|_| "rollout turn 轮序读取失败".to_owned())?;
+        Ok(sequence.and_then(|value| u64::try_from(value).ok()))
+    }
+
+    /// 按轮序倒序读取最近若干轮的事实摘要。
+    ///
+    /// 只做标量投影，不把 `record_json` 整条反序列化：这条路径每轮收口都跑一次，
+    /// 而单条 record 含完整工具回执与事件流，几十条就是数百 KB，解析成本远超它
+    /// 提供的信息量。`json_extract` 直接在 SQLite 侧取到需要的那几个字段。
+    ///
+    /// 坏行跳过而不是整体失败：一条历史记录损坏不该让本轮信号全部归零。
+    pub(crate) fn recent_turn_facts(
+        &self,
+        session_id: &str,
+        limit: u32,
+    ) -> Result<Vec<RecentTurnFact>, String> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT sequence, recorded_at_ms,
+                        COALESCE(length(json_extract(record_json, '$.prompt')), 0),
+                        json_extract(record_json, '$.failure') IS NOT NULL,
+                        COALESCE(json_extract(record_json, '$.turnTrace.signals.affectSequence'), '[]')
+                 FROM rollout_turns
+                 WHERE session_id = ?1 ORDER BY sequence DESC LIMIT ?2",
+            )
+            .map_err(|_| "rollout 轮次事实查询准备失败".to_owned())?;
+        let rows = statement
+            .query_map(params![session_id, i64::from(limit)], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, bool>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })
+            .map_err(|_| "rollout 轮次事实查询失败".to_owned())?;
+        let mut facts = Vec::new();
+        for row in rows {
+            let (sequence, recorded_at_ms, prompt_chars, failed, affect_json) =
+                row.map_err(|_| "rollout 轮次事实行读取失败".to_owned())?;
+            facts.push(RecentTurnFact {
+                sequence: u64::try_from(sequence).unwrap_or(0),
+                recorded_at_ms: u64::try_from(recorded_at_ms).unwrap_or(0),
+                prompt_chars: u32::try_from(prompt_chars).unwrap_or(0),
+                failed,
+                affect_sequence: serde_json::from_str(&affect_json).unwrap_or_default(),
+            });
+        }
+        Ok(facts)
+    }
+
+    /// 读同一会话里「本轮之外最近一轮」的记忆反思提示。
+    ///
+    /// 反思是轮后异步治理的产物，本轮运行期拿不到自己那条；能确定看到的只有上一轮。
+    /// 只投影 `reflectionNotice` 一个标量，不反序列化整条 record。
+    pub(crate) fn previous_reflection_notice(
+        &self,
+        session_id: &str,
+        current_part_id: &str,
+    ) -> Result<Option<String>, String> {
+        self.connection
+            .query_row(
+                "SELECT json_extract(record_json, '$.reflectionNotice')
+                 FROM rollout_turns
+                 WHERE session_id = ?1 AND assistant_part_id <> ?2
+                 ORDER BY sequence DESC LIMIT 1",
+                params![session_id, current_part_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(|_| "rollout 反思提示读取失败".to_owned())
+            .map(Option::flatten)
+    }
+
+    /// 读某会话**最新一轮**的记忆反思提示；该轮没有提示时返回 `None`。
+    ///
+    /// 与 [`Self::previous_reflection_notice`] 的差别只在取舍：这里要「这条会话现在
+    /// 能对外展示的最新鲜结果」，供只读接口投影给桌面；那里要「上一轮」，供本轮收口
+    /// 输出携带。两者都只投影一个标量，不反序列化整条 record。
+    pub(crate) fn latest_reflection_notice(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<String>, String> {
+        self.connection
+            .query_row(
+                "SELECT json_extract(record_json, '$.reflectionNotice')
+                 FROM rollout_turns
+                 WHERE session_id = ?1
+                 ORDER BY sequence DESC LIMIT 1",
+                params![session_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(|_| "rollout 反思提示读取失败".to_owned())
+            .map(Option::flatten)
     }
 
     /// 仅允许读取指定 session 中已持久化 provider receipt 关联的完整工具输出。
@@ -505,18 +476,6 @@ impl RolloutSqliteStore {
     }
 }
 
-fn session_root(session_id: &str, parents: &HashMap<String, Option<String>>) -> String {
-    let mut current = session_id.to_owned();
-    let mut visited = HashSet::new();
-    while let Some(Some(parent)) = parents.get(&current) {
-        if !visited.insert(current.clone()) || !parents.contains_key(parent) {
-            break;
-        }
-        current.clone_from(parent);
-    }
-    current
-}
-
 /// 解析 rollout SQLite 文件路径。
 pub(crate) fn resolved_rollout_db_path(config_path: &Path) -> Result<PathBuf, &'static str> {
     Ok(session_store_path(&resolved_axon_root(config_path)?).join(CLI_ROLLOUT_DB_FILE))
@@ -551,144 +510,6 @@ pub(crate) fn replay_session_chain(
             startup_timeline: record.startup_timeline,
         })
         .collect())
-}
-
-fn open_connection(path: &Path) -> Result<Connection, String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|_| "无法创建 rollout SQLite 目录".to_owned())?;
-    }
-    let connection =
-        Connection::open(path).map_err(|_| "无法打开 rollout SQLite 数据库".to_owned())?;
-    connection
-        .busy_timeout(Duration::from_millis(ROLLOUT_SQLITE_BUSY_TIMEOUT_MS))
-        .map_err(|_| "rollout SQLite busy timeout 配置失败".to_owned())?;
-    connection
-        .pragma_update(None, "journal_mode", "WAL")
-        .map_err(|_| "rollout SQLite WAL 配置失败".to_owned())?;
-    connection
-        .pragma_update(None, "foreign_keys", true)
-        .map_err(|_| "rollout SQLite foreign_keys 配置失败".to_owned())?;
-    Ok(connection)
-}
-
-fn open_read_only_connection(path: &Path) -> Result<Connection, String> {
-    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|_| "无法只读打开 rollout SQLite 数据库".to_owned())?;
-    connection
-        .busy_timeout(Duration::from_millis(ROLLOUT_SQLITE_BUSY_TIMEOUT_MS))
-        .map_err(|_| "rollout SQLite busy timeout 配置失败".to_owned())?;
-    connection
-        .pragma_update(None, "foreign_keys", true)
-        .map_err(|_| "rollout SQLite foreign_keys 配置失败".to_owned())?;
-    Ok(connection)
-}
-
-fn read_rollout_session_metadata(
-    transaction: &rusqlite::Transaction<'_>,
-) -> Result<Vec<RolloutSessionMetadata>, String> {
-    let mut statement = transaction
-        .prepare("SELECT session_id, parent_session_id, updated_at_ms FROM rollout_sessions")
-        .map_err(|_| "rollout 会话清理查询失败".to_owned())?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok(RolloutSessionMetadata {
-                session_id: row.get(0)?,
-                parent_session_id: row.get(1)?,
-                updated_at_ms: row.get(2)?,
-            })
-        })
-        .map_err(|_| "rollout 会话清理查询失败".to_owned())?;
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|_| "rollout 会话清理记录读取失败".to_owned())
-}
-
-fn stale_session_ids_in_transaction(
-    transaction: &rusqlite::Transaction<'_>,
-    cutoff_ms: i64,
-    protected_session_ids: &HashSet<String>,
-) -> Result<Vec<String>, String> {
-    let current_session_id = transaction
-        .query_row(
-            "SELECT session_id FROM rollout_current_session WHERE singleton_key = ?1",
-            [CURRENT_SESSION_SINGLETON_KEY],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(|_| "rollout 当前会话读取失败".to_owned())?;
-    let sessions = read_rollout_session_metadata(transaction)?;
-    Ok(stale_session_ids(
-        sessions,
-        current_session_id.as_deref(),
-        protected_session_ids,
-        cutoff_ms,
-    ))
-}
-
-fn stale_session_ids(
-    sessions: Vec<RolloutSessionMetadata>,
-    current_session_id: Option<&str>,
-    protected_session_ids: &HashSet<String>,
-    cutoff_ms: i64,
-) -> Vec<String> {
-    let parents = sessions
-        .iter()
-        .map(|session| {
-            (
-                session.session_id.clone(),
-                session.parent_session_id.clone(),
-            )
-        })
-        .collect::<HashMap<_, _>>();
-    let protected_root = current_session_id.map(|session_id| session_root(session_id, &parents));
-    let mut families = HashMap::<String, Vec<RolloutSessionMetadata>>::new();
-    for session in sessions {
-        let root = session_root(&session.session_id, &parents);
-        families.entry(root).or_default().push(session);
-    }
-    let mut stale_ids = families
-        .into_iter()
-        .filter(|(root, members)| {
-            protected_root.as_deref() != Some(root.as_str())
-                && !members
-                    .iter()
-                    .any(|session| protected_session_ids.contains(&session.session_id))
-                && members
-                    .iter()
-                    .all(|session| session.updated_at_ms < cutoff_ms)
-        })
-        .flat_map(|(_, members)| members.into_iter().map(|session| session.session_id))
-        .collect::<Vec<_>>();
-    stale_ids.sort();
-    stale_ids
-}
-
-fn delete_rollout_session_rows(
-    transaction: &rusqlite::Transaction<'_>,
-    session_ids: &[String],
-) -> Result<(), String> {
-    for session_id in session_ids {
-        for (table, message) in [
-            ("rollout_events", "rollout 事件清理失败"),
-            ("rollout_turns", "rollout turn 清理失败"),
-            ("rollout_sessions", "rollout 会话清理失败"),
-        ] {
-            transaction
-                .execute(
-                    &format!("DELETE FROM {table} WHERE session_id = ?1"),
-                    [session_id],
-                )
-                .map_err(|_| message.to_owned())?;
-        }
-    }
-    Ok(())
-}
-
-fn reclaim_rollout_space(connection: &Connection) -> Result<(), String> {
-    connection
-        .execute_batch(&format!(
-            "PRAGMA incremental_vacuum({ROLLOUT_INCREMENTAL_VACUUM_PAGE_BATCH})"
-        ))
-        .map_err(|_| "rollout SQLite 增量空间回收失败".to_owned())
 }
 
 #[cfg(test)]

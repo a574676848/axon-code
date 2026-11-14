@@ -50,6 +50,12 @@ pub struct EventSubmission {
     /// 未填写时交给会话历史与 `agent.default_model` 决定。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// 发起方显式指定的本轮推理强度（`agent.reasoning_effort` 的取值域）。
+    ///
+    /// 与 `model` 同源：只有用户在本会话里改过强度时才填写，未填写时交给
+    /// `agent.reasoning_effort` 决定。它随本轮下发，不写回全局配置。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 /// 提交回执。
@@ -215,6 +221,7 @@ mod tests {
             reply_destination: "workbench-1".to_owned(),
             local_files: Vec::new(),
             model: Some("balanced".to_owned()),
+            reasoning_effort: Some("high".to_owned()),
         })
         .expect("提交信封应可序列化");
         assert_eq!(value["sourceChannel"], "desktop");
@@ -222,6 +229,7 @@ mod tests {
         assert_eq!(value["replyDestination"], "workbench-1");
         assert!(value["localFiles"].is_array(), "附件字段必须存在且为数组");
         assert_eq!(value["model"], "balanced");
+        assert_eq!(value["reasoningEffort"], "high");
     }
 
     #[test]

@@ -14,6 +14,8 @@ fn settled(now_ms: u64) -> PersonaEvent {
         persona_drift_bp: 0,
         drift_reason: None,
         now_ms,
+        observed_failure_streak: None,
+        rule_cause: None,
     })
 }
 

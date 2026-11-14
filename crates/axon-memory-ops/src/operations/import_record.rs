@@ -222,7 +222,6 @@ fn source_origin_from_code(value: &str) -> Result<MemorySourceOrigin, &'static s
         "command_completion_feedback" | "commandCompletionFeedback" => {
             Ok(MemorySourceOrigin::CommandCompletionFeedback)
         }
-        "skill_reflection" | "skillReflection" => Ok(MemorySourceOrigin::SkillReflection),
         _ => Err("memory import sourceOrigin 无效"),
     }
 }

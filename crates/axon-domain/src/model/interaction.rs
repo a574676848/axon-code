@@ -162,6 +162,13 @@ pub struct InteractionRecord {
     /// 模型完全由会话历史与配置决定。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// 本轮显式指定的推理强度（例如 `low` / `medium` / `high`）。
+    ///
+    /// 与 `model` 同源：入口在用户明确选择时填充，投影为 Provider turn 的
+    /// `transportContext.reasoningEffort`，优先于 `agent.reasoning_effort`。
+    /// `None` 表示入口没有显式选择，强度完全由配置决定。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
     /// 当前处理状态。
     pub status: InteractionStatus,
     /// 接收时间（毫秒）。
@@ -235,6 +242,7 @@ impl InteractionRecord {
             content,
             attachments: Vec::new(),
             model: None,
+            reasoning_effort: None,
             status: InteractionStatus::Received,
             received_at_ms,
         })

@@ -93,6 +93,7 @@ fn tool_kind_name(kind: ToolKind) -> &'static str {
         ToolKind::ReadFile => "read_file",
         ToolKind::Glob => "glob",
         ToolKind::MemorySearch => "memory_search",
+        ToolKind::TurnTrace => "turn_trace",
         ToolKind::MemoryWrite => "memory_write",
         ToolKind::History => "history",
         ToolKind::Notes => "notes",

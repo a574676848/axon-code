@@ -439,6 +439,7 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
                 .and_then(|value| serde_json::from_value::<Vec<String>>(value.clone()).ok())
                 .unwrap_or_default(),
             args.get("model").and_then(Value::as_str),
+            args.get("reasoningEffort").and_then(Value::as_str),
         )?)
         .map_err(stringify)?),
         "conversation_answer_question" => {
@@ -528,6 +529,15 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
             &as_str("laneId")?,
         )?)
         .map_err(stringify)?),
+        "conversation_job_output" => {
+            let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0);
+            Ok(serde_json::to_value(conversation::job_output::job_output(
+                &as_str("laneId")?,
+                &as_str("jobId")?,
+                offset,
+            )?)
+            .map_err(stringify)?)
+        }
         "conversation_lane_subagents" => Ok(serde_json::to_value(
             conversation::session_read::lane_subagents(&as_str("laneId")?)?,
         )

@@ -391,12 +391,12 @@ mod tests {
     #[test]
     fn reset_key_mode_carries_the_key() {
         let payload = ConfigUpdate::ResetKey {
-            key: "agent.max_subagent_depth".to_string(),
+            key: "agent.max_subagent_threads".to_string(),
         }
         .payload();
         assert_eq!(
             payload,
-            json!({ "mode": "resetKey", "key": "agent.max_subagent_depth" }),
+            json!({ "mode": "resetKey", "key": "agent.max_subagent_threads" }),
             "恢复默认值的请求体必须逐字给出键名"
         );
         assert!(payload.get("values").is_none());

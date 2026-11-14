@@ -30,6 +30,7 @@ pub fn submit_message(
     content: &str,
     attachments: &[String],
     model: Option<&str>,
+    reasoning_effort: Option<&str>,
 ) -> Result<SubmissionReceipt, String> {
     let content = content.trim();
     if content.is_empty() && attachments.is_empty() {
@@ -68,6 +69,10 @@ pub fn submit_message(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned),
+        reasoning_effort: reasoning_effort
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
     };
     let payload =
         serde_json::to_value(&envelope).map_err(|error| format!("构造提交载荷失败：{error}"))?;
@@ -82,19 +87,19 @@ mod tests {
 
     #[test]
     fn empty_content_is_rejected_before_any_request() {
-        assert!(submit_message("workspace-a", "workbench-1", "   ", &[], None).is_err());
+        assert!(submit_message("workspace-a", "workbench-1", "   ", &[], None, None).is_err());
     }
 
     #[test]
     fn missing_workspace_or_destination_is_rejected_before_any_request() {
-        assert!(submit_message("", "workbench-1", "你好", &[], None).is_err());
-        assert!(submit_message("workspace-a", "  ", "你好", &[], None).is_err());
+        assert!(submit_message("", "workbench-1", "你好", &[], None, None).is_err());
+        assert!(submit_message("workspace-a", "  ", "你好", &[], None, None).is_err());
     }
 
     #[test]
     fn oversized_content_is_rejected_with_a_readable_reason() {
         let content = "好".repeat(MAX_CONTENT_CHARS + 1);
-        let error = submit_message("workspace-a", "workbench-1", &content, &[], None)
+        let error = submit_message("workspace-a", "workbench-1", &content, &[], None, None)
             .expect_err("必须拒绝");
         assert!(error.contains("字符"), "错误必须指明是长度问题：{error}");
     }
@@ -102,6 +107,6 @@ mod tests {
     #[test]
     fn attachments_make_an_empty_caption_acceptable() {
         // 只发一张图不带文字是合法输入；空文本且无附件才应被拒绝。
-        assert!(submit_message("", "workbench-1", "", &["a.png".to_string()], None).is_err());
+        assert!(submit_message("", "workbench-1", "", &["a.png".to_string()], None, None).is_err());
     }
 }

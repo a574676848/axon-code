@@ -37,7 +37,19 @@ const ROLLOVER_TRIGGER_REQUESTED: &str = "requested";
 const ROLLOVER_TRIGGER_AUTOMATIC: &str = "automatic";
 
 const TOKEN_BUDGET_REMINDER_MESSAGE_PREFIX: &str = "当前任务窗口距离自动换窗还剩 ";
-const TOKEN_BUDGET_FALLBACK_MESSAGE: &str = "当前任务窗口已耗尽。不要在本窗口继续任务或给出最终答复，新窗口不会自动包含本次对话。现在只允许一次便签写入或追加：调用 builtin.notes_write_file 或 builtin.notes_append_to_file 保存简洁 checkpoint，包含目标、关键决策、进展、经验教训、下一步动作，以及仍在处理的相关用户请求和重要工具动作的 window ID 与 item ID；每条非 assistant 条目正文末尾都带有 `[id: ...]` 标记，可原样引用。便签返回后立即调用 builtin.new_context，不要使用除便签与 new_context 之外的任何工具。";
+
+/// 换窗耗尽时下发的唯一提交换窗摘要指令。
+///
+/// 预算数字从常量拼装而不是写死在字面量里：常量一调，提示语自动跟着走，
+/// 不会出现「代码改成 8K、提示语还写 4K」这种漂移。
+fn token_budget_fallback_message() -> String {
+    format!(
+        "当前任务窗口已耗尽。不要在本窗口继续任务或给出最终答复，新窗口不会自动包含本次对话。现在只允许一次便签写入：调用 builtin.notes_write_file 把交接摘要写入 handoff/summary.md，首行必须是 P0:，随后依次给出 TASK:、CONSTRAINTS:、VERIFIED:、OPEN:、TOOLS: 六个固定段落（顺序与标题固定，缺项或空段会被拒绝）；TOOLS 段每行写 `- ID: <tool call id>`，没有未回填结果的调用时写 `- none`；每条非 assistant 条目正文末尾都带有 `[id: ...]` 标记，可原样引用。摘要上限 {max_tokens} tokens（约 {max_kib} KiB），超限会被拒绝并要求重写。工作便签（如 checkpoint.md）保持原有自由格式即可，不必改写成六段：换窗时不超过 {inline_kib} KiB 的便签内联正文，超过的只带路径与行数，由新窗口回读。便签返回后立即调用 builtin.new_context，不要使用除便签与 new_context 之外的任何工具。",
+        max_tokens = crate::session_notes::SESSION_NOTES_CHECKPOINT_MAX_TOKENS,
+        max_kib = crate::session_notes::SESSION_NOTES_CHECKPOINT_MAX_BYTES / 1024,
+        inline_kib = crate::session_notes_store::NOTES_INLINE_MAX_BYTES / 1024,
+    )
+}
 
 /// 窗口轮转 checkpoint 前缀，向 agent 标识当前任务交接事实。
 pub const WINDOW_ROLLOVER_CHECKPOINT_PREFIX: &str = "当前窗口交接事实：";
@@ -178,7 +190,7 @@ impl WindowRolloverPolicyRuntime {
     pub(crate) fn refresh_rollover_markers(&mut self, messages: &[AgentModelMessage]) {
         let fallback_note = crate::runtime_note_content(
             AgentRuntimeNoteKind::PayloadBudgetGate,
-            TOKEN_BUDGET_FALLBACK_MESSAGE,
+            &token_budget_fallback_message(),
         );
         let mut reminder_emitted = false;
         let mut fallback_emitted = false;
@@ -263,7 +275,10 @@ impl WindowRolloverPolicyRuntime {
         messages.push(AgentModelMessage::runtime_note(
             AgentRuntimeNoteKind::PayloadBudgetGate,
             format!(
-                "{TOKEN_BUDGET_REMINDER_MESSAGE_PREFIX}{remaining} tokens。请在当前阶段结束前调用 builtin.notes_write_file 或 builtin.notes_append_to_file 写入任务便签（目标、关键决策、进展、经验教训、下一步动作，以及相关条目的 window ID 与 item ID）；写入后可调用 builtin.new_context 主动开启新窗口。旧消息会保存在会话记录中，可在新窗口用 builtin.history_list_items 或 builtin.history_search_contents 按需查找。"
+                "{TOKEN_BUDGET_REMINDER_MESSAGE_PREFIX}{remaining} tokens。请在当前阶段结束前调用 builtin.notes_write_file 把交接摘要写入 handoff/summary.md：首行必须是 P0:，随后依次给出 TASK:、CONSTRAINTS:、VERIFIED:、OPEN:、TOOLS: 六个固定段落；TOOLS 段每行写 `- ID: <tool call id>`，没有未回填结果的调用时写 `- none`；条目结尾的 `[id: ...]` 标记可原样引用。摘要上限 {max_tokens} tokens（约 {max_kib} KiB），超限会被拒绝并要求重写。工作便签（如 checkpoint.md）保持原有自由格式即可；换窗时不超过 {inline_kib} KiB 的便签内联正文，超过的只带路径与行数。写入后可调用 builtin.new_context 主动开启新窗口。旧消息会保存在会话记录中，可在新窗口用 builtin.history_list_items 或 builtin.history_search_contents 按需查找。",
+                max_tokens = crate::session_notes::SESSION_NOTES_CHECKPOINT_MAX_TOKENS,
+                max_kib = crate::session_notes::SESSION_NOTES_CHECKPOINT_MAX_BYTES / 1024,
+                inline_kib = crate::session_notes_store::NOTES_INLINE_MAX_BYTES / 1024,
             ),
         ));
         self.reminder_emitted = true;
@@ -305,7 +320,7 @@ impl WindowRolloverPolicyRuntime {
         self.fallback_emitted = true;
         messages.push(AgentModelMessage::runtime_note(
             AgentRuntimeNoteKind::PayloadBudgetGate,
-            TOKEN_BUDGET_FALLBACK_MESSAGE,
+            token_budget_fallback_message(),
         ));
     }
 

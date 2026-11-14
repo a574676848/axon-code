@@ -43,7 +43,6 @@ Axon 使用以下用户级目录布局：
 | `agent.reasoning_effort` | 字符串 | `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max` | `"medium"` |
 | `agent.max_subagent_threads` | 无符号整数 | `>= 1` | `16` |
 | `agent.max_subagent_active_turns` | 无符号整数 | `>= 1` | `16` |
-| `agent.max_subagent_depth` | 无符号整数 | `>= 1` | `3` |
 | `agent.auto_compaction_threshold` | 浮点数 | `0.0..=1.0` | `0.8` |
 | `agent.idle_compaction_debounce_ms` | 无符号整数 | `>= 1`，单位毫秒 | `2000` |
 | `agent.log_level` | 字符串 | `trace`、`debug`、`info`、`warn`、`error` | `"warn"` |

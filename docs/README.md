@@ -28,6 +28,7 @@ Axon 是基于 Rust 构建的专属个人智能体（Personal Agent）与战术�
 - [系统概览](./overview.md) - 系统全景架构、端到端执行流与核心运行机制
 - [核心概念](./concepts.md) - Interaction、Goal、Execution、Session、上下文分层与工具权限
 - [记忆管理系统](./memory-management.md) - 分层认知模型、五类持久化、检索与衰减、生命周期与管理接口
+- [上下文消息契约](./context-message-contract.md) - source、kind、role 三维标记、构造器矩阵、装配顺序与换窗保留边界
 
 ## 2. 界面与使用指南
 
@@ -95,3 +96,5 @@ Axon 是基于 Rust 构建的专属个人智能体（Personal Agent）与战术�
 ---
 
 详细命令参数请随时运行 `axon --help` 或 `axon <COMMAND> --help` 查看。文档改动需通过 `pwsh -File tools/verify-docs.ps1` 的链接与术语门禁。
+| 重构记忆与反思链路 | [记忆与反思子系统重构设计](./memory-reflection-redesign.md) |
+- [记忆与反思子系统重构设计](./memory-reflection-redesign.md) - 反思链路的现状缺陷、三条线架构、索引卡与攒批、迁移分期

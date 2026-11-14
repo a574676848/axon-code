@@ -33,8 +33,6 @@ pub fn normalize_reasoning_effort(value: &str) -> Option<&str> {
 pub const DEFAULT_AGENT_MAX_SUBAGENT_THREADS: usize = 16;
 /// 默认每个 run session 允许同时运行的子代理 turn 数。
 pub const DEFAULT_AGENT_MAX_SUBAGENT_ACTIVE_TURNS: usize = 16;
-/// 默认子代理最大嵌套深度，root 深度为 0。
-pub const DEFAULT_AGENT_MAX_SUBAGENT_DEPTH: u32 = 3;
 /// Agent 自动压缩触发阈值（context_window 的比例），默认 0.8 (80%)。
 pub const DEFAULT_AGENT_AUTO_COMPACTION_THRESHOLD: f64 = 0.8;
 /// Agent 闲暇压缩 debounce 窗口，单位毫秒。

@@ -3,27 +3,25 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    SemanticSalienceAssessment, SubagentDelegationInput, SubagentDelegationMergeReport,
-    SubagentDelegationPlan, SubagentDelegationRequest, SubagentDelegationRuntime,
-    SubagentInheritance, SubagentRunResult, SubagentRunStatus, TurnOutcomeEnvelope,
+    ReflectionCard, ReflectionTier, SemanticSalienceAssessment, SubagentDelegationInput,
+    SubagentDelegationMergeReport, SubagentDelegationPlan, SubagentDelegationRequest,
+    SubagentDelegationRuntime, SubagentInheritance, SubagentRunResult, SubagentRunStatus,
+    TurnOutcomeEnvelope,
 };
 use axon_domain::{AxonResult, SessionId};
 
-/// skill 反思最长运行时间。
-pub const SELF_ITERATION_SKILL_REFLECTION_MAX_RUNTIME_MS: u64 = 30_000;
 /// 记忆更新最长运行时间。
 pub const SELF_ITERATION_MEMORY_UPDATE_MAX_RUNTIME_MS: u64 = 30_000;
 /// 记忆更新 subagent 固定任务消息。
-pub const SELF_ITERATION_MEMORY_TASK_MESSAGE: &str = "仅复盘随附的 turn outcome 与 evidence refs，先使用 builtin.memory_search 核对相关既有记忆，再判断候选是否形成可跨会话复用的 profile、preference、experience、knowledge 或 procedure。只有候选通过 owner、scope、稳定性、证据与冲突门禁时才调用 builtin.memory_write；当前证据明确证明已召回的具体记忆失效或错误时，才能通过 supersedes_memory_ids 标注其真实 Memory ID。作用域按地点划分：profile 与 preference 属于个人记忆；experience、knowledge 与 procedure 永远属于工作区记忆，普通 Workspace 与其 Git 分支各成桶，而在 ~/.axon（Axon 主目录）里产生的一律写入「Axon 主目录」这一固定桶，不得因为它们发生在主目录就改写成个人记忆，也不得因为那里没有普通 Workspace 就放弃写入。用户明确授权长期保存的敏感内容允许沿用普通 Memory 明文链路；偶然出现在源码、环境、日志或工具输出中的凭据不得自动记忆。不得继续父任务，不得猜测 Memory ID，不得写入 prompt 原文、未验证猜测、临时日志或一次性信息。表达风格类偏好由人格系统承接，不写入 Memory。完成后只简述本次反思结果。";
+pub const SELF_ITERATION_MEMORY_TASK_MESSAGE: &str = "仅复盘随附的 turn outcome 与 evidence refs；随附的是反思索引卡时，先按 trace_id 或 receipt_ref 调用 builtin.turn_trace 取回执原文，再使用 builtin.memory_search 核对相关既有记忆，最后判断候选是否形成可跨会话复用的 profile、preference、experience、knowledge 或 procedure。不要调用 builtin.memory_write：写入由运行时统一执行，你只交候选。只有候选通过 owner、scope、稳定性、证据与冲突门禁时才写进候选清单；当前证据明确证明已召回的具体记忆失效或错误时，用 targetMemoryId 指向那条真实 Memory ID，由运行时决定淘汰还是归档。作用域按地点划分：profile 与 preference 属于个人记忆；experience、knowledge 与 procedure 永远属于工作区记忆，普通 Workspace 与其 Git 分支各成桶，而在 ~/.axon（Axon 主目录）里产生的一律写入「Axon 主目录」这一固定桶，不得因为它们发生在主目录就改写成个人记忆，也不得因为那里没有普通 Workspace 就放弃写入。用户明确授权长期保存的敏感内容允许沿用普通 Memory 明文链路；偶然出现在源码、环境、日志或工具输出中的凭据不得自动记忆。不得继续父任务，不得猜测 Memory ID，不得写入 prompt 原文、未验证猜测、临时日志或一次性信息。表达风格类偏好由人格系统承接，不写入 Memory。最终回复只输出一个 JSON 对象，不要加解释文字：{\"candidates\":[{\"kind\":\"knowledge\",\"summary\":\"记忆正文\",\"evidence\":\"证据说明\",\"evidenceRefs\":[\"receipt:1\"],\"targetMemoryId\":null}],\"skipped\":[{\"kind\":\"procedure\",\"reason\":\"跳过理由\"}]}。";
 /// 记忆更新 prompt mode。
 pub const SELF_ITERATION_MEMORY_PROMPT_MODE: &str = "memory_update";
-/// skill 反思 prompt mode。
-pub const SELF_ITERATION_SKILL_REFLECTION_PROMPT_MODE: &str = "skill_reflection";
-/// skill 反思任务消息前缀。
-pub const SELF_ITERATION_SKILL_REFLECTION_TASK_PREFIX: &str = "仅基于随附的 verified evidence refs 复盘本次 Skill 的实际执行与验证结果。先调用 builtin.invoke_skill 读取当前 Skill 正文，再输出可直接用于改进 Skill 的准确摘要；不得把模型自述、工具次数或写盘次数当成执行证据。若需更新 Skill，必须保持标准 SKILL.md：文件以 YAML frontmatter 包裹，至少包含字符串 name 与 description，name 使用小写字母、数字和非连续连字符；正文放在结束分隔线之后。Skill：";
+/// 轻量反思档的任务消息：只放宽是否值得跑的门槛，不放宽写入标准。
+pub const SELF_ITERATION_MEMORY_WEAK_TASK_MESSAGE: &str = "仅复盘随附的 turn outcome 与 evidence refs。随附的是反思索引卡时，先按 trace_id 或 receipt_ref 调用 builtin.turn_trace 取回执原文。不要调用 builtin.memory_write：写入由运行时统一执行，你只交候选。本轮语义显著度处于弱档：弱档只放宽「是否值得跑」的门槛，不放宽写入标准。候选必须与强档一样同时满足跨会话可复用、证据充分、不与既有更强记忆冲突这三项，才允许写进候选清单；任何一项不满足就写进 skipped 并给出理由，不得产出低置信候选。不得继续父任务，不得猜测 Memory ID，不得写入 prompt 原文、未验证猜测、临时日志或一次性信息。表达风格类偏好由人格系统承接，不写入 Memory。最终回复只输出一个 JSON 对象，不要加解释文字：{\"candidates\":[{\"kind\":\"knowledge\",\"summary\":\"记忆正文\",\"evidence\":\"证据说明\",\"evidenceRefs\":[\"receipt:1\"],\"targetMemoryId\":null}],\"skipped\":[{\"kind\":\"procedure\",\"reason\":\"跳过理由\"}]}。";
 
 const SELF_ITERATION_CONTEXT_HEADER: &str =
     "\n\n以下 JSON 是运行时构建的有界事实包，禁止补造其中不存在的执行事实：\n";
+const SELF_ITERATION_CARD_CONTEXT_HEADER: &str = "\n\n以下 JSON 是运行时构建的反思索引卡，只含引用、指纹与显著度，不含任何正文：需要原文时按 trace_id 或 receipt_ref 调用 builtin.turn_trace，禁止补造卡片里不存在的执行事实：\n";
 
 /// 自我迭代规划输入。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,40 +30,14 @@ pub struct SelfIterationInput {
     pub is_subagent: bool,
     /// 本轮有界结果事实包。
     pub turn_outcome: TurnOutcomeEnvelope,
+    /// 反思索引卡；非空时任务消息改发卡片，摘要事实包退为兜底。
+    pub reflection_cards: Vec<ReflectionCard>,
     /// 轻量语义显著性评估；缺失或无效时保守跳过 Memory 反思。
     pub semantic_assessment: Option<SemanticSalienceAssessment>,
-    /// 最近一次 skill 执行上下文。
-    pub skill_execution: Option<SelfIterationSkillExecution>,
     /// 父 agent 当前累计成本，单位微美元。
     pub parent_total_cost_micros: u64,
     /// 已完成的自我迭代 subagent 结果。
     pub subagent_results: Vec<SelfIterationSubagentResult>,
-}
-
-/// Skill 执行上下文。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SelfIterationSkillExecution {
-    /// skill 名称。
-    pub skill_name: String,
-    /// skill 来源。
-    pub source: SelfIterationSkillSource,
-    /// 是否存在运行时验证的实际执行证据。
-    pub execution_verified: bool,
-    /// 支撑实际执行结论的证据引用。
-    pub evidence_refs: Vec<String>,
-}
-
-/// Skill 来源。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SelfIterationSkillSource {
-    /// 用户或项目自定义 skill。
-    User,
-    /// 项目内 skill。
-    Project,
-    /// 系统默认 skill。
-    Default,
-    /// 品牌或平台内置 skill。
-    Brand,
 }
 
 /// 自我迭代 subagent 结果。
@@ -108,8 +80,6 @@ pub struct SelfIterationPlan {
     pub cost_merge: SelfIterationCostMerge,
     /// 是否必须传播中断。
     pub interrupt_should_propagate: bool,
-    /// 是否展示 memory updated 信息。
-    pub memory_updated_info_visible: bool,
     /// task complete 是否必须排在 hook 之后。
     pub complete_after_hooks: bool,
     /// 远控是否允许触发自我迭代。
@@ -133,6 +103,8 @@ pub struct SelfIterationHookPlan {
     pub max_runtime_ms: Option<u64>,
     /// 可审计原因。
     pub reason: SelfIterationPlanReason,
+    /// 本次 hook 的反思分档；弱档只放宽启动门槛，写入门槛不变。
+    pub reflection_tier: ReflectionTier,
 }
 
 /// 自我迭代 hook 类型。
@@ -141,8 +113,6 @@ pub struct SelfIterationHookPlan {
 pub enum SelfIterationHookKind {
     /// 长期记忆更新。
     MemoryUpdate,
-    /// Skill 执行反思。
-    SkillReflection,
 }
 
 /// 自我迭代计划原因。
@@ -150,8 +120,6 @@ pub enum SelfIterationHookKind {
 pub enum SelfIterationPlanReason {
     /// root 任务完成后执行通用记忆反思。
     MemoryTaskQualified,
-    /// 父 Agent 已完成选中 skill 的闭环运行，可自动反思。
-    SkillReflectionQualified,
 }
 
 /// 自我迭代跳过原因。
@@ -163,12 +131,6 @@ pub enum SelfIterationSkipReason {
     SemanticAssessmentMissing,
     /// 语义显著性或确定性证据未达到完整反思门槛。
     SemanticSignalBelowThreshold,
-    /// 没有 skill 执行上下文。
-    SkillExecutionMissing,
-    /// Skill 只有选择状态，没有实际执行证据。
-    SkillExecutionUnverified,
-    /// 系统拥有的 skill 不自动反思。
-    SkillSystemOwned,
 }
 
 /// 自我迭代跳过记录。
@@ -203,7 +165,6 @@ impl SelfIterationRuntime {
         let mut skipped = Vec::new();
 
         plan_memory_update(input, &mut hooks, &mut skipped);
-        plan_skill_reflection(input, &mut hooks, &mut skipped);
 
         let subagent_cost_micros = input
             .subagent_results
@@ -214,10 +175,6 @@ impl SelfIterationRuntime {
             .subagent_results
             .iter()
             .any(|result| result.status == SelfIterationSubagentStatus::Interrupted);
-        let memory_updated_info_visible = input.subagent_results.iter().any(|result| {
-            result.hook == SelfIterationHookKind::MemoryUpdate
-                && result.status == SelfIterationSubagentStatus::CompletedWithWrite
-        });
 
         SelfIterationPlan {
             complete_after_hooks: !hooks.is_empty(),
@@ -231,7 +188,6 @@ impl SelfIterationRuntime {
                     .saturating_add(subagent_cost_micros),
             },
             interrupt_should_propagate,
-            memory_updated_info_visible,
             remote_trigger_allowed: false,
             delegation_plan: None,
         }
@@ -325,7 +281,8 @@ fn plan_memory_update(
         ));
         return;
     };
-    if !assessment.qualifies_for_reflection(&input.turn_outcome) {
+    let tier = assessment.reflection_tier(&input.turn_outcome);
+    if tier == ReflectionTier::Skip {
         skipped.push(skip(
             SelfIterationHookKind::MemoryUpdate,
             SelfIterationSkipReason::SemanticSignalBelowThreshold,
@@ -333,78 +290,40 @@ fn plan_memory_update(
         return;
     }
 
+    let prefix = match tier {
+        ReflectionTier::Weak => SELF_ITERATION_MEMORY_WEAK_TASK_MESSAGE,
+        ReflectionTier::Strong => SELF_ITERATION_MEMORY_TASK_MESSAGE,
+        ReflectionTier::Skip => return,
+    };
     hooks.push(SelfIterationHookPlan {
         kind: SelfIterationHookKind::MemoryUpdate,
         prompt_mode: SELF_ITERATION_MEMORY_PROMPT_MODE,
-        task_message: bounded_task_message(SELF_ITERATION_MEMORY_TASK_MESSAGE, input),
+        task_message: bounded_task_message(prefix, input, tier),
         inherits_model_tools_history: false,
         max_runtime_ms: Some(SELF_ITERATION_MEMORY_UPDATE_MAX_RUNTIME_MS),
         reason: SelfIterationPlanReason::MemoryTaskQualified,
+        reflection_tier: tier,
     });
 }
 
-fn plan_skill_reflection(
-    input: &SelfIterationInput,
-    hooks: &mut Vec<SelfIterationHookPlan>,
-    skipped: &mut Vec<SelfIterationSkip>,
-) {
-    if input.is_subagent {
-        skipped.push(skip(
-            SelfIterationHookKind::SkillReflection,
-            SelfIterationSkipReason::SubagentRecursionBlocked,
-        ));
-        return;
+/// 拼装反思任务消息。
+///
+/// 有索引卡时只发卡片：卡片是索引，正文一律靠 `builtin.turn_trace` 回取，
+/// 这样输入尺寸与任务长度解耦。没有卡片时退回有界事实包，保证历史行为不变。
+fn bounded_task_message(prefix: &str, input: &SelfIterationInput, tier: ReflectionTier) -> String {
+    if input.reflection_cards.is_empty() {
+        let context = serde_json::json!({
+            "turnOutcome": input.turn_outcome,
+            "semanticAssessment": input.semantic_assessment,
+            "reflectionTier": tier.as_str(),
+        });
+        return format!("{prefix}{SELF_ITERATION_CONTEXT_HEADER}{context}");
     }
-    let Some(skill) = input.skill_execution.as_ref() else {
-        skipped.push(skip(
-            SelfIterationHookKind::SkillReflection,
-            SelfIterationSkipReason::SkillExecutionMissing,
-        ));
-        return;
-    };
-    if matches!(
-        skill.source,
-        SelfIterationSkillSource::Default | SelfIterationSkillSource::Brand
-    ) {
-        skipped.push(skip(
-            SelfIterationHookKind::SkillReflection,
-            SelfIterationSkipReason::SkillSystemOwned,
-        ));
-        return;
-    }
-    if !skill.execution_verified || skill.evidence_refs.is_empty() {
-        skipped.push(skip(
-            SelfIterationHookKind::SkillReflection,
-            SelfIterationSkipReason::SkillExecutionUnverified,
-        ));
-        return;
-    }
-
-    let prefix = format!(
-        "{SELF_ITERATION_SKILL_REFLECTION_TASK_PREFIX}{}",
-        skill.skill_name
-    );
-    hooks.push(SelfIterationHookPlan {
-        kind: SelfIterationHookKind::SkillReflection,
-        prompt_mode: SELF_ITERATION_SKILL_REFLECTION_PROMPT_MODE,
-        task_message: bounded_task_message(&prefix, input),
-        inherits_model_tools_history: false,
-        max_runtime_ms: Some(SELF_ITERATION_SKILL_REFLECTION_MAX_RUNTIME_MS),
-        reason: SelfIterationPlanReason::SkillReflectionQualified,
-    });
-}
-
-fn bounded_task_message(prefix: &str, input: &SelfIterationInput) -> String {
     let context = serde_json::json!({
-        "turnOutcome": input.turn_outcome,
-        "semanticAssessment": input.semantic_assessment,
-        "skillEvidenceRefs": input
-            .skill_execution
-            .as_ref()
-            .map(|skill| skill.evidence_refs.as_slice())
-            .unwrap_or_default(),
+        "reflectionCards": input.reflection_cards,
+        "reflectionTier": tier.as_str(),
     });
-    format!("{prefix}{SELF_ITERATION_CONTEXT_HEADER}{context}")
+    format!("{prefix}{SELF_ITERATION_CARD_CONTEXT_HEADER}{context}")
 }
 
 const fn skip(hook: SelfIterationHookKind, reason: SelfIterationSkipReason) -> SelfIterationSkip {
@@ -414,7 +333,6 @@ const fn skip(hook: SelfIterationHookKind, reason: SelfIterationSkipReason) -> S
 const fn hook_label(hook: &SelfIterationHookPlan) -> &'static str {
     match hook.kind {
         SelfIterationHookKind::MemoryUpdate => "memory_update",
-        SelfIterationHookKind::SkillReflection => "skill_reflection",
     }
 }
 

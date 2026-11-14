@@ -169,6 +169,54 @@ fn save_to_path_backs_up_only_before_content_changes() {
 }
 
 #[test]
+fn save_to_path_keeps_only_the_newest_three_backups() {
+    let root = axon_test_support::test_temp_root().join(format!(
+        "axon-config-retention-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.toml");
+
+    // 首次写入没有旧文件可备份，随后四次改动各留一份，一共四份。
+    for index in 0..5 {
+        let mut config = AxonConfig::default();
+        config.agent.default_model = format!("retention-{index}");
+        ConfigLoader::save_to_path(&path, &config).unwrap();
+    }
+
+    assert_eq!(
+        config_backup_count(&root),
+        3,
+        "备份只保留最近三份，更老的必须清掉"
+    );
+
+    // 留下的是最新的三份：倒数第二次的内容还在，最早那份已经被清掉。
+    let kept: Vec<String> = std::fs::read_dir(&root)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("config.toml.backup-")
+        })
+        .map(|entry| std::fs::read_to_string(entry.path()).unwrap())
+        .collect();
+    assert!(
+        kept.iter().any(|text| text.contains("retention-3")),
+        "最新一份备份必须保留"
+    );
+    assert!(
+        !kept.iter().any(|text| text.contains("retention-0")),
+        "最旧一份备份必须清掉"
+    );
+}
+
+#[test]
 fn write_with_backup_overwrites_in_place_and_keeps_a_copy() {
     let root = axon_test_support::test_temp_root().join(format!(
         "axon-config-write-with-backup-{}-{}",

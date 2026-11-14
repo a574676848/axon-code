@@ -495,6 +495,7 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
             <JobLine
               key={job.id}
               job={job}
+              laneId={laneId}
               stoppedReason={null}
               live={isLive(job)}
               expanded={expandedId === job.id}
@@ -535,6 +536,7 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
                   <JobLine
                     key={job.id}
                     job={job}
+                    laneId={laneId}
                     stoppedReason={reasonOf(job)}
                     live={isLive(job)}
                     expanded={expandedId === job.id}

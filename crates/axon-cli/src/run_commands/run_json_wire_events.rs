@@ -6,8 +6,8 @@ use axon_domain::RuntimeFailure;
 use axon_protocol::wire::{
     WireAssistantMessage, WireCorrelationId, WireEventEnvelope, WireEventKind, WireFileChangeEvent,
     WireLifecyclePhase, WireLifecycleStatus, WireMemoryStatus, WireReasoningDelta,
-    WireReasoningEnd, WireReasoningStart, WireSchemaVersion, WireSessionRef, WireSkillStatus,
-    WireToolCall, WireToolResult, WireTurnLifecycle, WireUsageUpdate,
+    WireReasoningEnd, WireReasoningStart, WireSchemaVersion, WireSessionRef, WireToolCall,
+    WireToolResult, WireTurnLifecycle, WireUsageUpdate,
 };
 use serde::Serialize;
 
@@ -15,8 +15,7 @@ use super::{
     RunRequest, run_file_change_projection::project_tool_file_changes,
     run_memory_surface::surfaced_memory_entries, run_memory_usefulness::RunMemoryUsefulnessEvent,
     run_plan_projection::plan_update_from_tool_receipt,
-    run_post_run_governance::PostRunGovernanceReceipt, run_skill_evolution::SkillEvolutionEvent,
-    run_tool_loop::RunToolReceipt,
+    run_post_run_governance::PostRunGovernanceReceipt, run_tool_loop::RunToolReceipt,
 };
 
 const RUN_LIFECYCLE_TURN_ID: &str = "run";
@@ -33,7 +32,6 @@ pub(super) struct CompletedRunWireEventsInput<'a> {
     pub(super) session_title: Option<&'a str>,
     pub(super) memory_usefulness: Option<&'a RunMemoryUsefulnessEvent>,
     pub(super) memory_autonomy: Option<&'a MemoryAutonomyFeedbackReport>,
-    pub(super) skill_evolution: Option<&'a SkillEvolutionEvent>,
     pub(super) post_run_governance: Option<&'a PostRunGovernanceReceipt>,
     pub(super) recorded_at_ms: i64,
     pub(super) total_elapsed_ms: u64,
@@ -46,7 +44,6 @@ pub(super) fn completed_run_wire_events(
     builder.push_memory_recall(input.request);
     builder.push_memory_usefulness(input.memory_usefulness);
     builder.push_memory_autonomy(input.memory_autonomy);
-    builder.push_skill_evolution(input.skill_evolution);
     builder.push_reasoning_messages(&input.response.reasoning_messages);
     builder.push_tool_receipts(&input.response.tool_receipts);
     builder.push_usage(input.response.token_usage);
@@ -489,30 +486,6 @@ impl RunWireEventBuilder {
                 summary: metadata_string(metadata.as_ref(), "reason"),
                 refs: metadata_refs(metadata.as_ref(), &["refs", "memoryRefs"]),
                 surfaced_memories: Vec::new(),
-                metadata,
-            }),
-        );
-    }
-
-    fn push_skill_evolution(&mut self, event: Option<&SkillEvolutionEvent>) {
-        let Some(event) = event else {
-            return;
-        };
-        let metadata = metadata_value(event);
-        let outcome =
-            metadata_string(metadata.as_ref(), "status").unwrap_or_else(|| "unknown".to_owned());
-        let skill_name =
-            metadata_string(metadata.as_ref(), "skillName").unwrap_or_else(|| "unknown".to_owned());
-        self.push(
-            format!("{}:skill:{}", self.session.session_id, skill_name),
-            self.session.session_id.clone(),
-            WireEventKind::SkillStatus(WireSkillStatus {
-                skill_name,
-                status: lifecycle_from_outcome(&outcome),
-                outcome,
-                risk: metadata_string(metadata.as_ref(), "risk"),
-                summary: metadata_string(metadata.as_ref(), "summary"),
-                material_ref: metadata_string(metadata.as_ref(), "materialRef"),
                 metadata,
             }),
         );

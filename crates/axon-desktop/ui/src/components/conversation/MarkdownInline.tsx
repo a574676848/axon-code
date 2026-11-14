@@ -21,10 +21,25 @@ import {
   parseImageNode,
 } from './localImage';
 
+/**
+ * 一张图片的候选写法：会话里解析出的真路径排在最前，后面才是各种清洗写法。
+ *
+ * 图片与文本正文共用同一条解析，因此工作区外的截图也读得出来；解析不出结论时
+ * 候选与改动前逐字一致。
+ */
+function imageCandidates(path: string, art: MarkdownArt): string[] {
+  const resolved = art.resolvePath?.(path);
+  const cleaned = imagePathCandidates(path);
+  if (resolved === undefined || resolved === path || cleaned.includes(resolved)) return cleaned;
+  return [resolved, ...cleaned];
+}
+
 /** 正文渲染需要的外界能力；由 Markdown 组件按会话上下文组装。 */
 export interface MarkdownArt {
   /** 在右侧栏打开一个文件；缺省时路径只是文本。 */
   openFile?: (path: string) => void;
+  /** 把正文引用解析成真路径；缺省时按原样使用。 */
+  resolvePath?: (path: string) => string;
   /** 当前工作区根目录，用于把相对图片路径落到工作区。 */
   workspaceRoot: string | null;
   /** 是否给图片路径芯片挂悬浮缩略图；文档预览页关掉，避免预览页自己套一层预览。 */
@@ -53,7 +68,7 @@ function renderImage(
     <MarkdownImage
       key={key}
       destination={path}
-      candidates={imagePathCandidates(path)}
+      candidates={imageCandidates(path, art)}
       alt={alt}
     />
   );
@@ -107,7 +122,13 @@ export function renderPlain(
      */
     nodes.push(
       isImagePath(path) && art.hoverThumbnail === true ? (
-        <ImagePathChip key={key} path={path} onOpen={openFile} thumbnail>
+        <ImagePathChip
+          key={key}
+          path={path}
+          onOpen={openFile}
+          thumbnail
+          resolvePath={art.resolvePath}
+        >
           {path}
         </ImagePathChip>
       ) : (
@@ -206,6 +227,7 @@ function renderImagePaths(
         key={`${keyPrefix}:img:${position}`}
         path={match.path}
         onOpen={art.openFile}
+        resolvePath={art.resolvePath}
         thumbnail={art.hoverThumbnail === true}
       >
         {match.path}

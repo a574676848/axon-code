@@ -116,21 +116,21 @@ fn test_reset_key_restores_builtin_default() {
     let (temp_dir, config_file) = scratch_config();
 
     let mut values = HashMap::new();
-    values.insert("agent.max_subagent_depth".to_string(), "9".to_string());
+    values.insert("agent.max_subagent_threads".to_string(), "9".to_string());
     execute_apply_values_at(&config_file, &values).unwrap();
-    assert!(read_config(&config_file).contains("max_subagent_depth = 9"));
+    assert!(read_config(&config_file).contains("max_subagent_threads = 9"));
 
-    execute_reset_key_at(&config_file, "agent.max_subagent_depth").unwrap();
+    execute_reset_key_at(&config_file, "agent.max_subagent_threads").unwrap();
     let restored = execute_config_read_at(&config_file).unwrap();
     let default_value = execute_config_read_at(&config_file)
         .unwrap()
         .flat_values
-        .get("agent.max_subagent_depth")
+        .get("agent.max_subagent_threads")
         .cloned();
     assert_eq!(
         restored
             .flat_values
-            .get("agent.max_subagent_depth")
+            .get("agent.max_subagent_threads")
             .cloned(),
         default_value,
         "恢复后应回到内置默认值"

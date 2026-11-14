@@ -7,7 +7,7 @@ use axon_domain::RuntimeFailure;
 use axon_protocol::wire::WireEventEnvelope;
 use axon_tui_runtime::{
     AgentTuiChannelAttempt, AgentTuiRunError, AgentTuiRunLine, AgentTuiRunOutput,
-    AgentTuiRunSessionInfo,
+    AgentTuiRunSessionInfo, AgentTuiStatusItem, AgentTuiStatusLine,
 };
 use serde::Deserialize;
 
@@ -27,6 +27,7 @@ const DAEMON_FAILURE_NEXT_STEP: &str =
     "请确认 Axon Daemon 正在运行（axon daemon status），再重试本次提交。";
 const RUNTIME_ERROR_NEXT_STEP: &str =
     "运行时已保留错误上下文，可继续选择其他可用能力或检查结构化详情。";
+const MEMORY_REFLECTION_NOTICE_ID: &str = "status:memory-reflection";
 
 pub(super) fn format_tui_run_output(result: &CliRunResult) -> AgentTuiRunOutput {
     let mut output = AgentTuiRunOutput::empty();
@@ -124,6 +125,26 @@ fn project_tui_run_event(output: &mut AgentTuiRunOutput, event: &TuiRunJsonEvent
     if wire_runtime_error_count > 0 {
         return;
     }
+    if let Some(notice) = event
+        .memory_reflection_notice
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        // 反思提示只能延迟一轮到达：本轮治理尚未跑完，界面展示的是上一次的结果。
+        output.push(AgentTuiRunLine::Status(AgentTuiStatusLine::with_id(
+            MEMORY_REFLECTION_NOTICE_ID,
+            "记忆反思",
+            vec![AgentTuiStatusItem::new(
+                "MemoryReflection",
+                notice.to_owned(),
+                None,
+                Some("notice".to_owned()),
+                None,
+                None,
+            )],
+        )));
+    }
     // 顶层 failure 只是 wire RuntimeError 的兜底副本；daemon 失败报告只携带失败原文本，
     // 必须显式投影为结构化错误，否则会被成功投影静默吞掉。
     if let Some(failure) = event.failure.as_ref() {
@@ -220,6 +241,9 @@ pub(super) struct TuiRunJsonEvent {
     wire_events: Vec<WireEventEnvelope>,
     #[serde(default)]
     channel_attempts: Vec<TuiChannelAttempt>,
+    /// 上一轮记忆反思提示；缺省表示上一轮没有记忆动作。
+    #[serde(default)]
+    memory_reflection_notice: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

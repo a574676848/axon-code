@@ -14,10 +14,10 @@ use crate::ports::{
 use axon_domain::{InteractionId, InteractionRecord, InteractionStatus};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use uuid::Uuid;
-const SELECT_INTERACTION_BY_SOURCE: &str = "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model FROM jarvis_interactions WHERE source_channel=?1 AND source_message_id=?2";
+const SELECT_INTERACTION_BY_SOURCE: &str = "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort FROM jarvis_interactions WHERE source_channel=?1 AND source_message_id=?2";
 const SELECT_INTERACTION_ID_EXISTS: &str =
     "SELECT 1 FROM jarvis_interactions WHERE interaction_id=?1";
-const INSERT_INTERACTION: &str = "INSERT INTO jarvis_interactions(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,updated_at_ms,attachments_json,model,lane_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?9,?10,?11,?12)";
+const INSERT_INTERACTION: &str = "INSERT INTO jarvis_interactions(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,updated_at_ms,attachments_json,model,reasoning_effort,lane_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?9,?10,?11,?12,?13)";
 /// lane 排他领取候选：排队记录中，所属 lane 当前没有在途 `processing` 的那些。
 const SELECT_CLAIMABLE_INTERACTIONS: &str = "SELECT queued.interaction_id,queued.received_at_ms \
      FROM jarvis_interactions queued \
@@ -38,7 +38,7 @@ impl InteractionQueryStore for SqliteRuntimeStore {
         self.connection()
             .map_err(runtime_error)?
             .query_row(
-                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model FROM jarvis_interactions WHERE interaction_id=?1",
+                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort FROM jarvis_interactions WHERE interaction_id=?1",
                 params![interaction_id.as_str()],
                 read_record,
             )
@@ -58,7 +58,7 @@ impl InteractionQueryStore for SqliteRuntimeStore {
         self.connection()
             .map_err(runtime_error)?
             .query_row(
-                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model
+                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort
                  FROM jarvis_interactions
                  WHERE scope_json=?1 AND source_channel<>?2 AND source_message_id NOT LIKE ?3
                  ORDER BY received_at_ms DESC, interaction_id DESC LIMIT 1",
@@ -85,7 +85,7 @@ impl InteractionQueryStore for SqliteRuntimeStore {
         self.connection()
             .map_err(runtime_error)?
             .query_row(
-                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model
+                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort
                  FROM jarvis_interactions
                  WHERE scope_json=?1 AND source_channel<>?2 AND source_message_id NOT LIKE ?3 AND status=?4
                  ORDER BY received_at_ms DESC, interaction_id DESC LIMIT 1",
@@ -119,7 +119,7 @@ impl InteractionQueryStore for SqliteRuntimeStore {
         self.connection()
             .map_err(runtime_error)?
             .query_row(
-                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model
+                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort
                  FROM jarvis_interactions
                  WHERE scope_json=?1 AND source_channel=?2 AND reply_route_json=?3 AND source_message_id NOT LIKE ?4 AND status=?5
                  ORDER BY received_at_ms DESC, interaction_id DESC LIMIT 1",
@@ -159,7 +159,7 @@ impl InteractionQueryStore for SqliteRuntimeStore {
         self.connection()
             .map_err(runtime_error)?
             .query_row(
-                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model
+                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort
                  FROM jarvis_interactions
                  WHERE source_channel<>?1 AND source_message_id NOT LIKE ?2
                  ORDER BY received_at_ms DESC, interaction_id DESC LIMIT 1",
@@ -189,7 +189,7 @@ impl InteractionQueryStore for SqliteRuntimeStore {
         // 游标为空取最近一页，给出游标取它之前一页；行值比较与排序同键，故不漏不重。
         let mut statement = connection
             .prepare(
-                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model
+                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort
                  FROM jarvis_interactions
                  WHERE lane_id=?1 AND (?2 IS NULL OR (received_at_ms, interaction_id) < (?2, ?3))
                  ORDER BY received_at_ms DESC, interaction_id DESC LIMIT ?4",
@@ -227,7 +227,7 @@ fn latest_interaction_for_channel(
         .map_err(|error| InteractionStoreError::Storage(error.to_string()))?;
     let status_clause = status.map_or(String::new(), |_| " AND status=?4".to_owned());
     let sql = format!(
-        "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model
+        "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort
          FROM jarvis_interactions
          WHERE scope_json=?1 AND source_channel=?2 AND source_message_id NOT LIKE ?3{status_clause}
          ORDER BY received_at_ms DESC, interaction_id DESC LIMIT 1"
@@ -315,7 +315,7 @@ impl InteractionStore for SqliteRuntimeStore {
             }
             let interaction = transaction
                 .query_row(
-                    "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model FROM jarvis_interactions WHERE interaction_id=?1",
+                    "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort FROM jarvis_interactions WHERE interaction_id=?1",
                     params![id],
                     read_record,
                 )
@@ -374,7 +374,7 @@ impl InteractionStore for SqliteRuntimeStore {
         }
         let interaction = transaction
             .query_row(
-                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model FROM jarvis_interactions WHERE interaction_id=?1",
+                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort FROM jarvis_interactions WHERE interaction_id=?1",
                 params![interaction_id.as_str()],
                 read_record,
             )
@@ -532,6 +532,8 @@ fn insert_interaction(
                 serde_json::to_string(&interaction.attachments).map_err(serialize_error)?,
                 // 显式模型只跟随本轮 turn，不写进 Workspace 或 lane 身份。
                 interaction.model.as_deref(),
+                // 推理强度与模型同源：随本轮下发，不写进 Workspace 或 lane 身份。
+                interaction.reasoning_effort.as_deref(),
                 // lane 是主 turn 排他领取的事实源；未绑定 Workspace 的输入统一落在空 lane。
                 interaction_session_lane_id(interaction).unwrap_or_default(),
             ],

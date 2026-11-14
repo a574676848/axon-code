@@ -1,7 +1,6 @@
 use super::{
-    SELF_ITERATION_MEMORY_UPDATE_MAX_RUNTIME_MS, SELF_ITERATION_SKILL_REFLECTION_MAX_RUNTIME_MS,
-    SelfIterationHookKind, SelfIterationInput, SelfIterationRuntime, SelfIterationSkillExecution,
-    SelfIterationSkillSource, SelfIterationSkipReason, SelfIterationSubagentResult,
+    SELF_ITERATION_MEMORY_UPDATE_MAX_RUNTIME_MS, SelfIterationHookKind, SelfIterationInput,
+    SelfIterationRuntime, SelfIterationSkipReason, SelfIterationSubagentResult,
     SelfIterationSubagentStatus,
 };
 use crate::{
@@ -25,8 +24,10 @@ fn self_iteration_plans_memory_update_for_completed_root_task() {
         .find(|hook| hook.kind == SelfIterationHookKind::MemoryUpdate)
         .unwrap();
     assert!(hook.task_message.contains("builtin.memory_search"));
-    assert!(hook.task_message.contains("builtin.memory_write"));
-    assert!(hook.task_message.contains("supersedes_memory_ids"));
+    // 新契约：子代理只交候选，写入由运行时统一执行，因此提示词里必须出现
+    // 「不要调用 memory_write」与候选 JSON 的形状，而不是旧的 supersedes 参数名。
+    assert!(hook.task_message.contains("不要调用 builtin.memory_write"));
+    assert!(hook.task_message.contains("\"candidates\""));
     assert!(hook.task_message.contains("\"turnOutcome\""));
     assert!(!hook.inherits_model_tools_history);
     assert_eq!(
@@ -48,53 +49,6 @@ fn self_iteration_blocks_recursive_subagent_reflection() {
     assert!(subagent.skipped.iter().any(|skip| {
         skip.hook == SelfIterationHookKind::MemoryUpdate
             && skip.reason == SelfIterationSkipReason::SubagentRecursionBlocked
-    }));
-    assert!(subagent.skipped.iter().any(|skip| {
-        skip.hook == SelfIterationHookKind::SkillReflection
-            && skip.reason == SelfIterationSkipReason::SubagentRecursionBlocked
-    }));
-}
-
-#[test]
-fn self_iteration_reflects_selected_project_skills_without_manual_trigger() {
-    let plan = SelfIterationRuntime.plan(&SelfIterationInput {
-        skill_execution: Some(verified_skill()),
-        ..base_input()
-    });
-    let hook = plan
-        .hooks
-        .iter()
-        .find(|hook| hook.kind == SelfIterationHookKind::SkillReflection)
-        .unwrap();
-
-    assert!(hook.task_message.contains("release-notes"));
-    assert!(hook.task_message.contains("receipt:skill"));
-    assert!(!hook.inherits_model_tools_history);
-    assert!(hook.task_message.contains("builtin.invoke_skill"));
-    assert!(hook.task_message.contains("准确摘要"));
-    assert!(hook.task_message.contains("标准 SKILL.md"));
-    assert!(hook.task_message.contains("name 与 description"));
-    assert_eq!(
-        hook.max_runtime_ms,
-        Some(SELF_ITERATION_SKILL_REFLECTION_MAX_RUNTIME_MS)
-    );
-}
-
-#[test]
-fn self_iteration_skips_system_owned_skill_reflection() {
-    let default_skill = SelfIterationRuntime.plan(&SelfIterationInput {
-        skill_execution: Some(SelfIterationSkillExecution {
-            skill_name: "system-owned".to_owned(),
-            source: SelfIterationSkillSource::Default,
-            execution_verified: true,
-            evidence_refs: vec!["receipt:skill".to_owned()],
-        }),
-        ..base_input()
-    });
-
-    assert!(default_skill.skipped.iter().any(|skip| {
-        skip.hook == SelfIterationHookKind::SkillReflection
-            && skip.reason == SelfIterationSkipReason::SkillSystemOwned
     }));
 }
 
@@ -124,54 +78,21 @@ fn self_iteration_skips_memory_reflection_for_low_salience_turn() {
 }
 
 #[test]
-fn self_iteration_skips_selected_skill_without_execution_evidence() {
-    let plan = SelfIterationRuntime.plan(&SelfIterationInput {
-        skill_execution: Some(SelfIterationSkillExecution {
-            skill_name: "release-notes".to_owned(),
-            source: SelfIterationSkillSource::Project,
-            execution_verified: false,
-            evidence_refs: Vec::new(),
-        }),
-        ..base_input()
-    });
-
-    assert!(
-        plan.hooks
-            .iter()
-            .all(|hook| { hook.kind != SelfIterationHookKind::SkillReflection })
-    );
-    assert!(plan.skipped.iter().any(|skip| {
-        skip.hook == SelfIterationHookKind::SkillReflection
-            && skip.reason == SelfIterationSkipReason::SkillExecutionUnverified
-    }));
-}
-
-#[test]
 fn self_iteration_merges_subagent_cost_and_surfaces_memory_write_only() {
     let plan = SelfIterationRuntime.plan(&SelfIterationInput {
         parent_total_cost_micros: 1_000,
-        subagent_results: vec![
-            SelfIterationSubagentResult {
-                hook: SelfIterationHookKind::MemoryUpdate,
-                label: "memory_update".to_owned(),
-                cost_micros: 25,
-                status: SelfIterationSubagentStatus::CompletedWithWrite,
-                bounded_summary: "memory updated".to_owned(),
-            },
-            SelfIterationSubagentResult {
-                hook: SelfIterationHookKind::SkillReflection,
-                label: "skill_reflection".to_owned(),
-                cost_micros: 75,
-                status: SelfIterationSubagentStatus::FailedNonFatal,
-                bounded_summary: "reflection failed".to_owned(),
-            },
-        ],
+        subagent_results: vec![SelfIterationSubagentResult {
+            hook: SelfIterationHookKind::MemoryUpdate,
+            label: "memory_update".to_owned(),
+            cost_micros: 100,
+            status: SelfIterationSubagentStatus::CompletedWithWrite,
+            bounded_summary: "memory updated".to_owned(),
+        }],
         ..base_input()
     });
 
     assert_eq!(plan.cost_merge.subagent_cost_micros, 100);
     assert_eq!(plan.cost_merge.merged_total_cost_micros, 1_100);
-    assert!(plan.memory_updated_info_visible);
     assert!(!plan.interrupt_should_propagate);
 }
 
@@ -194,20 +115,12 @@ fn self_iteration_propagates_interrupt_but_not_nonfatal_failures() {
 #[test]
 fn self_iteration_bridges_hooks_into_subagent_delegation_plan() {
     let plan = SelfIterationRuntime
-        .plan_with_delegation(
-            SessionId(7),
-            false,
-            &SelfIterationInput {
-                skill_execution: Some(verified_skill()),
-                ..base_input()
-            },
-        )
+        .plan_with_delegation(SessionId(7), false, &base_input())
         .unwrap();
 
     let delegation_plan = plan.delegation_plan.as_ref().unwrap();
-    assert_eq!(delegation_plan.entries.len(), 2);
+    assert_eq!(delegation_plan.entries.len(), 1);
     assert_eq!(delegation_plan.entries[0].label, "memory_update");
-    assert_eq!(delegation_plan.entries[1].label, "skill_reflection");
     assert!(!plan.remote_trigger_allowed);
 }
 
@@ -234,18 +147,9 @@ fn base_input() -> SelfIterationInput {
             style_candidate: None,
         }),
         turn_outcome,
-        skill_execution: None,
+        reflection_cards: Vec::new(),
         parent_total_cost_micros: 0,
         subagent_results: Vec::new(),
-    }
-}
-
-fn verified_skill() -> SelfIterationSkillExecution {
-    SelfIterationSkillExecution {
-        skill_name: "release-notes".to_owned(),
-        source: SelfIterationSkillSource::Project,
-        execution_verified: true,
-        evidence_refs: vec!["receipt:skill".to_owned(), "receipt:test".to_owned()],
     }
 }
 

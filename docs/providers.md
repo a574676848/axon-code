@@ -117,7 +117,7 @@ api_key_env = "DASHSCOPE_API_KEY"
 
 ## 思考强度
 
-`agent.reasoning_effort`、`axon run --reasoning-effort` 与 TUI `/think` 使用同一组配置值。输入边界只接受 Provider 官方值并集；公共协商层会在发起网络请求前静默省略当前协议不支持的合法档位。复杂推理由主 Agent 使用当前选中模型直接完成，不存在独立的推理子代理模型槽位。
+`agent.reasoning_effort`、`axon run --reasoning-effort` 与 TUI `/think` 使用同一组配置值。输入边界只接受 Provider 官方值并集；公共协商层会在发起网络请求前静默省略当前协议不支持的合法档位。`--reasoning-effort` 与 `/think` 都只覆盖本轮之后的会话请求，不改写 `agent.reasoning_effort`：桌面端与 TUI 的显式强度随提交下发，进程退出即回到配置默认值。复杂推理由主 Agent 使用当前选中模型直接完成，不存在独立的推理子代理模型槽位。
 
 远控 Feishu 的流式投影不重新定义 Provider Markdown 规则。TUI、Feishu progress card 和最终回复都先进入共享 `normalize_markdown_source` 语义层，再执行卡片分段或消息编码；因此表格分隔线、全角空格、NBSP 和 fenced code 的处理保持一致。流式预览只承担低延迟展示，最终正文仍由 durable outbox 负责可靠投递。
 

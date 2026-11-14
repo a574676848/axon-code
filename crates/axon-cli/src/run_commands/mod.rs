@@ -47,10 +47,13 @@ pub(crate) mod run_model_routing;
 mod run_outcome_diagnostics;
 mod run_persona_settlement;
 mod run_plan_projection;
+mod run_post_run_artifacts;
 mod run_post_run_governance;
 mod run_post_run_governance_performance;
 mod run_post_run_governance_store;
 mod run_post_run_governance_worker;
+#[cfg(test)]
+mod run_post_run_reflection_tests;
 mod run_progress;
 mod run_progress_apply_patch_snapshot;
 mod run_progress_hashline_snapshot;
@@ -58,6 +61,8 @@ mod run_progress_streaming_diff_preview;
 mod run_provider_loop;
 mod run_provider_orchestration;
 mod run_question_projection;
+mod run_reflection_apply;
+mod run_reflection_batch;
 pub(crate) mod run_remote_execution;
 mod run_request;
 mod run_request_build_options;
@@ -65,14 +70,10 @@ mod run_request_builder;
 mod run_request_payload;
 mod run_request_session;
 pub(crate) mod run_request_subagents;
-mod run_rollout_store;
+pub(crate) mod run_rollout_store;
 mod run_self_iteration_subagent;
-mod run_session_store;
-mod run_skill_evolution;
-pub(crate) mod run_skill_evolution_materialize;
-#[cfg(test)]
-mod run_skill_evolution_post_run_tests;
-pub(crate) mod run_skill_evolution_store;
+mod run_semantic_salience;
+pub(crate) mod run_session_store;
 mod run_startup_snapshot;
 mod run_startup_snapshot_cache;
 mod run_startup_snapshot_fingerprint;
@@ -149,9 +150,10 @@ pub(crate) use run_rollout_store::select_rollout_session;
 #[cfg(test)]
 pub(crate) use run_rollout_store::{RolloutEventAppendInput, append_rollout_event_for_session};
 pub(crate) use run_rollout_store::{
-    RolloutEventRecord, RolloutReplayView, RolloutSqliteStore, load_session_usage_totals_from_root,
-    read_rollout_tool_output, replay_rollout_events, replay_session_chain,
-    resolved_rollout_db_path,
+    RolloutEventRecord, RolloutReplayView, RolloutSqliteStore, SessionUsageTotals,
+    load_latest_reflection_notice_from_root, load_latest_session_model_from_root,
+    load_session_usage_totals_from_root, read_rollout_tool_output, replay_rollout_events,
+    replay_session_chain, resolved_rollout_db_path,
 };
 pub(crate) use run_session_store::RunSessionRecord;
 pub(crate) use run_session_store::resolved_axon_root;
@@ -323,8 +325,9 @@ struct CompletedRun {
     session_title: Option<String>,
     memory_usefulness: Option<run_memory_usefulness::RunMemoryUsefulnessEvent>,
     memory_autonomy: Option<axon_agent_runtime::MemoryAutonomyFeedbackReport>,
-    skill_evolution: Option<run_skill_evolution::SkillEvolutionEvent>,
     post_run_governance: Option<PostRunGovernanceReceipt>,
+    /// 上一轮的记忆反思提示；本轮治理还没跑，拿不到自己那条。
+    memory_reflection_notice: Option<String>,
 }
 
 fn finish_completed_run(
@@ -341,6 +344,13 @@ fn finish_completed_run(
     );
     let session_title = run_thread_title::derive_thread_title(&record.prompt);
     commit_session_to_rollout(config_path, &record, &session_title)?;
+    // 反思是轮后异步治理的产物：本轮治理尚未启动，能确定看到的只有上一次的结果。
+    // 这条提示随 run 输出交给界面，用户在下一轮开头看到上一轮的记忆动作。
+    let memory_reflection_notice = run_rollout_store::load_previous_reflection_notice(
+        config_path,
+        &record.session_id,
+        &record.assistant_part_id,
+    );
     if let Err(error) = mirror_session_to_thread(config_path, &record) {
         axon_logger::warning(&format!(
             "thread projection skipped: session_id={}, error={error}",
@@ -366,8 +376,8 @@ fn finish_completed_run(
         session_title: Some(session_title),
         memory_usefulness,
         memory_autonomy: None,
-        skill_evolution: None,
         post_run_governance,
+        memory_reflection_notice,
     })
 }
 
@@ -405,6 +415,8 @@ fn finish_failed_run(
         persona_drift_bp: None,
         drift_reason: None,
         scene_audience: None,
+        // 失败路径没有轨迹也没有评估：不给信号，结算退回旧行为。
+        signals: None,
     });
     let failure = run_session_store::runtime_failure_from_execution_error(
         &request.session_id,

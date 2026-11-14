@@ -1,5 +1,5 @@
 use super::{
-    SELF_ITERATION_RECEIPT_STORE_SCHEMA_VERSION, SELF_ITERATION_SKILL_REFLECTION_PROMPT_MODE,
+    SELF_ITERATION_MEMORY_PROMPT_MODE, SELF_ITERATION_RECEIPT_STORE_SCHEMA_VERSION,
     SelfIterationHookKind, SelfIterationReceiptInput, SelfIterationReceiptRecord,
     SelfIterationReceiptStoreRuntime, SelfIterationSubagentStatus, SelfIterationWriteDecision,
 };
@@ -19,15 +19,6 @@ fn self_iteration_receipt_store_persists_structured_receipts_without_raw_transcr
         SelfIterationWriteDecision::Persisted,
     ))
     .unwrap();
-    let reflection = SelfIterationReceiptRecord::from_input(receipt_input(
-        SelfIterationHookKind::SkillReflection,
-        2_000,
-        SelfIterationSubagentStatus::CompletedNoWrite,
-        SelfIterationWriteDecision::SkippedNoChange,
-    ))
-    .unwrap();
-
-    SelfIterationReceiptStoreRuntime::append_record(&path, &reflection).unwrap();
     SelfIterationReceiptStoreRuntime::append_record(&path, &memory).unwrap();
 
     let receipts =
@@ -47,19 +38,17 @@ fn self_iteration_receipt_store_persists_structured_receipts_without_raw_transcr
         .join("\n");
     let _ = std::fs::remove_dir_all(root);
 
-    assert_eq!(receipts.len(), 2);
+    assert_eq!(receipts.len(), 1);
     assert_eq!(receipts[0].hook, SelfIterationHookKind::MemoryUpdate);
-    assert_eq!(receipts[1].hook, SelfIterationHookKind::SkillReflection);
     assert!(latest.is_some_and(|record| {
-        record.prompt_mode == SELF_ITERATION_SKILL_REFLECTION_PROMPT_MODE
-            && record.write_decision == SelfIterationWriteDecision::SkippedNoChange
+        record.prompt_mode == SELF_ITERATION_MEMORY_PROMPT_MODE
+            && record.write_decision == SelfIterationWriteDecision::Persisted
     }));
     assert!(summary.is_some_and(|summary| {
-        summary.total_receipts == 2
+        summary.total_receipts == 1
             && summary.memory_update_receipts == 1
-            && summary.skill_reflection_receipts == 1
             && summary.persisted_write_receipts == 1
-            && summary.total_cost_micros == 150
+            && summary.total_cost_micros == 120
             && !summary.prompt_text_persisted
             && !summary.raw_transcript_persisted
             && !summary.remote_trigger_allowed
@@ -93,7 +82,7 @@ fn self_iteration_receipt_store_rejects_raw_payload_remote_or_mode_mismatch() {
         SelfIterationWriteDecision::Persisted,
     ))
     .unwrap();
-    mode_mismatch.prompt_mode = SELF_ITERATION_SKILL_REFLECTION_PROMPT_MODE.to_owned();
+    mode_mismatch.prompt_mode = "invalid-mode".to_owned();
     assert!(SelfIterationReceiptStoreRuntime::append_record(&path, &mode_mismatch).is_err());
 
     let mut invalid_schema = SelfIterationReceiptRecord::from_input(receipt_input(
@@ -121,15 +110,10 @@ fn receipt_input(
         hook,
         source_trace: "runtime-cell://session-self/7/self-iteration".to_owned(),
         status,
-        cost_micros: match hook {
-            SelfIterationHookKind::MemoryUpdate => 120,
-            SelfIterationHookKind::SkillReflection => 30,
-        },
+        cost_micros: 120,
         write_decision,
         reason: "subagent finished with bounded receipt".to_owned(),
         summary_hash: Some("self-iteration-summary-hash".to_owned()),
-        skill_name: (hook == SelfIterationHookKind::SkillReflection)
-            .then(|| "release-notes".to_owned()),
         hook_iterations: 2,
     }
 }

@@ -24,6 +24,7 @@ import {
 } from './transcript';
 import type { SessionTokenBaseline } from './sessionUsage';
 import type { ConversationStreamEvent } from './wire';
+import type { LaneEffectiveModel } from './viewConfig';
 
 /** 历史分页的页大小：一次一条 Interaction，向前翻就是逐条往前取。 */
 const HISTORY_PAGE_SIZE = 1;
@@ -70,6 +71,10 @@ export interface LanePagingOptions {
   >;
   /** 取历史失败时的提示入口。 */
   onError: (message: string) => void;
+  /** 车道当前模型的权威事实（网关只读最新一轮记录）；翻到没有结论时给 null。 */
+  onEffectiveModel?: (model: LaneEffectiveModel | null) => void;
+  /** 首页带回来的最近一次记忆反思提示；没有记忆动作时回 null。 */
+  onReflectionNotice?: (notice: string | null) => void;
 }
 
 export interface LanePaging {
@@ -158,6 +163,10 @@ export function useLanePaging(options: LanePagingOptions): LanePaging {
       // 先丢旧基线：累计读数不能先按上一条会话的数画一帧，再跳到新会话。
       setSessionBaseline(null);
       const page = await ipc.conversationHistory(laneId, HISTORY_PAGE_SIZE);
+      // 权威模型随首页一起回来：只查最新一轮，不遍历历史轮次。
+      options.onEffectiveModel?.(page.effectiveModel ?? null);
+      // 记忆提示同一时机取回：它也是「这条会话现在的最新事实」，不能随翻页回退。
+      options.onReflectionNotice?.(page.reflectionNotice ?? null);
       seedsRef.current = new Map();
       seedHistoryEntries(page.interactions);
       rememberFirstPage(page.interactions);

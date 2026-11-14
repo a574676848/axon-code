@@ -350,3 +350,109 @@ fn handoff_failure_before_prepare_is_projected_instead_of_silent() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// 归档已写、投影失败时必须整体回滚：窗口身份、notes 与归档分片都不能半提交。
+#[test]
+fn projection_failure_rolls_back_archive_and_window_identity() {
+    let root = temp_workspace("inline-rollover-projection-rollback");
+    let request = request_with_rollover(root.clone());
+    let session_dir = initialize_session(&request);
+    SessionNotesRuntime::write_note_file(&session_dir, "progress.md", "已验证事实", 1).unwrap();
+    let before = SessionNotes::load_from_session(&session_dir)
+        .unwrap()
+        .expect("会话便签必须已初始化");
+
+    let messages = &request.model_payload.messages;
+    let mut rollover = InlineWindowRollover::new(&request, None);
+    let checkpoint = rollover.prepare(messages).expect("prepare 必须成功");
+    let policy_runtime = WindowRolloverPolicyRuntime::new(CompressionPolicy {
+        trigger_tokens: TEST_ROLLOVER_LIMIT,
+        context_window: TEST_CONTEXT_WINDOW,
+    });
+    let window = policy_runtime.provider_visible_window(messages);
+    let replacement = policy_runtime
+        .build_validated_replacement(
+            &window,
+            &checkpoint,
+            WindowRolloverValidationMode::Requested,
+        )
+        .expect("replacement 必须通过校验");
+
+    super::FORCE_PROJECTION_FAILURE.with(|flag| flag.set(true));
+    let error = rollover
+        .commit(messages, &checkpoint, &replacement)
+        .expect_err("投影失败必须返回错误");
+    let message = format!("{error:?}");
+    assert!(
+        message.contains("活动窗口投影失败"),
+        "失败原因必须点明投影步骤：{message}"
+    );
+
+    let after = SessionNotes::load_from_session(&session_dir)
+        .unwrap()
+        .expect("回滚后便签必须仍在");
+    assert_eq!(
+        after.window_number, before.window_number,
+        "窗口号必须回滚到换窗前：{message}"
+    );
+    assert_eq!(
+        after.current_window_id, before.current_window_id,
+        "窗口身份必须回滚到换窗前：{message}"
+    );
+    assert!(
+        WindowRolloverEngine::read_archive_shard(&session_dir, 1)
+            .map(|shard| shard.is_empty())
+            .unwrap_or(true),
+        "归档分片必须被回滚，不能留下半提交窗口：{message}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// 换窗成功必须把摘要来源记回便签，后续窗口才能判断摘要是否为模型原话。
+#[test]
+fn successful_rollover_records_projected_checkpoint_source() {
+    let root = temp_workspace("inline-rollover-source-projection");
+    let request = request_with_rollover(root.clone());
+    let session_dir = initialize_session(&request);
+    SessionNotesRuntime::write_note_file(&session_dir, "progress.md", "已验证事实", 1).unwrap();
+
+    run_rollover_with_progress(&request, None).unwrap();
+
+    let notes = SessionNotes::load_from_session(&session_dir)
+        .unwrap()
+        .expect("换窗后便签必须仍在");
+    assert_eq!(
+        notes.checkpoint_source,
+        Some(CheckpointSource::Projection),
+        "没有 handoff/summary.md 时必须记录为投影来源"
+    );
+    assert_eq!(
+        notes.checkpoint_window_number,
+        Some(1),
+        "摘要对应的应是换窗前的窗口号"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// 模型提交摘要时，来源必须记为 Model，而不是笼统的投影。
+#[test]
+fn submitted_summary_is_recorded_as_model_source() {
+    let root = temp_workspace("inline-rollover-source-model");
+    let request = request_with_rollover(root.clone());
+    let session_dir = initialize_session(&request);
+    let submitted = "P0:\nTASK:\n模型提交的任务\n\nCONSTRAINTS:\n- 约束\n\nVERIFIED:\n- 事实\n\nOPEN:\n- 无\n\nTOOLS:\n- none";
+    SessionNotesRuntime::write_note_file(&session_dir, "handoff/summary.md", submitted, 1).unwrap();
+    SessionNotesRuntime::write_note_file(&session_dir, "progress.md", "已验证事实", 1).unwrap();
+
+    run_rollover_with_progress(&request, None).unwrap();
+
+    let notes = SessionNotes::load_from_session(&session_dir)
+        .unwrap()
+        .expect("换窗后便签必须仍在");
+    assert_eq!(
+        notes.checkpoint_source,
+        Some(CheckpointSource::Model),
+        "模型提交的摘要必须记录为 Model 来源"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

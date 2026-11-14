@@ -144,7 +144,6 @@ pub(crate) const fn origin_code(origin: MemorySourceOrigin) -> &'static str {
         MemorySourceOrigin::DebuggingExperience => "debuggingExperience",
         MemorySourceOrigin::RemoteUpload => "remoteUpload",
         MemorySourceOrigin::CommandCompletionFeedback => "commandCompletionFeedback",
-        MemorySourceOrigin::SkillReflection => "skillReflection",
     }
 }
 
@@ -159,7 +158,6 @@ fn origin_from_code(value: &str) -> rusqlite::Result<MemorySourceOrigin> {
         "debuggingExperience" => Ok(MemorySourceOrigin::DebuggingExperience),
         "remoteUpload" => Ok(MemorySourceOrigin::RemoteUpload),
         "commandCompletionFeedback" => Ok(MemorySourceOrigin::CommandCompletionFeedback),
-        "skillReflection" => Ok(MemorySourceOrigin::SkillReflection),
         _ => Err(rusqlite::Error::InvalidQuery),
     }
 }

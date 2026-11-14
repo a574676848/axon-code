@@ -121,11 +121,11 @@ fn interaction_attachments_round_trip_through_every_read_path() {
 }
 
 #[test]
-fn interaction_explicit_model_round_trips_and_stays_empty_for_implicit_turns() {
+fn interaction_explicit_turn_settings_round_trip_and_stay_empty_for_implicit_turns() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
 
-    // 渠道与系统入站没有显式模型：必须读回 None，不能凭空造出模型。
+    // 渠道与系统入站没有显式模型与强度：必须读回 None，不能凭空造出设置。
     let implicit = interaction_record("interaction-implicit", "message-implicit", 10);
     assert!(store.append(&implicit).expect("追加").inserted);
     let read = store
@@ -133,17 +133,20 @@ fn interaction_explicit_model_round_trips_and_stays_empty_for_implicit_turns() {
         .expect("按 ID 读取")
         .expect("记录应存在");
     assert_eq!(read.model, None);
+    assert_eq!(read.reasoning_effort, None);
 
     let mut explicit = interaction_record("interaction-explicit", "message-explicit", 11);
     explicit.model = Some("balanced".to_owned());
+    explicit.reasoning_effort = Some("high".to_owned());
     assert!(store.append(&explicit).expect("追加").inserted);
 
-    // 显式模型必须穿过最近记录与领取路径：任一 SELECT 漏列都会在这里表现为列错位。
+    // 显式设置必须穿过最近记录与领取路径：任一 SELECT 漏列都会在这里表现为列错位。
     let latest = store
         .latest_external_interaction("workspace-test")
         .expect("读取最近外部交互")
         .expect("记录应存在");
     assert_eq!(latest.model.as_deref(), Some("balanced"));
+    assert_eq!(latest.reasoning_effort.as_deref(), Some("high"));
     let claimed = store
         .claim_processing_by_id(
             &explicit.interaction_id,
@@ -153,6 +156,10 @@ fn interaction_explicit_model_round_trips_and_stays_empty_for_implicit_turns() {
         .expect("按 ID 领取")
         .expect("应可领取");
     assert_eq!(claimed.interaction.model.as_deref(), Some("balanced"));
+    assert_eq!(
+        claimed.interaction.reasoning_effort.as_deref(),
+        Some("high")
+    );
 }
 
 #[test]

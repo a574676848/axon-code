@@ -29,8 +29,6 @@ axon mcp list [--limit <n>] | get <SERVER_ID> | add --url <url> [--bearer-token-
 axon memory stats|doctor|list|search <QUERY>|inspect <MEMORY_ID> ...
 axon memory conflicts|compare <LEFT_MEMORY_ID> <RIGHT_MEMORY_ID>|review|quality|sync-audit ...
 axon --format json memory quality
-axon [--format text|json] memory skill-evolution-status <session-id>
-axon [--format text|json] memory skill-evolution-promote <session-id> <skill-name>
 axon memory consolidate|consistency|recover-conflict [MEMORY_IDS]...|approve|approve-pending|archive-pending|quarantine <MEMORY_ID>|forget <MEMORY_ID> ...
 axon memory export --output <path> [--limit <n>] [--signing-key-id --signing-seed-hex --encryption-key-id --encryption-key-hex]
 axon memory import --input <path> [--yes] [--trusted-public-key-hex --decryption-key-hex]
@@ -88,8 +86,8 @@ axon upgrade [--manifest-url <url>] [--download] [--apply] [--rollback] [--outpu
 ```text
 /help                             查看 TUI 能力与常用命令
 /clear                            清空当前会话视图，保留顶部状态栏
-/model <model>                    切换模型：写回 agent.default_model，并对本进程后续回合生效
-/think                            调整本轮推理强度
+/model <model>                    切换模型：只作用于本会话，随每次提交下发给运行侧，不写回配置
+/think                            调整本轮推理强度（只作用于本会话，不写配置）
 /status                           查看当前 TUI 运行状态
 /mcp [list|login|logout <server>]  查看 MCP server 与工具清单、登录或登出
 /skills [list|toggle]             管理 skills
@@ -109,7 +107,6 @@ axon upgrade [--manifest-url <url>] [--download] [--apply] [--rollback] [--outpu
 - `--format` 既可作为顶层参数（`axon --format json <command> ...`），也可由支持它的子命令自己接收（如 `axon usage`、`axon models`、`axon pricing`、`axon skills`、`axon setup`、`axon providers`、`axon auth`、`axon upgrade`、`axon package`）。子命令帮助里没有 `--format` 的命令（如 `axon config get`、`axon debug session read`）必须用顶层写法。
 - 会话诊断的两个标识不可互换：`axon debug session show|delete` 收 `SESSION_ID`，`axon debug session read|resume` 收 `THREAD_ID`。
 - 接续既有会话（`--continue`、`--session` 或同一会话的后续 turn）且未传 `--model` 时，本轮沿用该会话记录的模型；只有该模型在配置内已不存在（`[[models]]` 条目被移除或所属 Provider 停用）才回退 `agent.default_model`。TUI `/model` 的显式选择随该轮下传，优先于会话模型。
-- `memory skill-evolution-status` 读取 `skill-evolution/state.json` 中指定 session 的当前状态；系统不保留历史状态流水。
 - `axon debug channel-metrics` 查询已持久化的渠道性能、缓存与连接指标。`--since-hours` 默认读取最近 24 小时，设置为 `0` 取消时间过滤；可用 `--model`、`--provider` 过滤，`--limit` 控制最多输出的渠道数。只有启用 `channel_balancer.telemetry_persistence_enabled` 后，运行遥测才会写入 `~/.axon/data/channel-metrics`。
 - 修改配置、删除会话、执行 Cron、发送远控消息、生成图片、升级或写入 Memory 前，先确认目标和副作用，并在完成后读取回执或 status。
 - 命令帮助中出现的 provider、传输、存储或后台行为属于配置和系统细节；Agent 只按命令帮助提供的当前参数执行，不自行构造隐藏设置。

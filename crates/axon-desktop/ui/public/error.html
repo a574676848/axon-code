@@ -7,7 +7,7 @@
     <script>
       try {
         var cached = window.localStorage.getItem('axon.theme');
-        if (cached === 'forest' || cached === 'obsidian') {
+        if (cached === 'obsidian') {
           document.documentElement.setAttribute('data-theme', cached);
         }
       } catch (e) {}
@@ -44,19 +44,6 @@
           sans-serif;
         --font-mono: 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'Liberation Mono', Menlo,
           Courier, 'PingFang SC', 'Microsoft YaHei';
-      }
-
-      html[data-theme='forest'] {
-        --color-canvas: #f2f6f4;
-        --color-surface: #fcfefd;
-        --color-surface-sunken: #e1eae5;
-        --color-border-hairline: rgba(17, 28, 24, 0.09);
-        --color-border-strong: rgba(17, 28, 24, 0.15);
-        --color-text-primary: #111c18;
-        --color-text-secondary: #3b4b44;
-        --color-text-tertiary: #52635b;
-        --color-primary: #164e3b;
-        --color-primary-hover: #1e604a;
       }
 
       html[data-theme='obsidian'] {

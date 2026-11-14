@@ -1,11 +1,14 @@
-//! Agent TUI 设置持久化到当前项目配置。
+//! Agent TUI 运行设置里需要落盘的部分（skill 开关）持久化到当前项目配置。
+//!
+//! 模型与推理强度都是会话内的显式选择，随每轮下发给运行侧，不写配置文件：写盘会把
+//! 一次临时切换变成所有会话的默认值，测试时还会改动真实配置。
 
 use std::path::Path;
 
 use axon_config::{AxonConfig, ConfigLoader};
 use axon_tui_runtime::AgentTuiSettingsChange;
 
-/// 将 TUI 中最后选择的模型运行设置写回配置文件。
+/// 将 TUI 中需要落盘的设置（skill 开关）写回配置文件。
 pub(super) fn persist_tui_settings_change(
     config_path: &Path,
     change: &AgentTuiSettingsChange,
@@ -17,62 +20,25 @@ pub(super) fn persist_tui_settings_change(
         .map_err(|error| format!("写入配置失败：{error:?}"))
 }
 
-/// 在 TUI 提交进入 Daemon 前同步必要的模型设置，避免配置写回回调尚未执行时使用旧模型。
+/// 在 TUI 提交进入 Daemon 前同步必要的运行设置（skill 开关）。
 pub(super) fn persist_tui_settings_change_if_needed(
     config_path: &Path,
     change: &AgentTuiSettingsChange,
 ) -> Result<(), String> {
-    let loaded = ConfigLoader::load_from_path(config_path)
-        .map_err(|error| format!("读取配置失败：{error:?}"))?;
-    if !tui_settings_change_requires_persist(&loaded.config, change) {
+    if !tui_settings_change_requires_persist(change) {
         return Ok(());
     }
     persist_tui_settings_change(config_path, change)
 }
 
-fn tui_settings_change_requires_persist(
-    config: &AxonConfig,
-    change: &AgentTuiSettingsChange,
-) -> bool {
-    let model_changed = change
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .is_some_and(|model| config.agent.default_model != model);
-    let reasoning_changed = change
-        .reasoning_effort
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .is_some_and(|effort| config.agent.reasoning_effort != effort);
-    model_changed || reasoning_changed || !change.skill_states.is_empty()
+/// 只有 skill 开关会落盘：没有开关变化就不必读写配置文件。
+fn tui_settings_change_requires_persist(change: &AgentTuiSettingsChange) -> bool {
+    !change.skill_states.is_empty()
 }
 
 fn apply_tui_settings_change(config: &mut AxonConfig, change: &AgentTuiSettingsChange) {
-    if let Some(model_name) = change
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        && let Some(index) = config
-            .models
-            .iter()
-            .position(|model| config.model_is_enabled(model) && model.name == model_name)
-            .or_else(|| {
-                config
-                    .models
-                    .iter()
-                    .position(|model| config.model_is_enabled(model) && model.id == model_name)
-            })
-    {
-        config.agent.default_model = config.models[index].name.clone();
-        if let Some(reasoning_effort) =
-            normalized_reasoning_effort(change.reasoning_effort.as_deref())
-        {
-            config.agent.reasoning_effort = reasoning_effort;
-        }
-    }
+    // 模型与推理强度只作用于当前会话：宿主把它们随轮下发给运行侧，这里不写
+    // `agent.default_model` 与 `agent.reasoning_effort`，全局默认值由设置入口维护。
     for skill in &change.skill_states {
         if skill.enabled {
             config.skills.disabled.remove(&skill.name);
@@ -82,88 +48,19 @@ fn apply_tui_settings_change(config: &mut AxonConfig, change: &AgentTuiSettingsC
     }
 }
 
-fn normalized_reasoning_effort(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|effort| !effort.is_empty())
-        .map(ToOwned::to_owned)
-}
-
 #[cfg(test)]
 mod tests {
-    use axon_config::{AxonConfig, ModelConfig, ProviderConfig};
+    use axon_config::AxonConfig;
     use axon_tui_runtime::AgentTuiSettingsChange;
 
-    use super::apply_tui_settings_change;
+    use super::{apply_tui_settings_change, tui_settings_change_requires_persist};
 
+    /// 切模型与切强度都不得改写配置：它们只随本轮下发，写盘会污染真实环境。
     #[test]
-    fn model_change_updates_default_model_and_agent_reasoning_effort() {
-        let mut config = fixture_config();
-        let change = AgentTuiSettingsChange {
-            model: Some("upstream-fast".to_owned()),
-            model_explicit: true,
-            reasoning_effort: Some("high".to_owned()),
-            skill_states: Vec::new(),
-        };
-
-        apply_tui_settings_change(&mut config, &change);
-
-        assert_eq!(config.agent.default_model, "fast");
-        assert_eq!(config.agent.reasoning_effort, "high");
-    }
-
-    #[test]
-    fn model_change_prefers_alias_name_over_duplicate_model_id() {
-        let mut config = fixture_config();
-        config
-            .models
-            .insert(0, model("alias-a", "alias-b", "local"));
-        config
-            .models
-            .push(model("alias-b", "shared-upstream-id", "local"));
-        let change = AgentTuiSettingsChange {
-            model: Some("alias-b".to_owned()),
-            model_explicit: true,
-            reasoning_effort: None,
-            skill_states: Vec::new(),
-        };
-
-        apply_tui_settings_change(&mut config, &change);
-
-        assert_eq!(config.agent.default_model, "alias-b");
-        assert!(config.models.iter().any(|model| {
-            model.name == config.agent.default_model && model.id == "shared-upstream-id"
-        }));
-    }
-
-    #[test]
-    fn model_name_change_reuses_channel_balancer_route_key() {
-        let mut config = fixture_config();
+    fn turn_model_and_reasoning_effort_never_touch_the_config() {
+        let mut config = AxonConfig::default();
         config.agent.default_model = "balanced".to_owned();
-        let change = AgentTuiSettingsChange {
-            model: Some("balanced".to_owned()),
-            model_explicit: true,
-            reasoning_effort: Some("xhigh".to_owned()),
-            skill_states: Vec::new(),
-        };
-
-        apply_tui_settings_change(&mut config, &change);
-
-        assert_eq!(config.agent.default_model, "balanced");
-        assert_eq!(config.agent.reasoning_effort, "xhigh");
-    }
-
-    #[test]
-    fn model_change_ignores_disabled_provider_model() {
-        let mut config = fixture_config();
-        config.agent.default_model = "balanced".to_owned();
-        let previous_reasoning_effort = config.agent.reasoning_effort.clone();
-        config
-            .providers
-            .iter_mut()
-            .find(|provider| provider.name == "remote")
-            .expect("测试 Provider 应存在")
-            .enabled = false;
+        config.agent.reasoning_effort = "low".to_owned();
         let change = AgentTuiSettingsChange {
             model: Some("upstream-fast".to_owned()),
             model_explicit: true,
@@ -174,12 +71,16 @@ mod tests {
         apply_tui_settings_change(&mut config, &change);
 
         assert_eq!(config.agent.default_model, "balanced");
-        assert_eq!(config.agent.reasoning_effort, previous_reasoning_effort);
+        assert_eq!(config.agent.reasoning_effort, "low");
+        assert!(
+            !tui_settings_change_requires_persist(&change),
+            "没有 skill 开关变化时不得读写配置文件"
+        );
     }
 
     #[test]
     fn skill_state_change_updates_disabled_skills() {
-        let mut config = fixture_config();
+        let mut config = AxonConfig::default();
         config.skills.disabled.insert("imagegen".to_owned());
         let change = AgentTuiSettingsChange {
             model: None,
@@ -201,36 +102,6 @@ mod tests {
 
         assert!(config.skills.disabled.contains("review"));
         assert!(!config.skills.disabled.contains("imagegen"));
-    }
-
-    fn fixture_config() -> AxonConfig {
-        let mut config = AxonConfig::default();
-        config.providers.push(ProviderConfig::new(
-            "local",
-            "openai",
-            "http://local.invalid",
-        ));
-        config.providers.push(ProviderConfig::new(
-            "remote",
-            "openai",
-            "http://remote.invalid",
-        ));
-        config
-            .models
-            .push(model("balanced", "local-balanced", "local"));
-        config
-            .models
-            .push(model("balanced", "remote-balanced", "remote"));
-        config.models.push(model("fast", "upstream-fast", "remote"));
-        config
-    }
-
-    fn model(name: &str, id: &str, provider: &str) -> ModelConfig {
-        ModelConfig {
-            name: name.to_owned(),
-            id: id.to_owned(),
-            provider: provider.to_owned(),
-            ..ModelConfig::default()
-        }
+        assert!(tui_settings_change_requires_persist(&change));
     }
 }

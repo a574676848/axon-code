@@ -420,7 +420,8 @@ fn failed_compression_retries_when_provider_visible_capabilities_change() {
 
 #[test]
 fn test_maybe_compress_rejects_checkpoint_over_window_output_budget() {
-    let oversized_task = "摘要".repeat(2_000);
+    // 需越过 token 上限：18,000 字节约为 4500 tokens，超过 4096 且仍低于 32 KiB 字节阀。
+    let oversized_task = "摘要".repeat(3_000);
     let mut rollover = |messages: &[AgentModelMessage]| {
         CanonicalCheckpoint::parse(&checkpoint_summary(&oversized_task, "- none"), messages)
             .map_err(axon_domain::AxonError::runtime_failure)

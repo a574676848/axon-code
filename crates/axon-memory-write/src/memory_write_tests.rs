@@ -330,7 +330,7 @@ fn candidate(id: u64, summary: &str) -> MemoryCandidate {
     MemoryCandidate {
         id: MemoryCandidateId(id),
         source_trace: Some(MemorySourceTrace {
-            origin: MemorySourceOrigin::SkillReflection,
+            origin: MemorySourceOrigin::AgentProcedure,
             session_id: Some(SessionId(7)),
             cell_id: Some(CellId(id)),
             summary: summary.to_owned(),

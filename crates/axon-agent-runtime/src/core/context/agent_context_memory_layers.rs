@@ -62,9 +62,7 @@ pub fn classify_long_term_origin(origin: Option<MemorySourceOrigin>) -> MemoryRe
             | MemorySourceOrigin::DebuggingExperience
             | MemorySourceOrigin::CommandCompletionFeedback,
         ) => MemoryRecallLayer::Episodic,
-        Some(MemorySourceOrigin::AgentProcedure | MemorySourceOrigin::SkillReflection) => {
-            MemoryRecallLayer::Procedural
-        }
+        Some(MemorySourceOrigin::AgentProcedure) => MemoryRecallLayer::Procedural,
         Some(
             MemorySourceOrigin::AgentUserContext
             | MemorySourceOrigin::AgentKnowledge

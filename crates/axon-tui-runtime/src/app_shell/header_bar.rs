@@ -3,7 +3,7 @@
 use crate::r#loop::agent_tui::{
     AgentTuiConfigStatus, AgentTuiModelCatalogItem, AgentTuiPlanProgress, AgentTuiRunOverrides,
     AgentTuiTokenUsage, display_units,
-    runtime_identity::{display_model, effective_model},
+    runtime_identity::{SessionRunModel, display_model, effective_model},
 };
 
 use crate::surface::display_width::DisplayWidthText;
@@ -43,6 +43,10 @@ pub(crate) struct HeaderBarMetrics {
     pub(crate) replay_snapshot: Option<ReplaySnapshotHeaderState>,
     pub(crate) spinner: &'static str,
     pub(crate) animation_tick: u64,
+    /// 本会话最近一轮真实使用的模型；头部据此显示真实模型与其上下文窗口。
+    pub(crate) session_run_model: Option<SessionRunModel>,
+    /// 用户在本进程里显式选过模型：显式选择优先于会话事实。
+    pub(crate) model_explicit: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,13 +69,15 @@ impl HeaderBarViewModel {
                     .with_breath_highlight(metrics.animation_tick),
             );
         }
+        // 生效模型只解析一次：模型名、思考强度与上下文窗口必须来自同一份事实。
+        let current = current_model_catalog_item(config_status, overrides, metrics, models);
         primary.extend([
             HeaderBarSegment::new(
                 HeaderBarSegmentKind::Model,
                 short_metric(
                     "模型",
                     compact_text(
-                        &display_model(config_status, overrides),
+                        &model_label(config_status, overrides, current),
                         MODEL_VISIBLE_CHARS,
                     ),
                 ),
@@ -82,7 +88,7 @@ impl HeaderBarViewModel {
             ),
             HeaderBarSegment::new(
                 HeaderBarSegmentKind::Reasoning,
-                short_metric("思考", reasoning_effort(overrides, models, config_status)),
+                short_metric("思考", reasoning_effort(overrides, current)),
             ),
         ]);
         // 会话累计：耗时 → 累计 → 命中率，三段回答同一件事「这条会话花了多少」。
@@ -114,7 +120,7 @@ impl HeaderBarViewModel {
                 ),
             ));
         }
-        if let Some(context) = context_usage_value(metrics, config_status, overrides, models) {
+        if let Some(context) = context_usage_value(metrics, current) {
             primary.push(
                 HeaderBarSegment::new(HeaderBarSegmentKind::Context, context.text)
                     .with_tone(context.tone),
@@ -292,33 +298,27 @@ fn non_empty_spinner(metrics: &HeaderBarMetrics) -> Option<String> {
 
 fn reasoning_effort(
     overrides: &AgentTuiRunOverrides,
-    models: &[AgentTuiModelCatalogItem],
-    config_status: &AgentTuiConfigStatus,
+    current: Option<&AgentTuiModelCatalogItem>,
 ) -> String {
     overrides
         .reasoning_effort
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            current_model_catalog_item(config_status, overrides, models)
-                .and_then(|model| model.reasoning_effort.as_deref())
-        })
+        .or_else(|| current.and_then(|model| model.reasoning_effort.as_deref()))
         .unwrap_or(DEFAULT_REASONING_EFFORT)
         .to_owned()
 }
 
 fn context_usage_value(
     metrics: &HeaderBarMetrics,
-    config_status: &AgentTuiConfigStatus,
-    overrides: &AgentTuiRunOverrides,
-    models: &[AgentTuiModelCatalogItem],
+    current: Option<&AgentTuiModelCatalogItem>,
 ) -> Option<ContextUsageValue> {
     let usage = metrics.token_usage;
     let used = usage.current_context_tokens();
     if used == 0 {
         return None;
     }
-    let context_window = current_model_catalog_item(config_status, overrides, models)
+    let context_window = current
         .and_then(|model| model.context_window)
         .filter(|window| *window > 0);
     let mut value = match context_window {
@@ -369,14 +369,46 @@ fn context_pressure_tone(used: u64, window: u64) -> HeaderBarSegmentTone {
 fn current_model_catalog_item<'a>(
     config_status: &AgentTuiConfigStatus,
     overrides: &AgentTuiRunOverrides,
+    metrics: &HeaderBarMetrics,
     models: &'a [AgentTuiModelCatalogItem],
 ) -> Option<&'a AgentTuiModelCatalogItem> {
+    // 用户显式选过模型：头部显示这次选择（与运行侧显式模型一致）。
+    if !metrics.model_explicit {
+        // 否则优先会话真实使用的模型：运行侧恢复会话时就是按它选模型，
+        // 头部读同一份事实，模型名与上下文窗口才不会各说一套。
+        if let Some(run) = metrics.session_run_model.as_ref()
+            && let Some(item) = models
+                .iter()
+                .find(|candidate| {
+                    candidate.provider == run.provider && candidate.matches(&run.model)
+                })
+                .or_else(|| {
+                    models
+                        .iter()
+                        .find(|candidate| candidate.matches(&run.model))
+                })
+        {
+            return Some(item);
+        }
+    }
     let model = effective_model(config_status, overrides);
     let display = display_model(config_status, overrides);
     models
         .iter()
         .find(|candidate| candidate.label == display)
         .or_else(|| models.iter().find(|candidate| candidate.matches(&model)))
+}
+
+/// 头部显示的模型名：命中目录时用目录展示名，否则回退配置口径。
+fn model_label(
+    config_status: &AgentTuiConfigStatus,
+    overrides: &AgentTuiRunOverrides,
+    current: Option<&AgentTuiModelCatalogItem>,
+) -> String {
+    current.map_or_else(
+        || display_model(config_status, overrides),
+        |model| model.label.clone(),
+    )
 }
 
 fn format_tokens_per_second_x10(value: u64) -> String {
@@ -402,257 +434,5 @@ fn short_metric(label: &str, value: impl Into<String>) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::r#loop::agent_tui::{AgentTuiConfigStatus, AgentTuiRunOverrides};
-
-    #[test]
-    fn header_bar_view_model_orders_product_status_fields_by_priority() {
-        let config = AgentTuiConfigStatus::new("openai", "gpt-5", "已认证");
-        let metrics = HeaderBarMetrics {
-            status: HeaderBarStatus::Working,
-            spinner: "⚡ Axon",
-            cwd: "E:/zbg/axon-code".to_owned(),
-            session_id: Some("019eead4-7469-7130-ad0b-47d4ec1a87a4".to_owned()),
-            continue_last: false,
-            plan_progress: Some(AgentTuiPlanProgress {
-                completed: 1,
-                total: 3,
-            }),
-            lsp_active_count: 2,
-            ..HeaderBarMetrics::default()
-        };
-
-        let model = HeaderBarViewModel::from_sources(
-            &config,
-            &AgentTuiRunOverrides::default(),
-            &metrics,
-            &[],
-        );
-
-        assert_eq!(model.primary[0].text, "⚡ Axon");
-        assert!(model.primary[0].breath_highlight);
-        assert!(
-            !model
-                .primary
-                .iter()
-                .any(|segment| segment.text.contains("生成回复中"))
-        );
-        assert!(
-            !model
-                .primary
-                .iter()
-                .any(|segment| segment.text.contains("会话:"))
-        );
-        assert!(!model.hints.iter().any(|segment| segment.text == "Esc 中断"));
-    }
-
-    #[test]
-    fn header_bar_view_model_surfaces_session_totals_before_context() {
-        let config = AgentTuiConfigStatus::new("openai", "gpt-5", "已认证");
-        let metrics = HeaderBarMetrics {
-            token_usage: AgentTuiTokenUsage::new(1_000, 2_000, 300, 400, 0)
-                .with_current_context_tokens(2_300),
-            session_tokens: 6_260_000,
-            session_elapsed_ms: 11_520_000,
-            session_cache_hit_basis_points: Some(6_060),
-            ..HeaderBarMetrics::default()
-        };
-
-        let model = HeaderBarViewModel::from_sources(
-            &config,
-            &AgentTuiRunOverrides::default(),
-            &metrics,
-            &[],
-        );
-
-        let kinds: Vec<_> = model.primary.iter().map(|segment| segment.kind).collect();
-        let elapsed = kinds
-            .iter()
-            .position(|kind| *kind == HeaderBarSegmentKind::Elapsed)
-            .expect("HeaderBar 应显示会话累计耗时");
-        let session = kinds
-            .iter()
-            .position(|kind| *kind == HeaderBarSegmentKind::SessionTokens)
-            .expect("HeaderBar 应显示会话累计用量");
-        let cache_hit = kinds
-            .iter()
-            .position(|kind| *kind == HeaderBarSegmentKind::CacheHit)
-            .expect("HeaderBar 应显示会话累计命中率");
-        let context = kinds
-            .iter()
-            .position(|kind| *kind == HeaderBarSegmentKind::Context)
-            .expect("HeaderBar 应显示上下文");
-        assert_eq!(session, elapsed + 1, "耗时排在累计用量之前");
-        assert_eq!(cache_hit, session + 1, "命中率紧跟累计用量");
-        assert!(cache_hit < context, "会话读数都在上下文段之前");
-        assert_eq!(model.primary[elapsed].text, "耗时 3h 12m 00s");
-        assert_eq!(model.primary[session].text, "累计 6.26M");
-        assert_eq!(model.primary[cache_hit].text, "命中率 60.60%");
-    }
-
-    #[test]
-    fn header_bar_view_model_omits_session_totals_until_any_usage() {
-        let config = AgentTuiConfigStatus::new("openai", "gpt-5", "已认证");
-        let model = HeaderBarViewModel::from_sources(
-            &config,
-            &AgentTuiRunOverrides::default(),
-            &HeaderBarMetrics::default(),
-            &[],
-        );
-
-        assert!(
-            !model.primary.iter().any(|segment| matches!(
-                segment.kind,
-                HeaderBarSegmentKind::SessionTokens | HeaderBarSegmentKind::Elapsed
-            )),
-            "一条会话都还没跑过时不渲染 `累计 0` 与 `耗时 0`"
-        );
-    }
-    #[test]
-    fn header_bar_view_model_surfaces_context_cache_without_prompt_cache_side_effects() {
-        let config = AgentTuiConfigStatus::new("openai", "gpt-5", "已认证");
-        let metrics = HeaderBarMetrics {
-            token_usage: AgentTuiTokenUsage::new(1_000, 2_000, 300, 400, 0)
-                .with_current_context_tokens(2_300),
-            ..HeaderBarMetrics::default()
-        };
-
-        let model = HeaderBarViewModel::from_sources(
-            &config,
-            &AgentTuiRunOverrides::default(),
-            &metrics,
-            &[],
-        );
-
-        let context = model
-            .primary
-            .iter()
-            .find(|segment| segment.kind == HeaderBarSegmentKind::Context)
-            .expect("HeaderBar 应显示上下文/cache 状态");
-        assert!(context.text.contains("上下文 2.3K"));
-        assert!(context.text.contains("缓存 2K"));
-        assert!(context.text.contains("写入 300"));
-        assert!(
-            !context.text.contains("命中"),
-            "命中率是整条会话的读数，不挤在上下文段里"
-        );
-    }
-
-    #[test]
-    fn context_pressure_uses_stable_warning_and_critical_thresholds() {
-        assert_eq!(
-            context_pressure_tone(699, 1_000),
-            HeaderBarSegmentTone::Default
-        );
-        assert_eq!(
-            context_pressure_tone(700, 1_000),
-            HeaderBarSegmentTone::Warning
-        );
-        assert_eq!(
-            context_pressure_tone(850, 1_000),
-            HeaderBarSegmentTone::Critical
-        );
-    }
-
-    #[test]
-    fn header_bar_view_model_projects_resume_loading_without_blocking_input() {
-        let config = AgentTuiConfigStatus::new("openai", "gpt-5", "已认证");
-        let metrics = HeaderBarMetrics {
-            spinner: "⚡ Axon",
-            animation_tick: 2,
-            cwd: "E:/zbg/axon-code".to_owned(),
-            replay_snapshot: Some(ReplaySnapshotHeaderState::loading(7, true)),
-            ..HeaderBarMetrics::default()
-        };
-
-        let model = HeaderBarViewModel::from_sources(
-            &config,
-            &AgentTuiRunOverrides::default(),
-            &metrics,
-            &[],
-        );
-
-        assert_eq!(model.primary[0].text, "⚡ Axon");
-        assert!(!model.primary[0].breath_highlight);
-        assert!(
-            model
-                .hints
-                .iter()
-                .any(|segment| segment.text == "7 cells 已加载")
-        );
-        assert!(model.hints.iter().any(|segment| segment.text == "输入可用"));
-    }
-
-    #[test]
-    fn header_bar_view_model_projects_completed_resume_snapshot_state() {
-        let config = AgentTuiConfigStatus::new("openai", "gpt-5", "已认证");
-        let metrics = HeaderBarMetrics {
-            cwd: "E:/zbg/axon-code".to_owned(),
-            replay_snapshot: Some(ReplaySnapshotHeaderState::completed(12, true)),
-            ..HeaderBarMetrics::default()
-        };
-
-        let model = HeaderBarViewModel::from_sources(
-            &config,
-            &AgentTuiRunOverrides::default(),
-            &metrics,
-            &[],
-        );
-
-        assert!(
-            !model
-                .primary
-                .iter()
-                .any(|segment| segment.text.contains("快照:"))
-        );
-        assert!(!model.hints.iter().any(|segment| segment.text == "输入可用"));
-    }
-
-    #[test]
-    fn header_bar_view_model_renders_generation_performance_after_context() {
-        let config = AgentTuiConfigStatus::new("openai", "gpt-5", "已认证");
-        let metrics = HeaderBarMetrics {
-            token_usage: AgentTuiTokenUsage::new(10, 0, 0, 40, 0),
-            first_token_avg_ms: Some(8_000),
-            generation_tps_x10: Some(400),
-            plan_progress: Some(AgentTuiPlanProgress {
-                completed: 1,
-                total: 3,
-            }),
-            lsp_active_count: 2,
-            ..HeaderBarMetrics::default()
-        };
-
-        let model = HeaderBarViewModel::from_sources(
-            &config,
-            &AgentTuiRunOverrides::default(),
-            &metrics,
-            &[],
-        );
-
-        let metrics = model
-            .primary
-            .iter()
-            .filter(|segment| {
-                matches!(
-                    segment.kind,
-                    HeaderBarSegmentKind::FirstToken
-                        | HeaderBarSegmentKind::GenerationRate
-                        | HeaderBarSegmentKind::Plan
-                        | HeaderBarSegmentKind::Lsp
-                )
-            })
-            .map(|segment| (segment.kind, segment.text.as_str()))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            metrics,
-            [
-                (HeaderBarSegmentKind::FirstToken, "首字 8s"),
-                (HeaderBarSegmentKind::GenerationRate, "速率 40 tok/s"),
-                (HeaderBarSegmentKind::Plan, "计划 1/3"),
-                (HeaderBarSegmentKind::Lsp, "LSP 2"),
-            ]
-        );
-    }
-}
+#[path = "header_bar_tests.rs"]
+mod tests;

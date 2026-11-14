@@ -1,5 +1,8 @@
 use super::*;
-use crate::session_notes::SESSION_NOTES_CHECKPOINT_MAX_BYTES;
+use crate::session_notes::{
+    SESSION_NOTES_CHECKPOINT_MAX_BYTES, SESSION_NOTES_CHECKPOINT_MAX_TOKENS,
+};
+use crate::token_estimator::estimated_text_tokens;
 
 pub(super) struct CompactionCompletionContext<'a> {
     pub(super) runtime: &'a WindowRolloverPolicyRuntime,
@@ -27,6 +30,7 @@ pub(super) struct CompactionCompletedMetrics {
     pub(super) before_messages: usize,
     pub(super) after_messages: usize,
     pub(super) checkpoint_bytes: usize,
+    pub(super) checkpoint_tokens: u64,
 }
 
 impl WindowRolloverPolicyRuntime {
@@ -127,6 +131,7 @@ pub(super) fn complete_compaction(
             before_messages: validated.before_messages,
             after_messages,
             checkpoint_bytes: validated.checkpoint_bytes,
+            checkpoint_tokens: estimated_text_tokens(context.checkpoint.as_str()),
         },
     ));
     transaction.complete();
@@ -143,6 +148,8 @@ enum ReplacementValidationError {
     CheckpointOverBudget {
         checkpoint_bytes: usize,
         byte_limit: usize,
+        checkpoint_tokens: u64,
+        token_limit: u64,
         compacted: CompactedHistory,
     },
     ContextOverflow {
@@ -173,10 +180,15 @@ fn validate_replacement(
 ) -> Result<ValidatedCompaction, ReplacementValidationError> {
     let compacted = runtime.rebuild_with_compression_from_normalized(provider_messages, checkpoint);
     let checkpoint_bytes = checkpoint.as_str().len();
-    if checkpoint_bytes > SESSION_NOTES_CHECKPOINT_MAX_BYTES {
+    let checkpoint_tokens = estimated_text_tokens(checkpoint.as_str());
+    if checkpoint_tokens > SESSION_NOTES_CHECKPOINT_MAX_TOKENS
+        || checkpoint_bytes > SESSION_NOTES_CHECKPOINT_MAX_BYTES
+    {
         return Err(ReplacementValidationError::CheckpointOverBudget {
             checkpoint_bytes,
             byte_limit: SESSION_NOTES_CHECKPOINT_MAX_BYTES,
+            checkpoint_tokens,
+            token_limit: SESSION_NOTES_CHECKPOINT_MAX_TOKENS,
             compacted,
         });
     }
@@ -261,6 +273,8 @@ fn compaction_completed_event(
         "beforeMessages": metrics.before_messages,
         "afterMessages": metrics.after_messages,
         "checkpointBytes": metrics.checkpoint_bytes,
+        "checkpointTokens": metrics.checkpoint_tokens,
+        "checkpointTokenLimit": SESSION_NOTES_CHECKPOINT_MAX_TOKENS,
     }))
 }
 
@@ -313,10 +327,14 @@ fn validation_failure_details(
         ReplacementValidationError::CheckpointOverBudget {
             checkpoint_bytes,
             byte_limit,
+            checkpoint_tokens,
+            token_limit,
             ..
         } => (
             format!(
-                "窗口交接事实超过大小上限：{} bytes > {} bytes",
+                "窗口交接事实超过预算：{} tokens > {} tokens，或 {} bytes > {} bytes；请压缩便签后重写交接摘要",
+                format_decimal_count(*checkpoint_tokens),
+                format_decimal_count(*token_limit),
                 format_decimal_count(u64::try_from(*checkpoint_bytes).unwrap_or(u64::MAX)),
                 format_decimal_count(u64::try_from(*byte_limit).unwrap_or(u64::MAX))
             ),

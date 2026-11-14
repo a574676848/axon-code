@@ -33,6 +33,8 @@ pub(super) struct PersonaSettlementInput<'a> {
     pub(super) drift_reason: Option<&'a str>,
     /// 轮前场景帧记录的受众记号；存在时以其为准。
     pub(super) scene_audience: Option<&'a str>,
+    /// 本轮零模型客观信号；规则层开关关闭或未采集时为空。
+    pub(super) signals: Option<&'a axon_agent_runtime::ExplicitSignals>,
 }
 
 /// 结算一轮的人格状态；任何失败只记日志，不影响治理任务结论。
@@ -59,6 +61,15 @@ pub(super) fn settle_persona_turn(input: &PersonaSettlementInput<'_>) {
         axon_logger::warning("persona_settlement: 人格库不可用");
         return;
     };
+    // 规则层只补评估器没给的那部分：有模型判定时一律以模型为准，
+    // 单开关关闭后这里退化成 `None`，行为与改动前完全一致。
+    let rule_advice = rule_advice_for(input.signals);
+    if let Some(advice) = rule_advice.as_ref() {
+        axon_logger::debug(&format!(
+            "persona_settlement: 规则层建议 精力={:?} 原因={}",
+            advice.fatigue, advice.cause
+        ));
+    }
     let event = PersonaEvent::TurnSettled(TurnSettledInput {
         final_status: input.final_status,
         user_affect: input
@@ -66,10 +77,16 @@ pub(super) fn settle_persona_turn(input: &PersonaSettlementInput<'_>) {
             .map_or(UserAffect::Unknown, UserAffect::parse),
         fatigue_level: input
             .user_fatigue
-            .and_then(axon_persona::FatigueLevel::parse),
+            .and_then(axon_persona::FatigueLevel::parse)
+            .or_else(|| rule_fatigue(rule_advice.as_ref())),
         persona_drift_bp: input.persona_drift_bp.unwrap_or(0),
         drift_reason: input.drift_reason.map(ToOwned::to_owned),
         now_ms: axon_time::unix_now_ms(),
+        observed_failure_streak: rule_advice
+            .as_ref()
+            .and(input.signals)
+            .and_then(|signals| u8::try_from(signals.failure_streak).ok()),
+        rule_cause: rule_advice.as_ref().map(|advice| advice.cause.clone()),
     });
     let idempotency_key = settlement_idempotency_key(
         input.session_id,
@@ -185,6 +202,32 @@ pub(super) fn select_user_evidence<'a>(
     evidence_refs
         .iter()
         .find(|reference| reference.as_str() == expected)
+}
+
+/// 规则层开关决定要不要取建议：关闭时一律返回 `None`，走旧评估器路径。
+fn rule_advice_for(
+    signals: Option<&axon_agent_runtime::ExplicitSignals>,
+) -> Option<axon_agent_runtime::PersonaRuleAdvice> {
+    if !axon_agent_runtime::PERSONA_RULES_ENABLED_DEFAULT {
+        return None;
+    }
+    let signals = signals?;
+    // 全零信号等于「没采集」：此时不介入，与关闭规则层保持完全等价。
+    if *signals == axon_agent_runtime::ExplicitSignals::default() {
+        return None;
+    }
+    Some(axon_agent_runtime::advise_persona(signals))
+}
+
+/// 规则层精力档映射到人格域记号；无建议时返回 `None`，交由衰减逻辑处理。
+fn rule_fatigue(
+    advice: Option<&axon_agent_runtime::PersonaRuleAdvice>,
+) -> Option<axon_persona::FatigueLevel> {
+    match advice?.fatigue {
+        axon_agent_runtime::FatigueAdvice::Light => Some(axon_persona::FatigueLevel::Low),
+        axon_agent_runtime::FatigueAdvice::Normal => Some(axon_persona::FatigueLevel::Normal),
+        axon_agent_runtime::FatigueAdvice::Heavy => Some(axon_persona::FatigueLevel::High),
+    }
 }
 
 #[cfg(test)]

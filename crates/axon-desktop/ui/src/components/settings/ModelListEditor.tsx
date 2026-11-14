@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { AlertCircleIcon, PlusIcon, TrashIcon } from '../../icons';
 import type { DiscoveredModel, DiscoverModelsResult, ModelInput } from '../../types';
 import * as ipc from '../../ipc';
+import { EMPTY_MODEL, mergeDiscoveredModels } from '../../modelCatalog';
 import { Button, Input, NumberInput, Switch } from '../ui/controls';
 import { Banner, EmptyState, FormField, Panel, SectionHeading, Text, ToggleField } from '../ui/surfaces';
 import { DiscoverModelsModal } from './DiscoverModelsModal';
@@ -11,18 +12,6 @@ import { DiscoverModelsModal } from './DiscoverModelsModal';
  * 每一行都是一条草稿，整张卡片保存时才随供应商一起原子落盘；
  * 「获取模型」把上游返回的结果作为候选交给用户勾选，绝不自动写配置。
  */
-
-/** 新建模型行的初始值。 */
-const EMPTY_MODEL: Omit<ModelInput, 'provider'> = {
-  name: '',
-  id: '',
-  context_window: 128000,
-  max_output_tokens: 8192,
-  supports_vision: true,
-  supports_embedding: false,
-  embedding_dimension: 0,
-  requires_reasoning_content_on_assistant_messages: false,
-};
 
 interface ModelListEditorProps {
   /** 该供应商名下的模型草稿。 */
@@ -76,21 +65,9 @@ export const ModelListEditor: React.FC<ModelListEditorProps> = ({
     }
   };
 
-  /** 采用候选：已存在的模型保留用户校正过的参数，不覆盖。 */
+  /** 采用候选：按 name 判重合并，保留用户校正过的参数，不覆盖。 */
   const adopt = (picked: DiscoveredModel[]) => {
-    const byId = new Map(models.map((model) => [model.id, model] as const));
-    for (const candidate of picked) {
-      if (byId.has(candidate.id)) continue;
-      byId.set(candidate.id, {
-        ...EMPTY_MODEL,
-        name: candidate.name ?? candidate.id,
-        id: candidate.id,
-        provider: providerName,
-        context_window: candidate.context_window ?? EMPTY_MODEL.context_window,
-        max_output_tokens: candidate.max_output_tokens ?? EMPTY_MODEL.max_output_tokens,
-      });
-    }
-    onChange([...byId.values()]);
+    onChange(mergeDiscoveredModels(models, picked, providerName));
     setAnswer(null);
   };
 

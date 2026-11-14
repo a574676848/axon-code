@@ -172,6 +172,8 @@ fn fixture_session_record() -> RunSessionRecord {
         upstream_model: None,
         reasoning_effort: None,
         request_path: None,
+        reflection_notice: None,
+        turn_trace: None,
         speed_mode: None,
         ttft_ms: None,
         generation_speed_tps: None,

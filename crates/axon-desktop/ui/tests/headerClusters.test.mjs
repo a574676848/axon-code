@@ -125,7 +125,7 @@ test('首屏只留辅助读数：会话读数与上下文整组不占位', () =>
     assert.deepEqual(auxKinds(firstScreen), ['mcp', 'skill']);
 });
 
-test('新建会话读作 0 与 0.00%，基线没取回时只留上下文', () => {
+test('没有用量观测时累计与命中率都不占位，与上下文同一生命周期', () => {
     const fresh = cluster(
         baseInput({
             usage: null,
@@ -139,27 +139,40 @@ test('新建会话读作 0 与 0.00%，基线没取回时只留上下文', () =>
         }),
         'session',
     );
-    assert.deepEqual(
-        fresh.segments.map((segment) => segment.kind),
-        ['sessionTokens', 'cacheHit', 'context'],
-    );
-    assert.equal(fresh.segments[0].text, '累计 0');
-    assert.equal(fresh.segments[1].text, '命中率 0.00%');
-    assert.equal(fresh.segments[2].text, '0/10K');
+    assert.equal(fresh, undefined, '一个 token 都没观测到时整簇不占位');
 
-    const loading = cluster(baseInput({ sessionCumulative: null }), 'session');
-    assert.deepEqual(
-        loading.segments.map((segment) => segment.kind),
-        ['context'],
-        '基线未取回时不拿单轮读数顶替',
+    const running = cluster(baseInput({ usage: null, sessionCumulative: null }), 'session');
+    assert.equal(running, undefined, '基线未取回且没有观测时整簇也不占位');
+});
+
+test('只有耗时没有用量时只留耗时一段', () => {
+    const session = cluster(
+        baseInput({
+            usage: null,
+            sessionCumulative: cumulative({
+                totalTokens: 0,
+                inputTokens: 0,
+                cacheReadTokens: 0,
+                outputTokens: 0,
+                elapsedMs: 90_000,
+            }),
+        }),
+        'session',
     );
+
+    assert.deepEqual(
+        session.segments.map((segment) => segment.kind),
+        ['elapsed'],
+        '在跑的第一轮还没有用量帧时，只呈现耗时',
+    );
+    assert.equal(session.segments[0].text, '耗时 1m 30s');
 });
 
 test('窗口未知时上下文只报已用', () => {
-    const session = cluster(baseInput({ usage: null, contextWindow: null }), 'session');
+    const session = cluster(baseInput({ contextWindow: null }), 'session');
     const context = session.segments.find((segment) => segment.kind === 'context');
 
-    assert.equal(context.text, '0');
+    assert.equal(context.text, '1K');
 });
 
 test('技能清单未就绪或零条时都不占位', () => {

@@ -20,6 +20,8 @@ pub mod commands;
 pub mod history;
 /// 中断正在运行的主 turn。
 pub mod interrupt;
+/// 后台作业输出的尾随读取：按字节游标增量读归档。
+pub mod job_output;
 /// 用户手动停止后台作业。
 pub mod job_stop;
 /// 车道活作业名册：作业行的对账依据。
@@ -42,12 +44,12 @@ pub mod wire;
 pub use attachment::{StagedAttachment, attachment_pick, attachment_preview, attachment_stage};
 pub use commands::{
     conversation_answer_question, conversation_history, conversation_history_events,
-    conversation_interrupt, conversation_lane_jobs, conversation_lane_questions,
-    conversation_lane_subagents, conversation_send_subagent_message, conversation_set_active_lane,
-    conversation_stop_job, conversation_submit, conversation_unsubscribe, conversation_watch,
-    conversation_watch_session,
+    conversation_interrupt, conversation_job_output, conversation_lane_jobs,
+    conversation_lane_questions, conversation_lane_subagents, conversation_send_subagent_message,
+    conversation_set_active_lane, conversation_stop_job, conversation_submit,
+    conversation_unsubscribe, conversation_watch, conversation_watch_session,
 };
-pub use history::{InteractionSummary, LaneInteractions, SessionUsageTotals};
+pub use history::{InteractionSummary, LaneEffectiveModel, LaneInteractions, SessionUsageTotals};
 pub use interrupt::InterruptReceipt;
 pub use job_stop::JobStopReceipt;
 pub use lane_jobs::LaneJobsRoster;

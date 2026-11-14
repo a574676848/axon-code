@@ -1,6 +1,6 @@
 //! Prompt fragment pipeline：统一解释 fragment 元数据并投影为模型消息。
 
-use crate::{AgentModelMessage, RetentionClass};
+use crate::{AgentModelMessage, AgentModelMessageKind, RetentionClass};
 use axon_context_fragments::{
     PromptFragment, PromptFragmentBudget, PromptFragmentLifecycle, PromptFragmentMetadata,
 };
@@ -61,17 +61,18 @@ impl PromptFragmentPipelineEntry {
     fn into_message(self) -> AgentModelMessage {
         let message = AgentModelMessage::context(self.metadata.role.as_str(), self.content);
         let retention_class = retention_class_for_fragment(&self.metadata);
-        let message = AgentModelMessage {
+        let exclude_from_cache = should_exclude_from_cache(&self.metadata);
+        AgentModelMessage {
             retention_class,
+            // 动态片段显式标为注入上下文，让换窗与角色转换按 kind 取舍；
+            // 稳定可缓存片段保持 Regular，否则会被 provider 规范化强制改成不入缓存。
+            kind: if exclude_from_cache {
+                AgentModelMessageKind::InjectedContext
+            } else {
+                AgentModelMessageKind::Regular
+            },
+            cache_excluded: exclude_from_cache,
             ..message
-        };
-        if should_exclude_from_cache(&self.metadata) {
-            AgentModelMessage {
-                cache_excluded: true,
-                ..message
-            }
-        } else {
-            message
         }
     }
 }

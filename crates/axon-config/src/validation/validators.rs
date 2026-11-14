@@ -34,11 +34,6 @@ fn validate_agent(agent: &AgentConfig) -> AxonResult<()> {
             "agent.max_subagent_active_turns 必须大于 0",
         ));
     }
-    if agent.max_subagent_depth == 0 {
-        return Err(AxonError::config_invalid(
-            "agent.max_subagent_depth 必须大于 0",
-        ));
-    }
     if agent.idle_compaction_debounce_ms == 0 {
         return Err(AxonError::config_invalid(
             "agent.idle_compaction_debounce_ms 必须大于 0",

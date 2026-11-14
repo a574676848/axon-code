@@ -372,17 +372,17 @@ fn render_completed_run(
             }
         }
         OutputFormat::Json => {
-            let event = RunJsonEvent::completed(CompletedRunWireEventsInput {
+            let mut event = RunJsonEvent::completed(CompletedRunWireEventsInput {
                 request,
                 response: &response,
                 session_title: completed.session_title.as_deref(),
                 memory_usefulness: completed.memory_usefulness.as_ref(),
                 memory_autonomy: completed.memory_autonomy.as_ref(),
-                skill_evolution: completed.skill_evolution.as_ref(),
                 post_run_governance: completed.post_run_governance.as_ref(),
                 recorded_at_ms: run_execution::wire_recorded_at_ms(),
                 total_elapsed_ms: provider_turn_elapsed_ms,
             });
+            event.memory_reflection_notice = completed.memory_reflection_notice.clone();
             let mut result = json_result(&event);
             if event.status == "failed" {
                 result.exit_code = 1;

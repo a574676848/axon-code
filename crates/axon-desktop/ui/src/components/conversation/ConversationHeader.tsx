@@ -9,12 +9,12 @@ import {
 } from '../../conversation/metrics';
 import { contextUsageModel } from '../../conversation/contextUsage';
 import {
-  AgentIcon,
+  ApiIcon,
   ChecklistIcon,
   ClockIcon,
-  CodeIcon,
   GaugeIcon,
   ListIcon,
+  DatabaseIcon,
   RingIcon,
   SkillIcon,
   ToolIcon,
@@ -50,7 +50,6 @@ const TONE_CLASS: Record<HeaderSegmentTone, string> = {
  * 确保空间不足时整簇提前退场，绝不把「耗时」等读数从汉字中间硬劈成两半。
  */
 const CLUSTER_VISIBILITY: Record<HeaderClusterKind, string> = {
-  identity: 'flex',
   // 会话读数组四段（耗时、累计、命中率、上下文）比只有后两段时更宽，断点随之上调：
   // 装不下就整簇收起，绝不把读数从数字中间裁断。
   session: 'hidden @min-[520px]:flex',
@@ -67,7 +66,6 @@ function contextPercentValue(metrics: HeaderMetricsInput): number | null {
   if (used === 0) return null;
   return Math.min(100, Math.floor((used * 100) / metrics.contextWindow));
 }
-
 /**
  * 指标图标：线性图形，14px。
  *
@@ -77,20 +75,22 @@ function contextPercentValue(metrics: HeaderMetricsInput): number | null {
 function metricIcon(segment: HeaderSegment, contextPercent: number | null): React.ReactNode {
   const size = 14;
   switch (segment.icon) {
-    case 'spark':
-      return <AgentIcon size={size} className="shrink-0" />;
     case 'ring':
       return <RingIcon size={size} className="shrink-0" ratio={(contextPercent ?? 0) / 100} />;
+    case 'database':
+      return <DatabaseIcon size={size} className="shrink-0" />;
     case 'clock':
       return <ClockIcon size={size} className="shrink-0" />;
     case 'gauge':
       return <GaugeIcon size={size} className="shrink-0" />;
     case 'list':
       return <ListIcon size={size} className="shrink-0" />;
-    case 'code':
-      return <CodeIcon size={size} className="shrink-0" />;
-    case 'mcp':
+    // LSP 是代码结构层面的能力：用尖括号比井号更像「代码本身」。
+    case 'lsp':
       return <ToolIcon size={size} className="shrink-0" />;
+    // MCP 是一批外部工具服务：提示符读作「可调用的接口与命令」，比扳手更贴切。
+    case 'mcp':
+      return <ApiIcon size={size} className="shrink-0" />;
     case 'skill':
       return <SkillIcon size={size} className="shrink-0" />;
     default:
@@ -149,25 +149,7 @@ export const ConversationHeader: React.FC<ConversationHeaderProps> = ({
             {cluster.segments.map((segment) => {
               const withContextCard = segment.kind === 'context' && contextUsage !== null;
               const withUsageCard = segment.kind === 'sessionTokens' && sessionCumulative !== null;
-              if (segment.kind === 'status') {
-                return (
-                  <span
-                    key={segment.kind}
-                    role="status"
-                    aria-label={segment.title ?? '正在运行'}
-                    title={segment.title ?? '正在运行'}
-                    className={`relative shrink-0 inline-flex items-center justify-center w-[22px] h-[22px] rounded-full bg-text-link/12 text-text-link transition-opacity duration-300 ${
-                      segment.breath ? 'opacity-100' : 'opacity-75'
-                    }`}
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="live-beacon-ring absolute inset-0 rounded-full bg-text-link/25"
-                    />
-                    {metricIcon(segment, contextPercent)}
-                  </span>
-                );
-              }
+
               const reading = (
                 <span
                   className={`min-w-0 shrink-0 inline-flex items-center gap-1 text-row tabular-nums ${TONE_CLASS[segment.tone]}`}

@@ -304,7 +304,7 @@ fn is_procedural(record: &MemorySqliteRecord) -> bool {
             .source_trace
             .as_ref()
             .map(|trace| trace.origin),
-        Some(MemorySourceOrigin::AgentProcedure | MemorySourceOrigin::SkillReflection)
+        Some(MemorySourceOrigin::AgentProcedure)
     )
 }
 
@@ -319,7 +319,7 @@ mod tests {
         let output = MemoryAutonomyFeedbackRuntime
             .apply(MemoryAutonomyFeedbackInput {
                 records: vec![
-                    record(1, "mem:good", Some(MemorySourceOrigin::SkillReflection)),
+                    record(1, "mem:good", Some(MemorySourceOrigin::AgentProcedure)),
                     record(
                         2,
                         "mem:bad",

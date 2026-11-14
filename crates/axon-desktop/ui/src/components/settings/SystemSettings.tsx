@@ -30,8 +30,6 @@ const THEME_CARDS: ReadonlyArray<{
   canvas: string;
   card: string;
   accent: string;
-  /** 冷杉多一层松雾微光。 */
-  wash?: string;
 }> = [
   {
     value: 'paper',
@@ -41,16 +39,6 @@ const THEME_CARDS: ReadonlyArray<{
     canvas: 'bg-swatch-paper-canvas',
     card: 'bg-swatch-paper-card',
     accent: 'bg-swatch-paper-accent',
-  },
-  {
-    value: 'forest',
-    label: '冷杉',
-    subtitle: '松雾冷矿青白',
-    sidebar: 'bg-swatch-forest-sidebar',
-    canvas: 'bg-swatch-forest-canvas',
-    card: 'bg-swatch-forest-card',
-    accent: 'bg-swatch-forest-accent',
-    wash: 'bg-swatch-forest-wash',
   },
   {
     value: 'obsidian',
@@ -65,7 +53,6 @@ const THEME_CARDS: ReadonlyArray<{
 
 function themeDisplayName(theme: ThemeId): string {
   if (theme === 'obsidian') return '黑曜石';
-  if (theme === 'forest') return '冷杉';
   return '纸白';
 }
 
@@ -179,9 +166,6 @@ export const SystemSettings: React.FC = () => {
                       <span
                         className={`relative flex-1 h-full rounded-[3px] overflow-hidden ${item.canvas}`}
                       >
-                        {item.wash !== undefined && (
-                          <span className={`absolute inset-0 opacity-35 ${item.wash}`} />
-                        )}
                         <span
                           className={`absolute left-1.5 right-1.5 top-1.5 h-2 rounded-[1.5px] ${item.card}`}
                         />

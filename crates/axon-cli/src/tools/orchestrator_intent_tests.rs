@@ -30,6 +30,7 @@ fn every_intent_tool_accepts_the_intent_field_before_execution() {
         "goal_start",
         "memory_search",
         "memory_write",
+        "turn_trace",
         "list_agents",
         "list_mcp_resources",
         "history_list_windows",
@@ -106,6 +107,10 @@ fn every_intent_tool_accepts_the_intent_field_before_execution() {
             r#"{"intent":"固化并行开发纪律","kind":"preference","summary":"并行改动必须隔离工作树","evidence":"用户明确要求"}"#,
         ),
         (
+            "builtin.turn_trace",
+            r#"{"intent":"核对上一轮回执原文","receipt_ref":"receipt:1","max_chars":800}"#,
+        ),
+        (
             "builtin.history_list_windows",
             r#"{"intent":"找回上次构建失败原因","limit":5}"#,
         ),
@@ -140,6 +145,7 @@ fn every_intent_tool_accepts_the_intent_field_before_execution() {
                 )
             }
             name if name.starts_with("builtin.history_") => execute_history_tool(&call, &context),
+            "builtin.turn_trace" => execute_turn_trace(&call, &context),
             _ => execute_notes_tool(&call, &context),
         };
         assert!(

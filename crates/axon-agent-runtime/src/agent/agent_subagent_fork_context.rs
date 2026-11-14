@@ -244,7 +244,7 @@ fn maybe_append_child_usage_hint(
     {
         return;
     }
-    messages.push(AgentModelMessage::cache_excluded("developer", hint));
+    messages.push(AgentModelMessage::injected_context("developer", hint));
     reasons.push(SUBAGENT_FORK_CONTEXT_REASON_CHILD_USAGE_HINT_ADDED.to_owned());
 }
 

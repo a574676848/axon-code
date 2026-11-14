@@ -91,9 +91,6 @@ fn get_non_terminal_config_value(config: &AxonConfig, key: &str) -> Option<Confi
         "agent.max_subagent_active_turns" => Some(ConfigValue::Unsigned(
             u64::try_from(config.agent.max_subagent_active_turns).unwrap_or(u64::MAX),
         )),
-        "agent.max_subagent_depth" => Some(ConfigValue::Unsigned(u64::from(
-            config.agent.max_subagent_depth,
-        ))),
         "agent.idle_compaction_debounce_ms" => Some(ConfigValue::Unsigned(
             config.agent.idle_compaction_debounce_ms,
         )),
@@ -227,9 +224,6 @@ fn set_core_config_value(config: &mut AxonConfig, key: &str, raw_value: &str) ->
         }
         "agent.max_subagent_active_turns" => {
             config.agent.max_subagent_active_turns = parse_usize(raw_value)?;
-        }
-        "agent.max_subagent_depth" => {
-            config.agent.max_subagent_depth = parse_u32(raw_value)?;
         }
         "agent.idle_compaction_debounce_ms" => {
             config.agent.idle_compaction_debounce_ms = parse_u64(raw_value)?;

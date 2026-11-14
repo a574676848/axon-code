@@ -202,3 +202,122 @@ fn style_mixed_with_preference_still_qualifies_through_the_preference() {
         "混合候选里只要含可反思类型就该触发，只是风格自身不参与判定"
     );
 }
+
+fn verified_receipt_envelope() -> (TurnOutcomeEnvelope, String) {
+    let evidence_ref = "receipt:1".to_owned();
+    let envelope = envelope(vec![ExecutionEvidenceRecord {
+        evidence_ref: evidence_ref.clone(),
+        tool_name: "builtin.shell_command".to_owned(),
+        status: ExecutionEvidenceStatus::Verified,
+        kind: ExecutionEvidenceKind::Validation,
+        runtime_verified: true,
+        verification_refs: Vec::new(),
+    }]);
+    (envelope, evidence_ref)
+}
+
+fn procedural_assessment(
+    evidence_ref: &str,
+    schema_version: u32,
+    verification: u16,
+    specificity: u16,
+) -> SemanticSalienceAssessment {
+    SemanticSalienceAssessment {
+        schema_version,
+        should_reflect: true,
+        candidate_types: vec![SemanticMemoryCandidateType::Procedure],
+        signals: SemanticSalienceSignals {
+            future_utility: 8_000,
+            verification_strength: verification,
+            specificity,
+            ..SemanticSalienceSignals::default()
+        },
+        evidence_refs: vec![evidence_ref.to_owned()],
+        reason: "已验证流程可复用".to_owned(),
+        user_affect: None,
+        user_fatigue: None,
+        persona_drift_bp: None,
+        drift_reason: None,
+        style_candidate: None,
+    }
+}
+
+#[test]
+fn v3_output_without_specificity_stays_admissible() {
+    let (envelope, evidence_ref) = verified_receipt_envelope();
+    let assessment = procedural_assessment(&evidence_ref, 3, 8_000, 0);
+
+    assert!(
+        assessment.is_valid_for(&envelope),
+        "兼容期必须接受 v3 输出，否则升版瞬间会把反思线掐停"
+    );
+    assert_eq!(
+        assessment.signals.effective_specificity(3),
+        EXECUTION_SPECIFICITY_MIN_BP,
+        "v3 缺 specificity 时用 verification 截到门槛，与既有准入等价"
+    );
+    assert_eq!(
+        assessment.signals.to_salience_vector(3).specificity,
+        EXECUTION_SPECIFICITY_MIN_BP
+    );
+}
+
+#[test]
+fn v3_output_below_verification_threshold_gains_no_advantage() {
+    let (_envelope, evidence_ref) = verified_receipt_envelope();
+    let assessment = procedural_assessment(&evidence_ref, 3, 6_000, 0);
+    let specificity = assessment.signals.effective_specificity(3);
+
+    assert_eq!(specificity, 6_000, "折中值不得超过 verification 本身");
+    assert!(
+        specificity < EXECUTION_SPECIFICITY_MIN_BP,
+        "verification 不达标时折中值同样不达标，不会凭空放宽"
+    );
+}
+
+#[test]
+fn v4_output_requires_real_specificity() {
+    let (envelope, evidence_ref) = verified_receipt_envelope();
+    let assessment = procedural_assessment(&evidence_ref, 4, 9_000, 0);
+
+    assert!(assessment.is_valid_for(&envelope));
+    assert_eq!(
+        assessment.signals.effective_specificity(4),
+        0,
+        "v4 必须真给 specificity，不再回落到 verification"
+    );
+}
+
+#[test]
+fn version_outside_accepted_window_is_rejected() {
+    let (envelope, evidence_ref) = verified_receipt_envelope();
+
+    assert!(
+        !procedural_assessment(&evidence_ref, 2, 9_000, 9_000).is_valid_for(&envelope),
+        "低于兼容窗口的版本整轮丢弃"
+    );
+    assert!(
+        !procedural_assessment(&evidence_ref, 5, 9_000, 9_000).is_valid_for(&envelope),
+        "高于当前版本的输出不再被接受"
+    );
+}
+
+#[test]
+fn salience_vector_maps_all_five_dimensions() {
+    let signals = SemanticSalienceSignals {
+        stability: 7_100,
+        future_utility: 7_200,
+        verification_strength: 7_300,
+        specificity: 7_400,
+        novelty: 7_500,
+        ..SemanticSalienceSignals::default()
+    };
+
+    let vector = signals.to_salience_vector(4);
+
+    assert_eq!(vector.persistence, 7_100);
+    assert_eq!(vector.utility, 7_200);
+    assert_eq!(vector.verification, 7_300);
+    assert_eq!(vector.specificity, 7_400);
+    assert_eq!(vector.novelty, 7_500);
+}

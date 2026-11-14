@@ -5,7 +5,7 @@ use super::WINDOW_ROLLOVER_CHECKPOINT_PREFIX;
 use crate::agent_model_tool_history::normalize_provider_history;
 use crate::token_estimator::estimated_message_tokens_with_capabilities;
 use crate::{
-    AgentModelMessage, AgentModelMessageSource, CanonicalCheckpoint, ModelToolDefinition,
+    AgentModelMessage, AgentModelMessageKind, CanonicalCheckpoint, ModelToolDefinition,
     PromptCacheProviderWireFormat, agent_session_stable_context::is_cross_workspace_stable_message,
 };
 
@@ -49,6 +49,11 @@ impl FreshWindowContext {
     }
 }
 
+/// 换窗后从旧窗口带入的消息范围。
+///
+/// 只保留本轮内容：紧邻用户请求之前的连续动态注入 + 当前用户请求 + 其后的全部交互。
+/// 边界以 `kind` 为准，不再用 `source != Context` 判断，动态注入与稳定前缀现在同为
+/// `Context`，沿用 source 边界会把整段旧对话一路扫进来，换窗等于没换。
 fn active_turn_tail(messages: &[AgentModelMessage]) -> Vec<AgentModelMessage> {
     let Some(user_index) = messages
         .iter()
@@ -59,13 +64,17 @@ fn active_turn_tail(messages: &[AgentModelMessage]) -> Vec<AgentModelMessage> {
     let mut start = user_index;
     while start > 0 {
         let candidate = &messages[start - 1];
-        if is_cross_workspace_stable_message(candidate)
-            || candidate.source != AgentModelMessageSource::Context
+        // 遇到任何非注入上下文（assistant 回复、工具结果、稳定前缀、交接摘要）立即停：
+        // 中间夹 assistant 时也必须在这里截断，不能越过它继续向前捡内容。
+        if candidate.kind != AgentModelMessageKind::InjectedContext
+            || is_cross_workspace_stable_message(candidate)
         {
             break;
         }
         start -= 1;
     }
+    // 右边界停在当前用户请求：换窗发生在 turn 之间，本轮之后的 assistant 回复
+    // 已归档进历史，不需要再整段搬进新窗口。
     messages[start..=user_index]
         .iter()
         .filter(|message| !is_cross_workspace_stable_message(message))

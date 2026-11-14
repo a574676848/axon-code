@@ -12,6 +12,8 @@ mod orchestrator_subagent;
 mod orchestrator_subagent_job;
 #[path = "orchestrator_time.rs"]
 mod orchestrator_time;
+#[path = "orchestrator_turn_trace.rs"]
+mod orchestrator_turn_trace;
 
 use axon_agent_runtime::{
     ASK_USER_QUESTION_TOOL_QUALIFIED_NAME, GET_CONTEXT_REMAINING_TOOL_QUALIFIED_NAME,
@@ -47,7 +49,8 @@ pub(crate) use orchestrator_time::now_ms;
 use orchestrator_builtin::{
     TokenBudgetMeasurementSource, TokenBudgetSnapshot, clear_token_budget_snapshot,
     execute_get_context_remaining, execute_memory_search, execute_memory_write,
-    execute_new_context, execute_search, execute_update_plan, record_token_budget_snapshot,
+    execute_new_context, execute_search, execute_turn_trace, execute_update_plan,
+    record_token_budget_snapshot,
 };
 use orchestrator_notes_history::{execute_history_tool, execute_notes_tool};
 use orchestrator_subagent::execute_subagent_tool;
@@ -59,6 +62,7 @@ pub(crate) fn classify_tool(name: &str) -> ToolKind {
         "builtin.read_file" => ToolKind::ReadFile,
         "builtin.glob" => ToolKind::Glob,
         "builtin.memory_search" => ToolKind::MemorySearch,
+        "builtin.turn_trace" => ToolKind::TurnTrace,
         "builtin.memory_write" => ToolKind::MemoryWrite,
         _ if is_history_tool_name(name) => ToolKind::History,
         _ if is_notes_tool_name(name) => ToolKind::Notes,
@@ -325,6 +329,7 @@ pub(crate) fn execute_tool_call_with_observer(
         ToolKind::ReadFile => crate::tool_orchestrator_fs::execute_read_file(tool_call, context),
         ToolKind::Glob => crate::tool_orchestrator_fs::execute_glob(tool_call, context),
         ToolKind::MemorySearch => execute_memory_search(tool_call, context),
+        ToolKind::TurnTrace => execute_turn_trace(tool_call, context),
         ToolKind::MemoryWrite => execute_memory_write(tool_call, context),
         ToolKind::History => execute_history_tool(tool_call, context),
         ToolKind::Notes => execute_notes_tool(tool_call, context),

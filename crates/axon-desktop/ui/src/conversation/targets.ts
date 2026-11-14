@@ -110,6 +110,15 @@ export interface ConversationController {
   sessionCumulative: import('./sessionUsage').SessionCumulative | null;
   /** 历史索引已经装载完成的车道标识；为空表示尚未就绪或目标不是车道。 */
   laneReadyId: string | null;
+  /** 车道当前模型的权威事实；网关只读该车道最新一轮记录，解析不到时为空。 */
+  laneModel: import('./viewConfig').LaneEffectiveModel | null;
+  /**
+   * 最近一次记忆反思的提示文本；该会话还没有记忆动作时为空。
+   *
+   * 与 `laneModel` 同一时机取回：都是「这条车道现在能对外展示的最新事实」，
+   * 不随翻页回到更早的轮次。反思是轮后异步治理的产物，按「上一次记忆动作」呈现。
+   */
+  laneReflectionNotice: string | null;
   /**
    * 目标已切换、正文尚未交出。
    *
@@ -151,6 +160,8 @@ export interface ConversationController {
     structuredInput?: string,
     /** 本会话显式选定的模型；空表示由会话历史与配置决定。 */
     model?: string | null,
+    /** 本会话显式选定的推理强度；空表示由 agent.reasoning_effort 决定。 */
+    reasoningEffort?: string | null,
   ) => Promise<void>;
   /**
    * 接管网关语音回合：把已经提交的这一轮接进对话流并订阅增量。

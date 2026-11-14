@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use self::session_cleanup_files::{FileCleanupCounts, cleanup_runtime_files, count_runtime_files};
 use self::session_cleanup_metrics::{
-    cleanup_channel_metrics, dry_run_channel_metrics_count, retention_ms,
+    cleanup_channel_metrics, dry_run_channel_metrics_count, file_retention_ms, retention_ms,
 };
 use self::session_cleanup_sqlite::vacuum_session_sqlite_files;
 use self::session_family_cleanup::{
@@ -27,6 +27,11 @@ pub(crate) const SESSION_CLEANUP_CRON_SCRIPT: &str = "axon.internal.brain-cleanu
 pub(crate) const SESSION_CLEANUP_DRY_RUN_CRON_SCRIPT: &str = "axon.internal.brain-cleanup-dry-run";
 /// 默认会话保留天数。
 pub(crate) const SESSION_RETENTION_DAYS: u64 = 7;
+/// 文件面（logs / tmp / archive / attachments）的保留天数。
+///
+/// 与 `SESSION_RETENTION_DAYS` 刻意解耦：会话与 SQLite 事实表仍按 7 天回收，
+/// 四个文件目录按用户口径统一在 3 天之外整体清空，避免两套策略互相牵制。
+pub(crate) const FILE_RETENTION_DAYS: u64 = 3;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct SessionCleanupReport {
@@ -75,6 +80,7 @@ pub(crate) struct SessionCleanupReport {
     pub(crate) deleted_temp_entry_count: usize,
     pub(crate) deleted_mcp_schema_cache_count: usize,
     pub(crate) deleted_archive_file_count: usize,
+    pub(crate) deleted_attachment_file_count: usize,
     pub(crate) elapsed_ms: u64,
 }
 
@@ -110,6 +116,11 @@ pub(super) fn run_session_cleanup_data(
     )
 }
 
+/// 文件面清理的截止时间：四个文件目录按独立保留期回收。
+fn file_cutoff_ms() -> u64 {
+    axon_time::unix_now_ms().saturating_sub(file_retention_ms())
+}
+
 fn run_cleanup_dry_run(
     root: &Path,
     cutoff_ms: u64,
@@ -140,7 +151,7 @@ fn run_cleanup_dry_run(
                 stale_sessions,
                 cutoff_ms,
             )?);
-    apply_file_cleanup_counts(&mut report, count_runtime_files(root, cutoff_ms)?);
+    apply_file_cleanup_counts(&mut report, count_runtime_files(root, file_cutoff_ms())?);
     Ok(report)
 }
 
@@ -159,7 +170,7 @@ fn run_cleanup_deletion(
     report.deleted_cron_run_count = cron_runs;
     report.deleted_cron_job_count = cron_jobs;
     initialize_and_cleanup_runtime(root, cutoff_ms, &mut report)?;
-    apply_file_cleanup_counts(&mut report, cleanup_runtime_files(root, cutoff_ms)?);
+    apply_file_cleanup_counts(&mut report, cleanup_runtime_files(root, file_cutoff_ms())?);
     cleanup_session_family_data(root, rollout_path, cutoff_ms, stale_sessions, &mut report)?;
     let execution = cleanup_execution_history(root, cutoff_ms, false)?;
     apply_execution_cleanup_report(&mut report, execution);
@@ -321,6 +332,7 @@ fn apply_file_cleanup_counts(report: &mut SessionCleanupReport, counts: FileClea
     report.deleted_temp_entry_count = counts.temp_entries;
     report.deleted_mcp_schema_cache_count = counts.mcp_schema_rows;
     report.deleted_archive_file_count = counts.archive_files;
+    report.deleted_attachment_file_count = counts.attachment_files;
 }
 
 #[cfg(test)]

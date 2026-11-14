@@ -25,7 +25,7 @@ const V1_SAMPLE: &str = r#"{
   "pending_lanes": [{"lane_id": "lane-9", "workspace_id": "D:/work/alpha", "destination": "s1", "created_at": 7}],
   "last_workspace_dir": "D:/work",
   "notifications_enabled": false,
-  "theme": "forest"
+  "theme": "obsidian"
 }"#;
 
 /// 把分隔符统一成正斜杠，使跨平台的路径断言只比较结构。
@@ -63,7 +63,7 @@ fn v1_in_client_root_is_migrated_field_by_field() {
 
     let document = &loaded.document;
     assert_eq!(document.version, 2);
-    assert_eq!(document.client.theme.as_deref(), Some("forest"));
+    assert_eq!(document.client.theme.as_deref(), Some("obsidian"));
     assert!(!document.client.notifications_enabled);
     assert_eq!(
         document.client.last_workspace_dir.as_deref(),
@@ -136,7 +136,7 @@ fn client_root_v1_wins_when_both_places_have_one() {
     let backend = temp_dir("both-backend");
     write_v1(&root, V1_SAMPLE);
     let mut other = V1_SAMPLE.replace("D:/work/alpha", "D:/work/beta");
-    other = other.replace("\"theme\": \"forest\"", "\"theme\": \"obsidian\"");
+    other = other.replace("\"theme\": \"obsidian\"", "\"theme\": \"paper\"");
     write_v1(&backend, &other);
 
     let loaded = load_document_at(&root, Some(&backend));
@@ -145,7 +145,7 @@ fn client_root_v1_wins_when_both_places_have_one() {
         projection.workspaces[0].path, "D:/work/alpha",
         "客户端根那份优先"
     );
-    assert_eq!(loaded.document.client.theme.as_deref(), Some("forest"));
+    assert_eq!(loaded.document.client.theme.as_deref(), Some("obsidian"));
 
     // 后端根那份仍按「不覆盖证据」归档，且加序号同名。
     let backend_superseded = backend.join(format!("{}{}", super::V1_FILE_NAME, ".superseded"));

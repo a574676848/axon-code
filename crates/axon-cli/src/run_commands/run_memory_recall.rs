@@ -55,7 +55,6 @@ pub(crate) struct RunMemoryRecallEvent {
     pub(super) scope: RunMemoryScopeEvent,
     pub(super) trace: Vec<RunMemoryRecallTraceEvent>,
     pub(super) debugging_experience_hit_count: usize,
-    pub(super) skill_reflection_hit_count: usize,
     pub(super) procedural_review_hit_count: usize,
     pub(super) embedding_status: &'static str,
     pub(super) reason: Option<String>,
@@ -228,8 +227,6 @@ fn recall_event(
     let memory_turn_hits = MemoryTurnContext::from_injected_hits("cli_run", hits).injected_hits;
     let debugging_experience_hit_count =
         origin_hit_count(hits, axon_domain::MemorySourceOrigin::DebuggingExperience);
-    let skill_reflection_hit_count =
-        origin_hit_count(hits, axon_domain::MemorySourceOrigin::SkillReflection);
     let trace = recall_trace(hits, scope, persisted);
     RunMemoryRecallEvent {
         status,
@@ -241,7 +238,6 @@ fn recall_event(
         scope: scope.clone(),
         trace,
         debugging_experience_hit_count,
-        skill_reflection_hit_count,
         procedural_review_hit_count: procedural_review_hit_count(hits),
         embedding_status,
         reason,
@@ -354,7 +350,7 @@ fn procedural_review_hit_count(hits: &[MemoryHybridHit]) -> usize {
                 .source_trace
                 .as_ref()
                 .is_some_and(|trace| {
-                    trace.origin == axon_domain::MemorySourceOrigin::SkillReflection
+                    trace.origin == axon_domain::MemorySourceOrigin::AgentProcedure
                 })
                 && hit.record.importance_basis_points < 6_000
         })

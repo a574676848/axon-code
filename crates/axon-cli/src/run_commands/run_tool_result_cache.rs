@@ -299,6 +299,7 @@ fn cacheable_tool_name(request: &ToolExecutionRequest) -> Option<String> {
         ToolKind::ReadFile => qualified_builtin_name(request, READ_FILE_TOOL_NAME),
         ToolKind::Glob => qualified_builtin_name(request, GLOB_TOOL_NAME),
         ToolKind::MemorySearch
+        | ToolKind::TurnTrace
         | ToolKind::MemoryWrite
         | ToolKind::History
         | ToolKind::Notes

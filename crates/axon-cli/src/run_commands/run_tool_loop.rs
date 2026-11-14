@@ -115,7 +115,7 @@ pub(super) fn execute_supported_tool_calls_for_turn(
     }
     let capacity = CapacitySnapshot::preset();
     // 批次按读写交叉切成连续子段：段内可并发，段间严格顺序。
-    // 独占请求自成一段，因此仍不会与同批其他工具重叠。
+    // 只有独占请求自成一段；写调用按写集相交断段，跨文件可同段并行。
     let mut receipts = Vec::with_capacity(execution_requests.len());
     for range in tool_batch_ranges(&scopes) {
         let batch = &execution_requests[range.clone()];
@@ -590,21 +590,36 @@ enum ParallelToolProgress {
 
 /// 把批次切成覆盖全部请求的连续子段。
 ///
-/// 独占请求（含写与编辑）自成一段，段间严格保序；不做路径交叉判定。
-/// 段与段之间严格保持模型给出的调用顺序，因此切分不会翻转因果次序。
+/// 独占请求自成一段；写调用按**写集相交**断段：目标路径不相交时，写读混排也能
+/// 落在同一段里并发。段间严格保持模型给出的调用顺序，因此切分不会翻转因果次序。
 pub(super) fn tool_batch_ranges(scopes: &[ToolAccessScope]) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
     let mut segment_start = 0usize;
+    let mut segment_writes: HashSet<std::path::PathBuf> = HashSet::new();
+    let mut segment_reads: HashSet<std::path::PathBuf> = HashSet::new();
     for (index, scope) in scopes.iter().enumerate() {
-        // 独占与整工作区写都必须自成一段，前后都是屏障（`S-2`）。
+        // 独占与整工作区写自成一段，前后都是屏障（`S-2`）。
         if scope.is_isolated() {
             if segment_start < index {
                 ranges.push(segment_start..index);
             }
             ranges.push(index..index + 1);
             segment_start = index + 1;
+            segment_writes.clear();
+            segment_reads.clear();
             continue;
         }
+        // 写撞写、写撞读、读撞写：同路径必须在段边界断开。
+        if scope.conflicts_with(&segment_writes, &segment_reads) {
+            if segment_start < index {
+                ranges.push(segment_start..index);
+            }
+            segment_start = index;
+            segment_writes.clear();
+            segment_reads.clear();
+        }
+        segment_writes.extend(scope.write_paths().iter().cloned());
+        segment_reads.extend(scope.read_paths().iter().cloned());
     }
     if segment_start < scopes.len() {
         ranges.push(segment_start..scopes.len());

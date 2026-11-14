@@ -3,7 +3,7 @@
 use crate::AgentTuiSessionSummary;
 use crate::r#loop::agent_tui::{
     AgentTuiCatalog, AgentTuiConfigStatus, AgentTuiRunOverrides, AgentTuiSettingsChange,
-    AgentTuiTokenUsage, TUI_HINT_IDLE,
+    AgentTuiTokenUsage, TUI_HINT_IDLE, runtime_identity::SessionRunModel,
 };
 use crate::surface::replay_snapshot::ReplaySnapshotHeaderState;
 
@@ -27,6 +27,10 @@ pub(crate) struct HeaderState {
     pub(crate) settings_changes: Vec<AgentTuiSettingsChange>,
     pub(crate) lsp_active_count: usize,
     pub(crate) gateway_active_turn_count: usize,
+    /// 本会话最近一轮真实使用的模型；还没跑过任何一轮时为空。
+    pub(crate) session_run_model: Option<SessionRunModel>,
+    /// 用户在本进程里显式选过模型（`/model`）：显式选择优先于会话事实。
+    pub(crate) model_explicit: bool,
 }
 
 impl HeaderState {
@@ -47,6 +51,8 @@ impl HeaderState {
             settings_changes: Vec::new(),
             lsp_active_count: 0,
             gateway_active_turn_count: 0,
+            session_run_model: None,
+            model_explicit: false,
         }
     }
 
@@ -58,5 +64,25 @@ impl HeaderState {
         self.settings_changes.clear();
         self.lsp_active_count = 0;
         self.gateway_active_turn_count = 0;
+    }
+
+    /// 记录本会话真实使用的模型（来自 provider 状态帧）。
+    ///
+    /// 空白值忽略：状态帧偶尔只带来阶段信息，不能把已知的模型抹掉。
+    pub(crate) fn record_session_run_model(&mut self, provider: &str, model: &str) {
+        let provider = provider.trim();
+        let model = model.trim();
+        if model.is_empty() {
+            return;
+        }
+        self.session_run_model = Some(SessionRunModel {
+            provider: provider.to_owned(),
+            model: model.to_owned(),
+        });
+    }
+
+    /// 用户显式选择了模型：此后头部显示这次选择，而不是会话事实。
+    pub(crate) fn mark_model_explicit(&mut self) {
+        self.model_explicit = true;
     }
 }

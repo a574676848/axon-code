@@ -29,7 +29,6 @@ mod quality;
 mod recover_conflict;
 mod render;
 mod review;
-mod skill_evolution_status;
 mod sync_audit;
 mod view;
 
@@ -61,8 +60,6 @@ pub use recover_conflict::MemoryRecoverConflictCommand;
 use recover_conflict::run_memory_recover_conflict;
 pub use review::MemoryReviewCommand;
 use review::run_memory_review;
-pub use skill_evolution_status::{SkillEvolutionPromoteCommand, SkillEvolutionStatusCommand};
-use skill_evolution_status::{run_skill_evolution_promote, run_skill_evolution_status};
 pub use sync_audit::MemorySyncAuditCommand;
 use sync_audit::run_memory_sync_audit;
 
@@ -110,10 +107,6 @@ pub enum MemorySubcommand {
     SyncAudit(MemorySyncAuditCommand),
     /// 查看单条 Memory 的 ref-only 证据链。
     Inspect(MemoryInspectCommand),
-    /// 查看指定 session 的 Skill Evolution 当前状态。
-    SkillEvolutionStatus(SkillEvolutionStatusCommand),
-    /// 将已验证的 Skill draft 晋升到用户 Skill 目录。
-    SkillEvolutionPromote(SkillEvolutionPromoteCommand),
     /// 本机批准 weak 记忆，提升为 strong。
     Approve(MemoryGovernanceCommand),
     /// 批量批准安全的待复核 weak 记忆。
@@ -234,12 +227,6 @@ pub(crate) fn run_memory(
         MemorySubcommand::Import(command) => run_memory_import(format, &context, command),
         MemorySubcommand::SyncAudit(command) => run_memory_sync_audit(format, &context, command),
         MemorySubcommand::Inspect(command) => run_memory_inspect(format, &context, command),
-        MemorySubcommand::SkillEvolutionStatus(command) => {
-            run_skill_evolution_status(format, &context, command)
-        }
-        MemorySubcommand::SkillEvolutionPromote(command) => {
-            run_skill_evolution_promote(format, &context, command)
-        }
         MemorySubcommand::Approve(command) => {
             run_memory_governance(format, &context, command, MemoryGovernanceAction::Approve)
         }

@@ -131,10 +131,6 @@ fn invalid_limits_fail_closed() {
     let mut config = AxonConfig::default();
     config.agent.max_subagent_active_turns = 0;
     assert!(config.validate().is_err());
-
-    let mut config = AxonConfig::default();
-    config.agent.max_subagent_depth = 0;
-    assert!(config.validate().is_err());
 }
 
 #[test]
@@ -143,7 +139,6 @@ fn config_key_registry_exposes_editability() {
     let editable_keys = [
         "agent.max_subagent_threads",
         "agent.max_subagent_active_turns",
-        "agent.max_subagent_depth",
         "channel_balancer.failure_threshold",
         "channel_balancer.cooldown_ms",
         "channel_balancer.affinity_ttl_ms",
@@ -228,10 +223,6 @@ fn agent_config_values_roundtrip_and_validate_bounds() {
     assert_eq!(value, ConfigValue::Unsigned(2));
     assert_eq!(config.agent.max_subagent_active_turns, 2);
 
-    let value = set_config_value(&mut config, "agent.max_subagent_depth", "2").unwrap();
-    assert_eq!(value, ConfigValue::Unsigned(2));
-    assert_eq!(config.agent.max_subagent_depth, 2);
-
     assert_eq!(
         get_config_value(&config, "agent.max_subagent_threads"),
         Some(ConfigValue::Unsigned(4))
@@ -240,14 +231,8 @@ fn agent_config_values_roundtrip_and_validate_bounds() {
         get_config_value(&config, "agent.max_subagent_active_turns"),
         Some(ConfigValue::Unsigned(2))
     );
-    assert_eq!(
-        get_config_value(&config, "agent.max_subagent_depth"),
-        Some(ConfigValue::Unsigned(2))
-    );
-
     assert!(set_config_value(&mut config, "agent.max_subagent_threads", "0").is_err());
     assert!(set_config_value(&mut config, "agent.max_subagent_active_turns", "0").is_err());
-    assert!(set_config_value(&mut config, "agent.max_subagent_depth", "0").is_err());
 }
 
 /// agent.log_level 往返：大小写归一小写，非法级别拒绝。
@@ -308,6 +293,9 @@ fn removed_runtime_config_keys_are_not_user_editable() {
     assert_eq!(get_config_value(&config, "memory.concurrency"), None);
     assert_eq!(get_config_value(&config, "memory.internal_limit"), None);
     assert!(set_config_value(&mut config, "memory.internal_limit", "8").is_err());
+    // 子代理不再持有派发工具，嵌套深度没有可约束的对象，该键已随配置项一起退役。
+    assert!(set_config_value(&mut config, "agent.max_subagent_depth", "3").is_err());
+    assert_eq!(get_config_value(&config, "agent.max_subagent_depth"), None);
 }
 
 #[test]

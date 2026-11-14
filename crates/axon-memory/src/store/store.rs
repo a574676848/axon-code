@@ -1,13 +1,12 @@
 //! SQLite 结构化 Memory store。
 
-use std::{collections::BTreeSet, path::Path, thread, time::Duration};
+#[cfg(test)]
+use std::collections::BTreeSet;
 
 use axon_domain::{AxonError, AxonResult, MemoryId, MemoryKind, MemoryRecord};
 #[cfg(test)]
 use axon_domain::{CellId, MemoryCandidateId, SessionId};
-use rusqlite::{
-    Connection, OptionalExtension as _, Transaction, TransactionBehavior, params, params_from_iter,
-};
+use rusqlite::{Connection, OptionalExtension as _, params_from_iter};
 
 use crate::MemoryConfig;
 
@@ -18,12 +17,13 @@ pub(crate) use store_codec::{
     usize_from_i64, validate_record,
 };
 
+mod store_lifecycle;
+mod store_schema;
+
 /// SQLite schema 版本。
 pub const MEMORY_SQLITE_SCHEMA_VERSION: i64 = 5;
 /// SQLite busy timeout，单位毫秒。
 pub const MEMORY_SQLITE_BUSY_TIMEOUT_MS: u64 = 5_000;
-const MEMORY_SQLITE_WAL_INIT_RETRIES: usize = 5;
-const MEMORY_SQLITE_WAL_INIT_BACKOFF_MS: u64 = 20;
 /// SQLite bool true。
 const SQLITE_TRUE: i64 = 1;
 /// SQLite bool false。
@@ -231,165 +231,17 @@ pub struct MemorySqliteStore {
 impl MemorySqliteStore {
     /// 打开并配置 SQLite store。
     pub fn open(config: &MemoryConfig) -> AxonResult<Self> {
-        open_connection(&config.db_path).map(|connection| Self { connection })
+        store_schema::open_connection(&config.db_path).map(|connection| Self { connection })
     }
 
     /// 初始化 schema 与 WAL。
     pub fn initialize_schema(&self) -> AxonResult<()> {
-        self.archive_incompatible_record_schema()?;
-        // 建表与建索引必须整体落在**一个 IMMEDIATE 事务**里：
-        //
-        // 1. 多个进程/线程同时打开同一个 Memory 库都会跑这段 DDL。自动提交模式下每条语句先
-        //    取读快照再升级写锁，一旦别的连接在此期间提交了 schema 变更，SQLite 直接返回
-        //    `SQLITE_BUSY_SNAPSHOT`，该错误**不进 busy handler**（无法等待，只能回滚重来），
-        //    并发初始化就会随机报「schema 初始化失败」。`BEGIN IMMEDIATE` 一开始就取写锁，
-        //    不存在读→写升级路径，等待由 busy_timeout 统一负责。
-        // 2. 一次性提交让「表 + 索引 + 版本号」对其它进程原子可见，不会看到半成品 schema。
-        let transaction = Transaction::new_unchecked(
-            &self.connection,
-            TransactionBehavior::Immediate,
-        )
-        .map_err(|error| {
-            AxonError::memory_persistence(format!("Memory SQLite schema 事务开启失败: {error}"))
-        })?;
-        transaction
-            .execute_batch(
-                r"
-                CREATE TABLE IF NOT EXISTS memory_records (
-                    memory_id INTEGER PRIMARY KEY NOT NULL,
-                    candidate_id INTEGER NOT NULL,
-                    memory_kind TEXT NOT NULL,
-                    state TEXT NOT NULL,
-                    content_ref TEXT,
-                    source_origin TEXT,
-                    source_session_id INTEGER,
-                    source_cell_id INTEGER,
-                    memory_summary TEXT,
-                    evidence_ref TEXT,
-                    tombstone_blocked_ref TEXT,
-                    tombstone_reason TEXT,
-                    namespace_ref TEXT,
-                    repo_ref TEXT,
-                    user_ref TEXT,
-                    vector_id INTEGER UNIQUE,
-                    created_at_ms INTEGER NOT NULL,
-                    updated_at_ms INTEGER NOT NULL,
-                    last_active_at_ms INTEGER NOT NULL,
-                    ttl_expires_at_ms INTEGER,
-                    confidence_basis_points INTEGER NOT NULL,
-                    importance_basis_points INTEGER NOT NULL,
-                    archived_at_ms INTEGER,
-                    prompt_text_persisted INTEGER NOT NULL DEFAULT 0,
-                    raw_payload_persisted INTEGER NOT NULL DEFAULT 0,
-                    remote_write_allowed INTEGER NOT NULL DEFAULT 0
-                );
-                ",
-            )
-            .map_err(|error| {
-                AxonError::memory_persistence(format!("Memory SQLite schema 初始化失败: {error}"))
-            })?;
-        transaction
-            .execute_batch(
-                r"
-                CREATE INDEX IF NOT EXISTS idx_memory_records_active_score
-                    ON memory_records(archived_at_ms, last_active_at_ms, confidence_basis_points);
-                CREATE INDEX IF NOT EXISTS idx_memory_records_ttl
-                    ON memory_records(ttl_expires_at_ms);
-                CREATE INDEX IF NOT EXISTS idx_memory_records_scope
-                    ON memory_records(repo_ref, namespace_ref, archived_at_ms);
-                CREATE INDEX IF NOT EXISTS idx_memory_records_personal_scope
-                    ON memory_records(user_ref, namespace_ref, state, archived_at_ms, ttl_expires_at_ms, updated_at_ms, memory_id);
-                CREATE INDEX IF NOT EXISTS idx_memory_records_active_content_ref
-                    ON memory_records(TRIM(content_ref), archived_at_ms);
-                CREATE INDEX IF NOT EXISTS idx_memory_records_recallable_probe
-                    ON memory_records(state, archived_at_ms, ttl_expires_at_ms, updated_at_ms, memory_id);
-                CREATE INDEX IF NOT EXISTS idx_memory_records_kind_timeline
-                    ON memory_records(memory_kind, updated_at_ms DESC, memory_id ASC);
-                CREATE INDEX IF NOT EXISTS idx_memory_records_scope_kind_timeline
-                    ON memory_records(namespace_ref, memory_kind, updated_at_ms DESC, memory_id ASC);
-                ",
-            )
-            .map_err(|error| {
-                AxonError::memory_persistence(format!("Memory SQLite 索引初始化失败: {error}"))
-            })?;
-        crate::store_supersession::initialize_supersession_schema(&transaction)?;
-        crate::store_thread::initialize_thread_schema(&transaction)?;
-        transaction
-            .pragma_update(None, "user_version", MEMORY_SQLITE_SCHEMA_VERSION)
-            .map_err(|error| {
-                AxonError::memory_persistence(format!("Memory SQLite schema 版本写入失败: {error}"))
-            })?;
-        transaction.commit().map_err(|error| {
-            AxonError::memory_persistence(format!("Memory SQLite schema 提交失败: {error}"))
-        })
-    }
-
-    /// 归档缺少必需列的旧 `memory_records`，返回归档表名。
-    ///
-    /// 旧库没有可信 `memory_kind` 来源，不能猜测填充；但既有记录属于用户数据，
-    /// 升级只重命名旧表并释放其索引名，绝不删除任何一行。
-    fn archive_incompatible_record_schema(&self) -> AxonResult<Option<String>> {
-        let columns = self.record_table_columns()?;
-        if columns.is_empty()
-            || REQUIRED_MEMORY_RECORD_COLUMNS
-                .iter()
-                .all(|column| columns.contains(*column))
-        {
-            return Ok(None);
-        }
-        let legacy_table = format!("{LEGACY_MEMORY_RECORD_TABLE_PREFIX}{}", archiving_now_ms());
-        self.connection
-            .execute_batch(&format!(
-                "ALTER TABLE memory_records RENAME TO \"{legacy_table}\""
-            ))
-            .map_err(|_| AxonError::memory_persistence("Memory SQLite 旧 schema 归档失败"))?;
-        for index in self.table_index_names(&legacy_table)? {
-            self.connection
-                .execute_batch(&format!("DROP INDEX IF EXISTS \"{index}\""))
-                .map_err(|_| AxonError::memory_persistence("Memory SQLite 旧索引释放失败"))?;
-        }
-        Ok(Some(legacy_table))
-    }
-
-    fn record_table_columns(&self) -> AxonResult<BTreeSet<String>> {
-        let mut statement = self
-            .connection
-            .prepare("PRAGMA table_info(memory_records)")
-            .map_err(|_| AxonError::memory_persistence("Memory SQLite schema 探测失败"))?;
-        statement
-            .query_map([], |row| row.get::<_, String>(1))
-            .map_err(|_| AxonError::memory_persistence("Memory SQLite schema 探测失败"))?
-            .collect::<Result<BTreeSet<_>, _>>()
-            .map_err(|_| AxonError::memory_persistence("Memory SQLite schema 探测失败"))
-    }
-
-    fn table_index_names(&self, table: &str) -> AxonResult<Vec<String>> {
-        let mut statement = self
-            .connection
-            .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ?1")
-            .map_err(|_| AxonError::memory_persistence("Memory SQLite 索引探测失败"))?;
-        statement
-            .query_map([table], |row| row.get::<_, String>(0))
-            .map_err(|_| AxonError::memory_persistence("Memory SQLite 索引探测失败"))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| AxonError::memory_persistence("Memory SQLite 索引探测失败"))
+        store_schema::initialize_schema(&self.connection)
     }
 
     /// 列出升级时归档的旧记录表，用于向运维与界面显式提示。
     pub fn legacy_record_tables(&self) -> AxonResult<Vec<String>> {
-        let mut statement = self
-            .connection
-            .prepare(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE ?1 ORDER BY name ASC",
-            )
-            .map_err(|_| AxonError::memory_persistence("Memory SQLite 归档表探测失败"))?;
-        statement
-            .query_map([format!("{LEGACY_MEMORY_RECORD_TABLE_PREFIX}%")], |row| {
-                row.get::<_, String>(0)
-            })
-            .map_err(|_| AxonError::memory_persistence("Memory SQLite 归档表探测失败"))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| AxonError::memory_persistence("Memory SQLite 归档表探测失败"))
+        store_schema::legacy_record_tables(&self.connection)
     }
 
     /// 写入或替换治理记录。
@@ -399,85 +251,28 @@ impl MemorySqliteStore {
 
     /// 原子更新一组既有记录的治理状态与排序元数据。
     pub fn update_governance_records(&self, records: &[MemorySqliteRecord]) -> AxonResult<()> {
-        if records.is_empty() {
-            return Ok(());
-        }
-        for record in records {
-            validate_record(record)?;
-        }
-        let transaction = self
-            .connection
-            .unchecked_transaction()
-            .map_err(|_| AxonError::memory_persistence("Memory SQLite 治理事务启动失败"))?;
-        for record in records {
-            transaction
-                .execute(
-                    r"
-                    UPDATE memory_records SET
-                        state = ?2,
-                        content_ref = ?3,
-                        tombstone_blocked_ref = ?4,
-                        tombstone_reason = ?5,
-                        updated_at_ms = ?6,
-                        last_active_at_ms = ?7,
-                        confidence_basis_points = ?8,
-                        importance_basis_points = ?9,
-                        archived_at_ms = ?10
-                    WHERE memory_id = ?1
-                    ",
-                    params![
-                        i64_from_u64(record.record.id.0)?,
-                        state_code(record.record.state),
-                        record.record.content_ref.as_deref(),
-                        record
-                            .record
-                            .tombstone
-                            .as_ref()
-                            .map(|item| item.blocked_ref.as_str()),
-                        record
-                            .record
-                            .tombstone
-                            .as_ref()
-                            .map(|item| item.reason.as_str()),
-                        i64_from_u64(record.updated_at_ms)?,
-                        i64_from_u64(record.last_active_at_ms)?,
-                        i64::from(record.confidence_basis_points),
-                        i64::from(record.importance_basis_points),
-                        optional_i64_from_u64(record.archived_at_ms)?,
-                    ],
-                )
-                .map_err(|_| AxonError::memory_persistence("Memory SQLite 治理记录更新失败"))?;
-        }
-        transaction
-            .commit()
-            .map_err(|_| AxonError::memory_persistence("Memory SQLite 治理事务提交失败"))
+        store_lifecycle::update_governance_records(&self.connection, records)
     }
 
     /// 原子删除一组过期 Memory 记录。
     pub fn delete_records(&self, memory_ids: &[MemoryId]) -> AxonResult<usize> {
-        let values = unique_positive_i64s(memory_ids.iter().map(|id| id.0))?;
-        if values.is_empty() {
-            return Ok(0);
-        }
-        let transaction = self
-            .connection
-            .unchecked_transaction()
-            .map_err(|_| AxonError::memory_persistence("Memory SQLite 删除事务启动失败"))?;
-        let mut deleted = 0usize;
-        for memory_id in values {
-            deleted = deleted.saturating_add(
-                transaction
-                    .execute(
-                        "DELETE FROM memory_records WHERE memory_id = ?1",
-                        [memory_id],
-                    )
-                    .map_err(|_| AxonError::memory_persistence("Memory SQLite 记录删除失败"))?,
-            );
-        }
-        transaction
-            .commit()
-            .map_err(|_| AxonError::memory_persistence("Memory SQLite 删除事务提交失败"))?;
-        Ok(deleted)
+        store_lifecycle::delete_records(&self.connection, memory_ids)
+    }
+
+    /// 原子归档一组 Memory：只写 `archived_at_ms`，不动内容与召回状态。
+    ///
+    /// 与淘汰不同：淘汰写 tombstone 并建立 supersession 链，归档只是让记录退出召回，
+    /// 事后仍能按 archived 过滤回看，属可逆动作。
+    pub fn archive_records(&self, memory_ids: &[MemoryId], now_ms: u64) -> AxonResult<usize> {
+        store_lifecycle::archive_records(&self.connection, memory_ids, now_ms)
+    }
+
+    /// 撤销归档：只清 `archived_at_ms`，不动正文与状态机。
+    ///
+    /// 这是归档「可逆」的实现面：归档只是让记录退出召回，撤销后按原状态回到召回集合。
+    /// 已被淘汰（tombstone）的记录不会因为撤销归档复活，这里同样按状态排除。
+    pub fn unarchive_records(&self, memory_ids: &[MemoryId], now_ms: u64) -> AxonResult<usize> {
+        store_lifecycle::unarchive_records(&self.connection, memory_ids, now_ms)
     }
 
     /// 按 ID 读取治理记录。
@@ -555,6 +350,18 @@ impl MemorySqliteStore {
             .map_err(|_| AxonError::memory_persistence("Memory SQLite schema 版本读取失败"))
     }
 
+    /// 探测 `memory_records` 现有列集合；仅供 schema 迁移测试取证。
+    #[cfg(test)]
+    pub(crate) fn record_table_columns(&self) -> AxonResult<BTreeSet<String>> {
+        store_schema::record_table_columns(&self.connection)
+    }
+
+    /// 探测指定表的索引名；仅供 schema 迁移测试取证。
+    #[cfg(test)]
+    pub(crate) fn table_index_names(&self, table: &str) -> AxonResult<Vec<String>> {
+        store_schema::table_index_names(&self.connection, table)
+    }
+
     fn records_by_field(
         &self,
         field: &'static str,
@@ -580,48 +387,6 @@ impl MemorySqliteStore {
         }
         Ok(records)
     }
-}
-
-/// 归档表名使用的时间戳，单位毫秒；仅用于命名，不参与业务判定。
-fn archiving_now_ms() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_millis())
-}
-
-fn open_connection(path: &Path) -> AxonResult<Connection> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|_| AxonError::memory_persistence("无法创建 Memory SQLite 目录"))?;
-    }
-    let connection = Connection::open(path)
-        .map_err(|_| AxonError::memory_persistence("无法打开 Memory SQLite 数据库"))?;
-    connection
-        .busy_timeout(Duration::from_millis(MEMORY_SQLITE_BUSY_TIMEOUT_MS))
-        .map_err(|_| AxonError::memory_persistence("Memory SQLite busy timeout 配置失败"))?;
-    let mut wal_ready = false;
-    for attempt in 0..=MEMORY_SQLITE_WAL_INIT_RETRIES {
-        if connection
-            .pragma_update(None, "journal_mode", "WAL")
-            .is_ok()
-            || connection
-                .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
-                .is_ok_and(|mode| mode.eq_ignore_ascii_case("wal"))
-        {
-            wal_ready = true;
-            break;
-        }
-        if attempt < MEMORY_SQLITE_WAL_INIT_RETRIES {
-            thread::sleep(Duration::from_millis(MEMORY_SQLITE_WAL_INIT_BACKOFF_MS));
-        }
-    }
-    if !wal_ready {
-        return Err(AxonError::memory_persistence("Memory SQLite WAL 配置失败"));
-    }
-    connection
-        .pragma_update(None, "foreign_keys", "ON")
-        .map_err(|_| AxonError::memory_persistence("Memory SQLite 外键配置失败"))?;
-    Ok(connection)
 }
 
 #[cfg(test)]

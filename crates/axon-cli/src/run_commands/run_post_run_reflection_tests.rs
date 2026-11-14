@@ -57,7 +57,7 @@ fn selected_project_skill_without_execution_evidence_is_not_reflected() {
 }
 
 #[test]
-fn completed_run_applies_agent_reflection_to_selected_skill_off_main_path() {
+fn completed_run_governs_reflection_off_main_path() {
     let root = test_root("low-risk-post-run");
     let config_path = root.join("runtime").join("config.toml");
     std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
@@ -124,14 +124,12 @@ fn completed_run_applies_agent_reflection_to_selected_skill_off_main_path() {
         run_governance_worker_with_request(&config_path, &AxonConfig::default(), &request),
         Ok(1)
     );
-    assert!(completed.skill_evolution.is_none());
     let json_event = RunJsonEvent::completed(CompletedRunWireEventsInput {
         request: &request,
         response: &completed.response,
         session_title: completed.session_title.as_deref(),
         memory_usefulness: completed.memory_usefulness.as_ref(),
         memory_autonomy: completed.memory_autonomy.as_ref(),
-        skill_evolution: completed.skill_evolution.as_ref(),
         post_run_governance: completed.post_run_governance.as_ref(),
         recorded_at_ms: super::run_execution::wire_recorded_at_ms(),
         total_elapsed_ms: 0,
@@ -155,30 +153,24 @@ fn completed_run_applies_agent_reflection_to_selected_skill_off_main_path() {
     assert_eq!(governance["kind"]["payload"]["status"], "started");
     assert_eq!(governance["kind"]["payload"]["statusPath"], *status_path);
 
-    let content = std::fs::read_to_string(&skill_file).expect("worker 应写入低风险 Skill");
     assert_eq!(
         governance_job_status(std::path::Path::new(status_path), &receipt.job_id),
         "completed"
     );
-    assert!(content.contains("## 已验证经验"));
-    assert!(content.contains("子代理自闭环完成"));
 
     assert!(
         events
             .iter()
             .all(|event| !matches!(event.event.kind, WireEventKind::SkillStatus(_))),
-        "skill evolution 不应恢复主路径 skill 状态"
+        "反思链路不应产生主路径技能状态事件"
     );
     assert!(
         events
             .iter()
             .all(|event| !matches!(event.event.kind, WireEventKind::ReviewStatus(_))),
-        "skill evolution 不应恢复人审状态"
+        "反思链路不应产生人审状态事件"
     );
-    assert!(captured_labels_contain(
-        &captured,
-        &["memory_update", "skill_reflection"]
-    ));
+    assert!(captured_labels_contain(&captured, &["memory_update"]));
     let assessor_input = captured_input_ending_with(&captured, "semantic_salience")
         .expect("post-run 应先执行 semantic salience assessor");
     assert!(!assessor_input.tools_enabled);
@@ -196,16 +188,17 @@ fn completed_run_applies_agent_reflection_to_selected_skill_off_main_path() {
         .unwrap();
     assert_eq!(quality.observation_count, 1);
     assert_eq!(quality.semantic_assessments, 1);
-    assert_eq!(quality.reflection_attempts, 2);
-    assert_eq!(quality.reflection_yields, 1);
-    assert_eq!(quality.reflection_yield_basis_points, 5_000);
+    assert_eq!(quality.reflection_attempts, 1);
+    // 该 executor 不写记忆，反思产出恒为 0；与线上实测完全一致。
+    assert_eq!(quality.reflection_yields, 0);
+    assert_eq!(quality.reflection_yield_basis_points, 0);
     assert_eq!(quality.false_memory_rejections, 0);
     assert_no_running_subagent_sessions(&request);
     let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
-fn completed_run_records_high_risk_selected_skill_rejection() {
+fn completed_run_keeps_high_risk_selected_skill_untouched() {
     let root = test_root("high-risk-post-run");
     let config_path = root.join("runtime").join("config.toml");
     std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
@@ -263,12 +256,11 @@ fn completed_run_records_high_risk_selected_skill_rejection() {
         .as_ref()
         .expect("完成后必须启动 post-run governance");
     assert_eq!(receipt.status, "started");
-    let status_path = receipt.status_path.as_ref().expect("必须返回 statusPath");
+    assert!(receipt.status_path.is_some(), "必须返回 statusPath");
     assert_eq!(
         run_governance_worker_with_request(&config_path, &AxonConfig::default(), &request),
         Ok(1)
     );
-    assert!(completed.skill_evolution.is_none());
     assert_eq!(
         std::fs::read_to_string(&skill_file).unwrap(),
         original_skill
@@ -277,25 +269,9 @@ fn completed_run_records_high_risk_selected_skill_rejection() {
         events
             .iter()
             .all(|event| !matches!(event.event.kind, WireEventKind::SkillStatus(_))),
-        "高风险静默时不应向 TUI 回显 skill evolution"
+        "高风险静默时不应向 TUI 回显技能状态"
     );
-    let state_path = config_path
-        .parent()
-        .unwrap()
-        .join("skill-evolution")
-        .join("state.json");
-    let state = std::fs::read_to_string(&state_path).expect("worker 应写入拒绝状态");
-    assert_eq!(
-        governance_job_status(std::path::Path::new(status_path), &receipt.job_id),
-        "completed"
-    );
-    assert!(state.contains("\"kind\": \"improvement\""));
-    assert!(state.contains("\"risk\": \"high\""));
-    assert!(state.contains("\"stage\": \"rejected\""));
-    assert!(captured_labels_contain(
-        &captured,
-        &["memory_update", "skill_reflection"]
-    ));
+    assert!(captured_labels_contain(&captured, &["memory_update"]));
     assert_no_running_subagent_sessions(&request);
     let _ = std::fs::remove_dir_all(root);
 }
@@ -366,7 +342,7 @@ fn response_with_receipts(receipts: &[RunToolReceipt]) -> RunResponse {
         .collect();
     RunResponse {
         content: "done".to_owned(),
-        assistant_part_id: "assistant-part:skill-evolution-post-run".to_owned(),
+        assistant_part_id: "assistant-part:post-run-reflection".to_owned(),
         provider: "fixture".to_owned(),
         model: "fixture-chat".to_owned(),
         token_usage: None,
@@ -534,7 +510,10 @@ fn semantic_assessment_json() -> String {
             "novelty": 8_000,
             "correctionStrength": 0,
             "verificationStrength": 9_000,
-            "scopeConfidence": 9_000
+            "scopeConfidence": 9_000,
+            // v4 的 schema 要求 specificity。缺了它会被反序列化成 0，执行类建卡
+            // 就过不了「三维同时达门」，本轮会走攒批而不是单跑。
+            "specificity": 9_000
         },
         "evidenceRefs": ["receipt:3"],
         "reason": "已验证的执行经验可跨会话复用"
@@ -580,7 +559,7 @@ fn self_iteration_labels(request: &RunRequest, response: &RunResponse) -> Vec<St
         .plan_with_delegation(
             SessionId(1),
             false,
-            &self_iteration_input(request, turn_outcome, Some(assessment)),
+            &self_iteration_input(request, turn_outcome, Some(assessment), Vec::new()),
         )
         .expect("self-iteration 计划应有效")
         .delegation_plan
@@ -609,6 +588,9 @@ fn assessment_for_outcome(outcome: &TurnOutcomeEnvelope) -> SemanticSalienceAsse
             future_utility: if should_reflect { 9_000 } else { 0 },
             verification_strength: if should_reflect { 9_000 } else { 0 },
             scope_confidence: if should_reflect { 9_000 } else { 0 },
+            // v4 起执行类强卡要求三维同时达门；夹具必须带上 specificity，
+            // 否则它只是一张「五维之和看着高、实际不达标」的弱卡，会走攒批而不是单跑。
+            specificity: if should_reflect { 9_000 } else { 0 },
             ..SemanticSalienceSignals::default()
         },
         evidence_refs: evidence_ref.into_iter().collect(),
@@ -677,7 +659,7 @@ fn test_root(label: &str) -> std::path::PathBuf {
     static NEXT_TEST_ROOT_ID: AtomicU64 = AtomicU64::new(1);
 
     let root = axon_test_support::test_temp_root().join(format!(
-        "axon-skill-evolution-{label}-{}-{}",
+        "axon-post-run-reflection-{label}-{}-{}",
         std::process::id(),
         NEXT_TEST_ROOT_ID.fetch_add(1, Ordering::Relaxed)
     ));

@@ -222,6 +222,7 @@ export const Markdown: React.FC<{ source: string; streaming?: boolean }> = ({
   const art = React.useMemo<MarkdownArt>(
     () => ({
       openFile: actions?.openFile,
+      resolvePath: actions?.resolvePath,
       workspaceRoot: actions?.workspaceRoot ?? null,
       hoverThumbnail: actions !== null,
     }),

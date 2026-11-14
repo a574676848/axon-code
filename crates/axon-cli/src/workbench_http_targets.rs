@@ -108,6 +108,19 @@ pub(super) fn lane_jobs_target(subpath: &str) -> Option<String> {
     (tail == "jobs" && !lane_id.is_empty()).then(|| lane_id.to_owned())
 }
 
+/// 解析 `lanes/<laneId>/jobs/<jobId>/output` 子路径，返回车道与作业标识。
+///
+/// 三个 `jobs` 前缀的路由互不吞并：名册只认完整的 `jobs`，停止只认 `stop`，
+/// 尾随只认 `output`。
+pub(super) fn lane_job_output_target(subpath: &str) -> Option<(String, String)> {
+    let rest = subpath.strip_prefix("lanes/")?;
+    let (lane_id, tail) = rest.split_once('/')?;
+    let jobs = tail.strip_prefix("jobs/")?;
+    let (job_id, action) = jobs.split_once('/')?;
+    (action == "output" && !lane_id.is_empty() && !job_id.is_empty())
+        .then(|| (lane_id.to_owned(), job_id.to_owned()))
+}
+
 /// 解析 `lanes/<laneId>/questions/<callId>/answer` 子路径。
 pub(super) fn lane_question_answer_target(subpath: &str) -> Option<(String, String)> {
     let rest = subpath.strip_prefix("lanes/")?;

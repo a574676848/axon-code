@@ -19,6 +19,7 @@ import {
   type AttachmentRef,
 } from './transcript';
 import type { ConversationStreamEvent } from './wire';
+import type { LaneEffectiveModel } from './viewConfig';
 import { normalizeTarget, subscriptionIdOf } from './targets';
 import type {
   ConversationController,
@@ -26,10 +27,9 @@ import type {
   LaneCapability,
 } from './targets';
 import { useAutoFoldTurns } from './useAutoFoldTurns';
+import { useConversationInterruptControl } from './useConversationInterruptControl';
 import { useElapsedTick } from './useElapsedTick';
-import { useInterruptedCarry } from './useInterruptedCarry';
 import { replayInteractionHistory } from './interactionReplay';
-import { useLaneInterrupt } from './useLaneInterrupt';
 import { useLanePaging } from './useLanePaging';
 import { useLaneReattach } from './useLaneReattach';
 import { useQuestionSync } from './useQuestionSync';
@@ -101,6 +101,20 @@ export function useConversation(target: ConversationTarget | null): Conversation
   const dismissQuestionError = useCallback(() => setQuestionError(null), []);
   const [laneReadyId, setLaneReadyId] = useState<string | null>(null);
   const laneReattach = useLaneReattach();
+  /**
+   * 车道当前模型的权威事实。
+   *
+   * 由网关按「该车道最新一轮记录」单条读出，随首屏历史一起回来；因此打开会话时
+   * 输入坞立刻能显示真实模型，不必等逐条回放，也不会被旧轮次的帧改写。
+   */
+  const [laneModel, setLaneModel] = useState<LaneEffectiveModel | null>(null);
+  /**
+   * 最近一次记忆反思提示。
+   *
+   * 与 `laneModel` 同源同寿命：换目标时一起清空，翻页时不回退。反思是轮后异步治理
+   * 的产物，界面按「上一次记忆动作」呈现，不承诺与当前轮同步。
+   */
+  const [laneReflectionNotice, setLaneReflectionNotice] = useState<string | null>(null);
 
   const pendingRef = useRef<ConversationStreamEvent[]>([]);
   const flushRef = useRef<number | null>(null);
@@ -167,6 +181,8 @@ export function useConversation(target: ConversationTarget | null): Conversation
     generationRef,
     playNextRef,
     onError: setSubmitError,
+    onEffectiveModel: setLaneModel,
+    onReflectionNotice: setLaneReflectionNotice,
   });
 
   /**
@@ -343,6 +359,8 @@ export function useConversation(target: ConversationTarget | null): Conversation
     dispatch({ type: 'connecting' });
     setSubmitError(null);
     setLaneReadyId(null);
+    setLaneModel(null);
+    setLaneReflectionNotice(null);
     // 投影与目标同批对齐：从这一帧起，state 里的旧轮次不再对外可见。
     setProjectionKey(targetKey);
     const current = targetRef.current;
@@ -456,6 +474,7 @@ export function useConversation(target: ConversationTarget | null): Conversation
       attachments: AttachmentRef[] = [],
       structuredInput = '',
       model: string | null = null,
+      reasoningEffort: string | null = null,
     ) => {
       // 会话目标不支持在这里发送：如实失败，不静默丢弃。
       if (!laneCapability.available) {
@@ -494,6 +513,7 @@ export function useConversation(target: ConversationTarget | null): Conversation
           structuredInput.length > 0 ? `${visibleText}${structuredInput}` : visibleText,
           attachments.map((attachment) => attachment.path),
           model,
+          reasoningEffort,
         );
         if (!streaming) {
           dispatch({ type: 'bind', turnId: localTurnId, interactionId: receipt.interactionId });
@@ -550,44 +570,17 @@ export function useConversation(target: ConversationTarget | null): Conversation
   }, [laneCapability, paging]);
 
   /*
-   * 中断转投：装配在这里而不是 interrupt 内部，是因为它同时要读轮次快照、要
-   * 在收口后重新提交，而这两件事各自由本文件与归约器持有。
+   * 中断与转投：三步的先后顺序本身就是语义，因此整条装配收在
+   * `useConversationInterruptControl` 里，本文件只保留一个 `interrupt` 出口。
    */
-  /**
-   * 车道上是否已经没有活跃轮次。
-   *
-   * 拿中断回执当探针：`interrupted` 为假即表示后端登记表里没有这条车道的活跃主
-   * turn，此刻提交才会开出一条新的 Interaction，而不是被注入那条正在收尾的轮次。
-   */  const laneIdle = useCallback(async () => {
-    const lane = laneCapability.laneId ?? watchedRef.current;
-    if (lane === null) return true;
-    try {
-      const receipt = await ipc.conversationInterrupt(lane);
-      return !receipt.interrupted;
-    } catch {
-      // 探测本身失败不拦转投：宁可把消息发出去，也不把它扣在本地。
-      return true;
-    }
-  }, [laneCapability.laneId]);
-
-  const handOverSteers = useInterruptedCarry({
+  const interrupt = useConversationInterruptControl({
+    laneId: laneCapability.laneId,
+    watchedRef,
     targetKey,
     working,
     turnsRef,
     dispatch,
     submit,
-    laneIdle,
-  });
-
-  /**
-   * 中断当前车道正在运行的一轮；回执为假时如实提示，不假装成功。
-   *
-   * 中断之前先把还没被注入的排队消息摘下交给转投队列，具体口径见 `useLaneInterrupt`。
-   */
-  const interrupt = useLaneInterrupt({
-    laneId: laneCapability.laneId,
-    watchedRef,
-    onBeforeInterrupt: handOverSteers,
     onNotice: setSubmitError,
   });
 
@@ -665,6 +658,9 @@ export function useConversation(target: ConversationTarget | null): Conversation
     watchedInteractionId: laneCapability.available ? watchedRef.current : null,
     sessionCumulative,
     laneReadyId,
+    /** 车道当前模型的权威事实：网关只读该车道最新一轮记录。 */
+    laneModel,
+    laneReflectionNotice,
     laneAvailable: laneCapability.available,
     opening,
     queued,

@@ -213,18 +213,22 @@ export const MarkdownImage: React.FC<{
 export const ImagePathChip: React.FC<{
   path: string;
   onOpen?: (path: string) => void;
+  /** 把引用解析成真路径；缺省时按原样读。 */
+  resolvePath?: (path: string) => string;
   /** 是否挂悬浮缩略图；文档预览页关掉，避免预览页里再套一层预览。 */
   thumbnail?: boolean;
   children: React.ReactNode;
-}> = ({ path, onOpen, thumbnail = false, children }) => {
+}> = ({ path, onOpen, resolvePath, thumbnail = false, children }) => {
   const [preview, setPreview] = React.useState<string | null>(null);
   const [hover, setHover] = React.useState(false);
+  /** 真路径：缩略图读的必须是它，芯片上写的仍是正文原文。 */
+  const source = resolvePath === undefined ? path : resolvePath(path);
 
   React.useEffect(() => {
     if (!thumbnail || !hover) return undefined;
     let disposed = false;
     let handle: ImageHandle | null = null;
-    void acquireFirstImage(imagePathCandidates(path)).then(
+    void acquireFirstImage(imagePathCandidates(source)).then(
       (acquired) => {
         if (disposed) {
           acquired.release();
@@ -244,7 +248,7 @@ export const ImagePathChip: React.FC<{
       setPreview(null);
       handle?.release();
     };
-  }, [hover, path, thumbnail]);
+  }, [hover, source, thumbnail]);
 
   return (
     <span

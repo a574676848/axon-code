@@ -9,7 +9,6 @@
 //! 独立持有游标与投影线程，任一放慢或断开都不影响同一连接上的其它订阅。
 
 use super::gateway_kernel::{GatewayAdapter, GatewayContext, GatewayEvent, GatewayEventStream};
-use crate::application::ExternalEventEnvelope;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -473,48 +472,9 @@ enum WsClientRequest {
     Ping {},
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct WsEventRequest {
-    source_channel: String,
-    event_id: String,
-    /// 事件所属 Workspace；缺省时由服务端解析默认 Workspace。
-    ///
-    /// 与 HTTP 信封同语义：外部发送方不填，自带工作区上下文的客户端才填。
-    #[serde(default)]
-    workspace_id: Option<String>,
-    observed_at_ms: u64,
-    expires_at_ms: u64,
-    content: String,
-    reply_channel: String,
-    reply_destination: String,
-    /// 客户端已落地的本地附件绝对路径。
-    #[serde(default)]
-    local_files: Vec<String>,
-    /// 客户端显式指定的本轮模型；与 HTTP 信封同语义。
-    #[serde(default)]
-    model: Option<String>,
-}
-
-impl WsEventRequest {
-    fn into_event(self) -> ExternalEventEnvelope {
-        ExternalEventEnvelope {
-            source_channel: self.source_channel,
-            event_id: self.event_id,
-            workspace_id: self.workspace_id.unwrap_or_default().trim().to_owned(),
-            observed_at_ms: self.observed_at_ms,
-            expires_at_ms: self.expires_at_ms,
-            content: self.content,
-            title: None,
-            correlation_key: None,
-            reply_channel: self.reply_channel,
-            reply_destination: self.reply_destination,
-            attachments: self.local_files,
-            model: self.model,
-        }
-    }
-}
-
+#[path = "gateway_websocket_event.rs"]
+mod gateway_websocket_event;
+use gateway_websocket_event::*;
 #[path = "gateway_websocket_frames.rs"]
 mod gateway_websocket_frames;
 use gateway_websocket_frames::*;

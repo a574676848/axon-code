@@ -8,6 +8,16 @@ pub(crate) struct EffectiveModelIdentity {
     pub(crate) model: String,
 }
 
+/// 本会话最近一轮真实使用的模型。
+///
+/// 来自 provider 状态帧（实时与回放同源）。运行侧恢复会话时就是按会话记录选模型，
+/// 头部读同一份事实才不会出现「模型是会话的、窗口是配置默认的」。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionRunModel {
+    pub(crate) provider: String,
+    pub(crate) model: String,
+}
+
 pub(crate) fn provider_model_route(provider: &str, model: &str) -> String {
     let provider = provider.trim();
     let model = model.trim();

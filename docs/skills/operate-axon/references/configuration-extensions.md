@@ -60,7 +60,6 @@ axon mcp logout <server-id>           # 清除本地 token 与待完成会话
 | `agent.log_level` | 日志级别：`trace`、`debug`、`info`、`warn`、`error` |
 | `agent.max_subagent_threads` | 每个 run session 允许的最大子代理线程数 |
 | `agent.max_subagent_active_turns` | 每个 run session 允许同时运行的子代理 turn 数 |
-| `agent.max_subagent_depth` | 子代理最大嵌套深度，root 深度为 0 |
 | `agent.idle_compaction_debounce_ms` | 闲暇压缩 debounce 窗口，单位毫秒 |
 
 并发委派超过 `max_subagent_threads` 或活跃 turn 超过 `max_subagent_active_turns` 时，超额请求会被准入裁决拒绝并回流明确原因，而不是排队等待。

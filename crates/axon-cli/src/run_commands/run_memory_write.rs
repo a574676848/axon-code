@@ -70,6 +70,36 @@ impl AgentMemoryWriteRuntime {
         self
     }
 
+    /// 反思收口用的轮次标识。
+    ///
+    /// post-run 阶段没有 cell 概念，用时间戳兜底，保证同一轮内多次写入共用一个 turn 标识。
+    #[must_use]
+    pub(crate) fn reflection_write_cell(turn_seq: u64) -> CellId {
+        CellId(turn_seq.max(1))
+    }
+
+    /// 归档指定 Memory：只让记录退出召回，不删除内容，也不建 supersession 链。
+    pub(crate) fn archive(
+        &self,
+        config_path: &Path,
+        memory_ids: &[u64],
+        now_ms: u64,
+    ) -> Result<usize, String> {
+        if memory_ids.is_empty() {
+            return Ok(0);
+        }
+        let loaded = ConfigLoader::load_from_path(config_path)
+            .map_err(|error| format!("Memory 配置加载失败: {error:?}"))?;
+        let orchestrator = axon_memory_read::init_memory_orchestrator(config_path, &loaded.config)
+            .map_err(|error| format!("{error:?}"))?;
+        let store = axon_memory::MemorySqliteStore::open(orchestrator.config())
+            .map_err(|error| format!("{error:?}"))?;
+        let ids: Vec<MemoryId> = memory_ids.iter().copied().map(MemoryId).collect();
+        store
+            .archive_records(&ids, now_ms)
+            .map_err(|error| format!("{error:?}"))
+    }
+
     pub(crate) fn trigger(
         &self,
         input: AgentMemoryWriteInput<'_>,

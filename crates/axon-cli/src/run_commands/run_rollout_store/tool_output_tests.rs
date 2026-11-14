@@ -131,6 +131,8 @@ fn record(session_id: &str, created_at_ms: u64) -> RunSessionRecord {
         failure: None,
         upstream_model: None,
         reasoning_effort: None,
+        reflection_notice: None,
+        turn_trace: None,
         request_path: None,
         speed_mode: None,
         ttft_ms: None,

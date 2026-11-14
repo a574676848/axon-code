@@ -9,7 +9,9 @@
 import React from 'react';
 import { structuredInputBlock } from '../../conversation/references';
 import type { AttachmentRef } from '../../conversation/transcript';
-import { changesAddress, fileAddress } from '../../sidebarRight/registry';
+import { changesAddress, choiceAddress, fileAddress } from '../../sidebarRight/registry';
+import type { ReferenceIndex } from '../../resources/referenceIndex';
+import { resolveReference } from '../../resources/resolveReference';
 import type { ConversationActions } from './actions';
 
 /** 构造动作集合所需的外壳能力。 */
@@ -26,6 +28,13 @@ export interface ConversationActionsSource {
   openResource: (address: string, params?: { index: number }) => void;
   /** 把问答卡片叫回输入坞。 */
   openQuestion: () => void;
+  /**
+   * 这条会话已知的绝对路径索引。
+   *
+   * 正文里的路径是引用而不是路径值：它相对谁，字面上没有答案。索引由会话事件流
+   * 派生，是「真的被碰过哪些文件」的唯一真值，缺省时退回「相对工作区」的既有语义。
+   */
+  referenceIndex?: () => ReferenceIndex;
 }
 
 /**
@@ -38,9 +47,15 @@ export interface ConversationActionsSource {
 export function useConversationActionsValue(
   source: ConversationActionsSource,
   workspaceRoot: string | null,
+  laneId: string | null,
 ): ConversationActions {
   const sourceRef = React.useRef(source);
   sourceRef.current = source;
+  /** 解析一段正文引用；索引经 ref 取当前值，只在真要打开时才查。 */
+  const resolveTarget = React.useCallback(
+    (path: string) => resolveReference(path, sourceRef.current.referenceIndex?.() ?? null),
+    [],
+  );
   return React.useMemo<ConversationActions>(
     () => ({
       retry: (text, attachments) => {
@@ -54,8 +69,17 @@ export function useConversationActionsValue(
       },
       openFile: (path) => {
         // 打开文件即打开对应的资源 tab：面板会自己展开，不需要先切视图。
-        sourceRef.current.openResource(fileAddress(path));
+        // 先解析引用：工作区外的产物靠这一步才能打开；对上多份文件时不替用户
+        // 选，打开候选页；解析不出结论时原样交回去，行为与改动前一致。
+        const resolution = resolveTarget(path);
+        if (resolution.status === 'ambiguous') {
+          sourceRef.current.openResource(choiceAddress(path.trim(), resolution.candidates));
+          return;
+        }
+        sourceRef.current.openResource(fileAddress(resolution.path));
       },
+      // 正文里的图片与文本共用同一条解析：候选写法与预览页不该各猜各的。
+      resolvePath: (path) => resolveTarget(path).path,
       openChanges: (turnId, turnNumber, index) => {
         // 改动对比按「轮次」落成资源地址：文件下标是导航参数，因此同一个 tab 反复
         // 打开不同文件时只会切换落点，不会堆出一排标签。
@@ -67,7 +91,9 @@ export function useConversationActionsValue(
       unfoldTurn: (interactionId) => sourceRef.current.unfoldTurn(interactionId),
       // 正文里的相对图片路径以当前工作区为准，与输入坞的 `@` 引用同作用域。
       workspaceRoot,
+      // 换会话就换车道：这个值进依赖，切换时重建一次集合是应该的。
+      laneId,
     }),
-    [workspaceRoot],
+    [resolveTarget, workspaceRoot, laneId],
   );
 }

@@ -17,8 +17,6 @@ pub(super) struct RunMemoryUsefulnessEvent {
     pub(super) adopted_hit_count: usize,
     pub(super) cited_hit_refs: Vec<String>,
     pub(super) adopted_hit_refs: Vec<String>,
-    pub(super) skill_reflection_hit_count: usize,
-    pub(super) skill_reflection_success_count: usize,
     pub(super) procedural_review_hit_count: usize,
     pub(super) tool_call_count: usize,
     pub(super) filesystem_write_count: usize,
@@ -83,9 +81,6 @@ fn memory_usefulness_event(
 ) -> RunMemoryUsefulnessEvent {
     let cited_hit_count = adopted.cited_hit_refs.len();
     let adopted_hit_count = adopted.adopted_hit_refs.len();
-    let skill_reflection_hit_count = recall.skill_reflection_hit_count;
-    let skill_reflection_success_count =
-        usize::from(run_completed && skill_reflection_hit_count > 0);
     let tool_call_count = tool_receipts.len();
     let filesystem_write_count = tool_receipts
         .iter()
@@ -100,8 +95,6 @@ fn memory_usefulness_event(
         adopted_hit_count,
         cited_hit_refs: adopted.cited_hit_refs,
         adopted_hit_refs: adopted.adopted_hit_refs,
-        skill_reflection_hit_count,
-        skill_reflection_success_count,
         procedural_review_hit_count: recall.procedural_review_hit_count,
         tool_call_count,
         filesystem_write_count,

@@ -69,8 +69,6 @@ pub enum MemorySourceOrigin {
     RemoteUpload,
     /// command completion feedback。
     CommandCompletionFeedback,
-    /// skill / playbook 执行反思。
-    SkillReflection,
 }
 
 /// 记忆候选类型。

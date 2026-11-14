@@ -20,12 +20,24 @@ use super::{
 use crate::CliRunResult;
 use crate::run_commands::{daemon_interaction_client, submit_prepared_daemon_interaction};
 
+/// 会话内的显式选择：模型与推理强度同源，只在本次运行里生效。
+///
+/// 分工是「这一轮用什么」对「默认用什么」：这里不清空也不写回 `config.toml`，
+/// 全局默认值仍由 `/model` 之外的设置入口维护。
+#[derive(Debug, Clone, Default)]
+pub(super) struct ExplicitTurnSelection {
+    /// `/model` 选过的模型；`None` 表示没有显式选择。
+    pub(super) model: Option<String>,
+    /// `/think` 选过的推理强度；`None` 表示没有显式选择。
+    pub(super) reasoning_effort: Option<String>,
+}
+
 #[derive(Clone)]
 pub(super) struct CliAgentTuiRuntimeAdapter {
     pub(super) config_path: Option<PathBuf>,
     pub(super) reply_destination: String,
-    /// 用户在本进程里显式选择过的模型（`/model`）；随每次提交下传为本轮显式模型。
-    pub(super) explicit_model: Arc<Mutex<Option<String>>>,
+    /// 用户在本进程里显式选过的模型与推理强度；随每次提交下传为本轮显式设置。
+    pub(super) explicit_turn: Arc<Mutex<ExplicitTurnSelection>>,
 }
 
 impl AgentTuiRuntimeAdapter for CliAgentTuiRuntimeAdapter {
@@ -256,9 +268,11 @@ impl AgentTuiRuntimeAdapter for CliAgentTuiRuntimeAdapter {
             ))
         })?;
         let mut interaction = prepared.interaction;
-        // 显式选择随本轮下传：Daemon 把它投影为 transportContext.model，
+        // 显式选择随本轮下传：Daemon 把它投影为 transportContext 的模型与推理强度，
         // Provider turn 据此覆盖会话模型与配置默认值。
-        interaction.model = self.current_explicit_model();
+        let explicit_turn = self.current_explicit_turn();
+        interaction.model = explicit_turn.model;
+        interaction.reasoning_effort = explicit_turn.reasoning_effort;
         let telemetry_enabled = axon_session_runtime::first_token_telemetry_enabled();
         let ipc_submit_started_at_ms = telemetry_enabled.then(axon_time::unix_now_ms);
         let (session_id, primary_interaction_id) = submit_prepared_daemon_interaction(
@@ -364,9 +378,9 @@ impl AgentTuiRuntimeAdapter for CliAgentTuiRuntimeAdapter {
 }
 
 impl CliAgentTuiRuntimeAdapter {
-    /// 当前生效的显式模型；未选择过时为 `None`。
-    fn current_explicit_model(&self) -> Option<String> {
-        self.explicit_model
+    /// 当前生效的显式选择；没选过时两个字段都为 `None`。
+    fn current_explicit_turn(&self) -> ExplicitTurnSelection {
+        self.explicit_turn
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()

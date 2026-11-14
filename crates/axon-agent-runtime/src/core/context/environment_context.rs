@@ -70,10 +70,13 @@ const REASONING_EFFORT_TIERS_NOTE: &str =
     "（当前可用思考强度档次；可根据任务难度选择对应档次随调用传入，省略即继承当前档位）";
 
 impl EnvironmentContext {
-    /// 渲染为 history 后的动态开发者消息。
+    /// 渲染为本轮动态上下文消息（`source=Context` + `kind=InjectedContext`）。
+    ///
+    /// 环境随每轮重建，不能进缓存；用 `injected_context` 而不是 `cache_excluded`，
+    /// 是为了让换窗与角色转换按 kind 识别注入，不必再依赖缓存标志。
     #[must_use]
     pub fn to_message(&self) -> AgentModelMessage {
-        AgentModelMessage::cache_excluded("developer", self.render())
+        AgentModelMessage::injected_context("developer", self.render())
     }
 
     /// 渲染有界环境文本；超限字段按完整块省略，不截断字段内容。

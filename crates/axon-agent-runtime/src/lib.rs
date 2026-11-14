@@ -330,10 +330,6 @@ mod mcp_transport_prompts;
 mod mcp_transport_resources;
 #[path = "memory/memory_adapter.rs"]
 mod memory_adapter;
-#[path = "memory/memory_auto_candidate.rs"]
-mod memory_auto_candidate;
-#[path = "memory/memory_auto_scheduler.rs"]
-mod memory_auto_scheduler;
 #[path = "memory/memory_autonomy.rs"]
 mod memory_autonomy;
 #[path = "memory/memory_code_symbol.rs"]
@@ -374,8 +370,6 @@ mod memory_receipt;
 pub mod memory_recovery;
 #[path = "memory/memory_runtime.rs"]
 mod memory_runtime;
-#[path = "memory/memory_skill_evolution.rs"]
-mod memory_skill_evolution;
 #[path = "memory/memory_tool_dispatcher.rs"]
 mod memory_tool_dispatcher;
 #[path = "memory/memory_write_trigger.rs"]
@@ -384,6 +378,8 @@ mod memory_write_trigger;
 mod model_router;
 #[path = "core/routing/model_routing_metrics.rs"]
 mod model_routing_metrics;
+#[path = "runtime/self_improvement/persona_rules.rs"]
+mod persona_rules;
 #[path = "core/tools/pinned_skill_executor.rs"]
 mod pinned_skill_executor;
 #[path = "runtime/prediction.rs"]
@@ -427,6 +423,21 @@ mod provider_tool_schedule;
 mod provider_visible_cache_shape;
 #[path = "core/context/quoted_message_projection.rs"]
 mod quoted_message_projection;
+#[path = "runtime/self_improvement/reflection_action.rs"]
+mod reflection_action;
+#[path = "runtime/self_improvement/reflection_card.rs"]
+mod reflection_card;
+#[path = "runtime/self_improvement/reflection_ledger.rs"]
+mod reflection_ledger;
+#[path = "runtime/self_improvement/reflection_pool.rs"]
+mod reflection_pool;
+#[path = "runtime/self_improvement/reflection_pool_store.rs"]
+mod reflection_pool_store;
+#[cfg(test)]
+#[path = "runtime/self_improvement/reflection_replay_tests.rs"]
+mod reflection_replay_tests;
+#[path = "runtime/self_improvement/reflection_report.rs"]
+mod reflection_report;
 #[path = "remote/remote_status_summary.rs"]
 mod remote_status_summary;
 #[path = "repo_structure/repo_structure_model.rs"]
@@ -500,6 +511,8 @@ mod turn_execution_ledger;
 mod turn_metadata;
 #[path = "runtime/self_improvement/turn_outcome.rs"]
 mod turn_outcome;
+#[path = "runtime/self_improvement/turn_trace.rs"]
+mod turn_trace;
 #[path = "core/run/user_question_limits.rs"]
 pub mod user_question_limits;
 #[path = "core/run/user_question_port.rs"]
@@ -588,6 +601,8 @@ pub use turn_execution_ledger::{
 pub use turn_metadata::{TurnMetadataBag, TurnRequestKind, WorkspaceGitMetadata};
 pub use user_question_limits::*;
 pub use user_question_port::{QuestionWaitBudget, QuestionWaitResult, UserQuestionPort};
+#[path = "core/tools/builtin_turn_trace_tool.rs"]
+mod builtin_turn_trace_tool;
 #[cfg(test)]
 #[path = "tests/lib_test_modules.rs"]
 mod lib_test_modules;

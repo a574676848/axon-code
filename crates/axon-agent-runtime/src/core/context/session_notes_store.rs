@@ -16,6 +16,14 @@ use crate::session_notes::write_file_replacing;
 pub const NOTES_DIR_NAME: &str = "notes";
 /// 单个便签文件的 UTF-8 字节上限（对齐 Codex notes 合同）。
 pub const NOTES_MAX_FILE_BYTES: usize = 1_000_000;
+/// 单个便签在 checkpoint 中内联正文的字节上限；超过只给路径与行数，由模型按需回读。
+///
+/// 定成常量而不是按剩余预算动态分配，是为了让模型能预判哪条便签会整段带入：
+/// 阈值以下的便签正文原样出现在摘要里，阈值以上一律只留可回读的引用，
+/// 从而既保住自由格式工作便签，又不让超长便签挤爆换窗预算。
+/// 4 KiB ≈ 1 024 tokens，与摘要总量上限（4 096 tokens）配套：单条内联后
+/// 仍要留出 TASK/CONSTRAINTS/OPEN/TOOLS 与六段标题的空间。
+pub const NOTES_INLINE_MAX_BYTES: usize = 4 * 1024;
 /// 便签虚拟路径允许的最大字符数。
 pub const NOTES_MAX_PATH_CHARS: usize = 512;
 /// 单次列举允许返回的文件数上限。
@@ -26,9 +34,6 @@ pub const NOTES_SEARCH_MAX_LINE_CHARS: usize = 400;
 const NOTES_MAX_DEPTH: usize = 16;
 /// 便签为空时写入 checkpoint 的占位事实。
 const NOTES_EMPTY_CHECKPOINT_HINT: &str = "- 尚未写入私有便签；换窗前必须先调用 builtin.notes_write_file 或 builtin.notes_append_to_file。";
-/// checkpoint 内被截断时的提示。
-const NOTES_CHECKPOINT_TRUNCATED_HINT: &str =
-    "- 便签内容超出 checkpoint 预算，已截断；细节请回读完整便签。";
 /// checkpoint 中回读便签的固定指引。
 const NOTES_READ_BACK_HINT: &str =
     "- 换窗后先回读私有便签：builtin.notes_list_files_by_prefix → builtin.notes_read_file。";
@@ -315,89 +320,101 @@ impl NotesStore {
 
     /// 列出全部便签虚拟路径（按更新时间倒序，最新在前）。
     pub fn list_note_paths(session_dir: &Path) -> AxonResult<Vec<String>> {
-        let entries = Self::list_files_by_prefix(
+        let entries = list_entries_by_prefix(
             session_dir,
             None,
-            Some(NOTES_LIST_MAX_RESULTS),
             NotesFileOrderBy::UpdatedAt,
             NotesFileOrder::Descending,
         )?;
+        ensure_entry_count_within_limit(entries.len())?;
         Ok(entries.into_iter().map(|entry| entry.path).collect())
     }
 
-    /// 渲染 canonical checkpoint 的便签事实区（严格不超过给定字节预算）。
-    pub fn render_checkpoint(session_dir: &Path, max_bytes: usize) -> AxonResult<String> {
-        let entries = Self::list_files_by_prefix(
+    /// 渲染 canonical checkpoint 的便签事实区。
+    ///
+    /// 短便签（不超过 `NOTES_INLINE_MAX_BYTES`）内联正文，长便签只留路径、字节数与行数，
+    /// 由模型换窗后按需回读：自由格式工作便签因此可以放心写长，也不必为换窗改写格式。
+    /// 这里不做任何截断，是否放得下由调用方的总量预算统一判定。
+    pub fn render_checkpoint(session_dir: &Path) -> AxonResult<String> {
+        let entries = list_entries_by_prefix(
             session_dir,
             None,
-            Some(NOTES_LIST_MAX_RESULTS),
             NotesFileOrderBy::UpdatedAt,
             NotesFileOrder::Descending,
         )?;
+        ensure_entry_count_within_limit(entries.len())?;
         if entries.is_empty() {
             return Ok(NOTES_EMPTY_CHECKPOINT_HINT.to_owned());
         }
         let mut rendered = String::new();
-        let mut truncated = false;
-        'files: for entry in entries {
-            let header = format!("- 便签 {}（{} 字节）:", entry.path, entry.size_bytes);
-            if !push_bounded(&mut rendered, &header, max_bytes) {
-                truncated = true;
-                break 'files;
-            }
+        for entry in entries {
             let target = resolve_note_path(session_dir, &entry.path)?;
             let content = match std::fs::read_to_string(&target) {
                 Ok(content) => content,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue 'files,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(error) => {
                     return Err(AxonError::runtime_failure(format!(
                         "读取私有便签失败: {error:?}"
                     )));
                 }
             };
+            // 提交通道不是事实便签：`P0:` 开头的 handoff/summary.md 要么被原样采用，要么因过期
+            // 被丢弃，绝不能由投影再内联一次，否则旧摘要会绕过来源校验重新回到新窗口。
+            if entry.path == crate::session_notes::SESSION_NOTES_SUBMITTED_SUMMARY_PATH
+                && content
+                    .trim_start()
+                    .starts_with(crate::session_notes::SESSION_NOTES_SUBMITTED_SUMMARY_HEADER)
+            {
+                continue;
+            }
+            if content.len() > NOTES_INLINE_MAX_BYTES {
+                push_line(
+                    &mut rendered,
+                    &format!(
+                        "- 便签 {}（{} 字节，{} 行）：正文超过内联上限 {} 字节，换窗后用 builtin.notes_read_file 按 start_line/stop_line 回读。",
+                        entry.path,
+                        entry.size_bytes,
+                        content.lines().count(),
+                        NOTES_INLINE_MAX_BYTES
+                    ),
+                );
+                continue;
+            }
+            push_line(
+                &mut rendered,
+                &format!("- 便签 {}（{} 字节）:", entry.path, entry.size_bytes),
+            );
             for line in content.lines() {
-                if !push_bounded(&mut rendered, &format!("  {}", line.trim_end()), max_bytes) {
-                    truncated = true;
-                    break 'files;
-                }
+                push_line(&mut rendered, &format!("  {}", line.trim_end()));
             }
         }
-        if truncated {
-            push_bounded(&mut rendered, NOTES_CHECKPOINT_TRUNCATED_HINT, max_bytes);
+        if rendered.is_empty() {
+            return Ok(NOTES_EMPTY_CHECKPOINT_HINT.to_owned());
         }
         Ok(rendered)
     }
 
-    /// 渲染 canonical checkpoint 的换窗回读指引区（严格不超过给定字节预算）。
-    pub fn render_read_back_hint(session_dir: &Path, max_bytes: usize) -> AxonResult<String> {
+    /// 渲染 canonical checkpoint 的换窗回读指引区（全部指引，不做截断）。
+    pub fn render_read_back_hint(session_dir: &Path) -> AxonResult<String> {
         let mut rendered = String::new();
-        push_bounded(&mut rendered, NOTES_READ_BACK_HINT, max_bytes);
-        push_bounded(&mut rendered, NOTES_HISTORY_HINT, max_bytes);
+        push_line(&mut rendered, NOTES_READ_BACK_HINT);
+        push_line(&mut rendered, NOTES_HISTORY_HINT);
         for path in Self::list_note_paths(session_dir)? {
-            if !push_bounded(&mut rendered, &format!("- 便签文件: {path}"), max_bytes) {
-                break;
+            if path == crate::session_notes::SESSION_NOTES_SUBMITTED_SUMMARY_PATH {
+                continue;
             }
+            push_line(&mut rendered, &format!("- 便签文件: {path}"));
         }
         Ok(rendered)
     }
 }
 
-/// 在预算内追加一行；未能完整追加时返回 false。
-fn push_bounded(buffer: &mut String, line: &str, max_bytes: usize) -> bool {
-    let separator_bytes = usize::from(!buffer.is_empty());
-    if buffer
-        .len()
-        .saturating_add(separator_bytes)
-        .saturating_add(line.len())
-        > max_bytes
-    {
-        return false;
-    }
-    if separator_bytes == 1 {
+/// 追加一行；空缓冲区时不写前置换行。
+fn push_line(buffer: &mut String, line: &str) {
+    if !buffer.is_empty() {
         buffer.push('\n');
     }
     buffer.push_str(line);
-    true
 }
 
 fn ensure_within_limit(total_bytes: usize) -> AxonResult<()> {
@@ -417,6 +434,19 @@ fn ensure_result_limit(value: usize) -> AxonResult<()> {
         )));
     }
     Ok(())
+}
+
+/// 换窗摘要要求覆盖全部便签：数量超过列举硬上限时显式失败，绝不静默漏掉后续文件。
+///
+/// 1000 个便签已远超正常使用，真出现说明该清理了；静默截断会让新窗口
+/// 看不到某条便签却毫无察觉，比直接失败危险得多。
+fn ensure_entry_count_within_limit(count: usize) -> AxonResult<()> {
+    if count <= NOTES_LIST_MAX_RESULTS {
+        return Ok(());
+    }
+    Err(AxonError::runtime_failure(format!(
+        "私有便签数量 {count} 个超过上限 {NOTES_LIST_MAX_RESULTS}，换窗摘要无法完整覆盖；请归档或删除过期便签后重试"
+    )))
 }
 
 /// 按虚拟路径过滤并排序全部便签文件；调用方决定是否截断返回数量。

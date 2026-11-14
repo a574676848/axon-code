@@ -158,7 +158,7 @@ pub(super) fn build_cli_run_model_payload(
         .map(str::trim)
         .filter(|block| !block.is_empty())
     {
-        dynamic_context_messages.push(AgentModelMessage::cache_excluded(
+        dynamic_context_messages.push(AgentModelMessage::injected_context(
             "developer",
             format!("<local-resources-context>\n{block}\n</local-resources-context>"),
         ));
@@ -168,7 +168,7 @@ pub(super) fn build_cli_run_model_payload(
         .map(str::trim)
         .filter(|block| !block.is_empty())
     {
-        dynamic_context_messages.push(AgentModelMessage::cache_excluded(
+        dynamic_context_messages.push(AgentModelMessage::injected_context(
             "developer",
             format!("<memory-thread-context>\n{block}\n</memory-thread-context>"),
         ));
@@ -176,7 +176,7 @@ pub(super) fn build_cli_run_model_payload(
     if axon_agent_runtime::anomaly::ANOMALY_ENABLED_DEFAULT
         && let Some(state) = anomaly_state_text(&prompt, &history_messages)
     {
-        dynamic_context_messages.push(AgentModelMessage::cache_excluded(
+        dynamic_context_messages.push(AgentModelMessage::injected_context(
             "developer",
             format!("<anomaly-state-context>\n{state}\n</anomaly-state-context>"),
         ));

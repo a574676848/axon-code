@@ -287,7 +287,8 @@ impl JsonlIpcClient {
     /// 读入一段可用字节并追加到待解析缓冲。
     ///
     /// `Ok(false)` 表示「暂无数据」（仅 Windows 非阻塞管道用 0 字节读取表达，见
-    /// [`platform_zero_byte_means_pending`]）；对端关闭返回 `Err(UnexpectedEof)`。
+    /// [`platform_zero_byte_means_pending`]）；对端关闭返回 `Err(UnexpectedEof)`，管道状态类瞬时
+    /// 错误同样按「暂无数据」重试，不据此判定连接失效。
     fn read_step(&mut self) -> io::Result<bool> {
         let mut scratch = [0_u8; RESPONSE_READ_CHUNK_BYTES];
         match self.stream.read(&mut scratch) {
@@ -300,7 +301,9 @@ impl JsonlIpcClient {
                 self.pending.extend_from_slice(&scratch[..count]);
                 Ok(true)
             }
-            Err(error) if is_reader_poll_timeout(&error) => Ok(false),
+            Err(error) if is_reader_poll_timeout(&error) || is_transient_pipe_state(&error) => {
+                Ok(false)
+            }
             Err(error) => Err(error),
         }
     }

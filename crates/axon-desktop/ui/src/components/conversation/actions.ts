@@ -23,6 +23,13 @@ export interface ConversationActions {
   /** 把收起或挂起的问答卡片叫回输入坞，并把焦点交给它。 */
   openQuestion: (callId: string) => void;
   /**
+   * 把一个正文引用解析成可读的真路径。
+   *
+   * 正文里的相对路径不以工作区为唯一基准：会话里真被碰过的文件才是证据。
+   * 解析不出结论时原样返回，调用方沿用既有语义。
+   */
+  resolvePath: (path: string) => string;
+  /**
    * 展开一条被折叠的 Interaction。
    *
    * 折叠时正文已经释放，因此展开要按标识重新回放那一条，再把单元换回来。
@@ -35,6 +42,13 @@ export interface ConversationActions {
    * 指向同一张图。没有工作区时为空。
    */
   workspaceRoot: string | null;
+  /**
+   * 当前会话的车道标识；没有选中会话时为空。
+   *
+   * 时间线里那些「按作业取输出」的行要用它定位网关接口，因此与动作一起下发，
+   * 不必再穿一条 props 链。
+   */
+  laneId: string | null;
 }
 
 const ConversationActionsContext = React.createContext<ConversationActions | null>(null);

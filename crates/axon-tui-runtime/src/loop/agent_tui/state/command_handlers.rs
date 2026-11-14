@@ -128,6 +128,8 @@ impl AgentTuiState {
         };
         self.header.overrides.model = Some(model.label.clone());
         self.header.config_status.model.clone_from(&model.label);
+        // 显式选择：头部此后显示这次选择，而不是会话记录里的模型。
+        self.header.mark_model_explicit();
         self.record_settings_change(true);
     }
 

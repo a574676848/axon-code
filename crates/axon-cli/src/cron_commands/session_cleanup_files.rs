@@ -1,7 +1,13 @@
-//! 会话保留清理的文件面：日志、MCP Schema 缓存与运行态临时目录。
+//! 会话保留清理的文件面：日志、临时目录、内容归档与附件。
 //!
 //! 目标态要求 `~/.axon` 下所有数据与日志都有界：SQLite 事实表由
 //! `runtime_cleanup` 清理，日志与缓存文件由本模块按同一保留期回收。
+//!
+//! 文件面口径：`logs`、`tmp`、`archive`、`attachments` 四个目录在保留期之外
+//! **整体清空**，不再按文件名白名单挑选，旧实现的 `axon-*.log` 与
+//! `*.shell.log` 白名单会让同目录的 `desktop-ui-failure.jsonl` 永久滞留。
+//! 唯一例外是 `%TEMP%/tee` 回退目录：那里是进程临时区、可能与其他程序混放，
+//! 仍按本工具后缀回收。
 
 use std::{
     fs,
@@ -13,8 +19,6 @@ use rusqlite::Connection;
 
 /// 日志目录，位于运行态 data 根之下。
 const LOG_DIRECTORY: &str = "logs";
-const LOG_FILE_PREFIX: &str = "axon-";
-const LOG_FILE_SUFFIX: &str = ".log";
 /// 缓存目录，位于运行态根之下。
 const CACHE_DIRECTORY: &str = "cache";
 const MCP_SCHEMA_CACHE_FILE: &str = "mcp_tool_schemas.sqlite3";
@@ -22,9 +26,11 @@ const MCP_SCHEMA_CACHE_FILE: &str = "mcp_tool_schemas.sqlite3";
 const TMP_DIRECTORY: &str = "tmp";
 /// 内容归档目录，位于运行态 data 根之下；复用 agent runtime 的归档目录名，避免两处漂移。
 const CONTENT_ARCHIVE_DIRECTORY: &str = axon_agent_runtime::CONTENT_ARCHIVE_DIR_NAME;
+/// 附件目录，位于运行态 data 根之下。
+const ATTACHMENTS_DIRECTORY: &str = "attachments";
 /// Shell 完整输出归档子目录（位于日志根之下）；复用 agent runtime 常量避免两处漂移。
 const SHELL_ARTIFACT_DIRECTORY: &str = axon_agent_runtime::SHELL_ARTIFACT_DIR_NAME;
-/// Shell 归档文件后缀；清理时据此识别本工具产物，不触碰同目录其他内容。
+/// Shell 归档文件后缀；仅用于回收进程临时目录下的回退归档。
 const SHELL_ARTIFACT_FILE_SUFFIX: &str = axon_agent_runtime::SHELL_ARTIFACT_FILE_SUFFIX;
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -35,6 +41,7 @@ pub(crate) struct FileCleanupCounts {
     pub(crate) temp_entries: usize,
     pub(crate) mcp_schema_rows: usize,
     pub(crate) archive_files: usize,
+    pub(crate) attachment_files: usize,
     pub(crate) shell_artifact_files: usize,
 }
 
@@ -61,24 +68,23 @@ fn run_file_cleanup(
     fallback_root: &Path,
 ) -> Result<FileCleanupCounts, String> {
     let data_root = root.join(axon_config::AXON_RUNTIME_DATA_DIR);
-    // Shell 归档可能落在两处：注入了日志根时在 `<data>/logs/tee`，否则回退到进程
-    // 临时目录下的同名子目录（见 `create_artifact`）。两处都按同一保留期回收：
-    // 归档每会话一个文件且**再无其他删除点**，不回收则文件数随调用次数无界增长。
+    // Shell 归档可能落在两处：注入了日志根时在 `<data>/logs/tee`（已被 logs 递归覆盖），
+    // 否则回退到进程临时目录下的同名子目录（见 `create_artifact`）。回退处按后缀回收：
+    // 那里可能与无关产物混放，不能整目录清空。
     //
     // `fallback_root` 显式传入而非在函数内取 `std::env::temp_dir()`：否则任何调用方
     // （含测试）都会以真实进程临时目录为作用域，把无关产物一并删除。
     let shell_artifact_files = cleanup_expired_shell_artifacts(
-        &data_root.join(LOG_DIRECTORY).join(SHELL_ARTIFACT_DIRECTORY),
-        cutoff_ms,
-        dry_run,
-    )?
-    .saturating_add(cleanup_expired_shell_artifacts(
         &fallback_root.join(SHELL_ARTIFACT_DIRECTORY),
         cutoff_ms,
         dry_run,
-    )?);
+    )?;
     Ok(FileCleanupCounts {
-        log_files: cleanup_expired_logs(&data_root.join(LOG_DIRECTORY), cutoff_ms, dry_run)?,
+        log_files: cleanup_expired_files_recursive(
+            &data_root.join(LOG_DIRECTORY),
+            cutoff_ms,
+            dry_run,
+        )?,
         temp_entries: cleanup_expired_temp_entries(
             &data_root.join(TMP_DIRECTORY),
             cutoff_ms,
@@ -89,8 +95,13 @@ fn run_file_cleanup(
             cutoff_ms,
             dry_run,
         )?,
-        archive_files: cleanup_expired_archive_files(
+        archive_files: cleanup_expired_files_recursive(
             &data_root.join(CONTENT_ARCHIVE_DIRECTORY),
+            cutoff_ms,
+            dry_run,
+        )?,
+        attachment_files: cleanup_expired_files_recursive(
+            &data_root.join(ATTACHMENTS_DIRECTORY),
             cutoff_ms,
             dry_run,
         )?,
@@ -98,30 +109,28 @@ fn run_file_cleanup(
     })
 }
 
-fn cleanup_expired_logs(log_dir: &Path, cutoff_ms: u64, dry_run: bool) -> Result<usize, String> {
-    if !log_dir.is_dir() {
+/// 递归回收目录下所有超出保留期的文件，目录本身保留。
+///
+/// 只按时间判定、不按文件名挑选：调用方（logs / archive / attachments）已由
+/// 保留期划定作用域，白名单只会留下同目录的漏网文件。
+fn cleanup_expired_files_recursive(
+    dir: &Path,
+    cutoff_ms: u64,
+    dry_run: bool,
+) -> Result<usize, String> {
+    if !dir.is_dir() {
         return Ok(0);
     }
-    let entries = fs::read_dir(log_dir).map_err(|error| format!("读取日志目录失败：{error}"))?;
+    let mut files = Vec::new();
+    collect_expired_files(dir, cutoff_ms, &mut files)?;
     let mut deleted = 0usize;
-    for entry in entries {
-        let entry = entry.map_err(|error| format!("读取日志目录失败：{error}"))?;
-        let path = entry.path();
-        if !path.is_file() || !is_axon_log_file(&path) || !is_expired(&path, cutoff_ms) {
-            continue;
+    for path in files {
+        // 单个文件删除失败不阻断整轮清理（可能被并发持锁），与其余目录口径一致。
+        if dry_run || fs::remove_file(&path).is_ok() {
+            deleted = deleted.saturating_add(1);
         }
-        if !dry_run {
-            fs::remove_file(&path).map_err(|error| format!("删除过期日志失败：{error}"))?;
-        }
-        deleted = deleted.saturating_add(1);
     }
     Ok(deleted)
-}
-
-fn is_axon_log_file(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with(LOG_FILE_PREFIX) && name.ends_with(LOG_FILE_SUFFIX))
 }
 
 fn cleanup_expired_temp_entries(
@@ -233,37 +242,11 @@ fn cleanup_mcp_schema_cache(path: &Path, cutoff_ms: u64, dry_run: bool) -> Resul
         .map_err(|_| "MCP Schema 缓存清理失败".to_owned())
 }
 
-fn cleanup_expired_archive_files(
-    archive_dir: &Path,
-    cutoff_ms: u64,
-    dry_run: bool,
-) -> Result<usize, String> {
-    if !archive_dir.is_dir() {
-        return Ok(0);
-    }
-    let mut files = Vec::new();
-    collect_expired_files(archive_dir, cutoff_ms, &mut files)?;
-    let mut deleted = 0usize;
-    for path in files {
-        if dry_run {
-            deleted = deleted.saturating_add(1);
-            continue;
-        }
-        if fs::remove_file(&path).is_ok() {
-            deleted = deleted.saturating_add(1);
-        }
-    }
-    Ok(deleted)
-}
-
 /// 回收超出保留期的 shell 完整输出归档。
 ///
-/// 归档为**每个会话（或后台作业）一个文件**，而 `reap_once` 只从注册表移除会话、
-/// 墓碑也不携带路径：本函数是这些文件**唯一的删除点**。缺了它，文件数会随
-/// 调用次数无界增长（实测单机 3 天累积 1131 个），而单文件 64 MiB 的上限只约束
-/// 单文件，对聚合维度毫无作用。
-///
-/// 只处理后缀匹配的文件，同目录下的其他内容一律不动。
+/// 只处理后缀匹配的文件，同目录下的其他内容一律不动，该目录既可能落在
+/// `<data>/logs/tee`（此时已被 logs 递归覆盖），也可能回退到进程临时目录，
+/// 后者与其他程序产物混放，不能整目录清空。
 fn cleanup_expired_shell_artifacts(
     artifact_dir: &Path,
     cutoff_ms: u64,
@@ -356,7 +339,12 @@ mod tests {
         write_file(&logs.join("axon-2020-01-01.log"), "旧日志");
         age_file(&logs.join("axon-2020-01-01.log"));
         write_file(&logs.join("axon-2999-01-01.log"), "新日志");
-        write_file(&logs.join("other.log"), "无关文件");
+        write_file(&logs.join("desktop-ui-failure.jsonl"), "旧诊断");
+        age_file(&logs.join("desktop-ui-failure.jsonl"));
+        write_file(&logs.join("other.log"), "保留期内的其他文件");
+        let tee = logs.join(SHELL_ARTIFACT_DIRECTORY);
+        write_file(&tee.join("stale.shell.log"), "旧归档");
+        age_file(&tee.join("stale.shell.log"));
         let tmp = root.path().join("data").join("tmp");
         write_file(&tmp.join("stale.bin"), "旧临时文件");
         age_file(&tmp.join("stale.bin"));
@@ -364,18 +352,30 @@ mod tests {
         write_file(&archive.join("old.log"), "旧工具输出");
         age_file(&archive.join("old.log"));
         write_file(&archive.join("new.log"), "新工具输出");
+        let attachments = root.path().join("data").join(ATTACHMENTS_DIRECTORY);
+        write_file(&attachments.join("old.png"), "旧附件");
+        age_file(&attachments.join("old.png"));
+        write_file(&attachments.join("blobs").join("fresh.blob"), "新附件");
 
         let counts = cleanup_runtime_files_isolated(root.path(), 100).expect("清理应成功");
 
-        assert_eq!(counts.log_files, 1);
+        assert_eq!(
+            counts.log_files, 3,
+            "logs 下过期文件（含 tee 与 jsonl）都要回收"
+        );
         assert_eq!(counts.temp_entries, 1);
         assert_eq!(counts.archive_files, 1);
+        assert_eq!(counts.attachment_files, 1);
         assert!(!logs.join("axon-2020-01-01.log").exists());
+        assert!(!logs.join("desktop-ui-failure.jsonl").exists());
+        assert!(!tee.join("stale.shell.log").exists());
         assert!(logs.join("axon-2999-01-01.log").exists());
-        assert!(logs.join("other.log").exists());
+        assert!(logs.join("other.log").exists(), "保留期内的文件不得被删除");
         assert!(!tmp.join("stale.bin").exists());
         assert!(!archive.join("old.log").exists());
         assert!(archive.join("new.log").exists());
+        assert!(!attachments.join("old.png").exists());
+        assert!(attachments.join("blobs").join("fresh.blob").exists());
     }
 
     #[test]
@@ -431,10 +431,13 @@ mod tests {
 
     /// R-25 回归：超出保留期的 shell 归档必须回收，且不误伤保留期内文件与其他内容。
     ///
+    /// `<data>/logs/tee` 下的归档现由 logs 递归统一回收（不再单独按后缀挑选），
+    /// 因此计数落在 `log_files` 上；保留期内的归档与同目录新文件必须留下。
+    ///
     /// 归档此前**没有任何删除点**：`reap_once` 只清注册表，墓碑不携带路径；
     /// 而 P0-01 的 64 MiB 上限只约束单文件，对文件数无作用。实测单机 3 天累积 1131 个。
     #[test]
-    fn expired_shell_artifacts_are_reclaimed_without_touching_other_files() {
+    fn expired_shell_artifacts_are_reclaimed_without_touching_fresh_files() {
         let root = axon_test_support::test_temp_dir();
         let tee = root
             .path()
@@ -454,7 +457,7 @@ mod tests {
 
         let counts = cleanup_runtime_files_isolated(root.path(), 100).expect("清理应成功");
 
-        assert_eq!(counts.shell_artifact_files, 2, "应回收两个过期归档");
+        assert_eq!(counts.log_files, 2, "应回收两个过期归档");
         assert!(!expired_session.exists(), "过期的会话归档必须被删除");
         assert!(!expired_job.exists(), "过期的作业归档必须被删除");
         assert!(fresh.exists(), "保留期内的归档不得被删除");

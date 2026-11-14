@@ -394,8 +394,8 @@ export interface DocumentText {
   exists: boolean;
 }
 
-/** 界面主题标识。暖石（paper）是默认，冷杉（forest）与黑曜石（obsidian）为可选主题。 */
-export type ThemeId = 'paper' | 'forest' | 'obsidian';
+/** 界面主题标识。纸白（paper）是默认，黑曜石（obsidian）为可选暗色主题。 */
+export type ThemeId = 'paper' | 'obsidian';
 
 /** 桌面偏好。 */
 export interface DesktopPreferences {
@@ -403,16 +403,6 @@ export interface DesktopPreferences {
   notificationsEnabled: boolean;
   /** 界面主题标识。 */
   theme: ThemeId;
-}
-
-export interface FileTextItem {
-  /** 相对工作区根目录的路径，统一正斜杠。 */
-  path: string;
-  /** 工作区内的绝对路径；查看页的路径栏显示这一份。 */
-  absolute_path: string;
-  content: string;
-  truncated: boolean;
-  binary: boolean;
 }
 
 /** 问答结算回执。 */
@@ -423,64 +413,6 @@ export interface AnswerQuestionReceipt {
   state: string;
   delivered: boolean;
   deliveryMode?: string | null;
-}
-
-/** 工作区内一个文件的原始字节。 */
-export interface FileBytesItem {
-  /** 相对工作区根目录的路径，统一正斜杠。 */
-  path: string;
-  /** 工作区内的绝对路径。 */
-  absolute_path: string;
-  /** 由扩展名判定的 MIME 类型。 */
-  mime: string;
-  /** 原始字节的 base64。 */
-  data_base64: string;
-  /** 是否因超出上限被截断。 */
-  truncated: boolean;
-}
-
-/** 系统为某个文件登记的一条打开方式。 */
-export interface FileApplicationItem {
-  /** 平台原生标识：Windows 是关联处理程序的 ProgID／AppID，Linux 是桌面条目 id。 */
-  id: string;
-  /** 展示名；系统没有给出名字时是标识的文件名部分。 */
-  name: string;
-  /** 图标：`data:image/png;base64,...`；取不到时为 null。 */
-  icon: string | null;
-  /** 是否为系统认定的默认打开方式。 */
-  default: boolean;
-}
-
-/** 本机可用的一个 shell。 */
-export interface ShellChoiceItem {
-  /** 启动用的程序：绝对路径，或 PATH 上的命令名。 */
-  path: string;
-  /** 展示名。 */
-  name: string;
-}
-
-/** 已建立的终端会话。 */
-export interface TerminalInfoItem {
-  id: string;
-  shell: string;
-  cwd: string;
-  cols: number;
-  rows: number;
-}
-
-/** 一帧终端输出；`data` 是原始字节的 base64。 */
-export interface TerminalOutputFrame {
-  id: string;
-  data: string;
-}
-
-/** 一次终端退出。 */
-export interface TerminalExitFrame {
-  id: string;
-  /** 退出码；拿不到时为 null。 */
-  code: number | null;
-  /** 是否由用户主动关闭。 */
-  closed: boolean;
 }
 
 /** 远控 adapter 状态。 */
@@ -593,6 +525,9 @@ export interface LaneInteractions {
   interactions: InteractionSummary[];
   sessionUsage: SessionUsageTotals | null;
   sessionElapsedMs: number | null;
+  effectiveModel?: import('./conversation/viewConfig').LaneEffectiveModel | null;
+  /** 最近一次记忆反思的提示文本；该会话还没有记忆动作时为 null。 */
+  reflectionNotice?: string | null;
 }
 
 /** 中断回执。 */
@@ -672,28 +607,23 @@ export interface StagedAttachment {
   bytes: number;
 }
 
-/** 工作区内的一个文件或目录。 */
-export interface FileEntryItem {
-  name: string;
-  /** 相对工作区根目录的路径，统一正斜杠。 */
-  path: string;
-  /** dir 或 file。 */
-  kind: string;
-}
-
-/** 工作区内一个文本文件的内容。 */
-export interface FileTextItem {
-  /** 相对工作区根目录的路径，统一正斜杠。 */
-  path: string;
-  /** 工作区内的绝对路径；查看页的路径栏显示这一份。 */
-  absolute_path: string;
-  content: string;
-  truncated: boolean;
-  binary: boolean;
-}
-
 /*
  * 用量统计的传输模型单独成篇（`usageTypes.ts`）：领域模型按块拆分，
  * 单文件才守得住行数硬限。这里整体转出去，调用方仍旧只从 `types` 取模型。
  */
 export type * from './usageTypes';
+
+/*
+ * 工作区文件与终端的传输模型单独成篇（`typesFiles.ts`）：模型按域拆分，
+ * 单文件才守得住行数硬限。这里整体转出去，调用方仍旧只从 `types` 取模型。
+ */
+export type {
+  FileEntryItem,
+  FileTextItem,
+  FileBytesItem,
+  FileApplicationItem,
+  ShellChoiceItem,
+  TerminalInfoItem,
+  TerminalOutputFrame,
+  TerminalExitFrame,
+} from './typesFiles';

@@ -35,6 +35,7 @@ import { MessageActionButton, MessageFooter } from './MessageFooter';
 import { QuestionCellBlock } from './QuestionCellBlock';
 import { SummaryBlock } from './SummaryBlock';
 import { ToolContent } from './ToolContent';
+import { JobOutputTail, jobOutputJobId } from './JobOutputTail';
 import { UserText } from './UserText';
 import { extractFilePath, toolFailed, toolLabel, toolRowTitle } from './toolPresentation';
 
@@ -309,6 +310,8 @@ const ToolBlock: React.FC<{ cell: Extract<TranscriptCell, { role: 'tool' }> }> =
    * 命令与原始 JSON 不丢：展开后才显示输入、变更与输出。
    */
   const primary = toolRowTitle(cell);
+  // `job_output` 那一行的输出区读作业归档，其余工具照旧读回执。
+  const jobTailId = jobOutputJobId(cell.toolName, cell.arguments);
   const failed = toolFailed(cell.status, cell.exitCode);
   // 读写类工具的主文本就是工作区内的相对路径：点它直接在右侧栏打开该文件。
   const openablePath =
@@ -374,8 +377,14 @@ const ToolBlock: React.FC<{ cell: Extract<TranscriptCell, { role: 'tool' }> }> =
           {cell.diff !== null && cell.diff.length > 0 && (
             <ToolContent title="变更" value={cell.diff} language="diff" />
           )}
-          {cell.output.length > 0 && (
-            <ToolContent title="输出" value={cell.output} />
+          {jobTailId !== null ? (
+            <JobOutputTail
+              laneId={actions?.laneId ?? null}
+              jobId={jobTailId}
+              fallback={cell.output}
+            />
+          ) : (
+            cell.output.length > 0 && <ToolContent title="输出" value={cell.output} />
           )}
         </DisclosureBody>
       )}

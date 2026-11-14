@@ -49,10 +49,10 @@ pub(crate) struct RunSessionRecord {
     pub(super) local_images: Vec<ThreadHistoryImageRef>,
     pub(super) local_files: Vec<ThreadHistoryFileRef>,
     pub(super) response: String,
-    pub(super) assistant_part_id: String,
+    pub(crate) assistant_part_id: String,
     pub(super) usage: Option<TokenUsageTelemetry>,
     #[serde(default)]
-    pub(super) tool_receipts: Vec<RunToolReceipt>,
+    pub(crate) tool_receipts: Vec<RunToolReceipt>,
     pub(super) tool_calls: Vec<axon_agent_runtime::ProviderToolCall>,
     #[serde(default)]
     pub(super) reasoning_messages: Vec<RunReasoningMessageRecord>,
@@ -74,6 +74,12 @@ pub(crate) struct RunSessionRecord {
     pub(super) ttft_ms: Option<u64>,
     #[serde(default)]
     pub(super) generation_speed_tps: Option<f64>,
+    /// 本轮记忆反思产生变更时的简要提示；无变更或缺省。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) reflection_notice: Option<String>,
+    /// 本轮证据轨迹；只在 post-run 采集成功后写入，缺省表示未采集。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) turn_trace: Option<axon_agent_runtime::TurnTrace>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -204,6 +210,8 @@ impl RunSessionRecord {
             speed_mode: None,
             ttft_ms,
             generation_speed_tps,
+            reflection_notice: None,
+            turn_trace: None,
         }
     }
 
@@ -245,6 +253,8 @@ impl RunSessionRecord {
             speed_mode: None,
             ttft_ms,
             generation_speed_tps: None,
+            reflection_notice: None,
+            turn_trace: None,
         }
     }
 

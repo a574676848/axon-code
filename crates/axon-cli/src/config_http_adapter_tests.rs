@@ -244,7 +244,7 @@ fn values_mode_rejects_a_non_string_value() {
     let (_directory, adapter) = fixture();
     let body = json!({
         "mode": "values",
-        "values": { "agent.max_subagent_depth": 3 },
+        "values": { "agent.max_subagent_threads": 16 },
     })
     .to_string();
     let (status, payload) = call(&adapter, "PUT", CONFIG_PATH, body.as_bytes());
@@ -254,7 +254,7 @@ fn values_mode_rejects_a_non_string_value() {
     assert!(
         payload["message"]
             .as_str()
-            .is_some_and(|message| message.contains("agent.max_subagent_depth"))
+            .is_some_and(|message| message.contains("agent.max_subagent_threads"))
     );
 }
 

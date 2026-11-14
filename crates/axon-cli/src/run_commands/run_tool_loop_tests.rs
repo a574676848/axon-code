@@ -157,7 +157,7 @@ fn isolated_requests_split_the_batch_into_sequential_segments() {
             "builtin.memory_search",
             ToolConcurrencyPolicy::ParallelSafe,
         ),
-        // 写调用自成隔离段。
+        // 空输入的 edit 解析不出写集，回退整工作区独占。
         plain_request(
             4,
             "builtin.edit",
@@ -209,7 +209,61 @@ fn sibling_reads_share_one_parallel_segment() {
     assert_eq!(segments(&requests), vec![0..3]);
 }
 
-/// 按执行域与读写交叉切段：独占请求自成一段，其余按路径冲突断开。
+/// 写调用不再自成隔离段：写不同文件时，写与读写可以落在同一段并发。
+#[test]
+fn writes_to_different_files_share_one_parallel_segment() {
+    let registry = registry_with_builtin_tools();
+    let requests = scheduled_requests(
+        &registry,
+        &[
+            (
+                "builtin.edit",
+                r#"{"input":"*** Begin Patch\n*** Update File: src/a.rs\n@@\n-old\n+new\n*** End Patch"}"#,
+            ),
+            (
+                "builtin.read_file",
+                r#"{"path":"src/b.rs","intent":"读另一个文件"}"#,
+            ),
+            (
+                "builtin.edit",
+                r#"{"input":"*** Begin Patch\n*** Update File: src/c.rs\n@@\n-old\n+new\n*** End Patch"}"#,
+            ),
+        ],
+    );
+
+    assert_eq!(
+        segments(&requests),
+        vec![0..3],
+        "写集互不相交的调用必须能同段并发"
+    );
+}
+
+/// 同一文件仍然必须断段：写与读同一路径不得并发。
+#[test]
+fn writes_to_the_same_file_split_the_segment() {
+    let registry = registry_with_builtin_tools();
+    let requests = scheduled_requests(
+        &registry,
+        &[
+            (
+                "builtin.edit",
+                r#"{"input":"*** Begin Patch\n*** Update File: src/a.rs\n@@\n-old\n+new\n*** End Patch"}"#,
+            ),
+            (
+                "builtin.read_file",
+                r#"{"path":"src/a.rs","intent":"读同一个文件"}"#,
+            ),
+        ],
+    );
+
+    assert_eq!(
+        segments(&requests),
+        vec![0..1, 1..2],
+        "同一路径的读写必须在段边界断开"
+    );
+}
+
+/// 按执行域与读写交叉切段：独占请求自成一段，写调用按写集相交断开。
 fn segments(requests: &[ToolExecutionRequest]) -> Vec<std::ops::Range<usize>> {
     let cwd = std::path::Path::new(".");
     let scopes = requests

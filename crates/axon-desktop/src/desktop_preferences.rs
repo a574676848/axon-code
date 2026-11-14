@@ -10,10 +10,7 @@ use crate::state::{DesktopState, load_state, save_state};
 /// 默认主题：暖石纸白。
 pub const THEME_PAPER: &str = "paper";
 
-/// 第二套主题：冷杉矿石。
-pub const THEME_FOREST: &str = "forest";
-
-/// 第三套主题：黑曜石暗色。
+/// 第二套主题：黑曜石暗色。
 pub const THEME_OBSIDIAN: &str = "obsidian";
 
 /// 把外部传入的主题标识归一化。
@@ -23,7 +20,6 @@ pub const THEME_OBSIDIAN: &str = "obsidian";
 #[must_use]
 pub fn normalize_theme(raw: &str) -> String {
     match raw.trim().to_ascii_lowercase().as_str() {
-        THEME_FOREST => THEME_FOREST.to_string(),
         THEME_OBSIDIAN => THEME_OBSIDIAN.to_string(),
         _ => THEME_PAPER.to_string(),
     }
@@ -51,7 +47,7 @@ fn snapshot(state: &DesktopState) -> DesktopPreferences {
 pub struct DesktopPreferences {
     /// 是否发送系统通知。
     pub notifications_enabled: bool,
-    /// 界面主题标识，取值为 `paper`、`forest` 或 `obsidian`。
+    /// 界面主题标识，取值为 `paper` 或 `obsidian`。
     pub theme: String,
 }
 
@@ -72,11 +68,8 @@ pub fn desktop_set_notifications(enabled: bool) -> Result<DesktopPreferences, St
 
 /// Tauri IPC 命令：切换界面主题。
 ///
-/// 纸白存空值，森林存标识本身。入参先归一化，非法取值落回纸白，
-/// 状态文件里不会出现第三种取值。
-///
-/// 落盘之后顺带把窗口的深浅色模式同步给 DWM 与 AppKit：这一步极轻，
-/// 且不重建系统材质，因此可以随主题切换反复调用（重复应用材质才会留下黑斑）。
+/// 纸白存空值，其余主题存标识本身。入参先归一化，非法取值落回纸白，
+/// 状态文件里不会出现第三种取值。已下线主题（如旧的 `forest`）同样落回纸白。
 #[tauri::command(async)]
 pub fn desktop_set_theme(theme: String) -> Result<DesktopPreferences, String> {
     let normalized = normalize_theme(&theme);
@@ -108,12 +101,12 @@ mod tests {
 
     #[test]
     fn unknown_theme_falls_back_to_paper() {
-        assert_eq!(normalize_theme("forest"), THEME_FOREST);
-        assert_eq!(normalize_theme(" Forest "), THEME_FOREST);
         assert_eq!(normalize_theme("obsidian"), THEME_OBSIDIAN);
         assert_eq!(normalize_theme(" Obsidian "), THEME_OBSIDIAN);
         assert_eq!(normalize_theme("solarized"), THEME_PAPER);
         assert_eq!(normalize_theme(""), THEME_PAPER);
+        // 下线主题的旧状态文件必须静默回落，而不是让设置页打不开。
+        assert_eq!(normalize_theme("forest"), THEME_PAPER);
     }
 
     #[test]
@@ -125,15 +118,15 @@ mod tests {
     #[test]
     fn stored_theme_survives_round_trip() {
         let state = DesktopState {
-            theme: Some(THEME_FOREST.to_string()),
-            ..DesktopState::default()
-        };
-        assert_eq!(theme_of(&state), THEME_FOREST);
-
-        let dark_state = DesktopState {
             theme: Some(THEME_OBSIDIAN.to_string()),
             ..DesktopState::default()
         };
-        assert_eq!(theme_of(&dark_state), THEME_OBSIDIAN);
+        assert_eq!(theme_of(&state), THEME_OBSIDIAN);
+
+        let paper_state = DesktopState {
+            theme: None,
+            ..DesktopState::default()
+        };
+        assert_eq!(theme_of(&paper_state), THEME_PAPER);
     }
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { contextUsageModel } from '../src/conversation/contextUsage.ts';
+import { contextUsageModel, segmentValueText } from '../src/conversation/contextUsage.ts';
 
 const usage = (overrides = {}) => ({
     inputTokens: 0,
@@ -15,33 +15,38 @@ const usage = (overrides = {}) => ({
     ...overrides,
 });
 
-test('上下文弹窗给出实测总量与三类构成', () => {
+test('上下文弹窗给出已用百分比、实测总量与三类构成', () => {
     const model = contextUsageModel(usage(), 1_000_000);
+    assert.equal(model.percentText, '12%');
     assert.equal(model.totalText, '122K / 1M');
     assert.deepEqual(
-        model.rows.map(({ label }) => label),
+        model.segments.map(({ label }) => label),
         ['系统提示词', '工具定义', '对话消息', '其他'],
     );
     assert.deepEqual(
-        model.rows.map(({ value }) => value.startsWith('~')),
+        model.segments.map(({ estimated }) => estimated),
         [true, true, true, false],
         '只有口径差额不是估算值',
     );
+    assert.deepEqual(
+        model.segments.map(({ color }) => typeof color === 'string' && color.length > 0),
+        [true, true, true, true],
+        '每段都带色块颜色，色带与明细共用',
+    );
 });
 
-test('差额行吸收实测总量与估算总量的缺口', () => {
-    const tokensOf = (value) => Number(value.replace('~', '').replace('K', '')) * 1_000;
+test('差额段吸收实测总量与估算总量的缺口，色带不会与标题对不上', () => {
     const model = contextUsageModel(usage(), 1_000_000);
-    const rows = model.rows.slice(0, 3).reduce((sum, row) => sum + tokensOf(row.value), 0);
-    assert.equal(rows, 27_100, '前三行就是本地估算的三项');
-    assert.equal(model.rows.at(-1).value, '94.9K', '差额补齐到实测总量');
+    const total = model.segments.reduce((sum, segment) => sum + segment.tokens, 0);
+    assert.equal(total, 122_000, '各段之和等于 Provider 实测总量');
+    assert.equal(model.segments.at(-1).tokens, 94_900);
 });
 
-test('估算总量已经覆盖实测总量时不造差额行', () => {
+test('估算总量已经覆盖实测总量时不造差额段', () => {
     const model = contextUsageModel(usage({ currentContextTokens: 20_000 }), 1_000_000);
     assert.deepEqual(
-        model.rows.map(({ label }) => label),
-        ['系统提示词', '工具定义', '对话消息'],
+        model.segments.map(({ kind }) => kind),
+        ['systemPrompt', 'toolDefinitions', 'conversation'],
     );
 });
 
@@ -51,31 +56,50 @@ test('微不足道的口径差额不单独占一行', () => {
         500_000,
     );
     assert.deepEqual(
-        model.rows.map(({ label }) => label),
-        ['系统提示词', '工具定义', '对话消息'],
+        model.segments.map(({ kind }) => kind),
+        ['systemPrompt', 'toolDefinitions', 'conversation'],
         '13 个 token 的差额不配单独成行',
+    );
+    assert.equal(
+        model.segments.reduce((sum, segment) => sum + segment.barPercent, 0),
+        Number.parseInt(model.percentText, 10),
+        '余量补给最大的一段，色带仍等于标题里的已用比例',
     );
 });
 
-test('没有构成观测时刻度仍在，明细留空由卡片显式降级', () => {
+test('没有构成观测时总量与百分比照常，明细留空由卡片显式降级', () => {
     const model = contextUsageModel(
         usage({ systemPromptTokens: 0, toolDefinitionTokens: 0, conversationTokens: 0 }),
         1_000_000,
     );
-    assert.deepEqual(model.rows, []);
+    assert.deepEqual(model.segments, []);
     assert.equal(model.totalText, '122K / 1M', '总量仍然照实显示');
+    assert.equal(model.percentText, '12%');
     assert.equal(model.usedRatio, 0.122);
 });
 
-test('无窗口定义时只报已用，环满格', () => {
+test('无窗口定义时不给百分比，色带按实测总量取标尺', () => {
     const model = contextUsageModel(usage(), null);
+    assert.equal(model.percentText, null);
     assert.equal(model.totalText, '122K');
     assert.equal(model.usedRatio, 1);
+    assert.equal(
+        model.segments.reduce((sum, segment) => sum + segment.barPercent, 0),
+        100,
+        '标尺取实测总量，色带刚好铺满',
+    );
 });
 
-test('溢出窗口时比例夹到 1', () => {
+test('色带宽度累加不超过 100', () => {
     const model = contextUsageModel(usage({ currentContextTokens: 2_000_000 }), 1_000_000);
-    assert.equal(model.usedRatio, 1);
+    assert.equal(model.percentText, '100%', '溢出时百分比夹到 100');
+    assert.ok(model.segments.reduce((sum, segment) => sum + segment.barPercent, 0) <= 100);
+});
+
+test('估算值带波浪号，实测差额不带', () => {
+    const model = contextUsageModel(usage(), 1_000_000);
+    assert.equal(segmentValueText(model.segments[1]), '~19.1K');
+    assert.equal(segmentValueText(model.segments[3]), '94.9K');
 });
 
 test('没有任何上下文观测时不出现弹窗模型', () => {

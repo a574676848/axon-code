@@ -5,9 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     DEFAULT_AFFINITY_TTL_MS, DEFAULT_AGENT_AUTO_COMPACTION_THRESHOLD,
     DEFAULT_AGENT_IDLE_COMPACTION_DEBOUNCE_MS, DEFAULT_AGENT_LOG_LEVEL,
-    DEFAULT_AGENT_MAX_SUBAGENT_ACTIVE_TURNS, DEFAULT_AGENT_MAX_SUBAGENT_DEPTH,
-    DEFAULT_AGENT_MAX_SUBAGENT_THREADS, DEFAULT_AGENT_REASONING_EFFORT,
-    DEFAULT_BREAKER_COOLDOWN_MS, DEFAULT_BREAKER_FAILURE_THRESHOLD,
+    DEFAULT_AGENT_MAX_SUBAGENT_ACTIVE_TURNS, DEFAULT_AGENT_MAX_SUBAGENT_THREADS,
+    DEFAULT_AGENT_REASONING_EFFORT, DEFAULT_BREAKER_COOLDOWN_MS, DEFAULT_BREAKER_FAILURE_THRESHOLD,
     DEFAULT_CHANNEL_METRICS_PERSISTENCE_ENABLED, DEFAULT_GATEWAY_API_TOKEN_ENV,
     DEFAULT_GATEWAY_HTTP_BIND, DEFAULT_GATEWAY_WEBSOCKET_BIND,
     HIGH_THROUGHPUT_REMOTE_MAX_EVENTS_PER_CURSOR, HIGH_THROUGHPUT_REMOTE_MAX_PAYLOAD_BYTES,
@@ -28,8 +27,6 @@ pub struct AgentConfig {
     pub max_subagent_threads: usize,
     /// 每个 run session 允许同时运行的子代理 turn 数。
     pub max_subagent_active_turns: usize,
-    /// 子代理最大嵌套深度，root 深度为 0。
-    pub max_subagent_depth: u32,
     /// 自动压缩触发阈值（context_window 的比例，0.0-1.0）。
     pub auto_compaction_threshold: f64,
     /// 闲暇压缩 debounce 窗口，单位毫秒。
@@ -51,7 +48,6 @@ impl Default for AgentConfig {
             reasoning_effort: DEFAULT_AGENT_REASONING_EFFORT.to_owned(),
             max_subagent_threads: DEFAULT_AGENT_MAX_SUBAGENT_THREADS,
             max_subagent_active_turns: DEFAULT_AGENT_MAX_SUBAGENT_ACTIVE_TURNS,
-            max_subagent_depth: DEFAULT_AGENT_MAX_SUBAGENT_DEPTH,
             auto_compaction_threshold: DEFAULT_AGENT_AUTO_COMPACTION_THRESHOLD,
             idle_compaction_debounce_ms: DEFAULT_AGENT_IDLE_COMPACTION_DEBOUNCE_MS,
             log_level: DEFAULT_AGENT_LOG_LEVEL.to_owned(),

@@ -8,7 +8,6 @@
 
 import type { ConfigReadResult } from '../types';
 import { isEmbeddingModel } from '../modelCatalog';
-import type { SessionRunFacets } from './transcript/state';
 
 /** 后端配置里与指标条相关的键。 */
 export const KEY_DEFAULT_MODEL = 'agent.default_model';
@@ -19,6 +18,23 @@ export interface ConfigModelEntry {
   name: string;
   id: string;
   provider: string;
+  /** 该模型的上下文窗口；未配置或非正数时为 null。 */
+  contextWindow: number | null;
+}
+
+/**
+ * 车道当前模型的权威事实。
+ *
+ * 网关只读该车道运行会话的**最新一轮**记录（一条 `ORDER BY sequence DESC LIMIT 1`），
+ * 不遍历历史轮次；界面据此显示输入坞的真实模型。
+ */
+export interface LaneEffectiveModel {
+  /** 该轮使用的 provider。 */
+  provider: string;
+  /** 该轮使用的 upstream 模型 ID。 */
+  model: string;
+  /** 该轮实际请求的思考强度；未设置时为 null。 */
+  reasoningEffort?: string | null;
 }
 
 /** 会话视图需要的配置取值。 */
@@ -64,7 +80,12 @@ export function resolveConfig(
       ? matched.context_window
       : null,
     models,
-    catalog: config.models.map(({ name, id, provider }) => ({ name, id, provider })),
+    catalog: config.models.map(({ name, id, provider, context_window }) => ({
+      name,
+      id,
+      provider,
+      contextWindow: context_window > 0 ? context_window : null,
+    })),
   };
 }
 
@@ -77,7 +98,7 @@ export function resolveConfig(
  */
 export function modelLabelFor(
   catalog: ConfigModelEntry[],
-  run: SessionRunFacets | null,
+  run: LaneEffectiveModel | null,
 ): string | null {
   if (run === null) return null;
   const exact = catalog.find(
@@ -85,4 +106,54 @@ export function modelLabelFor(
   );
   if (exact !== undefined) return exact.name;
   return catalog.find((entry) => entry.id === run.model)?.name ?? null;
+}
+
+/** 按选择器（展示名、upstream id，或 `供应商/模型` 里的末段）找目录条目。 */
+export function findModelEntry(
+  catalog: ConfigModelEntry[],
+  selector: string | null,
+): ConfigModelEntry | null {
+  if (selector === null) return null;
+  const trimmed = selector.trim();
+  if (trimmed === '') return null;
+  const leaf = trimmed.split('/').pop() ?? trimmed;
+  return (
+    catalog.find((entry) => entry.name === trimmed) ??
+    catalog.find((entry) => entry.id === trimmed) ??
+    catalog.find((entry) => entry.name === leaf) ??
+    catalog.find((entry) => entry.id === leaf) ??
+    null
+  );
+}
+
+/** 生效模型：展示名与它的上下文窗口必须成对给出，不能各读一份来源。 */
+export interface EffectiveModel {
+  /** 指标条与输入坞显示的模型展示名。 */
+  label: string;
+  /** 该模型的最大上下文；目录里查不到时回退配置默认模型的口径。 */
+  contextWindow: number | null;
+}
+
+/**
+ * 解析这次会话真正生效的模型与上下文窗口。
+ *
+ * 顺序与运行侧一致：目标固定模型 → 本会话显式选择 → 本会话真实运行面 → 配置默认。
+ * 三者都拿不到时才用配置默认；窗口永远跟着最终的展示名走，避免「模型显示 A、
+ * 窗口却是默认模型的数据」。
+ */
+export function resolveEffectiveModel(
+  config: ResolvedConfig | null,
+  fixedModel: string | null,
+  explicitModel: string | null,
+  laneModel: LaneEffectiveModel | null,
+): EffectiveModel {
+  const catalog = config?.catalog ?? [];
+  const configModel = config?.model ?? '';
+  const label =
+    fixedModel ?? explicitModel ?? modelLabelFor(catalog, laneModel) ?? configModel;
+  const matched = findModelEntry(catalog, label);
+  return {
+    label,
+    contextWindow: matched === null ? (config?.contextWindow ?? null) : matched.contextWindow,
+  };
 }

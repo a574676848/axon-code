@@ -89,21 +89,32 @@ pub(crate) fn run_agent_tui_entry(cli: &AxonCli, prompt: Option<&str>) -> CliRun
     let adapter = CliAgentTuiRuntimeAdapter {
         config_path: config_path.clone(),
         reply_destination: new_tui_reply_destination(),
-        explicit_model: Arc::new(Mutex::new(None)),
+        explicit_turn: Arc::new(Mutex::new(runtime_adapter::ExplicitTurnSelection::default())),
     };
-    let explicit_model = Arc::clone(&adapter.explicit_model);
+    let explicit_turn = Arc::clone(&adapter.explicit_turn);
     match axon_tui_runtime::run_agent_tui_cli_with_runtime_adapter_and_settings(
         &request,
         adapter,
         move |change| {
-            // `/model` 是显式模型选择：除写回配置外，还要随之后的每次提交下传，
-            // 否则既有会话会按会话记录的模型继续，用户的显式选择被静默忽略。
-            if change.model_explicit
-                && let Some(model) = change.model.clone()
+            // `/model` 与 `/think` 都是会话内的显式选择：只随之后的每次提交下传，不写回
+            // 配置。否则既有会话会按会话记录与全局默认值继续，用户的显式选择被静默忽略。
             {
-                *explicit_model
+                let mut selection = explicit_turn
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(model);
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if change.model_explicit
+                    && let Some(model) = change.model.clone()
+                {
+                    selection.model = Some(model);
+                }
+                if let Some(effort) = change
+                    .reasoning_effort
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    selection.reasoning_effort = Some(effort.to_owned());
+                }
             }
             if let Some(path) = config_path.as_deref()
                 && let Err(error) = persist_tui_settings_change(path, &change)

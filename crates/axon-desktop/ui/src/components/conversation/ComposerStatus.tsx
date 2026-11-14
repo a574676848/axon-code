@@ -1,6 +1,6 @@
 import React from 'react';
 import { formatElapsedClock } from '../../conversation/format';
-import { StateDot } from '../ui/surfaces';
+import { WorkingMeter } from '../ui/WorkingMeter';
 import { ComposerStatusCell } from './ComposerStatusCell';
 
 /*
@@ -71,8 +71,11 @@ export interface ComposerWorkingLineProps {
  * 与语音录音条共用 `ComposerStatusCell` 外壳：同一条状态列里两格同高同形，
  * 只是语气不同（一格在收声，一格在干活）。
  *
- * 读数按「这一行正在做的事」从左到右排：进行态转圈、主文案、耗时、
- * 排队条数，右端固定中断提示。底部一条扫光说明它确实在动。
+ * 读数按「这一行正在做的事」从左到右排：工作脉搏、主文案、耗时、排队条数，
+ * 右端固定中断提示。底边的墨色光泽说明它确实在动。
+ * 左端脉搏坐在一枚下沉底的小方槽里，颜色一律取墨水档：这一行是常驻读数，
+ * 不叠强调色，免得比正文更抢眼。
+ *
  * 内置指令复用这一行（`interruptible=false`）：它同样是「这件事正在做」，
  * 只是不能被打断，因此不承诺 ESC。
  */
@@ -89,13 +92,8 @@ export const ComposerWorkingLine: React.FC<ComposerWorkingLineProps> = ({
       aria-live="polite"
       className="mb-2"
       glyph={
-        /*
-          转圈坐在一枚 20px 的强调浅底里，与顶栏那枚活动点同一种做法：
-          40px 的条上空悬一枚 14px 细环会显得轻，浅底给它一个落点，
-          又不至于像一枚可以按的按钮。
-        */
-        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-text-link/10">
-          <StateDot state="ongoing" tone="accent" />
+        <span className="flex h-5 w-5 items-center justify-center rounded-sm bg-surface-sunken text-text-primary">
+          <WorkingMeter />
         </span>
       }
       hint={interruptible ? WORKING_INTERRUPT_HINT : undefined}
@@ -105,7 +103,10 @@ export const ComposerWorkingLine: React.FC<ComposerWorkingLineProps> = ({
         {primary}
       </span>
       {elapsed !== undefined && (
-        <span className="shrink-0 text-meta tabular-nums text-text-tertiary">{elapsed}</span>
+        <>
+          <span aria-hidden="true" className="shrink-0 self-center h-3 w-px bg-border-hairline" />
+          <span className="shrink-0 text-meta tabular-nums text-text-tertiary">{elapsed}</span>
+        </>
       )}
       {queued > 0 && (
         <span className="shrink-0 text-meta tabular-nums text-text-tertiary">

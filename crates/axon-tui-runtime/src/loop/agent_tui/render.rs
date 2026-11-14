@@ -298,6 +298,9 @@ fn header_bar_metrics(state: &AgentTuiState) -> HeaderBarMetrics {
         replay_snapshot: state.header.replay_snapshot,
         spinner: state.spinner(),
         animation_tick: state.animation_tick(),
+        // 会话真实模型与显式选择标记：头部模型名与上下文窗口都读这一份。
+        session_run_model: state.header.session_run_model.clone(),
+        model_explicit: state.header.model_explicit,
     }
 }
 

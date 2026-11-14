@@ -249,7 +249,7 @@ pub fn agent_run_tool_result_messages(
         let images = tool_result_local_images(receipt);
         if !images.is_empty() {
             annotations.push(
-                AgentModelMessage::cache_excluded("user", TOOL_RESULT_IMAGE_PROMPT)
+                AgentModelMessage::injected_context("user", TOOL_RESULT_IMAGE_PROMPT)
                     .with_local_images(images),
             );
         }

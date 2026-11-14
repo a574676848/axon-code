@@ -80,6 +80,41 @@ pub(crate) fn load_session_usage_totals_from_root(
     }
 }
 
+/// 一条会话最新一轮的模型事实。
+///
+/// 只保留界面显示与运行时选型需要的三个字段，不把整条轮次记录暴露给车道读数。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionModelFacts {
+    pub(crate) provider: String,
+    pub(crate) model: String,
+    pub(crate) reasoning_effort: Option<String>,
+}
+
+/// 读取一条会话**最新一轮**的模型事实（含 provider、model 与 reasoning effort）。
+///
+/// 只读打开加一条 `ORDER BY sequence DESC LIMIT 1`：界面显示「这条会话现在用哪个
+/// 模型」时读它，不遍历历史轮次，也不解析事件载荷。
+pub(crate) fn load_latest_session_model_from_root(
+    root: &Path,
+    session_id: &str,
+) -> Result<Option<SessionModelFacts>, String> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return Err("会话标识不能为空".to_owned());
+    }
+    let path = axon_session::session_store_path(root).join(CLI_ROLLOUT_DB_FILE);
+    if !path.exists() {
+        return Ok(None);
+    }
+    Ok(RolloutSqliteStore::open_read_only(&path)?
+        .load_by_id(session_id)?
+        .map(|record| SessionModelFacts {
+            provider: record.provider,
+            model: record.model,
+            reasoning_effort: record.reasoning_effort,
+        }))
+}
+
 /// 选择后续 `run --continue` 恢复的 rollout Thread。
 pub(crate) fn select_rollout_session(config_path: &Path, session_id: &str) -> Result<(), String> {
     let path = resolved_rollout_db_path(config_path).map_err(ToOwned::to_owned)?;
@@ -183,4 +218,78 @@ pub(crate) fn read_rollout_tool_output(
     let archive_root = crate::runtime_paths::runtime_axon_data_path_static(config_path)
         .map_err(ToOwned::to_owned)?;
     RolloutSqliteStore::open(&path)?.read_tool_output(&archive_root, session_id, provider_call_id)
+}
+
+/// 读取某一轮在会话内的轮序，供生成 `trace:<session>:<sequence>` 使用。
+///
+/// 取的是 `rollout_turns.sequence`，即同一会话内的轮次下标，不是
+/// `replay_chain` 的会话祖先链下标。治理队列是异步消费的：等某轮的 payload 被
+/// 处理时，同一会话可能已经落了更多轮次，所以任何「按当前链长回推本轮下标」的
+/// 写法都会指向别的轮次。必须按 `assistant_part_id` 点查。
+pub(crate) fn load_turn_sequence(
+    config_path: &Path,
+    session_id: &str,
+    assistant_part_id: &str,
+) -> Result<Option<u64>, String> {
+    let path = resolved_rollout_db_path(config_path).map_err(ToOwned::to_owned)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    RolloutSqliteStore::open(&path)?.turn_sequence(session_id, assistant_part_id)
+}
+
+/// 读取某会话最近若干轮的事实摘要；账本尚未建立时读作空。
+///
+/// 只读打开：这条路径挂在每轮收口上，不该顺带跑建表语句。
+pub(crate) fn load_recent_turn_facts(
+    config_path: &Path,
+    session_id: &str,
+    limit: u32,
+) -> Result<Vec<super::RecentTurnFact>, String> {
+    let path = resolved_rollout_db_path(config_path).map_err(ToOwned::to_owned)?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    RolloutSqliteStore::open_read_only(&path)?.recent_turn_facts(session_id, limit)
+}
+
+/// 读上一轮的记忆反思提示；任何读取失败都读作「没有」。
+///
+/// 这条路径挂在每轮收口的输出构造上，不能因为它自身的问题让整轮失败。
+pub(crate) fn load_previous_reflection_notice(
+    config_path: &Path,
+    session_id: &str,
+    current_part_id: &str,
+) -> Option<String> {
+    let path = resolved_rollout_db_path(config_path).ok()?;
+    if !path.exists() {
+        return None;
+    }
+    RolloutSqliteStore::open_read_only(&path)
+        .ok()?
+        .previous_reflection_notice(session_id, current_part_id)
+        .ok()
+        .flatten()
+}
+
+/// 读某会话最新一轮的记忆反思提示；任何读取失败都读作「没有」。
+///
+/// 供只读接口投影给桌面端：它不能因为读不到提示而让整条历史请求失败。
+pub(crate) fn load_latest_reflection_notice_from_root(
+    root: &Path,
+    session_id: &str,
+) -> Option<String> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return None;
+    }
+    let path = axon_session::session_store_path(root).join(CLI_ROLLOUT_DB_FILE);
+    if !path.exists() {
+        return None;
+    }
+    RolloutSqliteStore::open_read_only(&path)
+        .ok()?
+        .latest_reflection_notice(session_id)
+        .ok()
+        .flatten()
 }

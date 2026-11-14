@@ -137,6 +137,7 @@ fn provider_envelope(
         reply_destination: correlation_key,
         attachments: Vec::new(),
         model: None,
+        reasoning_effort: None,
     }
 }
 
@@ -176,6 +177,9 @@ struct HttpEventRequest {
     /// 发起方显式指定的本轮模型（已配置模型的 `name` 或 `id`）。
     #[serde(default)]
     model: Option<String>,
+    /// 发起方显式指定的本轮推理强度；与 `model` 同语义，只跟随这一轮。
+    #[serde(default)]
+    reasoning_effort: Option<String>,
 }
 
 impl HttpEventRequest {
@@ -193,6 +197,7 @@ impl HttpEventRequest {
             reply_destination: self.reply_destination,
             attachments: self.local_files,
             model: self.model,
+            reasoning_effort: self.reasoning_effort,
         })
     }
 }
@@ -261,16 +266,15 @@ mod tests {
     }
 
     #[test]
-    fn event_wire_carries_the_explicit_model() {
+    fn event_wire_carries_the_explicit_turn_settings() {
         let request = serde_json::from_str::<HttpEventRequest>(
-            r#"{"sourceChannel":"desktop","eventId":"event-1","observedAtMs":100,"expiresAtMs":200,"content":"hello","replyChannel":"desktop","replyDestination":"client-1","model":"balanced"}"#,
+            r#"{"sourceChannel":"desktop","eventId":"event-1","observedAtMs":100,"expiresAtMs":200,"content":"hello","replyChannel":"desktop","replyDestination":"client-1","model":"balanced","reasoningEffort":"high"}"#,
         )
-        .expect("显式模型应可解析");
+        .expect("显式设置应可解析");
 
-        assert_eq!(
-            request.into_event().expect("事件映射").model.as_deref(),
-            Some("balanced")
-        );
+        let event = request.into_event().expect("事件映射");
+        assert_eq!(event.model.as_deref(), Some("balanced"));
+        assert_eq!(event.reasoning_effort.as_deref(), Some("high"));
     }
 
     #[test]

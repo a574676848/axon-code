@@ -2,10 +2,12 @@
 
 use axon_domain::{OutputRef, ToolCallInput};
 use serde::{Deserialize, Serialize};
-use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
 
 use crate::agent_runtime_note::AgentRuntimeNoteKind;
+
+mod agent_model_history_snapshot;
+
+pub use agent_model_history_snapshot::AgentModelHistorySnapshot;
 
 const ROLE_USER: &str = "user";
 pub(crate) const TOOL_RESULT_SOURCE_REF_PREFIX: &str = "tool-call://";
@@ -19,6 +21,12 @@ pub enum AgentModelMessageKind {
     Regular,
     /// Axon 注入的低权威运行时 note。
     RuntimeNote(AgentRuntimeNoteKind),
+    /// Axon 注入的动态上下文：环境、本机资源、话题线索、异常状态、人格动态等。
+    ///
+    /// 与 `Regular + Context` 的区别在语义而非协议：`Regular + Context` 是跨轮稳定、
+    /// 可进缓存的前缀片段；本变体面向本轮重建、不进缓存的注入内容，
+    /// 让换窗与角色转换可以按 kind 精确取舍，而不必再猜 `cache_excluded`。
+    InjectedContext,
     /// 历史压缩 checkpoint。
     ConversationCheckpoint,
 }
@@ -76,125 +84,6 @@ pub struct AgentModelMessage {
     /// 可选的稳定事实引用，不等同于归档引用。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_ref: Option<String>,
-}
-
-/// Agent 到 Provider 瞬时链路共享的模型历史快照。
-///
-/// 只读规划层 clone 仅增加引用计数；需要追加或替换消息时通过
-/// [`Self::make_mut`] 执行 copy-on-write，不改变持久化消息合同。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AgentModelHistorySnapshot {
-    messages: Arc<Vec<AgentModelMessage>>,
-    /// 产生该历史的记忆窗口 ID；用于渲染 provider 可见的稳定 item id 标记。
-    history_window_id: Option<String>,
-}
-
-impl AgentModelHistorySnapshot {
-    /// 返回只读消息切片。
-    #[must_use]
-    pub fn as_slice(&self) -> &[AgentModelMessage] {
-        self.messages.as_slice()
-    }
-
-    /// 返回产生该历史的记忆窗口 ID。
-    #[must_use]
-    pub fn history_window_id(&self) -> Option<&str> {
-        self.history_window_id.as_deref()
-    }
-
-    /// 绑定记忆窗口 ID；空白值视为未绑定。
-    #[must_use]
-    pub fn with_history_window_id(mut self, window_id: Option<String>) -> Self {
-        self.history_window_id = window_id.filter(|value| !value.trim().is_empty());
-        self
-    }
-
-    /// 返回最近 N 个真实用户 turn 的起始消息下标。
-    #[must_use]
-    pub fn first_index_for_last_user_turns(&self, turns: usize) -> usize {
-        if turns == 0 {
-            return self.messages.len();
-        }
-        let total_turns = self
-            .messages
-            .iter()
-            .filter(|message| message.is_real_user_turn())
-            .count();
-        if turns >= total_turns {
-            return 0;
-        }
-        self.messages
-            .iter()
-            .enumerate()
-            .filter(|(_, message)| message.is_real_user_turn())
-            .nth(total_turns - turns)
-            .map_or(0, |(index, _)| index)
-    }
-
-    /// 删除最近 N 个真实用户 turn；没有可删除 turn 时保持共享存储不变。
-    pub fn drop_last_n_user_turns(&mut self, turns: usize) -> bool {
-        if turns == 0 {
-            return false;
-        }
-        let total_turns = self
-            .messages
-            .iter()
-            .filter(|message| message.is_real_user_turn())
-            .count();
-        if total_turns == 0 {
-            return false;
-        }
-        let retained_turns = total_turns.saturating_sub(turns);
-        let cut_index = self
-            .messages
-            .iter()
-            .enumerate()
-            .filter(|(_, message)| message.is_real_user_turn())
-            .nth(retained_turns)
-            .map_or(self.messages.len(), |(index, _)| index);
-        self.make_mut().truncate(cut_index);
-        true
-    }
-
-    /// 获取可变消息向量；存在其他快照时才复制底层历史。
-    pub fn make_mut(&mut self) -> &mut Vec<AgentModelMessage> {
-        Arc::make_mut(&mut self.messages)
-    }
-
-    /// 消费快照并回收消息向量；存在其他引用时才执行深拷贝。
-    #[must_use]
-    pub fn into_messages(self) -> Vec<AgentModelMessage> {
-        Arc::unwrap_or_clone(self.messages)
-    }
-
-    /// 判断两个快照是否共享同一份底层历史。
-    #[must_use]
-    pub fn shares_storage_with(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.messages, &other.messages)
-    }
-}
-
-impl From<Vec<AgentModelMessage>> for AgentModelHistorySnapshot {
-    fn from(messages: Vec<AgentModelMessage>) -> Self {
-        Self {
-            messages: Arc::new(messages),
-            history_window_id: None,
-        }
-    }
-}
-
-impl Deref for AgentModelHistorySnapshot {
-    type Target = Vec<AgentModelMessage>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.messages
-    }
-}
-
-impl DerefMut for AgentModelHistorySnapshot {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.make_mut()
-    }
 }
 
 #[derive(Deserialize)]
@@ -411,6 +300,21 @@ impl AgentModelMessage {
         message
     }
 
+    /// 构造运行时注入的动态上下文消息。
+    ///
+    /// 面向本轮重建、不进缓存的内容：环境信息、本机资源、话题线索、异常状态、
+    /// 人格动态、子代理提示等。与 `cache_excluded()` 的差别只在于显式标出
+    /// `kind = InjectedContext`，让下游可以按 kind 判断「这是注入，不是用户发言」。
+    #[must_use]
+    pub fn injected_context(role: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            cache_excluded: true,
+            retention_class: RetentionClass::P3Derivable,
+            kind: AgentModelMessageKind::InjectedContext,
+            ..Self::context(role, content)
+        }
+    }
+
     /// 附加本地图片引用。
     #[must_use]
     pub fn with_local_images(mut self, local_images: Vec<AgentModelLocalImageRef>) -> Self {
@@ -535,85 +439,5 @@ fn retention_class_for_role(role: &str) -> RetentionClass {
 }
 
 #[cfg(test)]
-mod preview_tests {
-    use super::{
-        AgentModelHistorySnapshot, AgentModelMessage, AgentModelMessageKind,
-        MAX_PROVIDER_FILE_PREVIEW_BYTES, bound_provider_file_preview,
-    };
-
-    #[test]
-    fn provider_file_preview_is_bounded_on_utf8_boundary() {
-        let preview = "界".repeat(MAX_PROVIDER_FILE_PREVIEW_BYTES);
-        let bounded = bound_provider_file_preview(&preview);
-        assert!(bounded.len() <= MAX_PROVIDER_FILE_PREVIEW_BYTES);
-        assert!(bounded.is_char_boundary(bounded.len()));
-    }
-
-    #[test]
-    fn shared_history_snapshot_clones_storage_until_mutation() {
-        let original =
-            AgentModelHistorySnapshot::from(vec![AgentModelMessage::text("user", "任务")]);
-        let mut mutated = original.clone();
-
-        assert!(original.shares_storage_with(&mutated));
-        mutated
-            .make_mut()
-            .push(AgentModelMessage::text("assistant", "结果"));
-
-        assert!(!original.shares_storage_with(&mutated));
-        assert_eq!(original.len(), 1);
-        assert_eq!(mutated.into_messages().len(), 2);
-    }
-
-    #[test]
-    fn real_user_turn_boundary_excludes_context_and_control_messages() {
-        let regular = AgentModelMessage::text("user", "真实请求");
-        let context = AgentModelMessage::context("user", "上下文");
-        let mut checkpoint = AgentModelMessage::text("user", "checkpoint");
-        checkpoint.kind = AgentModelMessageKind::ConversationCheckpoint;
-
-        assert!(regular.is_real_user_turn());
-        assert!(!context.is_real_user_turn());
-        assert!(!checkpoint.is_real_user_turn());
-    }
-
-    #[test]
-    fn dropping_user_turns_preserves_prefix_and_only_copies_on_change() {
-        let original = AgentModelHistorySnapshot::from(vec![
-            AgentModelMessage::text("system", "系统"),
-            AgentModelMessage::text("user", "第一轮"),
-            AgentModelMessage::text("assistant", "第一轮结果"),
-            AgentModelMessage::text("user", "第二轮"),
-            AgentModelMessage::text("assistant", "第二轮结果"),
-        ]);
-        let mut rolled_back = original.clone();
-
-        assert!(rolled_back.drop_last_n_user_turns(1));
-        assert!(!original.shares_storage_with(&rolled_back));
-        assert_eq!(
-            rolled_back
-                .as_slice()
-                .iter()
-                .map(|message| message.content.as_str())
-                .collect::<Vec<_>>(),
-            vec!["系统", "第一轮", "第一轮结果"]
-        );
-
-        let mut prefix_after_full_rollback = original.clone();
-        assert!(prefix_after_full_rollback.drop_last_n_user_turns(usize::MAX));
-        assert_eq!(
-            prefix_after_full_rollback
-                .as_slice()
-                .iter()
-                .map(|message| message.content.as_str())
-                .collect::<Vec<_>>(),
-            vec!["系统"]
-        );
-
-        let prefix_only =
-            AgentModelHistorySnapshot::from(vec![AgentModelMessage::text("system", "系统")]);
-        let mut unchanged = prefix_only.clone();
-        assert!(!unchanged.drop_last_n_user_turns(1));
-        assert!(prefix_only.shares_storage_with(&unchanged));
-    }
-}
+#[path = "agent_model_message_tests.rs"]
+mod tests;

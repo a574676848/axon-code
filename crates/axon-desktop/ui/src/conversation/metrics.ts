@@ -31,7 +31,6 @@ const CONTEXT_CRITICAL_PERCENT = 85;
 
 /** 段标识。 */
 export type HeaderSegmentKind =
-  | 'status'
   | 'reasoning'
   | 'sessionTokens'
   | 'context'
@@ -55,8 +54,6 @@ export interface HeaderSegment {
   text: string;
   /** 语义色调。 */
   tone: HeaderSegmentTone;
-  /** 是否需要呼吸高亮。 */
-  breath: boolean;
   /** 指标图标名；无图标时省略。 */
   icon?: string;
   /** 原生提示全文；缺省时渲染层用 `text`。 */
@@ -65,10 +62,6 @@ export interface HeaderSegment {
 
 /** 指标条输入。 */
 export interface HeaderMetricsInput {
-  /** 是否正在工作。 */
-  working: boolean;
-  /** 呼吸高亮的相位，工作态下用于脉冲。 */
-  animationTick: number;
   /** 当前模型，允许带 provider 前缀。 */
   model: string;
   /** 推理强度。 */
@@ -144,27 +137,14 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
    */
   const usage = input.usage ?? EMPTY_USAGE;
 
-  // 1 状态：仅工作态出现。品牌名不再占位：工作态只留一枚呼吸的活动点，
-  //   生成到哪一步已经由正文与输入坞那一行说清楚了。
-  if (input.working) {
-    segments.push({
-      kind: 'status',
-      text: '',
-      title: '正在运行',
-      icon: 'spark',
-      tone: 'default',
-      breath: input.animationTick % 4 < 2,
-    });
-  }
-  // 2 LSP：仅大于 0 时出现。
+  // 1 LSP：仅大于 0 时出现。
   if (input.lspActiveCount > 0) {
     segments.push({
       kind: 'lsp',
       text: shortMetric('LSP', String(input.lspActiveCount)),
-      icon: 'code',
+      icon: 'lsp',
       tone: 'default',
-      breath: false,
-    });
+        });
   }
   // 3.1 MCP：有服务器或读不到结论时出现。异常一台都不许沉默，用危险色顶出来；
   // 正常时只报台数，与 LSP 同为辅助读数。
@@ -175,8 +155,7 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
       title: mcpSegmentTitle(input.mcp),
       icon: 'mcp',
       tone: input.mcp.failedCount > 0 || input.mcp.error !== null ? 'critical' : 'default',
-      breath: false,
-    });
+        });
   }
   // 3.2 技能：紧跟 MCP 报「装了多少条」。清单未读到或零条时不占位，
   // 与 LSP、MCP 同一口径：辅助读数只报事实，不拿 0 占宽度。
@@ -187,8 +166,7 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
       title: `共 ${input.skillCount} 项已安装技能`,
       icon: 'skill',
       tone: 'default',
-      breath: false,
-    });
+        });
   }
   /*
    * 4 会话读数组：耗时 → 累计 → 命中率 → 上下文。
@@ -210,17 +188,18 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
         title: `本会话累计耗时 ${formatDurationMillisCompact(cumulative.elapsedMs)}`,
         icon: 'clock',
         tone: 'default',
-        breath: false,
-      });
+            });
     }
-    if (cumulative !== null) {
+    // 累计与命中率同上下文一个生命周期：还没有任何用量观测时整段不占位。
+    // 摆一个 `累计 0` 与 `命中率 0.00%` 只是把「还没开始」说成「已经算过」。
+    if (cumulative !== null && cumulative.totalTokens > 0) {
       segments.push({
         kind: 'sessionTokens',
         text: shortMetric('累计', formatDecimalCount(cumulative.totalTokens)),
         title: `本会话累计消耗 ${formatDecimalCount(cumulative.totalTokens)} token`,
+        icon: 'database',
         tone: 'default',
-        breath: false,
-      });
+            });
       // 命中率按整条会话累计：与累计用量同一份基线，不是最近一轮的命中率。
       segments.push({
         kind: 'cacheHit',
@@ -230,20 +209,21 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
         ),
         title: '本会话累计缓存命中率',
         tone: 'default',
-        breath: false,
+            });
+    }
+    // 上下文：只在真的观测到窗口占用时才出现。新建会话还没有任何一次请求，
+    // 摆一个 `0/窗口` 只是把「还没开始」说成「预算归零」；有观测之后这一段常驻。
+    if (currentContextTokens(usage) > 0) {
+      segments.push({
+        kind: 'context',
+        text: contextText(usage, input.contextWindow),
+        tone:
+          input.contextWindow !== null && input.contextWindow > 0
+            ? contextPressureTone(currentContextTokens(usage), input.contextWindow)
+            : 'default',
+              icon: 'ring',
       });
     }
-    // 上下文：进入会话即常驻，没有观测时读作 0/窗口。
-    segments.push({
-      kind: 'context',
-      text: contextText(usage, input.contextWindow),
-      tone:
-        input.contextWindow !== null && input.contextWindow > 0
-          ? contextPressureTone(currentContextTokens(usage), input.contextWindow)
-          : 'default',
-      breath: false,
-      icon: 'ring',
-    });
   }
   // 5 计划：有步骤时才出现。
   if (input.plan !== null && input.plan.total > 0) {
@@ -252,8 +232,7 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
       text: shortMetric('计划', `${input.plan.completed}/${input.plan.total}`),
       icon: 'list',
       tone: 'default',
-      breath: false,
-    });
+        });
   }
   // 7 首字。
   if (input.firstTokenAvgMs !== null) {
@@ -262,8 +241,7 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
       text: shortMetric('首字', formatDurationMillisCompact(input.firstTokenAvgMs)),
       icon: 'clock',
       tone: 'default',
-      breath: false,
-    });
+        });
   }
   // 8 速率。
   if (input.generationTpsX10 !== null) {
@@ -272,15 +250,14 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
       text: shortMetric('速率', formatTokensPerSecondX10(input.generationTpsX10)),
       icon: 'gauge',
       tone: 'default',
-      breath: false,
-    });
+        });
   }
   // 9 耗时已并入上面的会话累计：这一行不再重复报单轮耗时。
   return segments;
 }
 
 /** 指标条的四簇：身份、会话读数、性能、辅助。 */
-export type HeaderClusterKind = 'identity' | 'session' | 'performance' | 'aux';
+export type HeaderClusterKind = 'session' | 'performance' | 'aux';
 
 /** 指标条的一段成簇结果。 */
 export interface HeaderCluster {
@@ -290,8 +267,7 @@ export interface HeaderCluster {
 
 /** 段到簇的归属；不在表里的段不出现。 */
 const CLUSTER_OF: Record<HeaderSegmentKind, HeaderClusterKind> = {
-  status: 'identity',
-  reasoning: 'identity',
+  reasoning: 'session',
   sessionTokens: 'session',
   elapsed: 'session',
   cacheHit: 'session',
@@ -314,7 +290,6 @@ const CLUSTER_OF: Record<HeaderSegmentKind, HeaderClusterKind> = {
  */
 export function headerClusters(input: HeaderMetricsInput): HeaderCluster[] {
   const groups: HeaderCluster[] = [
-    { kind: 'identity', segments: [] },
     { kind: 'session', segments: [] },
     { kind: 'performance', segments: [] },
     { kind: 'aux', segments: [] },

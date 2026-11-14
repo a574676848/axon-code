@@ -38,7 +38,8 @@ pub(crate) use session_cleanup::{run_session_cleanup, run_session_cleanup_once};
 pub(crate) const SESSION_CLEANUP_CRON_SCRIPT: &str = session_cleanup::SESSION_CLEANUP_CRON_SCRIPT;
 pub(crate) const SESSION_CLEANUP_CRON_JOB_ID: &str = "axon.system.brain-cleanup";
 pub(crate) const SESSION_CLEANUP_CRON_NAME: &str = "Axon brain cleanup";
-pub(crate) const SESSION_CLEANUP_INTERVAL_MS: u64 = 86_400_000;
+/// 清理任务调度间隔。按用户口径每小时回收一次过期文件、附件与运行态记录。
+pub(crate) const SESSION_CLEANUP_INTERVAL_MS: u64 = 3_600_000;
 
 pub(crate) fn is_system_job(job_id: &str) -> bool {
     matches!(
