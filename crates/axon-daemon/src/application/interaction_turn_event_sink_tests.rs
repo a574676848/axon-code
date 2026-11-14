@@ -34,7 +34,7 @@ fn stream_event_annotation_adds_only_interaction_id() {
 }
 
 #[test]
-fn stream_deltas_and_usage_stay_off_the_durable_path() {
+fn stream_deltas_stay_off_the_durable_path_and_usage_keeps_a_replay_copy() {
     let text = wire_payload(
         "reasoningDelta",
         json!({"partId": "reasoning-part:1", "reasoningId": "r1", "delta": "想"}),
@@ -47,8 +47,16 @@ fn stream_deltas_and_usage_stay_off_the_durable_path() {
         }
     ));
 
+    // 用量必须能回放：切回会话时这一轮读数只可能来自持久副本。
     let usage = wire_payload("usageUpdate", json!({"inputTokens": 1}));
-    assert!(matches!(classify_frame(&usage), FrameClass::LiveOnly));
+    assert!(matches!(classify_frame(&usage), FrameClass::Snapshot));
+
+    // 供应商状态是瞬态读数，不进持久层。
+    let provider = wire_payload("providerStatus", json!({"activity": "thinking"}));
+    assert!(matches!(
+        classify_frame(&provider),
+        FrameClass::LiveOnly { remember: true }
+    ));
 
     let tool_call = wire_payload("toolCall", json!({"partId": "tool-1"}));
     assert!(matches!(classify_frame(&tool_call), FrameClass::Durable));
@@ -81,4 +89,35 @@ fn snapshot_reuses_the_same_part_envelope() {
         live_part_text(&envelope, LivePartKind::Assistant).as_deref(),
         Some("答")
     );
+}
+
+fn runtime_event(event_type: &str, payload_json: String) -> RuntimeEvent {
+    RuntimeEvent {
+        event_type: event_type.to_owned(),
+        payload_json,
+    }
+}
+
+#[test]
+fn turn_terminal_covers_the_completion_event_and_terminal_lifecycles() {
+    assert!(is_turn_terminal(&runtime_event(
+        "turn_completed",
+        "{}".to_owned()
+    )));
+
+    for status in ["completed", "failed", "cancelled", "aborted"] {
+        let payload = wire_payload("turnLifecycle", json!({ "status": status }));
+        assert!(
+            is_turn_terminal(&runtime_event("wire_event", payload)),
+            "{status} 属于收口终态"
+        );
+    }
+
+    // 运行中的生命周期不是收口：误判会把正在发生的阶段一起抹掉。
+    let running = wire_payload("turnLifecycle", json!({ "status": "running" }));
+    assert!(!is_turn_terminal(&runtime_event("wire_event", running)));
+
+    // 其余 durable 帧与收口无关，不必每一条都去清账。
+    let tool_call = wire_payload("toolCall", json!({ "partId": "tool-1" }));
+    assert!(!is_turn_terminal(&runtime_event("wire_event", tool_call)));
 }

@@ -26,12 +26,14 @@ pub const JOB_TOOL_JOB_ID_FIELD: &str = "job_id";
 pub const JOB_TOOL_YIELD_TIME_FIELD: &str = "yield_time_ms";
 /// `max_output_tokens` 字段名；与 `shell_command` 共用同名同义字段。
 pub const JOB_TOOL_MAX_OUTPUT_TOKENS_FIELD: &str = "max_output_tokens";
+/// `yield_time_ms` 的最大上限（毫秒，10 秒）：严禁前台长时间等待轮询。
+pub const JOB_TOOL_MAX_YIELD_TIME_MS: u64 = 10_000;
 
 const JOB_OUTPUT_TOOL_SCHEMA_VERSION: u32 = 1;
 const JOB_KILL_TOOL_SCHEMA_VERSION: u32 = 1;
 
 /// `job_id` 字段的统一说明：两条产出通道（Shell 后台作业、后台子代理）共用同一注册表。
-const JOB_TOOL_JOB_ID_FIELD_DESCRIPTION: &str = "回执给出的作业 ID：来自 shell_command 以 run_in_background: true 启动后的回执，或来自后台子代理（spawn_agent）回执的 jobId。必须逐字复制最近一次回执中的 job_id；禁止臆造、改写或跨 Agent run 复用。job_id 是临时 Job 的唯一生命周期句柄，不能传给 write_stdin 或 send_message，session_id 与 AgentPath 也不能传给本工具。";
+const JOB_TOOL_JOB_ID_FIELD_DESCRIPTION: &str = "启动后台任务时回执给出的编号，后台子代理的 jobId 也走这里。照抄回执里的数字就行：不要自己编、不要改动，也不要把别的任务的编号拿来用。这个编号只给 job_output 和 job_kill 用，不能传给 write_stdin 或 send_message；反过来，会话 ID 也不能传给这两个工具。";
 
 /// 返回 `job_output` 工具定义。
 pub(crate) fn job_output_tool_definition() -> ToolDefinition {
@@ -47,7 +49,7 @@ pub(crate) fn job_output_tool_definition() -> ToolDefinition {
             ToolSchemaField::new(
                 JOB_TOOL_YIELD_TIME_FIELD,
                 ToolSchemaFieldKind::Integer,
-                "可选等待增量输出时长，单位毫秒；省略时立即返回本批输出。作业仍在运行且已在等待窗口内有新输出、进入终态、本轮被中断或窗口结束时返回；被中断只结束本次等待，作业本身继续运行。",
+                "可选，最多 10000（10 秒）。传了会在这里稍等一下，看这段时间里有没有新输出或任务是否结束；不传就立刻返回当前已有的内容。任务跑完会自动通知你，所以平时不必靠这个参数去等。",
             ),
             ToolSchemaField::new(
                 JOB_TOOL_MAX_OUTPUT_TOKENS_FIELD,
@@ -56,17 +58,20 @@ pub(crate) fn job_output_tool_definition() -> ToolDefinition {
             ),
         ],
     );
+    schema.input_schema["properties"][JOB_TOOL_YIELD_TIME_FIELD]["minimum"] = serde_json::json!(0);
+    schema.input_schema["properties"][JOB_TOOL_YIELD_TIME_FIELD]["maximum"] =
+        serde_json::json!(JOB_TOOL_MAX_YIELD_TIME_MS);
     schema.input_schema["properties"][JOB_TOOL_MAX_OUTPUT_TOKENS_FIELD]["minimum"] =
         serde_json::json!(1);
     schema.input_schema["examples"] = serde_json::json!([
         { "job_id": "1" },
-        { "job_id": "1", "yield_time_ms": 30000 }
+        { "job_id": "1", "yield_time_ms": 10000 }
     ]);
     ToolDefinition {
         id: JOB_OUTPUT_TOOL_ID,
         namespace: crate::AGENT_TOOL_NAMESPACE.to_owned(),
         name: JOB_OUTPUT_TOOL_NAME.to_owned(),
-        description: "读取临时 Job（Shell 后台作业或后台子代理）的增量输出与状态。job_id 必须逐字复制最近一次回执中的 job_id，不能臆造或跨作业复用；job_id 是生命周期通道的句柄，与 session_id（write_stdin 的交互式 Shell 会话）、AgentPath（子代理协作寻址）属于不同通道，不可互传：job_id 不能传给 write_stdin，session_id 也不能传给本工具。回执返回本批新增的 stdout/stderr、status 与 exit_code；status 为 Running 只表示作业仍在运行，不表示已成功，Timeout 与 Unresponsive 分别表示墙钟超时与空闲超时。输出超出预算时按 full_output_available 决定是读取完整归档，还是缩小范围后重新执行。作业终态后按保留窗口回收，此后读取会提示已超出保留窗口。只想等待时传 yield_time_ms。".to_owned(),
+        description: "看一个后台任务跑到哪了：它到目前为止的输出，以及是否还在跑。要停掉它请用 job_kill。启动回执里的 job_id 照抄即可。任务跑完会自动通知你，不需要守着反复来问；只在需要看进度或取结果时调用。每次返回的是「上次读取之后新增的那一段」，不是从头到尾的全文；内容太多时只给摘要并标明完整输出在哪里。任务结束后短时间内仍可读取，再久会提示已经查不到，那时需要重新执行一次。".to_owned(),
         schema,
         enabled: true,
         concurrency_policy: axon_domain::ToolConcurrencyPolicy::ParallelSafe,
@@ -91,7 +96,7 @@ pub(crate) fn job_kill_tool_definition() -> ToolDefinition {
         id: JOB_KILL_TOOL_ID,
         namespace: crate::AGENT_TOOL_NAMESPACE.to_owned(),
         name: JOB_KILL_TOOL_NAME.to_owned(),
-        description: "终止一个临时 Job（Shell 后台作业或后台子代理）。job_id 必须逐字复制最近一次回执中的 job_id；job_id 与 session_id、AgentPath 属于不同通道，不可互传。对后台子代理执行完整中断语义：中止当前 turn、关闭会话、投影终态并触发完成通知。作业已进入终态时返回提示而非重复终止。终止后仍可用 job_output 读取已产生的输出与终态。".to_owned(),
+        description: "停掉一个后台任务，包括后台子代理。job_id 照抄启动回执里的编号。已经结束的任务会提示无需重复停止。停掉子代理等同于中断它：它会立刻停下，不再继续做。停掉之后仍可以用 job_output 查看它已经产生的输出和结局。".to_owned(),
         schema,
         enabled: true,
         concurrency_policy: axon_domain::ToolConcurrencyPolicy::Exclusive,

@@ -5,14 +5,15 @@ use axon_domain::{
     RuntimeObservationFrame,
 };
 use axon_session::SessionEventRecord;
-use std::collections::HashMap;
 use std::sync::{
     Arc, Mutex, Weak,
     atomic::{AtomicU64, Ordering},
-    mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError},
+    mpsc::{self, Receiver, RecvTimeoutError, TrySendError},
 };
 use std::time::Duration;
 
+use super::event_stream_bridge_live_status::now_unix_ms;
+use super::event_stream_bridge_subscribers::{PendingStreamReset, Subscriber, SubscriberRegistry};
 use super::event_stream_bridge_telemetry::{
     EventStreamBridgeTelemetry, EventStreamBridgeTelemetrySnapshot,
 };
@@ -44,53 +45,6 @@ mod tests;
 pub use super::event_stream_bridge_notifications::{
     LiveStreamEvent, StreamEvent, StreamNotification,
 };
-
-#[derive(Debug)]
-struct Subscriber {
-    id: u64,
-    /// 订阅者关心的 Interaction；`None` 表示**会话级订阅**（该会话的每条事件都投递）。
-    ///
-    /// 子代理会话不属于任何 Interaction，它的逐字稿没有 interaction 标注，
-    /// 因此必须有一条不按 Interaction 过滤的订阅路径，界面才能像主会话一样实时接收。
-    interaction_id: Option<InteractionId>,
-    last_cursor: Option<ConsumerCursor>,
-    sender: SyncSender<StreamNotification>,
-    pending_reset: Arc<Mutex<Option<PendingStreamReset>>>,
-}
-
-#[derive(Debug, Clone)]
-struct PendingStreamReset {
-    cursor: Option<ConsumerCursor>,
-    reason: &'static str,
-}
-
-impl Subscriber {
-    fn request_reset(&self, reason: &'static str) {
-        let mut pending = self
-            .pending_reset
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if pending.is_none() {
-            *pending = Some(PendingStreamReset {
-                cursor: self.last_cursor.clone(),
-                reason,
-            });
-        }
-    }
-
-    fn reset_pending(&self) -> bool {
-        self.pending_reset
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_some()
-    }
-}
-
-#[derive(Debug, Default)]
-struct SubscriberRegistry {
-    by_session: HashMap<DaemonSessionId, Vec<Subscriber>>,
-    total: usize,
-}
 
 /// 临时实时订阅桥接；不承担历史恢复或持久化职责。
 #[derive(Debug, Clone)]
@@ -198,6 +152,17 @@ impl EventStreamBridge {
         }
         let id = self.next_subscriber_id.fetch_add(1, Ordering::Relaxed);
         let pending_reset = Arc::new(Mutex::new(None));
+        /*
+         * 订阅建立前发出的瞬态读数在这里补一帧。
+         *
+         * 它没有 durable 副本，错过就只能等下一次真实 provider 请求，界面会一直挂着
+         * 中性占位。只补保鲜期内的：过期的读数代表一件早就结束的事，补出去比空着更糟。
+         */
+        let replay = interaction_id.as_ref().and_then(|interaction_id| {
+            registry
+                .remembered_live
+                .replay_for(&session_id, interaction_id, now_unix_ms())
+        });
         registry
             .by_session
             .entry(session_id.clone())
@@ -206,11 +171,16 @@ impl EventStreamBridge {
                 id,
                 interaction_id,
                 last_cursor: after_cursor,
-                sender,
+                sender: sender.clone(),
                 pending_reset: Arc::clone(&pending_reset),
             });
         registry.total = registry.total.saturating_add(1);
         self.telemetry.record_subscriber_added();
+        drop(registry);
+        if let Some(event) = replay {
+            // mailbox 刚建、容量至少为一；真满也只丢这一帧补发，不影响订阅本身。
+            let _ = sender.try_send(StreamNotification::LiveEvent(event));
+        }
         Ok(EventStreamSubscription {
             id,
             session_id,
@@ -531,6 +501,29 @@ impl EventStreamBridge {
     #[must_use]
     pub fn telemetry_snapshot(&self) -> EventStreamBridgeTelemetrySnapshot {
         self.telemetry.snapshot()
+    }
+
+    /// 记下最后一帧可补发的瞬态读数；同一轮次后到的覆盖先到的。
+    ///
+    /// 调用点只该是低频读数（provider 状态）：正文增量与用量不进这张表。
+    pub fn remember_live(&self, event: &LiveStreamEvent, captured_at_ms: u64) {
+        let mut registry = self
+            .subscribers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        registry.remembered_live.remember(event, captured_at_ms);
+    }
+
+    /// 轮次收口：丢掉该轮的可补发读数。
+    ///
+    /// 收口之后它不再代表任何正在进行的事，留着只会在下一次订阅时被补发出去，
+    /// 把上一轮的阶段当成新一轮的现状。
+    pub fn forget_live(&self, session_id: &DaemonSessionId, interaction_id: &InteractionId) {
+        let mut registry = self
+            .subscribers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        registry.remembered_live.forget(session_id, interaction_id);
     }
 }
 

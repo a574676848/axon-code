@@ -94,7 +94,11 @@ pub const JOB_TOMBSTONE_RETENTION: Duration = Duration::from_secs(30 * 60);
 pub const JOB_TOMBSTONE_CAPACITY: usize = 256;
 /// 回收线程的推进间隔。
 pub const JOB_REAPER_INTERVAL: Duration = Duration::from_secs(1);
-/// 单次读取等待的上界，避免模型用超大 yield 卡死整批工具；也是空闲超时判定值。
+/// 作业空闲超时判定值：连续这么久没有任何活动就判 `unresponsive`。
+///
+/// 它**不是**工具侧单次读取的等待上界，那个上界是 `JOB_TOOL_MAX_YIELD_TIME_MS`（10 秒）。
+/// 两个数值在早期版本共用同一个常量，把等待上界收窄到 10 秒后必须分开看：
+/// 拿这个 30 分钟去判断「模型能等多久」会漏掉真正的限制。
 pub const JOB_MAX_READ_YIELD: Duration = Duration::from_secs(30 * 60);
 /// 无输出时的检查间隔。
 pub const JOB_POLL_INTERVAL: Duration = Duration::from_millis(100);

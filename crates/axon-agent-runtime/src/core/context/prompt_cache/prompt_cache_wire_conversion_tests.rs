@@ -168,3 +168,50 @@ fn prompt_cache_wire_does_not_backfill_responses_messages() {
 
     assert!(plan.openai_messages[3].get("reasoning_content").is_none());
 }
+
+#[test]
+fn anthropic_tool_wire_strips_top_level_schema_combinators() {
+    let tool = crate::ModelToolDefinition {
+        qualified_name: "mcp.third_party".to_owned(),
+        description: "第三方 MCP 工具".to_owned(),
+        schema_hash: "tool-schema-third-party".to_owned(),
+        input_schema: serde_json::json!({
+            "allOf": [{ "if": { "required": ["cursor"] }, "then": { "required": ["server"] } }],
+            "type": "object",
+            "properties": { "cursor": { "type": "string" } },
+            "required": []
+        }),
+        input_format: axon_domain::ToolInputFormat::JsonSchema,
+    };
+
+    let wire = crate::prompt_cache_wire::anthropic_tool(&tool, false);
+    let schema = &wire["input_schema"];
+
+    for combinator in ["oneOf", "allOf", "anyOf"] {
+        assert!(
+            schema.get(combinator).is_none(),
+            "顶层 {combinator} 必须剥离：Anthropic 收到即整轮 400"
+        );
+    }
+    assert_eq!(schema["type"], "object");
+    assert_eq!(schema["properties"]["cursor"]["type"], "string");
+}
+
+#[test]
+fn anthropic_tool_wire_keeps_combinator_free_schema_verbatim() {
+    let tool = crate::ModelToolDefinition {
+        qualified_name: "builtin.search".to_owned(),
+        description: "只读搜索".to_owned(),
+        schema_hash: "tool-schema-search".to_owned(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": { "query": { "type": "string" } },
+            "required": ["query"]
+        }),
+        input_format: axon_domain::ToolInputFormat::JsonSchema,
+    };
+
+    let wire = crate::prompt_cache_wire::anthropic_tool(&tool, false);
+
+    assert_eq!(wire["input_schema"], tool.input_schema);
+}

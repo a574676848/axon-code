@@ -57,6 +57,8 @@ $stagingRoot = Join-Path ([IO.Path]::GetTempPath()) "axon-source-install-$PID"
 $daemonStopped = $false
 $taskDisabled = $false
 $previousLauncher = Test-Path $launcherPath
+# 网关监听端口由配置解析得出，停机段落里取样后供收尾验收复用。
+$gatewayPort = 0
 
 <#
  * 版本目录按组件裁剪写入：未选中的组件不会进入版本目录。
@@ -154,17 +156,81 @@ if ($null -eq $cargo) {
 }
 if ($null -eq $cargo) { throw "未找到 cargo，请先安装 Rust 工具链。" }
 
-function Wait-DaemonStopped([string]$path) {
+# Daemon 运行态根目录约定与 config.toml 同源，同样落在 $HOME\.axon 下。
+$axonHome = Join-Path $HOME ".axon"
+$daemonPidPath = Join-Path $axonHome "data\daemon.pid"
+
+<#
+ * 从 config.toml 的 [remote.gateway] http_bind 解析网关监听端口。
+ *
+ * 网关可用性是「服务是否真的能服务」的唯一硬事实：daemon status 反映的是进程存活，
+ * 进程在收尾期仍会存活，因此不能拿它当停止或就绪的判据。端口声明在配置里，不硬编码。
+#>
+function Get-GatewayListenPort([string]$configPath) {
+    if (-not (Test-Path $configPath -PathType Leaf)) { return 0 }
+    $inGatewaySection = $false
+    foreach ($line in [IO.File]::ReadLines($configPath)) {
+        $trimmed = $line.Trim()
+        if ($trimmed -match '^\[(.+?)\]$') {
+            $inGatewaySection = ($Matches[1].Trim() -eq 'remote.gateway')
+            continue
+        }
+        if (-not $inGatewaySection) { continue }
+        if ($trimmed -match '^http_bind\s*=\s*"([^"]+)"') {
+            $bind = $Matches[1].Trim()
+            $separator = $bind.LastIndexOf(':')
+            if ($separator -ge 0) {
+                $port = 0
+                if ([int]::TryParse($bind.Substring($separator + 1), [ref]$port) -and $port -gt 0 -and $port -lt 65536) { return $port }
+            }
+        }
+    }
+    return 0
+}
+
+function Get-DaemonProcessId([string]$pidPath) {
+    if (-not (Test-Path $pidPath -PathType Leaf)) { return 0 }
+    $value = 0
+    $raw = (Get-Content -LiteralPath $pidPath -Raw -ErrorAction SilentlyContinue)
+    if ($raw -and [int]::TryParse($raw.Trim(), [ref]$value)) { return $value }
+    return 0
+}
+
+# PID 可能被回收给无关进程，因此存活判定必须同时核对映像名。
+function Test-AxonProcess([int]$processId) {
+    if ($processId -le 0) { return $false }
+    $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
+    return $null -ne $process -and $process.ProcessName -ieq 'axon'
+}
+
+function Test-GatewayListening([int]$port) {
+    if ($port -le 0) { return $false }
+    return $null -ne (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+}
+
+<#
+ * 停止判据是「Daemon 进程真正退出」且「网关端口不再监听」。
+ *
+ * 只看 daemon status 会误判：daemon.pid 可能在进程退出前就被清理，status 因此报
+ * running=false，而旧进程仍占着计划任务实例。此时紧接着的 daemon start 会被
+ * AxonDaemon 的 IgnoreNew 策略静默丢弃，形成「安装成功但服务没运行」的空窗。
+#>
+function Wait-DaemonStopped([int]$daemonPid, [int]$gatewayPort) {
     $deadline = [DateTime]::UtcNow.AddSeconds(60)
     while ([DateTime]::UtcNow -lt $deadline) {
-        $rawStatus = (& $path daemon status 2>$null | Out-String).Trim()
-        $status = $null
-        if ($rawStatus) {
-            try { $status = $rawStatus | ConvertFrom-Json -ErrorAction Stop } catch { $status = $null }
-        }
-        if (($null -ne $status -and -not $status.running) -or
-            ($null -eq $status -and -not (Get-Process axon -ErrorAction SilentlyContinue))) { return $true }
+        if (-not (Test-AxonProcess $daemonPid) -and -not (Test-GatewayListening $gatewayPort)) { return $true }
         Start-Sleep -Milliseconds 200
+    }
+    return $false
+}
+
+# 启动判据是「网关端口真的在监听」，而不是 daemon status 的进程存活字段。
+function Wait-GatewayListening([int]$port, [int]$timeoutSeconds) {
+    if ($port -le 0) { return $true }
+    $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (Test-GatewayListening $port) { return $true }
+        Start-Sleep -Milliseconds 250
     }
     return $false
 }
@@ -294,8 +360,13 @@ try {
     if ($plan.InstallBackend -and $previousLauncher) {
         & schtasks.exe /change /tn AxonDaemon /disable 2>$null | Out-Null
         $taskDisabled = $true
+        # PID 与端口都要在 stop 之前取样：daemon.pid 会在进程退出前被清理，网关端口也会先关，
+        # 事后再读只能读到「看起来已经停了」的假象。
+        $gatewayPort = Get-GatewayListenPort (Join-Path $axonHome "config.toml")
+        $stoppingPid = Get-DaemonProcessId $daemonPidPath
         & $launcherPath daemon stop 2>$null | Out-Host
-        if (-not (Wait-DaemonStopped $launcherPath)) { throw "Daemon 未能在 60 秒内停止" }
+        if ($LASTEXITCODE -ne 0) { throw "Daemon 停止失败，退出码：$LASTEXITCODE" }
+        if (-not (Wait-DaemonStopped $stoppingPid $gatewayPort)) { throw "Daemon 未能在 60 秒内停止" }
         $daemonStopped = $true
     }
     Get-Process axon-desktop -ErrorAction SilentlyContinue | Where-Object {
@@ -370,6 +441,15 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Daemon 启动失败，退出码：$LASTEXITCODE" }
         $status = & $launcherPath daemon status | Out-String | ConvertFrom-Json
         if (-not $status.running) { throw "Daemon 未正常运行，请检查已注册服务和 data/logs 日志。" }
+        <#
+         * 进程存活不等于服务可用：daemon start 走计划任务，任务实例尚未结束时会被
+         * IgnoreNew 策略静默丢弃，而 status 仍可能因残留 PID 报 running=true。
+         * 只有网关端口真正在监听，桌面端才连得上，所以它才是安装成功的最终判据。
+        #>
+        if ($gatewayPort -le 0) { $gatewayPort = Get-GatewayListenPort $configPath }
+        if (-not (Wait-GatewayListening $gatewayPort 30)) {
+            throw "Daemon 进程已启动，但网关端口 $gatewayPort 未在 30 秒内监听，桌面端会连不上。请检查 data\logs 日志后执行 axon daemon restart。"
+        }
     } else {
         Write-Host "[axon] 仅安装桌面端：未写入 config.toml，未注册也未启动 Daemon。" -ForegroundColor Cyan
     }

@@ -428,24 +428,28 @@ fn count_ids_in(
 /// 所有 Session 都按事件年龄和 sequence 水位滚动回收；rollout stale family 随后
 /// 会继续删除剩余事件与根记录，二者共享报告计数但不共享候选判定。
 ///
-/// 保底只作用于仍在推进的会话：它们可能因为长时间流式输出而把早期帧挤出保留期，
-/// 但最近若干条仍是上下文续跑的锚点。已终结会话一旦越过保留期就应当全量回收，
-/// 否则每个死会话都会永久驻留 `SESSION_EVENT_MIN_RETAINED` 条事件，
+/// 保底只作用于「仍在活动」的会话：它们可能因为长时间流式输出而把早期帧挤出
+/// 保留期，但最近若干条仍是上下文续跑的锚点。已终结会话一旦越过保留期就应当
+/// 全量回收，否则每个死会话都会永久驻留 `SESSION_EVENT_MIN_RETAINED` 条事件，
 /// 使 7 天保留期对这类会话彻底失效。
+///
+/// 「仍在活动」按 `last_activity_at_ms >= ?1` 判定，不按 `status` 判定：
+/// 生产环境里 `session_runtimes.status` 几乎恒为 `created`（desktop 车道创建后
+/// 从不转 `running`），用状态白名单会把所有会话都判成非活跃，使保底分支永不命中，
+/// 长会话一旦超期就会被整段删空。`last_activity_at_ms` 才是随事件推进更新的字段。
 pub(super) fn session_event_expiry_predicate() -> String {
     format!(
         "emitted_at_ms < ?1
            AND NOT EXISTS (
                SELECT 1 FROM session_runtimes AS retained
                WHERE retained.session_id = session_events.session_id
-                 AND retained.status IN ({active})
+                 AND retained.last_activity_at_ms >= ?1
                  AND session_events.sequence > CASE
                      WHEN retained.last_event_sequence > {retained_count}
                      THEN retained.last_event_sequence - {retained_count}
                      ELSE 0
                  END
            )",
-        active = quoted_list(&SESSION_ACTIVE_STATUSES),
         retained_count = SESSION_EVENT_MIN_RETAINED,
     )
 }

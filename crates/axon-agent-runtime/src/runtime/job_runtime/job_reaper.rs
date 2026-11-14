@@ -23,12 +23,12 @@ pub(super) fn is_terminal(job: &Arc<Mutex<Job>>) -> bool {
         .is_some()
 }
 
-/// 把模型给出的等待时长收敛到上界内。
+/// 把模型给出的等待时长收敛到上界内（最多 10 秒）。
 pub(super) fn bounded_yield(yield_ms: Option<u64>) -> Duration {
     yield_ms
+        .map(|ms| ms.min(crate::JOB_TOOL_MAX_YIELD_TIME_MS))
         .map(Duration::from_millis)
         .unwrap_or_default()
-        .min(JOB_MAX_READ_YIELD)
 }
 
 /// 后台回收线程。

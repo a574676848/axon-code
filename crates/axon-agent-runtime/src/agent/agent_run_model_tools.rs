@@ -203,7 +203,9 @@ pub fn agent_run_job_started_tool_receipt(
     job_id: JobId,
 ) -> AgentRunToolReceiptProjection {
     let job_status = job_status_name(JobStatus::Running);
-    let summary = format!("job start job_id={job_id} status={job_status}");
+    let summary = format!(
+        "job start job_id={job_id} status={job_status}; 作业已在后台跑起来了，跑完会自动通知你，不用守在这里。现在可以接着做别的事，也可以先把当前进展回给用户。"
+    );
     let metadata = serde_json::json!({
         "kind": JOB_RECEIPT_KIND,
         "toolName": short_tool_name(tool_call.dispatch_name()),

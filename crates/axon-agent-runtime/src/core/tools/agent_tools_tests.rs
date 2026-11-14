@@ -225,6 +225,13 @@ fn builtin_tool_schemas_keep_meta_inputs_narrow_and_objects_closed() {
             "{} 必须拒绝未知顶层字段",
             tool.name
         );
+        for combinator in ["oneOf", "allOf", "anyOf"] {
+            assert!(
+                tool.schema.input_schema.get(combinator).is_none(),
+                "{} 顶层不得出现 {combinator}：Anthropic Messages API 会直接拒绝整轮请求",
+                tool.name
+            );
+        }
         match &tool.schema.input_format {
             ToolInputFormat::JsonSchema => {}
             ToolInputFormat::Freeform { fallback_field, .. } => {
@@ -390,13 +397,15 @@ fn builtin_schema_validation_matches_conditional_runtime_contracts() {
     let mut registry = ToolRegistry::new();
     AgentToolRegistryRuntime::register_builtin_tools(&mut registry).unwrap();
 
+    // 「cursor 必须配 server」不在 schema 层承载（顶层组合器会被 Anthropic 拒收），
+    // 由执行层 mcp_list_args 运行时校验；此处锁定 schema 对这一组合放行，防有人再塞回 allOf。
     assert!(
         registry
             .validate_call_input(
                 "builtin.list_mcp_resources",
-                &ToolCallInput::json(json!({ "cursor": "next" }))
+                &ToolCallInput::json(json!({ "intent": "翻页取下一页资源", "cursor": "next" }))
             )
-            .is_err()
+            .is_ok()
     );
     assert!(
         registry

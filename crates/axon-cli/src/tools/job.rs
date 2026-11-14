@@ -6,8 +6,8 @@
 //! 作业的可见范围因此与发起它的 Agent run 完全一致。
 
 use axon_agent_runtime::{
-    JOB_KILL_TOOL_NAME, JOB_OUTPUT_TOOL_NAME, JobRuntime, ProviderToolCall,
-    agent_run_job_kill_tool_receipt, agent_run_job_output_tool_receipt,
+    JOB_KILL_TOOL_NAME, JOB_OUTPUT_TOOL_NAME, JOB_TOOL_MAX_YIELD_TIME_MS, JobRuntime, JobStatus,
+    ProviderToolCall, agent_run_job_kill_tool_receipt, agent_run_job_output_tool_receipt,
     agent_run_job_tool_args_from_provider_input,
 };
 
@@ -40,6 +40,21 @@ pub(crate) fn execute_job_output(
         Ok(args) => args,
         Err(message) => return failed_tool_input_receipt(tool_call, message),
     };
+    // 第二道防线：刚启动运行（耗时低于上界）且仍在 Running 的后台任务，严禁前台阻塞等待。
+    let requested_yield_ms = args.yield_time_ms.unwrap_or(0);
+    if let Some(tail) = JobRuntime::global().tail_owned(args.job_id, &context.thread_session_id)
+        && tail.status == JobStatus::Running
+        && requested_yield_ms > 0
+        && tail.elapsed_ms < JOB_TOOL_MAX_YIELD_TIME_MS
+    {
+        return failed_tool_receipt(
+            tool_call,
+            format!(
+                "作业 #{} 刚在后台跑起来。它跑完会自动通知你，现在不用在这里等。可以接着做别的事；手头没有别的活，就先把进展回给用户。",
+                args.job_id
+            ),
+        );
+    }
     // 取消探针只结束本次等待：作业本身有独立生命周期，不随本轮取消而终止。
     let cancelled = context
         .cancel_token

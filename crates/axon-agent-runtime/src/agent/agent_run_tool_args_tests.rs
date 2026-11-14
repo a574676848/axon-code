@@ -409,6 +409,21 @@ fn job_tool_arguments_reject_session_ids_and_non_positive_ids() {
         .is_err(),
         "作业工具只接受 JSON 参数"
     );
+
+    let excessive = agent_run_job_tool_args_from_provider_input(
+        &ToolCallInput::from(r#"{"job_id":"12","yield_time_ms":10001}"#),
+        "builtin.job_output",
+    );
+    assert!(
+        excessive.is_err(),
+        "超出 10000ms 的等待时间必须在参数层被拦截"
+    );
+    assert!(
+        excessive
+            .unwrap_err()
+            .contains("等待时长不得超过 10000 毫秒"),
+        "错误信息必须说明不得超过 10000 毫秒"
+    );
 }
 
 fn temp_workspace(tag: &str) -> PathBuf {

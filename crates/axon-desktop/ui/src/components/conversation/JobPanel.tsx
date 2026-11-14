@@ -162,6 +162,11 @@ const JobTerminal: React.FC<{ job: JobRow; running: boolean; laneId: string | nu
   const output = stream.text;
   const tailRunning = stream.running;
   const waitingFirstByte = tailRunning && output.length === 0 && stream.unavailable === null;
+  // 识别命令里真正的输出落盘写法：PowerShell 的 Out-File/Set-Content/Add-Content，
+  // 以及把 stdout 导向文件的重定向符。管道 `|` 不是重定向，`2>&1` 也不是：
+  // 前者只是交接给下一个命令，后者是流合并，两者都不会让终端静默。
+  const hasFileRedirection =
+    /\b(?:out-file|set-content|add-content)\b|(?:^|[^0-9>\-])>{1,2}\s*[^&|;\r\n]*\.[a-z0-9]+/i.test(job.command);
 
   return (
     <div className="disclosure-enter mx-1 mb-1 rounded-md hairline border-border bg-code-block overflow-hidden">
@@ -208,7 +213,11 @@ const JobTerminal: React.FC<{ job: JobRow; running: boolean; laneId: string | nu
       {waitingFirstByte ? (
         <div className="px-3 py-2.5 flex items-center gap-2 text-meta text-text-tertiary">
           <StateDot state="ongoing" />
-          <span className="shimmer-text-active">正在后台执行，等待输出流...</span>
+          <span className="shimmer-text-active">
+            {hasFileRedirection
+              ? '正在后台执行（命令包含输出重定向，实时标准输出可能被写入文件）...'
+              : '正在后台执行，等待输出流...'}
+          </span>
         </div>
       ) : output.length > 0 || tailRunning ? (
         <>

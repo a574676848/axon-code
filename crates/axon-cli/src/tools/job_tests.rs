@@ -68,6 +68,54 @@ fn job_output_reports_unknown_job_id() {
     );
 }
 
+/// 第一道防线：超过 10000ms 的 yield_time_ms 必须被拒绝。
+#[test]
+fn job_output_rejects_excessive_yield_time() {
+    let tool_call = job_tool_call(
+        JOB_OUTPUT_TOOL_NAME,
+        serde_json::json!({
+            JOB_TOOL_JOB_ID_FIELD: "1",
+            axon_agent_runtime::JOB_TOOL_YIELD_TIME_FIELD: 120_000,
+        }),
+    );
+
+    let receipt = execute_job_output(&tool_call, &test_context("cli-job-excessive-yield"));
+
+    assert_eq!(receipt.status, "failed");
+    assert_eq!(receipt.error_type.as_deref(), Some("invalid_arguments"));
+    assert!(
+        receipt.summary.contains("最多 10000 毫秒"),
+        "必须指出上限是 10000 毫秒：{}",
+        receipt.summary
+    );
+}
+
+/// 第二道防线：后台作业刚启动运行（elapsed < 10s）时，严禁前台传入 yield_time_ms > 0 阻塞轮询。
+#[test]
+fn job_output_rejects_immediate_blocking_wait_on_fresh_job() {
+    let owner = "cli-job-immediate-wait";
+    let job_id = start_job(owner, &long_script());
+
+    let tool_call = job_tool_call(
+        JOB_OUTPUT_TOOL_NAME,
+        serde_json::json!({
+            JOB_TOOL_JOB_ID_FIELD: job_id.to_string(),
+            axon_agent_runtime::JOB_TOOL_YIELD_TIME_FIELD: 3000,
+        }),
+    );
+
+    let receipt = execute_job_output(&tool_call, &test_context(owner));
+
+    assert_eq!(receipt.status, "failed");
+    assert!(
+        receipt.summary.contains("刚在后台跑起来") && receipt.summary.contains("不用在这里等"),
+        "必须说清作业刚起、不必在此等待：{}",
+        receipt.summary
+    );
+
+    reap_job_via_kill(owner, job_id);
+}
+
 /// 作业输出是**增量**的：已消费的批次不得在后续读取中重复出现。
 #[test]
 fn job_output_returns_incremental_batches_only_once() {

@@ -649,6 +649,89 @@ test('重放收尾负载里的用量快照：分割线与指标条重新有 toke
     }
 });
 
+test('实时观测过的轮次收到收尾负载：用量只计一次', () => {
+    // 收尾负载的用量与最后一条流同源。这条流已经随 StreamingCompleted 并入累计，
+    // 收尾时再并一份，输入、输出与缓存命中全部翻倍，分割线的读数就是假的。
+    const openTurnState = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn', turnId: 'interaction-1', nowMs: 0,
+    });
+    const usagePayload = {
+        inputTokens: 24_000,
+        cachedInputTokens: 96_000,
+        outputTokens: 4_600,
+        currentContextTokens: 782_531,
+    };
+    const streamFolded = conversationReducer(openTurnState, {
+        type: 'frames',
+        nowMs: 9_000,
+        frames: [
+            {
+                kind: 'frame',
+                subscribeId: 'interaction:interaction-1',
+                eventType: 'wire_event',
+                payloadJson: JSON.stringify({
+                    schemaVersion: '1',
+                    eventId: 'usage-1',
+                    correlationId: 'usage',
+                    session: { sessionId: 'session-1' },
+                    sequence: 1,
+                    recordedAtMs: 9_000,
+                    kind: { type: 'usageUpdate', payload: usagePayload },
+                }),
+                cursor: null,
+                replay: false,
+            },
+            {
+                kind: 'frame',
+                subscribeId: 'interaction:interaction-1',
+                eventType: 'wire_event',
+                payloadJson: JSON.stringify({
+                    schemaVersion: '1',
+                    eventId: 'stream-completed-1',
+                    correlationId: 'generation',
+                    session: { sessionId: 'session-1' },
+                    sequence: 2,
+                    recordedAtMs: 9_500,
+                    kind: {
+                        type: 'turnLifecycle',
+                        payload: {
+                            partId: 'generation:stream:1',
+                            turnId: 'provider-stream',
+                            phase: 'regularTurn',
+                            status: 'completed',
+                            uiPhase: 'generation',
+                            kind: 'StreamingCompleted',
+                            title: '生成',
+                        },
+                    },
+                }),
+                cursor: null,
+                replay: false,
+            },
+        ],
+    });
+    const completed = conversationReducer(streamFolded, {
+        type: 'frames',
+        nowMs: 10_000,
+        frames: [{
+            kind: 'frame',
+            subscribeId: 'interaction:interaction-1',
+            eventType: 'turn_completed',
+            payloadJson: JSON.stringify({
+                response: '做完了。',
+                status: 'completed',
+                usage: { ...usagePayload, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 },
+            }),
+            cursor: null,
+            replay: false,
+        }],
+    });
+    const turn = completed.turns[0];
+    assert.equal(turn.usage.inputTokens, 24_000, '输入不得重复计入');
+    assert.equal(turn.usage.outputTokens, 4_600, '输出不得重复计入');
+    assert.equal(turn.usage.cacheReadInputTokens, 96_000, '缓存命中不得重复计入');
+});
+
 test('中断轮次也保留收尾负载里的首字与速率', () => {
     const opened = conversationReducer(INITIAL_CONVERSATION, {
         type: 'open-turn', turnId: 'interaction-1', nowMs: 0,

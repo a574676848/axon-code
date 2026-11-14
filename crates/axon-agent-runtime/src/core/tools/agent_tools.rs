@@ -204,7 +204,7 @@ fn read_mcp_resource_tool_definition() -> ToolDefinition {
 
 fn mcp_list_tool_schema() -> ToolSchema {
     let mut schema = ToolSchema::object(
-        2,
+        3,
         [crate::TOOL_INTENT_FIELD],
         vec![
             schema_field(
@@ -224,10 +224,9 @@ fn mcp_list_tool_schema() -> ToolSchema {
             ),
         ],
     );
-    schema.input_schema["allOf"] = json!([{
-        "if": { "required": ["cursor"] },
-        "then": { "required": ["server"] }
-    }]);
+    // 顶层禁止 oneOf / allOf / anyOf：Anthropic Messages API 会拒收这类 input_schema
+    // （HTTP 400 upstream_invalid_request），命中一次即整轮请求报废，与工具内容无关。
+    // 「cursor 必须配 server」改由执行层 mcp_list_args 运行时校验，schema 只声明类型。
     schema.input_schema["examples"] = json!([
         { "intent": "盘点可用的 MCP 资源" },
         { "intent": "翻到该 server 的下一页资源", "server": "github", "cursor": "next-page-token" }

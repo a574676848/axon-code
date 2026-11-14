@@ -267,6 +267,7 @@ mod tests {
                 "CREATE TABLE session_runtimes (
                      session_id TEXT PRIMARY KEY,
                      last_event_sequence INTEGER NOT NULL,
+                     last_activity_at_ms INTEGER NOT NULL,
                      status TEXT NOT NULL
                  );
                  CREATE TABLE session_events (
@@ -284,10 +285,11 @@ mod tests {
         (connection, directory)
     }
 
+    /// 活动时间一律写 0：归档判定只看事件年龄与序号水位，车道不因「最近活动」被保留。
     fn insert_lane(connection: &Connection, session_id: &str, status: &str, last_sequence: i64) {
         connection
             .execute(
-                "INSERT INTO session_runtimes(session_id,last_event_sequence,status) VALUES(?1,?2,?3)",
+                "INSERT INTO session_runtimes(session_id,last_event_sequence,last_activity_at_ms,status) VALUES(?1,?2,0,?3)",
                 params![session_id, last_sequence, status],
             )
             .expect("insert runtime");

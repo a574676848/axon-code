@@ -36,7 +36,14 @@ import {
   stringField,
 } from './derive';
 import type { ConversationState, TokenUsage, TurnState } from './state';
-import { elapsedSince, patchCell, streamOnlyAssistant, upsertCell, withTurn } from './turns';
+import {
+  activeTurnIndex,
+  elapsedSince,
+  patchCell,
+  streamOnlyAssistant,
+  upsertCell,
+  withTurn,
+} from './turns';
 
 /** 助手正文：delta 为真时追加，否则整段覆盖。 */
 export function applyAssistant(
@@ -459,4 +466,29 @@ export function applyContextRollover(
     }`,
     tone: 'info',
   });
+}
+
+/**
+ * 收尾负载里的用量快照落到本轮。
+ *
+ * 累计已有观测时直接丢弃快照：它与最后一条流同源，而流收口时已经并进累计一次。
+ * 只有整轮一条观测都没有（更早的历史帧没有用量帧，或窗口把用量帧截掉）时才用它兜底，
+ * 此时先把仍在跑的流并进累计，快照按新一轮流写入，读数不会凭空消失。
+ */
+export function applyTurnCompletedUsage(
+  state: ConversationState,
+  usage: WireUsageUpdate | null,
+): ConversationState {
+  const position = activeTurnIndex(state);
+  if (position < 0) return state;
+  const folded = withTurn(state, position, (turn) => foldStreamUsage(turn));
+  if (usage === null) return folded;
+  const observed = folded.turns[position].usage;
+  const observedTokens =
+    observed.inputTokens +
+    observed.cacheReadInputTokens +
+    observed.outputTokens +
+    observed.currentContextTokens;
+  if (observedTokens > 0) return folded;
+  return withTurn(folded, position, (turn) => applyUsage(turn, usage));
 }

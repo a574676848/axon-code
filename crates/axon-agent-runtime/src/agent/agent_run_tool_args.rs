@@ -236,9 +236,19 @@ pub fn agent_run_job_tool_args_from_provider_input(
                 crate::JOB_TOOL_JOB_ID_FIELD
             )
         })?;
+    let yield_time_ms = optional_u64(value, crate::JOB_TOOL_YIELD_TIME_FIELD, tool_name)?;
+    if let Some(yield_ms) = yield_time_ms
+        && yield_ms > crate::JOB_TOOL_MAX_YIELD_TIME_MS
+    {
+        return Err(format!(
+            "{tool_name} {} 最多 {} 毫秒（10 秒）：作业跑完会自动通知你，不需要在这里空等",
+            crate::JOB_TOOL_YIELD_TIME_FIELD,
+            crate::JOB_TOOL_MAX_YIELD_TIME_MS
+        ));
+    }
     Ok(AgentRunJobToolArgs {
         job_id,
-        yield_time_ms: optional_u64(value, crate::JOB_TOOL_YIELD_TIME_FIELD, tool_name)?,
+        yield_time_ms,
         max_output_tokens: optional_usize(
             value,
             crate::JOB_TOOL_MAX_OUTPUT_TOKENS_FIELD,

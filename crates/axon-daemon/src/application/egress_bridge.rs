@@ -127,6 +127,16 @@ where
         self.stream_bridge.publish_live(event);
     }
 
+    /// 留一份可补发的瞬态读数：订阅建立时补给新订阅者。
+    pub(crate) fn remember_live(&self, event: &LiveStreamEvent, captured_at_ms: u64) {
+        self.stream_bridge.remember_live(event, captured_at_ms);
+    }
+
+    /// 轮次收口：该轮的可补发读数到此作废。
+    pub(crate) fn forget_live(&self, session_id: &DaemonSessionId, interaction_id: &InteractionId) {
+        self.stream_bridge.forget_live(session_id, interaction_id);
+    }
+
     /// 发布非持久观测帧给实时订阅者。
     pub(crate) fn publish_observation(
         &self,

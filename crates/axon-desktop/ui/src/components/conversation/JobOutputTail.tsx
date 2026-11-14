@@ -48,7 +48,11 @@ export const JobOutputTail: React.FC<{
     );
   }
   if (stream.running) {
-    return <div className="px-1 pb-1 text-meta text-text-tertiary">正在读取作业输出...</div>;
+    return (
+      <div className="px-1 pb-1 text-meta text-text-tertiary shimmer-text-active">
+        正在后台执行，等待输出流...
+      </div>
+    );
   }
   return (
     <>

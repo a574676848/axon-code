@@ -45,6 +45,7 @@ import {
   applyTokenBudgetReminder,
   applyToolCall,
   applyToolResult,
+  applyTurnCompletedUsage,
   applyUsage,
   applyUserMessage,
   foldStreamUsage,
@@ -138,15 +139,12 @@ function applyFrame(
       usage?: WireUsageUpdate;
     }>(frame.payloadJson);
     /*
-     * 用量帧是 LiveOnly，重放历史时收不到；收尾负载另存了一份同形快照。
-     * 它必须在分割线落地之前并入本轮，否则 Token 一行永远不会出现。
+     * 用量帧在实时流里是「该条 provider 流的快照」，收尾负载另存了同形的一份。
+     * 先把还在跑的那条流并入累计：累计一旦有过观测，这份快照就与最后一条流同源，
+     * 再应用一次就是重复计入；只有整轮一次都没观测过的历史才拿它兜底。
+     * 必须在分割线落地之前并入本轮，否则 Token 一行永远不会出现。
      */
-    const withUsage =
-      payload?.usage === undefined || payload.usage === null
-        ? withCursor
-        : withTurn(withCursor, activeTurnIndex(withCursor), (turn) =>
-            applyUsage(turn, payload.usage as WireUsageUpdate),
-          );
+    const withUsage = applyTurnCompletedUsage(withCursor, payload?.usage ?? null);
     return applyTurnCompleted(
       withUsage,
       payload?.response ?? null,

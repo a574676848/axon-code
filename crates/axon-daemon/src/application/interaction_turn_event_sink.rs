@@ -22,14 +22,13 @@ use super::interaction_turn_generation_watch::{
 use crate::application::egress_bridge::CommittedEventEgress;
 use crate::application::event_stream_bridge::LiveStreamEvent;
 
-/// 累积中的正文 part 类型。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LivePartKind {
-    /// assistant 正文片段。
-    Assistant,
-    /// 模型推理片段。
-    Reasoning,
-}
+#[path = "interaction_turn_event_frame_class.rs"]
+mod frame_class;
+
+use frame_class::{
+    FrameClass, LivePartKind, annotate_live_event, assistant_part_key, classify_frame,
+    live_part_text,
+};
 
 /// 一个正在累积的正文 part。
 struct LivePartState {
@@ -38,16 +37,6 @@ struct LivePartState {
     envelope: Value,
     /// 已累积的正文。
     text: String,
-}
-
-/// 一帧的投递分类。
-enum FrameClass {
-    /// 正文增量：实时投递并累积成边界快照。
-    LivePart { key: String, kind: LivePartKind },
-    /// 仅实时投递：用量与供应商状态，不进快照。
-    LiveOnly,
-    /// 必须落库的语义事件。
-    Durable,
 }
 
 /// 单个 Primary Turn 的实时 durable sink。
@@ -70,11 +59,10 @@ pub(super) struct RuntimeTurnEventSink<'a, S, P, C> {
     /// 流式事件经 sink 直接投递，不经过 `TurnExecutionOutcome`，因此收尾指标
     /// 只能在这里留痕；否则速率永远算不出来。
     last_usage: Mutex<Option<TurnUsageSnapshot>>,
-    /// 本轮最后一条用量帧的原始载荷。
-    ///
-    /// 与 `last_usage` 分开留：收尾指标只要三个数，而重放要的是整段用量形状
-    /// （上下文 token 与上下文构成都在里面），少一项就等于重放后没有读数。
+    /// 本轮最后一条用量帧的原始载荷；收尾指标与回放副本共用。
     last_usage_payload: Mutex<Option<Value>>,
+    /// 已落库的用量快照：同值不再重复写，省掉一次事务。
+    last_committed_usage: Mutex<Option<Value>>,
     /// 本轮生成账本：provider 流式窗口与累计输出。
     ///
     /// 它让在跑的这一轮不必等整轮收口就进会话级速率：每收口一条 provider 流，
@@ -131,6 +119,7 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             subagent_session_sinks,
             last_usage: Mutex::new(None),
             last_usage_payload: Mutex::new(None),
+            last_committed_usage: Mutex::new(None),
             generation_watch: Mutex::new(TurnGenerationWatch::default()),
         }
     }
@@ -197,14 +186,31 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             self.observe_generation_event(event);
             match classify_frame(&event.payload_json) {
                 FrameClass::LivePart { key, kind } => {
-                    self.publish_live_frame(event, Some((key, kind)))?
+                    self.publish_live_frame(event, Some((key, kind)))?;
                 }
-                FrameClass::LiveOnly => self.publish_live_frame(event, None)?,
+                FrameClass::LiveOnly { remember } => {
+                    let payload_json = self.publish_live_frame(event, None)?;
+                    if remember {
+                        self.remember_live_status(event, payload_json);
+                    }
+                }
+                FrameClass::Snapshot => {
+                    // 实时侧先看增量，再补一份可回放的副本：两条通道不是同一份投递。
+                    // 复用已标注的那一份载荷，同一帧不必再解析一次 JSON。
+                    let payload_json = self.publish_live_frame(event, None)?;
+                    self.commit_replay_copy(event, &payload_json);
+                }
                 FrameClass::Durable => {
                     // 边界：先用快照把已累积的正文落库，再提交这个语义事件。
                     self.retire_part_for(event);
                     self.flush_live_parts()?;
                     self.commit_and_publish_slice(std::slice::from_ref(event))?;
+                    if is_turn_terminal(event) {
+                        // 轮次已收口：可补发的读数到此作废，留着只会被下一次订阅
+                        // 补发出去，把上一轮的阶段当成新一轮的现状。
+                        self.event_egress
+                            .forget_live(self.session_id, self.interaction_id);
+                    }
                 }
             }
             if self.take_stream_settled() {
@@ -220,11 +226,14 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
     }
 
     /// 投递一帧实时事件；正文增量同时进入累积缓冲。
+    ///
+    /// 返回带 `interactionId` 标注的载荷：瞬态读数要在投递之后再留一份补发副本，
+    /// 复用同一个字符串就不必为它重新解析一遍 JSON。
     fn publish_live_frame(
         &self,
         event: &RuntimeEvent,
         part: Option<(String, LivePartKind)>,
-    ) -> Result<(), String>
+    ) -> Result<String, String>
     where
         P: EventPublisher + Send + Sync,
     {
@@ -243,7 +252,27 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
         {
             performance.record(TurnPerformanceStage::FirstEventPublished);
         }
-        Ok(())
+        Ok(payload_json)
+    }
+
+    /// 留一份可补发的瞬态读数，供之后建立的订阅补看。
+    ///
+    /// 只有 provider 状态这类低频读数走到这里（每轮几十帧）；正文增量与用量
+    /// 一律不记账，所以它不会挤进每 token 一帧的热路径。
+    fn remember_live_status(&self, event: &RuntimeEvent, payload_json: String)
+    where
+        P: EventPublisher + Send + Sync,
+        C: RuntimeClock,
+    {
+        self.event_egress.remember_live(
+            &LiveStreamEvent {
+                session_id: self.session_id.clone(),
+                interaction_id: self.interaction_id.clone(),
+                event_type: event.event_type.clone(),
+                payload_json,
+            },
+            self.clock.now_ms(),
+        );
     }
 
     /// 把一帧正文计入累积缓冲。
@@ -342,6 +371,48 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             )
             .map(|_| ())
             .map_err(|error| error.to_string())
+    }
+
+    /// 给可回放的过程读数补一份持久副本。
+    ///
+    /// 载荷由调用方复用实时投递那一份（已带 `interactionId`），这里不再解析第二遍。
+    /// 不走正文 part 的累积与边界切分；同值快照不重复写；写失败只告警。
+    fn commit_replay_copy(&self, event: &RuntimeEvent, payload: &str)
+    where
+        S: RuntimeStore + Send + Sync,
+        C: RuntimeClock,
+    {
+        let body = usage_payload(payload);
+        if let Some(body) = &body {
+            let last = self
+                .last_committed_usage
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if last.as_ref() == Some(body) {
+                return;
+            }
+        }
+        match self.store.append_interaction_events(
+            self.session_id,
+            self.host,
+            self.interaction_id,
+            self.lease_token,
+            &[(event.event_type.clone(), payload.to_owned())],
+            self.clock.now_ms(),
+        ) {
+            Ok(_) => {
+                // 只有落库成功才记下这份快照：写失败时后续同值帧仍然值得再试一次。
+                if let Some(body) = body {
+                    *self
+                        .last_committed_usage
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(body);
+                }
+            }
+            Err(error) => {
+                axon_logger::warning(&format!("用量帧持久化失败（不影响本轮）: {error:?}"));
+            }
+        }
     }
 
     /// 终态正文到达后丢掉同名累积：它的全文已经由这条事件承载，不必再写快照。
@@ -496,76 +567,30 @@ fn compute_application_ttft_ms(recorder: &AtomicTurnPerformanceRecorder) -> Opti
     }
 }
 
-/// 正文 part 的累积键。
-fn assistant_part_key(part_id: &str) -> String {
-    format!("assistant:{part_id}")
-}
-
-/// 推理 part 的累积键。
-fn reasoning_part_key(part_id: &str) -> String {
-    format!("reasoning:{part_id}")
-}
-
-/// 按 wire 载荷给一帧分类：哪些只走实时、哪些必须落库。
-fn classify_frame(payload_json: &str) -> FrameClass {
-    let Ok(envelope) = serde_json::from_str::<Value>(payload_json) else {
-        return FrameClass::Durable;
+/// 这一帧是否代表本轮收口。
+///
+/// 只有 `Durable` 帧会走到这里（每轮几十条），因此可以再解析一次载荷；
+/// 热路径上的正文增量与用量永远不经过本函数。
+fn is_turn_terminal(event: &RuntimeEvent) -> bool {
+    const TURN_COMPLETED: &str = "turn_completed";
+    if event.event_type == TURN_COMPLETED {
+        return true;
+    }
+    let Ok(envelope) = serde_json::from_str::<Value>(&event.payload_json) else {
+        return false;
     };
     let Some(kind) = envelope.get("kind") else {
-        return FrameClass::Durable;
+        return false;
     };
-    let kind_type = kind.get("type").and_then(Value::as_str).unwrap_or_default();
-    let payload = kind.get("payload");
-    let part_id = payload
-        .and_then(|payload| payload.get("partId"))
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    match kind_type {
-        "reasoningDelta" => FrameClass::LivePart {
-            key: reasoning_part_key(part_id),
-            kind: LivePartKind::Reasoning,
-        },
-        "assistantMessage"
-            if payload
-                .and_then(|payload| payload.get("delta"))
-                .and_then(Value::as_bool)
-                == Some(true) =>
-        {
-            FrameClass::LivePart {
-                key: assistant_part_key(part_id),
-                kind: LivePartKind::Assistant,
-            }
-        }
-        // 用量与供应商状态是过程读数：实时有用，回放没有价值。
-        "usageUpdate" | "providerStatus" => FrameClass::LiveOnly,
-        _ => FrameClass::Durable,
+    if kind.get("type").and_then(Value::as_str) != Some("turnLifecycle") {
+        return false;
     }
-}
-
-/// 从正文 part 的信封里取出这一帧的文本。
-fn live_part_text(envelope: &Value, kind: LivePartKind) -> Option<String> {
-    let payload = envelope.get("kind")?.get("payload")?;
-    let text = match kind {
-        LivePartKind::Assistant => payload.get("content")?,
-        LivePartKind::Reasoning => payload.get("delta")?,
-    };
-    Some(text.as_str()?.to_owned())
-}
-
-fn annotate_live_event(
-    payload_json: &str,
-    interaction_id: &InteractionId,
-) -> Result<String, String> {
-    let mut payload: Value =
-        serde_json::from_str(payload_json).map_err(|error| error.to_string())?;
-    let object = payload
-        .as_object_mut()
-        .ok_or_else(|| "Runtime 事件 payload 必须是 JSON 对象".to_owned())?;
-    object.insert(
-        "interactionId".to_owned(),
-        Value::String(interaction_id.as_str().to_owned()),
-    );
-    serde_json::to_string(&payload).map_err(|error| error.to_string())
+    matches!(
+        kind.get("payload")
+            .and_then(|payload| payload.get("status"))
+            .and_then(Value::as_str),
+        Some("completed" | "failed" | "cancelled" | "aborted")
+    )
 }
 
 impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {

@@ -200,6 +200,19 @@ fn cross_owner_read_is_rejected() {
         "拒绝原因必须是归属不符：{}",
         error_text(&error)
     );
+
+    // 只读快照同样不得绕过归属：工具侧「刚启动禁阻塞」守卫依赖这一条，
+    // 否则越权探测会拿到别人的状态与已运行时长。
+    assert!(
+        runtime
+            .tail_owned(job_id, "baseline-owner-intruder")
+            .is_none(),
+        "跨 owner 的只读快照必须不可见"
+    );
+    assert!(
+        runtime.tail_owned(job_id, owner).is_some(),
+        "归属相符时只读快照必须可见"
+    );
 }
 
 /// 跨 owner 终止必须稳定拒绝，且不得真的终止作业。
@@ -266,7 +279,7 @@ fn job_label_is_bounded_by_character_count() {
     assert!(long_label.starts_with(&bounded), "截断必须保留原标签前缀");
 }
 
-/// 等待窗口必须收敛到上界：模型不能用一个超大 yield 卡死整批工具。
+/// 等待窗口必须收敛到工具上界：模型不能用一个超大 yield 卡死整批工具。
 #[test]
 fn read_yield_is_bounded_by_max_window() {
     assert_eq!(bounded_yield(None), Duration::ZERO, "缺省不得等待");
@@ -277,8 +290,13 @@ fn read_yield_is_bounded_by_max_window() {
     );
     assert_eq!(
         bounded_yield(Some(u64::MAX)),
-        JOB_MAX_READ_YIELD,
-        "超界取值必须收敛到上界"
+        Duration::from_millis(crate::JOB_TOOL_MAX_YIELD_TIME_MS),
+        "超界取值必须收敛到工具等待上界，而不是 30 分钟的空闲判定值"
+    );
+    assert_eq!(
+        bounded_yield(Some(crate::JOB_TOOL_MAX_YIELD_TIME_MS)),
+        Duration::from_millis(crate::JOB_TOOL_MAX_YIELD_TIME_MS),
+        "恰好等于上界时必须原样保留"
     );
 }
 

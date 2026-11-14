@@ -26,6 +26,10 @@ use crate::{
 
 const ANTHROPIC_CACHE_CONTROL_BREAKPOINT_CAP: usize = 4;
 
+/// Anthropic Messages API 拒绝工具 `input_schema` 顶层的这三个组合器：
+/// 命中即整轮请求 400（upstream_invalid_request），与工具内容无关。
+const ANTHROPIC_UNSUPPORTED_TOP_LEVEL_SCHEMA_COMBINATORS: [&str; 3] = ["oneOf", "allOf", "anyOf"];
+
 impl PromptCacheProviderWireRuntime {
     /// 将 cache hint 降低到 provider wire 请求片段。
     #[must_use]
@@ -473,7 +477,7 @@ pub(crate) fn anthropic_tool(
     let mut value = serde_json::json!({
         "name": provider_tool_name(&tool.qualified_name),
         "description": tool.description,
-        "input_schema": tool.input_schema,
+        "input_schema": anthropic_input_schema(&tool.input_schema),
     });
     if cache_control {
         value["cache_control"] = serde_json::json!({
@@ -481,4 +485,32 @@ pub(crate) fn anthropic_tool(
         });
     }
     value
+}
+
+/// 把工具 `input_schema` 降解为 Anthropic 可接受的形状。
+///
+/// 内置工具由本仓自己约束，但 MCP server 的 `inputSchema` 来自第三方进程，
+/// 本仓无法保证其顶层不含 `oneOf` / `allOf` / `anyOf`。Anthropic 对这三个键
+/// 是硬拒绝而非忽略，命中一次整轮请求报废，故在 wire 边界统一剥除：只摘掉
+/// 顶层组合器，其余键（`type` / `properties` / `required` / `additionalProperties`）
+/// 原样保留；剥空时退化为宽松 object：宁可少一层校验，也不能发不出请求。
+fn anthropic_input_schema(schema: &serde_json::Value) -> serde_json::Value {
+    let Some(object) = schema.as_object() else {
+        return serde_json::json!({ "type": "object", "properties": {} });
+    };
+    let mut sanitized = object.clone();
+    let mut stripped = false;
+    for key in ANTHROPIC_UNSUPPORTED_TOP_LEVEL_SCHEMA_COMBINATORS {
+        stripped |= sanitized.remove(key).is_some();
+    }
+    if !stripped {
+        return schema.clone();
+    }
+    if sanitized.is_empty() {
+        return serde_json::json!({ "type": "object", "properties": {} });
+    }
+    sanitized
+        .entry("type")
+        .or_insert_with(|| serde_json::json!("object"));
+    serde_json::Value::Object(sanitized)
 }

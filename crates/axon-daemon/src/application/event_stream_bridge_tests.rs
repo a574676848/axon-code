@@ -1,5 +1,6 @@
 use super::*;
 
+use super::super::event_stream_bridge_live_status::REMEMBERED_LIVE_TTL_MS;
 use axon_domain::DaemonSessionId;
 
 fn event(session_id: &DaemonSessionId, sequence: u64, generation: &str) -> SessionEventRecord {
@@ -378,4 +379,104 @@ fn best_of(samples: usize, mut measure: impl FnMut() -> PublishProfile) -> Publi
         best.batch_us = best.batch_us.min(candidate.batch_us);
     }
     best
+}
+
+/// 一帧 provider 状态：只走实时通道、没有 durable 副本，正是需要补发的那类读数。
+fn provider_status(session_id: &DaemonSessionId, interaction: &str) -> LiveStreamEvent {
+    LiveStreamEvent {
+        session_id: session_id.clone(),
+        interaction_id: interaction_id(interaction),
+        event_type: "wire_event".to_owned(),
+        payload_json: format!(
+            r#"{{"interactionId":"{interaction}","kind":{{"type":"providerStatus","payload":{{"phase":"generating"}}}}}}"#
+        ),
+    }
+}
+
+#[test]
+fn subscribe_replays_the_remembered_live_status() {
+    let bridge = EventStreamBridge::new();
+    let session = DaemonSessionId::new("remember-session").expect("Session ID");
+    let live = provider_status(&session, "interaction-a");
+    bridge.remember_live(&live, now_unix_ms());
+
+    let subscription = bridge
+        .subscribe(session.clone(), interaction_id("interaction-a"), None)
+        .expect("订阅应成功");
+
+    assert_eq!(
+        subscription.try_recv().expect("新订阅应补收到瞬态读数"),
+        StreamNotification::LiveEvent(live)
+    );
+}
+
+#[test]
+fn subscribe_skips_an_expired_remembered_live_status() {
+    let bridge = EventStreamBridge::new();
+    let session = DaemonSessionId::new("stale-session").expect("Session ID");
+    let live = provider_status(&session, "interaction-a");
+    // 保鲜期外：补出去就是把早已结束的阶段当成现状，宁可空着。
+    bridge.remember_live(
+        &live,
+        now_unix_ms().saturating_sub(REMEMBERED_LIVE_TTL_MS + 1),
+    );
+
+    let subscription = bridge
+        .subscribe(session.clone(), interaction_id("interaction-a"), None)
+        .expect("订阅应成功");
+
+    assert!(subscription.try_recv().is_err(), "过期的瞬态读数不得补发");
+}
+
+#[test]
+fn forget_live_drops_the_remembered_status() {
+    let bridge = EventStreamBridge::new();
+    let session = DaemonSessionId::new("forget-session").expect("Session ID");
+    bridge.remember_live(&provider_status(&session, "interaction-a"), now_unix_ms());
+
+    bridge.forget_live(&session, &interaction_id("interaction-a"));
+
+    let subscription = bridge
+        .subscribe(session.clone(), interaction_id("interaction-a"), None)
+        .expect("订阅应成功");
+    assert!(
+        subscription.try_recv().is_err(),
+        "轮次收口后不得再补发该轮的读数"
+    );
+}
+
+#[test]
+fn remembering_a_fresh_status_prunes_the_expired_ones() {
+    let bridge = EventStreamBridge::new();
+    let session = DaemonSessionId::new("prune-session").expect("Session ID");
+    let now = now_unix_ms();
+    bridge.remember_live(
+        &provider_status(&session, "interaction-old"),
+        now.saturating_sub(REMEMBERED_LIVE_TTL_MS + 1),
+    );
+    bridge.remember_live(&provider_status(&session, "interaction-new"), now);
+
+    let stale = bridge
+        .subscribe(session.clone(), interaction_id("interaction-old"), None)
+        .expect("旧订阅应成功");
+    let fresh = bridge
+        .subscribe(session.clone(), interaction_id("interaction-new"), None)
+        .expect("新订阅应成功");
+
+    assert!(stale.try_recv().is_err(), "过期条目应在记账时被清掉");
+    assert!(fresh.try_recv().is_ok(), "新鲜条目必须还在");
+}
+
+#[test]
+fn seeding_a_live_status_does_not_disturb_the_same_session_subscription() {
+    let bridge = EventStreamBridge::new();
+    let session = DaemonSessionId::new("pair-session").expect("Session ID");
+    let subscription = bridge
+        .subscribe(session.clone(), interaction_id("interaction-a"), None)
+        .expect("订阅应成功");
+
+    bridge.remember_live(&provider_status(&session, "interaction-a"), now_unix_ms());
+
+    // 记账只写补发用的表：在线订阅者不该因此多收一帧。
+    assert!(subscription.try_recv().is_err());
 }

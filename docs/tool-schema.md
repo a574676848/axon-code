@@ -374,10 +374,11 @@ Axon 会为每次执行注入模型友好的环境变量：非 TTY 场景注入 
 
 回执契约：
 
-- 启动回执只承诺「作业已启动、当前仍在运行」：立即返回，不在 `shell_command` 的 `yield_time_ms` 上等待；返回 `job_id` 而**不返回** `session_id`，也不返回退出码。等待增量输出改由 `builtin.job_output` 的 `yield_time_ms` 控制。
+- 启动回执只承诺「作业已启动、当前仍在运行」：立即返回，不在 `shell_command` 的 `yield_time_ms` 上等待；返回 `job_id` 而**不返回** `session_id`，也不返回退出码。等待增量输出改由 `builtin.job_output` 的 `yield_time_ms` 控制。启动回执原文用模型能直接照做的说法点明「作业已在后台运行、跑完会自动通知」，模型据此直接收工或转做无依赖工作：回执同时面向模型与展开面板的摘要区，因此不写事件队列、durable 回流这类内部机制术语。
 - 回执的 `status` 只描述**这次工具调用**：启动、读取、终止本身都已经返回，因此一律是 `completed`；作业自身的状态在 `jobStatus`（`running`、`completed`、`failed`、`killed`、`timeout`、`unresponsive`、`refusal`）。两者不得混用：把作业状态写进 `status` 会让记录里的这一行永远停在 `running`，面板随后只能靠活作业名册对账，最后退化成「已结束（后端已不再持有）」加一个没有证据的「未正常退出」。
 - `builtin.job_output` 的 `status` 为 `running` 只表示作业仍在运行；退出码只在终态出现。六类退出**互不合并**：`completed`、`refusal`（执行前的准入裁决拒绝，任务未被接受）、`failed`、`killed`（显式 `job_kill`）、`timeout`（墙钟超时）、`unresponsive`（空闲超时）；`refusal` 的 `error_type` 为 `refused`（不是 `execution_failed`），后三者的 `error_type` 为 `killed`。预算耗尽（模型输出 token 上限）落在失败类，但退出原因固定为「预算耗尽（模型输出 token 上限）」，不与普通失败混同。
 - `builtin.job_output` 的等待有四种终点：有新输出、作业进入终态、本轮被中断、等待窗口结束。中断只结束**本次等待**而不是作业：回执照旧按作业当前真实状态给出（通常仍是 `running`），作业继续运行，可用同一个 `job_id` 再次读取或直接终止。没有这条通道，一次让出窗口会把整轮扣在等待里，用户的中断请求要等窗口自然结束才可能生效。
+- `yield_time_ms` 的上界是 **10000 毫秒（10 秒）**：schema 的 `maximum`、参数解析与等待时长收敛三处同源，超限在参数层直接拒绝并点名该字段，不做静默截断。刚启动、仍在 `running` 且已运行不足 10 秒的作业，带正 `yield_time_ms` 的读取会被运行时守卫驳回（`yield_time_ms` 为 0 或省略的即时快照仍可用）：后台作业的输出由桌面端与 TUI 实时呈现，完成由 durable 事件回流，前台阻塞轮询不属于这条通道。
 - 输出是**增量**的：每次读取消费并返回自上次读取以来新增的片段，单次回执不是全部输出。预览受 `max_output_tokens` 约束，超出时保留头尾并标记截断，完整内容按 `artifactPath` 读取；`fullOutputAvailable` 为假时归档本身已被容量上限截断。
 - 作业在终态后按保留窗口回收（终态保留 5 分钟，墓碑保留 30 分钟）；超窗读取提示「已结束并超出保留窗口，请重新执行命令」，与从未产生过的 ID 可区分。
 - 作业进入终态时产生**统一完成通知**，经运行时注入回流到下一轮 provider 请求，模型无需轮询；通知载荷自证归属（生产者、作业引用、终态、退出原因、有界摘要或归档引用、待读 mailbox 引用）。daemon 侧 Goal Execution 完成沿用既有的持久投递收件箱。

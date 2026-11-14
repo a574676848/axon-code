@@ -329,17 +329,33 @@ impl JobRuntime {
     #[must_use]
     pub fn tail(&self, id: JobId) -> Option<JobTail> {
         let job = self.job_handle(id)?;
+        Some(Self::snapshot_tail(id, &job))
+    }
+
+    /// 与 [`Self::tail`] 相同，但先过归属校验：不属于 `owner` 的作业按「不存在」处理。
+    ///
+    /// 模型侧工具在谈状态之前必须先过归属：直接用 [`Self::tail`] 会把越权探测
+    /// 伪装成一条正常的状态回执，顺带泄露别人的作业存在性与已运行时长。
+    /// 界面侧不走这里：车道归属由网关单独裁决。
+    #[must_use]
+    pub fn tail_owned(&self, id: JobId, owner: &str) -> Option<JobTail> {
+        let job = self.owned_job(id, owner).ok()?;
+        Some(Self::snapshot_tail(id, &job))
+    }
+
+    /// 构造只读快照；归属判定由调用方在取到句柄之前完成。
+    fn snapshot_tail(id: JobId, job: &Arc<Mutex<Job>>) -> JobTail {
         let job = job
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        Some(JobTail {
+        JobTail {
             job_id: id,
             status: job.status(),
             exit_code: job.exit_code(),
             elapsed_ms: u64::try_from(job.started.elapsed().as_millis()).unwrap_or(u64::MAX),
             artifact_path: job.execution.artifact_path(),
             full_output_available: job.execution.full_output_available(),
-        })
+        }
     }
 
     /// 读取作业的增量输出，必要时等待到终态或等待窗口结束。
@@ -352,7 +368,7 @@ impl JobRuntime {
     /// 取消结束的是**本次等待**，不是作业：作业的生命周期独立于发起它的 tool call，
     /// 因此探针命中时立即按作业当前真实状态投影回执（通常仍是 `Running`），
     /// 由调用方决定是否把本轮收口。没有这条通道，一次 `job_output` 的让出窗口
-    /// （上界为 [`JOB_MAX_READ_YIELD`]）会把整轮的工具循环扣在等待里，
+    /// （上界为 `JOB_TOOL_MAX_YIELD_TIME_MS`，10 秒）会把整轮的工具循环扣在等待里，
     /// 用户的中断请求要等到窗口结束才可能生效。
     pub fn read_until_cancelled(
         &self,
