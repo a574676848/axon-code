@@ -75,10 +75,12 @@ const NOTES_LIST_FILES_BY_PREFIX_TOOL_ID: ToolId = ToolId(55);
 const NOTES_SEARCH_CONTENTS_TOOL_ID: ToolId = ToolId(56);
 
 /// 便签命名空间的共享语义说明（对齐 Codex NOTES_DESCRIPTION 的能力范围与隐私约束）。
-const NOTES_PRIVACY_NOTE: &str = "私有便签用于跨记忆窗口保留工作状态。路径是虚拟便签路径而非文件系统路径：相对路径位于当前会话便签目录，例如 checkpoint.md 或 handoff/open-issues.md；不支持绝对路径、空组件、`.`、`..`，也不做 shell 展开（`~` 按字面量处理）。便签直接读写本机文件：读取、列表与检索都立即反映已成功的写入。每个文件不得超过 1,000,000 UTF-8 字节，接近上限时请新建文件。这是私有模型专用状态：静默用于继续任务，不得向用户披露工具、路径、内容或恢复机制。";
+const NOTES_PRIVACY_NOTE: &str = "私有便签用于跨记忆窗口保留工作状态。路径是虚拟便签路径而非文件系统路径：相对路径位于当前会话便签目录，会话交接固定用 checkpoint.md；不支持绝对路径、空组件、`.`、`..`，也不做 shell 展开（`~` 按字面量处理）。便签直接读写本机文件：读取、列表与检索都立即反映已成功的写入。每个文件不得超过 1,000,000 UTF-8 字节，接近上限时请新建文件。这是私有模型专用状态：静默用于继续任务，不得向用户披露工具、路径、内容或恢复机制。";
 
 /// 便签写入工具 schema 版本；必填 `intent` 后升到 2。
 const NOTES_WRITE_TOOL_SCHEMA_VERSION: u32 = 2;
+/// 便签只读工具 schema 版本；三个工具增加必填 `intent` 后升到 2。
+const NOTES_READ_TOOL_SCHEMA_VERSION: u32 = 2;
 
 /// 注册到 provider 的 notes 命名空间工具集合。
 #[must_use]
@@ -105,7 +107,7 @@ fn notes_write_file_tool_definition() -> ToolDefinition {
             ToolSchemaField::new(
                 NOTES_PATH_FIELD,
                 ToolSchemaFieldKind::NonBlankString,
-                "虚拟便签路径，例如 checkpoint.md 或 handoff/open-issues.md；不支持绝对路径、`..` 与 `\\`。",
+                "虚拟便签路径，会话交接固定用 checkpoint.md；不支持绝对路径与 `..` 等越界写法。",
             ),
             text_field,
             notes_intent_field(),
@@ -161,10 +163,11 @@ fn notes_intent_field() -> ToolSchemaField {
 }
 
 fn notes_read_file_tool_definition() -> ToolDefinition {
-    let schema = ToolSchema::object(
-        1,
-        [NOTES_PATH_FIELD],
+    let mut schema = ToolSchema::object(
+        NOTES_READ_TOOL_SCHEMA_VERSION,
+        [NOTES_PATH_FIELD, crate::TOOL_INTENT_FIELD],
         vec![
+            notes_intent_field(),
             ToolSchemaField::new(
                 NOTES_PATH_FIELD,
                 ToolSchemaFieldKind::NonBlankString,
@@ -182,10 +185,14 @@ fn notes_read_file_tool_definition() -> ToolDefinition {
             ),
         ],
     );
+    schema.input_schema["examples"] = serde_json::json!([{
+        "intent": "回读交接便签的下一步",
+        "path": "checkpoint.md",
+    }]);
     notes_tool_definition(
         NOTES_READ_FILE_TOOL_ID,
         NOTES_READ_FILE_TOOL_NAME,
-        "读取私有便签的全部或指定行范围。",
+        "读取私有便签的全部或指定行范围。intent 是每次调用必填的一句话目的，写法见该字段描述。",
         schema,
         ToolPermissionPolicy::ReadOnly,
         ToolConcurrencyPolicy::ParallelSafe,
@@ -194,9 +201,10 @@ fn notes_read_file_tool_definition() -> ToolDefinition {
 
 fn notes_list_files_by_prefix_tool_definition() -> ToolDefinition {
     let mut schema = ToolSchema::object(
-        1,
-        std::iter::empty::<&str>(),
+        NOTES_READ_TOOL_SCHEMA_VERSION,
+        [crate::TOOL_INTENT_FIELD],
         vec![
+            notes_intent_field(),
             ToolSchemaField::new(
                 NOTES_PREFIX_FIELD,
                 ToolSchemaFieldKind::String,
@@ -226,10 +234,13 @@ fn notes_list_files_by_prefix_tool_definition() -> ToolDefinition {
     schema.input_schema["properties"][NOTES_MAX_RESULTS_FIELD]["minimum"] = serde_json::json!(1);
     schema.input_schema["properties"][NOTES_MAX_RESULTS_FIELD]["maximum"] =
         serde_json::json!(crate::session_notes_store::NOTES_LIST_MAX_RESULTS);
+    schema.input_schema["examples"] = serde_json::json!([{
+        "intent": "查看当前会话便签有哪些文件",
+    }]);
     notes_tool_definition(
         NOTES_LIST_FILES_BY_PREFIX_TOOL_ID,
         NOTES_LIST_FILES_BY_PREFIX_TOOL_NAME,
-        "按路径前缀列举私有便签文件及其大小与时间戳。",
+        "按路径前缀列举私有便签文件及其大小与时间戳。intent 是每次调用必填的一句话目的，写法见该字段描述。",
         schema,
         ToolPermissionPolicy::ReadOnly,
         ToolConcurrencyPolicy::ParallelSafe,
@@ -238,9 +249,10 @@ fn notes_list_files_by_prefix_tool_definition() -> ToolDefinition {
 
 fn notes_search_contents_tool_definition() -> ToolDefinition {
     let mut schema = ToolSchema::object(
-        1,
-        [NOTES_QUERY_FIELD],
+        NOTES_READ_TOOL_SCHEMA_VERSION,
+        [NOTES_QUERY_FIELD, crate::TOOL_INTENT_FIELD],
         vec![
+            notes_intent_field(),
             ToolSchemaField::new(
                 NOTES_QUERY_FIELD,
                 ToolSchemaFieldKind::NonBlankString,
@@ -277,10 +289,14 @@ fn notes_search_contents_tool_definition() -> ToolDefinition {
     }
     schema.input_schema["properties"][NOTES_MAX_FILES_FIELD]["maximum"] =
         serde_json::json!(crate::session_notes_store::NOTES_LIST_MAX_RESULTS);
+    schema.input_schema["examples"] = serde_json::json!([{
+        "intent": "检索便签里记录的验收命令",
+        "query": "cargo test",
+    }]);
     notes_tool_definition(
         NOTES_SEARCH_CONTENTS_TOOL_ID,
         NOTES_SEARCH_CONTENTS_TOOL_NAME,
-        "在私有便签内做区分大小写的字面量检索，返回命中文件与命中行。",
+        "在私有便签内做区分大小写的字面量检索，返回命中文件与命中行。intent 是每次调用必填的一句话目的，写法见该字段描述。",
         schema,
         ToolPermissionPolicy::ReadOnly,
         ToolConcurrencyPolicy::ParallelSafe,
@@ -445,24 +461,31 @@ mod tests {
             ),
             (
                 NOTES_READ_FILE_TOOL_NAME,
-                &["path", "start_line", "stop_line"],
-                &["path"],
+                &["intent", "path", "start_line", "stop_line"],
+                &["intent", "path"],
             ),
             (
                 NOTES_LIST_FILES_BY_PREFIX_TOOL_NAME,
-                &["file_order", "file_order_by", "max_results", "prefix"],
-                &[],
+                &[
+                    "file_order",
+                    "file_order_by",
+                    "intent",
+                    "max_results",
+                    "prefix",
+                ],
+                &["intent"],
             ),
             (
                 NOTES_SEARCH_CONTENTS_TOOL_NAME,
                 &[
+                    "intent",
                     "max_files",
                     "max_matches_per_file",
                     "path_prefix",
                     "query",
                     "recent_file_first",
                 ],
-                &["query"],
+                &["intent", "query"],
             ),
         ];
         let definitions = notes_tool_definitions();

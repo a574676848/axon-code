@@ -561,6 +561,9 @@ struct NotesWriteFileInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NotesReadFileInput {
+    /// 模型自述的调用目的；schema 必填，但只用于界面折叠态展示，执行侧接受并忽略。
+    #[serde(default, rename = "intent")]
+    _intent: String,
     path: String,
     #[serde(default)]
     start_line: Option<i64>,
@@ -571,6 +574,9 @@ struct NotesReadFileInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NotesListFilesInput {
+    /// 模型自述的调用目的；schema 必填，但只用于界面折叠态展示，执行侧接受并忽略。
+    #[serde(default, rename = "intent")]
+    _intent: String,
     #[serde(default)]
     prefix: Option<String>,
     #[serde(default)]
@@ -584,6 +590,9 @@ struct NotesListFilesInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NotesSearchContentsInput {
+    /// 模型自述的调用目的；schema 必填，但只用于界面折叠态展示，执行侧接受并忽略。
+    #[serde(default, rename = "intent")]
+    _intent: String,
     query: String,
     #[serde(default)]
     max_matches_per_file: Option<usize>,

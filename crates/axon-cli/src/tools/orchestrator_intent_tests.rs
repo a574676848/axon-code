@@ -19,6 +19,9 @@ fn every_intent_tool_accepts_the_intent_field_before_execution() {
         "search",
         "notes_write_file",
         "notes_append_to_file",
+        "notes_read_file",
+        "notes_list_files_by_prefix",
+        "notes_search_contents",
         "send_message",
         "delegate_to_fast",
         "spawn_agent",
@@ -97,6 +100,18 @@ fn every_intent_tool_accepts_the_intent_field_before_execution() {
         (
             "builtin.notes_append_to_file",
             r#"{"path":"checkpoint.md","text":"下一步动作","intent":"补充交接便签"}"#,
+        ),
+        (
+            "builtin.notes_read_file",
+            r#"{"intent":"回读交接便签","path":"checkpoint.md"}"#,
+        ),
+        (
+            "builtin.notes_list_files_by_prefix",
+            r#"{"intent":"查看便签文件清单"}"#,
+        ),
+        (
+            "builtin.notes_search_contents",
+            r#"{"intent":"检索便签里的验收命令","query":"cargo"}"#,
         ),
         (
             "builtin.memory_search",

@@ -87,11 +87,12 @@ pub fn tool_declares_intent(tool_name: &str) -> bool {
 
 /// 从工具调用参数里取出模型自述的目的概要。
 ///
-/// 未声明该字段的工具一律返回 `None`：MCP 工具与第三方 schema 里的同名参数
-/// 不属于本契约，界面按各自规则回落，不被这里误覆盖。
+/// 内置工具即使没有在 schema 里声明该字段，模型也可能按家族惯性带上它（例如把 `intent`
+/// 发给便签只读工具）；展示层照旧认这一句话，总比摆一串原始 JSON 强。MCP 工具与第三方
+/// schema 里的同名参数不属于本契约，界面按各自规则回落，不被这里误覆盖。
 #[must_use]
 pub fn tool_call_intent(tool_name: &str, arguments_json: &str) -> Option<String> {
-    if !tool_declares_intent(tool_name) {
+    if !tool_declares_intent(tool_name) && !tool_name.trim().starts_with(BUILTIN_NAMESPACE_PREFIX) {
         return None;
     }
     let value: Value = serde_json::from_str(arguments_json).ok()?;
@@ -151,10 +152,9 @@ pub fn tool_row_title_carries_primary(tool_name: &str, arguments_json: &str) -> 
     if rules().targets.contains_key(name) {
         return true;
     }
-    tool_declares_intent(name)
-        && serde_json::from_str::<Value>(arguments_json)
-            .ok()
-            .is_some_and(|value| intent_from_value(&value).is_some())
+    // 与 tool_call_intent 同一口径：内置工具带上 intent 时，标题行已经承载主事实，
+    // 折叠态不必再重复参数行。
+    tool_call_intent(tool_name, arguments_json).is_some()
 }
 
 /// 从已解析的参数对象里取出并裁剪目的概要；空值与缺失同义。
@@ -224,6 +224,13 @@ mod tests {
         assert_eq!(
             tool_call_intent("builtin.read_file", r#"{"path":"a"}"#),
             None
+        );
+        // 内置工具没声明该字段也会被模型按家族惯性带上：展示层认这一句话，
+        // 免得折叠态退化成原始 JSON。
+        assert_eq!(
+            tool_call_intent("builtin.read_file", r#"{"path":"a","intent":"看一眼源码"}"#)
+                .as_deref(),
+            Some("看一眼源码")
         );
         assert!(tool_declares_intent("builtin.notes_write_file"));
         assert!(!tool_declares_intent("builtin.read_file"));

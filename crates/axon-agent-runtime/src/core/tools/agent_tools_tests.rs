@@ -567,6 +567,15 @@ fn builtin_schema_validation_matches_conditional_runtime_contracts() {
         ),
         ("builtin.list_agents", json!({})),
         ("builtin.list_mcp_resources", json!({})),
+        (
+            "builtin.notes_read_file",
+            json!({ "path": "checkpoint.md" }),
+        ),
+        ("builtin.notes_list_files_by_prefix", json!({})),
+        (
+            "builtin.notes_search_contents",
+            json!({ "query": "并行改动" }),
+        ),
         ("builtin.history_list_windows", json!({ "limit": 5 })),
         (
             "builtin.history_search_contents",
