@@ -319,9 +319,29 @@ try {
         Start-Sleep -Milliseconds 500
     }
     Move-Item $stagedRelease $releaseDir
+    <#
+     * 旧版本目录属于残留，不参与本次生效路径：新版已经落位，删不掉只是多占一份磁盘。
+     * Windows 在 Stop-Process 之后仍可能短暂持有映像句柄，这里按名再停一次并有限重试，
+     * 仍失败只告警不中止，避免一次顺手的清理把已经装好的版本判成安装失败。
+    #>
     Get-ChildItem -LiteralPath $versionsDir -Directory -ErrorAction SilentlyContinue |
         Where-Object { -not $_.Name.StartsWith('.') -and $_.Name -ne $releaseId } |
-        Remove-Item -Recurse -Force
+        ForEach-Object {
+            $stale = $_
+            $removed = $false
+            for ($attempt = 0; $attempt -lt 5 -and -not $removed; $attempt++) {
+                try {
+                    Remove-Item $stale.FullName -Recurse -Force -ErrorAction Stop
+                    $removed = $true
+                } catch {
+                    Get-Process axon-desktop -ErrorAction SilentlyContinue | Stop-Process -Force
+                    Start-Sleep -Milliseconds 400
+                }
+            }
+            if (-not $removed) {
+                Write-Host "[axon] 旧版本目录仍被占用，已跳过清理：$($stale.Name)" -ForegroundColor Yellow
+            }
+        }
     Copy-Item $builtLauncher "$launcherPath.tmp.$PID" -Force
     Move-Item "$launcherPath.tmp.$PID" $launcherPath -Force
     $currentTmp = Join-Path $installRoot ".current.$PID.json"
