@@ -419,9 +419,7 @@ fn job_tool_arguments_reject_session_ids_and_non_positive_ids() {
         "超出 10000ms 的等待时间必须在参数层被拦截"
     );
     assert!(
-        excessive
-            .unwrap_err()
-            .contains("10000 毫秒（10 秒）"),
+        excessive.unwrap_err().contains("10000 毫秒（10 秒）"),
         "错误信息必须点名 10000 毫秒（10 秒）这个上限，模型才知道该传多少"
     );
 }
