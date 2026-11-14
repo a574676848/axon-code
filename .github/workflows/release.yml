@@ -21,7 +21,7 @@ env:
 
 jobs:
   # ──────────────────────────────────────────────
-  # 阶段零：发布前置门禁——该提交的 CI 必须已经通过
+  # 阶段零：发布前置门禁——该 tag 触发的那条 CI 必须已经通过
   # ──────────────────────────────────────────────
   gate:
     name: Gate (CI green)
@@ -29,32 +29,60 @@ jobs:
     timeout-minutes: 100
 
     steps:
-      - name: 校验该提交的 CI 已通过
+      - name: 校验该 tag 触发的 CI 已通过
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
         shell: bash
         run: |
           set -euo pipefail
+          # 判定范围必须收窄到「本次 ref 触发的那条 ci.yml」。
+          # 同一个 commit 上同时还挂着一条 master 直推的 CI：它只跑 Docs 与 Quick Gate，
+          # 约一分钟就绿。按 commit 判定会在 tag 全量矩阵还没跑完时就放行发布，
+          # 门禁形同虚设（0.1.8 就是这样带着红灯的提交发了包）。
+          #
+          # 过滤条件三条同时成立：ci.yml（release.yml 自己的运行也在同一 commit 上）、
+          # push 事件、head_branch 与本次 ref 名一致（tag 推送时 head_branch 就是 tag 名）。
+          # 手动触发时 ref 是分支，按同一口径匹配该分支的直推 CI。
           deadline=$((SECONDS + 5400))
+          # 触发到运行记录可查有秒级延迟，这里按首次成功取数起算给十分钟窗口；
+          # 超过窗口仍没有对应运行，说明 ci.yml 的触发条件根本没覆盖这个 ref。
+          observed_at=0
           while :; do
-            runs=$(gh run list --repo "$REPO" --commit "$SHA" --workflow ci.yml \
-                     --limit 20 --json status,conclusion 2>/dev/null || echo '[]')
-            ok=$(printf '%s' "$runs" | python3 -c 'import json,sys;print(sum(1 for r in json.load(sys.stdin) if r.get("conclusion")=="success"))')
-            pending=$(printf '%s' "$runs" | python3 -c 'import json,sys;print(sum(1 for r in json.load(sys.stdin) if r.get("status")!="completed"))')
-            bad=$(printf '%s' "$runs" | python3 -c 'import json,sys;print(sum(1 for r in json.load(sys.stdin) if r.get("conclusion") in ("failure","cancelled","timed_out","startup_failure")))')
-            echo "CI runs for ${SHA}: success=${ok} pending=${pending} failed=${bad}"
-            if [ "${ok}" -gt 0 ]; then
-              echo "CI 已通过，放行发布"
-              exit 0
+            payload=$(gh api "repos/${REPO}/actions/runs?head_sha=${SHA}&per_page=100" 2>/dev/null || echo '{}')
+            if [ "${payload}" = "{}" ]; then
+              echo "读取运行记录失败，稍后重试"
+            else
+              counts=$(printf '%s' "${payload}" | REF_NAME="${REF_NAME}" python3 -c 'import json,os,sys; n=os.environ["REF_NAME"]; rs=[r for r in json.load(sys.stdin).get("workflow_runs",[]) if (r.get("path") or "").endswith("ci.yml") and r.get("event")=="push" and r.get("head_branch")==n]; print(len(rs), sum(1 for r in rs if r.get("conclusion")=="success"), sum(1 for r in rs if r.get("status")!="completed"), sum(1 for r in rs if r.get("conclusion") in ("failure","cancelled","timed_out","startup_failure")))' 2>/dev/null || echo '')
+              if [ -z "${counts}" ]; then
+                echo "运行记录解析失败，稍后重试"
+              else
+                read -r matched ok pending bad <<<"${counts}"
+                echo "ref=${REF_TYPE}:${REF_NAME} sha=${SHA} 范围内 CI：matched=${matched} success=${ok} pending=${pending} failed=${bad}"
+                if [ "${ok}" -gt 0 ]; then
+                  echo "该 ref 的 CI 已通过，放行发布"
+                  exit 0
+                fi
+                if [ "${matched}" -gt 0 ] && [ "${pending}" -eq 0 ]; then
+                  echo "::error::该 ref 的 CI 已结束但没有成功记录（failed=${bad}），拒绝发布"
+                  exit 1
+                fi
+                if [ "${matched}" -eq 0 ]; then
+                  if [ "${observed_at}" -eq 0 ]; then
+                    observed_at=${SECONDS}
+                  elif [ $((SECONDS - observed_at)) -ge 600 ]; then
+                    echo "::error::十分钟内没有出现 ${REF_TYPE}:${REF_NAME} 触发的 ci.yml 运行，检查 ci.yml 的触发条件"
+                    exit 1
+                  fi
+                fi
+              fi
             fi
-            if [ "${pending}" -eq 0 ]; then
-              echo "::error::该提交没有通过的 CI 记录（failed=${bad}），拒绝发布"
-              exit 1
-            fi
+
             if [ "${SECONDS}" -ge "${deadline}" ]; then
-              echo "::error::等待 CI 超时（90 分钟），拒绝发布"
+              echo "::error::等待该 ref 的 CI 超时（90 分钟），拒绝发布"
               exit 1
             fi
             sleep 30
