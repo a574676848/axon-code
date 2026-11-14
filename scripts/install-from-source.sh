@@ -28,6 +28,49 @@ restore_daemon() {
 }
 trap restore_daemon EXIT
 
+# 安装成功后把桌面端拉起来。
+#
+# 只对有图形会话的机器拉起：Linux 看 DISPLAY 与 WAYLAND_DISPLAY，macOS 视为可用，
+# 其它平台（含无图形会话的服务器与远程会话）跳过。入口一律走稳定 launcher 的 desktop
+# 转发，stdio 全部丢弃并放到后台，安装脚本不等待窗口出现，也不会被终端关闭时的 SIGHUP 带走。
+# 拉起只做尽力验证：2 秒内 launcher 提前退出就告警，绝不改写安装结果。
+launch_desktop() {
+    if [ ! -x "${LAUNCHER_BIN}" ]; then
+        printf '%s\n' '[axon] 未找到稳定 launcher，跳过拉起桌面端。'
+        return 0
+    fi
+    case "$(uname -s)" in
+        Linux)
+            if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+                printf '%s\n' '[axon] 当前没有图形会话（DISPLAY 与 WAYLAND_DISPLAY 均为空），跳过拉起桌面端。'
+                return 0
+            fi
+            ;;
+        Darwin) ;;
+        *)
+            printf '%s\n' '[axon] 当前平台不支持自动拉起桌面端，跳过。'
+            return 0
+            ;;
+    esac
+    if command -v pgrep >/dev/null 2>&1 && pgrep -x axon-desktop >/dev/null 2>&1; then
+        printf '%s\n' '[axon] 桌面端已在运行，不重复拉起。'
+        return 0
+    fi
+    nohup "${LAUNCHER_BIN}" desktop >/dev/null 2>&1 &
+    desktop_launcher_pid=$!
+    desktop_attempts=0
+    while [ "${desktop_attempts}" -lt 10 ]; do
+        if ! kill -0 "${desktop_launcher_pid}" 2>/dev/null; then
+            printf '%s\n' '[axon] 桌面端启动后退出了，请手动运行 axon desktop 排查原因。'
+            return 0
+        fi
+        sleep 0.2
+        desktop_attempts=$((desktop_attempts + 1))
+    done
+    printf '%s\n' '[axon] 桌面端已启动。'
+    return 0
+}
+
 # 准备阶段一律不动运行态。
 #
 # 编译要好几分钟，期间停掉 Daemon 等于把后台任务、定时调度与远控连接一起掐断；
@@ -131,3 +174,4 @@ fi
 "${LAUNCHER_BIN}" daemon install
 "${LAUNCHER_BIN}" daemon start
 printf '%s\n' "[axon] 源码安装完成：${RELEASE_DIR}"
+launch_desktop

@@ -144,16 +144,134 @@ function parseToolJson(text: string): unknown | null {
 const SHELL_RECEIPT_FIELDS =
     / (exit_code=|timed_out=|output_handler=|output_tokens=|output_savings_pct=|stdout_truncated=|stdout_chars=|stderr_truncated=|stderr_chars=|full_output_available=|full_output_truncated=|full_output_failed=|stdout=|stderr=)/g;
 
-/** 把单行的 shell 回执按字段拆行；PowerShell 的裸 CR 一并归一成 LF。 */
-function formatShellReceipt(value: string): string {
-    return value.replace(/\r\n?/g, '\n').replace(SHELL_RECEIPT_FIELDS, '\n$1');
+/**
+ * 回执里的执行细节字段：处理器、预算、截断标记、原始字符数。
+ *
+ * 它们对「命令说了什么」没有信息量，却会把正文压到十几行之下，因此界面不铺；
+ * 其中真正影响结论的两项（是否截断、归档是否可用）单独折成一句说明。
+ */
+const SHELL_RECEIPT_META_KEYS = new Set([
+    'shell command',
+    'elapsed_ms',
+    'exit_code',
+    'timed_out',
+    'output_handler',
+    'output_tokens',
+    'output_savings_pct',
+    'stdout_truncated',
+    'stdout_chars',
+    'stderr_truncated',
+    'stderr_chars',
+    'full_output_available',
+    'full_output_truncated',
+    'full_output_failed',
+]);
+
+/** 以这些字段开头的文本就是 shell 回执；两者都是从回执自身认出来的，不靠工具名。 */
+const SHELL_RECEIPT_HEAD = /^(shell command=|output_handler=|full_output_available=|stdout_chars=)/;
+
+/** 回执首行是否 shell 回执。 */
+export function isShellReceipt(value: string): boolean {
+    return SHELL_RECEIPT_HEAD.test(value.trimStart());
+}
+
+/** 把回执按字段拆行；PowerShell 的裸 CR 一并归一成 LF。 */
+function shellReceiptLines(value: string): string[] {
+    return value
+        .replace(/\r\n?/g, '\n')
+        .replace(SHELL_RECEIPT_FIELDS, '\n$1')
+        .split('\n');
+}
+
+/** 读一行的元数据键名；不是元数据行时返回 null。 */
+function metaKeyOf(line: string): string | null {
+    const match = /^([a-z_ ]+)=/.exec(line);
+    if (match === null) return null;
+    return SHELL_RECEIPT_META_KEYS.has(match[1]) ? match[1] : null;
+}
+
+/** 从 `stdout_chars=463/12000` 这种读数里取原始长度；取不到返回 null。 */
+function originalChars(chars: string): number | null {
+    const total = chars.split('/').pop();
+    const parsed = Number(total);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+/**
+ * 只保留命令真正写出的正文。
+ *
+ * 回执把执行细节与输出挤在同一行里，铺出来是十行元数据压着一行结果。这里按字段
+ * 归类：`stdout=` 与 `stderr=` 之后的内容原样保留（含其中的空行与换行），其余键值
+ * 一律不展示，命令本身由「命令」区块单独承担。
+ *
+ * 但「看到的不是全部」必须说出来：截断与归档缺失各折成末尾一句说明，否则界面在
+ * 无声地撒谎。
+ */
+export function shellOutputBody(value: string): string {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    let stream: 'stdout' | 'stderr' = 'stdout';
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
+    let stdoutOriginal: number | null = null;
+    let archiveUnavailable = false;
+
+    for (const line of shellReceiptLines(value)) {
+        if (line.startsWith('stdout=')) {
+            stream = 'stdout';
+            stdout.push(line.slice('stdout='.length));
+            continue;
+        }
+        if (line.startsWith('stderr=')) {
+            stream = 'stderr';
+            const rest = line.slice('stderr='.length);
+            if (rest.length > 0) stderr.push(rest);
+            continue;
+        }
+        const key = metaKeyOf(line);
+        if (key !== null) {
+            if (key === 'stdout_truncated') stdoutTruncated = line.endsWith('=true');
+            if (key === 'stderr_truncated') stderrTruncated = line.endsWith('=true');
+            if (key === 'stdout_chars') stdoutOriginal = originalChars(line.slice(key.length + 1));
+            if (key === 'full_output_available') archiveUnavailable = line.endsWith('=false');
+            continue;
+        }
+        // 其余行是当前这一路正文的续行；首行落在元数据之前时按 stdout 处理。
+        (stream === 'stdout' ? stdout : stderr).push(line);
+    }
+
+    const sections: string[] = [];
+    const stdoutText = stdout.join('\n').trimEnd();
+    const stderrText = stderr.join('\n').trimEnd();
+    if (stdoutText.length > 0) sections.push(stdoutText);
+    if (stderrText.length > 0) {
+        if (sections.length > 0) sections.push('');
+        sections.push('--- stderr ---', stderrText);
+    }
+
+    const notes: string[] = [];
+    if (stdoutTruncated) {
+        notes.push(
+            stdoutOriginal === null
+                ? '（stdout 已截断）'
+                : `（stdout 已截断，原文 ${stdoutOriginal} 字符）`,
+        );
+    }
+    if (stderrTruncated) notes.push('（stderr 已截断）');
+    if (archiveUnavailable) notes.push('（完整输出归档不可用）');
+    if (notes.length > 0) {
+        if (sections.length > 0) sections.push('');
+        sections.push(...notes);
+    }
+
+    return sections.length > 0 ? sections.join('\n') : '（无输出）';
 }
 
 /** JSON 只调整缩进，Shell 与其他文本不改写原始语义。 */
 export function formatToolContent(value: string): { code: string; language: string | null } {
     const text = value.trim();
-    if (text.startsWith('shell command=')) {
-        return { code: formatShellReceipt(value), language: 'shell' };
+    if (isShellReceipt(text)) {
+        return { code: shellOutputBody(value), language: 'shell' };
     }
     if (text.startsWith('{') || text.startsWith('[')) {
         const parsed = parseToolJson(text);

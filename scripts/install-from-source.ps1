@@ -82,6 +82,49 @@ if ($installedVersionDir) {
     }
 }
 
+<#
+ * 安装成功后把桌面端拉起来。
+ *
+ * 只在本次装了桌面端组件时执行；已有安装树内的桌面端进程时不重复拉起，避免开出两个窗口。
+ * 入口一律走稳定 launcher 的 desktop 转发：它会脱离控制台并丢弃标准输入输出，因此既不占用
+ * 安装会话的输出，也不会因为控制台被选中写满而把安装脚本卡住，后续升级换目录也不影响入口。
+ * 提权重入的实例不调用本函数，改由外层未提权进程拉起，界面因此不会继承管理员令牌。
+#>
+function Start-AxonDesktop {
+    if (-not $plan.InstallDesktop) { return }
+    <#
+     * 拉起失败只告警，绝不改写已经完成的安装：本函数在成功路径末尾被调用，
+     * 一旦异常逃逸到外层 catch，会把「装好了」判成「装失败了」。
+    #>
+    try {
+        $running = @(Get-Process axon-desktop -ErrorAction SilentlyContinue | Where-Object {
+                $_.Path -and $_.Path.StartsWith($installRoot + '\', [StringComparison]::OrdinalIgnoreCase)
+            })
+        if ($running.Count -gt 0) {
+            Write-Host "[axon] 桌面端已在运行（PID $($running[0].Id)），不重复启动。" -ForegroundColor Cyan
+            return
+        }
+        Start-Process -FilePath $launcherPath -ArgumentList "desktop" -WorkingDirectory $installRoot | Out-Null
+        $launchDeadline = [DateTime]::UtcNow.AddSeconds(10)
+        while ($true) {
+            Start-Sleep -Milliseconds 200
+            $started = @(Get-Process axon-desktop -ErrorAction SilentlyContinue | Where-Object {
+                    $_.Path -and $_.Path.StartsWith($installRoot + '\', [StringComparison]::OrdinalIgnoreCase)
+                })
+            if ($started.Count -gt 0) {
+                Write-Host "[axon] 桌面端已启动（PID $($started[0].Id)）。" -ForegroundColor Cyan
+                return
+            }
+            if ([DateTime]::UtcNow -gt $launchDeadline) {
+                Write-Host "[axon] 桌面端未能在 10 秒内启动，请手动运行 axon desktop 排查原因。" -ForegroundColor Yellow
+                return
+            }
+        }
+    } catch {
+        Write-Host "[axon] 拉起桌面端失败：$($_.Exception.Message)。请手动运行 axon desktop。" -ForegroundColor Yellow
+    }
+}
+
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 if ($ExpectedUserSid -and $identity.User.Value -ne $ExpectedUserSid) { throw "提权账号与原登录用户不同，已停止安装。" }
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
@@ -99,6 +142,8 @@ if ($plan.InstallBackend -and -not $principal.IsInRole([Security.Principal.Windo
     $process = Start-Process -FilePath (Join-Path $PSHOME "pwsh.exe") -ArgumentList @("-NoProfile", "-EncodedCommand", $encoded) -Verb RunAs -WindowStyle Hidden -Wait -PassThru
     if (Test-Path $logPath) { Get-Content $logPath }
     if ($process.ExitCode -ne 0) { throw "源码安装失败，退出码：$($process.ExitCode)" }
+    # 提权只服务服务端安装：桌面端由本进程（原登录用户、未提权）拉起，界面不继承管理员令牌。
+    Start-AxonDesktop
     return
 }
 $root = Split-Path -Parent $PSScriptRoot
@@ -203,8 +248,29 @@ try {
         $version = [string]$cliPackage.version
     }
     if ($plan.InstallDesktop) {
-        & $desktop --self-check *> $null
-        if ($LASTEXITCODE -ne 0) { throw "桌面端自检失败" }
+        <#
+         * 桌面端是 GUI 子系统二进制：PowerShell 用 & 调用不会等待进程结束，
+         * $LASTEXITCODE 保留的是上一条命令的值，自检会空转、永远判不出失败。
+         * 这里必须 Start-Process -Wait 读 ExitCode，并把单行 JSON 留在暂存目录里备查。
+        #>
+        $selfCheckOut = Join-Path $stagingRoot "desktop-self-check.json"
+        $selfCheckErr = Join-Path $stagingRoot "desktop-self-check.err"
+        $selfCheckArgs = @{
+            FilePath               = $desktop
+            ArgumentList           = "--self-check"
+            Wait                   = $true
+            PassThru               = $true
+            NoNewWindow            = $true
+            RedirectStandardOutput = $selfCheckOut
+            RedirectStandardError  = $selfCheckErr
+        }
+        $selfCheck = Start-Process @selfCheckArgs
+        if ($selfCheck.ExitCode -ne 0) {
+            $detail = Get-Content -LiteralPath $selfCheckOut -Raw -ErrorAction SilentlyContinue
+            if (-not $detail) { $detail = Get-Content -LiteralPath $selfCheckErr -Raw -ErrorAction SilentlyContinue }
+            $detail = ("$detail" -replace '\s+', ' ').Trim()
+            throw "桌面端自检失败（退出码 $($selfCheck.ExitCode)）：$detail"
+        }
     }
     $releaseId = $version
     $releaseDir = Join-Path $versionsDir $releaseId
@@ -291,6 +357,8 @@ try {
         Write-Host "[axon] 仅安装服务端：未铺放桌面端二进制（本脚本不创建桌面快捷方式）。" -ForegroundColor Cyan
     }
     Write-Host "[axon] 源码安装完成（$componentText）：$releaseDir" -ForegroundColor Green
+    # 提权重入的实例到此为止：桌面端由外层未提权进程拉起，避免界面继承管理员令牌。
+    if (-not $ExpectedUserSid) { Start-AxonDesktop }
 } catch {
     if ($taskDisabled) { & schtasks.exe /change /tn AxonDaemon /enable 2>$null | Out-Null }
     if ($daemonStopped -and (Test-Path $launcherPath)) { & $launcherPath daemon start 2>$null | Out-Host }

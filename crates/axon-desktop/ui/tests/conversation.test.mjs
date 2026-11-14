@@ -96,7 +96,7 @@ test('格式化 JSON 不改变数据，Shell 不改变换行和转义', () => {
     assert.equal(formatToolContent('{"incomplete":').code, '{"incomplete":');
 });
 
-test('裸换行 JSON 仍可格式化，shell 回执按字段拆行', () => {
+test('裸换行 JSON 仍可格式化，shell 回执只留输出正文', () => {
     const multiline = '{"intent":"整理","path":"checkpoint.md","text":"# 路线\n\n- 第一条\n- 第二条"}';
     const formattedJson = formatToolContent(multiline);
     assert.equal(formattedJson.language, 'json');
@@ -106,9 +106,39 @@ test('裸换行 JSON 仍可格式化，shell 回执按字段拆行', () => {
     const receipt = 'shell command=git status exit_code=0 timed_out=false output_tokens=12/34 stdout=## main\n M file.txt stderr=';
     const formattedShell = formatToolContent(receipt);
     assert.equal(formattedShell.language, 'shell');
-    assert.match(formattedShell.code, /^shell command=git status\nexit_code=0\n/);
-    assert.match(formattedShell.code, /\nstdout=## main\n M file.txt\nstderr=$/);
-    assert.equal(formattedShell.code.includes('\r'), false);
+    // 命令与执行细节都不进输出区：命令由「命令」区块承担，细节只压版面。
+    assert.equal(formattedShell.code, '## main\n M file.txt');
+    assert.equal(formattedShell.code.includes('exit_code'), false);
+});
+
+test('多行元数据回执只留输出，截断与归档缺失仍要说出来', () => {
+    const receipt = [
+        'output_handler=head_tail',
+        'output_tokens=116/116',
+        'stdout_truncated=true',
+        'stdout_chars=463/12000',
+        'stderr_truncated=false',
+        'full_output_available=false',
+        'full_output_failed=false',
+        'stdout=731e5f54f 发布 0.1.5：记忆反思重构',
+        'acca2537e feat(persona)：场域与疲劳度成为一等状态',
+        'stderr=',
+    ].join('\n');
+    const formatted = formatToolContent(receipt);
+    assert.equal(formatted.language, 'shell');
+    assert.equal(
+        formatted.code,
+        '731e5f54f 发布 0.1.5：记忆反思重构\nacca2537e feat(persona)：场域与疲劳度成为一等状态\n\n（stdout 已截断，原文 12000 字符）\n（完整输出归档不可用）',
+    );
+    assert.equal(formatted.code.includes('output_handler'), false);
+    assert.equal(formatted.code.includes('stdout_chars'), false);
+});
+
+test('stderr 有内容时单独成段，没有输出时给一句无输出', () => {
+    const failed = formatToolContent('shell command=x exit_code=1 stdout=ok stderr=boom');
+    assert.equal(failed.code, 'ok\n\n--- stderr ---\nboom');
+    const empty = formatToolContent('output_handler=compact\nstdout=\nstderr=');
+    assert.equal(empty.code, '（无输出）');
 });
 
 test('后端字符串和结构化错误保留具体原因', () => {
