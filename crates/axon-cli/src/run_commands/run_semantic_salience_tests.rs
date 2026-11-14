@@ -81,11 +81,12 @@ fn reflection_cards_carry_the_folded_v3_specificity() {
         style_candidate: None,
     };
 
-    let cards = super::reflection_cards(
-        &trace,
-        Some(&assessment),
-        std::path::Path::new("E:/zbg/axon-code"),
-    );
+    // 地点桶必须是自己造出来的临时仓库，不能借用跑测试这台机器的目录：
+    // 开发机上 E:/zbg/axon-code 存在，断言就能过，CI 上同一个字面量指向空路径，
+    // 于是同一份代码在三台 runner 上判成 other。
+    let workspace = git_workspace_fixture();
+
+    let cards = super::reflection_cards(&trace, Some(&assessment), &workspace);
 
     assert_eq!(cards.len(), 1, "无回执的轮次也要给一张索引卡");
     assert_eq!(cards[0].trace_id, "trace:conversation-1:0");
@@ -97,6 +98,78 @@ fn reflection_cards_carry_the_folded_v3_specificity() {
     assert_eq!(cards[0].location.workspace_kind, "project");
 }
 
+/// 反思地点分桶的三个类别：只依赖临时目录，不依赖宿主机上恰好存在什么。
+#[test]
+fn workspace_kind_buckets_home_project_and_other() {
+    let root = tempfile::tempdir().expect("临时根目录");
+
+    let home = root.path().join(".axon");
+    std::fs::create_dir_all(&home).expect("创建 Home 桶");
+    assert_eq!(cards_for(&home)[0].location.workspace_kind, "home");
+
+    let project = root.path().join("project");
+    std::fs::create_dir_all(project.join(".git")).expect("创建 .git 目录");
+    assert_eq!(cards_for(&project)[0].location.workspace_kind, "project");
+
+    // worktree / submodule 的 `.git` 不是目录，是指向 gitdir 的单行文件。
+    let worktree = root.path().join("worktree");
+    std::fs::create_dir_all(&worktree).expect("创建 worktree 目录");
+    std::fs::write(
+        worktree.join(".git"),
+        "gitdir: ../elsewhere/.git/worktrees/x",
+    )
+    .expect("写入 .git 文件");
+    assert_eq!(
+        cards_for(&worktree)[0].location.workspace_kind,
+        "project",
+        ".git 是文件时同样必须算项目，否则 worktree 会被并进 other 桶"
+    );
+
+    let plain = root.path().join("plain");
+    std::fs::create_dir_all(&plain).expect("创建普通目录");
+    assert_eq!(cards_for(&plain)[0].location.workspace_kind, "other");
+}
+
+/// 造一个带 `.git` 的临时项目目录，路径由临时目录保证在任何 runner 上都存在。
+fn git_workspace_fixture() -> std::path::PathBuf {
+    let root = std::env::temp_dir().join(format!("axon-salience-{}", std::process::id()));
+    std::fs::create_dir_all(root.join(".git")).expect("创建临时项目 .git");
+    root
+}
+
+fn cards_for(cwd: &std::path::Path) -> Vec<axon_agent_runtime::ReflectionCard> {
+    super::reflection_cards(&trace(), Some(&assessment()), cwd)
+}
+
+fn trace() -> axon_agent_runtime::TurnTrace {
+    axon_agent_runtime::TurnTrace::from_outcome(
+        &envelope(),
+        "trace:conversation-1:0",
+        1_000,
+        axon_agent_runtime::ExplicitSignals::default(),
+    )
+}
+
+fn assessment() -> SemanticSalienceAssessment {
+    SemanticSalienceAssessment {
+        schema_version: axon_agent_runtime::SEMANTIC_SALIENCE_ACCEPTED_MIN_VERSION,
+        should_reflect: true,
+        candidate_types: vec![SemanticMemoryCandidateType::Procedure],
+        signals: SemanticSalienceSignals {
+            verification_strength: 9_000,
+            future_utility: 8_000,
+            ..SemanticSalienceSignals::default()
+        },
+        evidence_refs: Vec::new(),
+        reason: "已验证的执行流程".to_owned(),
+        user_affect: None,
+        user_fatigue: None,
+        persona_drift_bp: None,
+        drift_reason: None,
+        style_candidate: None,
+    }
+}
+/// 反思地点分桶夹具共用的空信封。
 fn envelope() -> TurnOutcomeEnvelope {
     TurnOutcomeEnvelope {
         conversation_id: "conversation-1".to_owned(),

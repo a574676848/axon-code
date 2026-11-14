@@ -55,12 +55,15 @@ pub(super) fn reflection_cards(
 
 /// 工作区类别：Home 单独一桶，含 `.git` 的算项目，其余归为 other。
 ///
-/// 只做一次目录探测，不读文件内容，避免后置流程产生额外 IO 抖动。
+/// Home 只比路径末段，不碰文件系统，避免为分类去解析符号链接。`.git` 探测用
+/// `symlink_metadata` 而不是 `exists`：一是 worktree / submodule 下 `.git` 是指向
+/// gitdir 的文件而非目录，二是 `exists()` 在目标不可达时静默返回 false，会把真实
+/// 仓库误判成 other 且无从排查；`symlink_metadata` 只要条目存在就成功。
 fn workspace_kind(cwd: &std::path::Path) -> &'static str {
-    if cwd.ends_with(".axon") {
+    if cwd.file_name().is_some_and(|name| name == ".axon") {
         return "home";
     }
-    if cwd.join(".git").exists() {
+    if cwd.join(".git").symlink_metadata().is_ok() {
         return "project";
     }
     "other"
@@ -75,7 +78,6 @@ fn current_git_branch(cwd: &std::path::Path) -> Option<String> {
     let branch = head.trim().strip_prefix("ref: refs/heads/")?.trim();
     (!branch.is_empty()).then(|| branch.to_owned())
 }
-
 /// 把本轮卡片放进反思池，并按触发入口判定是否现在就跑一批。
 ///
 /// 返回 `Run` 表示本次要跑：可能是本轮这一张，也可能是池里攒下的多张。
