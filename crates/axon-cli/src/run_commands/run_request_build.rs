@@ -30,7 +30,18 @@ impl RunRequest {
         let agent_identity = options.agent_identity;
         let client_channel = options.client_channel;
         let performance = options.performance;
-        let (prepared, previous_session) = session.prepare(command, config, cwd)?;
+        let (mut prepared, previous_session) = session.prepare(command, config, cwd)?;
+        // 飞书渠道固定使用全局默认模型与思考强度：会话恢复出的模型、目的地固定模型
+        // 与 transportContext 里的本轮选择一律不生效。飞书是无人值守的远控入口，
+        // 配置改过之后不应继续按某条历史会话当初选的模型跑。
+        if options
+            .transport_context
+            .as_ref()
+            .is_some_and(crate::remote_commands::remote_feishu_transport_context::is_feishu)
+        {
+            prepared.command.model = None;
+            prepared.command.reasoning_effort = None;
+        }
         let command = &prepared.command;
         let cwd = prepared.cwd;
         let prompt = prepared.prompt;

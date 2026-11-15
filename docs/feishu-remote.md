@@ -133,7 +133,7 @@ Daemon 常驻 runtime 同时运行用户级 Cron tick；Memory consolidation 作
 ### 执行进度与最终回答
 
 - OpenAI Responses、Chat Completions 与 Anthropic Messages 共用 Agent Runtime 的强类型工具历史和回合完成性判断。飞书不发起独立 Provider 续轮，也不修改 call/result、重试、compaction、prompt cache 或 WebSocket response chain。
-- 飞书入站消息经治理链归一化为 Workspace-scoped Interaction，其正文、附件引用和可选 `quotedMessage` 只作用于当前 Provider turn；回复目标由渠道无关的 `ReplyRoute` 表达。`quotedMessage` 只传入当前 Provider turn，不随 completed event 回写；稳定 Runtime `session_id`、rollout ID、工作目录和 context epoch 均由 Session Runtime 在入队与执行边界注入，飞书配置或消息字段不能覆盖。飞书反馈清理与投递使用稳定 `session_id`，Provider 恢复只使用 rollout ID。模型选择继续由共享 Provider 执行链在每轮加载用户配置后完成。
+- 飞书入站消息经治理链归一化为 Workspace-scoped Interaction，其正文、附件引用和可选 `quotedMessage` 只作用于当前 Provider turn；回复目标由渠道无关的 `ReplyRoute` 表达。`quotedMessage` 只传入当前 Provider turn，不随 completed event 回写；稳定 Runtime `session_id`、rollout ID、工作目录和 context epoch 均由 Session Runtime 在入队与执行边界注入，飞书配置或消息字段不能覆盖。飞书反馈清理与投递使用稳定 `session_id`，Provider 恢复只使用 rollout ID。模型选择继续由共享 Provider 执行链在每轮加载用户配置后完成；飞书渠道固定使用 `agent.default_model` 与 `agent.reasoning_effort`，会话历史里当初选的模型、目的地固定模型与 transportContext 里的本轮选择都不生效。
 - 同一 Workspace 的 Execution 由 Daemon Worker registry 串行执行。fencing、执行错误或 panic 边界时，registry 会在同一 ownership 临界区接管 pending 唤醒或释放 Worker lease；飞书、TUI 与 Cron 不维护独立 Worker 状态，也不依赖前台进程存活。
 - 中间 Provider 回合的可见 assistant `delta` 走瞬态实时帧，立即进入流式投影：首个可渲染事实创建 interactive 卡片，后续事件用同一个 `message_id` 原位 PATCH；worker 按 800ms 合并刷新，正文与过程行共用同一个合并门，不再为工具边界单独绕开窗口。思考开始与结束只投影一行耗时，原始 reasoning 文本永不投影。正文增量与工具行都按到达顺序归并，不在飞书侧另建重排或完成门禁；canonical assistant 与唯一 terminal 到达后只做卡片收口，不迟到重放旧工具事件。
 - 一个回合只有一张进度卡：`tool_call_id` 独占**一行**而不是一条消息，同一调用的开始与完成原位更新该行，因此同一次回复不会再刷出一串各带引用头的工具消息。工具行只承载折叠态事实（类别、目标、读数），回执原文与输出片段不进入卡片；供应商的连接与生成中状态只由 `Typing` 承担，重试、失败与故障转移各留一条可覆盖的提示行。

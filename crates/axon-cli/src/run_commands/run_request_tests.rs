@@ -381,3 +381,136 @@ fn resumed_parent_session_rejects_self_reference() {
         Some("parent-1")
     );
 }
+
+/// 飞书渠道下固定使用 `agent.default_model` 与 `agent.reasoning_effort`。
+///
+/// 传输上下文与本轮显式选择都不作数：飞书是无人值守的远控入口，配置改过之后
+/// 不应继续按某条历史会话当初选的模型跑。
+#[test]
+fn feishu_transport_pins_default_model_and_reasoning_effort() {
+    let (workspace, config_path, config) = pinned_model_fixture();
+    let command = pinned_model_command();
+    let startup = Arc::new(RunStartupSnapshot::build(&config_path, &workspace).unwrap());
+
+    let request = RunRequest::from_command(
+        &command,
+        &config,
+        &config_path,
+        RunRequestSession::with_id(None, super::new_run_session_id()),
+        Some(&workspace),
+        RunRequestBuildOptions {
+            transport_context: Some(serde_json::json!({
+                "channel": "feishu",
+                "destination": "oc_chat_pinned",
+            })),
+            client_channel: ClientChannel::Feishu,
+            startup,
+            cancel_token: None,
+            subagent_event_bus: None,
+            subagent_session_sinks: None,
+            agent_identity: RunAgentIdentity::PrimaryPrivate,
+            performance: None,
+            workspace_snapshot_prewarm: None,
+        },
+    )
+    .expect("飞书 RunRequest 应可构造");
+
+    assert_eq!(request.model.name, "default-model");
+    assert_eq!(request.reasoning_effort.as_deref(), Some("low"));
+
+    let _ = std::fs::remove_dir_all(&workspace);
+}
+
+/// 非飞书渠道仍然尊重本轮显式选择，证明上一条的固定行为只在飞书生效。
+#[test]
+fn non_feishu_transport_keeps_explicit_turn_model_and_effort() {
+    let (workspace, config_path, config) = pinned_model_fixture();
+    let command = pinned_model_command();
+    let startup = Arc::new(RunStartupSnapshot::build(&config_path, &workspace).unwrap());
+
+    let request = RunRequest::from_command(
+        &command,
+        &config,
+        &config_path,
+        RunRequestSession::with_id(None, super::new_run_session_id()),
+        Some(&workspace),
+        RunRequestBuildOptions {
+            transport_context: Some(serde_json::json!({
+                "channel": "tui",
+                "destination": "local",
+            })),
+            client_channel: ClientChannel::Tui,
+            startup,
+            cancel_token: None,
+            subagent_event_bus: None,
+            subagent_session_sinks: None,
+            agent_identity: RunAgentIdentity::PrimaryPrivate,
+            performance: None,
+            workspace_snapshot_prewarm: None,
+        },
+    )
+    .expect("TUI RunRequest 应可构造");
+
+    assert_eq!(request.model.name, "explicit-model");
+    assert_eq!(request.reasoning_effort.as_deref(), Some("max"));
+
+    let _ = std::fs::remove_dir_all(&workspace);
+}
+
+/// 固定模型口径的临时配置：默认模型与显式模型分开，便于断言最终选中哪一个。
+fn pinned_model_fixture() -> (
+    std::path::PathBuf,
+    std::path::PathBuf,
+    axon_config::AxonConfig,
+) {
+    let workspace = axon_test_support::test_temp_root().join(format!(
+        "axon-run-pinned-model-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("系统时间应晚于 UNIX_EPOCH")
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&workspace).unwrap();
+    let config_path = workspace.join("config.toml");
+    let mut config = axon_config::AxonConfig::default();
+    config.providers.push(axon_config::ProviderConfig::new(
+        "fixture",
+        "openai-chatcompletions",
+        "https://provider.invalid/v1",
+    ));
+    for model_id in ["default-model", "explicit-model"] {
+        config.models.push(axon_config::ModelConfig {
+            name: model_id.to_owned(),
+            id: model_id.to_owned(),
+            provider: "fixture".to_owned(),
+            context_window: 32_000,
+            max_output_tokens: None,
+            supports_vision: false,
+            supports_embedding: false,
+            embedding_dimension: 0,
+            requires_reasoning_content_on_assistant_messages: false,
+        });
+    }
+    config.agent.default_model = "default-model".to_owned();
+    config.agent.fast_model = "default-model".to_owned();
+    config.agent.reasoning_effort = "low".to_owned();
+    axon_config::ConfigLoader::save_to_path(&config_path, &config).unwrap();
+    let config = axon_config::ConfigLoader::load_from_path(&config_path)
+        .expect("配置应可读取")
+        .config;
+    (workspace, config_path, config)
+}
+
+fn pinned_model_command() -> RunCommand {
+    RunCommand {
+        prompt: "飞书远控消息".to_owned(),
+        model: Some("explicit-model".to_owned()),
+        reasoning_effort: Some("max".to_owned()),
+        format: Some(OutputFormat::Json),
+        continue_last: false,
+        session: None,
+        file: Vec::new(),
+        timeout: None,
+        tool: Vec::new(),
+    }
+}
