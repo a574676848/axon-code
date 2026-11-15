@@ -212,8 +212,48 @@ where
             command.recorded_at_ms,
             ThreadEvent::TurnInterrupted {
                 turn_id: command.turn_id,
+                appended_items: Vec::new(),
             },
         )
+    }
+
+    /// 修复一个未收口的尾部轮次。
+    ///
+    /// 判据来自日志自身的结构：尾部轮次仍是 `Active`，说明写它的进程没有走到收口。
+    /// 与「用户主动中断」不同，这里会先补齐崩溃遗留的工具结果，并在**同一条事件**里
+    /// 写终态，历史因此重新平衡。已经平衡时返回 `Balanced` 且零写入，所以可重复调用。
+    pub fn repair_open_turn(
+        &self,
+        root: &Path,
+        command: RepairOpenTurnCommand,
+    ) -> Result<TurnRepairOutcome, String> {
+        let activation = self.read_thread_activation(root, &command.thread_id)?;
+        let Some(active_turn_id) = activation.active_turn_id else {
+            return Ok(TurnRepairOutcome::Balanced);
+        };
+        if active_turn_id != command.turn_id {
+            return Err("修复 turn_id 与当前 active turn 不匹配".to_owned());
+        }
+        let detail = self.read_thread(root, &command.thread_id)?;
+        let Some(turn) = crate::domain::turn_repair::open_tail_turn(&detail.turns) else {
+            return Ok(TurnRepairOutcome::Balanced);
+        };
+        let synthetic = crate::domain::turn_repair::synthetic_tool_results(turn);
+        let synthetic_results = synthetic.len();
+        self.append_at_sequence(
+            root,
+            &command.thread_id,
+            activation.next_sequence,
+            command.recorded_at_ms,
+            ThreadEvent::TurnInterrupted {
+                turn_id: command.turn_id.clone(),
+                appended_items: synthetic,
+            },
+        )?;
+        Ok(TurnRepairOutcome::Repaired {
+            turn_id: command.turn_id,
+            synthetic_results,
+        })
     }
 
     /// 列出 thread 摘要。
@@ -326,6 +366,7 @@ where
                 command.recorded_at_ms,
                 ThreadEvent::TurnInterrupted {
                     turn_id: turn.turn_id.clone(),
+                    appended_items: Vec::new(),
                 },
             )?;
             source = self.read_thread(root, &command.source_thread_id)?;
@@ -621,6 +662,31 @@ pub struct FailTurnCommand {
     pub failure: axon_domain::RuntimeFailure,
     /// 记录时间。
     pub recorded_at_ms: u64,
+}
+
+/// 修复未收口轮次的命令。
+#[derive(Debug, Clone)]
+pub struct RepairOpenTurnCommand {
+    /// Thread ID。
+    pub thread_id: ThreadId,
+    /// 期望修复的轮次；用于避免修复期间新开的健康轮次被误伤。
+    pub turn_id: String,
+    /// 记录时间。
+    pub recorded_at_ms: u64,
+}
+
+/// 修复结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnRepairOutcome {
+    /// 历史已经平衡，本次没有写入。
+    Balanced,
+    /// 已收口，并补齐了合成的工具结果。
+    Repaired {
+        /// 被收口的轮次。
+        turn_id: String,
+        /// 补合成的工具结果条数。
+        synthetic_results: usize,
+    },
 }
 
 /// Turn 中断命令。

@@ -9,6 +9,7 @@ pub mod session_schedule;
 mod settings;
 mod thread;
 mod turn;
+pub mod turn_repair;
 pub mod workspace;
 
 pub use event::{ThreadEvent, ThreadEventRecord};

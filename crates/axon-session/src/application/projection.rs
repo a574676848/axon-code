@@ -67,8 +67,11 @@ fn apply_record(details: &mut BTreeMap<String, ThreadDetail>, record: &ThreadEve
             apply_turn_items_appended(details, record, turn_id, items);
         }
         ThreadEvent::TurnCompleted { turn } => apply_turn_completed(details, record, turn.clone()),
-        ThreadEvent::TurnInterrupted { turn_id } => {
-            apply_turn_interrupted(details, record, turn_id);
+        ThreadEvent::TurnInterrupted {
+            turn_id,
+            appended_items,
+        } => {
+            apply_turn_interrupted(details, record, turn_id, appended_items);
         }
         ThreadEvent::TurnFailed { turn_id, failure } => {
             apply_turn_failed(details, record, turn_id, failure);
@@ -149,11 +152,17 @@ fn apply_turn_interrupted(
     details: &mut BTreeMap<String, ThreadDetail>,
     record: &ThreadEventRecord,
     turn_id: &str,
+    appended_items: &[crate::ThreadHistoryItem],
 ) {
     if let Some(detail) = details.get_mut(&record.thread_id) {
         if let Some(turn) = detail.turns.iter_mut().find(|turn| turn.turn_id == turn_id) {
             turn.status = crate::domain::TurnStatus::Interrupted;
             turn.interrupted_at_ms = Some(record.recorded_at_ms);
+            // 合成结果与终态同批落库，投影侧必须一起收进本轮历史，否则 JSONL 与
+            // ThreadDetail 会对「本轮有哪些工具结果」给出两个答案。
+            if !appended_items.is_empty() {
+                turn.history_items.extend(appended_items.iter().cloned());
+            }
         }
         detail.thread.status = ThreadStatus::Idle;
         detail.thread.updated_at_ms = record.recorded_at_ms;

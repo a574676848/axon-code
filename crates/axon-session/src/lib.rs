@@ -14,9 +14,9 @@ pub use application::{
     AppendTurnItemsCommand, CompactThreadCommand, FailTurnCommand, ForkThreadCommand,
     GoalCommandService, GoalCommandServiceError, GoalExecutionSpec, GoalQueryService,
     GoalQueryServiceError, InterruptTurnCommand, LaneQueryService, LaneSnapshot, NameThreadCommand,
-    ResumeThreadCommand, StartEmptyThreadCommand, StartThreadCommand, StartTurnCommand,
-    ThreadService, WorkspaceGitSnapshot, WorkspaceIdentity, WorkspaceResolver,
-    WorkspaceResolverError, WorkspaceSnapshot, WorkspaceSnapshotFieldState,
+    RepairOpenTurnCommand, ResumeThreadCommand, StartEmptyThreadCommand, StartThreadCommand,
+    StartTurnCommand, ThreadService, TurnRepairOutcome, WorkspaceGitSnapshot, WorkspaceIdentity,
+    WorkspaceResolver, WorkspaceResolverError, WorkspaceSnapshot, WorkspaceSnapshotFieldState,
     interaction_session_lane_id, session_lane_id,
 };
 pub use domain::WorkspaceRecord;

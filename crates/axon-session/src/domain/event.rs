@@ -61,6 +61,12 @@ pub enum ThreadEvent {
     TurnInterrupted {
         /// Turn ID。
         turn_id: String,
+        /// 收口时补合成的历史项（崩溃遗留的工具结果等）。
+        ///
+        /// 与终态放在同一条事件里落地，避免「先补历史、再写终态」的两次非原子追加：
+        /// 中间崩溃会留下「有结果无终态」或「有终态无结果」的半截历史。
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        appended_items: Vec<super::history::ThreadHistoryItem>,
     },
     /// Turn 执行失败。
     TurnFailed {

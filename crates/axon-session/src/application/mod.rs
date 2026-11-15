@@ -20,8 +20,9 @@ pub use lane_query_service::{LaneQueryService, LaneSnapshot};
 pub use session_lane::{interaction_session_lane_id, session_lane_id};
 pub use thread_service::{
     AppendTurnCommand, AppendTurnItemsCommand, CompactThreadCommand, FailTurnCommand,
-    ForkThreadCommand, InterruptTurnCommand, NameThreadCommand, ResumeThreadCommand,
-    StartEmptyThreadCommand, StartThreadCommand, StartTurnCommand, ThreadService,
+    ForkThreadCommand, InterruptTurnCommand, NameThreadCommand, RepairOpenTurnCommand,
+    ResumeThreadCommand, StartEmptyThreadCommand, StartThreadCommand, StartTurnCommand,
+    ThreadService, TurnRepairOutcome,
 };
 pub use workspace_resolver::{
     WorkspaceGitSnapshot, WorkspaceIdentity, WorkspaceResolver, WorkspaceResolverError,

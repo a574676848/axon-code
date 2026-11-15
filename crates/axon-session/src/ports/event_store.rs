@@ -63,7 +63,7 @@ fn apply_activation_event(active_turn_ids: &mut Vec<String>, record: &ThreadEven
                 active_turn_ids.retain(|active| active != &turn.turn_id);
             }
         }
-        ThreadEvent::TurnInterrupted { turn_id } | ThreadEvent::TurnFailed { turn_id, .. } => {
+        ThreadEvent::TurnInterrupted { turn_id, .. } | ThreadEvent::TurnFailed { turn_id, .. } => {
             active_turn_ids.retain(|active| active != turn_id);
         }
         ThreadEvent::ThreadResumed
