@@ -27,8 +27,16 @@ pub(crate) fn repair_orphaned_threads_startup(
     let mut repaired = 0_usize;
     for runtime in sessions {
         let thread_id = runtime.run_session_id.clone();
-        let Ok(activation) = service.read_thread_activation(axon_root, &thread_id) else {
-            continue;
+        let activation = match service.read_thread_activation(axon_root, &thread_id) {
+            Ok(activation) => activation,
+            Err(error) => {
+                // 读不到激活状态不等于没有遗留轮次，必须留痕，否则这条会话会静默地
+                // 一直修不好且没有任何线索。
+                axon_logger::warning(&format!(
+                    "崩溃遗留轮次收口跳过：无法读取激活状态 thread={thread_id}, error={error}"
+                ));
+                continue;
+            }
         };
         let Some(turn_id) = activation.active_turn_id else {
             continue;

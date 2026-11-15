@@ -81,6 +81,27 @@ pub trait ThreadEventStore {
     /// 追加一条事件。
     fn append(&self, root: &Path, record: &ThreadEventRecord) -> Result<(), String>;
 
+    /// 在「当前末尾序号等于期望值」的前提下追加一条事件。
+    ///
+    /// 与 `append` 的区别是带回执校验：读了末尾再写，若期间别人已经写过，拒绝覆盖。
+    /// 低频路径（修复、收口）用它避免把并发的两次读改写都落成同一个序号；热路径的
+    /// 普通追加仍走 `append`，不为多数情况付读取代价。
+    fn append_at_expected_sequence(
+        &self,
+        root: &Path,
+        record: &ThreadEventRecord,
+        expected_sequence: u64,
+    ) -> Result<(), String> {
+        let current = self.read_thread(root, &record.thread_id)?;
+        let current_sequence = current.last().map_or(0, |event| event.sequence);
+        if current_sequence != expected_sequence {
+            return Err(format!(
+                "thread event sequence conflict: expected={expected_sequence} actual={current_sequence}"
+            ));
+        }
+        self.append(root, record)
+    }
+
     /// 用完整 checkpoint 替换指定 thread 的历史事件。
     fn replace_thread_with_checkpoint(
         &self,

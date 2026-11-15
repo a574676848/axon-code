@@ -339,6 +339,32 @@ impl ThreadEventStore for JsonlThreadEventStore {
             })
     }
 
+    fn append_at_expected_sequence(
+        &self,
+        root: &Path,
+        record: &ThreadEventRecord,
+        expected_sequence: u64,
+    ) -> Result<(), String> {
+        let logical = Self::thread_logical_path(root, &record.thread_id);
+        let line = serde_json::to_vec(record).map_err(|_| "thread 事件序列化失败".to_owned())?;
+        SHARD_STORE
+            .append_with(logical, |lines| {
+                let current =
+                    Self::parse_lines(&Self::join_lines(lines)).map_err(std::io::Error::other)?;
+                let actual = current.last().map_or(0, |event| event.sequence);
+                if actual != expected_sequence {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "thread event sequence conflict: expected={expected_sequence} actual={actual}"
+                        ),
+                    ));
+                }
+                Ok(((), vec![line.clone()]))
+            })
+            .map_err(|error| error.to_string())
+    }
+
     fn read_all(&self, root: &Path) -> Result<Vec<ThreadEventRecord>, String> {
         let mut records = Vec::new();
         for entry in Self::event_files(root)? {

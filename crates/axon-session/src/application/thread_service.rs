@@ -17,7 +17,7 @@ use crate::{
 /// Thread service。
 #[derive(Debug, Clone)]
 pub struct ThreadService<S> {
-    store: S,
+    pub(super) store: S,
 }
 
 impl<S> ThreadService<S>
@@ -194,29 +194,6 @@ where
         )
     }
 
-    /// 将 active turn 标记为中断。
-    pub fn interrupt_turn(&self, root: &Path, command: InterruptTurnCommand) -> Result<(), String> {
-        let activation = self
-            .store
-            .read_thread_activation(root, &command.thread_id)?;
-        let Some(active_turn_id) = activation.active_turn_id else {
-            return Err("thread 没有可中断的 active turn".to_owned());
-        };
-        if active_turn_id != command.turn_id {
-            return Err("中断 turn_id 与 active turn 不匹配".to_owned());
-        }
-        self.append_at_sequence(
-            root,
-            &command.thread_id,
-            activation.next_sequence,
-            command.recorded_at_ms,
-            ThreadEvent::TurnInterrupted {
-                turn_id: command.turn_id,
-                appended_items: Vec::new(),
-            },
-        )
-    }
-
     /// 列出 thread 摘要。
     pub fn list_threads(&self, root: &Path, limit: usize) -> Result<Vec<ThreadSummary>, String> {
         Ok(self
@@ -321,13 +298,17 @@ where
     pub fn fork_thread(&self, root: &Path, command: ForkThreadCommand) -> Result<ThreadId, String> {
         let mut source = self.read_thread(root, &command.source_thread_id)?;
         if let Some(turn) = active_turn(&source) {
+            // fork 也要补合成结果：源线程被切成两段时，悬空的工具调用会跟着历史一起
+            // 克隆进新线程，而克隆出来的轮次已是终态，之后再也没有机会被收口。
+            let turn_id = turn.turn_id.clone();
+            let synthetic = crate::domain::turn_repair::synthetic_tool_results(turn);
             self.append_simple(
                 root,
                 &command.source_thread_id,
                 command.recorded_at_ms,
                 ThreadEvent::TurnInterrupted {
-                    turn_id: turn.turn_id.clone(),
-                    appended_items: Vec::new(),
+                    turn_id,
+                    appended_items: synthetic,
                 },
             )?;
             source = self.read_thread(root, &command.source_thread_id)?;

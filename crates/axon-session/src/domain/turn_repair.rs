@@ -96,3 +96,49 @@ fn unknown_outcome_text() -> String {
      仅当该操作只读或幂等时才可直接重试；如果它可能有副作用，请先核实外部状态再决定，不要盲目重试。"
         .to_owned()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn turn(status: TurnStatus) -> Turn {
+        Turn {
+            turn_id: "turn-1".to_owned(),
+            sequence: 1,
+            status,
+            history_items: Vec::new(),
+            token_usage_json: None,
+            started_at_ms: 1,
+            completed_at_ms: None,
+            interrupted_at_ms: None,
+            failure: None,
+        }
+    }
+
+    /// 判据只认尾部 `Active`：三种已收口状态都不算，前面有 Active 但尾部已完成也不算。
+    #[test]
+    fn only_active_tail_turn_is_open() {
+        assert!(open_tail_turn(&[turn(TurnStatus::Active)]).is_some());
+        for settled in [
+            TurnStatus::Completed,
+            TurnStatus::Interrupted,
+            TurnStatus::Failed,
+        ] {
+            assert!(
+                open_tail_turn(&[turn(settled)]).is_none(),
+                "{settled:?} 已经收口"
+            );
+        }
+        assert!(open_tail_turn(&[]).is_none());
+        assert!(
+            open_tail_turn(&[turn(TurnStatus::Active), turn(TurnStatus::Completed)]).is_none(),
+            "尾部已完成说明这条历史已经平衡过"
+        );
+    }
+
+    /// 没有历史项时不该凭空造出结果。
+    #[test]
+    fn balanced_turn_yields_no_synthetic_results() {
+        assert!(synthetic_tool_results(&turn(TurnStatus::Active)).is_empty());
+    }
+}
