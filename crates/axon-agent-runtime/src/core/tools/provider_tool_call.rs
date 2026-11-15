@@ -27,7 +27,9 @@ pub const PROVIDER_TOOL_CALL_RAW_ARGUMENTS_FIELD: &str = "__axon_tool_call_raw_a
 pub const PROVIDER_TOOL_CALL_RAW_ARGUMENTS_MAX_CHARS: usize = 1024;
 const OPENAI_COMPAT_TOOL_CALL_ERROR_EVENT: &str =
     "OpenAI-compatible tool-call stream 返回 error 事件";
-const ANTHROPIC_TOOL_CALL_ERROR_EVENT: &str = "Anthropic tool-call stream 返回 error 事件";
+
+#[path = "provider_tool_call_anthropic.rs"]
+pub(crate) mod anthropic;
 
 /// Provider 归一化工具调用。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,7 +111,7 @@ impl ProviderToolCallRuntime {
                 normalize_openai_tool_calls(protocol, raw_stream, model_tools)?
             }
             ProviderStreamProtocol::AnthropicMessages => {
-                normalize_anthropic_tool_calls(raw_stream, model_tools)?
+                anthropic::normalize_anthropic_tool_calls(raw_stream, model_tools)?
             }
         };
         restore_provider_tool_names(&mut tool_calls, model_tools);
@@ -140,6 +142,7 @@ pub(crate) struct ToolCallAccumulator {
     pub(crate) name: Option<String>,
     pub(crate) arguments: String,
     pub(crate) wire_kind: ProviderToolCallWireKind,
+    pub(crate) anthropic_restart_offsets: Vec<usize>,
 }
 
 fn normalize_openai_tool_calls(
@@ -336,103 +339,6 @@ fn openai_responses_output_index(value: &serde_json::Value) -> AxonResult<usize>
         })
 }
 
-fn normalize_anthropic_tool_calls(
-    raw_stream: &str,
-    model_tools: &[ModelToolDefinition],
-) -> AxonResult<Vec<ProviderToolCall>> {
-    let mut calls = BTreeMap::<usize, ToolCallAccumulator>::new();
-    for line in raw_stream.lines() {
-        let Some(payload) = normalize_stream_line(line)? else {
-            continue;
-        };
-        let value: serde_json::Value = serde_json::from_str(payload).map_err(|_| {
-            AxonError::provider_invalid_response(
-                ProviderStreamProtocol::AnthropicMessages.as_code(),
-                "Anthropic tool-call JSON 无效",
-            )
-        })?;
-        match value.get("type").and_then(serde_json::Value::as_str) {
-            Some("content_block_start") => {
-                let Some(content_block) = value.get("content_block") else {
-                    continue;
-                };
-                if content_block
-                    .get("type")
-                    .and_then(serde_json::Value::as_str)
-                    != Some("tool_use")
-                {
-                    continue;
-                }
-                let index = content_index(&value)?;
-                let entry = calls.entry(index).or_default();
-                if let Some(id) = content_block
-                    .get("id")
-                    .and_then(serde_json::Value::as_str)
-                    .filter(|id| !id.trim().is_empty())
-                {
-                    entry.id = Some(id.to_owned());
-                }
-                if let Some(name) = content_block
-                    .get("name")
-                    .and_then(serde_json::Value::as_str)
-                    .filter(|name| !name.trim().is_empty())
-                {
-                    entry.name = Some(name.to_owned());
-                }
-                if let Some(input) = content_block.get("input") {
-                    let input_text = serde_json::to_string(input).map_err(|_| {
-                        AxonError::provider_invalid_response(
-                            ProviderStreamProtocol::AnthropicMessages.as_code(),
-                            "Anthropic tool-call input 序列化失败",
-                        )
-                    })?;
-                    if input_text != "{}" || entry.arguments.is_empty() {
-                        entry.arguments = input_text;
-                    }
-                }
-            }
-            Some("content_block_delta") => {
-                let Some(partial_json) = value
-                    .get("delta")
-                    .and_then(|delta| {
-                        (delta.get("type").and_then(serde_json::Value::as_str)
-                            == Some("input_json_delta"))
-                        .then_some(delta)
-                    })
-                    .and_then(|delta| delta.get("partial_json"))
-                    .and_then(serde_json::Value::as_str)
-                else {
-                    continue;
-                };
-                let index = content_index(&value)?;
-                let entry = calls.entry(index).or_default();
-                if entry.arguments != "{}"
-                    && !entry.arguments.is_empty()
-                    && partial_json.trim_start().starts_with('{')
-                {
-                    entry.arguments.clear();
-                }
-                if entry.arguments == "{}" {
-                    entry.arguments.clear();
-                }
-                entry.arguments.push_str(partial_json);
-            }
-            Some("error") => {
-                return Err(provider_stream_error_event(
-                    ANTHROPIC_TOOL_CALL_ERROR_EVENT,
-                    value.get("error").unwrap_or(&value),
-                ));
-            }
-            _ => {}
-        }
-    }
-    finalize_tool_calls(
-        ProviderStreamProtocol::AnthropicMessages,
-        calls,
-        model_tools,
-    )
-}
-
 pub(crate) fn finalize_tool_calls(
     protocol: ProviderStreamProtocol,
     calls: BTreeMap<usize, ToolCallAccumulator>,
@@ -440,7 +346,13 @@ pub(crate) fn finalize_tool_calls(
 ) -> AxonResult<Vec<ProviderToolCall>> {
     let mut output = Vec::with_capacity(calls.len());
     let mut seen_ids = BTreeSet::new();
-    for (call_index, call) in calls {
+    for (call_index, mut call) in calls {
+        if protocol == ProviderStreamProtocol::AnthropicMessages {
+            anthropic::recover_anthropic_restarted_arguments(
+                &mut call.arguments,
+                &call.anthropic_restart_offsets,
+            );
+        }
         let id = call.id.clone().ok_or_else(|| {
             incomplete_tool_call(protocol, call_index, ProviderToolCallIssue::MissingId)
         })?;
@@ -469,20 +381,41 @@ pub(crate) fn finalize_tool_calls(
         }
         if call.arguments.trim().is_empty() && call.wire_kind == ProviderToolCallWireKind::Function
         {
-            output.push(ProviderToolCall::new(
-                id,
-                name,
+            let input = if allows_empty_object_arguments(&name, model_tools) {
+                ToolCallInput::json(serde_json::json!({}))
+            } else {
                 ToolCallInput::json(recoverable_arguments(
                     ProviderToolCallIssue::EmptyArguments,
                     &call.arguments,
-                )),
-            ));
+                ))
+            };
+            output.push(ProviderToolCall::new(id, name, input));
             continue;
         }
         let input = normalize_tool_call_input(&name, &call, model_tools);
         output.push(ProviderToolCall::new(id, name, input));
     }
     Ok(output)
+}
+
+fn allows_empty_object_arguments(name: &str, model_tools: &[ModelToolDefinition]) -> bool {
+    let Some(tool) = resolved_model_tool(name, model_tools) else {
+        return false;
+    };
+    if !matches!(tool.input_format, ToolInputFormat::JsonSchema) {
+        return false;
+    }
+    let is_object_schema = tool
+        .input_schema
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(|kind| kind == "object");
+    let has_required_fields = tool
+        .input_schema
+        .get("required")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|required| !required.is_empty());
+    is_object_schema && !has_required_fields
 }
 
 fn normalize_tool_call_input(
@@ -585,19 +518,6 @@ pub(crate) fn restore_provider_tool_names(
     }
 }
 
-fn content_index(value: &serde_json::Value) -> AxonResult<usize> {
-    value
-        .get("index")
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|value| usize::try_from(value).ok())
-        .ok_or_else(|| {
-            AxonError::provider_invalid_response(
-                ProviderStreamProtocol::AnthropicMessages.as_code(),
-                "Anthropic tool-call 缺少 index",
-            )
-        })
-}
-
 fn reject_openai_error_event(value: &serde_json::Value) -> AxonResult<()> {
     if let Some(error) = value.get("error") {
         return Err(provider_stream_error_event(
@@ -628,7 +548,7 @@ fn is_openai_responses_stream_event(
     kind.starts_with("response.") || protocol == ProviderStreamProtocol::OpenAiResponses
 }
 
-fn normalize_stream_line(line: &str) -> AxonResult<Option<&str>> {
+pub(super) fn normalize_stream_line(line: &str) -> AxonResult<Option<&str>> {
     let trimmed = line.trim();
     // 跳过空行、注释行和 SSE event 行
     if trimmed.is_empty() || trimmed.starts_with(':') || trimmed.starts_with("event:") {

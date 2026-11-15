@@ -433,7 +433,7 @@ fn anthropic_tool_use_block(
     serde_json::json!({
         "type": "tool_use",
         "id": tool_use.id,
-        "name": tool_use.name,
+        "name": provider_tool_name(&tool_use.name),
         "input": input,
     })
 }

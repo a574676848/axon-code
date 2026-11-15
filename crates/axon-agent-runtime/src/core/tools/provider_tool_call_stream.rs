@@ -8,7 +8,7 @@ use crate::{
     ModelToolDefinition, OPENAI_COMPAT_STREAM_DATA_PREFIX, OPENAI_COMPAT_STREAM_DONE_MARKER,
     ProviderStreamProtocol, ProviderToolCall,
     provider_tool_call::{
-        ProviderToolCallWireKind, ToolCallAccumulator, finalize_tool_calls,
+        ProviderToolCallWireKind, ToolCallAccumulator, anthropic, finalize_tool_calls,
         restore_provider_tool_names,
     },
 };
@@ -39,6 +39,8 @@ struct PartialCall {
     arguments: String,
     pending_delta: String,
     arguments_reset: bool,
+    has_complete_start_input: bool,
+    anthropic_restart_offsets: Vec<usize>,
     wire_kind: ProviderToolCallWireKind,
 }
 
@@ -107,6 +109,7 @@ impl ProviderToolCallStreamRuntime {
                         name: (!call.name.is_empty()).then_some(call.name),
                         arguments: call.arguments,
                         wire_kind: call.wire_kind,
+                        anthropic_restart_offsets: call.anthropic_restart_offsets,
                     },
                 )
             })
@@ -224,7 +227,7 @@ impl ProviderToolCallStreamRuntime {
                 let call = self.calls.entry(index).or_default();
                 assign_nonempty(&mut call.id, block.get("id"));
                 assign_nonempty(&mut call.name, block.get("name"));
-                if let Some(input) = block.get("input") {
+                if let Some(input) = block.get("input").filter(|value| !value.is_null()) {
                     let input_json = serde_json::to_string(input).map_err(|_| {
                         AxonError::provider_invalid_response(
                             ProviderStreamProtocol::AnthropicMessages.as_code(),
@@ -232,6 +235,8 @@ impl ProviderToolCallStreamRuntime {
                         )
                     })?;
                     replace_arguments(call, &input_json);
+                    call.has_complete_start_input = input_json != "{}" && input.is_object();
+                    call.anthropic_restart_offsets.clear();
                 }
                 Ok(vec![index])
             }
@@ -275,8 +280,12 @@ impl ProviderToolCallStreamRuntime {
 }
 
 fn append_arguments(call: &mut PartialCall, delta: &str) {
+    if delta.is_empty() {
+        return;
+    }
     if call.arguments == "{}" {
         call.arguments.clear();
+        call.pending_delta.clear();
         call.arguments_reset = true;
     }
     call.arguments.push_str(delta);
@@ -284,12 +293,23 @@ fn append_arguments(call: &mut PartialCall, delta: &str) {
 }
 
 fn append_anthropic_arguments(call: &mut PartialCall, delta: &str) {
-    if call.arguments != "{}" && !call.arguments.is_empty() && delta.trim_start().starts_with('{') {
-        call.arguments.clear();
-        call.pending_delta.clear();
-        call.arguments_reset = true;
+    match anthropic::append_anthropic_delta(
+        &mut call.arguments,
+        &mut call.has_complete_start_input,
+        &mut call.anthropic_restart_offsets,
+        delta,
+    ) {
+        anthropic::AnthropicDeltaAction::NoOp => {}
+        anthropic::AnthropicDeltaAction::ReplacedCompleteStart
+        | anthropic::AnthropicDeltaAction::ReplacedEmptyPlaceholder => {
+            call.pending_delta.clear();
+            call.pending_delta.push_str(delta);
+            call.arguments_reset = true;
+        }
+        anthropic::AnthropicDeltaAction::Appended => {
+            call.pending_delta.push_str(delta);
+        }
     }
-    append_arguments(call, delta);
 }
 
 fn replace_arguments(call: &mut PartialCall, full: &str) {
@@ -346,206 +366,5 @@ fn stream_payload(line: &str) -> AxonResult<Option<&str>> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn openai_chat_emits_cumulative_arguments() {
-        let mut runtime = ProviderToolCallStreamRuntime::default();
-        let first = r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"edit","arguments":"{\"input\":\"src/"}}]}}]}"#;
-        let second = r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"lib.rs\"}"}}]}}]}"#;
-
-        let first = runtime
-            .consume_line(ProviderStreamProtocol::OpenAiCompatible, first)
-            .unwrap();
-        let second = runtime
-            .consume_line(ProviderStreamProtocol::OpenAiCompatible, second)
-            .unwrap();
-
-        assert_eq!(first[0].input_text, r#"{"input":"src/"#);
-        assert_eq!(first[0].input_delta, r#"{"input":"src/"#);
-        assert!(!first[0].input_reset);
-        assert_eq!(second[0].input_text, r#"{"input":"src/lib.rs"}"#);
-        assert_eq!(second[0].input_delta, r#"lib.rs"}"#);
-    }
-
-    #[test]
-    fn responses_done_event_replaces_accumulated_arguments() {
-        let mut runtime = ProviderToolCallStreamRuntime::default();
-        runtime
-            .consume_line(
-                ProviderStreamProtocol::OpenAiResponses,
-                r#"data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call-1","name":"edit"}}"#,
-            )
-            .unwrap();
-        runtime
-            .consume_line(
-                ProviderStreamProtocol::OpenAiResponses,
-                r#"data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"input\":\"partial\"}"}"#,
-            )
-            .unwrap();
-        let partial = runtime
-            .consume_line(
-                ProviderStreamProtocol::OpenAiResponses,
-                r#"data: {"type":"response.function_call_arguments.done","output_index":0,"arguments":"{\"input\":\"complete\"}"}"#,
-            )
-            .unwrap();
-
-        assert_eq!(partial[0].input_text, r#"{"input":"complete"}"#);
-        assert!(partial[0].input_reset);
-        assert_eq!(partial[0].wire_kind, ProviderToolCallWireKind::Function);
-        let calls = runtime
-            .finish(ProviderStreamProtocol::OpenAiResponses, &[])
-            .unwrap();
-        assert_eq!(
-            calls[0].input.as_json(),
-            Some(&serde_json::json!({"input": "complete"}))
-        );
-    }
-
-    #[test]
-    fn responses_custom_tool_done_event_replaces_accumulated_input() {
-        let mut runtime = ProviderToolCallStreamRuntime::default();
-        runtime
-            .consume_line(
-                ProviderStreamProtocol::OpenAiResponses,
-                r#"data: {"type":"response.output_item.added","output_index":0,"item":{"type":"custom_tool_call","call_id":"call-1","name":"edit"}}"#,
-            )
-            .unwrap();
-        runtime
-            .consume_line(
-                ProviderStreamProtocol::OpenAiResponses,
-                r#"data: {"type":"response.custom_tool_call_input.delta","output_index":0,"delta":"partial"}"#,
-            )
-            .unwrap();
-        let partial = runtime
-            .consume_line(
-                ProviderStreamProtocol::OpenAiResponses,
-                r#"data: {"type":"response.custom_tool_call_input.done","output_index":0,"input":"complete"}"#,
-            )
-            .unwrap();
-
-        assert_eq!(partial[0].input_text, "complete");
-        assert!(partial[0].input_reset);
-        assert_eq!(partial[0].wire_kind, ProviderToolCallWireKind::Custom);
-        let calls = runtime
-            .finish(ProviderStreamProtocol::OpenAiResponses, &[])
-            .unwrap();
-        assert_eq!(calls[0].input.as_text(), Some("complete"));
-    }
-
-    #[test]
-    fn anthropic_emits_partial_json_after_tool_start() {
-        let mut runtime = ProviderToolCallStreamRuntime::default();
-        runtime
-            .consume_line(
-                ProviderStreamProtocol::AnthropicMessages,
-                r#"data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tool-1","name":"edit","input":{}}}"#,
-            )
-            .unwrap();
-        let partial = runtime
-            .consume_line(
-                ProviderStreamProtocol::AnthropicMessages,
-                r#"data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"input\":\"a.rs\"}"}}"#,
-            )
-            .unwrap();
-
-        assert_eq!(partial[0].id, "tool-1");
-        assert_eq!(partial[0].input_text, r#"{"input":"a.rs"}"#);
-    }
-
-    #[test]
-    fn anthropic_uses_complete_input_when_provider_omits_json_deltas() {
-        let mut runtime = ProviderToolCallStreamRuntime::default();
-        runtime
-            .consume_line(
-                ProviderStreamProtocol::AnthropicMessages,
-                r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool-1","name":"edit","input":{"input":"new"}}}"#,
-            )
-            .unwrap();
-
-        let calls = runtime
-            .finish(ProviderStreamProtocol::AnthropicMessages, &[])
-            .unwrap();
-
-        assert_eq!(calls.len(), 1);
-        assert_eq!(
-            calls[0].input.as_json(),
-            Some(&serde_json::json!({"input": "new"}))
-        );
-    }
-
-    #[test]
-    fn anthropic_replaces_full_start_input_when_delta_repeats_complete_json() {
-        let mut runtime = ProviderToolCallStreamRuntime::default();
-        runtime
-            .consume_line(
-                ProviderStreamProtocol::AnthropicMessages,
-                r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool-1","name":"edit","input":{"input":"old"}}}"#,
-            )
-            .unwrap();
-        runtime
-            .consume_line(
-                ProviderStreamProtocol::AnthropicMessages,
-                r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"input\":\"new\"}"}}"#,
-            )
-            .unwrap();
-
-        let calls = runtime
-            .finish(ProviderStreamProtocol::AnthropicMessages, &[])
-            .unwrap();
-
-        assert_eq!(
-            calls[0].input.as_json(),
-            Some(&serde_json::json!({"input": "new"}))
-        );
-    }
-
-    #[test]
-    fn anthropic_replaces_incomplete_arguments_when_delta_restarts_full_json() {
-        let mut runtime = ProviderToolCallStreamRuntime::default();
-        runtime
-            .consume_line(
-                ProviderStreamProtocol::AnthropicMessages,
-                r#"data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tool-2","name":"edit","input":{}}}"#,
-            )
-            .unwrap();
-        runtime
-            .consume_line(
-                ProviderStreamProtocol::AnthropicMessages,
-                r#"data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"input\":\"a"}}"#,
-            )
-            .unwrap();
-        runtime
-            .consume_line(
-                ProviderStreamProtocol::AnthropicMessages,
-                r#"data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"input\":\"new\"}"}}"#,
-            )
-            .unwrap();
-
-        let calls = runtime
-            .finish(ProviderStreamProtocol::AnthropicMessages, &[])
-            .unwrap();
-
-        assert_eq!(
-            calls[0].input.as_json(),
-            Some(&serde_json::json!({"input": "new"}))
-        );
-    }
-
-    #[test]
-    fn anthropic_malformed_event_json_is_provider_failure() {
-        let mut runtime = ProviderToolCallStreamRuntime::default();
-        let error = runtime
-            .consume_line(
-                ProviderStreamProtocol::AnthropicMessages,
-                "data: {\"type\":\"content_block_delta\"",
-            )
-            .unwrap_err();
-
-        assert!(matches!(
-            error,
-            AxonError::Provider(axon_domain::ProviderError::InvalidResponse(_))
-        ));
-    }
-}
+#[path = "provider_tool_call_stream_tests.rs"]
+mod tests;

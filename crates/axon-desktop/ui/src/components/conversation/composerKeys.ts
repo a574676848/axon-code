@@ -63,6 +63,13 @@ export interface ComposerKeyContext {
   /** 取下一条输入历史。 */
   nextHistory: () => string | null;
   /**
+   * 是否正停在历史里（方向键已经由历史接管）。
+   *
+   * 翻历史进行中时方向键固定在条目之间走：一条历史可能折成好几行，光标落在它
+   * 末尾时若还按可见行判定，上键就变成移动光标，读起来像「按了没反应」。
+   */
+  historyActive: boolean;
+  /**
    * 实测光标是否在首个 / 末个可见行；量为 null 表示这一帧量不出来。
    *
    * 判据必须落在**可见行**上：软折行不写进正文，只看换行符会把一段折成三行的
@@ -92,6 +99,7 @@ export function createComposerKeyHandler(
     previousHistory,
     nextHistory,
     caretPlacement,
+    historyActive,
     submit,
   } = context;
 
@@ -151,6 +159,8 @@ export function createComposerKeyHandler(
     /*
      * 历史输入：与 TUI 同口径，只有光标在首个可见行按上、末个可见行按下才翻历史，
      * 多行草稿里的方向键仍然用于移动光标。可见行以实测为准，量不出来才退回换行符。
+     * 例外是已经停在历史里的时候：那时光标落在被翻出来那一长条的哪一行都继续翻，
+     * 否则跨行的历史会把上键吃掉，翻不过第二条。
      */
     if (
       (event.key === 'ArrowUp' || event.key === 'ArrowDown') &&
@@ -160,7 +170,7 @@ export function createComposerKeyHandler(
       !event.metaKey
     ) {
       const edges = caretPlacement() ?? caretLineBoundaryFallback(text, caret);
-      if (event.key === 'ArrowUp' && edges.first) {
+      if (event.key === 'ArrowUp' && (edges.first || historyActive)) {
         // 上键在首行固定用于翻历史（与 TUI 一致）；没历史时只是什么也不发生。
         event.preventDefault();
         void previousHistory(text).then((recalled) => {
@@ -170,7 +180,7 @@ export function createComposerKeyHandler(
         });
         return;
       }
-      if (event.key === 'ArrowDown' && edges.last) {
+      if (event.key === 'ArrowDown' && (edges.last || historyActive)) {
         const recalled = nextHistory();
         if (recalled !== null) {
           event.preventDefault();
@@ -213,6 +223,8 @@ export interface ComposerKeyWiring {
   previousHistory: (text: string) => Promise<string | null>;
   /** 取下一条历史。 */
   nextHistory: () => string | null;
+  /** 是否正停在历史里；翻历史期间方向键不再让位给光标。 */
+  historyActive: boolean;
   /** 实测光标所在的可见行；未接线时按换行符判断。 */
   caretPlacement: () => CaretPlacement | null;
   /** 提交正文。 */
@@ -241,6 +253,7 @@ export function useComposerKeyHandler(
     previousHistory,
     nextHistory,
     caretPlacement,
+    historyActive,
     submit,
   } = wiring;
   const isReference = openCandidates?.isReference === true;
@@ -273,6 +286,7 @@ export function useComposerKeyHandler(
         previousHistory,
         nextHistory,
         caretPlacement,
+        historyActive,
         submit,
       }),
     [
@@ -280,6 +294,7 @@ export function useComposerKeyHandler(
       caret,
       caretPlacement,
       commitText,
+      historyActive,
       isReference,
       nextHistory,
       openCandidates,

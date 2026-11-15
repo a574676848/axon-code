@@ -251,7 +251,7 @@ fn assert_anthropic_wire(body: &serde_json::Value, is_error: bool) {
     assert_eq!(messages[0]["role"], "assistant");
     assert_eq!(messages[1]["role"], "user");
     assert_eq!(call["id"], TEST_CALL_ID);
-    assert_eq!(call["name"], TEST_TOOL_NAME);
+    assert_eq!(call["name"], TEST_PROVIDER_TOOL_NAME);
     if is_error {
         assert_eq!(call["input"], serde_json::json!({}));
     } else {

@@ -25,6 +25,8 @@ export interface InputHistoryController {
   record: (text: string, onError: (message: string) => void) => void;
   /** 提交之后退出导航状态。 */
   reset: () => void;
+  /** 是否正停在历史里；翻历史期间方向键不再让位给光标。 */
+  active: boolean;
 }
 
 export function useInputHistory(): InputHistoryController {
@@ -97,5 +99,5 @@ export function useInputHistory(): InputHistoryController {
 
   const reset = React.useCallback(() => setNavigation(IDLE_HISTORY), []);
 
-  return { previous, next, record, reset };
+  return { previous, next, record, reset, active: navigation.index !== null };
 }

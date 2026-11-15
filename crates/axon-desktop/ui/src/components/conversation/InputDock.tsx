@@ -360,6 +360,7 @@ export const InputDock: React.FC<InputDockProps> = ({
     requestCaret: setPendingCaret,
     previousHistory: recall.previous,
     nextHistory: recall.next,
+    historyActive: recall.active,
     caretPlacement,
     submit,
   });

@@ -575,3 +575,106 @@ fn empty_object_arguments_are_preserved_for_scheduler_validation() {
         Some(&serde_json::json!({}))
     );
 }
+
+#[test]
+fn anthropic_batch_preserves_braces_and_nested_objects_while_recovering_restart() {
+    let split_braces = [
+        r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t_brace","name":"builtin_shell_command","input":{}}}"#,
+        r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"echo "}}"#,
+        r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{ $n++ }\"}"}}"#,
+        r#"data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"t_nested","name":"builtin_search","input":{}}}"#,
+        r#"data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"meta\":"}}"#,
+        r#"data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"k\":1}"}}"#,
+        r#"data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"}"}}"#,
+        r#"data: {"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"t_restart","name":"builtin_search","input":{}}}"#,
+        r#"data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"query\":\"old"}}"#,
+        r#"data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"query\":\"new\"}"}}"#,
+    ]
+    .join("\n\n");
+    let report = ProviderToolCallRuntime
+        .normalize(ProviderStreamProtocol::AnthropicMessages, &split_braces)
+        .unwrap();
+    assert_eq!(
+        report.tool_calls[0].input.as_json(),
+        Some(&serde_json::json!({"command": "echo { $n++ }"}))
+    );
+    assert_eq!(
+        report.tool_calls[1].input.as_json(),
+        Some(&serde_json::json!({"meta": {"k": 1}}))
+    );
+    assert_eq!(
+        report.tool_calls[2].input.as_json(),
+        Some(&serde_json::json!({"query": "new"}))
+    );
+}
+
+#[test]
+fn anthropic_batch_handles_empty_delta_and_zero_arg_tool_without_input() {
+    let tools = vec![
+        model_tool_definition(Vec::new()),
+        ModelToolDefinition {
+            qualified_name: "builtin.search".to_owned(),
+            description: "搜索".to_owned(),
+            schema_hash: "search-schema".to_owned(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"]
+            }),
+            input_format: axon_domain::ToolInputFormat::JsonSchema,
+        },
+    ];
+
+    let empty_delta = ProviderToolCallRuntime
+        .normalize_with_model_tools(
+            ProviderStreamProtocol::AnthropicMessages,
+            &anthropic_tool_call(
+                Some("t_empty_delta"),
+                Some("builtin_search"),
+                Some(serde_json::json!({})),
+                Some(""),
+            ),
+            &tools,
+        )
+        .unwrap();
+    assert_eq!(
+        empty_delta.tool_calls[0].input.as_json(),
+        Some(&serde_json::json!({}))
+    );
+    assert!(!is_recoverable_tool_call_input(
+        &empty_delta.tool_calls[0].input
+    ));
+
+    let zero_arg = ProviderToolCallRuntime
+        .normalize_with_model_tools(
+            ProviderStreamProtocol::AnthropicMessages,
+            &anthropic_tool_call(
+                Some("t_zero_arg"),
+                Some("mcp__gitnexus__list_repos"),
+                None,
+                Some(""),
+            ),
+            &tools,
+        )
+        .unwrap();
+    assert_eq!(
+        zero_arg.tool_calls[0].input.as_json(),
+        Some(&serde_json::json!({}))
+    );
+
+    let required_null = ProviderToolCallRuntime
+        .normalize_with_model_tools(
+            ProviderStreamProtocol::AnthropicMessages,
+            &anthropic_tool_call(
+                Some("t_required_null"),
+                Some("builtin_search"),
+                Some(serde_json::Value::Null),
+                None,
+            ),
+            &tools,
+        )
+        .unwrap();
+    assert!(is_recoverable_tool_call_input(
+        &required_null.tool_calls[0].input
+    ));
+}

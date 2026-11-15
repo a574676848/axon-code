@@ -207,6 +207,40 @@ fn prompt_cache_wire_projects_anthropic_tool_use_blocks_from_metadata() {
 }
 
 #[test]
+fn prompt_cache_wire_projects_dotted_and_mcp_anthropic_tool_use_names() {
+    let plan = PromptCacheProviderWireRuntime.lower(&PromptCacheProviderWireInput {
+        format: PromptCacheProviderWireFormat::AnthropicMessages,
+        capabilities: axon_config::ProviderCapabilities::for_protocol(
+            axon_config::PROVIDER_PROTOCOL_ANTHROPIC,
+        ),
+        supports_vision: false,
+        messages: vec![
+            AgentModelMessage::text("assistant", "").with_tool_calls(vec![
+                crate::AgentModelToolCallMetadata {
+                    id: "call_builtin".to_owned(),
+                    name: "builtin.search".to_owned(),
+                    input: r#"{"query":"panic"}"#.into(),
+                },
+                crate::AgentModelToolCallMetadata {
+                    id: "call_mcp".to_owned(),
+                    name: "mcp__demo__list_items".to_owned(),
+                    input: "{}".into(),
+                },
+            ]),
+        ]
+        .into(),
+        model_tools: Vec::new(),
+        prompt_cache_plan: test_prompt_cache_plan(PromptCacheProviderWireFormat::AnthropicMessages),
+    });
+
+    let blocks = plan.anthropic_messages[0]["content"]
+        .as_array()
+        .expect("assistant 内容块应为数组");
+    assert_eq!(blocks[0]["name"], "builtin_search");
+    assert_eq!(blocks[1]["name"], "mcp__demo__list_items");
+}
+
+#[test]
 fn prompt_cache_wire_keeps_developer_native_for_openai_responses() {
     let plan = PromptCacheProviderWireRuntime.lower(&PromptCacheProviderWireInput {
         format: PromptCacheProviderWireFormat::OpenAiResponses,

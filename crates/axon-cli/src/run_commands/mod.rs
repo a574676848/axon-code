@@ -91,6 +91,8 @@ mod run_subagent_progress;
 mod run_text_render;
 mod run_thread_history;
 mod run_thread_store;
+mod run_turn_reconciliation;
+pub(crate) use run_turn_reconciliation::reconcile_at_startup;
 mod run_thread_title;
 mod run_tool_loop;
 mod run_tool_pool;

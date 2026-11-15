@@ -20,6 +20,7 @@ Axon 是基于 Rust 构建的专属个人智能体（Personal Agent）与战术�
 | 部署、排障与核算成本 | [Daemon 后台守护进程](./daemon.md) → [故障诊断与自愈](./troubleshooting.md) → [使用统计与用量看板](./usage-statistics.md) |
 | 修改桌面端界面 | [桌面端 UI 约束规范](./ui-constraints.md) → [工作台设计系统](./workbench-design-system.md) |
 | 参与源码开发 | [开源贡献指南](../CONTRIBUTING.md) |
+| 排查轮次卡死与执行权回收 | [Turn 生命周期加固](./turn-lifecycle-hardening.md) |
 
 ## 1. 概念与架构
 

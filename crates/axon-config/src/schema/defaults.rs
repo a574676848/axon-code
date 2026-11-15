@@ -36,7 +36,10 @@ pub const DEFAULT_AGENT_MAX_SUBAGENT_ACTIVE_TURNS: usize = 16;
 /// Agent 自动压缩触发阈值（context_window 的比例），默认 0.8 (80%)。
 pub const DEFAULT_AGENT_AUTO_COMPACTION_THRESHOLD: f64 = 0.8;
 /// Agent 闲暇压缩 debounce 窗口，单位毫秒。
-pub const DEFAULT_AGENT_IDLE_COMPACTION_DEBOUNCE_MS: u64 = 2_000;
+///
+/// 取一分钟而非秒级：秒级窗口会在刚收口的轮次余温里抢跑，此时历史仍在落盘，
+/// 压缩多半因 `history_changed` 被跳过；拉长到一分钟让「确实闲下来」成为前提。
+pub const DEFAULT_AGENT_IDLE_COMPACTION_DEBOUNCE_MS: u64 = 60_000;
 /// Agent 默认日志级别；详细日志必须由配置显式开启。
 pub const DEFAULT_AGENT_LOG_LEVEL: &str = "warn";
 /// 日志级别的规范候选值，兼容别名不作为独立选项展示。

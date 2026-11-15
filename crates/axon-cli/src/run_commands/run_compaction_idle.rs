@@ -176,12 +176,14 @@ pub(crate) fn schedule_idle_compaction(
     let Some(policy) = idle_compaction_policy_for_selection(config, &selected) else {
         return;
     };
+    // 水位不再参与判定，但排期遥测仍要报「压缩时的上下文规模」，便于事后核对
+    // 空闲压缩究竟在多大规模上发生。
     let Ok(current_context_tokens) =
         super::current_context_tokens_for_selection(config_path, &detail, &selected)
     else {
         return;
     };
-    if !idle_compaction_eligible(&detail, policy, current_context_tokens) {
+    if !idle_compaction_eligible(&detail) {
         return;
     }
 
@@ -397,11 +399,13 @@ fn idle_compaction_policy_for_selection(
     .flatten()
 }
 
-pub(crate) fn idle_compaction_eligible(
-    detail: &axon_session::ThreadDetail,
-    policy: CompressionPolicy,
-    current_context_tokens: u64,
-) -> bool {
+/// 空闲压缩是否成立。
+///
+/// 判据只看「是否真的闲下来了」，不再看上下文水位：水位是请求前的保命闸，而空闲
+/// 压缩的价值在于把一段已经结束的历史提前收拢，占用量大小不改变这件事该不该做。
+/// 仍保留三道结构性保护：线程必须 Idle、最后一轮不是 Active、且本轮之后没压过。
+/// 少了第一道会在历史还在落盘时抢跑，少了第三道会在同一段历史上反复压。
+pub(crate) fn idle_compaction_eligible(detail: &axon_session::ThreadDetail) -> bool {
     if detail.thread.status != axon_session::ThreadStatus::Idle
         || detail
             .turns
@@ -409,9 +413,6 @@ pub(crate) fn idle_compaction_eligible(
             .is_some_and(|turn| turn.status == axon_session::TurnStatus::Active)
         || super::compacted_after_latest_turn(detail)
     {
-        return false;
-    }
-    if current_context_tokens < policy.trigger_tokens {
         return false;
     }
     let Ok(history_json) = thread_model_history_json(detail) else {
@@ -435,19 +436,17 @@ fn compact_session_with_expected(
 ) -> Result<CompactionDecision, String> {
     let root = resolved_axon_root(config_path)?;
     let detail = load_thread_detail(&root, session_id)?;
-    let Some(policy) = idle_compaction_policy_for_selection(config, &selected) else {
+    if idle_compaction_policy_for_selection(config, &selected).is_none() {
         return Ok(CompactionDecision::Skipped(
             IDLE_COMPACTION_SKIP_POLICY_UNAVAILABLE,
         ));
-    };
+    }
     if detail.turns.last().map(|turn| turn.sequence) != Some(expected_turn_sequence) {
         return Ok(CompactionDecision::Skipped(
             IDLE_COMPACTION_SKIP_HISTORY_CHANGED,
         ));
     }
-    let current_context_tokens =
-        super::current_context_tokens_for_selection(config_path, &detail, &selected)?;
-    if !idle_compaction_eligible(&detail, policy, current_context_tokens) {
+    if !idle_compaction_eligible(&detail) {
         return Ok(CompactionDecision::Skipped(IDLE_COMPACTION_SKIP_INELIGIBLE));
     }
     super::compact_loaded_thread(

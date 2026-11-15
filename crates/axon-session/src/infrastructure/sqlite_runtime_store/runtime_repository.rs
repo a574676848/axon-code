@@ -340,6 +340,42 @@ pub(super) fn claim_upgrade_replacement(
     })
 }
 
+/// 列出 owner lease 已失效的非终态 Session，只读不改状态。
+///
+/// 判据与 `recover_expired_sessions` 完全一致：宿主记录缺失、代际对不上、或宿主租约
+/// 已过期，都说明这一轮事实上已经没有推进者。区别只在「不接管」：接管与重新调度属于
+/// 调度器，对账只负责找出这些轮次并把它们改判为终态。
+pub(super) fn list_orphaned_sessions(
+    store: &SqliteRuntimeStore,
+    now_ms: u64,
+    limit: u32,
+) -> Result<Vec<SessionRuntimeRecord>, RuntimeStoreError> {
+    let connection = store.connection()?;
+    let mut statement = connection
+        .prepare(
+            "SELECT runtime.session_id FROM session_runtimes AS runtime \
+             LEFT JOIN daemon_hosts AS owner ON owner.host_id = runtime.owner_host_id AND owner.generation = runtime.owner_generation \
+             WHERE runtime.status IN ('created','running','compacting','waiting') \
+               AND (runtime.owner_host_id IS NULL OR owner.host_id IS NULL OR owner.lease_expires_at_ms <= ?1) \
+             ORDER BY runtime.last_activity_at_ms ASC LIMIT ?2",
+        )
+        .map_err(storage)?;
+    let ids = statement
+        .query_map(params![i64_value(now_ms)?, i64::from(limit)], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    drop(statement);
+    let mut records = Vec::with_capacity(ids.len());
+    for id in ids {
+        let session_id = parse_session_id(id).map_err(storage)?;
+        records.push(store.get_session(&session_id)?);
+    }
+    Ok(records)
+}
+
 pub(super) fn recover_expired_sessions(
     store: &SqliteRuntimeStore,
     host: &DaemonHostRecord,
