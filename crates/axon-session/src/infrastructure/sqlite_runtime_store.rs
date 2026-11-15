@@ -398,14 +398,6 @@ impl RuntimeStore for SqliteRuntimeStore {
         runtime_repository::recover_expired_sessions(self, host, now_ms, limit)
     }
 
-    fn list_orphaned_sessions(
-        &self,
-        now_ms: u64,
-        limit: u32,
-    ) -> Result<Vec<SessionRuntimeRecord>, RuntimeStoreError> {
-        runtime_repository::list_orphaned_sessions(self, now_ms, limit)
-    }
-
     fn set_session_status(
         &self,
         session_id: &DaemonSessionId,

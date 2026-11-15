@@ -472,9 +472,6 @@ fn build_daemon_host(
     store
         .reap_dead_hosts(now_ms())
         .map_err(|error| format!("回收已退出 Daemon Host lease 失败: {error}"))?;
-    // 启动对账：上一任宿主可能留下「宿主已死、轮次仍挂 Active」的会话，这里一次性
-    // 改判终态，让桌面端立刻停止等待一个永远不会有人推进的轮次。
-    crate::run_commands::reconcile_at_startup(&store, &command.config_path);
     let shell_job_wake = Some(Arc::new(
         crate::run_commands::run_shell_job_wake::ShellJobWakeBridge::new(
             store.clone(),

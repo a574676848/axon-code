@@ -164,16 +164,6 @@ pub trait RuntimeStore:
         now_ms: u64,
         limit: u32,
     ) -> Result<Vec<SessionRuntimeRecord>, RuntimeStoreError>;
-    /// 列出 owner lease 已失效的非终态 Session，只读不改状态。
-    ///
-    /// 与 `recover_expired_sessions` 共用同一条失效判据，但**不接管** Session：用于
-    /// 把「执行者已经没了、轮次却还挂在 Active」的会话交给对账流程改判终态。
-    /// 接管语义属于调度器，对账只需要知道哪些轮次事实上已无人推进。
-    fn list_orphaned_sessions(
-        &self,
-        now_ms: u64,
-        limit: u32,
-    ) -> Result<Vec<SessionRuntimeRecord>, RuntimeStoreError>;
     /// 更新 Session 状态并校验 fencing。
     fn set_session_status(
         &self,
