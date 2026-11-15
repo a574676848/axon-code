@@ -193,13 +193,16 @@ fn status_payload_only_reports_readings_it_can_prove() {
         assert!(lease.get("owner").is_some(), "owner 必须存在");
     }
 
-    // 临时根里没有 config.toml：飞书一路按默认关闭上报，而不是凭空为真。
-    let adapters = body["remoteAdapters"].as_array().expect("远端适配器是数组");
-    let feishu = adapters
-        .iter()
-        .find(|entry| entry["name"] == "feishu")
-        .expect("飞书一路必须在清单里");
-    assert_eq!(feishu["enabled"], false);
+    // 网关两个协议面是常驻事实，清单必须有且都为启用。
+    let adapters = body["remoteAdapters"].as_array().expect("适配器清单是数组");
+    for name in ["gateway_http", "gateway_websocket"] {
+        let entry = adapters
+            .iter()
+            .find(|entry| entry["name"] == name)
+            .unwrap_or_else(|| panic!("{name} 必须在清单里"));
+        assert_eq!(entry["enabled"], true, "{name} 必须上报为启用");
+    }
+    assert_eq!(adapters.len(), 2, "清单只应包含两个网关协议面");
 }
 
 #[test]

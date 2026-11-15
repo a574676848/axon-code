@@ -73,7 +73,7 @@ axon setup
 向导将引导你完成：
 - 选择默认大模型 Provider（OpenAI、Anthropic、DeepSeek、Ollama 等）；
 - 配置 API 密钥（安全隔离保存在 `~/.axon/.env` 中）；
-- 自动生成网关通信 Token，用于桌面端与远程协同鉴权。
+- 自动生成网关通信 Token，用于桌面端与外部系统接入鉴权。
 
 详细配置选项请参阅 [配置指南](./configuration.md)。
 

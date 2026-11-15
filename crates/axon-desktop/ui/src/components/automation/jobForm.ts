@@ -3,9 +3,8 @@ import type { CronJob } from "../../types";
 /*
  * 自动化任务的表单契约：任务快照、表单值与网关请求之间的唯一映射。
  *
- * 投递目标在新模型里只有一个 `wake` 文本字段，取值是 `feishu:<chat_id>` 或
- * `session:<channel>:<destination>`；空串表示不设置目标，请求里落成 `null`，
- * 任务执行完只记录运行事实，不产生任何投递。
+ * 投递目标只有一个 `wake` 文本字段，取值是 `session:<channel>:<destination>[:<workspace>]`；
+ * 空串表示不设置目标，请求里落成 `null`，任务执行完只记录运行事实，不产生任何投递。
  */
 
 /** 编辑器持有的全部字段；页面在打开编辑时用它快照任务。 */
@@ -46,6 +45,13 @@ export const wakeLabel = (wake: string | null | undefined): string =>
 /** 表单值转请求值：留空即不设置目标。 */
 export const wakeFromForm = (value: string): string | null =>
   value.trim() || null;
+
+/** 投递目标只接受会话注入形态；空串表示不设置目标。 */
+export const wakeError = (value: string): string | null => {
+  const wake = value.trim();
+  if (wake.length === 0 || wake.startsWith("session:")) return null;
+  return "投递目标只支持 session:<channel>:<destination>[:<workspace>] 形态";
+};
 
 /** 表单从任务快照里读取的字段；其余任务事实不参与编辑。 */
 export type JobFormSource = Pick<

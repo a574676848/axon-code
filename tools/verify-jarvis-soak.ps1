@@ -1,7 +1,6 @@
 param(
     [string]$WorkspaceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
     [int]$Iterations = 0,
-    [int]$Cycles = 0,
     [string]$ReportPath = ""
 )
 
@@ -10,9 +9,6 @@ Set-Location $WorkspaceRoot
 
 if ($Iterations -gt 0) {
     $env:JARVIS_SOAK_ITERATIONS = [string]$Iterations
-}
-if ($Cycles -gt 0) {
-    $env:JARVIS_DELIVERY_SOAK_CYCLES = [string]$Cycles
 }
 
 $reports = New-Object System.Collections.Generic.List[string]
@@ -44,7 +40,6 @@ function Invoke-SoakReport {
 }
 
 Invoke-SoakReport -Label "JARVIS 常驻 soak（R7-07）：Host heartbeat、lease 续租与 Execution churn" -Package "axon-daemon" -Filter "daemon_host_soak_tests"
-Invoke-SoakReport -Label "JARVIS 投递 soak（R7-07）：outbox 退避重试与崩溃恢复" -Package "axon-remote-runtime" -Filter "remote_delivery_soak_tests"
 
 if ($ReportPath) {
     $reports | Set-Content -LiteralPath $ReportPath -Encoding utf8

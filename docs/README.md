@@ -1,6 +1,6 @@
 # Axon 文档中心
 
-Axon 是基于 Rust 构建的专属个人智能体（Personal Agent）与战术协同平台，**知你所想，办你所托**（*Knowing Your Intent, Delivering Your Outcome*），融入你的工作区与工作节奏，在每一次交互中持续深化认知。系统严格遵循洋葱架构，在桌面端（Desktop Workbench）、终端交互（Terminal TUI）、无头命令行（Headless CLI）与企业协同（飞书远程接入）之间复用统一的 Agent 运行时、状态机模型、模型路由与上下文认知体系。
+Axon 是基于 Rust 构建的专属个人智能体（Personal Agent）与战术协同平台，**知你所想，办你所托**（*Knowing Your Intent, Delivering Your Outcome*），融入你的工作区与工作节奏，在每一次交互中持续深化认知。系统严格遵循洋葱架构，在桌面端（Desktop Workbench）、终端交互（Terminal TUI）与无头命令行（Headless CLI）之间复用统一的 Agent 运行时、状态机模型、模型路由与上下文认知体系。
 
 本页是全部文档的索引。每篇文档只讨论一个主题，互相之间保持链接，便于按需跳转。
 
@@ -48,7 +48,6 @@ Axon 是基于 Rust 构建的专属个人智能体（Personal Agent）与战术�
 - [Provider 与模型路由](./providers.md) - 多供应商接入、负载均衡、容灾 Failover 与 Prompt Cache
 - [Daemon 后台守护进程](./daemon.md) - 网关通信、后台任务执行池、服务管理与原子升级
 - [语音能力](./voice.md) - 云端识别与合成的帧协议、桥状态机、超时背压与可观测面
-- [飞书远程协同](./feishu-remote.md) - 私有长连接远控、移动端交互卡片与群聊协作
 
 ## 4. 扩展生态与工具
 

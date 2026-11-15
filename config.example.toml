@@ -40,37 +40,6 @@ http_bind = "127.0.0.1:3143"
 # 通用 WebSocket 监听地址；可选值：有效的 IP:端口；默认值："127.0.0.1:3144"。
 websocket_bind = "127.0.0.1:3144"
 
-[remote.feishu_websocket]
-# 是否启用 Feishu WebSocket adapter；可选值：true、false；默认值：false。
-enabled = false
-# Feishu app_id；可选值：飞书应用 ID；默认值：""。
-app_id = ""
-# Feishu app_secret 环境变量名；可选值：环境变量名；默认值：""。
-app_secret_env = ""
-# Feishu OpenAPI 基址；可选值：http/https URL；空字符串表示使用官方默认地址；默认值：""。
-api_base_url = ""
-# Feishu WebSocket 连接地址；可选值：WebSocket URL；空字符串表示使用官方默认地址；默认值：""。
-websocket_url = ""
-# 是否允许发送远控通知；可选值：true、false；默认值：false。
-enable_notification_sending = false
-# 全局 sender open_id 白名单；可选值：字符串数组；默认值：[]。
-allowed_sender_open_ids = []
-# 全局 sender open_id 黑名单（优先级高于白名单）；可选值：字符串数组；默认值：[]。
-blocked_sender_open_ids = []
-# 群聊是否要求显式 @ 机器人；可选值：true、false；默认值：false。
-require_mention = false
-
-# 单群治理策略数组表；可重复配置，默认值：[]（不配置任何群策略）。chat_id 必须非空。
-[[remote.feishu_websocket.chat_policies]]
-# Feishu chat_id；可选值：非空字符串；默认值：无（每条策略必须填写）。
-chat_id = "oc_example"
-# 当前群 sender 白名单；可选值：字符串数组；默认值：[]。
-allowed_sender_open_ids = []
-# 当前群 sender 黑名单；可选值：字符串数组；默认值：[]。
-blocked_sender_open_ids = []
-# 是否要求 @ 机器人；可选值：true、false 或省略（继承全局 require_mention）；默认值：省略。
-require_mention = true
-
 [memory.embedding]
 # 是否启用 Memory embedding 检索；可选值：true、false；默认值：false。
 enabled = false

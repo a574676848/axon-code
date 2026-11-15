@@ -61,40 +61,6 @@ const CONFIG_COPY: Record<string, ConfigCopy> = {
     detail: '接收长连接的地址',
   },
   'remote.mode': { label: '远控模式', detail: '常规模式够用，高频事件流再切换' },
-  'remote.feishu_websocket.enabled': { label: '启用飞书远控', detail: '是否开启飞书长连接远控' },
-  'remote.feishu_websocket.app_id': { label: '飞书应用 ID', detail: '飞书开放平台的应用标识' },
-  'remote.feishu_websocket.app_secret_env': {
-    label: '飞书密钥变量名',
-    detail: '存放应用密钥的环境变量',
-  },
-  'remote.feishu_websocket.api_base_url': {
-    label: '飞书接口地址',
-    detail: '留空使用官方默认地址',
-  },
-  'remote.feishu_websocket.websocket_url': {
-    label: '飞书长连接地址',
-    detail: '留空使用官方默认地址',
-  },
-  'remote.feishu_websocket.enable_notification_sending': {
-    label: '发送远控通知',
-    detail: '是否允许主动推送通知',
-  },
-  'remote.feishu_websocket.notification_chat_id': {
-    label: '消息通知 chat_id',
-    detail: '后台完成通知的接收会话；留空不通知飞书',
-  },
-  'remote.feishu_websocket.allowed_sender_open_ids': {
-    label: '允许的发送者',
-    detail: '仅这些用户可以远控',
-  },
-  'remote.feishu_websocket.blocked_sender_open_ids': {
-    label: '禁止的发送者',
-    detail: '这些用户一律拒绝',
-  },
-  'remote.feishu_websocket.require_mention': {
-    label: '需要 @ 机器人',
-    detail: '群聊中必须 @ 才响应',
-  },
 };
 
 /** 判断文本里是否含中文。 */

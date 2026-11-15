@@ -182,17 +182,6 @@ mod tests {
             Ok(String::new())
         }
 
-        fn enqueue_reply(
-            &self,
-            _job: &CronJob,
-            _channel: &str,
-            _destination: &str,
-            _body: &str,
-            _now_ms: u64,
-        ) -> Result<String, String> {
-            Ok("dispatch-test".to_owned())
-        }
-
         fn wake_session(
             &self,
             _job: &CronJob,

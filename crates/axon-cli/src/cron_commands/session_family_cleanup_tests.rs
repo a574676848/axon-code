@@ -3,7 +3,6 @@ use std::{
     time::Instant,
 };
 
-use axon_remote_runtime::RemoteStateStoreRuntime;
 use axon_session::RuntimeStore;
 use rusqlite::{Connection, params};
 
@@ -22,8 +21,6 @@ mod source_installed;
 #[test]
 fn stale_family_is_removed_from_all_associated_stores() {
     let root = axon_test_support::test_temp_dir();
-    // Feishu 清理会建立池化连接：临时目录析构前必须先关闭连接池（守卫按声明逆序析构）。
-    let _close_pool = feishu_records_pool_guard(root.path());
     let rollout_path = rollout_path(root.path());
     create_rollout(&rollout_path, true);
     create_runtime_family(root.path(), "idle", false);
@@ -32,7 +29,6 @@ fn stale_family_is_removed_from_all_associated_stores() {
     create_thread(root.path(), RETAINED_SESSION, RETAINED_BYTES);
     create_context(root.path(), STALE_ROOT);
     let retained_context = create_retained_context(root.path());
-    create_feishu_records(root.path());
 
     let stale = stale_session_family_ids(root.path(), &rollout_path, CUTOFF_MS)
         .expect("stale family 应可读取");
@@ -52,9 +48,6 @@ fn stale_family_is_removed_from_all_associated_stores() {
     assert_eq!(dry_run.deleted_session_event_count, 2);
     assert_eq!(dry_run.deleted_governance_count, 2);
     assert_eq!(dry_run.deleted_thread_file_count, 1);
-    assert_eq!(dry_run.deleted_feishu_reply_artifact_count, 1);
-    assert_eq!(dry_run.deleted_feishu_outbox_count, 1);
-    assert_eq!(dry_run.deleted_feishu_feedback_count, 1);
     assert_eq!(dry_run.deleted_session_notes_count, 1);
     assert_eq!(dry_run.deleted_note_file_count, 2);
     assert_eq!(dry_run.deleted_archived_shard_count, 1);
@@ -91,10 +84,6 @@ fn stale_family_is_removed_from_all_associated_stores() {
         report.deleted_thread_file_count,
         dry_run.deleted_thread_file_count
     );
-    assert_eq!(
-        report.deleted_feishu_reply_artifact_count,
-        dry_run.deleted_feishu_reply_artifact_count
-    );
     assert!(!rollout_exists(&rollout_path, STALE_ROOT));
     assert!(!runtime_exists(root.path(), STALE_ROOT));
     assert!(!thread_path(root.path(), STALE_ROOT).exists());
@@ -114,8 +103,6 @@ fn stale_family_is_removed_from_all_associated_stores() {
 fn active_or_execution_referenced_member_protects_whole_rollout_family() {
     for (status, with_execution) in [("running", false), ("idle", true)] {
         let root = axon_test_support::test_temp_dir();
-        // Feishu 清理会建立池化连接：临时目录析构前必须先关闭连接池（守卫按声明逆序析构）。
-        let _close_pool = feishu_records_pool_guard(root.path());
         let rollout_path = rollout_path(root.path());
         create_rollout(&rollout_path, false);
         create_runtime_family(root.path(), status, with_execution);
@@ -132,8 +119,6 @@ fn active_or_execution_referenced_member_protects_whole_rollout_family() {
 #[test]
 fn context_failure_keeps_rollout_retry_anchor() {
     let root = axon_test_support::test_temp_dir();
-    // Feishu 清理会建立池化连接：临时目录析构前必须先关闭连接池（守卫按声明逆序析构）。
-    let _close_pool = feishu_records_pool_guard(root.path());
     let rollout_path = rollout_path(root.path());
     create_rollout(&rollout_path, false);
     let invalid_context = root.path().join("sessions").join(STALE_ROOT);
@@ -157,39 +142,9 @@ fn context_failure_keeps_rollout_retry_anchor() {
 }
 
 #[test]
-fn feishu_failure_keeps_rollout_retry_anchor() {
-    let root = axon_test_support::test_temp_dir();
-    // Feishu 清理会建立池化连接：临时目录析构前必须先关闭连接池（守卫按声明逆序析构）。
-    let _close_pool = feishu_records_pool_guard(root.path());
-    let rollout_path = rollout_path(root.path());
-    create_rollout(&rollout_path, false);
-    let runtime_root = axon_remote_feishu::remote_feishu_runtime_root(root.path());
-    let artifact_path =
-        axon_remote_feishu::RemoteFeishuAgentReplyArtifactRuntime::resolve_store_path(runtime_root);
-    std::fs::create_dir_all(artifact_path.parent().expect("artifact 必须有父目录"))
-        .expect("artifact 目录应可创建");
-    std::fs::write(&artifact_path, b"not-sqlite").expect("损坏 artifact 应可创建");
-    let stale = vec![STALE_ROOT.to_owned(), STALE_CHILD.to_owned()];
-
-    cleanup_session_family_data(
-        root.path(),
-        &rollout_path,
-        CUTOFF_MS,
-        &stale,
-        &mut SessionCleanupReport::default(),
-    )
-    .expect_err("Feishu 清理失败必须向上传递");
-
-    assert!(rollout_exists(&rollout_path, STALE_ROOT));
-    assert!(rollout_exists(&rollout_path, STALE_CHILD));
-}
-
-#[test]
 fn governance_or_runtime_read_failure_keeps_rollout_retry_anchor() {
     for broken_store in ["governance", "runtime"] {
         let root = axon_test_support::test_temp_dir();
-        // Feishu 清理会建立池化连接：临时目录析构前必须先关闭连接池（守卫按声明逆序析构）。
-        let _close_pool = feishu_records_pool_guard(root.path());
         let rollout_path = rollout_path(root.path());
         create_rollout(&rollout_path, false);
         let broken_path = if broken_store == "governance" {
@@ -212,8 +167,6 @@ fn governance_or_runtime_read_failure_keeps_rollout_retry_anchor() {
 #[test]
 fn rollout_cleanup_crosses_bounded_batch_boundary() {
     let root = axon_test_support::test_temp_dir();
-    // Feishu 清理会建立池化连接：临时目录析构前必须先关闭连接池（守卫按声明逆序析构）。
-    let _close_pool = feishu_records_pool_guard(root.path());
     let rollout_path = rollout_path(root.path());
     let store = RolloutSqliteStore::open(&rollout_path).expect("rollout 应可初始化");
     drop(store);
@@ -238,11 +191,8 @@ fn rollout_cleanup_crosses_bounded_batch_boundary() {
 #[test]
 fn associated_cleanup_queries_use_indexes() {
     let root = axon_test_support::test_temp_dir();
-    // Feishu 清理会建立池化连接：临时目录析构前必须先关闭连接池（守卫按声明逆序析构）。
-    let _close_pool = feishu_records_pool_guard(root.path());
     create_runtime_family(root.path(), "idle", false);
     create_governance(root.path());
-    create_feishu_records(root.path());
     let ids = [STALE_ROOT, STALE_CHILD];
     let placeholders = "?,?";
 
@@ -276,21 +226,6 @@ fn associated_cleanup_queries_use_indexes() {
         governance_plan.contains("idx_governance_retention"),
         "governance 清理必须命中 retention 索引：{governance_plan}"
     );
-
-    let runtime_root = axon_remote_feishu::remote_feishu_runtime_root(root.path());
-    let artifact =
-        axon_remote_feishu::RemoteFeishuAgentReplyArtifactRuntime::resolve_store_path(runtime_root);
-    let remote = Connection::open(artifact).expect("remote state 应可打开");
-    let remote_plan = explain_plan(
-        &remote,
-        "SELECT record_key FROM remote_state_index
-         WHERE namespace=? AND partition IN (?,?)",
-        &["feishu_agent_reply", STALE_ROOT, STALE_CHILD],
-    );
-    assert!(
-        remote_plan.contains("remote_state_index_lookup"),
-        "Feishu 关联查询必须命中组合索引：{remote_plan}"
-    );
 }
 
 #[test]
@@ -303,8 +238,6 @@ fn stale_family_cleanup_reports_percentiles() {
     let mut samples = Vec::with_capacity(SAMPLE_COUNT);
     for sample in 0..SAMPLE_COUNT {
         let root = axon_test_support::test_temp_dir();
-        // Feishu 清理会建立池化连接：临时目录析构前必须先关闭连接池（守卫按声明逆序析构）。
-        let _close_pool = feishu_records_pool_guard(root.path());
         let rollout_path = rollout_path(root.path());
         let store = RolloutSqliteStore::open(&rollout_path).expect("rollout 应可初始化");
         drop(store);
@@ -462,56 +395,6 @@ fn create_retained_context(root: &Path) -> PathBuf {
         .expect("retained context 目录应可创建");
     std::fs::write(&path, RETAINED_BYTES).expect("retained context 应可写入");
     path
-}
-
-fn create_feishu_records(root: &Path) {
-    let dispatch_id = "dispatch-stale";
-    let [artifact, outbox, feedback] = feishu_record_store_paths(root);
-    axon_remote_runtime::RemoteStateStoreRuntime::upsert(
-        artifact,
-        dispatch_id,
-        axon_remote_runtime::RemoteStateStoreIndex::new(
-            "feishu_agent_reply",
-            STALE_ROOT,
-            "ready",
-            1,
-        ),
-        &serde_json::json!({"kind":"artifact"}),
-    )
-    .expect("artifact fixture 应可写入");
-    for path in [outbox, feedback] {
-        axon_remote_runtime::RemoteStateStoreRuntime::upsert(
-            path,
-            dispatch_id,
-            axon_remote_runtime::RemoteStateStoreIndex::new("fixture", "fixture", "ready", 1),
-            &serde_json::json!({"kind":"associated"}),
-        )
-        .expect("Feishu 关联 fixture 应可写入");
-    }
-}
-
-/// `create_feishu_records` 写入的三个池化状态库路径：artifact、outbox、feedback。
-///
-/// 路径推导与写入必须共用本函数，否则守卫漏关某个库时临时目录又会在 Windows 上删不掉。
-fn feishu_record_store_paths(root: &Path) -> [PathBuf; 3] {
-    let runtime_root = axon_remote_feishu::remote_feishu_runtime_root(root);
-    [
-        axon_remote_feishu::RemoteFeishuAgentReplyArtifactRuntime::resolve_store_path(
-            &runtime_root,
-        ),
-        axon_remote_runtime::RemoteNotificationOutboxRuntime::resolve_store_path(&runtime_root),
-        axon_remote_feishu::RemoteFeishuFeedbackTaskStoreRuntime::resolve_store_path(&runtime_root),
-    ]
-}
-
-/// 关闭该临时根下的 Feishu 池化状态库，让临时目录随测试线程顺利删除。
-fn feishu_records_pool_guard(root: &Path) -> axon_test_support::DeferredCleanup {
-    let paths = feishu_record_store_paths(root);
-    axon_test_support::DeferredCleanup::new(move || {
-        for path in paths {
-            axon_remote_runtime::RemoteStateStoreRuntime::close_path(path);
-        }
-    })
 }
 
 fn rollout_path(root: &Path) -> PathBuf {

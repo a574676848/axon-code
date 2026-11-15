@@ -382,48 +382,8 @@ fn resumed_parent_session_rejects_self_reference() {
     );
 }
 
-/// 飞书渠道下固定使用 `agent.default_model` 与 `agent.reasoning_effort`。
-///
-/// 传输上下文与本轮显式选择都不作数：飞书是无人值守的远控入口，配置改过之后
-/// 不应继续按某条历史会话当初选的模型跑。
 #[test]
-fn feishu_transport_pins_default_model_and_reasoning_effort() {
-    let (workspace, config_path, config) = pinned_model_fixture();
-    let command = pinned_model_command();
-    let startup = Arc::new(RunStartupSnapshot::build(&config_path, &workspace).unwrap());
-
-    let request = RunRequest::from_command(
-        &command,
-        &config,
-        &config_path,
-        RunRequestSession::with_id(None, super::new_run_session_id()),
-        Some(&workspace),
-        RunRequestBuildOptions {
-            transport_context: Some(serde_json::json!({
-                "channel": "feishu",
-                "destination": "oc_chat_pinned",
-            })),
-            client_channel: ClientChannel::Feishu,
-            startup,
-            cancel_token: None,
-            subagent_event_bus: None,
-            subagent_session_sinks: None,
-            agent_identity: RunAgentIdentity::PrimaryPrivate,
-            performance: None,
-            workspace_snapshot_prewarm: None,
-        },
-    )
-    .expect("飞书 RunRequest 应可构造");
-
-    assert_eq!(request.model.name, "default-model");
-    assert_eq!(request.reasoning_effort.as_deref(), Some("low"));
-
-    let _ = std::fs::remove_dir_all(&workspace);
-}
-
-/// 非飞书渠道仍然尊重本轮显式选择，证明上一条的固定行为只在飞书生效。
-#[test]
-fn non_feishu_transport_keeps_explicit_turn_model_and_effort() {
+fn transport_context_keeps_explicit_turn_model_and_effort() {
     let (workspace, config_path, config) = pinned_model_fixture();
     let command = pinned_model_command();
     let startup = Arc::new(RunStartupSnapshot::build(&config_path, &workspace).unwrap());

@@ -301,7 +301,7 @@ interface ToolRowRule {
 }
 
 /*
- * 规则表与 TUI、飞书渠道共用 `axon-display` 的 `tool_row_rules.json`：
+ * 规则表与 TUI 渠道共用 `axon-display` 的 `tool_row_rules.json`：
  * 这些工具的参数 JSON 里只有一项对用户有意义，其余是分页、预算一类执行细节，
  * 收起时摆了也只是噪声。
  */

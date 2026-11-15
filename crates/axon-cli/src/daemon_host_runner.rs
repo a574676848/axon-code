@@ -10,13 +10,10 @@ use axon_daemon::{
     },
 };
 use axon_domain::{InteractionId, InteractionRecord, RuntimeHostId, SYSTEM_SOURCE_CHANNEL};
-use axon_remote_runtime::{DeliveryStore, RemoteNotificationOutboxRuntime};
 use axon_session::{
     SqliteRuntimeStore, WorkspaceResolver, WorkspaceStore, interaction_session_lane_id,
 };
 use axon_session_runtime::AgentTurnExecutor;
-#[cfg(test)]
-use axon_session_runtime::EventPublisher;
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -28,7 +25,6 @@ use std::{
 };
 
 use super::DaemonRunCommand;
-use super::daemon_delivery_health::CliDeliveryHealthStore;
 use super::{DEFAULT_ENDPOINT, RUNTIME_DATA_DIR, now_ms};
 use crate::run_commands::run_steer::ActivePrimaryTurnRegistry;
 
@@ -84,7 +80,6 @@ pub(super) const MAINTENANCE_TIMER_INTERVAL_MS: u64 = 1_000;
 /// Cron tick 间隔：Cron 任务体时长不可控（用户脚本、清理、Agent turn），
 /// 必须运行在独立线程，避免拖住调度与监督 tick。
 pub(super) const CRON_TICK_INTERVAL_MS: u64 = 1_000;
-pub(super) const FEISHU_DELIVERY_RECOVERY_INTERVAL_MS: u64 = 30_000;
 pub(super) const RELEASE_GC_INTERVAL_MS: u64 = 30_000;
 /// 服务停机唤醒线程的轮询间隔。
 pub(super) const SERVICE_STOP_WAKEUP_POLL_MS: u64 = 50;
@@ -157,8 +152,6 @@ fn try_run_daemon_host(
     .map_err(|error| format!("加载 Daemon 凭据失败: {error}"))?;
     let loaded_config = ConfigLoader::load_from_path(&command.config_path)
         .map_err(|error| format!("加载 Daemon 配置失败: {error:?}"))?;
-    // 飞书问答卡片要用同一份远端配置；在 gateway 字段被取出前先留一份。
-    let feishu_websocket_config = loaded_config.config.remote.feishu_websocket.clone();
     crate::run_commands::cleanup_stale_run_controls(&command.config_path)
         .map_err(|error| format!("清理 stale run 控制文件失败: {error}"))?;
     let gateway_config = loaded_config.config.remote.gateway;
@@ -188,7 +181,6 @@ fn try_run_daemon_host(
     // Gateway 与 CLI、cron 一样是 Interaction 提交方，但它没有调用方 cwd，事件只能落在
     // Daemon 自己的工作目录上；提交方必须先注册 Workspace，否则主 turn 打开运行时会被拒。
     register_daemon_workspace(&store);
-    let delivery_signal = Arc::new(DaemonMaintenanceSignal::default());
     // 显式 MCP 刷新请求要在 IPC 侧清除健康负缓存并重建快照，因此缓存句柄由运行函数
     // 持有，再分别交给 Worker 与 IPC handler。
     let startup_snapshots = crate::run_commands::StartupSnapshotCache::default();
@@ -201,16 +193,11 @@ fn try_run_daemon_host(
     // 主 turn 唤醒信号必须先于问答装配创建：迟到作答落库后由答案注入器直接唤醒一次领取。
     let primary_turn_signal = Arc::new(DaemonMaintenanceSignal::default());
     // 问答宿主单例与答案服务在此装配；两者共用同一个宿主实例，见 QuestionWiring。
-    // 飞书卡片 sink 在后台预热凭据：提问事件当场出卡，未就绪时由网关后台 tick 兜底。
-    let feishu_question_sink = crate::remote_commands::warm_feishu_question_card_sink(
-        command.config_path.clone(),
-        command.root.clone(),
-        feishu_websocket_config,
-    );
+    // 守护进程当前没有外接渠道卡片通道，事件只经运行态 sink 进入逐字稿。
     let questions = QuestionWiring::assemble(
         store.clone(),
         active_primary_turns.clone(),
-        feishu_question_sink,
+        None,
         primary_turn_wake_hook(Arc::clone(&primary_turn_signal)),
     );
     // durable 落点要用同一份运行态存储：问答 sink 建在宿主之前，安装在其后。
@@ -220,7 +207,6 @@ fn try_run_daemon_host(
     let mut host = build_daemon_host(
         command,
         store,
-        Arc::clone(&delivery_signal),
         startup_snapshots.clone(),
         active_primary_turns.clone(),
         questions.primary_turn_port(),
@@ -230,7 +216,6 @@ fn try_run_daemon_host(
     // 宿主起来之后才有 host 记录与订阅桥；迟到作答的问答帧靠它落进会话事件流。
     questions.install_durable_question_events(&host, question_store);
     let _pid_file = DaemonPidFileGuard::acquire(&runtime_root)?;
-    let delivery_owner = host.owner_identity().map_err(|error| error.to_string())?;
     let server = bind_daemon_server(&endpoint, command)?;
     let cron_adapter = load_cron_adapter(command)?;
     let maintenance_signal = Arc::new(DaemonMaintenanceSignal::default());
@@ -252,13 +237,6 @@ fn try_run_daemon_host(
         gateway_egress,
         gateway_auth,
     ));
-    gateway_kernel
-        .register_adapter(Arc::new(
-            crate::remote_commands::remote_feishu_gateway_adapter::FeishuGatewayAdapter::new(
-                command.config_path.clone(),
-            ),
-        ))
-        .map_err(|error| format!("注册 Feishu Gateway Adapter 失败: {error}"))?;
     let observability_http_handler = Arc::new(
         crate::usage_statistics::http_adapter::ObservabilityHttpAdapter::new(
             command.config_path.clone(),
@@ -314,14 +292,11 @@ fn try_run_daemon_host(
         );
     }
     workers::start_background_workers(
-        command,
         &host,
         cron_adapter,
-        delivery_owner,
         Arc::clone(&workers_running),
         Arc::clone(&maintenance_signal),
         Arc::clone(&primary_turn_signal),
-        delivery_signal,
         active_primary_turns,
     );
     let result = serve_daemon_ipc(
@@ -454,7 +429,7 @@ fn ensure_system_crons(command: &DaemonRunCommand) -> Result<(), String> {
 
 pub(super) type CliDaemonHost = DaemonHost<
     SqliteRuntimeStore,
-    AgentTurnExecutor<crate::run_commands::run_remote_execution::CliProviderTurnRunner>,
+    AgentTurnExecutor<crate::run_commands::CliProviderTurnRunner>,
     DaemonEventPublisher,
     SystemClock,
     CliProcessIdentity,
@@ -463,7 +438,6 @@ pub(super) type CliDaemonHost = DaemonHost<
 fn build_daemon_host(
     command: &DaemonRunCommand,
     store: SqliteRuntimeStore,
-    delivery_signal: Arc<DaemonMaintenanceSignal>,
     startup_snapshots: crate::run_commands::StartupSnapshotCache,
     active_primary_turns: crate::run_commands::run_steer::ActivePrimaryTurnRegistry,
     user_question_port: Option<Arc<dyn axon_agent_runtime::UserQuestionPort>>,
@@ -480,7 +454,7 @@ fn build_daemon_host(
             primary_turn_wake_hook(primary_turn_signal),
         ),
     ));
-    let runner = crate::run_commands::run_remote_execution::CliProviderTurnRunner {
+    let runner = crate::run_commands::CliProviderTurnRunner {
         config_path: command.config_path.clone(),
         active_primary_turns: active_primary_turns.clone(),
         startup_snapshots,
@@ -488,20 +462,12 @@ fn build_daemon_host(
         user_question_port,
         shell_job_wake,
     };
-    let delivery_waker = Arc::clone(&delivery_signal);
-    crate::remote_commands::register_delivery_waker(Arc::new(move || {
-        delivery_waker.notify();
-    }));
     let host_id =
         RuntimeHostId::new(format!("axon-daemon-{}", std::process::id())).expect("稳定 Host ID");
     let host = DaemonHost::new(
         store.clone(),
         AgentTurnExecutor::new(runner),
-        DaemonEventPublisher::new(
-            command.root.clone(),
-            command.config_path.clone(),
-            delivery_signal,
-        ),
+        DaemonEventPublisher,
         SystemClock,
         CliProcessIdentity,
         host_id,
@@ -510,12 +476,7 @@ fn build_daemon_host(
     )
     .with_active_turn_steer_sink(DaemonPrimaryTurnSteerSink {
         active_primary_turns: active_primary_turns.clone(),
-    })
-    .with_delivery_health_store(CliDeliveryHealthStore::new(DeliveryStore::new(
-        RemoteNotificationOutboxRuntime::resolve_store_path(
-            axon_remote_feishu::remote_feishu_runtime_root(&command.root),
-        ),
-    )));
+    });
     Ok(host)
 }
 
@@ -542,9 +503,8 @@ fn resolved_daemon_endpoint(command: &DaemonRunCommand) -> String {
 
 fn load_cron_adapter(
     command: &DaemonRunCommand,
-) -> Result<crate::remote_commands::FeishuCronAdapter, String> {
-    crate::remote_commands::load_remote_context(Some(&command.config_path))
-        .map(|(_, context)| crate::remote_commands::FeishuCronAdapter::new(context))
+) -> Result<crate::cron_commands::CronDaemonAdapter, String> {
+    crate::cron_commands::load_cron_adapter(Some(&command.config_path))
         .map_err(|error| format!("加载 Daemon Cron 上下文失败: {error}"))
 }
 

@@ -301,7 +301,11 @@ fn test_job(next_run_at_ms: u64) -> CronJob {
     test_job_with_wake(
         "cron-test",
         next_run_at_ms,
-        Some(CronWakeTarget::Feishu("oc_test".to_owned())),
+        Some(CronWakeTarget::Session {
+            channel: "desktop".to_owned(),
+            destination: "workbench-1".to_owned(),
+            workspace: None,
+        }),
     )
 }
 

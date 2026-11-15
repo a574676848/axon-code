@@ -45,9 +45,6 @@ pub(crate) struct SessionCleanupReport {
     pub(crate) deleted_thread_file_count: usize,
     pub(crate) deleted_governance_count: usize,
     pub(crate) deleted_runtime_session_count: usize,
-    pub(crate) deleted_feishu_reply_artifact_count: usize,
-    pub(crate) deleted_feishu_outbox_count: usize,
-    pub(crate) deleted_feishu_feedback_count: usize,
     pub(crate) deleted_channel_metrics_sample_count: usize,
     pub(crate) deleted_cron_run_count: usize,
     pub(crate) deleted_cron_job_count: usize,
@@ -56,8 +53,6 @@ pub(crate) struct SessionCleanupReport {
     pub(crate) deleted_archived_shard_count: usize,
     pub(crate) vacuumed_rollout: bool,
     pub(crate) vacuumed_sqlite_count: usize,
-    pub(crate) deleted_ingress_watermark_count: usize,
-    pub(crate) deleted_ingress_governance_count: usize,
     pub(crate) deleted_session_event_count: usize,
     pub(crate) deleted_session_checkpoint_count: usize,
     pub(crate) deleted_runtime_schedule_count: usize,
@@ -140,8 +135,6 @@ fn run_cleanup_dry_run(
     let (cron_runs, cron_jobs) = dry_run_cron_history_count(root, cutoff_ms)?;
     report.deleted_cron_run_count = cron_runs;
     report.deleted_cron_job_count = cron_jobs;
-    let execution = cleanup_execution_history(root, cutoff_ms, true)?;
-    apply_execution_cleanup_report(&mut report, execution);
     apply_runtime_cleanup_counts(&mut report, count_runtime_cleanup(root, cutoff_ms)?);
     report.deleted_session_event_count =
         report
@@ -172,77 +165,9 @@ fn run_cleanup_deletion(
     initialize_and_cleanup_runtime(root, cutoff_ms, &mut report)?;
     apply_file_cleanup_counts(&mut report, cleanup_runtime_files(root, file_cutoff_ms())?);
     cleanup_session_family_data(root, rollout_path, cutoff_ms, stale_sessions, &mut report)?;
-    let execution = cleanup_execution_history(root, cutoff_ms, false)?;
-    apply_execution_cleanup_report(&mut report, execution);
     report.vacuumed_sqlite_count = vacuum_sqlite_files(root)?;
     report.status = "completed".to_owned();
     Ok(report)
-}
-
-#[derive(Debug, Default)]
-struct ExecutionCleanupReport {
-    ingress_watermarks: usize,
-    ingress_governance: usize,
-}
-
-fn apply_execution_cleanup_report(
-    report: &mut SessionCleanupReport,
-    cleanup: ExecutionCleanupReport,
-) {
-    report.deleted_ingress_watermark_count = cleanup.ingress_watermarks;
-    report.deleted_ingress_governance_count = cleanup.ingress_governance;
-}
-
-fn cleanup_execution_history(
-    root: &Path,
-    cutoff_ms: u64,
-    dry_run: bool,
-) -> Result<ExecutionCleanupReport, String> {
-    let ingress = cleanup_feishu_ingress_history(root, cutoff_ms, dry_run)?;
-    Ok(ExecutionCleanupReport {
-        ingress_watermarks: ingress.0,
-        ingress_governance: ingress.1,
-    })
-}
-
-fn cleanup_feishu_ingress_history(
-    root: &Path,
-    cutoff_ms: u64,
-    dry_run: bool,
-) -> Result<(usize, usize), String> {
-    let runtime_root = axon_remote_feishu::remote_feishu_runtime_root(root);
-    let watermark_path = root.join("remote_feishu_ingress_watermarks.sqlite3");
-    let watermark_count = if watermark_path.exists() && !dry_run {
-        axon_remote_runtime::RemoteStateStoreRuntime::delete_indexed_before(
-            &watermark_path,
-            "remote_feishu_ingress_watermark",
-            &["active"],
-            cutoff_ms,
-        )
-        .map_err(|error| format!("清理 Feishu ingress watermark 失败：{error:?}"))?
-    } else {
-        0
-    };
-    let governance_path = runtime_root.join(axon_remote_feishu::REMOTE_FEISHU_GOVERNANCE_FILE);
-    let governance_count = if governance_path.exists() && !dry_run {
-        axon_remote_runtime::RemoteStateStoreRuntime::delete_indexed_before(
-            &governance_path,
-            "feishu_governance",
-            &[
-                "accepted",
-                "duplicate_dropped",
-                "rejected_by_allowlist",
-                "rejected_by_blacklist",
-                "rejected_by_mention_gate",
-                "ignored_self_event",
-            ],
-            cutoff_ms,
-        )
-        .map_err(|error| format!("清理 Feishu ingress governance 失败：{error:?}"))?
-    } else {
-        0
-    };
-    Ok((watermark_count, governance_count))
 }
 
 fn dry_run_cron_history_count(root: &Path, cutoff_ms: u64) -> Result<(usize, usize), String> {
@@ -335,50 +260,6 @@ fn apply_file_cleanup_counts(report: &mut SessionCleanupReport, counts: FileClea
     report.deleted_attachment_file_count = counts.attachment_files;
 }
 
-#[cfg(test)]
-mod execution_cleanup_tests {
-    use axon_remote_runtime::{RemoteStateStoreIndex, RemoteStateStoreRuntime};
-
-    use super::*;
-
-    #[test]
-    fn system_cleanup_removes_expired_ingress() {
-        let root = axon_test_support::test_temp_dir();
-
-        let watermark = root.path().join("remote_feishu_ingress_watermarks.sqlite3");
-        // 池化连接会锁住库文件：临时目录析构前必须先关闭连接池（守卫按声明逆序析构）。
-        let _close_pool = axon_test_support::DeferredCleanup::new({
-            let watermark = watermark.clone();
-            move || axon_remote_runtime::RemoteStateStoreRuntime::close_path(&watermark)
-        });
-        RemoteStateStoreRuntime::upsert(
-            &watermark,
-            "chat:test",
-            RemoteStateStoreIndex::new("remote_feishu_ingress_watermark", "feishu", "active", 1),
-            &serde_json::json!({"recordedAtMs": 1}),
-        )
-        .expect("ingress watermark 应可写入");
-        let governance = axon_remote_feishu::remote_feishu_runtime_root(root.path())
-            .join(axon_remote_feishu::REMOTE_FEISHU_GOVERNANCE_FILE);
-        RemoteStateStoreRuntime::upsert(
-            &governance,
-            "request:test",
-            RemoteStateStoreIndex::new("feishu_governance", "1", "accepted", 1),
-            &serde_json::json!({"recordedAtMs": 1}),
-        )
-        .expect("governance 状态应可写入");
-
-        let mut report = SessionCleanupReport::default();
-        let execution = cleanup_execution_history(root.path(), 2, false).expect("清理应成功执行");
-        apply_execution_cleanup_report(&mut report, execution);
-
-        assert_eq!(report.deleted_ingress_watermark_count, 1);
-        assert_eq!(report.deleted_ingress_governance_count, 1);
-    }
-}
-
-#[path = "session_cleanup_feishu.rs"]
-mod session_cleanup_feishu;
 #[path = "session_cleanup_files.rs"]
 mod session_cleanup_files;
 #[path = "session_cleanup_metrics.rs"]

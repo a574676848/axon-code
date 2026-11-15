@@ -218,11 +218,6 @@ fn setup_agent_config_supports_empty_and_linked_config_values() {
   "baseUrl": "https://api.example.com/v1",
   "model": "gpt-4o",
   "configValues": {
-    "remote.feishu_websocket.enabled": "true",
-    "remote.feishu_websocket.app_id": "",
-    "remote.feishu_websocket.app_secret_env": "",
-    "remote.feishu_websocket.allowed_sender_open_ids": "",
-    "remote.feishu_websocket.blocked_sender_open_ids": "",
     "remote.mode": "high-throughput"
   }
 }"#,
@@ -241,16 +236,6 @@ fn setup_agent_config_supports_empty_and_linked_config_values() {
 
     assert_eq!(result.exit_code, 0, "{}", result.stderr);
     let loaded = ConfigLoader::load_from_path(&config_path).unwrap();
-    assert!(loaded.config.remote.feishu_websocket.enabled);
-    assert!(loaded.config.remote.feishu_websocket.app_id.is_empty());
-    assert!(
-        loaded
-            .config
-            .remote
-            .feishu_websocket
-            .allowed_sender_open_ids
-            .is_empty()
-    );
     assert_eq!(loaded.config.remote.mode.as_str(), "high-throughput");
     assert!(root.join(".env").is_file());
     let env_text = fs::read_to_string(root.join(".env")).unwrap();
@@ -266,17 +251,9 @@ fn config_keys_json_exposes_setup_choices_for_linked_fields() {
     let keys: Value = serde_json::from_str(&result.stdout).unwrap();
     let specs = keys.as_array().unwrap();
     assert_eq!(find_key(specs, "remote.mode")["setup_module"], "remote");
-    let wire_transport = find_key(specs, "remote.feishu_websocket.enabled");
-    assert_eq!(wire_transport["setup_module"], "remote");
-    assert_eq!(wire_transport["default_value"], "false");
-    assert_eq!(
-        wire_transport["options"],
-        serde_json::json!(["true", "false"])
-    );
-    assert_eq!(
-        wire_transport["depends_on"],
-        serde_json::json!([])
-    );
+    let mode = find_key(specs, "remote.mode");
+    assert_eq!(mode["setup_module"], "remote");
+    assert_eq!(mode["options"], serde_json::json!(["standard", "high-throughput"]));
     assert!(
         specs
             .iter()

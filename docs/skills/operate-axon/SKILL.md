@@ -1,6 +1,6 @@
 ---
 name: operate-axon
-description: 已安装 Axon 的运行时操作手册。用于配置和模型、Agent run 与 session、工具、Skill、Memory、MCP、Daemon、Remote、Cron、诊断与升级；以当前 CLI 帮助和工具回执为准。
+description: 已安装 Axon 的运行时操作手册。用于配置和模型、Agent run 与 session、工具、Skill、Memory、MCP、Daemon、Cron、诊断与升级；以当前 CLI 帮助和工具回执为准。
 ---
 
 # Operate Axon
@@ -30,7 +30,7 @@ description: 已安装 Axon 的运行时操作手册。用于配置和模型、A
 - 上下文窗口由运行时自动管理：`builtin.get_context_remaining` 使用空参数查询距自动换窗的剩余 token 与数值来源；临近换窗先用 `builtin.notes_write_file(path, text, intent)` 整文件替换或 `builtin.notes_append_to_file(path, text, intent)` 原样追加跨窗口便签（`intent` 必填，写法与长度同 `shell_command`），再用 `builtin.notes_read_file(intent, path, start_line, stop_line)` 按全部或 1-based 行范围读取、`builtin.notes_list_files_by_prefix(intent, prefix, max_results, file_order_by, file_order)` 按路径前缀列举、`builtin.notes_search_contents(intent, query, max_matches_per_file, max_files, path_prefix, recent_file_first)` 按非空且区分大小写的字面量检索。五个便签工具的 `intent` 都必填，折叠态只显示这一句话。便签内容仅作用于当前会话，不写长期记忆；路径只能是当前会话便签目录内的相对虚拟路径，写入后单文件 ≤ 1,000,000 UTF-8 字节；正整数限制不能传 0，列表和检索的文件上限为 1000；只有 `prefix`、`start_line`、`stop_line`、`path_prefix` 可按 schema 显式传 `null`，其余可选字段省略。确认写入回执成功后，调用 `builtin.new_context`（可选 `reason`）；该工具会在调用边界校验保存代际，未保存时只拒绝本次调用并返回可执行指令、不开启新窗口，可在同一 turn 内先补写便签再重试。写入失败时换窗 fail-closed，必须先保存成功再重试。换窗后先回读 notes 五件套，再用 history 四件套补齐细节。
 - 换窗交接只维护一份便签 `checkpoint.md`：会话中用它做增量记录，换窗前用 `builtin.notes_write_file` 覆盖写入交接摘要，换窗后先用 `builtin.notes_read_file` 回读它。便签不超过 4 KiB 时正文直接进摘要，超过只带「路径 + 字节数 + 行数」；总预算 4096 tokens 与 32 KiB 字节硬上限，超限直接拒绝并要求重写，不截断。模型没写便签时运行时按目标锚点与便签投影出六段摘要兜底，换窗本身不会被拒绝。
 - 内核工具严格收敛于系统基础原语；公网检索统一由 Skill / MCP 连接器（如 anysearch）扩展，文档与本地多格式文件直接使用 `builtin.read_file` 派生提取或模型多模态输入。`builtin.read_file` 的派生投影覆盖 Notebook、PDF、Word、Excel、PowerPoint、压缩包安全清单与 **SQLite**（`.db`/`.sqlite`/`.sqlite3`，只读打开，投影对象清单 + schema + 每表有界数据行）；派生文档不产生 Hashline 快照，不能直接参与 Hashline 编辑，需要修改时改用 `edit` 的 PathDiff 或 `*** Add File:` 契约。
-- 需要卸载独立、聚焦的工作（只读检索、局部摘要、有边界的实现或低风险核验）时用 `builtin.delegate_to_fast`：**默认后台**委派，立即返回 `jobId`，子代理跑完后结果会作为一条新消息送到你这里；相互独立的委派放在**同一条 assistant 消息**里批量并发发起；子代理运行期间继续做不依赖它的工作，不要反复 `job_output` 空转或空等。只有下一步动作依赖该结果时才传 `run_in_background: false` 同步等待。`intent` 必填（写法与长度同 `shell_command`），它是这次委托面向用户的说明，桌面端、TUI 与飞书的工具行只显示这一句话。`task` 必须是一份完整独立的 prompt（目标、范围、证据、交付要求），因为子代理看不到本次对话。
+- 需要卸载独立、聚焦的工作（只读检索、局部摘要、有边界的实现或低风险核验）时用 `builtin.delegate_to_fast`：**默认后台**委派，立即返回 `jobId`，子代理跑完后结果会作为一条新消息送到你这里；相互独立的委派放在**同一条 assistant 消息**里批量并发发起；子代理运行期间继续做不依赖它的工作，不要反复 `job_output` 空转或空等。只有下一步动作依赖该结果时才传 `run_in_background: false` 同步等待。`intent` 必填（写法与长度同 `shell_command`），它是这次委托面向用户的说明，桌面端与 TUI 的工具行只显示这一句话。`task` 必须是一份完整独立的 prompt（目标、范围、证据、交付要求），因为子代理看不到本次对话。
 - 需要子代理继承上下文、按模型或思考强度单独选型时用 `builtin.spawn_agent`：`intent`、`task_name`、`task` 必填，`fork_turns` 决定复制最近几轮父会话（缺省不复制）。`model` 与 `reasoning_effort` 可选，省略即继承当前模型与档位，`modelPolicy` 回执为 `inherit`；显式传 `model` 时按模型名重新做渠道均衡选择，回执为 `explicit` 并逐字回报实际选型。`model` 只能取环境上下文 `delegatable_models` 通告的模型名，越界会在参数层被拒绝并回列可用值；`reasoning_effort` 取 `none|minimal|low|medium|high|xhigh|max`，协议不支持的档位由运行时按上限收敛。`spawn_agent` 一律后台，生命周期与 `delegate_to_fast` 同构，按 `jobId` 用 `builtin.job_output` / `builtin.job_kill` 收口。
 - 已存在的子代理用 `builtin.send_message` 追加消息，`builtin.list_agents` 巡检当前代理树（两者 `intent` 必填）。`send_message` 的 `intent` 必填（写法与长度同 `shell_command`），`target` 与 `message` 同样必填；`target` 不可寻址 root（主代理自身会被稳定拒绝），子代理的结果回传由它的最终回复承担。`send_message` 的投递语义按目标状态分三种：目标**正在运行**时消息进入它的 mailbox，由它在最近的 step 边界读取（回执 `deliveryState: "delivered"`）；目标**空闲或已恢复**（已终态但未关闭）时消息仍会送达，并由运行时重挂它的会话、开启新轮次（回执 `wakeRequired: true`，`deliveryState: "delivered"`）；目标**不可达**（已关闭或已回收）时降级为排队，回执 `deliveryState: "pending"`，消息已持久化并等待重试，可用 `axon debug mailbox` 查询。**寻址规则写死**：生命周期操作（读输出、等待、终止）一律走 `job_id`：后台子代理的回执带 `jobId`，用 `builtin.job_output` 读取结果与终态、`builtin.job_kill` 完整中断（中止 turn、关闭会话、投影终态并触发完成通知）；协作寻址（发消息、列表）一律走 `AgentPath`。两者不可互传，`job_id` 传给子代理工具或 `AgentPath` 传给作业工具都会被稳定拒绝。
 - 需要建立、检索、查看、启动、修改、暂停、继续或取消跨轮 Goal 时，分别调用当前工具列表中的 `builtin.goal_create`、`builtin.goal_list`、`builtin.goal_get`、`builtin.goal_start`、`builtin.goal_update`、`builtin.goal_cancel`。六个工具都必填 `intent`（写法与长度同 `shell_command`），它是这次调用面向用户的说明，折叠态只显示这一句话。Goal 没有面向用户的启动确认步骤；主 turn 根据用户目标自主决定是否创建和启动，也可自主修改、暂停、继续或取消。Goal 查询必须服从当前 Workspace、audience 和 disclosure policy；写入回执成功后再向用户报告，后台工作不需要本轮同步等待结果，跑完会自动通知你。短结果直接在通知里给出，超过 400 个 Unicode 字符时通知里给摘要和完整结果文档路径。
@@ -63,7 +63,7 @@ description: 已安装 Axon 的运行时操作手册。用于配置和模型、A
 - Memory 与使用统计：`axon memory stats|doctor|list|search|conflicts|compare|quality|review|inspect` 和 `axon usage` 是检查入口。`memory consolidate|consistency|recover-conflict|approve|archive-pending|quarantine|forget|import` 会改变状态，必须先确认范围。
 - 人格：`axon persona validate|status` 是只读入口，分别校验 `SOUL.md` 是否符合 `axon-soul/v1` 与读取人格库状态；`axon persona style list|retire` 管理习得风格，`axon persona reset --yes` 把状态重置为基线且不改动人设文件；`axon doctor --check persona` 给出与 `validate` 同一条判定。人设格式无效时该轮不装配人格，回合照常继续。
 - 诊断和导出：`axon doctor [--check <area>]`、`axon lsp servers|workspace-symbol|definition|references|diagnostics`、`axon debug builtin`、`axon debug channel-metrics` 用于定向检查。`axon debug channel-metrics` 按时间、模型和 Provider 查询已持久化的渠道性能、缓存与连接指标；`axon export` 输出运行数据；输出到文件前确认路径。
-- Daemon、Cron 和 Remote：`axon daemon status`、`axon daemon health`、`axon cron list`、`axon cron holiday status`、`axon remote status|feishu-status|subscriptions|outbox|audit` 为只读检查。`axon daemon install|uninstall|start|stop|restart|drain`、`cron create|update|pause|resume|remove|run|tick`、`cron holiday sync`、远控订阅撤销和投递/worker 命令都会影响运行状态或外部服务，需用户明确授权。计划表达式写法见 [references/operations.md](references/operations.md)。
+- Daemon 与 Cron：`axon daemon status`、`axon daemon health`、`axon cron list`、`axon cron holiday status` 为只读检查。`axon daemon install|uninstall|start|stop|restart|drain`、`cron create|update|pause|resume|remove|run|tick`、`cron holiday sync` 都会影响运行状态或外部服务，需用户明确授权。计划表达式写法见 [references/operations.md](references/operations.md)。
 - 网关凭据：`axon gateway key list` 只读；`axon gateway key create --label <名>` 签发一把普通 Key，明文只在这次回执里出现一次；`axon gateway key revoke <id>` 吊销。三者都读写后端运行时根下的多 Key 存储，与 daemon 鉴权同一份数据，不需要重启即可生效。全局 token 仍是超管凭据，`/api/v1/keys` 管理面只接受超管且只认 `Authorization` 头。
 - 图片、服务、打包和升级：图片生成或编辑由已加载 Skill 完成，可能产生费用；`axon serve` 会监听本地端口；`axon package` 生成发布包；`axon upgrade --apply|--rollback` 改变后续 Axon 会话使用的版本。执行前都要确认目标与副作用。
 - HTTP 接口：Gateway 面随 Daemon 常驻（`remote.gateway.http_bind`），`axon serve` 是独立的前台 headless server。路由全表、报文体与错误码见 [references/gateway-http.md](references/gateway-http.md)。
@@ -86,7 +86,7 @@ description: 已安装 Axon 的运行时操作手册。用于配置和模型、A
 
 ## 执行与核验
 
-- 写入配置、工作区、Memory、session、Daemon、Cron、Remote、MCP 或外部服务前，先确认目标和实际参数；仅执行用户要求的范围。
+- 写入配置、工作区、Memory、session、Daemon、Cron、MCP 或外部服务前，先确认目标和实际参数；仅执行用户要求的范围。
 - provider、图片生成和外部投递可能产生费用或副作用，执行前说明目标；完成后读取对应回执、status、session 或 artifact，不以自然语言回复代替验证。
 - 失败时保留非敏感的错误、request/session ID 和工具回执；不要删除配置、session、Memory 或缓存来掩盖问题。
 
@@ -95,7 +95,7 @@ description: 已安装 Axon 的运行时操作手册。用于配置和模型、A
 - 需要选择运行入口时读 [references/capabilities.md](references/capabilities.md)。
 - 需要准确拼写 CLI 命令或了解当前命令的核验方式时读 [references/cli-reference.md](references/cli-reference.md)，随后仍以该命令的 `--help` 为准。
 - 需要配置 provider、模型、MCP 或 Skill 时读 [references/configuration-extensions.md](references/configuration-extensions.md)。
-- 需要执行 Agent 任务、查看 session、使用 Memory 或运维 Daemon、Cron、Remote 时读 [references/operations.md](references/operations.md)。
+- 需要执行 Agent 任务、查看 session、使用 Memory 或运维 Daemon、Cron 时读 [references/operations.md](references/operations.md)。
 - 需要通过 HTTP 接口读写运行态、提交外部事件或查询处理结果时读 [references/gateway-http.md](references/gateway-http.md)，它同时给出本 Skill 目录下 `scripts/gateway-http.ps1` 的用法。
 - 需要订阅实时事件、排查 WS 帧或驱动桌面调试桥时读 [references/gateway-websocket.md](references/gateway-websocket.md)，它同时给出 `scripts/gateway-ws.ps1` 的用法。
 - 需要启动或排查桌面工作台、用调试桥或 CDP 驱动界面时读 [references/desktop-app.md](references/desktop-app.md)。

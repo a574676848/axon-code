@@ -1,9 +1,8 @@
-use crate::remote_commands::remote_feishu_daemon_egress::FeishuDaemonEventPublisher;
 use axon_session_runtime::{EventPublisher, RuntimeClock};
 use std::{
     fs,
     path::PathBuf,
-    sync::{Arc, Condvar, Mutex},
+    sync::{Condvar, Mutex},
 };
 
 use super::now_ms;
@@ -50,34 +49,19 @@ impl Drop for DaemonPidFileGuard {
     }
 }
 
-#[derive(Clone)]
-pub struct DaemonEventPublisher {
-    feishu: FeishuDaemonEventPublisher,
-    delivery_signal: Arc<super::DaemonMaintenanceSignal>,
-}
-
-impl DaemonEventPublisher {
-    pub fn new(
-        axon_root: PathBuf,
-        config_path: PathBuf,
-        delivery_signal: Arc<super::DaemonMaintenanceSignal>,
-    ) -> Self {
-        Self {
-            feishu: FeishuDaemonEventPublisher::new(axon_root, config_path),
-            delivery_signal,
-        }
-    }
-}
+/// 会话事件发布端口。
+///
+/// 会话事件正文的落库与订阅扇出都由 Daemon 自身完成；本机没有任何外接渠道 egress，
+/// 因此这里不做额外动作，只满足执行器对发布端口的要求。
+#[derive(Clone, Copy, Default)]
+pub struct DaemonEventPublisher;
 
 impl EventPublisher for DaemonEventPublisher {
     fn publish(
         &self,
-        event: &axon_session::SessionEventRecord,
+        _event: &axon_session::SessionEventRecord,
         _cursor: &axon_domain::ConsumerCursor,
     ) -> Result<(), String> {
-        if self.feishu.publish_with_work(event)? {
-            self.delivery_signal.notify();
-        }
         Ok(())
     }
 }

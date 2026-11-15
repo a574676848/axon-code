@@ -20,7 +20,6 @@ axon-memory-read = { path = "../axon-memory-read" }
 axon-memory-write = { path = "../axon-memory-write" }
 axon-patch-model = { path = "../axon-patch-model" }
 axon-protocol = { path = "../axon-protocol" }
-axon-remote-runtime = { path = "../axon-remote-runtime" }
 axon-output-filter = { path = "../axon-output-filter" }
 axon-process = { path = "../axon-process" }
 axon-rustls-provider = { path = "../axon-rustls-provider" }

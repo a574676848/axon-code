@@ -35,16 +35,6 @@ pub(crate) trait CronExecutionAdapter: Send + Sync {
     /// 执行 Agent 任务并返回可投递正文。
     fn execute_agent(&self, job: &CronJob, prompt: &str) -> Result<String, String>;
 
-    /// 把正文登记到持久收件箱并定向投递到指定渠道目标。
-    fn enqueue_reply(
-        &self,
-        job: &CronJob,
-        channel: &str,
-        destination: &str,
-        body: &str,
-        now_ms: u64,
-    ) -> Result<String, String>;
-
     /// 向目标复合车道提交一次主 turn 注入。
     fn wake_session(
         &self,
@@ -238,7 +228,6 @@ mod tests {
     struct RecordingAdapter {
         root: std::path::PathBuf,
         agent_body: Result<String, String>,
-        replies: Mutex<Vec<(String, String, String)>>,
         turns: Mutex<Vec<(String, String, String)>>,
     }
 
@@ -247,7 +236,6 @@ mod tests {
             Self {
                 root: axon_test_support::test_temp_root(),
                 agent_body,
-                replies: Mutex::new(Vec::new()),
                 turns: Mutex::new(Vec::new()),
             }
         }
@@ -264,22 +252,6 @@ mod tests {
 
         fn execute_agent(&self, _job: &CronJob, _prompt: &str) -> Result<String, String> {
             self.agent_body.clone()
-        }
-
-        fn enqueue_reply(
-            &self,
-            _job: &CronJob,
-            channel: &str,
-            destination: &str,
-            body: &str,
-            _now_ms: u64,
-        ) -> Result<String, String> {
-            self.replies.lock().expect("回复锁应可用").push((
-                channel.to_owned(),
-                destination.to_owned(),
-                body.to_owned(),
-            ));
-            Ok("dispatch-test".to_owned())
         }
 
         fn wake_session(
@@ -325,32 +297,6 @@ mod tests {
         assert!(run.success);
         assert!(!run.delivery_enqueued);
         assert!(run.dispatch_id.is_none());
-        assert!(adapter.replies.lock().expect("回复锁应可用").is_empty());
-        assert!(adapter.turns.lock().expect("回合锁应可用").is_empty());
-    }
-
-    #[test]
-    fn feishu_wake_delivers_body_to_declared_chat() {
-        let adapter = RecordingAdapter::new(Ok("日报完成".to_owned()));
-        let job = job_with_wake(
-            "cron-feishu",
-            Some(CronWakeTarget::Feishu("oc_test".to_owned())),
-            false,
-        );
-
-        let run = execute_cron_job(&adapter, &job, 2);
-
-        assert!(run.success);
-        assert!(run.delivery_enqueued);
-        assert_eq!(run.dispatch_id.as_deref(), Some("dispatch-test"));
-        assert_eq!(
-            adapter.replies.lock().expect("回复锁应可用").as_slice(),
-            [(
-                "feishu".to_owned(),
-                "oc_test".to_owned(),
-                "日报完成".to_owned()
-            )]
-        );
         assert!(adapter.turns.lock().expect("回合锁应可用").is_empty());
     }
 
@@ -377,7 +323,6 @@ mod tests {
         assert_eq!(turns[0].1, "workbench-1");
         assert!(turns[0].2.contains("已执行完成"));
         assert!(turns[0].2.contains("结果摘要"));
-        assert!(adapter.replies.lock().expect("回复锁应可用").is_empty());
     }
 
     #[test]
@@ -385,7 +330,11 @@ mod tests {
         let adapter = RecordingAdapter::new(Err("凭证缺失".to_owned()));
         let job = job_with_wake(
             "cron-failed-wake",
-            Some(CronWakeTarget::Feishu("oc_test".to_owned())),
+            Some(CronWakeTarget::Session {
+                channel: "desktop".to_owned(),
+                destination: "workbench-1".to_owned(),
+                workspace: None,
+            }),
             false,
         );
 
@@ -395,7 +344,7 @@ mod tests {
         assert_eq!(run.error_summary.as_deref(), Some("凭证缺失"));
         assert!(run.delivery_enqueued);
         assert_eq!(
-            adapter.replies.lock().expect("回复锁应可用").len(),
+            adapter.turns.lock().expect("回合锁应可用").len(),
             1,
             "失败也必须告知，否则用户无法判断任务是否触发"
         );

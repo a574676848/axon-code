@@ -1,10 +1,10 @@
 //! Cron 完成后唤醒目标的解析与分派。
 //!
-//! 产品定义：定时任务只在创建时显式声明目标时才产生投递。两类目标的动作不同，成本
-//! 也不同：飞书是正文直投，不产生 Agent 回合；会话是主 turn 注入，会真实执行一轮。
-//! 因此两者必须走不同的 Daemon 原语，不能合并成同一个「投递」动作。
+//! 产品定义：定时任务只在创建时显式声明目标时才产生投递。目标是复合车道的主 turn
+//! 注入，会真实执行一轮，因此必须走 Daemon 的 Interaction 提交原语，不能退化成一次
+//! 本地写文件。
 
-use axon_domain::{CronJob, CronWakeTarget, FEISHU_CHANNEL};
+use axon_domain::{CronJob, CronWakeTarget};
 
 use super::execution::CronExecutionAdapter;
 
@@ -18,24 +18,18 @@ const WAKE_NOTICE_SUMMARY_MAX_CHARS: usize = 1_200;
 
 /// 解析 `--wake` 参数。
 ///
-/// 支持 `feishu:<chat_id>` 与 `session:<channel>:<destination>[:<workspace>]` 两种形态。
-/// 会话目标只在第二层切分：`destination` 不含冒号时，第三段就是目标所属 Workspace；
-/// 飞书目标则整段保留，避免 chat_id 里的冒号被误切。
+/// 支持 `session:<channel>:<destination>[:<workspace>]`。会话目标只在第二层切分：
+/// `destination` 不含冒号时，第三段就是目标所属 Workspace。
 pub(crate) fn parse_wake(value: &str) -> Result<CronWakeTarget, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err("--wake 目标不能为空".to_owned());
     }
-    if let Some(chat_id) = trimmed.strip_prefix("feishu:") {
-        let target = CronWakeTarget::Feishu(chat_id.trim().to_owned());
-        target.validate()?;
-        return Ok(target);
-    }
     if let Some(rest) = trimmed.strip_prefix("session:") {
         let Some((channel, remainder)) = rest.split_once(':') else {
             return Err(WAKE_FORMAT_HINT.to_owned());
         };
-        // 第四段是目标会话所属的 Workspace：车道身份由
+        // 第三段是目标会话所属的 Workspace：车道身份由
         // (workspace, trust_scope, channel, destination) 派生，只给后两维无法
         // 区分跨项目的同名会话。省略时退回按任务执行目录反推。
         let (destination, workspace) = match remainder.split_once(':') {
@@ -55,27 +49,14 @@ pub(crate) fn parse_wake(value: &str) -> Result<CronWakeTarget, String> {
 
 /// `--wake` 目标格式提示。
 const WAKE_FORMAT_HINT: &str =
-    "--wake 目标格式必须是 feishu:<chat_id> 或 session:<channel>:<destination>[:<workspace>]";
+    "--wake 目标格式必须是 session:<channel>:<destination>[:<workspace>]";
 
 /// 已知的旧投递参数中文迁移提示。
-pub(crate) const LEGACY_DELIVERY_ARGS_HINT: &str = "--feishu-chat-id / --feishu-thread-id 已移除：请改用 --wake feishu:<chat_id>；会话唤醒用 --wake session:<channel>:<destination>[:<workspace>]";
-
-/// 全局通知配置里的飞书 chat_id。
-///
-/// 这是用户级全局配置，作为「用户没有特意指明通知目标时的默认选择」提供给调用方；
-/// 是否采用由 Agent 在创建任务时决定，后端不做隐式兜底。配置缺失时返回 `None`。
-pub(crate) fn suggested_feishu_chat_id(config_path: &std::path::Path) -> Option<String> {
-    let loaded = axon_config::ConfigLoader::load_from_path(config_path).ok()?;
-    let chat_id = loaded.config.remote.feishu_websocket.notification_chat_id;
-    let chat_id = chat_id.trim();
-    // 提示值只回答「本机配了哪个群」；能不能发出去不在这里判断。
-    (!chat_id.is_empty()).then(|| chat_id.to_owned())
-}
+pub(crate) const LEGACY_DELIVERY_ARGS_HINT: &str = "--feishu-chat-id / --feishu-thread-id 已移除：会话唤醒用 --wake session:<channel>:<destination>[:<workspace>]";
 
 /// 派发一次唤醒；没有声明目标时什么都不做。
 ///
-/// 空正文的处理按「是否有事实要告知」决定：成功的飞书直投没有正文就不必发消息；
-/// 失败与会话唤醒都必须告知，否则用户无法判断任务是没有触发还是执行失败。
+/// 失败同样派发：任务已经跑完是事实，沉默会让用户无法判断它是没触发还是失败了。
 pub(crate) fn dispatch_wake(
     adapter: &dyn CronExecutionAdapter,
     job: &CronJob,
@@ -87,50 +68,19 @@ pub(crate) fn dispatch_wake(
     let Some(wake) = job.wake.as_ref() else {
         return Ok(None);
     };
-    let has_body = !body.trim().is_empty();
-    if !has_body && success && !wake.wakes_turn() {
-        return Ok(None);
-    }
-    let dispatch_id = match wake {
-        CronWakeTarget::Feishu(chat_id) => {
-            let chat_id = chat_id.trim();
-            if chat_id.is_empty() {
-                return Err("飞书唤醒目标的 chat_id 不能为空".to_owned());
-            }
-            adapter.enqueue_reply(
-                job,
-                FEISHU_CHANNEL,
-                chat_id,
-                &wake_body(job, run_id, body, success),
-                now_ms,
-            )?
-        }
-        CronWakeTarget::Session {
-            channel,
-            destination,
-            ..
-        } => adapter.wake_session(
-            job,
-            channel.trim(),
-            destination.trim(),
-            &turn_injection_body(job, run_id, body, success),
-            now_ms,
-        )?,
-    };
+    let CronWakeTarget::Session {
+        channel,
+        destination,
+        ..
+    } = wake;
+    let dispatch_id = adapter.wake_session(
+        job,
+        channel.trim(),
+        destination.trim(),
+        &turn_injection_body(job, run_id, body, success),
+        now_ms,
+    )?;
     Ok(Some(dispatch_id))
-}
-
-/// 飞书直投正文：完整结果本身就是交付内容，为空时退化成完成提示。
-fn wake_body(job: &CronJob, run_id: &str, body: &str, success: bool) -> String {
-    let trimmed = body.trim();
-    if !trimmed.is_empty() {
-        return trimmed.to_owned();
-    }
-    let mut text = completion_notice(job, run_id);
-    if !success {
-        text.push_str("\n本次执行失败，失败原因见 axon cron list 的运行记录。");
-    }
-    text
 }
 
 /// 主 turn 注入正文：指路提示加有界摘要。
@@ -177,10 +127,6 @@ mod tests {
     #[test]
     fn wake_target_parses_supported_forms_only() {
         assert_eq!(
-            parse_wake("feishu:oc_123").expect("飞书目标应可解析"),
-            CronWakeTarget::Feishu("oc_123".to_owned())
-        );
-        assert_eq!(
             parse_wake(" session:desktop:workbench-1 ").expect("会话目标应可解析"),
             CronWakeTarget::Session {
                 channel: "desktop".to_owned(),
@@ -197,7 +143,7 @@ mod tests {
                 workspace: Some("workspace-9d4b642b".to_owned()),
             }
         );
-        assert!(parse_wake("feishu:").is_err());
+        assert!(parse_wake("feishu:oc_123").is_err());
         assert!(parse_wake("session:desktop").is_err());
         assert!(parse_wake("tui:terminal-1").is_err());
         assert!(parse_wake("session:tui:terminal-1").is_err());
@@ -229,7 +175,11 @@ mod tests {
                 schedule: "interval:1h".to_owned(),
                 prompt: "执行".to_owned(),
                 skills: Vec::new(),
-                wake: Some(CronWakeTarget::Feishu("oc_test".to_owned())),
+                wake: Some(CronWakeTarget::Session {
+                    channel: "desktop".to_owned(),
+                    destination: "workbench-1".to_owned(),
+                    workspace: None,
+                }),
                 workdir: None,
                 no_agent: false,
                 script: None,

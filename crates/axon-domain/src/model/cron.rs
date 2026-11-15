@@ -4,9 +4,6 @@ use thiserror::Error;
 /// 当前通用 Cron 持久化模型版本。
 pub const CRON_SCHEMA_VERSION: u32 = 2;
 
-/// 飞书投递渠道标识。
-pub const FEISHU_CHANNEL: &str = "feishu";
-
 /// Cron 自身主 turn 车道的 destination 前缀。
 ///
 /// Cron 任务在自己的车道里执行，该车道没有人类消费者，因此不允许把唤醒目标指向它，
@@ -16,13 +13,10 @@ pub const CRON_LANE_DESTINATION_PREFIX: &str = "cron-";
 /// Cron 完成后要唤醒的目标。
 ///
 /// 产品定义：定时任务只在创建时显式声明目标时才产生任何投递；没有目标就只落执行
-/// 事实。两类目标语义不同：`Feishu` 是正文直投，不产生 Agent 回合；`Session` 是主
-/// turn 注入，会真实执行一轮，因此有 provider 成本。
+/// 事实。目标是主 turn 注入，会真实执行一轮，因此有 provider 成本。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CronWakeTarget {
-    /// 飞书群或单聊，载荷为 chat_id。
-    Feishu(String),
     /// 复合车道主 turn 注入。
     Session {
         /// 会话表面渠道，例如 `desktop`。
@@ -45,16 +39,14 @@ impl CronWakeTarget {
     #[must_use]
     pub fn channel(&self) -> &str {
         match self {
-            Self::Feishu(_) => FEISHU_CHANNEL,
             Self::Session { channel, .. } => channel,
         }
     }
 
-    /// 会话目标显式声明的 Workspace；飞书目标与旧任务为 `None`。
+    /// 会话目标显式声明的 Workspace。
     #[must_use]
     pub fn workspace(&self) -> Option<&str> {
         match self {
-            Self::Feishu(_) => None,
             Self::Session { workspace, .. } => workspace.as_deref(),
         }
     }
@@ -63,7 +55,6 @@ impl CronWakeTarget {
     #[must_use]
     pub fn destination(&self) -> &str {
         match self {
-            Self::Feishu(chat_id) => chat_id,
             Self::Session { destination, .. } => destination,
         }
     }
@@ -77,11 +68,6 @@ impl CronWakeTarget {
     /// 校验目标形态；返回中文原因便于直接呈现给调用方。
     pub fn validate(&self) -> Result<(), String> {
         match self {
-            Self::Feishu(chat_id) => {
-                if chat_id.trim().is_empty() {
-                    return Err("飞书唤醒目标的 chat_id 不能为空".to_owned());
-                }
-            }
             Self::Session {
                 channel,
                 destination,
@@ -97,16 +83,13 @@ impl CronWakeTarget {
                 }
                 // TUI 车道标识按进程随机生成，定时任务触发时早已失效，注入只会得到
                 // 一条无人消费的孤儿回合。
-                if channel != FEISHU_CHANNEL && channel != desktop_session_channel() {
+                if channel != desktop_session_channel() {
                     return Err(format!(
-                        "会话唤醒目标只支持 {} 与 {}，不支持 {channel}",
-                        FEISHU_CHANNEL,
+                        "会话唤醒目标只支持 {}，不支持 {channel}",
                         desktop_session_channel()
                     ));
                 }
-                if channel == desktop_session_channel()
-                    && destination.starts_with(CRON_LANE_DESTINATION_PREFIX)
-                {
+                if destination.starts_with(CRON_LANE_DESTINATION_PREFIX) {
                     return Err("会话唤醒目标不能指向 Cron 自身车道".to_owned());
                 }
             }
@@ -436,7 +419,14 @@ mod tests {
     #[test]
     fn cron_job_transition_replaces_wake_target() {
         let job = CronJob::new(test_input(), 10, Some(20)).expect("合法任务应可创建");
-        assert_eq!(job.wake, Some(CronWakeTarget::Feishu("oc_test".to_owned())));
+        assert_eq!(
+            job.wake,
+            Some(CronWakeTarget::Session {
+                channel: "desktop".to_owned(),
+                destination: "workbench-1".to_owned(),
+                workspace: None,
+            })
+        );
         let updated = job
             .with_update(
                 CronJobUpdate {
@@ -504,7 +494,11 @@ mod tests {
             destination: format!("{CRON_LANE_DESTINATION_PREFIX}cron-abc"),
             workspace: None,
         };
-        let empty_chat = CronWakeTarget::Feishu("   ".to_owned());
+        let empty_chat = CronWakeTarget::Session {
+            channel: "   ".to_owned(),
+            destination: "   ".to_owned(),
+            workspace: None,
+        };
         let valid = CronWakeTarget::Session {
             channel: "desktop".to_owned(),
             destination: "workbench-1".to_owned(),
@@ -557,7 +551,11 @@ mod tests {
             schedule: "interval:1h".to_owned(),
             prompt: "执行测试".to_owned(),
             skills: Vec::new(),
-            wake: Some(CronWakeTarget::Feishu("oc_test".to_owned())),
+            wake: Some(CronWakeTarget::Session {
+                channel: "desktop".to_owned(),
+                destination: "workbench-1".to_owned(),
+                workspace: None,
+            }),
             workdir: None,
             no_agent: false,
             script: None,

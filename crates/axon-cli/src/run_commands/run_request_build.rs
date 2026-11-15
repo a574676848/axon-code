@@ -30,18 +30,7 @@ impl RunRequest {
         let agent_identity = options.agent_identity;
         let client_channel = options.client_channel;
         let performance = options.performance;
-        let (mut prepared, previous_session) = session.prepare(command, config, cwd)?;
-        // 飞书渠道固定使用全局默认模型与思考强度：会话恢复出的模型、目的地固定模型
-        // 与 transportContext 里的本轮选择一律不生效。飞书是无人值守的远控入口，
-        // 配置改过之后不应继续按某条历史会话当初选的模型跑。
-        if options
-            .transport_context
-            .as_ref()
-            .is_some_and(crate::remote_commands::remote_feishu_transport_context::is_feishu)
-        {
-            prepared.command.model = None;
-            prepared.command.reasoning_effort = None;
-        }
+        let (prepared, previous_session) = session.prepare(command, config, cwd)?;
         let command = &prepared.command;
         let cwd = prepared.cwd;
         let prompt = prepared.prompt;
@@ -87,11 +76,7 @@ impl RunRequest {
             attached_files: &attached_files,
             supports_vision: model.supports_vision,
             transport_context: options.transport_context.as_ref(),
-            notification_chat_id: {
-                // 只作提示值：真正投到哪里由任务自己声明的 wake 决定。
-                let chat_id = config.remote.feishu_websocket.notification_chat_id.trim();
-                (!chat_id.is_empty()).then_some(chat_id)
-            },
+            notification_chat_id: None,
             context_window: model.context_window,
             include_user_soul: agent_identity.includes_user_soul(),
             include_personal_memory: agent_identity.includes_personal_memory(),

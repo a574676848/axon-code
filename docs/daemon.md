@@ -9,11 +9,11 @@ Daemon 是 Axon 的后台长生命周期宿主。当前实现已经把 `PrimaryT
 - 处理 `SubmitInteraction`，不接受旧 `SubmitAction`、`CancelAction`、`GetQueue` 或 `StopSession` 外部命令。
 - 使用 Workspace registry 将 `WorkspaceId` 解析为真实工作目录。
 - 调用 `InteractionTurnRunner` 完成普通问答或原子创建 Goal、首个 Execution 与 Event。
-- 托管 Scheduler、飞书 transport、事件桥、投递与维护 tick。
+- 托管 Scheduler、事件桥、投递与维护 tick。
 - 维护内部 host generation、lease 与 fencing 状态。Host lease 续租按 10 秒周期执行，租约有效期 30 秒；续租遇到存储抖动（`database is locked`）时按 750ms 持续重试，只有实际失去代际（另一 Host 已接管）才停止全部后台 Worker。停机请求在下一个重试点生效，不等待退避结束。
 - 由 Execution Worker 线程池接管已提交 Execution，前台不活跃时写入未读 Result 并入队持久化 Delivery。
 
-Goal 创建后的执行已经收口：Execution 由 Daemon 的 Execution Worker 池领取，并通过 `ProviderRunSubagentExecutor` 作为隔离子代理执行；结果写入 Result 与持久 completion notification。一个 Execution 只通知主 turn 一次，通知包含来源（一次性 Goal 或 Axon cron）、Goal 目标、执行结果及结果文档路径；主 turn 产出的汇总回复随后登记到创建 Task 时声明的唯一投递目标，目标取自 Execution 的 `transportContext`，不再广播到当时在线的其它客户端。TUI 只有真实展示后确认，Feishu 只有写入 durable outbox 后确认，任何渠道都不允许静默 ack。跨过创建后的下一个本地自然日仍未读则自动失效并静默停止通知。
+Goal 创建后的执行已经收口：Execution 由 Daemon 的 Execution Worker 池领取，并通过 `ProviderRunSubagentExecutor` 作为隔离子代理执行；结果写入 Result 与持久 completion notification。一个 Execution 只通知主 turn 一次，通知包含来源（一次性 Goal 或 Axon cron）、Goal 目标、执行结果及结果文档路径；主 turn 产出的汇总回复随后登记到创建 Task 时声明的唯一投递目标，目标取自 Execution 的 `transportContext`，不再广播到当时在线的其它客户端。TUI 只有真实展示后确认，桌面通知只有写入 durable outbox 后确认，任何渠道都不允许静默 ack。跨过创建后的下一个本地自然日仍未读则自动失效并静默停止通知。
 
 Agent cron 按投递需求分流：需要投递的 cron 到期后创建 `GoalToolCommand::Create`，并把 `channel`/`destination` 写入 Execution 的 `transportContext`，复用 Goal 的 Execution、Result、完成通知与定向投递；不需要投递的 cron 直接调用同一 `ProviderRunSubagentExecutor`，不进入用户渠道。子代理结果超过 4000 个 Unicode 字符时以 Markdown 原子写入统一内容归档 `.axon/data/archive/*.md`，主 turn 只接收有界预览和归档地址。
 主 turn 尚未产出汇总或执行失败时，后台 Execution 的原始回复不得作为渠道正文发送；通知继续留在持久收件箱，直到主 turn 汇总成功后投递，或按跨日未读规则自动失效。投递 sweep 每轮按有界批次补偿「汇总已落库但渠道推进中断」这一窗口；正文为空的通知不得推进，渠道行不得永久滞留在 pending。目标在登记时即已确定，不存在「等渠道上线再补登记」的路径。
@@ -45,7 +45,7 @@ Windows 后台非交互子进程统一通过 `axon-process` 设置 `CREATE_NO_WI
 
 Daemon 保留当前用户身份、用户级 PATH 与 `USERPROFILE`，Shell 直接继承 Daemon 环境和权限，无需独立 Shell Worker；PowerShell 包装器使用 `-NoProfile`，不会加载 PowerShell 配置脚本。启动快照仍在 Daemon 启动时预热。管理员用户的 Daemon 与工具具有管理员权限，必须限制外部渠道访问并审核高风险操作。
 
-最高权限任务的注册与更新需要管理员权限，安装器通过 UAC 请求授权，不关闭 UAC。授权必须使用同一用户，安装器拒绝切换到其他账号。停止不需要提权：`axon daemon stop` 写停止请求让 Daemon 自身 drain 退出（等待窗口 15 秒），只有它未响应而必须强制结束进程树时才需要管理员权限。用户未登录时任务不会运行，Feishu、HTTP、WebSocket 等监听也不可用，外部系统需要重试或持久化事件。Linux 用户单元使用 `Restart=always`，macOS LaunchAgent 使用 `KeepAlive`；进程重启后宿主按 lease 收敛中断中的 Execution。
+最高权限任务的注册与更新需要管理员权限，安装器通过 UAC 请求授权，不关闭 UAC。授权必须使用同一用户，安装器拒绝切换到其他账号。停止不需要提权：`axon daemon stop` 写停止请求让 Daemon 自身 drain 退出（等待窗口 15 秒），只有它未响应而必须强制结束进程树时才需要管理员权限。用户未登录时任务不会运行，HTTP、WebSocket 等监听也不可用，外部系统需要重试或持久化事件。Linux 用户单元使用 `Restart=always`，macOS LaunchAgent 使用 `KeepAlive`；进程重启后宿主按 lease 收敛中断中的 Execution。
 
 Windows IPC 命名管道在启动时显式授权当前用户 SID、SYSTEM 与管理员，并采用中完整性标签，使同一用户的普通权限 CLI/TUI 可以连接最高权限 Daemon；不授予其他普通账户访问权。连接后的工具执行继承 Daemon 的最高权限，因此本地同一用户客户端也属于可信边界。
 
@@ -121,12 +121,6 @@ Daemon 是长驻进程，`CliProviderTurnRunner` 持有进程级 `StartupSnapsho
 
 显式刷新走 IPC 命令 `RefreshMcpCapabilities { cwd }`：Daemon 清除该运行态根目录的 MCP 健康负缓存，作废对应 Workspace 的快照条目，再在后台以**绕过健康负缓存与 schema 缓存**的方式重建快照。TUI `/mcp` 与 OAuth 授权成功后的自动刷新都会提交该命令，因此恢复的 MCP 工具在下一轮 turn 就进入 Provider 工具表，而不是只刷新前端目录。该命令由 IPC 层直接处理，不进入 `DaemonHost` 的命令分发；探测在后台线程执行，IPC 不等待，下一次 `acquire` 会等这次构建结束后复用其结果。
 
-## Feishu 入口
-
-飞书只使用私有 WebSocket 入站。治理层接受的普通消息被转换为 Workspace-scoped Interaction，并通过 `SubmitInteraction` 交给 Daemon；旧 SessionAction payload 和 active run steer 旁路已删除。工具调用不再提供远端审批控制，旧审批卡片与命令会被明确拒绝，也不会转换为普通 Interaction。
-
-主 turn 被永久拒绝（Provider、Renderer 或 Runtime 层失败）时不会产生 `turn_completed`，因此 `PrimaryTurnService` 除了把 Interaction 置为 `rejected` 并保留分层日志，还把来源渠道、投递目标与入站消息幂等键交给组合根；组合根对飞书渠道复用同一条 artifact + durable outbox 通道补发 Warning 级失败回执（标题「Axon 处理失败」），并回帖到用户原始消息，非飞书渠道显式跳过。回执 dispatch 由 Interaction 稳定派生，重复调用不会产生第二条消息；入队失败只降级为告警，不影响已提交的拒绝终态。
-
 ## 健康与容量
 
 `axon daemon health` 通过 `GetHealth` IPC 读取内部聚合指标，覆盖 Interaction、Goal、Execution、投递积压与实时事件流订阅数，不要求调用方提供 Session ID，也不暴露 Session、lease 或 generation 管理入口。
@@ -141,7 +135,7 @@ axon daemon health
 
 ```powershell
 pwsh -File tools/verify-jarvis-capacity.ps1   # R7-06：backlog 与并发入口容量
-pwsh -File tools/verify-jarvis-soak.ps1       # R7-07：常驻 soak 与投递重试 soak
+pwsh -File tools/verify-jarvis-soak.ps1       # R7-07：常驻 soak（Host heartbeat、lease 续租与 Execution churn）
 bash tools/verify-daemon-restart.sh           # R7-01/09：真机重启接管，需 JARVIS_REAL_DEVICE=1
 ```
 

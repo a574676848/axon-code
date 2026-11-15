@@ -63,7 +63,7 @@ axon mcp logout <server-id>           # 清除本地 token 与待完成会话
 
 并发委派超过 `max_subagent_threads` 或活跃 turn 超过 `max_subagent_active_turns` 时，超额请求会当场被拒绝并在回执里直接写明原因，而不是排队等待。
 
-### 渠道、记忆与远控
+### 渠道、记忆与网关
 
 | 键 | 作用 |
 |---|---|
@@ -73,29 +73,12 @@ axon mcp logout <server-id>           # 清除本地 token 与待完成会话
 | `channel_balancer.telemetry_persistence_enabled` | 是否把渠道遥测样本持久化到 `data/channel-metrics` |
 | `memory.embedding.enabled` | 是否启用长期记忆 embedding 检索 |
 | `memory.embedding.model` | Memory 嵌入向量模型，引用顶层 model catalog 的 name 或 id |
-| `remote.mode` | 远控运行模式，`standard` 适合默认场景，`high-throughput` 适合高频事件流 |
+| `remote.mode` | 网关事件流吞吐模式，`standard` 适合默认场景，`high-throughput` 适合高频事件流 |
 | `remote.gateway.api_token_env` | Gateway API token 的环境变量名 |
 | `remote.gateway.http_bind` | Gateway HTTP 面监听地址 |
 | `remote.gateway.websocket_bind` | Gateway WebSocket 面监听地址 |
 
-### Feishu WebSocket 远控
-
-| 键 | 作用 |
-|---|---|
-| `remote.feishu_websocket.enabled` | 是否启用 Feishu WebSocket 远控 adapter |
-| `remote.feishu_websocket.app_id` | 飞书应用 app_id |
-| `remote.feishu_websocket.app_secret_env` | app_secret 的环境变量名 |
-| `remote.feishu_websocket.api_base_url` | OpenAPI 基址，留空用官方默认地址 |
-| `remote.feishu_websocket.websocket_url` | 长连接地址，留空用官方默认地址 |
-| `remote.feishu_websocket.enable_notification_sending` | 是否允许该 adapter 发送远控通知 |
-| `remote.feishu_websocket.notification_chat_id` | 后台完成通知的 chat_id，留空不发送 |
-| `remote.feishu_websocket.allowed_sender_open_ids` | 允许访问远控的 sender open_id 白名单 |
-| `remote.feishu_websocket.blocked_sender_open_ids` | 禁止访问的 sender open_id 黑名单，优先级高于白名单 |
-| `remote.feishu_websocket.require_mention` | 群聊是否要求显式 @ 机器人后才进入远控 |
-
-启用或调整 Feishu 远控属于状态变更：先确认目标与影响范围，改完用 `axon remote status`、`axon remote feishu-status` 核验，再按需 `axon daemon restart` 让 Daemon 重新加载配置。
-
 ## 图片与外部扩展
 
 - 图片生成、图片编辑或外部投递可能产生费用或副作用，应先取得用户明确意图；联网搜索等外部扩展能力统一通过 MCP 或 Skill 连接器（如 anysearch）处理。
-- 修改 Daemon、Cron 或 Remote 配置前，先运行对应的 `--help` 与 `status`/`list`，完成后以回执或 status 验证。
+- 修改 Daemon、Cron 或网关配置前，先运行对应的 `--help` 与 `status`/`list`，完成后以回执或 status 验证。

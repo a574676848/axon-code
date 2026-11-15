@@ -23,7 +23,7 @@
 | 桌面工作台 | `axon desktop`、`--self-check`、`--serve <端口>` | 图形工作台，是网关的客户端：工作区与车道、会话流订阅、Cron 与指标面板都经 `/api/v1/*` 与 WS 取得，不直连运行态数据库。自检输出单行 JSON；调试桥提供 `GET /events`、`POST /rpc`、`GET /attachment/<encoded>`。细节见 [desktop-app.md](desktop-app.md)。 |
 | 用量与费率 | `axon usage`、`axon pricing`、`/api/v1/observability/*` | 看板与审计走 `axon usage`（含 `diagnostics`、`audit`、`export`）或可观测性路由；费率规则用 `axon pricing list|add|delete|sync|recalculate`。重算与写入属于状态变更。 |
 | 图片生成与编辑 | Agent builtin tools、已加载 Skill | 由已加载 Skill 或其脚本调用配置中的图像模型完成，可能产生费用，先确认用户意图；公网搜索统一由 MCP/Skill 连接器（如 anysearch）扩展。 |
-| Daemon、Cron、Remote | `axon daemon`、`axon cron`、`axon remote` | `axon daemon status` 只回答注册与运行；健康快照用 `axon daemon health`（`host.status`、`executionBacklog.pending`、`deliveries.backlog.pending`、`streamSubscribers`）。优雅收口先 `daemon drain` 再确认积压归零，最后 `daemon stop`；`stop|restart` 先写停止请求让 Daemon 自行收口（15 秒），未响应才强制结束进程树。启动、停止、投递和执行任务属于状态变更。 |
+| Daemon 与 Cron | `axon daemon`、`axon cron` | `axon daemon status` 只回答注册与运行；健康快照用 `axon daemon health`（`host.status`、`executionBacklog.pending`、`deliveries.backlog.pending`、`streamSubscribers`）。优雅收口先 `daemon drain` 再确认积压归零，最后 `daemon stop`；`stop|restart` 先写停止请求让 Daemon 自行收口（15 秒），未响应才强制结束进程树。启动、停止和执行任务属于状态变更。 |
 | 诊断与升级 | `axon doctor`、`axon lsp`、`axon upgrade` | 从只读诊断开始，升级前检查候选与影响。 |
 
 不要把 TUI 里的斜杠命令当作 CLI 子命令。MCP 工具 schema 随每轮请求全量下发，外部能力直接在工具清单中按完整 MCP 工具名调用；清单中没有对应工具即判定该能力不可用，不得臆造。

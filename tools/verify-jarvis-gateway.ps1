@@ -3,7 +3,6 @@ param(
     [switch]$SkipCapacity,
     [switch]$SkipSoak,
     [int]$Iterations = 0,
-    [int]$Cycles = 0,
     [string]$ReportPath = ""
 )
 
@@ -47,7 +46,7 @@ function Invoke-SoakAudit {
     if ($SkipSoak) {
         return
     }
-    Write-Output "==> R8-GW-07 常驻恢复审计：Host lease、Execution recovery、Delivery retry"
+    Write-Output "==> R8-GW-07 常驻恢复审计：Host lease 与 Execution recovery"
     $arguments = @(
         "-NoProfile",
         "-File", (Join-Path $PSScriptRoot "verify-jarvis-soak.ps1"),
@@ -55,9 +54,6 @@ function Invoke-SoakAudit {
     )
     if ($Iterations -gt 0) {
         $arguments += @("-Iterations", $Iterations)
-    }
-    if ($Cycles -gt 0) {
-        $arguments += @("-Cycles", $Cycles)
     }
     $output = & pwsh @arguments 2>&1
     $exitCode = $LASTEXITCODE
@@ -82,4 +78,4 @@ if ($ReportPath) {
     Write-Output "Gateway 验收报告已写入 $ReportPath"
 }
 Write-Output "Gateway 验收报告条数: $($reports.Count)"
-Write-Output "说明：Feishu、外部 HTTP 和外部 WS 的真实网络回执必须在部署现场验证；本脚本不以 Mock 回执替代真机验收。"
+Write-Output "说明：外部 HTTP 和外部 WS 的真实网络回执必须在部署现场验证；本脚本不以 Mock 回执替代真机验收。"

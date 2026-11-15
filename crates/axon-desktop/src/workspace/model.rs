@@ -15,7 +15,7 @@ pub struct LaneDto {
     pub id: String,
     /// 车道显示标题。
     pub title: String,
-    /// 会话表面渠道，例如 tui、feishu 或本应用的 desktop。
+    /// 会话表面渠道，例如 tui 或本应用的 desktop。
     pub channel: String,
     /// 会话表面目标。
     pub destination: String,

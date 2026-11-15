@@ -46,7 +46,7 @@ axon persona style list [--all]|retire <style-id>
 axon persona reset [--yes]
 
 axon doctor [--check <area>] [--verbose] [--fix]
-axon cron list [--limit <n>] [--include-removed] | create --name <NAME> --schedule <SCHEDULE> [--prompt <text>] [--skill <name>] [--workdir <dir>] [--no-agent --script <path>] [--wake feishu:<chat_id> | --wake session:<channel>:<destination>[:<workspace>]] | update <JOB_ID> [--schedule <SCHEDULE>|--wake ...|--clear-wake] ... | pause|resume|remove|run <JOB_ID> | tick [--limit <n>] | holiday sync [--year <年份>]...|status
+axon cron list [--limit <n>] [--include-removed] | create --name <NAME> --schedule <SCHEDULE> [--prompt <text>] [--skill <name>] [--workdir <dir>] [--no-agent --script <path>] [--wake session:<channel>:<destination>[:<workspace>]] | update <JOB_ID> [--schedule <SCHEDULE>|--wake ...|--clear-wake] ... | pause|resume|remove|run <JOB_ID> | tick [--limit <n>] | holiday sync [--year <年份>]...|status
                                # --schedule 三类写法，字段自由组合：
                                #   interval:30m
                                #   once:2026-11-01T09:00:00
@@ -55,8 +55,6 @@ axon cron list [--limit <n>] [--include-removed] | create --name <NAME> --schedu
                                # 例：workday:0 8-20 * * *、workday:*/30 9-18 * * *、holiday:0 10 * * *
                                # 别名 @hourly @daily @midnight @weekly @monthly @yearly @annually
                                # 别名只压缩时间、不带日历语义、可叠前缀、不接受时刻后缀
-axon remote status|subscriptions|outbox|audit|feishu-status|feishu-worklist|render-feishu|deliver-feishu|execute-feishu-sdk-loop|simulate-feishu ...
-axon remote revoke <SESSION_ID> <SUBSCRIBER_ID>
 axon lsp servers|workspace-symbol|definition|references|diagnostics ...    # 通用参数：--workspace-root <dir>、--plan-only
 
 axon debug session list [--limit <n>] [--cursor <c>] [--cwd <dir>] [--archived]
@@ -108,5 +106,5 @@ axon upgrade [--manifest-url <url>] [--download] [--apply] [--rollback] [--outpu
 - 会话诊断的两个标识不可互换：`axon debug session show|delete` 收 `SESSION_ID`，`axon debug session read|resume` 收 `THREAD_ID`。
 - 接续既有会话（`--continue`、`--session` 或同一会话的后续 turn）且未传 `--model` 时，本轮沿用该会话记录的模型；只有该模型在配置内已不存在（`[[models]]` 条目被移除或所属 Provider 停用）才回退 `agent.default_model`。TUI `/model` 的显式选择随该轮下传，优先于会话模型。
 - `axon debug channel-metrics` 查询已持久化的渠道性能、缓存与连接指标。`--since-hours` 默认读取最近 24 小时，设置为 `0` 取消时间过滤；可用 `--model`、`--provider` 过滤，`--limit` 控制最多输出的渠道数。只有启用 `channel_balancer.telemetry_persistence_enabled` 后，运行遥测才会写入 `~/.axon/data/channel-metrics`。
-- 修改配置、删除会话、执行 Cron、发送远控消息、生成图片、升级或写入 Memory 前，先确认目标和副作用，并在完成后读取回执或 status。
+- 修改配置、删除会话、执行 Cron、生成图片、升级或写入 Memory 前，先确认目标和副作用，并在完成后读取回执或 status。
 - 命令帮助中出现的 provider、传输、存储或后台行为属于配置和系统细节；Agent 只按命令帮助提供的当前参数执行，不自行构造隐藏设置。

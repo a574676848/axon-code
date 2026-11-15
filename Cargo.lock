@@ -460,7 +460,6 @@ dependencies = [
  "axon-process",
  "axon-prompts",
  "axon-protocol",
- "axon-remote-runtime",
  "axon-rustls-provider",
  "axon-test-support",
  "axon-time",
@@ -592,8 +591,6 @@ dependencies = [
  "axon-process",
  "axon-protocol",
  "axon-provider-transport",
- "axon-remote-feishu",
- "axon-remote-runtime",
  "axon-rustls-provider",
  "axon-session",
  "axon-session-runtime",
@@ -938,50 +935,6 @@ dependencies = [
  "tokio-tungstenite 0.30.0",
  "url",
  "zstd 0.14.3",
-]
-
-[[package]]
-name = "axon-remote-feishu"
-version = "0.1.10"
-dependencies = [
- "axon-agent-runtime",
- "axon-crypto",
- "axon-display",
- "axon-domain",
- "axon-jsonl",
- "axon-logger",
- "axon-protocol",
- "axon-remote-runtime",
- "axon-rustls-provider",
- "axon-session",
- "axon-test-support",
- "axon-time",
- "futures-util",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-tungstenite 0.30.0",
- "ureq",
- "url",
-]
-
-[[package]]
-name = "axon-remote-runtime"
-version = "0.1.10"
-dependencies = [
- "axon-domain",
- "axon-jsonl",
- "axon-protocol",
- "axon-test-support",
- "chrono",
- "fs4 1.1.0",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
 ]
 
 [[package]]

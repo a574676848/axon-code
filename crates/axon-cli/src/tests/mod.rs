@@ -12,10 +12,8 @@ mod memory_cli_tests;
 mod mcp_cli_tests;
 #[path = "provider_tool_call_chunk_tests.rs"]
 mod provider_tool_call_chunk_tests;
-#[path = "remote_cli_tests.rs"]
-mod remote_cli_tests;
-#[path = "remote_cli_test_support.rs"]
-mod remote_cli_test_support;
+#[path = "test_support.rs"]
+mod test_support;
 #[path = "session_cli_tests.rs"]
 mod session_cli_tests;
 #[path = "serve_cli_tests.rs"]

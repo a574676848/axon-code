@@ -10,10 +10,7 @@ use std::{
 use axon_session::JsonlThreadEventStore;
 use rusqlite::{Connection, TransactionBehavior, params_from_iter, types::Value};
 
-use super::{
-    SessionCleanupReport,
-    session_cleanup_feishu::{apply_feishu_cleanup, apply_feishu_cleanup_count},
-};
+use super::SessionCleanupReport;
 use crate::cron_commands::runtime_cleanup::{
     cleanup_runtime_session_families, count_runtime_session_families,
     protected_runtime_session_ids, stale_runtime_session_ids,
@@ -99,7 +96,6 @@ pub(super) fn count_session_family_data(
     report.deleted_governance_count = count_governance(root, session_ids, cutoff_ms)?;
     report.deleted_thread_file_count = count_thread_files(root, session_ids)?;
     apply_context_counts(report, count_session_context_files(root, session_ids)?);
-    apply_feishu_cleanup_count(root, session_ids, report)?;
     super::apply_runtime_cleanup_counts(report, count_runtime_session_families(root, session_ids)?);
     Ok(())
 }
@@ -127,7 +123,6 @@ pub(super) fn cleanup_session_family_data(
         report.deleted_governance_count = report
             .deleted_governance_count
             .saturating_add(cleanup_governance(root, ids, cutoff_ms)?);
-        apply_feishu_cleanup(root, ids, report)?;
         remove_thread_files(root, ids, report)?;
         remove_session_context_files(root, ids, report)?;
         processed.extend(ids.iter().cloned());

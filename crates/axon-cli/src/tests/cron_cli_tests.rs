@@ -2,7 +2,7 @@ use std::fs;
 
 use serde_json::Value;
 
-use super::remote_cli_test_support::test_root;
+use super::test_support::test_root;
 use super::{AxonCli, run_parsed_cli};
 
 fn stdout_script(text: &str) -> String {
@@ -33,7 +33,7 @@ fn cron_create_projects_wake_target_and_uses_cron_store() {
         "--prompt",
         "总结今日进展",
         "--wake",
-        "feishu:oc_cron_chat",
+        "session:desktop:workbench-1:workspace-cron",
     ]);
 
     let create_result = run_parsed_cli(&create);
@@ -52,7 +52,10 @@ fn cron_create_projects_wake_target_and_uses_cron_store() {
 
     assert_eq!(create_result.exit_code, 0, "{}", create_result.stderr);
     assert_eq!(create_body["status"], "cron_created");
-    assert_eq!(create_body["jobs"][0]["wake"], "feishu:oc_cron_chat");
+    assert_eq!(
+        create_body["jobs"][0]["wake"],
+        "session:desktop:workbench-1:workspace-cron"
+    );
     assert!(
         create_body["storePath"]
             .as_str()
@@ -141,7 +144,7 @@ fn legacy_feishu_flags_fail_with_chinese_migration_hint() {
 
     assert_ne!(result.exit_code, 0, "旧参数必须失败而不是静默忽略");
     assert!(
-        result.stderr.contains("--wake feishu:<chat_id>"),
+        result.stderr.contains("--wake session:<channel>:<destination>"),
         "错误里必须给出迁移路径：{}",
         result.stderr
     );

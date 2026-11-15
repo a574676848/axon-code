@@ -10,8 +10,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-#[path = "daemon_delivery_health.rs"]
-pub(crate) mod daemon_delivery_health;
 #[path = "daemon_host_runner.rs"]
 mod daemon_host_runner;
 #[path = "daemon_service_manager.rs"]
@@ -262,7 +260,3 @@ pub(crate) fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_millis() as u64)
 }
-
-#[cfg(test)]
-#[path = "daemon_commands_tests.rs"]
-mod tests;

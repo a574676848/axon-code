@@ -121,60 +121,6 @@ fn validate_remote_policy(config: &AxonConfig) -> AxonResult<()> {
             "remote.gateway.auth_keys 不能包含空字符",
         ));
     }
-    if !config
-        .remote
-        .feishu_websocket
-        .api_base_url
-        .trim()
-        .is_empty()
-        && !websocket_url_allowed(&config.remote.feishu_websocket.api_base_url)
-    {
-        return Err(AxonError::config_invalid(
-            "remote.feishu_websocket.api_base_url 必须为 http 或 https URL",
-        ));
-    }
-    if config
-        .remote
-        .feishu_websocket
-        .allowed_sender_open_ids
-        .iter()
-        .any(|open_id| open_id.trim().is_empty())
-    {
-        return Err(AxonError::config_invalid(
-            "remote.feishu_websocket.allowed_sender_open_ids 不能为空字符串",
-        ));
-    }
-    if config
-        .remote
-        .feishu_websocket
-        .blocked_sender_open_ids
-        .iter()
-        .any(|open_id| open_id.trim().is_empty())
-    {
-        return Err(AxonError::config_invalid(
-            "remote.feishu_websocket.blocked_sender_open_ids 不能为空字符串",
-        ));
-    }
-    for policy in &config.remote.feishu_websocket.chat_policies {
-        if policy.chat_id.trim().is_empty() {
-            return Err(AxonError::config_invalid(
-                "remote.feishu_websocket.chat_policies.chat_id 不能为空",
-            ));
-        }
-        if policy
-            .allowed_sender_open_ids
-            .iter()
-            .any(|open_id| open_id.trim().is_empty())
-            || policy
-                .blocked_sender_open_ids
-                .iter()
-                .any(|open_id| open_id.trim().is_empty())
-        {
-            return Err(AxonError::config_invalid(
-                "remote.feishu_websocket.chat_policies open_id 不能为空字符串",
-            ));
-        }
-    }
     Ok(())
 }
 

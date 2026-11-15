@@ -112,17 +112,7 @@ fn get_non_terminal_config_value(config: &AxonConfig, key: &str) -> Option<Confi
         | "remote.gateway.http_bind"
         | "remote.gateway.websocket_bind"
         | "remote.gateway.auth_keys"
-        | "remote.gateway.legacy_token_enabled"
-        | "remote.feishu_websocket.enabled"
-        | "remote.feishu_websocket.app_id"
-        | "remote.feishu_websocket.app_secret_env"
-        | "remote.feishu_websocket.api_base_url"
-        | "remote.feishu_websocket.websocket_url"
-        | "remote.feishu_websocket.enable_notification_sending"
-        | "remote.feishu_websocket.notification_chat_id"
-        | "remote.feishu_websocket.allowed_sender_open_ids"
-        | "remote.feishu_websocket.blocked_sender_open_ids"
-        | "remote.feishu_websocket.require_mention" => get_remote_config_value(config, key),
+        | "remote.gateway.legacy_token_enabled" => get_remote_config_value(config, key),
         _ => None,
     }
 }
@@ -144,44 +134,6 @@ fn get_remote_config_value(config: &AxonConfig, key: &str) -> Option<ConfigValue
         }
         "remote.gateway.legacy_token_enabled" => Some(ConfigValue::Bool(
             config.remote.gateway.legacy_token_enabled,
-        )),
-        "remote.feishu_websocket.enabled" => {
-            Some(ConfigValue::Bool(config.remote.feishu_websocket.enabled))
-        }
-        "remote.feishu_websocket.app_id" => Some(ConfigValue::String(
-            config.remote.feishu_websocket.app_id.clone(),
-        )),
-        "remote.feishu_websocket.app_secret_env" => Some(ConfigValue::String(
-            config.remote.feishu_websocket.app_secret_env.clone(),
-        )),
-        "remote.feishu_websocket.api_base_url" => Some(ConfigValue::String(
-            config.remote.feishu_websocket.api_base_url.clone(),
-        )),
-        "remote.feishu_websocket.websocket_url" => Some(ConfigValue::String(
-            config.remote.feishu_websocket.websocket_url.clone(),
-        )),
-        "remote.feishu_websocket.enable_notification_sending" => Some(ConfigValue::Bool(
-            config.remote.feishu_websocket.enable_notification_sending,
-        )),
-        "remote.feishu_websocket.notification_chat_id" => Some(ConfigValue::String(
-            config.remote.feishu_websocket.notification_chat_id.clone(),
-        )),
-        "remote.feishu_websocket.allowed_sender_open_ids" => Some(ConfigValue::StringList(
-            config
-                .remote
-                .feishu_websocket
-                .allowed_sender_open_ids
-                .clone(),
-        )),
-        "remote.feishu_websocket.blocked_sender_open_ids" => Some(ConfigValue::StringList(
-            config
-                .remote
-                .feishu_websocket
-                .blocked_sender_open_ids
-                .clone(),
-        )),
-        "remote.feishu_websocket.require_mention" => Some(ConfigValue::Bool(
-            config.remote.feishu_websocket.require_mention,
         )),
         _ => None,
     }
@@ -269,44 +221,6 @@ fn set_remote_config_value(config: &mut AxonConfig, key: &str, raw_value: &str) 
         "remote.gateway.legacy_token_enabled" => {
             config.remote.gateway.legacy_token_enabled = parse_bool(raw_value)?;
         }
-        "remote.feishu_websocket.enabled" => {
-            config.remote.feishu_websocket.enabled = parse_bool(raw_value)?;
-        }
-        "remote.feishu_websocket.app_id" => {
-            raw_value
-                .trim()
-                .clone_into(&mut config.remote.feishu_websocket.app_id);
-        }
-        "remote.feishu_websocket.app_secret_env" => {
-            raw_value
-                .trim()
-                .clone_into(&mut config.remote.feishu_websocket.app_secret_env);
-        }
-        "remote.feishu_websocket.api_base_url" => {
-            raw_value
-                .trim()
-                .clone_into(&mut config.remote.feishu_websocket.api_base_url);
-        }
-        "remote.feishu_websocket.websocket_url" => {
-            raw_value
-                .trim()
-                .clone_into(&mut config.remote.feishu_websocket.websocket_url);
-        }
-        "remote.feishu_websocket.enable_notification_sending" => {
-            config.remote.feishu_websocket.enable_notification_sending = parse_bool(raw_value)?;
-        }
-        "remote.feishu_websocket.notification_chat_id" => {
-            config.remote.feishu_websocket.notification_chat_id = raw_value.trim().to_owned();
-        }
-        "remote.feishu_websocket.allowed_sender_open_ids" => {
-            config.remote.feishu_websocket.allowed_sender_open_ids = parse_string_list(raw_value)?;
-        }
-        "remote.feishu_websocket.blocked_sender_open_ids" => {
-            config.remote.feishu_websocket.blocked_sender_open_ids = parse_string_list(raw_value)?;
-        }
-        "remote.feishu_websocket.require_mention" => {
-            config.remote.feishu_websocket.require_mention = parse_bool(raw_value)?;
-        }
         _ => return Err(AxonError::config_invalid("未知配置键")),
     }
     Ok(())
@@ -361,21 +275,6 @@ fn parse_log_level(raw_value: &str) -> AxonResult<String> {
             "日志级别必须为 trace、debug、info、warn 或 error（兼容 warning）",
         ))
     }
-}
-
-fn parse_string_list(raw_value: &str) -> AxonResult<Vec<String>> {
-    if raw_value.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut values = Vec::new();
-    for raw_item in raw_value.split(',') {
-        let value = raw_item.trim();
-        if value.is_empty() {
-            return Err(AxonError::config_invalid("配置列表项不能为空"));
-        }
-        values.push(value.to_owned());
-    }
-    Ok(values)
 }
 
 fn parse_bool(raw_value: &str) -> AxonResult<bool> {

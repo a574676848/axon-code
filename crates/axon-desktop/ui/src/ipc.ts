@@ -261,7 +261,7 @@ export const secretClear = (key: string): Promise<void> => call('secret_clear', 
 
 // ------------------------------------------------------------ 系统信息
 
-/** 汇总运行态服务、远控状态与版本。 */
+/** 汇总运行态服务与版本。 */
 export const systemInfo = (): Promise<SystemInfo> => call('system_info');
 
 /** 经 GitHub 发布渠道检测更新。 */

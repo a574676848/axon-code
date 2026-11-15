@@ -31,24 +31,6 @@ fn log_level_warning_alias_is_canonicalized_without_duplicate_options() {
 }
 
 #[test]
-fn remote_feishu_chat_policies_validate_group_overrides() {
-    let mut config = AxonConfig::default();
-    config.remote.feishu_websocket.chat_policies =
-        vec![super::sections::RemoteFeishuChatPolicyConfig {
-            chat_id: "oc_ops".to_owned(),
-            allowed_sender_open_ids: vec!["ou_ops".to_owned()],
-            blocked_sender_open_ids: Vec::new(),
-            require_mention: Some(true),
-        }];
-
-    assert!(config.validate().is_ok());
-    config.remote.feishu_websocket.chat_policies[0]
-        .chat_id
-        .clear();
-    assert!(config.validate().is_err());
-}
-
-#[test]
 fn default_loader_records_config_sources() {
     let loaded = ConfigLoader::load_defaults().unwrap();
 
@@ -113,17 +95,6 @@ fn root_config_example_toml_is_loadable() {
 
 #[test]
 fn invalid_limits_fail_closed() {
-    let mut config = AxonConfig::default();
-    config.remote.feishu_websocket.chat_policies =
-        vec![super::sections::RemoteFeishuChatPolicyConfig {
-            chat_id: String::new(),
-            allowed_sender_open_ids: Vec::new(),
-            blocked_sender_open_ids: Vec::new(),
-            require_mention: None,
-        }];
-
-    assert!(config.validate().is_err());
-
     let mut config = AxonConfig::default();
     config.agent.max_subagent_threads = 0;
     assert!(config.validate().is_err());

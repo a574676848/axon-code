@@ -20,11 +20,11 @@
 
 ---
 
-Axon 是为个人与工程创造者打造的**专属个人智能体与首席战术副官（Personal Agent & Tactical Aide）**。系统恪守严格的洋葱架构（Onion Architecture），在**跨平台桌面端（Desktop Workbench）**、**终端全屏交互（Terminal TUI）**、**无头命令行（Headless CLI）**与**企业协作入口（飞书远程接入）**之间复用同一套高性能 Agent 运行时、状态机模型、工具权限边界、模型路由以及上下文认知体系。
+Axon 是为个人与工程创造者打造的**专属个人智能体与首席战术副官（Personal Agent & Tactical Aide）**。系统恪守严格的洋葱架构（Onion Architecture），在**跨平台桌面端（Desktop Workbench）**、**终端全屏交互（Terminal TUI）**与**无头命令行（Headless CLI）**之间复用同一套高性能 Agent 运行时、状态机模型、工具权限边界、模型路由以及上下文认知体系。
 
 ## 核心特性
 
-- **多端统一运行时 (Unified Multi-Interface Runtime)**：无论从现代化桌面窗口、终端全屏 TUI、非交互命令行 `axon run`，还是企业即时通讯（飞书），均运行在同一底层 Agent 运行时上，实现状态与上下文的无缝漫游。
+- **多端统一运行时 (Unified Multi-Interface Runtime)**：无论从现代化桌面窗口、终端全屏 TUI，还是非交互命令行 `axon run`，均运行在同一底层 Agent 运行时上，实现状态与上下文的无缝漫游。
 - **开发者桌面工作台 (Axon Desktop Workbench)**：基于 Tauri 2 构建的工业级桌面端，秉承黑白极简主义设计，支持多工作区与独立任务车道（Lanes）、实时流式 Token 投影、交互式问答卡片（支持单选/多选/输入与自动唤醒）、工作区文件查看器与系统关联应用打开、集成终端和可视化 MCP/模型设置。
 - **终端全屏交互 (Terminal TUI)**：基于 Ratatui 构建的高性能终端界面，具备毫秒级首字极速渲染、多状态仪表盘、转录行折叠与交互式问答面板。
 - **严格洋葱架构与持久化事实 (Onion Architecture & Durable State)**：领域层 `axon-domain` 绝对解耦；系统以原子入账的 `Interaction`、`Goal` 与 `Execution` 作为单一事实来源，支持分布式排他租约、故障自动恢复与历史精准重放。
@@ -42,10 +42,10 @@ Axon 是为个人与工程创造者打造的**专属个人智能体与首席战�
 </p>
 
 ```text
- [桌面工作台 (Desktop)]   [终端 TUI (Ratatui)]   [无头 CLI (Headless)]   [企业协同 (Feishu)]
-           \                       |                      |                      /
-            \                      |                      |                     /
-             +---------------------+----------------------+--------------------+
+ [桌面工作台 (Desktop)]   [终端 TUI (Ratatui)]   [无头 CLI (Headless)]
+           \                       |                      /
+            \                      |                     /
+             +---------------------+--------------------+
                                            |
                                            v
                              [Axon Daemon 守护进程 / 网关]
@@ -121,7 +121,6 @@ axon run "检查 Cargo.toml 依赖并报告潜在安全风险"
 | **终端全屏 (TUI)** | 纯命令行环境、沉浸式开发、低资源占用与高频快捷键操作 | `axon` 或 `axon "prompt"` |
 | **无头命令 (Run)** | 单次任务执行、流水线调用、结构化 JSON 输出 | `axon run "prompt"` |
 | **后台常驻 (Daemon)** | 异步长周期任务、定时计划 (Cron)、跨应用网络网关、系统监控 | `axon daemon start` |
-| **企业协作 (Feishu)** | 移动端远程委派、群聊交互、团队协作与异步卡片通知 | 配置在 `config.toml` 中启用 |
 
 > `axon desktop` 由安装根的稳定 launcher 直接转发给桌面端二进制，因此不会出现在 `axon --help` 的子命令列表中。
 
@@ -174,7 +173,6 @@ axon usage                                      # 查看 Token 消耗与成本�
 - **扩展与协同**
   - [大模型 Provider](./docs/providers.md) - 模型路由、参数映射与 Prompt Cache
   - [Daemon 守护进程](./docs/daemon.md) - 网关通信、后台作业与平滑升级
-  - [飞书远程协作](./docs/feishu-remote.md) - 私有长连接远控与交互卡片
   - [MCP 协议集成](./docs/mcp.md) - Model Context Protocol 服务器接入
   - [Skill 技能系统](./docs/skills.md) - 自定义技能编写与运行态规范
   - [内置工具契约](./docs/tool-schema.md) - 工具参数 Schema 与行为规约

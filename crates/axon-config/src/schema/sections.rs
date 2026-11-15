@@ -99,8 +99,6 @@ pub struct RemoteConfig {
     pub gateway: RemoteGatewayConfig,
     /// 远控运行模式。
     pub mode: RemoteMode,
-    /// Feishu WebSocket adapter 配置。
-    pub feishu_websocket: RemoteFeishuWebSocketConfig,
 }
 
 /// 统一 Gateway 配置。
@@ -149,48 +147,6 @@ impl RemoteConfig {
             RemoteMode::HighThroughput => HIGH_THROUGHPUT_REMOTE_MAX_PAYLOAD_BYTES,
         }
     }
-}
-
-/// 远控 Feishu WebSocket adapter 配置。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct RemoteFeishuWebSocketConfig {
-    /// 是否启用 Feishu WebSocket adapter。
-    pub enabled: bool,
-    /// Feishu app_id。
-    pub app_id: String,
-    /// Feishu app_secret 环境变量名。
-    pub app_secret_env: String,
-    /// Feishu OpenAPI 基址；为空时使用官方默认地址。
-    pub api_base_url: String,
-    /// 可选 WebSocket URL；为空时使用官方默认地址。
-    pub websocket_url: String,
-    /// 是否允许发送远控通知。
-    pub enable_notification_sending: bool,
-    /// 消息通知 chat_id；为空时不向飞书投递后台完成通知。
-    pub notification_chat_id: String,
-    /// 允许访问远控的 Feishu open_id 列表。
-    pub allowed_sender_open_ids: Vec<String>,
-    /// 禁止访问远控的 Feishu open_id 列表，优先级高于 allowlist。
-    pub blocked_sender_open_ids: Vec<String>,
-    /// 群聊消息是否要求显式 @ 机器人。
-    pub require_mention: bool,
-    /// 按 chat_id 生效的群聊治理策略。
-    pub chat_policies: Vec<RemoteFeishuChatPolicyConfig>,
-}
-
-/// Feishu 单群治理策略配置。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct RemoteFeishuChatPolicyConfig {
-    /// Feishu chat_id。
-    pub chat_id: String,
-    /// 当前 chat 的 sender allowlist；非空时覆盖全局 allowlist。
-    pub allowed_sender_open_ids: Vec<String>,
-    /// 当前 chat 的 sender blacklist；与全局 blacklist 叠加生效。
-    pub blocked_sender_open_ids: Vec<String>,
-    /// 当前 chat 是否要求 @ 机器人；为空时沿用全局配置。
-    pub require_mention: Option<bool>,
 }
 
 /// 视觉配置。

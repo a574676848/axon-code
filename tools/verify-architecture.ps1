@@ -53,19 +53,19 @@ function Assert-NoCargoDependency {
 }
 
 Assert-NoCargoDependency -Crate "axon-domain" -Forbidden @(
-    "axon-session", "axon-session-runtime", "axon-daemon", "axon-cli", "axon-remote-feishu", "rusqlite", "tokio"
+    "axon-session", "axon-session-runtime", "axon-daemon", "axon-cli", "rusqlite", "tokio"
 )
 Assert-NoCargoDependency -Crate "axon-session-runtime" -Forbidden @(
-    "axon-cli", "axon-remote-feishu"
+    "axon-cli"
 )
 Assert-NoCargoDependency -Crate "axon-daemon" -Forbidden @(
-    "axon-cli", "axon-remote-feishu"
+    "axon-cli"
 )
 Assert-NoCargoDependency -Crate "axon-apply" -Forbidden @(
     "axon-agent-runtime"
 )
 Assert-NoCargoDependency -Crate "axon-desktop" -Forbidden @(
-    "axon-cli", "axon-daemon", "axon-remote-feishu",
+    "axon-cli", "axon-daemon",
     # 表现层必须经网关协议访问运行态，禁止直连会话子系统或运行态数据库。
     "axon-session", "axon-session-runtime", "axon-domain", "rusqlite",
     # 人格状态一律经网关读取，桌面端不得直接依赖人格 crate。

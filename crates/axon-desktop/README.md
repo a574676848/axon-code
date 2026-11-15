@@ -45,7 +45,7 @@ cargo test -p axon-desktop --test history_replay_probe -- --ignored
 
 ## 跨平台架构与安全边界
 
-- 严格遵循洋葱架构分层，表现层不依赖表现层；禁止直接依赖 `axon-cli`、`axon-daemon` 与 `axon-remote-feishu`。
+- 严格遵循洋葱架构分层，表现层不依赖表现层；禁止直接依赖 `axon-cli` 与 `axon-daemon`。
 - 配置读写复用 `axon-config` 权威内核，修改前自动备份，直接覆盖原配置文件，兼容编辑器允许读写但禁止替换文件的占用方式。凭据文件保持原子写入。
 - 密钥安全隔离：IPC 传输与界面视图仅暴露环境变量名与掩码，严禁明文外泄。
 
@@ -54,7 +54,7 @@ cargo test -p axon-desktop --test history_replay_probe -- --ignored
 - 会话切换后定位最新消息，窗口标题同步会话名称；主动上翻后暂停跟随，回到最新时同步消息导航。
 - 思考展开、正文和工具输出增长时，处于底部的视口持续跟随。
 - 工具前缀使用中文，MCP 保持原前缀；文件、便签、记忆、任务、子代理、上下文和历史操作按具体工具语义展示，搜索操作统一使用“检索”，终端交互显示“终端执行”，后台作业输出显示“作业输出”。Desktop 与 TUI 共用 `axon-display` 的内置工具名称表，并通过真实注册清单检查覆盖范围；未知工具保留原名。
-- 工具行收起时只给一项事实，规则表与 TUI、飞书工具卡共用 `axon-display/src/tool_row_rules.json`：模型自述的 `intent` 优先（`shell_command`、`write_stdin`、`update_plan`、`glob`、`search` 与便签写入必填）；没有它时按工具语义取主参数（记忆检索的 `query`、技能的技能名、MCP 的服务名与工具名、子代理的 `task`、`send_message` 的 `message`、`job_output` 的等待作业、新建上下文的 `reason`）；`get_context_remaining` 收起时不追加内容；其余工具回落到文件路径、命令投影与结果摘要。原始参数、变更与输出仍在展开态完整可见。
+- 工具行收起时只给一项事实，规则表与 TUI 工具卡共用 `axon-display/src/tool_row_rules.json`：模型自述的 `intent` 优先（`shell_command`、`write_stdin`、`update_plan`、`glob`、`search` 与便签写入必填）；没有它时按工具语义取主参数（记忆检索的 `query`、技能的技能名、MCP 的服务名与工具名、子代理的 `task`、`send_message` 的 `message`、`job_output` 的等待作业、新建上下文的 `reason`）；`get_context_remaining` 收起时不追加内容；其余工具回落到文件路径、命令投影与结果摘要。原始参数、变更与输出仍在展开态完整可见。
 - 展开的 JSON 输入输出使用缩进和语法高亮；Shell 命令单独高亮，输出保留原始换行。非正常退出以红色标识。
 - 文件读取工具中的路径，以及正文和行内代码中的明确文件路径，可在右侧文件栏预览。性能分位数、I/O 和外部 URL 不作为本地文件。
 - 历史索引与事件回放共同归并用户消息，附件由历史索引补齐，同一事件不会产生重复气泡。

@@ -26,7 +26,7 @@ axon config get remote.gateway.websocket_bind
 | Memory 结果异常 | `axon memory stats`、`axon memory doctor`、`axon memory search <query>` |
 | 人设不生效或人格状态异常 | `axon persona validate`、`axon persona status`、`axon doctor --check persona`；人设格式无效时该轮不装配人格，回合照常继续 |
 | 会话读取或恢复异常 | `axon debug session show <session-id>`、`axon debug session read <session-id>`、`axon debug session doctor` |
-| Daemon、Cron 或 Remote 异常 | `axon daemon status`、`axon daemon health`、`axon cron list`、`axon remote status`、`axon remote feishu-status` |
+| Daemon、Cron 或网关异常 | `axon daemon status`、`axon daemon health`、`axon cron list`、`axon config get remote.gateway.http_bind` |
 | 桌面端提示「本轮被后端拒绝」 | 这条结论不指向模型或凭据：先看 `axon daemon health` 的 `host.leaseRemainingMs` 是否为正（为负或缺失表示 Worker 已停），再在 `data/logs/axon-<日期>.log` 检索 `database is locked`、`Daemon Host 续租失败` 与 `Daemon Primary Turn 拒绝 Interaction`（拒绝原因按 error 级留痕，含 `layer` 与 `message`）；需要恢复时 `axon daemon restart` 后重发 |
 | 停服或升级前需要优雅收口 | 先 `axon daemon drain`，用 `axon daemon health` 看 `executionBacklog.pending` 与 `deliveries.backlog.pending` 是否归零；`stop|restart` 等待窗口 10 秒，超时会强制结束进程树 |
 | 事件订阅数不回落 | `axon daemon health` 的 `streamSubscribers`；再用 `scripts/gateway-ws.ps1 -Action subscribe` 对照订阅与退订是否成对 |

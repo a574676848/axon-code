@@ -8,14 +8,11 @@ mod exports_agent_run;
 mod exports_builtin_tools;
 #[path = "exports_memory.rs"]
 mod exports_memory;
-#[path = "exports_remote.rs"]
-mod exports_remote;
 #[path = "exports_self_iteration.rs"]
 mod exports_self_iteration;
 
 pub use {
-    exports_agent_run::*, exports_builtin_tools::*, exports_memory::*, exports_remote::*,
-    exports_self_iteration::*,
+    exports_agent_run::*, exports_builtin_tools::*, exports_memory::*, exports_self_iteration::*,
 };
 
 pub use crate::agent_apply_history::{

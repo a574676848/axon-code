@@ -2,6 +2,8 @@ mod agent_config;
 mod application;
 pub(crate) use agent_config::cron_agent_config;
 mod args;
+mod daemon_adapter;
+pub(crate) use daemon_adapter::{CronDaemonAdapter, load_cron_adapter};
 mod execution;
 mod holiday_calendar;
 mod holiday_commands;
@@ -29,7 +31,7 @@ pub(crate) use execution::{
     execute_local_cron_agent, local_cron_session_key,
 };
 pub(crate) use tick::{execute_and_persist, run_due_cron_jobs};
-pub(crate) use wake::{CRON_WAKE_SOURCE_PREFIX, parse_wake, suggested_feishu_chat_id};
+pub(crate) use wake::{CRON_WAKE_SOURCE_PREFIX, parse_wake};
 
 pub(crate) const MEMORY_CONSOLIDATION_CRON_JOB_ID: &str = "axon.system.memory-consolidation";
 pub(crate) const MEMORY_CONSOLIDATION_CRON_NAME: &str = "Memory consolidation";

@@ -1,17 +1,15 @@
 use super::*;
 use axon_agent_runtime::{QuestionWaitBudget, QuestionWaitResult};
 use axon_domain::{
-    ConsumerCursor, DaemonSessionId, RuntimeHostId, UserAnswerItem, UserQuestionRecord,
-    UserQuestionState,
+    DaemonSessionId, RuntimeHostId, UserAnswerItem, UserQuestionRecord, UserQuestionState,
 };
 use axon_protocol::wire::{
     WireCorrelationId, WireEventEnvelope, WireEventKind, WireSchemaVersion, WireSessionRef,
     WireUserQuestion,
 };
-use axon_session::{InteractionQueryStore, RuntimeStore, SessionEventRecord, UserQuestionStore};
+use axon_session::{InteractionQueryStore, RuntimeStore, UserQuestionStore};
 use std::{sync::mpsc, thread, time::Duration};
 
-const PUBLISH_TIMEOUT: Duration = Duration::from_secs(1);
 /// 守护进程问答装配的等待者注册与作答回灌超时。
 const WIRING_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -67,34 +65,6 @@ fn pid_guard_reclaims_pid_recycled_to_a_foreign_process() {
     drop(guard);
     let _ = foreign.kill();
     let _ = foreign.wait();
-}
-
-#[test]
-fn daemon_event_publish_does_not_wait_for_process_stdout_lock() {
-    let directory = axon_test_support::test_temp_dir();
-    let publisher = DaemonEventPublisher::new(
-        directory.path().to_path_buf(),
-        directory.path().join("config.toml"),
-        Arc::new(DaemonMaintenanceSignal::default()),
-    );
-    let event = SessionEventRecord {
-        session_id: DaemonSessionId::new("stdout-lock-session").expect("Session ID 有效"),
-        sequence: 1,
-        emitted_at_ms: 1,
-        generation: "generation-a".to_owned(),
-        event_type: "turn_started".to_owned(),
-        payload_json: "{}".to_owned(),
-    };
-    let cursor = ConsumerCursor::new("generation-a", 1);
-    let (sender, receiver) = mpsc::channel();
-    let _stdout_guard = std::io::stdout().lock();
-
-    thread::spawn(move || sender.send(publisher.publish(&event, &cursor)));
-
-    receiver
-        .recv_timeout(PUBLISH_TIMEOUT)
-        .expect("Daemon 事件发布不应等待 stdout 锁")
-        .expect("Daemon 事件发布应成功");
 }
 
 #[test]

@@ -7,8 +7,8 @@ use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use super::{
     AuthCommand, CompletionCommand, ConfigCommand, CronCommand, DaemonCommand, DebugCommand,
     DoctorCommand, ExecCommand, ExportCommand, GatewayCommand, LspCommand, McpCommand,
-    MemoryCommand, ModelsCommand, PackageCommand, PersonaCommand, ProvidersCommand, RemoteCommand,
-    SetupCommand, SkillsCommand, StopCommand, UpgradeCommand, UsageCommand,
+    MemoryCommand, ModelsCommand, PackageCommand, PersonaCommand, ProvidersCommand, SetupCommand,
+    SkillsCommand, StopCommand, UpgradeCommand, UsageCommand,
 };
 
 /// Axon CLI 顶层参数。
@@ -152,8 +152,6 @@ pub enum AxonCommand {
     Usage(UsageCommand),
     /// 管理与核算模型费率规则。
     Pricing(crate::usage_statistics::PricingCommand),
-    /// 远控治理与诊断。
-    Remote(RemoteCommand),
     /// 调试工具。
     Debug(DebugCommand),
     /// LSP / diagnostics 查询入口。
@@ -263,7 +261,6 @@ pub fn plan_invocation(cli: &AxonCli) -> CliInvocation {
         Some(AxonCommand::Cron(_)) => CliInvocation::Command { name: "cron" },
         Some(AxonCommand::Usage(_)) => CliInvocation::Command { name: "usage" },
         Some(AxonCommand::Pricing(_)) => CliInvocation::Command { name: "pricing" },
-        Some(AxonCommand::Remote(_)) => CliInvocation::Command { name: "remote" },
         Some(AxonCommand::Debug(_)) => CliInvocation::Command { name: "debug" },
         Some(AxonCommand::Lsp(_)) => CliInvocation::Command { name: "lsp" },
         Some(AxonCommand::GovernanceWorker(_)) => CliInvocation::Command {

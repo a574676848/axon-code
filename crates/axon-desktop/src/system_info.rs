@@ -14,18 +14,11 @@
 //! 所有探测失败都如实呈现为「无响应」「读不到」或错误说明，绝不伪造成在线。
 //! 发布渠道与更新检测不在这里，见 [`crate::release_channel`]。
 
-use std::fs;
-use std::path::{Path, PathBuf};
-
-use axon_config::ConfigLoader;
 use serde::{Deserialize, Serialize};
 
 use crate::connection::endpoint;
 use crate::gateway;
 use crate::release_channel::{GithubInfoDto, github_info};
-
-/// 远控 adapter 状态文件名。
-const GATEWAY_STATUS_FILE: &str = "gateway-status.json";
 
 /// 键值对展示项。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,17 +27,6 @@ pub struct KeyValueDto {
     pub key: String,
     /// 值。
     pub value: String,
-}
-
-/// 远控 adapter 状态。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RemoteStatusDto {
-    /// adapter 是否已连接。
-    pub connected: bool,
-    /// 连接状态的中文说明。
-    pub state_label: String,
-    /// 一行补充说明，例如运行时长与最近错误。
-    pub detail: String,
 }
 
 /// daemon 后台健康快照。
@@ -83,16 +65,8 @@ pub struct SystemInfoDto {
     pub daemon_health: Option<DaemonHealthDto>,
     /// 后台健康快照读不到的原因；成功时为空串。
     pub daemon_health_error: String,
-    /// 飞书远控状态；无状态文件时为空。
-    pub remote_feishu: Option<RemoteStatusDto>,
     /// 发布渠道坐标：关于面板的仓库、发布页与反馈入口都由它派生。
     pub github: GithubInfoDto,
-}
-
-/// 解析运行时根目录。
-fn axon_root() -> Result<PathBuf, String> {
-    ConfigLoader::default_user_axon_root_path()
-        .map_err(|error| format!("无法解析 Axon 运行时根目录：{error:?}"))
 }
 
 /// daemon 结论标识：网关有响应，且后台租约有效。
@@ -221,120 +195,9 @@ fn interaction_count(value: &serde_json::Value, status: &str) -> u64 {
         .unwrap_or(0)
 }
 
-/// 飞书远控状态文件可能的位置。
-///
-/// 权威位置是各 adapter 自己的子目录（形如 `data/remote/<adapter>/gateway-status.json`），
-/// 因此先按已知目录枚举，再兜底扫描 `data/remote` 下的一层子目录，
-/// 避免新增 adapter 时又要回来改路径清单。
-fn feishu_status_candidates(root: &Path) -> Vec<PathBuf> {
-    let mut candidates = vec![
-        root.join("data")
-            .join("remote")
-            .join("feishu")
-            .join(GATEWAY_STATUS_FILE),
-        root.join("data").join(GATEWAY_STATUS_FILE),
-        root.join(GATEWAY_STATUS_FILE),
-    ];
-    if let Ok(entries) = fs::read_dir(root.join("data").join("remote")) {
-        for entry in entries.flatten() {
-            let path = entry.path().join(GATEWAY_STATUS_FILE);
-            if path.is_file() && !candidates.contains(&path) {
-                candidates.push(path);
-            }
-        }
-    }
-    candidates
-}
-
-/// 读取飞书远控状态。
-///
-/// 状态文件由 adapter 自己写入，`state` 是权威字段；这里把它翻成中文，
-/// 并把毫秒时间戳换算成可读的相对时间，界面不再出现原始字段名。
-fn remote_feishu_status(root: &Path) -> Option<RemoteStatusDto> {
-    for path in feishu_status_candidates(root) {
-        let Ok(text) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-            continue;
-        };
-        let state = value
-            .get("state")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
-        let connected = state == "connected";
-        let state_label = match state {
-            "connected" => "已连接",
-            "connecting" => "连接中",
-            "disconnected" => "已断开",
-            "" => "状态未知",
-            other => other,
-        }
-        .to_string();
-
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_millis() as u64)
-            .unwrap_or(0);
-        let mut parts: Vec<String> = Vec::new();
-        if let Some(started) = value.get("startedAtMs").and_then(serde_json::Value::as_u64)
-            && now_ms > started
-        {
-            parts.push(format!("已运行 {}", humanize_duration(now_ms - started)));
-        }
-        if let Some(updated) = value.get("updatedAtMs").and_then(serde_json::Value::as_u64)
-            && now_ms > updated
-        {
-            parts.push(format!("{}前更新", humanize_duration(now_ms - updated)));
-        }
-        if let Some(attempts) = value
-            .get("reconnectAttempts")
-            .and_then(serde_json::Value::as_u64)
-            && attempts > 0
-        {
-            parts.push(format!("重连 {attempts} 次"));
-        }
-        if let Some(active) = value
-            .get("activeTaskCount")
-            .and_then(serde_json::Value::as_u64)
-        {
-            parts.push(format!("进行中任务 {active}"));
-        }
-        if let Some(error) = value.get("lastError").and_then(serde_json::Value::as_str) {
-            parts.push(format!("最近错误：{error}"));
-        }
-
-        return Some(RemoteStatusDto {
-            connected,
-            state_label,
-            detail: parts.join(" · "),
-        });
-    }
-    None
-}
-
-/// 把毫秒时长换算成中文可读时长。
-fn humanize_duration(millis: u64) -> String {
-    let seconds = millis / 1000;
-    if seconds < 60 {
-        return format!("{seconds} 秒");
-    }
-    let minutes = seconds / 60;
-    if minutes < 60 {
-        return format!("{minutes} 分钟");
-    }
-    let hours = minutes / 60;
-    if hours < 24 {
-        return format!("{hours} 小时");
-    }
-    format!("{} 天", hours / 24)
-}
-
 /// Tauri IPC 命令：汇总系统信息。
 #[tauri::command(async)]
 pub fn system_info() -> Result<SystemInfoDto, String> {
-    let root = axon_root()?;
-
     let health = daemon_health_snapshot();
     let health_error = health.as_ref().err().cloned().unwrap_or_default();
     let (installed, running, daemon_state, detail) = daemon_status(&health);
@@ -347,7 +210,6 @@ pub fn system_info() -> Result<SystemInfoDto, String> {
         daemon_state: daemon_state.to_string(),
         daemon_health: health.ok(),
         daemon_health_error: health_error,
-        remote_feishu: remote_feishu_status(&root),
         github: github_info(),
     })
 }

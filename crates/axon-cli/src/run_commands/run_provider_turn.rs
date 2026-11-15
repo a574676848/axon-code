@@ -7,21 +7,17 @@ use axon_agent_runtime::RunCancelToken;
 use axon_daemon::PRIMARY_TURN_ACTION_KIND;
 use axon_domain::{InteractionId, SYSTEM_SOURCE_CHANNEL};
 use axon_protocol::wire::WireEventEnvelope;
-use axon_remote_feishu::RemoteFeishuProcessingOutcome;
 use axon_session_runtime::{
     ProviderTurnRequest, ProviderTurnResult, ProviderTurnRunner, TurnEventSink, TurnExecutionError,
 };
 
-use super::super::run_agent_identity::run_agent_identity;
-use super::super::run_shell_job_wake::{ShellJobWakeBridge, WakeRouteInfo};
-use super::super::run_steer::{ActivePrimaryTurnRegistry, RunSteerBridge, RunSteerInbox};
-use super::super::run_stream_provider_progress;
-use super::super::run_subagent_executor::{SUBAGENT_RESULT_MARKER_TEXT, strip_result_path};
-use super::super::{
-    CliRunResult, RunCommand, RunStartupSnapshot, StartupSnapshotCache, execute_standalone_subagent,
-};
+use super::run_agent_identity::run_agent_identity;
+use super::run_shell_job_wake::{ShellJobWakeBridge, WakeRouteInfo};
+use super::run_steer::{ActivePrimaryTurnRegistry, RunSteerBridge, RunSteerInbox};
+use super::run_stream_provider_progress;
+use super::run_subagent_executor::{SUBAGENT_RESULT_MARKER_TEXT, strip_result_path};
 use super::{
-    FeishuTurnContext, complete_feishu_processing, resolve_feishu_turn_context, transport_files,
+    CliRunResult, RunCommand, RunStartupSnapshot, StartupSnapshotCache, execute_standalone_subagent,
 };
 use crate::OutputFormat;
 
@@ -121,17 +117,7 @@ impl CliProviderTurnRunner {
             request.run_session_id,
             request.prompt.len()
         ));
-        // 实时投影是可降级能力：配置、凭据或会话映射异常只能退化为持久 outbox 出站，
-        // 绝不允许拒绝整轮用户 turn，否则飞书侧会完全收不到回复。
-        let feishu = match resolve_feishu_turn_context(&self.config_path, &request) {
-            Ok(context) => context,
-            Err(error) => {
-                axon_logger::warning(&format!(
-                    "Feishu 实时投影不可用，本轮仅由持久 outbox 出站: {error}"
-                ));
-                None
-            }
-        };
+
         // Provider 请求发出前的失败不会产生外部副作用，配置或输入错误直接结论为确定性失败。
         let command = provider_run_command(&self.config_path, &request)
             .map_err(TurnExecutionError::permanent)?;
@@ -153,14 +139,27 @@ impl CliProviderTurnRunner {
         )
         .map_err(TurnExecutionError::retryable)?;
         // Provider turn 已经执行，之后的收尾失败无法证明外部结果，必须进入 uncertain。
-        let run_result =
-            finalize_provider_run(feishu.as_ref(), run_result, &command, started_at_ms)
-                .map_err(TurnExecutionError::external_outcome_unknown)?;
+        let run_result = finalize_provider_run(run_result, &command, started_at_ms)
+            .map_err(TurnExecutionError::external_outcome_unknown)?;
         build_provider_turn_result(&self.config_path, &run_session_id, &run_result)
             .map_err(TurnExecutionError::external_outcome_unknown)
     }
 }
 
+/// 本轮附带的本地附件路径。
+///
+/// 附件缓存可能已过期回收：此时只丢附件，绝不因单个附件缺失而拒绝整轮 turn。
+fn transport_files(transport: Option<&serde_json::Value>) -> Vec<PathBuf> {
+    transport
+        .and_then(|value| value.get("files"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+        .collect()
+}
 fn provider_run_command(
     config_path: &Path,
     request: &ProviderTurnRequest,
@@ -309,7 +308,7 @@ fn active_turn_registration(
     active_primary_turns: &ActivePrimaryTurnRegistry,
     steer_inbox: RunSteerInbox,
     cancel_token: RunCancelToken,
-) -> Result<Option<super::super::run_steer::ActivePrimaryTurnRegistration>, String> {
+) -> Result<Option<super::run_steer::ActivePrimaryTurnRegistration>, String> {
     if request.action_kind != PRIMARY_TURN_ACTION_KIND {
         return Ok(None);
     }
@@ -345,19 +344,10 @@ fn active_turn_registration(
 }
 
 fn finalize_provider_run(
-    feishu: Option<&FeishuTurnContext>,
     run_result: CliRunResult,
     command: &RunCommand,
     started_at_ms: u64,
 ) -> Result<CliRunResult, String> {
-    if let Some(context) = feishu {
-        let outcome = if run_result.exit_code == 0 {
-            RemoteFeishuProcessingOutcome::Success
-        } else {
-            RemoteFeishuProcessingOutcome::Failure
-        };
-        complete_feishu_processing(context, outcome);
-    }
     axon_logger::debug(&format!(
         "Daemon Provider runner 返回: run_session_id={}, exit_code={}, elapsed_ms={}",
         command.session.clone().unwrap_or_default(),
@@ -484,7 +474,7 @@ fn build_provider_turn_result(
     run_result: &CliRunResult,
 ) -> Result<ProviderTurnResult, String> {
     let token_usage =
-        match super::super::run_rollout_store::load_session_usage(config_path, run_session_id) {
+        match super::run_rollout_store::load_session_usage(config_path, run_session_id) {
             Ok(usage) => usage,
             Err(error) => {
                 axon_logger::warning(&format!(
@@ -551,5 +541,5 @@ fn sanitize_agent_path_segment(value: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "run_remote_provider_turn_tests.rs"]
+#[path = "run_provider_turn_tests.rs"]
 mod tests;

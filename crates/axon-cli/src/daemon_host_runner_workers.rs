@@ -1,7 +1,6 @@
 //! Daemon 后台 Worker 线程的循环与失败处理。
 
 use std::{
-    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -11,20 +10,17 @@ use std::{
 };
 
 use super::{
-    CRON_TICK_INTERVAL_MS, CliDaemonHost, DaemonMaintenanceSignal, DaemonRunCommand,
-    FEISHU_DELIVERY_RECOVERY_INTERVAL_MS, HOST_RENEW_INTERVAL_MS, MAINTENANCE_TIMER_INTERVAL_MS,
-    RELEASE_GC_INTERVAL_MS, SCHEDULE_LEASE_DURATION_MS, SUPERVISOR_BATCH_LIMIT,
+    CRON_TICK_INTERVAL_MS, CliDaemonHost, DaemonMaintenanceSignal, HOST_RENEW_INTERVAL_MS,
+    MAINTENANCE_TIMER_INTERVAL_MS, RELEASE_GC_INTERVAL_MS, SCHEDULE_LEASE_DURATION_MS,
+    SUPERVISOR_BATCH_LIMIT,
 };
 
 pub(super) fn start_background_workers(
-    command: &DaemonRunCommand,
     host: &CliDaemonHost,
-    cron_adapter: crate::remote_commands::FeishuCronAdapter,
-    delivery_owner: String,
+    cron_adapter: crate::cron_commands::CronDaemonAdapter,
     workers_running: Arc<AtomicBool>,
     maintenance_signal: Arc<DaemonMaintenanceSignal>,
     primary_turn_signal: Arc<DaemonMaintenanceSignal>,
-    delivery_signal: Arc<DaemonMaintenanceSignal>,
     active_primary_turns: crate::run_commands::run_steer::ActivePrimaryTurnRegistry,
 ) {
     start_lease_worker(host.clone(), Arc::clone(&workers_running));
@@ -41,14 +37,6 @@ pub(super) fn start_background_workers(
         maintenance_signal,
     );
     start_cron_worker(cron_adapter, Arc::clone(&workers_running));
-    start_delivery_worker(
-        host.clone(),
-        command.root.clone(),
-        command.config_path.clone(),
-        delivery_owner,
-        Arc::clone(&workers_running),
-        delivery_signal,
-    );
 }
 
 /// 两次续租重试之间的退避。
@@ -205,16 +193,13 @@ fn run_supervisor_loop(
 /// Cron 任务独立推进：任务体可能长时间运行，与调度/监督 tick 共线程会让
 /// Daemon 维护停顿，因此单独占用一个后台线程并保持同一 tick 频率。
 fn start_cron_worker(
-    cron_adapter: crate::remote_commands::FeishuCronAdapter,
+    cron_adapter: crate::cron_commands::CronDaemonAdapter,
     running: Arc<AtomicBool>,
 ) {
     thread::spawn(move || run_cron_loop(cron_adapter, running));
 }
 
-fn run_cron_loop(
-    cron_adapter: crate::remote_commands::FeishuCronAdapter,
-    running: Arc<AtomicBool>,
-) {
+fn run_cron_loop(cron_adapter: crate::cron_commands::CronDaemonAdapter, running: Arc<AtomicBool>) {
     // 停机期间错过的触发点不补跑：只有本进程在线期间到期的任务才会执行。
     let scheduler_alive_since_ms = axon_time::unix_now_ms();
     while running.load(Ordering::Acquire) {
@@ -339,7 +324,7 @@ fn handle_primary_turn_failures(
 
 /// 持久 Cron tick：Claim 由 Cron 仓库保证幂等，失败只记录日志并等待下一轮。
 fn run_due_cron_jobs(
-    adapter: &crate::remote_commands::FeishuCronAdapter,
+    adapter: &crate::cron_commands::CronDaemonAdapter,
     scheduler_alive_since_ms: u64,
 ) {
     if let Err(error) = crate::cron_commands::run_due_cron_jobs(
@@ -349,69 +334,6 @@ fn run_due_cron_jobs(
     ) {
         axon_logger::warning(&format!(
             "Daemon 持久 Cron tick 失败，将在下一轮重试: {error}"
-        ));
-    }
-}
-
-fn start_delivery_worker(
-    host: CliDaemonHost,
-    axon_root: PathBuf,
-    config_path: PathBuf,
-    owner: String,
-    running: Arc<AtomicBool>,
-    signal: Arc<DaemonMaintenanceSignal>,
-) {
-    thread::spawn(move || {
-        while running.load(Ordering::Acquire) {
-            run_delivery_tick(&config_path, &owner);
-            run_feishu_inbox_tick(&host, &axon_root, &config_path);
-            signal.wait(Duration::from_millis(FEISHU_DELIVERY_RECOVERY_INTERVAL_MS));
-        }
-    });
-}
-
-/// 排空持久收件箱里等待飞书投递的完成消息。
-///
-/// 与出站恢复共用同一 tick：完成消息先进入收件箱，再由本 tick 写入 durable outbox，
-/// 顺序写入 + 幂等 dispatch 保证同一条完成消息不会重复送达，也不会被静默确认。
-fn run_feishu_inbox_tick(
-    host: &CliDaemonHost,
-    axon_root: &std::path::Path,
-    config_path: &std::path::Path,
-) {
-    let allow_outbound = crate::remote_commands::feishu_channel_enabled(config_path);
-    match crate::remote_commands::drain_feishu_completion_inbox(
-        host,
-        axon_root,
-        allow_outbound,
-        SUPERVISOR_BATCH_LIMIT,
-    ) {
-        Ok(0) => {}
-        Ok(delivered) => axon_logger::info(&format!(
-            "飞书完成消息投递器已确认送达 {delivered} 条收件箱条目"
-        )),
-        Err(error) => axon_logger::warning(&format!(
-            "飞书完成消息投递器 tick 失败，将在下一轮重试: {error}"
-        )),
-    }
-}
-
-fn run_delivery_tick(config_path: &std::path::Path, owner: &str) {
-    if let Err(error) = crate::remote_commands::run_daemon_delivery_tick(
-        config_path,
-        owner,
-        SUPERVISOR_BATCH_LIMIT as usize,
-    ) {
-        axon_logger::warning(&format!(
-            "Feishu Daemon delivery tick 失败，将在下一轮重试: {error}"
-        ));
-    }
-    if let Err(error) = crate::remote_commands::run_daemon_feedback_tick(
-        config_path,
-        SUPERVISOR_BATCH_LIMIT as usize,
-    ) {
-        axon_logger::warning(&format!(
-            "Feishu Daemon feedback tick 失败，将在下一轮重试: {error}"
         ));
     }
 }

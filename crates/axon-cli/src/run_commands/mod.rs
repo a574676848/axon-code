@@ -57,11 +57,12 @@ mod run_progress_apply_patch_snapshot;
 mod run_progress_hashline_snapshot;
 mod run_progress_streaming_diff_preview;
 mod run_provider_loop;
+mod run_provider_turn;
+pub(crate) use run_provider_turn::CliProviderTurnRunner;
 mod run_provider_orchestration;
 mod run_question_projection;
 mod run_reflection_apply;
 mod run_reflection_batch;
-pub(crate) mod run_remote_execution;
 mod run_request;
 mod run_request_build_options;
 mod run_request_builder;
@@ -139,7 +140,6 @@ pub(crate) use run_question_projection::{
     DurableQuestionEventSlot, DurableQuestionEventWriter,
     production_question_event_sink_with_durable_slot,
 };
-pub(crate) use run_remote_execution::{RemoteAgentExecutionInput, enqueue_remote_gateway_alert};
 use run_request::RunRequest;
 use run_request_build_options::RunRequestBuildOptions;
 use run_request_session::RunRequestSession;

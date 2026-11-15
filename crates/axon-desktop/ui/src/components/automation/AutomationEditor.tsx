@@ -39,15 +39,15 @@ export const AutomationEditor: React.FC<{
         aria-label="任务提示词"
       />
     </FormField>
-    <FormField label="投递目标（feishu:<chat_id> 或 session:<channel>:<destination>）">
+    <FormField label="投递目标（session:<channel>:<destination>[:<workspace>]）">
       <Input
         value={form.wake}
         onChange={(event) => onFormChange({ wake: event.target.value })}
-        placeholder="feishu:oc_xxx 或 session:desktop:workbench-1"
-        aria-label="投递目标 wake"
+        placeholder="session:desktop:workbench-1"
+        aria-label="投递目标"
       />
       <Text size="xs" tone="tertiary" className="block break-words">
-        channel 只能是 feishu 或 desktop。留空则不投递：任务执行完只记录运行事实。
+        channel 只能是 desktop。留空则不投递：任务执行完只记录运行事实。
       </Text>
     </FormField>
     <FormField label="Skills">

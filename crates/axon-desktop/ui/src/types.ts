@@ -47,7 +47,7 @@ export interface ModelItem {
 export interface LaneItem {
   id: string;
   title: string;
-  /** 会话表面渠道，例如 tui、cli、feishu 或本应用的 desktop。 */
+  /** 会话表面渠道，例如 tui、cli 或本应用的 desktop。 */
   channel: string;
   /** 会话表面目标。 */
   destination: string;
@@ -250,7 +250,7 @@ export interface CronJob {
   prompt: string;
   skills: string[];
   /**
-   * 完成后的唤醒目标：`feishu:<chat_id>` 或 `session:<channel>:<destination>`。
+   * 完成后的唤醒目标，形如 `session:<channel>:<destination>[:<workspace>]`。
    * `null` 表示执行完只记录运行事实，不产生任何投递。
    */
   wake: string | null;
@@ -313,8 +313,6 @@ export interface CronConfigResult {
   configPath: string;
   storePath: string;
   systemJobIds: string[];
-  /** 全局通知配置里的默认飞书 chat_id，只作提示，不参与投递决策。 */
-  defaultNotificationChatId: string | null;
 }
 
 export interface CronSessionTarget {
@@ -417,13 +415,6 @@ export interface AnswerQuestionReceipt {
   deliveryMode?: string | null;
 }
 
-/** 远控 adapter 状态。 */
-export interface RemoteStatus {
-  connected: boolean;
-  state_label: string;
-  detail: string;
-}
-
 /** GitHub 发布渠道：关于页展示的全部真实坐标。 */
 export interface GithubInfo {
   /** `owner/name` 形态的仓库标识。 */
@@ -461,8 +452,6 @@ export interface SystemInfo {
   daemon_health?: DaemonHealth | null;
   /** 后台健康快照读不到的原因；成功时为空串。 */
   daemon_health_error: string;
-  /** 飞书远控状态；无状态文件时为空。 */
-  remote_feishu?: RemoteStatus;
   github: GithubInfo;
 }
 

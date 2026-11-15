@@ -18,7 +18,7 @@ import {
   EMPTY_FORM,
   formFromJob,
   requestFromForm,
-  wakeLabel,
+  wakeError,
   type FormState,
 } from "./automation/jobForm";
 import { AutomationList, type JobFilter } from "./automation/AutomationList";
@@ -200,6 +200,8 @@ export const AutomationPage: React.FC<{
       () => {
         const validation = scheduleError(scheduleForm);
         if (validation) return Promise.reject(new Error(validation));
+        const wakeValidation = wakeError(form.wake);
+        if (wakeValidation) return Promise.reject(new Error(wakeValidation));
         const next = { ...form, schedule: encodeSchedule(scheduleForm) };
         return selected
           ? ipc.cronUpdate(selected.jobId, {
@@ -458,19 +460,6 @@ export const AutomationPage: React.FC<{
             <FormField label="系统任务">
               <Text size="sm" className="block break-all">
                 {config.systemJobIds.join("、")}
-              </Text>
-            </FormField>
-            <FormField label="默认通知 chat_id">
-              <Text
-                size="sm"
-                mono={config.defaultNotificationChatId != null}
-                className="block break-all"
-                tone={config.defaultNotificationChatId != null ? "primary" : "tertiary"}
-              >
-                {wakeLabel(config.defaultNotificationChatId)}
-              </Text>
-              <Text size="xs" tone="tertiary" className="block break-words">
-                仅作提示：任务的实际投递目标永远来自任务自己声明的 wake。
               </Text>
             </FormField>
           </div>

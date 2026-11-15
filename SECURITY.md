@@ -40,7 +40,6 @@ https://github.com/a574676848/axon-code/security/advisories/new
 - 网关与 Daemon：HTTP/WebSocket 鉴权绕过、跨工作区或跨会话越权、路径穿越
 - 工具执行边界：Shell 与文件工具的逃逸、权限判定绕过、非预期命令执行
 - 桌面端：Tauri IPC 命令越权调用、本地文件关联与外部打开的可利用路径
-- 远程协同：飞书长连接的身份校验与消息路由缺陷
 - 依赖与供应链：本项目直接依赖中的已知高危漏洞
 
 ## 不在范围内

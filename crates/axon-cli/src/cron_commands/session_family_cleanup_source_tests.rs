@@ -40,7 +40,6 @@ fn seed_source_installed_cleanup_fixture() {
     create_thread(&root, RETAINED_SESSION, RETAINED_BYTES);
     create_context(&root, STALE_ROOT);
     create_retained_context(&root);
-    create_feishu_records(&root);
 }
 
 #[test]
@@ -54,16 +53,6 @@ fn verify_source_installed_dry_run_fixture() {
     assert!(runtime_exists(&root, STALE_CHILD));
     assert!(thread_path(&root, STALE_ROOT).exists());
     assert!(root.join("sessions").join(STALE_ROOT).exists());
-    assert_eq!(
-        RemoteStateStoreRuntime::count_keys(
-            axon_remote_runtime::RemoteNotificationOutboxRuntime::resolve_store_path(
-                axon_remote_feishu::remote_feishu_runtime_root(&root),
-            ),
-            &["dispatch-stale".to_owned()],
-        )
-        .expect("Feishu outbox 应可统计"),
-        1
-    );
 }
 
 #[test]
@@ -90,16 +79,6 @@ fn verify_source_installed_cleanup_fixture() {
         )
         .expect("retained context 应可读"),
         RETAINED_BYTES
-    );
-    assert_eq!(
-        RemoteStateStoreRuntime::count_keys(
-            axon_remote_runtime::RemoteNotificationOutboxRuntime::resolve_store_path(
-                axon_remote_feishu::remote_feishu_runtime_root(&root),
-            ),
-            &["dispatch-stale".to_owned()],
-        )
-        .expect("Feishu outbox 应可统计"),
-        0
     );
 }
 

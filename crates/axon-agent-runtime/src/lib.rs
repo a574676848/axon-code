@@ -438,8 +438,6 @@ mod reflection_pool_store;
 mod reflection_replay_tests;
 #[path = "runtime/self_improvement/reflection_report.rs"]
 mod reflection_report;
-#[path = "remote/remote_status_summary.rs"]
-mod remote_status_summary;
 #[path = "repo_structure/repo_structure_model.rs"]
 mod repo_structure_model;
 #[path = "repo_structure/repo_structure_model_scan.rs"]

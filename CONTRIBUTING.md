@@ -34,7 +34,6 @@ crates/
 ├── axon-provider-transport/   # Provider HTTP / WebSocket Wire 通信与流式处理
 ├── axon-rustls-provider/      # 进程级 Rustls TLS 证书与 Provider
 ├── axon-mcp-runtime/          # 外部 MCP 客户端适配与运行时工具动态注册
-├── axon-remote-feishu/        # 飞书远控适配器（OpenAPI、WebSocket、卡片交互）
 ├── axon-process/              # 非交互子进程的平台隔离与管道保护
 ├── axon-fs-walk/              # 高性能文件遍历基础设施
 ├── axon-crypto/               # 加密、哈希与签名设施

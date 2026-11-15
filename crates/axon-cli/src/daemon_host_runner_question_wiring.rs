@@ -26,28 +26,28 @@ pub(super) struct QuestionWiring {
 }
 
 impl QuestionWiring {
-    /// 以运行态存储、活跃主 turn 注册表、飞书卡片 sink 与主 turn 唤醒端口装配问答宿主与答案服务。
+    /// 以运行态存储、活跃主 turn 注册表、可选渠道卡片 sink 与主 turn 唤醒端口装配问答宿主与答案服务。
     ///
-    /// `feishu_sink` 是飞书卡片通道（未启用时为 `None`）。它与运行态通道组成扇出：
-    /// 同一条事件既要进逐字稿，也要变成用户能看到的卡片；宿主与答案服务共用同一个
-    /// 扇出实例，避免同一 `call_id` 的两条事件在实例之间重号。
+    /// `channel_sink` 是可选的渠道卡片通道。它与运行态通道组成扇出：同一条事件既要进
+    /// 逐字稿，也要变成用户能看到的卡片；宿主与答案服务共用同一个扇出实例，避免同一
+    /// `call_id` 的两条事件在实例之间重号。
     ///
     /// `wake` 是迟到作答落库后的主 turn 唤醒端口：答案落成 queued Interaction 时
     /// 由答案注入器立刻触发一次领取，续跑不再依赖维护定时器的轮询周期。
     pub(super) fn assemble(
         store: SqliteRuntimeStore,
         active_primary_turns: crate::run_commands::run_steer::ActivePrimaryTurnRegistry,
-        feishu_sink: Option<Arc<dyn crate::user_question::UserQuestionEventSink>>,
+        channel_sink: Option<Arc<dyn crate::user_question::UserQuestionEventSink>>,
         wake: crate::user_question::lane_steerer::PrimaryTurnWakeHook,
     ) -> Self {
         let shutdown = axon_agent_runtime::RunCancelToken::default();
-        let channel_sink_attached = feishu_sink.is_some();
+        let channel_sink_attached = channel_sink.is_some();
         let (runtime_sink, durable_events) =
             crate::run_commands::production_question_event_sink_with_durable_slot();
-        let event_sink: Arc<dyn crate::user_question::UserQuestionEventSink> = match feishu_sink {
-            Some(feishu) => Arc::new(crate::user_question::UserQuestionFanoutSink::new(vec![
+        let event_sink: Arc<dyn crate::user_question::UserQuestionEventSink> = match channel_sink {
+            Some(channel) => Arc::new(crate::user_question::UserQuestionFanoutSink::new(vec![
                 runtime_sink,
-                feishu,
+                channel,
             ])),
             None => runtime_sink,
         };

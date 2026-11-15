@@ -9,7 +9,6 @@ use serde::Serialize;
 use crate::{
     CliRunResult, OutputFormat,
     management_commands::cli_error,
-    remote_commands::{FeishuCronAdapter, load_remote_context},
     usage_statistics::{
         USAGE_ROLLUP_CRON_JOB_ID, USAGE_ROLLUP_CRON_JOB_NAME, USAGE_ROLLUP_CRON_SCRIPT,
         USAGE_ROLLUP_INTERVAL_MS,
@@ -91,11 +90,10 @@ pub(crate) fn run_cron(
     if let CronAction::Holiday(command) = &command.action {
         return holiday_commands::run_holiday(command, format);
     }
-    let (_, context) = match load_remote_context(config_path) {
-        Ok(context) => context,
+    let adapter = match crate::cron_commands::load_cron_adapter(config_path) {
+        Ok(adapter) => adapter,
         Err(error) => return cli_error(error),
     };
-    let adapter = FeishuCronAdapter::new(context);
     let report = match &command.action {
         CronAction::Create(command) => create_job(&adapter, command),
         CronAction::Update(command) => update_job(&adapter, command),
@@ -499,7 +497,6 @@ fn job_view(job: &CronJob) -> CronJobView {
 /// 唤醒目标的命令行展示文本；与 `--wake` 的输入格式一致。
 pub(crate) fn wake_text(wake: &CronWakeTarget) -> String {
     match wake {
-        CronWakeTarget::Feishu(chat_id) => format!("feishu:{chat_id}"),
         CronWakeTarget::Session {
             channel,
             destination,

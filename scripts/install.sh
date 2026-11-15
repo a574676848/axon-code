@@ -3,7 +3,7 @@
 # 用法：curl -fsSL https://raw.githubusercontent.com/a574676848/axon-code/master/scripts/install.sh | sh
 # 或者指定安装目录：
 #   curl -fsSL https://raw.githubusercontent.com/a574676848/axon-code/master/scripts/install.sh | AXON_INSTALL_DIR="${HOME}/.axon/bin" sh
-# 安装完成后同时安装并启动 Daemon 用户服务（不要求预先配置 Remote/Feishu）。
+# 安装完成后同时安装并启动 Daemon 用户服务（不要求预先配置网关凭据）。
 set -eu
 
 REPO="a574676848/axon-code"
@@ -207,15 +207,15 @@ initialize_owner_identity() {
 
 install_daemon_service() {
     AXON_BIN="$1"
-    info "正在安装并启动 Daemon 用户服务（Remote/Feishu 配置可稍后完成）..."
+    info "正在安装并启动 Daemon 用户服务（网关凭据可稍后配置）..."
     if [ -n "${CONFIG_PATH}" ]; then
         if "${AXON_BIN}" --config "${CONFIG_PATH}" daemon install; then
-            success "Daemon 用户服务已安装并启动；未配置远控时仍可运行通用 Session/Cron 调度。"
+            success "Daemon 用户服务已安装并启动；未配置网关凭据时仍可运行通用 Session/Cron 调度。"
         else
             die "Daemon 安装失败，请检查 Axon 配置路径或系统用户服务权限。"
         fi
     elif "${AXON_BIN}" daemon install; then
-        success "Daemon 用户服务已安装并启动；未配置远控时仍可运行通用 Session/Cron 调度。"
+        success "Daemon 用户服务已安装并启动；未配置网关凭据时仍可运行通用 Session/Cron 调度。"
     else
         die "Daemon 安装失败，请检查 Axon 配置路径或系统用户服务权限。"
     fi

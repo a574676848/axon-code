@@ -2,7 +2,7 @@
 # 用法：irm https://raw.githubusercontent.com/a574676848/axon-code/master/scripts/install.ps1 | iex
 # 或者指定安装目录：
 #   & ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/a574676848/axon-code/master/scripts/install.ps1'))) -InstallDir "$HOME\.axon\bin"
-# 安装完成后同时安装并启动 Daemon 用户服务（不要求预先配置 Remote/Feishu）。
+# 安装完成后同时安装并启动 Daemon 用户服务（不要求预先配置网关凭据）。
 #
 # 特点：
 #   - 版本包安装到用户目录；Windows 当前用户最高权限任务注册需要 UAC 授权
@@ -157,7 +157,7 @@ function Install-DaemonService {
     if ($daemonExitCode -ne 0) {
         Write-Fatal "Windows 用户计划任务安装失败，exit=$daemonExitCode。"
     }
-    Write-Success "Windows 当前用户计划任务 AxonDaemon 已安装并启动；未配置远控时仍可运行通用 Session/Cron 调度。"
+    Write-Success "Windows 当前用户计划任务 AxonDaemon 已安装并启动；未配置网关凭据时仍可运行通用 Session/Cron 调度。"
 }
 
 # ── SHA256 校验 ────────────────────────────────────────────────────────────────

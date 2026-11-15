@@ -50,8 +50,7 @@ pub use keys::{
 };
 pub use sections::{
     AgentConfig, ChannelBalancerConfig, MemoryConfig, MemoryEmbeddingConfig, RemoteConfig,
-    RemoteFeishuWebSocketConfig, RemoteGatewayConfig, RemoteMode, SkillsConfig, TuiConfig,
-    VisionConfig,
+    RemoteGatewayConfig, RemoteMode, SkillsConfig, TuiConfig, VisionConfig,
 };
 pub use setup::*;
 

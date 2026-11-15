@@ -6,12 +6,11 @@ use std::path::PathBuf;
 
 use crate::cron_commands::{
     CRON_AGENT_CHANNEL, MEMORY_CONSOLIDATION_CRON_JOB_ID, SESSION_CLEANUP_CRON_JOB_ID,
-    execute_and_persist, is_system_job, local_cron_session_key, parse_wake,
+    execute_and_persist, is_system_job, load_cron_adapter, local_cron_session_key, parse_wake,
     repository::CronRepository,
     schedule::{parse_schedule, require_next_run},
-    suggested_feishu_chat_id, wake_text,
+    wake_text,
 };
-use crate::remote_commands::{FeishuCronAdapter, load_remote_context};
 use crate::usage_statistics::USAGE_ROLLUP_CRON_JOB_ID;
 
 const CRON_PATH: &str = "/api/v1/crons";
@@ -29,8 +28,7 @@ struct CronCreateRequest {
     prompt: String,
     #[serde(default)]
     skills: Vec<String>,
-    /// 唤醒目标：`feishu:<chat_id>` 或 `session:<channel>:<destination>[:<workspace>]`；
-    /// 省略时不投递。
+    /// 唤醒目标：`session:<channel>:<destination>[:<workspace>]`；省略时不投递。
     wake: Option<String>,
     workdir: Option<String>,
     #[serde(default)]
@@ -362,9 +360,8 @@ impl CronHttpAdapter {
 
     fn run_now(&self, job_id: &str) -> Result<serde_json::Value, CronHttpError> {
         let repository = self.repository()?;
-        let (_, context) =
-            load_remote_context(Some(&self.config_path)).map_err(CronHttpError::internal)?;
-        let adapter = FeishuCronAdapter::new(context);
+        let adapter =
+            load_cron_adapter(Some(&self.config_path)).map_err(CronHttpError::internal)?;
         let claim = repository
             .claim_manual(job_id, axon_time::unix_now_ms())
             .map_err(CronHttpError::conflict)?;
@@ -387,8 +384,6 @@ impl CronHttpAdapter {
                 SESSION_CLEANUP_CRON_JOB_ID,
                 USAGE_ROLLUP_CRON_JOB_ID,
             ],
-            // 仅作提示：任务的实际投递目标永远来自它自己声明的 wake。
-            "defaultNotificationChatId": suggested_feishu_chat_id(&self.config_path),
         }))
     }
 }

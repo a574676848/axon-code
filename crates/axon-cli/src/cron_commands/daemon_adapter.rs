@@ -1,14 +1,18 @@
-use std::path::Path;
+//! Daemon 侧 Cron 执行适配器的装配与实现。
+//!
+//! Cron 结果只通过 Daemon 原语交付：投递项与唤醒回合的 durable 事实都归 Daemon 所有，
+//! 因此这里只负责把「任务 + 启动时刻」派生成稳定的提交身份并转交 IPC，不在调用端
+//! 制造任何本地落库的假象。
+
+use std::path::{Path, PathBuf};
 
 use axon_crypto::sha256_hex_prefix;
 use axon_daemon::infrastructure::ipc::JsonlIpcClient;
 use axon_domain::{
-    AudienceContext, AudienceKind, CRON_DELIVERY_ID_PREFIX, CronJob, DisclosurePolicy,
-    InteractionId, InteractionRecord, InteractionSource, ReplyRoute, ScopeRef,
+    AudienceContext, AudienceKind, CronJob, DisclosurePolicy, InteractionId, InteractionRecord,
+    InteractionSource, ReplyRoute, ScopeRef,
 };
-use axon_protocol::{
-    DaemonCommand, DaemonRequest, EnqueueDeliveryRequest, SubmitInteractionRequest,
-};
+use axon_protocol::{DaemonCommand, DaemonRequest, SubmitInteractionRequest};
 use axon_session::WorkspaceResolver;
 
 use crate::{
@@ -16,35 +20,40 @@ use crate::{
     runtime_paths::daemon_endpoint_for_root,
 };
 
-use super::remote_support::RemoteCliContext;
+const CRON_DAEMON_CLIENT_ID: &str = "axon-cron";
 
-const CRON_DAEMON_CLIENT_ID: &str = "axon-feishu-cron";
-
-pub(crate) struct FeishuCronAdapter {
-    context: RemoteCliContext,
+/// 按配置路径装配 Cron 适配器。
+pub(crate) fn load_cron_adapter(config_path: Option<&Path>) -> Result<CronDaemonAdapter, String> {
+    let path = crate::management_commands::resolved_config_path(config_path)?;
+    // 与主 turn 一致的凭据来源：`--wake session:` 注入的目标车道可能属于另一个项目，
+    // 其配置里的环境变量必须同样可见。
+    crate::run_commands::load_run_env_file(&crate::setup_commands::env_path_for_config(&path))?;
+    let axon_root = crate::runtime_paths::runtime_axon_root_path(&path)?;
+    Ok(CronDaemonAdapter::new(axon_root, path))
 }
 
-impl FeishuCronAdapter {
-    pub(crate) fn new(context: RemoteCliContext) -> Self {
-        Self { context }
-    }
+/// 通过 Daemon IPC 执行 Cron Agent 任务并向目标车道注入一轮主 turn。
+pub(crate) struct CronDaemonAdapter {
+    axon_root: PathBuf,
+    config_path: PathBuf,
+}
 
-    /// 投递项身份：同一任务同一启动时刻只登记一次，重复登记命中唯一约束。
-    fn delivery_id(job_id: &str, now_ms: u64) -> String {
-        format!("{CRON_DELIVERY_ID_PREFIX}{job_id}:{now_ms}")
+impl CronDaemonAdapter {
+    pub(crate) fn new(axon_root: impl Into<PathBuf>, config_path: impl Into<PathBuf>) -> Self {
+        Self {
+            axon_root: axon_root.into(),
+            config_path: config_path.into(),
+        }
     }
 
     /// 通过 Daemon IPC 发送一条命令并返回成功响应正文。
-    ///
-    /// 投递项与唤醒回合的 durable 事实都归 Daemon 所有，因此必须由 Daemon 落库；
-    /// 失败一律向上返回错误，绝不在调用端制造一次「假装已投递」的成功。
     fn send_command(
         &self,
         request_id: String,
         command: DaemonCommand,
     ) -> Result<serde_json::Value, String> {
         let request = daemon_request(request_id, command);
-        let endpoint = daemon_endpoint_for_root(&self.context.axon_root);
+        let endpoint = daemon_endpoint_for_root(&self.axon_root);
         let mut client = JsonlIpcClient::connect(&endpoint)
             .map_err(|error| format!("连接 Daemon IPC 失败：{error}"))?;
         let response = client
@@ -60,10 +69,10 @@ impl FeishuCronAdapter {
         job.workdir
             .as_deref()
             .map(Path::new)
-            .unwrap_or(&self.context.axon_root)
+            .unwrap_or(&self.axon_root)
     }
 
-    /// 解析并注册任务所属 Workspace；投递与唤醒都必须绑定已注册的 Workspace。
+    /// 解析并注册任务所属 Workspace；唤醒必须绑定已注册的 Workspace。
     fn resolve_workspace_id(&self, job: &CronJob, now_ms: u64) -> Result<String, String> {
         // 会话唤醒必须落在任务创建时的那条车道上：车道身份含 workspace 维度，
         // 用任务执行目录反推会把结果投进另一个项目的同名会话。
@@ -77,40 +86,11 @@ impl FeishuCronAdapter {
             return Ok(workspace_id.to_owned());
         }
         let workdir = self.workdir(job);
-        crate::run_commands::register_workspace(workdir, now_ms, Some(&self.context.config_path))?;
+        crate::run_commands::register_workspace(workdir, now_ms, Some(&self.config_path))?;
         WorkspaceResolver
             .resolve(workdir, now_ms)
             .map(|workspace| workspace.workspace_id.as_str().to_owned())
             .map_err(|error| format!("解析 Cron 任务 Workspace 失败：{error}"))
-    }
-
-    /// 登记一条正文已就绪的投递项，并定向到指定渠道目标。
-    fn enqueue_delivery(
-        &self,
-        job: &CronJob,
-        channel: &str,
-        destination: &str,
-        body: &str,
-        now_ms: u64,
-    ) -> Result<String, String> {
-        let delivery_id = Self::delivery_id(&job.job_id, now_ms);
-        let workspace_id = self.resolve_workspace_id(job, now_ms)?;
-        let body_json = self.send_command(
-            format!("{CRON_DAEMON_CLIENT_ID}-delivery-{delivery_id}"),
-            DaemonCommand::EnqueueDelivery(EnqueueDeliveryRequest {
-                workspace_id,
-                goal_id: job.job_id.clone(),
-                delivery_id,
-                channel: Some(channel.to_owned()),
-                destination: Some(destination.to_owned()),
-                content: body.to_owned(),
-            }),
-        )?;
-        body_json
-            .get("notificationId")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned)
-            .ok_or_else(|| "Daemon 投递登记回执缺少 notificationId".to_owned())
     }
 
     /// 向目标复合车道提交一次主 turn 注入。
@@ -159,33 +139,17 @@ impl FeishuCronAdapter {
     }
 }
 
-impl CronExecutionAdapter for FeishuCronAdapter {
+impl CronExecutionAdapter for CronDaemonAdapter {
     fn axon_root(&self) -> &Path {
-        &self.context.axon_root
+        &self.axon_root
     }
 
     fn config_path(&self) -> &Path {
-        &self.context.config_path
+        &self.config_path
     }
 
     fn execute_agent(&self, job: &CronJob, prompt: &str) -> Result<String, String> {
-        execute_local_cron_agent(
-            &self.context.config_path,
-            &self.context.axon_root,
-            job,
-            prompt,
-        )
-    }
-
-    fn enqueue_reply(
-        &self,
-        job: &CronJob,
-        channel: &str,
-        destination: &str,
-        body: &str,
-        now_ms: u64,
-    ) -> Result<String, String> {
-        self.enqueue_delivery(job, channel, destination, body, now_ms)
+        execute_local_cron_agent(&self.config_path, &self.axon_root, job, prompt)
     }
 
     fn wake_session(

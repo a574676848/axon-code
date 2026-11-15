@@ -4,7 +4,7 @@
 
 ![Axon Setup 交互与配置提交](./images/axon-setup-ui-flow.svg)
 
-本章介绍 Axon 的配置系统，覆盖 Provider、模型、环境变量、MCP、Skills、远控与 Memory 等配置项。
+本章介绍 Axon 的配置系统，覆盖 Provider、模型、环境变量、MCP、Skills、网关与 Memory 等配置项。
 
 完整配置示例见仓库根目录的 [`config.example.toml`](../config.example.toml)、[`.env.example`](../.env.example)、[`mcp_stdio.example.json`](../mcp_stdio.example.json) 与 [`mcp_streamable_http.example.json`](../mcp_streamable_http.example.json)。
 
@@ -94,7 +94,7 @@ Axon 使用以下用户级目录布局：
 | `channel_balancer.affinity_ttl_ms` | 无符号整数 | `>= 1`，单位毫秒 | `300000` |
 | `channel_balancer.telemetry_persistence_enabled` | 布尔值 | `true`、`false` | `false` |
 
-### 远控与 Feishu
+### 桌面通信网关
 
 | 配置项 | 类型 | 可选值/范围 | 默认值 |
 | --- | --- | --- | --- |
@@ -104,20 +104,6 @@ Axon 使用以下用户级目录布局：
 | `remote.gateway.websocket_bind` | 字符串 | 有效的 IP:端口地址 | `"127.0.0.1:3144"` |
 | `remote.gateway.auth_keys` | 字符串 | 多 Key 存储文件路径；空串表示后端运行时根下 `data/gateway/auth-keys.json` | `""` |
 | `remote.gateway.legacy_token_enabled` | 布尔值 | `true`、`false`；关闭后全局 token 不再对业务路由生效，只有签发的 Key 生效 | `true` |
-| `remote.feishu_websocket.enabled` | 布尔值 | `true`、`false` | `false` |
-| `remote.feishu_websocket.app_id` | 字符串 | 飞书应用 ID | `""` |
-| `remote.feishu_websocket.app_secret_env` | 字符串 | 环境变量名 | `""` |
-| `remote.feishu_websocket.api_base_url` | 字符串 | `http` 或 `https` URL；空值使用官方默认地址 | `""` |
-| `remote.feishu_websocket.websocket_url` | 字符串 | WebSocket URL；空值使用官方默认地址 | `""` |
-| `remote.feishu_websocket.enable_notification_sending` | 布尔值 | `true`、`false` | `false` |
-| `remote.feishu_websocket.notification_chat_id` | 字符串 | 用户级全局通知会话 `chat_id`，经 `GET /api/v1/crons/config` 的 `defaultNotificationChatId` 暴露；用户未指明目标时由 Agent 作为默认 `wake` 采用，后端不做隐式兜底 | `""` |
-| `remote.feishu_websocket.allowed_sender_open_ids` | 字符串数组 | sender `open_id` 列表 | `[]` |
-| `remote.feishu_websocket.blocked_sender_open_ids` | 字符串数组 | sender `open_id` 列表；优先级高于 allowlist | `[]` |
-| `remote.feishu_websocket.require_mention` | 布尔值 | `true`、`false` | `false` |
-| `remote.feishu_websocket.chat_policies[].chat_id` | 字符串 | 非空 Feishu `chat_id` | 无 |
-| `remote.feishu_websocket.chat_policies[].allowed_sender_open_ids` | 字符串数组 | sender `open_id` 列表 | `[]` |
-| `remote.feishu_websocket.chat_policies[].blocked_sender_open_ids` | 字符串数组 | sender `open_id` 列表 | `[]` |
-| `remote.feishu_websocket.chat_policies[].require_mention` | 可选布尔值 | `true`、`false` 或省略（继承全局值） | 省略 |
 
 `remote.mode` 只改变运行时内部的 cursor 与 payload 预算，不再单独配置事件数或字节上限。Gateway 默认仅监听本机地址；对外提供服务时把两个 bind 改到需要的网卡，并按部署方的运维策略放行端口。
 
@@ -297,7 +283,7 @@ supports_vision = false
 
 DashScope 与火山方舟多模态接入分别使用 `protocol = "dashscope"` 与 `protocol = "volcengine-ark-multimodal"`。传输方式默认 HTTP；明确支持 WebSocket 的 Provider 可在配置中显式指定。
 
-Provider streaming 的 WebSocket 当前只适用于 OpenAI Responses（`protocol = "openai-responses"`）。OpenAI-compatible Chat Completions 与 Anthropic Messages 即使配置了 WebSocket，也会自动降级为 HTTP；普通请求、自动压缩和手动 `/compact` 均遵循同一协议请求构造、缓存形状和状态清理闭环，不会发送不兼容的 Responses `previous_response_id`。
+Provider streaming 的 WebSocket 当前只适用于 OpenAI Responses（`protocol = "openai-responses"`）。OpenAI-compatible Chat Completions 与 Anthropic Messages 即使配置了 WebSocket，也会自动降级为 HTTP；普通请求与自动压缩均遵循同一协议请求构造、缓存形状和状态清理闭环，不会发送不兼容的 Responses `previous_response_id`。
 
 ## 模型配置
 
@@ -311,7 +297,7 @@ Provider streaming 的 WebSocket 当前只适用于 OpenAI Responses（`protocol
 
 自动压缩只依据 Provider 上报的当前请求上下文 usage：OpenAI Responses、Chat Completions 与 Anthropic Messages 均使用归一化后的 `current_context_tokens`。统计层的完整输入统一为 `total_input_tokens`，缓存命中率按 `cache_read_input_tokens / total_input_tokens` 计算。Provider 未返回有效 usage 时不触发自动压缩，不使用历史字符数或本地 token 估算兜底。
 
-自动压缩在触发判断时选定的 `ChannelBalancedModel` 会贯穿整个压缩请求，阈值、摘要 Provider、输出上限和 replacement history 使用同一模型与渠道；渠道健康状态或亲和缓存变化不会在摘要阶段悄然改写上下文窗口语义。手动 `/compact` 仍按调用时重新选择可用渠道。
+自动压缩在触发判断时选定的 `ChannelBalancedModel` 会贯穿整个压缩请求，阈值、摘要 Provider、输出上限和 replacement history 使用同一模型与渠道；渠道健康状态或亲和缓存变化不会在摘要阶段悄然改写上下文窗口语义。模型主动请求换窗（`builtin.new_context`）发生在同一 turn 内，沿用的仍是本轮已选定的渠道。
 
 压缩替换历史时遵循 Codex 的保留顺序：保留稳定的 system/developer 与 session-stable 上下文，保留最近真实用户消息和压缩 checkpoint；动态工作区 Context 不会重新插入稳定缓存前缀，避免无关状态变化扩大 Prompt Cache 失配范围。压缩生命周期会展示 `0%`、`50%`、`100%` 阶段，完成摘要中的 token 数使用 Axon 统一单位格式。摘要和 checkpoint 输出统一限制为模型 `context_window / 8`，并取配置 `max_output_tokens` 的较小值。
 
@@ -372,7 +358,7 @@ axon setup --non-interactive --clear-websocket-url --clear-api-key
 
 ## 工具执行策略
 
-工具执行不需要配置审批策略，也不会等待 TUI、非交互 CLI、远端控制或 Guardian 的人工确认。每次调用只产生 `Allowed` 或 `Forbidden`：`Allowed` 直接进入执行链，`Forbidden` 拒绝执行并保留结构化原因。
+工具执行不需要配置审批策略，也不会等待 TUI、非交互 CLI 或 Guardian 的人工确认。每次调用只产生 `Allowed` 或 `Forbidden`：`Allowed` 直接进入执行链，`Forbidden` 拒绝执行并保留结构化原因。
 
 ## 环境变量
 
@@ -383,7 +369,6 @@ axon setup --non-interactive --clear-websocket-url --clear-api-key
 | `OPENAI_API_KEY` | OpenAI |
 | `ANTHROPIC_API_KEY` | Anthropic |
 | `OPENROUTER_API_KEY` | OpenRouter |
-| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | 飞书远控 |
 | `AXON_LOG_LEVEL` | 日志级别：`trace` / `debug` / `info` / `warn` / `error`（`trace` 等价 `debug`），优先于 `[agent].log_level` |
 | `AXON_LOG_FILE` | 日志输出文件路径；设置后固定写该文件，不再按日期滚动，留空则滚动写入 `<root>/data/logs/axon-<日期>.log` |
 | `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | 代理配置 |
@@ -481,9 +466,9 @@ axon --config ./.axon/config.toml run "分析当前项目"
 
 显式配置文件必须是完整、可独立校验的 Axon TOML 配置，不会与用户配置隐式合并，避免仓库文件意外遮蔽用户配置。
 
-## 飞书远程控制
+## 网关监听与凭据
 
-飞书远控使用事件订阅 WebSocket 长连接模式。配置文件只保存 App 标识、凭证环境变量名、访问治理与群聊策略：
+Gateway 是 Daemon 对桌面端与外部系统暴露的 HTTP 与 WebSocket 面。配置文件只保存监听地址、凭据变量名与多 Key 存储位置：
 
 ```toml
 [remote]
@@ -498,31 +483,14 @@ websocket_bind = "127.0.0.1:3144"
 # 或 IPv6 的 [::]:3143、[::]:3144；两个端口各自放行，暴露范围由部署方的防火墙决定。
 # 桌面端只需填 http 这一个地址与端口，事件流端口由 GET /api/v1/system/status
 # 的 webSocketPort 自报，客户端据此把 WebSocket 请求指到同一主机的该端口。
-
-[remote.feishu_websocket]
-enabled = true
-app_id = "cli_xxx"
-app_secret_env = "FEISHU_APP_SECRET"
-enable_notification_sending = true
-# 后台 Goal/Cron 完成通知只发送到这个明确会话；留空则不发送
-notification_chat_id = "oc_notify"
-allowed_sender_open_ids = ["ou_allowed"]
-blocked_sender_open_ids = ["ou_blocked"]
-require_mention = true
-
-[[remote.feishu_websocket.chat_policies]]
-chat_id = "oc_ops"
-allowed_sender_open_ids = ["ou_ops"]
-blocked_sender_open_ids = []
-require_mention = true
 ```
 
-`remote.mode` 是远控吞吐治理的用户入口：
+`remote.mode` 是网关事件流吞吐治理的用户入口：
 
 | 模式 | 适用场景 |
 |------|----------|
-| `standard` | 常规飞书远控、低频协作 |
-| `high-throughput` | 高频事件流、密集群聊协作 |
+| `standard` | 常规事件频率，默认选择 |
+| `high-throughput` | 高频事件流、密集并发订阅 |
 
 完整命令与状态机见 [CLI 参考](./cli.md) 的 daemon 与 cron 部分。
 

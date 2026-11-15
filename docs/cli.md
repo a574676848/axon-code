@@ -78,15 +78,15 @@ axon daemon attach <SESSION_ID>        # 重新挂接到指定会话事件流
 axon serve --host 127.0.0.1 --port 3000
 ```
 
-Daemon 是 Axon 的常驻后台宿主，负责接收持久化 `Interaction`、排他调度车道执行、托管 Agent Cron 定时任务、维护记忆治理以及飞书长连接网关。客户端断开后，长周期 Goal 与 Execution 继续在后台执行。
+Daemon 是 Axon 的常驻后台宿主，负责接收持久化 `Interaction`、排他调度车道执行、托管 Agent Cron 定时任务、维护记忆治理以及本机网关通信面。客户端断开后，长周期 Goal 与 Execution 继续在后台执行。
 
 ## 5. 自动化、统计与度量
 
 ```bash
 axon cron --help                       # 管理定时任务（list / create / update / pause / resume / run / remove / tick / holiday）
-axon cron create --name 日报 --schedule interval:1h --prompt "总结进展" --wake feishu:oc_xxx
 axon cron create --name 巡检 --schedule "0 9 * * *" --prompt "巡检仓库" --wake session:desktop:workbench-xxx
-                                       # --wake 决定执行完做什么：feishu 直投正文，session 注入一轮主 turn；
+                                       # --wake 决定执行完唤醒哪条会话车道：向它注入一轮主 turn 继续跟进；
+                                       # 形态为 session:<channel>:<destination>[:<workspace>]，
                                        # 省略时只记录运行事实，不产生任何投递
 axon cron create --name 工时提醒 --schedule "workday:0 8-20 * * *" --prompt "提醒记录工时"
                                        # 计划表达式字段可自由组合：区间 1-9、步长 */5、范围步长 9-18/2；
@@ -100,7 +100,6 @@ axon cron holiday status               # 查看已同步年份、数据目录与
 axon usage --period 7d                 # 查询最近 7 天 Token 消耗与成本看板
 axon usage audit                       # 审计日志流水查询
 axon pricing --help                    # 模型计费规则与成本核算
-axon remote --help                     # 飞书等远程协同通道治理与状态探测
 ```
 
 ## 6. 系统维护与运维诊断

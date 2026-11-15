@@ -11,8 +11,7 @@ pub(crate) fn cron_agent_config(
     let Some(job_id) = destination.strip_prefix(CRON_AGENT_DESTINATION_PREFIX) else {
         return Ok(None);
     };
-    let (_, context) = crate::remote_commands::load_remote_context(Some(config_path))?;
-    let adapter = crate::remote_commands::FeishuCronAdapter::new(context);
+    let adapter = crate::cron_commands::load_cron_adapter(Some(config_path))?;
     let repository = CronRepository::open(super::CronExecutionAdapter::axon_root(&adapter))?;
     if repository.find_job_any_status(job_id)?.is_none() {
         return Ok(None);

@@ -119,9 +119,9 @@ api_key_env = "DASHSCOPE_API_KEY"
 
 `agent.reasoning_effort`、`axon run --reasoning-effort` 与 TUI `/think` 使用同一组配置值。输入边界只接受 Provider 官方值并集；公共协商层会在发起网络请求前静默省略当前协议不支持的合法档位。`--reasoning-effort` 与 `/think` 都只覆盖本轮之后的会话请求，不改写 `agent.reasoning_effort`：桌面端与 TUI 的显式强度随提交下发，进程退出即回到配置默认值。复杂推理由主 Agent 使用当前选中模型直接完成，不存在独立的推理子代理模型槽位。
 
-远控 Feishu 的流式投影不重新定义 Provider Markdown 规则。TUI、Feishu progress card 和最终回复都先进入共享 `normalize_markdown_source` 语义层，再执行卡片分段或消息编码；因此表格分隔线、全角空格、NBSP 和 fenced code 的处理保持一致。流式预览只承担低延迟展示，最终正文仍由 durable outbox 负责可靠投递。
+流式投影不重新定义 Provider Markdown 规则。TUI 与桌面端的流式预览和最终回复都先进入共享 `normalize_markdown_source` 语义层，再执行分段或消息编码；因此表格分隔线、全角空格、NBSP 和 fenced code 的处理保持一致。流式预览只承担低延迟展示，最终正文以 canonical assistant 终态为准。
 
-部分 OpenAI-compatible Provider 会把工具调用降级为逐行的 `<function_calls>` 文本块。实时进度投影与最终响应聚合共用同一文本工具调用解析器：只在 fenced code 之外识别完整、独占行的调用块，使用 XML 与 JSON 解析器转换为真实工具调用，并从 TUI/Feishu 可见正文中移除原始标签；代码示例、无效块和未闭合块仍按普通正文处理，流结束时会刷新缓冲内容，避免尾部文本丢失。
+部分 OpenAI-compatible Provider 会把工具调用降级为逐行的 `<function_calls>` 文本块。实时进度投影与最终响应聚合共用同一文本工具调用解析器：只在 fenced code 之外识别完整、独占行的调用块，使用 XML 与 JSON 解析器转换为真实工具调用，并从 TUI 与桌面端可见正文中移除原始标签；代码示例、无效块和未闭合块仍按普通正文处理，流结束时会刷新缓冲内容，避免尾部文本丢失。
 
 | Provider 协议 | API 字段 | 支持值 |
 |---------------|----------|--------|

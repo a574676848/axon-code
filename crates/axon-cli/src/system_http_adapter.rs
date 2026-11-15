@@ -16,7 +16,6 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use axon_config::ConfigLoader;
 use axon_daemon::infrastructure::gateway_auth::GatewayIdentity;
 use axon_daemon::{GatewayHttpResponse, GatewayHttpRouteHandler};
 use axon_session::HealthStore;
@@ -63,13 +62,10 @@ const INTERACTION_RECEIVED_STATUS: &str = "received";
 const HOST_LEASE_BUSY_TIMEOUT: Duration = Duration::from_millis(200);
 /// 方法不匹配的错误码，与网关自身的 `405` 口径同名。
 const METHOD_NOT_ALLOWED: &str = "method_not_allowed";
-/// 远端适配器：HTTP 网关。
+/// 网关适配器：HTTP。
 const ADAPTER_GATEWAY_HTTP: &str = "gateway_http";
-/// 远端适配器：WebSocket 网关。
+/// 网关适配器：WebSocket。
 const ADAPTER_GATEWAY_WEBSOCKET: &str = "gateway_websocket";
-/// 远端适配器：飞书远控。
-const ADAPTER_FEISHU: &str = "feishu";
-
 /// 服务器时间：`/meta` 与 `/system/status` 的**唯一**取时实现。
 ///
 /// 两条路由必须来自同一时钟源（Unix 毫秒）与同一函数，否则合同 §6.2 的
@@ -254,19 +250,12 @@ impl SystemHttpAdapter {
     ///   失败都会让守护进程起不来，因此 WebSocket 这一路同样成立。
     /// - 飞书一路由 `remote.feishu_websocket.enabled` 开关决定，读配置即得真值。
     ///
-    /// 配置文件读不出来（解析或校验失败）时没有任何可靠来源判断远端适配器，
+    /// 配置文件读不出来（解析或校验失败）时没有任何可靠来源判断适配器状态，
     /// 此时给空数组，不猜。
     fn remote_adapters(&self) -> Value {
-        let Ok(loaded) = ConfigLoader::load_from_path(&self.config_path) else {
-            return json!([]);
-        };
         json!([
             {"name": ADAPTER_GATEWAY_HTTP, "enabled": true},
             {"name": ADAPTER_GATEWAY_WEBSOCKET, "enabled": true},
-            {
-                "name": ADAPTER_FEISHU,
-                "enabled": loaded.config.remote.feishu_websocket.enabled,
-            },
         ])
     }
 

@@ -68,7 +68,6 @@ mod persona_http_adapter;
 #[path = "commands/management/provider_report.rs"]
 mod provider_report;
 pub mod providers_http_adapter;
-mod remote_commands;
 /// 网关扩展路由的装配：各路由族的唯一组合点。
 mod route_handler_registry;
 mod run_commands;
@@ -216,10 +215,6 @@ pub use memory_commands::{
 pub use package_args::PackageCommand;
 use package_commands::run_package;
 use persona_commands::run_persona;
-use remote_commands::run_remote;
-pub use remote_commands::{
-    RemoteCommand, RemoteListCommand, RemoteRenderCommand, RemoteSimulateCommand, RemoteSubcommand,
-};
 use run_commands::{request_stop, run_cli_daemon_interaction, run_planned_invocation};
 use serve_commands::run_serve;
 pub use session_commands::{SessionCommand, SessionSubcommand};
@@ -335,9 +330,6 @@ fn run_parsed_cli_internal(
             command.format.unwrap_or(cli.global.format),
             cli.global.config.as_deref(),
         ),
-        Some(AxonCommand::Remote(command)) => {
-            run_remote(command, cli.global.format, cli.global.config.as_deref())
-        }
         Some(AxonCommand::Lsp(command)) => {
             run_lsp(command, cli.global.format, cli.global.cwd.as_deref())
         }
