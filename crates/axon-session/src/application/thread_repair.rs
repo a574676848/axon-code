@@ -91,13 +91,19 @@ where
         root: &Path,
         command: RepairOpenTurnCommand,
     ) -> Result<TurnRepairOutcome, String> {
-        let activation = self.read_thread_activation(root, &command.thread_id)?;
-        let Some(active_turn_id) = activation.active_turn_id else {
-            return Ok(TurnRepairOutcome::Balanced);
+        let next_sequence = match command.known_next_sequence {
+            Some(sequence) => sequence,
+            None => {
+                let activation = self.read_thread_activation(root, &command.thread_id)?;
+                let Some(active_turn_id) = activation.active_turn_id else {
+                    return Ok(TurnRepairOutcome::Balanced);
+                };
+                if active_turn_id != command.turn_id {
+                    return Err("修复 turn_id 与当前 active turn 不匹配".to_owned());
+                }
+                activation.next_sequence
+            }
         };
-        if active_turn_id != command.turn_id {
-            return Err("修复 turn_id 与当前 active turn 不匹配".to_owned());
-        }
         let detail = self.read_thread(root, &command.thread_id)?;
         let Some(turn) = crate::domain::turn_repair::open_tail_turn(&detail.turns) else {
             return Ok(TurnRepairOutcome::Balanced);
@@ -109,7 +115,7 @@ where
         self.append_with_expected_sequence(
             root,
             &command.thread_id,
-            activation.next_sequence,
+            next_sequence,
             command.recorded_at_ms,
             ThreadEvent::TurnInterrupted {
                 turn_id: command.turn_id.clone(),

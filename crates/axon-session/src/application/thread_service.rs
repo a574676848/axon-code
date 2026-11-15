@@ -615,6 +615,11 @@ pub struct RepairOpenTurnCommand {
     pub turn_id: String,
     /// 记录时间。
     pub recorded_at_ms: u64,
+    /// 调用方已经读到的下一个可用序号。
+    ///
+    /// 给出时省掉一次反向扫日志（真实数据上均值数 MB）：`mirror_session_started` 这类
+    /// 调用方本来就持有激活快照，再读一遍纯属浪费。留空则自行读取。
+    pub known_next_sequence: Option<u64>,
 }
 
 /// 修复结果。

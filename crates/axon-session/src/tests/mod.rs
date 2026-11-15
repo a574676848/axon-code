@@ -611,3 +611,31 @@ fn session_persistence_paths_share_data_directory() {
         Some(sessions.as_path())
     );
 }
+
+/// 历史已经平衡时，收口必须既不报错也不写入。
+///
+/// 这是「可重复调用」的前提：崩溃恢复路径与启动路径都可能对同一个已经修好的会话
+/// 再判一次，多写一条终态会让投影看到两条无主的中断事件。
+#[test]
+fn repair_open_turn_is_zero_write_when_history_is_balanced() {
+    let store = TargetThreadOnlyStore::default();
+    let service = ThreadService::new(store.clone());
+    let root = PathBuf::from("axon-root");
+    let outcome = service
+        .repair_open_turn(
+            &root,
+            crate::RepairOpenTurnCommand {
+                thread_id: "thread-1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                recorded_at_ms: 1,
+                known_next_sequence: None,
+            },
+        )
+        .expect("已平衡的历史不该报错");
+
+    assert_eq!(outcome, crate::TurnRepairOutcome::Balanced);
+    assert!(
+        store.appended().is_empty(),
+        "Balanced 必须零写入，否则重复调用会不断追加终态事件"
+    );
+}

@@ -233,6 +233,8 @@ pub(super) fn mirror_session_started(
                     thread_id: record.session_id.clone(),
                     turn_id: stale,
                     recorded_at_ms: record.created_at_ms,
+                    // 激活快照刚刚读过，直接复用它的序号，省掉一次反向扫日志。
+                    known_next_sequence: Some(activation.next_sequence),
                 },
             ) {
                 Ok(TurnRepairOutcome::Repaired {
