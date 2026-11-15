@@ -232,12 +232,6 @@ fn try_run_daemon_host(
     let _pid_file = DaemonPidFileGuard::acquire(&runtime_root)?;
     let delivery_owner = host.owner_identity().map_err(|error| error.to_string())?;
     let server = bind_daemon_server(&endpoint, command)?;
-    match host.take_orphaned_sessions() {
-        Ok(orphans) => {
-            crate::run_commands::repair_orphaned_threads_startup(&axon_root, &orphans);
-        }
-        Err(error) => axon_logger::warning(&format!("启动收口跳过：取孤儿会话失败 {error}")),
-    }
     let cron_adapter = load_cron_adapter(command)?;
     let maintenance_signal = Arc::new(DaemonMaintenanceSignal::default());
     // provider 内容资产与事件正文归档根都从运行态根目录派生；仓库内不落任何 provider 脚本。

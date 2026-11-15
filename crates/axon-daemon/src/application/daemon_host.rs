@@ -305,21 +305,6 @@ where
         Ok(())
     }
 
-    /// 取出一批「执行者已失效」的会话，供调用方做 Thread 侧收口。
-    ///
-    /// 只做取数不做修复：Thread 的读写属于调用方（持有运行时根目录）的职责，
-    /// Host 这里只提供「谁已经没人推进」这个事实。
-    pub fn take_orphaned_sessions(&self) -> Result<Vec<SessionRuntimeRecord>, DaemonHostError> {
-        let Some(host) = self.host.clone() else {
-            return Ok(Vec::new());
-        };
-        Ok(self.store.recover_expired_sessions(
-            &host,
-            self.clock.now_ms(),
-            INTERRUPTED_INTERACTION_BATCH_LIMIT,
-        )?)
-    }
-
     /// 续租，失败时调用方必须停止所有 Worker。
     pub fn renew(&self) -> Result<(), DaemonHostError> {
         let now_ms = self.clock.now_ms();
