@@ -10,11 +10,13 @@ use axon_session::{
 };
 use serde::Serialize;
 
+/// 投影回归用例独占：生产压缩走内联轮转的本地实现，不再经过这条 rollout 镜像。
+#[cfg(test)]
+use super::run_rollout_store::install_rollout_compaction;
 use super::{
     RunCommand,
     run_rollout_store::{
-        RolloutHistoryWindow, install_rollout_compaction, load_rollout_history_window,
-        load_rollout_history_window_from_root, restore_rollout_compaction,
+        RolloutHistoryWindow, load_rollout_history_window, restore_rollout_compaction,
     },
     run_session_store::{
         RunSessionIndexLookup, RunSessionRecord, load_indexed_run_session, resolved_axon_root,
@@ -40,6 +42,8 @@ pub(super) fn thread_event_sequence_snapshot(root: &Path, thread_id: &str) -> Re
     Ok(activation.next_sequence.saturating_sub(1))
 }
 
+/// 只服务投影 CAS 与回滚不变量测试：生产压缩路径已收敛到内联轮转的本地实现。
+#[cfg(test)]
 pub(super) fn install_compaction_projection(
     config_path: &Path,
     root: &Path,
@@ -461,21 +465,6 @@ fn prepare_session_from_lookup(
     }))
 }
 
-pub(super) fn load_thread_detail(root: &Path, thread_id: &str) -> Result<ThreadDetail, String> {
-    let window = load_rollout_history_window_from_root(root, thread_id)?;
-    let latest = window
-        .turns
-        .last()
-        .map(|(_, record)| record.clone())
-        .or_else(|| {
-            load_thread_session_from_root(root, thread_id)
-                .ok()
-                .flatten()
-        })
-        .ok_or_else(|| format!("未找到 SQLite thread：{thread_id}"))?;
-    thread_detail_from_history_window(&latest, window)
-}
-
 #[cfg(test)]
 fn thread_detail_from_records(records: &[RunSessionRecord]) -> Result<ThreadDetail, String> {
     let fallback = records
@@ -528,15 +517,6 @@ fn thread_detail_from_history_window(
         turns,
         compacted_history: window.compaction,
     })
-}
-
-fn load_thread_session_from_root(
-    root: &Path,
-    thread_id: &str,
-) -> Result<Option<RunSessionRecord>, String> {
-    let path =
-        axon_session::session_store_path(root).join(super::run_rollout_store::CLI_ROLLOUT_DB_FILE);
-    super::run_rollout_store::RolloutSqliteStore::open(&path)?.load_by_id(thread_id)
 }
 
 fn settings_from_record(record: &RunSessionRecord) -> ThreadSettings {

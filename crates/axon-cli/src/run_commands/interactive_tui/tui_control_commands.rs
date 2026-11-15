@@ -21,12 +21,3 @@ pub(super) fn run_tui_control_command(
         _ => None,
     }
 }
-
-pub(crate) fn active_tui_session_id(submission: &AgentTuiSubmit) -> Option<String> {
-    submission
-        .overrides
-        .session
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned)
-}

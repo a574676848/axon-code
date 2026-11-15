@@ -15,8 +15,6 @@ max_subagent_threads = 16
 max_subagent_active_turns = 16
 # 自动压缩阈值（当前模型 context_window 的比例）；可选范围：0.0..=1.0；默认值：0.8。
 auto_compaction_threshold = 0.8
-# 闲暇压缩 debounce 窗口（毫秒）；可选范围：>= 1 的整数；默认值：2000。
-idle_compaction_debounce_ms = 2000
 # 日志级别；可选值：trace、debug、info、warn、error（默认值："warn"）。
 log_level = "warn"
 

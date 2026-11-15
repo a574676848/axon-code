@@ -62,16 +62,6 @@ pub(crate) const CONFIG_KEY_SPECS: &[ConfigKeySpec] = &[
         depends_on: &["agent.max_subagent_threads"],
     },
     ConfigKeySpec {
-        key: "agent.idle_compaction_debounce_ms",
-        kind: ConfigValueKind::Unsigned,
-        editable: true,
-        description: "闲暇压缩 debounce 窗口，单位毫秒",
-        setup_module: "agent",
-        default_value: "2000",
-        options: &[],
-        depends_on: &[],
-    },
-    ConfigKeySpec {
         key: "channel_balancer.failure_threshold",
         kind: ConfigValueKind::Unsigned,
         editable: true,

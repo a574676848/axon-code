@@ -74,10 +74,9 @@ fn history_status_line(view: &AgentTuiLifecycleStatusView) -> Option<RenderCellR
     let status_label = match view.kind.as_str() {
         "CompactionStarted" => "进行中",
         "CompactionCompleted" => "完成",
-        // 失败与空闲排期同样是压缩的可见事实：phase 为 history 时不会落入
-        // 通用 lifecycle 通道，缺少映射就会被整条丢弃。
+        // 失败同样是压缩的可见事实：phase 为 history 时不会落入通用 lifecycle
+        // 通道，缺少映射就会被整条丢弃。
         "CompactionFailed" => "失败",
-        "CompactionPlanned" => "已排期",
         _ => return None,
     };
     let line = AgentTuiHistoryLine::with_id(
@@ -97,6 +96,6 @@ fn history_status_line(view: &AgentTuiLifecycleStatusView) -> Option<RenderCellR
 fn history_lifecycle_is_terminal(view: &AgentTuiLifecycleStatusView) -> bool {
     matches!(
         view.kind.as_str(),
-        "CompactionCompleted" | "CompactionFailed" | "CompactionPlanned"
+        "CompactionCompleted" | "CompactionFailed"
     )
 }

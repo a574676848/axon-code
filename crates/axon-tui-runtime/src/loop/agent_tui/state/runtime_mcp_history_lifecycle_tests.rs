@@ -112,7 +112,7 @@ fn history_lifecycle_replaces_running_compaction_cell_on_completion() {
 }
 
 #[test]
-fn history_lifecycle_keeps_compaction_failure_and_idle_schedule_visible() {
+fn history_lifecycle_keeps_compaction_failure_visible() {
     let mut state = test_state();
     state.start_runtime_submit(&test_submission("等待压缩"));
 
@@ -121,19 +121,11 @@ fn history_lifecycle_keeps_compaction_failure_and_idle_schedule_visible() {
         "CompactionFailed",
         "内联窗口轮转未完成：窗口轮转未通过门禁",
     ));
-    state.apply_runtime_event(compaction_history_lifecycle_event(
-        "history:lifecycle:compaction-planned",
-        "CompactionPlanned",
-        "空闲窗口轮转已排期",
-    ));
 
     assert_eq!(
         typed_history_names(&state),
-        vec![
-            "内联窗口轮转未完成：窗口轮转未通过门禁".to_owned(),
-            "空闲窗口轮转已排期".to_owned(),
-        ],
-        "压缩失败与空闲排期必须各自落到 history cell：phase=history 不会进入通用 lifecycle 通道，缺少映射会被整条丢弃"
+        vec!["内联窗口轮转未完成：窗口轮转未通过门禁".to_owned()],
+        "压缩失败必须落到 history cell：phase=history 不会进入通用 lifecycle 通道，缺少映射会被整条丢弃"
     );
 }
 

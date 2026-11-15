@@ -427,7 +427,6 @@ const COMPACTION_KINDS = [
   'CompactionStarted',
   'CompactionCompleted',
   'CompactionFailed',
-  'CompactionPlanned',
 ];
 /** 窗口轮转的缺省标题。 */
 const COMPACTION_TITLE = '窗口轮转';
@@ -446,8 +445,6 @@ function compactionStatus(kind: string | undefined): string {
       return '完成';
     case 'CompactionFailed':
       return '失败';
-    case 'CompactionPlanned':
-      return '已排期';
     default:
       return '历史';
   }

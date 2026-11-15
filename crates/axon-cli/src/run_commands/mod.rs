@@ -24,8 +24,6 @@ mod run_agent_identity;
 mod run_agent_store;
 mod run_capacity;
 pub(crate) mod run_channel_affinity;
-mod run_compaction;
-mod run_compaction_notice;
 mod run_compaction_projection;
 mod run_completion_notice_subscription;
 mod run_continuation_assembly;

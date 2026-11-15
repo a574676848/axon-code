@@ -3,8 +3,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DEFAULT_AFFINITY_TTL_MS, DEFAULT_AGENT_AUTO_COMPACTION_THRESHOLD,
-    DEFAULT_AGENT_IDLE_COMPACTION_DEBOUNCE_MS, DEFAULT_AGENT_LOG_LEVEL,
+    DEFAULT_AFFINITY_TTL_MS, DEFAULT_AGENT_AUTO_COMPACTION_THRESHOLD, DEFAULT_AGENT_LOG_LEVEL,
     DEFAULT_AGENT_MAX_SUBAGENT_ACTIVE_TURNS, DEFAULT_AGENT_MAX_SUBAGENT_THREADS,
     DEFAULT_AGENT_REASONING_EFFORT, DEFAULT_BREAKER_COOLDOWN_MS, DEFAULT_BREAKER_FAILURE_THRESHOLD,
     DEFAULT_CHANNEL_METRICS_PERSISTENCE_ENABLED, DEFAULT_GATEWAY_API_TOKEN_ENV,
@@ -29,8 +28,6 @@ pub struct AgentConfig {
     pub max_subagent_active_turns: usize,
     /// 自动压缩触发阈值（context_window 的比例，0.0-1.0）。
     pub auto_compaction_threshold: f64,
-    /// 闲暇压缩 debounce 窗口，单位毫秒。
-    pub idle_compaction_debounce_ms: u64,
     /// 日志级别：debug、info、warning、error。
     pub log_level: String,
 }
@@ -49,7 +46,6 @@ impl Default for AgentConfig {
             max_subagent_threads: DEFAULT_AGENT_MAX_SUBAGENT_THREADS,
             max_subagent_active_turns: DEFAULT_AGENT_MAX_SUBAGENT_ACTIVE_TURNS,
             auto_compaction_threshold: DEFAULT_AGENT_AUTO_COMPACTION_THRESHOLD,
-            idle_compaction_debounce_ms: DEFAULT_AGENT_IDLE_COMPACTION_DEBOUNCE_MS,
             log_level: DEFAULT_AGENT_LOG_LEVEL.to_owned(),
         }
     }

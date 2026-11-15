@@ -200,14 +200,6 @@ pub(crate) fn load_session_turn(
     RolloutSqliteStore::open(&path)?.load_turn_by_id(session_id, assistant_part_id)
 }
 
-pub(crate) fn load_rollout_history_window_from_root(
-    root: &Path,
-    session_id: &str,
-) -> Result<RolloutHistoryWindow, String> {
-    let path = axon_session::session_store_path(root).join(CLI_ROLLOUT_DB_FILE);
-    RolloutSqliteStore::open(&path)?.load_history_window(session_id)
-}
-
 /// 读取指定 session 中 provider receipt 关联的完整工具输出。
 pub(crate) fn read_rollout_tool_output(
     config_path: &Path,

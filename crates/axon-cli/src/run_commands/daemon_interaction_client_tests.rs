@@ -208,14 +208,14 @@ fn text_live_output_projects_compaction_lifecycle_on_its_own_line() {
         live.observe(&compaction_lifecycle_event(
             session_id.as_str(),
             COMPACTION_COMPLETED_KIND,
-            "空闲窗口轮转完成 · 消息 42 → 6 条",
+            "内联窗口轮转完成 · 消息 42 → 6 条",
         ));
         live.finish();
         assert!(live.error.is_none(), "压缩行投影不应报错");
     }
     assert_eq!(
         String::from_utf8(output).expect("实时输出应为 UTF-8"),
-        "压缩前正文\n· 空闲窗口轮转完成 · 消息 42 → 6 条\n"
+        "压缩前正文\n· 内联窗口轮转完成 · 消息 42 → 6 条\n"
     );
 }
 

@@ -32,7 +32,6 @@ use super::*;
 
 #[path = "run_request_build.rs"]
 mod build;
-pub(super) use build::resolved_request_channel;
 
 /// 从 session_id 生成确定性 selector，用于渠道加权选择。
 pub(super) fn hash_session_selector(session_id: &str) -> u64 {

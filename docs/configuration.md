@@ -44,7 +44,6 @@ Axon 使用以下用户级目录布局：
 | `agent.max_subagent_threads` | 无符号整数 | `>= 1` | `16` |
 | `agent.max_subagent_active_turns` | 无符号整数 | `>= 1` | `16` |
 | `agent.auto_compaction_threshold` | 浮点数 | `0.0..=1.0` | `0.8` |
-| `agent.idle_compaction_debounce_ms` | 无符号整数 | `>= 1`，单位毫秒 | `60000` |
 | `agent.log_level` | 字符串 | `trace`、`debug`、`info`、`warn`、`error` | `"warn"` |
 
 `agent.default_model` 是**没有更高优先级来源时**的兜底模型：优先级从高到低是「本轮显式模型」→「会话记录的模型」→ `agent.default_model`。本轮显式模型由入口在用户明确选择时随该轮下传（TUI 的 `/model`、桌面输入坞的模型选择器），优先级最高；未显式选择时，接续既有会话（`--continue`、`--session` 或同一会话的后续 turn）优先沿用该会话记录的模型，只有当该模型已从 `[[models]]` 移除、或所属 Provider 已停用导致会话模型在配置内不再可用时，才回退 `agent.default_model`。会话记录的模型按「同 Provider + 同 upstream `id`」匹配；Provider 改名或迁移后按 upstream `id` 兜底匹配。
@@ -312,7 +311,7 @@ Provider streaming 的 WebSocket 当前只适用于 OpenAI Responses（`protocol
 
 自动压缩只依据 Provider 上报的当前请求上下文 usage：OpenAI Responses、Chat Completions 与 Anthropic Messages 均使用归一化后的 `current_context_tokens`。统计层的完整输入统一为 `total_input_tokens`，缓存命中率按 `cache_read_input_tokens / total_input_tokens` 计算。Provider 未返回有效 usage 时不触发自动压缩，不使用历史字符数或本地 token 估算兜底。
 
-自动压缩和 idle 压缩在触发判断时选定的 `ChannelBalancedModel` 会贯穿整个压缩请求，阈值、摘要 Provider、输出上限和 replacement history 使用同一模型与渠道；渠道健康状态或亲和缓存变化不会在 debounce/摘要阶段悄然改写上下文窗口语义。手动 `/compact` 仍按调用时重新选择可用渠道。
+自动压缩在触发判断时选定的 `ChannelBalancedModel` 会贯穿整个压缩请求，阈值、摘要 Provider、输出上限和 replacement history 使用同一模型与渠道；渠道健康状态或亲和缓存变化不会在摘要阶段悄然改写上下文窗口语义。手动 `/compact` 仍按调用时重新选择可用渠道。
 
 压缩替换历史时遵循 Codex 的保留顺序：保留稳定的 system/developer 与 session-stable 上下文，保留最近真实用户消息和压缩 checkpoint；动态工作区 Context 不会重新插入稳定缓存前缀，避免无关状态变化扩大 Prompt Cache 失配范围。压缩生命周期会展示 `0%`、`50%`、`100%` 阶段，完成摘要中的 token 数使用 Axon 统一单位格式。摘要和 checkpoint 输出统一限制为模型 `context_window / 8`，并取配置 `max_output_tokens` 的较小值。
 

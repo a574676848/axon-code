@@ -19,9 +19,6 @@ fn agent_key_detail(key: &str) -> Option<&'static str> {
         "agent.max_subagent_active_turns" => {
             Some("每个 run session 允许同时运行的子代理 turn 数，不能超过线程数。")
         }
-        "agent.idle_compaction_debounce_ms" => {
-            Some("会话进入闲暇压缩前等待的防抖时长，单位为毫秒。")
-        }
         _ => None,
     }
 }

@@ -4,9 +4,8 @@ use super::{
     RunRequest, RunRequestBuildOptions, RunRequestSession, RunResponse, RunSessionRecord,
     RunStartupSnapshot, RunStopControl, cli_config_error, cli_error, finish_completed_run,
     finish_failed_run, json_result, load_run_env_file, mirror_session_started, new_run_session_id,
-    prepare_run_session, resolved_axon_root, resolved_config_path, run_compaction,
-    run_compaction_notice, run_execution, run_outcome_diagnostics, run_progress,
-    run_request_payload::RunWorkspaceSnapshotPrewarm, run_steer,
+    prepare_run_session, resolved_config_path, run_execution, run_outcome_diagnostics,
+    run_progress, run_request_payload::RunWorkspaceSnapshotPrewarm, run_steer,
 };
 use axon_agent_runtime::{AgentPath, ShellCommandToolRuntime};
 use axon_client_identity::ClientChannel;
@@ -116,7 +115,6 @@ pub(crate) fn run_run_with_progress(
         (None, None, Some(session_id)) => session_id,
         (None, None, None) => new_run_session_id(),
     };
-    run_compaction::cancel_idle_compaction(&session_id);
     let cancel_token = run_cancel_token(&options);
     let progress = options.progress.map(|emit| {
         let sink = run_progress::RunProgressSink::with_session_id(emit, session_id.clone());
@@ -126,12 +124,6 @@ pub(crate) fn run_run_with_progress(
             Err(_) => sink,
         }
     });
-    // 空闲轮转在本 turn 收尾之后执行，那时本通道已经关闭；结果在这里补投。
-    if let Some(sink) = progress.as_ref()
-        && let Ok(root) = resolved_axon_root(&path)
-    {
-        run_compaction_notice::project_pending_compaction_notice(Some(sink), &root, &session_id);
-    }
     let loaded = match ConfigLoader::load_from_path(&path) {
         Ok(loaded) => loaded,
         Err(error) => return cli_config_error(&error),
@@ -232,11 +224,9 @@ pub(crate) fn run_run_with_progress(
         Ok(response) => finish_successful_provider_run(
             &CompletedRunContext {
                 path: &path,
-                config: &loaded.config,
                 request: &request,
                 elapsed_ms: run_execution::now_ms().saturating_sub(started_at_ms),
                 output,
-                progress: progress.as_ref(),
             },
             response,
         ),
@@ -310,34 +300,24 @@ fn persist_cli_run_started(request: &RunRequest) -> Result<(), String> {
     mirror_session_started(&request.config_path, &record)
 }
 
-struct CompletedRunContext<'a, 'sink> {
+struct CompletedRunContext<'a> {
     path: &'a Path,
-    config: &'a axon_config::AxonConfig,
     request: &'a RunRequest,
     elapsed_ms: u64,
     output: OutputFormat,
-    progress: Option<&'a run_progress::RunProgressSink<'sink>>,
 }
 
 fn finish_successful_provider_run(
-    context: &CompletedRunContext<'_, '_>,
+    context: &CompletedRunContext<'_>,
     response: RunResponse,
 ) -> CliRunResult {
     match finish_completed_run(context.path, context.request, response) {
-        Ok(completed) => {
-            run_compaction::schedule_idle_compaction(
-                context.path,
-                context.config,
-                &context.request.session_id,
-                context.progress,
-            );
-            render_completed_run(
-                context.request,
-                completed,
-                context.output,
-                context.elapsed_ms,
-            )
-        }
+        Ok(completed) => render_completed_run(
+            context.request,
+            completed,
+            context.output,
+            context.elapsed_ms,
+        ),
         Err(error) => cli_error(format!("完成 Provider turn 持久化失败：{error}")),
     }
 }

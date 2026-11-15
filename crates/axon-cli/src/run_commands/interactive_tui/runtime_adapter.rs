@@ -241,9 +241,6 @@ impl AgentTuiRuntimeAdapter for CliAgentTuiRuntimeAdapter {
                 .map_err(RuntimeError::runtime)
                 .map_err(AgentTuiSubmitFailure::without_output)?;
         }
-        if let Some(session_id) = tui_control_commands::active_tui_session_id(submission) {
-            crate::run_commands::run_compaction::cancel_idle_compaction(&session_id);
-        }
         {
             let mut emit_event = |event| emit.emit(event);
             if let Some(result) = tui_control_commands::run_tui_control_command(

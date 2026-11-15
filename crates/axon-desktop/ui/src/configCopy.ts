@@ -31,11 +31,6 @@ const CONFIG_COPY: Record<string, ConfigCopy> = {
     label: '并发子代理上限',
     detail: '单个会话同时运行的子代理数量',
   },
-  'agent.idle_compaction_debounce_ms': {
-    label: '闲置压缩延迟',
-    detail: '空闲多久后压缩上下文，单位毫秒',
-  },
-
   // 负载均衡
   'channel_balancer.failure_threshold': {
     label: '熔断失败次数',

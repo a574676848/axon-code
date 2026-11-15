@@ -16,9 +16,8 @@ use axon_domain::{AxonError, AxonResult};
 
 use super::super::RunRequest;
 use super::super::run_compaction_projection::{
-    CompactionLifecycleView, CompactionTrigger, compaction_part_id, completed_summary,
-    context_rollover_fact, emit_compaction_lifecycle, emit_context_rollover, failed_summary,
-    started_summary,
+    CompactionLifecycleView, compaction_part_id, completed_summary, context_rollover_fact,
+    emit_compaction_lifecycle, emit_context_rollover, failed_summary, started_summary,
 };
 use super::super::run_execution::now_ms;
 use super::super::run_progress::RunProgressSink;
@@ -153,8 +152,8 @@ impl WindowRolloverTransaction for InlineWindowRollover<'_, '_> {
         emit_compaction_lifecycle(
             self.progress,
             &CompactionLifecycleView::started(
-                compaction_part_id(CompactionTrigger::Inline, &self.request.session_id),
-                started_summary(CompactionTrigger::Inline),
+                compaction_part_id(&self.request.session_id),
+                started_summary(),
                 started_at_ms,
             ),
         );
@@ -253,9 +252,8 @@ impl WindowRolloverTransaction for InlineWindowRollover<'_, '_> {
         emit_compaction_lifecycle(
             self.progress,
             &CompactionLifecycleView::completed(
-                compaction_part_id(CompactionTrigger::Inline, &self.request.session_id),
+                compaction_part_id(&self.request.session_id),
                 completed_summary(
-                    CompactionTrigger::Inline,
                     committed.before_tokens,
                     committed.after_tokens,
                     committed.before_messages,
@@ -322,8 +320,8 @@ impl WindowRolloverTransaction for InlineWindowRollover<'_, '_> {
         emit_compaction_lifecycle(
             self.progress,
             &CompactionLifecycleView::failed(
-                compaction_part_id(CompactionTrigger::Inline, &self.request.session_id),
-                failed_summary(CompactionTrigger::Inline, &reason),
+                compaction_part_id(&self.request.session_id),
+                failed_summary(&reason),
                 Some(started_at_ms),
                 Some(now_ms().saturating_sub(started_at_ms)),
             ),
