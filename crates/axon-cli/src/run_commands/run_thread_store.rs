@@ -4,9 +4,9 @@ use std::path::Path;
 
 use axon_session::{
     AppendTurnCommand, AppendTurnItemsCommand, CompactThreadCommand, FailTurnCommand,
-    InterruptTurnCommand, JsonlThreadEventStore, StartEmptyThreadCommand, StartThreadCommand,
-    StartTurnCommand, Thread, ThreadCompaction, ThreadDetail, ThreadService, ThreadSettings,
-    ThreadSource, ThreadStatus, Turn, TurnStatus,
+    InterruptTurnCommand, JsonlThreadEventStore, RepairOpenTurnCommand, StartEmptyThreadCommand,
+    StartThreadCommand, StartTurnCommand, Thread, ThreadCompaction, ThreadDetail, ThreadService,
+    ThreadSettings, ThreadSource, ThreadStatus, Turn, TurnRepairOutcome, TurnStatus,
 };
 use serde::Serialize;
 
@@ -221,20 +221,33 @@ pub(super) fn mirror_session_started(
             return Ok(());
         }
         // 崩溃恢复：上一进程若在 turn 中途被强杀，Thread 会遗留永不收口的 active turn。
-        // 该 turn 已不可能再完成，必须先中断，否则同一会话的新 turn 会被永久拒绝。
+        // 该 turn 已不可能再完成，必须先收口，否则同一会话的新 turn 会被永久拒绝。
+        //
+        // 收口走 repair_open_turn 而不是 interrupt_turn：前者会把崩溃时半截的工具调用
+        // 一并补成「结果未知」的回执，历史因此平衡；后者只写终态，工具调用仍然悬空。
+        // 收口失败只告警：修不好历史不该顺带炸掉这一轮。
         if let Some(stale) = activation.active_turn_id {
-            axon_logger::warning(&format!(
-                "Thread {} 存在未收口的 active turn {}，判定为进程中断遗留并自动中断",
-                record.session_id, stale
-            ));
-            service.interrupt_turn(
+            match service.repair_open_turn(
                 &root,
-                InterruptTurnCommand {
+                RepairOpenTurnCommand {
                     thread_id: record.session_id.clone(),
                     turn_id: stale,
                     recorded_at_ms: record.created_at_ms,
                 },
-            )?;
+            ) {
+                Ok(TurnRepairOutcome::Repaired {
+                    turn_id,
+                    synthetic_results,
+                }) => axon_logger::warning(&format!(
+                    "Thread {} 遗留轮次 {turn_id} 已收口，补合成工具结果 {synthetic_results} 条",
+                    record.session_id
+                )),
+                Ok(TurnRepairOutcome::Balanced) => {}
+                Err(error) => axon_logger::warning(&format!(
+                    "Thread {} 遗留轮次收口失败，仍尝试开始新轮：{error}",
+                    record.session_id
+                )),
+            }
         }
         service.start_turn(
             &root,

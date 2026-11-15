@@ -232,6 +232,12 @@ fn try_run_daemon_host(
     let _pid_file = DaemonPidFileGuard::acquire(&runtime_root)?;
     let delivery_owner = host.owner_identity().map_err(|error| error.to_string())?;
     let server = bind_daemon_server(&endpoint, command)?;
+    // Thread 侧收口：崩溃遗留的 Active 尾轮不会被进程级中断收敛改判，这里按刚被判定
+    // 执行者失效的会话逐条补齐终态，否则该会话的下一轮会一直撞「已有 active turn」。
+    // 放在端口绑定之后：收口要读整条 thread 日志，大 shard 会拖慢「守护进程可服务」时刻。
+    if let Ok(orphans) = host.take_orphaned_sessions() {
+        crate::run_commands::repair_orphaned_threads_startup(&axon_root, &orphans);
+    }
     let cron_adapter = load_cron_adapter(command)?;
     let maintenance_signal = Arc::new(DaemonMaintenanceSignal::default());
     // provider 内容资产与事件正文归档根都从运行态根目录派生；仓库内不落任何 provider 脚本。

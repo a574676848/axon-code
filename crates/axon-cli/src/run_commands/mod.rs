@@ -90,6 +90,8 @@ mod run_subagent_performance;
 mod run_subagent_progress;
 mod run_text_render;
 mod run_thread_history;
+mod run_turn_repair_startup;
+pub(crate) use run_turn_repair_startup::repair_orphaned_threads_startup;
 mod run_thread_store;
 mod run_thread_title;
 mod run_tool_loop;

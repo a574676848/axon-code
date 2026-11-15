@@ -12,8 +12,6 @@ use std::collections::HashSet;
 use super::history::{ThreadHistoryItem, ThreadHistoryReceipt, ThreadHistoryStatus};
 use super::turn::{Turn, TurnStatus};
 
-/// 工具调用连「开始」都没被记录：可以放心重试。
-pub const TOOL_NOT_STARTED: &str = "TOOL_NOT_STARTED";
 /// 工具调用已经被接受，但没有落盘结果：是否有副作用未知。
 pub const TOOL_OUTCOME_UNKNOWN: &str = "TOOL_OUTCOME_UNKNOWN";
 

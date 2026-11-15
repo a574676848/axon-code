@@ -18,6 +18,7 @@ pub use goal_command_service::{GoalCommandService, GoalCommandServiceError, Goal
 pub use goal_query_service::{GoalQueryService, GoalQueryServiceError};
 pub use lane_query_service::{LaneQueryService, LaneSnapshot};
 pub use session_lane::{interaction_session_lane_id, session_lane_id};
+mod thread_repair;
 pub use thread_service::{
     AppendTurnCommand, AppendTurnItemsCommand, CompactThreadCommand, FailTurnCommand,
     ForkThreadCommand, InterruptTurnCommand, NameThreadCommand, RepairOpenTurnCommand,

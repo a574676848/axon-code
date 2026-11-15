@@ -217,45 +217,6 @@ where
         )
     }
 
-    /// 修复一个未收口的尾部轮次。
-    ///
-    /// 判据来自日志自身的结构：尾部轮次仍是 `Active`，说明写它的进程没有走到收口。
-    /// 与「用户主动中断」不同，这里会先补齐崩溃遗留的工具结果，并在**同一条事件**里
-    /// 写终态，历史因此重新平衡。已经平衡时返回 `Balanced` 且零写入，所以可重复调用。
-    pub fn repair_open_turn(
-        &self,
-        root: &Path,
-        command: RepairOpenTurnCommand,
-    ) -> Result<TurnRepairOutcome, String> {
-        let activation = self.read_thread_activation(root, &command.thread_id)?;
-        let Some(active_turn_id) = activation.active_turn_id else {
-            return Ok(TurnRepairOutcome::Balanced);
-        };
-        if active_turn_id != command.turn_id {
-            return Err("修复 turn_id 与当前 active turn 不匹配".to_owned());
-        }
-        let detail = self.read_thread(root, &command.thread_id)?;
-        let Some(turn) = crate::domain::turn_repair::open_tail_turn(&detail.turns) else {
-            return Ok(TurnRepairOutcome::Balanced);
-        };
-        let synthetic = crate::domain::turn_repair::synthetic_tool_results(turn);
-        let synthetic_results = synthetic.len();
-        self.append_at_sequence(
-            root,
-            &command.thread_id,
-            activation.next_sequence,
-            command.recorded_at_ms,
-            ThreadEvent::TurnInterrupted {
-                turn_id: command.turn_id.clone(),
-                appended_items: synthetic,
-            },
-        )?;
-        Ok(TurnRepairOutcome::Repaired {
-            turn_id: command.turn_id,
-            synthetic_results,
-        })
-    }
-
     /// 列出 thread 摘要。
     pub fn list_threads(&self, root: &Path, limit: usize) -> Result<Vec<ThreadSummary>, String> {
         Ok(self
@@ -440,7 +401,7 @@ where
         self.store.append(root, &record)
     }
 
-    fn append_at_sequence(
+    pub(super) fn append_at_sequence(
         &self,
         root: &Path,
         thread_id: &str,

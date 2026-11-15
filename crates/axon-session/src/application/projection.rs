@@ -154,16 +154,31 @@ fn apply_turn_interrupted(
     turn_id: &str,
     appended_items: &[crate::ThreadHistoryItem],
 ) {
-    if let Some(detail) = details.get_mut(&record.thread_id) {
-        if let Some(turn) = detail.turns.iter_mut().find(|turn| turn.turn_id == turn_id) {
-            turn.status = crate::domain::TurnStatus::Interrupted;
-            turn.interrupted_at_ms = Some(record.recorded_at_ms);
-            // 合成结果与终态同批落库，投影侧必须一起收进本轮历史，否则 JSONL 与
-            // ThreadDetail 会对「本轮有哪些工具结果」给出两个答案。
-            if !appended_items.is_empty() {
-                turn.history_items.extend(appended_items.iter().cloned());
+    if let Some(detail) = details.get_mut(&record.thread_id)
+        && let Some(turn) = detail.turns.iter_mut().find(|turn| turn.turn_id == turn_id)
+    {
+        turn.status = crate::domain::TurnStatus::Interrupted;
+        turn.interrupted_at_ms = Some(record.recorded_at_ms);
+        // 合成结果与终态同批落库，投影侧必须一起收进本轮历史，否则 JSONL 与
+        // ThreadDetail 会对「本轮有哪些工具结果」给出两个答案。
+        //
+        // 按 part_id 去重：同一轮被重复收口时，重复追加会让同一批工具结果出现两次。
+        for item in appended_items {
+            if let crate::ThreadHistoryItem::ToolResult { part_id, .. } = item
+                && turn.history_items.iter().any(|existing| {
+                    matches!(
+                        existing,
+                        crate::ThreadHistoryItem::ToolResult { part_id: known, .. }
+                            if known == part_id
+                    )
+                })
+            {
+                continue;
             }
+            turn.history_items.push(item.clone());
         }
+        // 只有真的找到该轮次，才说明这一线程的状态该回落到空闲；找不到时保持原状，
+        // 避免把另一条仍在推进的轮次误标成空闲。
         detail.thread.status = ThreadStatus::Idle;
         detail.thread.updated_at_ms = record.recorded_at_ms;
     }
