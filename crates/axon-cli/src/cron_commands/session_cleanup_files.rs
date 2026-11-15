@@ -79,12 +79,16 @@ fn run_file_cleanup(
         cutoff_ms,
         dry_run,
     )?;
+    // 进程资源遥测样本属于可重建的诊断数据，与日志同族、同一保留期回收。
+    let log_files =
+        cleanup_expired_files_recursive(&data_root.join(LOG_DIRECTORY), cutoff_ms, dry_run)?
+            .saturating_add(cleanup_expired_files_recursive(
+                &data_root.join(crate::runtime_resource_metrics::RESOURCE_METRICS_DIR_NAME),
+                cutoff_ms,
+                dry_run,
+            )?);
     Ok(FileCleanupCounts {
-        log_files: cleanup_expired_files_recursive(
-            &data_root.join(LOG_DIRECTORY),
-            cutoff_ms,
-            dry_run,
-        )?,
+        log_files,
         temp_entries: cleanup_expired_temp_entries(
             &data_root.join(TMP_DIRECTORY),
             cutoff_ms,

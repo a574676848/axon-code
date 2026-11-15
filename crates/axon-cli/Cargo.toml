@@ -46,6 +46,7 @@ base64.workspace = true
 clap.workspace = true
 clap_complete = "4"
 chrono.workspace = true
+sysinfo.workspace = true
 encoding_rs.workspace = true
 crossterm.workspace = true
 fs4.workspace = true

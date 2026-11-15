@@ -193,6 +193,9 @@ fn try_run_daemon_host(
     // 持有，再分别交给 Worker 与 IPC handler。
     let startup_snapshots = crate::run_commands::StartupSnapshotCache::default();
     startup_snapshots.spawn_prewarm(command.config_path.clone(), command.root.clone());
+    // 进程资源遥测：常驻守护进程最容易出现内存单调增长，这里按固定间隔采样自身
+    // 内存与 CPU，越过高水位时以 WARN 等级输出量化遥测，样本同时按日落盘。
+    crate::runtime_resource_metrics::spawn_reporter(axon_root.clone());
     // 活跃主 turn 注册表由运行函数创建：问答答案注入、网关中断与后台 Worker 必须共用同一份。
     let active_primary_turns = crate::run_commands::run_steer::ActivePrimaryTurnRegistry::default();
     // 主 turn 唤醒信号必须先于问答装配创建：迟到作答落库后由答案注入器直接唤醒一次领取。

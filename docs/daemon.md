@@ -167,6 +167,20 @@ Windows 实测基线（`--release`，1k/10k backlog 与 8 线程并发入口）�
 
 事件保留窗口按会话状态区分：仍在推进的会话保留最近 200 条事件作为续跑锚点，其余事件按 7 天窗口回收；已终结会话不再有 sequence 回退风险，事件按时间窗全量回收。会话根记录的回收同时覆盖 rollout 索引与运行态两侧，避免不在 rollout 索引里的子代理与历史 desktop 车道永久滞留。
 
+### 进程资源遥测
+
+守护进程每 30 秒采样一次自身常驻内存与 CPU，样本按日历日分片追加写入 `data/resource-metrics/samples-<YYYY-MM-DD>.jsonl`，单条记录含 `sampledAtMs`、`pid`、`rssBytes`、`cpuPercent`、`totalMemoryBytes`、`highWaterBytes`、`rssRatioPercent`。样本与日志同族，按 3 天文件保留期回收。
+
+采样只落盘、不逐条打日志；连续 3 次越过水位才输出一条 WARN 遥测，避免抖动刷屏。内存高水位取物理内存的八分之一并夹在 768 MiB 与 4 GiB 之间，与桌面端 UI 失败看门狗同一口径；CPU 高水位为单核 80%。WARN 行以 `[resource-telemetry]` 开头并自带完整 JSON 样本，可直接按时间轴还原增长曲线：
+
+```powershell
+Get-ChildItem "$env:USERPROFILE\.axon\data\resource-metrics" -Filter 'samples-*.jsonl' |
+  Get-Content |
+  ForEach-Object { $_ | ConvertFrom-Json } |
+  Sort-Object sampledAtMs |
+  Select-Object -Last 20 sampledAtMs, rssBytes, cpuPercent
+```
+
 ## 升级与恢复边界
 
 launcher 和服务管理模块提供版本原子切换、心跳保活与进程生命周期管理。守护进程支持崩溃后由系统服务自动拉起，对超期的 Execution 租约执行自动接管；当外部副作用执行状态未知时自动收敛至 `uncertain` 保护状态，杜绝非幂等副作用的盲目重复执行。网络断开时具备指数退避重连、待投递事件排空与消息幂等去重能力。
