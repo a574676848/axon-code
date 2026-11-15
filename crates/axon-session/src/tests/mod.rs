@@ -612,10 +612,68 @@ fn session_persistence_paths_share_data_directory() {
     );
 }
 
-/// 历史已经平衡时，收口必须既不报错也不写入。
+/// 端到端：真实 JSONL 存储上把崩溃遗留的 Active 尾轮收口成中断。
 ///
-/// 这是「可重复调用」的前提：崩溃恢复路径与启动路径都可能对同一个已经修好的会话
-/// 再判一次，多写一条终态会让投影看到两条无主的中断事件。
+/// 这条覆盖单测覆盖不到的两段：一次原子的事件落盘，以及落盘后激活状态真的被解除
+/// （解除才会让下一轮 `start_turn` 放行，否则会话永久卡死）。
+#[test]
+fn repair_open_turn_closes_a_crashed_tail_turn_on_real_storage() {
+    let root = root("jsonl-turn-repair");
+    let service = ThreadService::new(JsonlThreadEventStore);
+    service
+        .start_thread(
+            &root,
+            StartThreadCommand {
+                thread_id: "thread".to_owned(),
+                session_root_id: "thread".to_owned(),
+                parent_thread_id: None,
+                forked_from_thread_id: None,
+                source: ThreadSource::CliRun,
+                ephemeral: false,
+                settings: settings(),
+                created_at_ms: 100,
+                // 崩溃现场：进程在轮次中途退出，尾轮停在 Active。
+                turn: turn("crashed", 0, TurnStatus::Active),
+            },
+        )
+        .unwrap();
+
+    let activation = service.read_thread_activation(&root, "thread").unwrap();
+    let stale = activation
+        .active_turn_id
+        .clone()
+        .expect("崩溃现场应存在未收口轮次");
+    let outcome = service
+        .repair_open_turn(
+            &root,
+            crate::RepairOpenTurnCommand {
+                thread_id: "thread".to_owned(),
+                turn_id: stale,
+                recorded_at_ms: 200,
+                known_next_sequence: None,
+            },
+        )
+        .unwrap();
+
+    assert!(
+        matches!(outcome, crate::TurnRepairOutcome::Repaired { .. }),
+        "应真的收口而不是判定已平衡"
+    );
+    let detail = service.read_thread(&root, "thread").unwrap();
+    assert_eq!(
+        detail.turns.last().expect("仍有轮次").status,
+        TurnStatus::Interrupted,
+        "尾轮必须变成中断"
+    );
+    assert!(
+        service
+            .read_thread_activation(&root, "thread")
+            .unwrap()
+            .active_turn_id
+            .is_none(),
+        "激活必须解除，否则下一轮永远起不来"
+    );
+}
 #[test]
 fn repair_open_turn_is_zero_write_when_history_is_balanced() {
     let store = TargetThreadOnlyStore::default();
