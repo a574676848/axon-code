@@ -134,7 +134,7 @@ Authorization: Bearer <token>
 | `GET /api/v1/lanes/<laneId>/subagents` | 该车道的子代理清单 |
 | `POST /api/v1/lanes/<laneId>/interrupt` | 中断该车道的运行 |
 | `GET /api/v1/lanes/<laneId>/interactions` | 该车道的交互记录；`?limit=<n>` 限制条数，`?before_ms=<毫秒>&before_id=<交互标识>` 向前翻页（取该条之前的一页，两个参数必须成对给出）。响应带 `sessionUsage`、`sessionElapsedMs` 与 `effectiveModel`（该车道**最新一轮**的 `provider`、`model`、`name` 与 `reasoningEffort`，只读一条记录，不遍历历史；`name` 是用户当时选择的模型别名，同一 `provider` 与 `model` 可能对应多条别名，旧记录没有该字段时为 null；整段读不到时为 null） |
-| `GET /api/v1/interactions/<interactionId>/events` | 该交互的历史帧页；`?after=<序号>` 从该序号之后续读（缺省从头），`?limit=<n>` 限制本页帧数。返回 `events`、`nextAfter`、`hasMore`、`tailSequence`、`tailCursor`：`hasMore` 为真时按 `nextAfter` 继续翻页，读完用 `tailCursor` 订阅 WebSocket 即可只收增量 |
+| `GET /api/v1/interactions/<interactionId>/events` | 该交互的历史帧页；`?after=<序号>` 从该序号之后续读（缺省从头），`?limit=<n>` 为本页帧数（缺省 800，上限 2000，越界按 1 与 2000 夹取），`?tail=1` 直接取该交互自身的尾窗（首屏一次往返拿到可渲染的尾部窗口）。返回 `events`、`nextAfter`、`hasMore`、`tailSequence`、`tailCursor`：`hasMore` 为真时按 `nextAfter` 继续翻页，读完用 `tailCursor` 订阅 WebSocket 即可只收增量。交互标识非法返回 400 `invalid_interaction_id`，记录不存在或已被清理返回 404 `interaction_not_found`，其余读取失败返回 500 `gateway_error`。外置正文缺失的帧由存储层降级为 `eventType=archive_missing` 的占位记录；网关读取时跳过这些占位帧，不返回给客户端，整页照常返回，扫描路径另记一条带跳过条数的 warning 日志 |
 | `GET /api/v1/lanes/<laneId>/jobs` | 该车道的作业清单 |
 | `GET /api/v1/lanes/<laneId>/jobs/<jobId>/output?offset=<字节>&max=<字节>` | 按字节游标读取该作业输出的增量：回 `text`、`offset`、`nextOffset`、`eof`、`running`、`status`、`exitCode`、`elapsedMs`、`fullOutputAvailable`；作业已回收时 `unavailable` 给出原因，`text` 为空。`max` 缺省 65536、上限 262144。`text` 只含命令正文：归档头部（`command=` / `cwd=` / `tty=`）与分片标记（`----- stdout seq=N -----`）都已剥离，连续空行已压缩，游标始终停在整行边界 |
 | `POST /api/v1/lanes/<laneId>/jobs/<jobId>/stop` | 停止指定作业 |

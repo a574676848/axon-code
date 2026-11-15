@@ -93,8 +93,7 @@ impl ShellSessionReclaim {
              - 回收原因：连续 {idle} 无任何 write_stdin 轮询\n\
              - 完整输出：{artifact}\n\
              该会话已终止：write_stdin 只能读取终态与保留窗口内的输出，不能再写入输入。\
-             需要继续等待的长命令请重新调用 shell_command —— 预计超过空闲窗口时显式提高 \
-             timeout_ms，或改用 run_in_background 后经 job_output 收取结果。",
+             需要重新执行的长命令请调用 shell_command 并设 run_in_background: true（跑完会自动通知你，不要阻塞轮询）。",
             session_id = self.session_id,
             command = self.command,
             cwd = self.cwd,

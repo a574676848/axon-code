@@ -210,8 +210,12 @@ fn execute_terminal_command(owner_id: &str) -> ShellCommandExecutionReceipt {
             .session_id
             .clone()
             .expect("Running 会话必须返回 session_id");
+        std::thread::sleep(std::time::Duration::from_millis(25));
         receipt = manager
-            .write_stdin(write_input(&session_id, owner_id, None, false), None)
+            .write_stdin(
+                write_input_with_yield(&session_id, owner_id, None, false, Some(0)),
+                None,
+            )
             .expect("轮询终态应成功");
     }
     panic!("命令未在有界轮询内进入终态：{receipt:?}");
@@ -240,12 +244,28 @@ fn write_input(
     chars: Option<&str>,
     ctrl_c: bool,
 ) -> WriteStdinExecutionInput {
+    write_input_with_yield(
+        session_id,
+        owner_id,
+        chars,
+        ctrl_c,
+        Some(INTERACTION_YIELD_MS),
+    )
+}
+
+fn write_input_with_yield(
+    session_id: &str,
+    owner_id: &str,
+    chars: Option<&str>,
+    ctrl_c: bool,
+    yield_time_ms: Option<u64>,
+) -> WriteStdinExecutionInput {
     WriteStdinExecutionInput {
         owner_id: owner_id.to_owned(),
         session_id: session_id.to_owned(),
         chars: chars.map(str::to_owned),
         ctrl_c,
-        yield_time_ms: INTERACTION_YIELD_MS,
+        yield_time_ms,
         max_output_tokens: None,
         remote_requested: false,
     }

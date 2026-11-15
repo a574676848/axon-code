@@ -443,7 +443,7 @@ fn history_page_resumes_at_the_last_consumed_event() {
             .expect("追加 durable 事件");
     }
 
-    let first = interaction_history_page(&store, &interaction_id, 0, 10).expect("第一页");
+    let first = interaction_history_page(&store, &interaction_id, 0, 10, false).expect("第一页");
     assert_eq!(first.events.len(), 10);
     assert!(first.has_more, "还有更晚的事件时必须提示续读");
     assert_eq!(
@@ -463,7 +463,8 @@ fn history_page_resumes_at_the_last_consumed_event() {
     let mut after = first.next_after;
     let mut pages = 1;
     loop {
-        let page = interaction_history_page(&store, &interaction_id, after, 10).expect("后续页");
+        let page =
+            interaction_history_page(&store, &interaction_id, after, 10, false).expect("后续页");
         pages += 1;
         sequences.extend(page.events.iter().map(|event| {
             parse_cursor(event.cursor.as_deref().expect("事件应有 cursor"))
@@ -516,7 +517,7 @@ fn history_page_skips_missing_external_archive_from_another_interaction() {
         )
         .expect("追加目标交互事件");
 
-    let page = interaction_history_page(&store, &interaction_id, 0, 100)
+    let page = interaction_history_page(&store, &interaction_id, 0, 100, false)
         .expect("旧交互缺失归档不得阻断读取新交互");
     assert_eq!(page.events.len(), 2, "应包含目标事件与终态补帧");
     assert_eq!(page.events[0].event_type, "wire_event");
@@ -528,10 +529,101 @@ fn history_page_reports_not_found_for_missing_interaction() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
     let missing = InteractionId::new("missing-interaction-id").expect("Interaction ID");
-    let error = interaction_history_page(&store, &missing, 0, 10)
+    let error = interaction_history_page(&store, &missing, 0, 10, false)
         .expect_err("不存在的 Interaction 必须返回 NotFound");
     assert!(
         matches!(error, GatewayKernelError::NotFound(_)),
         "{error:?}"
     );
+}
+
+#[test]
+fn tail_page_returns_the_durable_cursor_of_its_last_frame() {
+    let directory = axon_test_support::test_temp_dir();
+    let (store, interaction_id, session_id, host) = seed_interaction(
+        directory.path(),
+        InteractionStatus::Received,
+        "gateway-tail-cursor-interaction",
+    );
+    let lease = store
+        .claim_processing_by_id(&interaction_id, 20, 10_000)
+        .expect("领取不应失败")
+        .expect("应有 processing lease");
+    for (index, text) in ["a", "b"].iter().enumerate() {
+        store
+            .append_interaction_events(
+                &session_id,
+                &host,
+                &interaction_id,
+                &lease.lease_token,
+                &[(
+                    "wire_event".to_owned(),
+                    format!(
+                        "{{\"interactionId\":\"{}\",\"text\":\"{text}\"}}",
+                        interaction_id.as_str()
+                    ),
+                )],
+                30 + u64::try_from(index).expect("index"),
+            )
+            .expect("追加目标交互事件");
+    }
+
+    let page = interaction_history_page(&store, &interaction_id, 0, 10, true).expect("尾窗读取");
+    assert_eq!(page.events.len(), 2, "尾窗必须取到该交互自己的两帧");
+    // 尾游标是客户端接实时尾的订阅起点：网关按 Host generation 过滤订阅游标，
+    // 代际为空会被直接丢弃并从序号 0 重放整条交互（重复帧、乱序、用量翻倍）。
+    let cursor = parse_cursor(page.tail_cursor.as_deref().expect("尾窗必须给出尾游标"))
+        .expect("尾游标应有效");
+    assert!(
+        !cursor.generation.is_empty(),
+        "尾游标必须携带 Host generation，否则订阅时会被代际过滤丢弃"
+    );
+    assert_eq!(
+        cursor.sequence, page.next_after,
+        "尾游标必须与尾窗最后一帧对齐"
+    );
+}
+
+#[test]
+fn tail_page_falls_back_to_a_full_scan_for_legacy_events() {
+    let directory = axon_test_support::test_temp_dir();
+    let (store, interaction_id, session_id, host) = seed_interaction(
+        directory.path(),
+        InteractionStatus::Understood,
+        "gateway-legacy-interaction",
+    );
+    // 升级前写入的事件没有归属列，只能靠正文里的 interactionId 归位。
+    for index in 0_u64..3 {
+        let payload = format!(
+            "{{\"interactionId\":\"{}\",\"text\":\"legacy-{index}\"}}",
+            interaction_id.as_str()
+        );
+        store
+            .append_event(&session_id, &host, "wire_event", &payload, 10 + index)
+            .expect("追加老事件");
+    }
+    // 其后继续写入别的交互事件：尾窗起点会完全越过老交互的帧。
+    for index in 0_u64..20 {
+        let payload =
+            format!("{{\"interactionId\":\"other-interaction\",\"text\":\"other-{index}\"}}");
+        store
+            .append_event(&session_id, &host, "wire_event", &payload, 100 + index)
+            .expect("追加其他交互事件");
+    }
+
+    let page = interaction_history_page(&store, &interaction_id, 0, 5, true).expect("尾窗读取");
+    let legacy: Vec<&str> = page
+        .events
+        .iter()
+        .filter(|event| event.payload_json.contains("legacy-"))
+        .map(|event| event.payload_json.as_str())
+        .collect();
+    assert_eq!(legacy.len(), 3, "老交互的帧必须被保尾扫描捡回来");
+    assert!(
+        page.events
+            .iter()
+            .all(|event| !event.payload_json.contains("other-interaction")),
+        "尾窗不得混入其他交互的帧"
+    );
+    assert!(!page.has_more, "保尾扫描已到 durable 尾");
 }

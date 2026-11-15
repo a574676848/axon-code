@@ -44,6 +44,13 @@ pub(super) struct RunSteerBridge {
 
 impl RunSteerBridge {
     pub(super) fn open(&self) -> RunSteerInbox {
+        self.open_with_persistent_completion_wake(false)
+    }
+
+    pub(super) fn open_with_persistent_completion_wake(
+        &self,
+        has_persistent_completion_wake: bool,
+    ) -> RunSteerInbox {
         let mut state = self
             .state
             .lock()
@@ -55,6 +62,7 @@ impl RunSteerBridge {
             state: Arc::clone(&self.state),
             subagents: SubagentChannel::default(),
             closes_on_drop: true,
+            has_persistent_completion_wake,
         }
     }
 
@@ -264,6 +272,7 @@ pub(crate) struct RunSteerInbox {
     /// 子代理投递通道；由装配层在本轮建立起控制面之后装上句柄。
     subagents: SubagentChannel,
     closes_on_drop: bool,
+    has_persistent_completion_wake: bool,
 }
 
 impl Clone for RunSteerInbox {
@@ -272,6 +281,7 @@ impl Clone for RunSteerInbox {
             state: Arc::clone(&self.state),
             subagents: self.subagents.clone(),
             closes_on_drop: false,
+            has_persistent_completion_wake: self.has_persistent_completion_wake,
         }
     }
 }
@@ -322,6 +332,10 @@ fn drain_pending(state: &mut RunSteerState) -> Vec<AgentTurnSteerInput> {
 }
 
 impl RunSteerInbox {
+    pub(super) const fn has_persistent_completion_wake(&self) -> bool {
+        self.has_persistent_completion_wake
+    }
+
     #[cfg(test)]
     pub(super) fn try_send_message(
         &self,

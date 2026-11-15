@@ -74,6 +74,7 @@ pub(crate) mod run_rollout_store;
 mod run_self_iteration_subagent;
 mod run_semantic_salience;
 pub(crate) mod run_session_store;
+pub(crate) mod run_shell_job_wake;
 mod run_startup_snapshot;
 mod run_startup_snapshot_cache;
 mod run_startup_snapshot_fingerprint;

@@ -41,8 +41,14 @@ pub(super) fn quarantine_interrupted_interactions(
         }
         let payload = interrupted_payload(&interaction_id);
         if let Some(session_id) = session_id {
-            let Some(sequence) =
-                append_session_event(&transaction, host, now, &session_id, &payload)?
+            let Some(sequence) = append_session_event(
+                &transaction,
+                host,
+                now,
+                &session_id,
+                &interaction_id,
+                &payload,
+            )?
             else {
                 continue;
             };
@@ -168,6 +174,7 @@ fn append_session_event(
     host: &DaemonHostRecord,
     now: i64,
     session_id: &DaemonSessionId,
+    interaction_id: &InteractionId,
     payload: &str,
 ) -> Result<Option<u64>, RuntimeStoreError> {
     let previous: Option<i64> = transaction
@@ -185,17 +192,24 @@ fn append_session_event(
         .map_err(storage)?
         .checked_add(1)
         .ok_or_else(|| RuntimeStoreError::Storage("事件序号溢出".to_owned()))?;
+    /*
+     * 中断证据帧属于目标 Interaction：归属列必须与载荷里的 interactionId 一致。
+     *
+     * 尾窗读取按 interaction_id 列过滤，列留空就只剩「已中断」状态，
+     * 中断原因与分类永远读不出来。
+     */
     transaction
         .execute(
             "INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,\
-             emitted_at_ms) VALUES(?1,?2,?3,?4,?5,?6)",
+             emitted_at_ms,interaction_id) VALUES(?1,?2,?3,?4,?5,?6,?7)",
             params![
                 session_id.as_str(),
                 i64_value(sequence)?,
                 host.generation,
                 SESSION_EVENT_TYPE,
                 payload,
-                now
+                now,
+                interaction_id.as_str()
             ],
         )
         .map_err(storage)?;
@@ -230,11 +244,58 @@ fn interrupted_payload(interaction_id: &InteractionId) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::InteractionStore;
+    use axon_domain::RuntimeHostId;
 
     #[test]
     fn interrupted_payload_carries_interaction_evidence() {
         let interaction_id = InteractionId::new("interaction-1").expect("Interaction ID");
         let payload = interrupted_payload(&interaction_id);
         assert!(payload.contains("\"interactionId\":\"interaction-1\""));
+    }
+
+    #[test]
+    fn interrupted_session_event_writes_interaction_id_column() {
+        let directory = axon_test_support::test_temp_dir();
+        let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+        let host = store
+            .claim_host(
+                &RuntimeHostId::new("interrupted-column-host").expect("host"),
+                1,
+                None,
+                1,
+                1_000,
+            )
+            .expect("host lease");
+        let interaction =
+            crate::infrastructure::sqlite_runtime_store_interaction_tests::sample_interaction();
+        store.append(&interaction).expect("追加 Interaction");
+        let lane_id = crate::interaction_session_lane_id(&interaction).expect("lane");
+        let session_id = DaemonSessionId::new(lane_id).expect("Session ID");
+        store.create_session(&session_id, ".", 1).expect("Session");
+        store
+            .claim_processing_by_id(&interaction.interaction_id, 20, 100)
+            .expect("领取")
+            .expect("lease");
+
+        let records = quarantine_interrupted_interactions(&store, &host, 121, 10)
+            .expect("收敛中断 Interaction");
+        assert_eq!(records.len(), 1);
+        let column: String = store
+            .connection()
+            .expect("connection")
+            .query_row(
+                "SELECT interaction_id FROM session_events WHERE event_type=?1",
+                [SESSION_EVENT_TYPE],
+                |row| row.get(0),
+            )
+            .expect("归属列");
+        assert_eq!(column, interaction.interaction_id.as_str());
+        // 尾窗按同一列过滤：列写对了，中断证据才会出现在该交互自身的历史里。
+        let window = store
+            .interaction_tail_window(&session_id, &interaction.interaction_id, 10)
+            .expect("尾窗读取");
+        assert_eq!(window.len(), 1);
+        assert_eq!(window[0].event_type, SESSION_EVENT_TYPE);
     }
 }

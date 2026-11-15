@@ -162,6 +162,53 @@ fn write_stdin_receipt_projects_terminal_interaction_metadata() {
 }
 
 #[test]
+fn non_tty_running_shell_receipt_guides_against_polling_while_tty_and_completed_omit_it() {
+    let tool_call = ProviderToolCall::new("call-shell", "builtin.shell_command", "{}");
+    let mut non_tty_running = shell_receipt(ShellCommandExecutionStatus::Running);
+    non_tty_running.exit_code = None;
+    non_tty_running.session_id = Some("sess-non-tty".to_owned());
+    non_tty_running.tty = false;
+
+    let projected = agent_run_shell_tool_receipt(&tool_call, &non_tty_running);
+    let metadata = projected.metadata.expect("non-tty running metadata");
+    let guidance = metadata["nextActions"]["guidance"]
+        .as_array()
+        .expect("非 tty 运行中回执必须带 nextActions.guidance");
+    assert_eq!(guidance.len(), 1);
+    assert!(
+        guidance[0].as_str().is_some_and(
+            |text| text.contains("yield_time_ms") && text.contains("run_in_background")
+        )
+    );
+    assert!(projected.summary.contains("next_action="));
+    assert!(projected.summary.contains("run_in_background: true"));
+
+    let mut tty_running = non_tty_running.clone();
+    tty_running.tty = true;
+    let tty_projected = agent_run_shell_tool_receipt(&tool_call, &tty_running);
+    assert!(
+        tty_projected
+            .metadata
+            .as_ref()
+            .and_then(|value| value.get("nextActions"))
+            .is_none(),
+        "tty 会话允许交互等待，不得附带非 tty 禁轮询提示"
+    );
+    assert!(!tty_projected.summary.contains("next_action="));
+
+    let completed = shell_receipt(ShellCommandExecutionStatus::Completed);
+    let completed_projected = agent_run_shell_tool_receipt(&tool_call, &completed);
+    assert!(
+        completed_projected
+            .metadata
+            .as_ref()
+            .and_then(|value| value.get("nextActions"))
+            .is_none()
+    );
+    assert!(!completed_projected.summary.contains("next_action="));
+}
+
+#[test]
 fn search_tool_receipt_projection_uses_runtime_status_contract() {
     let tool_call = ProviderToolCall::new("call-1", "builtin.search", "{}");
     let receipt = search_receipt(SearchToolExecutionStatus::Completed);

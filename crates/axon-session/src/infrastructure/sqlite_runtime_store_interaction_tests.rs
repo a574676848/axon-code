@@ -13,9 +13,9 @@ const RECLAIM_AFTER_RELEASE_MS: u64 = 31;
 const EXPIRED_RECLAIM_AT_MS: u64 = 121;
 const SETTLE_AT_MS: u64 = 130;
 const VERIFY_TERMINAL_AT_MS: u64 = 140;
-const LEASE_DURATION_MS: u64 = 100;
+pub(super) const LEASE_DURATION_MS: u64 = 100;
 
-fn sample_interaction() -> InteractionRecord {
+pub(super) fn sample_interaction() -> InteractionRecord {
     interaction_record("interaction-test", "message-test", 10)
 }
 

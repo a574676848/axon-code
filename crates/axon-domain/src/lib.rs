@@ -132,7 +132,7 @@ pub use interaction::{
     COMPLETION_STEER_SOURCE_PREFIX, CRON_DELIVERY_ID_PREFIX, CRON_DELIVERY_NOTIFICATION_PREFIX,
     CRON_WAKE_SOURCE_PREFIX, InteractionError, InteractionId, InteractionRecord, InteractionSource,
     InteractionStatus, MAX_INTERACTION_CONTENT_LENGTH, MAX_INTERACTION_ID_LENGTH,
-    SYSTEM_SOURCE_CHANNEL,
+    QUESTION_ANSWER_SOURCE_PREFIX, SHELL_JOB_WAKE_SOURCE_PREFIX, SYSTEM_SOURCE_CHANNEL,
 };
 pub use ledger_id::{DecisionId, ExecutionId, GoalId, JarvisEventId, ResultId};
 pub use mcp::{MCP_CONFIG_FILE, McpServerDefinition};

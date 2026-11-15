@@ -30,6 +30,9 @@ mod sqlite_runtime_store_goal_activity_tests;
 #[path = "sqlite_runtime_store_health_tests.rs"]
 mod sqlite_runtime_store_health_tests;
 #[cfg(test)]
+#[path = "sqlite_runtime_store_interaction_tail_tests.rs"]
+mod sqlite_runtime_store_interaction_tail_tests;
+#[cfg(test)]
 #[path = "sqlite_runtime_store_interaction_tests.rs"]
 mod sqlite_runtime_store_interaction_tests;
 #[cfg(test)]
@@ -63,7 +66,8 @@ pub use jsonl_store::{
     JsonlThreadEventStore, THREAD_EVENTS_FILE, ThreadEventReadIssue, ThreadEventScan,
 };
 pub use sqlite_runtime_store::event_payload_store::{
-    is_exclusive_payload_reference, read as read_event_payload,
+    is_exclusive_payload_reference, payload_storage_path, read as read_event_payload,
+    reclaim_shards_before,
 };
 pub use sqlite_runtime_store::{
     SESSION_EVENT_ARCHIVE_SUBDIR, SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES,

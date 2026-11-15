@@ -292,6 +292,115 @@ fn shell_apply_patch_projects_structured_diff_receipt() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+#[test]
+fn shell_command_blocks_pure_sleep_only_when_pending_background_job_exists() {
+    let root = temp_workspace("shell-sleep-guard-pending");
+    let owner = format!("cli-shell-sleep-guard-{}", std::process::id());
+    let job_id = ShellCommandToolRuntime
+        .start_background(ShellCommandExecutionInput {
+            owner_id: owner.clone(),
+            command: ShellCommandToolRuntime::command_from_script(
+                #[cfg(windows)]
+                "Start-Sleep -Seconds 60",
+                #[cfg(unix)]
+                "sleep 60",
+                false,
+            )
+            .expect("后台睡眠命令应规范化成功"),
+            cwd: root.clone(),
+            timeout_ms: None,
+            yield_time_ms: 0,
+            tty: false,
+            run_in_background: true,
+            max_output_tokens: None,
+            tee_root: Some(root.clone()),
+            cancel_token: None,
+            write_paths: Vec::new(),
+            remote_requested: false,
+        })
+        .expect("后台作业应启动成功");
+
+    let mut context = test_context(root.clone());
+    context.config_path = Some(root.join("config.toml"));
+    context.thread_session_id = owner.clone();
+    let sleep_call = ProviderToolCall::new(
+        "call-sleep",
+        "builtin.shell_command",
+        serde_json::json!({
+            "command": if cfg!(windows) { "Start-Sleep -Seconds 10" } else { "sleep 10" },
+            "intent": "等待后台作业"
+        })
+        .to_string(),
+    );
+    let sleep_request = ToolExecutionRequest {
+        tool_call: sleep_call,
+        tool_call_id: axon_domain::ToolCallId(1),
+        part_id: "sleep-guard".to_owned(),
+        execution_request_id: axon_domain::ExecutionRequestId(1),
+        kind: crate::tool_orchestrator::ToolKind::Shell,
+        concurrency_policy: axon_domain::ToolConcurrencyPolicy::WorkspaceCoordinated,
+        execution_permission: axon_domain::ToolExecutionPermission::Allowed,
+    };
+    let rejected = execute_shell_command(&sleep_request, &context, None);
+
+    // 正常的非纯休眠命令即使存在后台作业也必须放行。
+    let valid_call = ProviderToolCall::new(
+        "call-real",
+        "builtin.shell_command",
+        serde_json::json!({
+            "command": "echo active-work",
+            "intent": "执行正常命令"
+        })
+        .to_string(),
+    );
+    let valid_request = ToolExecutionRequest {
+        tool_call: valid_call,
+        tool_call_id: axon_domain::ToolCallId(2),
+        part_id: "sleep-guard-real".to_owned(),
+        execution_request_id: axon_domain::ExecutionRequestId(2),
+        kind: crate::tool_orchestrator::ToolKind::Shell,
+        concurrency_policy: axon_domain::ToolConcurrencyPolicy::WorkspaceCoordinated,
+        execution_permission: axon_domain::ToolExecutionPermission::Allowed,
+    };
+    let allowed = execute_shell_command(&valid_request, &context, None);
+    let _ = axon_agent_runtime::JobRuntime::global().kill(job_id, &owner);
+    let _ = std::fs::remove_dir_all(root);
+
+    assert_eq!(rejected.status, "failed", "{}", rejected.summary);
+    assert_eq!(rejected.error_type.as_deref(), Some("invalid_arguments"));
+    assert!(rejected.summary.contains("禁止使用纯休眠命令"));
+    assert_eq!(allowed.status, "completed", "{}", allowed.summary);
+}
+
+#[test]
+fn shell_command_allows_sleep_when_no_pending_background_job_exists() {
+    let root = temp_workspace("shell-sleep-guard-idle");
+    let mut context = test_context(root.clone());
+    context.config_path = Some(root.join("config.toml"));
+    context.thread_session_id = format!("cli-shell-sleep-idle-{}", std::process::id());
+    let call = ProviderToolCall::new(
+        "call-no-job-sleep",
+        "builtin.shell_command",
+        serde_json::json!({
+            "command": if cfg!(windows) { "Start-Sleep -Milliseconds 10" } else { "sleep 0.01" },
+            "intent": "测试无后台作业时允许休眠"
+        })
+        .to_string(),
+    );
+    let request = ToolExecutionRequest {
+        tool_call: call,
+        tool_call_id: axon_domain::ToolCallId(3),
+        part_id: "sleep-guard-idle".to_owned(),
+        execution_request_id: axon_domain::ExecutionRequestId(3),
+        kind: crate::tool_orchestrator::ToolKind::Shell,
+        concurrency_policy: axon_domain::ToolConcurrencyPolicy::WorkspaceCoordinated,
+        execution_permission: axon_domain::ToolExecutionPermission::Allowed,
+    };
+    let receipt = execute_shell_command(&request, &context, None);
+    let _ = std::fs::remove_dir_all(root);
+    assert_eq!(receipt.status, "completed", "{}", receipt.summary);
+}
+
 fn temp_workspace(tag: &str) -> std::path::PathBuf {
     let mut root = axon_test_support::test_temp_root();
     root.push(format!(

@@ -130,6 +130,7 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             session_id TEXT NOT NULL, sequence INTEGER NOT NULL, generation TEXT NOT NULL,
             event_type TEXT NOT NULL, payload_json TEXT NOT NULL, emitted_at_ms INTEGER NOT NULL,
             payload_ref TEXT,
+            interaction_id TEXT NOT NULL DEFAULT '',
             PRIMARY KEY(session_id, sequence),
             FOREIGN KEY(session_id) REFERENCES session_runtimes(session_id)
         );
@@ -560,9 +561,25 @@ fn migrate_additive_columns(connection: &Connection) -> rusqlite::Result<()> {
         "tool_summary",
         "TEXT NOT NULL DEFAULT ''",
     )?;
-    // lane 排他领取按 (lane_id, status, lease_expires_at_ms) 定位在途 processing。
+    // 事件归属的 Interaction：历史帧按 (session_id, interaction_id, sequence) 定向读取，
+    // 不再扫整条会话。老记录该列为空串，读取侧自动回退旧扫描逻辑。
+    add_column_if_missing(
+        connection,
+        "session_events",
+        "interaction_id",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    /*
+     * 三条索引各服务一条固定查询：事件按 (会话, 交互, 序号) 定向取历史帧；
+     * 车道列表按 (lane, 接收时间倒序) 取组内首行；lane 排他领取按
+     * (lane, 状态, 租约到期) 定位在途 processing。
+     */
     connection.execute_batch(
-        "CREATE INDEX IF NOT EXISTS jarvis_interactions_lane_processing
+        "CREATE INDEX IF NOT EXISTS session_events_session_interaction
+            ON session_events(session_id, interaction_id, sequence);
+         CREATE INDEX IF NOT EXISTS jarvis_interactions_lane_recent
+            ON jarvis_interactions(lane_id, received_at_ms DESC, interaction_id DESC);
+         CREATE INDEX IF NOT EXISTS jarvis_interactions_lane_processing
             ON jarvis_interactions(lane_id, status, lease_expires_at_ms);",
     )
 }

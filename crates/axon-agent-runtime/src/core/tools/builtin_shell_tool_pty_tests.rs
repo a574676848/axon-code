@@ -42,7 +42,12 @@ fn tty_ctrl_c_projects_as_cancelled_session() {
     );
 
     let mut cancelled = ShellCommandToolRuntime
-        .write_stdin(write_input(&session_id, None, true, COMPLETION_YIELD_MS))
+        .write_stdin(write_input(
+            &session_id,
+            None,
+            true,
+            Some(COMPLETION_YIELD_MS),
+        ))
         .unwrap();
     // Ctrl+C 之后子进程还要走自己的退出路径：仍在跑就按状态等到退出，不预测耗时。
     if cancelled.status == ShellCommandExecutionStatus::Running {
@@ -107,7 +112,7 @@ fn tty_session_accepts_read_host_input() {
             &session_id,
             Some("axon-input".to_owned()),
             false,
-            0,
+            Some(0),
         ))
         .unwrap();
     assert_eq!(typed.status, ShellCommandExecutionStatus::Running);
@@ -119,7 +124,7 @@ fn tty_session_accepts_read_host_input() {
             &session_id,
             Some(input_newline("")),
             false,
-            COMPLETION_YIELD_MS,
+            Some(COMPLETION_YIELD_MS),
         ))
         .unwrap();
     stdout.push_str(&completed.stdout.preview);

@@ -11,7 +11,7 @@ use axon_domain::{
     DaemonSessionId, InteractionId, RuntimeHostId, SessionActionId, SessionActionStatus,
     SessionRuntimeStatus,
 };
-use rusqlite::{TransactionBehavior, params};
+use rusqlite::{Connection, TransactionBehavior, params};
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex,
@@ -162,6 +162,19 @@ impl SqliteRuntimeStore {
     /// 从连接池取用一条运行时连接。
     pub(crate) fn connection(&self) -> Result<PooledConnection<'_>, RuntimeStoreError> {
         self.pool.acquire()
+    }
+
+    /// 在共享连接池上执行一次只读查询。
+    ///
+    /// 只读仪表读数（车道用量、耗时、工具摘要）走这一层：逐请求 `Connection::open`
+    /// 会绕过进程内连接池，每次都重新打开 SQLite 并重建空池，把单次读放大成
+    /// 一次文件打开加一组 PRAGMA。
+    pub fn with_read_connection<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> rusqlite::Result<T>,
+    ) -> Result<T, RuntimeStoreError> {
+        let connection = self.connection()?;
+        f(&connection).map_err(|error| RuntimeStoreError::Storage(error.to_string()))
     }
 
     /// 从 Axon 根目录创建 Store。
@@ -590,6 +603,15 @@ impl RuntimeStore for SqliteRuntimeStore {
         limit: u32,
     ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
         event_repository::replay_events(self, session_id, after_sequence, limit)
+    }
+
+    fn interaction_tail_window(
+        &self,
+        session_id: &DaemonSessionId,
+        interaction_id: &axon_domain::InteractionId,
+        limit: u32,
+    ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
+        event_repository::interaction_tail_window(self, session_id, interaction_id, limit)
     }
 
     fn upsert_schedule(&self, schedule: &RuntimeScheduleRecord) -> Result<(), RuntimeStoreError> {

@@ -48,9 +48,11 @@ pub(super) fn run_with_failover(
     let _deferred_message_registration =
         register_deferred_message_session(&request.session_id, turn_inbox.clone());
     let _completion_notice_subscription =
-        super::run_completion_notice_subscription::subscribe_run_completion_notices(
-            &request.session_id,
-        );
+        (!turn_inbox.has_persistent_completion_wake()).then(|| {
+            super::run_completion_notice_subscription::subscribe_run_completion_notices(
+                &request.session_id,
+            )
+        });
     let _session_reclaim_subscription =
         super::run_completion_notice_subscription::subscribe_run_shell_session_reclaims(
             &request.session_id,

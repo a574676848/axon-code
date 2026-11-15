@@ -480,6 +480,8 @@ mod shell_command_policy_evaluator;
 mod shell_command_static_analyzer;
 #[path = "runtime/shell_command_wrapper_unwrapper.rs"]
 mod shell_command_wrapper_unwrapper;
+#[path = "runtime/shell_sleep_guard.rs"]
+mod shell_sleep_guard;
 pub mod skills;
 #[path = "runtime/snapshot.rs"]
 mod snapshot;

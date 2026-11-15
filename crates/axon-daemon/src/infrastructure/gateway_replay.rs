@@ -31,6 +31,14 @@ pub(super) const DEFAULT_GATEWAY_REPLAY_PAGE_SIZE: u32 = 100;
 const MAX_GATEWAY_REPLAY_BYTES: usize = 64 * 1024 * 1024;
 /// durable replay 页数兜底；字节预算之外的第二道防线，正常会话不可达。
 const MAX_GATEWAY_REPLAY_PAGES: usize = 100_000;
+/// 老记录「整会话保尾扫描」的页数上限。
+///
+/// 升级前写入的事件没有归属列，只能整条会话扫一遍；这条路径没有上界时，十万帧级
+/// 会话的首屏会退化成全量逐帧读盘，而桌面端历史帧页只有 60 秒预算，最终表现为
+/// 「打开历史超时」。按单页 100 帧计，2000 页覆盖 20 万帧，高于已知最长会话。
+const MAX_LEGACY_SCAN_PAGES: usize = 2_000;
+/// 老记录「整会话保尾扫描」的载荷字节上限，只挡病态长日志，不参与读到尾的判定。
+const MAX_LEGACY_SCAN_BYTES: usize = 32 * 1024 * 1024;
 
 /// 建立实时订阅并把 durable 日志从 `resume_cursor` 补齐到 `live_ceiling`。
 pub(super) fn subscribe_and_replay<S>(
@@ -342,14 +350,18 @@ pub struct InteractionHistoryPage {
 
 /// 读取一段历史帧：正文一次取回，实时尾才交给订阅流。
 ///
-/// 与订阅回放共用同一份「按 Interaction 过滤 + 终态补帧」语义，区别只有一个：
-/// 这里不建立实时订阅，因此历史不再逐帧穿过事件通道；客户端读完历史后，从
-/// [`InteractionHistoryPage::next_after`] 起订阅，事件流上只会出现真正的增量。
+/// `tail` 为真时，只读目标 Interaction 自身的尾窗：一次往返拿到可渲染的尾部
+/// 窗口，不再先探整条会话的尾序号再算窗口起点。老交互的帧序号远小于整条会话
+/// 的尾序号，先探再算会把它整个截空；定向读取从根上避免那个问题。
+///
+/// `tail` 为假时保持原有语义：从 `after_sequence` 起按整条会话扫描，按
+/// Interaction 过滤。老记录没有 `interaction_id` 时也走这条路径。
 pub fn interaction_history_page<S>(
     store: &S,
     interaction_id: &InteractionId,
     after_sequence: u64,
     limit: u32,
+    tail: bool,
 ) -> Result<InteractionHistoryPage, GatewayKernelError>
 where
     S: RuntimeStore,
@@ -360,21 +372,138 @@ where
         .ok_or_else(|| GatewayKernelError::NotFound("历史目标 Interaction 不存在".to_owned()))?;
     let session_id = crate::application::primary_session_id_for_interaction(&interaction)
         .map_err(GatewayKernelError::Ingress)?;
-    let tail_sequence = live_ceiling_cursor(store, &session_id, None)?.sequence;
+    let ceiling = live_ceiling_cursor(store, &session_id, None)?;
+    let tail_sequence = ceiling.sequence;
     let limit = usize::try_from(limit.max(1)).unwrap_or(usize::MAX);
+
+    if tail {
+        let window_limit = u32::try_from(limit).unwrap_or(u32::MAX);
+        let window = store
+            .interaction_tail_window(&session_id, interaction_id, window_limit)
+            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
+        if !window.is_empty() {
+            let mut missing_archives = 0_usize;
+            let mut first_missing_sequence = None;
+            let mut pending: VecDeque<GatewayEvent> = VecDeque::new();
+            for event in &window {
+                if event.event_type == SESSION_EVENT_MISSING_ARCHIVE_TYPE {
+                    // 外置正文缺失已被存储层降级成占位帧：网关不把它交给客户端，但必须
+                    // 留痕，否则归档根配错、权限丢失这类系统性故障只会表现为「历史莫名缺帧」。
+                    missing_archives += 1;
+                    first_missing_sequence.get_or_insert(event.sequence);
+                    continue;
+                }
+                pending.push_back(history_event(event));
+            }
+            if missing_archives > 0 {
+                axon_logger::warning(&format!(
+                    "[gateway-http] session={} interaction={} 尾窗跳过 {} 条缺失外置正文的事件（首条 sequence={}）",
+                    session_id.as_str(),
+                    interaction_id.as_str(),
+                    missing_archives,
+                    first_missing_sequence.unwrap_or(0)
+                ));
+            }
+            let next_after = window.last().map_or(tail_sequence, |event| event.sequence);
+            append_replayed_terminal_status(&mut pending, store, interaction_id)?;
+            return Ok(InteractionHistoryPage {
+                events: pending.into_iter().collect(),
+                next_after,
+                // 尾窗已经取到该交互自身的最后一帧：再往后翻只会扫到别的交互，
+                // 直接判定到底，客户端据 tailCursor 接实时尾即可。
+                has_more: false,
+                tail_sequence,
+                // 订阅游标必须是该交互最后一帧的真实 durable 游标，与扫描路径取同一
+                // 种游标：会话上界游标不带 Host generation，网关按代际过滤时会丢弃
+                // 它，客户端随即从序号 0 整条重放，造成重复帧、乱序与用量翻倍。
+                tail_cursor: window
+                    .last()
+                    .and_then(|event| serde_json::to_string(&event.cursor()).ok()),
+            });
+        }
+        // 老记录没有归属：先按尾序号截窗扫一遍；扫空说明这个交互的帧远在窗口
+        // 之前，再退回从头扫并保尾。宁可多读一遍，也不能让老交互展开成空白。
+        let tail_start = tail_sequence.saturating_sub(u64::try_from(limit).unwrap_or(u64::MAX));
+        let tailed = interaction_history_page_from_scan(
+            store,
+            &session_id,
+            interaction_id,
+            tail_start,
+            limit,
+            tail_sequence,
+            false,
+        )?;
+        // 只认真正读到的事件帧：补出来的终态帧会让空页看起来「有内容」，
+        // 从而把退回全量扫描这一步挡掉，老交互依旧展开成空白。
+        if tailed
+            .events
+            .iter()
+            .any(|event| event.event_type != INTERACTION_STATUS_EVENT)
+        {
+            return Ok(tailed);
+        }
+        return interaction_history_page_from_scan(
+            store,
+            &session_id,
+            interaction_id,
+            0,
+            limit,
+            tail_sequence,
+            true,
+        );
+    }
+
+    interaction_history_page_from_scan(
+        store,
+        &session_id,
+        interaction_id,
+        after_sequence,
+        limit,
+        tail_sequence,
+        false,
+    )
+}
+
+/// 整会话扫描路径：从 `after_sequence` 起扫到 `tail_sequence`，按 Interaction 过滤。
+///
+/// `keep_tail` 为真时扫满 `limit` 也不收工，改为滑动保留最后 `limit` 帧：老记录
+/// 没有归属列，只能整条会话扫一遍，而它们的帧往往远在窗口起点之前。
+fn interaction_history_page_from_scan<S>(
+    store: &S,
+    session_id: &axon_domain::DaemonSessionId,
+    interaction_id: &InteractionId,
+    after_sequence: u64,
+    limit: usize,
+    tail_sequence: u64,
+    keep_tail: bool,
+) -> Result<InteractionHistoryPage, GatewayKernelError>
+where
+    S: RuntimeStore,
+{
     let mut pending = VecDeque::new();
     let mut after = after_sequence.min(tail_sequence);
     let mut tail_cursor = None;
     let mut missing_archives = 0usize;
     let mut first_missing_seq = None;
-    while pending.len() < limit && after < tail_sequence {
+    let mut scanned_pages = 0usize;
+    let mut scanned_bytes = 0usize;
+    let mut budget_exhausted = false;
+    while (keep_tail || pending.len() < limit) && after < tail_sequence {
+        if scanned_pages >= MAX_LEGACY_SCAN_PAGES || scanned_bytes >= MAX_LEGACY_SCAN_BYTES {
+            // 触顶就停在已保住的尾窗上：继续扫下去只会把首屏拖过客户端的超时预算，
+            // 结果从「少一段历史」变成「整页打不开」。留告警供定位。
+            budget_exhausted = true;
+            break;
+        }
         let page = store
-            .replay_events(&session_id, after, DEFAULT_GATEWAY_REPLAY_PAGE_SIZE)
+            .replay_events(session_id, after, DEFAULT_GATEWAY_REPLAY_PAGE_SIZE)
             .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
         if page.is_empty() {
             break;
         }
+        scanned_pages += 1;
         for event in page {
+            scanned_bytes = scanned_bytes.saturating_add(event.payload_json.len());
             // 游标要记在**所有**扫过的事件上：客户端据它订阅实时尾，跳过不匹配的
             // 事件也必须从它们之后开始，否则会把别条交互的正文重复读一遍。
             tail_cursor = serde_json::to_string(&event.cursor()).ok();
@@ -396,7 +525,12 @@ where
                 cursor,
                 replay: true,
             });
-            if pending.len() >= limit {
+            if keep_tail {
+                // 保尾：从头扫的路径只有丢掉最早的那些帧，才能留下可渲染的尾窗。
+                if pending.len() > limit {
+                    pending.pop_front();
+                }
+            } else if pending.len() >= limit {
                 break;
             }
         }
@@ -410,7 +544,16 @@ where
             first_missing_seq.unwrap_or(0)
         ));
     }
-    let has_more = after < tail_sequence;
+    if budget_exhausted {
+        axon_logger::warning(&format!(
+            "[gateway-http] session={} interaction={} 保尾扫描触达预算上限（pages={} bytes={}），已返回部分尾窗",
+            session_id.as_str(),
+            interaction_id.as_str(),
+            scanned_pages,
+            scanned_bytes
+        ));
+    }
+    let has_more = !keep_tail && after < tail_sequence;
     if !has_more {
         // 补到尾才补终态：翻页中途收口会让界面提前把这一轮判成结束。
         append_replayed_terminal_status(&mut pending, store, interaction_id)?;
@@ -422,6 +565,16 @@ where
         tail_sequence,
         tail_cursor,
     })
+}
+
+/// 一条 durable 事件投影成历史页里的帧。
+fn history_event(event: &axon_session::SessionEventRecord) -> GatewayEvent {
+    GatewayEvent {
+        event_type: event.event_type.clone(),
+        payload_json: event.payload_json.clone(),
+        cursor: serde_json::to_string(&event.cursor()).ok(),
+        replay: true,
+    }
 }
 
 #[cfg(test)]

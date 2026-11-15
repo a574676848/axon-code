@@ -12,11 +12,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 
-use axon_daemon::infrastructure::gateway_replay::interaction_history_page;
 use axon_daemon::{GatewayHttpResponse, GatewayHttpRouteHandler};
-use axon_domain::{
-    AudienceContext, AudienceKind, DaemonSessionId, DisclosurePolicy, InteractionId,
-};
+use axon_domain::{AudienceContext, AudienceKind, DaemonSessionId, DisclosurePolicy};
 use axon_session::{
     AXON_RUNTIME_DATA_DIR, InteractionCursor, InteractionQueryStore, LaneQueryService,
     LaneSnapshot, RuntimeStore, RuntimeStoreError, SqliteRuntimeStore, WorkspaceRecord,
@@ -37,7 +34,7 @@ const MAX_LANE_INTERACTION_LIMIT: u32 = 1_000;
 /// 历史帧页的默认帧数：一次取够一屏正文，又不至于让单次响应过大。
 const DEFAULT_INTERACTION_EVENTS_LIMIT: u32 = 800;
 /// 单页帧数硬上限。
-const MAX_INTERACTION_EVENTS_LIMIT: u32 = 2_000;
+pub(super) const MAX_INTERACTION_EVENTS_LIMIT: u32 = 2_000;
 /// 单条发往子代理的用户消息字符上限；与主会话输入保持同一量级。
 const MAX_SUBAGENT_MESSAGE_CHARS: usize = 8_000;
 
@@ -63,6 +60,10 @@ mod workbench_http_subagents_jobs;
 #[path = "workbench_http_lane_readings.rs"]
 mod lane_readings;
 
+#[path = "workbench_http_interaction_events.rs"]
+mod interaction_events;
+
+use interaction_events::interaction_events_payload;
 use workbench_http_subagents_jobs::{
     JOB_OUTPUT_DEFAULT_MAX_BYTES, lane_job_output_payload, lane_jobs_payload,
     lane_subagents_payload, stop_lane_job,
@@ -134,44 +135,6 @@ pub fn lane_interactions_payload(
         "effectiveModel": lane_readings::effective_model_payload(axon_root, lane_id),
         // 最近一次记忆反思的提示文本：桌面端据此显示「上一次记忆动作」。
         "reflectionNotice": lane_readings::reflection_notice_payload(axon_root, lane_id),
-        "rawPayloadPersisted": false,
-    }))
-}
-
-/// 一条 Interaction 的历史帧页。
-///
-/// 正文一次取回，客户端读完历史后再从 `nextAfter` 起订阅实时尾：事件通道上因此
-/// 只出现真正的增量，不再承担整段回放。
-pub fn interaction_events_payload(
-    axon_root: &Path,
-    interaction_id: &str,
-    after: u64,
-    limit: u32,
-) -> Result<serde_json::Value, String> {
-    let limit = limit.clamp(1, MAX_INTERACTION_EVENTS_LIMIT);
-    let id = InteractionId::new(interaction_id)
-        .map_err(|error| format!("Interaction 标识非法：{error:?}"))?;
-    let page = interaction_history_page(&runtime_store(axon_root), &id, after, limit)
-        .map_err(|error| format!("读取历史帧失败：{error}"))?;
-    let events: Vec<serde_json::Value> = page
-        .events
-        .iter()
-        .map(|event| {
-            serde_json::json!({
-                "eventType": event.event_type,
-                "payloadJson": event.payload_json,
-                "cursor": event.cursor,
-                "replay": event.replay,
-            })
-        })
-        .collect();
-    Ok(serde_json::json!({
-        "interactionId": interaction_id,
-        "events": events,
-        "nextAfter": page.next_after,
-        "hasMore": page.has_more,
-        "tailSequence": page.tail_sequence,
-        "tailCursor": page.tail_cursor,
         "rawPayloadPersisted": false,
     }))
 }
@@ -600,17 +563,14 @@ impl GatewayHttpRouteHandler for WorkbenchHttpAdapter {
                 })
                 .or_else(|| {
                     interaction_events_target(subpath, query).map(
-                        |(interaction_id, after, limit)| match interaction_events_payload(
-                            &self.axon_root,
-                            &interaction_id,
-                            after,
-                            limit,
-                        ) {
-                            Ok(payload) => GatewayHttpResponse::json(200, &payload),
-                            Err(error) => GatewayHttpResponse::json(
-                                404,
-                                &serde_json::json!({ "error": error }),
-                            ),
+                        |(interaction_id, after, limit, tail)| {
+                            interaction_events_payload(
+                                &self.axon_root,
+                                &interaction_id,
+                                after,
+                                limit,
+                                tail,
+                            )
                         },
                     )
                 }),

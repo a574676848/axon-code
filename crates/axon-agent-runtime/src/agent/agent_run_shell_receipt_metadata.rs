@@ -1,12 +1,23 @@
 use crate::{
-    ProviderToolCall, ShellCommandExecutionReceipt, ShellCommandInteraction,
-    ShellCommandInteractionKind,
+    ProviderToolCall, ShellCommandExecutionReceipt, ShellCommandExecutionStatus,
+    ShellCommandInteraction, ShellCommandInteractionKind,
 };
 
 const SHELL_EXEC_KIND: &str = "exec";
 const TERMINAL_INTERACTION_WAIT: &str = "wait";
 const TERMINAL_INTERACTION_INPUT: &str = "input";
 const TERMINAL_INTERACTION_INTERRUPT: &str = "interrupt";
+const SHELL_RUNNING_NO_POLL_GUIDANCE: &str = "该非交互命令仍在后台继续运行；仅在确需写入 stdin、发送 Ctrl-C 或查询即时快照时再调用 write_stdin（纯等待请勿传正的 yield_time_ms 阻塞）；若预计耗时较长请改用 run_in_background: true。";
+
+pub(super) fn shell_running_summary_guidance(
+    receipt: &ShellCommandExecutionReceipt,
+) -> &'static str {
+    if !receipt.tty && receipt.status == ShellCommandExecutionStatus::Running {
+        " next_action=非交互命令仍在后台继续运行:仅在确需查看即时状态时才用 write_stdin(不得传正 yield_time_ms 阻塞等待);若预期耗时较长请改用 run_in_background: true"
+    } else {
+        ""
+    }
+}
 
 pub(super) fn shell_receipt_metadata(
     tool_call: &ProviderToolCall,
@@ -14,7 +25,7 @@ pub(super) fn shell_receipt_metadata(
     status: &str,
     summary: &str,
 ) -> serde_json::Value {
-    serde_json::json!({
+    let mut metadata = serde_json::json!({
         "kind": SHELL_EXEC_KIND,
         "toolName": short_tool_name(tool_call.dispatch_name()),
         "status": status,
@@ -47,7 +58,13 @@ pub(super) fn shell_receipt_metadata(
         "remoteTriggerAllowed": receipt.remote_trigger_allowed,
         "terminalInteraction": receipt.interaction.as_ref().map(terminal_interaction_metadata),
         "reasons": receipt.reasons,
-    })
+    });
+    if !receipt.tty && receipt.status == ShellCommandExecutionStatus::Running {
+        metadata["nextActions"] = serde_json::json!({
+            "guidance": [SHELL_RUNNING_NO_POLL_GUIDANCE],
+        });
+    }
+    metadata
 }
 
 fn terminal_interaction_metadata(interaction: &ShellCommandInteraction) -> serde_json::Value {

@@ -304,6 +304,15 @@ pub trait RuntimeStore:
         after_sequence: u64,
         limit: u32,
     ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError>;
+    /// 读取某条 Interaction 自身的尾窗帧，按序号升序。
+    ///
+    /// 首屏一次拿到可渲染的尾部窗口，不必先探整条会话的尾序号。
+    fn interaction_tail_window(
+        &self,
+        session_id: &DaemonSessionId,
+        interaction_id: &InteractionId,
+        limit: u32,
+    ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError>;
     /// 创建或更新持久调度计划。
     fn upsert_schedule(&self, schedule: &RuntimeScheduleRecord) -> Result<(), RuntimeStoreError>;
     /// 读取到期 schedule。

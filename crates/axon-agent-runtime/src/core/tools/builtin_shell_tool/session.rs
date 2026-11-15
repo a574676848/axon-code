@@ -19,9 +19,8 @@ use super::{
 };
 use crate::runtime_limits::{
     MAX_BACKGROUND_TERMINAL_WAIT_MS, MAX_SHELL_INTERACTION_YIELD_MS,
-    MIN_BACKGROUND_TERMINAL_WAIT_MS, SHELL_COMMAND_CANCEL_POLL_BACKOFF_FACTOR,
-    SHELL_COMMAND_CANCEL_POLL_INTERVAL_MS, SHELL_COMMAND_CANCEL_POLL_MAX_INTERVAL_MS,
-    SHELL_COMMAND_OUTPUT_DRAIN_TIMEOUT_MS,
+    SHELL_COMMAND_CANCEL_POLL_BACKOFF_FACTOR, SHELL_COMMAND_CANCEL_POLL_INTERVAL_MS,
+    SHELL_COMMAND_CANCEL_POLL_MAX_INTERVAL_MS, SHELL_COMMAND_OUTPUT_DRAIN_TIMEOUT_MS,
 };
 
 /// 空闲回收窗口：距 spawn 或最后一次 `write_stdin` 触碰满该时长，即判定模型已不再跟进，
@@ -29,8 +28,8 @@ use crate::runtime_limits::{
 ///
 /// 语义是**无轮询触碰**而不是无输出：模型每次 `write_stdin`（含纯等待）都会刷新
 /// `last_activity` 从而续命，因此本窗口既是「误触交互式命令」的兜底上限，
-/// 也是「模型放任不管」的回收判据。选 10 分钟：足够覆盖一次正常的轮询间隔
-/// （纯等待窗口上限 5 分钟），又不会把无人看管的挂起进程留到半小时。
+/// 也是「模型放任不管」的回收判据。选 10 分钟：足够覆盖正常的长命令间隔
+/// （单次等待上限 10 秒），又不会把无人看管的挂起进程留到半小时。
 pub(super) const SHELL_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const SHELL_REASON_PERSISTENT_SESSION: &str = "shell_command:persistent_session";
 const SHELL_REASON_PTY_USED: &str = "shell_command:pty_used";
@@ -275,11 +274,7 @@ pub(super) fn effective_yield_duration(requested_ms: u64, kind: SessionWaitKind)
         SessionWaitKind::Initial | SessionWaitKind::Interaction => {
             requested_ms.min(MAX_SHELL_INTERACTION_YIELD_MS)
         }
-        SessionWaitKind::Background if requested_ms == 0 => 0,
-        SessionWaitKind::Background => requested_ms.clamp(
-            MIN_BACKGROUND_TERMINAL_WAIT_MS,
-            MAX_BACKGROUND_TERMINAL_WAIT_MS,
-        ),
+        SessionWaitKind::Background => requested_ms.min(MAX_BACKGROUND_TERMINAL_WAIT_MS),
     };
     Duration::from_millis(yield_ms)
 }
@@ -344,14 +339,14 @@ mod wait_duration_tests {
     use super::*;
 
     #[test]
-    fn background_wait_clamps_requests_to_terminal_window() {
+    fn background_wait_caps_requests_to_terminal_window() {
         assert_eq!(
             effective_yield_duration(0, SessionWaitKind::Background),
             Duration::ZERO
         );
         assert_eq!(
             effective_yield_duration(1, SessionWaitKind::Background),
-            Duration::from_millis(MIN_BACKGROUND_TERMINAL_WAIT_MS)
+            Duration::from_millis(1)
         );
         assert_eq!(
             effective_yield_duration(u64::MAX, SessionWaitKind::Background),

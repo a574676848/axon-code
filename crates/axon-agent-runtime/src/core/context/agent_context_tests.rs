@@ -208,7 +208,12 @@ fn agent_model_payload_includes_context_snapshot_and_agent_pane() {
     assert!(
         delegation_message
             .content
-            .contains("最终答复前必须用 builtin.job_output 收集仍未终态的任务")
+            .contains("禁止用 builtin.job_output 阻塞空等")
+    );
+    assert!(
+        delegation_message
+            .content
+            .contains("子代理跑完会自动通知你")
     );
     // 子代理行为指引不得再提被移除的三个工具（名称按片段拼接以配合裁剪扫描）。
     for removed in [

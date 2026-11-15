@@ -263,6 +263,7 @@ fn append_session_event(
         .map_err(storage)?
         .checked_add(1)
         .ok_or_else(|| RuntimeStoreError::Storage("事件序号溢出".to_owned()))?;
+    // 会话级事件，不归属任何 Interaction，故 interaction_id 留空。
     transaction
         .execute(
             "INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,\

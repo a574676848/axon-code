@@ -38,7 +38,8 @@ pub use infrastructure::{
 pub use infrastructure::{
     SESSION_EVENT_ARCHIVE_SUBDIR, SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES,
     SESSION_EVENT_MISSING_ARCHIVE_TYPE, SqliteRuntimeStore, WalCheckpoint,
-    is_exclusive_payload_reference, read_event_payload,
+    is_exclusive_payload_reference, payload_storage_path, read_event_payload,
+    reclaim_shards_before,
 };
 pub use ports::ExecutionSettlement;
 pub use ports::ThreadActivationSnapshot;

@@ -90,7 +90,7 @@ impl ConversationStream {
     /// 按目标建立一条订阅；同一目标已在订阅时直接忽略。
     ///
     /// `watch` 与 [`unwatch`](Self::unwatch) 都由桌面命令串行化调用（编排器是同一个
-    /// 事件循环），因此这里「先占位、再换真实任务句柄」的两步不需要额外加锁语义。
+    /// 事件循环），因此「查重、派任务、入库」三步可以在一把锁里做完。
     pub fn watch(&self, target: SubscribeTarget) {
         let subscribe_id = target.subscribe_id();
         // 任务一律落在订阅器自有的运行时上：命令线程上没有环境运行时，
@@ -102,16 +102,15 @@ impl ConversationStream {
                 return;
             }
         };
-        {
-            let mut tasks = self
-                .tasks
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if tasks.contains_key(&subscribe_id) {
-                return;
-            }
-            // 先占位：并发调用时第二次会在这里被挡下。真实的 abort 句柄在下面替换进来。
-            tasks.insert(subscribe_id.clone(), runtime.spawn(async {}));
+        // 登记与换句柄整段持锁：任务收尾的自摘抢的是同一把锁，因此它必然排在本次入库
+        // 之后，摘掉的就是自己那一格。网关不可达时任务几微秒就收尾，若先放锁再入库，
+        // 那一格会留下一个已经结束的句柄，后续重连被开头的幂等分支永久挡死。
+        let mut tasks = self
+            .tasks()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if tasks.contains_key(&subscribe_id) {
+            return;
         }
         let publisher = shared();
         let tag = subscribe_id.clone();
@@ -119,11 +118,12 @@ impl ConversationStream {
             if let Err(message) = run_subscription(publisher, target).await {
                 publisher.publish_failure(&tag, &message, true);
             }
+            // 任务结束即自摘：登记只代表「一条连接正在为它服务」。缺这一步，断流后这
+            // 一格会一直占着标识，下一次 `watch` 被开头的幂等分支挡掉，界面点「重连」
+            // 永远建不回订阅。
+            publisher.retire(&tag);
         });
-        self.tasks()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(subscribe_id, handle);
+        tasks.insert(subscribe_id, handle);
     }
 
     /// 关闭指定目标的订阅；目标未被订阅时不做任何事。
@@ -157,6 +157,17 @@ impl ConversationStream {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .len()
+    }
+
+    /// 任务自然结束：摘掉自己那一格登记，不 abort（任务已经跑完了）。
+    ///
+    /// 只按本任务的标识摘，收尾不得连带摘掉同一连接上并存的别的路。同一个标识的重新
+    /// 登记必然发生在本格入库之后（见 `watch` 的持锁段），所以这里摘到的就是自己。
+    fn retire(&self, subscribe_id: &str) {
+        self.tasks()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(subscribe_id);
     }
 
     /// 摘除并取消一条订阅。
@@ -633,47 +644,45 @@ mod tests {
     }
 
     #[test]
-    fn watch_and_unwatch_track_one_task_per_target_without_an_ambient_runtime() {
-        // 这里是普通测试线程，没有环境运行时。`watch` 必须自己把任务落到订阅器
-        // 自有的运行时上：早先版本用 `tokio::task::spawn` 占位，一订阅就 panic。
-        //
-        // 目标故意指向不可达的网关：订阅任务会快速失败并把结论作为失败帧发出来，
-        // 因此断言只看「登记与摘除」这一层，不等网络结果。
+    fn watch_spawns_its_task_without_an_ambient_runtime() {
+        // 普通测试线程没有环境运行时：`watch` 必须把任务落到订阅器自有的运行时上，
+        // 否则一订阅就 panic（早先版本就是这样崩的）。任务收尾会自摘，故只断言上界。
         let stream = ConversationStream::new();
         let lane = SubscribeTarget::Interaction {
             workspace_id: "workspace-a".to_owned(),
             interaction_id: "interaction-1".to_owned(),
             resume_cursor: None,
         };
-        let session = SubscribeTarget::Session {
-            workspace_id: "workspace-a".to_owned(),
-            session_id: "parent--subagent--root".to_owned(),
-            resume_cursor: None,
-        };
-
         stream.watch(lane.clone());
-        assert_eq!(stream.active_subscriptions(), 1, "第一条订阅必须登记在册");
-        stream.watch(lane.clone());
-        assert_eq!(
-            stream.active_subscriptions(),
-            1,
-            "同一目标重复订阅必须被幂等挡下，不得堆出第二条任务"
-        );
-
-        stream.watch(session.clone());
-        assert_eq!(
-            stream.active_subscriptions(),
-            2,
-            "另一个目标必须能并存：单连接多路订阅正是这个模型"
-        );
-
+        assert!(stream.active_subscriptions() <= 1, "一次订阅最多登记一格");
         stream.unwatch(&lane);
-        assert_eq!(
-            stream.active_subscriptions(),
-            1,
-            "取消一路不得连带摘除另一路"
-        );
-        stream.unsubscribe(&session.subscribe_id());
-        assert_eq!(stream.active_subscriptions(), 0, "两路都取消后必须清空");
+        assert_eq!(stream.active_subscriptions(), 0, "取消后必须清空");
+    }
+
+    #[test]
+    fn watch_is_idempotent_and_retire_only_releases_its_own_slot() {
+        // 已在册时重复订阅必须幂等挡下；自摘只摘自己那一格，不得连带摘掉并存的别路。
+        let stream = ConversationStream::new();
+        let runtime = stream.runtime().expect("订阅器运行时");
+        let registered = runtime.spawn(async {});
+        let registered_id = registered.id();
+        let mut tasks = stream.tasks().lock().expect("登记表");
+        tasks.insert("interaction:a".to_owned(), registered);
+        tasks.insert("session:b".to_owned(), runtime.spawn(async {}));
+        drop(tasks);
+        stream.watch(SubscribeTarget::Interaction {
+            workspace_id: "workspace-a".to_owned(),
+            interaction_id: "a".to_owned(),
+            resume_cursor: None,
+        });
+        let kept = {
+            let tasks = stream.tasks().lock().expect("登记表");
+            tasks.get("interaction:a").map(|task| task.id())
+        };
+        assert_eq!(kept, Some(registered_id), "重复订阅不得换掉在册句柄");
+        stream.retire("interaction:a");
+        assert_eq!(stream.active_subscriptions(), 1, "自摘不得连带摘掉别路");
+        stream.unsubscribe("session:b");
+        assert_eq!(stream.active_subscriptions(), 0, "全部清掉后必须清空");
     }
 }

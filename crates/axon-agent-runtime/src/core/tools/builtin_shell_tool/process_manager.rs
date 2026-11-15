@@ -171,7 +171,7 @@ impl ShellProcessManager {
         let _interaction_guard = interaction_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let interaction_applied = {
+        let (interaction_applied, wait_ms) = {
             let mut session = session
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -182,16 +182,23 @@ impl ShellProcessManager {
                 ));
             }
             session.poll(Instant::now())?;
+            // 非 tty 会话同样按 `yield_time_ms` 阻塞等：这里等的是输出 Condvar 与进程
+            // 终态，不是 `sleep` 占位空等。此前把非 tty 的正等待判成非法输入，而前台
+            // 长命令超过默认 10 秒就会返回 Running，模型既不能阻塞、也收不到终态通知，
+            // 只剩被判为非法的轮询路径，形成「有禁令、无出口」的断链。
+            let wait_ms = input
+                .yield_time_ms
+                .unwrap_or(crate::DEFAULT_WRITE_STDIN_YIELD_TIME_MS);
             // 终态会话不写入任何输入（工具描述已就此承诺），故此处如实返回「未施加」。
             let applied = session.terminal.is_none();
             if applied {
                 apply_terminal_interaction(&mut session, &input)?;
             }
-            applied
+            (applied, wait_ms)
         };
         let mut receipt = self.wait_for_session(
             &input.session_id,
-            input.yield_time_ms,
+            wait_ms,
             input.max_output_tokens,
             output_observer,
             wait_kind,

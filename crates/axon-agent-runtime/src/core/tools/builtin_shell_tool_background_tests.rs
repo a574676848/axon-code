@@ -117,7 +117,7 @@ fn job_id_is_never_accepted_by_the_session_channel() {
             session_id: job_id.to_string(),
             chars: None,
             ctrl_c: false,
-            yield_time_ms: 0,
+            yield_time_ms: Some(0),
             max_output_tokens: None,
             remote_requested: false,
         })

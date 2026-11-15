@@ -27,25 +27,26 @@ pub(super) fn tool_summaries(
         return summaries;
     }
     let store = runtime_store(axon_root);
-    let Ok(connection) = rusqlite::Connection::open(store.path()) else {
-        return summaries;
-    };
-    let placeholders = vec!["?"; interaction_ids.len()].join(",");
-    let sql = format!(
-        "SELECT interaction_id, tool_summary FROM jarvis_interactions \
-         WHERE interaction_id IN ({placeholders})"
-    );
-    let Ok(mut statement) = connection.prepare(&sql) else {
-        return summaries;
-    };
-    let Ok(rows) = statement.query_map(rusqlite::params_from_iter(interaction_ids.iter()), |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    let Ok(map) = store.with_read_connection(|connection| {
+        let placeholders = vec!["?"; interaction_ids.len()].join(",");
+        let sql = format!(
+            "SELECT interaction_id, tool_summary FROM jarvis_interactions \
+             WHERE interaction_id IN ({placeholders})"
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement
+            .query_map(rusqlite::params_from_iter(interaction_ids.iter()), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+        let mut map = std::collections::HashMap::new();
+        for (interaction_id, tool_summary) in rows.flatten() {
+            map.insert(interaction_id, tool_summary);
+        }
+        Ok(map)
     }) else {
         return summaries;
     };
-    for (interaction_id, tool_summary) in rows.flatten() {
-        summaries.insert(interaction_id, tool_summary);
-    }
+    summaries = map;
     summaries
 }
 
@@ -57,14 +58,15 @@ pub(super) fn tool_summaries(
 /// 在基线与增量里各算一次。
 pub(super) fn settled_elapsed_ms(axon_root: &Path, lane_id: &str) -> Option<u64> {
     let store = runtime_store(axon_root);
-    let connection = rusqlite::Connection::open(store.path()).ok()?;
-    connection
-        .query_row(
-            "SELECT COALESCE(SUM(updated_at_ms - received_at_ms), 0) FROM jarvis_interactions \
-             WHERE lane_id = ?1 AND status NOT IN ('received', 'processing')",
-            [lane_id],
-            |row| row.get::<_, i64>(0),
-        )
+    store
+        .with_read_connection(|connection| {
+            connection.query_row(
+                "SELECT COALESCE(SUM(updated_at_ms - received_at_ms), 0) FROM jarvis_interactions \
+                 WHERE lane_id = ?1 AND status NOT IN ('received', 'processing')",
+                [lane_id],
+                |row| row.get::<_, i64>(0),
+            )
+        })
         .ok()
         .and_then(|total| u64::try_from(total).ok())
 }
@@ -135,12 +137,13 @@ pub(super) fn reflection_notice_payload(axon_root: &Path, lane_id: &str) -> serd
 /// 成 run session，再按它汇总；解析不到时返回 None。
 fn lane_run_session_id(axon_root: &Path, lane_id: &str) -> Option<String> {
     let store = runtime_store(axon_root);
-    let connection = rusqlite::Connection::open(store.path()).ok()?;
-    connection
-        .query_row(
-            "SELECT run_session_id FROM session_runtimes WHERE session_id = ?1",
-            [lane_id],
-            |row| row.get::<_, String>(0),
-        )
+    store
+        .with_read_connection(|connection| {
+            connection.query_row(
+                "SELECT run_session_id FROM session_runtimes WHERE session_id = ?1",
+                [lane_id],
+                |row| row.get::<_, String>(0),
+            )
+        })
         .ok()
 }

@@ -19,13 +19,13 @@ use super::runtime_cleanup_families::{
     delete_expired_session_events, delete_expired_upgrade_admissions,
     delete_expired_user_questions, delete_session_families_by_ids,
     delete_settled_completion_deliveries, delete_settled_completion_notifications,
-    delete_terminal_goals, delete_terminal_interactions,
+    delete_terminal_goals, delete_terminal_interactions, repair_dangling_payload_refs,
 };
 use super::runtime_event_archive;
 
 const RUNTIME_DATABASE_FILE: &str = "runtime.sqlite3";
 /// 单批删除的行数上限：直接决定单次 IMMEDIATE 事务的写锁持有时间。
-const RUNTIME_CLEANUP_BATCH_LIMIT: usize = 256;
+pub(super) const RUNTIME_CLEANUP_BATCH_LIMIT: usize = 256;
 /// 单轮清理的墙上时钟预算：超出后停止本轮，剩余过期数据由下轮 Cron 继续。
 ///
 /// 实测每批 256 行在一个 1.5 GiB 级库上约需 5 ms 到 15 ms，20 秒预算只够推进
@@ -182,11 +182,23 @@ fn run_runtime_cleanup_with_budget(
         cutoff_ms,
         deadline,
     )?);
-    counts.merge(delete_expired_session_events(
-        &mut connection,
-        cutoff_ms,
-        deadline,
-    )?);
+    // 事件删除必须跟随归档：归档耗尽预算时，这一族不得绕过归档直接删行，
+    // 否则外置正文既没进 .jsonl.zst，也没被回收，留成永久孤儿。
+    if Instant::now() < deadline {
+        counts.merge(delete_expired_session_events(
+            &mut connection,
+            &archive_root,
+            cutoff_ms,
+            deadline,
+        )?);
+    }
+    // 读取侧已经把缺失正文降级为占位帧；这里把悬空引用收口成内联占位，
+    // 下一次读取不再为同一行重复做一次失败的文件 I/O。
+    let repaired =
+        repair_dangling_payload_refs(&mut connection, &archive_root, cutoff_ms, deadline)?;
+    if repaired > 0 {
+        axon_logger::warning(&format!("运行态事件正文悬空引用已修复：{repaired} 条"));
+    }
     counts.merge(delete_terminal_goals(&mut connection, cutoff_ms, deadline)?);
     counts.merge(delete_terminal_interactions(
         &mut connection,
@@ -395,6 +407,7 @@ pub(super) fn cleanup_runtime_session_families(
     }
     let mut connection = open_database(&path)?;
     let deadline = Instant::now() + RUNTIME_CLEANUP_TIME_BUDGET;
+    let archive_root = runtime_event_archive::event_archive_root(&path);
     let mut counts = RuntimeCleanupCounts::default();
     for ids in session_ids.chunks(RUNTIME_CLEANUP_BATCH_LIMIT) {
         if Instant::now() >= deadline {
@@ -402,7 +415,11 @@ pub(super) fn cleanup_runtime_session_families(
             // 直接报错会让整条清理链在 Daemon 侧记为失败。
             break;
         }
-        counts.merge(delete_session_families_by_ids(&mut connection, ids)?);
+        counts.merge(delete_session_families_by_ids(
+            &mut connection,
+            ids,
+            &archive_root,
+        )?);
     }
     if !counts.is_empty() {
         reclaim_database_space(&connection)?;
@@ -658,3 +675,7 @@ mod retained_tests;
 #[cfg(test)]
 #[path = "runtime_cleanup_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "runtime_cleanup_payload_tests.rs"]
+mod payload_tests;

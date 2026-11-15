@@ -25,6 +25,15 @@ pub const COMPLETION_STEER_SOURCE_PREFIX: &str = "completion-steer-";
 /// 进行的回合。
 pub const CRON_WAKE_SOURCE_PREFIX: &str = "cron-wake:";
 
+/// 后台 Shell 作业跨轮唤醒回合的来源 ID 前缀。
+///
+/// 临时后台 Shell 作业在原回合结束后完成时，系统向原车道提交该前缀的唤醒回合，
+/// 必须独立成一轮，绝不能并入正在运行的用户输入。
+pub const SHELL_JOB_WAKE_SOURCE_PREFIX: &str = "shell-job-wake:";
+
+/// 用户提问迟到作答的来源 ID 前缀。
+pub const QUESTION_ANSWER_SOURCE_PREFIX: &str = "question-answer-source:";
+
 /// Cron 投递项的稳定 ID 前缀。
 ///
 /// 只用于任务投递项自身的身份派生，不参与 Interaction 来源判定：投递项与唤醒回合

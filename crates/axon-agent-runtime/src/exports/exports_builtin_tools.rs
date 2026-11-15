@@ -81,7 +81,7 @@ pub use crate::builtin_shell_tool::{
     SHELL_COMMAND_TOOL_MAX_OUTPUT_TOKENS_FIELD, SHELL_COMMAND_TOOL_NAME,
     SHELL_COMMAND_TOOL_RUN_IN_BACKGROUND_FIELD, SHELL_COMMAND_TOOL_SCHEMA_VERSION,
     SHELL_COMMAND_TOOL_TIMEOUT_FIELD, SHELL_COMMAND_TOOL_TTY_FIELD,
-    SHELL_COMMAND_TOOL_WORKDIR_FIELD, SHELL_COMMAND_TOOL_YIELD_TIME_FIELD,
+    SHELL_COMMAND_TOOL_WORKDIR_FIELD, SHELL_COMMAND_TOOL_YIELD_TIME_FIELD, SHELL_MAX_YIELD_TIME_MS,
     ShellCommandBoundedStream, ShellCommandCancelToken, ShellCommandExecutionInput,
     ShellCommandExecutionReceipt, ShellCommandExecutionStatus, ShellCommandInteraction,
     ShellCommandInteractionKind, ShellCommandOutputChunk, ShellCommandOutputStream,

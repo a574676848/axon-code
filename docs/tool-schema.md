@@ -246,8 +246,8 @@ Skill 可以在 frontmatter 中声明禁止模型调用；此类 Skill 由该工
 | 终态（超过 5 分钟，已回收） | 返回 | ❌ 提示「已结束并超出保留窗口，请重新执行命令」 | ❌ |
 
   会话被回收后仍保留 30 分钟墓碑记录，因此凭已回收的 ID 调用会得到**可区分**的提示，而不是含糊的「不存在」——后者只用于从未产生过的 ID。
-- `builtin.write_stdin` 在 `Running` 会话上：中断时设置 `ctrl_c: true`；写入字符时使用 `chars`；仅等待新输出时只传 `session_id`，可用 `yield_time_ms` 延长本次纯等待窗口。纯等待由新输出、进程终态或等待窗口结束唤醒；等待窗口结束不会终止进程。内部无输出检查采用有上限的指数退避，最大检查间隔为 5 秒，收到输出后恢复初始检查间隔，不影响有输出时的实时回执。
-- 前台会话有**空闲回收窗口**：距进程创建或最后一次 `write_stdin` 触碰满 10 分钟即判定模型不再跟进，进程被终止（退出码 `130`、`cancelled=true`），并向本轮注入一次 `shell-session-reclaimed` 运行时通知 —— 载荷含 `session_id`、命令、归档路径与后续动作，因此模型不必轮询也能知道它已被回收。轮询（含纯等待）会刷新该窗口，持续跟进的长命令不受影响；预计超过窗口的命令请改用 `run_in_background: true`，或显式提高 `timeout_ms` 并保持轮询。回合结束时该 run 的全部会话由 `terminate_sessions_for_owner` 统一清理，因此该窗口只在回合内生效。
+- `builtin.shell_command` 与 `builtin.write_stdin` 的 `yield_time_ms` 上界同为 **10000 毫秒（10 秒）**（schema 的 `minimum: 0` / `maximum: 10000` 与运行时参数校验同源，超限在参数层直接拒绝并点名该字段）。`shell_command` 的 `run_in_background` 缺省 `false`，但预计运行超过数秒或主线无需立即依赖结果时应主动设为 `true`。此外，当前会话存在尚未结束的后台作业时，前台 `shell_command` 会做上下文感知的纯休眠占位检测（如单独的 `sleep`、`Start-Sleep`、`timeout /t`、`ping ... >nul` 等无实质动作的休眠脚本），命中即在参数边界拒绝；包含后续检查或控制流的正常脚本不受影响。
+- `builtin.write_stdin` 区分 TTY 与非 TTY 会话：在 `Running` 会话上中断时设置 `ctrl_c: true`、写入字符时使用 `chars`（这两类场景以及 `tty: true` 的交互会话允许传入不超过 10000 毫秒的 `yield_time_ms`，缺省 `250` 毫秒）；对仍在运行的非 TTY 会话只传 `session_id`（含空 `chars`）做纯等待时，**不允许传正的 `yield_time_ms` 阻塞等待**（在运行时以 `invalid_arguments` 拒绝），传 `0` 或省略则立即返回当前增量快照。终态会话忽略 `chars`/`ctrl_c` 并幂等返回终态回执。无意义连续空等调用同样计入无进展只读循环守卫。
 - MCP 列表工具使用分页 `cursor` 时，必须同时传递同一 `server`。
 
 ## 记忆窗口工具（notes / history）
@@ -381,7 +381,7 @@ Axon 会为每次执行注入模型友好的环境变量：非 TTY 场景注入 
 - `yield_time_ms` 的上界是 **10000 毫秒（10 秒）**：schema 的 `maximum`、参数解析与等待时长收敛三处同源，超限在参数层直接拒绝并点名该字段，不做静默截断。刚启动、仍在 `running` 且已运行不足 10 秒的作业，带正 `yield_time_ms` 的读取会被运行时守卫驳回（`yield_time_ms` 为 0 或省略的即时快照仍可用）：后台作业的输出由桌面端与 TUI 实时呈现，完成由 durable 事件回流，前台阻塞轮询不属于这条通道。
 - 输出是**增量**的：每次读取消费并返回自上次读取以来新增的片段，单次回执不是全部输出。预览受 `max_output_tokens` 约束，超出时保留头尾并标记截断，完整内容按 `artifactPath` 读取；`fullOutputAvailable` 为假时归档本身已被容量上限截断。
 - 作业在终态后按保留窗口回收（终态保留 5 分钟，墓碑保留 30 分钟）；超窗读取提示「已结束并超出保留窗口，请重新执行命令」，与从未产生过的 ID 可区分。
-- 作业进入终态时产生**统一完成通知**，经运行时注入回流到下一轮 provider 请求，模型无需轮询；通知载荷自证归属（生产者、作业引用、终态、退出原因、有界摘要或归档引用、待读 mailbox 引用）。daemon 侧 Goal Execution 完成沿用既有的持久投递收件箱。
+- 作业进入终态时产生**统一完成通知**：若原回合仍在运行，则通过原回合的 steer 通道实时注入；若原回合已结束（`Inactive`）且非父回合取消导致的 Shell 作业终态，则由 `ShellJobWakeBridge` 包装为 `shell-job-wake:` Interaction 保留原 `model` 与 `reasoning_effort` 投递回原会话车道并唤醒下一轮响应，无需模型轮询。通知载荷自证归属（生产者、作业引用、终态、退出原因、有界摘要或归档引用、待读 mailbox 引用）。daemon 侧 Goal Execution 完成沿用既有的持久投递收件箱。
 - `builtin.job_kill` 终止作业及其进程树；对子代理则执行上述完整中断语义。作业已进入终态时返回提示而非重复终止。终止后仍可用 `builtin.job_output` 读取已产生的输出与终态。
 
 并发收益是这一层独立出来的直接原因：`builtin.write_stdin` 声明为 `Exclusive`，需要独占执行窗口；作业工具是 `ParallelSafe`，因此含作业的批次仍可与其他只读工具并行。

@@ -53,9 +53,11 @@ pub(crate) fn parse(value: &Value) -> Result<Option<FeishuTransportContext>, Str
     let chat_id = optional_string(value, FIELD_CHAT_ID)
         .or_else(|| optional_string(value, FIELD_DESTINATION))
         .ok_or_else(|| "Feishu transportContext 缺少 chatId 或 destination".to_owned())?;
-    let source_message_id =
-        optional_string(value, FIELD_SOURCE_MESSAGE_ID).map(|id| strip_destination_prefix(&id));
+    let source_message_id = optional_string(value, FIELD_SOURCE_MESSAGE_ID)
+        .filter(|id| !is_synthetic_source_message_id(id))
+        .map(|id| strip_destination_prefix(&id));
     let reply_to_message_id = optional_string(value, FIELD_REPLY_TO_MESSAGE_ID)
+        .filter(|id| !is_synthetic_source_message_id(id))
         .map(|id| strip_destination_prefix(&id))
         .or_else(|| source_message_id.clone());
     Ok(Some(FeishuTransportContext {
@@ -64,6 +66,14 @@ pub(crate) fn parse(value: &Value) -> Result<Option<FeishuTransportContext>, Str
         reply_to_message_id,
         delivery_notification_id: optional_string(value, FIELD_DELIVERY_NOTIFICATION_ID),
     }))
+}
+
+/// 系统合成唤醒来源 ID 不是 Feishu 真实消息 ID，不得用于清 Typing 表情或回复帖子。
+fn is_synthetic_source_message_id(message_id: &str) -> bool {
+    message_id.starts_with(axon_domain::SHELL_JOB_WAKE_SOURCE_PREFIX)
+        || message_id.starts_with(axon_domain::CRON_WAKE_SOURCE_PREFIX)
+        || message_id.starts_with(axon_domain::COMPLETION_STEER_SOURCE_PREFIX)
+        || message_id.starts_with(axon_domain::QUESTION_ANSWER_SOURCE_PREFIX)
 }
 
 /// 入站消息 ID 形如 `destination:message`；回帖与表情清理只接受真实消息 ID。
@@ -151,5 +161,28 @@ mod tests {
 
         let error = parse(&context).expect_err("缺少对话身份必须报错");
         assert!(error.contains("chatId"));
+    }
+
+    #[test]
+    fn synthetic_wake_source_message_ids_are_not_treated_as_feishu_message_ids() {
+        for source_id in [
+            "shell-job-wake:job-1",
+            "cron-wake:cron-1:100",
+            "completion-steer-exec-1",
+            "question-answer-source:q-1",
+        ] {
+            let context = json!({
+                "channel": "feishu",
+                "destination": "oc_chat_target",
+                "sourceMessageId": source_id
+            });
+
+            let parsed = parse(&context)
+                .expect("解析系统唤醒上下文")
+                .expect("Feishu 上下文");
+            assert_eq!(parsed.chat_id, "oc_chat_target");
+            assert_eq!(parsed.source_message_id, None);
+            assert_eq!(parsed.reply_to_message_id, None);
+        }
     }
 }

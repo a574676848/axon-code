@@ -85,8 +85,9 @@ pub fn conversation_history_events(
     interaction_id: String,
     after: Option<u64>,
     limit: Option<u32>,
+    tail: Option<bool>,
 ) -> Result<history::InteractionHistoryPage, String> {
-    history::interaction_events(&interaction_id, after, limit)
+    history::interaction_events(&interaction_id, after, limit, tail.unwrap_or(false))
 }
 
 /// Tauri IPC 命令：按网关权威记录对账某条车道下的问答状态。

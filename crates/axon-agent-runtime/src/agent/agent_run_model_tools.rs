@@ -20,7 +20,8 @@ use crate::GlobToolExecutionStatus;
 use crate::builtin_shell_tool::APPROX_CHARS_PER_TOKEN;
 use crate::job_runtime::{JobId, JobOutput, JobStatus};
 use agent_run_shell_receipt_metadata::{
-    output_preview, shell_receipt_metadata, short_tool_name, stream_metadata,
+    output_preview, shell_receipt_metadata, shell_running_summary_guidance, short_tool_name,
+    stream_metadata,
 };
 
 /// 工具参数无效时的稳定回执错误类型。
@@ -162,7 +163,7 @@ pub fn agent_run_shell_tool_receipt(
 #[must_use]
 pub fn agent_run_shell_tool_receipt_summary(receipt: &ShellCommandExecutionReceipt) -> String {
     format!(
-        "shell command={} exit_code={} timed_out={} output_handler={} output_tokens={}/{} output_savings_pct={} stdout_truncated={} stdout_chars={}/{} stderr_truncated={} stderr_chars={}/{} full_output_available={} full_output_truncated={} full_output_failed={} stdout={} stderr={}",
+        "shell command={} exit_code={} timed_out={} output_handler={} output_tokens={}/{} output_savings_pct={} stdout_truncated={} stdout_chars={}/{} stderr_truncated={} stderr_chars={}/{} full_output_available={} full_output_truncated={} full_output_failed={}{} stdout={} stderr={}",
         receipt.command.join(" "),
         receipt
             .exit_code
@@ -183,6 +184,7 @@ pub fn agent_run_shell_tool_receipt_summary(receipt: &ShellCommandExecutionRecei
             && !receipt.artifact_failed,
         receipt.artifact_truncated,
         receipt.artifact_failed,
+        shell_running_summary_guidance(receipt),
         receipt.stdout.preview,
         receipt.stderr.preview
     )

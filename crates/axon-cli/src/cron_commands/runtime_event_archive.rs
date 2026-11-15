@@ -5,6 +5,7 @@
 //! 文件名与事件正文外置目录并列，运维只需要看 `data/archive/session-events` 一个目录。
 
 use std::{
+    collections::BTreeSet,
     fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
@@ -79,10 +80,13 @@ pub(super) fn archive_expired_session_events(
         }
         report.merge(write_archives(archive_root, &batch)?);
         let deleted = delete_rows_by_rowid(connection, &batch)?;
-        if deleted > 0 {
-            reclaim_external_payload_files(archive_root, &batch);
+        if !deleted.is_empty() {
+            reclaim_external_payload_files(archive_root, &batch, &deleted);
+            // 行已提交删除，才允许按新的保底线回收整片正文。
+            let sessions: Vec<String> = batch.iter().map(|row| row.session_id.clone()).collect();
+            reclaim_dead_payload_shards(connection, archive_root, &sessions);
         }
-        if deleted < batch.len() {
+        if deleted.len() < batch.len() {
             // 行在归档期间被并发删除：本轮到此为止，下一轮重新取候选。
             break;
         }
@@ -121,10 +125,13 @@ pub(super) fn enforce_disk_budget(
         }
         report.merge(write_archives(archive_root, &batch)?);
         let deleted = delete_rows_by_rowid(connection, &batch)?;
-        if deleted > 0 {
-            reclaim_external_payload_files(archive_root, &batch);
+        if !deleted.is_empty() {
+            reclaim_external_payload_files(archive_root, &batch, &deleted);
+            // 行已提交删除，才允许按新的保底线回收整片正文。
+            let sessions: Vec<String> = batch.iter().map(|row| row.session_id.clone()).collect();
+            reclaim_dead_payload_shards(connection, archive_root, &sessions);
         }
-        if deleted < batch.len() {
+        if deleted.len() < batch.len() {
             break;
         }
     }
@@ -217,19 +224,33 @@ fn resolve_payload(archive_root: &Path, row: &ArchiveRow) -> String {
     }
 }
 
-/// 在数据库行确认删除之后，回收这一批引用的外置正文文件及已空的车道子目录。
+/// 在数据库行确认删除之后，回收这一批里**确实被删掉**的行所引用的外置正文文件。
 ///
-/// 只有独占一个文件的引用才随之回收：分片正文与同会话其他事件共用文件，
+/// 只按实际删除集合回收是关键：`batch` 里的 rowid 可能在读取候选之后被并发删除，
+/// 整批回收会把仍被其他行引用的文件误删，制造「行还在、文件没了」的孤儿引用。
+/// 只有独占一个文件的引用才随行回收；分片正文与同会话其他事件共用文件，
 /// 单条行过期就删整片会把仍有效的正文一起毁掉，这类文件交给文件保留期统一清理。
-fn reclaim_external_payload_files(archive_root: &Path, batch: &[ArchiveRow]) {
-    for row in batch {
-        let Some(reference) = row.payload_ref.as_deref() else {
-            continue;
-        };
+fn reclaim_external_payload_files(archive_root: &Path, batch: &[ArchiveRow], deleted: &[i64]) {
+    let deleted_set: std::collections::HashSet<i64> = deleted.iter().copied().collect();
+    let references: Vec<&str> = batch
+        .iter()
+        .filter(|row| deleted_set.contains(&row.rowid))
+        .filter_map(|row| row.payload_ref.as_deref())
+        .collect();
+    reclaim_exclusive_payloads(archive_root, &references);
+}
+
+/// 回收一批已确认删除的独占外置正文，以及因此变空的车道子目录。
+///
+/// 事务提交之后才允许调用：行还没删就先删文件，一旦回滚正文就永久没了。
+/// 只认一对一映射的引用（`is_exclusive_payload_reference`）；分片正文与同会话
+/// 其他事件共用文件，交给文件保留期统一清理。
+pub(super) fn reclaim_exclusive_payloads(archive_root: &Path, references: &[&str]) {
+    for reference in references {
         if !axon_session::is_exclusive_payload_reference(reference) {
             continue;
         }
-        let path = archive_root.join(reference);
+        let path = axon_session::payload_storage_path(archive_root, reference);
         let _ = std::fs::remove_file(&path);
         if let Some(parent) = path.parent()
             && parent != archive_root
@@ -240,7 +261,6 @@ fn reclaim_external_payload_files(archive_root: &Path, batch: &[ArchiveRow]) {
 }
 
 /// 整条会话家族已被删除后，回收该会话的外置事件正文目录（保留 `.jsonl.zst` 离线归档）。
-#[expect(dead_code, reason = "会话族清理接入分片目录回收前暂未调用")]
 pub(super) fn reclaim_session_archive_dir(archive_root: &Path, session_id: &str) {
     if session_id.is_empty()
         || session_id == "."
@@ -255,20 +275,61 @@ pub(super) fn reclaim_session_archive_dir(archive_root: &Path, session_id: &str)
     }
 }
 
+/// 按会话回收「整片都已过期」的外置正文分片，返回回收的文件数。
+///
+/// 分片正文被同一会话的多条事件共用，单条行过期时不能删整片；但一片只覆盖固定序号
+/// 区间，只要整段区间都早于该会话仍存活的最小序号，片内就不可能有活着的行，此时
+/// 整片回收才安全。没有这条路径时，行按保留期删掉了、正文却永久留在磁盘上，主库
+/// 不再膨胀的代价被转移成了无上限的归档目录增长。
+///
+/// 必须在删除事务提交之后调用：行还在时算出的保底线不成立，会删掉仍被引用的正文。
+pub(super) fn reclaim_dead_payload_shards(
+    connection: &Connection,
+    archive_root: &Path,
+    session_ids: &[String],
+) -> usize {
+    let mut reclaimed = 0;
+    for session_id in session_ids.iter().collect::<BTreeSet<_>>() {
+        let min_live = connection
+            .query_row(
+                "SELECT MIN(sequence) FROM session_events WHERE session_id=?1",
+                params![session_id],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .ok()
+            .flatten()
+            .and_then(|value| u64::try_from(value).ok());
+        reclaimed += axon_session::reclaim_shards_before(archive_root, session_id, min_live);
+    }
+    reclaimed
+}
+
+/// 删除一批已归档事件行，返回**确实被删掉**的 rowid 列表。
+///
+/// 用单条 `DELETE ... RETURNING` 同时完成删除与回执：只有拿到真实删除集合，调用方
+/// 才能精确回收外置正文。先查后删会在两条语句之间留出并发窗口，窗口内被别的清理
+/// 删掉的行仍留在候选集合里，调用方就分不清谁真的被删了，只能整批回收，误删仍被
+/// 其他行引用的文件。
 fn delete_rows_by_rowid(
     connection: &mut Connection,
     batch: &[ArchiveRow],
-) -> Result<usize, String> {
+) -> Result<Vec<i64>, String> {
+    if batch.is_empty() {
+        return Ok(Vec::new());
+    }
     let placeholders = vec!["?"; batch.len()].join(",");
-    let sql = format!("DELETE FROM session_events WHERE rowid IN ({placeholders})");
+    let sql = format!("DELETE FROM session_events WHERE rowid IN ({placeholders}) RETURNING rowid");
     let mut statement = connection
         .prepare(&sql)
         .map_err(|error| format!("归档删除语句准备失败：{error}"))?;
     let deleted = statement
-        .execute(rusqlite::params_from_iter(
-            batch.iter().map(|row| row.rowid),
-        ))
-        .map_err(|error| format!("归档删除失败：{error}"))?;
+        .query_map(
+            rusqlite::params_from_iter(batch.iter().map(|row| row.rowid)),
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| format!("归档删除失败：{error}"))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| format!("归档删除回执读取失败：{error}"))?;
     Ok(deleted)
 }
 

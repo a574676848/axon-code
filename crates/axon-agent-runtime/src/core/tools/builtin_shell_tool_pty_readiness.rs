@@ -59,7 +59,7 @@ pub(super) fn poll_until_ready(
     let mut stderr = seed.map_or_else(String::new, |first| first.stderr.preview.clone());
     loop {
         let mut receipt = ShellCommandToolRuntime
-            .write_stdin(write_input(session_id, None, false, 0))
+            .write_stdin(write_input(session_id, None, false, Some(0)))
             .unwrap();
         // `write_stdin` 每次只返回**增量**：必须原地累加，否则中途到达的输出会被静默丢掉。
         // 并行门禁下同一段输出常被拆成多次到达，只留最后一次的增量会让「输出里有标记」

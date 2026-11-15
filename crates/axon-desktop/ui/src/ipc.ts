@@ -372,8 +372,9 @@ export const conversationHistoryEvents = (
   interactionId: string,
   after = 0,
   limit?: number,
+  tail = false,
 ): Promise<HistoryPage> =>
-  call('conversation_history_events', { interactionId, after, limit });
+  call('conversation_history_events', { interactionId, after, limit, tail });
 
 /** 订阅一条 Interaction 的事件流。 */
 export const conversationWatch = (

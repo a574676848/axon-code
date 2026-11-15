@@ -381,6 +381,7 @@ pub(super) fn recover_expired_sessions(
                 |row| row.get(0),
             )
             .map_err(storage)?;
+        // 会话级事件，不归属任何 Interaction，故 interaction_id 留空。
         transaction.execute(
             "INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,emitted_at_ms) \
              VALUES(?1,?2,?3,'session_recovered',?4,?5)",

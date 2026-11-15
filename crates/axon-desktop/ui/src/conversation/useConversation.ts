@@ -219,6 +219,13 @@ export function useConversation(target: ConversationTarget | null): Conversation
     [rememberUnsubscribed],
   );
 
+  /** 释放本控制器当前持有的全部订阅；返回的 Promise 在退订送达后落地（失败不阻断）。 */
+  const releaseAllSubscriptions = useCallback(async () => {
+    const subscribeIds = [...subscribedIdsRef.current];
+    subscribedIdsRef.current.clear();
+    await Promise.all(subscribeIds.map(ipc.conversationUnsubscribe)).catch(() => undefined);
+  }, []);
+
   const playNext = useCallback(
     (workspace: string, generation: number, leaving: string | null = null) => {
       // 代次不符即作废：目标已切换，这一次回放属于上一次目标，不再建立任何订阅。
@@ -421,13 +428,11 @@ export function useConversation(target: ConversationTarget | null): Conversation
     return () => {
       cancelled = true;
       // 实时续聊的订阅也属于当前视图，离开时全部释放，重新进入才能从头回放。
-      for (const subscribeId of subscribedIdsRef.current) {
-        void ipc.conversationUnsubscribe(subscribeId).catch(() => undefined);
-      }
-      subscribedIdsRef.current.clear();
+      void releaseAllSubscriptions();
     };
   }, [
     paging.abort,
+    releaseAllSubscriptions,
     rememberSubscribed,
     rememberUnsubscribed,
     workspaceId,
@@ -550,13 +555,18 @@ export function useConversation(target: ConversationTarget | null): Conversation
     const laneId = laneCapability.laneId;
     const workspace = laneCapability.workspaceId;
     if (laneId === null || workspace === null) return;
+    // 重连第一步是放手旧订阅：订阅断掉后后端那一格仍占着该标识，不退订就重放，
+    // 回放里那次重新订阅会被幂等挡下，界面拼完历史也收不到增量；旧任务若还活着，
+    // 重置后的帧还会打进空投影。
+    paging.abort();
     pendingRef.current = [];
+    watchedRef.current = null;
     dispatch({ type: 'reset' });
     setLaneReadyId(null);
     // 重连走的也是同一条回放：同样在过渡面下把正文拼齐，再一次交出。
     setOpening(true);
-    void paging
-      .loadNewestPage(laneId)
+    void releaseAllSubscriptions()
+      .then(() => paging.loadNewestPage(laneId))
       .then((ids) => {
         queueRef.current = ids;
         // 重连发生在同一次目标内：代次不变，回放照常推进。
@@ -566,7 +576,7 @@ export function useConversation(target: ConversationTarget | null): Conversation
       .catch((error: unknown) => {
         setSubmitError(error instanceof Error ? error.message : '重连失败');
       });
-  }, [laneCapability, paging]);
+  }, [laneCapability, paging, releaseAllSubscriptions]);
 
   /*
    * 中断与转投：三步的先后顺序本身就是语义，因此整条装配收在

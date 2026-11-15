@@ -1,10 +1,10 @@
 use axon_agent_runtime::{
-    AgentRunShellToolArgs, ContentArchiveRuntime, LspBackgroundRuntime, MaybeApplyPatch,
-    ProviderToolCall, ShellCommandExecutionInput, ShellCommandOutputChunk,
+    AgentRunShellToolArgs, ContentArchiveRuntime, JobRuntime, LspBackgroundRuntime,
+    MaybeApplyPatch, ProviderToolCall, ShellCommandExecutionInput, ShellCommandOutputChunk,
     ShellCommandOutputStream, ShellCommandPolicyEvaluator, ShellCommandToolRuntime,
     agent_run_job_started_tool_receipt, agent_run_shell_tool_args_from_provider_input,
     agent_run_shell_tool_receipt, agent_run_write_stdin_tool_input_from_provider_args,
-    maybe_parse_apply_patch,
+    detect_pure_sleep_in_command, maybe_parse_apply_patch,
 };
 use axon_domain::OutputRef;
 use serde_json::json;
@@ -44,6 +44,20 @@ fn execute_shell_command(
         Ok(args) => args,
         Err(message) => return failed_tool_input_receipt(tool_call, message),
     };
+    if !args.run_in_background
+        && !JobRuntime::global()
+            .pending_job_ids(&context.thread_session_id)
+            .is_empty()
+        && let Some(detected) = detect_pure_sleep_in_command(&args.command)
+    {
+        return failed_tool_input_receipt(
+            tool_call,
+            format!(
+                "当前存在正在后台运行的任务，禁止使用纯休眠命令（{}）空等占用工具轮次：后台任务跑完会自动通知你，请改做无依赖工作或直接向用户说明当前进展。",
+                detected.reason
+            ),
+        );
+    }
     let evaluation = ShellCommandPolicyEvaluator::evaluate(&tool_call.input, &context.cwd);
     execute_shell_args(request, context, output_observer, args, evaluation, true)
 }

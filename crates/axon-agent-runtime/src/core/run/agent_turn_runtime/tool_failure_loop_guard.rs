@@ -5,8 +5,9 @@ use std::collections::BTreeMap;
 use axon_domain::{AxonError, AxonResult};
 
 use crate::{
-    AgentModelMessage, GLOB_TOOL_NAME, HASHLINE_NOOP_CHANGE_MARKER, MEMORY_SEARCH_TOOL_NAME,
-    READ_FILE_TOOL_NAME, SEARCH_TOOL_NAME,
+    AgentModelMessage, GLOB_TOOL_NAME, HASHLINE_NOOP_CHANGE_MARKER, JOB_OUTPUT_TOOL_NAME,
+    MEMORY_SEARCH_TOOL_NAME, READ_FILE_TOOL_NAME, SEARCH_TOOL_NAME, TOOL_INTENT_FIELD,
+    WRITE_STDIN_TOOL_CHARS_FIELD, WRITE_STDIN_TOOL_CTRL_C_FIELD, WRITE_STDIN_TOOL_NAME,
 };
 
 const MAX_IDENTICAL_TOOL_LOOP_TURNS: u8 = 3;
@@ -134,7 +135,7 @@ fn tool_loop_batch(messages: &[AgentModelMessage]) -> Option<ToolLoopBatch> {
         && results.iter().all(|result| {
             calls
                 .get(result.call_id.as_str())
-                .is_some_and(|(name, _)| is_known_read_only_tool(name))
+                .is_some_and(|(name, input)| is_read_only_no_progress_call(name, input))
         })
     {
         ToolLoopKind::ReadOnlyNoProgress
@@ -151,7 +152,11 @@ fn tool_loop_batch(messages: &[AgentModelMessage]) -> Option<ToolLoopBatch> {
                 (*name, input.clone())
             });
         tool_names.push(tool_name.to_owned());
-        parts.push(format!("{tool_name}\0{input}\0{}", result.output.trim()));
+        let normalized_input = normalized_input_for_fingerprint(tool_name, &input);
+        let normalized_output = normalized_output_for_fingerprint(tool_name, &result.output);
+        parts.push(format!(
+            "{tool_name}\0{normalized_input}\0{normalized_output}"
+        ));
     }
     parts.sort_unstable();
     tool_names.sort_unstable();
@@ -168,14 +173,105 @@ fn tool_loop_batch(messages: &[AgentModelMessage]) -> Option<ToolLoopBatch> {
     })
 }
 
-fn is_known_read_only_tool(name: &str) -> bool {
-    let Some(name) = name.strip_prefix("builtin.") else {
+fn is_read_only_no_progress_call(name: &str, canonical_input: &str) -> bool {
+    let Some(bare) = name.strip_prefix("builtin.") else {
         return false;
     };
-    matches!(
-        name,
-        SEARCH_TOOL_NAME | READ_FILE_TOOL_NAME | GLOB_TOOL_NAME | MEMORY_SEARCH_TOOL_NAME
-    )
+    match bare {
+        SEARCH_TOOL_NAME
+        | READ_FILE_TOOL_NAME
+        | GLOB_TOOL_NAME
+        | MEMORY_SEARCH_TOOL_NAME
+        | JOB_OUTPUT_TOOL_NAME => true,
+        WRITE_STDIN_TOOL_NAME => is_pure_wait_write_stdin_input(canonical_input),
+        _ => false,
+    }
+}
+
+fn is_pure_wait_write_stdin_input(canonical_input: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(canonical_input) else {
+        return false;
+    };
+    let has_chars = value
+        .get(WRITE_STDIN_TOOL_CHARS_FIELD)
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|chars| !chars.is_empty());
+    let has_ctrl_c = value
+        .get(WRITE_STDIN_TOOL_CTRL_C_FIELD)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    !has_chars && !has_ctrl_c
+}
+
+fn normalized_input_for_fingerprint(name: &str, canonical_input: &str) -> String {
+    if name.strip_prefix("builtin.") != Some(WRITE_STDIN_TOOL_NAME) {
+        return canonical_input.to_owned();
+    }
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(canonical_input) else {
+        return canonical_input.to_owned();
+    };
+    if let Some(object) = value.as_object_mut() {
+        object.remove(TOOL_INTENT_FIELD);
+    }
+    value.to_string()
+}
+
+fn normalized_output_for_fingerprint(name: &str, output: &str) -> String {
+    let trimmed = output.trim();
+    if !matches!(
+        name.strip_prefix("builtin."),
+        Some(JOB_OUTPUT_TOOL_NAME | WRITE_STDIN_TOOL_NAME)
+    ) {
+        return trimmed.to_owned();
+    }
+    if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(trimmed)
+        && let Some(root) = value.as_object_mut()
+    {
+        if let Some(normalized) = root
+            .get("summary")
+            .and_then(serde_json::Value::as_str)
+            .map(strip_elapsed_ms_markers)
+        {
+            root.insert("summary".to_owned(), serde_json::Value::String(normalized));
+        }
+        if let Some(metadata) = root
+            .get_mut("metadata")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            metadata.remove("elapsedMs");
+            metadata.remove("durationMs");
+        }
+        return value.to_string();
+    }
+    strip_elapsed_ms_markers(trimmed)
+}
+
+fn strip_elapsed_ms_markers(text: &str) -> String {
+    let mut normalized = strip_numeric_marker(text, "elapsed_ms=");
+    normalized = strip_numeric_marker(&normalized, "\"elapsedMs\":");
+    strip_numeric_marker(&normalized, "\"durationMs\":")
+}
+
+fn strip_numeric_marker(text: &str, prefix: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(pos) = rest.find(prefix) {
+        let split_at = pos + prefix.len();
+        result.push_str(&rest[..split_at]);
+        let after = &rest[split_at..];
+        let digits_len = after
+            .bytes()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+        if digits_len > 0 {
+            result.push_str("<n>");
+            rest = &after[digits_len..];
+        } else {
+            rest = after;
+        }
+    }
+    result.push_str(rest);
+    result
 }
 
 fn tool_calls_by_id(messages: &[AgentModelMessage]) -> BTreeMap<&str, (&str, String)> {
@@ -364,6 +460,82 @@ mod tests {
             .unwrap()
             .expect("普通失败仍应按失败归类");
         assert!(warning.contains("相同工具失败"));
+    }
+
+    #[test]
+    fn job_output_polling_with_changing_elapsed_ms_still_triggers_no_progress_guard() {
+        let mut guard = ToolLoopGuard::default();
+        for elapsed in [100_u64, 2500, 5000] {
+            let payload = serde_json::json!({
+                "tool": "builtin.job_output",
+                "status": "completed",
+                "summary": format!("job output job_id=7 status=running elapsed_ms={elapsed} exit_code=none stdout= stderr="),
+                "metadata": { "kind": "job", "jobId": "7", "jobStatus": "running", "elapsedMs": elapsed }
+            })
+            .to_string();
+            let messages = tool_messages("builtin.job_output", r#"{"job_id":"7"}"#, &payload, true);
+            let observed = guard.observe(&messages).unwrap();
+            if elapsed == 5000 {
+                let warning = observed.expect("第 3 次连续空轮询应命中无进展警告");
+                assert!(warning.contains("无进展只读工具调用"));
+            } else {
+                assert!(observed.is_none());
+            }
+        }
+
+        // 新输出到达后必须重置计数，不得误判。
+        let progress_payload = "job output job_id=7 status=running elapsed_ms=7000 exit_code=none stdout=compiling stderr=";
+        let progress_messages = tool_messages(
+            "builtin.job_output",
+            r#"{"job_id":"7"}"#,
+            progress_payload,
+            true,
+        );
+        assert!(guard.observe(&progress_messages).unwrap().is_none());
+    }
+
+    #[test]
+    fn write_stdin_pure_wait_triggers_guard_while_real_input_does_not() {
+        let mut guard = ToolLoopGuard::default();
+        for intent in ["查看输出1", "查看输出2", "查看输出3"] {
+            let input = serde_json::json!({
+                "session_id": "sess-1",
+                "intent": intent
+            })
+            .to_string();
+            let payload = serde_json::json!({
+                "tool": "builtin.write_stdin",
+                "status": "running",
+                "summary": "shell command=sleep exit_code=none stdout= stderr=",
+                "metadata": { "kind": "exec", "sessionId": "sess-1", "durationMs": intent.len() * 100 }
+            })
+            .to_string();
+            let messages = tool_messages("builtin.write_stdin", &input, &payload, true);
+            let observed = guard.observe(&messages).unwrap();
+            if intent == "查看输出3" {
+                let warning = observed.expect("连续 3 轮无进展纯等待 write_stdin 必须触发警告");
+                assert!(warning.contains("无进展只读工具调用"));
+            } else {
+                assert!(observed.is_none());
+            }
+        }
+
+        // 真正写入 chars 或发送 ctrl_c 不属于只读无进展。
+        let mut input_guard = ToolLoopGuard::default();
+        let interactive_messages = tool_messages(
+            "builtin.write_stdin",
+            r#"{"session_id":"sess-1","chars":"y\n","intent":"确认继续"}"#,
+            "shell command=prompt exit_code=none stdout= stderr=",
+            true,
+        );
+        for _ in 0..5 {
+            assert!(
+                input_guard
+                    .observe(&interactive_messages)
+                    .unwrap()
+                    .is_none()
+            );
+        }
     }
 
     fn tool_messages(

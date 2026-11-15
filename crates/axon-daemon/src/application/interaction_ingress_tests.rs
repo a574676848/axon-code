@@ -278,7 +278,11 @@ fn system_input_stays_independent_of_user_turn() {
 
 #[test]
 fn completion_and_wake_inputs_stay_independent_of_user_turn() {
-    for source_message_id in ["completion-steer-execution-1", "cron-wake:job-1"] {
+    for source_message_id in [
+        "completion-steer-execution-1",
+        "cron-wake:job-1",
+        "shell-job-wake:job-1",
+    ] {
         let store = Store {
             inserted: true,
             ..Store::default()

@@ -172,7 +172,7 @@ fn read_stdout_until_marker(
     while !collected.contains(marker) && started.elapsed() < OUTPUT_SETTLE_TIMEOUT {
         thread::sleep(OUTPUT_SETTLE_POLL_INTERVAL);
         let receipt = ShellCommandToolRuntime
-            .write_stdin(write_input(session_id, None, false, 0))
+            .write_stdin(write_input(session_id, None, false, Some(0)))
             .expect("终态会话在保留窗口内必须仍可读取");
         collected.push_str(&receipt.stdout.preview);
     }
@@ -203,7 +203,7 @@ fn persistent_session_supports_polling_and_stdin() {
     assert_eq!(running.status, ShellCommandExecutionStatus::Running);
 
     let polled = ShellCommandToolRuntime
-        .write_stdin(write_input(&session_id, None, false, 0))
+        .write_stdin(write_input(&session_id, None, false, Some(0)))
         .unwrap();
     assert_eq!(polled.status, ShellCommandExecutionStatus::Running);
     assert_eq!(
@@ -216,7 +216,7 @@ fn persistent_session_supports_polling_and_stdin() {
             &session_id,
             Some(input_newline("axon-input")),
             false,
-            SHORT_YIELD_MS,
+            Some(SHORT_YIELD_MS),
         ))
         .unwrap();
     assert_eq!(
@@ -242,7 +242,7 @@ fn pipe_ctrl_c_terminates_persistent_process() {
     let session_id = running.session_id.expect("睡眠命令必须保持运行");
 
     let mut cancelled = ShellCommandToolRuntime
-        .write_stdin(write_input(&session_id, None, true, SHORT_YIELD_MS))
+        .write_stdin(write_input(&session_id, None, true, Some(SHORT_YIELD_MS)))
         .unwrap();
     // 同一条纪律：Ctrl+C 之后等子进程自己的退出，不预测耗时。
     if cancelled.status == ShellCommandExecutionStatus::Running {
@@ -339,7 +339,7 @@ fn owner_cleanup_terminates_only_matching_sessions() {
     let second = ShellCommandToolRuntime.execute(second_input).unwrap();
     let second_id = second.session_id.expect("owner-b 命令必须保持运行");
 
-    let mut wrong_owner = write_input(&first_id, None, false, 0);
+    let mut wrong_owner = write_input(&first_id, None, false, Some(0));
     wrong_owner.owner_id = "owner-b".to_owned();
     let error = ShellCommandToolRuntime
         .write_stdin(wrong_owner)
@@ -353,7 +353,7 @@ fn owner_cleanup_terminates_only_matching_sessions() {
         ShellCommandToolRuntime::terminate_sessions_for_owner("owner-a"),
         1
     );
-    let mut removed = write_input(&first_id, None, false, 0);
+    let mut removed = write_input(&first_id, None, false, Some(0));
     removed.owner_id = "owner-a".to_owned();
     let error = ShellCommandToolRuntime.write_stdin(removed).unwrap_err();
     assert!(matches!(
@@ -362,7 +362,7 @@ fn owner_cleanup_terminates_only_matching_sessions() {
             if reason == SHELL_SESSION_NOT_FOUND_ERROR
     ));
 
-    let mut second_poll = write_input(&second_id, None, false, 0);
+    let mut second_poll = write_input(&second_id, None, false, Some(0));
     second_poll.owner_id = "owner-b".to_owned();
     let second = ShellCommandToolRuntime.write_stdin(second_poll).unwrap();
     assert_eq!(second.status, ShellCommandExecutionStatus::Running);
@@ -393,7 +393,7 @@ fn write_input(
     session_id: &str,
     chars: Option<String>,
     ctrl_c: bool,
-    yield_time_ms: u64,
+    yield_time_ms: Option<u64>,
 ) -> WriteStdinExecutionInput {
     WriteStdinExecutionInput {
         owner_id: TEST_OWNER_ID.to_owned(),
@@ -533,12 +533,8 @@ fn background_field_description_states_the_default_selection_rule() {
         .as_str()
         .expect("run_in_background 字段必须声明 description");
 
-    // 选型判据属单次调用语义：后台是默认，同步等待是显式例外。
-    for phrase in [
-        "默认设为 true",
-        "主线无需立即依赖该结果",
-        "仅当下一步行动强依赖该结果时才设为 false",
-    ] {
+    // 选型判据属单次调用语义：缺省 false，不阻塞主线或长耗时命令主动设 true。
+    for phrase in ["缺省 false", "无需立即依赖其结果", "主动设为 true"] {
         assert!(
             field_description.contains(phrase),
             "run_in_background 字段描述必须写明默认分流判据：{phrase}"
@@ -554,5 +550,77 @@ fn background_field_description_states_the_default_selection_rule() {
     assert!(
         !field_description.contains("<tool_execution_and_receipt_protocol>"),
         "字段描述不得引用内部片段标签"
+    );
+}
+
+#[test]
+fn shell_and_write_stdin_schemas_enforce_10s_yield_time_bounds() {
+    for tool in [
+        shell_command_tool_definition(),
+        write_stdin_tool_definition(),
+    ] {
+        let yield_prop =
+            &tool.schema.input_schema["properties"][SHELL_COMMAND_TOOL_YIELD_TIME_FIELD];
+        assert_eq!(yield_prop["minimum"], 0);
+        assert_eq!(yield_prop["maximum"], SHELL_MAX_YIELD_TIME_MS);
+    }
+}
+
+#[test]
+fn non_tty_write_stdin_blocks_within_yield_bound_like_tty() {
+    const ISOLATED_OWNER: &str = "shell-tool-non-tty-pure-wait";
+    let mut non_tty_input = execution_input(sleep_command(false));
+    non_tty_input.owner_id = ISOLATED_OWNER.to_owned();
+    non_tty_input.yield_time_ms = 0;
+    let non_tty = ShellCommandToolRuntime.execute(non_tty_input).unwrap();
+    let non_tty_id = non_tty.session_id.expect("睡眠命令必须保持运行");
+
+    // 非 tty 运行中会话同样可以按正 `yield_time_ms` 阻塞等：等的是输出 Condvar 与
+    // 进程终态，不是 sleep 占位空等。此前把这种等待判成非法输入，而前台命令超过
+    // 默认 10 秒就会返回 Running，模型既不能阻塞、也收不到终态通知，只剩被判非法
+    // 的轮询路径，形成「有禁令、无出口」的断链。
+    let mut blocked_req = write_input(&non_tty_id, None, false, Some(500));
+    blocked_req.owner_id = ISOLATED_OWNER.to_owned();
+    let blocked_wait = ShellCommandToolRuntime
+        .write_stdin(blocked_req)
+        .expect("非 tty 会话允许用正 yield_time_ms 等待输出");
+    assert_eq!(blocked_wait.status, ShellCommandExecutionStatus::Running);
+    assert!(blocked_wait.interaction.is_some(), "纯等待也要如实上报");
+
+    // 空 chars 是同一语义：只等输出，不写 stdin。
+    let mut empty_chars_req = write_input(&non_tty_id, Some(String::new()), false, Some(200));
+    empty_chars_req.owner_id = ISOLATED_OWNER.to_owned();
+    let empty_chars_wait = ShellCommandToolRuntime
+        .write_stdin(empty_chars_req)
+        .expect("空 chars 同样允许按 yield_time_ms 等待");
+    assert_eq!(
+        empty_chars_wait.status,
+        ShellCommandExecutionStatus::Running
+    );
+
+    let mut zero_req = write_input(&non_tty_id, None, false, Some(0));
+    zero_req.owner_id = ISOLATED_OWNER.to_owned();
+    let instant_zero = ShellCommandToolRuntime
+        .write_stdin(zero_req)
+        .expect("传 0 时应立刻返回即时快照");
+    assert_eq!(instant_zero.status, ShellCommandExecutionStatus::Running);
+
+    let mut tty_input = execution_input(sleep_command(true));
+    tty_input.owner_id = ISOLATED_OWNER.to_owned();
+    tty_input.tty = true;
+    tty_input.yield_time_ms = 0;
+    let tty_running = ShellCommandToolRuntime.execute(tty_input).unwrap();
+    let tty_id = tty_running.session_id.expect("TTY 睡眠命令必须保持运行");
+
+    let mut tty_req = write_input(&tty_id, None, false, Some(50));
+    tty_req.owner_id = ISOLATED_OWNER.to_owned();
+    let tty_wait = ShellCommandToolRuntime
+        .write_stdin(tty_req)
+        .expect("TTY 会话允许用正 yield_time_ms 等待交互输出");
+    assert_eq!(tty_wait.status, ShellCommandExecutionStatus::Running);
+
+    assert_eq!(
+        ShellCommandToolRuntime::terminate_sessions_for_owner(ISOLATED_OWNER),
+        2
     );
 }

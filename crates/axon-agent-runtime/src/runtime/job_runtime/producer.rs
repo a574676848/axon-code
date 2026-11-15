@@ -213,7 +213,7 @@ pub(crate) struct JobNoticeSettlement {
 }
 
 /// 取消标记命中导致的终止原因。
-pub(crate) const JOB_REASON_CANCELLED: &str = "取消标记命中";
+pub const JOB_REASON_CANCELLED: &str = "取消标记命中";
 /// 墙钟超时导致的终止原因。
 pub(crate) const JOB_REASON_TIMEOUT: &str = "墙钟超时";
 /// 空闲超时导致的终止原因。

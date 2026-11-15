@@ -323,3 +323,29 @@ fn composite_forwards_identity_to_every_handler() {
     assert!(response.is_some());
     assert_eq!(*recorder.seen.lock().expect("记录锁可用"), Some(None));
 }
+
+#[test]
+fn interaction_events_target_carries_tail_flag() {
+    // 默认是按 after 正向翻页，不带尾窗语义。
+    assert_eq!(
+        interaction_events_target("interactions/feishu-abc/events", None),
+        Some(("feishu-abc".to_string(), 0, 800, false))
+    );
+    // tail=1 与 tail=true 等价：首屏一次取该交互自身的尾窗。
+    assert_eq!(
+        interaction_events_target(
+            "interactions/feishu-abc/events",
+            Some("after=12&limit=34&tail=1")
+        ),
+        Some(("feishu-abc".to_string(), 12, 34, true))
+    );
+    assert_eq!(
+        interaction_events_target("interactions/feishu-abc/events", Some("tail=true")),
+        Some(("feishu-abc".to_string(), 0, 800, true))
+    );
+    // 尾部多出一段说明这不是本路由，不能误命中。
+    assert_eq!(
+        interaction_events_target("interactions/feishu-abc/events/extra", None),
+        None
+    );
+}

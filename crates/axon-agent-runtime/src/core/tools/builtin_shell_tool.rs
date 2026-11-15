@@ -91,8 +91,10 @@ pub const WRITE_STDIN_TOOL_CHARS_FIELD: &str = "chars";
 pub const WRITE_STDIN_TOOL_CTRL_C_FIELD: &str = "ctrl_c";
 /// Shell 工具默认等待进程输出的时长。
 pub const DEFAULT_SHELL_YIELD_TIME_MS: u64 = 10_000;
-/// write_stdin 默认请求的等待时长；空输入会提升到后台终端最小等待窗口。
+/// 交互终端（TTY）写入后默认的短响应等待窗口；非 TTY 纯等待默认不阻塞（0 ms）。
 pub const DEFAULT_WRITE_STDIN_YIELD_TIME_MS: u64 = 250;
+/// `shell_command` 与 `write_stdin` 的 `yield_time_ms` 最大上限（毫秒，10 秒）。
+pub const SHELL_MAX_YIELD_TIME_MS: u64 = crate::runtime_limits::MAX_SHELL_INTERACTION_YIELD_MS;
 /// Shell 工具拒绝远控原因。
 pub const SHELL_COMMAND_REASON_REMOTE_TRIGGER_CLOSED: &str = "shell_command:remote_trigger_closed";
 /// Shell 工具通过本机进程执行原因。
@@ -189,12 +191,12 @@ pub struct WriteStdinExecutionInput {
     pub owner_id: String,
     /// shell_command 返回的持久会话 ID。
     pub session_id: String,
-    /// 写入 stdin 的原始字符；为空表示仅轮询。
+    /// 写入 stdin 的原始字符；为空表示仅查询或纯等待。
     pub chars: Option<String>,
     /// 是否发送 Ctrl-C。
     pub ctrl_c: bool,
-    /// 本次等待增量输出的时长。
-    pub yield_time_ms: u64,
+    /// 本次等待增量输出的时长；None 表示按会话形态取默认窗口（非 TTY 纯等待为 0 ms，TTY/写入为 250 ms）。
+    pub yield_time_ms: Option<u64>,
     /// 本次回执的可选输出 token 预算。
     pub max_output_tokens: Option<usize>,
     /// 是否远控触发。
@@ -257,6 +259,11 @@ impl ShellCommandToolRuntime {
                 SHELL_COMMAND_EXECUTION_MODE_ENTRY_ERROR,
             ));
         }
+        if input.yield_time_ms > SHELL_MAX_YIELD_TIME_MS {
+            return Err(AxonError::tool_invalid_arguments(format!(
+                "shell_command yield_time_ms 最多 {SHELL_MAX_YIELD_TIME_MS} 毫秒（10 秒）"
+            )));
+        }
         if input.owner_id.trim().is_empty() {
             return Err(AxonError::tool_invalid_arguments(
                 SHELL_COMMAND_OWNER_EMPTY_ERROR,
@@ -297,6 +304,11 @@ impl ShellCommandToolRuntime {
             return Err(AxonError::tool_invalid_arguments(
                 SHELL_COMMAND_EXECUTION_MODE_ENTRY_ERROR,
             ));
+        }
+        if input.yield_time_ms > SHELL_MAX_YIELD_TIME_MS {
+            return Err(AxonError::tool_invalid_arguments(format!(
+                "shell_command yield_time_ms 最多 {SHELL_MAX_YIELD_TIME_MS} 毫秒（10 秒）"
+            )));
         }
         if input.remote_requested {
             return Err(AxonError::tool_execution_failed(
@@ -354,7 +366,13 @@ impl ShellCommandToolRuntime {
         }
         ShellProcessManager::global()
             .write_stdin(input, output_observer)
-            .map_err(|error| AxonError::tool_execution_failed(error.to_string()))
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::InvalidInput {
+                    AxonError::tool_invalid_arguments(error.to_string())
+                } else {
+                    AxonError::tool_execution_failed(error.to_string())
+                }
+            })
     }
 
     /// 终止并移除指定 Agent run 持有的全部 Shell 会话。
@@ -394,7 +412,7 @@ pub(crate) fn shell_command_tool_definition() -> ToolDefinition {
             ToolSchemaField::new(
                 SHELL_COMMAND_TOOL_YIELD_TIME_FIELD,
                 ToolSchemaFieldKind::Integer,
-                "可选首次等待输出时长，单位毫秒；普通命令使用默认窗口，tty 默认为立即返回，超过前台让出窗口后返回 session_id。",
+                "可选首次等待输出时长，单位毫秒，最多 10000 毫秒（10 秒）；普通命令默认 10000（超出后返回 session_id），tty 默认 0（立即返回 session_id）。",
             ),
             ToolSchemaField::new(
                 SHELL_COMMAND_TOOL_TTY_FIELD,
@@ -404,7 +422,7 @@ pub(crate) fn shell_command_tool_definition() -> ToolDefinition {
             ToolSchemaField::new(
                 SHELL_COMMAND_TOOL_RUN_IN_BACKGROUND_FIELD,
                 ToolSchemaFieldKind::Boolean,
-                "默认设为 true：主线无需立即依赖该结果时，命令转为后台作业，主线继续推进其他工作。仅当下一步行动强依赖该结果时才设为 false 前台等待。为 true 时回执返回 job_id 而不返回 session_id，随后用 job_output / job_kill 操作。与 tty: true 互斥：同时为 true 会被拒绝，因为后台作业不提供终端，交互会话不提供 job_id。",
+                "可选，缺省 false（前台执行）。预计运行超过数秒、或主线无需立即依赖其结果时，主动设为 true 转为后台作业，跑完会自动通知你，你可以继续做别的事，不要守着等。为 true 时回执返回 job_id 而不返回 session_id，收到通知或确实需要时再用 job_output / job_kill 操作。与 tty: true 互斥：同时为 true 会被拒绝，因为后台作业不提供终端，交互会话不提供 job_id。",
             ),
             ToolSchemaField::new(
                 SHELL_COMMAND_TOOL_MAX_OUTPUT_TOKENS_FIELD,
@@ -415,6 +433,10 @@ pub(crate) fn shell_command_tool_definition() -> ToolDefinition {
     );
     schema.input_schema["properties"][SHELL_COMMAND_TOOL_TIMEOUT_FIELD]["minimum"] =
         serde_json::json!(crate::runtime_limits::MIN_SHELL_TIMEOUT_MS);
+    schema.input_schema["properties"][SHELL_COMMAND_TOOL_YIELD_TIME_FIELD]["minimum"] =
+        serde_json::json!(0);
+    schema.input_schema["properties"][SHELL_COMMAND_TOOL_YIELD_TIME_FIELD]["maximum"] =
+        serde_json::json!(SHELL_MAX_YIELD_TIME_MS);
     schema.input_schema["properties"][SHELL_COMMAND_TOOL_MAX_OUTPUT_TOKENS_FIELD]["minimum"] =
         serde_json::json!(1);
     schema.input_schema["examples"] = serde_json::json!([
@@ -426,7 +448,7 @@ pub(crate) fn shell_command_tool_definition() -> ToolDefinition {
         id: SHELL_COMMAND_TOOL_ID,
         namespace: crate::AGENT_TOOL_NAMESPACE.to_owned(),
         name: SHELL_COMMAND_TOOL_NAME.to_owned(),
-        description: "在本机 shell 中运行命令；可指定工作目录、超时与回执输出预算。command 必须是当前默认 shell 的裸脚本，JSON 字符串内的双引号要转义；intent 是每次调用必填的一句话目的，写法见该字段描述。需要交互终端时设 tty 为 true，长时间运行或主线无需立即依赖其结果时设 run_in_background 为 true。".to_owned(),
+        description: "在本机 shell 中运行命令；可指定工作目录、超时与回执输出预算。command 必须是当前默认 shell 的裸脚本，JSON 字符串内的双引号要转义；intent 是每次调用必填的一句话目的，写法见该字段描述。需要交互终端时设 tty 为 true；预计耗时超过数秒或主线无需立即依赖结果时设 run_in_background 为 true（跑完会自动通知你，不要守着等待或发纯休眠命令空等）。".to_owned(),
         schema,
         enabled: true,
         concurrency_policy: axon_domain::ToolConcurrencyPolicy::WorkspaceCoordinated,
@@ -473,7 +495,7 @@ pub(crate) fn write_stdin_tool_definition() -> ToolDefinition {
             ToolSchemaField::new(
                 SHELL_COMMAND_TOOL_YIELD_TIME_FIELD,
                 ToolSchemaFieldKind::Integer,
-                "可选等待增量输出时长，单位毫秒；仅轮询时按后台终端等待窗口约束，写入 stdin 时按交互窗口约束。",
+                "可选，最多 10000 毫秒（10 秒）。对 tty 交互会话或写入 chars / 发送 ctrl_c 时，等待最多该时长的新输出（缺省 250 毫秒）；对非 tty 会话只传 session_id 纯等待时不得传正整数（传 0 或省略立即返回当前快照）。",
             ),
             ToolSchemaField::new(
                 SHELL_COMMAND_TOOL_MAX_OUTPUT_TOKENS_FIELD,
@@ -482,6 +504,10 @@ pub(crate) fn write_stdin_tool_definition() -> ToolDefinition {
             ),
         ],
     );
+    schema.input_schema["properties"][SHELL_COMMAND_TOOL_YIELD_TIME_FIELD]["minimum"] =
+        serde_json::json!(0);
+    schema.input_schema["properties"][SHELL_COMMAND_TOOL_YIELD_TIME_FIELD]["maximum"] =
+        serde_json::json!(SHELL_MAX_YIELD_TIME_MS);
     schema.input_schema["properties"][SHELL_COMMAND_TOOL_MAX_OUTPUT_TOKENS_FIELD]["minimum"] =
         serde_json::json!(1);
     schema.input_schema["not"] = serde_json::json!({
@@ -499,7 +525,7 @@ pub(crate) fn write_stdin_tool_definition() -> ToolDefinition {
         id: WRITE_STDIN_TOOL_ID,
         namespace: crate::AGENT_TOOL_NAMESPACE.to_owned(),
         name: WRITE_STDIN_TOOL_NAME.to_owned(),
-        description: "继续一个 shell 会话。session_id 必须逐字复制最近一次 shell_command 回执中的 session_id，不能臆造或跨命令复用；intent 是每次调用必填的一句话目的，写法见该字段描述。status 为 Running 时可写入 chars 或发送 ctrl_c: true；会话已结束时本工具只返回终态与退出码（幂等，重复调用结果一致），不会写入任何输入。若提示已超出保留窗口，说明会话已回收，应重新调用 shell_command。只想读取新输出时只传 session_id。纯等待会在输出、进程终态或等待窗口结束时返回。".to_owned(),
+        description: "继续一个前台 shell 会话。session_id 必须逐字复制最近一次 shell_command 回执中的 session_id，不能臆造或跨命令复用；intent 是每次调用必填的一句话目的，写法见该字段描述。status 为 Running 时可写入 chars 或发送 ctrl_c: true；会话已结束时本工具只返回终态与退出码（幂等，重复调用结果一致），不会写入任何输入。若提示已超出保留窗口，说明会话已回收，应重新调用 shell_command。只想读取新输出时只传 session_id：非 tty 会话立即返回当前快照（不得传正 yield_time_ms 阻塞轮询），tty 交互会话可配合不超过 10000 毫秒的 yield_time_ms 等待交互响应。".to_owned(),
         schema,
         enabled: true,
         concurrency_policy: axon_domain::ToolConcurrencyPolicy::Exclusive,
@@ -547,6 +573,14 @@ fn validate_write_stdin_input(input: &WriteStdinExecutionInput) -> AxonResult<()
         return Err(AxonError::tool_invalid_arguments(
             WRITE_STDIN_INPUT_CONFLICT_ERROR,
         ));
+    }
+    if input
+        .yield_time_ms
+        .is_some_and(|yield_ms| yield_ms > SHELL_MAX_YIELD_TIME_MS)
+    {
+        return Err(AxonError::tool_invalid_arguments(format!(
+            "write_stdin yield_time_ms 最多 {SHELL_MAX_YIELD_TIME_MS} 毫秒（10 秒）"
+        )));
     }
     Ok(())
 }

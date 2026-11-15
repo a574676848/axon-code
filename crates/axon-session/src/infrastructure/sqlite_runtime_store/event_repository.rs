@@ -144,10 +144,13 @@ fn append_event_refs<'a>(
      * 落库那一条 SQL 再按列内已有内容判重，所以一轮里反复用同一个工具只会记一次。
      */
     let mut tool_names: Vec<String> = Vec::new();
+    // 交互归属：带租约的写入把 Interaction 标识落到列上，历史帧查询据此定向取帧。
+    // 会话级事件没有归属，列值保持空串，读取侧自动回退整会话扫描。
+    let interaction_column = interaction_lease.map(|(id, _)| id.as_str()).unwrap_or("");
     {
         let mut statement = transaction
             .prepare_cached(
-                "INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,emitted_at_ms,payload_ref) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                "INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,emitted_at_ms,payload_ref,interaction_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
             )
             .map_err(storage)?;
         for (event_type, payload_json) in events {
@@ -175,7 +178,8 @@ fn append_event_refs<'a>(
                     event_type,
                     inline_payload,
                     emitted_at_ms,
-                    payload_ref
+                    payload_ref,
+                    interaction_column
                 ])
                 .map_err(storage)?;
             records.push(SessionEventRecord {
@@ -245,39 +249,30 @@ fn tool_call_name(event_type: &str, payload_json: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// 读取 cursor 之后按序号升序排列的 Session 事件。
-pub(super) fn replay_events(
+/// 一页原始事件行：`(session_id, sequence, generation, event_type, payload_json, emitted_at_ms, payload_ref)`。
+type RawEventRow = (String, i64, String, String, String, i64, Option<String>);
+
+/// 一页原始行的列读取顺序，三个查询共用。
+fn raw_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawEventRow> {
+    Ok((
+        row.get::<_, String>(0)?,
+        row.get::<_, i64>(1)?,
+        row.get::<_, String>(2)?,
+        row.get::<_, String>(3)?,
+        row.get::<_, String>(4)?,
+        row.get::<_, i64>(5)?,
+        row.get::<_, Option<String>>(6)?,
+    ))
+}
+
+/// 把一页原始行展开成带正文的事件记录。
+///
+/// 调用方必须先把整页读进内存再交进来：档案读取是文件 I/O，占着数据库连接与
+/// 语句做文件读取会让同一库的其他读者按 `busy_timeout` 排队。
+fn read_event_records(
     store: &SqliteRuntimeStore,
-    session_id: &DaemonSessionId,
-    after_sequence: u64,
-    limit: u32,
+    raw: Vec<RawEventRow>,
 ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
-    // 先把整页读进内存再逐条取正文：档案读取是文件 I/O，不能让它占着数据库连接与语句。
-    let raw = {
-        let connection = store.connection()?;
-        let mut statement = connection.prepare("SELECT session_id,sequence,generation,event_type,payload_json,emitted_at_ms,payload_ref FROM session_events WHERE session_id=?1 AND sequence>?2 ORDER BY sequence ASC LIMIT ?3").map_err(storage)?;
-        let rows = statement
-            .query_map(
-                params![
-                    session_id.as_str(),
-                    i64_value(after_sequence)?,
-                    i64::from(limit)
-                ],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, i64>(5)?,
-                        row.get::<_, Option<String>>(6)?,
-                    ))
-                },
-            )
-            .map_err(storage)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(storage)?
-    };
     let archive_root = store.event_archive_root();
     let mut records = Vec::with_capacity(raw.len());
     for (
@@ -293,22 +288,28 @@ pub(super) fn replay_events(
         let (event_type, payload_json) = match payload_ref {
             Some(reference) => match event_payload_store::read(&archive_root, &reference) {
                 Ok(content) => (event_type, content),
-                // 文件已被清理或丢失时，只对这一帧降级为占位记录：保留序号与游标推进，
-                // 避免单个外置文件缺失把同一车道的其他交互乃至整条会话一起拖垮。
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (
+                /*
+                 * 任何读取失败都只对这一帧降级为占位记录：保留序号与游标推进，
+                 * 避免单个外置正文缺失把同一车道的其他交互乃至整条会话一起拖垮。
+                 *
+                 * 之前只认 `NotFound`，其余错误（verbatim 路径下的非法名、权限、
+                 * 编码等）直接让整页历史帧失败，表现为网关返回 404、界面报
+                 * 「网关不含该接口，后台服务版本可能过旧」。外置正文属于可重建的
+                 * 附属事实，不值得用它拖垮主历史。
+                 */
+                Err(error) => (
                     SESSION_EVENT_MISSING_ARCHIVE_TYPE.to_owned(),
                     serde_json::json!({
                         "archiveMissing": true,
                         "payloadRef": reference,
                         "originalEventType": event_type,
+                        "archiveError": {
+                            "kind": format!("{:?}", error.kind()),
+                            "message": error.to_string(),
+                        },
                     })
                     .to_string(),
                 ),
-                Err(_) => {
-                    return Err(RuntimeStoreError::Storage(format!(
-                        "事件正文归档不可读：{reference}"
-                    )));
-                }
             },
             None => (event_type, inline_payload),
         };
@@ -322,4 +323,76 @@ pub(super) fn replay_events(
         });
     }
     Ok(records)
+}
+
+/// 读取 cursor 之后按序号升序排列的 Session 事件。
+pub(super) fn replay_events(
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+    after_sequence: u64,
+    limit: u32,
+) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
+    let raw = {
+        let connection = store.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT session_id,sequence,generation,event_type,payload_json,emitted_at_ms,payload_ref \
+                 FROM session_events \
+                 WHERE session_id=?1 AND sequence>?2 \
+                 ORDER BY sequence ASC LIMIT ?3",
+            )
+            .map_err(storage)?;
+        let rows = statement
+            .query_map(
+                params![
+                    session_id.as_str(),
+                    i64_value(after_sequence)?,
+                    i64::from(limit)
+                ],
+                raw_event_row,
+            )
+            .map_err(storage)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(storage)?
+    };
+    read_event_records(store, raw)
+}
+
+/// 读取某条 Interaction 自身的尾窗帧，按序号升序。
+///
+/// 从尾往前取：首屏一次就拿到可渲染的尾部窗口，不必先探整条会话的尾序号再算
+/// 窗口起点。老交互的帧序号远小于整条会话的尾序号，先探再算会把整个老交互截空，
+/// 这条路径从根上避免那个问题。
+pub(super) fn interaction_tail_window(
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+    interaction_id: &InteractionId,
+    limit: u32,
+) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
+    let raw = {
+        let connection = store.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT session_id,sequence,generation,event_type,payload_json,emitted_at_ms,payload_ref \
+                 FROM ( \
+                     SELECT session_id,sequence,generation,event_type,payload_json,emitted_at_ms,payload_ref \
+                     FROM session_events \
+                     WHERE session_id=?1 AND interaction_id=?2 \
+                     ORDER BY sequence DESC LIMIT ?3 \
+                 ) \
+                 ORDER BY sequence ASC",
+            )
+            .map_err(storage)?;
+        let rows = statement
+            .query_map(
+                params![
+                    session_id.as_str(),
+                    interaction_id.as_str(),
+                    i64::from(limit)
+                ],
+                raw_event_row,
+            )
+            .map_err(storage)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(storage)?
+    };
+    read_event_records(store, raw)
 }

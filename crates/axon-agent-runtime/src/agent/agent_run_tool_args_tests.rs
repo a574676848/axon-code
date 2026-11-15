@@ -220,8 +220,37 @@ fn shell_rejects_raw_text_while_write_stdin_keeps_session_controls() {
     )
     .expect("write_stdin args");
     assert_eq!(write_stdin.owner_id, "test-owner");
-    assert_eq!(write_stdin.yield_time_ms, 0);
+    assert_eq!(write_stdin.yield_time_ms, Some(0));
     assert_eq!(write_stdin.max_output_tokens, Some(64));
+
+    let omitted_yield = agent_run_write_stdin_tool_input_from_provider_args(
+        r#"{"session_id":"session-1"}"#,
+        "test-owner",
+    )
+    .expect("省略 yield_time_ms 时应保留 None 交由运行时区分 TTY");
+    assert_eq!(omitted_yield.yield_time_ms, None);
+}
+
+#[test]
+fn shell_and_write_stdin_reject_yield_time_above_10000_ms() {
+    let shell_err = agent_run_shell_tool_args_from_provider_input(
+        &ToolCallInput::json(serde_json::json!({
+            "command": "echo axon",
+            "yield_time_ms": 10_001
+        })),
+        Path::new("workspace"),
+    )
+    .expect_err("shell_command 超出 10000ms 必须在参数层拦截");
+    assert!(shell_err.contains("yield_time_ms"));
+    assert!(shell_err.contains("10000 毫秒（10 秒）"));
+
+    let write_err = agent_run_write_stdin_tool_input_from_provider_args(
+        r#"{"session_id":"session-1","yield_time_ms":10001}"#,
+        "test-owner",
+    )
+    .expect_err("write_stdin 超出 10000ms 必须在参数层拦截");
+    assert!(write_err.contains("yield_time_ms"));
+    assert!(write_err.contains("10000 毫秒（10 秒）"));
 }
 
 #[test]

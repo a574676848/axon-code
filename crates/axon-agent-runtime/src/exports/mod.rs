@@ -213,6 +213,7 @@ pub use crate::interrupt_validation::{
     InterruptCheckpoint, InterruptCleanupStatus, InterruptContext, InterruptRecoveryStrategy,
     InterruptSource, InterruptValidation, InterruptValidator,
 };
+pub use crate::job_runtime::JOB_REASON_CANCELLED;
 pub use crate::long_running_cell::{
     LONG_RUNNING_PROGRESS_MAX, LongRunningCellRuntime, LongRunningJobEvent, LongRunningJobHandle,
     LongRunningJobStatus,
@@ -461,6 +462,10 @@ pub use crate::session_notes_store::{
 };
 pub use crate::shell_command_policy_evaluator::{
     ShellCommandPolicyEvaluation, ShellCommandPolicyEvaluator,
+};
+pub use crate::shell_sleep_guard::{
+    PureSleepPlaceholder, detect_pure_sleep_in_command, detect_pure_sleep_placeholder,
+    extract_raw_script_from_command,
 };
 pub use crate::skills::{
     Skill, SkillInjectionReport, SkillInvocationRecord, SkillLoadError, SkillLoadOutcome,

@@ -237,10 +237,13 @@ pub fn lane_interactions(
 /// 读取一条 Interaction 的一段历史帧。
 ///
 /// `after` 为空从头读；`has_more` 为真时按 `next_after` 继续翻页，直到补到 durable 尾。
+/// `tail` 为真时直接取该 Interaction 自身的尾窗：一次往返拿到可渲染的尾部窗口，
+/// 不再先探整条会话的尾序号再算窗口起点。
 pub fn interaction_events(
     interaction_id: &str,
     after: Option<u64>,
     limit: Option<u32>,
+    tail: bool,
 ) -> Result<InteractionHistoryPage, String> {
     let interaction_id = interaction_id.trim();
     if interaction_id.is_empty() {
@@ -252,7 +255,9 @@ pub fn interaction_events(
     // 交互标识来自网关下发，仍按 URL 段转义：客户端不假定它的字符集。
     let encoded: String = url::form_urlencoded::byte_serialize(interaction_id.as_bytes()).collect();
     let after = after.unwrap_or(0);
-    let path = format!("{INTERACTIONS_PATH}/{encoded}/events?after={after}&limit={limit}");
+    let tail_query = if tail { "&tail=1" } else { "" };
+    let path =
+        format!("{INTERACTIONS_PATH}/{encoded}/events?after={after}&limit={limit}{tail_query}");
     let payload = gateway::get_json_at_with_timeout(&path, HISTORY_PAGE_TIMEOUT)?;
     serde_json::from_value(payload).map_err(|error| format!("解析历史帧失败：{error}"))
 }

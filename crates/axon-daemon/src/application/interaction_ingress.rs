@@ -309,6 +309,7 @@ fn is_system_generated(interaction: &InteractionRecord) -> bool {
     interaction.source.channel() == axon_domain::SYSTEM_SOURCE_CHANNEL
         || source_message_id.starts_with(axon_domain::COMPLETION_STEER_SOURCE_PREFIX)
         || source_message_id.starts_with(axon_domain::CRON_WAKE_SOURCE_PREFIX)
+        || source_message_id.starts_with(axon_domain::SHELL_JOB_WAKE_SOURCE_PREFIX)
 }
 
 #[cfg(test)]

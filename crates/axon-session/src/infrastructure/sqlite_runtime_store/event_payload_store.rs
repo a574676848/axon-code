@@ -81,7 +81,7 @@ pub(super) fn persist(
 /// 区分「正文已被清理」与其他故障。
 pub fn read(archive_root: &Path, reference: &str) -> std::io::Result<String> {
     let Some((relative, span)) = reference.split_once(REFERENCE_SPAN_SEPARATOR) else {
-        return std::fs::read_to_string(archive_root.join(reference));
+        return std::fs::read_to_string(payload_storage_path(archive_root, reference));
     };
     let invalid = |reason: &str| {
         std::io::Error::new(
@@ -94,7 +94,7 @@ pub fn read(archive_root: &Path, reference: &str) -> std::io::Result<String> {
         .ok_or_else(|| invalid("缺少长度"))?;
     let offset: u64 = offset.parse().map_err(|_| invalid("偏移非法"))?;
     let length: usize = length.parse().map_err(|_| invalid("长度非法"))?;
-    let mut file = File::open(archive_root.join(relative))?;
+    let mut file = File::open(payload_storage_path(archive_root, relative))?;
     file.seek(SeekFrom::Start(offset))?;
     let mut buffer = vec![0_u8; length];
     match file.read_exact(&mut buffer) {
@@ -112,12 +112,69 @@ pub fn read(archive_root: &Path, reference: &str) -> std::io::Result<String> {
     String::from_utf8(buffer).map_err(|_| invalid("正文不是 UTF-8"))
 }
 
+/// 把 `{session}/{file}` 形式的相对引用逐段接到归档根下。
+///
+/// 不能直接用 `archive_root.join(reference)`：Windows 上归档根可能带 `\\?\`
+/// verbatim 前缀，该前缀下 `/` 不是路径分隔符，整串会被当成一个文件名，
+/// 于是文件明明存在也会读成 `InvalidInput` 一类的错误。读取与回收必须共用
+/// 这一条解析规则，否则回收会静默删不掉文件、读侧却已经能读到。
+pub fn payload_storage_path(archive_root: &Path, reference: &str) -> std::path::PathBuf {
+    reference
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != "." && *segment != "..")
+        .fold(archive_root.to_path_buf(), |path, segment| {
+            path.join(segment)
+        })
+}
+
 /// 该引用是否独占一个归档文件。
 ///
-/// 分片被同一会话的多条事件共用，单条行过期不能删整片，回收交给文件保留期；
-/// 历史单文件格式是一对一映射，行删掉即可连带删文件。
+/// 分片被同一会话的多条事件共用，单条行过期不能删整片，必须整片判定；历史单文件
+/// 格式是一对一映射，行删掉即可连带删文件。
 pub fn is_exclusive_payload_reference(reference: &str) -> bool {
     !reference.contains(REFERENCE_SPAN_SEPARATOR)
+}
+
+/// 回收整片都已被删除的外置正文分片，返回回收的文件数。
+///
+/// 分片按 `sequence / EVENT_PAYLOAD_SHARD_ROWS` 命名，一片覆盖 `[shard*行数, (shard+1)*行数)`
+/// 这段序号区间。只有整段区间都早于该会话仍存活的最小序号时，片内才不可能有活着的
+/// 行，此时整片回收安全；`min_live_sequence` 为 `None` 表示该会话已无任何存活行。
+///
+/// 只处理 `{shard}.jsonl`：`.jsonl.zst` 是归档产物、`{sequence}.json` 是历史单文件形态，
+/// 都不归这条路径管。
+pub fn reclaim_shards_before(
+    archive_root: &Path,
+    session_id: &str,
+    min_live_sequence: Option<u64>,
+) -> usize {
+    let Ok(entries) = std::fs::read_dir(archive_root.join(session_id)) else {
+        return 0;
+    };
+    let mut reclaimed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(shard) = name.strip_suffix(".jsonl") else {
+            continue;
+        };
+        let Ok(shard_index) = shard.parse::<u64>() else {
+            continue;
+        };
+        let shard_end = shard_index
+            .saturating_add(1)
+            .saturating_mul(EVENT_PAYLOAD_SHARD_ROWS);
+        let dead = match min_live_sequence {
+            Some(min_live) => shard_end <= min_live,
+            None => true,
+        };
+        if dead && std::fs::remove_file(entry.path()).is_ok() {
+            reclaimed += 1;
+        }
+    }
+    reclaimed
 }
 
 fn inline_limit_for(event_type: &str) -> usize {
@@ -225,5 +282,43 @@ mod tests {
         let directory = tempfile::tempdir().expect("临时目录");
         let error = read(directory.path(), "session-gone/00000.jsonl@0+4").expect_err("应当失败");
         assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    /// 整片序号区间都早于保底线时回收该片，仍含存活行的分片必须保留。
+    ///
+    /// 缺了这条回收路径，行按保留期删掉了、正文却永久留在磁盘上：主库不再膨胀的
+    /// 代价会被转移成无上限的归档目录增长。
+    #[test]
+    fn shards_before_the_live_floor_are_reclaimed() {
+        let directory = tempfile::tempdir().expect("临时目录");
+        let root = directory.path();
+        let lane = session("session-reclaim");
+
+        persist(root, &lane, 1, "wire_event", "aa").expect("0 号片");
+        persist(
+            root,
+            &lane,
+            EVENT_PAYLOAD_SHARD_ROWS * 2 + 1,
+            "wire_event",
+            "bb",
+        )
+        .expect("2 号片");
+
+        // 保底线 4000：0 号片覆盖 [0,2000) 全部已删，2 号片覆盖 [4000,6000) 仍有活行。
+        assert_eq!(reclaim_shards_before(root, lane.as_str(), Some(4000)), 1);
+        let remaining = std::fs::read_dir(root.join("session-reclaim"))
+            .expect("分片目录")
+            .count();
+        assert_eq!(remaining, 1, "只允许回收整片都已过期的那一个");
+
+        // 会话已无任何存活行时，剩余分片一并回收。
+        assert_eq!(reclaim_shards_before(root, lane.as_str(), None), 1);
+        assert!(
+            std::fs::read_dir(root.join("session-reclaim"))
+                .expect("分片目录")
+                .next()
+                .is_none(),
+            "无存活行时必须清空分片"
+        );
     }
 }

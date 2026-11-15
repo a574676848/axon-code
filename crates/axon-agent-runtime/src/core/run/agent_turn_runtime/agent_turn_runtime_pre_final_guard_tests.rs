@@ -102,9 +102,12 @@ fn pre_final_guard_injects_once_when_pending_jobs_exist() {
                 && message["content"].as_str().is_some_and(|content| {
                     content.contains("<runtime-note kind=\"pre-final-guard\">")
                         && content.contains("2 个后台作业")
+                        && !content.contains("用 builtin.job_output 等待")
+                        && content.contains("无需在此阻塞等待")
+                        && content.contains("跑完会自动通知")
                 })
         }),
-        "第二轮必须带上守卫提醒正文"
+        "第二轮必须带上守卫提醒正文且不得引导等待 job_output"
     );
 }
 

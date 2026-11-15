@@ -4,6 +4,7 @@
 //! 派生数据与根记录后提交。所有族共享同一墙上时钟预算，预算耗尽即停止，剩余
 //! 数据由下一轮 Cron 幂等继续。
 
+use std::path::Path;
 use std::time::Instant;
 
 use rusqlite::{Connection, params_from_iter};
@@ -14,6 +15,11 @@ use super::runtime_cleanup::{
     session_event_expiry_filter, task_expiry_filter,
 };
 use axon_session::NotificationDeliveryState;
+
+#[path = "runtime_cleanup_session_events.rs"]
+pub(in crate::cron_commands) mod session_events;
+
+pub(super) use session_events::{delete_expired_session_events, repair_dangling_payload_refs};
 
 /// 删除长期过期且不再代表任何在线客户端的 presence 记录。
 ///
@@ -249,9 +255,14 @@ pub(super) fn delete_expired_upgrade_admissions(
 }
 
 /// 在一个短 `IMMEDIATE` 事务中删除指定 Session family 的运行态数据。
+///
+/// 事务提交之后逐个回收该会话的外置事件正文目录：行确认没了，正文文件才有资格删；
+/// 反过来先删文件再提交，一旦回滚事实就永久丢失。`.jsonl.zst` 离线归档由
+/// `reclaim_session_archive_dir` 保留，运维仍可解压回看。
 pub(super) fn delete_session_families_by_ids(
     connection: &mut Connection,
     ids: &[String],
+    archive_root: &Path,
 ) -> Result<RuntimeCleanupCounts, String> {
     if ids.is_empty() {
         return Ok(RuntimeCleanupCounts::default());
@@ -312,35 +323,19 @@ pub(super) fn delete_session_families_by_ids(
     transaction
         .commit()
         .map_err(|_| "Daemon runtime Session family 清理事务提交失败".to_owned())?;
+    for id in ids {
+        super::runtime_event_archive::reclaim_session_archive_dir(archive_root, id);
+    }
     Ok(counts)
 }
 
-/// 删除 retained Session 中超出保留期且位于 sequence 保底线之前的旧事件。
-pub(super) fn delete_expired_session_events(
-    connection: &mut Connection,
-    cutoff_ms: i64,
-    deadline: Instant,
-) -> Result<RuntimeCleanupCounts, String> {
-    let sql = expired_session_events_selection_sql();
-    delete_family(connection, cutoff_ms, deadline, &sql, |transaction, ids| {
-        let placeholders = placeholders(ids.len());
-        Ok(RuntimeCleanupCounts {
-            session_events: delete_ids_in(
-                transaction,
-                "session_events",
-                "rowid",
-                &placeholders,
-                ids,
-            )?,
-            ..RuntimeCleanupCounts::default()
-        })
-    })
-}
-
 /// retained Session Event 清理的批次选择 SQL：按 emitted_at 索引有序推进。
+///
+/// 同时取出会话标识与外置正文引用：删除提交之后要按会话新的保底线回收整片正文，
+/// 并按引用回收独占文件。
 pub(super) fn expired_session_events_selection_sql() -> String {
     format!(
-        "SELECT CAST(rowid AS TEXT) {} ORDER BY emitted_at_ms ASC LIMIT ?2",
+        "SELECT CAST(rowid AS TEXT), session_id, payload_ref {} ORDER BY emitted_at_ms ASC LIMIT ?2",
         session_event_expiry_filter()
     )
 }

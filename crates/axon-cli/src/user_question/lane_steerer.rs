@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use axon_daemon::{ActiveTurnSteerSink, InteractionDelivery, PrimaryTurnIngress};
 use axon_domain::{
-    AudienceContext, InteractionId, InteractionRecord, InteractionSource, ReplyRoute,
-    SYSTEM_SOURCE_CHANNEL, ScopeRef,
+    AudienceContext, InteractionId, InteractionRecord, InteractionSource,
+    QUESTION_ANSWER_SOURCE_PREFIX, ReplyRoute, SYSTEM_SOURCE_CHANNEL, ScopeRef,
 };
 use axon_session::{LaneQueryStore, LaneSummaryRow, SqliteRuntimeStore};
 
@@ -20,7 +20,7 @@ use super::answer_service::QuestionMessageSteerer;
 use crate::run_commands::run_steer::ActivePrimaryTurnRegistry;
 
 /// 答案 Interaction 的稳定来源 ID 前缀。
-const ANSWER_SOURCE_PREFIX: &str = "question-answer-source:";
+const ANSWER_SOURCE_PREFIX: &str = QUESTION_ANSWER_SOURCE_PREFIX;
 
 /// 答案落成 durable Interaction 后的主 turn 唤醒端口。
 ///

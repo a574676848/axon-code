@@ -221,6 +221,7 @@ fn try_run_daemon_host(
         startup_snapshots.clone(),
         active_primary_turns.clone(),
         questions.primary_turn_port(),
+        Arc::clone(&primary_turn_signal),
     )?;
     host.start().map_err(|error| error.to_string())?;
     // 宿主起来之后才有 host 记录与订阅桥；迟到作答的问答帧靠它落进会话事件流。
@@ -463,16 +464,26 @@ fn build_daemon_host(
     startup_snapshots: crate::run_commands::StartupSnapshotCache,
     active_primary_turns: crate::run_commands::run_steer::ActivePrimaryTurnRegistry,
     user_question_port: Option<Arc<dyn axon_agent_runtime::UserQuestionPort>>,
+    primary_turn_signal: Arc<DaemonMaintenanceSignal>,
 ) -> Result<CliDaemonHost, String> {
     store
         .reap_dead_hosts(now_ms())
         .map_err(|error| format!("回收已退出 Daemon Host lease 失败: {error}"))?;
+    let shell_job_wake = Some(Arc::new(
+        crate::run_commands::run_shell_job_wake::ShellJobWakeBridge::new(
+            store.clone(),
+            active_primary_turns.clone(),
+            ACTION_LEASE_DURATION_MS,
+            primary_turn_wake_hook(primary_turn_signal),
+        ),
+    ));
     let runner = crate::run_commands::run_remote_execution::CliProviderTurnRunner {
         config_path: command.config_path.clone(),
         active_primary_turns: active_primary_turns.clone(),
         startup_snapshots,
         // 只有守护进程主 turn 装配用户提问端口；子代理与后台执行保持 None。
         user_question_port,
+        shell_job_wake,
     };
     let delivery_waker = Arc::clone(&delivery_signal);
     crate::remote_commands::register_delivery_waker(Arc::new(move || {

@@ -12,8 +12,8 @@ const DELEGATION_POLICY_BODY: &str = concat!(
     "- 默认在**后台**委派：delegate_to_fast 与 spawn_agent 都立即返回 job_id，子代理跑完后结果会作为一条新消息送到你这里，你不需要守着它。\n",
     "- 相互独立的委派放在**同一条 assistant 消息**里批量并发发起；它们彼此无依赖，串行发起只会白白拉长时间。\n",
     "- 子代理运行期间继续做有用的事：做与它不重叠的工作，或推进不依赖它的部分。禁止 busy-poll（反复 job_output 空转）或空等。\n",
-    "- 仅当下一步动作**依赖**该结果时才同步等待：此时传 run_in_background: false 直接拿回执，或在后续轮用 builtin.job_output 按 job_id 收口。\n",
-    "- 影响当前交付的子代理都属于关键路径；父 Agent 负责跟踪回执给出的 job_id。最终答复前必须用 builtin.job_output 收集仍未终态的任务（不再需要的用 builtin.job_kill 终止）。\n",
+    "- 仅当下一步动作**依赖**该结果时才在委派时传 run_in_background: false 同步拿回执；已启动的后台任务跑完会自动通知，禁止用 builtin.job_output 阻塞空等。\n",
+    "- 影响当前交付的子代理都属于关键路径；子代理跑完会自动通知你，收到通知或确实需要介入时再按 job_id 用 builtin.job_output 读取增量（不再需要的用 builtin.job_kill 终止）。\n",
     "- 子代理仍在运行时可继续处理非依赖工作，但不得提前发送最终回复；生命周期操作一律走 job_id，协作寻址才走 AgentPath。\n",
 );
 

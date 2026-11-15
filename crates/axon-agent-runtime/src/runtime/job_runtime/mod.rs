@@ -36,7 +36,8 @@ pub use notice::{
     publish_completion_notice, publish_completion_notices, subscribe_completion_notices,
 };
 pub use producer::{
-    JOB_REASON_BUDGET_EXHAUSTED, JOB_REASON_USER_STOP, JobProducerKind, JobTerminalKind,
+    JOB_REASON_BUDGET_EXHAUSTED, JOB_REASON_CANCELLED, JOB_REASON_USER_STOP, JobProducerKind,
+    JobTerminalKind,
 };
 pub use registry::{
     JobId, JobOutput, JobRuntime, JobStatus, JobTail, bounded_job_label, job_reference,

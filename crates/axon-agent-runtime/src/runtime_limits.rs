@@ -64,11 +64,9 @@ pub const SHELL_ARTIFACT_DIR_NAME: &str = "tee";
 /// 从而不触碰同目录下属他人的内容。
 pub const SHELL_ARTIFACT_FILE_SUFFIX: &str = ".shell.log";
 /// Shell 首次执行与交互调用的最大让出窗口。
-pub const MAX_SHELL_INTERACTION_YIELD_MS: u64 = 30_000;
-/// 后台终端空输入等待的最小让出窗口。
-pub const MIN_BACKGROUND_TERMINAL_WAIT_MS: u64 = 5_000;
+pub const MAX_SHELL_INTERACTION_YIELD_MS: u64 = 10_000;
 /// 后台终端空输入等待的最大让出窗口。
-pub const MAX_BACKGROUND_TERMINAL_WAIT_MS: u64 = 300_000;
+pub const MAX_BACKGROUND_TERMINAL_WAIT_MS: u64 = 10_000;
 /// Shell 协作式取消的初始检查间隔。
 pub const SHELL_COMMAND_CANCEL_POLL_INTERVAL_MS: u64 = 100;
 /// Shell 协作式取消检查间隔的退避上限。

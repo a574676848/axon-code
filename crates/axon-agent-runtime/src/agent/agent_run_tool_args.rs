@@ -14,9 +14,9 @@ use axon_domain::{AxonError, ToolCallInput, ToolError, ToolInput};
 use axon_output_filter::lsp_symbol_filter::LspFilterLevel;
 
 use crate::{
-    DEFAULT_SHELL_YIELD_TIME_MS, DEFAULT_WRITE_STDIN_YIELD_TIME_MS, GlobInclude,
-    GlobToolExecutionInput, ReadFileToolExecutionInput, RegexSearchMode, SearchToolExecutionInput,
-    ShellCommandToolRuntime, WriteStdinExecutionInput, job_runtime::JobId,
+    DEFAULT_SHELL_YIELD_TIME_MS, GlobInclude, GlobToolExecutionInput, ReadFileToolExecutionInput,
+    RegexSearchMode, SHELL_MAX_YIELD_TIME_MS, SearchToolExecutionInput, ShellCommandToolRuntime,
+    WriteStdinExecutionInput, job_runtime::JobId,
 };
 #[path = "agent_run_tool_args_edit_normalize.rs"]
 mod agent_run_tool_args_edit_normalize;
@@ -187,6 +187,11 @@ pub fn agent_run_shell_tool_args_from_provider_input(
     .unwrap_or(false);
     let yield_time_ms = optional_u64(value, "yield_time_ms", "builtin.shell_command")?
         .unwrap_or(if tty { 0 } else { DEFAULT_SHELL_YIELD_TIME_MS });
+    if yield_time_ms > SHELL_MAX_YIELD_TIME_MS {
+        return Err(format!(
+            "builtin.shell_command yield_time_ms 最多 {SHELL_MAX_YIELD_TIME_MS} 毫秒（10 秒）：预计耗时较长的命令请设 run_in_background: true，跑完会自动通知你"
+        ));
+    }
     let max_output_tokens = optional_usize(value, "max_output_tokens", "builtin.shell_command")?
         .or(Some(DEFAULT_AGENT_SHELL_OUTPUT_TOKENS));
     let command = ShellCommandToolRuntime::command_from_script_at_cwd(&script, &cwd, tty)
@@ -269,8 +274,14 @@ pub fn agent_run_write_stdin_tool_input_from_provider_args(
     if chars.is_some() && ctrl_c {
         return Err("builtin.write_stdin chars 与 ctrl_c 不能同时提供".to_owned());
     }
-    let yield_time_ms = optional_u64(&value, "yield_time_ms", "builtin.write_stdin")?
-        .unwrap_or(DEFAULT_WRITE_STDIN_YIELD_TIME_MS);
+    let yield_time_ms = optional_u64(&value, "yield_time_ms", "builtin.write_stdin")?;
+    if let Some(yield_ms) = yield_time_ms
+        && yield_ms > SHELL_MAX_YIELD_TIME_MS
+    {
+        return Err(format!(
+            "builtin.write_stdin yield_time_ms 最多 {SHELL_MAX_YIELD_TIME_MS} 毫秒（10 秒）：不需要在这里长时间阻塞空等"
+        ));
+    }
     let max_output_tokens = optional_usize(&value, "max_output_tokens", "builtin.write_stdin")?
         .or(Some(DEFAULT_AGENT_SHELL_OUTPUT_TOKENS));
     Ok(WriteStdinExecutionInput {

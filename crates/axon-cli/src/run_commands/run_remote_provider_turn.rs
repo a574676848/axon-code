@@ -13,9 +13,8 @@ use axon_session_runtime::{
 };
 
 use super::super::run_agent_identity::run_agent_identity;
-use super::super::run_steer::{
-    ActivePrimaryTurnRegistry, RunSteerBridge, RunSteerInbox, register_deferred_message_session,
-};
+use super::super::run_shell_job_wake::{ShellJobWakeBridge, WakeRouteInfo};
+use super::super::run_steer::{ActivePrimaryTurnRegistry, RunSteerBridge, RunSteerInbox};
 use super::super::run_stream_provider_progress;
 use super::super::run_subagent_executor::{SUBAGENT_RESULT_MARKER_TEXT, strip_result_path};
 use super::super::{
@@ -40,6 +39,8 @@ pub(crate) struct CliProviderTurnRunner {
     pub(crate) startup_snapshots: StartupSnapshotCache,
     /// 主 turn 专属的用户提问端口；子代理与后台执行不装配（保持 `None`）。
     pub(crate) user_question_port: Option<Arc<dyn axon_agent_runtime::UserQuestionPort>>,
+    /// Daemon 主 turn 专属的临时后台 Shell 作业跨 Turn 唤醒桥；非 Daemon 场景为 `None`。
+    pub(crate) shell_job_wake: Option<Arc<ShellJobWakeBridge>>,
 }
 
 impl ProviderTurnRunner for CliProviderTurnRunner {
@@ -148,6 +149,7 @@ impl CliProviderTurnRunner {
             sink,
             &self.active_primary_turns,
             self.user_question_port.clone(),
+            self.shell_job_wake.as_deref(),
         )
         .map_err(TurnExecutionError::retryable)?;
         // Provider turn 已经执行，之后的收尾失败无法证明外部结果，必须进入 uncertain。
@@ -210,6 +212,7 @@ fn explicit_turn_reasoning_effort(transport_context: Option<&serde_json::Value>)
         .map(ToOwned::to_owned)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_provider_command(
     config_path: &Path,
     request: &ProviderTurnRequest,
@@ -218,39 +221,23 @@ fn execute_provider_command(
     sink: Option<&dyn TurnEventSink>,
     active_primary_turns: &ActivePrimaryTurnRegistry,
     user_question_port: Option<Arc<dyn axon_agent_runtime::UserQuestionPort>>,
+    shell_job_wake: Option<&ShellJobWakeBridge>,
 ) -> Result<CliRunResult, String> {
     let agent_identity = run_agent_identity(request);
     let steer_bridge = RunSteerBridge::default();
-    let steer_inbox = steer_bridge.open();
     // 本轮执行的取消令牌：注册进活跃主 turn，网关中断即置位它。
     let cancel_token = RunCancelToken::default();
-    let _deferred_registration =
-        register_deferred_message_session(&request.session_id, steer_inbox.clone());
-    let _completion_notice_subscription =
-        super::super::run_completion_notice_subscription::subscribe_run_completion_notices(
-            &request.session_id,
-        );
-    let _session_reclaim_subscription =
-        super::super::run_completion_notice_subscription::subscribe_run_shell_session_reclaims(
-            &request.session_id,
-        );
-    if let Err(error) = super::super::run_continuation_assembly::assemble_pending_continuations(
-        Some(config_path),
-        &request.session_id,
-        crate::run_commands::run_execution::now_ms(),
-    ) {
-        axon_logger::warning(&format!(
-            "子代理终态装配失败，事实保留待下次装配: session={}, error={error}",
-            request.session_id
-        ));
-    }
+    let has_persistent_completion_wake =
+        register_shell_job_wake(shell_job_wake, request, command, cancel_token.clone());
+    let steer_inbox =
+        steer_bridge.open_with_persistent_completion_wake(has_persistent_completion_wake);
     let _active_registration = active_turn_registration(
         request,
         active_primary_turns,
         steer_inbox.clone(),
         cancel_token.clone(),
     )?;
-    Ok(run_stream_provider_progress::run_with_progress(
+    let result = run_stream_provider_progress::run_with_progress(
         config_path,
         request,
         command,
@@ -260,7 +247,61 @@ fn execute_provider_command(
         agent_identity,
         cancel_token,
         user_question_port,
-    ))
+    );
+    // 回合已收口：本 owner 名下若再无未终态后台作业，摘除跨 Turn 唤醒路由与通知订阅。
+    // 仍在跑的作业会保留路由，终态照常唤醒下一轮。
+    if let Some(bridge) = shell_job_wake {
+        bridge.release_idle_turn(&request.run_session_id);
+    }
+    Ok(result)
+}
+
+/// 为 Daemon 非系统主 turn 登记跨 Turn Shell 作业唤醒路由。
+///
+/// 订阅键固定为 `request.run_session_id`（与作业 owner_id 同源），避免误用车道 ID
+/// 导致跨 Turn 完成通知匹配不到作业归属；返回是否成功建立持久订阅，用于避免
+/// `run_failover` 再建第二份重复订阅。
+fn register_shell_job_wake(
+    shell_job_wake: Option<&ShellJobWakeBridge>,
+    request: &ProviderTurnRequest,
+    command: &RunCommand,
+    turn_cancel_token: RunCancelToken,
+) -> bool {
+    let Some(wake_bridge) = shell_job_wake else {
+        return false;
+    };
+    if request.action_kind != PRIMARY_TURN_ACTION_KIND {
+        return false;
+    }
+    let Some(context) = request.transport_context.as_ref() else {
+        return false;
+    };
+    let channel = context
+        .get("channel")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if channel == Some(SYSTEM_SOURCE_CHANNEL) {
+        return false;
+    }
+    let Some(lane_id) = context
+        .get("primaryLaneId")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    wake_bridge.register_turn(
+        &request.run_session_id,
+        WakeRouteInfo {
+            lane_id: lane_id.to_owned(),
+            model: command.model.clone(),
+            reasoning_effort: command.reasoning_effort.clone(),
+            turn_cancel_token,
+        },
+    );
+    true
 }
 
 fn active_turn_registration(

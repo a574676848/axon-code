@@ -426,6 +426,11 @@ pub(crate) fn gateway_status_message(status: u16, body: &str) -> String {
         // 目标详情 404 说「这个目标不在了」，路由缺失 404 说「后台版本过旧」：
         // 两者的下一步完全不同，因此这条分支必须排在通用 404 之前。
         404 if code == "goal_not_found" => format!("目标不存在或已被清理{suffix}"),
+        // 历史帧 404 是「这条交互记录不在了」，同样不是路由缺失：夹在通用 404
+        // 之前，否则正文读取失败会被误报成后台版本旧。
+        404 if code == "interaction_not_found" => {
+            format!("交互记录不存在或已被清理{suffix}")
+        }
         404 => format!("网关不含该接口，后台服务版本可能过旧{suffix}"),
         429 => format!("网关繁忙，请稍后重试{suffix}"),
         _ => format!("网关返回状态码 {status}{suffix}"),
@@ -479,6 +484,16 @@ mod tests {
             other_code,
             "网关不含该接口，后台服务版本可能过旧（NOT_FOUND）"
         );
+    }
+
+    #[test]
+    fn interaction_not_found_is_reported_as_a_missing_interaction() {
+        // 历史帧 404 是「这条交互记录不在了」，不能归因到后台版本过旧。
+        let missing = gateway_status_message(
+            404,
+            r#"{"error":{"code":"interaction_not_found","message":"历史目标 Interaction 不存在","details":null}}"#,
+        );
+        assert_eq!(missing, "交互记录不存在或已被清理（interaction_not_found）");
     }
 
     #[test]

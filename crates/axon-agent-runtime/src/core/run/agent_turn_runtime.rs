@@ -123,12 +123,13 @@ pub trait AgentTurnSteerSource {
     }
 }
 
-/// 守卫提醒正文：给出数量与两条处理路径，不替模型决定该等还是该杀。
+/// 守卫提醒正文：告知当前仍有后台作业在跑、无需阻塞等待，避免误导模型轮询。
 fn pre_final_guard_note(pending_jobs: usize) -> String {
     format!(
-        "最终答复前仍有 {pending_jobs} 个后台作业未进入终态。请先处理它们再给出最终答复：\
-         用 builtin.job_output 等待并读取结果，或对不再需要的作业用 builtin.job_kill 终止。\
-         本条提醒至多延迟一轮；若确认无需等待，可直接给出最终答复。"
+        "当前仍有 {pending_jobs} 个后台作业正在运行，无需在此阻塞等待：\
+         它们跑完会自动通知（结果会作为一条新消息送到你这里）。\
+         如果还有不依赖它们的工作请继续推进；不再需要的作业可用 builtin.job_kill 终止；\
+         若当前阶段已可向用户汇报进展，可直接给出最终答复。"
     )
 }
 

@@ -489,6 +489,7 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
                 args.get("limit")
                     .and_then(Value::as_u64)
                     .and_then(|value| u32::try_from(value).ok()),
+                args.get("tail").and_then(Value::as_bool).unwrap_or(false),
             )?,
         )
         .map_err(stringify)?),
