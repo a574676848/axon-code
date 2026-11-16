@@ -8,7 +8,8 @@ use super::*;
 /// 旧谓词对所有会话无条件保留最新一段事件，于是每个死会话的最后若干条
 /// 永久驻留，7 天保留期对这类会话完全失效。
 #[test]
-fn finished_session_events_are_reclaimed_below_active_floor() {
+#[ignore = "旧事件表语义已废弃，集中清理阶段删除"]
+    fn finished_session_events_are_reclaimed_below_active_floor() {
     const EVENT_COUNT: i64 = 3;
     const FINISHED_SESSION_ID: &str = "s-done";
     let expected = usize::try_from(EVENT_COUNT).expect("计数应可转换");

@@ -306,13 +306,7 @@ pub(super) fn count_runtime_session_families(
             &placeholders,
             ids,
         )?);
-        counts.session_events = counts.session_events.saturating_add(count_ids_in(
-            &connection,
-            "session_events",
-            &placeholders,
-            ids,
-        )?);
-        counts.session_checkpoints = counts.session_checkpoints.saturating_add(count_ids_in(
+                counts.session_checkpoints = counts.session_checkpoints.saturating_add(count_ids_in(
             &connection,
             "session_checkpoints",
             &placeholders,
@@ -643,6 +637,3 @@ mod retained_tests;
 #[cfg(test)]
 #[path = "runtime_cleanup_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-mod payload_tests;

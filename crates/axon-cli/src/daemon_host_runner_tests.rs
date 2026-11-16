@@ -1,3 +1,4 @@
+use axon_session::EventLogStore as _;
 use super::*;
 use axon_agent_runtime::{QuestionWaitBudget, QuestionWaitResult};
 use axon_domain::{

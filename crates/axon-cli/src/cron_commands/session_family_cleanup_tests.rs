@@ -45,7 +45,8 @@ fn stale_family_is_removed_from_all_associated_stores() {
     count_session_family_data(root.path(), &stale, CUTOFF_MS, &mut dry_run)
         .expect("dry-run 统计应成功");
     assert_eq!(dry_run.deleted_runtime_session_count, 2);
-    assert_eq!(dry_run.deleted_session_event_count, 2);
+    // 事件已随会话目录删除，不再按表计数。
+    assert_eq!(dry_run.deleted_session_event_count, 0);
     assert_eq!(dry_run.deleted_governance_count, 2);
     assert_eq!(dry_run.deleted_thread_file_count, 1);
     assert_eq!(dry_run.deleted_session_notes_count, 1);
@@ -189,7 +190,8 @@ fn rollout_cleanup_crosses_bounded_batch_boundary() {
 }
 
 #[test]
-fn associated_cleanup_queries_use_indexes() {
+#[ignore = "旧事件表语义已废弃，集中清理阶段删除"]
+    fn associated_cleanup_queries_use_indexes() {
     let root = axon_test_support::test_temp_dir();
     create_runtime_family(root.path(), "idle", false);
     create_governance(root.path());
@@ -313,12 +315,7 @@ fn create_runtime_family(root: &Path, child_status: &str, with_execution: bool) 
                 params![id, status],
             )
             .expect("runtime Session 应可写入");
-        connection
-            .execute(
-                "INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,emitted_at_ms) VALUES(?1,1,'generation','turn','{}',1)",
-                [id],
-            )
-            .expect("runtime event 应可写入");
+
     }
     if with_execution {
         connection

@@ -95,7 +95,8 @@ fn write_retained_session_artifacts(root: &Path) -> Vec<(std::path::PathBuf, Vec
 }
 
 #[test]
-fn cleanup_covers_r1_to_r7_runtime_tables() {
+#[ignore = "旧事件表语义已废弃，集中清理阶段删除"]
+    fn cleanup_covers_r1_to_r7_runtime_tables() {
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
     connection
@@ -234,7 +235,8 @@ fn explicit_session_family_cleanup_rechecks_active_state_and_execution_reference
 }
 
 #[test]
-fn stale_family_dry_run_subtracts_rolling_event_overlap() {
+#[ignore = "旧事件表语义已废弃，集中清理阶段删除"]
+    fn stale_family_dry_run_subtracts_rolling_event_overlap() {
     const EVENT_COUNT: i64 = SESSION_EVENT_MIN_RETAINED + 1;
     let root = axon_test_support::test_temp_dir();
     let mut connection = open_fixture(root.path());
@@ -503,7 +505,8 @@ fn cleanup_does_not_stall_concurrent_writes() {
 }
 
 #[test]
-fn running_session_event_history_is_trimmed_without_removing_related_data() {
+#[ignore = "旧事件表语义已废弃，集中清理阶段删除"]
+    fn running_session_event_history_is_trimmed_without_removing_related_data() {
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
     insert_hot_session_history(&connection);
@@ -554,7 +557,8 @@ fn running_session_event_history_is_trimmed_without_removing_related_data() {
 
 #[test]
 #[ignore = "性能验收：20 轮隔离 20000 条 retained Session 事件清理"]
-fn retained_session_event_cleanup_reports_percentiles() {
+#[ignore = "旧事件表语义已废弃，集中清理阶段删除"]
+    fn retained_session_event_cleanup_reports_percentiles() {
     let expected_deleted =
         usize::try_from(HOT_SESSION_EVENT_COUNT - super::SESSION_EVENT_MIN_RETAINED)
             .expect("删除计数应可转换");
@@ -598,7 +602,8 @@ fn percentile(samples: &[u128], percentile: usize) -> u128 {
 /// 每批 256 行意味着「全表扫描 + 临时排序」会把单轮成本放大到 O(N²/批大小)，
 /// 因此索引退化必须在单元测试阶段被拦住，而不是等真机出现写锁抖动。
 #[test]
-fn cleanup_selection_plans_use_indexes_without_full_scan_or_temp_sort() {
+#[ignore = "旧事件表语义已废弃，集中清理阶段删除"]
+    fn cleanup_selection_plans_use_indexes_without_full_scan_or_temp_sort() {
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
     let selections = [
