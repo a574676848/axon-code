@@ -19,6 +19,8 @@ pub mod lease_store;
 pub mod ledger_commit_store;
 pub mod ledger_event_store;
 pub mod result_store;
+/// 恢复指针读写端口。
+pub mod resume_pointer_store;
 pub mod schedule_store;
 pub mod session_action_store;
 pub mod session_event_store;
@@ -63,6 +65,7 @@ pub use ledger_event_store::{LedgerEventStore, LedgerEventStoreError};
 pub use result_store::{
     RESULT_ACK_SOURCE_EXPIRED, RESULT_ACK_SOURCE_READ, ResultStore, ResultStoreError,
 };
+pub use resume_pointer_store::{ResumePointerStore, ResumePointerStoreError};
 pub use runtime_store::{CheckpointTelemetry, RuntimeStore, RuntimeStoreError};
 pub use session_query_store::{SessionQueryStore, SessionSummaryRow};
 pub use user_question_store::{UserQuestionStore, UserQuestionStoreError};

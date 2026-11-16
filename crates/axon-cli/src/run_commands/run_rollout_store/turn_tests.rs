@@ -126,61 +126,6 @@ fn record_and_load_by_id_roundtrips() {
 }
 
 #[test]
-fn current_session_ignores_newer_subagent_until_explicitly_selected() {
-    let path = temp_db("current-session");
-    let store = RolloutSqliteStore::open(&path).unwrap();
-    store.record_session(&record("root", None, 100)).unwrap();
-    store
-        .record_session(&record("root::subagent", Some("root"), 200))
-        .unwrap();
-
-    assert_eq!(store.load_latest().unwrap().unwrap().session_id, "root");
-
-    store.select_session("root::subagent").unwrap();
-    assert_eq!(
-        store.load_latest().unwrap().unwrap().session_id,
-        "root::subagent"
-    );
-    cleanup(&path);
-}
-
-#[test]
-fn current_session_falls_back_to_latest_root_for_legacy_database() {
-    let path = temp_db("legacy-current-session");
-    let store = RolloutSqliteStore::open(&path).unwrap();
-    store
-        .record_session(&record("older-root", None, 100))
-        .unwrap();
-    store
-        .record_session(&record("newer-root", None, 200))
-        .unwrap();
-    store
-        .connection
-        .execute("DELETE FROM rollout_current_session", [])
-        .unwrap();
-    store
-        .record_session(&record("newest-child", Some("newer-root"), 300))
-        .unwrap();
-
-    assert_eq!(
-        store.load_latest().unwrap().unwrap().session_id,
-        "newer-root"
-    );
-    cleanup(&path);
-}
-
-#[test]
-fn selecting_unknown_current_session_is_rejected() {
-    let path = temp_db("missing-current-session");
-    let store = RolloutSqliteStore::open(&path).unwrap();
-
-    let error = store.select_session("missing").unwrap_err();
-
-    assert!(error.contains("未找到会话"));
-    cleanup(&path);
-}
-
-#[test]
 fn same_session_preserves_multiple_turns_and_projects_contiguous_event_sequence() {
     let path = temp_db("multiple-turns");
     let store = RolloutSqliteStore::open(&path).unwrap();
@@ -389,63 +334,5 @@ fn rollout_events_sqlite_replays_session_events_in_sequence() {
         "最终响应".chars().count()
     );
     assert_eq!(loaded[3].payload["reasoningMessageCount"], 1);
-    cleanup(&path);
-}
-
-#[test]
-fn selection_snapshot_restores_the_previous_pointer() {
-    let path = temp_db("selection-snapshot");
-    let store = RolloutSqliteStore::open(&path).unwrap();
-    store
-        .record_session(&record("session-a", None, 100))
-        .unwrap();
-    store
-        .record_session(&record("session-b", None, 200))
-        .unwrap();
-
-    // 最近一次提交把指针推进到 session-b。
-    assert_eq!(
-        store.selected_session_id().unwrap().as_deref(),
-        Some("session-b")
-    );
-    let snapshot = store.selected_session_id().unwrap();
-    store.select_session("session-a").unwrap();
-    assert_eq!(
-        store.selected_session_id().unwrap().as_deref(),
-        Some("session-a")
-    );
-
-    // 显式跨会话运行结束后还原快照：后续 --continue 仍回 session-b。
-    store.set_selection(snapshot.as_deref()).unwrap();
-    assert_eq!(
-        store.selected_session_id().unwrap().as_deref(),
-        Some("session-b")
-    );
-    assert_eq!(
-        store.load_latest().unwrap().map(|record| record.session_id),
-        Some("session-b".to_owned())
-    );
-    cleanup(&path);
-}
-
-#[test]
-fn selection_snapshot_can_restore_the_absent_state() {
-    let path = temp_db("selection-cleared");
-    let store = RolloutSqliteStore::open(&path).unwrap();
-    store
-        .record_session(&record("session-a", None, 100))
-        .unwrap();
-    store.set_selection(None).unwrap();
-
-    assert_eq!(
-        store.selected_session_id().unwrap(),
-        None,
-        "从未选择过时指针必须为空"
-    );
-    // 指针为空时 load_latest 回落到最新的根会话。
-    assert_eq!(
-        store.load_latest().unwrap().map(|record| record.session_id),
-        Some("session-a".to_owned())
-    );
     cleanup(&path);
 }

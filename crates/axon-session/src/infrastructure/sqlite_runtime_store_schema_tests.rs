@@ -1,16 +1,12 @@
-//! Runtime SQLite schema 校验、首次建库原子性与追加式列迁移测试。
+//! Runtime SQLite schema 校验与首次建库原子性测试。
 //!
-//! 两个库各自用 `PRAGMA user_version` 标记不兼容变更：版本一致时既建库路径只补
-//! 幂等 DDL，版本不一致或陌生库必须直接拒绝，避免「编译通过、运行时表不存在」。
+//! 两个库各自用 `PRAGMA user_version` 标记不兼容变更：只认当前版本，版本不一致或
+//! 陌生库直接拒绝，不做补列与回填。
 
 use std::sync::{Arc, Barrier};
 
 use super::SqliteRuntimeStore;
-use crate::ports::{InteractionQueryStore, InteractionStore, RuntimeStore};
-use axon_domain::{
-    AudienceContext, AudienceKind, DisclosurePolicy, InteractionId, InteractionRecord,
-    InteractionSource, ReplyRoute, ScopeRef,
-};
+use crate::ports::RuntimeStore;
 
 /// 并发首开者数量：足够多才让建库窗口稳定重叠，又不至于拖慢测试。
 const CONCURRENT_OPENERS: usize = 8;
@@ -95,47 +91,21 @@ fn concurrent_first_open_builds_schema_atomically() {
 }
 
 #[test]
-fn schema_initialization_adds_additive_columns_to_existing_database() {
+fn legacy_database_is_rejected_instead_of_migrated() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
     let control = store.path().to_path_buf();
-    // 构造变更前的既有库：版本一致、inbox 已存在但没有追加列。
+    // 目标态只认当前 schema：旧版本库必须拒绝打开，不做补列与回填。
     {
-        let connection = rusqlite::Connection::open(&control).expect("打开既有库");
+        let connection = rusqlite::Connection::open(&control).expect("打开旧库");
         connection
             .execute_batch(
                 "PRAGMA user_version = 1;
                  CREATE TABLE inbox (
-                    interaction_id TEXT PRIMARY KEY NOT NULL,
-                    source_channel TEXT NOT NULL,
-                    source_message_id TEXT NOT NULL,
-                    scope_json TEXT NOT NULL,
-                    audience_json TEXT NOT NULL,
-                    reply_route_json TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    received_at_ms INTEGER NOT NULL,
-                    updated_at_ms INTEGER NOT NULL
+                    interaction_id TEXT PRIMARY KEY NOT NULL
                  );",
             )
-            .expect("既有库 schema");
+            .expect("旧库 schema");
     }
-    let mut interaction = InteractionRecord::new(
-        InteractionId::new("interaction-migrated").expect("合法 ID"),
-        InteractionSource::new("tui", "message-migrated").expect("合法来源"),
-        ScopeRef::workspace("workspace-migrated").expect("合法作用域"),
-        AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly),
-        ReplyRoute::new("tui", "terminal-migrated").expect("合法路由"),
-        "迁移后继续",
-        10,
-    )
-    .expect("Interaction 应创建");
-    interaction.attachments = vec!["media/image/migrated.png".to_owned()];
-    interaction.model = Some("balanced".to_owned());
-    assert!(store.append(&interaction).expect("迁移后可写入").inserted);
-    let read = store
-        .get_interaction(&interaction.interaction_id)
-        .expect("读取")
-        .expect("记录应存在");
-    assert_eq!(read.attachments, interaction.attachments);
-    assert_eq!(read.model, interaction.model);
+    store.initialize().expect_err("旧版本库必须拒绝");
 }

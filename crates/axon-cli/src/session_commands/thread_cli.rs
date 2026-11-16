@@ -270,7 +270,7 @@ pub(crate) fn run_session_resume(
     ) {
         return cli_error(error);
     }
-    if let Err(error) = crate::run_commands::select_rollout_session(config_path, &command.thread_id)
+    if let Err(error) = crate::run_commands::select_resume_session(config_path, &command.thread_id)
     {
         return cli_error(error);
     }

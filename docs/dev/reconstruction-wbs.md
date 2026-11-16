@@ -73,6 +73,7 @@
 | W2-9 | 删除 `session_events` 表与三个索引 | `schema.rs` | W2-5 | 新库不再含该表；直连 SQL 全部消失 | 0.4 |
 | W2-10 | gateway replay 契约测试 | `gateway_replay_tests.rs` | W2-4 | 分页、字节预算、缺失正文降级、cursor 续订全绿 | 0.5 |
 | W2-11 | 桌面端断线重连确认 | CDP 证据 | W2-10 | 断网重连后视图与在线态一致 | 0.5 |
+| W2-12 | `rollout.sqlite3` 退役：历史窗口改读 thread 文件，恢复指针改存 `control.resume_pointer` | `run_thread_store` + `axon-session` | W2-4 | 删库后多轮对话回归（跨回合引用、工具结果回放、压缩窗口）全绿；`axon run --continue` 仍能接续；无 `RolloutSqliteStore` 残留 | 1.2 |
 
 **里程碑 B**：`session_events` 从代码里消失；重复运行 24 小时，事件目录体量与预期一致，控制面库不再随轮次增长。
 
@@ -138,14 +139,11 @@
 | W6-3 | orphan 重建提交历史并 force push | 单个初始提交 | W6-2 | `git log --oneline` 只有一条 | 0.3 |
 | W6-4 | 打 `v0.0.1` 触发 release workflow | 四平台产物 | W6-3 | tar.gz / zip / msi / pkg / deb 齐全 | 0.3 |
 | W6-5 | 39 项真机验收矩阵 | 验收记录 | W6-4 | 基础 7 + 桌面 12 + TUI 7 + CLI 6 + 跨端 7 全部留证据；失败项如实登记 | 0.4 |
+| W6-6 | 性能门禁 | `tools/verify-performance.ps1` | W6-4 | 事件写入 p99、控制面事务、会话列表首屏、磁盘占用四项有实测输出并登记 | 0.3 |
 
 **里程碑 F**：`axon --version` 输出 0.0.1，安装态真机验收矩阵通过。
 
 ---
-
-## 延后项
-
-本轮不复做、但已登记理由与补做前置的项，见 `docs/storage-architecture.md` §12.5：`rollout.sqlite3` 退役、W3-4 在途/终态拆表、W3-5 统一 claim、W4-2/W4-8 命名重构。它们不阻塞 v0.0.1 的验收矩阵。
 
 ## 依赖关系
 
@@ -158,6 +156,9 @@ W0 ──► W1 ──► W2 ──► W3 ──► W4 ──► W5 ──► W6
 
 硬约束：
 
+- **不兼容、不迁移、不妥协**：旧库与旧字段一律不认，版本不符即拒绝打开；不写迁移脚本；只交付目标态，不留兼容层与双写窗口。违反任一条按未完成处理。
+- **性能是一等验收项**：事件写入 p99、控制面事务、会话列表首屏、磁盘占用同口径测量并留证，见 `docs/dev/storage-architecture.md` §9。
+- **测试与验收不得污染生产环境**：单元测试只用线程临时根；真机验收把 `AXON_RUNTIME_ROOT` 指向临时根，真实配置只读并核验 SHA-256。
 - W2 依赖 W1 的契约测试套件。W1 的测试没定稿就进 W2，后续每次改格式都要重跑全部下游。
 - W3 依赖 W2 完成，因为 `work_items` 的 claim 与事件水位在同一批事务里。
 - W6 强依赖 W5 与全部真机验收，不能提前。

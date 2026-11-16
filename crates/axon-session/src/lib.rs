@@ -59,6 +59,7 @@ pub use ports::{
     SessionSummaryRow, UserQuestionStore, UserQuestionStoreError, WorkspaceStore,
     WorkspaceStoreError,
 };
+pub use ports::{ResumePointerStore, ResumePointerStoreError};
 
 #[cfg(test)]
 #[path = "tests/mod.rs"]

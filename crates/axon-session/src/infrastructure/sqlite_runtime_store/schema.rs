@@ -25,11 +25,11 @@ pub(super) enum SchemaKind {
 impl SchemaKind {
     /// schema 版本号，写入 `PRAGMA user_version`。
     ///
-    /// 版本只标记**不兼容变更**：加表、加可空列不需要递增，删表或改语义必须递增，
-    /// 让打开旧库时报出「陌生库」而不是运行时表不存在。
+    /// 任何 schema 变更都必须递增：目标态只认当前版本的库，旧库直接拒绝打开，
+    /// 不做补列、不做回填。
     const fn version(self) -> i64 {
         match self {
-            Self::Control => 1,
+            Self::Control => 2,
             Self::Outbox => 1,
         }
     }
@@ -127,9 +127,6 @@ pub(super) fn initialize_schema(connection: &Connection, kind: SchemaKind) -> ru
     connection.execute_batch(kind.ddl())?;
     // `user_version` 不支持参数绑定，取值来自本模块常量。
     connection.execute_batch(&format!("PRAGMA user_version = {}", kind.version()))?;
-    if kind == SchemaKind::Control {
-        migrate_additive_columns(connection)?;
-    }
     Ok(())
 }
 
@@ -151,7 +148,8 @@ const CONTROL_DDL: &str = "
             updated_at_ms INTEGER NOT NULL,
             workspace_id TEXT, title TEXT,
             pinned INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,
-            run_generation INTEGER NOT NULL DEFAULT 0
+            run_generation INTEGER NOT NULL DEFAULT 0,
+            provider TEXT, model TEXT, model_name TEXT
         );
         CREATE INDEX IF NOT EXISTS sessions_recovery
             ON sessions(status, owner_host_id, owner_generation);
@@ -272,7 +270,11 @@ const CONTROL_DDL: &str = "
             ON inbox(scope_json, received_at_ms DESC, interaction_id DESC);
         CREATE INDEX IF NOT EXISTS inbox_scope_channel_recent
             ON inbox(scope_json, source_channel, received_at_ms DESC, interaction_id DESC);
-        CREATE TABLE IF NOT EXISTS goals (
+        CREATE TABLE IF NOT EXISTS resume_pointer (
+            singleton_key TEXT PRIMARY KEY NOT NULL,
+            session_id TEXT NOT NULL,
+            updated_at_ms INTEGER NOT NULL
+        );        CREATE TABLE IF NOT EXISTS goals (
             goal_id TEXT PRIMARY KEY NOT NULL,
             scope_json TEXT NOT NULL,
             parent_goal_id TEXT,
@@ -601,96 +603,3 @@ const OUTBOX_DDL: &str = "
         CREATE INDEX IF NOT EXISTS user_questions_reconcile
             ON user_questions(state, delivered, expires_at_ms);
 ";
-
-/// 追加式列迁移。
-///
-/// DDL 使用 `CREATE TABLE IF NOT EXISTS`，既有运行态库不会因 DDL 变更而获得新列。
-/// 这里只补齐**新增且可空/带默认值**的列：无损、幂等、不需要重建库，因此不会丢掉
-/// 排队中的 Interaction 或 Host lease。schema 版本只在出现不兼容变更时递增。
-///
-/// 新增列的配套索引必须在本函数内、列补齐之后创建：既有库的 `session_id` 由本函数
-/// 补列，索引若写在 DDL 批次里会因列不存在而整批失败。
-fn migrate_additive_columns(connection: &Connection) -> rusqlite::Result<()> {
-    /*
-     * 会话列表需要的展示列：workspace_id 与 	itle 由写入侧按需补齐，pinned 与
-     * rchived 决定排序与过滤。默认值让既有库无需重建即可上线这一能力。
-     */
-    add_column_if_missing(connection, "sessions", "workspace_id", "TEXT")?;
-    add_column_if_missing(connection, "sessions", "title", "TEXT")?;
-    add_column_if_missing(
-        connection,
-        "sessions",
-        "pinned",
-        "INTEGER NOT NULL DEFAULT 0",
-    )?;
-    add_column_if_missing(
-        connection,
-        "sessions",
-        "archived",
-        "INTEGER NOT NULL DEFAULT 0",
-    )?;
-    // 运行实例代数：`/reset` 只递增它并换 run_session_id，会话与会话历史保持不变。
-    add_column_if_missing(
-        connection,
-        "sessions",
-        "run_generation",
-        "INTEGER NOT NULL DEFAULT 0",
-    )?;
-    add_column_if_missing(
-        connection,
-        "inbox",
-        "attachments_json",
-        "TEXT NOT NULL DEFAULT '[]'",
-    )?;
-    add_column_if_missing(
-        connection,
-        "inbox",
-        "session_id",
-        "TEXT NOT NULL DEFAULT ''",
-    )?;
-    // 本轮显式指定的模型（TUI `/model` 等入口）：可空，老记录读作 None。
-    add_column_if_missing(connection, "inbox", "model", "TEXT")?;
-    // 本轮显式指定的推理强度：与 model 同源，可空，老记录读作 None。
-    add_column_if_missing(connection, "inbox", "reasoning_effort", "TEXT")?;
-    /*
-     * 本轮用过的工具名（逗号分隔、写入时已去重）。
-     *
-     * 历史列表不读事件流：工具名只在会话事件的载荷里，没有可用的索引，
-     * 查询时聚合要把整条会话的十几万帧扫一遍。落成列之后，索引接口按主键取一次
-     * 就能给出「执行了命令、已读取文件」这类动作摘要。老记录为空，界面退回状态短语。
-     */
-    add_column_if_missing(
-        connection,
-        "inbox",
-        "tool_summary",
-        "TEXT NOT NULL DEFAULT ''",
-    )?;
-    /*
-     * 车道列表按 (session, 接收时间倒序) 取组内首行；session 排他领取改由 work_items 的
-     * (inbox_id, status, lease_expires_at_ms) 索引承担，见 DDL。
-     */
-    connection.execute_batch(
-        "CREATE INDEX IF NOT EXISTS inbox_session_recent
-            ON inbox(session_id, received_at_ms DESC, interaction_id DESC);",
-    )
-}
-
-fn add_column_if_missing(
-    connection: &Connection,
-    table: &str,
-    column: &str,
-    definition: &str,
-) -> rusqlite::Result<()> {
-    let exists: bool = connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",
-        rusqlite::params![table, column],
-        |row| row.get(0),
-    )?;
-    if exists {
-        return Ok(());
-    }
-    // 表名与列名来自本模块的常量字面量，不含外部输入。
-    connection.execute_batch(&format!(
-        "ALTER TABLE {table} ADD COLUMN {column} {definition}"
-    ))
-}

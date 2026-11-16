@@ -69,6 +69,7 @@ mod run_request_builder;
 mod run_request_payload;
 mod run_request_session;
 pub(crate) mod run_request_subagents;
+pub(crate) mod run_resume_pointer;
 pub(crate) mod run_rollout_store;
 mod run_self_iteration_subagent;
 mod run_semantic_salience;
@@ -143,8 +144,9 @@ use run_request::RunRequest;
 use run_request_build_options::RunRequestBuildOptions;
 use run_request_session::RunRequestSession;
 pub(crate) use run_request_subagents::execute_standalone_subagent;
+pub(crate) use run_resume_pointer::select_resume_session;
+pub(crate) use run_resume_pointer::{restore_resume_session, snapshot_resume_session};
 use run_rollout_store::commit_session_to_rollout;
-pub(crate) use run_rollout_store::select_rollout_session;
 #[cfg(test)]
 pub(crate) use run_rollout_store::{RolloutEventAppendInput, append_rollout_event_for_session};
 pub(crate) use run_rollout_store::{
@@ -153,7 +155,6 @@ pub(crate) use run_rollout_store::{
     load_session_usage_totals_from_root, read_rollout_tool_output, replay_rollout_events,
     replay_session_chain, resolved_rollout_db_path,
 };
-pub(crate) use run_rollout_store::{restore_selected_session, snapshot_selected_session};
 pub(crate) use run_session_store::RunSessionRecord;
 pub(crate) use run_session_store::resolved_axon_root;
 pub(crate) use run_startup_snapshot::RunStartupSnapshot;

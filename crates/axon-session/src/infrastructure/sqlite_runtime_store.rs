@@ -71,6 +71,8 @@ use helpers::storage;
 pub mod lease_repository;
 #[path = "sqlite_runtime_store/result_repository.rs"]
 mod result_repository;
+#[path = "sqlite_runtime_store/resume_pointer_repository.rs"]
+mod resume_pointer_repository;
 #[path = "sqlite_runtime_store/runtime_repository.rs"]
 pub mod runtime_repository;
 #[path = "sqlite_runtime_store/runtime_store_impl.rs"]
