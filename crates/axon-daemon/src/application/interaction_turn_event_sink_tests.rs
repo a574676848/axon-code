@@ -3,6 +3,18 @@
 use super::*;
 use serde_json::json;
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use axon_domain::{
+    AudienceContext, AudienceKind, ConsumerCursor, DaemonSessionId, DisclosurePolicy,
+    InteractionRecord, InteractionSource, ReplyRoute, RuntimeHostId, ScopeRef,
+};
+use axon_session::{EventLogStore, InteractionStore, SessionEventRecord, SqliteRuntimeStore};
+use axon_session_runtime::EventPublisher;
+
+use crate::application::event_stream_bridge::EventStreamBridge;
+use super::super::child_session_event_sink::ChildSessionSinkFactory;
+
 fn interaction_id() -> InteractionId {
     InteractionId::new("interaction-projection-test").expect("Interaction ID 应合法")
 }
@@ -120,4 +132,143 @@ fn turn_terminal_covers_the_completion_event_and_terminal_lifecycles() {
     // 其余 durable 帧与收口无关，不必每一条都去清账。
     let tool_call = wire_payload("toolCall", json!({ "partId": "tool-1" }));
     assert!(!is_turn_terminal(&runtime_event("wire_event", tool_call)));
+}
+
+/// 每次读取都前进 1 毫秒的测试时钟。
+///
+/// 它是「同批写入」的取证手段：一批事件共享同一个 `emitted_at_ms`，两次写入必然
+/// 落到两个不同时间戳上，因此时间戳相等就等价于「只提交了一批」。
+#[derive(Clone)]
+struct AdvancingClock {
+    next: Arc<AtomicU64>,
+}
+
+impl AdvancingClock {
+    fn new(start: u64) -> Self {
+        Self {
+            next: Arc::new(AtomicU64::new(start)),
+        }
+    }
+}
+
+impl RuntimeClock for AdvancingClock {
+    fn now_ms(&self) -> u64 {
+        self.next.fetch_add(1, Ordering::AcqRel)
+    }
+}
+
+/// 只记录投递类型的发布器：用来区分「落库」与「推实时通道」。
+struct RecordingPublisher {
+    published: Arc<Mutex<Vec<String>>>,
+}
+
+impl EventPublisher for RecordingPublisher {
+    fn publish(&self, event: &SessionEventRecord, _cursor: &ConsumerCursor) -> Result<(), String> {
+        self.published
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(event.event_type.clone());
+        Ok(())
+    }
+}
+
+#[test]
+fn terminal_event_and_turn_metrics_land_in_one_batch() {
+    let root = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::from_root(root.path().join("data"));
+    let clock = AdvancingClock::new(1_000);
+    let host_id = RuntimeHostId::new("host-turn-metrics-batch").expect("Host ID");
+    let host = store
+        .claim_host(&host_id, 1, None, clock.now_ms(), 60_000)
+        .expect("注册 Host");
+    let session_id = DaemonSessionId::new("session-turn-metrics-batch").expect("Session ID");
+    store
+        .create_session(&session_id, "/workspace", clock.now_ms())
+        .expect("创建会话");
+
+    let interaction = InteractionRecord::new(
+        InteractionId::new("interaction-turn-metrics-batch").expect("Interaction ID"),
+        InteractionSource::new("cli", "message-turn-metrics-batch").expect("来源"),
+        ScopeRef::global(),
+        AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly),
+        ReplyRoute::new("cli", "terminal").expect("回复路由"),
+        "跑一轮",
+        clock.now_ms(),
+    )
+    .expect("Interaction");
+    let interaction_id = interaction.interaction_id.clone();
+    store.append(&interaction).expect("追加 Interaction");
+    let lease = store
+        .claim_processing_by_id(&interaction_id, clock.now_ms(), 60_000)
+        .expect("领取 Interaction")
+        .expect("应领取到一条待处理 Interaction");
+
+    let published = Arc::new(Mutex::new(Vec::new()));
+    let publisher = RecordingPublisher {
+        published: Arc::clone(&published),
+    };
+    let bridge = EventStreamBridge::new();
+    let sink = RuntimeTurnEventSink::new(
+        &store,
+        CommittedEventEgress::new(&publisher, &bridge),
+        &host,
+        &session_id,
+        &interaction_id,
+        &lease.lease_token,
+        &clock,
+        None,
+        Arc::new(ChildSessionSinkFactory {
+            store: store.clone(),
+            host: host.clone(),
+            clock: clock.clone(),
+            cwd: "/workspace".to_owned(),
+            stream_bridge: Arc::new(EventStreamBridge::new()),
+        }),
+    );
+
+    sink.publish(&runtime_event(
+        "turn_completed",
+        json!({
+            "interactionId": interaction_id.as_str(),
+            "response": "答案",
+        })
+        .to_string(),
+    ))
+    .expect("终态事件应落库");
+
+    // 一次写入两条：终态在前，它派生的指标紧随其后。
+    let events = store.replay_events(&session_id, 0, 10).expect("回放事件");
+    assert_eq!(events.len(), 2, "终态与指标必须一次写入，不得分两批");
+    assert_eq!(events[0].event_type, "turn_completed");
+    assert_eq!(events[1].event_type, "turn_metrics");
+    assert_eq!(events[1].sequence, events[0].sequence + 1);
+    assert_eq!(
+        events[0].emitted_at_ms, events[1].emitted_at_ms,
+        "同批事件共享同一个提交时刻：时间戳不同即说明又开了一批"
+    );
+
+    let metrics: axon_eventlog::TurnMetrics =
+        serde_json::from_str(&events[1].payload_json).expect("指标载荷应可解析");
+    assert_eq!(metrics.turn_id, interaction_id.as_str());
+
+    // 指标同时进入会话累计投影：派生读数不必回放事件也能读到。
+    let projected: i64 = store
+        .with_read_connection(|connection| {
+            connection.query_row(
+                "SELECT COUNT(*) FROM session_metrics WHERE session_id=?1",
+                [session_id.as_str()],
+                |row| row.get(0),
+            )
+        })
+        .expect("读取会话累计指标");
+    assert_eq!(projected, 1, "指标必须投影进 session_metrics");
+
+    // 指标只落库：实时通道仍然只看到终态这一帧。
+    assert_eq!(
+        published
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_slice(),
+        ["turn_completed".to_owned()]
+    );
 }

@@ -92,27 +92,87 @@ pub struct FrameScan {
     pub torn_start: Option<usize>,
 }
 
+/// 帧扫描的字节来源。
+///
+/// 扫描规则只写一遍，内存切片与磁盘文件各给一份读取实现：读一页分页日志时
+/// 不必把整个文件搬进内存，而扫描判据与写侧的截断判据仍然是同一份代码。
+pub trait FrameSource {
+    /// 来源的总字节数。
+    fn total_len(&mut self) -> Result<usize, EventLogError>;
+
+    /// 读取从 `start` 起的至多 `len` 字节；末尾不足时返回实际读到的字节。
+    fn read_range(&mut self, start: usize, len: usize) -> Result<Vec<u8>, EventLogError>;
+}
+
+impl FrameSource for &[u8] {
+    fn total_len(&mut self) -> Result<usize, EventLogError> {
+        Ok(self.len())
+    }
+
+    fn read_range(&mut self, start: usize, len: usize) -> Result<Vec<u8>, EventLogError> {
+        let end = start.saturating_add(len).min(self.len());
+        Ok(self.get(start..end).unwrap_or_default().to_vec())
+    }
+}
+
+impl FrameSource for std::fs::File {
+    fn total_len(&mut self) -> Result<usize, EventLogError> {
+        let len = self.metadata()?.len();
+        usize::try_from(len)
+            .map_err(|_| EventLogError::Corrupt(format!("日志长度超出可寻址范围：{len} 字节")))
+    }
+
+    fn read_range(&mut self, start: usize, len: usize) -> Result<Vec<u8>, EventLogError> {
+        use std::io::{Read as _, Seek as _, SeekFrom};
+        self.seek(SeekFrom::Start(u64::try_from(start).unwrap_or(u64::MAX)))?;
+        let mut buffer = vec![0u8; len];
+        let mut filled = 0usize;
+        while filled < len {
+            let read = self.read(&mut buffer[filled..])?;
+            if read == 0 {
+                break;
+            }
+            filled += read;
+        }
+        buffer.truncate(filled);
+        Ok(buffer)
+    }
+}
+
 /// 按 zstd 帧结构扫描字节流，不解压。
 ///
 /// 规则来自 RFC 8878：魔数、帧头描述符、可选字段、块循环、可选校验和。
 /// 末尾不足一个完整帧时返回 `torn_start`，交由写句柄截断。
 pub fn scan_frames(bytes: &[u8]) -> Result<FrameScan, EventLogError> {
+    let mut source = bytes;
+    scan_source_frames(&mut source)
+}
+
+/// 按帧结构扫描磁盘文件：只读帧头与块头，不把整个文件读进内存。
+pub fn scan_file_frames(file: &mut std::fs::File) -> Result<FrameScan, EventLogError> {
+    scan_source_frames(file)
+}
+
+/// 扫描任意字节来源，判据与 [`scan_frames`] 完全一致。
+pub fn scan_source_frames<S: FrameSource>(
+    source: &mut S,
+) -> Result<FrameScan, EventLogError> {
+    let total = source.total_len()?;
     let mut frames = Vec::new();
     let mut cursor = 0usize;
-    while cursor < bytes.len() {
+    while cursor < total {
         let start = cursor;
-        if bytes.len() - cursor < 4 {
-            return Ok(FrameScan {
-                frames,
-                torn_start: Some(start),
-            });
+        let magic = source.read_range(cursor, ZSTD_MAGIC.len())?;
+        if magic.len() < ZSTD_MAGIC.len() {
+            return Ok(torn_scan(frames, start));
         }
-        if bytes[cursor..cursor + 4] != ZSTD_MAGIC {
+        if magic != ZSTD_MAGIC {
             return Err(EventLogError::Corrupt(format!("帧魔数无效，偏移 {cursor}")));
         }
-        cursor += 4;
+        cursor += ZSTD_MAGIC.len();
 
-        let Some(&descriptor) = bytes.get(cursor) else {
+        let descriptor_bytes = source.read_range(cursor, 1)?;
+        let Some(&descriptor) = descriptor_bytes.first() else {
             return Ok(torn_scan(frames, start));
         };
         cursor += 1;
@@ -136,18 +196,22 @@ pub fn scan_frames(bytes: &[u8]) -> Result<FrameScan, EventLogError> {
             1usize << content_size_flag
         };
         let skip = dictionary_bytes + content_size_bytes + usize::from(!single_segment);
-        if bytes.len() - cursor < skip {
+        if total - cursor < skip {
             return Ok(torn_scan(frames, start));
         }
         cursor += skip;
 
         loop {
-            if bytes.len() - cursor < 3 {
+            if total - cursor < 3 {
                 return Ok(torn_scan(frames, start));
             }
-            let header = u32::from(bytes[cursor])
-                | (u32::from(bytes[cursor + 1]) << 8)
-                | (u32::from(bytes[cursor + 2]) << 16);
+            let block_header = source.read_range(cursor, 3)?;
+            let [first, second, third] = match block_header.as_slice() {
+                [first, second, third] => [*first, *second, *third],
+                _ => return Ok(torn_scan(frames, start)),
+            };
+            let header =
+                u32::from(first) | (u32::from(second) << 8) | (u32::from(third) << 16);
             cursor += 3;
             let last_block = header & 1 == 1;
             let block_type = (header >> 1) & 0b11;
@@ -156,7 +220,7 @@ pub fn scan_frames(bytes: &[u8]) -> Result<FrameScan, EventLogError> {
                 return Err(EventLogError::Corrupt(format!("保留块类型，偏移 {cursor}")));
             }
             let payload = if block_type == 0b01 { 1 } else { block_size };
-            if bytes.len() - cursor < payload {
+            if total - cursor < payload {
                 return Ok(torn_scan(frames, start));
             }
             cursor += payload;
@@ -166,7 +230,7 @@ pub fn scan_frames(bytes: &[u8]) -> Result<FrameScan, EventLogError> {
         }
 
         if checksum_flag {
-            if bytes.len() - cursor < 4 {
+            if total - cursor < 4 {
                 return Ok(torn_scan(frames, start));
             }
             cursor += 4;

@@ -175,19 +175,20 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
         }
     }
 
-    /// 把本轮指标写进会话事件流；每轮只写一次。
+    /// 组装本轮指标事件；每轮只产出一次。
     ///
-    /// 指标属于派生事实，写入失败不阻断本轮投递。
-    fn emit_turn_metrics(&self) -> Result<(), String>
+    /// 指标是终态事件的派生事实，因此不单独开一批写入：调用方把它并进终态批次，
+    /// 每轮省掉一次控制面事务与一次 fsync，也不会出现「终态已落盘而指标丢失」。
+    /// 序列化失败按派生事实处理：告警并返回 `None`，不阻断本轮投递。
+    fn turn_metrics_event(&self) -> Option<(String, String)>
     where
-        S: RuntimeStore + Send + Sync,
         C: RuntimeClock,
     {
         if self
             .turn_metrics_emitted
             .swap(true, std::sync::atomic::Ordering::AcqRel)
         {
-            return Ok(());
+            return None;
         }
         let now_ms = self.clock.now_ms();
         let readout = self.generation_readout(None);
@@ -226,16 +227,13 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             outcome: axon_eventlog::TurnOutcome::Succeeded,
             tool_calls: 0,
         };
-        let payload = serde_json::to_string(&metrics).map_err(|error| error.to_string())?;
-        self.store
-            .append_events(
-                self.session_id,
-                self.host,
-                &[("turn_metrics".to_owned(), payload)],
-                now_ms,
-            )
-            .map_err(|error| error.to_string())?;
-        Ok(())
+        match serde_json::to_string(&metrics) {
+            Ok(payload) => Some(("turn_metrics".to_owned(), payload)),
+            Err(error) => {
+                axon_logger::warning(&format!("turn_metrics 序列化失败：{error}"));
+                None
+            }
+        }
     }
     /// 边界收口：把累积的正文压成快照事件落库。
     ///
@@ -277,12 +275,15 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
                     // 边界：先用快照把已累积的正文落库，再提交这个语义事件。
                     self.retire_part_for(event);
                     self.flush_live_parts()?;
-                    self.commit_and_publish_slice(std::slice::from_ref(event))?;
-                    if is_turn_terminal(event) {
-                        // 指标属于派生事实：失败只记日志，不影响终态投递。
-                        if let Err(error) = self.emit_turn_metrics() {
-                            axon_logger::warning(&format!("turn_metrics 写入失败：{error}"));
-                        }
+                    let terminal = is_turn_terminal(event);
+                    // 终态与它派生的指标同批落盘：一次控制面事务、一次 fsync。
+                    let metrics = if terminal {
+                        self.turn_metrics_event()
+                    } else {
+                        None
+                    };
+                    self.commit_and_publish_slice(std::slice::from_ref(event), metrics)?;
+                    if terminal {
                         // 轮次已收口：可补发的读数到此作废，留着只会被下一次订阅
                         // 补发出去，把上一轮的阶段当成新一轮的现状。
                         self.event_egress
@@ -523,7 +524,15 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             .remove(&assistant_part_key(part_id));
     }
 
-    fn commit_and_publish_slice(&self, events: &[RuntimeEvent]) -> Result<(), String>
+    /// 提交一批语义事件，并把其中可投递的部分推给订阅者。
+    ///
+    /// `durable_only` 是只落库、不投递实时通道的附加事件（终态轮次的 `turn_metrics`）：
+    /// 它与同一批事件共享控制面事务与一次 fsync，但不对订阅者补发。
+    fn commit_and_publish_slice(
+        &self,
+        events: &[RuntimeEvent],
+        durable_only: Option<(String, String)>,
+    ) -> Result<(), String>
     where
         S: RuntimeStore + Send + Sync,
         P: EventPublisher + Send + Sync,
@@ -536,13 +545,17 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             .publish_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let payloads = events
+        let mut payloads = events
             .iter()
             .map(|event| {
                 annotate_live_event(&event.payload_json, self.interaction_id)
                     .map(|payload_json| (event.event_type.clone(), payload_json))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let publishable = payloads.len();
+        if let Some(durable) = durable_only {
+            payloads.push(durable);
+        }
         let persisted = self
             .store
             .append_interaction_events(
@@ -560,7 +573,8 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
         {
             performance.record(TurnPerformanceStage::FirstEventCommitted);
         }
-        for event in &persisted {
+        // 只投递可投递的前缀：附加事件已经落库，但它不属于实时通道的帧序列。
+        for event in persisted.iter().take(publishable) {
             self.event_egress.publish_for_interaction(
                 self.interaction_id,
                 event,
