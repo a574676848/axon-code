@@ -52,6 +52,31 @@ fn runtime_schema_contains_work_ledger_tables_and_hot_query_indexes() {
         )
         .expect("查询活动 Interaction 索引");
     assert!(active_indexed);
+    let session_recent_indexed: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='inbox_session_recent')",
+            [],
+            |row| row.get(0),
+        )
+        .expect("查询车道列表索引");
+    assert!(session_recent_indexed);
+    // 车道列表按 session 分组、组内按接收时间倒序取首行：索引列序必须与之吻合，
+    // 否则窗口函数会退化成全表扫描加临时排序。
+    let session_recent_columns = connection
+        .prepare("PRAGMA index_info(inbox_session_recent)")
+        .expect("读取车道列表索引")
+        .query_map([], |row| row.get::<_, String>(2))
+        .expect("枚举车道列表索引列")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("收集车道列表索引列");
+    assert_eq!(
+        session_recent_columns,
+        vec![
+            "session_id".to_owned(),
+            "received_at_ms".to_owned(),
+            "interaction_id".to_owned()
+        ]
+    );
     let claim_index_columns = connection
         .prepare("PRAGMA index_info(work_items_inbox)")
         .expect("读取 claim 索引")

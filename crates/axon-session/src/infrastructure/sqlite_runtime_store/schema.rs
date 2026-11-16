@@ -29,7 +29,7 @@ impl SchemaKind {
     /// 不做补列、不做回填。
     const fn version(self) -> i64 {
         match self {
-            Self::Control => 2,
+            Self::Control => 3,
             Self::Outbox => 1,
         }
     }
@@ -270,6 +270,8 @@ const CONTROL_DDL: &str = "
             ON inbox(scope_json, received_at_ms DESC, interaction_id DESC);
         CREATE INDEX IF NOT EXISTS inbox_scope_channel_recent
             ON inbox(scope_json, source_channel, received_at_ms DESC, interaction_id DESC);
+        CREATE INDEX IF NOT EXISTS inbox_session_recent
+            ON inbox(session_id, received_at_ms DESC, interaction_id DESC);
         CREATE TABLE IF NOT EXISTS resume_pointer (
             singleton_key TEXT PRIMARY KEY NOT NULL,
             session_id TEXT NOT NULL,

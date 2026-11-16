@@ -59,6 +59,79 @@ fn request(adapter: &SessionsHttpAdapter, query: Option<&str>) -> Vec<Value> {
     parsed.as_array().cloned().unwrap_or_default()
 }
 
+/// 会话清单每行两条相关子查询：缺 `inbox_session_recent` 时每次都要全表扫描 inbox。
+fn measure_session_list(store: &SqliteRuntimeStore) -> (usize, u128) {
+    let mut best = u128::MAX;
+    let mut rows = 0;
+    for _ in 0..3 {
+        let started = std::time::Instant::now();
+        rows = super::read_session_rows(store).expect("读取会话清单").len();
+        best = best.min(started.elapsed().as_millis());
+    }
+    (rows, best)
+}
+
+#[test]
+#[ignore = "性能验收：200 会话 × 20 万入站事实下会话清单必须走 inbox_session_recent，门槛 30ms"]
+fn session_list_query_uses_inbox_session_index_and_stays_within_budget() {
+    const SESSIONS: usize = 200;
+    const ROWS_PER_SESSION: usize = 1_000;
+    let (_directory, store) = fixture();
+    store
+        .with_read_connection(|connection| {
+            connection.execute_batch("BEGIN IMMEDIATE")?;
+            for session in 0..SESSIONS {
+                connection.execute(
+                    "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,
+                     worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,
+                     last_activity_at_ms,created_at_ms,updated_at_ms,pinned,archived,workspace_id)
+                     VALUES(?1,?1,?1,'/workspace','idle',0,0,0,0,?2,?2,?2,0,0,'ws-a')",
+                    params![
+                        format!("session-{session:04}"),
+                        i64::try_from(session).unwrap_or(0)
+                    ],
+                )?;
+                for row in 0..ROWS_PER_SESSION {
+                    let received = i64::try_from(row).unwrap_or(0);
+                    connection.execute(
+                        "INSERT INTO inbox(interaction_id,source_channel,source_message_id,
+                             scope_json,audience_json,reply_route_json,content,session_id,
+                             received_at_ms,updated_at_ms)
+                         VALUES(?1,'tui',?2,'{\"workspace\":\"ws-a\"}','{}','{}',?3,?4,?5,?5)",
+                        params![
+                            format!("inbox-{session:04}-{row:04}"),
+                            format!("msg-{session:04}-{row:04}"),
+                            format!("第 {row} 条"),
+                            format!("session-{session:04}"),
+                            received
+                        ],
+                    )?;
+                }
+            }
+            connection.execute_batch("COMMIT")
+        })
+        .expect("写入大规模会话 fixture");
+
+    let (rows, indexed_ms) = measure_session_list(&store);
+    assert_eq!(rows, SESSIONS, "会话清单条数");
+
+    store
+        .with_read_connection(|connection| {
+            connection.execute_batch("DROP INDEX inbox_session_recent")
+        })
+        .expect("删除索引以取得基线");
+    let (_, baseline_ms) = measure_session_list(&store);
+    println!(
+        "session_list sessions={SESSIONS} inbox_rows={} indexed={indexed_ms}ms baseline={baseline_ms}ms 门槛=30ms",
+        SESSIONS * ROWS_PER_SESSION
+    );
+    assert!(indexed_ms < 30, "会话清单超出 30ms 门槛：{indexed_ms}ms");
+    assert!(
+        indexed_ms.saturating_mul(3) < baseline_ms.max(1),
+        "索引必须带来数量级收益：indexed={indexed_ms}ms baseline={baseline_ms}ms"
+    );
+}
+
 #[test]
 fn lists_sessions_with_title_from_first_inbound_message_and_pinned_first() {
     let (directory, store) = fixture();
