@@ -6,7 +6,7 @@ use crate::ports::{EventPublisher, RuntimeClock, TurnEventSink, TurnExecutor};
 use axon_domain::{
     ConsumerCursor, DaemonSessionId, RuntimeHostId, SessionActionId, SessionActionStatus,
 };
-use axon_session::{
+use axon_session::{EventLogStore, 
     CheckpointTelemetry, DaemonHostRecord, RuntimeStore, SessionActionRecord, SessionEventRecord,
     SqliteRuntimeStore,
 };

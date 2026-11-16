@@ -4,7 +4,7 @@ use axon_domain::{
     ConsumerCursor, DecisionEffect, DecisionId, GoalId, GoalPlan, GoalRecord, GoalStatus,
     RuntimeHostId, ScopeRef,
 };
-use axon_session::{
+use axon_session::{EventLogStore, 
     CheckpointTelemetry, DecisionStore, GoalStore, SessionEventRecord, SessionRuntimeRecord,
     SqliteRuntimeStore,
 };
