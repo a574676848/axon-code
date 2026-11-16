@@ -44,7 +44,7 @@ pub use infrastructure::{
 pub use ports::ExecutionSettlement;
 pub use ports::ThreadActivationSnapshot;
 pub use ports::ThreadEventStore;
-pub use ports::{
+pub use ports::{EventLogStore,
     AgentContinuationAppendOutcome, AgentContinuationQuery, AgentContinuationRecord,
     AgentContinuationState, AgentContinuationStore, AgentContinuationStoreError,
     AgentMailboxAppendOutcome, AgentMailboxMessageKind, AgentMailboxMessageRecord,

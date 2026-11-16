@@ -9,6 +9,7 @@
 //! 事件流（与当轮 run 写的是同一条流、同一个事件类型），再把落好的事件推给实时订阅者。
 //! 顺序与子代理会话的 sink 一致：先 durable，再实时。
 
+use axon_session::EventLogStore as _;
 use std::sync::Arc;
 
 use axon_domain::DaemonSessionId;

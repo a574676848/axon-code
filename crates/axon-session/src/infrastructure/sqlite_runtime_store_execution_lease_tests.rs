@@ -3,6 +3,7 @@
 //! 与 `sqlite_runtime_store_tests.rs` 同源，按关注点拆开：这里只覆盖执行记录的领取与结算、
 //! 业务键去重、失败退避，以及 Daemon 主机租约的续期与回收。
 
+use crate::ports::EventLogStore as _;
 use super::SqliteRuntimeStore;
 use crate::{ExecutionStore, GoalStore, ports::RuntimeStore};
 use axon_domain::{

@@ -26,6 +26,7 @@ pub mod session_event_store;
 pub mod user_question_store;
 pub mod workspace_store;
 
+mod event_log_store;
 mod event_store;
 mod runtime_store;
 
@@ -44,6 +45,7 @@ pub use client_delivery_store::{
     NotificationDeliveryState,
 };
 pub use decision_store::{DecisionStore, DecisionStoreError};
+pub use event_log_store::EventLogStore;
 pub use event_store::{ThreadActivationSnapshot, ThreadEventStore};
 pub use execution_store::{ExecutionStore, ExecutionStoreError, ExecutionTrigger};
 pub use goal_commit_store::{GoalCommitError, GoalCommitStore};

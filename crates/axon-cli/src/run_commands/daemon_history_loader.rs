@@ -1,5 +1,6 @@
 //! TUI 启动时的最近完成回合历史读取。
 
+use axon_session::EventLogStore as _;
 use std::path::Path;
 
 use axon_domain::{

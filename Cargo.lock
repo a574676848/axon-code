@@ -747,6 +747,17 @@ name = "axon-env"
 version = "0.1.10"
 
 [[package]]
+name = "axon-eventlog"
+version = "0.1.10"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "zstd 0.14.3",
+]
+
+[[package]]
 name = "axon-fixtures"
 version = "0.1.10"
 
@@ -950,6 +961,7 @@ version = "0.1.10"
 dependencies = [
  "axon-crypto",
  "axon-domain",
+ "axon-eventlog",
  "axon-jsonl",
  "axon-process",
  "axon-test-support",

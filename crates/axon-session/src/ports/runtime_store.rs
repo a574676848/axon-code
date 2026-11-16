@@ -5,13 +5,14 @@ use crate::domain::runtime::{
     SessionRuntimeRecord,
 };
 use axon_domain::{
-    DaemonSessionId, InteractionId, RuntimeHostId, SessionActionId, SessionActionStatus,
+    DaemonSessionId, RuntimeHostId, SessionActionId, SessionActionStatus,
     SessionRuntimeStatus,
 };
 use thiserror::Error;
 
 use super::{
-    AgentContinuationStore, AgentMailboxStore, ClientDeliveryStore, DecisionStore, ExecutionStore,
+    AgentContinuationStore, AgentMailboxStore, ClientDeliveryStore, DecisionStore, EventLogStore,
+    ExecutionStore,
     GoalCommitStore, GoalMutationStore, GoalStore, HealthStore, InteractionQueryStore,
     InteractionStore, LedgerCommitStore, LedgerEventStore, ResultStore, WorkspaceStore,
 };
@@ -68,6 +69,7 @@ pub trait RuntimeStore:
     + LedgerCommitStore
     + WorkspaceStore
     + HealthStore
+    + EventLogStore
     + Send
     + Sync
 {
@@ -269,49 +271,6 @@ pub trait RuntimeStore:
         settlement: Option<&super::ExecutionSettlement>,
         checkpoint: &CheckpointTelemetry,
         now_ms: u64,
-    ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError>;
-    /// 追加事件并校验 Host generation。
-    fn append_event(
-        &self,
-        session_id: &DaemonSessionId,
-        host: &DaemonHostRecord,
-        event_type: &str,
-        payload_json: &str,
-        now_ms: u64,
-    ) -> Result<SessionEventRecord, RuntimeStoreError>;
-    /// 在同一事务中按输入顺序追加一批事件并校验一次 Host generation。
-    fn append_events(
-        &self,
-        session_id: &DaemonSessionId,
-        host: &DaemonHostRecord,
-        events: &[(String, String)],
-        now_ms: u64,
-    ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError>;
-    /// 在同一事务中校验 Interaction processing lease 并按顺序追加事件。
-    fn append_interaction_events(
-        &self,
-        session_id: &DaemonSessionId,
-        host: &DaemonHostRecord,
-        interaction_id: &InteractionId,
-        lease_token: &str,
-        events: &[(String, String)],
-        now_ms: u64,
-    ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError>;
-    /// 读取 cursor 之后的事件。
-    fn replay_events(
-        &self,
-        session_id: &DaemonSessionId,
-        after_sequence: u64,
-        limit: u32,
-    ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError>;
-    /// 读取某条 Interaction 自身的尾窗帧，按序号升序。
-    ///
-    /// 首屏一次拿到可渲染的尾部窗口，不必先探整条会话的尾序号。
-    fn interaction_tail_window(
-        &self,
-        session_id: &DaemonSessionId,
-        interaction_id: &InteractionId,
-        limit: u32,
     ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError>;
     /// 创建或更新持久调度计划。
     fn upsert_schedule(&self, schedule: &RuntimeScheduleRecord) -> Result<(), RuntimeStoreError>;

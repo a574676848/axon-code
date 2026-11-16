@@ -4,7 +4,7 @@ use crate::domain::runtime::{
     SessionRuntimeRecord,
 };
 use crate::ports::{
-    CheckpointTelemetry, RuntimeStore, RuntimeStoreError,
+    CheckpointTelemetry, EventLogStore, RuntimeStore, RuntimeStoreError,
     ingress_cursor_store::SessionIngressCursorStore,
 };
 use axon_domain::{
@@ -33,6 +33,8 @@ mod commit_repository;
 mod connection_pool;
 #[path = "sqlite_runtime_store/decision_repository.rs"]
 mod decision_repository;
+#[path = "sqlite_runtime_store/event_log_repository.rs"]
+mod event_log_repository;
 #[path = "sqlite_runtime_store/event_payload_store.rs"]
 pub mod event_payload_store;
 #[path = "sqlite_runtime_store/event_repository.rs"]
@@ -89,6 +91,8 @@ pub mod transaction;
 mod user_question_repository;
 
 const DATABASE_FILE_NAME: &str = "runtime.sqlite3";
+/// 会话事件日志根目录名。
+const EVENTS_DIR: &str = "events";
 const HOST_STATE_RUNNING: &str = "running";
 
 /// Session 事件正文的内联上限（字节）。
@@ -122,6 +126,7 @@ pub struct WalCheckpoint {
 #[derive(Debug, Clone)]
 pub struct SqliteRuntimeStore {
     path: PathBuf,
+    events_root: PathBuf,
     schema_ready: Arc<AtomicBool>,
     schema_init_lock: Arc<Mutex<()>>,
     pool: Arc<ConnectionPool>,
@@ -132,9 +137,14 @@ impl SqliteRuntimeStore {
     #[must_use]
     pub fn new(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
+        let events_root = path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join(EVENTS_DIR);
         Self {
             pool: Arc::new(ConnectionPool::new(path.clone())),
             path,
+            events_root,
             schema_ready: Arc::new(AtomicBool::new(false)),
             schema_init_lock: Arc::new(Mutex::new(())),
         }
@@ -148,12 +158,17 @@ impl SqliteRuntimeStore {
     #[must_use]
     pub fn with_busy_timeout(path: impl Into<PathBuf>, busy_timeout: Duration) -> Self {
         let path = path.into();
+        let events_root = path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join(EVENTS_DIR);
         Self {
             pool: Arc::new(ConnectionPool::with_busy_timeout(
                 path.clone(),
                 busy_timeout,
             )),
             path,
+            events_root,
             schema_ready: Arc::new(AtomicBool::new(false)),
             schema_init_lock: Arc::new(Mutex::new(())),
         }
@@ -187,6 +202,18 @@ impl SqliteRuntimeStore {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// 会话事件日志根目录。
+    #[must_use]
+    pub fn events_root(&self) -> &Path {
+        &self.events_root
+    }
+
+    /// 打开某个会话的事件日志。
+    #[must_use]
+    pub fn event_log(&self, session_id: &DaemonSessionId) -> axon_eventlog::EventLog {
+        axon_eventlog::EventLog::open(&self.events_root, session_id.as_str())
     }
 
     /// 回收仍标记为 running、但对应进程已经退出的 Host lease。
@@ -555,64 +582,6 @@ impl RuntimeStore for SqliteRuntimeStore {
         )
     }
 
-    fn append_event(
-        &self,
-        session_id: &DaemonSessionId,
-        host: &DaemonHostRecord,
-        event_type: &str,
-        payload_json: &str,
-        now_ms: u64,
-    ) -> Result<SessionEventRecord, RuntimeStoreError> {
-        event_repository::append_event(self, session_id, host, event_type, payload_json, now_ms)
-    }
-
-    fn append_events(
-        &self,
-        session_id: &DaemonSessionId,
-        host: &DaemonHostRecord,
-        events: &[(String, String)],
-        now_ms: u64,
-    ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
-        event_repository::append_events(self, session_id, host, events, now_ms)
-    }
-
-    fn append_interaction_events(
-        &self,
-        session_id: &DaemonSessionId,
-        host: &DaemonHostRecord,
-        interaction_id: &InteractionId,
-        lease_token: &str,
-        events: &[(String, String)],
-        now_ms: u64,
-    ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
-        event_repository::append_interaction_events(
-            self,
-            session_id,
-            host,
-            interaction_id,
-            lease_token,
-            events,
-            now_ms,
-        )
-    }
-
-    fn replay_events(
-        &self,
-        session_id: &DaemonSessionId,
-        after_sequence: u64,
-        limit: u32,
-    ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
-        event_repository::replay_events(self, session_id, after_sequence, limit)
-    }
-
-    fn interaction_tail_window(
-        &self,
-        session_id: &DaemonSessionId,
-        interaction_id: &axon_domain::InteractionId,
-        limit: u32,
-    ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
-        event_repository::interaction_tail_window(self, session_id, interaction_id, limit)
-    }
 
     fn upsert_schedule(&self, schedule: &RuntimeScheduleRecord) -> Result<(), RuntimeStoreError> {
         schedule_repository::upsert_schedule(self, schedule)
@@ -653,5 +622,69 @@ impl RuntimeStore for SqliteRuntimeStore {
         content: &str,
     ) -> Result<String, RuntimeStoreError> {
         goal_result_document::save(self, session_id, execution_id, content)
+    }
+}
+
+impl EventLogStore for SqliteRuntimeStore {
+    fn append_event(
+        &self,
+        session_id: &DaemonSessionId,
+        host: &DaemonHostRecord,
+        event_type: &str,
+        payload_json: &str,
+        now_ms: u64,
+    ) -> Result<SessionEventRecord, RuntimeStoreError> {
+        let batch = [(event_type.to_owned(), payload_json.to_owned())];
+        let mut records =
+            event_log_repository::append_events(self, session_id, host, &batch, now_ms, None)?;
+        records
+            .pop()
+            .ok_or_else(|| RuntimeStoreError::Storage("事件未写入".to_owned()))
+    }
+
+    fn append_events(
+        &self,
+        session_id: &DaemonSessionId,
+        host: &DaemonHostRecord,
+        events: &[(String, String)],
+        now_ms: u64,
+    ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
+        event_log_repository::append_events(self, session_id, host, events, now_ms, None)
+    }
+
+    fn append_interaction_events(
+        &self,
+        session_id: &DaemonSessionId,
+        host: &DaemonHostRecord,
+        interaction_id: &InteractionId,
+        lease_token: &str,
+        events: &[(String, String)],
+        now_ms: u64,
+    ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
+        event_log_repository::append_events(
+            self,
+            session_id,
+            host,
+            events,
+            now_ms,
+            Some((interaction_id, lease_token)),
+        )
+    }
+    fn replay_events(
+        &self,
+        session_id: &DaemonSessionId,
+        after_sequence: u64,
+        limit: u32,
+    ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
+        event_log_repository::replay_events(self, session_id, after_sequence, limit)
+    }
+
+    fn interaction_tail_window(
+        &self,
+        session_id: &DaemonSessionId,
+        interaction_id: &InteractionId,
+        limit: u32,
+    ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
+        event_log_repository::interaction_tail_window(self, session_id, interaction_id, limit)
     }
 }

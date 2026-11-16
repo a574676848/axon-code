@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/axon-jsonl",
+    "crates/axon-eventlog",
     "crates/axon-crypto",
     "crates/axon-display",
     "crates/axon-turn-view",

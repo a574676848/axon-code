@@ -1,5 +1,6 @@
 //! SQLite Interaction 持久化与执行所有权测试。
 
+use crate::ports::EventLogStore as _;
 use super::SqliteRuntimeStore;
 use crate::{InteractionQueryStore, InteractionStore, RuntimeStore, interaction_session_lane_id};
 use axon_domain::{
