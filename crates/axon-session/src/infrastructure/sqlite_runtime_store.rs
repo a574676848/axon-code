@@ -83,6 +83,9 @@ pub mod runtime_repository;
 pub mod schedule_repository;
 #[path = "sqlite_runtime_store/schema.rs"]
 mod schema;
+#[path = "sqlite_runtime_store/session_metrics_repository.rs"]
+mod session_metrics_repository;
+pub use session_metrics_repository::SessionMetricsSnapshot;
 #[path = "sqlite_runtime_store/session_control_repository.rs"]
 mod session_control_repository;
 #[path = "sqlite_runtime_store/transaction.rs"]
@@ -214,6 +217,14 @@ impl SqliteRuntimeStore {
     #[must_use]
     pub fn event_log(&self, session_id: &DaemonSessionId) -> axon_eventlog::EventLog {
         axon_eventlog::EventLog::open(&self.events_root, session_id.as_str())
+    }
+
+    /// 读取会话累计指标；不存在时返回 `None`。
+    pub fn session_metrics(
+        &self,
+        session_id: &DaemonSessionId,
+    ) -> Result<Option<session_metrics_repository::SessionMetricsSnapshot>, RuntimeStoreError> {
+        session_metrics_repository::read_metrics(self, session_id)
     }
 
     /// 回收仍标记为 running、但对应进程已经退出的 Host lease。
@@ -688,3 +699,6 @@ impl EventLogStore for SqliteRuntimeStore {
         event_log_repository::interaction_tail_window(self, session_id, interaction_id, limit)
     }
 }
+#[cfg(test)]
+#[path = "sqlite_runtime_store_metrics_tests.rs"]
+mod metrics_tests;

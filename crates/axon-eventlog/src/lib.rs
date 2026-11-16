@@ -22,7 +22,7 @@ pub use append::{EventLogWriter, append_once};
 pub use error::EventLogError;
 pub use format::{FrameScan, FrameSpan, Header, HEADER_FRAME_INDEX};
 pub use read::{EventLogSnapshot, EventLogReader};
-pub use record::{RuntimeEventKind, RuntimeEventRecord, TurnMetrics, TurnOrigin};
+pub use record::{RuntimeEventKind, RuntimeEventRecord, TurnMetrics, TurnOrigin, TurnOutcome};
 
 use std::path::{Path, PathBuf};
 

@@ -96,6 +96,7 @@ pub(super) fn append_events(
         .collect::<Vec<_>>();
     axon_eventlog::append_once(&store.event_log(session_id), start, now_ms, &runtime_records)
         .map_err(log_error)?;
+    apply_projections(store, session_id, events, now_ms);
     Ok(records)
 }
 
@@ -246,6 +247,7 @@ pub(super) fn write_events_at(
         .collect::<Vec<_>>();
     axon_eventlog::append_once(&store.event_log(session_id), start, now_ms, &runtime_records)
         .map_err(log_error)?;
+    apply_projections(store, session_id, events, now_ms);
     Ok(records)
 }
 /// 逐条把已分配序号的事件写进事件面文件。
@@ -268,4 +270,25 @@ pub(super) fn write_records(
         .map_err(log_error)?;
     }
     Ok(())
+}
+/// 把本轮指标投射到 `session_metrics`。
+///
+/// 投影失败不阻断主流程：它是可重建的派生数据，下一次重放会修正。
+fn apply_projections(
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+    events: &[(String, String)],
+    now_ms: u64,
+) {
+    for (event_type, payload_json) in events {
+        if event_type != "turn_metrics" {
+            continue;
+        }
+        let Ok(metrics) = serde_json::from_str::<axon_eventlog::TurnMetrics>(payload_json) else {
+            continue;
+        };
+        let _ = super::session_metrics_repository::apply_turn_metrics(
+            store, session_id, &metrics, None, now_ms,
+        );
+    }
 }

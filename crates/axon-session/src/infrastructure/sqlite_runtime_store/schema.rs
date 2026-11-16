@@ -126,6 +126,36 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             ON session_runtimes(last_activity_at_ms, status, session_id);
         CREATE INDEX IF NOT EXISTS session_runtimes_owner
             ON session_runtimes(owner_host_id);
+        CREATE TABLE IF NOT EXISTS session_metrics (
+            session_id TEXT PRIMARY KEY,
+            turn_count INTEGER NOT NULL DEFAULT 0,
+            turn_succeeded INTEGER NOT NULL DEFAULT 0,
+            turn_failed INTEGER NOT NULL DEFAULT 0,
+            turn_interrupted INTEGER NOT NULL DEFAULT 0,
+            total_active_ms INTEGER NOT NULL DEFAULT 0,
+            total_provider_ms INTEGER NOT NULL DEFAULT 0,
+            total_tool_ms INTEGER NOT NULL DEFAULT 0,
+            max_turn_ms INTEGER NOT NULL DEFAULT 0,
+            ttft_sum_ms INTEGER NOT NULL DEFAULT 0,
+            ttft_samples INTEGER NOT NULL DEFAULT 0,
+            ttft_max_ms INTEGER NOT NULL DEFAULT 0,
+            ttft_histogram_json TEXT NOT NULL DEFAULT '[]',
+            turn_histogram_json TEXT NOT NULL DEFAULT '[]',
+            channel_mix_json TEXT NOT NULL DEFAULT '{}',
+            total_input_tokens INTEGER NOT NULL DEFAULT 0,
+            total_output_tokens INTEGER NOT NULL DEFAULT 0,
+            total_reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+            total_cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+            total_cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+            total_tool_calls INTEGER NOT NULL DEFAULT 0,
+            jobs_started INTEGER NOT NULL DEFAULT 0,
+            jobs_completed INTEGER NOT NULL DEFAULT 0,
+            jobs_failed INTEGER NOT NULL DEFAULT 0,
+            jobs_running INTEGER NOT NULL DEFAULT 0,
+            first_turn_at_ms INTEGER,
+            last_turn_at_ms INTEGER,
+            updated_at_ms INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS session_checkpoints (
             session_id TEXT NOT NULL,
             checkpoint_seq INTEGER NOT NULL,

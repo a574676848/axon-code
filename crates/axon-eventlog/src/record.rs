@@ -21,6 +21,19 @@ pub enum TurnOrigin {
     Subagent,
 }
 
+/// 一轮的结局。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnOutcome {
+    /// 正常收口。
+    #[default]
+    Succeeded,
+    /// 执行失败。
+    Failed,
+    /// 被中断。
+    Interrupted,
+}
+
 /// 单轮可观测指标。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +43,11 @@ pub struct TurnMetrics {
     /// 首字延迟；`None` 表示未测得，禁止用 0 冒充。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ttft_ms: Option<u64>,
+    /// 本轮结局。
+    #[serde(default)]
+    pub outcome: TurnOutcome,
+    /// 本轮工具调用次数。
+    pub tool_calls: u32,
     /// 本轮墙钟耗时。
     pub active_ms: u64,
     /// 模型往返耗时。
