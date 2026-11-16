@@ -1528,9 +1528,9 @@ pwsh -File scripts/install-from-source.ps1 -Components all
 | C1 | `axon sessions list` | 列出会话，含 title、lastActivity、turnCount |
 | C2 | `axon run "…" --session <id>` | 追加到指定会话，历史被带入上下文（回复能引用上一轮内容） |
 | C3 | `--session` 指向不存在的 id | 报错并提示，**不隐式新建** |
-| C4 | 不带 `--session` 且无 resume 状态 | 报错并提示先 `axon sessions list` |
-| C5 | `axon sessions resume <id>` 后再 run | 追加到该会话 |
-| C6 | `--session` 与已保存的 resume 状态冲突 | `--session` 胜出，resume 状态不被改写 |
+| C4 | 不带 `--session` 与 `--continue` | 复用当前工作目录的 CLI 复合车道（同一 cwd 连续 run 接得上上下文），不报错；跨目录或首次使用要接续旧会话时用 `--continue` / `--session` |
+| C5 | `axon sessions resume <id>` 后再 `axon run --continue` | 追加到该会话：`resume` 只设置 resume 指针，`--continue` 按指针取会话并带入历史；普通 `run` 仍走当前目录车道，避免跨目录会话互相串味 |
+| C6 | `--session` 与已保存的 resume 状态冲突 | `--session` 胜出，运行结束后 resume 指针被还原成运行前的值（快照 + 还原，测试见 `selection_snapshot_restores_the_previous_pointer`） |
 
 #### 12.4.5 跨端同步（本次重构的核心验收）
 

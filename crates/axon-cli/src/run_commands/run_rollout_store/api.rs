@@ -178,6 +178,26 @@ pub(crate) fn load_latest_session_model_from_root(
         }))
 }
 
+/// 读取当前的 resume 指针；库不存在或从未选择时返回 `None`。
+pub(crate) fn snapshot_selected_session(config_path: &Path) -> Result<Option<String>, String> {
+    let path = resolved_rollout_db_path(config_path).map_err(ToOwned::to_owned)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    RolloutSqliteStore::open_read_only(&path)?.selected_session_id()
+}
+
+/// 把 resume 指针写回快照值。
+pub(crate) fn restore_selected_session(
+    config_path: &Path,
+    snapshot: Option<&str>,
+) -> Result<(), String> {
+    let path = resolved_rollout_db_path(config_path).map_err(ToOwned::to_owned)?;
+    if !path.exists() {
+        return Ok(());
+    }
+    RolloutSqliteStore::open(&path)?.set_selection(snapshot)
+}
 /// 选择后续 `run --continue` 恢复的 rollout Thread。
 pub(crate) fn select_rollout_session(config_path: &Path, session_id: &str) -> Result<(), String> {
     let path = resolved_rollout_db_path(config_path).map_err(ToOwned::to_owned)?;

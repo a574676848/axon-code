@@ -34,7 +34,8 @@ pub(crate) use api::{
     load_previous_reflection_notice, load_recent_turn_facts, load_rollout_history_window,
     load_session_turn, load_session_usage, load_session_usage_totals_from_root, load_turn_sequence,
     mark_child_session_origin, mark_child_session_status, read_rollout_tool_output,
-    replay_rollout_events, restore_rollout_compaction, select_rollout_session,
+    replay_rollout_events, restore_rollout_compaction, restore_selected_session, select_rollout_session,
+    snapshot_selected_session,
 };
 #[cfg(test)]
 pub(crate) use rollout_events::RolloutEventAppendInput;
@@ -432,6 +433,43 @@ impl RolloutSqliteStore {
         .transpose()
     }
 
+    /// 读取当前选择；从未选择过时返回 `None`。
+    pub(crate) fn selected_session_id(&self) -> Result<Option<String>, String> {
+        self.connection
+            .query_row(
+                "SELECT session_id FROM rollout_current_session WHERE singleton_key = ?1",
+                params![CURRENT_SESSION_SINGLETON_KEY],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|_| "rollout 当前会话读取失败".to_owned())
+    }
+
+    /// 直接改写选择指针，不校验会话是否存在。
+    ///
+    /// 只给「显式 `--session` 运行结束后把指针还原」用：那是把上一个状态写回去，
+    /// 不产生新的语义，因此也不该因为目标行缺失而失败。
+    pub(crate) fn set_selection(&self, session_id: Option<&str>) -> Result<(), String> {
+        match session_id {
+            Some(session_id) => self
+                .connection
+                .execute(
+                    "INSERT INTO rollout_current_session (singleton_key, session_id) VALUES(?1, ?2)
+                     ON CONFLICT(singleton_key) DO UPDATE SET session_id = excluded.session_id",
+                    params![CURRENT_SESSION_SINGLETON_KEY, session_id],
+                )
+                .map(|_| ())
+                .map_err(|_| "rollout 当前会话恢复失败".to_owned()),
+            None => self
+                .connection
+                .execute(
+                    "DELETE FROM rollout_current_session WHERE singleton_key = ?1",
+                    params![CURRENT_SESSION_SINGLETON_KEY],
+                )
+                .map(|_| ())
+                .map_err(|_| "rollout 当前会话恢复失败".to_owned()),
+        }
+    }
     /// 显式选择后续 `--continue` 使用的 Thread。
     pub(crate) fn select_session(&self, session_id: &str) -> Result<(), String> {
         let changed = self

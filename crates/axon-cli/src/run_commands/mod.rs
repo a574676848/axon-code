@@ -146,6 +146,7 @@ use run_request_session::RunRequestSession;
 pub(crate) use run_request_subagents::execute_standalone_subagent;
 use run_rollout_store::commit_session_to_rollout;
 pub(crate) use run_rollout_store::select_rollout_session;
+pub(crate) use run_rollout_store::{restore_selected_session, snapshot_selected_session};
 #[cfg(test)]
 pub(crate) use run_rollout_store::{RolloutEventAppendInput, append_rollout_event_for_session};
 pub(crate) use run_rollout_store::{

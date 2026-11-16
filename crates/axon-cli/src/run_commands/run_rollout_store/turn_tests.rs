@@ -391,3 +391,55 @@ fn rollout_events_sqlite_replays_session_events_in_sequence() {
     assert_eq!(loaded[3].payload["reasoningMessageCount"], 1);
     cleanup(&path);
 }
+
+#[test]
+fn selection_snapshot_restores_the_previous_pointer() {
+    let path = temp_db("selection-snapshot");
+    let store = RolloutSqliteStore::open(&path).unwrap();
+    store.record_session(&record("session-a", None, 100)).unwrap();
+    store.record_session(&record("session-b", None, 200)).unwrap();
+
+    // 最近一次提交把指针推进到 session-b。
+    assert_eq!(
+        store.selected_session_id().unwrap().as_deref(),
+        Some("session-b")
+    );
+    let snapshot = store.selected_session_id().unwrap();
+    store.select_session("session-a").unwrap();
+    assert_eq!(
+        store.selected_session_id().unwrap().as_deref(),
+        Some("session-a")
+    );
+
+    // 显式跨会话运行结束后还原快照：后续 --continue 仍回 session-b。
+    store.set_selection(snapshot.as_deref()).unwrap();
+    assert_eq!(
+        store.selected_session_id().unwrap().as_deref(),
+        Some("session-b")
+    );
+    assert_eq!(
+        store.load_latest().unwrap().map(|record| record.session_id),
+        Some("session-b".to_owned())
+    );
+    cleanup(&path);
+}
+
+#[test]
+fn selection_snapshot_can_restore_the_absent_state() {
+    let path = temp_db("selection-cleared");
+    let store = RolloutSqliteStore::open(&path).unwrap();
+    store.record_session(&record("session-a", None, 100)).unwrap();
+    store.set_selection(None).unwrap();
+
+    assert_eq!(
+        store.selected_session_id().unwrap(),
+        None,
+        "从未选择过时指针必须为空"
+    );
+    // 指针为空时 load_latest 回落到最新的根会话。
+    assert_eq!(
+        store.load_latest().unwrap().map(|record| record.session_id),
+        Some("session-a".to_owned())
+    );
+    cleanup(&path);
+}

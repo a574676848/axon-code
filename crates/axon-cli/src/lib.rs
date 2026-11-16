@@ -285,7 +285,7 @@ fn run_parsed_cli_internal(
 
     match &cli.command {
         Some(AxonCommand::Run(command)) => match validate_explicit_session(cli, command) {
-            Ok(()) => run_command_from_cli(cli, command, run_json_writer),
+            Ok(()) => run_with_selection_restore(cli, command, run_json_writer),
             Err(error) => crate::management_commands::cli_error(error),
         },
         Some(AxonCommand::Serve(command)) => {
@@ -678,3 +678,33 @@ pub(crate) fn validate_explicit_session(cli: &AxonCli, command: &RunCommand) -> 
 #[cfg(test)]
 #[path = "tests/explicit_session_tests.rs"]
 mod explicit_session_tests;
+
+/// 执行一次 `axon run`，并在显式 `--session` 时保住 resume 指针。
+///
+/// `--session` 是「这一轮去哪个会话」，不是「把默认会话换成它」：如果不还原指针，
+/// 一次跨会话追问就会悄悄把 `--continue` 的默认目标改掉，用户下次直接 `--continue`
+/// 会落到一个他并没有选中过的会话。
+fn run_with_selection_restore(
+    cli: &AxonCli,
+    command: &RunCommand,
+    run_json_writer: Option<&mut dyn IoWrite>,
+) -> CliRunResult {
+    let explicit = command.session.is_some();
+    if !explicit {
+        return run_command_from_cli(cli, command, run_json_writer);
+    }
+    let config_path = crate::management_commands::resolved_config_path(cli.global.config.as_deref())
+        .ok();
+    let snapshot = config_path
+        .as_deref()
+        .and_then(|path| crate::run_commands::snapshot_selected_session(path).ok());
+    let result = run_command_from_cli(cli, command, run_json_writer);
+    if let (Some(path), Some(snapshot)) = (config_path.as_deref(), snapshot) {
+        if let Err(error) =
+            crate::run_commands::restore_selected_session(path, snapshot.as_deref())
+        {
+            axon_logger::warning(&format!("恢复 resume 指针失败: {error}"));
+        }
+    }
+    result
+}
