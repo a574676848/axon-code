@@ -122,6 +122,9 @@ struct ThreadTurnMetadata {
     /// 用户当初选择的模型别名；恢复会话时用它回到同一别名。
     #[serde(default)]
     model_name: Option<String>,
+    /// 上一轮记忆反思提示；下一轮开头展示，随轮次落盘而不是另存一份。
+    #[serde(default)]
+    reflection_notice: Option<String>,
 }
 
 /// Thread mirror 中单个工具回执摘要的字符上限。
@@ -631,7 +634,55 @@ fn thread_turn_metadata_from_record(record: &RunSessionRecord) -> ThreadTurnMeta
         reasoning_message_count: record.reasoning_messages.len(),
         turn_event_count: record.turn_events.len(),
         model_name: record.model_name.clone(),
+        reflection_notice: record.reflection_notice.clone(),
     }
+}
+
+/// 上一轮的记忆反思提示：取当前轮之前最近一条带提示的轮次。
+pub(super) fn previous_reflection_notice(
+    config_path: &Path,
+    session_id: &str,
+    current_part_id: &str,
+) -> Option<String> {
+    let detail = read_thread_detail(config_path, session_id)?;
+    let mut notices = detail
+        .turns
+        .iter()
+        .map(|turn| {
+            let metadata = turn_metadata(&turn.token_usage_json);
+            (
+                metadata
+                    .as_ref()
+                    .map(|value| value.assistant_part_id.clone()),
+                metadata.and_then(|value| value.reflection_notice),
+            )
+        })
+        .collect::<Vec<_>>();
+    let position = notices
+        .iter()
+        .position(|(part_id, _)| part_id.as_deref() == Some(current_part_id))?;
+    notices
+        .drain(..position)
+        .filter_map(|(_, notice)| notice)
+        .next_back()
+}
+
+/// 只读接口用的入口：调用方手里是 Axon 根目录，不是配置文件路径。
+pub(crate) fn latest_reflection_notice_at_root(root: &Path, session_id: &str) -> Option<String> {
+    let detail = ThreadService::new(JsonlThreadEventStore)
+        .read_thread(root, session_id)
+        .ok()?;
+    detail.turns.iter().rev().find_map(|turn| {
+        turn_metadata(&turn.token_usage_json).and_then(|value| value.reflection_notice)
+    })
+}
+
+/// 读取 thread 投影；读不到时读作「没有」，只读接口不因此失败。
+fn read_thread_detail(config_path: &Path, session_id: &str) -> Option<ThreadDetail> {
+    let root = resolved_axon_root(config_path).ok()?;
+    ThreadService::new(JsonlThreadEventStore)
+        .read_thread(&root, session_id)
+        .ok()
 }
 
 #[cfg(test)]

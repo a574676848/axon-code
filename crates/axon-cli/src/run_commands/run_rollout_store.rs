@@ -29,8 +29,7 @@ mod transaction;
 pub(crate) use api::append_rollout_event_for_session;
 pub(crate) use api::{
     commit_session_to_rollout, ensure_current_turn_to_rollout, install_rollout_compaction,
-    load_child_sessions_from_root, load_latest_reflection_notice_from_root,
-    load_latest_session_model_from_root, load_previous_reflection_notice, load_recent_turn_facts,
+    load_child_sessions_from_root, load_latest_session_model_from_root, load_recent_turn_facts,
     load_session_turn, load_session_usage, load_session_usage_totals_from_root, load_turn_sequence,
     mark_child_session_origin, mark_child_session_status, read_rollout_tool_output,
     replay_rollout_events,
@@ -300,52 +299,6 @@ impl RolloutSqliteStore {
             });
         }
         Ok(facts)
-    }
-
-    /// 读同一会话里「本轮之外最近一轮」的记忆反思提示。
-    ///
-    /// 反思是轮后异步治理的产物，本轮运行期拿不到自己那条；能确定看到的只有上一轮。
-    /// 只投影 `reflectionNotice` 一个标量，不反序列化整条 record。
-    pub(crate) fn previous_reflection_notice(
-        &self,
-        session_id: &str,
-        current_part_id: &str,
-    ) -> Result<Option<String>, String> {
-        self.connection
-            .query_row(
-                "SELECT json_extract(record_json, '$.reflectionNotice')
-                 FROM rollout_turns
-                 WHERE session_id = ?1 AND assistant_part_id <> ?2
-                 ORDER BY sequence DESC LIMIT 1",
-                params![session_id, current_part_id],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()
-            .map_err(|_| "rollout 反思提示读取失败".to_owned())
-            .map(Option::flatten)
-    }
-
-    /// 读某会话**最新一轮**的记忆反思提示；该轮没有提示时返回 `None`。
-    ///
-    /// 与 [`Self::previous_reflection_notice`] 的差别只在取舍：这里要「这条会话现在
-    /// 能对外展示的最新鲜结果」，供只读接口投影给桌面；那里要「上一轮」，供本轮收口
-    /// 输出携带。两者都只投影一个标量，不反序列化整条 record。
-    pub(crate) fn latest_reflection_notice(
-        &self,
-        session_id: &str,
-    ) -> Result<Option<String>, String> {
-        self.connection
-            .query_row(
-                "SELECT json_extract(record_json, '$.reflectionNotice')
-                 FROM rollout_turns
-                 WHERE session_id = ?1
-                 ORDER BY sequence DESC LIMIT 1",
-                params![session_id],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()
-            .map_err(|_| "rollout 反思提示读取失败".to_owned())
-            .map(Option::flatten)
     }
 
     /// 仅允许读取指定 session 中已持久化 provider receipt 关联的完整工具输出。

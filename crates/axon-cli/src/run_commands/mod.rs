@@ -91,7 +91,7 @@ mod run_subagent_performance;
 mod run_subagent_progress;
 mod run_text_render;
 mod run_thread_history;
-mod run_thread_store;
+pub(crate) mod run_thread_store;
 mod run_thread_title;
 mod run_tool_loop;
 mod run_tool_pool;
@@ -152,9 +152,9 @@ use run_rollout_store::commit_session_to_rollout;
 pub(crate) use run_rollout_store::{RolloutEventAppendInput, append_rollout_event_for_session};
 pub(crate) use run_rollout_store::{
     RolloutEventRecord, RolloutReplayView, RolloutSqliteStore, SessionUsageTotals,
-    load_latest_reflection_notice_from_root, load_latest_session_model_from_root,
-    load_session_usage_totals_from_root, read_rollout_tool_output, replay_rollout_events,
-    replay_session_chain, resolved_rollout_db_path,
+    load_latest_session_model_from_root, load_session_usage_totals_from_root,
+    read_rollout_tool_output, replay_rollout_events, replay_session_chain,
+    resolved_rollout_db_path,
 };
 pub(crate) use run_session_store::RunSessionRecord;
 pub(crate) use run_session_store::resolved_axon_root;
@@ -370,7 +370,7 @@ fn finish_completed_run(
     commit_session_to_rollout(config_path, &record, &session_title)?;
     // 反思是轮后异步治理的产物：本轮治理尚未启动，能确定看到的只有上一次的结果。
     // 这条提示随 run 输出交给界面，用户在下一轮开头看到上一轮的记忆动作。
-    let memory_reflection_notice = run_rollout_store::load_previous_reflection_notice(
+    let memory_reflection_notice = run_thread_store::previous_reflection_notice(
         config_path,
         &record.session_id,
         &record.assistant_part_id,

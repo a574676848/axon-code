@@ -49,8 +49,12 @@ E → thread 子会话关系 + 事件面；F → 目录级保留（已存在）�
    (a) 把 `through_sequence` 定义为「最后一个已压缩轮次」的序号，恢复判据相应改成
    `sequence >= through` 或引入显式下界；(b) 换窗后回写 checkpoint，把已收口轮的回复并入窗口
    摘要。选定后同步更新 `storage-architecture.md` 的窗口语义小节。
-2. C 组：治理与反思改读 thread 轮次 + `turn metadata`（`load_session_turn`、
-   `load_turn_sequence`、`load_recent_turn_facts`、`load_previous_reflection_notice`）。
+2. C 组（部分完成）：记忆反思提示已迁到 thread —— `ThreadTurnMetadata` 增加
+   `reflectionNotice`，`run_thread_store::previous_reflection_notice` /
+   `latest_reflection_notice_at_root` 从 thread 轮次 metadata 读取；删除 rollout 的
+   `load_previous_reflection_notice`、`load_latest_reflection_notice_from_root` 与两条
+   store 方法及其用例。仍待迁移：`load_session_turn`、`load_turn_sequence`、
+   `load_recent_turn_facts`（治理 worker、收口产物）。
 3. D 组：会话读数与用量改读 `session_metrics`（已具备）与 thread settings；`load_session_usage*`
    与 `load_latest_session_model_from_root` 删除。
 4. E 组：子代理关系与链回放改用 thread 的父子关系与事件面；`read_rollout_tool_output` 改为

@@ -5,44 +5,6 @@ use super::{FIXTURE_ASSISTANT_TURN_ID, cleanup, record, temp_db};
 use axon_agent_runtime::{agent_run_assistant_part_id, agent_run_reasoning_part_id};
 
 #[test]
-fn latest_reflection_notice_reads_only_the_newest_turn() {
-    let path = temp_db("latest-reflection-notice");
-    let store = RolloutSqliteStore::open(&path).unwrap();
-    let mut older = record("notice-session", None, 100);
-    older.reflection_notice = Some("第一轮的提示".to_owned());
-    store.record_session(&older).unwrap();
-    let mut newer = record("notice-session", None, 200);
-    newer.assistant_part_id = "assistant-run:notice-2".to_owned();
-    newer.reflection_notice = Some("第二轮的提示".to_owned());
-    store.record_session(&newer).unwrap();
-
-    assert_eq!(
-        store
-            .latest_reflection_notice("notice-session")
-            .unwrap()
-            .as_deref(),
-        Some("第二轮的提示"),
-        "只读接口要最新一轮，不是最早那一轮"
-    );
-    cleanup(&path);
-}
-
-#[test]
-fn latest_reflection_notice_is_none_when_the_turn_has_no_notice() {
-    let path = temp_db("no-reflection-notice");
-    let store = RolloutSqliteStore::open(&path).unwrap();
-    let session = record("quiet-session", None, 100);
-    store.record_session(&session).unwrap();
-
-    assert_eq!(
-        store.latest_reflection_notice("quiet-session").unwrap(),
-        None,
-        "该轮没有提示时必须读作空，不能编造一条"
-    );
-    cleanup(&path);
-}
-
-#[test]
 fn rollout_sqlite_roundtrips_selected_skill_name() {
     let path = temp_db("selected-skill");
     let store = RolloutSqliteStore::open(&path).unwrap();

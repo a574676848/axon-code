@@ -221,8 +221,13 @@ pub(super) fn reflection_notice_payload(axon_root: &Path, session_id: &str) -> s
     let Some(run_session_id) = session_run_session_id(axon_root, session_id) else {
         return serde_json::Value::Null;
     };
-    crate::run_commands::load_latest_reflection_notice_from_root(axon_root, &run_session_id)
-        .map_or(serde_json::Value::Null, serde_json::Value::from)
+    // 反思提示随 thread 轮次落盘，只读接口直接从 thread 投影取。`axon_root` 的数据目录
+    // 与 CLI 一致，直接复用同一实现。
+    crate::run_commands::run_thread_store::latest_reflection_notice_at_root(
+        axon_root,
+        &run_session_id,
+    )
+    .map_or(serde_json::Value::Null, serde_json::Value::from)
 }
 
 /// 车道的运行时 session 标识。
