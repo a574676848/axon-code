@@ -125,30 +125,32 @@ fn file_outside_home() -> Option<PathBuf> {
 }
 
 #[test]
-fn tilde_paths_resolve_to_the_user_home() {
+fn tilde_paths_resolve_against_the_injected_home() {
     let root = scratch();
-    let home = axon_config::user_home_dir().expect("用户主目录");
-    let home = home.canonicalize().expect("主目录可解析");
-    // 主目录下的一个真实文件：`~` 前缀与 `~/` 前缀都要落到同一处。
+    // 用临时目录充当主目录：用例不得在开发机的家目录里留下任何文件。
+    let home_dir = axon_test_support::test_temp_dir();
+    let home = home_dir.path().canonicalize().expect("主目录可解析");
     let marker = home.join("axon-tilde-probe.txt");
     std::fs::write(&marker, "tilde").expect("写入探针文件");
     for value in ["~/axon-tilde-probe.txt", "~"] {
-        let resolved = resolve_within_locally(&root.to_string_lossy(), value).expect("解析 ~ 路径");
+        let resolved = resolve_within_home(&root.to_string_lossy(), value, Some(home.clone()))
+            .expect("解析 ~ 路径");
         let expected = if value == "~" {
             home.clone()
         } else {
             marker.clone()
         };
-        assert_eq!(resolved, expected, "{value} 必须解析到主目录");
+        assert_eq!(resolved, expected, "{value} 必须解析到注入的主目录");
     }
-    // 主目录下的绝对路径同样接受，展示成 `~/` 形式。
-    let text = read_text_locally(
-        &root.to_string_lossy(),
-        &marker.to_string_lossy().replace('\\', "/"),
-    )
-    .expect("按绝对路径读取主目录文件");
-    assert_eq!(text.path, "~/axon-tilde-probe.txt");
-    let _ = std::fs::remove_file(&marker);
+    // 展示口径同样只认注入的主目录。
+    assert_eq!(
+        display_path_with_home(&root, &marker, Some(&home)),
+        "~/axon-tilde-probe.txt"
+    );
+    assert!(
+        resolve_within_home("/workspace", "~/任何文件", None).is_err(),
+        "主目录不可解析时 `~` 路径必须明确报错"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 

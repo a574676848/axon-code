@@ -143,13 +143,24 @@ pub(crate) fn resolve_within(root: &str, relative: &str) -> Result<PathBuf, Stri
 
 /// 本机档案下的路径解析：绝对路径与 `~` 路径不受根集合限制，相对路径留在工作区内。
 fn resolve_within_locally(root: &str, relative: &str) -> Result<PathBuf, String> {
+    resolve_within_home(root, relative, home_directory())
+}
+
+/// 路径解析的实际实现。
+///
+/// `home` 由调用方注入：生产走真实主目录，用例注入临时目录，测试因此不需要在
+/// 开发机的家目录里写探针文件。
+fn resolve_within_home(
+    root: &str,
+    relative: &str,
+    home: Option<PathBuf>,
+) -> Result<PathBuf, String> {
     let trimmed = relative.trim().replace('\\', "/");
     if trimmed.is_empty() || trimmed == "." {
         return canonical_root(root);
     }
     if let Some(rest) = trimmed.strip_prefix('~') {
-        let home =
-            home_directory().ok_or_else(|| "无法解析用户主目录，不能打开 `~` 路径".to_string())?;
+        let home = home.ok_or_else(|| "无法解析用户主目录，不能打开 `~` 路径".to_string())?;
         let rest = rest.strip_prefix('/').unwrap_or(rest);
         return canonicalize_or_report(&home.join(rest));
     }
@@ -207,13 +218,18 @@ fn home_directory() -> Option<PathBuf> {
 /// 绝对路径那一支是放开根集合后补的：工作区与主目录之外的文件同样要有一个看得懂的
 /// 路径，而不是一条「越出范围」。
 fn display_path(root: &Path, path: &Path) -> String {
+    display_path_with_home(root, path, home_directory().as_deref())
+}
+
+/// 展示路径的实际实现：主目录由调用方注入，用例用临时目录代替真实家目录。
+fn display_path_with_home(root: &Path, path: &Path, home: Option<&Path>) -> String {
     if let Ok(canonical_root) = root.canonicalize()
         && let Ok(relative) = path.strip_prefix(&canonical_root)
     {
         return relative.to_string_lossy().replace('\\', "/");
     }
-    if let Some(home) = home_directory()
-        && let Ok(relative) = path.strip_prefix(&home)
+    if let Some(home) = home
+        && let Ok(relative) = path.strip_prefix(home)
     {
         return format!("~/{}", relative.to_string_lossy().replace('\\', "/"));
     }
