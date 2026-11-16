@@ -1,6 +1,7 @@
 //! 工人在同一工作区内的任务流与监督扫描：并行车道、重复建任务，以及中断执行的隔离。
 
 use super::*;
+use axon_session::EventLogStore;
 
 #[test]
 fn primary_turn_runs_different_workspace_lanes_concurrently() {

@@ -266,8 +266,9 @@ struct BusyFixture {
 
 fn busy_fixture(prefix: &str) -> BusyFixture {
     let directory = axon_test_support::test_temp_dir();
-    let path = directory.path().join("runtime.sqlite3");
-    let store = SqliteRuntimeStore::new(path.clone());
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    // 阻塞连接必须指向 store 真正写入的控制面库，否则争不到同一把写锁。
+    let path = store.path().to_path_buf();
     let session_id = create_fault_session(&store, FAULT_BASE_NOW_MS);
     let execution_id = seed_queued_execution(&store, &session_id, prefix);
     BusyFixture {

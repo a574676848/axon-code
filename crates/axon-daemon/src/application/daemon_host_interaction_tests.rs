@@ -9,7 +9,7 @@ use axon_protocol::{
     DAEMON_PROTOCOL_VERSION, DaemonCommand, DaemonRequest, SubmitInteractionRequest,
 };
 use axon_session::{
-    CheckpointTelemetry, SessionEventRecord, SqliteRuntimeStore, WorkspaceResolver, WorkspaceStore,
+    CheckpointTelemetry, EventLogStore, SessionEventRecord, SqliteRuntimeStore, WorkspaceResolver, WorkspaceStore,
 };
 use axon_session_runtime::{
     ActionExecutionRequest, RuntimeEvent, TurnEventSink, TurnExecutionError, TurnExecutionOutcome,

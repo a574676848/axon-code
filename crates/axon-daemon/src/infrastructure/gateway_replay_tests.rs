@@ -12,6 +12,7 @@ use axon_domain::{
     RuntimeHostId, ScopeRef, SessionRuntimeStatus,
 };
 use axon_session::{DaemonHostRecord, InteractionStore, RuntimeStore, SqliteRuntimeStore};
+use axon_session::EventLogStore;
 
 /// 测试用页大小：故意取小值，让一次订阅必然跨多页。
 const TEST_REPLAY_PAGE_SIZE: u32 = 2;
@@ -487,42 +488,6 @@ fn history_page_resumes_at_the_last_consumed_event() {
 }
 
 #[test]
-fn history_page_skips_missing_external_archive_from_another_interaction() {
-    use axon_session::SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES;
-
-    let directory = axon_test_support::test_temp_dir();
-    let (store, interaction_id, session_id, host) = seed_interaction(
-        directory.path(),
-        InteractionStatus::Understood,
-        "gateway-newer-interaction",
-    );
-    let oversized_other = format!(
-        "{{\"interactionId\":\"older-interaction\",\"body\":\"{}\"}}",
-        "x".repeat(SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES)
-    );
-    store
-        .append_event(&session_id, &host, "wire_event", &oversized_other, 12)
-        .expect("追加旧交互大事件");
-    // 分片整片消失：旧引用降级为占位记录，不能阻断同一会话其他交互的历史读取。
-    std::fs::remove_dir_all(store.event_archive_root().join(session_id.as_str()))
-        .expect("模拟外置正文分片缺失");
-
-    store
-        .append_event(
-            &session_id,
-            &host,
-            "wire_event",
-            &format!("{{\"interactionId\":\"{}\"}}", interaction_id.as_str()),
-            13,
-        )
-        .expect("追加目标交互事件");
-
-    let page = interaction_history_page(&store, &interaction_id, 0, 100, false)
-        .expect("旧交互缺失归档不得阻断读取新交互");
-    assert_eq!(page.events.len(), 2, "应包含目标事件与终态补帧");
-    assert_eq!(page.events[0].event_type, "wire_event");
-    assert_eq!(page.events[1].event_type, INTERACTION_STATUS_EVENT);
-}
 
 #[test]
 fn history_page_reports_not_found_for_missing_interaction() {

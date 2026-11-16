@@ -86,7 +86,7 @@ fn append_plain_interaction(
 #[test]
 fn unread_completion_expires_without_delivery_and_marks_result_expired() {
     let directory = axon_test_support::test_temp_dir();
-    let database_path = directory.path().join("runtime.sqlite3");
+    let database_path = directory.path().join("outbox.sqlite3");
     let store = SqliteRuntimeStore::new(database_path.clone());
     let workspace = register_workspace(&store, directory.path());
     let session_id = DaemonSessionId::new("expiry-session").expect("Session ID");
@@ -131,7 +131,9 @@ fn unread_completion_expires_without_delivery_and_marks_result_expired() {
         NotificationDeliveryState::Expired
     );
     assert_eq!(unread_results(&store, &workspace), 0);
-    let acknowledged_source: String = connection
+    // 已读标记在控制面库，通知本体在队列库：两处各读一次。
+    let acknowledged_source: String = rusqlite::Connection::open(store.path())
+        .expect("打开控制面库")
         .query_row(
             "SELECT acknowledged_source FROM goal_result_reads WHERE result_id=?1",
             [notification.result_ids[0].as_str()],
@@ -150,7 +152,7 @@ fn unread_completion_expires_without_delivery_and_marks_result_expired() {
 #[test]
 fn delivered_notification_expiry_keeps_settled_state() {
     let directory = axon_test_support::test_temp_dir();
-    let database_path = directory.path().join("runtime.sqlite3");
+    let database_path = directory.path().join("outbox.sqlite3");
     let store = SqliteRuntimeStore::new(database_path.clone());
     let workspace = register_workspace(&store, directory.path());
     let session_id = DaemonSessionId::new("partial-expiry-session").expect("Session ID");
@@ -223,7 +225,7 @@ fn delivered_notification_expiry_keeps_settled_state() {
 #[test]
 fn summarized_completion_with_pending_delivery_is_recovered_by_sweep() {
     let directory = axon_test_support::test_temp_dir();
-    let database_path = directory.path().join("runtime.sqlite3");
+    let database_path = directory.path().join("outbox.sqlite3");
     let store = SqliteRuntimeStore::new(database_path.clone());
     let workspace = register_workspace(&store, directory.path());
     let session_id = DaemonSessionId::new("summary-recovery-session").expect("Session ID");

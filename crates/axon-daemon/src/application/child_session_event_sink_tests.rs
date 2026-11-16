@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use axon_domain::{DaemonSessionId, RuntimeHostId};
 use axon_session::{DaemonHostRecord, RuntimeStore, SqliteRuntimeStore};
+use axon_session::EventLogStore;
 use axon_session_runtime::{RuntimeClock, RuntimeEvent, SubagentSessionSinkFactory};
 
 use super::ChildSessionSinkFactory;

@@ -8,7 +8,7 @@ use axon_domain::{
 };
 use axon_session::{
     CheckpointTelemetry, ExecutionStore, GoalStore, InteractionStore, LedgerEventStore,
-    SessionEventRecord, SqliteRuntimeStore, WorkspaceResolver, WorkspaceStore,
+    EventLogStore, SessionEventRecord, SqliteRuntimeStore, WorkspaceResolver, WorkspaceStore,
 };
 use axon_session_runtime::{
     ActionExecutionRequest, JarvisRuntimeSelector, TurnExecutionError, TurnExecutionOutcome,
