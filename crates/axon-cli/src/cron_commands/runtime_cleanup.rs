@@ -48,12 +48,6 @@ pub(super) const SESSION_ACTIVE_STATUSES: [&str; 5] =
     ["running", "compacting", "waiting", "recovering", "draining"];
 /// Event 保底保留条数：即使全部超出保留期也保留最新一段，避免 sequence 回退。
 pub(super) const LEDGER_EVENT_MIN_RETAINED: i64 = 1_000;
-/// 活跃 Session 的事件保底保留条数：保住仍在推进车道的最近上下文。
-///
-/// 只对 `SESSION_ACTIVE_STATUSES` 里的会话生效。已终结会话的 sequence 不会再推进，
-/// 保底对它没有任何防回退价值，反而让每个死会话永久驻留最后若干条事件，
-/// 使 7 天保留期对这类会话完全失效。
-pub(super) const SESSION_EVENT_MIN_RETAINED: i64 = 200;
 
 /// 一次运行态清理的分表计数。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -314,42 +308,6 @@ pub(super) fn count_runtime_session_families(
     Ok(counts)
 }
 
-/// 统计滚动事件清理与 stale Session family 清理的候选交集。
-pub(super) fn count_runtime_session_event_overlap(
-    root: &Path,
-    session_ids: &[String],
-    cutoff_ms: u64,
-) -> Result<usize, String> {
-    let path = control_database_path(root);
-    if session_ids.is_empty() || !path.exists() {
-        return Ok(0);
-    }
-    let connection = open_read_only_database(&path)?;
-    let cutoff_ms = i64::try_from(cutoff_ms).unwrap_or(i64::MAX);
-    let mut count = 0_usize;
-    for ids in session_ids.chunks(RUNTIME_CLEANUP_BATCH_LIMIT) {
-        // 复用同一份保留谓词，避免 dry-run 报告与真实删除出现口径漂移。
-        let id_placeholders = (2..=ids.len().saturating_add(1))
-            .map(|index| format!("?{index}"))
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!(
-            "SELECT COUNT(*) FROM session_events
-             WHERE session_id IN ({id_placeholders})
-               AND {}",
-            session_event_expiry_predicate(),
-        );
-        let mut values = Vec::with_capacity(ids.len().saturating_add(1));
-        values.push(rusqlite::types::Value::Integer(cutoff_ms));
-        values.extend(ids.iter().cloned().map(rusqlite::types::Value::Text));
-        let batch: i64 = connection
-            .query_row(&sql, params_from_iter(values.iter()), |row| row.get(0))
-            .map_err(|_| "Daemon runtime Session Event 重叠统计失败".to_owned())?;
-        count = count.saturating_add(usize::try_from(batch).unwrap_or(usize::MAX));
-    }
-    Ok(count)
-}
-
 /// 按 rollout stale IDs 清理 runtime Session family。
 pub(super) fn cleanup_runtime_session_families(
     root: &Path,
@@ -392,37 +350,6 @@ fn count_ids_in(
         .query_row(&sql, params_from_iter(ids.iter()), |row| row.get(0))
         .map_err(|_| format!("Daemon runtime {table} Session family 统计失败"))?;
     Ok(usize::try_from(count).unwrap_or(usize::MAX))
-}
-
-/// retained Session Event 滚动保留谓词（`?1` 为保留截止时间）。
-///
-/// 所有 Session 都按事件年龄和 sequence 水位滚动回收；rollout stale family 随后
-/// 会继续删除剩余事件与根记录，二者共享报告计数但不共享候选判定。
-///
-/// 保底只作用于「仍在活动」的会话：它们可能因为长时间流式输出而把早期帧挤出
-/// 保留期，但最近若干条仍是上下文续跑的锚点。已终结会话一旦越过保留期就应当
-/// 全量回收，否则每个死会话都会永久驻留 `SESSION_EVENT_MIN_RETAINED` 条事件，
-/// 使 7 天保留期对这类会话彻底失效。
-///
-/// 「仍在活动」按 `last_activity_at_ms >= ?1` 判定，不按 `status` 判定：
-/// 生产环境里 `sessions.status` 几乎恒为 `created`（desktop 车道创建后
-/// 从不转 `running`），用状态白名单会把所有会话都判成非活跃，使保底分支永不命中，
-/// 长会话一旦超期就会被整段删空。`last_activity_at_ms` 才是随事件推进更新的字段。
-pub(super) fn session_event_expiry_predicate() -> String {
-    format!(
-        "emitted_at_ms < ?1
-           AND NOT EXISTS (
-               SELECT 1 FROM sessions AS retained
-               WHERE retained.session_id = session_events.session_id
-                 AND retained.last_activity_at_ms >= ?1
-                 AND session_events.sequence > CASE
-                     WHEN retained.last_event_sequence > {retained_count}
-                     THEN retained.last_event_sequence - {retained_count}
-                     ELSE 0
-                 END
-           )",
-        retained_count = SESSION_EVENT_MIN_RETAINED,
-    )
 }
 
 /// Task 保留谓词（`?1` 为保留截止时间）：终态、无活跃 Execution、无未读 Result。
@@ -632,9 +559,6 @@ fn reclaim_database_space(connection: &Connection) -> Result<(), String> {
 #[cfg(test)]
 #[path = "runtime_cleanup_agent_state_tests.rs"]
 mod agent_state_tests;
-#[cfg(test)]
-#[path = "runtime_cleanup_retained_tests.rs"]
-mod retained_tests;
 #[cfg(test)]
 #[path = "runtime_cleanup_tests.rs"]
 mod tests;

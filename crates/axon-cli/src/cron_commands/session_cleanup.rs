@@ -14,10 +14,7 @@ use self::session_family_cleanup::{
     cleanup_session_family_data, count_session_family_data, stale_session_family_ids,
 };
 use super::repository::CronRepository;
-use super::runtime_cleanup::{
-    RuntimeCleanupCounts, cleanup_runtime_data, count_runtime_cleanup,
-    count_runtime_session_event_overlap,
-};
+use super::runtime_cleanup::{RuntimeCleanupCounts, cleanup_runtime_data, count_runtime_cleanup};
 use crate::run_commands::{resolved_axon_root, resolved_rollout_db_path};
 use crate::usage_statistics::cleanup_usage_data;
 
@@ -136,14 +133,6 @@ fn run_cleanup_dry_run(
     report.deleted_cron_run_count = cron_runs;
     report.deleted_cron_job_count = cron_jobs;
     apply_runtime_cleanup_counts(&mut report, count_runtime_cleanup(root, cutoff_ms)?);
-    report.deleted_session_event_count =
-        report
-            .deleted_session_event_count
-            .saturating_sub(count_runtime_session_event_overlap(
-                root,
-                stale_sessions,
-                cutoff_ms,
-            )?);
     apply_file_cleanup_counts(&mut report, count_runtime_files(root, file_cutoff_ms())?);
     Ok(report)
 }

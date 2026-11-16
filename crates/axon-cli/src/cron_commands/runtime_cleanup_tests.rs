@@ -10,14 +10,6 @@ use crate::cron_commands::runtime_cleanup_families::{
 
 use super::*;
 
-const HOT_SESSION_ID: &str = "s-hot";
-const HOT_SESSION_EVENT_COUNT: i64 = 20_000;
-const HOT_SESSION_RECENT_ACTIVITY_MS: i64 = 1_000;
-const OLD_EVENT_EMITTED_AT_MS: i64 = 1;
-const CLEANUP_CUTOFF_MS: u64 = 100;
-const CLEANUP_PERFORMANCE_SAMPLE_COUNT: usize = 20;
-const CLEANUP_PERFORMANCE_P99_BUDGET_US: u128 = 2_000_000;
-
 pub(super) fn open_fixture(root: &Path) -> Connection {
     let directory = root.join(axon_config::AXON_RUNTIME_DATA_DIR);
     let path = directory.join(CONTROL_DATABASE_FILE);
@@ -79,36 +71,6 @@ fn seed(connection: &Connection, batch: &str, what: &str) {
     connection.execute_batch(batch).expect(what);
     let outbox = Connection::open(outbox_sibling(connection)).expect("队列库应可打开");
     outbox.execute_batch(batch).expect(what);
-}
-
-fn insert_hot_session_history(connection: &Connection) {
-    connection
-        .execute(
-            "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms)
-             VALUES(?1,?1,?1,'/w','running',NULL,NULL,0,0,0,?2,?3,1,1)",
-            rusqlite::params![
-                HOT_SESSION_ID,
-                HOT_SESSION_EVENT_COUNT,
-                HOT_SESSION_RECENT_ACTIVITY_MS,
-            ],
-        )
-        .expect("高频 Session 应可写入");
-    connection
-        .execute(
-            "WITH RECURSIVE seq(n) AS (
-                 SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < ?1
-             )
-             INSERT INTO session_events(
-                 session_id, sequence, generation, event_type, payload_json, emitted_at_ms
-             )
-             SELECT ?2, n, 'g', 'wire_event', '{}', ?3 FROM seq",
-            rusqlite::params![
-                HOT_SESSION_EVENT_COUNT,
-                HOT_SESSION_ID,
-                OLD_EVENT_EMITTED_AT_MS
-            ],
-        )
-        .expect("高频 Session 历史应可写入");
 }
 
 #[test]
@@ -434,47 +396,6 @@ fn cleanup_does_not_stall_concurrent_writes() {
         max_write_ms < 2_000,
         "清理不得让并发写入等待超过 2 秒，实测 {max_write_ms}ms"
     );
-}
-
-#[test]
-#[ignore = "性能验收：20 轮隔离 20000 条 retained Session 事件清理"]
-fn retained_session_event_cleanup_reports_percentiles() {
-    let expected_deleted =
-        usize::try_from(HOT_SESSION_EVENT_COUNT - super::SESSION_EVENT_MIN_RETAINED)
-            .expect("删除计数应可转换");
-    let mut samples_us = Vec::with_capacity(CLEANUP_PERFORMANCE_SAMPLE_COUNT);
-    for _ in 0..CLEANUP_PERFORMANCE_SAMPLE_COUNT {
-        let root = axon_test_support::test_temp_dir();
-        let connection = open_fixture(root.path());
-        insert_hot_session_history(&connection);
-        drop(connection);
-
-        let started = std::time::Instant::now();
-        let counts = cleanup_runtime_data(root.path(), CLEANUP_CUTOFF_MS).expect("清理应成功");
-        samples_us.push(started.elapsed().as_micros());
-        assert_eq!(counts.session_events, expected_deleted);
-    }
-    samples_us.sort_unstable();
-    let p50 = percentile(&samples_us, 50);
-    let p95 = percentile(&samples_us, 95);
-    let p99 = percentile(&samples_us, 99);
-    println!(
-        "retained_session_event_cleanup samples={} p50={}us p95={}us p99={}us",
-        samples_us.len(),
-        p50,
-        p95,
-        p99
-    );
-    assert!(
-        p99 < CLEANUP_PERFORMANCE_P99_BUDGET_US,
-        "滚动事件清理 p99 超出预算：{p99}us"
-    );
-}
-
-fn percentile(samples: &[u128], percentile: usize) -> u128 {
-    let scaled = samples.len().saturating_mul(percentile);
-    let index = scaled.div_ceil(100).saturating_sub(1);
-    samples[index.min(samples.len().saturating_sub(1))]
 }
 
 /// 执行计划审计：七个清理族的批次选择必须全部走索引范围扫描。

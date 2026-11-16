@@ -190,7 +190,6 @@ fn rollout_cleanup_crosses_bounded_batch_boundary() {
 }
 
 #[test]
-#[ignore = "旧事件表语义已废弃，集中清理阶段删除"]
 fn associated_cleanup_queries_use_indexes() {
     let root = axon_test_support::test_temp_dir();
     create_runtime_family(root.path(), "idle", false);
@@ -199,12 +198,6 @@ fn associated_cleanup_queries_use_indexes() {
     let placeholders = "?,?";
 
     let runtime = Connection::open(runtime_path(root.path())).expect("runtime 应可打开");
-    assert_indexed_plan(
-        &runtime,
-        &format!("SELECT COUNT(*) FROM session_events WHERE session_id IN ({placeholders})"),
-        &ids,
-        "runtime session_events",
-    );
     assert_indexed_plan(
         &runtime,
         &format!(
