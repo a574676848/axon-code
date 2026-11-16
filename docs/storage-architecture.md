@@ -871,11 +871,15 @@ Interaction 不消失，但它不再是"会一直变的状态机"，而是"一�
 ```http
 GET /api/v1/sessions?workspace=<workspace_id>&include_archived=false
 → [{
-     sessionId, title, status, pinned, archived,
+     sessionId, title, status, pinned, archived, workspaceId,
      lastActivityAtMs, turnCount, totalActiveMs,
-     lastTtftMs, p50TtftMs, openJobCount
+     ttftP50Ms, ttftMaxMs, openJobCount
    }]
 ```
+
+已实施（`crates/axon-cli/src/sessions_http_adapter.rs`）：排序固定为「置顶优先、再按最近活动倒序」；`include_archived` 默认关闭；标题回落到该车道第一条入站消息的首个非空行；`ttftP50Ms` 由 TTFT 直方图求累计过半桶的中点。
+
+**`lastTtftMs` 暂缺**：投影里只有累计、样本数、最大值与直方图，没有「最后一次」的值。补它要在 `session_metrics` 增加一列并在每轮投影时写入，属于 W4 之后的增量，不阻塞三端会话选择。
 
 字段直接来自 `sessions JOIN session_metrics`（§4.11 的投影），一次索引查找，不扫事件、不扫 usage。排序为 `pinned` 优先、再按 `last_activity_at_ms` 倒序。
 
