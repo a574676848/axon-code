@@ -154,9 +154,7 @@ pub fn scan_file_frames(file: &mut std::fs::File) -> Result<FrameScan, EventLogE
 }
 
 /// 扫描任意字节来源，判据与 [`scan_frames`] 完全一致。
-pub fn scan_source_frames<S: FrameSource>(
-    source: &mut S,
-) -> Result<FrameScan, EventLogError> {
+pub fn scan_source_frames<S: FrameSource>(source: &mut S) -> Result<FrameScan, EventLogError> {
     let total = source.total_len()?;
     let mut frames = Vec::new();
     let mut cursor = 0usize;
@@ -210,8 +208,7 @@ pub fn scan_source_frames<S: FrameSource>(
                 [first, second, third] => [*first, *second, *third],
                 _ => return Ok(torn_scan(frames, start)),
             };
-            let header =
-                u32::from(first) | (u32::from(second) << 8) | (u32::from(third) << 16);
+            let header = u32::from(first) | (u32::from(second) << 8) | (u32::from(third) << 16);
             cursor += 3;
             let last_block = header & 1 == 1;
             let block_type = (header >> 1) & 0b11;

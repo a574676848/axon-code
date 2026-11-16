@@ -129,15 +129,15 @@ pub(super) fn prepare_run_input(
 ) -> Result<PreparedRunInput, String> {
     let command = resumed_command(command, previous_session, config)?;
     let resumed_cwd = previous_session
-        .and_then(|session| session.record.cwd.as_deref())
+        .and_then(|session| session.facts.cwd.as_deref())
         .map(Path::new);
     let cwd = resolve_effective_run_cwd(cwd, resumed_cwd)?;
     let (prompt, attached_files) = compose_run_prompt(&command)?;
     let model_history_json = previous_session.map(|session| session.model_history_json.clone());
     let parent_session_id = previous_session.and_then(|session| {
         resumed_parent_session_id(
-            &session.record.session_id,
-            session.record.parent_session_id.as_deref(),
+            &session.facts.session_id,
+            session.facts.parent_session_id.as_deref(),
         )
     });
     Ok(PreparedRunInput {
@@ -262,7 +262,7 @@ fn resumed_command(
     // 显式 --model 永远最高优先；未指定时沿用会话记录的模型，
     // 只有该模型已从配置移除才回退 agent.default_model。
     if effective.model.is_none()
-        && let Some(model) = resumed_session_model(config, &previous.record)
+        && let Some(model) = resumed_session_model(config, &previous.facts)
     {
         effective.model = Some(model.name.clone());
     }
@@ -277,7 +277,7 @@ fn resumed_command(
 /// 返回 `None` 表示会话模型在配置内已不存在，调用方回退 `agent.default_model`。
 fn resumed_session_model<'a>(
     config: &'a AxonConfig,
-    record: &run_session_store::RunSessionRecord,
+    record: &run_thread_store::ResumedSessionFacts,
 ) -> Option<&'a ModelConfig> {
     let mut best: Option<(u8, &'a ModelConfig)> = None;
     for model in config

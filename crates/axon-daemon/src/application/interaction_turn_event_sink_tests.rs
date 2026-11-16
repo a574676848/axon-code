@@ -12,8 +12,8 @@ use axon_domain::{
 use axon_session::{EventLogStore, InteractionStore, SessionEventRecord, SqliteRuntimeStore};
 use axon_session_runtime::EventPublisher;
 
-use crate::application::event_stream_bridge::EventStreamBridge;
 use super::super::child_session_event_sink::ChildSessionSinkFactory;
+use crate::application::event_stream_bridge::EventStreamBridge;
 
 fn interaction_id() -> InteractionId {
     InteractionId::new("interaction-projection-test").expect("Interaction ID 应合法")

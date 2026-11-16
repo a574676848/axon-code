@@ -109,7 +109,7 @@ impl RunRequest {
             client_channel,
             config_path: config_path.to_path_buf(),
             session_id,
-            resumed_from: previous_session.map(|session| session.record.session_id.clone()),
+            resumed_from: previous_session.map(|session| session.facts.session_id.clone()),
             parent_session_id: prepared.parent_session_id,
             cwd,
             prompt,

@@ -118,24 +118,20 @@ fn compaction_appends_only_newer_structured_items() {
 #[test]
 fn checkpoint_window_resume_does_not_reinject_raw_prefix() {
     let fallback = session_record("third-user", "third-assistant", 300);
-    let detail = thread_detail_from_history_window(
-        &fallback,
-        RolloutHistoryWindow {
-            compaction: Some(ThreadCompaction {
-                history_json: serde_json::json!([
-                    {"role": "user", "content": "checkpoint", "cache_excluded": true}
-                ])
-                .to_string(),
-                through_sequence: 1,
-                checkpoint_text: "checkpoint".to_owned(),
-                before_tokens: 100,
-                after_tokens: 10,
-                recorded_at_ms: 200,
-            }),
-            turns: vec![(2, fallback.clone())],
-        },
-    )
-    .unwrap();
+    let mut detail = thread_detail_from_records(&[fallback]).unwrap();
+    // 该轮在 thread 里的序号是 2，窗口边界 1 只吞掉更早的历史。
+    detail.turns[0].sequence = 2;
+    detail.compacted_history = Some(ThreadCompaction {
+        history_json: serde_json::json!([
+            {"role": "user", "content": "checkpoint", "cache_excluded": true}
+        ])
+        .to_string(),
+        through_sequence: 1,
+        checkpoint_text: "checkpoint".to_owned(),
+        before_tokens: 100,
+        after_tokens: 10,
+        recorded_at_ms: 200,
+    });
 
     let history = thread_model_history_json(&detail).unwrap();
     let messages: Vec<serde_json::Value> = serde_json::from_str(&history).unwrap();
@@ -490,8 +486,8 @@ fn attachments_roundtrip_sqlite_thread_jsonl_and_resume_history() {
     )
     .unwrap()
     .expect("应恢复持久化 session");
-    assert_eq!(prepared.record.local_images, record.local_images);
-    assert_eq!(prepared.record.local_files, record.local_files);
+    assert_eq!(prepared.facts.session_id, record.session_id);
+    assert_eq!(prepared.facts.cwd, record.cwd);
     let messages: Vec<AgentModelMessage> =
         serde_json::from_str(&prepared.model_history_json).unwrap();
     assert_eq!(

@@ -3,7 +3,7 @@ use rusqlite::{Connection, OptionalExtension as _, params};
 
 use super::{
     CURRENT_SESSION_SINGLETON_KEY, ChildSessionRow, RolloutEventRecord, RolloutEventType,
-    RolloutHistoryWindow, RolloutSqliteStore, RunSessionRecord, events_for_session,
+    RolloutSqliteStore, RunSessionRecord, events_for_session,
 };
 
 #[cfg(test)]
@@ -69,91 +69,18 @@ impl RolloutSqliteStore {
         session_id: &str,
         compaction: &ThreadCompaction,
     ) -> Result<(), String> {
-        self.replace_compaction(session_id, Some(compaction))
-    }
-
-    pub(super) fn install_active_window(
-        &self,
-        session_id: &str,
-        assistant_part_id: &str,
-        mut compaction: ThreadCompaction,
-    ) -> Result<(ThreadCompaction, Option<ThreadCompaction>), String> {
-        let transaction = self
-            .connection
-            .unchecked_transaction()
-            .map_err(|_| "活动窗口事务启动失败".to_owned())?;
-        let previous_json = transaction
-            .query_row(
-                "SELECT history_checkpoint_json FROM rollout_sessions WHERE session_id = ?1",
-                params![session_id],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .map_err(|_| "读取活动窗口回滚投影失败".to_owned())?;
-        let previous = previous_json
-            .map(|json| deserialize::<ThreadCompaction>(&json, "活动窗口回滚投影"))
-            .transpose()?;
-        let sequence = transaction.query_row(
-            "SELECT sequence FROM rollout_turns WHERE session_id = ?1 AND assistant_part_id = ?2",
-            params![session_id, assistant_part_id],
-            |row| row.get::<_, i64>(0),
-        ).map_err(|_| "活动窗口缺少当前运行轮次".to_owned())?;
-        compaction.through_sequence =
-            u64::try_from(sequence).map_err(|_| "活动窗口轮次不能为负数".to_owned())?;
-        let json = serialize(&compaction, "活动窗口 checkpoint")?;
-        transaction
-            .execute(
-                "UPDATE rollout_sessions SET history_checkpoint_json = ?2 WHERE session_id = ?1",
-                params![session_id, json],
-            )
-            .map_err(|_| "活动窗口 checkpoint 写入失败".to_owned())?;
-        transaction
-            .commit()
-            .map_err(|_| "活动窗口事务提交失败".to_owned())?;
-        Ok((compaction, previous))
-    }
-
-    pub(super) fn replace_compaction(
-        &self,
-        session_id: &str,
-        compaction: Option<&ThreadCompaction>,
-    ) -> Result<(), String> {
-        let json = compaction
-            .map(|value| serialize(value, "compaction checkpoint"))
-            .transpose()?;
+        let json = serialize(compaction, "活动窗口 checkpoint")?;
         let changed = self
             .connection
             .execute(
                 "UPDATE rollout_sessions SET history_checkpoint_json = ?2 WHERE session_id = ?1",
                 params![session_id, json],
             )
-            .map_err(|_| "rollout compaction checkpoint 写入失败".to_owned())?;
+            .map_err(|_| "活动窗口 checkpoint 写入失败".to_owned())?;
         if changed != 1 {
             return Err(format!("未找到待压缩 session：{session_id}"));
         }
         Ok(())
-    }
-
-    pub(super) fn load_history_window(
-        &self,
-        session_id: &str,
-    ) -> Result<RolloutHistoryWindow, String> {
-        let checkpoint_json = self
-            .connection
-            .query_row(
-                "SELECT history_checkpoint_json FROM rollout_sessions WHERE session_id = ?1",
-                params![session_id],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()
-            .map_err(|_| "rollout compaction checkpoint 读取失败".to_owned())?
-            .flatten();
-        let compaction = checkpoint_json
-            .map(|json| deserialize::<ThreadCompaction>(&json, "compaction checkpoint"))
-            .transpose()?;
-        let after_sequence = compaction.as_ref().map(|value| value.through_sequence);
-        let turns =
-            load_sequenced_turns_from_connection(&self.connection, session_id, after_sequence)?;
-        Ok(RolloutHistoryWindow { compaction, turns })
     }
 
     #[cfg(test)]
@@ -516,39 +443,6 @@ fn insert_event(
         )
         .map_err(|_| "rollout event 事务写入失败".to_owned())?;
     Ok(())
-}
-
-fn load_sequenced_turns_from_connection(
-    connection: &Connection,
-    session_id: &str,
-    after_sequence: Option<u64>,
-) -> Result<Vec<(u64, RunSessionRecord)>, String> {
-    let mut statement = connection
-        .prepare(
-            "SELECT sequence, record_json FROM rollout_turns \
-             WHERE session_id = ?1 AND (?2 IS NULL OR sequence > ?2) ORDER BY sequence",
-        )
-        .map_err(|_| "rollout turns 查询准备失败".to_owned())?;
-    let after_sequence = after_sequence.map(|value| i64::try_from(value).unwrap_or(i64::MAX));
-    let mut rows = statement
-        .query(params![session_id, after_sequence])
-        .map_err(|_| "rollout turns 查询失败".to_owned())?;
-    let mut turns = Vec::new();
-    while let Some(row) = rows
-        .next()
-        .map_err(|_| "rollout turns 读取失败".to_owned())?
-    {
-        let sequence = row
-            .get::<_, i64>(0)
-            .map_err(|_| "rollout turn sequence 无效".to_owned())?;
-        let sequence =
-            u64::try_from(sequence).map_err(|_| "rollout turn sequence 不能为负数".to_owned())?;
-        let json = row
-            .get::<_, String>(1)
-            .map_err(|_| "rollout turn JSON 读取失败".to_owned())?;
-        turns.push((sequence, deserialize(&json, "turn")?));
-    }
-    Ok(turns)
 }
 
 fn event_type_name(event_type: RolloutEventType) -> &'static str {

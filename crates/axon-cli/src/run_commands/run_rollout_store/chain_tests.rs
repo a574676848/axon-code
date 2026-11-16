@@ -27,11 +27,18 @@ fn history_window_starts_after_checkpoint_without_deleting_raw_turns() {
     };
     store.install_compaction("s1", &checkpoint).unwrap();
 
-    let window = store.load_history_window("s1").unwrap();
-    assert_eq!(window.compaction, Some(checkpoint));
-    assert_eq!(window.turns.len(), 1);
-    assert_eq!(window.turns[0].0, 2);
-    assert_eq!(window.turns[0].1.prompt, "third");
+    let checkpoint_json: Option<String> = store
+        .connection
+        .query_row(
+            "SELECT history_checkpoint_json FROM rollout_sessions WHERE session_id = 's1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        checkpoint_json.is_some(),
+        "checkpoint 必须已写入 rollout_sessions"
+    );
     let raw_turn_count = store
         .connection
         .query_row(
@@ -41,33 +48,6 @@ fn history_window_starts_after_checkpoint_without_deleting_raw_turns() {
         )
         .unwrap();
     assert_eq!(raw_turn_count, 3);
-    cleanup(&path);
-}
-
-#[test]
-fn replace_compaction_can_restore_previous_rollout_checkpoint() {
-    let path = temp_db("restore-compaction");
-    let store = RolloutSqliteStore::open(&path).unwrap();
-    store.record_session(&record("s1", None, 1)).unwrap();
-    let checkpoint = ThreadCompaction {
-        history_json: "[]".to_owned(),
-        through_sequence: 0,
-        checkpoint_text: "summary".to_owned(),
-        before_tokens: 10,
-        after_tokens: 5,
-        recorded_at_ms: 2,
-    };
-
-    store.install_compaction("s1", &checkpoint).unwrap();
-    store.replace_compaction("s1", None).unwrap();
-
-    assert!(
-        store
-            .load_history_window("s1")
-            .unwrap()
-            .compaction
-            .is_none()
-    );
     cleanup(&path);
 }
 

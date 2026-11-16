@@ -104,7 +104,7 @@ pub(crate) fn run_run_with_progress(
     let session_id = match (
         previous_session
             .as_ref()
-            .map(|session| session.record.session_id.clone()),
+            .map(|session| session.facts.session_id.clone()),
         command.session.clone(),
         implicit_session_id,
     ) {
@@ -134,7 +134,7 @@ pub(crate) fn run_run_with_progress(
     let output = command.format.unwrap_or(OutputFormat::Text);
     let recorded_cwd = previous_session
         .as_ref()
-        .and_then(|session| session.record.cwd.as_deref())
+        .and_then(|session| session.facts.cwd.as_deref())
         .map(Path::new);
     let effective_cwd = match super::run_request::resolve_effective_run_cwd(cwd, recorded_cwd) {
         Ok(cwd) => cwd,

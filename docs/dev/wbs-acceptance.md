@@ -44,7 +44,7 @@
 | W2-9 | 已完成 | 新库不含 `session_events` 表，直连 SQL 消失 | `crates/axon-session/src/infrastructure/sqlite_runtime_store/schema.rs` 无该表；`cargo test --workspace` 全绿 |
 | W2-10 | 已完成 | 分页、字节预算、缺失正文降级、cursor 续订全绿 | `crates/axon-daemon/src/infrastructure/gateway_replay_tests.rs` |
 | W2-11 | 未开始 | 断网重连后视图与在线态一致（需 CDP 真机证据） | 待 W6-5 真机验收时取证 |
-| W2-12 | 进行中 | 删库后多轮对话回归全绿；`--continue` 可接续；无 `RolloutSqliteStore` 残留 | 恢复指针已迁入 `control.resume_pointer`（`run_resume_pointer.rs` 4 个测试）；thread 历史窗口实现已验证（1193 个 CLI 用例全绿）。**仍未完成**：`crates/axon-cli/src/run_commands/run_rollout_store/**`（约 110 KB：`api.rs`/`transaction.rs`/`session_usage.rs`/`retention.rs`/`rollout_events.rs`/`schema.rs`）仍是生产存储，承载窗口投影、turn 记录、工具输出归档、用量统计与保留策略；整删需要把这些能力逐个迁到 thread JSONL + 控制面库，属于独立的多轮工作，不在单轮内能闭合 |
+| W2-12 | 进行中 | 删库后多轮对话回归全绿；`--continue` 可接续；无 `RolloutSqliteStore` 残留 | 专项计划与进度见 [w2-12-rollout-retirement.md](./w2-12-rollout-retirement.md)。本窗口已把**恢复路径**（`prepare_run_session`）与**窗口投影**改为以 thread 文件为准，并删除 rollout 的窗口读取/写入函数；剩余 C（治理与反思读轮次）、D（用量与读数）、E（子代理与链/工具输出）、F（保留策略）四组与整删待后续轮次 |
 
 ## W3 控制面与工作项
 

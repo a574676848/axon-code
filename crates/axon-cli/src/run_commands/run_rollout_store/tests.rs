@@ -13,12 +13,10 @@ mod path_tests;
 mod retention_tests;
 #[path = "turn_tests.rs"]
 mod turn_tests;
-#[path = "window_tests.rs"]
-mod window_tests;
 
 use super::{CLI_ROLLOUT_DB_FILE, RolloutSqliteStore, RunSessionRecord, resolved_rollout_db_path};
 use axon_agent_runtime::agent_run_assistant_part_id;
-use axon_session::{AXON_RUNTIME_DATA_DIR, SESSION_STORE_DIR, ThreadCompaction};
+use axon_session::{AXON_RUNTIME_DATA_DIR, SESSION_STORE_DIR};
 
 const FIXTURE_ASSISTANT_TURN_ID: u64 = 1;
 

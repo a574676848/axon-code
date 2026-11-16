@@ -2,22 +2,18 @@
 
 use std::path::Path;
 
+#[cfg(test)]
+use axon_session::Thread;
 use axon_session::{
     AppendTurnCommand, AppendTurnItemsCommand, CompactThreadCommand, FailTurnCommand,
     InterruptTurnCommand, JsonlThreadEventStore, RepairOpenTurnCommand, StartEmptyThreadCommand,
-    StartThreadCommand, StartTurnCommand, Thread, ThreadCompaction, ThreadDetail, ThreadService,
+    StartThreadCommand, StartTurnCommand, ThreadCompaction, ThreadDetail, ThreadService,
     ThreadSettings, ThreadSource, ThreadStatus, Turn, TurnRepairOutcome, TurnStatus,
 };
 use serde::Serialize;
 
-/// 投影回归用例独占：生产压缩走内联轮转的本地实现，不再经过这条 rollout 镜像。
-#[cfg(test)]
-use super::run_rollout_store::install_rollout_compaction;
 use super::{
     RunCommand,
-    run_rollout_store::{
-        RolloutHistoryWindow, load_rollout_history_window, restore_rollout_compaction,
-    },
     run_session_store::{
         RunSessionIndexLookup, RunSessionRecord, load_indexed_run_session, resolved_axon_root,
     },
@@ -27,9 +23,41 @@ use super::{
 mod model_history;
 pub(super) use model_history::thread_model_history_json;
 
+/// 恢复会话所需的事实：全部来自 thread 文件的 settings 与最近一轮 turn metadata。
+///
+/// 目标态下模型可见历史只有一份：`data/sessions/threads/*.jsonl`。恢复时先定位
+/// thread，再从它的 settings 与最近一轮 metadata 还原 provider、模型、cwd 与父会话，
+/// 不再从第二个数据库副本反推。
+#[derive(Debug, Clone)]
+pub(super) struct ResumedSessionFacts {
+    pub(super) session_id: String,
+    pub(super) parent_session_id: Option<String>,
+    pub(super) cwd: Option<String>,
+    pub(super) provider: String,
+    pub(super) model: String,
+    pub(super) model_name: Option<String>,
+}
+
+impl ResumedSessionFacts {
+    fn from_detail(detail: &ThreadDetail) -> Self {
+        let settings = &detail.thread.settings;
+        let model_name = detail.turns.iter().rev().find_map(|turn| {
+            turn_metadata(&turn.token_usage_json).and_then(|metadata| metadata.model_name)
+        });
+        Self {
+            session_id: detail.thread.thread_id.clone(),
+            parent_session_id: detail.thread.parent_thread_id.clone(),
+            cwd: Some(settings.cwd.clone()).filter(|cwd| !cwd.trim().is_empty()),
+            provider: settings.provider.clone(),
+            model: settings.model.clone(),
+            model_name,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct PreparedRunSession {
-    pub(super) record: RunSessionRecord,
+    pub(super) facts: ResumedSessionFacts,
     pub(super) model_history_json: String,
 }
 
@@ -42,55 +70,34 @@ pub(super) fn thread_event_sequence_snapshot(root: &Path, thread_id: &str) -> Re
     Ok(activation.next_sequence.saturating_sub(1))
 }
 
-/// 只服务投影 CAS 与回滚不变量测试：生产压缩路径已收敛到内联轮转的本地实现。
-#[cfg(test)]
-pub(super) fn install_compaction_projection(
-    config_path: &Path,
-    root: &Path,
-    session_id: &str,
-    expected_thread_event_sequence: u64,
-    compaction: ThreadCompaction,
-    previous_compaction: Option<&ThreadCompaction>,
-) -> Result<(), String> {
-    install_rollout_compaction(config_path, session_id, &compaction)?;
-    if let Err(error) = ThreadService::new(JsonlThreadEventStore).compact_thread(
-        root,
-        CompactThreadCommand {
-            thread_id: session_id.to_owned(),
-            recorded_at_ms: compaction.recorded_at_ms,
-            expected_sequence: expected_thread_event_sequence,
-            compaction,
-        },
-    ) {
-        let rollback = restore_rollout_compaction(config_path, session_id, previous_compaction);
-        return Err(match rollback {
-            Ok(()) => format!(
-                "Thread 压缩投影失败，已回滚 rollout：session_id={session_id}，error={error}"
-            ),
-            Err(rollback_error) => format!(
-                "Thread 压缩投影失败且 rollout 回滚失败：session_id={session_id}，projection={error}，rollback={rollback_error}"
-            ),
-        });
-    }
-    Ok(())
-}
-
 pub(super) fn install_active_compaction_projection(
-    config_path: &Path,
     root: &Path,
     session_id: &str,
     assistant_part_id: &str,
     expected_sequence: u64,
-    compaction: ThreadCompaction,
+    mut compaction: ThreadCompaction,
 ) -> Result<u64, String> {
-    let (compaction, previous) = super::run_rollout_store::install_active_rollout_window(
-        config_path,
-        session_id,
-        assistant_part_id,
-        compaction,
-    )?;
+    let service = ThreadService::new(JsonlThreadEventStore);
+    // `through_sequence` 取 thread 侧当前轮的序号：turn_id 由
+    // `{session_id}-turn-{assistant_part_id}` 组成，因此按后缀精确命中，找不到再退回活动轮。
+    let detail = service.read_thread(root, session_id)?;
+    let suffix = format!("-turn-{assistant_part_id}");
+    let current = detail
+        .turns
+        .iter()
+        .rev()
+        .find(|turn| turn.turn_id.ends_with(&suffix))
+        .or_else(|| {
+            detail
+                .turns
+                .iter()
+                .rev()
+                .find(|turn| turn.status == TurnStatus::Active)
+        })
+        .ok_or_else(|| "活动窗口缺少当前运行轮次".to_owned())?;
+    compaction.through_sequence = current.sequence;
     let through_sequence = compaction.through_sequence;
-    if let Err(error) = ThreadService::new(JsonlThreadEventStore).compact_thread(
+    service.compact_thread(
         root,
         CompactThreadCommand {
             thread_id: session_id.to_owned(),
@@ -98,19 +105,11 @@ pub(super) fn install_active_compaction_projection(
             expected_sequence,
             compaction,
         },
-    ) {
-        let rollback = restore_rollout_compaction(config_path, session_id, previous.as_ref());
-        return Err(match rollback {
-            Ok(()) => format!("活动窗口投影失败，rollout 已回滚：{error}"),
-            Err(rollback_error) => format!(
-                "活动窗口投影及 rollout 回滚失败：projection={error}，rollback={rollback_error}"
-            ),
-        });
-    }
+    )?;
     Ok(through_sequence)
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ThreadTurnMetadata {
     usage: Option<axon_agent_runtime::TokenUsageTelemetry>,
@@ -120,6 +119,9 @@ struct ThreadTurnMetadata {
     tool_receipts: Vec<serde_json::Value>,
     reasoning_message_count: usize,
     turn_event_count: usize,
+    /// 用户当初选择的模型别名；恢复会话时用它回到同一别名。
+    #[serde(default)]
+    model_name: Option<String>,
 }
 
 /// Thread mirror 中单个工具回执摘要的字符上限。
@@ -439,30 +441,62 @@ fn prepare_session_from_lookup(
     config_path: &Path,
     lookup: RunSessionIndexLookup<'_>,
 ) -> Result<Option<PreparedRunSession>, String> {
-    let Some(record) = load_indexed_run_session(config_path, &lookup)? else {
+    let root = resolved_axon_root(config_path)?;
+    let service = ThreadService::new(JsonlThreadEventStore);
+    let thread_id = match lookup {
+        RunSessionIndexLookup::Latest => latest_thread_id(&service, &root)?,
+        RunSessionIndexLookup::SessionId(session_id) => Some(session_id.to_owned()),
+    };
+    let Some(thread_id) = thread_id else {
         return Ok(None);
     };
-    let window = load_rollout_history_window(config_path, &record.session_id)?;
-    let detail = thread_detail_from_history_window(&record, window)?;
-    crate::turn_execution_ledger::restore_thread_history(&record.session_id, &detail);
-    if detail.compacted_history.is_none() {
-        let session_dir = resolved_axon_root(config_path)?
-            .join("sessions")
-            .join(&record.session_id);
-        if axon_agent_runtime::SessionNotes::load_from_session(&session_dir)
-            .map_err(|error| format!("读取窗口身份失败：{error:?}"))?
-            .is_some_and(|notes| notes.window_number > 1)
-        {
-            return Err(
-                "会话已换窗但活动窗口投影缺失，拒绝恢复旧聊天历史；请先修复窗口投影".to_owned(),
-            );
-        }
+    // 目标 thread 不存在时如实返回「没有可恢复的会话」，不隐式新建。
+    let Ok(detail) = service.read_thread(&root, &thread_id) else {
+        return Ok(None);
+    };
+    if detail.compacted_history.is_none() && window_number_exceeds_first(config_path, &thread_id)? {
+        return Err(
+            "会话已换窗但活动窗口投影缺失，拒绝恢复旧聊天历史；请先修复窗口投影".to_owned(),
+        );
     }
+    let facts = ResumedSessionFacts::from_detail(&detail);
     let model_history_json = thread_model_history_json(&detail)?;
+    crate::turn_execution_ledger::restore_thread_history(&facts.session_id, &detail);
     Ok(Some(PreparedRunSession {
-        record,
+        facts,
         model_history_json,
     }))
+}
+
+/// 最近一个未归档 thread：`--continue` 没有指针时的兜底候选。
+fn latest_thread_id(
+    service: &ThreadService<JsonlThreadEventStore>,
+    root: &Path,
+) -> Result<Option<String>, String> {
+    let summaries = service.list_threads(root, 20)?;
+    Ok(summaries
+        .into_iter()
+        .filter(|summary| summary.status != ThreadStatus::Archived)
+        .max_by_key(|summary| summary.updated_at_ms)
+        .map(|summary| summary.thread_id))
+}
+
+/// 换窗后的 thread 必须带活动窗口投影，否则恢复出来的历史会跨窗。
+fn window_number_exceeds_first(config_path: &Path, thread_id: &str) -> Result<bool, String> {
+    let session_dir = resolved_axon_root(config_path)?
+        .join("sessions")
+        .join(thread_id);
+    Ok(
+        axon_agent_runtime::SessionNotes::load_from_session(&session_dir)
+            .map_err(|error| format!("读取窗口身份失败：{error:?}"))?
+            .is_some_and(|notes| notes.window_number > 1),
+    )
+}
+
+/// thread 侧记录的最近一轮 metadata。
+fn turn_metadata(token_usage_json: &Option<String>) -> Option<ThreadTurnMetadata> {
+    let raw = token_usage_json.as_deref()?;
+    serde_json::from_str::<ThreadTurnMetadata>(raw).ok()
 }
 
 #[cfg(test)]
@@ -476,46 +510,27 @@ fn thread_detail_from_records(records: &[RunSessionRecord]) -> Result<ThreadDeta
         .enumerate()
         .map(|(sequence, record)| {
             u64::try_from(sequence)
-                .map(|sequence| (sequence, record))
                 .map_err(|_| "SQLite thread turn 数过大".to_owned())
+                .and_then(|sequence| turn_from_record(&record, sequence))
         })
-        .collect::<Result<Vec<_>, _>>()?;
-    thread_detail_from_history_window(
-        fallback,
-        RolloutHistoryWindow {
-            compaction: None,
-            turns,
-        },
-    )
-}
-
-fn thread_detail_from_history_window(
-    fallback: &RunSessionRecord,
-    window: RolloutHistoryWindow,
-) -> Result<ThreadDetail, String> {
-    let latest = window.turns.last().map_or(fallback, |(_, record)| record);
-    let turns = window
-        .turns
-        .iter()
-        .map(|(sequence, record)| turn_from_record(record, *sequence))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(ThreadDetail {
         thread: Thread {
-            thread_id: latest.session_id.clone(),
+            thread_id: fallback.session_id.clone(),
             session_root_id: fallback.session_id.clone(),
-            parent_thread_id: latest.parent_session_id.clone(),
+            parent_thread_id: fallback.parent_session_id.clone(),
             forked_from_thread_id: None,
             name: None,
             status: ThreadStatus::Idle,
             source: ThreadSource::CliRun,
             ephemeral: false,
-            settings: settings_from_record(latest),
+            settings: settings_from_record(fallback),
             created_at_ms: fallback.created_at_ms,
-            updated_at_ms: latest.created_at_ms,
+            updated_at_ms: fallback.created_at_ms,
             archived_at_ms: None,
         },
         turns,
-        compacted_history: window.compaction,
+        compacted_history: None,
     })
 }
 
@@ -615,12 +630,10 @@ fn thread_turn_metadata_from_record(record: &RunSessionRecord) -> ThreadTurnMeta
             .collect(),
         reasoning_message_count: record.reasoning_messages.len(),
         turn_event_count: record.turn_events.len(),
+        model_name: record.model_name.clone(),
     }
 }
 
-#[cfg(test)]
-#[path = "run_thread_store_compaction_projection_tests.rs"]
-mod compaction_projection_tests;
 #[cfg(test)]
 #[path = "run_thread_store_tests.rs"]
 mod tests;

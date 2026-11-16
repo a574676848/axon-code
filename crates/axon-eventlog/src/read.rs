@@ -3,7 +3,9 @@
 use std::path::Path;
 
 use crate::error::EventLogError;
-use crate::format::{HEADER_FRAME_INDEX, Header, decode_frame, scan_frames};
+use crate::format::{
+    FrameSpan, HEADER_FRAME_INDEX, Header, decode_frame, scan_file_frames, scan_frames,
+};
 use crate::record::RuntimeEventRecord;
 
 /// 一次完整读取的结果。
@@ -70,9 +72,9 @@ pub struct EventLogReader {
 }
 /// 读取序号严格大于 `after` 的至多 `limit` 条事件，只解压必要的尾部帧。
 ///
-/// 与 [`read_snapshot`] 的区别是**不做全量解压**：帧结构扫描仍然要读一遍文件字节，
-/// 但只解压从尾部倒推覆盖 `after` 的那几帧。日志越大，收益越明显；分页 replay
-/// 每翻一页都从尾部重新定位，不会随历史增长而线性变慢。
+/// 与 [`read_snapshot`] 的区别是**既不整文件入内存，也不做全量解压**：帧结构扫描
+/// 走 [`scan_file_frames`]，只读帧头与块头；解压只针对从尾部倒推覆盖 `after` 的那几帧。
+/// 日志越大收益越明显，分页 replay 每翻一页都从尾部重新定位，不随历史线性变慢。
 pub fn read_after(
     path: &Path,
     after: u64,
@@ -81,9 +83,9 @@ pub fn read_after(
     if limit == 0 {
         return Ok(Vec::new());
     }
-    let bytes = std::fs::read(path)?;
-    let scan = scan_frames(&bytes)?;
-    let frames: Vec<_> = scan
+    let mut file = std::fs::File::open(path)?;
+    let scan = scan_file_frames(&mut file)?;
+    let frames: Vec<FrameSpan> = scan
         .frames
         .iter()
         .skip(HEADER_FRAME_INDEX + 1)
@@ -91,11 +93,8 @@ pub fn read_after(
         .collect();
     // 先把最后一帧的末条序号作为快路径：`after` 已越过全部记录时直接返回空。
     if let Some(last_span) = frames.last() {
-        let plain = decode_frame(&bytes[last_span.start..last_span.end])?;
-        if decode_records(&plain)?
-            .last()
-            .is_none_or(|record| record.sequence <= after)
-        {
+        let records = frame_records(&mut file, last_span)?;
+        if records.last().is_none_or(|record| record.sequence <= after) {
             return Ok(Vec::new());
         }
     }
@@ -103,19 +102,18 @@ pub fn read_after(
     // 没有任何一帧的第一条序号 <= after 时，说明 after 落在日志起点之前，从头开始。
     let mut begin = 0usize;
     for (index, span) in frames.iter().enumerate().rev() {
-        let plain = decode_frame(&bytes[span.start..span.end])?;
-        let first = decode_records(&plain)?
+        let records = frame_records(&mut file, span)?;
+        if records
             .first()
-            .map(|record| record.sequence);
-        if first.is_none_or(|sequence| sequence <= after) {
+            .is_none_or(|record| record.sequence <= after)
+        {
             begin = index;
             break;
         }
     }
     let mut collected: Vec<RuntimeEventRecord> = Vec::with_capacity(limit);
     for span in frames.iter().skip(begin) {
-        let plain = decode_frame(&bytes[span.start..span.end])?;
-        for record in decode_records(&plain)? {
+        for record in frame_records(&mut file, span)? {
             if record.sequence > after {
                 collected.push(record);
             }
@@ -139,16 +137,20 @@ where
     if limit == 0 {
         return Ok(Vec::new());
     }
-    let bytes = std::fs::read(path)?;
-    let scan = scan_frames(&bytes)?;
+    let mut file = std::fs::File::open(path)?;
+    let scan = scan_file_frames(&mut file)?;
+    let frames: Vec<FrameSpan> = scan
+        .frames
+        .iter()
+        .skip(HEADER_FRAME_INDEX + 1)
+        .copied()
+        .collect();
     let mut matched: Vec<RuntimeEventRecord> = Vec::new();
-    for span in scan.frames.iter().skip(HEADER_FRAME_INDEX + 1).rev() {
+    for span in frames.iter().rev() {
         if matched.len() >= limit {
             break;
         }
-        let plain = decode_frame(&bytes[span.start..span.end])?;
-        let records = decode_records(&plain)?;
-        let tail: Vec<RuntimeEventRecord> = records
+        let tail: Vec<RuntimeEventRecord> = frame_records(&mut file, span)?
             .into_iter()
             .filter(|record| predicate(record))
             .collect();
@@ -160,6 +162,21 @@ where
         matched.drain(..matched.len() - limit);
     }
     Ok(matched)
+}
+
+/// 读出并解压单帧：只把这一帧的字节搬进内存。
+fn frame_records(
+    file: &mut std::fs::File,
+    span: &FrameSpan,
+) -> Result<Vec<RuntimeEventRecord>, EventLogError> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    let len = span.end.saturating_sub(span.start);
+    file.seek(SeekFrom::Start(
+        u64::try_from(span.start).unwrap_or(u64::MAX),
+    ))?;
+    let mut buffer = vec![0u8; len];
+    file.read_exact(&mut buffer)?;
+    decode_records(&decode_frame(&buffer)?)
 }
 
 /// 把一帧明文拆成事件记录，并校验帧内序号连续。

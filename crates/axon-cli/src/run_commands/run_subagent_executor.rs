@@ -302,7 +302,7 @@ impl ProviderRunSubagentExecutor {
             client_channel: axon_client_identity::ClientChannel::Cli,
             config_path: self.environment.config_path.clone(),
             session_id,
-            resumed_from: previous_session.map(|session| session.record.session_id),
+            resumed_from: previous_session.map(|session| session.facts.session_id),
             parent_session_id: Some(self.environment.parent_session_id.clone()),
             cwd: self.environment.cwd.clone(),
             prompt: input.message.clone(),

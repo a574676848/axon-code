@@ -248,7 +248,14 @@ fn historical_session_with_alias(
         injected_context_messages: Vec::new(),
     };
     PreparedRunSession {
-        record,
+        facts: crate::run_commands::run_thread_store::ResumedSessionFacts {
+            session_id: record.session_id.clone(),
+            parent_session_id: record.parent_session_id.clone(),
+            cwd: record.cwd.clone(),
+            provider: record.provider.clone(),
+            model: record.model.clone(),
+            model_name: record.model_name.clone(),
+        },
         model_history_json: "[]".to_owned(),
     }
 }

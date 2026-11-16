@@ -139,10 +139,15 @@ fn same_session_preserves_multiple_turns_and_projects_contiguous_event_sequence(
     store.record_session(&first).unwrap();
     store.record_session(&second).unwrap();
 
-    let turns = store.load_history_window("s1").unwrap().turns;
-    assert_eq!(turns.len(), 2);
-    assert_eq!(turns[0].1.prompt, "prompt-s1");
-    assert_eq!(turns[1].1.prompt, "second prompt");
+    let turn_count: i64 = store
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM rollout_turns WHERE session_id = 's1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(turn_count, 2);
     let events = store.load_events("s1").unwrap();
     assert_eq!(events.len(), 4);
     assert_eq!(events[0].sequence, 0);

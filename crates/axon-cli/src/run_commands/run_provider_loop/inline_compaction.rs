@@ -414,7 +414,6 @@ fn install_compaction_projection(
         }
     }
     super::super::run_thread_store::install_active_compaction_projection(
-        &request.config_path,
         root,
         &request.session_id,
         &super::super::run_session_store::run_persistence_assistant_part_id(request),

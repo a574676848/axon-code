@@ -59,6 +59,7 @@ mod run_progress_streaming_diff_preview;
 mod run_provider_loop;
 mod run_provider_turn;
 pub(crate) use run_provider_turn::CliProviderTurnRunner;
+mod run_cli_surface;
 mod run_provider_orchestration;
 mod run_question_projection;
 mod run_reflection_apply;
@@ -187,15 +188,36 @@ pub(crate) fn run_cli_daemon_interaction(
         .clone()
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let interaction = match interaction_from_prompt(
-        CLI_INTERACTION_CHANNEL,
-        cli_reply_destination(),
-        &command.prompt,
-        &cwd,
-        axon_time::unix_now_ms(),
-    ) {
-        Ok(interaction) => interaction,
-        Err(error) => return cli_error(error),
+    let interaction = {
+        // 会话由（工作区、受众、渠道、投递目标）推导：显式续接必须复用目标会话的
+        // 渠道与投递目标，否则 Daemon 会推导出另一条会话。
+        let surface = match run_cli_surface::resolve_cli_run_surface(
+            cli.global.config.as_deref(),
+            command.session.as_deref(),
+            command.continue_last,
+            &cwd,
+        ) {
+            Ok(surface) => surface,
+            Err(error) => return cli_error(&error),
+        };
+        let interaction = match interaction_from_prompt(
+            &surface.channel,
+            &surface.destination,
+            &command.prompt,
+            &cwd,
+            axon_time::unix_now_ms(),
+        ) {
+            Ok(interaction) => interaction,
+            Err(error) => return cli_error(error),
+        };
+        if let Some(target) = surface.session_id.as_deref()
+            && axon_session::interaction_session_id(&interaction).as_deref() != Some(target)
+        {
+            return cli_error(format!(
+                "无法续接会话 {target}：该会话属于其他工作区或受众，请在原工作目录下运行"
+            ));
+        }
+        interaction
     };
     run_daemon_interaction(
         interaction,

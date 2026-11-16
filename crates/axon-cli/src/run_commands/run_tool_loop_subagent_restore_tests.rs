@@ -102,7 +102,14 @@ fn previous_session_record(session_id: &str) -> RunSessionRecord {
 fn prepared_session(session_id: &str) -> PreparedRunSession {
     let record = previous_session_record(session_id);
     PreparedRunSession {
-        record,
+        facts: crate::run_commands::run_thread_store::ResumedSessionFacts {
+            session_id: record.session_id.clone(),
+            parent_session_id: record.parent_session_id.clone(),
+            cwd: record.cwd.clone(),
+            provider: record.provider.clone(),
+            model: record.model.clone(),
+            model_name: record.model_name.clone(),
+        },
         model_history_json: "[]".to_owned(),
     }
 }
@@ -224,7 +231,7 @@ fn new_run_request_reopens_file_graph_and_restores_child() {
         &run_command("恢复后继续"),
         &config,
         &config_path,
-        RunRequestSession::with_id(Some(&previous), previous.record.session_id.clone()),
+        RunRequestSession::with_id(Some(&previous), previous.facts.session_id.clone()),
         Some(&workspace),
         RunRequestBuildOptions {
             transport_context: None,

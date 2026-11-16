@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use axon_agent_runtime::ContentArchiveRuntime;
-use axon_session::{ThreadCompaction, session_store_path};
+use axon_session::session_store_path;
 use rusqlite::{Connection, OptionalExtension as _, params};
 
 use super::run_session_store::{RunSessionRecord, resolved_axon_root};
@@ -28,13 +28,12 @@ mod transaction;
 #[cfg(test)]
 pub(crate) use api::append_rollout_event_for_session;
 pub(crate) use api::{
-    commit_session_to_rollout, ensure_current_turn_to_rollout, install_active_rollout_window,
-    install_rollout_compaction, load_child_sessions_from_root,
-    load_latest_reflection_notice_from_root, load_latest_session_model_from_root,
-    load_previous_reflection_notice, load_recent_turn_facts, load_rollout_history_window,
+    commit_session_to_rollout, ensure_current_turn_to_rollout, install_rollout_compaction,
+    load_child_sessions_from_root, load_latest_reflection_notice_from_root,
+    load_latest_session_model_from_root, load_previous_reflection_notice, load_recent_turn_facts,
     load_session_turn, load_session_usage, load_session_usage_totals_from_root, load_turn_sequence,
     mark_child_session_origin, mark_child_session_status, read_rollout_tool_output,
-    replay_rollout_events, restore_rollout_compaction,
+    replay_rollout_events,
 };
 #[cfg(test)]
 pub(crate) use rollout_events::RolloutEventAppendInput;
@@ -53,11 +52,6 @@ pub(crate) const CLI_ROLLOUT_DB_FILE: &str = "rollout.sqlite3";
 pub(crate) const ROLLOUT_SQLITE_SCHEMA_VERSION: i64 = 6;
 /// 当前 Thread 选择表的单例键。
 const CURRENT_SESSION_SINGLETON_KEY: i64 = 1;
-
-pub(crate) struct RolloutHistoryWindow {
-    pub(crate) compaction: Option<ThreadCompaction>,
-    pub(crate) turns: Vec<(u64, RunSessionRecord)>,
-}
 
 /// 一轮的零模型事实摘要，供人格规则层与信号采集使用。
 ///
