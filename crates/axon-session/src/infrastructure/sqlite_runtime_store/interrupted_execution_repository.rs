@@ -112,8 +112,7 @@ fn quarantine_running(
         let Ok(session_id) = DaemonSessionId::new(session_id) else {
             continue;
         };
-        let Some(sequence) = append_session_event(&transaction, host, now, &session_id, &payload)?
-        else {
+        let Some(sequence) = next_session_sequence(&transaction, &session_id)? else {
             continue;
         };
         if matches!(settlement, SessionSettlement::AdoptByCurrentHost) {
@@ -242,12 +241,10 @@ fn settle_uncertain(
     Ok(true)
 }
 
-fn append_session_event(
+/// 取该会话的下一个事件序号；会话不存在时返回 None。
+fn next_session_sequence(
     transaction: &Transaction<'_>,
-    host: &DaemonHostRecord,
-    now: i64,
     session_id: &DaemonSessionId,
-    payload: &str,
 ) -> Result<Option<u64>, RuntimeStoreError> {
     let previous: Option<i64> = transaction
         .query_row(

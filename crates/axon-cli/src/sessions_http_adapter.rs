@@ -174,17 +174,15 @@ impl SessionsHttpAdapter {
             return GatewayHttpResponse::json(500, &json!({"error": "runtime_unavailable"}));
         }
         let changed = store.with_read_connection(|connection| {
-            connection
-                .execute(
-                    "UPDATE sessions SET pinned=COALESCE(?1, pinned), archived=COALESCE(?2, archived)
+            connection.execute(
+                "UPDATE sessions SET pinned=COALESCE(?1, pinned), archived=COALESCE(?2, archived)
                      WHERE session_id=?3",
-                    rusqlite::params![
-                        payload.pinned.map(|value| i64::from(u8::from(value))),
-                        payload.archived.map(|value| i64::from(u8::from(value))),
-                        session_id
-                    ],
-                )
-                .map(|changed| changed)
+                rusqlite::params![
+                    payload.pinned.map(|value| i64::from(u8::from(value))),
+                    payload.archived.map(|value| i64::from(u8::from(value))),
+                    session_id
+                ],
+            )
         });
         match changed {
             Ok(0) => GatewayHttpResponse::json(404, &json!({"error": "session_not_found"})),

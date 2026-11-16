@@ -15,9 +15,6 @@ mod sqlite_runtime_store_agent_continuation_tests;
 #[path = "sqlite_runtime_store_agent_mailbox_tests.rs"]
 mod sqlite_runtime_store_agent_mailbox_tests;
 #[cfg(test)]
-#[path = "sqlite_runtime_store_event_batch_tests.rs"]
-mod sqlite_runtime_store_event_batch_tests;
-#[cfg(test)]
 #[path = "sqlite_runtime_store_execution_lease_tests.rs"]
 mod sqlite_runtime_store_execution_lease_tests;
 #[cfg(test)]
@@ -64,10 +61,6 @@ pub fn session_store_path(root: &Path) -> PathBuf {
 
 pub use jsonl_store::{
     JsonlThreadEventStore, THREAD_EVENTS_FILE, ThreadEventReadIssue, ThreadEventScan,
-};
-pub use sqlite_runtime_store::event_payload_store::{
-    is_exclusive_payload_reference, payload_storage_path, read as read_event_payload,
-    reclaim_shards_before,
 };
 pub use sqlite_runtime_store::{
     SESSION_EVENT_ARCHIVE_SUBDIR, SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES,

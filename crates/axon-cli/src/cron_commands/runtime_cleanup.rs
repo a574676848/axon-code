@@ -425,14 +425,6 @@ pub(super) fn session_event_expiry_predicate() -> String {
     )
 }
 
-/// retained Session Event 清理的过滤子句（含 FROM，供计数与选择共用）。
-pub(super) fn session_event_expiry_filter() -> String {
-    format!(
-        "FROM session_events WHERE {}",
-        session_event_expiry_predicate()
-    )
-}
-
 /// Task 保留谓词（`?1` 为保留截止时间）：终态、无活跃 Execution、无未读 Result。
 pub(super) fn task_expiry_filter() -> String {
     format!(

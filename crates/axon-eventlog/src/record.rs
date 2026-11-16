@@ -279,6 +279,40 @@ impl RuntimeEventRecord {
     }
 }
 
+impl RuntimeEventRecord {
+    /// 构造一条后台任务开始事件。
+    pub fn job_started(
+        sequence: u64,
+        emitted_at_ms: u64,
+        job: &JobRef,
+    ) -> Result<Self, EventLogError> {
+        let payload =
+            serde_json::to_value(job).map_err(|error| EventLogError::Codec(error.to_string()))?;
+        Ok(Self::new(
+            sequence,
+            emitted_at_ms,
+            RuntimeEventKind::JobStarted,
+            payload,
+        ))
+    }
+
+    /// 构造一条后台任务结束事件。
+    pub fn job_completed(
+        sequence: u64,
+        emitted_at_ms: u64,
+        outcome: &JobOutcome,
+    ) -> Result<Self, EventLogError> {
+        let payload = serde_json::to_value(outcome)
+            .map_err(|error| EventLogError::Codec(error.to_string()))?;
+        Ok(Self::new(
+            sequence,
+            emitted_at_ms,
+            RuntimeEventKind::JobCompleted,
+            payload,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,38 +374,5 @@ mod tests {
             decoded.event_type,
             RuntimeEventKind::Other("wire_event".to_owned())
         );
-    }
-}
-impl RuntimeEventRecord {
-    /// 构造一条后台任务开始事件。
-    pub fn job_started(
-        sequence: u64,
-        emitted_at_ms: u64,
-        job: &JobRef,
-    ) -> Result<Self, EventLogError> {
-        let payload =
-            serde_json::to_value(job).map_err(|error| EventLogError::Codec(error.to_string()))?;
-        Ok(Self::new(
-            sequence,
-            emitted_at_ms,
-            RuntimeEventKind::JobStarted,
-            payload,
-        ))
-    }
-
-    /// 构造一条后台任务结束事件。
-    pub fn job_completed(
-        sequence: u64,
-        emitted_at_ms: u64,
-        outcome: &JobOutcome,
-    ) -> Result<Self, EventLogError> {
-        let payload = serde_json::to_value(outcome)
-            .map_err(|error| EventLogError::Codec(error.to_string()))?;
-        Ok(Self::new(
-            sequence,
-            emitted_at_ms,
-            RuntimeEventKind::JobCompleted,
-            payload,
-        ))
     }
 }

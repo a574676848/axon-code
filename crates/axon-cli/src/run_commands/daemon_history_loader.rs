@@ -8,7 +8,7 @@ use axon_domain::{
 };
 use axon_protocol::wire::{WireEventEnvelope, WireEventKind};
 use axon_session::{
-    InteractionQueryStore, RuntimeStore, SessionEventRecord, SqliteRuntimeStore, session_lane_id,
+    InteractionQueryStore, SessionEventRecord, SqliteRuntimeStore, session_lane_id,
 };
 use serde::Deserialize;
 

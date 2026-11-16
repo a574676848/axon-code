@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use axon_domain::DaemonSessionId;
 use axon_protocol::wire::WireEventEnvelope;
-use axon_session::{DaemonHostRecord, RuntimeStore, SqliteRuntimeStore};
+use axon_session::{DaemonHostRecord, SqliteRuntimeStore};
 
 use crate::run_commands::DurableQuestionEventWriter;
 

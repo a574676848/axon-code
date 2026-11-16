@@ -488,7 +488,6 @@ fn history_page_resumes_at_the_last_consumed_event() {
 }
 
 #[test]
-#[test]
 fn history_page_reports_not_found_for_missing_interaction() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));

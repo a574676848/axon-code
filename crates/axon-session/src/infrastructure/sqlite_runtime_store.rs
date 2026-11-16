@@ -30,8 +30,6 @@ mod connection_pool;
 mod decision_repository;
 #[path = "sqlite_runtime_store/event_log_repository.rs"]
 mod event_log_repository;
-#[path = "sqlite_runtime_store/event_payload_store.rs"]
-pub mod event_payload_store;
 #[path = "sqlite_runtime_store/execution_repository.rs"]
 mod execution_repository;
 #[path = "sqlite_runtime_store/failure_repository.rs"]
@@ -80,11 +78,10 @@ mod runtime_store_impl;
 pub mod schedule_repository;
 #[path = "sqlite_runtime_store/schema.rs"]
 mod schema;
-#[path = "sqlite_runtime_store/session_metrics_repository.rs"]
-pub(crate) mod session_metrics_repository;
-pub use session_metrics_repository::SessionMetricsSnapshot;
 #[path = "sqlite_runtime_store/session_control_repository.rs"]
 mod session_control_repository;
+#[path = "sqlite_runtime_store/session_metrics_repository.rs"]
+pub(crate) mod session_metrics_repository;
 #[path = "sqlite_runtime_store/transaction.rs"]
 pub mod transaction;
 #[path = "sqlite_runtime_store/user_question_repository.rs"]

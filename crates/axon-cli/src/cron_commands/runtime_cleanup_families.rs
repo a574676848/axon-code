@@ -12,7 +12,7 @@ use rusqlite::{Connection, params_from_iter};
 use super::runtime_cleanup::{
     INTERACTION_TERMINAL_KINDS, LEDGER_EVENT_MIN_RETAINED, RuntimeCleanupCounts,
     SESSION_ACTIVE_STATUSES, delete_family, delete_ids_in, placeholders, quoted_list,
-    session_event_expiry_filter, task_expiry_filter,
+    task_expiry_filter,
 };
 use axon_session::NotificationDeliveryState;
 
@@ -305,17 +305,6 @@ pub(super) fn delete_session_families_by_ids(
         super::runtime_event_archive::reclaim_session_archive_dir(archive_root, id);
     }
     Ok(counts)
-}
-
-/// retained Session Event 清理的批次选择 SQL：按 emitted_at 索引有序推进。
-///
-/// 同时取出会话标识与外置正文引用：删除提交之后要按会话新的保底线回收整片正文，
-/// 并按引用回收独占文件。
-pub(super) fn expired_session_events_selection_sql() -> String {
-    format!(
-        "SELECT CAST(rowid AS TEXT), session_id, payload_ref {} ORDER BY emitted_at_ms ASC LIMIT ?2",
-        session_event_expiry_filter()
-    )
 }
 
 /// 删除终态且没有未读 Result 的 Task 家族：读回执、Result、Execution、Task。

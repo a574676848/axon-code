@@ -42,15 +42,7 @@ pub(super) fn quarantine_interrupted_interactions(
         }
         let payload = interrupted_payload(&interaction_id);
         if let Some(session_id) = session_id {
-            let Some(sequence) = append_session_event(
-                &transaction,
-                host,
-                now,
-                &session_id,
-                &interaction_id,
-                &payload,
-            )?
-            else {
+            let Some(sequence) = next_session_sequence(&transaction, &session_id)? else {
                 continue;
             };
             update_session_tail(&transaction, now, &session_id, sequence)?;
@@ -172,13 +164,10 @@ fn settle_interrupted(
     Ok(true)
 }
 
-fn append_session_event(
+/// 取该会话的下一个事件序号；会话不存在时返回 None。
+fn next_session_sequence(
     transaction: &Transaction<'_>,
-    host: &DaemonHostRecord,
-    now: i64,
     session_id: &DaemonSessionId,
-    interaction_id: &InteractionId,
-    payload: &str,
 ) -> Result<Option<u64>, RuntimeStoreError> {
     let previous: Option<i64> = transaction
         .query_row(

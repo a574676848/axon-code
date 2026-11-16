@@ -41,11 +41,8 @@ pub(crate) fn run_sessions_list(
         Err(error) => return cli_error(error),
     };
     let store = SqliteRuntimeStore::from_root(data_root);
-    let rows = match read_session_rows(&store) {
-        Ok(rows) => rows,
-        // 运行态库还没建出来：如实报告空清单，不是错误。
-        Err(_) => Vec::new(),
-    };
+    // 运行态库还没建出来时如实报告空清单，不是错误。
+    let rows = read_session_rows(&store).unwrap_or_default();
     let visible = rows
         .into_iter()
         .filter(|row| command.all || !row.archived)

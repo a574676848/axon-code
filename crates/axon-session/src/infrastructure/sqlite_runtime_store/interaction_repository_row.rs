@@ -62,17 +62,6 @@ fn parse_status(value: &str) -> rusqlite::Result<InteractionStatus> {
     }
 }
 
-/// 把领域状态映射为库内状态码。
-pub(super) fn status_code(status: InteractionStatus) -> &'static str {
-    match status {
-        InteractionStatus::Received => STATUS_RECEIVED,
-        InteractionStatus::Processing => STATUS_PROCESSING,
-        InteractionStatus::Understood => STATUS_UNDERSTOOD,
-        InteractionStatus::Rejected => STATUS_REJECTED,
-        InteractionStatus::Interrupted => STATUS_INTERRUPTED,
-    }
-}
-
 pub(super) fn runtime_error(error: impl std::fmt::Display) -> InteractionStoreError {
     InteractionStoreError::Storage(error.to_string())
 }

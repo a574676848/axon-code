@@ -50,11 +50,10 @@ pub(crate) fn run_with_selection_restore(
         .as_deref()
         .and_then(|path| crate::run_commands::snapshot_selected_session(path).ok());
     let result = run_command_from_cli(cli, command, run_json_writer);
-    if let (Some(path), Some(snapshot)) = (config_path.as_deref(), snapshot) {
-        if let Err(error) = crate::run_commands::restore_selected_session(path, snapshot.as_deref())
-        {
-            axon_logger::warning(&format!("恢复 resume 指针失败: {error}"));
-        }
+    if let (Some(path), Some(snapshot)) = (config_path.as_deref(), snapshot)
+        && let Err(error) = crate::run_commands::restore_selected_session(path, snapshot.as_deref())
+    {
+        axon_logger::warning(&format!("恢复 resume 指针失败: {error}"));
     }
     result
 }

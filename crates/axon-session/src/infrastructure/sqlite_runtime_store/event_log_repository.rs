@@ -4,8 +4,6 @@
 //! 写入顺序固定为「先控制面事务、后文件追加」：崩溃时最多出现"水位大于文件尾"，
 //! 恢复逻辑据此回退水位并补一条 `session_recovered`。
 
-use std::path::Path;
-
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use super::SqliteRuntimeStore;
@@ -152,16 +150,6 @@ pub(super) fn interaction_tail_window(
 
 /// 会话事件日志的物理路径（供诊断与清理使用）。
 #[must_use]
-pub(super) fn event_log_path(store: &SqliteRuntimeStore, session_id: &str) -> std::path::PathBuf {
-    axon_eventlog::EventLog::open(store.events_root(), session_id).path()
-}
-
-/// 事件日志根目录是否存在可读日志。
-#[must_use]
-pub(super) fn has_event_log(store: &SqliteRuntimeStore, session_id: &str) -> bool {
-    Path::new(&event_log_path(store, session_id)).exists()
-}
-
 fn build_records(
     session_id: &DaemonSessionId,
     host: &DaemonHostRecord,

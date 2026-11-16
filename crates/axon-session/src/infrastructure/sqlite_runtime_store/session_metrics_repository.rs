@@ -85,6 +85,11 @@ pub(super) fn apply_turn_metrics(
 }
 
 /// 后台任务计数变更：`+1` 表示开始，`-1` 表示结束。
+///
+/// 生产者暂缺：作业生命周期事件（`job_started` / `job_completed`）尚未接入，
+/// 该投影目前只有测试调用，列已由会话列表接口读取。补生产者的改造登记在
+/// `docs/dev/storage-architecture.md` §12.5 延后项。
+#[allow(dead_code)]
 pub(crate) fn apply_job_delta(
     store: &SqliteRuntimeStore,
     session_id: &DaemonSessionId,
