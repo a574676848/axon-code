@@ -21,7 +21,7 @@ mod record;
 pub use append::{EventLogWriter, append_once};
 pub use error::EventLogError;
 pub use format::{FrameScan, FrameSpan, HEADER_FRAME_INDEX, Header};
-pub use read::{EventLogReader, EventLogSnapshot};
+pub use read::{EventLogReader, EventLogSnapshot, read_after, read_tail_matching};
 pub use record::{
     JobOutcome, JobRef, RuntimeEventKind, RuntimeEventRecord, TurnMetrics, TurnOrigin, TurnOutcome,
 };

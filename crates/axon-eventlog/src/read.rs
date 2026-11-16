@@ -71,6 +71,123 @@ pub fn read_snapshot(path: &Path) -> Result<EventLogSnapshot, EventLogError> {
 pub struct EventLogReader {
     snapshot: EventLogSnapshot,
 }
+/// 读取序号严格大于 `after` 的至多 `limit` 条事件，只解压必要的尾部帧。
+///
+/// 与 [`read_snapshot`] 的区别是**不做全量解压**：帧结构扫描仍然要读一遍文件字节，
+/// 但只解压从尾部倒推覆盖 `after` 的那几帧。日志越大，收益越明显；分页 replay
+/// 每翻一页都从尾部重新定位，不会随历史增长而线性变慢。
+pub fn read_after(
+    path: &Path,
+    after: u64,
+    limit: usize,
+) -> Result<Vec<RuntimeEventRecord>, EventLogError> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let bytes = std::fs::read(path)?;
+    let scan = scan_frames(&bytes)?;
+    let frames: Vec<_> = scan
+        .frames
+        .iter()
+        .skip(HEADER_FRAME_INDEX + 1)
+        .copied()
+        .collect();
+    // 先把最后一帧的末条序号作为快路径：`after` 已越过全部记录时直接返回空。
+    if let Some(last_span) = frames.last() {
+        let plain = decode_frame(&bytes[last_span.start..last_span.end])?;
+        if decode_records(&plain)?
+            .last()
+            .is_none_or(|record| record.sequence <= after)
+        {
+            return Ok(Vec::new());
+        }
+    }
+    // 再从尾部倒推定位「包含 after 的那一帧」，从那一帧往后顺序解压；
+    // 没有任何一帧的第一条序号 <= after 时，说明 after 落在日志起点之前，从头开始。
+    let mut begin = 0usize;
+    for (index, span) in frames.iter().enumerate().rev() {
+        let plain = decode_frame(&bytes[span.start..span.end])?;
+        let first = decode_records(&plain)?
+            .first()
+            .map(|record| record.sequence);
+        if first.is_none_or(|sequence| sequence <= after) {
+            begin = index;
+            break;
+        }
+    }
+    let mut collected: Vec<RuntimeEventRecord> = Vec::with_capacity(limit);
+    for span in frames.iter().skip(begin) {
+        let plain = decode_frame(&bytes[span.start..span.end])?;
+        for record in decode_records(&plain)? {
+            if record.sequence > after {
+                collected.push(record);
+            }
+            if collected.len() >= limit {
+                return Ok(collected);
+            }
+        }
+    }
+    Ok(collected)
+}
+
+/// 从尾部倒推读取满足谓词的最后 `limit` 条事件，只解压必要的尾部帧。
+pub fn read_tail_matching<F>(
+    path: &Path,
+    limit: usize,
+    predicate: F,
+) -> Result<Vec<RuntimeEventRecord>, EventLogError>
+where
+    F: Fn(&RuntimeEventRecord) -> bool,
+{
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let bytes = std::fs::read(path)?;
+    let scan = scan_frames(&bytes)?;
+    let mut matched: Vec<RuntimeEventRecord> = Vec::new();
+    for span in scan.frames.iter().skip(HEADER_FRAME_INDEX + 1).rev() {
+        if matched.len() >= limit {
+            break;
+        }
+        let plain = decode_frame(&bytes[span.start..span.end])?;
+        let records = decode_records(&plain)?;
+        let tail: Vec<RuntimeEventRecord> = records
+            .into_iter()
+            .filter(|record| predicate(record))
+            .collect();
+        for record in tail.into_iter().rev() {
+            matched.insert(0, record);
+        }
+    }
+    if matched.len() > limit {
+        matched.drain(..matched.len() - limit);
+    }
+    Ok(matched)
+}
+
+/// 把一帧明文拆成事件记录，并校验帧内序号连续。
+fn decode_records(plain: &[u8]) -> Result<Vec<RuntimeEventRecord>, EventLogError> {
+    // 起始序号由控制面决定，这里只校验相邻连续，不假定从 0 开始。
+    let mut expected: Option<u64> = None;
+    let mut records = Vec::new();
+    for line in plain.split(|byte| *byte == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        let record = RuntimeEventRecord::decode_line(line)?;
+        if let Some(previous) = expected
+            && record.sequence != previous
+        {
+            return Err(EventLogError::SequenceGap {
+                expected: previous,
+                actual: record.sequence,
+            });
+        }
+        expected = Some(record.sequence.saturating_add(1));
+        records.push(record);
+    }
+    Ok(records)
+}
 
 impl EventLogReader {
     /// 打开并解析一个日志文件。

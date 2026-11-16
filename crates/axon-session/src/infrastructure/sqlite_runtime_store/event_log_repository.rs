@@ -115,10 +115,10 @@ pub(super) fn replay_events(
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let reader = axon_eventlog::EventLogReader::open(&path).map_err(log_error)?;
     let limit = usize::try_from(limit).unwrap_or(usize::MAX);
-    Ok(reader
-        .read_from(after_sequence, limit)
+    // 分页只解压覆盖请求范围的尾部帧：历史越长越不能每次全量解压。
+    Ok(axon_eventlog::read_after(&path, after_sequence, limit)
+        .map_err(log_error)?
         .iter()
         .map(|record| from_runtime_record(session_id, record))
         .collect())
@@ -135,18 +135,15 @@ pub(super) fn interaction_tail_window(
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let reader = axon_eventlog::EventLogReader::open(&path).map_err(log_error)?;
-    let matching = reader
-        .records()
-        .iter()
-        .filter(|record| record.interaction_id.as_deref() == Some(interaction_id.as_str()))
-        .collect::<Vec<_>>();
     let keep = usize::try_from(limit).unwrap_or(usize::MAX);
-    let start = matching.len().saturating_sub(keep);
-    Ok(matching[start..]
-        .iter()
-        .map(|record| from_runtime_record(session_id, record))
-        .collect())
+    // 尾窗同样从尾部倒推：只要凑够该交互的条数就停，不遍历整条历史。
+    Ok(axon_eventlog::read_tail_matching(&path, keep, |record| {
+        record.interaction_id.as_deref() == Some(interaction_id.as_str())
+    })
+    .map_err(log_error)?
+    .iter()
+    .map(|record| from_runtime_record(session_id, record))
+    .collect())
 }
 
 /// 会话事件日志的物理路径（供诊断与清理使用）。

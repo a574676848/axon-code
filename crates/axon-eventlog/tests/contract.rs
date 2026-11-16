@@ -227,6 +227,115 @@ fn append_once_keeps_healthy_tail_larger_than_tail_window() {
 }
 
 #[test]
+fn lazy_paged_reads_match_the_full_snapshot() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let log = EventLog::open(dir.path(), "session-session-paged");
+    let mut writer = log.writer().expect("写句柄");
+    let mut sequence = 0_u64;
+    for batch in 0..20_u64 {
+        let events = (0..5)
+            .map(|_| {
+                let record = record(
+                    sequence,
+                    RuntimeEventKind::ToolCall,
+                    json!({"batch": batch}),
+                );
+                sequence += 1;
+                record
+            })
+            .collect::<Vec<_>>();
+        writer.append_batch(&events).expect("批次写入");
+    }
+    writer.append_batch(&[]).ok();
+    drop(writer);
+
+    let full = log.reader().expect("全量读取");
+    for after in [0_u64, 3, 27, 99, 100] {
+        for limit in [1_usize, 7, 100] {
+            let expected = full.read_from(after, limit);
+            let actual = axon_eventlog::read_after(&log.path(), after, limit).expect("分页读取");
+            assert_eq!(
+                actual, expected,
+                "分页结果必须与全量快照一致：after={after} limit={limit}"
+            );
+        }
+    }
+
+    let matched = |record: &RuntimeEventRecord| record.sequence.is_multiple_of(3);
+    let matched_all = full
+        .records()
+        .iter()
+        .filter(|record| matched(record))
+        .cloned()
+        .collect::<Vec<_>>();
+    for limit in [1_usize, 4, 50] {
+        let start = matched_all.len().saturating_sub(limit);
+        let expected = matched_all[start..].to_vec();
+        let actual =
+            axon_eventlog::read_tail_matching(&log.path(), limit, matched).expect("尾窗读取");
+        assert_eq!(
+            actual, expected,
+            "尾窗结果必须与全量过滤一致：limit={limit}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "性能验收：2000 帧会话日志的分页读取只解压尾帧，门槛 30ms"]
+fn lazy_paged_read_stays_bounded_on_long_logs() {
+    const FRAMES: u64 = 2_000;
+    const PER_FRAME: u64 = 10;
+    let dir = tempfile::tempdir().expect("临时目录");
+    let log = EventLog::open(dir.path(), "session-session-biglog");
+    {
+        let mut writer = log.writer().expect("写句柄");
+        let mut sequence = 0_u64;
+        for _ in 0..FRAMES {
+            let events = (0..PER_FRAME)
+                .map(|_| {
+                    let record = record(
+                        sequence,
+                        RuntimeEventKind::ToolCall,
+                        json!({"payload": "x"}),
+                    );
+                    sequence += 1;
+                    record
+                })
+                .collect::<Vec<_>>();
+            writer.append_batch(&events).expect("批次写入");
+        }
+    }
+
+    let full_started = std::time::Instant::now();
+    let full = log.reader().expect("全量读取");
+    let full_ms = full_started.elapsed().as_millis();
+    assert_eq!(
+        full.records().len(),
+        usize::try_from(FRAMES * PER_FRAME).expect("条数")
+    );
+
+    let mut best_ms = u128::MAX;
+    let mut last_page = Vec::new();
+    for _ in 0..5 {
+        let started = std::time::Instant::now();
+        last_page =
+            axon_eventlog::read_after(&log.path(), FRAMES * PER_FRAME - 5, 5).expect("分页读取");
+        best_ms = best_ms.min(started.elapsed().as_millis());
+    }
+    assert_eq!(last_page.len(), 4, "after 之后只剩 4 条");
+    assert_eq!(last_page[3].sequence, FRAMES * PER_FRAME - 1);
+    println!(
+        "eventlog_paged frames={FRAMES} records={} page={best_ms}ms full={full_ms}ms 门槛=30ms",
+        FRAMES * PER_FRAME
+    );
+    assert!(best_ms < 30, "分页读取超出 30ms 门槛：{best_ms}ms");
+    assert!(
+        best_ms < full_ms,
+        "分页读取必须明显快于全量解压：page={best_ms}ms full={full_ms}ms"
+    );
+}
+
+#[test]
 fn turn_metrics_keeps_origin_and_unmeasured_ttft() {
     let dir = tempfile::tempdir().expect("临时目录");
     let log = EventLog::open(dir.path(), "session-session-f");
