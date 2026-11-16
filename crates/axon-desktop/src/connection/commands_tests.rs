@@ -23,6 +23,7 @@ fn ready_outcome() -> ProbeOutcome {
         clock_offset_ms: 0,
         clock_verified: true,
         build_version: Some("test".to_owned()),
+        lease_active: Some(true),
     }))
 }
 

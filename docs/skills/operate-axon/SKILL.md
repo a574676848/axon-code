@@ -62,7 +62,7 @@ description: 已安装 Axon 的运行时操作手册。用于配置和模型、A
 - Skill 与 MCP：用 `axon skills --summary` 查看有效 Skill；用 `axon mcp list|get` 检查 MCP server。添加、移除、登录或退出前必须读取相应子命令帮助并取得用户授权。
 - Memory 与使用统计：`axon memory stats|doctor|list|search|conflicts|compare|quality|review|inspect` 和 `axon usage` 是检查入口。`memory consolidate|consistency|recover-conflict|approve|archive-pending|quarantine|forget|import` 会改变状态，必须先确认范围。
 - 人格：`axon persona validate|status` 是只读入口，分别校验 `SOUL.md` 是否符合 `axon-soul/v1` 与读取人格库状态；`axon persona style list|retire` 管理习得风格，`axon persona reset --yes` 把状态重置为基线且不改动人设文件；`axon doctor --check persona` 给出与 `validate` 同一条判定。人设格式无效时该轮不装配人格，回合照常继续。
-- 诊断和导出：`axon doctor [--check <area>]`、`axon lsp servers|workspace-symbol|definition|references|diagnostics`、`axon debug builtin`、`axon debug channel-metrics` 用于定向检查。`axon debug channel-metrics` 按时间、模型和 Provider 查询已持久化的渠道性能、缓存与连接指标；`axon export` 输出运行数据；输出到文件前确认路径。
+- 诊断和导出：`axon doctor [--check <area>]`、`axon lsp servers|workspace-symbol|definition|references|diagnostics`、`axon debug builtin`、`axon debug channel-metrics` 用于定向检查。`--check` 的取值包括 `config`、`cli`、`preflight`、`provider`、`tool`、`mcp`、`memory`、`persona`、`lsp`、`runtime`、`daemon`、`smoke`；其中 `daemon` 读后台租约，`lease=0` 即「进程在跑但 Worker 已停」。`axon debug channel-metrics` 按时间、模型和 Provider 查询已持久化的渠道性能、缓存与连接指标；`axon export` 输出运行数据；输出到文件前确认路径。
 - Daemon 与 Cron：`axon daemon status`、`axon daemon health`、`axon cron list`、`axon cron holiday status` 为只读检查。`axon daemon install|uninstall|start|stop|restart|drain`、`cron create|update|pause|resume|remove|run|tick`、`cron holiday sync` 都会影响运行状态或外部服务，需用户明确授权。计划表达式写法见 [references/operations.md](references/operations.md)。
 - 网关凭据：`axon gateway key list` 只读；`axon gateway key create --label <名>` 签发一把普通 Key，明文只在这次回执里出现一次；`axon gateway key revoke <id>` 吊销。三者都读写后端运行时根下的多 Key 存储，与 daemon 鉴权同一份数据，不需要重启即可生效。全局 token 仍是超管凭据，`/api/v1/keys` 管理面只接受超管且只认 `Authorization` 头。
 - 图片、服务、打包和升级：图片生成或编辑由已加载 Skill 完成，可能产生费用；`axon serve` 会监听本地端口；`axon package` 生成发布包；`axon upgrade --apply|--rollback` 改变后续 Axon 会话使用的版本。执行前都要确认目标与副作用。
@@ -78,6 +78,7 @@ description: 已安装 Axon 的运行时操作手册。用于配置和模型、A
 - 已经开始的 CLI、TUI 或 Agent 任务应继续等待其正常完成。升级结果只影响之后启动的 Axon 会话；不要把正在运行的会话当作已自动切换版本。
 - 升级完成后，在新的终端或新的 Axon 会话中运行 `axon --version` 核验版本；当前会话显示的版本不能作为升级后的核验依据。
 - Daemon 运行态分两层看：`axon daemon status` 只回答 `installed` 与 `running`；内部健康快照用 `axon daemon health`，它给出 `host.status`（`running`、`upgrade_requested`、`admitting_shutdown`、`handoff_ready`、`stopping`、`stopped`）、`host.leaseRemainingMs`、`executions`、`executionBacklog.pending`、`deliveries.backlog.pending` 与 `streamSubscribers`。判断「是否还有在跑的工作」看这两个积压字段是否归零。
+- 租约是「后台还在不在干活」的唯一判据：`host.leaseRemainingMs` 归零即表示 Worker 已全部停下，此时网关仍会应答、`daemon status` 仍报 running。Daemon 一旦因 lease fencing 停掉 Worker，会以非零退出码自行退出，由计划任务 / systemd / launchd 的失败重启策略拉起（Windows 计划任务的重启间隔为 1 分钟、最多 3 次）；在此之前界面上的「正在连接供应商」「生成中」都可能是已死轮次的僵尸态。
 - `axon daemon drain [--reason <text>]` 经本地 IPC 请求排空：停止接收新的 Daemon 事件与新的任务领取，让已开始的任务自然完成。Daemon 异常退出或重启后会恢复未完成的已接收事件，重复入站不会创建新的处理任务。这是会改变运行状态的操作，必须先取得用户明确授权。
 - `axon daemon stop|restart` 是服务级操作：先写停止请求让 Daemon 自行收口退出（等待窗口 15 秒），未响应才禁用并结束用户计划任务，Windows 上再以 `taskkill /T /F` 强制结束进程树（macOS 用 `launchctl bootout`，Linux 用 `systemctl stop`）。强制结束会中断仍在执行的任务。要优雅收口必须先 `drain`，用 `axon daemon health` 确认两个积压字段归零，再 `stop`。
 - 停止、重启、重新安装或卸载完成后，重新读取 `axon daemon status` 与 `axon daemon health` 核验结果。

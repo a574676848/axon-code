@@ -19,14 +19,20 @@ pub(super) fn start_background_workers(
     host: &CliDaemonHost,
     cron_adapter: crate::cron_commands::CronDaemonAdapter,
     workers_running: Arc<AtomicBool>,
+    host_fenced: Arc<AtomicBool>,
     maintenance_signal: Arc<DaemonMaintenanceSignal>,
     primary_turn_signal: Arc<DaemonMaintenanceSignal>,
     active_primary_turns: crate::run_commands::run_steer::ActivePrimaryTurnRegistry,
 ) {
-    start_lease_worker(host.clone(), Arc::clone(&workers_running));
+    start_lease_worker(
+        host.clone(),
+        Arc::clone(&workers_running),
+        Arc::clone(&host_fenced),
+    );
     start_primary_turn_worker(
         host.clone(),
         Arc::clone(&workers_running),
+        Arc::clone(&host_fenced),
         primary_turn_signal,
         Arc::clone(&maintenance_signal),
     );
@@ -34,9 +40,10 @@ pub(super) fn start_background_workers(
         host.clone(),
         active_primary_turns,
         Arc::clone(&workers_running),
+        host_fenced,
         maintenance_signal,
     );
-    start_cron_worker(cron_adapter, Arc::clone(&workers_running));
+    start_cron_worker(cron_adapter, workers_running);
 }
 
 /// 两次续租重试之间的退避。
@@ -44,7 +51,7 @@ const LEASE_RENEW_RETRY_DELAY: Duration = Duration::from_millis(750);
 /// 持续失败的告警节流：每约 30 秒留一条 WARNING，风暴期间不刷日志。
 const LEASE_RENEW_WARN_EVERY: u32 = 40;
 
-fn start_lease_worker(host: CliDaemonHost, running: Arc<AtomicBool>) {
+fn start_lease_worker(host: CliDaemonHost, running: Arc<AtomicBool>, fenced: Arc<AtomicBool>) {
     thread::spawn(move || {
         while running.load(Ordering::Acquire) {
             if let Err(error) =
@@ -53,6 +60,9 @@ fn start_lease_worker(host: CliDaemonHost, running: Arc<AtomicBool>) {
                 axon_logger::error(&format!(
                     "Daemon Host 已失去 lease，后台 Worker 将停止: {error}"
                 ));
+                // 只停 Worker 会留下「进程活着但没人干活」的僵尸：必须把 fence 交给进程
+                // 退出判据，运行函数据此以非零码退出，服务管理器才会重启。
+                fenced.store(true, Ordering::Release);
                 running.store(false, Ordering::Release);
                 break;
             }
@@ -112,17 +122,19 @@ where
 fn start_primary_turn_worker(
     host: CliDaemonHost,
     running: Arc<AtomicBool>,
+    fenced: Arc<AtomicBool>,
     signal: Arc<DaemonMaintenanceSignal>,
     maintenance_signal: Arc<DaemonMaintenanceSignal>,
 ) {
     thread::spawn(move || {
-        run_primary_turn_loop(host, running, signal, maintenance_signal);
+        run_primary_turn_loop(host, running, fenced, signal, maintenance_signal);
     });
 }
 
 fn run_primary_turn_loop(
     host: CliDaemonHost,
     running: Arc<AtomicBool>,
+    fenced: Arc<AtomicBool>,
     signal: Arc<DaemonMaintenanceSignal>,
     maintenance_signal: Arc<DaemonMaintenanceSignal>,
 ) {
@@ -133,7 +145,7 @@ fn run_primary_turn_loop(
             .as_ref()
             .is_ok_and(|report| report.claimed >= SUPERVISOR_BATCH_LIMIT);
         let completed_work = result.as_ref().is_ok_and(|report| report.claimed > 0);
-        if !handle_host_tick(result, &running, "Primary Turn") {
+        if !handle_host_tick(result, &running, &fenced, "Primary Turn") {
             break;
         }
         if completed_work {
@@ -149,15 +161,19 @@ fn start_supervisor_worker(
     host: CliDaemonHost,
     active_primary_turns: crate::run_commands::run_steer::ActivePrimaryTurnRegistry,
     running: Arc<AtomicBool>,
+    fenced: Arc<AtomicBool>,
     signal: Arc<DaemonMaintenanceSignal>,
 ) {
-    thread::spawn(move || run_supervisor_loop(host, active_primary_turns, running, signal));
+    thread::spawn(move || {
+        run_supervisor_loop(host, active_primary_turns, running, fenced, signal);
+    });
 }
 
 fn run_supervisor_loop(
     host: CliDaemonHost,
     active_primary_turns: crate::run_commands::run_steer::ActivePrimaryTurnRegistry,
     running: Arc<AtomicBool>,
+    fenced: Arc<AtomicBool>,
     signal: Arc<DaemonMaintenanceSignal>,
 ) {
     let mut last_release_gc = Instant::now();
@@ -178,10 +194,12 @@ fn run_supervisor_loop(
         if !handle_host_tick(
             host.scheduler_tick(SCHEDULE_LEASE_DURATION_MS, SUPERVISOR_BATCH_LIMIT),
             &running,
+            &fenced,
             "Scheduler",
         ) || !handle_host_tick(
             host.supervisor_tick(SUPERVISOR_BATCH_LIMIT),
             &running,
+            &fenced,
             "Supervisor",
         ) {
             break;
@@ -282,6 +300,7 @@ fn sample_and_broadcast_lsp_if_due(
 fn handle_host_tick<T>(
     result: Result<T, axon_daemon::DaemonHostError>,
     running: &AtomicBool,
+    fenced: &AtomicBool,
     component: &str,
 ) -> bool {
     match result {
@@ -290,6 +309,8 @@ fn handle_host_tick<T>(
             axon_logger::error(&format!(
                 "Daemon Host 已失去 lease，停止后台 {component}: {error}"
             ));
+            // 多个 Worker 可能同时撞上 fence，置位必须幂等。
+            fenced.store(true, Ordering::Release);
             running.store(false, Ordering::Release);
             false
         }
@@ -418,5 +439,48 @@ mod lease_renew_tests {
 
         assert!(outcome.is_ok(), "停机请求是正常退出路径，不是失败");
         assert_eq!(calls, 5, "停机请求必须在下一个重试点生效");
+    }
+
+    /// fence 必须交给进程退出判据：只停 Worker 会留下「活着但不干活」的僵尸进程，
+    /// 服务管理器的失败重启策略永远不会被触发。
+    #[test]
+    fn fenced_host_tick_marks_the_host_for_non_zero_exit() {
+        let running = running();
+        let fenced = AtomicBool::new(false);
+        let keep_going = handle_host_tick(
+            Err::<(), _>(axon_daemon::DaemonHostError::Store(
+                axon_session::RuntimeStoreError::Fenced,
+            )),
+            &running,
+            &fenced,
+            "Supervisor",
+        );
+
+        assert!(!keep_going, "fence 之后 tick 循环必须退出");
+        assert!(
+            fenced.load(Ordering::Acquire),
+            "fence 结论必须交给退出判据，否则进程会以零退出码留下"
+        );
+        assert!(
+            !running.load(Ordering::Acquire),
+            "fence 同时停掉后台 Worker"
+        );
+    }
+
+    /// 存储抖动只是重试信号：它不是终态，不得把进程推向退出。
+    #[test]
+    fn transient_tick_failure_does_not_mark_the_host_fenced() {
+        let running = running();
+        let fenced = AtomicBool::new(false);
+        let keep_going = handle_host_tick(
+            Err::<(), _>(storage_error()),
+            &running,
+            &fenced,
+            "Supervisor",
+        );
+
+        assert!(keep_going, "写锁抖动必须原地重试");
+        assert!(!fenced.load(Ordering::Acquire), "抖动不是 fence");
+        assert!(running.load(Ordering::Acquire), "抖动不得停掉后台 Worker");
     }
 }

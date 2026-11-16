@@ -31,8 +31,8 @@ use crate::run_commands::run_steer::ActivePrimaryTurnRegistry;
 #[path = "daemon_host_runner_support.rs"]
 mod support;
 pub(super) use support::{
-    CliProcessIdentity, DaemonEventPublisher, DaemonMaintenanceSignal, DaemonPidFileGuard,
-    SystemClock,
+    CliProcessIdentity, DaemonEventPublisher, DaemonExitSignals, DaemonMaintenanceSignal,
+    DaemonPidFileGuard, SystemClock, spawn_lease_fence_wake,
 };
 
 #[path = "daemon_host_runner_workers.rs"]
@@ -83,6 +83,8 @@ pub(super) const CRON_TICK_INTERVAL_MS: u64 = 1_000;
 pub(super) const RELEASE_GC_INTERVAL_MS: u64 = 30_000;
 /// 服务停机唤醒线程的轮询间隔。
 pub(super) const SERVICE_STOP_WAKEUP_POLL_MS: u64 = 50;
+/// fence 之后进程的非零退出说明：进 stderr，最终落到服务日志与计划任务历史。
+const DAEMON_FENCED_EXIT_REASON: &str = "Daemon Host 已失去租约（lease fencing）：后台 Worker 全部停止，进程以非零码退出，等待服务管理器重启";
 
 #[derive(Clone)]
 struct DaemonPrimaryTurnSteerSink {
@@ -204,6 +206,9 @@ fn try_run_daemon_host(
     let question_store = store.clone();
     // 关停标志先于宿主构建：后台 Worker 启动后立即依赖它判断是否需要收口。
     let workers_running = Arc::new(AtomicBool::new(true));
+    // fence 判据与关停判据必须分开：停机是零退出码的正常收尾，fence 必须非零退出，
+    // 否则服务管理器不会重启一个「活着但不干活」的进程。
+    let host_fenced = Arc::new(AtomicBool::new(false));
     let mut host = build_daemon_host(
         command,
         store,
@@ -295,10 +300,14 @@ fn try_run_daemon_host(
         &host,
         cron_adapter,
         Arc::clone(&workers_running),
+        Arc::clone(&host_fenced),
         Arc::clone(&maintenance_signal),
         Arc::clone(&primary_turn_signal),
         active_primary_turns,
     );
+    // 接受循环阻塞在 accept 上，只有新连接才会让它复查停止判据；fence 之后必须
+    // 主动敲一次 IPC，否则进程会一直停在 accept 上等不到退出。
+    spawn_lease_fence_wake(&endpoint, Arc::clone(&host_fenced));
     let result = serve_daemon_ipc(
         server,
         host,
@@ -312,7 +321,10 @@ fn try_run_daemon_host(
             config_path: command.config_path.clone(),
             snapshots: startup_snapshots,
         },
-        stop_requested,
+        DaemonExitSignals {
+            stop_requested,
+            host_fenced,
+        },
     );
     // 守护进程收口：唤醒仍在等待用户作答的提问工具，避免它们空等到预算耗尽。
     questions.shutdown.cancel();
@@ -521,7 +533,7 @@ fn serve_daemon_ipc(
     maintenance_signal: Arc<DaemonMaintenanceSignal>,
     answer_entry: DaemonIpcAnswerEntry,
     mcp_refresh: McpRefreshContext,
-    stop_requested: Option<Arc<AtomicBool>>,
+    exit_signals: DaemonExitSignals,
 ) -> Result<(), String> {
     let mut handler_host = host.clone();
     let handler_gateway = Arc::clone(&gateway_kernel);
@@ -593,14 +605,20 @@ fn serve_daemon_ipc(
         }
         responses
     };
-    let served = match stop_requested {
-        Some(stop_requested) => server
-            .serve_forever_streaming_until(handler, move || stop_requested.load(Ordering::Acquire)),
-        None => server.serve_forever_streaming(handler),
+    let served = {
+        // 停止判据同时覆盖「外部停机请求」与「租约被 fence」：两者都要让接受循环收手，
+        // 差别只在收手之后的退出码。
+        let exit_probe = exit_signals.clone();
+        server.serve_forever_streaming_until(handler, move || exit_probe.should_stop())
     };
     let _ = host.request_drain();
     let _ = gateway_kernel.begin_drain();
-    served.map_err(|error| error.to_string())
+    served.map_err(|error| error.to_string())?;
+    // fence 是代际失效：后台 Worker 已全部停下，必须非零退出把重启交给服务管理器。
+    if exit_signals.fenced() {
+        return Err(DAEMON_FENCED_EXIT_REASON.to_owned());
+    }
+    Ok(())
 }
 
 /// 处理显式 MCP 刷新请求：清除健康负缓存，作废并在后台重建该 Workspace 的启动快照。

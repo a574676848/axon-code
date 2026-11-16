@@ -4,6 +4,10 @@ use super::*;
 mod doctor_commands;
 
 #[cfg(feature = "tui")]
+#[path = "doctor_daemon_check.rs"]
+mod doctor_daemon_check;
+
+#[cfg(feature = "tui")]
 pub use doctor_commands::{DoctorCheck, DoctorReport, DoctorStatus};
 
 #[cfg(feature = "tui")]
@@ -140,5 +144,5 @@ fn render_doctor_fallback_report(
 
 #[cfg(not(feature = "tui"))]
 fn is_tui_doctor_check(check: &str) -> bool {
-    check == DOCTOR_CHECK_PROVIDER_RECOVERY
+    check == DOCTOR_CHECK_PROVIDER_RECOVERY || check == DOCTOR_CHECK_DAEMON
 }

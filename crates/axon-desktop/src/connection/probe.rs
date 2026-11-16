@@ -72,6 +72,11 @@ pub struct StatusPayload {
     pub server_time_ms: u64,
     /// 构建版本。
     pub build_version: Option<String>,
+    /// 后台 host 租约是否仍生效；后端未给出该读数时为 `None`。
+    ///
+    /// 网关应答只证明进程在跑：租约失效时后台 Worker 已全部停下，会话不会被领取。
+    /// 保留 `None` 这一档，是为了把「读不到」与「确实失效」分开，不把缺读数当故障。
+    pub lease_active: Option<bool>,
 }
 
 /// 探活失败原因。
@@ -129,6 +134,8 @@ pub struct ProbeReady {
     pub clock_verified: bool,
     /// 后端构建版本。
     pub build_version: Option<String>,
+    /// 后台 host 租约是否仍生效；后端未给出该读数时为 `None`。
+    pub lease_active: Option<bool>,
 }
 
 /// 一次探活的结论。
@@ -224,6 +231,9 @@ pub(crate) fn probe_within(base: &str, token: Option<&str>, deadline: Deadline) 
             let status_payload = fetch_status(base, token, deadline);
             let (clock_offset_ms, clock_verified) =
                 clock_offset(meta.server_time_ms, status_payload.as_ref());
+            let lease_active = status_payload
+                .as_ref()
+                .and_then(|payload| payload.lease_active);
             let build_version = status_payload.and_then(|payload| payload.build_version);
             ProbeOutcome::Ready(Box::new(ProbeReady {
                 meta,
@@ -231,6 +241,7 @@ pub(crate) fn probe_within(base: &str, token: Option<&str>, deadline: Deadline) 
                 clock_offset_ms,
                 clock_verified,
                 build_version,
+                lease_active,
             }))
         }
         Err(failure) => ProbeOutcome::Failed(failure),
@@ -314,9 +325,15 @@ fn fetch_status(base: &str, token: Option<&str>, deadline: Deadline) -> Option<S
         .get("buildVersion")
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned);
+    // 租约是对象里的三件事实之一；整段缺失或为 null 都按「读不到」处理。
+    let lease_active = value
+        .get("lease")
+        .and_then(|lease| lease.get("active"))
+        .and_then(serde_json::Value::as_bool);
     Some(StatusPayload {
         server_time_ms,
         build_version,
+        lease_active,
     })
 }
 

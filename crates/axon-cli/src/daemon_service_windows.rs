@@ -14,8 +14,12 @@ pub(super) const WINDOWS_TASK_NAME: &str = "AxonDaemon";
 #[cfg(windows)]
 pub(super) const WINDOWS_TASK_PROGRAM: &str = "schtasks.exe";
 
+/// 进程失败退出后的重启间隔。
+///
+/// 这个间隔只是「僵尸进程被换掉」的上限等待：Daemon 在租约失效时会以非零码自行退出，
+/// 重启越快用户越早恢复。5 分钟对「每条消息都发不出去」的现场来说过长。
 #[cfg(any(windows, test))]
-const RESTART_INTERVAL: &str = "PT5M";
+const RESTART_INTERVAL: &str = "PT1M";
 #[cfg(any(windows, test))]
 const RESTART_COUNT: &str = "3";
 #[cfg(windows)]
@@ -262,6 +266,10 @@ mod tests {
         assert!(xml.contains("<LogonType>InteractiveToken</LogonType>"));
         assert!(xml.contains("<RunLevel>HighestAvailable</RunLevel>"));
         assert!(xml.contains("<RestartOnFailure>"));
+        assert!(
+            xml.contains("<Interval>PT1M</Interval>"),
+            "fence 自退出后必须在一分钟内被拉起，不能沿用旧的长间隔"
+        );
         assert!(xml.contains("<StartWhenAvailable>true</StartWhenAvailable>"));
         assert!(xml.contains(r"<Command>C:\Program Files\PowerShell\7\pwsh.exe</Command>"));
         assert!(xml.contains("-WindowStyle Hidden -EncodedCommand"));

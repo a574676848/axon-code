@@ -1,3 +1,4 @@
+use super::doctor_daemon_check::doctor_daemon_check;
 use super::*;
 use crate::doctor_receipts::{
     DoctorCheck as ReceiptDoctorCheck, doctor_provider_recovery_check, render_template_report,
@@ -80,6 +81,7 @@ impl DoctorReport {
             Some(DOCTOR_CHECK_PERSONA) => vec![doctor_persona_check()],
             Some(DOCTOR_CHECK_LSP) => vec![doctor_lsp_check()],
             Some(DOCTOR_CHECK_RUNTIME) => vec![doctor_runtime_check(fix)],
+            Some(DOCTOR_CHECK_DAEMON) => vec![doctor_daemon_check()],
             Some(DOCTOR_CHECK_SMOKE) => vec![doctor_smoke_check()],
             Some(unknown) => vec![DoctorCheck::failed(
                 unknown,
@@ -96,6 +98,7 @@ impl DoctorReport {
                 doctor_persona_check(),
                 doctor_lsp_check(),
                 doctor_runtime_check(fix),
+                doctor_daemon_check(),
                 doctor_smoke_check(),
             ],
         };

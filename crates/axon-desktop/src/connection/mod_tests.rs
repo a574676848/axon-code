@@ -204,3 +204,53 @@ fn client_layer_defaults_keep_notifications_on() {
     assert_eq!(layer.theme, None);
     assert_eq!(layer.sidebar_collapsed, None);
 }
+
+/// 探活结论要能区分「进程在跑」与「后台在干活」。
+///
+/// 网关答得再快，租约失效时后台 Worker 已经全停，会话不会被领取；这一档必须报降级，
+/// 否则侧栏连接行会替一个不干活的进程报绿。
+#[test]
+fn probe_with_dead_lease_reports_worker_stopped() {
+    let health = super::health_from_probe(&ready_outcome(Some(false)));
+
+    assert_eq!(health.dot, super::HealthDot::Warning);
+    assert_eq!(health.label, "后台已停机");
+    assert!(
+        health.detail.contains("重启后台服务"),
+        "降级结论必须给出恢复动作，实际是：{}",
+        health.detail
+    );
+}
+
+#[test]
+fn probe_with_live_or_missing_lease_stays_connected() {
+    for lease in [Some(true), None] {
+        let health = super::health_from_probe(&ready_outcome(lease));
+        assert_eq!(
+            health.dot,
+            super::HealthDot::Done,
+            "租约有效或缺读数都不算故障（lease={lease:?}）"
+        );
+        assert_eq!(health.label, "已连接");
+    }
+}
+
+fn ready_outcome(lease_active: Option<bool>) -> crate::connection::probe::ProbeOutcome {
+    use crate::connection::probe::{FALLBACK_UPLOAD_LIMIT_BYTES, MetaPayload, ProbeReady};
+    use crate::connection::profile::CapabilitySet;
+
+    crate::connection::probe::ProbeOutcome::Ready(Box::new(ProbeReady {
+        meta: MetaPayload {
+            protocol_version: crate::connection::probe::PROTOCOL_VERSION,
+            capabilities: CapabilitySet::default(),
+            server_time_ms: 0,
+            upload_limit_bytes: FALLBACK_UPLOAD_LIMIT_BYTES,
+            super_admin: false,
+        },
+        latency_ms: 7,
+        clock_offset_ms: 0,
+        clock_verified: true,
+        build_version: None,
+        lease_active,
+    }))
+}

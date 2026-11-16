@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { connectionSummary, readoutText } from '../connectionReadout';
 import { latencyText, switchProfile, useConnectionFact } from '../connectionState';
 import type { McpHeaderReading } from '../conversation/mcpReading';
 import { sidebarReadouts } from '../conversation/sidebarReading';
@@ -26,8 +27,8 @@ import { STATE_ICON_INK, Text } from './ui/surfaces';
  *
  * 读数只取 useConnectionFact()：胶囊自己不发 ipc.connectionState()，也不起轮询；
  * 健康档位直接用快照里的 health.dot，不在本地二次推导，因此胶囊与设置 › 连接
- * 永远说同一句话。右端固定给延迟读数，取不到延迟时才退回健康结论（未连接、连不上），
- * 两者不会同时出现，也不会写成 0。
+ * 永远说同一句话。行尾只在健康档写延迟；其余档位（含「后台已停机」这种网关通、
+ * 后台租约失效的降级态）改显健康结论，两者不会同时出现，也不会写成 0。
  *
  * 一级（胶囊本身）只负责展开清单，不承担切档：切档要重启应用，误触代价太大。
  * 二级清单只在真有多份档案时才给出可切换项，且不复述任何连接状态：那些结论属于
@@ -90,24 +91,24 @@ export const ConnectionCapsule: React.FC<ConnectionCapsuleProps> = ({
   const healthInk = STATE_ICON_INK[healthState];
   const healthSpinning = healthState === 'ongoing';
   /** 行尾读数：有延迟就写延迟，没有才写健康结论。 */
+  /** 行尾读数：健康时是延迟，其余档位是健康结论（设计系统 §14.1.2）。 */
   const latency = snapshot === null ? null : latencyText(snapshot.latencyMs);
-  const readout = latency ?? healthLabel;
+  const readout = readoutText(snapshot?.health ?? null, latency) ?? healthLabel;
   /** 档案名之后的辅助读数：MCP 台数与技能条数，缺数据即整段不占位。 */
   const auxReadouts = sidebarReadouts(mcpReading, skillCount);
   /*
-   * 原生提示与无障碍名称：档案名加健康结论，有延迟时再补一句。两者同值时只说一遍，
-   * 免得读屏器念出「未连接，未连接」；文字被截断时，完整档案名也由它兜住。
+   * 原生提示与无障碍名称：档案名加健康结论，健康时再补一句延迟、降级时补一句可执行说明。
+   * 两者同值时只说一遍，免得读屏器念出「未连接，未连接」；文字被截断时，完整档案名也由它兜住。
    */
-  const summary = healthLabel === label ? label : `${label}，${healthLabel}`;
-  const connectionSummary = latency === null ? summary : `${summary}，延迟 ${latency}`;
+  const summary = connectionSummary(label, snapshot?.health ?? null, latency);
   /*
    * 整行只有一个无障碍名称：按钮的 aria-label 会盖住子节点文字，因此辅助读数
    * 也一并写进来，读屏器不必回头去猜这一行还有几台 MCP、几条技能。
    */
   const announcement =
     auxReadouts.length === 0
-      ? connectionSummary
-      : `${connectionSummary}；${auxReadouts.map((item) => item.title).join('；')}`;
+      ? summary
+      : `${summary}；${auxReadouts.map((item) => item.title).join('；')}`;
   /** 可切换的档案：当前生效那一份不在其中，避免一次「选了自己」的重启。 */
   const targets = (snapshot?.profiles ?? []).filter((profile) => !profile.active);
   const rosterEmpty = snapshot !== null && (snapshot.profiles ?? []).length === 0;

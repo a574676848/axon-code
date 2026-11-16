@@ -95,6 +95,10 @@ pub(super) fn parse_semantic_assessment(
 }
 
 /// 评估输出的 JSON Schema；供结构化输出通道与 prompt-only 降级共用。
+///
+/// 契约按 Provider **严格模式**写：`strict: true` 的网关（tokenplus 等）要求 `required`
+/// 覆盖 `properties` 的每一个键，缺键会被直接拒收为 400 `invalid_json_schema`，整轮评估
+/// 变成白跑。因此「可选」只能用 nullable 表达，不能靠「不写进 required」表达。
 pub(super) fn semantic_salience_output_schema() -> serde_json::Value {
     let signal = serde_json::json!({ "type": "integer", "minimum": 0, "maximum": 10_000 });
     serde_json::json!({
@@ -124,13 +128,13 @@ pub(super) fn semantic_salience_output_schema() -> serde_json::Value {
             },
             "evidenceRefs": { "type": "array", "items": { "type": "string" } },
             "reason": { "type": "string", "minLength": 1, "maxLength": 500 },
-            "userAffect": { "type": "string", "enum": ["neutral", "positive", "frustrated", "urgent", "unknown"] },
-            "userFatigue": { "type": "string", "enum": ["low", "normal", "high"] },
+            "userAffect": { "type": ["string", "null"], "enum": ["neutral", "positive", "frustrated", "urgent", "unknown", null] },
+            "userFatigue": { "type": ["string", "null"], "enum": ["low", "normal", "high", null] },
             "personaDrift": { "type": "integer", "minimum": 0, "maximum": 10_000 },
-            "driftReason": { "type": "string", "minLength": 1, "maxLength": 80 },
-            "styleCandidate": { "type": "string", "minLength": 1, "maxLength": 120 }
+            "driftReason": { "type": ["string", "null"], "minLength": 1, "maxLength": 80 },
+            "styleCandidate": { "type": ["string", "null"], "minLength": 1, "maxLength": 120 }
         },
-        "required": ["schemaVersion", "shouldReflect", "candidateTypes", "signals", "evidenceRefs", "reason", "userAffect", "personaDrift"]
+        "required": ["schemaVersion", "shouldReflect", "candidateTypes", "signals", "evidenceRefs", "reason", "userAffect", "userFatigue", "personaDrift", "driftReason", "styleCandidate"]
     })
 }
 

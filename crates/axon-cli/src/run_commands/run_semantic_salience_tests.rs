@@ -17,6 +17,74 @@ fn output_schema_omits_provider_unsupported_unique_items() {
     assert!(properties["evidenceRefs"].get("uniqueItems").is_none());
 }
 
+/// 严格模式的硬约束：`required` 必须覆盖 `properties` 的每一个键。
+///
+/// `strict: true` 的网关（tokenplus 等）按 OpenAI 规则校验 schema，少一个键就整单拒收
+/// （400 `invalid_json_schema`），评估子代理每轮空跑。可选语义只能写成 nullable，
+/// 不能靠「不放进 required」表达。
+#[test]
+fn output_schema_is_strict_mode_compatible() {
+    let schema = semantic_salience_output_schema();
+
+    assert_strict_required_covers_properties(&schema);
+    assert_eq!(schema["additionalProperties"], false);
+    assert_strict_required_covers_properties(&schema["properties"]["signals"]);
+    assert_eq!(
+        schema["properties"]["signals"]["additionalProperties"],
+        false
+    );
+}
+
+fn assert_strict_required_covers_properties(schema: &serde_json::Value) {
+    let properties = schema["properties"]
+        .as_object()
+        .expect("schema 必须声明 properties 对象");
+    let required: Vec<&str> = schema["required"]
+        .as_array()
+        .expect("strict 模式必须给出 required 数组")
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+
+    for key in properties.keys() {
+        assert!(
+            required.contains(&key.as_str()),
+            "strict 模式要求 required 覆盖属性：{key}"
+        );
+    }
+    for key in &required {
+        assert!(
+            properties.contains_key(*key),
+            "required 里的 {key} 不在 properties 中"
+        );
+    }
+}
+
+/// 可选项以 null 出现时必须仍然合法：nullable 是严格模式下「未给出」的唯一写法。
+#[test]
+fn nullable_optional_fields_parse_as_absent() {
+    let raw = serde_json::json!({
+        "schemaVersion": axon_agent_runtime::SEMANTIC_SALIENCE_SCHEMA_VERSION,
+        "shouldReflect": false,
+        "candidateTypes": [],
+        "signals": serde_json::to_value(SemanticSalienceSignals::default()).unwrap(),
+        "evidenceRefs": [],
+        "reason": "纯查询，没有可复用结论",
+        "userAffect": null,
+        "userFatigue": null,
+        "personaDrift": 0,
+        "driftReason": null,
+        "styleCandidate": null
+    });
+
+    let assessment = parse_semantic_assessment(&raw.to_string(), &envelope())
+        .expect("null 可选字段必须照旧判为合法");
+
+    assert_eq!(assessment.user_fatigue, None);
+    assert_eq!(assessment.drift_reason, None);
+    assert_eq!(assessment.style_candidate, None);
+}
+
 #[test]
 fn invalid_json_is_conservatively_rejected() {
     let envelope = envelope();

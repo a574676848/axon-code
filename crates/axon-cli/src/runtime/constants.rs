@@ -25,6 +25,8 @@ pub const DOCTOR_CHECK_PERSONA: &str = "persona";
 pub const DOCTOR_CHECK_LSP: &str = "lsp";
 /// doctor 本地运行目录与数据可写性检查名称。
 pub const DOCTOR_CHECK_RUNTIME: &str = "runtime";
+/// doctor Daemon 后台租约检查名称。
+pub const DOCTOR_CHECK_DAEMON: &str = "daemon";
 /// doctor 跨平台最小 smoke 检查名称。
 pub const DOCTOR_CHECK_SMOKE: &str = "smoke";
 /// provider 连通性测试超时。

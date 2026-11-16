@@ -21,7 +21,7 @@
 | 面 | 用途 |
 |---|---|
 | `GET /api/v1/meta` | 连接档案的连接判定：一次请求同时拿到能力位、服务器时间与上传上限；失败区分凭据不匹配、证书有问题与连不上 |
-| `GET /api/v1/system/status` | 设置 › 连接的运行态读数（后端版本、租约、排队），并与 `/meta` 交叉校验服务器时间；同一响应里的 `webSocketPort` 是事件流端口的唯一来源，连接档案只填一个 HTTP 地址时由它校正事件流地址 |
+| `GET /api/v1/system/status` | 连接判定与运行态读数：后端版本、租约（`lease.active` 为 false 时连接健康档降为「后台已停机」，侧栏连接行不再显示延迟）、排队深度，并与 `/meta` 交叉校验服务器时间；同一响应里的 `webSocketPort` 是事件流端口的唯一来源，连接档案只填一个 HTTP 地址时由它校正事件流地址 |
 | `GET /api/v1/config`、`GET /api/v1/config/schema`、`PUT /api/v1/config` | 设置页的配置读写与校验 |
 | `GET/PUT /api/v1/secrets*` | 密钥状态与写入，值不回读 |
 | `POST /api/v1/providers/discover` | 「探查模型」 |

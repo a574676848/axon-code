@@ -22,6 +22,8 @@
 
 pub mod commands;
 pub mod endpoint;
+/// 健康结论与「探活到档位」的唯一映射。
+mod health;
 pub mod keys;
 pub mod probe;
 pub mod profile;
@@ -32,6 +34,9 @@ pub mod store;
 mod store_migration;
 pub mod tls;
 pub mod views;
+
+use health::health_from_probe;
+pub use health::{HealthDot, HealthState};
 
 /// 客户端外壳偏好：不触碰连接探活事实。
 mod client_preferences;
@@ -71,64 +76,6 @@ struct Inner {
     health: HealthState,
     /// 最近一次成功的探活结论；探测失败或换档即清空。
     last_probe: Option<probe::ProbeReady>,
-}
-
-/// 健康结论：只有一档状态词加一句可执行的说明。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HealthState {
-    /// 供界面选状态点的档位。
-    pub dot: HealthDot,
-    /// 中文状态词。
-    pub label: String,
-    /// 一句可执行的说明。
-    pub detail: String,
-}
-
-/// 状态点档位，与界面 `StateDot` 的语义一一对应。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HealthDot {
-    /// 尚未探测。
-    Idle,
-    /// 连接中。
-    Ongoing,
-    /// 已连接。
-    Done,
-    /// 连不上、凭据无效。
-    Error,
-    /// 凭据缺失、后台需升级。
-    Warning,
-}
-
-impl HealthState {
-    /// 尚未探测：入口可见但置灰，不得判为版本过旧。
-    #[must_use]
-    pub fn idle() -> Self {
-        Self {
-            dot: HealthDot::Idle,
-            label: "未连接".to_owned(),
-            detail: "尚未探测当前档案".to_owned(),
-        }
-    }
-
-    /// 连接中。
-    #[must_use]
-    pub fn ongoing() -> Self {
-        Self {
-            dot: HealthDot::Ongoing,
-            label: "连接中".to_owned(),
-            detail: "正在取后端能力位".to_owned(),
-        }
-    }
-
-    /// 凭据库缺少这把 Key（换机、重装后最常见）。
-    #[must_use]
-    pub fn credential_missing() -> Self {
-        Self {
-            dot: HealthDot::Warning,
-            label: "需重新输入凭据".to_owned(),
-            detail: "本机凭据库里没有这把 Key，请在档案里重新输入".to_owned(),
-        }
-    }
 }
 
 /// 连接运行态。
@@ -284,33 +231,10 @@ impl Runtime {
     pub fn record_probe(&self, outcome: &probe::ProbeOutcome) {
         let mut inner = self.write();
         inner.last_probe = None;
-        inner.health = match outcome {
-            probe::ProbeOutcome::Ready(ready) => {
-                inner.last_probe = Some((**ready).clone());
-                HealthState {
-                    dot: HealthDot::Done,
-                    label: "已连接".to_owned(),
-                    detail: format!("延迟 {} 毫秒", ready.latency_ms),
-                }
-            }
-            probe::ProbeOutcome::Failed(failure) => match failure {
-                probe::ProbeFailure::CredentialRejected { .. } => HealthState {
-                    dot: HealthDot::Error,
-                    label: "凭据无效".to_owned(),
-                    detail: failure.message(),
-                },
-                probe::ProbeFailure::ProtocolUnsupported(_) => HealthState {
-                    dot: HealthDot::Warning,
-                    label: "需升级客户端".to_owned(),
-                    detail: failure.message(),
-                },
-                _ => HealthState {
-                    dot: HealthDot::Error,
-                    label: "连不上".to_owned(),
-                    detail: failure.message(),
-                },
-            },
-        };
+        inner.health = health_from_probe(outcome);
+        if let probe::ProbeOutcome::Ready(ready) = outcome {
+            inner.last_probe = Some((**ready).clone());
+        }
         let caps = outcome.caps_state();
         if let Some(active) = inner.active.as_mut() {
             active.profile.caps = caps;
