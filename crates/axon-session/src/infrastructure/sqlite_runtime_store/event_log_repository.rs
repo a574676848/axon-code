@@ -146,6 +146,24 @@ pub(super) fn interaction_tail_window(
     .collect())
 }
 
+/// 事件面真正落盘的末条序号与 generation；日志不存在或没有完整帧时返回 `None`。
+///
+/// 撕裂尾不算已落盘：它会被写侧截断，水位不该跟着它走。
+pub(super) fn durable_tail(
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+) -> Result<Option<(u64, Option<String>)>, RuntimeStoreError> {
+    let path = store.event_log(session_id).path();
+    if !path.exists() {
+        return Ok(None);
+    }
+    let reader = axon_eventlog::EventLogReader::open(&path).map_err(log_error)?;
+    Ok(reader
+        .records()
+        .last()
+        .map(|record| (record.sequence, record.generation.clone())))
+}
+
 /// 会话事件日志的物理路径（供诊断与清理使用）。
 #[must_use]
 fn build_records(

@@ -37,15 +37,12 @@ pub fn read_snapshot(path: &Path) -> Result<EventLogSnapshot, EventLogError> {
     let header = Header::decode_line(&header_plain)?;
 
     let mut records = Vec::new();
+    // 跨帧同样要求序号连续：只校验帧内连续会让「控制面水位倒退后写出的重复序号」
+    // 静默通过，读者拿到的序号序列不再单调。
+    let mut expected: Option<u64> = None;
     for span in scan.frames.iter().skip(HEADER_FRAME_INDEX + 1) {
         let plain = decode_frame(&bytes[span.start..span.end])?;
-        // 起始序号由控制面决定，这里只校验相邻连续，不假定从 0 开始。
-        let mut expected: Option<u64> = None;
-        for line in plain.split(|byte| *byte == b'\n') {
-            if line.is_empty() {
-                continue;
-            }
-            let record = RuntimeEventRecord::decode_line(line)?;
+        for record in decode_records(&plain)? {
             if let Some(previous) = expected
                 && record.sequence != previous
             {

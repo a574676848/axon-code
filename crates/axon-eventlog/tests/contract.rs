@@ -336,6 +336,38 @@ fn lazy_paged_read_stays_bounded_on_long_logs() {
 }
 
 #[test]
+fn non_monotonic_frames_are_rejected_across_frame_boundaries() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let log = EventLog::open(dir.path(), "session-session-monotonic");
+    // 模拟「控制面水位倒退后继续写入」：第二帧的序号比第一帧小。
+    axon_eventlog::append_once(
+        &log,
+        5,
+        1_700_000_000_000,
+        &[record(5, RuntimeEventKind::TurnStarted, json!({}))],
+    )
+    .expect("第一帧");
+    axon_eventlog::append_once(
+        &log,
+        0,
+        1_700_000_000_000,
+        &[record(0, RuntimeEventKind::TurnStarted, json!({}))],
+    )
+    .expect("第二帧（序号倒退）");
+    let error = log.reader().expect_err("跨帧序号倒退必须被拒绝");
+    assert!(
+        matches!(
+            error,
+            EventLogError::SequenceGap {
+                expected: 6,
+                actual: 0
+            }
+        ),
+        "实际错误：{error:?}"
+    );
+}
+
+#[test]
 fn turn_metrics_keeps_origin_and_unmeasured_ttft() {
     let dir = tempfile::tempdir().expect("临时目录");
     let log = EventLog::open(dir.path(), "session-session-f");

@@ -362,6 +362,83 @@ fn terminal_action_failure_is_archived_out_of_in_flight_table() {
 }
 
 #[test]
+fn recovery_reconciles_the_watermark_with_the_durable_log_tail() {
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    let old_host = store
+        .claim_host(
+            &RuntimeHostId::new("host-watermark-old").expect("host"),
+            1,
+            None,
+            10,
+            100,
+        )
+        .expect("旧 Host");
+    let session_id = DaemonSessionId::new("session-watermark").expect("session");
+    store.create_session(&session_id, ".", 10).expect("session");
+    store
+        .set_session_status(&session_id, &old_host, SessionRuntimeStatus::Running, 20)
+        .expect("绑定旧 Host");
+    for (offset, event_type) in ["turn_started", "tool_call"].into_iter().enumerate() {
+        let now = 30 + u64::try_from(offset).expect("偏移");
+        store
+            .append_events(
+                &session_id,
+                &old_host,
+                &[(event_type.to_owned(), "{}".to_owned())],
+                now,
+            )
+            .expect("写入事件");
+    }
+    // 崩溃现场：帧已经落盘（末条序号 2），控制面水位却退回 0；旧 Host 租约也已过期。
+    let connection = store.connection().expect("connection");
+    connection
+        .execute(
+            "UPDATE sessions SET last_event_sequence=0 WHERE session_id=?1",
+            [session_id.as_str()],
+        )
+        .expect("回退水位");
+    connection
+        .execute(
+            "UPDATE daemon_instances SET lease_expires_at_ms=0 WHERE host_id=?1",
+            [old_host.host_id.as_str()],
+        )
+        .expect("让旧 Host 过期");
+    drop(connection);
+
+    let new_host = store
+        .claim_host(
+            &RuntimeHostId::new("host-watermark-new").expect("host"),
+            2,
+            None,
+            200,
+            10_000,
+        )
+        .expect("新 Host");
+    let recovered = store
+        .recover_expired_sessions(&new_host, 300, 10)
+        .expect("恢复过期会话");
+    let session = recovered
+        .iter()
+        .find(|record| record.session_id == session_id)
+        .expect("会话应被恢复");
+    // 落盘末条序号 2 → 对账后的水位 2 → 恢复事件占 3。
+    assert_eq!(session.last_event_sequence, 3, "水位必须对齐落盘尾再前进");
+
+    let events = store.replay_events(&session_id, 0, 10).expect("回放事件");
+    let recovered_event = events.last().expect("恢复事件");
+    assert_eq!(recovered_event.event_type, "session_recovered");
+    assert!(
+        recovered_event
+            .payload_json
+            .contains("\"watermarkBefore\":0")
+            && recovered_event.payload_json.contains("\"logTail\":2"),
+        "恢复事件必须记录对账前后的水位: {}",
+        recovered_event.payload_json
+    );
+}
+
+#[test]
 fn interrupted_running_execution_is_quarantined_as_uncertain_without_reclaim() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));

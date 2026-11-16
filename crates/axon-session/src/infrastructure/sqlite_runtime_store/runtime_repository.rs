@@ -375,22 +375,47 @@ pub(super) fn recover_expired_sessions(
         if changed == 0 {
             continue;
         }
-        let next_event: i64 = transaction
+        // 水位与事件面对账：控制面记的末条序号必须等于真正落盘的末条序号。
+        // 崩溃可能让两者差开（帧已落盘但水位没推进，或控制面先提交而帧没落盘），
+        // 不对账就会写出序号不单调的日志。日志缺失时保持水位不变。
+        let recorded: i64 = transaction
             .query_row(
-                "SELECT last_event_sequence + 1 FROM sessions WHERE session_id=?1",
-                params![id],
+                "SELECT last_event_sequence FROM sessions WHERE session_id=?1",
+                params![id.clone()],
                 |row| row.get(0),
             )
             .map_err(storage)?;
+        let recorded = u64::try_from(recorded)
+            .map_err(|_| RuntimeStoreError::Storage("事件水位为负".to_owned()))?;
+        let session_id = parse_session_id(id.clone())
+            .map_err(|_| RuntimeStoreError::Storage("会话标识无效".to_owned()))?;
+        let durable = super::event_log_repository::durable_tail(store, &session_id)?;
+        let (watermark, reconciliation) = match durable {
+            Some((tail, tail_generation)) if tail != recorded => (
+                tail,
+                serde_json::json!({
+                    "watermarkBefore": recorded,
+                    "watermarkAfter": tail,
+                    "logTail": tail,
+                    "tailGeneration": tail_generation,
+                }),
+            ),
+            _ => (recorded, serde_json::Value::Null),
+        };
+        let next_event = i64::try_from(watermark.saturating_add(1))
+            .map_err(|_| RuntimeStoreError::Storage("事件序号超出范围".to_owned()))?;
         // 会话级事件，不归属任何 Interaction，故 interaction_id 留空。
         // 会话级事件，不归属任何 Interaction；事件写入推迟到事务提交之后。
         pending_events.push((
-            parse_session_id(id.clone())
-                .map_err(|_| RuntimeStoreError::Storage("会话标识无效".to_owned()))?,
+            session_id.clone(),
             u64::try_from(next_event)
                 .map_err(|_| RuntimeStoreError::Storage("事件序号超出范围".to_owned()))?,
-            serde_json::json!({"ownerGeneration": host.generation, "checkpointRecovered": true})
-                .to_string(),
+            serde_json::json!({
+                "ownerGeneration": host.generation,
+                "checkpointRecovered": true,
+                "watermarkReconciled": reconciliation,
+            })
+            .to_string(),
         ));
         transaction
             .execute(
