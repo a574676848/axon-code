@@ -7,7 +7,7 @@ use rusqlite::Connection;
 
 use super::runtime_cleanup::{
     INTERACTION_TERMINAL_STATUSES, LEDGER_EVENT_MIN_RETAINED, RuntimeCleanupCounts, count_rows,
-    quoted_list, session_event_expiry_filter, task_expiry_filter,
+    quoted_list, task_expiry_filter,
 };
 use super::runtime_cleanup_families::{
     expired_agent_messages_filter, expired_client_presence_filter, expired_continuations_filter,
@@ -21,11 +21,7 @@ pub(super) fn count_expired_rows(
     cutoff_ms: i64,
 ) -> Result<RuntimeCleanupCounts, String> {
     let task_filter = task_expiry_filter();
-    let session_events = count_rows(
-        connection,
-        &format!("SELECT COUNT(*) {}", session_event_expiry_filter()),
-        cutoff_ms,
-    )?;
+
     let counts = RuntimeCleanupCounts {
         interactions: count_rows(
             connection,
@@ -77,7 +73,6 @@ pub(super) fn count_expired_rows(
             "SELECT COUNT(*) FROM daemon_upgrade_admissions WHERE deadline_at_ms < ?1",
             cutoff_ms,
         )?,
-        session_events,
         executions: count_rows(
             connection,
             &format!("SELECT COUNT(*) FROM jarvis_executions WHERE goal_id IN (SELECT goal_id {task_filter})"),

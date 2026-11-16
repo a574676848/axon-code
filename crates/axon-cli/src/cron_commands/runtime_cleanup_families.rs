@@ -16,11 +16,6 @@ use super::runtime_cleanup::{
 };
 use axon_session::NotificationDeliveryState;
 
-#[path = "runtime_cleanup_session_events.rs"]
-pub(in crate::cron_commands) mod session_events;
-
-pub(super) use session_events::{delete_expired_session_events, repair_dangling_payload_refs};
-
 /// 删除长期过期且不再代表任何在线客户端的 presence 记录。
 ///
 /// presence 只表达「客户端此刻能否接收投递」。过期行没有任何历史价值，但会持续
@@ -290,13 +285,8 @@ pub(super) fn delete_session_families_by_ids(
         return Err("Daemon runtime Session family 已重新活跃，保留 rollout 重试锚点".to_owned());
     }
     let counts = RuntimeCleanupCounts {
-        session_events: delete_ids_in(
-            &transaction,
-            "session_events",
-            "session_id",
-            &placeholders,
-            ids,
-        )?,
+        // 事件已随会话目录删除，这里不再按表计数。
+        session_events: 0,
         session_checkpoints: delete_ids_in(
             &transaction,
             "session_checkpoints",

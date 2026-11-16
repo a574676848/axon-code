@@ -16,10 +16,10 @@ use super::runtime_cleanup_counts::count_expired_rows;
 use super::runtime_cleanup_families::{
     delete_expired_agent_messages, delete_expired_client_presence, delete_expired_continuations,
     delete_expired_daemon_hosts, delete_expired_decisions, delete_expired_events,
-    delete_expired_session_events, delete_expired_upgrade_admissions,
+    delete_expired_upgrade_admissions,
     delete_expired_user_questions, delete_session_families_by_ids,
     delete_settled_completion_deliveries, delete_settled_completion_notifications,
-    delete_terminal_goals, delete_terminal_interactions, repair_dangling_payload_refs,
+    delete_terminal_goals, delete_terminal_interactions,
 };
 use super::runtime_event_archive;
 
@@ -161,43 +161,15 @@ fn run_runtime_cleanup_with_budget(
     }
     let deadline = Instant::now() + time_budget;
     let mut counts = RuntimeCleanupCounts::default();
-    let archive_root = runtime_event_archive::event_archive_root(&path);
-    // 先归档再删行：删除不可逆，.jsonl.zst 是事后唯一的回看手段。
-    let archived = runtime_event_archive::archive_expired_session_events(
-        &mut connection,
-        &archive_root,
-        cutoff_ms,
-        deadline,
+    let events_root = runtime_event_archive::events_root(&path);
+    // 事件按会话目录存放：保留期一到整目录删除，不再按行归档成 .jsonl.zst。
+    let removed_dirs = runtime_event_archive::archive_expired_session_dirs(
+        &events_root,
+        u64::try_from(cutoff_ms).unwrap_or(u64::MAX),
     )?;
-    if archived.rows > 0 {
-        // 归档即清理的一部分：删掉的行必须体现在同一份计数里，否则报告会少算。
-        counts.session_events = counts.session_events.saturating_add(archived.rows);
-        axon_logger::info(&format!(
-            "运行态事件归档完成：{} 行 / {} 个 lane 文件",
-            archived.rows, archived.files
-        ));
-    }
-    counts.merge(delete_expired_upgrade_admissions(
-        &mut connection,
-        cutoff_ms,
-        deadline,
-    )?);
-    // 事件删除必须跟随归档：归档耗尽预算时，这一族不得绕过归档直接删行，
-    // 否则外置正文既没进 .jsonl.zst，也没被回收，留成永久孤儿。
-    if Instant::now() < deadline {
-        counts.merge(delete_expired_session_events(
-            &mut connection,
-            &archive_root,
-            cutoff_ms,
-            deadline,
-        )?);
-    }
-    // 读取侧已经把缺失正文降级为占位帧；这里把悬空引用收口成内联占位，
-    // 下一次读取不再为同一行重复做一次失败的文件 I/O。
-    let repaired =
-        repair_dangling_payload_refs(&mut connection, &archive_root, cutoff_ms, deadline)?;
-    if repaired > 0 {
-        axon_logger::warning(&format!("运行态事件正文悬空引用已修复：{repaired} 条"));
+    if removed_dirs > 0 {
+        counts.session_events = counts.session_events.saturating_add(removed_dirs);
+        axon_logger::info(&format!("运行态事件目录清理完成：{removed_dirs} 个会话"));
     }
     counts.merge(delete_terminal_goals(&mut connection, cutoff_ms, deadline)?);
     counts.merge(delete_terminal_interactions(
@@ -250,21 +222,17 @@ fn run_runtime_cleanup_with_budget(
         deadline,
     )?);
     // 时间维度清理之后再看磁盘水位：越过上限就按最旧优先继续淘汰到低水位。
-    let evicted = runtime_event_archive::enforce_disk_budget(
-        &mut connection,
-        &path,
-        &archive_root,
-        axon_time::unix_now_ms(),
-        deadline,
+    // 时间维度清理之后再看磁盘水位：越过上限就从最旧会话开始淘汰到低水位。
+    let evicted = runtime_event_archive::enforce_events_disk_budget(
+        &events_root,
+        runtime_event_archive::high_water_bytes(),
+        runtime_event_archive::low_water_bytes(),
     )?;
-    if evicted.rows > 0 {
-        counts.session_events = counts.session_events.saturating_add(evicted.rows);
-        axon_logger::warning(&format!(
-            "运行态库越过磁盘高水位，已归档并淘汰 {} 行最旧事件",
-            evicted.rows
-        ));
+    if evicted > 0 {
+        counts.session_events = counts.session_events.saturating_add(evicted);
+        axon_logger::warning(&format!("事件目录越过磁盘高水位，已淘汰 {evicted} 个最旧会话"));
     }
-    if !counts.is_empty() || !evicted.is_empty() {
+    if !counts.is_empty() || evicted > 0 {
         reclaim_database_space(&connection)?;
     }
     Ok(counts)
@@ -677,5 +645,4 @@ mod retained_tests;
 mod tests;
 
 #[cfg(test)]
-#[path = "runtime_cleanup_payload_tests.rs"]
 mod payload_tests;

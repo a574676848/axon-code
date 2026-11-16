@@ -94,54 +94,43 @@ pub(super) fn answer_texts(
     }
     let wanted: std::collections::HashSet<&str> = interaction_ids.iter().copied().collect();
     let store = runtime_store(axon_root);
-    let archive_root = store.event_archive_root();
-    let _ = store.with_read_connection(|connection| {
-        let mut statement = connection.prepare(
-            "SELECT payload_json, payload_ref FROM session_events \
-             WHERE session_id = ?1 AND event_type = 'turn_completed' ORDER BY sequence DESC",
-        )?;
-        let mut rows = statement.query([lane_id])?;
-        while let Some(row) = rows.next()? {
-            // 从新往旧取，凑齐这一页要的标识就停：最新一页只读几条，老页才走完整条会话。
-            if answers.len() == wanted.len() {
-                break;
-            }
-            let inline: String = row.get(0)?;
-            let reference: Option<String> = row.get(1)?;
-            let payload = if inline.trim().is_empty() {
-                match reference {
-                    Some(reference) => {
-                        axon_session::read_event_payload(&archive_root, &reference).ok()
-                    }
-                    None => None,
-                }
-            } else {
-                Some(inline)
-            };
-            let Some(payload) = payload else { continue };
-            let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) else {
-                continue;
-            };
-            let Some(interaction_id) = value
-                .get("interactionId")
-                .and_then(serde_json::Value::as_str)
-            else {
-                continue;
-            };
-            if !wanted.contains(interaction_id) || answers.contains_key(interaction_id) {
-                continue;
-            }
-            let Some(text) = value.get("response").and_then(serde_json::Value::as_str) else {
-                continue;
-            };
-            let text = text.trim();
-            if text.is_empty() {
-                continue;
-            }
-            answers.insert(interaction_id.to_owned(), clamp_answer_text(text));
+    let Ok(session_id) = axon_domain::DaemonSessionId::new(lane_id.to_owned()) else {
+        return answers;
+    };
+    let path = store.event_log(&session_id).path();
+    if !path.exists() {
+        return answers;
+    }
+    let Ok(reader) = axon_eventlog::EventLogReader::open(&path) else {
+        return answers;
+    };
+    // 从新往旧取，凑齐这一页要的标识就停：最新一页只读几条，老页才走完整条会话。
+    for record in reader.records().iter().rev() {
+        if answers.len() == wanted.len() {
+            break;
         }
-        Ok(())
-    });
+        if record.event_type.as_str() != "turn_completed" {
+            continue;
+        }
+        let Some(interaction_id) = record
+            .payload
+            .get("interactionId")
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        if !wanted.contains(interaction_id) || answers.contains_key(interaction_id) {
+            continue;
+        }
+        let Some(text) = record.payload.get("response").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        answers.insert(interaction_id.to_owned(), clamp_answer_text(text));
+    }
     answers
 }
 

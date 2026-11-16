@@ -12,6 +12,7 @@ homepage = "https://github.com/a574676848/axon-code"
 documentation = "https://github.com/a574676848/axon-code/tree/master/docs"
 
 [dependencies]
+axon-eventlog = { path = "../axon-eventlog" }
 axon-client-identity = { path = "../axon-client-identity" }
 axon-apply = { path = "../axon-apply" }
 axon-agent-runtime = { path = "../axon-agent-runtime" }
