@@ -78,7 +78,7 @@ axon daemon attach <SESSION_ID>        # 重新挂接到指定会话事件流
 axon serve --host 127.0.0.1 --port 3000
 ```
 
-Daemon 是 Axon 的常驻后台宿主，负责接收持久化 `Interaction`、排他调度车道执行、托管 Agent Cron 定时任务、维护记忆治理以及本机网关通信面。客户端断开后，长周期 Goal 与 Execution 继续在后台执行。
+Daemon 是 Axon 的常驻后台服务，负责接收输入、按工作区有序执行、托管定时任务、维护记忆治理并提供本机网关。客户端断开后，后台工作继续执行到终态。
 
 ## 5. 自动化、统计与度量
 
@@ -111,21 +111,23 @@ axon export --output <PATH>            # 导出运行数据
 axon completion bash                   # 生成 Shell 自动补全脚本 (支持 bash/zsh/fish/powershell)
 axon exec <COMMAND...>                 # 执行本机受控命令
 
-# 只读运维诊断面 (内部排障使用，用户无需手工管理 session_id)
-axon debug session list
-axon debug session show <SESSION_ID>
-axon debug session read <THREAD_ID>
-axon debug session doctor
-
 # 人格系统：校验人设与查看持久化状态
 axon persona validate [--file <PATH>]  # 校验 SOUL.md（或指定文件）是否符合 axon-soul/v1
 axon persona status                    # 展示人格库、当前状态与已发布习得风格
-axon persona status [--json]          # 展示人格库、当前状态、最近转移与已发布习得风格
+axon persona status [--json]           # 展示人格库、当前状态、最近转移与已发布习得风格
 axon persona style list [--all]        # 列出习得风格
 axon persona style retire <STYLE_ID>   # 退役一条习得风格
 axon persona reset --yes               # 把人格状态重置为基线，不动人设与习得风格
 ```
 
-Axon 自行判断是否继续既有工作并按工作区车道自动管理上下文。`debug session` 仅作为系统诊断与数据恢复的底层接口。
+Axon 自行判断是否继续既有工作，并按工作区自动管理上下文。会话层面的查看、删除、导出与修复走 `axon sessions`，例如：
+
+```bash
+axon sessions list                     # 列出会话（含标题、最近活动与轮次）
+axon sessions list --all               # 含归档会话
+axon sessions resume <THREAD_ID>       # 设置 --continue 的默认目标
+```
+
+人设与人格状态的字段、模式与体积预算见 [人格系统](./persona.md)；`axon doctor --check persona` 给出同一条判定。
 
 人设与人格状态的字段、模式与体积预算见 [人格系统](./persona.md)；`axon doctor --check persona` 给出同一条判定。

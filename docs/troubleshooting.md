@@ -28,9 +28,9 @@
    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
    ```
 
-Axon Windows Daemon 使用当前用户最高权限 Task Scheduler 任务 `AxonDaemon`。任务以 `InteractiveToken + HighestAvailable` 登录启动，隐藏 PowerShell 包装器等待 Daemon 退出并透传退出码，`RestartOnFailure` 负责失败重试。Shell 直接继承 Daemon 的用户级 PATH、`USERPROFILE` 和提升权限，不使用 SYSTEM，也不依赖 `axon run` 启动 Worker。
+Windows 上 Axon 的后台服务注册为当前用户的任务计划任务 `AxonDaemon`，以当前用户身份、最高可用权限在登录时启动；失败后自动重试，手动停止不会触发失败恢复。Shell 与工具继承该用户的环境变量与权限，不会切到其他账号。
 
-注册与更新任务需要同一用户的管理员授权；源码安装器会请求 UAC，并保留已有 `~/.axon/config.toml` 与凭据。请勿输入其他管理员账号。停止与覆盖安装不需要提权：`axon daemon stop` 写停止请求让 Daemon 自身 drain 退出（等待窗口 15 秒），只有它未响应而必须强制结束进程树时才需要管理员权限。查看实际任务定义与恢复策略使用 `schtasks /query /tn AxonDaemon /xml`。用户未登录时外部渠道不可用。
+安装与更新需要同一用户的管理员授权，安装器会弹出系统提权请求并保留已有的 `~/.axon/config.toml` 与凭据，请不要输入其他管理员账号。停止不需要提权：`axon daemon stop` 会让服务自行收尾退出（默认等待 15 秒）。用户未登录时后台服务不运行，外部渠道投递也会失败，需要等登录后重试或让对方缓存事件。
 
 ### Linux / macOS 安装失败
 
@@ -203,7 +203,7 @@ Linux/macOS 安装器会将 `$HOME/.axon/bin`（或自定义 `AXON_INSTALL_DIR`�
 
 **症状**：对话区出现「本轮被后端拒绝，可重新发送这条消息。」，这一轮只产出部分推理，没有失败卡。
 
-**说明**：这条结论只表示 Daemon 没把这一轮跑完，不指向模型或凭据。常见来源是运行态库写锁：`session_events` 在长会话里增长很快，写入在 `busy_timeout` 之后返回 `database is locked`，在跑的轮次连同子代理一起中断，Interaction 落为 `rejected`。存储抖动本身不再停后台 Worker：续租遇到 `database is locked` 会按 750ms 持续重试，只有真正失去代际（另一个 Host 已接管）才会停。
+**说明**：这条结论只表示后台服务没把这一轮跑完，不指向模型或凭据。常见来源是运行数据在长会话里写入密集，落盘超时导致这一轮连同子代理一起中断。这类抖动只会结束当前轮次，不会停掉后台服务。
 
 **解决方案**：
 
@@ -215,7 +215,7 @@ Linux/macOS 安装器会将 `$HOME/.axon/bin`（或自定义 `AXON_INSTALL_DIR`�
 
    `host.leaseRemainingMs` 为正即有效；`host.status` 仍是 `running` 而租约已过期，说明后台 Worker 已停。
 
-2. 在 `data/logs/axon-<日期>.log` 中检索 `database is locked`、`Daemon Host 续租失败`、`Daemon Primary Turn 拒绝 Interaction`。拒绝原因按 error 级留痕，带 `layer` 与 `message`，是这一条结论唯一能指向真因的地方。
+2. 在运行根目录的 `data/logs/axon-<日期>.log` 中检索 `本轮被后端拒绝`。拒绝原因按 error 级留痕，带 `layer` 与 `message`，是这条结论唯一能指向真因的地方。
 
 3. 恢复服务后重新发送：
 
@@ -223,24 +223,20 @@ Linux/macOS 安装器会将 `$HOME/.axon/bin`（或自定义 `AXON_INSTALL_DIR`�
    axon daemon restart
    ```
 
-4. 运行态库长期偏大时，按 [daemon.md](daemon.md) 的清理说明核对 `axon.system.brain-cleanup` 的保留窗口与运行记录；保留期内的新事件不会被清理。
+4. 运行数据长期偏大时，按 [daemon.md](daemon.md) 的数据保留一节核对自动回收策略；保留期内的新数据不会被清理。
 
 ### 所有会话都停在「生成回复中」，且中断提示本轮已结束
 
 **症状**：任意一条消息发出去后，输入坞一直显示「生成回复中」且没有任何输出；按 ESC 提示「本轮已经结束，无需中断」。重启桌面端无效，重启 Daemon 后立刻恢复。
 
-**说明**：这是 Daemon 已被 fence 但进程还在的情况。宿主租约过期后后台 Worker 全部停止，进程继续接受 HTTP 提交，于是 Interaction 只落成 `received`，没有任何 Worker 领取。判定依据（全部只读）：
+**说明**：这是后台服务已停止接管新工作、但进程还在接受请求的情况。此时新提交只会被登记，没有任何执行者领取，所以界面一直停在「生成回复中」。判定依据：
 
 1. `axon daemon health` 的 `host.leaseRemainingMs` 为负，或 `host.status` 仍是 `running` 而租约已过期。
-2. 运行态库里 `jarvis_interactions.status = 'received'` 且 `received_at_ms` 不断变新，`lease_token` 为空。
-3. 日志里最后一次 `Daemon Host 已失去 lease，后台 Worker 将停止` 之后没有任何 tick 记录。
+2. 日志里最后一次出现「已失去 lease，后台 Worker 将停止」之后没有任何调度记录。
 
-**根因与已修项**：
+**现场处置**：执行 `axon daemon restart` 恢复。服务重启后会自动接管被中断的工作：能续的继续，状态不可判定的显式标成「状态未知」，不会重复执行已经产生外部副作用的操作。
 
-- 写锁风暴会持续数十秒，而旧版续租预算只有 8 次 × 750ms（约 6 秒），耗尽即停全部 Worker 且进程不退。现在续租遇到存储抖动按 750ms **持续重试**，只有失去代际才停，停机请求在下一个重试点生效。
-- 风暴的来源是 WAL 无限增长：连接级 PRAGMA 从未设置 `journal_size_limit`，一次 checkpoint 要把整库回写主库并独占写锁。现在连接统一设置 `journal_size_limit = 64 MiB` 与显式 `wal_autocheckpoint`，WAL 体积有硬上限。
-
-**现场处置**：`axon daemon restart`。停机落盘后若要一次性收回历史 WAL，可直接执行 `PRAGMA wal_checkpoint(TRUNCATE)`（无进程占用时最快，不改变数据）。
+当前版本在续租遇到存储抖动时会持续重试，只有确实失去宿主代际才停止后台工作，因此这类停摆不再由短时写入高峰诱发。
 
 ### 工具调用被禁止
 
@@ -292,7 +288,7 @@ Linux/macOS 安装器会将 `$HOME/.axon/bin`（或自定义 `AXON_INSTALL_DIR`�
    AXON_PROCESS_RLIMIT_NOFILE=off axon run "…"
    ```
 
-   取值为 `off` 或 `0` 表示该维度不限制；也可以在同一个 shell 里 `export` 后长期生效。这些变量**不需要重新编译**，但必须由启动 Axon 的进程环境提供——`~/.axon/.env` 只承载 provider 凭据，其中的围栏变量不会被读取。
+   取值为 `off` 或 `0` 表示该维度不限制；也可以在同一个 shell 里 `export` 后长期生效。这些变量**不需要重新编译**，但必须由启动 Axon 的进程环境提供：`~/.axon/.env` 只承载 provider 凭据，其中的围栏变量不会被读取。
 
 3. 需要恢复默认值（把某个维度调大而不是关掉）时，直接给具体数值：
 
@@ -302,7 +298,7 @@ Linux/macOS 安装器会将 `$HOME/.axon/bin`（或自定义 `AXON_INSTALL_DIR`�
 
 4. 受限容器里宿主的硬限制可能更低：`setrlimit` 只能降低硬限制，Axon 会静默取两者的较小值，因此配置了更大的值也不会报错，只是不会超过宿主上限。用 `ulimit -a` 或 `prlimit --pid $$` 查看宿主实际值。
 
-围栏只覆盖 shell 工具启动的子进程；文件工具等 Rust 侧写入不受 `RLIMIT_FSIZE` 影响。需要区分「artifact 上限截断」与「内核终止进程」时见 [内置工具参数契约](./tool-schema.md#shell-命令格式)。
+围栏只覆盖 shell 工具启动的子进程；文件工具等程序自身写入不受 `RLIMIT_FSIZE` 影响。需要区分「artifact 上限截断」与「内核终止进程」时见 [内置工具参数契约](./tool-schema.md#shell-命令格式)。
 
 ### 会话无法恢复
 

@@ -36,7 +36,7 @@ MCP 失败按阶段治理，粒度与后果不同：
 
 调用期降级回执的 `error_type` 为 `mcp_unavailable`，metadata 同时给出 `degraded=true`、`degradationClass=optional`、`circuitOpen`（发现期熔断在调用期被命中）与 `toolCooldown`（命中工具冷却），摘要按作用域给出可执行的替代建议；配置错误与业务拒绝是普通失败回执（`error_type=execution_failed`），不标记降级。
 
-恢复路径：工具冷却随窗口过期，该工具调用成功即立即清除；server 级熔断在该 server 发现成功或任一工具调用成功时清除，也可用 TUI `/mcp` 立即重探 —— 它会清空全部负缓存、作废并在后台强制重建该 Workspace 的快照（绕过负缓存与 schema 缓存现场重探），下一轮 turn 即使用新的工具表。Daemon 的启动快照缓存 TTL（5 分钟）到期时，只要上一次快照存在探测失败的 server 就强制重建并重跑探测；反过来说，只发生调用期失败的 server 不会因此被摘除，需要立刻反映真实故障时用 `/mcp`。
+恢复路径：工具冷却随窗口过期，该工具调用成功即立即清除；server 级熔断在该 server 发现成功或任一工具调用成功时清除，也可用 TUI `/mcp` 立即重探，它会清空全部负缓存、作废并在后台强制重建该 Workspace 的快照（绕过负缓存与 schema 缓存现场重探），下一轮 turn 即使用新的工具表。Daemon 的启动快照缓存 TTL（5 分钟）到期时，只要上一次快照存在探测失败的 server 就强制重建并重跑探测；反过来说，只发生调用期失败的 server 不会因此被摘除，需要立刻反映真实故障时用 `/mcp`。
 
 Axon 完整保留 MCP `tools/list` 返回的 tool description 与 schema，不设置客户端私有的描述长度上限，也不通过截断规避注册失败。配置解析、协议握手、`tools/list`、空工具列表与 schema 注册失败都会形成独立的 server load report；负缓存保存同一条已脱敏原因。TUI `/mcp` 直接展示对应 server 的实际失败原因，恢复探测会绕过负缓存并用本次结果更新状态。
 

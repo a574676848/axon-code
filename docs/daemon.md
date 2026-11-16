@@ -1,189 +1,117 @@
 # Daemon 后台运行
 
-Daemon 是 Axon 的后台长生命周期宿主。当前实现已经把 `PrimaryTurnService` 接入 supervisor tick：Daemon 从 durable Interaction inbox 领取输入，按 Workspace lane 有界并发，并通过 lease token 提交 `Understood` 或 `Rejected` 终态。
+Daemon（守护进程）是 Axon 的后台长驻服务。桌面端、终端与命令行都把任务交给它执行，所以关掉界面不会中断正在跑的工作。
 
-主 turn 的并发单元是复合 lane（Workspace + trust scope + channel + destination），不是批次：`jarvis_interactions.lane_id` 是领取排他的持久化事实源，某条 lane 已有未过期 `processing` 时，该 lane 的后续记录不会被领取，同 lane 串行无需调用方维护在途状态。协调线程在同一批内只等待「任意一个 lane」结束，槽位一归还就补位领取并投递，因此某条 lane 的长 turn 不会推迟其他空闲 lane 的新消息；只有并发槽位（默认 4 条 lane）全满时才等待 lane 结束。槽位未满时以 250ms 有界窗口复查新到输入，窗口只是补位周期，不改变 durable 领取顺序。
+---
 
-## 当前职责
+## 1. 它负责什么
 
-- 处理 `SubmitInteraction`，不接受旧 `SubmitAction`、`CancelAction`、`GetQueue` 或 `StopSession` 外部命令。
-- 使用 Workspace registry 将 `WorkspaceId` 解析为真实工作目录。
-- 调用 `InteractionTurnRunner` 完成普通问答或原子创建 Goal、首个 Execution 与 Event。
-- 托管 Scheduler、事件桥、投递与维护 tick。
-- 维护内部 host generation、lease 与 fencing 状态。Host lease 续租按 10 秒周期执行，租约有效期 30 秒；续租遇到存储抖动（`database is locked`）时按 750ms 持续重试，只有实际失去代际（另一 Host 已接管）才停止全部后台 Worker。停机请求在下一个重试点生效，不等待退避结束。
-- 由 Execution Worker 线程池接管已提交 Execution，前台不活跃时写入未读 Result 并入队持久化 Delivery。
+- **接收并排队**：把来自桌面、终端、命令行与外部系统的事件收成同一条输入队列，按工作区与渠道排队、同队列串行执行。
+- **执行与托管**：普通问答当场跑完；需要跨轮次推进的工作登记为后台工作，由它持续推进到终态。
+- **定时自动化**：按计划触发周期性任务，例如用量聚合、记忆治理与你自己配置的定时任务。
+- **投递结果**：把后台工作与定时任务的结果送回发起它的渠道，不广播到其他在线客户端。
+- **提供网关**：对客户端暴露 HTTP 接口与事件推送，会话、任务、指标、配置都从这里读。
 
-Goal 创建后的执行已经收口：Execution 由 Daemon 的 Execution Worker 池领取，并通过 `ProviderRunSubagentExecutor` 作为隔离子代理执行；结果写入 Result 与持久 completion notification。一个 Execution 只通知主 turn 一次，通知包含来源（一次性 Goal 或 Axon cron）、Goal 目标、执行结果及结果文档路径；主 turn 产出的汇总回复随后登记到创建 Task 时声明的唯一投递目标，目标取自 Execution 的 `transportContext`，不再广播到当时在线的其它客户端。TUI 只有真实展示后确认，桌面通知只有写入 durable outbox 后确认，任何渠道都不允许静默 ack。跨过创建后的下一个本地自然日仍未读则自动失效并静默停止通知。
+客户端不自己跑推理：命令行与终端只提交输入并订阅事件流，Provider 调用与任务领取都发生在 Daemon 内。
 
-Agent cron 按投递需求分流：需要投递的 cron 到期后创建 `GoalToolCommand::Create`，并把 `channel`/`destination` 写入 Execution 的 `transportContext`，复用 Goal 的 Execution、Result、完成通知与定向投递；不需要投递的 cron 直接调用同一 `ProviderRunSubagentExecutor`，不进入用户渠道。子代理结果超过 4000 个 Unicode 字符时以 Markdown 原子写入统一内容归档 `.axon/data/archive/*.md`，主 turn 只接收有界预览和归档地址。
-主 turn 尚未产出汇总或执行失败时，后台 Execution 的原始回复不得作为渠道正文发送；通知继续留在持久收件箱，直到主 turn 汇总成功后投递，或按跨日未读规则自动失效。投递 sweep 每轮按有界批次补偿「汇总已落库但渠道推进中断」这一窗口；正文为空的通知不得推进，渠道行不得永久滞留在 pending。目标在登记时即已确定，不存在「等渠道上线再补登记」的路径。
+---
 
-Daemon 的维护清理覆盖 client presence、completion notification、completion delivery 以及既有 Interaction/Goal/Execution/Result 等运行态数据。清理使用索引、有界批次、IMMEDIATE 短事务和整轮时间预算；只删除 delivered/expired 且超过保留期的 delivery，随后删除无未终结子 delivery 的 notification，pending/dispatched 一律保留。
-
-关闭 CLI/TUI 不影响已提交 Execution 继续运行，重新接入后按 cursor replay 取回结果。
-
-## 服务管理
-
-安装包可注册 Daemon 服务；也可以使用 CLI 管理当前安装：
+## 2. 服务管理
 
 ```text
-axon daemon install
-axon daemon status
-axon daemon start
-axon daemon stop
-axon daemon restart
-axon daemon uninstall
+axon daemon install     安装为当前用户的后台服务
+axon daemon status      查看是否已安装、是否正在运行
+axon daemon start       启动
+axon daemon stop        请求优雅停机
+axon daemon restart     重启
+axon daemon uninstall   卸载服务
+axon daemon health      读取当前健康快照
 ```
 
-Windows 使用当前用户 Windows Task Scheduler 任务 `AxonDaemon`，登录时以 `InteractiveToken + HighestAvailable` 启动隐藏 PowerShell 7 包装进程并等待 `axon daemon run` 退出，将退出码传回任务计划程序。注册时解析并校验 `pwsh.exe` 绝对路径，运行时不再搜索 PATH。`RestartOnFailure` 在失败后每隔 5 分钟重试，最多 3 次；手动停止不会触发失败恢复。任务允许电池供电下继续运行。
+`install` 与 `uninstall` 需要管理员权限，安装器通过系统提权弹窗请求授权，不会关闭系统 UAC，且拒绝切换到其他账号执行。`stop` 不需要提权：它会写一个停止请求让 Daemon 自行收尾退出（默认等待 15 秒），只有进程无响应、必须强制结束进程树时才需要管理员权限。
 
-包装进程的控制台输入、输出和 `$OutputEncoding` 均设为 UTF-8 无 BOM，`$PSStyle.OutputRendering` 为 `PlainText`，不经过表格格式化或添加 ANSI 颜色。`axon run --format json` 仍使用 JSONL 契约。任务 XML 暂存文件按 Windows Task Scheduler 的要求使用 UTF-16LE，该编码不影响日志和 CLI 输出。
+**平台行为**
 
-`shell_command` 启动的 PowerShell 子进程也会显式初始化输入、输出和管道编码为 UTF-8 无 BOM；PowerShell 7 使用 `PlainText` 输出，避免新建子进程回到系统代码页或默认颜色模式。此设置通过启动脚本前缀完成，不增加额外进程或探测调用。
+| 平台 | 安装形态 | 行为 |
+| --- | --- | --- |
+| Windows | 当前用户的任务计划任务 `AxonDaemon` | 登录时以当前用户身份启动；失败后每 5 分钟重试，最多 3 次；手动停止不触发失败恢复；允许电池供电下继续运行 |
+| Linux | 用户级 systemd 单元 | 始终自动重启 |
+| macOS | LaunchAgent | 保活，异常退出自动拉起 |
 
-Windows 后台非交互子进程统一通过 `axon-process` 设置 `CREATE_NO_WINDOW`，包括 Shell、MCP、LSP、Workspace Git 探测和 Host 存活探测。隐藏 Daemon 包装窗口不等于隐藏所有后代进程；独立后台 worker 的每个非交互启动边界都必须遵守同一策略，避免短生命周期控制台闪现。用户明确打开的浏览器和外部编辑器不受该策略约束。
+用户未登录时服务不会运行，网关端口也不可用，外部系统需要自行重试或缓存事件。
 
-Daemon 保留当前用户身份、用户级 PATH 与 `USERPROFILE`，Shell 直接继承 Daemon 环境和权限，无需独立 Shell Worker；PowerShell 包装器使用 `-NoProfile`，不会加载 PowerShell 配置脚本。启动快照仍在 Daemon 启动时预热。管理员用户的 Daemon 与工具具有管理员权限，必须限制外部渠道访问并审核高风险操作。
+---
 
-最高权限任务的注册与更新需要管理员权限，安装器通过 UAC 请求授权，不关闭 UAC。授权必须使用同一用户，安装器拒绝切换到其他账号。停止不需要提权：`axon daemon stop` 写停止请求让 Daemon 自身 drain 退出（等待窗口 15 秒），只有它未响应而必须强制结束进程树时才需要管理员权限。用户未登录时任务不会运行，HTTP、WebSocket 等监听也不可用，外部系统需要重试或持久化事件。Linux 用户单元使用 `Restart=always`，macOS LaunchAgent 使用 `KeepAlive`；进程重启后宿主按 lease 收敛中断中的 Execution。
+## 3. 权限边界
 
-Windows IPC 命名管道在启动时显式授权当前用户 SID、SYSTEM 与管理员，并采用中完整性标签，使同一用户的普通权限 CLI/TUI 可以连接最高权限 Daemon；不授予其他普通账户访问权。连接后的工具执行继承 Daemon 的最高权限，因此本地同一用户客户端也属于可信边界。
+- Daemon 以安装时的用户身份运行，继承该用户的 PATH、环境变量与权限；管理员用户的 Daemon 与其工具具有管理员权限。
+- 同一用户下的普通权限命令行与终端可以连接管理员权限的 Daemon，因此**本机同一用户属于可信边界**；如果机器上有其他用户，请限制网关端口的可达范围。
+- 高风险操作仍需你在客户端确认；权限裁决在服务端完成，客户端无法绕过。
 
-订阅客户端用「阻塞写 + 非阻塞轮询读」完成握手与持续推送，从而在 Daemon 卡死时按截止时间失败返回而不是永久阻塞。Windows 命名管道的 `PIPE_NOWAIT` 切换在管道尚未完全建立或处于繁忙状态时会瞬时失败（`ERROR_PIPE_BUSY`/`ERROR_NO_DATA`/`ERROR_PIPE_NOT_CONNECTED`）：这类管道状态错误在截止时间内重试，超期仍失败才返回最后一次真实错误——既不把可恢复状态当成硬故障，也不突破超时契约。
+---
 
-运行数据统一位于用户级 `~/.axon/data`（Windows 为 `%USERPROFILE%\\.axon\\data`）；安装目录只保存 `versions/<CLI版本>`、稳定 launcher 与 `current.json`，不承载数据库或日志。升级前会停止受管 Daemon 和桌面端，再替换对应 CLI 版本目录，避免同一版本重复安装产生随机目录。具体文件路径仍由配置根解析，不应由外部调用方拼接数据库文件名或内部 Session ID。源码覆盖安装会直接清理旧安装目录下遗留的 `data` 目录。
+## 4. 外部事件接入
 
-## Interaction 流程
+外部系统（工单、告警、审阅等）可以把自己的事件投递给 Axon，转成一次正常的输入：
 
-```text
-SubmitInteraction
-  -> durable append / idempotency
-  -> PrimaryTurnService claim
-  -> workspace resolution
-  -> InteractionTurnRunner
-  -> Answer 或 Goal transaction
-  -> Interaction terminal state
-```
+| 路由 | 用途 |
+| --- | --- |
+| `POST /gateway/v1/events` | 通用信封，由报文声明来源渠道 |
+| `POST /gateway/v1/events/{provider}` | 发送方已完成归一化，报文体即约定结构 |
+| `POST /gateway/v1/events/{provider}/raw` | 发送方原样投递，由 Axel 侧的解析脚本归一化 |
 
-CLI 与 TUI 不再自行运行前台 turn：它们只提交 Interaction 并订阅 Daemon 事件流，Provider 执行与 lease 领取只发生在 Daemon 内。前端源码中不允许出现 Daemon 专有的领取与执行入口，该约束由源码守卫测试固定。
+凭据有两种通道，命中任意一种即通过：`Authorization: Bearer <token>` 请求头，或 URL 查询串 `?api_token=<token>`。查询串通道是为只能填 URL 的发送方准备的（典型是 Jira Server 的 WebHook 配置界面）；由于 token 会出现在 URL 里，它只应在受信内网或反向代理之后使用，并避免在中间层记录完整 URL。密钥管理接口只认请求头，不接受查询串。
 
-## 外部事件入口
+以 Jira Server 为例，WebHook 地址填 `http://<axon 主机>:3143/gateway/v1/events/jira/raw?api_token=<token>` 即可，Jira 侧不需要配置任何请求头。
 
-Gateway 把外部系统的事件收敛为同一条 durable Interaction 输入，不新增存储、队列或执行路径。事件入口有三条路由：
+**监听地址**
 
-- `POST /gateway/v1/events`：通用信封，语义与既有实现一致，`sourceChannel` 由报文指定，不调用 provider 解析脚本。
-- `POST /gateway/v1/events/{provider}`：provider 已完成归一化的信封，报文体即脚本输出契约。
-- `POST /gateway/v1/events/{provider}/raw`：provider 原生 Webhook 报文，交给该 provider 的 `parser.py` 归一化。
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `remote.gateway.http_bind` | `127.0.0.1:3143` | HTTP 与外部事件入口 |
+| `remote.gateway.websocket_bind` | `127.0.0.1:3144` | 事件流订阅 |
 
-三条路由共用既有鉴权、连接限额与入站上限。凭据有两个通道，任一命中即通过：`Authorization: Bearer <token>`，或 URL 查询串 `?api_token=<token>`。查询串通道是为无法配置 HTTP header 的发送方（典型是 Jira Server WebHooks，其配置界面只能填 URL）准备的；它不做百分号解码，token 必须由 URL 安全字符构成。由于 token 会出现在 URL 里，该通道应只在受信内网或反向代理之后使用，并避免在中间层记录完整 URL。多 Key 管理面（`/api/v1/keys`）只认 `Authorization` 头，不接受查询串。provider 名只允许小写 ASCII 字母、数字、`-` 与 `_`；未注册的 provider 直接按 404 拒绝，不进入耐久存储。
+需要跨网段投递时，把 HTTP 入口改为 `0.0.0.0:3143` 并在主机防火墙放行该端口；事件流同理改 `websocket_bind` 并放行 3144。端口一旦暴露到网络上，token 就是唯一门槛，务必使用高强度随机值。是否启用 TLS、对外开放到哪一层，由部署方的网络策略决定。
 
-以 Jira Server 为例，WebHook 地址填 `http://<axon 主机>:3143/gateway/v1/events/jira/raw?api_token=<token>` 即可，Jira 侧无需任何 header 配置。
+桌面端只需要填一个 HTTP 地址：它先用该地址询问服务信息，再从状态接口拿到事件流端口，因此两个协议面绑在不同端口时客户端不需要额外配置。
 
-监听地址由两条配置项决定：`remote.gateway.http_bind`（默认 `127.0.0.1:3143`）与 `remote.gateway.websocket_bind`（默认 `127.0.0.1:3144`）。需要被跨网段的外部系统投递时，把 HTTP 入口改为 `0.0.0.0:3143`，并在主机防火墙上放行该端口的入站规则（例如开放 TCP 3143 端口）；事件流同理，把 `websocket_bind` 改为 `0.0.0.0:3144` 并放行该端口。端口一旦暴露在网络上，凭据就是唯一访问门槛，务必使用高强度随机 token。要用 TLS 还是明文、对外开放到哪一层，由部署方的网络与运维策略决定，程序本身不加额外的网络层限制。
+**请求体上限**：普通接口按路由判定，未登记的路径统一按 4 MiB 收体；声明了长度且超限直接返回 413，分块传输但未声明长度的返回 411。附件上传的文件本体上限 64 MiB（另有少量 multipart 固定开销）。并发入口打满时返回 429 与 `gateway_busy`，不会排队到无限等待。
 
-桌面端**只填一个 HTTP 地址**即可连接：它先用该地址请求 `/api/v1/meta`，再从 `GET /api/v1/system/status` 的 `webSocketPort` 拿到事件流端口，把 WebSocket 请求指到同一主机的该端口上。因此后端把两个协议面绑在不同端口时，客户端不需要额外配置，也不需要中间层做端口归一。细节见 [安全基线](./security-baseline.md)。
+---
 
-`/api/v1/*` 的正文上限按**每路由**分别判定，未登记的路径统一按 4 MiB 收体（不回落到 router 级的既有上限）。判定顺序固定：先按 `(方法, 路径)` 查表，声明了 `Content-Length` 且超过该路由上限的，在读体之前直接 413；声明了分块传输又没有长度的返回 411；两者都没有的视为无正文，因此 GET、HEAD、DELETE 不受影响。附件上传的文件本体上限是 64 MiB，其请求体上限为 64 MiB 加 8 KiB 的 multipart 固定开销，文件字节数只在读体过程中判定。
-
-配置、密钥、模型发现、MCP、技能、人设与准则这些原先由桌面端直接读写本机文件的族，现在都有对应的 `/api/v1/*` 路由，桌面端因此不再直连本机配置文件、`.env`、`.mcp.json`、`SOUL.md`、`AGENTS.md` 与技能目录。后端自报支持哪些族由 `GET /api/v1/meta` 的 12 个能力位给出，运行态摘要由 `GET /api/v1/system/status` 给出（租约、排队、远端适配器、构建版本、服务器时间）。
-
-两条入口的接入路径都不承载单个慢客户端的等待，这条并发契约必须保持：HTTP 面由 axum（hyper + tokio）承载，框架负责连接循环与请求解析，网关自身不再持有固定数量的工作线程；请求头解析、正文读取与 durable 入站中的同步部分（运行态存储读写、provider 解析脚本、事件落库）一律在阻塞池执行，因此慢请求只占阻塞池的一个名额，不会停掉整条接入面。阻塞池并发上限 64，排队预算 5 秒，超时返回 429 `gateway_busy`；内核连接许可（默认 256）仍然是更外层的准入。WebSocket 入口的全部连接共享单线程 runtime，durable 桥调用（事件提交、订阅重放）同样只在阻塞池执行，连接收口先关闭事件接收端再回收投影线程。
-
-WebSocket 的 `event` 帧包含 `subscribeId`、`event_type`、`payload_json`、`cursor` 与布尔字段 `replay`。初始订阅和断流补偿中读取的 durable 历史事件使用 `replay: true`，实时流转发使用 `replay: false`。客户端应照常显示回放内容，但仅对实时终态发送新结果提示，避免切换会话或重连后反复推送历史通知。订阅一个**已经终态**的 Interaction 时，这次回放还会在全部 durable 事件之后补一条 `interaction.status` 终态帧（`payload` 为状态字符串，`replay: true`，无 `cursor`）：终态平时只由实时通道在状态跃迁时发出，早已结束的回合不会再跃迁，缺了这条帧客户端就没有收口依据；`received` 与 `processing` 不补，由实时跃迁给出。
-
-provider 内容资产位于 `~/.axon/events/{provider}/`，目录名即 provider 名，其中 `parser.py` 必填、`sop.md` 可选。仓库内只保留输出契约 `crates/axon-daemon/src/infrastructure/event_script_schema.json` 与测试夹具，不存放任何 provider 业务脚本；新增外部系统只需新增目录，Rust 代码零改动。
-
-解析脚本从 stdin 读取 UTF-8 JSON `{provider, received_at_ms, payload}`，向 stdout 写出 `{event_id, correlation_key?, title, content}`。`event_id` 必须带 `{provider}:` 命名空间，且不得掺入接收时间或随机数，否则 durable 幂等键失效。脚本以非交互方式启动：环境变量清空后只注入白名单项与 `PYTHONUTF8=1`，拿不到任何凭据；超过 2 秒按超时终止并整树回收进程。脚本缺失、崩溃、超时或输出不合契约时事件一律 fail-closed 丢弃并留下审计行，分别返回 404 / 504 / 502。
-
-归一化后的事件在进入 durable ingress 前有两条增强：`content` 超过 4000 个 Unicode 字符时原子归档为 `~/.axon/data/archive/*.md`，Interaction 正文只保留包含归档路径与 `sop.md` 路径的简报，由主 turn 用 `builtin.read_file` 按 offset/limit 分页读取；带关联键的事件（provider 路由未显式给出时回落为 `event_id`）按该键做 3000ms 滑动窗口合并，窗口内的同类事件只唤醒主 turn 一次。事件有效期 24 小时，过期事件按既有策略拒绝。事件 durable 入账成功后立即唤醒主 turn，与 CLI/TUI 的 IPC 提交走同一条唤醒路径，不再依赖 1 秒维护定时兜底；被防抖吸收或幂等命中的提交不产生新记录，因此也不重复唤醒。
-
-外部事件没有调用方 cwd，因此固定绑定 Daemon `--root` 工作目录派生的 Workspace：该 Workspace 由守护进程启动时注册，与 CLI、cron 提交侧的契约一致（提交方负责注册，主 turn 只按 id 查找），未注册时主 turn 会在打开运行时阶段拒绝事件。事件驱动的工作都在这个工作区内进行，仓库操作由 `sop.md` 用绝对路径表达，引擎不为外部事件引入第二套执行身份。
-
-## Turn 投影时序
-
-Turn 执行过程中，Daemon 按 Provider 生产顺序消费 wire 事件。正文与推理增量、用量、供应商状态只走内存实时通道：订阅者收到即渲染，不写库、不带 cursor、不推进重放水位，慢消费者丢帧也不阻塞本轮。落库只发生在语义边界（工具调用前后、流结束、轮次收口）：边界上先把累积的正文压成一条快照事件（同一 part 的整段文本），再提交该语义事件，因此每个边界一次事务。回放读的是边界快照：整段正文仍可重建，但不再逐帧回放打字过程。Interaction 的实时帧与终态收口都在同一事务内校验当前 processing lease；supervisor 收口为 interrupted 后，旧 worker 的 delta、usage 或 completed 事件不会再进入 durable sequence。
-
-Provider 的每次成功流固定产生 `StreamingStarted -> delta/reasoning/usage/tool -> StreamingCompleted`。整轮收口只追加记忆、技能、治理、运行错误、canonical assistant 等不可由实时增量替代的稳定快照，最后追加唯一 terminal `RunLifecycle`，再写入 `turn_completed`。实时 reasoning、tool、file、plan 与 usage 不在收口阶段重建；投影异常也不会把旧过程事件迟到插回日志。CLI/TUI 与 Gateway 订阅在同一 Workspace lane 回放时均按 `interactionId` 过滤，并直接消费 durable sequence，不建立第二套重排或完成门禁。
-
-整轮的顺序契约是 `canonical assistant -> foreground/run completed -> turn_completed`。canonical 终止事件（最终 assistant 与 terminal `RunLifecycle`）在同一批 `publish_batch` 内原子提交；该批次失败必须终止本轮并形成结构化失败结论，禁止在 durable 缺口上继续写入 `turn_completed`。成功但无正文的回合仍提交 canonical assistant（内容为空），因此该契约对所有成功回合都成立。
-
-文件差异在工具执行过程中按稳定 part ID 更新：流式参数只能形成预览，工具回执产生的实际结果会在同一实时序列中原地替换预览。终态收口不重新创建旧 `ToolCall`、`ToolResult` 或 `FileChange`。
-
-`axon run` 通过同一 Daemon durable/realtime 订阅链路接收当前 Interaction 的过程 wire 事件并等待 `turn_completed`；Text 模式会把 assistant 增量实时写到 stdout，canonical 终态用于完整性校验与缺失正文兜底，JSON 模式保持终态 JSONL 契约。
-
-## 启动快照复用
-
-Daemon 是长驻进程，`CliProviderTurnRunner` 持有进程级 `StartupSnapshotCache`：启动后立即在后台线程按运行态根目录预热首份启动快照，主 turn 直接复用，不再每轮现场重建 Principal、Personal Memory、User Agents、Workspace 指令、Skill catalog 与 MCP registry。
-
-缓存以「规范化 config 路径 + 规范化 cwd」为键，最多保留 4 条，每条记录带 TTL 与资源指纹。TTL 内直接命中且不做任何文件扫描；TTL 到期后先计算轻量指纹（用户级与工作区 AGENTS.md、`.mcp.json`、`.axon/skills`、用户级 memory 存储目录的 mtime / 大小 / 条目数）：指纹不一致，**或上一次快照存在探测失败的 MCP server**，都会重建；两者都不成立才只续期。缓存缺失或构建失败时返回 `None`，本轮自动回退到现场构建，语义与未接入缓存前完全一致。
-
-指纹只做元数据扫描，不读取文件内容，且目录深度与条目数都有上限，避免异常目录拖慢 turn。
-
-显式刷新走 IPC 命令 `RefreshMcpCapabilities { cwd }`：Daemon 清除该运行态根目录的 MCP 健康负缓存，作废对应 Workspace 的快照条目，再在后台以**绕过健康负缓存与 schema 缓存**的方式重建快照。TUI `/mcp` 与 OAuth 授权成功后的自动刷新都会提交该命令，因此恢复的 MCP 工具在下一轮 turn 就进入 Provider 工具表，而不是只刷新前端目录。该命令由 IPC 层直接处理，不进入 `DaemonHost` 的命令分发；探测在后台线程执行，IPC 不等待，下一次 `acquire` 会等这次构建结束后复用其结果。
-
-## 健康与容量
-
-`axon daemon health` 通过 `GetHealth` IPC 读取内部聚合指标，覆盖 Interaction、Goal、Execution、投递积压与实时事件流订阅数，不要求调用方提供 Session ID，也不暴露 Session、lease 或 generation 管理入口。
-
-`streamSubscribers` 是当前实时事件流订阅数。网关一条连接可以并存多路订阅（主会话车道流与子代理会话流各占一路），因此这个数就是「Daemon 侧此刻在为几路订阅投递事件」；窗口在会话之间切换、关闭子代理视图之后它必须回落，是订阅是否真的释放的唯一可观测判据。
+## 5. 健康检查
 
 ```text
 axon daemon health
 ```
 
-容量、故障与恢复验收（均使用真实 SQLite 事实源与真实 DaemonHost，只把 Provider 执行替换为本地执行器）：
+输出当前聚合指标：后台工作积压、投递积压与实时事件流订阅数。其中 `streamSubscribers` 是「此刻正在为几路订阅投递事件」，在桌面端切换会话、关闭子代理视图之后应当回落，它是订阅是否真正释放的唯一可观测判据。
 
-```powershell
-cargo test -p axon-daemon --release daemon_host_capacity -- --ignored --nocapture
-cargo test -p axon-daemon --release daemon_host_soak -- --ignored --nocapture
-bash tools/verify-daemon-restart.sh           # 真机重启接管，需 REAL_DEVICE=1
-```
+---
 
-Windows 实测基线（`--release`，1k/10k backlog 与 8 线程并发入口）：
+## 6. 数据位置与保留
 
-| 场景 | P50 | P95 | 总耗时 | 常驻内存 | WAL |
-|---|---|---|---|---|---|
-| 1k backlog | 1.78ms | 2.65ms | 1.94s | 8.96MB → 9.84MB | 4.14MB |
-| 10k backlog | 2.22ms | 3.51ms | 23.34s | 11.61MB → 11.87MB | 4.17MB |
-| 并发入口 8 线程/1000 动作 | 1.19ms | 1.62ms | 2.29s（另有 2.04s 结算） | 8.87MB → 13.63MB | 4.15MB |
+- 运行数据统一位于用户级运行根目录（Windows 为 `%USERPROFILE%\.axon\data`），安装目录只放版本目录、稳定入口与指针文件，不承载数据与日志。
+- 事件保留按会话状态区分：仍在推进的会话保留最近 200 条作为续跑锚点，其余按 7 天窗口回收；已终结的会话按时间窗全量回收。回收前先归档，归档成功才删除。
+- 事件正文超过单条阈值时外置到归档目录，主记录只留引用，因此历史会话的整段正文仍可重建，不为逐帧打字过程付存储代价。
+- 磁盘水位淘汰在时间清理之后执行：硬上限 4 GiB，高水位 3.2 GiB，低水位 2 GiB，只淘汰一小时以前且不属于运行中会话的事件。
+- Daemon 每 30 秒采样一次自身内存与 CPU，样本按天写入运行根的 `resource-metrics/` 下，保留 3 天；连续多次越过高水位才输出一条告警日志，避免抖动刷屏。
 
-事实源存储策略固定为：进程内连接池 + WAL + `synchronous=FULL`。`synchronous=FULL` 是因为已提交的外部副作用事实必须承受断电级故障，崩溃恢复只依赖已提交记录，不做重放猜测。写事务统一使用 `TransactionBehavior::Immediate`，使写锁争用落到 `busy_timeout` 上而不是立即返回 `SQLITE_BUSY`。写锁等待上限生产默认为 5 秒；`SqliteRuntimeStore::with_busy_timeout` 允许注入更小的上限，使「超过等待上限后有界失败且不留下幽灵 claim」的确定性验证不必空转完整生产超时。WAL 体积有硬上限：连接统一设置 `journal_size_limit = 64 MiB`，并显式钉住 `wal_autocheckpoint = 1000` 页。没有上限时 WAL 会随每次写入增长到与主库同量级（实测 708 MiB / 703 MiB），一次 checkpoint 需要回写整库并独占写锁数十秒，所有写者按 `busy_timeout` 排队失败。
+---
 
-### 事件正文外置与归档
+## 7. 升级与恢复
 
-`session_events.payload_json` 只承载定长元数据：流式帧（`wire_event`）一律外置，其余事件正文超过 4 KiB 才外置。外置正文按会话追加写入 `data/archive/session-events/<session_id>/<分片>.jsonl`（每 2000 个序号一片），表里保留 `payload_ref`，形如 `<session_id>/<分片>.jsonl@<偏移>+<长度>`，回放时按偏移取回。单条 desktop 车道一天数十万帧，分片让文件数与「会话数 × 保留窗口内分片数」成正比，不会退化成百万小文件。
+- 版本切换是原子的，升级前会先停止受管 Daemon 与桌面端，再替换版本目录，因此同一版本不会装出随机目录。
+- 进程崩溃后由系统服务自动拉起；被中断的后台工作在重启后自动收敛，能续的继续，状态不可判定的显式收敛为「状态未知」，不会对非幂等操作做盲目重放。
+- 网络断开时按指数退避重连，待投递事件排队等恢复后补投，并做幂等去重。
+- 关闭命令行或终端不影响已提交的后台工作，重新接入后从上次的位置继续读。
 
-`session_events` 增量追加 `interaction_id` 列并建 `(session_id, interaction_id, sequence)` 联合索引：带 Interaction 租约的写入把归属落列，历史帧据此只读目标交互自己的帧，不再扫整条会话。老记录该列为空串，读取侧自动回退整会话扫描。外置正文读取失败（缺失、非法名、权限、编码）只把该帧降级为 `archive_missing` 占位并带 `archiveError`，单帧损坏不拖垮整页；清理任务按活跃会话渐进修复悬空 `payload_ref`，改写成内联占位并清空引用，且只在正文文件确实不存在时才改写：该更新不可逆，可恢复或可诊断的临时读取故障只由读取侧降级，不在这里判成永久丢失。
+---
 
-清理走「先归档再删行」：过期事件按 lane 追加写入 `data/archive/session-events/<session_id>.jsonl.zst`（zstd 多帧串联，可分批中断），归档成功后才删除对应行。分片被同一会话的多条事件共用，单条行过期不删整片，由会话族清理统一回收；只有确认删除的行才回收其独占外置正文，整批回收会在并发删除时误删仍被其他行引用的文件。删除与回执由单条 `DELETE ... RETURNING` 一次完成，先查后删会在两条语句之间留出并发窗口，让调用方分不清谁真的被删了。该目录整体排除在 3 天文件保留期之外。归档目录与事件正文外置目录同一处，备份与清理只需看一个路径。
+## 8. 相关文档
 
-磁盘水位淘汰在时间维度清理之后执行，常量先写死：硬上限 4 GiB、高水位 3.2 GiB、低水位 2 GiB；只淘汰一小时以前且不属于运行中 lane 的事件，同样先归档再删除，随后由 `incremental_vacuum` 归还空闲页。上限按实测高负载口径留出余量（desktop 车道单日约 400 MiB，7 天约 2.8 GiB），避免水位淘汰先于 7 天保留期触发，把保留窗口悄悄缩短。
-
-事件保留窗口按会话状态区分：仍在推进的会话保留最近 200 条事件作为续跑锚点，其余事件按 7 天窗口回收；已终结会话不再有 sequence 回退风险，事件按时间窗全量回收。会话根记录的回收同时覆盖 rollout 索引与运行态两侧，避免不在 rollout 索引里的子代理与历史 desktop 车道永久滞留。
-
-### 进程资源遥测
-
-守护进程每 30 秒采样一次自身常驻内存与 CPU，样本按日历日分片追加写入 `data/resource-metrics/samples-<YYYY-MM-DD>.jsonl`，单条记录含 `sampledAtMs`、`pid`、`rssBytes`、`cpuPercent`、`totalMemoryBytes`、`highWaterBytes`、`rssRatioPercent`。样本与日志同族，按 3 天文件保留期回收。
-
-采样只落盘、不逐条打日志；连续 3 次越过水位才输出一条 WARN 遥测，避免抖动刷屏。内存高水位取物理内存的八分之一并夹在 768 MiB 与 4 GiB 之间，与桌面端 UI 失败看门狗同一口径；CPU 高水位为单核 80%。WARN 行以 `[resource-telemetry]` 开头并自带完整 JSON 样本，可直接按时间轴还原增长曲线：
-
-```powershell
-Get-ChildItem "$env:USERPROFILE\.axon\data\resource-metrics" -Filter 'samples-*.jsonl' |
-  Get-Content |
-  ForEach-Object { $_ | ConvertFrom-Json } |
-  Sort-Object sampledAtMs |
-  Select-Object -Last 20 sampledAtMs, rssBytes, cpuPercent
-```
-
-## 升级与恢复边界
-
-launcher 和服务管理模块提供版本原子切换、心跳保活与进程生命周期管理。守护进程支持崩溃后由系统服务自动拉起，对超期的 Execution 租约执行自动接管；当外部副作用执行状态未知时自动收敛至 `uncertain` 保护状态，杜绝非幂等副作用的盲目重复执行。网络断开时具备指数退避重连、待投递事件排空与消息幂等去重能力。
-
-执行期的租约由工作线程自行续约：领取 Action 时写入租约到期时间，随后在整轮执行期间按租约时长的一半周期续租一次（每次一条按主键的 UPDATE，命中 `jarvis_executions` 主键），轮次收口即停表，空闲期不占线程也不产生写入。因此「一轮跑得比租约久」不会再被判成超期：只有工作线程真的消失（进程崩溃、Host 换代或取消请求）时，supervisor 才会把仍在 `running` 的执行隔离为 `uncertain`。续租条件不成立（租约已被他人接管或已过期）时工作线程立即停止续租，不重试。
-
-后台 Execution 的逐字稿写在它绑定的运行时会话里（`goal-session-<goalId>` 这类标识）；被隔离为 `uncertain` 的执行只有一条终态记录，回看该会话时是空态而不是伪造的正文。
-
-## 相关文档
-- [系统概览](./overview.md)
-- [核心概念](./concepts.md)
-- [开源贡献与分层架构](../CONTRIBUTING.md)
+- [系统概览](./overview.md) - 产品定位与能力边界
+- [核心概念](./concepts.md) - 会话、轮次与后台工作
+- [配置参考指南](./configuration.md) - 网关与监听地址配置
+- [安全基线](./security-baseline.md) - 凭据、传输与访问边界
+- [故障诊断与自愈](./troubleshooting.md) - 服务异常时先做什么

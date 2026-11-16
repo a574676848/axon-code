@@ -26,8 +26,8 @@
 
 #### axon-desktop 桌面端开发约束 (必须执行)
 
-* **UI 任务前置必读 (CRITICAL)**：任何涉及 `crates/axon-desktop/ui/**` 或桌面端渲染逻辑的任务，**第一个动作**必须是完整阅读 `docs/ui-constraints.md` 与 `docs/workbench-design-system.md`，并按 `docs/ui-constraints.md` 第 8 节的开工检查表逐项确认。**未读不得修改任何界面代码**；新增颜色、字号、圆角、状态或组件形态时，必须先改这两份文档，再改实现。
-* **先确认规范与 Skill，再动工**：开工前先确认是否存在相关的设计与前端开发 Skill（如 `frontend-ui-ux`），存在则加载并严格遵循其规范。仓库内的 SSOT 同样必须先读：UI 约束看 `docs/ui-constraints.md`；视觉、动效与令牌看 `docs/workbench-design-system.md`；桌面端职责边界与操作手册看 `docs/desktop.md`。禁止另起一套视觉语言、组件体系或交互范式。
+* **UI 任务前置必读 (CRITICAL)**：任何涉及 `crates/axon-desktop/ui/**` 或桌面端渲染逻辑的任务，**第一个动作**必须是完整阅读 `docs/dev/ui-constraints.md` 与 `docs/dev/workbench-design-system.md`，并按 `docs/dev/ui-constraints.md` 第 8 节的开工检查表逐项确认。**未读不得修改任何界面代码**；新增颜色、字号、圆角、状态或组件形态时，必须先改这两份文档，再改实现。
+* **先确认规范与 Skill，再动工**：开工前先确认是否存在相关的设计与前端开发 Skill（如 `frontend-ui-ux`），存在则加载并严格遵循其规范。仓库内的 SSOT 同样必须先读：UI 约束看 `docs/dev/ui-constraints.md`；视觉、动效与令牌看 `docs/dev/workbench-design-system.md`；桌面端职责边界与操作手册看 `docs/desktop.md`。禁止另起一套视觉语言、组件体系或交互范式。
 * **禁止重复实现，先抽共用组件**：同一页面或不同页面之间出现**多处 80% 以上高度一致**的内容与结构时，**禁止**复制粘贴各写一遍，必须先抽象成共用组件（单一实现，差异用 props 或变体参数化）；已经是共用组件的按职责继续下沉，不得用复制绕开抽象。新写一段界面前先检索既有组件是否已覆盖该形态。
 * **优先使用原生能力**：优先用 Tauri 2 与平台 WebView 的原生能力（窗口、菜单、托盘、单实例、文件对话框、剪贴板、通知、IPC 通道等），以及 Axon 既有网关协议与运行态接口取得数据；自研或引入第三方实现必须给出必要性理由。新增依赖按合同逐项登记，禁止为「看起来高级」引入自带样式的组件库、重型状态库或第二套图标体系。
 * **依赖只用稳定版**：严禁 alpha、beta、rc、canary、next、insiders 等预发布线，包括把 Tauri 升到 3.x 预发布。
@@ -64,9 +64,9 @@
 
 **每次改完代码，必须逐项判定 `docs/` 与 `docs/skills/` 是否需要同步更新**；判定为「不需要」时也要在交付说明中给出依据，不得默认跳过。
 
-* **用户面文档**：根 `README.md`、`docs/README.md` 与 `docs/*.md`（CLI 命令、配置键、工具参数契约、守护进程与升级、故障排查等）。
-* **开发者规范**：`CONTRIBUTING.md`、`docs/ui-constraints.md` 与 `docs/workbench-design-system.md`（架构、UI 约束、设计系统与贡献指南）。
-* **索引同步**：新增、重命名或删除文档时，必须同步 `docs/README.md` 的索引条目；坏链会被门禁直接拦下。
+* **用户面文档**：根 `README.md`、`docs/README.md` 与 `docs/*.md`（CLI 命令、配置键、工具参数契约、守护进程与升级、故障排查等）。产品文档只讲用户可见行为，禁止写表名、库名、代码路径、内部模块名、调优常量与实现演进史。
+* **开发者文档**：`docs/dev/**`（存储设计、内部契约、界面规范与重构记录）。界面规范为 `docs/dev/ui-constraints.md` 与 `docs/dev/workbench-design-system.md`，架构与贡献流程见 `CONTRIBUTING.md`。
+* **索引同步**：新增、重命名或删除文档时，必须同步 `docs/README.md`（产品）与 `docs/dev/README.md`（技术）的索引条目；坏链会被门禁直接拦下。
 * **官方 Skill SSOT**：`docs/skills/operate-axon/`（`SKILL.md` 与 `references/*.md`）是随发行包内置的运行时操作手册。凡改动 CLI 命令面与参数、内置工具名与语义、配置键、Skill / Memory / MCP / Daemon / 安装升级行为，**必须同步该 Skill**，并始终以当前 `--help` 与工具回执为事实来源，不写未显示的行为。
 * **安装态副本**：安装脚本把 `docs/skills/` 投放到 `$HOME/.axon/skills/`。只改仓库副本运行时读不到：同步后必须重跑安装脚本（或显式同步安装目录），并核对两份内容一致。
 * **单一事实来源 (SSOT)**：同一事实只在一处定义，其余位置引用；改动核心逻辑或 API 契约时同步更新对应文档，禁止文档与代码分叉。

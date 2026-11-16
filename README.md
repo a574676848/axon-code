@@ -177,10 +177,10 @@ axon usage                                      # 查看 Token 消耗与成本�
   - [Skill 技能系统](./docs/skills.md) - 自定义技能编写与运行态规范
   - [内置工具契约](./docs/tool-schema.md) - 工具参数 Schema 与行为规约
 - **运维与贡献**
-  - [使用统计与成本](./docs/usage-statistics.md) - 监控指标、用量审计与模型计费
+  - [使用统计与成本](./docs/dev/usage-statistics.md) - 监控指标、用量审计与模型计费
   - [故障排查](./docs/troubleshooting.md) - 常见问题诊断与修复建议
-  - [工作台设计系统](./docs/workbench-design-system.md) - 跨平台桌面端极简浅色设计规范与令牌 SSOT
-  - [桌面端 UI 约束规范](./docs/ui-constraints.md) - UI 任务开工前置契约与验收门禁
+  - [工作台设计系统](./docs/dev/workbench-design-system.md) - 跨平台桌面端极简浅色设计规范与令牌 SSOT
+  - [桌面端 UI 约束规范](./docs/dev/ui-constraints.md) - UI 任务开工前置契约与验收门禁
   - [贡献指南](./CONTRIBUTING.md) - 源码架构分层、规范与开发工作流
 
 ## 示例与配置样板
@@ -241,7 +241,7 @@ npm test
 - [行为准则](./CODE_OF_CONDUCT.md)：社区协作的期望行为、适用范围与执行方式。
 - [安全策略](./SECURITY.md)：漏洞报告的私密渠道、支持范围与处理流程。
 - [AGENTS.md](./AGENTS.md)：仓库级开发实施准则，包含质量基线、跨平台约定与发布约束。
-- [桌面端 UI 约束规范](./docs/ui-constraints.md) 与 [工作台设计系统](./docs/workbench-design-system.md)：涉及界面改动时的必读规范。
+- [桌面端 UI 约束规范](./docs/dev/ui-constraints.md) 与 [工作台设计系统](./docs/dev/workbench-design-system.md)：涉及界面改动时的必读规范。
 
 提交前请确认不含本机绝对路径、凭据与运行态产物，并保证文档门禁与架构门禁全部通过。
 

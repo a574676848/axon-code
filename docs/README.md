@@ -1,81 +1,62 @@
 # Axon 文档中心
 
-Axon 是基于 Rust 构建的专属个人智能体（Personal Agent）与战术协同平台，**知你所想，办你所托**（*Knowing Your Intent, Delivering Your Outcome*），融入你的工作区与工作节奏，在每一次交互中持续深化认知。系统严格遵循洋葱架构，在桌面端（Desktop Workbench）、终端交互（Terminal TUI）与无头命令行（Headless CLI）之间复用统一的 Agent 运行时、状态机模型、模型路由与上下文认知体系。
+Axon 是基于 Rust 构建的专属个人智能体（Personal Agent）与战术协同平台，**知你所想，办你所托**（*Knowing Your Intent, Delivering Your Outcome*）。它在桌面工作台、终端界面与命令行之间共享同一套会话、记忆与技能，在每一次交互中持续深化认知。
 
-本页是全部文档的索引。每篇文档只讨论一个主题，互相之间保持链接，便于按需跳转。
+本页只索引**产品文档**：讲用户能看到、能操作、能配置的行为。开发者与维护者文档见文末的开发者入口。
 
 ## 快速导航
 
 按当前目标选择入口：
 
 | 我想… | 先读 |
-|---|---|
-| 了解 Axon 是什么、如何运转 | [系统概览](./overview.md) → [核心概念](./concepts.md) |
+| --- | --- |
+| 了解 Axon 是什么、能做什么 | [系统概览](./overview.md) → [核心概念](./concepts.md) |
 | 尽快装好并跑通第一个任务 | [快速开始](./quickstart.md) |
 | 接入自己的模型供应商 | [配置参考指南](./configuration.md) → [Provider 与模型路由](./providers.md) |
 | 用桌面端或终端界面工作 | [Axon Desktop 桌面工作台](./desktop.md) → [终端 TUI 交互](./tui.md) |
-| 扩展工具、Skill 与 MCP 能力 | [内置工具契约](./tool-schema.md) → [Skill 技能系统](./skills.md) → [MCP 协议集成](./mcp.md) |
+| 扩展工具、技能与 MCP 能力 | [内置工具契约](./tool-schema.md) → [Skill 技能系统](./skills.md) → [MCP 协议集成](./mcp.md) |
 | 管理记忆与长周期认知 | [记忆管理系统](./memory-management.md) |
 | 调整 Axon 的人格与表达 | [人格系统](./persona.md) |
-| 部署、排障与核算成本 | [Daemon 后台守护进程](./daemon.md) → [故障诊断与自愈](./troubleshooting.md) → [使用统计与用量看板](./usage-statistics.md) |
-| 修改桌面端界面 | [桌面端 UI 约束规范](./ui-constraints.md) → [工作台设计系统](./workbench-design-system.md) |
-| 参与源码开发 | [开源贡献指南](../CONTRIBUTING.md) |
-| 排查轮次卡死与执行权回收 | [Turn 生命周期加固](./turn-lifecycle-hardening.md) |
+| 后台常驻、排障与安全边界 | [Daemon 后台运行](./daemon.md) → [故障诊断与自愈](./troubleshooting.md) → [安全基线](./security-baseline.md) |
+| 使用语音输入与朗读 | [语音能力](./voice.md) |
 
-## 1. 概念与架构
+## 1. 概念与使用
 
-理解系统的核心思想、执行拓扑与状态机设计：
+- [系统概览](./overview.md) - 产品定位、三种形态、一次请求的全过程与能力边界
+- [核心概念](./concepts.md) - 会话、轮次、交互、后台工作与工作区
+- [快速开始](./quickstart.md) - 安装、配置向导与首次任务
+- [Axon Desktop 桌面工作台](./desktop.md) - 图形化多会话工作台操作手册
+- [终端 TUI 交互](./tui.md) - 全屏终端操作、状态读数与按键绑定
+- [CLI 命令参考](./cli.md) - 命令、参数与无头自动化运行
 
-- [系统概览](./overview.md) - 系统全景架构、端到端执行流与核心运行机制
-- [核心概念](./concepts.md) - Interaction、Goal、Execution、Session、上下文分层与工具权限
-- [记忆管理系统](./memory-management.md) - 分层认知模型、五类持久化、检索与衰减、生命周期与管理接口
-- [上下文消息契约](./context-message-contract.md) - source、kind、role 三维标记、构造器矩阵、装配顺序与换窗保留边界
+## 2. 配置与模型
 
-## 2. 界面与使用指南
+- [配置参考指南](./configuration.md) - `config.toml` 里你可以改的键与环境约定
+- [Provider 与模型路由](./providers.md) - 多供应商接入、路由与故障切换
+- [人格系统](./persona.md) - 人设格式、模式推导与表达调整
 
-针对不同工作场景的完整操作与配置指南：
+## 3. 后台服务与安全
 
-- [快速开始](./quickstart.md) - 一键安装、源码构建、配置向导与首次任务执行
-- [Axon Desktop 桌面工作台](./desktop.md) - 基于 Tauri 2 的图形化多工作区工作台完全手册
-- [终端 TUI 交互](./tui.md) - Ratatui 全屏终端操作、仪表盘读数与按键绑定
-- [CLI 命令参考](./cli.md) - 完整命令行接口、参数选项与无头自动化运行
-- [配置参考指南](./configuration.md) - `config.toml` 配置项深度解析与环境约定
+- [Daemon 后台运行](./daemon.md) - 服务管理、外部事件接入、健康检查、数据保留与升级
+- [安全基线](./security-baseline.md) - 连接形态、传输信任、凭据与访问边界
+- [故障诊断与自愈](./troubleshooting.md) - 常见症状、判定依据与可执行动作
 
-## 3. 模型与后台服务
+## 4. 扩展生态
 
-大模型接入治理与后台守护进程：
+- [MCP 协议集成](./mcp.md) - MCP 服务器注册、工具发现与 OAuth 授权
+- [Skill 技能系统](./skills.md) - 技能结构、装载规则与编写要点
+- [内置工具契约](./tool-schema.md) - 内置工具的参数、回执与展示契约
 
-- [Provider 与模型路由](./providers.md) - 多供应商接入、负载均衡、容灾 Failover 与 Prompt Cache
-- [Daemon 后台守护进程](./daemon.md) - 网关通信、后台任务执行池、服务管理与原子升级
-- [语音能力](./voice.md) - 云端识别与合成的帧协议、桥状态机、超时背压与可观测面
+## 5. 记忆与语音
 
-## 4. 扩展生态与工具
-
-扩展 Axon 的能力边界：
-
-- [MCP 协议集成](./mcp.md) - Model Context Protocol 标准支持、服务器注册与 OAuth 授权
-- [Skill 技能系统](./skills.md) - 动态工作流加载、自进化机制与 `SKILL.md` 编写规范
-- [内置工具契约](./tool-schema.md) - 文件、Shell、编辑、记忆与交互问答等工具 Schema
-
-## 5. 运维诊断与开发者中心
-
-生产环境观测与源码开发：
-
-- [使用统计与用量看板](./usage-statistics.md) - Token 消耗度量、审计日志与成本核算体系
-- [存储架构重构方案](./storage-architecture.md) - 事件面、控制面与投影面三层重构，替代单一大 SQLite 事实源
-- [存储层现状测绘](./storage-map.md) - 全量存储单元、表、写入路径、PRAGMA 与依赖方向的取证记录（重构附件）
-- [存储重构 WBS](./reconstruction-wbs.md) - 53 个任务的执行分解、依赖关系与里程碑验收
-- [安全基线](./security-baseline.md) - 连接形态与地址分流、TLS 信任来源、两级身份与多 Key 凭据、上传与路径校验、调试面与日志审计
-- [故障诊断与自愈](./troubleshooting.md) - 健康检查 `axon doctor`、常见异常与修复手段
-- [开源贡献指南](../CONTRIBUTING.md) - 代码结构、分层边界、门禁要求与贡献流程
-- [工作台设计系统](./workbench-design-system.md) - 跨平台桌面端极简浅色设计规范与令牌 SSOT
-- [桌面端 UI 约束规范](./ui-constraints.md) - UI 任务开工前置契约、令牌与组件约束、验收门禁与设计终检清单
+- [记忆管理系统](./memory-management.md) - 记忆分类、准入、替代、归档与自愈
+- [语音能力](./voice.md) - 语音输入与朗读的当前状态、状态提示与错误码
 
 ## 6. 示例与配置样板
 
 仓库根目录提供可直接参照的配置与接入样例：
 
-- [`config.example.toml`](../config.example.toml) - 带逐字段注释的完整配置样板，对应用户级配置文件 `~/.axon/config.toml`
+- [`config.example.toml`](../config.example.toml) - 带逐字段注释的完整配置样板，对应用户级配置文件 `$HOME/.axon/config.toml`
 - [`.env.example`](../.env.example) - 环境变量与 API 密钥模板
 - [`mcp_stdio.example.json`](../mcp_stdio.example.json) - MCP stdio 服务器注册样例
 - [`mcp_streamable_http.example.json`](../mcp_streamable_http.example.json) - MCP streamable HTTP 服务器注册样例
@@ -96,8 +77,10 @@ Axon 是基于 Rust 构建的专属个人智能体（Personal Agent）与战术�
 - [贡献指南](../CONTRIBUTING.md) - 开发流程、门禁要求与提交规范
 - [Issue 入口](https://github.com/a574676848/axon-code/issues/new/choose) - 缺陷报告与功能建议的结构化模板
 
+## 9. 开发者入口
+
+界面规范、存储设计、内部契约与重构记录属开发者文档，不属产品说明，单独维护在 [开发者与维护者文档](./dev/README.md)。
+
 ---
 
-详细命令参数请随时运行 `axon --help` 或 `axon <COMMAND> --help` 查看。文档改动需通过 `pwsh -File tools/verify-docs.ps1` 的链接与术语门禁。
-| 重构记忆与反思链路 | [记忆与反思子系统重构设计](./memory-reflection-redesign.md) |
-- [记忆与反思子系统重构设计](./memory-reflection-redesign.md) - 反思链路的现状缺陷、三条线架构、索引卡与攒批、迁移分期
+详细命令参数请随时运行 `axon --help` 或 `axon <COMMAND> --help` 查看。文档改动需通过 `pwsh -File tools/verify-docs.ps1` 的链接、术语与产品文档清洁度门禁。

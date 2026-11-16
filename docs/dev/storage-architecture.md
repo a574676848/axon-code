@@ -1243,7 +1243,7 @@ docs/dev/                  开发者与维护者文档，不属产品 SSOT
 | `configuration.md` | 修订 | 只保留用户可改的键，内部调优项移入 dev |
 | `desktop.md` | 修订 | 功能说明，去掉数据来源的实现叙述 |
 | `tui.md` | 修订 | 补 `/sessions`、`/new`、`/reset` 的用户说明 |
-| `usage-statistics.md` | 产品化重写 | 删掉"rollout.sqlite3 是唯一事实源"这类实现细节 |
+| `usage-statistics.md` | 移入 `docs/dev/` | 统计投影属实现细节，产品侧只保留 `axon usage` 等命令入口 |
 | `troubleshooting.md` | 产品化重写 | 保留用户可执行的动作，删掉 WAL 与写锁的成因分析 |
 | `security-baseline.md` | 核对 | 用户可理解的边界保留，TLS 与凭据实现细节移入 dev |
 | `skills.md`、`mcp.md`、`providers.md`、`memory-management.md`、`persona.md`、`voice.md` | 核对 | 只确认无表名与代码路径 |

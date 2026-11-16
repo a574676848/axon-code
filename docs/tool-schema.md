@@ -33,7 +33,7 @@
 
 写请求体的 `memoryKind`、`summary`、`evidence` 必填。`experience`、`knowledge`、`procedure` 属于 Workspace 记忆，必须额外提供 `workspacePath`（文件夹绝对路径），Gateway 用该目录经 Workspace Registry 派生 namespace 与 `repoRef`；`profile`、`preference` 属于 Personal 记忆，提供 `workspacePath` 会被拒绝。请求体可以是单条对象、对象数组或 `{"records": [...]}` 包装体；批量写入先整批校验再落库，任一条非法都不产生半批记录。未知字段一律拒绝。
 
-所有列表、统计和写操作回执都包含 `needsRepair`，表示文本索引、向量投影或 HNSW 清理是否需要修复；统计回执另含 `legacyRecordTables`，列出升级时归档的旧记录表。
+所有列表、统计和写操作回执都包含 `needsRepair`，表示检索索引是否需要修复；统计回执另含 `legacyRecordTables`，列出升级时归档的旧记录。
 
 ## 计划更新
 
@@ -77,7 +77,7 @@
 - `questions`：向用户提出的问题列表（最多 8 项）；每项包含 `id`、`question`（不超过 512 字符）、可选 `header`、可选 `detail`（不超过 2 KiB）、可选 `options`（最多 20 项，每项含 `label` 与可选 `description`）以及 `multi_select`（布尔值）。
 - `handoff`：可选文本，用户没有及时回答时展示给用户的话。
 - 回执：等到答案返回 `status: answered` 与 `answers`；等待超限返回 `status: suspended` 且 `pending`、`suspended` 均为真；被取消返回 `aborted`。挂起不是同意，也不是跳过。
-- 等待上限、退避与载荷上限是编译期常量（`crates/axon-agent-runtime/src/core/run/user_question_limits.rs`），不是配置键。
+- 等待上限、退避与载荷上限是运行时固定约束，不是配置键。
 - 问答状态以 `WireEventKind::UserQuestion` 事件进入会话流（pending / extended / settled / suspended）；作答入口与未决查询见 [网关 HTTP 参考](skills/operate-axon/references/gateway-http.md)。
 
 ## Goal 工具
@@ -245,7 +245,7 @@ Skill 可以在 frontmatter 中声明禁止模型调用；此类 Skill 由该工
 | 终态（结束 5 分钟内） | 返回 | ✅（幂等，重复查询结果一致） | ❌ 忽略写入与 `ctrl_c` |
 | 终态（超过 5 分钟，已回收） | 返回 | ❌ 提示「已结束并超出保留窗口，请重新执行命令」 | ❌ |
 
-  会话被回收后仍保留 30 分钟墓碑记录，因此凭已回收的 ID 调用会得到**可区分**的提示，而不是含糊的「不存在」——后者只用于从未产生过的 ID。
+  会话被回收后仍保留 30 分钟墓碑记录，因此凭已回收的 ID 调用会得到**可区分**的提示，而不是含糊的「不存在」，后者只用于从未产生过的 ID。
 - `builtin.shell_command` 与 `builtin.write_stdin` 的 `yield_time_ms` 上界同为 **10000 毫秒（10 秒）**（schema 的 `minimum: 0` / `maximum: 10000` 与运行时参数校验同源，超限在参数层直接拒绝并点名该字段）。`shell_command` 的 `run_in_background` 缺省 `false`，但预计运行超过数秒或主线无需立即依赖结果时应主动设为 `true`。此外，当前会话存在尚未结束的后台作业时，前台 `shell_command` 会做上下文感知的纯休眠占位检测（如单独的 `sleep`、`Start-Sleep`、`timeout /t`、`ping ... >nul` 等无实质动作的休眠脚本），命中即在参数边界拒绝；包含后续检查或控制流的正常脚本不受影响。
 - `builtin.write_stdin` 区分 TTY 与非 TTY 会话：在 `Running` 会话上中断时设置 `ctrl_c: true`、写入字符时使用 `chars`（这两类场景以及 `tty: true` 的交互会话允许传入不超过 10000 毫秒的 `yield_time_ms`，缺省 `250` 毫秒）；对仍在运行的非 TTY 会话只传 `session_id`（含空 `chars`）做纯等待时，**不允许传正的 `yield_time_ms` 阻塞等待**（在运行时以 `invalid_arguments` 拒绝），传 `0` 或省略则立即返回当前增量快照。终态会话忽略 `chars`/`ctrl_c` 并幂等返回终态回执。无意义连续空等调用同样计入无进展只读循环守卫。
 - MCP 列表工具使用分页 `cursor` 时，必须同时传递同一 `server`。
@@ -278,13 +278,13 @@ Hashline 头的 apply_patch 噪声剥离：方括号头里混入 `***`、`Update
 
 流式只读预览：编辑载荷在 provider 流式生成期间即被投影为只读 diff 快照。PathDiff 走补信封解析；Hashline 正文只携带新内容，因此预览会按**当前工作区文件内容**渲染真实前后对比（与 omp 的 `applyPartialTo(text, …)` 同思路）。预览全程只读且容错：目标文件缺失、section 标签陈旧、操作尚未写完时对应文件被跳过，不发出任何事件；读取被限制在工作区内（拒绝绝对路径与父目录跳转，只接受一般名称组件）。
 
-read_file 的多格式投影：除纯 UTF-8 文本外，已支持 Notebook、PDF、Word、Excel、PowerPoint、压缩包安全清单，以及 **SQLite**（`.db`/`.sqlite`/`.sqlite3`）。SQLite 以 `SQLITE_OPEN_READ_ONLY` 只读打开，投影「对象清单 + schema + 每表有界数据行」（对象数、行数、列数与单元格长度均有界，输出再经统一上限收敛），**绝不创建、修改或写入目标文件**。所有派生文档都不产生 Hashline 快照与 seenLines，因此不能直接参与 Hashline 编辑。
+read_file 的多格式投影：除纯 UTF-8 文本外，已支持 Notebook、PDF、Word、Excel、PowerPoint、压缩包安全清单，以及 **SQLite 数据库文件**。SQLite 以只读方式打开，投影「对象清单 + schema + 每表有界数据行」（对象数、行数、列数与单元格长度均有界，输出再经统一上限收敛），**绝不创建、修改或写入目标文件**。所有派生文档都不产生 Hashline 快照与 seenLines，因此不能直接参与 Hashline 编辑。
 
-编辑解析回归观测：Hashline 写入后，运行时用既有 tree-sitter 语法判断该文件是否由「可解析」变为「解析失败」，**只有本次编辑引入回归时**才在回执 `warnings` 追加 `[解析回归] <path> 由本次编辑从「可解析」变为「解析失败」（约行 X-Y）`。肇事区取所有 ERROR / MISSING 节点行范围的并集，向两侧扩 6 行上下文；跨度超过 150 行时退回错误节点原始范围。该观测**不阻断写入、不自动改写文件**，修复决策留给上层与模型；未知扩展名（无可用语法）时跳过判定而不报错。配套的修复接受判据（供上层使用）：候选内容必须重新解析成功，且**不得**是整段回退到编辑前文本 —— 只满足其一都会被拒绝（前者防"删干净蒙混"，后者防"接受仍然坏的候选"）。
+编辑解析回归观测：Hashline 写入后，运行时用既有 tree-sitter 语法判断该文件是否由「可解析」变为「解析失败」，**只有本次编辑引入回归时**才在回执 `warnings` 追加 `[解析回归] <path> 由本次编辑从「可解析」变为「解析失败」（约行 X-Y）`。肇事区取所有 ERROR / MISSING 节点行范围的并集，向两侧扩 6 行上下文；跨度超过 150 行时退回错误节点原始范围。该观测**不阻断写入、不自动改写文件**，修复决策留给上层与模型；未知扩展名（无可用语法）时跳过判定而不报错。配套的修复接受判据（供上层使用）：候选内容必须重新解析成功，且**不得**是整段回退到编辑前文本，只满足其一都会被拒绝（前者防"删干净蒙混"，后者防"接受仍然坏的候选"）。
 
 陈旧快照恢复（Hashline）：读取后文件被外部改动时，运行时会尝试把编辑重放到当前内容上，但要求所有锚点的位移**完全一致**（等价于 line-map 上的一次整体平移），并对决定位移的锚点做邻域校验：锚点行值唯一时至少一侧邻居逐行一致，行值重复时两侧都必须一致；后续锚点改为按已确定位移直接逐行核对。任一条不满足即 fail-closed，回执要求重新读取文件，绝不猜测位置。
 
-Lazy 块内的漏写前缀容错：当某个 `*** Update File:` 块内出现独立 Lazy 边界时，该块中漏写行首前缀的正文行在输入规范化阶段被补一个空格并按上下文行处理，`+`、`-` 与空格前缀的既有语义不变。Lazy 占位符本身、`@@` 变更上下文、Markdown 代码围栏、Hashline 头（`[path#TAG]`）与 shell 命令原文一律不参与补正，仍由解析器硬失败，以保证定向诊断不被吞掉；未出现 Lazy 边界的严格块保持原样硬失败。该容错由 `crates/axon-agent-runtime/src/agent/agent_run_tool_args_edit_normalize.rs` 的 `pad_lazy_update_block_lines` 实现。
+Lazy 块内的漏写前缀容错：当某个 `*** Update File:` 块内出现独立 Lazy 边界时，该块中漏写行首前缀的正文行在输入规范化阶段被补一个空格并按上下文行处理，`+`、`-` 与空格前缀的既有语义不变。Lazy 占位符本身、`@@` 变更上下文、Markdown 代码围栏、Hashline 头（`[path#TAG]`）与 shell 命令原文一律不参与补正，仍由解析器硬失败，以保证定向诊断不被吞掉；未出现 Lazy 边界的严格块保持原样硬失败。
 
 ```text
 *** Begin Patch
@@ -315,7 +315,7 @@ Lazy 块内的漏写前缀容错：当某个 `*** Update File:` 块内出现独�
 
 `intent` 是跨工具的展示契约，字段名与写法在所有声明它的工具上完全一致，当前包含 `builtin.shell_command`、`builtin.write_stdin`、`builtin.update_plan`、`builtin.glob`、`builtin.search`、五个 `builtin.notes_*`、`builtin.send_message`、`builtin.delegate_to_fast`、`builtin.memory_search`、`builtin.memory_write`、`builtin.list_agents`、`builtin.list_mcp_resources`、四个 `builtin.history_*` 与六个 `builtin.goal_*` 工具。它只影响展示，不参与执行语义：模型自述目的在参数被截断之前取出，因此再长的脚本、正文或计划都不会把它挤掉；内置工具即使没声明该字段，模型带上时展示层仍按这一句话收口，MCP 工具与第三方 schema 的同名参数不受影响。
 
-两处内容分工固定，改任一处都要同步检查另一处：**写法与长度**（写目标、标点、字数、示例）属单次调用语义，写在该字段的 schema 描述里；**产品态承诺**（每次调用必填、它是这次执行面向用户的说明、不得复述命令）属跨调用约束，写在 `crates/axon-prompts/templates/agent/tool_usage_guidance.md` 的 `<tool_execution_and_receipt_protocol>` 片段里。界面机制（哪一端折叠、哪一端展开）两处都不写。
+两处内容分工固定，改任一处都要同步检查另一处：**写法与长度**（写目标、标点、字数、示例）属单次调用语义，写在该字段的 schema 描述里；**产品态承诺**（每次调用必填、它是这次执行面向用户的说明、不得复述命令）属跨调用约束，写在运行时提示词模板的 `<tool_execution_and_receipt_protocol>` 片段里。界面机制（哪一端折叠、哪一端展开）两处都不写。
 
 输出预算按每次回执的增量批次计算：读取回执会消费当前缓冲，前一批大输出被截断并不意味着最后一批短输出也会截断。`full_output_path` 指向跨批次保留的完整输出归档。截断与归档回归使用真实输出缓冲和自动清理的临时目录，不启动系统 shell。
 
@@ -338,7 +338,7 @@ Shell 输出有**两层独立的上限**，失败表现完全不同，不要把�
 
 模型可见的工具结果与界面收到的事件读的是**同一份**裁剪结果：一次大搜索结果因此只产生有界事件，不会把订阅流撑爆，也不需要传输层另设限制。预算是固定值，不随上下文窗口放大。
 
-Axon 会为每次执行注入模型友好的环境变量：非 TTY 场景注入 `PAGER=cat`、`GIT_PAGER=cat`、`NO_COLOR=1`、`TERM=dumb`；TTY 场景保留 `TERM` 以维持交互式终端能力，但仍注入两个分页器变量。分页器在缺少交互输入时会一直等待，是 `git log`、`man` 等命令挂起的直接成因；该注入覆盖「工具自行按 TTY 决定是否分页」这一类。非交互保障由这组结构化手段共同提供 —— 注入的分页器与色彩变量、无 profile 的 `-NonInteractive` shell 形态、会话的 `timeout_ms` 截止时间与空闲回收、以及 `tty: true` 的独立 PTY 通道；运行时**不对命令文本作词表式判定**：`less`/`more`/`vim`/`ssh`、`docker -it` 之类的写法按普通命令原样执行，不再被预检拒绝。cwd 位于 WSL UNC 路径时，命令由 `wsl.exe` 承载，变量同时经 `WSLENV` 声明后才对 Linux 侧可见。
+Axon 会为每次执行注入模型友好的环境变量：非 TTY 场景注入 `PAGER=cat`、`GIT_PAGER=cat`、`NO_COLOR=1`、`TERM=dumb`；TTY 场景保留 `TERM` 以维持交互式终端能力，但仍注入两个分页器变量。分页器在缺少交互输入时会一直等待，是 `git log`、`man` 等命令挂起的直接成因；该注入覆盖「工具自行按 TTY 决定是否分页」这一类。非交互保障由这组结构化手段共同提供：注入的分页器与色彩变量、无 profile 的 `-NonInteractive` shell 形态、会话的 `timeout_ms` 截止时间与空闲回收、以及 `tty: true` 的独立 PTY 通道；运行时**不对命令文本作词表式判定**：`less`/`more`/`vim`/`ssh`、`docker -it` 之类的写法按普通命令原样执行，不再被预检拒绝。cwd 位于 WSL UNC 路径时，命令由 `wsl.exe` 承载，变量同时经 `WSLENV` 声明后才对 Linux 侧可见。
 
 ```json
 {"command":"git status --short"}
@@ -357,7 +357,7 @@ Axon 会为每次执行注入模型友好的环境变量：非 TTY 场景注入 
 | PTY 交互式会话 | `tty: true` | `session_id` | `Exclusive` | `builtin.write_stdin` |
 | 后台长任务 | `run_in_background: true` | `job_id` | `ParallelSafe` | `builtin.job_output` / `builtin.job_kill` |
 
-**后台子代理是同一类临时 Job**：`builtin.delegate_to_fast` 缺省后台执行（`run_in_background` 默认 true），回执带 `jobId`，其生命周期与 Shell 后台作业完全同构 —— 同一个注册表、同一套 owner 校验、同一保留与墓碑窗口，用 `builtin.job_output` 读取结果与终态、`builtin.job_kill` 完整中断（中止当前 turn → 关闭会话 → 投影统一终态 → 触发完成通知 → 回收）；显式传 `run_in_background: false` 时才走同步路径，直接返回回执且**不产生** `job_id`。该工具的 `intent` 必填（写法与长度同 `builtin.shell_command.intent`）：折叠态只显示这一句话，`task` 原文留在展开态。
+**后台子代理是同一类临时 Job**：`builtin.delegate_to_fast` 缺省后台执行（`run_in_background` 默认 true），回执带 `jobId`，其生命周期与 Shell 后台作业完全同构：同一个注册表、同一套 owner 校验、同一保留与墓碑窗口，用 `builtin.job_output` 读取结果与终态、`builtin.job_kill` 完整中断（中止当前 turn → 关闭会话 → 投影统一终态 → 触发完成通知 → 回收）；显式传 `run_in_background: false` 时才走同步路径，直接返回回执且**不产生** `job_id`。该工具的 `intent` 必填（写法与长度同 `builtin.shell_command.intent`）：折叠态只显示这一句话，`task` 原文留在展开态。
 
 `builtin.spawn_agent` 是模型可见的第二个创建类工具，一律后台执行：`intent`、`task_name`、`task` 必填，`model` 与 `reasoning_effort` 可选。省略两者时子代理继承当前模型、渠道链与思考强度（`modelPolicy: inherit`）；显式给出 `model` 时按模型名重新做渠道均衡选择（`modelPolicy: explicit`），并逐字写进回执。`model` 的取值必须落在环境上下文 `delegatable_models` 通告的清单内，越界在参数层被拒绝并回列可用值；`reasoning_effort` 取 `none|minimal|low|medium|high|xhigh|max`，协议不支持的档位由 provider 协商层按上限收敛而不报错。两个创建类工具都是 `ParallelSafe`，互不依赖的委派可以同批发出。
 

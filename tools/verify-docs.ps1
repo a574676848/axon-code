@@ -135,7 +135,8 @@ $documentRoots = @(
     (Join-Path $WorkspaceRoot "SECURITY.md"),
     (Join-Path $WorkspaceRoot "CODE_OF_CONDUCT.md"),
     (Join-Path $WorkspaceRoot "CHANGELOG.md"),
-    (Join-Path $WorkspaceRoot "docs")
+    (Join-Path $WorkspaceRoot "docs"),
+    (Join-Path $WorkspaceRoot "docs\dev")
 )
 
 $markdownFiles = $qualityFiles | Where-Object {
@@ -196,6 +197,62 @@ foreach ($file in $markdownFiles) {
 
 if ($termHits.Count -gt 0) {
     Fail ("terminology consistency issue detected:" + [Environment]::NewLine + ($termHits -join [Environment]::NewLine))
+}
+
+# 产品文档清洁度：docs 根下的产品文档只讲用户可见行为。
+# 扫描范围排除 docs/dev（开发者文档）与 docs/skills（随发行包内置的运行时手册）。
+$productDocExcludedPrefixes = @(
+    (Join-Path $WorkspaceRoot "docs\dev"),
+    (Join-Path $WorkspaceRoot "docs\skills")
+)
+
+$productDocFiles = @()
+$docsRoot = Join-Path $WorkspaceRoot "docs"
+if (Test-Path -LiteralPath $docsRoot) {
+    $productDocFiles = Get-ChildItem -Path $docsRoot -Recurse -File -Filter "*.md" |
+        Where-Object {
+            $full = $_.FullName
+            $excluded = $false
+            foreach ($prefix in $productDocExcludedPrefixes) {
+                $fullPrefix = [System.IO.Path]::GetFullPath($prefix)
+                if ($full -eq $fullPrefix -or $full.StartsWith($fullPrefix + [System.IO.Path]::DirectorySeparatorChar)) {
+                    $excluded = $true
+                    break
+                }
+            }
+            -not $excluded
+        }
+}
+
+$productTermRules = @(
+    @{ Pattern = "jarvis_"; Message = "implementation-era identifier is not allowed in product docs" },
+    @{ Pattern = "\.sqlite3"; Message = "database file name is not allowed in product docs" },
+    @{ Pattern = "session_events"; Message = "internal table name is not allowed in product docs" },
+    @{ Pattern = "runtime\.sqlite3"; Message = "database file name is not allowed in product docs" },
+    @{ Pattern = "rollout\.sqlite3"; Message = "database file name is not allowed in product docs" },
+    @{ Pattern = "crates/"; Message = "source path is not allowed in product docs" },
+    @{ Pattern = "payload_ref"; Message = "internal field name is not allowed in product docs" },
+    @{ Pattern = "lane_id"; Message = "internal field name is not allowed in product docs" },
+    @{ Pattern = "(?i)\bWAL\b"; Message = "storage internal term is not allowed in product docs" },
+    @{ Pattern = "(?i)\bPRAGMA\b"; Message = "storage internal term is not allowed in product docs" }
+)
+
+$productTermHits = @()
+foreach ($file in $productDocFiles) {
+    $relativePath = Get-WorkspaceRelativePath $WorkspaceRoot $file.FullName
+    $lines = [System.IO.File]::ReadAllLines($file.FullName, $Utf8NoBomEncoding)
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        foreach ($rule in $productTermRules) {
+            if ($lines[$index] -match $rule.Pattern) {
+                $lineNumber = $index + 1
+                $productTermHits += "${relativePath}:${lineNumber}: $($rule.Message)"
+            }
+        }
+    }
+}
+
+if ($productTermHits.Count -gt 0) {
+    Fail ("product documentation still contains implementation detail:" + [Environment]::NewLine + ($productTermHits -join [Environment]::NewLine))
 }
 
 Write-Output "Documentation verification OK"

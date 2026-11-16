@@ -25,8 +25,8 @@ Skill 是 Axon 的可复用工作流，将复杂任务封装为简单的调用�
 
 Skills 按以下优先级加载，同名 Skill 由更高优先级覆盖：
 
-1. `~/.axon/skills/` — 用户级 Axon Skills
-2. `<workspace>/.axon/skills/` — Workspace 级 Axon Skills
+1. `~/.axon/skills/`：用户级 Axon Skills
+2. `<workspace>/.axon/skills/`：Workspace 级 Axon Skills
 
 同名 Skill 只加载 User 版本，不重复加载 Workspace 版本。`docs/skills/` 用于随发行包提供文档与示例，不是运行时搜索路径。
 

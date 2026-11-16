@@ -2,7 +2,7 @@
 
 本文件是 Axon 记忆反思链路（post-run 自我迭代中的 `memory_update` 线）的单一事实源。链路的触发、证据、准入、动作与可见性一律以本文为准；实现与本文冲突时改实现，不改本文，除非先改本文。
 
-记忆存储与检索口径以 [记忆管理系统](./memory-management.md) 为准，人格状态机以 [人格系统](./persona.md) 为准，内置工具字段以 [内置工具契约](./tool-schema.md) 为准；本文不重复定义，只做增量与差异说明。第 9 章给出分期与实现状态，未落地部分按该章推进。
+记忆存储与检索口径以 [记忆管理系统](../memory-management.md) 为准，人格状态机以 [人格系统](../persona.md) 为准，内置工具字段以 [内置工具契约](../tool-schema.md) 为准；本文不重复定义，只做增量与差异说明。第 9 章给出分期与实现状态，未落地部分按该章推进。
 
 ---
 
@@ -453,7 +453,7 @@ turn 收口
 |---|---|---|
 | profile / preference | persistence 7000、utility 7000、scope_confidence 7000 | `evidence_refs` 必须含 `user_message_ref` |
 | experience / knowledge / procedure | verification 7000、utility 6500、specificity 6500 | 至少一条 `runtime_verified=true` 且非 Skill 调用的执行证据 |
-| style | 不经记忆线 | 由人格系统承接，见 [人格系统](./persona.md) |
+| style | 不经记忆线 | 由人格系统承接，见 [人格系统](../persona.md) |
 
 弱档只降低「是否值得跑」的门槛，不降低「是否允许写入」的门槛。弱档反思启动后，准入仍按上表强标准判定：达不到就不写，回执记 `skipped_below_admission`。反思产出不使用治理态 Weak 承接，也不写低置信条目。这样库里每一条反思产物都经过同一套证据与维度门禁，强档与弱档的差别只体现在「跑不跑」，不体现在「写多宽」。
 
@@ -645,7 +645,7 @@ turn 收口
 4. **三态无 UPDATE 会产生多条渐进记录**。同一事实逐步细化时，库里会出现一串相似条目。
    取舍：靠 supersede 链与摘要相似度去重收敛；对齐 episodic 只追加的范式，代价是库体积略增，收益是每条都可解释、可追溯、可回退。
 5. **新增来源枚举属对外契约变更**。HTTP、桌面端与 CLI 都序列化记忆记录。
-   取舍：新增枚举值向后兼容，旧客户端忽略未知值；同步更新 [记忆管理系统](./memory-management.md) 与 [内置工具契约](./tool-schema.md)，避免文档与实现分叉。
+   取舍：新增枚举值向后兼容，旧客户端忽略未知值；同步更新 [记忆管理系统](../memory-management.md) 与 [内置工具契约](../tool-schema.md)，避免文档与实现分叉。
 6. **规则层信号可能被误用**。时段、密度、长度趋势都是启发式，直接硬熔断会误伤。
    取舍：规则层只影响表达策略与反思频率，不改任务执行、不截断内容、不对用户下人格判定；判定理由进告警而非进记忆。
 7. **分段可能切错边界**。工具边界不等于语义边界，一个目标可能横跨两段。
@@ -692,11 +692,11 @@ turn 收口
 
 ## 13. 相关文档
 
-- [记忆管理系统](./memory-management.md)：存储模型、检索投影、生命周期与管理接口
-- [人格系统](./persona.md)：人格分层、状态机、转移表与体积预算
-- [核心概念](./concepts.md)：Interaction、Goal、Execution、Session 与上下文分层
-- [内置工具契约](./tool-schema.md)：内置工具名称、字段与权限级别
-- [故障诊断与自愈](./troubleshooting.md)：运行态取证与常见异常处置
+- [记忆管理系统](../memory-management.md)：存储模型、检索投影、生命周期与管理接口
+- [人格系统](../persona.md)：人格分层、状态机、转移表与体积预算
+- [核心概念](../concepts.md)：Interaction、Goal、Execution、Session 与上下文分层
+- [内置工具契约](../tool-schema.md)：内置工具名称、字段与权限级别
+- [故障诊断与自愈](../troubleshooting.md)：运行态取证与常见异常处置
 
 工具定义要件与其他内置工具完全一致，缺一即视为未完成：
 

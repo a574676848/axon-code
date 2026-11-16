@@ -150,20 +150,9 @@ AXON_PROCESS_RLIMIT_NOFILE=off \
 axon run "…"
 ```
 
-默认值的选取原则是「宽到不影响正常构建，紧到能阻断失控写入与进程爆炸」：`RLIMIT_FSIZE` 远高于单次构建产物量级；`RLIMIT_AS` 默认不限制，因为 rustc/LLVM 在个别 crate 上会用到数 GiB 地址空间，设限会误伤正常构建。PTY 交互式会话（`tty: true`）使用单独一组更宽的限额（`FSIZE` 8 GiB、`NPROC` 16384、`NOFILE` 8192），因为它会自建并行作业编排。
+默认值的选取原则是「宽到不影响正常构建，紧到能阻断失控写入与进程爆炸」：`RLIMIT_FSIZE` 远高于单次构建产物量级；地址空间默认不限制，因为编译器在个别 crate 上会用到数 GiB。交互式终端会话（`tty: true`）使用单独一组更宽的限额（文件 8 GiB、进程数 16384、打开文件数 8192），因为它会自建并行作业编排。
 
-平台差异：
-
-| 维度 | Unix | Windows |
-| --- | --- | --- |
-| 文件大小 | `RLIMIT_FSIZE`，超限进程被 `SIGXFSZ` 终止 | 无等价物，只能依赖 artifact 上限与静态分析 |
-| 进程数 | `RLIMIT_NPROC`（对 root 不生效） | `JOB_OBJECT_LIMIT_ACTIVE_PROCESS` |
-| 打开文件数 | `RLIMIT_NOFILE` | 无等价物 |
-| 地址空间 | `RLIMIT_AS` | `JOB_OBJECT_LIMIT_PROCESS_MEMORY` |
-
-Windows 侧的 PTY（ConPTY）会话不做围栏：`portable_pty` 不返回子进程句柄，无法绑定 Job Object。此外 Windows 的 Job Object 绑定发生在进程启动之后，子进程在该窗口内派生的孙进程不受限额约束。
-
-`setrlimit` 只能**降低**硬限制，因此当容器或宿主已经给了更低的硬限制时，Axon 静默取两者的较小值而不是报错。
+`setrlimit` 只能**降低**硬限制，因此当容器或宿主已经给了更低的硬限制时，Axon 静默取两者的较小值而不是报错。各维度的平台落点与不可拦截的场景见 [子进程资源围栏（开发）](./dev/process-fences.md)。
 
 ### Soul
 
@@ -173,7 +162,7 @@ Windows 侧的 PTY（ConPTY）会话不做围栏：`portable_pty` 不返回子�
 
 `SOUL.md` 使用 `axon-soul/v1` 结构化格式（必填 YAML frontmatter 加可选正文），字段与校验规则见 [人格系统](./persona.md)。不符合该格式的文件不会被装配，回合继续并留下带字段路径的告警；可用 `axon persona validate` 就地校验。
 
-Soul 以独立、可缓存的 session-stable user context 发送，不写入基础 system prompt。修改 Soul 只会更新该 session-stable 段的缓存标识，基础 system prefix 及其缓存命名空间保持稳定。轮后的人格状态写入独立库 `~/.axon/data/persona/persona.sqlite3`，不改变该缓存段。
+Soul 以独立、可缓存的 session-stable user context 发送，不写入基础 system prompt。修改 Soul 只会更新该 session-stable 段的缓存标识，基础 system prefix 及其缓存命名空间保持稳定。轮后的人格状态保存在运行数据里，不影响该缓存段。
 
 ## 面向新用户的最小设置
 
@@ -372,7 +361,7 @@ axon setup --non-interactive --clear-websocket-url --clear-api-key
 | `AXON_LOG_LEVEL` | 日志级别：`trace` / `debug` / `info` / `warn` / `error`（`trace` 等价 `debug`），优先于 `[agent].log_level` |
 | `AXON_LOG_FILE` | 日志输出文件路径；设置后固定写该文件，不再按日期滚动，留空则滚动写入 `<root>/data/logs/axon-<日期>.log` |
 | `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | 代理配置 |
-| `AXON_CONTEXT_COMPRESSION_THRESHOLD` | 上下文自动压缩阈值（0.0–1.0） |
+| `AXON_CONTEXT_COMPRESSION_THRESHOLD` | 上下文自动压缩阈值（0.0 到 1.0） |
 | `AXON_SESSION_AUTOSAVE_INTERVAL` | 会话自动保存间隔（秒） |
 | `AXON_PROCESS_RLIMIT_FSIZE_BYTES` | 子进程单文件大小上限（字节），`off` 或 `0` 表示不限制 |
 | `AXON_PROCESS_RLIMIT_NPROC` | 子进程数上限，`off` 或 `0` 表示不限制 |
@@ -451,8 +440,8 @@ server 名会规范化为小写下划线形式的稳定 `server_id`。User 配�
 
 Skills 搜索路径（按优先级）：
 
-1. `~/.axon/skills/` — 用户级 Axon Skills
-2. `<workspace>/.axon/skills/` — Workspace 级 Axon Skills
+1. `~/.axon/skills/`：用户级 Axon Skills
+2. `<workspace>/.axon/skills/`：Workspace 级 Axon Skills
 
 每个根目录只扫描直接子目录中的 `SKILL.md`。User Skill 优先于 Workspace Skill，同名项只加载 User 版本。仓库中的 `docs/skills/` 不参与运行时扫描。frontmatter 至少需要字符串 `name` 与 `description`；额外字段可用于兼容其他 Skill 生态，但 Axon 不把它们解释为权限、依赖或执行配置。详细说明见 [Skills](./skills.md)。
 
@@ -496,7 +485,7 @@ websocket_bind = "127.0.0.1:3144"
 
 ## Memory
 
-Memory 的持久化位置、SQLite busy timeout、索引算法参数和内部 SQL 批次由运行时管理，不暴露线程扫描数、固定候选数、最大 diff 字节数、治理扫描容量或作业总 timeout 等伪配置。自动召回数量由当前模型的 `context_window` 与统一 Context Budget 决定；CLI 的 `--limit` 只表示用户显式请求的展示或操作范围，不受 Axon 内建最大值限制。
+Memory 的持久化位置、检索参数与内部批次由运行时管理，不暴露线程扫描数、固定候选数、最大 diff 字节数、治理扫描容量或作业总 timeout 等伪配置。自动召回数量由当前模型的 `context_window` 与统一 Context Budget 决定；CLI 的 `--limit` 只表示用户显式请求的展示或操作范围，不受 Axon 内建最大值限制。
 
 Retention policy 不会自动生成 TTL。需要按绝对时间过期的记录必须在写入时显式提供 `ttl_expires_at_ms`；默认治理继续保留 30 天半衰期的低活跃衰减归档。
 
@@ -512,6 +501,6 @@ axon doctor --fix
 
 ## 下一步
 
-- [Provider 与模型](./providers.md) — Provider 管理与连通性探测命令。
-- [MCP 集成](./mcp.md) — MCP 协议与外部 server 集成。
-- [Skills](./skills.md) — 可复用工作流。
+- [Provider 与模型](./providers.md)：Provider 管理与连通性探测命令。
+- [MCP 集成](./mcp.md)：MCP 协议与外部 server 集成。
+- [Skills](./skills.md)：可复用工作流。
