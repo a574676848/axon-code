@@ -74,7 +74,7 @@ pub use sqlite_runtime_store::{
     SESSION_EVENT_MISSING_ARCHIVE_TYPE, SqliteRuntimeStore, WalCheckpoint,
 };
 pub use sqlite_runtime_store::{
-    action_repository::ActionRepository, event_repository::EventRepository,
+    action_repository::ActionRepository,
     lease_repository::LeaseRepository, runtime_repository::RuntimeRepository,
     schedule_repository::ScheduleRepository, transaction::TransactionBoundary,
 };

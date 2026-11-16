@@ -15,15 +15,20 @@ use std::time::Duration;
 /// 空闲连接保留上限；超出的归还连接直接关闭，避免长尾线程堆积文件句柄。
 const MAX_IDLE_CONNECTIONS: usize = 8;
 /// 单条连接等待写锁的毫秒数；超时返回 Busy 交由上层可观测地失败，而不是无限阻塞。
-const BUSY_TIMEOUT_MS: u64 = 5_000;
+const BUSY_TIMEOUT_MS: u64 = 1_000;
 /// 生产默认的写锁等待上限。
 const DEFAULT_BUSY_TIMEOUT: Duration = Duration::from_millis(BUSY_TIMEOUT_MS);
 /// 每条连接共享的 PRAGMA 配置。
 ///
-/// `synchronous=FULL` 保证已提交的外部副作用事实在断电级故障前落盘，崩溃恢复只依赖
-/// 已提交记录，不依赖重放猜测。WAL **不在此批次内**：它是库级持久属性，且切换到 WAL
-/// 需要独占锁，逐连接重复切换会在并发读写下反复争抢该锁并以 `SQLITE_BUSY` 失败
-/// （实测 busy_timeout 到期仍失败）。WAL 由建库路径按需确保一次，见 `schema` 模块。
+/// `synchronous=NORMAL` 是 WAL 下的推荐档位：`COMMIT` 不再逐事务 `fsync`，只在
+/// checkpoint 与显式同步点落盘。代价是断电可能丢掉最近一小段已提交事务，但库结构
+/// 不会损坏；对运行态事实（会话状态、队列、事件水位）这是可接受的语义弱化，崩溃恢复
+/// 本就按「以日志为准回退水位、从结算记录重建叙述」设计。原先的 `FULL` 让每批流式帧
+/// 都承担一次持久性代价，实测直接决定了单帧延迟上限。
+///
+/// WAL **不在此批次内**：它是库级持久属性，且切换到 WAL 需要独占锁，逐连接重复切换
+/// 会在并发读写下反复争抢该锁并以 `SQLITE_BUSY` 失败（实测 busy_timeout 到期仍失败）。
+/// WAL 由建库路径按需确保一次，见 `schema` 模块。
 ///
 /// `journal_size_limit` 是 WAL 的硬上限：没有它，WAL 会随着每次写入无限增长
 /// （实测 743 MB，与主库同量级），而一次 checkpoint 要把这些页全部回写主库，
@@ -31,7 +36,7 @@ const DEFAULT_BUSY_TIMEOUT: Duration = Duration::from_millis(BUSY_TIMEOUT_MS);
 /// checkpoint 只在有界体量上发生，写锁抖动不再波及无关写入方。
 /// `wal_autocheckpoint` 显式钉住默认值：1000 页（约 4 MB）触发一次 checkpoint，
 /// 不依赖 SQLite 编译期默认，也让「多久回写一次」成为代码里的可见事实。
-const CONNECTION_PRAGMAS: &str = "PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL; \
+const CONNECTION_PRAGMAS: &str = "PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL; \
      PRAGMA journal_size_limit = 67108864; PRAGMA wal_autocheckpoint = 1000;";
 /// 守卫在连接被取走后再解引用时的显式失败信息。
 const CONNECTION_TAKEN: &str = "运行时连接在守卫释放前被取走";

@@ -39,7 +39,7 @@ pub(super) fn append_events(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(storage)?;
-    SqliteRuntimeStore::ensure_fence(&transaction, host, now_ms)?;
+    SqliteRuntimeStore::check_fence(&transaction, host, now_ms)?;
     if let Some((interaction_id, lease_token)) = interaction_lease {
         let active = transaction
             .query_row(

@@ -37,8 +37,6 @@ mod decision_repository;
 mod event_log_repository;
 #[path = "sqlite_runtime_store/event_payload_store.rs"]
 pub mod event_payload_store;
-#[path = "sqlite_runtime_store/event_repository.rs"]
-pub mod event_repository;
 #[path = "sqlite_runtime_store/execution_repository.rs"]
 mod execution_repository;
 #[path = "sqlite_runtime_store/failure_repository.rs"]

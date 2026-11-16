@@ -394,11 +394,12 @@ struct RuntimeEventRecord {
 **fencing 规则**
 
 - 保留 `daemon_hosts` 与控制面事务，`claim_host` / `renew_host` 语义不变。
-- 事件写入**不再**在每个批次里 `UPDATE daemon_hosts`（删掉 `helpers.rs:126-136` 在事件路径上的调用）。改为：
-  - 写入前读一次进程内缓存的 `(host_id, generation, lease_deadline_ms)`（续租线程维护的原子值）。
-  - `now > deadline - safety_margin` 直接返回 `Fenced`，fail-closed。
+- 事件写入**不再**在每个批次里 `UPDATE daemon_hosts`（删掉 `helpers.rs` 在事件路径上的写调用）。改为：
+  - 写入前在同一次事务里按主键读一次租约行（`host_id` + `generation` + `state = running` + 未过期）。
+  - 任一条不满足直接返回 `Fenced`，fail-closed。
   - 日志记录的 `generation` 字段用于事后仲裁：读取侧忽略非当前 generation 的帧。
-- 这样做的代价：进程被冻结超过租约时长后，旧 host 恢复时可能已写入几帧。但由于 `generation` 单调、且接管方会从 `last_event_sequence` 之后继续，这部分帧在读取侧可被识别为过期代际。**这是必须显式接受的语义弱化，需要在文档中写清。**
+- 为什么是「只读校验」而不是「进程内缓存快照」：两者判据相同，但只读校验在主键上命中一次，成本可忽略，却不会引入「缓存值滞后于真实续租」的窗口；实现上也就不需要额外的租约广播机制。
+- 这样做的代价：进程被冻结超过租约时长后，旧 host 恢复时可能已写入几帧。但由于 `generation` 单调、且接管方会从 `last_event_sequence` 之后继续，这部分帧在读取侧可被识别为过期代际。**这是必须显式接受的语义弱化，已在文档写明。**
 
 **checkpoint 规则（照搬 DSH）**
 
@@ -522,7 +523,7 @@ enum TurnOrigin { External, Cron, Goal, Subagent }
 - `payload_json.metrics` 缺失时按"本轮未测得"处理，**不填 0**，否则平均值被稀释。
 - `metrics` 只是回传通道，不是权威事实：权威事实是落盘后的 `turn_metrics` 事件。
 
-### 4.11.2 CLI 路径的 fence 问题（待裁决）
+### 4.11.2 CLI 路径的 fence 裁决
 
 `axon run` 是独立进程，不经过 daemon 的 action 队列。这带来一个计划书未覆盖的问题：
 
@@ -537,7 +538,7 @@ enum TurnOrigin { External, Cron, Goal, Subagent }
 | B | `append_events` 允许 `host=None` 跳过 fence，仅 CLI 使用 | 削弱 fence：CLI 与 daemon 同时写同一会话时失去保护 |
 | C | CLI 不写事件，`turn_metrics` 只覆盖 daemon 托管的会话 | 实现最简单，但 CLI 与 TUI 的轮次在 header 指标里缺失 |
 
-倾向 **B**，理由是 CLI 直连的是它自己独占的会话（run 期间没有 daemon 并发执行同一会话），而 fence 要防的是"两个 host 同时写同一会话"。但这属于安全边界调整，需要显式确认。
+**裁决：A。** CLI 在写 `turn_metrics` 前 claim 一个 60 秒租约的 host（host id 为 `cli-<pid>`），写完整批事件后即结束，不续租。拿不到 lease（daemon 正持有同一库的 host 行）时只记一条警告并跳过写入：本轮执行不因指标缺失而失败，fence 语义也不被削弱。这与 B 的差别在于「宁缺勿弱」：宁可少一条指标，也不打开一条不受 fence 约束的写入口。
 
 **采集策略**
 

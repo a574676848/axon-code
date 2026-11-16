@@ -135,6 +135,37 @@ impl SqliteRuntimeStore {
         Ok(())
     }
 
+    /// 只读 fence 校验：同一判据，但不写 `daemon_instances`。
+    ///
+    /// 事件写入是最高频的写路径（每个流式帧一批）。每批都 `UPDATE daemon_instances`
+    /// 会让租约行随帧数一起进 WAL，把「续租」这条低频写的代价绑到帧率上。这里改为按主键
+    /// 读一次租约行：判据完全相同（`state = running` 且未过期的同一代际），fail-closed
+    /// 语义不变，但不再产生 WAL 记录。控制面事务（claim / 结算）仍用 `ensure_fence`，
+    /// 它们需要与状态更新共用同一次写锁。
+    pub(crate) fn check_fence(
+        transaction: &rusqlite::Transaction<'_>,
+        host: &DaemonHostRecord,
+        now_ms: u64,
+    ) -> Result<(), RuntimeStoreError> {
+        let active = transaction
+            .query_row(
+                "SELECT 1 FROM daemon_instances WHERE host_id = ?1 AND generation = ?2 AND state = ?3 AND lease_expires_at_ms > ?4",
+                params![
+                    host.host_id.as_str(),
+                    host.generation,
+                    HOST_STATE_RUNNING,
+                    i64_value(now_ms)?
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(storage)?;
+        if active.is_none() {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        Ok(())
+    }
+
     pub(crate) fn read_action(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionActionRecord> {
         Ok(SessionActionRecord {
             action_id: parse_action_id(row.get(0)?)?,
