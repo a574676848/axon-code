@@ -197,9 +197,7 @@ fn apply_runtime_cleanup_counts(report: &mut SessionCleanupReport, counts: Runti
     report.deleted_session_event_count = report
         .deleted_session_event_count
         .saturating_add(counts.session_events);
-    report.deleted_session_checkpoint_count = report
-        .deleted_session_checkpoint_count
-        .saturating_add(counts.session_checkpoints);
+    // 检查点表已删除：报告字段保留（对外结构稳定），读数恒为 0。
     report.deleted_runtime_schedule_count = report
         .deleted_runtime_schedule_count
         .saturating_add(counts.schedules);

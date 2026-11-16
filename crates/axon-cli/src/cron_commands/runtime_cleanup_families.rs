@@ -305,13 +305,6 @@ pub(super) fn delete_session_families_by_ids(
     let counts = RuntimeCleanupCounts {
         // 事件已随会话目录删除，这里不再按表计数。
         session_events: 0,
-        session_checkpoints: delete_ids_in(
-            &transaction,
-            "session_checkpoints",
-            "session_id",
-            &placeholders,
-            ids,
-        )?,
         schedules: delete_ids_in(&transaction, "schedules", "session_id", &placeholders, ids)?,
         // 执行历史先于会话删除：终态行已迁出在途表，不删会留下无主历史。
         // 在途表里残留的终态行必须同步回收：`work_items.session_id` 有外键指向

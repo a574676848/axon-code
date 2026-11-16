@@ -29,7 +29,7 @@ impl SchemaKind {
     /// 不做补列、不做回填。
     const fn version(self) -> i64 {
         match self {
-            Self::Control => 4,
+            Self::Control => 5,
             Self::Outbox => 1,
         }
     }
@@ -189,22 +189,6 @@ const CONTROL_DDL: &str = "
             last_turn_at_ms INTEGER,
             updated_at_ms INTEGER NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS session_checkpoints (
-            session_id TEXT NOT NULL,
-            checkpoint_seq INTEGER NOT NULL,
-            action_id TEXT NOT NULL,
-            context_version INTEGER NOT NULL,
-            tool_receipt_sequence INTEGER NOT NULL,
-            goal_revision INTEGER,
-            token_usage INTEGER,
-            time_usage_ms INTEGER,
-            agent_tree_summary TEXT,
-            transcript_ref TEXT,
-            created_at_ms INTEGER NOT NULL,
-            PRIMARY KEY(session_id, checkpoint_seq)
-        );
-        CREATE INDEX IF NOT EXISTS session_checkpoints_latest
-            ON session_checkpoints(session_id, checkpoint_seq DESC);
         CREATE TABLE IF NOT EXISTS schedules (
             schedule_id TEXT PRIMARY KEY, session_id TEXT, kind TEXT NOT NULL,
             expression TEXT NOT NULL, payload_json TEXT NOT NULL, delivery_mode TEXT NOT NULL, status TEXT NOT NULL,

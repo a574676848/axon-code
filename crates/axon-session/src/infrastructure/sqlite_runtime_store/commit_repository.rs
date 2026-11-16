@@ -163,39 +163,8 @@ pub(super) fn commit_action(
     if settled == 0 {
         return Err(RuntimeStoreError::Fenced);
     }
-    let checkpoint_seq = transaction
-        .query_row(
-            "SELECT last_checkpoint_seq + 1 FROM sessions WHERE session_id=?1",
-            params![session_id.as_str()],
-            |row| row.get::<_, i64>(0),
-        )
-        .map_err(storage)?;
-    let goal_revision: Option<i64> = transaction
-        .query_row(
-            "SELECT goal_revision FROM work_items WHERE execution_id=?1",
-            params![action_id.as_str()],
-            |row| row.get::<_, Option<i64>>(0),
-        )
-        .optional()
-        .map_err(storage)?
-        .flatten();
-    transaction
-         .execute(
-             "INSERT INTO session_checkpoints(session_id,checkpoint_seq,action_id,context_version,tool_receipt_sequence,goal_revision,token_usage,time_usage_ms,agent_tree_summary,transcript_ref,created_at_ms) VALUES(?1,?2,?3,COALESCE((SELECT context_version FROM sessions WHERE session_id=?1),0),?4,?5,?6,?7,?8,?9,?10)",
-             params![
-                 session_id.as_str(),
-                 checkpoint_seq,
-                 action_id.as_str(),
-                 i64_value(checkpoint.tool_receipt_sequence.unwrap_or(next_sequence))?,
-                 goal_revision,
-                 checkpoint.token_usage.map(i64_value).transpose()?,
-                 checkpoint.time_usage_ms.map(i64_value).transpose()?,
-                 checkpoint.agent_tree_summary,
-                 checkpoint.transcript_ref,
-                 i64_value(now_ms)?
-             ],
-         )
-         .map_err(storage)?;
+    // 检查点不再单独落表：`session_checkpoints` 全仓无人读取，每轮一条 INSERT 只是
+    // 纯写放大。checkpoint 事实随本轮事件面帧一起落盘，需要时从事件重放即可。
     transaction
          .execute(
              "UPDATE sessions SET status='idle',owner_host_id=?1,owner_generation=?2,last_checkpoint_seq=last_checkpoint_seq+1,last_event_sequence=?3,last_activity_at_ms=?4,updated_at_ms=?4 WHERE session_id=?5",

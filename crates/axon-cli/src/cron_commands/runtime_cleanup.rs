@@ -55,7 +55,6 @@ pub(super) const LEDGER_EVENT_MIN_RETAINED: i64 = 1_000;
 pub(crate) struct RuntimeCleanupCounts {
     pub(crate) sessions: usize,
     pub(crate) session_events: usize,
-    pub(crate) session_checkpoints: usize,
     pub(crate) schedules: usize,
     pub(crate) interactions: usize,
     pub(crate) goals: usize,
@@ -78,9 +77,6 @@ impl RuntimeCleanupCounts {
     pub(super) fn merge(&mut self, other: Self) {
         self.sessions = self.sessions.saturating_add(other.sessions);
         self.session_events = self.session_events.saturating_add(other.session_events);
-        self.session_checkpoints = self
-            .session_checkpoints
-            .saturating_add(other.session_checkpoints);
         self.schedules = self.schedules.saturating_add(other.schedules);
         self.interactions = self.interactions.saturating_add(other.interactions);
         self.goals = self.goals.saturating_add(other.goals);
@@ -321,12 +317,6 @@ pub(super) fn count_runtime_session_families(
         counts.sessions = counts.sessions.saturating_add(count_ids_in(
             &connection,
             "sessions",
-            &placeholders,
-            ids,
-        )?);
-        counts.session_checkpoints = counts.session_checkpoints.saturating_add(count_ids_in(
-            &connection,
-            "session_checkpoints",
             &placeholders,
             ids,
         )?);
