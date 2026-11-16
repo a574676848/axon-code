@@ -315,8 +315,10 @@ fn insert_interaction(
                 interaction.model.as_deref(),
                 // 推理强度与模型同源：随本轮下发，不写进 Workspace 或 session 身份。
                 interaction.reasoning_effort.as_deref(),
-                // session 是主 turn 排他领取的事实源；未绑定 Workspace 的输入统一落在空 session。
-                interaction_session_id(interaction).unwrap_or_default(),
+                // session 是主 turn 排他领取的事实源，按三级回退解析：
+                // 显式目标（调用方指定）> 渠道绑定（飞书群等无 UI 入口）> 路由派生。
+                // 未绑定 Workspace 的输入统一落在空 session。
+                resolve_session_id(transaction, interaction)?,
             ],
         )
         .map(|_| ())
@@ -527,4 +529,29 @@ fn ensure_same_interaction(
         ));
     }
     Ok(())
+}
+
+/// 解析入站事实的目标会话：显式目标优先，其次渠道绑定，最后按路由派生。
+fn resolve_session_id(
+    transaction: &Transaction<'_>,
+    interaction: &InteractionRecord,
+) -> Result<String, InteractionStoreError> {
+    if let Some(session_id) = interaction.runtime_session_id.as_deref() {
+        return Ok(session_id.to_owned());
+    }
+    let bound: Option<String> = transaction
+        .query_row(
+            "SELECT session_id FROM channel_bindings WHERE channel=?1 AND destination=?2",
+            params![
+                interaction.source.channel(),
+                interaction.reply_route.destination()
+            ],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if let Some(session_id) = bound {
+        return Ok(session_id);
+    }
+    Ok(interaction_session_id(interaction).unwrap_or_default())
 }

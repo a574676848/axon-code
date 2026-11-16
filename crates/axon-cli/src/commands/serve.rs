@@ -10,9 +10,7 @@ use axon_config::{AxonConfig, ConfigLoader};
 use serde::Serialize;
 use serde_json::json;
 
-use crate::workbench_http_adapter::{
-    WORKBENCH_PROTOCOL_VERSION, sessions_payload, workspaces_payload,
-};
+use crate::workbench_http_adapter::{WORKBENCH_PROTOCOL_VERSION, workspaces_payload};
 use crate::{
     CliRunResult, OutputFormat, ServeCommand,
     management_commands::{cli_config_error, cli_error, json_result, resolved_config_path},

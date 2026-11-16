@@ -16,11 +16,13 @@ use crate::{
     runtime_paths::runtime_axon_root_path,
 };
 
+mod channel_binding;
 mod output;
 mod replay;
 mod sessions_list;
 mod thread_cli;
 
+use channel_binding::{run_session_bind, run_session_unbind};
 use output::{SessionOutputCommand, run_session_output};
 use replay::{SessionReplayCommand, run_session_replay};
 use sessions_list::{SessionsListCommand, run_sessions_list};
@@ -150,6 +152,24 @@ pub enum SessionsSubcommand {
     Output(SessionOutputCommand),
     /// 诊断会话事件流。
     Doctor(SessionDoctorCommand),
+    /// 把无 UI 入站渠道绑定到会话。
+    Bind(SessionBindCommand),
+    /// 解除渠道绑定。
+    Unbind(SessionBindCommand),
+}
+
+/// `axon sessions bind` / `unbind` 参数。
+#[derive(Debug, Clone, Args, PartialEq, Eq)]
+pub struct SessionBindCommand {
+    /// 来源渠道，例如 `feishu`。
+    #[arg(long)]
+    pub channel: String,
+    /// 该渠道内的目的地：群 ID、webhook 路径等。
+    #[arg(long)]
+    pub destination: String,
+    /// 目标会话；`unbind` 可省略。
+    #[arg(long)]
+    pub session: Option<String>,
 }
 
 pub(crate) fn run_sessions(
@@ -173,6 +193,8 @@ pub(crate) fn run_sessions(
         Some(SessionsSubcommand::Replay(sub)) => run_session_replay(format, &path, sub),
         Some(SessionsSubcommand::Output(sub)) => run_session_output(format, sub),
         Some(SessionsSubcommand::Doctor(sub)) => run_session_doctor(format, &path, sub),
+        Some(SessionsSubcommand::Bind(sub)) => run_session_bind(format, &path, sub),
+        Some(SessionsSubcommand::Unbind(sub)) => run_session_unbind(format, &path, sub),
     }
 }
 

@@ -135,7 +135,6 @@ use run_post_run_governance::{
 pub(crate) use run_post_run_governance_worker::run_governance_worker;
 pub(crate) use run_progress::question_part_id;
 pub(crate) use run_provider_orchestration::{RunProgressOptions, run_run_with_progress};
-pub(crate) use run_question_projection::run_session_id;
 pub(crate) use run_question_projection::{
     DurableQuestionEventSlot, DurableQuestionEventWriter,
     production_question_event_sink_with_durable_slot,

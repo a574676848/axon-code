@@ -20,6 +20,8 @@ pub mod action_repository;
 mod agent_continuation_repository;
 #[path = "sqlite_runtime_store/agent_mailbox_repository.rs"]
 mod agent_mailbox_repository;
+#[path = "sqlite_runtime_store/channel_binding_repository.rs"]
+mod channel_binding_repository;
 #[path = "sqlite_runtime_store/client_delivery_repository.rs"]
 mod client_delivery_repository;
 #[path = "sqlite_runtime_store/commit_repository.rs"]

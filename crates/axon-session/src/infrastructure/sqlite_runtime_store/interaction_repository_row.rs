@@ -44,6 +44,11 @@ pub(super) fn read_record(row: &Row<'_>) -> rusqlite::Result<InteractionRecord> 
             .map_or_else(Vec::new, |json| {
                 serde_json::from_str(&json).unwrap_or_default()
             }),
+        // 入站时解析到的目标会话随记录回读：重放与排他领取都以它为准。
+        runtime_session_id: row
+            .get::<_, String>(12)
+            .ok()
+            .filter(|value| !value.is_empty()),
         model: row.get::<_, Option<String>>(10)?,
         reasoning_effort: row.get::<_, Option<String>>(11)?,
         status,

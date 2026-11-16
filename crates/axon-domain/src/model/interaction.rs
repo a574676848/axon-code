@@ -171,6 +171,12 @@ pub struct InteractionRecord {
     /// 模型完全由会话历史与配置决定。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// 入站路由显式指定的目标会话。
+    ///
+    /// channel_bindings 命中时由入口填充：飞书群、外部 webhook 这类没有客户端状态的
+    /// 入口必须能把消息投进指定会话。None 表示按路由派生会话身份。
+    #[serde(default, skip)]
+    pub runtime_session_id: Option<String>,
     /// 本轮显式指定的推理强度（例如 `low` / `medium` / `high`）。
     ///
     /// 与 `model` 同源：入口在用户明确选择时填充，投影为 Provider turn 的
@@ -250,6 +256,7 @@ impl InteractionRecord {
             reply_route,
             content,
             attachments: Vec::new(),
+            runtime_session_id: None,
             model: None,
             reasoning_effort: None,
             status: InteractionStatus::Received,

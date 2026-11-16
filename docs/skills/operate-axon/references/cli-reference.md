@@ -110,6 +110,7 @@ axon upgrade [--manifest-url <url>] [--download] [--apply] [--rollback] [--outpu
 - 会话诊断的两个标识不可互换：`axon debug session show|delete` 收 `SESSION_ID`，`axon debug session read|resume` 收 `THREAD_ID`。
 - `axon run --session <id>` 只追加到**已存在**的会话：ID 不存在时直接报错并提示先 `axon sessions list`，不会隐式新建空会话。
 - `axon sessions resume <id>` 只设置 `--continue` 的默认目标，不改变会话内容；普通 `axon run` 仍落在当前工作目录的车道。带 `--session` 的 run 结束后该默认目标保持运行前的值。
+- `axon sessions bind --channel <渠道> --destination <目的地> --session <id>` 把没有客户端状态的入站渠道（飞书群、外部 webhook）固定到指定会话，命中绑定的消息直接进入该会话；`axon sessions unbind --channel <渠道> --destination <目的地>` 解除。未绑定的渠道仍按路由派生会话身份。
 - 接续既有会话（`--continue`、`--session` 或同一会话的后续 turn）且未传 `--model` 时，本轮沿用该会话记录的模型；只有该模型在配置内已不存在（`[[models]]` 条目被移除或所属 Provider 停用）才回退 `agent.default_model`。TUI `/model` 的显式选择随该轮下传，优先于会话模型。
 - `axon debug channel-metrics` 查询已持久化的渠道性能、缓存与连接指标。`--since-hours` 默认读取最近 24 小时，设置为 `0` 取消时间过滤；可用 `--model`、`--provider` 过滤，`--limit` 控制最多输出的渠道数。只有启用 `channel_balancer.telemetry_persistence_enabled` 后，运行遥测才会写入 `~/.axon/data/channel-metrics`。
 - 修改配置、删除会话、执行 Cron、生成图片、升级或写入 Memory 前，先确认目标和副作用，并在完成后读取回执或 status。

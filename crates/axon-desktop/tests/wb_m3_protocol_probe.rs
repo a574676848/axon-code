@@ -291,7 +291,7 @@ async fn run_probe() -> Vec<Observation> {
         return observations;
     };
 
-    let session_subscribe_id = format!("interaction:{}", target.interaction_id);
+    let interaction_subscribe_id = format!("interaction:{}", target.interaction_id);
     let session_subscribe_id = "session:wb-m3-probe-session".to_owned();
     let mut collected: Vec<(String, Option<String>)> = Vec::new();
 
@@ -300,24 +300,25 @@ async fn run_probe() -> Vec<Observation> {
         &mut socket,
         &session_frame(
             &target.workspace_id,
-            &session_subscribe_id,
+            &interaction_subscribe_id,
             &target.interaction_id,
         ),
     )
     .await;
-    let session_ok = wait_subscribed(&mut socket, &session_subscribe_id, &mut collected).await;
+    let interaction_ok =
+        wait_subscribed(&mut socket, &interaction_subscribe_id, &mut collected).await;
     observations.push(Observation::new(
         "同一条连接上的第一条订阅建立成功",
-        session_ok.is_ok(),
+        interaction_ok.is_ok(),
     ));
-    if let Err(code) = &session_ok {
+    if let Err(code) = &interaction_ok {
         eprintln!("[probe] 第一路订阅失败：{code}");
     }
 
     if let Some(session_id) = target.subagent_session_id.clone() {
         send(
             &mut socket,
-            &session_frame(&target.workspace_id, &session_subscribe_id, &session_id),
+            &session_frame_v2(&target.workspace_id, &session_subscribe_id, &session_id),
         )
         .await;
         let session_ok = wait_subscribed(&mut socket, &session_subscribe_id, &mut collected).await;
@@ -337,13 +338,13 @@ async fn run_probe() -> Vec<Observation> {
         "重放事件帧回显 subscribeId（事件按订阅归位）",
         collected
             .iter()
-            .all(|(id, _)| id == &session_subscribe_id || id == &session_subscribe_id),
+            .all(|(id, _)| id == &interaction_subscribe_id || id == &session_subscribe_id),
     ));
-    let session_cursors = cursors_of(&collected, &session_subscribe_id);
+    let interaction_cursors = cursors_of(&collected, &interaction_subscribe_id);
     let session_cursors = cursors_of(&collected, &session_subscribe_id);
     observations.push(Observation::new(
-        "车道那一路的游标单调推进",
-        is_monotonic(&session_cursors),
+        "交互那一路的游标单调推进",
+        is_monotonic(&interaction_cursors),
     ));
     observations.push(Observation::new(
         "会话那一路的游标单调推进（两路互不干扰）",
@@ -378,12 +379,12 @@ async fn run_probe() -> Vec<Observation> {
     ));
 
     // 4. 负例：已在册的标识重复订阅：只有真的订阅上了才会命中这一条。
-    if session_ok.is_ok() {
+    if interaction_ok.is_ok() {
         send(
             &mut socket,
             &session_frame(
                 &target.workspace_id,
-                &session_subscribe_id,
+                &interaction_subscribe_id,
                 &target.interaction_id,
             ),
         )
@@ -444,7 +445,7 @@ async fn run_probe() -> Vec<Observation> {
             &mut socket,
             &session_frame(
                 &target.workspace_id,
-                &session_subscribe_id,
+                &interaction_subscribe_id,
                 &target.interaction_id,
             ),
         )

@@ -272,6 +272,16 @@ const CONTROL_DDL: &str = "
             ON inbox(scope_json, received_at_ms DESC, interaction_id DESC);
         CREATE INDEX IF NOT EXISTS inbox_scope_channel_recent
             ON inbox(scope_json, source_channel, received_at_ms DESC, interaction_id DESC);
+        CREATE TABLE IF NOT EXISTS channel_bindings (
+            channel TEXT NOT NULL,
+            destination TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (channel, destination)
+        );
+        CREATE INDEX IF NOT EXISTS channel_bindings_session
+            ON channel_bindings(session_id, updated_at_ms DESC);
         CREATE TABLE IF NOT EXISTS goals (
             goal_id TEXT PRIMARY KEY NOT NULL,
             scope_json TEXT NOT NULL,

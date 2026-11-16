@@ -126,6 +126,8 @@ Axon 自行判断是否继续既有工作，并按工作区自动管理上下文
 axon sessions list                     # 列出会话（含标题、最近活动与轮次）
 axon sessions list --all               # 含归档会话
 axon sessions resume <THREAD_ID>       # 设置 --continue 的默认目标
+axon sessions bind --channel feishu --destination <群ID> --session <SESSION_ID>   # 把无界面渠道固定到会话
+axon sessions unbind --channel feishu --destination <群ID>                        # 解除绑定，回到按路由派生
 ```
 
 人设与人格状态的字段、模式与体积预算见 [人格系统](./persona.md)；`axon doctor --check persona` 给出同一条判定。

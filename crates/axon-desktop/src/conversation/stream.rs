@@ -529,7 +529,10 @@ mod tests {
             session_id: "parent--subagent--root".to_owned(),
             resume_cursor: None,
         };
-        assert_eq!(interaction_target.subscribe_id(), "interaction:interaction-1");
+        assert_eq!(
+            interaction_target.subscribe_id(),
+            "interaction:interaction-1"
+        );
         assert_eq!(
             session_target.subscribe_id(),
             "session:parent--subagent--root"
