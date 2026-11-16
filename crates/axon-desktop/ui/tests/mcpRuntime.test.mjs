@@ -8,11 +8,11 @@ import {
     mcpSegmentText,
     mcpSegmentTitle,
 } from '../src/conversation/mcpReading.ts';
-import { headerClusters } from '../src/conversation/metrics.ts';
+import { sidebarReadouts } from '../src/conversation/sidebarReading.ts';
 import { commandLabel } from '../src/components/conversation/useComposerCommandRun.ts';
 
 /*
- * MCP 读数与 `/mcp` 指令的口径：指标条那一段说什么、什么时候告警、回执怎么写。
+ * MCP 读数与 `/mcp` 指令的口径：侧栏连接行那一段说什么、什么时候告警、回执怎么写。
  * 三处消费同一个翻译层，因此这里钉住的是「同一件事在不同位置读起来一致」。
  */
 
@@ -25,24 +25,6 @@ function runtimeStatus(overrides = {}) {
         failedCount: 0,
         checkedAtMs: 0,
         ...overrides,
-    };
-}
-
-function metricsInput(mcp) {
-    return {
-        working: false,
-        animationTick: 0,
-        model: 'test-model',
-        cwd: '/workspace',
-        reasoningEffort: null,
-        usage: null,
-        contextWindow: null,
-        firstTokenAvgMs: null,
-        generationTpsX10: null,
-        elapsedMs: null,
-        plan: null,
-        lspActiveCount: 0,
-        mcp,
     };
 }
 
@@ -69,14 +51,13 @@ test('有一台没加载起来就用危险色，并把异常台数写在段里',
     );
     assert.equal(mcpSegmentText(reading), 'MCP 2 · 1 异常');
 
-    const clusters = headerClusters(metricsInput(reading));
-    const aux = clusters.at(-1);
+    const readouts = sidebarReadouts(reading, null);
     assert.deepEqual(
-        aux.segments.map((segment) => segment.kind),
+        readouts.map((item) => item.kind),
         ['mcp'],
-        'MCP 属于辅助簇',
+        'MCP 读数落在侧栏连接行的辅助读数里',
     );
-    assert.equal(aux.segments[0].tone, 'critical');
+    assert.equal(readouts[0].tone, 'critical');
 });
 
 test('读不到结论时也要画出来，不悄悄消失', () => {
@@ -85,20 +66,14 @@ test('读不到结论时也要画出来，不悄悄消失', () => {
     assert.equal(mcpSegmentText(reading), 'MCP 异常');
     assert.match(mcpSegmentTitle(reading), /读不到 MCP 运行态/);
 
-    const clusters = headerClusters(metricsInput(reading));
-    assert.equal(clusters.at(-1).segments[0].tone, 'critical');
+    assert.equal(sidebarReadouts(reading, null)[0].tone, 'critical');
 });
 
-test('指标条里 MCP 与 LSP、计划同簇，且排在 LSP 之后', () => {
+test('侧栏连接行里 MCP 排在技能之前，档案名与延迟读数由行本身承担', () => {
     const reading = mcpHeaderReading(runtimeStatus({ totalCount: 2, loadedCount: 2 }));
-    const clusters = headerClusters({
-        ...metricsInput(reading),
-        lspActiveCount: 1,
-        plan: { completed: 1, total: 2 },
-    });
     assert.deepEqual(
-        clusters.at(-1).segments.map((segment) => segment.kind),
-        ['lsp', 'mcp', 'plan'],
+        sidebarReadouts(reading, 9).map((item) => item.kind),
+        ['mcp', 'skill'],
     );
 });
 

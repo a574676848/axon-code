@@ -9,14 +9,12 @@ import {
 } from '../../conversation/metrics';
 import { contextUsageModel } from '../../conversation/contextUsage';
 import {
-  ApiIcon,
   ChecklistIcon,
   ClockIcon,
   GaugeIcon,
   ListIcon,
   DatabaseIcon,
   RingIcon,
-  SkillIcon,
   ToolIcon,
 } from '../../icons';
 import { ContextUsagePopover } from './ContextUsagePopover';
@@ -25,8 +23,11 @@ import { SessionUsagePopover } from './SessionUsagePopover';
 /*
  * 主区域顶部指标条。
  *
- * 四簇按语义排开：身份（在不在干活）、预算（会话累计、上下文与缓存）、性能（首字、速率、耗时）、辅助（LSP、MCP、技能、计划）。
+ * 四簇按语义排开：身份（在不在干活）、预算（会话累计、上下文与缓存）、性能（首字、速率、耗时）、辅助（LSP 与计划）。
  * 此前是十段用「·」连成一条，装不下就从中间硬裁，读起来像一串调试输出。
+ *
+ * MCP 台数与技能条数不在这里：它们是「这台机器上挂着什么」，与打开哪条会话无关，
+ * 由侧栏底栏的连接行常驻承载。
  *
  * 工作区路径不进这一行：侧栏与窗口标题已经说清楚当前在哪，指标条只留会变的读数。
  * 装不下时整簇收起：断点由宽到窄依次让辅助、性能与预算退场，身份簇始终在。
@@ -88,11 +89,6 @@ function metricIcon(segment: HeaderSegment, contextPercent: number | null): Reac
     // LSP 是代码结构层面的能力：用尖括号比井号更像「代码本身」。
     case 'lsp':
       return <ToolIcon size={size} className="shrink-0" />;
-    // MCP 是一批外部工具服务：提示符读作「可调用的接口与命令」，比扳手更贴切。
-    case 'mcp':
-      return <ApiIcon size={size} className="shrink-0" />;
-    case 'skill':
-      return <SkillIcon size={size} className="shrink-0" />;
     default:
       return null;
   }

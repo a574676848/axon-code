@@ -6,6 +6,7 @@ import {
   ClockIcon,
 } from '../icons';
 import type { GatewayHealth, LaneItem, NavTab, WorkspaceItem } from '../types';
+import type { McpHeaderReading } from '../conversation/mcpReading';
 import * as ipc from '../ipc';
 import type { LaneSelection } from '../conversation/useConversation';
 import { isRunning, type LaneRuntimeFacts } from '../conversation/runtimeFacts';
@@ -79,6 +80,10 @@ interface SidebarProps {
   runtime?: LaneRuntimeFacts | null;
   /** 有新结果的车道：车道标识到终态；点开即清除。 */
   laneMarks?: Record<string, string>;
+  /** MCP 运行态读数；由外壳持有唯一一份，侧栏只负责呈现。 */
+  mcpReading?: McpHeaderReading | null;
+  /** 已安装技能条数；清单未就绪时为空。 */
+  skillCount?: number | null;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -93,6 +98,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   selectedLaneId = null,
   runtime = null,
   laneMarks,
+  mcpReading = null,
+  skillCount = null,
 }) => {
   const [width, setWidth] = useState(DEFAULT_WIDTH);
   const [resizing, setResizing] = useState(false);
@@ -606,9 +613,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
         底栏自上而下三层：连接胶囊、切档回执（仅在切档时出现）、设置行。
         胶囊自占一行：设置行右端已被「新版本」入口占用，挤进同一行会把两个入口
         压成一条，且胶囊是恒常驻的档案入口，不该跟着更新检测的结论出现或消失。
+        MCP 台数与技能条数收在这一行里：它们同样是「此刻挂着什么」的常驻事实。
       */}
       <div className="shrink-0 px-3 py-2 space-y-1">
-        <ConnectionCapsule onManage={onOpenConnection ?? onOpenSettings} />
+        <ConnectionCapsule
+          onManage={onOpenConnection ?? onOpenSettings}
+          mcpReading={mcpReading}
+          skillCount={skillCount}
+        />
         <div className="flex items-center gap-2">
           <button
             type="button"

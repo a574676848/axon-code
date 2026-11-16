@@ -65,19 +65,14 @@ test('静息态没有身份簇，LSP 与计划固定在指标条末尾', () => {
     assert.deepEqual(auxKinds(baseInput()), ['lsp', 'plan']);
 });
 
-test('技能条数紧跟 MCP，同为辅助读数', () => {
-    const input = baseInput({
-        mcp: { totalCount: 2, loadedCount: 2, failedCount: 0, error: null },
-        skillCount: 7,
-    });
+test('MCP 台数与技能条数不再进指标条：它们已搬到侧栏连接行', () => {
+    const input = baseInput();
 
-    assert.deepEqual(auxKinds(input), ['lsp', 'mcp', 'skill', 'plan']);
-
-    const skill = cluster(input, 'aux').segments[2];
-    assert.equal(skill.text, '技能 7');
-    assert.equal(skill.title, '共 7 项已安装技能');
-    assert.equal(skill.tone, 'default');
-    assert.equal(skill.icon, 'skill');
+    assert.deepEqual(
+        auxKinds(input),
+        ['lsp', 'plan'],
+        '辅助簇只剩 LSP 与计划，档案、MCP 与技能读数归侧栏底栏',
+    );
 });
 
 test('会话读数簇的顺序是 耗时 → 累计 → 命中率 → 上下文', () => {
@@ -104,7 +99,7 @@ test('零耗时的时候不占位，其余三段照常', () => {
     );
 });
 
-test('首屏只留辅助读数：会话读数与上下文整组不占位', () => {
+test('首屏没有会变的读数时，指标条整行不占位', () => {
     const firstScreen = baseInput({
         inSession: false,
         sessionCumulative: null,
@@ -113,16 +108,13 @@ test('首屏只留辅助读数：会话读数与上下文整组不占位', () =>
         generationTpsX10: null,
         plan: null,
         lspActiveCount: 0,
-        mcp: { totalCount: 3, loadedCount: 3, failedCount: 0, error: null },
-        skillCount: 32,
     });
 
     assert.deepEqual(
-        headerClusters(firstScreen).map((item) => item.kind),
-        ['aux'],
-        '还没进入会话时指标条只剩 MCP 与技能',
+        headerClusters(firstScreen),
+        [],
+        '首屏只剩辅助簇，而 MCP 与技能已搬到侧栏，因此没有可画的簇',
     );
-    assert.deepEqual(auxKinds(firstScreen), ['mcp', 'skill']);
 });
 
 test('没有用量观测时累计与命中率都不占位，与上下文同一生命周期', () => {
@@ -173,14 +165,4 @@ test('窗口未知时上下文只报已用', () => {
     const context = session.segments.find((segment) => segment.kind === 'context');
 
     assert.equal(context.text, '1K');
-});
-
-test('技能清单未就绪或零条时都不占位', () => {
-    for (const skillCount of [null, undefined, 0]) {
-        assert.deepEqual(
-            auxKinds(baseInput({ skillCount })),
-            ['lsp', 'plan'],
-            `skillCount=${String(skillCount)} 时不应出现技能段`,
-        );
-    }
 });

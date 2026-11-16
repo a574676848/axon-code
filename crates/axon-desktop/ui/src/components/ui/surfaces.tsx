@@ -207,6 +207,21 @@ const DOT_STATE: Record<Exclude<StateDotState, 'ongoing'>, string> = {
   idle: 'text-state-idle',
 };
 
+/**
+ * 状态色用作**图标墨色**时的档位。
+ *
+ * 与状态点同源同色，只有一处不同：`idle` 的 10px 标记档（`--color-state-idle`）在
+ * 14px 线形图形上看不出来，因此图标退回三级文本色。图形本身已经说明「这是一条连接」，
+ * 颜色只补「此刻好不好」，所以颜色永远不单独承载状态：同一行仍有中文结论与无障碍名称。
+ */
+export const STATE_ICON_INK: Record<StateDotState, string> = {
+  done: 'text-ok',
+  warning: 'text-gold',
+  error: 'text-danger',
+  idle: 'text-text-tertiary',
+  ongoing: 'text-text-tertiary',
+};
+
 /** 标记槽边长：实心状态 10px，转圈 14px，与参考实现的取值一致。 */
 const DOT_EDGE = 10;
 const ONGOING_EDGE = 14;

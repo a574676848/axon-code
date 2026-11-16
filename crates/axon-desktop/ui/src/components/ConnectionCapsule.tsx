@@ -1,19 +1,28 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { latencyText, switchProfile, useConnectionFact } from '../connectionState';
+import type { McpHeaderReading } from '../conversation/mcpReading';
+import { sidebarReadouts } from '../conversation/sidebarReading';
 import { ChevronDownIcon, PulseIcon } from '../icons';
 import { ROW_ICON_COLUMN, ROW_STATE } from './SidebarRows';
 import { Dropdown, MenuItem, MenuLabel, MenuSeparator } from './ui/overlays';
-import { StateDot, Text } from './ui/surfaces';
+import { STATE_ICON_INK, Text } from './ui/surfaces';
 
 /*
  * 侧栏连接胶囊（设计系统 §14.1.2）。
  *
- * 形态与顶部导航、设置行同一套侧栏行：24px 图标列放线性连接图形，健康点与延迟
- * 读数收在行尾读数簇，不再自带描边与卡片底。底栏只有它与设置行两行，两行长得
- * 不一样会被读成两种控件。
+ * 形态与顶部导航、设置行同一套侧栏行：24px 图标列放线性连接图形，延迟读数收在行尾，
+ * 不再自带描边与卡片底。底栏只有它与设置行两行，两行长得不一样会被读成两种控件。
  *
  * 它是当前生效档案的唯一常驻入口，不是「有事才出现」的提示：尚未连接、甚至快照
  * 还没有取回来时同样显示，因为换个后端只有这一个入口。
+ *
+ * 行内自左向右读作「档案 MCP 技能 延迟」：档案名之后是这台机器此刻挂着什么
+ * （MCP 台数、技能条数），行尾是这一档延迟多少。前两项因此不承担任何点击语义，
+ * 整行仍只有一个动作：展开档案清单。
+ *
+ * 健康档位不另画状态点，由行首连接图形自己的颜色承担：已连接绿、连不上红、
+ * 需要人过目琥珀、尚未探测灰，连接中则让同一枚图形转起来。颜色不单独承载状态，
+ * 完整结论仍在整行的无障碍名称与原生提示里。行尾因此只剩延迟读数与展开箭头。
  *
  * 读数只取 useConnectionFact()：胶囊自己不发 ipc.connectionState()，也不起轮询；
  * 健康档位直接用快照里的 health.dot，不在本地二次推导，因此胶囊与设置 › 连接
@@ -34,7 +43,32 @@ const PLACEHOLDER_LABEL = '未连接';
 /** 切档进入重启流程时的过渡文案。 */
 const SWITCHING_LABEL = '正在重启以切换后端';
 
-export const ConnectionCapsule: React.FC<{ onManage: () => void }> = ({ onManage }) => {
+/**
+ * 条目分隔圆点。
+ *
+ * 这一行有四个读数，用空白分隔会被读成一串连字（`MCP 3 技能 32 7 毫秒`）；圆点是排版
+ * 记号而不是内容，因此取三级文本色、不进无障碍树。
+ */
+const ReadoutSeparator: React.FC = () => (
+  <span aria-hidden="true" className="shrink-0 text-micro text-text-tertiary">
+    ·
+  </span>
+);
+
+export interface ConnectionCapsuleProps {
+  /** 打开设置 › 连接。 */
+  onManage: () => void;
+  /** MCP 运行态读数；为空时这一段不占位。 */
+  mcpReading?: McpHeaderReading | null;
+  /** 已安装技能条数；清单未就绪或零条时不占位。 */
+  skillCount?: number | null;
+}
+
+export const ConnectionCapsule: React.FC<ConnectionCapsuleProps> = ({
+  onManage,
+  mcpReading = null,
+  skillCount = null,
+}) => {
   const { snapshot } = useConnectionFact();
   /** 切档回执：只在本行就地说明，不弹窗、不改主区域。 */
   const [notice, setNotice] = useState<string | null>(null);
@@ -47,15 +81,33 @@ export const ConnectionCapsule: React.FC<{ onManage: () => void }> = ({ onManage
 
   const label = snapshot?.activeLabel ?? PLACEHOLDER_LABEL;
   const healthLabel = snapshot?.health.label ?? PLACEHOLDER_LABEL;
-  /** 右端读数：有延迟就写延迟，没有才写健康结论。 */
+  /** 健康档位：只取快照结论，不在本地二次推导。 */
+  const healthState = snapshot?.health.dot ?? 'idle';
+  /*
+   * 行首图形同时承载「这是一条连接」与「此刻好不好」：图形不变，颜色随档位走。
+   * 连接中是唯一没有稳定状态的档位，于是让同一枚图形转起来（全站共用 .state-spinner）。
+   */
+  const healthInk = STATE_ICON_INK[healthState];
+  const healthSpinning = healthState === 'ongoing';
+  /** 行尾读数：有延迟就写延迟，没有才写健康结论。 */
   const latency = snapshot === null ? null : latencyText(snapshot.latencyMs);
   const readout = latency ?? healthLabel;
+  /** 档案名之后的辅助读数：MCP 台数与技能条数，缺数据即整段不占位。 */
+  const auxReadouts = sidebarReadouts(mcpReading, skillCount);
   /*
    * 原生提示与无障碍名称：档案名加健康结论，有延迟时再补一句。两者同值时只说一遍，
    * 免得读屏器念出「未连接，未连接」；文字被截断时，完整档案名也由它兜住。
    */
   const summary = healthLabel === label ? label : `${label}，${healthLabel}`;
-  const announcement = latency === null ? summary : `${summary}，延迟 ${latency}`;
+  const connectionSummary = latency === null ? summary : `${summary}，延迟 ${latency}`;
+  /*
+   * 整行只有一个无障碍名称：按钮的 aria-label 会盖住子节点文字，因此辅助读数
+   * 也一并写进来，读屏器不必回头去猜这一行还有几台 MCP、几条技能。
+   */
+  const announcement =
+    auxReadouts.length === 0
+      ? connectionSummary
+      : `${connectionSummary}；${auxReadouts.map((item) => item.title).join('；')}`;
   /** 可切换的档案：当前生效那一份不在其中，避免一次「选了自己」的重启。 */
   const targets = (snapshot?.profiles ?? []).filter((profile) => !profile.active);
   const rosterEmpty = snapshot !== null && (snapshot.profiles ?? []).length === 0;
@@ -112,28 +164,46 @@ export const ConnectionCapsule: React.FC<{ onManage: () => void }> = ({ onManage
             className={`${ROW_STATE} w-full h-8 text-left select-none cursor-pointer hover:bg-hover active:bg-active focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus`}
           >
             {/*
-              图标列承载「连接」这一语义本身：图形与档位点分工，图形说明这一行是什么，
-              档位点说明它此刻好不好，两者不挤在同一格里。
+              图标列承载「连接」这一语义本身：图形说明这一行是什么，颜色说明它此刻好不好。
+              两者不拆成两枚元素，因此底栏这一行只有一枚状态标记，且它在行首。
             */}
-            <span className={`${ROW_ICON_COLUMN} text-text-tertiary`}>
+            <span
+              className={`${ROW_ICON_COLUMN} ${healthInk} ${healthSpinning ? 'state-spinner' : ''}`}
+            >
               <PulseIcon size={14} />
             </span>
-            <Text size="body" truncate className="flex-1 min-w-0 leading-5">
-              {label}
-            </Text>
-            {/* 行尾读数簇：档位点、读数与箭头同组右对齐，槽宽恒定，读数变化不带动档案名抖动。 */}
-            <span className="shrink-0 flex items-center gap-1.5">
-              <StateDot state={snapshot?.health.dot ?? 'idle'} />
-              <Text size="micro" tone="tertiary" className="tabular-nums">
+            {/*
+              一行读作一句话：档案名 · MCP 台数 · 技能条数 · 延迟读数，条目之间用同一个圆点
+              分隔，末尾留给展开箭头。读数只给原生提示，不加第二层按钮：整行只有一个动作。
+            */}
+            <span className="flex-1 min-w-0 flex items-center gap-1.5">
+              <Text size="body" truncate className="min-w-0 leading-5">
+                {label}
+              </Text>
+              {auxReadouts.map((item) => (
+                <React.Fragment key={item.kind}>
+                  <ReadoutSeparator />
+                  <Text
+                    size="micro"
+                    tone={item.tone === 'critical' ? 'danger' : 'tertiary'}
+                    title={item.title}
+                    className="shrink-0 tabular-nums"
+                  >
+                    {item.text}
+                  </Text>
+                </React.Fragment>
+              ))}
+              <ReadoutSeparator />
+              <Text size="micro" tone="tertiary" className="shrink-0 tabular-nums">
                 {readout}
               </Text>
-              <ChevronDownIcon
-                size={12}
-                className={`shrink-0 text-text-tertiary transition-transform duration-150 ${
-                  open ? 'rotate-180' : ''
-                }`}
-              />
             </span>
+            <ChevronDownIcon
+              size={12}
+              className={`shrink-0 text-text-tertiary transition-transform duration-150 ${
+                open ? 'rotate-180' : ''
+              }`}
+            />
           </button>
         )}
       >

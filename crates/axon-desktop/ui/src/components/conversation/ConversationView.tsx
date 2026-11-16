@@ -21,8 +21,7 @@ import { useRailLayout } from '../../sidebarRight/useRailLayout';
 import { ConversationActionsProvider, UnfoldingProvider } from './actions';
 import { useConversationActionsValue } from './useConversationActionsValue';
 import { sessionReferenceIndex } from './referenceAnchors';
-import { useConversationMcp } from '../../conversation/useConversationMcp';
-import { useSkillCatalog } from '../../conversation/skillCatalog';
+import type { ConversationMcp } from '../../conversation/useConversationMcp';
 import { changedFilesOf, workingLineOf } from '../../conversation/transcript';
 import {
   isActiveSubagent,
@@ -68,6 +67,13 @@ export interface ConversationViewProps {
   onRuntimeFacts?: (facts: LaneRuntimeFacts) => void;
   /** 会话来源返回条；从页面进入的后台会话才有。 */
   originBar?: SessionOriginBarState | null;
+  /**
+   * MCP 运行态。
+   *
+   * 读数已经搬去侧栏底栏的连接行，这里只留输入坞的 `/mcp` 需要的那一份执行入口；
+   * 实例由外壳持有，因此重载一次之后侧栏读数与输入坞回执读的是同一份结论。
+   */
+  mcp: ConversationMcp;
 }
 
 export const ConversationView: React.FC<ConversationViewProps> = ({
@@ -77,6 +83,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   onSelectLane,
   onRuntimeFacts,
   originBar = null,
+  mcp,
 }) => {
   // 车道选择归一化成订阅目标：控制器本身与子代理会话视图共用同一个 hook。
   const target = React.useMemo(
@@ -287,11 +294,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     [conversation.state.turns],
   );
 
-  // MCP 运行态：指标条读数与输入坞的 `/mcp` 同源（见 useConversationMcp）。
-  const mcp = useConversationMcp(workspace?.path ?? null);
-  // 技能条数：与指令补全读同一份清单，清单未就绪时先不画这一段。
-  const skillCount = useSkillCatalog()?.length ?? null;
-
+  // MCP 运行态与技能条数不在这里取：它们已经搬到侧栏底栏的连接行，读数由外壳持有。
   const liveHeaderMetrics = {
     working: conversation.working,
     animationTick: conversation.state.turns.length,
@@ -308,8 +311,6 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     generationTpsX10: sessionGeneration.generationTpsX10,
     plan: conversation.state.plan,
     lspActiveCount: conversation.state.lspActiveCount,
-    mcp: mcp.reading,
-    skillCount,
   };
 
   /*

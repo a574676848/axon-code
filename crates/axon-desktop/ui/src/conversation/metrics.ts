@@ -20,7 +20,6 @@ import {
   currentContextTokens,
   type TokenUsage,
 } from './transcript';
-import { mcpSegmentText, mcpSegmentTitle, type McpHeaderReading } from './mcpReading';
 import { cumulativeCacheHitBasisPoints, type SessionCumulative } from './sessionUsage';
 export { currentContextTokens };
 
@@ -39,9 +38,7 @@ export type HeaderSegmentKind =
   | 'generationRate'
   | 'elapsed'
   | 'plan'
-  | 'lsp'
-  | 'mcp'
-  | 'skill';
+  | 'lsp';
 
 /** 段色调。 */
 export type HeaderSegmentTone = 'default' | 'warning' | 'critical';
@@ -93,10 +90,6 @@ export interface HeaderMetricsInput {
   plan: { completed: number; total: number } | null;
   /** 活跃 LSP 客户端数。 */
   lspActiveCount: number;
-  /** MCP 运行态；没有服务器且没有错误时为空，指标条不画这一段。 */
-  mcp?: McpHeaderReading | null;
-  /** 已安装技能条数；未读到清单时为空，零条时指标条不画这一段。 */
-  skillCount?: number | null;
 }
 
 function shortMetric(label: string, value: string): string {
@@ -146,30 +139,8 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
       tone: 'default',
         });
   }
-  // 3.1 MCP：有服务器或读不到结论时出现。异常一台都不许沉默，用危险色顶出来；
-  // 正常时只报台数，与 LSP 同为辅助读数。
-  if (input.mcp !== null && input.mcp !== undefined) {
-    segments.push({
-      kind: 'mcp',
-      text: mcpSegmentText(input.mcp),
-      title: mcpSegmentTitle(input.mcp),
-      icon: 'mcp',
-      tone: input.mcp.failedCount > 0 || input.mcp.error !== null ? 'critical' : 'default',
-        });
-  }
-  // 3.2 技能：紧跟 MCP 报「装了多少条」。清单未读到或零条时不占位，
-  // 与 LSP、MCP 同一口径：辅助读数只报事实，不拿 0 占宽度。
-  if (input.skillCount !== null && input.skillCount !== undefined && input.skillCount > 0) {
-    segments.push({
-      kind: 'skill',
-      text: shortMetric('技能', String(input.skillCount)),
-      title: `共 ${input.skillCount} 项已安装技能`,
-      icon: 'skill',
-      tone: 'default',
-        });
-  }
   /*
-   * 4 会话读数组：耗时 → 累计 → 命中率 → 上下文。
+   * 3 会话读数组：耗时 → 累计 → 命中率 → 上下文。
    *
    * 前三段回答「这条会话一共花了多少」：累计用量是总量，命中率是它里面缓存省下来的比例，
    * 耗时是花掉的时间，因此排在一起、彼此相邻；上下文是「最近一次请求占了多少窗口」，
@@ -274,8 +245,6 @@ const CLUSTER_OF: Record<HeaderSegmentKind, HeaderClusterKind> = {
   context: 'session',
   plan: 'aux',
   lsp: 'aux',
-  mcp: 'aux',
-  skill: 'aux',
   firstToken: 'performance',
   generationRate: 'performance',
 };
@@ -286,7 +255,8 @@ const CLUSTER_OF: Record<HeaderSegmentKind, HeaderClusterKind> = {
  * 四簇的关系是「在不在干活 · 这条会话花了多少 · 跑得多快 · 辅助状态」，
  * 因此装不下时整簇收起，而不是从中间把某一簇切成两半。
  * 工作区路径不进指标条：侧栏与窗口标题已经说清楚当前在哪，顶部再写一遍只是重复。
- * LSP、MCP、技能与计划是辅助读数，固定排在最后，窗口不够时先让位。
+ * LSP 与计划是辅助读数，固定排在最后，窗口不够时先让位；MCP 台数与技能条数属
+ * 「这台机器上挂着什么」，由侧栏底栏的连接行常驻承载，不占指标条。
  */
 export function headerClusters(input: HeaderMetricsInput): HeaderCluster[] {
   const groups: HeaderCluster[] = [

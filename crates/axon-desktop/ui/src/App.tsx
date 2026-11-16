@@ -9,6 +9,8 @@ import { GatewayUnconnected, GatewayUnavailableStage } from './components/Gatewa
 import { ConversationView } from './components/conversation/ConversationView';
 import { ErrorBoundary } from './components/conversation/ErrorBoundary';
 import type { LaneSelection } from './conversation/useConversation';
+import { useConversationMcp } from './conversation/useConversationMcp';
+import { useSkillCatalog } from './conversation/skillCatalog';
 import { clearedAtSettle, markForNotice } from './conversation/laneMarks';
 import { sameRuntimeFacts, type LaneRuntimeFacts } from './conversation/runtimeFacts';
 import { LoadingState, Text } from './components/ui/surfaces';
@@ -346,6 +348,16 @@ export const App: React.FC = () => {
     return workspaces.find((item) => item.active) ?? workspaces[0] ?? null;
   }, [selection, workspaces]);
 
+  /**
+   * 侧栏底栏的常驻辅助读数：MCP 台数与技能条数。
+   *
+   * 这两项原本挂在对话页指标条上，现在收进连接行：它们是「这台机器上挂着什么」，
+   * 与打开哪条会话无关，因此不该跟着会话读数一起在首屏消失。实例由外壳持有唯一一份，
+   * 输入坞的 `/mcp` 重载之后侧栏读数与回执读的是同一份结论，不会各说一套。
+   */
+  const mcp = useConversationMcp(activeWorkspace?.path ?? null);
+  const skillCount = useSkillCatalog()?.length ?? null;
+
   const selectedLane = selection === null ? null :
     activeWorkspace?.lanes.find((lane) => lane.id === selection.laneId);
   const hasPendingQuestion = Boolean(
@@ -518,6 +530,8 @@ export const App: React.FC = () => {
         selectedLaneId={selection?.laneId ?? null}
         laneMarks={laneMarks}
         runtime={laneRuntime}
+        mcpReading={mcp.reading}
+        skillCount={skillCount}
       />
 
       {/*
@@ -592,6 +606,7 @@ export const App: React.FC = () => {
               onSelectLane={selectLane}
               onRuntimeFacts={applyRuntimeFacts}
               originBar={originBarFor(selection, setCurrentTab)}
+              mcp={mcp}
             />
           </ErrorBoundary>
         )}
