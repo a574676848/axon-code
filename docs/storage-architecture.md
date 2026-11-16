@@ -520,6 +520,23 @@ enum TurnOrigin { External, Cron, Goal, Subagent }
 - `payload_json.metrics` 缺失时按"本轮未测得"处理，**不填 0**，否则平均值被稀释。
 - `metrics` 只是回传通道，不是权威事实：权威事实是落盘后的 `turn_metrics` 事件。
 
+### 4.11.2 CLI 路径的 fence 问题（待裁决）
+
+`axon run` 是独立进程，不经过 daemon 的 action 队列。这带来一个计划书未覆盖的问题：
+
+- CLI 没有 `DaemonHostRecord`，调用 `append_events` 会被 fence 校验拒绝；
+- CLI 也不产生 daemon 侧的 execution，所以"结算时落事件"那条路径对它不适用。
+
+也就是说 `turn_metrics` 若只由 daemon 生产，CLI 发起的轮次就永远没有指标。三个选项：
+
+| 选项 | 做法 | 代价 |
+| --- | --- | --- |
+| A | CLI 也 claim 一个短租约 host | 与 daemon 抢同一行的 lease，冲突概率高，等于把故障点引进来 |
+| B | `append_events` 允许 `host=None` 跳过 fence，仅 CLI 使用 | 削弱 fence：CLI 与 daemon 同时写同一会话时失去保护 |
+| C | CLI 不写事件，`turn_metrics` 只覆盖 daemon 托管的会话 | 实现最简单，但 CLI 与 TUI 的轮次在 header 指标里缺失 |
+
+倾向 **B**，理由是 CLI 直连的是它自己独占的会话（run 期间没有 daemon 并发执行同一会话），而 fence 要防的是"两个 host 同时写同一会话"。但这属于安全边界调整，需要显式确认。
+
 **采集策略**
 
 1. **始终采集，不受日志级别控制。** `first_token_telemetry_enabled` 的 trace 开关只保留给"逐阶段明细日志"，不再决定是否落库。
