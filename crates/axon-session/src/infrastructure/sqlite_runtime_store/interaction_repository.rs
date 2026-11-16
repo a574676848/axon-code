@@ -35,6 +35,8 @@ const SELECT_CLAIMABLE_INTERACTIONS: &str = "SELECT queued.interaction_id,queued
      FROM inbox AS queued \
      LEFT JOIN work_items AS current ON current.inbox_id=queued.interaction_id \
      WHERE (current.execution_id IS NULL OR current.status=?1) \
+       AND NOT EXISTS(SELECT 1 FROM work_item_history AS done \
+                      WHERE done.inbox_id=queued.interaction_id) \
        AND NOT EXISTS(SELECT 1 FROM work_items AS active \
                       JOIN inbox AS session ON session.interaction_id=active.inbox_id \
                       WHERE session.session_id=queued.session_id AND active.status=?2 \
@@ -453,6 +455,13 @@ fn release_work_item(
         )
         .map_err(storage_error)?;
     if changed == 1 {
+        // 终态行搬进历史表：在途表只留排队与运行中的行。
+        super::work_item_archive::archive_work_item(
+            &connection,
+            interaction_id.as_str(),
+            i64_value(now_ms).map_err(runtime_error)?,
+        )
+        .map_err(storage_error)?;
         return Ok(());
     }
     Err(inbox_state_error(&connection, interaction_id)?)
@@ -488,6 +497,13 @@ fn settle_work_item(
         )
         .map_err(storage_error)?;
     if changed == 1 {
+        // 终态行搬进历史表：在途表只留排队与运行中的行。
+        super::work_item_archive::archive_work_item(
+            &connection,
+            interaction_id.as_str(),
+            i64_value(now_ms).map_err(runtime_error)?,
+        )
+        .map_err(storage_error)?;
         return Ok(());
     }
     Err(inbox_state_error(&connection, interaction_id)?)

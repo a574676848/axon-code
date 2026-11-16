@@ -108,7 +108,7 @@ impl ExecutionStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(runtime_error)?;
         connection
             .query_row(
-                &format!("SELECT {EXECUTION_COLUMNS} FROM work_items WHERE execution_id=?1"),
+                &format!("SELECT {EXECUTION_COLUMNS} FROM work_items_all WHERE execution_id=?1"),
                 params![execution_id.as_str()],
                 read_execution,
             )
@@ -126,7 +126,7 @@ impl ExecutionStore for SqliteRuntimeStore {
         }
         let connection = self.connection().map_err(runtime_error)?;
         let mut statement = connection
-            .prepare("SELECT execution_id,goal_id,session_id,attempt,priority,dedupe_key,status,lease_json,retry_at_ms,checkpoint_json,created_at_ms,updated_at_ms,payload_json FROM work_items WHERE goal_id=?1 ORDER BY created_at_ms DESC, execution_id DESC LIMIT ?2")
+            .prepare("SELECT execution_id,goal_id,session_id,attempt,priority,dedupe_key,status,lease_json,retry_at_ms,checkpoint_json,created_at_ms,updated_at_ms,payload_json FROM work_items_all WHERE goal_id=?1 ORDER BY created_at_ms DESC, execution_id DESC LIMIT ?2")
             .map_err(storage_error)?;
         statement
             .query_map(
@@ -149,7 +149,7 @@ impl ExecutionStore for SqliteRuntimeStore {
         connection
             .query_row(
                 &format!(
-                    "SELECT {EXECUTION_COLUMNS} FROM work_items WHERE session_id=?1 \
+                    "SELECT {EXECUTION_COLUMNS} FROM work_items_all WHERE session_id=?1 \
                      ORDER BY created_at_ms DESC, execution_id DESC LIMIT 1"
                 ),
                 params![session_id.as_str()],
@@ -333,6 +333,15 @@ impl ExecutionStore for SqliteRuntimeStore {
             )
             .map_err(enqueue_error)?;
         if changed == 1 {
+            if terminal {
+                // 终态行搬进历史表：在途表只留排队与运行中的行。
+                super::work_item_archive::archive_work_item(
+                    &connection,
+                    execution_id.as_str(),
+                    i64_value(now_ms).map_err(runtime_error)?,
+                )
+                .map_err(storage_error)?;
+            }
             Ok(())
         } else {
             Err(ExecutionStoreError::Conflict(
@@ -385,6 +394,16 @@ impl ExecutionStore for SqliteRuntimeStore {
                 .map_err(storage_error)?
         };
         if changed == 1 {
+            if status.is_terminal() {
+                // 终态行搬进历史表：在途表只留排队与运行中的行。
+                let connection = self.connection().map_err(runtime_error)?;
+                super::work_item_archive::archive_work_item(
+                    &connection,
+                    execution_id.as_str(),
+                    i64_value(now_ms).map_err(runtime_error)?,
+                )
+                .map_err(storage_error)?;
+            }
             Ok(())
         } else if self.get_execution(execution_id)?.is_none() {
             Err(ExecutionStoreError::NotFound(execution_id.clone()))
@@ -402,7 +421,7 @@ impl ExecutionStore for SqliteRuntimeStore {
     ) -> Result<Option<ExecutionRecord>, ExecutionStoreError> {
         let connection = self.connection().map_err(runtime_error)?;
         connection.query_row(
-            &format!("SELECT {EXECUTION_COLUMNS} FROM work_items WHERE goal_id=?1 AND dedupe_key=?2 ORDER BY created_at_ms,execution_id LIMIT 1"),
+            &format!("SELECT {EXECUTION_COLUMNS} FROM work_items_all WHERE goal_id=?1 AND dedupe_key=?2 ORDER BY created_at_ms,execution_id LIMIT 1"),
             params![goal_id.as_str(), dedupe_key],
             read_execution,
         ).optional().map_err(storage_error)

@@ -11,12 +11,14 @@ use rusqlite::{OptionalExtension, params};
 pub(super) const INBOX_COLUMNS: &str = "i.interaction_id,i.source_channel,i.source_message_id,i.scope_json,\
 i.audience_json,i.reply_route_json,i.content,\
 CASE WHEN w.status='running' THEN 'processing' \
+     WHEN h.terminal_kind IS NOT NULL THEN h.terminal_kind \
      WHEN w.terminal_kind IS NOT NULL THEN w.terminal_kind \
      ELSE 'received' END,\
 i.received_at_ms,i.attachments_json,i.model,i.reasoning_effort,i.session_id";
 /// 入站事实与工作项的连接：一个 inbox 行最多对应一个工作项。
-pub(super) const INBOX_STATE_JOIN: &str =
-    "FROM inbox AS i LEFT JOIN work_items AS w ON w.inbox_id = i.interaction_id";
+pub(super) const INBOX_STATE_JOIN: &str = "FROM inbox AS i \
+     LEFT JOIN work_items AS w ON w.inbox_id = i.interaction_id \
+     LEFT JOIN work_item_history AS h ON h.inbox_id = i.interaction_id";
 /// 工作项的在途状态。
 pub(super) const WORK_RUNNING: &str = "running";
 pub(super) const SYSTEM_SOURCE_CHANNEL: &str = axon_domain::SYSTEM_SOURCE_CHANNEL;

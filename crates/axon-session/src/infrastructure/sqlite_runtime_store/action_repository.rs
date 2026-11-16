@@ -77,7 +77,7 @@ pub(super) fn claim_next_action(
     }
     let action = transaction
         .query_row(
-            &format!("SELECT {ACTION_COLUMNS} FROM work_items WHERE execution_id=?1"),
+            &format!("SELECT {ACTION_COLUMNS} FROM work_items_all WHERE execution_id=?1"),
             params![action_id],
             SqliteRuntimeStore::read_action,
         )
@@ -152,7 +152,7 @@ pub(super) fn cancel_action(
     }
     connection
         .query_row(
-            &format!("SELECT {ACTION_COLUMNS} FROM work_items WHERE execution_id=?1"),
+            &format!("SELECT {ACTION_COLUMNS} FROM work_items_all WHERE execution_id=?1"),
             params![action_id.as_str()],
             SqliteRuntimeStore::read_action,
         )
@@ -225,7 +225,7 @@ fn find_by_action_id(
 ) -> Result<Option<SessionActionRecord>, RuntimeStoreError> {
     let existing = transaction
         .query_row(
-            &format!("SELECT {ACTION_COLUMNS} FROM work_items WHERE execution_id=?1"),
+            &format!("SELECT {ACTION_COLUMNS} FROM work_items_all WHERE execution_id=?1"),
             params![action.action_id.as_str()],
             SqliteRuntimeStore::read_action,
         )

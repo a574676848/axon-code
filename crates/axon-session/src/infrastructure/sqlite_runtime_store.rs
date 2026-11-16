@@ -88,6 +88,8 @@ pub(crate) mod session_metrics_repository;
 pub mod transaction;
 #[path = "sqlite_runtime_store/user_question_repository.rs"]
 mod user_question_repository;
+#[path = "sqlite_runtime_store/work_item_archive.rs"]
+mod work_item_archive;
 
 /// 控制面库文件名：会话、队列、目标、调度、游标、账本。
 const CONTROL_DATABASE_FILE_NAME: &str = "control.sqlite3";

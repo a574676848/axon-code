@@ -295,6 +295,8 @@ pub(super) fn delete_session_families_by_ids(
             ids,
         )?,
         schedules: delete_ids_in(&transaction, "schedules", "session_id", &placeholders, ids)?,
+        // 执行历史先于会话删除：终态行已迁出在途表，不删会留下无主历史。
+        executions: delete_ids_in(&transaction, "work_item_history", "session_id", &placeholders, ids)?,
         sessions: delete_ids_in(&transaction, "sessions", "session_id", &placeholders, ids)?,
         ..RuntimeCleanupCounts::default()
     };
@@ -330,7 +332,14 @@ pub(super) fn delete_terminal_goals(
         Ok(RuntimeCleanupCounts {
             result_reads,
             results: delete_ids_in(transaction, "goal_results", "goal_id", &placeholders, ids)?,
-            executions: delete_ids_in(transaction, "work_items", "goal_id", &placeholders, ids)?,
+            executions: delete_ids_in(transaction, "work_items", "goal_id", &placeholders, ids)?
+                + delete_ids_in(
+                    transaction,
+                    "work_item_history",
+                    "goal_id",
+                    &placeholders,
+                    ids,
+                )?,
             goals: delete_ids_in(transaction, "goals", "goal_id", &placeholders, ids)?,
             ..RuntimeCleanupCounts::default()
         })
@@ -351,6 +360,13 @@ pub(super) fn delete_terminal_interactions(
         let placeholders = placeholders(ids.len());
         // 工作项随入站事实一同回收：终态队列行没有独立保留价值，留着只会拖慢清扫。
         delete_ids_in(transaction, "work_items", "inbox_id", &placeholders, ids)?;
+        delete_ids_in(
+            transaction,
+            "work_item_history",
+            "inbox_id",
+            &placeholders,
+            ids,
+        )?;
         Ok(RuntimeCleanupCounts {
             interactions: delete_ids_in(
                 transaction,
@@ -456,7 +472,7 @@ pub(super) fn terminal_interactions_selection_sql() -> String {
     format!(
         "SELECT i.interaction_id FROM inbox AS i
          INDEXED BY inbox_retention
-         JOIN work_items AS w ON w.inbox_id = i.interaction_id
+         JOIN work_item_history AS w ON w.inbox_id = i.interaction_id
          WHERE w.terminal_kind IN ({terminal})
            AND i.received_at_ms < ?1
          ORDER BY i.received_at_ms ASC

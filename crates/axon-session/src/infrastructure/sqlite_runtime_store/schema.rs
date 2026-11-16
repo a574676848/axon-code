@@ -338,7 +338,50 @@ const CONTROL_DDL: &str = "
             updated_at_ms INTEGER NOT NULL,
             FOREIGN KEY(session_id) REFERENCES sessions(session_id)
         );
-        CREATE INDEX IF NOT EXISTS work_items_goal_history
+        CREATE TABLE IF NOT EXISTS work_item_history (
+            work_id TEXT PRIMARY KEY NOT NULL,
+            goal_id TEXT,
+            session_id TEXT,
+            kind TEXT NOT NULL DEFAULT 'turn',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            goal_revision INTEGER,
+            context_version INTEGER,
+            attempt INTEGER NOT NULL,
+            priority INTEGER NOT NULL,
+            dedupe_key TEXT,
+            inbox_id TEXT,
+            terminal_kind TEXT NOT NULL,
+            status TEXT NOT NULL,
+            started_at_ms INTEGER,
+            committed_at_ms INTEGER,
+            cancelled_at_ms INTEGER,
+            checkpoint_json TEXT,
+            cancellation_reason TEXT,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            finished_at_ms INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS work_item_history_goal
+            ON work_item_history(goal_id, finished_at_ms DESC, work_id DESC);
+        CREATE INDEX IF NOT EXISTS work_item_history_session
+            ON work_item_history(session_id, finished_at_ms DESC, work_id DESC);
+        CREATE INDEX IF NOT EXISTS work_item_history_inbox
+            ON work_item_history(inbox_id);
+        CREATE VIEW IF NOT EXISTS work_items_all AS
+            SELECT execution_id, goal_id, session_id, kind, payload_json, goal_revision,
+                   context_version, attempt, priority, dedupe_key, inbox_id, terminal_kind,
+                   status, lease_token, lease_json, claimed_by, claimed_generation,
+                   lease_expires_at_ms, started_at_ms, committed_at_ms, cancelled_at_ms,
+                   retry_at_ms, checkpoint_json, cancellation_requested_at_ms,
+                   cancellation_reason, created_at_ms, updated_at_ms
+            FROM work_items
+            UNION ALL
+            SELECT work_id AS execution_id, goal_id, session_id, kind, payload_json,
+                   goal_revision, context_version, attempt, priority, dedupe_key, inbox_id,
+                   terminal_kind, status, NULL, NULL, NULL, NULL, NULL, started_at_ms,
+                   committed_at_ms, cancelled_at_ms, NULL, checkpoint_json, NULL,
+                   cancellation_reason, created_at_ms, updated_at_ms
+            FROM work_item_history;       CREATE INDEX IF NOT EXISTS work_items_goal_history
             ON work_items(goal_id, created_at_ms DESC, execution_id DESC);
         CREATE INDEX IF NOT EXISTS work_items_goal_dedupe
             ON work_items(goal_id, dedupe_key, created_at_ms, execution_id);
@@ -373,8 +416,8 @@ const CONTROL_DDL: &str = "
             artifact_refs_json TEXT NOT NULL,
             error_kind TEXT,
             created_at_ms INTEGER NOT NULL,
-            FOREIGN KEY(goal_id) REFERENCES goals(goal_id),
-            FOREIGN KEY(execution_id) REFERENCES work_items(execution_id)
+            -- 只约束 goal：执行行终结后会搬进 work_item_history，不能再对在途表建外键。
+            FOREIGN KEY(goal_id) REFERENCES goals(goal_id)
         );
         CREATE INDEX IF NOT EXISTS goal_results_goal
             ON goal_results(goal_id, created_at_ms DESC, result_id);

@@ -31,7 +31,7 @@ pub(super) fn count_expired_rows(
             connection,
             &format!(
                 "SELECT COUNT(*) FROM inbox AS i
-                 JOIN work_items AS w ON w.inbox_id = i.interaction_id
+                 JOIN work_item_history AS w ON w.inbox_id = i.interaction_id
                  WHERE w.terminal_kind IN ({terminal}) AND i.received_at_ms < ?1",
                 terminal = quoted_list(&INTERACTION_TERMINAL_KINDS),
             ),
@@ -81,7 +81,7 @@ pub(super) fn count_expired_rows(
         counts.executions = count_rows(
             connection,
             &format!(
-                "SELECT COUNT(*) FROM work_items WHERE goal_id IN (SELECT goal_id {task_filter})"
+                "SELECT COUNT(*) FROM work_items_all WHERE goal_id IN (SELECT goal_id {task_filter})"
             ),
             cutoff_ms,
         )?;
