@@ -6,6 +6,7 @@
 //! 剩余数据由下一轮 Cron 幂等继续，避免清理长时间争抢 Daemon 的写锁。
 
 use std::{
+    collections::HashSet,
     path::Path,
     time::{Duration, Instant},
 };
@@ -201,11 +202,14 @@ fn run_runtime_cleanup_with_budget(
             connection, cutoff_ms, deadline,
         )?);
     }
-    // 时间维度清理之后再看磁盘水位：越过上限就按最旧优先继续淘汰到低水位。
+    // 时间维度清理之后再看磁盘水位：越过上限就按最旧优先继续淘汰到低水位，
+    // 但仍在推进的会话目录一律不淘汰。
+    let protected_dirs = active_event_dir_names(root)?;
     let evicted = runtime_event_archive::enforce_events_disk_budget(
         &events_root,
         runtime_event_archive::high_water_bytes(),
         runtime_event_archive::low_water_bytes(),
+        &protected_dirs,
     )?;
     if evicted > 0 {
         counts.session_events = counts.session_events.saturating_add(evicted);
@@ -222,6 +226,34 @@ fn run_runtime_cleanup_with_budget(
         }
     }
     Ok(counts)
+}
+
+/// 仍在推进的会话事件目录名集合，按事件目录的编码规则给出。
+///
+/// 磁盘淘汰按会话目录删除，比较对象是目录名（`EventLog::encode_segment` 的结果），
+/// 不是原始会话标识。
+fn active_event_dir_names(root: &Path) -> Result<HashSet<String>, String> {
+    let path = control_database_path(root);
+    if !path.exists() {
+        return Ok(HashSet::new());
+    }
+    let connection = open_read_only_database(&path)?;
+    let sql = format!(
+        "SELECT session_id FROM sessions WHERE status IN ({active})",
+        active = quoted_list(&SESSION_ACTIVE_STATUSES),
+    );
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|_| "Daemon runtime 活跃 Session 目录查询失败".to_owned())?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|_| "Daemon runtime 活跃 Session 目录读取失败".to_owned())?;
+    let mut names = HashSet::new();
+    for row in rows {
+        let session_id = row.map_err(|_| "Daemon runtime 活跃 Session 目录读取失败".to_owned())?;
+        names.insert(axon_eventlog::EventLog::encode_segment(&session_id));
+    }
+    Ok(names)
 }
 
 /// 读取候选中仍活跃或仍被 Execution 引用的 Session。

@@ -5,6 +5,7 @@
 //! 不再有「按行归档成 .jsonl.zst 再删行」这一套：帧本身已经压缩，逐帧再压一次
 //! 只会重复占用磁盘。
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -15,12 +16,12 @@ const EVENTS_DIR: &str = "events";
 const ARCHIVE_DIR: &str = "archive";
 /// 事件归档子目录名。
 const ARCHIVE_SUBDIR: &str = "session-events";
-/// 磁盘预算高水位占上限的比例。
-const HIGH_WATER_NUMERATOR: u64 = 8;
-/// 磁盘预算低水位占上限的比例。
-const LOW_WATER_NUMERATOR: u64 = 1;
-/// 比例分母。
-const WATER_DENOMINATOR: u64 = 2;
+/// 磁盘预算高水位占上限的百分比。
+const HIGH_WATER_PERCENT: u64 = 80;
+/// 磁盘预算低水位占上限的百分比。
+const LOW_WATER_PERCENT: u64 = 20;
+/// 比例基数。
+const PERCENT_BASE: u64 = 100;
 /// 数据目录上限：4 GiB。
 const MAX_EVENT_DISK_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
@@ -41,14 +42,14 @@ pub(super) fn events_root(database_path: &Path) -> PathBuf {
         .join(EVENTS_DIR)
 }
 
-/// 磁盘预算高水位。
+/// 磁盘预算高水位：上限的 80%。
 pub(super) fn high_water_bytes() -> u64 {
-    MAX_EVENT_DISK_BYTES / WATER_DENOMINATOR * HIGH_WATER_NUMERATOR
+    MAX_EVENT_DISK_BYTES / PERCENT_BASE * HIGH_WATER_PERCENT
 }
 
-/// 磁盘预算低水位。
+/// 磁盘预算低水位：上限的 20%。
 pub(super) fn low_water_bytes() -> u64 {
-    MAX_EVENT_DISK_BYTES / WATER_DENOMINATOR * LOW_WATER_NUMERATOR
+    MAX_EVENT_DISK_BYTES / PERCENT_BASE * LOW_WATER_PERCENT
 }
 
 /// 删除最后活动时间早于 `cutoff_ms` 的会话事件目录，返回删除的会话数。
@@ -72,10 +73,15 @@ pub(super) fn archive_expired_session_dirs(
 }
 
 /// 超过高水位时从最旧会话开始删除，直到落到低水位；返回删除的会话数。
+///
+/// `protected` 是仍在推进的会话目录名（已按事件目录规则编码）：它们的事件还会被
+/// 读写，磁盘紧张也不能删。全部候选都被保护时本函数如实返回 0，由上层报警，
+/// 不做「删活跃会话换水位」的交换。
 pub(super) fn enforce_events_disk_budget(
     events_root: &Path,
     high_bytes: u64,
     low_bytes: u64,
+    protected: &HashSet<String>,
 ) -> Result<usize, String> {
     if !events_root.is_dir() {
         return Ok(0);
@@ -92,6 +98,13 @@ pub(super) fn enforce_events_disk_budget(
     for (directory, size, _) in sessions {
         if total <= low_bytes {
             break;
+        }
+        let name = directory
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if protected.contains(name) {
+            continue;
         }
         fs::remove_dir_all(&directory)
             .map_err(|error| format!("淘汰事件目录失败 {}：{error}", directory.display()))?;
@@ -203,7 +216,7 @@ mod tests {
         let events = root.path().join("events");
         write_file(&events.join("session-a"), "session.v1.jsonl.zstd", 64);
         write_file(&events.join("session-b"), "session.v1.jsonl.zstd", 64);
-        let removed = enforce_events_disk_budget(&events, 1, 1).expect("淘汰");
+        let removed = enforce_events_disk_budget(&events, 1, 1, &HashSet::new()).expect("淘汰");
         assert_eq!(removed, 2, "超过低水位前应持续淘汰");
     }
 
@@ -212,7 +225,36 @@ mod tests {
         let root = tempfile::tempdir().expect("临时目录");
         let events = root.path().join("events");
         write_file(&events.join("session-a"), "session.v1.jsonl.zstd", 8);
-        let removed = enforce_events_disk_budget(&events, 1024, 512).expect("检查");
+        let removed =
+            enforce_events_disk_budget(&events, 1024, 512, &HashSet::new()).expect("检查");
         assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn budget_never_evicts_active_session_dirs() {
+        let root = tempfile::tempdir().expect("临时目录");
+        let events = root.path().join("events");
+        write_file(&events.join("session-live"), "session.v1.jsonl.zstd", 64);
+        write_file(&events.join("session-dead"), "session.v1.jsonl.zstd", 64);
+        let protected = HashSet::from(["session-live".to_owned()]);
+        // 低水位 1 字节：不保护就得全删；保护后活跃目录必须留下。
+        let removed = enforce_events_disk_budget(&events, 1, 1, &protected).expect("淘汰");
+        assert_eq!(removed, 1, "只淘汰非活跃会话");
+        assert!(
+            events.join("session-live").exists(),
+            "活跃会话事件目录不得被淘汰"
+        );
+        assert!(!events.join("session-dead").exists());
+    }
+
+    #[test]
+    fn water_marks_stay_inside_the_disk_cap() {
+        assert_eq!(high_water_bytes(), MAX_EVENT_DISK_BYTES / 100 * 80);
+        assert_eq!(low_water_bytes(), MAX_EVENT_DISK_BYTES / 100 * 20);
+        assert!(
+            high_water_bytes() < MAX_EVENT_DISK_BYTES,
+            "高水位必须低于上限，否则预算永远不触发"
+        );
+        assert!(low_water_bytes() < high_water_bytes());
     }
 }
