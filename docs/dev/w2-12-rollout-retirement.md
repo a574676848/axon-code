@@ -56,8 +56,11 @@ E → thread 子会话关系 + 事件面；F → 目录级保留（已存在）�
    - 运行收口、桌面模型读数、桌面用量读数都已改走这些入口；
      删除 rollout 的 `load_previous_reflection_notice`、`load_latest_reflection_notice_from_root`、
      `load_latest_session_model_from_root`、`load_session_usage_totals_from_root` 与两条 store 方法。
-   - 仍待迁移：`load_session_turn`、`load_turn_sequence`、`load_recent_turn_facts`（治理 worker、
-     收口产物 → 显式信号），以及 `session_usage_totals`（已标 `#[allow(dead_code)]`，随整删移除）。
+   - 仍待迁移：`load_recent_turn_facts`（收口产物 → 显式信号）、`load_session_turn`
+     （治理 worker 需要整条 RunSessionRecord，需用 thread 轮次反向重建），以及
+     `session_usage_totals`（已标 `#[allow(dead_code)]`，随整删移除）。
+   - 轮序已迁：`run_thread_store::turn_sequence` 按 `turn_id` 后缀（`{session}-turn-{part}`）
+     点查 thread 轮次，删掉 rollout 的 `load_turn_sequence` 与 store 方法。
 3. D 组：会话读数与用量改读 `session_metrics`（已具备）与 thread settings；`load_session_usage*`
    与 `load_latest_session_model_from_root` 删除。
 4. E 组：子代理关系与链回放改用 thread 的父子关系与事件面；`read_rollout_tool_output` 改为

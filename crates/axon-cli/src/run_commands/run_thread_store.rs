@@ -143,6 +143,25 @@ pub(crate) struct SessionModelFacts {
 
 pub(crate) use super::run_rollout_store::SessionUsageTotals;
 
+/// 某轮在会话内的轮序：turn_id 由 `{session_id}-turn-{assistant_part_id}` 组成，按后缀命中。
+pub(super) fn turn_sequence(
+    config_path: &Path,
+    session_id: &str,
+    assistant_part_id: &str,
+) -> Result<Option<u64>, String> {
+    let root = resolved_axon_root(config_path)?;
+    let Ok(detail) = ThreadService::new(JsonlThreadEventStore).read_thread(&root, session_id)
+    else {
+        return Ok(None);
+    };
+    let suffix = format!("-turn-{assistant_part_id}");
+    Ok(detail
+        .turns
+        .iter()
+        .find(|turn| turn.turn_id.ends_with(&suffix))
+        .map(|turn| turn.sequence))
+}
+
 /// 读某条会话的累计用量；没有投影时读作全零（新会话本来就是这个状态）。
 pub(crate) fn session_usage_totals_at_root(
     root: &Path,

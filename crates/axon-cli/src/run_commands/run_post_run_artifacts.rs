@@ -208,7 +208,7 @@ pub(super) fn sequence_option(
     payload: &DurableGovernancePayload,
     session_record: &RunSessionRecord,
 ) -> Option<u64> {
-    match super::run_rollout_store::load_turn_sequence(
+    match super::run_thread_store::turn_sequence(
         &payload.config_path,
         &session_record.session_id,
         &session_record.assistant_part_id,

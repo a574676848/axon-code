@@ -170,24 +170,6 @@ pub(crate) fn read_rollout_tool_output(
     RolloutSqliteStore::open(&path)?.read_tool_output(&archive_root, session_id, provider_call_id)
 }
 
-/// 读取某一轮在会话内的轮序，供生成 `trace:<session>:<sequence>` 使用。
-///
-/// 取的是 `rollout_turns.sequence`，即同一会话内的轮次下标，不是
-/// `replay_chain` 的会话祖先链下标。治理队列是异步消费的：等某轮的 payload 被
-/// 处理时，同一会话可能已经落了更多轮次，所以任何「按当前链长回推本轮下标」的
-/// 写法都会指向别的轮次。必须按 `assistant_part_id` 点查。
-pub(crate) fn load_turn_sequence(
-    config_path: &Path,
-    session_id: &str,
-    assistant_part_id: &str,
-) -> Result<Option<u64>, String> {
-    let path = resolved_rollout_db_path(config_path).map_err(ToOwned::to_owned)?;
-    if !path.exists() {
-        return Ok(None);
-    }
-    RolloutSqliteStore::open(&path)?.turn_sequence(session_id, assistant_part_id)
-}
-
 /// 读取某会话最近若干轮的事实摘要；账本尚未建立时读作空。
 ///
 /// 只读打开：这条路径挂在每轮收口上，不该顺带跑建表语句。
