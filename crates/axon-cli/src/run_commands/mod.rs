@@ -71,7 +71,6 @@ mod run_request_payload;
 mod run_request_session;
 pub(crate) mod run_request_subagents;
 pub(crate) mod run_resume_pointer;
-pub(crate) mod run_rollout_store;
 mod run_self_iteration_subagent;
 mod run_semantic_salience;
 pub(crate) mod run_session_store;
@@ -90,7 +89,10 @@ mod run_subagent_lifecycle;
 mod run_subagent_performance;
 mod run_subagent_progress;
 mod run_text_render;
+pub(crate) mod run_thread_children;
 mod run_thread_history;
+mod run_thread_partial;
+pub(crate) mod run_thread_replay;
 pub(crate) mod run_thread_store;
 mod run_thread_title;
 mod run_tool_loop;
@@ -147,13 +149,6 @@ use run_request_session::RunRequestSession;
 pub(crate) use run_request_subagents::execute_standalone_subagent;
 pub(crate) use run_resume_pointer::select_resume_session;
 pub(crate) use run_resume_pointer::{restore_resume_session, snapshot_resume_session};
-use run_rollout_store::commit_session_to_rollout;
-#[cfg(test)]
-pub(crate) use run_rollout_store::{RolloutEventAppendInput, append_rollout_event_for_session};
-pub(crate) use run_rollout_store::{
-    RolloutEventRecord, RolloutReplayView, RolloutSqliteStore, read_rollout_tool_output,
-    replay_rollout_events, replay_session_chain, resolved_rollout_db_path,
-};
 pub(crate) use run_session_store::RunSessionRecord;
 pub(crate) use run_session_store::resolved_axon_root;
 pub(crate) use run_startup_snapshot::RunStartupSnapshot;
@@ -227,13 +222,6 @@ pub(crate) fn run_cli_daemon_interaction(
         None,
         live_writer,
     )
-}
-
-pub(crate) fn load_thread_session(
-    config_path: &Path,
-    session_id: Option<&str>,
-) -> Result<Option<RunSessionRecord>, String> {
-    run_thread_store::load_thread_session(config_path, session_id)
 }
 
 use run_thread_store::{
@@ -365,7 +353,6 @@ fn finish_completed_run(
     publish_turn_metrics(config_path, &record);
     let session_title = run_thread_title::derive_thread_title(&record.prompt);
 
-    commit_session_to_rollout(config_path, &record, &session_title)?;
     // 反思是轮后异步治理的产物：本轮治理尚未启动，能确定看到的只有上一次的结果。
     // 这条提示随 run 输出交给界面，用户在下一轮开头看到上一轮的记忆动作。
     let memory_reflection_notice = run_thread_store::previous_reflection_notice(
@@ -491,11 +478,11 @@ fn persist_failed_run(
     failure: &axon_domain::RuntimeFailure,
 ) -> Result<(), String> {
     let started = RunSessionRecord::started(request);
-    let persisted = load_thread_session(config_path, Some(&request.session_id))?;
+    let persisted =
+        run_thread_store::turn_record_by_sequence(config_path, &request.session_id, None)?
+            .map(|(record, _)| record);
     let mut record = select_failed_run_record(started, persisted);
     record.mark_failed(failure.clone(), partial_response, error);
-    let title = run_thread_title::derive_thread_title(&record.prompt);
-    commit_session_to_rollout(config_path, &record, &title)?;
     mirror_failed_session_to_thread(config_path, &record, failure)
 }
 

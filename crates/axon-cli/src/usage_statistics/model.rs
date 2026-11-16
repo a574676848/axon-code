@@ -1,5 +1,5 @@
 use clap::ValueEnum;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// 使用统计查询周期。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, ValueEnum)]
@@ -270,50 +270,23 @@ pub(crate) struct UsageProjectionReport {
     pub completed_at_ms: u64,
 }
 
-/// Usage 投影只关心的 rollout 事件类型；其他类型保持前向兼容。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-pub(super) enum RolloutUsageEventKind {
-    ProviderCompleted,
-    Completed,
-    Failed,
-    Interrupted,
-    #[serde(other)]
-    Other,
-}
-
-/// Usage 投影读取的最小事件字段。
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct RolloutUsageEvent {
-    pub(super) kind: RolloutUsageEventKind,
-    #[serde(default)]
-    pub(super) duration_ms: Option<u64>,
-}
-
-/// Rollout usage 的最小反序列化合同。
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct RolloutUsageRecord {
+/// Usage 投影只关心的最小轮次事实：全部来自 thread 轮次与 metadata。
+#[derive(Debug, Clone)]
+pub(super) struct ThreadUsageRecord {
     pub(super) session_id: String,
-    #[serde(default)]
-    pub(super) parent_session_id: Option<String>,
+    /// 是否子会话：子代理轮的用量单独归因。
+    pub(super) is_subagent: bool,
     pub(super) provider: String,
     pub(super) model: String,
     pub(super) assistant_part_id: String,
-    #[serde(default)]
     pub(super) usage: Option<axon_agent_runtime::TokenUsageTelemetry>,
-    #[serde(default)]
-    pub(super) turn_events: Vec<RolloutUsageEvent>,
-    #[serde(default)]
+    pub(super) status: UsageStatus,
+    pub(super) provider_call_count: u64,
+    pub(super) provider_duration_ms: u64,
     pub(super) upstream_model: Option<String>,
-    #[serde(default)]
     pub(super) reasoning_effort: Option<String>,
-    #[serde(default)]
     pub(super) request_path: Option<String>,
-    #[serde(default)]
     pub(super) speed_mode: Option<String>,
-    #[serde(default)]
     pub(super) ttft_ms: Option<u64>,
-    #[serde(default)]
     pub(super) generation_speed_tps: Option<f64>,
 }

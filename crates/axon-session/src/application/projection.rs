@@ -29,6 +29,12 @@ pub(crate) fn to_summary(detail: &ThreadDetail) -> ThreadSummary {
         cwd: detail.thread.settings.cwd.clone(),
         status: detail.thread.status,
         child_origin: detail.thread.child_origin.clone(),
+        last_turn_status: detail.turns.last().map(|turn| turn.status),
+        last_turn_at_ms: detail.turns.last().map(|turn| {
+            turn.completed_at_ms
+                .or(turn.interrupted_at_ms)
+                .unwrap_or(turn.started_at_ms)
+        }),
         turn_count: detail.turns.len(),
     }
 }

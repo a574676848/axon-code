@@ -32,12 +32,10 @@ fn seed_source_installed_cleanup_fixture() {
     let root = real_device_root();
     std::fs::create_dir_all(&root).expect("隔离根应可创建");
     std::fs::write(root.join("config.toml"), ISOLATION_CONFIG).expect("隔离配置应可写入");
-    let rollout_path = rollout_path(&root);
-    create_rollout(&rollout_path, true);
     create_runtime_family(&root, "idle", false);
     create_governance(&root);
-    create_thread(&root, STALE_ROOT, b"stale-thread\n");
-    create_thread(&root, RETAINED_SESSION, RETAINED_BYTES);
+    create_thread(&root, STALE_ROOT, None, 100);
+    create_thread(&root, RETAINED_SESSION, None, RETAINED_UPDATED_AT_MS);
     create_context(&root, STALE_ROOT);
     create_retained_context(&root);
 }
@@ -46,12 +44,9 @@ fn seed_source_installed_cleanup_fixture() {
 #[ignore = "真机隔离 dry-run 校验：需先运行安装版 dry-run"]
 fn verify_source_installed_dry_run_fixture() {
     let root = real_device_root();
-    let rollout_path = rollout_path(&root);
-    assert!(rollout_exists(&rollout_path, STALE_ROOT));
-    assert!(rollout_exists(&rollout_path, STALE_CHILD));
     assert!(runtime_exists(&root, STALE_ROOT));
     assert!(runtime_exists(&root, STALE_CHILD));
-    assert!(thread_path(&root, STALE_ROOT).exists());
+    assert!(thread_exists(&root, STALE_ROOT));
     assert!(root.join("sessions").join(STALE_ROOT).exists());
 }
 
@@ -59,17 +54,13 @@ fn verify_source_installed_dry_run_fixture() {
 #[ignore = "真机隔离校验：需先运行安装版 cleanup"]
 fn verify_source_installed_cleanup_fixture() {
     let root = real_device_root();
-    let rollout_path = rollout_path(&root);
-    assert!(!rollout_exists(&rollout_path, STALE_ROOT));
-    assert!(!rollout_exists(&rollout_path, STALE_CHILD));
-    assert!(rollout_exists(&rollout_path, RETAINED_SESSION));
     assert!(!runtime_exists(&root, STALE_ROOT));
     assert!(!runtime_exists(&root, STALE_CHILD));
-    assert!(!thread_path(&root, STALE_ROOT).exists());
+    assert!(!thread_exists(&root, STALE_ROOT));
     assert!(!root.join("sessions").join(STALE_ROOT).exists());
-    assert_eq!(
-        std::fs::read(thread_path(&root, RETAINED_SESSION)).expect("retained JSONL 应可读"),
-        RETAINED_BYTES
+    assert!(
+        thread_exists(&root, RETAINED_SESSION),
+        "保留会话的 thread 事件不得被清理"
     );
     assert_eq!(
         std::fs::read(
@@ -78,7 +69,7 @@ fn verify_source_installed_cleanup_fixture() {
                 .join("retained.txt")
         )
         .expect("retained context 应可读"),
-        RETAINED_BYTES
+        b"retained-session-bytes\n"
     );
 }
 

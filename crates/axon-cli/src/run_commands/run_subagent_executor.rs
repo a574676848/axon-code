@@ -36,7 +36,6 @@ use super::{
     run_request_payload::{
         BuildRunModelPayloadInput, RunWorkspaceSnapshotPrewarm, build_run_model_payload,
     },
-    run_rollout_store::commit_session_to_rollout,
     run_session_store::{RunSessionPartialInput, RunSessionRecord},
     run_subagent_completion::log_completion_failure,
     run_subagent_executor_support::child_session_id,

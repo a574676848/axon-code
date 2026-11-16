@@ -11,7 +11,7 @@ use axon_session::{RuntimeStore, RuntimeStoreError};
 
 use super::runtime_store;
 use super::workbench_http_targets::session_owns_owner;
-use crate::run_commands::run_rollout_store::load_child_sessions_from_root;
+use crate::run_commands::run_thread_children::child_session_rows;
 
 /// 子代理会话 ID 的分隔符，与运行侧 `child_session_id` 保持一致。
 const SUBAGENT_SESSION_ID_SEPARATOR: &str = "--subagent--";
@@ -56,7 +56,7 @@ pub(super) fn session_subagents_payload(
         }));
     }
     let prefix = format!("{run_session_id}{SUBAGENT_SESSION_ID_SEPARATOR}");
-    let rows = load_child_sessions_from_root(axon_root, &run_session_id, MAX_SESSION_SUBAGENTS)?;
+    let rows = child_session_rows(axon_root, &run_session_id, MAX_SESSION_SUBAGENTS)?;
     let mut subagents = Vec::with_capacity(rows.len());
     for row in rows {
         let slug = row

@@ -21,7 +21,6 @@ use super::super::run_compaction_projection::{
 };
 use super::super::run_execution::now_ms;
 use super::super::run_progress::RunProgressSink;
-use super::super::run_session_store::RunSessionRecord;
 use super::super::run_session_store::resolved_axon_root;
 
 /// 门禁未通过且没有更具体原因时的失败说明。
@@ -277,34 +276,14 @@ impl WindowRolloverTransaction for InlineWindowRollover<'_, '_> {
         self.active_started_at_ms = None;
     }
 
-    fn publish_active_window(&mut self, messages: &[AgentModelMessage]) -> AxonResult<()> {
-        let Some(through_sequence) = self.active_through_sequence else {
+    fn publish_active_window(&mut self, _messages: &[AgentModelMessage]) -> AxonResult<()> {
+        // 活动窗口投影只有 thread 一处：`commit` 已经把压缩快照连同窗口边界写进
+        // thread 事件流，重启恢复读的就是它。这里不再维护第二份镜像，也不再需要
+        // 把同一批消息按另一套边界重写一遍。
+        if self.active_through_sequence.is_none() {
             return Ok(());
-        };
-        let history_json = serde_json::to_string(messages)
-            .map_err(|error| AxonError::runtime_failure(format!("活动窗口序列化失败：{error}")))?;
-        if !messages.iter().any(|message| {
-            matches!(
-                message.kind,
-                axon_agent_runtime::AgentModelMessageKind::ConversationCheckpoint
-            )
-        }) {
-            return Err(AxonError::runtime_failure("活动窗口缺少便签交接投影"));
         }
-        let checkpoint = axon_session::ThreadCompaction {
-            history_json,
-            checkpoint_text: self.active_checkpoint_text.clone(),
-            through_sequence,
-            before_tokens: self.active_before_tokens,
-            after_tokens: axon_agent_runtime::estimated_history_tokens(messages),
-            recorded_at_ms: now_ms(),
-        };
-        super::super::run_rollout_store::install_rollout_compaction(
-            &self.request.config_path,
-            &self.request.session_id,
-            &checkpoint,
-        )
-        .map_err(AxonError::runtime_failure)
+        Ok(())
     }
 
     fn abort(&mut self) {
@@ -354,13 +333,7 @@ impl InlineWindowRollover<'_, '_> {
             messages,
             prepared.persisted_at_ms,
         )?;
-        // 本轮记录还没落地时先补一条起始记录：窗口靠 assistant_part_id 定位当前轮，
-        // 缺这一行会让这次换窗直接判「缺少当前运行轮次」而白跑。
-        super::super::run_rollout_store::ensure_current_turn_to_rollout(
-            &self.request.config_path,
-            &RunSessionRecord::started(self.request),
-        )
-        .map_err(AxonError::runtime_failure)?;
+
         // 投影与「摘要来源落库」同属一次提交：任一步失败都整体回滚，
         // 不留下「窗口已推进但来源未知」的半状态。
         let projection =

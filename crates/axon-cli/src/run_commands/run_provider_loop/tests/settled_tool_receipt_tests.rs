@@ -1,5 +1,4 @@
 use super::*;
-use crate::run_commands::run_session_store::{RunSessionIndexLookup, load_indexed_run_session};
 use axon_agent_runtime::{
     AgentRunToolOutputPolicy, ContentArchiveRuntime, agent_run_tool_result_messages,
     agent_run_tool_result_receipt_from_facts,
@@ -53,16 +52,16 @@ fn settled_tool_receipt_is_durable_before_next_provider_turn() {
 
     persist_settled_tool_receipts(&request, &state, 1, &[receipt]);
 
-    let persisted = load_indexed_run_session(
+    let assistant_part_id =
+        crate::run_commands::run_session_store::run_persistence_assistant_part_id(&request);
+    let persisted = crate::run_commands::run_thread_store::turn_record(
         &request.config_path,
-        &RunSessionIndexLookup::SessionId(&request.session_id),
+        &request.session_id,
+        &assistant_part_id,
     )
-    .expect("rollout SSOT 应可读取")
+    .expect("thread 轮次应可读取")
     .expect("部分工具回执应在下一轮 Provider 前可读");
-    assert_eq!(
-        persisted.assistant_part_id,
-        crate::run_commands::run_session_store::run_persistence_assistant_part_id(&request)
-    );
+    assert_eq!(persisted.assistant_part_id, assistant_part_id);
     assert!(persisted.tool_receipts.iter().any(|value| {
         value.part_id == part_id
             && value.status == "completed"
@@ -70,17 +69,16 @@ fn settled_tool_receipt_is_durable_before_next_provider_turn() {
             && value.duration_ms == Some(11)
     }));
 
+    // 同一条 active turn 的再次落盘只追加增量，不新开轮次。
     persist_partial_tool_call_record(&request, &state, 2);
-    let rollout_path = crate::run_commands::resolved_rollout_db_path(&request.config_path).unwrap();
-    let turn_count = rusqlite::Connection::open(rollout_path)
-        .unwrap()
-        .query_row(
-            "SELECT COUNT(*) FROM rollout_turns WHERE session_id = ?1",
-            rusqlite::params![request.session_id],
-            |row| row.get::<_, i64>(0),
+    let detail = axon_session::ThreadService::new(axon_session::JsonlThreadEventStore)
+        .read_thread(
+            &crate::run_commands::resolved_axon_root(&request.config_path).unwrap(),
+            &request.session_id,
         )
         .unwrap();
-    assert_eq!(turn_count, 1);
+    assert_eq!(detail.turns.len(), 1);
+    assert_eq!(detail.turns[0].status, axon_session::TurnStatus::Active);
 
     let _ = fs::remove_dir_all(root);
 }
@@ -132,7 +130,7 @@ fn oversized_metadata_receipt_is_archived_under_data_root_and_replayable() {
     assert!(!root.join("archive").exists());
 
     persist_settled_tool_receipts(&request, &state, 1, &[receipt]);
-    let archived = crate::run_commands::read_rollout_tool_output(
+    let archived = crate::run_commands::run_thread_replay::read_task_output(
         &request.config_path,
         &request.session_id,
         "provider-call-metadata",
@@ -246,7 +244,7 @@ fn completed_receipt(
 ) -> RunToolReceipt {
     RunToolReceipt {
         tool_call_id: 7,
-        part_id: format!("tool-part:{provider_call_id}"),
+        part_id: crate::tool_orchestrator::tool_execution_part_id(1, provider_call_id, 0),
         provider_call_id: provider_call_id.to_owned(),
         tool_name: "builtin.search".to_owned(),
         status: "completed".to_owned(),

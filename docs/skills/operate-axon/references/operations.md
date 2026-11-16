@@ -55,6 +55,7 @@ axon memory inspect <memory-id>
 ```
 
 - Session 的删除、修复和 fork 会改变数据或执行上下文，须先取得用户授权；`axon debug session` 是只读优先的运维诊断面，用户不需要也不应管理 session_id。
+- `axon debug session replay <session-id>` 输出的三项都来自 thread 事件面：`chain` 是沿 parent 回溯的 resume 链（含每段末轮的 prompt/response 字符数），`turns` 是该会话的轮次摘要（`status`、`recordedAtMs`、`turnEventCount`、`toolReceiptCount`、`reflectionNotice`），`toolOutput` 只在显式传入 `--provider-call-id` 时出现，读取的是该回执关联的归档正文。
 - 只有明确、可复用且有证据的结论才写入 Memory。归档、隔离、遗忘、导入或其他治理动作前，先确认范围并获得授权。
 - Memory 的 JSON 记录包含稳定的 `memoryKind` 字段，取值为 `profile`、`preference`、`experience`、`knowledge` 或 `procedure`；Personal 只允许前两类，Workspace 只允许后三类。
 - 打开旧版本写入的 Memory 库时，缺少 `memoryKind` 列的 `memory_records` 会被整体重命名为 `memory_records_legacy_<毫秒时间戳>` 并释放其索引名，随后建出目标态新表；旧行不删除也不猜测类型。`GET /api/v1/memory/stats` 的 `legacyRecordTables` 会列出这些归档表，界面以告警条呈现。

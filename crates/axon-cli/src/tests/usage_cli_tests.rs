@@ -1,7 +1,5 @@
-use std::fs;
+use std::{fs, path::Path};
 
-use axon_agent_runtime::{AgentTurnEvent, AgentTurnEventKind};
-use axon_domain::TurnId;
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 
@@ -23,14 +21,9 @@ struct TestUsageTurn<'a> {
 fn usage_refresh_queries_preaggregated_data_with_filters() {
     let root = test_root("usage-refresh");
     let config_path = root.join("config.toml");
-    let rollout_path = crate::run_commands::resolved_rollout_db_path(&config_path)
-        .expect("rollout 路径应可解析");
-    fs::create_dir_all(rollout_path.parent().expect("rollout 应有父目录"))
-        .expect("rollout 目录应可创建");
-    let connection = Connection::open(&rollout_path).expect("rollout SQLite 应可创建");
-    create_rollout_schema(&connection);
-    insert_rollout_turn(
-        &connection,
+    fs::create_dir_all(&root).expect("测试根目录应可创建");
+    seed_usage_turn(
+        &root,
         &TestUsageTurn {
             session_id: "session-main",
             sequence: 0,
@@ -41,9 +34,10 @@ fn usage_refresh_queries_preaggregated_data_with_filters() {
             input_tokens: 100,
             output_tokens: 200,
         },
+        true,
     );
-    insert_rollout_turn(
-        &connection,
+    seed_usage_turn(
+        &root,
         &TestUsageTurn {
             session_id: "session-subagent",
             sequence: 0,
@@ -54,8 +48,9 @@ fn usage_refresh_queries_preaggregated_data_with_filters() {
             input_tokens: 300,
             output_tokens: 400,
         },
+        true,
     );
-    drop(connection);
+
 
     let first_projection = crate::usage_statistics::run_usage_rollup_once(&config_path)
         .expect("首次 usage projection 应成功");
@@ -63,10 +58,15 @@ fn usage_refresh_queries_preaggregated_data_with_filters() {
         .expect("重复 usage projection 应成功");
     assert_eq!(first_projection.projected_records, 2);
     assert_eq!(first_projection.changed_facts, 2);
-    assert_eq!(first_projection.source_watermark_rowid, 2);
-    assert_eq!(repeated_projection.projected_records, 0);
+    assert!(first_projection.source_watermark_rowid > 0);
+    // 水位按毫秒比较且取 `>=`：同一毫秒的边界轮会重投影一次，但事实幂等、不再变更。
+    // 边界同毫秒的轮会重读一次；跨毫秒时只剩水位那一行，因此只断言「不扩大范围」。
+    assert!(repeated_projection.projected_records <= 2);
     assert_eq!(repeated_projection.changed_facts, 0);
-    assert_eq!(repeated_projection.source_watermark_rowid, 2);
+    assert_eq!(
+        repeated_projection.source_watermark_rowid,
+        first_projection.source_watermark_rowid
+    );
 
     let config_arg = config_path.to_string_lossy().to_string();
     let provider_query = AxonCli::parse_from_args([
@@ -171,15 +171,10 @@ fn usage_refresh_queries_preaggregated_data_with_filters() {
 }
 
 #[test]
-fn usage_refresh_reconciles_in_place_rollout_terminal_update() {
+fn usage_refresh_reconciles_in_place_thread_terminal_update() {
     let root = test_root("usage-reconcile");
     let config_path = root.join("config.toml");
-    let rollout_path =
-        crate::run_commands::resolved_rollout_db_path(&config_path).expect("rollout 路径应可解析");
-    fs::create_dir_all(rollout_path.parent().expect("rollout 应有父目录"))
-        .expect("rollout 目录应可创建");
-    let connection = Connection::open(&rollout_path).expect("rollout SQLite 应可创建");
-    create_rollout_schema(&connection);
+    fs::create_dir_all(&root).expect("测试根目录应可创建");
     let turn = TestUsageTurn {
         session_id: "session-reconcile",
         sequence: 0,
@@ -190,8 +185,8 @@ fn usage_refresh_reconciles_in_place_rollout_terminal_update() {
         input_tokens: 10,
         output_tokens: 20,
     };
-    insert_partial_rollout_turn(&connection, &turn);
-    drop(connection);
+    // 中途落盘：轮次还在跑，先投影出 active 事实。
+    seed_usage_turn(&root, &turn, false);
 
     crate::usage_statistics::run_usage_rollup_once(&config_path)
         .expect("partial usage projection 应成功");
@@ -210,39 +205,8 @@ fn usage_refresh_reconciles_in_place_rollout_terminal_update() {
     assert_eq!(status, "active");
     drop(usage);
 
-    let connection = Connection::open(&rollout_path).expect("rollout SQLite 应可打开");
-    let provider_completed = AgentTurnEvent::new(
-        TurnId(1),
-        AgentTurnEventKind::ProviderCompleted,
-        "Provider 完成",
-    )
-    .with_duration_ms(250);
-    let completed = AgentTurnEvent::new(TurnId(1), AgentTurnEventKind::Completed, "Turn 完成");
-    let record = json!({
-        "sessionId": turn.session_id,
-        "parentSessionId": turn.parent_session_id,
-        "provider": turn.provider,
-        "model": turn.model,
-        "assistantPartId": turn.assistant_part_id,
-        "usage": {
-            "inputTokens": turn.input_tokens,
-            "cacheReadInputTokens": 0,
-            "cacheWriteInputTokens": 0,
-            "outputTokens": turn.output_tokens,
-            "reasoningOutputTokens": 0,
-            "currentContextTokens": turn.input_tokens + turn.output_tokens,
-            "totalInputTokens": turn.input_tokens
-        },
-        "turnEvents": [provider_completed, completed]
-    })
-    .to_string();
-    connection
-        .execute(
-            "UPDATE rollout_turns SET record_json = ?1 WHERE session_id = ?2 AND assistant_part_id = ?3",
-            params![record, turn.session_id, turn.assistant_part_id],
-        )
-        .expect("rollout terminal 更新应成功");
-    drop(connection);
+    // 同一轮收口：thread 追加 turnCompleted，投影必须重新读这一轮并改写事实。
+    seed_usage_turn(&root, &turn, true);
 
     let report = crate::usage_statistics::run_usage_rollup_once(&config_path)
         .expect("terminal usage projection 应成功");
@@ -261,73 +225,40 @@ fn usage_refresh_reconciles_in_place_rollout_terminal_update() {
     let _ = fs::remove_dir_all(root);
 }
 
-fn insert_partial_rollout_turn(connection: &Connection, turn: &TestUsageTurn<'_>) {
-    let recorded_at_ms = axon_time::unix_now_ms();
-    let record = json!({
-        "sessionId": turn.session_id,
-        "parentSessionId": turn.parent_session_id,
-        "provider": turn.provider,
-        "model": turn.model,
-        "assistantPartId": turn.assistant_part_id,
-        "usage": null,
-        "turnEvents": []
-    })
-    .to_string();
-    connection
-        .execute(
-            "INSERT INTO rollout_turns (
-                session_id, sequence, assistant_part_id, recorded_at_ms, record_json
-             ) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                turn.session_id,
-                i64::try_from(turn.sequence).expect("测试 sequence 应有效"),
-                turn.assistant_part_id,
-                i64::try_from(recorded_at_ms).expect("测试时间戳应有效"),
-                record
-            ],
-        )
-        .expect("partial rollout turn 应可写入");
-}
 
-fn create_rollout_schema(connection: &Connection) {
-    connection
-        .execute_batch(
-            "CREATE TABLE rollout_turns (
-                session_id TEXT NOT NULL,
-                sequence INTEGER NOT NULL,
-                assistant_part_id TEXT NOT NULL,
-                recorded_at_ms INTEGER NOT NULL,
-                record_json TEXT NOT NULL,
-                PRIMARY KEY (session_id, sequence),
-                UNIQUE (session_id, assistant_part_id)
-             );",
-        )
-        .expect("rollout schema 应可创建");
-}
-
-fn insert_rollout_turn(connection: &Connection, turn: &TestUsageTurn<'_>) {
-    let recorded_at_ms = axon_time::unix_now_ms();
-    let sequence = i64::try_from(turn.sequence).expect("测试 sequence 应在 i64 范围内");
-    let recorded_at =
-        i64::try_from(recorded_at_ms).expect("测试时间戳应在 i64 范围内");
-    let provider_completed = AgentTurnEvent::new(
-        TurnId(turn.sequence.saturating_add(1)),
-        AgentTurnEventKind::ProviderCompleted,
-        "Provider 完成",
-    )
-    .with_duration_ms(250);
-    let completed = AgentTurnEvent::new(
-        TurnId(turn.sequence.saturating_add(1)),
-        AgentTurnEventKind::Completed,
-        "Turn 完成",
-    );
-    let record = json!({
-        "sessionId": turn.session_id,
-        "parentSessionId": turn.parent_session_id,
-        "provider": turn.provider,
-        "model": turn.model,
-        "assistantPartId": turn.assistant_part_id,
-        "usage": {
+/// 用 thread 事件面播种一轮：容器是 `threadStarted` + `turnStarted`/`turnCompleted`。
+///
+/// 用量事实只在轮次 metadata 里：这里逐字段写出生产会落的那几项，避免测试引入
+/// 第二套字段口径。
+fn seed_usage_turn(root: &Path, turn: &TestUsageTurn<'_>, completed: bool) {
+    let thread_id = turn.session_id;
+    let service = axon_session::ThreadService::new(axon_session::JsonlThreadEventStore);
+    let existing = service.read_thread(root, thread_id).ok();
+    if existing.is_none() {
+        let started = json!({
+            "schemaVersion": 3,
+            "threadId": thread_id,
+            "sequence": 0,
+            "recordedAtMs": axon_time::unix_now_ms(),
+            "event": {
+                "type": "threadStarted",
+                "session_root_id": turn.parent_session_id.unwrap_or(thread_id),
+                "parent_thread_id": turn.parent_session_id,
+                "forked_from_thread_id": null,
+                "source": "cliRun",
+                "ephemeral": false,
+                "settings": {
+                    "cwd": ".",
+                    "provider": turn.provider,
+                    "model": turn.model,
+                    "selectedSkillName": null
+                }
+            }
+        });
+        append_thread_event(root, thread_id, started);
+    }
+    let metadata = json!({
+        "usage": completed.then(|| json!({
             "inputTokens": turn.input_tokens,
             "cacheReadInputTokens": 0,
             "cacheWriteInputTokens": 0,
@@ -335,22 +266,62 @@ fn insert_rollout_turn(connection: &Connection, turn: &TestUsageTurn<'_>) {
             "reasoningOutputTokens": 0,
             "currentContextTokens": turn.input_tokens + turn.output_tokens,
             "totalInputTokens": turn.input_tokens
-        },
-        "turnEvents": [provider_completed, completed]
-    })
-    .to_string();
-    connection
-        .execute(
-            "INSERT INTO rollout_turns (
-                session_id, sequence, assistant_part_id, recorded_at_ms, record_json
-             ) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                turn.session_id,
-                sequence,
-                turn.assistant_part_id,
-                recorded_at,
-                record
-            ],
-        )
-        .expect("rollout turn 应可写入");
+        })),
+        "assistantPartId": turn.assistant_part_id,
+        "latestFailure": null,
+        "suggestedNextStep": null,
+        "toolReceipts": [],
+        "reasoningMessageCount": 0,
+        "turnEventCount": 2,
+        "modelName": null,
+        "reflectionNotice": null,
+        "reasoningEffort": null,
+        "promptChars": 4,
+        "failed": false,
+        "affectSequence": [],
+        "upstreamModel": null,
+        "requestPath": null,
+        "speedMode": null,
+        "ttftMs": null,
+        "generationSpeedTps": null,
+        "providerCallCount": 1,
+        "providerDurationMs": 250
+    });
+    let turn_json = json!({
+        "turnId": format!("{thread_id}-turn-{}", turn.assistant_part_id),
+        "sequence": turn.sequence,
+        "status": if completed { "completed" } else { "active" },
+        "historyItems": [],
+        "tokenUsageJson": metadata.to_string(),
+        "startedAtMs": axon_time::unix_now_ms(),
+        "completedAtMs": completed.then(axon_time::unix_now_ms),
+        "interruptedAtMs": null
+    });
+    let event_type = if completed { "turnCompleted" } else { "turnStarted" };
+    let event = json!({
+        "schemaVersion": 3,
+        "threadId": thread_id,
+        "sequence": next_thread_sequence(root, thread_id),
+        "recordedAtMs": axon_time::unix_now_ms(),
+        "event": { "type": event_type, "turn": turn_json }
+    });
+    append_thread_event(root, thread_id, event);
+}
+
+/// 下一个可用的事件序号：直接取存储给出的激活快照，避免手写序号漂移。
+fn next_thread_sequence(root: &Path, thread_id: &str) -> u64 {
+    axon_session::ThreadEventStore::read_thread_activation(
+        &axon_session::JsonlThreadEventStore,
+        root,
+        thread_id,
+    )
+    .expect("thread 激活快照应可读取")
+    .next_sequence
+}
+
+fn append_thread_event(root: &Path, _thread_id: &str, value: Value) {
+    let record: axon_session::ThreadEventRecord =
+        serde_json::from_value(value).expect("thread 事件 fixture 应有效");
+    axon_session::ThreadEventStore::append(&axon_session::JsonlThreadEventStore, root, &record)
+        .expect("thread 事件应可写入");
 }

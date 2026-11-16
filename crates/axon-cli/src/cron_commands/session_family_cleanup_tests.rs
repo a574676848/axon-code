@@ -12,8 +12,7 @@ const CUTOFF_MS: u64 = 500;
 const STALE_ROOT: &str = "stale-root";
 const STALE_CHILD: &str = "stale-root::child";
 const RETAINED_SESSION: &str = "retained-session";
-const RETAINED_BYTES: &[u8] = b"retained-session-bytes\n";
-const RETAINED_UPDATED_AT_MS: i64 = 4_102_444_800_000;
+const RETAINED_UPDATED_AT_MS: u64 = 4_102_444_800_000;
 
 #[path = "session_family_cleanup_source_tests.rs"]
 mod source_installed;
@@ -21,23 +20,20 @@ mod source_installed;
 #[test]
 fn stale_family_is_removed_from_all_associated_stores() {
     let root = axon_test_support::test_temp_dir();
-    let rollout_path = rollout_path(root.path());
-    create_rollout(&rollout_path, true);
+    create_thread(root.path(), STALE_ROOT, None, 100);
+    create_thread(root.path(), STALE_CHILD, Some(STALE_ROOT), 200);
+    create_thread(root.path(), RETAINED_SESSION, None, RETAINED_UPDATED_AT_MS);
     create_runtime_family(root.path(), "idle", false);
     create_governance(root.path());
-    create_thread(root.path(), STALE_ROOT, b"stale-thread\n");
-    create_thread(root.path(), RETAINED_SESSION, RETAINED_BYTES);
     create_context(root.path(), STALE_ROOT);
     let retained_context = create_retained_context(root.path());
 
-    let stale = stale_session_family_ids(root.path(), &rollout_path, CUTOFF_MS)
-        .expect("stale family 应可读取");
+    let stale = stale_session_family_ids(root.path(), CUTOFF_MS).expect("stale family 应可读取");
     assert_eq!(stale, vec![STALE_ROOT.to_owned(), STALE_CHILD.to_owned()]);
     let dry_run_snapshots = snapshot_files(&[
-        rollout_path.clone(),
         runtime_path(root.path()),
         governance_database_path(root.path()),
-        thread_path(root.path(), STALE_ROOT),
+        thread_shard(root.path(), STALE_ROOT),
         retained_context.clone(),
     ]);
 
@@ -48,11 +44,11 @@ fn stale_family_is_removed_from_all_associated_stores() {
     // 事件已随会话目录删除，不再按表计数。
     assert_eq!(dry_run.deleted_session_event_count, 0);
     assert_eq!(dry_run.deleted_governance_count, 2);
-    assert_eq!(dry_run.deleted_thread_file_count, 1);
+    assert_eq!(dry_run.deleted_thread_file_count, 2);
     assert_eq!(dry_run.deleted_session_notes_count, 1);
     assert_eq!(dry_run.deleted_note_file_count, 2);
     assert_eq!(dry_run.deleted_archived_shard_count, 1);
-    assert!(rollout_exists(&rollout_path, STALE_ROOT));
+    assert!(thread_exists(root.path(), STALE_ROOT));
     assert_eq!(
         snapshot_files(
             &dry_run_snapshots
@@ -65,7 +61,7 @@ fn stale_family_is_removed_from_all_associated_stores() {
     );
 
     let mut report = SessionCleanupReport::default();
-    cleanup_session_family_data(root.path(), &rollout_path, CUTOFF_MS, &stale, &mut report)
+    cleanup_session_family_data(root.path(), CUTOFF_MS, &stale, &mut report)
         .expect("整族清理应成功");
 
     assert_eq!(report.deleted_session_count, 2);
@@ -85,43 +81,83 @@ fn stale_family_is_removed_from_all_associated_stores() {
         report.deleted_thread_file_count,
         dry_run.deleted_thread_file_count
     );
-    assert!(!rollout_exists(&rollout_path, STALE_ROOT));
+    assert!(!thread_exists(root.path(), STALE_ROOT));
     assert!(!runtime_exists(root.path(), STALE_ROOT));
-    assert!(!thread_path(root.path(), STALE_ROOT).exists());
     assert!(!root.path().join("sessions").join(STALE_ROOT).exists());
-    assert_eq!(
-        std::fs::read(thread_path(root.path(), RETAINED_SESSION)).expect("retained JSONL 应可读"),
-        RETAINED_BYTES
+    assert!(
+        thread_exists(root.path(), RETAINED_SESSION),
+        "保留会话的 thread 事件不得被清理"
     );
     assert_eq!(
         std::fs::read(retained_context).expect("retained context 应可读"),
-        RETAINED_BYTES
+        b"retained-session-bytes\n"
     );
-    assert!(rollout_exists(&rollout_path, RETAINED_SESSION));
 }
 
 #[test]
-fn active_or_execution_referenced_member_protects_whole_rollout_family() {
+fn active_or_execution_referenced_member_protects_whole_family() {
     for (status, with_execution) in [("running", false), ("idle", true)] {
         let root = axon_test_support::test_temp_dir();
-        let rollout_path = rollout_path(root.path());
-        create_rollout(&rollout_path, false);
+        create_thread(root.path(), STALE_ROOT, None, 100);
+        create_thread(root.path(), STALE_CHILD, Some(STALE_ROOT), 200);
         create_runtime_family(root.path(), status, with_execution);
 
-        let stale = stale_session_family_ids(root.path(), &rollout_path, CUTOFF_MS)
-            .expect("保护集合应可读取");
+        let stale = stale_session_family_ids(root.path(), CUTOFF_MS).expect("保护集合应可读取");
 
         assert!(stale.is_empty());
-        assert!(rollout_exists(&rollout_path, STALE_ROOT));
-        assert!(rollout_exists(&rollout_path, STALE_CHILD));
+        assert!(thread_exists(root.path(), STALE_ROOT));
+        assert!(thread_exists(root.path(), STALE_CHILD));
     }
 }
 
 #[test]
-fn context_failure_keeps_rollout_retry_anchor() {
+fn current_resume_session_family_is_protected() {
     let root = axon_test_support::test_temp_dir();
-    let rollout_path = rollout_path(root.path());
-    create_rollout(&rollout_path, false);
+    create_thread(root.path(), STALE_ROOT, None, 100);
+    create_thread(root.path(), STALE_CHILD, Some(STALE_ROOT), 200);
+    let service = axon_session::ThreadService::new(axon_session::JsonlThreadEventStore);
+    service
+        .start_empty_thread(
+            root.path(),
+            axon_session::StartEmptyThreadCommand {
+                thread_id: STALE_CHILD.to_owned(),
+                session_root_id: STALE_ROOT.to_owned(),
+                parent_thread_id: Some(STALE_ROOT.to_owned()),
+                forked_from_thread_id: None,
+                source: axon_session::ThreadSource::CliRun,
+                ephemeral: false,
+                settings: axon_session::ThreadSettings {
+                    cwd: ".".to_owned(),
+                    provider: "fixture".to_owned(),
+                    model: "fixture".to_owned(),
+                    selected_skill_name: None,
+                },
+                created_at_ms: 200,
+            },
+        )
+        .expect("active thread 应可写入");
+    // 把 --continue 指针指向子会话：整族受保护。
+    let data = root.path().join(axon_session::AXON_RUNTIME_DATA_DIR);
+    let store = axon_session::SqliteRuntimeStore::from_root(&data);
+    store.initialize().expect("runtime schema 应可初始化");
+    let session =
+        axon_domain::DaemonSessionId::new(STALE_CHILD.to_owned()).expect("会话 ID 应有效");
+    axon_session::ResumePointerStore::write_resume_pointer(&store, &session, 1)
+        .expect("恢复指针应可写入");
+
+    let stale = stale_session_family_ids(root.path(), CUTOFF_MS).expect("候选应可读取");
+
+    assert!(
+        stale.is_empty(),
+        "当前 --continue 会话的家族不得被清理：{stale:?}"
+    );
+}
+
+#[test]
+fn context_failure_keeps_retry_anchor() {
+    let root = axon_test_support::test_temp_dir();
+    create_thread(root.path(), STALE_ROOT, None, 100);
+    create_thread(root.path(), STALE_CHILD, Some(STALE_ROOT), 200);
     let invalid_context = root.path().join("sessions").join(STALE_ROOT);
     std::fs::create_dir_all(invalid_context.parent().expect("context 必须有父目录"))
         .expect("context 父目录应可创建");
@@ -130,7 +166,6 @@ fn context_failure_keeps_rollout_retry_anchor() {
 
     let error = cleanup_session_family_data(
         root.path(),
-        &rollout_path,
         CUTOFF_MS,
         &stale,
         &mut SessionCleanupReport::default(),
@@ -138,16 +173,17 @@ fn context_failure_keeps_rollout_retry_anchor() {
     .expect_err("context 删除失败必须向上传递");
 
     assert!(error.contains("删除会话上下文目录"));
-    assert!(rollout_exists(&rollout_path, STALE_ROOT));
-    assert!(rollout_exists(&rollout_path, STALE_CHILD));
+    // 上下文删除失败时，thread 文件仍是下一次清理的重试入口。
+    assert!(thread_exists(root.path(), STALE_ROOT));
+    assert!(thread_exists(root.path(), STALE_CHILD));
 }
 
 #[test]
-fn governance_or_runtime_read_failure_keeps_rollout_retry_anchor() {
+fn governance_or_runtime_read_failure_stops_candidate_generation() {
     for broken_store in ["governance", "runtime"] {
         let root = axon_test_support::test_temp_dir();
-        let rollout_path = rollout_path(root.path());
-        create_rollout(&rollout_path, false);
+        create_thread(root.path(), STALE_ROOT, None, 100);
+        create_thread(root.path(), STALE_CHILD, Some(STALE_ROOT), 200);
         let broken_path = if broken_store == "governance" {
             governance_database_path(root.path())
         } else {
@@ -157,36 +193,29 @@ fn governance_or_runtime_read_failure_keeps_rollout_retry_anchor() {
             .expect("损坏存储目录应可创建");
         std::fs::write(&broken_path, b"not-sqlite").expect("损坏存储应可创建");
 
-        stale_session_family_ids(root.path(), &rollout_path, CUTOFF_MS)
+        stale_session_family_ids(root.path(), CUTOFF_MS)
             .expect_err("关联 SQLite 读取失败必须终止候选生成");
 
-        assert!(rollout_exists(&rollout_path, STALE_ROOT));
-        assert!(rollout_exists(&rollout_path, STALE_CHILD));
+        assert!(thread_exists(root.path(), STALE_ROOT));
+        assert!(thread_exists(root.path(), STALE_CHILD));
     }
 }
 
 #[test]
-fn rollout_cleanup_crosses_bounded_batch_boundary() {
+fn thread_cleanup_crosses_bounded_batch_boundary() {
     let root = axon_test_support::test_temp_dir();
-    let rollout_path = rollout_path(root.path());
-    let store = RolloutSqliteStore::open(&rollout_path).expect("rollout 应可初始化");
-    drop(store);
-    let mut connection = Connection::open(&rollout_path).expect("rollout 应可打开");
-    let transaction = connection.transaction().expect("rollout 事务应可创建");
     for index in 0..=SESSION_FAMILY_BATCH_LIMIT {
-        insert_rollout(&transaction, &format!("stale-{index:04}"), None, 1);
+        create_thread(root.path(), &format!("stale-{index:04}"), None, 1);
     }
-    transaction.commit().expect("rollout fixture 应可提交");
-    let stale =
-        stale_session_family_ids(root.path(), &rollout_path, CUTOFF_MS).expect("批量候选应可读取");
+    let stale = stale_session_family_ids(root.path(), CUTOFF_MS).expect("批量候选应可读取");
     assert_eq!(stale.len(), SESSION_FAMILY_BATCH_LIMIT + 1);
 
     let mut report = SessionCleanupReport::default();
-    cleanup_session_family_data(root.path(), &rollout_path, CUTOFF_MS, &stale, &mut report)
+    cleanup_session_family_data(root.path(), CUTOFF_MS, &stale, &mut report)
         .expect("跨批次清理应成功");
 
     assert_eq!(report.deleted_session_count, SESSION_FAMILY_BATCH_LIMIT + 1);
-    assert_eq!(rollout_count(&rollout_path), 0);
+    assert_eq!(thread_file_count(root.path()), 0);
 }
 
 #[test]
@@ -233,26 +262,18 @@ fn stale_family_cleanup_reports_percentiles() {
     let mut samples = Vec::with_capacity(SAMPLE_COUNT);
     for sample in 0..SAMPLE_COUNT {
         let root = axon_test_support::test_temp_dir();
-        let rollout_path = rollout_path(root.path());
-        let store = RolloutSqliteStore::open(&rollout_path).expect("rollout 应可初始化");
-        drop(store);
-        let mut connection = Connection::open(&rollout_path).expect("rollout 应可打开");
-        let transaction = connection.transaction().expect("rollout 事务应可创建");
         for index in 0..FAMILY_COUNT {
-            insert_rollout(
-                &transaction,
+            create_thread(
+                root.path(),
                 &format!("sample-{sample:02}-stale-{index:04}"),
                 None,
                 1,
             );
         }
-        transaction.commit().expect("rollout fixture 应可提交");
-        let stale =
-            stale_session_family_ids(root.path(), &rollout_path, CUTOFF_MS).expect("候选应可读取");
+        let stale = stale_session_family_ids(root.path(), CUTOFF_MS).expect("候选应可读取");
         let started = Instant::now();
         cleanup_session_family_data(
             root.path(),
-            &rollout_path,
             CUTOFF_MS,
             &stale,
             &mut SessionCleanupReport::default(),
@@ -268,31 +289,29 @@ fn stale_family_cleanup_reports_percentiles() {
     assert!(p99 < P99_BUDGET_MS, "p99={p99}ms 超出 {P99_BUDGET_MS}ms");
 }
 
-fn create_rollout(path: &Path, with_retained: bool) {
-    let store = RolloutSqliteStore::open(path).expect("rollout 应可初始化");
-    drop(store);
-    let connection = Connection::open(path).expect("rollout 应可打开");
-    insert_rollout(&connection, STALE_ROOT, None, 100);
-    insert_rollout(&connection, STALE_CHILD, Some(STALE_ROOT), 200);
-    if with_retained {
-        insert_rollout(&connection, RETAINED_SESSION, None, RETAINED_UPDATED_AT_MS);
-    }
-}
-
-fn insert_rollout(
-    connection: &Connection,
-    session_id: &str,
-    parent_session_id: Option<&str>,
-    updated_at_ms: i64,
-) {
-    connection
-        .execute(
-            "INSERT INTO rollout_sessions(
-                session_id,parent_session_id,created_at_ms,updated_at_ms,provider,model,title
-             ) VALUES(?1,?2,?3,?3,'gateway','test','fixture')",
-            params![session_id, parent_session_id, updated_at_ms],
+/// 写一条最小可投影的 thread：`threadStarted` 的 recordedAtMs 就是活动时间。
+fn create_thread(root: &Path, session_id: &str, parent: Option<&str>, updated_at_ms: u64) {
+    let service = axon_session::ThreadService::new(axon_session::JsonlThreadEventStore);
+    service
+        .start_empty_thread(
+            root,
+            axon_session::StartEmptyThreadCommand {
+                thread_id: session_id.to_owned(),
+                session_root_id: parent.unwrap_or(session_id).to_owned(),
+                parent_thread_id: parent.map(ToOwned::to_owned),
+                forked_from_thread_id: None,
+                source: axon_session::ThreadSource::CliRun,
+                ephemeral: false,
+                settings: axon_session::ThreadSettings {
+                    cwd: ".".to_owned(),
+                    provider: "fixture".to_owned(),
+                    model: "fixture".to_owned(),
+                    selected_skill_name: None,
+                },
+                created_at_ms: updated_at_ms,
+            },
         )
-        .expect("rollout fixture 应可写入");
+        .expect("thread fixture 应可写入");
 }
 
 fn create_runtime_family(root: &Path, child_status: &str, with_execution: bool) {
@@ -344,13 +363,6 @@ fn create_governance(root: &Path) {
         .expect("governance fixture 应可写入");
 }
 
-fn create_thread(root: &Path, session_id: &str, content: &[u8]) {
-    let path = thread_path(root, session_id);
-    std::fs::create_dir_all(path.parent().expect("thread 必须有父目录"))
-        .expect("thread 目录应可创建");
-    std::fs::write(path, content).expect("thread fixture 应可写入");
-}
-
 fn create_context(root: &Path, session_id: &str) {
     let session = root.join("sessions").join(session_id);
     let notes = session.join(axon_agent_runtime::NOTES_DIR_NAME);
@@ -382,42 +394,33 @@ fn create_retained_context(root: &Path) -> PathBuf {
         .join("retained.txt");
     std::fs::create_dir_all(path.parent().expect("retained context 必须有父目录"))
         .expect("retained context 目录应可创建");
-    std::fs::write(&path, RETAINED_BYTES).expect("retained context 应可写入");
+    std::fs::write(&path, b"retained-session-bytes\n").expect("retained context 应可写入");
     path
 }
 
-fn rollout_path(root: &Path) -> PathBuf {
-    axon_session::session_store_path(root).join("rollout.sqlite3")
+fn thread_exists(root: &Path, session_id: &str) -> bool {
+    axon_session::JsonlThreadEventStore::thread_shard_paths(root, session_id)
+        .map(|paths| !paths.is_empty())
+        .unwrap_or(false)
 }
 
-fn thread_path(root: &Path, session_id: &str) -> PathBuf {
-    let encoded = session_id
-        .as_bytes()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    axon_session::JsonlThreadEventStore::path(root).join(format!("{encoded}.000000.jsonl"))
+fn thread_shard(root: &Path, session_id: &str) -> PathBuf {
+    axon_session::JsonlThreadEventStore::thread_shard_paths(root, session_id)
+        .expect("thread shard 应可读取")
+        .into_iter()
+        .next()
+        .expect("thread shard 必须存在")
 }
 
-fn rollout_exists(path: &Path, session_id: &str) -> bool {
-    Connection::open(path)
-        .expect("rollout 应可打开")
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM rollout_sessions WHERE session_id=?1)",
-            [session_id],
-            |row| row.get(0),
-        )
-        .expect("rollout 应可查询")
-}
-
-fn rollout_count(path: &Path) -> usize {
-    let count: i64 = Connection::open(path)
-        .expect("rollout 应可打开")
-        .query_row("SELECT COUNT(*) FROM rollout_sessions", [], |row| {
-            row.get(0)
-        })
-        .expect("rollout 应可统计");
-    usize::try_from(count).expect("rollout 数量应可转换")
+fn thread_file_count(root: &Path) -> usize {
+    let directory = axon_session::JsonlThreadEventStore::path(root);
+    match std::fs::read_dir(directory) {
+        Ok(entries) => entries
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "jsonl"))
+            .count(),
+        Err(_) => 0,
+    }
 }
 
 fn runtime_exists(root: &Path, session_id: &str) -> bool {

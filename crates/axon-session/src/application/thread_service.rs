@@ -135,23 +135,6 @@ where
         )
     }
 
-    /// 标注子会话来源；重复标注以最后一次为准。
-    pub fn annotate_child_origin(
-        &self,
-        root: &Path,
-        command: AnnotateChildOriginCommand,
-    ) -> Result<(), String> {
-        self.read_thread(root, &command.thread_id)?;
-        self.append_simple(
-            root,
-            &command.thread_id,
-            command.recorded_at_ms,
-            ThreadEvent::ThreadAnnotated {
-                child_origin: Some(command.origin),
-            },
-        )
-    }
-
     /// 标记一个 active turn。
     pub fn start_turn(&self, root: &Path, command: StartTurnCommand) -> Result<(), String> {
         let activation = self
@@ -382,7 +365,7 @@ where
         project_thread_records(&events, thread_id)
     }
 
-    fn append_simple(
+    pub(super) fn append_simple(
         &self,
         root: &Path,
         thread_id: &str,
@@ -584,17 +567,6 @@ pub struct NameThreadCommand {
     pub recorded_at_ms: u64,
     /// Thread 名称。
     pub name: Option<String>,
-}
-
-/// 标注子会话来源的命令。
-#[derive(Debug, Clone)]
-pub struct AnnotateChildOriginCommand {
-    /// Thread ID。
-    pub thread_id: ThreadId,
-    /// 记录时间。
-    pub recorded_at_ms: u64,
-    /// 来源标识：用户可见的委派还是运行侧内务。
-    pub origin: String,
 }
 
 /// 开始 turn 命令。

@@ -18,7 +18,6 @@ use super::{
     run_execution::{RunResponse, RunToolReceipt, now_ms},
     run_memory_recall::RunMemoryRecallEvent,
     run_memory_usefulness::RunMemoryUsefulnessEvent,
-    run_rollout_store::{RolloutSqliteStore, resolved_rollout_db_path},
     run_startup_snapshot::RunStartupTimeline,
 };
 use crate::runtime_paths::runtime_axon_root_path_static;
@@ -546,24 +545,10 @@ pub(crate) fn resolved_axon_root(config_path: &Path) -> Result<PathBuf, &'static
     runtime_axon_root_path_static(config_path)
 }
 
+/// 恢复目标查找方式：显式会话 ID 或最近一个未归档会话。
 pub(super) enum RunSessionIndexLookup<'a> {
     Latest,
     SessionId(&'a str),
-}
-
-pub(super) fn load_indexed_run_session(
-    config_path: &Path,
-    lookup: &RunSessionIndexLookup<'_>,
-) -> Result<Option<RunSessionRecord>, String> {
-    let path = resolved_rollout_db_path(config_path).map_err(ToOwned::to_owned)?;
-    if !path.exists() {
-        return Ok(None);
-    }
-    let store = RolloutSqliteStore::open(&path)?;
-    match lookup {
-        RunSessionIndexLookup::Latest => store.load_latest(),
-        RunSessionIndexLookup::SessionId(session_id) => store.load_by_id(session_id),
-    }
 }
 
 #[cfg(test)]

@@ -134,9 +134,7 @@ pub(super) fn query_dashboard(
     let hourly = repository.hourly_rollups(&repository_query)?;
     let recent_requests = repository.recent_requests(&repository_query, query.recent_limit)?;
     let projection = repository.projection_state()?;
-    let rollout_path =
-        crate::run_commands::resolved_rollout_db_path(config_path).map_err(ToOwned::to_owned)?;
-    let stale = source_modified_ms(&rollout_path)?
+    let stale = newest_thread_event_ms(&axon_root)?
         .zip(projection.last_success_at_ms)
         .is_some_and(|(source, projected)| source > projected);
 
@@ -246,28 +244,28 @@ fn cost_status(request_count: u64, unpriced_request_count: u64) -> &'static str 
     }
 }
 
-fn source_modified_ms(path: &Path) -> Result<Option<u64>, String> {
-    let wal_path = path.with_file_name(format!(
-        "{}-wal",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default()
-    ));
-    [path, wal_path.as_path()]
-        .into_iter()
-        .filter(|candidate| candidate.exists())
-        .map(|candidate| {
-            let modified = fs::metadata(candidate)
-                .and_then(|metadata| metadata.modified())
-                .map_err(|error| format!("读取 rollout 更新时间失败：{error}"))?;
-            modified
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(axon_time::duration_ms)
-                .map_err(|error| format!("转换 rollout 更新时间失败：{error}"))
-        })
-        .try_fold(None, |latest, modified| {
-            modified.map(|modified| Some(latest.map_or(modified, |value: u64| value.max(modified))))
-        })
+/// thread 事件面里最新一次写入时间：用量投影的新鲜度只看这一处事实源。
+fn newest_thread_event_ms(root: &Path) -> Result<Option<u64>, String> {
+    let directory = axon_session::JsonlThreadEventStore::path(root);
+    if !directory.exists() {
+        return Ok(None);
+    }
+    let entries =
+        fs::read_dir(&directory).map_err(|error| format!("读取 thread 事件目录失败：{error}"))?;
+    let mut newest = None;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("读取 thread 事件目录项失败：{error}"))?;
+        let modified = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .map_err(|error| format!("读取 thread 事件更新时间失败：{error}"))?;
+        let modified = modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(axon_time::duration_ms)
+            .map_err(|error| format!("转换 thread 事件更新时间失败：{error}"))?;
+        newest = Some(newest.map_or(modified, |value: u64| value.max(modified)));
+    }
+    Ok(newest)
 }
 
 #[cfg(test)]

@@ -69,9 +69,9 @@ pub(super) fn persist_partial_tool_call_record(
         turn_events: state.turn_events.borrow().clone(),
     };
     let record = super::super::run_session_store::RunSessionRecord::from_partial(request, &input);
-    let title = super::super::run_thread_title::derive_thread_title(&record.prompt);
+    // 中途落盘只补 active turn 的新增 item：轮次保持 Active，终态由收口路径单独写。
     if let Err(error) =
-        super::super::commit_session_to_rollout(&request.config_path, &record, &title)
+        super::super::run_thread_partial::mirror_session_partial(&request.config_path, &record)
     {
         axon_logger::warning(&format!(
             "partial tool-call persistence skipped: session_id={}, error={error}",

@@ -4,10 +4,10 @@
 > 用量与保留策略都落在 `data/sessions/threads/*.jsonl` 与控制面库；删除 rollout 库后多轮对话
 > 回归全绿、`--continue` 可接续。
 >
-> 依据：`docs/dev/storage-architecture.md` §12.5 把该项登记为「专门一轮 + 多轮对话回归」的延后项。
-> 本轮起按下面的顺序推进，每步都必须可编译、门禁全绿、并把证据补进 `docs/dev/wbs-acceptance.md`。
+> 依据：`docs/dev/storage-architecture.md` §12.5 曾把该项登记为「专门一轮 + 多轮对话回归」的
+> 延后项。本轮已完成代码迁移并删除 rollout 库；剩真实多轮对话真机回归。
 
-## 现状盘点（生产引用，不含测试）
+## 现状盘点（迁移前，生产引用）
 
 rollout 对外能力共 25 个入口，按用途分六组：
 
@@ -21,9 +21,9 @@ rollout 对外能力共 25 个入口，按用途分六组：
 | F 保留与清理 | `stale_session_family_ids`、`finalize_stale_session_family_removal` | 会话清理链 |
 
 目标落点：A/B → thread 文件；C → thread 轮次 + turn metadata；D → `session_metrics` 与控制面；
-E → thread 子会话关系 + 事件面；F → 目录级保留（已存在）。
+E → thread 子会话关系 + 事件面；F → 会话目录/thread 家族（已完成）。
 
-## 已完成（本窗口）
+## 已完成
 
 1. **A 组迁移**：`prepare_run_session` 不再读 rollout。恢复目标先用 `ThreadService` 定位
    （`--session` 按 id，`--continue` 先读恢复指针，再回退最近未归档 thread），模型可见历史由
@@ -31,48 +31,63 @@ E → thread 子会话关系 + 事件面；F → 目录级保留（已存在）�
    `facts: ResumedSessionFacts`（session_id / 父会话 / cwd / provider / model / 别名），
    全部来自 thread settings 与最近一轮 metadata。
 2. **B 组收口**：活动窗口投影改为只写 thread（`install_active_compaction_projection` 的
-   `through_sequence` 由 thread 当前轮推导），删除 rollout 侧的 `install_active_window`、
-   `replace_compaction`、`load_history_window` 与门面 `install_active_rollout_window`、
-   `restore_rollout_compaction`、`load_rollout_history_window`；删除只服务该镜像的
-   `install_compaction_projection`、`run_thread_store_compaction_projection_tests.rs`、
-   `run_rollout_store/window_tests.rs`。
-3. **文档同步**：`docs/dev/wbs-acceptance.md` 的 W2-12 行改为指向本文件。
-4. **C 组收口（轮次事实）**：治理 worker 与 `builtin.turn_trace` 不再读 rollout。
+   `through_sequence` 由 thread 当前轮推导），删除 rollout 侧的窗口镜像与两条门面；
+   `publish_active_window` 不再维护第二份镜像（thread 压缩快照就是活动窗口）。
+   窗口边界语义定案：`through_sequence` 是**首个仍然可见的轮次**，恢复侧保留
+   `sequence >= through_sequence`，已同步 `storage-architecture.md`。
+3. **C 组收口（轮次事实）**：治理 worker 与 `builtin.turn_trace` 不再读 rollout。
    - `run_thread_store::turn_record` / `turn_record_by_sequence`：按
      `(thread, assistant_part_id)` 或轮序，把 thread 轮次反向重建为整条
      `RunSessionRecord`（`run_thread_history::turn_item_projection` 是历史投影的逆运算：
      注入上下文、用户输入、工具调用与回执、reasoning、助手响应逐个还原；用量、模型
      别名、推理强度、失败标记来自轮次 metadata）。
-   - `run_thread_history` 的回执反投影保留 `provider_call_id` / `output_ref` /
-     `part_id` / 错误类型 / 写盘标记，`builtin.turn_trace` 因此照样能按 provider 调用
-     读归档原文。
-   - 删除 rollout 的 `load_session_turn` 与 `orchestrator_turn_trace` 里的 rollout 点查。
-5. **治理产物回写改点对点**：`publish_turn_artifacts` 不再整条重写记录（那会把 thread
-   投影已不收录的字段抹成零），改为 `run_thread_store::patch_turn_artifacts`：只补写
-   本轮 metadata 的 `reflectionNotice` 与 `affectSequence`，其余原样保留；反思回执仍
-   单独入表。`turn_trace` 不再落库——它只被写、从不被读回，读取方一律按轮次事实重建。
-6. **测试夹具对齐真实形态**：`run_post_run_reflection_tests::response_with_receipts`
-   现在为每个回执构造对应的 provider 调用、`ToolExecutionStarted` 生命周期事件与唯一
-   part，与生产投影的前置条件一致（否则治理按 thread 读回的就不是这一轮）。
+   - 回执反投影保留 `provider_call_id` / `output_ref` / `part_id` / 错误类型 / 写盘标记，
+     `builtin.turn_trace` 因此照样能按 provider 调用读归档原文。
+4. **治理产物回写改点对点**：`publish_turn_artifacts` 不再整条重写记录，改为
+   `run_thread_store::patch_turn_artifacts`：只补写本轮 metadata 的 `reflectionNotice` 与
+   `affectSequence`，其余原样保留；反思回执仍单独入表。`turn_trace` 不再落库：它只被写、
+   从不被读回，读取方一律按轮次事实重建。
+5. **D 组（用量与会话读数）**：用量事实源改为 thread 轮次 metadata。
+   - `ThreadTurnMetadata` 新增 `upstreamModel`、`requestPath`、`speedMode`、`ttftMs`、
+     `generationSpeedTps`、`providerCallCount`、`providerDurationMs`，投影器不再反序列化整条
+     轮次正文。
+   - `usage_statistics` 的水位改为「上次投影到的记录时间（毫秒）」，同毫秒边界重读一次、
+     事实按 `(sessionId, assistantPartId)` 幂等覆盖；`usage` 页面的 `stale` 依据 thread 事件
+     文件的最新写入时间判定。
+   - `run_provider_turn` 的 token 用量读数改走 `latest_turn_usage_tokens_at_root`。
+6. **E 组（子代理、链回放、工具归档）**：
+   - 名册：`run_thread_children::child_session_rows` 由 `ThreadSummary`（父会话、标题、模型、
+     末轮状态与时间）直接给出；`ThreadSummary` 因此新增 `lastTurnStatus` / `lastTurnAtMs`。
+   - 来源：新增 `ThreadAnnotated` 事件与 `Thread.childOrigin`、`annotate_child_origin`，
+     内务子代理不再进名册；缺省来源按委派处理（兼容旧日志）。
+   - 回放：`run_thread_replay::replay_session_chain` 沿 `parent_thread_id` 回溯 resume 链；
+     `replay_session_turns` 给出轮次级摘要（状态、时间、turn 事件数、回执数、反思提示）；
+     `read_task_output` 按 `(thread, providerCallId)` 点查回执并读内容归档。
+   - `axon debug session replay` 的 JSON 输出字段随之改为 `chain` / `turnCount` / `turns` /
+     `toolOutput`，同时更新 `operate-axon` Skill 与安装态副本。
+   - 子代理起跑/收尾补写 thread 标题，名册标题不再依赖 rollout。
+7. **F 组（保留与清理）**：`stale_session_family_ids` 只按 thread 家族判定：
+   `scan_threads` 给出会话、父子关系与最近活动时间；当前 `--continue` 指针所在的家族、
+   治理队列活跃作业与运行态活跃会话整族保护；清理顺序改为「先删会话上下文、后删 thread
+   文件」，上下文删除失败时 thread 仍是下一轮的重试入口。`vacuumed_rollout` 报告字段删除。
+8. **整删**：`crates/axon-cli/src/run_commands/run_rollout_store/**` 与
+   `resolved_rollout_db_path`、`RolloutSqliteStore`、`commit_*_to_rollout` 全部删除；
+   `usage_statistics` 不再读 SQLite 源；相关测试改为 thread 事件面夹具，并补
+   `current_resume_session_family_is_protected` 与六条子代理名册用例。
+9. **文档同步**：`storage-architecture.md` 的会话正文/用量/数据布局/延后项四处改口径；
+   `wbs-acceptance.md` 的 W2-12 行指向本文件。
 
-## 未完成（下一步，按序）
+## 门禁证据
 
-1. **窗口投影与恢复的序号语义差一位**：`install_active_compaction_projection` 把
-   `through_sequence` 设成「当前轮序号」，而恢复侧保留 `sequence > through_sequence` 的轮次，
-   于是换窗那一轮（连同它在换窗之后才产生的最终回复）整轮落在窗口外——恢复出来的历史缺最后
-   一条 assistant 消息。用例
-   `inline_compaction_tests::two_inline_rollovers_restore_only_active_window_and_keep_archives`
-   因此被 `#[ignore]` 标注。修法二选一（需与 C 组一起做，避免二次改口径）：
-   (a) 把 `through_sequence` 定义为「最后一个已压缩轮次」的序号，恢复判据相应改成
-   `sequence >= through` 或引入显式下界；(b) 换窗后回写 checkpoint，把已收口轮的回复并入窗口
-   摘要。选定后同步更新 `storage-architecture.md` 的窗口语义小节。
-2. C 组（已完成，见「已完成」第 4 条）：轮次事实、反思提示、模型事实、累计用量、
-   轮序、显式信号全部来自 thread 轮次与控制面投影。
-3. D 组：会话读数与用量改读 `session_metrics`（已具备）与 thread settings；`load_session_usage*`
-   与 `load_latest_session_model_from_root` 删除。
-4. E 组：子代理关系与链回放改用 thread 的父子关系与事件面；`read_rollout_tool_output` 改为
-   按 provider_call_id 直接读归档目录（thread 轮次的工具回执里已有 `archive_ref`）。
-5. F 组：保留策略改为只按会话目录与控制面做，删除 rollout 表与 `stale_session_family_ids`。
-6. 删除 `run_rollout_store/**` 与 `resolved_rollout_db_path`，`axon doctor`/架构门禁里去掉
-   rollout 相关断言；`sessions` 子命令的 `replay`/`output`/`export` 改走 thread 与事件面。
-7. 真机回归：安装后跑 C2/C4/C5（`--session`、`--continue`、同 cwd 连续 run）与 X1–X7 跨端续聊。
+- `cargo fmt --all --check` 绿。
+- `cargo check --workspace --all-targets` 绿。
+- `cargo clippy --workspace --all-targets -- -D warnings` 绿。
+- `cargo test --workspace` 全绿（58 个测试目标、0 失败；`axon-cli` 1163 passed / 12 ignored）。
+- `tools/verify-architecture.ps1` 绿（含文件行数硬限与文档校验）。
+- `tools/verify-docs.ps1` 绿。
+
+## 剩余（真机回归）
+
+安装后跑 C2/C4/C5（`--session`、`--continue`、同 cwd 连续 run）与 X1-X7 跨端续聊，
+把回执登记到 `docs/dev/device-verification.md`；`inline_compaction_tests` 里仍有一个
+`#[ignore]` 的两轮换窗用例，需在真机回归同批打开。

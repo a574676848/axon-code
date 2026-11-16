@@ -474,16 +474,18 @@ fn build_provider_turn_result(
     run_session_id: &str,
     run_result: &CliRunResult,
 ) -> Result<ProviderTurnResult, String> {
-    let token_usage =
-        match super::run_rollout_store::load_session_usage(config_path, run_session_id) {
-            Ok(usage) => usage,
-            Err(error) => {
-                axon_logger::warning(&format!(
-                    "读取已持久化 token usage 失败: session_id={run_session_id}, error={error}"
-                ));
-                None
-            }
-        };
+    let token_usage = match super::run_thread_store::latest_turn_usage_tokens_at_root(
+        config_path,
+        run_session_id,
+    ) {
+        Ok(usage) => usage,
+        Err(error) => {
+            axon_logger::warning(&format!(
+                "读取已持久化 token usage 失败: session_id={run_session_id}, error={error}"
+            ));
+            None
+        }
+    };
     let payload = serde_json::from_str::<serde_json::Value>(&run_result.stdout)
         .map_err(|error| format!("解析 Provider JSON 输出失败：{error}"))?;
     let wire_events = extract_wire_events(&payload)?;

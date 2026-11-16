@@ -323,7 +323,7 @@ SQLite 没有跨库事务，所以拆库不能按业务随意切，只能按**�
 
 | 重叠组 | 现状 | 目标 |
 | --- | --- | --- |
-| 会话正文 | `session_events`（帧级）+ `rollout_turns`（turn 级）+ `threads/*.jsonl`（模型可见历史） | 两份：会话事件文件 + thread 文件。`rollout.sqlite3` **延后退役**：它是 `axon run` 恢复模型可见历史窗口的唯一来源（`run_thread_store` 的 `load_rollout_history_window`），改用事件日志重建会直接改动模型输入，必须独立一轮改造并配专门的对话回归验证，见 §延后项；用量投影器已改为只读事件日志。**窗口边界语义**（W2-12 迁移口径）：`ThreadCompaction.through_sequence` 是**首个仍然可见的轮次**，恢复侧保留 `sequence >= through_sequence`；换窗那一轮的回复在换窗之后才产生，摘要里不可能包含它，因此边界取包含 |
+| 会话正文 | `session_events`（帧级）+ `threads/*.jsonl`（模型可见历史） | 两份：会话事件文件 + thread 文件。`rollout.sqlite3` 已在 W2-12 删除：模型可见历史窗口、轮次事实、用量投影、子代理名册、resume 链回放与保留策略全部只读 thread 事件面与控制面；窗口边界见右列。**窗口边界语义**（W2-12 迁移口径）：`ThreadCompaction.through_sequence` 是**首个仍然可见的轮次**，恢复侧保留 `sequence >= through_sequence`；换窗那一轮的回复在换窗之后才产生，摘要里不可能包含它，因此边界取包含 |
 | 事件流 | `session_events`（单会话叙述）+ `jarvis_events`（跨会话审计） | 职责分离：前者进文件，后者进 `control.sqlite3` |
 | 检查点 | `session_checkpoints` 表 + `sessions.last_checkpoint_seq` 列 | 事件 `kind = checkpoint` + 一列水位 |
 | 已读标记 | `jarvis_result_reads` 独立表 | 并入 `goal_results` 两列 |
@@ -385,7 +385,7 @@ struct RuntimeEventRecord {
 | 会话内最近消息列表 | `jarvis_interactions_lane_recent` | 留在 `control.inbox`，按 `(session_id, received_at_ms DESC)` 取 |
 | 会话列表与元数据 | `session_runtimes` | 留在 `control.sessions` |
 | 启动激活状态 | `thread_service` 反向扫描 | 复用现有 `JsonlThreadEventStore::read_thread_activation` |
-| 用量投影 | 只读 `rollout.sqlite3` 的 turn 快照 | 改为只读事件日志的 `turn` 记录，见 §9 |
+| 用量投影 | 只读 `rollout.sqlite3` 的 turn 快照 | 已改为只读 thread 轮次事实（W2-12），见 §9 |
 
 投影缓存不是必须的：会话级日志本身小（预估见 §7），顺序扫几 MB 是可接受的。若真机测出首屏延迟，再加 `.idx` 旁挂索引（记录 `(seq, offset, raw_len)`），不做全量解析。
 
@@ -437,7 +437,7 @@ struct RuntimeEventRecord {
 | --- | --- | --- |
 | 首字延迟 TTFT | `TurnPerformanceRecorder` 采集 20 个阶段（`crates/axon-session-runtime/src/ports/turn_performance.rs:16-57`），TTFT 等于 `ProviderFirstDeltaParsed - ProviderRequestStarted` | **只在 `log_level = trace` 时启用**。`config_log_level_enables_first_token_telemetry` 只认 trace（`crates/axon-cli/src/lib.rs:500`），默认 `error` 级别完全不采集 |
 | 生成速率 | `generation_speed_tps` 已写入 `usage_facts` | 是跨会话聚合投影，会话内看不到自己这轮多快 |
-| token 消耗 | `input/output/reasoning/cache_read/cache_write` 五个字段齐全（`usage_statistics/repository/schema.rs`） | 同上，且依赖 rollout 投影，本次要删 |
+| token 消耗 | `input/output/reasoning/cache_read/cache_write` 五个字段齐全（`usage_statistics/repository/schema.rs`） | 事实源已改为 thread 轮次 metadata（W2-12），rollout 投影已删除 |
 | 后台任务 | `JobRuntime` 是进程内全局态，`JobStatus` 有 running/completed/refusal/failed/killed/timeout/unresponsive 七态 | **零持久化**。只能通过 `pending_job_ids(run_session_id)` 查在途，进程重启即丢；`agent_continuation_store.rs:74` 的 job 引用明确写着"只作可读线索，不承担解析职责" |
 
 目标：这些事实归会话所有，写进会话事件流，由投影汇总，不再依赖日志级别与跨会话聚合。
@@ -612,7 +612,7 @@ CREATE TABLE session_metrics (
 
 **为什么不全放 `usage.sqlite3`**
 
-- usage 是跨会话计费口径，且它的源是 `rollout.sqlite3`，本次要删。
+- usage 是跨会话计费口径，事实源已迁到 thread 轮次 metadata（W2-12），`rollout.sqlite3` 已删除。
 - 会话级事实应当随会话走，删会话一起删，不留孤儿。
 - 桌面端要看的是"这个会话"，不是"这个月"。
 
@@ -1046,7 +1046,7 @@ axon sessions show <session_id>                    # 查看单个会话摘要
 | `axon-session-runtime/src/application/execution_worker_settlement.rs` | 229 | `commit_action` | 按 §5.2 三段式 |
 | `axon-session-runtime/src/application/execution_worker_outcome.rs` | 42 | `commit_action` | 按 §5.2 三段式 |
 | `axon-cli/src/daemon_host_runner_question_durable.rs` | 39 | `append_events` | 改调 `EventLogStore` |
-| `axon-cli/src/run_commands/run_rollout_store/api.rs` | 239 | rollout `append_event` | 删除 `rollout.sqlite3`，turn 记录改由 `EventLogStore` 写入会话事件流 |
+| `axon-cli/src/run_commands/run_rollout_store/api.rs` | 239 | rollout `append_event` | 已完成：`rollout.sqlite3` 删除，turn 记录由 Thread 事件流承载（W2-12） |
 | `TurnPerformanceRecorder` 采集点 | `crates/axon-cli/src/lib.rs:472`、`run_request_payload.rs:151-260`、`run_provider_loop/mod.rs:176-413` | 只在 `log_level = trace` 时采集阶段 | 改为无条件采集；收口时写一条 `turn_metrics`（见 §4.11） |
 | `JobRuntime` 生命周期 | `crates/axon-agent-runtime/src/job_runtime`（`JobId` / `JobStatus`） | 纯进程内全局态，重启即丢 | 启停两处写 `job_started` / `job_completed` 事件，并维护 `control.sessions.open_job_count` |
 
@@ -1137,7 +1137,7 @@ axon sessions show <session_id>                    # 查看单个会话摘要
 
 - `runtime_cleanup.rs:166-201`（归档与悬空正文修复流程）整体重写。
 - `runtime_cleanup_session_events.rs` 整个模块删除。
-- `session_family_cleanup.rs:343`（`vacuumed_rollout`）随 rollout 迁走。
+- `session_family_cleanup.rs` 的 `vacuumed_rollout` 已随 rollout 删除；保留策略改为按 thread 家族判定。
 - 保留期语义从"按事件时间删行"变为"按会话目录删除"，粒度变粗但代价模型简单得多。
 
 ### 5.7 诊断、导出、健康、VACUUM
@@ -1474,7 +1474,7 @@ pwsh -File scripts/install-from-source.ps1 -Components all
 | 项 | 行为 |
 | --- | --- |
 | 控制面库 | 按新 schema 从零创建，`SCHEMA_IDENTITY` 已换新值 |
-| 事件面目录 | `data/events/`、`data/rollout/`、`data/sessions/threads/` 按需创建 |
+| 事件面目录 | `data/events/`、`data/sessions/threads/` 按需创建 |
 | 人格 | 美术资源在 `persona/`，状态库需从 `<home>/.axon-backup-20261116-154743/persona.sqlite3` 恢复 |
 | 记忆 | 需从备份的 `memory/` 恢复，否则从零学习 |
 | 定时任务 | 需从备份的 `cron.sqlite3` 恢复，否则为空 |
@@ -1496,7 +1496,7 @@ pwsh -File scripts/install-from-source.ps1 -Components all
 | B1 | `axon --version` | 输出 0.0.1 |
 | B2 | `Get-Command axon` | 解析到安装根，不是 cargo bin |
 | B3 | `axon doctor` | 通过 |
-| B4 | `data/` 布局 | 无 `runtime.sqlite3`；`control.sqlite3` 与 `outbox.sqlite3` 就位；`rollout.sqlite3` 的退役见 §4.6 延后项 |
+| B4 | `data/` 布局 | 无 `runtime.sqlite3`、无 `rollout.sqlite3`；`control.sqlite3` 与 `outbox.sqlite3` 就位 |
 | B5 | 单回合写入 | `data/events/<session>/session.v1.jsonl.zstd` 生成、可解压、记录数与水位一致 |
 | B6 | daemon 重启 3 次 | 续租不报 `database is locked` |
 | B7 | 24 小时运行 | `control.sqlite3` 稳定在 50 MB 以内 |
@@ -1557,11 +1557,11 @@ pwsh -File scripts/install-from-source.ps1 -Components all
 
 ### 12.5 延后清单
 
-原清单四项里三项已在本轮完成：`work_items` / `work_item_history` 拆表（W3-4）、统一 claim（W3-5，`work_item_claim.rs`）、协议字段 `laneId` → `sessionId`（W4-2 / W4-8，全仓无 `lane_id` 残留）。只剩 `rollout.sqlite3` 退役。
+原清单四项已全部完成：`work_items` / `work_item_history` 拆表（W3-4）、统一 claim（W3-5，`work_item_claim.rs`）、协议字段 `laneId` → `sessionId`（W4-2 / W4-8，全仓无 `lane_id` 残留）、`rollout.sqlite3` 退役（W2-12）。
 
 | 项 | 现状 | 补的时候必须带什么 |
 | --- | --- | --- |
-| `rollout.sqlite3` 退役 | 它仍是 `axon run` 恢复模型可见历史窗口的唯一来源；改用事件日志 + thread 文件重建会直接改动模型输入，出错时表现为「对话突然失忆」，只有多轮真机对话能发现 | 专门一轮改造 + 多轮对话回归用例（跨回合引用、工具结果回放、压缩窗口）；同时要迁移 resume 指针与 session 用量投影 |
+| `rollout.sqlite3` 退役 | 已完成（W2-12）：恢复链、轮次事实、用量投影、子代理名册、回放与保留策略全部改读 thread 事件面与控制面；`run_rollout_store/**` 与 `rollout.sqlite3` 已删除，见 `docs/dev/w2-12-rollout-retirement.md` | 真实多轮对话回归（C2/C4/C5、X1-X7）仍需真机取证 |
 
 已完成的项在代码与验收台账（`docs/dev/wbs-acceptance.md`）里有对应证据，不再保留「延后」表述。
 

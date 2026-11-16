@@ -1,9 +1,6 @@
 use std::{collections::BTreeSet, path::Path, time::Duration};
 
-use rusqlite::{
-    Connection, OpenFlags, OptionalExtension as _, Transaction, params, params_from_iter,
-    types::Value,
-};
+use rusqlite::{Connection, OptionalExtension as _, Transaction, params};
 
 use super::model::{
     UsageFact, UsageProjectionState, UsageRequestView, UsageRollupRow, UsageSourceFilter,
@@ -26,7 +23,6 @@ pub(super) use rollup_rebuild::{rebuild_day_bucket, rebuild_hour_bucket};
 const USAGE_RUNTIME_DIR: &str = "usage";
 const USAGE_DATABASE_FILE: &str = "usage.sqlite3";
 const USAGE_BUSY_TIMEOUT_MS: u64 = 250;
-const SOURCE_BUSY_TIMEOUT_MS: u64 = 50;
 
 pub(crate) struct UsageRepository {
     connection: Connection,
@@ -34,10 +30,10 @@ pub(crate) struct UsageRepository {
     window: Option<std::sync::Arc<axon_domain::SlidingWindowRingBuffer>>,
 }
 
+/// 用量投影的源行：thread 轮次事实 + 该轮记录时间。
 pub(super) struct UsageSourceRow {
-    pub(super) source_rowid: u64,
     pub(super) recorded_at_ms: u64,
-    pub(super) record_json: String,
+    pub(super) record: super::model::ThreadUsageRecord,
 }
 
 pub(super) struct UsageQuery<'a> {
@@ -497,56 +493,6 @@ fn parse_rollup_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(u64, UsageRoll
             unpriced_request_count: from_i64(row.get(15)?)?,
         },
     ))
-}
-
-pub(super) fn read_rollout_usage_rows(
-    rollout_path: &Path,
-    watermark_rowid: u64,
-    reconcile_keys: &[(String, String)],
-) -> Result<Vec<UsageSourceRow>, String> {
-    if !rollout_path.exists() {
-        return Ok(Vec::new());
-    }
-    let connection = Connection::open_with_flags(
-        rollout_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(db_error("只读打开 rollout SQLite"))?;
-    connection
-        .busy_timeout(Duration::from_millis(SOURCE_BUSY_TIMEOUT_MS))
-        .map_err(db_error("配置 rollout 只读 busy timeout"))?;
-    let mut where_clauses = vec!["rowid > ?1".to_owned()];
-    let mut values = vec![Value::Integer(to_i64(watermark_rowid)?)];
-    for (index, (session_id, assistant_part_id)) in reconcile_keys.iter().enumerate() {
-        let session_placeholder = index.saturating_mul(2).saturating_add(2);
-        let part_placeholder = session_placeholder.saturating_add(1);
-        where_clauses.push(format!(
-            "(session_id = ?{session_placeholder} AND assistant_part_id = ?{part_placeholder})"
-        ));
-        values.push(Value::Text(session_id.clone()));
-        values.push(Value::Text(assistant_part_id.clone()));
-    }
-    let sql = format!(
-        "SELECT rowid, recorded_at_ms, record_json
-         FROM rollout_turns
-         WHERE {}
-         ORDER BY rowid",
-        where_clauses.join(" OR ")
-    );
-    let mut statement = connection
-        .prepare(&sql)
-        .map_err(db_error("准备 rollout usage 增量查询"))?;
-    let rows = statement
-        .query_map(params_from_iter(values.iter()), |row| {
-            Ok(UsageSourceRow {
-                source_rowid: from_i64(row.get(0)?)?,
-                recorded_at_ms: from_i64(row.get(1)?)?,
-                record_json: row.get(2)?,
-            })
-        })
-        .map_err(db_error("查询 rollout usage 增量"))?;
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(db_error("解析 rollout usage 增量"))
 }
 
 fn existing_buckets(

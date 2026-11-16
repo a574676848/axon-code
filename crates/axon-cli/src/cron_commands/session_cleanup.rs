@@ -15,7 +15,7 @@ use self::session_family_cleanup::{
 };
 use super::repository::CronRepository;
 use super::runtime_cleanup::{RuntimeCleanupCounts, cleanup_runtime_data, count_runtime_cleanup};
-use crate::run_commands::{resolved_axon_root, resolved_rollout_db_path};
+use crate::run_commands::resolved_axon_root;
 use crate::usage_statistics::cleanup_usage_data;
 
 /// 由 Axon Cron 直接识别的跨平台会话清理任务标识。
@@ -48,7 +48,6 @@ pub(crate) struct SessionCleanupReport {
     pub(crate) deleted_session_notes_count: usize,
     pub(crate) deleted_note_file_count: usize,
     pub(crate) deleted_archived_shard_count: usize,
-    pub(crate) vacuumed_rollout: bool,
     pub(crate) vacuumed_sqlite_count: usize,
     pub(crate) deleted_session_event_count: usize,
     pub(crate) deleted_session_checkpoint_count: usize,
@@ -94,18 +93,11 @@ pub(super) fn run_session_cleanup_data(
     let usage_fact_count = cleanup_usage_data(config_path, dry_run)?;
     let root = resolved_axon_root(config_path)?;
     let cutoff_ms = axon_time::unix_now_ms().saturating_sub(retention_ms());
-    let rollout_path = resolved_rollout_db_path(config_path)?;
-    let stale_sessions = stale_session_family_ids(&root, &rollout_path, cutoff_ms)?;
+    let stale_sessions = stale_session_family_ids(&root, cutoff_ms)?;
     if dry_run {
         return run_cleanup_dry_run(&root, cutoff_ms, &stale_sessions, usage_fact_count);
     }
-    run_cleanup_deletion(
-        &root,
-        &rollout_path,
-        cutoff_ms,
-        &stale_sessions,
-        usage_fact_count,
-    )
+    run_cleanup_deletion(&root, cutoff_ms, &stale_sessions, usage_fact_count)
 }
 
 /// 文件面清理的截止时间：四个文件目录按独立保留期回收。
@@ -139,7 +131,6 @@ fn run_cleanup_dry_run(
 
 fn run_cleanup_deletion(
     root: &Path,
-    rollout_path: &Path,
     cutoff_ms: u64,
     stale_sessions: &[String],
     usage_fact_count: u64,
@@ -153,7 +144,7 @@ fn run_cleanup_deletion(
     report.deleted_cron_job_count = cron_jobs;
     initialize_and_cleanup_runtime(root, cutoff_ms, &mut report)?;
     apply_file_cleanup_counts(&mut report, cleanup_runtime_files(root, file_cutoff_ms())?);
-    cleanup_session_family_data(root, rollout_path, cutoff_ms, stale_sessions, &mut report)?;
+    cleanup_session_family_data(root, cutoff_ms, stale_sessions, &mut report)?;
     report.vacuumed_sqlite_count = vacuum_sqlite_files(root)?;
     report.status = "completed".to_owned();
     Ok(report)

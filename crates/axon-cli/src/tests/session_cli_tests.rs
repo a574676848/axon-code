@@ -7,20 +7,30 @@ use axon_session::{JsonlThreadEventStore, ThreadEventRecord, ThreadEventStore};
 use serde_json::Value;
 
 use super::{AxonCli, run_parsed_cli};
-use crate::run_commands::{
-    RolloutEventAppendInput, RolloutEventRecord, append_rollout_event_for_session,
-};
 
 #[test]
-fn session_replay_reads_rollout_events_without_run_session_record() {
-    let root = test_root("replay-rollout-only");
+fn session_replay_reads_thread_turns_and_their_metadata() {
+    let root = test_root("replay-thread-turns");
     fs::create_dir_all(&root).expect("测试目录应可创建");
     let config_path = root.join("config.toml");
     fs::write(&config_path, "[agent]\ndefault_model = \"balanced\"\n").expect("测试配置应可写入");
-    let rollout_events = [
-        r#"{"schemaVersion":1,"sessionId":"cli-session-1","parentSessionId":null,"sequence":0,"eventType":"turn_events","recordedAtMs":100,"payload":{"source":"run_prompt","runId":"cli-run-1","turnEvents":[{"turnId":1,"kind":"TurnStarted","recordedAtMs":100,"summary":"provider turn 1 started"},{"turnId":1,"kind":"Completed","recordedAtMs":101,"summary":"provider turn finished without additional tool calls"}]}}"#,
-    ];
-    seed_rollout_events(&config_path, &rollout_events);
+    seed_thread_records(
+        &root,
+        &[
+            thread_started("cli-session-1", None, 0, 100, "small"),
+            turn_completed_with_metadata(
+                "cli-session-1",
+                1,
+                0,
+                101,
+                "第五轮提示",
+                "第五轮回答",
+                2,
+                1,
+                Some("记忆反思：本轮新增 1 条记忆"),
+            ),
+        ],
+    );
 
     let path_arg = config_path.to_string_lossy().to_string();
     let cli = AxonCli::parse_from_args([
@@ -40,10 +50,46 @@ fn session_replay_reads_rollout_events_without_run_session_record() {
     assert_eq!(result.exit_code, 0);
     assert_eq!(body["status"], "session_replayed");
     assert_eq!(body["sessionId"], "cli-session-1");
-    assert_eq!(body["chainLen"], 0);
-    assert_eq!(body["eventCount"], 1);
-    assert_eq!(body["eventSummaries"][0]["source"], "run_prompt");
-    assert_eq!(body["eventSummaries"][0]["turnEventCount"], 2);
+    assert_eq!(body["chainLen"], 1);
+    assert_eq!(body["turnCount"], 1);
+    assert_eq!(body["turns"][0]["status"], "completed");
+    assert_eq!(body["turns"][0]["turnEventCount"], 2);
+    assert_eq!(body["turns"][0]["toolReceiptCount"], 1);
+    assert_eq!(
+        body["turns"][0]["reflectionNotice"],
+        "记忆反思：本轮新增 1 条记忆"
+    );
+    assert_eq!(body["chain"][0]["promptChars"], 5);
+    assert_eq!(body["chain"][0]["responseChars"], 5);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn session_replay_walks_the_parent_chain_root_first() {
+    let root = test_root("replay-parent-chain");
+    seed_sessions(&root);
+    let path_arg = root.join("config.toml").to_string_lossy().to_string();
+
+    let (result, body) = run_json_cli([
+        "axon",
+        "--config",
+        &path_arg,
+        "--format",
+        "json",
+        "debug",
+        "session",
+        "replay",
+        "session-new",
+    ]);
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(body["chainLen"], 2, "resume 链必须沿 parent 回溯到根");
+    assert_eq!(body["chain"][0]["sessionId"], "session-old");
+    assert_eq!(body["chain"][0]["depth"], 0);
+    assert_eq!(body["chain"][1]["sessionId"], "session-new");
+    assert_eq!(body["chain"][1]["depth"], 1);
+    assert_eq!(body["chain"][1]["promptChars"], 6);
+    assert_eq!(body["chain"][1]["responseChars"], 4);
 
     let _ = fs::remove_dir_all(root);
 }
@@ -167,43 +213,6 @@ fn session_read_text_outputs_thread_and_turn_details() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn session_replay_summarizes_tool_and_memory_receipt_fields() {
-    let root = test_root("replay-rollout-summary");
-    fs::create_dir_all(&root).expect("测试目录应可创建");
-    let config_path = root.join("config.toml");
-    fs::write(&config_path, "[agent]\ndefault_model = \"balanced\"\n").expect("测试配置应可写入");
-    let rollout_events = [
-        r#"{"schemaVersion":1,"sessionId":"agent-pane-provider-session-1000001","parentSessionId":null,"sequence":0,"eventType":"turn_events","recordedAtMs":100,"payload":{"source":"optional_ui_agent_pane","paneId":1,"cellId":1,"turnEvents":[{"turnId":1,"kind":"TurnStarted","recordedAtMs":100,"summary":"provider turn 1 started"}],"toolReceipts":[{"toolCallId":1000001,"toolName":"builtin_search","status":"Completed"}]}}"#,
-        r#"{"schemaVersion":1,"sessionId":"agent-pane-provider-session-1000001","parentSessionId":null,"sequence":1,"eventType":"session_completed","recordedAtMs":101,"payload":{"source":"optional_ui_memory_receipt","hook":"MemoryUpdate","status":"CompletedNoWrite","writeDecision":"SkippedNoChange","reason":"auto candidate skipped","memoryUpdatedInfoVisible":false}}"#,
-    ];
-    seed_rollout_events(&config_path, &rollout_events);
-
-    let path_arg = config_path.to_string_lossy().to_string();
-    let cli = AxonCli::parse_from_args([
-        "axon",
-        "--config",
-        &path_arg,
-        "--format",
-        "json",
-        "debug",
-        "session",
-        "replay",
-        "agent-pane-provider-session-1000001",
-    ]);
-    let result = run_parsed_cli(&cli);
-    let body: Value = serde_json::from_str(&result.stdout).expect("session replay 应输出 JSON");
-
-    assert_eq!(result.exit_code, 0);
-    assert_eq!(body["eventCount"], 2);
-    assert_eq!(body["eventSummaries"][0]["toolReceiptCount"], 1);
-    assert_eq!(
-        body["eventSummaries"][1]["memoryWriteStatus"],
-        "SkippedNoChange"
-    );
-
-    let _ = fs::remove_dir_all(root);
-}
 
 fn run_json_cli<const N: usize>(args: [&str; N]) -> (super::CliRunResult, Value) {
     let cli = AxonCli::parse_from_args(args);
@@ -212,22 +221,58 @@ fn run_json_cli<const N: usize>(args: [&str; N]) -> (super::CliRunResult, Value)
     (result, body)
 }
 
-fn seed_rollout_events(config_path: &Path, events: &[&str]) {
-    for event in events {
-        let record: RolloutEventRecord =
-            serde_json::from_str(event).expect("rollout event fixture 应有效");
-        append_rollout_event_for_session(
-            config_path,
-            RolloutEventAppendInput {
-                session_id: record.session_id,
-                parent_session_id: record.parent_session_id,
-                event_type: record.event_type,
-                recorded_at_ms: record.recorded_at_ms,
-                payload: record.payload,
-            },
-        )
-        .expect("rollout event 应写入 SQLite");
+/// 直接把 thread 事件写进事件面；回放只认这一份事实。
+fn seed_thread_records(root: &Path, content: &[String]) {
+    let store = JsonlThreadEventStore;
+    for value in content {
+        let record =
+            serde_json::from_str::<ThreadEventRecord>(value).expect("测试 thread 事件应有效");
+        store
+            .append(root, &record)
+            .expect("测试 thread 事件应可写入");
     }
+}
+
+/// 带轮次 metadata 的完成轮：事件数与回执数、反思提示都在 metadata 里。
+fn turn_completed_with_metadata(
+    thread_id: &str,
+    sequence: u64,
+    turn_sequence: u64,
+    recorded_at_ms: u64,
+    user_message: &str,
+    assistant_message: &str,
+    turn_event_count: usize,
+    tool_receipt_count: usize,
+    reflection_notice: Option<&str>,
+) -> String {
+    let metadata = serde_json::json!({
+        "usage": null,
+        "assistantPartId": format!("assistant-run:{turn_sequence}"),
+        "latestFailure": null,
+        "suggestedNextStep": null,
+        "toolReceipts": (0..tool_receipt_count)
+            .map(|index| serde_json::json!({"callId": index + 1}))
+            .collect::<Vec<_>>(),
+        "reasoningMessageCount": 0,
+        "turnEventCount": turn_event_count,
+        "modelName": null,
+        "reflectionNotice": reflection_notice,
+        "reasoningEffort": null,
+        "promptChars": user_message.chars().count(),
+        "failed": false,
+        "affectSequence": [],
+    });
+    let mut event: Value = serde_json::from_str(&turn_completed(
+        thread_id,
+        sequence,
+        turn_sequence,
+        recorded_at_ms,
+        user_message,
+        assistant_message,
+    ))
+    .expect("基础轮次 fixture 应有效");
+    event["event"]["turn"]["tokenUsageJson"] = Value::String(metadata.to_string());
+    event.to_string()
 }
 
 fn seed_sessions(root: &Path) {

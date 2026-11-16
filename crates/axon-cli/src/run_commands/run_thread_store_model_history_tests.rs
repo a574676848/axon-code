@@ -1,7 +1,6 @@
 //! Thread 模型历史投影：注入上下文原序回放与原生工具条目恢复。
 
 use super::*;
-use crate::run_commands::{RolloutSqliteStore, resolved_rollout_db_path};
 
 #[test]
 fn injected_context_replays_verbatim_before_turn_user_message() {
@@ -32,7 +31,7 @@ fn injected_context_replays_verbatim_before_turn_user_message() {
 }
 
 #[test]
-fn injected_context_survives_sqlite_record_roundtrip() {
+fn injected_context_survives_thread_roundtrip() {
     let root = temp_root("injected-record-roundtrip");
     let config_path = root.join("runtime").join("config.toml");
     std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
@@ -51,19 +50,14 @@ fn injected_context_survives_sqlite_record_roundtrip() {
     ];
     let expected = record.injected_context_messages.clone();
 
-    let db_path = resolved_rollout_db_path(&config_path).unwrap();
-    let store = RolloutSqliteStore::open(&db_path).unwrap();
-    store
-        .record_session(&record)
-        .expect("写入 rollout 必须成功");
-    let restored = store
-        .load_by_id(&record.session_id)
-        .expect("读取 rollout 必须成功")
-        .expect("rollout 记录必须存在");
+    mirror_session_to_thread(&config_path, &record).expect("写入 thread 必须成功");
+    let restored = turn_record(&config_path, &record.session_id, &record.assistant_part_id)
+        .expect("读取 thread 必须成功")
+        .expect("thread 轮次必须存在");
 
     assert_eq!(
         restored.injected_context_messages, expected,
-        "注入上下文必须原样通过 SQLite 记录往返"
+        "注入上下文必须原样通过 thread 事件流往返"
     );
     let detail = thread_detail_from_records(&[restored]).unwrap();
     let messages = parsed_model_history(&detail);

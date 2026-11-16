@@ -449,11 +449,6 @@ fn attachments_roundtrip_sqlite_thread_jsonl_and_resume_history() {
         source_ref: Some("local-upload://notes.txt".to_owned()),
     }];
 
-    let db_path = super::super::run_rollout_store::resolved_rollout_db_path(&config_path).unwrap();
-    super::super::run_rollout_store::RolloutSqliteStore::open(&db_path)
-        .unwrap()
-        .record_session(&record)
-        .unwrap();
     mirror_session_to_thread(&config_path, &record).unwrap();
 
     let stored_thread = ThreadService::new(JsonlThreadEventStore)

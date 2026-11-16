@@ -44,7 +44,7 @@
 | W2-9 | 已完成 | 新库不含 `session_events` 表，直连 SQL 消失 | `crates/axon-session/src/infrastructure/sqlite_runtime_store/schema.rs` 无该表；`cargo test --workspace` 全绿 |
 | W2-10 | 已完成 | 分页、字节预算、缺失正文降级、cursor 续订全绿 | `crates/axon-daemon/src/infrastructure/gateway_replay_tests.rs` |
 | W2-11 | 未开始 | 断网重连后视图与在线态一致（需 CDP 真机证据） | 待 W6-5 真机验收时取证 |
-| W2-12 | 进行中 | 删库后多轮对话回归全绿；`--continue` 可接续；无 `RolloutSqliteStore` 残留 | 专项计划与进度见 [w2-12-rollout-retirement.md](./w2-12-rollout-retirement.md)。本窗口已把**恢复路径**（`prepare_run_session`）与**窗口投影**改为以 thread 文件为准，并删除 rollout 的窗口读取/写入函数；剩余 C（治理与反思读轮次）、D（用量与读数）、E（子代理与链/工具输出）、F（保留策略）四组与整删待后续轮次 |
+| W2-12 | 代码完成，待真机回归 | `run_rollout_store/**` 与 `rollout.sqlite3` 全仓无引用；`cargo test --workspace` 全绿；`--continue` 可接续；真机 C2/C4/C5 与 X1-X7 取证通过 | 专项计划、进度与门禁证据见 [w2-12-rollout-retirement.md](./w2-12-rollout-retirement.md)。A/B/C/D/E/F 六组全部迁移完成并整删 rollout 模块；离线门禁（fmt/check/clippy/test/verify-architecture/verify-docs）全绿；仅剩安装后真机多轮对话回归 |
 
 ## W3 控制面与工作项
 
@@ -100,6 +100,6 @@
 
 - 已完成：W0 三项、W1 十项、W2 十项、W3 八项（W3-7 撤销、W3-4 已修）、W4 八项、W5 六项、W6 一项。
 - W1 基座已闭合：W1-7 / W1-9 的实现与崩溃注入用例在 `3df37831b`、`b703cb615`；W1-1 / W1-6 / W1-8 / W1-10 的证据见上表。
-- 进行中：W2-12（rollout 退役剩整删：rollout 存储约 110 KB 仍是生产存储，整删需把窗口投影、turn 记录、工具输出归档、用量统计与保留策略逐项迁走，属独立多轮工作）。
+- 代码完成待真机：W2-12（rollout 已整删：窗口投影、轮次事实、用量统计、子代理名册、链回放、工具归档与保留策略全部改读 thread 事件面与控制面，只剩安装后多轮对话回归）。
 - 进行中（续）：W6-6（门禁脚本四项硬上限已改为自动测量，实测 p99 0.555 ms / 事务 p95 0.122 ms / 首屏 1 ms / data 0 MiB）。
 - 未开始：W2-11、W4-9、W6-2 至 W6-5（全部依赖装机与发布阶段）。

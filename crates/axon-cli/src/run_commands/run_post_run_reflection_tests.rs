@@ -158,17 +158,16 @@ fn completed_run_governs_reflection_off_main_path() {
         "completed"
     );
 
+    let kinds = events
+        .iter()
+        .map(|event| event.event.kind.clone())
+        .collect::<Vec<_>>();
     assert!(
-        events
-            .iter()
-            .all(|event| !matches!(event.event.kind, WireEventKind::SkillStatus(_))),
-        "反思链路不应产生主路径技能状态事件"
-    );
-    assert!(
-        events
-            .iter()
-            .all(|event| !matches!(event.event.kind, WireEventKind::ReviewStatus(_))),
-        "反思链路不应产生人审状态事件"
+        kinds.iter().all(|kind| !matches!(
+            kind,
+            WireEventKind::SkillStatus(_) | WireEventKind::ReviewStatus(_)
+        )),
+        "反思链路不应产生主路径技能状态或人审状态事件"
     );
     assert!(captured_labels_contain(&captured, &["memory_update"]));
     let assessor_input = captured_input_ending_with(&captured, "semantic_salience")
@@ -674,29 +673,6 @@ fn governance_job_error(path: &std::path::Path, job_id: &str) -> String {
         .expect("governance job 应记录失败原因")
 }
 
-fn assert_no_running_subagent_sessions(request: &RunRequest) {
-    let sessions = request
-        .subagent_sessions
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    assert!(
-        sessions
-            .sessions()
-            .iter()
-            .all(|handle| handle.status != axon_agent_runtime::SubagentSessionStatus::Running),
-        "post-run self-iteration 子代理必须完成会话闭环"
-    );
-}
-
-fn test_root(label: &str) -> std::path::PathBuf {
-    static NEXT_TEST_ROOT_ID: AtomicU64 = AtomicU64::new(1);
-
-    let root = axon_test_support::test_temp_root().join(format!(
-        "axon-post-run-reflection-{label}-{}-{}",
-        std::process::id(),
-        NEXT_TEST_ROOT_ID.fetch_add(1, Ordering::Relaxed)
-    ));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
-    root
-}
+#[path = "run_post_run_reflection_fixtures.rs"]
+mod fixtures;
+use fixtures::*;

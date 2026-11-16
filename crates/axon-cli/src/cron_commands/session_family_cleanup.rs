@@ -1,13 +1,18 @@
-//! rollout stale Session family 的跨存储一致性清理。
+//! 过期 Session family 的跨存储一致性清理。
+//!
+//! 会话事实来自 thread 事件面与控制面：thread 文件给出会话、父子关系与最近活动时间，
+//! 运行态库给出守护进程侧的活动，治理队列给出正在跑作业的保护名单。
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     io::ErrorKind,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
-use axon_session::JsonlThreadEventStore;
+use axon_session::{
+    JsonlThreadEventStore, ResumePointerStore as _, SqliteRuntimeStore, ThreadDetail, ThreadService,
+};
 use rusqlite::{Connection, TransactionBehavior, params_from_iter, types::Value};
 
 use super::SessionCleanupReport;
@@ -15,7 +20,6 @@ use crate::cron_commands::runtime_cleanup::{
     cleanup_runtime_session_families, count_runtime_session_families,
     protected_runtime_session_ids, stale_runtime_session_ids,
 };
-use crate::run_commands::RolloutSqliteStore;
 
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const GOVERNANCE_DATABASE_FILE: &str = "post_run_governance.sqlite3";
@@ -38,53 +42,97 @@ pub(super) struct SessionContextCounts {
     pub(super) archived_shards: usize,
 }
 
-/// 过期会话家族候选：rollout 索引与运行态两侧取并集。
+/// 过期会话家族候选：会话事实来自 thread 事件面，运行态侧补充守护进程会话。
 ///
-/// rollout 只索引交互式主会话，子代理车道与历史 desktop 车道不在其中；
-/// 只按 rollout 取候选会让这些会话的根记录永久滞留，其事件也就永远没有
-/// 回收入口。运行态侧按最后一次活动时间自判过期，并对受治理保护的会话去重。
-pub(super) fn stale_session_family_ids(
-    root: &Path,
-    rollout_path: &Path,
-    cutoff_ms: u64,
-) -> Result<Vec<String>, String> {
+/// 家族按 `parent_thread_id` 归并到根：只要族内有一条受保护会话或未过期会话，
+/// 整个家族都不清理，避免回放链被删成断头。
+pub(super) fn stale_session_family_ids(root: &Path, cutoff_ms: u64) -> Result<Vec<String>, String> {
     let mut protected = protected_governance_sessions(root)?;
-    let mut ids = Vec::new();
-    let mut rollout_ids = HashSet::new();
-    if rollout_path.exists() {
-        let mut store = RolloutSqliteStore::open_read_only(rollout_path)?;
-        let initial = store.stale_session_family_ids(cutoff_ms, &protected)?;
-        extend_runtime_protection(root, &initial, &mut protected)?;
-        ids = store.stale_session_family_ids(cutoff_ms, &protected)?;
-        // rollout 的家族保护是整族语义：只要有一个成员受保护，整族都不动。
-        // 因此运行态补充候选只覆盖 rollout 完全没索引的会话，不得越过家族边界。
-        rollout_ids = rollout_session_ids(rollout_path)?;
-    }
+    let threads = ThreadService::new(JsonlThreadEventStore)
+        .scan_threads(root)
+        .map_err(|error| format!("扫描 thread 事件面失败：{error}"))?;
+    let current = current_resume_session(root);
+    let known = threads
+        .iter()
+        .map(|detail| detail.thread.thread_id.clone())
+        .collect::<HashSet<_>>();
+    let mut ids = stale_thread_family_ids(&threads, current.as_deref(), &protected, cutoff_ms);
+    extend_runtime_protection(root, &ids, &mut protected)?;
+    ids = stale_thread_family_ids(&threads, current.as_deref(), &protected, cutoff_ms);
     ids.extend(
         stale_runtime_session_ids(root, cutoff_ms)?
             .into_iter()
-            .filter(|session_id| {
-                !protected.contains(session_id) && !rollout_ids.contains(session_id)
-            }),
+            .filter(|session_id| !protected.contains(session_id) && !known.contains(session_id)),
     );
     ids.sort();
     ids.dedup();
     Ok(ids)
 }
 
-/// rollout 索引里已登记的会话集合：运行态补充候选必须避开这些会话。
-fn rollout_session_ids(rollout_path: &Path) -> Result<HashSet<String>, String> {
-    let connection =
-        Connection::open_with_flags(rollout_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(|_| "rollout 会话索引打开失败".to_owned())?;
-    let mut statement = connection
-        .prepare("SELECT session_id FROM rollout_sessions")
-        .map_err(|_| "rollout 会话索引查询失败".to_owned())?;
-    let rows = statement
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(|_| "rollout 会话索引查询失败".to_owned())?;
-    rows.collect::<rusqlite::Result<HashSet<_>>>()
-        .map_err(|_| "rollout 会话索引读取失败".to_owned())
+/// 当前 `--continue` 指向的会话：它所在的家族永不过期。
+fn current_resume_session(root: &Path) -> Option<String> {
+    let store = SqliteRuntimeStore::from_root(root.join(axon_session::AXON_RUNTIME_DATA_DIR));
+    store
+        .read_resume_pointer()
+        .ok()
+        .flatten()
+        .map(|session| session.as_str().to_owned())
+}
+
+/// 按家族判定过期：族内全部成员都早于截止时间，且不含受保护会话与当前家族。
+fn stale_thread_family_ids(
+    threads: &[ThreadDetail],
+    current_session_id: Option<&str>,
+    protected_session_ids: &HashSet<String>,
+    cutoff_ms: u64,
+) -> Vec<String> {
+    let parents = threads
+        .iter()
+        .map(|detail| {
+            (
+                detail.thread.thread_id.clone(),
+                detail.thread.parent_thread_id.clone(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let protected_root = current_session_id.map(|session_id| session_root(session_id, &parents));
+    let mut families = HashMap::<String, Vec<&ThreadDetail>>::new();
+    for detail in threads {
+        let root = session_root(&detail.thread.thread_id, &parents);
+        families.entry(root).or_default().push(detail);
+    }
+    let mut stale_ids = families
+        .into_iter()
+        .filter(|(root, members)| {
+            protected_root.as_deref() != Some(root.as_str())
+                && !members
+                    .iter()
+                    .any(|detail| protected_session_ids.contains(&detail.thread.thread_id))
+                && members
+                    .iter()
+                    .all(|detail| detail.thread.updated_at_ms < cutoff_ms)
+        })
+        .flat_map(|(_, members)| {
+            members
+                .into_iter()
+                .map(|detail| detail.thread.thread_id.clone())
+        })
+        .collect::<Vec<_>>();
+    stale_ids.sort();
+    stale_ids
+}
+
+/// 沿父链归并到家族根；遇到环或缺失父节点时停在原地。
+fn session_root(session_id: &str, parents: &HashMap<String, Option<String>>) -> String {
+    let mut current = session_id.to_owned();
+    let mut visited = HashSet::new();
+    while let Some(Some(parent)) = parents.get(&current) {
+        if !visited.insert(current.clone()) || !parents.contains_key(parent) {
+            break;
+        }
+        current.clone_from(parent);
+    }
+    current
 }
 
 pub(super) fn count_session_family_data(
@@ -102,12 +150,11 @@ pub(super) fn count_session_family_data(
 
 pub(super) fn cleanup_session_family_data(
     root: &Path,
-    rollout_path: &Path,
     cutoff_ms: u64,
     session_ids: &[String],
     report: &mut SessionCleanupReport,
 ) -> Result<(), String> {
-    let current = stale_session_family_ids(root, rollout_path, cutoff_ms)?;
+    let current = stale_session_family_ids(root, cutoff_ms)?;
     let requested = session_ids.iter().collect::<HashSet<_>>();
     let eligible = current
         .into_iter()
@@ -123,11 +170,14 @@ pub(super) fn cleanup_session_family_data(
         report.deleted_governance_count = report
             .deleted_governance_count
             .saturating_add(cleanup_governance(root, ids, cutoff_ms)?);
-        remove_thread_files(root, ids, report)?;
+        // 先删会话上下文、后删 thread 文件：上下文删除失败时 thread 轮次仍在，
+        // 下一轮清理还能凭它重新定位整个家族，不会留下无人认领的孤儿数据。
         remove_session_context_files(root, ids, report)?;
+        remove_thread_files(root, ids, report)?;
         processed.extend(ids.iter().cloned());
     }
-    finalize_rollout_cleanup(root, rollout_path, cutoff_ms, &processed, report)
+    report.deleted_session_count = processed.len();
+    Ok(())
 }
 
 fn protected_governance_sessions(root: &Path) -> Result<HashSet<String>, String> {
@@ -321,26 +371,6 @@ fn remove_session_context_files(
         })?;
         apply_context_counts(report, counts);
     }
-    Ok(())
-}
-
-fn finalize_rollout_cleanup(
-    root: &Path,
-    rollout_path: &Path,
-    cutoff_ms: u64,
-    session_ids: &[String],
-    report: &mut SessionCleanupReport,
-) -> Result<(), String> {
-    if session_ids.is_empty() || !rollout_path.exists() {
-        return Ok(());
-    }
-    let mut protected = protected_governance_sessions(root)?;
-    extend_runtime_protection(root, session_ids, &mut protected)?;
-    let mut store = RolloutSqliteStore::open(rollout_path)?;
-    let rollout =
-        store.finalize_stale_session_family_removal(session_ids, cutoff_ms, &protected)?;
-    report.deleted_session_count = rollout.session_ids.len();
-    report.vacuumed_rollout = rollout.vacuumed;
     Ok(())
 }
 

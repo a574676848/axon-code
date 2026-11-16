@@ -18,12 +18,14 @@ pub use goal_command_service::{GoalCommandService, GoalCommandServiceError, Goal
 pub use goal_query_service::{GoalQueryService, GoalQueryServiceError};
 pub use session_identity::{interaction_session_id, session_id_for_route};
 pub use session_query_service::{SessionQueryService, SessionSnapshot};
+mod thread_maintenance;
 mod thread_repair;
+pub use thread_maintenance::AnnotateChildOriginCommand;
 pub use thread_service::{
-    AnnotateChildOriginCommand, AppendTurnCommand, AppendTurnItemsCommand, CompactThreadCommand,
-    FailTurnCommand, ForkThreadCommand, InterruptTurnCommand, NameThreadCommand,
-    RepairOpenTurnCommand, ResumeThreadCommand, StartEmptyThreadCommand, StartThreadCommand,
-    StartTurnCommand, ThreadService, TurnRepairOutcome,
+    AppendTurnCommand, AppendTurnItemsCommand, CompactThreadCommand, FailTurnCommand,
+    ForkThreadCommand, InterruptTurnCommand, NameThreadCommand, RepairOpenTurnCommand,
+    ResumeThreadCommand, StartEmptyThreadCommand, StartThreadCommand, StartTurnCommand,
+    ThreadService, TurnRepairOutcome,
 };
 pub use workspace_resolver::{
     WorkspaceGitSnapshot, WorkspaceIdentity, WorkspaceResolver, WorkspaceResolverError,

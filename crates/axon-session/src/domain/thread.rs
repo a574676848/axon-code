@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ThreadSettings, Turn};
+use super::{ThreadSettings, Turn, TurnStatus};
 
 /// Thread ID。
 pub type ThreadId = String;
@@ -95,6 +95,12 @@ pub struct ThreadSummary {
     /// 子会话来源；非子会话为缺省。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub child_origin: Option<String>,
+    /// 末轮状态；没有轮次时为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_turn_status: Option<TurnStatus>,
+    /// 末轮记录时间；没有轮次时为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_turn_at_ms: Option<u64>,
     /// Turn 数。
     pub turn_count: usize,
 }

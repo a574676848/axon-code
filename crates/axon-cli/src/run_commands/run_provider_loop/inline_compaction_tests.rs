@@ -42,13 +42,7 @@ fn mirror_completed(request: &RunRequest, response: &str) {
 
 fn initialize_session(request: &RunRequest) -> PathBuf {
     let record = fixture_record(request);
-    // rollout 仍在写入（C/D/E/F 组未迁移完），thread 侧按生产顺序登记 active turn。
-    crate::run_commands::run_rollout_store::commit_session_to_rollout(
-        &request.config_path,
-        &record,
-        "窗口测试",
-    )
-    .unwrap();
+    // 与生产一致：起跑时就把 active turn 登记进 thread，换窗靠它定位当前轮。
     mirror_session_started(&request.config_path, &record).unwrap();
     resolved_axon_root(&request.config_path)
         .unwrap()
@@ -217,21 +211,15 @@ fn two_inline_rollovers_restore_only_active_window_and_keep_archives() {
                 .is_empty()
         );
     }
-    let db = crate::run_commands::resolved_rollout_db_path(&request.config_path).unwrap();
-    let count = rusqlite::Connection::open(db)
-        .unwrap()
-        .query_row(
-            "SELECT COUNT(*) FROM rollout_turns WHERE session_id = ?1",
-            rusqlite::params![request.session_id],
-            |row| row.get::<_, i64>(0),
-        )
+    let detail = axon_session::ThreadService::new(axon_session::JsonlThreadEventStore)
+        .read_thread(&root, &request.session_id)
         .unwrap();
-    assert_eq!(count, 2);
+    assert_eq!(detail.turns.len(), 2, "两次收尾各落一轮，不得重复开轮");
     std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn missing_current_turn_is_backfilled_so_the_rollover_still_commits() {
+fn rollover_falls_back_to_the_active_turn_when_part_id_changed() {
     let root = temp_workspace("inline-projection-backfill");
     let mut request = request_with_rollover(root.clone());
     let session_dir = initialize_session(&request);
@@ -239,13 +227,13 @@ fn missing_current_turn_is_backfilled_so_the_rollover_still_commits() {
     let previous = SessionNotes::load_from_session(&session_dir)
         .unwrap()
         .unwrap();
-    // 换窗先于本轮收尾发生：轮记录还没落地。
+    // 本轮收尾还没发生，assistant_part_id 与起跑时不同：换窗必须回退到 active turn。
     request.invocation_id = "unregistered-invocation".to_owned();
     run_rollover(&request).unwrap();
     let notes = SessionNotes::load_from_session(&session_dir)
         .unwrap()
         .unwrap();
-    // 起始记录被补上，这一次换窗不再白跑：窗口身份真的推进、旧窗口真的归档。
+    // 回退命中了起跑时登记的 active turn：窗口身份真的推进、旧窗口真的归档。
     assert_eq!(notes.window_number, previous.window_number + 1);
     assert_ne!(notes.current_window_id, previous.current_window_id);
     assert_ne!(
