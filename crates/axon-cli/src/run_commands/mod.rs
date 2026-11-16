@@ -151,10 +151,8 @@ use run_rollout_store::commit_session_to_rollout;
 #[cfg(test)]
 pub(crate) use run_rollout_store::{RolloutEventAppendInput, append_rollout_event_for_session};
 pub(crate) use run_rollout_store::{
-    RolloutEventRecord, RolloutReplayView, RolloutSqliteStore, SessionUsageTotals,
-    load_latest_session_model_from_root, load_session_usage_totals_from_root,
-    read_rollout_tool_output, replay_rollout_events, replay_session_chain,
-    resolved_rollout_db_path,
+    RolloutEventRecord, RolloutReplayView, RolloutSqliteStore, read_rollout_tool_output,
+    replay_rollout_events, replay_session_chain, resolved_rollout_db_path,
 };
 pub(crate) use run_session_store::RunSessionRecord;
 pub(crate) use run_session_store::resolved_axon_root;

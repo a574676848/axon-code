@@ -173,10 +173,12 @@ pub(super) fn settled_elapsed_ms(axon_root: &Path, session_id: &str) -> Option<u
 /// 真的读失败（账本打不开、列缺失且回填失败）才给 null，由界面按「未知」处理。
 pub(super) fn session_usage_payload(axon_root: &Path, session_id: &str) -> serde_json::Value {
     let totals = match session_run_session_id(axon_root, session_id) {
-        Some(run_session) => {
-            crate::run_commands::load_session_usage_totals_from_root(axon_root, &run_session).ok()
-        }
-        None => Some(crate::run_commands::SessionUsageTotals::default()),
+        Some(run_session) => crate::run_commands::run_thread_store::session_usage_totals_at_root(
+            axon_root,
+            &run_session,
+        )
+        .ok(),
+        None => Some(crate::run_commands::run_thread_store::SessionUsageTotals::default()),
     };
     totals.map_or(serde_json::Value::Null, |usage| {
         serde_json::json!({
@@ -200,7 +202,7 @@ pub(super) fn effective_model_payload(axon_root: &Path, session_id: &str) -> ser
         return serde_json::Value::Null;
     };
     let Ok(Some(facts)) =
-        crate::run_commands::load_latest_session_model_from_root(axon_root, &run_session_id)
+        crate::run_commands::run_thread_store::session_model_at_root(axon_root, &run_session_id)
     else {
         return serde_json::Value::Null;
     };

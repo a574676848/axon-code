@@ -51,6 +51,7 @@ impl RolloutSqliteStore {
     ///
     /// 同一轮的起始记录与收口记录共用一行（按 `assistant_part_id` 唯一），因此按行相加
     /// 不会把一轮算两次；还没收到用量的轮次贡献 0。
+    #[allow(dead_code)] // W2-12：读数已改走 session_metrics，此方法随 rollout 整删移除。
     pub(crate) fn session_usage_totals(
         &self,
         session_id: &str,

@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use axon_session::RuntimeStore as _;
 #[cfg(test)]
 use axon_session::Thread;
 use axon_session::{
@@ -125,6 +126,74 @@ struct ThreadTurnMetadata {
     /// 上一轮记忆反思提示；下一轮开头展示，随轮次落盘而不是另存一份。
     #[serde(default)]
     reflection_notice: Option<String>,
+    /// 本轮使用的推理强度；恢复与只读读数都用它，不再回查第二个库。
+    #[serde(default)]
+    reasoning_effort: Option<String>,
+}
+
+/// 车道当前模型的权威事实：全部来自 thread settings 与最近一轮 metadata。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionModelFacts {
+    pub(crate) provider: String,
+    pub(crate) model: String,
+    /// 用户当时选择的别名；旧轮次没有该字段时为 `None`。
+    pub(crate) model_name: Option<String>,
+    pub(crate) reasoning_effort: Option<String>,
+}
+
+pub(crate) use super::run_rollout_store::SessionUsageTotals;
+
+/// 读某条会话的累计用量；没有投影时读作全零（新会话本来就是这个状态）。
+pub(crate) fn session_usage_totals_at_root(
+    root: &Path,
+    session_id: &str,
+) -> Result<SessionUsageTotals, String> {
+    let store =
+        axon_session::SqliteRuntimeStore::from_root(root.join(axon_config::AXON_RUNTIME_DATA_DIR));
+    store.initialize().map_err(|error| error.to_string())?;
+    let session = axon_domain::DaemonSessionId::new(session_id.to_owned())
+        .map_err(|_| format!("会话 ID 非法：{session_id}"))?;
+    let Some(metrics) = store
+        .session_metrics(&session)
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(SessionUsageTotals::default());
+    };
+    Ok(SessionUsageTotals {
+        total_tokens: metrics
+            .total_input_tokens
+            .saturating_add(metrics.total_output_tokens),
+        input_tokens: metrics.total_input_tokens,
+        cache_read_tokens: metrics.total_cache_read_tokens,
+        cache_write_tokens: metrics.total_cache_write_tokens,
+        output_tokens: metrics.total_output_tokens,
+        reasoning_tokens: metrics.total_reasoning_tokens,
+    })
+}
+/// 读某条 thread 的当前模型事实；没有该 thread 或还没有任何一轮时读作 `None`。
+pub(crate) fn session_model_at_root(
+    root: &Path,
+    session_id: &str,
+) -> Result<Option<SessionModelFacts>, String> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return Err("会话标识不能为空".to_owned());
+    }
+    let Ok(detail) = ThreadService::new(JsonlThreadEventStore).read_thread(root, session_id) else {
+        return Ok(None);
+    };
+    let settings = &detail.thread.settings;
+    let metadata = detail
+        .turns
+        .iter()
+        .rev()
+        .find_map(|turn| turn_metadata(&turn.token_usage_json));
+    Ok(Some(SessionModelFacts {
+        provider: settings.provider.clone(),
+        model: settings.model.clone(),
+        model_name: metadata.as_ref().and_then(|value| value.model_name.clone()),
+        reasoning_effort: metadata.and_then(|value| value.reasoning_effort),
+    }))
 }
 
 /// Thread mirror 中单个工具回执摘要的字符上限。
@@ -635,6 +704,7 @@ fn thread_turn_metadata_from_record(record: &RunSessionRecord) -> ThreadTurnMeta
         turn_event_count: record.turn_events.len(),
         model_name: record.model_name.clone(),
         reflection_notice: record.reflection_notice.clone(),
+        reasoning_effort: record.reasoning_effort.clone(),
     }
 }
 

@@ -84,6 +84,3 @@ pub(super) fn cleanup(path: &std::path::Path) {
         let _ = std::fs::remove_dir_all(parent);
     }
 }
-
-#[path = "latest_model_tests.rs"]
-mod latest_model_tests;

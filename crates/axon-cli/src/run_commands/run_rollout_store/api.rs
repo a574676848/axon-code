@@ -52,45 +52,6 @@ pub(crate) fn load_session_usage(
         }))
 }
 
-/// 读取一条会话截至当前的累计用量（总量与各分桶）。
-///
-/// `session_id` 是运行时 session 标识（车道要先经 `sessions` 解析成它的 run
-/// session）。与 [`load_session_usage`] 的区别在口径：那个取的是**最近一轮**的用量，用于
-/// 续接远程 provider；这里取的是整条会话各轮之和，用于界面上的会话累计读数。
-/// 账本尚未建立时读作全零。
-pub(crate) fn load_session_usage_totals_from_root(
-    root: &Path,
-    session_id: &str,
-) -> Result<super::SessionUsageTotals, String> {
-    let session_id = session_id.trim();
-    if session_id.is_empty() {
-        return Err("会话标识不能为空".to_owned());
-    }
-    let path = axon_session::session_store_path(root).join(CLI_ROLLOUT_DB_FILE);
-    if !path.exists() {
-        return Ok(super::SessionUsageTotals::default());
-    }
-    // 读侧不跑建表语句：这条路径挂在历史列表上，每次翻页都会走一遍，不该附带 schema 初始化。
-    let read_only = RolloutSqliteStore::open_read_only(&path)?;
-    match read_only.session_usage_totals(session_id) {
-        Ok(totals) => Ok(totals),
-        // 旧库还没有用量列：退回写连接补列并回填一次，之后一律走只读路径。
-        Err(_) => RolloutSqliteStore::open(&path)?.session_usage_totals(session_id),
-    }
-}
-
-/// 一条会话最新一轮的模型事实。
-///
-/// 只保留界面显示与运行时选型需要的三个字段，不把整条轮次记录暴露给车道读数。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SessionModelFacts {
-    pub(crate) provider: String,
-    pub(crate) model: String,
-    /// 用户当时选择的别名；旧记录没有该字段时为 `None`。
-    pub(crate) model_name: Option<String>,
-    pub(crate) reasoning_effort: Option<String>,
-}
-
 /// 写入一条子代理会话的状态。
 ///
 /// 子代理生命周期在起跑、完成与终态三处调用它，名册因此只读会话行就能回答
@@ -149,32 +110,6 @@ pub(crate) fn load_child_sessions_from_root(
         Ok(rows) => Ok(rows),
         Err(_) => RolloutSqliteStore::open(&path)?.select_child_sessions(parent_session_id, limit),
     }
-}
-
-/// 读取一条会话**最新一轮**的模型事实（含 provider、model 与 reasoning effort）。
-///
-/// 只读打开加一条 `ORDER BY sequence DESC LIMIT 1`：界面显示「这条会话现在用哪个
-/// 模型」时读它，不遍历历史轮次，也不解析事件载荷。
-pub(crate) fn load_latest_session_model_from_root(
-    root: &Path,
-    session_id: &str,
-) -> Result<Option<SessionModelFacts>, String> {
-    let session_id = session_id.trim();
-    if session_id.is_empty() {
-        return Err("会话标识不能为空".to_owned());
-    }
-    let path = axon_session::session_store_path(root).join(CLI_ROLLOUT_DB_FILE);
-    if !path.exists() {
-        return Ok(None);
-    }
-    Ok(RolloutSqliteStore::open_read_only(&path)?
-        .load_by_id(session_id)?
-        .map(|record| SessionModelFacts {
-            provider: record.provider,
-            model: record.model,
-            model_name: record.model_name,
-            reasoning_effort: record.reasoning_effort,
-        }))
 }
 
 pub(crate) fn install_rollout_compaction(
