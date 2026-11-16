@@ -34,7 +34,7 @@ export interface SubagentRunViewProps {
 }
 
 export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspaceId, sessionId, onBack }) => {
-  const [sessionId, setSessionId] = React.useState<string | null>(null);
+  const [locatedSessionId, setLocatedSessionId] = React.useState<string | null>(null);
   const [title, setTitle] = React.useState<string | null>(null);
   const [model, setModel] = React.useState<string | null>(null);
   const [locateError, setLocateError] = React.useState<string | null>(null);
@@ -62,7 +62,7 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
           setLocateError('这次执行早于子代理会话化，没有可回看的逐字稿');
           return;
         }
-        setSessionId(match.sessionId);
+        setLocatedSessionId(match.sessionId);
         setTitle(match.title ?? null);
         setModel(match.model ?? row.model);
       })
@@ -78,20 +78,20 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
 
   const target = React.useMemo(
     () =>
-      workspaceId === null || sessionId === null
+      workspaceId === null || locatedSessionId === null
         ? null
-        : ({ kind: 'session', workspaceId, sessionId } as const),
-    [workspaceId, sessionId],
+        : ({ kind: 'session', workspaceId, sessionId: locatedSessionId } as const),
+    [workspaceId, locatedSessionId],
   );
   const conversation = useConversation(target);
 
   /** 投递一条消息：输入坞只把正文交出来，附件与模型选择在这个变体里是关闭的。 */
   const send = (text: string) => {
-    if (text.trim().length === 0 || sending || sessionId === null) return;
+    if (text.trim().length === 0 || sending || locatedSessionId === null) return;
     setSending(true);
     setSendError(null);
     void ipc
-      .conversationSendSubagentMessage(sessionId, row.agentId, text)
+      .conversationSendSubagentMessage(locatedSessionId, row.agentId, text)
       .catch((failure: unknown) => {
         setSendError(
           failure instanceof Error
@@ -157,7 +157,7 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
         <InputDock
           compact
           workspaceRoot={null}
-          enabled={sessionId !== null}
+          enabled={locatedSessionId !== null}
           busy={sending}
           placeholder={`把下一步交给 ${row.label}`}
           hint={

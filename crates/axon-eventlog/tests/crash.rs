@@ -130,28 +130,23 @@ fn concurrent_writers_to_one_log_never_interleave_frames() {
     let dir = tempfile::tempdir().expect("临时目录");
     let log = EventLog::open(dir.path(), "session-concurrent");
     // 两个线程各自持有写句柄，靠文件锁串行：锁粒度是整个日志，因此帧不会交错。
+    // 序号由写句柄按已落盘尾部给出，调用方不预设序号。
     let mut handles = Vec::new();
-    for worker in 0..2_u64 {
+    for _ in 0..2_u8 {
         let log = log.clone();
         handles.push(std::thread::spawn(move || {
-            let mut written = Vec::new();
-            for offset in 0..5_u64 {
-                let sequence = worker * 5 + offset;
+            for _ in 0..5_u8 {
                 let mut writer = log.writer().expect("抢到写句柄");
+                let sequence = writer.next_sequence();
                 writer
                     .append_batch(&[record(sequence, RuntimeEventKind::ToolCall)])
                     .expect("追加");
-                written.push(sequence);
             }
-            written
         }));
     }
-    let mut written: Vec<u64> = handles
-        .into_iter()
-        .flat_map(|handle| handle.join().expect("线程应正常结束"))
-        .collect();
-    written.sort_unstable();
-    assert_eq!(written, (0..10).collect::<Vec<_>>());
+    for handle in handles {
+        handle.join().expect("线程应正常结束");
+    }
 
     let reader = log.reader().expect("并发写入后必须可读");
     let sequences = reader
@@ -159,11 +154,10 @@ fn concurrent_writers_to_one_log_never_interleave_frames() {
         .iter()
         .map(|record| record.sequence)
         .collect::<Vec<_>>();
-    let mut sorted = sequences.clone();
-    sorted.sort_unstable();
-    assert_eq!(sorted, (0..10).collect::<Vec<_>>(), "全部记录都要落盘");
-    assert!(
-        sequences.windows(2).all(|pair| pair[0] < pair[1]),
-        "帧不得交错：序号必须整体单调"
+    assert_eq!(sequences.len(), 10, "全部记录都要落盘");
+    assert_eq!(
+        sequences,
+        (0..10).collect::<Vec<_>>(),
+        "帧不得交错：序号必须整体单调递增"
     );
 }

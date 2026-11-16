@@ -12,6 +12,7 @@ import type { JobRow, AttachmentRef, ConversationState } from './transcript';
 export interface SessionSelection {
   workspaceId: string;
   workspacePath: string;
+  /** 会话标识：主车道即车道本身，Cron/子代理为其独立会话标识。 */
   sessionId: string;
   destination: string;
   title: string;
@@ -20,8 +21,6 @@ export interface SessionSelection {
   pending?: boolean;
   fixedModel?: string | null;
   fixedReasoningEffort?: string | null;
-  /** Cron 或子代理的独立会话标识；存在时按 session 目标订阅。 */
-  sessionId?: string;
 }
 
 /** 会话订阅目标：一条连接上的一路订阅。 */

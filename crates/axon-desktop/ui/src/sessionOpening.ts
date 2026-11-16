@@ -28,7 +28,6 @@ export function goalSessionSelection(target: {
     destination: '',
     title: target.title,
     channel: 'goal',
-    sessionId: target.sessionId,
   };
 }
 
