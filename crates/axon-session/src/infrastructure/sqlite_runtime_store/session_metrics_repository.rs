@@ -83,7 +83,7 @@ pub(super) fn apply_turn_metrics(
 }
 
 /// 后台任务计数变更：`+1` 表示开始，`-1` 表示结束。
-pub(super) fn apply_job_delta(
+pub(crate) fn apply_job_delta(
     store: &SqliteRuntimeStore,
     session_id: &DaemonSessionId,
     started: bool,

@@ -84,7 +84,7 @@ pub mod schedule_repository;
 #[path = "sqlite_runtime_store/schema.rs"]
 mod schema;
 #[path = "sqlite_runtime_store/session_metrics_repository.rs"]
-mod session_metrics_repository;
+pub(crate) mod session_metrics_repository;
 pub use session_metrics_repository::SessionMetricsSnapshot;
 #[path = "sqlite_runtime_store/session_control_repository.rs"]
 mod session_control_repository;

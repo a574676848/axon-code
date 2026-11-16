@@ -118,3 +118,35 @@ fn failed_turns_are_counted_separately() {
     assert_eq!(snapshot.turn_failed, 1);
     assert_eq!(snapshot.turn_succeeded, 0);
 }
+#[test]
+fn job_deltas_track_started_completed_and_running() {
+    let (store, session_id) = fixture();
+    let repo = super::session_metrics_repository::apply_job_delta;
+
+    repo(&store, &session_id, true, false, 100).expect("start one");
+    repo(&store, &session_id, true, false, 110).expect("start two");
+    repo(&store, &session_id, false, false, 200).expect("complete one");
+    repo(&store, &session_id, false, true, 210).expect("fail one");
+
+    let snapshot = store
+        .session_metrics(&session_id)
+        .expect("读取投影")
+        .expect("投影应存在");
+    assert_eq!(snapshot.jobs_started, 2);
+    assert_eq!(snapshot.jobs_completed, 2);
+    assert_eq!(snapshot.jobs_failed, 1);
+    assert_eq!(snapshot.jobs_running, 0, "两个都收口后不应为负");
+}
+
+#[test]
+fn running_jobs_never_go_negative() {
+    let (store, session_id) = fixture();
+    let repo = super::session_metrics_repository::apply_job_delta;
+    repo(&store, &session_id, false, false, 100).expect("complete without start");
+    let snapshot = store
+        .session_metrics(&session_id)
+        .expect("读取投影")
+        .expect("投影应存在");
+    assert_eq!(snapshot.jobs_running, 0);
+    assert_eq!(snapshot.jobs_completed, 1);
+}
