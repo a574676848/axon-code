@@ -20,34 +20,34 @@
 
 | 编号 | 位置 | 问题 | 修法 |
 | --- | --- | --- | --- |
-| P1-1（S-03/B-5） | `event_log_repository.rs`、`runtime_repository.rs:422` | 无「水位 vs 日志尾」对账，`session_recovered` 无生产者 | 启动时对账：日志尾大于水位则回退水位并写 `session_recovered` |
-| P1-2（S-04） | `commit_repository.rs:203-212` | 两段式只有正向，文件写失败时控制面已提交且无补偿 | 文件写失败走补偿事务回滚水位与状态 |
-| P1-3（S-05/B-6） | `event_log_repository.rs:107-149`、`read.rs:40-60` | 读侧不过滤 generation；`read_snapshot` 只在帧内校验序号，跨帧不连续无人拒绝 | 读侧按当前 generation 过滤；跨帧维护单调 `expected` |
+| P1-1（S-03/B-5）**已修** `bc7475593` | `event_log_repository.rs`、`runtime_repository.rs:422` | 无「水位 vs 日志尾」对账，`session_recovered` 无生产者 | 启动时对账：日志尾大于水位则回退水位并写 `session_recovered` |
+| P1-2（S-04）**已修** `d09b3f4a6` | `commit_repository.rs:203-212` | 两段式只有正向，文件写失败时控制面已提交且无补偿 | 文件写失败走补偿事务回滚水位与状态 |
+| P1-3（S-05/B-6）**已修** `bc7475593` | `event_log_repository.rs:107-149`、`read.rs:40-60` | 读侧不过滤 generation；`read_snapshot` 只在帧内校验序号，跨帧不连续无人拒绝 | 读侧按当前 generation 过滤；跨帧维护单调 `expected` |
 | P1-4（S-08）**已修** `256f732c0` | `runtime_event_archive.rs:19-25` | 高水位算成 16 GiB（上限 4 GiB 的 4 倍），且淘汰不看会话是否活跃 | 改为 `MAX*8/10`；淘汰前排除活跃会话 |
-| P1-5（S-06/C-8） | `event_log_repository.rs:288` | `let _ =` 吞 `session_metrics` 投影错误，且无重建入口 | 失败上报；补 `rebuild_session_metrics(session)` 与测试 |
+| P1-5（S-06/C-8）**已修** `8d22a7b2c` | `event_log_repository.rs:288` | `let _ =` 吞 `session_metrics` 投影错误，且无重建入口 | 失败上报；补 `rebuild_session_metrics(session)` 与测试 |
 | P1-6（S-10）**已修** `4e871981e` | `execution_worker_settlement.rs:168`、`execution_worker.rs:430/435` | 账本事件写入失败被 `let _ =` 吞 | 失败上报并写补偿事件 |
 | P1-7（S-11）**已修** `e9883a436` | `workspace_files_tests.rs:130-151` | 单测直接写真实用户主目录 | 注入假 home（`test_temp_root`）或只测纯函数 |
 | P1-8（B-1）**已修** `b61804187` | `schema.rs`（`inbox`） | 缺 `(session_id, received_at_ms DESC, inbox_id DESC)` 索引；实测会话列表 71.3 ms / 历史页 31.1 ms，门槛 30 ms | 加索引并递增 control 版本；滤镜下推 SQL。实测：200 会话×20 万入站事实，有索引 1 ms / 无索引 10452 ms |
-| P1-9（B-2） | `health_repository.rs:12-21` | `/system/status` 每请求做三表全扫 + `work_items_all` 全量 GROUP BY（实测 35.4 ms） | 改有界索引查询或投影列 |
-| P1-10（B-3） | `read.rs:23-27`、`event_log_repository.rs:127-149` | 每次读都把整个日志读入内存并全量解压，分页 replay 每页重做 | 加 `.idx` 或惰性解压；分页复用 reader |
-| P1-11（B-4） | `event_log_repository.rs:184-188/289` | `origin_channel`/`origin_kind` 硬编码，`channel_mix_json` 恒为 internal | 从 `inbox.source_channel` 解析后传入 |
+| P1-9（B-2）**已修** `f939652e1` | `health_repository.rs:12-21` | `/system/status` 每请求做三表全扫 + `work_items_all` 全量 GROUP BY（实测 35.4 ms） | 改有界索引查询或投影列 |
+| P1-10（B-3）**已修** `f869b7cb3` | `read.rs:23-27`、`event_log_repository.rs:127-149` | 每次读都把整个日志读入内存并全量解压，分页 replay 每页重做 | 加 `.idx` 或惰性解压；分页复用 reader |
+| P1-11（B-4）**已修** `8d22a7b2c` | `event_log_repository.rs:184-188/289` | `origin_channel`/`origin_kind` 硬编码，`channel_mix_json` 恒为 internal | 从 `inbox.source_channel` 解析后传入 |
 | P1-12（B-10）**已修** `b1f6cfe6d` | `docs/skills/operate-axon/references/*.md` | 安装态 Skill 仍写 `/api/v1/lanes/<laneId>/...`，实际路由是 `/api/v1/sessions/<id>/...` | 同步路由与 `sessionId` 命名，核验安装态副本 SHA-256 |
-| P1-13（B-8） | `tools/verify_performance.py` | 已加四项硬上限，但读数仍是人工登记，未接自动测量 | 事件写 p99 用 `cargo test --ignored` 产出；首屏用列表 SQL 计时；体积已自动 |
+| P1-13（B-8）**已修** `f131bc365` | `tools/verify_performance.py` | 已加四项硬上限，但读数仍是人工登记，未接自动测量 | 事件写 p99 用 `cargo test --ignored` 产出；首屏用列表 SQL 计时；体积已自动 |
 
 ## P2 写放大与原则残留
 
 | 编号 | 位置 | 问题 |
 | --- | --- | --- |
-| P2-1（S-12/C-1） | `commit_repository.rs:174-190` | 每轮写 `session_checkpoints` 但全仓无读取；应删除该表与 INSERT |
+| P2-1（S-12/C-1）**已修** `d4899c33a` | `commit_repository.rs:174-190` | 每轮写 `session_checkpoints` 但全仓无读取；应删除该表与 INSERT |
 | P2-2（C-2） | `interaction_turn_event_sink.rs:283-285` | `turn_metrics` 单独一批写入，多一次事务与 fsync |
-| P2-3（C-3） | `event_log_repository.rs:255-271` | `write_records` 每条一次 `append_once`，N 条即 N 次 fsync |
+| P2-3（C-3）**已修** `5c664a1e0` | `event_log_repository.rs:255-271` | `write_records` 每条一次 `append_once`，N 条即 N 次 fsync |
 | P2-4（C-4） | `schema.rs:303-376` | `goal_result_reads` 未并入 `goal_results`；`work_items` 主键仍叫 `execution_id` |
-| P2-5（C-5） | `schema.rs:122-127` | 版本相等时仍执行 DDL 补表 = 补表迁移通道，与「不迁移」冲突；已有测试把它固化（`legacy_database_without_continuation_table_gains_it_on_open`） |
-| P2-6（C-6） | `sessions_http_adapter.rs:41` | 每请求新建连接池，未复用 `RUNTIME_STORES`；滤镜在 LIMIT 之后生效 |
-| P2-7（C-7） | `lock.rs:19-31` | 写锁阻塞无超时，卡死会让该会话追加无限阻塞 |
+| P2-5（C-5）**已修** `d7bb33a56` | `schema.rs:122-127` | 版本相等时仍执行 DDL 补表 = 补表迁移通道，与「不迁移」冲突；已有测试把它固化（`legacy_database_without_continuation_table_gains_it_on_open`） |
+| P2-6（C-6）**已修** `1a0d9c751` | `sessions_http_adapter.rs:41` | 每请求新建连接池，未复用 `RUNTIME_STORES`；滤镜在 LIMIT 之后生效 |
+| P2-7（C-7）**已修** `d7319963c` | `lock.rs:19-31` | 写锁阻塞无超时，卡死会让该会话追加无限阻塞 |
 | P2-8（C-9） | `workbench_http_session_readings.rs:1-10` | 注释仍把 rollout 当用量账本；`rollout_current_session` 与 `resume_pointer` 双存储 |
-| P2-9（S-13） | `runtime_cleanup_families.rs:287-308` | 会话族清理不删 `session_metrics`/`inbox`/`resume_pointer`，留孤儿 |
-| P2-10（S-15） | `schema.rs:380-383` | `COALESCE(session_id, goal_id)` 对 turn 项为 NULL，去重索引失效 |
+| P2-9（S-13）**已修** `b967527ba` | `runtime_cleanup_families.rs:287-308` | 会话族清理不删 `session_metrics`/`inbox`/`resume_pointer`，留孤儿 |
+| P2-10（S-15）**已修** `d7bb33a56` | `schema.rs:380-383` | `COALESCE(session_id, goal_id)` 对 turn 项为 NULL，去重索引失效 |
 | P2-11（S-16） | `read.rs:24/43-57` | 两套序号权威并存；`read_snapshot` 全量入内存 |
 | P2-12（A-2/B-7） | rollout 读取点 30+ 处 | W2-12 未完成，用量/模型/子会话/治理仍读 rollout；读点需逐点登记迁移目标 |
 

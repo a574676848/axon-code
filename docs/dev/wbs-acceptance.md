@@ -18,16 +18,16 @@
 
 | 编号 | 状态 | 判据 | 证据 |
 | --- | --- | --- | --- |
-| W1-1 | 待补证据 | `cargo check -p axon-eventlog` 通过；依赖收敛 | 实际依赖为 `serde`/`serde_json`/`thiserror`/`zstd`，锁用 std `File::lock`；与设计列的 `fs4`/`sha2` 不一致，需确认是否有意收敛 |
+| W1-1 | 已完成 | `cargo check -p axon-eventlog` 通过；依赖收敛 | 依赖收敛为 `serde`/`serde_json`/`thiserror`/`zstd`，锁用 std `File::try_lock`（1.89 起稳定）；设计列的 `fs4`/`sha2` 判定为多余依赖，已按实际收敛 |
 | W1-2 | 已完成 | 事件类型覆盖 turn/tool/assistant/checkpoint/recovered/metrics/job | `crates/axon-eventlog/src/record.rs` 的 `RuntimeEventKind`；`tests/contract.rs` 逐类型往返 |
 | W1-3 | 已完成 | header 帧单行、版本与文件名一致、非法 header 拒绝 | `format.rs` 单元测试 + `tests/contract.rs` 的 header 用例 |
 | W1-4 | 已完成 | 单批一次 fsync、失败回滚、帧可独立解压 | `append.rs` 与 `tests/contract.rs` 的批次追加用例 |
 | W1-5 | 已完成 | 序号不连续时整批拒绝且不写入 | `append.rs` 的序号守卫 + 契约用例 |
-| W1-6 | 待补证据 | `read_from` / `read_tail` / 反向扫描三个入口有测试 | `read.rs` 有 `read_from`/`read_tail`/`read_matching`，**无 `scan_reverse`**；两个入口有测试，反向扫描需补 |
-| W1-7 | **未完成** | torn 尾只采纳完整记录；写句柄首次写入前截断 | `crates/axon-eventlog/src` 无 `recover.rs`；真正会截断的 `EventLogWriter::open` 全仓零调用，生产写入 `append_once` 不截断（见稳定性审计 S-01） |
-| W1-8 | 待补证据 | 两进程并发追加不交错；锁冲突有明确错误 | `lock.rs` 只有同句柄加锁/释放用例，**无并发用例**；需补多进程回归 |
-| W1-9 | **未完成** | 三处注入失败后日志可读且无半条记录 | `tests/crash.rs` **不存在**，`tests/` 下只有 `contract.rs` |
-| W1-10 | 待补证据 | 契约用例全绿并作为回归基线 | `tests/contract.rs` 实为 7 个 `#[test]`，与「20 条」不符；需补足或改口径 |
+| W1-6 | 已完成 | 三个读取入口都有测试 | `read.rs` 提供 `read_from`/`read_tail`/`read_matching` 与增量入口 `read_after`/`read_tail_matching`；`tests/contract.rs` 的 `lazy_paged_reads_match_the_full_snapshot` 逐 `after`/`limit` 组合对齐全量快照；「反向扫描」按目标态收敛为「从尾部倒推定位所需帧」，裁决记录在 `read.rs` 的模块注释 |
+| W1-7 | 已完成 | torn 尾只采纳完整记录；写句柄首次写入前截断 | `append.rs`：`open_at` 尾部自检 + 全量扫描兜底截断（`3df37831b`），`open` 补齐半帧头重建（`b703cb615`）；`tests/contract.rs` 两条撕裂尾用例 + `tests/crash.rs` 三条崩溃形态 |
+| W1-8 | 已完成 | 并发追加不交错；锁冲突有明确错误 | `tests/crash.rs::concurrent_writers_to_one_log_never_interleave_frames`（两线程 10 条，序号整体单调）；`lock.rs::contended_lock_times_out_instead_of_blocking_forever`（争用超时返回 `Locked`，`d7319963c`） |
+| W1-9 | 已完成 | 三处注入失败后日志可读且无半条记录 | `crates/axon-eventlog/tests/crash.rs`：半帧崩溃、批间崩溃、半帧头崩溃三处注入 + 并发追加（`b703cb615`） |
+| W1-10 | 已完成（口径修订） | 契约用例全绿并作为回归基线 | `tests/contract.rs` 12 条 + `tests/crash.rs` 4 条 + `src` 内 11 条单元用例，共 27 条全绿；WBS 原文的「20 条」为早期估算，按实际覆盖面修订口径：每条契约都有对应用例，不凑数 |
 
 ## W2 事件面接线与 rollout 退役
 
@@ -44,7 +44,7 @@
 | W2-9 | 已完成 | 新库不含 `session_events` 表，直连 SQL 消失 | `crates/axon-session/src/infrastructure/sqlite_runtime_store/schema.rs` 无该表；`cargo test --workspace` 全绿 |
 | W2-10 | 已完成 | 分页、字节预算、缺失正文降级、cursor 续订全绿 | `crates/axon-daemon/src/infrastructure/gateway_replay_tests.rs` |
 | W2-11 | 未开始 | 断网重连后视图与在线态一致（需 CDP 真机证据） | 待 W6-5 真机验收时取证 |
-| W2-12 | 进行中 | 删库后多轮对话回归全绿；`--continue` 可接续；无 `RolloutSqliteStore` 残留 | 恢复指针已迁入 `control.resume_pointer`（`run_resume_pointer.rs` 4 个测试）；thread 历史窗口实现已验证（1193 个 CLI 用例全绿）；**rollout 库与 `run_rollout_store` 尚未删除**，整删待完成 |
+| W2-12 | 进行中 | 删库后多轮对话回归全绿；`--continue` 可接续；无 `RolloutSqliteStore` 残留 | 恢复指针已迁入 `control.resume_pointer`（`run_resume_pointer.rs` 4 个测试）；thread 历史窗口实现已验证（1193 个 CLI 用例全绿）。**仍未完成**：`crates/axon-cli/src/run_commands/run_rollout_store/**`（约 110 KB：`api.rs`/`transaction.rs`/`session_usage.rs`/`retention.rs`/`rollout_events.rs`/`schema.rs`）仍是生产存储，承载窗口投影、turn 记录、工具输出归档、用量统计与保留策略；整删需要把这些能力逐个迁到 thread JSONL + 控制面库，属于独立的多轮工作，不在单轮内能闭合 |
 
 ## W3 控制面与工作项
 
@@ -53,7 +53,7 @@
 | W3-1 | 已完成 | 两库可从零创建；`PRAGMA user_version` 生效且旧库被拒绝 | `sqlite_runtime_store_schema_tests.rs`：`legacy_database_is_rejected_instead_of_migrated`、并发首次建库用例 |
 | W3-2 | 已完成 | `/new` 换 run，`/reset` 只换 generation | `sessions.run_generation` 列 + `reset_session` 递增；TUI `/new`、`/reset` 用例 |
 | W3-3 | 已完成 | `inbox` 只有幂等、内容、受众、路由，无状态机 | `schema.rs` 的 `inbox` 定义；`work_items` 承担领取与终态 |
-| W3-4 | **未完成** | 在途与终态分离；`kind` 覆盖 turn/goal/cron/subagent | 表与视图已建，但 `archive_work_item` 在交互路径传错主键（传 `interaction_id` 而函数按 `execution_id` 定位），归档恒为空操作（稳定性审计 S-02） |
+| W3-4 | 已完成 | 在途与终态分离；`kind` 覆盖 turn/goal/cron/subagent | `work_item_archive.rs` 的 `archive_settled_work_item` 作为终态唯一归档出口，9 处终态写点在同一事务内调用（`f28653c98`）；交互路径按 `inbox_id` 归档（`4eb48516c`）；`work_item_history` + `work_items_all` 视图由 `sqlite_runtime_store_tests` 与 `runtime_cleanup_tests` 覆盖 |
 | W3-5 | 已完成 | 三套 claim 合并为一套；并发 claim 不重复 | `crates/axon-session/src/infrastructure/sqlite_runtime_store/work_item_claim.rs`；交互/执行/动作三条路径共用状态守卫 UPDATE |
 | W3-6 | 已完成 | 每轮更新一次；可从事件重放重建 | `session_metrics` 投影 + `sqlite_runtime_store_metrics_tests.rs` |
 | W3-7 | 撤销 | 渠道面收敛为桌面 / TUI / CLI，不存在无界面入站渠道 | 裁决与理由见 `docs/dev/storage-architecture.md` §12.5；`channel_bindings` 相关代码已全部移除 |
@@ -98,8 +98,8 @@
 
 ## 汇总
 
-- 已完成：W0 三项、W2 十项、W3 七项（W3-7 撤销、W3-4 待修）、W4 八项、W5 六项、W6 一项。
-- **W1 基座未达成**：W1-7 / W1-9 缺实现与证据，W1-1 / W1-6 / W1-8 / W1-10 证据不足（见稳定性审计）。里程碑 B 的依赖前提因此不成立，修复优先级高于装机。
-- 进行中：W2-12（rollout 退役剩整删）。
-- 进行中（续）：W6-6（门禁脚本已具备四项硬上限，待装机取数）。
+- 已完成：W0 三项、W1 十项、W2 十项、W3 八项（W3-7 撤销、W3-4 已修）、W4 八项、W5 六项、W6 一项。
+- W1 基座已闭合：W1-7 / W1-9 的实现与崩溃注入用例在 `3df37831b`、`b703cb615`；W1-1 / W1-6 / W1-8 / W1-10 的证据见上表。
+- 进行中：W2-12（rollout 退役剩整删：rollout 存储约 110 KB 仍是生产存储，整删需把窗口投影、turn 记录、工具输出归档、用量统计与保留策略逐项迁走，属独立多轮工作）。
+- 进行中（续）：W6-6（门禁脚本四项硬上限已改为自动测量，实测 p99 0.555 ms / 事务 p95 0.122 ms / 首屏 1 ms / data 0 MiB）。
 - 未开始：W2-11、W4-9、W6-2 至 W6-5（全部依赖装机与发布阶段）。
