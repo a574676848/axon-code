@@ -1,6 +1,7 @@
 //! `axon run --session` 的存在性校验测试。
 
-use super::{AxonCli, AxonCommand, RunCommand, validate_explicit_session};
+use super::{AxonCli, RunCommand, validate_explicit_session};
+use crate::AxonCommand;
 use axon_domain::DaemonSessionId;
 use axon_session::{RuntimeStore as _, SqliteRuntimeStore};
 

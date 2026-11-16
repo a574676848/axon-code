@@ -92,7 +92,7 @@ fn insert_hot_session_history(connection: &Connection) {
             rusqlite::params![
                 HOT_SESSION_ID,
                 HOT_SESSION_EVENT_COUNT,
-                HOT_SESSION_RECENT_ACTIVITY_MS
+                HOT_SESSION_RECENT_ACTIVITY_MS,
             ],
         )
         .expect("高频 Session 应可写入");
@@ -146,85 +146,6 @@ fn write_retained_session_artifacts(root: &Path) -> Vec<(std::path::PathBuf, Vec
         .collect()
 }
 
-#[test]
-#[ignore = "旧事件表语义已废弃，集中清理阶段删除"]
-    fn cleanup_covers_r1_to_r7_runtime_tables() {
-    let root = axon_test_support::test_temp_dir();
-    let connection = open_fixture(root.path());
-    seed(&connection, "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES('s-old','s-old','s-old','/w','completed',NULL,NULL,0,0,0,0,1,1,1);
-             INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,emitted_at_ms) VALUES('s-old',1,'g','turn','{}',1);
-             INSERT INTO session_checkpoints VALUES('s-old',1,'a',0,0,NULL,NULL,NULL,NULL,NULL,1);
-             INSERT INTO schedules VALUES('sch-1','s-old','interval','1m','{}','none','created',1,NULL,NULL,0,NULL,NULL);
-             INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,received_at_ms,updated_at_ms,attachments_json)
-                 VALUES('i-old','tui','m-1','{}','{}','{}','hi',1,1,'[]');
-             INSERT INTO work_items(execution_id,kind,attempt,priority,status,inbox_id,terminal_kind,created_at_ms,updated_at_ms)
-                 VALUES('w-i-old','turn',1,0,'completed','i-old','understood',1,1);
-             INSERT INTO goals(goal_id,scope_json,parent_goal_id,title,status,revision,plan_json,acceptance_json,progress_json,waiting_reason,next_step,priority,deadline_ms,created_from_interaction_id,cancellation_reason,cancellation_requested_at_ms,created_at_ms,updated_at_ms)
-                 VALUES('t-old','{}',NULL,'旧任务','completed',1,'{}','{}',NULL,NULL,NULL,0,NULL,NULL,NULL,NULL,1,1);
-             INSERT INTO work_items(execution_id,goal_id,session_id,kind,payload_json,goal_revision,context_version,attempt,priority,dedupe_key,status,lease_json,claimed_by,claimed_generation,lease_expires_at_ms,started_at_ms,committed_at_ms,cancelled_at_ms,retry_at_ms,checkpoint_json,cancellation_requested_at_ms,cancellation_reason,created_at_ms,updated_at_ms)
-                 VALUES('e-old','t-old',NULL,'turn','{}',NULL,NULL,1,0,NULL,'completed',NULL,NULL,NULL,NULL,1,NULL,NULL,NULL,NULL,NULL,NULL,1,1);
-             INSERT INTO goal_results VALUES('r-old','t-old','e-old',1,'done','[]','[]',NULL,1);
-             INSERT INTO goal_result_reads VALUES('r-old',1,'read');
-             INSERT INTO decisions VALUES('d-old','{}','user','allow',1,1,1);
-             INSERT INTO ledger_events VALUES('ev-old',1,'goal.completed','k-1',NULL,'{}',1);
-             INSERT INTO daemon_instances VALUES('h-old','g-old',1,NULL,'stopped',1,1,1);
-             INSERT INTO upgrade_handoffs VALUES('a-old','tok','v1','h-old','g-old',1,1,1,'claimed',NULL,NULL);
-             INSERT INTO client_presence VALUES('client-old','workspace-old','tui','dest-old',1,1);
-             INSERT INTO notifications VALUES('n-old','workspace-old','t-old','e-old','完成提示','主 turn 汇总','[]','delivered',1,1,1);
-             INSERT INTO notification_deliveries VALUES('n-old','tui','dest-old','delivered',1,1);
-             INSERT INTO agent_messages(message_id,idempotency_key,owner_id,author,recipient,kind,content,trigger_turn,continuation_id,state,attempt_count,last_attempt_at_ms,retry_at_ms,last_error,delivered_at_ms,created_at_ms,expires_at_ms)
-                 VALUES('m-old','k-m-old','s-old','/root','/root/review','collab','hi',0,NULL,'delivered',1,1,NULL,NULL,1,1,1);
-             INSERT INTO continuations(continuation_id,idempotency_key,owner_id,parent_session_id,child_session_id,agent_path,job_ref,execution_ref,terminal_kind,exit_reason,summary,artifact_path,token_input,token_output,token_reasoning,state,consumed_at_ms,consumed_by,attempt_count,last_attempt_at_ms,retry_at_ms,last_error,created_at_ms,expires_at_ms)
-                 VALUES('c-old','k-c-old','s-old','s-old','child-old','/root/review',NULL,NULL,'completed','子代理正常结束','摘要',NULL,1,1,0,'consumed',1,'run',1,NULL,NULL,NULL,1,1);", "测试数据应可写入");
-    drop(connection);
-
-    let mut counts = cleanup_runtime_session_families(root.path(), &["s-old".to_owned()])
-        .expect("Session family 清理应成功");
-    counts.merge(cleanup_runtime_data(root.path(), 100).expect("清理应成功"));
-
-    assert_eq!(counts.sessions, 1);
-    assert_eq!(counts.session_events, 1);
-    assert_eq!(counts.session_checkpoints, 1);
-    assert_eq!(counts.schedules, 1);
-    assert_eq!(counts.interactions, 1);
-    assert_eq!(counts.goals, 1);
-    assert_eq!(counts.executions, 1);
-    assert_eq!(counts.results, 1);
-    assert_eq!(counts.result_reads, 1);
-    assert_eq!(counts.decisions, 1);
-    // 事件保底保留最新 1000 条：样本量低于保底时即使超期也不回收。
-    assert_eq!(counts.events, 0);
-    assert_eq!(counts.upgrade_admissions, 1);
-    // 准入记录先删，随后旧 Host 不再被其引用而可回收。
-    assert_eq!(counts.daemon_instances, 1);
-    assert_eq!(counts.client_presence, 1);
-    assert_eq!(counts.completion_notifications, 1);
-    assert_eq!(counts.completion_deliveries, 1);
-    assert_eq!(counts.agent_messages, 1);
-    assert_eq!(counts.continuations, 1);
-
-    let remaining = count_expired_rows(
-        Some(
-            &Connection::open(
-                root.path()
-                    .join(axon_config::AXON_RUNTIME_DATA_DIR)
-                    .join(CONTROL_DATABASE_FILE),
-            )
-            .expect("测试数据库应可重开"),
-        ),
-        Some(
-            &Connection::open(
-                root.path()
-                    .join(axon_config::AXON_RUNTIME_DATA_DIR)
-                    .join(OUTBOX_DATABASE_FILE),
-            )
-            .expect("队列数据库应可重开"),
-        ),
-        100,
-    )
-    .expect("清理后应可统计");
-    assert_eq!(remaining, RuntimeCleanupCounts::default());
-}
 
 #[test]
 fn cleanup_protects_active_and_unread_records() {
@@ -450,7 +371,6 @@ fn cleanup_large_runtime_history_is_bounded() {
 }
 
 /// 并发验收：清理与 Daemon 写入并存时，写入延迟必须保持在毫秒级。
-///
 /// 断言口径是「清理不得让单次并发写入等待超过 2 秒」：批量 256 行 + 单批
 /// IMMEDIATE 事务的写锁持有时间远低于该阈值，一旦退化为长事务即会失败。
 #[test]
@@ -638,7 +558,6 @@ fn percentile(samples: &[u128], percentile: usize) -> u128 {
 }
 
 /// 执行计划审计：七个清理族的批次选择必须全部走索引范围扫描。
-///
 /// 每批 256 行意味着「全表扫描 + 临时排序」会把单轮成本放大到 O(N²/批大小)，
 /// 因此索引退化必须在单元测试阶段被拦住，而不是等真机出现写锁抖动。
 #[test]

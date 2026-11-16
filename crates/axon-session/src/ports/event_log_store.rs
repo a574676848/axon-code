@@ -1,7 +1,7 @@
 //! 会话事件日志端口。
 //!
 //! 与 [`super::RuntimeStore`] 的分工：本端口只负责事件的追加与读取；租约、队列、
-//! 状态机仍留在 `RuntimeStore`。拆分的目的见 `docs/storage-architecture.md`：
+//! 状态机仍留在 `RuntimeStore`。拆分的目的见 `docs/dev/storage-architecture.md`：
 //! 事件流要走 append-only 文件，状态机要继续留在 SQLite，两者不能再共用一套事务。
 
 use axon_domain::{DaemonSessionId, InteractionId};

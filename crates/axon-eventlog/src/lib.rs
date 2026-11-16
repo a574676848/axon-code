@@ -6,7 +6,7 @@
 //! - 此后每个追加批次一帧，帧内是若干行 JSONL 事件；
 //! - 每帧独立压缩并带内容校验和，因此崩溃只会损坏最后一帧。
 //!
-//! 设计目标见 `docs/storage-architecture.md`：事件流不占用 SQLite 写锁，
+//! 设计目标见 `docs/dev/storage-architecture.md`：事件流不占用 SQLite 写锁，
 //! 单次追加只做一次顺序写与一次 `fsync`。
 
 #![deny(missing_docs)]

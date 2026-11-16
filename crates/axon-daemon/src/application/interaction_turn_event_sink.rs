@@ -1,9 +1,7 @@
 //! Primary Turn 实时事件的瞬态投递与边界落库。
 //!
-//! 流式增量（推理、正文片段、用量、供应商状态）只走内存实时通道：客户端收到就渲染，
-//! 延迟与磁盘无关。落库只发生在语义边界：工具调用前后、流结束、轮次收口。边界上把
-//! 累积的正文压成一条快照事件落库，回放据此重建整段文本，因此回放等价，而写量从
-//! 「每个增量一行」降到「每个边界一行」。
+//! 流式增量只走内存实时通道；落库只发生在语义边界（工具调用前后、流结束、轮次收口），
+//! 边界上把累积正文压成一条快照事件，因此回放等价而写量从「每增量一行」降到「每边界一行」。
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -24,7 +22,10 @@ use crate::application::event_stream_bridge::LiveStreamEvent;
 
 #[path = "interaction_turn_event_frame_class.rs"]
 mod frame_class;
+#[path = "interaction_turn_event_signals.rs"]
+mod signals;
 
+use signals::{compute_application_ttft_ms, is_turn_terminal};
 use frame_class::{
     FrameClass, LivePartKind, annotate_live_event, assistant_part_key, classify_frame,
     live_part_text,
@@ -623,49 +624,6 @@ where
     }
 }
 
-fn compute_application_ttft_ms(recorder: &AtomicTurnPerformanceRecorder) -> Option<u64> {
-    let snapshot = recorder.snapshot();
-    let start = snapshot
-        .stages
-        .iter()
-        .find(|s| s.stage == TurnPerformanceStage::ProviderRequestStarted)?;
-    let first = snapshot
-        .stages
-        .iter()
-        .find(|s| s.stage == TurnPerformanceStage::ProviderFirstDeltaParsed)?;
-    if first.elapsed_us >= start.elapsed_us {
-        Some((first.elapsed_us - start.elapsed_us) / 1000)
-    } else {
-        None
-    }
-}
-
-/// 这一帧是否代表本轮收口。
-///
-/// 只有 `Durable` 帧会走到这里（每轮几十条），因此可以再解析一次载荷；
-/// 热路径上的正文增量与用量永远不经过本函数。
-fn is_turn_terminal(event: &RuntimeEvent) -> bool {
-    const TURN_COMPLETED: &str = "turn_completed";
-    if event.event_type == TURN_COMPLETED {
-        return true;
-    }
-    let Ok(envelope) = serde_json::from_str::<Value>(&event.payload_json) else {
-        return false;
-    };
-    let Some(kind) = envelope.get("kind") else {
-        return false;
-    };
-    if kind.get("type").and_then(Value::as_str) != Some("turnLifecycle") {
-        return false;
-    }
-    matches!(
-        kind.get("payload")
-            .and_then(|payload| payload.get("status"))
-            .and_then(Value::as_str),
-        Some("completed" | "failed" | "cancelled" | "aborted")
-    )
-}
-
 impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
     /// 记一条生成事件：用量观测与 provider 流边界都写进本轮账本。
     fn observe_generation_event(&self, event: &RuntimeEvent) {
@@ -713,9 +671,7 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
 
     /// 本轮生成账本。
     fn generation_watch(&self) -> std::sync::MutexGuard<'_, TurnGenerationWatch> {
-        self.generation_watch
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.generation_watch.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// 取出「刚有 provider 流收口」的标记。
@@ -725,18 +681,14 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
 
     /// 本轮最后一条用量更新。
     pub(super) fn last_usage(&self) -> Option<TurnUsageSnapshot> {
-        *self
-            .last_usage
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        *self.last_usage.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// 本轮最后一条用量帧的原始载荷。
     pub(super) fn last_usage_payload(&self) -> Option<Value> {
         self.last_usage_payload
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+            .unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 }
 
