@@ -173,6 +173,7 @@ pub(crate) fn read_rollout_tool_output(
 /// 读取某会话最近若干轮的事实摘要；账本尚未建立时读作空。
 ///
 /// 只读打开：这条路径挂在每轮收口上，不该顺带跑建表语句。
+#[allow(dead_code)] // W2-12：显式信号改读 thread 轮次，此函数随 rollout 整删移除。
 pub(crate) fn load_recent_turn_facts(
     config_path: &Path,
     session_id: &str,

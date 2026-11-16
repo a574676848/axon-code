@@ -29,7 +29,7 @@ mod transaction;
 pub(crate) use api::append_rollout_event_for_session;
 pub(crate) use api::{
     commit_session_to_rollout, ensure_current_turn_to_rollout, install_rollout_compaction,
-    load_child_sessions_from_root, load_recent_turn_facts, load_session_turn, load_session_usage,
+    load_child_sessions_from_root, load_session_turn, load_session_usage,
     mark_child_session_origin, mark_child_session_status, read_rollout_tool_output,
     replay_rollout_events,
 };
@@ -258,6 +258,7 @@ impl RolloutSqliteStore {
     /// 提供的信息量。`json_extract` 直接在 SQLite 侧取到需要的那几个字段。
     ///
     /// 坏行跳过而不是整体失败：一条历史记录损坏不该让本轮信号全部归零。
+    #[allow(dead_code)] // W2-12：同上，随 rollout 整删移除。
     pub(crate) fn recent_turn_facts(
         &self,
         session_id: &str,

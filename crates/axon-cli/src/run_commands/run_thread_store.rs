@@ -129,6 +129,15 @@ struct ThreadTurnMetadata {
     /// 本轮使用的推理强度；恢复与只读读数都用它，不再回查第二个库。
     #[serde(default)]
     reasoning_effort: Option<String>,
+    /// 该轮用户输入的字符数；显式信号采集只需要这个量。
+    #[serde(default)]
+    prompt_chars: u32,
+    /// 该轮是否以失败收场。
+    #[serde(default)]
+    failed: bool,
+    /// 该轮轨迹里记录的用户状态序列；未采集过时为空。
+    #[serde(default)]
+    affect_sequence: Vec<String>,
 }
 
 /// 车道当前模型的权威事实：全部来自 thread settings 与最近一轮 metadata。
@@ -143,6 +152,38 @@ pub(crate) struct SessionModelFacts {
 
 pub(crate) use super::run_rollout_store::SessionUsageTotals;
 
+pub(crate) use super::run_rollout_store::RecentTurnFact;
+
+/// 最近若干轮的事实摘要，供显式信号采集；顺序为由旧到新。
+pub(super) fn recent_turn_facts(
+    config_path: &Path,
+    session_id: &str,
+    limit: u32,
+) -> Result<Vec<RecentTurnFact>, String> {
+    let root = resolved_axon_root(config_path)?;
+    let Ok(detail) = ThreadService::new(JsonlThreadEventStore).read_thread(&root, session_id)
+    else {
+        return Ok(Vec::new());
+    };
+    let want = usize::try_from(limit).unwrap_or(usize::MAX);
+    let start = detail.turns.len().saturating_sub(want);
+    Ok(detail.turns[start..]
+        .iter()
+        .map(|turn| {
+            let metadata = turn_metadata(&turn.token_usage_json);
+            RecentTurnFact {
+                sequence: turn.sequence,
+                recorded_at_ms: turn.started_at_ms,
+                prompt_chars: metadata.as_ref().map_or(0, |value| value.prompt_chars),
+                failed: metadata.as_ref().is_some_and(|value| value.failed)
+                    || turn.status == axon_session::TurnStatus::Failed,
+                affect_sequence: metadata
+                    .map(|value| value.affect_sequence)
+                    .unwrap_or_default(),
+            }
+        })
+        .collect())
+}
 /// 某轮在会话内的轮序：turn_id 由 `{session_id}-turn-{assistant_part_id}` 组成，按后缀命中。
 pub(super) fn turn_sequence(
     config_path: &Path,
@@ -724,6 +765,13 @@ fn thread_turn_metadata_from_record(record: &RunSessionRecord) -> ThreadTurnMeta
         model_name: record.model_name.clone(),
         reflection_notice: record.reflection_notice.clone(),
         reasoning_effort: record.reasoning_effort.clone(),
+        prompt_chars: u32::try_from(record.prompt.chars().count()).unwrap_or(u32::MAX),
+        failed: record.failure.is_some(),
+        affect_sequence: record
+            .turn_trace
+            .as_ref()
+            .map(|trace| trace.signals.affect_sequence.clone())
+            .unwrap_or_default(),
     }
 }
 
