@@ -439,6 +439,61 @@ fn recovery_reconciles_the_watermark_with_the_durable_log_tail() {
 }
 
 #[test]
+fn log_write_failure_compensates_the_control_plane_watermark() {
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    let host = store
+        .claim_host(
+            &RuntimeHostId::new("host-compensation").expect("host"),
+            1,
+            None,
+            10,
+            10_000,
+        )
+        .expect("Host");
+    let session_id = DaemonSessionId::new("session-compensation").expect("session");
+    store.create_session(&session_id, ".", 10).expect("session");
+    store
+        .append_events(
+            &session_id,
+            &host,
+            &[("turn_started".to_owned(), "{}".to_owned())],
+            20,
+        )
+        .expect("首批事件");
+    assert_eq!(
+        store
+            .get_session(&session_id)
+            .expect("读取会话")
+            .last_event_sequence,
+        1
+    );
+
+    // 把日志路径换成目录：第二段写入必然失败，而控制面事务已经提交。
+    let log_path = store.event_log(&session_id).path();
+    std::fs::remove_file(&log_path).expect("删除日志");
+    std::fs::create_dir(&log_path).expect("占用日志路径");
+
+    store
+        .append_events(
+            &session_id,
+            &host,
+            &[("tool_call".to_owned(), "{}".to_owned())],
+            30,
+        )
+        .expect_err("事件面写入必须失败");
+    // 补偿把水位退回落盘尾：日志已不可读，落盘尾按 0 计。
+    assert_eq!(
+        store
+            .get_session(&session_id)
+            .expect("读取会话")
+            .last_event_sequence,
+        0,
+        "写入失败后水位必须退回落盘尾，避免序号空洞"
+    );
+}
+
+#[test]
 fn interrupted_running_execution_is_quarantined_as_uncertain_without_reclaim() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));

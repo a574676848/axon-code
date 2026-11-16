@@ -93,13 +93,16 @@ pub(super) fn append_events(
         .iter()
         .map(|record| to_runtime_record(record, interaction_column, origin_channel.as_deref()))
         .collect::<Vec<_>>();
-    axon_eventlog::append_once(
+    if let Err(error) = axon_eventlog::append_once(
         &store.event_log(session_id),
         start,
         now_ms,
         &runtime_records,
-    )
-    .map_err(log_error)?;
+    ) {
+        // 第二段失败：控制面已提交，把水位退回落盘尾再上报。
+        compensate_watermark_after_log_failure(store, session_id);
+        return Err(log_error(error));
+    }
     apply_projections(store, session_id, events, origin_channel.as_deref(), now_ms);
     Ok(records)
 }
@@ -154,7 +157,7 @@ pub(super) fn durable_tail(
     session_id: &DaemonSessionId,
 ) -> Result<Option<(u64, Option<String>)>, RuntimeStoreError> {
     let path = store.event_log(session_id).path();
-    if !path.exists() {
+    if !path.is_file() {
         return Ok(None);
     }
     let reader = axon_eventlog::EventLogReader::open(&path).map_err(log_error)?;
@@ -162,6 +165,46 @@ pub(super) fn durable_tail(
         .records()
         .last()
         .map(|record| (record.sequence, record.generation.clone())))
+}
+
+/// 事件面写入失败后的水位补偿：把控制面水位退回落盘尾。
+///
+/// 两段式的第二段失败时控制面已经提交，幂等重放会看到「水位有、帧没有」。
+/// 把水位退回落盘尾可以让下一次写入从真实尾部继续，避免序号空洞；
+/// 补偿本身失败只上报，最终由恢复路径的对账兜底。
+fn compensate_watermark_after_log_failure(
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+) {
+    let durable = match durable_tail(store, session_id) {
+        Ok(tail) => tail.map_or(0, |(sequence, _)| sequence),
+        Err(error) => {
+            eprintln!(
+                "事件面写入失败后读不到落盘尾，水位补偿放弃: session={} error={error}",
+                session_id.as_str()
+            );
+            return;
+        }
+    };
+    let result = store.connection().and_then(|connection| {
+        connection
+            .execute(
+                "UPDATE sessions SET last_event_sequence=?1 WHERE session_id=?2",
+                params![
+                    i64::try_from(durable)
+                        .map_err(|_| RuntimeStoreError::Storage("事件序号超出范围".to_owned()))?,
+                    session_id.as_str()
+                ],
+            )
+            .map(|_| ())
+            .map_err(storage)
+    });
+    if let Err(error) = result {
+        eprintln!(
+            "事件面写入失败后水位补偿失败: session={} durable={durable} error={error}",
+            session_id.as_str()
+        );
+    }
 }
 
 /// 会话事件日志的物理路径（供诊断与清理使用）。
@@ -277,13 +320,15 @@ pub(super) fn write_events_at(
         .iter()
         .map(|record| to_runtime_record(record, interaction_id, origin_channel.as_deref()))
         .collect::<Vec<_>>();
-    axon_eventlog::append_once(
+    if let Err(error) = axon_eventlog::append_once(
         &store.event_log(session_id),
         start,
         now_ms,
         &runtime_records,
-    )
-    .map_err(log_error)?;
+    ) {
+        compensate_watermark_after_log_failure(store, session_id);
+        return Err(log_error(error));
+    }
     apply_projections(store, session_id, events, origin_channel.as_deref(), now_ms);
     Ok(records)
 }
@@ -299,13 +344,15 @@ pub(super) fn write_records(
     let origin_channel = interaction_channel(store, interaction_id)?;
     for record in records {
         let runtime_record = to_runtime_record(record, interaction_id, origin_channel.as_deref());
-        axon_eventlog::append_once(
+        if let Err(error) = axon_eventlog::append_once(
             &store.event_log(&record.session_id),
             record.sequence,
             record.emitted_at_ms,
             std::slice::from_ref(&runtime_record),
-        )
-        .map_err(log_error)?;
+        ) {
+            compensate_watermark_after_log_failure(store, &record.session_id);
+            return Err(log_error(error));
+        }
     }
     Ok(())
 }
