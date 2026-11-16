@@ -148,19 +148,16 @@ fn clamp_answer_text(text: &str) -> String {
     clamped
 }
 
-/// 车道上已收口轮次的累计墙钟耗时（毫秒）。
+/// 会话累计墙钟耗时（毫秒）：直接读 `session_metrics` 投影。
 ///
-/// 每轮的耗时取「到达 → 收尾」这段墙钟差：`inbox` 里一行就是一轮，两个
-/// 时间戳都是网关自己写的，因此按车道求和即可，不必回放正文，也不必解析事件载荷。
-/// 仍在排队或在跑的轮次不参与：它们还没收尾，读数由界面按实时帧自己补，避免同一轮
-/// 在基线与增量里各算一次。
+/// `inbox` 已不再持有处理状态，逐轮耗时只能由 `turn_metrics` 投影到
+/// `session_metrics.total_active_ms`；这里读投影而不是回放事件，一次主键查找即可。
 pub(super) fn settled_elapsed_ms(axon_root: &Path, session_id: &str) -> Option<u64> {
     let store = runtime_store(axon_root);
     store
         .with_read_connection(|connection| {
             connection.query_row(
-                "SELECT COALESCE(SUM(updated_at_ms - received_at_ms), 0) FROM inbox \
-                 WHERE session_id = ?1 AND status NOT IN ('received', 'processing')",
+                "SELECT total_active_ms FROM session_metrics WHERE session_id = ?1",
                 [session_id],
                 |row| row.get::<_, i64>(0),
             )
