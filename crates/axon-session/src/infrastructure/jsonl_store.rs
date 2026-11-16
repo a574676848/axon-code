@@ -3,7 +3,6 @@
 use std::{
     fmt::Write as _,
     fs,
-    io::{Read as _, Seek as _, SeekFrom},
     path::{Path, PathBuf},
 };
 
@@ -49,7 +48,6 @@ pub struct ThreadEventScan {
 pub struct JsonlThreadEventStore;
 
 const ACTIVATION_SCAN_BUDGET_BYTES: u64 = 64 * 1024 * 1024;
-const ACTIVATION_SCAN_CHUNK_BYTES: usize = 64 * 1024;
 
 impl JsonlThreadEventStore {
     /// 解析 thread 事件存储目录。
@@ -60,9 +58,14 @@ impl JsonlThreadEventStore {
 
     /// 删除指定 thread 的分片事件文件；文件不存在时返回 false。
     pub fn remove_thread(&self, root: &Path, thread_id: &str) -> Result<bool, String> {
-        SHARD_STORE
+        let removed = SHARD_STORE
             .remove_all(Self::thread_logical_path(root, thread_id))
-            .map_err(|_| "无法删除 thread 事件文件".to_owned())
+            .map_err(|_| "无法删除 thread 事件文件".to_owned())?;
+        if removed {
+            // 同步删除索引条目，否则名册与保留判定会把已删会话当成幽灵继续返回。
+            super::thread_index::append_thread_removed(root, thread_id);
+        }
+        Ok(removed)
     }
 
     fn thread_prefix(thread_id: &str) -> String {
@@ -208,108 +211,6 @@ impl JsonlThreadEventStore {
         Ok(records)
     }
 
-    /// 从一个 JSONL 文件尾部反向收集事件；返回 true 表示已找到投影起点。
-    /// `None` 表示扫描预算耗尽，调用方必须退回完整读取。
-    fn read_activation_tail(
-        path: &Path,
-        reverse_records: &mut Vec<ThreadEventRecord>,
-        scan_budget: &mut u64,
-    ) -> Result<Option<bool>, String> {
-        if !path.exists() {
-            return Ok(Some(false));
-        }
-        let mut file = fs::File::open(path).map_err(|_| "无法读取 thread 事件".to_owned())?;
-        let mut end = file
-            .metadata()
-            .map_err(|_| "无法读取 thread 事件".to_owned())?
-            .len();
-        while end > 0 {
-            let Some(start) = Self::previous_line_start(&mut file, end, scan_budget)? else {
-                return Ok(None);
-            };
-            if let Some(record) = Self::read_activation_record(&mut file, start, end)? {
-                let reached_origin = matches!(
-                    record.event,
-                    crate::domain::ThreadEvent::ThreadStarted { .. }
-                        | crate::domain::ThreadEvent::ThreadCheckpoint { .. }
-                );
-                reverse_records.push(record);
-                if reached_origin {
-                    return Ok(Some(true));
-                }
-            }
-            end = start.saturating_sub(1);
-        }
-        Ok(Some(false))
-    }
-
-    fn previous_line_start(
-        file: &mut fs::File,
-        end: u64,
-        scan_budget: &mut u64,
-    ) -> Result<Option<u64>, String> {
-        let mut scan_end = end;
-        while scan_end > 0 {
-            let read_start = scan_end.saturating_sub(ACTIVATION_SCAN_CHUNK_BYTES as u64);
-            let length = usize::try_from(scan_end - read_start)
-                .map_err(|_| "thread 事件扫描窗口过大".to_owned())?;
-            let consumed = scan_end - read_start;
-            if consumed > *scan_budget {
-                return Ok(None);
-            }
-            file.seek(SeekFrom::Start(read_start))
-                .map_err(|_| "无法定位 thread 事件".to_owned())?;
-            let mut buffer = vec![0; length];
-            file.read_exact(&mut buffer)
-                .map_err(|_| "无法读取 thread 事件尾部".to_owned())?;
-            if let Some(newline) = buffer.iter().rposition(|byte| *byte == b'\n') {
-                let start = read_start + u64::try_from(newline + 1).unwrap_or(u64::MAX);
-                let consumed = end - start;
-                if consumed > *scan_budget {
-                    return Ok(None);
-                }
-                *scan_budget -= consumed;
-                return Ok(Some(start));
-            }
-            *scan_budget -= consumed;
-            if *scan_budget == 0 {
-                return Ok(None);
-            }
-            scan_end = read_start;
-        }
-        Ok(Some(0))
-    }
-
-    fn read_activation_record(
-        file: &mut fs::File,
-        start: u64,
-        end: u64,
-    ) -> Result<Option<ThreadEventRecord>, String> {
-        if start >= end {
-            return Ok(None);
-        }
-        let length = usize::try_from(end - start).map_err(|_| "thread 事件行过大".to_owned())?;
-        file.seek(SeekFrom::Start(start))
-            .map_err(|_| "无法定位 thread 事件".to_owned())?;
-        let mut line = vec![0; length];
-        file.read_exact(&mut line)
-            .map_err(|_| "无法读取 thread 事件".to_owned())?;
-        let line = String::from_utf8(line).map_err(|_| "thread 事件 UTF-8 无效".to_owned())?;
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return Ok(None);
-        }
-        let record = serde_json::from_str::<ThreadEventRecord>(trimmed)
-            .map_err(|error| format!("thread 事件无效: {error}"))?;
-        if record.schema_version != THREAD_EVENT_SCHEMA_VERSION {
-            return Err(format!(
-                "thread 事件 schema 不兼容：expected={} actual={}",
-                record.schema_version, THREAD_EVENT_SCHEMA_VERSION
-            ));
-        }
-        Ok(Some(record))
-    }
-
     fn join_lines(lines: &[Vec<u8>]) -> Vec<u8> {
         let mut bytes = Vec::new();
         for line in lines {
@@ -367,6 +268,12 @@ impl ThreadEventStore for JsonlThreadEventStore {
         Ok(())
     }
 
+    fn read_thread(&self, root: &Path, thread_id: &str) -> Result<Vec<ThreadEventRecord>, String> {
+        // 只读本 thread 的分片：trait 默认实现会 read_all（整语料），恢复与会话命令
+        // 一旦走到那条路径，单次读取就退化成 O(全部会话)。
+        Self::read_thread_full(root, thread_id)
+    }
+
     fn read_all(&self, root: &Path) -> Result<Vec<ThreadEventRecord>, String> {
         let mut records = Vec::new();
         for entry in Self::event_files(root)? {
@@ -415,19 +322,33 @@ impl ThreadEventStore for JsonlThreadEventStore {
         root: &Path,
         thread_id: &str,
     ) -> Result<ThreadActivationSnapshot, String> {
-        let mut paths = Self::thread_shard_paths(root, thread_id)?;
-        paths.reverse();
-        let mut reverse_records = Vec::new();
-        let mut scan_budget = ACTIVATION_SCAN_BUDGET_BYTES;
-        for path in &paths {
-            match Self::read_activation_tail(path, &mut reverse_records, &mut scan_budget)? {
-                Some(true) => {
-                    reverse_records.reverse();
-                    return Ok(ThreadActivationSnapshot::from_records(&reverse_records));
-                }
-                Some(false) => {}
-                None => break,
+        // 从最后一个分片整体回读（每片 ≤ 8 MiB），不再「每行读一次 64 KiB 窗口」：
+        // 后者在长会话上把物理读放大到 S × (64 KiB / 平均行长)。读到「没有 active turn」
+        // 的状态即停止；预算耗尽退回完整读，不猜。
+        let paths = Self::thread_shard_paths(root, thread_id)?;
+        if paths.is_empty() {
+            return Ok(ThreadActivationSnapshot::default());
+        }
+        let mut budget = ACTIVATION_SCAN_BUDGET_BYTES;
+        let mut scanned: Vec<ThreadEventRecord> = Vec::new();
+        let mut resolved = false;
+        for path in paths.iter().rev() {
+            let size = fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+            if size > budget {
+                break;
             }
+            budget -= size;
+            let mut records = Self::read_file(path)?;
+            records.reverse();
+            scanned.append(&mut records);
+            if super::thread_tail::activation_settled(&scanned) {
+                resolved = true;
+                break;
+            }
+        }
+        if resolved {
+            scanned.reverse();
+            return Ok(ThreadActivationSnapshot::from_records(&scanned));
         }
         Ok(ThreadActivationSnapshot::from_records(
             &Self::read_thread_full(root, thread_id)?,

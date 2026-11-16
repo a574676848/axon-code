@@ -75,3 +75,6 @@ pub use sqlite_runtime_store::{
 };
 pub use thread_index::{THREAD_INDEX_FILE, ThreadIndexEntry, ThreadIndexSnapshot};
 pub use thread_tail::ThreadTailRead;
+#[cfg(test)]
+#[path = "thread_index_tests.rs"]
+mod thread_index_tests;

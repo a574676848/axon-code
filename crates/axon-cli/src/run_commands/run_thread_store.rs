@@ -617,11 +617,8 @@ pub(super) fn mirror_failed_session_to_thread(
         .find(|turn| turn.status == TurnStatus::Active)
         .ok_or_else(|| "thread 没有可标记失败的 active turn".to_owned())?;
     let failed_turn = turn_from_record(record, active.sequence)?;
-    let start = active
-        .history_items
-        .len()
-        .min(failed_turn.history_items.len());
-    let items = failed_turn.history_items[start..].to_vec();
+    // 与中途落盘同一口径：按身份 upsert 只补差量，绝不按位置切片。
+    let items = pending_turn_items(&active.history_items, &failed_turn.history_items);
     if !items.is_empty() {
         service.append_turn_items(
             &root,

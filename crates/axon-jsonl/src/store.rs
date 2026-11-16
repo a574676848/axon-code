@@ -324,46 +324,32 @@ impl ShardedJsonlStore {
     }
 
     fn rewrite_unlocked(&self, logical_path: &Path, lines: Vec<Vec<u8>>) -> io::Result<()> {
-        // 先写临时分片再替换，最后才删除旧分片：thread 是会话的唯一副本，
-        // 「先删后写」一旦在中间崩溃就等于整条会话归零。
-        let staging = logical_path.with_extension("rewrite.tmp");
-        if staging.exists() {
-            fs::remove_file(&staging)?;
-        }
-        if !lines.is_empty() {
-            let mut file = open_append(&staging)?;
-            for line in lines.iter() {
-                let current_bytes = file.metadata()?.len();
-                if current_bytes > 0
-                    && current_bytes.saturating_add(line.len() as u64 + 1) > self.max_shard_bytes
-                {
-                    // 单条重写不允许跨分片滚动：超限就按非法数据拒绝，避免写出半份状态。
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "重写内容超过单分片上限",
-                    ));
-                }
-                file.write_all(line)?;
-                file.write_all(b"\n")?;
-            }
-            file.flush()?;
+        // 重写允许跨多个分片（历史超过 8 MiB 的会话同样要能换窗）。顺序是：
+        // 先把全部新分片写成临时文件，再逐个就位，最后删除序号超出的旧分片。
+        // 「先写后替换」保证任何一步崩溃都不会让会话归零；读取侧按 sequence 去重，
+        // 因此「新分片已就位、旧分片尚未删除」这个窗口不会产生重复轮次。
+        let chunks = self.chunk_rewrite_lines(&lines)?;
+        let mut temporaries = Vec::with_capacity(chunks.len());
+        for (index, chunk) in chunks.iter().enumerate() {
+            let temporary = logical_path.with_extension(format!("rewrite{index}.tmp"));
+            fs::write(&temporary, chunk)?;
             if self.sync_on_write {
+                let file = fs::OpenOptions::new().write(true).open(&temporary)?;
                 file.sync_data()?;
             }
+            temporaries.push(temporary);
         }
-        if lines.is_empty() {
-            if staging.exists() {
-                fs::remove_file(&staging)?;
+        for (index, temporary) in temporaries.iter().enumerate() {
+            let target = shard_path(logical_path, index as u64)?;
+            match fs::remove_file(&target) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
             }
-            remove_shards(logical_path)?;
-            return Ok(());
+            fs::rename(temporary, &target)?;
         }
-        let _ = &lines;
-        let target = shard_path(logical_path, 0)?;
-        fs::rename(&staging, &target)?;
-        // 新分片已就位：删除其它序号的分片，避免旧内容与新内容并存。
-        for path in self.shard_paths(logical_path)? {
-            if path != target {
+        for (sequence, path) in self.shard_entries(logical_path)? {
+            if sequence as usize >= chunks.len() {
                 match fs::remove_file(&path) {
                     Ok(()) => {}
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -371,7 +357,34 @@ impl ShardedJsonlStore {
                 }
             }
         }
+        if chunks.is_empty() {
+            remove_shards(logical_path)?;
+        }
         Ok(())
+    }
+
+    /// 按单分片预算把重写内容切块；单行超过预算仍按非法数据拒绝。
+    fn chunk_rewrite_lines(&self, lines: &[Vec<u8>]) -> io::Result<Vec<Vec<u8>>> {
+        let mut chunks = Vec::new();
+        let mut current = Vec::new();
+        for line in lines {
+            let stored = line.len() as u64 + 1;
+            if stored > self.max_shard_bytes {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "重写内容超过单行上限",
+                ));
+            }
+            if !current.is_empty() && current.len() as u64 + stored > self.max_shard_bytes {
+                chunks.push(std::mem::take(&mut current));
+            }
+            current.extend_from_slice(line);
+            current.push(b'\n');
+        }
+        if !current.is_empty() {
+            chunks.push(current);
+        }
+        Ok(chunks)
     }
 
     fn repair_tail(&self, logical_path: &Path) -> io::Result<()> {

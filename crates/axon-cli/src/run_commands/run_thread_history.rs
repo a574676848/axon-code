@@ -197,7 +197,7 @@ pub(super) fn visit_history_item_views_from_record(
     }
     visit(HistoryItemView::User {
         sequence,
-        part_id: format!("user:{}:{}", record.session_id, record.created_at_ms),
+        part_id: format!("user:{}:{}", record.session_id, record.assistant_part_id),
         content: &record.prompt,
         local_images: &record.local_images,
         local_files: &record.local_files,

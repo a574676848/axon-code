@@ -70,12 +70,14 @@ where
         recorded_at_ms: u64,
         next_sequence: u64,
     ) -> Result<(), String> {
-        self.append_at_sequence(
-            root,
-            thread_id,
-            next_sequence,
+        let record = crate::domain::ThreadEventRecord {
+            schema_version: crate::application::THREAD_EVENT_SCHEMA_VERSION,
+            thread_id: thread_id.to_owned(),
+            sequence: next_sequence,
             recorded_at_ms,
-            ThreadEvent::TurnItemsAppended { turn_id, items },
-        )
+            event: ThreadEvent::TurnItemsAppended { turn_id, items },
+        };
+        self.store
+            .append_at_expected_sequence(root, &record, next_sequence.saturating_sub(1))
     }
 }

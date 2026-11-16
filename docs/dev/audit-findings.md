@@ -34,6 +34,20 @@
 | P1-6（P 组） | `run_thread_tail.rs` 四个热查询 | `recent_turn_facts`、`turn_sequence`、`latest_turn_usage`、`previous_reflection_notice` 每次整读 thread | 统一走尾部视图，尾部不足才回退整读 |
 | P1-7（S 组） | `session_family_cleanup.rs::family_members` | 保留判定整表投影；`scan_threads` 丢弃损坏分片且不上报，父节点缺失会让子会话脱离家族被误删 | 改读派生索引；对「父 id 存在但投影里没有父」的会话整族保护；回退投影时把损坏分片数写进告警 |
 
+## 第二轮复核后新增修复（本清单随代码同步）
+
+| 编号 | 来源 | 问题 | 修法 |
+| --- | --- | --- | --- |
+| N-1 | 第二轮性能+闭环 | `JsonlThreadEventStore::read_thread` 覆盖实现被删，trait 默认实现退化为 `read_all`（整语料） | 恢复按 thread 分片读取的覆盖实现；新增回归靠 `thread_index_tests` 与既有 session 用例覆盖 |
+| N-2 | 第二轮闭环 | 尾部视图不识别 `ThreadCheckpoint`，换窗后记为「完整但空」 | `project_tail` 应用 checkpoint 里的全量轮次 |
+| N-3 | 第二轮闭环 | 索引读/写/重建三条路径互不可见（逻辑路径 vs 分片路径），索引恒不可读 | 读侧改判分片存在、重建改走分片写入；新增 `thread_index_tests`（写入可读、删除 tombstone、rebuild 一致） |
+| N-5 | 第二轮闭环 | 用户消息 part_id 含落盘时间戳，重复落盘会追加重复用户输入 | 用户 item 身份改为「会话 + 轮次」；新增 `repeated_partial_writes_keep_a_single_user_message` |
+| N-6 | 第二轮闭环 | 删除会话不清理索引条目 | `remove_thread` 写 tombstone 补丁，折叠时移除条目 |
+| N-9 | 第二轮闭环 | 热路径追加用预读序号直接写，无冲突校验 | 改走 `append_at_expected_sequence` |
+| P1-5（补正） | 第二轮闭环 | 首轮清单写「已修」，实际 service 侧未改 | 现已改为优先读索引最新更新时间，索引缺失才扫目录且只认 `.jsonl` |
+| R3 | 第二轮性能 | 激活状态反向扫描按行读 64 KiB 窗口，物理读放大 33× | 改为「整分片从尾回读 + 状态已定即停」，预算按实际读取字节扣减；删除三处旧扫描助手 |
+| N-4（部分） | 第二轮闭环 | 换窗重写单分片 8 MiB 上限让大会话无法压缩；rename 与删旧分片之间崩溃会新旧并存 | 重写改为多分片分块 + 临时文件逐个就位；读取侧按 sequence 稳定去重，消除并存窗口的重复轮次 |
+
 ## P2（已记录，暂不修）
 
 | 编号 | 位置 | 问题 | 处置 |

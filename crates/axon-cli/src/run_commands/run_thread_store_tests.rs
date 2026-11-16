@@ -676,3 +676,7 @@ fn model_tool_result(message: &AgentModelMessage) -> Option<&AgentModelToolResul
         .as_ref()
         .and_then(|metadata| metadata.tool_result.as_ref())
 }
+
+#[cfg(test)]
+#[path = "run_thread_store_partial_tests.rs"]
+mod partial_tests;

@@ -85,6 +85,9 @@ struct ThreadIndexPatch {
     /// 末轮时间。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_turn_at_ms: Option<u64>,
+    /// 删除标记：会话被保留策略清理后写一条，读取时整条移除。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    deleted: bool,
     /// provider。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     provider: Option<String>,
@@ -124,7 +127,11 @@ impl JsonlThreadEventStore {
     /// 读取索引；索引缺失时返回 `None`，调用方据此回退整表投影。
     pub fn read_thread_index(&self, root: &Path) -> Result<Option<ThreadIndexSnapshot>, String> {
         let path = Self::thread_index_path(root);
-        if !path.exists() {
+        // 索引按 JSONL 分片写入（`thread-index.v1.000000.jsonl`），不能用逻辑路径判断存在。
+        let shards = SHARD_STORE
+            .shard_paths(&path)
+            .map_err(|_| "无法读取 thread 索引".to_owned())?;
+        if shards.is_empty() {
             return Ok(None);
         }
         let lines = SHARD_STORE
@@ -201,6 +208,7 @@ impl ThreadIndexPatch {
             last_turn_at_ms: entry.last_turn_at_ms,
             provider: Some(entry.provider.clone()),
             model: Some(entry.model.clone()),
+            deleted: false,
         }
     }
 }
@@ -209,6 +217,31 @@ impl ThreadIndexPatch {
 pub(crate) fn append_index_patch(root: &Path, record: &ThreadEventRecord) {
     let Some(patch) = index_patch(record) else {
         return;
+    };
+    let Ok(line) = serde_json::to_string(&patch) else {
+        return;
+    };
+    let _ = SHARD_STORE.append_line(
+        JsonlThreadEventStore::thread_index_path(root),
+        line.as_bytes(),
+    );
+}
+
+/// 会话被清理时同步写一条删除补丁，避免索引留下幽灵条目。
+pub(crate) fn append_thread_removed(root: &Path, thread_id: &str) {
+    let patch = ThreadIndexPatch {
+        thread_id: thread_id.to_owned(),
+        at: axon_time::unix_now_ms(),
+        parent: None,
+        name: None,
+        origin: None,
+        archived: None,
+        status: None,
+        last_turn_status: None,
+        last_turn_at_ms: None,
+        provider: None,
+        model: None,
+        deleted: true,
     };
     let Ok(line) = serde_json::to_string(&patch) else {
         return;
@@ -233,6 +266,7 @@ fn index_patch(record: &ThreadEventRecord) -> Option<ThreadIndexPatch> {
         last_turn_at_ms: None,
         provider: None,
         model: None,
+        deleted: false,
     };
     match &record.event {
         ThreadEvent::ThreadStarted {
@@ -288,16 +322,21 @@ fn index_patch(record: &ThreadEventRecord) -> Option<ThreadIndexPatch> {
         ThreadEvent::ThreadClosed => {
             patch.status = Some(ThreadStatus::NotLoaded);
         }
+        // 纯噪声事件不写索引：只有会话级标量变化才值得一行，否则索引会随 item 数量膨胀。
         ThreadEvent::TurnItemsAppended { .. }
         | ThreadEvent::ThreadResumed
         | ThreadEvent::ThreadCompacted { .. }
         | ThreadEvent::ThreadCheckpoint { .. }
-        | ThreadEvent::ThreadForked { .. } => {}
+        | ThreadEvent::ThreadForked { .. } => return None,
     }
     Some(patch)
 }
 
 fn apply_patch(entries: &mut BTreeMap<String, ThreadIndexEntry>, patch: ThreadIndexPatch) {
+    if patch.deleted {
+        entries.remove(&patch.thread_id);
+        return;
+    }
     let entry = entries
         .entry(patch.thread_id.clone())
         .or_insert_with(|| ThreadIndexEntry {

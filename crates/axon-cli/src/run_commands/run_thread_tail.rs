@@ -120,6 +120,23 @@ fn project_tail(records: &[ThreadEventRecord], complete: bool) -> ThreadTailView
                     existing.status = axon_session::TurnStatus::Failed;
                 }
             }
+            ThreadEvent::ThreadCheckpoint { detail } => {
+                // checkpoint 是整条 thread 的权威快照：尾部一旦包含它，轮次就以它为准。
+                turns = detail
+                    .turns
+                    .iter()
+                    .map(|turn| TailTurn {
+                        turn_id: turn.turn_id.clone(),
+                        sequence: turn.sequence,
+                        status: turn.status,
+                        started_at_ms: turn.started_at_ms,
+                        completed_at_ms: turn.completed_at_ms,
+                        metadata: turn_metadata(&turn.token_usage_json),
+                        history_items: turn.history_items.clone(),
+                        complete: true,
+                    })
+                    .collect();
+            }
             ThreadEvent::TurnItemsAppended { turn_id, items } => {
                 if let Some(existing) = turns.iter_mut().find(|item| item.turn_id == *turn_id) {
                     for item in items {
@@ -212,7 +229,8 @@ pub(super) fn previous_reflection_notice_at_tail(
     {
         return Some(notice);
     }
-    if view.complete || view.reliable() {
+    // 当前轮已在尾部：它之前的轮次也都在尾部，答案就是「没有提示」，不必回退。
+    if position.is_some() || view.complete {
         return None;
     }
     super::run_thread_store::previous_reflection_notice(config_path, session_id, current_part_id)

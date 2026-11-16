@@ -126,6 +126,35 @@ impl JsonlThreadEventStore {
         for path in Self::thread_shard_paths(root, thread_id)? {
             records.extend(Self::read_file_public(&path)?);
         }
+        // 重写与删除旧分片之间崩溃时，同一序号可能出现两次：按序号稳定去重，
+        // 排在前面（新分片）的那条胜出，避免重复轮次进入模型历史。
+        records.sort_by_key(|record| record.sequence);
+        records.dedup_by_key(|record| record.sequence);
         Ok(records)
     }
+}
+
+/// 反向尾扫是否已经能确定激活状态：碰到线程起点/检查点，或已确认没有未收口轮次。
+pub(crate) fn activation_settled(reverse_records: &[ThreadEventRecord]) -> bool {
+    use crate::domain::{ThreadEvent, TurnStatus};
+    let mut pending = 0_i64;
+    for record in reverse_records {
+        match &record.event {
+            ThreadEvent::ThreadStarted { .. } | ThreadEvent::ThreadCheckpoint { .. } => {
+                return pending <= 0;
+            }
+            ThreadEvent::TurnStarted { .. } => pending -= 1,
+            ThreadEvent::TurnCompleted { turn } => {
+                if turn.status != TurnStatus::Active {
+                    pending += 1;
+                }
+            }
+            ThreadEvent::TurnFailed { .. } | ThreadEvent::TurnInterrupted { .. } => pending += 1,
+            _ => {}
+        }
+        if pending <= 0 {
+            return true;
+        }
+    }
+    pending <= 0
 }
