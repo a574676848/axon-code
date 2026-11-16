@@ -205,7 +205,7 @@ pub(super) fn sequence_option(
     payload: &DurableGovernancePayload,
     session_record: &RunSessionRecord,
 ) -> Option<u64> {
-    match super::run_thread_store::turn_sequence(
+    match super::run_thread_tail::turn_sequence_at_tail(
         &payload.config_path,
         &session_record.session_id,
         &session_record.assistant_part_id,
@@ -244,7 +244,7 @@ fn collect_explicit_signals(
     now_ms: u64,
     sequence: Option<u64>,
 ) -> axon_agent_runtime::ExplicitSignals {
-    let facts = match super::run_thread_store::recent_turn_facts(
+    let facts = match super::run_thread_tail::recent_turn_facts_at_tail(
         &payload.config_path,
         &session_record.session_id,
         EXPLICIT_SIGNALS_HISTORY_TURNS,

@@ -280,7 +280,6 @@ fn partial_updates_append_only_new_history_items() {
         .unwrap();
 
     let mut second = first.clone();
-    second.created_at_ms = 301;
     second.tool_calls.push(ProviderToolCall::new(
         "call-second",
         "builtin.read_file",

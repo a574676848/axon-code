@@ -18,7 +18,7 @@ pub use application::{
     SessionSnapshot, StartEmptyThreadCommand, StartThreadCommand, StartTurnCommand, ThreadService,
     TurnRepairOutcome, WorkspaceGitSnapshot, WorkspaceIdentity, WorkspaceResolver,
     WorkspaceResolverError, WorkspaceSnapshot, WorkspaceSnapshotFieldState, interaction_session_id,
-    session_id_for_route,
+    project_threads, session_id_for_route,
 };
 pub use domain::WorkspaceRecord;
 pub use domain::session_action::{default_action_priority, effective_action_priority};
@@ -34,7 +34,8 @@ pub use domain::{
 };
 pub use infrastructure::{
     AXON_RUNTIME_DATA_DIR, JsonlThreadEventStore, SESSION_STORE_DIR, THREAD_EVENTS_FILE,
-    ThreadEventReadIssue, ThreadEventScan, session_store_path,
+    ThreadEventReadIssue, ThreadEventScan, ThreadIndexEntry, ThreadIndexSnapshot, ThreadTailRead,
+    session_store_path,
 };
 pub use infrastructure::{
     SESSION_EVENT_ARCHIVE_SUBDIR, SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES,

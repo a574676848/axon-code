@@ -60,7 +60,8 @@ pub(super) fn record_child_origin(
 
 /// 某条会话直接派生的子代理名册；按最近活动倒序。
 ///
-/// 只投影 thread 摘要，不逐条读会话正文：代价与子会话历史体量无关。
+/// 走 thread 派生索引：名册只要「全体会话的少量标量」，逐会话解析整条历史会让这个
+/// 界面轮询变成 O(语料)。索引缺失时回退整表投影（正确但慢，属于缓存未建立的冷启动）。
 pub(crate) fn child_session_rows(
     root: &Path,
     parent_session_id: &str,
@@ -70,28 +71,52 @@ pub(crate) fn child_session_rows(
     if parent_session_id.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
-    let page = ThreadService::new(JsonlThreadEventStore).list_thread_page(
-        root,
-        &ThreadListQuery {
-            limit: CHILD_SESSION_SCAN_LIMIT,
-            ..ThreadListQuery::default()
-        },
-    )?;
-    let mut rows = page
-        .threads
-        .into_iter()
-        .filter(|summary| summary.parent_thread_id.as_deref() == Some(parent_session_id))
-        .filter(|summary| summary.child_origin.as_deref() != Some(CHILD_SESSION_ORIGIN_INTERNAL))
-        .map(|summary| ChildSessionRow {
-            session_id: summary.thread_id,
-            title: summary.name,
-            provider: summary.provider,
-            model: summary.model,
-            status: summary.last_turn_status.map(turn_status_text),
-            updated_at_ms: summary.updated_at_ms,
-            last_turn_at_ms: summary.last_turn_at_ms,
-        })
-        .collect::<Vec<_>>();
+    let store = JsonlThreadEventStore;
+    let explained = store.read_thread_index(root)?.map(|snapshot| {
+        snapshot
+            .entries
+            .into_iter()
+            .filter(|entry| entry.parent_thread_id.as_deref() == Some(parent_session_id))
+            .filter(|entry| entry.child_origin.as_deref() != Some(CHILD_SESSION_ORIGIN_INTERNAL))
+            .map(|entry| ChildSessionRow {
+                session_id: entry.thread_id,
+                title: entry.name,
+                provider: entry.provider,
+                model: entry.model,
+                status: entry.last_turn_status.map(turn_status_text),
+                updated_at_ms: entry.updated_at_ms,
+                last_turn_at_ms: entry.last_turn_at_ms,
+            })
+            .collect::<Vec<_>>()
+    });
+    let mut rows = match explained {
+        Some(rows) => rows,
+        None => {
+            let page = ThreadService::new(JsonlThreadEventStore).list_thread_page(
+                root,
+                &ThreadListQuery {
+                    limit: CHILD_SESSION_SCAN_LIMIT,
+                    ..ThreadListQuery::default()
+                },
+            )?;
+            page.threads
+                .into_iter()
+                .filter(|summary| summary.parent_thread_id.as_deref() == Some(parent_session_id))
+                .filter(|summary| {
+                    summary.child_origin.as_deref() != Some(CHILD_SESSION_ORIGIN_INTERNAL)
+                })
+                .map(|summary| ChildSessionRow {
+                    session_id: summary.thread_id,
+                    title: summary.name,
+                    provider: summary.provider,
+                    model: summary.model,
+                    status: summary.last_turn_status.map(turn_status_text),
+                    updated_at_ms: summary.updated_at_ms,
+                    last_turn_at_ms: summary.last_turn_at_ms,
+                })
+                .collect::<Vec<_>>()
+        }
+    };
     rows.sort_by_key(|row| std::cmp::Reverse(row.updated_at_ms));
     rows.truncate(limit);
     Ok(rows)

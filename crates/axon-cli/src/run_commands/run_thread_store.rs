@@ -10,7 +10,6 @@ use axon_session::{
     StartThreadCommand, StartTurnCommand, ThreadCompaction, ThreadDetail, ThreadService,
     ThreadSettings, ThreadSource, ThreadStatus, Turn, TurnRepairOutcome, TurnStatus,
 };
-use serde::Serialize;
 
 use super::{
     RunCommand,
@@ -110,7 +109,7 @@ pub(super) fn install_active_compaction_projection(
 #[path = "run_thread_queries.rs"]
 mod queries;
 pub(crate) use queries::{
-    SessionUsageTotals, ThreadTurnMetadata, latest_reflection_notice_at_root,
+    RecentTurnFact, SessionUsageTotals, ThreadTurnMetadata, latest_reflection_notice_at_root,
     latest_turn_usage_tokens_at_root, patch_turn_artifacts, previous_reflection_notice,
     recent_turn_facts, session_model_at_root, session_usage_totals_at_root, turn_record,
     turn_record_by_sequence, turn_sequence,
@@ -284,6 +283,25 @@ pub(super) fn mirror_session_started(
     }
 }
 
+/// 计算仍需要落盘的历史 item：身份是 `(类别, part_id)`，与投影侧 upsert 口径一致。
+///
+/// 增量落盘不能按位置切片：item 的生成顺序不是「只追加尾部」（工具回执插在调用之间、
+/// reasoning 排在最后），切片会把回执错插到历史里并丢掉已有调用的结果。
+pub(super) fn pending_turn_items(
+    existing: &[axon_session::ThreadHistoryItem],
+    projected: &[axon_session::ThreadHistoryItem],
+) -> Vec<axon_session::ThreadHistoryItem> {
+    projected
+        .iter()
+        .filter(|item| {
+            !existing
+                .iter()
+                .any(|current| current.identity() == item.identity() && current == *item)
+        })
+        .cloned()
+        .collect()
+}
+
 /// 将 provider child turn 收口到 Thread 终态。
 pub(super) fn mirror_session_terminal(
     config_path: &Path,
@@ -342,8 +360,7 @@ pub(super) fn mirror_existing_turn(
             if active.turn_id != turn.turn_id {
                 return Err("thread 已存在不同 active turn".to_owned());
             }
-            let start = active.history_items.len().min(turn.history_items.len());
-            let items = turn.history_items[start..].to_vec();
+            let items = pending_turn_items(&active.history_items, &turn.history_items);
             if items.is_empty() {
                 return Ok(());
             }
@@ -433,10 +450,17 @@ fn prepare_session_from_lookup(
     let Some(thread_id) = thread_id else {
         return Ok(None);
     };
-    // 目标 thread 不存在时如实返回「没有可恢复的会话」，不隐式新建。
-    let Ok(detail) = service.read_thread(&root, &thread_id) else {
+    // 「不存在」与「读不出来」必须分开：前者如实返回没有可恢复会话，后者是数据损坏，
+    // 静默当成空会话会让用户先看到失忆、再在起跑时才看到报错。
+    if JsonlThreadEventStore::thread_shard_paths(&root, &thread_id)?.is_empty() {
         return Ok(None);
-    };
+    }
+    // 崩溃遗留的 active turn 必须在装配模型历史之前收口：否则第一次 provider 请求会带着
+    // 「有 tool_calls 却没有 tool 结果」的悬空历史，必然被拒一次。
+    repair_open_turn_before_restore(&service, &root, &thread_id)?;
+    let detail = service
+        .read_thread(&root, &thread_id)
+        .map_err(|error| format!("会话历史读取失败：{thread_id}，{error}"))?;
     if detail.compacted_history.is_none() && window_number_exceeds_first(config_path, &thread_id)? {
         return Err(
             "会话已换窗但活动窗口投影缺失，拒绝恢复旧聊天历史；请先修复窗口投影".to_owned(),
@@ -451,15 +475,66 @@ fn prepare_session_from_lookup(
     }))
 }
 
+/// 恢复前先把崩溃遗留的 active turn 收口：补合成工具结果并写终态。
+///
+/// 收口在装配历史之前执行，保证发往 provider 的第一条请求就已经是平衡历史；
+/// 收口失败只告警不阻断（历史照旧装配，用户至少能看见会话并自行处理）。
+fn repair_open_turn_before_restore(
+    service: &ThreadService<JsonlThreadEventStore>,
+    root: &Path,
+    thread_id: &str,
+) -> Result<(), String> {
+    let activation = service.read_thread_activation(root, thread_id)?;
+    let Some(turn_id) = activation.active_turn_id else {
+        return Ok(());
+    };
+    match service.repair_open_turn(
+        root,
+        RepairOpenTurnCommand {
+            thread_id: thread_id.to_owned(),
+            turn_id,
+            recorded_at_ms: super::run_execution::now_ms(),
+            known_next_sequence: Some(activation.next_sequence),
+        },
+    ) {
+        Ok(TurnRepairOutcome::Repaired {
+            turn_id,
+            synthetic_results,
+        }) => axon_logger::warning(&format!(
+            "Thread {thread_id} 崩溃遗留轮次 {turn_id} 已在恢复前收口，补合成工具结果 {synthetic_results} 条"
+        )),
+        Ok(TurnRepairOutcome::Balanced) => {}
+        Err(error) => axon_logger::warning(&format!(
+            "Thread {thread_id} 崩溃遗留轮次收口失败，按现有历史继续恢复：{error}"
+        )),
+    }
+    Ok(())
+}
+
 /// 最近一个未归档 thread：`--continue` 没有指针时的兜底候选。
 fn latest_thread_id(
     service: &ThreadService<JsonlThreadEventStore>,
     root: &Path,
 ) -> Result<Option<String>, String> {
+    // `--continue` 的权威目标是恢复指针；只有从未设置过指针时才回退「最近一个根会话」。
+    // 回退必须排除子代理/内务 thread，否则用户会续到工具的会话上。
+    if let Some(snapshot) = JsonlThreadEventStore.read_thread_index(root)? {
+        if let Some(entry) = snapshot
+            .entries
+            .iter()
+            .filter(|entry| !entry.archived)
+            .filter(|entry| entry.parent_thread_id.is_none())
+            .max_by_key(|entry| entry.updated_at_ms)
+        {
+            return Ok(Some(entry.thread_id.clone()));
+        }
+        return Ok(None);
+    }
     let summaries = service.list_threads(root, 20)?;
     Ok(summaries
         .into_iter()
         .filter(|summary| summary.status != ThreadStatus::Archived)
+        .filter(|summary| summary.parent_thread_id.is_none())
         .max_by_key(|summary| summary.updated_at_ms)
         .map(|summary| summary.thread_id))
 }
@@ -477,7 +552,7 @@ fn window_number_exceeds_first(config_path: &Path, thread_id: &str) -> Result<bo
 }
 
 /// thread 侧记录的最近一轮 metadata。
-fn turn_metadata(token_usage_json: &Option<String>) -> Option<ThreadTurnMetadata> {
+pub(super) fn turn_metadata(token_usage_json: &Option<String>) -> Option<ThreadTurnMetadata> {
     let raw = token_usage_json.as_deref()?;
     serde_json::from_str::<ThreadTurnMetadata>(raw).ok()
 }

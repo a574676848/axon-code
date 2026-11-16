@@ -324,31 +324,54 @@ impl ShardedJsonlStore {
     }
 
     fn rewrite_unlocked(&self, logical_path: &Path, lines: Vec<Vec<u8>>) -> io::Result<()> {
-        remove_shards(logical_path)?;
+        // 先写临时分片再替换，最后才删除旧分片：thread 是会话的唯一副本，
+        // 「先删后写」一旦在中间崩溃就等于整条会话归零。
+        let staging = logical_path.with_extension("rewrite.tmp");
+        if staging.exists() {
+            fs::remove_file(&staging)?;
+        }
+        if !lines.is_empty() {
+            let mut file = open_append(&staging)?;
+            for line in lines.iter() {
+                let current_bytes = file.metadata()?.len();
+                if current_bytes > 0
+                    && current_bytes.saturating_add(line.len() as u64 + 1) > self.max_shard_bytes
+                {
+                    // 单条重写不允许跨分片滚动：超限就按非法数据拒绝，避免写出半份状态。
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "重写内容超过单分片上限",
+                    ));
+                }
+                file.write_all(line)?;
+                file.write_all(b"\n")?;
+            }
+            file.flush()?;
+            if self.sync_on_write {
+                file.sync_data()?;
+            }
+        }
         if lines.is_empty() {
+            if staging.exists() {
+                fs::remove_file(&staging)?;
+            }
+            remove_shards(logical_path)?;
             return Ok(());
         }
-        let mut target = shard_path(logical_path, 0)?;
-        let mut file = open_append(&target)?;
-        for line in lines {
-            let current_bytes = target.metadata()?.len();
-            if current_bytes > 0
-                && current_bytes.saturating_add(line.len() as u64 + 1) > self.max_shard_bytes
-            {
-                file.flush()?;
-                target = self.append_target(logical_path, line.len())?;
-                file = open_append(&target)?;
+        let _ = &lines;
+        let target = shard_path(logical_path, 0)?;
+        fs::rename(&staging, &target)?;
+        // 新分片已就位：删除其它序号的分片，避免旧内容与新内容并存。
+        for path in self.shard_paths(logical_path)? {
+            if path != target {
+                match fs::remove_file(&path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
             }
-            file.write_all(&line)?;
-            file.write_all(b"\n")?;
         }
-        file.flush().and_then(|()| {
-            if self.sync_on_write {
-                file.sync_data()
-            } else {
-                Ok(())
-            }
-        })
+        Ok(())
     }
 
     fn repair_tail(&self, logical_path: &Path) -> io::Result<()> {

@@ -7,7 +7,7 @@ use crate::domain::{
 };
 
 /// 从事件流构建 thread 详情。
-pub(crate) fn project_threads(records: &[ThreadEventRecord]) -> Vec<ThreadDetail> {
+pub fn project_threads(records: &[ThreadEventRecord]) -> Vec<ThreadDetail> {
     let mut details = BTreeMap::<String, ThreadDetail>::new();
     for record in records {
         apply_record(&mut details, record);
@@ -153,7 +153,19 @@ fn apply_turn_items_appended(
     if let Some(detail) = details.get_mut(&record.thread_id)
         && let Some(turn) = detail.turns.iter_mut().find(|turn| turn.turn_id == turn_id)
     {
-        turn.history_items.extend(items.iter().cloned());
+        // 中途落盘按稳定身份增量合并：历史 item 的生成顺序不是「只追加尾部」
+        // （工具回执插在调用之间、reasoning 排在最后），按位置切片会写坏历史。
+        // 同一身份后到的 item 整体替换原位，新身份追加到末尾。
+        for item in items {
+            match turn
+                .history_items
+                .iter_mut()
+                .find(|existing| existing.identity() == item.identity())
+            {
+                Some(existing) => *existing = item.clone(),
+                None => turn.history_items.push(item.clone()),
+            }
+        }
         detail.thread.status = ThreadStatus::Active;
         detail.thread.updated_at_ms = record.recorded_at_ms;
     }

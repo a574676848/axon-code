@@ -11,7 +11,7 @@ use std::{
 };
 
 use axon_session::{
-    JsonlThreadEventStore, ResumePointerStore as _, SqliteRuntimeStore, ThreadDetail, ThreadService,
+    JsonlThreadEventStore, ResumePointerStore as _, SqliteRuntimeStore, project_threads,
 };
 use rusqlite::{Connection, TransactionBehavior, params_from_iter, types::Value};
 
@@ -48,17 +48,15 @@ pub(super) struct SessionContextCounts {
 /// 整个家族都不清理，避免回放链被删成断头。
 pub(super) fn stale_session_family_ids(root: &Path, cutoff_ms: u64) -> Result<Vec<String>, String> {
     let mut protected = protected_governance_sessions(root)?;
-    let threads = ThreadService::new(JsonlThreadEventStore)
-        .scan_threads(root)
-        .map_err(|error| format!("扫描 thread 事件面失败：{error}"))?;
+    let sessions = family_members(root)?;
     let current = current_resume_session(root);
-    let known = threads
+    let known = sessions
         .iter()
-        .map(|detail| detail.thread.thread_id.clone())
+        .map(|session| session.thread_id.clone())
         .collect::<HashSet<_>>();
-    let mut ids = stale_thread_family_ids(&threads, current.as_deref(), &protected, cutoff_ms);
+    let mut ids = stale_thread_family_ids(&sessions, current.as_deref(), &protected, cutoff_ms);
     extend_runtime_protection(root, &ids, &mut protected)?;
-    ids = stale_thread_family_ids(&threads, current.as_deref(), &protected, cutoff_ms);
+    ids = stale_thread_family_ids(&sessions, current.as_deref(), &protected, cutoff_ms);
     ids.extend(
         stale_runtime_session_ids(root, cutoff_ms)?
             .into_iter()
@@ -67,6 +65,74 @@ pub(super) fn stale_session_family_ids(root: &Path, cutoff_ms: u64) -> Result<Ve
     ids.sort();
     ids.dedup();
     Ok(ids)
+}
+
+/// 家族判定只需要三个标量：会话 id、父 id、最近活动时间。
+#[derive(Debug, Clone)]
+struct FamilyMember {
+    thread_id: String,
+    parent_thread_id: Option<String>,
+    updated_at_ms: u64,
+    /// 父 id 指向一个投影里不存在的会话：该族一律不清理，宁可漏删也不误删。
+    dangling_parent: bool,
+}
+
+/// 读取会话清单：优先派生索引，缺失时回退整表投影。
+fn family_members(root: &Path) -> Result<Vec<FamilyMember>, String> {
+    let store = JsonlThreadEventStore;
+    if let Some(snapshot) = store
+        .read_thread_index(root)
+        .map_err(|error| format!("读取 thread 索引失败：{error}"))?
+    {
+        let known = snapshot
+            .entries
+            .iter()
+            .map(|entry| entry.thread_id.clone())
+            .collect::<HashSet<_>>();
+        return Ok(snapshot
+            .entries
+            .into_iter()
+            .map(|entry| FamilyMember {
+                dangling_parent: entry
+                    .parent_thread_id
+                    .as_deref()
+                    .is_some_and(|parent| !known.contains(parent)),
+                thread_id: entry.thread_id,
+                parent_thread_id: entry.parent_thread_id,
+                updated_at_ms: entry.updated_at_ms,
+            })
+            .collect());
+    }
+    // 索引尚未建立（旧库首次运行或缓存缺失）：回退整表投影，并把损坏分片数如实记下来。
+    let scan = store
+        .scan_all(root)
+        .map_err(|error| format!("扫描 thread 事件面失败：{error}"))?;
+    if !scan.issues.is_empty() {
+        axon_logger::warning(&format!(
+            "thread 事件面有 {} 个分片不可读，保留判定按剩余会话进行",
+            scan.issues.len()
+        ));
+    }
+    let details = project_threads(&scan.records);
+    let known = details
+        .iter()
+        .map(|detail| detail.thread.thread_id.clone())
+        .collect::<HashSet<_>>();
+    Ok(details
+        .into_iter()
+        .map(|detail| {
+            let thread = detail.thread;
+            FamilyMember {
+                dangling_parent: thread
+                    .parent_thread_id
+                    .as_deref()
+                    .is_some_and(|parent| !known.contains(parent)),
+                thread_id: thread.thread_id,
+                parent_thread_id: thread.parent_thread_id,
+                updated_at_ms: thread.updated_at_ms,
+            }
+        })
+        .collect())
 }
 
 /// 当前 `--continue` 指向的会话：它所在的家族永不过期。
@@ -81,25 +147,20 @@ fn current_resume_session(root: &Path) -> Option<String> {
 
 /// 按家族判定过期：族内全部成员都早于截止时间，且不含受保护会话与当前家族。
 fn stale_thread_family_ids(
-    threads: &[ThreadDetail],
+    sessions: &[FamilyMember],
     current_session_id: Option<&str>,
     protected_session_ids: &HashSet<String>,
     cutoff_ms: u64,
 ) -> Vec<String> {
-    let parents = threads
+    let parents = sessions
         .iter()
-        .map(|detail| {
-            (
-                detail.thread.thread_id.clone(),
-                detail.thread.parent_thread_id.clone(),
-            )
-        })
+        .map(|session| (session.thread_id.clone(), session.parent_thread_id.clone()))
         .collect::<HashMap<_, _>>();
     let protected_root = current_session_id.map(|session_id| session_root(session_id, &parents));
-    let mut families = HashMap::<String, Vec<&ThreadDetail>>::new();
-    for detail in threads {
-        let root = session_root(&detail.thread.thread_id, &parents);
-        families.entry(root).or_default().push(detail);
+    let mut families = HashMap::<String, Vec<&FamilyMember>>::new();
+    for session in sessions {
+        let root = session_root(&session.thread_id, &parents);
+        families.entry(root).or_default().push(session);
     }
     let mut stale_ids = families
         .into_iter()
@@ -107,16 +168,13 @@ fn stale_thread_family_ids(
             protected_root.as_deref() != Some(root.as_str())
                 && !members
                     .iter()
-                    .any(|detail| protected_session_ids.contains(&detail.thread.thread_id))
+                    .any(|member| protected_session_ids.contains(&member.thread_id))
+                && !members.iter().any(|member| member.dangling_parent)
                 && members
                     .iter()
-                    .all(|detail| detail.thread.updated_at_ms < cutoff_ms)
+                    .all(|member| member.updated_at_ms < cutoff_ms)
         })
-        .flat_map(|(_, members)| {
-            members
-                .into_iter()
-                .map(|detail| detail.thread.thread_id.clone())
-        })
+        .flat_map(|(_, members)| members.into_iter().map(|member| member.thread_id.clone()))
         .collect::<Vec<_>>();
     stale_ids.sort();
     stale_ids

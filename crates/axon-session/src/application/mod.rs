@@ -16,6 +16,7 @@ pub use activity_service::{
 };
 pub use goal_command_service::{GoalCommandService, GoalCommandServiceError, GoalExecutionSpec};
 pub use goal_query_service::{GoalQueryService, GoalQueryServiceError};
+pub use projection::project_threads;
 pub use session_identity::{interaction_session_id, session_id_for_route};
 pub use session_query_service::{SessionQueryService, SessionSnapshot};
 mod thread_maintenance;

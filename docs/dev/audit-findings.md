@@ -1,62 +1,62 @@
-# 交叉审计问题清单（第 16 轮）
+# 交叉审计问题清单（第 26 轮：rollout 退役专项）
 
-> 两份独立只读审计的合并结果：性能与闭环（A/B/C 组）、稳定性与一致性（S 组）。交集项只保留一条并注明双编号。
->
-> 修复顺序按严重度，不按编号。每条都给出复核命令；修完一组后在 `docs/dev/wbs-acceptance.md` 更新对应条目并补证据，**不得**在证据缺失时标已完成。
+> 本轮范围：`edb5f34fd..671cc9894`（rollout 整删）。两个独立只读审计各出一份：
+> 性能（P 组）与闭环/稳定性（S 组）。修复提交见文末；未修项如实留在这里，不标已完成。
 
-## P0 阻断项（不修不能装机）
+## 审计结论（修复前）
 
-| 编号 | 位置 | 问题 | 复核 | 修法 |
-| --- | --- | --- | --- | --- |
-| P0-1（S-02/A-1）**已修** `4eb48516c` | `work_item_archive.rs:31`、`interaction_repository.rs:418/460` | 归档按 `execution_id` 定位，交互路径传 `interaction_id`，两值永不相等 → 归档恒空操作，终态永不回收 | `git grep -n "archive_work_item" -- crates` | 先 `SELECT execution_id FROM work_items WHERE inbox_id=?` 再归档；或让归档函数按 `inbox_id` 分支。同时去掉 `release_work_item` 里的归档调用（那是回 queued） |
-| P0-2（A-2）**已修** `f28653c98` | `commit_repository.rs:143-157`，以及 `failure_repository.rs:49`、`action_repository.rs:141`、`goal_repository.rs:156/209` | turn 结算主路径只 UPDATE 状态，**从不归档**；其余终态写点同样缺失 | `git grep -n "archive_work_item" -- crates` | 收敛成单一入口 `settle_work_item(tx, work_id, terminal_kind)`，所有终态写点在同一事务里调用。实际落地：新增 `archive_settled_work_item`（只搬 completed/failed/cancelled/dead_letter）作为唯一归档出口，补齐 9 处写点；补偿扫描改读 `work_items_all` |
-| P0-3（S-01）**已修** `3df37831b` | `append.rs:172-215`（`open_at`） | 生产写入不扫 torn 尾、不截断；崩溃后新帧写在撕裂字节之后，读侧扫到 torn 即停，之后历史永久静默不可见 | `git grep -n "append_once\|\.writer()" -- crates` | `open_at` 复用 `read_snapshot` 的截断逻辑（先截断 + `sync_data`）；补「撕裂尾后再追加再读」契约用例。实际落地：尾部 1 MiB 自检 + 全量帧扫描兜底，两条契约用例 |
-| P0-4（A-3）**已修** `f8c56a305` | `runtime_cleanup_families.rs:277-286` | 会话族删除前的活跃判定不过滤状态，任何跑过一轮的会话都命中 → 清理永远 `Err`，会话族一套都删不掉 | `git grep -n "work_items WHERE session_id IN" -- crates/axon-cli` | 判定加 `AND status IN ('queued','waiting','running')`，与积压口径一致。实际落地：复用 `EXECUTION_ACTIVE_STATUSES`，并在同一事务内回收残留终态行以满足 `work_items.session_id` 外键 |
-| P0-5（S-09/A-4）**已修** `68dfea535` | `runtime_cleanup.rs:336-341`、`411-426` | 清理链在控制面库执行 `SELECT ... FROM session_events`，该表已删 → dry-run 每次必失败，且被 `?` 上抛 | `git grep -n "session_events" -- crates/axon-cli/src/cron_commands` | 删除 `count_runtime_session_event_overlap` 与 `session_event_expiry_predicate` |
-| P0-6（A-5）**已修** `022772c48` | `workbench_http_session_readings.rs:157-170` | SQL 引用 `inbox.status`（该列已随状态机删除），prepare 即失败并被 `.ok()` 吞掉 → 桌面「累计耗时」恒 null | 对照 `schema.rs` 的 `inbox` DDL | 改读 `session_metrics.total_active_ms`；`.ok()` 读数补错误日志 |
-| P0-7（S-07）**已修** `f28653c98` | `work_item_claim.rs:45-46` | turn 工作项 `session_id` 写死 NULL → 取消、清理、会话保护谓词全部漏判 | `git grep -n "UPDATE work_items" -- crates` | 建工作项时写入 `interaction_session_id()` 的结果。实际落地：INSERT 里用 `inbox` 与 `sessions` 的联合子查询取值（外键安全、未绑定 Workspace 折回 NULL） |
+- 性能：3 个 P0。用量投影 cron 每 60 秒全量扫描全部 thread 并逐行反序列化；子代理名册每
+  10 秒全量扫描；每轮收口的中途落盘把原来的 SQLite 行 upsert 换成「3 遍整文件读 + 1 次追加」，
+  单轮收尾约 44 遍全文件读，整体 O(T²)。
+- 闭环：1 个 P0。「中途落盘」按位置切片追加，而历史 item 的生成顺序不是只追加尾部
+  （工具回执插在调用之间、reasoning 排在最后）；运行中崩溃或本轮失败后没有任何路径重写
+  这一轮，错位历史会永久留在模型可见历史里，后续每一轮都带着重复 `tool_call_id` / 缺失
+  工具结果发请求。
 
-## P1 稳定性与一致性
+## P0（已全部修复）
+
+| 编号 | 位置（修复前） | 问题 | 修法 |
+| --- | --- | --- | --- |
+| P0-1（S 组） | `run_thread_store.rs` Active 分支、`projection.rs::apply_turn_items_appended` | 按位置切片追加 → 回执错位、丢结果、重复 id，且失败/崩溃路径无终态覆盖 | 历史 item 增加稳定身份 `(类别, part_id)`；投影改为 upsert，写入侧只追加「新身份或内容已变」的 item；补 `partial_write_with_settled_receipts_keeps_history_consistent` 回归用例 |
+| P0-2（P 组） | `usage_statistics/projection.rs::read_thread_usage_rows` | 每 60 秒 `scan_threads` 全量反序列化全部轮次，水位在解析之后才生效 | 新增 thread 派生索引（`thread-index.v1.jsonl`，append 时写补丁、可 `rebuild`）；投影先用索引判断「哪些会话在上次水位之后写过」，只读这些会话的头部分片 + 尾部分片；索引缺失才回退整表投影 |
+| P0-3（P 组） | `run_thread_partial.rs`、`run_thread_store.rs::mirror_existing_turn` | 每次 provider 迭代 3 遍全文件读（mirror 一次 + append_turn_items 一次 + 激活扫描） | 新增 `read_thread_tail`（有字节预算，可分片回溯）；现状 item 从尾部投影得到，尾部不覆盖本轮起跑时才回退整读；追加走 `append_turn_items_at_sequence`（复用激活快照，不再二次整读） |
+| P0-4（P 组） | `run_thread_children.rs::child_session_rows` | 名册每次轮询 `list_thread_page` → `read_all` 全量投影 | 名册改读派生索引（父会话 / 来源 / 标题 / 模型 / 末轮状态与时间），索引缺失才回退整表投影 |
+
+## P1（已修）
 
 | 编号 | 位置 | 问题 | 修法 |
 | --- | --- | --- | --- |
-| P1-1（S-03/B-5）**已修** `bc7475593` | `event_log_repository.rs`、`runtime_repository.rs:422` | 无「水位 vs 日志尾」对账，`session_recovered` 无生产者 | 启动时对账：日志尾大于水位则回退水位并写 `session_recovered` |
-| P1-2（S-04）**已修** `d09b3f4a6` | `commit_repository.rs:203-212` | 两段式只有正向，文件写失败时控制面已提交且无补偿 | 文件写失败走补偿事务回滚水位与状态 |
-| P1-3（S-05/B-6）**已修** `bc7475593` | `event_log_repository.rs:107-149`、`read.rs:40-60` | 读侧不过滤 generation；`read_snapshot` 只在帧内校验序号，跨帧不连续无人拒绝 | 读侧按当前 generation 过滤；跨帧维护单调 `expected` |
-| P1-4（S-08）**已修** `256f732c0` | `runtime_event_archive.rs:19-25` | 高水位算成 16 GiB（上限 4 GiB 的 4 倍），且淘汰不看会话是否活跃 | 改为 `MAX*8/10`；淘汰前排除活跃会话 |
-| P1-5（S-06/C-8）**已修** `8d22a7b2c` | `event_log_repository.rs:288` | `let _ =` 吞 `session_metrics` 投影错误，且无重建入口 | 失败上报；补 `rebuild_session_metrics(session)` 与测试 |
-| P1-6（S-10）**已修** `4e871981e` | `execution_worker_settlement.rs:168`、`execution_worker.rs:430/435` | 账本事件写入失败被 `let _ =` 吞 | 失败上报并写补偿事件 |
-| P1-7（S-11）**已修** `e9883a436` | `workspace_files_tests.rs:130-151` | 单测直接写真实用户主目录 | 注入假 home（`test_temp_root`）或只测纯函数 |
-| P1-8（B-1）**已修** `b61804187` | `schema.rs`（`inbox`） | 缺 `(session_id, received_at_ms DESC, inbox_id DESC)` 索引；实测会话列表 71.3 ms / 历史页 31.1 ms，门槛 30 ms | 加索引并递增 control 版本；滤镜下推 SQL。实测：200 会话×20 万入站事实，有索引 1 ms / 无索引 10452 ms |
-| P1-9（B-2）**已修** `f939652e1` | `health_repository.rs:12-21` | `/system/status` 每请求做三表全扫 + `work_items_all` 全量 GROUP BY（实测 35.4 ms） | 改有界索引查询或投影列 |
-| P1-10（B-3）**已修** `f869b7cb3` | `read.rs:23-27`、`event_log_repository.rs:127-149` | 每次读都把整个日志读入内存并全量解压，分页 replay 每页重做 | 加 `.idx` 或惰性解压；分页复用 reader |
-| P1-11（B-4）**已修** `8d22a7b2c` | `event_log_repository.rs:184-188/289` | `origin_channel`/`origin_kind` 硬编码，`channel_mix_json` 恒为 internal | 从 `inbox.source_channel` 解析后传入 |
-| P1-12（B-10）**已修** `b1f6cfe6d` | `docs/skills/operate-axon/references/*.md` | 安装态 Skill 仍写 `/api/v1/lanes/<laneId>/...`，实际路由是 `/api/v1/sessions/<id>/...` | 同步路由与 `sessionId` 命名，核验安装态副本 SHA-256 |
-| P1-13（B-8）**已修** `f131bc365` | `tools/verify_performance.py` | 已加四项硬上限，但读数仍是人工登记，未接自动测量 | 事件写 p99 用 `cargo test --ignored` 产出；首屏用列表 SQL 计时；体积已自动 |
+| P1-1（S 组） | `run_provider_orchestration.rs`、`run_thread_store.rs::prepare_session_from_lookup` | 崩溃修复晚于模型历史装配：恢复后第一条请求必带悬空 tool_call | 恢复流程先读激活快照，存在 active turn 就先 `repair_open_turn`，再装配历史 |
+| P1-2（S 组） | `prepare_session_from_lookup` | 损坏 thread 被当成「没有会话」静默返回 | 区分「分片不存在」与「读取失败」：前者返回无会话，后者显式报错 |
+| P1-3（S 组） | `latest_thread_id` | `--continue` 兜底取「最近未归档 thread」，可能续到子代理/内务会话 | 兜底排除 `parent_thread_id` 非空的 thread；权威目标仍是恢复指针 |
+| P1-4（S 组） | `axon-jsonl::store::rewrite_unlocked` | 换窗 checkpoint 先删全部分片再写一条，崩溃即整会话归零 | 先写临时分片 → rename 就位 → 再删旧分片；空内容仍走删除分支 |
+| P1-5（P 组） | `usage_statistics/service.rs::newest_thread_event_ms` | 每次 usage 请求 stat 全部 thread 分片（含 `.lock`） | 优先读派生索引的最新更新时间；索引缺失时才扫目录且只认 `.jsonl` |
+| P1-6（P 组） | `run_thread_tail.rs` 四个热查询 | `recent_turn_facts`、`turn_sequence`、`latest_turn_usage`、`previous_reflection_notice` 每次整读 thread | 统一走尾部视图，尾部不足才回退整读 |
+| P1-7（S 组） | `session_family_cleanup.rs::family_members` | 保留判定整表投影；`scan_threads` 丢弃损坏分片且不上报，父节点缺失会让子会话脱离家族被误删 | 改读派生索引；对「父 id 存在但投影里没有父」的会话整族保护；回退投影时把损坏分片数写进告警 |
 
-## P2 写放大与原则残留
+## P2（已记录，暂不修）
 
-| 编号 | 位置 | 问题 |
-| --- | --- | --- |
-| P2-1（S-12/C-1）**已修** `d4899c33a` | `commit_repository.rs:174-190` | 每轮写 `session_checkpoints` 但全仓无读取；应删除该表与 INSERT |
-| P2-2（C-2） | `interaction_turn_event_sink.rs:283-285` | `turn_metrics` 单独一批写入，多一次事务与 fsync |
-| P2-3（C-3）**已修** `5c664a1e0` | `event_log_repository.rs:255-271` | `write_records` 每条一次 `append_once`，N 条即 N 次 fsync |
-| P2-4（C-4） | `schema.rs:303-376` | `goal_result_reads` 未并入 `goal_results`；`work_items` 主键仍叫 `execution_id` |
-| P2-5（C-5）**已修** `d7bb33a56` | `schema.rs:122-127` | 版本相等时仍执行 DDL 补表 = 补表迁移通道，与「不迁移」冲突；已有测试把它固化（`legacy_database_without_continuation_table_gains_it_on_open`） |
-| P2-6（C-6）**已修** `1a0d9c751` | `sessions_http_adapter.rs:41` | 每请求新建连接池，未复用 `RUNTIME_STORES`；滤镜在 LIMIT 之后生效 |
-| P2-7（C-7）**已修** `d7319963c` | `lock.rs:19-31` | 写锁阻塞无超时，卡死会让该会话追加无限阻塞 |
-| P2-8（C-9） | `workbench_http_session_readings.rs:1-10` | 注释仍把 rollout 当用量账本；`rollout_current_session` 与 `resume_pointer` 双存储 |
-| P2-9（S-13）**已修** `b967527ba` | `runtime_cleanup_families.rs:287-308` | 会话族清理不删 `session_metrics`/`inbox`/`resume_pointer`，留孤儿 |
-| P2-10（S-15）**已修** `d7bb33a56` | `schema.rs:380-383` | `COALESCE(session_id, goal_id)` 对 turn 项为 NULL，去重索引失效 |
-| P2-11（S-16） | `read.rs:24/43-57` | 两套序号权威并存；`read_snapshot` 全量入内存 |
-| P2-12（A-2/B-7） | rollout 读取点 30+ 处 | W2-12 未完成，用量/模型/子会话/治理仍读 rollout；读点需逐点登记迁移目标 |
+| 编号 | 位置 | 问题 | 处置 |
+| --- | --- | --- | --- |
+| P2-1（S 组） | `run_thread_queries.rs::patch_turn_artifacts` | 治理产物回写仍整轮重写（含全部 history items），大轮次二次膨胀，且触到单条 64 MiB 上限时只留告警 | 计划改为独立的轮次注解事件；当前有整轮终态替换兜底，未列入本轮 |
+| P2-2（P 组） | `axon-jsonl::store` append 路径 | `repair_tail` 与 `append_target` 各列一次整个 `threads/` 目录，代价随全局分片数增长 | 计划改用激活快照里的目标分片号；属底层写入优化，单独一轮 |
+| P2-3（P 组） | `thread_service::compact_thread` | checkpoint 写入完整 detail，压缩后文件不缩小；超 64 MiB 单条上限的会话无法压缩 | 计划在 checkpoint 内只保留窗口内轮次；需与窗口语义一起改 |
+| P2-4（P 组） | `workbench_http_session_readings.rs` 注释 | 文档注释仍写「一次 sessions 单行查 + 一次 rollout_turns 最新行查」，与现状不符 | 注释口径修正随 P2-1 一起做 |
+| P2-5（S 组） | `usage_statistics` 活跃事实复核 | 复核集合上限 256，且 `abandoned` 不可逆 | 已记录；需要有终态的会话复活语义，单独一轮 |
+| P2-6（S 组） | `cleanup_usage_data` | 会话被保留策略删除后用量事实保留 90 天，与「会话级事实随会话走」口径冲突 | 已记录；需产品口径裁决后改 |
 
-## 台账改判（已完成部分）
+## 本轮复核命令
 
-W1-7（`recover.rs` 不存在）、W1-9（`tests/crash.rs` 不存在）→ **未完成**；W1-1（依赖不符）、W1-6（无 `scan_reverse`）、W1-8（无并发用例）、W1-10（7 条非 20 条）→ **待补证据**；W3-4（归档恒空）→ **未完成**。
+```text
+cargo fmt --all --check
+cargo check --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+pwsh -File tools/verify-architecture.ps1
+pwsh -File tools/verify-docs.ps1
+```
 
-仍需改判：W2-5（无文件写失败补偿）、W2-8（`job_started` 无生产者）、W3-5（三套 claim 只合两套、无并发用例）、W3-6（无重建实现）、W2-12（指针未被 `--continue` 消费）。W2-9（`session_events` 直连 SQL 仍在清理链）已随 P0-5 合上。
-
-## 结论
-
-结构方向成立（事件面一批一次 fsync、控制面两段式、版本不符拒绝打开），但**闭环没闭合**：终态搬不进历史表、清理被残留行挡住、清理 SQL 打在已删表上。在这些修复前装机只能验「界面能开」，验不了「存储重构成立」。
+补的回归用例：`run_thread_store_tests::partial_write_with_settled_receipts_keeps_history_consistent`、
+`run_thread_store_tests::partial_updates_append_only_new_history_items`（改为身份口径）、
+`session_family_cleanup_tests::current_resume_session_family_is_protected`、
+`run_thread_children_tests`（六条名册用例）、`usage_cli_tests`（水位与原地更新）。

@@ -9,6 +9,8 @@ use super::{
     repository::{UsageRepository, UsageSourceRow},
 };
 const ACTIVE_FACT_RECONCILIATION_LIMIT: usize = 256;
+/// 增量读取单个会话时尾部占用的字节预算。
+const CHANGED_THREAD_TAIL_BUDGET_BYTES: u64 = 16 * 1024 * 1024;
 
 pub(crate) fn run_usage_rollup_once(config_path: &Path) -> Result<UsageProjectionReport, String> {
     let axon_root = crate::runtime_paths::runtime_axon_root_path_static(config_path)
@@ -47,17 +49,43 @@ pub(crate) fn run_usage_rollup_once(config_path: &Path) -> Result<UsageProjectio
 /// 水位是「上次投影到的记录时间（毫秒）」：取 `>=` 而不是 `>`，同毫秒的多轮宁可重
 /// 投影一次（事实按 `(sessionId, assistantPartId)` 幂等覆盖），也不能漏掉一轮。
 /// 活动事实的键同时参与对账，中途落盘的同一轮在终态更新后必定重读。
+///
+/// 增量口径：先用 thread 派生索引判断「哪些会话在上次投影之后写过」，只读这些会话的
+/// 头部分片 + 尾部分片；索引缺失（旧库首次运行）才回退整表投影。
 fn read_thread_usage_rows(
     axon_root: &Path,
     watermark_ms: u64,
     reconcile_keys: &[(String, String)],
 ) -> Result<Vec<UsageSourceRow>, String> {
-    let details = ThreadService::new(JsonlThreadEventStore)
-        .scan_threads(axon_root)
-        .map_err(|error| format!("扫描 thread 事件面失败：{error}"))?;
+    let store = JsonlThreadEventStore;
     let reconcile = reconcile_keys
         .iter()
         .collect::<std::collections::HashSet<_>>();
+    let details = match store
+        .read_thread_index(axon_root)
+        .map_err(|error| format!("读取 thread 索引失败：{error}"))?
+    {
+        Some(snapshot) => {
+            let changed = snapshot
+                .entries
+                .into_iter()
+                .filter(|entry| {
+                    entry.updated_at_ms >= watermark_ms
+                        || reconcile
+                            .iter()
+                            .any(|(session_id, _)| session_id == &entry.thread_id)
+                })
+                .map(|entry| entry.thread_id)
+                .collect::<Vec<_>>();
+            if changed.is_empty() {
+                return Ok(Vec::new());
+            }
+            read_changed_threads(axon_root, &changed, watermark_ms)?
+        }
+        None => ThreadService::new(JsonlThreadEventStore)
+            .scan_threads(axon_root)
+            .map_err(|error| format!("扫描 thread 事件面失败：{error}"))?,
+    };
     let mut rows = Vec::new();
     for detail in &details {
         let thread = &detail.thread;
@@ -108,6 +136,42 @@ fn turn_metadata(
     token_usage_json: &Option<String>,
 ) -> Option<super::super::run_commands::run_thread_store::ThreadTurnMetadata> {
     serde_json::from_str(token_usage_json.as_deref()?).ok()
+}
+
+/// 增量读取「上次投影之后写过」的会话：只读头部分片（settings）与尾部分片（近期轮次）。
+///
+/// 尾部覆盖不足且水位早于尾部起点时，这部分轮次可能被漏掉，因此该会话回退整条读。
+fn read_changed_threads(
+    axon_root: &Path,
+    thread_ids: &[String],
+    watermark_ms: u64,
+) -> Result<Vec<axon_session::ThreadDetail>, String> {
+    let store = JsonlThreadEventStore;
+    let mut details = Vec::with_capacity(thread_ids.len());
+    for thread_id in thread_ids {
+        let head = store
+            .read_thread_head(axon_root, thread_id)
+            .map_err(|error| format!("读取 thread 头部失败：{error}"))?;
+        let tail = store
+            .read_thread_tail(axon_root, thread_id, CHANGED_THREAD_TAIL_BUDGET_BYTES)
+            .map_err(|error| format!("读取 thread 尾部失败：{error}"))?;
+        let tail_start_ms = tail.records.first().map(|record| record.recorded_at_ms);
+        let safe = tail.complete || tail_start_ms.is_some_and(|earliest| watermark_ms >= earliest);
+        if !safe {
+            details.push(
+                ThreadService::new(JsonlThreadEventStore)
+                    .read_thread(axon_root, thread_id)
+                    .map_err(|error| format!("读取 thread 失败：{error}"))?,
+            );
+            continue;
+        }
+        let mut records = head;
+        records.extend(tail.records);
+        records.sort_by_key(|record| record.sequence);
+        records.dedup_by_key(|record| record.sequence);
+        details.extend(axon_session::project_threads(&records));
+    }
+    Ok(details)
 }
 
 fn fact_from_source(

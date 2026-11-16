@@ -144,8 +144,7 @@ pub(super) fn thread_turn_metadata_from_record(record: &RunSessionRecord) -> Thr
     }
 }
 
-/// 读取 thread 投影；读不到时读作「没有」，只读接口不因此失败。
-
+/// 车道当前模型的权威事实：全部来自 thread settings 与最近一轮 metadata。
 pub(crate) struct SessionModelFacts {
     pub(crate) provider: String,
     pub(crate) model: String,

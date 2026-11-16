@@ -94,6 +94,7 @@ mod run_thread_history;
 mod run_thread_partial;
 pub(crate) mod run_thread_replay;
 pub(crate) mod run_thread_store;
+mod run_thread_tail;
 mod run_thread_title;
 mod run_tool_loop;
 mod run_tool_pool;
@@ -355,7 +356,7 @@ fn finish_completed_run(
 
     // 反思是轮后异步治理的产物：本轮治理尚未启动，能确定看到的只有上一次的结果。
     // 这条提示随 run 输出交给界面，用户在下一轮开头看到上一轮的记忆动作。
-    let memory_reflection_notice = run_thread_store::previous_reflection_notice(
+    let memory_reflection_notice = run_thread_tail::previous_reflection_notice_at_tail(
         config_path,
         &record.session_id,
         &record.assistant_part_id,

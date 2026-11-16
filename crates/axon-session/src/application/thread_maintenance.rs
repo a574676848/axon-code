@@ -56,3 +56,26 @@ pub struct AnnotateChildOriginCommand {
     /// 来源标识：用户可见的委派还是运行侧内务。
     pub origin: String,
 }
+impl<S> ThreadService<S>
+where
+    S: ThreadEventStore,
+{
+    /// 追加 active turn 的增量历史 item；调用方已持有激活快照时用它省掉一次整读。
+    pub fn append_turn_items_at_sequence(
+        &self,
+        root: &Path,
+        thread_id: &str,
+        turn_id: String,
+        items: Vec<crate::domain::ThreadHistoryItem>,
+        recorded_at_ms: u64,
+        next_sequence: u64,
+    ) -> Result<(), String> {
+        self.append_at_sequence(
+            root,
+            thread_id,
+            next_sequence,
+            recorded_at_ms,
+            ThreadEvent::TurnItemsAppended { turn_id, items },
+        )
+    }
+}

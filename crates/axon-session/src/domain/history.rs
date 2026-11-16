@@ -218,6 +218,23 @@ impl ThreadHistoryItem {
         }
     }
 
+    /// 返回轮次内可增量合并的稳定身份：`(item 类别, part_id)`。
+    ///
+    /// 中途落盘按这个身份做 upsert：同一类别同一 part 的 item 后来再次出现时整体替换
+    /// （工具调用从 InProgress 变成 Completed 就是这种情形），新身份则追加到末尾。
+    /// 类别必须参与身份，因为工具调用与它的结果共用同一个 part。
+    #[must_use]
+    pub fn identity(&self) -> (&'static str, &str) {
+        match self {
+            Self::UserMessage { part_id, .. } => ("user", part_id),
+            Self::AssistantMessage { part_id, .. } => ("assistant", part_id),
+            Self::Reasoning { part_id, .. } => ("reasoning", part_id),
+            Self::ToolCall { part_id, .. } => ("toolCall", part_id),
+            Self::ToolResult { part_id, .. } => ("toolResult", part_id),
+            Self::InjectedContext { part_id, .. } => ("injected", part_id),
+        }
+    }
+
     /// 返回 provider turn 批次身份；文本 item 没有工具批次。
     #[must_use]
     pub const fn provider_turn_id(&self) -> Option<u64> {

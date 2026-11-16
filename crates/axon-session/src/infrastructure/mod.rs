@@ -59,6 +59,8 @@ pub fn session_store_path(root: &Path) -> PathBuf {
     root.join(AXON_RUNTIME_DATA_DIR).join(SESSION_STORE_DIR)
 }
 
+mod thread_index;
+mod thread_tail;
 pub use jsonl_store::{
     JsonlThreadEventStore, THREAD_EVENTS_FILE, ThreadEventReadIssue, ThreadEventScan,
 };
@@ -71,3 +73,5 @@ pub use sqlite_runtime_store::{
     runtime_repository::RuntimeRepository, schedule_repository::ScheduleRepository,
     transaction::TransactionBoundary,
 };
+pub use thread_index::{THREAD_INDEX_FILE, ThreadIndexEntry, ThreadIndexSnapshot};
+pub use thread_tail::ThreadTailRead;

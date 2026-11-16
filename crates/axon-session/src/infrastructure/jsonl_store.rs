@@ -21,7 +21,7 @@ const MAX_LEGACY_THREAD_PREFIX_LENGTH: usize = 96;
 /// thread 事件存储目录名。
 pub const THREAD_EVENTS_FILE: &str = "threads";
 /// 统一 JSONL shard 存储。
-const SHARD_STORE: ShardedJsonlStore = ShardedJsonlStore::new();
+pub(crate) const SHARD_STORE: ShardedJsonlStore = ShardedJsonlStore::new();
 /// thread 使用的 shard 大小上限。
 #[cfg(test)]
 const THREAD_SHARD_MAX_BYTES: u64 = DEFAULT_SHARD_MAX_BYTES;
@@ -48,9 +48,7 @@ pub struct ThreadEventScan {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct JsonlThreadEventStore;
 
-/// 反向扫描启动激活状态时的最大物理读取量。
 const ACTIVATION_SCAN_BUDGET_BYTES: u64 = 64 * 1024 * 1024;
-/// 反向扫描时单次向前读取的字节数。
 const ACTIVATION_SCAN_CHUNK_BYTES: usize = 64 * 1024;
 
 impl JsonlThreadEventStore {
@@ -336,7 +334,9 @@ impl ThreadEventStore for JsonlThreadEventStore {
                 } else {
                     "无法写入 thread 事件".to_owned()
                 }
-            })
+            })?;
+        super::thread_index::append_index_patch(root, record);
+        Ok(())
     }
 
     fn append_at_expected_sequence(
@@ -362,7 +362,9 @@ impl ThreadEventStore for JsonlThreadEventStore {
                 }
                 Ok(((), vec![line.clone()]))
             })
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        super::thread_index::append_index_patch(root, record);
+        Ok(())
     }
 
     fn read_all(&self, root: &Path) -> Result<Vec<ThreadEventRecord>, String> {
@@ -408,14 +410,6 @@ impl ThreadEventStore for JsonlThreadEventStore {
             })
     }
 
-    fn read_thread(&self, root: &Path, thread_id: &str) -> Result<Vec<ThreadEventRecord>, String> {
-        let mut records = Vec::new();
-        for path in Self::thread_shard_paths(root, thread_id)? {
-            records.extend(Self::read_file(&path)?);
-        }
-        Ok(records)
-    }
-
     fn read_thread_activation(
         &self,
         root: &Path,
@@ -435,11 +429,9 @@ impl ThreadEventStore for JsonlThreadEventStore {
                 None => break,
             }
         }
-        let mut records = Vec::new();
-        for path in Self::thread_shard_paths(root, thread_id)? {
-            records.extend(Self::read_file(&path)?);
-        }
-        Ok(ThreadActivationSnapshot::from_records(&records))
+        Ok(ThreadActivationSnapshot::from_records(
+            &Self::read_thread_full(root, thread_id)?,
+        ))
     }
 }
 
