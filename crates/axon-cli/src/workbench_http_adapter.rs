@@ -154,7 +154,12 @@ static RUNTIME_STORES: LazyLock<Mutex<HashMap<PathBuf, SqliteRuntimeStore>>> =
 
 /// 运行态存储句柄；内部为进程内共享连接池，克隆代价极低。
 pub(crate) fn runtime_store(axon_root: &Path) -> SqliteRuntimeStore {
-    let root = axon_root.join(AXON_RUNTIME_DATA_DIR);
+    runtime_store_for_data_dir(&axon_root.join(AXON_RUNTIME_DATA_DIR))
+}
+
+/// 已解析到运行态数据目录的句柄缓存入口：适配器持的就是数据目录。
+pub(crate) fn runtime_store_for_data_dir(data_dir: &Path) -> SqliteRuntimeStore {
+    let root = data_dir.to_path_buf();
     let mut stores = RUNTIME_STORES
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);

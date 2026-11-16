@@ -18,6 +18,9 @@ use serde_json::{Value, json};
 const SESSIONS_PATH: &str = "/api/v1/sessions";
 /// 单次返回的会话上限：运行态会话数量由用户实际使用决定，这里只防止异常放大。
 const SESSION_LIST_LIMIT: i64 = 500;
+/// 会话清单的扫描上限：工作区过滤在内存里做，扫描窗口必须明显大于单页上限，
+/// 否则先截断再过滤会让「该工作区有会话」在长列表尾部时返回空页。
+const SESSION_SCAN_LIMIT: i64 = 4_096;
 /// TTFT 直方图桶上界（毫秒），与 `session_metrics` 的投影口径保持一致。
 const TTFT_BOUNDS_MS: [u64; 15] = [
     1, 2, 5, 10, 20, 50, 100, 200, 500, 1_000, 2_000, 5_000, 10_000, 30_000, 60_000,
@@ -38,7 +41,8 @@ impl SessionsHttpAdapter {
 
     fn list(&self, query: Option<&str>) -> Value {
         let filters = QueryFilters::parse(query);
-        let store = SqliteRuntimeStore::from_root(&self.runtime_root);
+        // 复用进程内运行态句柄：每个请求都 `from_root` 等于每次重开 SQLite 并重建连接池。
+        let store = crate::workbench_http_adapter::runtime_store_for_data_dir(&self.runtime_root);
         let rows = match read_session_rows(&store) {
             Ok(rows) => rows,
             // 库还没建出来、被锁或没有表：返回空列表而不是 500，调用方据此展示空态。
@@ -333,7 +337,7 @@ fn read_sessions(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<Sess
          ORDER BY s.pinned DESC, s.last_activity_at_ms DESC, s.session_id ASC
          LIMIT ?1",
     )?;
-    let rows = statement.query_map([SESSION_LIST_LIMIT], |row| {
+    let rows = statement.query_map([SESSION_SCAN_LIMIT], |row| {
         let cwd: String = row.get(1)?;
         let stored_workspace: Option<String> = row.get(5)?;
         let stored_title: Option<String> = row.get(6)?;
