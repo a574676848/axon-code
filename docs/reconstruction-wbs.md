@@ -101,13 +101,13 @@
 | # | 任务 | 交付物 | 依赖 | 验收 | 估时 |
 | --- | --- | --- | --- | --- | --- |
 | W4-1 | `GET /api/v1/sessions` 接口 | HTTP adapter | 里程碑 C | 返回 `sessionId`/`title`/`turnCount`/`totalActiveMs`/`lastTtftMs`/`openJobCount` | 0.6 |
-| W4-2 | 协议字段 `laneId` → `sessionId` | `axon-protocol` + `frames.ts` | W4-1 | 前后端同批改；网关契约测试绿 | 1.0 |
+| W4-2 | 协议字段 `laneId` → `sessionId` | `axon-protocol` + `frames.ts` | W4-1 | 前后端同批改；网关契约测试绿 | 1.0（**延后**：纯命名重构，Rust 与 TS 合计约 840 处引用，零行为收益；验收矩阵不检查字段名，先做 D/T/C 三组能力项） |
 | W4-3 | 桌面左侧菜单接 `sessions` | desktop workspace 模块 | W4-2 | 点击切换会话，置顶/归档/排序生效 | 0.8 |
 | W4-4 | TUI `/sessions` 弹窗 | `command_palette` + handler | W4-1 | 上下键选择、Enter 进入、`--all` 含归档 | 0.7 |
 | W4-5 | `/new` 与 `/reset` 拆分 | `commands.rs` + handler | W4-2 | 前者换 `session_id`，后者只换 `run_generation` | 0.4 |
 | W4-6 | CLI `run --session` | `run_commands` 参数 | W4-2 | 单次指定；不存在则报错不新建 | 0.5 |
 | W4-7 | CLI `axon sessions` 提层 | `session_commands/mod.rs` | W4-6 | `debug session` 子命令全部可用 | 0.4 |
-| W4-8 | 删除 `session_lane.rs` | 模块移除 | W4-2 | 全仓无 `lane_id` 残留 | 0.3 |
+| W4-8 | 删除 `session_lane.rs` | 模块移除 | W4-2 | 全仓无 `lane_id` 残留 | 0.3（**延后**：与 W4-2 同一批命名重构；单独做会让 `lane_id` 与 `session_id` 并存更混乱） |
 | W4-9 | 跨端同步验证（X1-X7） | CDP + TUI 快照 | W4-3 到 W4-7 | 七项跨端场景全部有 `OK:` 证据 | 0.3 |
 
 **里程碑 D**：桌面、TUI、CLI 三端能进入同一会话，一端在聊另一端能看到。
@@ -142,6 +142,10 @@
 **里程碑 F**：`axon --version` 输出 0.0.1，安装态真机验收矩阵通过。
 
 ---
+
+## 延后项
+
+本轮不复做、但已登记理由与补做前置的项，见 `docs/storage-architecture.md` §12.5：`rollout.sqlite3` 退役、W3-4 在途/终态拆表、W3-5 统一 claim、W4-2/W4-8 命名重构。它们不阻塞 v0.0.1 的验收矩阵。
 
 ## 依赖关系
 

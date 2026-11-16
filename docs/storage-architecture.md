@@ -315,7 +315,7 @@ SQLite 没有跨库事务，所以拆库不能按业务随意切，只能按**�
 
 | 重叠组 | 现状 | 目标 |
 | --- | --- | --- |
-| 会话正文 | `session_events`（帧级）+ `rollout_turns`（turn 级）+ `threads/*.jsonl`（模型可见历史） | 两份：会话事件文件 + thread 文件。`rollout.sqlite3` 删除，turn 正文由事件日志的 `turn` 记录派生；用量投影器改为只读事件日志（原依赖见 `docs/usage-statistics.md:98`） |
+| 会话正文 | `session_events`（帧级）+ `rollout_turns`（turn 级）+ `threads/*.jsonl`（模型可见历史） | 两份：会话事件文件 + thread 文件。`rollout.sqlite3` **延后退役**：它是 `axon run` 恢复模型可见历史窗口的唯一来源（`run_thread_store` 的 `load_rollout_history_window`），改用事件日志重建会直接改动模型输入，必须独立一轮改造并配专门的对话回归验证，见 §延后项；用量投影器已改为只读事件日志 |
 | 事件流 | `session_events`（单会话叙述）+ `jarvis_events`（跨会话审计） | 职责分离：前者进文件，后者进 `control.sqlite3` |
 | 检查点 | `session_checkpoints` 表 + `sessions.last_checkpoint_seq` 列 | 事件 `kind = checkpoint` + 一列水位 |
 | 已读标记 | `jarvis_result_reads` 独立表 | 并入 `goal_results` 两列 |
@@ -1487,7 +1487,7 @@ pwsh -File scripts/install-from-source.ps1 -Components all
 | B1 | `axon --version` | 输出 0.0.1 |
 | B2 | `Get-Command axon` | 解析到安装根，不是 cargo bin |
 | B3 | `axon doctor` | 通过 |
-| B4 | `data/` 布局 | 只有新布局，无 `runtime.sqlite3`、`rollout.sqlite3` |
+| B4 | `data/` 布局 | 无 `runtime.sqlite3`；`control.sqlite3` 与 `outbox.sqlite3` 就位；`rollout.sqlite3` 的退役见 §4.6 延后项 |
 | B5 | 单回合写入 | `data/events/<session>/session.v1.jsonl.zstd` 生成、可解压、记录数与水位一致 |
 | B6 | daemon 重启 3 次 | 续租不报 `database is locked` |
 | B7 | 24 小时运行 | `control.sqlite3` 稳定在 50 MB 以内 |
@@ -1545,6 +1545,20 @@ pwsh -File scripts/install-from-source.ps1 -Components all
 | X7 | 同一会话跨渠道续聊 | 桌面先聊两轮后，TUI 载入同一会话再聊一轮；历史里三轮分别标 desktop / desktop / tui，`channel_mix_json` 为 `{"desktop":{"turns":2},"tui":{"turns":1}}` |
 
 记录方式：每条场景留 CDP `OK:` 行或 TUI 快照；未取得真机证据的条目如实登记"未真机验证"，不得用测试覆盖替代。
+
+### 12.5 本轮不复做的项（延后清单）
+
+以下四项都有明确收益，但要么有真实的回归风险，要么对验收矩阵不可见。它们不阻塞 v0.0.1，登记在此避免被当成已完成。
+
+| 项 | 为什么延后 | 补的时候必须带什么 |
+| --- | --- | --- |
+| `rollout.sqlite3` 退役 | 它是 `axon run` 恢复模型可见历史窗口的唯一来源；改用事件日志重建会直接改动模型输入，出错时表现为「对话突然失忆」，只有真机对话能发现 | 专门一轮改造 + 多轮对话回归用例（跨回合引用、工具结果回放、压缩窗口） |
+| `work_items` / `work_item_history` 拆在途与终态（W3-4） | 属写入放大优化，验收矩阵不检查；拆表要同步改清理、健康聚合与三条 claim 路径 | 拆表与统一 claim（W3-5）同批做，否则会出现两套终态判定 |
+| Action / Execution 两套 claim 合并（W3-5） | 与上一条强耦合；单独做会让 turn 走 work_items、goal 仍走旧表，语义更难追踪 | 同 W3-4 |
+| 协议字段 `laneId` → `sessionId`（W4-2 / W4-8） | 纯命名重构，Rust 与 TS 合计约 840 处引用，零行为收益；验收矩阵按能力判定，不检查字段名 | 前后端同批改名 + 网关契约测试 + 桌面端全量回归 |
+
+这些项的代码事实已写进对应章节（§4.4.3 的 audit 取消、§4.6 的 rollout、§4.14 的 claim 现状），不会出现「文档说改了、代码没改」的分叉。
+
 ## 13. 发布治理：历史重置与版本归零
 
 时间点：M4 门禁全绿之后执行。这是重构的最后一步，不是可选收尾。

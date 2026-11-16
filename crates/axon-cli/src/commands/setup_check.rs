@@ -54,6 +54,7 @@ fn command_needs_config(cli: &AxonCli) -> bool {
                 | AxonCommand::Persona(_)
                 | AxonCommand::Gateway(_)
                 | AxonCommand::Package(_)
+                | AxonCommand::Sessions(_)
         )
     )
 }

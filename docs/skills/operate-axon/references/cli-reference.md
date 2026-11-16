@@ -57,6 +57,7 @@ axon cron list [--limit <n>] [--include-removed] | create --name <NAME> --schedu
                                # 别名只压缩时间、不带日历语义、可叠前缀、不接受时刻后缀
 axon lsp servers|workspace-symbol|definition|references|diagnostics ...    # 通用参数：--workspace-root <dir>、--plan-only
 
+axon sessions [list [--limit <n>] [--all] | show|delete <SESSION_ID> | read|resume <THREAD_ID> | replay [--provider-call-id <id>] | output [--max-chars <n>] | export [--output <path>] | fork [--new-thread-id <id>] [--cwd <dir>] | doctor [--repair]]    # list 读运行态会话清单（title、最近活动、轮次），--all 含归档
 axon debug session list [--limit <n>] [--cursor <c>] [--cwd <dir>] [--archived]
 axon debug session show|delete <SESSION_ID> | read|resume <THREAD_ID> | replay [--provider-call-id <id>] | output [--max-chars <n>] | export [--output <path>] | fork [--new-thread-id <id>] [--cwd <dir>] | doctor [--repair]
 axon debug builtin list

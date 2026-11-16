@@ -85,6 +85,7 @@ Authorization: Bearer <token>
 |---|---|
 | `GET /api/v1/meta` | 协议版本与能力位。顶层恰好五个字段：`protocolVersion`（未识别时客户端应提示升级客户端）、`capabilities`（固定 12 个键：`files`、`dirs`、`attachments`、`config`、`secrets`、`providers`、`mcp`、`skills`、`documents`、`system_status`、`service_control`、`terminal`，缺键或多键都视为协议不合规）、`serverTimeMs`、`uploadLimitBytes`（文件本身上限，64 MiB）、`superAdmin`（本次请求所用凭据是否为全局 token）。不返回构建版本、主机名与路径 |
 | `GET /api/v1/system/status` | 运行态只读快照：`serverTimeMs`（与 `/meta` 同源，二者相差超过 1 秒即判 `/meta` 不可信）、`buildVersion`、`httpPort` 与 `webSocketPort`（后端自报的两条监听端口，取自 `remote.gateway.http_bind` / `remote.gateway.websocket_bind`，解析不出时为 `null`）、`lease`（`active` / `expiresInMs` / `owner`，取不到时为 `null`）、`queueDepth`、`remoteAdapters`、`uptimeMs` |
+| `GET /api/v1/sessions?workspace=<id>&include_archived=<bool>` | 运行态会话清单，按置顶优先、再按最近活动倒序。字段：`sessionId`、`title`（回落到该会话首条入站消息的首个非空行）、`status`、`pinned`、`archived`、`workspaceId`、`lastActivityAtMs`、`turnCount`、`totalActiveMs`、`ttftP50Ms`、`ttftMaxMs`、`openJobCount`。`include_archived` 默认 `false` |
 
 配置类（桌面端的设置页经此读写，不再直连本机文件）：
 

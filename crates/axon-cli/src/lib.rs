@@ -334,6 +334,9 @@ fn run_parsed_cli_internal(
         Some(AxonCommand::Lsp(command)) => {
             run_lsp(command, cli.global.format, cli.global.cwd.as_deref())
         }
+        Some(AxonCommand::Sessions(command)) => {
+            crate::session_commands::run_sessions(command, cli.global.format, cli.global.config.as_deref())
+        }
         Some(AxonCommand::Debug(command)) => run_debug(
             command,
             cli.global.format,

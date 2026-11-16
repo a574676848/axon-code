@@ -152,6 +152,8 @@ pub enum AxonCommand {
     Usage(UsageCommand),
     /// 管理与核算模型费率规则。
     Pricing(crate::usage_statistics::PricingCommand),
+    /// 会话管理：列出、查看、恢复、导出。
+    Sessions(crate::session_commands::SessionsCommand),
     /// 调试工具。
     Debug(DebugCommand),
     /// LSP / diagnostics 查询入口。
@@ -261,6 +263,7 @@ pub fn plan_invocation(cli: &AxonCli) -> CliInvocation {
         Some(AxonCommand::Cron(_)) => CliInvocation::Command { name: "cron" },
         Some(AxonCommand::Usage(_)) => CliInvocation::Command { name: "usage" },
         Some(AxonCommand::Pricing(_)) => CliInvocation::Command { name: "pricing" },
+        Some(AxonCommand::Sessions(_)) => CliInvocation::Command { name: "sessions" },
         Some(AxonCommand::Debug(_)) => CliInvocation::Command { name: "debug" },
         Some(AxonCommand::Lsp(_)) => CliInvocation::Command { name: "lsp" },
         Some(AxonCommand::GovernanceWorker(_)) => CliInvocation::Command {

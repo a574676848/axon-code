@@ -17,10 +17,12 @@ use crate::{
 };
 
 mod output;
+mod sessions_list;
 mod replay;
 mod thread_cli;
 
 use output::{SessionOutputCommand, run_session_output};
+use sessions_list::{SessionsListCommand, run_sessions_list};
 use replay::{SessionReplayCommand, run_session_replay};
 pub(crate) use thread_cli::session_summary_views_for_root;
 use thread_cli::{
@@ -114,10 +116,69 @@ pub(crate) fn run_session(
     }
 }
 
+/// `axon sessions` 参数：面向用户的会话入口。
+///
+/// 与 `axon debug session` 共用同一批处理器；顶层 `list` 读运行态会话清单
+/// （title / 最近活动 / 轮次），`debug session list` 保留 thread 级视图。
+#[derive(Debug, Clone, Args, PartialEq, Eq)]
+pub struct SessionsCommand {
+    /// session 子命令；省略时等价于 `list`。
+    #[command(subcommand)]
+    pub command: Option<SessionsSubcommand>,
+}
+
+/// `axon sessions` 子命令。
+#[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
+pub enum SessionsSubcommand {
+    /// 列出运行态会话。
+    List(SessionsListCommand),
+    /// 查看单个会话摘要。
+    Show(SessionShowCommand),
+    /// 读取单个会话详情。
+    Read(SessionReadCommand),
+    /// 恢复会话，让后续 run 追加到同一会话。
+    Resume(SessionResumeCommand),
+    /// Fork 一个新会话。
+    Fork(SessionForkCommand),
+    /// 删除会话记录。
+    Delete(SessionDeleteCommand),
+    /// 导出会话摘要。
+    Export(SessionExportCommand),
+    /// 回放整条会话链。
+    Replay(SessionReplayCommand),
+    /// 读取 tool output 归档内容。
+    Output(SessionOutputCommand),
+    /// 诊断会话事件流。
+    Doctor(SessionDoctorCommand),
+}
+
+pub(crate) fn run_sessions(
+    command: &SessionsCommand,
+    format: OutputFormat,
+    config_path: Option<&Path>,
+) -> CliRunResult {
+    let path = match resolved_config_path(config_path) {
+        Ok(path) => path,
+        Err(error) => return cli_error(error),
+    };
+    match command.command.as_ref() {
+        None => run_sessions_list(format, &path, &SessionsListCommand::default()),
+        Some(SessionsSubcommand::List(list)) => run_sessions_list(format, &path, list),
+        Some(SessionsSubcommand::Show(sub)) => run_session_show(format, &path, sub),
+        Some(SessionsSubcommand::Read(sub)) => run_session_read(format, &path, sub),
+        Some(SessionsSubcommand::Resume(sub)) => run_session_resume(format, &path, sub),
+        Some(SessionsSubcommand::Fork(sub)) => run_session_fork(format, &path, sub),
+        Some(SessionsSubcommand::Delete(sub)) => run_session_delete(format, &path, sub),
+        Some(SessionsSubcommand::Export(sub)) => run_session_export(format, &path, sub),
+        Some(SessionsSubcommand::Replay(sub)) => run_session_replay(format, &path, sub),
+        Some(SessionsSubcommand::Output(sub)) => run_session_output(format, sub),
+        Some(SessionsSubcommand::Doctor(sub)) => run_session_doctor(format, &path, sub),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SessionDeleteReport {
-    status: &'static str,
+struct SessionDeleteReport {    status: &'static str,
     store_path: String,
     session_id: String,
     deleted_events: usize,
@@ -358,3 +419,7 @@ pub(crate) fn bounded_session_limit(limit: Option<usize>) -> Result<usize, &'sta
 fn display_path(path: &Path) -> String {
     path.display().to_string()
 }
+
+#[cfg(test)]
+#[path = "sessions_list_tests.rs"]
+mod sessions_list_tests;

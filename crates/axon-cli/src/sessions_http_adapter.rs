@@ -39,7 +39,7 @@ impl SessionsHttpAdapter {
     fn list(&self, query: Option<&str>) -> Value {
         let filters = QueryFilters::parse(query);
         let store = SqliteRuntimeStore::from_root(&self.runtime_root);
-        let rows = match store.with_read_connection(|connection| read_sessions(connection)) {
+        let rows = match read_session_rows(&store) {
             Ok(rows) => rows,
             // 库还没建出来、被锁或没有表：返回空列表而不是 500，调用方据此展示空态。
             Err(_) => return json!([]),
@@ -48,7 +48,7 @@ impl SessionsHttpAdapter {
             .into_iter()
             .filter(|row| filters.matches(row))
             .take(usize::try_from(SESSION_LIST_LIMIT).unwrap_or(usize::MAX))
-            .map(SessionListRow::into_json)
+            .map(|row| row.to_json())
             .collect::<Vec<_>>();
         json!(sessions)
     }
@@ -147,23 +147,26 @@ fn percent_decode(value: &str) -> String {
 }
 
 /// 一行会话列表数据。
-struct SessionListRow {
-    session_id: String,
-    title: String,
-    status: String,
-    pinned: bool,
-    archived: bool,
-    workspace_id: Option<String>,
-    last_activity_at_ms: u64,
-    turn_count: u64,
-    total_active_ms: u64,
-    ttft_p50_ms: Option<u64>,
-    ttft_max_ms: u64,
-    open_job_count: u64,
+///
+/// HTTP 路由与 `axon sessions list` 共用这一份投影：字段与 SQL 只在这里定义一次，
+/// 避免两个出口对同一份运行态事实给出不同口径。
+pub(crate) struct SessionListRow {
+    pub(crate) session_id: String,
+    pub(crate) title: String,
+    pub(crate) status: String,
+    pub(crate) pinned: bool,
+    pub(crate) archived: bool,
+    pub(crate) workspace_id: Option<String>,
+    pub(crate) last_activity_at_ms: u64,
+    pub(crate) turn_count: u64,
+    pub(crate) total_active_ms: u64,
+    pub(crate) ttft_p50_ms: Option<u64>,
+    pub(crate) ttft_max_ms: u64,
+    pub(crate) open_job_count: u64,
 }
 
 impl SessionListRow {
-    fn into_json(self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
         json!({
             "sessionId": self.session_id,
             "title": self.title,
@@ -179,6 +182,13 @@ impl SessionListRow {
             "openJobCount": self.open_job_count,
         })
     }
+}
+
+/// 读取会话清单：置顶优先、再按最近活动倒序。
+pub(crate) fn read_session_rows(
+    store: &SqliteRuntimeStore,
+) -> Result<Vec<SessionListRow>, axon_session::RuntimeStoreError> {
+    store.with_read_connection(read_sessions)
 }
 
 fn read_sessions(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<SessionListRow>> {
