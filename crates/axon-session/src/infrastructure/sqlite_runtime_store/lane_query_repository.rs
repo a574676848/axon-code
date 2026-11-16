@@ -10,14 +10,15 @@ use rusqlite::Row;
 
 /// 按车道聚合 Interaction；只取每组排名第一的行。
 const SELECT_LANE_SUMMARIES: &str = "WITH ranked AS (\
-       SELECT lane_id, content, source_channel, scope_json, audience_json, reply_route_json, \
-              received_at_ms, updated_at_ms, \
-              ROW_NUMBER() OVER (PARTITION BY lane_id ORDER BY received_at_ms DESC, interaction_id DESC) AS rank_in_lane, \
-              COUNT(*) OVER (PARTITION BY lane_id) AS interaction_count, \
-              SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) OVER (PARTITION BY lane_id) AS processing_count, \
-              MIN(received_at_ms) OVER (PARTITION BY lane_id) AS first_received_ms \
-       FROM inbox \
-       WHERE lane_id IS NOT NULL AND lane_id <> ''\
+       SELECT i.lane_id, i.content, i.source_channel, i.scope_json, i.audience_json, i.reply_route_json, \
+              i.received_at_ms, i.updated_at_ms, \
+              ROW_NUMBER() OVER (PARTITION BY i.lane_id ORDER BY i.received_at_ms DESC, i.interaction_id DESC) AS rank_in_lane, \
+              COUNT(*) OVER (PARTITION BY i.lane_id) AS interaction_count, \
+              SUM(CASE WHEN w.status = 'running' THEN 1 ELSE 0 END) OVER (PARTITION BY i.lane_id) AS processing_count, \
+              MIN(i.received_at_ms) OVER (PARTITION BY i.lane_id) AS first_received_ms \
+       FROM inbox AS i \
+       LEFT JOIN work_items AS w ON w.inbox_id = i.interaction_id \
+       WHERE i.lane_id IS NOT NULL AND i.lane_id <> ''\
      ) \
      SELECT lane_id, content, source_channel, scope_json, audience_json, reply_route_json, \
             updated_at_ms, interaction_count, processing_count, first_received_ms \

@@ -10,7 +10,7 @@ use std::time::Instant;
 use rusqlite::{Connection, params_from_iter};
 
 use super::runtime_cleanup::{
-    INTERACTION_TERMINAL_STATUSES, LEDGER_EVENT_MIN_RETAINED, RuntimeCleanupCounts,
+    INTERACTION_TERMINAL_KINDS, LEDGER_EVENT_MIN_RETAINED, RuntimeCleanupCounts,
     SESSION_ACTIVE_STATUSES, delete_family, delete_ids_in, placeholders, quoted_list,
     session_event_expiry_filter, task_expiry_filter,
 };
@@ -378,6 +378,8 @@ pub(super) fn delete_terminal_interactions(
     let sql = terminal_interactions_selection_sql();
     delete_family(connection, cutoff_ms, deadline, &sql, |transaction, ids| {
         let placeholders = placeholders(ids.len());
+        // 工作项随入站事实一同回收：终态队列行没有独立保留价值，留着只会拖慢清扫。
+        delete_ids_in(transaction, "work_items", "inbox_id", &placeholders, ids)?;
         Ok(RuntimeCleanupCounts {
             interactions: delete_ids_in(
                 transaction,
@@ -481,13 +483,14 @@ pub(super) fn terminal_goals_selection_sql() -> String {
 /// Interaction 清理的批次选择 SQL：固定走保留期索引，避免临时排序。
 pub(super) fn terminal_interactions_selection_sql() -> String {
     format!(
-        "SELECT interaction_id FROM inbox
+        "SELECT i.interaction_id FROM inbox AS i
          INDEXED BY inbox_retention
-         WHERE status IN ({terminal})
-           AND received_at_ms < ?1
-         ORDER BY received_at_ms ASC
+         JOIN work_items AS w ON w.inbox_id = i.interaction_id
+         WHERE w.terminal_kind IN ({terminal})
+           AND i.received_at_ms < ?1
+         ORDER BY i.received_at_ms ASC
          LIMIT ?2",
-        terminal = quoted_list(&INTERACTION_TERMINAL_STATUSES),
+        terminal = quoted_list(&INTERACTION_TERMINAL_KINDS),
     )
 }
 

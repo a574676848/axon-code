@@ -14,8 +14,9 @@ use axon_domain::{
 };
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 
-const INTERRUPTED_STATUS: &str = "interrupted";
-const PROCESSING_STATUS: &str = "processing";
+const WORK_RUNNING: &str = "running";
+const WORK_FAILED: &str = "failed";
+const TERMINAL_INTERRUPTED: &str = "interrupted";
 const LEDGER_EVENT_TYPE: &str = "interaction.interrupted";
 const SESSION_EVENT_TYPE: &str = "interaction_interrupted";
 pub(super) fn quarantine_interrupted_interactions(
@@ -75,16 +76,16 @@ fn read_candidates(
 ) -> Result<Vec<(InteractionId, Option<DaemonSessionId>)>, RuntimeStoreError> {
     let mut statement = transaction
         .prepare(
-            "SELECT interaction_id,scope_json,audience_json,source_channel,source_message_id,\
-                    reply_route_json \
-             FROM inbox \
-             WHERE status=?1 AND lease_expires_at_ms<=?2 \
-             ORDER BY lease_expires_at_ms ASC, received_at_ms ASC, interaction_id ASC LIMIT ?3",
+            "SELECT i.interaction_id,i.scope_json,i.audience_json,i.source_channel,i.source_message_id,\
+                    i.reply_route_json \
+             FROM work_items AS w JOIN inbox AS i ON i.interaction_id=w.inbox_id \
+             WHERE w.status=?1 AND w.lease_expires_at_ms<=?2 \
+             ORDER BY w.lease_expires_at_ms ASC, i.received_at_ms ASC, i.interaction_id ASC LIMIT ?3",
         )
         .map_err(storage)?;
     let rows = statement
         .query_map(
-            params![PROCESSING_STATUS, now, i64::from(limit)],
+            params![WORK_RUNNING, now, i64::from(limit)],
             read_candidate_row,
         )
         .map_err(storage)?
@@ -134,14 +135,15 @@ fn settle_interrupted(
 ) -> Result<bool, RuntimeStoreError> {
     let changed = transaction
         .execute(
-            "UPDATE inbox SET status=?1,lease_token=NULL,\
-             lease_expires_at_ms=NULL,updated_at_ms=?2 \
-             WHERE interaction_id=?3 AND status=?4",
+            "UPDATE work_items SET status=?1,terminal_kind=?2,lease_token=NULL,\
+             lease_expires_at_ms=NULL,updated_at_ms=?3,committed_at_ms=?3 \
+             WHERE inbox_id=?4 AND status=?5 AND lease_expires_at_ms<=?3",
             params![
-                INTERRUPTED_STATUS,
+                WORK_FAILED,
+                TERMINAL_INTERRUPTED,
                 now,
                 interaction_id.as_str(),
-                PROCESSING_STATUS
+                WORK_RUNNING
             ],
         )
         .map_err(storage)?;

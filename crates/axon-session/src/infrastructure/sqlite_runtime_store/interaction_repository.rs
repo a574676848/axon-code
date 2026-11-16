@@ -1,10 +1,14 @@
 //! `inbox` 的 SQLite 持久化实现。
+//!
+//! `inbox` 是**只读入站事实**：写入后不再改状态。处理状态机整体搬到 `work_items`：
+//! 一条消息对应一个工作项（`work_items.inbox_id` 唯一），领取、续租、终态都只更新
+//! 工作项那一行。读取侧把两者 JOIN 起来，把工作项状态派生回领域状态，
+//! 因此上层看到的 `InteractionRecord` 语义不变。
 
 use super::SqliteRuntimeStore;
 use super::helpers::i64_value;
 use super::interaction_repository_row::{
-    STATUS_INTERRUPTED, STATUS_PROCESSING, STATUS_RECEIVED, STATUS_REJECTED, STATUS_UNDERSTOOD,
-    read_record, runtime_error, serialize_error, status_code, storage_error,
+    read_record, runtime_error, serialize_error, storage_error,
 };
 use crate::application::interaction_session_lane_id;
 use crate::ports::{
@@ -14,20 +18,48 @@ use crate::ports::{
 use axon_domain::{InteractionId, InteractionRecord, InteractionStatus};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use uuid::Uuid;
-const SELECT_INTERACTION_BY_SOURCE: &str = "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort FROM inbox WHERE source_channel=?1 AND source_message_id=?2";
+
+/// 读取投影：`inbox` 事实 + `work_items` 派生的处理状态。
+///
+/// 列序是 `read_record` 的契约：状态固定在第 8 列（索引 7）。
+const INBOX_COLUMNS: &str = "i.interaction_id,i.source_channel,i.source_message_id,i.scope_json,\
+i.audience_json,i.reply_route_json,i.content,\
+CASE WHEN w.status='running' THEN 'processing' \
+     WHEN w.terminal_kind IS NOT NULL THEN w.terminal_kind \
+     ELSE 'received' END,\
+i.received_at_ms,i.attachments_json,i.model,i.reasoning_effort";
+/// 入站事实与工作项的连接：一个 inbox 行最多对应一个工作项。
+const INBOX_STATE_JOIN: &str =
+    "FROM inbox AS i LEFT JOIN work_items AS w ON w.inbox_id = i.interaction_id";
+/// 工作项的在途状态。
+const WORK_RUNNING: &str = "running";
+/// 工作项的排队状态：已释放、等待重新领取。
+const WORK_QUEUED: &str = "queued";
+/// 终态：正常结束。
+const TERMINAL_UNDERSTOOD: &str = "understood";
+/// 终态：被拒绝。
+const TERMINAL_REJECTED: &str = "rejected";
+/// 终态：进程中断。
+const TERMINAL_INTERRUPTED: &str = "interrupted";
 const SELECT_INTERACTION_ID_EXISTS: &str =
     "SELECT 1 FROM inbox WHERE interaction_id=?1";
-const INSERT_INTERACTION: &str = "INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,updated_at_ms,attachments_json,model,reasoning_effort,lane_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?9,?10,?11,?12,?13)";
-/// lane 排他领取候选：排队记录中，所属 lane 当前没有在途 `processing` 的那些。
+const INSERT_INTERACTION: &str = "INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,received_at_ms,updated_at_ms,attachments_json,model,reasoning_effort,lane_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?8,?9,?10,?11,?12)";
+/// lane 排他领取候选：没有工作项、或工作项已释放的那些；所属 lane 当前不得有在途工作项。
 const SELECT_CLAIMABLE_INTERACTIONS: &str = "SELECT queued.interaction_id,queued.received_at_ms \
-     FROM inbox queued \
-     WHERE queued.status=?1 AND queued.lease_expires_at_ms IS NULL \
-       AND NOT EXISTS(SELECT 1 FROM inbox active \
-                      WHERE active.lane_id=queued.lane_id AND active.status=?2 \
+     FROM inbox AS queued \
+     LEFT JOIN work_items AS current ON current.inbox_id=queued.interaction_id \
+     WHERE (current.execution_id IS NULL OR current.status=?1) \
+       AND NOT EXISTS(SELECT 1 FROM work_items AS active \
+                      JOIN inbox AS lane ON lane.interaction_id=active.inbox_id \
+                      WHERE lane.lane_id=queued.lane_id AND active.status=?2 \
                         AND active.lease_expires_at_ms>?3) \
      ORDER BY queued.received_at_ms ASC, queued.interaction_id ASC LIMIT ?4";
 /// 系统自身派发的来源渠道；与领域常量保持单一事实源。
 const SYSTEM_SOURCE_CHANNEL: &str = axon_domain::SYSTEM_SOURCE_CHANNEL;
+
+fn select_inbox(where_clause: &str) -> String {
+    format!("SELECT {INBOX_COLUMNS} {INBOX_STATE_JOIN} {where_clause}")
+}
 
 impl InteractionQueryStore for SqliteRuntimeStore {
     fn get_interaction(
@@ -38,7 +70,7 @@ impl InteractionQueryStore for SqliteRuntimeStore {
         self.connection()
             .map_err(runtime_error)?
             .query_row(
-                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort FROM inbox WHERE interaction_id=?1",
+                &select_inbox("WHERE i.interaction_id=?1"),
                 params![interaction_id.as_str()],
                 read_record,
             )
@@ -51,17 +83,14 @@ impl InteractionQueryStore for SqliteRuntimeStore {
         workspace_id: &str,
     ) -> Result<Option<InteractionRecord>, InteractionStoreError> {
         self.initialize().map_err(runtime_error)?;
-        let scope = axon_domain::ScopeRef::workspace(workspace_id.to_owned())
-            .map_err(|_| InteractionStoreError::InvalidState("Workspace ID 无效".to_owned()))?;
-        let scope_json = serde_json::to_string(&scope)
-            .map_err(|error| InteractionStoreError::Storage(error.to_string()))?;
+        let scope_json = workspace_scope_json(workspace_id)?;
         self.connection()
             .map_err(runtime_error)?
             .query_row(
-                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort
-                 FROM inbox
-                 WHERE scope_json=?1 AND source_channel<>?2 AND source_message_id NOT LIKE ?3
-                 ORDER BY received_at_ms DESC, interaction_id DESC LIMIT 1",
+                &select_inbox(
+                    "WHERE i.scope_json=?1 AND i.source_channel<>?2 AND i.source_message_id NOT LIKE ?3 \
+                     ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1",
+                ),
                 params![
                     scope_json,
                     SYSTEM_SOURCE_CHANNEL,
@@ -78,22 +107,20 @@ impl InteractionQueryStore for SqliteRuntimeStore {
         workspace_id: &str,
     ) -> Result<Option<InteractionRecord>, InteractionStoreError> {
         self.initialize().map_err(runtime_error)?;
-        let scope = axon_domain::ScopeRef::workspace(workspace_id.to_owned())
-            .map_err(|_| InteractionStoreError::InvalidState("Workspace ID 无效".to_owned()))?;
-        let scope_json = serde_json::to_string(&scope)
-            .map_err(|error| InteractionStoreError::Storage(error.to_string()))?;
+        let scope_json = workspace_scope_json(workspace_id)?;
         self.connection()
             .map_err(runtime_error)?
             .query_row(
-                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort
-                 FROM inbox
-                 WHERE scope_json=?1 AND source_channel<>?2 AND source_message_id NOT LIKE ?3 AND status=?4
-                 ORDER BY received_at_ms DESC, interaction_id DESC LIMIT 1",
+                &select_inbox(
+                    "WHERE i.scope_json=?1 AND i.source_channel<>?2 AND i.source_message_id NOT LIKE ?3 \
+                       AND w.status=?4 \
+                     ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1",
+                ),
                 params![
                     scope_json,
                     SYSTEM_SOURCE_CHANNEL,
                     format!("{}%", axon_domain::COMPLETION_STEER_SOURCE_PREFIX),
-                    STATUS_PROCESSING,
+                    WORK_RUNNING,
                 ],
                 read_record,
             )
@@ -108,27 +135,25 @@ impl InteractionQueryStore for SqliteRuntimeStore {
         destination: &str,
     ) -> Result<Option<InteractionRecord>, InteractionStoreError> {
         self.initialize().map_err(runtime_error)?;
-        let scope = axon_domain::ScopeRef::workspace(workspace_id.to_owned())
-            .map_err(|_| InteractionStoreError::InvalidState("Workspace ID 无效".to_owned()))?;
+        let scope_json = workspace_scope_json(workspace_id)?;
         let route = axon_domain::ReplyRoute::new(channel, destination)
             .map_err(|error| InteractionStoreError::InvalidState(error.to_string()))?;
-        let scope_json = serde_json::to_string(&scope)
-            .map_err(|error| InteractionStoreError::Storage(error.to_string()))?;
         let route_json = serde_json::to_string(&route)
             .map_err(|error| InteractionStoreError::Storage(error.to_string()))?;
         self.connection()
             .map_err(runtime_error)?
             .query_row(
-                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort
-                 FROM inbox
-                 WHERE scope_json=?1 AND source_channel=?2 AND reply_route_json=?3 AND source_message_id NOT LIKE ?4 AND status=?5
-                 ORDER BY received_at_ms DESC, interaction_id DESC LIMIT 1",
+                &select_inbox(
+                    "WHERE i.scope_json=?1 AND i.source_channel=?2 AND i.reply_route_json=?3 \
+                       AND i.source_message_id NOT LIKE ?4 AND w.status=?5 \
+                     ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1",
+                ),
                 params![
                     scope_json,
                     channel,
                     route_json,
                     format!("{}%", axon_domain::COMPLETION_STEER_SOURCE_PREFIX),
-                    STATUS_PROCESSING,
+                    WORK_RUNNING,
                 ],
                 read_record,
             )
@@ -141,7 +166,7 @@ impl InteractionQueryStore for SqliteRuntimeStore {
         workspace_id: &str,
         channel: &str,
     ) -> Result<Option<InteractionRecord>, InteractionStoreError> {
-        latest_interaction_for_channel(self, workspace_id, channel, None)
+        latest_interaction_for_channel(self, workspace_id, channel, false)
     }
 
     fn latest_processing_interaction_for_channel(
@@ -149,7 +174,7 @@ impl InteractionQueryStore for SqliteRuntimeStore {
         workspace_id: &str,
         channel: &str,
     ) -> Result<Option<InteractionRecord>, InteractionStoreError> {
-        latest_interaction_for_channel(self, workspace_id, channel, Some(STATUS_PROCESSING))
+        latest_interaction_for_channel(self, workspace_id, channel, true)
     }
 
     fn latest_external_interaction_any(
@@ -159,10 +184,10 @@ impl InteractionQueryStore for SqliteRuntimeStore {
         self.connection()
             .map_err(runtime_error)?
             .query_row(
-                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort
-                 FROM inbox
-                 WHERE source_channel<>?1 AND source_message_id NOT LIKE ?2
-                 ORDER BY received_at_ms DESC, interaction_id DESC LIMIT 1",
+                &select_inbox(
+                    "WHERE i.source_channel<>?1 AND i.source_message_id NOT LIKE ?2 \
+                     ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1",
+                ),
                 params![
                     SYSTEM_SOURCE_CHANNEL,
                     format!("{}%", axon_domain::COMPLETION_STEER_SOURCE_PREFIX)
@@ -188,12 +213,10 @@ impl InteractionQueryStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(runtime_error)?;
         // 游标为空取最近一页，给出游标取它之前一页；行值比较与排序同键，故不漏不重。
         let mut statement = connection
-            .prepare(
-                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort
-                 FROM inbox
-                 WHERE lane_id=?1 AND (?2 IS NULL OR (received_at_ms, interaction_id) < (?2, ?3))
-                 ORDER BY received_at_ms DESC, interaction_id DESC LIMIT ?4",
-            )
+            .prepare(&select_inbox(
+                "WHERE i.lane_id=?1 AND (?2 IS NULL OR (i.received_at_ms, i.interaction_id) < (?2, ?3)) \
+                 ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT ?4",
+            ))
             .map_err(storage_error)?;
         let mut records = statement
             .query_map(
@@ -214,45 +237,44 @@ impl InteractionQueryStore for SqliteRuntimeStore {
     }
 }
 
+fn workspace_scope_json(workspace_id: &str) -> Result<String, InteractionStoreError> {
+    let scope = axon_domain::ScopeRef::workspace(workspace_id.to_owned())
+        .map_err(|_| InteractionStoreError::InvalidState("Workspace ID 无效".to_owned()))?;
+    serde_json::to_string(&scope)
+        .map_err(|error| InteractionStoreError::Storage(error.to_string()))
+}
+
 fn latest_interaction_for_channel(
     store: &SqliteRuntimeStore,
     workspace_id: &str,
     channel: &str,
-    status: Option<&str>,
+    processing_only: bool,
 ) -> Result<Option<InteractionRecord>, InteractionStoreError> {
     store.initialize().map_err(runtime_error)?;
-    let scope = axon_domain::ScopeRef::workspace(workspace_id.to_owned())
-        .map_err(|_| InteractionStoreError::InvalidState("Workspace ID 无效".to_owned()))?;
-    let scope_json = serde_json::to_string(&scope)
-        .map_err(|error| InteractionStoreError::Storage(error.to_string()))?;
-    let status_clause = status.map_or(String::new(), |_| " AND status=?4".to_owned());
-    let sql = format!(
-        "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort
-         FROM inbox
-         WHERE scope_json=?1 AND source_channel=?2 AND source_message_id NOT LIKE ?3{status_clause}
-         ORDER BY received_at_ms DESC, interaction_id DESC LIMIT 1"
-    );
-    let connection = store.connection().map_err(runtime_error)?;
-    let steer_prefix = format!("{}%", axon_domain::COMPLETION_STEER_SOURCE_PREFIX);
-    let result = match status {
-        Some(status) => connection
-            .query_row(
-                &sql,
-                rusqlite::params![scope_json, channel, steer_prefix, status],
-                read_record,
-            )
-            .optional()
-            .map_err(storage_error)?,
-        None => connection
-            .query_row(
-                &sql,
-                rusqlite::params![scope_json, channel, steer_prefix],
-                read_record,
-            )
-            .optional()
-            .map_err(storage_error)?,
+    let scope_json = workspace_scope_json(workspace_id)?;
+    let state_clause = if processing_only {
+        format!(" AND w.status='{WORK_RUNNING}'")
+    } else {
+        String::new()
     };
-    Ok(result)
+    let sql = select_inbox(&format!(
+        "WHERE i.scope_json=?1 AND i.source_channel=?2 AND i.source_message_id NOT LIKE ?3{state_clause} \
+         ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1"
+    ));
+    store
+        .connection()
+        .map_err(runtime_error)?
+        .query_row(
+            &sql,
+            rusqlite::params![
+                scope_json,
+                channel,
+                format!("{}%", axon_domain::COMPLETION_STEER_SOURCE_PREFIX)
+            ],
+            read_record,
+        )
+        .optional()
+        .map_err(storage_error)
 }
 
 impl InteractionStore for SqliteRuntimeStore {
@@ -304,18 +326,12 @@ impl InteractionStore for SqliteRuntimeStore {
         let mut leases = Vec::with_capacity(ids.len());
         for id in ids {
             let token = Uuid::new_v4().to_string();
-            let changed = transaction
-                .execute(
-                    "UPDATE inbox SET status=?1,lease_token=?2,lease_expires_at_ms=?3,updated_at_ms=?4 WHERE interaction_id=?5 AND (status=?6 OR (status=?7 AND lease_expires_at_ms<=?4))",
-                    params![STATUS_PROCESSING, token, expires, now, id, STATUS_RECEIVED, STATUS_PROCESSING],
-                )
-                .map_err(storage_error)?;
-            if changed == 0 {
+            if !start_work_item(&transaction, &id, &token, now, expires)? {
                 continue;
             }
             let interaction = transaction
                 .query_row(
-                    "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort FROM inbox WHERE interaction_id=?1",
+                    &select_inbox("WHERE i.interaction_id=?1"),
                     params![id],
                     read_record,
                 )
@@ -337,7 +353,14 @@ impl InteractionStore for SqliteRuntimeStore {
         lease_token: &str,
         now_ms: u64,
     ) -> Result<(), InteractionStoreError> {
-        update_status(self, interaction_id, lease_token, now_ms, STATUS_UNDERSTOOD)
+        settle_work_item(
+            self,
+            interaction_id,
+            lease_token,
+            now_ms,
+            "completed",
+            TERMINAL_UNDERSTOOD,
+        )
     }
 
     fn claim_processing_by_id(
@@ -355,26 +378,13 @@ impl InteractionStore for SqliteRuntimeStore {
         let now = i64_value(now_ms).map_err(runtime_error)?;
         let expires = i64_value(now_ms.saturating_add(lease_duration_ms)).map_err(runtime_error)?;
         let token = Uuid::new_v4().to_string();
-        let changed = transaction
-            .execute(
-                "UPDATE inbox SET status=?1,lease_token=?2,lease_expires_at_ms=?3,updated_at_ms=?4 WHERE interaction_id=?5 AND (status=?6 OR (status=?1 AND lease_expires_at_ms<=?4))",
-                params![
-                    STATUS_PROCESSING,
-                    token,
-                    expires,
-                    now,
-                    interaction_id.as_str(),
-                    STATUS_RECEIVED
-                ],
-            )
-            .map_err(storage_error)?;
-        if changed == 0 {
+        if !start_work_item(&transaction, interaction_id.as_str(), &token, now, expires)? {
             transaction.commit().map_err(storage_error)?;
             return Ok(None);
         }
         let interaction = transaction
             .query_row(
-                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort FROM inbox WHERE interaction_id=?1",
+                &select_inbox("WHERE i.interaction_id=?1"),
                 params![interaction_id.as_str()],
                 read_record,
             )
@@ -404,13 +414,14 @@ impl InteractionStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(runtime_error)?;
         let changed = connection
             .execute(
-                "UPDATE inbox SET lease_expires_at_ms=?1,updated_at_ms=?2 WHERE interaction_id=?3 AND status=?4 AND lease_token=?5",
+                "UPDATE work_items SET lease_expires_at_ms=?1,updated_at_ms=?2 \
+                 WHERE inbox_id=?3 AND lease_token=?4 AND status=?5",
                 params![
                     i64_value(expires_at_ms).map_err(runtime_error)?,
                     i64_value(now_ms).map_err(runtime_error)?,
                     interaction_id.as_str(),
-                    STATUS_PROCESSING,
-                    lease_token
+                    lease_token,
+                    WORK_RUNNING
                 ],
             )
             .map_err(storage_error)?;
@@ -429,7 +440,7 @@ impl InteractionStore for SqliteRuntimeStore {
         lease_token: &str,
         now_ms: u64,
     ) -> Result<(), InteractionStoreError> {
-        update_status(self, interaction_id, lease_token, now_ms, STATUS_RECEIVED)
+        release_work_item(self, interaction_id, lease_token, now_ms)
     }
 
     fn mark_rejected(
@@ -438,7 +449,14 @@ impl InteractionStore for SqliteRuntimeStore {
         lease_token: &str,
         now_ms: u64,
     ) -> Result<(), InteractionStoreError> {
-        update_status(self, interaction_id, lease_token, now_ms, STATUS_REJECTED)
+        settle_work_item(
+            self,
+            interaction_id,
+            lease_token,
+            now_ms,
+            "cancelled",
+            TERMINAL_REJECTED,
+        )
     }
 
     fn mark_interrupted(
@@ -447,12 +465,13 @@ impl InteractionStore for SqliteRuntimeStore {
         lease_token: &str,
         now_ms: u64,
     ) -> Result<(), InteractionStoreError> {
-        update_status(
+        settle_work_item(
             self,
             interaction_id,
             lease_token,
             now_ms,
-            STATUS_INTERRUPTED,
+            "failed",
+            TERMINAL_INTERRUPTED,
         )
     }
 }
@@ -481,7 +500,7 @@ fn find_by_source(
 ) -> Result<Option<InteractionRecord>, InteractionStoreError> {
     transaction
         .query_row(
-            SELECT_INTERACTION_BY_SOURCE,
+            &select_inbox("WHERE i.source_channel=?1 AND i.source_message_id=?2"),
             params![
                 interaction.source.channel(),
                 interaction.source.source_message_id()
@@ -527,7 +546,6 @@ fn insert_interaction(
                 serde_json::to_string(&interaction.audience).map_err(serialize_error)?,
                 serde_json::to_string(&interaction.reply_route).map_err(serialize_error)?,
                 interaction.content,
-                status_code(interaction.status),
                 i64_value(interaction.received_at_ms).map_err(runtime_error)?,
                 serde_json::to_string(&interaction.attachments).map_err(serialize_error)?,
                 // 显式模型只跟随本轮 turn，不写进 Workspace 或 lane 身份。
@@ -542,13 +560,11 @@ fn insert_interaction(
         .map_err(storage_error)
 }
 
-/// 领取候选集合：只包含未持有 lease、且所属 lane 当前没有在途执行的排队记录。
+/// 领取候选集合：只包含没有工作项、或工作项已释放的入站事实。
 ///
-/// lane 内串行是主 turn 的硬约束：同一 lane 已有未过期 `processing` 时，该 lane 的
+/// lane 内串行是主 turn 的硬约束：同一 lane 已有未过期的在途工作项时，该 lane 的
 /// 后续记录必须留在队列里，否则协调线程会把同 lane 的两条输入并发交给 Provider。
-/// 一次领取内的多条同 lane 记录仍然合法：它们会作为同一条 lane 投递、顺序执行。
-/// 过期 `processing` 不再盲目重领；由中断恢复路径先证明原 worker 已不可达，
-/// 再收敛为 interrupted 终态。排队侧走 claim 索引等值前缀，lane 侧走 lane 索引。
+/// 过期租约不再盲目重领；由中断恢复路径先证明原 worker 已不可达，再收敛为 interrupted。
 fn claimable_ids(
     transaction: &Transaction<'_>,
     now_ms: u64,
@@ -558,8 +574,8 @@ fn claimable_ids(
         transaction,
         SELECT_CLAIMABLE_INTERACTIONS,
         params![
-            STATUS_RECEIVED,
-            STATUS_PROCESSING,
+            WORK_QUEUED,
+            WORK_RUNNING,
             i64_value(now_ms).map_err(runtime_error)?,
             i64::from(limit)
         ],
@@ -582,12 +598,75 @@ fn ordered_candidates(
     rows.collect::<Result<Vec<_>, _>>().map_err(storage_error)
 }
 
-fn update_status(
+/// 建立或接管一个工作项的租约。
+///
+/// 每个入站事实最多一个工作项：首次领取创建行，释放后的再领取复用同一行并换新的
+/// `lease_token`，因此旧持有者的令牌在结算与续租时都会失效。已进入终态的工作项不可再领。
+fn start_work_item(
+    transaction: &Transaction<'_>,
+    interaction_id: &str,
+    lease_token: &str,
+    now: i64,
+    expires: i64,
+) -> Result<bool, InteractionStoreError> {
+    let existing = transaction
+        .query_row(
+            "SELECT execution_id,status,terminal_kind FROM work_items WHERE inbox_id=?1",
+            params![interaction_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((work_id, status, terminal_kind)) = existing else {
+        transaction
+            .execute(
+                "INSERT INTO work_items(execution_id,goal_id,session_id,kind,payload_json,attempt,priority,status,lease_token,claimed_by,lease_expires_at_ms,started_at_ms,created_at_ms,updated_at_ms,inbox_id) \
+                 VALUES(?1,NULL,NULL,'turn','{}',1,0,?2,?3,NULL,?4,?5,?5,?5,?6)",
+                params![work_id_for_new(), WORK_RUNNING, lease_token, expires, now, interaction_id],
+            )
+            .map_err(storage_error)?;
+        return Ok(true);
+    };
+    if terminal_kind.is_some() {
+        return Ok(false);
+    }
+    let changed = if status == WORK_RUNNING {
+        // 只有过期租约才可被接管，避免两个 worker 同时持有同一条输入。
+        transaction
+            .execute(
+                "UPDATE work_items SET lease_token=?2,lease_expires_at_ms=?3,updated_at_ms=?4,started_at_ms=?4,attempt=attempt+1 \
+                 WHERE execution_id=?1 AND status=?5 AND lease_expires_at_ms<=?4",
+                params![work_id, lease_token, expires, now, WORK_RUNNING],
+            )
+            .map_err(storage_error)?
+    } else {
+        transaction
+            .execute(
+                "UPDATE work_items SET status=?2,lease_token=?3,lease_expires_at_ms=?4,updated_at_ms=?5,started_at_ms=?5,attempt=attempt+1 \
+                 WHERE execution_id=?1 AND status=?6",
+                params![work_id, WORK_RUNNING, lease_token, expires, now, WORK_QUEUED],
+            )
+            .map_err(storage_error)?
+    };
+    Ok(changed == 1)
+}
+
+fn work_id_for_new() -> String {
+    Uuid::new_v4().to_string()
+}
+
+/// 释放租约：工作项回到排队态，令牌立即失效。
+fn release_work_item(
     store: &SqliteRuntimeStore,
     interaction_id: &InteractionId,
     lease_token: &str,
     now_ms: u64,
-    status: &str,
 ) -> Result<(), InteractionStoreError> {
     if lease_token.is_empty() {
         return Err(InteractionStoreError::InvalidState(
@@ -597,13 +676,63 @@ fn update_status(
     let connection = store.connection().map_err(runtime_error)?;
     let changed = connection
         .execute(
-            "UPDATE inbox SET status=?1,lease_token=NULL,lease_expires_at_ms=NULL,updated_at_ms=?2 WHERE interaction_id=?3 AND status=?4 AND lease_token=?5",
-            params![status, i64_value(now_ms).map_err(runtime_error)?, interaction_id.as_str(), STATUS_PROCESSING, lease_token],
+            "UPDATE work_items SET status=?1,lease_token=NULL,lease_expires_at_ms=NULL,updated_at_ms=?2 \
+             WHERE inbox_id=?3 AND lease_token=?4 AND status=?5",
+            params![
+                WORK_QUEUED,
+                i64_value(now_ms).map_err(runtime_error)?,
+                interaction_id.as_str(),
+                lease_token,
+                WORK_RUNNING
+            ],
         )
         .map_err(storage_error)?;
     if changed == 1 {
         return Ok(());
     }
+    Err(inbox_state_error(&connection, interaction_id)?)
+}
+
+/// 结算工作项：写入终态与终态类别，令牌立即失效。
+fn settle_work_item(
+    store: &SqliteRuntimeStore,
+    interaction_id: &InteractionId,
+    lease_token: &str,
+    now_ms: u64,
+    status: &str,
+    terminal_kind: &str,
+) -> Result<(), InteractionStoreError> {
+    if lease_token.is_empty() {
+        return Err(InteractionStoreError::InvalidState(
+            "lease token 不能为空".to_owned(),
+        ));
+    }
+    let connection = store.connection().map_err(runtime_error)?;
+    let changed = connection
+        .execute(
+            "UPDATE work_items SET status=?1,terminal_kind=?2,lease_token=NULL,lease_expires_at_ms=NULL,updated_at_ms=?3,committed_at_ms=?3 \
+             WHERE inbox_id=?4 AND lease_token=?5 AND status=?6",
+            params![
+                status,
+                terminal_kind,
+                i64_value(now_ms).map_err(runtime_error)?,
+                interaction_id.as_str(),
+                lease_token,
+                WORK_RUNNING
+            ],
+        )
+        .map_err(storage_error)?;
+    if changed == 1 {
+        return Ok(());
+    }
+    Err(inbox_state_error(&connection, interaction_id)?)
+}
+
+/// 结算失败时的错误归因：入站事实存在即为租约失效，否则是真不存在。
+fn inbox_state_error(
+    connection: &rusqlite::Connection,
+    interaction_id: &InteractionId,
+) -> Result<InteractionStoreError, InteractionStoreError> {
     let exists = connection
         .query_row(
             "SELECT 1 FROM inbox WHERE interaction_id=?1",
@@ -612,12 +741,12 @@ fn update_status(
         )
         .optional()
         .map_err(storage_error)?;
-    match exists {
-        Some(_) => Err(InteractionStoreError::InvalidState(
+    Ok(match exists {
+        Some(_) => InteractionStoreError::InvalidState(
             "Interaction 不处于当前 lease 的 processing 状态".to_owned(),
-        )),
-        None => Err(InteractionStoreError::NotFound(interaction_id.clone())),
-    }
+        ),
+        None => InteractionStoreError::NotFound(interaction_id.clone()),
+    })
 }
 
 fn ensure_same_interaction(

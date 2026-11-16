@@ -8,8 +8,10 @@ use crate::ports::{HealthStore, RuntimeHealthCounters, RuntimeStore, RuntimeStor
 use axon_domain::{HealthBacklog, HealthStatusCounts};
 use rusqlite::Connection;
 
-const INTERACTION_STATUS_SQL: &str =
-    "SELECT status,COUNT(*) FROM inbox GROUP BY status";
+/// 入站事实本身不再带状态：状态由工作项派生，聚合必须先 JOIN。
+const INTERACTION_STATUS_SQL: &str = "SELECT CASE WHEN w.status='running' THEN 'processing' \
+     WHEN w.terminal_kind IS NOT NULL THEN w.terminal_kind ELSE 'received' END AS state,COUNT(*) \
+     FROM inbox AS i LEFT JOIN work_items AS w ON w.inbox_id=i.interaction_id GROUP BY state";
 const GOAL_STATUS_SQL: &str = "SELECT status,COUNT(*) FROM goals GROUP BY status";
 const EXECUTION_STATUS_SQL: &str = "SELECT status,COUNT(*) FROM work_items GROUP BY status";
 const EXECUTION_BACKLOG_SQL: &str = "SELECT COUNT(*),MIN(created_at_ms) FROM work_items WHERE status IN ('queued','waiting')";

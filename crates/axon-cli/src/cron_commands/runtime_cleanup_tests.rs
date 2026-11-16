@@ -155,8 +155,10 @@ fn write_retained_session_artifacts(root: &Path) -> Vec<(std::path::PathBuf, Vec
              INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,emitted_at_ms) VALUES('s-old',1,'g','turn','{}',1);
              INSERT INTO session_checkpoints VALUES('s-old',1,'a',0,0,NULL,NULL,NULL,NULL,NULL,1);
              INSERT INTO schedules VALUES('sch-1','s-old','interval','1m','{}','none','created',1,NULL,NULL,0,NULL,NULL);
-             INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,updated_at_ms,attachments_json)
-                 VALUES('i-old','tui','m-1','{}','{}','{}','hi','understood',1,1,'[]');
+             INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,received_at_ms,updated_at_ms,attachments_json)
+                 VALUES('i-old','tui','m-1','{}','{}','{}','hi',1,1,'[]');
+             INSERT INTO work_items(execution_id,kind,attempt,priority,status,inbox_id,terminal_kind,created_at_ms,updated_at_ms)
+                 VALUES('w-i-old','turn',1,0,'completed','i-old','understood',1,1);
              INSERT INTO goals(goal_id,scope_json,parent_goal_id,title,status,revision,plan_json,acceptance_json,progress_json,waiting_reason,next_step,priority,deadline_ms,created_from_interaction_id,cancellation_reason,cancellation_requested_at_ms,created_at_ms,updated_at_ms)
                  VALUES('t-old','{}',NULL,'旧任务','completed',1,'{}','{}',NULL,NULL,NULL,0,NULL,NULL,NULL,NULL,1,1);
              INSERT INTO work_items(execution_id,goal_id,session_id,kind,payload_json,goal_revision,context_version,attempt,priority,dedupe_key,status,lease_json,claimed_by,claimed_generation,lease_expires_at_ms,started_at_ms,committed_at_ms,cancelled_at_ms,retry_at_ms,checkpoint_json,cancellation_requested_at_ms,cancellation_reason,created_at_ms,updated_at_ms)
@@ -234,8 +236,8 @@ fn cleanup_protects_active_and_unread_records() {
              INSERT INTO work_items(execution_id,goal_id,session_id,kind,payload_json,goal_revision,context_version,attempt,priority,dedupe_key,status,lease_json,claimed_by,claimed_generation,lease_expires_at_ms,started_at_ms,committed_at_ms,cancelled_at_ms,retry_at_ms,checkpoint_json,cancellation_requested_at_ms,cancellation_reason,created_at_ms,updated_at_ms)
                  VALUES('e-done','t-done',NULL,'turn','{}',NULL,NULL,1,0,NULL,'completed',NULL,NULL,NULL,NULL,1,NULL,NULL,NULL,NULL,NULL,NULL,1,1);
              INSERT INTO goal_results VALUES('r-unread','t-done','e-done',1,'done','[]','[]',NULL,1);
-             INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,updated_at_ms,attachments_json)
-                 VALUES('i-live','tui','m-2','{}','{}','{}','hi','received',1,1,'[]');", "测试数据应可写入");
+             INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,received_at_ms,updated_at_ms,attachments_json)
+                 VALUES('i-live','tui','m-2','{}','{}','{}','hi',1,1,'[]');", "测试数据应可写入");
     drop(connection);
 
     let dry_run = count_runtime_cleanup(root.path(), 100).expect("dry-run 应成功");
@@ -337,8 +339,10 @@ fn explicit_session_family_cleanup_rechecks_active_state_and_execution_reference
 fn dry_run_counts_match_real_deletion() {
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
-    seed(&connection, "INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,updated_at_ms,attachments_json)
-                 VALUES('i-1','tui','m-1','{}','{}','{}','hi','rejected',1,1,'[]');
+    seed(&connection, "INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,received_at_ms,updated_at_ms,attachments_json)
+                 VALUES('i-1','tui','m-1','{}','{}','{}','hi',1,1,'[]');
+             INSERT INTO work_items(execution_id,kind,attempt,priority,status,inbox_id,terminal_kind,created_at_ms,updated_at_ms)
+                 VALUES('w-i-1','turn',1,0,'cancelled','i-1','rejected',1,1);
              INSERT INTO decisions VALUES('d-1','{}','user','allow',1,1,1);", "测试数据应可写入");
     drop(connection);
 
@@ -388,10 +392,12 @@ fn cleanup_stops_at_time_budget_and_resumes_next_run() {
     seed(&connection, "WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 1000)
              INSERT INTO inbox
                  (interaction_id, source_channel, source_message_id, scope_json, audience_json,
-                  reply_route_json, content, status, received_at_ms, lease_token,
-                  lease_expires_at_ms, updated_at_ms)
-             SELECT 'i-'||n, 'tui', 'm-'||n, '{}', '{}', '{}', 'hi', 'rejected', 1, NULL, NULL, 1
-             FROM seq;", "测试数据应可写入");
+                  reply_route_json, content, received_at_ms, updated_at_ms)
+             SELECT 'i-'||n, 'tui', 'm-'||n, '{}', '{}', '{}', 'hi', 1, 1
+             FROM seq;
+             INSERT INTO work_items
+                 (execution_id, kind, attempt, priority, status, inbox_id, terminal_kind, created_at_ms, updated_at_ms)
+             SELECT 'w-'||interaction_id, 'turn', 1, 0, 'cancelled', interaction_id, 'rejected', 1, 1 FROM inbox;", "测试数据应可写入");
     drop(connection);
 
     let first = run_runtime_cleanup_with_budget(root.path(), 100, false, Duration::ZERO)
@@ -416,10 +422,12 @@ fn cleanup_large_runtime_history_is_bounded() {
              WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 50000)
              INSERT INTO inbox
                  (interaction_id, source_channel, source_message_id, scope_json, audience_json,
-                  reply_route_json, content, status, received_at_ms, lease_token,
-                  lease_expires_at_ms, updated_at_ms)
-             SELECT 'i-'||n, 'tui', 'm-'||n, '{}', '{}', '{}', 'hi', 'understood', 1, NULL, NULL, 1
+                  reply_route_json, content, received_at_ms, updated_at_ms)
+             SELECT 'i-'||n, 'tui', 'm-'||n, '{}', '{}', '{}', 'hi', 1, 1
              FROM seq;
+             INSERT INTO work_items
+                 (execution_id, kind, attempt, priority, status, inbox_id, terminal_kind, created_at_ms, updated_at_ms)
+             SELECT 'w-'||interaction_id, 'turn', 1, 0, 'completed', interaction_id, 'understood', 1, 1 FROM inbox;
              COMMIT;", "交互数据应可写入");
     seed(&connection, "BEGIN;
              WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 200000)
@@ -459,10 +467,12 @@ fn cleanup_does_not_stall_concurrent_writes() {
              WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 20000)
              INSERT INTO inbox
                  (interaction_id, source_channel, source_message_id, scope_json, audience_json,
-                  reply_route_json, content, status, received_at_ms, lease_token,
-                  lease_expires_at_ms, updated_at_ms)
-             SELECT 'i-'||n, 'tui', 'm-'||n, '{}', '{}', '{}', 'hi', 'rejected', 1, NULL, NULL, 1
+                  reply_route_json, content, received_at_ms, updated_at_ms)
+             SELECT 'i-'||n, 'tui', 'm-'||n, '{}', '{}', '{}', 'hi', 1, 1
              FROM seq;
+             INSERT INTO work_items
+                 (execution_id, kind, attempt, priority, status, inbox_id, terminal_kind, created_at_ms, updated_at_ms)
+             SELECT 'w-'||interaction_id, 'turn', 1, 0, 'cancelled', interaction_id, 'rejected', 1, 1 FROM inbox;
              COMMIT;", "交互数据应可写入");
     drop(connection);
 

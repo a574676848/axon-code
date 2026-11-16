@@ -43,7 +43,7 @@ pub(super) fn append_events(
     if let Some((interaction_id, lease_token)) = interaction_lease {
         let active = transaction
             .query_row(
-                "SELECT 1 FROM inbox WHERE interaction_id=?1 AND status='processing' \
+                "SELECT 1 FROM work_items WHERE inbox_id=?1 AND status='running' \
                  AND lease_token=?2 AND lease_expires_at_ms>?3",
                 params![interaction_id.as_str(), lease_token, i64_value(now_ms)?],
                 |row| row.get::<_, i64>(0),

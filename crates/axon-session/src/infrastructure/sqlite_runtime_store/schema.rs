@@ -254,10 +254,7 @@ const CONTROL_DDL: &str = "
             audience_json TEXT NOT NULL,
             reply_route_json TEXT NOT NULL,
             content TEXT NOT NULL,
-            status TEXT NOT NULL,
             received_at_ms INTEGER NOT NULL,
-            lease_token TEXT,
-            lease_expires_at_ms INTEGER,
             updated_at_ms INTEGER NOT NULL,
             attachments_json TEXT NOT NULL DEFAULT '[]',
             model TEXT,
@@ -267,16 +264,12 @@ const CONTROL_DDL: &str = "
         );
         CREATE UNIQUE INDEX IF NOT EXISTS inbox_source
             ON inbox(source_channel, source_message_id);
-        CREATE INDEX IF NOT EXISTS inbox_claim
-            ON inbox(status, lease_expires_at_ms, received_at_ms, interaction_id);
         CREATE INDEX IF NOT EXISTS inbox_retention
-            ON inbox(received_at_ms, status);
-        CREATE INDEX IF NOT EXISTS inbox_scope_status_recent
-            ON inbox(scope_json, status, received_at_ms DESC, interaction_id DESC);
+            ON inbox(received_at_ms, interaction_id);
+        CREATE INDEX IF NOT EXISTS inbox_scope_recent
+            ON inbox(scope_json, received_at_ms DESC, interaction_id DESC);
         CREATE INDEX IF NOT EXISTS inbox_scope_channel_recent
             ON inbox(scope_json, source_channel, received_at_ms DESC, interaction_id DESC);
-        CREATE INDEX IF NOT EXISTS inbox_scope_channel_status_recent
-            ON inbox(scope_json, source_channel, status, received_at_ms DESC, interaction_id DESC);
         CREATE TABLE IF NOT EXISTS goals (
             goal_id TEXT PRIMARY KEY NOT NULL,
             scope_json TEXT NOT NULL,
@@ -305,7 +298,7 @@ const CONTROL_DDL: &str = "
             ON goals(status, priority DESC, updated_at_ms, goal_id);
         CREATE TABLE IF NOT EXISTS work_items (
             execution_id TEXT PRIMARY KEY NOT NULL,
-            goal_id TEXT NOT NULL,
+            goal_id TEXT,
             session_id TEXT,
             kind TEXT NOT NULL DEFAULT 'turn',
             payload_json TEXT NOT NULL DEFAULT '{}',
@@ -314,7 +307,10 @@ const CONTROL_DDL: &str = "
             attempt INTEGER NOT NULL,
             priority INTEGER NOT NULL,
             dedupe_key TEXT,
+            inbox_id TEXT,
+            terminal_kind TEXT,
             status TEXT NOT NULL,
+            lease_token TEXT,
             lease_json TEXT,
             claimed_by TEXT,
             claimed_generation TEXT,
@@ -345,6 +341,14 @@ const CONTROL_DDL: &str = "
         CREATE INDEX IF NOT EXISTS work_items_stale_running
             ON work_items(status, priority DESC, created_at_ms, execution_id, lease_expires_at_ms)
             WHERE status='running';
+        CREATE UNIQUE INDEX IF NOT EXISTS work_items_inbox
+            ON work_items(inbox_id)
+            WHERE inbox_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS work_items_inbox_state
+            ON work_items(inbox_id, status, lease_expires_at_ms);
+        CREATE INDEX IF NOT EXISTS work_items_terminal
+            ON work_items(terminal_kind, updated_at_ms)
+            WHERE terminal_kind IS NOT NULL;
         CREATE INDEX IF NOT EXISTS work_items_conclusive
             ON work_items(status, updated_at_ms ASC, execution_id ASC);
         CREATE TABLE IF NOT EXISTS goal_results (
@@ -583,14 +587,12 @@ fn migrate_additive_columns(connection: &Connection) -> rusqlite::Result<()> {
      */
     add_column_if_missing(connection, "inbox", "tool_summary", "TEXT NOT NULL DEFAULT ''")?;
     /*
-     * 两条索引各服务一条固定查询：车道列表按 (lane, 接收时间倒序) 取组内首行；
-     * lane 排他领取按 (lane, 状态, 租约到期) 定位在途 processing。
+     * 车道列表按 (lane, 接收时间倒序) 取组内首行；lane 排他领取改由 work_items 的
+     * (inbox_id, status, lease_expires_at_ms) 索引承担，见 DDL。
      */
     connection.execute_batch(
         "CREATE INDEX IF NOT EXISTS inbox_lane_recent
-            ON inbox(lane_id, received_at_ms DESC, interaction_id DESC);
-         CREATE INDEX IF NOT EXISTS inbox_lane_processing
-            ON inbox(lane_id, status, lease_expires_at_ms);",
+            ON inbox(lane_id, received_at_ms DESC, interaction_id DESC);",
     )
 }
 

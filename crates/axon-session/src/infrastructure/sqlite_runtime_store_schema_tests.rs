@@ -113,10 +113,7 @@ fn schema_initialization_adds_additive_columns_to_existing_database() {
                     audience_json TEXT NOT NULL,
                     reply_route_json TEXT NOT NULL,
                     content TEXT NOT NULL,
-                    status TEXT NOT NULL,
                     received_at_ms INTEGER NOT NULL,
-                    lease_token TEXT,
-                    lease_expires_at_ms INTEGER,
                     updated_at_ms INTEGER NOT NULL
                  );",
             )

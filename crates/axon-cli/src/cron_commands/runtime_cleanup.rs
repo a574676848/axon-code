@@ -40,6 +40,8 @@ const INCREMENTAL_VACUUM_PAGE_BATCH: u32 = 4_096;
 
 /// 终态 Interaction 状态：只有终态记录参与按保留期回收。
 pub(super) const INTERACTION_TERMINAL_STATUSES: [&str; 2] = ["understood", "rejected"];
+/// 终态工作项类别：入站事实的终态由工作项的 terminal_kind 表达。
+pub(super) const INTERACTION_TERMINAL_KINDS: [&str; 2] = ["understood", "rejected"];
 /// 终态 Task 状态：长期承诺结束后才允许回收。
 pub(super) const TASK_TERMINAL_STATUSES: [&str; 3] = ["completed", "failed", "cancelled"];
 /// 活跃 Execution 状态：保护其 Task 与 Session Window 不被回收。

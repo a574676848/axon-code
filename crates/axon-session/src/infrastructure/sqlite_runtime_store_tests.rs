@@ -46,14 +46,14 @@ fn runtime_schema_contains_work_ledger_tables_and_hot_query_indexes() {
     assert!(indexed);
     let active_indexed: bool = connection
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='inbox_scope_status_recent')",
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='inbox_scope_recent')",
             [],
             |row| row.get(0),
         )
         .expect("查询活动 Interaction 索引");
     assert!(active_indexed);
     let claim_index_columns = connection
-        .prepare("PRAGMA index_info(inbox_claim)")
+        .prepare("PRAGMA index_info(work_items_inbox)")
         .expect("读取 claim 索引")
         .query_map([], |row| row.get::<_, String>(2))
         .expect("枚举 claim 索引列")
@@ -61,13 +61,8 @@ fn runtime_schema_contains_work_ledger_tables_and_hot_query_indexes() {
         .expect("收集 claim 索引列");
     assert_eq!(
         claim_index_columns,
-        vec![
-            "status".to_owned(),
-            "lease_expires_at_ms".to_owned(),
-            "received_at_ms".to_owned(),
-            "interaction_id".to_owned(),
-        ],
-        "claim 索引列顺序保证排队与过期 lease 都按到达顺序有界领取"
+        vec!["inbox_id".to_owned()],
+        "一条入站事实最多对应一个工作项"
     );
     let execution_dedupe_indexed: bool = connection
         .query_row(
