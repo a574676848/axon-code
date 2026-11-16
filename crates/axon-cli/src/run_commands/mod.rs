@@ -341,7 +341,9 @@ fn finish_completed_run(
         memory_usefulness.as_ref(),
         &request.startup.workspace_instructions,
     );
+    publish_turn_metrics(config_path, &record);
     let session_title = run_thread_title::derive_thread_title(&record.prompt);
+
     commit_session_to_rollout(config_path, &record, &session_title)?;
     // 反思是轮后异步治理的产物：本轮治理尚未启动，能确定看到的只有上一次的结果。
     // 这条提示随 run 输出交给界面，用户在下一轮开头看到上一轮的记忆动作。
@@ -508,3 +510,64 @@ impl CliRuntimePendingReport {
 }
 
 pub(crate) use run_memory_write::{AgentMemoryWriteInput, AgentMemoryWriteRuntime};
+/// 把本轮指标写进会话事件流。
+///
+/// CLI 是独立进程，必须先 claim 一个短租约 host 才能通过 fence 校验；拿不到 lease
+/// （daemon 正持有同一库的 host 行）时跳过写入，不阻断本轮执行。
+fn publish_turn_metrics(config_path: &Path, record: &RunSessionRecord) {
+    use axon_session::{EventLogStore as _, RuntimeStore as _};
+
+    let Ok(store) = run_agent_store::shared_runtime_store(config_path) else {
+        return;
+    };
+    let Ok(session_id) = axon_domain::DaemonSessionId::new(record.session_id.clone()) else {
+        return;
+    };
+    let Ok(host_id) = axon_domain::RuntimeHostId::new(format!("cli-{}", std::process::id())) else {
+        return;
+    };
+    let now_ms = axon_time::unix_now_ms();
+    // CLI 直连时该会话可能尚未登记：先补齐运行时行，否则事件无处归属。
+    if store.get_session(&session_id).is_err() {
+        let cwd = record.cwd.clone().unwrap_or_default();
+        let _ = store.create_session(&session_id, &cwd, now_ms);
+    }
+    let Ok(host) = store.claim_host(&host_id, std::process::id(), None, now_ms, 60_000) else {
+        axon_logger::warning("CLI 未能取得 host lease，跳过 turn_metrics 写入");
+        return;
+    };
+    let usage = record.usage.unwrap_or_default();
+    let active_ms = record
+        .turn_events
+        .iter()
+        .filter_map(|event| event.duration_ms)
+        .fold(0_u64, |total, value| total.saturating_add(value));
+    let metrics = axon_eventlog::TurnMetrics {
+        turn_id: record.assistant_part_id.clone(),
+        ttft_ms: record.ttft_ms,
+        active_ms,
+        provider_duration_ms: active_ms,
+        tool_ms: 0,
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        reasoning_tokens: usage.reasoning_output_tokens,
+        cache_read_tokens: usage.cache_read_input_tokens,
+        cache_write_tokens: usage.cache_write_input_tokens,
+        generation_speed_tps: record.generation_speed_tps,
+        background_jobs_started: 0,
+        background_jobs_running: 0,
+        outcome: axon_eventlog::TurnOutcome::Succeeded,
+        tool_calls: u32::try_from(record.tool_calls.len()).unwrap_or(u32::MAX),
+    };
+    let Ok(payload) = serde_json::to_string(&metrics) else {
+        return;
+    };
+    if let Err(error) = store.append_events(
+        &session_id,
+        &host,
+        &[("turn_metrics".to_owned(), payload)],
+        now_ms,
+    ) {
+        axon_logger::warning(&format!("turn_metrics 写入失败：{error}"));
+    }
+}
