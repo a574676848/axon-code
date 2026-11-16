@@ -4,6 +4,8 @@
 pub(crate) mod question;
 #[path = "bottom_view/selection.rs"]
 mod selection;
+#[path = "bottom_view/sessions.rs"]
+mod sessions;
 #[path = "bottom_view/skills_toggle.rs"]
 mod skills_toggle;
 #[path = "bottom_view/stack.rs"]
@@ -16,6 +18,7 @@ use crate::ui_workflow::action::UiKeyEvent;
 pub(crate) use question::QuestionView;
 pub(super) use selection::BottomViewAction;
 pub(crate) use selection::SelectionView;
+pub(crate) use sessions::{SessionsView, SessionsViewItem};
 pub(super) use skills_toggle::SkillsToggleSummary;
 pub(crate) use skills_toggle::SkillsToggleView;
 pub(crate) use stack::BottomViewStack;
@@ -24,6 +27,7 @@ pub(crate) use stack::BottomViewStack;
 pub(crate) enum BottomView {
     Question(QuestionView),
     Selection(SelectionView),
+    Sessions(SessionsView),
     SkillsToggle(SkillsToggleView),
     ToolOutputViewer(ToolOutputDock),
     ShortcutHelp(ShortcutHelpDock),
@@ -34,6 +38,8 @@ pub(super) enum BottomViewEvent {
     None,
     Close,
     Action(BottomViewAction),
+    /// 用户在会话弹窗里确认了目标会话。
+    SessionSelected(String),
     SkillsClosed(SkillsToggleSummary),
     QuestionAnswered {
         lane_id: String,
@@ -62,6 +68,7 @@ impl BottomView {
         match self {
             Self::Question(view) => view.handle_key(key),
             Self::Selection(view) => view.handle_key(key),
+            Self::Sessions(view) => view.handle_key(key),
             Self::SkillsToggle(view) => view.handle_key(key),
             Self::ToolOutputViewer(_) | Self::ShortcutHelp(_) => BottomViewEvent::None,
         }
@@ -71,6 +78,7 @@ impl BottomView {
         match self {
             Self::Question(view) => view.height(),
             Self::Selection(view) => view.height(),
+            Self::Sessions(view) => view.height(),
             Self::SkillsToggle(view) => view.height(),
             Self::ToolOutputViewer(_) => 8,
             Self::ShortcutHelp(_) => 8,
@@ -81,6 +89,7 @@ impl BottomView {
         match self {
             Self::Question(view) => view.kind(),
             Self::Selection(view) => view.kind(),
+            Self::Sessions(view) => view.kind(),
             Self::SkillsToggle(_) => DockKind::Skills,
             Self::ToolOutputViewer(_) => DockKind::ToolOutputViewer,
             Self::ShortcutHelp(_) => DockKind::ShortcutHelp,

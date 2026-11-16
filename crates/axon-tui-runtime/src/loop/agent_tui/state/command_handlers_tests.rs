@@ -338,6 +338,185 @@ fn test_state() -> AgentTuiState {
     })
 }
 
+fn session_item(
+    session_id: &str,
+    archived: bool,
+) -> crate::r#loop::agent_tui::AgentTuiSessionCatalogItem {
+    crate::r#loop::agent_tui::AgentTuiSessionCatalogItem::new(
+        session_id,
+        Some(format!("{session_id} 标题")),
+        "openai",
+        "gpt-5.5",
+        1,
+    )
+    .with_archived(archived)
+}
+
+fn sessions_view(
+    state: &AgentTuiState,
+) -> Option<&crate::r#loop::agent_tui::bottom_view::SessionsView> {
+    match state.bottom_view() {
+        Some(crate::r#loop::agent_tui::bottom_view::BottomView::Sessions(view)) => Some(view),
+        _ => None,
+    }
+}
+
+#[test]
+fn sessions_command_opens_popup_with_unarchived_sessions() {
+    let mut state = test_state();
+    state.header.catalog.sessions = vec![
+        session_item("session-active", false),
+        session_item("session-archived", true),
+    ];
+
+    assert!(matches!(
+        state.handle_command("/sessions"),
+        AgentTuiCommandOutcome::Handled
+    ));
+
+    let view = sessions_view(&state).expect("/sessions 应打开会话弹窗");
+    assert_eq!(view.items().len(), 1);
+    assert_eq!(view.selected_session_id(), Some("session-active"));
+    assert!(state.composer.draft.text().is_empty());
+}
+
+#[test]
+fn sessions_all_command_lists_archived_sessions() {
+    let mut state = test_state();
+    state.header.catalog.sessions = vec![
+        session_item("session-active", false),
+        session_item("session-archived", true),
+    ];
+
+    assert!(matches!(
+        state.handle_command("/sessions --all"),
+        AgentTuiCommandOutcome::Handled
+    ));
+
+    let view = sessions_view(&state).expect("/sessions --all 应打开会话弹窗");
+    assert_eq!(view.items().len(), 2);
+    assert!(view.items().iter().any(|item| item.archived));
+}
+
+#[test]
+fn sessions_command_points_to_all_when_catalog_only_has_archived() {
+    let mut state = test_state();
+    state.header.catalog.sessions = vec![session_item("session-archived", true)];
+
+    assert!(matches!(
+        state.handle_command("/sessions"),
+        AgentTuiCommandOutcome::Handled
+    ));
+
+    assert!(!state.bottom_view_open(), "空候选不应打开空弹窗");
+    let Some(RenderCellData::Error(cell)) = state
+        .cells
+        .transcript
+        .last()
+        .and_then(|line| line.data.as_ref())
+    else {
+        panic!("归档会话被过滤时应给出可执行提示");
+    };
+    assert!(cell.message.contains("--all"));
+}
+
+#[test]
+fn sessions_command_rejects_unknown_argument() {
+    let mut state = test_state();
+    state.header.catalog.sessions = vec![session_item("session-active", false)];
+
+    assert!(matches!(
+        state.handle_command("/sessions --everything"),
+        AgentTuiCommandOutcome::Handled
+    ));
+
+    assert!(!state.bottom_view_open());
+    let Some(RenderCellData::Error(cell)) = state
+        .cells
+        .transcript
+        .last()
+        .and_then(|line| line.data.as_ref())
+    else {
+        panic!("非法参数应生成用法错误");
+    };
+    assert!(cell.message.contains("/sessions [--all]"));
+}
+
+#[test]
+fn new_and_reset_commands_split_session_ownership() {
+    let mut state = test_state();
+    state.header.overrides.session = Some("session-1".to_owned());
+    state.header.session_summary.record_session(
+        "session-1".to_owned(),
+        None,
+        Some("历史会话".to_owned()),
+    );
+
+    assert!(matches!(
+        state.handle_command("/new"),
+        AgentTuiCommandOutcome::Handled
+    ));
+    assert_eq!(state.header.overrides.session, None);
+    assert_eq!(state.header.session_summary.session_id, None);
+
+    let mut state = test_state();
+    state.header.overrides.session = Some("session-1".to_owned());
+    state.header.session_summary.record_session(
+        "session-1".to_owned(),
+        None,
+        Some("历史会话".to_owned()),
+    );
+
+    assert!(matches!(
+        state.handle_command("/reset"),
+        AgentTuiCommandOutcome::Handled
+    ));
+    assert_eq!(
+        state.header.overrides.session.as_deref(),
+        Some("session-1"),
+        "/reset 必须保留 session id"
+    );
+    assert_eq!(
+        state.header.session_summary.session_id.as_deref(),
+        Some("session-1"),
+        "/reset 必须保留会话历史归属"
+    );
+}
+
+#[test]
+fn sessions_popup_enter_binds_selected_session() {
+    let mut state = test_state();
+    state.header.catalog.sessions = vec![
+        session_item("session-a", false),
+        session_item("session-b", false),
+    ];
+    assert!(matches!(
+        state.handle_command("/sessions"),
+        AgentTuiCommandOutcome::Handled
+    ));
+
+    assert!(
+        state
+            .handle_bottom_view_key(UiKeyEvent::plain(UiKeyCode::Down))
+            .is_none()
+    );
+    assert!(
+        state
+            .handle_bottom_view_key(UiKeyEvent::plain(UiKeyCode::Enter))
+            .is_none()
+    );
+
+    assert_eq!(
+        state.header.overrides.session.as_deref(),
+        Some("session-b"),
+        "Enter 必须绑定当前选中会话"
+    );
+    assert_eq!(
+        state.take_pending_session_switch().as_deref(),
+        Some("session-b")
+    );
+}
+
 fn status_summary(cell: &crate::surface::cell::RenderCommandCell, kind: &str) -> String {
     cell.items
         .iter()

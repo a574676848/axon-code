@@ -366,6 +366,9 @@ where
         if poll_mcp_auth_loader(&adapter, state, &mut mcp_auth_loader) {
             frame_scheduler.request_frame(FrameRequestReason::StateTick, state);
         }
+        if poll_session_switch(&adapter, state) {
+            frame_scheduler.request_frame(FrameRequestReason::StateTick, state);
+        }
         if poll_completion_inbox(
             state,
             &mut completion_inbox,
@@ -517,6 +520,25 @@ where
     match adapter.start_mcp_auth(&state.catalog_reload_launch_request(), &request) {
         Some(loader) => *mcp_auth_loader = Some(loader),
         None => state.fail_mcp_auth_request(&request, "当前 runtime adapter 未提供 MCP 授权任务"),
+    }
+    true
+}
+
+/// 载入 `/sessions` 选中会话的历史。
+///
+/// 读取由宿主适配器完成，回放走与冷启动同一条状态入口（`apply_session_history`），
+/// 因此会话切换不新增渲染分支；宿主不具备该能力时把占位收成失败态。
+fn poll_session_switch<F>(adapter: &F, state: &mut AgentTuiState) -> bool
+where
+    F: AgentTuiRuntimeAdapter,
+{
+    let Some(session_id) = state.take_pending_session_switch() else {
+        return false;
+    };
+    let request = state.catalog_reload_launch_request();
+    match adapter.load_session_history(&request, &session_id) {
+        Some(output) => state.apply_session_history(output),
+        None => state.fail_session_history("当前宿主不支持按会话读取历史"),
     }
     true
 }

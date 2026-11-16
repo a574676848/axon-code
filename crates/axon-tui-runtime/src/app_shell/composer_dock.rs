@@ -15,11 +15,12 @@ pub(crate) const COMPOSER_DOCK_MIN_INPUT_HEIGHT: u16 = 3;
 pub(crate) const COMPOSER_DOCK_WORKING_STATUS_TOP_PADDING: u16 = 1;
 pub(crate) const COMPOSER_DOCK_WORKING_STATUS_HEIGHT: u16 =
     COMPOSER_DOCK_WORKING_STATUS_TOP_PADDING.saturating_add(1);
-pub(crate) const DOCK_REGISTRY: [DockKind; 7] = [
+pub(crate) const DOCK_REGISTRY: [DockKind; 8] = [
     DockKind::Question,
     DockKind::Followup,
     DockKind::Revert,
     DockKind::Skills,
+    DockKind::Sessions,
     DockKind::ExternalEditor,
     DockKind::ToolOutputViewer,
     DockKind::ShortcutHelp,
@@ -216,6 +217,7 @@ pub(crate) enum DockKind {
     Followup,
     Revert,
     Skills,
+    Sessions,
     ExternalEditor,
     ToolOutputViewer,
     ShortcutHelp,
@@ -228,6 +230,7 @@ impl DockKind {
             Self::Followup => "Followup",
             Self::Revert => "Revert",
             Self::Skills => "Skills",
+            Self::Sessions => "Sessions",
             Self::ExternalEditor => "ExternalEditor",
             Self::ToolOutputViewer => "ToolOutputViewer",
             Self::ShortcutHelp => "ShortcutHelp",
@@ -402,7 +405,8 @@ mod tests {
         kinds.dedup();
 
         assert_eq!(kinds.len(), DOCK_REGISTRY.len());
-        assert_eq!(DOCK_REGISTRY.len(), 7);
+        assert_eq!(DOCK_REGISTRY.len(), 8);
+        assert!(DOCK_REGISTRY.contains(&DockKind::Sessions));
         assert!(DOCK_REGISTRY.contains(&DockKind::ToolOutputViewer));
         assert!(DOCK_REGISTRY.contains(&DockKind::ShortcutHelp));
     }

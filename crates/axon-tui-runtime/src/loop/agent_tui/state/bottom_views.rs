@@ -3,8 +3,8 @@
 use crate::app_shell::composer_dock::{DockCloseResult, DockLifecycle, DockState};
 use crate::r#loop::agent_tui::{
     bottom_view::{
-        BottomView, BottomViewAction, BottomViewEvent, SelectionView, SkillsToggleSummary,
-        SkillsToggleView,
+        BottomView, BottomViewAction, BottomViewEvent, SelectionView, SessionsView,
+        SessionsViewItem, SkillsToggleSummary, SkillsToggleView,
     },
     state::{AgentTuiState, AgentTuiSubmit},
 };
@@ -48,6 +48,25 @@ impl AgentTuiState {
         )));
     }
 
+    /// 打开会话弹窗；候选来自已加载的会话目录，`show_archived` 决定是否列出归档会话。
+    ///
+    /// 过滤后没有任何候选时不打开空弹窗，由调用方给出可执行的下一步提示。
+    pub(in crate::r#loop::agent_tui) fn open_sessions_view(&mut self, show_archived: bool) -> bool {
+        let items = self
+            .header
+            .catalog
+            .sessions
+            .iter()
+            .map(SessionsViewItem::from_catalog_item)
+            .collect::<Vec<_>>();
+        let view = SessionsView::new(items, show_archived);
+        if view.items().is_empty() {
+            return false;
+        }
+        self.open_bottom_view(BottomView::Sessions(view));
+        true
+    }
+
     pub(in crate::r#loop::agent_tui) fn handle_bottom_view_key(
         &mut self,
         key: UiKeyEvent,
@@ -70,6 +89,11 @@ impl AgentTuiState {
             BottomViewEvent::Action(action) => {
                 self.close_top_bottom_view();
                 self.apply_bottom_view_action(action)
+            }
+            BottomViewEvent::SessionSelected(session_id) => {
+                self.close_top_bottom_view();
+                self.begin_session_switch(&session_id);
+                None
             }
             BottomViewEvent::SkillsClosed(summary) => {
                 self.close_top_bottom_view();

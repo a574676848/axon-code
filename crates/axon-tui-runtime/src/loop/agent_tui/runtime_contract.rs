@@ -217,6 +217,19 @@ pub trait AgentTuiRuntimeAdapter: Send + Clone + 'static {
         None
     }
 
+    /// 按会话 ID 读取该会话的历史回放载荷。
+    ///
+    /// `/sessions` 选中会话后由主循环调用；返回的载荷走与冷启动同一条
+    /// `restore_historical_turn` 路径写入转录。宿主没有按会话读取历史的能力时
+    /// 返回 None，TUI 会把回放占位收成失败态并提示下一步，而不是静默留空。
+    fn load_session_history(
+        &self,
+        _request: &AgentTuiLaunchRequest,
+        _session_id: &str,
+    ) -> Option<AgentTuiRunOutput> {
+        None
+    }
+
     /// 查询当前工作区是否存在可恢复的 Daemon 活动回合。
     fn load_active_turn(&self, _request: &AgentTuiLaunchRequest) -> Option<AgentTuiActiveTurn> {
         None

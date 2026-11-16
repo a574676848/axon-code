@@ -131,6 +131,8 @@ mod runtime_watcher_tests;
 mod runtime_wire_policy;
 #[path = "state/runtime_wire_projection.rs"]
 mod runtime_wire_projection;
+#[path = "state/session_commands.rs"]
+mod session_commands;
 #[path = "state/session_handoff.rs"]
 mod session_handoff;
 #[path = "state/state_dump.rs"]
@@ -375,10 +377,13 @@ impl AgentTuiState {
     }
 
     pub(super) fn clear(&mut self) {
+        self.clear_with_note("已清空当前会话视图。");
+    }
+
+    /// 清空视图并写入一条说明，供 `/clear`、`/new` 等入口复用同一清屏语义。
+    pub(super) fn clear_with_note(&mut self, note: &str) {
         self.cells.transcript.clear();
-        self.cells
-            .transcript
-            .push(RenderCellRecord::system("已清空当前会话视图。"));
+        self.cells.transcript.push(RenderCellRecord::system(note));
         self.viewport.reset_transcript_view_to_bottom();
         self.composer.submitted_prompt = None;
         self.clear_active_transcript_lines();

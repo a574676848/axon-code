@@ -26,6 +26,14 @@ pub(super) const COMMAND_THINK: &str = "/think";
 pub(super) const COMMAND_STATUS: &str = "/status";
 pub(super) const COMMAND_MCP: &str = "/mcp";
 pub(super) const COMMAND_SKILLS: &str = "/skills";
+pub(super) const COMMAND_SESSIONS: &str = "/sessions";
+pub(super) const COMMAND_NEW: &str = "/new";
+pub(super) const COMMAND_RESET: &str = "/reset";
+
+/// `/sessions` 的用法提示。
+pub(super) const SESSIONS_USAGE: &str = "/sessions [--all]";
+/// `/sessions --all`：把归档会话一并列出。
+pub(super) const SESSIONS_ALL_ARG: &str = "--all";
 
 /// `/mcp` 用法提示。
 pub(super) const MCP_USAGE: &str = "/mcp [list|login|logout <server>]";
@@ -39,9 +47,27 @@ pub(super) const MCP_AUTH_LOGOUT_ARG: &str = "logout";
 const MCP_AUTH_ACTIONS: [&str; 2] = [MCP_AUTH_LOGIN_ARG, MCP_AUTH_LOGOUT_ARG];
 const MCP_ACTIONS: [&str; 3] = [MCP_LIST_ARG, MCP_AUTH_LOGIN_ARG, MCP_AUTH_LOGOUT_ARG];
 
-const COMMANDS: [AgentTuiCommandTemplate; 8] = [
+const COMMANDS: [AgentTuiCommandTemplate; 11] = [
     command(COMMAND_HELP, "查看 TUI 能力和常用命令", "", true),
     command(COMMAND_CLEAR, "清空当前会话视图，保留顶部状态栏", "", false),
+    command(
+        COMMAND_SESSIONS,
+        "打开会话弹窗，选中后载入该会话历史",
+        "[--all]",
+        false,
+    ),
+    command(
+        COMMAND_NEW,
+        "开启新会话，下一轮使用新的 session id",
+        "",
+        false,
+    ),
+    command(
+        COMMAND_RESET,
+        "重置当前会话的运行实例，保留 session id 与历史",
+        "",
+        false,
+    ),
     command(COMMAND_EXIT, "退出 Axon Agent TUI", "", true),
     command(COMMAND_MODEL, "切换下一轮使用的模型", "<model>", false),
     command(
@@ -208,6 +234,12 @@ fn argument_suggestions(
     match command_name {
         COMMAND_MODEL => model_suggestions(argument_filter, catalog),
         COMMAND_MCP => mcp_suggestions(argument_filter, catalog),
+        COMMAND_SESSIONS => static_value_suggestions(
+            COMMAND_SESSIONS,
+            "会话弹窗",
+            argument_filter,
+            &[SESSIONS_ALL_ARG],
+        ),
         COMMAND_SKILLS => static_value_suggestions(
             COMMAND_SKILLS,
             "Skill 管理",
@@ -373,12 +405,56 @@ mod tests {
     fn session_mutating_commands_are_unavailable_while_task_is_running() {
         let suggestions = command_suggestions("", &AgentTuiCatalog::default(), true);
 
-        for command in [COMMAND_CLEAR, COMMAND_MODEL, COMMAND_THINK] {
+        for command in [
+            COMMAND_CLEAR,
+            COMMAND_MODEL,
+            COMMAND_THINK,
+            COMMAND_SESSIONS,
+            COMMAND_NEW,
+            COMMAND_RESET,
+        ] {
             assert!(!command_available_during_task(command));
             assert!(
                 suggestions
                     .iter()
                     .all(|suggestion| suggestion.command != command)
+            );
+        }
+    }
+
+    #[test]
+    fn session_switch_commands_are_known_and_completable() {
+        let suggestions = command_suggestions("", &AgentTuiCatalog::default(), false);
+        let commands = suggestions
+            .iter()
+            .map(|suggestion| suggestion.command.as_str())
+            .collect::<Vec<_>>();
+
+        for command in [COMMAND_SESSIONS, COMMAND_NEW, COMMAND_RESET] {
+            assert!(is_known_command(command), "{command} 必须可被识别");
+            assert!(commands.contains(&command), "{command} 必须出现在补全里");
+        }
+    }
+
+    #[test]
+    fn sessions_argument_suggestion_offers_archived_flag() {
+        let suggestions = command_suggestions("sessions ", &AgentTuiCatalog::default(), false);
+
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].command, "/sessions --all");
+        assert_eq!(suggestions[0].argument_hint, SESSIONS_ALL_ARG);
+    }
+
+    #[test]
+    fn similar_commands_recovers_reset_typo() {
+        for (typo, expected) in [
+            ("/resett", COMMAND_RESET),
+            ("/sesions", COMMAND_SESSIONS),
+            ("/neww", COMMAND_NEW),
+        ] {
+            assert!(
+                similar_commands(typo).contains(&expected),
+                "{typo} 应提示 {expected}"
             );
         }
     }

@@ -181,9 +181,9 @@ mod tests {
         assert_eq!(counts[CATEGORY_INPUT], 14);
         assert_eq!(counts[CATEGORY_ATTACHMENT], 5);
         assert_eq!(counts[CATEGORY_QUEUE], 5);
-        assert_eq!(counts[CATEGORY_SLASH], 9);
+        assert_eq!(counts[CATEGORY_SLASH], 12);
         assert_eq!(counts[CATEGORY_POPUP], 3);
-        assert_eq!(counts[CATEGORY_DOCK], 7);
+        assert_eq!(counts[CATEGORY_DOCK], 8);
         assert_eq!(counts[CATEGORY_CELL], 15);
         assert_eq!(counts[CATEGORY_RUNTIME], 14);
         assert_eq!(counts[CATEGORY_LIVE_CELL], 5);

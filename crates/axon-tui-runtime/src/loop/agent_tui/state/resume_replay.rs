@@ -43,7 +43,6 @@ use crate::{
     },
 };
 
-#[cfg(test)]
 use crate::surface::cell_store::CellStore;
 
 const RESUME_RUNTIME_ERROR_EVENT_ID: &str = "resume-runtime-error";
@@ -52,9 +51,12 @@ const RESUME_RUNTIME_ERROR_SCOPE: &str = "resume";
 use super::AgentTuiState;
 
 impl AgentTuiState {
-    #[cfg(test)]
+    /// 进入历史回放加载态：清空转录并挂上回放占位。
+    ///
+    /// 冷启动恢复与 `/sessions` 切换会话共用这一入口，避免两套占位逻辑。
     pub(in crate::r#loop::agent_tui) fn begin_resume_replay(&mut self) {
         self.cells = CellStore::new(Vec::new());
+        self.viewport.reset_transcript_view_to_bottom();
         self.header.replay_snapshot = Some(ReplaySnapshotHeaderState::loading(0, true));
         self.upsert_resume_replay_cell(replay_loading_cell(0));
     }
@@ -70,6 +72,15 @@ impl AgentTuiState {
             replay.loaded_cells,
             true,
         ));
+        self.take_resume_replay_cell();
+    }
+
+    /// 撤掉历史回放占位 cell。
+    ///
+    /// `/sessions` 切换会话时，历史回放里的会话身份行会先清掉 handoff 态，
+    /// 占位此时已不在加载相位，`complete_resume_replay` 会直接返回。
+    /// 这里只负责把占位撤掉，避免界面上留下永远「正在加载」的死单元格。
+    pub(in crate::r#loop::agent_tui) fn settle_session_history_replay(&mut self) {
         self.take_resume_replay_cell();
     }
 

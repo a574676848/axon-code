@@ -146,6 +146,14 @@ impl AgentTuiRuntimeAdapter for CliAgentTuiRuntimeAdapter {
         ))
     }
 
+    fn load_session_history(
+        &self,
+        _request: &AgentTuiLaunchRequest,
+        session_id: &str,
+    ) -> Option<AgentTuiRunOutput> {
+        super::session_history::load_session_history(self.config_path.as_deref(), session_id)
+    }
+
     fn load_active_turn(&self, request: &AgentTuiLaunchRequest) -> Option<AgentTuiActiveTurn> {
         daemon_interaction_client::load_active_interaction_for_workspace(
             &request.cwd,

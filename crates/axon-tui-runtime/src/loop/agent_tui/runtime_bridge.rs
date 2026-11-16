@@ -64,6 +64,8 @@ pub(in crate::r#loop::agent_tui) struct RuntimeBridge {
     pub(in crate::r#loop::agent_tui) should_exit: bool,
     pub(in crate::r#loop::agent_tui) runtime_submission_enabled: bool,
     pub(in crate::r#loop::agent_tui) pending_runtime_submit: Option<AgentTuiSubmit>,
+    /// `/sessions` 选中后等待宿主读取历史的会话 ID。
+    pub(in crate::r#loop::agent_tui) pending_session_switch: Option<String>,
     pub(in crate::r#loop::agent_tui) catalog_reload_requested: bool,
     pub(in crate::r#loop::agent_tui) catalog_reload_force_mcp_refresh: bool,
     pub(in crate::r#loop::agent_tui) mcp_auth_request: Option<AgentTuiMcpAuthRequest>,
@@ -142,6 +144,7 @@ impl RuntimeBridge {
             should_exit: false,
             runtime_submission_enabled: true,
             pending_runtime_submit: None,
+            pending_session_switch: None,
             catalog_reload_requested: false,
             catalog_reload_force_mcp_refresh: false,
             mcp_auth_request: None,

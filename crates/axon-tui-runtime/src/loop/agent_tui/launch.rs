@@ -206,6 +206,10 @@ pub struct AgentTuiSessionCatalogItem {
     pub model: String,
     /// 更新时间。
     pub updated_at_ms: u64,
+    /// 会话是否已归档。
+    ///
+    /// `/sessions` 默认只列未归档会话，`/sessions --all` 才把归档项一并列出。
+    pub archived: bool,
 }
 
 impl AgentTuiSessionCatalogItem {
@@ -227,7 +231,21 @@ impl AgentTuiSessionCatalogItem {
             provider: provider.into(),
             model: model.into(),
             updated_at_ms,
+            archived: false,
         }
+    }
+
+    /// 标记该会话是否已归档。
+    #[must_use]
+    pub fn with_archived(mut self, archived: bool) -> Self {
+        self.archived = archived;
+        self
+    }
+
+    /// 会话是否已归档。
+    #[must_use]
+    pub const fn is_archived(&self) -> bool {
+        self.archived
     }
 
     /// 展示标签。
@@ -349,6 +367,16 @@ mod catalog_tests {
                 .with_supports_vision(false)
                 .supports_vision
         );
+    }
+
+    #[test]
+    fn session_catalog_item_defaults_to_active_and_carries_archived_flag() {
+        let active = AgentTuiSessionCatalogItem::new("s1", None, "p", "m", 1);
+        let archived = active.clone().with_archived(true);
+
+        assert!(!active.is_archived());
+        assert!(archived.is_archived());
+        assert_eq!(active.label(), "s1");
     }
 
     #[test]

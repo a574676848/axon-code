@@ -6,9 +6,10 @@ use crate::r#loop::agent_tui::{
     AXON_VERSION, AgentTuiLifecyclePhase, AgentTuiMcpAuthAction, AgentTuiModelCatalogItem,
     AgentTuiTokenUsage,
     commands::{
-        COMMAND_CLEAR, COMMAND_EXIT, COMMAND_HELP, COMMAND_MCP, COMMAND_MODEL, COMMAND_SKILLS,
-        COMMAND_STATUS, COMMAND_THINK, MCP_AUTH_LOGIN_ARG, MCP_AUTH_LOGOUT_ARG, MCP_LIST_ARG,
-        MCP_USAGE, command_available_during_task, is_known_command, parse_slash_command_token,
+        COMMAND_CLEAR, COMMAND_EXIT, COMMAND_HELP, COMMAND_MCP, COMMAND_MODEL, COMMAND_NEW,
+        COMMAND_RESET, COMMAND_SESSIONS, COMMAND_SKILLS, COMMAND_STATUS, COMMAND_THINK,
+        MCP_AUTH_LOGIN_ARG, MCP_AUTH_LOGOUT_ARG, MCP_LIST_ARG, MCP_USAGE, SESSIONS_ALL_ARG,
+        SESSIONS_USAGE, command_available_during_task, is_known_command, parse_slash_command_token,
         similar_commands,
     },
     runtime_identity::display_model,
@@ -52,6 +53,15 @@ impl AgentTuiState {
             COMMAND_MODEL => self.set_model(arg),
             COMMAND_THINK => self.set_reasoning_effort(arg),
             COMMAND_STATUS => self.show_status(),
+            COMMAND_SESSIONS => return self.show_sessions(arg),
+            COMMAND_NEW => {
+                self.start_new_session();
+                return AgentTuiCommandOutcome::Handled;
+            }
+            COMMAND_RESET => {
+                self.reset_session_run();
+                return AgentTuiCommandOutcome::Handled;
+            }
             COMMAND_MCP => return self.show_mcp(arg),
             COMMAND_SKILLS => self.show_skills(arg),
             _ if prompt == "exit" || prompt == "quit" => self.bridge.should_exit = true,
@@ -74,6 +84,9 @@ impl AgentTuiState {
                 "/model".to_owned(),
                 "/think".to_owned(),
                 "/status".to_owned(),
+                "/sessions".to_owned(),
+                "/new".to_owned(),
+                "/reset".to_owned(),
                 "/mcp".to_owned(),
                 "/skills".to_owned(),
                 "/clear".to_owned(),
@@ -301,6 +314,34 @@ impl AgentTuiState {
                 self.push_command_error("用法", "/skills [list|toggle]", None);
             }
         }
+    }
+
+    /// 处理 `/sessions [--all]`：打开会话弹窗。
+    ///
+    /// 候选只来自已加载的会话目录，未归档会话默认可见；`--all` 才把归档项一并列出。
+    fn show_sessions(&mut self, value: &str) -> AgentTuiCommandOutcome {
+        let show_archived = match value {
+            "" => false,
+            SESSIONS_ALL_ARG => true,
+            _ => {
+                self.push_usage_error(SESSIONS_USAGE);
+                return AgentTuiCommandOutcome::Handled;
+            }
+        };
+        self.clear_draft();
+        if !self.open_sessions_view(show_archived) {
+            let message = if show_archived {
+                "会话目录为空：还没有任何会话记录。"
+            } else {
+                "当前没有未归档会话；可用 /sessions --all 查看归档会话。"
+            };
+            self.push_command_error(
+                "没有可用会话",
+                message,
+                Some("先完成一轮对话后再打开会话弹窗。".to_owned()),
+            );
+        }
+        AgentTuiCommandOutcome::Handled
     }
 
     fn show_mcp(&mut self, value: &str) -> AgentTuiCommandOutcome {

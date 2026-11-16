@@ -40,6 +40,7 @@ mod run_output_review_renderer;
 mod run_output_tool_renderer;
 mod run_output_wire_sequence;
 mod runtime_adapter;
+mod session_history;
 mod settings_persistence;
 mod tui_control_commands;
 mod tui_submit_mapper;

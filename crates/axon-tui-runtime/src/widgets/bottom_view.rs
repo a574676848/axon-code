@@ -9,7 +9,9 @@ use ratatui::{
 
 use crate::{
     app_shell::style_tokens::TranscriptColorRole,
-    r#loop::agent_tui::bottom_view::{BottomView, QuestionView, SelectionView, SkillsToggleView},
+    r#loop::agent_tui::bottom_view::{
+        BottomView, QuestionView, SelectionView, SessionsView, SkillsToggleView,
+    },
 };
 
 use super::{
@@ -44,6 +46,7 @@ impl Widget for BottomPaneView<'_> {
         match self.view {
             BottomView::Question(view) => render_question_view(view, area, buf),
             BottomView::Selection(view) => render_selection_view(view, area, buf),
+            BottomView::Sessions(view) => render_sessions_view(view, area, buf),
             BottomView::SkillsToggle(view) => render_skills_toggle_view(view, area, buf),
             BottomView::ToolOutputViewer(view) => ToolOutputDockWidget {
                 title: view.title(),
@@ -235,6 +238,74 @@ fn render_question_custom_input(view: &QuestionView, area: Rect, buf: &mut Buffe
     }
 }
 
+fn render_sessions_view(view: &SessionsView, area: Rect, buf: &mut Buffer) {
+    if area.height == 0 {
+        return;
+    }
+    buf.set_line(
+        area.x,
+        area.y,
+        &Line::from(vec![
+            Span::styled(
+                view.title().to_owned(),
+                strong_role_style(TranscriptColorRole::Loading),
+            ),
+            Span::raw(" "),
+            Span::styled(
+                view.subtitle().to_owned(),
+                role_style(TranscriptColorRole::Muted),
+            ),
+        ]),
+        area.width,
+    );
+
+    let mut row = area.y.saturating_add(1);
+    for (index, item) in view.items().iter().enumerate() {
+        if row >= area.y.saturating_add(area.height) {
+            break;
+        }
+        let selected = index == view.selected();
+        let prefix = if selected {
+            PREFIX_SELECTED
+        } else {
+            PREFIX_IDLE
+        };
+        let style = if selected {
+            strong_role_style(TranscriptColorRole::Accent)
+        } else if item.archived {
+            role_style(TranscriptColorRole::Muted)
+        } else {
+            role_style(TranscriptColorRole::Assistant)
+        };
+        buf.set_line(
+            area.x,
+            row,
+            &Line::from(vec![
+                Span::styled(prefix, role_style(TranscriptColorRole::Accent)),
+                Span::styled(item.label.clone(), style),
+            ]),
+            area.width,
+        );
+        row = row.saturating_add(1);
+        if row >= area.y.saturating_add(area.height) {
+            break;
+        }
+        buf.set_line(
+            area.x,
+            row,
+            &Line::from(vec![
+                Span::raw(DESCRIPTION_PREFIX),
+                Span::styled(
+                    item.description.clone(),
+                    role_style(TranscriptColorRole::Muted),
+                ),
+            ]),
+            area.width,
+        );
+        row = row.saturating_add(1);
+    }
+}
+
 fn render_skills_toggle_view(view: &SkillsToggleView, area: Rect, buf: &mut Buffer) {
     if area.height == 0 {
         return;
@@ -330,7 +401,9 @@ mod tests {
     use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
 
     use super::*;
-    use crate::r#loop::agent_tui::bottom_view::{BottomView, SelectionView, SkillsToggleView};
+    use crate::r#loop::agent_tui::bottom_view::{
+        BottomView, SelectionView, SessionsView, SessionsViewItem, SkillsToggleView,
+    };
 
     #[test]
     fn selection_view_renders_menu_actions() {
@@ -344,6 +417,43 @@ mod tests {
         assert!(text.contains("查看skill列表"));
         assert!(text.contains("启用/禁用skill"));
         assert!(!buffer_text(&buffer).contains('─'));
+    }
+
+    #[test]
+    fn sessions_view_renders_selected_and_archived_items() {
+        let sessions = vec![
+            crate::r#loop::agent_tui::AgentTuiSessionCatalogItem::new(
+                "session-active",
+                Some("普通会话".to_owned()),
+                "openai",
+                "gpt-5.5",
+                1,
+            ),
+            crate::r#loop::agent_tui::AgentTuiSessionCatalogItem::new(
+                "session-archived",
+                Some("归档会话".to_owned()),
+                "openai",
+                "gpt-5.5",
+                2,
+            )
+            .with_archived(true),
+        ];
+        let view = BottomView::Sessions(SessionsView::new(
+            sessions
+                .iter()
+                .map(SessionsViewItem::from_catalog_item)
+                .collect(),
+            true,
+        ));
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 80, 10));
+
+        BottomPaneView { view: &view }.render(buffer.area, &mut buffer);
+
+        let text = normalized_text(&buffer_text(&buffer));
+        assert!(text.contains("会话"));
+        assert!(text.contains("普通会话"));
+        assert!(text.contains("归档会话"));
+        assert!(text.contains("已归档"));
     }
 
     #[test]
