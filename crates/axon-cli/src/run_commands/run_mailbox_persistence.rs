@@ -134,7 +134,7 @@ impl AgentMailboxPersistence for RuntimeMailboxPersistence {
 
 /// 构造绑定 `owner_id` 作用域的 mailbox 持久化实现。
 ///
-/// 库路径与 `axon run` 主链路同源（`<axon_root>/data/runtime.sqlite3`），
+/// 库路径与 `axon run` 主链路同源（`<axon_root>/data/control.sqlite3`），
 /// 因此本机 run 与 daemon 共享同一份 mailbox 事实。
 pub(crate) fn runtime_mailbox_persistence(
     config_path: &Path,

@@ -17,7 +17,7 @@ fn runtime_schema_contains_work_ledger_tables_and_hot_query_indexes() {
     let path = directory.path().join("runtime.sqlite3");
     let store = SqliteRuntimeStore::new(&path);
     store.initialize().expect("初始化目标 schema");
-    let connection = rusqlite::Connection::open(path).expect("打开数据库");
+    let connection = rusqlite::Connection::open(store.path()).expect("打开数据库");
     for table in [
         "workspaces",
         "inbox",

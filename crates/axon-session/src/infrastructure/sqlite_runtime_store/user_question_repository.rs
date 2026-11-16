@@ -16,7 +16,7 @@ impl UserQuestionStore for SqliteRuntimeStore {
         record: &UserQuestionRecord,
     ) -> Result<UserQuestionRecord, UserQuestionStoreError> {
         self.initialize().map_err(runtime_error)?;
-        let connection = self.connection().map_err(runtime_error)?;
+        let connection = self.outbox_connection().map_err(runtime_error)?;
 
         let changed = connection
             .execute(
@@ -68,7 +68,7 @@ impl UserQuestionStore for SqliteRuntimeStore {
         question_id: &str,
     ) -> Result<Option<UserQuestionRecord>, UserQuestionStoreError> {
         self.initialize().map_err(runtime_error)?;
-        let connection = self.connection().map_err(runtime_error)?;
+        let connection = self.outbox_connection().map_err(runtime_error)?;
         let sql = format!(
             "SELECT {USER_QUESTION_COLUMNS} FROM user_questions WHERE question_id = ?1 LIMIT 1"
         );
@@ -83,7 +83,7 @@ impl UserQuestionStore for SqliteRuntimeStore {
         call_id: &str,
     ) -> Result<Option<UserQuestionRecord>, UserQuestionStoreError> {
         self.initialize().map_err(runtime_error)?;
-        let connection = self.connection().map_err(runtime_error)?;
+        let connection = self.outbox_connection().map_err(runtime_error)?;
         let sql = format!(
             "SELECT {USER_QUESTION_COLUMNS} FROM user_questions WHERE tool_call_id = ?1 LIMIT 1"
         );
@@ -100,7 +100,7 @@ impl UserQuestionStore for SqliteRuntimeStore {
         limit: usize,
     ) -> Result<Vec<UserQuestionRecord>, UserQuestionStoreError> {
         self.initialize().map_err(runtime_error)?;
-        let connection = self.connection().map_err(runtime_error)?;
+        let connection = self.outbox_connection().map_err(runtime_error)?;
 
         let limit_i64 = i64::try_from(limit).unwrap_or(50);
         let mut results = Vec::new();
@@ -145,7 +145,7 @@ impl UserQuestionStore for SqliteRuntimeStore {
         delivery_mode: Option<&str>,
     ) -> Result<UserQuestionRecord, UserQuestionStoreError> {
         self.initialize().map_err(runtime_error)?;
-        let connection = self.connection().map_err(runtime_error)?;
+        let connection = self.outbox_connection().map_err(runtime_error)?;
 
         let changed = connection
             .execute(
@@ -195,7 +195,7 @@ impl UserQuestionStore for SqliteRuntimeStore {
         handoff_text: Option<&str>,
     ) -> Result<bool, UserQuestionStoreError> {
         self.initialize().map_err(runtime_error)?;
-        let connection = self.connection().map_err(runtime_error)?;
+        let connection = self.outbox_connection().map_err(runtime_error)?;
 
         let changed = connection
             .execute(
@@ -222,7 +222,7 @@ impl UserQuestionStore for SqliteRuntimeStore {
         limit: usize,
     ) -> Result<Vec<UserQuestionRecord>, UserQuestionStoreError> {
         self.initialize().map_err(runtime_error)?;
-        let connection = self.connection().map_err(runtime_error)?;
+        let connection = self.outbox_connection().map_err(runtime_error)?;
         let limit_i64 = i64::try_from(limit).unwrap_or(50);
 
         let sql = format!(
@@ -248,7 +248,7 @@ impl UserQuestionStore for SqliteRuntimeStore {
         delivery_mode: &str,
     ) -> Result<bool, UserQuestionStoreError> {
         self.initialize().map_err(runtime_error)?;
-        let connection = self.connection().map_err(runtime_error)?;
+        let connection = self.outbox_connection().map_err(runtime_error)?;
 
         let changed = connection
             .execute(
@@ -268,7 +268,7 @@ impl UserQuestionStore for SqliteRuntimeStore {
         limit: usize,
     ) -> Result<usize, UserQuestionStoreError> {
         self.initialize().map_err(runtime_error)?;
-        let connection = self.connection().map_err(runtime_error)?;
+        let connection = self.outbox_connection().map_err(runtime_error)?;
         let limit_i64 = i64::try_from(limit).unwrap_or(100);
 
         let expired = connection

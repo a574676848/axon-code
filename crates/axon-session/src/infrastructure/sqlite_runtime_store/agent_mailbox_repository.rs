@@ -36,7 +36,7 @@ impl AgentMailboxStore for SqliteRuntimeStore {
         message: &AgentMailboxMessageRecord,
     ) -> Result<AgentMailboxAppendOutcome, AgentMailboxStoreError> {
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         let changed = connection
             .execute(
                 "INSERT INTO agent_messages(message_id,idempotency_key,owner_id,author,\
@@ -92,7 +92,7 @@ impl AgentMailboxStore for SqliteRuntimeStore {
         message_id: &str,
     ) -> Result<Option<AgentMailboxMessageRecord>, AgentMailboxStoreError> {
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         connection
             .query_row(
                 &format!("SELECT {MESSAGE_COLUMNS} FROM agent_messages WHERE message_id=?1"),
@@ -108,7 +108,7 @@ impl AgentMailboxStore for SqliteRuntimeStore {
         idempotency_key: &str,
     ) -> Result<Option<AgentMailboxMessageRecord>, AgentMailboxStoreError> {
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         connection
             .query_row(
                 &format!(
@@ -133,7 +133,7 @@ impl AgentMailboxStore for SqliteRuntimeStore {
             return Ok(Vec::new());
         }
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         let mut statement = connection
             .prepare(&format!(
                 "SELECT {MESSAGE_COLUMNS} FROM agent_messages \
@@ -167,7 +167,7 @@ impl AgentMailboxStore for SqliteRuntimeStore {
             return Ok(Vec::new());
         }
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         let mut statement = connection
             .prepare(&format!(
                 "SELECT {MESSAGE_COLUMNS} FROM agent_messages \
@@ -196,7 +196,7 @@ impl AgentMailboxStore for SqliteRuntimeStore {
         now_ms: u64,
     ) -> Result<bool, AgentMailboxStoreError> {
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         let changed = connection
             .execute(
                 "UPDATE agent_messages \
@@ -218,7 +218,7 @@ impl AgentMailboxStore for SqliteRuntimeStore {
         now_ms: u64,
     ) -> Result<bool, AgentMailboxStoreError> {
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         // 读确认以「投递确认已经发生」为前置：只有 delivered 能推进到 read，
         // 因此不存在「还没送达就被标记已读」的路径。
         let changed = connection
@@ -243,7 +243,7 @@ impl AgentMailboxStore for SqliteRuntimeStore {
             return Ok(Vec::new());
         }
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         let mut statement = connection
             .prepare(&format!(
                 "SELECT {MESSAGE_COLUMNS} FROM agent_messages \
@@ -275,7 +275,7 @@ impl AgentMailboxStore for SqliteRuntimeStore {
         policy: AgentMailboxRetryPolicy,
     ) -> Result<bool, AgentMailboxStoreError> {
         self.initialize().map_err(storage_error)?;
-        let mut connection = self.connection().map_err(storage_error)?;
+        let mut connection = self.outbox_connection().map_err(storage_error)?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(storage_error)?;
@@ -330,7 +330,7 @@ impl AgentMailboxStore for SqliteRuntimeStore {
             return Ok(0);
         }
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         let changed = connection
             .execute(
                 "UPDATE agent_messages SET state='expired' \
@@ -358,7 +358,7 @@ impl AgentMailboxStore for SqliteRuntimeStore {
             return Ok(Vec::new());
         }
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         let mut conditions: Vec<&str> = Vec::new();
         let mut values: Vec<Value> = Vec::new();
         if let Some(owner_id) = query.owner_id.as_deref() {

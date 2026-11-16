@@ -141,7 +141,7 @@ pub(super) fn run_subagent_execution_wiring(
 ) -> Result<RunSubagentExecutionWiring, String> {
     let root_thread_id = stable_numeric_id(input.session_id);
     // mailbox 落盘绑定在装配层：内核不依赖数据库，只持有端口实现。
-    // 库路径与主链路同源（`<axon_root>/data/runtime.sqlite3`），因此本机 run
+    // 库路径与主链路同源（`<axon_root>/data/control.sqlite3`），因此本机 run
     // 与 daemon 共享同一份 mailbox 事实（合同 §5.3.1）。
     let mailbox_persistence = super::run_mailbox_persistence::runtime_mailbox_persistence(
         input.config_path,

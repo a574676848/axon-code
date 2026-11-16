@@ -59,7 +59,7 @@ pub enum DaemonAction {
 /// Daemon 启动参数。
 #[derive(Debug, Clone, Args, PartialEq, Eq)]
 pub struct DaemonRunCommand {
-    /// 用户 Axon 根目录；Daemon 会把 runtime.sqlite3 放到其 data 子目录。
+    /// 用户 Axon 根目录；Daemon 会把 control.sqlite3 放到其 data 子目录。
     #[arg(long)]
     pub root: PathBuf,
     /// Provider 配置路径。

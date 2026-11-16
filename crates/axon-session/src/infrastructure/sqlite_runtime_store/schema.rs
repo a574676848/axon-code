@@ -1,4 +1,8 @@
-//! Runtime SQLite schema 与索引定义。
+//! 运行态 SQLite schema 与索引定义。
+//!
+//! 事实源按生命周期拆成两个库，各自一套 DDL 与一个 `PRAGMA user_version`：
+//! `control.sqlite3` 承载需要长期保留、需要原子条件更新的控制面状态；
+//! `outbox.sqlite3` 承载有界、可按过期时间整批删除的待消费队列。
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -6,9 +10,37 @@ use std::sync::{LazyLock, Mutex, PoisonError, RwLock};
 
 use rusqlite::{Connection, TransactionBehavior};
 
-const SCHEMA_IDENTITY: &str = "jarvis-runtime-goal-v1";
 /// WAL 模式的 PRAGMA 返回值。
 const WAL_JOURNAL_MODE: &str = "wal";
+
+/// 建库目标。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SchemaKind {
+    /// 控制面库。
+    Control,
+    /// 待消费队列库。
+    Outbox,
+}
+
+impl SchemaKind {
+    /// schema 版本号，写入 `PRAGMA user_version`。
+    ///
+    /// 版本只标记**不兼容变更**：加表、加可空列不需要递增，删表或改语义必须递增，
+    /// 让打开旧库时报出「陌生库」而不是运行时表不存在。
+    const fn version(self) -> i64 {
+        match self {
+            Self::Control => 1,
+            Self::Outbox => 1,
+        }
+    }
+
+    const fn ddl(self) -> &'static str {
+        match self {
+            Self::Control => CONTROL_DDL,
+            Self::Outbox => OUTBOX_DDL,
+        }
+    }
+}
 
 static INITIALIZED_DATABASE_PATHS: LazyLock<RwLock<HashSet<PathBuf>>> =
     LazyLock::new(|| RwLock::new(HashSet::new()));
@@ -50,6 +82,7 @@ pub(super) fn is_schema_initialized_for_path(path: &Path) -> bool {
 
 pub(super) fn initialize_schema_for_path(
     path: &Path,
+    kind: SchemaKind,
     connection: &mut Connection,
 ) -> rusqlite::Result<()> {
     let _guard = SCHEMA_INIT_LOCK
@@ -63,13 +96,13 @@ pub(super) fn initialize_schema_for_path(
     // 执行一次。逐连接重复切换会在并发读流下反复争抢独占锁（实测 busy_timeout 到期仍
     // 以 `SQLITE_BUSY` 失败），而稳态下的新连接只需一次无锁的模式读取即可确认。
     ensure_wal_journal_mode(connection)?;
-    // 首次建库必须落在一个 IMMEDIATE 写事务里。DDL 批次很长，且 identity 行在批次
-    // **末尾**才写入：并发首次打开（本机 run、daemon、子代理执行面同时打开同一个
-    // runtime 库）时，后来的连接会进入「已建部分表、尚未写 identity」的窗口，把正常
-    // 建库误判为陌生库（`InvalidQuery`），并把半成品库永久留在该状态。IMMEDIATE 使
-    // 并发初始化者与普通写者一样按 busy_timeout 排队，建库要么整体可见、要么整体不可见。
+    // 首次建库必须落在一个 IMMEDIATE 写事务里。DDL 批次很长，且 `user_version` 在批次
+    // **末尾**才写入：并发首次打开（本机 run、daemon、子代理执行面同时打开同一个库）时，
+    // 后来的连接会进入「已建部分表、尚未写版本」的窗口，把正常建库误判为陌生库
+    // （`InvalidQuery`），并把半成品库永久留在该状态。IMMEDIATE 使并发初始化者与普通
+    // 写者一样按 busy_timeout 排队，建库要么整体可见、要么整体不可见。
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    initialize_schema(&transaction)?;
+    initialize_schema(&transaction, kind)?;
     transaction.commit()?;
     let normalized = canonical_or_raw(path);
     if let Ok(mut paths) = INITIALIZED_DATABASE_PATHS.write() {
@@ -78,34 +111,34 @@ pub(super) fn initialize_schema_for_path(
     Ok(())
 }
 
-/// 初始化运行时事实源 schema。
-pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()> {
-    let identity_table_exists: bool = connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='jarvis_schema_identity')",
+/// 初始化单个库的 schema。
+pub(super) fn initialize_schema(
+    connection: &Connection,
+    kind: SchemaKind,
+) -> rusqlite::Result<()> {
+    let existing_tables: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
         [],
         |row| row.get(0),
     )?;
-    if !identity_table_exists {
-        let existing_tables: i64 = connection.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
-            [],
-            |row| row.get(0),
-        )?;
-        if existing_tables > 0 {
-            return Err(rusqlite::Error::InvalidQuery);
-        }
-    } else {
-        let identity: String = connection.query_row(
-            "SELECT identity FROM jarvis_schema_identity LIMIT 1",
-            [],
-            |row| row.get(0),
-        )?;
-        if identity != SCHEMA_IDENTITY {
-            return Err(rusqlite::Error::InvalidQuery);
-        }
+    let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if existing_tables > 0 && version != kind.version() {
+        return Err(rusqlite::Error::InvalidQuery);
     }
-    connection.execute_batch(
-        "CREATE TABLE IF NOT EXISTS daemon_instances (
+    // 版本一致时仍然执行 DDL：全部语句都是 `CREATE ... IF NOT EXISTS`，既有库靠这一步
+    // 补上新增的表与索引，空库靠这一步建库。版本号只拦不兼容变更，不承担建库语义。
+    connection.execute_batch(kind.ddl())?;
+    // `user_version` 不支持参数绑定，取值来自本模块常量。
+    connection.execute_batch(&format!("PRAGMA user_version = {}", kind.version()))?;
+    if kind == SchemaKind::Control {
+        migrate_additive_columns(connection)?;
+    }
+    Ok(())
+}
+
+/// 控制面库：长期保留的状态机、目标与账本。
+const CONTROL_DDL: &str = "
+        CREATE TABLE IF NOT EXISTS daemon_instances (
             host_id TEXT PRIMARY KEY, generation TEXT NOT NULL, pid INTEGER NOT NULL,
             process_start_id TEXT, state TEXT NOT NULL, lease_expires_at_ms INTEGER NOT NULL,
             created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL
@@ -297,7 +330,6 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             updated_at_ms INTEGER NOT NULL,
             FOREIGN KEY(session_id) REFERENCES sessions(session_id)
         );
-        DROP INDEX IF EXISTS work_items_attempt;
         CREATE INDEX IF NOT EXISTS work_items_goal_history
             ON work_items(goal_id, created_at_ms DESC, execution_id DESC);
         CREATE INDEX IF NOT EXISTS work_items_goal_dedupe
@@ -340,6 +372,47 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             acknowledged_source TEXT NOT NULL,
             FOREIGN KEY(result_id) REFERENCES goal_results(result_id)
         );
+        CREATE TABLE IF NOT EXISTS decisions (
+            decision_id TEXT PRIMARY KEY NOT NULL,
+            scope_json TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            effect TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            expires_at_ms INTEGER,
+            created_at_ms INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS decisions_scope
+            ON decisions(effect, expires_at_ms, created_at_ms, decision_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS decisions_scope_revision
+            ON decisions(scope_json, revision);
+        CREATE INDEX IF NOT EXISTS decisions_expiry
+            ON decisions(expires_at_ms)
+            WHERE expires_at_ms IS NOT NULL;
+        CREATE TABLE IF NOT EXISTS ledger_events (
+            event_id TEXT PRIMARY KEY NOT NULL,
+            sequence INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            cause_event_id TEXT,
+            payload_json TEXT NOT NULL,
+            occurred_at_ms INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ledger_events_idempotency
+            ON ledger_events(idempotency_key);
+        CREATE UNIQUE INDEX IF NOT EXISTS ledger_events_sequence
+            ON ledger_events(sequence);
+        CREATE INDEX IF NOT EXISTS ledger_events_goal_lookup
+            ON ledger_events(
+                COALESCE(
+                    json_extract(payload_json, '$.goal_id'),
+                    json_extract(payload_json, '$.goalId')
+                ),
+                sequence
+            );
+";
+
+/// 待消费队列库：有界、按过期时间整批删除的协作事实。
+const OUTBOX_DDL: &str = "
         CREATE TABLE IF NOT EXISTS client_presence (
             client_id TEXT PRIMARY KEY NOT NULL,
             workspace_id TEXT NOT NULL,
@@ -453,43 +526,6 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             ON continuations(child_session_id, created_at_ms DESC, continuation_id);
         CREATE INDEX IF NOT EXISTS continuations_retention
             ON continuations(state, expires_at_ms, continuation_id);
-        CREATE TABLE IF NOT EXISTS decisions (
-            decision_id TEXT PRIMARY KEY NOT NULL,
-            scope_json TEXT NOT NULL,
-            actor TEXT NOT NULL,
-            effect TEXT NOT NULL,
-            revision INTEGER NOT NULL,
-            expires_at_ms INTEGER,
-            created_at_ms INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS decisions_scope
-            ON decisions(effect, expires_at_ms, created_at_ms, decision_id);
-        CREATE UNIQUE INDEX IF NOT EXISTS decisions_scope_revision
-            ON decisions(scope_json, revision);
-        CREATE INDEX IF NOT EXISTS decisions_expiry
-            ON decisions(expires_at_ms)
-            WHERE expires_at_ms IS NOT NULL;
-        CREATE TABLE IF NOT EXISTS ledger_events (
-            event_id TEXT PRIMARY KEY NOT NULL,
-            sequence INTEGER NOT NULL,
-            event_type TEXT NOT NULL,
-            idempotency_key TEXT NOT NULL,
-            cause_event_id TEXT,
-            payload_json TEXT NOT NULL,
-            occurred_at_ms INTEGER NOT NULL
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS ledger_events_idempotency
-            ON ledger_events(idempotency_key);
-        CREATE UNIQUE INDEX IF NOT EXISTS ledger_events_sequence
-            ON ledger_events(sequence);
-        CREATE INDEX IF NOT EXISTS ledger_events_goal_lookup
-            ON ledger_events(
-                COALESCE(
-                    json_extract(payload_json, '$.goal_id'),
-                    json_extract(payload_json, '$.goalId')
-                ),
-                sequence
-            );
         CREATE TABLE IF NOT EXISTS user_questions (
             question_id TEXT PRIMARY KEY NOT NULL,
             idempotency_key TEXT NOT NULL,
@@ -515,34 +551,14 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
         CREATE INDEX IF NOT EXISTS user_questions_lane_state
             ON user_questions(lane_id, state, created_at_ms DESC);
         CREATE INDEX IF NOT EXISTS user_questions_reconcile
-            ON user_questions(state, delivered, expires_at_ms);",
-    )?;
-    connection.execute_batch(
-        "CREATE TABLE IF NOT EXISTS jarvis_schema_identity (
-            identity TEXT PRIMARY KEY NOT NULL
-        );",
-    )?;
-    connection.execute(
-        "INSERT OR IGNORE INTO jarvis_schema_identity(identity) VALUES(?1)",
-        [SCHEMA_IDENTITY],
-    )?;
-    let identity: String = connection.query_row(
-        "SELECT identity FROM jarvis_schema_identity LIMIT 1",
-        [],
-        |row| row.get(0),
-    )?;
-    if identity != SCHEMA_IDENTITY {
-        return Err(rusqlite::Error::InvalidQuery);
-    }
-    migrate_additive_columns(connection)?;
-    Ok(())
-}
+            ON user_questions(state, delivered, expires_at_ms);
+";
 
 /// 追加式列迁移。
 ///
 /// DDL 使用 `CREATE TABLE IF NOT EXISTS`，既有运行态库不会因 DDL 变更而获得新列。
 /// 这里只补齐**新增且可空/带默认值**的列：无损、幂等、不需要重建库，因此不会丢掉
-/// 排队中的 Interaction 或 Host lease。schema identity 只在出现不兼容变更时递增。
+/// 排队中的 Interaction 或 Host lease。schema 版本只在出现不兼容变更时递增。
 ///
 /// 新增列的配套索引必须在本函数内、列补齐之后创建：既有库的 `lane_id` 由本函数
 /// 补列，索引若写在 DDL 批次里会因列不存在而整批失败。
@@ -553,38 +569,22 @@ fn migrate_additive_columns(connection: &Connection) -> rusqlite::Result<()> {
         "attachments_json",
         "TEXT NOT NULL DEFAULT '[]'",
     )?;
-    add_column_if_missing(
-        connection,
-        "inbox",
-        "lane_id",
-        "TEXT NOT NULL DEFAULT ''",
-    )?;
+    add_column_if_missing(connection, "inbox", "lane_id", "TEXT NOT NULL DEFAULT ''")?;
     // 本轮显式指定的模型（TUI `/model` 等入口）：可空，老记录读作 None。
     add_column_if_missing(connection, "inbox", "model", "TEXT")?;
     // 本轮显式指定的推理强度：与 model 同源，可空，老记录读作 None。
-    add_column_if_missing(
-        connection,
-        "inbox",
-        "reasoning_effort",
-        "TEXT",
-    )?;
+    add_column_if_missing(connection, "inbox", "reasoning_effort", "TEXT")?;
     /*
      * 本轮用过的工具名（逗号分隔、写入时已去重）。
      *
-     * 历史列表不读事件流：工具名只在 `session_events` 的载荷里，没有可用的索引，
+     * 历史列表不读事件流：工具名只在会话事件的载荷里，没有可用的索引，
      * 查询时聚合要把整条会话的十几万帧扫一遍。落成列之后，索引接口按主键取一次
      * 就能给出「执行了命令、已读取文件」这类动作摘要。老记录为空，界面退回状态短语。
      */
-    add_column_if_missing(
-        connection,
-        "inbox",
-        "tool_summary",
-        "TEXT NOT NULL DEFAULT ''",
-    )?;
+    add_column_if_missing(connection, "inbox", "tool_summary", "TEXT NOT NULL DEFAULT ''")?;
     /*
      * 两条索引各服务一条固定查询：车道列表按 (lane, 接收时间倒序) 取组内首行；
-     * 车道列表按 (lane, 接收时间倒序) 取组内首行；lane 排他领取按
-     * (lane, 状态, 租约到期) 定位在途 processing。
+     * lane 排他领取按 (lane, 状态, 租约到期) 定位在途 processing。
      */
     connection.execute_batch(
         "CREATE INDEX IF NOT EXISTS inbox_lane_recent

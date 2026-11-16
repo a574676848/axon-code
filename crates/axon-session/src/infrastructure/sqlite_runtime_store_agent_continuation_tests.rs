@@ -2,6 +2,7 @@
 //! （合同 §5.3.3 / §8.2.2）。
 
 use super::SqliteRuntimeStore;
+use crate::ports::RuntimeStore;
 use crate::{
     AgentContinuationAppendOutcome, AgentContinuationQuery, AgentContinuationRecord,
     AgentContinuationState, AgentContinuationStore,
@@ -54,7 +55,7 @@ fn continuation(continuation_id: &str, key: &str) -> AgentContinuationRecord {
 
 /// 直接打开底层库断言物理行数，避免只验证内存视图。
 fn count_rows(store: &SqliteRuntimeStore, key: &str) -> i64 {
-    let connection = rusqlite::Connection::open(store.path()).expect("打开数据库");
+    let connection = rusqlite::Connection::open(store.outbox_path()).expect("打开数据库");
     connection
         .query_row(
             "SELECT COUNT(*) FROM continuations WHERE idempotency_key=?1",
@@ -453,20 +454,31 @@ fn continuation_reference_is_resolvable_after_reopen() {
 #[test]
 fn legacy_database_without_continuation_table_gains_it_on_open() {
     let directory = axon_test_support::test_temp_dir();
-    let path = directory.path().join("runtime.sqlite3");
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    let version = outbox_schema_version();
     {
-        // 手造「新增本表之前」的既有库：只有 schema identity。
-        let connection = rusqlite::Connection::open(&path).expect("打开数据库");
+        // 手造「新增本表之前」的队列库：版本一致，但还没有 continuations。
+        let connection = rusqlite::Connection::open(store.outbox_path()).expect("打开数据库");
         connection
-            .execute_batch(
-                "CREATE TABLE jarvis_schema_identity (identity TEXT PRIMARY KEY NOT NULL);
-                 INSERT INTO jarvis_schema_identity(identity) VALUES('jarvis-runtime-goal-v1');",
-            )
+            .execute_batch(&format!(
+                "PRAGMA user_version = {version};
+                 CREATE TABLE legacy_marker(marker TEXT PRIMARY KEY NOT NULL);"
+            ))
             .expect("造旧库");
     }
-    let store = SqliteRuntimeStore::new(&path);
     store
         .append_continuation(&continuation("continuation-1", "key-1"))
         .expect("既有库必须能直接写入新表");
     assert_eq!(count_rows(&store, "key-1"), 1);
+}
+
+/// 读取队列库当前的 schema 版本，避免测试重复字面量。
+fn outbox_schema_version() -> i64 {
+    let seed_dir = axon_test_support::test_temp_dir();
+    let seed = SqliteRuntimeStore::new(seed_dir.path().join("seed.sqlite3"));
+    seed.initialize().expect("初始化 seed 库");
+    let connection = rusqlite::Connection::open(seed.outbox_path()).expect("打开 seed 库");
+    connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("读取版本")
 }

@@ -93,7 +93,10 @@ pub mod transaction;
 #[path = "sqlite_runtime_store/user_question_repository.rs"]
 mod user_question_repository;
 
-const DATABASE_FILE_NAME: &str = "runtime.sqlite3";
+/// 控制面库文件名：会话、队列、目标、调度、游标、账本。
+const CONTROL_DATABASE_FILE_NAME: &str = "control.sqlite3";
+/// 待消费队列库文件名：Agent 消息、continuation、通知、用户提问、客户端在线。
+const OUTBOX_DATABASE_FILE_NAME: &str = "outbox.sqlite3";
 /// 会话事件日志根目录名。
 const EVENTS_DIR: &str = "events";
 const HOST_STATE_RUNNING: &str = "running";
@@ -124,33 +127,98 @@ pub struct WalCheckpoint {
 
 /// SQLite Runtime Store。
 ///
+/// 事实源按生命周期拆成两个库：`control.sqlite3` 承载需要长期保留与原子条件更新的
+/// 控制面状态，`outbox.sqlite3` 承载有界待消费队列。分库后清理 outbox 不会与核心
+/// 事务争同一把写锁，两个库各自的 WAL 也互不影响。
+///
 /// Store 在进程内共享连接池：SQLite 单写者模型下，逐操作重建连接会反复承担
 /// 文件打开与 WAL 配置开销，实测每次提交代价相差两个数量级。
 #[derive(Debug, Clone)]
 pub struct SqliteRuntimeStore {
-    path: PathBuf,
+    control: Arc<DatabaseHandle>,
+    outbox: Arc<DatabaseHandle>,
     events_root: PathBuf,
-    schema_ready: Arc<AtomicBool>,
-    schema_init_lock: Arc<Mutex<()>>,
-    pool: Arc<ConnectionPool>,
+}
+
+/// 单个数据库文件的连接池与建库状态。
+///
+/// 每个库各自持有进度位与建库互斥：两个库的 DDL 互不相关，共享一把锁只会让
+/// 首次打开多等一轮无用时间。
+#[derive(Debug)]
+struct DatabaseHandle {
+    path: PathBuf,
+    kind: schema::SchemaKind,
+    pool: ConnectionPool,
+    schema_ready: AtomicBool,
+    schema_init_lock: Mutex<()>,
+}
+
+impl DatabaseHandle {
+    fn new(path: PathBuf, kind: schema::SchemaKind, busy_timeout: Option<Duration>) -> Self {
+        let pool = match busy_timeout {
+            Some(timeout) => ConnectionPool::with_busy_timeout(path.clone(), timeout),
+            None => ConnectionPool::new(path.clone()),
+        };
+        Self {
+            path,
+            kind,
+            pool,
+            schema_ready: AtomicBool::new(false),
+            schema_init_lock: Mutex::new(()),
+        }
+    }
+
+    fn connection(&self) -> Result<PooledConnection<'_>, RuntimeStoreError> {
+        self.pool.acquire()
+    }
+
+    fn ensure_schema(&self) -> Result<(), RuntimeStoreError> {
+        if self.schema_ready.load(Ordering::Acquire)
+            || schema::is_schema_initialized_for_path(&self.path)
+        {
+            self.schema_ready.store(true, Ordering::Release);
+            return Ok(());
+        }
+        let _guard = self
+            .schema_init_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.schema_ready.load(Ordering::Acquire)
+            || schema::is_schema_initialized_for_path(&self.path)
+        {
+            self.schema_ready.store(true, Ordering::Release);
+            return Ok(());
+        }
+        let mut connection = self.connection()?;
+        schema::initialize_schema_for_path(&self.path, self.kind, &mut connection).map_err(storage)?;
+        self.schema_ready.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    /// 在空闲窗口把 WAL 回写主库。
+    fn checkpoint_wal(&self) -> Result<WalCheckpoint, RuntimeStoreError> {
+        let connection = self.connection()?;
+        connection
+            .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+                Ok(WalCheckpoint {
+                    busy: row.get::<_, i64>(0)? != 0,
+                    log_frames: row.get(1)?,
+                    checkpointed_frames: row.get(2)?,
+                })
+            })
+            .map_err(storage)
+    }
 }
 
 impl SqliteRuntimeStore {
     /// 从数据库文件路径创建 Store。
+    ///
+    /// 传入的路径只用于确定**所在目录**：控制面库与待消费队列库固定为该目录下的
+    /// `control.sqlite3` 与 `outbox.sqlite3`。调用方不必关心具体文件名，也就不会出现
+    /// 「run 写 control、daemon 读 runtime」这类分叉。
     #[must_use]
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        let path = path.into();
-        let events_root = path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join(EVENTS_DIR);
-        Self {
-            pool: Arc::new(ConnectionPool::new(path.clone())),
-            path,
-            events_root,
-            schema_ready: Arc::new(AtomicBool::new(false)),
-            schema_init_lock: Arc::new(Mutex::new(())),
-        }
+        Self::build(path.into(), None)
     }
 
     /// 使用自定义写锁等待上限创建 Store。
@@ -160,26 +228,37 @@ impl SqliteRuntimeStore {
     /// 而不必空转完整生产超时。
     #[must_use]
     pub fn with_busy_timeout(path: impl Into<PathBuf>, busy_timeout: Duration) -> Self {
-        let path = path.into();
-        let events_root = path
+        Self::build(path.into(), Some(busy_timeout))
+    }
+
+    fn build(path: PathBuf, busy_timeout: Option<Duration>) -> Self {
+        let directory = path
             .parent()
-            .unwrap_or(Path::new("."))
-            .join(EVENTS_DIR);
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        let events_root = directory.join(EVENTS_DIR);
         Self {
-            pool: Arc::new(ConnectionPool::with_busy_timeout(
-                path.clone(),
+            control: Arc::new(DatabaseHandle::new(
+                directory.join(CONTROL_DATABASE_FILE_NAME),
+                schema::SchemaKind::Control,
                 busy_timeout,
             )),
-            path,
+            outbox: Arc::new(DatabaseHandle::new(
+                directory.join(OUTBOX_DATABASE_FILE_NAME),
+                schema::SchemaKind::Outbox,
+                busy_timeout,
+            )),
             events_root,
-            schema_ready: Arc::new(AtomicBool::new(false)),
-            schema_init_lock: Arc::new(Mutex::new(())),
         }
     }
 
-    /// 从连接池取用一条运行时连接。
+    /// 从连接池取用一条控制面连接。
     pub(crate) fn connection(&self) -> Result<PooledConnection<'_>, RuntimeStoreError> {
-        self.pool.acquire()
+        self.control.connection()
+    }
+
+    /// 从连接池取用一条待消费队列连接。
+    pub(crate) fn outbox_connection(&self) -> Result<PooledConnection<'_>, RuntimeStoreError> {
+        self.outbox.connection()
     }
 
     /// 在共享连接池上执行一次只读查询。
@@ -195,16 +274,37 @@ impl SqliteRuntimeStore {
         f(&connection).map_err(|error| RuntimeStoreError::Storage(error.to_string()))
     }
 
+    /// 在待消费队列库上执行一次只读查询。
+    pub fn with_outbox_read_connection<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> rusqlite::Result<T>,
+    ) -> Result<T, RuntimeStoreError> {
+        let connection = self.outbox_connection()?;
+        f(&connection).map_err(|error| RuntimeStoreError::Storage(error.to_string()))
+    }
+
     /// 从 Axon 根目录创建 Store。
     #[must_use]
     pub fn from_root(root: impl AsRef<Path>) -> Self {
-        Self::new(root.as_ref().join(DATABASE_FILE_NAME))
+        Self::new(root.as_ref().join(CONTROL_DATABASE_FILE_NAME))
     }
 
-    /// 返回数据库路径。
+    /// 返回控制面库路径。
     #[must_use]
     pub fn path(&self) -> &Path {
-        &self.path
+        &self.control.path
+    }
+
+    /// 返回待消费队列库路径。
+    #[must_use]
+    pub fn outbox_path(&self) -> &Path {
+        &self.outbox.path
+    }
+
+    /// 返回 Store 的两个库文件路径（控制面、待消费队列）。
+    #[must_use]
+    pub fn database_paths(&self) -> [&Path; 2] {
+        [&self.control.path, &self.outbox.path]
     }
 
     /// 会话事件日志根目录。
@@ -235,22 +335,16 @@ impl SqliteRuntimeStore {
         runtime_repository::reap_dead_hosts(self, now_ms)
     }
 
-    /// 在空闲窗口把 WAL 回写主库。
+    /// 在空闲窗口把两个库的 WAL 回写主库。
     ///
     /// `PASSIVE` 不阻塞并发读写：能回写的帧立即回写，拿不到干净窗口就把剩余部分留给
     /// 下一次。没有这一步，持续写入会让 WAL 漂到与主库同量级（实测 708 MiB / 703 MiB），
     /// 随后一次全量回写独占写锁数十秒，所有写者按 `busy_timeout` 排队失败。
     pub fn checkpoint_wal(&self) -> Result<WalCheckpoint, RuntimeStoreError> {
-        let connection = self.connection()?;
-        connection
-            .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
-                Ok(WalCheckpoint {
-                    busy: row.get::<_, i64>(0)? != 0,
-                    log_frames: row.get(1)?,
-                    checkpointed_frames: row.get(2)?,
-                })
-            })
-            .map_err(storage)
+        let control = self.control.checkpoint_wal()?;
+        // 队列库的回写失败不影响控制面结论：它的体量有界，下一个维护周期会再试。
+        let _ = self.outbox.checkpoint_wal();
+        Ok(control)
     }
 
     /// 事件正文归档根目录：`<库目录>/archive/session-events`。
@@ -258,7 +352,7 @@ impl SqliteRuntimeStore {
     /// 与网关事件归档同处 `data/archive` 下，便于运维按一个目录做备份与清理。
     #[must_use]
     pub fn event_archive_root(&self) -> PathBuf {
-        let parent = self.path.parent().unwrap_or(Path::new("."));
+        let parent = self.control.path.parent().unwrap_or(Path::new("."));
         parent
             .join(EVENT_ARCHIVE_DIR)
             .join(SESSION_EVENT_ARCHIVE_SUBDIR)
@@ -274,28 +368,8 @@ pub const SESSION_EVENT_MISSING_ARCHIVE_TYPE: &str = "archive_missing";
 
 impl RuntimeStore for SqliteRuntimeStore {
     fn initialize(&self) -> Result<(), RuntimeStoreError> {
-        if self.schema_ready.load(Ordering::Acquire)
-            || schema::is_schema_initialized_for_path(&self.path)
-        {
-            if !self.schema_ready.load(Ordering::Relaxed) {
-                self.schema_ready.store(true, Ordering::Release);
-            }
-            return Ok(());
-        }
-        let _guard = self
-            .schema_init_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self.schema_ready.load(Ordering::Acquire)
-            || schema::is_schema_initialized_for_path(&self.path)
-        {
-            self.schema_ready.store(true, Ordering::Release);
-            return Ok(());
-        }
-        let mut connection = self.connection()?;
-        schema::initialize_schema_for_path(&self.path, &mut connection).map_err(storage)?;
-        self.schema_ready.store(true, Ordering::Release);
-        Ok(())
+        self.control.ensure_schema()?;
+        self.outbox.ensure_schema()
     }
 
     fn claim_host(

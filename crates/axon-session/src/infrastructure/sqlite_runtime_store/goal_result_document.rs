@@ -18,7 +18,7 @@ pub(super) fn save(
     // 文件名由身份和正文散列生成，不接受 Execution ID 中的路径分隔符。
     store.get_session(session_id)?;
     let directory = store
-        .path
+        .path()
         .parent()
         .ok_or_else(|| RuntimeStoreError::Storage("运行目录缺少父目录".to_owned()))?
         .join(GOAL_RESULT_DIRECTORY);

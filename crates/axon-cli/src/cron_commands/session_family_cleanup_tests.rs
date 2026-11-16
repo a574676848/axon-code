@@ -307,7 +307,7 @@ fn create_runtime_family(root: &Path, child_status: &str, with_execution: bool) 
     axon_session::SqliteRuntimeStore::from_root(&data)
         .initialize()
         .expect("runtime schema 应可初始化");
-    let connection = Connection::open(data.join("runtime.sqlite3")).expect("runtime 应可打开");
+    let connection = Connection::open(data.join("control.sqlite3")).expect("runtime 应可打开");
     for (id, status) in [(STALE_ROOT, "idle"), (STALE_CHILD, child_status)] {
         connection
             .execute(
@@ -441,7 +441,7 @@ fn runtime_exists(root: &Path, session_id: &str) -> bool {
 
 fn runtime_path(root: &Path) -> PathBuf {
     root.join(axon_session::AXON_RUNTIME_DATA_DIR)
-        .join("runtime.sqlite3")
+        .join("control.sqlite3")
 }
 
 fn snapshot_files(paths: &[PathBuf]) -> Vec<(PathBuf, Vec<u8>)> {

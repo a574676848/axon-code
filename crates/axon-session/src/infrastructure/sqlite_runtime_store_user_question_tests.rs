@@ -58,7 +58,7 @@ fn test_insert_and_idempotency() {
     assert_eq!(second.idempotency_key, "idem-1");
 
     // 物理检查只存在 1 行
-    let conn = rusqlite::Connection::open(fix.store.path()).expect("打开库");
+    let conn = rusqlite::Connection::open(fix.store.outbox_path()).expect("打开库");
     let count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM user_questions WHERE idempotency_key = 'idem-1'",

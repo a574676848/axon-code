@@ -22,14 +22,66 @@ const CLEANUP_PERFORMANCE_SAMPLE_COUNT: usize = 20;
 const CLEANUP_PERFORMANCE_P99_BUDGET_US: u128 = 2_000_000;
 
 pub(super) fn open_fixture(root: &Path) -> Connection {
-    let path = root
-        .join(axon_config::AXON_RUNTIME_DATA_DIR)
-        .join(RUNTIME_DATABASE_FILE);
+    let directory = root.join(axon_config::AXON_RUNTIME_DATA_DIR);
+    let path = directory.join(CONTROL_DATABASE_FILE);
     std::fs::create_dir_all(path.parent().expect("路径应含父目录")).expect("测试目录应可创建");
-    axon_session::SqliteRuntimeStore::from_root(root.join(axon_config::AXON_RUNTIME_DATA_DIR))
+    axon_session::SqliteRuntimeStore::from_root(&directory)
         .initialize()
         .expect("测试 schema 应可初始化");
-    Connection::open(&path).expect("测试数据库应可打开")
+    let connection = Connection::open(&path).expect("测试数据库应可打开");
+    // 夹具按「一份批次写两个库」的方式播种，因此队列库也要具备控制面表的形状：
+    // 只镜像表结构，不复制索引与数据，空表对断言无影响。
+    let outbox = Connection::open(outbox_sibling(&connection)).expect("队列库应可打开");
+    mirror_schema(&connection, &outbox);
+    connection
+}
+
+fn mirror_schema(control: &Connection, outbox: &Connection) {
+    let mut statement = control
+        .prepare(
+            "SELECT name, sql FROM sqlite_master
+             WHERE type='table' AND sql IS NOT NULL AND name NOT LIKE 'sqlite_%'",
+        )
+        .expect("读取控制面表定义");
+    let tables = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .expect("枚举控制面表定义")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("收集控制面表定义");
+    for (name, sql) in tables {
+        let exists: bool = outbox
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                [&name],
+                |row| row.get(0),
+            )
+            .expect("查询队列库表");
+        if !exists {
+            outbox.execute_batch(&sql).expect("镜像控制面表结构");
+        }
+    }
+}
+
+/// 队列库与给定连接指向的控制面库同目录，文件名固定为 `outbox.sqlite3`。
+fn outbox_sibling(connection: &Connection) -> std::path::PathBuf {
+    let path: String = connection
+        .query_row(
+            "SELECT file FROM pragma_database_list WHERE name='main'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("读取库文件路径");
+    std::path::Path::new(&path).with_file_name(OUTBOX_DATABASE_FILE)
+}
+
+/// 清理横跨两个库，测试夹具也按同一个批次写两份：每个库各自持有本库内存在的表，
+/// 这样既保留「一份数据、两侧可读」的既有断言，又不需要为每张表判断归属。
+fn seed(connection: &Connection, batch: &str, what: &str) {
+    connection.execute_batch(batch).expect(what);
+    let outbox = Connection::open(outbox_sibling(connection)).expect("队列库应可打开");
+    outbox.execute_batch(batch).expect(what);
 }
 
 fn insert_hot_session_history(connection: &Connection) {
@@ -99,9 +151,7 @@ fn write_retained_session_artifacts(root: &Path) -> Vec<(std::path::PathBuf, Vec
     fn cleanup_covers_r1_to_r7_runtime_tables() {
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
-    connection
-        .execute_batch(
-            "INSERT INTO sessions VALUES('s-old','s-old','s-old','/w','completed',NULL,NULL,0,0,0,0,1,1,1);
+    seed(&connection, "INSERT INTO sessions VALUES('s-old','s-old','s-old','/w','completed',NULL,NULL,0,0,0,0,1,1,1);
              INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,emitted_at_ms) VALUES('s-old',1,'g','turn','{}',1);
              INSERT INTO session_checkpoints VALUES('s-old',1,'a',0,0,NULL,NULL,NULL,NULL,NULL,1);
              INSERT INTO schedules VALUES('sch-1','s-old','interval','1m','{}','none','created',1,NULL,NULL,0,NULL,NULL);
@@ -123,9 +173,7 @@ fn write_retained_session_artifacts(root: &Path) -> Vec<(std::path::PathBuf, Vec
              INSERT INTO agent_messages(message_id,idempotency_key,owner_id,author,recipient,kind,content,trigger_turn,continuation_id,state,attempt_count,last_attempt_at_ms,retry_at_ms,last_error,delivered_at_ms,created_at_ms,expires_at_ms)
                  VALUES('m-old','k-m-old','s-old','/root','/root/review','collab','hi',0,NULL,'delivered',1,1,NULL,NULL,1,1,1);
              INSERT INTO continuations(continuation_id,idempotency_key,owner_id,parent_session_id,child_session_id,agent_path,job_ref,execution_ref,terminal_kind,exit_reason,summary,artifact_path,token_input,token_output,token_reasoning,state,consumed_at_ms,consumed_by,attempt_count,last_attempt_at_ms,retry_at_ms,last_error,created_at_ms,expires_at_ms)
-                 VALUES('c-old','k-c-old','s-old','s-old','child-old','/root/review',NULL,NULL,'completed','子代理正常结束','摘要',NULL,1,1,0,'consumed',1,'run',1,NULL,NULL,NULL,1,1);",
-        )
-        .expect("测试数据应可写入");
+                 VALUES('c-old','k-c-old','s-old','s-old','child-old','/root/review',NULL,NULL,'completed','子代理正常结束','摘要',NULL,1,1,0,'consumed',1,'run',1,NULL,NULL,NULL,1,1);", "测试数据应可写入");
     drop(connection);
 
     let mut counts = cleanup_runtime_session_families(root.path(), &["s-old".to_owned()])
@@ -154,12 +202,22 @@ fn write_retained_session_artifacts(root: &Path) -> Vec<(std::path::PathBuf, Vec
     assert_eq!(counts.continuations, 1);
 
     let remaining = count_expired_rows(
-        &Connection::open(
-            root.path()
-                .join(axon_config::AXON_RUNTIME_DATA_DIR)
-                .join(RUNTIME_DATABASE_FILE),
-        )
-        .expect("测试数据库应可重开"),
+        Some(
+            &Connection::open(
+                root.path()
+                    .join(axon_config::AXON_RUNTIME_DATA_DIR)
+                    .join(CONTROL_DATABASE_FILE),
+            )
+            .expect("测试数据库应可重开"),
+        ),
+        Some(
+            &Connection::open(
+                root.path()
+                    .join(axon_config::AXON_RUNTIME_DATA_DIR)
+                    .join(OUTBOX_DATABASE_FILE),
+            )
+            .expect("队列数据库应可重开"),
+        ),
         100,
     )
     .expect("清理后应可统计");
@@ -170,18 +228,14 @@ fn write_retained_session_artifacts(root: &Path) -> Vec<(std::path::PathBuf, Vec
 fn cleanup_protects_active_and_unread_records() {
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
-    connection
-        .execute_batch(
-            "INSERT INTO sessions VALUES('s-run','s-run','s-run','/w','running',NULL,NULL,0,0,0,0,1,1,1);
+    seed(&connection, "INSERT INTO sessions VALUES('s-run','s-run','s-run','/w','running',NULL,NULL,0,0,0,0,1,1,1);
              INSERT INTO goals(goal_id,scope_json,parent_goal_id,title,status,revision,plan_json,acceptance_json,progress_json,waiting_reason,next_step,priority,deadline_ms,created_from_interaction_id,cancellation_reason,cancellation_requested_at_ms,created_at_ms,updated_at_ms)
                  VALUES('t-done','{}',NULL,'完成任务','completed',1,'{}','{}',NULL,NULL,NULL,0,NULL,NULL,NULL,NULL,1,1);
              INSERT INTO work_items(execution_id,goal_id,session_id,kind,payload_json,goal_revision,context_version,attempt,priority,dedupe_key,status,lease_json,claimed_by,claimed_generation,lease_expires_at_ms,started_at_ms,committed_at_ms,cancelled_at_ms,retry_at_ms,checkpoint_json,cancellation_requested_at_ms,cancellation_reason,created_at_ms,updated_at_ms)
                  VALUES('e-done','t-done',NULL,'turn','{}',NULL,NULL,1,0,NULL,'completed',NULL,NULL,NULL,NULL,1,NULL,NULL,NULL,NULL,NULL,NULL,1,1);
              INSERT INTO goal_results VALUES('r-unread','t-done','e-done',1,'done','[]','[]',NULL,1);
              INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,updated_at_ms,attachments_json)
-                 VALUES('i-live','tui','m-2','{}','{}','{}','hi','received',1,1,'[]');",
-        )
-        .expect("测试数据应可写入");
+                 VALUES('i-live','tui','m-2','{}','{}','{}','hi','received',1,1,'[]');", "测试数据应可写入");
     drop(connection);
 
     let dry_run = count_runtime_cleanup(root.path(), 100).expect("dry-run 应成功");
@@ -220,7 +274,7 @@ fn explicit_session_family_cleanup_rechecks_active_state_and_execution_reference
         let connection = Connection::open(
             root.path()
                 .join(axon_config::AXON_RUNTIME_DATA_DIR)
-                .join(RUNTIME_DATABASE_FILE),
+                .join(CONTROL_DATABASE_FILE),
         )
         .expect("runtime 应可重开");
         let retained: i64 = connection
@@ -283,13 +337,9 @@ fn explicit_session_family_cleanup_rechecks_active_state_and_execution_reference
 fn dry_run_counts_match_real_deletion() {
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
-    connection
-        .execute_batch(
-            "INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,updated_at_ms,attachments_json)
+    seed(&connection, "INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,updated_at_ms,attachments_json)
                  VALUES('i-1','tui','m-1','{}','{}','{}','hi','rejected',1,1,'[]');
-             INSERT INTO decisions VALUES('d-1','{}','user','allow',1,1,1);",
-        )
-        .expect("测试数据应可写入");
+             INSERT INTO decisions VALUES('d-1','{}','user','allow',1,1,1);", "测试数据应可写入");
     drop(connection);
 
     let dry_run = count_runtime_cleanup(root.path(), 100).expect("dry-run 应成功");
@@ -304,13 +354,9 @@ fn dry_run_counts_match_real_deletion() {
 fn expired_events_beyond_floor_are_removed() {
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
-    connection
-        .execute_batch(
-            "WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 1001)
+    seed(&connection, "WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 1001)
              INSERT INTO ledger_events(event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms)
-             SELECT 'ev-'||n, n, 'goal.completed', 'k-'||n, NULL, '{}', 1 FROM seq;",
-        )
-        .expect("测试数据应可写入");
+             SELECT 'ev-'||n, n, 'goal.completed', 'k-'||n, NULL, '{}', 1 FROM seq;", "测试数据应可写入");
     drop(connection);
 
     let counts = cleanup_runtime_data(root.path(), 100).expect("清理应成功");
@@ -319,7 +365,7 @@ fn expired_events_beyond_floor_are_removed() {
     let connection = Connection::open(
         root.path()
             .join(axon_config::AXON_RUNTIME_DATA_DIR)
-            .join(RUNTIME_DATABASE_FILE),
+            .join(CONTROL_DATABASE_FILE),
     )
     .expect("测试数据库应可重开");
     let remaining: i64 = connection
@@ -339,17 +385,13 @@ fn expired_events_beyond_floor_are_removed() {
 fn cleanup_stops_at_time_budget_and_resumes_next_run() {
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
-    connection
-        .execute_batch(
-            "WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 1000)
+    seed(&connection, "WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 1000)
              INSERT INTO inbox
                  (interaction_id, source_channel, source_message_id, scope_json, audience_json,
                   reply_route_json, content, status, received_at_ms, lease_token,
                   lease_expires_at_ms, updated_at_ms)
              SELECT 'i-'||n, 'tui', 'm-'||n, '{}', '{}', '{}', 'hi', 'rejected', 1, NULL, NULL, 1
-             FROM seq;",
-        )
-        .expect("测试数据应可写入");
+             FROM seq;", "测试数据应可写入");
     drop(connection);
 
     let first = run_runtime_cleanup_with_budget(root.path(), 100, false, Duration::ZERO)
@@ -370,9 +412,7 @@ fn cleanup_stops_at_time_budget_and_resumes_next_run() {
 fn cleanup_large_runtime_history_is_bounded() {
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
-    connection
-        .execute_batch(
-            "BEGIN;
+    seed(&connection, "BEGIN;
              WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 50000)
              INSERT INTO inbox
                  (interaction_id, source_channel, source_message_id, scope_json, audience_json,
@@ -380,19 +420,13 @@ fn cleanup_large_runtime_history_is_bounded() {
                   lease_expires_at_ms, updated_at_ms)
              SELECT 'i-'||n, 'tui', 'm-'||n, '{}', '{}', '{}', 'hi', 'understood', 1, NULL, NULL, 1
              FROM seq;
-             COMMIT;",
-        )
-        .expect("交互数据应可写入");
-    connection
-        .execute_batch(
-            "BEGIN;
+             COMMIT;", "交互数据应可写入");
+    seed(&connection, "BEGIN;
              WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 200000)
              INSERT INTO ledger_events
                  (event_id, sequence, event_type, idempotency_key, cause_event_id, payload_json, occurred_at_ms)
              SELECT 'ev-'||n, n, 'goal.completed', 'k-'||n, NULL, '{}', 1 FROM seq;
-             COMMIT;",
-        )
-        .expect("事件数据应可写入");
+             COMMIT;", "事件数据应可写入");
     drop(connection);
 
     let started = std::time::Instant::now();
@@ -421,9 +455,7 @@ fn cleanup_does_not_stall_concurrent_writes() {
 
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
-    connection
-        .execute_batch(
-            "BEGIN;
+    seed(&connection, "BEGIN;
              WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 20000)
              INSERT INTO inbox
                  (interaction_id, source_channel, source_message_id, scope_json, audience_json,
@@ -431,15 +463,13 @@ fn cleanup_does_not_stall_concurrent_writes() {
                   lease_expires_at_ms, updated_at_ms)
              SELECT 'i-'||n, 'tui', 'm-'||n, '{}', '{}', '{}', 'hi', 'rejected', 1, NULL, NULL, 1
              FROM seq;
-             COMMIT;",
-        )
-        .expect("交互数据应可写入");
+             COMMIT;", "交互数据应可写入");
     drop(connection);
 
     let writer_path = root
         .path()
         .join(axon_config::AXON_RUNTIME_DATA_DIR)
-        .join(RUNTIME_DATABASE_FILE);
+        .join(CONTROL_DATABASE_FILE);
     let started = Arc::new(AtomicBool::new(false));
     let stop = Arc::new(AtomicBool::new(false));
     let max_write_us = Arc::new(AtomicU64::new(0));
@@ -528,7 +558,7 @@ fn cleanup_does_not_stall_concurrent_writes() {
     let connection = Connection::open(
         root.path()
             .join(axon_config::AXON_RUNTIME_DATA_DIR)
-            .join(RUNTIME_DATABASE_FILE),
+            .join(CONTROL_DATABASE_FILE),
     )
     .expect("测试数据库应可重开");
     let (remaining, first_sequence, last_sequence): (i64, i64, i64) = connection

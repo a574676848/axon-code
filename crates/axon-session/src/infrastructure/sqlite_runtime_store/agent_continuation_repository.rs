@@ -29,7 +29,7 @@ impl AgentContinuationStore for SqliteRuntimeStore {
         record: &AgentContinuationRecord,
     ) -> Result<AgentContinuationAppendOutcome, AgentContinuationStoreError> {
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         let changed = connection
             .execute(
                 "INSERT INTO continuations(continuation_id,idempotency_key,owner_id,\
@@ -94,7 +94,7 @@ impl AgentContinuationStore for SqliteRuntimeStore {
         continuation_id: &str,
     ) -> Result<Option<AgentContinuationRecord>, AgentContinuationStoreError> {
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         connection
             .query_row(
                 &format!(
@@ -113,7 +113,7 @@ impl AgentContinuationStore for SqliteRuntimeStore {
         idempotency_key: &str,
     ) -> Result<Option<AgentContinuationRecord>, AgentContinuationStoreError> {
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         connection
             .query_row(
                 &format!(
@@ -138,7 +138,7 @@ impl AgentContinuationStore for SqliteRuntimeStore {
             return Ok(Vec::new());
         }
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         let mut statement = connection
             .prepare(&format!(
                 "SELECT {CONTINUATION_COLUMNS} FROM continuations \
@@ -170,7 +170,7 @@ impl AgentContinuationStore for SqliteRuntimeStore {
         now_ms: u64,
     ) -> Result<bool, AgentContinuationStoreError> {
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         let changed = connection
             .execute(
                 "UPDATE continuations \
@@ -195,7 +195,7 @@ impl AgentContinuationStore for SqliteRuntimeStore {
         retry_at_ms: u64,
     ) -> Result<bool, AgentContinuationStoreError> {
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         // continuation 的终止路径只有保留窗口：装配失败不该让终态事实被丢弃，
         // 因此这里只记账与延后，不设尝试上限。
         let changed = connection
@@ -225,7 +225,7 @@ impl AgentContinuationStore for SqliteRuntimeStore {
             return Ok(0);
         }
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         let changed = connection
             .execute(
                 "UPDATE continuations SET state='expired' \
@@ -253,7 +253,7 @@ impl AgentContinuationStore for SqliteRuntimeStore {
             return Ok(Vec::new());
         }
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         let mut conditions: Vec<&str> = Vec::new();
         let mut values: Vec<Value> = Vec::new();
         if let Some(owner_id) = query.owner_id.as_deref() {

@@ -39,8 +39,8 @@ mod sqlite_runtime_store_interaction_tests;
 #[path = "sqlite_runtime_store_result_tests.rs"]
 mod sqlite_runtime_store_result_tests;
 #[cfg(test)]
-#[path = "sqlite_runtime_store_schema_identity_tests.rs"]
-mod sqlite_runtime_store_schema_identity_tests;
+#[path = "sqlite_runtime_store_schema_tests.rs"]
+mod sqlite_runtime_store_schema_tests;
 #[cfg(test)]
 #[path = "sqlite_runtime_store_session_tests.rs"]
 mod sqlite_runtime_store_session_tests;

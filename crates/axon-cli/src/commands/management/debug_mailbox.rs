@@ -126,7 +126,7 @@ fn build_report(
     })
 }
 
-/// 打开共享 runtime 库；与 `axon run` / daemon 同源（`<axon_root>/data/runtime.sqlite3`）。
+/// 打开共享 runtime 库；与 `axon run` / daemon 同源（`<axon_root>/data/control.sqlite3`）。
 fn mailbox_store(config_path: Option<&Path>) -> Result<SqliteRuntimeStore, String> {
     let path = match config_path {
         Some(path) => path.to_path_buf(),

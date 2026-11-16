@@ -25,10 +25,15 @@ impl RuntimePaths {
             root,
         }
     }
-    /// 返回 runtime.sqlite3 路径。
+    /// 返回 control.sqlite3 路径。
     #[must_use]
-    pub fn runtime_database(&self) -> PathBuf {
-        self.data.join("runtime.sqlite3")
+    pub fn control_database(&self) -> PathBuf {
+        self.data.join("control.sqlite3")
+    }
+    /// 返回 outbox.sqlite3 路径。
+    #[must_use]
+    pub fn outbox_database(&self) -> PathBuf {
+        self.data.join("outbox.sqlite3")
     }
     /// 以 Path 形式借用根目录。
     #[must_use]

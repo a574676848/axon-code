@@ -31,7 +31,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         presence: &ClientPresenceRecord,
     ) -> Result<(), ClientDeliveryStoreError> {
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         connection
             .execute(
                 "INSERT INTO client_presence(client_id,workspace_id,channel,destination,registered_at_ms,expires_at_ms)
@@ -57,7 +57,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
 
     fn unregister_client_presence(&self, client_id: &str) -> Result<(), ClientDeliveryStoreError> {
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         connection
             .execute(
                 "DELETE FROM client_presence WHERE client_id=?1",
@@ -72,7 +72,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         client_id: &str,
     ) -> Result<Option<ClientPresenceRecord>, ClientDeliveryStoreError> {
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         connection
             .query_row(
                 "SELECT client_id,workspace_id,channel,destination,registered_at_ms,expires_at_ms
@@ -89,7 +89,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         notification: &CompletionNotificationRecord,
     ) -> Result<bool, ClientDeliveryStoreError> {
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         let result_ids_json =
             serde_json::to_string(&notification.result_ids).map_err(storage_error)?;
         let changed = connection
@@ -120,7 +120,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         notification_id: &str,
     ) -> Result<Option<CompletionNotificationRecord>, ClientDeliveryStoreError> {
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         connection
             .query_row(
                 &format!(
@@ -142,7 +142,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
             return Ok(Vec::new());
         }
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         let mut statement = connection
             .prepare(&format!(
                 "SELECT {NOTIFICATION_COLUMNS}
@@ -167,7 +167,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
             return Ok(Vec::new());
         }
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         let mut statement = connection
             .prepare(&format!(
                 "SELECT {NOTIFICATION_COLUMNS}
@@ -202,25 +202,66 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
             return Ok(Vec::new());
         }
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
         let statuses = CONCLUSIVE_EXECUTION_STATUSES
             .iter()
             .map(|status| format!("'{status}'"))
             .collect::<Vec<_>>()
             .join(",");
-        let mut statement = connection
-            .prepare(&format!(
-                "SELECT e.execution_id FROM work_items AS e
-                 LEFT JOIN notifications AS n ON n.execution_id=e.execution_id
-                 WHERE e.status IN ({statuses}) AND n.notification_id IS NULL
-                 ORDER BY e.updated_at_ms ASC, e.execution_id ASC LIMIT ?1"
-            ))
-            .map_err(storage_error)?;
-        statement
-            .query_map(params![i64::from(limit)], |row| row.get::<_, String>(0))
-            .map_err(storage_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(storage_error)
+        // 结论状态在控制面库，通知在队列库，跨库无法 JOIN：按 (updated_at_ms, execution_id)
+        // 顺序分页取候选，再逐页剔除「已有通知」的项。只取一批会在老项通知齐备后永远返回
+        // 空结果，因此这里按页推进到凑满 limit 或候选耗尽。
+        let wanted = usize::try_from(limit).unwrap_or(usize::MAX);
+        let page_size = i64::from(limit.max(64));
+        let mut offset = 0_i64;
+        let mut unnotified = Vec::with_capacity(wanted);
+        while unnotified.len() < wanted {
+            let candidates = {
+                let connection = self.connection().map_err(storage_error)?;
+                let mut statement = connection
+                    .prepare(&format!(
+                        "SELECT execution_id FROM work_items
+                         WHERE status IN ({statuses})
+                         ORDER BY updated_at_ms ASC, execution_id ASC LIMIT ?1 OFFSET ?2"
+                    ))
+                    .map_err(storage_error)?;
+                statement
+                    .query_map(params![page_size, offset], |row| row.get::<_, String>(0))
+                    .map_err(storage_error)?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(storage_error)?
+            };
+            if candidates.is_empty() {
+                break;
+            }
+            let fetched = candidates.len();
+            let already_notified = {
+                let connection = self.outbox_connection().map_err(storage_error)?;
+                let placeholders = vec!["?"; candidates.len()].join(",");
+                let mut statement = connection
+                    .prepare(&format!(
+                        "SELECT execution_id FROM notifications WHERE execution_id IN ({placeholders})"
+                    ))
+                    .map_err(storage_error)?;
+                statement
+                    .query_map(rusqlite::params_from_iter(candidates.iter()), |row| {
+                        row.get::<_, String>(0)
+                    })
+                    .map_err(storage_error)?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(storage_error)?
+            };
+            unnotified.extend(
+                candidates
+                    .into_iter()
+                    .filter(|execution_id| !already_notified.contains(execution_id)),
+            );
+            offset += i64::try_from(fetched).unwrap_or(i64::MAX);
+            if fetched < usize::try_from(page_size).unwrap_or(usize::MAX) {
+                break;
+            }
+        }
+        unnotified.truncate(wanted);
+        Ok(unnotified)
     }
     fn upsert_completion_deliveries(
         &self,
@@ -232,7 +273,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
             return Ok(0);
         }
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         let now = i64_value(now_ms).map_err(storage_error)?;
         let mut added = 0_u32;
         for target in targets {
@@ -255,7 +296,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         notification_id: &str,
     ) -> Result<Vec<CompletionDeliveryRecord>, ClientDeliveryStoreError> {
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         let mut statement = connection
             .prepare(&format!(
                 "SELECT {DELIVERY_COLUMNS}
@@ -277,7 +318,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         now_ms: u64,
     ) -> Result<u32, ClientDeliveryStoreError> {
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         // 正文不变量在存储层兜底：主 turn 尚未产出汇总回复（正文为空）时，渠道正文
         // 没有可交付内容，推进只能等汇总落库，绝不允许把空正文当成完成消息投递。
         let changed = connection
@@ -307,7 +348,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
             return Ok(Vec::new());
         }
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         let mut statement = connection
             .prepare(&format!(
                 "SELECT {INBOX_COLUMNS}
@@ -345,7 +386,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
             return Ok(Vec::new());
         }
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         let mut statement = connection
             .prepare(&format!(
                 "SELECT {INBOX_COLUMNS}
@@ -380,7 +421,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         now_ms: u64,
     ) -> Result<bool, ClientDeliveryStoreError> {
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         let changed = connection
             .execute(
                 "UPDATE notification_deliveries
@@ -405,7 +446,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         now_ms: u64,
     ) -> Result<u32, ClientDeliveryStoreError> {
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         let changed = connection
             .execute(
                 "UPDATE notification_deliveries
@@ -424,7 +465,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         now_ms: u64,
     ) -> Result<(), ClientDeliveryStoreError> {
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         connection
             .execute(
                 "UPDATE notifications
@@ -447,7 +488,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         now_ms: u64,
     ) -> Result<(), ClientDeliveryStoreError> {
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         connection
             .execute(
                 "UPDATE notifications
@@ -472,7 +513,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
             return Ok(Vec::new());
         }
         self.initialize().map_err(storage_error)?;
-        let connection = self.connection().map_err(storage_error)?;
+        let connection = self.outbox_connection().map_err(storage_error)?;
         // 从投递行的 `pending` 索引区间出发：待推进集合通常为空，避免每轮扫描全部
         // 未结算通知。正文不变量在此再次校验，未产出汇总的通知保持 `pending`。
         let mut statement = connection

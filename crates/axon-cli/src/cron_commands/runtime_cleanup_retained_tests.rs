@@ -43,7 +43,7 @@ use super::*;
     let connection = Connection::open(
         root.path()
             .join(axon_config::AXON_RUNTIME_DATA_DIR)
-            .join(RUNTIME_DATABASE_FILE),
+            .join(CONTROL_DATABASE_FILE),
     )
     .expect("测试数据库应可重开");
     let remaining: i64 = connection

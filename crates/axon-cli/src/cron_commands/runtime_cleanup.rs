@@ -23,7 +23,9 @@ use super::runtime_cleanup_families::{
 };
 use super::runtime_event_archive;
 
-const RUNTIME_DATABASE_FILE: &str = "runtime.sqlite3";
+pub(super) const CONTROL_DATABASE_FILE: &str = "control.sqlite3";
+/// 待消费队列库文件名：与 `SqliteRuntimeStore` 的库划分保持一致。
+pub(super) const OUTBOX_DATABASE_FILE: &str = "outbox.sqlite3";
 /// 单批删除的行数上限：直接决定单次 IMMEDIATE 事务的写锁持有时间。
 pub(super) const RUNTIME_CLEANUP_BATCH_LIMIT: usize = 256;
 /// 单轮清理的墙上时钟预算：超出后停止本轮，剩余过期数据由下轮 Cron 继续。
@@ -148,20 +150,20 @@ fn run_runtime_cleanup_with_budget(
     dry_run: bool,
     time_budget: Duration,
 ) -> Result<RuntimeCleanupCounts, String> {
-    let path = root
-        .join(axon_config::AXON_RUNTIME_DATA_DIR)
-        .join(RUNTIME_DATABASE_FILE);
-    if !path.exists() {
+    let control_path = control_database_path(root);
+    let outbox_path = outbox_database_path(root);
+    if !control_path.exists() && !outbox_path.exists() {
         return Ok(RuntimeCleanupCounts::default());
     }
     let cutoff_ms = i64::try_from(cutoff_ms).unwrap_or(i64::MAX);
-    let mut connection = open_database(&path)?;
+    let mut control = open_if_exists(&control_path)?;
+    let mut outbox = open_if_exists(&outbox_path)?;
     if dry_run {
-        return count_expired_rows(&connection, cutoff_ms);
+        return count_expired_rows(control.as_ref(), outbox.as_ref(), cutoff_ms);
     }
     let deadline = Instant::now() + time_budget;
     let mut counts = RuntimeCleanupCounts::default();
-    let events_root = runtime_event_archive::events_root(&path);
+    let events_root = runtime_event_archive::events_root(&control_path);
     // 事件按会话目录存放：保留期一到整目录删除，不再按行归档成 .jsonl.zst。
     let removed_dirs = runtime_event_archive::archive_expired_session_dirs(
         &events_root,
@@ -171,58 +173,62 @@ fn run_runtime_cleanup_with_budget(
         counts.session_events = counts.session_events.saturating_add(removed_dirs);
         axon_logger::info(&format!("运行态事件目录清理完成：{removed_dirs} 个会话"));
     }
-    counts.merge(delete_terminal_goals(&mut connection, cutoff_ms, deadline)?);
-    counts.merge(delete_terminal_interactions(
-        &mut connection,
-        cutoff_ms,
-        deadline,
-    )?);
-    counts.merge(delete_expired_decisions(
-        &mut connection,
-        cutoff_ms,
-        deadline,
-    )?);
-    counts.merge(delete_expired_events(&mut connection, cutoff_ms, deadline)?);
-    counts.merge(delete_expired_daemon_instances(
-        &mut connection,
-        cutoff_ms,
-        deadline,
-    )?);
-    counts.merge(delete_expired_client_presence(
-        &mut connection,
-        cutoff_ms,
-        deadline,
-    )?);
-    // 渠道投递记录通过外键引用通知本体，必须先删派生 delivery，再删 notification。
-    counts.merge(delete_settled_completion_deliveries(
-        &mut connection,
-        cutoff_ms,
-        deadline,
-    )?);
-    counts.merge(delete_settled_completion_notifications(
-        &mut connection,
-        cutoff_ms,
-        deadline,
-    )?);
-    // mailbox 消息与 continuation 是 run 级协作事实：前者 24 小时、后者 7 天的自身
-    // 保留窗口先于 Cron 水位到期，因此这里的回收不会删掉仍可投递或仍可装配的事实。
-    counts.merge(delete_expired_agent_messages(
-        &mut connection,
-        cutoff_ms,
-        deadline,
-    )?);
-    counts.merge(delete_expired_continuations(
-        &mut connection,
-        cutoff_ms,
-        deadline,
-    )?);
-    counts.merge(delete_expired_user_questions(
-        &mut connection,
-        cutoff_ms,
-        deadline,
-    )?);
+    if let Some(connection) = control.as_mut() {
+        counts.merge(delete_terminal_goals(connection, cutoff_ms, deadline)?);
+        counts.merge(delete_terminal_interactions(
+            connection,
+            cutoff_ms,
+            deadline,
+        )?);
+        counts.merge(delete_expired_decisions(connection, cutoff_ms, deadline)?);
+        counts.merge(delete_expired_events(connection, cutoff_ms, deadline)?);
+        counts.merge(delete_expired_upgrade_admissions(
+            connection,
+            cutoff_ms,
+            deadline,
+        )?);
+        counts.merge(delete_expired_daemon_instances(
+            connection,
+            cutoff_ms,
+            deadline,
+        )?);
+    }
+    if let Some(connection) = outbox.as_mut() {
+        counts.merge(delete_expired_client_presence(
+            connection,
+            cutoff_ms,
+            deadline,
+        )?);
+        // 渠道投递记录通过外键引用通知本体，必须先删派生 delivery，再删 notification。
+        counts.merge(delete_settled_completion_deliveries(
+            connection,
+            cutoff_ms,
+            deadline,
+        )?);
+        counts.merge(delete_settled_completion_notifications(
+            connection,
+            cutoff_ms,
+            deadline,
+        )?);
+        // mailbox 消息与 continuation 是 run 级协作事实：前者 24 小时、后者 7 天的自身
+        // 保留窗口先于 Cron 水位到期，因此这里的回收不会删掉仍可投递或仍可装配的事实。
+        counts.merge(delete_expired_agent_messages(
+            connection,
+            cutoff_ms,
+            deadline,
+        )?);
+        counts.merge(delete_expired_continuations(
+            connection,
+            cutoff_ms,
+            deadline,
+        )?);
+        counts.merge(delete_expired_user_questions(
+            connection,
+            cutoff_ms,
+            deadline,
+        )?);
+    }
     // 时间维度清理之后再看磁盘水位：越过上限就按最旧优先继续淘汰到低水位。
-    // 时间维度清理之后再看磁盘水位：越过上限就从最旧会话开始淘汰到低水位。
     let evicted = runtime_event_archive::enforce_events_disk_budget(
         &events_root,
         runtime_event_archive::high_water_bytes(),
@@ -233,7 +239,12 @@ fn run_runtime_cleanup_with_budget(
         axon_logger::warning(&format!("事件目录越过磁盘高水位，已淘汰 {evicted} 个最旧会话"));
     }
     if !counts.is_empty() || evicted > 0 {
-        reclaim_database_space(&connection)?;
+        if let Some(connection) = control.as_ref() {
+            reclaim_database_space(connection)?;
+        }
+        if let Some(connection) = outbox.as_ref() {
+            reclaim_database_space(connection)?;
+        }
     }
     Ok(counts)
 }
@@ -243,7 +254,7 @@ pub(super) fn protected_runtime_session_ids(
     root: &Path,
     candidate_ids: &[String],
 ) -> Result<Vec<String>, String> {
-    let path = runtime_database_path(root);
+    let path = control_database_path(root);
     if candidate_ids.is_empty() || !path.exists() {
         return Ok(Vec::new());
     }
@@ -292,7 +303,7 @@ pub(super) fn count_runtime_session_families(
     root: &Path,
     session_ids: &[String],
 ) -> Result<RuntimeCleanupCounts, String> {
-    let path = runtime_database_path(root);
+    let path = control_database_path(root);
     if session_ids.is_empty() || !path.exists() {
         return Ok(RuntimeCleanupCounts::default());
     }
@@ -328,7 +339,7 @@ pub(super) fn count_runtime_session_event_overlap(
     session_ids: &[String],
     cutoff_ms: u64,
 ) -> Result<usize, String> {
-    let path = runtime_database_path(root);
+    let path = control_database_path(root);
     if session_ids.is_empty() || !path.exists() {
         return Ok(0);
     }
@@ -363,7 +374,7 @@ pub(super) fn cleanup_runtime_session_families(
     root: &Path,
     session_ids: &[String],
 ) -> Result<RuntimeCleanupCounts, String> {
-    let path = runtime_database_path(root);
+    let path = control_database_path(root);
     if session_ids.is_empty() || !path.exists() {
         return Ok(RuntimeCleanupCounts::default());
     }
@@ -553,6 +564,15 @@ fn open_database(path: &Path) -> Result<Connection, String> {
     Ok(connection)
 }
 
+/// 库文件存在才打开：两个库各自独立，缺一个不影响另一个的清理。
+fn open_if_exists(path: &Path) -> Result<Option<Connection>, String> {
+    if path.exists() {
+        open_database(path).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
 fn open_read_only_database(path: &Path) -> Result<Connection, String> {
     let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|_| "Daemon runtime SQLite 数据库只读打开失败".to_owned())?;
@@ -565,9 +585,14 @@ fn open_read_only_database(path: &Path) -> Result<Connection, String> {
     Ok(connection)
 }
 
-fn runtime_database_path(root: &Path) -> std::path::PathBuf {
+fn control_database_path(root: &Path) -> std::path::PathBuf {
     root.join(axon_config::AXON_RUNTIME_DATA_DIR)
-        .join(RUNTIME_DATABASE_FILE)
+        .join(CONTROL_DATABASE_FILE)
+}
+
+fn outbox_database_path(root: &Path) -> std::path::PathBuf {
+    root.join(axon_config::AXON_RUNTIME_DATA_DIR)
+        .join(OUTBOX_DATABASE_FILE)
 }
 
 /// 运行态侧自判的过期会话：最后一次活动早于保留期、已不在推进、且无 Execution 引用。
@@ -578,7 +603,7 @@ pub(super) fn stale_runtime_session_ids(
     root: &Path,
     cutoff_ms: u64,
 ) -> Result<Vec<String>, String> {
-    let path = runtime_database_path(root);
+    let path = control_database_path(root);
     if !path.exists() {
         return Ok(Vec::new());
     }

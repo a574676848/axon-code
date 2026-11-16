@@ -205,7 +205,7 @@ DSH 的 Known Limitations 直接写明了：没有删除 API、没有保留期�
 SQLite 没有跨库事务，所以拆库不能按业务随意切，只能按**事务边界**切。四条原则：
 
 1. **同一事务内必须原子提交的表，必须在同一个库。** 例如 claim execution 与推进 `sessions.last_event_sequence`，或 goal 结算与 result 写入。
-2. **生命周期不同则分库。** 能整体归档或删除的表（outbox、audit）不与核心状态机同库，避免清理时锁住热路径。
+2. **生命周期不同则分库。** 能整体归档或删除的表（outbox）不与核心状态机同库，避免清理时锁住热路径。
 3. **写热路径与写冷路径分库。** 一个低频表不应该和高频表共享同一个 WAL 与 checkpoint。
 4. **事件流不建库。** 追加型叙述用压缩文件，SQLite 只承载需要原子条件更新的状态。
 
@@ -226,15 +226,14 @@ SQLite 没有跨库事务，所以拆库不能按业务随意切，只能按**�
 
 | 库 | 文件 | 内容 | 预估体量 |
 | --- | --- | --- | --- |
-| control | `<root>/data/control.sqlite3` | 实例租约、会话状态、交互、执行队列与历史、目标与结果、决策、工作区、调度、游标、升级交接 | 小于 20 MB |
+| control | `<root>/data/control.sqlite3` | 实例租约、会话状态、交互、执行队列与历史、目标与结果、决策、工作区、调度、游标、升级交接、跨会话账本 | 小于 20 MB |
 | outbox | `<root>/data/outbox.sqlite3` | Agent 消息、continuation、完成通知与投递、用户提问、客户端在线 | 小于 5 MB |
-| audit | `<root>/data/audit.sqlite3` | 跨会话账本事件，append-only | 可整体归档 |
 | 事件面 | `<root>/data/events/**` | 会话事件日志，zstd 分帧 | 按会话，见 §7 |
 | 运营库 | `usage/`、`cron/`、`persona/`、`memory/` | 保持不变，不属于本次重构 | 不变 |
 
 ### 4.4 表设计
 
-#### 4.4.1 control.sqlite3（14 张）
+#### 4.4.1 control.sqlite3（15 张）
 
 | 新表 | 原表 | 主键 | 关键索引 | 说明 |
 | --- | --- | --- | --- | --- |
@@ -252,6 +251,7 @@ SQLite 没有跨库事务，所以拆库不能按业务随意切，只能按**�
 | `ingress_cursors` | `transport_ingress_cursors` | `(adapter, partition_key)` | 主键即索引 | 渠道游标 |
 | `channel_bindings` | 新增 | `(channel, destination)` | 主键即索引、`(session_id)` | 无 UI 入站渠道到会话的固定映射，见 §4.13。只服务入站路由，不参与会话身份 |
 | `upgrade_handoffs` | `daemon_upgrade_admissions` | `handoff_id` | `(state, deadline_at_ms)`、`handoff_token` 唯一 | 升级交接 |
+| `ledger_events` | `jarvis_events` | `event_id` | `idempotency_key` 唯一、`sequence` 唯一、目标查询表达式索引 | 跨会话账本，append-only，与结算同事务，见 §4.4.3 |
 
 `inbox` 的索引从原来的 5 条收敛为 2 条。原 `scope_json` 三连（`scope_status_recent`、`scope_channel_recent`、`scope_channel_status_recent`）只服务渠道回落，合并后由 `(session_id, received_at_ms DESC)` 覆盖；`lane_recent` 与 `lane_processing` 两族随状态机一起搬到 `work_items`。
 
@@ -268,17 +268,19 @@ SQLite 没有跨库事务，所以拆库不能按业务随意切，只能按**�
 
 放同一个库的理由：这六张表都是"有界待消费"队列，可按过期时间整批删除，与需要长期保留的 control 表生命周期完全不同。分库后清理 outbox 不会与核心事务争同一把锁。
 
-#### 4.4.3 audit.sqlite3（1 张）
+#### 4.4.3 账本留在 control，不单独成库
 
-| 新表 | 原表 | 说明 |
-| --- | --- | --- |
-| `ledger_events` | `jarvis_events` | 跨会话账本，`event_id` 主键、`idempotency_key` 唯一、`sequence` 单调 |
+`ledger_events`（原 `jarvis_events`）一度计划单独进 `audit.sqlite3`，实现时否掉了，理由是 §4.1 原则 1：
 
-单独成库的理由：它是 append-only 的审计流水，可以整体归档或按序列区间删除，永远不参与业务条件更新。
+- 账本事件与目标结算在**同一个 `IMMEDIATE` 事务**里写入（`work_item` 终态 + `goal_results` + `goals.revision` + 账本行），跨库写没有原子性，崩溃会留下「结算成功、账本少一条」或「账本有行、结算回滚」两种分叉。
+- 账本的 `sequence` 由 `MAX(sequence)+1` 分配并做连续性校验，这个乐观并发守卫依赖同库写锁；拆库后必须在另一个库重新实现分配协议，收益为零、风险翻倍。
+- 账本体量由保留期与保底条数双重约束（默认保留最新一段），实测远小于 20 MB 的控制面预算，单独归档的收益不足以抵消原子性损失。
+
+因此最终是两个库：`control.sqlite3` 与 `outbox.sqlite3`。账本按序列区间 `DELETE` 归档即可满足清理需求。
 
 ### 4.5 旧表到新表的映射
 
-22 张旧表收敛为 21 张新表（control 14 + outbox 6 + audit 1），其中一张迁出为文件，两张为新增。
+22 张旧表收敛为 21 张新表（control 15 + outbox 6），其中一张迁出为文件，两张为新增。
 
 | 旧表 | 新归属 | 动作 |
 | --- | --- | --- |
@@ -305,7 +307,7 @@ SQLite 没有跨库事务，所以拆库不能按业务随意切，只能按**�
 | `jarvis_completion_deliveries` | `outbox.notification_deliveries` | 迁库 |
 | `jarvis_user_questions` | `outbox.user_questions` | 迁库 |
 | `jarvis_client_presence` | `outbox.client_presence` | 迁库 |
-| `jarvis_events` | `audit.ledger_events` | 迁库 |
+| `jarvis_events` | `control.ledger_events` | 去前缀，见 §4.4.3 |
 
 ### 4.6 重叠存储消除
 
@@ -314,7 +316,7 @@ SQLite 没有跨库事务，所以拆库不能按业务随意切，只能按**�
 | 重叠组 | 现状 | 目标 |
 | --- | --- | --- |
 | 会话正文 | `session_events`（帧级）+ `rollout_turns`（turn 级）+ `threads/*.jsonl`（模型可见历史） | 两份：会话事件文件 + thread 文件。`rollout.sqlite3` 删除，turn 正文由事件日志的 `turn` 记录派生；用量投影器改为只读事件日志（原依赖见 `docs/usage-statistics.md:98`） |
-| 事件流 | `session_events`（单会话叙述）+ `jarvis_events`（跨会话审计） | 职责分离：前者进文件，后者进 `audit.sqlite3` |
+| 事件流 | `session_events`（单会话叙述）+ `jarvis_events`（跨会话审计） | 职责分离：前者进文件，后者进 `control.sqlite3` |
 | 检查点 | `session_checkpoints` 表 + `sessions.last_checkpoint_seq` 列 | 事件 `kind = checkpoint` + 一列水位 |
 | 已读标记 | `jarvis_result_reads` 独立表 | 并入 `goal_results` 两列 |
 | 正文载体 | 内联 `payload_json` + `payload_ref` + `event_payload_store` 分片 + `archive/*.jsonl.zst` | 一套：zstd frame 内联，取消外置与归档两套机制 |
