@@ -30,6 +30,7 @@ fn initialize_session(request: &RunRequest) -> PathBuf {
             turn_events: Vec::new(),
         },
     );
+    // rollout 仍在写入（C/D/E/F 组未迁移完），thread 侧按生产顺序登记 active turn。
     crate::run_commands::run_rollout_store::commit_session_to_rollout(
         &request.config_path,
         &record,
@@ -133,7 +134,7 @@ fn request_with_rollover(root: PathBuf) -> RunRequest {
     request
 }
 
-#[ignore = "W2-12 迁移中：thread 侧尚未保存换窗轮的最终回复，恢复结果缺少最后一条 assistant 消息；见 docs/dev/w2-12-rollout-retirement.md"]
+#[ignore = "W2-12 迁移中：换窗时最终 assistant 回复尚未进入 thread 轮次，恢复窗口缺最后一条；见 docs/dev/w2-12-rollout-retirement.md"]
 #[test]
 fn two_inline_rollovers_restore_only_active_window_and_keep_archives() {
     let root = temp_workspace("two-inline-rollovers");
