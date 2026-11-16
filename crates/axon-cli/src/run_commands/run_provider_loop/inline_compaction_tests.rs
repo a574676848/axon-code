@@ -18,8 +18,8 @@ const TEST_CONTEXT_WINDOW: u64 = 32_000;
 const TEST_ROLLOVER_LIMIT: u64 = 20_000;
 const TEST_OUTPUT_RESERVE: u64 = 4_096;
 
-fn initialize_session(request: &RunRequest) -> PathBuf {
-    let record = RunSessionRecord::from_partial(
+fn fixture_record(request: &RunRequest) -> RunSessionRecord {
+    RunSessionRecord::from_partial(
         request,
         &RunSessionPartialInput {
             provider: "fixture".to_owned(),
@@ -29,7 +29,19 @@ fn initialize_session(request: &RunRequest) -> PathBuf {
             reasoning_messages: Vec::new(),
             turn_events: Vec::new(),
         },
-    );
+    )
+}
+
+/// 与生产收口一致：把本轮最终回复写进 thread 轮次（`mirror_session_to_thread`）。
+fn mirror_completed(request: &RunRequest, response: &str) {
+    let mut record = fixture_record(request);
+    record.response = response.to_owned();
+    crate::run_commands::run_thread_store::mirror_session_to_thread(&request.config_path, &record)
+        .unwrap();
+}
+
+fn initialize_session(request: &RunRequest) -> PathBuf {
+    let record = fixture_record(request);
     // rollout 仍在写入（C/D/E/F 组未迁移完），thread 侧按生产顺序登记 active turn。
     crate::run_commands::run_rollout_store::commit_session_to_rollout(
         &request.config_path,
@@ -82,7 +94,7 @@ fn run_rollover_with_progress(
         }),
         &mut rollover,
     );
-    AgentTurnRuntime.run(
+    let result = AgentTurnRuntime.run(
         &input,
         |transport_request| {
             assert!(!transport_request.request.body_text.contains("不应复活的旧工具输出"));
@@ -94,7 +106,10 @@ fn run_rollover_with_progress(
         },
         |_, _, _| -> AxonResult<AgentTurnToolDecision<()>> { panic!("不应调用工具") },
         None, Some(compression),
-    ).map(|_| ())
+    ).map(|_| ());
+    // 生产收口会把最终回复写进 thread；这里补上同一步，恢复窗口才有最后一条消息。
+    mirror_completed(request, "换窗后最终回复");
+    result
 }
 
 fn lifecycle_kinds(events: &[RunProgressWireEvent]) -> Vec<String> {
@@ -134,7 +149,7 @@ fn request_with_rollover(root: PathBuf) -> RunRequest {
     request
 }
 
-#[ignore = "W2-12 迁移中：换窗时最终 assistant 回复尚未进入 thread 轮次，恢复窗口缺最后一条；见 docs/dev/w2-12-rollout-retirement.md"]
+#[ignore = "W2-12：窗口投影边界按当前轮序号表达，而恢复保留 sequence > through，换窗轮的回复因此落在窗口外；需与 C 组迁移一起统一序号语义，见 docs/dev/w2-12-rollout-retirement.md"]
 #[test]
 fn two_inline_rollovers_restore_only_active_window_and_keep_archives() {
     let root = temp_workspace("two-inline-rollovers");

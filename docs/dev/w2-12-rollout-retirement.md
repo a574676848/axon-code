@@ -40,10 +40,15 @@ E → thread 子会话关系 + 事件面；F → 目录级保留（已存在）�
 
 ## 未完成（下一步，按序）
 
-1. `inline_compaction_tests::two_inline_rollovers_restore_only_active_window_and_keep_archives`
-   被标 `#[ignore]`：换窗轮的**最终 assistant 回复**目前只在 rollout 轮记录里，thread 侧没有，
-   恢复出来的窗口缺少最后一条消息。修法：`mirror_session_to_thread` 把收口回复写进该轮
-   `history_items`，或让换窗归档与 thread 轮次同步提交；补回用例后去掉 `#[ignore]`。
+1. **窗口投影与恢复的序号语义差一位**：`install_active_compaction_projection` 把
+   `through_sequence` 设成「当前轮序号」，而恢复侧保留 `sequence > through_sequence` 的轮次，
+   于是换窗那一轮（连同它在换窗之后才产生的最终回复）整轮落在窗口外——恢复出来的历史缺最后
+   一条 assistant 消息。用例
+   `inline_compaction_tests::two_inline_rollovers_restore_only_active_window_and_keep_archives`
+   因此被 `#[ignore]` 标注。修法二选一（需与 C 组一起做，避免二次改口径）：
+   (a) 把 `through_sequence` 定义为「最后一个已压缩轮次」的序号，恢复判据相应改成
+   `sequence >= through` 或引入显式下界；(b) 换窗后回写 checkpoint，把已收口轮的回复并入窗口
+   摘要。选定后同步更新 `storage-architecture.md` 的窗口语义小节。
 2. C 组：治理与反思改读 thread 轮次 + `turn metadata`（`load_session_turn`、
    `load_turn_sequence`、`load_recent_turn_facts`、`load_previous_reflection_notice`）。
 3. D 组：会话读数与用量改读 `session_metrics`（已具备）与 thread settings；`load_session_usage*`
