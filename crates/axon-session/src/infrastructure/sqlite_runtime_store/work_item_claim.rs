@@ -41,6 +41,16 @@ pub(super) fn start_interaction_item(
             other => Err(other),
         })?;
     let Some((work_id, status, terminal_kind)) = existing else {
+        // 已经终结并搬进历史表的入站事实不能再领：归档后它在途表里没有行，
+        // 只看在途表会把它当成「从未处理过」。
+        let archived: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM work_item_history WHERE inbox_id=?1)",
+            params![interaction_id],
+            |row| row.get(0),
+        )?;
+        if archived {
+            return Ok(false);
+        }
         transaction.execute(
             "INSERT INTO work_items(execution_id,goal_id,session_id,kind,payload_json,attempt,priority,status,lease_token,claimed_by,lease_expires_at_ms,started_at_ms,created_at_ms,updated_at_ms,inbox_id) \
              VALUES(?1,NULL,NULL,'turn','{}',1,0,?2,?3,NULL,?4,?5,?5,?5,?6)",

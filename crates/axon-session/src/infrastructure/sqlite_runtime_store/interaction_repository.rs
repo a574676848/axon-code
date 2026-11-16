@@ -414,13 +414,6 @@ fn release_work_item(
         )
         .map_err(storage_error)?;
     if changed == 1 {
-        // 终态行搬进历史表：在途表只留排队与运行中的行。
-        super::work_item_archive::archive_work_item(
-            &connection,
-            interaction_id.as_str(),
-            i64_value(now_ms).map_err(runtime_error)?,
-        )
-        .map_err(storage_error)?;
         return Ok(());
     }
     Err(inbox_state_error(&connection, interaction_id)?)
@@ -457,7 +450,7 @@ fn settle_work_item(
         .map_err(storage_error)?;
     if changed == 1 {
         // 终态行搬进历史表：在途表只留排队与运行中的行。
-        super::work_item_archive::archive_work_item(
+        super::work_item_archive::archive_work_item_by_inbox(
             &connection,
             interaction_id.as_str(),
             i64_value(now_ms).map_err(runtime_error)?,

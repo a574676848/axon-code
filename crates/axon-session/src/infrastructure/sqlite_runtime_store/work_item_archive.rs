@@ -15,8 +15,27 @@ pub(super) fn archive_work_item(
     execution_id: &str,
     now_ms: i64,
 ) -> rusqlite::Result<()> {
+    archive_where(connection, "execution_id=?1", execution_id, now_ms)
+}
+
+/// 按入站事实（`inbox_id`）归档：交互型工作项的主键是随机 UUID，调用方只有 `interaction_id`。
+pub(super) fn archive_work_item_by_inbox(
+    connection: &Connection,
+    inbox_id: &str,
+    now_ms: i64,
+) -> rusqlite::Result<()> {
+    archive_where(connection, "inbox_id=?1", inbox_id, now_ms)
+}
+
+fn archive_where(
+    connection: &Connection,
+    condition: &str,
+    work_key: &str,
+    now_ms: i64,
+) -> rusqlite::Result<()> {
     connection.execute(
-        "INSERT INTO work_item_history(
+        &format!(
+            "INSERT INTO work_item_history(
              work_id, goal_id, session_id, kind, payload_json, goal_revision, context_version,
              attempt, priority, dedupe_key, inbox_id, terminal_kind, status, started_at_ms,
              committed_at_ms, cancelled_at_ms, checkpoint_json, cancellation_reason,
@@ -28,14 +47,14 @@ pub(super) fn archive_work_item(
                 cancelled_at_ms, checkpoint_json, cancellation_reason, created_at_ms,
                 updated_at_ms, COALESCE(committed_at_ms, cancelled_at_ms, ?2)
          FROM work_items
-         WHERE execution_id=?1
-         ON CONFLICT(work_id) DO NOTHING",
-        params![execution_id, now_ms],
+         WHERE {condition}"
+        ),
+        rusqlite::params![work_key, now_ms],
     )?;
     connection
         .execute(
-            "DELETE FROM work_items WHERE execution_id=?1",
-            params![execution_id],
+            &format!("DELETE FROM work_items WHERE {condition}"),
+            rusqlite::params![work_key],
         )
         .map(|_| ())
 }
