@@ -142,19 +142,6 @@ pub(crate) fn append_rollout_event_for_session(
     RolloutSqliteStore::open(&path)?.append_event(input)
 }
 
-/// 精确读取治理作业引用的单个 turn，避免同一 session 的后续 turn 抢占读取结果。
-pub(crate) fn load_session_turn(
-    config_path: &Path,
-    session_id: &str,
-    assistant_part_id: &str,
-) -> Result<Option<super::super::run_session_store::RunSessionRecord>, String> {
-    let path = resolved_rollout_db_path(config_path).map_err(ToOwned::to_owned)?;
-    if !path.exists() {
-        return Ok(None);
-    }
-    RolloutSqliteStore::open(&path)?.load_turn_by_id(session_id, assistant_part_id)
-}
-
 /// 读取指定 session 中 provider receipt 关联的完整工具输出。
 pub(crate) fn read_rollout_tool_output(
     config_path: &Path,

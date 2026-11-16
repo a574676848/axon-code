@@ -326,7 +326,7 @@ fn execute_claimed_payload(payload_json: &str) -> Result<(), String> {
 fn load_governance_session_record(
     payload: &DurableGovernancePayload,
 ) -> Result<RunSessionRecord, String> {
-    super::run_rollout_store::load_session_turn(
+    super::run_thread_store::turn_record(
         &payload.config_path,
         &payload.session_record.session_id,
         &payload.session_record.assistant_part_id,

@@ -181,8 +181,9 @@ fn parse_trace_id(trace_id: &str) -> Option<(String, Option<u64>)> {
 
 /// 载入指定会话的某一轮；未给 `sequence` 时取该会话最新一轮。
 ///
-/// `sequence` 是 `rollout_turns.sequence`，即会话内轮序，与 `replay_chain`
-/// 的会话祖先链下标是两套编号；用后者当轮序会把祖先会话的记录当成这一轮。
+/// `sequence` 是 thread 轮次在会话内的序号，与 `replay_chain` 的会话祖先链下标是
+/// 两套编号；用后者当轮序会把祖先会话的记录当成这一轮。轮次事实统一由 thread
+/// 事件流反向重建，不再回查 rollout 账本。
 fn load_turn_record(
     config_path: &std::path::Path,
     session_id: &str,
@@ -194,32 +195,17 @@ fn load_turn_record(
     ),
     String,
 > {
-    let db_path = crate::run_commands::run_rollout_store::resolved_rollout_db_path(config_path)?;
-    if !db_path.exists() {
-        return Err(format!(
-            "builtin.turn_trace 没有可用的轮次记录库：{session_id} 尚未落盘"
-        ));
-    }
-    let store = crate::run_commands::run_rollout_store::RolloutSqliteStore::open(&db_path)?;
-    match sequence {
+    crate::run_commands::run_thread_store::turn_record_by_sequence(
+        config_path,
+        session_id,
+        sequence,
+    )?
+    .ok_or_else(|| match sequence {
         Some(sequence) => {
-            let record = store
-                .load_turn_by_sequence(session_id, sequence)?
-                .ok_or_else(|| {
-                    format!("builtin.turn_trace 会话 {session_id} 没有第 {sequence} 条轮次记录")
-                })?;
-            Ok((record, sequence))
+            format!("builtin.turn_trace 会话 {session_id} 没有第 {sequence} 条轮次记录")
         }
-        None => {
-            let record = store
-                .load_by_id(session_id)?
-                .ok_or_else(|| format!("builtin.turn_trace 未找到会话 {session_id} 的轮次记录"))?;
-            let resolved = store
-                .turn_sequence(session_id, &record.assistant_part_id)?
-                .unwrap_or(0);
-            Ok((record, resolved))
-        }
-    }
+        None => format!("builtin.turn_trace 未找到会话 {session_id} 的轮次记录"),
+    })
 }
 
 /// 从轮次回执里挑出目标回执，并按上限读取归档原文。

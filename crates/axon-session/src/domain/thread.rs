@@ -57,6 +57,9 @@ pub struct Thread {
     pub ephemeral: bool,
     /// 设置快照。
     pub settings: ThreadSettings,
+    /// 子会话来源：用户可见的委派还是运行侧内务；非子会话为缺省。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_origin: Option<String>,
     /// 创建时间。
     pub created_at_ms: u64,
     /// 更新时间。
@@ -89,6 +92,9 @@ pub struct ThreadSummary {
     pub cwd: String,
     /// 状态。
     pub status: ThreadStatus,
+    /// 子会话来源；非子会话为缺省。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_origin: Option<String>,
     /// Turn 数。
     pub turn_count: usize,
 }

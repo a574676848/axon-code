@@ -20,10 +20,10 @@ pub use session_identity::{interaction_session_id, session_id_for_route};
 pub use session_query_service::{SessionQueryService, SessionSnapshot};
 mod thread_repair;
 pub use thread_service::{
-    AppendTurnCommand, AppendTurnItemsCommand, CompactThreadCommand, FailTurnCommand,
-    ForkThreadCommand, InterruptTurnCommand, NameThreadCommand, RepairOpenTurnCommand,
-    ResumeThreadCommand, StartEmptyThreadCommand, StartThreadCommand, StartTurnCommand,
-    ThreadService, TurnRepairOutcome,
+    AnnotateChildOriginCommand, AppendTurnCommand, AppendTurnItemsCommand, CompactThreadCommand,
+    FailTurnCommand, ForkThreadCommand, InterruptTurnCommand, NameThreadCommand,
+    RepairOpenTurnCommand, ResumeThreadCommand, StartEmptyThreadCommand, StartThreadCommand,
+    StartTurnCommand, ThreadService, TurnRepairOutcome,
 };
 pub use workspace_resolver::{
     WorkspaceGitSnapshot, WorkspaceIdentity, WorkspaceResolver, WorkspaceResolverError,

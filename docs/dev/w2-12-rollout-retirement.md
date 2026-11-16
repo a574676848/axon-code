@@ -37,6 +37,23 @@ E → thread 子会话关系 + 事件面；F → 目录级保留（已存在）�
    `install_compaction_projection`、`run_thread_store_compaction_projection_tests.rs`、
    `run_rollout_store/window_tests.rs`。
 3. **文档同步**：`docs/dev/wbs-acceptance.md` 的 W2-12 行改为指向本文件。
+4. **C 组收口（轮次事实）**：治理 worker 与 `builtin.turn_trace` 不再读 rollout。
+   - `run_thread_store::turn_record` / `turn_record_by_sequence`：按
+     `(thread, assistant_part_id)` 或轮序，把 thread 轮次反向重建为整条
+     `RunSessionRecord`（`run_thread_history::turn_item_projection` 是历史投影的逆运算：
+     注入上下文、用户输入、工具调用与回执、reasoning、助手响应逐个还原；用量、模型
+     别名、推理强度、失败标记来自轮次 metadata）。
+   - `run_thread_history` 的回执反投影保留 `provider_call_id` / `output_ref` /
+     `part_id` / 错误类型 / 写盘标记，`builtin.turn_trace` 因此照样能按 provider 调用
+     读归档原文。
+   - 删除 rollout 的 `load_session_turn` 与 `orchestrator_turn_trace` 里的 rollout 点查。
+5. **治理产物回写改点对点**：`publish_turn_artifacts` 不再整条重写记录（那会把 thread
+   投影已不收录的字段抹成零），改为 `run_thread_store::patch_turn_artifacts`：只补写
+   本轮 metadata 的 `reflectionNotice` 与 `affectSequence`，其余原样保留；反思回执仍
+   单独入表。`turn_trace` 不再落库——它只被写、从不被读回，读取方一律按轮次事实重建。
+6. **测试夹具对齐真实形态**：`run_post_run_reflection_tests::response_with_receipts`
+   现在为每个回执构造对应的 provider 调用、`ToolExecutionStarted` 生命周期事件与唯一
+   part，与生产投影的前置条件一致（否则治理按 thread 读回的就不是这一轮）。
 
 ## 未完成（下一步，按序）
 
@@ -49,20 +66,8 @@ E → thread 子会话关系 + 事件面；F → 目录级保留（已存在）�
    (a) 把 `through_sequence` 定义为「最后一个已压缩轮次」的序号，恢复判据相应改成
    `sequence >= through` 或引入显式下界；(b) 换窗后回写 checkpoint，把已收口轮的回复并入窗口
    摘要。选定后同步更新 `storage-architecture.md` 的窗口语义小节。
-2. C 组（部分完成）：记忆反思提示、当前模型事实与累计用量已迁到 thread / 控制面投影 ——
-   - `ThreadTurnMetadata` 增加 `reflectionNotice`、`reasoningEffort`；`run_thread_store` 提供
-     `previous_reflection_notice`、`latest_reflection_notice_at_root`、`session_model_at_root`、
-     `session_usage_totals_at_root`（后者读控制面 `session_metrics` 投影）。
-   - 运行收口、桌面模型读数、桌面用量读数都已改走这些入口；
-     删除 rollout 的 `load_previous_reflection_notice`、`load_latest_reflection_notice_from_root`、
-     `load_latest_session_model_from_root`、`load_session_usage_totals_from_root` 与两条 store 方法。
-   - 仍待迁移：`load_session_turn`（治理 worker 需要整条 RunSessionRecord，需用 thread 轮次反向重建）。
-   - 显式信号已迁：`ThreadTurnMetadata` 增加 `promptChars`/`failed`/`affectSequence`，
-     `run_thread_store::recent_turn_facts` 由 thread 轮次给出同一份事实；rollout 的
-     `load_recent_turn_facts` 与 `recent_turn_facts`、`session_usage_totals` 已标
-     `#[allow(dead_code)]`，随整删一并移除。
-   - 轮序已迁：`run_thread_store::turn_sequence` 按 `turn_id` 后缀（`{session}-turn-{part}`）
-     点查 thread 轮次，删掉 rollout 的 `load_turn_sequence` 与 store 方法。
+2. C 组（已完成，见「已完成」第 4 条）：轮次事实、反思提示、模型事实、累计用量、
+   轮序、显式信号全部来自 thread 轮次与控制面投影。
 3. D 组：会话读数与用量改读 `session_metrics`（已具备）与 thread settings；`load_session_usage*`
    与 `load_latest_session_model_from_root` 删除。
 4. E 组：子代理关系与链回放改用 thread 的父子关系与事件面；`read_rollout_tool_output` 改为

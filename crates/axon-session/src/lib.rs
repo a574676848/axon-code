@@ -10,14 +10,15 @@ pub mod infrastructure;
 pub mod ports;
 
 pub use application::{
-    ActivityQuery, ActivityService, ActivityServiceError, ActivitySnapshot, AppendTurnCommand,
-    AppendTurnItemsCommand, CompactThreadCommand, FailTurnCommand, ForkThreadCommand,
-    GoalCommandService, GoalCommandServiceError, GoalExecutionSpec, GoalQueryService,
-    GoalQueryServiceError, InterruptTurnCommand, NameThreadCommand, RepairOpenTurnCommand,
-    ResumeThreadCommand, SessionQueryService, SessionSnapshot, StartEmptyThreadCommand,
-    StartThreadCommand, StartTurnCommand, ThreadService, TurnRepairOutcome, WorkspaceGitSnapshot,
-    WorkspaceIdentity, WorkspaceResolver, WorkspaceResolverError, WorkspaceSnapshot,
-    WorkspaceSnapshotFieldState, interaction_session_id, session_id_for_route,
+    ActivityQuery, ActivityService, ActivityServiceError, ActivitySnapshot,
+    AnnotateChildOriginCommand, AppendTurnCommand, AppendTurnItemsCommand, CompactThreadCommand,
+    FailTurnCommand, ForkThreadCommand, GoalCommandService, GoalCommandServiceError,
+    GoalExecutionSpec, GoalQueryService, GoalQueryServiceError, InterruptTurnCommand,
+    NameThreadCommand, RepairOpenTurnCommand, ResumeThreadCommand, SessionQueryService,
+    SessionSnapshot, StartEmptyThreadCommand, StartThreadCommand, StartTurnCommand, ThreadService,
+    TurnRepairOutcome, WorkspaceGitSnapshot, WorkspaceIdentity, WorkspaceResolver,
+    WorkspaceResolverError, WorkspaceSnapshot, WorkspaceSnapshotFieldState, interaction_session_id,
+    session_id_for_route,
 };
 pub use domain::WorkspaceRecord;
 pub use domain::session_action::{default_action_priority, effective_action_priority};

@@ -28,6 +28,7 @@ pub(crate) fn to_summary(detail: &ThreadDetail) -> ThreadSummary {
         model: detail.thread.settings.model.clone(),
         cwd: detail.thread.settings.cwd.clone(),
         status: detail.thread.status,
+        child_origin: detail.thread.child_origin.clone(),
         turn_count: detail.turns.len(),
     }
 }
@@ -54,6 +55,7 @@ fn apply_record(details: &mut BTreeMap<String, ThreadDetail>, record: &ThreadEve
                     source: *source,
                     ephemeral: *ephemeral,
                     settings: settings.clone(),
+                    child_origin: None,
                     created_at_ms: record.recorded_at_ms,
                     updated_at_ms: record.recorded_at_ms,
                     archived_at_ms: None,
@@ -87,6 +89,9 @@ fn apply_record(details: &mut BTreeMap<String, ThreadDetail>, record: &ThreadEve
         }
         ThreadEvent::ThreadForked { .. } => update_timestamp(details, record),
         ThreadEvent::ThreadNamed { name } => apply_thread_named(details, record, name.as_ref()),
+        ThreadEvent::ThreadAnnotated { child_origin } => {
+            apply_thread_annotated(details, record, child_origin.clone());
+        }
         ThreadEvent::ThreadArchived => apply_thread_archived(details, record),
         ThreadEvent::ThreadClosed => update_status(details, record, ThreadStatus::NotLoaded),
     }
@@ -236,6 +241,17 @@ fn apply_thread_named(
 ) {
     if let Some(detail) = details.get_mut(&record.thread_id) {
         detail.thread.name = name.cloned();
+        detail.thread.updated_at_ms = record.recorded_at_ms;
+    }
+}
+
+fn apply_thread_annotated(
+    details: &mut BTreeMap<String, ThreadDetail>,
+    record: &ThreadEventRecord,
+    child_origin: Option<String>,
+) {
+    if let Some(detail) = details.get_mut(&record.thread_id) {
+        detail.thread.child_origin = child_origin;
         detail.thread.updated_at_ms = record.recorded_at_ms;
     }
 }

@@ -105,7 +105,7 @@ fn completed_run_governs_reflection_off_main_path() {
             false,
         ),
     ]);
-    response.turn_events = provider_turn_events(7);
+    response.turn_events.extend(provider_turn_events(7));
     let mut events = Vec::new();
     let mut collect = |event| events.push(event);
     let sink = RunProgressSink::with_session_id(&mut collect, "test-session".to_owned());
@@ -303,7 +303,7 @@ fn durable_governance_requeues_failed_subagent_execution() {
             false,
         ),
     ]);
-    response.turn_events = provider_turn_events(7);
+    response.turn_events.extend(provider_turn_events(7));
 
     let completed = finish_completed_run(&config_path, &request, response)
         .expect("完成链路应成功持久化 governance job");
@@ -328,15 +328,39 @@ fn durable_governance_requeues_failed_subagent_execution() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// 构造一条形态真实的一轮响应：每个回执都有自己的调用、生命周期事件与唯一 part。
+///
+/// thread 事件流是轮次事实的唯一来源，`mirror_session_to_thread` 只投影「有调用、
+/// 有 started 事件、part 互不相同」的回执；夹具必须跟生产形态一致，否则治理读到
+/// 的轮次就不是这一轮。
 fn response_with_receipts(receipts: &[RunToolReceipt]) -> RunResponse {
-    let tool_calls = receipts
+    let started = receipts
         .iter()
-        .filter(|receipt| receipt.tool_name == "builtin.invoke_skill")
+        .enumerate()
+        .map(|(index, _)| {
+            AgentTurnEvent::new(
+                TurnId(u64::try_from(index).unwrap_or(u64::MAX).saturating_add(1)),
+                AgentTurnEventKind::ToolExecutionStarted,
+                "tool execution started",
+            )
+        })
+        .collect::<Vec<_>>();
+    let tool_receipts = receipts
+        .iter()
+        .enumerate()
+        .map(|(index, receipt)| RunToolReceipt {
+            tool_call_id: u64::try_from(index).unwrap_or(u64::MAX).saturating_add(1),
+            part_id: started[index].part_id.clone(),
+            ..receipt.clone()
+        })
+        .collect::<Vec<_>>();
+    let tool_calls = tool_receipts
+        .iter()
         .map(|receipt| {
             ProviderToolCall::new(
                 receipt.provider_call_id.clone(),
                 receipt.tool_name.clone(),
-                r#"{"skill_name":"release"}"#,
+                tool_call_input(&receipt.tool_name),
             )
         })
         .collect();
@@ -349,10 +373,19 @@ fn response_with_receipts(receipts: &[RunToolReceipt]) -> RunResponse {
         http_status: 200,
         channel_attempts: Vec::new(),
         reasoning_messages: Vec::new(),
-        tool_receipts: receipts.to_vec(),
+        tool_receipts,
         tool_calls,
-        turn_events: Vec::new(),
+        turn_events: started,
         max_tokens_truncated: false,
+    }
+}
+
+/// 与工具名一致的调用输入：参数指纹与证据归因都按真实调用形态取值。
+fn tool_call_input(tool_name: &str) -> String {
+    match tool_name {
+        "builtin.invoke_skill" => r#"{"skill_name":"release"}"#.to_owned(),
+        "builtin.edit" => r#"{"path":"src/lib.rs"}"#.to_owned(),
+        _ => r#"{"command":"cargo test"}"#.to_owned(),
     }
 }
 

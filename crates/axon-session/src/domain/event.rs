@@ -97,6 +97,14 @@ pub enum ThreadEvent {
         /// 新名称。
         name: Option<String>,
     },
+    /// 标注子会话来源。
+    ///
+    /// 来源只决定界面名册列不列这条会话：运行侧内务（自迭代、反思、语义显著度）
+    /// 不是用户要的子代理，缺省（未标注）按委派处理，以兼容旧日志。
+    ThreadAnnotated {
+        /// 子会话来源。
+        child_origin: Option<String>,
+    },
     /// 归档。
     ThreadArchived,
     /// 取消归档。

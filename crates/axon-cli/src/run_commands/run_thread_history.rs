@@ -360,3 +360,131 @@ fn tool_receipt_for_call<'a>(
         .iter()
         .find(|receipt| receipt.part_id == part_id)
 }
+
+/// thread 历史 item 反投影出的单轮事实。
+///
+/// 这是 `history_items_from_record` 的逆运算：thread 文件成为唯一 SSOT 之后，
+/// 治理收口与轨迹读取都靠它拿回当轮的用户输入、助手响应、工具调用与回执。
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct TurnItemProjection {
+    pub(super) prompt: String,
+    pub(super) local_images: Vec<ThreadHistoryImageRef>,
+    pub(super) local_files: Vec<ThreadHistoryFileRef>,
+    pub(super) response: String,
+    pub(super) tool_calls: Vec<axon_agent_runtime::ProviderToolCall>,
+    pub(super) tool_receipts: Vec<RunToolReceipt>,
+    pub(super) reasoning_messages: Vec<super::run_session_store::RunReasoningMessageRecord>,
+    pub(super) injected_context_messages: Vec<axon_agent_runtime::AgentModelMessage>,
+}
+
+impl TurnItemProjection {
+    fn new() -> Self {
+        Self {
+            prompt: String::new(),
+            local_images: Vec::new(),
+            local_files: Vec::new(),
+            response: String::new(),
+            tool_calls: Vec::new(),
+            tool_receipts: Vec::new(),
+            reasoning_messages: Vec::new(),
+            injected_context_messages: Vec::new(),
+        }
+    }
+}
+
+/// 把一轮 thread 历史 item 反向投影成 run 记录所需的字段。
+///
+/// 只还原 thread 真正收录的事实：目录外的字段（启动时间线、turn event 明细）
+/// 保持空值，由调用方按缺省处理，不在此处编造。
+pub(super) fn turn_item_projection(items: &[ThreadHistoryItem]) -> TurnItemProjection {
+    let mut projection = TurnItemProjection::new();
+    for item in items {
+        match item {
+            ThreadHistoryItem::InjectedContext { message_json, .. } => {
+                // 反序列化失败说明该条注入已损坏：丢掉它，不写入半截上下文。
+                if let Ok(message) =
+                    serde_json::from_str::<axon_agent_runtime::AgentModelMessage>(message_json)
+                {
+                    projection.injected_context_messages.push(message);
+                }
+            }
+            ThreadHistoryItem::UserMessage {
+                content,
+                local_images,
+                local_files,
+                ..
+            } => {
+                projection.prompt.clone_from(content);
+                projection.local_images.clone_from(local_images);
+                projection.local_files.clone_from(local_files);
+            }
+            ThreadHistoryItem::AssistantMessage { content, .. } => {
+                projection.response.clone_from(content);
+            }
+            ThreadHistoryItem::Reasoning {
+                part_id,
+                reasoning_id,
+                content,
+                ..
+            } => projection.reasoning_messages.push(
+                super::run_session_store::RunReasoningMessageRecord {
+                    part_id: part_id.clone(),
+                    reasoning_id: reasoning_id.clone(),
+                    content: content.clone(),
+                },
+            ),
+            ThreadHistoryItem::ToolCall {
+                provider_call_id,
+                tool_name,
+                input,
+                ..
+            } => projection
+                .tool_calls
+                .push(axon_agent_runtime::ProviderToolCall {
+                    id: provider_call_id.clone(),
+                    name: tool_name.clone(),
+                    input: input.clone(),
+                }),
+            ThreadHistoryItem::ToolResult {
+                part_id,
+                tool_call_id,
+                provider_call_id,
+                tool_name,
+                receipt: Some(receipt),
+                ..
+            } => {
+                // 调用账本 ID 是十进制字符串；解析不出说明该条记录不完整，跳过而不填 0。
+                let Ok(call_id) = tool_call_id.parse::<u64>() else {
+                    continue;
+                };
+                projection.tool_receipts.push(RunToolReceipt {
+                    tool_call_id: call_id,
+                    part_id: part_id.clone(),
+                    provider_call_id: provider_call_id.clone(),
+                    tool_name: tool_name.clone(),
+                    status: status_text(receipt.status).to_owned(),
+                    summary: receipt.summary.clone(),
+                    metadata: receipt.metadata.clone(),
+                    error_type: receipt.error_type.clone(),
+                    remote_trigger_allowed: receipt.remote_trigger_allowed,
+                    filesystem_write_performed: receipt.filesystem_write_performed,
+                    output_ref: receipt.output_ref.clone(),
+                    duration_ms: receipt.duration_ms,
+                });
+            }
+            ThreadHistoryItem::ToolResult { receipt: None, .. } => {}
+        }
+    }
+    projection
+}
+
+/// 回执状态回到运行时口径的字符串；与 `history_status` 互为逆映射。
+fn status_text(status: ThreadHistoryStatus) -> &'static str {
+    match status {
+        ThreadHistoryStatus::Completed => "completed",
+        ThreadHistoryStatus::Failed => "failed",
+        ThreadHistoryStatus::Interrupted => "interrupted",
+        ThreadHistoryStatus::Rejected => "rejected",
+        ThreadHistoryStatus::InProgress => "in_progress",
+    }
+}

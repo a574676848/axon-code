@@ -261,6 +261,7 @@ mod tests {
                     model: "fixture".to_owned(),
                     selected_skill_name: None,
                 },
+                child_origin: None,
                 created_at_ms: 1,
                 updated_at_ms: 1,
                 archived_at_ms: None,

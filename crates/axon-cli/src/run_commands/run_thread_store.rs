@@ -657,6 +657,7 @@ fn thread_detail_from_records(records: &[RunSessionRecord]) -> Result<ThreadDeta
             source: ThreadSource::CliRun,
             ephemeral: false,
             settings: settings_from_record(fallback),
+            child_origin: None,
             created_at_ms: fallback.created_at_ms,
             updated_at_ms: fallback.created_at_ms,
             archived_at_ms: None,
@@ -802,6 +803,149 @@ pub(super) fn previous_reflection_notice(
         .drain(..position)
         .filter_map(|(_, notice)| notice)
         .next_back()
+}
+
+/// 治理收口产物回写：只补写本轮 metadata 中由 post-run 产生的两项事实。
+///
+/// 整条 `RunSessionRecord` 重写会把 thread 投影里不再收录的字段（reasoning 条数、
+/// turn event 条数等）抹成零，因此这里按 `(thread, turn)` 点对点补写 metadata，
+/// 其余字段原样保留；`None` 提示表示「本轮没有新提示」，不覆盖已有值。
+pub(super) fn patch_turn_artifacts(
+    config_path: &Path,
+    session_id: &str,
+    assistant_part_id: &str,
+    notice: Option<&str>,
+    affect_sequence: &[String],
+) -> Result<(), String> {
+    let root = resolved_axon_root(config_path)?;
+    let service = ThreadService::new(JsonlThreadEventStore);
+    let detail = service.read_thread(&root, session_id)?;
+    let mut turn = detail
+        .turns
+        .iter()
+        .find(|turn| {
+            turn_metadata(&turn.token_usage_json)
+                .is_some_and(|metadata| metadata.assistant_part_id == assistant_part_id)
+        })
+        .cloned()
+        .ok_or_else(|| format!("thread {session_id} 缺少轮次 {assistant_part_id}"))?;
+    let mut metadata = turn_metadata(&turn.token_usage_json)
+        .ok_or_else(|| format!("thread {session_id} 轮次 {assistant_part_id} 缺少 metadata"))?;
+    if let Some(notice) = notice {
+        metadata.reflection_notice = Some(notice.to_owned());
+    }
+    if !affect_sequence.is_empty() {
+        metadata.affect_sequence = affect_sequence.to_vec();
+    }
+    turn.token_usage_json = Some(
+        serde_json::to_string(&metadata)
+            .map_err(|_| "thread turn metadata 序列化失败".to_owned())?,
+    );
+    service.append_turn(
+        &root,
+        AppendTurnCommand {
+            thread_id: session_id.to_owned(),
+            recorded_at_ms: crate::run_commands::run_execution::now_ms(),
+            turn,
+        },
+    )
+}
+
+/// 由 thread 轮次反向重建整条 run 记录。
+///
+/// 治理收口与轨迹读取共用这一份事实：迁移后 rollout 账本不再是它们的唯一来源。
+/// 轮次 metadata 给出用量、模型别名、推理强度与失败标记，历史 item 给出输入、
+/// 响应、工具调用与回执；thread 本就不收录的字段（启动时间线、turn event 明细）
+/// 留空，由消费方按缺省处理。
+pub(super) fn turn_record(
+    config_path: &Path,
+    session_id: &str,
+    assistant_part_id: &str,
+) -> Result<Option<RunSessionRecord>, String> {
+    let Some(detail) = read_thread_detail(config_path, session_id) else {
+        return Ok(None);
+    };
+    let found = detail.turns.iter().find_map(|turn| {
+        let metadata = turn_metadata(&turn.token_usage_json)?;
+        (metadata.assistant_part_id == assistant_part_id).then_some((turn, metadata))
+    });
+    Ok(found.map(|(turn, metadata)| turn_record_from_part(&detail, turn, &metadata)))
+}
+
+/// 按轮序或最新一轮取回 thread 轮次记录，并带回解出的轮序。
+pub(crate) fn turn_record_by_sequence(
+    config_path: &Path,
+    session_id: &str,
+    sequence: Option<u64>,
+) -> Result<Option<(RunSessionRecord, u64)>, String> {
+    let Some(detail) = read_thread_detail(config_path, session_id) else {
+        return Ok(None);
+    };
+    let found = match sequence {
+        Some(wanted) => detail
+            .turns
+            .iter()
+            .find(|turn| turn.sequence == wanted)
+            .map(|turn| (turn, wanted)),
+        None => detail.turns.last().map(|turn| (turn, turn.sequence)),
+    };
+    let Some((turn, sequence)) = found else {
+        return Ok(None);
+    };
+    let Some(metadata) = turn_metadata(&turn.token_usage_json) else {
+        return Ok(None);
+    };
+    Ok(Some((
+        turn_record_from_part(&detail, turn, &metadata),
+        sequence,
+    )))
+}
+
+fn turn_record_from_part(
+    detail: &ThreadDetail,
+    turn: &Turn,
+    metadata: &ThreadTurnMetadata,
+) -> RunSessionRecord {
+    let projection = super::run_thread_history::turn_item_projection(&turn.history_items);
+    RunSessionRecord {
+        session_id: detail.thread.thread_id.clone(),
+        parent_session_id: detail.thread.parent_thread_id.clone(),
+        created_at_ms: turn.started_at_ms,
+        startup_timeline: super::run_startup_snapshot::RunStartupTimeline {
+            total_ms: 0,
+            stages: Vec::new(),
+            mcp_schema_cache: Vec::new(),
+            skill_catalog_revision: String::new(),
+        },
+        cwd: Some(detail.thread.settings.cwd.clone()).filter(|cwd| !cwd.trim().is_empty()),
+        provider: detail.thread.settings.provider.clone(),
+        model: detail.thread.settings.model.clone(),
+        model_name: metadata.model_name.clone(),
+        selected_skill_name: detail.thread.settings.selected_skill_name.clone(),
+        repo_context: None,
+        session_context: None,
+        durable_memory: None,
+        prompt: projection.prompt,
+        local_images: projection.local_images,
+        local_files: projection.local_files,
+        response: projection.response,
+        assistant_part_id: metadata.assistant_part_id.clone(),
+        usage: metadata.usage,
+        tool_receipts: projection.tool_receipts,
+        tool_calls: projection.tool_calls,
+        reasoning_messages: projection.reasoning_messages,
+        injected_context_messages: projection.injected_context_messages,
+        turn_events: Vec::new(),
+        failure: None,
+        upstream_model: None,
+        reasoning_effort: metadata.reasoning_effort.clone(),
+        request_path: None,
+        speed_mode: None,
+        ttft_ms: None,
+        generation_speed_tps: None,
+        reflection_notice: metadata.reflection_notice.clone(),
+        turn_trace: None,
+    }
 }
 
 /// 只读接口用的入口：调用方手里是 Axon 根目录，不是配置文件路径。

@@ -1,8 +1,8 @@
 //! 一轮治理后要落下的三份可见性产物：界面提示、审计回执、证据轨迹。
 //!
-//! 三份产物必须写在同一个 record 上、只提交一次：`commit_session_to_rollout` 按
-//! `(session_id, assistant_part_id)` 整条覆盖，分两次提交会让后一次用旧 record
-//! 把前一次刚写的字段抹掉。
+//! 提示与状态序列按 `(thread, turn)` 点对点补写本轮 metadata，回执单独入表：
+//! 三者写的是不同落点，谁也不必整条重写轮次记录，因此不会再出现「后一次写回把前
+//! 一次刚写的字段抹掉」。
 
 use axon_agent_runtime::{
     SelfIterationHookKind, SelfIterationReceiptInput, SelfIterationReceiptRecord,
@@ -29,23 +29,20 @@ pub(super) fn publish_turn_artifacts(
     report: &PostRunSelfIterationReport,
     trace: &axon_agent_runtime::TurnTrace,
 ) {
-    let mut record = session_record.clone();
-    // 只在有提示时覆盖：已处理轮次的补写带的是默认报告，直接赋值会把首次写好的
-    // 提示清空。
-    if let Some(notice) = reflection_notice_text(report) {
-        record.reflection_notice = Some(notice);
-    }
-    record.turn_trace = Some(trace.clone());
+    let notice = reflection_notice_text(report);
     let attempted = report.quality.reflection_attempts > 0
         || report.memory_write_count > 0
         || report.quality.reflection_deferred > 0;
     if attempted {
         append_reflection_receipt(payload, session_record, report);
     }
-    let title = super::run_thread_title::derive_thread_title(&record.prompt);
-    if let Err(error) =
-        super::run_rollout_store::commit_session_to_rollout(&payload.config_path, &record, &title)
-    {
+    if let Err(error) = super::run_thread_store::patch_turn_artifacts(
+        &payload.config_path,
+        &session_record.session_id,
+        &session_record.assistant_part_id,
+        notice.as_deref(),
+        &trace.signals.affect_sequence,
+    ) {
         axon_logger::warning(&format!("本轮反思产物写回失败: {error}"));
     }
 }

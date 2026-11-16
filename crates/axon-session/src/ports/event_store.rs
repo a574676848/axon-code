@@ -70,6 +70,7 @@ fn apply_activation_event(active_turn_ids: &mut Vec<String>, record: &ThreadEven
         | ThreadEvent::ThreadCompacted { .. }
         | ThreadEvent::ThreadForked { .. }
         | ThreadEvent::ThreadNamed { .. }
+        | ThreadEvent::ThreadAnnotated { .. }
         | ThreadEvent::ThreadArchived
         | ThreadEvent::ThreadUnarchived
         | ThreadEvent::ThreadClosed => {}
