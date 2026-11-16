@@ -153,7 +153,8 @@ const CONTROL_DDL: &str = "
             last_activity_at_ms INTEGER NOT NULL, created_at_ms INTEGER NOT NULL,
             updated_at_ms INTEGER NOT NULL,
             workspace_id TEXT, title TEXT,
-            pinned INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0
+            pinned INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,
+            run_generation INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS sessions_recovery
             ON sessions(status, owner_host_id, owner_generation);
@@ -579,6 +580,8 @@ fn migrate_additive_columns(connection: &Connection) -> rusqlite::Result<()> {
     add_column_if_missing(connection, "sessions", "title", "TEXT")?;
     add_column_if_missing(connection, "sessions", "pinned", "INTEGER NOT NULL DEFAULT 0")?;
     add_column_if_missing(connection, "sessions", "archived", "INTEGER NOT NULL DEFAULT 0")?;
+    // 运行实例代数：`/reset` 只递增它并换 run_session_id，会话与会话历史保持不变。
+    add_column_if_missing(connection, "sessions", "run_generation", "INTEGER NOT NULL DEFAULT 0")?;
     add_column_if_missing(
         connection,
         "inbox",

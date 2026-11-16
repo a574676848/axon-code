@@ -63,7 +63,8 @@ pub(super) fn reset_session(
             "UPDATE sessions
              SET run_session_id=?1,cwd=?2,status='created',
                  owner_host_id=?3,owner_generation=?4,worker_attempt=worker_attempt+1,
-                 context_version=context_version+1,last_activity_at_ms=?5,updated_at_ms=?5
+                 context_version=context_version+1,run_generation=run_generation+1,
+                 last_activity_at_ms=?5,updated_at_ms=?5
              WHERE session_id=?6",
             params![
                 run_session_id,
