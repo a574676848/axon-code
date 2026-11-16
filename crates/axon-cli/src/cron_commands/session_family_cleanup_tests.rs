@@ -311,7 +311,7 @@ fn create_runtime_family(root: &Path, child_status: &str, with_execution: bool) 
     for (id, status) in [(STALE_ROOT, "idle"), (STALE_CHILD, child_status)] {
         connection
             .execute(
-                "INSERT INTO sessions VALUES(?1,?1,?1,'/workspace',?2,NULL,NULL,0,0,1,1,1,1,1)",
+                "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES(?1,?1,?1,'/workspace',?2,NULL,NULL,0,0,1,1,1,1,1)",
                 params![id, status],
             )
             .expect("runtime Session 应可写入");

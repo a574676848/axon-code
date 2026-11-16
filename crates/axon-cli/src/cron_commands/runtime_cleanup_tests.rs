@@ -87,7 +87,7 @@ fn seed(connection: &Connection, batch: &str, what: &str) {
 fn insert_hot_session_history(connection: &Connection) {
     connection
         .execute(
-            "INSERT INTO sessions
+            "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms)
              VALUES(?1,?1,?1,'/w','running',NULL,NULL,0,0,0,?2,?3,1,1)",
             rusqlite::params![
                 HOT_SESSION_ID,
@@ -151,7 +151,7 @@ fn write_retained_session_artifacts(root: &Path) -> Vec<(std::path::PathBuf, Vec
     fn cleanup_covers_r1_to_r7_runtime_tables() {
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
-    seed(&connection, "INSERT INTO sessions VALUES('s-old','s-old','s-old','/w','completed',NULL,NULL,0,0,0,0,1,1,1);
+    seed(&connection, "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES('s-old','s-old','s-old','/w','completed',NULL,NULL,0,0,0,0,1,1,1);
              INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,emitted_at_ms) VALUES('s-old',1,'g','turn','{}',1);
              INSERT INTO session_checkpoints VALUES('s-old',1,'a',0,0,NULL,NULL,NULL,NULL,NULL,1);
              INSERT INTO schedules VALUES('sch-1','s-old','interval','1m','{}','none','created',1,NULL,NULL,0,NULL,NULL);
@@ -230,7 +230,7 @@ fn write_retained_session_artifacts(root: &Path) -> Vec<(std::path::PathBuf, Vec
 fn cleanup_protects_active_and_unread_records() {
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
-    seed(&connection, "INSERT INTO sessions VALUES('s-run','s-run','s-run','/w','running',NULL,NULL,0,0,0,0,1,1,1);
+    seed(&connection, "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES('s-run','s-run','s-run','/w','running',NULL,NULL,0,0,0,0,1,1,1);
              INSERT INTO goals(goal_id,scope_json,parent_goal_id,title,status,revision,plan_json,acceptance_json,progress_json,waiting_reason,next_step,priority,deadline_ms,created_from_interaction_id,cancellation_reason,cancellation_requested_at_ms,created_at_ms,updated_at_ms)
                  VALUES('t-done','{}',NULL,'完成任务','completed',1,'{}','{}',NULL,NULL,NULL,0,NULL,NULL,NULL,NULL,1,1);
              INSERT INTO work_items(execution_id,goal_id,session_id,kind,payload_json,goal_revision,context_version,attempt,priority,dedupe_key,status,lease_json,claimed_by,claimed_generation,lease_expires_at_ms,started_at_ms,committed_at_ms,cancelled_at_ms,retry_at_ms,checkpoint_json,cancellation_requested_at_ms,cancellation_reason,created_at_ms,updated_at_ms)
@@ -254,7 +254,7 @@ fn explicit_session_family_cleanup_rechecks_active_state_and_execution_reference
         let connection = open_fixture(root.path());
         connection
             .execute(
-                "INSERT INTO sessions VALUES('protected','protected','protected','/w',?1,NULL,NULL,0,0,0,0,1,1,1)",
+                "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES('protected','protected','protected','/w',?1,NULL,NULL,0,0,0,0,1,1,1)",
                 [status],
             )
             .expect("受保护 Session 应可写入");
@@ -298,7 +298,7 @@ fn explicit_session_family_cleanup_rechecks_active_state_and_execution_reference
     let mut connection = open_fixture(root.path());
     connection
         .execute(
-            "INSERT INTO sessions VALUES('stale','stale','stale','/w','idle',NULL,NULL,0,0,0,?1,1,1,1)",
+            "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES('stale','stale','stale','/w','idle',NULL,NULL,0,0,0,?1,1,1,1)",
             [EVENT_COUNT],
         )
         .expect("stale Session 应可写入");

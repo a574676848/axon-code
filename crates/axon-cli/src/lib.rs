@@ -12,6 +12,7 @@ pub mod config_http_adapter;
 mod constants;
 mod cron_commands;
 mod cron_http_adapter;
+mod sessions_http_adapter;
 mod daemon_commands;
 mod display_units;
 #[cfg(all(test, feature = "tui"))]

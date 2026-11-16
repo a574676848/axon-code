@@ -44,6 +44,10 @@ pub(crate) fn compose(deps: AdapterDeps<'_>) -> Arc<dyn GatewayHttpRouteHandler>
             runtime_root.to_path_buf(),
             config_path.to_path_buf(),
         )),
+        // 会话列表：桌面左侧菜单与 TUI /sessions 共用同一份运行态读数。
+        Arc::new(crate::sessions_http_adapter::SessionsHttpAdapter::new(
+            runtime_root.to_path_buf(),
+        )),
         Arc::new(crate::memory_http_adapter::MemoryHttpAdapter::new(
             runtime_root.to_path_buf(),
             config_path.to_path_buf(),

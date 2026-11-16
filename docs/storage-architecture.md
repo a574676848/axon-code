@@ -799,25 +799,39 @@ CREATE TABLE work_items (
 );
 ```
 
-`inbox` 只剩事实：
+`inbox` 只剩事实（实施后的实际列名，见 §4.14.1）：
 
 ```sql
 CREATE TABLE inbox (
-    inbox_id          TEXT PRIMARY KEY,
-    channel           TEXT NOT NULL,
+    interaction_id    TEXT PRIMARY KEY,   -- 保留原列名，避免无收益的全仓改名
+    source_channel    TEXT NOT NULL,
     source_message_id TEXT NOT NULL,
-    session_id        TEXT NOT NULL,
-    content           TEXT NOT NULL,
-    attachments_json  TEXT NOT NULL,
-    scope_json        TEXT NOT NULL,
+    scope_json        TEXT NOT NULL,      -- 含 Workspace 归属，lane 由它派生
     audience_json     TEXT NOT NULL,
     reply_route_json  TEXT NOT NULL,
+    content           TEXT NOT NULL,
+    attachments_json  TEXT NOT NULL,
     model             TEXT,
     reasoning_effort  TEXT,
+    lane_id           TEXT NOT NULL,      -- 车道聚合键，随 W4 改名 session_id
+    tool_summary      TEXT NOT NULL,      -- 展示元数据，每轮更新一次
     received_at_ms    INTEGER NOT NULL,
-    UNIQUE(channel, source_message_id)
+    updated_at_ms     INTEGER NOT NULL,
+    UNIQUE(source_channel, source_message_id)
 );
 ```
+
+**已落地的部分（W3-3）**
+
+- `inbox` 不再有 `status` / `lease_token` / `lease_expires_at_ms`，写入后只有 `tool_summary` 与 `updated_at_ms` 会被更新。
+- `work_items` 增加 `inbox_id`（部分唯一索引：一条入站事实最多一个工作项）、`terminal_kind`（`understood` / `rejected` / `interrupted`）与 `lease_token`；`goal_id` 改为可空，turn 工作项不需要 Goal。
+- 领取、续租、释放、结算全部只更新 `work_items` 一行；读取侧 `inbox LEFT JOIN work_items` 派生回领域状态，上层 `InteractionRecord` 语义不变。
+- 事件写入前的 Interaction lease 校验改为校验工作项租约（`work_items.lease_token` + 未过期）。
+- 中断收敛与保留期清理都改为按工作项判定：前者扫过期 `running` 工作项，后者按 `terminal_kind` 选行。
+
+**尚未落地的部分（W3-4 / W3-5）**
+
+`work_items` 与 `work_item_history` 的在途/终态拆分、以及 Action 领取与 Execution 领取合并到同一套 claim 仍未实施。当前状态：turn 领取已并入 `work_items`，goal 结算仍走 `claim_executions` / `claim_next_action` 两条独立路径。
 
 **收益**
 

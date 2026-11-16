@@ -38,8 +38,6 @@ const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// 单轮增量回收的页数：4 KiB 页下约等于 16 MiB，避免删了行文件却不缩。
 const INCREMENTAL_VACUUM_PAGE_BATCH: u32 = 4_096;
 
-/// 终态 Interaction 状态：只有终态记录参与按保留期回收。
-pub(super) const INTERACTION_TERMINAL_STATUSES: [&str; 2] = ["understood", "rejected"];
 /// 终态工作项类别：入站事实的终态由工作项的 terminal_kind 表达。
 pub(super) const INTERACTION_TERMINAL_KINDS: [&str; 2] = ["understood", "rejected"];
 /// 终态 Task 状态：长期承诺结束后才允许回收。

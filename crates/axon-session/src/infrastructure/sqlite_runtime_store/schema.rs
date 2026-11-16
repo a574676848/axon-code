@@ -151,7 +151,9 @@ const CONTROL_DDL: &str = "
             worker_attempt INTEGER NOT NULL, context_version INTEGER NOT NULL,
             last_checkpoint_seq INTEGER NOT NULL, last_event_sequence INTEGER NOT NULL,
             last_activity_at_ms INTEGER NOT NULL, created_at_ms INTEGER NOT NULL,
-            updated_at_ms INTEGER NOT NULL
+            updated_at_ms INTEGER NOT NULL,
+            workspace_id TEXT, title TEXT,
+            pinned INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS sessions_recovery
             ON sessions(status, owner_host_id, owner_generation);
@@ -159,6 +161,8 @@ const CONTROL_DDL: &str = "
             ON sessions(last_activity_at_ms, status, session_id);
         CREATE INDEX IF NOT EXISTS sessions_owner
             ON sessions(owner_host_id);
+        CREATE INDEX IF NOT EXISTS sessions_by_activity
+            ON sessions(pinned DESC, last_activity_at_ms DESC);
         CREATE TABLE IF NOT EXISTS session_metrics (
             session_id TEXT PRIMARY KEY,
             turn_count INTEGER NOT NULL DEFAULT 0,
@@ -567,6 +571,14 @@ const OUTBOX_DDL: &str = "
 /// 新增列的配套索引必须在本函数内、列补齐之后创建：既有库的 `lane_id` 由本函数
 /// 补列，索引若写在 DDL 批次里会因列不存在而整批失败。
 fn migrate_additive_columns(connection: &Connection) -> rusqlite::Result<()> {
+    /*
+     * 会话列表需要的展示列：workspace_id 与 	itle 由写入侧按需补齐，pinned 与
+     * rchived 决定排序与过滤。默认值让既有库无需重建即可上线这一能力。
+     */
+    add_column_if_missing(connection, "sessions", "workspace_id", "TEXT")?;
+    add_column_if_missing(connection, "sessions", "title", "TEXT")?;
+    add_column_if_missing(connection, "sessions", "pinned", "INTEGER NOT NULL DEFAULT 0")?;
+    add_column_if_missing(connection, "sessions", "archived", "INTEGER NOT NULL DEFAULT 0")?;
     add_column_if_missing(
         connection,
         "inbox",

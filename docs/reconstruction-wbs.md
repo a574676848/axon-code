@@ -82,7 +82,7 @@
 
 | # | 任务 | 交付物 | 依赖 | 验收 | 估时 |
 | --- | --- | --- | --- | --- | --- |
-| W3-1 | 三库 schema 重写 | `control`/`outbox`/`audit` 各自 schema | 里程碑 B | 三库可从零创建；`PRAGMA user_version` 生效 | 0.8 |
+| W3-1 | 两库 schema 重写（audit 取消并入 control，理由见 docs/storage-architecture.md §4.4.3） | `control`/`outbox`/`audit` 各自 schema | 里程碑 B | 三库可从零创建；`PRAGMA user_version` 生效 | 0.8 |
 | W3-2 | `sessions` 表（含 `current_run_id` / `run_generation`） | schema + repository | W3-1 | `/new` 换 run，`/reset` 只换 generation | 0.6 |
 | W3-3 | `inbox` 表（去状态机） | schema + repository | W3-1 | 只有幂等、内容、受众、路由；无 `status`/`lease_token` | 0.6 |
 | W3-4 | `work_items` + `work_item_history` | schema + repository | W3-3 | 在途与终态分离；`kind` 覆盖 turn/goal/cron/subagent | 0.9 |
