@@ -332,27 +332,38 @@ pub(super) fn write_events_at(
     apply_projections(store, session_id, events, origin_channel.as_deref(), now_ms);
     Ok(records)
 }
-/// 逐条把已分配序号的事件写进事件面文件。
+/// 逐会话批量把已分配序号的事件写进事件面文件。
 ///
-/// 供跨会话的隔离与恢复路径使用：这些路径一次只产出少量事件，且序号已在控制面
-/// 事务里分配好。按条追加即可，不做批次合并。
+/// 供跨会话的隔离与恢复路径使用：这些路径一次产出少量事件，序号已在控制面事务里
+/// 分配好。同一会话的连续记录合并成一次追加，避免每条一次 fsync。
 pub(super) fn write_records(
     store: &SqliteRuntimeStore,
     records: &[SessionEventRecord],
     interaction_id: Option<&str>,
 ) -> Result<(), RuntimeStoreError> {
     let origin_channel = interaction_channel(store, interaction_id)?;
-    for record in records {
-        let runtime_record = to_runtime_record(record, interaction_id, origin_channel.as_deref());
+    let mut index = 0usize;
+    while index < records.len() {
+        let session_id = &records[index].session_id;
+        let mut end = index + 1;
+        while end < records.len() && &records[end].session_id == session_id {
+            end += 1;
+        }
+        let batch = &records[index..end];
+        let runtime_records = batch
+            .iter()
+            .map(|record| to_runtime_record(record, interaction_id, origin_channel.as_deref()))
+            .collect::<Vec<_>>();
         if let Err(error) = axon_eventlog::append_once(
-            &store.event_log(&record.session_id),
-            record.sequence,
-            record.emitted_at_ms,
-            std::slice::from_ref(&runtime_record),
+            &store.event_log(session_id),
+            batch[0].sequence,
+            batch[0].emitted_at_ms,
+            &runtime_records,
         ) {
-            compensate_watermark_after_log_failure(store, &record.session_id);
+            compensate_watermark_after_log_failure(store, session_id);
             return Err(log_error(error));
         }
+        index = end;
     }
     Ok(())
 }
