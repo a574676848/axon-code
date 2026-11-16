@@ -501,6 +501,25 @@ enum TurnOrigin { External, Cron, Goal, Subagent }
 
 入站路由也允许一个会话被多个渠道绑定：`channel_bindings` 主键是 `(channel, destination)`，多行可以指向同一个 `session_id`。桌面与 TUI 不写这张表（它们直接传 `session_id`），只有飞书群、外部 webhook 这类无 UI 入口才需要。
 
+### 4.11.1 turn_metrics 的生产链
+
+采集发生在 CLI 进程（`run_session_store` 已能算出 TTFT 与速率），消费发生在 daemon 进程（结算时落事件），两者当前没有通道。落法分三段：
+
+1. **采集（CLI）**：provider turn 结束时构造 `TurnMetrics`：
+   - `ttft_ms` ← `compute_request_ttft_ms`
+   - `generation_speed_tps` ← `compute_generation_speed_tps`
+   - 五类 token ← `TokenUsageTelemetry`
+   - `active_ms` ← turn 起止时间差
+   - `outcome` ← turn 终态（succeeded / failed / interrupted）
+   - 结果写进 `SessionActionRecord.payload_json` 的 `metrics` 键，与 `axon_eventlog::TurnMetrics` 同构。
+2. **搬运（daemon 结算）**：`execution_worker_settlement::commit_conclusion` 从 action payload 取出 `metrics`，转成一条 `turn_metrics` 事件，与终态事件一起传给 `commit_action` 的 `events`。
+3. **投影（自动）**：`event_log_repository::apply_projections` 识别该事件并累加进 `session_metrics`，不需要额外接线。
+
+两条硬规则：
+
+- `payload_json.metrics` 缺失时按"本轮未测得"处理，**不填 0**，否则平均值被稀释。
+- `metrics` 只是回传通道，不是权威事实：权威事实是落盘后的 `turn_metrics` 事件。
+
 **采集策略**
 
 1. **始终采集，不受日志级别控制。** `first_token_telemetry_enabled` 的 trace 开关只保留给"逐阶段明细日志"，不再决定是否落库。
