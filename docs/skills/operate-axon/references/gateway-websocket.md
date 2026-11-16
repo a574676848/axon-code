@@ -55,7 +55,7 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
   - **子代理会话**，会话标识形如 `parent--subagent--root`；其中的 `parent` 是父的**运行会话标识**，不是车道标识。
   - **目标执行会话**，即目标执行账本里绑定到该会话的执行记录所对应的会话（形如 `goal-session-<goalId>`）。服务端按执行绑定裁决，**不解析标识前缀**：没有执行绑定的会话即使标识看起来像目标会话也会被拒。
 - 目标执行会话还要通过工作区校验：工作区作用域的目标，其作用域工作区必须等于请求的 `workspaceId`；全局作用域的目标按会话 `cwd` 精确匹配工作区注册表根目录，匹配必须唯一（零个或多个都拒绝）。
-- 把车道标识当 `sessionId` 传会被拒为 `subscription_rejected`；既不是子代理会话、也没有执行绑定的普通会话同样被拒。主会话车道用 `interactionId` 订阅，交互标识可从 `GET /api/v1/lanes/<laneId>/interactions` 取得。
+- 把车道标识当 `sessionId` 传会被拒为 `subscription_rejected`；既不是子代理会话、也没有执行绑定的普通会话同样被拒。主会话车道用 `interactionId` 订阅，交互标识可从 `GET /api/v1/sessions/<sessionId>/interactions` 取得。
 - `subscribeId` 由客户端生成，必须在同一连接内唯一；建议直接由目标推导（`interaction:<id>` 或 `session:<id>`）。
 - `resumeCursor` 用于从既有游标续读；省略时从头回放。
 

@@ -27,12 +27,12 @@
 | `POST /api/v1/providers/discover` | 「探查模型」 |
 | `GET/PUT /api/v1/mcp/config`、`GET /api/v1/skills`、`DELETE /api/v1/skills/{id}` | MCP 配置、技能清单与技能移除（设置 › 技能 的「移除」经它删除技能目录，确认后才发请求） |
 | `GET/PUT /api/v1/documents/soul`、`/documents/agents` | 人设与行为文件 |
-| `GET /api/v1/workspaces`、`GET /api/v1/lanes` | 工作区与车道列表 |
-| `POST /api/v1/workspaces`、`POST /api/v1/lanes/identity` | 注册工作区、推导车道标识 |
-| `POST /api/v1/lanes/<laneId>/interrupt` | 中断该车道当前运行 |
-| `POST /api/v1/lanes/<laneId>/jobs/<jobId>/stop` | 停止该车道的后台作业 |
-| `POST /api/v1/lanes/<laneId>/subagents/<agent>/messages` | 给该车道的子代理追加消息 |
-| `GET /api/v1/lanes/<laneId>/interactions`、`/jobs`、`/jobs/<jobId>/output`、`/subagents` | 车道详情与作业输出增量 |
+| `GET /api/v1/workspaces`、`GET /api/v1/sessions` | 工作区与会话列表 |
+| `POST /api/v1/workspaces`、`POST /api/v1/sessions/identity` | 注册工作区、推导会话标识 |
+| `POST /api/v1/sessions/<sessionId>/interrupt` | 中断该会话当前运行 |
+| `POST /api/v1/sessions/<sessionId>/jobs/<jobId>/stop` | 停止该会话的后台作业 |
+| `POST /api/v1/sessions/<sessionId>/subagents/<agent>/messages` | 给该会话的子代理追加消息 |
+| `GET /api/v1/sessions/<sessionId>/interactions`、`/jobs`、`/jobs/<jobId>/output`、`/subagents` | 会话详情与作业输出增量 |
 | `ws://<remote.gateway.websocket_bind>/gateway/v1/ws` | 会话事件流，按 `subscribeId` 并存多路订阅 |
 | `GET /api/v1/crons` 系列 | Cron 管理与运行历史 |
 | `GET /api/v1/observability/*` | 指标与审计看板（设置 › 用量统计，按概览、实时、活动、诊断、请求日志分页签） |

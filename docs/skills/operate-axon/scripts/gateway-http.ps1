@@ -3,7 +3,7 @@
 #
 # 用法：
 #   pwsh -File gateway-http.ps1 -Action overview -Query "period=7d"
-#   pwsh -File gateway-http.ps1 -Action lanes -Query "workspace=<id>"
+#   pwsh -File gateway-http.ps1 -Action sessions -Query "workspace=<id>"
 #   pwsh -File gateway-http.ps1 -Action event -SourceChannel jira -EventId AX-1024 `
 #     -Content "事件正文" -ReplyChannel jira -ReplyDestination AX-1024
 #   pwsh -File gateway-http.ps1 -Action interaction -InteractionId <id>
@@ -16,7 +16,7 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidateSet(
         'health', 'ready', 'models', 'sessions',
-        'workspaces', 'lanes',
+        'workspaces',
         'overview', 'realtime', 'distribution', 'diagnostics',
         'audit-logs', 'audit-export',
         'pricing-rules', 'pricing-auto-sync', 'pricing-sync', 'pricing-recalculate',
@@ -82,9 +82,8 @@ function Resolve-Route {
         'health' { return @('GET', '/v1/health') }
         'ready' { return @('GET', '/v1/ready') }
         'models' { return @('GET', '/v1/models') }
-        'sessions' { return @('GET', '/v1/sessions') }
+        'sessions' { return @('GET', "$prefix/sessions") }
         'workspaces' { return @('GET', "$prefix/workspaces") }
-        'lanes' { return @('GET', "$prefix/lanes") }
         'overview' { return @('GET', '/api/v1/observability/overview') }
         'realtime' { return @('GET', '/api/v1/observability/realtime') }
         'distribution' { return @('GET', '/api/v1/observability/distribution') }

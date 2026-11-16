@@ -126,24 +126,24 @@ Authorization: Bearer <token>
 | `POST /api/v1/keys` | 体 `{"label":"..."}`，回执 `id`、`label`、`plaintext`、`createdAtMs`；明文只出现一次 |
 | `DELETE /api/v1/keys/{id}` | 吊销该 Key；不存在 404 `key_not_found` |
 
-工作台与车道：
+工作区与会话：
 
 | 方法与路径 | 用途 |
 |---|---|
 | `GET /api/v1/workspaces` | 工作区注册表 |
 | `POST /api/v1/workspaces` | 注册工作区 |
-| `GET /api/v1/lanes` | 车道视图，可用 `?workspace=<id>` 过滤 |
-| `POST /api/v1/lanes/identity` | 由报文体推导车道标识 |
-| `GET /api/v1/lanes/<laneId>/subagents` | 该车道的子代理清单 |
-| `POST /api/v1/lanes/<laneId>/interrupt` | 中断该车道的运行 |
-| `GET /api/v1/lanes/<laneId>/interactions` | 该车道的交互记录；`?limit=<n>` 限制条数，`?before_ms=<毫秒>&before_id=<交互标识>` 向前翻页（取该条之前的一页，两个参数必须成对给出）。响应带 `sessionUsage`、`sessionElapsedMs` 与 `effectiveModel`（该车道**最新一轮**的 `provider`、`model`、`name` 与 `reasoningEffort`，只读一条记录，不遍历历史；`name` 是用户当时选择的模型别名，同一 `provider` 与 `model` 可能对应多条别名，旧记录没有该字段时为 null；整段读不到时为 null） |
+| `GET /api/v1/sessions` | 会话清单，可用 `?workspace=<id>` 过滤（字段与排序见上文会话族） |
+| `POST /api/v1/sessions/identity` | 由报文体推导会话标识 |
+| `GET /api/v1/sessions/<sessionId>/subagents` | 该会话的子代理清单 |
+| `POST /api/v1/sessions/<sessionId>/interrupt` | 中断该会话的运行 |
+| `GET /api/v1/sessions/<sessionId>/interactions` | 该会话的交互记录；`?limit=<n>` 限制条数，`?before_ms=<毫秒>&before_id=<交互标识>` 向前翻页（取该条之前的一页，两个参数必须成对给出）。响应带 `sessionUsage`、`sessionElapsedMs` 与 `effectiveModel`（该会话**最新一轮**的 `provider`、`model`、`name` 与 `reasoningEffort`，只读一条记录，不遍历历史；`name` 是用户当时选择的模型别名，同一 `provider` 与 `model` 可能对应多条别名，旧记录没有该字段时为 null；整段读不到时为 null） |
 | `GET /api/v1/interactions/<interactionId>/events` | 该交互的历史帧页；`?after=<序号>` 从该序号之后续读（缺省从头），`?limit=<n>` 为本页帧数（缺省 800，上限 2000，越界按 1 与 2000 夹取），`?tail=1` 直接取该交互自身的尾窗（首屏一次往返拿到可渲染的尾部窗口）。返回 `events`、`nextAfter`、`hasMore`、`tailSequence`、`tailCursor`：`hasMore` 为真时按 `nextAfter` 继续翻页，读完用 `tailCursor` 订阅 WebSocket 即可只收增量。交互标识非法返回 400 `invalid_interaction_id`，记录不存在或已被清理返回 404 `interaction_not_found`，其余读取失败返回 500 `gateway_error`。外置正文缺失的帧由存储层降级为 `eventType=archive_missing` 的占位记录；网关读取时跳过这些占位帧，不返回给客户端，整页照常返回，扫描路径另记一条带跳过条数的 warning 日志 |
-| `GET /api/v1/lanes/<laneId>/jobs` | 该车道的作业清单 |
-| `GET /api/v1/lanes/<laneId>/jobs/<jobId>/output?offset=<字节>&max=<字节>` | 按字节游标读取该作业输出的增量：回 `text`、`offset`、`nextOffset`、`eof`、`running`、`status`、`exitCode`、`elapsedMs`、`fullOutputAvailable`；作业已回收时 `unavailable` 给出原因，`text` 为空。`max` 缺省 65536、上限 262144。`text` 只含命令正文：归档头部（`command=` / `cwd=` / `tty=`）与分片标记（`----- stdout seq=N -----`）都已剥离，连续空行已压缩，游标始终停在整行边界 |
-| `POST /api/v1/lanes/<laneId>/jobs/<jobId>/stop` | 停止指定作业 |
-| `POST /api/v1/lanes/<laneId>/subagents/<agent>/messages` | 给指定子代理追加消息 |
-| `GET /api/v1/lanes/<laneId>/questions` | 该车道的提问记录，可用 `?state=<pending\|suspended\|answered\|cancelled\|expired>` 过滤 |
-| `POST /api/v1/lanes/<laneId>/questions/<callId>/answer` | 提交待决提问的结构化回答，先到先得；已结算返回 409 |
+| `GET /api/v1/sessions/<sessionId>/jobs` | 该会话的作业清单 |
+| `GET /api/v1/sessions/<sessionId>/jobs/<jobId>/output?offset=<字节>&max=<字节>` | 按字节游标读取该作业输出的增量：回 `text`、`offset`、`nextOffset`、`eof`、`running`、`status`、`exitCode`、`elapsedMs`、`fullOutputAvailable`；作业已回收时 `unavailable` 给出原因，`text` 为空。`max` 缺省 65536、上限 262144。`text` 只含命令正文：归档头部（`command=` / `cwd=` / `tty=`）与分片标记（`----- stdout seq=N -----`）都已剥离，连续空行已压缩，游标始终停在整行边界 |
+| `POST /api/v1/sessions/<sessionId>/jobs/<jobId>/stop` | 停止指定作业 |
+| `POST /api/v1/sessions/<sessionId>/subagents/<agent>/messages` | 给指定子代理追加消息 |
+| `GET /api/v1/sessions/<sessionId>/questions` | 该会话的提问记录，可用 `?state=<pending\|suspended\|answered\|cancelled\|expired>` 过滤 |
+| `POST /api/v1/sessions/<sessionId>/questions/<callId>/answer` | 提交待决提问的结构化回答，先到先得；已结算返回 409 |
 
 `<agent>` 是单个路径段，其中的 `/` 与 `:` 必须先做百分号转义；转义非法按未命中处理。
 
@@ -255,8 +255,7 @@ Gateway 面只在 Daemon 运行时可达：先用 `axon daemon status` 确认 `i
 | `GET /v1/ready` | 已加载的 provider 与模型数量 |
 | `GET /v1/models` | 已启用模型清单 |
 | `GET /v1/workspaces` | 工作区视图 |
-| `GET /v1/lanes` | 车道视图，可用 `?workspace=<id>` 过滤 |
-| `GET /v1/sessions` | 会话摘要，可用 `?limit=<n>` 限制条数 |
+| `GET /v1/sessions` | 会话摘要，可用 `?workspace=<id>` 过滤，`?limit=<n>` 限制条数 |
 
 非 `GET` 方法返回 405；鉴权头格式为 `Authorization: Bearer <token>`，与 `--auth-token-file` 中的原文一致。
 
@@ -270,8 +269,8 @@ Gateway 面只在 Daemon 运行时可达：先用 `axon daemon status` 确认 `i
 # 只读检查：看板概览（默认走 Gateway 面，基址由配置推导）
 pwsh -File scripts/gateway-http.ps1 -Action overview -Query "period=7d"
 
-# 车道与工作区
-pwsh -File scripts/gateway-http.ps1 -Action lanes -Query "workspace=<workspace-id>"
+# 会话与工作区
+pwsh -File scripts/gateway-http.ps1 -Action sessions -Query "workspace=<workspace-id>"
 pwsh -File scripts/gateway-http.ps1 -Action workspaces
 
 # 提交一条通用外部事件
