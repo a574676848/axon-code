@@ -6,7 +6,7 @@ use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use super::SqliteRuntimeStore;
 use super::helpers::{i64_value, storage};
 use crate::domain::runtime::{DaemonHostRecord, SessionActionRecord, SessionEventRecord};
-use crate::ports::{CheckpointTelemetry, RuntimeStoreError};
+use crate::ports::RuntimeStoreError;
 
 pub(super) fn update_action_status(
     store: &SqliteRuntimeStore,
@@ -56,7 +56,6 @@ pub(super) fn commit_action(
     events: &[(String, String)],
     next_execution: Option<&SessionActionRecord>,
     settlement: Option<&crate::ports::ExecutionSettlement>,
-    checkpoint: &CheckpointTelemetry,
     now_ms: u64,
 ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
     let mut connection = store.connection()?;

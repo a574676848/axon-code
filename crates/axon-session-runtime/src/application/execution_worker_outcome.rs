@@ -7,7 +7,7 @@ use axon_domain::{
     ExecutionId, ExecutionStatus, GoalStatus, JarvisEvent, JarvisEventId, ResultErrorKind,
     ResultId, ResultRecord, SessionActionId, SessionActionStatus,
 };
-use axon_session::{CheckpointTelemetry, ExecutionSettlement, RuntimeStore, SessionActionRecord};
+use axon_session::{ExecutionSettlement, RuntimeStore, SessionActionRecord};
 
 use axon_domain::GOAL_RESULT_SUMMARY_MAX_CHARS as MAX_RESULT_SUMMARY_CHARS;
 
@@ -22,7 +22,6 @@ where
         &self,
         action: &SessionActionRecord,
         outcome: TurnExecutionOutcome,
-        checkpoint: &CheckpointTelemetry,
         terminal_projected: bool,
     ) -> Result<(), ExecutionWorkerError> {
         let now_ms = self.clock.now_ms();
@@ -46,7 +45,6 @@ where
             appended,
             next.as_ref(),
             settlement.as_ref(),
-            checkpoint,
             now_ms,
         )?;
         for record in records {

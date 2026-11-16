@@ -15,7 +15,7 @@ use axon_domain::{
     ExecutionId, ExecutionStatus, GoalId, GoalRecord, GoalStatus, JarvisEvent, JarvisEventId,
     ResultErrorKind, ResultId, ResultRecord,
 };
-use axon_session::{CheckpointTelemetry, ExecutionSettlement, RuntimeStore, SessionActionRecord};
+use axon_session::{ExecutionSettlement, RuntimeStore, SessionActionRecord};
 
 const FAILED_LEDGER_EVENT: &str = "execution.failed";
 const UNCERTAIN_LEDGER_EVENT: &str = "execution.uncertain";
@@ -241,7 +241,6 @@ where
             &[(conclusion.session_event_type.to_owned(), payload.to_owned())],
             None,
             settlement.as_ref(),
-            &CheckpointTelemetry::default(),
             now_ms,
         )?;
         for record in records {

@@ -247,13 +247,12 @@ where
                 return Err(ExecutionWorkerError::Execution(error.to_string()));
             }
         };
-        let checkpoint = outcome.checkpoint.clone();
         // 投影已经写过终态时不能再追加一遍：界面会把同一轮收口两次。
         let terminal_projected = self
             .projection
             .as_ref()
             .is_some_and(ExecutionProjection::terminal_written);
-        if let Err(error) = self.commit_outcome(&action, outcome, &checkpoint, terminal_projected) {
+        if let Err(error) = self.commit_outcome(&action, outcome, terminal_projected) {
             if matches!(error, ExecutionWorkerError::Gate(_))
                 && let Err(cancel_error) = self.cancel_for_gate(&action, self.clock.now_ms())
             {

@@ -259,7 +259,9 @@ pub trait RuntimeStore:
         now_ms: u64,
         limit: u32,
     ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError>;
-    /// 原子提交当前 Execution、checkpoint、事件和显式下一次 Execution。
+    /// 原子提交当前 Execution、事件与显式下一次 Execution。
+    ///
+    /// 检查点不再单独落表：事实随本轮事件面帧一起落盘。
     fn commit_action(
         &self,
         action_id: &SessionActionId,
@@ -268,7 +270,6 @@ pub trait RuntimeStore:
         events: &[(String, String)],
         next_execution: Option<&SessionActionRecord>,
         settlement: Option<&super::ExecutionSettlement>,
-        checkpoint: &CheckpointTelemetry,
         now_ms: u64,
     ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError>;
     /// 创建或更新持久调度计划。

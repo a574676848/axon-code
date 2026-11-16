@@ -12,7 +12,7 @@ use crate::domain::runtime::{
     DaemonHostRecord, RuntimeScheduleRecord, SessionActionRecord, SessionEventRecord,
     SessionRuntimeRecord,
 };
-use crate::ports::{CheckpointTelemetry, RuntimeStore, RuntimeStoreError};
+use crate::ports::{RuntimeStore, RuntimeStoreError};
 use axon_domain::{
     DaemonSessionId, RuntimeHostId, SessionActionId, SessionActionStatus, SessionRuntimeStatus,
 };
@@ -303,7 +303,6 @@ impl RuntimeStore for SqliteRuntimeStore {
         events: &[(String, String)],
         next_execution: Option<&SessionActionRecord>,
         settlement: Option<&crate::ports::ExecutionSettlement>,
-        checkpoint: &CheckpointTelemetry,
         now_ms: u64,
     ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
         commit_repository::commit_action(
@@ -314,7 +313,6 @@ impl RuntimeStore for SqliteRuntimeStore {
             events,
             next_execution,
             settlement,
-            checkpoint,
             now_ms,
         )
     }
