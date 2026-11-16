@@ -30,14 +30,6 @@ const STOP_CONFIRM_MS = 3000;
 /** 子代理会话状态的对账间隔。 */
 const SUBAGENT_ROSTER_REFRESH_MS = 10000;
 
-/**
- * 名册的本地缓存时长。
- *
- * 名册接口要在后端扫线程存储，实测单次约十秒，因此切回同一条车道时不重拉：
- * 历史子代理是持久事实，两分钟内不会变。
- */
-const SUBAGENT_ROSTER_CACHE_MS = 120000;
-
 /** 行内状态到状态点的映射；表与参考实现的作业状态一一对应。 */
 function statusDotState(status: string): StateDotState {
   if (
@@ -323,8 +315,6 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
   const [roster, setRoster] = React.useState<LaneSubagentSummary[] | null>(null);
   /** 拉一次名册的最新入口；轮询与收口补齐都经它，避免两处各写一份请求。 */
   const loadRosterRef = React.useRef<() => void>(() => undefined);
-  /** 名册的本地缓存；按车道记，切回同一条车道时直接复用。 */
-  const rosterCacheRef = React.useRef(new Map<string, { atMs: number; entries: LaneSubagentSummary[] }>());
 
   /*
    * 名册的首次读取。
@@ -345,20 +335,14 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
         .conversationLaneSubagents(laneId)
         .then((list) => {
           if (cancelled) return;
-          rosterCacheRef.current.set(laneId, { atMs: Date.now(), entries: list.subagents });
           setRoster(list.subagents);
         })
         .catch(() => {
           // 对账失败保留上一次结论：宁可短暂显示旧状态，也不要误判成已结束。
         });
     };
-    // 刚拉过的车道直接用缓存：这一步能省掉一次十秒级的后端扫描。
-    const cached = rosterCacheRef.current.get(laneId);
-    if (cached !== undefined && Date.now() - cached.atMs < SUBAGENT_ROSTER_CACHE_MS) {
-      setRoster(cached.entries);
-    } else {
-      loadRosterRef.current();
-    }
+    // 名册是一次索引查询，打开车道就读，不做本地缓存：缓存只会掩盖后端的成本。
+    loadRosterRef.current();
     return () => {
       cancelled = true;
       loadRosterRef.current = () => undefined;

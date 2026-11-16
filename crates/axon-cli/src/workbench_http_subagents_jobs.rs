@@ -7,19 +7,23 @@ use std::{
 
 use axon_agent_runtime::job_runtime::{JOB_REASON_USER_STOP, JobId, JobRuntime, JobStatus};
 use axon_domain::DaemonSessionId;
-use axon_session::{JsonlThreadEventStore, RuntimeStore, RuntimeStoreError, ThreadService};
+use axon_session::{RuntimeStore, RuntimeStoreError};
 
 use super::runtime_store;
 use super::workbench_http_targets::lane_owns_owner;
+use crate::run_commands::run_rollout_store::load_child_sessions_from_root;
 
 /// 子代理会话 ID 的分隔符，与运行侧 `child_session_id` 保持一致。
 const SUBAGENT_SESSION_ID_SEPARATOR: &str = "--subagent--";
 /// 一次车道子代理列举的上限。
 const MAX_LANE_SUBAGENTS: usize = 200;
 
-/// 会话数据源：与 `axon export` 同一份线程存储。
-fn thread_service() -> ThreadService<JsonlThreadEventStore> {
-    ThreadService::new(JsonlThreadEventStore)
+/// 运行侧终态到名册状态的归一。
+///
+/// 运行侧把失败写成 `errored`，而名册对外只给界面认得的取值（`failed` 才是失败）。
+/// 其余取值原样透传，未知与缺失都读作未知，不在这里猜成已完成。
+fn normalize_last_turn_status(status: Option<&str>) -> Option<&str> {
+    status.map(|value| if value == "errored" { "failed" } else { value })
 }
 
 /// 车道的运行会话 ID；子代理会话挂在它下面。
@@ -32,28 +36,6 @@ fn lane_run_session_id(axon_root: &Path, lane_id: &str) -> Result<String, String
         Err(RuntimeStoreError::NotFound(_)) => Ok(String::new()),
         Err(error) => Err(format!("读取车道运行会话失败：{error:?}")),
     }
-}
-
-/// 线程状态的稳定小写取值：界面只认这几个 token。
-fn thread_status_token(status: axon_session::ThreadStatus) -> &'static str {
-    match status {
-        axon_session::ThreadStatus::NotLoaded => "notLoaded",
-        axon_session::ThreadStatus::Idle => "idle",
-        axon_session::ThreadStatus::Active => "active",
-        axon_session::ThreadStatus::SystemError => "systemError",
-        axon_session::ThreadStatus::Archived => "archived",
-    }
-}
-
-/// 末轮状态的稳定小写取值；没有回合时为空。
-fn last_turn_status_token(detail: &axon_session::ThreadDetail) -> Option<&'static str> {
-    let turn = detail.turns.last()?;
-    Some(match turn.status {
-        axon_session::TurnStatus::Active => "active",
-        axon_session::TurnStatus::Completed => "completed",
-        axon_session::TurnStatus::Interrupted => "interrupted",
-        axon_session::TurnStatus::Failed => "failed",
-    })
 }
 
 /// 某条车道下的子代理会话清单。
@@ -74,47 +56,37 @@ pub(super) fn lane_subagents_payload(
         }));
     }
     let prefix = format!("{run_session_id}{SUBAGENT_SESSION_ID_SEPARATOR}");
-    let service = thread_service();
-    let threads = service
-        .list_threads(axon_root, MAX_LANE_SUBAGENTS)
-        .map_err(|error| format!("读取子代理会话失败：{error}"))?;
-    let children = threads
-        .into_iter()
-        .filter(|summary| summary.thread_id.as_str().starts_with(&prefix))
-        .collect::<Vec<_>>();
-    let mut subagents = Vec::with_capacity(children.len());
-    for summary in children {
-        let session_id = summary.thread_id.as_str().to_owned();
-        let slug = session_id
+    let rows = load_child_sessions_from_root(axon_root, &run_session_id, MAX_LANE_SUBAGENTS)?;
+    let mut subagents = Vec::with_capacity(rows.len());
+    for row in rows {
+        let slug = row
+            .session_id
             .strip_prefix(&prefix)
             .unwrap_or_default()
             .to_owned();
-        let (last_turn_status, last_turn_at_ms) = match service.read_thread(axon_root, &session_id)
-        {
-            Ok(detail) => (
-                last_turn_status_token(&detail),
-                detail
-                    .turns
-                    .last()
-                    .map(|turn| turn.completed_at_ms.unwrap_or(turn.started_at_ms)),
-            ),
-            Err(_) => (None, None),
-        };
-        let has_runtime = DaemonSessionId::new(session_id.as_str())
+        let has_runtime = DaemonSessionId::new(row.session_id.as_str())
             .ok()
             .is_some_and(|id| runtime_store(axon_root).get_session(&id).is_ok());
+        // 状态列存的是会话自己的终态：在跑、完成、中断、失败。界面用它回答
+        // 「这条子代理还在跑吗」，末轮状态直接取它，没有状态列的旧行读作未知。
+        // 运行侧把失败写成 errored，对外统一成 failed：名册只给界面认得的取值。
+        let last_turn_status = normalize_last_turn_status(row.status.as_deref());
+        let status = if last_turn_status == Some("active") {
+            "active"
+        } else {
+            "idle"
+        };
         subagents.push(serde_json::json!({
-            "sessionId": session_id,
+            "sessionId": row.session_id,
             "slug": slug,
-            "title": summary.name,
-            "model": summary.model,
-            "provider": summary.provider,
-            "updatedAtMs": summary.updated_at_ms,
+            "title": row.title,
+            "model": row.model,
+            "provider": row.provider,
+            "updatedAtMs": row.updated_at_ms,
             "hasRuntime": has_runtime,
-            "status": thread_status_token(summary.status),
-            "turnCount": summary.turn_count,
+            "status": status,
             "lastTurnStatus": last_turn_status,
-            "lastTurnAtMs": last_turn_at_ms,
+            "lastTurnAtMs": row.last_turn_at_ms,
         }));
     }
     Ok(serde_json::json!({

@@ -92,6 +92,49 @@ pub(crate) struct SessionModelFacts {
     pub(crate) reasoning_effort: Option<String>,
 }
 
+/// 写入一条子代理会话的状态。
+///
+/// 子代理生命周期在起跑、完成与终态三处调用它，名册因此只读会话行就能回答
+/// 「这条子代理是什么状态」，不必回放线程日志。
+pub(crate) fn mark_child_session_status(
+    config_path: &Path,
+    session_id: &str,
+    status: &str,
+    at_ms: u64,
+) -> Result<(), String> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return Err("会话标识不能为空".to_owned());
+    }
+    let path = resolved_rollout_db_path(config_path).map_err(ToOwned::to_owned)?;
+    RolloutSqliteStore::open(&path)?.mark_session_status(session_id, status, at_ms)
+}
+
+/// 某条会话直接派生的子代理名册；按最近活动倒序。
+///
+/// 只走 `rollout_sessions.parent_session_id` 索引，线程日志一概不读：名册的代价与
+/// 历史轮次的体量无关，打开车道即可拿到。台账尚未建立时读作空名册。
+pub(crate) fn load_child_sessions_from_root(
+    root: &Path,
+    parent_session_id: &str,
+    limit: usize,
+) -> Result<Vec<super::ChildSessionRow>, String> {
+    let parent_session_id = parent_session_id.trim();
+    if parent_session_id.is_empty() {
+        return Ok(Vec::new());
+    }
+    let path = axon_session::session_store_path(root).join(CLI_ROLLOUT_DB_FILE);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    // 读侧不跑建表语句：旧库还没有状态列时退回写连接补列一次，之后一律走只读路径。
+    match RolloutSqliteStore::open_read_only(&path)?.select_child_sessions(parent_session_id, limit)
+    {
+        Ok(rows) => Ok(rows),
+        Err(_) => RolloutSqliteStore::open(&path)?.select_child_sessions(parent_session_id, limit),
+    }
+}
+
 /// 读取一条会话**最新一轮**的模型事实（含 provider、model 与 reasoning effort）。
 ///
 /// 只读打开加一条 `ORDER BY sequence DESC LIMIT 1`：界面显示「这条会话现在用哪个

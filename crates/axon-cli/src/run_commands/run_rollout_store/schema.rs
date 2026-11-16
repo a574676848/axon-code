@@ -51,7 +51,8 @@ impl super::RolloutSqliteStore {
                     provider TEXT NOT NULL,
                     model TEXT NOT NULL,
                     title TEXT,
-                    history_checkpoint_json TEXT
+                    history_checkpoint_json TEXT,
+                    status TEXT
                 );
                 CREATE TABLE IF NOT EXISTS rollout_turns (
                     session_id TEXT NOT NULL,
@@ -87,6 +88,7 @@ impl super::RolloutSqliteStore {
             .pragma_update(None, "user_version", ROLLOUT_SQLITE_SCHEMA_VERSION)
             .map_err(|_| "rollout SQLite schema 版本配置失败".to_owned())?;
         super::session_usage::ensure_usage_columns(&self.connection)?;
+        ensure_session_status_column(&self.connection)?;
         Ok(())
     }
 
@@ -134,6 +136,28 @@ pub(super) fn open_connection(path: &Path) -> Result<Connection, String> {
         .pragma_update(None, "foreign_keys", true)
         .map_err(|_| "rollout SQLite foreign_keys 配置失败".to_owned())?;
     Ok(connection)
+}
+
+/// 旧库补 `status` 列。
+///
+/// 子代理名册要一次查询读出会话状态，而旧库没有这一列；这里只做增量补列，
+/// 不进 schema 版本判定，因此不会触发整表重建，也不丢历史轮次。
+fn ensure_session_status_column(connection: &Connection) -> Result<(), String> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(rollout_sessions)")
+        .map_err(|_| "rollout SQLite schema 检查准备失败".to_owned())?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|_| "rollout SQLite schema 检查失败".to_owned())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|_| "rollout SQLite schema 列解析失败".to_owned())?;
+    if columns.iter().any(|column| column == "status") {
+        return Ok(());
+    }
+    connection
+        .execute("ALTER TABLE rollout_sessions ADD COLUMN status TEXT", [])
+        .map_err(|_| "rollout SQLite 会话状态列补齐失败".to_owned())?;
+    Ok(())
 }
 
 pub(super) fn open_read_only_connection(path: &Path) -> Result<Connection, String> {

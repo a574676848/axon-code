@@ -2,8 +2,8 @@ use axon_session::ThreadCompaction;
 use rusqlite::{Connection, OptionalExtension as _, params};
 
 use super::{
-    CURRENT_SESSION_SINGLETON_KEY, RolloutEventRecord, RolloutEventType, RolloutHistoryWindow,
-    RolloutSqliteStore, RunSessionRecord, events_for_session,
+    CURRENT_SESSION_SINGLETON_KEY, ChildSessionRow, RolloutEventRecord, RolloutEventType,
+    RolloutHistoryWindow, RolloutSqliteStore, RunSessionRecord, events_for_session,
 };
 
 #[cfg(test)]
@@ -209,6 +209,85 @@ impl RolloutSqliteStore {
                 Ok(event)
             })
             .collect()
+    }
+
+    /// 标记一条会话的状态（子代理生命周期在起跑、完成与终态三处调用）。
+    ///
+    /// 只更新状态与最近活动时间：`updated_at_ms` 取较大值，迟到的终态写入不会把
+    /// 时间往回拨，名册的排序因此稳定。
+    pub(super) fn mark_session_status(
+        &self,
+        session_id: &str,
+        status: &str,
+        at_ms: u64,
+    ) -> Result<(), String> {
+        self.connection
+            .execute(
+                "UPDATE rollout_sessions SET status = ?1, updated_at_ms = MAX(updated_at_ms, ?2) \
+                 WHERE session_id = ?3",
+                params![status, timestamp(at_ms), session_id],
+            )
+            .map_err(|_| "rollout 会话状态写入失败".to_owned())?;
+        Ok(())
+    }
+
+    /// 某条会话直接派生的子会话名册；按最近活动倒序。
+    ///
+    /// 走 `idx_rollout_parent`：一条车道的历史子代理是一次索引查询，不读线程日志，
+    /// 因此与历史轮次的体量无关。
+    pub(super) fn select_child_sessions(
+        &self,
+        parent_session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ChildSessionRow>, String> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut statement = self
+            .connection
+            .prepare(
+                r"
+                SELECT sessions.session_id, sessions.title, sessions.provider, sessions.model,
+                       sessions.status, sessions.updated_at_ms,
+                       (SELECT MAX(turns.recorded_at_ms) FROM rollout_turns AS turns
+                         WHERE turns.session_id = sessions.session_id) AS last_turn_at_ms
+                FROM rollout_sessions AS sessions
+                WHERE sessions.parent_session_id = ?1
+                ORDER BY sessions.updated_at_ms DESC, sessions.session_id
+                LIMIT ?2
+                ",
+            )
+            .map_err(|_| "子代理名册查询准备失败".to_owned())?;
+        let rows = statement
+            .query_map(params![parent_session_id, limit], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, Option<i64>>(6)?,
+                ))
+            })
+            .map_err(|_| "子代理名册查询失败".to_owned())?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|_| "子代理名册读取失败".to_owned())?;
+        Ok(rows
+            .into_iter()
+            .map(
+                |(session_id, title, provider, model, status, updated_at_ms, last_turn_at_ms)| {
+                    ChildSessionRow {
+                        session_id,
+                        title,
+                        provider,
+                        model,
+                        status,
+                        updated_at_ms: u64::try_from(updated_at_ms).unwrap_or_default(),
+                        last_turn_at_ms: last_turn_at_ms
+                            .and_then(|value| u64::try_from(value).ok()),
+                    }
+                },
+            )
+            .collect())
     }
 }
 

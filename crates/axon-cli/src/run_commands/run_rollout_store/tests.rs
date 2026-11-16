@@ -5,6 +5,8 @@
 
 #[path = "chain_tests.rs"]
 mod chain_tests;
+#[path = "child_sessions_tests.rs"]
+mod child_sessions_tests;
 #[path = "path_tests.rs"]
 mod path_tests;
 #[path = "retention_tests.rs"]

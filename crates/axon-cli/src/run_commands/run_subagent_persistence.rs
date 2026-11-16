@@ -8,6 +8,7 @@ use super::{
     RunRequest, RunSessionPartialInput, RunSessionRecord, commit_session_to_rollout,
     derive_thread_title, mirror_session_started, mirror_session_terminal, mirror_session_to_thread,
 };
+use crate::run_commands::run_rollout_store::mark_child_session_status;
 
 /// 子代理长回执归档使用的文件后缀：Markdown 便于按 `builtin.read_file` 分页阅读。
 const SUBAGENT_RESULT_FILE_SUFFIX: &str = ".md";
@@ -157,6 +158,23 @@ fn result_status(output: &super::RunSubagentExecutionOutput) -> &'static str {
     }
 }
 
+/// 名册里的会话状态：子代理生命周期的唯一写点。
+///
+/// 写失败只留痕、不阻断：状态是名册的读数，丢了不影响这一轮本身的结果。
+fn mark_child_status(request: &RunRequest, status: &str) {
+    if let Err(error) = mark_child_session_status(
+        &request.config_path,
+        &request.session_id,
+        status,
+        super::super::run_execution::now_ms(),
+    ) {
+        axon_logger::warning(&format!(
+            "child session status projection skipped: session_id={}, status={status}, error={error}",
+            request.session_id
+        ));
+    }
+}
+
 pub(super) fn persist_child_turn_started(request: &RunRequest) {
     let input = RunSessionPartialInput {
         provider: request.provider.name.clone(),
@@ -181,6 +199,7 @@ pub(super) fn persist_child_turn_started(request: &RunRequest) {
             request.session_id
         ));
     }
+    mark_child_status(request, "active");
 }
 
 pub(super) fn persist_child_turn_completed(
@@ -194,6 +213,7 @@ pub(super) fn persist_child_turn_completed(
         &request.startup.workspace_instructions,
     );
     persist_child_record(request, &record);
+    mark_child_status(request, "completed");
 }
 
 pub(super) fn persist_child_turn_terminal(
@@ -225,6 +245,7 @@ pub(super) fn persist_child_turn_terminal(
             request.session_id
         ));
     }
+    mark_child_status(request, status);
 }
 
 fn persist_child_record(request: &RunRequest, record: &RunSessionRecord) {

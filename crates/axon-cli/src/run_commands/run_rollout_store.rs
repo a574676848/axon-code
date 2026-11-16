@@ -29,11 +29,12 @@ mod transaction;
 pub(crate) use api::append_rollout_event_for_session;
 pub(crate) use api::{
     commit_session_to_rollout, ensure_current_turn_to_rollout, install_active_rollout_window,
-    install_rollout_compaction, load_latest_reflection_notice_from_root,
-    load_latest_session_model_from_root, load_previous_reflection_notice, load_recent_turn_facts,
-    load_rollout_history_window, load_session_turn, load_session_usage,
-    load_session_usage_totals_from_root, load_turn_sequence, read_rollout_tool_output,
-    replay_rollout_events, restore_rollout_compaction, select_rollout_session,
+    install_rollout_compaction, load_child_sessions_from_root,
+    load_latest_reflection_notice_from_root, load_latest_session_model_from_root,
+    load_previous_reflection_notice, load_recent_turn_facts, load_rollout_history_window,
+    load_session_turn, load_session_usage, load_session_usage_totals_from_root, load_turn_sequence,
+    mark_child_session_status, read_rollout_tool_output, replay_rollout_events,
+    restore_rollout_compaction, select_rollout_session,
 };
 #[cfg(test)]
 pub(crate) use rollout_events::RolloutEventAppendInput;
@@ -113,6 +114,26 @@ pub(crate) struct RolloutSessionSummary {
     pub(crate) provider: String,
     /// 模型 ID。
     pub(crate) model: String,
+}
+
+/// 子代理会话在名册里的一行。
+///
+/// 名册读的是 rollout 读模型，而不是线程日志：`rollout_sessions` 已按 `parent_session_id`
+/// 建了索引，一条车道的历史子代理因此是一次索引查询，与线程日志的体量无关。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChildSessionRow {
+    pub(crate) session_id: String,
+    /// 线程标题；旧记录可能为空。
+    pub(crate) title: Option<String>,
+    pub(crate) provider: String,
+    pub(crate) model: String,
+    /// 会话状态：active / completed / interrupted / failed。
+    ///
+    /// 旧库还没有该列时为 None，调用方按「未知」呈现，不猜成已完成。
+    pub(crate) status: Option<String>,
+    pub(crate) updated_at_ms: u64,
+    /// 最后一轮记录时间；没有轮次时为空。
+    pub(crate) last_turn_at_ms: Option<u64>,
 }
 
 /// SQLite 结构化 rollout store。
