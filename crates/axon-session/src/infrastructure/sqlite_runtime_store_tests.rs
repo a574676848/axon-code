@@ -12,6 +12,38 @@ use axon_domain::{
 };
 
 #[test]
+fn active_dedupe_index_covers_turn_items_after_session_binding() {
+    let directory = axon_test_support::test_temp_dir();
+    let path = directory.path().join("runtime.sqlite3");
+    let store = SqliteRuntimeStore::new(&path);
+    store.initialize().expect("初始化目标 schema");
+    let connection = store.connection().expect("连接");
+    connection
+        .execute_batch(
+            "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms)
+                 VALUES('session-dedupe','session-dedupe','session-dedupe','/w','idle',NULL,NULL,0,0,0,0,1,1,1);
+             INSERT INTO work_items(execution_id,session_id,kind,payload_json,attempt,priority,status,dedupe_key,created_at_ms,updated_at_ms)
+                 VALUES('work-first','session-dedupe','turn','{}',1,0,'queued','turn:1',1,1);",
+        )
+        .expect("首个在途工作项");
+    // 同一会话的同名去重键在活跃期只能有一个：COALESCE(session_id, goal_id) 必须命中，
+    // 否则 turn 会重复入队。
+    let duplicate = connection.execute_batch(
+        "INSERT INTO work_items(execution_id,session_id,kind,payload_json,attempt,priority,status,dedupe_key,created_at_ms,updated_at_ms)
+             VALUES('work-second','session-dedupe','turn','{}',1,0,'queued','turn:1',2,2);",
+    );
+    assert!(duplicate.is_err(), "活跃期重复去重键必须被唯一索引拒绝");
+    // 终态后可以再次入队：索引只覆盖活跃状态。
+    connection
+        .execute_batch(
+            "UPDATE work_items SET status='completed' WHERE execution_id='work-first';
+             INSERT INTO work_items(execution_id,session_id,kind,payload_json,attempt,priority,status,dedupe_key,created_at_ms,updated_at_ms)
+                 VALUES('work-second','session-dedupe','turn','{}',1,0,'queued','turn:1',2,2);",
+        )
+        .expect("终态后同名去重键应可再次入队");
+}
+
+#[test]
 fn runtime_schema_contains_work_ledger_tables_and_hot_query_indexes() {
     let directory = axon_test_support::test_temp_dir();
     let path = directory.path().join("runtime.sqlite3");

@@ -122,9 +122,12 @@ pub(super) fn initialize_schema(connection: &Connection, kind: SchemaKind) -> ru
     if existing_tables > 0 && version != kind.version() {
         return Err(rusqlite::Error::InvalidQuery);
     }
-    // 版本一致时仍然执行 DDL：全部语句都是 `CREATE ... IF NOT EXISTS`，既有库靠这一步
-    // 补上新增的表与索引，空库靠这一步建库。版本号只拦不兼容变更，不承担建库语义。
-    connection.execute_batch(kind.ddl())?;
+    // 只给空库建表：既有库不跑 DDL。`CREATE ... IF NOT EXISTS` 在版本一致时执行等于
+    // 一条「缺表就补表」的迁移通道，与「不迁移、缺表即不兼容」的目标态冲突。
+    // 任何 schema 变更都必须递增版本，旧库因此会被上面的版本检查直接拒绝。
+    if existing_tables == 0 {
+        connection.execute_batch(kind.ddl())?;
+    }
     // `user_version` 不支持参数绑定，取值来自本模块常量。
     connection.execute_batch(&format!("PRAGMA user_version = {}", kind.version()))?;
     Ok(())

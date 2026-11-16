@@ -452,12 +452,12 @@ fn continuation_reference_is_resolvable_after_reopen() {
 }
 
 #[test]
-fn legacy_database_without_continuation_table_gains_it_on_open() {
+fn same_version_database_missing_a_table_is_not_silently_migrated() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
     let version = outbox_schema_version();
     {
-        // 手造「新增本表之前」的队列库：版本一致，但还没有 continuations。
+        // 手造「版本一致但缺表」的队列库：目标态不提供补表通道，必须如实失败。
         let connection = rusqlite::Connection::open(store.outbox_path()).expect("打开数据库");
         connection
             .execute_batch(&format!(
@@ -468,8 +468,17 @@ fn legacy_database_without_continuation_table_gains_it_on_open() {
     }
     store
         .append_continuation(&continuation("continuation-1", "key-1"))
-        .expect("既有库必须能直接写入新表");
-    assert_eq!(count_rows(&store, "key-1"), 1);
+        .expect_err("缺表时不得静默补表并写入");
+    // 仍不补表：缺表即不兼容，由版本之外的显式检查暴露问题。
+    let connection = rusqlite::Connection::open(store.outbox_path()).expect("打开数据库");
+    let present: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='continuations')",
+            [],
+            |row| row.get(0),
+        )
+        .expect("查询表");
+    assert!(!present, "既有库不得被静默补表");
 }
 
 /// 读取队列库当前的 schema 版本，避免测试重复字面量。
