@@ -126,9 +126,9 @@ fn unknown_method_and_path_are_not_claimed() {
     let adapter = SessionsHttpAdapter::new(directory.path().to_path_buf());
     assert!(
         adapter
-            .handle_request("POST", "/api/v1/sessions", None, &[])
+            .handle_request("DELETE", "/api/v1/sessions", None, &[])
             .is_none(),
-        "非 GET 不接管"
+        "未实现的方法不接管"
     );
     assert!(
         adapter
@@ -146,4 +146,96 @@ fn filters_parse_percent_encoded_workspace() {
     let default = QueryFilters::parse(None);
     assert!(default.workspace_id.is_none());
     assert!(!default.include_archived);
+}
+
+#[test]
+fn creates_a_session_and_lists_it() {
+    let (directory, store) = fixture();
+    let adapter = SessionsHttpAdapter::new(directory.path().to_path_buf());
+    let response = adapter
+        .handle_request(
+            "POST",
+            "/api/v1/sessions",
+            None,
+            r#"{"workspaceId":"ws-a","cwd":"/workspace","title":"新会话"}"#.as_bytes(),
+        )
+        .expect("命中共用路由");
+    assert_eq!(response.status, 200);
+    let created: Value = serde_json::from_slice(&response.body).expect("JSON");
+    let session_id = created["sessionId"].as_str().expect("返回会话 ID");
+    assert!(session_id.starts_with("session-"), "会话 ID 应带前缀");
+
+    // 会话确实落到了控制面库。
+    let listed = request(&adapter, Some("workspace=ws-a"));
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["sessionId"], session_id);
+    assert_eq!(listed[0]["title"], "新会话");
+    drop(store);
+}
+
+#[test]
+fn patches_pinned_and_archived_state() {
+    let (directory, store) = fixture();
+    seed_session(&store, "session-live", 0, 0);
+    let adapter = SessionsHttpAdapter::new(directory.path().to_path_buf());
+
+    let response = adapter
+        .handle_request(
+            "PATCH",
+            "/api/v1/sessions/session-live",
+            None,
+            br#"{"pinned":true}"#,
+        )
+        .expect("命中单会话路由");
+    assert_eq!(response.status, 200);
+    let listed = request(&adapter, None);
+    assert_eq!(listed[0]["pinned"], true);
+
+    let archived = adapter
+        .handle_request(
+            "PATCH",
+            "/api/v1/sessions/session-live",
+            None,
+            br#"{"archived":true}"#,
+        )
+        .expect("命中单会话路由");
+    assert_eq!(archived.status, 200);
+    assert!(request(&adapter, None).is_empty(), "归档后默认列表为空");
+    assert_eq!(
+        request(&adapter, Some("include_archived=true")).len(),
+        1,
+        "显式请求时归档会话仍可找回"
+    );
+}
+
+#[test]
+fn patch_rejects_unknown_session_and_empty_body() {
+    let (directory, store) = fixture();
+    seed_session(&store, "session-live", 0, 0);
+    let adapter = SessionsHttpAdapter::new(directory.path().to_path_buf());
+
+    let missing = adapter
+        .handle_request(
+            "PATCH",
+            "/api/v1/sessions/missing",
+            None,
+            br#"{"pinned":true}"#,
+        )
+        .expect("命中单会话路由");
+    assert_eq!(missing.status, 404);
+
+    let empty = adapter
+        .handle_request("PATCH", "/api/v1/sessions/session-live", None, b"{}")
+        .expect("命中单会话路由");
+    assert_eq!(empty.status, 400);
+}
+
+#[test]
+fn create_rejects_malformed_body() {
+    let (directory, _store) = fixture();
+    let adapter = SessionsHttpAdapter::new(directory.path().to_path_buf());
+    let response = adapter
+        .handle_request("POST", "/api/v1/sessions", None, b"not-json")
+        .expect("命中共用路由");
+    assert_eq!(response.status, 400);
 }

@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use axon_daemon::{GatewayHttpResponse, GatewayHttpRouteHandler};
-use axon_session::SqliteRuntimeStore;
+use axon_session::{RuntimeStore as _, SqliteRuntimeStore};
 use serde_json::{Value, json};
 
 /// 会话路由前缀。
@@ -60,18 +60,146 @@ impl GatewayHttpRouteHandler for SessionsHttpAdapter {
         method: &str,
         path: &str,
         query: Option<&str>,
-        _body: &[u8],
+        body: &[u8],
     ) -> Option<GatewayHttpResponse> {
-        if path != SESSIONS_PATH {
-            return None;
+        if path == SESSIONS_PATH {
+            return match method {
+                "GET" => Some(GatewayHttpResponse::json(200, &self.list(query))),
+                "POST" => Some(self.create(body)),
+                _ => None,
+            };
         }
+        // 单会话写入：`/api/v1/sessions/<id>`。
+        let session_id = path
+            .strip_prefix(SESSIONS_PATH)?
+            .strip_prefix('/')
+            .filter(|rest| !rest.is_empty() && !rest.contains('/'))?;
         match method {
-            "GET" => Some(GatewayHttpResponse::json(200, &self.list(query))),
+            "PATCH" => Some(self.patch(session_id, body)),
             _ => None,
         }
     }
 }
 
+/// `POST /api/v1/sessions` 的报文体。
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateSessionBody {
+    /// 归属 Workspace；缺省时不绑定。
+    #[serde(default)]
+    workspace_id: Option<String>,
+    /// 工作目录；缺省时沿用 Axon 根目录。
+    #[serde(default)]
+    cwd: Option<String>,
+    /// 展示标题；缺省时由第一条入站消息回落。
+    #[serde(default)]
+    title: Option<String>,
+}
+
+/// `PATCH /api/v1/sessions/<id>` 的报文体。
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PatchSessionBody {
+    #[serde(default)]
+    pinned: Option<bool>,
+    #[serde(default)]
+    archived: Option<bool>,
+}
+
+impl SessionsHttpAdapter {
+    /// 新建一个空会话：只登记运行态行，第一条消息到来时才产生事件。
+    fn create(&self, body: &[u8]) -> GatewayHttpResponse {
+        let Ok(payload) = serde_json::from_slice::<CreateSessionBody>(body) else {
+            return GatewayHttpResponse::json(400, &json!({"error": "invalid_body"}));
+        };
+        let store = SqliteRuntimeStore::from_root(&self.runtime_root);
+        if store.initialize().is_err() {
+            return GatewayHttpResponse::json(500, &json!({"error": "runtime_unavailable"}));
+        }
+        let session_id = format!("session-{}", uuid::Uuid::new_v4());
+        let Ok(parsed) = axon_domain::DaemonSessionId::new(session_id.clone()) else {
+            return GatewayHttpResponse::json(500, &json!({"error": "invalid_session_id"}));
+        };
+        let cwd = payload
+            .cwd
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_default();
+        let now_ms = axon_time::unix_now_ms();
+        if store.create_session(&parsed, &cwd, now_ms).is_err() {
+            return GatewayHttpResponse::json(500, &json!({"error": "create_failed"}));
+        }
+        let title = payload
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let workspace_id = payload
+            .workspace_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if title.is_some() || workspace_id.is_some() {
+            let _ = store.with_read_connection(|connection| {
+                connection
+                    .execute(
+                        "UPDATE sessions SET title=COALESCE(?1, title),
+                             workspace_id=COALESCE(?2, workspace_id)
+                         WHERE session_id=?3",
+                        rusqlite::params![title, workspace_id, session_id.as_str()],
+                    )
+                    .map(|_| ())
+            });
+        }
+        GatewayHttpResponse::json(
+            200,
+            &json!({
+                "sessionId": session_id,
+                "workspaceId": workspace_id,
+                "createdAtMs": now_ms,
+            }),
+        )
+    }
+
+    /// 更新会话的置顶与归档状态。
+    fn patch(&self, session_id: &str, body: &[u8]) -> GatewayHttpResponse {
+        let Ok(payload) = serde_json::from_slice::<PatchSessionBody>(body) else {
+            return GatewayHttpResponse::json(400, &json!({"error": "invalid_body"}));
+        };
+        if payload.pinned.is_none() && payload.archived.is_none() {
+            return GatewayHttpResponse::json(400, &json!({"error": "empty_patch"}));
+        }
+        let store = SqliteRuntimeStore::from_root(&self.runtime_root);
+        if store.initialize().is_err() {
+            return GatewayHttpResponse::json(500, &json!({"error": "runtime_unavailable"}));
+        }
+        let changed = store.with_read_connection(|connection| {
+            connection
+                .execute(
+                    "UPDATE sessions SET pinned=COALESCE(?1, pinned), archived=COALESCE(?2, archived)
+                     WHERE session_id=?3",
+                    rusqlite::params![
+                        payload.pinned.map(|value| i64::from(u8::from(value))),
+                        payload.archived.map(|value| i64::from(u8::from(value))),
+                        session_id
+                    ],
+                )
+                .map(|changed| changed)
+        });
+        match changed {
+            Ok(0) => GatewayHttpResponse::json(404, &json!({"error": "session_not_found"})),
+            Ok(_) => GatewayHttpResponse::json(
+                200,
+                &json!({
+                    "sessionId": session_id,
+                    "pinned": payload.pinned,
+                    "archived": payload.archived,
+                }),
+            ),
+            Err(_) => GatewayHttpResponse::json(500, &json!({"error": "update_failed"})),
+        }
+    }
+}
 /// 查询过滤条件：`workspace` 精确匹配，`include_archived` 决定是否包含归档会话。
 #[derive(Debug, Default)]
 struct QueryFilters {
