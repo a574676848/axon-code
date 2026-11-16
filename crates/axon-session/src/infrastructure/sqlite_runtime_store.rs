@@ -187,7 +187,8 @@ impl DatabaseHandle {
             return Ok(());
         }
         let mut connection = self.connection()?;
-        schema::initialize_schema_for_path(&self.path, self.kind, &mut connection).map_err(storage)?;
+        schema::initialize_schema_for_path(&self.path, self.kind, &mut connection)
+            .map_err(storage)?;
         self.schema_ready.store(true, Ordering::Release);
         Ok(())
     }

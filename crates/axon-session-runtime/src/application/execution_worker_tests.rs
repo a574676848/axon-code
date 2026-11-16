@@ -4,9 +4,9 @@ use axon_domain::{
     ConsumerCursor, DecisionEffect, DecisionId, GoalId, GoalPlan, GoalRecord, GoalStatus,
     RuntimeHostId, ScopeRef,
 };
-use axon_session::{EventLogStore, 
-    CheckpointTelemetry, DecisionStore, GoalStore, SessionEventRecord, SessionRuntimeRecord,
-    SqliteRuntimeStore,
+use axon_session::{
+    CheckpointTelemetry, DecisionStore, EventLogStore, GoalStore, SessionEventRecord,
+    SessionRuntimeRecord, SqliteRuntimeStore,
 };
 use std::sync::{Arc, Mutex};
 

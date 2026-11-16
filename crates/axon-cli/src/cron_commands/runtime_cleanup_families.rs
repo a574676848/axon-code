@@ -294,20 +294,8 @@ pub(super) fn delete_session_families_by_ids(
             &placeholders,
             ids,
         )?,
-        schedules: delete_ids_in(
-            &transaction,
-            "schedules",
-            "session_id",
-            &placeholders,
-            ids,
-        )?,
-        sessions: delete_ids_in(
-            &transaction,
-            "sessions",
-            "session_id",
-            &placeholders,
-            ids,
-        )?,
+        schedules: delete_ids_in(&transaction, "schedules", "session_id", &placeholders, ids)?,
+        sessions: delete_ids_in(&transaction, "sessions", "session_id", &placeholders, ids)?,
         ..RuntimeCleanupCounts::default()
     };
     transaction
@@ -353,13 +341,7 @@ pub(super) fn delete_terminal_goals(
         Ok(RuntimeCleanupCounts {
             result_reads,
             results: delete_ids_in(transaction, "goal_results", "goal_id", &placeholders, ids)?,
-            executions: delete_ids_in(
-                transaction,
-                "work_items",
-                "goal_id",
-                &placeholders,
-                ids,
-            )?,
+            executions: delete_ids_in(transaction, "work_items", "goal_id", &placeholders, ids)?,
             goals: delete_ids_in(transaction, "goals", "goal_id", &placeholders, ids)?,
             ..RuntimeCleanupCounts::default()
         })

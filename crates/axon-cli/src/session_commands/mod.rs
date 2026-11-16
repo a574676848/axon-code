@@ -17,13 +17,13 @@ use crate::{
 };
 
 mod output;
-mod sessions_list;
 mod replay;
+mod sessions_list;
 mod thread_cli;
 
 use output::{SessionOutputCommand, run_session_output};
-use sessions_list::{SessionsListCommand, run_sessions_list};
 use replay::{SessionReplayCommand, run_session_replay};
+use sessions_list::{SessionsListCommand, run_sessions_list};
 pub(crate) use thread_cli::session_summary_views_for_root;
 use thread_cli::{
     SessionExportCommand, SessionForkCommand, SessionListCommand, SessionReadCommand,
@@ -178,7 +178,8 @@ pub(crate) fn run_sessions(
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SessionDeleteReport {    status: &'static str,
+struct SessionDeleteReport {
+    status: &'static str,
     store_path: String,
     session_id: String,
     deleted_events: usize,

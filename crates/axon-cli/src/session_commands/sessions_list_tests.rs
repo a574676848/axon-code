@@ -80,11 +80,7 @@ fn list(
     limit: usize,
     all: bool,
 ) -> crate::CliRunResult {
-    run_sessions_list(
-        format,
-        config_path,
-        &SessionsListCommand { limit, all },
-    )
+    run_sessions_list(format, config_path, &SessionsListCommand { limit, all })
 }
 
 #[test]

@@ -11,8 +11,8 @@ use axon_domain::{
     InteractionId, InteractionRecord, InteractionSource, InteractionStatus, ReplyRoute,
     RuntimeHostId, ScopeRef, SessionRuntimeStatus,
 };
-use axon_session::{DaemonHostRecord, InteractionStore, RuntimeStore, SqliteRuntimeStore};
 use axon_session::EventLogStore;
+use axon_session::{DaemonHostRecord, InteractionStore, RuntimeStore, SqliteRuntimeStore};
 
 /// 测试用页大小：故意取小值，让一次订阅必然跨多页。
 const TEST_REPLAY_PAGE_SIZE: u32 = 2;
@@ -488,7 +488,6 @@ fn history_page_resumes_at_the_last_consumed_event() {
 }
 
 #[test]
-
 #[test]
 fn history_page_reports_not_found_for_missing_interaction() {
     let directory = axon_test_support::test_temp_dir();

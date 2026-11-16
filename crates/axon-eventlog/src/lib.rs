@@ -20,8 +20,8 @@ mod record;
 
 pub use append::{EventLogWriter, append_once};
 pub use error::EventLogError;
-pub use format::{FrameScan, FrameSpan, Header, HEADER_FRAME_INDEX};
-pub use read::{EventLogSnapshot, EventLogReader};
+pub use format::{FrameScan, FrameSpan, HEADER_FRAME_INDEX, Header};
+pub use read::{EventLogReader, EventLogSnapshot};
 pub use record::{
     JobOutcome, JobRef, RuntimeEventKind, RuntimeEventRecord, TurnMetrics, TurnOrigin, TurnOutcome,
 };
@@ -69,9 +69,9 @@ impl EventLog {
     /// 目录名使用十六进制转义，规避 Windows 路径长度与保留字符问题。
     #[must_use]
     pub fn path(&self) -> PathBuf {
-        self.root.join(Self::encode_segment(&self.session_id)).join(format!(
-            "{LOG_FILE_STEM}.v{FORMAT_VERSION}.jsonl.zstd"
-        ))
+        self.root
+            .join(Self::encode_segment(&self.session_id))
+            .join(format!("{LOG_FILE_STEM}.v{FORMAT_VERSION}.jsonl.zstd"))
     }
 
     /// 追加写句柄。同一时刻只允许一个写句柄持有该日志。
@@ -128,6 +128,9 @@ mod tests {
     fn path_uses_current_generation() {
         let log = EventLog::open("/tmp/events", "session-lane-1");
         let text = log.path().to_string_lossy().replace('\\', "/");
-        assert!(text.ends_with("/session-lane-1/session.v1.jsonl.zstd"), "{text}");
+        assert!(
+            text.ends_with("/session-lane-1/session.v1.jsonl.zstd"),
+            "{text}"
+        );
     }
 }

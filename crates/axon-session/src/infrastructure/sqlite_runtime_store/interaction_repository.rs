@@ -8,7 +8,9 @@
 use super::SqliteRuntimeStore;
 use super::helpers::i64_value;
 use super::interaction_query_repository::{WORK_RUNNING, select_inbox};
-use super::interaction_repository_row::{read_record, runtime_error, serialize_error, storage_error};
+use super::interaction_repository_row::{
+    read_record, runtime_error, serialize_error, storage_error,
+};
 use crate::application::interaction_session_lane_id;
 use crate::ports::{
     InteractionAppendReceipt, InteractionProcessingLease, InteractionStore, InteractionStoreError,
@@ -26,8 +28,7 @@ const TERMINAL_UNDERSTOOD: &str = "understood";
 const TERMINAL_REJECTED: &str = "rejected";
 /// 终态：进程中断。
 const TERMINAL_INTERRUPTED: &str = "interrupted";
-const SELECT_INTERACTION_ID_EXISTS: &str =
-    "SELECT 1 FROM inbox WHERE interaction_id=?1";
+const SELECT_INTERACTION_ID_EXISTS: &str = "SELECT 1 FROM inbox WHERE interaction_id=?1";
 const INSERT_INTERACTION: &str = "INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,received_at_ms,updated_at_ms,attachments_json,model,reasoning_effort,lane_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?8,?9,?10,?11,?12)";
 /// lane 排他领取候选：没有工作项、或工作项已释放的那些；所属 lane 当前不得有在途工作项。
 const SELECT_CLAIMABLE_INTERACTIONS: &str = "SELECT queued.interaction_id,queued.received_at_ms \

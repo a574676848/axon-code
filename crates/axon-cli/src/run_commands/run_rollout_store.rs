@@ -34,8 +34,8 @@ pub(crate) use api::{
     load_previous_reflection_notice, load_recent_turn_facts, load_rollout_history_window,
     load_session_turn, load_session_usage, load_session_usage_totals_from_root, load_turn_sequence,
     mark_child_session_origin, mark_child_session_status, read_rollout_tool_output,
-    replay_rollout_events, restore_rollout_compaction, restore_selected_session, select_rollout_session,
-    snapshot_selected_session,
+    replay_rollout_events, restore_rollout_compaction, restore_selected_session,
+    select_rollout_session, snapshot_selected_session,
 };
 #[cfg(test)]
 pub(crate) use rollout_events::RolloutEventAppendInput;

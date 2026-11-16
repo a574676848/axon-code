@@ -5,12 +5,12 @@ use std::io::Write as _;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::EventLog;
 use crate::error::EventLogError;
-use crate::format::{encode_frame, Header};
+use crate::format::{Header, encode_frame};
 use crate::lock::ExclusiveLock;
 use crate::read::read_snapshot;
 use crate::record::RuntimeEventRecord;
-use crate::EventLog;
 
 /// 事件日志的追加写句柄。
 ///

@@ -17,14 +17,15 @@ fn fixture() -> (axon_test_support::TestTempDir, SqliteRuntimeStore) {
 fn seed_session(store: &SqliteRuntimeStore, session_id: &str, pinned: i64, archived: i64) {
     store
         .with_read_connection(|connection| {
-            connection.execute(
-                "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,
+            connection
+                .execute(
+                    "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,
                      worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,
                      last_activity_at_ms,created_at_ms,updated_at_ms,pinned,archived,workspace_id)
                  VALUES(?1,?1,?1,'/workspace','idle',0,0,0,0,?2,?2,?2,?3,?4,'ws-a')",
-                params![session_id, 1_000_i64, pinned, archived],
-            )
-            .map(|_| ())
+                    params![session_id, 1_000_i64, pinned, archived],
+                )
+                .map(|_| ())
         })
         .expect("写入会话");
 }
@@ -71,9 +72,15 @@ fn lists_sessions_with_title_from_first_inbound_message_and_pinned_first() {
     let sessions = request(&adapter, None);
 
     assert_eq!(sessions.len(), 2);
-    assert_eq!(sessions[0]["sessionId"], "session-pinned", "置顶会话排在最前");
+    assert_eq!(
+        sessions[0]["sessionId"], "session-pinned",
+        "置顶会话排在最前"
+    );
     assert_eq!(sessions[0]["title"], "置顶会话");
-    assert_eq!(sessions[1]["title"], "第一行标题", "标题只取首条消息的第一个非空行");
+    assert_eq!(
+        sessions[1]["title"], "第一行标题",
+        "标题只取首条消息的第一个非空行"
+    );
     assert_eq!(sessions[1]["workspaceId"], "ws-a");
 }
 

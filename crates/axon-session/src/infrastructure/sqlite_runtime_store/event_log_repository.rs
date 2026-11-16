@@ -94,8 +94,13 @@ pub(super) fn append_events(
         .iter()
         .map(|record| to_runtime_record(record, interaction_column))
         .collect::<Vec<_>>();
-    axon_eventlog::append_once(&store.event_log(session_id), start, now_ms, &runtime_records)
-        .map_err(log_error)?;
+    axon_eventlog::append_once(
+        &store.event_log(session_id),
+        start,
+        now_ms,
+        &runtime_records,
+    )
+    .map_err(log_error)?;
     apply_projections(store, session_id, events, now_ms);
     Ok(records)
 }
@@ -245,8 +250,13 @@ pub(super) fn write_events_at(
         .iter()
         .map(|record| to_runtime_record(record, interaction_id))
         .collect::<Vec<_>>();
-    axon_eventlog::append_once(&store.event_log(session_id), start, now_ms, &runtime_records)
-        .map_err(log_error)?;
+    axon_eventlog::append_once(
+        &store.event_log(session_id),
+        start,
+        now_ms,
+        &runtime_records,
+    )
+    .map_err(log_error)?;
     apply_projections(store, session_id, events, now_ms);
     Ok(records)
 }

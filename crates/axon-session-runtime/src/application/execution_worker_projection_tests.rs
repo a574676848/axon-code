@@ -6,9 +6,9 @@ use crate::ports::{EventPublisher, RuntimeClock, TurnEventSink, TurnExecutor};
 use axon_domain::{
     ConsumerCursor, DaemonSessionId, RuntimeHostId, SessionActionId, SessionActionStatus,
 };
-use axon_session::{EventLogStore, 
-    CheckpointTelemetry, DaemonHostRecord, RuntimeStore, SessionActionRecord, SessionEventRecord,
-    SqliteRuntimeStore,
+use axon_session::{
+    CheckpointTelemetry, DaemonHostRecord, EventLogStore, RuntimeStore, SessionActionRecord,
+    SessionEventRecord, SqliteRuntimeStore,
 };
 use std::sync::{
     Arc,

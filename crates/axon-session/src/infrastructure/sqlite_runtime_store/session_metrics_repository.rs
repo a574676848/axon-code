@@ -69,7 +69,9 @@ pub(super) fn apply_turn_metrics(
     row.total_cache_write_tokens = row
         .total_cache_write_tokens
         .saturating_add(metrics.cache_write_tokens);
-    row.total_tool_calls = row.total_tool_calls.saturating_add(u64::from(metrics.tool_calls));
+    row.total_tool_calls = row
+        .total_tool_calls
+        .saturating_add(u64::from(metrics.tool_calls));
     let channel_key = channel.unwrap_or("internal").to_owned();
     let channel_entry = row.channel_mix.entry(channel_key).or_insert(0);
     *channel_entry = channel_entry.saturating_add(1);
@@ -271,8 +273,12 @@ fn read_row(
                     jobs_completed: u64_value(row.get(21)?),
                     jobs_failed: u64_value(row.get(22)?),
                     jobs_running: u64_value(row.get(23)?),
-                    first_turn_at_ms: row.get::<_, Option<i64>>(24)?.and_then(|v| u64::try_from(v).ok()),
-                    last_turn_at_ms: row.get::<_, Option<i64>>(25)?.and_then(|v| u64::try_from(v).ok()),
+                    first_turn_at_ms: row
+                        .get::<_, Option<i64>>(24)?
+                        .and_then(|v| u64::try_from(v).ok()),
+                    last_turn_at_ms: row
+                        .get::<_, Option<i64>>(25)?
+                        .and_then(|v| u64::try_from(v).ok()),
                     updated_at_ms: u64_value(row.get(26)?),
                 })
             },
@@ -402,8 +408,12 @@ fn read_snapshot(
                     jobs_completed: u64_value(row.get(21)?),
                     jobs_failed: u64_value(row.get(22)?),
                     jobs_running: u64_value(row.get(23)?),
-                    first_turn_at_ms: row.get::<_, Option<i64>>(24)?.and_then(|v| u64::try_from(v).ok()),
-                    last_turn_at_ms: row.get::<_, Option<i64>>(25)?.and_then(|v| u64::try_from(v).ok()),
+                    first_turn_at_ms: row
+                        .get::<_, Option<i64>>(24)?
+                        .and_then(|v| u64::try_from(v).ok()),
+                    last_turn_at_ms: row
+                        .get::<_, Option<i64>>(25)?
+                        .and_then(|v| u64::try_from(v).ok()),
                     updated_at_ms: u64_value(row.get(26)?),
                 })
             },

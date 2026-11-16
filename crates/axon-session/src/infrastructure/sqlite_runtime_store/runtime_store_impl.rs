@@ -2,20 +2,19 @@
 //!
 //! 单独成文件只是为了让 store 本体保持可读：它承载连接池、路径解析与事件日志入口。
 
-use super::{
-    action_repository, commit_repository, failure_repository,
-    goal_result_document, interrupted_execution_repository, interrupted_interaction_repository,
-    runtime_repository, schedule_repository, session_control_repository, SqliteRuntimeStore,
-};
 use super::helpers::{i64_value, storage};
+use super::{
+    SqliteRuntimeStore, action_repository, commit_repository, failure_repository,
+    goal_result_document, interrupted_execution_repository, interrupted_interaction_repository,
+    runtime_repository, schedule_repository, session_control_repository,
+};
 use crate::domain::runtime::{
     DaemonHostRecord, RuntimeScheduleRecord, SessionActionRecord, SessionEventRecord,
     SessionRuntimeRecord,
 };
 use crate::ports::{CheckpointTelemetry, RuntimeStore, RuntimeStoreError};
 use axon_domain::{
-    DaemonSessionId, RuntimeHostId, SessionActionId, SessionActionStatus,
-    SessionRuntimeStatus,
+    DaemonSessionId, RuntimeHostId, SessionActionId, SessionActionStatus, SessionRuntimeStatus,
 };
 use rusqlite::{TransactionBehavior, params};
 
@@ -320,7 +319,6 @@ impl RuntimeStore for SqliteRuntimeStore {
         )
     }
 
-
     fn upsert_schedule(&self, schedule: &RuntimeScheduleRecord) -> Result<(), RuntimeStoreError> {
         schedule_repository::upsert_schedule(self, schedule)
     }
@@ -362,4 +360,3 @@ impl RuntimeStore for SqliteRuntimeStore {
         goal_result_document::save(self, session_id, execution_id, content)
     }
 }
-

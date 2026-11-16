@@ -360,9 +360,7 @@ fn read_sessions(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<Sess
             total_active_ms: u64::try_from(row.get::<_, i64>(9)?).unwrap_or(0),
             ttft_max_ms: u64::try_from(row.get::<_, i64>(10)?).unwrap_or(0),
             open_job_count: u64::try_from(row.get::<_, i64>(11)?).unwrap_or(0),
-            ttft_p50_ms: ttft_histogram_json
-                .as_deref()
-                .and_then(median_of_histogram),
+            ttft_p50_ms: ttft_histogram_json.as_deref().and_then(median_of_histogram),
         })
     })?;
     rows.collect()

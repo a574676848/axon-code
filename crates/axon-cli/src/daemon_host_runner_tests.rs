@@ -1,4 +1,3 @@
-use axon_session::EventLogStore as _;
 use super::*;
 use axon_agent_runtime::{QuestionWaitBudget, QuestionWaitResult};
 use axon_domain::{
@@ -8,6 +7,7 @@ use axon_protocol::wire::{
     WireCorrelationId, WireEventEnvelope, WireEventKind, WireSchemaVersion, WireSessionRef,
     WireUserQuestion,
 };
+use axon_session::EventLogStore as _;
 use axon_session::{InteractionQueryStore, RuntimeStore, UserQuestionStore};
 use std::{sync::mpsc, thread, time::Duration};
 

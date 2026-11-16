@@ -1,8 +1,8 @@
 //! Interaction 尾窗读取回归：只返回目标交互的帧，不混入同 lane 的其他交互。
 
-use crate::ports::EventLogStore as _;
 use super::SqliteRuntimeStore;
 use super::sqlite_runtime_store_interaction_tests::{LEASE_DURATION_MS, sample_interaction};
+use crate::ports::EventLogStore as _;
 use crate::{InteractionStore, RuntimeStore, interaction_session_lane_id};
 use axon_domain::{DaemonSessionId, RuntimeHostId};
 

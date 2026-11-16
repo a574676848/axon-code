@@ -31,7 +31,10 @@ fn unknown_session_is_rejected_with_actionable_message() {
     let (cli, command) = parse_run(config_path.to_str().expect("UTF-8 路径"), "missing-session");
 
     let error = validate_explicit_session(&cli, &command).expect_err("未知会话必须失败");
-    assert!(error.contains("会话不存在"), "错误信息应说明会话不存在：{error}");
+    assert!(
+        error.contains("会话不存在"),
+        "错误信息应说明会话不存在：{error}"
+    );
     assert!(
         error.contains("axon sessions list"),
         "错误信息应指出下一步命令：{error}"
@@ -45,7 +48,9 @@ fn existing_session_passes_validation() {
     let store = SqliteRuntimeStore::from_root(directory.path().join("data"));
     store.initialize().expect("初始化运行态库");
     let session_id = DaemonSessionId::new("session-known").expect("合法 ID");
-    store.create_session(&session_id, "/workspace", 1).expect("建会话");
+    store
+        .create_session(&session_id, "/workspace", 1)
+        .expect("建会话");
     let (cli, command) = parse_run(config_path.to_str().expect("UTF-8 路径"), "session-known");
 
     validate_explicit_session(&cli, &command).expect("已存在的会话必须通过校验");

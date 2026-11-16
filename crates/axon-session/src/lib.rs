@@ -44,14 +44,14 @@ pub use infrastructure::{
 pub use ports::ExecutionSettlement;
 pub use ports::ThreadActivationSnapshot;
 pub use ports::ThreadEventStore;
-pub use ports::{EventLogStore,
+pub use ports::{
     AgentContinuationAppendOutcome, AgentContinuationQuery, AgentContinuationRecord,
     AgentContinuationState, AgentContinuationStore, AgentContinuationStoreError,
     AgentMailboxAppendOutcome, AgentMailboxMessageKind, AgentMailboxMessageRecord,
     AgentMailboxMessageState, AgentMailboxQuery, AgentMailboxRetryPolicy, AgentMailboxStore,
     AgentMailboxStoreError, CheckpointTelemetry, ClientDeliveryStore, ClientDeliveryStoreError,
     ClientInboxEntry, ClientPresenceRecord, CompletionDeliveryRecord, CompletionDeliveryTarget,
-    CompletionNotificationRecord, DecisionStore, DecisionStoreError, ExecutionStore,
+    CompletionNotificationRecord, DecisionStore, DecisionStoreError, EventLogStore, ExecutionStore,
     ExecutionStoreError, ExecutionTrigger, GoalCommitError, GoalCommitStore, GoalMutationStore,
     GoalPage, GoalStore, GoalStoreError, HealthStore, InteractionAppendReceipt, InteractionCursor,
     InteractionProcessingLease, InteractionQueryStore, InteractionStore, InteractionStoreError,

@@ -258,8 +258,8 @@ impl RuntimeEventRecord {
         emitted_at_ms: u64,
         metrics: &TurnMetrics,
     ) -> Result<Self, EventLogError> {
-        let payload =
-            serde_json::to_value(metrics).map_err(|error| EventLogError::Codec(error.to_string()))?;
+        let payload = serde_json::to_value(metrics)
+            .map_err(|error| EventLogError::Codec(error.to_string()))?;
         Ok(Self::new(
             sequence,
             emitted_at_ms,
@@ -319,7 +319,10 @@ mod tests {
         );
         let line = record.encode_line().expect("可编码");
         let text = String::from_utf8(line).expect("UTF-8");
-        assert!(!text.contains("ttftMs"), "未测得首字不得出现在载荷里：{text}");
+        assert!(
+            !text.contains("ttftMs"),
+            "未测得首字不得出现在载荷里：{text}"
+        );
     }
 
     #[test]
@@ -333,7 +336,10 @@ mod tests {
         assert_eq!(record.event_type.as_str(), "wire_event");
         let line = record.encode_line().expect("可编码");
         let decoded = RuntimeEventRecord::decode_line(&line).expect("可解码");
-        assert_eq!(decoded.event_type, RuntimeEventKind::Other("wire_event".to_owned()));
+        assert_eq!(
+            decoded.event_type,
+            RuntimeEventKind::Other("wire_event".to_owned())
+        );
     }
 }
 impl RuntimeEventRecord {

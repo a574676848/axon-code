@@ -52,12 +52,9 @@ pub(crate) fn run_sessions_list(
         .take(command.limit)
         .collect::<Vec<_>>();
     match format {
-        OutputFormat::Json => json_result(
-            &visible
-                .iter()
-                .map(|row| row.to_json())
-                .collect::<Vec<_>>(),
-        ),
+        OutputFormat::Json => {
+            json_result(&visible.iter().map(|row| row.to_json()).collect::<Vec<_>>())
+        }
         OutputFormat::Text => {
             let mut stdout = String::new();
             if visible.is_empty() {

@@ -396,8 +396,12 @@ fn rollout_events_sqlite_replays_session_events_in_sequence() {
 fn selection_snapshot_restores_the_previous_pointer() {
     let path = temp_db("selection-snapshot");
     let store = RolloutSqliteStore::open(&path).unwrap();
-    store.record_session(&record("session-a", None, 100)).unwrap();
-    store.record_session(&record("session-b", None, 200)).unwrap();
+    store
+        .record_session(&record("session-a", None, 100))
+        .unwrap();
+    store
+        .record_session(&record("session-b", None, 200))
+        .unwrap();
 
     // 最近一次提交把指针推进到 session-b。
     assert_eq!(
@@ -428,7 +432,9 @@ fn selection_snapshot_restores_the_previous_pointer() {
 fn selection_snapshot_can_restore_the_absent_state() {
     let path = temp_db("selection-cleared");
     let store = RolloutSqliteStore::open(&path).unwrap();
-    store.record_session(&record("session-a", None, 100)).unwrap();
+    store
+        .record_session(&record("session-a", None, 100))
+        .unwrap();
     store.set_selection(None).unwrap();
 
     assert_eq!(

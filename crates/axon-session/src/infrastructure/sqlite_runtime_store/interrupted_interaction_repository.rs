@@ -231,9 +231,9 @@ fn interrupted_payload(interaction_id: &InteractionId) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::ports::EventLogStore as _;
     use super::*;
     use crate::InteractionStore;
+    use crate::ports::EventLogStore as _;
     use axon_domain::RuntimeHostId;
 
     #[test]

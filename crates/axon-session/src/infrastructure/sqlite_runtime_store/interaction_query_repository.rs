@@ -204,8 +204,7 @@ impl InteractionQueryStore for SqliteRuntimeStore {
 fn workspace_scope_json(workspace_id: &str) -> Result<String, InteractionStoreError> {
     let scope = axon_domain::ScopeRef::workspace(workspace_id.to_owned())
         .map_err(|_| InteractionStoreError::InvalidState("Workspace ID 无效".to_owned()))?;
-    serde_json::to_string(&scope)
-        .map_err(|error| InteractionStoreError::Storage(error.to_string()))
+    serde_json::to_string(&scope).map_err(|error| InteractionStoreError::Storage(error.to_string()))
 }
 
 fn latest_interaction_for_channel(
@@ -240,4 +239,3 @@ fn latest_interaction_for_channel(
         .optional()
         .map_err(storage_error)
 }
-

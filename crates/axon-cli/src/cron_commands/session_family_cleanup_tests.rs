@@ -191,7 +191,7 @@ fn rollout_cleanup_crosses_bounded_batch_boundary() {
 
 #[test]
 #[ignore = "旧事件表语义已废弃，集中清理阶段删除"]
-    fn associated_cleanup_queries_use_indexes() {
+fn associated_cleanup_queries_use_indexes() {
     let root = axon_test_support::test_temp_dir();
     create_runtime_family(root.path(), "idle", false);
     create_governance(root.path());
@@ -315,7 +315,6 @@ fn create_runtime_family(root: &Path, child_status: &str, with_execution: bool) 
                 params![id, status],
             )
             .expect("runtime Session 应可写入");
-
     }
     if with_execution {
         connection

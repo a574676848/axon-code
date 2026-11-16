@@ -8,7 +8,11 @@ use axon_eventlog::{
 };
 use serde_json::json;
 
-fn record(sequence: u64, event_type: RuntimeEventKind, payload: serde_json::Value) -> RuntimeEventRecord {
+fn record(
+    sequence: u64,
+    event_type: RuntimeEventKind,
+    payload: serde_json::Value,
+) -> RuntimeEventRecord {
     RuntimeEventRecord::new(sequence, 1_700_000_000_000 + sequence, event_type, payload)
 }
 
@@ -162,8 +166,7 @@ fn turn_metrics_keeps_origin_and_unmeasured_ttft() {
     assert_eq!(stored.origin_channel.as_deref(), Some("tui"));
     assert_eq!(stored.origin_kind, TurnOrigin::External);
     assert_eq!(stored.interaction_id.as_deref(), Some("interaction-1"));
-    let parsed: TurnMetrics =
-        serde_json::from_value(stored.payload.clone()).expect("载荷应可还原");
+    let parsed: TurnMetrics = serde_json::from_value(stored.payload.clone()).expect("载荷应可还原");
     assert!(parsed.ttft_ms.is_none(), "未测得首字必须保持 None");
     assert_eq!(parsed.active_ms, 900);
 }

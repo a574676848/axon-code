@@ -80,12 +80,16 @@ pub(super) fn count_expired_rows(
         )?;
         counts.executions = count_rows(
             connection,
-            &format!("SELECT COUNT(*) FROM work_items WHERE goal_id IN (SELECT goal_id {task_filter})"),
+            &format!(
+                "SELECT COUNT(*) FROM work_items WHERE goal_id IN (SELECT goal_id {task_filter})"
+            ),
             cutoff_ms,
         )?;
         counts.results = count_rows(
             connection,
-            &format!("SELECT COUNT(*) FROM goal_results WHERE goal_id IN (SELECT goal_id {task_filter})"),
+            &format!(
+                "SELECT COUNT(*) FROM goal_results WHERE goal_id IN (SELECT goal_id {task_filter})"
+            ),
             cutoff_ms,
         )?;
         counts.result_reads = count_rows(
@@ -107,7 +111,10 @@ pub(super) fn count_expired_rows(
         )?;
         counts.completion_notifications = count_rows(
             connection,
-            &format!("SELECT COUNT(*) {}", settled_completion_notifications_filter()),
+            &format!(
+                "SELECT COUNT(*) {}",
+                settled_completion_notifications_filter()
+            ),
             cutoff_ms,
         )?;
         counts.completion_deliveries = count_rows(

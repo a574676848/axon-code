@@ -7,8 +7,8 @@ use axon_domain::{
     InteractionRecord, InteractionSource, ReplyRoute, RuntimeHostId, ScopeRef,
 };
 use axon_session::{
-    CheckpointTelemetry, ExecutionStore, GoalStore, InteractionStore, LedgerEventStore,
-    EventLogStore, SessionEventRecord, SqliteRuntimeStore, WorkspaceResolver, WorkspaceStore,
+    CheckpointTelemetry, EventLogStore, ExecutionStore, GoalStore, InteractionStore,
+    LedgerEventStore, SessionEventRecord, SqliteRuntimeStore, WorkspaceResolver, WorkspaceStore,
 };
 use axon_session_runtime::{
     ActionExecutionRequest, JarvisRuntimeSelector, TurnExecutionError, TurnExecutionOutcome,

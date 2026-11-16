@@ -146,7 +146,6 @@ fn write_retained_session_artifacts(root: &Path) -> Vec<(std::path::PathBuf, Vec
         .collect()
 }
 
-
 #[test]
 fn cleanup_protects_active_and_unread_records() {
     let root = axon_test_support::test_temp_dir();
@@ -213,7 +212,7 @@ fn explicit_session_family_cleanup_rechecks_active_state_and_execution_reference
 
 #[test]
 #[ignore = "旧事件表语义已废弃，集中清理阶段删除"]
-    fn stale_family_dry_run_subtracts_rolling_event_overlap() {
+fn stale_family_dry_run_subtracts_rolling_event_overlap() {
     const EVENT_COUNT: i64 = SESSION_EVENT_MIN_RETAINED + 1;
     let root = axon_test_support::test_temp_dir();
     let mut connection = open_fixture(root.path());
@@ -466,7 +465,7 @@ fn cleanup_does_not_stall_concurrent_writes() {
 
 #[test]
 #[ignore = "旧事件表语义已废弃，集中清理阶段删除"]
-    fn running_session_event_history_is_trimmed_without_removing_related_data() {
+fn running_session_event_history_is_trimmed_without_removing_related_data() {
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
     insert_hot_session_history(&connection);
@@ -518,7 +517,7 @@ fn cleanup_does_not_stall_concurrent_writes() {
 #[test]
 #[ignore = "性能验收：20 轮隔离 20000 条 retained Session 事件清理"]
 #[ignore = "旧事件表语义已废弃，集中清理阶段删除"]
-    fn retained_session_event_cleanup_reports_percentiles() {
+fn retained_session_event_cleanup_reports_percentiles() {
     let expected_deleted =
         usize::try_from(HOT_SESSION_EVENT_COUNT - super::SESSION_EVENT_MIN_RETAINED)
             .expect("删除计数应可转换");
@@ -562,7 +561,7 @@ fn percentile(samples: &[u128], percentile: usize) -> u128 {
 /// 因此索引退化必须在单元测试阶段被拦住，而不是等真机出现写锁抖动。
 #[test]
 #[ignore = "旧事件表语义已废弃，集中清理阶段删除"]
-    fn cleanup_selection_plans_use_indexes_without_full_scan_or_temp_sort() {
+fn cleanup_selection_plans_use_indexes_without_full_scan_or_temp_sort() {
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
     let selections = [
@@ -578,7 +577,10 @@ fn percentile(samples: &[u128], percentile: usize) -> u128 {
         ),
         ("expired_decisions", expired_decisions_selection_sql()),
         ("expired_events", expired_events_selection_sql()),
-        ("expired_daemon_instances", expired_daemon_instances_selection_sql()),
+        (
+            "expired_daemon_instances",
+            expired_daemon_instances_selection_sql(),
+        ),
         (
             "settled_completion_deliveries_delivered",
             settled_completion_deliveries_selection_sql_for_state(

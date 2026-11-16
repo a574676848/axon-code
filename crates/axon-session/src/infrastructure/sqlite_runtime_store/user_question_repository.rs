@@ -172,7 +172,8 @@ impl UserQuestionStore for SqliteRuntimeStore {
         }
 
         // 没更新到行，检查是否存在以及当前状态
-        let check_sql = "SELECT state FROM user_questions WHERE tool_call_id = ?1 OR question_id = ?1 LIMIT 1";
+        let check_sql =
+            "SELECT state FROM user_questions WHERE tool_call_id = ?1 OR question_id = ?1 LIMIT 1";
         let existing_state: Option<String> = connection
             .query_row(check_sql, params![call_id], |row| row.get(0))
             .optional()

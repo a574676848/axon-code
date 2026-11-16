@@ -93,9 +93,8 @@ pub(super) fn enforce_events_disk_budget(
         if total <= low_bytes {
             break;
         }
-        fs::remove_dir_all(&directory).map_err(|error| {
-            format!("淘汰事件目录失败 {}：{error}", directory.display())
-        })?;
+        fs::remove_dir_all(&directory)
+            .map_err(|error| format!("淘汰事件目录失败 {}：{error}", directory.display()))?;
         total = total.saturating_sub(size);
         removed = removed.saturating_add(1);
     }
@@ -141,8 +140,7 @@ fn session_dirs_with_size(root: &Path) -> Result<Vec<(PathBuf, u64, u64)>, Strin
 }
 
 fn directory_size(directory: &Path) -> Result<u64, String> {
-    let entries =
-        fs::read_dir(directory).map_err(|error| format!("读取会话目录失败：{error}"))?;
+    let entries = fs::read_dir(directory).map_err(|error| format!("读取会话目录失败：{error}"))?;
     let mut total = 0u64;
     for entry in entries {
         let entry = entry.map_err(|error| format!("读取会话目录条目失败：{error}"))?;
@@ -157,8 +155,7 @@ fn directory_size(directory: &Path) -> Result<u64, String> {
 }
 
 fn latest_modified_ms(directory: &Path) -> Result<u64, String> {
-    let entries =
-        fs::read_dir(directory).map_err(|error| format!("读取会话目录失败：{error}"))?;
+    let entries = fs::read_dir(directory).map_err(|error| format!("读取会话目录失败：{error}"))?;
     let mut latest = 0u64;
     for entry in entries {
         let entry = entry.map_err(|error| format!("读取会话目录条目失败：{error}"))?;
@@ -171,9 +168,7 @@ fn latest_modified_ms(directory: &Path) -> Result<u64, String> {
         if let Ok(modified) = metadata.modified()
             && let Ok(elapsed) = SystemTime::now().duration_since(modified)
         {
-            let cutoff = SystemTime::now()
-                .checked_sub(elapsed)
-                .unwrap_or(UNIX_EPOCH);
+            let cutoff = SystemTime::now().checked_sub(elapsed).unwrap_or(UNIX_EPOCH);
             if let Ok(since_epoch) = cutoff.duration_since(UNIX_EPOCH) {
                 let millis = u64::try_from(since_epoch.as_millis()).unwrap_or(u64::MAX);
                 latest = latest.max(millis);

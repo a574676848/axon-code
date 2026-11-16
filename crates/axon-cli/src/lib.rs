@@ -3,7 +3,6 @@ pub mod attachments_http_adapter;
 mod attachments_policy;
 #[path = "args/cli_args.rs"]
 mod cli_args;
-mod run_session_guard;
 #[path = "args/command_surface.rs"]
 mod command_surface;
 #[path = "args/completion_args.rs"]
@@ -13,7 +12,6 @@ pub mod config_http_adapter;
 mod constants;
 mod cron_commands;
 mod cron_http_adapter;
-mod sessions_http_adapter;
 mod daemon_commands;
 mod display_units;
 #[cfg(all(test, feature = "tui"))]
@@ -64,6 +62,8 @@ mod memory_image_ref;
 mod package_args;
 mod package_commands;
 mod persona_commands;
+mod run_session_guard;
+mod sessions_http_adapter;
 pub use persona_commands::{PersonaCommand, PersonaSubcommand};
 #[path = "persona_http_adapter.rs"]
 mod persona_http_adapter;
@@ -285,10 +285,14 @@ fn run_parsed_cli_internal(
     }
 
     match &cli.command {
-        Some(AxonCommand::Run(command)) => match run_session_guard::validate_explicit_session(cli, command) {
-            Ok(()) => run_session_guard::run_with_selection_restore(cli, command, run_json_writer),
-            Err(error) => crate::management_commands::cli_error(error),
-        },
+        Some(AxonCommand::Run(command)) => {
+            match run_session_guard::validate_explicit_session(cli, command) {
+                Ok(()) => {
+                    run_session_guard::run_with_selection_restore(cli, command, run_json_writer)
+                }
+                Err(error) => crate::management_commands::cli_error(error),
+            }
+        }
         Some(AxonCommand::Serve(command)) => {
             run_serve(command, cli.global.format, cli.global.config.as_deref())
         }
@@ -338,9 +342,11 @@ fn run_parsed_cli_internal(
         Some(AxonCommand::Lsp(command)) => {
             run_lsp(command, cli.global.format, cli.global.cwd.as_deref())
         }
-        Some(AxonCommand::Sessions(command)) => {
-            crate::session_commands::run_sessions(command, cli.global.format, cli.global.config.as_deref())
-        }
+        Some(AxonCommand::Sessions(command)) => crate::session_commands::run_sessions(
+            command,
+            cli.global.format,
+            cli.global.config.as_deref(),
+        ),
         Some(AxonCommand::Debug(command)) => run_debug(
             command,
             cli.global.format,
@@ -651,4 +657,3 @@ mod default_log_dir_tests {
 
 #[cfg(test)]
 include!("tests/mod.rs");
-

@@ -25,11 +25,11 @@ mod frame_class;
 #[path = "interaction_turn_event_signals.rs"]
 mod signals;
 
-use signals::{compute_application_ttft_ms, is_turn_terminal};
 use frame_class::{
     FrameClass, LivePartKind, annotate_live_event, assistant_part_key, classify_frame,
     live_part_text,
 };
+use signals::{compute_application_ttft_ms, is_turn_terminal};
 
 /// 一个正在累积的正文 part。
 struct LivePartState {
@@ -128,7 +128,9 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             generation_watch: Mutex::new(TurnGenerationWatch::default()),
             started_at_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)),
+                .map_or(0, |elapsed| {
+                    u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+                }),
             turn_metrics_emitted: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -173,7 +175,7 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
         }
     }
 
-/// 把本轮指标写进会话事件流；每轮只写一次。
+    /// 把本轮指标写进会话事件流；每轮只写一次。
     ///
     /// 指标属于派生事实，写入失败不阻断本轮投递。
     fn emit_turn_metrics(&self) -> Result<(), String>
@@ -195,7 +197,10 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .unwrap_or_default();
         let active_ms = now_ms.saturating_sub(self.started_at_ms);
-        let generate_ms = readout.ttft_ms.unwrap_or(0).saturating_add(readout.decode_ms.unwrap_or(0));
+        let generate_ms = readout
+            .ttft_ms
+            .unwrap_or(0)
+            .saturating_add(readout.decode_ms.unwrap_or(0));
         let generated_tokens = readout
             .output_tokens
             .saturating_add(readout.reasoning_output_tokens);
@@ -276,9 +281,7 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
                     if is_turn_terminal(event) {
                         // 指标属于派生事实：失败只记日志，不影响终态投递。
                         if let Err(error) = self.emit_turn_metrics() {
-                            axon_logger::warning(&format!(
-                                "turn_metrics 写入失败：{error}"
-                            ));
+                            axon_logger::warning(&format!("turn_metrics 写入失败：{error}"));
                         }
                         // 轮次已收口：可补发的读数到此作废，留着只会被下一次订阅
                         // 补发出去，把上一轮的阶段当成新一轮的现状。
@@ -671,7 +674,9 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
 
     /// 本轮生成账本。
     fn generation_watch(&self) -> std::sync::MutexGuard<'_, TurnGenerationWatch> {
-        self.generation_watch.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.generation_watch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// 取出「刚有 provider 流收口」的标记。
@@ -681,14 +686,18 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
 
     /// 本轮最后一条用量更新。
     pub(super) fn last_usage(&self) -> Option<TurnUsageSnapshot> {
-        *self.last_usage.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        *self
+            .last_usage
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// 本轮最后一条用量帧的原始载荷。
     pub(super) fn last_usage_payload(&self) -> Option<Value> {
         self.last_usage_payload
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 

@@ -122,7 +122,11 @@ pub(super) fn answer_texts(
         if !wanted.contains(interaction_id) || answers.contains_key(interaction_id) {
             continue;
         }
-        let Some(text) = record.payload.get("response").and_then(serde_json::Value::as_str) else {
+        let Some(text) = record
+            .payload
+            .get("response")
+            .and_then(serde_json::Value::as_str)
+        else {
             continue;
         };
         let text = text.trim();

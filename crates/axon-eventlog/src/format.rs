@@ -4,8 +4,8 @@ use std::io::Write as _;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::EventLogError;
 use crate::FORMAT_VERSION;
+use crate::error::EventLogError;
 
 /// header 固定占用第 0 帧。
 pub const HEADER_FRAME_INDEX: usize = 0;
@@ -117,13 +117,19 @@ pub fn scan_frames(bytes: &[u8]) -> Result<FrameScan, EventLogError> {
         };
         cursor += 1;
         if descriptor & 0b0001_1000 != 0 {
-            return Err(EventLogError::Corrupt(format!("帧头保留位非零，偏移 {start}")));
+            return Err(EventLogError::Corrupt(format!(
+                "帧头保留位非零，偏移 {start}"
+            )));
         }
         let content_size_flag = descriptor >> 6;
         let single_segment = descriptor & 0b0010_0000 != 0;
         let checksum_flag = descriptor & 0b0000_0100 != 0;
         let dictionary_flag = descriptor & 0b0000_0011;
-        let dictionary_bytes = if dictionary_flag == 3 { 4 } else { usize::from(dictionary_flag) };
+        let dictionary_bytes = if dictionary_flag == 3 {
+            4
+        } else {
+            usize::from(dictionary_flag)
+        };
         let content_size_bytes = if content_size_flag == 0 {
             usize::from(single_segment)
         } else {
@@ -165,10 +171,7 @@ pub fn scan_frames(bytes: &[u8]) -> Result<FrameScan, EventLogError> {
             }
             cursor += 4;
         }
-        frames.push(FrameSpan {
-            start,
-            end: cursor,
-        });
+        frames.push(FrameSpan { start, end: cursor });
     }
     Ok(FrameScan {
         frames,
@@ -198,9 +201,8 @@ pub fn encode_frame(plain: &[u8]) -> Result<Vec<u8>, EventLogError> {
 
 /// 解压单个完整帧。
 pub fn decode_frame(frame: &[u8]) -> Result<Vec<u8>, EventLogError> {
-    let plain = zstd::decode_all(frame).map_err(|error| {
-        EventLogError::Corrupt(format!("zstd 帧解码失败：{error}"))
-    })?;
+    let plain = zstd::decode_all(frame)
+        .map_err(|error| EventLogError::Corrupt(format!("zstd 帧解码失败：{error}")))?;
     if plain.len() > MAX_FRAME_PLAIN_BYTES {
         return Err(EventLogError::Corrupt(format!(
             "帧明文超过上限：{} 字节",
@@ -225,8 +227,14 @@ mod tests {
         let scan = scan_frames(&bytes).expect("可扫描");
         assert_eq!(scan.frames.len(), 2);
         assert_eq!(scan.torn_start, None);
-        assert_eq!(&bytes[scan.frames[0].start..scan.frames[0].end], first.as_slice());
-        assert_eq!(&bytes[scan.frames[1].start..scan.frames[1].end], second.as_slice());
+        assert_eq!(
+            &bytes[scan.frames[0].start..scan.frames[0].end],
+            first.as_slice()
+        );
+        assert_eq!(
+            &bytes[scan.frames[1].start..scan.frames[1].end],
+            second.as_slice()
+        );
     }
 
     #[test]

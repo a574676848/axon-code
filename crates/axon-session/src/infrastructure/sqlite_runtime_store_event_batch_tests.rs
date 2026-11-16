@@ -1,7 +1,7 @@
 //! SQLite Session Event 批量追加测试。
 
-use crate::ports::EventLogStore as _;
 use super::SqliteRuntimeStore;
+use crate::ports::EventLogStore as _;
 use crate::{RuntimeStore, RuntimeStoreError};
 use axon_domain::{DaemonSessionId, RuntimeHostId, SessionRuntimeStatus};
 use std::path::PathBuf;

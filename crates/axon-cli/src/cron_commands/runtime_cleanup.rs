@@ -16,10 +16,9 @@ use super::runtime_cleanup_counts::count_expired_rows;
 use super::runtime_cleanup_families::{
     delete_expired_agent_messages, delete_expired_client_presence, delete_expired_continuations,
     delete_expired_daemon_instances, delete_expired_decisions, delete_expired_events,
-    delete_expired_upgrade_admissions,
-    delete_expired_user_questions, delete_session_families_by_ids,
-    delete_settled_completion_deliveries, delete_settled_completion_notifications,
-    delete_terminal_goals, delete_terminal_interactions,
+    delete_expired_upgrade_admissions, delete_expired_user_questions,
+    delete_session_families_by_ids, delete_settled_completion_deliveries,
+    delete_settled_completion_notifications, delete_terminal_goals, delete_terminal_interactions,
 };
 use super::runtime_event_archive;
 
@@ -87,9 +86,7 @@ impl RuntimeCleanupCounts {
         self.session_checkpoints = self
             .session_checkpoints
             .saturating_add(other.session_checkpoints);
-        self.schedules = self
-            .schedules
-            .saturating_add(other.schedules);
+        self.schedules = self.schedules.saturating_add(other.schedules);
         self.interactions = self.interactions.saturating_add(other.interactions);
         self.goals = self.goals.saturating_add(other.goals);
         self.executions = self.executions.saturating_add(other.executions);
@@ -176,56 +173,38 @@ fn run_runtime_cleanup_with_budget(
     if let Some(connection) = control.as_mut() {
         counts.merge(delete_terminal_goals(connection, cutoff_ms, deadline)?);
         counts.merge(delete_terminal_interactions(
-            connection,
-            cutoff_ms,
-            deadline,
+            connection, cutoff_ms, deadline,
         )?);
         counts.merge(delete_expired_decisions(connection, cutoff_ms, deadline)?);
         counts.merge(delete_expired_events(connection, cutoff_ms, deadline)?);
         counts.merge(delete_expired_upgrade_admissions(
-            connection,
-            cutoff_ms,
-            deadline,
+            connection, cutoff_ms, deadline,
         )?);
         counts.merge(delete_expired_daemon_instances(
-            connection,
-            cutoff_ms,
-            deadline,
+            connection, cutoff_ms, deadline,
         )?);
     }
     if let Some(connection) = outbox.as_mut() {
         counts.merge(delete_expired_client_presence(
-            connection,
-            cutoff_ms,
-            deadline,
+            connection, cutoff_ms, deadline,
         )?);
         // 渠道投递记录通过外键引用通知本体，必须先删派生 delivery，再删 notification。
         counts.merge(delete_settled_completion_deliveries(
-            connection,
-            cutoff_ms,
-            deadline,
+            connection, cutoff_ms, deadline,
         )?);
         counts.merge(delete_settled_completion_notifications(
-            connection,
-            cutoff_ms,
-            deadline,
+            connection, cutoff_ms, deadline,
         )?);
         // mailbox 消息与 continuation 是 run 级协作事实：前者 24 小时、后者 7 天的自身
         // 保留窗口先于 Cron 水位到期，因此这里的回收不会删掉仍可投递或仍可装配的事实。
         counts.merge(delete_expired_agent_messages(
-            connection,
-            cutoff_ms,
-            deadline,
+            connection, cutoff_ms, deadline,
         )?);
         counts.merge(delete_expired_continuations(
-            connection,
-            cutoff_ms,
-            deadline,
+            connection, cutoff_ms, deadline,
         )?);
         counts.merge(delete_expired_user_questions(
-            connection,
-            cutoff_ms,
-            deadline,
+            connection, cutoff_ms, deadline,
         )?);
     }
     // 时间维度清理之后再看磁盘水位：越过上限就按最旧优先继续淘汰到低水位。
@@ -236,7 +215,9 @@ fn run_runtime_cleanup_with_budget(
     )?;
     if evicted > 0 {
         counts.session_events = counts.session_events.saturating_add(evicted);
-        axon_logger::warning(&format!("事件目录越过磁盘高水位，已淘汰 {evicted} 个最旧会话"));
+        axon_logger::warning(&format!(
+            "事件目录越过磁盘高水位，已淘汰 {evicted} 个最旧会话"
+        ));
     }
     if !counts.is_empty() || evicted > 0 {
         if let Some(connection) = control.as_ref() {
@@ -317,7 +298,7 @@ pub(super) fn count_runtime_session_families(
             &placeholders,
             ids,
         )?);
-                counts.session_checkpoints = counts.session_checkpoints.saturating_add(count_ids_in(
+        counts.session_checkpoints = counts.session_checkpoints.saturating_add(count_ids_in(
             &connection,
             "session_checkpoints",
             &placeholders,

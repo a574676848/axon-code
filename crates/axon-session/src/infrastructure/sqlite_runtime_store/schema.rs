@@ -112,10 +112,7 @@ pub(super) fn initialize_schema_for_path(
 }
 
 /// 初始化单个库的 schema。
-pub(super) fn initialize_schema(
-    connection: &Connection,
-    kind: SchemaKind,
-) -> rusqlite::Result<()> {
+pub(super) fn initialize_schema(connection: &Connection, kind: SchemaKind) -> rusqlite::Result<()> {
     let existing_tables: i64 = connection.query_row(
         "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
         [],
@@ -578,10 +575,25 @@ fn migrate_additive_columns(connection: &Connection) -> rusqlite::Result<()> {
      */
     add_column_if_missing(connection, "sessions", "workspace_id", "TEXT")?;
     add_column_if_missing(connection, "sessions", "title", "TEXT")?;
-    add_column_if_missing(connection, "sessions", "pinned", "INTEGER NOT NULL DEFAULT 0")?;
-    add_column_if_missing(connection, "sessions", "archived", "INTEGER NOT NULL DEFAULT 0")?;
+    add_column_if_missing(
+        connection,
+        "sessions",
+        "pinned",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(
+        connection,
+        "sessions",
+        "archived",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
     // 运行实例代数：`/reset` 只递增它并换 run_session_id，会话与会话历史保持不变。
-    add_column_if_missing(connection, "sessions", "run_generation", "INTEGER NOT NULL DEFAULT 0")?;
+    add_column_if_missing(
+        connection,
+        "sessions",
+        "run_generation",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
     add_column_if_missing(
         connection,
         "inbox",
@@ -600,7 +612,12 @@ fn migrate_additive_columns(connection: &Connection) -> rusqlite::Result<()> {
      * 查询时聚合要把整条会话的十几万帧扫一遍。落成列之后，索引接口按主键取一次
      * 就能给出「执行了命令、已读取文件」这类动作摘要。老记录为空，界面退回状态短语。
      */
-    add_column_if_missing(connection, "inbox", "tool_summary", "TEXT NOT NULL DEFAULT ''")?;
+    add_column_if_missing(
+        connection,
+        "inbox",
+        "tool_summary",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
     /*
      * 车道列表按 (lane, 接收时间倒序) 取组内首行；lane 排他领取改由 work_items 的
      * (inbox_id, status, lease_expires_at_ms) 索引承担，见 DDL。

@@ -9,7 +9,7 @@ use super::*;
 /// 永久驻留，7 天保留期对这类会话完全失效。
 #[test]
 #[ignore = "旧事件表语义已废弃，集中清理阶段删除"]
-    fn finished_session_events_are_reclaimed_below_active_floor() {
+fn finished_session_events_are_reclaimed_below_active_floor() {
     const EVENT_COUNT: i64 = 3;
     const FINISHED_SESSION_ID: &str = "s-done";
     let expected = usize::try_from(EVENT_COUNT).expect("计数应可转换");

@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use crate::error::EventLogError;
-use crate::format::{decode_frame, scan_frames, Header, HEADER_FRAME_INDEX};
+use crate::format::{HEADER_FRAME_INDEX, Header, decode_frame, scan_frames};
 use crate::record::RuntimeEventRecord;
 
 /// 一次完整读取的结果。

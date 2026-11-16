@@ -11,10 +11,7 @@ use std::io::Write as IoWrite;
 ///
 /// 只校验用户显式指定的这一条路径：子代理与测试会用 `--session` 生成新的子会话，
 /// 它们不经过这里。拼错 ID 时若静默新建，用户会以为历史还在，而模型什么都没看到。
-pub(crate) fn validate_explicit_session(
-    cli: &AxonCli,
-    command: &RunCommand,
-) -> Result<(), String> {
+pub(crate) fn validate_explicit_session(cli: &AxonCli, command: &RunCommand) -> Result<(), String> {
     let Some(session_id) = command.session.as_deref() else {
         return Ok(());
     };
@@ -47,8 +44,8 @@ pub(crate) fn run_with_selection_restore(
     if command.session.is_none() {
         return run_command_from_cli(cli, command, run_json_writer);
     }
-    let config_path = crate::management_commands::resolved_config_path(cli.global.config.as_deref())
-        .ok();
+    let config_path =
+        crate::management_commands::resolved_config_path(cli.global.config.as_deref()).ok();
     let snapshot = config_path
         .as_deref()
         .and_then(|path| crate::run_commands::snapshot_selected_session(path).ok());

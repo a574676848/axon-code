@@ -222,7 +222,14 @@ impl SessionIngressCursorStore for SqliteRuntimeStore {
         partition: &str,
     ) -> Result<Option<String>, RuntimeStoreError> {
         let connection = self.connection()?;
-        connection.query_row("SELECT cursor_json FROM ingress_cursors WHERE adapter=?1 AND partition_key=?2", params![adapter, partition], |row| row.get(0)).optional().map_err(storage)
+        connection
+            .query_row(
+                "SELECT cursor_json FROM ingress_cursors WHERE adapter=?1 AND partition_key=?2",
+                params![adapter, partition],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage)
     }
 
     fn save_ingress_cursor(

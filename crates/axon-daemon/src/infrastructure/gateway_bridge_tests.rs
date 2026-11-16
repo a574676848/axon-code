@@ -2,8 +2,8 @@
 
 use super::*;
 use axon_domain::{DaemonSessionId, RuntimeHostId, SessionRuntimeStatus};
-use axon_session::SqliteRuntimeStore;
 use axon_session::EventLogStore;
+use axon_session::SqliteRuntimeStore;
 
 /// 测试用页大小：故意远小于待补齐区间，让一次订阅必然跨页。
 const TEST_REPLAY_PAGE_SIZE: u32 = 2;
