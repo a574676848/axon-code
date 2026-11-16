@@ -17,8 +17,21 @@ for _stream in (sys.stdout, sys.stderr):
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REGRESSION_RATIO = 1.05
+# §9 的绝对上限：读数超过它就是不合格，与「相对基线回退」是两道独立检查。
+HARD_LIMITS = {
+    "event_append_p99_ms": 5.0,
+    "control_tx_p95_ms": 50.0,
+    "sessions_first_page_ms": 30.0,
+    "runtime_data_mib": 50.0,
+}
 GATEWAY_PREFIXES = ("/api/v1/files", "/api/v1/fs/dirs", "/api/v1/attachments")
+# 存储架构 §9 的四项硬指标：前两项由 Rust 侧 ignored 测量用例产出，
+# 后两项由本脚本直接从运行态读取。
 MANUAL_ITEMS = (
+    ("event_append_p99_ms", "事件单次写入 p99（毫秒，不含 fsync）"),
+    ("control_tx_p95_ms", "控制面事务 p95（毫秒）"),
+    ("sessions_first_page_ms", "会话列表首屏（毫秒）"),
+    ("runtime_data_mib", "运行态 data 目录体积（MiB）"),
     ("p2_offline_start_ms", "P2 断网启动到可见界面（毫秒）"),
     ("p9_idle_cpu_percent", "P9 空闲 60 秒渲染进程 CPU（百分比）"),
     ("p10_cold_start_ms", "P10 冷启动到可交互（毫秒）"),
@@ -55,6 +68,12 @@ def auto_measurements() -> dict[str, int]:
         )
     else:
         print(f"[perf] P12 待测量：当日 daemon 日志不存在（{log_path}）")
+    data_root = runtime_home() / "data"
+    if data_root.is_dir():
+        total = sum(
+            path.stat().st_size for path in data_root.rglob("*") if path.is_file()
+        )
+        measurements["runtime_data_mib"] = total // (1024 * 1024)
     return measurements
 
 
@@ -102,6 +121,13 @@ def main() -> int:
         print(f"[perf] 已写入基线：{baseline}")
 
     failures = 0
+    for name, limit in HARD_LIMITS.items():
+        current = manual.get(name, measurements.get(name))
+        if current is None:
+            continue
+        if float(current) > float(limit):
+            print(f"[perf] 超限：{name} = {current}，上限 {limit}")
+            failures += 1
     if baseline.is_file():
         baseline_document = json.loads(baseline.read_text(encoding="utf-8"))
         for bucket, current_map in (
