@@ -15,8 +15,6 @@ const HOT_SESSION_EVENT_COUNT: i64 = 20_000;
 const HOT_SESSION_RECENT_ACTIVITY_MS: i64 = 1_000;
 const OLD_EVENT_EMITTED_AT_MS: i64 = 1;
 const CLEANUP_CUTOFF_MS: u64 = 100;
-const TEST_ROLLOUT_DATABASE_FILE: &str = "rollout.sqlite3";
-const RETAINED_ARTIFACT_CONTENT: &[u8] = b"retained-session-artifact\n";
 const CLEANUP_PERFORMANCE_SAMPLE_COUNT: usize = 20;
 const CLEANUP_PERFORMANCE_P99_BUDGET_US: u128 = 2_000_000;
 
@@ -111,38 +109,6 @@ fn insert_hot_session_history(connection: &Connection) {
             ],
         )
         .expect("高频 Session 历史应可写入");
-}
-
-fn write_retained_session_artifacts(root: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
-    let encoded_id = HOT_SESSION_ID
-        .as_bytes()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let session_store = axon_session::session_store_path(root);
-    let paths = [
-        axon_session::JsonlThreadEventStore::path(root).join(format!("{encoded_id}.000000.jsonl")),
-        session_store.join(TEST_ROLLOUT_DATABASE_FILE),
-        session_store
-            .join(HOT_SESSION_ID)
-            .join(axon_agent_runtime::SESSION_NOTES_FILE_NAME),
-        axon_jsonl::ShardedJsonlStore::physical_shard_path(
-            session_store
-                .join(HOT_SESSION_ID)
-                .join(axon_agent_runtime::ARCHIVED_HISTORY_DIR_NAME)
-                .join("window_1.jsonl"),
-            0,
-        ),
-    ];
-    paths
-        .into_iter()
-        .map(|path| {
-            std::fs::create_dir_all(path.parent().expect("关联文件必须有父目录"))
-                .expect("关联目录应可创建");
-            std::fs::write(&path, RETAINED_ARTIFACT_CONTENT).expect("关联文件应可写入");
-            (path, RETAINED_ARTIFACT_CONTENT.to_vec())
-        })
-        .collect()
 }
 
 #[test]
