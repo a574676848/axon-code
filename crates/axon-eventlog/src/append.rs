@@ -44,7 +44,27 @@ impl EventLogWriter {
         let lock = ExclusiveLock::acquire(&lock_path)?;
 
         let (header, next_sequence, header_written, bytes_len) = if path.exists() {
-            let snapshot = read_snapshot(&path)?;
+            let fresh = || (Header::new(log.session_id(), now_ms(), None), 0, false, 0);
+            let snapshot = match read_snapshot(&path) {
+                Ok(snapshot) => snapshot,
+                // 连第一个完整帧都没有时读到的是「半帧头」：这不是损坏数据，
+                // 而是崩溃在写 header 的中途。整段截掉重新开始，避免日志永久不可写。
+                Err(error) => {
+                    let len = std::fs::metadata(&path)?.len();
+                    if repair_torn_tail(&path, len)? == 0 {
+                        return Ok(Self {
+                            path,
+                            file: None,
+                            _lock: lock,
+                            header: fresh().0,
+                            next_sequence: 0,
+                            header_written: false,
+                            bytes_len: 0,
+                        });
+                    }
+                    return Err(error);
+                }
+            };
             let mut committed = std::fs::metadata(&path)?.len();
             if let Some(torn_at) = snapshot.torn_truncate_to {
                 let repaired = u64::try_from(torn_at).unwrap_or(committed);
