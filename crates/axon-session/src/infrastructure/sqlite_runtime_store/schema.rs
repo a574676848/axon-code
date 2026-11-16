@@ -29,7 +29,7 @@ impl SchemaKind {
     /// 不做补列、不做回填。
     const fn version(self) -> i64 {
         match self {
-            Self::Control => 3,
+            Self::Control => 4,
             Self::Outbox => 1,
         }
     }
@@ -361,6 +361,10 @@ const CONTROL_DDL: &str = "
             ON work_item_history(session_id, finished_at_ms DESC, work_id DESC);
         CREATE INDEX IF NOT EXISTS work_item_history_inbox
             ON work_item_history(inbox_id);
+        CREATE INDEX IF NOT EXISTS work_item_history_terminal
+            ON work_item_history(terminal_kind);
+        CREATE INDEX IF NOT EXISTS work_item_history_status
+            ON work_item_history(status);
         CREATE VIEW IF NOT EXISTS work_items_all AS
             SELECT execution_id, goal_id, session_id, kind, payload_json, goal_revision,
                    context_version, attempt, priority, dedupe_key, inbox_id, terminal_kind,
