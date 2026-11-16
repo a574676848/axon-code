@@ -366,6 +366,7 @@ pub(super) fn recover_expired_sessions(
         .map_err(storage)?;
     drop(statement);
     let mut recovered = Vec::with_capacity(ids.len());
+    let mut pending_events: Vec<(axon_domain::DaemonSessionId, u64, String)> = Vec::new();
     for id in ids {
         let changed = transaction.execute(
             "UPDATE session_runtimes SET status='recovering',owner_host_id=?1,owner_generation=?2,worker_attempt=worker_attempt+1,last_activity_at_ms=?3,updated_at_ms=?3 WHERE session_id=?4",
@@ -382,17 +383,15 @@ pub(super) fn recover_expired_sessions(
             )
             .map_err(storage)?;
         // 会话级事件，不归属任何 Interaction，故 interaction_id 留空。
-        transaction.execute(
-            "INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,emitted_at_ms) \
-             VALUES(?1,?2,?3,'session_recovered',?4,?5)",
-            params![
-                id,
-                next_event,
-                host.generation,
-                serde_json::json!({"ownerGeneration": host.generation, "checkpointRecovered": true}).to_string(),
-                i64_value(now_ms)?
-            ],
-        ).map_err(storage)?;
+        // 会话级事件，不归属任何 Interaction；事件写入推迟到事务提交之后。
+        pending_events.push((
+            parse_session_id(id.clone())
+                .map_err(|_| RuntimeStoreError::Storage("会话标识无效".to_owned()))?,
+            u64::try_from(next_event)
+                .map_err(|_| RuntimeStoreError::Storage("事件序号超出范围".to_owned()))?,
+            serde_json::json!({"ownerGeneration": host.generation, "checkpointRecovered": true})
+                .to_string(),
+        ));
         transaction
             .execute(
                 "UPDATE session_runtimes SET last_event_sequence=?1 WHERE session_id=?2",
@@ -420,6 +419,17 @@ pub(super) fn recover_expired_sessions(
         ).map_err(storage)?);
     }
     transaction.commit().map_err(storage)?;
+    for (session_id, sequence, payload_json) in pending_events {
+        let record = crate::domain::runtime::SessionEventRecord {
+            session_id,
+            sequence,
+            generation: host.generation.clone(),
+            event_type: "session_recovered".to_owned(),
+            payload_json,
+            emitted_at_ms: now_ms,
+        };
+        super::event_log_repository::write_records(store, std::slice::from_ref(&record), None)?;
+    }
     Ok(recovered)
 }
 

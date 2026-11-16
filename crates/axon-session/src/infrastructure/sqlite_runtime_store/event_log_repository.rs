@@ -212,3 +212,60 @@ fn from_runtime_record(
         emitted_at_ms: record.emitted_at_ms,
     }
 }
+/// 在调用方已经分配序号并推进水位之后，只把事件写进事件面文件。
+///
+/// 供 `commit_action`、`fail_action` 与隔离路径使用：它们在同一个控制面事务里
+/// 已完成 fence、序号分配与水位推进，事务提交后再落帧。
+pub(super) fn write_events_at(
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+    generation: &str,
+    start: u64,
+    events: &[(String, String)],
+    now_ms: u64,
+    interaction_id: Option<&str>,
+) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
+    if events.is_empty() {
+        return Ok(Vec::new());
+    }
+    let records = events
+        .iter()
+        .enumerate()
+        .map(|(offset, (event_type, payload_json))| SessionEventRecord {
+            session_id: session_id.clone(),
+            sequence: start.saturating_add(u64::try_from(offset).unwrap_or(0)),
+            generation: generation.to_owned(),
+            event_type: event_type.clone(),
+            payload_json: payload_json.clone(),
+            emitted_at_ms: now_ms,
+        })
+        .collect::<Vec<_>>();
+    let runtime_records = records
+        .iter()
+        .map(|record| to_runtime_record(record, interaction_id))
+        .collect::<Vec<_>>();
+    axon_eventlog::append_once(&store.event_log(session_id), start, now_ms, &runtime_records)
+        .map_err(log_error)?;
+    Ok(records)
+}
+/// 逐条把已分配序号的事件写进事件面文件。
+///
+/// 供跨会话的隔离与恢复路径使用：这些路径一次只产出少量事件，且序号已在控制面
+/// 事务里分配好。按条追加即可，不做批次合并。
+pub(super) fn write_records(
+    store: &SqliteRuntimeStore,
+    records: &[SessionEventRecord],
+    interaction_id: Option<&str>,
+) -> Result<(), RuntimeStoreError> {
+    for record in records {
+        let runtime_record = to_runtime_record(record, interaction_id);
+        axon_eventlog::append_once(
+            &store.event_log(&record.session_id),
+            record.sequence,
+            record.emitted_at_ms,
+            std::slice::from_ref(&runtime_record),
+        )
+        .map_err(log_error)?;
+    }
+    Ok(())
+}

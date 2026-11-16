@@ -95,35 +95,17 @@ pub(super) fn commit_action(
         .optional()
         .map_err(storage)?
         .ok_or_else(|| RuntimeStoreError::NotFound(session_id.to_string()))?;
-    let mut next_sequence = u64::try_from(last_sequence)
-        .map_err(|_| RuntimeStoreError::Storage("事件序号超出范围".to_owned()))?;
-    let mut records = Vec::with_capacity(events.len());
+    let start_sequence = u64::try_from(last_sequence)
+        .map_err(|_| RuntimeStoreError::Storage("事件序号超出范围".to_owned()))?
+        .checked_add(1)
+        .ok_or_else(|| RuntimeStoreError::Storage("事件序号溢出".to_owned()))?;
+    let mut next_sequence = start_sequence.saturating_sub(1);
+    let mut pending_events: Vec<(String, String)> = Vec::with_capacity(events.len());
     for (event_type, payload_json) in events {
         next_sequence = next_sequence
             .checked_add(1)
             .ok_or_else(|| RuntimeStoreError::Storage("事件序号溢出".to_owned()))?;
-        // 会话级事件，不归属任何 Interaction，故 interaction_id 留空。
-        transaction
-             .execute(
-                 "INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,emitted_at_ms) VALUES(?1,?2,?3,?4,?5,?6)",
-                 params![
-                     session_id.as_str(),
-                     i64_value(next_sequence)?,
-                     host.generation,
-                     event_type,
-                     payload_json,
-                     i64_value(now_ms)?
-                 ],
-             )
-             .map_err(storage)?;
-        records.push(SessionEventRecord {
-            session_id: session_id.clone(),
-            sequence: next_sequence,
-            generation: host.generation.clone(),
-            event_type: event_type.clone(),
-            payload_json: payload_json.clone(),
-            emitted_at_ms: now_ms,
-        });
+        pending_events.push((event_type.clone(), payload_json.clone()));
     }
     let current_goal_id: String = transaction
         .query_row(
@@ -219,5 +201,13 @@ pub(super) fn commit_action(
          )
          .map_err(storage)?;
     transaction.commit().map_err(storage)?;
-    Ok(records)
+    super::event_log_repository::write_events_at(
+        store,
+        session_id,
+        &host.generation,
+        start_sequence,
+        &pending_events,
+        now_ms,
+        None,
+    )
 }

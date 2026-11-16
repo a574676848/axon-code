@@ -64,6 +64,7 @@ pub(super) fn quarantine_interrupted_interactions(
         }
     }
     transaction.commit().map_err(storage)?;
+    super::event_log_repository::write_records(store, &records, None)?;
     Ok(records)
 }
 
@@ -198,21 +199,6 @@ fn append_session_event(
      * 尾窗读取按 interaction_id 列过滤，列留空就只剩「已中断」状态，
      * 中断原因与分类永远读不出来。
      */
-    transaction
-        .execute(
-            "INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,\
-             emitted_at_ms,interaction_id) VALUES(?1,?2,?3,?4,?5,?6,?7)",
-            params![
-                session_id.as_str(),
-                i64_value(sequence)?,
-                host.generation,
-                SESSION_EVENT_TYPE,
-                payload,
-                now,
-                interaction_id.as_str()
-            ],
-        )
-        .map_err(storage)?;
     Ok(Some(sequence))
 }
 

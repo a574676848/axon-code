@@ -61,13 +61,6 @@ pub(super) fn fail_action(
         .map_err(|_| RuntimeStoreError::Storage("事件序号超出范围".to_owned()))?
         .checked_add(1)
         .ok_or_else(|| RuntimeStoreError::Storage("事件序号溢出".to_owned()))?;
-    // 会话级事件，不归属任何 Interaction，故 interaction_id 留空。
-    transaction
-        .execute(
-            "INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,emitted_at_ms) VALUES(?1,?2,?3,?4,?5,?6)",
-            params![session_id.as_str(), i64::try_from(sequence).map_err(|_| RuntimeStoreError::Storage("事件序号超出范围".to_owned()))?, host.generation, event_type, error, i64::try_from(now_ms).map_err(|_| RuntimeStoreError::Storage("时间戳超出范围".to_owned()))?],
-        )
-        .map_err(super::helpers::storage)?;
     transaction
         .execute(
             "UPDATE session_runtimes SET status='idle',owner_host_id=?1,owner_generation=?2,last_event_sequence=?3,last_activity_at_ms=?4,updated_at_ms=?4 WHERE session_id=?5",
@@ -75,12 +68,13 @@ pub(super) fn fail_action(
         )
         .map_err(super::helpers::storage)?;
     transaction.commit().map_err(super::helpers::storage)?;
-    Ok(vec![SessionEventRecord {
-        session_id: session_id.clone(),
+    super::event_log_repository::write_events_at(
+        store,
+        session_id,
+        &host.generation,
         sequence,
-        generation: host.generation.clone(),
-        event_type: event_type.to_owned(),
-        payload_json: error.to_owned(),
-        emitted_at_ms: now_ms,
-    }])
+        &[(event_type.to_owned(), error.to_owned())],
+        now_ms,
+        None,
+    )
 }

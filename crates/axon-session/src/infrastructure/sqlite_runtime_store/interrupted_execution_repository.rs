@@ -129,6 +129,7 @@ fn quarantine_running(
         });
     }
     transaction.commit().map_err(storage)?;
+    super::event_log_repository::write_records(store, &records, None)?;
     Ok(records)
 }
 
@@ -264,20 +265,6 @@ fn append_session_event(
         .checked_add(1)
         .ok_or_else(|| RuntimeStoreError::Storage("事件序号溢出".to_owned()))?;
     // 会话级事件，不归属任何 Interaction，故 interaction_id 留空。
-    transaction
-        .execute(
-            "INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,\
-             emitted_at_ms) VALUES(?1,?2,?3,?4,?5,?6)",
-            params![
-                session_id.as_str(),
-                i64_value(sequence)?,
-                host.generation,
-                SESSION_EVENT_TYPE,
-                payload,
-                now
-            ],
-        )
-        .map_err(storage)?;
     Ok(Some(sequence))
 }
 
