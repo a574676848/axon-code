@@ -98,7 +98,8 @@ fn compaction_appends_only_newer_structured_items() {
             "checkpoint",
         )])
         .unwrap(),
-        through_sequence: 0,
+        // 新语义：`through_sequence` 是首个仍可见的轮次；压缩掉第 0 轮即取 1。
+        through_sequence: 1,
         checkpoint_text: "checkpoint".to_owned(),
         before_tokens: 100,
         after_tokens: 10,

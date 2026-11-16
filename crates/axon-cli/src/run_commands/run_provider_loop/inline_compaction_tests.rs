@@ -149,7 +149,6 @@ fn request_with_rollover(root: PathBuf) -> RunRequest {
     request
 }
 
-#[ignore = "W2-12：窗口投影边界按当前轮序号表达，而恢复保留 sequence > through，换窗轮的回复因此落在窗口外；需与 C 组迁移一起统一序号语义，见 docs/dev/w2-12-rollout-retirement.md"]
 #[test]
 fn two_inline_rollovers_restore_only_active_window_and_keep_archives() {
     let root = temp_workspace("two-inline-rollovers");

@@ -323,7 +323,7 @@ SQLite 没有跨库事务，所以拆库不能按业务随意切，只能按**�
 
 | 重叠组 | 现状 | 目标 |
 | --- | --- | --- |
-| 会话正文 | `session_events`（帧级）+ `rollout_turns`（turn 级）+ `threads/*.jsonl`（模型可见历史） | 两份：会话事件文件 + thread 文件。`rollout.sqlite3` **延后退役**：它是 `axon run` 恢复模型可见历史窗口的唯一来源（`run_thread_store` 的 `load_rollout_history_window`），改用事件日志重建会直接改动模型输入，必须独立一轮改造并配专门的对话回归验证，见 §延后项；用量投影器已改为只读事件日志 |
+| 会话正文 | `session_events`（帧级）+ `rollout_turns`（turn 级）+ `threads/*.jsonl`（模型可见历史） | 两份：会话事件文件 + thread 文件。`rollout.sqlite3` **延后退役**：它是 `axon run` 恢复模型可见历史窗口的唯一来源（`run_thread_store` 的 `load_rollout_history_window`），改用事件日志重建会直接改动模型输入，必须独立一轮改造并配专门的对话回归验证，见 §延后项；用量投影器已改为只读事件日志。**窗口边界语义**（W2-12 迁移口径）：`ThreadCompaction.through_sequence` 是**首个仍然可见的轮次**，恢复侧保留 `sequence >= through_sequence`；换窗那一轮的回复在换窗之后才产生，摘要里不可能包含它，因此边界取包含 |
 | 事件流 | `session_events`（单会话叙述）+ `jarvis_events`（跨会话审计） | 职责分离：前者进文件，后者进 `control.sqlite3` |
 | 检查点 | `session_checkpoints` 表 + `sessions.last_checkpoint_seq` 列 | 事件 `kind = checkpoint` + 一列水位 |
 | 已读标记 | `jarvis_result_reads` 独立表 | 并入 `goal_results` 两列 |

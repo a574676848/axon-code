@@ -137,7 +137,10 @@ pub struct ThreadDetail {
 pub struct ThreadCompaction {
     /// FreshWindow 的 OpenAI-compatible messages JSON。
     pub history_json: String,
-    /// 此 checkpoint 已覆盖的最后一个 Turn sequence。
+    /// 首个仍然可见的 Turn sequence；它之前的轮次已经并入本 checkpoint。
+    ///
+    /// 换窗那一轮的回复在换窗之后才产生，压缩摘要里不可能包含它，因此边界取「包含」：
+    /// 恢复时保留 `sequence >= through_sequence` 的轮次。
     pub through_sequence: u64,
     /// Session Notes 生成并通过完整性门禁的 canonical checkpoint。
     pub checkpoint_text: String,

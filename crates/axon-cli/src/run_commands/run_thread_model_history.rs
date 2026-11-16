@@ -22,10 +22,12 @@ pub(crate) fn thread_model_history_json(detail: &ThreadDetail) -> Result<String,
     };
     let mut messages = serde_json::from_str::<Vec<serde_json::Value>>(&compaction.history_json)
         .map_err(|error| format!("压缩历史 JSON 无效：{error}"))?;
+    // `through_sequence` 是**首个仍然可见的轮次**：换窗那轮自己留在窗口里（它的回复在换窗
+    // 之后才产生，压缩摘要里不可能有），此前的轮次已经并入摘要。因此边界取包含。
     let recent_turns = detail
         .turns
         .iter()
-        .filter(|turn| turn.sequence > compaction.through_sequence);
+        .filter(|turn| turn.sequence >= compaction.through_sequence);
     append_turn_model_messages(&mut messages, recent_turns);
     serde_json::to_string(&messages).map_err(|error| format!("历史序列化失败：{error}"))
 }
