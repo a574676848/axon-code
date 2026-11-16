@@ -249,7 +249,6 @@ SQLite 没有跨库事务，所以拆库不能按业务随意切，只能按**�
 | `decisions` | `jarvis_decisions` | `decision_id` | `(scope_json, revision)` 唯一、`(effect, expires_at_ms)` | 决策 |
 | `workspaces` | `jarvis_workspaces` | `workspace_id` | `(last_seen_at_ms DESC)` | 工作区注册表 |
 | `ingress_cursors` | `transport_ingress_cursors` | `(adapter, partition_key)` | 主键即索引 | 渠道游标 |
-| `channel_bindings` | 新增 | `(channel, destination)` | 主键即索引、`(session_id)` | 无 UI 入站渠道到会话的固定映射，见 §4.13。只服务入站路由，不参与会话身份 |
 | `upgrade_handoffs` | `daemon_upgrade_admissions` | `handoff_id` | `(state, deadline_at_ms)`、`handoff_token` 唯一 | 升级交接 |
 | `ledger_events` | `jarvis_events` | `event_id` | `idempotency_key` 唯一、`sequence` 唯一、目标查询表达式索引 | 跨会话账本，append-only，与结算同事务，见 §4.4.3 |
 
@@ -285,7 +284,6 @@ SQLite 没有跨库事务，所以拆库不能按业务随意切，只能按**�
 | 旧表 | 新归属 | 动作 |
 | --- | --- | --- |
 | （新增） | `control.session_metrics` | 会话累计投影，见 §4.11 |
-| （新增） | `control.channel_bindings` | 入站渠道到会话的绑定，见 §4.13 |
 | `jarvis_schema_identity` | 无 | 删除，改用每库 `PRAGMA user_version` |
 | `session_events` | `data/events/<session>/session.v1.jsonl.zstd` | 迁出为文件 |
 | `session_checkpoints` | 事件 `kind = checkpoint` | 合并删除（生产代码零 SELECT） |
@@ -487,7 +485,7 @@ struct JobOutcome {
 enum TurnOrigin { External, Cron, Goal, Subagent }
 ```
 
-`origin_channel` 只在 `External` 时有值（`tui` / `desktop` / `cli` / `feishu` / …）。不为每条事件重复写渠道字符串，因为那会把同一个值复制到几十万行里；`turn_metrics` 是一个轮次一条，冗余成本可接受，换来按渠道直接聚合而不用 JOIN。
+`origin_channel` 只在 `External` 时有值（`desktop` / `tui` / `cli`）。不为每条事件重复写渠道字符串，因为那会把同一个值复制到几十万行里；`turn_metrics` 是一个轮次一条，冗余成本可接受，换来按渠道直接聚合而不用 JOIN。
 
 **一个会话可以有多个渠道的轮次**
 
@@ -502,7 +500,6 @@ enum TurnOrigin { External, Cron, Goal, Subagent }
 }
 ```
 
-入站路由也允许一个会话被多个渠道绑定：`channel_bindings` 主键是 `(channel, destination)`，多行可以指向同一个 `session_id`。桌面与 TUI 不写这张表（它们直接传 `session_id`），只有飞书群、外部 webhook 这类无 UI 入口才需要。
 
 ### 4.11.1 turn_metrics 的生产链
 
@@ -694,9 +691,9 @@ CREATE TABLE sessions (
 
 - 桌面端用固定常量 `DESKTOP_LANE_CHANNEL` 派生自己的车道（`crates/axon-desktop/src/workspace/mutation.rs:167`）。
 - TUI 走 `tui` channel（`session_lane.rs:69` 的测试就是这个组合）。
-- 飞书每个 destination（群或私聊）再各一份。
+- CLI 每条调用各一份。
 
-结果：TUI 与桌面永远是两个 session、两条事件流，两边谁改都看不见对方。飞书加进来是第三份。
+结果：TUI 与桌面永远是两个 session、两条事件流，两边谁改都看不见对方；CLI 再各一份。
 
 **新模型**
 
@@ -721,7 +718,7 @@ CREATE TABLE sessions (
 
 1. **`trust_scope` 不能丢。** 它是防"群聊看到私聊上下文"的唯一隔离维度（`session_lane.rs:52-58`）。保留为会话创建时的属性，不再作为哈希输入。
 2. **客户端必须显式携带 `session_id`，服务端不做推断。** 桌面左侧菜单栏就是 `sessions` 列表（现为车道列表），选中即切换；TUI 用 `--session <id>` 指定或启动时从列表选择。服务端收到不带 `session_id` 的请求直接拒绝，不猜、不隐式建会话。
-3. **无 UI 的入站渠道靠绑定表。** 飞书群、外部 webhook 这类没有"菜单"的入口，用 `control.channel_bindings` 把 `(channel, destination)` 映射到一个 `session_id`：首次绑定时创建或选择一个会话，之后该群的消息固定进这个会话。这张表只服务入站路由，不参与会话身份。
+3. **三端直接传 `session_id`。** 桌面、TUI 与 CLI 都在建立连接时拿到显式会话标识；不存在无界面入站渠道，因此不设渠道绑定表，任何跨端接续都靠同一个 `session_id` 完成。
 4. **协议字段改名。** `primaryLaneId`（`interaction_turn_payloads.rs:163`）、`laneId`（`crates/axon-protocol/src/daemon.rs:88`、`user_question.rs:158`）统一改 `sessionId`。这是破坏性协议变更，`crates/axon-desktop/ui` 的 `frames.ts` 与 store 必须同批改。
 5. **会话管理的落点。** 桌面端已有 `lane_create` / `lane_rename` / `lane_set_pinned` / `lane_set_archived` / `lane_reorder`（`crates/axon-desktop/src/workspace/mod.rs:61-100`），语义直接迁到 `sessions` 表的 `title` / `pinned` / `archived` / `sort_order` 四列。左侧菜单读的就是 `(workspace_id, archived, sort_order)` 索引。
 

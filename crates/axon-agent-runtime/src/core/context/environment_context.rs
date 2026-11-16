@@ -46,7 +46,7 @@ pub struct EnvironmentContext {
     /// 会话车道的完整身份含 workspace 维度：同一个会话表面在不同项目下是不同的
     /// 车道。只给 channel 与 destination，调用方无法表达「往哪个项目的这条会话发」。
     pub session_workspace: Option<String>,
-    /// 本机全局通知飞书会话；未配置时省略，仅作提示值。
+    /// 本机全局通知远端会话；未配置时省略，仅作提示值。
     pub notification_chat_id: Option<String>,
     /// 可为子代理显式选型的模型名，已去重并保持配置顺序。
     ///

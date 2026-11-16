@@ -341,7 +341,7 @@ fn legacy_payload_version_is_rejected_before_migration() {
         "schedule": "interval:1h",
         "prompt": "执行",
         "skills": [],
-        "delivery": {"adapter": "feishu", "sessionId": 0, "recipientId": "oc_legacy", "threadId": null},
+        "delivery": {"adapter": "webhook", "sessionId": 0, "recipientId": "oc_legacy", "threadId": null},
         "workdir": null,
         "noAgent": false,
         "script": null,

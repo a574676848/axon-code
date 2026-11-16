@@ -90,7 +90,7 @@ pub(crate) fn register_workspace_record(
 
 /// 解析当前会话表面的复合车道运行窗口身份。
 ///
-/// 飞书、TUI 与 CLI 共用同一条派生规则：Workspace、trust scope 与
+/// 远端、TUI 与 CLI 共用同一条派生规则：Workspace、trust scope 与
 /// channel/destination 共同决定 Session，Session 再决定 Provider rollout 身份。
 /// 已有 Session 直接加载其 `run_session_id`，只有首次进入该复合车道才创建，
 /// 使同表面的相邻输入延续同一段上下文，而不是各起一段新历史。

@@ -96,7 +96,7 @@ mod tests {
     fn builder_preserves_prompt_and_transport_shape() {
         let request = build_provider_turn_request(
             &action(
-                r#"{"prompt":"问题","quotedMessage":{"messageId":"parent","visibleText":"引用"},"transportContext":{"kind":"feishu","chatId":"chat"}}"#,
+                r#"{"prompt":"问题","quotedMessage":{"messageId":"parent","visibleText":"引用"},"transportContext":{"kind":"webhook","chatId":"chat"}}"#,
             ),
             &context(),
             JarvisRuntimeProfile::Jarvis,
@@ -114,7 +114,7 @@ mod tests {
                 .as_ref()
                 .and_then(|value| value.get("kind"))
                 .and_then(serde_json::Value::as_str),
-            Some("feishu")
+            Some("webhook")
         );
         assert_eq!(
             request

@@ -167,10 +167,10 @@ fn interaction() -> InteractionRecord {
 fn group_interaction() -> InteractionRecord {
     InteractionRecord::new(
         InteractionId::new("group-interaction").expect("ID"),
-        InteractionSource::new("feishu", "group-message").expect("来源"),
+        InteractionSource::new("webhook", "group-message").expect("来源"),
         ScopeRef::workspace("group-workspace").expect("作用域"),
         AudienceContext::new(AudienceKind::Group, DisclosurePolicy::Workspace),
-        ReplyRoute::new("feishu", "chat-group").expect("路由"),
+        ReplyRoute::new("webhook", "chat-group").expect("路由"),
         "群聊进展",
         2,
     )

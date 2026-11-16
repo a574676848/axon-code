@@ -353,24 +353,24 @@ fn composite_forwards_identity_to_every_handler() {
 fn interaction_events_target_carries_tail_flag() {
     // 默认是按 after 正向翻页，不带尾窗语义。
     assert_eq!(
-        interaction_events_target("interactions/feishu-abc/events", None),
-        Some(("feishu-abc".to_string(), 0, 800, false))
+        interaction_events_target("interactions/webhook-abc/events", None),
+        Some(("webhook-abc".to_string(), 0, 800, false))
     );
     // tail=1 与 tail=true 等价：首屏一次取该交互自身的尾窗。
     assert_eq!(
         interaction_events_target(
-            "interactions/feishu-abc/events",
+            "interactions/webhook-abc/events",
             Some("after=12&limit=34&tail=1")
         ),
-        Some(("feishu-abc".to_string(), 12, 34, true))
+        Some(("webhook-abc".to_string(), 12, 34, true))
     );
     assert_eq!(
-        interaction_events_target("interactions/feishu-abc/events", Some("tail=true")),
-        Some(("feishu-abc".to_string(), 0, 800, true))
+        interaction_events_target("interactions/webhook-abc/events", Some("tail=true")),
+        Some(("webhook-abc".to_string(), 0, 800, true))
     );
     // 尾部多出一段说明这不是本路由，不能误命中。
     assert_eq!(
-        interaction_events_target("interactions/feishu-abc/events/extra", None),
+        interaction_events_target("interactions/webhook-abc/events/extra", None),
         None
     );
 }

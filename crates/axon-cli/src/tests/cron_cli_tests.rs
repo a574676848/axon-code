@@ -117,39 +117,6 @@ fn cron_without_wake_runs_silently_without_advancing_schedule() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn legacy_feishu_flags_fail_with_chinese_migration_hint() {
-    let root = test_root("cron-legacy-args");
-    let config_path = root.join("config.toml");
-    let path_arg = config_path.to_string_lossy().to_string();
-    let create = AxonCli::parse_from_args([
-        "axon",
-        "--config",
-        &path_arg,
-        "--format",
-        "json",
-        "cron",
-        "create",
-        "--name",
-        "旧参数",
-        "--schedule",
-        "interval:1h",
-        "--prompt",
-        "执行",
-        "--feishu-chat-id",
-        "oc_legacy",
-    ]);
-
-    let result = run_parsed_cli(&create);
-
-    assert_ne!(result.exit_code, 0, "旧参数必须失败而不是静默忽略");
-    assert!(
-        result.stderr.contains("--wake session:<channel>:<destination>"),
-        "错误里必须给出迁移路径：{}",
-        result.stderr
-    );
-    let _ = fs::remove_dir_all(root);
-}
 
 #[test]
 fn create_rejects_unstable_session_wake_session() {

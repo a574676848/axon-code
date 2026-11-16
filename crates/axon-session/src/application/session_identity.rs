@@ -80,8 +80,8 @@ mod tests {
         let group = AudienceContext::new(AudienceKind::Group, DisclosurePolicy::Workspace);
         let first = session_id_for_route("workspace-a", &private, "tui", "terminal-1");
         let second = session_id_for_route("workspace-b", &private, "tui", "terminal-1");
-        let third = session_id_for_route("workspace-a", &group, "feishu", "chat-a");
-        let fourth = session_id_for_route("workspace-a", &private, "feishu", "chat-b");
+        let third = session_id_for_route("workspace-a", &group, "webhook", "chat-a");
+        let fourth = session_id_for_route("workspace-a", &private, "webhook", "chat-b");
 
         assert_ne!(first, second);
         assert_ne!(first, third);
@@ -110,10 +110,10 @@ mod tests {
     fn interaction_session_requires_workspace_and_uses_route_identity() {
         let interaction = InteractionRecord::new(
             axon_domain::InteractionId::new("interaction-1").expect("合法 ID"),
-            axon_domain::InteractionSource::new("feishu", "chat-a:message-1").expect("合法来源"),
+            axon_domain::InteractionSource::new("webhook", "chat-a:message-1").expect("合法来源"),
             axon_domain::ScopeRef::workspace("workspace-a").expect("合法作用域"),
             AudienceContext::new(AudienceKind::Group, DisclosurePolicy::Workspace),
-            axon_domain::ReplyRoute::new("feishu", "chat-a").expect("合法路由"),
+            axon_domain::ReplyRoute::new("webhook", "chat-a").expect("合法路由"),
             "检查构建",
             42,
         )
@@ -124,7 +124,7 @@ mod tests {
             Some(session_id_for_route(
                 "workspace-a",
                 &interaction.audience,
-                "feishu",
+                "webhook",
                 "chat-a"
             ))
         );

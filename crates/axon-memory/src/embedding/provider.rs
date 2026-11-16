@@ -230,7 +230,7 @@ fn request_plan(
         method: HTTP_METHOD_POST,
         url: endpoint_url(base_url, provider_protocol),
         headers: vec![
-            header(HEADER_USER_AGENT, &user_agent(ClientChannel::Memory)),
+            header(HEADER_USER_AGENT, &user_agent(ClientChannel::Cli)),
             header(HEADER_CONTENT_TYPE, CONTENT_TYPE_JSON),
         ],
         auth_header: auth_header(api_key, api_key_env),

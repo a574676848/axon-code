@@ -59,19 +59,16 @@ pub(super) fn claim_next_action(
         return Ok(None);
     };
     let expires = i64_value(now_ms.saturating_add(lease_duration_ms))?;
-    let changed = transaction
-        .execute(
-            "UPDATE work_items SET status='running',claimed_by=?1,claimed_generation=?2,lease_expires_at_ms=?3,attempt=attempt+1,started_at_ms=COALESCE(started_at_ms,?4),retry_at_ms=NULL,lease_json=json_object('owner',?1,'token',?5,'expires_at_ms',?3) WHERE execution_id=?6 AND (status='queued' OR (status='waiting' AND lease_expires_at_ms <= ?4))",
-            params![
-                host.host_id.as_str(),
-                host.generation,
-                expires,
-                i64_value(now_ms)?,
-                Uuid::new_v4().to_string(),
-                action_id
-            ],
-        )
-        .map_err(storage)?;
+    let changed = super::work_item_claim::claim_action_item(
+        &transaction,
+        &action_id,
+        host.host_id.as_str(),
+        &host.generation,
+        &Uuid::new_v4().to_string(),
+        expires,
+        i64_value(now_ms)?,
+    )
+    .map_err(storage)?;
     if changed == 0 {
         return Err(RuntimeStoreError::Fenced);
     }

@@ -31,7 +31,7 @@ pub fn invoke_skill_tool_definition() -> ToolDefinition {
                 "skill_name": {
                     "type": "string",
                     "pattern": "\\S",
-                    "description": "要加载说明的已注入 Skill 名称；例如 feishu-cli。"
+                    "description": "要加载说明的已注入 Skill 名称；例如 operate-axon。"
                 }
             },
             "required": ["skill_name"],

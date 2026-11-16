@@ -140,8 +140,8 @@ fn remote_control_action_is_committed_without_provider_call() {
                 kind: "remote_control".to_owned(),
                 priority: 100,
                 status: SessionActionStatus::Queued,
-                dedupe_key: Some("feishu-control:action-control".to_owned()),
-                payload_json: r#"{"control":{"preview":"/status"},"transportContext":{"kind":"feishu","chatId":"oc_chat"}}"#.to_owned(),
+                dedupe_key: Some("remote-control:action-control".to_owned()),
+                payload_json: r#"{"control":{"preview":"/status"},"transportContext":{"kind":"webhook","chatId":"oc_chat"}}"#.to_owned(),
                 goal_revision: None,
                 context_version: None,
                 claimed_by: None,
@@ -166,7 +166,7 @@ fn remote_control_action_is_committed_without_provider_call() {
     );
     let payload: serde_json::Value =
         serde_json::from_str(&outcome.events[0].payload_json).expect("事件应为 JSON");
-    assert_eq!(payload["transportContext"]["kind"], "feishu");
+    assert_eq!(payload["transportContext"]["kind"], "webhook");
     assert_eq!(payload["response"], "状态: 已处理");
 }
 
@@ -204,8 +204,8 @@ fn preserves_transport_context_without_copying_quoted_message_to_completed_event
                 kind: "user_input".to_owned(),
                 priority: 10,
                 status: SessionActionStatus::Queued,
-                dedupe_key: Some("feishu:om_source".to_owned()),
-                payload_json: r#"{"prompt":"问题","quotedMessage":{"messageId":"om_parent","visibleText":"父消息正文"},"transportContext":{"kind":"feishu"}}"#
+                dedupe_key: Some("remote:om_source".to_owned()),
+                payload_json: r#"{"prompt":"问题","quotedMessage":{"messageId":"om_parent","visibleText":"父消息正文"},"transportContext":{"kind":"webhook"}}"#
                     .to_owned(),
                 goal_revision: None,
                 context_version: None,
@@ -235,7 +235,7 @@ fn preserves_transport_context_without_copying_quoted_message_to_completed_event
         serde_json::from_str(&outcome.events[0].payload_json).expect("事件应为 JSON");
     assert_eq!(
         payload["transportContext"]["kind"],
-        serde_json::Value::String("feishu".to_owned())
+        serde_json::Value::String("webhook".to_owned())
     );
     assert!(payload.get("quotedMessage").is_none());
 }

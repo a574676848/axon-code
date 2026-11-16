@@ -604,7 +604,7 @@ fn workspace_channel_queries_find_latest_history_and_active_turn() {
     assert_eq!(active.interaction_id.as_str(), "interaction-first");
     assert!(
         store
-            .latest_processing_interaction_for_channel("workspace-test", "feishu")
+            .latest_processing_interaction_for_channel("workspace-test", "webhook")
             .expect("按渠道隔离查询")
             .is_none()
     );

@@ -174,7 +174,7 @@ pub struct UserQuestionRecord {
     pub answer_json: Option<String>,
     /// 用户作答时刻毫秒时间戳。
     pub answered_at_ms: Option<i64>,
-    /// 作答来源渠道（desktop / tui / feishu 等）。
+    /// 作答来源渠道（desktop / tui / cli 等）。
     pub answered_channel: Option<String>,
     /// 答案是否已投递给等待者或下发到轮次。
     pub delivered: bool,
@@ -452,9 +452,9 @@ mod tests {
         };
 
         let json = serde_json::to_string(&question).expect("序列化应成功");
-        // 确保无渠道特定字段（例如没有 desktop/tui/feishu 专有标记）
+        // 确保无渠道特定字段（例如没有 desktop/tui/cli 专有标记）
         assert!(!json.contains("channel"));
-        assert!(!json.contains("feishu"));
+        assert!(!json.contains("webhook"));
         assert!(!json.contains("desktop"));
 
         let restored: UserQuestionItem = serde_json::from_str(&json).expect("反序列化应成功");

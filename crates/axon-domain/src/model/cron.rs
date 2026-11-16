@@ -150,7 +150,7 @@ pub struct CronJob {
     /// 完成后的唤醒目标；`None` 表示执行完只落运行事实，不产生任何投递。
     ///
     /// 该字段没有 serde 默认值：历史版本 1 的载荷必须显式迁移，否则解析失败，
-    /// 避免把「显式声明过飞书目标」的任务静默降级成不投递。
+    /// 避免把「显式声明过远端目标」的任务静默降级成不投递。
     pub wake: Option<CronWakeTarget>,
     /// 可选工作目录文本，由外层 adapter 解析。
     pub workdir: Option<String>,

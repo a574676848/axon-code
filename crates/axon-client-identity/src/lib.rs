@@ -9,10 +9,6 @@ pub enum ClientChannel {
     Cli,
     /// 桌面工作台。
     Desktop,
-    /// 飞书。
-    Feishu,
-    /// Memory 后台能力。
-    Memory,
 }
 
 impl ClientChannel {
@@ -22,8 +18,6 @@ impl ClientChannel {
         match value.map(str::trim).unwrap_or_default() {
             "tui" => Self::Tui,
             "desktop" => Self::Desktop,
-            "feishu" => Self::Feishu,
-            "memory" => Self::Memory,
             _ => Self::Cli,
         }
     }
@@ -33,8 +27,6 @@ impl ClientChannel {
             Self::Tui => "axon-tui",
             Self::Cli => "axon-cli",
             Self::Desktop => "axon-desktop",
-            Self::Feishu => "axon-feishu",
-            Self::Memory => "axon-memory",
         }
     }
 }
@@ -62,7 +54,7 @@ mod tests {
             ClientChannel::parse(Some("desktop")),
             ClientChannel::Desktop
         );
-        assert_eq!(ClientChannel::parse(Some("feishu")), ClientChannel::Feishu);
+        assert_eq!(ClientChannel::parse(Some("webhook")), ClientChannel::Cli);
         assert_eq!(ClientChannel::parse(Some("unknown")), ClientChannel::Cli);
     }
 
@@ -73,8 +65,6 @@ mod tests {
             ClientChannel::Tui.product(),
             ClientChannel::Cli.product(),
             ClientChannel::Desktop.product(),
-            ClientChannel::Feishu.product(),
-            ClientChannel::Memory.product(),
         ];
         let unique = names.iter().collect::<std::collections::HashSet<_>>();
         assert_eq!(

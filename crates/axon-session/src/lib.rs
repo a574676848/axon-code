@@ -59,7 +59,6 @@ pub use ports::{
     SessionSummaryRow, UserQuestionStore, UserQuestionStoreError, WorkspaceStore,
     WorkspaceStoreError,
 };
-pub use ports::{ChannelBinding, ChannelBindingStore, ChannelBindingStoreError};
 
 #[cfg(test)]
 #[path = "tests/mod.rs"]

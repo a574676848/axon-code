@@ -88,7 +88,7 @@ fn bind_port(bind: &str) -> Option<u16> {
 pub(crate) struct SystemHttpAdapter {
     /// Axon 运行时根目录；运行态库位于其下。
     axon_root: PathBuf,
-    /// 配置文件路径；远端适配器清单据此读取飞书远控开关。
+    /// 配置文件路径；远端适配器清单据此读取远端远控开关。
     config_path: PathBuf,
     /// 适配器装配时刻，`uptimeMs` 的真实起点。
     started_at: Instant,
@@ -248,7 +248,7 @@ impl SystemHttpAdapter {
     ///   `remote.gateway.websocket_bind` 驱动，在守护进程装配阶段一并注册并启动；
     ///   本路由能应答即证明 HTTP 这一路已就绪，而 `GatewayKernel::start` 任一路
     ///   失败都会让守护进程起不来，因此 WebSocket 这一路同样成立。
-    /// - 飞书一路由 `remote.feishu_websocket.enabled` 开关决定，读配置即得真值。
+    /// - 适配器清单只列本机真实装配的网关入口，不再含外部渠道适配器。
     ///
     /// 配置文件读不出来（解析或校验失败）时没有任何可靠来源判断适配器状态，
     /// 此时给空数组，不猜。

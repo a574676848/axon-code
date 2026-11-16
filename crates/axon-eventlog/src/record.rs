@@ -10,7 +10,7 @@ use crate::error::EventLogError;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnOrigin {
-    /// 外部渠道发起（桌面、TUI、CLI、飞书等）。
+    /// 外部渠道发起（桌面、TUI、CLI、远端等）。
     #[default]
     External,
     /// 定时任务触发。

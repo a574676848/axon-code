@@ -105,9 +105,9 @@ pub struct PrimaryTurnFailure {
     pub message: String,
     /// 来源渠道；组合根据此判断是否需要向渠道补发失败回执。
     pub channel: String,
-    /// 渠道投递目标（Feishu 为 chat_id）。
+    /// 渠道投递目标（如会话 ID）。
     pub destination: String,
-    /// 可回帖的入站消息幂等键（Feishu 形如 `chat_id:message_id`）。
+    /// 可回帖的入站消息幂等键（形如 `chat_id:message_id`）。
     pub source_message_id: String,
 }
 

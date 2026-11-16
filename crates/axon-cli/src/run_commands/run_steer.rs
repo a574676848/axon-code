@@ -662,7 +662,7 @@ mod tests {
         assert!(
             !registry
                 .try_send(
-                    &ActivePrimaryTurnRegistry::affinity_key("session-session-a-feishu"),
+                    &ActivePrimaryTurnRegistry::affinity_key("session-session-a-remote"),
                     "其他渠道".to_owned(),
                 )
                 .expect("其他渠道应隔离")

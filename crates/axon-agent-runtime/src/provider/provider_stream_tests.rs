@@ -25,7 +25,7 @@ fn openai_responses_stream_accepts_text_events_without_choices() {
         .normalize_text_deltas(
             crate::ProviderStreamProtocol::OpenAiResponses,
             r#"data: {"type":"response.created","response":{"id":"resp_text"}}
-data: {"type":"response.output_text.delta","delta":"Axon Feishu live provider ok"}
+data: {"type":"response.output_text.delta","delta":"Axon Remote live provider ok"}
 data: {"type":"response.completed","response":{"id":"resp_text"}}
 "#,
         )
@@ -34,7 +34,7 @@ data: {"type":"response.completed","response":{"id":"resp_text"}}
     assert_eq!(result.deltas.len(), 1);
     assert_eq!(
         result.deltas[0].content_delta,
-        "Axon Feishu live provider ok"
+        "Axon Remote live provider ok"
     );
     assert_eq!(result.finish_reason.as_deref(), Some("stop"));
 }

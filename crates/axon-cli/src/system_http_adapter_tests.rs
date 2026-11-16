@@ -11,7 +11,7 @@ use super::{
 
 /// 构造一个指向临时运行态根与临时配置路径的适配器。
 ///
-/// 临时根里没有 `config.toml`，因此远端适配器清单走默认配置：飞书一路默认关闭。
+/// 临时根里没有 `config.toml`，因此远端适配器清单走默认配置：远端一路默认关闭。
 fn fixture() -> (axon_test_support::TestTempDir, SystemHttpAdapter) {
     let directory = axon_test_support::test_temp_dir();
     let adapter = SystemHttpAdapter::new(

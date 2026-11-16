@@ -51,9 +51,6 @@ pub(crate) fn parse_wake(value: &str) -> Result<CronWakeTarget, String> {
 const WAKE_FORMAT_HINT: &str =
     "--wake 目标格式必须是 session:<channel>:<destination>[:<workspace>]";
 
-/// 已知的旧投递参数中文迁移提示。
-pub(crate) const LEGACY_DELIVERY_ARGS_HINT: &str = "--feishu-chat-id / --feishu-thread-id 已移除：会话唤醒用 --wake session:<channel>:<destination>[:<workspace>]";
-
 /// 派发一次唤醒；没有声明目标时什么都不做。
 ///
 /// 失败同样派发：任务已经跑完是事实，沉默会让用户无法判断它是没触发还是失败了。
@@ -143,7 +140,7 @@ mod tests {
                 workspace: Some("workspace-9d4b642b".to_owned()),
             }
         );
-        assert!(parse_wake("feishu:oc_123").is_err());
+        assert!(parse_wake("webhook:oc_123").is_err());
         assert!(parse_wake("session:desktop").is_err());
         assert!(parse_wake("tui:terminal-1").is_err());
         assert!(parse_wake("session:tui:terminal-1").is_err());

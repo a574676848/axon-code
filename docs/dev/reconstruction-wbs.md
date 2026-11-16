@@ -88,7 +88,7 @@
 | W3-4 | `work_items` + `work_item_history` | schema + repository | W3-3 | 在途与终态分离；`kind` 覆盖 turn/goal/cron/subagent | 0.9 |
 | W3-5 | 统一 claim 逻辑 | `claim.rs` | W3-4 | 三套旧 claim 合并为一套；并发 claim 不重复 | 1.0 |
 | W3-6 | `session_metrics` 投影 | schema + 更新管道 | W3-4 | 每轮更新一次；可从事件重放重建 | 0.8 |
-| W3-7 | `channel_bindings` | schema + 路由 | W3-3 | 飞书群绑定后消息进入指定会话 | 0.4 |
+| W3-7 | ~~`channel_bindings`~~ **撤销** | 不实施 | W3-3 | 渠道面收敛为桌面 / TUI / CLI 三端，三端都显式携带 `session_id`，不存在无界面入站渠道；绑定表与路由不实施，入站身份仍由 `session_id` 唯一决定 | 0 |
 | W3-8 | 去掉事件路径上的 fence 写 | `helpers.rs` 调用点 | W3-3 | 事件写入不再 `UPDATE daemon_instances` | 0.3 |
 | W3-9 | PRAGMA 调整（`synchronous`/`busy_timeout`/`journal_size_limit`） | 连接配置 | W3-1 | 控制面事务毫秒级；写风暴下续租不 `Fenced` | 0.6 |
 

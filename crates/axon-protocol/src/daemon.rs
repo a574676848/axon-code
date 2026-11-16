@@ -90,7 +90,7 @@ pub enum DaemonCommand {
         call_id: String,
         /// 用户作答条目列表。
         answers: Vec<axon_domain::UserAnswerItem>,
-        /// 作答渠道（例如 "tui" / "desktop" / "feishu"）。
+        /// 作答渠道（例如 "tui" / "desktop" / "webhook"）。
         channel: String,
     },
     /// 注销客户端 presence；后续完成通知不再投递到该客户端。

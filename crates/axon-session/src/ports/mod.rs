@@ -5,8 +5,6 @@ pub mod agent_continuation_store;
 /// agent 间消息 mailbox 的持久化端口。
 pub mod agent_mailbox_store;
 /// Interaction 收件箱的持久化端口。
-/// 无 UI 入站渠道到会话的绑定端口。
-pub mod channel_binding_store;
 pub mod client_delivery_store;
 pub mod decision_store;
 pub mod execution_store;
@@ -42,7 +40,6 @@ pub use agent_mailbox_store::{
     AgentMailboxMessageState, AgentMailboxQuery, AgentMailboxRetryPolicy, AgentMailboxStore,
     AgentMailboxStoreError,
 };
-pub use channel_binding_store::{ChannelBinding, ChannelBindingStore, ChannelBindingStoreError};
 pub use client_delivery_store::{
     ClientDeliveryStore, ClientDeliveryStoreError, ClientInboxEntry, ClientPresenceRecord,
     CompletionDeliveryRecord, CompletionDeliveryTarget, CompletionNotificationRecord,

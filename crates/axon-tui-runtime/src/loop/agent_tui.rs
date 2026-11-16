@@ -329,7 +329,7 @@ where
         state.start_runtime_submit(&submission);
         runtime_driver.start_resume(submission, active_turn, request.clone());
     }
-    // 收件箱在 TUI 启动即注册 presence：它与 Feishu 等其他可用渠道并行接收完成通知，
+    // 收件箱在 TUI 启动即注册 presence：它与桌面端等其他可用渠道并行接收完成通知，
     // 线程内轮询，主循环只做展示与回执。
     let mut completion_inbox = adapter.start_completion_inbox(request);
     let mut next_title_refresh = Instant::now();

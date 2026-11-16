@@ -470,7 +470,7 @@ fn interaction_in_workspace(id: &str, workspace: &str, received_at_ms: u64) -> I
 fn primary_turn_uses_jarvis_profile_regardless_of_transport_source() {
     let mut source_interaction = interaction();
     source_interaction.source =
-        InteractionSource::new("feishu", "message-from-feishu").expect("有效来源");
+        InteractionSource::new("webhook", "message-from-remote").expect("有效来源");
     let store = TestStore::default();
     store.append(&source_interaction).expect("追加成功");
     let runner = RecordingRunner::default();

@@ -20,12 +20,12 @@ pub const METRIC_LLM_PROVIDER_REQUEST_PATH: &str = "llm.provider.request_path";
 /// 速率或处理模式。
 pub const METRIC_LLM_PROVIDER_SPEED_MODE: &str = "llm.provider.speed_mode";
 
-/// 计算统一网关活跃并发回合数 (SSOT §2.1: 正在进行中的 Primary Turn 与 Remote Feishu 会话总和)。
+/// 计算统一网关活跃并发回合数 (SSOT §2.1: 正在进行中的 Primary Turn 与远端会话总和)。
 pub fn compute_gateway_active_turn_count(
     primary_active_turns: usize,
-    feishu_active_chat_turns: usize,
+    remote_active_turns: usize,
 ) -> usize {
-    primary_active_turns.saturating_add(feishu_active_chat_turns)
+    primary_active_turns.saturating_add(remote_active_turns)
 }
 
 /// 统一应用层生成性能快照 (纯数值 POD 结构，零堆分配，Option<T> 仍满足 Copy)。

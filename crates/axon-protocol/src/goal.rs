@@ -47,9 +47,9 @@ pub enum GoalSource {
     AxonCron {
         /// 触发该 Goal 的 cron job 标识。
         job_id: String,
-        /// 投递渠道，例如 feishu。
+        /// 投递渠道，例如 desktop。
         channel: String,
-        /// 渠道内投递目标，例如 Feishu chat_id。
+        /// 渠道内投递目标，例如会话 ID。
         destination: String,
     },
 }
@@ -132,7 +132,7 @@ mod tests {
     fn axon_cron_source_round_trips_through_json() {
         let request = create_request(Some(GoalSource::AxonCron {
             job_id: "job-42".to_owned(),
-            channel: "feishu".to_owned(),
+            channel: "webhook".to_owned(),
             destination: "oc_test".to_owned(),
         }));
         let encoded = serde_json::to_string(&request).expect("Goal 请求应可序列化");

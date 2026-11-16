@@ -171,7 +171,7 @@ fn test_reconciliation_and_mark_delivered() {
             "call-4",
             r#"[{"id":"q1","selected":["好的"]}]"#,
             2_000,
-            Some("feishu"),
+            Some("webhook"),
             Some("user_message"),
         )
         .expect("结算应成功");

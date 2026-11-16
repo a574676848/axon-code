@@ -16,8 +16,7 @@ pub enum Channel {
     Tui,
     /// 一次性 CLI 调用。
     Cli,
-    /// 飞书远控。
-    Feishu,
+
     /// 其余渠道。
     Other,
 }
@@ -30,7 +29,6 @@ impl Channel {
             "desktop" => Self::Desktop,
             "tui" => Self::Tui,
             "cli" => Self::Cli,
-            "feishu" => Self::Feishu,
             _ => Self::Other,
         }
     }
@@ -42,7 +40,6 @@ impl Channel {
             Self::Desktop => "desktop",
             Self::Tui => "tui",
             Self::Cli => "cli",
-            Self::Feishu => "feishu",
             Self::Other => "other",
         }
     }
@@ -276,13 +273,7 @@ mod tests {
 
     #[test]
     fn channel_tokens_round_trip_and_unknown_falls_to_other() {
-        for channel in [
-            Channel::Desktop,
-            Channel::Tui,
-            Channel::Cli,
-            Channel::Feishu,
-            Channel::Other,
-        ] {
+        for channel in [Channel::Desktop, Channel::Tui, Channel::Cli, Channel::Other] {
             assert_eq!(Channel::parse(channel.as_token()), channel);
         }
         assert_eq!(Channel::parse("CLI"), Channel::Cli);

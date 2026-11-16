@@ -323,7 +323,7 @@ where
     ///
     /// 一次完成通知只在这里结算一次：主 turn 的汇总回复是各渠道唯一交付内容，
     /// 回写汇总后把全部渠道推进到 `dispatched`，由各渠道消费者（TUI 轮询收件箱、
-    /// 飞书持久投递器）自行确认送达。这里不做任何送达确认：即便飞书是当时唯一
+    /// 远端持久投递器）自行确认送达。这里不做任何送达确认：即便远端是当时唯一
     /// 可用渠道，也必须等渠道把正文写入自己的 durable 出站队列后才允许确认。
     fn settle_completion_delivery(&self, interaction: &InteractionRecord, summary: Option<&str>) {
         let Some(execution_id) =

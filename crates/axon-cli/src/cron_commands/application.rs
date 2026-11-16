@@ -29,7 +29,6 @@ use super::{
     repository::CronRepository,
     schedule::{next_run_after, parse_schedule, require_next_run},
     tick::{execute_and_persist, execute_due_jobs},
-    wake::LEGACY_DELIVERY_ARGS_HINT,
 };
 
 const CRON_DEFAULT_LIMIT: usize = 20;
@@ -299,10 +298,6 @@ fn create_job(
     adapter: &dyn CronExecutionAdapter,
     command: &CronCreateCommand,
 ) -> Result<CronReport, String> {
-    reject_legacy_delivery_args(
-        command.feishu_chat_id.as_ref(),
-        command.feishu_thread_id.as_ref(),
-    )?;
     let repository = CronRepository::open(adapter.axon_root())?;
     let created_at_ms = now_ms();
     let schedule = parse_schedule(&command.schedule)?;
@@ -425,10 +420,6 @@ fn required_job(repository: &CronRepository, job_id: &str) -> Result<CronJob, St
 }
 
 fn update_input(command: &CronUpdateCommand) -> Result<CronJobUpdate, String> {
-    reject_legacy_delivery_args(
-        command.feishu_chat_id.as_ref(),
-        command.feishu_thread_id.as_ref(),
-    )?;
     Ok(CronJobUpdate {
         name: command.name.clone(),
         schedule: command.schedule.clone(),
@@ -508,17 +499,6 @@ pub(crate) fn wake_text(wake: &CronWakeTarget) -> String {
             _ => format!("session:{channel}:{destination}"),
         },
     }
-}
-
-/// 拒绝已移除的投递参数，并给出中文迁移路径。
-fn reject_legacy_delivery_args(
-    chat_id: Option<&String>,
-    thread_id: Option<&String>,
-) -> Result<(), String> {
-    if chat_id.is_some() || thread_id.is_some() {
-        return Err(LEGACY_DELIVERY_ARGS_HINT.to_owned());
-    }
-    Ok(())
 }
 
 fn path_text(path: Option<&Path>) -> Result<Option<String>, String> {

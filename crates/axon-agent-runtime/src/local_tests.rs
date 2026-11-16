@@ -159,7 +159,7 @@ fn remote_upload_enters_ready_and_remains_ref_only() {
     let record = runtime
         .ingest_remote_upload_with_blob_store(
             super::AttachmentRemoteUploadRequest {
-                client_id: "feishu-agent".to_owned(),
+                client_id: "webhook-agent".to_owned(),
                 upload_id: "upload-1".to_owned(),
                 file_name: "remote-note.txt".to_owned(),
                 mime_hint: None,
@@ -185,7 +185,7 @@ fn remote_upload_enters_ready_and_remains_ref_only() {
     );
     assert_eq!(
         record.attachment.source_trace,
-        "remote://client/feishu-agent/upload/upload-1"
+        "remote://client/webhook-agent/upload/upload-1"
     );
     assert_eq!(record.attachment.mime_type, "text/plain");
     assert!(record.blob_path.exists());

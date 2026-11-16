@@ -1,7 +1,7 @@
 //! 通用后台 Session 宿主。
 //!
 //! DaemonHost 管理 ownership、Session Worker、调度和 IPC 端口；
-//! 不包含 CLI、Feishu 或 Agent prompt 逻辑。
+//! 不包含 CLI 或 Agent prompt 逻辑。
 
 pub mod application;
 pub mod infrastructure;

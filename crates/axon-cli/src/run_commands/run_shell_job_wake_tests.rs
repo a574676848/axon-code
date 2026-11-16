@@ -153,7 +153,7 @@ fn shell_notice(
 
 #[test]
 fn active_turn_receives_completion_notice_in_band_without_opening_wake_turn() {
-    let fixture = TestFixture::new("feishu", "oc_chat_active", "ws-active");
+    let fixture = TestFixture::new("webhook", "oc_chat_active", "ws-active");
     let owner = format!("run-active-{}", uuid::Uuid::new_v4());
     let cancel_token = RunCancelToken::default();
     fixture.bridge.register_turn(
@@ -189,7 +189,7 @@ fn active_turn_receives_completion_notice_in_band_without_opening_wake_turn() {
 
 #[test]
 fn ended_turn_wakes_new_turn_preserving_model_and_effort_for_shell_job() {
-    let fixture = TestFixture::new("feishu", "oc_chat_wake", "ws-wake");
+    let fixture = TestFixture::new("webhook", "oc_chat_wake", "ws-wake");
     let owner = format!("run-ended-{}", uuid::Uuid::new_v4());
     let cancel_token = RunCancelToken::default();
     fixture.bridge.register_turn(
@@ -235,7 +235,7 @@ fn ended_turn_wakes_new_turn_preserving_model_and_effort_for_shell_job() {
             .source_message_id()
             .starts_with(SHELL_JOB_WAKE_SOURCE_PREFIX)
     );
-    assert_eq!(wake_turn.interaction.source.channel(), "feishu");
+    assert_eq!(wake_turn.interaction.source.channel(), "webhook");
     assert_eq!(
         wake_turn.interaction.reply_route.destination(),
         "oc_chat_wake"

@@ -24,10 +24,10 @@ const TEST_NOW_MS: u64 = 10;
 const TEST_LEASE_DURATION_MS: u64 = 1_000;
 const USER_INPUT_ACTION_KIND: &str = "user_input";
 const TUI_CHANNEL: &str = "tui";
-const FEISHU_CHANNEL: &str = "feishu";
+const DELIVERY_CHANNEL: &str = "webhook";
 const TUI_CLIENT_ID: &str = "tui-delivery-client";
 const TUI_DESTINATION: &str = "tui-delivery-destination";
-const FEISHU_DESTINATION: &str = "oc_delivery_chat";
+const DELIVERY_DESTINATION: &str = "oc_delivery_chat";
 
 #[derive(Clone, Default)]
 pub(super) struct RecordingSteerSink {
@@ -291,7 +291,7 @@ fn declared_channel_receives_one_primary_turn_completion() {
         "execution-all-channel",
         "多渠道任务",
     );
-    // 完成通知只投递给 Execution 自己的会话表面；历史飞书交互不再成为目标。
+    // 完成通知只投递给 Execution 自己的会话表面；历史远端交互不再成为目标。
     register_tui_presence(&store, &workspace);
 
     let steer_sink = RecordingSteerSink::default();

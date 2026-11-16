@@ -1,4 +1,4 @@
-//! 投递的离线与恢复路径：离线补投、显式飞书目标、崩溃后由监督扫描接管并最终确认结果。
+//! 投递的离线与恢复路径：离线补投、显式远端目标、崩溃后由监督扫描接管并最终确认结果。
 use super::super::super::completion_delivery::{
     COMPLETION_DISPATCH_BATCH_LIMIT, completion_notification_id,
 };
@@ -22,26 +22,26 @@ fn new_goal(goal_id: &GoalId, scope: &ScopeRef, title: &str) -> GoalRecord {
 }
 
 #[test]
-fn declared_feishu_transport_context_delivers_without_global_config() {
+fn declared_remote_transport_context_delivers_without_global_config() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
     let workspace = register_workspace(&store, directory.path());
-    let session_id = DaemonSessionId::new("feishu-fallback-session").expect("Session ID");
-    let goal_id = GoalId::new("feishu-fallback-task").expect("Goal ID");
+    let session_id = DaemonSessionId::new("remote-fallback-session").expect("Session ID");
+    let goal_id = GoalId::new("remote-fallback-task").expect("Goal ID");
     let action = seed_completion_request_for_transport(
         &store,
         &workspace,
         &session_id,
         &goal_id,
-        "execution-feishu-fallback",
-        "飞书回落任务",
-        private_transport_context(FEISHU_CHANNEL, FEISHU_DESTINATION),
+        "execution-remote-fallback",
+        "远端回落任务",
+        private_transport_context(DELIVERY_CHANNEL, DELIVERY_DESTINATION),
     );
 
     let steer_sink = RecordingSteerSink::default();
     let host = start_host(
         &store,
-        RuntimeHostId::new("feishu-fallback-host").expect("Host ID"),
+        RuntimeHostId::new("remote-fallback-host").expect("Host ID"),
         &steer_sink,
     );
 
@@ -52,19 +52,19 @@ fn declared_feishu_transport_context_delivers_without_global_config() {
 
     let steered = steer_sink.steered();
     assert_eq!(steered.len(), 1);
-    assert_eq!(steered[0].reply_route.channel(), FEISHU_CHANNEL);
-    assert_eq!(steered[0].reply_route.destination(), FEISHU_DESTINATION);
+    assert_eq!(steered[0].reply_route.channel(), DELIVERY_CHANNEL);
+    assert_eq!(steered[0].reply_route.destination(), DELIVERY_DESTINATION);
 
-    let execution_id = ExecutionId::new("execution-feishu-fallback").expect("Execution ID");
+    let execution_id = ExecutionId::new("execution-remote-fallback").expect("Execution ID");
     let notification = notification_of(&store, &execution_id);
     assert_eq!(notification.state, NotificationDeliveryState::Dispatched);
-    // 飞书由主 turn 汇总回复负责确认，派发本身不得确认 Result。
+    // 远端由主 turn 汇总回复负责确认，派发本身不得确认 Result。
     let deliveries = store
         .completion_deliveries(&notification.notification_id)
         .expect("读取渠道投递");
     assert_eq!(deliveries.len(), 1);
-    assert_eq!(deliveries[0].channel, FEISHU_CHANNEL);
-    assert_eq!(deliveries[0].destination, FEISHU_DESTINATION);
+    assert_eq!(deliveries[0].channel, DELIVERY_CHANNEL);
+    assert_eq!(deliveries[0].destination, DELIVERY_DESTINATION);
     assert_eq!(deliveries[0].state, NotificationDeliveryState::Pending);
     assert_eq!(unread_results(&store, &workspace), 1);
 }
@@ -173,30 +173,30 @@ fn crashed_completion_is_recovered_by_supervisor_sweep() {
 }
 
 #[test]
-fn feishu_summary_turn_settles_delivery_and_acknowledges_results() {
+fn remote_summary_turn_settles_delivery_and_acknowledges_results() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
     let workspace = register_workspace(&store, directory.path());
-    let session_id = DaemonSessionId::new("feishu-settlement-session").expect("Session ID");
-    let goal_id = GoalId::new("feishu-settlement-task").expect("Goal ID");
+    let session_id = DaemonSessionId::new("remote-settlement-session").expect("Session ID");
+    let goal_id = GoalId::new("remote-settlement-task").expect("Goal ID");
     let action = seed_completion_request_for_transport(
         &store,
         &workspace,
         &session_id,
         &goal_id,
-        "execution-feishu-settlement",
-        "飞书结算任务",
-        private_transport_context(FEISHU_CHANNEL, FEISHU_DESTINATION),
+        "execution-remote-settlement",
+        "远端结算任务",
+        private_transport_context(DELIVERY_CHANNEL, DELIVERY_DESTINATION),
     );
 
-    // 无活跃主 turn：通知先进入持久收件箱并按飞书渠道派发。
+    // 无活跃主 turn：通知先进入持久收件箱并按远端渠道派发。
     let mut host = DaemonHost::new(
         store.clone(),
         AnswerExecutor,
         NoopPublisher,
         FixedClock,
         TestProcess,
-        RuntimeHostId::new("feishu-settlement-host").expect("Host ID"),
+        RuntimeHostId::new("remote-settlement-host").expect("Host ID"),
         TEST_LEASE_DURATION_MS,
         TEST_LEASE_DURATION_MS,
     );
@@ -206,15 +206,15 @@ fn feishu_summary_turn_settles_delivery_and_acknowledges_results() {
         Some(action.action_id)
     );
 
-    let execution_id = ExecutionId::new("execution-feishu-settlement").expect("Execution ID");
+    let execution_id = ExecutionId::new("execution-remote-settlement").expect("Execution ID");
     let notification = notification_of(&store, &execution_id);
     assert_eq!(notification.state, NotificationDeliveryState::Dispatched);
     let deliveries = store
         .completion_deliveries(&notification.notification_id)
         .expect("读取渠道投递");
     assert_eq!(deliveries.len(), 1);
-    assert_eq!(deliveries[0].channel, FEISHU_CHANNEL);
-    assert_eq!(deliveries[0].destination, FEISHU_DESTINATION);
+    assert_eq!(deliveries[0].channel, DELIVERY_CHANNEL);
+    assert_eq!(deliveries[0].destination, DELIVERY_DESTINATION);
     assert_eq!(deliveries[0].state, NotificationDeliveryState::Pending);
     assert_eq!(unread_results(&store, &workspace), 1);
 
@@ -229,12 +229,12 @@ fn feishu_summary_turn_settles_delivery_and_acknowledges_results() {
     );
     assert_eq!(unread_results(&store, &workspace), 1);
     let inbox = host
-        .dispatched_channel_inbox(FEISHU_CHANNEL, COMPLETION_DISPATCH_BATCH_LIMIT)
-        .expect("读取飞书收件箱");
+        .dispatched_channel_inbox(DELIVERY_CHANNEL, COMPLETION_DISPATCH_BATCH_LIMIT)
+        .expect("读取远端收件箱");
     assert_eq!(inbox.len(), 1);
     assert_eq!(inbox[0].content, "主 turn 汇总回复");
     host.acknowledge_channel_delivery(&inbox[0])
-        .expect("确认飞书 delivery");
+        .expect("确认远端 delivery");
     assert_eq!(
         notification_of(&store, &execution_id).state,
         NotificationDeliveryState::Delivered

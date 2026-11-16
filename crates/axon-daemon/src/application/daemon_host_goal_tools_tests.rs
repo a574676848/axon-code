@@ -183,7 +183,7 @@ fn cron_source_persists_explicit_delivery_target_in_execution_payload() {
     );
     request.source = Some(axon_protocol::GoalSource::AxonCron {
         job_id: "job-42".to_owned(),
-        channel: "feishu".to_owned(),
+        channel: "webhook".to_owned(),
         destination: "oc_test".to_owned(),
     });
 
@@ -195,7 +195,7 @@ fn cron_source_persists_explicit_delivery_target_in_execution_payload() {
         .expect("读取 Execution")
         .expect("Execution 必须存在");
     let payload: Value = serde_json::from_str(&execution.payload_json).expect("payload JSON");
-    assert_eq!(payload["transportContext"]["channel"], "feishu");
+    assert_eq!(payload["transportContext"]["channel"], "webhook");
     assert_eq!(payload["transportContext"]["destination"], "oc_test");
     assert_eq!(payload["transportContext"]["source"]["kind"], "axon_cron");
 }

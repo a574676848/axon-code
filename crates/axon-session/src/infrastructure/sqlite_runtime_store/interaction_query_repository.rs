@@ -14,7 +14,7 @@ CASE WHEN w.status='running' THEN 'processing' \
      WHEN h.terminal_kind IS NOT NULL THEN h.terminal_kind \
      WHEN w.terminal_kind IS NOT NULL THEN w.terminal_kind \
      ELSE 'received' END,\
-i.received_at_ms,i.attachments_json,i.model,i.reasoning_effort,i.session_id";
+i.received_at_ms,i.attachments_json,i.model,i.reasoning_effort";
 /// 入站事实与工作项的连接：一个 inbox 行最多对应一个工作项。
 pub(super) const INBOX_STATE_JOIN: &str = "FROM inbox AS i \
      LEFT JOIN work_items AS w ON w.inbox_id = i.interaction_id \

@@ -74,7 +74,7 @@ pub(super) struct CliRunModelPayloadInput<'a> {
     pub(super) ledger_context: Option<&'a LedgerContextProjection>,
     /// 本轮 Action 的运行时上下文；用于把会话车道标识并入动态环境上下文。
     pub(super) transport_context: Option<&'a serde_json::Value>,
-    /// 本机全局通知飞书会话；仅作提示值注入。
+    /// 本机全局通知远端会话；仅作提示值注入。
     pub(super) notification_chat_id: Option<&'a str>,
     /// 可供子代理选型的模型名；空表示本轮不注入选型事实（子代理身份）。
     pub(super) delegatable_models: &'a [String],

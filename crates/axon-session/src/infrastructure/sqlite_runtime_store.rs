@@ -20,8 +20,7 @@ pub mod action_repository;
 mod agent_continuation_repository;
 #[path = "sqlite_runtime_store/agent_mailbox_repository.rs"]
 mod agent_mailbox_repository;
-#[path = "sqlite_runtime_store/channel_binding_repository.rs"]
-mod channel_binding_repository;
+
 #[path = "sqlite_runtime_store/client_delivery_repository.rs"]
 mod client_delivery_repository;
 #[path = "sqlite_runtime_store/commit_repository.rs"]
@@ -90,6 +89,8 @@ pub mod transaction;
 mod user_question_repository;
 #[path = "sqlite_runtime_store/work_item_archive.rs"]
 mod work_item_archive;
+#[path = "sqlite_runtime_store/work_item_claim.rs"]
+mod work_item_claim;
 
 /// 控制面库文件名：会话、队列、目标、调度、游标、账本。
 const CONTROL_DATABASE_FILE_NAME: &str = "control.sqlite3";

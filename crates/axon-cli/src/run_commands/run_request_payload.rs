@@ -46,7 +46,7 @@ use vision::attach_vision_files_to_payload_with_archive_root;
 
 pub(super) struct BuildRunModelPayloadInput<'a> {
     pub(super) config_path: &'a Path,
-    /// 当前客户端渠道；人格场景帧据此区分终端、桌面与飞书。
+    /// 当前客户端渠道；人格场景帧据此区分终端、桌面与远端。
     pub(super) client_channel: axon_client_identity::ClientChannel,
     pub(super) config: &'a AxonConfig,
     pub(super) cwd: &'a Path,
@@ -61,7 +61,7 @@ pub(super) struct BuildRunModelPayloadInput<'a> {
     pub(super) supports_vision: bool,
     /// 本轮 Action 的运行时上下文；用于把会话车道标识并入动态环境上下文。
     pub(super) transport_context: Option<&'a serde_json::Value>,
-    /// 本机全局通知飞书会话；仅作提示值注入。
+    /// 本机全局通知远端会话；仅作提示值注入。
     pub(super) notification_chat_id: Option<&'a str>,
     pub(super) context_window: u64,
     pub(super) include_user_soul: bool,

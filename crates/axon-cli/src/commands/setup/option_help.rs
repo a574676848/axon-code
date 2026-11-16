@@ -63,36 +63,6 @@ fn remote_key_detail(key: &str) -> Option<&'static str> {
             "是否仍接受全局 token 访问业务路由；关闭后只有签发的 Key 生效，本机连接档案需改用 Key。",
         ),
         "remote.mode" => Some("远控运行模式：standard 或 high-throughput。"),
-        "remote.feishu_websocket.enabled" => {
-            Some("启用 Feishu WebSocket 长连接 adapter；远控 Gateway 目标态始终启用。")
-        }
-        "remote.feishu_websocket.app_id" => {
-            Some("飞书开放平台应用的 App ID。不要填写 App Secret。")
-        }
-        "remote.feishu_websocket.app_secret_env" => {
-            Some("保存飞书 App Secret 的环境变量名；setup 只保存变量名，不保存密钥明文。")
-        }
-        "remote.feishu_websocket.api_base_url" => {
-            Some("飞书 OpenAPI 基础地址。留空使用官方默认地址，私有化或代理环境才需要填写。")
-        }
-        "remote.feishu_websocket.websocket_url" => {
-            Some("飞书长连接地址。留空使用官方默认地址，私有化或代理环境才需要填写。")
-        }
-        "remote.feishu_websocket.enable_notification_sending" => {
-            Some("允许 adapter 主动发送远控通知。关闭时只接收和处理输入。")
-        }
-        "remote.feishu_websocket.notification_chat_id" => {
-            Some("后台完成通知接收会话的 chat_id。留空不通知飞书；不会从历史聊天自动选择收件人。")
-        }
-        "remote.feishu_websocket.allowed_sender_open_ids" => {
-            Some("允许访问远控的飞书 open_id 列表。留空表示不额外限制 allowlist。")
-        }
-        "remote.feishu_websocket.blocked_sender_open_ids" => {
-            Some("禁止访问远控的飞书 open_id 列表；命中时即使在 allowlist 中也会被拒绝。")
-        }
-        "remote.feishu_websocket.require_mention" => {
-            Some("群聊中要求显式 @ 机器人后才处理消息，降低误触发概率。")
-        }
         _ => None,
     }
 }
@@ -108,13 +78,6 @@ pub(super) fn input_hint(key: &str, kind: ConfigValueKind, has_options: bool) ->
     match key {
         "agent.default_model" | "agent.fast_model" => {
             "输入模型别名或模型 ID；通常使用 setup 中配置的模型别名。"
-        }
-        "remote.feishu_websocket.api_base_url" | "remote.feishu_websocket.websocket_url" => {
-            "输入完整 URL；留空表示使用官方默认地址。"
-        }
-        "remote.feishu_websocket.app_secret_env" => "输入环境变量名，不要输入真实密钥。",
-        "remote.feishu_websocket.notification_chat_id" => {
-            "输入通知会话的 chat_id；输入“留空”关闭飞书后台通知。"
         }
         _ => match kind {
             ConfigValueKind::Bool => "输入 true 或 false；也可输入序号；回车保留当前值。",

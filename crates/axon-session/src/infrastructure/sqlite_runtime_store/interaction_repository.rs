@@ -317,10 +317,8 @@ fn insert_interaction(
                 interaction.model.as_deref(),
                 // 推理强度与模型同源：随本轮下发，不写进 Workspace 或 session 身份。
                 interaction.reasoning_effort.as_deref(),
-                // session 是主 turn 排他领取的事实源，按三级回退解析：
-                // 显式目标（调用方指定）> 渠道绑定（飞书群等无 UI 入口）> 路由派生。
-                // 未绑定 Workspace 的输入统一落在空 session。
-                resolve_session_id(transaction, interaction)?,
+                // session 是主 turn 排他领取的事实源；未绑定 Workspace 的输入统一落在空 session。
+                interaction_session_id(interaction).unwrap_or_default(),
             ],
         )
         .map(|_| ())
@@ -376,56 +374,17 @@ fn start_work_item(
     now: i64,
     expires: i64,
 ) -> Result<bool, InteractionStoreError> {
-    let existing = transaction
-        .query_row(
-            "SELECT execution_id,status,terminal_kind FROM work_items WHERE inbox_id=?1",
-            params![interaction_id],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                ))
-            },
-        )
-        .optional()
-        .map_err(storage_error)?;
-    let Some((work_id, status, terminal_kind)) = existing else {
-        transaction
-            .execute(
-                "INSERT INTO work_items(execution_id,goal_id,session_id,kind,payload_json,attempt,priority,status,lease_token,claimed_by,lease_expires_at_ms,started_at_ms,created_at_ms,updated_at_ms,inbox_id) \
-                 VALUES(?1,NULL,NULL,'turn','{}',1,0,?2,?3,NULL,?4,?5,?5,?5,?6)",
-                params![work_id_for_new(), WORK_RUNNING, lease_token, expires, now, interaction_id],
-            )
-            .map_err(storage_error)?;
-        return Ok(true);
-    };
-    if terminal_kind.is_some() {
-        return Ok(false);
-    }
-    let changed = if status == WORK_RUNNING {
-        // 只有过期租约才可被接管，避免两个 worker 同时持有同一条输入。
-        transaction
-            .execute(
-                "UPDATE work_items SET lease_token=?2,lease_expires_at_ms=?3,updated_at_ms=?4,started_at_ms=?4,attempt=attempt+1 \
-                 WHERE execution_id=?1 AND status=?5 AND lease_expires_at_ms<=?4",
-                params![work_id, lease_token, expires, now, WORK_RUNNING],
-            )
-            .map_err(storage_error)?
-    } else {
-        transaction
-            .execute(
-                "UPDATE work_items SET status=?2,lease_token=?3,lease_expires_at_ms=?4,updated_at_ms=?5,started_at_ms=?5,attempt=attempt+1 \
-                 WHERE execution_id=?1 AND status=?6",
-                params![work_id, WORK_RUNNING, lease_token, expires, now, WORK_QUEUED],
-            )
-            .map_err(storage_error)?
-    };
-    Ok(changed == 1)
-}
-
-fn work_id_for_new() -> String {
-    Uuid::new_v4().to_string()
+    super::work_item_claim::start_interaction_item(
+        transaction,
+        interaction_id,
+        Uuid::new_v4().to_string(),
+        WORK_RUNNING,
+        WORK_QUEUED,
+        lease_token,
+        now,
+        expires,
+    )
+    .map_err(storage_error)
 }
 
 /// 释放租约：工作项回到排队态，令牌立即失效。
@@ -545,29 +504,4 @@ fn ensure_same_interaction(
         ));
     }
     Ok(())
-}
-
-/// 解析入站事实的目标会话：显式目标优先，其次渠道绑定，最后按路由派生。
-fn resolve_session_id(
-    transaction: &Transaction<'_>,
-    interaction: &InteractionRecord,
-) -> Result<String, InteractionStoreError> {
-    if let Some(session_id) = interaction.runtime_session_id.as_deref() {
-        return Ok(session_id.to_owned());
-    }
-    let bound: Option<String> = transaction
-        .query_row(
-            "SELECT session_id FROM channel_bindings WHERE channel=?1 AND destination=?2",
-            params![
-                interaction.source.channel(),
-                interaction.reply_route.destination()
-            ],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(storage_error)?;
-    if let Some(session_id) = bound {
-        return Ok(session_id);
-    }
-    Ok(interaction_session_id(interaction).unwrap_or_default())
 }

@@ -463,7 +463,7 @@ fn pinned_model_fixture() -> (
 
 fn pinned_model_command() -> RunCommand {
     RunCommand {
-        prompt: "飞书远控消息".to_owned(),
+        prompt: "远端远控消息".to_owned(),
         model: Some("explicit-model".to_owned()),
         reasoning_effort: Some("max".to_owned()),
         format: Some(OutputFormat::Json),

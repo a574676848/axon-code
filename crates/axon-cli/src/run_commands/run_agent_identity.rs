@@ -58,10 +58,7 @@ pub(crate) fn persona_channel(channel: axon_client_identity::ClientChannel) -> C
     match channel {
         axon_client_identity::ClientChannel::Tui => Channel::Tui,
         axon_client_identity::ClientChannel::Desktop => Channel::Desktop,
-        axon_client_identity::ClientChannel::Feishu => Channel::Feishu,
-        axon_client_identity::ClientChannel::Cli | axon_client_identity::ClientChannel::Memory => {
-            Channel::Cli
-        }
+        axon_client_identity::ClientChannel::Cli => Channel::Cli,
     }
 }
 

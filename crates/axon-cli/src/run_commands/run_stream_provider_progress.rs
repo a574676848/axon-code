@@ -162,7 +162,7 @@ fn provider_progress_options<'a>(
         .as_ref()
         .and_then(|value| value.get("channel").and_then(|value| value.as_str()))
         .map(|value| axon_client_identity::ClientChannel::parse(Some(value)))
-        .unwrap_or(axon_client_identity::ClientChannel::Feishu);
+        .unwrap_or(axon_client_identity::ClientChannel::Cli);
     RunProgressOptions {
         client_channel,
         progress: Some(progress),

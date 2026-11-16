@@ -296,7 +296,13 @@ pub(super) fn delete_session_families_by_ids(
         )?,
         schedules: delete_ids_in(&transaction, "schedules", "session_id", &placeholders, ids)?,
         // 执行历史先于会话删除：终态行已迁出在途表，不删会留下无主历史。
-        executions: delete_ids_in(&transaction, "work_item_history", "session_id", &placeholders, ids)?,
+        executions: delete_ids_in(
+            &transaction,
+            "work_item_history",
+            "session_id",
+            &placeholders,
+            ids,
+        )?,
         sessions: delete_ids_in(&transaction, "sessions", "session_id", &placeholders, ids)?,
         ..RuntimeCleanupCounts::default()
     };

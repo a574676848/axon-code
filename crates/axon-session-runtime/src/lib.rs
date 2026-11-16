@@ -1,7 +1,7 @@
 //! 持久 Session Action 的应用运行时。
 //!
 //! 本 crate 只协调 Action、checkpoint、recovery 与 Agent 执行端口，
-//! 不依赖 CLI、Feishu、IPC 或操作系统服务。
+//! 不依赖 CLI、IPC 或操作系统服务。
 
 pub mod application;
 pub mod model;

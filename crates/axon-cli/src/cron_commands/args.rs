@@ -88,16 +88,14 @@ pub(crate) struct CronCreateCommand {
     pub(crate) prompt: String,
     #[arg(long = "skill")]
     pub(crate) skills: Vec<String>,
-    /// 完成后的通知目标，两种取值互斥。
-    ///
-    /// `feishu:<chat_id>`：把结果正文直接发到该飞书会话，用于通知用户，不消耗模型。
+    /// 完成后的通知目标。
     ///
     /// `session:<channel>:<destination>[:<workspace>]`：向该会话注入一轮主 turn，用于让
     /// 发布任务的会话自己跟进结果，按一轮对话计费。要回调当前会话，把运行上下文里给出的
-    /// `session_channel`、`session_destination`、`session_workspace` 原样填上；车道身份
+    /// `session_channel`、`session_destination`、`session_workspace` 原样填上；会话身份
     /// 含 workspace 维度，跨项目的同名会话靠第四段区分，省略时按任务执行目录反推。
     ///
-    /// channel 只支持 feishu 与 desktop。省略时任务执行完只记录运行事实，不产生任何投递。
+    /// channel 只支持 desktop 与 tui。省略时任务执行完只记录运行事实，不产生任何投递。
     #[arg(long, verbatim_doc_comment)]
     pub(crate) wake: Option<String>,
     #[arg(long)]
@@ -106,12 +104,6 @@ pub(crate) struct CronCreateCommand {
     pub(crate) no_agent: bool,
     #[arg(long)]
     pub(crate) script: Option<String>,
-    /// 已移除：命中时给出中文迁移提示，不再参与任何投递。
-    #[arg(long, hide = true, value_name = "CHAT_ID")]
-    pub(crate) feishu_chat_id: Option<String>,
-    /// 已移除：命中时给出中文迁移提示，不再参与任何投递。
-    #[arg(long, hide = true, value_name = "THREAD_ID")]
-    pub(crate) feishu_thread_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Args, PartialEq, Eq)]
@@ -137,8 +129,8 @@ pub(crate) struct CronUpdateCommand {
     pub(crate) clear_skills: bool,
     /// 新的通知目标，语义与 create 的 `--wake` 一致。
     ///
-    /// `feishu:<chat_id>` 直投飞书会话；`session:<channel>:<destination>[:<workspace>]`
-    /// 注入一轮主 turn。channel 只支持 feishu 与 desktop。
+    /// `session:<channel>:<destination>[:<workspace>]` 注入一轮主 turn，
+    /// 注入一轮主 turn。channel 只支持 desktop 与 tui。
     #[arg(long, verbatim_doc_comment)]
     pub(crate) wake: Option<String>,
     /// 清空通知目标；此后的执行不再产生任何投递。
@@ -154,12 +146,6 @@ pub(crate) struct CronUpdateCommand {
     pub(crate) script: Option<String>,
     #[arg(long)]
     pub(crate) clear_script: bool,
-    /// 已移除：命中时给出中文迁移提示，不再参与任何投递。
-    #[arg(long, hide = true, value_name = "CHAT_ID")]
-    pub(crate) feishu_chat_id: Option<String>,
-    /// 已移除：命中时给出中文迁移提示，不再参与任何投递。
-    #[arg(long, hide = true, value_name = "THREAD_ID")]
-    pub(crate) feishu_thread_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Args, PartialEq, Eq)]

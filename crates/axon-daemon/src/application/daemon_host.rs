@@ -114,7 +114,7 @@ pub struct DaemonHost<S, E, P, C, I> {
     stream_bridge: Arc<EventStreamBridge>,
     active_turn_steer_sink: Arc<dyn ActiveTurnSteerSink>,
     delivery_health: Option<Arc<dyn DeliveryHealthStore>>,
-    /// 组合根提供的飞书通知目标；所有 Host 快照共享最新配置。
+    /// 组合根提供的远端通知目标；所有 Host 快照共享最新配置。
     /// 最近一次成功写入的 Host lease 到期时间；健康快照据此报告真实剩余租期。
     lease_expires_at_ms: Arc<AtomicU64>,
 }
@@ -223,7 +223,7 @@ where
         self.delivery_health = Some(Arc::new(delivery_health));
         self
     }
-    /// 获取 Host 级实时事件桥接器，供 TUI、CLI、Feishu adapter 订阅。
+    /// 获取 Host 级实时事件桥接器，供 TUI、CLI 与桌面端订阅。
     #[must_use]
     pub fn stream_bridge(&self) -> Arc<EventStreamBridge> {
         Arc::clone(&self.stream_bridge)

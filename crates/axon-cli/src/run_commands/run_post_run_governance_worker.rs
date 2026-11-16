@@ -145,8 +145,6 @@ fn client_channel_token(channel: axon_client_identity::ClientChannel) -> &'stati
         axon_client_identity::ClientChannel::Tui => "tui",
         axon_client_identity::ClientChannel::Cli => "cli",
         axon_client_identity::ClientChannel::Desktop => "desktop",
-        axon_client_identity::ClientChannel::Feishu => "feishu",
-        axon_client_identity::ClientChannel::Memory => "memory",
     }
 }
 

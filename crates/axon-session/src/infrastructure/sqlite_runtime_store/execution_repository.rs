@@ -9,7 +9,7 @@ use crate::ports::{ExecutionStore, ExecutionStoreError, RuntimeStore};
 use axon_domain::{
     DaemonSessionId, ExecutionId, ExecutionLease, ExecutionRecord, ExecutionStatus, GoalId,
 };
-use rusqlite::{OptionalExtension, Row, ToSql, TransactionBehavior, params, params_from_iter};
+use rusqlite::{OptionalExtension, Row, TransactionBehavior, params};
 use uuid::Uuid;
 
 const RETRY_BACKOFF_BASE_MS: u64 = 1_000;
@@ -215,20 +215,16 @@ impl ExecutionStore for SqliteRuntimeStore {
             .iter()
             .map(|execution| execution.execution_id.as_str().to_owned())
             .collect::<Vec<_>>();
-        let placeholders = (6..(6 + ids.len()))
-            .map(|index| format!("?{index}"))
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!(
-            "UPDATE work_items SET status='running',lease_json=?1,claimed_by=?2,claimed_generation=?3,lease_expires_at_ms=?4,retry_at_ms=NULL,updated_at_ms=?5 WHERE execution_id IN ({placeholders}) AND status='queued' AND (retry_at_ms IS NULL OR retry_at_ms<=?5)"
-        );
-        let owner_value = owner.to_owned();
-        let mut bindings: Vec<&dyn ToSql> =
-            vec![&lease_json, &owner_value, &lease_token, &expires, &now];
-        bindings.extend(ids.iter().map(|id| id as &dyn ToSql));
-        let changed = transaction
-            .execute(&sql, params_from_iter(bindings))
-            .map_err(storage_error)?;
+        let changed = super::work_item_claim::claim_execution_rows(
+            &transaction,
+            &ids,
+            &lease_json,
+            owner,
+            &lease_token,
+            expires,
+            now,
+        )
+        .map_err(storage_error)?;
         if changed != executions.len() {
             return Err(ExecutionStoreError::Conflict(
                 "Execution claim 在事务内发生并发变化".to_owned(),
