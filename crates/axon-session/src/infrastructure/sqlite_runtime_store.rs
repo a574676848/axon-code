@@ -329,6 +329,18 @@ impl SqliteRuntimeStore {
         session_metrics_repository::read_metrics(self, session_id)
     }
 
+    /// 由事件日志重放重建会话累计指标。
+    ///
+    /// 投影是可重建的派生数据：写入失败或怀疑漂移时调用一次，按日志里的
+    /// `turn_metrics` 帧整体重放，删旧行后写回。
+    pub fn rebuild_session_metrics(
+        &self,
+        session_id: &DaemonSessionId,
+        now_ms: u64,
+    ) -> Result<session_metrics_repository::SessionMetricsSnapshot, RuntimeStoreError> {
+        session_metrics_repository::rebuild_metrics(self, session_id, now_ms)
+    }
+
     /// 回收仍标记为 running、但对应进程已经退出的 Host lease。
     ///
     /// 服务被 launchd/systemd 强制停止时，进程可能来不及执行持久化清理；

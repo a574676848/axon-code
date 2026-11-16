@@ -87,10 +87,11 @@ pub(super) fn append_events(
 
     // 阶段 2：事件面追加。不持有任何数据库锁。
     let interaction_column = interaction_lease.map(|(interaction_id, _)| interaction_id.as_str());
+    let origin_channel = interaction_channel(store, interaction_column)?;
     let records = build_records(session_id, host, events, start, now_ms);
     let runtime_records = records
         .iter()
-        .map(|record| to_runtime_record(record, interaction_column))
+        .map(|record| to_runtime_record(record, interaction_column, origin_channel.as_deref()))
         .collect::<Vec<_>>();
     axon_eventlog::append_once(
         &store.event_log(session_id),
@@ -99,7 +100,7 @@ pub(super) fn append_events(
         &runtime_records,
     )
     .map_err(log_error)?;
-    apply_projections(store, session_id, events, now_ms);
+    apply_projections(store, session_id, events, origin_channel.as_deref(), now_ms);
     Ok(records)
 }
 
@@ -174,6 +175,7 @@ fn build_records(
 fn to_runtime_record(
     record: &SessionEventRecord,
     interaction_id: Option<&str>,
+    origin_channel: Option<&str>,
 ) -> axon_eventlog::RuntimeEventRecord {
     let payload = serde_json::from_str::<serde_json::Value>(&record.payload_json)
         .unwrap_or_else(|_| serde_json::Value::String(record.payload_json.clone()));
@@ -182,11 +184,32 @@ fn to_runtime_record(
         emitted_at_ms: record.emitted_at_ms,
         generation: Some(record.generation.clone()),
         interaction_id: interaction_id.map(str::to_owned),
-        origin_channel: None,
+        origin_channel: origin_channel.map(str::to_owned),
+        // 这三个写入口都来自外部渠道触发的一轮执行（交互、动作、失败、隔离），
+        // 因此来源类别固定是外部；定时与目标推进的上游另有生产者，不经过这里。
         origin_kind: axon_eventlog::TurnOrigin::External,
         event_type: axon_eventlog::RuntimeEventKind::from_str_lossy(&record.event_type),
         payload,
     }
+}
+
+/// 入站事实的来源渠道：只取一条，缺失时按内部轮次处理。
+fn interaction_channel(
+    store: &SqliteRuntimeStore,
+    interaction_id: Option<&str>,
+) -> Result<Option<String>, RuntimeStoreError> {
+    let Some(interaction_id) = interaction_id else {
+        return Ok(None);
+    };
+    let connection = store.connection()?;
+    connection
+        .query_row(
+            "SELECT source_channel FROM inbox WHERE interaction_id=?1",
+            params![interaction_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage)
 }
 
 fn from_runtime_record(
@@ -234,9 +257,10 @@ pub(super) fn write_events_at(
             emitted_at_ms: now_ms,
         })
         .collect::<Vec<_>>();
+    let origin_channel = interaction_channel(store, interaction_id)?;
     let runtime_records = records
         .iter()
-        .map(|record| to_runtime_record(record, interaction_id))
+        .map(|record| to_runtime_record(record, interaction_id, origin_channel.as_deref()))
         .collect::<Vec<_>>();
     axon_eventlog::append_once(
         &store.event_log(session_id),
@@ -245,7 +269,7 @@ pub(super) fn write_events_at(
         &runtime_records,
     )
     .map_err(log_error)?;
-    apply_projections(store, session_id, events, now_ms);
+    apply_projections(store, session_id, events, origin_channel.as_deref(), now_ms);
     Ok(records)
 }
 /// 逐条把已分配序号的事件写进事件面文件。
@@ -257,8 +281,9 @@ pub(super) fn write_records(
     records: &[SessionEventRecord],
     interaction_id: Option<&str>,
 ) -> Result<(), RuntimeStoreError> {
+    let origin_channel = interaction_channel(store, interaction_id)?;
     for record in records {
-        let runtime_record = to_runtime_record(record, interaction_id);
+        let runtime_record = to_runtime_record(record, interaction_id, origin_channel.as_deref());
         axon_eventlog::append_once(
             &store.event_log(&record.session_id),
             record.sequence,
@@ -271,11 +296,13 @@ pub(super) fn write_records(
 }
 /// 把本轮指标投射到 `session_metrics`。
 ///
-/// 投影失败不阻断主流程：它是可重建的派生数据，下一次重放会修正。
+/// 投影是可重建的派生数据，失败不阻断主流程；但失败必须上报，否则「累计耗时恒 null」
+/// 这类问题只能等界面报错才发现。需要兜底时用 `rebuild_session_metrics` 整体重放。
 fn apply_projections(
     store: &SqliteRuntimeStore,
     session_id: &DaemonSessionId,
     events: &[(String, String)],
+    origin_channel: Option<&str>,
     now_ms: u64,
 ) {
     for (event_type, payload_json) in events {
@@ -285,8 +312,17 @@ fn apply_projections(
         let Ok(metrics) = serde_json::from_str::<axon_eventlog::TurnMetrics>(payload_json) else {
             continue;
         };
-        let _ = super::session_metrics_repository::apply_turn_metrics(
-            store, session_id, &metrics, None, now_ms,
-        );
+        if let Err(error) = super::session_metrics_repository::apply_turn_metrics(
+            store,
+            session_id,
+            &metrics,
+            origin_channel,
+            now_ms,
+        ) {
+            eprintln!(
+                "会话累计指标投影写入失败，可重建: session={} error={error}",
+                session_id.as_str()
+            );
+        }
     }
 }

@@ -34,7 +34,64 @@ pub(super) fn apply_turn_metrics(
         .map_err(storage)?;
     let existing = read_row(&transaction, session_id)?;
     let mut row = existing.unwrap_or_default();
+    accumulate_turn_metrics(&mut row, metrics, channel, now_ms);
+    write_row(&transaction, session_id, &row)?;
+    transaction.commit().map_err(storage)
+}
 
+/// 由会话事件日志重放重建累计指标。
+///
+/// 投影是派生数据：写入失败或怀疑漂移时，按日志里的 `turn_metrics` 帧整体重放，
+/// 先删旧行再写回，不依赖增量路径是否成功。
+pub(super) fn rebuild_metrics(
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+    now_ms: u64,
+) -> Result<SessionMetricsSnapshot, RuntimeStoreError> {
+    let reader = store
+        .event_log(session_id)
+        .reader()
+        .map_err(|error| RuntimeStoreError::Storage(format!("读取会话事件日志失败：{error}")))?;
+    let mut row = MetricsRow::default();
+    let metrics_kind = axon_eventlog::RuntimeEventKind::TurnMetrics.as_str();
+    for record in reader.records() {
+        if record.event_type.as_str() != metrics_kind {
+            continue;
+        }
+        let Ok(metrics) = serde_json::from_value::<TurnMetrics>(record.payload.clone()) else {
+            continue;
+        };
+        accumulate_turn_metrics(
+            &mut row,
+            &metrics,
+            record.origin_channel.as_deref(),
+            record.emitted_at_ms,
+        );
+    }
+    let mut connection = store.connection()?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage)?;
+    transaction
+        .execute(
+            "DELETE FROM session_metrics WHERE session_id=?1",
+            params![session_id.as_str()],
+        )
+        .map_err(storage)?;
+    row.updated_at_ms = now_ms;
+    write_row(&transaction, session_id, &row)?;
+    transaction.commit().map_err(storage)?;
+    read_metrics(store, session_id)?
+        .ok_or_else(|| RuntimeStoreError::Storage("重建后仍未读到会话累计指标".to_owned()))
+}
+
+/// 把一轮指标叠加到内存行上；增量投影与全量重放共用同一套口径。
+fn accumulate_turn_metrics(
+    row: &mut MetricsRow,
+    metrics: &TurnMetrics,
+    channel: Option<&str>,
+    now_ms: u64,
+) {
     row.turn_count = row.turn_count.saturating_add(1);
     match metrics.outcome {
         TurnOutcome::Succeeded => row.turn_succeeded = row.turn_succeeded.saturating_add(1),
@@ -79,9 +136,6 @@ pub(super) fn apply_turn_metrics(
     row.first_turn_at_ms.get_or_insert(now_ms);
     row.last_turn_at_ms = Some(now_ms);
     row.updated_at_ms = now_ms;
-
-    write_row(&transaction, session_id, &row)?;
-    transaction.commit().map_err(storage)
 }
 
 /// 后台任务计数变更：`+1` 表示开始，`-1` 表示结束。

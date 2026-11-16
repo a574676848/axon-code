@@ -150,3 +150,69 @@ fn running_jobs_never_go_negative() {
     assert_eq!(snapshot.jobs_running, 0);
     assert_eq!(snapshot.jobs_completed, 1);
 }
+
+#[test]
+fn projection_records_the_inbound_channel_instead_of_internal() {
+    let (store, session_id) = fixture();
+    super::session_metrics_repository::apply_turn_metrics(
+        &store,
+        &session_id,
+        &metrics("t1", None, 10, 0),
+        Some("tui"),
+        20,
+    )
+    .expect("写入投影");
+    let snapshot = store
+        .session_metrics(&session_id)
+        .expect("读取投影")
+        .expect("投影应存在");
+    assert_eq!(snapshot.channel_mix.get("tui"), Some(&1));
+    assert!(
+        !snapshot.channel_mix.contains_key("internal"),
+        "有渠道来源的轮次不得记成 internal：{:?}",
+        snapshot.channel_mix
+    );
+}
+
+#[test]
+fn rebuild_replays_the_event_log_and_restores_channel_mix() {
+    let (store, session_id) = fixture();
+    let mut records = Vec::new();
+    for (index, metrics) in [
+        metrics("t1", Some(50), 700, 1),
+        metrics("t2", None, 1_300, 2),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let sequence = u64::try_from(index).expect("序号");
+        let record = axon_eventlog::RuntimeEventRecord::turn_metrics(sequence, 1_000, &metrics)
+            .expect("构造事件")
+            .with_origin(Some("desktop"), axon_eventlog::TurnOrigin::External);
+        records.push(record);
+    }
+    axon_eventlog::append_once(&store.event_log(&session_id), 0, 1_000, &records)
+        .expect("写入事件日志");
+
+    // 投影缺失（模拟写入失败）时，重放必须把它补回来。
+    assert!(
+        store
+            .session_metrics(&session_id)
+            .expect("读取投影")
+            .is_none()
+    );
+    let snapshot = store
+        .rebuild_session_metrics(&session_id, 2_000)
+        .expect("重建投影");
+    assert_eq!(snapshot.turn_count, 2);
+    assert_eq!(snapshot.total_active_ms, 2_000);
+    assert_eq!(snapshot.max_turn_ms, 1_300);
+    assert_eq!(snapshot.ttft_samples, 1);
+    assert_eq!(snapshot.channel_mix.get("desktop"), Some(&2));
+    // 重复重建是幂等的：先删旧行再整体重放。
+    let again = store
+        .rebuild_session_metrics(&session_id, 3_000)
+        .expect("再次重建");
+    assert_eq!(again.turn_count, 2);
+    assert_eq!(again.total_active_ms, 2_000);
+}
