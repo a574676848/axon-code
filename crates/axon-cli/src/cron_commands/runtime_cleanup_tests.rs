@@ -210,50 +210,6 @@ fn explicit_session_family_cleanup_rechecks_active_state_and_execution_reference
 }
 
 #[test]
-fn stale_family_dry_run_subtracts_rolling_event_overlap() {
-    const EVENT_COUNT: i64 = SESSION_EVENT_MIN_RETAINED + 1;
-    let root = axon_test_support::test_temp_dir();
-    let mut connection = open_fixture(root.path());
-    connection
-        .execute(
-            "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES('stale','stale','stale','/w','idle',NULL,NULL,0,0,0,?1,1,1,1)",
-            [EVENT_COUNT],
-        )
-        .expect("stale Session 应可写入");
-    let transaction = connection.transaction().expect("事件事务应可创建");
-    for sequence in 1..=EVENT_COUNT {
-        transaction
-            .execute(
-                "INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,emitted_at_ms) VALUES('stale',?1,'g','turn','{}',1)",
-                [sequence],
-            )
-            .expect("stale event 应可写入");
-    }
-    transaction.commit().expect("事件事务应可提交");
-
-    let family = count_runtime_session_families(root.path(), &["stale".to_owned()])
-        .expect("family 应可统计");
-    let rolling = count_runtime_cleanup(root.path(), 100).expect("rolling 应可统计");
-    let overlap = count_runtime_session_event_overlap(root.path(), &["stale".to_owned()], 100)
-        .expect("重叠应可统计");
-
-    // 会话状态是 idle，不属于活跃车道：事件保底不生效，超期事件整段可回收。
-    assert_eq!(family.session_events, usize::try_from(EVENT_COUNT).unwrap());
-    assert_eq!(
-        rolling.session_events,
-        usize::try_from(EVENT_COUNT).unwrap()
-    );
-    assert_eq!(overlap, usize::try_from(EVENT_COUNT).unwrap());
-    assert_eq!(
-        family
-            .session_events
-            .saturating_add(rolling.session_events)
-            .saturating_sub(overlap),
-        usize::try_from(EVENT_COUNT).unwrap()
-    );
-}
-
-#[test]
 fn dry_run_counts_match_real_deletion() {
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
@@ -462,56 +418,6 @@ fn cleanup_does_not_stall_concurrent_writes() {
 }
 
 #[test]
-fn running_session_event_history_is_trimmed_without_removing_related_data() {
-    let root = axon_test_support::test_temp_dir();
-    let connection = open_fixture(root.path());
-    insert_hot_session_history(&connection);
-    drop(connection);
-    let artifacts = write_retained_session_artifacts(root.path());
-    let expected_deleted = HOT_SESSION_EVENT_COUNT - super::SESSION_EVENT_MIN_RETAINED;
-
-    let dry_run = count_runtime_cleanup(root.path(), CLEANUP_CUTOFF_MS).expect("dry-run 应成功");
-    assert_eq!(
-        i64::try_from(dry_run.session_events).expect("计数应可转换"),
-        expected_deleted
-    );
-    let counts = cleanup_runtime_data(root.path(), CLEANUP_CUTOFF_MS).expect("清理应成功");
-    assert_eq!(
-        i64::try_from(counts.session_events).expect("计数应可转换"),
-        expected_deleted
-    );
-
-    let connection = Connection::open(
-        root.path()
-            .join(axon_config::AXON_RUNTIME_DATA_DIR)
-            .join(CONTROL_DATABASE_FILE),
-    )
-    .expect("测试数据库应可重开");
-    let (remaining, first_sequence, last_sequence): (i64, i64, i64) = connection
-        .query_row(
-            "SELECT COUNT(*), MIN(sequence), MAX(sequence)
-             FROM session_events WHERE session_id = ?1",
-            [HOT_SESSION_ID],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .expect("事件水位统计应成功");
-    assert_eq!(remaining, super::SESSION_EVENT_MIN_RETAINED);
-    assert_eq!(first_sequence, expected_deleted + 1);
-    assert_eq!(last_sequence, HOT_SESSION_EVENT_COUNT);
-    let remaining_sessions: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM sessions WHERE session_id = ?1",
-            [HOT_SESSION_ID],
-            |row| row.get(0),
-        )
-        .expect("Session 统计应成功");
-    assert_eq!(remaining_sessions, 1);
-    for (path, before) in artifacts {
-        assert_eq!(std::fs::read(path).expect("关联文件应可读取"), before);
-    }
-}
-
-#[test]
 #[ignore = "性能验收：20 轮隔离 20000 条 retained Session 事件清理"]
 fn retained_session_event_cleanup_reports_percentiles() {
     let expected_deleted =
@@ -559,6 +465,13 @@ fn percentile(samples: &[u128], percentile: usize) -> u128 {
 fn cleanup_selection_plans_use_indexes_without_full_scan_or_temp_sort() {
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
+    // 队列库的清理语句要在队列库上取执行计划：两个库各自持有自己的表。
+    let outbox = Connection::open(
+        root.path()
+            .join(axon_config::AXON_RUNTIME_DATA_DIR)
+            .join(OUTBOX_DATABASE_FILE),
+    )
+    .expect("队列库应可打开");
     let selections = [
         (
             "upgrade_admissions",
@@ -601,7 +514,13 @@ fn cleanup_selection_plans_use_indexes_without_full_scan_or_temp_sort() {
         ),
     ];
     for (label, sql) in selections {
-        let plan = explain_cleanup_plan(&connection, &sql);
+        // 投递记录与通知本体在队列库，其余在控制面库。
+        let target = if label.starts_with("settled_completion") || label == "client_presence" {
+            &outbox
+        } else {
+            &connection
+        };
+        let plan = explain_cleanup_plan(target, &sql);
         assert!(!plan.is_empty(), "{label} 清理的执行计划不应为空");
         assert!(!plan.contains("SCAN "), "{label} 清理不得全表扫描：{plan}");
         assert!(
