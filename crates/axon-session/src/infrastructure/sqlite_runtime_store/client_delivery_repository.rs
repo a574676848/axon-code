@@ -219,7 +219,8 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
                 let connection = self.connection().map_err(storage_error)?;
                 let mut statement = connection
                     .prepare(&format!(
-                        "SELECT execution_id FROM work_items
+                        // 终态行已搬进历史表：补偿扫描必须走覆盖在途与历史的视图。
+                        "SELECT execution_id FROM work_items_all
                          WHERE status IN ({statuses})
                          ORDER BY updated_at_ms ASC, execution_id ASC LIMIT ?1 OFFSET ?2"
                     ))

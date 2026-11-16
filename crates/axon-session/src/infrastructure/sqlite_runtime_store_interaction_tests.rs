@@ -235,6 +235,22 @@ fn interrupted_interaction_appends_durable_session_and_ledger_events() {
         .expect("领取")
         .expect("lease");
 
+    // 工作项必须带上入站事实绑定的 session：写死 NULL 会让取消与会话保护谓词漏判。
+    let claimed_session: Option<String> = store
+        .connection()
+        .expect("connection")
+        .query_row(
+            "SELECT session_id FROM work_items WHERE inbox_id=?1",
+            [interaction.interaction_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("工作项应可查询");
+    assert_eq!(
+        claimed_session.as_deref(),
+        Some(session_id.as_str()),
+        "工作项的 session_id 必须来自入站事实"
+    );
+
     let records = store
         .quarantine_interrupted_interactions(&host, 121, 10)
         .expect("收敛中断 Interaction");

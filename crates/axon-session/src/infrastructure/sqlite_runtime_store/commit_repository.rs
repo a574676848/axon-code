@@ -37,6 +37,14 @@ pub(super) fn update_action_status(
     if changed == 0 {
         return Err(RuntimeStoreError::Fenced);
     }
+    // 终态落定后立刻搬进历史表：在途表只放排队与运行中的行。
+    super::work_item_archive::archive_settled_work_item(
+        &transaction,
+        "execution_id=?1",
+        action_id.as_str(),
+        i64_value(now_ms)?,
+    )
+    .map_err(storage)?;
     transaction.commit().map_err(storage)
 }
 
@@ -200,6 +208,14 @@ pub(super) fn commit_action(
              ],
          )
          .map_err(storage)?;
+    // 所有对在途行的读取与派生写入都已完成，最后把终态行搬进历史表。
+    super::work_item_archive::archive_settled_work_item(
+        &transaction,
+        "execution_id=?1",
+        action_id.as_str(),
+        i64_value(now_ms)?,
+    )
+    .map_err(storage)?;
     transaction.commit().map_err(storage)?;
     super::event_log_repository::write_events_at(
         store,

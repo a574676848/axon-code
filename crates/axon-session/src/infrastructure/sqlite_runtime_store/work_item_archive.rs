@@ -6,6 +6,12 @@
 
 use rusqlite::Connection;
 
+/// 已落定终态：这些状态的行必须搬进历史表。
+///
+/// `uncertain` 不在其中：它表示外部结果未知、仍待裁决，留在在途表才能继续拦住
+/// Goal 的重新激活。
+const SETTLED_STATUSES: &str = "'completed','failed','cancelled','dead_letter'";
+
 /// 把一条已结束的工作项搬进历史表；不存在时什么都不做。
 ///
 /// 调用方必须先在同一事务里把 `work_items.status`/`terminal_kind` 写成终态，
@@ -27,13 +33,40 @@ pub(super) fn archive_work_item_by_inbox(
     archive_where(connection, "inbox_id=?1", inbox_id, now_ms)
 }
 
+/// 归档命中条件且已落定终态的行，返回搬运行数。
+///
+/// 终态写点的统一出口：终态 UPDATE 不管有没有真的把行改到终态（可能因守卫失效
+/// 而 0 行、也可能是重试排队态），都可以无条件调用本函数，由状态谓词决定搬不搬。
+pub(super) fn archive_settled_work_item(
+    connection: &Connection,
+    condition: &str,
+    work_key: &str,
+    now_ms: i64,
+) -> rusqlite::Result<usize> {
+    archive_where_count(
+        connection,
+        &format!("{condition} AND status IN ({SETTLED_STATUSES})"),
+        work_key,
+        now_ms,
+    )
+}
+
 fn archive_where(
     connection: &Connection,
     condition: &str,
     work_key: &str,
     now_ms: i64,
 ) -> rusqlite::Result<()> {
-    connection.execute(
+    archive_where_count(connection, condition, work_key, now_ms).map(|_| ())
+}
+
+fn archive_where_count(
+    connection: &Connection,
+    condition: &str,
+    work_key: &str,
+    now_ms: i64,
+) -> rusqlite::Result<usize> {
+    let moved = connection.execute(
         &format!(
             "INSERT INTO work_item_history(
              work_id, goal_id, session_id, kind, payload_json, goal_revision, context_version,
@@ -51,10 +84,9 @@ fn archive_where(
         ),
         rusqlite::params![work_key, now_ms],
     )?;
-    connection
-        .execute(
-            &format!("DELETE FROM work_items WHERE {condition}"),
-            rusqlite::params![work_key],
-        )
-        .map(|_| ())
+    connection.execute(
+        &format!("DELETE FROM work_items WHERE {condition}"),
+        rusqlite::params![work_key],
+    )?;
+    Ok(moved)
 }

@@ -44,8 +44,27 @@ impl LedgerCommitStore for SqliteRuntimeStore {
             expected_goal_revision,
             event,
         )?;
+        archive_settled(&transaction, execution)?;
         transaction.commit().map_err(storage_error)
     }
+}
+
+/// 账本提交把 Execution 收敛到终态后，把这一行搬进历史表。
+///
+/// 复用事务的调用方（Session 收口路径）必须在本函数之外、自己事务的末尾调用，
+/// 否则后续还要按 id 读在途行的步骤会读到空集。
+fn archive_settled(
+    transaction: &rusqlite::Transaction<'_>,
+    execution: &ExecutionRecord,
+) -> Result<(), LedgerCommitError> {
+    super::work_item_archive::archive_settled_work_item(
+        transaction,
+        "execution_id=?1",
+        execution.execution_id.as_str(),
+        i64_value(execution.updated_at_ms).map_err(storage_error)?,
+    )
+    .map(|_| ())
+    .map_err(storage_error)
 }
 
 /// 复用调用方事务，保证账本、Session checkpoint 与下一阶段同时成功或回滚。

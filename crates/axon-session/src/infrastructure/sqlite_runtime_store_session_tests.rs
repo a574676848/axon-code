@@ -187,6 +187,24 @@ fn stop_session_cancels_pending_actions_without_rotating_run_identity() {
             .expect("读取队列")
             .is_empty()
     );
+    // 取消即终态：在途表必须清空，历史表承接这条被取消的 Action。
+    let connection = store.connection().expect("connection");
+    let in_flight: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM work_items WHERE session_id=?1",
+            [session_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("在途表可查");
+    assert_eq!(in_flight, 0, "终态行不得留在在途表");
+    let archived_status: String = connection
+        .query_row(
+            "SELECT status FROM work_item_history WHERE session_id=?1",
+            [session_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("历史表应有被取消的 Action");
+    assert_eq!(archived_status, "cancelled");
 }
 
 #[test]
@@ -273,6 +291,74 @@ fn failed_action_respects_persistent_retry_at_before_reclaim() {
             .expect("退避到期查询")
             .is_some()
     );
+}
+
+#[test]
+fn terminal_action_failure_is_archived_out_of_in_flight_table() {
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    let host = store
+        .claim_host(
+            &RuntimeHostId::new("host-failed-archive").expect("host"),
+            1,
+            None,
+            10,
+            10_000,
+        )
+        .expect("claim");
+    let session_id = DaemonSessionId::new("session-failed-archive").expect("session");
+    store.create_session(&session_id, ".", 10).expect("session");
+    let action = SessionActionRecord {
+        action_id: SessionActionId::new("failed-archive-action").expect("action"),
+        goal_id: None,
+        session_id: session_id.clone(),
+        kind: "user_input".to_owned(),
+        priority: 50,
+        status: SessionActionStatus::Queued,
+        dedupe_key: None,
+        payload_json: r#"{"prompt":"必然失败"}"#.to_owned(),
+        goal_revision: None,
+        context_version: None,
+        claimed_by: None,
+        claimed_generation: None,
+        lease_expires_at_ms: None,
+        attempt: 0,
+    };
+    store.enqueue_action(&action, 20).expect("入队");
+    let claimed = store
+        .claim_next_action(&session_id, &host, 30, 10_000)
+        .expect("claim action")
+        .expect("应领取");
+    // max_attempts=1：本次失败即终态，必须搬离在途表。
+    store
+        .fail_action(
+            &claimed.action_id,
+            &session_id,
+            &host,
+            "Provider 返回不可恢复错误",
+            1,
+            40,
+        )
+        .expect("终态失败结算");
+
+    let connection = store.connection().expect("connection");
+    let in_flight: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM work_items WHERE session_id=?1",
+            [session_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("在途表可查");
+    assert_eq!(in_flight, 0, "终态失败行必须搬离在途表");
+    let archived: (String, String) = connection
+        .query_row(
+            "SELECT status,terminal_kind FROM work_item_history WHERE work_id=?1",
+            [claimed.action_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("历史表应承接终态失败行");
+    assert_eq!(archived.0, "failed");
+    assert_eq!(archived.1, "failed");
 }
 
 #[test]

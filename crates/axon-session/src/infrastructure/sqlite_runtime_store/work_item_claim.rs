@@ -52,8 +52,11 @@ pub(super) fn start_interaction_item(
             return Ok(false);
         }
         transaction.execute(
+            // session_id 取自入站事实本身：写死 NULL 会让取消、会话族清理与会话保护
+            // 谓词全部漏判这条工作项。未绑定 Workspace 的输入在 `inbox` 里是空串，
+            // 这里折回 NULL；同时要求 `sessions` 已有对应行，避免触发外键约束。
             "INSERT INTO work_items(execution_id,goal_id,session_id,kind,payload_json,attempt,priority,status,lease_token,claimed_by,lease_expires_at_ms,started_at_ms,created_at_ms,updated_at_ms,inbox_id) \
-             VALUES(?1,NULL,NULL,'turn','{}',1,0,?2,?3,NULL,?4,?5,?5,?5,?6)",
+             VALUES(?1,NULL,NULLIF((SELECT i.session_id FROM inbox AS i JOIN sessions AS s ON s.session_id=i.session_id WHERE i.interaction_id=?6),''),'turn','{}',1,0,?2,?3,NULL,?4,?5,?5,?5,?6)",
             params![work_id, running, lease_token, expires, now, interaction_id],
         )?;
         return Ok(true);

@@ -97,5 +97,12 @@ fn cancel_open_actions(
             params![i64_value(now_ms)?, session_id.as_str()],
         )
         .map_err(storage)?;
+    super::work_item_archive::archive_settled_work_item(
+        transaction,
+        "session_id=?1",
+        session_id.as_str(),
+        i64_value(now_ms)?,
+    )
+    .map_err(storage)?;
     Ok(())
 }

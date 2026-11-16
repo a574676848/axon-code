@@ -163,6 +163,13 @@ impl GoalStore for SqliteRuntimeStore {
                 params![now, reason, goal_id.as_str()],
             )
             .map_err(storage_error)?;
+        super::work_item_archive::archive_settled_work_item(
+            &transaction,
+            "goal_id=?1",
+            goal_id.as_str(),
+            now,
+        )
+        .map_err(storage_error)?;
         let sequence: i64 = transaction
             .query_row(
                 "SELECT COALESCE(MAX(sequence),0)+1 FROM ledger_events",
@@ -213,6 +220,13 @@ impl GoalStore for SqliteRuntimeStore {
             "UPDATE work_items SET cancellation_requested_at_ms=?1,cancellation_reason=?2,updated_at_ms=?1 WHERE goal_id=?3 AND status='running'",
             params![now, reason, goal.goal_id.as_str()],
         ).map_err(storage_error)?;
+        super::work_item_archive::archive_settled_work_item(
+            &transaction,
+            "goal_id=?1",
+            goal.goal_id.as_str(),
+            now,
+        )
+        .map_err(storage_error)?;
         let sequence: i64 = transaction
             .query_row(
                 "SELECT COALESCE(MAX(sequence),0)+1 FROM ledger_events",

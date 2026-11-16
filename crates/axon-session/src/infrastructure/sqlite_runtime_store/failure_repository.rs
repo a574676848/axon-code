@@ -67,6 +67,14 @@ pub(super) fn fail_action(
             params![host.host_id.as_str(), host.generation, i64::try_from(sequence).map_err(|_| RuntimeStoreError::Storage("事件序号超出范围".to_owned()))?, i64::try_from(now_ms).map_err(|_| RuntimeStoreError::Storage("时间戳超出范围".to_owned()))?, session_id.as_str()],
         )
         .map_err(super::helpers::storage)?;
+    // 终态失败搬进历史表；重试排队态不满足终态谓词，这里是空操作。
+    super::work_item_archive::archive_settled_work_item(
+        &transaction,
+        "execution_id=?1",
+        action_id.as_str(),
+        super::helpers::i64_value(now_ms)?,
+    )
+    .map_err(super::helpers::storage)?;
     transaction.commit().map_err(super::helpers::storage)?;
     super::event_log_repository::write_events_at(
         store,

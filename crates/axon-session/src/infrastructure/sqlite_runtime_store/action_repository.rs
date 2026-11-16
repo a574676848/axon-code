@@ -147,6 +147,14 @@ pub(super) fn cancel_action(
             "Action 不在可取消状态".to_owned(),
         ));
     }
+    // 归档先于读回：`work_items_all` 视图同时覆盖在途表与历史表，读回结果不变。
+    super::work_item_archive::archive_settled_work_item(
+        &connection,
+        "execution_id=?1",
+        action_id.as_str(),
+        i64_value(now_ms)?,
+    )
+    .map_err(storage)?;
     connection
         .query_row(
             &format!("SELECT {ACTION_COLUMNS} FROM work_items_all WHERE execution_id=?1"),

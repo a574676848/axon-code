@@ -142,6 +142,14 @@ fn settle_interrupted(
     if changed == 0 {
         return Ok(false);
     }
+    // 隔离即终态：行搬进历史表后，处理链不会再把它当成可领取的入站事实。
+    super::work_item_archive::archive_settled_work_item(
+        transaction,
+        "inbox_id=?1",
+        interaction_id.as_str(),
+        now,
+    )
+    .map_err(storage)?;
     let event_id = JarvisEventId::new(format!(
         "event-{LEDGER_EVENT_TYPE}-{}",
         interaction_id.as_str()
