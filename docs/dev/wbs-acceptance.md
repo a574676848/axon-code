@@ -26,7 +26,7 @@
 | W1-6 | 待补证据 | `read_from` / `read_tail` / 反向扫描三个入口有测试 | `read.rs` 有 `read_from`/`read_tail`/`read_matching`，**无 `scan_reverse`**；两个入口有测试，反向扫描需补 |
 | W1-7 | **未完成** | torn 尾只采纳完整记录；写句柄首次写入前截断 | `crates/axon-eventlog/src` 无 `recover.rs`；真正会截断的 `EventLogWriter::open` 全仓零调用，生产写入 `append_once` 不截断（见稳定性审计 S-01） |
 | W1-8 | 待补证据 | 两进程并发追加不交错；锁冲突有明确错误 | `lock.rs` 只有同句柄加锁/释放用例，**无并发用例**；需补多进程回归 |
-| W1-9 | 已完成 | append / fsync / 截断三处注入失败后日志可读且无半条记录 | `crates/axon-eventlog/tests/crash.rs` |
+| W1-9 | **未完成** | 三处注入失败后日志可读且无半条记录 | `tests/crash.rs` **不存在**，`tests/` 下只有 `contract.rs` |
 | W1-10 | 待补证据 | 契约用例全绿并作为回归基线 | `tests/contract.rs` 实为 7 个 `#[test]`，与「20 条」不符；需补足或改口径 |
 
 ## W2 事件面接线与 rollout 退役
