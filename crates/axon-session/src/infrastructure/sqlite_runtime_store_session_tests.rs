@@ -494,6 +494,29 @@ fn log_write_failure_compensates_the_control_plane_watermark() {
 }
 
 #[test]
+#[ignore = "性能验收：控制面写事务 p95 入门禁，上限 50ms"]
+fn control_transaction_p95_budget() {
+    const SAMPLES: usize = 100;
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    store.initialize().expect("初始化");
+    let mut samples_us = Vec::with_capacity(SAMPLES);
+    for index in 0..SAMPLES {
+        let session_id = DaemonSessionId::new(format!("session-tx-{index:03}")).expect("session");
+        let started = std::time::Instant::now();
+        store
+            .create_session(&session_id, ".", 10 + u64::try_from(index).expect("序号"))
+            .expect("控制面写事务");
+        samples_us.push(started.elapsed().as_micros());
+    }
+    samples_us.sort_unstable();
+    let index = (samples_us.len() * 95).div_ceil(100).saturating_sub(1);
+    let p95_ms = samples_us[index.min(samples_us.len() - 1)] as f64 / 1_000.0;
+    println!("control_tx_p95_ms={p95_ms:.3}");
+    assert!(p95_ms < 50.0, "控制面事务 p95 超出 50ms：{p95_ms}ms");
+}
+
+#[test]
 fn interrupted_running_execution_is_quarantined_as_uncertain_without_reclaim() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));

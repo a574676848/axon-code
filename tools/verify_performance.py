@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""性能契约门禁的跨平台实现（对应 tools/perf-baseline.json）。"""
+"""性能契约门禁的跨平台实现（对应 tools/perf-baseline.json）。
+
+存储架构 §9 的四项硬上限全部由本脚本产出读数：
+- 事件写入 p99 与控制面事务 p95 由 Rust 侧 ignored 测量用例打印，脚本解析后比对；
+- 会话列表首屏由 CLI 的索引验收用例打印；
+- 运行态 data 目录体积直接扫描本机安装树。
+桌面端 P2/P9/P10/P11 属于真机交互读数，只能人工登记。
+"""
 
 from __future__ import annotations
 
@@ -7,6 +14,8 @@ import argparse
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -25,13 +34,59 @@ HARD_LIMITS = {
     "runtime_data_mib": 50.0,
 }
 GATEWAY_PREFIXES = ("/api/v1/files", "/api/v1/fs/dirs", "/api/v1/attachments")
-# 存储架构 §9 的四项硬指标：前两项由 Rust 侧 ignored 测量用例产出，
-# 后两项由本脚本直接从运行态读取。
+
+# 由 Rust 侧 ignored 用例产出的读数：命令、输出模式、超时（秒）。
+RUST_MEASUREMENTS = (
+    (
+        "event_append_p99_ms",
+        [
+            "cargo",
+            "test",
+            "-p",
+            "axon-eventlog",
+            "--test",
+            "contract",
+            "--",
+            "--ignored",
+            "event_append_p99",
+            "--nocapture",
+        ],
+        r"event_append_p99_ms=([0-9.]+)",
+    ),
+    (
+        "control_tx_p95_ms",
+        [
+            "cargo",
+            "test",
+            "-p",
+            "axon-session",
+            "--lib",
+            "--",
+            "--ignored",
+            "control_transaction_p95",
+            "--nocapture",
+        ],
+        r"control_tx_p95_ms=([0-9.]+)",
+    ),
+    (
+        "sessions_first_page_ms",
+        [
+            "cargo",
+            "test",
+            "-p",
+            "axon-cli",
+            "--lib",
+            "--",
+            "--ignored",
+            "session_list_query",
+            "--nocapture",
+        ],
+        r"indexed=([0-9]+)ms",
+    ),
+)
+
+# 只能人工登记的真机读数（自动测量覆盖不到交互与冷启动）。
 MANUAL_ITEMS = (
-    ("event_append_p99_ms", "事件单次写入 p99（毫秒，不含 fsync）"),
-    ("control_tx_p95_ms", "控制面事务 p95（毫秒）"),
-    ("sessions_first_page_ms", "会话列表首屏（毫秒）"),
-    ("runtime_data_mib", "运行态 data 目录体积（MiB）"),
     ("p2_offline_start_ms", "P2 断网启动到可见界面（毫秒）"),
     ("p9_idle_cpu_percent", "P9 空闲 60 秒渲染进程 CPU（百分比）"),
     ("p10_cold_start_ms", "P10 冷启动到可交互（毫秒）"),
@@ -49,8 +104,38 @@ def runtime_home() -> Path:
     return Path(home) / ".axon"
 
 
-def auto_measurements() -> dict[str, int]:
-    measurements: dict[str, int] = {}
+def run_rust_measurement(command: list[str], pattern: str) -> float | None:
+    """执行一个 ignored 测量用例并解析它打印的读数。"""
+    if shutil.which(command[0]) is None:
+        print(f"[perf] 跳过 {command[0]}：当前环境没有该工具", file=sys.stderr)
+        return None
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=1800,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f"[perf] 测量命令失败：{error}", file=sys.stderr)
+        return None
+    output = f"{completed.stdout}\n{completed.stderr}"
+    match = re.search(pattern, output)
+    if match is None:
+        print(
+            f"[perf] 读数解析失败：{' '.join(command)}（退出码 {completed.returncode}）",
+            file=sys.stderr,
+        )
+        return None
+    return float(match.group(1))
+
+
+def auto_measurements() -> dict[str, float]:
+    measurements: dict[str, float] = {}
     endpoint_test = REPO_ROOT / "crates/axon-desktop/src/connection/endpoint_tests.rs"
     present = endpoint_test.is_file() and (
         "sixty_times_reads_the_config_at_most_sixty_times"
@@ -77,11 +162,25 @@ def auto_measurements() -> dict[str, int]:
     return measurements
 
 
+def rust_measurements() -> dict[str, float]:
+    measurements: dict[str, float] = {}
+    for name, command, pattern in RUST_MEASUREMENTS:
+        value = run_rust_measurement(command, pattern)
+        if value is not None:
+            measurements[name] = value
+    return measurements
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="性能契约门禁")
     parser.add_argument("--baseline", default=str(REPO_ROOT / "tools" / "perf-baseline.json"))
     parser.add_argument("--record", action="store_true")
     parser.add_argument("--manual-json", default="")
+    parser.add_argument(
+        "--skip-rust-measurements",
+        action="store_true",
+        help="跳过 Rust 侧的 ignored 测量用例（无工具链或只需人工读数时使用）",
+    )
     parser.add_argument("--allow-incomplete", action="store_true")
     args = parser.parse_args()
 
@@ -94,6 +193,8 @@ def main() -> int:
         manual.update(json.loads(args.manual_json))
 
     measurements = auto_measurements()
+    if not args.skip_rust_measurements:
+        measurements.update(rust_measurements())
     pending = [
         f"{label}（未登记读数）" for key, label in MANUAL_ITEMS if key not in manual
     ]

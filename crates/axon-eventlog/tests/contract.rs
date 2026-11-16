@@ -368,6 +368,37 @@ fn non_monotonic_frames_are_rejected_across_frame_boundaries() {
 }
 
 #[test]
+#[ignore = "性能验收：事件编码 p99 入门禁，口径为不含 fsync 的 CPU 段"]
+fn event_append_p99_budget() {
+    const SAMPLES: usize = 200;
+    const COMPRESSION_SAMPLES: usize = 500;
+    let mut samples_us = Vec::with_capacity(SAMPLES);
+    for round in 0..SAMPLES {
+        let mut plain = Vec::new();
+        for offset in 0..COMPRESSION_SAMPLES {
+            let sequence = u64::try_from(round * SAMPLES + offset).expect("序号");
+            let event = record(
+                sequence,
+                RuntimeEventKind::ToolCall,
+                json!({"name": "read", "path": "src/main.rs"}),
+            );
+            plain.extend_from_slice(&event.encode_line().expect("编码行"));
+            plain.push(b'\n');
+        }
+        let started = std::time::Instant::now();
+        let frame = axon_eventlog::encode_frame(&plain).expect("压缩");
+        samples_us.push(started.elapsed().as_micros());
+        std::hint::black_box(frame.len());
+    }
+    samples_us.sort_unstable();
+    let index = (samples_us.len() * 99).div_ceil(100).saturating_sub(1);
+    let p99_us = samples_us[index.min(samples_us.len() - 1)];
+    let p99_ms = p99_us as f64 / 1_000.0;
+    println!("event_append_p99_ms={p99_ms:.3}");
+    assert!(p99_ms < 5.0, "事件写入 p99 超出 5ms：{p99_ms}ms");
+}
+
+#[test]
 fn turn_metrics_keeps_origin_and_unmeasured_ttft() {
     let dir = tempfile::tempdir().expect("临时目录");
     let log = EventLog::open(dir.path(), "session-session-f");
