@@ -421,7 +421,7 @@ mod tests {
 
     #[test]
     fn sessions_view_renders_selected_and_archived_items() {
-        let sessions = vec![
+        let sessions = [
             crate::r#loop::agent_tui::AgentTuiSessionCatalogItem::new(
                 "session-active",
                 Some("普通会话".to_owned()),
