@@ -85,6 +85,9 @@ axon upgrade [--manifest-url <url>] [--download] [--apply] [--rollback] [--outpu
 ```text
 /help                             查看 TUI 能力与常用命令
 /clear                            清空当前会话视图，保留顶部状态栏
+/sessions [--all]                 打开会话弹窗，↑↓ 选择、Enter 载入该会话历史；--all 含归档会话
+/new                              开启新会话，下一轮使用新的会话标识
+/reset                            重置当前会话的运行实例，保留会话标识与历史
 /model <model>                    切换模型：只作用于本会话，随每次提交下发给运行侧，不写回配置
 /think                            调整本轮推理强度（只作用于本会话，不写配置）
 /status                           查看当前 TUI 运行状态
