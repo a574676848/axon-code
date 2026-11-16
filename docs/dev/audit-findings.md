@@ -8,12 +8,12 @@
 
 | 编号 | 位置 | 问题 | 复核 | 修法 |
 | --- | --- | --- | --- | --- |
-| P0-1（S-02/A-1） | `work_item_archive.rs:31`、`interaction_repository.rs:418/460` | 归档按 `execution_id` 定位，交互路径传 `interaction_id`，两值永不相等 → 归档恒空操作，终态永不回收 | `git grep -n "archive_work_item" -- crates` | 先 `SELECT execution_id FROM work_items WHERE inbox_id=?` 再归档；或让归档函数按 `inbox_id` 分支。同时去掉 `release_work_item` 里的归档调用（那是回 queued） |
+| P0-1（S-02/A-1）**已修** `4eb48516c` | `work_item_archive.rs:31`、`interaction_repository.rs:418/460` | 归档按 `execution_id` 定位，交互路径传 `interaction_id`，两值永不相等 → 归档恒空操作，终态永不回收 | `git grep -n "archive_work_item" -- crates` | 先 `SELECT execution_id FROM work_items WHERE inbox_id=?` 再归档；或让归档函数按 `inbox_id` 分支。同时去掉 `release_work_item` 里的归档调用（那是回 queued） |
 | P0-2（A-2） | `commit_repository.rs:143-157`，以及 `failure_repository.rs:49`、`action_repository.rs:141`、`goal_repository.rs:156/209` | turn 结算主路径只 UPDATE 状态，**从不归档**；其余终态写点同样缺失 | `git grep -n "archive_work_item" -- crates` | 收敛成单一入口 `settle_work_item(tx, work_id, terminal_kind)`，所有终态写点在同一事务里调用 |
 | P0-3（S-01） | `append.rs:172-215`（`open_at`） | 生产写入不扫 torn 尾、不截断；崩溃后新帧写在撕裂字节之后，读侧扫到 torn 即停，之后历史永久静默不可见 | `git grep -n "append_once\|\.writer()" -- crates` | `open_at` 复用 `read_snapshot` 的截断逻辑（先截断 + `sync_data`）；补「撕裂尾后再追加再读」契约用例 |
 | P0-4（A-3） | `runtime_cleanup_families.rs:277-286` | 会话族删除前的活跃判定不过滤状态，任何跑过一轮的会话都命中 → 清理永远 `Err`，会话族一套都删不掉 | `git grep -n "work_items WHERE session_id IN" -- crates/axon-cli` | 判定加 `AND status IN ('queued','waiting','running')`，与积压口径一致 |
 | P0-5（S-09/A-4） | `runtime_cleanup.rs:336-341`、`411-426` | 清理链在控制面库执行 `SELECT ... FROM session_events`，该表已删 → dry-run 每次必失败，且被 `?` 上抛 | `git grep -n "session_events" -- crates/axon-cli/src/cron_commands` | 删除 `count_runtime_session_event_overlap` 与 `session_event_expiry_predicate` |
-| P0-6（A-5） | `workbench_http_session_readings.rs:157-170` | SQL 引用 `inbox.status`（该列已随状态机删除），prepare 即失败并被 `.ok()` 吞掉 → 桌面「累计耗时」恒 null | 对照 `schema.rs` 的 `inbox` DDL | 改读 `session_metrics.total_active_ms`；`.ok()` 读数补错误日志 |
+| P0-6（A-5）**已修** `022772c48` | `workbench_http_session_readings.rs:157-170` | SQL 引用 `inbox.status`（该列已随状态机删除），prepare 即失败并被 `.ok()` 吞掉 → 桌面「累计耗时」恒 null | 对照 `schema.rs` 的 `inbox` DDL | 改读 `session_metrics.total_active_ms`；`.ok()` 读数补错误日志 |
 | P0-7（S-07） | `work_item_claim.rs:45-46` | turn 工作项 `session_id` 写死 NULL → 取消、清理、会话保护谓词全部漏判 | `git grep -n "UPDATE work_items" -- crates` | 建工作项时写入 `interaction_session_id()` 的结果 |
 
 ## P1 稳定性与一致性
