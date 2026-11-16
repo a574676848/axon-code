@@ -33,8 +33,8 @@ pub(crate) use api::{
     load_latest_reflection_notice_from_root, load_latest_session_model_from_root,
     load_previous_reflection_notice, load_recent_turn_facts, load_rollout_history_window,
     load_session_turn, load_session_usage, load_session_usage_totals_from_root, load_turn_sequence,
-    mark_child_session_status, read_rollout_tool_output, replay_rollout_events,
-    restore_rollout_compaction, select_rollout_session,
+    mark_child_session_origin, mark_child_session_status, read_rollout_tool_output,
+    replay_rollout_events, restore_rollout_compaction, select_rollout_session,
 };
 #[cfg(test)]
 pub(crate) use rollout_events::RolloutEventAppendInput;
@@ -135,6 +135,14 @@ pub(crate) struct ChildSessionRow {
     /// 最后一轮记录时间；没有轮次时为空。
     pub(crate) last_turn_at_ms: Option<u64>,
 }
+
+/// 子代理会话来源：用户可见的委派。
+pub(crate) const CHILD_SESSION_ORIGIN_DELEGATED: &str = "delegated";
+/// 子代理会话来源：运行侧内务（自迭代、反思、语义显著度）。
+///
+/// 这类会话由轮后治理自己派出去，不是用户要的子代理：名册不把它们列成会话的
+/// 运行时动作，否则每个跑过一轮的会话都会长出一条并不存在的「子代理」。
+pub(crate) const CHILD_SESSION_ORIGIN_INTERNAL: &str = "internal";
 
 /// SQLite 结构化 rollout store。
 pub(crate) struct RolloutSqliteStore {

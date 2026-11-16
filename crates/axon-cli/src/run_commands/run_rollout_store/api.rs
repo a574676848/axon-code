@@ -110,6 +110,23 @@ pub(crate) fn mark_child_session_status(
     RolloutSqliteStore::open(&path)?.mark_session_status(session_id, status, at_ms)
 }
 
+/// 写入一条子代理会话的来源：用户可见的委派，还是运行侧内务。
+///
+/// 子代理起跑时写一次。名册据此把内务会话（自迭代、反思、语义显著度）排除在外，
+/// 否则每个跑过一轮的会话都会长出一条并不存在的「子代理」。
+pub(crate) fn mark_child_session_origin(
+    config_path: &Path,
+    session_id: &str,
+    origin: &str,
+) -> Result<(), String> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return Err("会话标识不能为空".to_owned());
+    }
+    let path = resolved_rollout_db_path(config_path).map_err(ToOwned::to_owned)?;
+    RolloutSqliteStore::open(&path)?.mark_session_origin(session_id, origin)
+}
+
 /// 某条会话直接派生的子代理名册；按最近活动倒序。
 ///
 /// 只走 `rollout_sessions.parent_session_id` 索引，线程日志一概不读：名册的代价与

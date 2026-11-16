@@ -8,7 +8,11 @@ use super::{
     RunRequest, RunSessionPartialInput, RunSessionRecord, commit_session_to_rollout,
     derive_thread_title, mirror_session_started, mirror_session_terminal, mirror_session_to_thread,
 };
-use crate::run_commands::run_rollout_store::mark_child_session_status;
+use crate::run_commands::run_rollout_store::{
+    CHILD_SESSION_ORIGIN_DELEGATED, CHILD_SESSION_ORIGIN_INTERNAL, mark_child_session_origin,
+    mark_child_session_status,
+};
+use crate::run_commands::run_self_iteration_subagent::is_internal_agent_path;
 
 /// 子代理长回执归档使用的文件后缀：Markdown 便于按 `builtin.read_file` 分页阅读。
 const SUBAGENT_RESULT_FILE_SUFFIX: &str = ".md";
@@ -158,6 +162,31 @@ fn result_status(output: &super::RunSubagentExecutionOutput) -> &'static str {
     }
 }
 
+/// 名册里的会话来源：用户可见的委派还是运行侧内务。
+fn child_session_origin(request: &RunRequest) -> &'static str {
+    if is_internal_agent_path(&request.current_agent_path) {
+        CHILD_SESSION_ORIGIN_INTERNAL
+    } else {
+        CHILD_SESSION_ORIGIN_DELEGATED
+    }
+}
+
+/// 名册里的会话来源：子代理起跑时写一次。
+///
+/// 写失败只留痕、不阻断：来源只决定名册列不列这一条，丢了不会影响这一轮本身。
+fn mark_child_origin(request: &RunRequest) {
+    if let Err(error) = mark_child_session_origin(
+        &request.config_path,
+        &request.session_id,
+        child_session_origin(request),
+    ) {
+        axon_logger::warning(&format!(
+            "child session origin projection skipped: session_id={}, error={error}",
+            request.session_id
+        ));
+    }
+}
+
 /// 名册里的会话状态：子代理生命周期的唯一写点。
 ///
 /// 写失败只留痕、不阻断：状态是名册的读数，丢了不影响这一轮本身的结果。
@@ -199,6 +228,7 @@ pub(super) fn persist_child_turn_started(request: &RunRequest) {
             request.session_id
         ));
     }
+    mark_child_origin(request);
     mark_child_status(request, "active");
 }
 

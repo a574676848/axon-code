@@ -231,10 +231,22 @@ impl RolloutSqliteStore {
         Ok(())
     }
 
+    /// 标记一条会话的来源（子代理起跑时写入）。
+    pub(super) fn mark_session_origin(&self, session_id: &str, origin: &str) -> Result<(), String> {
+        self.connection
+            .execute(
+                "UPDATE rollout_sessions SET origin = ?1 WHERE session_id = ?2",
+                params![origin, session_id],
+            )
+            .map_err(|_| "rollout 会话来源写入失败".to_owned())?;
+        Ok(())
+    }
+
     /// 某条会话直接派生的子会话名册；按最近活动倒序。
     ///
     /// 走 `idx_rollout_parent`：一条车道的历史子代理是一次索引查询，不读线程日志，
-    /// 因此与历史轮次的体量无关。
+    /// 因此与历史轮次的体量无关。运行侧内务会话（自迭代、反思、语义显著度）不属于
+    /// 用户可见的委派，一律不列进名册。
     pub(super) fn select_child_sessions(
         &self,
         parent_session_id: &str,
@@ -251,23 +263,32 @@ impl RolloutSqliteStore {
                          WHERE turns.session_id = sessions.session_id) AS last_turn_at_ms
                 FROM rollout_sessions AS sessions
                 WHERE sessions.parent_session_id = ?1
+                  AND COALESCE(sessions.origin, ?3) <> ?4
                 ORDER BY sessions.updated_at_ms DESC, sessions.session_id
                 LIMIT ?2
                 ",
             )
             .map_err(|_| "子代理名册查询准备失败".to_owned())?;
         let rows = statement
-            .query_map(params![parent_session_id, limit], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                    row.get::<_, i64>(5)?,
-                    row.get::<_, Option<i64>>(6)?,
-                ))
-            })
+            .query_map(
+                params![
+                    parent_session_id,
+                    limit,
+                    super::CHILD_SESSION_ORIGIN_DELEGATED,
+                    super::CHILD_SESSION_ORIGIN_INTERNAL
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
+                    ))
+                },
+            )
             .map_err(|_| "子代理名册查询失败".to_owned())?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|_| "子代理名册读取失败".to_owned())?;

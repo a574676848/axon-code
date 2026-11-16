@@ -116,3 +116,79 @@ fn missing_status_column_reads_as_unknown_instead_of_failed() {
     assert_eq!(rows[0].status, None);
     cleanup(&path);
 }
+
+#[test]
+fn internal_governance_children_are_not_part_of_the_roster() {
+    let path = temp_db("child-origin");
+    let store = RolloutSqliteStore::open(&path).unwrap();
+    store.record_session(&record("run-d", None, 100)).unwrap();
+    // 用户可见的委派。
+    store
+        .commit_session(
+            &record("run-d--subagent--root_delegate_fast_1", Some("run-d"), 200),
+            Some("委派子代理"),
+        )
+        .unwrap();
+    store
+        .mark_session_origin("run-d--subagent--root_delegate_fast_1", "delegated")
+        .unwrap();
+    // 轮后治理自己派出去的语义显著度子任务。
+    store
+        .commit_session(
+            &record(
+                "run-d--subagent--root_self_iteration_semantic_salience",
+                Some("run-d"),
+                300,
+            ),
+            Some("评估以下有界事实包："),
+        )
+        .unwrap();
+    store
+        .mark_session_origin(
+            "run-d--subagent--root_self_iteration_semantic_salience",
+            "internal",
+        )
+        .unwrap();
+
+    let rows = store.select_child_sessions("run-d", 10).unwrap();
+    assert_eq!(rows.len(), 1, "内务子代理不得出现在会话的子代理名册里");
+    assert_eq!(rows[0].session_id, "run-d--subagent--root_delegate_fast_1");
+    cleanup(&path);
+}
+
+#[test]
+fn legacy_internal_children_are_backfilled_at_open() {
+    let path = temp_db("child-origin-backfill");
+    {
+        let store = RolloutSqliteStore::open(&path).unwrap();
+        store.record_session(&record("run-e", None, 100)).unwrap();
+        // 这一行写于补列之前：没有 origin，靠补列时的回填把它标成内部。
+        store
+            .record_session(&record(
+                "run-e--subagent--root_self_iteration_memory_update",
+                Some("run-e"),
+                200,
+            ))
+            .unwrap();
+    }
+    // 重新打开会跑补列与回填。
+    let reopened = RolloutSqliteStore::open(&path).unwrap();
+    assert_eq!(
+        reopened.select_child_sessions("run-e", 10).unwrap().len(),
+        0,
+        "补列回填后，旧内务会话同样不进名册"
+    );
+    cleanup(&path);
+}
+
+#[test]
+fn children_without_origin_are_treated_as_delegated() {
+    let path = temp_db("child-origin-null");
+    let store = RolloutSqliteStore::open(&path).unwrap();
+    store
+        .record_session(&record("run-f--subagent--root_unknown", Some("run-f"), 100))
+        .unwrap();
+    // 旧记录没有来源：按用户委派处理，宁可多列一条也不静默丢掉真实的子代理。
+    assert_eq!(store.select_child_sessions("run-f", 10).unwrap().len(), 1);
+    cleanup(&path);
+}

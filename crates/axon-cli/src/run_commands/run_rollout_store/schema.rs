@@ -52,7 +52,8 @@ impl super::RolloutSqliteStore {
                     model TEXT NOT NULL,
                     title TEXT,
                     history_checkpoint_json TEXT,
-                    status TEXT
+                    status TEXT,
+                    origin TEXT
                 );
                 CREATE TABLE IF NOT EXISTS rollout_turns (
                     session_id TEXT NOT NULL,
@@ -89,6 +90,7 @@ impl super::RolloutSqliteStore {
             .map_err(|_| "rollout SQLite schema 版本配置失败".to_owned())?;
         super::session_usage::ensure_usage_columns(&self.connection)?;
         ensure_session_status_column(&self.connection)?;
+        ensure_session_origin_column(&self.connection)?;
         Ok(())
     }
 
@@ -157,6 +159,38 @@ fn ensure_session_status_column(connection: &Connection) -> Result<(), String> {
     connection
         .execute("ALTER TABLE rollout_sessions ADD COLUMN status TEXT", [])
         .map_err(|_| "rollout SQLite 会话状态列补齐失败".to_owned())?;
+    Ok(())
+}
+
+/// 旧库补 `origin` 列，并把历史内务会话标成内部。
+///
+/// 子代理名册只列用户可见的委派，运行侧内务（`self_iteration_*`）不该出现。旧记录
+/// 写这列之前就已经落库，因此补列时按会话标识一次性回填：这是迁移，不是读侧判据，
+/// 读查询只认 `origin` 一个口径。
+fn ensure_session_origin_column(connection: &Connection) -> Result<(), String> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(rollout_sessions)")
+        .map_err(|_| "rollout SQLite schema 检查准备失败".to_owned())?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|_| "rollout SQLite schema 检查失败".to_owned())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|_| "rollout SQLite schema 列解析失败".to_owned())?;
+    if !columns.iter().any(|column| column == "origin") {
+        connection
+            .execute("ALTER TABLE rollout_sessions ADD COLUMN origin TEXT", [])
+            .map_err(|_| "rollout SQLite 会话来源列补齐失败".to_owned())?;
+    }
+    connection
+        .execute(
+            r"
+            UPDATE rollout_sessions
+            SET origin = ?1
+            WHERE origin IS NULL AND session_id GLOB '*--subagent--root_self_iteration_*'
+            ",
+            rusqlite::params![super::CHILD_SESSION_ORIGIN_INTERNAL],
+        )
+        .map_err(|_| "rollout SQLite 会话来源回填失败".to_owned())?;
     Ok(())
 }
 
