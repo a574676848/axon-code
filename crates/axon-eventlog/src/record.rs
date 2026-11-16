@@ -149,6 +149,38 @@ impl RuntimeEventKind {
     }
 }
 
+/// 一次后台任务的引用。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobRef {
+    /// 作业标识。
+    pub job_id: String,
+    /// 作业类型（shell / subagent 等）。
+    pub kind: String,
+    /// 归属的会话或 agent。
+    pub owner: String,
+    /// 启动时刻（Unix 毫秒）。
+    pub started_at_ms: u64,
+}
+
+/// 一次后台任务的结局。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobOutcome {
+    /// 作业标识。
+    pub job_id: String,
+    /// 终态名称：completed / failed / killed / timeout / refusal / unresponsive。
+    pub status: String,
+    /// 从启动到终态的耗时。
+    pub elapsed_ms: u64,
+    /// 退出码（若可得）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// 终止原因（若可得）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_reason: Option<String>,
+}
+
 /// 一条 durable 事件记录。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -301,5 +333,38 @@ mod tests {
         let line = record.encode_line().expect("可编码");
         let decoded = RuntimeEventRecord::decode_line(&line).expect("可解码");
         assert_eq!(decoded.event_type, RuntimeEventKind::Other("wire_event".to_owned()));
+    }
+}
+impl RuntimeEventRecord {
+    /// 构造一条后台任务开始事件。
+    pub fn job_started(
+        sequence: u64,
+        emitted_at_ms: u64,
+        job: &JobRef,
+    ) -> Result<Self, EventLogError> {
+        let payload =
+            serde_json::to_value(job).map_err(|error| EventLogError::Codec(error.to_string()))?;
+        Ok(Self::new(
+            sequence,
+            emitted_at_ms,
+            RuntimeEventKind::JobStarted,
+            payload,
+        ))
+    }
+
+    /// 构造一条后台任务结束事件。
+    pub fn job_completed(
+        sequence: u64,
+        emitted_at_ms: u64,
+        outcome: &JobOutcome,
+    ) -> Result<Self, EventLogError> {
+        let payload = serde_json::to_value(outcome)
+            .map_err(|error| EventLogError::Codec(error.to_string()))?;
+        Ok(Self::new(
+            sequence,
+            emitted_at_ms,
+            RuntimeEventKind::JobCompleted,
+            payload,
+        ))
     }
 }

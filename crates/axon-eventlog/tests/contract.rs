@@ -3,7 +3,8 @@
 use std::io::Write as _;
 
 use axon_eventlog::{
-    EventLog, EventLogError, RuntimeEventKind, RuntimeEventRecord, TurnMetrics, TurnOrigin,
+    EventLog, EventLogError, JobOutcome, JobRef, RuntimeEventKind, RuntimeEventRecord, TurnMetrics,
+    TurnOrigin,
 };
 use serde_json::json;
 
@@ -165,4 +166,36 @@ fn turn_metrics_keeps_origin_and_unmeasured_ttft() {
         serde_json::from_value(stored.payload.clone()).expect("载荷应可还原");
     assert!(parsed.ttft_ms.is_none(), "未测得首字必须保持 None");
     assert_eq!(parsed.active_ms, 900);
+}
+#[test]
+fn job_events_round_trip() {
+    let started = JobRef {
+        job_id: "job-1".to_owned(),
+        kind: "shell".to_owned(),
+        owner: "session-lane-a".to_owned(),
+        started_at_ms: 100,
+    };
+    let event = RuntimeEventRecord::job_started(0, 100, &started).expect("可构造");
+    let line = event.encode_line().expect("可编码");
+    let decoded = RuntimeEventRecord::decode_line(&line).expect("可解码");
+    assert_eq!(decoded.event_type, RuntimeEventKind::JobStarted);
+    let parsed: JobRef = serde_json::from_value(decoded.payload).expect("载荷可还原");
+    assert_eq!(parsed.job_id, "job-1");
+    assert_eq!(parsed.kind, "shell");
+
+    let outcome = JobOutcome {
+        job_id: "job-1".to_owned(),
+        status: "completed".to_owned(),
+        elapsed_ms: 900,
+        exit_code: Some(0),
+        terminal_reason: None,
+    };
+    let event = RuntimeEventRecord::job_completed(1, 1_000, &outcome).expect("可构造");
+    let decoded =
+        RuntimeEventRecord::decode_line(&event.encode_line().expect("可编码")).expect("可解码");
+    assert_eq!(decoded.event_type, RuntimeEventKind::JobCompleted);
+    let parsed: JobOutcome = serde_json::from_value(decoded.payload).expect("载荷可还原");
+    assert_eq!(parsed.elapsed_ms, 900);
+    assert_eq!(parsed.exit_code, Some(0));
+    assert!(parsed.terminal_reason.is_none());
 }
