@@ -158,7 +158,13 @@ fn explicit_session_family_cleanup_reclaims_terminal_work_items() {
                  execution_id,goal_id,session_id,payload_json,attempt,priority,status,created_at_ms,updated_at_ms
              ) VALUES('cancelled','task','stale','{}',1,0,'cancelled',1,1);
              INSERT INTO work_item_history(work_id,goal_id,session_id,kind,payload_json,attempt,priority,status,terminal_kind,created_at_ms,updated_at_ms,finished_at_ms)
-                 VALUES('archived','task','stale','turn','{}',1,0,'completed','completed',1,1,1);",
+                 VALUES('archived','task','stale','turn','{}',1,0,'completed','completed',1,1,1);
+             INSERT INTO session_metrics(session_id,turn_count,updated_at_ms)
+                 VALUES('stale',1,1);
+             INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,received_at_ms,updated_at_ms,attachments_json,session_id)
+                 VALUES('i-stale','tui','m-stale','{}','{}','{}','hi',1,1,'[]','stale');
+             INSERT INTO resume_pointer(singleton_key,session_id,updated_at_ms)
+                 VALUES('default','stale',1);",
         )
         .expect("过期会话数据应可写入");
     drop(connection);
@@ -178,6 +184,9 @@ fn explicit_session_family_cleanup_reclaims_terminal_work_items() {
         ("sessions", "session_id"),
         ("work_items", "session_id"),
         ("work_item_history", "session_id"),
+        ("session_metrics", "session_id"),
+        ("inbox", "session_id"),
+        ("resume_pointer", "session_id"),
     ] {
         let retained: i64 = connection
             .query_row(

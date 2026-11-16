@@ -289,6 +289,19 @@ pub(super) fn delete_session_families_by_ids(
     if active > 0 || executions > 0 {
         return Err("Daemon runtime Session family 已重新活跃，保留 rollout 重试锚点".to_owned());
     }
+    // 派生投影与入站事实同样属于会话族：留着就是指向已删会话的孤儿行，
+    // 既算进积压统计，也会让「已收到」的派生状态永远不收敛。
+    // 这两张表不在报告分项里，只删不计数（dry-run 口径与真实删除保持一致）。
+    for table in ["session_metrics", "inbox"] {
+        delete_ids_in(&transaction, table, "session_id", &placeholders, ids)?;
+    }
+    // 恢复指针指向已删会话时一并清掉：指针只是「下次接续谁」的缓存，不构成事实。
+    transaction
+        .execute(
+            &format!("DELETE FROM resume_pointer WHERE session_id IN ({placeholders})"),
+            params_from_iter(ids.iter()),
+        )
+        .map_err(|_| "Daemon runtime 恢复指针清理失败".to_owned())?;
     let counts = RuntimeCleanupCounts {
         // 事件已随会话目录删除，这里不再按表计数。
         session_events: 0,
