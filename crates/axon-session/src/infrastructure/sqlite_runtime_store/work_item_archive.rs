@@ -4,7 +4,7 @@
 //! 行数随活跃度而不是随历史增长。终态行整体搬到 append-only 的 `work_item_history`，
 //! 由视图 `work_items_all` 保持「按 id 读、按 goal 列历史」的既有语义。
 
-use rusqlite::{Connection, params};
+use rusqlite::Connection;
 
 /// 把一条已结束的工作项搬进历史表；不存在时什么都不做。
 ///
