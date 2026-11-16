@@ -568,10 +568,11 @@ fn outbox_database_path(root: &Path) -> std::path::PathBuf {
         .join(OUTBOX_DATABASE_FILE)
 }
 
-/// 运行态侧自判的过期会话：最后一次活动早于保留期、已不在推进、且无 Execution 引用。
+/// 运行态侧自判的过期会话：最后一次活动早于保留期、已不在推进、且无在途 Execution。
 ///
 /// rollout 索引只覆盖一部分会话（子代理车道与历史 desktop 车道不在其中），
 /// 只按 rollout 取候选会让这些会话根记录永久滞留，其事件也就永远没有回收入口。
+/// 在途判定按状态过滤：终态工作项不构成引用，真正拦删除的是排队/等待/运行中的行。
 pub(super) fn stale_runtime_session_ids(
     root: &Path,
     cutoff_ms: u64,
@@ -589,9 +590,11 @@ pub(super) fn stale_runtime_session_ids(
            AND NOT EXISTS (
                SELECT 1 FROM work_items AS execution
                WHERE execution.session_id = sessions.session_id
+                 AND execution.status IN ({execution_active})
            )
          ORDER BY last_activity_at_ms ASC",
         active = quoted_list(&SESSION_ACTIVE_STATUSES),
+        execution_active = quoted_list(&EXECUTION_ACTIVE_STATUSES),
     );
     let mut statement = connection
         .prepare(&sql)

@@ -134,7 +134,12 @@ fn cleanup_protects_active_and_unread_records() {
 
 #[test]
 fn explicit_session_family_cleanup_rechecks_active_state_and_execution_references() {
-    for (status, with_execution) in [("running", false), ("idle", true)] {
+    for (status, work_item_status) in [
+        ("running", None),
+        ("idle", Some("running")),
+        ("idle", Some("queued")),
+        ("idle", Some("waiting")),
+    ] {
         let root = axon_test_support::test_temp_dir();
         let connection = open_fixture(root.path());
         connection
@@ -143,13 +148,13 @@ fn explicit_session_family_cleanup_rechecks_active_state_and_execution_reference
                 [status],
             )
             .expect("受保护 Session 应可写入");
-        if with_execution {
+        if let Some(work_item_status) = work_item_status {
             connection
                 .execute(
                     "INSERT INTO work_items(
                         execution_id,goal_id,session_id,payload_json,attempt,priority,status,created_at_ms,updated_at_ms
-                     ) VALUES('execution','task','protected','{}',1,0,'running',1,1)",
-                    [],
+                     ) VALUES('execution','task','protected','{}',1,0,?1,1,1)",
+                    [work_item_status],
                 )
                 .expect("Execution 引用应可写入");
         }
@@ -172,6 +177,54 @@ fn explicit_session_family_cleanup_rechecks_active_state_and_execution_reference
             )
             .expect("受保护 Session 应可查询");
         assert_eq!(retained, 1);
+    }
+}
+
+/// 终态工作项不得把会话钉在运行态库里：它已不再推进任何执行，
+/// 却会让「活跃判定」永远命中，使会话族一套都删不掉。
+#[test]
+fn explicit_session_family_cleanup_reclaims_terminal_work_items() {
+    let root = axon_test_support::test_temp_dir();
+    let connection = open_fixture(root.path());
+    connection
+        .execute_batch(
+            "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES('stale','stale','stale','/w','idle',NULL,NULL,0,0,0,0,1,1,1);
+             INSERT INTO work_items(
+                 execution_id,goal_id,session_id,payload_json,attempt,priority,status,created_at_ms,updated_at_ms
+             ) VALUES('done','task','stale','{}',1,0,'completed',1,1);
+             INSERT INTO work_items(
+                 execution_id,goal_id,session_id,payload_json,attempt,priority,status,created_at_ms,updated_at_ms
+             ) VALUES('cancelled','task','stale','{}',1,0,'cancelled',1,1);
+             INSERT INTO work_item_history(work_id,goal_id,session_id,kind,payload_json,attempt,priority,status,terminal_kind,created_at_ms,updated_at_ms,finished_at_ms)
+                 VALUES('archived','task','stale','turn','{}',1,0,'completed','completed',1,1,1);",
+        )
+        .expect("过期会话数据应可写入");
+    drop(connection);
+
+    let counts = cleanup_runtime_session_families(root.path(), &["stale".to_owned()])
+        .expect("终态工作项不应阻止会话族清理");
+    assert_eq!(counts.sessions, 1);
+    assert_eq!(counts.executions, 3);
+
+    let connection = Connection::open(
+        root.path()
+            .join(axon_config::AXON_RUNTIME_DATA_DIR)
+            .join(CONTROL_DATABASE_FILE),
+    )
+    .expect("runtime 应可重开");
+    for (table, column) in [
+        ("sessions", "session_id"),
+        ("work_items", "session_id"),
+        ("work_item_history", "session_id"),
+    ] {
+        let retained: i64 = connection
+            .query_row(
+                &format!("SELECT COUNT(*) FROM {table} WHERE {column}='stale'"),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| panic!("{table} 应可查询"));
+        assert_eq!(retained, 0, "{table} 必须随会话族一并回收");
     }
 }
 

@@ -10,9 +10,9 @@ use std::time::Instant;
 use rusqlite::{Connection, params_from_iter};
 
 use super::runtime_cleanup::{
-    INTERACTION_TERMINAL_KINDS, LEDGER_EVENT_MIN_RETAINED, RuntimeCleanupCounts,
-    SESSION_ACTIVE_STATUSES, delete_family, delete_ids_in, placeholders, quoted_list,
-    task_expiry_filter,
+    EXECUTION_ACTIVE_STATUSES, INTERACTION_TERMINAL_KINDS, LEDGER_EVENT_MIN_RETAINED,
+    RuntimeCleanupCounts, SESSION_ACTIVE_STATUSES, delete_family, delete_ids_in, placeholders,
+    quoted_list, task_expiry_filter,
 };
 use axon_session::NotificationDeliveryState;
 
@@ -274,8 +274,13 @@ pub(super) fn delete_session_families_by_ids(
     let active: i64 = transaction
         .query_row(&active_sql, params_from_iter(ids.iter()), |row| row.get(0))
         .map_err(|_| "Daemon runtime Session family 活跃状态复核失败".to_owned())?;
-    let execution_sql =
-        format!("SELECT COUNT(*) FROM work_items WHERE session_id IN ({placeholders})");
+    // 只认在途状态：已终态但尚未归档的工作项拦不住会话删除，否则任何跑过一轮的
+    // 会话都永久留在运行态库里，清理成了空转。
+    let execution_sql = format!(
+        "SELECT COUNT(*) FROM work_items
+         WHERE session_id IN ({placeholders}) AND status IN ({active})",
+        active = quoted_list(&EXECUTION_ACTIVE_STATUSES),
+    );
     let executions: i64 = transaction
         .query_row(&execution_sql, params_from_iter(ids.iter()), |row| {
             row.get(0)
@@ -296,13 +301,16 @@ pub(super) fn delete_session_families_by_ids(
         )?,
         schedules: delete_ids_in(&transaction, "schedules", "session_id", &placeholders, ids)?,
         // 执行历史先于会话删除：终态行已迁出在途表，不删会留下无主历史。
-        executions: delete_ids_in(
-            &transaction,
-            "work_item_history",
-            "session_id",
-            &placeholders,
-            ids,
-        )?,
+        // 在途表里残留的终态行必须同步回收：`work_items.session_id` 有外键指向
+        // `sessions`，漏删会让整个事务因外键约束回滚。
+        executions: delete_ids_in(&transaction, "work_items", "session_id", &placeholders, ids)?
+            + delete_ids_in(
+                &transaction,
+                "work_item_history",
+                "session_id",
+                &placeholders,
+                ids,
+            )?,
         sessions: delete_ids_in(&transaction, "sessions", "session_id", &placeholders, ids)?,
         ..RuntimeCleanupCounts::default()
     };
