@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+axon-eventlog = { path = "../axon-eventlog" }
 axon-agent-runtime = { path = "../axon-agent-runtime" }
 axon-crypto = { path = "../axon-crypto" }
 axon-domain = { path = "../axon-domain" }

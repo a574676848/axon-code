@@ -68,6 +68,10 @@ pub(super) struct RuntimeTurnEventSink<'a, S, P, C> {
     /// 它让在跑的这一轮不必等整轮收口就进会话级速率：每收口一条 provider 流，
     /// 就按实测值补一帧实时指标。
     generation_watch: Mutex<TurnGenerationWatch>,
+    /// 本轮起始时刻，用于计算整轮墙钟。
+    started_at_ms: u64,
+    /// 本轮指标是否已落事件：每轮只写一条。
+    turn_metrics_emitted: std::sync::atomic::AtomicBool,
 }
 
 /// 收尾指标需要的用量快照。
@@ -121,6 +125,10 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             last_usage_payload: Mutex::new(None),
             last_committed_usage: Mutex::new(None),
             generation_watch: Mutex::new(TurnGenerationWatch::default()),
+            started_at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)),
+            turn_metrics_emitted: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -164,6 +172,65 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
         }
     }
 
+/// 把本轮指标写进会话事件流；每轮只写一次。
+    ///
+    /// 指标属于派生事实，写入失败不阻断本轮投递。
+    fn emit_turn_metrics(&self) -> Result<(), String>
+    where
+        S: RuntimeStore + Send + Sync,
+        C: RuntimeClock,
+    {
+        if self
+            .turn_metrics_emitted
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return Ok(());
+        }
+        let now_ms = self.clock.now_ms();
+        let readout = self.generation_readout(None);
+        let usage = self
+            .last_usage
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_default();
+        let active_ms = now_ms.saturating_sub(self.started_at_ms);
+        let generate_ms = readout.ttft_ms.unwrap_or(0).saturating_add(readout.decode_ms.unwrap_or(0));
+        let generated_tokens = readout
+            .output_tokens
+            .saturating_add(readout.reasoning_output_tokens);
+        let speed = if readout.decode_ms.unwrap_or(0) > 0 && generated_tokens > 0 {
+            Some((generated_tokens as f64) * 1_000.0 / (readout.decode_ms.unwrap_or(1) as f64))
+        } else {
+            None
+        };
+        let metrics = axon_eventlog::TurnMetrics {
+            turn_id: self.interaction_id.as_str().to_owned(),
+            ttft_ms: readout.ttft_ms,
+            active_ms,
+            provider_duration_ms: generate_ms,
+            tool_ms: active_ms.saturating_sub(generate_ms),
+            input_tokens: usage.input_tokens,
+            output_tokens: readout.output_tokens,
+            reasoning_tokens: readout.reasoning_output_tokens,
+            cache_read_tokens: usage.cached_input_tokens,
+            cache_write_tokens: usage.cache_write_input_tokens,
+            generation_speed_tps: speed,
+            background_jobs_started: 0,
+            background_jobs_running: 0,
+            outcome: axon_eventlog::TurnOutcome::Succeeded,
+            tool_calls: 0,
+        };
+        let payload = serde_json::to_string(&metrics).map_err(|error| error.to_string())?;
+        self.store
+            .append_events(
+                self.session_id,
+                self.host,
+                &[("turn_metrics".to_owned(), payload)],
+                now_ms,
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
     /// 边界收口：把累积的正文压成快照事件落库。
     ///
     /// 空排空是常态（没有累积正文），因此它不会产生任何写入。
@@ -206,6 +273,12 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
                     self.flush_live_parts()?;
                     self.commit_and_publish_slice(std::slice::from_ref(event))?;
                     if is_turn_terminal(event) {
+                        // 指标属于派生事实：失败只记日志，不影响终态投递。
+                        if let Err(error) = self.emit_turn_metrics() {
+                            axon_logger::warning(&format!(
+                                "turn_metrics 写入失败：{error}"
+                            ));
+                        }
                         // 轮次已收口：可补发的读数到此作废，留着只会被下一次订阅
                         // 补发出去，把上一轮的阶段当成新一轮的现状。
                         self.event_egress

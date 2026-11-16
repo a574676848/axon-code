@@ -662,6 +662,7 @@ dependencies = [
  "axon-agent-runtime",
  "axon-crypto",
  "axon-domain",
+ "axon-eventlog",
  "axon-logger",
  "axon-process",
  "axon-protocol",
