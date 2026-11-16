@@ -125,7 +125,7 @@ kind   == Regular
 
 **预算**：总量 `4096` tokens（`SESSION_NOTES_CHECKPOINT_MAX_TOKENS`，常量，无配置项）与 `32 KiB` 字节硬上限（`SESSION_NOTES_CHECKPOINT_MAX_BYTES`）；token 由 `estimated_text_tokens` 按 UTF-8 字节数除以 4 向上取整估算。取值以压住换窗固定成本为先：这段摘要每次都要顶到新窗口最前面，4 096 tokens 已能容纳 4 KiB 便签内联（≈1024 tokens）与其余段落。超限一律 fail-closed 并返回「请压缩便签后重写摘要」，不截断、不降级采用部分内容。
 
-**兼容回退**：模型未写便签（没有 `checkpoint.md`）时，`SessionNotes::try_render_canonical_summary`（`session_notes.rs`）按目标锚点与全部便签投影出 `P0:` / `TASK:` / `CONSTRAINTS:` / `VERIFIED:` / `OPEN:` / `TOOLS:` 六段摘要，`TOOLS` 段每行写 `- ID: <provider-call-id>`，没有未回填调用时写 `- none`。投影只是运行时兜底格式，不构成对模型写入内容的结构要求。投影对单条便签分两档处理（`NOTES_INLINE_MAX_BYTES = 4 KiB`）：不超过阈值的便签内联正文，超过的只写「路径 + 字节数 + 行数 + 回读指引」，由新窗口用 `builtin.notes_read_file` 按行范围取回。短便签整段可读、长便签只留引用，两条路都不挤爆换窗预算，也不需要模型为换窗压缩或改写。投影与提交两条路径都不做行级截断；替换历史前 `validate_replacement`（`insert_then_compress_completion.rs:171`）再校验一次同一预算，并追加「新窗口 `after_tokens < trigger`」与自动换窗的收敛要求。
+**兼容回退**：模型未写便签（没有 `checkpoint.md`）时，`SessionNotes::try_render_canonical_summary`（`session_notes.rs`）按目标锚点与全部便签投影出 `P0:` / `TASK:` / `CONSTRAINTS:` / `VERIFIED:` / `OPEN:` / `TOOLS:` 六段摘要，`TOOLS` 段每行写 `- ID: <provider-call-id>`，没有未回填调用时写 `- none`。投影只是运行时兜底格式，不构成对模型写入内容的结构要求。投影对单条便签分两档处理（`NOTES_INLINE_MAX_BYTES = 4 KiB`）：不超过阈值的便签内联正文，超过的只写「路径 + 字节数 + 行数 + 回读指引」，由新窗口用 `builtin.notes_read_file` 按行范围取回。短便签整段可读、长便签只留引用，两条路都不挤爆换窗预算，也不需要模型为换窗压缩或改写。投影与提交两条路径都不做行级截断；替换历史前 `validate_replacement`（`insert_then_compress_completion.rs:173`）再校验一次同一预算，并追加「新窗口 `after_tokens < trigger`」与自动换窗的收敛要求。
 
 ## 5. 请求装配顺序
 

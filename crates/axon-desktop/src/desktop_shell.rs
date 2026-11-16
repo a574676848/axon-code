@@ -6,7 +6,7 @@
 use std::sync::{Mutex, OnceLock};
 
 mod turn_notifications;
-use turn_notifications::NotificationState;
+use turn_notifications::{NotificationState, notification_copy};
 
 use tauri::image::Image;
 use tauri::menu::{IconMenuItem, IsMenuItem, Menu, PredefinedMenuItem};
@@ -67,10 +67,6 @@ fn icons_for_theme(theme: &tauri::Theme) -> &'static TrayIcons {
 
 /// 主窗口标签；托盘与关闭行为都只作用于它。
 const MAIN_WINDOW: &str = "main";
-/// 通知正文的最大字符数：系统通知不是阅读区，超长只会被截断得体无完肤。
-const NOTIFICATION_BODY_LIMIT: usize = 120;
-/// 轮次终态事件类型，与后端一致。
-const EVENT_TURN_COMPLETED: &str = "turn_completed";
 /// 全局快捷键：把窗口唤回前台并把光标送进输入坞。
 const GLOBAL_SHORTCUT: &str = "ctrl+alt+space";
 /// 聚焦输入坞事件的推送名，与前端 `App.tsx` 一致。
@@ -78,8 +74,6 @@ pub const FOCUS_COMPOSER_EVENT: &str = "axon://focus-composer";
 
 /// 推给前端的「会话有新结果」事件名，与前端 `ipc.ts` 中的常量一致。
 pub const LANE_ACTIVITY_EVENT: &str = "axon://lane-activity";
-/// 运行过程事件类型：其中承载 durable 的轮次生命周期。
-const EVENT_WIRE: &str = "wire_event";
 
 /// 已通知过的轮次标识。
 ///
@@ -356,19 +350,6 @@ fn open_pending_lane(app: &AppHandle) {
     }
 }
 
-/// 通知标题：会话名在前、结论在后；没有会话名时只给结论。
-///
-/// 只写「本轮已完成」时用户得点进去才知道是哪个会话，而通知本来就常在一屏之外；
-/// 会话名由界面在切换会话时写入 [`crate::lane_context`]。
-#[must_use]
-fn compose_title(lane: Option<&str>, base: &str) -> String {
-    let lane = lane.map(str::trim).filter(|value| !value.is_empty());
-    match lane {
-        Some(lane) => format!("{lane} · {base}"),
-        None => base.to_string(),
-    }
-}
-
 /// 是否允许发送系统通知。
 ///
 /// 直接读桌面状态：开关是用户设置，且改动频率极低，
@@ -377,13 +358,15 @@ pub fn notifications_enabled() -> bool {
     crate::state::load_state().notifications_enabled
 }
 
-/// 轮次结束时发系统通知，并把「这一轮结束了」推给界面。
+/// 轮次结束时给界面上标识、给系统中通知。
 ///
-/// 两条通道分工明确：
-/// - **界面标识**在实时终态首次到达时推：应用在前台时它就是通知的替代品，会话标题前的状态图标
-///   告诉用户哪条会话有了新结果，看过即清；
-/// - **系统通知**只在窗口不在前台时发：用户就坐在界面前再弹一条通知是打扰，
-///   而应用收进托盘时，界面标识看不见，通知才是唯一的提醒。
+/// 两条通道按窗口是否在前台分流，判据只有一份：
+/// - **前台**（窗口可见且聚焦）只推界面事件：会话标题前挂「完成」标识，
+///   人就在界面前，再弹一条系统通知是打扰；
+/// - **后台**再发系统通知：标题是会话标题、正文是回复摘要；应用收进托盘时
+///   标识看不见，通知才是唯一的提醒。
+///
+/// 「弹什么」由 `turn_notifications::notification_copy` 决定，这里只管发。
 pub fn notify_turn_finished(app: &AppHandle, event: &StreamEvent) {
     let notice = NOTIFICATION_STATE
         .get_or_init(|| Mutex::new(NotificationState::default()))
@@ -394,7 +377,9 @@ pub fn notify_turn_finished(app: &AppHandle, event: &StreamEvent) {
         return;
     };
 
-    // 界面标识先推：它不依赖通知设置，也不受窗口状态影响。
+    // 会话归属取这一刻的当前会话：桌面端同一时刻只订阅这一条事件流。
+    let lane = crate::lane_context::active_lane();
+    let lane_id = lane.as_ref().map_or("", |context| context.lane_id.as_str());
     let window = app.get_webview_window(MAIN_WINDOW);
     let visible = window
         .as_ref()
@@ -405,220 +390,41 @@ pub fn notify_turn_finished(app: &AppHandle, event: &StreamEvent) {
         .and_then(|window| window.is_focused().ok())
         .unwrap_or(false);
     let foreground = visible && focused;
+    // 界面标识先推：它不受通知开关与窗口状态影响，前台它就是通知的替代品。
     let _ = app.emit(
         LANE_ACTIVITY_EVENT,
         serde_json::json!({
             "id": notice.id,
             "status": notice.status,
             "title": notice.title,
+            "laneId": lane_id,
             "foreground": foreground,
         }),
     );
 
-    if foreground {
+    if foreground || !notifications_enabled() {
         return;
     }
-    if !notifications_enabled() {
+    let lane_title = lane.as_ref().map(|context| context.title.as_str());
+    let Some((title, body)) = notification_copy(&notice, lane_title) else {
         return;
-    }
+    };
     /*
-     * 通知的会话归属：标题要带会话名，点击后要能回到这条会话。
-     *
-     * 桌面端同一时刻只订阅当前会话的事件流，因此收到轮次终态的一定就是它；
-     * 目标在这里记下，由窗口重新获得焦点那一刻消费。
+     * 通知点击没有直接回调：桌面端拿不到插件的点击事件，但点击必然让窗口重新获得焦点，
+     * 这一刻是同一个事实。只在真的发出通知时记下，普通聚焦不会把人带到无关会话上。
      */
-    let lane = crate::lane_context::active_lane();
-    if let Some(lane) = lane.as_ref() {
-        crate::lane_context::remember_pending_open(&lane.lane_id);
+    if !lane_id.is_empty() {
+        crate::lane_context::remember_pending_open(lane_id);
     }
-    let title = compose_title(
-        lane.as_ref().map(|context| context.title.as_str()),
-        &notice.title,
-    );
     // 通知失败必须留痕：这条链路一旦静默失败，用户只会觉得「说好的通知从来没出现过」。
-    if let Err(error) = app
-        .notification()
-        .builder()
-        .title(title)
-        .body(notice.body)
-        .show()
-    {
+    if let Err(error) = app.notification().builder().title(title).body(body).show() {
         eprintln!("Axon 系统通知投递失败：{error}");
     }
-}
-
-/// 一次轮次结束提示。
-struct TurnNotice {
-    /// 轮次标识，用于去重。
-    id: String,
-    /// 终态标签，界面据此选状态图标。
-    status: String,
-    /// 结论标题；发送时再拼上会话名。
-    title: String,
-    body: String,
-}
-
-/// 从一帧事件里判断是否构成「一轮结束」。
-///
-/// 收口事件是首选；但订阅端未必收得到终态帧，而轮次生命周期是 durable 的
-/// 运行事件、稳定到达，因此两条路都认，避免通知整体失效。
-fn turn_notice(event_type: &str, payload_json: &str) -> Option<TurnNotice> {
-    if event_type == EVENT_TURN_COMPLETED {
-        let payload: serde_json::Value = serde_json::from_str(payload_json).unwrap_or_default();
-        let status = payload
-            .get("status")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("completed");
-        let id = payload
-            .get("interactionId")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        let body = payload
-            .get("response")
-            .and_then(serde_json::Value::as_str)
-            .map(compact_body)
-            .filter(|text| !text.is_empty())
-            .unwrap_or_else(|| "打开 Axon 查看结果".to_owned());
-        return Some(TurnNotice {
-            id,
-            status: status.to_owned(),
-            title: status_title(status).to_string(),
-            body,
-        });
-    }
-    if event_type != EVENT_WIRE {
-        return None;
-    }
-    let envelope: serde_json::Value = serde_json::from_str(payload_json).ok()?;
-    let kind = envelope.get("kind")?;
-    if kind.get("type").and_then(serde_json::Value::as_str) != Some("turnLifecycle") {
-        return None;
-    }
-    let payload = kind.get("payload")?;
-    if payload.get("phase").and_then(serde_json::Value::as_str) != Some("regularTurn") {
-        return None;
-    }
-    let status = payload
-        .get("status")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    if status != "completed" && status != "failed" {
-        return None;
-    }
-    // 生命周期事件没有正文，用它的标题兜底，至少说清这一轮的结果。
-    let body = payload
-        .get("title")
-        .and_then(serde_json::Value::as_str)
-        .map(compact_body)
-        .filter(|text| !text.is_empty())
-        .unwrap_or_else(|| "打开 Axon 查看结果".to_owned());
-    Some(TurnNotice {
-        id: envelope
-            .get("interactionId")
-            .and_then(serde_json::Value::as_str)
-            .filter(|id| !id.is_empty())
-            .map(str::to_owned)
-            .unwrap_or_else(|| {
-                format!(
-                    "{}:{}",
-                    payload
-                        .get("turnId")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default(),
-                    status
-                )
-            }),
-        status: status.to_owned(),
-        title: status_title(status).to_string(),
-        body,
-    })
-}
-
-/// 终态到提示标题。
-const fn status_title(status: &str) -> &'static str {
-    match status.as_bytes() {
-        b"failed" => "本轮执行失败",
-        b"interrupted" => "本轮已中断",
-        _ => "本轮已完成",
-    }
-}
-
-/// 问答提问的通知标题。
-pub(super) fn question_title(status: &str) -> &'static str {
-    if status == "suspended" {
-        "任务已挂起，等待回复"
-    } else {
-        "模型需要您的确认"
-    }
-}
-
-/// 压平并截断通知正文。
-fn compact_body(text: &str) -> String {
-    // 折叠连续空白：多行正文直接贴进通知会带出一串空格，读起来是断裂的。
-    let mut flattened = String::with_capacity(text.len());
-    let mut in_space = false;
-    for character in text.chars() {
-        if character.is_whitespace() {
-            in_space = true;
-            continue;
-        }
-        if in_space && !flattened.is_empty() {
-            flattened.push(' ');
-        }
-        in_space = false;
-        flattened.push(character);
-    }
-    let trimmed = flattened.trim();
-    let mut body: String = trimmed.chars().take(NOTIFICATION_BODY_LIMIT).collect();
-    if trimmed.chars().count() > NOTIFICATION_BODY_LIMIT {
-        body.push('…');
-    }
-    body
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn notification_body_is_flattened_and_bounded() {
-        let body = compact_body("第一行\n\n第二行\t 第三行");
-        assert_eq!(body, "第一行 第二行 第三行");
-        let long = compact_body(&"长".repeat(NOTIFICATION_BODY_LIMIT + 10));
-        assert_eq!(long.chars().count(), NOTIFICATION_BODY_LIMIT + 1);
-        assert!(long.ends_with('…'));
-    }
-
-    #[test]
-    fn non_terminal_frames_do_not_notify() {
-        // 只做纯函数层的判定：通知本身依赖系统能力，不在单测里断言。
-        assert_eq!(compact_body("   "), "");
-    }
-
-    #[test]
-    fn turn_notice_recognises_both_terminal_facts() {
-        let completed = turn_notice(
-            EVENT_TURN_COMPLETED,
-            r#"{"interactionId":"i-1","status":"failed","response":"出错了"}"#,
-        )
-        .expect("收口事件应构成提示");
-        assert_eq!(completed.id, "i-1");
-        assert_eq!(completed.title, "本轮执行失败");
-        assert_eq!(completed.body, "出错了");
-
-        let lifecycle = turn_notice(
-            EVENT_WIRE,
-            r#"{"kind":{"type":"turnLifecycle","payload":{"phase":"regularTurn","status":"completed","turnId":"t-9","title":"本轮完成"}}}"#,
-        )
-        .expect("生命周期终态应构成提示");
-        assert_eq!(lifecycle.id, "t-9:completed");
-        assert_eq!(lifecycle.title, "本轮已完成");
-        assert_eq!(lifecycle.body, "本轮完成");
-
-        assert!(turn_notice(EVENT_WIRE, r#"{"kind":{"type":"turnLifecycle","payload":{"phase":"regularTurn","status":"running"}}}"#).is_none());
-        assert!(turn_notice("runtime_observation", "{}").is_none());
-    }
 
     #[test]
     fn tray_icon_assets_match_the_declared_size() {

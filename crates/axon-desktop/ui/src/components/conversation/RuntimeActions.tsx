@@ -7,6 +7,8 @@ import {
   formatDurationPadded,
 } from '../../conversation/format';
 import type { JobRow, SubagentRow } from '../../conversation/transcript';
+import { mergeSubagentRoster, shouldPollSubagentRoster, subagentSlug } from '../../conversation/subagentRoster';
+import type { LaneSubagentSummary } from '../../types';
 import { isActiveJob, JOB_ROSTER_REFRESH_MS } from '../../conversation/runtimeFacts';
 import { Dropdown } from '../ui/overlays';
 import { StateDot, type StateDotState } from '../ui/surfaces';
@@ -27,6 +29,14 @@ const STOP_CONFIRM_MS = 3000;
 
 /** 子代理会话状态的对账间隔。 */
 const SUBAGENT_ROSTER_REFRESH_MS = 10000;
+
+/**
+ * 名册的本地缓存时长。
+ *
+ * 名册接口要在后端扫线程存储，实测单次约十秒，因此切回同一条车道时不重拉：
+ * 历史子代理是持久事实，两分钟内不会变。
+ */
+const SUBAGENT_ROSTER_CACHE_MS = 120000;
 
 /** 行内状态到状态点的映射；表与参考实现的作业状态一一对应。 */
 function statusDotState(status: string): StateDotState {
@@ -139,6 +149,8 @@ export interface RuntimeActionsProps {
   jobs: JobRow[];
   /** 当前会话车道；停止作业时作为归属参数。 */
   laneId: string | null;
+  /** 本视图是否有正在跑的轮次：名册只在这段窗口里按间隔对账。 */
+  working: boolean;
   /** 打开某个子代理的运行轨迹。 */
   onOpenSubagent: (agentId: string) => void;
 }
@@ -147,6 +159,7 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
   subagents,
   jobs,
   laneId,
+  working,
   onOpenSubagent,
 }) => {
   /** 已被用户停止的作业：行标识到终态原因。 */
@@ -306,64 +319,67 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
     setExpandedId(null);
   }, [jobs, expandedId]);
 
-  const ordered = React.useMemo(
-    () =>
-      [...subagents].sort(
-        (left, right) => right.lastSeenAtMs - left.lastSeenAtMs || left.order - right.order,
-      ),
-    [subagents],
-  );
+  /** 车道子代理名册；`null` 表示还没对过账。 */
+  const [roster, setRoster] = React.useState<LaneSubagentSummary[] | null>(null);
+  /** 拉一次名册的最新入口；轮询与收口补齐都经它，避免两处各写一份请求。 */
+  const loadRosterRef = React.useRef<() => void>(() => undefined);
+  /** 名册的本地缓存；按车道记，切回同一条车道时直接复用。 */
+  const rosterCacheRef = React.useRef(new Map<string, { atMs: number; entries: LaneSubagentSummary[] }>());
 
   /*
-   * 子代理状态对账。
+   * 名册的首次读取。
    *
-   * 行里的状态来自主轮事件流：父轮结束后不会再有生命周期事件，只靠它会让已经
-   * 结束或被中断的子代理一直显示「运行中」。后端线程存储才是「此刻是否还在跑」
-   * 的可靠依据（turnStarted → active，turnCompleted/Interrupted/Failed → idle），
-   * 所以这里定期取一次子代理会话清单，把仍在声称运行、但后端已判定收口的行纠正成终态。
+   * 转录里的阶段来自轮次事件流，轮次结束后不再产生；名册来自线程存储，是持久事实。
+   * 名册不能只在转录已经有行时才拉：历史轮折叠之后转录没有行，入口会整块消失，
+   * 而这时名册里恰好还记着那些跑过的子代理。
    */
-  const [liveSubagents, setLiveSubagents] = React.useState<Map<
-    string,
-    { status: string; lastTurnStatus: string | null }
-  > | null>(null);
-
   React.useEffect(() => {
-    if (laneId === null || subagents.length === 0) {
-      setLiveSubagents(null);
+    if (laneId === null) {
+      setRoster(null);
+      loadRosterRef.current = () => undefined;
       return undefined;
     }
     let cancelled = false;
-    const refresh = () => {
+    loadRosterRef.current = () => {
       void ipc
         .conversationLaneSubagents(laneId)
         .then((list) => {
           if (cancelled) return;
-          const map = new Map<string, { status: string; lastTurnStatus: string | null }>();
-          for (const item of list.subagents) {
-            map.set(item.slug, {
-              status: item.status ?? 'notLoaded',
-              lastTurnStatus: item.lastTurnStatus ?? null,
-            });
-          }
-          setLiveSubagents(map);
+          rosterCacheRef.current.set(laneId, { atMs: Date.now(), entries: list.subagents });
+          setRoster(list.subagents);
         })
         .catch(() => {
           // 对账失败保留上一次结论：宁可短暂显示旧状态，也不要误判成已结束。
         });
     };
-    refresh();
-    const timer = window.setInterval(refresh, SUBAGENT_ROSTER_REFRESH_MS);
+    // 刚拉过的车道直接用缓存：这一步能省掉一次十秒级的后端扫描。
+    const cached = rosterCacheRef.current.get(laneId);
+    if (cached !== undefined && Date.now() - cached.atMs < SUBAGENT_ROSTER_CACHE_MS) {
+      setRoster(cached.entries);
+    } else {
+      loadRosterRef.current();
+    }
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      loadRosterRef.current = () => undefined;
     };
-  }, [laneId, subagents.length]);
+  }, [laneId]);
+
+  /** 名册按 slug 索引的实时状态。 */
+  const liveSubagents = React.useMemo(() => {
+    if (roster === null) return null;
+    const map = new Map<string, { status: string; lastTurnStatus: string | null }>();
+    for (const item of roster) {
+      map.set(item.slug, {
+        status: item.status ?? 'notLoaded',
+        lastTurnStatus: item.lastTurnStatus ?? null,
+      });
+    }
+    return map;
+  }, [roster]);
 
   /** 该子代理的会话 slug，规则与运行侧 `child_session_id` 一致。 */
-  const slugOfAgent = React.useCallback(
-    (agentId: string) => agentId.replace(/^subagent:/, '').replace(/^\/+/, '').replaceAll('/', '_'),
-    [],
-  );
+  const slugOfAgent = subagentSlug;
 
   /** 后端对账后的真实状态；无法对账时沿用事件流里的状态。 */
   const statusOf = React.useCallback(
@@ -383,6 +399,20 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
     [liveSubagents, slugOfAgent],
   );
 
+  /*
+   * 入口里的子代理行：转录行加名册补齐的历史行。
+   *
+   * 历史轮折叠后转录不再有那些行，名册仍然记着它们，因此入口在会话重开后照常
+   * 数得出来（判定见 conversation/subagentRoster）。
+   */
+  const ordered = React.useMemo(
+    () =>
+      mergeSubagentRoster(subagents, roster).sort(
+        (left, right) => right.lastSeenAtMs - left.lastSeenAtMs || left.order - right.order,
+      ),
+    [subagents, roster],
+  );
+
   /** 仍在运行中的子代理数：触发标签上的计数必须与行内状态同源。 */
   const runningCount = React.useMemo(
     () =>
@@ -392,6 +422,24 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
       }).length,
     [ordered, statusOf],
   );
+
+  /*
+   * 名册轮询只在「还会变」的时候开：一轮在跑，或行里还挂着未结束。收口且全部
+   * 终态之后不再请求，历史行是持久事实，不会自己变（判定见 subagentRoster）。
+   */
+  const rosterPolling = shouldPollSubagentRoster(working, ordered);
+  React.useEffect(() => {
+    if (laneId === null || !rosterPolling) return undefined;
+    const timer = window.setInterval(() => loadRosterRef.current(), SUBAGENT_ROSTER_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [laneId, rosterPolling]);
+
+  /** 一轮收口的这一刻补一次：终态只能由名册给出，等下一次轮询会多挂十秒。 */
+  const previousWorkingRef = React.useRef(working);
+  React.useEffect(() => {
+    if (previousWorkingRef.current && !working) loadRosterRef.current();
+    previousWorkingRef.current = working;
+  }, [working]);
 
   if (ordered.length === 0 && jobs.length === 0) return null;
 

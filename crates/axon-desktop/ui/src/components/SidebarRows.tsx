@@ -106,6 +106,25 @@ export function laneStatusState(
   return null;
 }
 
+/**
+ * 状态点的名称：图形本身不发声，名称由外层给。
+ *
+ * 「已完成」这一档尤其需要：前台不再弹系统通知，会话标题前那颗绿点就是
+ * 唯一的提示，读屏器与悬停都必须说清它是什么。
+ */
+export function laneStatusLabel(status: StateDotState): string | undefined {
+  switch (status) {
+    case 'done':
+      return '本轮已完成，未查看';
+    case 'error':
+      return '本轮执行失败';
+    case 'warning':
+      return '本轮已中断';
+    default:
+      return undefined;
+  }
+}
+
 // ------------------------------------------------------------------ 会话行
 
 export interface LaneRowProps {
@@ -234,7 +253,7 @@ export const LaneRow: React.FC<LaneRowProps> = ({
           />
         )}
 
-        {/* 状态槽：待答用线性图标，在跑是转圈，有未查看的结果是终态点；槽宽恒定。 */}
+        {/* 状态槽：待答用线性图标，在跑是转圈，未查看的终态是状态点；槽宽恒定。 */}
         <span className={ROW_ICON_COLUMN}>
           {hasPendingQuestion ? (
             <span
@@ -246,7 +265,12 @@ export const LaneRow: React.FC<LaneRowProps> = ({
               <AlertCircleIcon size={14} />
             </span>
           ) : status !== null ? (
-            <span className={`${STATUS_SLOT} ${status !== 'ongoing' ? 'confirm-pop' : ''}`}>
+            <span
+              className={`${STATUS_SLOT} ${status !== 'ongoing' ? 'confirm-pop' : ''}`}
+              role={status === 'ongoing' ? undefined : 'img'}
+              aria-label={laneStatusLabel(status)}
+              title={laneStatusLabel(status)}
+            >
               <StateDot state={status} />
             </span>
           ) : null}

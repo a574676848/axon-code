@@ -32,6 +32,7 @@ import { useElapsedTick } from './useElapsedTick';
 import { replayInteractionHistory } from './interactionReplay';
 import { useLanePaging } from './useLanePaging';
 import { useLaneReattach } from './useLaneReattach';
+import { useLaneSync, type LaneSyncFacts } from './useLaneSync';
 import { useQuestionSync } from './useQuestionSync';
 import { useSessionCumulative } from './useSessionCumulative';
 
@@ -51,8 +52,13 @@ const OPENING_CEILING_MS = 900;
 export type { ConversationController, ConversationTarget, LaneSelection } from './targets';
 export { targetOfLane } from './targets';
 
-/** 组装会话控制器；`target` 为空表示还没有选定的会话。 */
-export function useConversation(target: ConversationTarget | null): ConversationController {
+/**
+ * 组装会话控制器；`target` 为空表示还没选定会话，`laneFacts` 见 conversation/useLaneSync。
+ */
+export function useConversation(
+  target: ConversationTarget | null,
+  laneFacts: LaneSyncFacts | null = null,
+): ConversationController {
   // 目标对象的身份每次渲染都可能变，因此只在「归一化后的稳定串」上做依赖。
   const normalized = target === null ? null : normalizeTarget(target);
   const workspaceId = normalized?.workspaceId ?? null;
@@ -448,6 +454,9 @@ export function useConversation(target: ConversationTarget | null): Conversation
   useElapsedTick(dispatch, ticking);
   /** 是否有轮次在跑：与节拍同源，避免同一判断写两遍。 */
   const working = ticking;
+
+  // 外部发起的新一轮（后台作业唤醒轮、定时投递）靠车道轮数变化补齐接管。
+  useLaneSync({ laneFacts, targetKind, ready: laneReadyId === targetKey && !opening, working, onReattach: laneReattach.reattach });
 
   // 折叠生效：体量过大与超出窗口的老轮次折成一行摘要并释放正文（见 useAutoFoldTurns）。
   useAutoFoldTurns(state.turns, dispatch);

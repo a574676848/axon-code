@@ -23,7 +23,9 @@ export interface LaneActivity {
   status: string;
   /** 提示标题。 */
   title: string;
-  /** 推送时应用是否在前台；待答标识与前台的「有新结果」标识据此分流。 */
+  /** 终态所属的会话：宿主在推事件的这一刻写进来，界面据此把标识挂到正确的行上。 */
+  laneId: string;
+  /** 推送时应用是否在前台。前台不发系统通知，标识因此要照挂。 */
   foreground: boolean;
 }
 

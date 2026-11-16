@@ -19,18 +19,21 @@ export const ConversationHeaderActions: React.FC<{
   jobs: JobRow[];
   /** 当前会话车道；停止作业时作为归属参数。 */
   laneId: string | null;
+  /** 本视图是否有正在跑的轮次：子代理名册只在这段窗口里按间隔对账。 */
+  working: boolean;
   /** 当前会话的偏好键；为空表示还没有选中会话。 */
   laneKey: string | null;
   onOpenSubagent: (agentId: string) => void;
   railExpanded: boolean;
   onToggleRail: () => void;
-}> = ({ subagents, jobs, laneId, laneKey, onOpenSubagent, railExpanded, onToggleRail }) => (
+}> = ({ subagents, jobs, laneId, working, laneKey, onOpenSubagent, railExpanded, onToggleRail }) => (
   <>
     {VOICE_UI_ENABLED && <VoiceLaneToggle laneKey={laneKey} />}
     <RuntimeActions
       subagents={subagents}
       jobs={jobs}
       laneId={laneId}
+      working={working}
       onOpenSubagent={onOpenSubagent}
     />
     {/*

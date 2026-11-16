@@ -1,0 +1,103 @@
+/*
+ * 车道子代理名册与转录行的合并。
+ *
+ * 子代理事实有两条来源，寿命完全不同：
+ *
+ * - 转录里的行来自轮次事件流，历史轮一旦折叠（或只按索引立成一行）就随正文一起释放；
+ * - 名册来自网关的线程存储，按车道持久化，重新打开会话照样能列出来。
+ *
+ * 头部入口原先只读转录，于是「会话跑过子代理、重新打开后入口整块消失」。这里把
+ * 名册里转录没有的子代理补成行，入口在会话重开后仍然数得出来；状态取末轮状态，
+ * 因此补出来的行不会伪装成还在跑。
+ */
+
+import type { LaneSubagentSummary } from '../types';
+import type { SubagentRow } from './transcript';
+
+/** 子代理行标识前缀。 */
+const AGENT_PREFIX = 'subagent:';
+
+/**
+ * 子代理会话的 slug。
+ *
+ * 与运行侧 `child_session_id` 的尾段同一套写法：去掉 agent 路径前缀，斜杠换成下划线。
+ * 名册按 slug 对账，两侧必须是同一个函数，否则同一条子代理会同时以「转录行」与
+ * 「名册行」出现两次。
+ */
+export function subagentSlug(agentId: string): string {
+  return agentId.replace(/^subagent:/, '').replace(/^\/+/, '').replaceAll('/', '_');
+}
+
+/** 名册里的线程状态与末轮状态折算成行状态。 */
+function rosterStatus(entry: LaneSubagentSummary): SubagentRow['status'] {
+  const last = entry.lastTurnStatus ?? null;
+  if (last === 'completed') return 'completed';
+  if (last === 'failed') return 'failed';
+  if (last === 'interrupted') return 'interrupted';
+  const status = entry.status ?? '';
+  if (status === 'systemError') return 'failed';
+  if (status === 'active' || last === 'active') return 'running';
+  // 既没有末轮、也不是在跑：这一次委派没有留下可执行的回合，按已结束呈现，
+  // 不写成「运行中」让入口一直亮着。
+  return 'completed';
+}
+
+/**
+ * 把名册里转录没有的子代理补成行。
+ *
+ * 只补缺，不覆盖：转录里的行带着 token、耗时与阶段，信息比名册多。名册为空
+ * （还没对过账）时原样返回转录行，界面不会因此少一行。
+ */
+export function mergeSubagentRoster(
+  rows: readonly SubagentRow[],
+  roster: readonly LaneSubagentSummary[] | null,
+): SubagentRow[] {
+  if (roster === null || roster.length === 0) return [...rows];
+  const known = new Set(rows.map((row) => subagentSlug(row.agentId)));
+  const extra: SubagentRow[] = [];
+  for (const entry of roster) {
+    const slug = (entry.slug ?? '').trim();
+    if (slug.length === 0 || known.has(slug)) continue;
+    known.add(slug);
+    extra.push({
+      agentId: `${AGENT_PREFIX}${slug}`,
+      label: (entry.title ?? '').trim() || slug,
+      status: rosterStatus(entry),
+      // 名册没有阶段、用量与耗时：留空，渲染层按「缺读数就不占位」处理。
+      activity: '',
+      elapsedMs: 0,
+      lastSeenAtMs: entry.updatedAtMs ?? 0,
+      order: extra.length,
+      usage: null,
+      cacheHitRateBasisPoints: null,
+      model: (entry.model ?? '').trim() || null,
+      summary: null,
+      events: [],
+    });
+  }
+  if (extra.length === 0) return [...rows];
+  return [...rows, ...extra];
+}
+
+/**
+ * 名册还要不要继续轮询。
+ *
+ * 名册接口每次都要列线程存储里的子代理目录，并逐个读一次线程末轮状态，代价不在
+ * 客户端而在后端，因此不能像时钟一样一直拉：
+ *
+ * - 这条车道一行子代理都没有：一次都不再拉，界面本来也没有入口可画；
+ * - 有一轮正在跑：拉到轮次收口为止，子代理的状态可能还在变；
+ * - 轮次已经收口、但行里还挂着未结束：继续拉，直到名册把它判成终态。
+ *
+ * 其余情况（收口且全部终态）不再请求：历史行是持久事实，不会自己变。
+ */
+export function shouldPollSubagentRoster(
+  working: boolean,
+  rows: readonly SubagentRow[],
+): boolean {
+  if (rows.length === 0) return false;
+  if (working) return true;
+  return rows.some(
+    (row) => row.status === 'running' || row.status === 'starting' || row.status === 'waiting',
+  );
+}

@@ -87,6 +87,33 @@ test('没有 jobStatus 的普通工具行仍然用调用状态', () => {
     assert.equal(jobs[0].status, 'completed');
 });
 
+test('前台 shell 调用与交互式会话不进后台任务列表', () => {
+    // 只有回执带回 job_id 的调用才是后台作业：前台命令与 tty 会话给的是 session_id，
+    // 把它们也列进这张面板，会让「后台任务 N」的读数与事实对不上。
+    const foreground = jobsOf(
+        toolCell({
+            id: 'foreground',
+            toolKind: 'shell',
+            toolName: 'builtin.shell_command',
+            command: 'git -C repo status --short',
+            exitCode: 0,
+            jobId: null,
+        }),
+    );
+    assert.equal(foreground.length, 0);
+
+    const background = jobsOf(
+        toolCell({
+            id: 'background',
+            toolKind: 'shell',
+            toolName: 'builtin.shell_command',
+            command: 'git -C repo switch --create master --track origin/master',
+            jobId: '1',
+        }),
+    );
+    assert.deepEqual(background.map((job) => job.id), ['background']);
+});
+
 test('进行中计数以活作业名册为权威，启动快照不会把已收口的任务算成在跑', () => {
     const rows = [
         { status: 'running', jobId: '39' },

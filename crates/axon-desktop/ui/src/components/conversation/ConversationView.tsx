@@ -83,7 +83,25 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     () => (selection === null ? null : targetOfLane(selection)),
     [selection],
   );
-  const conversation = useConversation(target);
+  /**
+   * 车道快照里的轮数。
+   *
+   * 外部发起的新一轮（后台作业跑完的唤醒轮、定时投递的一轮）不在本视图的订阅里，
+   * 唯一能说明「这条车道又多了一轮」的外部事实就是快照上的总数；车道不在侧栏
+   * 登记时（定时任务这类独立会话）没有这份事实，传空。
+   */
+  const snapshotLaneId = selection?.laneId ?? null;
+  const laneFacts = React.useMemo(
+    () => {
+      if (snapshotLaneId === null) return null;
+      const lane = workspace?.lanes.find((item) => item.id === snapshotLaneId);
+      return lane === undefined
+        ? null
+        : { laneId: lane.id, interactionCount: lane.interaction_count };
+    },
+    [snapshotLaneId, workspace],
+  );
+  const conversation = useConversation(target, laneFacts);
   // 右侧栏按会话持有停靠面：开关、tab 与分栏都在这一份状态里。
   const rail = useRailLayout(selection?.laneId ?? null);
   /*
@@ -448,6 +466,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 subagents={runtimeFacts.subagents}
                 jobs={runtimeFacts.jobs}
                 laneId={selection?.laneId ?? null}
+                working={conversation.working}
                 laneKey={laneKey}
                 onOpenSubagent={setOpenSubagentId}
                 railExpanded={rail.layout.expanded}
