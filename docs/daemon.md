@@ -131,12 +131,12 @@ Daemon 是长驻进程，`CliProviderTurnRunner` 持有进程级 `StartupSnapsho
 axon daemon health
 ```
 
-容量、故障与恢复验收脚本（均使用真实 SQLite 事实源与真实 DaemonHost，只把 Provider 执行替换为本地执行器）：
+容量、故障与恢复验收（均使用真实 SQLite 事实源与真实 DaemonHost，只把 Provider 执行替换为本地执行器）：
 
 ```powershell
-pwsh -File tools/verify-jarvis-capacity.ps1   # R7-06：backlog 与并发入口容量
-pwsh -File tools/verify-jarvis-soak.ps1       # R7-07：常驻 soak（Host heartbeat、lease 续租与 Execution churn）
-bash tools/verify-daemon-restart.sh           # R7-01/09：真机重启接管，需 JARVIS_REAL_DEVICE=1
+cargo test -p axon-daemon --release daemon_host_capacity -- --ignored --nocapture
+cargo test -p axon-daemon --release daemon_host_soak -- --ignored --nocapture
+bash tools/verify-daemon-restart.sh           # 真机重启接管，需 REAL_DEVICE=1
 ```
 
 Windows 实测基线（`--release`，1k/10k backlog 与 8 线程并发入口）：

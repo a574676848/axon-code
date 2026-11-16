@@ -1,6 +1,6 @@
 //! 守护进程容量审计报告（R7-06）。
 //!
-//! 默认不参与常规测试；由 `tools/verify-jarvis-capacity.ps1` 显式触发。
+//! 默认不参与常规测试；用 `cargo test -p axon-daemon --release daemon_host_capacity -- --ignored` 显式触发。
 //! 报告使用真实 SQLite 事实源与真实 DaemonHost，只把 Provider 执行替换为本地执行器，
 //! 因此能量化 backlog 领取/结算延迟、并发入口争用、吞吐、常驻内存、WAL 体积与最老积压时长。
 
@@ -99,7 +99,7 @@ impl ProcessIdentity for CapacityProcess {
 }
 
 #[test]
-#[ignore = "容量审计报告，由 tools/verify-jarvis-capacity.ps1 触发"]
+#[ignore = "容量审计报告，用 cargo test -- --ignored 显式触发"]
 fn capacity_report_for_backlog_sizes() {
     for backlog in requested_backlogs() {
         println!("{}", run_capacity_case(backlog));
@@ -107,7 +107,7 @@ fn capacity_report_for_backlog_sizes() {
 }
 
 #[test]
-#[ignore = "容量审计报告，由 tools/verify-jarvis-capacity.ps1 触发"]
+#[ignore = "容量审计报告，用 cargo test -- --ignored 显式触发"]
 fn capacity_report_for_concurrent_ingress() {
     println!("{}", run_concurrent_ingress_case());
 }

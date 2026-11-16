@@ -62,6 +62,9 @@ Axon 是基于 Rust 构建的专属个人智能体（Personal Agent）与战术�
 生产环境观测与源码开发：
 
 - [使用统计与用量看板](./usage-statistics.md) - Token 消耗度量、审计日志与成本核算体系
+- [存储架构重构方案](./storage-architecture.md) - 事件面、控制面与投影面三层重构，替代单一大 SQLite 事实源
+- [存储层现状测绘](./storage-map.md) - 全量存储单元、表、写入路径、PRAGMA 与依赖方向的取证记录（重构附件）
+- [存储重构 WBS](./reconstruction-wbs.md) - 53 个任务的执行分解、依赖关系与里程碑验收
 - [安全基线](./security-baseline.md) - 连接形态与地址分流、TLS 信任来源、两级身份与多 Key 凭据、上传与路径校验、调试面与日志审计
 - [故障诊断与自愈](./troubleshooting.md) - 健康检查 `axon doctor`、常见异常与修复手段
 - [开源贡献指南](../CONTRIBUTING.md) - 代码结构、分层边界、门禁要求与贡献流程

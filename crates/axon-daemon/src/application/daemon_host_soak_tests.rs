@@ -1,6 +1,6 @@
 //! JARVIS 常驻 soak 报告（R7-07）。
 //!
-//! 默认不参与常规测试；由 `tools/verify-jarvis-soak.ps1` 显式触发。
+//! 默认不参与常规测试；用 `cargo test -p axon-daemon --release daemon_host_soak -- --ignored` 显式触发。
 //! 每个周期覆盖 Host heartbeat、lease 续租、recovery tick 与 Execution 领取/结算，
 //! 并断言常驻状态（Session Worker 登记、Worker 线程数、非终态 Execution、WAL 体积）
 //! 不随周期数增长。
@@ -88,7 +88,7 @@ impl ProcessIdentity for SoakProcess {
 }
 
 #[test]
-#[ignore = "常驻 soak 报告，由 tools/verify-jarvis-soak.ps1 触发"]
+#[ignore = "常驻 soak 报告，用 cargo test -- --ignored 显式触发"]
 fn soak_report_for_heartbeat_and_execution_churn() {
     println!("{}", run_soak_case(soak_iterations()));
 }
