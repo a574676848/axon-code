@@ -7,7 +7,9 @@ use axon_domain::{
     DaemonSessionId, ExecutionId, GoalStatus, JarvisEvent, JarvisEventId, SessionActionId,
     SessionActionStatus, SessionRuntimeStatus,
 };
-use axon_session::{DaemonHostRecord, RuntimeStore, RuntimeStoreError, SessionActionRecord};
+use axon_session::{
+    DaemonHostRecord, ExecutionStoreError, RuntimeStore, RuntimeStoreError, SessionActionRecord,
+};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -252,8 +254,13 @@ where
             .as_ref()
             .is_some_and(ExecutionProjection::terminal_written);
         if let Err(error) = self.commit_outcome(&action, outcome, &checkpoint, terminal_projected) {
-            if matches!(error, ExecutionWorkerError::Gate(_)) {
-                let _ = self.cancel_for_gate(&action, self.clock.now_ms());
+            if matches!(error, ExecutionWorkerError::Gate(_))
+                && let Err(cancel_error) = self.cancel_for_gate(&action, self.clock.now_ms())
+            {
+                eprintln!(
+                    "门禁拒绝后的取消补偿失败，等待 supervisor 回收: action={} error={cancel_error}",
+                    action.action_id.as_str()
+                );
             }
             return Err(error);
         }
@@ -427,12 +434,23 @@ where
             && let Ok(Some(execution)) = self.store.get_execution(&execution_id)
             && let Some(ref lease) = execution.lease
         {
-            let _ = self
+            // 门禁拒绝后取消执行是补偿动作：执行可能已经自行收口，租约失效属正常，
+            // 其余失败必须上报，否则残留的 running 行只能等 supervisor 超时回收。
+            match self
                 .store
-                .cancel_execution(&execution_id, &lease.owner, &lease.token, now_ms);
+                .cancel_execution(&execution_id, &lease.owner, &lease.token, now_ms)
+            {
+                Ok(())
+                | Err(ExecutionStoreError::Conflict(_))
+                | Err(ExecutionStoreError::NotFound(_)) => {}
+                Err(error) => eprintln!(
+                    "门禁拒绝后取消执行失败，等待 supervisor 回收: execution={} error={error}",
+                    execution_id.as_str()
+                ),
+            }
         }
         let event_key = format!("execution.cancelled:{}", action.action_id.as_str());
-        let _ = self.store.append_ledger_event(&JarvisEvent {
+        let cancelled_event = JarvisEvent {
             event_id: JarvisEventId::new(format!("event-cancelled-{}", action.action_id.as_str()))
                 .unwrap_or_else(|_| JarvisEventId::new("event-cancelled").unwrap()),
             sequence: 0,
@@ -446,7 +464,13 @@ where
             })
             .to_string(),
             occurred_at_ms: now_ms,
-        });
+        };
+        if let Err(error) = self.store.append_ledger_event(&cancelled_event) {
+            eprintln!(
+                "门禁拒绝后补写 execution.cancelled 账本事件失败: action={} error={error}",
+                action.action_id.as_str()
+            );
+        }
         self.store
             .update_action_status(
                 &action.action_id,

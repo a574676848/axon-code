@@ -135,12 +135,17 @@ where
                 .publish(&record, &record.cursor())
                 .map_err(ExecutionWorkerError::Publish)?;
         }
-        self.append_retry_event(action, &message, now_ms);
+        self.append_retry_event(action, &message, now_ms)?;
         Ok(())
     }
 
-    /// 退避重排：事件重复写入由幂等键消化，不影响重试事实。
-    fn append_retry_event(&self, action: &SessionActionRecord, error: &str, now_ms: u64) {
+    /// 退避重排：事件重复写入由幂等键消化，但写入失败必须上报，不能静默吞掉。
+    fn append_retry_event(
+        &self,
+        action: &SessionActionRecord,
+        error: &str,
+        now_ms: u64,
+    ) -> Result<(), ExecutionWorkerError> {
         let event = JarvisEvent {
             event_id: JarvisEventId::new(format!(
                 "event-waiting-{}-{}",
@@ -165,7 +170,10 @@ where
             .to_string(),
             occurred_at_ms: now_ms,
         };
-        let _ = self.store.append_ledger_event(&event);
+        self.store
+            .append_ledger_event(&event)
+            .map(|_| ())
+            .map_err(|error| ExecutionWorkerError::Gate(error.to_string()))
     }
 
     /// 同一事务提交失败结论与 Session 收尾。
