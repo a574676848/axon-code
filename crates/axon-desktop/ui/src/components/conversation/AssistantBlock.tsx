@@ -28,7 +28,14 @@ export const AssistantBlock: React.FC<{
   atMs: number | null;
   /** 这一格在时间线里的标识；朗读状态按它回认「正在念的是这一条」。 */
   source: string;
-}> = ({ text, streaming, atMs, source }) => {
+  /**
+   * 是否渲染页脚。
+   *
+   * 没有记录时间的那一格（按索引立起来的历史结论）页脚只剩一条恒定高度的空横条，
+   * 而操作按钮本来就悬浮才出现，因此整块不渲染。
+   */
+  footer?: boolean;
+}> = ({ text, streaming, atMs, source, footer = true }) => {
   const [copied, setCopied] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [saved, setSaved] = React.useState<string | null>(null);
@@ -95,7 +102,7 @@ export const AssistantBlock: React.FC<{
     <div className="group w-full">
       {/* 流式期间的“还在生成”提示由 Markdown 内部新增块的块级淡入承担，正文不再画光标。 */}
       <Markdown source={text} streaming={streaming} />
-      {!streaming && text.trim().length > 0 && (
+      {footer && !streaming && text.trim().length > 0 && (
         <MessageFooter
           atMs={atMs}
           revealActions={revealing}

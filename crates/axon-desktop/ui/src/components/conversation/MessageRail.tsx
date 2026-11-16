@@ -43,13 +43,11 @@ export interface MessageRailProps {
 /**
  * 这一轮用于导航的那一句。
  *
- * 正文轮取用户消息；骨架轮还没回放，用户那一句只存在于折叠单元的 `prompt` 里。
- * 两种形态给同一句话，导航条才不会因为「这一轮还没打开」就少一个点。
+ * 每一轮都有自己的用户气泡：索引轮与折叠轮都原位保留它，因此导航条只需读它。
  */
 function turnNavLabel(turn: TurnState): string {
   for (const cell of turn.cells) {
     if (cell.role === 'user' && cell.text.trim().length > 0) return cell.text;
-    if (cell.role === 'folded' && cell.prompt.trim().length > 0) return cell.prompt;
   }
   return '';
 }
@@ -61,8 +59,8 @@ export const MessageRail: React.FC<MessageRailProps> = ({ turns, scrollRef, anch
   /**
    * 只有带「用户那一句」的轮次才值得导航。
    *
-   * 折叠行也算：骨架轮还没回放，它的用户消息只存在于折叠单元的 `prompt` 里。
-   * 不认它的话，翻到第一百条时导航条上仍然只有那一两轮已展开的正文，等于废掉。
+   * 索引轮同样有真实的用户气泡（它由索引的入站正文立起来），因此翻到第一百条时
+   * 导航条上仍然有对应的那一句，不会因为「这一轮还没回放」就少一个点。
    */
   const navigable = React.useMemo(() => turns.filter((turn) => turnNavLabel(turn).length > 0), [turns]);
 

@@ -55,17 +55,21 @@ export type TranscriptCell =
     }
   | { id: string; role: 'reasoning'; text: string; done: boolean; durationMs: number | null; startedAtMs: number | null }
   /**
-   * 折叠单元：一整条 Interaction 压成的一行。
+   * 整轮控件：一轮的过程已经收起，点开即回放该轮。
    *
-   * 它是折叠态下该轮**唯一**保留的单元，因此这里必须自带展开所需的一切：
-   * 用户那一句、动作摘要与用来重新物化的标识。
+   * 它是一根抬头而不是过程的替身：位置固定在开场输入之后，标题给这一轮的动作摘要，
+   * 行尾给用时。折叠态的其余可见单元（用户气泡、助手回复、提示与失败卡）都是原位保留
+   * 的真实单元，因此折叠不改变任何一句话的先后。
    */
   | {
       id: string;
       role: 'folded';
+      /** 回放这一轮用的 Interaction 标识。 */
       interactionId: string;
-      prompt: string;
+      /** 动作摘要；索引轮可能是状态短语（已中断、未执行）。 */
       summary: string;
+      /** 这一轮的用时；没有时间事实时为空。 */
+      elapsedMs: number | null;
       atMs: number | null;
     }
   | {
@@ -438,11 +442,11 @@ export type ConversationAction =
    */
   | { type: 'prepend-turns'; turns: TurnState[] }
   /**
-   * 折叠一轮：丢弃正文单元，只留一行摘要。
+   * 折叠一轮：撤下过程单元，在开场输入之后留一根过程控件。
    *
-   * 摘要在派发前算好：折叠之后就没有可依据的单元了。
+   * 摘要由折叠自身从过程单元里算出来，调用方只说要折哪一轮。
    */
-  | { type: 'fold-turn'; turnId: string; summary: string }
+  | { type: 'fold-turn'; turnId: string }
   | { type: 'replace-turn-cells'; turnId: string; cells: TranscriptCell[] }
   | { type: 'connecting' }
   | { type: 'frames'; frames: import('../wire').ConversationStreamEvent[]; nowMs: number }

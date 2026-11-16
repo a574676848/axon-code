@@ -2,21 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { emptyTurn } from '../src/conversation/transcript/turns.ts';
 import {
-    FOLD_CELL_THRESHOLD,
-    FOLD_TEXT_THRESHOLD,
-    MATERIALIZED_TURN_WINDOW,
     foldTurn,
-    foldedSummary,
-    isFoldCandidate,
+    processSummary,
     replaceTurnCells,
-    shouldEvictFromWindow,
     shouldFold,
-    turnTextWeight,
 } from '../src/conversation/transcript/fold.ts';
 
 /*
- * 折叠是本仓最要紧的一条内存约束：大轮次的正文必须在折叠那一刻真的被丢弃，
- * 而不是「藏起来」。因此这里既固定判据与摘要，也固定体量的释放效果。
+ * 整轮折叠：过程整段撤下、控件插在开场输入之后、内容原位保留。
+ *
+ * 这里固定三件事，缺一件这次改造就退化成「把整轮压成一行」：
+ * 判据（谁能折）、形态与顺序（折完还是原话顺序）、释放（过程正文真的不再被引用）。
  */
 
 /** 造一轮：默认已收口。 */
@@ -24,13 +20,17 @@ function turnOf(cells, status = 'completed') {
     return { ...emptyTurn('interaction-1', 0), interactionId: 'interaction-1', status, cells };
 }
 
-function userCell(text) {
-    return { id: 'u1', role: 'user', text, atMs: null, attachments: [] };
+function userCell(text, id = 'u1') {
+    return { id, role: 'user', text, atMs: null, attachments: [] };
 }
 
-function toolCell(toolName, output = '') {
+function assistantCell(text, id) {
+    return { id, role: 'assistant', text, streaming: false, atMs: null };
+}
+
+function toolCell(toolName, output = '', id = `t:${toolName}`) {
     return {
-        id: `t:${toolName}`,
+        id,
         role: 'tool',
         toolName,
         toolKind: 'builtin',
@@ -53,25 +53,93 @@ function toolCell(toolName, output = '') {
     };
 }
 
-test('体量小的轮次不折，体量大的才折', () => {
-    const small = turnOf([userCell('你好'), toolCell('read_file', '短输出')]);
-    assert.equal(shouldFold(small), false, '小轮次折起来只会让人多按一次');
-
-    const wide = turnOf([userCell('跑一遍'), toolCell('shell_command', 'x'.repeat(FOLD_TEXT_THRESHOLD))]);
-    assert.equal(shouldFold(wide), true);
-    assert.ok(turnTextWeight(wide) >= FOLD_TEXT_THRESHOLD);
-
-    const many = turnOf(
-        Array.from({ length: FOLD_CELL_THRESHOLD }, (_, index) => toolCell(`tool_${index}`, 'ok')),
-    );
-    assert.equal(shouldFold(many), true, '单元多的一轮同样要折');
+test('只有最新的那一轮永远展开', () => {
+    const heavy = turnOf([userCell('跑一遍'), toolCell('shell_command', 'x'.repeat(50_000))]);
+    assert.equal(shouldFold(heavy, 0, 1), false, '唯一的一轮不折');
+    assert.equal(shouldFold(heavy, 1, 2), false, '最新一轮不折');
+    assert.equal(shouldFold(heavy, 0, 2), true, '再往前一轮就该折');
 });
 
-test('运行中与用户已展开的轮次都不折', () => {
-    const big = [userCell('跑一遍'), toolCell('shell_command', 'x'.repeat(FOLD_TEXT_THRESHOLD))];
-    assert.equal(shouldFold(turnOf(big, 'streaming')), false, '正在长出来的一轮不能折');
-    assert.equal(shouldFold({ ...turnOf(big), keepExpanded: true }), false, '点开过的不能被收回去');
-    assert.equal(shouldFold({ ...turnOf(big), folded: true }), false, '已经折过的不重复折');
+test('形态：用户气泡、过程控件、回复原位，一句话都不搬动', () => {
+    const turn = turnOf([
+        userCell('先看看现状'),
+        assistantCell('我先读一下这两个文件。', 'a1'),
+        toolCell('read_file', '正文 A'),
+        assistantCell('读完了，再跑一次测试。', 'a2'),
+        toolCell('shell_command', '正文 B'),
+        assistantCell('结果在这里。', 'a3'),
+    ]);
+    const folded = foldTurn(turn);
+
+    assert.equal(folded.folded, true);
+    assert.deepEqual(
+        folded.cells.map((cell) => cell.role),
+        ['user', 'folded', 'assistant', 'assistant', 'assistant'],
+        '控件紧跟开场输入，三段叙述保持原有先后',
+    );
+    assert.deepEqual(
+        folded.cells.filter((cell) => cell.role === 'assistant').map((cell) => cell.text),
+        ['我先读一下这两个文件。', '读完了，再跑一次测试。', '结果在这里。'],
+        '叙述 A 与叙述 B 不得互换，也不得被挪到控件之前',
+    );
+    const control = folded.cells[1];
+    assert.equal(control.role, 'folded');
+    assert.equal(control.interactionId, 'interaction-1', '点开回放要认得出是哪一条');
+    assert.equal(control.summary, '已读取文件，执行了命令');
+    assert.equal(folded.index[control.id], 1, '下标索引要跟着重建');
+});
+
+test('过程整段撤下：工具输出不再被任何字段引用', () => {
+    const heavy = turnOf([
+        userCell('跑一遍'),
+        toolCell('shell_command', 'x'.repeat(80_000)),
+        toolCell('read_file', 'y'.repeat(40_000)),
+    ]);
+    const folded = foldTurn(heavy);
+
+    assert.ok(JSON.stringify(folded).length < 2_000, '被释放的正文不得残留引用');
+    assert.equal(
+        folded.cells.some((cell) => cell.role === 'tool'),
+        false,
+        '折叠态不保留工具单元',
+    );
+});
+
+test('没有过程的轮次不折：折了与没折完全一样', () => {
+    const plain = turnOf([userCell('说明一下'), assistantCell('说明如下。', 'a1')]);
+    assert.equal(shouldFold(plain, 0, 2), false);
+    assert.equal(foldTurn(plain).folded, false, '没有可撤下的过程就不该插控件');
+});
+
+test('过程之后又收到输入的轮次不折：控件只能落在开场输入之后', () => {
+    const steering = turnOf([
+        userCell('跑一遍'),
+        toolCell('shell_command'),
+        userCell('等一下，先别跑', 'u2'),
+    ]);
+    assert.equal(shouldFold(steering, 0, 2), false, '把这条输入压到过程之前会读错顺序');
+
+    const opening = turnOf([
+        userCell('第一句'),
+        userCell('补充一句', 'u1b'),
+        toolCell('shell_command'),
+    ]);
+    const folded = foldTurn(opening);
+    assert.deepEqual(
+        folded.cells.map((cell) => cell.role),
+        ['user', 'user', 'folded'],
+        '开场连续输入都在控件之上',
+    );
+});
+
+test('运行中、中断、失败、已折、用户展开过的一律不折', () => {
+    const cells = [userCell('跑一遍'), toolCell('shell_command')];
+    assert.equal(shouldFold(turnOf(cells, 'streaming'), 0, 2), false);
+    assert.equal(shouldFold(turnOf(cells, 'pending'), 0, 2), false);
+    assert.equal(shouldFold(turnOf(cells, 'interrupted'), 0, 2), false, '中断的结论要保持可见');
+    assert.equal(shouldFold(turnOf(cells, 'failed'), 0, 2), false, '失败卡要保持可见');
+    assert.equal(shouldFold({ ...turnOf(cells), folded: true }, 0, 2), false);
+    assert.equal(shouldFold({ ...turnOf(cells), keepExpanded: true }, 0, 2), false);
 });
 
 test('摘要按动作短语去重、最多三个，其余并成等', () => {
@@ -79,141 +147,54 @@ test('摘要按动作短语去重、最多三个，其余并成等', () => {
         userCell('跑一遍'),
         toolCell('read_file'),
         toolCell('search'),
-        toolCell('read_file'),
+        toolCell('read_file', '', 't:read_file:2'),
         toolCell('edit'),
         toolCell('shell_command'),
     ]);
-    assert.equal(foldedSummary(turn), '已读取文件，已搜索代码，修改了文件等');
+    assert.equal(processSummary(turn.cells), '已读取文件，已搜索代码，修改了文件等');
 });
 
-test('没有工具动作的长回复给出如实摘要，不留空行', () => {
-    const plain = turnOf([
-        userCell('说明一下'),
-        { id: 'a1', role: 'assistant', text: 'x'.repeat(FOLD_TEXT_THRESHOLD), streaming: false, atMs: null },
+test('没有工具的过程按类别给一句，不写「已生成长回复」这类含糊话', () => {
+    const reasoning = turnOf([
+        userCell('想一想'),
+        { id: 'r1', role: 'reasoning', text: '思考正文', done: true, durationMs: null, startedAtMs: null },
     ]);
-    assert.equal(foldedSummary(plain), '已生成长回复');
-});
+    assert.equal(processSummary(reasoning.cells), '已思考');
 
-test('折叠真的释放正文：单元只剩一格，体量骤降', () => {
-    const heavy = turnOf([
-        userCell('跑一遍'),
-        toolCell('shell_command', 'x'.repeat(80_000)),
-        toolCell('read_file', 'y'.repeat(40_000)),
+    const changes = turnOf([
+        userCell('改一下'),
+        { id: 'f1', role: 'fileChange', path: 'a.ts', changeType: 'edit', added: 1, removed: 0, diff: '' },
     ]);
-    const before = turnTextWeight(heavy);
-    assert.ok(before > 100_000);
-
-    const folded = foldTurn(heavy, foldedSummary(heavy));
-    assert.equal(folded.folded, true);
-    assert.equal(folded.cells.length, 1, '折叠后只留一行摘要');
-    assert.equal(folded.cells[0].role, 'folded');
-    assert.equal(folded.cells[0].prompt, '跑一遍', '用户那一句要留在折叠行上');
-    assert.ok(
-        turnTextWeight(folded) < 100,
-        `折叠后的体量必须回到百字符以内，实际 ${turnTextWeight(folded)}`,
-    );
-    // 旧单元已经不在任何字段里：序列化后的体量同样骤降。
-    assert.ok(JSON.stringify(folded).length < 2_000, '被丢弃的正文不得残留引用');
+    assert.equal(processSummary(changes.cells), '改动了文件');
 });
 
 test('展开换回正文并标记保持展开', () => {
     const heavy = turnOf([userCell('跑一遍'), toolCell('shell_command', 'x'.repeat(50_000))]);
-    const folded = foldTurn(heavy, foldedSummary(heavy));
+    const folded = foldTurn(heavy);
     const restored = replaceTurnCells(folded, heavy.cells);
 
     assert.equal(restored.folded, false);
     assert.equal(restored.keepExpanded, true, '展开过的一轮不再被自动折叠');
     assert.equal(restored.cells.length, heavy.cells.length);
     assert.equal(restored.index[heavy.cells[1].id], 1, '下标索引要跟着重建');
-    assert.equal(shouldFold(restored), false);
+    assert.equal(shouldFold(restored, 0, 2), false);
 });
 
-test('发送新一轮不会折叠上一轮：最近两轮始终展开', () => {
-    const heavyTurn = () =>
-        turnOf([userCell('跑一遍'), toolCell('shell_command', 'x'.repeat(FOLD_TEXT_THRESHOLD))]);
-    /** 照 useAutoFoldTurns 的口径跑一遍：先过位置闸门，再按体量判。 */
-    const settle = (turns) =>
-        turns.map((turn, index) =>
-            isFoldCandidate(index, turns.length) && shouldFold(turn)
-                ? foldTurn(turn, foldedSummary(turn))
-                : turn,
-        );
-
-    const justSent = settle([heavyTurn(), turnOf([userCell('新一轮')])]);
-    assert.equal(justSent[0].folded, false, '按下发送的同一刻，上一轮必须仍然展开');
-    assert.equal(justSent[0].cells.length, 2, '上一轮的正文不能被摘要顶掉');
-
-    const later = settle([
-        heavyTurn(),
-        turnOf([userCell('第二轮')]),
-        turnOf([userCell('第三轮')]),
-    ]);
-    assert.equal(later[0].folded, true, '隔了两轮之后才按体量回收');
-    assert.equal(later[1].folded, false, '上一轮仍然展开');
-});
-
-test('位置闸门只认最近两轮之外的老轮次', () => {
-    assert.equal(isFoldCandidate(0, 1), false, '唯一的一轮永远不折');
-    assert.equal(isFoldCandidate(0, 2), false, '两条轮次时，上一轮不会被收');
-    assert.equal(isFoldCandidate(1, 2), false, '正在跑的一轮同样不折');
-    assert.equal(isFoldCandidate(0, 3), true, '再往前的一轮才轮到体量判据');
-    assert.equal(isFoldCandidate(1, 3), false);
-    assert.equal(isFoldCandidate(2, 3), false);
-});
-
-test('轮次窗口：超出保留窗口的老轮次一律淘汰，最新一轮永不淘汰', () => {
-    const total = MATERIALIZED_TURN_WINDOW + 3;
-    const turns = Array.from({ length: total }, (_, index) => turnOf([userCell(`第 ${index} 轮`)]));
-
-    assert.equal(shouldEvictFromWindow(turns[0], 0, total), true, '最老的一轮必须回收');
-    assert.equal(shouldEvictFromWindow(turns[2], 2, total), true, '窗口之外同样回收');
-    assert.equal(shouldEvictFromWindow(turns[3], 3, total), false, '窗口之内保持展开');
-    assert.equal(
-        shouldEvictFromWindow(turns[total - 1], total - 1, total),
-        false,
-        '正在看的一轮不能被回收',
+test('多轮会话按位置逐轮折叠，最新一轮保持完整', () => {
+    const make = (id) =>
+        ({
+            ...turnOf([userCell(`第 ${id} 轮`), toolCell('read_file', '输出', `t:${id}`)]),
+            id,
+            interactionId: id,
+        });
+    const turns = [make('a'), make('b'), make('c')];
+    const settled = turns.map((turn, index) =>
+        shouldFold(turn, index, turns.length) ? foldTurn(turn) : turn,
     );
-});
-
-test('窗口淘汰只动可回收的轮次：运行中与用户展开过的都不动', () => {
-    const total = MATERIALIZED_TURN_WINDOW + 2;
-    const live = turnOf([userCell('正在跑')], 'streaming');
-    assert.equal(shouldEvictFromWindow(live, 0, total), false, '运行中的一轮不能回收');
-
-    const opened = { ...turnOf([userCell('刚看过')]), keepExpanded: true };
-    assert.equal(shouldEvictFromWindow(opened, 0, total), false, '刚点开的一轮不该被回收');
-
-    const already = { ...turnOf([userCell('已折')]), folded: true };
-    assert.equal(shouldEvictFromWindow(already, 0, total), false, '折过的不重复折');
-});
-
-test('多轮会话按窗口回收后，被淘汰轮次的正文体量回到摘要级', () => {
-    // 每轮都带一段中等输出：单看体量不足以触发折叠，但轮数一多就会堆起来。
-    const perTurn = 1_000;
-    const total = MATERIALIZED_TURN_WINDOW + 4;
-    let turns = Array.from({ length: total }, (_, index) =>
-        turnOf([userCell(`第 ${index} 轮`), toolCell('read_file', 'z'.repeat(perTurn))]),
+    assert.deepEqual(
+        settled.map((turn) => turn.folded),
+        [true, true, false],
+        '除最新一轮之外都折起来',
     );
-    const before = turns.reduce((sum, turn) => sum + turnTextWeight(turn), 0);
-    assert.ok(before > total * perTurn, `回收前应包含每轮的正文，实际 ${before}`);
-
-    turns = turns.map((turn, index) =>
-        shouldEvictFromWindow(turn, index, total) ? foldTurn(turn, foldedSummary(turn)) : turn,
-    );
-
-    // 窗口保留最近 MATERIALIZED_TURN_WINDOW 轮，其余全部淘汰。
-    const evicted = total - MATERIALIZED_TURN_WINDOW;
-    const foldedTurns = turns.filter((turn) => turn.folded);
-    assert.equal(foldedTurns.length, evicted);
-    for (const turn of foldedTurns) {
-        assert.ok(
-            turnTextWeight(turn) < 200,
-            `被淘汰的一轮只该剩下摘要，实际 ${turnTextWeight(turn)}`,
-        );
-    }
-    const after = turns.reduce((sum, turn) => sum + turnTextWeight(turn), 0);
-    assert.ok(
-        before - after > evicted * perTurn * 0.9,
-        `回收掉的体量应约等于 ${evicted} 轮正文，实际 ${before - after}`,
-    );
+    assert.equal(settled[2].cells.length, 2, '最新一轮的正文一格都不能少');
 });

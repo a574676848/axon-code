@@ -96,6 +96,15 @@ pub struct InteractionSummary {
     /// 该轮用过的工具名（逗号分隔、已去重）；老网关不返回时为空。
     #[serde(default)]
     pub tool_summary: String,
+    /// 本轮最终交付正文；老网关、非正常收口或正文已过保留期时为空。
+    ///
+    /// 历史轮折叠后要能直接读到结论，因此正文随索引一起回来，客户端不必为看见它
+    /// 而回放该轮的历史帧。
+    #[serde(default)]
+    pub answer_text: Option<String>,
+    /// 已收口轮次的墙钟用时（毫秒）；读不到时间事实时为空。
+    #[serde(default)]
+    pub elapsed_ms: Option<u64>,
 }
 
 /// 网关载荷。

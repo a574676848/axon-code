@@ -510,6 +510,10 @@ export interface InteractionSummary {
   reasoningEffort?: string | null;
   /** 该轮用过的工具名（逗号分隔、已去重）；老网关不返回时缺省。 */
   toolSummary?: string;
+  /** 本轮最终交付正文；老网关、非正常收口或正文已过保留期时缺省。 */
+  answerText?: string | null;
+  /** 已收口轮次的墙钟用时（毫秒）；读不到时间事实时缺省。 */
+  elapsedMs?: number | null;
 }
 
 /**

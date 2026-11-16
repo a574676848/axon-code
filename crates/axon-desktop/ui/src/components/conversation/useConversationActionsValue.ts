@@ -87,7 +87,7 @@ export function useConversationActionsValue(
       },
       // 卡片只有一张，而且只承载当前待答的那条提问：入口因此只需把卡片叫回来。
       openQuestion: () => sourceRef.current.openQuestion(),
-      // 折叠行自带标识：展开时按它重新回放那一条交互。
+      // 过程控件自带标识：展开时按它重新回放那一条交互。
       unfoldTurn: (interactionId) => sourceRef.current.unfoldTurn(interactionId),
       // 正文里的相对图片路径以当前工作区为准，与输入坞的 `@` 引用同作用域。
       workspaceRoot,

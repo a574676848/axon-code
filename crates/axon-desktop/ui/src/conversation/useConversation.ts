@@ -359,7 +359,7 @@ export function useConversation(
     /*
      * 在途的展开与补窗要就地作废。
      *
-     * 分页层用「有没有正在跑的临时投影」当发起守卫；不清它，新会话里点骨架、翻历史
+     * 分页层用「有没有正在跑的临时投影」当发起守卫；不清它，新会话里点控件、翻历史
      * 都会被静默拒绝，用户除了重启没有别的出路。
      */
     paging.abort();
@@ -458,7 +458,7 @@ export function useConversation(
   // 外部发起的新一轮（后台作业唤醒轮、定时投递）靠车道轮数变化补齐接管。
   useLaneSync({ laneFacts, targetKind, ready: laneReadyId === targetKey && !opening, working, onReattach: laneReattach.reattach });
 
-  // 折叠生效：体量过大与超出窗口的老轮次折成一行摘要并释放正文（见 useAutoFoldTurns）。
+  // 折叠生效：最新一轮之外的老轮次撤下过程、只留一根过程控件（见 useAutoFoldTurns）。
   useAutoFoldTurns(state.turns, dispatch);
 
   /** 过渡窗口的上限：兜底收口，正文区不会一直停在过渡面上。 */
@@ -667,7 +667,7 @@ export function useConversation(
     working,
     /** 正文装载中：工作状态行写「正在加载会话…」而不是供应商阶段。 */
     loadingHistory: opening || replaying,
-    /** 正在展开的折叠轮：折叠行据此把箭头换成转圈。 */
+    /** 正在展开的折叠轮：过程控件据此把箭头换成转圈。 */
     unfoldingId: paging.unfoldingId,
     activeQuestion,
     answerQuestion,

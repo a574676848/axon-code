@@ -1,36 +1,27 @@
 /*
  * 折叠生效。
  *
- * 两条判据（单轮体量、轮次窗口）都只作用于最近两轮之外的老轮次：发送新一轮时，
- * 上一轮仍是阅读对象，不能在按下的同一刻被收成摘要（见 `isFoldCandidate`）。
+ * 只有一条判据：除最新一轮之外，能折的都折（见 `shouldFold`）。最新一轮是正在读的
+ * 那一段，收起来等于把阅读对象抽走；而其余轮次折起来不损失任何一句话，只把过程
+ * 撤下，因此不再需要体量阈值与轮次窗口两套判据。
  *
- * 折叠时该轮的正文单元被丢弃，工具输出与推理正文随即失去引用、被回收；用户点开过的
- * 一轮不会被自动收回（`keepExpanded`），每一轮至多折一次，因此这个 effect 自行收敛，
- * 不会来回派发。
+ * 折叠时该轮的过程单元被撤下，工具输出与推理正文随即失去引用、被回收；用户点开过的
+ * 一轮不会被自动收回（`keepExpanded`），每一轮至多折一次，因此这个 effect 自行收敛。
  */
 
 import { useEffect } from 'react';
-import {
-  foldedSummary,
-  isFoldCandidate,
-  shouldEvictFromWindow,
-  shouldFold,
-  type ConversationAction,
-  type TurnState,
-} from './transcript';
+import { shouldFold, type ConversationAction, type TurnState } from './transcript';
 
-/** 按体量与窗口两条判据让折叠生效；最近两轮不参与。 */
+/** 除最新一轮之外，把该折的都折起来。 */
 export function useAutoFoldTurns(
   turns: readonly TurnState[],
   dispatch: (action: ConversationAction) => void,
 ): void {
   useEffect(() => {
     for (let index = 0; index < turns.length; index += 1) {
-      if (!isFoldCandidate(index, turns.length)) continue;
       const turn = turns[index];
-      const evicted = shouldEvictFromWindow(turn, index, turns.length);
-      if (!evicted && !shouldFold(turn)) continue;
-      dispatch({ type: 'fold-turn', turnId: turn.id, summary: foldedSummary(turn) });
+      if (!shouldFold(turn, index, turns.length)) continue;
+      dispatch({ type: 'fold-turn', turnId: turn.id });
     }
   }, [dispatch, turns]);
 }

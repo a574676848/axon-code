@@ -51,22 +51,10 @@ export { conversationReducer } from './reducer';
 export { applyFrames } from './frames';
 
 /*
- * 折叠判据、摘要与历史骨架对外可见：控制器据此决定哪一轮折成一行，在派发前把摘要
- * 算好（折叠之后就没有可依据的单元了），并按索引直接立起「只有摘要、没有正文」的
- * 历史轮次。
+ * 折叠判据与索引轮对外可见：控制器据此决定哪一轮折起来，并按索引直接立起一根
+ * 已经收好的轮次（用户气泡 + 过程控件 + 最终答案）。
  */
-export {
-  FOLD_CELL_THRESHOLD,
-  FOLD_TEXT_THRESHOLD,
-  MATERIALIZED_TURN_WINDOW,
-  RECENT_EXPANDED_TURNS,
-  foldedSummary,
-  historySkeletonTurn,
-  isFoldCandidate,
-  shouldEvictFromWindow,
-  shouldFold,
-  turnTextWeight,
-} from './fold';
+export { indexedTurn, shouldFold, type IndexedTurnEntry } from './fold';
 
 export {
   attachmentsFromPaths,

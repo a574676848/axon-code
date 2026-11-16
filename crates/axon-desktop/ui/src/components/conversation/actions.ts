@@ -64,8 +64,8 @@ export function useConversationActions(): ConversationActions | null {
  * 正在展开的那一条。
  *
  * 单独一条上下文而不是并进动作集合：动作集合是每一轮都会读的 props，它一变，
- * 正文里所有轮次的 memo 就同时失效。展开状态只该让「那一条折叠行」重渲染，
- * 因此这里只放一个标识，消费者也只有折叠行自己。
+ * 正文里所有轮次的 memo 就同时失效。展开状态只该让「那一根过程控件」重渲染，
+ * 因此这里只放一个标识，消费者也只有过程控件自己。
  */
 const UnfoldingContext = React.createContext<string | null>(null);
 

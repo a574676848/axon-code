@@ -71,7 +71,7 @@ export function conversationReducer(
       /*
        * 去重后再接。
        *
-       * 前置进来的既可能是回放算好的一页，也可能是按索引立起来的骨架行：
+       * 前置进来的既可能是回放算好的一页，也可能是按索引立起来的一轮：
        * 重连会再取一次首屏页，反复翻页也可能取到与已有窗口重叠的一段。
        * 同一条 Interaction 只能有一个轮次：重复接进头部就是两份同样的历史。
        */
@@ -84,11 +84,9 @@ export function conversationReducer(
       return fresh.length === 0 ? state : { ...state, turns: [...fresh, ...state.turns] };
     }
     case 'fold-turn': {
-      // 折叠即释放：正文单元在这一步被丢弃，摘要由调用方在派发前算好。
+      // 折叠即释放：过程单元在这一步被撤下，控件与内容由 foldTurn 自己算出来。
       const position = state.turns.findIndex((turn) => turn.id === action.turnId);
-      return position < 0
-        ? state
-        : withTurn(state, position, (turn) => foldTurn(turn, action.summary));
+      return position < 0 ? state : withTurn(state, position, (turn) => foldTurn(turn));
     }
     case 'replace-turn-cells': {
       const position = state.turns.findIndex((turn) => turn.id === action.turnId);

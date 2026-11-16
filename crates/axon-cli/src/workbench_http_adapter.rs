@@ -91,21 +91,25 @@ pub fn lane_interactions_payload(
     let records = runtime_store(axon_root)
         .interactions_for_lane(lane_id, limit, before)
         .map_err(|error| format!("读取车道 Interaction 失败：{error:?}"))?;
-    // 工具动作摘要一次批次查覆盖整页：名字在写入事件时已落列，这里不碰事件表。
+    // 工具动作摘要与本轮用时一次批次查覆盖整页：两者都已在写入时落列，这里不碰事件表。
     let interaction_ids: Vec<&str> = records
         .iter()
         .map(|record| record.interaction_id.as_str())
         .collect();
-    let tool_summaries = lane_readings::tool_summaries(axon_root, &interaction_ids);
+    let facts = lane_readings::interaction_facts(axon_root, &interaction_ids);
+    // 最终交付正文按收口事件取回：同样是整页一次索引查，不回放任何一条记录的帧。
+    let answers = lane_readings::answer_texts(axon_root, lane_id, &interaction_ids);
     let interactions: Vec<InteractionView> = records
         .iter()
         .map(|record| {
             let interaction_id = record.interaction_id.as_str().to_owned();
+            let fact = facts.get(&interaction_id);
             InteractionView {
-                tool_summary: tool_summaries
-                    .get(&interaction_id)
-                    .cloned()
+                tool_summary: fact
+                    .map(|fact| fact.tool_summary.clone())
                     .unwrap_or_default(),
+                answer_text: answers.get(&interaction_id).cloned().unwrap_or_default(),
+                elapsed_ms: fact.and_then(|fact| fact.elapsed_ms),
                 interaction_id,
                 status: serde_json::to_value(record.status)
                     .ok()

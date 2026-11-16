@@ -143,6 +143,7 @@
 - 模型编辑必须读写 `supports_embedding` 与 `embedding_dimension`：关闭 Embedding 时维度归零，打开时给出有效默认维度并允许修改；加载模型时不得把这两个字段丢掉，否则保存会写出不合法配置。
 - 以下形态全站只有一份实现，出现第二份即视为缺陷：
   - 可展开行（`DisclosureRow`）
+  - 整轮控件（历史轮折叠后留在开场输入之后的那一根过程行；思考、工具、改动、计划整段撤下，回复原位保留，见 `docs/workbench-design-system.md` §6.1.4）
   - 菜单与候选列表（`MenuPanel` / `MenuRow`）
   - 下拉选择（`Select`，含停用项与说明列；音色这类单选一律走它，不平铺成行）
   - 分页（`ui/pagination`）

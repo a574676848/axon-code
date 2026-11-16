@@ -487,23 +487,23 @@ const NoticeBlock: React.FC<{ cell: Extract<TranscriptCell, { role: 'notice' }> 
 );
 
 /**
- * 折叠行：一整条 Interaction 压成的一行。
+ * 整轮控件：一轮的过程已经收起之后留在开场输入之后的那一根抬头。
  *
- * 折叠时正文已经释放，因此这一行本身不展开任何内容，只负责把人带回那条记录：
- * 点击即按标识重新回放，回放完把正文整段换回来。
+ * 过程正文在折叠那一刻已经释放，因此这一行本身不展开任何内容，只负责把人带回那条
+ * 记录：点击即按标识重新回放，回放完把完整正文整段换回来。行的样式与思考、执行行
+ * 同一份实现，读者不必学第二套折叠语义。
  */
 const FoldedBlock: React.FC<{ cell: Extract<TranscriptCell, { role: 'folded' }> }> = ({ cell }) => {
   const actions = useConversationActions();
   /*
-   * 展开要先回放一窗帧，这段时间里折叠行必须自己说"在动"：否则用户点下去看到的是
-   * 一秒钟毫无反应的一行，会以为点空了。转圈由共用的可展开行负责（`active` 会
-   * 把箭头换成转圈），这里只把状态递进去。
+   * 展开要先回放一窗帧，这段时间里控件必须自己说"在动"：否则用户点下去看到的是一秒
+   * 毫无反应的一行，会以为点空了。转圈由共用的可展开行负责（`active` 会把箭头换成
+   * 转圈），这里只把状态递进去。
    */
   const unfolding = useUnfoldingInteractionId();
   const expanding = unfolding === cell.interactionId;
-  const label = cell.prompt.trim().length > 0 ? cell.prompt : '这一轮的历史记录';
   return (
-    <div className="skeleton-row-in w-full rounded-md hairline border-border-hairline bg-surface px-1 py-0.5">
+    <div className="skeleton-row-in w-full">
       <DisclosureRow
         open={false}
         onToggle={() => {
@@ -512,10 +512,10 @@ const FoldedBlock: React.FC<{ cell: Extract<TranscriptCell, { role: 'folded' }> 
           actions?.unfoldTurn(cell.interactionId);
         }}
         icon={<ChecklistIcon size={14} />}
-        label="历史"
-        title={label}
-        titleText={label}
-        meta={cell.summary}
+        label="过程"
+        title={cell.summary}
+        titleText={cell.summary}
+        meta={cell.elapsedMs === null ? undefined : compactDuration(cell.elapsedMs)}
         active={expanding}
       />
     </div>
@@ -555,6 +555,9 @@ export const TranscriptCellView: React.FC<{
           streaming={cell.streaming}
           atMs={cell.atMs}
           source={cell.id}
+          // 时间事实缺席时页脚只剩一条空白横条（操作按钮本来就悬浮才出现），
+          // 索引轮因此不渲染它。
+          footer={cell.atMs !== null}
         />
       );
     case 'reasoning':
