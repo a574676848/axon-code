@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::lane_source::{DESKTOP_LANE_CHANNEL, LaneSource};
+use crate::session_menu::SessionMenuEntry;
 use crate::state::{directory_label, load_state};
 
 use super::model::{LaneDto, WorkspaceDto, normalize, runtime_workspace_dir};
@@ -106,10 +107,58 @@ fn workspace_entries(source: &dyn LaneSource) -> Result<Vec<WorkspaceEntry>, Str
     Ok(entries)
 }
 
+/// 按运行态会话清单校正车道的状态、标题与活动时刻。
+///
+/// 三件事都以 `sessions` 表为准：置顶与归档取表里的值，标题取表里的会话标题
+/// （用户在本机的重命名属于本地偏好，仍然优先），最近活动时间取表里的时间戳。
+/// 活动时间对齐之后，[`order_lanes`] 按它排序得到的次序就是网关那条
+/// 「置顶优先、再按最近活动倒序」的结果，客户端不再另算一套顺序。
+///
+/// 不在清单里的车道（本端新建、尚未产生首条消息）保持本地镜像不动：会话还不存在时
+/// 没有可对齐的事实，此时硬塞一个默认值只会把用户刚点下的置顶抹掉。
+pub(super) fn apply_session_facts(
+    lanes: &mut [LaneDto],
+    sessions: &[SessionMenuEntry],
+    renamed: &HashMap<String, String>,
+) {
+    if sessions.is_empty() {
+        return;
+    }
+    let index: HashMap<&str, &SessionMenuEntry> = sessions
+        .iter()
+        .map(|session| (session.session_id.as_str(), session))
+        .collect();
+    for lane in lanes.iter_mut() {
+        let Some(session) = index.get(lane.id.as_str()) else {
+            continue;
+        };
+        lane.pinned = session.pinned;
+        lane.archived = session.archived;
+        // 零表示没有任何活动观测，此时保留车道自己报的时间而不是把时间清成 1970。
+        if session.last_activity_at_ms > 0 {
+            lane.updated_at = session.last_activity_at_ms;
+        }
+        let custom_name = renamed
+            .get(&lane.id)
+            .is_some_and(|title| !title.trim().is_empty());
+        if !custom_name && !session.title.trim().is_empty() {
+            lane.title = session.title.clone();
+        }
+    }
+}
+
 /// 组装全部工作区及其车道。
 pub(super) fn build_workspaces(source: &dyn LaneSource) -> Result<Vec<WorkspaceDto>, String> {
     let state = load_state();
     let entries = workspace_entries(source)?;
+    /*
+     * 会话清单只读一次：它同时决定置顶、归档、标题与次序。按工作区分别再取会把同一份
+     * 事实读多遍，两次之间还可能被另一端改写。
+     *
+     * 读不到时退回本地镜像而不是整棵树失败：侧栏是主界面的一部分，旧版本后台没有这个
+     * 接口时它必须照常渲染；写操作仍然会如实报错，不会静默变成「点了没反应」。
+     */
+    let sessions = crate::session_menu::list(None, true).unwrap_or_default();
 
     // 车道先按 workspace_id 归堆；未登记工作区的车道单独兜底，绝不静默丢弃。
     let mut buckets: HashMap<String, Vec<LaneDto>> = HashMap::new();
@@ -190,6 +239,7 @@ pub(super) fn build_workspaces(source: &dyn LaneSource) -> Result<Vec<WorkspaceD
         .into_iter()
         .map(|entry| {
             let mut lanes = buckets.remove(&entry.id).unwrap_or_default();
+            apply_session_facts(&mut lanes, &sessions, &state.lane_title);
             order_lanes(
                 &mut lanes,
                 &state.lane_pinned,

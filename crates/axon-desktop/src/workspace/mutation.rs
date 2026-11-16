@@ -197,11 +197,17 @@ pub fn execute_lane_create(
 }
 
 /// 在给定数据源上设置或取消车道置顶。
+///
+/// 先写运行态、再同步本地镜像：置顶是会话在 `sessions` 表里的状态，三端读的是同一份，
+/// 因此失败必须原样上报（网关不可达、会话尚未登记），不能只在本地改一个标记让用户
+/// 以为已经生效。本地镜像继续维护，是为了让「还没有产生回合、因而不在会话清单里」
+/// 的新建会话保持住用户刚点下的选择。
 pub fn execute_lane_set_pinned(
     source: &dyn LaneSource,
     lane_id: &str,
     pinned: bool,
 ) -> Result<Vec<WorkspaceDto>, String> {
+    crate::session_menu::patch(lane_id, Some(pinned), None)?;
     let mut desktop = load_state();
     desktop.lane_pinned.retain(|id| id != lane_id);
     if pinned {
@@ -212,11 +218,15 @@ pub fn execute_lane_set_pinned(
 }
 
 /// 在给定数据源上设置或取消车道归档。
+///
+/// 归档同样先写运行态：归档后从默认列表消失的依据是 `sessions.archived`，
+/// 写不进去就必须让用户看见，否则「归档成功」只是本地假装。
 pub fn execute_lane_set_archived(
     source: &dyn LaneSource,
     lane_id: &str,
     archived: bool,
 ) -> Result<Vec<WorkspaceDto>, String> {
+    crate::session_menu::patch(lane_id, None, Some(archived))?;
     let mut desktop = load_state();
     desktop.lane_archived.retain(|id| id != lane_id);
     if archived {

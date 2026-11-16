@@ -22,9 +22,7 @@ import {
 import { ArchiveLaneDialog, RemoveWorkspaceDialog } from './SidebarConfirmations';
 import { WorkspaceTree } from './WorkspaceTree';
 import type { ArchivedFilter, GroupMode, OrderMode } from './ViewOptionsMenu';
-import { SettingsIcon } from '../icons';
-import { UpdateHint } from './UpdateHint';
-import { ConnectionCapsule } from './ConnectionCapsule';
+import { SidebarFooter } from './SidebarFooter';
 
 /** 侧栏默认宽度，与既有工作台产品一致。 */
 const DEFAULT_WIDTH = 280;
@@ -105,7 +103,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [resizing, setResizing] = useState(false);
 
   const [workspaces, setWorkspaces] = useState<WorkspaceItem[]>([]);
+  /** 列表本身的读取失败：这一档会替换树形区，因为没有可展示的数据。 */
   const [loadError, setLoadError] = useState<string | null>(null);
+  /**
+   * 单次动作（置顶、归档、新建、重命名、添加工作区）的失败原因。
+   *
+   * 与列表读取失败分开：动作失败时树还在，把它整块换成错误页等于因为一次置顶没写成
+   * 就把用户正在看的会话列表抽走。失败结论挂成树上方的一行回执，树保持原位。
+   */
+  const [actionError, setActionError] = useState<string | null>(null);
   /** 首次读取是否已经落地：连上但还没读到数据时，骨架比「没有工作区」准确。 */
   const [loadedOnce, setLoadedOnce] = useState(false);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState('');
@@ -185,9 +191,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
     async (action: () => Promise<WorkspaceItem[]>, fallback: string): Promise<boolean> => {
       try {
         ingest(await action());
+        setActionError(null);
         return true;
       } catch (error) {
-        setLoadError(error instanceof Error ? error.message : fallback);
+        // 动作失败只写回执，不动列表读取的状态：树要留在原处。
+        setActionError(error instanceof Error ? error.message : fallback);
         return false;
       }
     },
@@ -221,7 +229,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         setExpanded((current) => ({ ...current, [target]: true }));
         onSelectTab('chat');
       } catch (error) {
-        setLoadError(error instanceof Error ? error.message : '新建会话失败');
+        setActionError(error instanceof Error ? error.message : '新建会话失败');
       }
     },
     [activeWorkspaceId, ingest, onSelectLane, onSelectTab],
@@ -233,20 +241,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
     try {
       picked = await ipc.pickDirectory();
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : '无法打开目录选择器');
+      setActionError(error instanceof Error ? error.message : '无法打开目录选择器');
       return;
     }
     if (picked === null || picked.length === 0) return;
     try {
       const list = await ipc.addWorkspace(picked);
       ingest(list);
+      setActionError(null);
       const added = list.find((workspace) => workspace.path === picked);
       if (added !== undefined) {
         setActiveWorkspaceId(added.id);
         setExpanded((current) => ({ ...current, [added.id]: true }));
       }
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : '添加工作区失败');
+      setActionError(error instanceof Error ? error.message : '添加工作区失败');
     }
   }, [ingest]);
 
@@ -432,10 +441,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
           );
         })
         .sort((left, right) => {
+          /*
+           * 置顶块优先、其余按最近活动倒序，与网关 `sessions` 清单的排序规则一致。
+           *
+           * 置顶与最近活动都由运行态投影给出（桌面端不再自存一份状态），因此这里只是把
+           * 同一条规则重放一遍，不会算出一个与网关不同的次序；「手动顺序」档保留后端
+           * 给出的次序，用户在列表里拖动过之后就以那次拖动为准。
+           */
+          if (orderBy !== 'updated') return 0;
           if (left.pinned !== right.pinned) return left.pinned ? -1 : 1;
-          if (orderBy === 'updated') return right.updated_at - left.updated_at;
-          // 手动排序保持后端给出的顺序，即置顶块加上用户保存的次序。
-          return 0;
+          return right.updated_at - left.updated_at;
         });
 
     return workspaces.map((workspace) => ({
@@ -549,6 +564,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* 工作区与会话列表 */}
       <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar px-3 pb-2 pt-1">
+        {/*
+          动作失败挂在树上方一行，而不是把树换成错误页：置顶、归档失败时用户仍然要看得见
+          自己正在看的那串会话。列表读取失败才走下面的整块占位。
+        */}
+        {actionError !== null && (
+          <div className="pb-1.5">
+            <Banner
+              tone="danger"
+              icon={<AlertCircleIcon size={14} />}
+              title={actionError}
+              action={
+                <button
+                  type="button"
+                  onClick={() => setActionError(null)}
+                  className="text-meta text-text-primary underline underline-offset-2"
+                >
+                  知道了
+                </button>
+              }
+            />
+          </div>
+        )}
         {loadError !== null && health?.connected !== false ? (
           <Banner
             tone="danger"
@@ -609,34 +646,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
       </div>
 
-      {/*
-        底栏自上而下三层：连接胶囊、切档回执（仅在切档时出现）、设置行。
-        胶囊自占一行：设置行右端已被「新版本」入口占用，挤进同一行会把两个入口
-        压成一条，且胶囊是恒常驻的档案入口，不该跟着更新检测的结论出现或消失。
-        MCP 台数与技能条数收在这一行里：它们同样是「此刻挂着什么」的常驻事实。
-      */}
-      <div className="shrink-0 px-3 py-2 space-y-1">
-        <ConnectionCapsule
-          onManage={onOpenConnection ?? onOpenSettings}
-          mcpReading={mcpReading}
-          skillCount={skillCount}
-        />
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onOpenSettings}
-            className={`${ROW_STATE} hover:bg-hover flex-1 min-w-0 h-8 text-left`}
-          >
-            <span className={`${ROW_ICON_COLUMN} text-text-tertiary`}>
-              <SettingsIcon size={14} />
-            </span>
-            <Text size="body" className="leading-5" truncate>
-              设置
-            </Text>
-          </button>
-          <UpdateHint />
-        </div>
-      </div>
+      <SidebarFooter
+        mcpReading={mcpReading}
+        skillCount={skillCount}
+        onOpenSettings={onOpenSettings}
+        onOpenConnection={onOpenConnection ?? onOpenSettings}
+      />
 
       {/* 宽度拖拽把手：与既有工作台产品一致，做成不可见的命中区，
           只保留列宽光标这一处可见反馈，不额外绘制把手或分隔条。 */}

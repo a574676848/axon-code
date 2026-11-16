@@ -59,6 +59,8 @@ pub mod secrets;
 pub mod self_check;
 /// 网关可用性探测与服务修复引导。
 pub mod service_recovery;
+/// 会话菜单：经网关读取会话清单并写回置顶与归档。
+pub mod session_menu;
 /// 桌面工作台自身的持久化状态。
 pub mod state;
 /// 系统信息。

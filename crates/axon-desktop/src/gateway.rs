@@ -299,6 +299,34 @@ pub fn post_json(path: &str, payload: &serde_json::Value) -> Result<serde_json::
     decode_json(status, &body)
 }
 
+/// PATCH 一个网关接口，返回状态码与响应体。
+///
+/// 局部更新必须走 PATCH：[`post_raw`] 的语义是「整条记录由此覆盖」，用它改一个字段
+/// 等于把没提到的字段一并重置。需要按状态码分档的调用方（例如 404 表示会话还不在
+/// 运行态登记里）走这一层，只关心成败的调用方自己决定怎么翻译。
+pub fn patch_raw(path: &str, payload: &serde_json::Value) -> Result<(u16, String), String> {
+    let url = endpoint(path)?;
+    let mut request = agent()
+        .patch(&url)
+        .header("accept", "application/json")
+        .header("content-type", "application/json");
+    if let Some(token) = api_token() {
+        request = request.header("authorization", &format!("Bearer {token}"));
+    }
+    match request.send(payload.to_string()) {
+        Ok(response) => {
+            let status = response.status().as_u16();
+            let body = response
+                .into_body()
+                .read_to_string()
+                .map_err(|error| format!("读取网关响应失败：{error}"))?;
+            Ok((status, body))
+        }
+        Err(ureq::Error::StatusCode(status)) => Ok((status, String::new())),
+        Err(error) => Err(transport_failure_message_rejected(&error)),
+    }
+}
+
 /// DELETE 一个网关接口，返回状态码与响应体。
 pub fn delete_raw(path: &str) -> Result<(u16, String), String> {
     let url = endpoint(path)?;
