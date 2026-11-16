@@ -284,7 +284,10 @@ fn run_parsed_cli_internal(
     }
 
     match &cli.command {
-        Some(AxonCommand::Run(command)) => run_command_from_cli(cli, command, run_json_writer),
+        Some(AxonCommand::Run(command)) => match validate_explicit_session(cli, command) {
+            Ok(()) => run_command_from_cli(cli, command, run_json_writer),
+            Err(error) => crate::management_commands::cli_error(error),
+        },
         Some(AxonCommand::Serve(command)) => {
             run_serve(command, cli.global.format, cli.global.config.as_deref())
         }
@@ -647,3 +650,31 @@ mod default_log_dir_tests {
 
 #[cfg(test)]
 include!("tests/mod.rs");
+
+/// `axon run --session` 指向的会话必须已存在。
+///
+/// 只校验**用户显式指定**的这一条路径：子代理与测试会用 `--session` 生成新的子会话，
+/// 它们不经过这里。拼错 ID 时若静默新建，用户会以为历史还在，而模型什么都没看到。
+pub(crate) fn validate_explicit_session(cli: &AxonCli, command: &RunCommand) -> Result<(), String> {
+    let Some(session_id) = command.session.as_deref() else {
+        return Ok(());
+    };
+    let config_path = crate::management_commands::resolved_config_path(cli.global.config.as_deref())?;
+    let data_root = crate::runtime_paths::runtime_axon_data_path_static(&config_path)?;
+    let store = axon_session::SqliteRuntimeStore::from_root(data_root);
+    store
+        .initialize()
+        .map_err(|error| error.to_string())?;
+    let parsed = axon_domain::DaemonSessionId::new(session_id.to_owned())
+        .map_err(|_| format!("会话 ID 非法：{session_id}"))?;
+    use axon_session::RuntimeStore as _;
+    store.get_session(&parsed).map(|_| ()).map_err(|_| {
+        format!(
+            "会话不存在：{session_id}。先用 `axon sessions list` 查看可用会话；--session 不会隐式新建会话"
+        )
+    })
+}
+
+#[cfg(test)]
+#[path = "tests/explicit_session_tests.rs"]
+mod explicit_session_tests;
