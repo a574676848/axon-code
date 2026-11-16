@@ -37,7 +37,7 @@ const LEASE_RENEWAL_JOIN_POLL: Duration = Duration::from_millis(1);
 ///   空闲期没有线程也没有写入；
 /// - **零轮询**：线程阻塞在 `Condvar::wait_timeout` 上，每个周期只醒一次，
 ///   停机由 `notify_all` 立即放行，不靠短间隔空转；
-/// - **每个周期一次按主键的 UPDATE**：命中 `jarvis_executions` 主键，代价与目标数量无关；
+/// - **每个周期一次按主键的 UPDATE**：命中 `work_items` 主键，代价与目标数量无关；
 /// - **失败只记一次**：租约被抢（`Fenced`）时直接停表，其余错误记一行后继续等下一周期。
 struct LeaseRenewal {
     stop: Arc<(Mutex<bool>, Condvar)>,

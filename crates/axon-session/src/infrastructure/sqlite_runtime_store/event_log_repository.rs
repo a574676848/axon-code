@@ -1,6 +1,6 @@
 //! 会话事件的文件写入与读取。
 //!
-//! 序号由控制面分配（`session_runtimes.last_event_sequence`），文件只承载内容。
+//! 序号由控制面分配（`sessions.last_event_sequence`），文件只承载内容。
 //! 写入顺序固定为「先控制面事务、后文件追加」：崩溃时最多出现"水位大于文件尾"，
 //! 恢复逻辑据此回退水位并补一条 `session_recovered`。
 
@@ -43,7 +43,7 @@ pub(super) fn append_events(
     if let Some((interaction_id, lease_token)) = interaction_lease {
         let active = transaction
             .query_row(
-                "SELECT 1 FROM jarvis_interactions WHERE interaction_id=?1 AND status='processing' \
+                "SELECT 1 FROM inbox WHERE interaction_id=?1 AND status='processing' \
                  AND lease_token=?2 AND lease_expires_at_ms>?3",
                 params![interaction_id.as_str(), lease_token, i64_value(now_ms)?],
                 |row| row.get::<_, i64>(0),
@@ -56,7 +56,7 @@ pub(super) fn append_events(
     }
     let previous: i64 = transaction
         .query_row(
-            "SELECT last_event_sequence FROM session_runtimes WHERE session_id=?1",
+            "SELECT last_event_sequence FROM sessions WHERE session_id=?1",
             params![session_id.as_str()],
             |row| row.get(0),
         )
@@ -74,7 +74,7 @@ pub(super) fn append_events(
         .ok_or_else(|| RuntimeStoreError::Storage("事件序号溢出".to_owned()))?;
     transaction
         .execute(
-            "UPDATE session_runtimes SET last_event_sequence=?1,last_activity_at_ms=?2,\
+            "UPDATE sessions SET last_event_sequence=?1,last_activity_at_ms=?2,\
              owner_host_id=?3,owner_generation=?4 WHERE session_id=?5",
             params![
                 i64_value(end)?,

@@ -79,14 +79,14 @@ fn task_event_lookup_is_bounded_indexed_and_supports_legacy_payload_key() {
     let connection = rusqlite::Connection::open(store.path()).expect("打开数据库");
     let index_exists: bool = connection
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='jarvis_events_goal_lookup')",
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='ledger_events_goal_lookup')",
             [],
             |row| row.get(0),
         )
         .expect("检查 Task 事件索引");
     assert!(index_exists);
     let plan = connection
-        .prepare("EXPLAIN QUERY PLAN SELECT event_id FROM jarvis_events WHERE COALESCE(json_extract(payload_json,'$.goal_id'),json_extract(payload_json,'$.goalId'))=?1 ORDER BY sequence ASC LIMIT ?2")
+        .prepare("EXPLAIN QUERY PLAN SELECT event_id FROM ledger_events WHERE COALESCE(json_extract(payload_json,'$.goal_id'),json_extract(payload_json,'$.goalId'))=?1 ORDER BY sequence ASC LIMIT ?2")
         .expect("准备查询计划")
         .query_map([target.goal_id.as_str(), "1"], |row| row.get::<_, String>(3))
         .expect("读取查询计划")
@@ -94,7 +94,7 @@ fn task_event_lookup_is_bounded_indexed_and_supports_legacy_payload_key() {
         .expect("收集查询计划");
     assert!(
         plan.iter()
-            .any(|detail| detail.contains("jarvis_events_goal_lookup")),
+            .any(|detail| detail.contains("ledger_events_goal_lookup")),
         "查询计划未命中 Task 事件索引：{plan:?}"
     );
 }

@@ -12,7 +12,7 @@
 //!
 //! **同一 continuation 最多产生一次有效执行**：产生侧靠幂等键唯一索引，
 //! 消费侧靠条件 `UPDATE` 的受影响行数（[`AgentContinuationStore::consume_continuation`]）。
-//! 这与 Work Ledger 无关：本表不写入 `jarvis_goals` / `jarvis_executions` / `jarvis_events`。
+//! 这与 Work Ledger 无关：本表不写入 `goals` / `work_items` / `ledger_events`。
 
 use std::fmt;
 

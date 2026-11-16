@@ -1,4 +1,4 @@
-//! `jarvis_continuations` 的落盘、幂等与「最多一次有效执行」测试
+//! `continuations` 的落盘、幂等与「最多一次有效执行」测试
 //! （合同 §5.3.3 / §8.2.2）。
 
 use super::SqliteRuntimeStore;
@@ -57,7 +57,7 @@ fn count_rows(store: &SqliteRuntimeStore, key: &str) -> i64 {
     let connection = rusqlite::Connection::open(store.path()).expect("打开数据库");
     connection
         .query_row(
-            "SELECT COUNT(*) FROM jarvis_continuations WHERE idempotency_key=?1",
+            "SELECT COUNT(*) FROM continuations WHERE idempotency_key=?1",
             rusqlite::params![key],
             |row| row.get(0),
         )

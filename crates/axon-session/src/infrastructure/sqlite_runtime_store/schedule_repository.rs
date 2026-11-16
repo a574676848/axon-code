@@ -34,7 +34,7 @@ pub(super) fn upsert_schedule(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(storage)?;
-    transaction.execute("INSERT INTO runtime_schedules(schedule_id,session_id,kind,expression,payload_json,delivery_mode,status,next_run_at_ms,lease_owner,lease_expires_at_ms,failure_count) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,NULL,NULL,?9) ON CONFLICT(schedule_id) DO UPDATE SET session_id=excluded.session_id,kind=excluded.kind,expression=excluded.expression,payload_json=excluded.payload_json,delivery_mode=excluded.delivery_mode,status=excluded.status,next_run_at_ms=excluded.next_run_at_ms,failure_count=excluded.failure_count", params![schedule.schedule_id, schedule.session_id.as_ref().map(DaemonSessionId::as_str), schedule.kind, schedule.expression, schedule.payload_json, schedule.delivery_mode, schedule.status, schedule.next_run_at_ms.map(i64_value).transpose()?, i64::from(schedule.failure_count)]).map_err(storage)?;
+    transaction.execute("INSERT INTO schedules(schedule_id,session_id,kind,expression,payload_json,delivery_mode,status,next_run_at_ms,lease_owner,lease_expires_at_ms,failure_count) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,NULL,NULL,?9) ON CONFLICT(schedule_id) DO UPDATE SET session_id=excluded.session_id,kind=excluded.kind,expression=excluded.expression,payload_json=excluded.payload_json,delivery_mode=excluded.delivery_mode,status=excluded.status,next_run_at_ms=excluded.next_run_at_ms,failure_count=excluded.failure_count", params![schedule.schedule_id, schedule.session_id.as_ref().map(DaemonSessionId::as_str), schedule.kind, schedule.expression, schedule.payload_json, schedule.delivery_mode, schedule.status, schedule.next_run_at_ms.map(i64_value).transpose()?, i64::from(schedule.failure_count)]).map_err(storage)?;
     transaction.commit().map_err(storage)
 }
 
@@ -52,7 +52,7 @@ pub(super) fn claim_due_schedules(
         .map_err(storage)?;
     SqliteRuntimeStore::ensure_fence(&transaction, host, now_ms)?;
     let expires = i64_value(now_ms.saturating_add(lease_duration_ms))?;
-    let mut statement = transaction.prepare("SELECT schedule_id FROM runtime_schedules WHERE status='active' AND next_run_at_ms <= ?1 AND (lease_expires_at_ms IS NULL OR lease_expires_at_ms <= ?1) ORDER BY next_run_at_ms ASC LIMIT ?2").map_err(storage)?;
+    let mut statement = transaction.prepare("SELECT schedule_id FROM schedules WHERE status='active' AND next_run_at_ms <= ?1 AND (lease_expires_at_ms IS NULL OR lease_expires_at_ms <= ?1) ORDER BY next_run_at_ms ASC LIMIT ?2").map_err(storage)?;
     let ids = statement
         .query_map(params![i64_value(now_ms)?, i64::from(limit)], |row| {
             row.get::<_, String>(0)
@@ -63,8 +63,8 @@ pub(super) fn claim_due_schedules(
     drop(statement);
     let mut result = Vec::with_capacity(ids.len());
     for id in ids {
-        transaction.execute("UPDATE runtime_schedules SET lease_owner=?1,lease_expires_at_ms=?2 WHERE schedule_id=?3 AND status='active' AND (lease_expires_at_ms IS NULL OR lease_expires_at_ms <= ?4)", params![host.host_id.as_str(), expires, id, i64_value(now_ms)?]).map_err(storage)?;
-        result.push(transaction.query_row("SELECT schedule_id,session_id,kind,expression,payload_json,delivery_mode,status,next_run_at_ms,lease_owner,lease_expires_at_ms,failure_count FROM runtime_schedules WHERE schedule_id=?1", params![id], SqliteRuntimeStore::read_schedule).map_err(storage)?);
+        transaction.execute("UPDATE schedules SET lease_owner=?1,lease_expires_at_ms=?2 WHERE schedule_id=?3 AND status='active' AND (lease_expires_at_ms IS NULL OR lease_expires_at_ms <= ?4)", params![host.host_id.as_str(), expires, id, i64_value(now_ms)?]).map_err(storage)?;
+        result.push(transaction.query_row("SELECT schedule_id,session_id,kind,expression,payload_json,delivery_mode,status,next_run_at_ms,lease_owner,lease_expires_at_ms,failure_count FROM schedules WHERE schedule_id=?1", params![id], SqliteRuntimeStore::read_schedule).map_err(storage)?);
     }
     transaction.commit().map_err(storage)?;
     Ok(result)
@@ -84,7 +84,7 @@ pub(super) fn settle_schedule(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(storage)?;
     SqliteRuntimeStore::ensure_fence(&transaction, host, now_ms)?;
-    let changed = transaction.execute("UPDATE runtime_schedules SET next_run_at_ms=?1,last_run_at_ms=?2,lease_owner=NULL,lease_expires_at_ms=NULL,failure_count=CASE WHEN ?3 THEN failure_count+1 ELSE 0 END WHERE schedule_id=?4 AND lease_owner=?5", params![next_run_at_ms.map(i64_value).transpose()?, i64_value(now_ms)?, failed, schedule_id, host.host_id.as_str()]).map_err(storage)?;
+    let changed = transaction.execute("UPDATE schedules SET next_run_at_ms=?1,last_run_at_ms=?2,lease_owner=NULL,lease_expires_at_ms=NULL,failure_count=CASE WHEN ?3 THEN failure_count+1 ELSE 0 END WHERE schedule_id=?4 AND lease_owner=?5", params![next_run_at_ms.map(i64_value).transpose()?, i64_value(now_ms)?, failed, schedule_id, host.host_id.as_str()]).map_err(storage)?;
     if changed == 0 {
         return Err(RuntimeStoreError::Fenced);
     }

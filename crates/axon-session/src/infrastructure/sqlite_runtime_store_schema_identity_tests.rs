@@ -31,7 +31,7 @@ fn legacy_database_without_identity_is_rejected_without_creating_target_schema()
     let connection = rusqlite::Connection::open(&path).expect("复查数据库");
     let target_tables: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='jarvis_goals'",
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='goals'",
             [],
             |row| row.get(0),
         )
@@ -109,14 +109,14 @@ fn schema_initialization_adds_additive_columns_to_existing_database() {
             })
             .expect("读取 identity")
     };
-    // 构造变更前的既有库：identity 有效、jarvis_interactions 已存在但没有追加列。
+    // 构造变更前的既有库：identity 有效、inbox 已存在但没有追加列。
     {
         let connection = rusqlite::Connection::open(&path).expect("打开既有库");
         connection
             .execute_batch(&format!(
                 "CREATE TABLE jarvis_schema_identity (identity TEXT PRIMARY KEY NOT NULL);
                  INSERT INTO jarvis_schema_identity(identity) VALUES('{identity}');
-                 CREATE TABLE jarvis_interactions (
+                 CREATE TABLE inbox (
                     interaction_id TEXT PRIMARY KEY NOT NULL,
                     source_channel TEXT NOT NULL,
                     source_message_id TEXT NOT NULL,

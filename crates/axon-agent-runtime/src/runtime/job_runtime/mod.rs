@@ -22,8 +22,8 @@
 //! 两者由 `shell_command` 的 `run_in_background` 与 `tty` **硬互斥**分流。
 //!
 //! 双层生命周期边界（合同 §4 不变量 8）：临时 Job 是进程内、单 run、随进程消亡的
-//! 事实源；Goal/Execution 由 Work Ledger 拥有。本模块**不写入** `jarvis_goals` 或
-//! `jarvis_executions`，也不承载跨轮任务状态。
+//! 事实源；Goal/Execution 由 Work Ledger 拥有。本模块**不写入** `goals` 或
+//! `work_items`，也不承载跨轮任务状态。
 
 mod notice;
 mod producer;

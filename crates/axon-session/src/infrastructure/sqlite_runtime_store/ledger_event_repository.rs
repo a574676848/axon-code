@@ -1,4 +1,4 @@
-//! `jarvis_events` 的 SQLite repository。
+//! `ledger_events` 的 SQLite repository。
 
 use super::{SqliteRuntimeStore, helpers::i64_value};
 use crate::ports::{LedgerEventStore, LedgerEventStoreError, RuntimeStore};
@@ -19,7 +19,7 @@ impl LedgerEventStore for SqliteRuntimeStore {
             .map_err(storage_error)?;
         let existing = transaction
             .query_row(
-                "SELECT event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms FROM jarvis_events WHERE idempotency_key=?1",
+                "SELECT event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms FROM ledger_events WHERE idempotency_key=?1",
                 params![event.idempotency_key.as_str()],
                 read_event,
             )
@@ -42,7 +42,7 @@ impl LedgerEventStore for SqliteRuntimeStore {
         }
         let expected_sequence: i64 = transaction
             .query_row(
-                "SELECT COALESCE(MAX(sequence),0)+1 FROM jarvis_events",
+                "SELECT COALESCE(MAX(sequence),0)+1 FROM ledger_events",
                 [],
                 |row| row.get(0),
             )
@@ -56,7 +56,7 @@ impl LedgerEventStore for SqliteRuntimeStore {
         }
         transaction
             .execute(
-                "INSERT INTO jarvis_events(event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                "INSERT INTO ledger_events(event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)",
                 params![
                     event.event_id.as_str(),
                     expected_sequence,
@@ -84,7 +84,7 @@ impl LedgerEventStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         let mut statement = connection
             .prepare(
-                "SELECT event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms FROM jarvis_events WHERE sequence>?1 ORDER BY sequence ASC LIMIT ?2",
+                "SELECT event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms FROM ledger_events WHERE sequence>?1 ORDER BY sequence ASC LIMIT ?2",
             )
             .map_err(storage_error)?;
         statement
@@ -112,7 +112,7 @@ impl LedgerEventStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         let mut statement = connection
             .prepare(
-                "SELECT event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms FROM jarvis_events WHERE COALESCE(json_extract(payload_json,'$.goal_id'),json_extract(payload_json,'$.goalId'))=?1 ORDER BY sequence DESC LIMIT ?2",
+                "SELECT event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms FROM ledger_events WHERE COALESCE(json_extract(payload_json,'$.goal_id'),json_extract(payload_json,'$.goalId'))=?1 ORDER BY sequence DESC LIMIT ?2",
             )
             .map_err(storage_error)?;
         statement

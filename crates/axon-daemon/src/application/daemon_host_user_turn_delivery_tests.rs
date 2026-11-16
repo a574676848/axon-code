@@ -116,7 +116,7 @@ fn unread_completion_expires_without_delivery_and_marks_result_expired() {
     let connection = rusqlite::Connection::open(database_path).expect("打开 runtime 数据库");
     connection
         .execute(
-            "UPDATE jarvis_completion_notifications SET expires_at_ms=?1 WHERE notification_id=?2",
+            "UPDATE notifications SET expires_at_ms=?1 WHERE notification_id=?2",
             rusqlite::params![1_i64, notification.notification_id],
         )
         .expect("设置过期时间");
@@ -133,7 +133,7 @@ fn unread_completion_expires_without_delivery_and_marks_result_expired() {
     assert_eq!(unread_results(&store, &workspace), 0);
     let acknowledged_source: String = connection
         .query_row(
-            "SELECT acknowledged_source FROM jarvis_result_reads WHERE result_id=?1",
+            "SELECT acknowledged_source FROM goal_result_reads WHERE result_id=?1",
             [notification.result_ids[0].as_str()],
             |row| row.get(0),
         )
@@ -197,7 +197,7 @@ fn delivered_notification_expiry_keeps_settled_state() {
     let connection = rusqlite::Connection::open(database_path).expect("打开 runtime 数据库");
     connection
         .execute(
-            "UPDATE jarvis_completion_notifications SET expires_at_ms=?1 WHERE notification_id=?2",
+            "UPDATE notifications SET expires_at_ms=?1 WHERE notification_id=?2",
             rusqlite::params![1_i64, notification.notification_id],
         )
         .expect("设置过期时间");
@@ -261,7 +261,7 @@ fn summarized_completion_with_pending_delivery_is_recovered_by_sweep() {
     let connection = rusqlite::Connection::open(database_path).expect("打开 runtime 数据库");
     connection
         .execute(
-            "UPDATE jarvis_completion_deliveries SET state='pending' WHERE notification_id=?1",
+            "UPDATE notification_deliveries SET state='pending' WHERE notification_id=?1",
             rusqlite::params![notification.notification_id],
         )
         .expect("重置渠道投递状态");

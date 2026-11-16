@@ -66,7 +66,7 @@ impl GoalCommitStore for SqliteRuntimeStore {
             .map_err(storage_error)?;
         let updated = transaction
             .execute(
-                "UPDATE jarvis_goals SET status='active',revision=?1,updated_at_ms=?2,waiting_reason=NULL WHERE goal_id=?3 AND revision=?4 AND status IN ('proposed','waiting','paused') AND NOT EXISTS (SELECT 1 FROM jarvis_executions WHERE goal_id=?3 AND status='uncertain')",
+                "UPDATE goals SET status='active',revision=?1,updated_at_ms=?2,waiting_reason=NULL WHERE goal_id=?3 AND revision=?4 AND status IN ('proposed','waiting','paused') AND NOT EXISTS (SELECT 1 FROM work_items WHERE goal_id=?3 AND status='uncertain')",
                 params![
                     i64_value(goal.revision).map_err(storage_error)?,
                     i64_value(goal.updated_at_ms).map_err(storage_error)?,
@@ -150,7 +150,7 @@ fn ensure_goal(
 ) -> Result<(), GoalCommitError> {
     let inserted = transaction
         .execute(
-            "INSERT INTO jarvis_goals(goal_id,scope_json,title,status,revision,plan_json,acceptance_json,progress_json,waiting_reason,next_step,priority,deadline_ms,created_from_interaction_id,cancellation_reason,cancellation_requested_at_ms,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,'proposed',0,?4,?5,?6,NULL,NULL,?7,NULL,?8,NULL,NULL,?9,?9) ON CONFLICT(goal_id) DO NOTHING",
+            "INSERT INTO goals(goal_id,scope_json,title,status,revision,plan_json,acceptance_json,progress_json,waiting_reason,next_step,priority,deadline_ms,created_from_interaction_id,cancellation_reason,cancellation_requested_at_ms,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,'proposed',0,?4,?5,?6,NULL,NULL,?7,NULL,?8,NULL,NULL,?9,?9) ON CONFLICT(goal_id) DO NOTHING",
             params![
                 goal.goal_id.as_str(),
                 serde_json::to_string(&goal.scope).map_err(serialize_error)?,
@@ -169,7 +169,7 @@ fn ensure_goal(
     }
     let existing = transaction
         .query_row(
-            "SELECT scope_json,title,status,revision,plan_json,acceptance_json,created_at_ms,updated_at_ms FROM jarvis_goals WHERE goal_id=?1",
+            "SELECT scope_json,title,status,revision,plan_json,acceptance_json,created_at_ms,updated_at_ms FROM goals WHERE goal_id=?1",
             params![goal.goal_id.as_str()],
             |row| {
                 Ok((
@@ -215,7 +215,7 @@ fn ensure_execution(
         Some(session_id) => {
             let value = transaction
                 .query_row(
-                    "SELECT context_version FROM session_runtimes WHERE session_id=?1",
+                    "SELECT context_version FROM sessions WHERE session_id=?1",
                     params![session_id.as_str()],
                     |row| row.get::<_, i64>(0),
                 )
@@ -234,7 +234,7 @@ fn ensure_execution(
         .map_err(storage_error)?;
     let inserted = transaction
         .execute(
-            "INSERT INTO jarvis_executions(execution_id,goal_id,session_id,attempt,priority,dedupe_key,status,context_version,payload_json,lease_json,retry_at_ms,checkpoint_json,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,?5,?6,'queued',?7,?8,NULL,NULL,NULL,?9,?10) ON CONFLICT(execution_id) DO NOTHING",
+            "INSERT INTO work_items(execution_id,goal_id,session_id,attempt,priority,dedupe_key,status,context_version,payload_json,lease_json,retry_at_ms,checkpoint_json,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,?5,?6,'queued',?7,?8,NULL,NULL,NULL,?9,?10) ON CONFLICT(execution_id) DO NOTHING",
             params![
                 execution.execution_id.as_str(),
                 execution.goal_id.as_str(),
@@ -254,7 +254,7 @@ fn ensure_execution(
     }
     let matches: bool = transaction
         .query_row(
-            "SELECT goal_id=?1 AND (session_id IS ?2) AND attempt=?3 AND priority=?4 AND (dedupe_key IS ?5) AND (context_version IS ?6) AND payload_json=?8 AND status='queued' FROM jarvis_executions WHERE execution_id=?7",
+            "SELECT goal_id=?1 AND (session_id IS ?2) AND attempt=?3 AND priority=?4 AND (dedupe_key IS ?5) AND (context_version IS ?6) AND payload_json=?8 AND status='queued' FROM work_items WHERE execution_id=?7",
             params![
                 execution.goal_id.as_str(),
                 execution.session_id.as_ref().map(|s| s.as_str()),
@@ -286,7 +286,7 @@ fn ensure_event(
 
     let existing: Option<PersistedEvent> = transaction
         .query_row(
-            "SELECT event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms FROM jarvis_events WHERE idempotency_key=?1",
+            "SELECT event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms FROM ledger_events WHERE idempotency_key=?1",
             params![event.idempotency_key.as_str()],
             |row| {
                 Ok((
@@ -339,14 +339,14 @@ fn ensure_event(
     }
     let expected_sequence: i64 = transaction
         .query_row(
-            "SELECT COALESCE(MAX(sequence),0)+1 FROM jarvis_events",
+            "SELECT COALESCE(MAX(sequence),0)+1 FROM ledger_events",
             [],
             |row| row.get(0),
         )
         .map_err(storage_error)?;
     transaction
         .execute(
-            "INSERT INTO jarvis_events(event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            "INSERT INTO ledger_events(event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)",
             params![
                 event.event_id.as_str(),
                 expected_sequence,

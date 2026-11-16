@@ -71,7 +71,7 @@ pub(super) fn commit_in_transaction(
     let execution_status = status_code(execution.status);
     let updated = transaction
         .execute(
-            "UPDATE jarvis_executions SET status=?1,lease_json=NULL,retry_at_ms=NULL,checkpoint_json=?2,updated_at_ms=?3 WHERE execution_id=?4 AND goal_id=?5 AND status='running' AND cancellation_requested_at_ms IS NULL AND EXISTS (SELECT 1 FROM jarvis_goals WHERE goal_id=?5 AND status <> 'cancelled') AND json_extract(lease_json,'$.owner')=?6 AND json_extract(lease_json,'$.token')=?7",
+            "UPDATE work_items SET status=?1,lease_json=NULL,retry_at_ms=NULL,checkpoint_json=?2,updated_at_ms=?3 WHERE execution_id=?4 AND goal_id=?5 AND status='running' AND cancellation_requested_at_ms IS NULL AND EXISTS (SELECT 1 FROM goals WHERE goal_id=?5 AND status <> 'cancelled') AND json_extract(lease_json,'$.owner')=?6 AND json_extract(lease_json,'$.token')=?7",
             params![
                 execution_status,
                 execution
@@ -91,7 +91,7 @@ pub(super) fn commit_in_transaction(
     if updated == 0 {
         let exists: bool = transaction
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM jarvis_executions WHERE execution_id=?1)",
+                "SELECT EXISTS(SELECT 1 FROM work_items WHERE execution_id=?1)",
                 params![execution.execution_id.as_str()],
                 |row| row.get(0),
             )
@@ -105,7 +105,7 @@ pub(super) fn commit_in_transaction(
 
     transaction
         .execute(
-            "INSERT INTO jarvis_results(result_id,goal_id,execution_id,succeeded,summary,receipt_refs_json,artifact_refs_json,error_kind,created_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            "INSERT INTO goal_results(result_id,goal_id,execution_id,succeeded,summary,receipt_refs_json,artifact_refs_json,error_kind,created_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             params![
                 result.result_id.as_str(),
                 result.goal_id.as_str(),
@@ -125,7 +125,7 @@ pub(super) fn commit_in_transaction(
         .ok_or_else(|| LedgerCommitError::Conflict("Goal revision 溢出".to_owned()))?;
     let goal_updated = transaction
         .execute(
-            "UPDATE jarvis_goals SET scope_json=?1,title=?2,status=?3,revision=?4,plan_json=?5,acceptance_json=?6,updated_at_ms=?7,waiting_reason=?10,next_step=?11,progress_json=?12 WHERE goal_id=?8 AND revision=?9",
+            "UPDATE goals SET scope_json=?1,title=?2,status=?3,revision=?4,plan_json=?5,acceptance_json=?6,updated_at_ms=?7,waiting_reason=?10,next_step=?11,progress_json=?12 WHERE goal_id=?8 AND revision=?9",
             params![
                 serde_json::to_string(&goal.scope).map_err(serialize_error)?,
                 goal.title,
@@ -151,7 +151,7 @@ pub(super) fn commit_in_transaction(
 
     let expected_sequence: i64 = transaction
         .query_row(
-            "SELECT COALESCE(MAX(sequence),0)+1 FROM jarvis_events",
+            "SELECT COALESCE(MAX(sequence),0)+1 FROM ledger_events",
             [],
             |row| row.get(0),
         )
@@ -165,7 +165,7 @@ pub(super) fn commit_in_transaction(
     }
     transaction
         .execute(
-            "INSERT INTO jarvis_events(event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            "INSERT INTO ledger_events(event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)",
             params![
                 event.event_id.as_str(),
                 expected_sequence,

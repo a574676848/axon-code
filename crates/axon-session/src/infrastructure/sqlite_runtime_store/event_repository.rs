@@ -113,7 +113,7 @@ fn append_event_refs<'a>(
     if let Some((interaction_id, lease_token)) = interaction_lease {
         let active = transaction
             .query_row(
-                "SELECT 1 FROM jarvis_interactions WHERE interaction_id=?1 AND status='processing' AND lease_token=?2 AND lease_expires_at_ms>?3",
+                "SELECT 1 FROM inbox WHERE interaction_id=?1 AND status='processing' AND lease_token=?2 AND lease_expires_at_ms>?3",
                 params![interaction_id.as_str(), lease_token, i64_value(now_ms)?],
                 |row| row.get::<_, i64>(0),
             )
@@ -125,7 +125,7 @@ fn append_event_refs<'a>(
     }
     let previous = transaction
         .query_row(
-            "SELECT last_event_sequence FROM session_runtimes WHERE session_id=?1",
+            "SELECT last_event_sequence FROM sessions WHERE session_id=?1",
             params![session_id.as_str()],
             |row| row.get::<_, i64>(0),
         )
@@ -201,7 +201,7 @@ fn append_event_refs<'a>(
     }
     transaction
         .execute(
-            "UPDATE session_runtimes SET last_event_sequence=?1,last_activity_at_ms=?2,owner_host_id=?3,owner_generation=?4 WHERE session_id=?5",
+            "UPDATE sessions SET last_event_sequence=?1,last_activity_at_ms=?2,owner_host_id=?3,owner_generation=?4 WHERE session_id=?5",
             params![
                 i64_value(next_sequence)?,
                 emitted_at_ms,
@@ -215,7 +215,7 @@ fn append_event_refs<'a>(
         for name in &tool_names {
             transaction
                 .execute(
-                    "UPDATE jarvis_interactions SET tool_summary = CASE \
+                    "UPDATE inbox SET tool_summary = CASE \
                         WHEN tool_summary = '' THEN ?1 \
                         WHEN instr(',' || tool_summary || ',', ',' || ?1 || ',') > 0 THEN tool_summary \
                         ELSE tool_summary || ',' || ?1 END \

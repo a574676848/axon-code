@@ -364,7 +364,7 @@ impl RuntimeStore for SqliteRuntimeStore {
                 .map_err(storage)?;
             Self::ensure_fence(&transaction, host, now_ms)?;
             transaction.execute(
-                "UPDATE session_runtimes SET status='recovering',owner_host_id=?1,owner_generation=?2,last_activity_at_ms=?3,updated_at_ms=?3 WHERE owner_host_id=?1 AND owner_generation=?2 AND status IN ('running','waiting','compacting')",
+                "UPDATE sessions SET status='recovering',owner_host_id=?1,owner_generation=?2,last_activity_at_ms=?3,updated_at_ms=?3 WHERE owner_host_id=?1 AND owner_generation=?2 AND status IN ('running','waiting','compacting')",
                 params![host.host_id.as_str(), host.generation, i64_value(now_ms)?],
             ).map_err(storage)?;
             transaction.commit().map_err(storage)?;
@@ -448,7 +448,7 @@ impl RuntimeStore for SqliteRuntimeStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(storage)?;
         Self::ensure_fence(&transaction, host, now_ms)?;
-        let changed = transaction.execute("UPDATE session_runtimes SET status=?1,owner_host_id=?2,owner_generation=?3,updated_at_ms=?4,last_activity_at_ms=?4 WHERE session_id=?5", params![status.as_str(), host.host_id.as_str(), host.generation, i64_value(now_ms)?, session_id.as_str()]).map_err(storage)?;
+        let changed = transaction.execute("UPDATE sessions SET status=?1,owner_host_id=?2,owner_generation=?3,updated_at_ms=?4,last_activity_at_ms=?4 WHERE session_id=?5", params![status.as_str(), host.host_id.as_str(), host.generation, i64_value(now_ms)?, session_id.as_str()]).map_err(storage)?;
         if changed == 0 {
             return Err(RuntimeStoreError::NotFound(session_id.to_string()));
         }

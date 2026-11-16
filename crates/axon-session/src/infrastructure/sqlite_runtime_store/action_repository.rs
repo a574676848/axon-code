@@ -25,7 +25,7 @@ pub(super) fn claim_next_action(
     let now_val = i64_value(now_ms)?;
     let queued_candidate: Option<(String, i32, u64)> = transaction
         .query_row(
-            "SELECT execution_id, priority, created_at_ms FROM jarvis_executions WHERE session_id=?1 AND status='queued' AND (retry_at_ms IS NULL OR retry_at_ms <= ?2) ORDER BY priority DESC, created_at_ms ASC, execution_id ASC LIMIT 1",
+            "SELECT execution_id, priority, created_at_ms FROM work_items WHERE session_id=?1 AND status='queued' AND (retry_at_ms IS NULL OR retry_at_ms <= ?2) ORDER BY priority DESC, created_at_ms ASC, execution_id ASC LIMIT 1",
             params![session_id.as_str(), now_val],
             |row| Ok((row.get(0)?, row.get(1)?, u64_value(row.get(2)?)?)),
         )
@@ -36,7 +36,7 @@ pub(super) fn claim_next_action(
     // 不在 claim 路径重跑，避免重复外部副作用。
     let stale_waiting_candidate: Option<(String, i32, u64)> = transaction
         .query_row(
-            "SELECT execution_id, priority, created_at_ms FROM jarvis_executions WHERE session_id=?1 AND status='waiting' AND lease_expires_at_ms <= ?2 ORDER BY priority DESC, created_at_ms ASC, execution_id ASC LIMIT 1",
+            "SELECT execution_id, priority, created_at_ms FROM work_items WHERE session_id=?1 AND status='waiting' AND lease_expires_at_ms <= ?2 ORDER BY priority DESC, created_at_ms ASC, execution_id ASC LIMIT 1",
             params![session_id.as_str(), now_val],
             |row| Ok((row.get(0)?, row.get(1)?, u64_value(row.get(2)?)?)),
         )
@@ -61,7 +61,7 @@ pub(super) fn claim_next_action(
     let expires = i64_value(now_ms.saturating_add(lease_duration_ms))?;
     let changed = transaction
         .execute(
-            "UPDATE jarvis_executions SET status='running',claimed_by=?1,claimed_generation=?2,lease_expires_at_ms=?3,attempt=attempt+1,started_at_ms=COALESCE(started_at_ms,?4),retry_at_ms=NULL,lease_json=json_object('owner',?1,'token',?5,'expires_at_ms',?3) WHERE execution_id=?6 AND (status='queued' OR (status='waiting' AND lease_expires_at_ms <= ?4))",
+            "UPDATE work_items SET status='running',claimed_by=?1,claimed_generation=?2,lease_expires_at_ms=?3,attempt=attempt+1,started_at_ms=COALESCE(started_at_ms,?4),retry_at_ms=NULL,lease_json=json_object('owner',?1,'token',?5,'expires_at_ms',?3) WHERE execution_id=?6 AND (status='queued' OR (status='waiting' AND lease_expires_at_ms <= ?4))",
             params![
                 host.host_id.as_str(),
                 host.generation,
@@ -77,7 +77,7 @@ pub(super) fn claim_next_action(
     }
     let action = transaction
         .query_row(
-            &format!("SELECT {ACTION_COLUMNS} FROM jarvis_executions WHERE execution_id=?1"),
+            &format!("SELECT {ACTION_COLUMNS} FROM work_items WHERE execution_id=?1"),
             params![action_id],
             SqliteRuntimeStore::read_action,
         )
@@ -109,7 +109,7 @@ pub(super) fn renew_action_lease(
     let expires = i64_value(now_ms.saturating_add(lease_duration_ms))?;
     let changed = connection
         .execute(
-            "UPDATE jarvis_executions SET lease_expires_at_ms=?1,\
+            "UPDATE work_items SET lease_expires_at_ms=?1,\
              lease_json=json_object('owner',claimed_by,'token',json_extract(lease_json,'$.token'),'expires_at_ms',?1),\
              updated_at_ms=?2 \
              WHERE execution_id=?3 AND session_id=?4 AND status='running' \
@@ -141,7 +141,7 @@ pub(super) fn cancel_action(
     let connection = store.connection()?;
     let changed = connection
         .execute(
-            "UPDATE jarvis_executions SET status='cancelled',cancelled_at_ms=?1,lease_json=NULL,claimed_by=NULL,claimed_generation=NULL,lease_expires_at_ms=NULL WHERE execution_id=?2 AND session_id=?3 AND status IN ('queued','waiting','running')",
+            "UPDATE work_items SET status='cancelled',cancelled_at_ms=?1,lease_json=NULL,claimed_by=NULL,claimed_generation=NULL,lease_expires_at_ms=NULL WHERE execution_id=?2 AND session_id=?3 AND status IN ('queued','waiting','running')",
             params![i64_value(now_ms)?, action_id.as_str(), session_id.as_str()],
         )
         .map_err(storage)?;
@@ -152,7 +152,7 @@ pub(super) fn cancel_action(
     }
     connection
         .query_row(
-            &format!("SELECT {ACTION_COLUMNS} FROM jarvis_executions WHERE execution_id=?1"),
+            &format!("SELECT {ACTION_COLUMNS} FROM work_items WHERE execution_id=?1"),
             params![action_id.as_str()],
             SqliteRuntimeStore::read_action,
         )
@@ -180,7 +180,7 @@ pub(super) fn enqueue_action(
     }
     let context_version = transaction
         .query_row(
-            "SELECT context_version FROM session_runtimes WHERE session_id=?1",
+            "SELECT context_version FROM sessions WHERE session_id=?1",
             params![action.session_id.as_str()],
             |row| row.get::<_, i64>(0),
         )
@@ -195,7 +195,7 @@ pub(super) fn enqueue_action(
         .unwrap_or(action.action_id.as_str());
     transaction
         .execute(
-            "INSERT INTO jarvis_executions(execution_id,goal_id,session_id,kind,priority,status,dedupe_key,payload_json,goal_revision,context_version,attempt,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?12)",
+            "INSERT INTO work_items(execution_id,goal_id,session_id,kind,priority,status,dedupe_key,payload_json,goal_revision,context_version,attempt,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?12)",
             params![
                 action.action_id.as_str(),
                 goal_id,
@@ -225,7 +225,7 @@ fn find_by_action_id(
 ) -> Result<Option<SessionActionRecord>, RuntimeStoreError> {
     let existing = transaction
         .query_row(
-            &format!("SELECT {ACTION_COLUMNS} FROM jarvis_executions WHERE execution_id=?1"),
+            &format!("SELECT {ACTION_COLUMNS} FROM work_items WHERE execution_id=?1"),
             params![action.action_id.as_str()],
             SqliteRuntimeStore::read_action,
         )
@@ -252,7 +252,7 @@ fn find_by_dedupe_key(
     transaction
         .query_row(
             &format!(
-                "SELECT {ACTION_COLUMNS} FROM jarvis_executions WHERE session_id=?1 AND dedupe_key=?2 AND status NOT IN ('completed','cancelled','failed')"
+                "SELECT {ACTION_COLUMNS} FROM work_items WHERE session_id=?1 AND dedupe_key=?2 AND status NOT IN ('completed','cancelled','failed')"
             ),
             params![action.session_id.as_str(), dedupe_key],
             SqliteRuntimeStore::read_action,

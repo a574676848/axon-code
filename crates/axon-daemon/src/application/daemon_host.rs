@@ -473,7 +473,7 @@ where
         .map_err(|error| DaemonHostError::Worker(error.to_string()))
     }
 
-    /// 恢复租约失效的 Session，并直接按 `jarvis_executions` 驱动执行 Worker。
+    /// 恢复租约失效的 Session，并直接按 `work_items` 驱动执行 Worker。
     pub fn supervisor_tick(&self, limit: u32) -> Result<HostTickReport, DaemonHostError> {
         let host = self.started_host()?.clone();
         let now_ms = self.clock.now_ms();

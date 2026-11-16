@@ -3,8 +3,8 @@
 //! 两个读数各有各的事实源，且都不是车道表本身：
 //! - 用量：`rollout.sqlite3` 的账本，按车道当前的 run session 汇总。车道标识
 //!   （`session-lane-<hash>`）是复合车道的稳定身份，账本却记在 run session 名下，
-//!   因此要先经 `session_runtimes` 解析一层。
-//! - 耗时：`jarvis_interactions` 里已收口轮次的墙钟差，按车道求和即可。
+//!   因此要先经 `sessions` 解析一层。
+//! - 耗时：`inbox` 里已收口轮次的墙钟差，按车道求和即可。
 //!
 //! 两者都是「打开会话就要立刻有数」的读数，因此这里只做一次索引查与一次索引求和，
 //! 不回放正文，也不解析单轮记录里的 JSON。
@@ -31,7 +31,7 @@ const ANSWER_TEXT_LIMIT_CHARS: usize = 16 * 1024;
 
 /// 一次主键批次查补齐整页的聚合事实：工具动作摘要与本轮用时。
 ///
-/// 工具名在写入事件时就已累加进 `jarvis_interactions` 的 `tool_summary` 列，两个时间戳
+/// 工具名在写入事件时就已累加进 `inbox` 的 `tool_summary` 列，两个时间戳
 /// 也在同一行上，所以这里既不碰事件表，也不扫历史。老记录工具列为空，界面据此退回
 /// 状态短语；还没有收口结论的轮次用时字段不参与折叠。
 pub(super) fn interaction_facts(
@@ -47,7 +47,7 @@ pub(super) fn interaction_facts(
         let placeholders = vec!["?"; interaction_ids.len()].join(",");
         let sql = format!(
             "SELECT interaction_id, tool_summary, updated_at_ms - received_at_ms \
-             FROM jarvis_interactions WHERE interaction_id IN ({placeholders})"
+             FROM inbox WHERE interaction_id IN ({placeholders})"
         );
         let mut statement = connection.prepare(&sql)?;
         let rows =
@@ -146,7 +146,7 @@ fn clamp_answer_text(text: &str) -> String {
 
 /// 车道上已收口轮次的累计墙钟耗时（毫秒）。
 ///
-/// 每轮的耗时取「到达 → 收尾」这段墙钟差：`jarvis_interactions` 里一行就是一轮，两个
+/// 每轮的耗时取「到达 → 收尾」这段墙钟差：`inbox` 里一行就是一轮，两个
 /// 时间戳都是网关自己写的，因此按车道求和即可，不必回放正文，也不必解析事件载荷。
 /// 仍在排队或在跑的轮次不参与：它们还没收尾，读数由界面按实时帧自己补，避免同一轮
 /// 在基线与增量里各算一次。
@@ -155,7 +155,7 @@ pub(super) fn settled_elapsed_ms(axon_root: &Path, lane_id: &str) -> Option<u64>
     store
         .with_read_connection(|connection| {
             connection.query_row(
-                "SELECT COALESCE(SUM(updated_at_ms - received_at_ms), 0) FROM jarvis_interactions \
+                "SELECT COALESCE(SUM(updated_at_ms - received_at_ms), 0) FROM inbox \
                  WHERE lane_id = ?1 AND status NOT IN ('received', 'processing')",
                 [lane_id],
                 |row| row.get::<_, i64>(0),
@@ -192,7 +192,7 @@ pub(super) fn session_usage_payload(axon_root: &Path, lane_id: &str) -> serde_js
 /// 车道当前模型的权威事实：只读该车道运行会话的**最新一条**轮次记录。
 ///
 /// 性能约束（CRITICAL）：不遍历历史轮次，也不回放 Interaction 事件帧。一次
-/// `session_runtimes` 单行查 + 一次 `rollout_turns` 最新行查就够；解析不到运行会话、
+/// `sessions` 单行查 + 一次 `rollout_turns` 最新行查就够；解析不到运行会话、
 /// 或该会话还没有任何一轮时给 null，由界面回退配置默认值（那也是运行时会选的模型）。
 pub(super) fn effective_model_payload(axon_root: &Path, lane_id: &str) -> serde_json::Value {
     let Some(run_session_id) = lane_run_session_id(axon_root, lane_id) else {
@@ -227,14 +227,14 @@ pub(super) fn reflection_notice_payload(axon_root: &Path, lane_id: &str) -> serd
 /// 车道的运行时 session 标识。
 ///
 /// 车道标识（`session-lane-<hash>`）是复合车道的稳定身份，每轮的用量却记在该车道当前的
-/// run session 名下（`session_runtimes.run_session_id`）。会话累计读数因此要先把车道解析
+/// run session 名下（`sessions.run_session_id`）。会话累计读数因此要先把车道解析
 /// 成 run session，再按它汇总；解析不到时返回 None。
 fn lane_run_session_id(axon_root: &Path, lane_id: &str) -> Option<String> {
     let store = runtime_store(axon_root);
     store
         .with_read_connection(|connection| {
             connection.query_row(
-                "SELECT run_session_id FROM session_runtimes WHERE session_id = ?1",
+                "SELECT run_session_id FROM sessions WHERE session_id = ?1",
                 [lane_id],
                 |row| row.get::<_, String>(0),
             )

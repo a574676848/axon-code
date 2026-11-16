@@ -105,14 +105,14 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
         }
     }
     connection.execute_batch(
-        "CREATE TABLE IF NOT EXISTS daemon_hosts (
+        "CREATE TABLE IF NOT EXISTS daemon_instances (
             host_id TEXT PRIMARY KEY, generation TEXT NOT NULL, pid INTEGER NOT NULL,
             process_start_id TEXT, state TEXT NOT NULL, lease_expires_at_ms INTEGER NOT NULL,
             created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS daemon_hosts_retention
-            ON daemon_hosts(lease_expires_at_ms, host_id);
-        CREATE TABLE IF NOT EXISTS session_runtimes (
+        CREATE INDEX IF NOT EXISTS daemon_instances_retention
+            ON daemon_instances(lease_expires_at_ms, host_id);
+        CREATE TABLE IF NOT EXISTS sessions (
             session_id TEXT PRIMARY KEY, run_session_id TEXT NOT NULL, root_session_id TEXT NOT NULL,
             cwd TEXT NOT NULL, status TEXT NOT NULL, owner_host_id TEXT, owner_generation TEXT,
             worker_attempt INTEGER NOT NULL, context_version INTEGER NOT NULL,
@@ -120,12 +120,12 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             last_activity_at_ms INTEGER NOT NULL, created_at_ms INTEGER NOT NULL,
             updated_at_ms INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS session_runtimes_recovery
-            ON session_runtimes(status, owner_host_id, owner_generation);
-        CREATE INDEX IF NOT EXISTS session_runtimes_retention
-            ON session_runtimes(last_activity_at_ms, status, session_id);
-        CREATE INDEX IF NOT EXISTS session_runtimes_owner
-            ON session_runtimes(owner_host_id);
+        CREATE INDEX IF NOT EXISTS sessions_recovery
+            ON sessions(status, owner_host_id, owner_generation);
+        CREATE INDEX IF NOT EXISTS sessions_retention
+            ON sessions(last_activity_at_ms, status, session_id);
+        CREATE INDEX IF NOT EXISTS sessions_owner
+            ON sessions(owner_host_id);
         CREATE TABLE IF NOT EXISTS session_metrics (
             session_id TEXT PRIMARY KEY,
             turn_count INTEGER NOT NULL DEFAULT 0,
@@ -172,17 +172,17 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
         );
         CREATE INDEX IF NOT EXISTS session_checkpoints_latest
             ON session_checkpoints(session_id, checkpoint_seq DESC);
-        CREATE TABLE IF NOT EXISTS runtime_schedules (
+        CREATE TABLE IF NOT EXISTS schedules (
             schedule_id TEXT PRIMARY KEY, session_id TEXT, kind TEXT NOT NULL,
             expression TEXT NOT NULL, payload_json TEXT NOT NULL, delivery_mode TEXT NOT NULL, status TEXT NOT NULL,
             next_run_at_ms INTEGER, lease_owner TEXT, lease_expires_at_ms INTEGER,
             failure_count INTEGER NOT NULL, retry_at_ms INTEGER, last_run_at_ms INTEGER
         );
-        CREATE INDEX IF NOT EXISTS runtime_schedules_due
-            ON runtime_schedules(status, next_run_at_ms, lease_expires_at_ms);
-        CREATE INDEX IF NOT EXISTS runtime_schedules_session
-            ON runtime_schedules(session_id);
-        CREATE TABLE IF NOT EXISTS daemon_upgrade_admissions (
+        CREATE INDEX IF NOT EXISTS schedules_due
+            ON schedules(status, next_run_at_ms, lease_expires_at_ms);
+        CREATE INDEX IF NOT EXISTS schedules_session
+            ON schedules(session_id);
+        CREATE TABLE IF NOT EXISTS upgrade_handoffs (
             admission_id TEXT PRIMARY KEY, handoff_token TEXT NOT NULL UNIQUE,
             target_version TEXT NOT NULL DEFAULT 'unknown',
             old_host_id TEXT NOT NULL, old_generation TEXT NOT NULL,
@@ -190,17 +190,17 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             updated_at_ms INTEGER NOT NULL, state TEXT NOT NULL,
             claimed_by TEXT, claimed_at_ms INTEGER
         );
-        CREATE INDEX IF NOT EXISTS daemon_upgrade_admissions_ready
-            ON daemon_upgrade_admissions(state, deadline_at_ms);
-        CREATE INDEX IF NOT EXISTS daemon_upgrade_admissions_owner
-            ON daemon_upgrade_admissions(old_host_id, admission_id);
-        CREATE INDEX IF NOT EXISTS daemon_upgrade_admissions_expiry
-            ON daemon_upgrade_admissions(deadline_at_ms, admission_id);
-        CREATE TABLE IF NOT EXISTS transport_ingress_cursors (
+        CREATE INDEX IF NOT EXISTS upgrade_handoffs_ready
+            ON upgrade_handoffs(state, deadline_at_ms);
+        CREATE INDEX IF NOT EXISTS upgrade_handoffs_owner
+            ON upgrade_handoffs(old_host_id, admission_id);
+        CREATE INDEX IF NOT EXISTS upgrade_handoffs_expiry
+            ON upgrade_handoffs(deadline_at_ms, admission_id);
+        CREATE TABLE IF NOT EXISTS ingress_cursors (
             adapter TEXT NOT NULL, partition_key TEXT NOT NULL, cursor_json TEXT NOT NULL,
             updated_at_ms INTEGER NOT NULL, PRIMARY KEY(adapter, partition_key)
         );
-        CREATE TABLE IF NOT EXISTS jarvis_workspaces (
+        CREATE TABLE IF NOT EXISTS workspaces (
             workspace_id TEXT PRIMARY KEY NOT NULL,
             display_name TEXT NOT NULL,
             workspace_root TEXT NOT NULL,
@@ -211,9 +211,9 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             pinned INTEGER NOT NULL,
             last_seen_at_ms INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS jarvis_workspaces_recent
-            ON jarvis_workspaces(last_seen_at_ms DESC, workspace_id);
-        CREATE TABLE IF NOT EXISTS jarvis_interactions (
+        CREATE INDEX IF NOT EXISTS workspaces_recent
+            ON workspaces(last_seen_at_ms DESC, workspace_id);
+        CREATE TABLE IF NOT EXISTS inbox (
             interaction_id TEXT PRIMARY KEY NOT NULL,
             source_channel TEXT NOT NULL,
             source_message_id TEXT NOT NULL,
@@ -232,19 +232,19 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             lane_id TEXT NOT NULL DEFAULT '',
             tool_summary TEXT NOT NULL DEFAULT ''
         );
-        CREATE UNIQUE INDEX IF NOT EXISTS jarvis_interactions_source
-            ON jarvis_interactions(source_channel, source_message_id);
-        CREATE INDEX IF NOT EXISTS jarvis_interactions_claim
-            ON jarvis_interactions(status, lease_expires_at_ms, received_at_ms, interaction_id);
-        CREATE INDEX IF NOT EXISTS jarvis_interactions_retention
-            ON jarvis_interactions(received_at_ms, status);
-        CREATE INDEX IF NOT EXISTS jarvis_interactions_scope_status_recent
-            ON jarvis_interactions(scope_json, status, received_at_ms DESC, interaction_id DESC);
-        CREATE INDEX IF NOT EXISTS jarvis_interactions_scope_channel_recent
-            ON jarvis_interactions(scope_json, source_channel, received_at_ms DESC, interaction_id DESC);
-        CREATE INDEX IF NOT EXISTS jarvis_interactions_scope_channel_status_recent
-            ON jarvis_interactions(scope_json, source_channel, status, received_at_ms DESC, interaction_id DESC);
-        CREATE TABLE IF NOT EXISTS jarvis_goals (
+        CREATE UNIQUE INDEX IF NOT EXISTS inbox_source
+            ON inbox(source_channel, source_message_id);
+        CREATE INDEX IF NOT EXISTS inbox_claim
+            ON inbox(status, lease_expires_at_ms, received_at_ms, interaction_id);
+        CREATE INDEX IF NOT EXISTS inbox_retention
+            ON inbox(received_at_ms, status);
+        CREATE INDEX IF NOT EXISTS inbox_scope_status_recent
+            ON inbox(scope_json, status, received_at_ms DESC, interaction_id DESC);
+        CREATE INDEX IF NOT EXISTS inbox_scope_channel_recent
+            ON inbox(scope_json, source_channel, received_at_ms DESC, interaction_id DESC);
+        CREATE INDEX IF NOT EXISTS inbox_scope_channel_status_recent
+            ON inbox(scope_json, source_channel, status, received_at_ms DESC, interaction_id DESC);
+        CREATE TABLE IF NOT EXISTS goals (
             goal_id TEXT PRIMARY KEY NOT NULL,
             scope_json TEXT NOT NULL,
             parent_goal_id TEXT,
@@ -264,13 +264,13 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             created_at_ms INTEGER NOT NULL,
             updated_at_ms INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS jarvis_goals_active
-            ON jarvis_goals(status, updated_at_ms, goal_id);
-        CREATE INDEX IF NOT EXISTS jarvis_goals_scope_active
-            ON jarvis_goals(scope_json, status, updated_at_ms, goal_id);
-        CREATE INDEX IF NOT EXISTS jarvis_goals_priority
-            ON jarvis_goals(status, priority DESC, updated_at_ms, goal_id);
-        CREATE TABLE IF NOT EXISTS jarvis_executions (
+        CREATE INDEX IF NOT EXISTS goals_active
+            ON goals(status, updated_at_ms, goal_id);
+        CREATE INDEX IF NOT EXISTS goals_scope_active
+            ON goals(scope_json, status, updated_at_ms, goal_id);
+        CREATE INDEX IF NOT EXISTS goals_priority
+            ON goals(status, priority DESC, updated_at_ms, goal_id);
+        CREATE TABLE IF NOT EXISTS work_items (
             execution_id TEXT PRIMARY KEY NOT NULL,
             goal_id TEXT NOT NULL,
             session_id TEXT,
@@ -295,27 +295,27 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             cancellation_reason TEXT,
             created_at_ms INTEGER NOT NULL,
             updated_at_ms INTEGER NOT NULL,
-            FOREIGN KEY(session_id) REFERENCES session_runtimes(session_id)
+            FOREIGN KEY(session_id) REFERENCES sessions(session_id)
         );
-        DROP INDEX IF EXISTS jarvis_executions_attempt;
-        CREATE INDEX IF NOT EXISTS jarvis_executions_goal_history
-            ON jarvis_executions(goal_id, created_at_ms DESC, execution_id DESC);
-        CREATE INDEX IF NOT EXISTS jarvis_executions_goal_dedupe
-            ON jarvis_executions(goal_id, dedupe_key, created_at_ms, execution_id);
-        CREATE UNIQUE INDEX IF NOT EXISTS jarvis_executions_active_dedupe
-            ON jarvis_executions(COALESCE(session_id, goal_id), dedupe_key)
+        DROP INDEX IF EXISTS work_items_attempt;
+        CREATE INDEX IF NOT EXISTS work_items_goal_history
+            ON work_items(goal_id, created_at_ms DESC, execution_id DESC);
+        CREATE INDEX IF NOT EXISTS work_items_goal_dedupe
+            ON work_items(goal_id, dedupe_key, created_at_ms, execution_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS work_items_active_dedupe
+            ON work_items(COALESCE(session_id, goal_id), dedupe_key)
             WHERE dedupe_key IS NOT NULL
               AND status NOT IN ('completed','failed','cancelled');
-        CREATE INDEX IF NOT EXISTS jarvis_executions_claim
-            ON jarvis_executions(status, priority DESC, created_at_ms, execution_id, retry_at_ms);
-        CREATE INDEX IF NOT EXISTS jarvis_executions_session_claim
-            ON jarvis_executions(session_id, status, priority DESC, created_at_ms, execution_id, retry_at_ms, lease_expires_at_ms);
-        CREATE INDEX IF NOT EXISTS jarvis_executions_stale_running
-            ON jarvis_executions(status, priority DESC, created_at_ms, execution_id, lease_expires_at_ms)
+        CREATE INDEX IF NOT EXISTS work_items_claim
+            ON work_items(status, priority DESC, created_at_ms, execution_id, retry_at_ms);
+        CREATE INDEX IF NOT EXISTS work_items_session_claim
+            ON work_items(session_id, status, priority DESC, created_at_ms, execution_id, retry_at_ms, lease_expires_at_ms);
+        CREATE INDEX IF NOT EXISTS work_items_stale_running
+            ON work_items(status, priority DESC, created_at_ms, execution_id, lease_expires_at_ms)
             WHERE status='running';
-        CREATE INDEX IF NOT EXISTS jarvis_executions_conclusive
-            ON jarvis_executions(status, updated_at_ms ASC, execution_id ASC);
-        CREATE TABLE IF NOT EXISTS jarvis_results (
+        CREATE INDEX IF NOT EXISTS work_items_conclusive
+            ON work_items(status, updated_at_ms ASC, execution_id ASC);
+        CREATE TABLE IF NOT EXISTS goal_results (
             result_id TEXT PRIMARY KEY NOT NULL,
             goal_id TEXT NOT NULL,
             execution_id TEXT NOT NULL,
@@ -325,22 +325,22 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             artifact_refs_json TEXT NOT NULL,
             error_kind TEXT,
             created_at_ms INTEGER NOT NULL,
-            FOREIGN KEY(goal_id) REFERENCES jarvis_goals(goal_id),
-            FOREIGN KEY(execution_id) REFERENCES jarvis_executions(execution_id)
+            FOREIGN KEY(goal_id) REFERENCES goals(goal_id),
+            FOREIGN KEY(execution_id) REFERENCES work_items(execution_id)
         );
-        CREATE INDEX IF NOT EXISTS jarvis_results_goal
-            ON jarvis_results(goal_id, created_at_ms DESC, result_id);
-        CREATE INDEX IF NOT EXISTS jarvis_results_execution
-            ON jarvis_results(execution_id);
-        CREATE INDEX IF NOT EXISTS jarvis_results_created
-            ON jarvis_results(created_at_ms ASC, result_id ASC);
-        CREATE TABLE IF NOT EXISTS jarvis_result_reads (
+        CREATE INDEX IF NOT EXISTS goal_results_goal
+            ON goal_results(goal_id, created_at_ms DESC, result_id);
+        CREATE INDEX IF NOT EXISTS goal_results_execution
+            ON goal_results(execution_id);
+        CREATE INDEX IF NOT EXISTS goal_results_created
+            ON goal_results(created_at_ms ASC, result_id ASC);
+        CREATE TABLE IF NOT EXISTS goal_result_reads (
             result_id TEXT PRIMARY KEY NOT NULL,
             acknowledged_at_ms INTEGER NOT NULL,
             acknowledged_source TEXT NOT NULL,
-            FOREIGN KEY(result_id) REFERENCES jarvis_results(result_id)
+            FOREIGN KEY(result_id) REFERENCES goal_results(result_id)
         );
-        CREATE TABLE IF NOT EXISTS jarvis_client_presence (
+        CREATE TABLE IF NOT EXISTS client_presence (
             client_id TEXT PRIMARY KEY NOT NULL,
             workspace_id TEXT NOT NULL,
             channel TEXT NOT NULL,
@@ -348,11 +348,11 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             registered_at_ms INTEGER NOT NULL,
             expires_at_ms INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS jarvis_client_presence_workspace
-            ON jarvis_client_presence(workspace_id, expires_at_ms DESC);
-        CREATE INDEX IF NOT EXISTS jarvis_client_presence_expiry
-            ON jarvis_client_presence(expires_at_ms ASC, client_id ASC);
-        CREATE TABLE IF NOT EXISTS jarvis_completion_notifications (
+        CREATE INDEX IF NOT EXISTS client_presence_workspace
+            ON client_presence(workspace_id, expires_at_ms DESC);
+        CREATE INDEX IF NOT EXISTS client_presence_expiry
+            ON client_presence(expires_at_ms ASC, client_id ASC);
+        CREATE TABLE IF NOT EXISTS notifications (
             notification_id TEXT PRIMARY KEY NOT NULL,
             workspace_id TEXT NOT NULL,
             goal_id TEXT NOT NULL,
@@ -365,18 +365,18 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             updated_at_ms INTEGER NOT NULL,
             expires_at_ms INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS jarvis_completion_notifications_state
-            ON jarvis_completion_notifications(state, created_at_ms ASC, notification_id ASC);
-        CREATE INDEX IF NOT EXISTS jarvis_completion_notifications_workspace
-            ON jarvis_completion_notifications(workspace_id, state, created_at_ms ASC);
-        CREATE INDEX IF NOT EXISTS jarvis_completion_notifications_retention
-            ON jarvis_completion_notifications(state, updated_at_ms ASC, notification_id ASC);
-        CREATE INDEX IF NOT EXISTS jarvis_completion_notifications_expiry
-            ON jarvis_completion_notifications(expires_at_ms ASC, notification_id ASC)
+        CREATE INDEX IF NOT EXISTS notifications_state
+            ON notifications(state, created_at_ms ASC, notification_id ASC);
+        CREATE INDEX IF NOT EXISTS notifications_workspace
+            ON notifications(workspace_id, state, created_at_ms ASC);
+        CREATE INDEX IF NOT EXISTS notifications_retention
+            ON notifications(state, updated_at_ms ASC, notification_id ASC);
+        CREATE INDEX IF NOT EXISTS notifications_expiry
+            ON notifications(expires_at_ms ASC, notification_id ASC)
             WHERE state IN ('pending','dispatched');
-        CREATE INDEX IF NOT EXISTS jarvis_completion_notifications_expiry_all
-            ON jarvis_completion_notifications(expires_at_ms ASC, notification_id ASC);
-        CREATE TABLE IF NOT EXISTS jarvis_completion_deliveries (
+        CREATE INDEX IF NOT EXISTS notifications_expiry_all
+            ON notifications(expires_at_ms ASC, notification_id ASC);
+        CREATE TABLE IF NOT EXISTS notification_deliveries (
             notification_id TEXT NOT NULL,
             channel TEXT NOT NULL,
             destination TEXT NOT NULL,
@@ -384,15 +384,15 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             created_at_ms INTEGER NOT NULL,
             updated_at_ms INTEGER NOT NULL,
             PRIMARY KEY(notification_id, channel, destination),
-            FOREIGN KEY(notification_id) REFERENCES jarvis_completion_notifications(notification_id)
+            FOREIGN KEY(notification_id) REFERENCES notifications(notification_id)
         );
-        CREATE INDEX IF NOT EXISTS jarvis_completion_deliveries_inbox
-            ON jarvis_completion_deliveries(channel, state, updated_at_ms ASC, notification_id ASC);
-        CREATE INDEX IF NOT EXISTS jarvis_completion_deliveries_target_inbox
-            ON jarvis_completion_deliveries(channel, destination, state, updated_at_ms ASC, notification_id ASC);
-        CREATE INDEX IF NOT EXISTS jarvis_completion_deliveries_retention
-            ON jarvis_completion_deliveries(state, updated_at_ms ASC, notification_id ASC);
-        CREATE TABLE IF NOT EXISTS jarvis_agent_messages (
+        CREATE INDEX IF NOT EXISTS notification_deliveries_inbox
+            ON notification_deliveries(channel, state, updated_at_ms ASC, notification_id ASC);
+        CREATE INDEX IF NOT EXISTS notification_deliveries_target_inbox
+            ON notification_deliveries(channel, destination, state, updated_at_ms ASC, notification_id ASC);
+        CREATE INDEX IF NOT EXISTS notification_deliveries_retention
+            ON notification_deliveries(state, updated_at_ms ASC, notification_id ASC);
+        CREATE TABLE IF NOT EXISTS agent_messages (
             message_id TEXT PRIMARY KEY NOT NULL,
             idempotency_key TEXT NOT NULL,
             owner_id TEXT NOT NULL,
@@ -411,15 +411,15 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             created_at_ms INTEGER NOT NULL,
             expires_at_ms INTEGER NOT NULL
         );
-        CREATE UNIQUE INDEX IF NOT EXISTS jarvis_agent_messages_idempotency
-            ON jarvis_agent_messages(idempotency_key);
-        CREATE INDEX IF NOT EXISTS jarvis_agent_messages_recipient
-            ON jarvis_agent_messages(owner_id, recipient, state, created_at_ms, message_id);
-        CREATE INDEX IF NOT EXISTS jarvis_agent_messages_retry
-            ON jarvis_agent_messages(state, retry_at_ms, message_id);
-        CREATE INDEX IF NOT EXISTS jarvis_agent_messages_retention
-            ON jarvis_agent_messages(state, expires_at_ms, message_id);
-        CREATE TABLE IF NOT EXISTS jarvis_continuations (
+        CREATE UNIQUE INDEX IF NOT EXISTS agent_messages_idempotency
+            ON agent_messages(idempotency_key);
+        CREATE INDEX IF NOT EXISTS agent_messages_recipient
+            ON agent_messages(owner_id, recipient, state, created_at_ms, message_id);
+        CREATE INDEX IF NOT EXISTS agent_messages_retry
+            ON agent_messages(state, retry_at_ms, message_id);
+        CREATE INDEX IF NOT EXISTS agent_messages_retention
+            ON agent_messages(state, expires_at_ms, message_id);
+        CREATE TABLE IF NOT EXISTS continuations (
             continuation_id TEXT PRIMARY KEY NOT NULL,
             idempotency_key TEXT NOT NULL,
             owner_id TEXT NOT NULL,
@@ -445,15 +445,15 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             created_at_ms INTEGER NOT NULL,
             expires_at_ms INTEGER NOT NULL
         );
-        CREATE UNIQUE INDEX IF NOT EXISTS jarvis_continuations_idempotency
-            ON jarvis_continuations(idempotency_key);
-        CREATE INDEX IF NOT EXISTS jarvis_continuations_owner
-            ON jarvis_continuations(owner_id, state, created_at_ms, continuation_id);
-        CREATE INDEX IF NOT EXISTS jarvis_continuations_child
-            ON jarvis_continuations(child_session_id, created_at_ms DESC, continuation_id);
-        CREATE INDEX IF NOT EXISTS jarvis_continuations_retention
-            ON jarvis_continuations(state, expires_at_ms, continuation_id);
-        CREATE TABLE IF NOT EXISTS jarvis_decisions (
+        CREATE UNIQUE INDEX IF NOT EXISTS continuations_idempotency
+            ON continuations(idempotency_key);
+        CREATE INDEX IF NOT EXISTS continuations_owner
+            ON continuations(owner_id, state, created_at_ms, continuation_id);
+        CREATE INDEX IF NOT EXISTS continuations_child
+            ON continuations(child_session_id, created_at_ms DESC, continuation_id);
+        CREATE INDEX IF NOT EXISTS continuations_retention
+            ON continuations(state, expires_at_ms, continuation_id);
+        CREATE TABLE IF NOT EXISTS decisions (
             decision_id TEXT PRIMARY KEY NOT NULL,
             scope_json TEXT NOT NULL,
             actor TEXT NOT NULL,
@@ -462,14 +462,14 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             expires_at_ms INTEGER,
             created_at_ms INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS jarvis_decisions_scope
-            ON jarvis_decisions(effect, expires_at_ms, created_at_ms, decision_id);
-        CREATE UNIQUE INDEX IF NOT EXISTS jarvis_decisions_scope_revision
-            ON jarvis_decisions(scope_json, revision);
-        CREATE INDEX IF NOT EXISTS jarvis_decisions_expiry
-            ON jarvis_decisions(expires_at_ms)
+        CREATE INDEX IF NOT EXISTS decisions_scope
+            ON decisions(effect, expires_at_ms, created_at_ms, decision_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS decisions_scope_revision
+            ON decisions(scope_json, revision);
+        CREATE INDEX IF NOT EXISTS decisions_expiry
+            ON decisions(expires_at_ms)
             WHERE expires_at_ms IS NOT NULL;
-        CREATE TABLE IF NOT EXISTS jarvis_events (
+        CREATE TABLE IF NOT EXISTS ledger_events (
             event_id TEXT PRIMARY KEY NOT NULL,
             sequence INTEGER NOT NULL,
             event_type TEXT NOT NULL,
@@ -478,19 +478,19 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             payload_json TEXT NOT NULL,
             occurred_at_ms INTEGER NOT NULL
         );
-        CREATE UNIQUE INDEX IF NOT EXISTS jarvis_events_idempotency
-            ON jarvis_events(idempotency_key);
-        CREATE UNIQUE INDEX IF NOT EXISTS jarvis_events_sequence
-            ON jarvis_events(sequence);
-        CREATE INDEX IF NOT EXISTS jarvis_events_goal_lookup
-            ON jarvis_events(
+        CREATE UNIQUE INDEX IF NOT EXISTS ledger_events_idempotency
+            ON ledger_events(idempotency_key);
+        CREATE UNIQUE INDEX IF NOT EXISTS ledger_events_sequence
+            ON ledger_events(sequence);
+        CREATE INDEX IF NOT EXISTS ledger_events_goal_lookup
+            ON ledger_events(
                 COALESCE(
                     json_extract(payload_json, '$.goal_id'),
                     json_extract(payload_json, '$.goalId')
                 ),
                 sequence
             );
-        CREATE TABLE IF NOT EXISTS jarvis_user_questions (
+        CREATE TABLE IF NOT EXISTS user_questions (
             question_id TEXT PRIMARY KEY NOT NULL,
             idempotency_key TEXT NOT NULL,
             lane_id TEXT NOT NULL,
@@ -510,12 +510,12 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
             created_at_ms INTEGER NOT NULL,
             expires_at_ms INTEGER NOT NULL
         );
-        CREATE UNIQUE INDEX IF NOT EXISTS jarvis_user_questions_idempotency
-            ON jarvis_user_questions(idempotency_key);
-        CREATE INDEX IF NOT EXISTS jarvis_user_questions_lane_state
-            ON jarvis_user_questions(lane_id, state, created_at_ms DESC);
-        CREATE INDEX IF NOT EXISTS jarvis_user_questions_reconcile
-            ON jarvis_user_questions(state, delivered, expires_at_ms);",
+        CREATE UNIQUE INDEX IF NOT EXISTS user_questions_idempotency
+            ON user_questions(idempotency_key);
+        CREATE INDEX IF NOT EXISTS user_questions_lane_state
+            ON user_questions(lane_id, state, created_at_ms DESC);
+        CREATE INDEX IF NOT EXISTS user_questions_reconcile
+            ON user_questions(state, delivered, expires_at_ms);",
     )?;
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS jarvis_schema_identity (
@@ -549,22 +549,22 @@ pub(super) fn initialize_schema(connection: &Connection) -> rusqlite::Result<()>
 fn migrate_additive_columns(connection: &Connection) -> rusqlite::Result<()> {
     add_column_if_missing(
         connection,
-        "jarvis_interactions",
+        "inbox",
         "attachments_json",
         "TEXT NOT NULL DEFAULT '[]'",
     )?;
     add_column_if_missing(
         connection,
-        "jarvis_interactions",
+        "inbox",
         "lane_id",
         "TEXT NOT NULL DEFAULT ''",
     )?;
     // 本轮显式指定的模型（TUI `/model` 等入口）：可空，老记录读作 None。
-    add_column_if_missing(connection, "jarvis_interactions", "model", "TEXT")?;
+    add_column_if_missing(connection, "inbox", "model", "TEXT")?;
     // 本轮显式指定的推理强度：与 model 同源，可空，老记录读作 None。
     add_column_if_missing(
         connection,
-        "jarvis_interactions",
+        "inbox",
         "reasoning_effort",
         "TEXT",
     )?;
@@ -577,7 +577,7 @@ fn migrate_additive_columns(connection: &Connection) -> rusqlite::Result<()> {
      */
     add_column_if_missing(
         connection,
-        "jarvis_interactions",
+        "inbox",
         "tool_summary",
         "TEXT NOT NULL DEFAULT ''",
     )?;
@@ -587,10 +587,10 @@ fn migrate_additive_columns(connection: &Connection) -> rusqlite::Result<()> {
      * (lane, 状态, 租约到期) 定位在途 processing。
      */
     connection.execute_batch(
-        "CREATE INDEX IF NOT EXISTS jarvis_interactions_lane_recent
-            ON jarvis_interactions(lane_id, received_at_ms DESC, interaction_id DESC);
-         CREATE INDEX IF NOT EXISTS jarvis_interactions_lane_processing
-            ON jarvis_interactions(lane_id, status, lease_expires_at_ms);",
+        "CREATE INDEX IF NOT EXISTS inbox_lane_recent
+            ON inbox(lane_id, received_at_ms DESC, interaction_id DESC);
+         CREATE INDEX IF NOT EXISTS inbox_lane_processing
+            ON inbox(lane_id, status, lease_expires_at_ms);",
     )
 }
 

@@ -1,4 +1,4 @@
-//! `jarvis_agent_messages` 的落盘、幂等与投递状态机测试（合同 §5.3.1 / §5.3.2）。
+//! `agent_messages` 的落盘、幂等与投递状态机测试（合同 §5.3.1 / §5.3.2）。
 
 use super::SqliteRuntimeStore;
 use crate::{
@@ -112,7 +112,7 @@ fn duplicate_idempotency_key_writes_exactly_one_message() {
     assert_eq!(
         count_rows(
             &fixture.store,
-            "SELECT COUNT(*) FROM jarvis_agent_messages WHERE idempotency_key=?1",
+            "SELECT COUNT(*) FROM agent_messages WHERE idempotency_key=?1",
             "collab:owner:root:review:1000",
         ),
         1
@@ -562,7 +562,7 @@ fn legacy_database_without_mailbox_table_gains_it_on_open() {
     assert_eq!(
         count_rows(
             &store,
-            "SELECT COUNT(*) FROM jarvis_agent_messages WHERE message_id=?1",
+            "SELECT COUNT(*) FROM agent_messages WHERE message_id=?1",
             "msg-1",
         ),
         1

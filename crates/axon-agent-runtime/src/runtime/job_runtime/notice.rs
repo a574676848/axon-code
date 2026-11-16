@@ -8,8 +8,8 @@
 //!
 //! 进程边界（设计 §4.3）：临时 Job 随进程消亡，因此临时 Job 通知**只在本进程内
 //! 投递**，不落任何持久表：指向已消亡作业的通知是错误事实。daemon Execution 通知
-//! 属持久事实，继续走既有的 `jarvis_completion_notifications` /
-//! `jarvis_completion_deliveries` 投递状态机，不经过本模块。
+//! 属持久事实，继续走既有的 `notifications` /
+//! `notification_deliveries` 投递状态机，不经过本模块。
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},

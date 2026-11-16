@@ -1,4 +1,4 @@
-//! `jarvis_goals` 的 SQLite repository。
+//! `goals` 的 SQLite repository。
 
 use super::{
     SqliteRuntimeStore,
@@ -15,7 +15,7 @@ impl GoalStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(runtime_error)?;
         let inserted = connection
             .execute(
-                "INSERT INTO jarvis_goals(goal_id,scope_json,title,status,revision,plan_json,acceptance_json,progress_json,waiting_reason,next_step,priority,deadline_ms,created_from_interaction_id,cancellation_reason,cancellation_requested_at_ms,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17) ON CONFLICT(goal_id) DO NOTHING",
+                "INSERT INTO goals(goal_id,scope_json,title,status,revision,plan_json,acceptance_json,progress_json,waiting_reason,next_step,priority,deadline_ms,created_from_interaction_id,cancellation_reason,cancellation_requested_at_ms,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17) ON CONFLICT(goal_id) DO NOTHING",
                 params![
                     goal.goal_id.as_str(),
                     serde_json::to_string(&goal.scope).map_err(serialize_error)?,
@@ -56,7 +56,7 @@ impl GoalStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(runtime_error)?;
         connection
             .query_row(
-                "SELECT goal_id,scope_json,title,status,revision,plan_json,acceptance_json,progress_json,waiting_reason,next_step,priority,deadline_ms,created_from_interaction_id,cancellation_reason,cancellation_requested_at_ms,created_at_ms,updated_at_ms FROM jarvis_goals WHERE goal_id=?1",
+                "SELECT goal_id,scope_json,title,status,revision,plan_json,acceptance_json,progress_json,waiting_reason,next_step,priority,deadline_ms,created_from_interaction_id,cancellation_reason,cancellation_requested_at_ms,created_at_ms,updated_at_ms FROM goals WHERE goal_id=?1",
                 params![goal_id.as_str()],
                 read_goal,
             )
@@ -70,7 +70,7 @@ impl GoalStore for SqliteRuntimeStore {
         }
         let connection = self.connection().map_err(runtime_error)?;
         let mut statement = connection
-            .prepare("SELECT goal_id,scope_json,title,status,revision,plan_json,acceptance_json,progress_json,waiting_reason,next_step,priority,deadline_ms,created_from_interaction_id,cancellation_reason,cancellation_requested_at_ms,created_at_ms,updated_at_ms FROM jarvis_goals WHERE status NOT IN ('completed','failed','cancelled') ORDER BY updated_at_ms ASC, goal_id ASC LIMIT ?1")
+            .prepare("SELECT goal_id,scope_json,title,status,revision,plan_json,acceptance_json,progress_json,waiting_reason,next_step,priority,deadline_ms,created_from_interaction_id,cancellation_reason,cancellation_requested_at_ms,created_at_ms,updated_at_ms FROM goals WHERE status NOT IN ('completed','failed','cancelled') ORDER BY updated_at_ms ASC, goal_id ASC LIMIT ?1")
             .map_err(storage_error)?;
         statement
             .query_map([i64::from(limit)], read_goal)
@@ -90,7 +90,7 @@ impl GoalStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(runtime_error)?;
         let scope_json = serde_json::to_string(scope).map_err(serialize_error)?;
         let mut statement = connection
-            .prepare("SELECT goal_id,scope_json,title,status,revision,plan_json,acceptance_json,progress_json,waiting_reason,next_step,priority,deadline_ms,created_from_interaction_id,cancellation_reason,cancellation_requested_at_ms,created_at_ms,updated_at_ms FROM jarvis_goals WHERE scope_json=?1 AND status NOT IN ('completed','failed','cancelled') ORDER BY updated_at_ms ASC, goal_id ASC LIMIT ?2")
+            .prepare("SELECT goal_id,scope_json,title,status,revision,plan_json,acceptance_json,progress_json,waiting_reason,next_step,priority,deadline_ms,created_from_interaction_id,cancellation_reason,cancellation_requested_at_ms,created_at_ms,updated_at_ms FROM goals WHERE scope_json=?1 AND status NOT IN ('completed','failed','cancelled') ORDER BY updated_at_ms ASC, goal_id ASC LIMIT ?2")
             .map_err(storage_error)?;
         statement
             .query_map(params![scope_json, i64::from(limit)], read_goal)
@@ -105,7 +105,7 @@ impl GoalStore for SqliteRuntimeStore {
             let connection = self.connection().map_err(runtime_error)?;
             connection
             .execute(
-                "UPDATE jarvis_goals SET scope_json=?1,title=?2,status=?3,revision=?4,plan_json=?5,acceptance_json=?6,progress_json=?7,waiting_reason=?8,next_step=?9,priority=?10,deadline_ms=?11,created_from_interaction_id=?12,cancellation_reason=?13,cancellation_requested_at_ms=?14,updated_at_ms=?15 WHERE goal_id=?16 AND revision=?17",
+                "UPDATE goals SET scope_json=?1,title=?2,status=?3,revision=?4,plan_json=?5,acceptance_json=?6,progress_json=?7,waiting_reason=?8,next_step=?9,priority=?10,deadline_ms=?11,created_from_interaction_id=?12,cancellation_reason=?13,cancellation_requested_at_ms=?14,updated_at_ms=?15 WHERE goal_id=?16 AND revision=?17",
                 params![
                     serde_json::to_string(&goal.scope).map_err(serialize_error)?,
                     goal.title,
@@ -153,19 +153,19 @@ impl GoalStore for SqliteRuntimeStore {
         let now = i64_value(now_ms).map_err(runtime_error)?;
         transaction
             .execute(
-                "UPDATE jarvis_executions SET status='cancelled',cancelled_at_ms=?1,updated_at_ms=?1,lease_json=NULL,claimed_by=NULL,claimed_generation=NULL,lease_expires_at_ms=NULL WHERE goal_id=?2 AND status='queued'",
+                "UPDATE work_items SET status='cancelled',cancelled_at_ms=?1,updated_at_ms=?1,lease_json=NULL,claimed_by=NULL,claimed_generation=NULL,lease_expires_at_ms=NULL WHERE goal_id=?2 AND status='queued'",
                 params![now, goal_id.as_str()],
             )
             .map_err(storage_error)?;
         transaction
             .execute(
-                "UPDATE jarvis_executions SET cancellation_requested_at_ms=?1,cancellation_reason=?2,updated_at_ms=?1 WHERE goal_id=?3 AND status='running'",
+                "UPDATE work_items SET cancellation_requested_at_ms=?1,cancellation_reason=?2,updated_at_ms=?1 WHERE goal_id=?3 AND status='running'",
                 params![now, reason, goal_id.as_str()],
             )
             .map_err(storage_error)?;
         let sequence: i64 = transaction
             .query_row(
-                "SELECT COALESCE(MAX(sequence),0)+1 FROM jarvis_events",
+                "SELECT COALESCE(MAX(sequence),0)+1 FROM ledger_events",
                 [],
                 |row| row.get(0),
             )
@@ -175,7 +175,7 @@ impl GoalStore for SqliteRuntimeStore {
             serde_json::json!({"goal_id": goal_id.as_str(), "reason": reason}).to_string();
         transaction
             .execute(
-                "INSERT INTO jarvis_events(event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms) VALUES(?1,?2,'goal.cancelled',?3,NULL,?4,?5)",
+                "INSERT INTO ledger_events(event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms) VALUES(?1,?2,'goal.cancelled',?3,NULL,?4,?5)",
                 params![event_id, sequence, format!("goal.cancelled:{}", goal_id.as_str()), payload, now],
             )
             .map_err(storage_error)?;
@@ -196,7 +196,7 @@ impl GoalStore for SqliteRuntimeStore {
         let mut connection = self.connection().map_err(runtime_error)?;
         let transaction = connection.transaction().map_err(storage_error)?;
         let changed = transaction.execute(
-            "UPDATE jarvis_goals SET status='cancelled',revision=?1,cancellation_reason=?2,cancellation_requested_at_ms=?3,updated_at_ms=?3 WHERE goal_id=?4 AND revision=?5 AND status NOT IN ('completed','failed','cancelled')",
+            "UPDATE goals SET status='cancelled',revision=?1,cancellation_reason=?2,cancellation_requested_at_ms=?3,updated_at_ms=?3 WHERE goal_id=?4 AND revision=?5 AND status NOT IN ('completed','failed','cancelled')",
             params![i64_value(goal.revision).map_err(runtime_error)?, reason, i64_value(now_ms).map_err(runtime_error)?, goal.goal_id.as_str(), i64_value(expected_revision).map_err(runtime_error)?],
         ).map_err(storage_error)?;
         if changed != 1 {
@@ -206,22 +206,22 @@ impl GoalStore for SqliteRuntimeStore {
         }
         let now = i64_value(now_ms).map_err(runtime_error)?;
         transaction.execute(
-            "UPDATE jarvis_executions SET status='cancelled',cancelled_at_ms=?1,updated_at_ms=?1,lease_json=NULL,claimed_by=NULL,claimed_generation=NULL,lease_expires_at_ms=NULL WHERE goal_id=?2 AND status='queued'",
+            "UPDATE work_items SET status='cancelled',cancelled_at_ms=?1,updated_at_ms=?1,lease_json=NULL,claimed_by=NULL,claimed_generation=NULL,lease_expires_at_ms=NULL WHERE goal_id=?2 AND status='queued'",
             params![now, goal.goal_id.as_str()],
         ).map_err(storage_error)?;
         transaction.execute(
-            "UPDATE jarvis_executions SET cancellation_requested_at_ms=?1,cancellation_reason=?2,updated_at_ms=?1 WHERE goal_id=?3 AND status='running'",
+            "UPDATE work_items SET cancellation_requested_at_ms=?1,cancellation_reason=?2,updated_at_ms=?1 WHERE goal_id=?3 AND status='running'",
             params![now, reason, goal.goal_id.as_str()],
         ).map_err(storage_error)?;
         let sequence: i64 = transaction
             .query_row(
-                "SELECT COALESCE(MAX(sequence),0)+1 FROM jarvis_events",
+                "SELECT COALESCE(MAX(sequence),0)+1 FROM ledger_events",
                 [],
                 |row| row.get(0),
             )
             .map_err(storage_error)?;
         transaction.execute(
-            "INSERT INTO jarvis_events(event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms) VALUES(?1,?2,'goal.cancelled',?3,NULL,?4,?5)",
+            "INSERT INTO ledger_events(event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms) VALUES(?1,?2,'goal.cancelled',?3,NULL,?4,?5)",
             params![Uuid::new_v4().to_string(), sequence, format!("goal.cancelled:{}:{}", goal.goal_id.as_str(), expected_revision), serde_json::json!({"goal_id": goal.goal_id.as_str(), "reason": reason}).to_string(), now],
         ).map_err(storage_error)?;
         transaction.commit().map_err(storage_error)
@@ -261,7 +261,7 @@ impl GoalStore for SqliteRuntimeStore {
             .collect::<Vec<_>>()
             .join(",");
         let mut sql = format!(
-            "SELECT goal_id,scope_json,title,status,revision,plan_json,acceptance_json,progress_json,waiting_reason,next_step,priority,deadline_ms,created_from_interaction_id,cancellation_reason,cancellation_requested_at_ms,created_at_ms,updated_at_ms FROM jarvis_goals WHERE scope_json IN ({scope_placeholders})"
+            "SELECT goal_id,scope_json,title,status,revision,plan_json,acceptance_json,progress_json,waiting_reason,next_step,priority,deadline_ms,created_from_interaction_id,cancellation_reason,cancellation_requested_at_ms,created_at_ms,updated_at_ms FROM goals WHERE scope_json IN ({scope_placeholders})"
         );
         let mut bind_values: Vec<Box<dyn rusqlite::ToSql>> = scope_values
             .into_iter()
@@ -339,7 +339,7 @@ impl GoalMutationStore for SqliteRuntimeStore {
             .map_err(storage_error)?;
         let changed = transaction
             .execute(
-                "UPDATE jarvis_goals SET scope_json=?1,title=?2,status=?3,revision=?4,plan_json=?5,acceptance_json=?6,progress_json=?7,waiting_reason=?8,next_step=?9,priority=?10,deadline_ms=?11,created_from_interaction_id=?12,cancellation_reason=?13,cancellation_requested_at_ms=?14,updated_at_ms=?15 WHERE goal_id=?16 AND revision=?17",
+                "UPDATE goals SET scope_json=?1,title=?2,status=?3,revision=?4,plan_json=?5,acceptance_json=?6,progress_json=?7,waiting_reason=?8,next_step=?9,priority=?10,deadline_ms=?11,created_from_interaction_id=?12,cancellation_reason=?13,cancellation_requested_at_ms=?14,updated_at_ms=?15 WHERE goal_id=?16 AND revision=?17",
                 params![
                     serde_json::to_string(&goal.scope).map_err(serialize_error)?,
                     goal.title,
@@ -366,14 +366,14 @@ impl GoalMutationStore for SqliteRuntimeStore {
         }
         let sequence: i64 = transaction
             .query_row(
-                "SELECT COALESCE(MAX(sequence),0)+1 FROM jarvis_events",
+                "SELECT COALESCE(MAX(sequence),0)+1 FROM ledger_events",
                 [],
                 |row| row.get(0),
             )
             .map_err(storage_error)?;
         transaction
             .execute(
-                "INSERT INTO jarvis_events(event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                "INSERT INTO ledger_events(event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)",
                 params![
                     event.event_id.as_str(),
                     sequence,

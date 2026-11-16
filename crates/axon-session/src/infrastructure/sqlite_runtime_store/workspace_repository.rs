@@ -15,7 +15,7 @@ impl WorkspaceStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         connection
             .execute(
-                "INSERT INTO jarvis_workspaces(workspace_id,display_name,workspace_root,git_remote,default_branch,aliases_json,memory_namespace,pinned,last_seen_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(workspace_id) DO UPDATE SET display_name=excluded.display_name,workspace_root=excluded.workspace_root,git_remote=excluded.git_remote,default_branch=excluded.default_branch,aliases_json=excluded.aliases_json,memory_namespace=excluded.memory_namespace,pinned=excluded.pinned,last_seen_at_ms=MAX(jarvis_workspaces.last_seen_at_ms,excluded.last_seen_at_ms)",
+                "INSERT INTO workspaces(workspace_id,display_name,workspace_root,git_remote,default_branch,aliases_json,memory_namespace,pinned,last_seen_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(workspace_id) DO UPDATE SET display_name=excluded.display_name,workspace_root=excluded.workspace_root,git_remote=excluded.git_remote,default_branch=excluded.default_branch,aliases_json=excluded.aliases_json,memory_namespace=excluded.memory_namespace,pinned=excluded.pinned,last_seen_at_ms=MAX(workspaces.last_seen_at_ms,excluded.last_seen_at_ms)",
                 params![
                     workspace.workspace_id,
                     workspace.display_name,
@@ -40,7 +40,7 @@ impl WorkspaceStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         connection
             .query_row(
-                "SELECT workspace_id,display_name,workspace_root,git_remote,default_branch,aliases_json,memory_namespace,pinned,last_seen_at_ms FROM jarvis_workspaces WHERE workspace_id=?1",
+                "SELECT workspace_id,display_name,workspace_root,git_remote,default_branch,aliases_json,memory_namespace,pinned,last_seen_at_ms FROM workspaces WHERE workspace_id=?1",
                 params![workspace_id.as_str()],
                 read_workspace,
             )
@@ -53,7 +53,7 @@ impl WorkspaceStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         let mut statement = connection
             .prepare(
-                "SELECT workspace_id,display_name,workspace_root,git_remote,default_branch,aliases_json,memory_namespace,pinned,last_seen_at_ms FROM jarvis_workspaces ORDER BY pinned DESC, last_seen_at_ms DESC, workspace_id ASC",
+                "SELECT workspace_id,display_name,workspace_root,git_remote,default_branch,aliases_json,memory_namespace,pinned,last_seen_at_ms FROM workspaces ORDER BY pinned DESC, last_seen_at_ms DESC, workspace_id ASC",
             )
             .map_err(storage_error)?;
         let rows = statement

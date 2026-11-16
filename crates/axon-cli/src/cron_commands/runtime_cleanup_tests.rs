@@ -1,7 +1,7 @@
 use axon_session::{NotificationDeliveryState, RuntimeStore};
 
 use crate::cron_commands::runtime_cleanup_families::{
-    expired_daemon_hosts_selection_sql, expired_decisions_selection_sql,
+    expired_daemon_instances_selection_sql, expired_decisions_selection_sql,
     expired_events_selection_sql, expired_session_events_selection_sql,
     expired_upgrade_admissions_selection_sql,
     settled_completion_deliveries_selection_sql_for_state,
@@ -35,7 +35,7 @@ pub(super) fn open_fixture(root: &Path) -> Connection {
 fn insert_hot_session_history(connection: &Connection) {
     connection
         .execute(
-            "INSERT INTO session_runtimes
+            "INSERT INTO sessions
              VALUES(?1,?1,?1,'/w','running',NULL,NULL,0,0,0,?2,?3,1,1)",
             rusqlite::params![
                 HOT_SESSION_ID,
@@ -101,28 +101,28 @@ fn write_retained_session_artifacts(root: &Path) -> Vec<(std::path::PathBuf, Vec
     let connection = open_fixture(root.path());
     connection
         .execute_batch(
-            "INSERT INTO session_runtimes VALUES('s-old','s-old','s-old','/w','completed',NULL,NULL,0,0,0,0,1,1,1);
+            "INSERT INTO sessions VALUES('s-old','s-old','s-old','/w','completed',NULL,NULL,0,0,0,0,1,1,1);
              INSERT INTO session_events(session_id,sequence,generation,event_type,payload_json,emitted_at_ms) VALUES('s-old',1,'g','turn','{}',1);
              INSERT INTO session_checkpoints VALUES('s-old',1,'a',0,0,NULL,NULL,NULL,NULL,NULL,1);
-             INSERT INTO runtime_schedules VALUES('sch-1','s-old','interval','1m','{}','none','created',1,NULL,NULL,0,NULL,NULL);
-             INSERT INTO jarvis_interactions(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,updated_at_ms,attachments_json)
+             INSERT INTO schedules VALUES('sch-1','s-old','interval','1m','{}','none','created',1,NULL,NULL,0,NULL,NULL);
+             INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,updated_at_ms,attachments_json)
                  VALUES('i-old','tui','m-1','{}','{}','{}','hi','understood',1,1,'[]');
-             INSERT INTO jarvis_goals(goal_id,scope_json,parent_goal_id,title,status,revision,plan_json,acceptance_json,progress_json,waiting_reason,next_step,priority,deadline_ms,created_from_interaction_id,cancellation_reason,cancellation_requested_at_ms,created_at_ms,updated_at_ms)
+             INSERT INTO goals(goal_id,scope_json,parent_goal_id,title,status,revision,plan_json,acceptance_json,progress_json,waiting_reason,next_step,priority,deadline_ms,created_from_interaction_id,cancellation_reason,cancellation_requested_at_ms,created_at_ms,updated_at_ms)
                  VALUES('t-old','{}',NULL,'旧任务','completed',1,'{}','{}',NULL,NULL,NULL,0,NULL,NULL,NULL,NULL,1,1);
-             INSERT INTO jarvis_executions(execution_id,goal_id,session_id,kind,payload_json,goal_revision,context_version,attempt,priority,dedupe_key,status,lease_json,claimed_by,claimed_generation,lease_expires_at_ms,started_at_ms,committed_at_ms,cancelled_at_ms,retry_at_ms,checkpoint_json,cancellation_requested_at_ms,cancellation_reason,created_at_ms,updated_at_ms)
+             INSERT INTO work_items(execution_id,goal_id,session_id,kind,payload_json,goal_revision,context_version,attempt,priority,dedupe_key,status,lease_json,claimed_by,claimed_generation,lease_expires_at_ms,started_at_ms,committed_at_ms,cancelled_at_ms,retry_at_ms,checkpoint_json,cancellation_requested_at_ms,cancellation_reason,created_at_ms,updated_at_ms)
                  VALUES('e-old','t-old',NULL,'turn','{}',NULL,NULL,1,0,NULL,'completed',NULL,NULL,NULL,NULL,1,NULL,NULL,NULL,NULL,NULL,NULL,1,1);
-             INSERT INTO jarvis_results VALUES('r-old','t-old','e-old',1,'done','[]','[]',NULL,1);
-             INSERT INTO jarvis_result_reads VALUES('r-old',1,'read');
-             INSERT INTO jarvis_decisions VALUES('d-old','{}','user','allow',1,1,1);
-             INSERT INTO jarvis_events VALUES('ev-old',1,'goal.completed','k-1',NULL,'{}',1);
-             INSERT INTO daemon_hosts VALUES('h-old','g-old',1,NULL,'stopped',1,1,1);
-             INSERT INTO daemon_upgrade_admissions VALUES('a-old','tok','v1','h-old','g-old',1,1,1,'claimed',NULL,NULL);
-             INSERT INTO jarvis_client_presence VALUES('client-old','workspace-old','tui','dest-old',1,1);
-             INSERT INTO jarvis_completion_notifications VALUES('n-old','workspace-old','t-old','e-old','完成提示','主 turn 汇总','[]','delivered',1,1,1);
-             INSERT INTO jarvis_completion_deliveries VALUES('n-old','tui','dest-old','delivered',1,1);
-             INSERT INTO jarvis_agent_messages(message_id,idempotency_key,owner_id,author,recipient,kind,content,trigger_turn,continuation_id,state,attempt_count,last_attempt_at_ms,retry_at_ms,last_error,delivered_at_ms,created_at_ms,expires_at_ms)
+             INSERT INTO goal_results VALUES('r-old','t-old','e-old',1,'done','[]','[]',NULL,1);
+             INSERT INTO goal_result_reads VALUES('r-old',1,'read');
+             INSERT INTO decisions VALUES('d-old','{}','user','allow',1,1,1);
+             INSERT INTO ledger_events VALUES('ev-old',1,'goal.completed','k-1',NULL,'{}',1);
+             INSERT INTO daemon_instances VALUES('h-old','g-old',1,NULL,'stopped',1,1,1);
+             INSERT INTO upgrade_handoffs VALUES('a-old','tok','v1','h-old','g-old',1,1,1,'claimed',NULL,NULL);
+             INSERT INTO client_presence VALUES('client-old','workspace-old','tui','dest-old',1,1);
+             INSERT INTO notifications VALUES('n-old','workspace-old','t-old','e-old','完成提示','主 turn 汇总','[]','delivered',1,1,1);
+             INSERT INTO notification_deliveries VALUES('n-old','tui','dest-old','delivered',1,1);
+             INSERT INTO agent_messages(message_id,idempotency_key,owner_id,author,recipient,kind,content,trigger_turn,continuation_id,state,attempt_count,last_attempt_at_ms,retry_at_ms,last_error,delivered_at_ms,created_at_ms,expires_at_ms)
                  VALUES('m-old','k-m-old','s-old','/root','/root/review','collab','hi',0,NULL,'delivered',1,1,NULL,NULL,1,1,1);
-             INSERT INTO jarvis_continuations(continuation_id,idempotency_key,owner_id,parent_session_id,child_session_id,agent_path,job_ref,execution_ref,terminal_kind,exit_reason,summary,artifact_path,token_input,token_output,token_reasoning,state,consumed_at_ms,consumed_by,attempt_count,last_attempt_at_ms,retry_at_ms,last_error,created_at_ms,expires_at_ms)
+             INSERT INTO continuations(continuation_id,idempotency_key,owner_id,parent_session_id,child_session_id,agent_path,job_ref,execution_ref,terminal_kind,exit_reason,summary,artifact_path,token_input,token_output,token_reasoning,state,consumed_at_ms,consumed_by,attempt_count,last_attempt_at_ms,retry_at_ms,last_error,created_at_ms,expires_at_ms)
                  VALUES('c-old','k-c-old','s-old','s-old','child-old','/root/review',NULL,NULL,'completed','子代理正常结束','摘要',NULL,1,1,0,'consumed',1,'run',1,NULL,NULL,NULL,1,1);",
         )
         .expect("测试数据应可写入");
@@ -135,7 +135,7 @@ fn write_retained_session_artifacts(root: &Path) -> Vec<(std::path::PathBuf, Vec
     assert_eq!(counts.sessions, 1);
     assert_eq!(counts.session_events, 1);
     assert_eq!(counts.session_checkpoints, 1);
-    assert_eq!(counts.runtime_schedules, 1);
+    assert_eq!(counts.schedules, 1);
     assert_eq!(counts.interactions, 1);
     assert_eq!(counts.goals, 1);
     assert_eq!(counts.executions, 1);
@@ -146,7 +146,7 @@ fn write_retained_session_artifacts(root: &Path) -> Vec<(std::path::PathBuf, Vec
     assert_eq!(counts.events, 0);
     assert_eq!(counts.upgrade_admissions, 1);
     // 准入记录先删，随后旧 Host 不再被其引用而可回收。
-    assert_eq!(counts.daemon_hosts, 1);
+    assert_eq!(counts.daemon_instances, 1);
     assert_eq!(counts.client_presence, 1);
     assert_eq!(counts.completion_notifications, 1);
     assert_eq!(counts.completion_deliveries, 1);
@@ -172,13 +172,13 @@ fn cleanup_protects_active_and_unread_records() {
     let connection = open_fixture(root.path());
     connection
         .execute_batch(
-            "INSERT INTO session_runtimes VALUES('s-run','s-run','s-run','/w','running',NULL,NULL,0,0,0,0,1,1,1);
-             INSERT INTO jarvis_goals(goal_id,scope_json,parent_goal_id,title,status,revision,plan_json,acceptance_json,progress_json,waiting_reason,next_step,priority,deadline_ms,created_from_interaction_id,cancellation_reason,cancellation_requested_at_ms,created_at_ms,updated_at_ms)
+            "INSERT INTO sessions VALUES('s-run','s-run','s-run','/w','running',NULL,NULL,0,0,0,0,1,1,1);
+             INSERT INTO goals(goal_id,scope_json,parent_goal_id,title,status,revision,plan_json,acceptance_json,progress_json,waiting_reason,next_step,priority,deadline_ms,created_from_interaction_id,cancellation_reason,cancellation_requested_at_ms,created_at_ms,updated_at_ms)
                  VALUES('t-done','{}',NULL,'完成任务','completed',1,'{}','{}',NULL,NULL,NULL,0,NULL,NULL,NULL,NULL,1,1);
-             INSERT INTO jarvis_executions(execution_id,goal_id,session_id,kind,payload_json,goal_revision,context_version,attempt,priority,dedupe_key,status,lease_json,claimed_by,claimed_generation,lease_expires_at_ms,started_at_ms,committed_at_ms,cancelled_at_ms,retry_at_ms,checkpoint_json,cancellation_requested_at_ms,cancellation_reason,created_at_ms,updated_at_ms)
+             INSERT INTO work_items(execution_id,goal_id,session_id,kind,payload_json,goal_revision,context_version,attempt,priority,dedupe_key,status,lease_json,claimed_by,claimed_generation,lease_expires_at_ms,started_at_ms,committed_at_ms,cancelled_at_ms,retry_at_ms,checkpoint_json,cancellation_requested_at_ms,cancellation_reason,created_at_ms,updated_at_ms)
                  VALUES('e-done','t-done',NULL,'turn','{}',NULL,NULL,1,0,NULL,'completed',NULL,NULL,NULL,NULL,1,NULL,NULL,NULL,NULL,NULL,NULL,1,1);
-             INSERT INTO jarvis_results VALUES('r-unread','t-done','e-done',1,'done','[]','[]',NULL,1);
-             INSERT INTO jarvis_interactions(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,updated_at_ms,attachments_json)
+             INSERT INTO goal_results VALUES('r-unread','t-done','e-done',1,'done','[]','[]',NULL,1);
+             INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,updated_at_ms,attachments_json)
                  VALUES('i-live','tui','m-2','{}','{}','{}','hi','received',1,1,'[]');",
         )
         .expect("测试数据应可写入");
@@ -198,14 +198,14 @@ fn explicit_session_family_cleanup_rechecks_active_state_and_execution_reference
         let connection = open_fixture(root.path());
         connection
             .execute(
-                "INSERT INTO session_runtimes VALUES('protected','protected','protected','/w',?1,NULL,NULL,0,0,0,0,1,1,1)",
+                "INSERT INTO sessions VALUES('protected','protected','protected','/w',?1,NULL,NULL,0,0,0,0,1,1,1)",
                 [status],
             )
             .expect("受保护 Session 应可写入");
         if with_execution {
             connection
                 .execute(
-                    "INSERT INTO jarvis_executions(
+                    "INSERT INTO work_items(
                         execution_id,goal_id,session_id,payload_json,attempt,priority,status,created_at_ms,updated_at_ms
                      ) VALUES('execution','task','protected','{}',1,0,'completed',1,1)",
                     [],
@@ -225,7 +225,7 @@ fn explicit_session_family_cleanup_rechecks_active_state_and_execution_reference
         .expect("runtime 应可重开");
         let retained: i64 = connection
             .query_row(
-                "SELECT COUNT(*) FROM session_runtimes WHERE session_id='protected'",
+                "SELECT COUNT(*) FROM sessions WHERE session_id='protected'",
                 [],
                 |row| row.get(0),
             )
@@ -242,7 +242,7 @@ fn explicit_session_family_cleanup_rechecks_active_state_and_execution_reference
     let mut connection = open_fixture(root.path());
     connection
         .execute(
-            "INSERT INTO session_runtimes VALUES('stale','stale','stale','/w','idle',NULL,NULL,0,0,0,?1,1,1,1)",
+            "INSERT INTO sessions VALUES('stale','stale','stale','/w','idle',NULL,NULL,0,0,0,?1,1,1,1)",
             [EVENT_COUNT],
         )
         .expect("stale Session 应可写入");
@@ -285,9 +285,9 @@ fn dry_run_counts_match_real_deletion() {
     let connection = open_fixture(root.path());
     connection
         .execute_batch(
-            "INSERT INTO jarvis_interactions(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,updated_at_ms,attachments_json)
+            "INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,updated_at_ms,attachments_json)
                  VALUES('i-1','tui','m-1','{}','{}','{}','hi','rejected',1,1,'[]');
-             INSERT INTO jarvis_decisions VALUES('d-1','{}','user','allow',1,1,1);",
+             INSERT INTO decisions VALUES('d-1','{}','user','allow',1,1,1);",
         )
         .expect("测试数据应可写入");
     drop(connection);
@@ -307,7 +307,7 @@ fn expired_events_beyond_floor_are_removed() {
     connection
         .execute_batch(
             "WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 1001)
-             INSERT INTO jarvis_events(event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms)
+             INSERT INTO ledger_events(event_id,sequence,event_type,idempotency_key,cause_event_id,payload_json,occurred_at_ms)
              SELECT 'ev-'||n, n, 'goal.completed', 'k-'||n, NULL, '{}', 1 FROM seq;",
         )
         .expect("测试数据应可写入");
@@ -323,11 +323,11 @@ fn expired_events_beyond_floor_are_removed() {
     )
     .expect("测试数据库应可重开");
     let remaining: i64 = connection
-        .query_row("SELECT COUNT(*) FROM jarvis_events", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM ledger_events", [], |row| row.get(0))
         .expect("统计应成功");
     assert_eq!(remaining, 1_000);
     let lowest: i64 = connection
-        .query_row("SELECT MIN(sequence) FROM jarvis_events", [], |row| {
+        .query_row("SELECT MIN(sequence) FROM ledger_events", [], |row| {
             row.get(0)
         })
         .expect("统计应成功");
@@ -342,7 +342,7 @@ fn cleanup_stops_at_time_budget_and_resumes_next_run() {
     connection
         .execute_batch(
             "WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 1000)
-             INSERT INTO jarvis_interactions
+             INSERT INTO inbox
                  (interaction_id, source_channel, source_message_id, scope_json, audience_json,
                   reply_route_json, content, status, received_at_ms, lease_token,
                   lease_expires_at_ms, updated_at_ms)
@@ -374,7 +374,7 @@ fn cleanup_large_runtime_history_is_bounded() {
         .execute_batch(
             "BEGIN;
              WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 50000)
-             INSERT INTO jarvis_interactions
+             INSERT INTO inbox
                  (interaction_id, source_channel, source_message_id, scope_json, audience_json,
                   reply_route_json, content, status, received_at_ms, lease_token,
                   lease_expires_at_ms, updated_at_ms)
@@ -387,7 +387,7 @@ fn cleanup_large_runtime_history_is_bounded() {
         .execute_batch(
             "BEGIN;
              WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 200000)
-             INSERT INTO jarvis_events
+             INSERT INTO ledger_events
                  (event_id, sequence, event_type, idempotency_key, cause_event_id, payload_json, occurred_at_ms)
              SELECT 'ev-'||n, n, 'goal.completed', 'k-'||n, NULL, '{}', 1 FROM seq;
              COMMIT;",
@@ -425,7 +425,7 @@ fn cleanup_does_not_stall_concurrent_writes() {
         .execute_batch(
             "BEGIN;
              WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 20000)
-             INSERT INTO jarvis_interactions
+             INSERT INTO inbox
                  (interaction_id, source_channel, source_message_id, scope_json, audience_json,
                   reply_route_json, content, status, received_at_ms, lease_token,
                   lease_expires_at_ms, updated_at_ms)
@@ -463,7 +463,7 @@ fn cleanup_does_not_stall_concurrent_writes() {
                 let write_started = std::time::Instant::now();
                 connection
                     .execute(
-                        "INSERT INTO jarvis_events
+                        "INSERT INTO ledger_events
                              (event_id, sequence, event_type, idempotency_key, cause_event_id,
                               payload_json, occurred_at_ms)
                          VALUES (?1, ?2, 'turn.started', ?3, NULL, '{}', ?4)",
@@ -544,7 +544,7 @@ fn cleanup_does_not_stall_concurrent_writes() {
     assert_eq!(last_sequence, HOT_SESSION_EVENT_COUNT);
     let remaining_sessions: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM session_runtimes WHERE session_id = ?1",
+            "SELECT COUNT(*) FROM sessions WHERE session_id = ?1",
             [HOT_SESSION_ID],
             |row| row.get(0),
         )
@@ -619,7 +619,7 @@ fn percentile(samples: &[u128], percentile: usize) -> u128 {
         ),
         ("expired_decisions", expired_decisions_selection_sql()),
         ("expired_events", expired_events_selection_sql()),
-        ("expired_daemon_hosts", expired_daemon_hosts_selection_sql()),
+        ("expired_daemon_instances", expired_daemon_instances_selection_sql()),
         (
             "settled_completion_deliveries_delivered",
             settled_completion_deliveries_selection_sql_for_state(

@@ -249,7 +249,7 @@ fn interrupted_interaction_appends_durable_session_and_ledger_events() {
         .connection()
         .expect("connection")
         .query_row(
-            "SELECT COUNT(*) FROM jarvis_events WHERE idempotency_key=?1",
+            "SELECT COUNT(*) FROM ledger_events WHERE idempotency_key=?1",
             ["interaction.interrupted:interaction-test"],
             |row| row.get(0),
         )

@@ -213,7 +213,7 @@ fn apply_runtime_cleanup_counts(report: &mut SessionCleanupReport, counts: Runti
         .saturating_add(counts.session_checkpoints);
     report.deleted_runtime_schedule_count = report
         .deleted_runtime_schedule_count
-        .saturating_add(counts.runtime_schedules);
+        .saturating_add(counts.schedules);
     report.deleted_interaction_count = report
         .deleted_interaction_count
         .saturating_add(counts.interactions);
@@ -231,7 +231,7 @@ fn apply_runtime_cleanup_counts(report: &mut SessionCleanupReport, counts: Runti
     report.deleted_event_count = report.deleted_event_count.saturating_add(counts.events);
     report.deleted_daemon_host_count = report
         .deleted_daemon_host_count
-        .saturating_add(counts.daemon_hosts);
+        .saturating_add(counts.daemon_instances);
     report.deleted_upgrade_admission_count = report
         .deleted_upgrade_admission_count
         .saturating_add(counts.upgrade_admissions);

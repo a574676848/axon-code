@@ -9,10 +9,10 @@ use axon_domain::{HealthBacklog, HealthStatusCounts};
 use rusqlite::Connection;
 
 const INTERACTION_STATUS_SQL: &str =
-    "SELECT status,COUNT(*) FROM jarvis_interactions GROUP BY status";
-const GOAL_STATUS_SQL: &str = "SELECT status,COUNT(*) FROM jarvis_goals GROUP BY status";
-const EXECUTION_STATUS_SQL: &str = "SELECT status,COUNT(*) FROM jarvis_executions GROUP BY status";
-const EXECUTION_BACKLOG_SQL: &str = "SELECT COUNT(*),MIN(created_at_ms) FROM jarvis_executions WHERE status IN ('queued','waiting')";
+    "SELECT status,COUNT(*) FROM inbox GROUP BY status";
+const GOAL_STATUS_SQL: &str = "SELECT status,COUNT(*) FROM goals GROUP BY status";
+const EXECUTION_STATUS_SQL: &str = "SELECT status,COUNT(*) FROM work_items GROUP BY status";
+const EXECUTION_BACKLOG_SQL: &str = "SELECT COUNT(*),MIN(created_at_ms) FROM work_items WHERE status IN ('queued','waiting')";
 
 impl HealthStore for SqliteRuntimeStore {
     fn read_runtime_health(&self, now_ms: u64) -> Result<RuntimeHealthCounters, RuntimeStoreError> {

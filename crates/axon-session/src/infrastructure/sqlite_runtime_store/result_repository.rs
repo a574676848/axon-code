@@ -1,4 +1,4 @@
-//! `jarvis_results` 的 SQLite 查询与读取确认持久化。
+//! `goal_results` 的 SQLite 查询与读取确认持久化。
 
 use super::{SqliteRuntimeStore, helpers::u64_value};
 use crate::ports::{
@@ -23,9 +23,9 @@ impl ResultStore for SqliteRuntimeStore {
             .prepare(
                 "SELECT r.result_id,r.goal_id,r.execution_id,r.succeeded,r.summary,
                     r.receipt_refs_json,r.artifact_refs_json,r.error_kind,r.created_at_ms
-                 FROM jarvis_results AS r
-                 INNER JOIN jarvis_goals AS t ON t.goal_id=r.goal_id
-                 LEFT JOIN jarvis_result_reads AS rr ON rr.result_id=r.result_id
+                 FROM goal_results AS r
+                 INNER JOIN goals AS t ON t.goal_id=r.goal_id
+                 LEFT JOIN goal_result_reads AS rr ON rr.result_id=r.result_id
                  WHERE t.scope_json=?1 AND rr.acknowledged_at_ms IS NULL
                  ORDER BY r.created_at_ms ASC, r.result_id ASC LIMIT ?2",
             )
@@ -70,8 +70,8 @@ impl ResultStore for SqliteRuntimeStore {
             .query_row(
                 "SELECT r.result_id,r.goal_id,r.execution_id,r.succeeded,r.summary,
                     r.receipt_refs_json,r.artifact_refs_json,r.error_kind,r.created_at_ms
-                 FROM jarvis_results AS r
-                 INDEXED BY jarvis_results_execution
+                 FROM goal_results AS r
+                 INDEXED BY goal_results_execution
                  WHERE r.execution_id=?1
                  ORDER BY r.created_at_ms DESC, r.result_id ASC LIMIT 1",
                 params![execution_id.as_str()],
@@ -133,10 +133,10 @@ impl SqliteRuntimeStore {
         for result_id in result_ids {
             let changed = transaction
                 .execute(
-                    "INSERT OR IGNORE INTO jarvis_result_reads(result_id,acknowledged_at_ms,acknowledged_source)
+                    "INSERT OR IGNORE INTO goal_result_reads(result_id,acknowledged_at_ms,acknowledged_source)
                      SELECT r.result_id,?1,?2
-                     FROM jarvis_results AS r
-                     INNER JOIN jarvis_goals AS t ON t.goal_id=r.goal_id
+                     FROM goal_results AS r
+                     INNER JOIN goals AS t ON t.goal_id=r.goal_id
                      WHERE r.result_id=?3 AND t.scope_json=?4",
                     params![confirmed_at_ms, source, result_id.as_str(), scope_json],
                 )

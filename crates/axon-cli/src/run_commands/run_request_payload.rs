@@ -542,7 +542,7 @@ mod tests {
         let connection = rusqlite::Connection::open(store.path()).expect("打开数据库");
         connection
             .execute(
-                "INSERT INTO jarvis_results(result_id,goal_id,execution_id,succeeded,summary,receipt_refs_json,artifact_refs_json,error_kind,created_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,NULL,?8)",
+                "INSERT INTO goal_results(result_id,goal_id,execution_id,succeeded,summary,receipt_refs_json,artifact_refs_json,error_kind,created_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,NULL,?8)",
                 rusqlite::params![
                     result.result_id.as_str(),
                     result.goal_id.as_str(),
@@ -638,7 +638,7 @@ mod tests {
         let connection = rusqlite::Connection::open(store.path()).expect("打开数据库");
         connection
             .execute(
-                "INSERT INTO jarvis_results(result_id,goal_id,execution_id,succeeded,summary,receipt_refs_json,artifact_refs_json,error_kind,created_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,NULL,?8)",
+                "INSERT INTO goal_results(result_id,goal_id,execution_id,succeeded,summary,receipt_refs_json,artifact_refs_json,error_kind,created_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,NULL,?8)",
                 rusqlite::params![
                     result.result_id.as_str(),
                     result.goal_id.as_str(),

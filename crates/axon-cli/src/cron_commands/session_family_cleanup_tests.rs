@@ -208,7 +208,7 @@ fn rollout_cleanup_crosses_bounded_batch_boundary() {
     assert_indexed_plan(
         &runtime,
         &format!(
-            "SELECT session_id FROM session_runtimes
+            "SELECT session_id FROM sessions
              WHERE session_id IN ({placeholders}) AND status IN ('running','compacting')"
         ),
         &ids,
@@ -311,7 +311,7 @@ fn create_runtime_family(root: &Path, child_status: &str, with_execution: bool) 
     for (id, status) in [(STALE_ROOT, "idle"), (STALE_CHILD, child_status)] {
         connection
             .execute(
-                "INSERT INTO session_runtimes VALUES(?1,?1,?1,'/workspace',?2,NULL,NULL,0,0,1,1,1,1,1)",
+                "INSERT INTO sessions VALUES(?1,?1,?1,'/workspace',?2,NULL,NULL,0,0,1,1,1,1,1)",
                 params![id, status],
             )
             .expect("runtime Session 应可写入");
@@ -320,7 +320,7 @@ fn create_runtime_family(root: &Path, child_status: &str, with_execution: bool) 
     if with_execution {
         connection
             .execute(
-                "INSERT INTO jarvis_executions(
+                "INSERT INTO work_items(
                     execution_id,goal_id,session_id,payload_json,attempt,priority,status,created_at_ms,updated_at_ms
                  ) VALUES('execution','task',?1,'{}',1,0,'completed',1,1)",
                 [STALE_CHILD],
@@ -432,7 +432,7 @@ fn runtime_exists(root: &Path, session_id: &str) -> bool {
     Connection::open(runtime_path(root))
         .expect("runtime 应可打开")
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM session_runtimes WHERE session_id=?1)",
+            "SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id=?1)",
             [session_id],
             |row| row.get(0),
         )

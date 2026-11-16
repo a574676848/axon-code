@@ -77,7 +77,7 @@ fn read_candidates(
         .prepare(
             "SELECT interaction_id,scope_json,audience_json,source_channel,source_message_id,\
                     reply_route_json \
-             FROM jarvis_interactions \
+             FROM inbox \
              WHERE status=?1 AND lease_expires_at_ms<=?2 \
              ORDER BY lease_expires_at_ms ASC, received_at_ms ASC, interaction_id ASC LIMIT ?3",
         )
@@ -134,7 +134,7 @@ fn settle_interrupted(
 ) -> Result<bool, RuntimeStoreError> {
     let changed = transaction
         .execute(
-            "UPDATE jarvis_interactions SET status=?1,lease_token=NULL,\
+            "UPDATE inbox SET status=?1,lease_token=NULL,\
              lease_expires_at_ms=NULL,updated_at_ms=?2 \
              WHERE interaction_id=?3 AND status=?4",
             params![
@@ -155,9 +155,9 @@ fn settle_interrupted(
     .map_err(|error| RuntimeStoreError::InvalidId(error.to_string()))?;
     transaction
         .execute(
-            "INSERT INTO jarvis_events(event_id,sequence,event_type,idempotency_key,\
+            "INSERT INTO ledger_events(event_id,sequence,event_type,idempotency_key,\
              cause_event_id,payload_json,occurred_at_ms) \
-             VALUES(?1,(SELECT COALESCE(MAX(sequence),0)+1 FROM jarvis_events),?2,?3,NULL,?4,?5)",
+             VALUES(?1,(SELECT COALESCE(MAX(sequence),0)+1 FROM ledger_events),?2,?3,NULL,?4,?5)",
             params![
                 event_id.as_str(),
                 LEDGER_EVENT_TYPE,
@@ -180,7 +180,7 @@ fn append_session_event(
 ) -> Result<Option<u64>, RuntimeStoreError> {
     let previous: Option<i64> = transaction
         .query_row(
-            "SELECT last_event_sequence FROM session_runtimes WHERE session_id=?1",
+            "SELECT last_event_sequence FROM sessions WHERE session_id=?1",
             params![session_id.as_str()],
             |row| row.get(0),
         )
@@ -210,7 +210,7 @@ fn update_session_tail(
 ) -> Result<(), RuntimeStoreError> {
     transaction
         .execute(
-            "UPDATE session_runtimes SET last_event_sequence=?1,last_activity_at_ms=?2,\
+            "UPDATE sessions SET last_event_sequence=?1,last_activity_at_ms=?2,\
              updated_at_ms=?2 WHERE session_id=?3",
             params![i64_value(sequence)?, now, session_id.as_str()],
         )

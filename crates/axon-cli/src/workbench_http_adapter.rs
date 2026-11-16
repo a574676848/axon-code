@@ -211,7 +211,7 @@ fn lane_pending_question_counts(
     let conn = rusqlite::Connection::open(store.path()).map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT lane_id, COUNT(*) FROM jarvis_user_questions \
+            "SELECT lane_id, COUNT(*) FROM user_questions \
              WHERE state IN ('pending', 'suspended') GROUP BY lane_id",
         )
         .map_err(|e| e.to_string())?;

@@ -15,7 +15,7 @@ use rusqlite::{Connection, OpenFlags, TransactionBehavior, params_from_iter};
 use super::runtime_cleanup_counts::count_expired_rows;
 use super::runtime_cleanup_families::{
     delete_expired_agent_messages, delete_expired_client_presence, delete_expired_continuations,
-    delete_expired_daemon_hosts, delete_expired_decisions, delete_expired_events,
+    delete_expired_daemon_instances, delete_expired_decisions, delete_expired_events,
     delete_expired_upgrade_admissions,
     delete_expired_user_questions, delete_session_families_by_ids,
     delete_settled_completion_deliveries, delete_settled_completion_notifications,
@@ -60,7 +60,7 @@ pub(crate) struct RuntimeCleanupCounts {
     pub(crate) sessions: usize,
     pub(crate) session_events: usize,
     pub(crate) session_checkpoints: usize,
-    pub(crate) runtime_schedules: usize,
+    pub(crate) schedules: usize,
     pub(crate) interactions: usize,
     pub(crate) goals: usize,
     pub(crate) executions: usize,
@@ -68,7 +68,7 @@ pub(crate) struct RuntimeCleanupCounts {
     pub(crate) result_reads: usize,
     pub(crate) decisions: usize,
     pub(crate) events: usize,
-    pub(crate) daemon_hosts: usize,
+    pub(crate) daemon_instances: usize,
     pub(crate) upgrade_admissions: usize,
     pub(crate) client_presence: usize,
     pub(crate) completion_notifications: usize,
@@ -85,9 +85,9 @@ impl RuntimeCleanupCounts {
         self.session_checkpoints = self
             .session_checkpoints
             .saturating_add(other.session_checkpoints);
-        self.runtime_schedules = self
-            .runtime_schedules
-            .saturating_add(other.runtime_schedules);
+        self.schedules = self
+            .schedules
+            .saturating_add(other.schedules);
         self.interactions = self.interactions.saturating_add(other.interactions);
         self.goals = self.goals.saturating_add(other.goals);
         self.executions = self.executions.saturating_add(other.executions);
@@ -95,7 +95,7 @@ impl RuntimeCleanupCounts {
         self.result_reads = self.result_reads.saturating_add(other.result_reads);
         self.decisions = self.decisions.saturating_add(other.decisions);
         self.events = self.events.saturating_add(other.events);
-        self.daemon_hosts = self.daemon_hosts.saturating_add(other.daemon_hosts);
+        self.daemon_instances = self.daemon_instances.saturating_add(other.daemon_instances);
         self.upgrade_admissions = self
             .upgrade_admissions
             .saturating_add(other.upgrade_admissions);
@@ -183,7 +183,7 @@ fn run_runtime_cleanup_with_budget(
         deadline,
     )?);
     counts.merge(delete_expired_events(&mut connection, cutoff_ms, deadline)?);
-    counts.merge(delete_expired_daemon_hosts(
+    counts.merge(delete_expired_daemon_instances(
         &mut connection,
         cutoff_ms,
         deadline,
@@ -252,7 +252,7 @@ pub(super) fn protected_runtime_session_ids(
     for ids in candidate_ids.chunks(RUNTIME_CLEANUP_BATCH_LIMIT) {
         let placeholders = placeholders(ids.len());
         let active_sql = format!(
-            "SELECT session_id FROM session_runtimes
+            "SELECT session_id FROM sessions
              WHERE session_id IN ({placeholders}) AND status IN ({active})",
             active = quoted_list(&SESSION_ACTIVE_STATUSES),
         );
@@ -268,7 +268,7 @@ pub(super) fn protected_runtime_session_ids(
         );
 
         let execution_sql = format!(
-            "SELECT DISTINCT session_id FROM jarvis_executions
+            "SELECT DISTINCT session_id FROM work_items
              WHERE session_id IN ({placeholders})"
         );
         let mut statement = connection
@@ -302,7 +302,7 @@ pub(super) fn count_runtime_session_families(
         let placeholders = placeholders(ids.len());
         counts.sessions = counts.sessions.saturating_add(count_ids_in(
             &connection,
-            "session_runtimes",
+            "sessions",
             &placeholders,
             ids,
         )?);
@@ -312,9 +312,9 @@ pub(super) fn count_runtime_session_families(
             &placeholders,
             ids,
         )?);
-        counts.runtime_schedules = counts.runtime_schedules.saturating_add(count_ids_in(
+        counts.schedules = counts.schedules.saturating_add(count_ids_in(
             &connection,
-            "runtime_schedules",
+            "schedules",
             &placeholders,
             ids,
         )?);
@@ -413,14 +413,14 @@ fn count_ids_in(
 /// 使 7 天保留期对这类会话彻底失效。
 ///
 /// 「仍在活动」按 `last_activity_at_ms >= ?1` 判定，不按 `status` 判定：
-/// 生产环境里 `session_runtimes.status` 几乎恒为 `created`（desktop 车道创建后
+/// 生产环境里 `sessions.status` 几乎恒为 `created`（desktop 车道创建后
 /// 从不转 `running`），用状态白名单会把所有会话都判成非活跃，使保底分支永不命中，
 /// 长会话一旦超期就会被整段删空。`last_activity_at_ms` 才是随事件推进更新的字段。
 pub(super) fn session_event_expiry_predicate() -> String {
     format!(
         "emitted_at_ms < ?1
            AND NOT EXISTS (
-               SELECT 1 FROM session_runtimes AS retained
+               SELECT 1 FROM sessions AS retained
                WHERE retained.session_id = session_events.session_id
                  AND retained.last_activity_at_ms >= ?1
                  AND session_events.sequence > CASE
@@ -444,17 +444,17 @@ pub(super) fn session_event_expiry_filter() -> String {
 /// Task 保留谓词（`?1` 为保留截止时间）：终态、无活跃 Execution、无未读 Result。
 pub(super) fn task_expiry_filter() -> String {
     format!(
-        "FROM jarvis_goals
+        "FROM goals
          WHERE status IN ({terminal})
            AND updated_at_ms < ?1
            AND NOT EXISTS (
-               SELECT 1 FROM jarvis_executions e
-               WHERE e.goal_id = jarvis_goals.goal_id AND e.status IN ({active})
+               SELECT 1 FROM work_items e
+               WHERE e.goal_id = goals.goal_id AND e.status IN ({active})
            )
            AND NOT EXISTS (
-               SELECT 1 FROM jarvis_results r
-               LEFT JOIN jarvis_result_reads rr ON rr.result_id = r.result_id
-               WHERE r.goal_id = jarvis_goals.goal_id AND rr.result_id IS NULL
+               SELECT 1 FROM goal_results r
+               LEFT JOIN goal_result_reads rr ON rr.result_id = r.result_id
+               WHERE r.goal_id = goals.goal_id AND rr.result_id IS NULL
            )",
         terminal = quoted_list(&TASK_TERMINAL_STATUSES),
         active = quoted_list(&EXECUTION_ACTIVE_STATUSES),
@@ -585,12 +585,12 @@ pub(super) fn stale_runtime_session_ids(
     let connection = open_read_only_database(&path)?;
     let cutoff_ms = i64::try_from(cutoff_ms).unwrap_or(i64::MAX);
     let sql = format!(
-        "SELECT session_id FROM session_runtimes
+        "SELECT session_id FROM sessions
          WHERE last_activity_at_ms < ?1
            AND status NOT IN ({active})
            AND NOT EXISTS (
-               SELECT 1 FROM jarvis_executions AS execution
-               WHERE execution.session_id = session_runtimes.session_id
+               SELECT 1 FROM work_items AS execution
+               WHERE execution.session_id = sessions.session_id
            )
          ORDER BY last_activity_at_ms ASC",
         active = quoted_list(&SESSION_ACTIVE_STATUSES),

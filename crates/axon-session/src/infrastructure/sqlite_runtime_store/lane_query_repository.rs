@@ -1,4 +1,4 @@
-//! `jarvis_interactions` 的车道聚合查询实现。
+//! `inbox` 的车道聚合查询实现。
 //!
 //! 一条车道由 Interaction 的复合归属决定，因此车道列表就是按 `lane_id`
 //! 分组后的汇总。这里用一条窗口函数查询同时取出每组的总数、最早接收时间、
@@ -16,7 +16,7 @@ const SELECT_LANE_SUMMARIES: &str = "WITH ranked AS (\
               COUNT(*) OVER (PARTITION BY lane_id) AS interaction_count, \
               SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) OVER (PARTITION BY lane_id) AS processing_count, \
               MIN(received_at_ms) OVER (PARTITION BY lane_id) AS first_received_ms \
-       FROM jarvis_interactions \
+       FROM inbox \
        WHERE lane_id IS NOT NULL AND lane_id <> ''\
      ) \
      SELECT lane_id, content, source_channel, scope_json, audience_json, reply_route_json, \

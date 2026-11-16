@@ -26,7 +26,7 @@ pub(super) fn count_expired_rows(
         interactions: count_rows(
             connection,
             &format!(
-                "SELECT COUNT(*) FROM jarvis_interactions
+                "SELECT COUNT(*) FROM inbox
                  WHERE status IN ({terminal}) AND received_at_ms < ?1",
                 terminal = quoted_list(&INTERACTION_TERMINAL_STATUSES),
             ),
@@ -39,55 +39,55 @@ pub(super) fn count_expired_rows(
         )?,
         decisions: count_rows(
             connection,
-            "SELECT COUNT(*) FROM jarvis_decisions
+            "SELECT COUNT(*) FROM decisions
              WHERE expires_at_ms IS NOT NULL AND expires_at_ms < ?1",
             cutoff_ms,
         )?,
         events: count_rows(
             connection,
             &format!(
-                "SELECT COUNT(*) FROM jarvis_events
+                "SELECT COUNT(*) FROM ledger_events
                  WHERE occurred_at_ms < ?1
-                   AND sequence <= (SELECT COALESCE(MAX(sequence), 0) FROM jarvis_events) - {retained}",
+                   AND sequence <= (SELECT COALESCE(MAX(sequence), 0) FROM ledger_events) - {retained}",
                 retained = LEDGER_EVENT_MIN_RETAINED,
             ),
             cutoff_ms,
         )?,
-        daemon_hosts: count_rows(
+        daemon_instances: count_rows(
             connection,
-            "SELECT COUNT(*) FROM daemon_hosts
+            "SELECT COUNT(*) FROM daemon_instances
              WHERE lease_expires_at_ms < ?1
                AND NOT EXISTS (
-                   SELECT 1 FROM session_runtimes
-                   WHERE session_runtimes.owner_host_id = daemon_hosts.host_id
+                   SELECT 1 FROM sessions
+                   WHERE sessions.owner_host_id = daemon_instances.host_id
                )
                AND NOT EXISTS (
-                   SELECT 1 FROM daemon_upgrade_admissions
-                   INDEXED BY daemon_upgrade_admissions_owner
-                   WHERE daemon_upgrade_admissions.old_host_id = daemon_hosts.host_id
+                   SELECT 1 FROM upgrade_handoffs
+                   INDEXED BY upgrade_handoffs_owner
+                   WHERE upgrade_handoffs.old_host_id = daemon_instances.host_id
                )",
             cutoff_ms,
         )?,
         upgrade_admissions: count_rows(
             connection,
-            "SELECT COUNT(*) FROM daemon_upgrade_admissions WHERE deadline_at_ms < ?1",
+            "SELECT COUNT(*) FROM upgrade_handoffs WHERE deadline_at_ms < ?1",
             cutoff_ms,
         )?,
         executions: count_rows(
             connection,
-            &format!("SELECT COUNT(*) FROM jarvis_executions WHERE goal_id IN (SELECT goal_id {task_filter})"),
+            &format!("SELECT COUNT(*) FROM work_items WHERE goal_id IN (SELECT goal_id {task_filter})"),
             cutoff_ms,
         )?,
         results: count_rows(
             connection,
-            &format!("SELECT COUNT(*) FROM jarvis_results WHERE goal_id IN (SELECT goal_id {task_filter})"),
+            &format!("SELECT COUNT(*) FROM goal_results WHERE goal_id IN (SELECT goal_id {task_filter})"),
             cutoff_ms,
         )?,
         result_reads: count_rows(
             connection,
             &format!(
-                "SELECT COUNT(*) FROM jarvis_result_reads WHERE result_id IN (
-                     SELECT result_id FROM jarvis_results WHERE goal_id IN (SELECT goal_id {task_filter})
+                "SELECT COUNT(*) FROM goal_result_reads WHERE result_id IN (
+                     SELECT result_id FROM goal_results WHERE goal_id IN (SELECT goal_id {task_filter})
                  )"
             ),
             cutoff_ms,

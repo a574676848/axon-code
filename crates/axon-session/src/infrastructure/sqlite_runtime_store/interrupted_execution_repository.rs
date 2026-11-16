@@ -141,7 +141,7 @@ fn read_candidates(
 ) -> Result<Vec<(String, String, Option<String>)>, RuntimeStoreError> {
     let (sql, owner_host_id, owner_generation) = match selector {
         CandidateSelector::ExpiredLease => (
-            "SELECT execution_id,goal_id,session_id FROM jarvis_executions \
+            "SELECT execution_id,goal_id,session_id FROM work_items \
              WHERE status='running' AND lease_expires_at_ms<=?1 \
              ORDER BY lease_expires_at_ms ASC, created_at_ms ASC LIMIT ?2"
                 .to_owned(),
@@ -152,7 +152,7 @@ fn read_candidates(
             owner_host_id,
             owner_generation,
         } => (
-            "SELECT execution_id,goal_id,session_id FROM jarvis_executions \
+            "SELECT execution_id,goal_id,session_id FROM work_items \
              WHERE claimed_by=?1 AND claimed_generation=?2 AND status='running' \
              ORDER BY created_at_ms ASC, execution_id ASC LIMIT ?3"
                 .to_owned(),
@@ -191,7 +191,7 @@ fn settle_uncertain(
 ) -> Result<bool, RuntimeStoreError> {
     let changed = transaction
         .execute(
-            "UPDATE jarvis_executions SET status=?1,claimed_by=NULL,claimed_generation=NULL,\
+            "UPDATE work_items SET status=?1,claimed_by=NULL,claimed_generation=NULL,\
              lease_json=NULL,lease_expires_at_ms=NULL,retry_at_ms=NULL,updated_at_ms=?2 \
              WHERE execution_id=?3 AND status=?4",
             params![UNCERTAIN_STATUS, now, execution_id, RUNNING_STATUS],
@@ -202,10 +202,10 @@ fn settle_uncertain(
     }
     transaction
         .execute(
-            "INSERT INTO jarvis_results(result_id,goal_id,execution_id,succeeded,summary,\
+            "INSERT INTO goal_results(result_id,goal_id,execution_id,succeeded,summary,\
              receipt_refs_json,artifact_refs_json,error_kind,created_at_ms) \
              SELECT ?1,?2,?3,0,?4,'[]','[]',?5,?6 \
-             WHERE NOT EXISTS(SELECT 1 FROM jarvis_results WHERE execution_id=?3)",
+             WHERE NOT EXISTS(SELECT 1 FROM goal_results WHERE execution_id=?3)",
             params![
                 format!("result-uncertain-{execution_id}"),
                 goal_id,
@@ -218,7 +218,7 @@ fn settle_uncertain(
         .map_err(storage)?;
     transaction
         .execute(
-            "UPDATE jarvis_goals SET status=?1,revision=revision+1,updated_at_ms=?2 \
+            "UPDATE goals SET status=?1,revision=revision+1,updated_at_ms=?2 \
              WHERE goal_id=?3 AND status IN ('proposed','active')",
             params![WAITING_GOAL_STATUS, now, goal_id],
         )
@@ -227,9 +227,9 @@ fn settle_uncertain(
         .map_err(|error| RuntimeStoreError::InvalidId(error.to_string()))?;
     transaction
         .execute(
-            "INSERT INTO jarvis_events(event_id,sequence,event_type,idempotency_key,\
+            "INSERT INTO ledger_events(event_id,sequence,event_type,idempotency_key,\
              cause_event_id,payload_json,occurred_at_ms) \
-             VALUES(?1,(SELECT COALESCE(MAX(sequence),0)+1 FROM jarvis_events),?2,?3,NULL,?4,?5)",
+             VALUES(?1,(SELECT COALESCE(MAX(sequence),0)+1 FROM ledger_events),?2,?3,NULL,?4,?5)",
             params![
                 event_id.as_str(),
                 LEDGER_EVENT_TYPE,
@@ -251,7 +251,7 @@ fn append_session_event(
 ) -> Result<Option<u64>, RuntimeStoreError> {
     let previous: Option<i64> = transaction
         .query_row(
-            "SELECT last_event_sequence FROM session_runtimes WHERE session_id=?1",
+            "SELECT last_event_sequence FROM sessions WHERE session_id=?1",
             params![session_id.as_str()],
             |row| row.get(0),
         )
@@ -277,7 +277,7 @@ fn update_session_owner(
 ) -> Result<(), RuntimeStoreError> {
     transaction
         .execute(
-            "UPDATE session_runtimes SET status='idle',owner_host_id=?1,owner_generation=?2,\
+            "UPDATE sessions SET status='idle',owner_host_id=?1,owner_generation=?2,\
              last_event_sequence=?3,last_activity_at_ms=?4,updated_at_ms=?4 WHERE session_id=?5",
             params![
                 host.host_id.as_str(),

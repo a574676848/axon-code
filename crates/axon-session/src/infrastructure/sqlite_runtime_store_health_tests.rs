@@ -54,13 +54,13 @@ fn health_counts_statuses_and_oldest_execution_age() {
     let connection = rusqlite::Connection::open(store.path()).expect("打开数据库");
     connection
         .execute(
-            "INSERT INTO jarvis_executions(execution_id,goal_id,attempt,priority,status,created_at_ms,updated_at_ms) VALUES('health-execution','health-task',0,0,'queued',2000,2000)",
+            "INSERT INTO work_items(execution_id,goal_id,attempt,priority,status,created_at_ms,updated_at_ms) VALUES('health-execution','health-task',0,0,'queued',2000,2000)",
             [],
         )
         .expect("写入 Execution");
     connection
         .execute(
-            "INSERT INTO jarvis_executions(execution_id,goal_id,attempt,priority,status,created_at_ms,updated_at_ms) VALUES('health-completed','health-task',1,0,'completed',3000,3000)",
+            "INSERT INTO work_items(execution_id,goal_id,attempt,priority,status,created_at_ms,updated_at_ms) VALUES('health-completed','health-task',1,0,'completed',3000,3000)",
             [],
         )
         .expect("写入终态 Execution");

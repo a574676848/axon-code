@@ -51,9 +51,9 @@ const CAPABILITY_NAMES: [&str; 12] = [
 ];
 /// 构建版本：取本 crate 的版本号，与 `axon --version` 同源。
 const BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
-/// 运行态库 `daemon_hosts.state` 的「运行中」取值，与 axon-session 的建库口径一致。
+/// 运行态库 `daemon_instances.state` 的「运行中」取值，与 axon-session 的建库口径一致。
 const HOST_STATE_RUNNING: &str = "running";
-/// 运行态库 `jarvis_interactions.status` 的「已接收待领取」取值。
+/// 运行态库 `inbox.status` 的「已接收待领取」取值。
 const INTERACTION_RECEIVED_STATUS: &str = "received";
 /// 读租约时等待写锁的上限。
 ///
@@ -190,7 +190,7 @@ impl SystemHttpAdapter {
 
     /// 读取当前 Host 租约的拥有者与绝对到期时间。
     ///
-    /// 来源是运行态库 `daemon_hosts` 表：`claim_host` 领取租约、心跳按 `renew_host`
+    /// 来源是运行态库 `daemon_instances` 表：`claim_host` 领取租约、心跳按 `renew_host`
     /// 续租，写的就是这一行，因此它是守护进程此刻真正持有的租约。只取
     /// `state = 'running'` 里到期时间最晚的一行：被回收的旧 Host 仍留在表里，
     /// 但它们已经不在运行。
@@ -203,7 +203,7 @@ impl SystemHttpAdapter {
         let connection = rusqlite::Connection::open(path)?;
         connection.busy_timeout(HOST_LEASE_BUSY_TIMEOUT)?;
         let mut statement = connection.prepare(
-            "SELECT host_id, generation, lease_expires_at_ms FROM daemon_hosts \
+            "SELECT host_id, generation, lease_expires_at_ms FROM daemon_instances \
              WHERE state = ?1 ORDER BY lease_expires_at_ms DESC LIMIT 1",
         )?;
         let mut rows = statement.query(rusqlite::params![HOST_STATE_RUNNING])?;
@@ -224,7 +224,7 @@ impl SystemHttpAdapter {
     /// 排队深度：已可靠接收、尚未被主 turn 领取的 Interaction 条数。
     ///
     /// 来源是运行态健康聚合（`HealthStore::read_runtime_health` 对
-    /// `jarvis_interactions` 按状态计数），与既有 `axon daemon health` 的
+    /// `inbox` 按状态计数），与既有 `axon daemon health` 的
     /// `interactions.byStatus.received` 同源同口径。读不到时如实返回 0。
     ///
     /// 该聚合在未建库时会按需建表，因此这条路由不会因为「库还没建」而失败。

@@ -1,4 +1,4 @@
-//! `jarvis_decisions` 的 SQLite repository。
+//! `decisions` 的 SQLite repository。
 
 use super::{SqliteRuntimeStore, helpers::i64_value};
 use crate::ports::{DecisionStore, DecisionStoreError, RuntimeStore};
@@ -33,7 +33,7 @@ impl DecisionStore for SqliteRuntimeStore {
         let scope_json = serde_json::to_string(&decision.scope).map_err(serialize_error)?;
         let current_revision: u64 = transaction
             .query_row(
-                "SELECT COALESCE(MAX(revision),0) FROM jarvis_decisions WHERE scope_json=?1",
+                "SELECT COALESCE(MAX(revision),0) FROM decisions WHERE scope_json=?1",
                 params![scope_json],
                 |row| row.get::<_, i64>(0),
             )
@@ -51,7 +51,7 @@ impl DecisionStore for SqliteRuntimeStore {
         }
         transaction
             .execute(
-                "INSERT INTO jarvis_decisions(decision_id,scope_json,actor,effect,revision,expires_at_ms,created_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                "INSERT INTO decisions(decision_id,scope_json,actor,effect,revision,expires_at_ms,created_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)",
                 params![
                     decision.decision_id.as_str(),
                     scope_json,
@@ -76,7 +76,7 @@ impl DecisionStore for SqliteRuntimeStore {
         let scope_json = serde_json::to_string(scope).map_err(serialize_error)?;
         connection
             .query_row(
-                "SELECT decision_id,scope_json,actor,effect,revision,expires_at_ms,created_at_ms FROM jarvis_decisions WHERE scope_json=?1 ORDER BY revision DESC, created_at_ms DESC, decision_id DESC LIMIT 1",
+                "SELECT decision_id,scope_json,actor,effect,revision,expires_at_ms,created_at_ms FROM decisions WHERE scope_json=?1 ORDER BY revision DESC, created_at_ms DESC, decision_id DESC LIMIT 1",
                 params![scope_json],
                 read_decision,
             )

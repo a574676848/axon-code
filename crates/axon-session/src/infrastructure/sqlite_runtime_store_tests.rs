@@ -19,13 +19,13 @@ fn runtime_schema_contains_work_ledger_tables_and_hot_query_indexes() {
     store.initialize().expect("初始化目标 schema");
     let connection = rusqlite::Connection::open(path).expect("打开数据库");
     for table in [
-        "jarvis_workspaces",
-        "jarvis_interactions",
-        "jarvis_goals",
-        "jarvis_executions",
-        "jarvis_results",
-        "jarvis_decisions",
-        "jarvis_events",
+        "workspaces",
+        "inbox",
+        "goals",
+        "work_items",
+        "goal_results",
+        "decisions",
+        "ledger_events",
     ] {
         let exists: bool = connection
             .query_row(
@@ -38,7 +38,7 @@ fn runtime_schema_contains_work_ledger_tables_and_hot_query_indexes() {
     }
     let indexed: bool = connection
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='jarvis_interactions_source')",
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='inbox_source')",
             [],
             |row| row.get(0),
         )
@@ -46,14 +46,14 @@ fn runtime_schema_contains_work_ledger_tables_and_hot_query_indexes() {
     assert!(indexed);
     let active_indexed: bool = connection
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='jarvis_interactions_scope_status_recent')",
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='inbox_scope_status_recent')",
             [],
             |row| row.get(0),
         )
         .expect("查询活动 Interaction 索引");
     assert!(active_indexed);
     let claim_index_columns = connection
-        .prepare("PRAGMA index_info(jarvis_interactions_claim)")
+        .prepare("PRAGMA index_info(inbox_claim)")
         .expect("读取 claim 索引")
         .query_map([], |row| row.get::<_, String>(2))
         .expect("枚举 claim 索引列")
@@ -71,14 +71,14 @@ fn runtime_schema_contains_work_ledger_tables_and_hot_query_indexes() {
     );
     let execution_dedupe_indexed: bool = connection
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='jarvis_executions_active_dedupe')",
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='work_items_active_dedupe')",
             [],
             |row| row.get(0),
         )
         .expect("查询 Execution 幂等索引");
     assert!(execution_dedupe_indexed);
     let execution_columns = connection
-        .prepare("PRAGMA table_info(jarvis_executions)")
+        .prepare("PRAGMA table_info(work_items)")
         .expect("读取 Execution 列")
         .query_map([], |row| row.get::<_, String>(1))
         .expect("枚举 Execution 列")
@@ -228,7 +228,7 @@ fn ledger_commit_rolls_back_all_records_on_stale_task_revision() {
         ExecutionStatus::Running
     );
     let connection = rusqlite::Connection::open(store.path()).expect("打开数据库");
-    for table in ["jarvis_results", "jarvis_events"] {
+    for table in ["goal_results", "ledger_events"] {
         let count: i64 = connection
             .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
                 row.get(0)
@@ -256,7 +256,7 @@ fn ledger_commit_rolls_back_all_records_on_stale_task_revision() {
             .status,
         ExecutionStatus::Completed
     );
-    for table in ["jarvis_results", "jarvis_events"] {
+    for table in ["goal_results", "ledger_events"] {
         let count: i64 = connection
             .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
                 row.get(0)
@@ -346,7 +346,7 @@ fn ledger_event_store_is_idempotent_and_replay_does_not_mutate_business_state() 
     );
     let connection = rusqlite::Connection::open(store.path()).expect("打开数据库");
     let count: i64 = connection
-        .query_row("SELECT COUNT(*) FROM jarvis_events", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM ledger_events", [], |row| row.get(0))
         .expect("查询事件数");
     assert_eq!(count, 2);
 }
@@ -473,7 +473,7 @@ fn cancelling_task_persists_request_and_event_and_blocks_claim() {
     let connection = rusqlite::Connection::open(store.path()).expect("打开数据库");
     let event_count: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM jarvis_events WHERE event_type='goal.cancelled'",
+            "SELECT COUNT(*) FROM ledger_events WHERE event_type='goal.cancelled'",
             [],
             |row| row.get(0),
         )

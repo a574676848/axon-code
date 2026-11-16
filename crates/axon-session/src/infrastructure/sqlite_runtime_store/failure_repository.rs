@@ -24,7 +24,7 @@ pub(super) fn fail_action(
     super::SqliteRuntimeStore::ensure_fence(&transaction, host, now_ms)?;
     let attempt: u32 = transaction
         .query_row(
-            "SELECT attempt FROM jarvis_executions WHERE execution_id=?1 AND session_id=?2 AND claimed_by=?3 AND claimed_generation=?4",
+            "SELECT attempt FROM work_items WHERE execution_id=?1 AND session_id=?2 AND claimed_by=?3 AND claimed_generation=?4",
             params![action_id.as_str(), session_id.as_str(), host.host_id.as_str(), host.generation],
             |row| row.get::<_, i64>(0),
         )
@@ -46,13 +46,13 @@ pub(super) fn fail_action(
     });
     transaction
         .execute(
-            "UPDATE jarvis_executions SET status=?1,claimed_by=NULL,claimed_generation=NULL,lease_expires_at_ms=NULL,lease_json=NULL,retry_at_ms=?2 WHERE execution_id=?3 AND session_id=?4 AND claimed_by=?5 AND claimed_generation=?6",
+            "UPDATE work_items SET status=?1,claimed_by=NULL,claimed_generation=NULL,lease_expires_at_ms=NULL,lease_json=NULL,retry_at_ms=?2 WHERE execution_id=?3 AND session_id=?4 AND claimed_by=?5 AND claimed_generation=?6",
             params![status, retry_at_ms.map(super::helpers::i64_value).transpose()?, action_id.as_str(), session_id.as_str(), host.host_id.as_str(), host.generation],
         )
         .map_err(super::helpers::storage)?;
     let previous: i64 = transaction
         .query_row(
-            "SELECT last_event_sequence FROM session_runtimes WHERE session_id=?1",
+            "SELECT last_event_sequence FROM sessions WHERE session_id=?1",
             params![session_id.as_str()],
             |row| row.get(0),
         )
@@ -63,7 +63,7 @@ pub(super) fn fail_action(
         .ok_or_else(|| RuntimeStoreError::Storage("事件序号溢出".to_owned()))?;
     transaction
         .execute(
-            "UPDATE session_runtimes SET status='idle',owner_host_id=?1,owner_generation=?2,last_event_sequence=?3,last_activity_at_ms=?4,updated_at_ms=?4 WHERE session_id=?5",
+            "UPDATE sessions SET status='idle',owner_host_id=?1,owner_generation=?2,last_event_sequence=?3,last_activity_at_ms=?4,updated_at_ms=?4 WHERE session_id=?5",
             params![host.host_id.as_str(), host.generation, i64::try_from(sequence).map_err(|_| RuntimeStoreError::Storage("事件序号超出范围".to_owned()))?, i64::try_from(now_ms).map_err(|_| RuntimeStoreError::Storage("时间戳超出范围".to_owned()))?, session_id.as_str()],
         )
         .map_err(super::helpers::storage)?;

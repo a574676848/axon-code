@@ -29,13 +29,13 @@ fn insert_result(
     let execution_id = format!("execution-{result_id}");
     connection
         .execute(
-            "INSERT INTO jarvis_executions(execution_id,goal_id,attempt,priority,status,created_at_ms,updated_at_ms) VALUES(?1,?2,0,0,'completed',?3,?3)",
+            "INSERT INTO work_items(execution_id,goal_id,attempt,priority,status,created_at_ms,updated_at_ms) VALUES(?1,?2,0,0,'completed',?3,?3)",
             rusqlite::params![execution_id, task.goal_id.as_str(), created_at_ms as i64],
         )
         .expect("写入 Execution");
     connection
         .execute(
-            "INSERT INTO jarvis_results(result_id,goal_id,execution_id,succeeded,summary,receipt_refs_json,artifact_refs_json,error_kind,created_at_ms) VALUES(?1,?2,?3,1,?4,'[]','[]',NULL,?5)",
+            "INSERT INTO goal_results(result_id,goal_id,execution_id,succeeded,summary,receipt_refs_json,artifact_refs_json,error_kind,created_at_ms) VALUES(?1,?2,?3,1,?4,'[]','[]',NULL,?5)",
             rusqlite::params![
                 result_id,
                 task.goal_id.as_str(),

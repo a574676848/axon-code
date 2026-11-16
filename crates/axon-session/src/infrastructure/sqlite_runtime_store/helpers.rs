@@ -73,7 +73,7 @@ impl SqliteRuntimeStore {
         let inserted = {
             let connection = self.connection()?;
             connection
-                .execute("INSERT INTO session_runtimes(session_id,run_session_id,root_session_id,cwd,status,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES(?1,?2,?1,?3,?4,0,0,0,0,?5,?5,?5) ON CONFLICT(session_id) DO NOTHING", params![session_id.as_str(), run_session_id, cwd, SessionRuntimeStatus::Created.as_str(), i64_value(now_ms)?])
+                .execute("INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES(?1,?2,?1,?3,?4,0,0,0,0,?5,?5,?5) ON CONFLICT(session_id) DO NOTHING", params![session_id.as_str(), run_session_id, cwd, SessionRuntimeStatus::Created.as_str(), i64_value(now_ms)?])
                 .map_err(storage)?
         };
         if inserted == 0 {
@@ -101,7 +101,7 @@ impl SqliteRuntimeStore {
     ) -> Result<crate::domain::runtime::SessionRuntimeRecord, RuntimeStoreError> {
         let connection = self.connection()?;
         connection
-            .query_row("SELECT session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms FROM session_runtimes WHERE session_id=?1", params![session_id.as_str()], |row| Ok(crate::domain::runtime::SessionRuntimeRecord { session_id: parse_session_id(row.get(0)?)?, run_session_id: row.get(1)?, root_session_id: parse_session_id(row.get(2)?)?, cwd: row.get(3)?, status: parse_runtime_status(&row.get::<_, String>(4)?), owner_host_id: row.get::<_, Option<String>>(5)?.map(parse_host_id).transpose()?, owner_generation: row.get(6)?, worker_attempt: u32::try_from(row.get::<_, i64>(7)?).map_err(|_| rusqlite::Error::InvalidQuery)?, context_version: u64_value(row.get(8)?)?, last_checkpoint_seq: u64_value(row.get(9)?)?, last_event_sequence: u64_value(row.get(10)?)?, last_activity_at_ms: u64_value(row.get(11)?)? })).optional().map_err(storage)?
+            .query_row("SELECT session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms FROM sessions WHERE session_id=?1", params![session_id.as_str()], |row| Ok(crate::domain::runtime::SessionRuntimeRecord { session_id: parse_session_id(row.get(0)?)?, run_session_id: row.get(1)?, root_session_id: parse_session_id(row.get(2)?)?, cwd: row.get(3)?, status: parse_runtime_status(&row.get::<_, String>(4)?), owner_host_id: row.get::<_, Option<String>>(5)?.map(parse_host_id).transpose()?, owner_generation: row.get(6)?, worker_attempt: u32::try_from(row.get::<_, i64>(7)?).map_err(|_| rusqlite::Error::InvalidQuery)?, context_version: u64_value(row.get(8)?)?, last_checkpoint_seq: u64_value(row.get(9)?)?, last_event_sequence: u64_value(row.get(10)?)?, last_activity_at_ms: u64_value(row.get(11)?)? })).optional().map_err(storage)?
             .ok_or_else(|| RuntimeStoreError::NotFound(session_id.to_string()))
     }
 
@@ -112,7 +112,7 @@ impl SqliteRuntimeStore {
     ) -> Result<Vec<SessionActionRecord>, RuntimeStoreError> {
         let connection = self.connection()?;
         let mut statement = connection
-            .prepare("SELECT execution_id,goal_id,session_id,kind,priority,CASE status WHEN 'completed' THEN 'committed' WHEN 'failed' THEN 'dead_letter' ELSE status END,dedupe_key,payload_json,goal_revision,context_version,claimed_by,claimed_generation,lease_expires_at_ms,attempt FROM jarvis_executions WHERE session_id=?1 AND status NOT IN ('completed','cancelled','failed') ORDER BY priority DESC,created_at_ms ASC,execution_id ASC LIMIT ?2")
+            .prepare("SELECT execution_id,goal_id,session_id,kind,priority,CASE status WHEN 'completed' THEN 'committed' WHEN 'failed' THEN 'dead_letter' ELSE status END,dedupe_key,payload_json,goal_revision,context_version,claimed_by,claimed_generation,lease_expires_at_ms,attempt FROM work_items WHERE session_id=?1 AND status NOT IN ('completed','cancelled','failed') ORDER BY priority DESC,created_at_ms ASC,execution_id ASC LIMIT ?2")
             .map_err(storage)?;
         let rows = statement
             .query_map(
@@ -128,7 +128,7 @@ impl SqliteRuntimeStore {
         host: &DaemonHostRecord,
         now_ms: u64,
     ) -> Result<(), RuntimeStoreError> {
-        let changed = transaction.execute("UPDATE daemon_hosts SET updated_at_ms = updated_at_ms WHERE host_id = ?1 AND generation = ?2 AND state = ?3 AND lease_expires_at_ms > ?4", params![host.host_id.as_str(), host.generation, HOST_STATE_RUNNING, i64_value(now_ms)?]).map_err(storage)?;
+        let changed = transaction.execute("UPDATE daemon_instances SET updated_at_ms = updated_at_ms WHERE host_id = ?1 AND generation = ?2 AND state = ?3 AND lease_expires_at_ms > ?4", params![host.host_id.as_str(), host.generation, HOST_STATE_RUNNING, i64_value(now_ms)?]).map_err(storage)?;
         if changed == 0 {
             return Err(RuntimeStoreError::Fenced);
         }
@@ -191,7 +191,7 @@ impl SessionIngressCursorStore for SqliteRuntimeStore {
         partition: &str,
     ) -> Result<Option<String>, RuntimeStoreError> {
         let connection = self.connection()?;
-        connection.query_row("SELECT cursor_json FROM transport_ingress_cursors WHERE adapter=?1 AND partition_key=?2", params![adapter, partition], |row| row.get(0)).optional().map_err(storage)
+        connection.query_row("SELECT cursor_json FROM ingress_cursors WHERE adapter=?1 AND partition_key=?2", params![adapter, partition], |row| row.get(0)).optional().map_err(storage)
     }
 
     fn save_ingress_cursor(
@@ -202,7 +202,7 @@ impl SessionIngressCursorStore for SqliteRuntimeStore {
         now_ms: u64,
     ) -> Result<(), RuntimeStoreError> {
         let connection = self.connection()?;
-        connection.execute("INSERT INTO transport_ingress_cursors(adapter,partition_key,cursor_json,updated_at_ms) VALUES(?1,?2,?3,?4) ON CONFLICT(adapter,partition_key) DO UPDATE SET cursor_json=excluded.cursor_json,updated_at_ms=excluded.updated_at_ms", params![adapter, partition, cursor_json, i64_value(now_ms)?]).map_err(storage)?;
+        connection.execute("INSERT INTO ingress_cursors(adapter,partition_key,cursor_json,updated_at_ms) VALUES(?1,?2,?3,?4) ON CONFLICT(adapter,partition_key) DO UPDATE SET cursor_json=excluded.cursor_json,updated_at_ms=excluded.updated_at_ms", params![adapter, partition, cursor_json, i64_value(now_ms)?]).map_err(storage)?;
         Ok(())
     }
 }

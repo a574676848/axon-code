@@ -1,4 +1,4 @@
-//! `jarvis_user_questions` 的持久化、幂等、CAS 结算与过期回收测试。
+//! `user_questions` 的持久化、幂等、CAS 结算与过期回收测试。
 
 use super::sqlite_runtime_store::SqliteRuntimeStore;
 use crate::ports::{UserQuestionStore, UserQuestionStoreError};
@@ -61,7 +61,7 @@ fn test_insert_and_idempotency() {
     let conn = rusqlite::Connection::open(fix.store.path()).expect("打开库");
     let count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM jarvis_user_questions WHERE idempotency_key = 'idem-1'",
+            "SELECT COUNT(*) FROM user_questions WHERE idempotency_key = 'idem-1'",
             [],
             |r| r.get(0),
         )

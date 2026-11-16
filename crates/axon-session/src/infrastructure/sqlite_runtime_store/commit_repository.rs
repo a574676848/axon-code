@@ -23,7 +23,7 @@ pub(super) fn update_action_status(
     SqliteRuntimeStore::ensure_fence(&transaction, host, now_ms)?;
     let changed = transaction
          .execute(
-             "UPDATE jarvis_executions SET status=CASE ?1 WHEN 'committed' THEN 'completed' ELSE ?1 END,committed_at_ms=CASE WHEN ?1='committed' THEN ?2 ELSE committed_at_ms END,cancelled_at_ms=CASE WHEN ?1='cancelled' THEN ?2 ELSE cancelled_at_ms END,lease_json=CASE WHEN ?1='running' THEN lease_json ELSE NULL END,lease_expires_at_ms=CASE WHEN ?1='running' THEN lease_expires_at_ms ELSE NULL END WHERE execution_id=?3 AND session_id=?4 AND claimed_by=?5 AND claimed_generation=?6",
+             "UPDATE work_items SET status=CASE ?1 WHEN 'committed' THEN 'completed' ELSE ?1 END,committed_at_ms=CASE WHEN ?1='committed' THEN ?2 ELSE committed_at_ms END,cancelled_at_ms=CASE WHEN ?1='cancelled' THEN ?2 ELSE cancelled_at_ms END,lease_json=CASE WHEN ?1='running' THEN lease_json ELSE NULL END,lease_expires_at_ms=CASE WHEN ?1='running' THEN lease_expires_at_ms ELSE NULL END WHERE execution_id=?3 AND session_id=?4 AND claimed_by=?5 AND claimed_generation=?6",
              params![
                  status.as_str(),
                  i64_value(now_ms)?,
@@ -88,7 +88,7 @@ pub(super) fn commit_action(
     }
     let last_sequence = transaction
         .query_row(
-            "SELECT last_event_sequence FROM session_runtimes WHERE session_id=?1",
+            "SELECT last_event_sequence FROM sessions WHERE session_id=?1",
             params![session_id.as_str()],
             |row| row.get::<_, i64>(0),
         )
@@ -109,7 +109,7 @@ pub(super) fn commit_action(
     }
     let current_goal_id: String = transaction
         .query_row(
-            "SELECT goal_id FROM jarvis_executions WHERE execution_id=?1 AND session_id=?2 AND claimed_by=?3 AND claimed_generation=?4",
+            "SELECT goal_id FROM work_items WHERE execution_id=?1 AND session_id=?2 AND claimed_by=?3 AND claimed_generation=?4",
             params![
                 action_id.as_str(),
                 session_id.as_str(),
@@ -124,7 +124,7 @@ pub(super) fn commit_action(
     if let Some(next_execution) = next_execution {
         transaction
              .execute(
-                 "INSERT INTO jarvis_executions(execution_id,goal_id,session_id,kind,priority,status,dedupe_key,payload_json,goal_revision,context_version,attempt,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,?5,'queued',?6,?7,?8,?9,0,?10,?10) ON CONFLICT(execution_id) DO NOTHING",
+                 "INSERT INTO work_items(execution_id,goal_id,session_id,kind,priority,status,dedupe_key,payload_json,goal_revision,context_version,attempt,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,?5,'queued',?6,?7,?8,?9,0,?10,?10) ON CONFLICT(execution_id) DO NOTHING",
                  params![
                      next_execution.action_id.as_str(),
                      current_goal_id,
@@ -142,7 +142,7 @@ pub(super) fn commit_action(
     }
     let settled = transaction
          .execute(
-             "UPDATE jarvis_executions SET status=CASE WHEN status IN ('failed','cancelled','uncertain') THEN status ELSE 'completed' END,committed_at_ms=?1,lease_json=NULL,lease_expires_at_ms=NULL,claimed_by=NULL,claimed_generation=NULL WHERE execution_id=?2 AND session_id=?3 AND claimed_by=?4 AND claimed_generation=?5",
+             "UPDATE work_items SET status=CASE WHEN status IN ('failed','cancelled','uncertain') THEN status ELSE 'completed' END,committed_at_ms=?1,lease_json=NULL,lease_expires_at_ms=NULL,claimed_by=NULL,claimed_generation=NULL WHERE execution_id=?2 AND session_id=?3 AND claimed_by=?4 AND claimed_generation=?5",
              params![
                  i64_value(now_ms)?,
                  action_id.as_str(),
@@ -157,14 +157,14 @@ pub(super) fn commit_action(
     }
     let checkpoint_seq = transaction
         .query_row(
-            "SELECT last_checkpoint_seq + 1 FROM session_runtimes WHERE session_id=?1",
+            "SELECT last_checkpoint_seq + 1 FROM sessions WHERE session_id=?1",
             params![session_id.as_str()],
             |row| row.get::<_, i64>(0),
         )
         .map_err(storage)?;
     let goal_revision: Option<i64> = transaction
         .query_row(
-            "SELECT goal_revision FROM jarvis_executions WHERE execution_id=?1",
+            "SELECT goal_revision FROM work_items WHERE execution_id=?1",
             params![action_id.as_str()],
             |row| row.get::<_, Option<i64>>(0),
         )
@@ -173,7 +173,7 @@ pub(super) fn commit_action(
         .flatten();
     transaction
          .execute(
-             "INSERT INTO session_checkpoints(session_id,checkpoint_seq,action_id,context_version,tool_receipt_sequence,goal_revision,token_usage,time_usage_ms,agent_tree_summary,transcript_ref,created_at_ms) VALUES(?1,?2,?3,COALESCE((SELECT context_version FROM session_runtimes WHERE session_id=?1),0),?4,?5,?6,?7,?8,?9,?10)",
+             "INSERT INTO session_checkpoints(session_id,checkpoint_seq,action_id,context_version,tool_receipt_sequence,goal_revision,token_usage,time_usage_ms,agent_tree_summary,transcript_ref,created_at_ms) VALUES(?1,?2,?3,COALESCE((SELECT context_version FROM sessions WHERE session_id=?1),0),?4,?5,?6,?7,?8,?9,?10)",
              params![
                  session_id.as_str(),
                  checkpoint_seq,
@@ -190,7 +190,7 @@ pub(super) fn commit_action(
          .map_err(storage)?;
     transaction
          .execute(
-             "UPDATE session_runtimes SET status='idle',owner_host_id=?1,owner_generation=?2,last_checkpoint_seq=last_checkpoint_seq+1,last_event_sequence=?3,last_activity_at_ms=?4,updated_at_ms=?4 WHERE session_id=?5",
+             "UPDATE sessions SET status='idle',owner_host_id=?1,owner_generation=?2,last_checkpoint_seq=last_checkpoint_seq+1,last_event_sequence=?3,last_activity_at_ms=?4,updated_at_ms=?4 WHERE session_id=?5",
              params![
                  host.host_id.as_str(),
                  host.generation,

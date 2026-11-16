@@ -24,7 +24,7 @@ pub(super) fn stop_session(
     cancel_open_actions(&transaction, session_id, now_ms)?;
     let changed = transaction
         .execute(
-            "UPDATE session_runtimes
+            "UPDATE sessions
              SET status='idle',owner_host_id=?1,owner_generation=?2,
                  last_activity_at_ms=?3,updated_at_ms=?3
              WHERE session_id=?4",
@@ -60,7 +60,7 @@ pub(super) fn reset_session(
     cancel_open_actions(&transaction, session_id, now_ms)?;
     let changed = transaction
         .execute(
-            "UPDATE session_runtimes
+            "UPDATE sessions
              SET run_session_id=?1,cwd=?2,status='created',
                  owner_host_id=?3,owner_generation=?4,worker_attempt=worker_attempt+1,
                  context_version=context_version+1,last_activity_at_ms=?5,updated_at_ms=?5
@@ -89,7 +89,7 @@ fn cancel_open_actions(
 ) -> Result<(), RuntimeStoreError> {
     transaction
         .execute(
-            "UPDATE jarvis_executions
+            "UPDATE work_items
              SET status='cancelled',cancelled_at_ms=?1,
                  claimed_by=NULL,claimed_generation=NULL,lease_expires_at_ms=NULL,lease_json=NULL
              WHERE session_id=?2 AND status IN ('queued','waiting','running')",

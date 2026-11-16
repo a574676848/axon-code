@@ -35,7 +35,7 @@ pub(super) fn delete_expired_client_presence(
             Ok(RuntimeCleanupCounts {
                 client_presence: delete_ids_in(
                     transaction,
-                    "jarvis_client_presence",
+                    "client_presence",
                     "client_id",
                     &placeholders,
                     ids,
@@ -83,7 +83,7 @@ fn delete_settled_completion_notifications_by_state(
             Ok(RuntimeCleanupCounts {
                 completion_notifications: delete_ids_in(
                     transaction,
-                    "jarvis_completion_notifications",
+                    "notifications",
                     "notification_id",
                     &placeholders,
                     ids,
@@ -98,8 +98,8 @@ fn delete_settled_completion_notifications_by_state(
 ///
 /// dry-run 统计与实际删除共用同一份谓词，避免口径漂移。
 pub(super) fn expired_client_presence_filter() -> &'static str {
-    "FROM jarvis_client_presence
-     INDEXED BY jarvis_client_presence_expiry
+    "FROM client_presence
+     INDEXED BY client_presence_expiry
      WHERE expires_at_ms < ?1"
 }
 
@@ -109,12 +109,12 @@ pub(super) fn expired_client_presence_filter() -> &'static str {
 /// `pending` / `dispatched` 一律保留，删除它们等同于静默丢弃完成结论。
 pub(super) fn settled_completion_notifications_filter() -> String {
     format!(
-        "FROM jarvis_completion_notifications
-         INDEXED BY jarvis_completion_notifications_retention
+        "FROM notifications
+         INDEXED BY notifications_retention
          WHERE state IN ('{delivered}','{expired}') AND updated_at_ms < ?1
            AND NOT EXISTS (
-               SELECT 1 FROM jarvis_completion_deliveries AS d
-               WHERE d.notification_id = jarvis_completion_notifications.notification_id
+               SELECT 1 FROM notification_deliveries AS d
+               WHERE d.notification_id = notifications.notification_id
                  AND d.state IN ('{pending}','{dispatched}')
            )",
         delivered = NotificationDeliveryState::Delivered.as_str(),
@@ -127,8 +127,8 @@ pub(super) fn settled_completion_notifications_filter() -> String {
 /// 渠道投递记录保留谓词（`?1` 为保留截止时间）：只回收已经终结的渠道投递。
 pub(super) fn settled_completion_deliveries_filter() -> String {
     format!(
-        "FROM jarvis_completion_deliveries
-         INDEXED BY jarvis_completion_deliveries_retention
+        "FROM notification_deliveries
+         INDEXED BY notification_deliveries_retention
          WHERE state IN ('{delivered}','{expired}') AND updated_at_ms < ?1",
         delivered = NotificationDeliveryState::Delivered.as_str(),
         expired = NotificationDeliveryState::Expired.as_str(),
@@ -139,12 +139,12 @@ pub(super) fn settled_completion_notifications_selection_sql_for_state(
     state: NotificationDeliveryState,
 ) -> String {
     format!(
-        "SELECT notification_id FROM jarvis_completion_notifications
-         INDEXED BY jarvis_completion_notifications_retention
+        "SELECT notification_id FROM notifications
+         INDEXED BY notifications_retention
          WHERE state='{}' AND updated_at_ms < ?1
            AND NOT EXISTS (
-               SELECT 1 FROM jarvis_completion_deliveries AS d
-               WHERE d.notification_id = jarvis_completion_notifications.notification_id
+               SELECT 1 FROM notification_deliveries AS d
+               WHERE d.notification_id = notifications.notification_id
                  AND d.state IN ('pending','dispatched')
            )
          ORDER BY updated_at_ms ASC, notification_id ASC LIMIT ?2",
@@ -199,7 +199,7 @@ fn delete_settled_completion_deliveries_by_state(
             Ok(RuntimeCleanupCounts {
                 completion_deliveries: delete_ids_in(
                     transaction,
-                    "jarvis_completion_deliveries",
+                    "notification_deliveries",
                     "rowid",
                     &placeholders,
                     ids,
@@ -214,8 +214,8 @@ pub(super) fn settled_completion_deliveries_selection_sql_for_state(
     state: NotificationDeliveryState,
 ) -> String {
     format!(
-        "SELECT CAST(rowid AS TEXT) FROM jarvis_completion_deliveries
-         INDEXED BY jarvis_completion_deliveries_retention
+        "SELECT CAST(rowid AS TEXT) FROM notification_deliveries
+         INDEXED BY notification_deliveries_retention
          WHERE state='{}' AND updated_at_ms < ?1
          ORDER BY updated_at_ms ASC LIMIT ?2",
         state.as_str(),
@@ -238,7 +238,7 @@ pub(super) fn delete_expired_upgrade_admissions(
             Ok(RuntimeCleanupCounts {
                 upgrade_admissions: delete_ids_in(
                     transaction,
-                    "daemon_upgrade_admissions",
+                    "upgrade_handoffs",
                     "admission_id",
                     &placeholders,
                     ids,
@@ -267,7 +267,7 @@ pub(super) fn delete_session_families_by_ids(
         .map_err(|_| "Daemon runtime Session family 清理事务启动失败".to_owned())?;
     let placeholders = placeholders(ids.len());
     let active_sql = format!(
-        "SELECT COUNT(*) FROM session_runtimes
+        "SELECT COUNT(*) FROM sessions
          WHERE session_id IN ({placeholders}) AND status IN ({active})",
         active = quoted_list(&SESSION_ACTIVE_STATUSES),
     );
@@ -275,7 +275,7 @@ pub(super) fn delete_session_families_by_ids(
         .query_row(&active_sql, params_from_iter(ids.iter()), |row| row.get(0))
         .map_err(|_| "Daemon runtime Session family 活跃状态复核失败".to_owned())?;
     let execution_sql =
-        format!("SELECT COUNT(*) FROM jarvis_executions WHERE session_id IN ({placeholders})");
+        format!("SELECT COUNT(*) FROM work_items WHERE session_id IN ({placeholders})");
     let executions: i64 = transaction
         .query_row(&execution_sql, params_from_iter(ids.iter()), |row| {
             row.get(0)
@@ -294,16 +294,16 @@ pub(super) fn delete_session_families_by_ids(
             &placeholders,
             ids,
         )?,
-        runtime_schedules: delete_ids_in(
+        schedules: delete_ids_in(
             &transaction,
-            "runtime_schedules",
+            "schedules",
             "session_id",
             &placeholders,
             ids,
         )?,
         sessions: delete_ids_in(
             &transaction,
-            "session_runtimes",
+            "sessions",
             "session_id",
             &placeholders,
             ids,
@@ -340,27 +340,27 @@ pub(super) fn delete_terminal_goals(
     delete_family(connection, cutoff_ms, deadline, &sql, |transaction, ids| {
         let placeholders = placeholders(ids.len());
         let reads_sql = format!(
-            "DELETE FROM jarvis_result_reads WHERE result_id IN (
-                 SELECT result_id FROM jarvis_results WHERE goal_id IN ({placeholders})
+            "DELETE FROM goal_result_reads WHERE result_id IN (
+                 SELECT result_id FROM goal_results WHERE goal_id IN ({placeholders})
              )"
         );
         let mut reads_statement = transaction
             .prepare_cached(&reads_sql)
-            .map_err(|_| "Daemon runtime jarvis_result_reads 清理失败".to_owned())?;
+            .map_err(|_| "Daemon runtime goal_result_reads 清理失败".to_owned())?;
         let result_reads = reads_statement
             .execute(params_from_iter(ids.iter()))
-            .map_err(|_| "Daemon runtime jarvis_result_reads 清理失败".to_owned())?;
+            .map_err(|_| "Daemon runtime goal_result_reads 清理失败".to_owned())?;
         Ok(RuntimeCleanupCounts {
             result_reads,
-            results: delete_ids_in(transaction, "jarvis_results", "goal_id", &placeholders, ids)?,
+            results: delete_ids_in(transaction, "goal_results", "goal_id", &placeholders, ids)?,
             executions: delete_ids_in(
                 transaction,
-                "jarvis_executions",
+                "work_items",
                 "goal_id",
                 &placeholders,
                 ids,
             )?,
-            goals: delete_ids_in(transaction, "jarvis_goals", "goal_id", &placeholders, ids)?,
+            goals: delete_ids_in(transaction, "goals", "goal_id", &placeholders, ids)?,
             ..RuntimeCleanupCounts::default()
         })
     })
@@ -368,7 +368,7 @@ pub(super) fn delete_terminal_goals(
 
 /// 删除终态且超出保留期的 Interaction。
 ///
-/// `jarvis_interactions_retention` 以 `received_at_ms` 为前导列：强制走该索引
+/// `inbox_retention` 以 `received_at_ms` 为前导列：强制走该索引
 /// 可同时满足范围过滤与 `ORDER BY`，避免优化器改走覆盖索引后追加临时排序。
 pub(super) fn delete_terminal_interactions(
     connection: &mut Connection,
@@ -381,7 +381,7 @@ pub(super) fn delete_terminal_interactions(
         Ok(RuntimeCleanupCounts {
             interactions: delete_ids_in(
                 transaction,
-                "jarvis_interactions",
+                "inbox",
                 "interaction_id",
                 &placeholders,
                 ids,
@@ -393,7 +393,7 @@ pub(super) fn delete_terminal_interactions(
 
 /// 删除已过期的 Decision；无过期时间的权威决策长期保留。
 ///
-/// 过期行由部分索引 `jarvis_decisions_expiry` 直接按 `expires_at_ms` 有序定位，
+/// 过期行由部分索引 `decisions_expiry` 直接按 `expires_at_ms` 有序定位，
 /// 避免在权威决策越积越多时退化为「全索引扫描 + 临时排序」。
 pub(super) fn delete_expired_decisions(
     connection: &mut Connection,
@@ -410,7 +410,7 @@ pub(super) fn delete_expired_decisions(
             Ok(RuntimeCleanupCounts {
                 decisions: delete_ids_in(
                     transaction,
-                    "jarvis_decisions",
+                    "decisions",
                     "decision_id",
                     &placeholders,
                     ids,
@@ -431,14 +431,14 @@ pub(super) fn delete_expired_events(
     delete_family(connection, cutoff_ms, deadline, &sql, |transaction, ids| {
         let placeholders = placeholders(ids.len());
         Ok(RuntimeCleanupCounts {
-            events: delete_ids_in(transaction, "jarvis_events", "event_id", &placeholders, ids)?,
+            events: delete_ids_in(transaction, "ledger_events", "event_id", &placeholders, ids)?,
             ..RuntimeCleanupCounts::default()
         })
     })
 }
 
 /// 删除租约长期过期且不再被 Session 或升级准入引用的 Daemon Host 记录。
-pub(super) fn delete_expired_daemon_hosts(
+pub(super) fn delete_expired_daemon_instances(
     connection: &mut Connection,
     cutoff_ms: i64,
     deadline: Instant,
@@ -447,13 +447,13 @@ pub(super) fn delete_expired_daemon_hosts(
         connection,
         cutoff_ms,
         deadline,
-        &expired_daemon_hosts_selection_sql(),
+        &expired_daemon_instances_selection_sql(),
         |transaction, ids| {
             let placeholders = placeholders(ids.len());
             Ok(RuntimeCleanupCounts {
-                daemon_hosts: delete_ids_in(
+                daemon_instances: delete_ids_in(
                     transaction,
-                    "daemon_hosts",
+                    "daemon_instances",
                     "host_id",
                     &placeholders,
                     ids,
@@ -466,7 +466,7 @@ pub(super) fn delete_expired_daemon_hosts(
 
 /// 升级准入清理的批次选择 SQL：dry-run 统计、实际删除与执行计划审计共用。
 pub(super) fn expired_upgrade_admissions_selection_sql() -> String {
-    "SELECT admission_id FROM daemon_upgrade_admissions
+    "SELECT admission_id FROM upgrade_handoffs
      WHERE deadline_at_ms < ?1
      ORDER BY deadline_at_ms ASC
      LIMIT ?2"
@@ -481,8 +481,8 @@ pub(super) fn terminal_goals_selection_sql() -> String {
 /// Interaction 清理的批次选择 SQL：固定走保留期索引，避免临时排序。
 pub(super) fn terminal_interactions_selection_sql() -> String {
     format!(
-        "SELECT interaction_id FROM jarvis_interactions
-         INDEXED BY jarvis_interactions_retention
+        "SELECT interaction_id FROM inbox
+         INDEXED BY inbox_retention
          WHERE status IN ({terminal})
            AND received_at_ms < ?1
          ORDER BY received_at_ms ASC
@@ -493,8 +493,8 @@ pub(super) fn terminal_interactions_selection_sql() -> String {
 
 /// Decision 清理的批次选择 SQL：过期行由部分索引按到期时间有序定位。
 pub(super) fn expired_decisions_selection_sql() -> String {
-    "SELECT decision_id FROM jarvis_decisions
-     INDEXED BY jarvis_decisions_expiry
+    "SELECT decision_id FROM decisions
+     INDEXED BY decisions_expiry
      WHERE expires_at_ms IS NOT NULL AND expires_at_ms < ?1
      ORDER BY expires_at_ms ASC
      LIMIT ?2"
@@ -504,9 +504,9 @@ pub(super) fn expired_decisions_selection_sql() -> String {
 /// Ledger Event 清理的批次选择 SQL：按 sequence 索引推进并保留最新一段。
 pub(super) fn expired_events_selection_sql() -> String {
     format!(
-        "SELECT event_id FROM jarvis_events
+        "SELECT event_id FROM ledger_events
          WHERE occurred_at_ms < ?1
-           AND sequence <= (SELECT COALESCE(MAX(sequence), 0) FROM jarvis_events) - {retained}
+           AND sequence <= (SELECT COALESCE(MAX(sequence), 0) FROM ledger_events) - {retained}
          ORDER BY sequence ASC
          LIMIT ?2",
         retained = LEDGER_EVENT_MIN_RETAINED,
@@ -514,17 +514,17 @@ pub(super) fn expired_events_selection_sql() -> String {
 }
 
 /// Daemon Host 清理的批次选择 SQL：租约过期索引 + 两条引用保护子查询。
-pub(super) fn expired_daemon_hosts_selection_sql() -> String {
-    "SELECT host_id FROM daemon_hosts
+pub(super) fn expired_daemon_instances_selection_sql() -> String {
+    "SELECT host_id FROM daemon_instances
      WHERE lease_expires_at_ms < ?1
        AND NOT EXISTS (
-           SELECT 1 FROM session_runtimes
-           WHERE session_runtimes.owner_host_id = daemon_hosts.host_id
+           SELECT 1 FROM sessions
+           WHERE sessions.owner_host_id = daemon_instances.host_id
        )
        AND NOT EXISTS (
-           SELECT 1 FROM daemon_upgrade_admissions
-           INDEXED BY daemon_upgrade_admissions_owner
-           WHERE daemon_upgrade_admissions.old_host_id = daemon_hosts.host_id
+           SELECT 1 FROM upgrade_handoffs
+           INDEXED BY upgrade_handoffs_owner
+           WHERE upgrade_handoffs.old_host_id = daemon_instances.host_id
        )
      LIMIT ?2"
         .to_owned()
@@ -551,7 +551,7 @@ pub(super) fn delete_expired_agent_messages(
             Ok(RuntimeCleanupCounts {
                 agent_messages: delete_ids_in(
                     transaction,
-                    "jarvis_agent_messages",
+                    "agent_messages",
                     "message_id",
                     &placeholders,
                     ids,
@@ -564,8 +564,8 @@ pub(super) fn delete_expired_agent_messages(
 
 /// agent 间消息保留谓词（`?1` 为保留截止时间）：dry-run 与实际删除共用。
 pub(super) fn expired_agent_messages_filter() -> &'static str {
-    "FROM jarvis_agent_messages
-     INDEXED BY jarvis_agent_messages_retention
+    "FROM agent_messages
+     INDEXED BY agent_messages_retention
      WHERE expires_at_ms < ?1"
 }
 
@@ -598,7 +598,7 @@ pub(super) fn delete_expired_continuations(
             Ok(RuntimeCleanupCounts {
                 continuations: delete_ids_in(
                     transaction,
-                    "jarvis_continuations",
+                    "continuations",
                     "continuation_id",
                     &placeholders,
                     ids,
@@ -611,8 +611,8 @@ pub(super) fn delete_expired_continuations(
 
 /// continuation 保留谓词（`?1` 为保留截止时间）：dry-run 与实际删除共用。
 pub(super) fn expired_continuations_filter() -> &'static str {
-    "FROM jarvis_continuations
-     INDEXED BY jarvis_continuations_retention
+    "FROM continuations
+     INDEXED BY continuations_retention
      WHERE expires_at_ms < ?1"
 }
 
@@ -640,7 +640,7 @@ pub(super) fn delete_expired_user_questions(
             Ok(RuntimeCleanupCounts {
                 user_questions: delete_ids_in(
                     transaction,
-                    "jarvis_user_questions",
+                    "user_questions",
                     "question_id",
                     &placeholders,
                     ids,
@@ -652,7 +652,7 @@ pub(super) fn delete_expired_user_questions(
 }
 
 pub(super) fn expired_user_questions_filter() -> &'static str {
-    "FROM jarvis_user_questions WHERE expires_at_ms < ?1"
+    "FROM user_questions WHERE expires_at_ms < ?1"
 }
 
 pub(super) fn expired_user_questions_selection_sql() -> String {

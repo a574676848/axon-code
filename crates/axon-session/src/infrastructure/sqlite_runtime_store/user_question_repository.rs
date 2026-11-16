@@ -1,4 +1,4 @@
-//! `jarvis_user_questions` 的 SQLite 实现。
+//! `user_questions` 的 SQLite 实现。
 
 use super::SqliteRuntimeStore;
 use crate::ports::{RuntimeStore, RuntimeStoreError, UserQuestionStore, UserQuestionStoreError};
@@ -20,7 +20,7 @@ impl UserQuestionStore for SqliteRuntimeStore {
 
         let changed = connection
             .execute(
-                "INSERT INTO jarvis_user_questions(\
+                "INSERT INTO user_questions(\
                     question_id, idempotency_key, lane_id, session_id, interaction_id, turn_id, \
                     tool_call_id, questions_json, handoff_text, state, deadline_at_ms, \
                     answer_json, answered_at_ms, answered_channel, delivered, delivery_mode, \
@@ -56,7 +56,7 @@ impl UserQuestionStore for SqliteRuntimeStore {
 
         // 幂等冲突时，查询并返回已存在的记录
         let sql = format!(
-            "SELECT {USER_QUESTION_COLUMNS} FROM jarvis_user_questions WHERE idempotency_key = ?1 LIMIT 1"
+            "SELECT {USER_QUESTION_COLUMNS} FROM user_questions WHERE idempotency_key = ?1 LIMIT 1"
         );
         connection
             .query_row(&sql, params![record.idempotency_key], read_user_question)
@@ -70,7 +70,7 @@ impl UserQuestionStore for SqliteRuntimeStore {
         self.initialize().map_err(runtime_error)?;
         let connection = self.connection().map_err(runtime_error)?;
         let sql = format!(
-            "SELECT {USER_QUESTION_COLUMNS} FROM jarvis_user_questions WHERE question_id = ?1 LIMIT 1"
+            "SELECT {USER_QUESTION_COLUMNS} FROM user_questions WHERE question_id = ?1 LIMIT 1"
         );
         connection
             .query_row(&sql, params![question_id], read_user_question)
@@ -85,7 +85,7 @@ impl UserQuestionStore for SqliteRuntimeStore {
         self.initialize().map_err(runtime_error)?;
         let connection = self.connection().map_err(runtime_error)?;
         let sql = format!(
-            "SELECT {USER_QUESTION_COLUMNS} FROM jarvis_user_questions WHERE tool_call_id = ?1 LIMIT 1"
+            "SELECT {USER_QUESTION_COLUMNS} FROM user_questions WHERE tool_call_id = ?1 LIMIT 1"
         );
         connection
             .query_row(&sql, params![call_id], read_user_question)
@@ -107,7 +107,7 @@ impl UserQuestionStore for SqliteRuntimeStore {
 
         if let Some(st) = state {
             let sql = format!(
-                "SELECT {USER_QUESTION_COLUMNS} FROM jarvis_user_questions \
+                "SELECT {USER_QUESTION_COLUMNS} FROM user_questions \
                  WHERE lane_id = ?1 AND state = ?2 \
                  ORDER BY created_at_ms DESC LIMIT ?3"
             );
@@ -120,7 +120,7 @@ impl UserQuestionStore for SqliteRuntimeStore {
             }
         } else {
             let sql = format!(
-                "SELECT {USER_QUESTION_COLUMNS} FROM jarvis_user_questions \
+                "SELECT {USER_QUESTION_COLUMNS} FROM user_questions \
                  WHERE lane_id = ?1 \
                  ORDER BY created_at_ms DESC LIMIT ?2"
             );
@@ -149,7 +149,7 @@ impl UserQuestionStore for SqliteRuntimeStore {
 
         let changed = connection
             .execute(
-                "UPDATE jarvis_user_questions \
+                "UPDATE user_questions \
                  SET state = 'answered', \
                      answer_json = ?1, \
                      answered_at_ms = ?2, \
@@ -163,7 +163,7 @@ impl UserQuestionStore for SqliteRuntimeStore {
 
         if changed > 0 {
             let sql = format!(
-                "SELECT {USER_QUESTION_COLUMNS} FROM jarvis_user_questions \
+                "SELECT {USER_QUESTION_COLUMNS} FROM user_questions \
                  WHERE tool_call_id = ?1 OR question_id = ?1 LIMIT 1"
             );
             return connection
@@ -172,7 +172,7 @@ impl UserQuestionStore for SqliteRuntimeStore {
         }
 
         // 没更新到行，检查是否存在以及当前状态
-        let check_sql = "SELECT state FROM jarvis_user_questions WHERE tool_call_id = ?1 OR question_id = ?1 LIMIT 1";
+        let check_sql = "SELECT state FROM user_questions WHERE tool_call_id = ?1 OR question_id = ?1 LIMIT 1";
         let existing_state: Option<String> = connection
             .query_row(check_sql, params![call_id], |row| row.get(0))
             .optional()
@@ -199,7 +199,7 @@ impl UserQuestionStore for SqliteRuntimeStore {
 
         let changed = connection
             .execute(
-                "UPDATE jarvis_user_questions \
+                "UPDATE user_questions \
                  SET state = ?1, \
                      deadline_at_ms = COALESCE(?2, deadline_at_ms), \
                      handoff_text = COALESCE(?3, handoff_text) \
@@ -226,7 +226,7 @@ impl UserQuestionStore for SqliteRuntimeStore {
         let limit_i64 = i64::try_from(limit).unwrap_or(50);
 
         let sql = format!(
-            "SELECT {USER_QUESTION_COLUMNS} FROM jarvis_user_questions \
+            "SELECT {USER_QUESTION_COLUMNS} FROM user_questions \
              WHERE state = 'answered' AND delivered = 0 \
              ORDER BY created_at_ms ASC LIMIT ?1"
         );
@@ -252,7 +252,7 @@ impl UserQuestionStore for SqliteRuntimeStore {
 
         let changed = connection
             .execute(
-                "UPDATE jarvis_user_questions \
+                "UPDATE user_questions \
                  SET delivered = 1, delivery_mode = ?2 \
                  WHERE question_id = ?1",
                 params![question_id, delivery_mode],
@@ -273,10 +273,10 @@ impl UserQuestionStore for SqliteRuntimeStore {
 
         let expired = connection
             .execute(
-                "UPDATE jarvis_user_questions \
+                "UPDATE user_questions \
                  SET state = ?1 \
                  WHERE question_id IN ( \
-                     SELECT question_id FROM jarvis_user_questions \
+                     SELECT question_id FROM user_questions \
                      WHERE expires_at_ms <= ?2 AND state IN ('pending', 'suspended') \
                      LIMIT ?3 \
                  )",

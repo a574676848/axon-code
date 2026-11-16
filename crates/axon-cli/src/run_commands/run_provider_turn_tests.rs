@@ -8,7 +8,7 @@ use axon_session_runtime::{JarvisRuntimeProfile, ProviderTurnRequest};
 use serde_json::{Value, json};
 use std::path::Path;
 
-/// `jarvis_executions.kind` 默认值：后台 Goal Execution 的持久 Action 类型。
+/// `work_items.kind` 默认值：后台 Goal Execution 的持久 Action 类型。
 const GOAL_EXECUTION_ACTION_KIND: &str = "turn";
 
 /// 真机样本：中继回 response.failed 不给 code，渠道链已尝试 2 次。

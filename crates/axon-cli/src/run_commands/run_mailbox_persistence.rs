@@ -2,7 +2,7 @@
 //!
 //! 内核（`axon-agent-runtime`）不依赖数据库，只持有
 //! [`axon_agent_runtime::AgentMailboxPersistence`] 的 trait 对象；本模块把该端口
-//! 接到 `axon-session` 的 `jarvis_agent_messages` 仓储上，并绑定当前会话作用域。
+//! 接到 `axon-session` 的 `agent_messages` 仓储上，并绑定当前会话作用域。
 //!
 //! 作用域绑定在本层而不是内核：`owner_id` 是「根会话」概念，只有装配层知道它，
 //! 而幂等键需要它作为前缀才能既跨进程稳定又不跨会话误判。

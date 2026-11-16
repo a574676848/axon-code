@@ -1,4 +1,4 @@
-//! `jarvis_client_presence` 与 `jarvis_completion_notifications` 的 SQLite 实现。
+//! `client_presence` 与 `notifications` 的 SQLite 实现。
 //!
 //! 完成通知是 daemon 的 durable 收件箱：先落库再派发，只有渠道确认送达或
 //! 主 turn 汇总回复已写入渠道出站队列时才允许确认 Result。
@@ -34,7 +34,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         connection
             .execute(
-                "INSERT INTO jarvis_client_presence(client_id,workspace_id,channel,destination,registered_at_ms,expires_at_ms)
+                "INSERT INTO client_presence(client_id,workspace_id,channel,destination,registered_at_ms,expires_at_ms)
                  VALUES(?1,?2,?3,?4,?5,?6)
                  ON CONFLICT(client_id) DO UPDATE SET
                     workspace_id=excluded.workspace_id,
@@ -60,7 +60,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         connection
             .execute(
-                "DELETE FROM jarvis_client_presence WHERE client_id=?1",
+                "DELETE FROM client_presence WHERE client_id=?1",
                 params![client_id],
             )
             .map_err(storage_error)?;
@@ -76,7 +76,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         connection
             .query_row(
                 "SELECT client_id,workspace_id,channel,destination,registered_at_ms,expires_at_ms
-                 FROM jarvis_client_presence WHERE client_id=?1",
+                 FROM client_presence WHERE client_id=?1",
                 params![client_id],
                 read_presence,
             )
@@ -94,7 +94,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
             serde_json::to_string(&notification.result_ids).map_err(storage_error)?;
         let changed = connection
             .execute(
-                "INSERT INTO jarvis_completion_notifications(notification_id,workspace_id,goal_id,execution_id,content,summary,result_ids_json,state,created_at_ms,updated_at_ms,expires_at_ms)
+                "INSERT INTO notifications(notification_id,workspace_id,goal_id,execution_id,content,summary,result_ids_json,state,created_at_ms,updated_at_ms,expires_at_ms)
                  VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
                  ON CONFLICT(execution_id) DO NOTHING",
                 params![
@@ -125,7 +125,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
             .query_row(
                 &format!(
                     "SELECT {NOTIFICATION_COLUMNS}
-                     FROM jarvis_completion_notifications WHERE notification_id=?1"
+                     FROM notifications WHERE notification_id=?1"
                 ),
                 params![notification_id],
                 read_notification,
@@ -146,7 +146,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         let mut statement = connection
             .prepare(&format!(
                 "SELECT {NOTIFICATION_COLUMNS}
-                 FROM jarvis_completion_notifications
+                 FROM notifications
                  WHERE state='pending'
                  ORDER BY created_at_ms ASC, notification_id ASC LIMIT ?1"
             ))
@@ -171,13 +171,13 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         let mut statement = connection
             .prepare(&format!(
                 "SELECT {NOTIFICATION_COLUMNS}
-                 FROM jarvis_completion_notifications INDEXED BY jarvis_completion_notifications_expiry_all
+                 FROM notifications INDEXED BY notifications_expiry_all
                  WHERE expires_at_ms <= ?1
                    AND (
                        state IN ('pending','dispatched')
                        OR EXISTS (
-                           SELECT 1 FROM jarvis_completion_deliveries AS d
-                           WHERE d.notification_id=jarvis_completion_notifications.notification_id
+                           SELECT 1 FROM notification_deliveries AS d
+                           WHERE d.notification_id=notifications.notification_id
                              AND d.state IN ('pending','dispatched')
                        )
                    )
@@ -210,8 +210,8 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
             .join(",");
         let mut statement = connection
             .prepare(&format!(
-                "SELECT e.execution_id FROM jarvis_executions AS e
-                 LEFT JOIN jarvis_completion_notifications AS n ON n.execution_id=e.execution_id
+                "SELECT e.execution_id FROM work_items AS e
+                 LEFT JOIN notifications AS n ON n.execution_id=e.execution_id
                  WHERE e.status IN ({statuses}) AND n.notification_id IS NULL
                  ORDER BY e.updated_at_ms ASC, e.execution_id ASC LIMIT ?1"
             ))
@@ -239,7 +239,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
             // 幂等登记：已存在的目标保留既有状态，重复派发不会把已确认渠道退回。
             let changed = connection
                 .execute(
-                    "INSERT INTO jarvis_completion_deliveries(notification_id,channel,destination,state,created_at_ms,updated_at_ms)
+                    "INSERT INTO notification_deliveries(notification_id,channel,destination,state,created_at_ms,updated_at_ms)
                      VALUES(?1,?2,?3,'pending',?4,?4)
                      ON CONFLICT(notification_id,channel,destination) DO NOTHING",
                     params![notification_id, target.channel, target.destination, now],
@@ -259,7 +259,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         let mut statement = connection
             .prepare(&format!(
                 "SELECT {DELIVERY_COLUMNS}
-                 FROM jarvis_completion_deliveries
+                 FROM notification_deliveries
                  WHERE notification_id=?1
                  ORDER BY created_at_ms ASC, channel ASC, destination ASC"
             ))
@@ -282,11 +282,11 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         // 没有可交付内容，推进只能等汇总落库，绝不允许把空正文当成完成消息投递。
         let changed = connection
             .execute(
-                "UPDATE jarvis_completion_deliveries
+                "UPDATE notification_deliveries
                  SET state='dispatched', updated_at_ms=?2
                  WHERE notification_id=?1 AND state='pending'
                    AND EXISTS (
-                       SELECT 1 FROM jarvis_completion_notifications AS n
+                       SELECT 1 FROM notifications AS n
                        WHERE n.notification_id=?1 AND trim(n.summary) <> ''
                    )",
                 params![notification_id, i64_value(now_ms).map_err(storage_error)?],
@@ -311,9 +311,9 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         let mut statement = connection
             .prepare(&format!(
                 "SELECT {INBOX_COLUMNS}
-                 FROM jarvis_completion_deliveries AS d
-                 INDEXED BY jarvis_completion_deliveries_target_inbox
-                 JOIN jarvis_completion_notifications AS n ON n.notification_id=d.notification_id
+                 FROM notification_deliveries AS d
+                 INDEXED BY notification_deliveries_target_inbox
+                 JOIN notifications AS n ON n.notification_id=d.notification_id
                  WHERE d.channel=?1 AND d.destination=?2 AND n.workspace_id=?3
                    AND d.state='dispatched' AND n.state<>'expired' AND n.expires_at_ms>?4
                  ORDER BY n.created_at_ms ASC, n.notification_id ASC LIMIT ?5"
@@ -349,9 +349,9 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         let mut statement = connection
             .prepare(&format!(
                 "SELECT {INBOX_COLUMNS}
-                 FROM jarvis_completion_deliveries AS d
-                 INDEXED BY jarvis_completion_deliveries_inbox
-                 JOIN jarvis_completion_notifications AS n ON n.notification_id=d.notification_id
+                 FROM notification_deliveries AS d
+                 INDEXED BY notification_deliveries_inbox
+                 JOIN notifications AS n ON n.notification_id=d.notification_id
                  WHERE d.channel=?1
                    AND d.state='dispatched' AND n.state<>'expired' AND n.expires_at_ms>?2
                  ORDER BY n.created_at_ms ASC, n.notification_id ASC LIMIT ?3"
@@ -383,7 +383,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         let changed = connection
             .execute(
-                "UPDATE jarvis_completion_deliveries
+                "UPDATE notification_deliveries
                  SET state=?4, updated_at_ms=?5
                  WHERE notification_id=?1 AND channel=?2 AND destination=?3
                    AND state='dispatched'",
@@ -408,7 +408,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         let changed = connection
             .execute(
-                "UPDATE jarvis_completion_deliveries
+                "UPDATE notification_deliveries
                  SET state='expired', updated_at_ms=?2
                  WHERE notification_id=?1 AND state IN ('pending','dispatched')",
                 params![notification_id, i64_value(now_ms).map_err(storage_error)?],
@@ -427,7 +427,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         connection
             .execute(
-                "UPDATE jarvis_completion_notifications
+                "UPDATE notifications
                  SET summary=?2, updated_at_ms=?3
                  WHERE notification_id=?1",
                 params![
@@ -450,7 +450,7 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         connection
             .execute(
-                "UPDATE jarvis_completion_notifications
+                "UPDATE notifications
                  SET state=?2, updated_at_ms=?3
                  WHERE notification_id=?1 AND state<>?2",
                 params![
@@ -478,9 +478,9 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
         let mut statement = connection
             .prepare(
                 "SELECT d.notification_id
-                 FROM jarvis_completion_deliveries AS d
-                 INDEXED BY jarvis_completion_deliveries_retention
-                 JOIN jarvis_completion_notifications AS n ON n.notification_id=d.notification_id
+                 FROM notification_deliveries AS d
+                 INDEXED BY notification_deliveries_retention
+                 JOIN notifications AS n ON n.notification_id=d.notification_id
                  WHERE d.state='pending' AND n.state<>'expired' AND n.expires_at_ms>?1
                    AND trim(n.summary) <> ''
                  GROUP BY d.notification_id

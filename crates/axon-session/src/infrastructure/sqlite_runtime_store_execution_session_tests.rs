@@ -24,7 +24,7 @@ fn goal(goal_id: &str, now_ms: u64) -> GoalRecord {
     record
 }
 
-/// 目标执行会话必须先登记到 `session_runtimes`：执行表对会话有外键。
+/// 目标执行会话必须先登记到 `sessions`：执行表对会话有外键。
 fn session(store: &SqliteRuntimeStore, session_id: &str) -> DaemonSessionId {
     let id = DaemonSessionId::new(session_id).expect("session");
     store.create_session(&id, "E:/repo", 10).expect("session");

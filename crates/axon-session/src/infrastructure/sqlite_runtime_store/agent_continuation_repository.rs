@@ -1,4 +1,4 @@
-//! `jarvis_continuations` 的 SQLite 实现。
+//! `continuations` 的 SQLite 实现。
 //!
 //! 一条记录承载子代理终态的一次引用：摘要（落盘文本）与 artifact 路径（磁盘绝对路径）
 //! 是恢复装配的解析凭据，`job_ref` 只作可读线索：它含进程代际，跨进程必然失效。
@@ -32,7 +32,7 @@ impl AgentContinuationStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         let changed = connection
             .execute(
-                "INSERT INTO jarvis_continuations(continuation_id,idempotency_key,owner_id,\
+                "INSERT INTO continuations(continuation_id,idempotency_key,owner_id,\
                  parent_session_id,child_session_id,agent_path,job_ref,execution_ref,terminal_kind,\
                  exit_reason,summary,artifact_path,token_input,token_output,token_reasoning,state,\
                  consumed_at_ms,consumed_by,attempt_count,last_attempt_at_ms,retry_at_ms,last_error,\
@@ -74,7 +74,7 @@ impl AgentContinuationStore for SqliteRuntimeStore {
         // 幂等命中：读回既有记录的状态，让调用方按事实回执而不是猜测结局。
         let existing: Option<String> = connection
             .query_row(
-                "SELECT state FROM jarvis_continuations WHERE idempotency_key=?1",
+                "SELECT state FROM continuations WHERE idempotency_key=?1",
                 params![record.idempotency_key],
                 |row| row.get(0),
             )
@@ -98,7 +98,7 @@ impl AgentContinuationStore for SqliteRuntimeStore {
         connection
             .query_row(
                 &format!(
-                    "SELECT {CONTINUATION_COLUMNS} FROM jarvis_continuations \
+                    "SELECT {CONTINUATION_COLUMNS} FROM continuations \
                      WHERE continuation_id=?1"
                 ),
                 params![continuation_id],
@@ -117,7 +117,7 @@ impl AgentContinuationStore for SqliteRuntimeStore {
         connection
             .query_row(
                 &format!(
-                    "SELECT {CONTINUATION_COLUMNS} FROM jarvis_continuations \
+                    "SELECT {CONTINUATION_COLUMNS} FROM continuations \
                      WHERE idempotency_key=?1"
                 ),
                 params![idempotency_key],
@@ -141,8 +141,8 @@ impl AgentContinuationStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         let mut statement = connection
             .prepare(&format!(
-                "SELECT {CONTINUATION_COLUMNS} FROM jarvis_continuations \
-                 INDEXED BY jarvis_continuations_owner \
+                "SELECT {CONTINUATION_COLUMNS} FROM continuations \
+                 INDEXED BY continuations_owner \
                  WHERE owner_id=?1 AND parent_session_id=?2 AND state='pending' \
                  AND expires_at_ms>?3 AND (retry_at_ms IS NULL OR retry_at_ms<=?3) \
                  ORDER BY created_at_ms ASC, continuation_id ASC LIMIT ?4"
@@ -173,7 +173,7 @@ impl AgentContinuationStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         let changed = connection
             .execute(
-                "UPDATE jarvis_continuations \
+                "UPDATE continuations \
                  SET state='consumed', consumed_at_ms=?2, consumed_by=?3, retry_at_ms=NULL, \
                      last_error=NULL \
                  WHERE continuation_id=?1 AND state='pending'",
@@ -200,7 +200,7 @@ impl AgentContinuationStore for SqliteRuntimeStore {
         // 因此这里只记账与延后，不设尝试上限。
         let changed = connection
             .execute(
-                "UPDATE jarvis_continuations \
+                "UPDATE continuations \
                  SET attempt_count=attempt_count+1, last_attempt_at_ms=?2, last_error=?3, \
                      retry_at_ms=?4 \
                  WHERE continuation_id=?1 AND state='pending'",
@@ -228,10 +228,10 @@ impl AgentContinuationStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         let changed = connection
             .execute(
-                "UPDATE jarvis_continuations SET state='expired' \
+                "UPDATE continuations SET state='expired' \
                  WHERE continuation_id IN (\
-                     SELECT continuation_id FROM jarvis_continuations \
-                     INDEXED BY jarvis_continuations_retention \
+                     SELECT continuation_id FROM continuations \
+                     INDEXED BY continuations_retention \
                      WHERE owner_id=?1 AND state='pending' AND expires_at_ms<=?2 \
                      ORDER BY expires_at_ms ASC, continuation_id ASC LIMIT ?3\
                  )",
@@ -272,7 +272,7 @@ impl AgentContinuationStore for SqliteRuntimeStore {
             conditions.push("state=?");
             values.push(Value::Text(state.as_str().to_owned()));
         }
-        let mut sql = format!("SELECT {CONTINUATION_COLUMNS} FROM jarvis_continuations");
+        let mut sql = format!("SELECT {CONTINUATION_COLUMNS} FROM continuations");
         if !conditions.is_empty() {
             sql.push_str(" WHERE ");
             sql.push_str(&conditions.join(" AND "));

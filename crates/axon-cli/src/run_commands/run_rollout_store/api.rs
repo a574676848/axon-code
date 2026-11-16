@@ -55,7 +55,7 @@ pub(crate) fn load_session_usage(
 
 /// 读取一条会话截至当前的累计用量（总量与各分桶）。
 ///
-/// `session_id` 是运行时 session 标识（车道要先经 `session_runtimes` 解析成它的 run
+/// `session_id` 是运行时 session 标识（车道要先经 `sessions` 解析成它的 run
 /// session）。与 [`load_session_usage`] 的区别在口径：那个取的是**最近一轮**的用量，用于
 /// 续接远程 provider；这里取的是整条会话各轮之和，用于界面上的会话累计读数。
 /// 账本尚未建立时读作全零。

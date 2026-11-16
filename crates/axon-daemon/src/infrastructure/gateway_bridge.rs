@@ -346,7 +346,7 @@ where
     ///    与请求工作区一致。**不解析 `goal-session-` 前缀**：前缀只是生成约定，不是授权事实。
     ///
     /// 注意：子会话 ID 里嵌的是父的**运行会话 ID**（rollout 的 UUID），而不是车道 ID，
-    /// 所以这里不能拿它去查 `session_runtimes`（那张表登记的是车道会话）。
+    /// 所以这里不能拿它去查 `sessions`（那张表登记的是车道会话）。
     fn subscribe_session_stream(
         &self,
         workspace_id: &str,

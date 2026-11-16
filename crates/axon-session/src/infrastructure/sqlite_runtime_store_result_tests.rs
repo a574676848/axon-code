@@ -24,13 +24,13 @@ fn result_store_reads_only_unacknowledged_results_in_scope() {
     for (result_id, created_at) in [("result-read", 2_i64), ("result-acked", 3_i64)] {
         connection
             .execute(
-                "INSERT INTO jarvis_executions(execution_id,goal_id,attempt,priority,status,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,'completed',?5,?5)",
+                "INSERT INTO work_items(execution_id,goal_id,attempt,priority,status,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,'completed',?5,?5)",
                 rusqlite::params![format!("execution-{result_id}"), task.goal_id.as_str(), if result_id == "result-read" { 0_i64 } else { 1_i64 }, 0_i64, created_at],
             )
             .expect("写入 Execution");
         connection
             .execute(
-                "INSERT INTO jarvis_results(result_id,goal_id,execution_id,succeeded,summary,receipt_refs_json,artifact_refs_json,error_kind,created_at_ms) VALUES(?1,?2,?3,1,?4,'[]','[]',NULL,?5)",
+                "INSERT INTO goal_results(result_id,goal_id,execution_id,succeeded,summary,receipt_refs_json,artifact_refs_json,error_kind,created_at_ms) VALUES(?1,?2,?3,1,?4,'[]','[]',NULL,?5)",
                 rusqlite::params![result_id, task.goal_id.as_str(), format!("execution-{result_id}"), result_id, created_at],
             )
             .expect("写入 Result");
@@ -57,7 +57,7 @@ fn result_store_reads_only_unacknowledged_results_in_scope() {
     );
     let (read_count, acknowledged_at): (i64, i64) = connection
         .query_row(
-            "SELECT COUNT(*),MIN(acknowledged_at_ms) FROM jarvis_result_reads WHERE result_id=?1",
+            "SELECT COUNT(*),MIN(acknowledged_at_ms) FROM goal_result_reads WHERE result_id=?1",
             rusqlite::params!["result-acked"],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )

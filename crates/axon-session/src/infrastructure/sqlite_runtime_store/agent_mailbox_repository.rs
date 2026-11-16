@@ -1,4 +1,4 @@
-//! `jarvis_agent_messages` 的 SQLite 实现。
+//! `agent_messages` 的 SQLite 实现。
 //!
 //! 一条消息一行，投递进度写在同行：
 //!
@@ -6,7 +6,7 @@
 //!   驱动有界重试，越过保留窗口或达到尝试上限后转 `expired`；
 //! - `state='delivered'`：已交付目标代理 mailbox，是正常终态。
 //!
-//! 幂等由 `jarvis_agent_messages_idempotency` 唯一索引承担：同键重复写入
+//! 幂等由 `agent_messages_idempotency` 唯一索引承担：同键重复写入
 //! `ON CONFLICT DO NOTHING`，受影响行数为 `0`，调用方据此判断「本条是不是首次入队」。
 //! 状态迁移一律用条件 `UPDATE` 的受影响行数裁决，因此不存在重复迁移。
 
@@ -39,7 +39,7 @@ impl AgentMailboxStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         let changed = connection
             .execute(
-                "INSERT INTO jarvis_agent_messages(message_id,idempotency_key,owner_id,author,\
+                "INSERT INTO agent_messages(message_id,idempotency_key,owner_id,author,\
                  recipient,kind,content,trigger_turn,continuation_id,state,attempt_count,\
                  last_attempt_at_ms,retry_at_ms,last_error,delivered_at_ms,created_at_ms,\
                  expires_at_ms) \
@@ -72,7 +72,7 @@ impl AgentMailboxStore for SqliteRuntimeStore {
         // 幂等命中：读回既有记录的状态，让调用方按事实回执而不是猜测结局。
         let existing: Option<String> = connection
             .query_row(
-                "SELECT state FROM jarvis_agent_messages WHERE idempotency_key=?1",
+                "SELECT state FROM agent_messages WHERE idempotency_key=?1",
                 params![message.idempotency_key],
                 |row| row.get(0),
             )
@@ -95,7 +95,7 @@ impl AgentMailboxStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         connection
             .query_row(
-                &format!("SELECT {MESSAGE_COLUMNS} FROM jarvis_agent_messages WHERE message_id=?1"),
+                &format!("SELECT {MESSAGE_COLUMNS} FROM agent_messages WHERE message_id=?1"),
                 params![message_id],
                 read_message,
             )
@@ -112,7 +112,7 @@ impl AgentMailboxStore for SqliteRuntimeStore {
         connection
             .query_row(
                 &format!(
-                    "SELECT {MESSAGE_COLUMNS} FROM jarvis_agent_messages \
+                    "SELECT {MESSAGE_COLUMNS} FROM agent_messages \
                      WHERE idempotency_key=?1"
                 ),
                 params![idempotency_key],
@@ -136,8 +136,8 @@ impl AgentMailboxStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         let mut statement = connection
             .prepare(&format!(
-                "SELECT {MESSAGE_COLUMNS} FROM jarvis_agent_messages \
-                 INDEXED BY jarvis_agent_messages_recipient \
+                "SELECT {MESSAGE_COLUMNS} FROM agent_messages \
+                 INDEXED BY agent_messages_recipient \
                  WHERE owner_id=?1 AND recipient=?2 AND state='pending' AND expires_at_ms>?3 \
                  AND (retry_at_ms IS NULL OR retry_at_ms<=?3) {PENDING_ORDER} LIMIT ?4"
             ))
@@ -170,8 +170,8 @@ impl AgentMailboxStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         let mut statement = connection
             .prepare(&format!(
-                "SELECT {MESSAGE_COLUMNS} FROM jarvis_agent_messages \
-                 INDEXED BY jarvis_agent_messages_retry \
+                "SELECT {MESSAGE_COLUMNS} FROM agent_messages \
+                 INDEXED BY agent_messages_retry \
                  WHERE owner_id=?1 AND state='pending' AND expires_at_ms>?2 \
                  AND (retry_at_ms IS NULL OR retry_at_ms<=?2) {PENDING_ORDER} LIMIT ?3"
             ))
@@ -199,7 +199,7 @@ impl AgentMailboxStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         let changed = connection
             .execute(
-                "UPDATE jarvis_agent_messages \
+                "UPDATE agent_messages \
                  SET state='delivered', delivered_at_ms=?2, last_attempt_at_ms=?2, retry_at_ms=NULL, \
                      last_error=NULL \
                  WHERE message_id=?1 AND state='pending'",
@@ -223,7 +223,7 @@ impl AgentMailboxStore for SqliteRuntimeStore {
         // 因此不存在「还没送达就被标记已读」的路径。
         let changed = connection
             .execute(
-                "UPDATE jarvis_agent_messages \
+                "UPDATE agent_messages \
                  SET state='read', last_attempt_at_ms=?2 \
                  WHERE message_id=?1 AND state='delivered'",
                 params![message_id, i64_value(now_ms).map_err(storage_error)?],
@@ -246,8 +246,8 @@ impl AgentMailboxStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         let mut statement = connection
             .prepare(&format!(
-                "SELECT {MESSAGE_COLUMNS} FROM jarvis_agent_messages \
-                 INDEXED BY jarvis_agent_messages_recipient \
+                "SELECT {MESSAGE_COLUMNS} FROM agent_messages \
+                 INDEXED BY agent_messages_recipient \
                  WHERE owner_id=?1 AND recipient=?2 AND state='delivered' AND expires_at_ms>?3 \
                  ORDER BY delivered_at_ms ASC, message_id ASC LIMIT ?4"
             ))
@@ -283,7 +283,7 @@ impl AgentMailboxStore for SqliteRuntimeStore {
         // 否则并发重试会把同一消息推过上限两次。
         let current: Option<i64> = transaction
             .query_row(
-                "SELECT attempt_count FROM jarvis_agent_messages \
+                "SELECT attempt_count FROM agent_messages \
                  WHERE message_id=?1 AND state='pending'",
                 params![message_id],
                 |row| row.get(0),
@@ -298,7 +298,7 @@ impl AgentMailboxStore for SqliteRuntimeStore {
         let exhausted = next >= u64::from(policy.max_attempts);
         transaction
             .execute(
-                "UPDATE jarvis_agent_messages \
+                "UPDATE agent_messages \
                  SET attempt_count=?2, last_attempt_at_ms=?3, last_error=?4, retry_at_ms=?5, \
                      state=?6 \
                  WHERE message_id=?1 AND state='pending'",
@@ -333,10 +333,10 @@ impl AgentMailboxStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(storage_error)?;
         let changed = connection
             .execute(
-                "UPDATE jarvis_agent_messages SET state='expired' \
+                "UPDATE agent_messages SET state='expired' \
                  WHERE message_id IN (\
-                     SELECT message_id FROM jarvis_agent_messages \
-                     INDEXED BY jarvis_agent_messages_retention \
+                     SELECT message_id FROM agent_messages \
+                     INDEXED BY agent_messages_retention \
                      WHERE owner_id=?1 AND state='pending' AND expires_at_ms<=?2 \
                      ORDER BY expires_at_ms ASC, message_id ASC LIMIT ?3\
                  )",
@@ -373,7 +373,7 @@ impl AgentMailboxStore for SqliteRuntimeStore {
             conditions.push("state=?");
             values.push(Value::Text(state.as_str().to_owned()));
         }
-        let mut sql = format!("SELECT {MESSAGE_COLUMNS} FROM jarvis_agent_messages");
+        let mut sql = format!("SELECT {MESSAGE_COLUMNS} FROM agent_messages");
         if !conditions.is_empty() {
             sql.push_str(" WHERE ");
             sql.push_str(&conditions.join(" AND "));

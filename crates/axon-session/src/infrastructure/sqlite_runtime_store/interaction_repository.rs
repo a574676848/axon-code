@@ -1,4 +1,4 @@
-//! `jarvis_interactions` 的 SQLite 持久化实现。
+//! `inbox` 的 SQLite 持久化实现。
 
 use super::SqliteRuntimeStore;
 use super::helpers::i64_value;
@@ -14,15 +14,15 @@ use crate::ports::{
 use axon_domain::{InteractionId, InteractionRecord, InteractionStatus};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use uuid::Uuid;
-const SELECT_INTERACTION_BY_SOURCE: &str = "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort FROM jarvis_interactions WHERE source_channel=?1 AND source_message_id=?2";
+const SELECT_INTERACTION_BY_SOURCE: &str = "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort FROM inbox WHERE source_channel=?1 AND source_message_id=?2";
 const SELECT_INTERACTION_ID_EXISTS: &str =
-    "SELECT 1 FROM jarvis_interactions WHERE interaction_id=?1";
-const INSERT_INTERACTION: &str = "INSERT INTO jarvis_interactions(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,updated_at_ms,attachments_json,model,reasoning_effort,lane_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?9,?10,?11,?12,?13)";
+    "SELECT 1 FROM inbox WHERE interaction_id=?1";
+const INSERT_INTERACTION: &str = "INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,updated_at_ms,attachments_json,model,reasoning_effort,lane_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?9,?10,?11,?12,?13)";
 /// lane 排他领取候选：排队记录中，所属 lane 当前没有在途 `processing` 的那些。
 const SELECT_CLAIMABLE_INTERACTIONS: &str = "SELECT queued.interaction_id,queued.received_at_ms \
-     FROM jarvis_interactions queued \
+     FROM inbox queued \
      WHERE queued.status=?1 AND queued.lease_expires_at_ms IS NULL \
-       AND NOT EXISTS(SELECT 1 FROM jarvis_interactions active \
+       AND NOT EXISTS(SELECT 1 FROM inbox active \
                       WHERE active.lane_id=queued.lane_id AND active.status=?2 \
                         AND active.lease_expires_at_ms>?3) \
      ORDER BY queued.received_at_ms ASC, queued.interaction_id ASC LIMIT ?4";
@@ -38,7 +38,7 @@ impl InteractionQueryStore for SqliteRuntimeStore {
         self.connection()
             .map_err(runtime_error)?
             .query_row(
-                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort FROM jarvis_interactions WHERE interaction_id=?1",
+                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort FROM inbox WHERE interaction_id=?1",
                 params![interaction_id.as_str()],
                 read_record,
             )
@@ -59,7 +59,7 @@ impl InteractionQueryStore for SqliteRuntimeStore {
             .map_err(runtime_error)?
             .query_row(
                 "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort
-                 FROM jarvis_interactions
+                 FROM inbox
                  WHERE scope_json=?1 AND source_channel<>?2 AND source_message_id NOT LIKE ?3
                  ORDER BY received_at_ms DESC, interaction_id DESC LIMIT 1",
                 params![
@@ -86,7 +86,7 @@ impl InteractionQueryStore for SqliteRuntimeStore {
             .map_err(runtime_error)?
             .query_row(
                 "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort
-                 FROM jarvis_interactions
+                 FROM inbox
                  WHERE scope_json=?1 AND source_channel<>?2 AND source_message_id NOT LIKE ?3 AND status=?4
                  ORDER BY received_at_ms DESC, interaction_id DESC LIMIT 1",
                 params![
@@ -120,7 +120,7 @@ impl InteractionQueryStore for SqliteRuntimeStore {
             .map_err(runtime_error)?
             .query_row(
                 "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort
-                 FROM jarvis_interactions
+                 FROM inbox
                  WHERE scope_json=?1 AND source_channel=?2 AND reply_route_json=?3 AND source_message_id NOT LIKE ?4 AND status=?5
                  ORDER BY received_at_ms DESC, interaction_id DESC LIMIT 1",
                 params![
@@ -160,7 +160,7 @@ impl InteractionQueryStore for SqliteRuntimeStore {
             .map_err(runtime_error)?
             .query_row(
                 "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort
-                 FROM jarvis_interactions
+                 FROM inbox
                  WHERE source_channel<>?1 AND source_message_id NOT LIKE ?2
                  ORDER BY received_at_ms DESC, interaction_id DESC LIMIT 1",
                 params![
@@ -190,7 +190,7 @@ impl InteractionQueryStore for SqliteRuntimeStore {
         let mut statement = connection
             .prepare(
                 "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort
-                 FROM jarvis_interactions
+                 FROM inbox
                  WHERE lane_id=?1 AND (?2 IS NULL OR (received_at_ms, interaction_id) < (?2, ?3))
                  ORDER BY received_at_ms DESC, interaction_id DESC LIMIT ?4",
             )
@@ -228,7 +228,7 @@ fn latest_interaction_for_channel(
     let status_clause = status.map_or(String::new(), |_| " AND status=?4".to_owned());
     let sql = format!(
         "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort
-         FROM jarvis_interactions
+         FROM inbox
          WHERE scope_json=?1 AND source_channel=?2 AND source_message_id NOT LIKE ?3{status_clause}
          ORDER BY received_at_ms DESC, interaction_id DESC LIMIT 1"
     );
@@ -306,7 +306,7 @@ impl InteractionStore for SqliteRuntimeStore {
             let token = Uuid::new_v4().to_string();
             let changed = transaction
                 .execute(
-                    "UPDATE jarvis_interactions SET status=?1,lease_token=?2,lease_expires_at_ms=?3,updated_at_ms=?4 WHERE interaction_id=?5 AND (status=?6 OR (status=?7 AND lease_expires_at_ms<=?4))",
+                    "UPDATE inbox SET status=?1,lease_token=?2,lease_expires_at_ms=?3,updated_at_ms=?4 WHERE interaction_id=?5 AND (status=?6 OR (status=?7 AND lease_expires_at_ms<=?4))",
                     params![STATUS_PROCESSING, token, expires, now, id, STATUS_RECEIVED, STATUS_PROCESSING],
                 )
                 .map_err(storage_error)?;
@@ -315,7 +315,7 @@ impl InteractionStore for SqliteRuntimeStore {
             }
             let interaction = transaction
                 .query_row(
-                    "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort FROM jarvis_interactions WHERE interaction_id=?1",
+                    "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort FROM inbox WHERE interaction_id=?1",
                     params![id],
                     read_record,
                 )
@@ -357,7 +357,7 @@ impl InteractionStore for SqliteRuntimeStore {
         let token = Uuid::new_v4().to_string();
         let changed = transaction
             .execute(
-                "UPDATE jarvis_interactions SET status=?1,lease_token=?2,lease_expires_at_ms=?3,updated_at_ms=?4 WHERE interaction_id=?5 AND (status=?6 OR (status=?1 AND lease_expires_at_ms<=?4))",
+                "UPDATE inbox SET status=?1,lease_token=?2,lease_expires_at_ms=?3,updated_at_ms=?4 WHERE interaction_id=?5 AND (status=?6 OR (status=?1 AND lease_expires_at_ms<=?4))",
                 params![
                     STATUS_PROCESSING,
                     token,
@@ -374,7 +374,7 @@ impl InteractionStore for SqliteRuntimeStore {
         }
         let interaction = transaction
             .query_row(
-                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort FROM jarvis_interactions WHERE interaction_id=?1",
+                "SELECT interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,status,received_at_ms,attachments_json,model,reasoning_effort FROM inbox WHERE interaction_id=?1",
                 params![interaction_id.as_str()],
                 read_record,
             )
@@ -404,7 +404,7 @@ impl InteractionStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(runtime_error)?;
         let changed = connection
             .execute(
-                "UPDATE jarvis_interactions SET lease_expires_at_ms=?1,updated_at_ms=?2 WHERE interaction_id=?3 AND status=?4 AND lease_token=?5",
+                "UPDATE inbox SET lease_expires_at_ms=?1,updated_at_ms=?2 WHERE interaction_id=?3 AND status=?4 AND lease_token=?5",
                 params![
                     i64_value(expires_at_ms).map_err(runtime_error)?,
                     i64_value(now_ms).map_err(runtime_error)?,
@@ -597,7 +597,7 @@ fn update_status(
     let connection = store.connection().map_err(runtime_error)?;
     let changed = connection
         .execute(
-            "UPDATE jarvis_interactions SET status=?1,lease_token=NULL,lease_expires_at_ms=NULL,updated_at_ms=?2 WHERE interaction_id=?3 AND status=?4 AND lease_token=?5",
+            "UPDATE inbox SET status=?1,lease_token=NULL,lease_expires_at_ms=NULL,updated_at_ms=?2 WHERE interaction_id=?3 AND status=?4 AND lease_token=?5",
             params![status, i64_value(now_ms).map_err(runtime_error)?, interaction_id.as_str(), STATUS_PROCESSING, lease_token],
         )
         .map_err(storage_error)?;
@@ -606,7 +606,7 @@ fn update_status(
     }
     let exists = connection
         .query_row(
-            "SELECT 1 FROM jarvis_interactions WHERE interaction_id=?1",
+            "SELECT 1 FROM inbox WHERE interaction_id=?1",
             params![interaction_id.as_str()],
             |row| row.get::<_, i64>(0),
         )

@@ -1,4 +1,4 @@
-//! `jarvis_executions` 的 SQLite repository。
+//! `work_items` 的 SQLite repository。
 
 use super::{
     SqliteRuntimeStore,
@@ -32,7 +32,7 @@ impl ExecutionStore for SqliteRuntimeStore {
         }
         let inserted = connection
             .execute(
-                "INSERT INTO jarvis_executions(execution_id,goal_id,session_id,kind,payload_json,attempt,priority,dedupe_key,status,created_at_ms,updated_at_ms) VALUES(?1,?1,?2,?3,?4,0,?5,?6,'queued',?7,?7) ON CONFLICT(execution_id) DO NOTHING",
+                "INSERT INTO work_items(execution_id,goal_id,session_id,kind,payload_json,attempt,priority,dedupe_key,status,created_at_ms,updated_at_ms) VALUES(?1,?1,?2,?3,?4,0,?5,?6,'queued',?7,?7) ON CONFLICT(execution_id) DO NOTHING",
                 params![
                     trigger.execution_id.as_str(),
                     trigger.session_id.as_str(),
@@ -63,7 +63,7 @@ impl ExecutionStore for SqliteRuntimeStore {
             let connection = self.connection().map_err(runtime_error)?;
             connection
             .execute(
-                "INSERT INTO jarvis_executions(execution_id,goal_id,session_id,attempt,priority,dedupe_key,status,lease_json,retry_at_ms,checkpoint_json,payload_json,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,NULL,NULL,?8,?9,?10,?11) ON CONFLICT(execution_id) DO NOTHING",
+                "INSERT INTO work_items(execution_id,goal_id,session_id,attempt,priority,dedupe_key,status,lease_json,retry_at_ms,checkpoint_json,payload_json,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,NULL,NULL,?8,?9,?10,?11) ON CONFLICT(execution_id) DO NOTHING",
                 params![
                     execution.execution_id.as_str(),
                     execution.goal_id.as_str(),
@@ -108,7 +108,7 @@ impl ExecutionStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(runtime_error)?;
         connection
             .query_row(
-                &format!("SELECT {EXECUTION_COLUMNS} FROM jarvis_executions WHERE execution_id=?1"),
+                &format!("SELECT {EXECUTION_COLUMNS} FROM work_items WHERE execution_id=?1"),
                 params![execution_id.as_str()],
                 read_execution,
             )
@@ -126,7 +126,7 @@ impl ExecutionStore for SqliteRuntimeStore {
         }
         let connection = self.connection().map_err(runtime_error)?;
         let mut statement = connection
-            .prepare("SELECT execution_id,goal_id,session_id,attempt,priority,dedupe_key,status,lease_json,retry_at_ms,checkpoint_json,created_at_ms,updated_at_ms,payload_json FROM jarvis_executions WHERE goal_id=?1 ORDER BY created_at_ms DESC, execution_id DESC LIMIT ?2")
+            .prepare("SELECT execution_id,goal_id,session_id,attempt,priority,dedupe_key,status,lease_json,retry_at_ms,checkpoint_json,created_at_ms,updated_at_ms,payload_json FROM work_items WHERE goal_id=?1 ORDER BY created_at_ms DESC, execution_id DESC LIMIT ?2")
             .map_err(storage_error)?;
         statement
             .query_map(
@@ -144,12 +144,12 @@ impl ExecutionStore for SqliteRuntimeStore {
     ) -> Result<Option<ExecutionRecord>, ExecutionStoreError> {
         self.initialize().map_err(runtime_error)?;
         let connection = self.connection().map_err(runtime_error)?;
-        // 索引 `jarvis_executions_session_claim` 首列即 session_id；排序用临时 B 树，
+        // 索引 `work_items_session_claim` 首列即 session_id；排序用临时 B 树，
         // 单会话执行数极少（同一目标跨阶段复用同一会话标识），代价可忽略。
         connection
             .query_row(
                 &format!(
-                    "SELECT {EXECUTION_COLUMNS} FROM jarvis_executions WHERE session_id=?1 \
+                    "SELECT {EXECUTION_COLUMNS} FROM work_items WHERE session_id=?1 \
                      ORDER BY created_at_ms DESC, execution_id DESC LIMIT 1"
                 ),
                 params![session_id.as_str()],
@@ -178,7 +178,7 @@ impl ExecutionStore for SqliteRuntimeStore {
         let expires = i64_value(now_ms.saturating_add(lease_duration_ms)).map_err(runtime_error)?;
         let batch_limit = i64::from(limit.min(MAX_EXECUTION_CLAIM_BATCH));
         let mut queued_stmt = transaction
-            .prepare(&format!("SELECT {EXECUTION_COLUMNS} FROM jarvis_executions WHERE status='queued' AND (retry_at_ms IS NULL OR retry_at_ms<=?1) AND EXISTS (SELECT 1 FROM jarvis_goals WHERE jarvis_goals.goal_id=jarvis_executions.goal_id AND jarvis_goals.status <> 'cancelled') ORDER BY priority DESC, created_at_ms ASC, execution_id ASC LIMIT ?2"))
+            .prepare(&format!("SELECT {EXECUTION_COLUMNS} FROM work_items WHERE status='queued' AND (retry_at_ms IS NULL OR retry_at_ms<=?1) AND EXISTS (SELECT 1 FROM goals WHERE goals.goal_id=work_items.goal_id AND goals.status <> 'cancelled') ORDER BY priority DESC, created_at_ms ASC, execution_id ASC LIMIT ?2"))
             .map_err(storage_error)?;
         let queued_executions = queued_stmt
             .query_map(params![now, batch_limit], read_execution)
@@ -220,7 +220,7 @@ impl ExecutionStore for SqliteRuntimeStore {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "UPDATE jarvis_executions SET status='running',lease_json=?1,claimed_by=?2,claimed_generation=?3,lease_expires_at_ms=?4,retry_at_ms=NULL,updated_at_ms=?5 WHERE execution_id IN ({placeholders}) AND status='queued' AND (retry_at_ms IS NULL OR retry_at_ms<=?5)"
+            "UPDATE work_items SET status='running',lease_json=?1,claimed_by=?2,claimed_generation=?3,lease_expires_at_ms=?4,retry_at_ms=NULL,updated_at_ms=?5 WHERE execution_id IN ({placeholders}) AND status='queued' AND (retry_at_ms IS NULL OR retry_at_ms<=?5)"
         );
         let owner_value = owner.to_owned();
         let mut bindings: Vec<&dyn ToSql> =
@@ -265,7 +265,7 @@ impl ExecutionStore for SqliteRuntimeStore {
         };
         let changed = connection
             .execute(
-                "UPDATE jarvis_executions SET lease_json=?1,lease_expires_at_ms=?2,updated_at_ms=?3 WHERE execution_id=?4 AND status='running' AND cancellation_requested_at_ms IS NULL AND claimed_by=?5 AND claimed_generation=?6 AND lease_expires_at_ms>?3",
+                "UPDATE work_items SET lease_json=?1,lease_expires_at_ms=?2,updated_at_ms=?3 WHERE execution_id=?4 AND status='running' AND cancellation_requested_at_ms IS NULL AND claimed_by=?5 AND claimed_generation=?6 AND lease_expires_at_ms>?3",
                 params![
                     serde_json::to_string(&lease).map_err(serialize_error)?,
                     i64_value(lease.expires_at_ms).map_err(runtime_error)?,
@@ -301,7 +301,7 @@ impl ExecutionStore for SqliteRuntimeStore {
         let connection = self.connection().map_err(runtime_error)?;
         let current_attempt: Option<u32> = connection
             .query_row(
-                "SELECT attempt FROM jarvis_executions WHERE execution_id=?1 AND status='running' AND claimed_by=?2 AND claimed_generation=?3",
+                "SELECT attempt FROM work_items WHERE execution_id=?1 AND status='running' AND claimed_by=?2 AND claimed_generation=?3",
                 params![execution_id.as_str(), owner, lease_token],
                 |row| row.get::<_, i64>(0),
             )
@@ -320,7 +320,7 @@ impl ExecutionStore for SqliteRuntimeStore {
         let next_attempt = attempt.saturating_add(1);
         let changed = connection
             .execute(
-                "UPDATE jarvis_executions SET status=?1,attempt=CASE WHEN ?1='queued' THEN ?2 ELSE attempt END,lease_json=NULL,claimed_by=NULL,claimed_generation=NULL,lease_expires_at_ms=NULL,retry_at_ms=?3,updated_at_ms=?4 WHERE execution_id=?5 AND status='running' AND claimed_by=?6 AND claimed_generation=?7",
+                "UPDATE work_items SET status=?1,attempt=CASE WHEN ?1='queued' THEN ?2 ELSE attempt END,lease_json=NULL,claimed_by=NULL,claimed_generation=NULL,lease_expires_at_ms=NULL,retry_at_ms=?3,updated_at_ms=?4 WHERE execution_id=?5 AND status='running' AND claimed_by=?6 AND claimed_generation=?7",
                 params![
                     if terminal { "failed" } else { "queued" },
                     i64::from(next_attempt),
@@ -379,7 +379,7 @@ impl ExecutionStore for SqliteRuntimeStore {
             let connection = self.connection().map_err(runtime_error)?;
             connection
                 .execute(
-                    "UPDATE jarvis_executions SET status=?1,lease_json=NULL,claimed_by=NULL,claimed_generation=NULL,lease_expires_at_ms=NULL,cancelled_at_ms=CASE WHEN ?1='cancelled' THEN ?2 ELSE cancelled_at_ms END,updated_at_ms=?2 WHERE execution_id=?3 AND status='running' AND (cancellation_requested_at_ms IS NULL OR ?1='cancelled') AND claimed_by=?4 AND claimed_generation=?5",
+                    "UPDATE work_items SET status=?1,lease_json=NULL,claimed_by=NULL,claimed_generation=NULL,lease_expires_at_ms=NULL,cancelled_at_ms=CASE WHEN ?1='cancelled' THEN ?2 ELSE cancelled_at_ms END,updated_at_ms=?2 WHERE execution_id=?3 AND status='running' AND (cancellation_requested_at_ms IS NULL OR ?1='cancelled') AND claimed_by=?4 AND claimed_generation=?5",
                     params![status_code(status), i64_value(now_ms).map_err(runtime_error)?, execution_id.as_str(), owner, lease_token],
                 )
                 .map_err(storage_error)?
@@ -402,7 +402,7 @@ impl ExecutionStore for SqliteRuntimeStore {
     ) -> Result<Option<ExecutionRecord>, ExecutionStoreError> {
         let connection = self.connection().map_err(runtime_error)?;
         connection.query_row(
-            &format!("SELECT {EXECUTION_COLUMNS} FROM jarvis_executions WHERE goal_id=?1 AND dedupe_key=?2 ORDER BY created_at_ms,execution_id LIMIT 1"),
+            &format!("SELECT {EXECUTION_COLUMNS} FROM work_items WHERE goal_id=?1 AND dedupe_key=?2 ORDER BY created_at_ms,execution_id LIMIT 1"),
             params![goal_id.as_str(), dedupe_key],
             read_execution,
         ).optional().map_err(storage_error)
@@ -480,7 +480,7 @@ fn serialize_error(error: serde_json::Error) -> ExecutionStoreError {
 fn enqueue_error(error: rusqlite::Error) -> ExecutionStoreError {
     if error
         .to_string()
-        .contains("jarvis_executions.goal_id, jarvis_executions.dedupe_key")
+        .contains("work_items.goal_id, work_items.dedupe_key")
     {
         ExecutionStoreError::Conflict("同一 Goal 的业务幂等键已有 active Execution".to_owned())
     } else {

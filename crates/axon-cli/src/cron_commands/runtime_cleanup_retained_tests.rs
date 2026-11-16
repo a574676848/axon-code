@@ -17,7 +17,7 @@ use super::*;
     let connection = open_fixture(root.path());
     connection
         .execute(
-            "INSERT INTO session_runtimes
+            "INSERT INTO sessions
              VALUES(?1,?1,?1,'/w','completed',NULL,NULL,0,0,0,?2,1,1,1)",
             rusqlite::params![FINISHED_SESSION_ID, EVENT_COUNT],
         )
