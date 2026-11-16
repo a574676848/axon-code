@@ -141,6 +141,92 @@ fn torn_tail_is_truncated_before_next_append() {
 }
 
 #[test]
+fn append_once_repairs_torn_tail_before_appending() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let log = EventLog::open(dir.path(), "session-session-g");
+
+    {
+        let mut writer = log.writer().expect("首次打开");
+        writer
+            .append_batch(&[record(0, RuntimeEventKind::TurnStarted, json!({}))])
+            .expect("首批");
+    }
+
+    // 模拟崩溃：末尾留下半帧（魔数 + 截断的帧头）
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(log.path())
+        .expect("打开日志");
+    file.write_all(&[0x28u8, 0xB5, 0x2F, 0xFD, 0x00, 0x00])
+        .expect("写入半帧");
+    drop(file);
+
+    // 控制面续写走 append_once：必须先截断撕裂尾，再写新帧
+    axon_eventlog::append_once(
+        &log,
+        1,
+        1_700_000_000_000,
+        &[record(1, RuntimeEventKind::TurnCompleted, json!({}))],
+    )
+    .expect("撕裂尾修复后应可追加");
+
+    let reader = log.reader().expect("修复后可读");
+    assert_eq!(reader.records().len(), 2, "撕裂尾之后追加的帧必须仍然可见");
+    assert_eq!(reader.last_sequence(), Some(1));
+}
+
+/// 生成不可压缩的载荷：压缩后仍然大于尾部自检窗口，用来覆盖「窗口落在帧内部」的分支。
+fn incompressible_payload(bytes: usize) -> String {
+    let mut state = 0x2545_F491_4F6C_DD1Du64;
+    let mut out = String::with_capacity(bytes);
+    for _ in 0..bytes {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        out.push(char::from(b'!' + u8::try_from(state % 90).unwrap_or(0)));
+    }
+    out
+}
+
+#[test]
+fn append_once_keeps_healthy_tail_larger_than_tail_window() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let log = EventLog::open(dir.path(), "session-session-h");
+    let blob = incompressible_payload(3 * 1024 * 1024);
+
+    {
+        let mut writer = log.writer().expect("首次打开");
+        writer
+            .append_batch(&[record(
+                0,
+                RuntimeEventKind::TurnStarted,
+                json!({"blob": blob.clone()}),
+            )])
+            .expect("首批");
+    }
+
+    // 末帧远大于尾部自检窗口：自检必须在找不到帧边界时回退全量扫描，
+    // 且不得把健康日志当成撕裂尾截断。
+    axon_eventlog::append_once(
+        &log,
+        1,
+        1_700_000_000_000,
+        &[record(1, RuntimeEventKind::TurnCompleted, json!({}))],
+    )
+    .expect("健康日志应可续写");
+
+    let reader = log.reader().expect("应可读取");
+    assert_eq!(reader.records().len(), 2, "健康日志不得被截断");
+    let stored = reader.records()[0]
+        .payload
+        .get("blob")
+        .and_then(|value| value.as_str())
+        .expect("载荷应保留");
+    assert_eq!(stored.len(), blob.len(), "大载荷必须逐字节保留");
+    assert_eq!(stored, blob);
+}
+
+#[test]
 fn turn_metrics_keeps_origin_and_unmeasured_ttft() {
     let dir = tempfile::tempdir().expect("临时目录");
     let log = EventLog::open(dir.path(), "session-session-f");

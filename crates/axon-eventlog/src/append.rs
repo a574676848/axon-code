@@ -2,15 +2,21 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::EventLog;
 use crate::error::EventLogError;
-use crate::format::{Header, encode_frame};
+use crate::format::{Header, encode_frame, scan_frames, tail_ends_on_frame_boundary};
 use crate::lock::ExclusiveLock;
 use crate::read::read_snapshot;
 use crate::record::RuntimeEventRecord;
+
+/// 尾部自检窗口：正常日志只需解码最后一帧就能确认停在帧边界。
+///
+/// 只有当这一窗口里找不到可解码的尾帧时才回退全量扫描，因此稳态追加不会
+/// 随日志增长变成 O(文件大小)。
+const TAIL_SCAN_WINDOW_BYTES: u64 = 1 << 20;
 
 /// 事件日志的追加写句柄。
 ///
@@ -170,11 +176,14 @@ fn now_ms() -> u64 {
         })
 }
 impl EventLogWriter {
-    /// 由调用方给定下一个序号打开写句柄，不扫描既有文件。
+    /// 由调用方给定下一个序号打开写句柄，不按既有文件推断序号。
     ///
     /// 用于"控制面是序号权威"的场景：控制面已经保存 `last_event_sequence`，
     /// 这里直接按它续写。序号是否连续由 [`Self::append_batch`] 校验；文件缺失时
     /// 首次写入会自动补写 header 帧。
+    ///
+    /// 打开时同样先修复撕裂尾：不修就会把新帧写在撕裂字节之后，读侧扫到 torn
+    /// 立即停止，之后写入的历史永久静默不可见。
     pub fn open_at(
         log: &EventLog,
         expected_next: u64,
@@ -182,11 +191,12 @@ impl EventLogWriter {
     ) -> Result<Self, EventLogError> {
         let path = log.path();
         let lock = ExclusiveLock::acquire(&path.with_extension("lock"))?;
-        let exists = path.exists();
-        let bytes_len = if exists {
-            std::fs::metadata(&path)?.len()
+        let (bytes_len, header_written) = if path.exists() {
+            let len = std::fs::metadata(&path)?.len();
+            let repaired = repair_torn_tail(&path, len)?;
+            (repaired, repaired > 0)
         } else {
-            0
+            (0, false)
         };
         Ok(Self {
             path,
@@ -194,10 +204,44 @@ impl EventLogWriter {
             _lock: lock,
             header: Header::new(log.session_id(), created_at_ms, None),
             next_sequence: expected_next,
-            header_written: exists,
+            header_written,
             bytes_len,
         })
     }
+}
+
+/// 打开写句柄前修复撕裂尾，返回可以安全追加的字节长度。
+///
+/// 正常情况只读尾部窗口并解码最后一帧；窗口内找不到完整帧时回退全量帧扫描，
+/// 用与读侧完全相同的判据定位截断点，保证写接口与 `read_snapshot` 口径一致。
+fn repair_torn_tail(path: &Path, len: u64) -> Result<u64, EventLogError> {
+    if len == 0 {
+        return Ok(0);
+    }
+    let tail_start = len.saturating_sub(TAIL_SCAN_WINDOW_BYTES);
+    let tail = read_range(path, tail_start, len)?;
+    if tail_ends_on_frame_boundary(&tail) {
+        return Ok(len);
+    }
+    let bytes = std::fs::read(path)?;
+    let scan = scan_frames(&bytes)?;
+    let Some(torn_at) = scan.torn_start else {
+        return Ok(len);
+    };
+    let repaired = u64::try_from(torn_at).unwrap_or(0);
+    let handle = OpenOptions::new().write(true).open(path)?;
+    handle.set_len(repaired)?;
+    handle.sync_data()?;
+    Ok(repaired)
+}
+
+fn read_range(path: &Path, start: u64, end: u64) -> Result<Vec<u8>, EventLogError> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    let mut file = File::open(path)?;
+    file.seek(SeekFrom::Start(start))?;
+    let mut buffer = Vec::with_capacity(usize::try_from(end - start).unwrap_or(0));
+    file.take(end - start).read_to_end(&mut buffer)?;
+    Ok(buffer)
 }
 
 /// 一次性追加：持锁、追加、释放锁。

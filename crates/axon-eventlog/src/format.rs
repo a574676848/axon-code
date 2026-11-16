@@ -186,6 +186,20 @@ fn torn_scan(frames: Vec<FrameSpan>, start: usize) -> FrameScan {
     }
 }
 
+/// 尾部字节是否恰好停在一个完整帧边界上。
+///
+/// 判据是「尾段里某个 zstd 帧魔数起的剩余字节能被完整解码」：帧自带内容校验和，
+/// 随机字节几乎不可能凑出可解码的尾帧，因此误判概率可忽略。
+/// 返回 `false` 只说明「尾段里找不到完整帧」，调用方应回退全量扫描定位截断点。
+pub(crate) fn tail_ends_on_frame_boundary(tail: &[u8]) -> bool {
+    if tail.is_empty() {
+        return true;
+    }
+    tail.windows(ZSTD_MAGIC.len())
+        .enumerate()
+        .any(|(offset, window)| window == ZSTD_MAGIC && decode_frame(&tail[offset..]).is_ok())
+}
+
 /// 压缩一段明文成一个带校验和的 zstd 帧。
 pub fn encode_frame(plain: &[u8]) -> Result<Vec<u8>, EventLogError> {
     let mut encoder = zstd::stream::Encoder::new(Vec::new(), COMPRESSION_LEVEL)
