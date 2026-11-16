@@ -171,8 +171,9 @@ pub struct JobOutcome {
     pub job_id: String,
     /// 终态名称：completed / failed / killed / timeout / refusal / unresponsive。
     pub status: String,
-    /// 从启动到终态的耗时。
-    pub elapsed_ms: u64,
+    /// 从启动到终态的耗时；`None` 表示未测得，禁止用 0 冒充。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
     /// 退出码（若可得）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,

@@ -186,7 +186,7 @@ fn job_events_round_trip() {
     let outcome = JobOutcome {
         job_id: "job-1".to_owned(),
         status: "completed".to_owned(),
-        elapsed_ms: 900,
+        elapsed_ms: Some(900),
         exit_code: Some(0),
         terminal_reason: None,
     };
@@ -195,7 +195,7 @@ fn job_events_round_trip() {
         RuntimeEventRecord::decode_line(&event.encode_line().expect("可编码")).expect("可解码");
     assert_eq!(decoded.event_type, RuntimeEventKind::JobCompleted);
     let parsed: JobOutcome = serde_json::from_value(decoded.payload).expect("载荷可还原");
-    assert_eq!(parsed.elapsed_ms, 900);
+    assert_eq!(parsed.elapsed_ms, Some(900));
     assert_eq!(parsed.exit_code, Some(0));
     assert!(parsed.terminal_reason.is_none());
 }
