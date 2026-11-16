@@ -26,17 +26,17 @@ function replyCellOf(
 }
 
 export function useAutoReadReply(
-  laneKey: string | null,
+  sessionKey: string | null,
   working: boolean,
   turns: readonly TurnState[],
   enabled: boolean,
 ): void {
-  const previous = React.useRef({ laneKey, working });
+  const previous = React.useRef({ sessionKey, working });
   React.useEffect(() => {
     const before = previous.current;
-    previous.current = { laneKey, working };
+    previous.current = { sessionKey, working };
     // 刚切会话：这一帧的收口属于上一条会话，不念。
-    if (before.laneKey !== laneKey) return;
+    if (before.sessionKey !== sessionKey) return;
     // 只在「在跑」翻成「收口」的那一帧念一次。
     if (!before.working || working || !enabled) return;
     const turn = turns[turns.length - 1];
@@ -47,5 +47,5 @@ export function useAutoReadReply(
     const cell = replyCellOf(turn);
     if (cell === null) return;
     speak(cell.text, { source: cell.id });
-  }, [enabled, laneKey, turns, working]);
+  }, [enabled, sessionKey, turns, working]);
 }

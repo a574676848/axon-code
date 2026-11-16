@@ -51,12 +51,14 @@ impl TurnNotice {
 /// 标题只写会话标题：状态已经在正文里说清，一条通知里两个主体只会让人读两遍。
 pub(super) fn notification_copy(
     notice: &TurnNotice,
-    lane_title: Option<&str>,
+    session_title: Option<&str>,
 ) -> Option<(String, String)> {
-    let lane = lane_title.map(str::trim).filter(|value| !value.is_empty());
+    let session = session_title
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     if notice.is_question() {
         // 提问要的是用户的一个动作，标题必须说清是哪种动作，因此带状态标签。
-        let title = compose_title(lane, &notice.title);
+        let title = compose_title(session, &notice.title);
         let body = if notice.body.is_empty() {
             "请回到 Axon 作答".to_owned()
         } else {
@@ -64,7 +66,7 @@ pub(super) fn notification_copy(
         };
         return Some((clip(&title, TITLE_LIMIT), clip(&body, BODY_LIMIT)));
     }
-    let title = lane.unwrap_or(&notice.title);
+    let title = session.unwrap_or(&notice.title);
     let body = match (notice.body.as_str(), notice.status.as_str()) {
         // 成功：正文就是回复摘要。
         ("", "completed") => return None,
@@ -77,9 +79,9 @@ pub(super) fn notification_copy(
 }
 
 /// 会话名在前的标题：只写状态标签时，用户得点进去才知道是哪个会话。
-fn compose_title(lane: Option<&str>, base: &str) -> String {
-    match lane {
-        Some(lane) => format!("{lane} · {base}"),
+fn compose_title(session: Option<&str>, base: &str) -> String {
+    match session {
+        Some(session) => format!("{session} · {base}"),
         None => base.to_owned(),
     }
 }

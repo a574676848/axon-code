@@ -29,10 +29,10 @@ export function useGlobalAutoRead(): boolean {
 }
 
 /** 这一条会话是否自动朗读：没有显式设置时继承全局值。 */
-export function useLaneAutoRead(laneKey: string | null): boolean {
+export function useSessionAutoRead(sessionKey: string | null): boolean {
   return React.useSyncExternalStore(
     voicePreferences.subscribe,
-    () => VOICE_UI_ENABLED && voicePreferences.effectiveAutoRead(laneKey),
+    () => VOICE_UI_ENABLED && voicePreferences.effectiveAutoRead(sessionKey),
     () => false,
   );
 }
@@ -51,6 +51,6 @@ export function useVoicePresetId(): string {
  *
  * 上一条会话的声音不该跟到新会话里，窗口关掉之后也不该还有一段音频在念。
  */
-export function useStopSpeechOnLaneChange(laneKey: string | null): void {
-  React.useEffect(() => () => speech.stop(), [laneKey]);
+export function useStopSpeechOnSessionChange(sessionKey: string | null): void {
+  React.useEffect(() => () => speech.stop(), [sessionKey]);
 }

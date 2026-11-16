@@ -42,17 +42,17 @@ impl AnswerRouteOutcome {
 /// 结算一次作答。
 pub fn route_answer(
     service: &UserQuestionAnswerService,
-    lane_id: &str,
+    session_id: &str,
     call_id: &str,
     answers: Vec<UserAnswerItem>,
     channel: &str,
 ) -> AnswerRouteOutcome {
-    match service.submit_answer(lane_id, call_id, answers, channel) {
+    match service.submit_answer(session_id, call_id, answers, channel) {
         Ok(record) => AnswerRouteOutcome {
             status_code: 200,
             code: None,
             payload: serde_json::json!({
-                "laneId": record.lane_id,
+                "sessionId": record.session_id,
                 "callId": record.tool_call_id,
                 "questionId": record.question_id,
                 "state": record.state.as_str(),
@@ -69,8 +69,8 @@ pub fn route_answer(
         Err(AnswerError::AlreadySettled(message)) => {
             AnswerRouteOutcome::failure(409, "ALREADY_SETTLED", message)
         }
-        Err(AnswerError::LaneMismatch(message)) => {
-            AnswerRouteOutcome::failure(400, "LANE_MISMATCH", message)
+        Err(AnswerError::SessionMismatch(message)) => {
+            AnswerRouteOutcome::failure(400, "SESSION_MISMATCH", message)
         }
         Err(AnswerError::Internal(message)) => {
             AnswerRouteOutcome::failure(500, "INTERNAL_ERROR", message)

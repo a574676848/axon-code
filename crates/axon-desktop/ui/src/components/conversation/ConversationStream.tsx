@@ -71,11 +71,11 @@ export interface ConversationStreamProps {
    * 缺省即主会话车道；给出时横幅改成父轮归因文案。回上层会话走头部既有的
    * 「返回会话」入口，横幅不再重复给动作。
    */
-  subagentLane?: { interrupted: boolean };
+  subagentSession?: { interrupted: boolean };
   /**
    * 只读会话（目标执行会话）：没有输入坞，也没有上层会话。
    *
-   * 与 `subagentLane` 互斥，缺省即主会话车道。给出时失败结论只说「后台已停止推进」，
+   * 与 `subagentSession` 互斥，缺省即主会话车道。给出时失败结论只说「后台已停止推进」，
    * 不给「重新发送」这类在这个视图里不存在的动作。
    */
   readOnly?: boolean;
@@ -102,7 +102,7 @@ export const ConversationStream: React.FC<ConversationStreamProps> = ({
   turns,
   followToken,
   sessionKey,
-  subagentLane,
+  subagentSession,
   readOnly = false,
   hasOlder = false,
   loadingOlder = false,
@@ -208,14 +208,14 @@ export const ConversationStream: React.FC<ConversationStreamProps> = ({
     !turnConclusionExplained(lastTurn) &&
     (lastTurn.status === 'rejected' || lastTurn.status === 'failed')
       ? failureBanner({
-          lane:
+          session:
             readOnly === true
               ? 'readonly'
-              : subagentLane === undefined
+              : subagentSession === undefined
                 ? 'primary'
                 : 'subagent',
           status: lastTurn.status,
-          interrupted: subagentLane?.interrupted,
+          interrupted: subagentSession?.interrupted,
         })
       : null;
   const lastCell = lastTurn?.cells[lastTurn.cells.length - 1];

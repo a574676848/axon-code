@@ -42,7 +42,7 @@ pub(super) enum BottomViewEvent {
     SessionSelected(String),
     SkillsClosed(SkillsToggleSummary),
     QuestionAnswered {
-        lane_id: String,
+        session_id: String,
         call_id: String,
         answers: Vec<axon_domain::UserAnswerItem>,
     },

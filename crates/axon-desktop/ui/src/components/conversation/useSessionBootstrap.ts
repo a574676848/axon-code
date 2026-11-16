@@ -3,25 +3,25 @@
  *
  * 这一段的时序比看上去紧：新建会话会切换当前目标并触发一次投影重置，消息若在重置
  * 之前发出，这一轮的本地消息与流式内容都会被重置吃掉。提交因此必须等新目标的历史
- * 索引装载完成（`laneReadyId` 与当前目标对齐）之后才发生。
+ * 索引装载完成（`sessionReadyId` 与当前目标对齐）之后才发生。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as ipc from '../../ipc';
 import type { AttachmentRef } from '../../conversation/transcript';
-import type { ConversationController, LaneSelection } from '../../conversation/targets';
+import type { ConversationController, SessionSelection } from '../../conversation/targets';
 import type { WorkspaceItem } from '../../types';
 
 /** 会话引导的依赖面。 */
 export interface SessionBootstrapOptions {
   /** 当前选中的会话；为空表示还在首屏。 */
-  selection: LaneSelection | null;
+  selection: SessionSelection | null;
   /** 当前工作区：新建会话要用它的标识与路径。 */
   workspace: WorkspaceItem | null;
   /** 会话控制器：只取提交入口与目标就绪标记。 */
   conversation: ConversationController;
   /** 新建会话后通知外层切换目标。 */
-  onSelectLane: (selection: LaneSelection) => void;
+  onSelectSession: (selection: SessionSelection) => void;
 }
 
 /** 会话引导对外给出的事实。 */
@@ -39,7 +39,7 @@ export interface SessionBootstrap {
 }
 
 export function useSessionBootstrap(options: SessionBootstrapOptions): SessionBootstrap {
-  const { selection, workspace, conversation, onSelectLane } = options;
+  const { selection, workspace, conversation, onSelectSession } = options;
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   /** 首屏直接输入时暂存的正文与附件；等新会话的历史索引装载完成后再发出。 */
@@ -51,7 +51,7 @@ export function useSessionBootstrap(options: SessionBootstrapOptions): SessionBo
   } | null>(null);
 
   /** 新建一条会话并把它设为当前目标。 */
-  const createSession = useCallback(async (): Promise<LaneSelection | null> => {
+  const createSession = useCallback(async (): Promise<SessionSelection | null> => {
     if (workspace === null) {
       setCreateError('请先在左侧添加一个工作区');
       return null;
@@ -59,25 +59,25 @@ export function useSessionBootstrap(options: SessionBootstrapOptions): SessionBo
     setCreating(true);
     setCreateError(null);
     try {
-      const list = await ipc.createLane(workspace.id);
+      const list = await ipc.createSession(workspace.id);
       const target = list.find((item) => item.id === workspace.id) ?? list[0];
-      const pending = (target?.lanes ?? []).filter((lane) => lane.pending);
+      const pending = (target?.sessions ?? []).filter((session) => session.pending);
       const created = pending.sort((left, right) => right.created_at - left.created_at)[0];
       if (created === undefined) {
         setCreateError('新建会话失败：后端未返回新车道');
         return null;
       }
-      const next: LaneSelection = {
+      const next: SessionSelection = {
         workspaceId: workspace.id,
         workspacePath: workspace.path,
-        laneId: created.id,
+        sessionId: created.id,
         destination: created.destination,
         title: created.title,
         channel: created.channel,
         // 刚建好的会话还没有内容：主区域继续留在首屏，直到第一条消息发出。
         pending: true,
       };
-      onSelectLane(next);
+      onSelectSession(next);
       return next;
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : '新建会话失败');
@@ -85,7 +85,7 @@ export function useSessionBootstrap(options: SessionBootstrapOptions): SessionBo
     } finally {
       setCreating(false);
     }
-  }, [onSelectLane, workspace]);
+  }, [onSelectSession, workspace]);
 
   /**
    * 首屏直接起语音时先建一条会话，返回这一轮可用的工作区与目的地。
@@ -115,7 +115,7 @@ export function useSessionBootstrap(options: SessionBootstrapOptions): SessionBo
   useEffect(() => {
     const pending = pendingHeroText.current;
     if (pending === null || selection === null) return;
-    if (conversation.laneReadyId !== selection.laneId) return;
+    if (conversation.sessionReadyId !== selection.sessionId) return;
     pendingHeroText.current = null;
     void conversation.submit(pending.text, pending.attachments, pending.structuredInput);
   }, [conversation, selection]);

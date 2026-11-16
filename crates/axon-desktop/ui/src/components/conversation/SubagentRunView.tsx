@@ -28,12 +28,12 @@ export interface SubagentRunViewProps {
   row: SubagentRow;
   /** 该子代理所属工作区与车道；定位会话与投递消息都要。 */
   workspaceId: string | null;
-  laneId: string | null;
+  sessionId: string | null;
   /** 返回主会话。 */
   onBack: () => void;
 }
 
-export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspaceId, laneId, onBack }) => {
+export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspaceId, sessionId, onBack }) => {
   const [sessionId, setSessionId] = React.useState<string | null>(null);
   const [title, setTitle] = React.useState<string | null>(null);
   const [model, setModel] = React.useState<string | null>(null);
@@ -43,13 +43,13 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
 
   // 会话定位：子代理会话挂在车道的运行会话之下，用 slug 与界面上的 agent 路径对齐。
   React.useEffect(() => {
-    if (laneId === null) {
+    if (sessionId === null) {
       setLocateError('这条会话没有绑定车道，无法定位子代理会话');
       return undefined;
     }
     let cancelled = false;
     void ipc
-      .conversationLaneSubagents(laneId)
+      .conversationSessionSubagents(sessionId)
       .then((list) => {
         if (cancelled) return;
         const slug = slugOf(row.agentId);
@@ -74,7 +74,7 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
     return () => {
       cancelled = true;
     };
-  }, [laneId, row.agentId, row.model]);
+  }, [sessionId, row.agentId, row.model]);
 
   const target = React.useMemo(
     () =>
@@ -87,11 +87,11 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
 
   /** 投递一条消息：输入坞只把正文交出来，附件与模型选择在这个变体里是关闭的。 */
   const send = (text: string) => {
-    if (text.trim().length === 0 || sending || laneId === null) return;
+    if (text.trim().length === 0 || sending || sessionId === null) return;
     setSending(true);
     setSendError(null);
     void ipc
-      .conversationSendSubagentMessage(laneId, row.agentId, text)
+      .conversationSendSubagentMessage(sessionId, row.agentId, text)
       .catch((failure: unknown) => {
         setSendError(
           failure instanceof Error
@@ -149,7 +149,7 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
           sessionKey={`subagent:${row.agentId}`}
           turns={conversation.state.turns}
           followToken={conversation.state.turns.length}
-          subagentLane={{ interrupted: row.status === 'interrupted' }}
+          subagentSession={{ interrupted: row.status === 'interrupted' }}
         />
       )}
 
@@ -157,7 +157,7 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
         <InputDock
           compact
           workspaceRoot={null}
-          enabled={laneId !== null}
+          enabled={sessionId !== null}
           busy={sending}
           placeholder={`把下一步交给 ${row.label}`}
           hint={

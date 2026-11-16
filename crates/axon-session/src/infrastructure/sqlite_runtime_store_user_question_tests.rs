@@ -22,7 +22,6 @@ fn test_record(qid: &str, idempotency_key: &str, tool_call_id: &str) -> UserQues
     UserQuestionRecord {
         question_id: qid.to_string(),
         idempotency_key: idempotency_key.to_string(),
-        lane_id: "lane-test".to_string(),
         session_id: "sess-1".to_string(),
         interaction_id: "inter-1".to_string(),
         turn_id: "turn-1".to_string(),
@@ -52,7 +51,7 @@ fn test_insert_and_idempotency() {
 
     // 相同 idempotency_key 再次插入应幂等返回既有记录
     let mut rec2 = test_record("uq-different", "idem-1", "call-2");
-    rec2.lane_id = "lane-other".to_string();
+    rec2.session_id = "session-other".to_string();
     let second = fix.store.insert_question(&rec2).expect("幂等插入应成功");
     assert_eq!(second.question_id, "uq-1");
     assert_eq!(second.idempotency_key, "idem-1");

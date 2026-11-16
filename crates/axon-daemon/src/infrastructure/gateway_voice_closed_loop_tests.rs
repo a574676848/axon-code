@@ -129,12 +129,12 @@ fn test_timeouts(drained: Duration) -> VoiceTimeouts {
     }
 }
 
-fn lane_id() -> String {
+fn session_id() -> String {
     let audience = axon_domain::AudienceContext::new(
         axon_domain::AudienceKind::Private,
         axon_domain::DisclosurePolicy::PrivateOnly,
     );
-    axon_session::session_lane_id("w-1", &audience, "desktop", "desktop")
+    axon_session::session_id_for_route("w-1", &audience, "desktop", "desktop")
 }
 
 fn wire_delta(text: &str) -> GatewayEvent {
@@ -145,7 +145,7 @@ fn wire_delta(text: &str) -> GatewayEvent {
             "schemaVersion": 1,
             "eventId": "event-1",
             "correlationId": "correlation-1",
-            "session": {"sessionId": lane_id()},
+            "session": {"sessionId": session_id()},
             "sequence": 1,
             "recordedAtMs": 0,
             "kind": {
@@ -324,8 +324,8 @@ fn turn_closed_loop_reaches_playback_drained() {
         assert_eq!(turn["interactionId"], "interaction-1");
         assert_eq!(turn["epoch"], 1);
         assert_eq!(turn["turnId"], "interaction-1:1");
-        assert_eq!(turn["laneId"], lane_id());
-        assert_eq!(turn["sessionId"], lane_id());
+        assert_eq!(turn["sessionId"], session_id());
+        assert_eq!(turn["sessionId"], session_id());
         let submitted = server.ingress.submitted();
         assert_eq!(submitted.len(), 1, "必须且只能提交一次");
         assert_eq!(submitted[0].source_channel, "desktop");

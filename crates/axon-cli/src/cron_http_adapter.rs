@@ -1,6 +1,6 @@
 use axon_daemon::{GatewayHttpResponse, GatewayHttpRouteHandler};
 use axon_domain::{CronJob, CronJobInput, CronJobStatus, CronJobUpdate, CronRunRecord};
-use axon_session::{WorkspaceResolver, session_lane_id};
+use axon_session::{WorkspaceResolver, session_id_for_route};
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -155,7 +155,7 @@ impl CronHttpAdapter {
         } else {
             crate::cron_commands::cron_agent_config(&self.config_path, &destination)?
         };
-        let session_id = session_lane_id(
+        let session_id = session_id_for_route(
             workspace.workspace_id.as_str(),
             &axon_domain::AudienceContext::new(
                 axon_domain::AudienceKind::Private,

@@ -18,13 +18,13 @@ use axon_domain::{
     AudienceContext, InteractionId, InteractionRecord, InteractionSource, ReplyRoute,
     SHELL_JOB_WAKE_SOURCE_PREFIX, SYSTEM_SOURCE_CHANNEL, ScopeRef,
 };
-use axon_session::{LaneQueryStore, LaneSummaryRow, SqliteRuntimeStore};
+use axon_session::{SessionQueryStore, SessionSummaryRow, SqliteRuntimeStore};
 
 use super::run_execution::now_ms;
 use super::run_steer::{
     ActivePrimaryTurnRegistry, RunSteerSendError, try_send_deferred_runtime_note,
 };
-use crate::user_question::lane_steerer::{ActiveLaneTurnSteerSink, PrimaryTurnWakeHook};
+use crate::user_question::turn_steerer::{PrimaryTurnSteerSink, PrimaryTurnWakeHook};
 
 /// 跨 Turn 唤醒 Interaction ID 的前缀。
 const SHELL_JOB_WAKE_INTERACTION_PREFIX: &str = "shell-job-wake-";
@@ -42,7 +42,7 @@ const SHELL_JOB_WAKE_ROUTE_CAPACITY: usize = 256;
 /// 单个 `run_session_id` 在原回合结束后的跨 Turn 唤醒路由上下文。
 #[derive(Clone)]
 pub(crate) struct WakeRouteInfo {
-    pub(crate) lane_id: String,
+    pub(crate) session_id: String,
     pub(crate) model: Option<String>,
     pub(crate) reasoning_effort: Option<String>,
     pub(crate) turn_cancel_token: RunCancelToken,
@@ -93,7 +93,7 @@ impl ShellJobWakeBridge {
     /// 移除时才会随 `Drop` 退订，不设上界就等于让通知总线上的订阅随运行时长单调增长。
     pub(crate) fn register_turn(&self, owner_id: &str, route: WakeRouteInfo) {
         let trimmed_owner = owner_id.trim();
-        if trimmed_owner.is_empty() || route.lane_id.trim().is_empty() {
+        if trimmed_owner.is_empty() || route.session_id.trim().is_empty() {
             return;
         }
         let now = now_ms();
@@ -252,8 +252,8 @@ impl ShellJobWakeBridge {
         };
         if let Err(error) = self.submit_wake_interaction(&route_info, &wake_batch) {
             axon_logger::warning(&format!(
-                "后台 Shell 作业跨 Turn 唤醒提交失败: lane={}, owner={owner_id}, error={error}",
-                route_info.lane_id
+                "后台 Shell 作业跨 Turn 唤醒提交失败: session={}, owner={owner_id}, error={error}",
+                route_info.session_id
             ));
         }
     }
@@ -263,7 +263,8 @@ impl ShellJobWakeBridge {
         route_info: &WakeRouteInfo,
         batch: &CompletionNoticeBatch,
     ) -> Result<(), String> {
-        let Some((scope, audience, reply_route)) = self.lane_route(&route_info.lane_id)? else {
+        let Some((scope, audience, reply_route)) = self.session_route(&route_info.session_id)?
+        else {
             return Ok(());
         };
         if reply_route.channel() == SYSTEM_SOURCE_CHANNEL {
@@ -294,7 +295,7 @@ impl ShellJobWakeBridge {
 
         let ingress = PrimaryTurnIngress::new(
             self.store.clone(),
-            ActiveLaneTurnSteerSink::new(self.active_primary_turns.clone()),
+            PrimaryTurnSteerSink::new(self.active_primary_turns.clone()),
             timestamp,
             self.lease_duration_ms,
         );
@@ -305,23 +306,24 @@ impl ShellJobWakeBridge {
             && let Err(error) = (self.wake)()
         {
             axon_logger::warning(&format!(
-                "后台 Shell 作业唤醒信号发送失败，等待下一轮领取: lane={}, error={error}",
-                route_info.lane_id
+                "后台 Shell 作业唤醒信号发送失败，等待下一轮领取: session={}, error={error}",
+                route_info.session_id
             ));
         }
         Ok(())
     }
 
-    fn lane_route(
+    fn session_route(
         &self,
-        lane_id: &str,
+        session_id: &str,
     ) -> Result<Option<(ScopeRef, AudienceContext, ReplyRoute)>, String> {
-        let rows = LaneQueryStore::list_lane_summaries(&self.store)
+        let rows = SessionQueryStore::list_session_summaries(&self.store)
             .map_err(|error| format!("读取车道路由失败: {error:?}"))?;
-        let Some(row): Option<&LaneSummaryRow> = rows.iter().find(|row| row.lane_id == lane_id)
+        let Some(row): Option<&SessionSummaryRow> =
+            rows.iter().find(|row| row.session_id == session_id)
         else {
             axon_logger::warning(&format!(
-                "后台 Shell 作业唤醒跳过未登记的车道: lane={lane_id}"
+                "后台 Shell 作业唤醒跳过未登记的车道: session={session_id}"
             ));
             return Ok(None);
         };

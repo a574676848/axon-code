@@ -26,12 +26,13 @@ pub(super) struct DaemonIpcAnswerEntry {
 pub(super) fn answer_question_ipc_response(
     service: &crate::user_question::UserQuestionAnswerService,
     request_id: &str,
-    lane_id: &str,
+    session_id: &str,
     call_id: &str,
     answers: Vec<axon_domain::UserAnswerItem>,
     channel: &str,
 ) -> axon_protocol::DaemonResponse {
-    let outcome = crate::user_question::route_answer(service, lane_id, call_id, answers, channel);
+    let outcome =
+        crate::user_question::route_answer(service, session_id, call_id, answers, channel);
     if outcome.is_success() {
         return axon_protocol::DaemonResponse::success(request_id, outcome.payload);
     }

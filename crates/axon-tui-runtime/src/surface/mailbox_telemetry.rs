@@ -20,7 +20,7 @@ const P99: u64 = 99;
 /// 单条邮箱链路的聚合快照。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MailboxLaneTelemetrySnapshot {
+pub struct MailboxSessionTelemetrySnapshot {
     /// 实际进入队列的元素数。
     pub enqueued_count: u64,
     /// 从队列取出的元素数。
@@ -49,13 +49,13 @@ pub struct MailboxTelemetrySnapshot {
     /// 是否启用了采集。
     pub enabled: bool,
     /// submission worker mailbox 指标。
-    pub worker: MailboxLaneTelemetrySnapshot,
+    pub worker: MailboxSessionTelemetrySnapshot,
     /// runtime event mailbox 指标。
-    pub runtime: MailboxLaneTelemetrySnapshot,
+    pub runtime: MailboxSessionTelemetrySnapshot,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum MailboxLane {
+pub(crate) enum MailboxSession {
     Worker,
 }
 
@@ -67,12 +67,12 @@ pub(crate) struct MailboxTelemetry {
 
 #[derive(Debug)]
 struct MailboxTelemetryInner {
-    worker: MailboxLaneTelemetry,
-    runtime: MailboxLaneTelemetry,
+    worker: MailboxSessionTelemetry,
+    runtime: MailboxSessionTelemetry,
 }
 
 #[derive(Debug)]
-struct MailboxLaneTelemetry {
+struct MailboxSessionTelemetry {
     enqueued_count: AtomicU64,
     drained_count: AtomicU64,
     coalesced_count: AtomicU64,
@@ -87,8 +87,8 @@ impl MailboxTelemetry {
         Self {
             enabled,
             inner: Arc::new(MailboxTelemetryInner {
-                worker: MailboxLaneTelemetry::new(),
-                runtime: MailboxLaneTelemetry::new(),
+                worker: MailboxSessionTelemetry::new(),
+                runtime: MailboxSessionTelemetry::new(),
             }),
         }
     }
@@ -101,8 +101,8 @@ impl MailboxTelemetry {
         self.enabled.then(Instant::now)
     }
 
-    pub(crate) fn record_enqueued(&self, lane: MailboxLane, backlog: usize) {
-        let Some(metrics) = self.metrics(lane) else {
+    pub(crate) fn record_enqueued(&self, session: MailboxSession, backlog: usize) {
+        let Some(metrics) = self.metrics(session) else {
             return;
         };
         metrics.enqueued_count.fetch_add(1, Ordering::Relaxed);
@@ -112,8 +112,8 @@ impl MailboxTelemetry {
         );
     }
 
-    pub(crate) fn record_drained(&self, lane: MailboxLane, enqueued_at: Option<Instant>) {
-        let Some(metrics) = self.metrics(lane) else {
+    pub(crate) fn record_drained(&self, session: MailboxSession, enqueued_at: Option<Instant>) {
+        let Some(metrics) = self.metrics(session) else {
             return;
         };
         metrics.drained_count.fetch_add(1, Ordering::Relaxed);
@@ -123,20 +123,20 @@ impl MailboxTelemetry {
         }
     }
 
-    pub(crate) fn record_coalesced(&self, lane: MailboxLane) {
-        if let Some(metrics) = self.metrics(lane) {
+    pub(crate) fn record_coalesced(&self, session: MailboxSession) {
+        if let Some(metrics) = self.metrics(session) {
             metrics.coalesced_count.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    pub(crate) fn record_stale(&self, lane: MailboxLane) {
-        if let Some(metrics) = self.metrics(lane) {
+    pub(crate) fn record_stale(&self, session: MailboxSession) {
+        if let Some(metrics) = self.metrics(session) {
             metrics.stale_count.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    pub(crate) fn record_shed(&self, lane: MailboxLane) {
-        if let Some(metrics) = self.metrics(lane) {
+    pub(crate) fn record_shed(&self, session: MailboxSession) {
+        if let Some(metrics) = self.metrics(session) {
             metrics.shed_count.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -152,8 +152,8 @@ impl MailboxTelemetry {
         }
     }
 
-    fn metrics(&self, lane: MailboxLane) -> Option<&MailboxLaneTelemetry> {
-        let MailboxLane::Worker = lane;
+    fn metrics(&self, session: MailboxSession) -> Option<&MailboxSessionTelemetry> {
+        let MailboxSession::Worker = session;
         self.enabled.then_some(&self.inner.worker)
     }
 }
@@ -164,7 +164,7 @@ impl Default for MailboxTelemetry {
     }
 }
 
-impl MailboxLaneTelemetry {
+impl MailboxSessionTelemetry {
     fn new() -> Self {
         Self {
             enqueued_count: AtomicU64::new(0),
@@ -177,12 +177,12 @@ impl MailboxLaneTelemetry {
         }
     }
 
-    fn snapshot(&self) -> MailboxLaneTelemetrySnapshot {
+    fn snapshot(&self) -> MailboxSessionTelemetrySnapshot {
         let buckets = self
             .queue_wait_buckets
             .each_ref()
             .map(|bucket| bucket.load(Ordering::Relaxed));
-        MailboxLaneTelemetrySnapshot {
+        MailboxSessionTelemetrySnapshot {
             enqueued_count: self.enqueued_count.load(Ordering::Relaxed),
             drained_count: self.drained_count.load(Ordering::Relaxed),
             coalesced_count: self.coalesced_count.load(Ordering::Relaxed),
@@ -251,8 +251,8 @@ mod tests {
     #[test]
     fn disabled_collector_remains_empty() {
         let telemetry = MailboxTelemetry::new(false);
-        telemetry.record_enqueued(MailboxLane::Worker, 3);
-        telemetry.record_coalesced(MailboxLane::Worker);
+        telemetry.record_enqueued(MailboxSession::Worker, 3);
+        telemetry.record_coalesced(MailboxSession::Worker);
 
         assert_eq!(telemetry.enqueued_at(), None);
         assert_eq!(telemetry.snapshot(), MailboxTelemetrySnapshot::default());
@@ -261,11 +261,11 @@ mod tests {
     #[test]
     fn enabled_collector_tracks_bounded_distribution() {
         let telemetry = MailboxTelemetry::new(true);
-        telemetry.record_enqueued(MailboxLane::Worker, 4);
-        telemetry.record_drained(MailboxLane::Worker, telemetry.enqueued_at());
-        telemetry.record_coalesced(MailboxLane::Worker);
-        telemetry.record_stale(MailboxLane::Worker);
-        telemetry.record_shed(MailboxLane::Worker);
+        telemetry.record_enqueued(MailboxSession::Worker, 4);
+        telemetry.record_drained(MailboxSession::Worker, telemetry.enqueued_at());
+        telemetry.record_coalesced(MailboxSession::Worker);
+        telemetry.record_stale(MailboxSession::Worker);
+        telemetry.record_shed(MailboxSession::Worker);
 
         let snapshot = telemetry.snapshot();
         assert!(snapshot.enabled);

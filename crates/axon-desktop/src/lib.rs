@@ -38,10 +38,6 @@ pub mod goals;
 pub mod input_history;
 /// 基础配置权威 IPC 命令与数据模型。
 pub mod ipc;
-/// 当前会话上下文：通知与界面共用的会话归属。
-pub mod lane_context;
-/// 车道数据源与表现层端口。
-pub mod lane_source;
 /// MCP 运行态转发：真正的加载结论由 daemon 的启动快照给出。
 pub mod mcp_runtime;
 pub mod persona;
@@ -59,8 +55,12 @@ pub mod secrets;
 pub mod self_check;
 /// 网关可用性探测与服务修复引导。
 pub mod service_recovery;
+/// 当前会话上下文：通知与界面共用的会话归属。
+pub mod session_context;
 /// 会话菜单：经网关读取会话清单并写回置顶与归档。
 pub mod session_menu;
+/// 车道数据源与表现层端口。
+pub mod session_source;
 /// 桌面工作台自身的持久化状态。
 pub mod state;
 /// 系统信息。
@@ -104,10 +104,10 @@ use connection::keys::{connection_keys_create, connection_keys_list, connection_
 use conversation::{
     attachment_pick, attachment_preview, attachment_stage, conversation_answer_question,
     conversation_history, conversation_history_events, conversation_interrupt,
-    conversation_job_output, conversation_lane_jobs, conversation_lane_questions,
-    conversation_lane_subagents, conversation_send_subagent_message, conversation_set_active_lane,
-    conversation_stop_job, conversation_submit, conversation_unsubscribe, conversation_watch,
-    conversation_watch_session,
+    conversation_job_output, conversation_send_subagent_message, conversation_session_jobs,
+    conversation_session_questions, conversation_session_subagents,
+    conversation_set_active_session, conversation_stop_job, conversation_submit,
+    conversation_unsubscribe, conversation_watch, conversation_watch_session,
 };
 use desktop_preferences::{
     desktop_preferences, desktop_set_notifications, desktop_set_sidebar_collapsed,
@@ -125,7 +125,6 @@ use ipc::{
     config_apply_values, config_read, config_reset_key, config_validate, config_validate_values,
     config_write, voice_presets, voice_runtime_status, voice_tts,
 };
-use lane_source::GatewayLaneSource;
 use mcp_runtime::{mcp_runtime_refresh, mcp_runtime_status};
 use persona::{persona_portrait, persona_summary};
 use picker::pick_directory;
@@ -137,6 +136,7 @@ use process::open_external_url;
 use release_channel::check_update;
 use secrets::{secret_clear, secret_set, secret_status_of};
 use service_recovery::{gateway_health, gateway_start_service};
+use session_source::GatewaySessionSource;
 use std::sync::Arc;
 use system_info::system_info;
 use tauri::Emitter;
@@ -148,8 +148,8 @@ use voice::{
 };
 use voice_permission::{voice_microphone_status, voice_open_microphone_settings};
 use workspace::{
-    lane_create, lane_rename, lane_reorder, lane_set_archived, lane_set_pinned, workspace_add,
-    workspace_list, workspace_remove,
+    session_create, session_rename, session_reorder, session_set_archived, session_set_pinned,
+    workspace_add, workspace_list, workspace_remove,
 };
 use workspace_apps::{workspace_applications, workspace_open_with};
 use workspace_files::{
@@ -160,7 +160,7 @@ use workspace_files::{
 /// 桌面应用共享状态：组合根装配好的车道数据源。
 pub struct AppState {
     /// 表现层消费的车道数据端口。
-    pub lanes: Arc<dyn lane_source::LaneSource>,
+    pub sessions: Arc<dyn session_source::SessionSource>,
     /// 会话事件订阅器：一条连接并行服务多路订阅（进程内唯一实例）。
     pub conversation: Arc<conversation::ConversationStream>,
 }
@@ -176,7 +176,7 @@ pub fn run() {
         connection::runtime().set_notice(Some(notice));
     }
     let state = AppState {
-        lanes: Arc::new(GatewayLaneSource::new()),
+        sessions: Arc::new(GatewaySessionSource::new()),
         conversation: conversation::stream::shared().clone(),
     };
 
@@ -337,11 +337,11 @@ pub fn run() {
             workspace_add,
             workspace_remove,
             pick_directory,
-            lane_create,
-            lane_set_pinned,
-            lane_set_archived,
-            lane_rename,
-            lane_reorder,
+            session_create,
+            session_set_pinned,
+            session_set_archived,
+            session_rename,
+            session_reorder,
             workspace_list_entries,
             workspace_stat_path,
             workspace_read_file,
@@ -357,18 +357,18 @@ pub fn run() {
             terminal_close,
             conversation_submit,
             conversation_answer_question,
-            conversation_set_active_lane,
+            conversation_set_active_session,
             conversation_history,
             conversation_history_events,
-            conversation_lane_questions,
+            conversation_session_questions,
             conversation_watch,
             conversation_watch_session,
             conversation_unsubscribe,
             conversation_interrupt,
             conversation_stop_job,
             conversation_send_subagent_message,
-            conversation_lane_jobs,
-            conversation_lane_subagents,
+            conversation_session_jobs,
+            conversation_session_subagents,
             conversation_job_output,
             attachment_stage,
             attachment_pick,

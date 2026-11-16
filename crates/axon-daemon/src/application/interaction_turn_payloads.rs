@@ -160,7 +160,7 @@ pub(super) fn interaction_transport_context(interaction: &InteractionRecord) -> 
             .scope
             .workspace_id()
             .map_or_else(String::new, |value| value.as_str().to_owned()),
-        "primaryLaneId": interaction_session_lane_id(interaction)
+        "primarySessionId": interaction_session_id(interaction)
             .unwrap_or_default(),
         "audience": interaction.audience.clone(),
     });

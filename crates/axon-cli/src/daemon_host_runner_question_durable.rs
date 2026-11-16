@@ -30,9 +30,9 @@ pub(super) fn durable_question_event_writer(
     host: DaemonHostRecord,
     bridge: Arc<axon_daemon::EventStreamBridge>,
 ) -> DurableQuestionEventWriter {
-    Arc::new(move |lane_id: &str, event: &WireEventEnvelope| {
+    Arc::new(move |session_id: &str, event: &WireEventEnvelope| {
         let session_id =
-            DaemonSessionId::new(lane_id).map_err(|error| format!("车道标识非法：{error:?}"))?;
+            DaemonSessionId::new(session_id).map_err(|error| format!("车道标识非法：{error:?}"))?;
         let now_ms = crate::daemon_commands::now_ms();
         let payload =
             serde_json::to_string(event).map_err(|error| format!("问答事件序列化失败：{error}"))?;

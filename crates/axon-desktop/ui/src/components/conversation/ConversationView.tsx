@@ -1,11 +1,11 @@
 import React from 'react';
 import * as ipc from '../../ipc';
 import type { CronJob, WorkspaceItem } from '../../types';
-import { targetOfLane, useConversation, type LaneSelection } from '../../conversation/useConversation';
+import { targetOfSession, useConversation, type SessionSelection } from '../../conversation/useConversation';
 import { sessionGenerationMetrics } from '../../conversation/sessionGeneration';
 import { lastObservedUsage } from '../../conversation/sessionUsage';
 import { coverFace, type StageFrame } from '../../conversation/stage';
-import { useLaneAutoRead, useStopSpeechOnLaneChange } from '../../speech';
+import { useSessionAutoRead, useStopSpeechOnSessionChange } from '../../speech';
 import { ConversationHeader } from './ConversationHeader';
 import { SessionOriginBar } from './SessionOriginBar';
 import { isReadOnlySession, READ_ONLY_PLACEHOLDER, type SessionOriginBarState } from '../../sessionOpening';
@@ -27,7 +27,7 @@ import {
   isActiveSubagent,
   activeJobCount,
   JOB_ROSTER_REFRESH_MS,
-  type LaneRuntimeFacts,
+  type SessionRuntimeFacts,
 } from '../../conversation/runtimeFacts';
 import { SubagentRunView } from './SubagentRunView';
 import {
@@ -56,15 +56,15 @@ const CRON_DESTINATION_PREFIX = 'cron-';
 /** 后台驱动的独立会话在输入坞里的禁用说明。 */
 export interface ConversationViewProps {
   /** 当前选中的会话；为空时展示首屏空态。 */
-  selection: LaneSelection | null;
+  selection: SessionSelection | null;
   /** 当前工作区；用于占位提示与新建会话。 */
   workspace: WorkspaceItem | null;
   /** 配置版本号；设置保存后递增以触发复读。 */
   configRevision: number;
   /** 通知外层选中了新的会话。 */
-  onSelectLane: (selection: LaneSelection) => void;
+  onSelectSession: (selection: SessionSelection) => void;
   /** 上报当前会话的运行时事实；外层据此判断归档是否需要二次确认。 */
-  onRuntimeFacts?: (facts: LaneRuntimeFacts) => void;
+  onRuntimeFacts?: (facts: SessionRuntimeFacts) => void;
   /** 会话来源返回条；从页面进入的后台会话才有。 */
   originBar?: SessionOriginBarState | null;
   /**
@@ -80,14 +80,14 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   selection,
   workspace,
   configRevision,
-  onSelectLane,
+  onSelectSession,
   onRuntimeFacts,
   originBar = null,
   mcp,
 }) => {
   // 车道选择归一化成订阅目标：控制器本身与子代理会话视图共用同一个 hook。
   const target = React.useMemo(
-    () => (selection === null ? null : targetOfLane(selection)),
+    () => (selection === null ? null : targetOfSession(selection)),
     [selection],
   );
   /**
@@ -97,35 +97,35 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    * 唯一能说明「这条车道又多了一轮」的外部事实就是快照上的总数；车道不在侧栏
    * 登记时（定时任务这类独立会话）没有这份事实，传空。
    */
-  const snapshotLaneId = selection?.laneId ?? null;
-  const laneFacts = React.useMemo(
+  const snapshotSessionId = selection?.sessionId ?? null;
+  const sessionFacts = React.useMemo(
     () => {
-      if (snapshotLaneId === null) return null;
-      const lane = workspace?.lanes.find((item) => item.id === snapshotLaneId);
-      return lane === undefined
+      if (snapshotSessionId === null) return null;
+      const session = workspace?.sessions.find((item) => item.id === snapshotSessionId);
+      return session === undefined
         ? null
-        : { laneId: lane.id, interactionCount: lane.interaction_count };
+        : { sessionId: session.id, interactionCount: session.interaction_count };
     },
-    [snapshotLaneId, workspace],
+    [snapshotSessionId, workspace],
   );
-  const conversation = useConversation(target, laneFacts);
+  const conversation = useConversation(target, sessionFacts);
   // 右侧栏按会话持有停靠面：开关、tab 与分栏都在这一份状态里。
-  const rail = useRailLayout(selection?.laneId ?? null);
+  const rail = useRailLayout(selection?.sessionId ?? null);
   /*
    * 语音播报按会话生效：偏好键由工作区与会话拼成，正文舞台与指标条里的
    * 开关读的都是这一个键，因此两处不会各说一套。
    */
-  const laneKey = selection === null ? null : `${selection.workspaceId}:${selection.laneId}`;
-  const voiceAutoRead = useLaneAutoRead(laneKey);
-  useStopSpeechOnLaneChange(laneKey);
+  const sessionKey = selection === null ? null : `${selection.workspaceId}:${selection.sessionId}`;
+  const voiceAutoRead = useSessionAutoRead(sessionKey);
+  useStopSpeechOnSessionChange(sessionKey);
   /*
    * 用户在本会话里显式改过的模型：只有真在输入坞选过才随轮下发，换会话即作废。
    * 没选过时留空，让后端按会话记录的模型继续，而不是让全局默认值覆盖它。
    */
   const { explicitModel, explicitReasoningEffort, onModelChange, onReasoningEffortChange } =
-    useExplicitTurnSettings(laneKey);
+    useExplicitTurnSettings(sessionKey);
   // 一轮收口时朗读这一轮的回复：流式与收口补齐两种落地方式都覆盖。
-  useAutoReadReply(laneKey, conversation.working, conversation.state.turns, voiceAutoRead);
+  useAutoReadReply(sessionKey, conversation.working, conversation.state.turns, voiceAutoRead);
   const [config, setConfig] = React.useState<ResolvedConfig | null>(null);
   const [cronConfig, setCronConfig] = React.useState<CronJob | null>(null);
   const cronJobId = selection?.destination.startsWith(CRON_DESTINATION_PREFIX)
@@ -142,7 +142,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     config,
     fixedModel ?? null,
     explicitModel,
-    conversation.laneModel,
+    conversation.sessionModel,
   );
   /**
    * 最近一次记忆反思提示。
@@ -150,7 +150,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    * 它由「首页历史」带回，与权威模型同一时机、同一寿命：换目标时一起清空，翻页不回退。
    * 空白一律当没有：网关偶尔会给出空串，渲染一行空白等于凭空造出一条提示。
    */
-  const memoryReflection = conversation.laneReflectionNotice?.trim() || null;
+  const memoryReflection = conversation.sessionReflectionNotice?.trim() || null;
   /** 递增即要求定位到最新消息：发送消息后必须看到自己刚发的那条。 */
   const [followToken, setFollowToken] = React.useState(0);
   /** 正在查看的子代理；非空时主区域让给它的运行轨迹。 */
@@ -193,7 +193,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    * `useSessionBootstrap` 里，本层只消费它的事实。
    */
   const { creating, createError, clearCreateError, submitFromHero, ensureVoiceSession } =
-    useSessionBootstrap({ selection, workspace, conversation, onSelectLane });
+    useSessionBootstrap({ selection, workspace, conversation, onSelectSession });
 
   /**
    * 工作状态行的主语：最后一条真正在跑的轮次。
@@ -259,7 +259,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
       referenceIndex: () => sessionReferenceIndex(conversationRef.current.state.turns),
     },
     workspacePath,
-    selection?.laneId ?? null,
+    selection?.sessionId ?? null,
   );
 
   /*
@@ -365,16 +365,16 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    * 归档判断拿它当权威，避免把已经跑完的后台任务算成「还在运行」。
    */
   const [liveJobIds, setLiveJobIds] = React.useState<Set<string> | null>(null);
-  const selectedLaneId = selection?.laneId ?? null;
+  const selectedSessionId = selection?.sessionId ?? null;
   React.useEffect(() => {
-    if (selectedLaneId === null) {
+    if (selectedSessionId === null) {
       setLiveJobIds(null);
       return undefined;
     }
     let cancelled = false;
     const refresh = () => {
       void ipc
-        .conversationLaneJobs(selectedLaneId)
+        .conversationSessionJobs(selectedSessionId)
         .then((roster) => {
           if (!cancelled) setLiveJobIds(new Set(roster.jobIds));
         })
@@ -388,12 +388,12 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [selectedLaneId]);
+  }, [selectedSessionId]);
   const activeJobs = activeJobCount(conversation.jobs, liveJobIds);
 
   React.useEffect(() => {
     onRuntimeFacts?.({
-      laneId: selection?.laneId ?? null,
+      sessionId: selection?.sessionId ?? null,
       turnRunning: conversation.working,
       activeSubagents,
       activeJobs,
@@ -407,7 +407,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     conversation.activeQuestion,
     conversation.working,
     onRuntimeFacts,
-    selection?.laneId,
+    selection?.sessionId,
     stopRunning,
   ]);
 
@@ -428,7 +428,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    * 切换前正在看的那一屏。
    */
   const shown = useSettledValue<StageFrame>(
-    { key: laneKey, turns: conversation.state.turns },
+    { key: sessionKey, turns: conversation.state.turns },
     settling,
   );
 
@@ -466,9 +466,9 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
               <ConversationHeaderActions
                 subagents={runtimeFacts.subagents}
                 jobs={runtimeFacts.jobs}
-                laneId={selection?.laneId ?? null}
+                sessionId={selection?.sessionId ?? null}
                 working={conversation.working}
-                laneKey={laneKey}
+                sessionKey={sessionKey}
                 onOpenSubagent={setOpenSubagentId}
                 railExpanded={rail.layout.expanded}
                 onToggleRail={rail.toggleExpanded}
@@ -503,7 +503,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
               <SubagentRunView
                 row={openSubagent}
                 workspaceId={selection?.workspaceId ?? null}
-                laneId={selection?.laneId ?? null}
+                sessionId={selection?.sessionId ?? null}
                 onBack={() => setOpenSubagentId(null)}
               />
             ) : (
@@ -624,7 +624,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 error={dockError}
                 working={dockWorking}
                 onInterrupt={() => void conversation.interrupt()}
-                laneKey={laneKey}
+                sessionKey={sessionKey}
                 activeQuestion={conversation.activeQuestion}
                 onAnswerQuestion={conversation.answerQuestion}
                 reopenToken={questionReopenToken}

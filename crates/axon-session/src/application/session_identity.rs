@@ -7,7 +7,7 @@ use axon_crypto::sha256_hex;
 use axon_domain::{AudienceContext, AudienceKind, DisclosurePolicy, InteractionRecord};
 
 /// Session 车道 ID 前缀；与历史逐条 Interaction Session 明确区分。
-const SESSION_LANE_ID_PREFIX: &str = "session-lane-";
+const SESSION_SESSION_ID_PREFIX: &str = "session-session-";
 /// 只允许当前私密上下文可见的 trust scope。
 const TRUST_SCOPE_PRIVATE: &str = "private";
 /// 允许披露 Workspace 内容的群聊 trust scope。
@@ -21,26 +21,29 @@ const TRUST_SCOPE_RESTRICTED: &str = "restricted";
 /// destination 区分同一 Workspace 下的不同会话表面。ID 使用规范化四元组的
 /// SHA-256，避免路由字段分隔符歧义和超长 destination 撑破 Session ID。
 #[must_use]
-pub fn session_lane_id(
+pub fn session_id_for_route(
     workspace_id: &str,
     audience: &AudienceContext,
     channel: &str,
     destination: &str,
 ) -> String {
-    let lane_material = serde_json::json!([
+    let session_material = serde_json::json!([
         workspace_id.trim(),
         trust_scope(audience),
         channel.trim(),
         destination.trim(),
     ])
     .to_string();
-    format!("{SESSION_LANE_ID_PREFIX}{}", sha256_hex(lane_material))
+    format!(
+        "{SESSION_SESSION_ID_PREFIX}{}",
+        sha256_hex(session_material)
+    )
 }
 
 /// 从 Interaction 派生主 turn 车道；未绑定 Workspace 时返回 None。
 #[must_use]
-pub fn interaction_session_lane_id(interaction: &InteractionRecord) -> Option<String> {
-    Some(session_lane_id(
+pub fn interaction_session_id(interaction: &InteractionRecord) -> Option<String> {
+    Some(session_id_for_route(
         interaction.scope.workspace_id()?.as_str(),
         &interaction.audience,
         interaction.source.channel(),
@@ -62,23 +65,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn same_workspace_and_surface_resolves_to_same_session_lane() {
+    fn same_workspace_and_surface_resolves_to_same_session_session() {
         let workspace = "workspace-0f1e2d3c4b5a6978";
         let audience = AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly);
         assert_eq!(
-            session_lane_id(workspace, &audience, "tui", "terminal-1"),
-            session_lane_id(workspace, &audience, "tui", "terminal-1")
+            session_id_for_route(workspace, &audience, "tui", "terminal-1"),
+            session_id_for_route(workspace, &audience, "tui", "terminal-1")
         );
     }
 
     #[test]
-    fn different_workspaces_scopes_and_surfaces_resolve_to_different_lanes() {
+    fn different_workspaces_scopes_and_surfaces_resolve_to_different_sessions() {
         let private = AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly);
         let group = AudienceContext::new(AudienceKind::Group, DisclosurePolicy::Workspace);
-        let first = session_lane_id("workspace-a", &private, "tui", "terminal-1");
-        let second = session_lane_id("workspace-b", &private, "tui", "terminal-1");
-        let third = session_lane_id("workspace-a", &group, "feishu", "chat-a");
-        let fourth = session_lane_id("workspace-a", &private, "feishu", "chat-b");
+        let first = session_id_for_route("workspace-a", &private, "tui", "terminal-1");
+        let second = session_id_for_route("workspace-b", &private, "tui", "terminal-1");
+        let third = session_id_for_route("workspace-a", &group, "feishu", "chat-a");
+        let fourth = session_id_for_route("workspace-a", &private, "feishu", "chat-b");
 
         assert_ne!(first, second);
         assert_ne!(first, third);
@@ -86,15 +89,15 @@ mod tests {
     }
 
     #[test]
-    fn session_lane_ignores_surrounding_whitespace() {
+    fn session_session_ignores_surrounding_whitespace() {
         assert_eq!(
-            session_lane_id(
+            session_id_for_route(
                 "  workspace-0f1e2d3c4b5a6978  ",
                 &AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly),
                 " tui ",
                 " terminal-1 ",
             ),
-            session_lane_id(
+            session_id_for_route(
                 "workspace-0f1e2d3c4b5a6978",
                 &AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly),
                 "tui",
@@ -104,7 +107,7 @@ mod tests {
     }
 
     #[test]
-    fn interaction_lane_requires_workspace_and_uses_route_identity() {
+    fn interaction_session_requires_workspace_and_uses_route_identity() {
         let interaction = InteractionRecord::new(
             axon_domain::InteractionId::new("interaction-1").expect("合法 ID"),
             axon_domain::InteractionSource::new("feishu", "chat-a:message-1").expect("合法来源"),
@@ -117,8 +120,8 @@ mod tests {
         .expect("合法 Interaction");
 
         assert_eq!(
-            interaction_session_lane_id(&interaction),
-            Some(session_lane_id(
+            interaction_session_id(&interaction),
+            Some(session_id_for_route(
                 "workspace-a",
                 &interaction.audience,
                 "feishu",

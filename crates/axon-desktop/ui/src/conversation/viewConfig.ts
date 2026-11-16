@@ -28,7 +28,7 @@ export interface ConfigModelEntry {
  * 网关只读该车道运行会话的**最新一轮**记录（一条 `ORDER BY sequence DESC LIMIT 1`），
  * 不遍历历史轮次；界面据此显示输入坞的真实模型。
  */
-export interface LaneEffectiveModel {
+export interface SessionEffectiveModel {
   /** 该轮使用的 provider。 */
   provider: string;
   /** 该轮使用的 upstream 模型 ID。 */
@@ -103,7 +103,7 @@ export function resolveConfig(
  */
 export function modelLabelFor(
   catalog: ConfigModelEntry[],
-  run: LaneEffectiveModel | null,
+  run: SessionEffectiveModel | null,
 ): string | null {
   if (run === null) return null;
   const name = run.name ?? null;
@@ -162,12 +162,12 @@ export function resolveEffectiveModel(
   config: ResolvedConfig | null,
   fixedModel: string | null,
   explicitModel: string | null,
-  laneModel: LaneEffectiveModel | null,
+  sessionModel: SessionEffectiveModel | null,
 ): EffectiveModel {
   const catalog = config?.catalog ?? [];
   const configModel = config?.model ?? '';
   const label =
-    fixedModel ?? explicitModel ?? modelLabelFor(catalog, laneModel) ?? configModel;
+    fixedModel ?? explicitModel ?? modelLabelFor(catalog, sessionModel) ?? configModel;
   const matched = findModelEntry(catalog, label);
   return {
     label,

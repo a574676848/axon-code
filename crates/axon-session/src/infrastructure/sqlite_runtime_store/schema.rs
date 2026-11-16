@@ -261,7 +261,7 @@ const CONTROL_DDL: &str = "
             attachments_json TEXT NOT NULL DEFAULT '[]',
             model TEXT,
             reasoning_effort TEXT,
-            lane_id TEXT NOT NULL DEFAULT '',
+            session_id TEXT NOT NULL DEFAULT '',
             tool_summary TEXT NOT NULL DEFAULT ''
         );
         CREATE UNIQUE INDEX IF NOT EXISTS inbox_source
@@ -535,7 +535,6 @@ const OUTBOX_DDL: &str = "
         CREATE TABLE IF NOT EXISTS user_questions (
             question_id TEXT PRIMARY KEY NOT NULL,
             idempotency_key TEXT NOT NULL,
-            lane_id TEXT NOT NULL,
             session_id TEXT NOT NULL,
             interaction_id TEXT NOT NULL,
             turn_id TEXT NOT NULL,
@@ -554,8 +553,8 @@ const OUTBOX_DDL: &str = "
         );
         CREATE UNIQUE INDEX IF NOT EXISTS user_questions_idempotency
             ON user_questions(idempotency_key);
-        CREATE INDEX IF NOT EXISTS user_questions_lane_state
-            ON user_questions(lane_id, state, created_at_ms DESC);
+        CREATE INDEX IF NOT EXISTS user_questions_session_state
+            ON user_questions(session_id, state, created_at_ms DESC);
         CREATE INDEX IF NOT EXISTS user_questions_reconcile
             ON user_questions(state, delivered, expires_at_ms);
 ";
@@ -566,7 +565,7 @@ const OUTBOX_DDL: &str = "
 /// 这里只补齐**新增且可空/带默认值**的列：无损、幂等、不需要重建库，因此不会丢掉
 /// 排队中的 Interaction 或 Host lease。schema 版本只在出现不兼容变更时递增。
 ///
-/// 新增列的配套索引必须在本函数内、列补齐之后创建：既有库的 `lane_id` 由本函数
+/// 新增列的配套索引必须在本函数内、列补齐之后创建：既有库的 `session_id` 由本函数
 /// 补列，索引若写在 DDL 批次里会因列不存在而整批失败。
 fn migrate_additive_columns(connection: &Connection) -> rusqlite::Result<()> {
     /*
@@ -600,7 +599,12 @@ fn migrate_additive_columns(connection: &Connection) -> rusqlite::Result<()> {
         "attachments_json",
         "TEXT NOT NULL DEFAULT '[]'",
     )?;
-    add_column_if_missing(connection, "inbox", "lane_id", "TEXT NOT NULL DEFAULT ''")?;
+    add_column_if_missing(
+        connection,
+        "inbox",
+        "session_id",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
     // 本轮显式指定的模型（TUI `/model` 等入口）：可空，老记录读作 None。
     add_column_if_missing(connection, "inbox", "model", "TEXT")?;
     // 本轮显式指定的推理强度：与 model 同源，可空，老记录读作 None。
@@ -619,12 +623,12 @@ fn migrate_additive_columns(connection: &Connection) -> rusqlite::Result<()> {
         "TEXT NOT NULL DEFAULT ''",
     )?;
     /*
-     * 车道列表按 (lane, 接收时间倒序) 取组内首行；lane 排他领取改由 work_items 的
+     * 车道列表按 (session, 接收时间倒序) 取组内首行；session 排他领取改由 work_items 的
      * (inbox_id, status, lease_expires_at_ms) 索引承担，见 DDL。
      */
     connection.execute_batch(
-        "CREATE INDEX IF NOT EXISTS inbox_lane_recent
-            ON inbox(lane_id, received_at_ms DESC, interaction_id DESC);",
+        "CREATE INDEX IF NOT EXISTS inbox_session_recent
+            ON inbox(session_id, received_at_ms DESC, interaction_id DESC);",
     )
 }
 

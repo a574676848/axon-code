@@ -111,7 +111,7 @@ fn assert_resume_cells(state: &crate::r#loop::agent_tui::state::AgentTuiState) {
         panic!("快照恢复后底部面板应为提问面板");
     };
     assert_eq!(view.call_id(), "call-snapshot-question");
-    assert_eq!(view.lane_id(), "session-008");
+    assert_eq!(view.session_id(), "session-008");
     assert!(state.cells.transcript.iter().any(|line| {
         line.text == "历史回答"
             && matches!(

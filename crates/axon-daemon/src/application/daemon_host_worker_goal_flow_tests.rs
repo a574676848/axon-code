@@ -4,7 +4,7 @@ use super::*;
 use axon_session::EventLogStore;
 
 #[test]
-fn primary_turn_runs_different_workspace_lanes_concurrently() {
+fn primary_turn_runs_different_workspace_sessions_concurrently() {
     let directory = axon_test_support::test_temp_dir();
     let first_root = directory.path().join("workspace-a");
     let second_root = directory.path().join("workspace-b");

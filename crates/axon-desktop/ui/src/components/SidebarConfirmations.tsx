@@ -1,6 +1,6 @@
 import React from 'react';
-import type { LaneItem, WorkspaceItem } from '../types';
-import type { LaneRuntimeFacts } from '../conversation/runtimeFacts';
+import type { SessionItem, WorkspaceItem } from '../types';
+import type { SessionRuntimeFacts } from '../conversation/runtimeFacts';
 import { Text } from './ui/surfaces';
 import { Dialog } from './ui/overlays';
 
@@ -12,11 +12,11 @@ import { Dialog } from './ui/overlays';
  * 放在弹窗正文里一次说完，因此这里不与侧栏的其它状态共享任何文案。
  */
 
-export interface ArchiveLaneDialogProps {
+export interface ArchiveSessionDialogProps {
   /** 待归档的会话；为空表示没有弹窗。 */
-  lane: LaneItem | null;
+  session: SessionItem | null;
   /** 当前会话的运行时事实，用来摆出还在跑什么。 */
-  runtime: LaneRuntimeFacts | null;
+  runtime: SessionRuntimeFacts | null;
   /** 正在停止。 */
   stopping: boolean;
   onClose: () => void;
@@ -24,15 +24,15 @@ export interface ArchiveLaneDialogProps {
 }
 
 /** 归档正在运行的会话：先停掉本轮与派生的子任务，再归档。 */
-export const ArchiveLaneDialog: React.FC<ArchiveLaneDialogProps> = ({
-  lane,
+export const ArchiveSessionDialog: React.FC<ArchiveSessionDialogProps> = ({
+  session,
   runtime,
   stopping,
   onClose,
   onConfirm,
 }) => (
   <Dialog
-    open={lane !== null}
+    open={session !== null}
     onClose={() => {
       if (!stopping) onClose();
     }}
@@ -47,7 +47,7 @@ export const ArchiveLaneDialog: React.FC<ArchiveLaneDialogProps> = ({
       disabled: stopping,
       onClick: onClose,
     }}
-    hint={lane?.title ?? ''}
+    hint={session?.title ?? ''}
   >
     <Text size="meta" className="block">
       这个会话正在运行，归档不会让它自己停下来：

@@ -162,13 +162,13 @@ impl InteractionQueryStore for SqliteRuntimeStore {
             .map_err(storage_error)
     }
 
-    fn interactions_for_lane(
+    fn interactions_for_session(
         &self,
-        lane_id: &str,
+        session_id: &str,
         limit: u32,
         before: Option<&InteractionCursor>,
     ) -> Result<Vec<InteractionRecord>, InteractionStoreError> {
-        if lane_id.trim().is_empty() {
+        if session_id.trim().is_empty() {
             return Err(InteractionStoreError::InvalidState(
                 "车道标识不能为空".to_owned(),
             ));
@@ -178,14 +178,14 @@ impl InteractionQueryStore for SqliteRuntimeStore {
         // 游标为空取最近一页，给出游标取它之前一页；行值比较与排序同键，故不漏不重。
         let mut statement = connection
             .prepare(&select_inbox(
-                "WHERE i.lane_id=?1 AND (?2 IS NULL OR (i.received_at_ms, i.interaction_id) < (?2, ?3)) \
+                "WHERE i.session_id=?1 AND (?2 IS NULL OR (i.received_at_ms, i.interaction_id) < (?2, ?3)) \
                  ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT ?4",
             ))
             .map_err(storage_error)?;
         let mut records = statement
             .query_map(
                 params![
-                    lane_id,
+                    session_id,
                     // SQLite 整数是 i64；毫秒时间戳远在其范围内，越界按最大值处理。
                     before.map(|cursor| i64::try_from(cursor.received_at_ms).unwrap_or(i64::MAX)),
                     before.map(|cursor| cursor.interaction_id.as_str()),

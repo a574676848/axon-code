@@ -28,7 +28,7 @@ use super::{
 use crate::r#loop::agent_tui::state::AgentTuiState;
 #[cfg(test)]
 use crate::surface::mailbox_telemetry::MailboxTelemetrySnapshot;
-use crate::surface::mailbox_telemetry::{MailboxLane, MailboxTelemetry};
+use crate::surface::mailbox_telemetry::{MailboxSession, MailboxTelemetry};
 
 type SteerApply = Box<dyn FnOnce(&mut AgentTuiState) + Send>;
 
@@ -106,11 +106,11 @@ impl WorkerMailbox {
         }
         match admit_event(&mut state.wire_gate, event, enqueued_at) {
             WireAdmission::Duplicate => {
-                self.telemetry.record_coalesced(MailboxLane::Worker);
+                self.telemetry.record_coalesced(MailboxSession::Worker);
                 drop(state);
             }
             WireAdmission::Stale => {
-                self.telemetry.record_stale(MailboxLane::Worker);
+                self.telemetry.record_stale(MailboxSession::Worker);
                 drop(state);
             }
             WireAdmission::Deliver(ordered) => self.enqueue_ordered(state, ordered),
@@ -130,7 +130,7 @@ impl WorkerMailbox {
             enqueued_at,
         });
         self.telemetry
-            .record_enqueued(MailboxLane::Worker, state.messages.len());
+            .record_enqueued(MailboxSession::Worker, state.messages.len());
         drop(state);
         self.main_loop_thread.unpark();
     }
@@ -149,7 +149,7 @@ impl WorkerMailbox {
             state.sheddable_frames = state.sheddable_frames.saturating_sub(1);
         }
         self.telemetry
-            .record_drained(MailboxLane::Worker, timed.enqueued_at);
+            .record_drained(MailboxSession::Worker, timed.enqueued_at);
         Some(timed.message)
     }
 
@@ -188,7 +188,7 @@ impl WorkerMailbox {
         let Some(event) =
             try_coalesce_worker_assistant_delta(&mut state.messages, ordered.event, self.budget)
         else {
-            self.telemetry.record_coalesced(MailboxLane::Worker);
+            self.telemetry.record_coalesced(MailboxSession::Worker);
             return;
         };
         let sheddable = is_sheddable_event(&event);
@@ -198,7 +198,7 @@ impl WorkerMailbox {
                     break;
                 }
                 state.sheddable_frames = state.sheddable_frames.saturating_sub(1);
-                self.telemetry.record_shed(MailboxLane::Worker);
+                self.telemetry.record_shed(MailboxSession::Worker);
             }
             state.sheddable_frames = state.sheddable_frames.saturating_add(1);
         }
@@ -207,7 +207,7 @@ impl WorkerMailbox {
             enqueued_at: ordered.enqueued_at,
         });
         self.telemetry
-            .record_enqueued(MailboxLane::Worker, state.messages.len());
+            .record_enqueued(MailboxSession::Worker, state.messages.len());
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, WorkerMailboxState> {

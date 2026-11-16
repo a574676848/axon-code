@@ -4,7 +4,7 @@ import {
   COUNTDOWN_DANGER_THRESHOLD_MS,
   COUNTDOWN_WARN_THRESHOLD_MS,
   getCountdownPhase,
-  shouldReattachLane,
+  shouldReattachSession,
   stripQuestionReceiptBlock,
   extractQuestionReceipt,
 } from '../src/conversation/questions.ts';
@@ -54,7 +54,7 @@ test('归约器在 state 级维护 pendingQuestions 映射，历史裁切后仍�
       schemaVersion: 'axon.wire.v3',
       eventId: 'evt-1',
       correlationId: 'corr-1',
-      session: { sessionId: 'lane-1' },
+      session: { sessionId: 'session-1' },
       sequence: 1,
       recordedAtMs: 1000,
       kind: {
@@ -130,12 +130,12 @@ test('归约器在 state 级维护 pendingQuestions 映射，历史裁切后仍�
 
 test('走消息通道的作答之后必须重贴车道，回灌给等待者的那一档不必', () => {
   // 答案变成车道上的一条新用户消息，续跑的那一轮由守护进程开启：界面必须重贴。
-  assert.equal(shouldReattachLane('user_message'), true);
+  assert.equal(shouldReattachSession('user_message'), true);
   // 回灌给活等待者：界面手上那条订阅还在看着同一轮，后续帧自己会到。
-  assert.equal(shouldReattachLane('tool_return'), false);
+  assert.equal(shouldReattachSession('tool_return'), false);
   // 网关没有下发投递方式时按需要重贴处理：停在原地比多贴一次更糟。
-  assert.equal(shouldReattachLane(null), true);
-  assert.equal(shouldReattachLane(undefined), true);
+  assert.equal(shouldReattachSession(null), true);
+  assert.equal(shouldReattachSession(undefined), true);
 });
 
 test('对账先于回放到达时，重放出来的挂起帧不得把答过的题摆回待答态', () => {
@@ -147,7 +147,7 @@ test('对账先于回放到达时，重放出来的挂起帧不得把答过的�
       schemaVersion: 'axon.wire.v3',
       eventId: 'evt-q-late',
       correlationId: 'corr-q-late',
-      session: { sessionId: 'lane-1' },
+      session: { sessionId: 'session-1' },
       sequence: 3,
       recordedAtMs: 1_500,
       kind: {
@@ -210,7 +210,7 @@ test('对账把权威状态同步到时间线单元：已结算的提问不再�
       schemaVersion: 'axon.wire.v3',
       eventId: `evt-user-${sequence}`,
       correlationId: `corr-user-${sequence}`,
-      session: { sessionId: 'lane-1' },
+      session: { sessionId: 'session-1' },
       sequence,
       recordedAtMs: 1000 + sequence,
       kind: { type: 'userMessage', payload: { partId: 'part:user', content: '开始' } },
@@ -224,7 +224,7 @@ test('对账把权威状态同步到时间线单元：已结算的提问不再�
       schemaVersion: 'axon.wire.v3',
       eventId: `evt-q-${sequence}`,
       correlationId: 'corr-q',
-      session: { sessionId: 'lane-1' },
+      session: { sessionId: 'session-1' },
       sequence,
       recordedAtMs: 1000 + sequence,
       kind: {

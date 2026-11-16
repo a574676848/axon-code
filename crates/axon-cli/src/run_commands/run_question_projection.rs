@@ -57,7 +57,7 @@ impl QuestionEventRouter {
     /// 登记某车道的问答事件通道，返回 RAII 注销句柄。
     pub(crate) fn register(
         &self,
-        lane_id: &str,
+        session_id: &str,
         bus: QuestionEventBus,
     ) -> QuestionEventRegistration {
         let registration_id = QUESTION_BUS_REGISTRATION_ID.fetch_add(1, Ordering::Relaxed);
@@ -65,29 +65,29 @@ impl QuestionEventRouter {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(
-                lane_id.to_owned(),
+                session_id.to_owned(),
                 RegisteredQuestionBus {
                     registration_id,
                     bus,
                 },
             );
         QuestionEventRegistration {
-            lane_id: lane_id.to_owned(),
+            session_id: session_id.to_owned(),
             registration_id,
             buses: Arc::clone(&self.buses),
         }
     }
 
     /// 把一条问答事件投进该车道的运行通道；车道当前没有运行中的 turn 时如实报错。
-    fn publish(&self, lane_id: &str, event: RunProgressWireEvent) -> Result<(), String> {
+    fn publish(&self, session_id: &str, event: RunProgressWireEvent) -> Result<(), String> {
         let bus = self
             .buses
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(lane_id)
+            .get(session_id)
             .map(|registered| Arc::clone(&registered.bus));
         let Some(bus) = bus else {
-            return Err(format!("车道 {lane_id} 当前没有运行中的会话"));
+            return Err(format!("车道 {session_id} 当前没有运行中的会话"));
         };
         bus(event)
     }
@@ -95,7 +95,7 @@ impl QuestionEventRouter {
 
 /// 问答事件通道的 RAII 注销句柄；run 收口即摘除本车道通道。
 pub(crate) struct QuestionEventRegistration {
-    lane_id: String,
+    session_id: String,
     registration_id: u64,
     buses: Arc<Mutex<HashMap<String, RegisteredQuestionBus>>>,
 }
@@ -107,10 +107,10 @@ impl Drop for QuestionEventRegistration {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if buses
-            .get(&self.lane_id)
+            .get(&self.session_id)
             .is_some_and(|registered| registered.registration_id == self.registration_id)
         {
-            buses.remove(&self.lane_id);
+            buses.remove(&self.session_id);
         }
     }
 }
@@ -159,7 +159,7 @@ impl RoutedUserQuestionEventSink {
     /// 与其它投递明细同一档。
     fn persist_question_event(
         &self,
-        lane_id: &str,
+        session_id: &str,
         call_id: &str,
         status: &str,
         envelope: &WireEventEnvelope,
@@ -169,16 +169,16 @@ impl RoutedUserQuestionEventSink {
             // 槽位为空说明这个进程没有装配 durable 落点（例如只做投递的装配）：
             // 如实留痕，不静默丢弃。
             axon_logger::warning(&format!(
-                "用户问答事件未实时投递，且本进程没有 durable 落点: lane={lane_id} call={call_id} status={status} error={realtime}"
+                "用户问答事件未实时投递，且本进程没有 durable 落点: session={session_id} call={call_id} status={status} error={realtime}"
             ));
             return;
         };
-        match write(lane_id, envelope) {
+        match write(session_id, envelope) {
             Ok(()) => axon_logger::debug(&format!(
-                "用户问答事件已落进会话事件流: lane={lane_id} call={call_id} status={status}"
+                "用户问答事件已落进会话事件流: session={session_id} call={call_id} status={status}"
             )),
             Err(durable) => axon_logger::warning(&format!(
-                "用户问答事件既未实时投递也未落盘，等待客户端对账: lane={lane_id} call={call_id} status={status} realtime={realtime} durable={durable}"
+                "用户问答事件既未实时投递也未落盘，等待客户端对账: session={session_id} call={call_id} status={status} realtime={realtime} durable={durable}"
             )),
         }
     }
@@ -187,7 +187,7 @@ impl RoutedUserQuestionEventSink {
 impl UserQuestionEventSink for RoutedUserQuestionEventSink {
     fn emit_question_event(
         &self,
-        lane_id: &str,
+        session_id: &str,
         part_id: &str,
         call_id: &str,
         status: &str,
@@ -202,7 +202,7 @@ impl UserQuestionEventSink for RoutedUserQuestionEventSink {
             event_id: WireCorrelationId(format!("question:{call_id}:{sequence}")),
             correlation_id: WireCorrelationId(question_correlation(call_id)),
             session: WireSessionRef {
-                session_id: lane_id.to_owned(),
+                session_id: session_id.to_owned(),
                 run_id: None,
                 parent_session_id: None,
             },
@@ -224,27 +224,27 @@ impl UserQuestionEventSink for RoutedUserQuestionEventSink {
          * 历史回放的客户端都会把已经答完的提问一直显示成待答。
          */
         let realtime = self.router.publish(
-            lane_id,
+            session_id,
             RunProgressWireEvent {
                 event: envelope.clone(),
             },
         );
         if let Err(error) = realtime {
-            self.persist_question_event(lane_id, call_id, status, &envelope, &error);
+            self.persist_question_event(session_id, call_id, status, &envelope, &error);
         }
     }
 }
 
 /// 本轮 run 的会话车道身份：优先取 Interaction 的复合车道，缺失时退回运行会话。
 ///
-/// Daemon 主 turn 的车道就是它的运行会话身份（`primaryLaneId`）；问答记录、事件路由与
+/// Daemon 主 turn 的车道就是它的运行会话身份（`primarySessionId`）；问答记录、事件路由与
 /// 答案消息注入必须用同一个身份，否则客户端的作答会因车道不符被拒。
-pub(crate) fn run_lane_id(
+pub(crate) fn run_session_id(
     transport_context: Option<&serde_json::Value>,
     session_id: &str,
 ) -> String {
     transport_context
-        .and_then(|context| context.get("primaryLaneId"))
+        .and_then(|context| context.get("primarySessionId"))
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())

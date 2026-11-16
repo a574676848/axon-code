@@ -26,11 +26,11 @@ pub struct QuestionAnswerDelivery {
 pub trait UserQuestionEventSink: Send + Sync {
     /// 发射问答状态变化事件（pending / extended / settled / suspended）。
     ///
-    /// `lane_id` 是会话车道身份（Daemon 下等于主 turn 的会话 ID）：事件按它路由到
+    /// `session_id` 是会话车道身份（Daemon 下等于主 turn 的会话 ID）：事件按它路由到
     /// 当前正在运行的那一轮，同时也作为 wire 事件的会话身份。
     fn emit_question_event(
         &self,
-        lane_id: &str,
+        session_id: &str,
         part_id: &str,
         call_id: &str,
         status: &str,
@@ -48,7 +48,7 @@ pub struct NoopUserQuestionEventSink;
 impl UserQuestionEventSink for NoopUserQuestionEventSink {
     fn emit_question_event(
         &self,
-        _lane_id: &str,
+        _session_id: &str,
         _part_id: &str,
         _call_id: &str,
         _status: &str,
@@ -159,7 +159,7 @@ impl UserQuestionPort for UserQuestionHost {
         let part_id = crate::run_commands::question_part_id(&actual_record.tool_call_id);
 
         self.sink.emit_question_event(
-            &actual_record.lane_id,
+            &actual_record.session_id,
             &part_id,
             &actual_record.tool_call_id,
             "pending",
@@ -249,7 +249,7 @@ impl UserQuestionPort for UserQuestionHost {
                     );
 
                     self.sink.emit_question_event(
-                        &actual_record.lane_id,
+                        &actual_record.session_id,
                         &part_id,
                         &actual_record.tool_call_id,
                         "suspended",
@@ -281,7 +281,7 @@ impl UserQuestionPort for UserQuestionHost {
                 );
 
                 self.sink.emit_question_event(
-                    &actual_record.lane_id,
+                    &actual_record.session_id,
                     &part_id,
                     &actual_record.tool_call_id,
                     "extended",
@@ -330,9 +330,9 @@ mod tests {
             Ok(None)
         }
 
-        fn list_questions_by_lane(
+        fn list_questions_by_session(
             &self,
-            _lane_id: &str,
+            _session_id: &str,
             _state: Option<UserQuestionState>,
             _limit: usize,
         ) -> Result<Vec<UserQuestionRecord>, UserQuestionStoreError> {
@@ -392,7 +392,6 @@ mod tests {
         UserQuestionRecord {
             question_id: format!("uq-{call_id}"),
             idempotency_key: format!("idem-{call_id}"),
-            lane_id: "lane-1".to_string(),
             session_id: "sess-1".to_string(),
             interaction_id: "inter-1".to_string(),
             turn_id: "turn-1".to_string(),

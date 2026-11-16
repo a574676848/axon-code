@@ -32,8 +32,8 @@ import { useConnectionFact } from '../connectionState';
 /** 持久化键前缀；按会话 id 分开存。 */
 const STORAGE_PREFIX = 'axon.sidebar-right.v1.';
 
-function storageKey(laneId: string | null): string {
-  return `${STORAGE_PREFIX}${laneId ?? 'none'}`;
+function storageKey(sessionId: string | null): string {
+  return `${STORAGE_PREFIX}${sessionId ?? 'none'}`;
 }
 
 /** 打开一个页类型时的落位选项。 */
@@ -68,9 +68,9 @@ export interface RailController {
   activePath: string | null;
 }
 
-export function useRailLayout(laneId: string | null): RailController {
+export function useRailLayout(sessionId: string | null): RailController {
   const connection = useConnectionFact();
-  const key = storageKey(laneId);
+  const key = storageKey(sessionId);
   const [layout, setLayout] = React.useState<RailLayout>(() =>
     deserialize(window.localStorage.getItem(key)),
   );
@@ -89,11 +89,11 @@ export function useRailLayout(laneId: string | null): RailController {
 
   React.useEffect(() => {
     try {
-      window.localStorage.setItem(storageKey(laneId), serialize(layout));
+      window.localStorage.setItem(storageKey(sessionId), serialize(layout));
     } catch {
       // 存储不可用时布局仍在内存里可用，不打扰用户。
     }
-  }, [laneId, layout]);
+  }, [sessionId, layout]);
 
   const openResource = React.useCallback((address: string, params?: ResourceParams) => {
     const type = claim(address);

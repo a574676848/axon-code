@@ -10,15 +10,15 @@ import { useCallback } from 'react';
 import type { RefObject } from 'react';
 import * as ipc from '../ipc';
 import { useInterruptedCarry, type InterruptedCarryWiring } from './useInterruptedCarry';
-import { useLaneInterrupt } from './useLaneInterrupt';
+import { useSessionInterrupt } from './useSessionInterrupt';
 
 /**
- * 中断装配的依赖面：转投入参去掉 `laneIdle`（由本 hook 自己算），
+ * 中断装配的依赖面：转投入参去掉 `sessionIdle`（由本 hook 自己算），
  * 另加车道标识、订阅快照与提示出口。
  */
-export type InterruptControlWiring = Omit<InterruptedCarryWiring, 'laneIdle'> & {
+export type InterruptControlWiring = Omit<InterruptedCarryWiring, 'sessionIdle'> & {
   /** 当前车道标识；会话目标下为空。 */
-  laneId: string | null;
+  sessionId: string | null;
   /** 正在订阅的那一条 Interaction：车道标识缺失时用它兜底。 */
   watchedRef: RefObject<string | null>;
   /** 回执与失败原因的出口。 */
@@ -29,24 +29,24 @@ export type InterruptControlWiring = Omit<InterruptedCarryWiring, 'laneIdle'> & 
 export function useConversationInterruptControl(
   wiring: InterruptControlWiring,
 ): () => Promise<void> {
-  const { laneId, watchedRef, onNotice, targetKey, working, turnsRef, dispatch, submit } = wiring;
+  const { sessionId, watchedRef, onNotice, targetKey, working, turnsRef, dispatch, submit } = wiring;
   /**
    * 车道上是否已经没有活跃轮次。
    *
    * 拿中断回执当探针：`interrupted` 为假即表示后端登记表里没有这条车道的活跃主
    * turn，此刻提交才会开出一条新的 Interaction，而不是被注入那条正在收尾的轮次。
    */
-  const laneIdle = useCallback(async () => {
-    const lane = laneId ?? watchedRef.current;
-    if (lane === null) return true;
+  const sessionIdle = useCallback(async () => {
+    const session = sessionId ?? watchedRef.current;
+    if (session === null) return true;
     try {
-      const receipt = await ipc.conversationInterrupt(lane);
+      const receipt = await ipc.conversationInterrupt(session);
       return !receipt.interrupted;
     } catch {
       // 探测本身失败不拦转投：宁可把消息发出去，也不把它扣在本地。
       return true;
     }
-  }, [laneId, watchedRef]);
+  }, [sessionId, watchedRef]);
 
   const handOverSteers = useInterruptedCarry({
     targetKey,
@@ -54,11 +54,11 @@ export function useConversationInterruptControl(
     turnsRef,
     dispatch,
     submit,
-    laneIdle,
+    sessionIdle,
   });
 
-  return useLaneInterrupt({
-    laneId,
+  return useSessionInterrupt({
+    sessionId,
     watchedRef,
     onBeforeInterrupt: handOverSteers,
     onNotice,

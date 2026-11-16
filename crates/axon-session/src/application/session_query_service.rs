@@ -6,22 +6,22 @@
 use axon_domain::{AudienceContext, ReplyRoute, ScopeRef};
 use serde::{Deserialize, Serialize};
 
-use crate::ports::{InteractionStoreError, LaneQueryStore, LaneSummaryRow};
+use crate::ports::{InteractionStoreError, SessionQueryStore, SessionSummaryRow};
 
 /// 车道标题的最大字符数。
-const LANE_TITLE_MAX_CHARS: usize = 32;
+const SESSION_TITLE_MAX_CHARS: usize = 32;
 
 /// 车道标题兜底文案。
-const LANE_TITLE_FALLBACK: &str = "未命名车道";
+const SESSION_TITLE_FALLBACK: &str = "未命名车道";
 
 /// 用户可见的一条车道。
 ///
 /// 实现 `Serialize` 是为了让网关等 adapter 直接把它作为协议载荷，
 /// 避免每个 adapter 各自再抄一份同名字段而导致口径漂移。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LaneSnapshot {
+pub struct SessionSnapshot {
     /// 车道稳定标识。
-    pub lane_id: String,
+    pub session_id: String,
     /// 所属 Workspace 标识；未绑定时为空。
     pub workspace_id: String,
     /// 会话表面渠道。
@@ -43,25 +43,25 @@ pub struct LaneSnapshot {
 }
 
 /// 车道查询服务。
-pub struct LaneQueryService<S> {
+pub struct SessionQueryService<S> {
     store: S,
 }
 
-impl<S: LaneQueryStore> LaneQueryService<S> {
+impl<S: SessionQueryStore> SessionQueryService<S> {
     /// 以给定存储构造服务。
     pub fn new(store: S) -> Self {
         Self { store }
     }
 
     /// 列出全部车道。
-    pub fn list_lanes(&self) -> Result<Vec<LaneSnapshot>, InteractionStoreError> {
-        let rows = self.store.list_lane_summaries()?;
-        Ok(rows.iter().map(project_lane).collect())
+    pub fn list_sessions(&self) -> Result<Vec<SessionSnapshot>, InteractionStoreError> {
+        let rows = self.store.list_session_summaries()?;
+        Ok(rows.iter().map(project_session).collect())
     }
 }
 
 /// 把一行原始汇总投影成用户可见的车道。
-fn project_lane(row: &LaneSummaryRow) -> LaneSnapshot {
+fn project_session(row: &SessionSummaryRow) -> SessionSnapshot {
     let workspace_id = serde_json::from_str::<ScopeRef>(&row.scope_json)
         .ok()
         .and_then(|scope| scope.workspace_id().map(|value| value.as_str().to_string()))
@@ -70,8 +70,8 @@ fn project_lane(row: &LaneSummaryRow) -> LaneSnapshot {
     let route = serde_json::from_str::<ReplyRoute>(&row.reply_route_json).ok();
     let audience = serde_json::from_str::<AudienceContext>(&row.audience_json).ok();
 
-    LaneSnapshot {
-        lane_id: row.lane_id.clone(),
+    SessionSnapshot {
+        session_id: row.session_id.clone(),
         workspace_id,
         channel: route.as_ref().map_or_else(
             || row.latest_channel.clone(),
@@ -81,7 +81,7 @@ fn project_lane(row: &LaneSummaryRow) -> LaneSnapshot {
             .as_ref()
             .map_or_else(String::new, |value| value.destination().to_string()),
         audience: audience.as_ref().map_or_else(String::new, audience_label),
-        title: lane_title(&row.latest_content),
+        title: session_title(&row.latest_content),
         interaction_count: row.interaction_count,
         running: row.processing_count > 0,
         created_at_ms: row.first_received_ms,
@@ -102,12 +102,12 @@ fn audience_label(audience: &AudienceContext) -> String {
 ///
 /// 取第一条非空行，按中文句读切出第一个短句，并限制长度；
 /// 与运行时会话命名保持同一套可读性口径。
-fn lane_title(content: &str) -> String {
+fn session_title(content: &str) -> String {
     let source = content
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
-        .unwrap_or(LANE_TITLE_FALLBACK);
+        .unwrap_or(SESSION_TITLE_FALLBACK);
     let normalized = source.split_whitespace().collect::<Vec<_>>().join(" ");
     let content = normalized
         .trim_start_matches(['#', '>', '-', '*', '+'])
@@ -119,10 +119,10 @@ fn lane_title(content: &str) -> String {
         .trim();
     let title = clause
         .chars()
-        .take(LANE_TITLE_MAX_CHARS)
+        .take(SESSION_TITLE_MAX_CHARS)
         .collect::<String>();
     if title.is_empty() {
-        LANE_TITLE_FALLBACK.to_string()
+        SESSION_TITLE_FALLBACK.to_string()
     } else {
         title
     }
@@ -130,28 +130,28 @@ fn lane_title(content: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{LaneQueryService, lane_title};
-    use crate::ports::{InteractionStoreError, LaneQueryStore, LaneSummaryRow};
+    use super::{SessionQueryService, session_title};
+    use crate::ports::{InteractionStoreError, SessionQueryStore, SessionSummaryRow};
     use axon_domain::{
         AudienceContext, AudienceKind, DisclosurePolicy, ReplyRoute, ScopeRef, WorkspaceId,
     };
 
     /// 固定测试数据的车道存储。
-    struct FixedStore(Vec<LaneSummaryRow>);
+    struct FixedStore(Vec<SessionSummaryRow>);
 
-    impl LaneQueryStore for FixedStore {
-        fn list_lane_summaries(&self) -> Result<Vec<LaneSummaryRow>, InteractionStoreError> {
+    impl SessionQueryStore for FixedStore {
+        fn list_session_summaries(&self) -> Result<Vec<SessionSummaryRow>, InteractionStoreError> {
             Ok(self.0.clone())
         }
     }
 
-    fn row(content: &str) -> LaneSummaryRow {
+    fn row(content: &str) -> SessionSummaryRow {
         // 上下文列全部由领域类型自身序列化生成，避免手写 JSON 与领域契约漂移。
         let scope = ScopeRef::Workspace(WorkspaceId::new("workspace-a").unwrap());
         let audience = AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly);
         let route = ReplyRoute::new("tui", "terminal-1").unwrap();
-        LaneSummaryRow {
-            lane_id: "session-lane-test".to_string(),
+        SessionSummaryRow {
+            session_id: "session-session-test".to_string(),
             interaction_count: 3,
             first_received_ms: 100,
             last_updated_ms: 900,
@@ -167,26 +167,26 @@ mod tests {
     #[test]
     fn title_takes_first_clause_and_bounds_length() {
         assert_eq!(
-            lane_title("  ## 修复 Provider 延迟。后续说明"),
+            session_title("  ## 修复 Provider 延迟。后续说明"),
             "修复 Provider 延迟"
         );
-        assert_eq!(lane_title("\n\n"), "未命名车道");
-        let long = lane_title(&"超长标题".repeat(20));
+        assert_eq!(session_title("\n\n"), "未命名车道");
+        let long = session_title(&"超长标题".repeat(20));
         assert_eq!(long.chars().count(), 32);
     }
 
     #[test]
-    fn service_projects_lane_identity_and_counts() {
-        let service = LaneQueryService::new(FixedStore(vec![row("设计工作台侧栏交互")]));
-        let lanes = service.list_lanes().unwrap();
-        assert_eq!(lanes.len(), 1);
-        let lane = &lanes[0];
-        assert_eq!(lane.title, "设计工作台侧栏交互");
-        assert_eq!(lane.interaction_count, 3);
-        assert!(!lane.running, "没有在途 Interaction 时不得标记为运行中");
-        assert_eq!(lane.workspace_id, "workspace-a");
-        assert_eq!(lane.channel, "tui");
-        assert_eq!(lane.destination, "terminal-1");
-        assert_eq!(lane.audience, "私密");
+    fn service_projects_session_identity_and_counts() {
+        let service = SessionQueryService::new(FixedStore(vec![row("设计工作台侧栏交互")]));
+        let sessions = service.list_sessions().unwrap();
+        assert_eq!(sessions.len(), 1);
+        let session = &sessions[0];
+        assert_eq!(session.title, "设计工作台侧栏交互");
+        assert_eq!(session.interaction_count, 3);
+        assert!(!session.running, "没有在途 Interaction 时不得标记为运行中");
+        assert_eq!(session.workspace_id, "workspace-a");
+        assert_eq!(session.channel, "tui");
+        assert_eq!(session.destination, "terminal-1");
+        assert_eq!(session.audience, "私密");
     }
 }

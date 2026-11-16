@@ -6,13 +6,13 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::conversation::wire::LANES_PATH;
+use crate::conversation::wire::SESSIONS_PATH;
 use crate::gateway;
 
 /// 车道下的一条子代理会话。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LaneSubagentSummary {
+pub struct SessionSubagentSummary {
     /// 子代理会话标识。
     pub session_id: String,
     /// 会话标识里属于代理路径的那一段，用于与界面上的 agent 路径对齐。
@@ -53,25 +53,25 @@ pub struct LaneSubagentSummary {
 /// 车道子代理清单。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LaneSubagents {
+pub struct SessionSubagents {
     /// 目标车道。
-    pub lane_id: String,
+    pub session_id: String,
     /// 车道运行会话标识；没有运行会话时为空。
     #[serde(default)]
     pub run_session_id: Option<String>,
     /// 该车道派生出的子代理会话。
     #[serde(default)]
-    pub subagents: Vec<LaneSubagentSummary>,
+    pub subagents: Vec<SessionSubagentSummary>,
 }
 
 /// 读取一条车道下的子代理会话清单。
-pub fn lane_subagents(lane_id: &str) -> Result<LaneSubagents, String> {
-    let lane_id = lane_id.trim();
-    if lane_id.is_empty() {
+pub fn session_subagents(session_id: &str) -> Result<SessionSubagents, String> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
         return Err("车道标识不能为空".to_string());
     }
-    let payload = gateway::get_json_at(&format!("{LANES_PATH}/{lane_id}/subagents"))?;
-    serde_json::from_value::<LaneSubagents>(payload)
+    let payload = gateway::get_json_at(&format!("{SESSIONS_PATH}/{session_id}/subagents"))?;
+    serde_json::from_value::<SessionSubagents>(payload)
         .map_err(|error| format!("解析子代理清单失败：{error}"))
 }
 
@@ -79,6 +79,6 @@ pub fn lane_subagents(lane_id: &str) -> Result<LaneSubagents, String> {
 mod tests {
     #[test]
     fn empty_identifiers_are_rejected_before_any_request() {
-        assert!(super::lane_subagents("  ").is_err());
+        assert!(super::session_subagents("  ").is_err());
     }
 }

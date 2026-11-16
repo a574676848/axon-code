@@ -14,7 +14,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 打开会话事件名，与前端 `ipc.ts` 中的常量一致。
-pub const LANE_OPEN_EVENT: &str = "axon://open-lane";
+pub const SESSION_OPEN_EVENT: &str = "axon://open-session";
 
 /// 待打开目标的最长存活时长。
 ///
@@ -24,9 +24,9 @@ const PENDING_OPEN_TTL_MS: u64 = 120_000;
 
 /// 一次会话上下文快照。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LaneContext {
+pub struct SessionContext {
     /// 车道稳定标识。
-    pub lane_id: String,
+    pub session_id: String,
     /// 车道展示标题；界面上的会话名。
     pub title: String,
 }
@@ -38,8 +38,8 @@ pub fn now_millis() -> u64 {
         .map_or(0, |duration| duration.as_millis() as u64)
 }
 
-fn active_slot() -> &'static Mutex<Option<LaneContext>> {
-    static ACTIVE: OnceLock<Mutex<Option<LaneContext>>> = OnceLock::new();
+fn active_slot() -> &'static Mutex<Option<SessionContext>> {
+    static ACTIVE: OnceLock<Mutex<Option<SessionContext>>> = OnceLock::new();
     ACTIVE.get_or_init(|| Mutex::new(None))
 }
 
@@ -50,24 +50,24 @@ fn pending_slot() -> &'static Mutex<Option<(String, u64)>> {
 }
 
 /// 记下当前会话；空白标识视为「没有会话」并清空。
-pub fn set_active_lane(lane_id: &str, title: &str) {
-    let lane_id = lane_id.trim();
+pub fn set_active_session(session_id: &str, title: &str) {
+    let session_id = session_id.trim();
     let mut slot = active_slot()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if lane_id.is_empty() {
+    if session_id.is_empty() {
         *slot = None;
         return;
     }
-    *slot = Some(LaneContext {
-        lane_id: lane_id.to_string(),
+    *slot = Some(SessionContext {
+        session_id: session_id.to_string(),
         title: title.trim().to_string(),
     });
 }
 
 /// 取当前会话。
 #[must_use]
-pub fn active_lane() -> Option<LaneContext> {
+pub fn active_session() -> Option<SessionContext> {
     active_slot()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -75,15 +75,15 @@ pub fn active_lane() -> Option<LaneContext> {
 }
 
 /// 记下「点这条通知应当打开的会话」。
-pub fn remember_pending_open(lane_id: &str) {
-    let lane_id = lane_id.trim();
-    if lane_id.is_empty() {
+pub fn remember_pending_open(session_id: &str) {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
         return;
     }
     let mut slot = pending_slot()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    *slot = Some((lane_id.to_string(), now_millis()));
+    *slot = Some((session_id.to_string(), now_millis()));
 }
 
 /// 取走尚未过期的待打开会话；过期或没有时返回 None。
@@ -94,9 +94,9 @@ pub fn take_pending_open() -> Option<String> {
     let mut slot = pending_slot()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let (lane_id, at_ms) = slot.take()?;
+    let (session_id, at_ms) = slot.take()?;
     let fresh = now_millis().saturating_sub(at_ms) <= PENDING_OPEN_TTL_MS;
-    fresh.then_some(lane_id)
+    fresh.then_some(session_id)
 }
 
 #[cfg(test)]
@@ -104,14 +104,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn blank_lane_identity_clears_the_context_instead_of_storing_a_placeholder() {
-        set_active_lane("lane-a", "会话甲");
+    fn blank_session_identity_clears_the_context_instead_of_storing_a_placeholder() {
+        set_active_session("session-a", "会话甲");
         assert_eq!(
-            active_lane().map(|context| context.title),
+            active_session().map(|context| context.title),
             Some("会话甲".to_string())
         );
-        set_active_lane("   ", "");
-        assert!(active_lane().is_none(), "空白标识必须清空上下文");
+        set_active_session("   ", "");
+        assert!(active_session().is_none(), "空白标识必须清空上下文");
     }
 
     #[test]
@@ -119,8 +119,8 @@ mod tests {
         remember_pending_open("");
         assert!(take_pending_open().is_none(), "空白标识不得留下待打开目标");
 
-        remember_pending_open("lane-b");
-        assert_eq!(take_pending_open(), Some("lane-b".to_string()));
+        remember_pending_open("session-b");
+        assert_eq!(take_pending_open(), Some("session-b".to_string()));
         assert!(
             take_pending_open().is_none(),
             "同一次通知只允许把人带过去一次"
@@ -133,7 +133,7 @@ mod tests {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             *slot = Some((
-                "lane-c".to_string(),
+                "session-c".to_string(),
                 now_millis().saturating_sub(PENDING_OPEN_TTL_MS + 1),
             ));
         }

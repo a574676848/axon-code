@@ -85,7 +85,7 @@ pub enum DaemonCommand {
     /// 回答指定待决提问交互。
     AnswerQuestion {
         /// 所属车道 ID。
-        lane_id: String,
+        session_id: String,
         /// 问题 tool_call_id 或 question_id。
         call_id: String,
         /// 用户作答条目列表。

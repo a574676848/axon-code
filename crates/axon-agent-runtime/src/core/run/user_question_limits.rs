@@ -14,7 +14,7 @@ pub const BACKOFF_FACTOR: u32 = 2;
 pub const TOTAL_BUDGET_MS: u64 = 120_000;
 
 /// 每条车道允许驻留的未答提问最大数量：3 项。
-pub const MAX_PENDING_PER_LANE: usize = 3;
+pub const MAX_PENDING_PER_SESSION: usize = 3;
 
 /// 宿主等待循环唤醒检查取消/关停的周期（毫秒）：250 毫秒。
 pub const CANCELLATION_POLL_INTERVAL_MS: u64 = 250;
@@ -86,7 +86,7 @@ mod tests {
         assert_eq!(DEFAULT_WAIT_WINDOW_MS, 30_000);
         assert_eq!(BACKOFF_FACTOR, 2);
         assert_eq!(TOTAL_BUDGET_MS, 120_000);
-        assert_eq!(MAX_PENDING_PER_LANE, 3);
+        assert_eq!(MAX_PENDING_PER_SESSION, 3);
         assert_eq!(CANCELLATION_POLL_INTERVAL_MS, 250);
         assert_eq!(MAX_QUESTIONS_PER_CALL, 8);
         assert_eq!(MAX_OPTIONS_PER_QUESTION, 20);

@@ -17,12 +17,16 @@ const WS_CHANNEL: &str = "ws";
 
 #[test]
 fn http_channel_completion_still_dispatches_primary_turn() {
-    assert_declared_channel_completion_dispatched(HTTP_CHANNEL, "gateway-http-client", "http-lane");
+    assert_declared_channel_completion_dispatched(
+        HTTP_CHANNEL,
+        "gateway-http-client",
+        "http-session",
+    );
 }
 
 #[test]
 fn websocket_channel_completion_still_dispatches_primary_turn() {
-    assert_declared_channel_completion_dispatched(WS_CHANNEL, "gateway-ws-client", "ws-lane");
+    assert_declared_channel_completion_dispatched(WS_CHANNEL, "gateway-ws-client", "ws-session");
 }
 
 fn assert_declared_channel_completion_dispatched(channel: &str, destination: &str, tag: &str) {

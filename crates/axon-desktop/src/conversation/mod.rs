@@ -3,7 +3,7 @@
 //! 与运行态的全部往来都走网关协议，桌面端不链接会话子系统、不直连数据库：
 //!
 //! - **提交**走网关 HTTP 的交互事件面（[`wire::EVENTS_PATH`]），
-//!   `sourceChannel` 取 [`crate::lane_source::DESKTOP_LANE_CHANNEL`]；
+//!   `sourceChannel` 取 [`crate::session_source::DESKTOP_SESSION_CHANNEL`]；
 //! - **流式**走网关 WebSocket 订阅（[`wire::WS_PATH`]），文本增量、工具过程与
 //!   运行指标都从同一条订阅流上取，不用轮询替代；
 //! - **历史**走工作台扩展面按车道枚举 Interaction，再逐条订阅重放。
@@ -24,10 +24,10 @@ pub mod interrupt;
 pub mod job_output;
 /// 用户手动停止后台作业。
 pub mod job_stop;
-/// 车道活作业名册：作业行的对账依据。
-pub mod lane_jobs;
 /// 车道待决提问的对账查询与字段适配。
 pub mod question_sync;
+/// 车道活作业名册：作业行的对账依据。
+pub mod session_jobs;
 /// 会话级读取：子代理清单与任意会话的逐字稿。
 pub mod session_read;
 /// 车道事件订阅：一条连接并行服务多路订阅，逐帧推送给前端。
@@ -44,17 +44,19 @@ pub mod wire;
 pub use attachment::{StagedAttachment, attachment_pick, attachment_preview, attachment_stage};
 pub use commands::{
     conversation_answer_question, conversation_history, conversation_history_events,
-    conversation_interrupt, conversation_job_output, conversation_lane_jobs,
-    conversation_lane_questions, conversation_lane_subagents, conversation_send_subagent_message,
-    conversation_set_active_lane, conversation_stop_job, conversation_submit,
+    conversation_interrupt, conversation_job_output, conversation_send_subagent_message,
+    conversation_session_jobs, conversation_session_questions, conversation_session_subagents,
+    conversation_set_active_session, conversation_stop_job, conversation_submit,
     conversation_unsubscribe, conversation_watch, conversation_watch_session,
 };
-pub use history::{InteractionSummary, LaneEffectiveModel, LaneInteractions, SessionUsageTotals};
+pub use history::{
+    InteractionSummary, SessionEffectiveModel, SessionInteractions, SessionUsageTotals,
+};
 pub use interrupt::InterruptReceipt;
 pub use job_stop::JobStopReceipt;
-pub use lane_jobs::LaneJobsRoster;
 pub use question_sync::QuestionSnapshot;
-pub use session_read::LaneSubagents;
+pub use session_jobs::SessionJobsRoster;
+pub use session_read::SessionSubagents;
 pub use stream::{ConversationStream, SubscribeTarget};
 pub use stream_batch::{StreamBatcher, StreamEventBatch};
 pub use subagent_message::SubagentMessageReceipt;

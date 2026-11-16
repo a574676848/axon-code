@@ -17,9 +17,9 @@ export { FOLLOW_PERSONA_ID, parseVoicePresets, voicePresetRows } from './presets
 export type { VoicePreset, VoicePresetRow, VoicePresetsPayload } from './presets';
 export {
   useGlobalAutoRead,
-  useLaneAutoRead,
+  useSessionAutoRead,
   useSpeechState,
-  useStopSpeechOnLaneChange,
+  useStopSpeechOnSessionChange,
   useVoicePresetId,
 } from './hooks';
 

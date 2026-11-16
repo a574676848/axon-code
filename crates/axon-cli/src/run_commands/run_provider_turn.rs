@@ -283,8 +283,8 @@ fn register_shell_job_wake(
     if channel == Some(SYSTEM_SOURCE_CHANNEL) {
         return false;
     }
-    let Some(lane_id) = context
-        .get("primaryLaneId")
+    let Some(session_id) = context
+        .get("primarySessionId")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -294,7 +294,7 @@ fn register_shell_job_wake(
     wake_bridge.register_turn(
         &request.run_session_id,
         WakeRouteInfo {
-            lane_id: lane_id.to_owned(),
+            session_id: session_id.to_owned(),
             model: command.model.clone(),
             reasoning_effort: command.reasoning_effort.clone(),
             turn_cancel_token,
@@ -326,18 +326,19 @@ fn active_turn_registration(
         .map(InteractionId::new)
         .transpose()
         .map_err(|error| error.to_string())?;
-    let primary_lane_id = context
-        .get("primaryLaneId")
+    let primary_session_id = context
+        .get("primarySessionId")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let (Some(primary_lane_id), Some(interaction_id)) = (primary_lane_id, interaction_id) else {
+    let (Some(primary_session_id), Some(interaction_id)) = (primary_session_id, interaction_id)
+    else {
         return Ok(None);
     };
     if channel == Some(SYSTEM_SOURCE_CHANNEL) {
         return Ok(None);
     }
-    let affinity_key = ActivePrimaryTurnRegistry::affinity_key(primary_lane_id);
+    let affinity_key = ActivePrimaryTurnRegistry::affinity_key(primary_session_id);
     active_primary_turns
         .register(&affinity_key, interaction_id, steer_inbox, cancel_token)
         .map(Some)

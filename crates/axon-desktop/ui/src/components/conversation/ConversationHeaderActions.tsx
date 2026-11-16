@@ -2,7 +2,7 @@ import React from 'react';
 import { IconButton } from '../ui/controls';
 import { PanelRightIcon } from '../../icons';
 import { RuntimeActions } from './RuntimeActions';
-import { VoiceLaneToggle } from './VoiceLaneToggle';
+import { VoiceSessionToggle } from './VoiceSessionToggle';
 import { VOICE_UI_ENABLED } from '../../speech/enabled';
 import type { JobRow, SubagentRow } from '../../conversation/transcript';
 
@@ -18,21 +18,21 @@ export const ConversationHeaderActions: React.FC<{
   subagents: SubagentRow[];
   jobs: JobRow[];
   /** 当前会话车道；停止作业时作为归属参数。 */
-  laneId: string | null;
+  sessionId: string | null;
   /** 本视图是否有正在跑的轮次：子代理名册只在这段窗口里按间隔对账。 */
   working: boolean;
   /** 当前会话的偏好键；为空表示还没有选中会话。 */
-  laneKey: string | null;
+  sessionKey: string | null;
   onOpenSubagent: (agentId: string) => void;
   railExpanded: boolean;
   onToggleRail: () => void;
-}> = ({ subagents, jobs, laneId, working, laneKey, onOpenSubagent, railExpanded, onToggleRail }) => (
+}> = ({ subagents, jobs, sessionId, working, sessionKey, onOpenSubagent, railExpanded, onToggleRail }) => (
   <>
-    {VOICE_UI_ENABLED && <VoiceLaneToggle laneKey={laneKey} />}
+    {VOICE_UI_ENABLED && <VoiceSessionToggle sessionKey={sessionKey} />}
     <RuntimeActions
       subagents={subagents}
       jobs={jobs}
-      laneId={laneId}
+      sessionId={sessionId}
       working={working}
       onOpenSubagent={onOpenSubagent}
     />

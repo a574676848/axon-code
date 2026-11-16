@@ -101,7 +101,7 @@ impl AgentTuiState {
                 None
             }
             BottomViewEvent::QuestionAnswered {
-                lane_id,
+                session_id,
                 call_id,
                 answers,
             } => {
@@ -110,7 +110,7 @@ impl AgentTuiState {
                 // 面板保持打开直到发送结果回落，失败时用户可原样重试。
                 Some(self.question_answer_submission(
                     crate::r#loop::agent_tui::AgentTuiQuestionAnswer {
-                        lane_id,
+                        session_id,
                         call_id,
                         answers,
                     },

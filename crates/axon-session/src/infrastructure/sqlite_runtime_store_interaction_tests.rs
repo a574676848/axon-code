@@ -2,7 +2,7 @@
 
 use super::SqliteRuntimeStore;
 use crate::ports::EventLogStore as _;
-use crate::{InteractionQueryStore, InteractionStore, RuntimeStore, interaction_session_lane_id};
+use crate::{InteractionQueryStore, InteractionStore, RuntimeStore, interaction_session_id};
 use axon_domain::{
     AudienceContext, AudienceKind, DaemonSessionId, DisclosurePolicy, InteractionId,
     InteractionRecord, InteractionSource, InteractionStatus, ReplyRoute, RuntimeHostId, ScopeRef,
@@ -37,8 +37,8 @@ fn interaction_record(
     .expect("Interaction")
 }
 
-/// 构造指定复合 lane（Workspace + 渠道 + 会话表面）的 Interaction。
-fn interaction_in_lane(
+/// 构造指定复合 session（Workspace + 渠道 + 会话表面）的 Interaction。
+fn interaction_in_session(
     interaction_id: &str,
     workspace: &str,
     destination: &str,
@@ -227,8 +227,8 @@ fn interrupted_interaction_appends_durable_session_and_ledger_events() {
         .expect("host lease");
     let interaction = sample_interaction();
     store.append(&interaction).expect("追加 Interaction");
-    let lane_id = interaction_session_lane_id(&interaction).expect("lane");
-    let session_id = DaemonSessionId::new(lane_id).expect("Session ID");
+    let session_id = interaction_session_id(&interaction).expect("session");
+    let session_id = DaemonSessionId::new(session_id).expect("Session ID");
     store.create_session(&session_id, ".", 1).expect("Session");
     let lease = store
         .claim_processing_by_id(&interaction.interaction_id, 20, 100)
@@ -299,28 +299,28 @@ fn claim_keeps_arrival_order_across_queued_and_expired_records() {
 }
 
 #[test]
-fn claim_keeps_lane_exclusive_while_a_turn_is_in_flight() {
+fn claim_keeps_session_exclusive_while_a_turn_is_in_flight() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
     store
-        .append(&interaction_in_lane(
-            "interaction-lane-a-1",
+        .append(&interaction_in_session(
+            "interaction-session-a-1",
             "workspace-a",
             "terminal-a",
             10,
         ))
         .expect("追加");
     store
-        .append(&interaction_in_lane(
-            "interaction-lane-a-2",
+        .append(&interaction_in_session(
+            "interaction-session-a-2",
             "workspace-a",
             "terminal-a",
             20,
         ))
         .expect("追加");
     store
-        .append(&interaction_in_lane(
-            "interaction-lane-b-1",
+        .append(&interaction_in_session(
+            "interaction-session-b-1",
             "workspace-b",
             "terminal-b",
             30,
@@ -333,10 +333,10 @@ fn claim_keeps_lane_exclusive_while_a_turn_is_in_flight() {
     assert_eq!(first.len(), 1);
     assert_eq!(
         first[0].interaction.interaction_id.as_str(),
-        "interaction-lane-a-1"
+        "interaction-session-a-1"
     );
 
-    // 首个 lane 仍在 lease 内：它的后续记录必须留在队列，不能与在途 turn 并发执行。
+    // 首个 session 仍在 lease 内：它的后续记录必须留在队列，不能与在途 turn 并发执行。
     let next = store
         .claim_processing(10, RECLAIM_AFTER_RELEASE_MS, LEASE_DURATION_MS)
         .expect("再次领取");
@@ -344,9 +344,9 @@ fn claim_keeps_lane_exclusive_while_a_turn_is_in_flight() {
         .iter()
         .map(|lease| lease.interaction.interaction_id.as_str().to_owned())
         .collect::<Vec<_>>();
-    assert_eq!(ids, ["interaction-lane-b-1"]);
+    assert_eq!(ids, ["interaction-session-b-1"]);
 
-    // 在途 turn 结束后，同 lane 的后续记录重新可领取。
+    // 在途 turn 结束后，同 session 的后续记录重新可领取。
     store
         .mark_understood(
             &first[0].interaction.interaction_id,
@@ -361,7 +361,7 @@ fn claim_keeps_lane_exclusive_while_a_turn_is_in_flight() {
         .iter()
         .map(|lease| lease.interaction.interaction_id.as_str().to_owned())
         .collect::<Vec<_>>();
-    assert_eq!(resumed_ids, ["interaction-lane-a-2"]);
+    assert_eq!(resumed_ids, ["interaction-session-a-2"]);
 }
 
 #[test]
@@ -625,7 +625,7 @@ fn expired_interaction_lease_cannot_append_late_runtime_events() {
         .expect("host lease");
     let interaction = sample_interaction();
     store.append(&interaction).expect("追加 Interaction");
-    let session_id = DaemonSessionId::new(interaction_session_lane_id(&interaction).expect("lane"))
+    let session_id = DaemonSessionId::new(interaction_session_id(&interaction).expect("session"))
         .expect("Session ID");
     store.create_session(&session_id, ".", 1).expect("Session");
     let lease = store

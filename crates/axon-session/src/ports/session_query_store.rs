@@ -8,9 +8,9 @@ use super::InteractionStoreError;
 
 /// 一条车道的原始汇总行。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LaneSummaryRow {
-    /// 车道稳定标识，取值同 `session_lane_id`。
-    pub lane_id: String,
+pub struct SessionSummaryRow {
+    /// 车道稳定标识，取值同 `session_id_for_route`。
+    pub session_id: String,
     /// 该车道下的 Interaction 总数。
     pub interaction_count: u64,
     /// 该车道当前处于处理中的 Interaction 条数。
@@ -32,7 +32,7 @@ pub struct LaneSummaryRow {
 }
 
 /// 车道查询端口。
-pub trait LaneQueryStore: Send + Sync {
+pub trait SessionQueryStore: Send + Sync {
     /// 列出全部车道汇总，按最近更新时间降序。
-    fn list_lane_summaries(&self) -> Result<Vec<LaneSummaryRow>, InteractionStoreError>;
+    fn list_session_summaries(&self) -> Result<Vec<SessionSummaryRow>, InteractionStoreError>;
 }

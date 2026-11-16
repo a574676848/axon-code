@@ -41,7 +41,7 @@ fn all_variants() -> Vec<VoiceFailure> {
         VoiceFailure::Overloaded,
         VoiceFailure::TtsFailed,
         VoiceFailure::TurnRejected {
-            code: "lane_closed".to_owned(),
+            code: "session_closed".to_owned(),
         },
         VoiceFailure::IdleTimeout {
             phase: IdlePhase::Connect,

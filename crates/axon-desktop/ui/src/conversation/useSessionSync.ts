@@ -6,29 +6,29 @@
  * 状态在走，读起来就是「活已经结束，界面还在跑」。
  *
  * 本 hook 只做编排：外部事实（车道快照上的 Interaction 总数）与内部事实（本视图
- * 已经接管到第几轮）交给 `advanceLaneSync` 判定，结论为真就要求重新接管一次。
- * 判定规则是纯函数，单测在 `tests/laneSync.test.mjs`。
+ * 已经接管到第几轮）交给 `advanceSessionSync` 判定，结论为真就要求重新接管一次。
+ * 判定规则是纯函数，单测在 `tests/sessionSync.test.mjs`。
  */
 
 import { useEffect, useRef } from 'react';
-import { EMPTY_LANE_SYNC_CURSOR, advanceLaneSync, type LaneSyncCursor } from './laneSync';
+import { EMPTY_SESSION_SYNC_CURSOR, advanceSessionSync, type SessionSyncCursor } from './sessionSync';
 
 /**
  * 车道快照里与接管有关的事实。
  *
  * 不订阅车道的目标（子代理会话、目标执行会话）没有这份事实，传空即可。
  */
-export interface LaneSyncFacts {
+export interface SessionSyncFacts {
   /** 车道稳定标识。 */
-  laneId: string;
+  sessionId: string;
   /** 该车道已有的 Interaction 总数；外部唤醒出来的新一轮会让它增长。 */
   interactionCount: number;
 }
 
 /** 组装参数。 */
-export interface LaneSyncOptions {
+export interface SessionSyncOptions {
   /** 当前车道的外部事实；没有可观察的车道时为空。 */
-  laneFacts: LaneSyncFacts | null;
+  sessionFacts: SessionSyncFacts | null;
   /** 目标种类；只有车道（Interaction）目标才按轮数接管。 */
   targetKind: 'interaction' | 'session' | null;
   /** 目标是否已经完成首次加载：首屏没落地时接管会和首次加载抢同一页历史。 */
@@ -40,18 +40,18 @@ export interface LaneSyncOptions {
 }
 
 /** 按车道轮数变化接管外部发起的新一轮。 */
-export function useLaneSync(options: LaneSyncOptions): void {
-  const { laneFacts, targetKind, ready, working, onReattach } = options;
-  const cursorRef = useRef<LaneSyncCursor>(EMPTY_LANE_SYNC_CURSOR);
+export function useSessionSync(options: SessionSyncOptions): void {
+  const { sessionFacts, targetKind, ready, working, onReattach } = options;
+  const cursorRef = useRef<SessionSyncCursor>(EMPTY_SESSION_SYNC_CURSOR);
   useEffect(() => {
-    if (laneFacts === null || targetKind !== 'interaction' || !ready) return;
-    const step = advanceLaneSync(
+    if (sessionFacts === null || targetKind !== 'interaction' || !ready) return;
+    const step = advanceSessionSync(
       cursorRef.current,
-      laneFacts.laneId,
-      laneFacts.interactionCount,
+      sessionFacts.sessionId,
+      sessionFacts.interactionCount,
       working,
     );
     cursorRef.current = step.cursor;
     if (step.reattach) onReattach();
-  }, [laneFacts, working, onReattach, ready, targetKind]);
+  }, [sessionFacts, working, onReattach, ready, targetKind]);
 }

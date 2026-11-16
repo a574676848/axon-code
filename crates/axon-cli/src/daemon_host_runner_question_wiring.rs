@@ -38,7 +38,7 @@ impl QuestionWiring {
         store: SqliteRuntimeStore,
         active_primary_turns: crate::run_commands::run_steer::ActivePrimaryTurnRegistry,
         channel_sink: Option<Arc<dyn crate::user_question::UserQuestionEventSink>>,
-        wake: crate::user_question::lane_steerer::PrimaryTurnWakeHook,
+        wake: crate::user_question::turn_steerer::PrimaryTurnWakeHook,
     ) -> Self {
         let shutdown = axon_agent_runtime::RunCancelToken::default();
         let channel_sink_attached = channel_sink.is_some();
@@ -60,7 +60,7 @@ impl QuestionWiring {
             Arc::new(store.clone()),
             Some((*host).clone()),
             event_sink,
-            Arc::new(crate::user_question::LaneQuestionMessageSteerer::new(
+            Arc::new(crate::user_question::HostQuestionMessageSteerer::new(
                 store,
                 active_primary_turns,
                 ACTION_LEASE_DURATION_MS,

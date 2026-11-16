@@ -539,8 +539,8 @@ mod tests {
         let archive = root.path().join("data").join("archive");
         let expired_content = archive.join("old.log");
         let session_events = archive.join(axon_session::SESSION_EVENT_ARCHIVE_SUBDIR);
-        let external_payload = session_events.join("session-lane-a").join("16651.json");
-        let cold_archive = session_events.join("session-lane-a.jsonl.zst");
+        let external_payload = session_events.join("session-session-a").join("16651.json");
+        let cold_archive = session_events.join("session-session-a.jsonl.zst");
         write_file(&expired_content, "旧工具输出");
         write_file(&external_payload, "{\"ok\":true}");
         write_file(&cold_archive, "zst-bytes");

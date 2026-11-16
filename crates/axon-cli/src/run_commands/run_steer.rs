@@ -490,8 +490,8 @@ impl ActivePrimaryTurnRegistry {
         turn.inbox.try_send_subagent_message(agent, content)
     }
 
-    pub(crate) fn affinity_key(primary_lane_id: &str) -> String {
-        primary_lane_id.to_owned()
+    pub(crate) fn affinity_key(primary_session_id: &str) -> String {
+        primary_session_id.to_owned()
     }
 
     /// 中断某条车道上正在运行的主 turn。
@@ -632,7 +632,7 @@ mod tests {
         let bridge = RunSteerBridge::default();
         let inbox = bridge.open();
         let interaction_id = InteractionId::new("interaction-a").expect("Interaction ID");
-        let affinity_key = ActivePrimaryTurnRegistry::affinity_key("session-lane-a");
+        let affinity_key = ActivePrimaryTurnRegistry::affinity_key("session-session-a");
         let registration = registry
             .register(
                 &affinity_key,
@@ -653,7 +653,7 @@ mod tests {
         assert!(
             !registry
                 .try_send(
-                    &ActivePrimaryTurnRegistry::affinity_key("session-lane-b"),
+                    &ActivePrimaryTurnRegistry::affinity_key("session-session-b"),
                     "其他工作区".to_owned(),
                 )
                 .expect("其他工作区应排队")
@@ -662,7 +662,7 @@ mod tests {
         assert!(
             !registry
                 .try_send(
-                    &ActivePrimaryTurnRegistry::affinity_key("session-lane-a-feishu"),
+                    &ActivePrimaryTurnRegistry::affinity_key("session-session-a-feishu"),
                     "其他渠道".to_owned(),
                 )
                 .expect("其他渠道应隔离")

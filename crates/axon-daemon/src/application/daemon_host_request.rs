@@ -113,17 +113,17 @@ where
                 target_version,
             } => self.drain_value(reason, target_version),
             DaemonCommand::AnswerQuestion {
-                lane_id,
+                session_id,
                 call_id,
                 answers,
                 channel,
-            } => self.answer_question_value(lane_id, call_id, answers, channel),
+            } => self.answer_question_value(session_id, call_id, answers, channel),
         }
     }
 
     fn answer_question_value(
         &self,
-        _lane_id: String,
+        _session_id: String,
         call_id: String,
         answers: Vec<axon_domain::UserAnswerItem>,
         channel: String,
@@ -139,7 +139,7 @@ where
             .cas_settle_answer(&call_id, &answers_json, now_ms, Some(&channel), Some("ipc"))
             .map_err(|e| DaemonHostError::Worker(e.to_string()))?;
         Ok(serde_json::json!({
-            "laneId": settled.lane_id,
+            "sessionId": settled.session_id,
             "callId": settled.tool_call_id,
             "questionId": settled.question_id,
             "state": settled.state.as_str(),

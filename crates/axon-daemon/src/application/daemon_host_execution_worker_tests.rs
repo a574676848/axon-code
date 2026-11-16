@@ -140,7 +140,7 @@ impl ConcurrentExecutor {
         let (state, timeout) = condition
             .wait_timeout_while(state, TEST_WAIT_DURATION, |state| state.started < expected)
             .unwrap_or_else(PoisonError::into_inner);
-        assert!(!timeout.timed_out(), "等待并发 Primary lane 启动超时");
+        assert!(!timeout.timed_out(), "等待并发 Primary session 启动超时");
         assert_eq!(state.started, expected);
     }
 

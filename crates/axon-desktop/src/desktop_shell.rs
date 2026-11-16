@@ -73,7 +73,7 @@ const GLOBAL_SHORTCUT: &str = "ctrl+alt+space";
 pub const FOCUS_COMPOSER_EVENT: &str = "axon://focus-composer";
 
 /// 推给前端的「会话有新结果」事件名，与前端 `ipc.ts` 中的常量一致。
-pub const LANE_ACTIVITY_EVENT: &str = "axon://lane-activity";
+pub const SESSION_ACTIVITY_EVENT: &str = "axon://session-activity";
 
 /// 已通知过的轮次标识。
 ///
@@ -146,7 +146,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
              * 但点击通知必然让系统激活应用、窗口重新获得焦点，这一刻是同一个事实。
              * 有刚发出的待打开目标时才动作，否则聚焦只是聚焦。
              */
-            WindowEvent::Focused(true) => open_pending_lane(handle.app_handle()),
+            WindowEvent::Focused(true) => open_pending_session(handle.app_handle()),
             _ => {}
         });
     }
@@ -327,14 +327,14 @@ pub fn show_main_window(app: &AppHandle) {
         let _ = window.set_focus();
     }
     // 托盘唤回与第二次启动都可能带着一条待打开的通知目标回来，一并消费。
-    open_pending_lane(app);
+    open_pending_session(app);
 }
 
 /// 消费待打开的通知目标：聚焦窗口，并把要打开的会话交给界面。
 ///
 /// 会话选择由界面完成：它持有真实工作区与会话清单，Rust 侧只交出车道标识。
-fn open_pending_lane(app: &AppHandle) {
-    let Some(lane_id) = crate::lane_context::take_pending_open() else {
+fn open_pending_session(app: &AppHandle) {
+    let Some(session_id) = crate::session_context::take_pending_open() else {
         return;
     };
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
@@ -343,8 +343,8 @@ fn open_pending_lane(app: &AppHandle) {
         let _ = window.set_focus();
     }
     if let Err(error) = app.emit(
-        crate::lane_context::LANE_OPEN_EVENT,
-        serde_json::json!({ "laneId": lane_id }),
+        crate::session_context::SESSION_OPEN_EVENT,
+        serde_json::json!({ "sessionId": session_id }),
     ) {
         eprintln!("Axon 打开会话事件下发失败：{error}");
     }
@@ -378,8 +378,10 @@ pub fn notify_turn_finished(app: &AppHandle, event: &StreamEvent) {
     };
 
     // 会话归属取这一刻的当前会话：桌面端同一时刻只订阅这一条事件流。
-    let lane = crate::lane_context::active_lane();
-    let lane_id = lane.as_ref().map_or("", |context| context.lane_id.as_str());
+    let session = crate::session_context::active_session();
+    let session_id = session
+        .as_ref()
+        .map_or("", |context| context.session_id.as_str());
     let window = app.get_webview_window(MAIN_WINDOW);
     let visible = window
         .as_ref()
@@ -392,12 +394,12 @@ pub fn notify_turn_finished(app: &AppHandle, event: &StreamEvent) {
     let foreground = visible && focused;
     // 界面标识先推：它不受通知开关与窗口状态影响，前台它就是通知的替代品。
     let _ = app.emit(
-        LANE_ACTIVITY_EVENT,
+        SESSION_ACTIVITY_EVENT,
         serde_json::json!({
             "id": notice.id,
             "status": notice.status,
             "title": notice.title,
-            "laneId": lane_id,
+            "sessionId": session_id,
             "foreground": foreground,
         }),
     );
@@ -405,16 +407,16 @@ pub fn notify_turn_finished(app: &AppHandle, event: &StreamEvent) {
     if foreground || !notifications_enabled() {
         return;
     }
-    let lane_title = lane.as_ref().map(|context| context.title.as_str());
-    let Some((title, body)) = notification_copy(&notice, lane_title) else {
+    let session_title = session.as_ref().map(|context| context.title.as_str());
+    let Some((title, body)) = notification_copy(&notice, session_title) else {
         return;
     };
     /*
      * 通知点击没有直接回调：桌面端拿不到插件的点击事件，但点击必然让窗口重新获得焦点，
      * 这一刻是同一个事实。只在真的发出通知时记下，普通聚焦不会把人带到无关会话上。
      */
-    if !lane_id.is_empty() {
-        crate::lane_context::remember_pending_open(lane_id);
+    if !session_id.is_empty() {
+        crate::session_context::remember_pending_open(session_id);
     }
     // 通知失败必须留痕：这条链路一旦静默失败，用户只会觉得「说好的通知从来没出现过」。
     if let Err(error) = app.notification().builder().title(title).body(body).show() {

@@ -1,6 +1,6 @@
 //! 车道待决提问的对账查询。
 //!
-//! 事实源是网关的 `GET /api/v1/lanes/{laneId}/questions`：库里存的是问答记录的
+//! 事实源是网关的 `GET /api/v1/sessions/{sessionId}/questions`：库里存的是问答记录的
 //! 权威状态，窗口重新聚焦时用它校正本地投影。
 //!
 //! 网关载荷的字段名与前端消费的形状并不相同（`state` 而不是 `status`、`answer`
@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::conversation::wire::{LANES_PATH, UserAnswerItem, UserQuestionItem};
+use crate::conversation::wire::{SESSIONS_PATH, UserAnswerItem, UserQuestionItem};
 use crate::gateway;
 
 /// 单次对账拉取的条数上限。
@@ -84,7 +84,7 @@ struct RawQuestion {
 /// 网关车道问答载荷。
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct LaneQuestionsPayload {
+struct SessionQuestionsPayload {
     /// 该车道下的问答记录。
     #[serde(default)]
     questions: Vec<RawQuestion>,
@@ -163,24 +163,24 @@ fn derive_part_key(call_id: &str, question_id: &str) -> String {
 /// `state` 给定时只取该状态；缺省时不加状态过滤。**默认不加过滤是有意的**：
 /// 网关的 `state` 只能取单值，而「待决」与「挂起」是两种状态，只查 pending 会把
 /// 挂起项误判成已结算。对账需要看到全部状态才能让本地投影真正收敛。
-pub fn lane_questions(
-    lane_id: &str,
+pub fn session_questions(
+    session_id: &str,
     state: Option<&str>,
     limit: Option<u32>,
 ) -> Result<Vec<QuestionSnapshot>, String> {
-    let lane_id = lane_id.trim();
-    if lane_id.is_empty() {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
         return Err("车道标识不能为空".to_string());
     }
     let limit = limit
         .unwrap_or(DEFAULT_QUESTION_LIMIT)
         .clamp(1, MAX_QUESTION_LIMIT);
-    let mut path = format!("{LANES_PATH}/{lane_id}/questions?limit={limit}");
+    let mut path = format!("{SESSIONS_PATH}/{session_id}/questions?limit={limit}");
     if let Some(state) = state.map(str::trim).filter(|value| !value.is_empty()) {
         path.push_str(&format!("&state={state}"));
     }
     let payload = gateway::get_json_at(&path)?;
-    let parsed: LaneQuestionsPayload =
+    let parsed: SessionQuestionsPayload =
         serde_json::from_value(payload).map_err(|error| format!("解析车道问答失败：{error}"))?;
     Ok(parsed.questions.into_iter().map(adapt).collect())
 }
@@ -190,8 +190,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn empty_lane_id_is_rejected_before_any_request() {
-        assert!(super::lane_questions("  ", None, None).is_err());
+    fn empty_session_id_is_rejected_before_any_request() {
+        assert!(super::session_questions("  ", None, None).is_err());
     }
 
     #[test]

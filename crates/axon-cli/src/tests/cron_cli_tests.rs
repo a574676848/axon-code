@@ -152,8 +152,8 @@ fn legacy_feishu_flags_fail_with_chinese_migration_hint() {
 }
 
 #[test]
-fn create_rejects_unstable_session_wake_lane() {
-    let root = test_root("cron-unstable-lane");
+fn create_rejects_unstable_session_wake_session() {
+    let root = test_root("cron-unstable-session");
     let config_path = root.join("config.toml");
     let path_arg = config_path.to_string_lossy().to_string();
     let create = AxonCli::parse_from_args([

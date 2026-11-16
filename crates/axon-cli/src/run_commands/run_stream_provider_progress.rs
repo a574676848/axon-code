@@ -205,7 +205,7 @@ fn question_event_registration(
     sender: &std::sync::mpsc::SyncSender<WireEventEnvelope>,
 ) -> super::run_question_projection::QuestionEventRegistration {
     let router = super::run_question_projection::global_question_event_router();
-    let lane_id = super::run_question_projection::run_lane_id(
+    let session_id = super::run_question_projection::run_session_id(
         request.transport_context.as_ref(),
         &request.session_id,
     );
@@ -217,5 +217,5 @@ fn question_event_registration(
             None => Err("本轮 run 已收口，尾随问答事件已丢弃".to_owned()),
         }
     });
-    router.register(&lane_id, bus)
+    router.register(&session_id, bus)
 }

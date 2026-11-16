@@ -410,12 +410,6 @@ fn execute_ask_user_question(
     let record = axon_domain::UserQuestionRecord {
         question_id: format!("uq-{}", uuid::Uuid::new_v4()),
         idempotency_key: format!("idem-{}-{}", context.session_id.0, tool_call.id),
-        // 车道身份取自本轮 Interaction 的路由上下文：答案消息必须能按它回到同一条车道，
-        // 客户端的车道对账查询也按它归属。
-        lane_id: crate::run_commands::run_lane_id(
-            context.goal_transport_context.as_ref(),
-            &context.thread_session_id,
-        ),
         session_id: context.session_id.0.to_string(),
         interaction_id: context.cell_id.0.to_string(),
         turn_id,

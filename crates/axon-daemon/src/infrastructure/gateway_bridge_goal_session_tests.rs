@@ -158,7 +158,7 @@ fn session_without_execution_binding_is_rejected() {
     let fixture = Fixture::new();
     fixture.register_workspace("workspace-a", "/repo-a");
     // 普通会话：既不是子代理会话，也没有执行绑定。
-    let session_id = DaemonSessionId::new("lane-session-plain").expect("session id");
+    let session_id = DaemonSessionId::new("session-session-plain").expect("session id");
     fixture
         .store
         .create_session(&session_id, "/repo-a", NOW_MS)

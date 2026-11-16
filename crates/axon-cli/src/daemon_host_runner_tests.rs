@@ -189,7 +189,7 @@ fn daemon_question_wiring_serves_the_waiting_primary_turn_from_one_host_instance
     let settled = wiring
         .service
         .submit_answer(
-            &record.lane_id,
+            &record.session_id,
             &record.tool_call_id,
             vec![UserAnswerItem {
                 id: "q1".to_owned(),
@@ -236,20 +236,19 @@ fn daemon_question_wiring_attaches_the_channel_sink_when_provided() {
 }
 
 /// 装配自检用的主 turn 唤醒钩子：只确认接线，不承载等待语义。
-fn test_wake_hook() -> crate::user_question::lane_steerer::PrimaryTurnWakeHook {
+fn test_wake_hook() -> crate::user_question::turn_steerer::PrimaryTurnWakeHook {
     Arc::new(|| Ok(()))
 }
 
 /// Daemon IPC 作答必须走统一答案入口：只结算不投递的路径会让答案落库却永远送不到
 /// 等待中的提问工具，也不会开启续跑的一轮。
 #[test]
-fn ipc_answer_question_delivers_to_the_lane_and_wakes_the_primary_turn() {
+fn ipc_answer_question_delivers_to_the_session_and_wakes_the_primary_turn() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::from_root(directory.path());
-    let lane_id = seed_answer_lane(&store);
+    let session_id = seed_answer_session(&store);
     let record = UserQuestionRecord {
-        lane_id: lane_id.clone(),
-        session_id: lane_id.clone(),
+        session_id: session_id.clone(),
         tool_call_id: "call-ipc-answer".to_owned(),
         state: UserQuestionState::Suspended,
         ..pending_question_record("call-ipc-answer")
@@ -267,7 +266,7 @@ fn ipc_answer_question_delivers_to_the_lane_and_wakes_the_primary_turn() {
     let response = super::answer_ipc::answer_question_ipc_response(
         &wiring.service,
         "request-answer-1",
-        &lane_id,
+        &session_id,
         "call-ipc-answer",
         vec![UserAnswerItem {
             id: "q1".to_owned(),
@@ -300,7 +299,7 @@ fn ipc_answer_question_delivers_to_the_lane_and_wakes_the_primary_turn() {
 /// 唤醒计数钩子：只记录唤醒次数。
 fn counting_wake_hook(
     wakes: Arc<std::sync::atomic::AtomicUsize>,
-) -> crate::user_question::lane_steerer::PrimaryTurnWakeHook {
+) -> crate::user_question::turn_steerer::PrimaryTurnWakeHook {
     Arc::new(move || {
         wakes.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         Ok(())
@@ -310,7 +309,7 @@ fn counting_wake_hook(
 /// 在测试仓库里登记一条车道，返回车道标识。
 ///
 /// 答案注入要按车道行回读作用域与回复路由，因此作答之前车道必须已有 Interaction。
-fn seed_answer_lane(store: &SqliteRuntimeStore) -> String {
+fn seed_answer_session(store: &SqliteRuntimeStore) -> String {
     use axon_domain::{
         AudienceContext, AudienceKind, DisclosurePolicy, InteractionId, InteractionRecord,
         InteractionSource, ReplyRoute, ScopeRef,
@@ -325,9 +324,9 @@ fn seed_answer_lane(store: &SqliteRuntimeStore) -> String {
         1,
     )
     .expect("合法 Interaction");
-    let lane_id = axon_session::interaction_session_lane_id(&seed).expect("种子记录绑定 Workspace");
+    let session_id = axon_session::interaction_session_id(&seed).expect("种子记录绑定 Workspace");
     axon_session::InteractionStore::append(store, &seed).expect("种子 Interaction 落库");
-    lane_id
+    session_id
 }
 
 /// 只用于装配自检的渠道 sink 桩：确认扇出接线，不关心投递内容。
@@ -356,8 +355,8 @@ impl crate::user_question::UserQuestionEventSink for NoopChannelSink {
 fn question_event_without_active_run_lands_in_the_session_event_stream() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::from_root(directory.path());
-    let lane_id = "session-lane-durable-question";
-    let session_id = DaemonSessionId::new(lane_id).expect("合法车道标识");
+    let session_id = "session-session-durable-question";
+    let session_id = DaemonSessionId::new(session_id).expect("合法车道标识");
     let host_id = RuntimeHostId::new("durable-question-host").expect("合法宿主标识");
     // 落盘用真实时钟过代际围栏，宿主租约也必须按真实时钟申请，否则会被判为过期宿主。
     let now_ms = crate::daemon_commands::now_ms();
@@ -378,7 +377,7 @@ fn question_event_without_active_run_lands_in_the_session_event_stream() {
         event_id: WireCorrelationId(format!("question:{call_id}:7")),
         correlation_id: WireCorrelationId(format!("question:{call_id}")),
         session: WireSessionRef {
-            session_id: lane_id.to_owned(),
+            session_id: session_id.as_str().to_owned(),
             run_id: None,
             parent_session_id: None,
         },
@@ -395,7 +394,7 @@ fn question_event_without_active_run_lands_in_the_session_event_stream() {
         }),
     };
 
-    writer(lane_id, &envelope).expect("没有活跃 run 时必须落盘成功");
+    writer(session_id.as_str(), &envelope).expect("没有活跃 run 时必须落盘成功");
 
     let events = store
         .replay_events(&session_id, 0, 10)
@@ -416,7 +415,6 @@ fn pending_question_record(call_id: &str) -> UserQuestionRecord {
     UserQuestionRecord {
         question_id: format!("uq-{call_id}"),
         idempotency_key: format!("idem-{call_id}"),
-        lane_id: "lane-daemon-wiring".to_owned(),
         session_id: "session-daemon-wiring".to_owned(),
         interaction_id: "interaction-daemon-wiring".to_owned(),
         turn_id: "turn-daemon-wiring".to_owned(),

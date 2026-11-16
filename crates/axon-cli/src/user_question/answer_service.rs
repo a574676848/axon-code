@@ -29,8 +29,8 @@ pub enum AnswerError {
     #[error("ALREADY_SETTLED: {0}")]
     AlreadySettled(String),
     /// 车道不匹配。
-    #[error("LANE_MISMATCH: {0}")]
-    LaneMismatch(String),
+    #[error("SESSION_MISMATCH: {0}")]
+    SessionMismatch(String),
     /// 内部存储或处理错误。
     #[error("INTERNAL_ERROR: {0}")]
     Internal(String),
@@ -41,7 +41,6 @@ pub trait QuestionMessageSteerer: Send + Sync {
     /// 向指定车道注入一条带稳定幂等键的用户答案消息。
     fn steer_answer_message(
         &self,
-        lane_id: &str,
         session_id: &str,
         idempotency_key: &str,
         content: &str,
@@ -55,7 +54,6 @@ pub struct NoopQuestionMessageSteerer;
 impl QuestionMessageSteerer for NoopQuestionMessageSteerer {
     fn steer_answer_message(
         &self,
-        _lane_id: &str,
         _session_id: &str,
         _idempotency_key: &str,
         _content: &str,
@@ -97,7 +95,7 @@ impl UserQuestionAnswerService {
     /// 5. 触发一轮限量对账，兜住历史崩溃窗口留下的未投递记录。
     pub fn submit_answer(
         &self,
-        lane_id: &str,
+        session_id: &str,
         call_id: &str,
         answers: Vec<UserAnswerItem>,
         channel: &str,
@@ -111,10 +109,10 @@ impl UserQuestionAnswerService {
             .ok_or_else(|| AnswerError::UnknownCall(call_id.to_string()))?;
 
         // 校验车道一致性
-        if !lane_id.is_empty() && record.lane_id != lane_id {
-            return Err(AnswerError::LaneMismatch(format!(
+        if !session_id.is_empty() && record.session_id != session_id {
+            return Err(AnswerError::SessionMismatch(format!(
                 "问题属于车道 {}，收到作答车道 {}",
-                record.lane_id, lane_id
+                record.session_id, session_id
             )));
         }
 
@@ -182,12 +180,7 @@ impl UserQuestionAnswerService {
             let idem_key = format!("question-answer-{}", settled.question_id);
 
             self.steerer
-                .steer_answer_message(
-                    &settled.lane_id,
-                    &settled.session_id,
-                    &idem_key,
-                    &msg_content,
-                )
+                .steer_answer_message(&settled.session_id, &idem_key, &msg_content)
                 .map_err(|e| AnswerError::Internal(format!("消息投递失败: {e}")))?;
 
             settled.delivered = true;
@@ -205,7 +198,7 @@ impl UserQuestionAnswerService {
         // 4. 发射 settled 事件
         let part_id = crate::run_commands::question_part_id(&record.tool_call_id);
         self.sink.emit_question_event(
-            &record.lane_id,
+            &record.session_id,
             &part_id,
             &record.tool_call_id,
             "settled",
@@ -253,12 +246,8 @@ impl UserQuestionAnswerService {
                 encode_question_answer_message(&record.tool_call_id, &questions, &answers);
             let idem_key = format!("question-answer-{}", record.question_id);
 
-            self.steerer.steer_answer_message(
-                &record.lane_id,
-                &record.session_id,
-                &idem_key,
-                &msg_content,
-            )?;
+            self.steerer
+                .steer_answer_message(&record.session_id, &idem_key, &msg_content)?;
 
             // 补投同样要写投递方式：与首次投递共用同一条送达事实。
             self.store
@@ -348,9 +337,9 @@ mod tests {
             Ok(self.record.lock().unwrap().clone())
         }
 
-        fn list_questions_by_lane(
+        fn list_questions_by_session(
             &self,
-            _lane_id: &str,
+            _session_id: &str,
             _state: Option<UserQuestionState>,
             _limit: usize,
         ) -> Result<Vec<UserQuestionRecord>, UserQuestionStoreError> {
@@ -442,7 +431,6 @@ mod tests {
     impl QuestionMessageSteerer for TestSteerer {
         fn steer_answer_message(
             &self,
-            _lane_id: &str,
             _session_id: &str,
             idempotency_key: &str,
             _content: &str,
@@ -459,8 +447,7 @@ mod tests {
         UserQuestionRecord {
             question_id: "uq-100".to_string(),
             idempotency_key: "idem-100".to_string(),
-            lane_id: "lane-main".to_string(),
-            session_id: "sess-1".to_string(),
+            session_id: "session-main".to_string(),
             interaction_id: "inter-1".to_string(),
             turn_id: "turn-1".to_string(),
             tool_call_id: "call-100".to_string(),
@@ -498,7 +485,7 @@ mod tests {
         }];
 
         let settled = service
-            .submit_answer("lane-main", "call-100", answers, "desktop")
+            .submit_answer("session-main", "call-100", answers, "desktop")
             .expect("提交答案应成功");
 
         assert_eq!(settled.state, UserQuestionState::Answered);
@@ -510,7 +497,7 @@ mod tests {
     }
 
     #[test]
-    fn test_submit_answer_rejects_bad_answer_and_lane_mismatch() {
+    fn test_submit_answer_rejects_bad_answer_and_session_mismatch() {
         let store = Arc::new(InMemoryQuestionStore::default());
         store.insert_question(&sample_record()).unwrap();
 
@@ -524,7 +511,7 @@ mod tests {
         // 跨车道被拒
         let err = service
             .submit_answer(
-                "lane-wrong",
+                "session-wrong",
                 "call-100",
                 vec![UserAnswerItem {
                     id: "q1".to_string(),
@@ -535,14 +522,14 @@ mod tests {
             )
             .expect_err("跨车道必须被拒");
         match err {
-            AnswerError::LaneMismatch(_) => {}
-            other => panic!("期望 LaneMismatch，得到 {other:?}"),
+            AnswerError::SessionMismatch(_) => {}
+            other => panic!("期望 SessionMismatch，得到 {other:?}"),
         }
 
         // 单选题选多个选项 -> BAD_ANSWER
         let err_multi = service
             .submit_answer(
-                "lane-main",
+                "session-main",
                 "call-100",
                 vec![UserAnswerItem {
                     id: "q1".to_string(),

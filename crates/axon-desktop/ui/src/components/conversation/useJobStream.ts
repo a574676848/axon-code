@@ -63,7 +63,7 @@ function tailLines(text: string, maxLines: number): string {
  * 已累积的内容原样保留。
  */
 export function useJobStream(
-  laneId: string | null,
+  sessionId: string | null,
   jobId: string | null,
   fallbackRunning = false,
 ): JobStream {
@@ -77,14 +77,14 @@ export function useJobStream(
   }, [fallbackRunning]);
 
   React.useEffect(() => {
-    if (laneId === null || jobId === null) {
+    if (sessionId === null || jobId === null) {
       offsetRef.current = 0;
       attachedRef.current = null;
       setStream(emptyStream(initialRunning.current));
       return undefined;
     }
     // 换作业就整段重来：游标属于某一个具体作业，跨作业复用会把两段输出拼在一起。
-    const key = `${laneId}\u0000${jobId}`;
+    const key = `${sessionId}\u0000${jobId}`;
     if (attachedRef.current !== key) {
       attachedRef.current = key;
       offsetRef.current = 0;
@@ -100,7 +100,7 @@ export function useJobStream(
         return;
       }
       void ipc
-        .conversationJobOutput(laneId, jobId, offsetRef.current)
+        .conversationJobOutput(sessionId, jobId, offsetRef.current)
         .then((page) => {
           if (cancelled) return;
           failures = 0;
@@ -149,7 +149,7 @@ export function useJobStream(
       cancelled = true;
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [laneId, jobId]);
+  }, [sessionId, jobId]);
 
   return stream;
 }

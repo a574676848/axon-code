@@ -25,11 +25,11 @@ const QUESTION_STATUS_EXTENDED: &str = "extended";
 impl AgentTuiState {
     /// 把一条提问事件投影为提问单元，并同步面板开合。
     ///
-    /// `lane_id` 取自事件信封的会话身份：Daemon 下它就是主 turn 的车道身份，
+    /// `session_id` 取自事件信封的会话身份：Daemon 下它就是主 turn 的车道身份，
     /// 作答必须沿同一个身份回到统一答案入口。
     pub(in crate::r#loop::agent_tui) fn apply_user_question(
         &mut self,
-        lane_id: &str,
+        session_id: &str,
         question: WireUserQuestion,
     ) {
         let answerable = is_answerable_status(&question.status);
@@ -37,7 +37,7 @@ impl AgentTuiState {
         self.upsert_question_cell(&part_id, question_cell(&part_id, &question));
         if answerable {
             self.open_bottom_view(BottomView::Question(QuestionView::new(
-                lane_id,
+                session_id,
                 question.call_id,
                 question.questions,
                 question.deadline_at_ms,

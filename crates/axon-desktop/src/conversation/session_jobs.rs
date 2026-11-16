@@ -6,15 +6,15 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::conversation::wire::LANES_PATH;
+use crate::conversation::wire::SESSIONS_PATH;
 use crate::gateway;
 
 /// 活作业名册。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LaneJobsRoster {
+pub struct SessionJobsRoster {
     /// 目标车道。
-    pub lane_id: String,
+    pub session_id: String,
     /// 后端进程代际；重启即变化，用于识别过期作业行。
     #[serde(default)]
     pub epoch: String,
@@ -24,20 +24,20 @@ pub struct LaneJobsRoster {
 }
 
 /// 读取某条车道的活作业名册。
-pub fn lane_jobs(lane_id: &str) -> Result<LaneJobsRoster, String> {
-    let lane_id = lane_id.trim();
-    if lane_id.is_empty() {
+pub fn session_jobs(session_id: &str) -> Result<SessionJobsRoster, String> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
         return Err("车道标识不能为空".to_string());
     }
-    let payload = gateway::get_json_at(&format!("{LANES_PATH}/{lane_id}/jobs"))?;
-    serde_json::from_value::<LaneJobsRoster>(payload)
+    let payload = gateway::get_json_at(&format!("{SESSIONS_PATH}/{session_id}/jobs"))?;
+    serde_json::from_value::<SessionJobsRoster>(payload)
         .map_err(|error| format!("解析作业名册失败：{error}"))
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn empty_lane_id_is_rejected_before_any_request() {
-        assert!(super::lane_jobs("   ").is_err());
+    fn empty_session_id_is_rejected_before_any_request() {
+        assert!(super::session_jobs("   ").is_err());
     }
 }

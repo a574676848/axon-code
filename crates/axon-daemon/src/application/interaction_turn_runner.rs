@@ -17,9 +17,7 @@ mod interaction_turn_generation_watch;
 mod interaction_turn_terminal;
 use axon_crypto::sha256_hex;
 use axon_domain::{DaemonSessionId, InteractionRecord, SessionActionId};
-use axon_session::{
-    DaemonHostRecord, RuntimeStore, SessionRuntimeRecord, interaction_session_lane_id,
-};
+use axon_session::{DaemonHostRecord, RuntimeStore, SessionRuntimeRecord, interaction_session_id};
 use axon_session_runtime::model::{RuntimeEvent, TURN_COMPLETED_EVENT};
 use axon_session_runtime::{
     ActionExecutionRequest, AtomicTurnPerformanceRecorder, EventPublisher, RuntimeClock,
@@ -173,7 +171,7 @@ where
     {
         let interaction = request.interaction;
         let interaction_id = interaction.interaction_id.as_str();
-        let session_id = interaction_session_lane_id(&interaction)
+        let session_id = interaction_session_id(&interaction)
             .ok_or_else(|| runtime_error("Primary Turn 必须绑定 Workspace"))?;
         let session_id =
             DaemonSessionId::new(session_id).map_err(|error| runtime_error(error.to_string()))?;
@@ -363,7 +361,7 @@ where
 pub fn primary_session_id_for_interaction(
     interaction: &InteractionRecord,
 ) -> Result<DaemonSessionId, String> {
-    let session_id = interaction_session_lane_id(interaction)
+    let session_id = interaction_session_id(interaction)
         .ok_or_else(|| "Primary Turn 必须绑定 Workspace".to_owned())?;
     DaemonSessionId::new(session_id).map_err(|error| error.to_string())
 }

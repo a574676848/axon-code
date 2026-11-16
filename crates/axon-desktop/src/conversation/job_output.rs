@@ -4,12 +4,12 @@
 //! 参数校验与载荷解析，不决定轮询节奏：节奏属于界面（见
 //! `ui/src/components/conversation/useJobStream.ts`），换一种节奏不该改后端契约。
 //!
-//! 与 `lane_jobs` 的分工：名册回答「后端此刻还持有哪些作业」，这里回答「某个作业
+//! 与 `session_jobs` 的分工：名册回答「后端此刻还持有哪些作业」，这里回答「某个作业
 //! 到第几个字节为止输出了什么」。两者都由网关给出，桌面端不直连运行态数据。
 
 use serde::{Deserialize, Serialize};
 
-use crate::conversation::wire::LANES_PATH;
+use crate::conversation::wire::SESSIONS_PATH;
 use crate::gateway;
 
 /// 一次尾随读取的最大字节数：与网关默认口径一致，请求里显式带上以免依赖缺省值。
@@ -20,7 +20,7 @@ const TAIL_PAGE_BYTES: u32 = 64 * 1024;
 #[serde(rename_all = "camelCase")]
 pub struct JobOutputStream {
     /// 目标车道。
-    pub lane_id: String,
+    pub session_id: String,
     /// 目标作业。
     pub job_id: String,
     /// 本次读取的起始字节偏移（已在归档头部之后）。
@@ -54,9 +54,9 @@ pub struct JobOutputStream {
 }
 
 /// 读取某条车道上一次作业输出增量。
-pub fn job_output(lane_id: &str, job_id: &str, offset: u64) -> Result<JobOutputStream, String> {
-    let lane_id = lane_id.trim();
-    if lane_id.is_empty() {
+pub fn job_output(session_id: &str, job_id: &str, offset: u64) -> Result<JobOutputStream, String> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
         return Err("车道标识不能为空".to_string());
     }
     let job_id = job_id.trim();
@@ -64,7 +64,7 @@ pub fn job_output(lane_id: &str, job_id: &str, offset: u64) -> Result<JobOutputS
         return Err("作业标识不能为空".to_string());
     }
     let payload = gateway::get_json_at(&format!(
-        "{LANES_PATH}/{lane_id}/jobs/{job_id}/output?offset={offset}&max={TAIL_PAGE_BYTES}"
+        "{SESSIONS_PATH}/{session_id}/jobs/{job_id}/output?offset={offset}&max={TAIL_PAGE_BYTES}"
     ))?;
     serde_json::from_value::<JobOutputStream>(payload)
         .map_err(|error| format!("解析作业输出失败：{error}"))
@@ -75,6 +75,6 @@ mod tests {
     #[test]
     fn empty_identifiers_are_rejected_before_any_request() {
         assert!(super::job_output("   ", "1", 0).is_err());
-        assert!(super::job_output("session-lane-a", "  ", 0).is_err());
+        assert!(super::job_output("session-session-a", "  ", 0).is_err());
     }
 }

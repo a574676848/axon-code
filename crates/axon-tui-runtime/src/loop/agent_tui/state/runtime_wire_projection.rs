@@ -58,7 +58,7 @@ const CONTEXT_ROLLOVER_NOTES_SKIPPED: &str = "，未注入战术笔记";
 pub(super) fn dispatch_wire_event(state: &mut AgentTuiState, event: WireEventEnvelope) {
     let event_id = event.event_id.0.clone();
     let execution_id = event.session.run_id.clone();
-    let lane_id = event.session.session_id.clone();
+    let session_id = event.session.session_id.clone();
     match event.kind {
         WireEventKind::TurnLifecycle(lifecycle) => {
             dispatch_turn_lifecycle(state, lifecycle, event_id, execution_id)
@@ -105,7 +105,7 @@ pub(super) fn dispatch_wire_event(state: &mut AgentTuiState, event: WireEventEnv
         }
         WireEventKind::ContextRollover(rollover) => dispatch_context_rollover(state, rollover),
         WireEventKind::UserQuestion(question) => {
-            state.apply_user_question(&lane_id, question);
+            state.apply_user_question(&session_id, question);
         }
     }
 }

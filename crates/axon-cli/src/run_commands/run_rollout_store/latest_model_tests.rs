@@ -20,17 +20,17 @@ fn latest_session_model_reads_only_the_newest_turn() {
     let db = axon_session::session_store_path(&root).join(CLI_ROLLOUT_DB_FILE);
     std::fs::create_dir_all(db.parent().expect("rollout 目录")).unwrap();
     let store = RolloutSqliteStore::open(&db).unwrap();
-    let mut first = record("lane-session", None, 100);
+    let mut first = record("session-session", None, 100);
     first.provider = "sm-wenwen-chat".to_owned();
     first.model = "deepseek-v4.1-flash-1017".to_owned();
     store.record_session(&first).unwrap();
-    let mut second = record("lane-session", None, 200);
+    let mut second = record("session-session", None, 200);
     second.provider = "deng".to_owned();
     second.model = "gpt-6-astra".to_owned();
     second.model_name = Some("gpt-6-astra".to_owned());
     store.record_session(&second).unwrap();
 
-    let facts = load_latest_session_model_from_root(&root, "lane-session")
+    let facts = load_latest_session_model_from_root(&root, "session-session")
         .unwrap()
         .expect("应读到最新一轮");
     assert_eq!(facts.provider, "deng");
@@ -40,7 +40,7 @@ fn latest_session_model_reads_only_the_newest_turn() {
 
     let missing = root.join("no-such-root");
     assert!(
-        load_latest_session_model_from_root(&missing, "lane-session")
+        load_latest_session_model_from_root(&missing, "session-session")
             .unwrap()
             .is_none(),
         "账本不存在时必须给 None，而不是报错或造一个模型"

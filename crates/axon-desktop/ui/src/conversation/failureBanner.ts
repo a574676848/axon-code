@@ -12,11 +12,11 @@
  */
 
 /** 横幅所属的车道类型。 */
-export type FailureBannerLane = 'primary' | 'subagent' | 'readonly';
+export type FailureBannerSession = 'primary' | 'subagent' | 'readonly';
 
 /** 决定横幅文案的输入。 */
 export interface FailureBannerInput {
-  lane: FailureBannerLane;
+  session: FailureBannerSession;
   /** 这一轮的终态：只有这两种终态才需要给结论提示。 */
   status: 'failed' | 'rejected';
   /** 子代理车道：该子代理是否被中断（父轮连坐或用户中止）；其余车道忽略。 */
@@ -38,12 +38,12 @@ const READONLY_FAILED = '本轮执行失败，后台已停止推进，此视图�
 
 /** 按车道与终态给出结论文案。 */
 export function failureBanner(input: FailureBannerInput): FailureBanner {
-  if (input.lane === 'readonly') {
+  if (input.session === 'readonly') {
     return {
       text: input.status === 'rejected' ? READONLY_REJECTED : READONLY_FAILED,
     };
   }
-  if (input.lane === 'subagent') {
+  if (input.session === 'subagent') {
     if (input.status === 'rejected') {
       return { text: SUBAGENT_REJECTED };
     }

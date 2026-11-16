@@ -23,13 +23,13 @@ export interface VoicePreferences {
   /** 全局开关；没有存过时为 false。 */
   globalAutoRead(): boolean;
   /** 会话的显式设置；没存过时为 null，表示继承全局。 */
-  laneAutoRead(laneKey: string): boolean | null;
-  /** 这一条会话此刻是否自动朗读；laneKey 为空时取全局值。 */
-  effectiveAutoRead(laneKey: string | null): boolean;
+  sessionAutoRead(sessionKey: string): boolean | null;
+  /** 这一条会话此刻是否自动朗读；sessionKey 为空时取全局值。 */
+  effectiveAutoRead(sessionKey: string | null): boolean;
   /** 音色预设 id；没存过或存的是空串时为 ''，表示跟随人格。 */
   presetId(): string;
   setGlobalAutoRead(next: boolean): void;
-  setLaneAutoRead(laneKey: string, next: boolean): void;
+  setSessionAutoRead(sessionKey: string, next: boolean): void;
   /** 写入音色预设；空串表示跟随人格。 */
   setPresetId(next: string): void;
   subscribe(listener: () => void): () => void;
@@ -70,23 +70,23 @@ export function createVoicePreferences(storage: PreferenceStorage | null): Voice
 
   const globalAutoRead = (): boolean => parseFlag(read(VOICE_STORAGE_KEYS.global)) === true;
 
-  const laneAutoRead = (laneKey: string): boolean | null =>
-    parseFlag(read(VOICE_STORAGE_KEYS.lane(laneKey)));
+  const sessionAutoRead = (sessionKey: string): boolean | null =>
+    parseFlag(read(VOICE_STORAGE_KEYS.session(sessionKey)));
 
   const presetId = (): string => read(VOICE_STORAGE_KEYS.preset) ?? '';
 
   return {
     globalAutoRead,
-    laneAutoRead,
+    sessionAutoRead,
     presetId,
-    effectiveAutoRead: (laneKey) =>
-      laneKey === null ? globalAutoRead() : (laneAutoRead(laneKey) ?? globalAutoRead()),
+    effectiveAutoRead: (sessionKey) =>
+      sessionKey === null ? globalAutoRead() : (sessionAutoRead(sessionKey) ?? globalAutoRead()),
     setGlobalAutoRead: (next) => {
       write(VOICE_STORAGE_KEYS.global, next ? 'true' : 'false');
       notify();
     },
-    setLaneAutoRead: (laneKey, next) => {
-      write(VOICE_STORAGE_KEYS.lane(laneKey), next ? 'true' : 'false');
+    setSessionAutoRead: (sessionKey, next) => {
+      write(VOICE_STORAGE_KEYS.session(sessionKey), next ? 'true' : 'false');
       notify();
     },
     setPresetId: (next) => {

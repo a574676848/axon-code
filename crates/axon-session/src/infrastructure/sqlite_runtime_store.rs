@@ -56,12 +56,12 @@ mod interaction_repository_row;
 mod interrupted_execution_repository;
 #[path = "sqlite_runtime_store/interrupted_interaction_repository.rs"]
 mod interrupted_interaction_repository;
-#[path = "sqlite_runtime_store/lane_query_repository.rs"]
-mod lane_query_repository;
 #[path = "sqlite_runtime_store/ledger_commit_repository.rs"]
 mod ledger_commit_repository;
 #[path = "sqlite_runtime_store/ledger_event_repository.rs"]
 mod ledger_event_repository;
+#[path = "sqlite_runtime_store/session_query_repository.rs"]
+mod session_query_repository;
 #[path = "sqlite_runtime_store/workspace_repository.rs"]
 mod workspace_repository;
 use connection_pool::{ConnectionPool, PooledConnection};

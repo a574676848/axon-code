@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::conversation::wire::LANES_PATH;
+use crate::conversation::wire::SESSIONS_PATH;
 use crate::gateway;
 
 /// 中断回执。
@@ -14,7 +14,7 @@ use crate::gateway;
 #[serde(rename_all = "camelCase")]
 pub struct InterruptReceipt {
     /// 目标车道。
-    pub lane_id: String,
+    pub session_id: String,
     /// 是否确实中断了一轮。
     pub interrupted: bool,
     /// 被中断的 Interaction 标识；没有活跃 turn 时为空。
@@ -23,12 +23,12 @@ pub struct InterruptReceipt {
 }
 
 /// 中断一条车道上正在运行的主 turn。
-pub fn interrupt_lane(lane_id: &str) -> Result<InterruptReceipt, String> {
-    let lane_id = lane_id.trim();
-    if lane_id.is_empty() {
+pub fn interrupt_session(session_id: &str) -> Result<InterruptReceipt, String> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
         return Err("车道标识不能为空".to_string());
     }
-    let path = format!("{LANES_PATH}/{lane_id}/interrupt");
+    let path = format!("{SESSIONS_PATH}/{session_id}/interrupt");
     let payload = gateway::post_json_at(&path, &serde_json::json!({}))?;
     serde_json::from_value::<InterruptReceipt>(payload)
         .map_err(|error| format!("解析中断回执失败：{error}"))
@@ -37,7 +37,7 @@ pub fn interrupt_lane(lane_id: &str) -> Result<InterruptReceipt, String> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn empty_lane_id_is_rejected_before_any_request() {
-        assert!(super::interrupt_lane("  ").is_err());
+    fn empty_session_id_is_rejected_before_any_request() {
+        assert!(super::interrupt_session("  ").is_err());
     }
 }

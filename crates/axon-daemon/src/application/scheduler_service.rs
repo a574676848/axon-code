@@ -237,7 +237,7 @@ mod tests {
         let host = store
             .claim_host(&host_id, 1, None, 10, 100)
             .expect("领取 host");
-        let session_id = DaemonSessionId::new("session-lane-workspace-a").expect("session ID");
+        let session_id = DaemonSessionId::new("session-session-workspace-a").expect("session ID");
         store
             .create_session(&session_id, ".", 10)
             .expect("创建 session");

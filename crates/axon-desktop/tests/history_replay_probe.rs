@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use axon_desktop::conversation::history;
-use axon_desktop::conversation::wire::{ClientFrame, LANES_PATH, WS_PATH};
+use axon_desktop::conversation::wire::{ClientFrame, SESSIONS_PATH, WS_PATH};
 use axon_desktop::gateway;
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest, http::HeaderValue};
@@ -12,14 +12,17 @@ const FRAME_TIMEOUT: Duration = Duration::from_secs(10);
 const SUBSCRIBE_ID: &str = "history-replay-probe";
 
 fn historical_target() -> (String, String) {
-    let payload = gateway::get_json_at(LANES_PATH).expect("真实网关必须可用");
-    let lanes = payload["lanes"].as_array().expect("车道列表必须有效");
-    for lane in lanes {
-        let lane_id = lane["laneId"].as_str().expect("车道标识");
-        let page = history::lane_interactions(lane_id, None, None).expect("读取历史交互");
+    let payload = gateway::get_json_at(SESSIONS_PATH).expect("真实网关必须可用");
+    let sessions = payload["sessions"].as_array().expect("车道列表必须有效");
+    for session in sessions {
+        let session_id = session["sessionId"].as_str().expect("车道标识");
+        let page = history::session_interactions(session_id, None, None).expect("读取历史交互");
         if let Some(interaction) = page.interactions.first() {
             return (
-                lane["workspaceId"].as_str().expect("工作区标识").to_owned(),
+                session["workspaceId"]
+                    .as_str()
+                    .expect("工作区标识")
+                    .to_owned(),
                 interaction.interaction_id.clone(),
             );
         }

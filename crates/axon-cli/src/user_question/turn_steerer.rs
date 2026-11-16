@@ -14,7 +14,7 @@ use axon_domain::{
     AudienceContext, InteractionId, InteractionRecord, InteractionSource,
     QUESTION_ANSWER_SOURCE_PREFIX, ReplyRoute, SYSTEM_SOURCE_CHANNEL, ScopeRef,
 };
-use axon_session::{LaneQueryStore, LaneSummaryRow, SqliteRuntimeStore};
+use axon_session::{SessionQueryStore, SessionSummaryRow, SqliteRuntimeStore};
 
 use super::answer_service::QuestionMessageSteerer;
 use crate::run_commands::run_steer::ActivePrimaryTurnRegistry;
@@ -30,11 +30,11 @@ pub(crate) type PrimaryTurnWakeHook = Arc<dyn Fn() -> Result<(), String> + Send 
 
 /// 主 turn 的活跃回合注入端口：按会话车道亲和键把输入并入正在运行的那一轮。
 #[derive(Clone)]
-pub(crate) struct ActiveLaneTurnSteerSink {
+pub(crate) struct PrimaryTurnSteerSink {
     active_primary_turns: ActivePrimaryTurnRegistry,
 }
 
-impl ActiveLaneTurnSteerSink {
+impl PrimaryTurnSteerSink {
     /// 以活跃主 turn 注册表构造。
     pub(crate) fn new(active_primary_turns: ActivePrimaryTurnRegistry) -> Self {
         Self {
@@ -43,12 +43,12 @@ impl ActiveLaneTurnSteerSink {
     }
 }
 
-impl ActiveTurnSteerSink for ActiveLaneTurnSteerSink {
+impl ActiveTurnSteerSink for PrimaryTurnSteerSink {
     fn try_steer(&self, interaction: &InteractionRecord) -> Result<bool, String> {
-        let lane_id = interaction_lane_id(interaction)?;
+        let session_id = interaction_session_id(interaction)?;
         self.active_primary_turns
             .try_send(
-                &ActivePrimaryTurnRegistry::affinity_key(&lane_id),
+                &ActivePrimaryTurnRegistry::affinity_key(&session_id),
                 interaction.content.clone(),
             )
             .map(|result| result.is_some())
@@ -61,16 +61,16 @@ impl ActiveTurnSteerSink for ActiveLaneTurnSteerSink {
         if interaction.source.channel() == SYSTEM_SOURCE_CHANNEL {
             return Ok(None);
         }
-        let lane_id = interaction_lane_id(interaction)?;
+        let session_id = interaction_session_id(interaction)?;
         self.active_primary_turns.try_send(
-            &ActivePrimaryTurnRegistry::affinity_key(&lane_id),
+            &ActivePrimaryTurnRegistry::affinity_key(&session_id),
             interaction.content.clone(),
         )
     }
 }
 
-fn interaction_lane_id(interaction: &InteractionRecord) -> Result<String, String> {
-    axon_session::interaction_session_lane_id(interaction)
+fn interaction_session_id(interaction: &InteractionRecord) -> Result<String, String> {
+    axon_session::interaction_session_id(interaction)
         .ok_or_else(|| "问答答案注入必须绑定 Workspace".to_owned())
 }
 
@@ -78,15 +78,15 @@ fn interaction_lane_id(interaction: &InteractionRecord) -> Result<String, String
 ///
 /// 答案记录只带车道身份，因此这里按车道行回读它自己的作用域与回复路由：
 /// 重建出来的 Interaction 必然解析回同一条车道，注入不会落到别的会话表面上。
-pub(crate) struct LaneQuestionMessageSteerer {
+pub(crate) struct HostQuestionMessageSteerer {
     store: SqliteRuntimeStore,
-    steer_sink: ActiveLaneTurnSteerSink,
+    steer_sink: PrimaryTurnSteerSink,
     lease_duration_ms: u64,
     /// 迟到作答落库后的主 turn 唤醒端口。
     wake: PrimaryTurnWakeHook,
 }
 
-impl LaneQuestionMessageSteerer {
+impl HostQuestionMessageSteerer {
     /// 以运行态存储、活跃主 turn 注册表、动作租约时长与唤醒端口构造。
     pub(crate) fn new(
         store: SqliteRuntimeStore,
@@ -96,32 +96,35 @@ impl LaneQuestionMessageSteerer {
     ) -> Self {
         Self {
             store,
-            steer_sink: ActiveLaneTurnSteerSink::new(active_primary_turns),
+            steer_sink: PrimaryTurnSteerSink::new(active_primary_turns),
             lease_duration_ms,
             wake,
         }
     }
 
     /// 唤醒一次主 turn 领取；失败只留痕，不影响答案已落库这一事实。
-    fn wake_claim(&self, lane_id: &str) {
+    fn wake_claim(&self, session_id: &str) {
         match (self.wake)() {
             Ok(()) => axon_logger::debug(&format!(
-                "用户答案已落库，已唤醒主 turn 领取: lane={lane_id}"
+                "用户答案已落库，已唤醒主 turn 领取: session={session_id}"
             )),
             Err(error) => axon_logger::warning(&format!(
-                "用户答案已落库但唤醒主 turn 失败，等待下一次领取: lane={lane_id} error={error}"
+                "用户答案已落库但唤醒主 turn 失败，等待下一次领取: session={session_id} error={error}"
             )),
         }
     }
 
     /// 按车道身份回读该车道的作用域、受众与回复路由。
-    fn lane_route(&self, lane_id: &str) -> Result<(ScopeRef, AudienceContext, ReplyRoute), String> {
-        let rows = LaneQueryStore::list_lane_summaries(&self.store)
+    fn session_route(
+        &self,
+        session_id: &str,
+    ) -> Result<(ScopeRef, AudienceContext, ReplyRoute), String> {
+        let rows = SessionQueryStore::list_session_summaries(&self.store)
             .map_err(|error| format!("读取车道路由失败: {error:?}"))?;
-        let row: &LaneSummaryRow = rows
+        let row: &SessionSummaryRow = rows
             .iter()
-            .find(|row| row.lane_id == lane_id)
-            .ok_or_else(|| format!("车道 {lane_id} 尚未登记任何 Interaction，无法投递答案"))?;
+            .find(|row| row.session_id == session_id)
+            .ok_or_else(|| format!("车道 {session_id} 尚未登记任何 Interaction，无法投递答案"))?;
         let scope: ScopeRef = serde_json::from_str(&row.scope_json)
             .map_err(|error| format!("车道作用域解析失败: {error}"))?;
         let audience: AudienceContext = serde_json::from_str(&row.audience_json)
@@ -132,15 +135,14 @@ impl LaneQuestionMessageSteerer {
     }
 }
 
-impl QuestionMessageSteerer for LaneQuestionMessageSteerer {
+impl QuestionMessageSteerer for HostQuestionMessageSteerer {
     fn steer_answer_message(
         &self,
-        lane_id: &str,
         session_id: &str,
         idempotency_key: &str,
         content: &str,
     ) -> Result<(), String> {
-        let (scope, audience, route) = self.lane_route(lane_id)?;
+        let (scope, audience, route) = self.session_route(session_id)?;
         let interaction_id = InteractionId::new(idempotency_key.to_string())
             .map_err(|error| format!("答案 Interaction ID 非法: {error}"))?;
         let source = InteractionSource::new(
@@ -176,11 +178,11 @@ impl QuestionMessageSteerer for LaneQuestionMessageSteerer {
         // 投递由答案 Interaction 的稳定幂等键去重：重复投递只命中同一条记录，不会被
         // 领取成第二轮。
         if receipt.delivery == InteractionDelivery::Queued {
-            self.wake_claim(lane_id);
+            self.wake_claim(session_id);
         }
         // 运行会话身份只用于留痕：注入路由完全由车道决定。
         axon_logger::debug(&format!(
-            "用户答案已投递: lane={lane_id} session={session_id} delivery={:?}",
+            "用户答案已投递: session={session_id} session={session_id} delivery={:?}",
             receipt.delivery
         ));
         Ok(())

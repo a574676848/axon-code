@@ -93,7 +93,7 @@ mod tests {
         let sink = UserQuestionFanoutSink::new(vec![first.clone(), second.clone()]);
 
         sink.emit_question_event(
-            "lane-1",
+            "session-1",
             "part:question:call-1",
             "call-1",
             "pending",
@@ -103,7 +103,7 @@ mod tests {
             1_000,
         );
         sink.emit_question_event(
-            "lane-1",
+            "session-1",
             "part:question:call-1",
             "call-1",
             "settled",

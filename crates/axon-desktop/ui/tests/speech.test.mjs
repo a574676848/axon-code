@@ -37,12 +37,12 @@ function flush(times = 4) {
 test('语音播报默认关闭：没存过时全局与会话都在关闭态', () => {
   const prefs = createVoicePreferences(memoryStorage());
   assert.equal(prefs.globalAutoRead(), false);
-  assert.equal(prefs.laneAutoRead('ws1:lane1'), null);
-  assert.equal(prefs.effectiveAutoRead('ws1:lane1'), false);
+  assert.equal(prefs.sessionAutoRead('ws1:session1'), null);
+  assert.equal(prefs.effectiveAutoRead('ws1:session1'), false);
   // 存储不可用时退化为默认值，界面不会被存储异常带崩。
   const withoutStorage = createVoicePreferences(null);
   assert.equal(withoutStorage.globalAutoRead(), false);
-  assert.equal(withoutStorage.effectiveAutoRead('ws1:lane1'), false);
+  assert.equal(withoutStorage.effectiveAutoRead('ws1:session1'), false);
 });
 
 test('全局开关落盘可复读，未设置过的会话继承全局值', () => {
@@ -51,24 +51,24 @@ test('全局开关落盘可复读，未设置过的会话继承全局值', () =>
   assert.equal(storage.getItem(VOICE_STORAGE_KEYS.global), 'true');
   const reloaded = createVoicePreferences(storage);
   assert.equal(reloaded.globalAutoRead(), true);
-  assert.equal(reloaded.effectiveAutoRead('ws1:lane1'), true);
+  assert.equal(reloaded.effectiveAutoRead('ws1:session1'), true);
 });
 
 test('会话开关只作用于自己：别的会话与全局值都不受影响', () => {
   const storage = memoryStorage();
   const prefs = createVoicePreferences(storage);
-  prefs.setLaneAutoRead('ws1:lane1', true);
-  assert.equal(prefs.effectiveAutoRead('ws1:lane1'), true);
-  assert.equal(prefs.effectiveAutoRead('ws1:lane2'), false);
-  assert.equal(prefs.effectiveAutoRead('ws2:lane1'), false);
+  prefs.setSessionAutoRead('ws1:session1', true);
+  assert.equal(prefs.effectiveAutoRead('ws1:session1'), true);
+  assert.equal(prefs.effectiveAutoRead('ws1:session2'), false);
+  assert.equal(prefs.effectiveAutoRead('ws2:session1'), false);
   assert.equal(prefs.globalAutoRead(), false);
-  assert.notEqual(VOICE_STORAGE_KEYS.lane('ws1:lane1'), VOICE_STORAGE_KEYS.lane('ws1:lane2'));
+  assert.notEqual(VOICE_STORAGE_KEYS.session('ws1:session1'), VOICE_STORAGE_KEYS.session('ws1:session2'));
 
   // 会话显式关闭优先于全局打开，因此「全局打开 + 本条关闭」不会漏出声音。
   prefs.setGlobalAutoRead(true);
-  prefs.setLaneAutoRead('ws1:lane1', false);
-  assert.equal(prefs.effectiveAutoRead('ws1:lane1'), false);
-  assert.equal(prefs.effectiveAutoRead('ws1:lane2'), true);
+  prefs.setSessionAutoRead('ws1:session1', false);
+  assert.equal(prefs.effectiveAutoRead('ws1:session1'), false);
+  assert.equal(prefs.effectiveAutoRead('ws1:session2'), true);
 });
 
 test('开关变化会通知订阅者', () => {
@@ -78,7 +78,7 @@ test('开关变化会通知订阅者', () => {
     notified += 1;
   });
   prefs.setGlobalAutoRead(true);
-  prefs.setLaneAutoRead('ws1:lane1', true);
+  prefs.setSessionAutoRead('ws1:session1', true);
   assert.equal(notified, 2);
   unsubscribe();
   prefs.setGlobalAutoRead(false);

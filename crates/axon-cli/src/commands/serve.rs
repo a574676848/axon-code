@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::workbench_http_adapter::{
-    WORKBENCH_PROTOCOL_VERSION, lanes_payload, workspaces_payload,
+    WORKBENCH_PROTOCOL_VERSION, sessions_payload, workspaces_payload,
 };
 use crate::{
     CliRunResult, OutputFormat, ServeCommand,
@@ -147,10 +147,6 @@ impl ServeRuntime {
                 Ok(body) => json_response(200, &body),
                 Err(error) => json_response(400, &json!({ "error": error })),
             },
-            "/v1/lanes" => match self.lanes_body(&request) {
-                Ok(body) => json_response(200, &body),
-                Err(error) => json_response(400, &json!({ "error": error })),
-            },
             "/v1/sessions" => match self.sessions_body(&request) {
                 Ok(body) => json_response(200, &body),
                 Err(error) => json_response(400, &json!({ "error": error })),
@@ -170,7 +166,7 @@ impl ServeRuntime {
             "capabilities": {
                 "protocolVersion": WORKBENCH_PROTOCOL_VERSION,
                 "workspaces": true,
-                "lanes": true,
+                "sessions": true,
             },
             "remoteTriggerAllowed": false,
             "remoteStdinAllowed": false,
@@ -181,12 +177,6 @@ impl ServeRuntime {
     /// 工作区注册表视图。
     fn workspaces_body(&self) -> Result<serde_json::Value, String> {
         workspaces_payload(&self.axon_root)
-    }
-
-    /// 车道视图；带 `workspace` 查询参数时只返回该工作区下的车道。
-    fn lanes_body(&self, request: &HttpRequest) -> Result<serde_json::Value, String> {
-        let filter = query_value(&request.path, "workspace")?;
-        lanes_payload(&self.axon_root, filter.as_deref())
     }
 
     fn ready_body(&self) -> serde_json::Value {

@@ -21,40 +21,40 @@ export interface ExplicitTurnSettings {
 
 /** 一次显式选择的落点：车道键与两个值同生共死。 */
 interface Picked {
-  laneKey: string | null;
+  sessionKey: string | null;
   model: string | null;
   reasoningEffort: string | null;
 }
 
 /** 取同一车道上的既有选择；换车道后整份作废，不做部分继承。 */
-function pickedInLane(picked: Picked | null, laneKey: string | null): Picked | null {
+function pickedInSession(picked: Picked | null, sessionKey: string | null): Picked | null {
   if (picked === null) return null;
-  return picked.laneKey === laneKey ? picked : null;
+  return picked.sessionKey === sessionKey ? picked : null;
 }
 
-export function useExplicitTurnSettings(laneKey: string | null): ExplicitTurnSettings {
+export function useExplicitTurnSettings(sessionKey: string | null): ExplicitTurnSettings {
   const [picked, setPicked] = React.useState<Picked | null>(null);
   const onModelChange = React.useCallback(
     (value: string) => {
       setPicked((previous) => ({
-        laneKey,
+        sessionKey,
         model: value,
-        reasoningEffort: pickedInLane(previous, laneKey)?.reasoningEffort ?? null,
+        reasoningEffort: pickedInSession(previous, sessionKey)?.reasoningEffort ?? null,
       }));
     },
-    [laneKey],
+    [sessionKey],
   );
   const onReasoningEffortChange = React.useCallback(
     (value: string) => {
       setPicked((previous) => ({
-        laneKey,
-        model: pickedInLane(previous, laneKey)?.model ?? null,
+        sessionKey,
+        model: pickedInSession(previous, sessionKey)?.model ?? null,
         reasoningEffort: value,
       }));
     },
-    [laneKey],
+    [sessionKey],
   );
-  const current = pickedInLane(picked, laneKey);
+  const current = pickedInSession(picked, sessionKey);
   return {
     explicitModel: current?.model ?? null,
     explicitReasoningEffort: current?.reasoningEffort ?? null,

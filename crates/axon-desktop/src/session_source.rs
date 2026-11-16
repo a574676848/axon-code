@@ -1,7 +1,7 @@
 //! 车道数据源：经网关 HTTP 协议读取工作区与车道。
 //!
-//! 依赖倒置：表现层只依赖本模块声明的 [`LaneSource`]，真实实现
-//! [`GatewayLaneSource`] 在组合根装配，因此 IPC 层看不到传输细节，
+//! 依赖倒置：表现层只依赖本模块声明的 [`SessionSource`]，真实实现
+//! [`GatewaySessionSource`] 在组合根装配，因此 IPC 层看不到传输细节，
 //! 桌面端也不链接会话子系统。
 //!
 //! 车道等于 Interaction 的复合归属：同一 `(workspace, trust scope, channel,
@@ -9,14 +9,14 @@
 //! 客户端通过网关请求派生结果，绝不在本地复刻哈希算法，否则同一身份会出现
 //! 两份实现并随口径漂移而各算各的车道。
 //!
-//! 本应用自身产生的车道渠道取 [`DESKTOP_LANE_CHANNEL`]。
+//! 本应用自身产生的车道渠道取 [`DESKTOP_SESSION_CHANNEL`]。
 
 use serde::{Deserialize, Serialize};
 
 use crate::gateway;
 
 /// 本应用产生的车道所属渠道。
-pub const DESKTOP_LANE_CHANNEL: &str = "desktop";
+pub const DESKTOP_SESSION_CHANNEL: &str = "desktop";
 
 /// 工作区条目，对应网关 `GET /api/v1/workspaces` 的载荷。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,12 +42,12 @@ pub struct WorkspaceEntry {
     pub last_seen_at_ms: u64,
 }
 
-/// 车道条目，对应网关 `GET /api/v1/lanes` 的载荷。
+/// 车道条目，对应网关 `GET /api/v1/sessions` 的载荷。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LaneEntry {
+pub struct SessionEntry {
     /// 车道标识。
-    pub lane_id: String,
+    pub session_id: String,
     /// 所属 Workspace 标识。
     #[serde(default)]
     pub workspace_id: String,
@@ -78,15 +78,15 @@ pub struct LaneEntry {
 }
 
 /// 表现层消费的车道数据端口。
-pub trait LaneSource: Send + Sync {
+pub trait SessionSource: Send + Sync {
     /// 注册表中全部工作区。
     fn workspaces(&self) -> Result<Vec<WorkspaceEntry>, String>;
 
     /// 全部真实车道。
-    fn lanes(&self) -> Result<Vec<LaneEntry>, String>;
+    fn sessions(&self) -> Result<Vec<SessionEntry>, String>;
 
     /// 派生一条新车道的标识；派生在服务端完成。
-    fn derive_lane_id(
+    fn derive_session_id(
         &self,
         workspace_id: &str,
         channel: &str,
@@ -103,9 +103,9 @@ pub trait LaneSource: Send + Sync {
 
 /// 网关实现：所有读写都走网关 HTTP 协议。
 #[derive(Debug, Clone, Default)]
-pub struct GatewayLaneSource;
+pub struct GatewaySessionSource;
 
-impl GatewayLaneSource {
+impl GatewaySessionSource {
     /// 构造数据源；地址与凭据在每次请求时按权威配置解析。
     #[must_use]
     pub fn new() -> Self {
@@ -124,25 +124,25 @@ fn entries<T: for<'de> Deserialize<'de>>(
     serde_json::from_value(items.clone()).map_err(|error| format!("解析 {field} 失败：{error}"))
 }
 
-impl LaneSource for GatewayLaneSource {
+impl SessionSource for GatewaySessionSource {
     fn workspaces(&self) -> Result<Vec<WorkspaceEntry>, String> {
         let payload = gateway::get_json("/workspaces")?;
         entries(&payload, "workspaces")
     }
 
-    fn lanes(&self) -> Result<Vec<LaneEntry>, String> {
-        let payload = gateway::get_json("/lanes")?;
-        entries(&payload, "lanes")
+    fn sessions(&self) -> Result<Vec<SessionEntry>, String> {
+        let payload = gateway::get_json("/sessions")?;
+        entries(&payload, "sessions")
     }
 
-    fn derive_lane_id(
+    fn derive_session_id(
         &self,
         workspace_id: &str,
         channel: &str,
         destination: &str,
     ) -> Result<String, String> {
         let payload = gateway::post_json(
-            "/lanes/identity",
+            "/sessions/identity",
             &serde_json::json!({
                 "workspaceId": workspace_id,
                 "channel": channel,
@@ -150,10 +150,10 @@ impl LaneSource for GatewayLaneSource {
             }),
         )?;
         payload
-            .get("laneId")
+            .get("sessionId")
             .and_then(serde_json::Value::as_str)
             .map(ToString::to_string)
-            .ok_or_else(|| "网关响应缺少 laneId 字段".to_string())
+            .ok_or_else(|| "网关响应缺少 sessionId 字段".to_string())
     }
 
     fn ensure_workspace(&self, root: &str) -> Result<WorkspaceEntry, String> {

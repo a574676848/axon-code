@@ -66,13 +66,13 @@ fn speaks_start_at_one_and_carry_turn_identity() {
     assert_eq!(voice.phase(), TurnPhase::Speaking);
 
     let value: serde_json::Value =
-        serde_json::from_str(&turn_json("interaction-1", &assigned, "lane-1", "lane-1"))
+        serde_json::from_str(&turn_json("interaction-1", &assigned, "session-1"))
             .expect("合法 JSON");
     assert_eq!(value["type"], "turn");
     assert_eq!(value["interactionId"], "interaction-1");
     assert_eq!(value["turnId"], "interaction-1:1");
-    assert_eq!(value["laneId"], "lane-1");
-    assert_eq!(value["sessionId"], "lane-1");
+    assert_eq!(value["sessionId"], "session-1");
+    assert_eq!(value["sessionId"], "session-1");
     assert_eq!(value["epoch"], 1);
 }
 

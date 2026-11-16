@@ -315,14 +315,14 @@ fn test_desktop_state_tolerates_utf8_bom() {
     ));
     std::fs::create_dir_all(&dir).unwrap();
 
-    let v1 = "\u{feff}{\"version\":1,\"workspaces\":[{\"path\":\"E:\\\\repo\",\"name\":\"repo\"}],\"lane_pinned\":[\"lane-a\"]}";
+    let v1 = "\u{feff}{\"version\":1,\"workspaces\":[{\"path\":\"E:\\\\repo\",\"name\":\"repo\"}],\"session_pinned\":[\"session-a\"]}";
     std::fs::write(dir.join(super::connection::store::V1_FILE_NAME), v1).unwrap();
     let loaded = super::connection::store::load_document_at(&dir, None);
     assert!(loaded.migrated_from_v1, "带 BOM 的 v1 必须仍能迁移");
     let projection = loaded.document.projection("local");
     assert_eq!(projection.workspaces.len(), 1);
     assert_eq!(projection.workspaces[0].name, "repo");
-    assert_eq!(projection.lane_pinned, vec!["lane-a".to_string()]);
+    assert_eq!(projection.session_pinned, vec!["session-a".to_string()]);
 
     let v2 = format!(
         "\u{feff}{}",
@@ -341,7 +341,7 @@ fn test_desktop_state_tolerates_utf8_bom() {
 
 #[test]
 fn test_workspace_list_only_exposes_user_registered_directories() {
-    let source = super::lane_source::GatewayLaneSource::new();
+    let source = super::session_source::GatewaySessionSource::new();
     // 该用例校验的是真实运行态契约：数据经网关读取，网关未运行时无从校验。
     // 此时直接跳过而不是伪造数据，避免把「网关没起」误报成用例通过。
     let Ok(workspaces) = super::workspace::workspace_list_at(&source) else {
@@ -369,10 +369,10 @@ fn test_workspace_list_only_exposes_user_registered_directories() {
             "路径不得残留 Windows 扩展前缀"
         );
         assert!(!workspace.name.is_empty(), "工作区名称不得为空");
-        for lane in &workspace.lanes {
-            assert!(!lane.id.is_empty(), "车道标识不得为空");
-            assert!(!lane.title.is_empty(), "车道标题不得为空");
-            assert!(!lane.channel.is_empty(), "车道渠道不得为空");
+        for session in &workspace.sessions {
+            assert!(!session.id.is_empty(), "车道标识不得为空");
+            assert!(!session.title.is_empty(), "车道标题不得为空");
+            assert!(!session.channel.is_empty(), "车道渠道不得为空");
         }
     }
 }

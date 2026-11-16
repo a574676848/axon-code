@@ -5,7 +5,7 @@
 
 use super::SqliteRuntimeStore;
 use super::helpers::{i64_value, storage, u64_value};
-use crate::application::session_lane_id;
+use crate::application::session_id_for_route;
 use crate::domain::runtime::{DaemonHostRecord, SessionEventRecord};
 use crate::ports::{RuntimeStore, RuntimeStoreError};
 use axon_domain::{
@@ -111,13 +111,13 @@ fn candidate_session_id(row: &rusqlite::Row<'_>) -> Result<DaemonSessionId, Stri
     let workspace_id = scope
         .workspace_id()
         .ok_or_else(|| "未绑定 Workspace".to_owned())?;
-    let lane_id = session_lane_id(
+    let session_id = session_id_for_route(
         workspace_id.as_str(),
         &audience,
         source.channel(),
         reply_route.destination(),
     );
-    DaemonSessionId::new(lane_id).map_err(|error| error.to_string())
+    DaemonSessionId::new(session_id).map_err(|error| error.to_string())
 }
 
 fn settle_interrupted(
@@ -249,8 +249,8 @@ mod tests {
         let interaction =
             crate::infrastructure::sqlite_runtime_store_interaction_tests::sample_interaction();
         store.append(&interaction).expect("追加 Interaction");
-        let lane_id = crate::interaction_session_lane_id(&interaction).expect("lane");
-        let session_id = DaemonSessionId::new(lane_id).expect("Session ID");
+        let session_id = crate::interaction_session_id(&interaction).expect("session");
+        let session_id = DaemonSessionId::new(session_id).expect("Session ID");
         store.create_session(&session_id, ".", 1).expect("Session");
         store
             .claim_processing_by_id(&interaction.interaction_id, 20, 100)

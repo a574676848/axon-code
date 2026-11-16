@@ -42,17 +42,17 @@ pub struct DesktopState {
     /// 用户登记的工作区清单。
     pub workspaces: Vec<RegisteredWorkspace>,
     /// 车道到所属工作区路径的归属映射。
-    pub lane_workspace: HashMap<String, String>,
+    pub session_workspace: HashMap<String, String>,
     /// 已置顶的车道标识。
-    pub lane_pinned: Vec<String>,
+    pub session_pinned: Vec<String>,
     /// 已归档的车道标识。
-    pub lane_archived: Vec<String>,
+    pub session_archived: Vec<String>,
     /// 用户重命名后的车道标题。
-    pub lane_title: HashMap<String, String>,
+    pub session_title: HashMap<String, String>,
     /// 每个工作区下车道的用户自定义顺序（手动排序）。
-    pub lane_order: HashMap<String, Vec<String>>,
+    pub session_order: HashMap<String, Vec<String>>,
     /// 本应用新建、尚未产生 Interaction 的车道。
-    pub pending_lanes: Vec<PendingLane>,
+    pub pending_sessions: Vec<PendingSession>,
     /// 上一次在原生目录选择器中选中的目录，用于下次打开时的初始位置。
     pub last_workspace_dir: Option<String>,
     /// 是否发送系统通知；缺省视为开启。
@@ -71,9 +71,9 @@ const fn default_notifications_enabled() -> bool {
 /// 落盘键名取 camelCase，与 v2 状态文件其余字段同一口径。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", default)]
-pub struct PendingLane {
+pub struct PendingSession {
     /// 车道稳定标识。
-    pub lane_id: String,
+    pub session_id: String,
     /// 所属工作区标识。
     pub workspace_id: String,
     /// 会话表面目标。
@@ -87,12 +87,12 @@ impl Default for DesktopState {
         Self {
             version: DESKTOP_STATE_VERSION,
             workspaces: Vec::new(),
-            lane_workspace: HashMap::new(),
-            lane_pinned: Vec::new(),
-            lane_archived: Vec::new(),
-            lane_title: HashMap::new(),
-            lane_order: HashMap::new(),
-            pending_lanes: Vec::new(),
+            session_workspace: HashMap::new(),
+            session_pinned: Vec::new(),
+            session_archived: Vec::new(),
+            session_title: HashMap::new(),
+            session_order: HashMap::new(),
+            pending_sessions: Vec::new(),
             last_workspace_dir: None,
             notifications_enabled: default_notifications_enabled(),
             theme: None,
@@ -107,12 +107,12 @@ impl DesktopState {
         Self {
             version: DESKTOP_STATE_VERSION,
             workspaces: projection.workspaces.clone(),
-            lane_workspace: projection.lane_workspace.clone(),
-            lane_pinned: projection.lane_pinned.clone(),
-            lane_archived: projection.lane_archived.clone(),
-            lane_title: projection.lane_title.clone(),
-            lane_order: projection.lane_order.clone(),
-            pending_lanes: projection.pending_lanes.clone(),
+            session_workspace: projection.session_workspace.clone(),
+            session_pinned: projection.session_pinned.clone(),
+            session_archived: projection.session_archived.clone(),
+            session_title: projection.session_title.clone(),
+            session_order: projection.session_order.clone(),
+            pending_sessions: projection.pending_sessions.clone(),
             last_workspace_dir: client.last_workspace_dir.clone(),
             notifications_enabled: client.notifications_enabled,
             theme: client.theme.clone(),
@@ -124,12 +124,12 @@ impl DesktopState {
     pub fn to_projection(&self) -> ProfileProjection {
         ProfileProjection {
             workspaces: self.workspaces.clone(),
-            lane_workspace: self.lane_workspace.clone(),
-            lane_pinned: self.lane_pinned.clone(),
-            lane_archived: self.lane_archived.clone(),
-            lane_title: self.lane_title.clone(),
-            lane_order: self.lane_order.clone(),
-            pending_lanes: self.pending_lanes.clone(),
+            session_workspace: self.session_workspace.clone(),
+            session_pinned: self.session_pinned.clone(),
+            session_archived: self.session_archived.clone(),
+            session_title: self.session_title.clone(),
+            session_order: self.session_order.clone(),
+            pending_sessions: self.pending_sessions.clone(),
         }
     }
 }
@@ -207,9 +207,9 @@ mod tests {
             notifications_enabled: false,
             ..DesktopState::default()
         };
-        state.lane_pinned.push("lane-1".to_owned());
+        state.session_pinned.push("session-1".to_owned());
         let projection = state.to_projection();
-        assert_eq!(projection.lane_pinned, vec!["lane-1".to_owned()]);
+        assert_eq!(projection.session_pinned, vec!["session-1".to_owned()]);
 
         let client = crate::connection::store::ClientLayer {
             theme: state.theme.clone(),
@@ -221,19 +221,19 @@ mod tests {
         assert_eq!(rebuilt.version, super::DESKTOP_STATE_VERSION);
         assert_eq!(rebuilt.theme.as_deref(), Some("obsidian"));
         assert!(!rebuilt.notifications_enabled);
-        assert_eq!(rebuilt.lane_pinned, vec!["lane-1".to_owned()]);
+        assert_eq!(rebuilt.session_pinned, vec!["session-1".to_owned()]);
     }
 
     #[test]
-    fn pending_lane_serializes_with_camel_case_keys() {
-        let lane = super::PendingLane {
-            lane_id: "lane-1".to_owned(),
+    fn pending_session_serializes_with_camel_case_keys() {
+        let session = super::PendingSession {
+            session_id: "session-1".to_owned(),
             workspace_id: "ws".to_owned(),
             destination: "s1".to_owned(),
             created_at: 5,
         };
-        let value = serde_json::to_value(&lane).expect("应可序列化");
-        assert_eq!(value["laneId"], "lane-1");
+        let value = serde_json::to_value(&session).expect("应可序列化");
+        assert_eq!(value["sessionId"], "session-1");
         assert_eq!(value["workspaceId"], "ws");
         assert_eq!(value["createdAt"], 5);
     }

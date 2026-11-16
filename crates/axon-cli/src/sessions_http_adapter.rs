@@ -324,9 +324,9 @@ fn read_sessions(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<Sess
                 COALESCE(m.turn_count, 0), COALESCE(m.total_active_ms, 0),
                 COALESCE(m.ttft_max_ms, 0), COALESCE(m.jobs_running, 0),
                 m.ttft_histogram_json,
-                (SELECT i.content FROM inbox AS i WHERE i.lane_id = s.session_id
+                (SELECT i.content FROM inbox AS i WHERE i.session_id = s.session_id
                  ORDER BY i.received_at_ms ASC, i.interaction_id ASC LIMIT 1),
-                (SELECT i.scope_json FROM inbox AS i WHERE i.lane_id = s.session_id
+                (SELECT i.scope_json FROM inbox AS i WHERE i.session_id = s.session_id
                  ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1)
          FROM sessions AS s
          LEFT JOIN session_metrics AS m ON m.session_id = s.session_id

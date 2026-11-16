@@ -48,7 +48,7 @@ export interface ConversationActions {
    * 时间线里那些「按作业取输出」的行要用它定位网关接口，因此与动作一起下发，
    * 不必再穿一条 props 链。
    */
-  laneId: string | null;
+  sessionId: string | null;
 }
 
 const ConversationActionsContext = React.createContext<ConversationActions | null>(null);

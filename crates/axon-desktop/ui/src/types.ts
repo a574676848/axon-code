@@ -44,7 +44,7 @@ export interface ModelItem {
 }
 
 /** 车道（等同通用工作台的会话）。 */
-export interface LaneItem {
+export interface SessionItem {
   id: string;
   title: string;
   /** 会话表面渠道，例如 tui、cli 或本应用的 desktop。 */
@@ -74,7 +74,7 @@ export interface WorkspaceItem {
   path: string;
   active: boolean;
   removable: boolean;
-  lanes: LaneItem[];
+  sessions: SessionItem[];
 }
 
 /** 配置读取结果。 */
@@ -407,7 +407,7 @@ export interface DesktopPreferences {
 
 /** 问答结算回执。 */
 export interface AnswerQuestionReceipt {
-  laneId: string;
+  sessionId: string;
   callId: string;
   questionId: string;
   state: string;
@@ -522,18 +522,18 @@ export interface InteractionSummary {
  * 两个累计读数与翻到第几页无关，由网关按车道聚合；读不到结论时各自为 null。
  * 用量的形状只定义一份（`conversation/sessionUsage`），这里只引用。
  */
-export interface LaneInteractions {
+export interface SessionInteractions {
   interactions: InteractionSummary[];
   sessionUsage: SessionUsageTotals | null;
   sessionElapsedMs: number | null;
-  effectiveModel?: import('./conversation/viewConfig').LaneEffectiveModel | null;
+  effectiveModel?: import('./conversation/viewConfig').SessionEffectiveModel | null;
   /** 最近一次记忆反思的提示文本；该会话还没有记忆动作时为 null。 */
   reflectionNotice?: string | null;
 }
 
 /** 中断回执。 */
 export interface InterruptReceipt {
-  laneId: string;
+  sessionId: string;
   /** 服务端的真实结论：没有活跃轮次时为 false。 */
   interrupted: boolean;
   interactionId?: string | null;
@@ -541,7 +541,7 @@ export interface InterruptReceipt {
 
 /** 用户手动停止后台作业的回执。 */
 export interface JobStopReceipt {
-  laneId: string;
+  sessionId: string;
   jobId: string;
   /** 服务端的真实结论；归属不符等拒绝走错误分支。 */
   stopped: boolean;
@@ -553,7 +553,7 @@ export interface JobStopReceipt {
 
 /** 向子代理投递用户消息的回执。 */
 export interface SubagentMessageReceipt {
-  laneId: string;
+  sessionId: string;
   agentId: string;
   /** 是否已进入目标 mailbox。 */
   delivered: boolean;
@@ -562,8 +562,8 @@ export interface SubagentMessageReceipt {
 }
 
 /** 一条车道上仍在运行的后台作业名册。 */
-export interface LaneJobsRoster {
-  laneId: string;
+export interface SessionJobsRoster {
+  sessionId: string;
   /** 后端进程代际；重启即变化。 */
   epoch: string;
   /** 仍在运行的作业标识。 */
@@ -571,7 +571,7 @@ export interface LaneJobsRoster {
 }
 
 /** 车道下的一条子代理会话。 */
-export interface LaneSubagentSummary {
+export interface SessionSubagentSummary {
   sessionId: string;
   /** 会话标识里属于代理路径的那段，用于与 agent 路径对齐。 */
   slug: string;
@@ -590,10 +590,10 @@ export interface LaneSubagentSummary {
 }
 
 /** 一条车道的子代理会话清单。 */
-export interface LaneSubagents {
-  laneId: string;
+export interface SessionSubagents {
+  sessionId: string;
   runSessionId?: string | null;
-  subagents: LaneSubagentSummary[];
+  subagents: SessionSubagentSummary[];
 }
 
 /** 已落地的附件。 */

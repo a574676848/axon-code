@@ -33,7 +33,7 @@ fn live_user_question_event_lands_cell_and_opens_panel() {
         panic!("底部面板应为提问面板");
     };
     assert_eq!(view.call_id(), "call-live-question");
-    assert_eq!(view.lane_id(), "test-session");
+    assert_eq!(view.session_id(), "test-session");
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn panel_submit_goes_through_question_answer_payload_not_plain_text() {
     let answer = submission
         .question_answer
         .expect("问答载荷应随提交一起交出");
-    assert_eq!(answer.lane_id, "test-session");
+    assert_eq!(answer.session_id, "test-session");
     assert_eq!(answer.call_id, "call-live-question");
     assert_eq!(answer.answers.len(), 1);
     assert_eq!(answer.answers[0].id, "q1");

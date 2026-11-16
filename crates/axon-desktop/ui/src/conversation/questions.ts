@@ -141,7 +141,7 @@ export const ANSWER_DELIVERY_TOOL_RETURN = 'tool_return';
  * 缺省（网关未下发投递方式）按需要重贴处理：少贴一次等于界面停在原地，
  * 多贴一次只是把车道重放一遍。
  */
-export function shouldReattachLane(deliveryMode: string | null | undefined): boolean {
+export function shouldReattachSession(deliveryMode: string | null | undefined): boolean {
   return deliveryMode !== ANSWER_DELIVERY_TOOL_RETURN;
 }
 

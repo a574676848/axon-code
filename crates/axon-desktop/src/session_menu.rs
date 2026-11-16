@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn identifiers_are_percent_encoded_before_they_reach_the_path() {
         // 保留字符必须转义，否则一条带斜杠的标识会被网关读成两条不同的路由。
-        assert_eq!(encode("session-lane-a_b.c~d"), "session-lane-a_b.c~d");
+        assert_eq!(encode("session-session-a_b.c~d"), "session-session-a_b.c~d");
         assert_eq!(encode("a/b c"), "a%2Fb%20c");
         assert_eq!(
             list_path(Some("workspace 1&2"), false),
@@ -167,7 +167,7 @@ mod tests {
     fn entries_parse_the_gateway_payload_without_local_reinterpretation() {
         // 网关字段是 camelCase，缺失的读数按零/空处理，不猜。
         let payload = serde_json::json!([{
-            "sessionId": "session-lane-a",
+            "sessionId": "session-session-a",
             "title": "修复会话历史分页",
             "status": "completed",
             "pinned": true,
@@ -183,7 +183,7 @@ mod tests {
         let entries: Vec<SessionMenuEntry> = serde_json::from_value(payload).expect("载荷可解析");
         assert_eq!(entries.len(), 1);
         let entry = &entries[0];
-        assert_eq!(entry.session_id, "session-lane-a");
+        assert_eq!(entry.session_id, "session-session-a");
         assert!(entry.pinned);
         assert!(!entry.archived);
         assert_eq!(entry.turn_count, 3);
@@ -191,7 +191,7 @@ mod tests {
 
         // 没有观测的读数不进界面：缺字段解析成空值而不是报错。
         let sparse: Vec<SessionMenuEntry> =
-            serde_json::from_value(serde_json::json!([{ "sessionId": "session-lane-b" }]))
+            serde_json::from_value(serde_json::json!([{ "sessionId": "session-session-b" }]))
                 .expect("缺省字段可解析");
         assert_eq!(sparse[0].title, "");
         assert_eq!(sparse[0].workspace_id, None);

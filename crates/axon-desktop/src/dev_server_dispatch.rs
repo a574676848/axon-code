@@ -9,17 +9,17 @@ use serde_json::Value;
 use crate::catalog::{self, ModelInput, ProviderInput};
 use crate::conversation;
 use crate::ipc;
-use crate::lane_source::GatewayLaneSource;
+use crate::session_source::GatewaySessionSource;
 use crate::workspace;
 
 /// 组合根构造的车道数据源：调试桥与桌面窗口共用同一份真实来源。
-fn lane_source() -> Result<GatewayLaneSource, String> {
-    Ok(GatewayLaneSource::new())
+fn session_source() -> Result<GatewaySessionSource, String> {
+    Ok(GatewaySessionSource::new())
 }
 
 /// 把命令名与参数派发到真实实现。
 pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
-    let source = lane_source()?;
+    let source = session_source()?;
     let as_str = |key: &str| -> Result<String, String> {
         args.get(key)
             .and_then(Value::as_str)
@@ -144,30 +144,32 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
             &as_str("id")?,
         )?)
         .map_err(stringify)?),
-        "lane_create" => Ok(serde_json::to_value(workspace::execute_lane_create(
+        "session_create" => Ok(serde_json::to_value(workspace::execute_session_create(
             &source,
             &as_str("workspaceId")?,
         )?)
         .map_err(stringify)?),
-        "lane_set_pinned" => Ok(serde_json::to_value(workspace::execute_lane_set_pinned(
+        "session_set_pinned" => Ok(serde_json::to_value(workspace::execute_session_set_pinned(
             &source,
-            &as_str("laneId")?,
+            &as_str("sessionId")?,
             as_bool("pinned")?,
         )?)
         .map_err(stringify)?),
-        "lane_set_archived" => Ok(serde_json::to_value(workspace::execute_lane_set_archived(
-            &source,
-            &as_str("laneId")?,
-            as_bool("archived")?,
-        )?)
+        "session_set_archived" => Ok(serde_json::to_value(
+            workspace::execute_session_set_archived(
+                &source,
+                &as_str("sessionId")?,
+                as_bool("archived")?,
+            )?,
+        )
         .map_err(stringify)?),
-        "lane_rename" => Ok(serde_json::to_value(workspace::execute_lane_rename(
+        "session_rename" => Ok(serde_json::to_value(workspace::execute_session_rename(
             &source,
-            &as_str("laneId")?,
+            &as_str("sessionId")?,
             &as_str("title")?,
         )?)
         .map_err(stringify)?),
-        "lane_reorder" => Ok(serde_json::to_value(workspace::execute_lane_reorder(
+        "session_reorder" => Ok(serde_json::to_value(workspace::execute_session_reorder(
             &source,
             &as_str("workspaceId")?,
             args.get("orderedIds")
@@ -456,7 +458,7 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
                 .unwrap_or_default();
             Ok(
                 serde_json::to_value(conversation::answer_question::answer_question(
-                    &as_str("laneId")?,
+                    &as_str("sessionId")?,
                     &as_str("callId")?,
                     &answers,
                 )?)
@@ -464,8 +466,8 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
             )
         }
         "conversation_history" => Ok(serde_json::to_value(
-            conversation::history::lane_interactions(
-                &as_str("laneId")?,
+            conversation::history::session_interactions(
+                &as_str("sessionId")?,
                 args.get("limit")
                     .and_then(Value::as_u64)
                     .and_then(|value| u32::try_from(value).ok()),
@@ -514,37 +516,37 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
             Ok(Value::Null)
         }
         "conversation_interrupt" => Ok(serde_json::to_value(
-            conversation::interrupt::interrupt_lane(&as_str("laneId")?)?,
+            conversation::interrupt::interrupt_session(&as_str("sessionId")?)?,
         )
         .map_err(stringify)?),
         "conversation_stop_job" => Ok(serde_json::to_value(conversation::job_stop::stop_job(
-            &as_str("laneId")?,
+            &as_str("sessionId")?,
             &as_str("jobId")?,
         )?)
         .map_err(stringify)?),
         "conversation_send_subagent_message" => Ok(serde_json::to_value(
             conversation::subagent_message::send_subagent_message(
-                &as_str("laneId")?,
+                &as_str("sessionId")?,
                 &as_str("agentId")?,
                 &as_str("content")?,
             )?,
         )
         .map_err(stringify)?),
-        "conversation_lane_jobs" => Ok(serde_json::to_value(conversation::lane_jobs::lane_jobs(
-            &as_str("laneId")?,
-        )?)
+        "conversation_session_jobs" => Ok(serde_json::to_value(
+            conversation::session_jobs::session_jobs(&as_str("sessionId")?)?,
+        )
         .map_err(stringify)?),
         "conversation_job_output" => {
             let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0);
             Ok(serde_json::to_value(conversation::job_output::job_output(
-                &as_str("laneId")?,
+                &as_str("sessionId")?,
                 &as_str("jobId")?,
                 offset,
             )?)
             .map_err(stringify)?)
         }
-        "conversation_lane_subagents" => Ok(serde_json::to_value(
-            conversation::session_read::lane_subagents(&as_str("laneId")?)?,
+        "conversation_session_subagents" => Ok(serde_json::to_value(
+            conversation::session_read::session_subagents(&as_str("sessionId")?)?,
         )
         .map_err(stringify)?),
         "attachment_stage" => Ok(serde_json::to_value(crate::conversation::attachment::stage(

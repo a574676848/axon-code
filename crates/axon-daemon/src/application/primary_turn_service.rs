@@ -16,12 +16,12 @@ use thiserror::Error;
 
 use super::EventStreamBridge;
 use super::daemon_host::primary_session_id_for_interaction;
-use super::primary_turn_lanes::{
-    LaneReportWait, await_lane_report, group_lanes, merge_lane_report,
+use super::primary_turn_sessions::{
+    SessionReportWait, await_session_report, group_sessions, merge_session_report,
 };
 use super::primary_turn_worker_pool::{PrimaryTurnWorkerPool, PrimaryTurnWorkerPoolSlot};
 
-const LANE_PANIC_ERROR: &str = "Primary turn lane worker 异常退出";
+const SESSION_PANIC_ERROR: &str = "Primary turn session worker 异常退出";
 const LEASE_RENEWAL_THREAD_NAME: &str = "primary-turn-lease-renewal";
 /// lease 剩余一半时续租，为 supervisor 留出完整故障判定窗口。
 const LEASE_RENEWAL_INTERVAL_DIVISOR: u64 = 2;
@@ -29,9 +29,9 @@ const LEASE_RENEWAL_RETRY_LIMIT: u32 = 3;
 const LEASE_RENEWAL_RETRY_DELAY: Duration = Duration::from_millis(5);
 /// 批内补位轮询间隔。
 ///
-/// 协调线程在同一批里只等待「任意一个 lane」结束，并在有空闲槽位时重新领取，因此
-/// 空闲 lane 的新消息不必等待本批最慢 lane。没有空闲槽位时不做轮询。
-const LANE_REPLENISH_INTERVAL: Duration = Duration::from_millis(250);
+/// 协调线程在同一批里只等待「任意一个 session」结束，并在有空闲槽位时重新领取，因此
+/// 空闲 session 的新消息不必等待本批最慢 session。没有空闲槽位时不做轮询。
+const SESSION_REPLENISH_INTERVAL: Duration = Duration::from_millis(250);
 
 /// 交给 Agent runtime 的主 turn 请求。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -242,15 +242,15 @@ where
         Ok(report)
     }
 
-    /// 按复合 lane 并发处理主 turn。
+    /// 按复合 session 并发处理主 turn。
     ///
-    /// 同一复合 lane（以及 Global lane）始终保持领取顺序；不同 lane 最多同时运行
-    /// `max_concurrency` 个。领取由 Store 按 lane 排他推进，同 lane 的多条排队记录
-    /// 作为一条 lane 顺序执行，不会并发进入 Provider。
+    /// 同一复合 session（以及 Global session）始终保持领取顺序；不同 session 最多同时运行
+    /// `max_concurrency` 个。领取由 Store 按 session 排他推进，同 session 的多条排队记录
+    /// 作为一条 session 顺序执行，不会并发进入 Provider。
     ///
-    /// 协调线程只等待「任意一个 lane」结束：某个 lane 归还槽位后立即补位领取并投递，
-    /// 所以最慢 lane 不再阻塞其他空闲 lane 的新消息；只有槽位全满时才等待 lane 结束。
-    /// 本批结束前不会返回，保证本轮报告覆盖全部已投递 lane。
+    /// 协调线程只等待「任意一个 session」结束：某个 session 归还槽位后立即补位领取并投递，
+    /// 所以最慢 session 不再阻塞其他空闲 session 的新消息；只有槽位全满时才等待 session 结束。
+    /// 本批结束前不会返回，保证本轮报告覆盖全部已投递 session。
     pub fn tick_concurrent(
         &self,
         limit: u32,
@@ -282,33 +282,33 @@ where
                 if leases.is_empty() {
                     break;
                 }
-                for lane in group_lanes(leases).into_values() {
-                    self.dispatch_lane(&pool, lane, sender.clone())?;
+                for session in group_sessions(leases).into_values() {
+                    self.dispatch_session(&pool, session, sender.clone())?;
                     in_flight = in_flight.saturating_add(1);
                 }
             }
             if in_flight == 0 {
                 return Ok(report);
             }
-            // 槽位未满时用有界窗口等待：窗口到期后重新领取空闲 lane 的新消息。
-            let idle_window = (in_flight < max_concurrency).then_some(LANE_REPLENISH_INTERVAL);
-            match await_lane_report(&receiver, idle_window)? {
-                LaneReportWait::Report(lane_report) => {
+            // 槽位未满时用有界窗口等待：窗口到期后重新领取空闲 session 的新消息。
+            let idle_window = (in_flight < max_concurrency).then_some(SESSION_REPLENISH_INTERVAL);
+            match await_session_report(&receiver, idle_window)? {
+                SessionReportWait::Report(session_report) => {
                     in_flight = in_flight.saturating_sub(1);
-                    merge_lane_report(&mut report, lane_report?);
+                    merge_session_report(&mut report, session_report?);
                 }
-                LaneReportWait::Idle => {}
+                SessionReportWait::Idle => {}
             }
         }
     }
 
-    /// 把一条 lane 投递到有界 worker pool。
+    /// 把一条 session 投递到有界 worker pool。
     ///
     /// 投递量受空闲槽位约束，池内排队深度不会超过 worker 数，因此这里不会阻塞协调线程。
-    fn dispatch_lane(
+    fn dispatch_session(
         &self,
         pool: &PrimaryTurnWorkerPool,
-        lane: Vec<InteractionProcessingLease>,
+        session: Vec<InteractionProcessingLease>,
         sender: mpsc::Sender<Result<PrimaryTurnTickReport, PrimaryTurnServiceError>>,
     ) -> Result<(), PrimaryTurnServiceError>
     where
@@ -316,16 +316,17 @@ where
     {
         let service = self.clone();
         pool.execute(move || {
-            let result =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| service.run_lane(lane)))
-                    .map_err(|_| PrimaryTurnServiceError::Runner(LANE_PANIC_ERROR.to_owned()))
-                    .and_then(|result| result);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                service.run_session(session)
+            }))
+            .map_err(|_| PrimaryTurnServiceError::Runner(SESSION_PANIC_ERROR.to_owned()))
+            .and_then(|result| result);
             let _ = sender.send(result);
         })
         .map_err(PrimaryTurnServiceError::Runner)
     }
 
-    fn run_lane(
+    fn run_session(
         &self,
         leases: Vec<InteractionProcessingLease>,
     ) -> Result<PrimaryTurnTickReport, PrimaryTurnServiceError> {
@@ -489,15 +490,17 @@ fn validate_batch_limit(limit: u32) -> Result<(), PrimaryTurnServiceError> {
 fn validate_max_concurrency(max_concurrency: usize) -> Result<(), PrimaryTurnServiceError> {
     if max_concurrency == 0 {
         return Err(PrimaryTurnServiceError::Store(
-            InteractionStoreError::InvalidState("Primary turn 最大并发 lane 必须大于 0".to_owned()),
+            InteractionStoreError::InvalidState(
+                "Primary turn 最大并发 session 必须大于 0".to_owned(),
+            ),
         ));
     }
     Ok(())
 }
 
-/// 单次领取上限：空闲 lane 槽位与调用方批上限的较小值。
+/// 单次领取上限：空闲 session 槽位与调用方批上限的较小值。
 ///
-/// 领取量不超过空闲槽位，lane 数就不会超过槽位，因此投递无需归还 lease。
+/// 领取量不超过空闲槽位，session 数就不会超过槽位，因此投递无需归还 lease。
 fn claim_capacity(free_slots: usize, limit: u32) -> u32 {
     u32::try_from(free_slots).map_or(limit, |free| free.min(limit))
 }

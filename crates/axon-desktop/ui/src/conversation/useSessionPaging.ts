@@ -31,7 +31,7 @@ import {
 } from './transcript';
 import type { SessionTokenBaseline } from './sessionUsage';
 import type { ConversationStreamEvent } from './wire';
-import type { LaneEffectiveModel } from './viewConfig';
+import type { SessionEffectiveModel } from './viewConfig';
 
 /**
  * 历史分页的页大小。
@@ -62,9 +62,9 @@ export interface HistorySeed {
   attachments: AttachmentRef[];
 }
 
-export interface LanePagingOptions {
+export interface SessionPagingOptions {
   /** 当前车道标识；会话目标下为空。 */
-  laneId: string | null;
+  sessionId: string | null;
   /** 当前工作区标识。 */
   workspaceId: string | null;
   /** 主投影的派发入口。 */
@@ -79,12 +79,12 @@ export interface LanePagingOptions {
   /** 取历史失败时的提示入口。 */
   onError: (message: string) => void;
   /** 车道当前模型的权威事实（网关只读最新一轮记录）；翻到没有结论时给 null。 */
-  onEffectiveModel?: (model: LaneEffectiveModel | null) => void;
+  onEffectiveModel?: (model: SessionEffectiveModel | null) => void;
   /** 首页带回来的最近一次记忆反思提示；没有记忆动作时回 null。 */
   onReflectionNotice?: (notice: string | null) => void;
 }
 
-export interface LanePaging {
+export interface SessionPaging {
   /** 取某一条的种子。 */
   seedOf: (interactionId: string) => HistorySeed | undefined;
   /**
@@ -94,7 +94,7 @@ export interface LanePaging {
    */
   sessionBaseline: SessionTokenBaseline | null;
   /** 取最近一页历史：重置种子表与累计基线、记住游标，返回最新一条要回放的标识。 */
-  loadNewestPage: (laneId: string) => Promise<string[]>;
+  loadNewestPage: (sessionId: string) => Promise<string[]>;
   /** 按当前模式派发动作：独立回放时进临时投影，其余进主投影。 */
   applyAction: (action: ConversationAction) => void;
   /** 取下一条要回放的标识：展开时取这一路的队列，否则取主队列。 */
@@ -118,8 +118,8 @@ export interface LanePaging {
 }
 
 /** 组装分页与展开能力。 */
-export function useLanePaging(options: LanePagingOptions): LanePaging {
-  const { laneId, workspaceId, dispatch, replayingRef, generationRef, playNextRef, onError } =
+export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
+  const { sessionId, workspaceId, dispatch, replayingRef, generationRef, playNextRef, onError } =
     options;
   /** 更早一页的游标；为空表示已经翻到车道开头。 */
   const olderCursorRef = useRef<{ receivedAtMs: number; interactionId: string } | null>(null);
@@ -184,10 +184,10 @@ export function useLanePaging(options: LanePagingOptions): LanePaging {
    * 「还有没有更早」都在这里定，调用方不再各自解释「取多少条、从哪往前翻」。
    */
   const loadNewestPage = useCallback(
-    async (laneId: string): Promise<string[]> => {
+    async (sessionId: string): Promise<string[]> => {
       // 先丢旧基线：累计读数不能先按上一条会话的数画一帧，再跳到新会话。
       setSessionBaseline(null);
-      const page = await ipc.conversationHistory(laneId, HISTORY_PAGE_SIZE);
+      const page = await ipc.conversationHistory(sessionId, HISTORY_PAGE_SIZE);
       // 权威模型随首页一起回来：只查最新一轮，不遍历历史轮次。
       options.onEffectiveModel?.(page.effectiveModel ?? null);
       // 记忆提示同一时机取回：它也是「这条会话现在的最新事实」，不能随翻页回退。
@@ -291,12 +291,12 @@ export function useLanePaging(options: LanePagingOptions): LanePaging {
    */
   const loadOlder = useCallback(async () => {
     const cursor = olderCursorRef.current;
-    if (cursor === null || laneId === null) return;
+    if (cursor === null || sessionId === null) return;
     if (pagingRef.current !== null) return;
     const generation = generationRef.current;
     setLoadingOlder(true);
     try {
-      const page = await ipc.conversationHistory(laneId, HISTORY_PAGE_SIZE, cursor);
+      const page = await ipc.conversationHistory(sessionId, HISTORY_PAGE_SIZE, cursor);
       if (generationRef.current !== generation) return;
       const entries = page.interactions;
       if (entries.length === 0) {
@@ -314,7 +314,7 @@ export function useLanePaging(options: LanePagingOptions): LanePaging {
     } finally {
       setLoadingOlder(false);
     }
-  }, [dispatch, generationRef, laneId, onError, rememberFirstPage, seedHistoryEntries]);
+  }, [dispatch, generationRef, sessionId, onError, rememberFirstPage, seedHistoryEntries]);
 
   /**
    * 展开一条被折叠的 Interaction。

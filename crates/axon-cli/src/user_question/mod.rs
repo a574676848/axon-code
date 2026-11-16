@@ -6,7 +6,7 @@ pub mod content;
 pub mod fanout;
 pub mod host;
 pub mod http_adapter;
-pub mod lane_steerer;
+pub mod turn_steerer;
 
 pub use answer_route::{AnswerRouteOutcome, parse_answer_body, route_answer};
 pub use answer_service::{
@@ -22,4 +22,4 @@ pub use host::{
     NoopUserQuestionEventSink, QuestionAnswerDelivery, UserQuestionEventSink, UserQuestionHost,
 };
 /// 车道答案注入器只在本 crate 内使用：它是答案服务的内部零件，不对外暴露。
-pub(crate) use lane_steerer::LaneQuestionMessageSteerer;
+pub(crate) use turn_steerer::HostQuestionMessageSteerer;

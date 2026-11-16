@@ -13,7 +13,7 @@ import {
   SpinnerIcon,
   TrashIcon,
 } from '../icons';
-import type { LaneItem, WorkspaceItem } from '../types';
+import type { SessionItem, WorkspaceItem } from '../types';
 import { IconButton } from './ui/controls';
 import { Dropdown, MenuItem, MenuSeparator } from './ui/overlays';
 import { Chip, RowActions, StateDot, Text } from './ui/surfaces';
@@ -67,7 +67,7 @@ const STATUS_SLOT = 'shrink-0 w-4 flex items-center justify-center';
  * 三枚 28px 图标按钮加两处 2px 间隙正好 88px：槽宽恒定，因此 hover 时操作区
  * 替换时间不会改变标题的可用宽度，跑马灯也不会按旧宽度判定溢出。
  */
-const LANE_TRAILING_WIDTH = 88;
+const SESSION_TRAILING_WIDTH = 88;
 
 /** 工作区行尾槽：两枚 28px 按钮加 4px 间隙。 */
 const WORKSPACE_TRAILING_WIDTH = 60;
@@ -95,11 +95,11 @@ export function formatRelativeTime(timestamp: number): string {
  * 完成是绿点，异常是红点，被中断与主动停止同属「按人的意思结束」因此是琥珀点。
  * 标识在用户点开这条会话后由外层清除。
  */
-export function laneStatusState(
-  lane: LaneItem,
+export function sessionStatusState(
+  session: SessionItem,
   activity: string | undefined,
 ): StateDotState | null {
-  if (lane.running) return 'ongoing';
+  if (session.running) return 'ongoing';
   if (activity === 'failed') return 'error';
   if (activity === 'interrupted') return 'warning';
   if (activity !== undefined) return 'done';
@@ -112,7 +112,7 @@ export function laneStatusState(
  * 「已完成」这一档尤其需要：前台不再弹系统通知，会话标题前那颗绿点就是
  * 唯一的提示，读屏器与悬停都必须说清它是什么。
  */
-export function laneStatusLabel(status: StateDotState): string | undefined {
+export function sessionStatusLabel(status: StateDotState): string | undefined {
   switch (status) {
     case 'done':
       return '本轮已完成，未查看';
@@ -127,8 +127,8 @@ export function laneStatusLabel(status: StateDotState): string | undefined {
 
 // ------------------------------------------------------------------ 会话行
 
-export interface LaneRowProps {
-  lane: LaneItem;
+export interface SessionRowProps {
+  session: SessionItem;
   selected: boolean;
   /** 该会话有新结果时的终态；为空表示没有待查看的标识。 */
   activity?: string;
@@ -151,8 +151,8 @@ export interface LaneRowProps {
 }
 
 /** 一条会话：状态槽、标题、行尾槽（时间与图钉，悬浮换成操作区）。 */
-export const LaneRow: React.FC<LaneRowProps> = ({
-  lane,
+export const SessionRow: React.FC<SessionRowProps> = ({
+  session,
   selected,
   activity,
   onSelect,
@@ -167,26 +167,26 @@ export const LaneRow: React.FC<LaneRowProps> = ({
   dropHint,
 }) => {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(lane.title);
+  const [draft, setDraft] = useState(session.title);
   const [menuOpen, setMenuOpen] = useState(false);
   const { titleRef, handlers: marqueeHandlers } = useRowTitleMarquee();
   /*
    * 侦测会话标题自动生成或外部重命名：首次挂载时不播动画，
    * 运行中后端提炼出新标题时触发一次柔和上浮叠化（title-morph-in）。
    */
-  const initialTitleRef = React.useRef(lane.title);
-  const titleChanged = lane.title !== initialTitleRef.current;
+  const initialTitleRef = React.useRef(session.title);
+  const titleChanged = session.title !== initialTitleRef.current;
   /** 尚未产生任何交互的会话：按既有工作台产品的语义，它是一条安静的占位行。 */
-  const blank = lane.pending;
+  const blank = session.pending;
   /** 前置状态槽里要画的状态；为空表示这一行不占状态位。 */
-  const status = blank ? null : laneStatusState(lane, activity);
+  const status = blank ? null : sessionStatusState(session, activity);
   const hasPendingQuestion = Boolean(
-    (lane.pending_question_count ?? 0) > 0 || activity?.startsWith('question_'),
+    (session.pending_question_count ?? 0) > 0 || activity?.startsWith('question_'),
   );
 
   const commit = () => {
     const trimmed = draft.trim();
-    if (trimmed.length > 0 && trimmed !== lane.title) onRename(trimmed);
+    if (trimmed.length > 0 && trimmed !== session.title) onRename(trimmed);
     setEditing(false);
   };
 
@@ -195,23 +195,23 @@ export const LaneRow: React.FC<LaneRowProps> = ({
       disabled={menuOpen || editing}
       content={
         <>
-          <HoverCardTitle>{lane.title}</HoverCardTitle>
+          <HoverCardTitle>{session.title}</HoverCardTitle>
           <HoverCardLine>
-            {!blank && <>{formatRelativeTime(lane.updated_at)}{' · '}</>}
-            共 {lane.interaction_count} 条会话
+            {!blank && <>{formatRelativeTime(session.updated_at)}{' · '}</>}
+            共 {session.interaction_count} 条会话
           </HoverCardLine>
           <HoverCardStatus
             icon={
-              lane.running ? (
+              session.running ? (
                 <SpinnerIcon size={14} className="state-spinner" />
               ) : (
                 <GlobeIcon size={14} />
               )
             }
           >
-            {lane.running ? '进行中' : `渠道 ${lane.channel}`}
-            {lane.archived ? ' · 已归档' : ''}
-            {lane.pinned ? ' · 已置顶' : ''}
+            {session.running ? '进行中' : `渠道 ${session.channel}`}
+            {session.archived ? ' · 已归档' : ''}
+            {session.pinned ? ' · 已置顶' : ''}
           </HoverCardStatus>
         </>
       }
@@ -233,7 +233,7 @@ export const LaneRow: React.FC<LaneRowProps> = ({
         onClick={() => {
           if (!editing) onSelect();
         }}
-        title={`渠道 ${lane.channel} · 目标 ${lane.destination || '未指定'} · 共 ${lane.interaction_count} 条会话`}
+        title={`渠道 ${session.channel} · 目标 ${session.destination || '未指定'} · 共 ${session.interaction_count} 条会话`}
         className={`${ROW_STATE} ${rowTone(selected)} h-9 pr-1 cursor-pointer select-none ${
           dragging ? 'opacity-40' : ''
         }`}
@@ -241,7 +241,7 @@ export const LaneRow: React.FC<LaneRowProps> = ({
         {selected && (
           <span
             aria-hidden="true"
-            className={`${ROW_SELECTED_BAR} ${lane.running ? 'dock-ambient-glow' : ''}`}
+            className={`${ROW_SELECTED_BAR} ${session.running ? 'dock-ambient-glow' : ''}`}
           />
         )}
         {dropHint !== 'none' && (
@@ -268,8 +268,8 @@ export const LaneRow: React.FC<LaneRowProps> = ({
             <span
               className={`${STATUS_SLOT} ${status !== 'ongoing' ? 'confirm-pop' : ''}`}
               role={status === 'ongoing' ? undefined : 'img'}
-              aria-label={laneStatusLabel(status)}
-              title={laneStatusLabel(status)}
+              aria-label={sessionStatusLabel(status)}
+              title={sessionStatusLabel(status)}
             >
               <StateDot state={status} />
             </span>
@@ -291,20 +291,20 @@ export const LaneRow: React.FC<LaneRowProps> = ({
           />
         ) : (
           <Text
-            key={titleChanged ? lane.title : 'initial'}
+            key={titleChanged ? session.title : 'initial'}
             ref={titleRef}
             size="row"
             truncate
             className={`flex-1 min-w-0 ${MARQUEE_TITLE_CLASS} ${titleChanged ? 'title-morph-in' : ''}`}
           >
-            {lane.title}
+            {session.title}
           </Text>
         )}
 
         {!editing && !blank && (
           <div
             className="shrink-0 flex items-center justify-end whitespace-nowrap"
-            style={{ width: LANE_TRAILING_WIDTH }}
+            style={{ width: SESSION_TRAILING_WIDTH }}
           >
             {/*
              * 静止态显示时间与图钉，hover 时整块换成操作区：两态同宽，
@@ -314,10 +314,10 @@ export const LaneRow: React.FC<LaneRowProps> = ({
               className={`inline-flex items-center gap-1.5 ${menuOpen ? 'hidden' : 'group-hover:hidden'}`}
             >
               <span className="text-[11px] leading-4 tabular-nums text-text-tertiary">
-                {formatRelativeTime(lane.updated_at)}
+                {formatRelativeTime(session.updated_at)}
               </span>
               {/* 置顶标记与时间同一格：图标本身不发声，名称由这一层给。 */}
-              {lane.pinned && (
+              {session.pinned && (
                 <span
                   role="img"
                   aria-label="已置顶"
@@ -346,15 +346,15 @@ export const LaneRow: React.FC<LaneRowProps> = ({
                 )}
               >
                 <MenuItem
-                  icon={lane.pinned ? <PinFillIcon size={14} /> : <PinIcon size={14} />}
+                  icon={session.pinned ? <PinFillIcon size={14} /> : <PinIcon size={14} />}
                   onSelect={onTogglePin}
                 >
-                  {lane.pinned ? '取消置顶' : '置顶会话'}
+                  {session.pinned ? '取消置顶' : '置顶会话'}
                 </MenuItem>
                 <MenuItem
                   icon={<EditIcon size={14} />}
                   onSelect={() => {
-                    setDraft(lane.title);
+                    setDraft(session.title);
                     setEditing(true);
                   }}
                 >
@@ -362,12 +362,12 @@ export const LaneRow: React.FC<LaneRowProps> = ({
                 </MenuItem>
                 <MenuSeparator />
                 <MenuItem icon={<ArchiveIcon size={14} />} onSelect={onToggleArchive}>
-                  {lane.archived ? '取消归档' : '归档会话'}
+                  {session.archived ? '取消归档' : '归档会话'}
                 </MenuItem>
               </Dropdown>
               {/* 悬浮即出现的快捷操作：归档与置顶，与既有工作台产品一致 */}
               <IconButton
-                label={lane.archived ? '取消归档' : '归档会话'}
+                label={session.archived ? '取消归档' : '归档会话'}
                 onClick={(event) => {
                   event.stopPropagation();
                   onToggleArchive();
@@ -376,13 +376,13 @@ export const LaneRow: React.FC<LaneRowProps> = ({
                 <ArchiveIcon size={14} />
               </IconButton>
               <IconButton
-                label={lane.pinned ? '取消置顶' : '置顶会话'}
+                label={session.pinned ? '取消置顶' : '置顶会话'}
                 onClick={(event) => {
                   event.stopPropagation();
                   onTogglePin();
                 }}
               >
-                {lane.pinned ? <PinFillIcon size={14} /> : <PinIcon size={14} />}
+                {session.pinned ? <PinFillIcon size={14} /> : <PinIcon size={14} />}
               </IconButton>
             </RowActions>
           </div>
@@ -400,7 +400,7 @@ export interface WorkspaceRowProps {
   depth: number;
   expanded: boolean;
   onToggle: () => void;
-  onCreateLane: () => void;
+  onCreateSession: () => void;
   onRemove: () => void;
 }
 
@@ -410,7 +410,7 @@ export const WorkspaceRow: React.FC<WorkspaceRowProps> = ({
   depth,
   expanded,
   onToggle,
-  onCreateLane,
+  onCreateSession,
   onRemove,
 }) => {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -423,7 +423,7 @@ export const WorkspaceRow: React.FC<WorkspaceRowProps> = ({
           <HoverCardTitle>{workspace.name}</HoverCardTitle>
           <HoverCardLine mono>{workspace.path}</HoverCardLine>
           <HoverCardStatus>
-            共 {workspace.lanes.length} 条会话
+            共 {workspace.sessions.length} 条会话
             {workspace.active ? ' · 当前工作区' : ''}
           </HoverCardStatus>
         </>
@@ -471,7 +471,7 @@ export const WorkspaceRow: React.FC<WorkspaceRowProps> = ({
                 当前
               </Text>
             ) : (
-              <Chip>{workspace.lanes.length}</Chip>
+              <Chip>{workspace.sessions.length}</Chip>
             )}
           </span>
           <RowActions active={menuOpen}>
@@ -491,7 +491,7 @@ export const WorkspaceRow: React.FC<WorkspaceRowProps> = ({
                 </IconButton>
               )}
             >
-              <MenuItem onSelect={onCreateLane}>新建会话</MenuItem>
+              <MenuItem onSelect={onCreateSession}>新建会话</MenuItem>
               {workspace.removable && (
                 <>
                   <MenuSeparator />
@@ -506,7 +506,7 @@ export const WorkspaceRow: React.FC<WorkspaceRowProps> = ({
               label="新建会话"
               onClick={(event) => {
                 event.stopPropagation();
-                onCreateLane();
+                onCreateSession();
               }}
             >
               <IconNewChat size={14} />

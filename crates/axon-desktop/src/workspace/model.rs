@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 /// 车道数据模型（等同通用工作台的会话）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LaneDto {
+pub struct SessionDto {
     /// 车道稳定标识。
     pub id: String,
     /// 车道显示标题。
@@ -53,7 +53,7 @@ pub struct WorkspaceDto {
     /// 是否可移除。
     pub removable: bool,
     /// 所属车道列表。
-    pub lanes: Vec<LaneDto>,
+    pub sessions: Vec<SessionDto>,
 }
 
 /// 当前运行工作区目录（跨平台，取自进程实际工作目录）。

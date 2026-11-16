@@ -5,11 +5,11 @@ import {
   ChecklistIcon,
   ClockIcon,
 } from '../icons';
-import type { GatewayHealth, LaneItem, NavTab, WorkspaceItem } from '../types';
+import type { GatewayHealth, SessionItem, NavTab, WorkspaceItem } from '../types';
 import type { McpHeaderReading } from '../conversation/mcpReading';
 import * as ipc from '../ipc';
-import type { LaneSelection } from '../conversation/useConversation';
-import { isRunning, type LaneRuntimeFacts } from '../conversation/runtimeFacts';
+import type { SessionSelection } from '../conversation/useConversation';
+import { isRunning, type SessionRuntimeFacts } from '../conversation/runtimeFacts';
 import { Banner, Text } from './ui/surfaces';
 import { NewSessionButton, NavGlide, SidebarColumn } from './ui/shell';
 import { SidebarRail } from './SidebarRail';
@@ -19,7 +19,7 @@ import {
   ROW_STATE,
   rowTone,
 } from './SidebarRows';
-import { ArchiveLaneDialog, RemoveWorkspaceDialog } from './SidebarConfirmations';
+import { ArchiveSessionDialog, RemoveWorkspaceDialog } from './SidebarConfirmations';
 import { WorkspaceTree } from './WorkspaceTree';
 import type { ArchivedFilter, GroupMode, OrderMode } from './ViewOptionsMenu';
 import { SidebarFooter } from './SidebarFooter';
@@ -27,7 +27,7 @@ import { SidebarFooter } from './SidebarFooter';
 /** 侧栏默认宽度，与既有工作台产品一致。 */
 const DEFAULT_WIDTH = 280;
 /** 会话列表静默刷新间隔。 */
-const LANE_REFRESH_MS = 15000;
+const SESSION_REFRESH_MS = 15000;
 /** 侧栏最小宽度，与既有工作台产品一致。 */
 const MIN_WIDTH = 264;
 /** 侧栏最大宽度，与既有工作台产品一致。 */
@@ -71,13 +71,13 @@ interface SidebarProps {
   /** 网关连接状态；为空表示尚未探测完成。 */
   health?: GatewayHealth | null;
   /** 选中某条会话；主区域据此建立订阅。 */
-  onSelectLane?: (selection: LaneSelection | null) => void;
+  onSelectSession?: (selection: SessionSelection | null) => void;
   /** 外壳当前选中的会话标识；未激活会话只显示这一条。 */
-  selectedLaneId?: string | null;
+  selectedSessionId?: string | null;
   /** 当前选中会话的运行时事实；归档正在运行的会话前据此二次确认。 */
-  runtime?: LaneRuntimeFacts | null;
+  runtime?: SessionRuntimeFacts | null;
   /** 有新结果的车道：车道标识到终态；点开即清除。 */
-  laneMarks?: Record<string, string>;
+  sessionMarks?: Record<string, string>;
   /** MCP 运行态读数；由外壳持有唯一一份，侧栏只负责呈现。 */
   mcpReading?: McpHeaderReading | null;
   /** 已安装技能条数；清单未就绪时为空。 */
@@ -92,10 +92,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenSettings,
   onOpenConnection,
   health = null,
-  onSelectLane,
-  selectedLaneId = null,
+  onSelectSession,
+  selectedSessionId = null,
   runtime = null,
-  laneMarks,
+  sessionMarks,
   mcpReading = null,
   skillCount = null,
 }) => {
@@ -115,7 +115,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   /** 首次读取是否已经落地：连上但还没读到数据时，骨架比「没有工作区」准确。 */
   const [loadedOnce, setLoadedOnce] = useState(false);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState('');
-  const [activeLaneId, setActiveLaneId] = useState('');
+  const [activeSessionId, setActiveSessionId] = useState('');
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   /** 展示用的工作区全路径，用于树形分组的父子判定。 */
   const [fullPaths, setFullPaths] = useState<Record<string, string>>({});
@@ -126,7 +126,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [orderBy, setOrderBy] = useState<OrderMode>('updated');
   const [archivedFilter, setArchivedFilter] = useState<ArchivedFilter>('hide');
   /** 等待确认的归档目标；非空时弹窗。 */
-  const [pendingArchive, setPendingArchive] = useState<LaneItem | null>(null);
+  const [pendingArchive, setPendingArchive] = useState<SessionItem | null>(null);
   const [stopping, setStopping] = useState(false);
   /** 等待确认的移除目标；只在「正在跑或正在看」的工作区上弹窗。 */
   const [pendingRemove, setPendingRemove] = useState<WorkspaceItem | null>(null);
@@ -183,7 +183,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         .fetchWorkspaces()
         .then((list) => ingest(list))
         .catch(() => undefined);
-    }, LANE_REFRESH_MS);
+    }, SESSION_REFRESH_MS);
     return () => window.clearInterval(timer);
   }, [health?.connected, ingest]);
 
@@ -202,24 +202,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
     [ingest],
   );
 
-  const createLane = useCallback(
+  const createSession = useCallback(
     async (workspaceId?: string) => {
       const target = workspaceId ?? activeWorkspaceId;
       if (target.length === 0) return;
       try {
-        const list = await ipc.createLane(target);
+        const list = await ipc.createSession(target);
         const workspace = list.find((item) => item.id === target);
-        const created = workspace?.lanes
-          .filter((lane) => lane.pending)
+        const created = workspace?.sessions
+          .filter((session) => session.pending)
           .sort((left, right) => right.created_at - left.created_at)[0];
         ingest(list);
         if (created !== undefined) {
           setActiveWorkspaceId(target);
-          setActiveLaneId(created.id);
-          onSelectLane?.({
+          setActiveSessionId(created.id);
+          onSelectSession?.({
             workspaceId: target,
             workspacePath: workspace?.path ?? '',
-            laneId: created.id,
+            sessionId: created.id,
             destination: created.destination,
             title: created.title,
             channel: created.channel,
@@ -232,7 +232,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         setActionError(error instanceof Error ? error.message : '新建会话失败');
       }
     },
-    [activeWorkspaceId, ingest, onSelectLane, onSelectTab],
+    [activeWorkspaceId, ingest, onSelectSession, onSelectTab],
   );
 
   /** 添加工作区：一步直达系统原生目录选择器，选中后立即登记。 */
@@ -260,22 +260,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, [ingest]);
 
   /** 拖拽重排：落盘后切到手动排序，与用户看到的新顺序保持一致。 */
-  const reorderLanes = useCallback(
+  const reorderSessions = useCallback(
     async (workspaceId: string, orderedIds: string[]) => {
       setOrderBy('manual');
-      await mutate(() => ipc.laneReorder(workspaceId, orderedIds), '保存排序失败');
+      await mutate(() => ipc.sessionReorder(workspaceId, orderedIds), '保存排序失败');
     },
     [mutate],
   );
 
   /** 真正落盘归档；归档掉正在看的会话后回到首屏。 */
   const applyArchive = useCallback(
-    (lane: LaneItem) =>
-      mutate(() => ipc.setLaneArchived(lane.id, !lane.archived), '归档操作失败').then((ok) => {
+    (session: SessionItem) =>
+      mutate(() => ipc.setSessionArchived(session.id, !session.archived), '归档操作失败').then((ok) => {
         // 内容已经归档，继续停留在它的正文上会让用户以为它还在；失败时保持原状不动。
-        if (ok && !lane.archived && lane.id === selectedLaneId) onSelectLane?.(null);
+        if (ok && !session.archived && session.id === selectedSessionId) onSelectSession?.(null);
       }),
-    [mutate, onSelectLane, selectedLaneId],
+    [mutate, onSelectSession, selectedSessionId],
   );
 
   /**
@@ -287,14 +287,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
     (id: string) => {
       const workspace = workspaces.find((item) => item.id === id);
       if (workspace === undefined) return;
-      const viewed = workspace.lanes.some((lane) => lane.id === selectedLaneId);
-      if (workspace.lanes.some((lane) => lane.running) || viewed) {
+      const viewed = workspace.sessions.some((session) => session.id === selectedSessionId);
+      if (workspace.sessions.some((session) => session.running) || viewed) {
         setPendingRemove(workspace);
         return;
       }
       void mutate(() => ipc.removeWorkspace(id), '移除工作区失败');
     },
-    [mutate, selectedLaneId, workspaces],
+    [mutate, selectedSessionId, workspaces],
   );
 
   /** 确认移除：移除后把还停留在该工作区的会话视图收回首屏。 */
@@ -306,12 +306,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       const ok = await mutate(() => ipc.removeWorkspace(workspace.id), '移除工作区失败');
       // 工作区没了，它的会话也就不再属于任何可见分组：继续停在正文上会让用户
       // 以为这条会话还在侧栏里（实测过：移除后主区域仍显示被移除工作区的会话）。
-      if (ok && workspace.lanes.some((lane) => lane.id === selectedLaneId)) onSelectLane?.(null);
+      if (ok && workspace.sessions.some((session) => session.id === selectedSessionId)) onSelectSession?.(null);
     } finally {
       setRemoving(false);
       setPendingRemove(null);
     }
-  }, [mutate, onSelectLane, pendingRemove, selectedLaneId]);
+  }, [mutate, onSelectSession, pendingRemove, selectedSessionId]);
 
   /**
    * 归档入口。
@@ -320,25 +320,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
    * 用户以为「归档等于结束」时最容易丢东西，所以把正在跑的事实摆出来再确认。
    */
   const requestArchive = useCallback(
-    (lane: LaneItem) => {
+    (session: SessionItem) => {
       const busy =
-        !lane.archived &&
+        !session.archived &&
         runtime !== null &&
-        runtime.laneId === lane.id &&
+        runtime.sessionId === session.id &&
         isRunning(runtime);
       if (busy) {
-        setPendingArchive(lane);
+        setPendingArchive(session);
         return;
       }
-      void applyArchive(lane);
+      void applyArchive(session);
     },
     [applyArchive, runtime],
   );
 
   /** 确认归档：先停掉本轮与派生的子任务，再归档。 */
   const confirmArchive = useCallback(async () => {
-    const lane = pendingArchive;
-    if (lane === null) return;
+    const session = pendingArchive;
+    if (session === null) return;
     setStopping(true);
     try {
       await runtime?.stop();
@@ -348,7 +348,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       setStopping(false);
       setPendingArchive(null);
     }
-    await applyArchive(lane);
+    await applyArchive(session);
   }, [applyArchive, pendingArchive, runtime]);
 
   /* 拖拽调节宽度：实时跟随指针，过窄自动收进图标轨，双击恢复默认。 */
@@ -380,12 +380,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.ctrlKey && event.altKey && event.key.toLowerCase() === 'n') {
         event.preventDefault();
-        void createLane();
+        void createSession();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [createLane]);
+  }, [createSession]);
 
   // 点击应用内其他位置即退出搜索并清空条件，与既有工作台产品的行为一致。
   useEffect(() => {
@@ -411,32 +411,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
     pendingRemove === null
       ? null
       : {
-          viewed: pendingRemove.lanes.some((lane) => lane.id === selectedLaneId),
+          viewed: pendingRemove.sessions.some((session) => session.id === selectedSessionId),
           busy:
-            pendingRemove.lanes.some((lane) => lane.running) ||
+            pendingRemove.sessions.some((session) => session.running) ||
             (runtime !== null &&
               isRunning(runtime) &&
-              pendingRemove.lanes.some((lane) => lane.id === runtime.laneId)),
+              pendingRemove.sessions.some((session) => session.id === runtime.sessionId)),
         };
 
   /** 按搜索、归档筛选与排序规则加工展示数据。 */
   const presented = useMemo(() => {
     const keyword = query.trim().toLowerCase();
-    const currentLane = selectedLaneId ?? activeLaneId;
+    const currentSession = selectedSessionId ?? activeSessionId;
     const currentWorkspace = workspaces.find((workspace) =>
-      workspace.lanes.some((lane) => lane.id === currentLane),
+      workspace.sessions.some((session) => session.id === currentSession),
     )?.id ?? activeWorkspaceId;
-    const lanesOf = (workspace: WorkspaceItem): LaneItem[] =>
-      workspace.lanes
-        .filter((lane) => {
-          if (archivedFilter === 'hide' && lane.archived) return false;
-          if (archivedFilter === 'only' && !lane.archived) return false;
+    const sessionsOf = (workspace: WorkspaceItem): SessionItem[] =>
+      workspace.sessions
+        .filter((session) => {
+          if (archivedFilter === 'hide' && session.archived) return false;
+          if (archivedFilter === 'only' && !session.archived) return false;
           // 未激活会话是「即将开始的会话」，只保留当前这一条：
           // 历史遗留的空会话不该在列表里长期占位，这与既有工作台产品一致。
-          if (lane.pending && lane.id !== currentLane) return false;
+          if (session.pending && session.id !== currentSession) return false;
           if (keyword.length === 0) return true;
           return (
-            lane.title.toLowerCase().includes(keyword) ||
+            session.title.toLowerCase().includes(keyword) ||
             workspace.name.toLowerCase().includes(keyword)
           );
         })
@@ -456,11 +456,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
     return workspaces.map((workspace) => ({
       ...workspace,
       active: workspace.id === currentWorkspace,
-      lanes: lanesOf(workspace),
+      sessions: sessionsOf(workspace),
       // 树形分组需要真实路径做父子判定。
       path: fullPaths[workspace.id] ?? workspace.path,
     }));
-  }, [workspaces, query, archivedFilter, orderBy, fullPaths, selectedLaneId, activeLaneId, activeWorkspaceId]);
+  }, [workspaces, query, archivedFilter, orderBy, fullPaths, selectedSessionId, activeSessionId, activeWorkspaceId]);
 
   /*
    * 收轨态整块不渲染连接胶囊，也不给 RailButton 加状态槽：图标轨每一格都是一个
@@ -473,7 +473,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <SidebarRail
         currentTab={currentTab}
         onToggleSidebar={onToggleSidebar}
-        onNewSession={() => void createLane()}
+        onNewSession={() => void createSession()}
         onOpenSearch={() => {
           onToggleSidebar();
           setSearching(true);
@@ -505,7 +505,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* 新建会话与顶部导航 */}
       <div className="shrink-0 px-3 pb-3 pt-1 space-y-0.5">
-        <NewSessionButton onClick={() => void createLane()} />
+        <NewSessionButton onClick={() => void createSession()} />
         {/*
           三行导航各自不再画静态指示条，整列共用一枚滑动指示标：
           切换视图时只有它在平移，行本身不重排。
@@ -605,42 +605,42 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <WorkspaceTree
             groupBy={groupBy}
             workspaces={presented}
-            activeLaneId={selectedLaneId ?? activeLaneId}
-            laneMarks={laneMarks}
+            activeSessionId={selectedSessionId ?? activeSessionId}
+            sessionMarks={sessionMarks}
             expanded={expanded}
             loading={health === null || (health.connected && !loadedOnce)}
             onToggleWorkspace={(id) =>
               setExpanded((current) => ({ ...current, [id]: current[id] !== true }))
             }
-            onSelectLane={(workspaceId, laneId) => {
+            onSelectSession={(workspaceId, sessionId) => {
               setActiveWorkspaceId(workspaceId);
-              setActiveLaneId(laneId);
+              setActiveSessionId(sessionId);
               const workspace = presented.find((item) => item.id === workspaceId);
-              const lane: LaneItem | undefined = workspace?.lanes.find(
-                (item) => item.id === laneId,
+              const session: SessionItem | undefined = workspace?.sessions.find(
+                (item) => item.id === sessionId,
               );
-              if (workspace !== undefined && lane !== undefined) {
-                onSelectLane?.({
+              if (workspace !== undefined && session !== undefined) {
+                onSelectSession?.({
                   workspaceId,
                   workspacePath: workspace.path,
-                  laneId,
-                  destination: lane.destination,
-                  title: lane.title,
-                  channel: lane.channel,
-                  pending: lane.pending,
+                  sessionId,
+                  destination: session.destination,
+                  title: session.title,
+                  channel: session.channel,
+                  pending: session.pending,
                 });
               }
               onSelectTab('chat');
             }}
-            onTogglePin={(lane) =>
-              void mutate(() => ipc.setLanePinned(lane.id, !lane.pinned), '置顶操作失败')
+            onTogglePin={(session) =>
+              void mutate(() => ipc.setSessionPinned(session.id, !session.pinned), '置顶操作失败')
             }
-            onToggleArchive={(lane) => requestArchive(lane)}
-            onRenameLane={(laneId, title) =>
-              void mutate(() => ipc.renameLane(laneId, title), '重命名失败')
+            onToggleArchive={(session) => requestArchive(session)}
+            onRenameSession={(sessionId, title) =>
+              void mutate(() => ipc.renameSession(sessionId, title), '重命名失败')
             }
-            onReorder={(workspaceId, orderedIds) => void reorderLanes(workspaceId, orderedIds)}
-            onCreateLane={(workspaceId) => void createLane(workspaceId)}
+            onReorder={(workspaceId, orderedIds) => void reorderSessions(workspaceId, orderedIds)}
+            onCreateSession={(workspaceId) => void createSession(workspaceId)}
             onRemoveWorkspace={requestRemoveWorkspace}
           />
         )}
@@ -667,8 +667,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         className="absolute top-0 right-0 w-2 -mr-1 h-full cursor-col-resize touch-none z-20"
       />
 
-      <ArchiveLaneDialog
-        lane={pendingArchive}
+      <ArchiveSessionDialog
+        session={pendingArchive}
         runtime={runtime}
         stopping={stopping}
         onClose={() => setPendingArchive(null)}

@@ -8,26 +8,34 @@ fn child_sessions_are_listed_by_parent_and_ordered_by_recent_activity() {
     let path = temp_db("child-sessions");
     let store = RolloutSqliteStore::open(&path).unwrap();
     store
-        .record_session(&record("lane-run", None, 100))
+        .record_session(&record("session-run", None, 100))
         .unwrap();
     store
         .commit_session(
-            &record("lane-run--subagent--root_older", Some("lane-run"), 200),
+            &record(
+                "session-run--subagent--root_older",
+                Some("session-run"),
+                200,
+            ),
             Some("旧子代理"),
         )
         .unwrap();
     store
         .commit_session(
-            &record("lane-run--subagent--root_newer", Some("lane-run"), 300),
+            &record(
+                "session-run--subagent--root_newer",
+                Some("session-run"),
+                300,
+            ),
             Some("新子代理"),
         )
         .unwrap();
 
-    let rows = store.select_child_sessions("lane-run", 10).unwrap();
+    let rows = store.select_child_sessions("session-run", 10).unwrap();
     assert_eq!(rows.len(), 2, "父会话直接派生的子会话必须全部列出");
-    assert_eq!(rows[0].session_id, "lane-run--subagent--root_newer");
+    assert_eq!(rows[0].session_id, "session-run--subagent--root_newer");
     assert_eq!(rows[0].title.as_deref(), Some("新子代理"));
-    assert_eq!(rows[1].session_id, "lane-run--subagent--root_older");
+    assert_eq!(rows[1].session_id, "session-run--subagent--root_older");
     assert_eq!(
         store.select_child_sessions("other-run", 10).unwrap().len(),
         0,

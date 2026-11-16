@@ -15,9 +15,9 @@ use std::sync::{Arc, LazyLock, Mutex};
 use axon_daemon::{GatewayHttpResponse, GatewayHttpRouteHandler};
 use axon_domain::{AudienceContext, AudienceKind, DaemonSessionId, DisclosurePolicy};
 use axon_session::{
-    AXON_RUNTIME_DATA_DIR, InteractionCursor, InteractionQueryStore, LaneQueryService,
-    LaneSnapshot, RuntimeStore, RuntimeStoreError, SqliteRuntimeStore, WorkspaceRecord,
-    WorkspaceStore, session_lane_id,
+    AXON_RUNTIME_DATA_DIR, InteractionCursor, InteractionQueryStore, RuntimeStore,
+    RuntimeStoreError, SessionQueryService, SessionSnapshot, SqliteRuntimeStore, WorkspaceRecord,
+    WorkspaceStore, session_id_for_route,
 };
 use serde::Serialize;
 
@@ -28,9 +28,9 @@ pub const WORKBENCH_PATH_PREFIX: &str = "/api/v1";
 /// 协议版本；新增路由或改动字段语义时必须递增，供客户端协商。
 pub const WORKBENCH_PROTOCOL_VERSION: u32 = 8;
 /// 单次车道 Interaction 回放查询的默认条数上限。
-const DEFAULT_LANE_INTERACTION_LIMIT: u32 = 200;
+const DEFAULT_SESSION_INTERACTION_LIMIT: u32 = 200;
 /// 单次车道 Interaction 回放查询的条数硬上限。
-const MAX_LANE_INTERACTION_LIMIT: u32 = 1_000;
+const MAX_SESSION_INTERACTION_LIMIT: u32 = 1_000;
 /// 历史帧页的默认帧数：一次取够一屏正文，又不至于让单次响应过大。
 const DEFAULT_INTERACTION_EVENTS_LIMIT: u32 = 800;
 /// 单页帧数硬上限。
@@ -41,32 +41,33 @@ const MAX_SUBAGENT_MESSAGE_CHARS: usize = 8_000;
 #[path = "workbench_http_views.rs"]
 mod workbench_http_views;
 
-pub use workbench_http_views::{InteractionView, LaneView, WorkspaceView};
+pub use workbench_http_views::{InteractionView, SessionView, WorkspaceView};
 
 #[path = "workbench_http_targets.rs"]
 mod workbench_http_targets;
 
 #[cfg(test)]
-pub(crate) use workbench_http_targets::owner_matches_lane;
+pub(crate) use workbench_http_targets::owner_matches_session;
 use workbench_http_targets::{
-    interaction_events_target, lane_interactions_target, lane_interrupt_target,
-    lane_job_output_target, lane_job_stop_target, lane_jobs_target, lane_question_answer_target,
-    lane_questions_target, lane_subagent_message_target, lane_subagents_target, query_param,
+    interaction_events_target, query_param, session_interactions_target, session_interrupt_target,
+    session_job_output_target, session_job_stop_target, session_jobs_target,
+    session_question_answer_target, session_questions_target, session_subagent_message_target,
+    session_subagents_target,
 };
 
 #[path = "workbench_http_subagents_jobs.rs"]
 mod workbench_http_subagents_jobs;
 
-#[path = "workbench_http_lane_readings.rs"]
-mod lane_readings;
+#[path = "workbench_http_session_readings.rs"]
+mod session_readings;
 
 #[path = "workbench_http_interaction_events.rs"]
 mod interaction_events;
 
 use interaction_events::interaction_events_payload;
 use workbench_http_subagents_jobs::{
-    JOB_OUTPUT_DEFAULT_MAX_BYTES, lane_job_output_payload, lane_jobs_payload,
-    lane_subagents_payload, stop_lane_job,
+    JOB_OUTPUT_DEFAULT_MAX_BYTES, session_job_output_payload, session_jobs_payload,
+    session_subagents_payload, stop_session_job,
 };
 
 #[cfg(test)]
@@ -81,24 +82,24 @@ mod workbench_http_adapter_tests;
 /// 载荷同时给出整条车道的两个累计读数（token 用量与已收口轮次的墙钟耗时）：界面的
 /// 会话读数要的是整条会话，而不是客户端恰好翻到的那一页，因此这两个数按车道聚合，
 /// 与分页无关。取数失败不牵连历史列表：列表是主事实，累计读数缺了就不给。
-pub fn lane_interactions_payload(
+pub fn session_interactions_payload(
     axon_root: &Path,
-    lane_id: &str,
+    session_id: &str,
     limit: u32,
     before: Option<&InteractionCursor>,
 ) -> Result<serde_json::Value, String> {
-    let limit = limit.clamp(1, MAX_LANE_INTERACTION_LIMIT);
+    let limit = limit.clamp(1, MAX_SESSION_INTERACTION_LIMIT);
     let records = runtime_store(axon_root)
-        .interactions_for_lane(lane_id, limit, before)
+        .interactions_for_session(session_id, limit, before)
         .map_err(|error| format!("读取车道 Interaction 失败：{error:?}"))?;
     // 工具动作摘要与本轮用时一次批次查覆盖整页：两者都已在写入时落列，这里不碰事件表。
     let interaction_ids: Vec<&str> = records
         .iter()
         .map(|record| record.interaction_id.as_str())
         .collect();
-    let facts = lane_readings::interaction_facts(axon_root, &interaction_ids);
+    let facts = session_readings::interaction_facts(axon_root, &interaction_ids);
     // 最终交付正文按收口事件取回：同样是整页一次索引查，不回放任何一条记录的帧。
-    let answers = lane_readings::answer_texts(axon_root, lane_id, &interaction_ids);
+    let answers = session_readings::answer_texts(axon_root, session_id, &interaction_ids);
     let interactions: Vec<InteractionView> = records
         .iter()
         .map(|record| {
@@ -126,19 +127,19 @@ pub fn lane_interactions_payload(
         })
         .collect();
     // 两个累计读数：用量走账本（按 run session 汇总），耗时走已收口轮次的墙钟差。
-    let session_usage = lane_readings::session_usage_payload(axon_root, lane_id);
-    let session_elapsed_ms = lane_readings::settled_elapsed_ms(axon_root, lane_id)
+    let session_usage = session_readings::session_usage_payload(axon_root, session_id);
+    let session_elapsed_ms = session_readings::settled_elapsed_ms(axon_root, session_id)
         .map_or(serde_json::Value::Null, serde_json::Value::from);
     Ok(serde_json::json!({
-        "laneId": lane_id,
+        "sessionId": session_id,
         "interactions": interactions,
         "totalRecords": interactions.len(),
         "sessionUsage": session_usage,
         "sessionElapsedMs": session_elapsed_ms,
         // 车道当前模型的权威事实：只读该车道最新一轮记录，供输入坞显示真实模型。
-        "effectiveModel": lane_readings::effective_model_payload(axon_root, lane_id),
+        "effectiveModel": session_readings::effective_model_payload(axon_root, session_id),
         // 最近一次记忆反思的提示文本：桌面端据此显示「上一次记忆动作」。
-        "reflectionNotice": lane_readings::reflection_notice_payload(axon_root, lane_id),
+        "reflectionNotice": session_readings::reflection_notice_payload(axon_root, session_id),
         "rawPayloadPersisted": false,
     }))
 }
@@ -177,42 +178,45 @@ pub fn workspaces_payload(axon_root: &Path) -> Result<serde_json::Value, String>
 }
 
 /// 车道载荷；给定 `workspace` 时只返回该工作区下的车道。
-pub fn lanes_payload(
+pub fn sessions_payload(
     axon_root: &Path,
     workspace_filter: Option<&str>,
 ) -> Result<serde_json::Value, String> {
-    let mut lanes = LaneQueryService::new(runtime_store(axon_root))
-        .list_lanes()
+    let mut sessions = SessionQueryService::new(runtime_store(axon_root))
+        .list_sessions()
         .map_err(|error| format!("读取车道列表失败：{error:?}"))?;
     if let Some(workspace_id) = workspace_filter {
-        lanes.retain(|lane| lane.workspace_id == workspace_id);
+        sessions.retain(|session| session.workspace_id == workspace_id);
     }
-    let pending_counts = lane_pending_question_counts(axon_root).unwrap_or_default();
-    let lanes: Vec<LaneView> = lanes
+    let pending_counts = session_pending_question_counts(axon_root).unwrap_or_default();
+    let sessions: Vec<SessionView> = sessions
         .iter()
-        .map(|lane| {
-            let mut view = LaneView::from(lane);
-            view.pending_question_count = pending_counts.get(&lane.lane_id).copied().unwrap_or(0);
+        .map(|session| {
+            let mut view = SessionView::from(session);
+            view.pending_question_count = pending_counts
+                .get(&session.session_id)
+                .copied()
+                .unwrap_or(0);
             view
         })
         .collect();
     Ok(serde_json::json!({
-        "lanes": lanes,
-        "totalRecords": lanes.len(),
+        "sessions": sessions,
+        "totalRecords": sessions.len(),
         "rawPayloadPersisted": false,
     }))
 }
 
 /// 单条聚合 SQL 查询各车道待答提问数量（P9 判据）。
-fn lane_pending_question_counts(
+fn session_pending_question_counts(
     axon_root: &Path,
 ) -> Result<std::collections::HashMap<String, u64>, String> {
     let store = runtime_store(axon_root);
     let conn = rusqlite::Connection::open(store.path()).map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT lane_id, COUNT(*) FROM user_questions \
-             WHERE state IN ('pending', 'suspended') GROUP BY lane_id",
+            "SELECT session_id, COUNT(*) FROM user_questions \
+             WHERE state IN ('pending', 'suspended') GROUP BY session_id",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -230,7 +234,7 @@ fn lane_pending_question_counts(
 /// 新车道标识派生请求。
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct LaneIdentityRequest {
+struct SessionIdentityRequest {
     workspace_id: String,
     channel: String,
     destination: String,
@@ -252,8 +256,8 @@ struct SubagentMessageRequest {
 }
 
 /// 解析入站车道标识派生载荷。
-fn derive_lane_identity(body: &[u8]) -> Result<serde_json::Value, String> {
-    let request: LaneIdentityRequest =
+fn derive_session_identity(body: &[u8]) -> Result<serde_json::Value, String> {
+    let request: SessionIdentityRequest =
         serde_json::from_slice(body).map_err(|error| format!("解析车道标识请求失败：{error}"))?;
     if request.workspace_id.trim().is_empty() {
         return Err("workspaceId 不能为空".to_string());
@@ -265,13 +269,13 @@ fn derive_lane_identity(body: &[u8]) -> Result<serde_json::Value, String> {
         return Err("destination 不能为空".to_string());
     }
     let audience = AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly);
-    let lane_id = session_lane_id(
+    let session_id = session_id_for_route(
         &request.workspace_id,
         &audience,
         &request.channel,
         &request.destination,
     );
-    Ok(serde_json::json!({ "laneId": lane_id }))
+    Ok(serde_json::json!({ "sessionId": session_id }))
 }
 
 /// 工作台 HTTP 路由适配器。
@@ -318,7 +322,7 @@ impl WorkbenchHttpAdapter {
 
     fn handle_question_answer(
         &self,
-        lane_id: &str,
+        session_id: &str,
         call_id: &str,
         body: &[u8],
     ) -> GatewayHttpResponse {
@@ -330,27 +334,27 @@ impl WorkbenchHttpAdapter {
             Arc::new(crate::user_question::NoopQuestionMessageSteerer),
         );
         let service = self.answer_service.as_ref().unwrap_or(&default_service);
-        crate::user_question::http_adapter::handle_submit_answer(service, lane_id, call_id, body)
+        crate::user_question::http_adapter::handle_submit_answer(service, session_id, call_id, body)
     }
 
     /// 中断某条车道上正在运行的主 turn。
     ///
     /// 取消令牌是既有机制：置位后 provider 传输、重试退避与工具执行的所有取消点
     /// 都会立即收口。没有活跃主 turn 时如实回执 `false`，不假装成功。
-    fn interrupt_lane(&self, lane_id: &str) -> Result<serde_json::Value, String> {
-        let lane_id = lane_id.trim();
-        if lane_id.is_empty() {
+    fn interrupt_session(&self, session_id: &str) -> Result<serde_json::Value, String> {
+        let session_id = session_id.trim();
+        if session_id.is_empty() {
             return Err("车道标识不能为空".to_string());
         }
-        let affinity_key = ActivePrimaryTurnRegistry::affinity_key(lane_id);
+        let affinity_key = ActivePrimaryTurnRegistry::affinity_key(session_id);
         match self.active_primary_turns.interrupt(&affinity_key)? {
             Some(interaction_id) => Ok(serde_json::json!({
-                "laneId": lane_id,
+                "sessionId": session_id,
                 "interrupted": true,
                 "interactionId": interaction_id.as_str(),
             })),
             None => Ok(serde_json::json!({
-                "laneId": lane_id,
+                "sessionId": session_id,
                 "interrupted": false,
                 "interactionId": serde_json::Value::Null,
             })),
@@ -364,12 +368,12 @@ impl WorkbenchHttpAdapter {
     /// 不做「排队等以后」的假受理。
     fn send_subagent_message(
         &self,
-        lane_id: &str,
+        session_id: &str,
         agent: &str,
         body: &[u8],
     ) -> Result<serde_json::Value, String> {
-        let lane_id = lane_id.trim();
-        if lane_id.is_empty() {
+        let session_id = session_id.trim();
+        if session_id.is_empty() {
             return Err("车道标识不能为空".to_string());
         }
         let request: SubagentMessageRequest = serde_json::from_slice(body)
@@ -390,7 +394,7 @@ impl WorkbenchHttpAdapter {
             .strip_prefix("subagent:")
             .unwrap_or(agent.trim())
             .to_owned();
-        let affinity_key = ActivePrimaryTurnRegistry::affinity_key(lane_id);
+        let affinity_key = ActivePrimaryTurnRegistry::affinity_key(session_id);
         match self
             .active_primary_turns
             .try_send_subagent(&affinity_key, &agent, content)
@@ -407,7 +411,7 @@ impl WorkbenchHttpAdapter {
                     return Err("该子代理当前不在运行，无法即时接收消息".to_string());
                 }
                 Ok(serde_json::json!({
-                    "laneId": lane_id,
+                    "sessionId": session_id,
                     "agentId": agent,
                     "delivered": true,
                     "recipientStatus": status,
@@ -427,8 +431,8 @@ impl GatewayHttpRouteHandler for WorkbenchHttpAdapter {
     ) -> Option<GatewayHttpResponse> {
         let subpath = path.strip_prefix(WORKBENCH_PATH_PREFIX)?;
         let subpath = subpath.strip_prefix('/').unwrap_or(subpath);
-        if method == "POST" && subpath == "lanes/identity" {
-            return Some(match derive_lane_identity(body) {
+        if method == "POST" && subpath == "sessions/identity" {
+            return Some(match derive_session_identity(body) {
                 Ok(payload) => GatewayHttpResponse::json(200, &payload),
                 Err(error) => {
                     GatewayHttpResponse::json(400, &serde_json::json!({ "error": error }))
@@ -444,9 +448,9 @@ impl GatewayHttpRouteHandler for WorkbenchHttpAdapter {
             });
         }
         if method == "POST"
-            && let Some(lane_id) = lane_interrupt_target(subpath)
+            && let Some(session_id) = session_interrupt_target(subpath)
         {
-            return Some(match self.interrupt_lane(&lane_id) {
+            return Some(match self.interrupt_session(&session_id) {
                 Ok(payload) => GatewayHttpResponse::json(200, &payload),
                 Err(error) => {
                     GatewayHttpResponse::json(500, &serde_json::json!({ "error": error }))
@@ -454,29 +458,33 @@ impl GatewayHttpRouteHandler for WorkbenchHttpAdapter {
             });
         }
         if method == "POST"
-            && let Some((lane_id, agent)) = lane_subagent_message_target(subpath)
+            && let Some((session_id, agent)) = session_subagent_message_target(subpath)
         {
-            return Some(match self.send_subagent_message(&lane_id, &agent, body) {
-                Ok(payload) => GatewayHttpResponse::json(200, &payload),
-                Err(error) => {
-                    GatewayHttpResponse::json(409, &serde_json::json!({ "error": error }))
-                }
-            });
+            return Some(
+                match self.send_subagent_message(&session_id, &agent, body) {
+                    Ok(payload) => GatewayHttpResponse::json(200, &payload),
+                    Err(error) => {
+                        GatewayHttpResponse::json(409, &serde_json::json!({ "error": error }))
+                    }
+                },
+            );
         }
         if method == "POST"
-            && let Some((lane_id, job_id)) = lane_job_stop_target(subpath)
+            && let Some((session_id, job_id)) = session_job_stop_target(subpath)
         {
-            return Some(match stop_lane_job(&self.axon_root, &lane_id, &job_id) {
-                Ok(payload) => GatewayHttpResponse::json(200, &payload),
-                Err(error) => {
-                    GatewayHttpResponse::json(409, &serde_json::json!({ "error": error }))
-                }
-            });
+            return Some(
+                match stop_session_job(&self.axon_root, &session_id, &job_id) {
+                    Ok(payload) => GatewayHttpResponse::json(200, &payload),
+                    Err(error) => {
+                        GatewayHttpResponse::json(409, &serde_json::json!({ "error": error }))
+                    }
+                },
+            );
         }
         if method == "POST"
-            && let Some((lane_id, call_id)) = lane_question_answer_target(subpath)
+            && let Some((session_id, call_id)) = session_question_answer_target(subpath)
         {
-            return Some(self.handle_question_answer(&lane_id, &call_id, body));
+            return Some(self.handle_question_answer(&session_id, &call_id, body));
         }
         if method != "GET" {
             return None;
@@ -488,18 +496,18 @@ impl GatewayHttpRouteHandler for WorkbenchHttpAdapter {
                     GatewayHttpResponse::json(500, &serde_json::json!({ "error": error }))
                 }
             }),
-            "lanes" => {
+            "sessions" => {
                 let filter = query_param(query, "workspace");
-                Some(match lanes_payload(&self.axon_root, filter.as_deref()) {
+                Some(match sessions_payload(&self.axon_root, filter.as_deref()) {
                     Ok(payload) => GatewayHttpResponse::json(200, &payload),
                     Err(error) => {
                         GatewayHttpResponse::json(500, &serde_json::json!({ "error": error }))
                     }
                 })
             }
-            _ => lane_subagents_target(subpath)
+            _ => session_subagents_target(subpath)
                 .map(
-                    |lane_id| match lane_subagents_payload(&self.axon_root, &lane_id) {
+                    |session_id| match session_subagents_payload(&self.axon_root, &session_id) {
                         Ok(payload) => GatewayHttpResponse::json(200, &payload),
                         Err(error) => {
                             GatewayHttpResponse::json(500, &serde_json::json!({ "error": error }))
@@ -507,8 +515,8 @@ impl GatewayHttpRouteHandler for WorkbenchHttpAdapter {
                     },
                 )
                 .or_else(|| {
-                    lane_jobs_target(subpath).map(|lane_id| {
-                        match lane_jobs_payload(&self.axon_root, &lane_id) {
+                    session_jobs_target(subpath).map(|session_id| {
+                        match session_jobs_payload(&self.axon_root, &session_id) {
                             Ok(payload) => GatewayHttpResponse::json(200, &payload),
                             Err(error) => GatewayHttpResponse::json(
                                 500,
@@ -518,16 +526,16 @@ impl GatewayHttpRouteHandler for WorkbenchHttpAdapter {
                     })
                 })
                 .or_else(|| {
-                    lane_job_output_target(subpath).map(|(lane_id, job_id)| {
+                    session_job_output_target(subpath).map(|(session_id, job_id)| {
                         let offset = query_param(query, "offset")
                             .and_then(|value| value.parse::<u64>().ok())
                             .unwrap_or(0);
                         let max_bytes = query_param(query, "max")
                             .and_then(|value| value.parse::<usize>().ok())
                             .unwrap_or(JOB_OUTPUT_DEFAULT_MAX_BYTES);
-                        match lane_job_output_payload(
+                        match session_job_output_payload(
                             &self.axon_root,
-                            &lane_id,
+                            &session_id,
                             &job_id,
                             offset,
                             max_bytes,
@@ -541,19 +549,19 @@ impl GatewayHttpRouteHandler for WorkbenchHttpAdapter {
                     })
                 })
                 .or_else(|| {
-                    lane_questions_target(subpath).map(|lane_id| {
+                    session_questions_target(subpath).map(|session_id| {
                         crate::user_question::http_adapter::handle_list_questions(
                             &runtime_store(&self.axon_root),
-                            &lane_id,
+                            &session_id,
                             query,
                         )
                     })
                 })
                 .or_else(|| {
-                    lane_interactions_target(subpath, query).map(|(lane_id, limit, before)| {
-                        match lane_interactions_payload(
+                    session_interactions_target(subpath, query).map(
+                        |(session_id, limit, before)| match session_interactions_payload(
                             &self.axon_root,
-                            &lane_id,
+                            &session_id,
                             limit,
                             before.as_ref(),
                         ) {
@@ -562,8 +570,8 @@ impl GatewayHttpRouteHandler for WorkbenchHttpAdapter {
                                 500,
                                 &serde_json::json!({ "error": error }),
                             ),
-                        }
-                    })
+                        },
+                    )
                 })
                 .or_else(|| {
                     interaction_events_target(subpath, query).map(

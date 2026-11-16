@@ -6,12 +6,12 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::model::{LaneDto, normalize};
+use super::model::{SessionDto, normalize};
 use super::mutation::RemovalScope;
 use super::projection::apply_session_facts;
-use crate::lane_source::WorkspaceEntry as RegistryWorkspace;
 use crate::session_menu::SessionMenuEntry;
-use crate::state::{DesktopState, PendingLane, RegisteredWorkspace, directory_label};
+use crate::session_source::WorkspaceEntry as RegistryWorkspace;
+use crate::state::{DesktopState, PendingSession, RegisteredWorkspace, directory_label};
 
 /// 造一条运行态工作区记录。
 fn record(workspace_id: &str, root: &Path) -> RegistryWorkspace {
@@ -44,15 +44,15 @@ fn state_with_two_workspaces() -> (DesktopState, PathBuf, PathBuf) {
         ],
         ..DesktopState::default()
     };
-    desktop.pending_lanes.push(PendingLane {
-        lane_id: "session-lane-target".to_string(),
+    desktop.pending_sessions.push(PendingSession {
+        session_id: "session-session-target".to_string(),
         workspace_id: "workspace-target".to_string(),
         destination: "workbench-1".to_string(),
         created_at: 1,
     });
-    desktop.lane_order.insert(
+    desktop.session_order.insert(
         "workspace-target".to_string(),
-        vec!["session-lane-target".to_string()],
+        vec!["session-session-target".to_string()],
     );
     (desktop, target, sibling)
 }
@@ -90,11 +90,11 @@ fn removal_by_path_matches_the_same_entry_and_still_clears_derived_records() {
     assert!(scope.apply(&mut desktop));
     assert_eq!(desktop.workspaces.len(), 1);
     assert!(
-        desktop.pending_lanes.is_empty(),
+        desktop.pending_sessions.is_empty(),
         "被移除工作区的待激活车道不得留下：重新添加同一目录会冒出一条空会话"
     );
     assert!(
-        !desktop.lane_order.contains_key("workspace-target"),
+        !desktop.session_order.contains_key("workspace-target"),
         "被移除工作区的手动顺序必须一并清掉"
     );
 }
@@ -127,8 +127,8 @@ fn registry_root_with_extended_prefix_matches_the_registered_path() {
 }
 
 /// 造一条车道；参数只给与本次判定相关的字段。
-fn lane(id: &str, title: &str, pinned: bool, archived: bool, updated_at: u64) -> LaneDto {
-    LaneDto {
+fn session_dto(id: &str, title: &str, pinned: bool, archived: bool, updated_at: u64) -> SessionDto {
+    SessionDto {
         id: id.to_string(),
         title: title.to_string(),
         channel: "desktop".to_string(),
@@ -146,7 +146,7 @@ fn lane(id: &str, title: &str, pinned: bool, archived: bool, updated_at: u64) ->
 }
 
 /// 造一条运行态会话条目。
-fn session(
+fn session_fact(
     id: &str,
     title: &str,
     pinned: bool,
@@ -173,15 +173,15 @@ fn session(
 fn runtime_session_facts_win_over_the_local_mirror() {
     // 置顶、归档与最近活动时间都以 `sessions` 表为准：本地镜像只是旧版本后台或缺字段
     // 时的兜底，不能让「桌面自己存了一份状态」盖住三端共用的那一份。
-    let mut lanes = vec![lane("session-lane-a", "旧标题", false, false, 10)];
-    let sessions = vec![session("session-lane-a", "新标题", true, true, 900)];
-    apply_session_facts(&mut lanes, &sessions, &HashMap::new());
+    let mut sessions = vec![session_dto("session-session-a", "旧标题", false, false, 10)];
+    let facts = vec![session_fact("session-session-a", "新标题", true, true, 900)];
+    apply_session_facts(&mut sessions, &facts, &HashMap::new());
 
-    assert!(lanes[0].pinned, "置顶必须取会话表的值");
-    assert!(lanes[0].archived, "归档必须取会话表的值");
-    assert_eq!(lanes[0].title, "新标题", "标题取会话表给出的结论");
+    assert!(sessions[0].pinned, "置顶必须取会话表的值");
+    assert!(sessions[0].archived, "归档必须取会话表的值");
+    assert_eq!(sessions[0].title, "新标题", "标题取会话表给出的结论");
     assert_eq!(
-        lanes[0].updated_at, 900,
+        sessions[0].updated_at, 900,
         "活动时刻对齐后，按它排序就是网关那条「最近活动倒序」"
     );
 }
@@ -190,27 +190,45 @@ fn runtime_session_facts_win_over_the_local_mirror() {
 fn a_local_rename_still_wins_over_the_generated_title() {
     // 会话标题是网关按首条入站消息给出的；用户在本机改过的名字是本地偏好，优先。
     // 投影在进入这一步之前已经把本地名字写进车道标题，因此这里只负责「不覆盖」。
-    let mut lanes = vec![lane("session-lane-a", "我改的名字", false, false, 10)];
-    let sessions = vec![session("session-lane-a", "网关标题", false, false, 900)];
+    let mut sessions = vec![session_dto(
+        "session-session-a",
+        "我改的名字",
+        false,
+        false,
+        10,
+    )];
+    let facts = vec![session_fact(
+        "session-session-a",
+        "网关标题",
+        false,
+        false,
+        900,
+    )];
     let mut renamed = HashMap::new();
-    renamed.insert("session-lane-a".to_string(), "我改的名字".to_string());
+    renamed.insert("session-session-a".to_string(), "我改的名字".to_string());
 
-    apply_session_facts(&mut lanes, &sessions, &renamed);
-    assert_eq!(lanes[0].title, "我改的名字");
+    apply_session_facts(&mut sessions, &facts, &renamed);
+    assert_eq!(sessions[0].title, "我改的名字");
     // 状态仍然以运行态为准：本地重命名只影响标题。
-    assert_eq!(lanes[0].updated_at, 900);
+    assert_eq!(sessions[0].updated_at, 900);
 }
 
 #[test]
-fn a_lane_without_a_runtime_session_keeps_its_local_state() {
+fn a_session_without_a_runtime_session_keeps_its_local_state() {
     // 本端刚新建、还没有首条消息的会话不在清单里：此时没有可对齐的事实，
     // 不能把用户刚点下的置顶抹掉，也不能把时间清成零。
-    let mut lanes = vec![lane("session-lane-new", "新会话", true, false, 5)];
-    let sessions = vec![session("session-lane-other", "别的会话", false, true, 900)];
+    let mut sessions = vec![session_dto("session-session-new", "新会话", true, false, 5)];
+    let facts = vec![session_fact(
+        "session-session-other",
+        "别的会话",
+        false,
+        true,
+        900,
+    )];
 
-    apply_session_facts(&mut lanes, &sessions, &HashMap::new());
-    assert!(lanes[0].pinned, "不在清单里的车道保持本地镜像");
-    assert!(!lanes[0].archived);
-    assert_eq!(lanes[0].updated_at, 5);
-    assert_eq!(lanes[0].title, "新会话");
+    apply_session_facts(&mut sessions, &facts, &HashMap::new());
+    assert!(sessions[0].pinned, "不在清单里的车道保持本地镜像");
+    assert!(!sessions[0].archived);
+    assert_eq!(sessions[0].updated_at, 5);
+    assert_eq!(sessions[0].title, "新会话");
 }

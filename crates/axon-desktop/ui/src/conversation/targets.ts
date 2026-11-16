@@ -9,10 +9,10 @@
 import type { JobRow, AttachmentRef, ConversationState } from './transcript';
 
 /** 当前选中的车道（一份完整的会话目标，含 UI 用的展示字段）。 */
-export interface LaneSelection {
+export interface SessionSelection {
   workspaceId: string;
   workspacePath: string;
-  laneId: string;
+  sessionId: string;
   destination: string;
   title: string;
   channel: string;
@@ -36,14 +36,14 @@ export type ConversationTarget =
   | { kind: 'session'; workspaceId: string; sessionId: string };
 
 /** 从车道选择得到订阅目标。 */
-export function targetOfLane(selection: LaneSelection): ConversationTarget {
+export function targetOfSession(selection: SessionSelection): ConversationTarget {
   if (selection.sessionId !== undefined && selection.sessionId.length > 0) {
     return { kind: 'session', workspaceId: selection.workspaceId, sessionId: selection.sessionId };
   }
   return {
     kind: 'interaction',
     workspaceId: selection.workspaceId,
-    interactionId: selection.laneId,
+    interactionId: selection.sessionId,
     destination: selection.destination,
   };
 }
@@ -57,9 +57,9 @@ export interface NormalizedTarget {
 /**
  * 目标对应的订阅标识；必须与 Rust 侧 `SubscribeTarget::subscribe_id` 逐字符一致。
  *
- * 车道目标用**交互标识**（`interactionId`）：网关车道 API 的 `laneId` 与 Interaction 的
+ * 车道目标用**交互标识**（`interactionId`）：网关车道 API 的 `sessionId` 与 Interaction 的
  * `interactionId` 是两个不同的串，订阅与事件回显用的都是后者。曾经这里误用
- * `LaneSelection.laneId`，结果是帧全部到达、又被过滤器按「标识不匹配」整批丢掉，
+ * `SessionSelection.sessionId`，结果是帧全部到达、又被过滤器按「标识不匹配」整批丢掉，
  * 界面永远停在「生成回复中」。
  */
 export function subscriptionIdOf(target: ConversationTarget): string {
@@ -82,9 +82,9 @@ export function normalizeTarget(target: ConversationTarget): NormalizedTarget {
  * 历史索引装载、提交、重试与中断都是车道专属能力；会话目标下这些能力一律
  * 「不可用」，并且只在提交入口处判断一次，不散落到主流程里。
  */
-export interface LaneCapability {
+export interface SessionCapability {
   available: boolean;
-  laneId: string | null;
+  sessionId: string | null;
   workspaceId: string | null;
   destination: string | null;
 }
@@ -116,16 +116,16 @@ export interface ConversationController {
    */
   sessionCumulative: import('./sessionUsage').SessionCumulative | null;
   /** 历史索引已经装载完成的车道标识；为空表示尚未就绪或目标不是车道。 */
-  laneReadyId: string | null;
+  sessionReadyId: string | null;
   /** 车道当前模型的权威事实；网关只读该车道最新一轮记录，解析不到时为空。 */
-  laneModel: import('./viewConfig').LaneEffectiveModel | null;
+  sessionModel: import('./viewConfig').SessionEffectiveModel | null;
   /**
    * 最近一次记忆反思的提示文本；该会话还没有记忆动作时为空。
    *
-   * 与 `laneModel` 同一时机取回：都是「这条车道现在能对外展示的最新事实」，
+   * 与 `sessionModel` 同一时机取回：都是「这条车道现在能对外展示的最新事实」，
    * 不随翻页回到更早的轮次。反思是轮后异步治理的产物，按「上一次记忆动作」呈现。
    */
-  laneReflectionNotice: string | null;
+  sessionReflectionNotice: string | null;
   /**
    * 目标已切换、正文尚未交出。
    *
@@ -141,7 +141,7 @@ export interface ConversationController {
    */
   loadingHistory: boolean;
   /** 本次目标是否具备车道能力（提交、重试、中断）。 */
-  laneAvailable: boolean;
+  sessionAvailable: boolean;
   /** 尚未被服务端确认的待发送消息条数。 */
   queued: number;
   submitting: boolean;

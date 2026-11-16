@@ -109,7 +109,7 @@ fn one_connection_serves_two_subscriptions_with_independent_cursors() {
             read_until_two_subscribed(&mut socket, "interaction:interaction-1", "session:sub-1")
                 .await;
         // 两路事件交错到达：必须按标识分流，而不是按到达顺序切分。
-        let (lane_cursors, session_cursors) = collect_two_stream_cursors(
+        let (interaction_cursors, session_cursors) = collect_two_stream_cursors(
             &mut socket,
             "interaction:interaction-1",
             "session:sub-1",
@@ -120,7 +120,7 @@ fn one_connection_serves_two_subscriptions_with_independent_cursors() {
         (
             taps.first_confirmed,
             taps.second_confirmed,
-            lane_cursors,
+            interaction_cursors,
             session_cursors,
         )
     });
@@ -129,12 +129,12 @@ fn one_connection_serves_two_subscriptions_with_independent_cursors() {
     drop(client);
     let _ = server.join();
 
-    let (first, second, lane_cursors, session_cursors) = observed;
+    let (first, second, interaction_cursors, session_cursors) = observed;
     assert!(first && second, "一条连接上的两路订阅都必须收到确认帧");
     assert_eq!(
-        lane_cursors,
+        interaction_cursors,
         vec!["{\"sequence\":0}".to_owned(), "{\"sequence\":1}".to_owned()],
-        "车道那一路的游标必须自己单调推进"
+        "交互那一路的游标必须自己单调推进"
     );
     assert_eq!(
         session_cursors,

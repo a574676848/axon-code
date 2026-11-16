@@ -1,18 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CronJob, DesktopPreferences, NavTab, SettingsSection, WorkspaceItem } from './types';
 import * as ipc from './ipc';
-import { listenLaneActivity, listenOpenLane } from './laneEvents';
+import { listenSessionActivity, listenOpenSession } from './sessionEvents';
 import { useWindowTitle } from './useWindowTitle';
 import { Sidebar } from './components/Sidebar';
 import { BasicSettingsPanel } from './components/BasicSettingsPanel';
 import { GatewayUnconnected, GatewayUnavailableStage } from './components/GatewayUnconnected';
 import { ConversationView } from './components/conversation/ConversationView';
 import { ErrorBoundary } from './components/conversation/ErrorBoundary';
-import type { LaneSelection } from './conversation/useConversation';
+import type { SessionSelection } from './conversation/useConversation';
 import { useConversationMcp } from './conversation/useConversationMcp';
 import { useSkillCatalog } from './conversation/skillCatalog';
-import { clearedAtSettle, markForNotice } from './conversation/laneMarks';
-import { sameRuntimeFacts, type LaneRuntimeFacts } from './conversation/runtimeFacts';
+import { clearedAtSettle, markForNotice } from './conversation/sessionMarks';
+import { sameRuntimeFacts, type SessionRuntimeFacts } from './conversation/runtimeFacts';
 import { LoadingState, Text } from './components/ui/surfaces';
 import { Dialog } from './components/ui/modal';
 import { WindowChrome } from './components/ui/WindowChrome';
@@ -55,7 +55,7 @@ import { notifyDesktopReady, useWindowDynamicSurfaces } from './windowSurfaces';
  * 会话可能由其它渠道产生（例如 TUI 新开一条），侧栏必须能自己发现；
  * 刷新全程不显示加载态、失败也不打扰用户，由下一次连接探活统一报连接问题。
  */
-const LANE_REFRESH_MS = 15000;
+const SESSION_REFRESH_MS = 15000;
 /** 侧栏折叠组合键。 */
 const SIDEBAR_TOGGLE_KEY = 'b';
 /** 设置弹窗组合键。 */
@@ -107,11 +107,11 @@ export const App: React.FC = () => {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general');
   // 启动一律落在首屏：会话目标是本次使用的临时上下文，
   // 自动恢复上次的会话会把「打开应用」变成「接着上次干活」，与首屏语义冲突。
-  const [selection, setSelection] = useState<LaneSelection | null>(null);
+  const [selection, setSelection] = useState<SessionSelection | null>(null);
   const [configRevision, setConfigRevision] = useState(0);
   const [workspaces, setWorkspaces] = useState<WorkspaceItem[]>([]);
   /** 当前会话的运行时事实；归档前需要知道它是不是还在跑。 */
-  const [laneRuntime, setLaneRuntime] = useState<LaneRuntimeFacts | null>(null);
+  const [sessionRuntime, setSessionRuntime] = useState<SessionRuntimeFacts | null>(null);
   /**
    * 有新结果的会话：车道标识到终态。
    *
@@ -119,24 +119,24 @@ export const App: React.FC = () => {
    * 只存最近一次终态，不落盘：它是「这次打开应用期间发生了什么」的提示，
    * 跨启动保留会让旧标识永远挂在那里。
    */
-  const [laneMarks, setLaneMarks] = useState<Record<string, string>>({});
+  const [sessionMarks, setSessionMarks] = useState<Record<string, string>>({});
   /** 命令面板是否打开。 */
   const [paletteOpen, setPaletteOpen] = useState(false);
   /** 订阅回调里要读当前选中会话，用 ref 避免每次选择变化都重订阅。 */
-  const selectionRef = useRef<LaneSelection | null>(null);
+  const selectionRef = useRef<SessionSelection | null>(null);
   selectionRef.current = selection;
   /** 订阅回调里要读最新车道清单，理由同上。 */
   const workspacesRef = useRef<WorkspaceItem[]>([]);
   workspacesRef.current = workspaces;
 
   /** 选中会话即视为已查看：清掉它的状态标识。 */
-  const selectLane = useCallback((next: LaneSelection | null) => {
+  const selectSession = useCallback((next: SessionSelection | null) => {
     setSelection(next);
     if (next === null) return;
-    setLaneMarks((current) => {
-      if (current[next.laneId] === undefined) return current;
+    setSessionMarks((current) => {
+      if (current[next.sessionId] === undefined) return current;
       const next_marks = { ...current };
-      delete next_marks[next.laneId];
+      delete next_marks[next.sessionId];
       return next_marks;
     });
   }, []);
@@ -239,18 +239,18 @@ export const App: React.FC = () => {
   useEffect(() => {
     let dispose: (() => void) | null = null;
     let cancelled = false;
-    void listenOpenLane((laneId) => {
+    void listenOpenSession((sessionId) => {
       for (const workspace of workspacesRef.current) {
-        const lane = workspace.lanes.find((item) => item.id === laneId);
-        if (lane === undefined) continue;
-        selectLane({
+        const session = workspace.sessions.find((item) => item.id === sessionId);
+        if (session === undefined) continue;
+        selectSession({
           workspaceId: workspace.id,
           workspacePath: workspace.path,
-          laneId: lane.id,
-          destination: lane.destination,
-          title: lane.title,
-          channel: lane.channel,
-          pending: lane.pending,
+          sessionId: session.id,
+          destination: session.destination,
+          title: session.title,
+          channel: session.channel,
+          pending: session.pending,
         });
         return;
       }
@@ -264,20 +264,20 @@ export const App: React.FC = () => {
       cancelled = true;
       dispose?.();
     };
-  }, [selectLane]);
+  }, [selectSession]);
 
   // 轮次结束的推送：标记「有新结果」的会话。
   useEffect(() => {
     let dispose: (() => void) | null = null;
     let cancelled = false;
-    void listenLaneActivity((activity) => {
+    void listenSessionActivity((activity) => {
       /*
-       * 待答与新结果是两回事，不能共用「看过即清」：判定见 conversation/laneMarks，
+       * 待答与新结果是两回事，不能共用「看过即清」：判定见 conversation/sessionMarks，
        * 那里同时是它唯一的测试入口。
        */
-      const mark = markForNotice(activity, selectionRef.current?.laneId ?? null);
+      const mark = markForNotice(activity, selectionRef.current?.sessionId ?? null);
       if (mark === null) return;
-      setLaneMarks((marks) => ({ ...marks, [mark.laneId]: mark.status }));
+      setSessionMarks((marks) => ({ ...marks, [mark.sessionId]: mark.status }));
     })
       .then((unlisten) => {
         if (cancelled) unlisten();
@@ -321,11 +321,11 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     void refreshWorkspaces();
-  }, [refreshWorkspaces, selection?.laneId, health?.available]);
+  }, [refreshWorkspaces, selection?.sessionId, health?.available]);
 
   // 静默轮询：只更新数据，不动界面状态，因此不会打断正在输入或翻历史的用户。
   useEffect(() => {
-    const timer = window.setInterval(() => void refreshWorkspaces(), LANE_REFRESH_MS);
+    const timer = window.setInterval(() => void refreshWorkspaces(), SESSION_REFRESH_MS);
     return () => window.clearInterval(timer);
   }, [refreshWorkspaces]);
 
@@ -341,7 +341,7 @@ export const App: React.FC = () => {
         path: selection.workspacePath,
         active: false,
         removable: false,
-        lanes: [],
+        sessions: [],
       } satisfies WorkspaceItem;
       return null;
     }
@@ -358,17 +358,17 @@ export const App: React.FC = () => {
   const mcp = useConversationMcp(activeWorkspace?.path ?? null);
   const skillCount = useSkillCatalog()?.length ?? null;
 
-  const selectedLane = selection === null ? null :
-    activeWorkspace?.lanes.find((lane) => lane.id === selection.laneId);
+  const selectedSession = selection === null ? null :
+    activeWorkspace?.sessions.find((session) => session.id === selection.sessionId);
   const hasPendingQuestion = Boolean(
-    (selectedLane?.pending_question_count ?? 0) > 0 ||
-    (selection && laneMarks[selection.laneId]?.startsWith('question_')),
+    (selectedSession?.pending_question_count ?? 0) > 0 ||
+    (selection && sessionMarks[selection.sessionId]?.startsWith('question_')),
   );
   const selectedRunning = Boolean(
-    selectedLane?.running ||
-    (selection !== null && laneRuntime?.laneId === selection.laneId && laneRuntime.turnRunning),
+    selectedSession?.running ||
+    (selection !== null && sessionRuntime?.sessionId === selection.sessionId && sessionRuntime.turnRunning),
   );
-  const baseTitle = selectedLane?.title || selection?.title;
+  const baseTitle = selectedSession?.title || selection?.title;
   // 待答与运行状态用文字前缀表达：窗口标题栏里不放彩色表情符号，与侧栏的状态语言同源。
   const windowTitle = selection === null
     ? undefined
@@ -430,18 +430,18 @@ export const App: React.FC = () => {
    * 只随提问结算消失；结算事实来自会话视图，因此前台一问完标识就落。
    */
   useEffect(() => {
-    const laneId = clearedAtSettle(
-      laneMarks,
-      laneRuntime?.laneId ?? null,
-      laneRuntime?.hasPendingQuestion ?? true,
+    const sessionId = clearedAtSettle(
+      sessionMarks,
+      sessionRuntime?.sessionId ?? null,
+      sessionRuntime?.hasPendingQuestion ?? true,
     );
-    if (laneId === null) return;
-    setLaneMarks((marks) => {
+    if (sessionId === null) return;
+    setSessionMarks((marks) => {
       const next = { ...marks };
-      delete next[laneId];
+      delete next[sessionId];
       return next;
     });
-  }, [laneMarks, laneRuntime]);
+  }, [sessionMarks, sessionRuntime]);
 
   /*
    * 登记当前会话：系统通知的标题与点击跳转都按它归属，会话一换就必须跟着写。
@@ -449,10 +449,10 @@ export const App: React.FC = () => {
    * 选中项自带的名字；没有选中会话时显式清空，免得通知挂到上一条会话上。
    */
   useEffect(() => {
-    const laneId = selection?.laneId ?? '';
-    const title = selectedLane?.title ?? selection?.title ?? '';
-    void ipc.conversationSetActiveLane(laneId, title).catch(() => undefined);
-  }, [selection, selectedLane?.title]);
+    const sessionId = selection?.sessionId ?? '';
+    const title = selectedSession?.title ?? selection?.title ?? '';
+    void ipc.conversationSetActiveSession(sessionId, title).catch(() => undefined);
+  }, [selection, selectedSession?.title]);
 
   /** 打开设置并定位到指定分区。 */
   const openSettingsAt = useCallback((target: SettingsSection) => {
@@ -471,9 +471,9 @@ export const App: React.FC = () => {
         switchProfile: (profileId) => {
           void switchProfile(profileId);
         },
-        selectLane,
+        selectSession,
       }),
-    [connection.snapshot, openSettingsAt, selectLane, workspaces],
+    [connection.snapshot, openSettingsAt, selectSession, workspaces],
   );
 
 
@@ -484,8 +484,8 @@ export const App: React.FC = () => {
    * App 每轮重渲染，而重渲染又让上报方的回调换引用、再次上报，形成自激循环。
    * 这里按值比较后返回原引用，React 会直接跳过这次更新，循环因此断开。
    */
-  const applyRuntimeFacts = useCallback((facts: LaneRuntimeFacts) => {
-    setLaneRuntime((previous) => (sameRuntimeFacts(previous, facts) ? previous : facts));
+  const applyRuntimeFacts = useCallback((facts: SessionRuntimeFacts) => {
+    setSessionRuntime((previous) => (sameRuntimeFacts(previous, facts) ? previous : facts));
   }, []);
 
   useEffect(() => {
@@ -526,10 +526,10 @@ export const App: React.FC = () => {
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenConnection={() => openSettingsAt('connection')}
         health={health}
-        onSelectLane={selectLane}
-        selectedLaneId={selection?.laneId ?? null}
-        laneMarks={laneMarks}
-        runtime={laneRuntime}
+        onSelectSession={selectSession}
+        selectedSessionId={selection?.sessionId ?? null}
+        sessionMarks={sessionMarks}
+        runtime={sessionRuntime}
         mcpReading={mcp.reading}
         skillCount={skillCount}
       />
@@ -575,10 +575,10 @@ export const App: React.FC = () => {
         ) : currentTab === 'automation' ? (
           <AutomationPage onOpenSession={(job: CronJob) => {
             if (!job.workspaceId || !job.sessionId) return;
-            selectLane({
+            selectSession({
               workspaceId: job.workspaceId,
               workspacePath: job.workspacePath ?? '',
-              laneId: job.sessionId,
+              sessionId: job.sessionId,
               destination: job.destination ?? '',
               title: job.name,
               channel: 'cron',
@@ -593,7 +593,7 @@ export const App: React.FC = () => {
           <GoalsPage
             /* 目标执行会话交给主舞台：与自动化页共用同一套 session 目标口径。 */
             onOpenSession={(target) => {
-              selectLane(goalSessionSelection(target));
+              selectSession(goalSessionSelection(target));
               setCurrentTab('chat');
             }}
           />
@@ -603,7 +603,7 @@ export const App: React.FC = () => {
               selection={selection}
               workspace={activeWorkspace}
               configRevision={configRevision}
-              onSelectLane={selectLane}
+              onSelectSession={selectSession}
               onRuntimeFacts={applyRuntimeFacts}
               originBar={originBarFor(selection, setCurrentTab)}
               mcp={mcp}

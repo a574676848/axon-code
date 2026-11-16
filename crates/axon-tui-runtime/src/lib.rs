@@ -116,7 +116,7 @@ pub use surface::event_envelope::{
 pub use surface::first_token_telemetry::{
     FirstTokenLatencyPercentiles, FirstTokenSample, FirstTokenTelemetrySnapshot,
 };
-pub use surface::mailbox_telemetry::{MailboxLaneTelemetrySnapshot, MailboxTelemetrySnapshot};
+pub use surface::mailbox_telemetry::{MailboxSessionTelemetrySnapshot, MailboxTelemetrySnapshot};
 pub use surface::runtime_adapter::{
     RuntimeAdapterCapabilities, RuntimeAdapterContract, RuntimeAdapterSchemaVersion, RuntimeError,
     RuntimeErrorType, RuntimeEventEmitter, RuntimeEventSender,

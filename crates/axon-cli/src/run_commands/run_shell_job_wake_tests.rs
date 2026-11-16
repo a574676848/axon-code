@@ -23,7 +23,7 @@ use super::{ShellJobWakeBridge, WakeRouteInfo};
 use crate::run_commands::run_steer::{
     ActivePrimaryTurnRegistry, RunSteerBridge, register_deferred_message_session,
 };
-use crate::user_question::lane_steerer::PrimaryTurnWakeHook;
+use crate::user_question::turn_steerer::PrimaryTurnWakeHook;
 
 const TEST_LEASE_MS: u64 = 120_000;
 const TICK_BATCH: u32 = 32;
@@ -63,7 +63,7 @@ struct TestFixture {
     store: SqliteRuntimeStore,
     wakes: Arc<AtomicUsize>,
     bridge: ShellJobWakeBridge,
-    lane_id: String,
+    session_id: String,
 }
 
 impl TestFixture {
@@ -89,7 +89,7 @@ impl TestFixture {
             1,
         )
         .expect("Interaction");
-        let lane_id = axon_session::interaction_session_lane_id(&seed).expect("车道 ID");
+        let session_id = axon_session::interaction_session_id(&seed).expect("车道 ID");
         store.append(&seed).expect("种子入库");
         let service = PrimaryTurnService::new(
             store.clone(),
@@ -110,7 +110,7 @@ impl TestFixture {
             store,
             wakes,
             bridge,
-            lane_id,
+            session_id,
         }
     }
 
@@ -125,9 +125,9 @@ impl TestFixture {
             .expect("主 turn 领取")
     }
 
-    fn lane_interactions(&self) -> Vec<InteractionRecord> {
+    fn session_interactions(&self) -> Vec<InteractionRecord> {
         self.store
-            .interactions_for_lane(&self.lane_id, 20, None)
+            .interactions_for_session(&self.session_id, 20, None)
             .expect("读取车道 Interaction")
     }
 }
@@ -159,7 +159,7 @@ fn active_turn_receives_completion_notice_in_band_without_opening_wake_turn() {
     fixture.bridge.register_turn(
         &owner,
         WakeRouteInfo {
-            lane_id: fixture.lane_id.clone(),
+            session_id: fixture.session_id.clone(),
             model: Some("gpt-6-astra".to_owned()),
             reasoning_effort: Some("high".to_owned()),
             turn_cancel_token: cancel_token,
@@ -195,7 +195,7 @@ fn ended_turn_wakes_new_turn_preserving_model_and_effort_for_shell_job() {
     fixture.bridge.register_turn(
         &owner,
         WakeRouteInfo {
-            lane_id: fixture.lane_id.clone(),
+            session_id: fixture.session_id.clone(),
             model: Some("gpt-6-astra".to_owned()),
             reasoning_effort: Some("high".to_owned()),
             turn_cancel_token: cancel_token,
@@ -205,7 +205,7 @@ fn ended_turn_wakes_new_turn_preserving_model_and_effort_for_shell_job() {
     fixture.bridge.register_turn(
         &owner,
         WakeRouteInfo {
-            lane_id: fixture.lane_id.clone(),
+            session_id: fixture.session_id.clone(),
             model: Some("gpt-6-astra".to_owned()),
             reasoning_effort: Some("high".to_owned()),
             turn_cancel_token: RunCancelToken::default(),
@@ -271,7 +271,7 @@ fn cancelled_turn_does_not_wake_but_subagent_and_shell_terminals_do() {
     fixture.bridge.register_turn(
         &owner,
         WakeRouteInfo {
-            lane_id: fixture.lane_id.clone(),
+            session_id: fixture.session_id.clone(),
             model: None,
             reasoning_effort: None,
             turn_cancel_token: cancel_token,
@@ -306,7 +306,7 @@ fn cancelled_turn_does_not_wake_but_subagent_and_shell_terminals_do() {
     fixture.bridge.register_turn(
         &owner,
         WakeRouteInfo {
-            lane_id: fixture.lane_id.clone(),
+            session_id: fixture.session_id.clone(),
             model: None,
             reasoning_effort: None,
             turn_cancel_token: RunCancelToken::default(),
@@ -329,7 +329,7 @@ fn multi_notice_batch_respects_interaction_id_length_and_ignores_system_channel(
     fixture.bridge.register_turn(
         &owner,
         WakeRouteInfo {
-            lane_id: fixture.lane_id.clone(),
+            session_id: fixture.session_id.clone(),
             model: None,
             reasoning_effort: None,
             turn_cancel_token: RunCancelToken::default(),
@@ -347,7 +347,7 @@ fn multi_notice_batch_respects_interaction_id_length_and_ignores_system_channel(
         .collect::<Vec<_>>();
     publish_completion_notices(batch);
     assert_eq!(fixture.wake_count(), 1);
-    assert_eq!(fixture.lane_interactions().len(), 2);
+    assert_eq!(fixture.session_interactions().len(), 2);
 
     // system 渠道不得触发唤醒。
     let system_fixture = TestFixture::new(SYSTEM_SOURCE_CHANNEL, "internal", "ws-sys");
@@ -355,7 +355,7 @@ fn multi_notice_batch_respects_interaction_id_length_and_ignores_system_channel(
     system_fixture.bridge.register_turn(
         &sys_owner,
         WakeRouteInfo {
-            lane_id: system_fixture.lane_id.clone(),
+            session_id: system_fixture.session_id.clone(),
             model: None,
             reasoning_effort: None,
             turn_cancel_token: RunCancelToken::default(),
@@ -377,7 +377,7 @@ fn releasing_an_idle_turn_drops_the_route_and_its_subscription() {
     fixture.bridge.register_turn(
         &owner,
         WakeRouteInfo {
-            lane_id: fixture.lane_id.clone(),
+            session_id: fixture.session_id.clone(),
             model: None,
             reasoning_effort: None,
             turn_cancel_token: RunCancelToken::default(),
@@ -395,7 +395,7 @@ fn releasing_an_idle_turn_drops_the_route_and_its_subscription() {
     ));
     assert_eq!(fixture.wake_count(), 0, "已注销的 owner 不得再唤醒新回合");
     let wake_interactions = fixture
-        .lane_interactions()
+        .session_interactions()
         .into_iter()
         .filter(|interaction| {
             interaction
@@ -414,7 +414,7 @@ fn releasing_an_idle_turn_drops_the_route_and_its_subscription() {
     fixture.bridge.register_turn(
         &live_owner,
         WakeRouteInfo {
-            lane_id: fixture.lane_id.clone(),
+            session_id: fixture.session_id.clone(),
             model: None,
             reasoning_effort: None,
             turn_cancel_token: RunCancelToken::default(),

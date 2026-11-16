@@ -519,22 +519,25 @@ mod tests {
 
     #[test]
     fn subscribe_ids_are_derived_from_the_target_and_stay_distinct() {
-        let lane = SubscribeTarget::Interaction {
+        let interaction_target = SubscribeTarget::Interaction {
             workspace_id: "workspace-a".to_owned(),
             interaction_id: "interaction-1".to_owned(),
             resume_cursor: None,
         };
-        let session = SubscribeTarget::Session {
+        let session_target = SubscribeTarget::Session {
             workspace_id: "workspace-a".to_owned(),
             session_id: "parent--subagent--root".to_owned(),
             resume_cursor: None,
         };
-        assert_eq!(lane.subscribe_id(), "interaction:interaction-1");
-        assert_eq!(session.subscribe_id(), "session:parent--subagent--root");
+        assert_eq!(interaction_target.subscribe_id(), "interaction:interaction-1");
+        assert_eq!(
+            session_target.subscribe_id(),
+            "session:parent--subagent--root"
+        );
         assert_ne!(
-            lane.subscribe_id(),
-            session.subscribe_id(),
-            "车道流与会话流必须落在不同的订阅标识上，否则一条连接上会互相顶掉"
+            interaction_target.subscribe_id(),
+            session_target.subscribe_id(),
+            "交互流与会话流必须落在不同的订阅标识上，否则一条连接上会互相顶掉"
         );
     }
 
@@ -648,14 +651,14 @@ mod tests {
         // 普通测试线程没有环境运行时：`watch` 必须把任务落到订阅器自有的运行时上，
         // 否则一订阅就 panic（早先版本就是这样崩的）。任务收尾会自摘，故只断言上界。
         let stream = ConversationStream::new();
-        let lane = SubscribeTarget::Interaction {
+        let session = SubscribeTarget::Interaction {
             workspace_id: "workspace-a".to_owned(),
             interaction_id: "interaction-1".to_owned(),
             resume_cursor: None,
         };
-        stream.watch(lane.clone());
+        stream.watch(session.clone());
         assert!(stream.active_subscriptions() <= 1, "一次订阅最多登记一格");
-        stream.unwatch(&lane);
+        stream.unwatch(&session);
         assert_eq!(stream.active_subscriptions(), 0, "取消后必须清空");
     }
 

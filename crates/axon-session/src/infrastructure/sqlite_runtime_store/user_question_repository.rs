@@ -6,7 +6,7 @@ use axon_domain::{UserQuestionRecord, UserQuestionState};
 use rusqlite::{OptionalExtension, Row, params};
 
 const USER_QUESTION_COLUMNS: &str = "\
-    question_id, idempotency_key, lane_id, session_id, interaction_id, turn_id, tool_call_id, \
+    question_id, idempotency_key, session_id, interaction_id, turn_id, tool_call_id, \
     questions_json, handoff_text, state, deadline_at_ms, answer_json, answered_at_ms, \
     answered_channel, delivered, delivery_mode, created_at_ms, expires_at_ms";
 
@@ -21,16 +21,15 @@ impl UserQuestionStore for SqliteRuntimeStore {
         let changed = connection
             .execute(
                 "INSERT INTO user_questions(\
-                    question_id, idempotency_key, lane_id, session_id, interaction_id, turn_id, \
+                    question_id, idempotency_key, session_id, interaction_id, turn_id, \
                     tool_call_id, questions_json, handoff_text, state, deadline_at_ms, \
                     answer_json, answered_at_ms, answered_channel, delivered, delivery_mode, \
                     created_at_ms, expires_at_ms\
-                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18) \
+                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17) \
                  ON CONFLICT(idempotency_key) DO NOTHING",
                 params![
                     record.question_id,
                     record.idempotency_key,
-                    record.lane_id,
                     record.session_id,
                     record.interaction_id,
                     record.turn_id,
@@ -93,9 +92,9 @@ impl UserQuestionStore for SqliteRuntimeStore {
             .map_err(storage_error)
     }
 
-    fn list_questions_by_lane(
+    fn list_questions_by_session(
         &self,
-        lane_id: &str,
+        session_id: &str,
         state: Option<UserQuestionState>,
         limit: usize,
     ) -> Result<Vec<UserQuestionRecord>, UserQuestionStoreError> {
@@ -108,12 +107,15 @@ impl UserQuestionStore for SqliteRuntimeStore {
         if let Some(st) = state {
             let sql = format!(
                 "SELECT {USER_QUESTION_COLUMNS} FROM user_questions \
-                 WHERE lane_id = ?1 AND state = ?2 \
+                 WHERE session_id = ?1 AND state = ?2 \
                  ORDER BY created_at_ms DESC LIMIT ?3"
             );
             let mut stmt = connection.prepare(&sql).map_err(storage_error)?;
             let rows = stmt
-                .query_map(params![lane_id, st.as_str(), limit_i64], read_user_question)
+                .query_map(
+                    params![session_id, st.as_str(), limit_i64],
+                    read_user_question,
+                )
                 .map_err(storage_error)?;
             for row in rows {
                 results.push(row.map_err(storage_error)?);
@@ -121,12 +123,12 @@ impl UserQuestionStore for SqliteRuntimeStore {
         } else {
             let sql = format!(
                 "SELECT {USER_QUESTION_COLUMNS} FROM user_questions \
-                 WHERE lane_id = ?1 \
+                 WHERE session_id = ?1 \
                  ORDER BY created_at_ms DESC LIMIT ?2"
             );
             let mut stmt = connection.prepare(&sql).map_err(storage_error)?;
             let rows = stmt
-                .query_map(params![lane_id, limit_i64], read_user_question)
+                .query_map(params![session_id, limit_i64], read_user_question)
                 .map_err(storage_error)?;
             for row in rows {
                 results.push(row.map_err(storage_error)?);
@@ -290,10 +292,10 @@ impl UserQuestionStore for SqliteRuntimeStore {
 }
 
 fn read_user_question(row: &Row<'_>) -> rusqlite::Result<UserQuestionRecord> {
-    let state_str: String = row.get(9)?;
+    let state_str: String = row.get(8)?;
     let state = UserQuestionState::parse_state(&state_str).ok_or_else(|| {
         rusqlite::Error::FromSqlConversionFailure(
-            9,
+            8,
             rusqlite::types::Type::Text,
             Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -302,27 +304,26 @@ fn read_user_question(row: &Row<'_>) -> rusqlite::Result<UserQuestionRecord> {
         )
     })?;
 
-    let delivered_int: i64 = row.get(14)?;
+    let delivered_int: i64 = row.get(13)?;
 
     Ok(UserQuestionRecord {
         question_id: row.get(0)?,
         idempotency_key: row.get(1)?,
-        lane_id: row.get(2)?,
-        session_id: row.get(3)?,
-        interaction_id: row.get(4)?,
-        turn_id: row.get(5)?,
-        tool_call_id: row.get(6)?,
-        questions_json: row.get(7)?,
-        handoff_text: row.get(8)?,
+        session_id: row.get(2)?,
+        interaction_id: row.get(3)?,
+        turn_id: row.get(4)?,
+        tool_call_id: row.get(5)?,
+        questions_json: row.get(6)?,
+        handoff_text: row.get(7)?,
         state,
-        deadline_at_ms: row.get(10)?,
-        answer_json: row.get(11)?,
-        answered_at_ms: row.get(12)?,
-        answered_channel: row.get(13)?,
+        deadline_at_ms: row.get(9)?,
+        answer_json: row.get(10)?,
+        answered_at_ms: row.get(11)?,
+        answered_channel: row.get(12)?,
         delivered: delivered_int != 0,
-        delivery_mode: row.get(15)?,
-        created_at_ms: row.get(16)?,
-        expires_at_ms: row.get(17)?,
+        delivery_mode: row.get(14)?,
+        created_at_ms: row.get(15)?,
+        expires_at_ms: row.get(16)?,
     })
 }
 

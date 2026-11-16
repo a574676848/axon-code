@@ -9,7 +9,7 @@ import * as ipc from './ipc';
 import { SETTINGS_SECTION_LABELS } from './components/BasicSettingsPanel';
 import type { CommandPaletteItem } from './components/ui/CommandPalette';
 import type { NavTab, SettingsSection, WorkspaceItem } from './types';
-import type { LaneSelection } from './conversation/useConversation';
+import type { SessionSelection } from './conversation/useConversation';
 import { applyTheme, currentTheme, THEME_CHOICES } from './theme';
 
 /** 一条可切换的连接档案；只用到标识与显示名。 */
@@ -25,12 +25,12 @@ export interface PaletteSources {
   navigate: (tab: NavTab) => void;
   openSettingsAt: (section: SettingsSection) => void;
   switchProfile: (profileId: string) => void;
-  selectLane: (selection: LaneSelection) => void;
+  selectSession: (selection: SessionSelection) => void;
 }
 
 /** 组装命令面板候选：跳转、连接、设置、主题与会话。 */
 export function buildPaletteItems(sources: PaletteSources): CommandPaletteItem[] {
-  const { workspaces, profiles, navigate, openSettingsAt, switchProfile, selectLane } = sources;
+  const { workspaces, profiles, navigate, openSettingsAt, switchProfile, selectSession } = sources;
 
   const navigation: CommandPaletteItem[] = [
     { id: 'nav-chat', label: '前往对话', group: '跳转', run: () => navigate('chat') },
@@ -87,25 +87,25 @@ export function buildPaletteItems(sources: PaletteSources): CommandPaletteItem[]
     },
   }));
 
-  const lanes: CommandPaletteItem[] = workspaces.flatMap((workspace) =>
-    workspace.lanes.map((lane) => ({
-      id: `lane-${lane.id}`,
-      label: `${lane.title || '未命名会话'}`,
+  const sessions: CommandPaletteItem[] = workspaces.flatMap((workspace) =>
+    workspace.sessions.map((session) => ({
+      id: `session-${session.id}`,
+      label: `${session.title || '未命名会话'}`,
       group: workspace.name || '会话',
       run: () => {
-        selectLane({
+        selectSession({
           workspaceId: workspace.id,
           workspacePath: workspace.path,
-          laneId: lane.id,
-          destination: lane.destination,
-          title: lane.title,
-          channel: lane.channel,
-          pending: lane.pending,
+          sessionId: session.id,
+          destination: session.destination,
+          title: session.title,
+          channel: session.channel,
+          pending: session.pending,
         });
         navigate('chat');
       },
     })),
   );
 
-  return [...navigation, ...connections, ...settings, ...themes, ...lanes];
+  return [...navigation, ...connections, ...settings, ...themes, ...sessions];
 }

@@ -2,7 +2,7 @@
 //!
 //! 两个读数各有各的事实源，且都不是车道表本身：
 //! - 用量：`rollout.sqlite3` 的账本，按车道当前的 run session 汇总。车道标识
-//!   （`session-lane-<hash>`）是复合车道的稳定身份，账本却记在 run session 名下，
+//!   （`session-session-<hash>`）是复合车道的稳定身份，账本却记在 run session 名下，
 //!   因此要先经 `sessions` 解析一层。
 //! - 耗时：`inbox` 里已收口轮次的墙钟差，按车道求和即可。
 //!
@@ -85,7 +85,7 @@ pub(super) fn interaction_facts(
 /// 若干行索引加上少量外置读取，而不是几十万帧。
 pub(super) fn answer_texts(
     axon_root: &Path,
-    lane_id: &str,
+    session_id: &str,
     interaction_ids: &[&str],
 ) -> HashMap<String, String> {
     let mut answers = HashMap::new();
@@ -94,7 +94,7 @@ pub(super) fn answer_texts(
     }
     let wanted: std::collections::HashSet<&str> = interaction_ids.iter().copied().collect();
     let store = runtime_store(axon_root);
-    let Ok(session_id) = axon_domain::DaemonSessionId::new(lane_id.to_owned()) else {
+    let Ok(session_id) = axon_domain::DaemonSessionId::new(session_id.to_owned()) else {
         return answers;
     };
     let path = store.event_log(&session_id).path();
@@ -154,14 +154,14 @@ fn clamp_answer_text(text: &str) -> String {
 /// 时间戳都是网关自己写的，因此按车道求和即可，不必回放正文，也不必解析事件载荷。
 /// 仍在排队或在跑的轮次不参与：它们还没收尾，读数由界面按实时帧自己补，避免同一轮
 /// 在基线与增量里各算一次。
-pub(super) fn settled_elapsed_ms(axon_root: &Path, lane_id: &str) -> Option<u64> {
+pub(super) fn settled_elapsed_ms(axon_root: &Path, session_id: &str) -> Option<u64> {
     let store = runtime_store(axon_root);
     store
         .with_read_connection(|connection| {
             connection.query_row(
                 "SELECT COALESCE(SUM(updated_at_ms - received_at_ms), 0) FROM inbox \
-                 WHERE lane_id = ?1 AND status NOT IN ('received', 'processing')",
-                [lane_id],
+                 WHERE session_id = ?1 AND status NOT IN ('received', 'processing')",
+                [session_id],
                 |row| row.get::<_, i64>(0),
             )
         })
@@ -174,8 +174,8 @@ pub(super) fn settled_elapsed_ms(axon_root: &Path, lane_id: &str) -> Option<u64>
 /// 车道还没有 run session 时读作全零而不是「没有结论」：新建的会话在第一轮跑起来之前
 /// 就是这个状态，把读数藏起来会让「这一轮已经花了多少」在页面上完全看不见。
 /// 真的读失败（账本打不开、列缺失且回填失败）才给 null，由界面按「未知」处理。
-pub(super) fn session_usage_payload(axon_root: &Path, lane_id: &str) -> serde_json::Value {
-    let totals = match lane_run_session_id(axon_root, lane_id) {
+pub(super) fn session_usage_payload(axon_root: &Path, session_id: &str) -> serde_json::Value {
+    let totals = match session_run_session_id(axon_root, session_id) {
         Some(run_session) => {
             crate::run_commands::load_session_usage_totals_from_root(axon_root, &run_session).ok()
         }
@@ -198,8 +198,8 @@ pub(super) fn session_usage_payload(axon_root: &Path, lane_id: &str) -> serde_js
 /// 性能约束（CRITICAL）：不遍历历史轮次，也不回放 Interaction 事件帧。一次
 /// `sessions` 单行查 + 一次 `rollout_turns` 最新行查就够；解析不到运行会话、
 /// 或该会话还没有任何一轮时给 null，由界面回退配置默认值（那也是运行时会选的模型）。
-pub(super) fn effective_model_payload(axon_root: &Path, lane_id: &str) -> serde_json::Value {
-    let Some(run_session_id) = lane_run_session_id(axon_root, lane_id) else {
+pub(super) fn effective_model_payload(axon_root: &Path, session_id: &str) -> serde_json::Value {
+    let Some(run_session_id) = session_run_session_id(axon_root, session_id) else {
         return serde_json::Value::Null;
     };
     let Ok(Some(facts)) =
@@ -220,8 +220,8 @@ pub(super) fn effective_model_payload(axon_root: &Path, lane_id: &str) -> serde_
 /// 与 `effective_model_payload` 同一读法：先把车道解析成 run session，再读它最新
 /// 一轮记录里的 `reflectionNotice`。反思是轮后异步治理的产物，这里给的是「最近一次
 /// 已完成治理」的结果，界面按「上一次记忆动作」呈现，不承诺与当前轮同步。
-pub(super) fn reflection_notice_payload(axon_root: &Path, lane_id: &str) -> serde_json::Value {
-    let Some(run_session_id) = lane_run_session_id(axon_root, lane_id) else {
+pub(super) fn reflection_notice_payload(axon_root: &Path, session_id: &str) -> serde_json::Value {
+    let Some(run_session_id) = session_run_session_id(axon_root, session_id) else {
         return serde_json::Value::Null;
     };
     crate::run_commands::load_latest_reflection_notice_from_root(axon_root, &run_session_id)
@@ -230,16 +230,16 @@ pub(super) fn reflection_notice_payload(axon_root: &Path, lane_id: &str) -> serd
 
 /// 车道的运行时 session 标识。
 ///
-/// 车道标识（`session-lane-<hash>`）是复合车道的稳定身份，每轮的用量却记在该车道当前的
+/// 车道标识（`session-session-<hash>`）是复合车道的稳定身份，每轮的用量却记在该车道当前的
 /// run session 名下（`sessions.run_session_id`）。会话累计读数因此要先把车道解析
 /// 成 run session，再按它汇总；解析不到时返回 None。
-fn lane_run_session_id(axon_root: &Path, lane_id: &str) -> Option<String> {
+fn session_run_session_id(axon_root: &Path, session_id: &str) -> Option<String> {
     let store = runtime_store(axon_root);
     store
         .with_read_connection(|connection| {
             connection.query_row(
                 "SELECT run_session_id FROM sessions WHERE session_id = ?1",
-                [lane_id],
+                [session_id],
                 |row| row.get::<_, String>(0),
             )
         })

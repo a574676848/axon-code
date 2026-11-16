@@ -12,9 +12,8 @@ pub const EVENTS_PATH: &str = "/gateway/v1/events";
 /// 会话事件 WebSocket 路径。
 pub const WS_PATH: &str = "/gateway/v1/ws";
 /// 车道 Interaction 枚举路径前缀。
-pub const LANES_PATH: &str = "/api/v1/lanes";
-/// 工作台会话面前缀：按会话标识读取逐字稿。
 pub const SESSIONS_PATH: &str = "/api/v1/sessions";
+/// 工作台会话面前缀：按会话标识读取逐字稿。
 /// 工作台交互面前缀：按交互标识读取历史帧页。
 pub const INTERACTIONS_PATH: &str = "/api/v1/interactions";
 
@@ -251,8 +250,8 @@ mod tests {
     }
 
     #[test]
-    fn lane_subscribe_identifies_the_interaction_never_the_lane() {
-        // 车道 API 的 `laneId` 与 Interaction 的 `interactionId` 是两个不同的串，
+    fn session_subscribe_identifies_the_interaction_never_the_session() {
+        // 车道 API 的 `sessionId` 与 Interaction 的 `interactionId` 是两个不同的串，
         // 而订阅与事件回显用的都是后者。曾经前端拿车道标识当订阅标识去过滤帧，
         // 结果是帧全部到达、又被整批丢掉，界面永远停在「生成回复中」。
         let frame = ClientFrame::Subscribe {
@@ -272,7 +271,7 @@ mod tests {
             !value["subscribeId"]
                 .as_str()
                 .unwrap_or_default()
-                .contains("session-lane-"),
+                .contains("session-session-"),
             "订阅标识不得由车道标识派生：服务端回显的是交互标识，两者不相等就会把帧全丢掉"
         );
     }

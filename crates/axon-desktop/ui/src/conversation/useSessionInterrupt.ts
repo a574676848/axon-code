@@ -11,9 +11,9 @@
 import { useCallback, useRef } from 'react';
 import * as ipc from '../ipc';
 
-export interface LaneInterruptOptions {
+export interface SessionInterruptOptions {
   /** 当前车道标识；会话目标下为空。 */
-  laneId: string | null;
+  sessionId: string | null;
   /** 正在订阅的那一条 Interaction：车道标识缺失时用它兜底。 */
   watchedRef: React.RefObject<string | null>;
   /** 真正发请求之前的动作（摘排队消息转投）。 */
@@ -23,19 +23,19 @@ export interface LaneInterruptOptions {
 }
 
 /** 中断当前车道正在运行的一轮；回执为假时如实提示，不假装成功。 */
-export function useLaneInterrupt(options: LaneInterruptOptions): () => Promise<void> {
-  const { laneId, watchedRef, onBeforeInterrupt, onNotice } = options;
+export function useSessionInterrupt(options: SessionInterruptOptions): () => Promise<void> {
+  const { sessionId, watchedRef, onBeforeInterrupt, onNotice } = options;
   /** 中断请求是否在途。 */
   const interruptingRef = useRef(false);
 
   return useCallback(async () => {
-    const lane = laneId ?? watchedRef.current;
-    if (lane === null) return;
+    const session = sessionId ?? watchedRef.current;
+    if (session === null) return;
     if (interruptingRef.current) return;
     interruptingRef.current = true;
     onBeforeInterrupt();
     try {
-      const receipt = await ipc.conversationInterrupt(lane);
+      const receipt = await ipc.conversationInterrupt(session);
       if (!receipt.interrupted) {
         onNotice('本轮已经结束，无需中断');
       }
@@ -44,5 +44,5 @@ export function useLaneInterrupt(options: LaneInterruptOptions): () => Promise<v
     } finally {
       interruptingRef.current = false;
     }
-  }, [laneId, onBeforeInterrupt, onNotice, watchedRef]);
+  }, [sessionId, onBeforeInterrupt, onNotice, watchedRef]);
 }

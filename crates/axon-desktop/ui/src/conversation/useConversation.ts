@@ -6,7 +6,7 @@
  *
  * **一个控制器服务两种目标**：主会话车道（按 Interaction 订阅）与子代理会话
  * （按会话订阅）。订阅、帧合并、失败语义与连接状态机在本文件里只有一份；
- * 目标差异全部收敛到 `normalizeTarget`（归一化）与 `laneCapability`（车道能力门）两处。
+ * 目标差异全部收敛到 `normalizeTarget`（归一化）与 `sessionCapability`（车道能力门）两处。
  */
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
@@ -19,20 +19,20 @@ import {
   type AttachmentRef,
 } from './transcript';
 import type { ConversationStreamEvent } from './wire';
-import type { LaneEffectiveModel } from './viewConfig';
+import type { SessionEffectiveModel } from './viewConfig';
 import { normalizeTarget, subscriptionIdOf } from './targets';
 import type {
   ConversationController,
   ConversationTarget,
-  LaneCapability,
+  SessionCapability,
 } from './targets';
 import { useAutoFoldTurns } from './useAutoFoldTurns';
 import { useConversationInterruptControl } from './useConversationInterruptControl';
 import { useElapsedTick } from './useElapsedTick';
 import { replayInteractionHistory } from './interactionReplay';
-import { useLanePaging } from './useLanePaging';
-import { useLaneReattach } from './useLaneReattach';
-import { useLaneSync, type LaneSyncFacts } from './useLaneSync';
+import { useSessionPaging } from './useSessionPaging';
+import { useSessionReattach } from './useSessionReattach';
+import { useSessionSync, type SessionSyncFacts } from './useSessionSync';
 import { useQuestionSync } from './useQuestionSync';
 import { useSessionCumulative } from './useSessionCumulative';
 
@@ -49,15 +49,15 @@ const OPENING_CEILING_MS = 900;
  * 目标与契约类型整块移到 `targets.ts`：它们是纯类型与纯函数，编排文件只负责流程。
  * 这里原样再导出，调用方的引用不必改。
  */
-export type { ConversationController, ConversationTarget, LaneSelection } from './targets';
-export { targetOfLane } from './targets';
+export type { ConversationController, ConversationTarget, SessionSelection } from './targets';
+export { targetOfSession } from './targets';
 
 /**
- * 组装会话控制器；`target` 为空表示还没选定会话，`laneFacts` 见 conversation/useLaneSync。
+ * 组装会话控制器；`target` 为空表示还没选定会话，`sessionFacts` 见 conversation/useSessionSync。
  */
 export function useConversation(
   target: ConversationTarget | null,
-  laneFacts: LaneSyncFacts | null = null,
+  sessionFacts: SessionSyncFacts | null = null,
 ): ConversationController {
   // 目标对象的身份每次渲染都可能变，因此只在「归一化后的稳定串」上做依赖。
   const normalized = target === null ? null : normalizeTarget(target);
@@ -105,22 +105,22 @@ export function useConversation(
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [questionError, setQuestionError] = useState<string | null>(null);
   const dismissQuestionError = useCallback(() => setQuestionError(null), []);
-  const [laneReadyId, setLaneReadyId] = useState<string | null>(null);
-  const laneReattach = useLaneReattach();
+  const [sessionReadyId, setSessionReadyId] = useState<string | null>(null);
+  const sessionReattach = useSessionReattach();
   /**
    * 车道当前模型的权威事实。
    *
    * 由网关按「该车道最新一轮记录」单条读出，随首屏历史一起回来；因此打开会话时
    * 输入坞立刻能显示真实模型，不必等逐条回放，也不会被旧轮次的帧改写。
    */
-  const [laneModel, setLaneModel] = useState<LaneEffectiveModel | null>(null);
+  const [sessionModel, setSessionModel] = useState<SessionEffectiveModel | null>(null);
   /**
    * 最近一次记忆反思提示。
    *
-   * 与 `laneModel` 同源同寿命：换目标时一起清空，翻页时不回退。反思是轮后异步治理
+   * 与 `sessionModel` 同源同寿命：换目标时一起清空，翻页时不回退。反思是轮后异步治理
    * 的产物，界面按「上一次记忆动作」呈现，不承诺与当前轮同步。
    */
-  const [laneReflectionNotice, setLaneReflectionNotice] = useState<string | null>(null);
+  const [sessionReflectionNotice, setSessionReflectionNotice] = useState<string | null>(null);
 
   const pendingRef = useRef<ConversationStreamEvent[]>([]);
   const flushRef = useRef<number | null>(null);
@@ -170,21 +170,21 @@ export function useConversation(
     (workspaceId: string, generation: number, leaving?: string | null) => void
   >(() => undefined);
   /** 当前车道与工作区：会话目标下没有车道能力，分页与展开也随之不可用。 */
-  const pagingLaneId = target !== null && target.kind === 'interaction' ? target.interactionId : null;
+  const pagingSessionId = target !== null && target.kind === 'interaction' ? target.interactionId : null;
 
   /*
-   * 分页与展开：与主回放共用代次与在途标记，但自己持有临时投影（见 useLanePaging）。
+   * 分页与展开：与主回放共用代次与在途标记，但自己持有临时投影（见 useSessionPaging）。
    */
-  const paging = useLanePaging({
-    laneId: pagingLaneId,
+  const paging = useSessionPaging({
+    sessionId: pagingSessionId,
     workspaceId: target?.workspaceId ?? null,
     dispatch,
     replayingRef,
     generationRef,
     playNextRef,
     onError: setSubmitError,
-    onEffectiveModel: setLaneModel,
-    onReflectionNotice: setLaneReflectionNotice,
+    onEffectiveModel: setSessionModel,
+    onReflectionNotice: setSessionReflectionNotice,
   });
 
   /**
@@ -369,9 +369,9 @@ export function useConversation(
     dispatch({ type: 'reset' });
     dispatch({ type: 'connecting' });
     setSubmitError(null);
-    setLaneReadyId(null);
-    setLaneModel(null);
-    setLaneReflectionNotice(null);
+    setSessionReadyId(null);
+    setSessionModel(null);
+    setSessionReflectionNotice(null);
     // 投影与目标同批对齐：从这一帧起，state 里的旧轮次不再对外可见。
     setProjectionKey(targetKey);
     const current = targetRef.current;
@@ -413,18 +413,18 @@ export function useConversation(
       };
     }
 
-    const laneId = current.interactionId;
+    const sessionId = current.interactionId;
     // 车道标识不是 Interaction；由历史索引逐条订阅真实交互，新消息按提交回执订阅。
     let cancelled = false;
     // 历史按「一次一条」向前翻：首屏只取最近一条，更早的由「加载更早」按需取。
     void paging
-      .loadNewestPage(laneId)
+      .loadNewestPage(sessionId)
       .then((ids) => {
         if (cancelled) return;
         queueRef.current = ids;
         // 已经收口的交互仍然要回放：正文的事实源就是订阅流上的 durable 事件。
         playNextRef.current(workspaceId, generationRef.current);
-        setLaneReadyId(laneId);
+        setSessionReadyId(sessionId);
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -444,7 +444,7 @@ export function useConversation(
     workspaceId,
     targetKind,
     targetKey,
-    laneReattach.token,
+    sessionReattach.token,
   ]);
 
   /** 运行中按节拍刷新耗时：没有轮次在跑时不起表。 */
@@ -456,7 +456,7 @@ export function useConversation(
   const working = ticking;
 
   // 外部发起的新一轮（后台作业唤醒轮、定时投递）靠车道轮数变化补齐接管。
-  useLaneSync({ laneFacts, targetKind, ready: laneReadyId === targetKey && !opening, working, onReattach: laneReattach.reattach });
+  useSessionSync({ sessionFacts, targetKind, ready: sessionReadyId === targetKey && !opening, working, onReattach: sessionReattach.reattach });
 
   // 折叠生效：最新一轮之外的老轮次撤下过程、只留一根过程控件（见 useAutoFoldTurns）。
   useAutoFoldTurns(state.turns, dispatch);
@@ -468,16 +468,16 @@ export function useConversation(
     return () => window.clearTimeout(timer);
   }, [opening]);
 
-  const laneCapability = useMemo<LaneCapability>(
+  const sessionCapability = useMemo<SessionCapability>(
     () =>
       target !== null && target.kind === 'interaction'
         ? {
             available: true,
-            laneId: target.interactionId,
+            sessionId: target.interactionId,
             workspaceId: target.workspaceId,
             destination: target.destination,
           }
-        : { available: false, laneId: null, workspaceId: null, destination: null },
+        : { available: false, sessionId: null, workspaceId: null, destination: null },
     [target],
   );
 
@@ -490,7 +490,7 @@ export function useConversation(
       reasoningEffort: string | null = null,
     ) => {
       // 会话目标不支持在这里发送：如实失败，不静默丢弃。
-      if (!laneCapability.available) {
+      if (!sessionCapability.available) {
         const message = '该会话不支持在这里发送消息';
         setSubmitError(message);
         throw new Error(message);
@@ -498,8 +498,8 @@ export function useConversation(
       // 服务端会把正文首尾的空白裁掉：界面若留着它，回放就认领不上这一格，
       // 同一条消息会在时间线上多出一个永远等不到回复的气泡。
       const visibleText = text.trim();
-      const workspace = laneCapability.workspaceId ?? '';
-      const destination = laneCapability.destination ?? '';
+      const workspace = sessionCapability.workspaceId ?? '';
+      const destination = sessionCapability.destination ?? '';
       setSubmitting(true);
       setSubmitError(null);
       queueRef.current = [];
@@ -557,13 +557,13 @@ export function useConversation(
         setSubmitting(false);
       }
     },
-    [laneCapability, rememberSubscribed],
+    [sessionCapability, rememberSubscribed],
   );
 
   const retry = useCallback(() => {
-    const laneId = laneCapability.laneId;
-    const workspace = laneCapability.workspaceId;
-    if (laneId === null || workspace === null) return;
+    const sessionId = sessionCapability.sessionId;
+    const workspace = sessionCapability.workspaceId;
+    if (sessionId === null || workspace === null) return;
     // 重连第一步是放手旧订阅：订阅断掉后后端那一格仍占着该标识，不退订就重放，
     // 回放里那次重新订阅会被幂等挡下，界面拼完历史也收不到增量；旧任务若还活着，
     // 重置后的帧还会打进空投影。
@@ -571,28 +571,28 @@ export function useConversation(
     pendingRef.current = [];
     watchedRef.current = null;
     dispatch({ type: 'reset' });
-    setLaneReadyId(null);
+    setSessionReadyId(null);
     // 重连走的也是同一条回放：同样在过渡面下把正文拼齐，再一次交出。
     setOpening(true);
     void releaseAllSubscriptions()
-      .then(() => paging.loadNewestPage(laneId))
+      .then(() => paging.loadNewestPage(sessionId))
       .then((ids) => {
         queueRef.current = ids;
         // 重连发生在同一次目标内：代次不变，回放照常推进。
         playNextRef.current(workspace, generationRef.current);
-        setLaneReadyId(laneId);
+        setSessionReadyId(sessionId);
       })
       .catch((error: unknown) => {
         setSubmitError(error instanceof Error ? error.message : '重连失败');
       });
-  }, [laneCapability, paging, releaseAllSubscriptions]);
+  }, [sessionCapability, paging, releaseAllSubscriptions]);
 
   /*
    * 中断与转投：三步的先后顺序本身就是语义，因此整条装配收在
    * `useConversationInterruptControl` 里，本文件只保留一个 `interrupt` 出口。
    */
   const interrupt = useConversationInterruptControl({
-    laneId: laneCapability.laneId,
+    sessionId: sessionCapability.sessionId,
     watchedRef,
     targetKey,
     working,
@@ -612,8 +612,8 @@ export function useConversation(
    */
   const attachVoiceTurn = useCallback(
     async (interactionId: string, utterance: string) => {
-      const workspace = laneCapability.workspaceId ?? '';
-      if (!laneCapability.available || interactionId.length === 0) return;
+      const workspace = sessionCapability.workspaceId ?? '';
+      if (!sessionCapability.available || interactionId.length === 0) return;
       const visibleText = utterance.trim();
       const nowMs = Date.now();
       const localTurnId = `voice-${nowMs}-${Math.random().toString(36).slice(2, 7)}`;
@@ -625,16 +625,16 @@ export function useConversation(
         await ipc.conversationWatch(workspace, interactionId, null);
       }
     },
-    [laneCapability, rememberSubscribed],
+    [sessionCapability, rememberSubscribed],
   );
 
   const { activeQuestion, answerQuestion } = useQuestionSync({
-    laneId: laneCapability.laneId,
+    sessionId: sessionCapability.sessionId,
     state,
     dispatch,
     onError: setQuestionError,
-    onContinuation: laneReattach.reattach,
-    reattachToken: laneReattach.token,
+    onContinuation: sessionReattach.reattach,
+    reattachToken: sessionReattach.token,
   });
 
   const jobs = useMemo(() => deriveJobs(state), [state]);
@@ -671,13 +671,13 @@ export function useConversation(
     unfoldingId: paging.unfoldingId,
     activeQuestion,
     answerQuestion,
-    watchedInteractionId: laneCapability.available ? watchedRef.current : null,
+    watchedInteractionId: sessionCapability.available ? watchedRef.current : null,
     sessionCumulative,
-    laneReadyId,
+    sessionReadyId,
     /** 车道当前模型的权威事实：网关只读该车道最新一轮记录。 */
-    laneModel,
-    laneReflectionNotice,
-    laneAvailable: laneCapability.available,
+    sessionModel,
+    sessionReflectionNotice,
+    sessionAvailable: sessionCapability.available,
     opening,
     queued,
     submitting,

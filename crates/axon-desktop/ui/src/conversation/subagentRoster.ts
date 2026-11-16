@@ -11,7 +11,7 @@
  * 因此补出来的行不会伪装成还在跑。
  */
 
-import type { LaneSubagentSummary } from '../types';
+import type { SessionSubagentSummary } from '../types';
 import type { SubagentRow } from './transcript';
 
 /** 子代理行标识前缀。 */
@@ -29,7 +29,7 @@ export function subagentSlug(agentId: string): string {
 }
 
 /** 名册里的线程状态与末轮状态折算成行状态。 */
-function rosterStatus(entry: LaneSubagentSummary): SubagentRow['status'] {
+function rosterStatus(entry: SessionSubagentSummary): SubagentRow['status'] {
   const last = entry.lastTurnStatus ?? null;
   if (last === 'completed') return 'completed';
   if (last === 'failed') return 'failed';
@@ -50,7 +50,7 @@ function rosterStatus(entry: LaneSubagentSummary): SubagentRow['status'] {
  */
 export function mergeSubagentRoster(
   rows: readonly SubagentRow[],
-  roster: readonly LaneSubagentSummary[] | null,
+  roster: readonly SessionSubagentSummary[] | null,
 ): SubagentRow[] {
   if (roster === null || roster.length === 0) return [...rows];
   const known = new Set(rows.map((row) => subagentSlug(row.agentId)));

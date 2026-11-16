@@ -13,11 +13,11 @@ pub use application::{
     ActivityQuery, ActivityService, ActivityServiceError, ActivitySnapshot, AppendTurnCommand,
     AppendTurnItemsCommand, CompactThreadCommand, FailTurnCommand, ForkThreadCommand,
     GoalCommandService, GoalCommandServiceError, GoalExecutionSpec, GoalQueryService,
-    GoalQueryServiceError, InterruptTurnCommand, LaneQueryService, LaneSnapshot, NameThreadCommand,
-    RepairOpenTurnCommand, ResumeThreadCommand, StartEmptyThreadCommand, StartThreadCommand,
-    StartTurnCommand, ThreadService, TurnRepairOutcome, WorkspaceGitSnapshot, WorkspaceIdentity,
-    WorkspaceResolver, WorkspaceResolverError, WorkspaceSnapshot, WorkspaceSnapshotFieldState,
-    interaction_session_lane_id, session_lane_id,
+    GoalQueryServiceError, InterruptTurnCommand, NameThreadCommand, RepairOpenTurnCommand,
+    ResumeThreadCommand, SessionQueryService, SessionSnapshot, StartEmptyThreadCommand,
+    StartThreadCommand, StartTurnCommand, ThreadService, TurnRepairOutcome, WorkspaceGitSnapshot,
+    WorkspaceIdentity, WorkspaceResolver, WorkspaceResolverError, WorkspaceSnapshot,
+    WorkspaceSnapshotFieldState, interaction_session_id, session_id_for_route,
 };
 pub use domain::WorkspaceRecord;
 pub use domain::session_action::{default_action_priority, effective_action_priority};
@@ -53,10 +53,10 @@ pub use ports::{
     ExecutionStoreError, ExecutionTrigger, GoalCommitError, GoalCommitStore, GoalMutationStore,
     GoalPage, GoalStore, GoalStoreError, HealthStore, InteractionAppendReceipt, InteractionCursor,
     InteractionProcessingLease, InteractionQueryStore, InteractionStore, InteractionStoreError,
-    LaneQueryStore, LaneSummaryRow, LedgerCommitError, LedgerCommitStore, LedgerEventStore,
-    LedgerEventStoreError, NotificationDeliveryState, RESULT_ACK_SOURCE_EXPIRED,
-    RESULT_ACK_SOURCE_READ, ResultStore, ResultStoreError, RuntimeHealthCounters, RuntimeStore,
-    RuntimeStoreError, UserQuestionStore, UserQuestionStoreError, WorkspaceStore,
+    LedgerCommitError, LedgerCommitStore, LedgerEventStore, LedgerEventStoreError,
+    NotificationDeliveryState, RESULT_ACK_SOURCE_EXPIRED, RESULT_ACK_SOURCE_READ, ResultStore,
+    ResultStoreError, RuntimeHealthCounters, RuntimeStore, RuntimeStoreError, SessionQueryStore,
+    SessionSummaryRow, UserQuestionStore, UserQuestionStoreError, WorkspaceStore,
     WorkspaceStoreError,
 };
 

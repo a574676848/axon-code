@@ -18,7 +18,7 @@ use crate::{
     },
 };
 
-pub(crate) const CRON_AGENT_DESTINATION_PREFIX: &str = axon_domain::CRON_LANE_DESTINATION_PREFIX;
+pub(crate) const CRON_AGENT_DESTINATION_PREFIX: &str = axon_domain::CRON_SESSION_DESTINATION_PREFIX;
 pub(crate) const CRON_AGENT_CHANNEL: &str = axon_domain::desktop_session_channel();
 const CRON_POWERSHELL_UTF8_PREAMBLE: &str = "$utf8 = [System.Text.UTF8Encoding]::new($false); [Console]::OutputEncoding = $utf8; $OutputEncoding = $utf8;";
 const CRON_AGENT_POLICY: &str = "这是用户级 Agent Cron 定时任务。必须遵守：不得创建、修改、暂停、恢复或删除任何 cron 任务；不得请求交互式澄清；配置、凭证或投递目标缺失时必须失败闭环并说明原因。";
@@ -301,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn session_wake_injects_turn_into_declared_lane() {
+    fn session_wake_injects_turn_into_declared_session() {
         let adapter = RecordingAdapter::new(Ok("已生成报告".to_owned()));
         let job = job_with_wake(
             "cron-session",

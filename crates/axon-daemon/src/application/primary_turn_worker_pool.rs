@@ -1,4 +1,4 @@
-//! JARVIS 主 turn lane 的长期存活 worker pool。
+//! JARVIS 主 turn session 的长期存活 worker pool。
 
 use std::{
     fmt,
@@ -13,7 +13,7 @@ const WORKER_THREAD_NAME_PREFIX: &str = "axon-primary-turn";
 const WORKER_SPAWN_ERROR_PREFIX: &str = "创建 Primary turn worker 失败";
 const WORKER_QUEUE_CLOSED_ERROR: &str = "Primary turn worker pool 已关闭";
 
-type LaneJob = Box<dyn FnOnce() + Send + 'static>;
+type SessionJob = Box<dyn FnOnce() + Send + 'static>;
 
 #[derive(Clone)]
 pub(super) struct PrimaryTurnWorkerPool {
@@ -27,7 +27,7 @@ pub(super) struct PrimaryTurnWorkerPoolSlot {
 
 struct PrimaryTurnWorkerPoolInner {
     worker_count: usize,
-    sender: Option<mpsc::SyncSender<LaneJob>>,
+    sender: Option<mpsc::SyncSender<SessionJob>>,
     workers: Vec<JoinHandle<()>>,
 }
 
@@ -145,7 +145,7 @@ impl Drop for PrimaryTurnWorkerPoolInner {
 
 fn spawn_workers(
     worker_count: usize,
-    receiver: Arc<Mutex<mpsc::Receiver<LaneJob>>>,
+    receiver: Arc<Mutex<mpsc::Receiver<SessionJob>>>,
 ) -> Result<Vec<JoinHandle<()>>, String> {
     let mut workers = Vec::with_capacity(worker_count);
     for worker_index in 0..worker_count {
@@ -160,7 +160,7 @@ fn spawn_workers(
     Ok(workers)
 }
 
-fn run_worker(receiver: Arc<Mutex<mpsc::Receiver<LaneJob>>>) {
+fn run_worker(receiver: Arc<Mutex<mpsc::Receiver<SessionJob>>>) {
     loop {
         let job = receiver
             .lock()

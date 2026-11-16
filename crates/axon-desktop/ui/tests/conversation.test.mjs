@@ -1037,7 +1037,7 @@ test('拦截器：业务拒绝不弹窗，服务真不可用才弹窗', async ()
             ? { ok: true, data: { connected: true } }
             : { ok: false, error: '车道标题不能为空' });
     try {
-        await assert.rejects(ipc.renameLane('lane-1', ''), /车道标题不能为空/);
+        await assert.rejects(ipc.renameSession('session-1', ''), /车道标题不能为空/);
         await sleep(80); // 事实核验在后台完成，等它落地再断言
         assert.deepEqual(details, [], '有服务在跑时，参数错误不能弹「服务未启用」');
     } finally {
@@ -1051,7 +1051,7 @@ test('拦截器：业务拒绝不弹窗，服务真不可用才弹窗', async ()
             ? { ok: true, data: { connected: false } }
             : { ok: false, error: '车道不存在' });
     try {
-        await assert.rejects(ipc.renameLane('lane-1', '新标题'), /车道不存在/);
+        await assert.rejects(ipc.renameSession('session-1', '新标题'), /车道不存在/);
         await sleep(80);
         assert.equal(details.length, 1, '判据来自探测事实，不依赖错误措辞');
         // 弹窗要说明「哪一次调用失败」，而不是只给探测结论。

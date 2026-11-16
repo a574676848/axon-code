@@ -59,8 +59,8 @@ pub trait InteractionStore: Send + Sync {
 
     /// 领取待处理 Interaction，并建立有界 lease。
     ///
-    /// 领取按复合 lane 排他：某条 lane 已有未过期 `processing` 时，该 lane 的后续记录
-    /// 不会被领取。同 lane 串行由持久化事实源保证，调用方无需额外维护在途 lane 状态。
+    /// 领取按复合 session 排他：某条 session 已有未过期 `processing` 时，该 session 的后续记录
+    /// 不会被领取。同 session 串行由持久化事实源保证，调用方无需额外维护在途 session 状态。
     fn claim_processing(
         &self,
         limit: u32,
@@ -180,9 +180,9 @@ pub trait InteractionQueryStore: Send + Sync {
     /// 从而把读放大限制在有界窗口内。
     ///
     /// `before` 为空即取最近一页；给出游标则取它**之前**的那一页，用于按需向前翻。
-    fn interactions_for_lane(
+    fn interactions_for_session(
         &self,
-        lane_id: &str,
+        session_id: &str,
         limit: u32,
         before: Option<&InteractionCursor>,
     ) -> Result<Vec<InteractionRecord>, InteractionStoreError>;

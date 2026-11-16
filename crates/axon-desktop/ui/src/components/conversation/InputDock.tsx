@@ -86,7 +86,7 @@ export const InputDock: React.FC<InputDockProps> = ({
   error,
   working,
   onInterrupt,
-  laneKey = null,
+  sessionKey = null,
   activeQuestion = null,
   onAnswerQuestion,
   reopenToken = 0,
@@ -97,7 +97,7 @@ export const InputDock: React.FC<InputDockProps> = ({
    * 问答占座卡：何时占位、草稿存在哪、外部入口怎么叫回来，与输入和提交无关，
    * 因此整套状态在 useQuestionCard 里。
    */
-  const question = useQuestionCard(activeQuestion, reopenToken, laneKey);
+  const question = useQuestionCard(activeQuestion, reopenToken, sessionKey);
 
   /*
    * 全局快捷键（Ctrl + Alt + Space）唤回窗口后，App 会把聚焦请求转成一条窗口事件；

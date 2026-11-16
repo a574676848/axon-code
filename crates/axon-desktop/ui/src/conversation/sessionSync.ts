@@ -11,20 +11,20 @@
  */
 
 /** 接管游标：一条车道已经接管到第几轮。 */
-export interface LaneSyncCursor {
+export interface SessionSyncCursor {
   /** 游标所属的车道；为空表示还没接管过任何车道。 */
-  laneId: string | null;
+  sessionId: string | null;
   /** 已经接管到的 Interaction 总数。 */
   interactionCount: number;
 }
 
 /** 空游标：还没有接管过任何车道。 */
-export const EMPTY_LANE_SYNC_CURSOR: LaneSyncCursor = { laneId: null, interactionCount: 0 };
+export const EMPTY_SESSION_SYNC_CURSOR: SessionSyncCursor = { sessionId: null, interactionCount: 0 };
 
 /** 一次对齐的结论：游标推进到哪，以及是否要重新接管。 */
-export interface LaneSyncStep {
+export interface SessionSyncStep {
   /** 推进之后的游标。 */
-  cursor: LaneSyncCursor;
+  cursor: SessionSyncCursor;
   /** 是否需要重新接管一次（取最新一页并订阅那一轮）。 */
   reattach: boolean;
 }
@@ -43,25 +43,25 @@ export interface LaneSyncStep {
  * 增长而本视图在跑时仍然推进游标：否则自己这一轮收口之后会被当成「外部新轮」
  * 再接管一次，白白回放一遍刚写完的正文。
  */
-export function advanceLaneSync(
-  cursor: LaneSyncCursor,
-  laneId: string,
+export function advanceSessionSync(
+  cursor: SessionSyncCursor,
+  sessionId: string,
   interactionCount: number,
   working: boolean,
-): LaneSyncStep {
-  const trimmed = laneId.trim();
+): SessionSyncStep {
+  const trimmed = sessionId.trim();
   // 车道标识为空或计数不成立时不推进：这两者是「还不知道」而不是「没有变化」。
   if (trimmed.length === 0 || !Number.isFinite(interactionCount) || interactionCount < 0) {
     return { cursor, reattach: false };
   }
-  if (cursor.laneId !== trimmed) {
-    return { cursor: { laneId: trimmed, interactionCount }, reattach: false };
+  if (cursor.sessionId !== trimmed) {
+    return { cursor: { sessionId: trimmed, interactionCount }, reattach: false };
   }
   if (interactionCount <= cursor.interactionCount) {
     return { cursor, reattach: false };
   }
   return {
-    cursor: { laneId: trimmed, interactionCount },
+    cursor: { sessionId: trimmed, interactionCount },
     reattach: !working,
   };
 }

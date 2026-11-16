@@ -8,7 +8,7 @@ import {
 } from '../../conversation/format';
 import type { JobRow, SubagentRow } from '../../conversation/transcript';
 import { mergeSubagentRoster, shouldPollSubagentRoster, subagentSlug } from '../../conversation/subagentRoster';
-import type { LaneSubagentSummary } from '../../types';
+import type { SessionSubagentSummary } from '../../types';
 import { isActiveJob, JOB_ROSTER_REFRESH_MS } from '../../conversation/runtimeFacts';
 import { Dropdown } from '../ui/overlays';
 import { StateDot, type StateDotState } from '../ui/surfaces';
@@ -140,7 +140,7 @@ export interface RuntimeActionsProps {
   subagents: SubagentRow[];
   jobs: JobRow[];
   /** 当前会话车道；停止作业时作为归属参数。 */
-  laneId: string | null;
+  sessionId: string | null;
   /** 本视图是否有正在跑的轮次：名册只在这段窗口里按间隔对账。 */
   working: boolean;
   /** 打开某个子代理的运行轨迹。 */
@@ -150,7 +150,7 @@ export interface RuntimeActionsProps {
 export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
   subagents,
   jobs,
-  laneId,
+  sessionId,
   working,
   onOpenSubagent,
 }) => {
@@ -183,14 +183,14 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
   // 作业行的对账：transcript 投影是历史事实，进程重启后旧行不会自己消失，
   // 因此定期向后端要一次活作业名册，不在这份名册里的行不再算「运行中」。
   React.useEffect(() => {
-    if (laneId === null || jobs.length === 0) {
+    if (sessionId === null || jobs.length === 0) {
       setLiveJobIds(null);
       return undefined;
     }
     let cancelled = false;
     const refresh = () => {
       void ipc
-        .conversationLaneJobs(laneId)
+        .conversationSessionJobs(sessionId)
         .then((roster) => {
           if (!cancelled) setLiveJobIds(new Set(roster.jobIds));
         })
@@ -204,7 +204,7 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [laneId, jobs.length]);
+  }, [sessionId, jobs.length]);
 
   /**
    * 同一个作业标识可能对应多行：作业 ID 在进程内单调，但**重启后会从 1 重新计数**，
@@ -246,7 +246,7 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
   const requestStop = React.useCallback(
     (job: JobRow) => {
       const jobId = job.jobId;
-      if (jobId === null || laneId === null) return;
+      if (jobId === null || sessionId === null) return;
       if (armTimer.current !== null) window.clearTimeout(armTimer.current);
       if (armed !== job.id) {
         setStopError(null);
@@ -257,7 +257,7 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
       setArmed(null);
       setStopping(job.id);
       void ipc
-        .conversationStopJob(laneId, jobId)
+        .conversationStopJob(sessionId, jobId)
         .then((receipt) => {
           setStopped((current) => ({ ...current, [job.id]: receipt.reason ?? '已停止' }));
         })
@@ -274,7 +274,7 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
         })
         .finally(() => setStopping(null));
     },
-    [armed, laneId],
+    [armed, sessionId],
   );
 
   // 已结束的作业在有进行中作业时折叠到分组之后，避免长列表盖住当前进展。
@@ -312,7 +312,7 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
   }, [jobs, expandedId]);
 
   /** 车道子代理名册；`null` 表示还没对过账。 */
-  const [roster, setRoster] = React.useState<LaneSubagentSummary[] | null>(null);
+  const [roster, setRoster] = React.useState<SessionSubagentSummary[] | null>(null);
   /** 拉一次名册的最新入口；轮询与收口补齐都经它，避免两处各写一份请求。 */
   const loadRosterRef = React.useRef<() => void>(() => undefined);
 
@@ -324,7 +324,7 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
    * 而这时名册里恰好还记着那些跑过的子代理。
    */
   React.useEffect(() => {
-    if (laneId === null) {
+    if (sessionId === null) {
       setRoster(null);
       loadRosterRef.current = () => undefined;
       return undefined;
@@ -332,7 +332,7 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
     let cancelled = false;
     loadRosterRef.current = () => {
       void ipc
-        .conversationLaneSubagents(laneId)
+        .conversationSessionSubagents(sessionId)
         .then((list) => {
           if (cancelled) return;
           setRoster(list.subagents);
@@ -347,7 +347,7 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
       cancelled = true;
       loadRosterRef.current = () => undefined;
     };
-  }, [laneId]);
+  }, [sessionId]);
 
   /** 名册按 slug 索引的实时状态。 */
   const liveSubagents = React.useMemo(() => {
@@ -413,10 +413,10 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
    */
   const rosterPolling = shouldPollSubagentRoster(working, ordered);
   React.useEffect(() => {
-    if (laneId === null || !rosterPolling) return undefined;
+    if (sessionId === null || !rosterPolling) return undefined;
     const timer = window.setInterval(() => loadRosterRef.current(), SUBAGENT_ROSTER_REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [laneId, rosterPolling]);
+  }, [sessionId, rosterPolling]);
 
   /** 一轮收口的这一刻补一次：终态只能由名册给出，等下一次轮询会多挂十秒。 */
   const previousWorkingRef = React.useRef(working);
@@ -527,7 +527,7 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
             <JobLine
               key={job.id}
               job={job}
-              laneId={laneId}
+              sessionId={sessionId}
               stoppedReason={null}
               live={isLive(job)}
               expanded={expandedId === job.id}
@@ -568,7 +568,7 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
                   <JobLine
                     key={job.id}
                     job={job}
-                    laneId={laneId}
+                    sessionId={sessionId}
                     stoppedReason={reasonOf(job)}
                     live={isLive(job)}
                     expanded={expandedId === job.id}

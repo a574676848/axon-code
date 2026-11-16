@@ -9,14 +9,14 @@
 
 import { isDesktopHost } from './ipc';
 
-/** 会话有新结果的推送事件名，与 Rust 侧 `LANE_ACTIVITY_EVENT` 一致。 */
-const LANE_ACTIVITY_EVENT = 'axon://lane-activity';
+/** 会话有新结果的推送事件名，与 Rust 侧 `SESSION_ACTIVITY_EVENT` 一致。 */
+const SESSION_ACTIVITY_EVENT = 'axon://session-activity';
 
-/** 打开某条会话的推送事件名，与 Rust 侧 `LANE_OPEN_EVENT` 一致。 */
-const LANE_OPEN_EVENT = 'axon://open-lane';
+/** 打开某条会话的推送事件名，与 Rust 侧 `SESSION_OPEN_EVENT` 一致。 */
+const SESSION_OPEN_EVENT = 'axon://open-session';
 
 /** 一条「会话有新结果」的提示。 */
-export interface LaneActivity {
+export interface SessionActivity {
   /** 轮次标识，用于去重。 */
   id: string;
   /** 终态：completed / failed / interrupted，以及提问的 question_pending 等。 */
@@ -24,7 +24,7 @@ export interface LaneActivity {
   /** 提示标题。 */
   title: string;
   /** 终态所属的会话：宿主在推事件的这一刻写进来，界面据此把标识挂到正确的行上。 */
-  laneId: string;
+  sessionId: string;
   /** 推送时应用是否在前台。前台不发系统通知，标识因此要照挂。 */
   foreground: boolean;
 }
@@ -40,15 +40,15 @@ async function listenDesktopEvent<T>(
 }
 
 /** 订阅「会话有新结果」。 */
-export async function listenLaneActivity(
-  handler: (activity: LaneActivity) => void,
+export async function listenSessionActivity(
+  handler: (activity: SessionActivity) => void,
 ): Promise<() => void> {
-  return listenDesktopEvent<LaneActivity>(LANE_ACTIVITY_EVENT, handler);
+  return listenDesktopEvent<SessionActivity>(SESSION_ACTIVITY_EVENT, handler);
 }
 
 /** 订阅「回到某条会话」。 */
-export async function listenOpenLane(handler: (laneId: string) => void): Promise<() => void> {
-  return listenDesktopEvent<{ laneId: string }>(LANE_OPEN_EVENT, (payload) =>
-    handler(payload.laneId),
+export async function listenOpenSession(handler: (sessionId: string) => void): Promise<() => void> {
+  return listenDesktopEvent<{ sessionId: string }>(SESSION_OPEN_EVENT, (payload) =>
+    handler(payload.sessionId),
   );
 }

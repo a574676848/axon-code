@@ -10,9 +10,7 @@ use axon_daemon::{
     },
 };
 use axon_domain::{InteractionId, InteractionRecord, RuntimeHostId, SYSTEM_SOURCE_CHANNEL};
-use axon_session::{
-    SqliteRuntimeStore, WorkspaceResolver, WorkspaceStore, interaction_session_lane_id,
-};
+use axon_session::{SqliteRuntimeStore, WorkspaceResolver, WorkspaceStore, interaction_session_id};
 use axon_session_runtime::AgentTurnExecutor;
 use std::{
     path::{Path, PathBuf},
@@ -93,11 +91,11 @@ struct DaemonPrimaryTurnSteerSink {
 
 impl ActiveTurnSteerSink for DaemonPrimaryTurnSteerSink {
     fn try_steer(&self, interaction: &InteractionRecord) -> Result<bool, String> {
-        let lane_id = interaction_session_lane_id(interaction)
+        let session_id = interaction_session_id(interaction)
             .ok_or_else(|| "Primary Turn steer 必须绑定 Workspace".to_owned())?;
         self.active_primary_turns
             .try_send_message(
-                &ActivePrimaryTurnRegistry::affinity_key(&lane_id),
+                &ActivePrimaryTurnRegistry::affinity_key(&session_id),
                 steer_message(interaction),
             )
             .map(|result| result.is_some())
@@ -110,10 +108,10 @@ impl ActiveTurnSteerSink for DaemonPrimaryTurnSteerSink {
         if interaction.source.channel() == SYSTEM_SOURCE_CHANNEL {
             return Ok(None);
         }
-        let lane_id = interaction_session_lane_id(interaction)
+        let session_id = interaction_session_id(interaction)
             .ok_or_else(|| "Primary Turn append 必须绑定 Workspace".to_owned())?;
         self.active_primary_turns.try_send_message(
-            &ActivePrimaryTurnRegistry::affinity_key(&lane_id),
+            &ActivePrimaryTurnRegistry::affinity_key(&session_id),
             steer_message(interaction),
         )
     }
@@ -369,7 +367,7 @@ fn primary_turn_waker(signal: Arc<DaemonMaintenanceSignal>) -> Arc<dyn Fn() + Se
 /// 实现，调用方据此留痕而不是静默跳过。
 fn primary_turn_wake_hook(
     signal: Arc<DaemonMaintenanceSignal>,
-) -> crate::user_question::lane_steerer::PrimaryTurnWakeHook {
+) -> crate::user_question::turn_steerer::PrimaryTurnWakeHook {
     Arc::new(move || {
         signal.notify();
         Ok(())
@@ -559,7 +557,7 @@ fn serve_daemon_ipc(
         // UserQuestionAnswerService 内。IPC 不允许存在「只结算、不投递」的第二条路径，
         // 否则答案会落库却送不到等待中的提问工具，也不会开启续跑的一轮。
         if let axon_protocol::DaemonCommand::AnswerQuestion {
-            lane_id,
+            session_id,
             call_id,
             answers,
             channel,
@@ -574,7 +572,7 @@ fn serve_daemon_ipc(
             return IpcDispatch::complete(vec![answer_question_ipc_response(
                 &answer_service,
                 &request.request_id,
-                lane_id,
+                session_id,
                 call_id,
                 answers.clone(),
                 channel,

@@ -5,9 +5,9 @@
  * 会话的运行状态只存在于会话视图内部，因此由它把这份最小事实上报给外壳，
  * 侧栏据此决定是否需要二次确认，以及确认后该停止什么。
  */
-export interface LaneRuntimeFacts {
+export interface SessionRuntimeFacts {
   /** 事实所属的车道；没有选中会话时为 null。 */
-  laneId: string | null;
+  sessionId: string | null;
   /** 主轮是否仍在推进。 */
   turnRunning: boolean;
   /** 进行中的子代理数量。 */
@@ -21,7 +21,7 @@ export interface LaneRuntimeFacts {
 }
 
 /** 是否真的有什么在跑。 */
-export function isRunning(facts: LaneRuntimeFacts | null): boolean {
+export function isRunning(facts: SessionRuntimeFacts | null): boolean {
   if (facts === null) return false;
   return facts.turnRunning || facts.activeSubagents > 0 || facts.activeJobs > 0;
 }
@@ -35,12 +35,12 @@ export function isRunning(facts: LaneRuntimeFacts | null): boolean {
  * 渲染进程一路推到内存耗尽）。
  */
 export function sameRuntimeFacts(
-  previous: LaneRuntimeFacts | null,
-  next: LaneRuntimeFacts | null,
+  previous: SessionRuntimeFacts | null,
+  next: SessionRuntimeFacts | null,
 ): boolean {
   if (previous === null || next === null) return previous === next;
   return (
-    previous.laneId === next.laneId &&
+    previous.sessionId === next.sessionId &&
     previous.turnRunning === next.turnRunning &&
     previous.activeSubagents === next.activeSubagents &&
     previous.activeJobs === next.activeJobs &&

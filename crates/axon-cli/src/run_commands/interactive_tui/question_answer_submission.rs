@@ -37,7 +37,7 @@ fn question_answer_command(answer: &AgentTuiQuestionAnswer) -> Result<DaemonComm
         return Err("问答作答条目不能为空".to_owned());
     }
     Ok(DaemonCommand::AnswerQuestion {
-        lane_id: answer.lane_id.clone(),
+        session_id: answer.session_id.clone(),
         call_id: answer.call_id.clone(),
         answers: answer.answers.clone(),
         channel: TUI_CHANNEL.to_owned(),
@@ -52,7 +52,7 @@ mod tests {
 
     fn answer(selected: Vec<String>) -> AgentTuiQuestionAnswer {
         AgentTuiQuestionAnswer {
-            lane_id: "lane-main".to_owned(),
+            session_id: "session-main".to_owned(),
             call_id: "call-question-1".to_owned(),
             answers: vec![UserAnswerItem {
                 id: "q1".to_owned(),
@@ -68,7 +68,7 @@ mod tests {
             .expect("合法作答应构造出命令");
 
         let DaemonCommand::AnswerQuestion {
-            lane_id,
+            session_id,
             call_id,
             answers,
             channel,
@@ -76,7 +76,7 @@ mod tests {
         else {
             panic!("作答必须走 DaemonCommand::AnswerQuestion，而不是普通消息提交");
         };
-        assert_eq!(lane_id, "lane-main");
+        assert_eq!(session_id, "session-main");
         assert_eq!(call_id, "call-question-1");
         assert_eq!(answers[0].selected, vec!["继续部署".to_owned()]);
         assert_eq!(channel, TUI_CHANNEL);

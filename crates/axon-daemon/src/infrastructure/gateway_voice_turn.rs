@@ -285,17 +285,11 @@ impl VoiceTurn {
 }
 
 /// `turn` 帧。
-pub(super) fn turn_json(
-    interaction_id: &str,
-    assigned: &AssignedTurn,
-    lane_id: &str,
-    session_id: &str,
-) -> String {
+pub(super) fn turn_json(interaction_id: &str, assigned: &AssignedTurn, session_id: &str) -> String {
     serde_json::json!({
         "type": "turn",
         "interactionId": interaction_id,
         "turnId": assigned.turn_id,
-        "laneId": lane_id,
         "sessionId": session_id,
         "epoch": assigned.epoch,
     })

@@ -3,9 +3,9 @@
 mod activity_service;
 mod goal_command_service;
 mod goal_query_service;
-mod lane_query_service;
 pub(crate) mod projection;
-mod session_lane;
+mod session_identity;
+mod session_query_service;
 mod thread_service;
 mod workspace_resolver;
 
@@ -16,8 +16,8 @@ pub use activity_service::{
 };
 pub use goal_command_service::{GoalCommandService, GoalCommandServiceError, GoalExecutionSpec};
 pub use goal_query_service::{GoalQueryService, GoalQueryServiceError};
-pub use lane_query_service::{LaneQueryService, LaneSnapshot};
-pub use session_lane::{interaction_session_lane_id, session_lane_id};
+pub use session_identity::{interaction_session_id, session_id_for_route};
+pub use session_query_service::{SessionQueryService, SessionSnapshot};
 mod thread_repair;
 pub use thread_service::{
     AppendTurnCommand, AppendTurnItemsCommand, CompactThreadCommand, FailTurnCommand,

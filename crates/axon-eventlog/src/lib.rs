@@ -114,7 +114,7 @@ mod tests {
 
     #[test]
     fn segment_encoding_is_injective_and_path_safe() {
-        let cases = ["session-lane-abc", "a/b", "a\\b", "..", "会话一", ""];
+        let cases = ["session-session-abc", "a/b", "a\\b", "..", "会话一", ""];
         let mut seen = std::collections::BTreeSet::new();
         for case in cases {
             let encoded = EventLog::encode_segment(case);
@@ -126,10 +126,10 @@ mod tests {
 
     #[test]
     fn path_uses_current_generation() {
-        let log = EventLog::open("/tmp/events", "session-lane-1");
+        let log = EventLog::open("/tmp/events", "session-session-1");
         let text = log.path().to_string_lossy().replace('\\', "/");
         assert!(
-            text.ends_with("/session-lane-1/session.v1.jsonl.zstd"),
+            text.ends_with("/session-session-1/session.v1.jsonl.zstd"),
             "{text}"
         );
     }

@@ -307,14 +307,14 @@ fn publish_lock_wait_does_not_grow_with_the_subscriber_count() {
 
     let paired = {
         let bridge = EventStreamBridge::new_with_telemetry(true);
-        let lane = bridge
+        let subscription = bridge
             .subscribe_with_capacity(
                 session.clone(),
                 interaction.clone(),
                 None,
                 PROFILE_MAILBOX_CAPACITY,
             )
-            .expect("车道订阅");
+            .expect("订阅");
         let conversation = bridge
             .subscribe_session_with_capacity(session.clone(), None, PROFILE_MAILBOX_CAPACITY)
             .expect("会话级订阅应与车道订阅并存于同一会话");
@@ -325,7 +325,7 @@ fn publish_lock_wait_does_not_grow_with_the_subscriber_count() {
             "双订阅对照必须真的每条事件扇出两次（车道那一路命中，会话那一路全收）"
         );
         // 只释放其中一路：另一路必须继续在册。
-        drop(lane);
+        drop(subscription);
         assert_eq!(
             bridge.subscriber_count(),
             1,

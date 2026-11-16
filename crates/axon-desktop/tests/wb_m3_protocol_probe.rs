@@ -35,7 +35,7 @@ type LiveSocket =
 #[derive(Debug, Clone)]
 struct RealTarget {
     workspace_id: String,
-    lane_id: String,
+    session_id: String,
     interaction_id: String,
     /// 该车道下真实登记过的子代理会话标识；没有时为空。
     subagent_session_id: Option<String>,
@@ -43,29 +43,30 @@ struct RealTarget {
 
 /// 从真实库里挑一条有历史的车道，并尽量找一条它名下的子代理会话。
 fn real_target() -> Option<RealTarget> {
-    let payload = gateway::get_json_at("/api/v1/lanes").ok()?;
-    let lanes = payload.get("lanes")?.as_array()?;
-    for lane in lanes {
-        let lane_id = lane.get("laneId")?.as_str()?.to_owned();
-        let workspace_id = lane.get("workspaceId")?.as_str()?.to_owned();
-        let Ok(page) = history::lane_interactions(&lane_id, Some(200), None) else {
+    let payload = gateway::get_json_at("/api/v1/sessions").ok()?;
+    let sessions = payload.get("sessions")?.as_array()?;
+    for session in sessions {
+        let session_id = session.get("sessionId")?.as_str()?.to_owned();
+        let workspace_id = session.get("workspaceId")?.as_str()?.to_owned();
+        let Ok(page) = history::session_interactions(&session_id, Some(200), None) else {
             continue;
         };
         let Some(first) = page.interactions.first() else {
             continue;
         };
-        let subagent_session_id = session_read::lane_subagents(&lane_id)
-            .ok()
-            .and_then(|roster| {
-                roster
-                    .subagents
-                    .into_iter()
-                    .find(|row| row.has_runtime)
-                    .map(|row| row.session_id)
-            });
+        let subagent_session_id =
+            session_read::session_subagents(&session_id)
+                .ok()
+                .and_then(|roster| {
+                    roster
+                        .subagents
+                        .into_iter()
+                        .find(|row| row.has_runtime)
+                        .map(|row| row.session_id)
+                });
         return Some(RealTarget {
             workspace_id,
-            lane_id,
+            session_id,
             interaction_id: first.interaction_id.clone(),
             subagent_session_id,
         });
@@ -173,7 +174,7 @@ async fn wait_pong(socket: &mut LiveSocket) -> bool {
     }
 }
 
-fn lane_frame(workspace_id: &str, subscribe_id: &str, interaction_id: &str) -> ClientFrame {
+fn session_frame(workspace_id: &str, subscribe_id: &str, interaction_id: &str) -> ClientFrame {
     ClientFrame::Subscribe {
         subscribe_id: subscribe_id.to_owned(),
         workspace_id: workspace_id.to_owned(),
@@ -183,7 +184,7 @@ fn lane_frame(workspace_id: &str, subscribe_id: &str, interaction_id: &str) -> C
     }
 }
 
-fn session_frame(workspace_id: &str, subscribe_id: &str, session_id: &str) -> ClientFrame {
+fn session_frame_v2(workspace_id: &str, subscribe_id: &str, session_id: &str) -> ClientFrame {
     ClientFrame::Subscribe {
         subscribe_id: subscribe_id.to_owned(),
         workspace_id: workspace_id.to_owned(),
@@ -206,7 +207,7 @@ async fn probe_subscription_holder(subscribe_id: &str, target: &RealTarget) -> H
     };
     send(
         &mut socket,
-        &lane_frame(&target.workspace_id, subscribe_id, &target.interaction_id),
+        &session_frame(&target.workspace_id, subscribe_id, &target.interaction_id),
     )
     .await;
     let mut collected = Vec::new();
@@ -290,26 +291,26 @@ async fn run_probe() -> Vec<Observation> {
         return observations;
     };
 
-    let lane_subscribe_id = format!("interaction:{}", target.interaction_id);
+    let session_subscribe_id = format!("interaction:{}", target.interaction_id);
     let session_subscribe_id = "session:wb-m3-probe-session".to_owned();
     let mut collected: Vec<(String, Option<String>)> = Vec::new();
 
     // 1. 同一条连接上连发两条订阅，两条都必须建立成功。
     send(
         &mut socket,
-        &lane_frame(
+        &session_frame(
             &target.workspace_id,
-            &lane_subscribe_id,
+            &session_subscribe_id,
             &target.interaction_id,
         ),
     )
     .await;
-    let lane_ok = wait_subscribed(&mut socket, &lane_subscribe_id, &mut collected).await;
+    let session_ok = wait_subscribed(&mut socket, &session_subscribe_id, &mut collected).await;
     observations.push(Observation::new(
         "同一条连接上的第一条订阅建立成功",
-        lane_ok.is_ok(),
+        session_ok.is_ok(),
     ));
-    if let Err(code) = &lane_ok {
+    if let Err(code) = &session_ok {
         eprintln!("[probe] 第一路订阅失败：{code}");
     }
 
@@ -336,13 +337,13 @@ async fn run_probe() -> Vec<Observation> {
         "重放事件帧回显 subscribeId（事件按订阅归位）",
         collected
             .iter()
-            .all(|(id, _)| id == &lane_subscribe_id || id == &session_subscribe_id),
+            .all(|(id, _)| id == &session_subscribe_id || id == &session_subscribe_id),
     ));
-    let lane_cursors = cursors_of(&collected, &lane_subscribe_id);
+    let session_cursors = cursors_of(&collected, &session_subscribe_id);
     let session_cursors = cursors_of(&collected, &session_subscribe_id);
     observations.push(Observation::new(
         "车道那一路的游标单调推进",
-        is_monotonic(&lane_cursors),
+        is_monotonic(&session_cursors),
     ));
     observations.push(Observation::new(
         "会话那一路的游标单调推进（两路互不干扰）",
@@ -350,8 +351,8 @@ async fn run_probe() -> Vec<Observation> {
     ));
     println!(
         "[probe] 目标车道 {}：车道订阅重放 {} 条事件，会话订阅重放 {} 条事件，合计 {} 条事件帧",
-        target.lane_id,
-        lane_cursors.len(),
+        target.session_id,
+        session_cursors.len(),
         session_cursors.len(),
         collected.len()
     );
@@ -377,12 +378,12 @@ async fn run_probe() -> Vec<Observation> {
     ));
 
     // 4. 负例：已在册的标识重复订阅：只有真的订阅上了才会命中这一条。
-    if lane_ok.is_ok() {
+    if session_ok.is_ok() {
         send(
             &mut socket,
-            &lane_frame(
+            &session_frame(
                 &target.workspace_id,
-                &lane_subscribe_id,
+                &session_subscribe_id,
                 &target.interaction_id,
             ),
         )
@@ -399,7 +400,7 @@ async fn run_probe() -> Vec<Observation> {
             duplicate
                 .as_ref()
                 .and_then(|(_, id)| id.as_deref())
-                .is_some_and(|id| id == lane_subscribe_id),
+                .is_some_and(|id| id == session_subscribe_id),
         ));
 
         // 重标识只拒绝那一次，不得影响已建立的那一路：再发一条事件查询仍然有回音。
@@ -413,14 +414,14 @@ async fn run_probe() -> Vec<Observation> {
         send(
             &mut socket,
             &ClientFrame::Unsubscribe {
-                subscribe_id: lane_subscribe_id.clone(),
+                subscribe_id: session_subscribe_id.clone(),
             },
         )
         .await;
         let unsubscribed = wait_unsubscribed(&mut socket).await;
         observations.push(Observation::new(
             "取消订阅回执回显 subscribeId",
-            unsubscribed.as_deref() == Some(lane_subscribe_id.as_str()),
+            unsubscribed.as_deref() == Some(session_subscribe_id.as_str()),
         ));
         send(&mut socket, &ClientFrame::Ping {}).await;
         observations.push(Observation::new(
@@ -429,7 +430,7 @@ async fn run_probe() -> Vec<Observation> {
         ));
 
         // 从另一条连接上确认：这一路的标识已经被真正释放（不是只从本地表里摘掉）。
-        let holder = probe_subscription_holder(&lane_subscribe_id, &target).await;
+        let holder = probe_subscription_holder(&session_subscribe_id, &target).await;
         observations.push(Observation::new(
             "取消之后该订阅标识确实被释放（独立连接可重新占用）",
             holder == HolderProbe::Released,
@@ -441,9 +442,9 @@ async fn run_probe() -> Vec<Observation> {
         // 取消之后同一标识可以重新订阅：证明条目真的被摘除，而不是残留占位。
         send(
             &mut socket,
-            &lane_frame(
+            &session_frame(
                 &target.workspace_id,
-                &lane_subscribe_id,
+                &session_subscribe_id,
                 &target.interaction_id,
             ),
         )
@@ -451,14 +452,14 @@ async fn run_probe() -> Vec<Observation> {
         let mut again = Vec::new();
         observations.push(Observation::new(
             "取消后同一标识可以重新订阅（条目被真正摘除）",
-            wait_subscribed(&mut socket, &lane_subscribe_id, &mut again)
+            wait_subscribed(&mut socket, &session_subscribe_id, &mut again)
                 .await
                 .is_ok(),
         ));
         send(
             &mut socket,
             &ClientFrame::Unsubscribe {
-                subscribe_id: lane_subscribe_id.clone(),
+                subscribe_id: session_subscribe_id.clone(),
             },
         )
         .await;

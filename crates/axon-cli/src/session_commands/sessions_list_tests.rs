@@ -59,7 +59,7 @@ fn seed_inbox(store: &SqliteRuntimeStore, session_id: &str, content: &str, recei
             connection
                 .execute(
                     "INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,
-                         audience_json,reply_route_json,content,lane_id,received_at_ms,updated_at_ms)
+                         audience_json,reply_route_json,content,session_id,received_at_ms,updated_at_ms)
                      VALUES(?1,'tui',?2,'{}','{}','{}',?3,?4,?5,?5)",
                     params![
                         format!("inbox-{session_id}"),

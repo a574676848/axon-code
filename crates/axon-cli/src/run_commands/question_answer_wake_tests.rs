@@ -22,18 +22,18 @@ use axon_session_runtime::RuntimeClock;
 
 use super::RunCancelToken;
 use super::run_steer::{ActivePrimaryTurnRegistry, RunSteerBridge};
-use crate::user_question::QuestionMessageSteerer;
-use crate::user_question::lane_steerer::PrimaryTurnWakeHook;
+use crate::user_question::HostQuestionMessageSteerer;
+use crate::user_question::turn_steerer::PrimaryTurnWakeHook;
 use crate::user_question::{
-    LaneQuestionMessageSteerer, NoopUserQuestionEventSink, UserQuestionAnswerService,
+    NoopUserQuestionEventSink, QuestionMessageSteerer, UserQuestionAnswerService,
 };
 
 /// 测试车道所属的工作区。
 const WORKSPACE_ID: &str = "workspace-late-answer";
 /// 测试车道的会话表面。
-const LANE_SURFACE: &str = "desktop-surface-1";
+const SESSION_SURFACE: &str = "desktop-surface-1";
 /// 测试车道来源渠道；必须与回复路由渠道一致，否则入口策略直接拒绝。
-const LANE_CHANNEL: &str = "desktop";
+const SESSION_CHANNEL: &str = "desktop";
 /// 动作租约时长；与守护进程同一量级即可。
 const TEST_LEASE_MS: u64 = 120_000;
 /// 单次领取批量上限。
@@ -48,7 +48,7 @@ fn late_answer_lands_durable_and_opens_exactly_one_new_primary_turn() {
     let settled = fixture
         .answer_service()
         .submit_answer(
-            &record.lane_id,
+            &record.session_id,
             &record.tool_call_id,
             answer("release"),
             "desktop",
@@ -108,7 +108,7 @@ fn duplicate_answer_delivery_never_opens_a_second_turn() {
 
     let settled = service
         .submit_answer(
-            &record.lane_id,
+            &record.session_id,
             &record.tool_call_id,
             answer("release"),
             "desktop",
@@ -118,7 +118,7 @@ fn duplicate_answer_delivery_never_opens_a_second_turn() {
 
     // 重试投递：权威记录已结算，统一入口直接拒绝，不会开出第二轮。
     let retry = service.submit_answer(
-        &record.lane_id,
+        &record.session_id,
         &record.tool_call_id,
         answer("release"),
         "desktop",
@@ -148,7 +148,6 @@ fn duplicate_answer_delivery_never_opens_a_second_turn() {
     for _ in 0..2 {
         steerer
             .steer_answer_message(
-                &record.lane_id,
                 &record.session_id,
                 &format!("question-answer-{}", settled.question_id),
                 &answer_content,
@@ -177,7 +176,7 @@ fn answer_merges_into_the_active_turn_instead_of_opening_a_new_one() {
     let _live_turn = fixture
         .active_primary_turns
         .register(
-            &ActivePrimaryTurnRegistry::affinity_key(&record.lane_id),
+            &ActivePrimaryTurnRegistry::affinity_key(&record.session_id),
             InteractionId::new("interaction-active-turn").expect("合法 ID"),
             inbox,
             RunCancelToken::default(),
@@ -187,7 +186,7 @@ fn answer_merges_into_the_active_turn_instead_of_opening_a_new_one() {
     let settled = fixture
         .answer_service()
         .submit_answer(
-            &record.lane_id,
+            &record.session_id,
             &record.tool_call_id,
             answer("release"),
             "desktop",
@@ -284,7 +283,7 @@ struct WakeFixture {
     store: SqliteRuntimeStore,
     active_primary_turns: ActivePrimaryTurnRegistry,
     wakes: Arc<Mutex<usize>>,
-    lane_id: String,
+    session_id: String,
 }
 
 impl WakeFixture {
@@ -293,23 +292,23 @@ impl WakeFixture {
         let store = SqliteRuntimeStore::from_root(axon_test_support::test_temp_root());
         let active_primary_turns = ActivePrimaryTurnRegistry::default();
         let seed = InteractionRecord::new(
-            InteractionId::new("interaction-lane-seed").expect("合法 ID"),
-            InteractionSource::new(LANE_CHANNEL, "seed-message-1").expect("合法来源"),
+            InteractionId::new("interaction-session-seed").expect("合法 ID"),
+            InteractionSource::new(SESSION_CHANNEL, "seed-message-1").expect("合法来源"),
             ScopeRef::workspace(WORKSPACE_ID).expect("合法作用域"),
             private_audience(),
-            ReplyRoute::new(LANE_CHANNEL, LANE_SURFACE).expect("合法回复路由"),
+            ReplyRoute::new(SESSION_CHANNEL, SESSION_SURFACE).expect("合法回复路由"),
             "历史提问",
             1,
         )
         .expect("合法 Interaction");
-        let lane_id =
-            axon_session::interaction_session_lane_id(&seed).expect("种子记录必须绑定 Workspace");
+        let session_id =
+            axon_session::interaction_session_id(&seed).expect("种子记录必须绑定 Workspace");
         store.append(&seed).expect("种子 Interaction 落库");
         let fixture = Self {
             store,
             active_primary_turns,
             wakes: Arc::new(Mutex::new(0)),
-            lane_id,
+            session_id,
         };
         // 种子记录必须先被结算，否则它自己就会在后续领取里占掉一轮。
         let seeded = fixture.tick(&RecordingRunner::default());
@@ -322,8 +321,7 @@ impl WakeFixture {
         let record = UserQuestionRecord {
             question_id: format!("uq-{call_id}"),
             idempotency_key: format!("idem-{call_id}"),
-            lane_id: self.lane_id.clone(),
-            session_id: self.lane_id.clone(),
+            session_id: self.session_id.clone(),
             interaction_id: "interaction-question".to_owned(),
             turn_id: "turn-question".to_owned(),
             tool_call_id: call_id.to_owned(),
@@ -346,8 +344,8 @@ impl WakeFixture {
     }
 
     /// 车道答案注入器：与守护进程同一份装配，唤醒端口计入本次现场。
-    fn steerer(&self) -> LaneQuestionMessageSteerer {
-        LaneQuestionMessageSteerer::new(
+    fn steerer(&self) -> HostQuestionMessageSteerer {
+        HostQuestionMessageSteerer::new(
             self.store.clone(),
             self.active_primary_turns.clone(),
             TEST_LEASE_MS,
@@ -383,7 +381,7 @@ impl WakeFixture {
     /// 该车道上的答案 Interaction 条数。
     fn answer_interaction_count(&self) -> usize {
         self.store
-            .interactions_for_lane(&self.lane_id, 10, None)
+            .interactions_for_session(&self.session_id, 10, None)
             .expect("读取车道 Interaction")
             .iter()
             .filter(|record| {

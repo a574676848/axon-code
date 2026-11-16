@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import * as ipc from '../ipc';
 import type { AnswerItem, PendingQuestion } from './questions';
-import { shouldReattachLane } from './questions';
+import { shouldReattachSession } from './questions';
 import type { ConversationAction, ConversationState } from './transcript/state';
 
 export interface UseQuestionSyncReturn {
@@ -14,7 +14,7 @@ export interface UseQuestionSyncReturn {
 /** 问答对账与作答的装配参数。 */
 export interface QuestionSyncOptions {
   /** 当前车道；为空时什么也不做。 */
-  laneId: string | null;
+  sessionId: string | null;
   /** 对话投影。 */
   state: ConversationState;
   /** 投影入口。 */
@@ -38,7 +38,7 @@ export interface QuestionSyncOptions {
 }
 
 export function useQuestionSync({
-  laneId,
+  sessionId,
   state,
   dispatch,
   onError,
@@ -75,17 +75,17 @@ export function useQuestionSync({
    */
   const reconcile = useCallback(
     async (requireActive: boolean) => {
-      if (!laneId) return;
+      if (!sessionId) return;
       if (requireActive && activeQuestionRef.current === null) return;
       try {
-        const questions = await ipc.conversationLaneQuestions(laneId);
+        const questions = await ipc.conversationSessionQuestions(sessionId);
         dispatch({ type: 'reconcile-questions', questions, authoritative: true });
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         console.warn('[axon] 问答状态对账失败，保留本地状态', msg);
       }
     },
-    [laneId, dispatch],
+    [sessionId, dispatch],
   );
 
   const reconcileRef = useRef(reconcile);
@@ -93,9 +93,9 @@ export function useQuestionSync({
 
   const answerQuestion = useCallback(
     async (callId: string, answers: AnswerItem[]) => {
-      if (!laneId) return;
+      if (!sessionId) return;
       try {
-        const receipt = await ipc.conversationAnswerQuestion(laneId, callId, answers);
+        const receipt = await ipc.conversationAnswerQuestion(sessionId, callId, answers);
         const existing = state.pendingQuestions[callId];
         if (existing) {
           dispatch({
@@ -111,7 +111,7 @@ export function useQuestionSync({
         }
         // 走消息通道的作答会换来新的一轮：那一条 Interaction 界面此前不认识，
         // 不重贴车道就会一直停在原地，看起来像「答了但没继续」。
-        if (shouldReattachLane(receipt?.deliveryMode)) {
+        if (shouldReattachSession(receipt?.deliveryMode)) {
           onContinuation?.();
         }
       } catch (error) {
@@ -122,7 +122,7 @@ export function useQuestionSync({
         if (onError) onError(msg);
       }
     },
-    [laneId, state.pendingQuestions, dispatch, onError, onContinuation],
+    [sessionId, state.pendingQuestions, dispatch, onError, onContinuation],
   );
 
   /*
@@ -135,7 +135,7 @@ export function useQuestionSync({
   }, [reconcile, reattachToken]);
 
   useEffect(() => {
-    if (!laneId) return;
+    if (!sessionId) return;
 
     const onFocus = () => {
       void reconcile(true);
@@ -143,7 +143,7 @@ export function useQuestionSync({
 
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
-  }, [laneId, reconcile]);
+  }, [sessionId, reconcile]);
 
   return {
     activeQuestion,

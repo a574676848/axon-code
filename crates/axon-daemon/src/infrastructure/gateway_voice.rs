@@ -20,7 +20,7 @@ use crate::application::ExternalEventEnvelope;
 use crate::infrastructure::gateway_auth::query_token;
 use crate::infrastructure::gateway_kernel::GatewayKernelError;
 use axon_domain::{AudienceContext, AudienceKind, DisclosurePolicy};
-use axon_session::session_lane_id;
+use axon_session::session_id_for_route;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderMap, Uri};
@@ -384,8 +384,8 @@ async fn handle_final(
         Ok(Ok(receipt)) => {
             let interaction_id = receipt.interaction_id.as_str().to_owned();
             let assigned = voice.submitted(&interaction_id);
-            let lane_id = lane_id_for(request);
-            let frame = turn_json(&interaction_id, &assigned, &lane_id, &lane_id);
+            let session_id = session_id_for(request);
+            let frame = turn_json(&interaction_id, &assigned, &session_id);
             let stop = Arc::new(AtomicBool::new(false));
             if let Some(previous) = subscription.replace(Arc::clone(&stop)) {
                 previous.store(true, Ordering::Relaxed);
@@ -520,9 +520,9 @@ fn voice_envelope(
 }
 
 /// 与文本入口同一条车道：`(workspace, 私有信任域, desktop, destination)`。
-fn lane_id_for(request: &StartRequest) -> String {
+fn session_id_for(request: &StartRequest) -> String {
     let audience = AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly);
-    session_lane_id(
+    session_id_for_route(
         &request.workspace_id,
         &audience,
         VOICE_CHANNEL,

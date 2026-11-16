@@ -24,7 +24,7 @@ use axon_config::ConfigLoader;
 use serde::{Deserialize, Serialize};
 
 use crate::connection::profile::BackendProfile;
-use crate::state::{PendingLane, RegisteredWorkspace};
+use crate::state::{PendingSession, RegisteredWorkspace};
 
 use super::store_migration::{migrate_from_v1, warn_if_v1_returned};
 
@@ -97,17 +97,17 @@ pub struct ProfileProjection {
     /// 用户登记的工作区清单。
     pub workspaces: Vec<RegisteredWorkspace>,
     /// 车道到所属工作区路径的归属映射。
-    pub lane_workspace: HashMap<String, String>,
+    pub session_workspace: HashMap<String, String>,
     /// 已置顶的车道标识。
-    pub lane_pinned: Vec<String>,
+    pub session_pinned: Vec<String>,
     /// 已归档的车道标识。
-    pub lane_archived: Vec<String>,
+    pub session_archived: Vec<String>,
     /// 用户重命名后的车道标题。
-    pub lane_title: HashMap<String, String>,
+    pub session_title: HashMap<String, String>,
     /// 每个工作区下车道的用户自定义顺序。
-    pub lane_order: HashMap<String, Vec<String>>,
+    pub session_order: HashMap<String, Vec<String>>,
     /// 本应用新建、尚未产生 Interaction 的车道。
-    pub pending_lanes: Vec<PendingLane>,
+    pub pending_sessions: Vec<PendingSession>,
 }
 
 /// 一个档案在状态文件里的整段内容：元数据加投影。

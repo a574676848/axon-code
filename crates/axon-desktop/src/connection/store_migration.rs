@@ -16,7 +16,7 @@ use super::store::{
     backup_corrupt, save_document_at, unique_suffixed_path,
 };
 use crate::connection::profile::{BackendProfile, EndpointSpec};
-use crate::state::{PendingLane, RegisteredWorkspace};
+use crate::state::{PendingSession, RegisteredWorkspace};
 
 /// v1 状态文件的两处位置，按读取优先级排列：客户端根优先，缺失才读后端运行时根。
 fn v1_candidates(root: &Path, backend: Option<&Path>) -> Vec<PathBuf> {
@@ -110,12 +110,12 @@ fn retire_v1_files(root: &Path, backend: Option<&Path>) {
 const V1_KNOWN_KEYS: [&str; 11] = [
     "version",
     "workspaces",
-    "lane_workspace",
-    "lane_pinned",
-    "lane_archived",
-    "lane_title",
-    "lane_order",
-    "pending_lanes",
+    "session_workspace",
+    "session_pinned",
+    "session_archived",
+    "session_title",
+    "session_order",
+    "pending_sessions",
     "last_workspace_dir",
     "notifications_enabled",
     "theme",
@@ -180,12 +180,12 @@ fn read_v1(path: &Path) -> Result<Option<V1State>, String> {
 struct V1State {
     version: u32,
     workspaces: Vec<RegisteredWorkspace>,
-    lane_workspace: HashMap<String, String>,
-    lane_pinned: Vec<String>,
-    lane_archived: Vec<String>,
-    lane_title: HashMap<String, String>,
-    lane_order: HashMap<String, Vec<String>>,
-    pending_lanes: Vec<V1PendingLane>,
+    session_workspace: HashMap<String, String>,
+    session_pinned: Vec<String>,
+    session_archived: Vec<String>,
+    session_title: HashMap<String, String>,
+    session_order: HashMap<String, Vec<String>>,
+    pending_sessions: Vec<V1PendingSession>,
     last_workspace_dir: Option<String>,
     notifications_enabled: Option<bool>,
     theme: Option<String>,
@@ -194,8 +194,8 @@ struct V1State {
 /// v1 的待激活车道：字段名是旧版的 snake_case。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
-struct V1PendingLane {
-    lane_id: String,
+struct V1PendingSession {
+    session_id: String,
     workspace_id: String,
     destination: String,
     created_at: u64,
@@ -225,19 +225,19 @@ impl V1State {
                 meta: BackendProfile::local(LOCAL_PROFILE_LABEL),
                 projection: ProfileProjection {
                     workspaces: self.workspaces,
-                    lane_workspace: self.lane_workspace,
-                    lane_pinned: self.lane_pinned,
-                    lane_archived: self.lane_archived,
-                    lane_title: self.lane_title,
-                    lane_order: self.lane_order,
-                    pending_lanes: self
-                        .pending_lanes
+                    session_workspace: self.session_workspace,
+                    session_pinned: self.session_pinned,
+                    session_archived: self.session_archived,
+                    session_title: self.session_title,
+                    session_order: self.session_order,
+                    pending_sessions: self
+                        .pending_sessions
                         .into_iter()
-                        .map(|lane| PendingLane {
-                            lane_id: lane.lane_id,
-                            workspace_id: lane.workspace_id,
-                            destination: lane.destination,
-                            created_at: lane.created_at,
+                        .map(|session| PendingSession {
+                            session_id: session.session_id,
+                            workspace_id: session.workspace_id,
+                            destination: session.destination,
+                            created_at: session.created_at,
                         })
                         .collect(),
                 },

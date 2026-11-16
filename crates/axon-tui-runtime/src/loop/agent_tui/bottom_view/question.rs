@@ -16,7 +16,7 @@ pub const MAX_TUI_CUSTOM_ANSWER_CHARS: usize = 2000;
 /// TUI 用户问答交互面板视图。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct QuestionView {
-    lane_id: String,
+    session_id: String,
     call_id: String,
     questions: Vec<UserQuestionItem>,
     current_index: usize,
@@ -30,17 +30,17 @@ pub(crate) struct QuestionView {
 impl QuestionView {
     /// 构造新的提问控件视图。
     ///
-    /// `lane_id` 是问题所属的会话车道身份：作答必须回到提出问题的那条车道，
+    /// `session_id` 是问题所属的会话车道身份：作答必须回到提出问题的那条车道，
     /// 面板本身不重新推导，直接沿用事件携带的身份。
     pub(crate) fn new(
-        lane_id: impl Into<String>,
+        session_id: impl Into<String>,
         call_id: impl Into<String>,
         questions: Vec<UserQuestionItem>,
         deadline_at_ms: i64,
     ) -> Self {
         let count = questions.len();
         Self {
-            lane_id: lane_id.into(),
+            session_id: session_id.into(),
             call_id: call_id.into(),
             questions,
             current_index: 0,
@@ -59,8 +59,8 @@ impl QuestionView {
 
     /// 问题所属车道身份。
     #[allow(dead_code)]
-    pub(crate) fn lane_id(&self) -> &str {
-        &self.lane_id
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session_id
     }
 
     pub(crate) const fn kind(&self) -> DockKind {
@@ -292,7 +292,7 @@ impl QuestionView {
             return BottomViewEvent::None;
         }
         BottomViewEvent::QuestionAnswered {
-            lane_id: self.lane_id.clone(),
+            session_id: self.session_id.clone(),
             call_id: self.call_id.clone(),
             answers: self.build_answers(),
         }
@@ -356,7 +356,7 @@ mod tests {
             ],
             multi_select: false,
         };
-        QuestionView::new("lane-1", "call-123", vec![q1], 60_000)
+        QuestionView::new("session-1", "call-123", vec![q1], 60_000)
     }
 
     fn key(code: UiKeyCode) -> UiKeyEvent {
@@ -373,10 +373,10 @@ mod tests {
     fn answered(event: BottomViewEvent) -> (String, String, Vec<UserAnswerItem>) {
         match event {
             BottomViewEvent::QuestionAnswered {
-                lane_id,
+                session_id,
                 call_id,
                 answers,
-            } => (lane_id, call_id, answers),
+            } => (session_id, call_id, answers),
             other => panic!("期望 QuestionAnswered，收到 {other:?}"),
         }
     }
@@ -404,8 +404,8 @@ mod tests {
         assert!(!view.is_option_selected("Prod"));
 
         // Enter 提交
-        let (lane_id, call_id, answers) = answered(view.handle_key(key(UiKeyCode::Enter)));
-        assert_eq!(lane_id, "lane-1");
+        let (session_id, call_id, answers) = answered(view.handle_key(key(UiKeyCode::Enter)));
+        assert_eq!(session_id, "session-1");
         assert_eq!(call_id, "call-123");
         assert_eq!(answers.len(), 1);
         assert_eq!(answers[0].selected, vec!["Dev".to_string()]);
@@ -525,6 +525,6 @@ mod tests {
         assert_eq!(view.kind(), DockKind::Question);
         assert_eq!(view.call_id(), "call-123");
         assert_eq!(view.deadline_at_ms(), 60_000);
-        assert_eq!(view.lane_id(), "lane-1");
+        assert_eq!(view.session_id(), "session-1");
     }
 }

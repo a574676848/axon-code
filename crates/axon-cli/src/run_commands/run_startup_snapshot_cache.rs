@@ -142,7 +142,7 @@ impl StartupSnapshotCache {
         Some(snapshot)
     }
 
-    /// 重建快照：构建期间不持锁，MCP 探测耗时不能阻塞其他 lane 读取旧条目。
+    /// 重建快照：构建期间不持锁，MCP 探测耗时不能阻塞其他 session 读取旧条目。
     fn rebuild(
         &self,
         config_path: &Path,
@@ -152,7 +152,7 @@ impl StartupSnapshotCache {
         force: bool,
     ) -> Option<Arc<RunStartupSnapshot>> {
         let _guard = self.begin_build(&key);
-        // 其他 lane 可能刚刚完成同一 key 的构建，避免重复探测 MCP；
+        // 其他 session 可能刚刚完成同一 key 的构建，避免重复探测 MCP；
         // 强制重建（失败 MCP 重探）必须越过该短路。
         if !force
             && let Some(entry) = self.read(&key)

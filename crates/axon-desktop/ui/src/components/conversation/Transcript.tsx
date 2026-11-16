@@ -396,7 +396,7 @@ const ToolBlock: React.FC<{
           )}
           {jobTailId !== null ? (
             <JobOutputTail
-              laneId={actions?.laneId ?? null}
+              sessionId={actions?.sessionId ?? null}
               jobId={jobTailId}
               fallback={cell.output}
             />

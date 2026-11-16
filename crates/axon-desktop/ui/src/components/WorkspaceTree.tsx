@@ -1,9 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import { FolderIcon, IconNewChat } from '../icons';
-import type { LaneItem, WorkspaceItem } from '../types';
+import type { SessionItem, WorkspaceItem } from '../types';
 import type { GroupMode } from './ViewOptionsMenu';
 import { EmptyState, Text } from './ui/surfaces';
-import { LaneRow, ROW_TEXT_INDENT, WorkspaceRow } from './SidebarRows';
+import { SessionRow, ROW_TEXT_INDENT, WorkspaceRow } from './SidebarRows';
 
 /*
  * 工作区与会话列表：同一份真实数据按三种分组方式呈现。
@@ -16,7 +16,7 @@ import { LaneRow, ROW_TEXT_INDENT, WorkspaceRow } from './SidebarRows';
  */
 
 /** 折叠态下每个工作区最多直接展示的车道条数。 */
-const COLLAPSED_LANE_LIMIT = 5;
+const COLLAPSED_SESSION_LIMIT = 5;
 
 /** 去掉末尾分隔符，便于做路径前缀比较。 */
 function trimSeparators(path: string): string {
@@ -55,9 +55,9 @@ interface WorkspaceTreeProps {
   /** 真实工作区列表；单列表模式下只取其中的车道。 */
   workspaces: WorkspaceItem[];
   /** 当前选中车道标识。 */
-  activeLaneId: string;
+  activeSessionId: string;
   /** 有新结果的车道：车道标识到终态；点开即由外层清除。 */
-  laneMarks?: Record<string, string>;
+  sessionMarks?: Record<string, string>;
   /** 展开状态表。 */
   expanded: Record<string, boolean>;
   /** 网关探测尚未完成：显示骨架而不是「没有工作区」。 */
@@ -65,17 +65,17 @@ interface WorkspaceTreeProps {
   /** 折叠或展开工作区。 */
   onToggleWorkspace: (id: string) => void;
   /** 选中车道。 */
-  onSelectLane: (workspaceId: string, laneId: string) => void;
+  onSelectSession: (workspaceId: string, sessionId: string) => void;
   /** 切换置顶。 */
-  onTogglePin: (lane: LaneItem) => void;
+  onTogglePin: (session: SessionItem) => void;
   /** 切换归档。 */
-  onToggleArchive: (lane: LaneItem) => void;
+  onToggleArchive: (session: SessionItem) => void;
   /** 重命名车道。 */
-  onRenameLane: (laneId: string, title: string) => void;
+  onRenameSession: (sessionId: string, title: string) => void;
   /** 保存重排后的完整车道顺序。 */
   onReorder: (workspaceId: string, orderedIds: string[]) => void;
   /** 在工作区内新建车道。 */
-  onCreateLane: (workspaceId: string) => void;
+  onCreateSession: (workspaceId: string) => void;
   /** 移除已登记工作区。 */
   onRemoveWorkspace: (id: string) => void;
 }
@@ -83,36 +83,36 @@ interface WorkspaceTreeProps {
 export const WorkspaceTree: React.FC<WorkspaceTreeProps> = ({
   groupBy,
   workspaces,
-  activeLaneId,
-  laneMarks,
+  activeSessionId,
+  sessionMarks,
   expanded,
   loading = false,
   onToggleWorkspace,
-  onSelectLane,
+  onSelectSession,
   onTogglePin,
   onToggleArchive,
-  onRenameLane,
+  onRenameSession,
   onReorder,
-  onCreateLane,
+  onCreateSession,
   onRemoveWorkspace,
 }) => {
   const [expandedAll, setExpandedAll] = useState<Record<string, boolean>>({});
   /** 正在拖拽的车道及其所属工作区。 */
-  const [drag, setDrag] = useState<{ workspaceId: string; laneId: string } | null>(null);
+  const [drag, setDrag] = useState<{ workspaceId: string; sessionId: string } | null>(null);
   /** 当前落点。 */
-  const [dropAt, setDropAt] = useState<{ laneId: string; half: 'before' | 'after' } | null>(null);
+  const [dropAt, setDropAt] = useState<{ sessionId: string; half: 'before' | 'after' } | null>(null);
 
   /** 把拖拽结果换算成该工作区的完整车道顺序并交回上层落盘。 */
-  const applyDrop = (workspace: WorkspaceItem, targetLaneId: string, half: 'before' | 'after') => {
+  const applyDrop = (workspace: WorkspaceItem, targetSessionId: string, half: 'before' | 'after') => {
     if (drag === null || drag.workspaceId !== workspace.id) return;
-    const ids = workspace.lanes.map((lane) => lane.id);
-    const from = ids.indexOf(drag.laneId);
+    const ids = workspace.sessions.map((session) => session.id);
+    const from = ids.indexOf(drag.sessionId);
     if (from < 0) return;
-    const without = ids.filter((id) => id !== drag.laneId);
-    const targetAt = without.indexOf(targetLaneId);
+    const without = ids.filter((id) => id !== drag.sessionId);
+    const targetAt = without.indexOf(targetSessionId);
     if (targetAt < 0) return;
     const insertAt = half === 'before' ? targetAt : targetAt + 1;
-    const next = [...without.slice(0, insertAt), drag.laneId, ...without.slice(insertAt)];
+    const next = [...without.slice(0, insertAt), drag.sessionId, ...without.slice(insertAt)];
     if (next.join('\u0000') !== ids.join('\u0000')) {
       onReorder(workspace.id, next);
     }
@@ -140,38 +140,38 @@ export const WorkspaceTree: React.FC<WorkspaceTreeProps> = ({
     return { children, roots };
   }, [groupBy, workspaces]);
 
-  const lanesOf = (workspace: WorkspaceItem): LaneItem[] =>
+  const sessionsOf = (workspace: WorkspaceItem): SessionItem[] =>
     expandedAll[workspace.id] === true
-      ? workspace.lanes
-      : workspace.lanes.slice(0, COLLAPSED_LANE_LIMIT);
+      ? workspace.sessions
+      : workspace.sessions.slice(0, COLLAPSED_SESSION_LIMIT);
 
-  const renderLanes = (workspace: WorkspaceItem) => {
-    const lanes = lanesOf(workspace);
-    const hiddenCount = workspace.lanes.length - lanes.length;
+  const renderSessions = (workspace: WorkspaceItem) => {
+    const sessions = sessionsOf(workspace);
+    const hiddenCount = workspace.sessions.length - sessions.length;
     const showsAll = expandedAll[workspace.id] === true;
-    const canPaginate = workspace.lanes.length > COLLAPSED_LANE_LIMIT;
+    const canPaginate = workspace.sessions.length > COLLAPSED_SESSION_LIMIT;
 
     return (
       <div className="space-y-0.5 pb-1">
-        {lanes.length === 0 ? (
+        {sessions.length === 0 ? (
           <Text tone="tertiary" size="meta" className={`block ${ROW_TEXT_INDENT} py-1`}>
             暂无会话
           </Text>
         ) : (
-          lanes.map((lane) => (
-            <LaneRow
-              key={lane.id}
-              lane={lane}
-              selected={lane.id === activeLaneId}
-              activity={laneMarks?.[lane.id]}
-              onSelect={() => onSelectLane(workspace.id, lane.id)}
-              onTogglePin={() => onTogglePin(lane)}
-              onToggleArchive={() => onToggleArchive(lane)}
-              onRename={(title) => onRenameLane(lane.id, title)}
-              onDragStart={() => setDrag({ workspaceId: workspace.id, laneId: lane.id })}
-              onDragOver={(half) => setDropAt({ laneId: lane.id, half })}
+          sessions.map((session) => (
+            <SessionRow
+              key={session.id}
+              session={session}
+              selected={session.id === activeSessionId}
+              activity={sessionMarks?.[session.id]}
+              onSelect={() => onSelectSession(workspace.id, session.id)}
+              onTogglePin={() => onTogglePin(session)}
+              onToggleArchive={() => onToggleArchive(session)}
+              onRename={(title) => onRenameSession(session.id, title)}
+              onDragStart={() => setDrag({ workspaceId: workspace.id, sessionId: session.id })}
+              onDragOver={(half) => setDropAt({ sessionId: session.id, half })}
               onDrop={() => {
-                applyDrop(workspace, lane.id, dropAt?.half ?? 'before');
+                applyDrop(workspace, session.id, dropAt?.half ?? 'before');
                 setDrag(null);
                 setDropAt(null);
               }}
@@ -179,9 +179,9 @@ export const WorkspaceTree: React.FC<WorkspaceTreeProps> = ({
                 setDrag(null);
                 setDropAt(null);
               }}
-              dragging={drag?.laneId === lane.id}
+              dragging={drag?.sessionId === session.id}
               dropHint={
-                dropAt?.laneId === lane.id && drag !== null && drag.laneId !== lane.id
+                dropAt?.sessionId === session.id && drag !== null && drag.sessionId !== session.id
                   ? dropAt.half
                   : 'none'
               }
@@ -220,12 +220,12 @@ export const WorkspaceTree: React.FC<WorkspaceTreeProps> = ({
           depth={depth}
           expanded={isExpanded}
           onToggle={() => onToggleWorkspace(workspace.id)}
-          onCreateLane={() => onCreateLane(workspace.id)}
+          onCreateSession={() => onCreateSession(workspace.id)}
           onRemove={() => onRemoveWorkspace(workspace.id)}
         />
         {isExpanded && (
           <>
-            {renderLanes(workspace)}
+            {renderSessions(workspace)}
             {nested.map((child) => renderWorkspace(child, depth + 1))}
           </>
         )}
@@ -249,7 +249,7 @@ export const WorkspaceTree: React.FC<WorkspaceTreeProps> = ({
 
   // 单列表：不出现工作区分组，全部会话平铺成一张列表。
   if (groupBy === 'flat') {
-    const all = workspaces.flatMap((workspace) => workspace.lanes);
+    const all = workspaces.flatMap((workspace) => workspace.sessions);
     if (all.length === 0) {
       return (
         <EmptyState
@@ -261,19 +261,19 @@ export const WorkspaceTree: React.FC<WorkspaceTreeProps> = ({
     }
     return (
       <div className="space-y-0.5">
-        {all.map((lane) => {
+        {all.map((session) => {
           const owner = workspaces.find((workspace) =>
-            workspace.lanes.some((entry) => entry.id === lane.id),
+            workspace.sessions.some((entry) => entry.id === session.id),
           );
           return (
-            <LaneRow
-              key={lane.id}
-              lane={lane}
-              selected={lane.id === activeLaneId}
-              onSelect={() => onSelectLane(owner?.id ?? '', lane.id)}
-              onTogglePin={() => onTogglePin(lane)}
-              onToggleArchive={() => onToggleArchive(lane)}
-              onRename={(title) => onRenameLane(lane.id, title)}
+            <SessionRow
+              key={session.id}
+              session={session}
+              selected={session.id === activeSessionId}
+              onSelect={() => onSelectSession(owner?.id ?? '', session.id)}
+              onTogglePin={() => onTogglePin(session)}
+              onToggleArchive={() => onToggleArchive(session)}
+              onRename={(title) => onRenameSession(session.id, title)}
               onDragStart={() => setDrag(null)}
               onDragOver={() => undefined}
               onDrop={() => undefined}

@@ -1,5 +1,5 @@
 import React from 'react';
-import { isSupported, useLaneAutoRead, useSpeechState, voicePreferences } from '../../speech';
+import { isSupported, useSessionAutoRead, useSpeechState, voicePreferences } from '../../speech';
 import { SpeakerIcon, SpeakerOffIcon } from '../../icons';
 import { VoiceWave } from './VoiceWave';
 
@@ -14,10 +14,10 @@ import { VoiceWave } from './VoiceWave';
  * 不必先成为「已经点开过」的那一页。
  */
 
-export const VoiceLaneToggle: React.FC<{ laneKey: string | null }> = ({ laneKey }) => {
-  const autoRead = useLaneAutoRead(laneKey);
+export const VoiceSessionToggle: React.FC<{ sessionKey: string | null }> = ({ sessionKey }) => {
+  const autoRead = useSessionAutoRead(sessionKey);
   const speech = useSpeechState();
-  if (laneKey === null || !isSupported()) return null;
+  if (sessionKey === null || !isSupported()) return null;
   const sounding = speech.status === 'playing' || speech.status === 'preparing';
   return (
     <button
@@ -26,7 +26,7 @@ export const VoiceLaneToggle: React.FC<{ laneKey: string | null }> = ({ laneKey 
       aria-pressed={autoRead}
       data-voice-auto={sounding ? 'sounding' : autoRead ? 'on' : 'off'}
       title={autoRead ? '关闭此会话的自动朗读' : '开启此会话的自动朗读'}
-      onClick={() => voicePreferences.setLaneAutoRead(laneKey, !autoRead)}
+      onClick={() => voicePreferences.setSessionAutoRead(sessionKey, !autoRead)}
       className={`shrink-0 w-7 h-7 inline-flex items-center justify-center rounded-sm transition-colors duration-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus ${
         autoRead || sounding
           ? 'bg-active text-text-primary'

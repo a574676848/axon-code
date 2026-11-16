@@ -5,7 +5,7 @@
 
 use crate::conversation::wire::{EVENTS_PATH, EventSubmission, SubmissionReceipt};
 use crate::gateway;
-use crate::lane_source::DESKTOP_LANE_CHANNEL;
+use crate::session_source::DESKTOP_SESSION_CHANNEL;
 
 /// 提交正文的字符上限。
 ///
@@ -52,17 +52,17 @@ pub fn submit_message(
 
     let now_ms = crate::workspace::now_millis();
     let envelope = EventSubmission {
-        source_channel: DESKTOP_LANE_CHANNEL.to_string(),
+        source_channel: DESKTOP_SESSION_CHANNEL.to_string(),
         event_id: format!(
             "{}-{}",
-            DESKTOP_LANE_CHANNEL,
+            DESKTOP_SESSION_CHANNEL,
             crate::workspace::generate_uuid()
         ),
         workspace_id: workspace_id.to_string(),
         observed_at_ms: now_ms,
         expires_at_ms: now_ms.saturating_add(EVENT_TTL_MS),
         content: content.to_string(),
-        reply_channel: DESKTOP_LANE_CHANNEL.to_string(),
+        reply_channel: DESKTOP_SESSION_CHANNEL.to_string(),
         reply_destination: destination.to_string(),
         local_files: attachments.to_vec(),
         model: model

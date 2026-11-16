@@ -37,24 +37,24 @@ export interface QuestionCardState {
 export function useQuestionCard(
   activeQuestion: PendingQuestion | null,
   reopenToken: number,
-  laneKey: string | null = null,
+  sessionKey: string | null = null,
 ): QuestionCardState {
   /** 用户收起的那一条提问；换一条提问或换一条会话即失效。 */
   const [dismissedCallId, setDismissedCallId] = React.useState<string | null>(null);
   /** 作答草稿：按提问标识持有，卡片收起再打开时已选项仍在。 */
   const [drafts, setDrafts] = React.useState<Record<string, AnswerDraftMap>>({});
   /** 上一次所在的会话：用来区分「进入另一条会话」与「同一条会话里的重渲染」。 */
-  const laneRef = React.useRef(laneKey);
+  const sessionRef = React.useRef(sessionKey);
 
   /*
    * 进入另一条会话就是重新唤醒：收起只对「这一次进来」有效。
    * 同一条会话里的重渲染不经过这里，因此用户正在打字时卡片不会被顶回来。
    */
   React.useEffect(() => {
-    if (laneRef.current === laneKey) return;
-    laneRef.current = laneKey;
+    if (sessionRef.current === sessionKey) return;
+    sessionRef.current = sessionKey;
     setDismissedCallId(null);
-  }, [laneKey]);
+  }, [sessionKey]);
 
   /* 时间线上的「重新打开」按次递增，等于一次显式唤醒：它同样解除收起。 */
   React.useEffect(() => {

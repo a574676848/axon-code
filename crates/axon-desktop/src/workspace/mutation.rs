@@ -6,7 +6,9 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::lane_source::{DESKTOP_LANE_CHANNEL, LaneSource, WorkspaceEntry as RegistryWorkspace};
+use crate::session_source::{
+    DESKTOP_SESSION_CHANNEL, SessionSource, WorkspaceEntry as RegistryWorkspace,
+};
 use crate::state::{DesktopState, RegisteredWorkspace, directory_label, load_state, save_state};
 
 use super::model::{WorkspaceDto, generate_uuid, normalize, now_millis};
@@ -51,8 +53,8 @@ impl RemovalScope {
     pub(super) fn apply(&self, desktop: &mut DesktopState) -> bool {
         let before = (
             desktop.workspaces.len(),
-            desktop.pending_lanes.len(),
-            desktop.lane_order.len(),
+            desktop.pending_sessions.len(),
+            desktop.session_order.len(),
         );
         desktop
             .workspaces
@@ -60,23 +62,23 @@ impl RemovalScope {
         // 待激活车道与手动顺序都属于被移除的工作区：留下它们会在重新添加同一
         // 目录时冒出一条谁也不认识的空会话。
         desktop
-            .pending_lanes
-            .retain(|lane| !self.ids.contains(&lane.workspace_id));
+            .pending_sessions
+            .retain(|session| !self.ids.contains(&session.workspace_id));
         desktop
-            .lane_order
+            .session_order
             .retain(|workspace_id, _| !self.ids.contains(workspace_id));
         before
             != (
                 desktop.workspaces.len(),
-                desktop.pending_lanes.len(),
-                desktop.lane_order.len(),
+                desktop.pending_sessions.len(),
+                desktop.session_order.len(),
             )
     }
 }
 
 /// 在给定数据源上登记一个工作区目录。
 pub fn execute_workspace_add(
-    source: &dyn LaneSource,
+    source: &dyn SessionSource,
     path: &str,
 ) -> Result<Vec<WorkspaceDto>, String> {
     let trimmed = path.trim();
@@ -110,7 +112,7 @@ pub fn execute_workspace_add(
 
 /// 在给定数据源上移除已登记的工作区。
 pub fn execute_workspace_remove(
-    source: &dyn LaneSource,
+    source: &dyn SessionSource,
     id: &str,
 ) -> Result<Vec<WorkspaceDto>, String> {
     let target = id.trim();
@@ -140,31 +142,31 @@ pub fn execute_workspace_remove(
 /// **同一工作区已有待激活车道时直接复用**，不再新建第二条：待激活车道是
 /// 「尚未开始的会话」，同一时刻每个工作区只需要一条；允许堆积只会留下一串
 /// 既没有内容、也没有意义可言的空会话。
-pub fn execute_lane_create(
-    source: &dyn LaneSource,
+pub fn execute_session_create(
+    source: &dyn SessionSource,
     workspace_id: &str,
 ) -> Result<Vec<WorkspaceDto>, String> {
     // 只有「服务端还看不见」的待激活车道才值得复用；已经产生 Interaction 的车道
     // 早就是真实车道了，再拿它当新建目标会让「新会话」什么都不做。
     let observed: std::collections::HashSet<String> = source
-        .lanes()?
+        .sessions()?
         .into_iter()
-        .map(|lane| lane.lane_id)
+        .map(|session| session.session_id)
         .collect();
     // 复用判断先按当前快照早退一次：能复用就不必再向服务端派生车道标识。
     let current = load_state();
     let reusable = |desktop: &crate::state::DesktopState| {
-        desktop
-            .pending_lanes
-            .iter()
-            .any(|lane| lane.workspace_id == workspace_id && !observed.contains(&lane.lane_id))
+        desktop.pending_sessions.iter().any(|session| {
+            session.workspace_id == workspace_id && !observed.contains(&session.session_id)
+        })
     };
     if reusable(&current) {
         return build_workspaces(source);
     }
     let destination = format!("workbench-{}", generate_uuid());
     // 车道标识在服务端派生，本地不复刻哈希算法。
-    let lane_id = source.derive_lane_id(workspace_id, DESKTOP_LANE_CHANNEL, &destination)?;
+    let session_id =
+        source.derive_session_id(workspace_id, DESKTOP_SESSION_CHANNEL, &destination)?;
 
     /*
      * 写入前重新读取本地状态。
@@ -180,12 +182,14 @@ pub fn execute_lane_create(
     }
     // 顺手清掉已落地为真实车道的本地待激活记录，避免越积越多。
     desktop
-        .pending_lanes
-        .retain(|lane| !observed.contains(&lane.lane_id));
+        .pending_sessions
+        .retain(|session| !observed.contains(&session.session_id));
 
-    desktop.pending_lanes.retain(|lane| lane.lane_id != lane_id);
-    desktop.pending_lanes.push(crate::state::PendingLane {
-        lane_id: lane_id.clone(),
+    desktop
+        .pending_sessions
+        .retain(|session| session.session_id != session_id);
+    desktop.pending_sessions.push(crate::state::PendingSession {
+        session_id: session_id.clone(),
         workspace_id: workspace_id.to_string(),
         destination,
         created_at: now_millis(),
@@ -202,16 +206,16 @@ pub fn execute_lane_create(
 /// 因此失败必须原样上报（网关不可达、会话尚未登记），不能只在本地改一个标记让用户
 /// 以为已经生效。本地镜像继续维护，是为了让「还没有产生回合、因而不在会话清单里」
 /// 的新建会话保持住用户刚点下的选择。
-pub fn execute_lane_set_pinned(
-    source: &dyn LaneSource,
-    lane_id: &str,
+pub fn execute_session_set_pinned(
+    source: &dyn SessionSource,
+    session_id: &str,
     pinned: bool,
 ) -> Result<Vec<WorkspaceDto>, String> {
-    crate::session_menu::patch(lane_id, Some(pinned), None)?;
+    crate::session_menu::patch(session_id, Some(pinned), None)?;
     let mut desktop = load_state();
-    desktop.lane_pinned.retain(|id| id != lane_id);
+    desktop.session_pinned.retain(|id| id != session_id);
     if pinned {
-        desktop.lane_pinned.push(lane_id.to_string());
+        desktop.session_pinned.push(session_id.to_string());
     }
     save_state(&desktop)?;
     build_workspaces(source)
@@ -221,25 +225,25 @@ pub fn execute_lane_set_pinned(
 ///
 /// 归档同样先写运行态：归档后从默认列表消失的依据是 `sessions.archived`，
 /// 写不进去就必须让用户看见，否则「归档成功」只是本地假装。
-pub fn execute_lane_set_archived(
-    source: &dyn LaneSource,
-    lane_id: &str,
+pub fn execute_session_set_archived(
+    source: &dyn SessionSource,
+    session_id: &str,
     archived: bool,
 ) -> Result<Vec<WorkspaceDto>, String> {
-    crate::session_menu::patch(lane_id, None, Some(archived))?;
+    crate::session_menu::patch(session_id, None, Some(archived))?;
     let mut desktop = load_state();
-    desktop.lane_archived.retain(|id| id != lane_id);
+    desktop.session_archived.retain(|id| id != session_id);
     if archived {
-        desktop.lane_archived.push(lane_id.to_string());
+        desktop.session_archived.push(session_id.to_string());
     }
     save_state(&desktop)?;
     build_workspaces(source)
 }
 
 /// 在给定数据源上重命名车道。
-pub fn execute_lane_rename(
-    source: &dyn LaneSource,
-    lane_id: &str,
+pub fn execute_session_rename(
+    source: &dyn SessionSource,
+    session_id: &str,
     title: &str,
 ) -> Result<Vec<WorkspaceDto>, String> {
     let trimmed = title.trim();
@@ -248,15 +252,15 @@ pub fn execute_lane_rename(
     }
     let mut desktop = load_state();
     desktop
-        .lane_title
-        .insert(lane_id.to_string(), trimmed.to_string());
+        .session_title
+        .insert(session_id.to_string(), trimmed.to_string());
     save_state(&desktop)?;
     build_workspaces(source)
 }
 
 /// 在给定数据源上保存某个工作区下车道的自定义顺序。
-pub fn execute_lane_reorder(
-    source: &dyn LaneSource,
+pub fn execute_session_reorder(
+    source: &dyn SessionSource,
     workspace_id: &str,
     ordered_ids: Vec<String>,
 ) -> Result<Vec<WorkspaceDto>, String> {
@@ -265,7 +269,7 @@ pub fn execute_lane_reorder(
     }
     let mut desktop = load_state();
     desktop
-        .lane_order
+        .session_order
         .insert(workspace_id.to_string(), ordered_ids);
     save_state(&desktop)?;
     build_workspaces(source)

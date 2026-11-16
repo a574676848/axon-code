@@ -8,7 +8,7 @@ use axon_domain::{
 };
 use axon_protocol::wire::{WireEventEnvelope, WireEventKind};
 use axon_session::{
-    InteractionQueryStore, SessionEventRecord, SqliteRuntimeStore, session_lane_id,
+    InteractionQueryStore, SessionEventRecord, SqliteRuntimeStore, session_id_for_route,
 };
 use serde::Deserialize;
 
@@ -72,13 +72,13 @@ pub(crate) fn load_latest_completed_turn_for_workspace(
     else {
         return Ok(None);
     };
-    let lane_id = session_lane_id(
+    let session_id = session_id_for_route(
         &workspace.workspace_id,
         &AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly),
         interaction.reply_route.channel(),
         interaction.reply_route.destination(),
     );
-    let session_id = DaemonSessionId::new(lane_id)
+    let session_id = DaemonSessionId::new(session_id)
         .map_err(|error| format!("解析 Daemon 历史 Session ID 失败：{error}"))?;
     load_completed_turn_from_store(&store, &session_id)
 }

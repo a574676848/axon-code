@@ -332,7 +332,12 @@ fn unrelated_methods_and_paths_fall_through() {
     );
     assert!(
         adapter
-            .handle_request("GET", &format!("{WORKBENCH_PATH_PREFIX}/lanes"), None, &[])
+            .handle_request(
+                "GET",
+                &format!("{WORKBENCH_PATH_PREFIX}/sessions"),
+                None,
+                &[]
+            )
             .is_none()
     );
     assert!(

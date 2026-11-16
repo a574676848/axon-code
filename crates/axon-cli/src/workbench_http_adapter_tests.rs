@@ -26,37 +26,42 @@ fn start_job(owner: &str) -> JobId {
 }
 
 #[test]
-fn subagent_message_target_parses_lane_and_agent() {
+fn subagent_message_target_parses_session_and_agent() {
     assert_eq!(
-        lane_subagent_message_target("lanes/session-lane-a/subagents/subagent%3A1/messages"),
-        Some(("session-lane-a".to_string(), "subagent:1".to_string()))
-    );
-    assert_eq!(
-        lane_subagent_message_target(
-            "lanes/session-lane-a/subagents/subagent%3A%2Froot%2Fw/messages"
+        session_subagent_message_target(
+            "sessions/session-session-a/subagents/subagent%3A1/messages"
         ),
-        Some(("session-lane-a".to_string(), "subagent:/root/w".to_string()))
+        Some(("session-session-a".to_string(), "subagent:1".to_string()))
     );
     assert_eq!(
-        lane_subagent_message_target("lanes/session-lane-a/subagents/worker/messages"),
-        Some(("session-lane-a".to_string(), "worker".to_string()))
+        session_subagent_message_target(
+            "sessions/session-session-a/subagents/subagent%3A%2Froot%2Fw/messages"
+        ),
+        Some((
+            "session-session-a".to_string(),
+            "subagent:/root/w".to_string()
+        ))
     );
     assert_eq!(
-        lane_subagent_message_target("lanes/session-lane-a/subagents/worker"),
+        session_subagent_message_target("sessions/session-session-a/subagents/worker/messages"),
+        Some(("session-session-a".to_string(), "worker".to_string()))
+    );
+    assert_eq!(
+        session_subagent_message_target("sessions/session-session-a/subagents/worker"),
         None
     );
     assert_eq!(
-        lane_subagent_message_target("lanes/session-lane-a/subagents//messages"),
+        session_subagent_message_target("sessions/session-session-a/subagents//messages"),
         None
     );
     // 车道段里多出斜杠说明这不是本路由。
     assert_eq!(
-        lane_subagent_message_target("lanes/a/b/subagents/worker/messages"),
+        session_subagent_message_target("sessions/a/b/subagents/worker/messages"),
         None
     );
     // 坏转义按不匹配处理，而不是解出一段乱码当子代理名。
     assert_eq!(
-        lane_subagent_message_target("lanes/session-lane-a/subagents/%ZZ/messages"),
+        session_subagent_message_target("sessions/session-session-a/subagents/%ZZ/messages"),
         None
     );
 }
@@ -64,18 +69,21 @@ fn subagent_message_target_parses_lane_and_agent() {
 #[test]
 fn test_question_targets_parsing() {
     assert_eq!(
-        lane_question_answer_target("lanes/lane-test/questions/call-123/answer"),
-        Some(("lane-test".to_string(), "call-123".to_string()))
+        session_question_answer_target("sessions/session-test/questions/call-123/answer"),
+        Some(("session-test".to_string(), "call-123".to_string()))
     );
     assert_eq!(
-        lane_question_answer_target("lanes/lane-test/questions/call-123"),
+        session_question_answer_target("sessions/session-test/questions/call-123"),
         None
     );
     assert_eq!(
-        lane_questions_target("lanes/lane-test/questions"),
-        Some("lane-test".to_string())
+        session_questions_target("sessions/session-test/questions"),
+        Some("session-test".to_string())
     );
-    assert_eq!(lane_questions_target("lanes/lane-test/other"), None);
+    assert_eq!(
+        session_questions_target("sessions/session-test/other"),
+        None
+    );
 }
 
 #[test]
@@ -99,7 +107,7 @@ fn subagent_message_is_rejected_without_an_active_turn() {
     let adapter = WorkbenchHttpAdapter::from_root(axon_test_support::test_temp_root());
     let error = adapter
         .send_subagent_message(
-            "session-lane-idle",
+            "session-session-idle",
             "subagent:/root/worker",
             r#"{"content":"继续"}"#.as_bytes(),
         )
@@ -114,7 +122,7 @@ fn subagent_message_is_rejected_without_an_active_turn() {
 fn subagent_message_rejects_empty_and_oversized_content() {
     let adapter = WorkbenchHttpAdapter::from_root(axon_test_support::test_temp_root());
     let empty = adapter
-        .send_subagent_message("session-lane-a", "/root/worker", br#"{"content":"   "}"#)
+        .send_subagent_message("session-session-a", "/root/worker", br#"{"content":"   "}"#)
         .expect_err("空正文必须被拒绝");
     assert!(
         empty.contains("不能为空"),
@@ -122,90 +130,107 @@ fn subagent_message_rejects_empty_and_oversized_content() {
     );
     let oversized = format!(r#"{{"content":"{}"}}"#, "字".repeat(8_001));
     let error = adapter
-        .send_subagent_message("session-lane-a", "/root/worker", oversized.as_bytes())
+        .send_subagent_message("session-session-a", "/root/worker", oversized.as_bytes())
         .expect_err("超长正文必须被拒绝");
     assert!(error.contains("超过"), "拒绝原因必须说明超长：{error}");
 }
 
 #[test]
-fn lane_jobs_target_parses_lane_only() {
+fn session_jobs_target_parses_session_only() {
     assert_eq!(
-        lane_jobs_target("lanes/session-lane-a/jobs"),
-        Some("session-lane-a".to_string())
+        session_jobs_target("sessions/session-session-a/jobs"),
+        Some("session-session-a".to_string())
     );
-    assert_eq!(lane_jobs_target("lanes/session-lane-a/jobs/1/stop"), None);
-    assert_eq!(lane_jobs_target("lanes//jobs"), None);
+    assert_eq!(
+        session_jobs_target("sessions/session-session-a/jobs/1/stop"),
+        None
+    );
+    assert_eq!(session_jobs_target("sessions//jobs"), None);
 }
 
 /// 尾随路由与名册、停止互不吞并：三者前缀相同，动作是唯一判据。
 #[test]
-fn job_output_target_parses_lane_and_job() {
+fn job_output_target_parses_session_and_job() {
     assert_eq!(
-        lane_job_output_target("lanes/session-lane-a/jobs/256/output"),
-        Some(("session-lane-a".to_string(), "256".to_string()))
+        session_job_output_target("sessions/session-session-a/jobs/256/output"),
+        Some(("session-session-a".to_string(), "256".to_string()))
     );
     assert_eq!(
-        lane_job_output_target("lanes/session-lane-a/jobs/256/stop"),
+        session_job_output_target("sessions/session-session-a/jobs/256/stop"),
         None
     );
-    assert_eq!(lane_job_output_target("lanes/session-lane-a/jobs"), None);
     assert_eq!(
-        lane_job_output_target("lanes/session-lane-a/jobs//output"),
+        session_job_output_target("sessions/session-session-a/jobs"),
         None
     );
-    assert_eq!(lane_job_output_target("lanes//jobs/1/output"), None);
+    assert_eq!(
+        session_job_output_target("sessions/session-session-a/jobs//output"),
+        None
+    );
+    assert_eq!(session_job_output_target("sessions//jobs/1/output"), None);
 }
 
 #[test]
-fn empty_roster_is_returned_for_a_lane_without_runtime() {
+fn empty_roster_is_returned_for_a_session_without_runtime() {
     let root = axon_test_support::test_temp_root();
     // 先让存储建出运行态表：真实环境里 daemon 启动时就已经建好，
     // 缺表在这里只是测试脚手架的假象。
-    let other = DaemonSessionId::new("session-lane-schema").expect("车道标识合法");
+    let other = DaemonSessionId::new("session-session-schema").expect("车道标识合法");
     let _ = runtime_store(&root)
         .create_session(&other, ".", 1)
         .expect("登记会话必须成功");
-    let payload = lane_jobs_payload(&root, "session-lane-no-runtime")
+    let payload = session_jobs_payload(&root, "session-session-no-runtime")
         .expect("没有运行会话时名册应为空而不是报错");
     assert_eq!(payload["jobIds"], serde_json::json!([]));
     assert!(payload["epoch"].as_str().is_some_and(|v| !v.is_empty()));
 }
 
 #[test]
-fn job_stop_target_parses_lane_and_job() {
+fn job_stop_target_parses_session_and_job() {
     assert_eq!(
-        lane_job_stop_target("lanes/session-lane-abc/jobs/7/stop"),
-        Some(("session-lane-abc".to_string(), "7".to_string()))
+        session_job_stop_target("sessions/session-session-abc/jobs/7/stop"),
+        Some(("session-session-abc".to_string(), "7".to_string()))
     );
-    assert_eq!(lane_job_stop_target("lanes/session-lane-abc/jobs/7"), None);
-    assert_eq!(lane_job_stop_target("lanes//jobs/7/stop"), None);
     assert_eq!(
-        lane_job_stop_target("lanes/session-lane-abc/interrupt"),
+        session_job_stop_target("sessions/session-session-abc/jobs/7"),
+        None
+    );
+    assert_eq!(session_job_stop_target("sessions//jobs/7/stop"), None);
+    assert_eq!(
+        session_job_stop_target("sessions/session-session-abc/interrupt"),
         None
     );
 }
 
 #[test]
-fn ownership_accepts_lane_identity_and_its_run_session() {
-    assert!(owner_matches_lane("session-lane-a", "session-lane-a", None));
-    assert!(owner_matches_lane(
-        "session-lane-a",
+fn ownership_accepts_session_identity_and_its_run_session() {
+    assert!(owner_matches_session(
+        "session-session-a",
+        "session-session-a",
+        None
+    ));
+    assert!(owner_matches_session(
+        "session-session-a",
         "run-uuid",
         Some("run-uuid")
     ));
-    assert!(!owner_matches_lane(
-        "session-lane-a",
+    assert!(!owner_matches_session(
+        "session-session-a",
         "run-other",
         Some("run-uuid")
     ));
-    assert!(!owner_matches_lane("session-lane-a", "run-uuid", None));
+    assert!(!owner_matches_session(
+        "session-session-a",
+        "run-uuid",
+        None
+    ));
 }
 
 #[test]
 fn stop_is_rejected_for_unknown_job() {
     let root = axon_test_support::test_temp_root();
-    let error =
-        stop_lane_job(&root, "session-lane-missing", "999999").expect_err("未知作业必须被拒绝");
+    let error = stop_session_job(&root, "session-session-missing", "999999")
+        .expect_err("未知作业必须被拒绝");
     assert!(
         error.contains("不存在"),
         "拒绝原因必须是作业不可达：{error}"
@@ -213,33 +238,33 @@ fn stop_is_rejected_for_unknown_job() {
 }
 
 #[test]
-fn stop_is_rejected_for_job_owned_by_another_lane() {
+fn stop_is_rejected_for_job_owned_by_another_session() {
     let root = axon_test_support::test_temp_root();
-    let lane_id = "session-lane-owner-b";
-    let session_id = DaemonSessionId::new(lane_id).expect("车道标识合法");
+    let session_id = "session-session-owner-b";
+    let session_id = DaemonSessionId::new(session_id).expect("车道标识合法");
     // 先登记本车道的运行会话：归属核对发生在真实存储上，缺表会被当成读取失败。
     let _ = runtime_store(&root)
         .create_session(&session_id, ".", 1)
         .expect("登记车道运行会话必须成功");
-    let owner = "run-session-of-other-lane";
+    let owner = "run-session-of-other-session";
     let job_id = start_job(owner);
-    let error =
-        stop_lane_job(&root, lane_id, &job_id.0.to_string()).expect_err("他人车道的作业必须被拒绝");
+    let error = stop_session_job(&root, session_id.as_str(), &job_id.0.to_string())
+        .expect_err("他人车道的作业必须被拒绝");
     assert!(error.contains("不属于"), "拒绝原因必须是归属不符：{error}");
     let _ = JobRuntime::global().kill(job_id, owner);
 }
 
 #[test]
-fn stop_records_user_reason_for_the_lane_run_session() {
+fn stop_records_user_reason_for_the_session_run_session() {
     let root = axon_test_support::test_temp_root();
-    let lane_id = "session-lane-owner-c";
-    let session_id = DaemonSessionId::new(lane_id).expect("车道标识合法");
+    let session_id = "session-session-owner-c";
+    let session_id = DaemonSessionId::new(session_id).expect("车道标识合法");
     let record = runtime_store(&root)
         .create_session(&session_id, ".", 1)
         .expect("登记车道运行会话必须成功");
     let job_id = start_job(&record.run_session_id);
 
-    let payload = stop_lane_job(&root, lane_id, &job_id.0.to_string())
+    let payload = stop_session_job(&root, session_id.as_str(), &job_id.0.to_string())
         .expect("本车道运行会话的作业必须可停止");
     assert_eq!(payload["stopped"], serde_json::json!(true));
     assert_eq!(payload["reason"], serde_json::json!(JOB_REASON_USER_STOP));

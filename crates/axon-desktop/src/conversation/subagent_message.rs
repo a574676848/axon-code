@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::conversation::wire::LANES_PATH;
+use crate::conversation::wire::SESSIONS_PATH;
 use crate::gateway;
 
 /// 投递回执。
@@ -14,7 +14,7 @@ use crate::gateway;
 #[serde(rename_all = "camelCase")]
 pub struct SubagentMessageReceipt {
     /// 目标车道。
-    pub lane_id: String,
+    pub session_id: String,
     /// 目标子代理。
     pub agent_id: String,
     /// 是否已进入目标 mailbox。
@@ -26,12 +26,12 @@ pub struct SubagentMessageReceipt {
 
 /// 向某个子代理投递一条用户消息。
 pub fn send_subagent_message(
-    lane_id: &str,
+    session_id: &str,
     agent_id: &str,
     content: &str,
 ) -> Result<SubagentMessageReceipt, String> {
-    let lane_id = lane_id.trim();
-    if lane_id.is_empty() {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
         return Err("车道标识不能为空".to_string());
     }
     let agent_id = agent_id.trim();
@@ -42,7 +42,7 @@ pub fn send_subagent_message(
         return Err("消息内容不能为空".to_string());
     }
     let path = format!(
-        "{LANES_PATH}/{lane_id}/subagents/{}/messages",
+        "{SESSIONS_PATH}/{session_id}/subagents/{}/messages",
         agent_path_segment(agent_id)
     );
     let payload = gateway::post_json_at(&path, &serde_json::json!({ "content": content }))?;
@@ -63,8 +63,8 @@ mod tests {
     #[test]
     fn empty_inputs_are_rejected_before_any_request() {
         assert!(super::send_subagent_message("  ", "/root/a", "继续").is_err());
-        assert!(super::send_subagent_message("session-lane-a", " ", "继续").is_err());
-        assert!(super::send_subagent_message("session-lane-a", "/root/a", "   ").is_err());
+        assert!(super::send_subagent_message("session-session-a", " ", "继续").is_err());
+        assert!(super::send_subagent_message("session-session-a", "/root/a", "   ").is_err());
     }
 
     #[test]

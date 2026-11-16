@@ -2,7 +2,7 @@
 //!
 //! 只测纯逻辑：归档头部定位、分片标记剥离、UTF-8 边界回退与分片大小收口。它们都不
 //! 依赖运行态，因此三平台跑出来的结论一致。读取编排（归属校验、游标推进）由
-//! `lane_job_output_target` 的解析测试与 `stop_lane_job` 共用的归属判据覆盖。
+//! `session_job_output_target` 的解析测试与 `stop_session_job` 共用的归属判据覆盖。
 
 use super::*;
 

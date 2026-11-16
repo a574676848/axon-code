@@ -17,9 +17,9 @@ import type {
   GatewayHealth,
   InterruptReceipt,
   JobStopReceipt,
-  LaneInteractions,
-  LaneJobsRoster,
-  LaneSubagents,
+  SessionInteractions,
+  SessionJobsRoster,
+  SessionSubagents,
   SubagentMessageReceipt,
   ServiceAction,
   McpServerInput,
@@ -185,23 +185,23 @@ export const removeWorkspace = (id: string): Promise<WorkspaceItem[]> =>
 /** 打开系统原生目录选择器，返回选中路径；取消或不可用时返回 null。 */
 export const pickDirectory = (): Promise<string | null> => call('pick_directory');
 
-export const createLane = (workspaceId: string): Promise<WorkspaceItem[]> =>
-  call('lane_create', { workspaceId });
+export const createSession = (workspaceId: string): Promise<WorkspaceItem[]> =>
+  call('session_create', { workspaceId });
 
-export const setLanePinned = (laneId: string, pinned: boolean): Promise<WorkspaceItem[]> =>
-  call('lane_set_pinned', { laneId, pinned });
+export const setSessionPinned = (sessionId: string, pinned: boolean): Promise<WorkspaceItem[]> =>
+  call('session_set_pinned', { sessionId, pinned });
 
-export const setLaneArchived = (laneId: string, archived: boolean): Promise<WorkspaceItem[]> =>
-  call('lane_set_archived', { laneId, archived });
+export const setSessionArchived = (sessionId: string, archived: boolean): Promise<WorkspaceItem[]> =>
+  call('session_set_archived', { sessionId, archived });
 
-export const renameLane = (laneId: string, title: string): Promise<WorkspaceItem[]> =>
-  call('lane_rename', { laneId, title });
+export const renameSession = (sessionId: string, title: string): Promise<WorkspaceItem[]> =>
+  call('session_rename', { sessionId, title });
 
 /** 保存某个工作区下车道的自定义顺序，用于手动排序。 */
-export const laneReorder = (
+export const sessionReorder = (
   workspaceId: string,
   orderedIds: string[],
-): Promise<WorkspaceItem[]> => call('lane_reorder', { workspaceId, orderedIds });
+): Promise<WorkspaceItem[]> => call('session_reorder', { workspaceId, orderedIds });
 
 // ------------------------------------------------- 文档、目录与 MCP 管理
 
@@ -300,11 +300,11 @@ export const conversationSubmit = (
 
 /** 提交待决提问的答案。 */
 export const conversationAnswerQuestion = (
-  laneId: string,
+  sessionId: string,
   callId: string,
   answers: AnswerItem[],
 ): Promise<AnswerQuestionReceipt> =>
-  call('conversation_answer_question', { laneId, callId, answers });
+  call('conversation_answer_question', { sessionId, callId, answers });
 
 /**
  * 按网关权威记录对账某条车道下的问答状态。
@@ -313,15 +313,15 @@ export const conversationAnswerQuestion = (
  * 覆盖本地投影的形状。`state` 缺省表示不加状态过滤：待决与挂起是两种状态，
  * 只查其一会把另一种误判成已结算。
  */
-export const conversationLaneQuestions = (
-  laneId: string,
+export const conversationSessionQuestions = (
+  sessionId: string,
   state: string | null = null,
 ): Promise<QuestionSnapshot[]> =>
-  call('conversation_lane_questions', { laneId, state });
+  call('conversation_session_questions', { sessionId, state });
 
 /** 登记当前会话，供系统通知的标题与点击跳转使用。 */
-export const conversationSetActiveLane = (laneId: string, title: string): Promise<void> =>
-  call('conversation_set_active_lane', { laneId, title });
+export const conversationSetActiveSession = (sessionId: string, title: string): Promise<void> =>
+  call('conversation_set_active_session', { sessionId, title });
 
 /**
  * 按车道读取历史 Interaction。
@@ -333,12 +333,12 @@ export const conversationSetActiveLane = (laneId: string, title: string): Promis
  * 界面据此在打开历史会话时就得到整条会话的消耗，而不必先把前面几十条都回放一遍。
  */
 export const conversationHistory = (
-  laneId: string,
+  sessionId: string,
   limit = 1,
   before: { receivedAtMs: number; interactionId: string } | null = null,
-): Promise<LaneInteractions> =>
+): Promise<SessionInteractions> =>
   call('conversation_history', {
-    laneId,
+    sessionId,
     limit,
     beforeMs: before?.receivedAtMs ?? null,
     beforeId: before?.interactionId ?? null,
@@ -400,28 +400,28 @@ export const conversationUnsubscribe = (subscribeId: string): Promise<void> =>
   call('conversation_unsubscribe', { subscribeId });
 
 /** 中断某条车道正在运行的轮次。 */
-export const conversationInterrupt = (laneId: string): Promise<InterruptReceipt> =>
-  call('conversation_interrupt', { laneId });
+export const conversationInterrupt = (sessionId: string): Promise<InterruptReceipt> =>
+  call('conversation_interrupt', { sessionId });
 
 /** 用户手动停止某条车道上的后台作业。 */
-export const conversationStopJob = (laneId: string, jobId: string): Promise<JobStopReceipt> =>
-  call('conversation_stop_job', { laneId, jobId });
+export const conversationStopJob = (sessionId: string, jobId: string): Promise<JobStopReceipt> =>
+  call('conversation_stop_job', { sessionId, jobId });
 
 /** 向正在运行的子代理投递一条用户消息。 */
 export const conversationSendSubagentMessage = (
-  laneId: string,
+  sessionId: string,
   agentId: string,
   content: string,
 ): Promise<SubagentMessageReceipt> =>
-  call('conversation_send_subagent_message', { laneId, agentId, content });
+  call('conversation_send_subagent_message', { sessionId, agentId, content });
 
 /** 读取一条车道上仍在运行的后台作业名册。 */
-export const conversationLaneJobs = (laneId: string): Promise<LaneJobsRoster> =>
-  call('conversation_lane_jobs', { laneId });
+export const conversationSessionJobs = (sessionId: string): Promise<SessionJobsRoster> =>
+  call('conversation_session_jobs', { sessionId });
 
 /** 后台作业输出的一页：网关按字节游标增量给出。 */
 export interface JobOutputStream {
-  laneId: string;
+  sessionId: string;
   jobId: string;
   /** 本次读取的起始字节偏移（已在归档头部之后）。 */
   offset: number;
@@ -441,14 +441,14 @@ export interface JobOutputStream {
 
 /** 读取一次后台作业的输出增量。 */
 export const conversationJobOutput = (
-  laneId: string,
+  sessionId: string,
   jobId: string,
   offset: number,
-): Promise<JobOutputStream> => call('conversation_job_output', { laneId, jobId, offset });
+): Promise<JobOutputStream> => call('conversation_job_output', { sessionId, jobId, offset });
 
 /** 读取一条车道下的子代理会话清单。 */
-export const conversationLaneSubagents = (laneId: string): Promise<LaneSubagents> =>
-  call('conversation_lane_subagents', { laneId });
+export const conversationSessionSubagents = (sessionId: string): Promise<SessionSubagents> =>
+  call('conversation_session_subagents', { sessionId });
 
 /**
  * 监听会话事件流。

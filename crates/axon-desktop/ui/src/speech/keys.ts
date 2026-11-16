@@ -17,7 +17,7 @@ export const VOICE_STORAGE_KEYS = {
   /** 全局开关：新回复是否默认自动朗读。 */
   global: PREFIX,
   /** 会话开关：一条会话一个键，入参是工作区与会话拼成的车道键。 */
-  lane: (laneKey: string): string => `${PREFIX}.lane.${laneKey}`,
+  session: (sessionKey: string): string => `${PREFIX}.session.${sessionKey}`,
   /** 音色预设：空串表示跟随人格。 */
   preset: PRESET_KEY,
 } as const;

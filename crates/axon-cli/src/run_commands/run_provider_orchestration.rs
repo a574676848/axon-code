@@ -80,7 +80,7 @@ pub(crate) fn run_run_with_progress(
     // 直接加载，未建才创建，使同表面相邻输入延续同一段上下文。显式入口与子代理不受影响。
     let implicit_session_id = match (command.continue_last, command.session.as_deref(), cwd) {
         (false, None, Some(cwd)) => {
-            match super::interaction_adapter::conversation_lane_run_session_id(
+            match super::interaction_adapter::conversation_session_run_session_id(
                 cwd,
                 Some(&path),
                 run_execution::now_ms(),

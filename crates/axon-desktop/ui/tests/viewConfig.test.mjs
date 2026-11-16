@@ -110,13 +110,13 @@ const DUAL_ALIAS = [
 
 test('同一 provider 与 upstream id 有多条别名时，按记录里的别名还原展示名', () => {
     const config = resolveConfig(configOf('fast_model', DUAL_ALIAS));
-    const lane = {
+    const session = {
         provider: 'sm-wenwen-chat',
         model: 'deepseek-v4.1-flash-1017',
         name: 'deepseek-v4.1-flash',
     };
-    assert.equal(modelLabelFor(config.catalog, lane), 'deepseek-v4.1-flash');
-    const effective = resolveEffectiveModel(config, null, null, lane);
+    assert.equal(modelLabelFor(config.catalog, session), 'deepseek-v4.1-flash');
+    const effective = resolveEffectiveModel(config, null, null, session);
     assert.equal(effective.label, 'deepseek-v4.1-flash');
     assert.equal(effective.contextWindow, 262_144, '窗口必须跟着别名走，不能取同 id 的另一条');
 });

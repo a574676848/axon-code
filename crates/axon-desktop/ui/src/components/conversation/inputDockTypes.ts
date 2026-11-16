@@ -88,7 +88,7 @@ export interface InputDockProps {
    * 问答占座卡只在「这一次进来」里听从收起：换一条会话再回来，还没答完的提问
    * 要自己回到占位位，因此卡片状态需要认出会话换没换。
    */
-  laneKey?: string | null;
+  sessionKey?: string | null;
   /** 当前待决或挂起的模型提问。 */
   activeQuestion?: PendingQuestion | null;
   /** 提交问答作答。 */

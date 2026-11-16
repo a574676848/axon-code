@@ -1,9 +1,9 @@
-//! Interaction 尾窗读取回归：只返回目标交互的帧，不混入同 lane 的其他交互。
+//! Interaction 尾窗读取回归：只返回目标交互的帧，不混入同 session 的其他交互。
 
 use super::SqliteRuntimeStore;
 use super::sqlite_runtime_store_interaction_tests::{LEASE_DURATION_MS, sample_interaction};
 use crate::ports::EventLogStore as _;
-use crate::{InteractionStore, RuntimeStore, interaction_session_lane_id};
+use crate::{InteractionStore, RuntimeStore, interaction_session_id};
 use axon_domain::{DaemonSessionId, RuntimeHostId};
 
 #[test]
@@ -21,7 +21,7 @@ fn interaction_tail_window_reads_only_the_target_interaction() {
         .expect("host lease");
     let interaction = sample_interaction();
     store.append(&interaction).expect("追加 Interaction");
-    let session_id = DaemonSessionId::new(interaction_session_lane_id(&interaction).expect("lane"))
+    let session_id = DaemonSessionId::new(interaction_session_id(&interaction).expect("session"))
         .expect("Session ID");
     store.create_session(&session_id, ".", 1).expect("Session");
     let lease = store

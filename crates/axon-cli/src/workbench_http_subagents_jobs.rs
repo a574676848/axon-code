@@ -10,13 +10,13 @@ use axon_domain::DaemonSessionId;
 use axon_session::{RuntimeStore, RuntimeStoreError};
 
 use super::runtime_store;
-use super::workbench_http_targets::lane_owns_owner;
+use super::workbench_http_targets::session_owns_owner;
 use crate::run_commands::run_rollout_store::load_child_sessions_from_root;
 
 /// 子代理会话 ID 的分隔符，与运行侧 `child_session_id` 保持一致。
 const SUBAGENT_SESSION_ID_SEPARATOR: &str = "--subagent--";
 /// 一次车道子代理列举的上限。
-const MAX_LANE_SUBAGENTS: usize = 200;
+const MAX_SESSION_SUBAGENTS: usize = 200;
 
 /// 运行侧终态到名册状态的归一。
 ///
@@ -27,10 +27,10 @@ fn normalize_last_turn_status(status: Option<&str>) -> Option<&str> {
 }
 
 /// 车道的运行会话 ID；子代理会话挂在它下面。
-fn lane_run_session_id(axon_root: &Path, lane_id: &str) -> Result<String, String> {
+fn session_run_session_id(axon_root: &Path, session_id: &str) -> Result<String, String> {
     let store = runtime_store(axon_root);
     let session_id =
-        DaemonSessionId::new(lane_id).map_err(|error| format!("车道标识非法：{error:?}"))?;
+        DaemonSessionId::new(session_id).map_err(|error| format!("车道标识非法：{error:?}"))?;
     match store.get_session(&session_id) {
         Ok(record) => Ok(record.run_session_id),
         Err(RuntimeStoreError::NotFound(_)) => Ok(String::new()),
@@ -39,24 +39,24 @@ fn lane_run_session_id(axon_root: &Path, lane_id: &str) -> Result<String, String
 }
 
 /// 某条车道下的子代理会话清单。
-pub(super) fn lane_subagents_payload(
+pub(super) fn session_subagents_payload(
     axon_root: &Path,
-    lane_id: &str,
+    session_id: &str,
 ) -> Result<serde_json::Value, String> {
-    let lane_id = lane_id.trim();
-    if lane_id.is_empty() {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
         return Err("车道标识不能为空".to_string());
     }
-    let run_session_id = lane_run_session_id(axon_root, lane_id)?;
+    let run_session_id = session_run_session_id(axon_root, session_id)?;
     if run_session_id.is_empty() {
         return Ok(serde_json::json!({
-            "laneId": lane_id,
+            "sessionId": session_id,
             "runSessionId": serde_json::Value::Null,
             "subagents": [],
         }));
     }
     let prefix = format!("{run_session_id}{SUBAGENT_SESSION_ID_SEPARATOR}");
-    let rows = load_child_sessions_from_root(axon_root, &run_session_id, MAX_LANE_SUBAGENTS)?;
+    let rows = load_child_sessions_from_root(axon_root, &run_session_id, MAX_SESSION_SUBAGENTS)?;
     let mut subagents = Vec::with_capacity(rows.len());
     for row in rows {
         let slug = row
@@ -90,24 +90,24 @@ pub(super) fn lane_subagents_payload(
         }));
     }
     Ok(serde_json::json!({
-        "laneId": lane_id,
+        "sessionId": session_id,
         "runSessionId": run_session_id,
         "subagents": subagents,
     }))
 }
 
 /// 某条车道上仍在运行的后台作业名册。
-pub(super) fn lane_jobs_payload(
+pub(super) fn session_jobs_payload(
     axon_root: &Path,
-    lane_id: &str,
+    session_id: &str,
 ) -> Result<serde_json::Value, String> {
-    let lane_id = lane_id.trim();
-    if lane_id.is_empty() {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
         return Err("车道标识不能为空".to_string());
     }
     let store = runtime_store(axon_root);
     let session_id =
-        DaemonSessionId::new(lane_id).map_err(|error| format!("车道标识非法：{error:?}"))?;
+        DaemonSessionId::new(session_id).map_err(|error| format!("车道标识非法：{error:?}"))?;
     let job_ids = match store.get_session(&session_id) {
         Ok(record) => JobRuntime::global()
             .pending_job_ids(&record.run_session_id)
@@ -118,20 +118,20 @@ pub(super) fn lane_jobs_payload(
         Err(error) => return Err(format!("读取车道运行会话失败：{error:?}")),
     };
     Ok(serde_json::json!({
-        "laneId": lane_id,
+        "sessionId": session_id,
         "epoch": axon_agent_runtime::job_runtime::runtime_epoch(),
         "jobIds": job_ids,
     }))
 }
 
 /// 停止某条车道上正在运行的后台作业。
-pub(super) fn stop_lane_job(
+pub(super) fn stop_session_job(
     axon_root: &Path,
-    lane_id: &str,
+    session_id: &str,
     job_id: &str,
 ) -> Result<serde_json::Value, String> {
-    let lane_id = lane_id.trim();
-    if lane_id.is_empty() {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
         return Err("车道标识不能为空".to_string());
     }
     let parsed = job_id
@@ -142,14 +142,14 @@ pub(super) fn stop_lane_job(
     let owner = JobRuntime::global()
         .owner_of(id)
         .ok_or_else(|| "作业不存在或已过保留窗口".to_string())?;
-    if !lane_owns_owner(axon_root, lane_id, &owner)? {
+    if !session_owns_owner(axon_root, session_id, &owner)? {
         return Err("该作业不属于这条车道".to_string());
     }
     let status = JobRuntime::global()
         .kill_with_reason(id, &owner, Some(JOB_REASON_USER_STOP))
         .map_err(|error| format!("停止作业失败：{error:?}"))?;
     Ok(serde_json::json!({
-        "laneId": lane_id,
+        "sessionId": session_id,
         "jobId": job_id.trim(),
         "stopped": true,
         "status": format!("{status:?}"),
@@ -260,13 +260,13 @@ fn strip_archive_markers(text: &str) -> String {
 
 /// 读不到时的载荷：作业已不在注册表里，界面据此收口而不是当成空输出。
 fn unavailable_job_output(
-    lane_id: &str,
+    session_id: &str,
     job_id: &str,
     offset: u64,
     reason: &str,
 ) -> serde_json::Value {
     serde_json::json!({
-        "laneId": lane_id,
+        "sessionId": session_id,
         "jobId": job_id.trim(),
         "offset": offset,
         "nextOffset": offset,
@@ -286,15 +286,15 @@ fn unavailable_job_output(
 /// 只读归档、**不碰**增量批次：读走增量是模型侧 `job_output` 的语义，界面若也按
 /// 增量读，模型本该看到的内容就被吞掉了。游标是归档的字节偏移，调用方按返回的
 /// `nextOffset` 续读，因此同一段重复请求既不丢内容也不重复。
-pub(super) fn lane_job_output_payload(
+pub(super) fn session_job_output_payload(
     axon_root: &Path,
-    lane_id: &str,
+    session_id: &str,
     job_id: &str,
     offset: u64,
     max_bytes: usize,
 ) -> Result<serde_json::Value, String> {
-    let lane_id = lane_id.trim();
-    if lane_id.is_empty() {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
         return Err("车道标识不能为空".to_string());
     }
     let parsed = job_id
@@ -305,18 +305,18 @@ pub(super) fn lane_job_output_payload(
     let runtime = JobRuntime::global();
     let Some(owner) = runtime.owner_of(id) else {
         return Ok(unavailable_job_output(
-            lane_id,
+            session_id,
             job_id,
             offset,
             "作业已结束并超出保留窗口",
         ));
     };
-    if !lane_owns_owner(axon_root, lane_id, &owner)? {
+    if !session_owns_owner(axon_root, session_id, &owner)? {
         return Err("该作业不属于这条车道".to_string());
     }
     let Some(tail) = runtime.tail(id) else {
         return Ok(unavailable_job_output(
-            lane_id,
+            session_id,
             job_id,
             offset,
             "作业已结束并超出保留窗口",
@@ -371,7 +371,7 @@ pub(super) fn lane_job_output_payload(
         }
     }
     Ok(serde_json::json!({
-        "laneId": lane_id,
+        "sessionId": session_id,
         "jobId": job_id.trim(),
         "offset": start,
         "nextOffset": next_offset,

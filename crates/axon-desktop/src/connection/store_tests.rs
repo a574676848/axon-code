@@ -17,12 +17,12 @@ use crate::connection::profile::{CredentialSource, EndpointSpec};
 const V1_SAMPLE: &str = r#"{
   "version": 1,
   "workspaces": [{"path": "D:/work/alpha", "name": "alpha"}],
-  "lane_workspace": {"lane-1": "D:/work/alpha"},
-  "lane_pinned": ["lane-1"],
-  "lane_archived": ["lane-2"],
-  "lane_title": {"lane-1": "重构计划"},
-  "lane_order": {"D:/work/alpha": ["lane-1", "lane-2"]},
-  "pending_lanes": [{"lane_id": "lane-9", "workspace_id": "D:/work/alpha", "destination": "s1", "created_at": 7}],
+  "session_workspace": {"session-1": "D:/work/alpha"},
+  "session_pinned": ["session-1"],
+  "session_archived": ["session-2"],
+  "session_title": {"session-1": "重构计划"},
+  "session_order": {"D:/work/alpha": ["session-1", "session-2"]},
+  "pending_sessions": [{"session_id": "session-9", "workspace_id": "D:/work/alpha", "destination": "s1", "created_at": 7}],
   "last_workspace_dir": "D:/work",
   "notifications_enabled": false,
   "theme": "obsidian"
@@ -79,14 +79,14 @@ fn v1_in_client_root_is_migrated_field_by_field() {
     let projection = document.projection("local");
     assert_eq!(projection.workspaces.len(), 1);
     assert_eq!(projection.workspaces[0].path, "D:/work/alpha");
-    assert_eq!(projection.lane_pinned, vec!["lane-1".to_owned()]);
-    assert_eq!(projection.lane_archived, vec!["lane-2".to_owned()]);
+    assert_eq!(projection.session_pinned, vec!["session-1".to_owned()]);
+    assert_eq!(projection.session_archived, vec!["session-2".to_owned()]);
     assert_eq!(
-        projection.lane_title.get("lane-1").map(String::as_str),
+        projection.session_title.get("session-1").map(String::as_str),
         Some("重构计划")
     );
-    assert_eq!(projection.pending_lanes.len(), 1);
-    assert_eq!(projection.pending_lanes[0].lane_id, "lane-9");
+    assert_eq!(projection.pending_sessions.len(), 1);
+    assert_eq!(projection.pending_sessions[0].session_id, "session-9");
 
     let meta = document.meta("local").expect("应建立本机档案元数据");
     assert_eq!(meta.label, "本机");

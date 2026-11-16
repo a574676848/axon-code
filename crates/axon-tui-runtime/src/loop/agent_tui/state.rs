@@ -264,7 +264,7 @@ pub struct AgentTuiSubmit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentTuiQuestionAnswer {
     /// 问题所属会话车道身份。
-    pub lane_id: String,
+    pub session_id: String,
     /// 问题调用 ID（提问工具的 tool_call_id）。
     pub call_id: String,
     /// 用户作答条目。

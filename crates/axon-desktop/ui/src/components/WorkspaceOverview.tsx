@@ -30,15 +30,15 @@ export const WorkspaceOverview: React.FC = () => {
     void load();
   }, [load]);
 
-  const lanes = useMemo(
-    () => workspaces.flatMap((workspace) => workspace.lanes),
+  const sessions = useMemo(
+    () => workspaces.flatMap((workspace) => workspace.sessions),
     [workspaces],
   );
 
   return (
     <PageShell
       title="工作区"
-      description={`共 ${workspaces.length} 个工作区，${lanes.length} 条会话，其中置顶 ${lanes.filter((lane) => lane.pinned).length} 条，已归档 ${lanes.filter((lane) => lane.archived).length} 条`}
+      description={`共 ${workspaces.length} 个工作区，${sessions.length} 条会话，其中置顶 ${sessions.filter((session) => session.pinned).length} 条，已归档 ${sessions.filter((session) => session.archived).length} 条`}
       actions={
         <Button variant="outline" size="md" onClick={() => void load()}>
           <RefreshIcon size={14} />
@@ -84,7 +84,7 @@ export const WorkspaceOverview: React.FC = () => {
                 </span>
               </div>
               <Text tone="tertiary" size="meta" className="shrink-0 leading-4 tabular-nums">
-                {workspace.lanes.length} 条会话
+                {workspace.sessions.length} 条会话
               </Text>
             </ListRow>
           ))}

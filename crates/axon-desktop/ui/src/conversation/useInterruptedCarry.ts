@@ -22,8 +22,8 @@ import {
  */
 
 /** 车道空闲探测的重试间隔与次数：取不到空闲结论时宁可晚一点发，也不早发。 */
-const LANE_IDLE_PROBE_INTERVAL_MS = 150;
-const LANE_IDLE_PROBE_ATTEMPTS = 20;
+const SESSION_IDLE_PROBE_INTERVAL_MS = 150;
+const SESSION_IDLE_PROBE_ATTEMPTS = 20;
 
 /** 转投所需的最小依赖面。 */
 export interface InterruptedCarryWiring {
@@ -43,7 +43,7 @@ export interface InterruptedCarryWiring {
    * 那一刻提交的输入会被注入那条正在收尾的轮次，随它一起作废（实测：三条排队
    * 消息按下中断后原样贴在已中断的那一轮里，一条都没跑起来）。
    */
-  laneIdle: () => Promise<boolean>;
+  sessionIdle: () => Promise<boolean>;
 }
 
 /** 组装转投队列；队列本身只在内存里，不写进正文投影。 */
@@ -53,7 +53,7 @@ export function useInterruptedCarry({
   turnsRef,
   dispatch,
   submit,
-  laneIdle,
+  sessionIdle,
 }: InterruptedCarryWiring): () => void {
   const [queued, setQueued] = useState<CarriedPrompt[]>([]);
   /** 转投的一次提交是否在途：在途期间不允许再取队列头，否则会重复发送。 */
@@ -101,9 +101,9 @@ export function useInterruptedCarry({
     void (async () => {
       try {
         // 车道真正空闲才发：本地终态帧比后端摘掉登记项早，早发的输入会被注入死轮。
-        for (let attempt = 0; attempt < LANE_IDLE_PROBE_ATTEMPTS; attempt += 1) {
-          if (await laneIdle()) break;
-          await wait(LANE_IDLE_PROBE_INTERVAL_MS);
+        for (let attempt = 0; attempt < SESSION_IDLE_PROBE_ATTEMPTS; attempt += 1) {
+          if (await sessionIdle()) break;
+          await wait(SESSION_IDLE_PROBE_INTERVAL_MS);
         }
         const merged = mergeCarriedPrompts(batch);
         if (merged === null) return;
@@ -117,7 +117,7 @@ export function useInterruptedCarry({
         setQueued((queue) => (queue.length === 0 ? queue : []));
       }
     })();
-  }, [laneIdle, queued, submit, targetKey, working]);
+  }, [sessionIdle, queued, submit, targetKey, working]);
 
   return handOver;
 }

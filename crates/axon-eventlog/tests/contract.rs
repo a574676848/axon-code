@@ -19,7 +19,7 @@ fn record(
 #[test]
 fn append_then_read_round_trips() {
     let dir = tempfile::tempdir().expect("临时目录");
-    let log = EventLog::open(dir.path(), "session-lane-a");
+    let log = EventLog::open(dir.path(), "session-session-a");
 
     let mut writer = log.writer().expect("应可打开写句柄");
     assert_eq!(writer.next_sequence(), 0);
@@ -34,7 +34,7 @@ fn append_then_read_round_trips() {
     drop(writer);
 
     let reader = log.reader().expect("应可读取");
-    assert_eq!(reader.header().session_id, "session-lane-a");
+    assert_eq!(reader.header().session_id, "session-session-a");
     assert_eq!(reader.records().len(), 2);
     assert_eq!(reader.last_sequence(), Some(1));
     // read_from 的语义是"序号严格大于 after"，与网关重放游标一致
@@ -47,7 +47,7 @@ fn append_then_read_round_trips() {
 #[test]
 fn sequence_gap_is_rejected_without_writing() {
     let dir = tempfile::tempdir().expect("临时目录");
-    let log = EventLog::open(dir.path(), "session-lane-b");
+    let log = EventLog::open(dir.path(), "session-session-b");
     let mut writer = log.writer().expect("应可打开写句柄");
 
     let error = writer
@@ -70,7 +70,7 @@ fn sequence_gap_is_rejected_without_writing() {
 #[test]
 fn empty_batch_is_rejected() {
     let dir = tempfile::tempdir().expect("临时目录");
-    let log = EventLog::open(dir.path(), "session-lane-c");
+    let log = EventLog::open(dir.path(), "session-session-c");
     let mut writer = log.writer().expect("应可打开写句柄");
     let error = writer.append_batch(&[]).expect_err("空批次应被拒绝");
     assert!(matches!(error, EventLogError::EmptyBatch));
@@ -79,7 +79,7 @@ fn empty_batch_is_rejected() {
 #[test]
 fn reopen_continues_from_stored_tail() {
     let dir = tempfile::tempdir().expect("临时目录");
-    let log = EventLog::open(dir.path(), "session-lane-d");
+    let log = EventLog::open(dir.path(), "session-session-d");
 
     {
         let mut writer = log.writer().expect("首次打开");
@@ -102,7 +102,7 @@ fn reopen_continues_from_stored_tail() {
 #[test]
 fn torn_tail_is_truncated_before_next_append() {
     let dir = tempfile::tempdir().expect("临时目录");
-    let log = EventLog::open(dir.path(), "session-lane-e");
+    let log = EventLog::open(dir.path(), "session-session-e");
 
     {
         let mut writer = log.writer().expect("首次打开");
@@ -124,7 +124,7 @@ fn torn_tail_is_truncated_before_next_append() {
     assert_eq!(snapshot.records().len(), 1, "完整前缀必须保留");
     assert_eq!(
         snapshot.header().session_id,
-        "session-lane-e",
+        "session-session-e",
         "header 必须可解析"
     );
 
@@ -143,7 +143,7 @@ fn torn_tail_is_truncated_before_next_append() {
 #[test]
 fn turn_metrics_keeps_origin_and_unmeasured_ttft() {
     let dir = tempfile::tempdir().expect("临时目录");
-    let log = EventLog::open(dir.path(), "session-lane-f");
+    let log = EventLog::open(dir.path(), "session-session-f");
     let mut writer = log.writer().expect("应可打开写句柄");
 
     let metrics = TurnMetrics {
@@ -175,7 +175,7 @@ fn job_events_round_trip() {
     let started = JobRef {
         job_id: "job-1".to_owned(),
         kind: "shell".to_owned(),
-        owner: "session-lane-a".to_owned(),
+        owner: "session-session-a".to_owned(),
         started_at_ms: 100,
     };
     let event = RuntimeEventRecord::job_started(0, 100, &started).expect("可构造");

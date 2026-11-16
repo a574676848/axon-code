@@ -320,7 +320,7 @@ where
         .map_err(|error| ExternalEventIngressError::InvalidInput(error.to_string()))?;
         // 附件只描述输入素材，原样带到 Provider turn 的 transportContext.files。
         record.attachments = event.attachments.clone();
-        // 显式模型只跟随本轮 turn：它不落 Workspace 或 lane 身份。
+        // 显式模型只跟随本轮 turn：它不落 Workspace 或 session 身份。
         record.model = event
             .model
             .as_deref()

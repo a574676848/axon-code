@@ -8,7 +8,7 @@ import { useCallback, useState } from 'react';
  * 因此只能靠重贴把它拉回视图；回灌给活等待者时不必重贴，那条订阅还在看着同一轮。
  */
 
-export interface LaneReattach {
+export interface SessionReattach {
   /** 请求序号：作为车道装配的键参与依赖，变一次就重贴一次。 */
   token: number;
   /** 请求重贴一次。 */
@@ -16,7 +16,7 @@ export interface LaneReattach {
 }
 
 /** 取「重新贴住车道」的请求序号与触发函数。 */
-export function useLaneReattach(): LaneReattach {
+export function useSessionReattach(): SessionReattach {
   const [token, setToken] = useState(0);
   const reattach = useCallback(() => setToken((current) => current + 1), []);
   return { token, reattach };

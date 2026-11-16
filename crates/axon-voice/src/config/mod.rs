@@ -417,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_limit_is_single_lane() {
+    fn concurrent_limit_is_single_session() {
         let config = VoiceConfig {
             concurrent_limit: 2,
             ..VoiceConfig::default()

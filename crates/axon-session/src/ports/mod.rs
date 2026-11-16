@@ -14,8 +14,6 @@ pub mod health_store;
 pub mod ingress_cursor_store;
 /// Interaction 收件箱的持久化端口。
 pub mod interaction_store;
-/// 车道聚合查询端口。
-pub mod lane_query_store;
 pub mod lease_store;
 pub mod ledger_commit_store;
 pub mod ledger_event_store;
@@ -23,6 +21,8 @@ pub mod result_store;
 pub mod schedule_store;
 pub mod session_action_store;
 pub mod session_event_store;
+/// 车道聚合查询端口。
+pub mod session_query_store;
 pub mod user_question_store;
 pub mod workspace_store;
 
@@ -56,7 +56,6 @@ pub use interaction_store::{
     InteractionAppendReceipt, InteractionCursor, InteractionProcessingLease, InteractionQueryStore,
     InteractionStore, InteractionStoreError,
 };
-pub use lane_query_store::{LaneQueryStore, LaneSummaryRow};
 pub use lease_store::LeaseStore;
 pub use ledger_commit_store::{ExecutionSettlement, LedgerCommitError, LedgerCommitStore};
 pub use ledger_event_store::{LedgerEventStore, LedgerEventStoreError};
@@ -64,5 +63,6 @@ pub use result_store::{
     RESULT_ACK_SOURCE_EXPIRED, RESULT_ACK_SOURCE_READ, ResultStore, ResultStoreError,
 };
 pub use runtime_store::{CheckpointTelemetry, RuntimeStore, RuntimeStoreError};
+pub use session_query_store::{SessionQueryStore, SessionSummaryRow};
 pub use user_question_store::{UserQuestionStore, UserQuestionStoreError};
 pub use workspace_store::{WorkspaceStore, WorkspaceStoreError};

@@ -16,16 +16,16 @@ const TEST_LEASE_TOKEN: &str = "lease-1";
 const RENEWAL_TEST_LEASE_DURATION_MS: u64 = 40;
 const RENEWAL_WAIT_POLLS: usize = 200;
 const RENEWAL_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(5);
-/// 并发 lane 汇合点的参与方数量：workspace 与会话表面相同的 lane 汇为一组。
-const LANE_RENDEZVOUS_PARTIES: usize = 2;
+/// 并发 session 汇合点的参与方数量：workspace 与会话表面相同的 session 汇为一组。
+const SESSION_RENDEZVOUS_PARTIES: usize = 2;
 /// 汇合点等待上限；健康实现立即汇合，回归为串行时由断言而非挂起收口。
-const LANE_RENDEZVOUS_TIMEOUT: Duration = Duration::from_secs(5);
-/// 慢 lane 的 Interaction：占用 1 个 lane 槽位做长 turn。
-const SLOW_LANE_INTERACTION_ID: &str = "slow-1";
-/// 长 turn 执行期间追加到空闲 lane 的后续消息。
-const IDLE_LANE_FOLLOW_UP_ID: &str = "b-2";
-/// 空闲 lane 后续消息被独立领取执行的等待上限。
-const IDLE_LANE_PROGRESS_TIMEOUT: Duration = Duration::from_secs(5);
+const SESSION_RENDEZVOUS_TIMEOUT: Duration = Duration::from_secs(5);
+/// 慢 session 的 Interaction：占用 1 个 session 槽位做长 turn。
+const SLOW_SESSION_INTERACTION_ID: &str = "slow-1";
+/// 长 turn 执行期间追加到空闲 session 的后续消息。
+const IDLE_SESSION_FOLLOW_UP_ID: &str = "b-2";
+/// 空闲 session 后续消息被独立领取执行的等待上限。
+const IDLE_SESSION_PROGRESS_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Default)]
 struct TestClock;
@@ -354,17 +354,17 @@ struct RecordingRunner {
     profiles: Arc<Mutex<Vec<JarvisRuntimeProfile>>>,
     active: Arc<AtomicUsize>,
     max_active: Arc<AtomicUsize>,
-    /// 可选汇合点：需要观察 lane 并发时注入，用同步取代 sleep 时序。
-    rendezvous: Option<Arc<LaneRendezvous>>,
+    /// 可选汇合点：需要观察 session 并发时注入，用同步取代 sleep 时序。
+    rendezvous: Option<Arc<SessionRendezvous>>,
 }
 
-/// 两个 lane 的确定性汇合点。
-struct LaneRendezvous {
+/// 两个 session 的确定性汇合点。
+struct SessionRendezvous {
     arrived: Mutex<usize>,
     ready: Condvar,
 }
 
-impl LaneRendezvous {
+impl SessionRendezvous {
     fn new() -> Self {
         Self {
             arrived: Mutex::new(0),
@@ -372,18 +372,18 @@ impl LaneRendezvous {
         }
     }
 
-    /// 登记本轮进入并等待另一个 lane；超时后返回，让并发断言给出确定性失败。
+    /// 登记本轮进入并等待另一个 session；超时后返回，让并发断言给出确定性失败。
     fn meet(&self) {
         let mut arrived = self.arrived.lock().expect("锁未中毒");
         *arrived += 1;
         self.ready.notify_all();
-        if *arrived >= LANE_RENDEZVOUS_PARTIES {
+        if *arrived >= SESSION_RENDEZVOUS_PARTIES {
             return;
         }
         let _ = self
             .ready
-            .wait_timeout_while(arrived, LANE_RENDEZVOUS_TIMEOUT, |count| {
-                *count < LANE_RENDEZVOUS_PARTIES
+            .wait_timeout_while(arrived, SESSION_RENDEZVOUS_TIMEOUT, |count| {
+                *count < SESSION_RENDEZVOUS_PARTIES
             })
             .expect("锁未中毒");
     }
@@ -486,7 +486,7 @@ fn primary_turn_uses_jarvis_profile_regardless_of_transport_source() {
 }
 
 #[test]
-fn concurrent_tick_keeps_lane_order_and_bounds_lane_count() {
+fn concurrent_tick_keeps_session_order_and_bounds_session_count() {
     let store = BatchStore::default();
     for (id, workspace, received_at_ms) in [
         ("a-1", "workspace-a", 1),
@@ -498,7 +498,7 @@ fn concurrent_tick_keeps_lane_order_and_bounds_lane_count() {
             .expect("追加成功");
     }
     let runner = RecordingRunner {
-        rendezvous: Some(Arc::new(LaneRendezvous::new())),
+        rendezvous: Some(Arc::new(SessionRendezvous::new())),
         ..RecordingRunner::default()
     };
     let service = PrimaryTurnService::new(store, runner.clone(), TestClock, TEST_LEASE_DURATION_MS)
@@ -541,36 +541,36 @@ fn wait_for_signal(signal: &Signal, timeout: Duration) -> bool {
     *signaled
 }
 
-/// 慢 lane 的长 turn 会向空闲 lane 追加新消息，并等待它被独立领取执行。
+/// 慢 session 的长 turn 会向空闲 session 追加新消息，并等待它被独立领取执行。
 ///
 /// 回归 T-4：批间 barrier 下这条消息必须等长 turn 结束才会被领取。
 #[derive(Clone)]
-struct IdleLaneProgressRunner {
+struct IdleSessionProgressRunner {
     store: BatchStore,
     long_turn_entered: Signal,
-    idle_lane_entered: Signal,
+    idle_session_entered: Signal,
     release: Signal,
 }
 
-impl PrimaryTurnRunner for IdleLaneProgressRunner {
+impl PrimaryTurnRunner for IdleSessionProgressRunner {
     fn run(&self, request: PrimaryTurnRequest) -> Result<(), PrimaryTurnRunnerError> {
         match request.interaction.interaction_id.as_str() {
-            SLOW_LANE_INTERACTION_ID => {
+            SLOW_SESSION_INTERACTION_ID => {
                 signal_once(&self.long_turn_entered);
                 self.store
                     .append(&interaction_in_workspace(
-                        IDLE_LANE_FOLLOW_UP_ID,
+                        IDLE_SESSION_FOLLOW_UP_ID,
                         "workspace-b",
                         3,
                     ))
                     .map_err(|error| PrimaryTurnRunnerError::Runtime(error.to_string()))?;
-                if !wait_for_signal(&self.release, IDLE_LANE_PROGRESS_TIMEOUT) {
+                if !wait_for_signal(&self.release, IDLE_SESSION_PROGRESS_TIMEOUT) {
                     return Err(PrimaryTurnRunnerError::Runtime(
                         "长 turn 未被放行".to_owned(),
                     ));
                 }
             }
-            IDLE_LANE_FOLLOW_UP_ID => signal_once(&self.idle_lane_entered),
+            IDLE_SESSION_FOLLOW_UP_ID => signal_once(&self.idle_session_entered),
             _ => {}
         }
         Ok(())
@@ -578,22 +578,22 @@ impl PrimaryTurnRunner for IdleLaneProgressRunner {
 }
 
 #[test]
-fn idle_lane_progresses_without_waiting_for_the_slowest_lane() {
+fn idle_session_progresses_without_waiting_for_the_slowest_session() {
     let store = BatchStore::default();
     store
         .append(&interaction_in_workspace(
-            SLOW_LANE_INTERACTION_ID,
+            SLOW_SESSION_INTERACTION_ID,
             "workspace-a",
             1,
         ))
-        .expect("追加慢 lane 消息");
+        .expect("追加慢 session 消息");
     store
         .append(&interaction_in_workspace("b-1", "workspace-b", 2))
-        .expect("追加空闲 lane 已有消息");
-    let runner = IdleLaneProgressRunner {
+        .expect("追加空闲 session 已有消息");
+    let runner = IdleSessionProgressRunner {
         store: store.clone(),
         long_turn_entered: new_signal(),
-        idle_lane_entered: new_signal(),
+        idle_session_entered: new_signal(),
         release: new_signal(),
     };
     let service = PrimaryTurnService::new(store, runner.clone(), TestClock, TEST_LEASE_DURATION_MS)
@@ -601,12 +601,12 @@ fn idle_lane_progresses_without_waiting_for_the_slowest_lane() {
     let tick = thread::spawn(move || service.tick_concurrent(10, 4));
 
     assert!(
-        wait_for_signal(&runner.long_turn_entered, IDLE_LANE_PROGRESS_TIMEOUT),
-        "慢 lane 必须在本批内开始执行"
+        wait_for_signal(&runner.long_turn_entered, IDLE_SESSION_PROGRESS_TIMEOUT),
+        "慢 session 必须在本批内开始执行"
     );
-    // 长 turn 正在运行时它追加的空闲 lane 消息必须被补位领取，而不是等长 turn 收口。
-    let idle_lane_progressed =
-        wait_for_signal(&runner.idle_lane_entered, IDLE_LANE_PROGRESS_TIMEOUT);
+    // 长 turn 正在运行时它追加的空闲 session 消息必须被补位领取，而不是等长 turn 收口。
+    let idle_session_progressed =
+        wait_for_signal(&runner.idle_session_entered, IDLE_SESSION_PROGRESS_TIMEOUT);
     signal_once(&runner.release);
 
     let report = tick
@@ -614,8 +614,8 @@ fn idle_lane_progresses_without_waiting_for_the_slowest_lane() {
         .expect("Primary Turn 协调线程不得 panic")
         .expect("并发 tick 成功");
     assert!(
-        idle_lane_progressed,
-        "空闲 lane 的新消息不得等待最慢 lane 结束才启动"
+        idle_session_progressed,
+        "空闲 session 的新消息不得等待最慢 session 结束才启动"
     );
     assert_eq!(report.claimed, 3);
     assert_eq!(report.understood, 3);

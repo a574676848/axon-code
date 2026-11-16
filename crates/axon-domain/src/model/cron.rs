@@ -8,7 +8,7 @@ pub const CRON_SCHEMA_VERSION: u32 = 2;
 ///
 /// Cron 任务在自己的车道里执行，该车道没有人类消费者，因此不允许把唤醒目标指向它，
 /// 否则每轮执行都会唤醒一轮新的 Agent 回合。
-pub const CRON_LANE_DESTINATION_PREFIX: &str = "cron-";
+pub const CRON_SESSION_DESTINATION_PREFIX: &str = "cron-";
 
 /// Cron 完成后要唤醒的目标。
 ///
@@ -89,7 +89,7 @@ impl CronWakeTarget {
                         desktop_session_channel()
                     ));
                 }
-                if destination.starts_with(CRON_LANE_DESTINATION_PREFIX) {
+                if destination.starts_with(CRON_SESSION_DESTINATION_PREFIX) {
                     return Err("会话唤醒目标不能指向 Cron 自身车道".to_owned());
                 }
             }
@@ -483,15 +483,15 @@ mod tests {
     }
 
     #[test]
-    fn wake_target_rejects_unstable_or_self_lane() {
+    fn wake_target_rejects_unstable_or_self_session() {
         let tui = CronWakeTarget::Session {
             channel: "tui".to_owned(),
             destination: "terminal-1".to_owned(),
             workspace: None,
         };
-        let self_lane = CronWakeTarget::Session {
+        let self_session = CronWakeTarget::Session {
             channel: "desktop".to_owned(),
-            destination: format!("{CRON_LANE_DESTINATION_PREFIX}cron-abc"),
+            destination: format!("{CRON_SESSION_DESTINATION_PREFIX}cron-abc"),
             workspace: None,
         };
         let empty_chat = CronWakeTarget::Session {
@@ -509,7 +509,7 @@ mod tests {
             tui.validate().is_err(),
             "TUI 车道标识不稳定，不得作为唤醒目标"
         );
-        assert!(self_lane.validate().is_err(), "不得唤醒 Cron 自身车道");
+        assert!(self_session.validate().is_err(), "不得唤醒 Cron 自身车道");
         assert!(empty_chat.validate().is_err());
         assert!(valid.validate().is_ok());
     }

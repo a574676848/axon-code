@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use std::time::Duration;
 
-use crate::conversation::wire::{INTERACTIONS_PATH, LANES_PATH};
+use crate::conversation::wire::{INTERACTIONS_PATH, SESSIONS_PATH};
 use crate::gateway;
 
 /// 单次拉取的历史条数上限。
@@ -110,7 +110,7 @@ pub struct InteractionSummary {
 /// 网关载荷。
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct LaneInteractionsPayload {
+struct SessionInteractionsPayload {
     #[serde(default)]
     interactions: Vec<InteractionSummary>,
     /// 整条车道的累计用量；网关没给结论时缺省为空。
@@ -121,7 +121,7 @@ struct LaneInteractionsPayload {
     session_elapsed_ms: Option<u64>,
     /// 车道当前模型的权威事实；网关读不到时缺省为空。
     #[serde(default)]
-    effective_model: Option<LaneEffectiveModel>,
+    effective_model: Option<SessionEffectiveModel>,
     /// 最近一次记忆反思的提示文本；该会话还没有记忆动作时缺省为空。
     #[serde(default)]
     reflection_notice: Option<String>,
@@ -133,7 +133,7 @@ struct LaneInteractionsPayload {
 /// 不遍历历史轮次：界面打开会话时据此显示真实模型，不必等逐条回放。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LaneEffectiveModel {
+pub struct SessionEffectiveModel {
     /// 该轮使用的 provider。
     pub provider: String,
     /// 该轮使用的 upstream 模型 ID。
@@ -172,7 +172,7 @@ pub struct SessionUsageTotals {
 /// 按车道聚合，客户端不靠自己已经回放到哪一条去推算。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LaneInteractions {
+pub struct SessionInteractions {
     /// 这一页的 Interaction，按接收时间升序。
     pub interactions: Vec<InteractionSummary>,
     /// 整条车道截至当前的累计用量；读不到结论时为空。
@@ -183,7 +183,7 @@ pub struct LaneInteractions {
     pub session_elapsed_ms: Option<u64>,
     /// 车道当前模型的权威事实；读不到结论时为空。
     #[serde(default)]
-    pub effective_model: Option<LaneEffectiveModel>,
+    pub effective_model: Option<SessionEffectiveModel>,
     /// 最近一次记忆反思的提示文本；该会话还没有记忆动作时为空。
     ///
     /// 与 `effective_model` 同一时机取回：都是「这条车道现在能对外展示的最新事实」，
@@ -208,19 +208,19 @@ pub struct HistoryCursor {
 /// 列出某条车道下的 Interaction，按接收时间升序。
 ///
 /// `before` 为空取最近一页；给出游标则取它之前的一页，用于逐条向前翻。
-pub fn lane_interactions(
-    lane_id: &str,
+pub fn session_interactions(
+    session_id: &str,
     limit: Option<u32>,
     before: Option<&HistoryCursor>,
-) -> Result<LaneInteractions, String> {
-    let lane_id = lane_id.trim();
-    if lane_id.is_empty() {
+) -> Result<SessionInteractions, String> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
         return Err("车道标识不能为空".to_string());
     }
     let limit = limit
         .unwrap_or(DEFAULT_HISTORY_LIMIT)
         .clamp(1, MAX_HISTORY_LIMIT);
-    let mut path = format!("{LANES_PATH}/{lane_id}/interactions?limit={limit}");
+    let mut path = format!("{SESSIONS_PATH}/{session_id}/interactions?limit={limit}");
     if let Some(cursor) = before {
         // 车道标识只允许 URL 安全字符，游标仍需转义：它来自网关下发的标识，
         // 不该由客户端假定其字符集。
@@ -232,8 +232,8 @@ pub fn lane_interactions(
         ));
     }
     let payload = gateway::get_json_at(&path)?;
-    serde_json::from_value::<LaneInteractionsPayload>(payload)
-        .map(|parsed| LaneInteractions {
+    serde_json::from_value::<SessionInteractionsPayload>(payload)
+        .map(|parsed| SessionInteractions {
             interactions: parsed.interactions,
             session_usage: parsed.session_usage,
             session_elapsed_ms: parsed.session_elapsed_ms,
@@ -283,8 +283,8 @@ mod tests {
     }
 
     #[test]
-    fn empty_lane_id_is_rejected_before_any_request() {
-        assert!(super::lane_interactions("  ", None, None).is_err());
+    fn empty_session_id_is_rejected_before_any_request() {
+        assert!(super::session_interactions("  ", None, None).is_err());
     }
 
     #[test]

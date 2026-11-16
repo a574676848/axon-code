@@ -8,7 +8,7 @@ use axon_domain::{
 };
 use axon_session::{
     RuntimeStore, SqliteRuntimeStore, WorkspaceRecord, WorkspaceResolver, WorkspaceStore,
-    session_lane_id,
+    session_id_for_route,
 };
 use uuid::Uuid;
 
@@ -94,7 +94,7 @@ pub(crate) fn register_workspace_record(
 /// channel/destination 共同决定 Session，Session 再决定 Provider rollout 身份。
 /// 已有 Session 直接加载其 `run_session_id`，只有首次进入该复合车道才创建，
 /// 使同表面的相邻输入延续同一段上下文，而不是各起一段新历史。
-pub(crate) fn conversation_lane_run_session_id(
+pub(crate) fn conversation_session_run_session_id(
     cwd: &Path,
     config_path: Option<&Path>,
     now_ms: u64,
@@ -104,7 +104,7 @@ pub(crate) fn conversation_lane_run_session_id(
     let workspace = WorkspaceResolver
         .resolve(cwd, now_ms)
         .map_err(|error| error.to_string())?;
-    let session_id = DaemonSessionId::new(session_lane_id(
+    let session_id = DaemonSessionId::new(session_id_for_route(
         &workspace.workspace_id,
         &AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly),
         channel,
@@ -138,7 +138,7 @@ fn interaction_store(config_path: Option<&Path>) -> Result<SqliteRuntimeStore, S
 
 #[cfg(test)]
 mod tests {
-    use super::{conversation_lane_run_session_id, interaction_from_prompt, interaction_store};
+    use super::{conversation_session_run_session_id, interaction_from_prompt, interaction_store};
 
     use crate::run_commands::{CLI_INTERACTION_CHANNEL, cli_reply_destination};
     use axon_session::RuntimeStore;
@@ -177,7 +177,7 @@ mod tests {
         std::fs::write(&config_path, "[agent]\ndefault_model = \"balanced\"\n").expect("写入配置");
 
         // 模拟两个独立 CLI 进程：各自持有不同的会话表面 ID。
-        let first = conversation_lane_run_session_id(
+        let first = conversation_session_run_session_id(
             root.path(),
             Some(&config_path),
             1,
@@ -185,7 +185,7 @@ mod tests {
             "terminal-a",
         )
         .expect("首个 CLI 进程");
-        let second = conversation_lane_run_session_id(
+        let second = conversation_session_run_session_id(
             root.path(),
             Some(&config_path),
             2,
@@ -201,12 +201,12 @@ mod tests {
     }
 
     #[test]
-    fn workspace_lane_loads_existing_run_window_instead_of_creating_one() {
+    fn workspace_session_loads_existing_run_window_instead_of_creating_one() {
         let root = axon_test_support::test_temp_dir();
         let config_path = root.path().join("isolated-config.toml");
         std::fs::write(&config_path, "[agent]\ndefault_model = \"balanced\"\n").expect("写入配置");
 
-        let first = conversation_lane_run_session_id(
+        let first = conversation_session_run_session_id(
             root.path(),
             Some(&config_path),
             1,
@@ -223,16 +223,16 @@ mod tests {
         )
         .expect("构造 CLI Interaction");
         // CLI 与 Daemon 必须解析到同一条车道，否则两个入口会各自维护一段历史。
-        let lane = axon_daemon::primary_session_id_for_interaction(&interaction)
+        let session = axon_daemon::primary_session_id_for_interaction(&interaction)
             .expect("Daemon 车道身份一致");
         let runtime = interaction_store(Some(&config_path))
             .expect("打开运行库")
-            .get_session(&lane)
+            .get_session(&session)
             .expect("车道 Session 已建立");
-        assert_eq!(runtime.session_id, lane);
+        assert_eq!(runtime.session_id, session);
         assert_eq!(runtime.run_session_id, first);
 
-        let second = conversation_lane_run_session_id(
+        let second = conversation_session_run_session_id(
             root.path(),
             Some(&config_path),
             2,
@@ -250,7 +250,7 @@ mod tests {
         let config_path = root.path().join("isolated-config.toml");
         std::fs::write(&config_path, "[agent]\ndefault_model = \"balanced\"\n").expect("写入配置");
 
-        let first = conversation_lane_run_session_id(
+        let first = conversation_session_run_session_id(
             root.path(),
             Some(&config_path),
             1,
@@ -258,7 +258,7 @@ mod tests {
             cli_reply_destination(),
         )
         .expect("首个 Workspace");
-        let second = conversation_lane_run_session_id(
+        let second = conversation_session_run_session_id(
             other.path(),
             Some(&config_path),
             2,

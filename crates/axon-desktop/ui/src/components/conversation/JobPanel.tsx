@@ -113,15 +113,15 @@ const StopButton: React.FC<{ armed: boolean; pending: boolean; onStop: () => voi
  * 与复制入口贴住横幅顶端，命令滚走时它们还在。在跑且尚无输出的命令只有横幅，
  * 不画空的输出区；输出区同样限高内部滚动，中间行不折叠。
  */
-const JobTerminal: React.FC<{ job: JobRow; running: boolean; laneId: string | null }> = ({
+const JobTerminal: React.FC<{ job: JobRow; running: boolean; sessionId: string | null }> = ({
   job,
   running,
-  laneId,
+  sessionId,
 }) => {
   const [copied, setCopied] = React.useState(false);
   const timer = React.useRef<number | null>(null);
   // 输出只认作业自己的归档：发起作业的那条工具回执（`job start …`）不是作业输出。
-  const stream = useJobStream(laneId, job.jobId, running);
+  const stream = useJobStream(sessionId, job.jobId, running);
   const outputRef = React.useRef<HTMLPreElement | null>(null);
   /** 是否贴在底部：贴住就跟随新内容，用户上翻阅读时不抢滚动位置。 */
   const stickRef = React.useRef(true);
@@ -249,7 +249,7 @@ const JobTerminal: React.FC<{ job: JobRow; running: boolean; laneId: string | nu
 export interface JobLineProps {
   job: JobRow;
   /** 所属车道：作业输出按车道与作业标识取。 */
-  laneId: string | null;
+  sessionId: string | null;
   /** 已被用户停止时的终态原因；为空表示未停止。 */
   stoppedReason: string | null;
   /** 后端是否仍持有它；false 表示这一行只是历史记录。 */
@@ -269,7 +269,7 @@ export interface JobLineProps {
 /** 作业一行：状态点打头，行尾给状态与耗时，可展开出终端卡。 */
 export const JobLine: React.FC<JobLineProps> = ({
   job,
-  laneId,
+  sessionId,
   stoppedReason,
   live,
   expanded,
@@ -337,7 +337,7 @@ export const JobLine: React.FC<JobLineProps> = ({
           <StopButton armed={armed} pending={stopping} onStop={() => onStop(job)} />
         )}
       </div>
-      {expanded && observable && <JobTerminal job={job} running={running} laneId={laneId} />}
+      {expanded && observable && <JobTerminal job={job} running={running} sessionId={sessionId} />}
     </div>
   );
 };

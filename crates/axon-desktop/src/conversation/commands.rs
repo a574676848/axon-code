@@ -7,13 +7,13 @@ use tauri::State;
 
 use crate::AppState;
 use crate::conversation::answer_question::{self, AnswerQuestionReceipt};
-use crate::conversation::history::{self, LaneInteractions};
+use crate::conversation::history::{self, SessionInteractions};
 use crate::conversation::interrupt::{self, InterruptReceipt};
 use crate::conversation::job_output::{self, JobOutputStream};
 use crate::conversation::job_stop::{self, JobStopReceipt};
-use crate::conversation::lane_jobs::{self, LaneJobsRoster};
 use crate::conversation::question_sync::{self, QuestionSnapshot};
-use crate::conversation::session_read::{self, LaneSubagents};
+use crate::conversation::session_jobs::{self, SessionJobsRoster};
+use crate::conversation::session_read::{self, SessionSubagents};
 use crate::conversation::stream::SubscribeTarget;
 use crate::conversation::subagent_message::{self, SubagentMessageReceipt};
 use crate::conversation::submit;
@@ -45,11 +45,11 @@ pub fn conversation_submit(
 /// Tauri IPC 命令：提交待决提问的答案。
 #[tauri::command(async)]
 pub fn conversation_answer_question(
-    lane_id: String,
+    session_id: String,
     call_id: String,
     answers: Vec<UserAnswerItem>,
 ) -> Result<AnswerQuestionReceipt, String> {
-    answer_question::answer_question(&lane_id, &call_id, &answers)
+    answer_question::answer_question(&session_id, &call_id, &answers)
 }
 
 /// Tauri IPC 命令：列出某条车道下的历史 Interaction。
@@ -59,11 +59,11 @@ pub fn conversation_answer_question(
 /// 回执同时带上整条车道的累计 token 用量：会话读数要的是整条会话，与翻到第几页无关。
 #[tauri::command(async)]
 pub fn conversation_history(
-    lane_id: String,
+    session_id: String,
     limit: Option<u32>,
     before_ms: Option<u64>,
     before_id: Option<String>,
-) -> Result<LaneInteractions, String> {
+) -> Result<SessionInteractions, String> {
     let before = match (before_ms, before_id) {
         (Some(received_at_ms), Some(interaction_id)) if !interaction_id.trim().is_empty() => {
             Some(history::HistoryCursor {
@@ -73,7 +73,7 @@ pub fn conversation_history(
         }
         _ => None,
     };
-    history::lane_interactions(&lane_id, limit, before.as_ref())
+    history::session_interactions(&session_id, limit, before.as_ref())
 }
 
 /// Tauri IPC 命令：读取一条 Interaction 的一段历史帧。
@@ -96,12 +96,12 @@ pub fn conversation_history_events(
 /// 缺失的 partId 按 callId 派生），前端直接消费即可，不必自己解释网关协议。
 /// 失败时返回原因且不产生任何本地副作用：调用方保留本地事实。
 #[tauri::command(async)]
-pub fn conversation_lane_questions(
-    lane_id: String,
+pub fn conversation_session_questions(
+    session_id: String,
     state: Option<String>,
     limit: Option<u32>,
 ) -> Result<Vec<QuestionSnapshot>, String> {
-    question_sync::lane_questions(&lane_id, state.as_deref(), limit)
+    question_sync::session_questions(&session_id, state.as_deref(), limit)
 }
 
 /// Tauri IPC 命令：中断某条车道上正在运行的主 turn。
@@ -109,8 +109,8 @@ pub fn conversation_lane_questions(
 /// 回执里的 `interrupted` 是服务端的真实结论：没有活跃轮次时返回 false，
 /// 调用方不得据此假装中断成功。
 #[tauri::command(async)]
-pub fn conversation_interrupt(lane_id: String) -> Result<InterruptReceipt, String> {
-    interrupt::interrupt_lane(&lane_id)
+pub fn conversation_interrupt(session_id: String) -> Result<InterruptReceipt, String> {
+    interrupt::interrupt_session(&session_id)
 }
 
 /// Tauri IPC 命令：用户手动停止一条车道上的后台作业。
@@ -118,14 +118,14 @@ pub fn conversation_interrupt(lane_id: String) -> Result<InterruptReceipt, Strin
 /// 归属与终态原因都由服务端裁决；回执里的 `stopped` 是真实结论，
 /// 失败时返回的是服务端给出的拒绝原因（例如归属不符）。
 #[tauri::command(async)]
-pub fn conversation_stop_job(lane_id: String, job_id: String) -> Result<JobStopReceipt, String> {
-    job_stop::stop_job(&lane_id, &job_id)
+pub fn conversation_stop_job(session_id: String, job_id: String) -> Result<JobStopReceipt, String> {
+    job_stop::stop_job(&session_id, &job_id)
 }
 
 /// Tauri IPC 命令：读取一条车道上仍在运行的后台作业名册。
 #[tauri::command(async)]
-pub fn conversation_lane_jobs(lane_id: String) -> Result<LaneJobsRoster, String> {
-    lane_jobs::lane_jobs(&lane_id)
+pub fn conversation_session_jobs(session_id: String) -> Result<SessionJobsRoster, String> {
+    session_jobs::session_jobs(&session_id)
 }
 
 /// Tauri IPC 命令：读取一次后台作业的输出增量。
@@ -134,17 +134,17 @@ pub fn conversation_lane_jobs(lane_id: String) -> Result<LaneJobsRoster, String>
 /// 只写了一半，按字节续读既不丢内容也不会重复。
 #[tauri::command(async)]
 pub fn conversation_job_output(
-    lane_id: String,
+    session_id: String,
     job_id: String,
     offset: u64,
 ) -> Result<JobOutputStream, String> {
-    job_output::job_output(&lane_id, &job_id, offset)
+    job_output::job_output(&session_id, &job_id, offset)
 }
 
 /// Tauri IPC 命令：读取一条车道下的子代理会话清单。
 #[tauri::command(async)]
-pub fn conversation_lane_subagents(lane_id: String) -> Result<LaneSubagents, String> {
-    session_read::lane_subagents(&lane_id)
+pub fn conversation_session_subagents(session_id: String) -> Result<SessionSubagents, String> {
+    session_read::session_subagents(&session_id)
 }
 
 /// Tauri IPC 命令：向正在运行的子代理投递一条用户消息。
@@ -153,11 +153,11 @@ pub fn conversation_lane_subagents(lane_id: String) -> Result<LaneSubagents, Str
 /// 拒绝时返回的是服务端给出的原因（例如「该子代理当前不在运行」）。
 #[tauri::command(async)]
 pub fn conversation_send_subagent_message(
-    lane_id: String,
+    session_id: String,
     agent_id: String,
     content: String,
 ) -> Result<SubagentMessageReceipt, String> {
-    subagent_message::send_subagent_message(&lane_id, &agent_id, &content)
+    subagent_message::send_subagent_message(&session_id, &agent_id, &content)
 }
 
 /// Tauri IPC 命令：登记当前会话，供系统通知使用。
@@ -166,8 +166,8 @@ pub fn conversation_send_subagent_message(
 /// 会话里」的事实，而这份事实只有界面知道（会话切换发生在界面里）。车道的展示名
 /// 也一并交上来：Rust 侧不重新派生标题，避免同一件事出现两种口径。
 #[tauri::command(async)]
-pub fn conversation_set_active_lane(lane_id: String, title: String) -> Result<(), String> {
-    crate::lane_context::set_active_lane(&lane_id, &title);
+pub fn conversation_set_active_session(session_id: String, title: String) -> Result<(), String> {
+    crate::session_context::set_active_session(&session_id, &title);
     Ok(())
 }
 

@@ -44,9 +44,9 @@ pub trait UserQuestionStore: Send + Sync {
     ) -> Result<Option<UserQuestionRecord>, UserQuestionStoreError>;
 
     /// 按车道查询提问列表。
-    fn list_questions_by_lane(
+    fn list_questions_by_session(
         &self,
-        lane_id: &str,
+        session_id: &str,
         state: Option<UserQuestionState>,
         limit: usize,
     ) -> Result<Vec<UserQuestionRecord>, UserQuestionStoreError>;

@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn turn_record_usage_carries_every_bucket() {
         let record = serde_json::json!({
-            "sessionId": "session-lane-1",
+            "sessionId": "session-session-1",
             "provider": "openai",
             "model": "gpt-5",
             "assistantPartId": "assistant-1",
@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn turn_record_without_usage_counts_as_zero() {
         let record = serde_json::json!({
-            "sessionId": "session-lane-1",
+            "sessionId": "session-session-1",
             "provider": "openai",
             "model": "gpt-5",
             "assistantPartId": "assistant-1",
@@ -258,7 +258,7 @@ mod tests {
         let path = temp_db("session-usage-total");
         let store = RolloutSqliteStore::open(&path).unwrap();
 
-        let mut first = record("lane-1", None, 100);
+        let mut first = record("session-1", None, 100);
         first.usage = Some(TokenUsageTelemetry {
             total_input_tokens: 1_000,
             input_tokens: 400,
@@ -266,7 +266,7 @@ mod tests {
             output_tokens: 50,
             ..TokenUsageTelemetry::default()
         });
-        let mut second = record("lane-1", None, 200);
+        let mut second = record("session-1", None, 200);
         second.assistant_part_id = "assistant-followup".to_owned();
         second.usage = Some(TokenUsageTelemetry {
             total_input_tokens: 2_000,
@@ -274,7 +274,7 @@ mod tests {
             reasoning_output_tokens: 70,
             ..TokenUsageTelemetry::default()
         });
-        let mut other = record("lane-2", None, 300);
+        let mut other = record("session-2", None, 300);
         other.usage = Some(TokenUsageTelemetry {
             output_tokens: 999,
             ..TokenUsageTelemetry::default()
@@ -283,7 +283,7 @@ mod tests {
             store.record_session(turn).unwrap();
         }
 
-        let totals = store.session_usage_totals("lane-1").unwrap();
+        let totals = store.session_usage_totals("session-1").unwrap();
         assert_eq!(totals.total_tokens, 3_120);
         assert_eq!(totals.input_tokens, 2_400);
         assert_eq!(totals.cache_read_tokens, 600);
@@ -292,11 +292,14 @@ mod tests {
         assert_eq!(totals.reasoning_tokens, 70);
 
         assert_eq!(
-            store.session_usage_totals("lane-2").unwrap().total_tokens,
+            store
+                .session_usage_totals("session-2")
+                .unwrap()
+                .total_tokens,
             999
         );
         assert_eq!(
-            store.session_usage_totals("lane-without-usage").unwrap(),
+            store.session_usage_totals("session-without-usage").unwrap(),
             super::SessionUsageTotals::default()
         );
         cleanup(&path);

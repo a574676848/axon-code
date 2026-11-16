@@ -14,22 +14,22 @@ pub(super) fn query_param(query: Option<&str>, name: &str) -> Option<String> {
     })
 }
 
-/// 解析 `lanes/<laneId>/interactions` 子路径，返回车道标识、条数上限与反向游标。
+/// 解析 `sessions/<sessionId>/interactions` 子路径，返回车道标识、条数上限与反向游标。
 ///
 /// 游标由 `before_ms` 与 `before_id` 两个参数共同给出，它们就是查询的排序键
 /// `(received_at_ms, interaction_id)`；只给一半按未给处理，不做猜测。
-pub(super) fn lane_interactions_target(
+pub(super) fn session_interactions_target(
     subpath: &str,
     query: Option<&str>,
 ) -> Option<(String, u32, Option<InteractionCursor>)> {
-    let rest = subpath.strip_prefix("lanes/")?;
-    let (lane_id, tail) = rest.split_once('/')?;
-    if lane_id.is_empty() || tail != "interactions" {
+    let rest = subpath.strip_prefix("sessions/")?;
+    let (session_id, tail) = rest.split_once('/')?;
+    if session_id.is_empty() || tail != "interactions" {
         return None;
     }
     let limit = query_param(query, "limit")
         .and_then(|value| value.parse::<u32>().ok())
-        .unwrap_or(DEFAULT_LANE_INTERACTION_LIMIT);
+        .unwrap_or(DEFAULT_SESSION_INTERACTION_LIMIT);
     let before = match (
         query_param(query, "before_ms").and_then(|value| value.parse::<u64>().ok()),
         query_param(query, "before_id"),
@@ -42,37 +42,38 @@ pub(super) fn lane_interactions_target(
         }
         _ => None,
     };
-    Some((lane_id.to_owned(), limit, before))
+    Some((session_id.to_owned(), limit, before))
 }
 
-/// 解析 `lanes/<laneId>/interrupt` 子路径，返回车道标识。
-pub(super) fn lane_interrupt_target(subpath: &str) -> Option<String> {
-    let rest = subpath.strip_prefix("lanes/")?;
-    let (lane_id, tail) = rest.split_once('/')?;
-    (tail == "interrupt" && !lane_id.is_empty()).then(|| lane_id.to_owned())
+/// 解析 `sessions/<sessionId>/interrupt` 子路径，返回车道标识。
+pub(super) fn session_interrupt_target(subpath: &str) -> Option<String> {
+    let rest = subpath.strip_prefix("sessions/")?;
+    let (session_id, tail) = rest.split_once('/')?;
+    (tail == "interrupt" && !session_id.is_empty()).then(|| session_id.to_owned())
 }
 
-/// 解析 `lanes/<laneId>/jobs/<jobId>/stop` 子路径，返回车道与作业标识。
-pub(super) fn lane_job_stop_target(subpath: &str) -> Option<(String, String)> {
-    let rest = subpath.strip_prefix("lanes/")?;
-    let (lane_id, tail) = rest.split_once('/')?;
+/// 解析 `sessions/<sessionId>/jobs/<jobId>/stop` 子路径，返回车道与作业标识。
+pub(super) fn session_job_stop_target(subpath: &str) -> Option<(String, String)> {
+    let rest = subpath.strip_prefix("sessions/")?;
+    let (session_id, tail) = rest.split_once('/')?;
     let job_id = tail.strip_prefix("jobs/")?.strip_suffix("/stop")?;
-    (!lane_id.is_empty() && !job_id.is_empty()).then(|| (lane_id.to_owned(), job_id.to_owned()))
+    (!session_id.is_empty() && !job_id.is_empty())
+        .then(|| (session_id.to_owned(), job_id.to_owned()))
 }
 
-/// 解析 `lanes/<laneId>/subagents/<agent>/messages` 子路径。
+/// 解析 `sessions/<sessionId>/subagents/<agent>/messages` 子路径。
 ///
 /// 子代理标识在 URL 里是一个路径段（`/` 与 `:` 由调用方转义），这里解码回原样；
 /// 解码失败按 404 处理，不把一段坏字节当成子代理名。
-pub(super) fn lane_subagent_message_target(subpath: &str) -> Option<(String, String)> {
-    let rest = subpath.strip_prefix("lanes/")?;
-    let (lane_id, tail) = rest.split_once('/')?;
+pub(super) fn session_subagent_message_target(subpath: &str) -> Option<(String, String)> {
+    let rest = subpath.strip_prefix("sessions/")?;
+    let (session_id, tail) = rest.split_once('/')?;
     let agent = tail.strip_prefix("subagents/")?.strip_suffix("/messages")?;
-    if lane_id.is_empty() || agent.is_empty() || agent.contains('/') {
+    if session_id.is_empty() || agent.is_empty() || agent.contains('/') {
         return None;
     }
     let agent = percent_decode(agent)?;
-    (!agent.is_empty()).then(|| (lane_id.to_owned(), agent))
+    (!agent.is_empty()).then(|| (session_id.to_owned(), agent))
 }
 
 /// 百分号解码；只用于本适配器自己的路径段，遇到坏转义返回 `None`。
@@ -94,48 +95,48 @@ pub(super) fn percent_decode(value: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-/// 解析 `lanes/<laneId>/subagents` 子路径，返回车道标识。
-pub(super) fn lane_subagents_target(subpath: &str) -> Option<String> {
-    let rest = subpath.strip_prefix("lanes/")?;
-    let (lane_id, tail) = rest.split_once('/')?;
-    (tail == "subagents" && !lane_id.is_empty()).then(|| lane_id.to_owned())
+/// 解析 `sessions/<sessionId>/subagents` 子路径，返回车道标识。
+pub(super) fn session_subagents_target(subpath: &str) -> Option<String> {
+    let rest = subpath.strip_prefix("sessions/")?;
+    let (session_id, tail) = rest.split_once('/')?;
+    (tail == "subagents" && !session_id.is_empty()).then(|| session_id.to_owned())
 }
 
-/// 解析 `lanes/<laneId>/jobs` 子路径，返回车道标识。
-pub(super) fn lane_jobs_target(subpath: &str) -> Option<String> {
-    let rest = subpath.strip_prefix("lanes/")?;
-    let (lane_id, tail) = rest.split_once('/')?;
-    (tail == "jobs" && !lane_id.is_empty()).then(|| lane_id.to_owned())
+/// 解析 `sessions/<sessionId>/jobs` 子路径，返回车道标识。
+pub(super) fn session_jobs_target(subpath: &str) -> Option<String> {
+    let rest = subpath.strip_prefix("sessions/")?;
+    let (session_id, tail) = rest.split_once('/')?;
+    (tail == "jobs" && !session_id.is_empty()).then(|| session_id.to_owned())
 }
 
-/// 解析 `lanes/<laneId>/jobs/<jobId>/output` 子路径，返回车道与作业标识。
+/// 解析 `sessions/<sessionId>/jobs/<jobId>/output` 子路径，返回车道与作业标识。
 ///
 /// 三个 `jobs` 前缀的路由互不吞并：名册只认完整的 `jobs`，停止只认 `stop`，
 /// 尾随只认 `output`。
-pub(super) fn lane_job_output_target(subpath: &str) -> Option<(String, String)> {
-    let rest = subpath.strip_prefix("lanes/")?;
-    let (lane_id, tail) = rest.split_once('/')?;
+pub(super) fn session_job_output_target(subpath: &str) -> Option<(String, String)> {
+    let rest = subpath.strip_prefix("sessions/")?;
+    let (session_id, tail) = rest.split_once('/')?;
     let jobs = tail.strip_prefix("jobs/")?;
     let (job_id, action) = jobs.split_once('/')?;
-    (action == "output" && !lane_id.is_empty() && !job_id.is_empty())
-        .then(|| (lane_id.to_owned(), job_id.to_owned()))
+    (action == "output" && !session_id.is_empty() && !job_id.is_empty())
+        .then(|| (session_id.to_owned(), job_id.to_owned()))
 }
 
-/// 解析 `lanes/<laneId>/questions/<callId>/answer` 子路径。
-pub(super) fn lane_question_answer_target(subpath: &str) -> Option<(String, String)> {
-    let rest = subpath.strip_prefix("lanes/")?;
-    let (lane_id, tail) = rest.split_once('/')?;
+/// 解析 `sessions/<sessionId>/questions/<callId>/answer` 子路径。
+pub(super) fn session_question_answer_target(subpath: &str) -> Option<(String, String)> {
+    let rest = subpath.strip_prefix("sessions/")?;
+    let (session_id, tail) = rest.split_once('/')?;
     let rest_q = tail.strip_prefix("questions/")?;
     let (call_id, action) = rest_q.split_once('/')?;
-    (action == "answer" && !lane_id.is_empty() && !call_id.is_empty())
-        .then(|| (lane_id.to_owned(), call_id.to_owned()))
+    (action == "answer" && !session_id.is_empty() && !call_id.is_empty())
+        .then(|| (session_id.to_owned(), call_id.to_owned()))
 }
 
-/// 解析 `lanes/<laneId>/questions` 子路径。
-pub(super) fn lane_questions_target(subpath: &str) -> Option<String> {
-    let rest = subpath.strip_prefix("lanes/")?;
-    let (lane_id, tail) = rest.split_once('/')?;
-    (tail == "questions" && !lane_id.is_empty()).then(|| lane_id.to_owned())
+/// 解析 `sessions/<sessionId>/questions` 子路径。
+pub(super) fn session_questions_target(subpath: &str) -> Option<String> {
+    let rest = subpath.strip_prefix("sessions/")?;
+    let (session_id, tail) = rest.split_once('/')?;
+    (tail == "questions" && !session_id.is_empty()).then(|| session_id.to_owned())
 }
 
 /// 解析 `interactions/<interactionId>/events` 子路径。
@@ -164,29 +165,33 @@ pub(super) fn interaction_events_target(
 }
 
 /// 归属判据：owner 是车道本身，或车道当前运行会话的 `run_session_id`。
-pub(crate) fn owner_matches_lane(lane_id: &str, owner: &str, run_session_id: Option<&str>) -> bool {
-    owner == lane_id || run_session_id == Some(owner)
+pub(crate) fn owner_matches_session(
+    session_id: &str,
+    owner: &str,
+    run_session_id: Option<&str>,
+) -> bool {
+    owner == session_id || run_session_id == Some(owner)
 }
 
 /// 判断某个作业 owner 是否属于这条车道。
-pub(crate) fn lane_owns_owner(
+pub(crate) fn session_owns_owner(
     axon_root: &Path,
-    lane_id: &str,
+    session_id: &str,
     owner: &str,
 ) -> Result<bool, String> {
-    if owner_matches_lane(lane_id, owner, None) {
+    if owner_matches_session(session_id, owner, None) {
         return Ok(true);
     }
     let store = runtime_store(axon_root);
     let session_id =
-        DaemonSessionId::new(lane_id).map_err(|error| format!("车道标识非法：{error:?}"))?;
+        DaemonSessionId::new(session_id).map_err(|error| format!("车道标识非法：{error:?}"))?;
     let record = match store.get_session(&session_id) {
         Ok(record) => record,
         Err(RuntimeStoreError::NotFound(_)) => return Ok(false),
         Err(error) => return Err(format!("读取车道运行会话失败：{error:?}")),
     };
-    Ok(owner_matches_lane(
-        lane_id,
+    Ok(owner_matches_session(
+        session_id.as_str(),
         owner,
         Some(record.run_session_id.as_str()),
     ))

@@ -42,9 +42,9 @@ impl From<&WorkspaceRecord> for WorkspaceView {
 /// 车道协议载荷。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LaneView {
+pub struct SessionView {
     /// 车道标识。
-    pub lane_id: String,
+    pub session_id: String,
     /// 所属 Workspace 标识。
     pub workspace_id: String,
     /// 会话表面渠道。
@@ -67,10 +67,10 @@ pub struct LaneView {
     pub pending_question_count: u64,
 }
 
-impl From<&LaneSnapshot> for LaneView {
-    fn from(snapshot: &LaneSnapshot) -> Self {
+impl From<&SessionSnapshot> for SessionView {
+    fn from(snapshot: &SessionSnapshot) -> Self {
         Self {
-            lane_id: snapshot.lane_id.clone(),
+            session_id: snapshot.session_id.clone(),
             workspace_id: snapshot.workspace_id.clone(),
             channel: snapshot.channel.clone(),
             destination: snapshot.destination.clone(),

@@ -7,12 +7,12 @@ use axon_session::UserQuestionStore;
 use super::answer_route::{parse_answer_body, route_answer};
 use super::answer_service::UserQuestionAnswerService;
 
-/// 处理 `POST /api/v1/lanes/{laneId}/questions/{callId}/answer` 请求。
+/// 处理 `POST /api/v1/sessions/{sessionId}/questions/{callId}/answer` 请求。
 ///
 /// 状态码与错误码由 [`route_answer`] 统一给出，与 Daemon IPC 命令完全一致。
 pub fn handle_submit_answer(
     service: &UserQuestionAnswerService,
-    lane_id: &str,
+    session_id: &str,
     call_id: &str,
     body: &[u8],
 ) -> GatewayHttpResponse {
@@ -20,14 +20,14 @@ pub fn handle_submit_answer(
         Ok(parsed) => parsed,
         Err(outcome) => return GatewayHttpResponse::json(outcome.status_code, &outcome.payload),
     };
-    let outcome = route_answer(service, lane_id, call_id, answers, &channel);
+    let outcome = route_answer(service, session_id, call_id, answers, &channel);
     GatewayHttpResponse::json(outcome.status_code, &outcome.payload)
 }
 
-/// 处理 `GET /api/v1/lanes/{laneId}/questions` 对账查询请求。
+/// 处理 `GET /api/v1/sessions/{sessionId}/questions` 对账查询请求。
 pub fn handle_list_questions(
     store: &dyn UserQuestionStore,
-    lane_id: &str,
+    session_id: &str,
     query: Option<&str>,
 ) -> GatewayHttpResponse {
     let state_filter = query.and_then(|q| {
@@ -37,7 +37,7 @@ pub fn handle_list_questions(
         })
     });
 
-    let records = match store.list_questions_by_lane(lane_id, state_filter, 50) {
+    let records = match store.list_questions_by_session(session_id, state_filter, 50) {
         Ok(r) => r,
         Err(e) => {
             return GatewayHttpResponse::json(
@@ -53,7 +53,7 @@ pub fn handle_list_questions(
             serde_json::json!({
                 "questionId": r.question_id,
                 "callId": r.tool_call_id,
-                "laneId": r.lane_id,
+                "sessionId": r.session_id,
                 "state": r.state.as_str(),
                 "deadlineAtMs": r.deadline_at_ms,
                 "questions": serde_json::from_str::<serde_json::Value>(&r.questions_json).unwrap_or(serde_json::json!([])),
@@ -70,7 +70,7 @@ pub fn handle_list_questions(
     GatewayHttpResponse::json(
         200,
         &serde_json::json!({
-            "laneId": lane_id,
+            "sessionId": session_id,
             "questions": questions_view,
         }),
     )

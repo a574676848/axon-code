@@ -15,15 +15,15 @@ import { useJobStream } from './useJobStream';
 
 /** 作业输出区：跟随归档增量，读不到时退回本次调用自己的回执。 */
 export const JobOutputTail: React.FC<{
-  laneId: string | null;
+  sessionId: string | null;
   jobId: string;
   /** 这次工具调用自己的回执原文。 */
   fallback: string;
-}> = ({ laneId, jobId, fallback }) => {
+}> = ({ sessionId, jobId, fallback }) => {
   // 初值按「在跑」算：展开的一瞬间先给等待提示，不要先闪一下机器回执。
-  const stream = useJobStream(laneId, jobId, true);
+  const stream = useJobStream(sessionId, jobId, true);
   // 没有车道就没有读取通道：直接退回回执，别让「正在读取」一直转下去。
-  if (laneId === null) {
+  if (sessionId === null) {
     return fallback.length > 0 ? <ToolContent title="输出" value={fallback} /> : null;
   }
   const note =

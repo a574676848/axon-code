@@ -47,7 +47,7 @@ export interface ConversationActionsSource {
 export function useConversationActionsValue(
   source: ConversationActionsSource,
   workspaceRoot: string | null,
-  laneId: string | null,
+  sessionId: string | null,
 ): ConversationActions {
   const sourceRef = React.useRef(source);
   sourceRef.current = source;
@@ -92,8 +92,8 @@ export function useConversationActionsValue(
       // 正文里的相对图片路径以当前工作区为准，与输入坞的 `@` 引用同作用域。
       workspaceRoot,
       // 换会话就换车道：这个值进依赖，切换时重建一次集合是应该的。
-      laneId,
+      sessionId,
     }),
-    [resolveTarget, workspaceRoot, laneId],
+    [resolveTarget, workspaceRoot, sessionId],
   );
 }

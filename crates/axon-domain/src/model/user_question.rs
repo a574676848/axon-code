@@ -154,8 +154,6 @@ pub struct UserQuestionRecord {
     pub question_id: String,
     /// 幂等键（由 tool_call_id 与 turn 等信息生成）。
     pub idempotency_key: String,
-    /// 所属车道 ID。
-    pub lane_id: String,
     /// 所属会话 ID。
     pub session_id: String,
     /// 所属交互 ID。
@@ -200,9 +198,6 @@ impl UserQuestionRecord {
             return Err(UserQuestionValidationError::MissingRequiredField(
                 "idempotency_key",
             ));
-        }
-        if self.lane_id.trim().is_empty() {
-            return Err(UserQuestionValidationError::MissingRequiredField("lane_id"));
         }
         if self.session_id.trim().is_empty() {
             return Err(UserQuestionValidationError::MissingRequiredField(
@@ -322,7 +317,6 @@ mod tests {
         UserQuestionRecord {
             question_id: "uq-001".to_string(),
             idempotency_key: "idem-001".to_string(),
-            lane_id: "lane-main".to_string(),
             session_id: "sess-1".to_string(),
             interaction_id: "inter-1".to_string(),
             turn_id: "turn-1".to_string(),

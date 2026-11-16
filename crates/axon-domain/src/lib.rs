@@ -100,7 +100,7 @@ pub use cell::{
 pub use channel_breaker::BreakerPolicy;
 pub use channel_failure::{ChannelFailureKind, classify_channel_failure};
 pub use cron::{
-    CRON_LANE_DESTINATION_PREFIX, CRON_SCHEMA_VERSION, CronJob, CronJobInput, CronJobStatus,
+    CRON_SCHEMA_VERSION, CRON_SESSION_DESTINATION_PREFIX, CronJob, CronJobInput, CronJobStatus,
     CronJobUpdate, CronRunRecord, CronValidationError, CronWakeTarget, desktop_session_channel,
 };
 pub use daemon::{

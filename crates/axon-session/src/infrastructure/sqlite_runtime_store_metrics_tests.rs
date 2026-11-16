@@ -14,7 +14,7 @@ fn fixture() -> (SqliteRuntimeStore, DaemonSessionId) {
     let _host = store
         .claim_host(&host_id, 1, None, 10, 60_000)
         .expect("claim host");
-    let session_id = DaemonSessionId::new("session-lane-metrics").expect("session id");
+    let session_id = DaemonSessionId::new("session-session-metrics").expect("session id");
     store
         .create_session(&session_id, ".", 10)
         .expect("create session");
