@@ -39,6 +39,7 @@ import { ConversationWidthControls } from './ConversationWidthControls';
 import { useConversationWidth } from './useConversationWidth';
 import { useExpiringNotice } from './composerNotice';
 import { useSettledValue } from './conversationViewUtils';
+import { useComposerPick } from './useComposerPick';
 import { useExplicitTurnSettings } from './useExplicitTurnSettings';
 import { useOpeningStage } from './useOpeningStage';
 import { useInterruptOnEscape, useRailShortcuts } from './useConversationShortcuts';
@@ -53,6 +54,8 @@ import { useSessionBootstrap } from './useSessionBootstrap';
 
 /** 后端配置里与指标条相关的键。 */
 const CRON_DESTINATION_PREFIX = 'cron-';
+/** 配置还没读回来时的模型目录：稳定的空清单，避免每帧重算继承值。 */
+const NO_COMPOSER_MODELS: string[] = [];
 /** 后台驱动的独立会话在输入坞里的禁用说明。 */
 export interface ConversationViewProps {
   /** 当前选中的会话；为空时展示首屏空态。 */
@@ -118,12 +121,6 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   const sessionKey = selection === null ? null : `${selection.workspaceId}:${selection.sessionId}`;
   const voiceAutoRead = useSessionAutoRead(sessionKey);
   useStopSpeechOnSessionChange(sessionKey);
-  /*
-   * 用户在本会话里显式改过的模型：只有真在输入坞选过才随轮下发，换会话即作废。
-   * 没选过时留空，让后端按会话记录的模型继续，而不是让全局默认值覆盖它。
-   */
-  const { explicitModel, explicitReasoningEffort, onModelChange, onReasoningEffortChange } =
-    useExplicitTurnSettings(sessionKey);
   // 一轮收口时朗读这一轮的回复：流式与收口补齐两种落地方式都覆盖。
   useAutoReadReply(sessionKey, conversation.working, conversation.state.turns, voiceAutoRead);
   const [config, setConfig] = React.useState<ResolvedConfig | null>(null);
@@ -133,6 +130,22 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     : null;
   const fixedModel = (cronConfig?.jobId === cronJobId ? cronConfig?.model : null) ?? selection?.fixedModel;
   const fixedReasoningEffort = (cronConfig?.jobId === cronJobId ? cronConfig?.reasoningEffort : null) ?? selection?.fixedReasoningEffort;
+  /**
+   * 还没有正文的一屏：首屏本身，或应用内刚建好、还没有任何内容的那条会话。
+   *
+   * 这一屏还没有自己的运行记录，输入坞因此沿用上一次选过的模型与思考强度；
+   * 历史会话不走这条路，它的权威模型来自该车道最新一轮的记录。
+   */
+  const heroSession =
+    selection === null ||
+    (selection.pending === true && conversation.state.turns.length === 0);
+  const composerPick = useComposerPick(config?.models ?? NO_COMPOSER_MODELS);
+  const { explicitModel, explicitReasoningEffort, onModelChange, onReasoningEffortChange } =
+    useExplicitTurnSettings(sessionKey, {
+      inherited: heroSession ? composerPick.inherited : null,
+      onRememberModel: composerPick.rememberModel,
+      onRememberReasoningEffort: composerPick.rememberReasoningEffort,
+    });
   // 本会话真实跑过的模型（来自终态帧，回放历史时同样可得）：优先于配置默认值。
   /*
    * 指标条与输入坞共用的生效模型：展示名与最大上下文必须同源，否则会出现
@@ -419,15 +432,6 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     stopRunning,
   ]);
 
-  /**
-   * 首屏条件：还没有选中会话，或者选中的是一条刚建好、还没有任何内容的会话。
-   *
-   * 新建会话不该把主区域变成一片空白：那里仍应是「标志 + 标语」的首屏，
-   * 而输入坞已经指向这条新会话，第一条消息发出去之后正文自然接管。
-   */
-  const blankSession =
-    selection !== null && selection.pending === true && conversation.state.turns.length === 0;
-
   /*
    * 正文舞台：切换会话时正文层显示哪一屏。
    *
@@ -440,8 +444,14 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     settling,
   );
 
-  /** 还没有正文可看的两种情形：没选会话，或这条会话刚建好还没有内容。 */
-  const heroVisible = selection === null || blankSession;
+  /**
+   * 首屏条件：还没有选中会话，或者选中的是一条刚建好、还没有任何内容的会话。
+   *
+   * 新建会话不该把主区域变成一片空白：那里仍应是「标志 + 标语」的首屏，
+   * 而输入坞已经指向这条新会话，第一条消息发出去之后正文自然接管。判据与输入坞
+   * 的继承条件同源，见 `heroSession`。
+   */
+  const heroVisible = heroSession;
   const cover = coverFace(settling, shown.turns.length > 0, slowOpening, heroVisible);
   /*
    * 过渡面淡出期间保持上一份内容。
@@ -615,7 +625,13 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                   selection === null
                     ? (text, attachments, structuredInput) => {
                         setFollowToken((value) => value + 1);
-                        submitFromHero(text, attachments, structuredInput);
+                        submitFromHero(
+                          text,
+                          attachments,
+                          structuredInput,
+                          explicitModel,
+                          explicitReasoningEffort,
+                        );
                       }
                     : (text, attachments, structuredInput) => {
                         setFollowToken((value) => value + 1);

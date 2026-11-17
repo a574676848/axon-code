@@ -236,6 +236,14 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
             crate::desktop_preferences::desktop_set_theme(as_str("theme")?)?,
         )
         .map_err(stringify)?),
+        "desktop_set_composer_model" => Ok(serde_json::to_value(
+            crate::desktop_preferences::desktop_set_composer_model(as_str("model")?)?,
+        )
+        .map_err(stringify)?),
+        "desktop_set_composer_reasoning_effort" => Ok(serde_json::to_value(
+            crate::desktop_preferences::desktop_set_composer_reasoning_effort(as_str("effort")?)?,
+        )
+        .map_err(stringify)?),
         "pick_directory" => Ok(Value::Null),
         "document_catalog" => {
             Ok(serde_json::to_value(crate::documents::document_catalog()?).map_err(stringify)?)

@@ -33,7 +33,15 @@ export interface SessionBootstrap {
   /** 清掉失败原因：回执到点退场时调用。 */
   clearCreateError: () => void;
   /** 首屏直接提交：先建会话，等目标就绪后再发送。 */
-  submitFromHero: (text: string, attachments: AttachmentRef[], structuredInput: string) => void;
+  submitFromHero: (
+    text: string,
+    attachments: AttachmentRef[],
+    structuredInput: string,
+    /** 新会话沿用的模型名称；空表示交给配置默认值。 */
+    model?: string | null,
+    /** 新会话沿用的思考强度；空表示交给 `agent.reasoning_effort`。 */
+    reasoningEffort?: string | null,
+  ) => void;
   /** 首屏起语音时先建会话，返回这一轮可用的工作区与目的地。 */
   ensureVoiceSession: () => Promise<{ workspaceId: string; replyDestination: string } | null>;
 }
@@ -48,6 +56,10 @@ export function useSessionBootstrap(options: SessionBootstrapOptions): SessionBo
     attachments: AttachmentRef[];
     /** 提交时附在正文之后的结构化输入块（`@` 文件引用）；为空表示没有引用。 */
     structuredInput: string;
+    /** 新会话沿用的模型名称；空表示交给配置默认值。 */
+    model: string | null;
+    /** 新会话沿用的思考强度；空表示交给 `agent.reasoning_effort`。 */
+    reasoningEffort: string | null;
   } | null>(null);
 
   /** 新建一条会话并把它设为当前目标。 */
@@ -101,8 +113,14 @@ export function useSessionBootstrap(options: SessionBootstrapOptions): SessionBo
 
   /** 首屏直接提交：先建会话，等这一轮目标就绪后再发送。 */
   const submitFromHero = useCallback(
-    (text: string, attachments: AttachmentRef[], structuredInput: string) => {
-      pendingHeroText.current = { text, attachments, structuredInput };
+    (
+      text: string,
+      attachments: AttachmentRef[],
+      structuredInput: string,
+      model: string | null = null,
+      reasoningEffort: string | null = null,
+    ) => {
+      pendingHeroText.current = { text, attachments, structuredInput, model, reasoningEffort };
       void createSession().then((target) => {
         if (target === null) pendingHeroText.current = null;
       });
@@ -112,12 +130,19 @@ export function useSessionBootstrap(options: SessionBootstrapOptions): SessionBo
 
   // 目标就绪才发送：新建会话会切换当前车道并触发一次投影重置，
   // 若在重置之前把消息发出去，这一轮的本地消息与流式内容都会被重置吃掉。
+  // 模型与强度随这一轮带过去：新会话还没有自己的记录，这一轮就是它的第一个事实。
   useEffect(() => {
     const pending = pendingHeroText.current;
     if (pending === null || selection === null) return;
     if (conversation.sessionReadyId !== selection.sessionId) return;
     pendingHeroText.current = null;
-    void conversation.submit(pending.text, pending.attachments, pending.structuredInput);
+    void conversation.submit(
+      pending.text,
+      pending.attachments,
+      pending.structuredInput,
+      pending.model,
+      pending.reasoningEffort,
+    );
   }, [conversation, selection]);
 
   const clearCreateError = useCallback(() => setCreateError(null), []);

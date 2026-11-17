@@ -2,6 +2,7 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDownIcon, ChevronRightIcon } from '../../icons';
 import { modelNameOnly } from '../../conversation/format';
+import { REASONING_EFFORTS } from '../../conversation/reasoningEffort';
 import { Z_MENU, Z_MENU_SCRIM } from './chatChrome';
 import { MENU_ANCHOR_GAP, MENU_PADDING, MenuRow } from './MenuPanel';
 
@@ -18,9 +19,6 @@ import { MENU_ANCHOR_GAP, MENU_PADDING, MenuRow } from './MenuPanel';
 
 /** 浮层与视口边缘的最小留白。 */
 const VIEWPORT_MARGIN = 8;
-
-/** 推理等级候选值，与后端配置枚举逐一对应。 */
-const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 
 /** 首字母大写的展示形态；取值本身仍是配置里的原始枚举。 */
 function displayEffort(value: string): string {

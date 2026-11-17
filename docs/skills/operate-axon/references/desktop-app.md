@@ -86,7 +86,7 @@
 
 | 路径 | 内容 |
 |---|---|
-| `desktop-state.v2.json` | 客户端状态：主题、通知开关、左侧导航折叠偏好、生效与上一次生效的档案 id、引导版本，以及每个档案的工作区与车道投影 |
+| `desktop-state.v2.json` | 客户端状态：主题、通知开关、左侧导航折叠偏好、输入坞最近选过的模型名称与思考强度、生效与上一次生效的档案 id、引导版本，以及每个档案的工作区与车道投影 |
 | `desktop-state.json.superseded` | 迁移前的 v1 状态归档，只生成一份，不再读写 |
 | `desktop-state.v1.json.bak` | 首次写入 v2 之前的 v1 备份 |
 | `attachments/` | 附件暂存目录，按一次附件一个子目录落盘 |
@@ -123,7 +123,7 @@
 | MCP 与 Skill | `mcp_list`、`mcp_upsert`、`mcp_upsert_raw`、`mcp_remove`、`mcp_runtime_status`、`mcp_runtime_refresh`、`skills_list` |
 | 文档与输入历史 | `document_catalog`、`document_read`、`document_write`、`open_document`、`open_external_url`、`input_history_list`、`input_history_append` |
 | 凭据 | `secret_status_of`、`secret_set`、`secret_clear` |
-| 系统与偏好 | `system_info`、`check_update`、`gateway_health`、`gateway_start_service`、`desktop_preferences`、`desktop_set_notifications`、`desktop_set_sidebar_collapsed`、`desktop_set_theme`、`pick_directory`、`attachment_stage` |
+| 系统与偏好 | `system_info`、`check_update`、`gateway_health`、`gateway_start_service`、`desktop_preferences`、`desktop_set_notifications`、`desktop_set_sidebar_collapsed`、`desktop_set_theme`、`desktop_set_composer_model`、`desktop_set_composer_reasoning_effort`、`pick_directory`、`attachment_stage` |
 | 目标看板 | `goal_list`（`limit`、`workspaceId`）、`goal_get`（`goalId`）；两条都只读，参数非法在本地直接返回中文错误，不发请求 |
 
 - 读类命令可直接用于排障（`system_info`、`gateway_health`、`conversation_history`、`cron_history`）。
@@ -151,6 +151,7 @@
 | 指标条辅助簇 | `MCP <已加载台数>`；有服务器没加载起来时写 `MCP <正常> · <异常> 异常` 并整段转危险色，悬停给出总台数与原因；一台都没有且没有错误时不占位 |
 | 指标条辅助簇（技能） | 紧跟 MCP 写 `技能 <条数>`，取自技能目录下的一级技能目录，与设置 › 技能页同一份清单，悬停写 `共 <条数> 项已安装技能`；清单未读到或零条时不占位 |
 | 输入坞 `/mcp` | 清 MCP 健康负缓存并强制重建启动快照，也就是重连一遍 MCP；执行期间输入坞上方显示 `正在重载 MCP 服务器…` 与已耗时，返回后换成一行回执，同时在输入坞上沿摊开服务器清单 |
+| 输入坞 模型与思考强度 | 右下角选择器常驻展示当前生效的模型名称与思考强度，就地可改。改选只作用于当前会话，同时记进客户端状态文件；新开会话优先沿用这一份记录，模型名称已不在配置的模型目录里时整份作废，回到 `agent.default_model` 与 `agent.reasoning_effort`。历史会话不受影响，它显示并沿用该车道最新一轮记录里的模型 |
 
 - `/mcp` 的回执只有四种口径：`已重载 MCP：N 台全部正常`、`已重载 MCP：N 台正常，M 台异常`、`已重载 MCP：这个工作区没有配置 MCP 服务器`、`重载 MCP 失败：<原因>`。
 - 执行态复用工作状态行（工作脉搏 + 文案 + 已耗时 + 底边墨色光泽），但不给 `按 ESC 中断` 提示：本机指令不可打断；执行期间重复提交同一条指令会被忽略。

@@ -110,8 +110,8 @@ use conversation::{
     conversation_unsubscribe, conversation_watch, conversation_watch_session,
 };
 use desktop_preferences::{
-    desktop_preferences, desktop_set_notifications, desktop_set_sidebar_collapsed,
-    desktop_set_theme,
+    desktop_preferences, desktop_set_composer_model, desktop_set_composer_reasoning_effort,
+    desktop_set_notifications, desktop_set_sidebar_collapsed, desktop_set_theme,
 };
 use discovery::discover_models;
 use documents::{
@@ -380,6 +380,8 @@ pub fn run() {
             desktop_set_notifications,
             desktop_set_sidebar_collapsed,
             desktop_set_theme,
+            desktop_set_composer_model,
+            desktop_set_composer_reasoning_effort,
             window_state::desktop_notify_ready,
             usage_overview,
             usage_distribution,

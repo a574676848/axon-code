@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::connection::Runtime;
 use crate::state::{DesktopState, load_state, save_state};
 
 /// 默认主题：暖石纸白。
@@ -34,11 +35,13 @@ fn theme_of(state: &DesktopState) -> String {
 }
 
 /// 组成一次快照，避免读写两处各拼一遍字段。
-fn snapshot(state: &DesktopState, sidebar_collapsed: Option<bool>) -> DesktopPreferences {
+fn snapshot(state: &DesktopState, runtime: &Runtime) -> DesktopPreferences {
     DesktopPreferences {
         notifications_enabled: state.notifications_enabled,
         theme: theme_of(state),
-        sidebar_collapsed,
+        sidebar_collapsed: runtime.sidebar_collapsed(),
+        composer_model: runtime.composer_model(),
+        composer_reasoning_effort: runtime.composer_reasoning_effort(),
     }
 }
 
@@ -52,16 +55,17 @@ pub struct DesktopPreferences {
     pub theme: String,
     /// 左侧导航是否折叠；空值表示用户还没有手动表态。
     pub sidebar_collapsed: Option<bool>,
+    /// 输入坞最近一次显式选择的模型名称；空值表示用户从未选过。
+    pub composer_model: Option<String>,
+    /// 输入坞最近一次显式选择的思考强度；空值表示用户从未选过。
+    pub composer_reasoning_effort: Option<String>,
 }
 
 /// Tauri IPC 命令：读取桌面偏好。
 #[tauri::command(async)]
 pub fn desktop_preferences() -> Result<DesktopPreferences, String> {
     let state = load_state();
-    Ok(snapshot(
-        &state,
-        crate::connection::runtime().sidebar_collapsed(),
-    ))
+    Ok(snapshot(&state, crate::connection::runtime()))
 }
 
 /// Tauri IPC 命令：设置是否发送系统通知。
@@ -71,7 +75,7 @@ pub fn desktop_set_notifications(enabled: bool) -> Result<DesktopPreferences, St
     let mut state = load_state();
     state.notifications_enabled = enabled;
     save_state(&state)?;
-    Ok(snapshot(&state, runtime.sidebar_collapsed()))
+    Ok(snapshot(&state, runtime))
 }
 
 /// Tauri IPC 命令：切换界面主题。
@@ -90,7 +94,7 @@ pub fn desktop_set_theme(theme: String) -> Result<DesktopPreferences, String> {
     };
     save_state(&state)?;
     crate::window_effects::update_window_material_mode(normalized == THEME_OBSIDIAN);
-    Ok(snapshot(&state, runtime.sidebar_collapsed()))
+    Ok(snapshot(&state, runtime))
 }
 
 /// Tauri IPC 命令：设置左侧导航是否折叠。
@@ -99,7 +103,28 @@ pub fn desktop_set_sidebar_collapsed(collapsed: bool) -> Result<DesktopPreferenc
     let runtime = crate::connection::runtime();
     runtime.set_sidebar_collapsed(collapsed)?;
     let state = load_state();
-    Ok(snapshot(&state, runtime.sidebar_collapsed()))
+    Ok(snapshot(&state, runtime))
+}
+
+/// Tauri IPC 命令：记下输入坞改选的主模型名称。
+///
+/// 存的是配置里的展示名而不是 upstream id：id 会随供应商版本漂移，名称才是用户
+/// 在输入坞里认得出的那一个，也只有名称能在新会话里按配置目录重新校验一次。
+#[tauri::command(async)]
+pub fn desktop_set_composer_model(model: String) -> Result<DesktopPreferences, String> {
+    let runtime = crate::connection::runtime();
+    runtime.set_composer_model(Some(&model))?;
+    let state = load_state();
+    Ok(snapshot(&state, runtime))
+}
+
+/// Tauri IPC 命令：记下输入坞改选的思考强度。
+#[tauri::command(async)]
+pub fn desktop_set_composer_reasoning_effort(effort: String) -> Result<DesktopPreferences, String> {
+    let runtime = crate::connection::runtime();
+    runtime.set_composer_reasoning_effort(Some(&effort))?;
+    let state = load_state();
+    Ok(snapshot(&state, runtime))
 }
 
 #[cfg(test)]
@@ -112,11 +137,30 @@ mod tests {
             notifications_enabled: true,
             theme: THEME_PAPER.to_string(),
             sidebar_collapsed: Some(true),
+            composer_model: Some("deepseek-v4.1-flash".to_string()),
+            composer_reasoning_effort: Some("high".to_string()),
         })
         .expect("序列化");
         assert_eq!(value["notificationsEnabled"], true);
         assert_eq!(value["theme"], THEME_PAPER);
         assert_eq!(value["sidebarCollapsed"], true);
+        assert_eq!(value["composerModel"], "deepseek-v4.1-flash");
+        assert_eq!(value["composerReasoningEffort"], "high");
+    }
+
+    #[test]
+    fn empty_composer_cache_serializes_as_null() {
+        // 从未选过就是没有缓存：界面按 null 判断，不能收到空字符串。
+        let value = serde_json::to_value(DesktopPreferences {
+            notifications_enabled: true,
+            theme: THEME_PAPER.to_string(),
+            sidebar_collapsed: None,
+            composer_model: None,
+            composer_reasoning_effort: None,
+        })
+        .expect("序列化");
+        assert!(value["composerModel"].is_null());
+        assert!(value["composerReasoningEffort"].is_null());
     }
 
     #[test]

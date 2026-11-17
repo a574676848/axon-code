@@ -66,6 +66,13 @@ pub struct ClientLayer {
     pub notifications_enabled: bool,
     /// 左侧导航是否折叠；空值表示用户还没有手动表态。
     pub sidebar_collapsed: Option<bool>,
+    /// 输入坞最近一次显式选择的模型名称（配置里的展示名，不是 upstream id）。
+    ///
+    /// 只在用户于输入坞里改选过模型时写入，新开会话时优先沿用它；名称已不在配置里
+    /// 就整份作废，回到 `agent.default_model` 与 `agent.reasoning_effort`。
+    pub composer_model: Option<String>,
+    /// 输入坞最近一次显式选择的思考强度。
+    pub composer_reasoning_effort: Option<String>,
     /// 上一次在原生目录选择器中选中的目录。
     pub last_workspace_dir: Option<String>,
     /// 当前生效档案 id。
@@ -82,6 +89,8 @@ impl Default for ClientLayer {
             theme: None,
             notifications_enabled: true,
             sidebar_collapsed: None,
+            composer_model: None,
+            composer_reasoning_effort: None,
             last_workspace_dir: None,
             last_profile_id: None,
             previous_profile_id: None,
@@ -499,4 +508,62 @@ pub(super) fn unique_suffixed_path(path: &Path, suffix: &str) -> PathBuf {
         index += 1;
     }
     candidate
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ClientStateDocument, V2_FILE_NAME, load_document_at, save_document_at};
+    use std::fs;
+    use std::path::PathBuf;
+
+    /// 只属于本次用例的临时客户端根，不碰真实主目录。
+    fn temp_root(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "axon-store-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|value| value.as_nanos())
+                .unwrap_or_default()
+        ));
+        fs::create_dir_all(&dir).expect("临时目录应可创建");
+        dir
+    }
+
+    #[test]
+    fn composer_pick_survives_a_save_and_reload() {
+        // 输入坞的模型名称与思考强度要跨会话沿用，因此必须真的落在状态文件里，
+        // 而不是只活在进程内存。字段名走 camelCase，与 v2 文件其余字段同一口径。
+        let root = temp_root("composer");
+        let mut document = ClientStateDocument::default();
+        document.client.composer_model = Some("deepseek-v4.1-flash".to_owned());
+        document.client.composer_reasoning_effort = Some("xhigh".to_owned());
+        save_document_at(&root, &document).expect("状态文件应可写入");
+
+        let text = fs::read_to_string(root.join(V2_FILE_NAME)).expect("应可读回");
+        assert!(
+            text.contains("\"composerModel\": \"deepseek-v4.1-flash\""),
+            "{text}"
+        );
+        assert!(
+            text.contains("\"composerReasoningEffort\": \"xhigh\""),
+            "{text}"
+        );
+
+        let reloaded = load_document_at(&root, None);
+        assert_eq!(
+            reloaded.document.client.composer_model.as_deref(),
+            Some("deepseek-v4.1-flash")
+        );
+        assert_eq!(
+            reloaded
+                .document
+                .client
+                .composer_reasoning_effort
+                .as_deref(),
+            Some("xhigh")
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }

@@ -665,5 +665,14 @@ export const desktopSetSidebarCollapsed = (collapsed: boolean): Promise<DesktopP
 export const desktopSetTheme = (theme: ThemeId): Promise<DesktopPreferences> =>
   call('desktop_set_theme', { theme });
 
+/** 记下输入坞改选的主模型名称；新开会话时优先沿用。 */
+export const desktopSetComposerModel = (model: string): Promise<DesktopPreferences> =>
+  call('desktop_set_composer_model', { model });
+
+/** 记下输入坞改选的思考强度；新开会话时优先沿用。 */
+export const desktopSetComposerReasoningEffort = (
+  effort: string,
+): Promise<DesktopPreferences> => call('desktop_set_composer_reasoning_effort', { effort });
+
 
 export * from './ipcService';

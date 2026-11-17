@@ -46,7 +46,7 @@ Axon 使用以下用户级目录布局：
 | `agent.auto_compaction_threshold` | 浮点数 | `0.0..=1.0` | `0.8` |
 | `agent.log_level` | 字符串 | `trace`、`debug`、`info`、`warn`、`error` | `"warn"` |
 
-`agent.default_model` 是**没有更高优先级来源时**的兜底模型：优先级从高到低是「本轮显式模型」→「会话记录的模型」→ `agent.default_model`。本轮显式模型由入口在用户明确选择时随该轮下传（TUI 的 `/model`、桌面输入坞的模型选择器），优先级最高；未显式选择时，接续既有会话（`--continue`、`--session` 或同一会话的后续 turn）优先沿用该会话记录的模型，只有当该模型已从 `[[models]]` 移除、或所属 Provider 已停用导致会话模型在配置内不再可用时，才回退 `agent.default_model`。会话记录的模型按「同 Provider + 同 upstream `id`」匹配；Provider 改名或迁移后按 upstream `id` 兜底匹配。
+`agent.default_model` 是**没有更高优先级来源时**的兜底模型：优先级从高到低是「本轮显式模型」→「会话记录的模型」→ `agent.default_model`。本轮显式模型由入口在用户明确选择时随该轮下传（TUI 的 `/model`、桌面输入坞的模型选择器），优先级最高；桌面端还会把输入坞里选过的模型名称与思考强度记进客户端状态文件，新开会话时优先沿用它作为本轮显式模型，模型名称已不在 `[[models]]` 里时整份记录作废、回到配置默认值。未显式选择时，接续既有会话（`--continue`、`--session` 或同一会话的后续 turn）优先沿用该会话记录的模型，只有当该模型已从 `[[models]]` 移除、或所属 Provider 已停用导致会话模型在配置内不再可用时，才回退 `agent.default_model`。会话记录的模型按「同 Provider + 同 upstream `id`」匹配；Provider 改名或迁移后按 upstream `id` 兜底匹配。
 
 `[tui]` 当前为空配置段；视觉 MIME 与本地确认开关属于内部固定策略，不接受用户配置。
 
@@ -382,7 +382,7 @@ AXON_RUNTIME_ROOT（后端运行时根）
   > 后端默认 $HOME/.axon
 ```
 
-客户端数据根存放桌面端自己的状态与暂存数据：`desktop-state.v2.json`（连接档案、工作区与车道投影）、`attachments/`、`logs/desktop-ui-failure.jsonl` 与云档案的输入历史（按档案 id 分文件）。后端运行时根继续存放 `config.toml`、配置相邻的 `.env`、`data/`、`skills/`、`.mcp.json`、`SOUL.md` 与 `AGENTS.md`；本机档案的输入历史仍是后端根下的 `data/runtime/draft_history.jsonl`，与 TUI 共用同一份文件。
+客户端数据根存放桌面端自己的状态与暂存数据：`desktop-state.v2.json`（连接档案、工作区与车道投影，以及输入坞最近选过的模型名称与思考强度）、`attachments/`、`logs/desktop-ui-failure.jsonl` 与云档案的输入历史（按档案 id 分文件）。后端运行时根继续存放 `config.toml`、配置相邻的 `.env`、`data/`、`skills/`、`.mcp.json`、`SOUL.md` 与 `AGENTS.md`；本机档案的输入历史仍是后端根下的 `data/runtime/draft_history.jsonl`，与 TUI 共用同一份文件。
 
 `AXON_CLIENT_ROOT` 指向后端运行时根之内时会被忽略并退回默认位置，因为那会把桌面端状态写进 daemon 的运行态目录。
 

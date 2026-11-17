@@ -403,6 +403,10 @@ export interface DesktopPreferences {
   theme: ThemeId;
   /** 左侧导航是否折叠；空值表示用户还没有手动表态。 */
   sidebarCollapsed: boolean | null;
+  /** 输入坞最近一次显式选择的模型名称；空值表示从未选过。 */
+  composerModel: string | null;
+  /** 输入坞最近一次显式选择的思考强度；空值表示从未选过。 */
+  composerReasoningEffort: string | null;
 }
 
 /** 问答结算回执。 */
