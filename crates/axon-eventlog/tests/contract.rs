@@ -357,6 +357,20 @@ fn lazy_paged_read_stays_bounded_on_long_logs() {
         best_ms < full_ms,
         "分页读取必须明显快于全量解压：page={best_ms}ms full={full_ms}ms"
     );
+
+    // 从头部取页同样要快：起点定位按帧序号二分，不能把尾帧到起点之间的每一帧
+    // 都解压一遍（线性倒推会把「打开历史首页」放大成整条日志的解压）。
+    let mut head_ms = u128::MAX;
+    for _ in 0..5 {
+        let started = std::time::Instant::now();
+        let head = axon_eventlog::read_after(&log.path(), 0, 100).expect("头部读取");
+        head_ms = head_ms.min(started.elapsed().as_millis());
+        assert_eq!(head.len(), 100, "头部一页取满 100 条");
+        // after 是排他游标：after=0 时第一条进度是序号 1 的事件。
+        assert_eq!(head[0].sequence, 1);
+    }
+    println!("eventlog_head frames={FRAMES} page={head_ms}ms full={full_ms}ms 门槛=30ms");
+    assert!(head_ms < 30, "从头部取页超出 30ms 门槛：{head_ms}ms");
 }
 
 #[test]

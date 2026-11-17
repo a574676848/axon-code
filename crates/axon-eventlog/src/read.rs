@@ -100,15 +100,23 @@ pub fn read_after(
     }
     // 再从尾部倒推定位「包含 after 的那一帧」，从那一帧往后顺序解压；
     // 没有任何一帧的第一条序号 <= after 时，说明 after 落在日志起点之前，从头开始。
+    //
+    // 帧内序号单调递增，因此「首条序号 <= after」对帧下标成立单调性：二分即可定位
+    // 最后一个候选起点帧。线性倒推会把从尾部到 after 之间的每一帧都解压一遍，
+    // 读一次从头的历史页就等于把整条日志解压一次。
     let mut begin = 0usize;
-    for (index, span) in frames.iter().enumerate().rev() {
-        let records = frame_records(&mut file, span)?;
-        if records
+    let mut low = 0usize;
+    let mut high = frames.len();
+    while low < high {
+        let middle = low + (high - low) / 2;
+        let first = frame_records(&mut file, &frames[middle])?
             .first()
-            .is_none_or(|record| record.sequence <= after)
-        {
-            begin = index;
-            break;
+            .map(|record| record.sequence);
+        if first.is_some_and(|sequence| sequence <= after) {
+            begin = middle;
+            low = middle + 1;
+        } else {
+            high = middle;
         }
     }
     let mut collected: Vec<RuntimeEventRecord> = Vec::with_capacity(limit);

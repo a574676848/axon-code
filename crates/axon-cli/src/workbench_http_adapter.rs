@@ -214,27 +214,30 @@ pub fn sessions_payload(
 }
 
 /// 单条聚合 SQL 查询各车道待答提问数量（P9 判据）。
+///
+/// `user_questions` 落在待消费队列库上，控制面库里没有这张表：按控制面库查会以
+/// 「no such table」失败并被调用方吞成 0，界面上因此永远看不到「有待答提问」。
+/// 这里改走待消费队列的共享连接池，既不查错库，也不为每个请求重开一次 SQLite 连接。
 fn session_pending_question_counts(
     axon_root: &Path,
 ) -> Result<std::collections::HashMap<String, u64>, String> {
-    let store = runtime_store(axon_root);
-    let conn = rusqlite::Connection::open(store.path()).map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT session_id, COUNT(*) FROM user_questions \
-             WHERE state IN ('pending', 'suspended') GROUP BY session_id",
-        )
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+    runtime_store(axon_root)
+        .with_outbox_read_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT session_id, COUNT(*) FROM user_questions \
+                 WHERE state IN ('pending', 'suspended') GROUP BY session_id",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+            })?;
+            let mut counts = std::collections::HashMap::new();
+            for row in rows {
+                let (session_id, count) = row?;
+                counts.insert(session_id, count);
+            }
+            Ok(counts)
         })
-        .map_err(|e| e.to_string())?;
-    let mut map = std::collections::HashMap::new();
-    for row in rows.flatten() {
-        map.insert(row.0, row.1);
-    }
-    Ok(map)
+        .map_err(|error| error.to_string())
 }
 
 /// 新车道标识派生请求。

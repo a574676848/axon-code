@@ -35,10 +35,16 @@ const MAX_GATEWAY_REPLAY_PAGES: usize = 100_000;
 ///
 /// 升级前写入的事件没有归属列，只能整条会话扫一遍；这条路径没有上界时，十万帧级
 /// 会话的首屏会退化成全量逐帧读盘，而桌面端历史帧页只有 60 秒预算，最终表现为
-/// 「打开历史超时」。按单页 100 帧计，2000 页覆盖 20 万帧，高于已知最长会话。
+/// 「打开历史超时」。按下面的取页大小计，这个页数已远超任何已知会话，只作兜底。
 const MAX_LEGACY_SCAN_PAGES: usize = 2_000;
 /// 老记录「整会话保尾扫描」的载荷字节上限，只挡病态长日志，不参与读到尾的判定。
 const MAX_LEGACY_SCAN_BYTES: usize = 32 * 1024 * 1024;
+/// 老记录整会话扫描的取页大小。
+///
+/// `replay_events` 每读一页都要先按帧结构定位起点，单页只取 100 条会让一次历史首页
+/// 在几千帧的会话里翻几十页、每页都把日志重新定位一遍，实测首屏要 1.2 至 9.5 秒。
+/// 一次取 4000 条让常见会话一页读完；内存与时间仍由上面的页数、字节预算兜住。
+const LEGACY_SCAN_PAGE_SIZE: u32 = 4_000;
 
 /// 建立实时订阅并把 durable 日志从 `resume_cursor` 补齐到 `live_ceiling`。
 pub(super) fn subscribe_and_replay<S>(
@@ -496,7 +502,7 @@ where
             break;
         }
         let page = store
-            .replay_events(session_id, after, DEFAULT_GATEWAY_REPLAY_PAGE_SIZE)
+            .replay_events(session_id, after, LEGACY_SCAN_PAGE_SIZE)
             .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
         if page.is_empty() {
             break;
