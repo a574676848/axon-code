@@ -19,15 +19,24 @@ export interface OpeningStage {
  * 后半句是必需的：慢了才亮、亮了就撤，会让过渡面自己变成一次闪动。停够时长再交出
  * 正文，回放的快慢就只体现在它停留的长短上。
  */
-export function useOpeningStage(opening: boolean): OpeningStage {
+export function useOpeningStage(opening: boolean, identity: string | null): OpeningStage {
   const [slowOpening, setSlowOpening] = React.useState(false);
   const [coverHeld, setCoverHeld] = React.useState(false);
+  /*
+   * 只有「换了一条会话」才算换屏。
+   *
+   * 跨渠道事件（后台任务完成、子代理落地、目标推进、cron 唤醒主 turn）会让投影重新
+   * 走一遍回放，于是 `opening` 又一次为真；若照样算作换屏，正文就会每来一条外部事件
+   * 闪一次过渡面。身份没变时它是同一条会话的增量更新，正文原地长出来即可。
+   */
+  const [settledIdentity, setSettledIdentity] = React.useState<string | null>(null);
+  const switched = opening && identity !== settledIdentity;
   React.useEffect(() => {
     if (!opening) {
-      setSlowOpening(false);
-      setCoverHeld(false);
-      return undefined;
+      if (identity !== null) setSettledIdentity(identity);
+      return;
     }
+    if (!switched) return undefined;
     const show = window.setTimeout(() => setSlowOpening(true), OPENING_SURFACE_DELAY_MS);
     const hold = window.setTimeout(
       () => setCoverHeld(true),
@@ -37,6 +46,11 @@ export function useOpeningStage(opening: boolean): OpeningStage {
       window.clearTimeout(show);
       window.clearTimeout(hold);
     };
-  }, [opening]);
-  return { settling: opening || (slowOpening && !coverHeld), slowOpening };
+  }, [opening, switched, identity]);
+  React.useEffect(() => {
+    if (switched) return;
+    setSlowOpening(false);
+    setCoverHeld(false);
+  }, [switched]);
+  return { settling: switched || (slowOpening && !coverHeld), slowOpening };
 }

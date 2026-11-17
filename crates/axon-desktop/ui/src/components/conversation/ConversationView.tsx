@@ -235,7 +235,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
       ? workingLineOf(runningTurn, conversation.queued, conversation.loadingHistory)
       : null;
 
-  const { settling, slowOpening } = useOpeningStage(conversation.opening);
+  const { settling, slowOpening } = useOpeningStage(conversation.opening, sessionKey);
 
   /** 中断当前这一轮；Esc 与停止按钮共用同一个入口。 */
   const interruptTurn = conversation.interrupt;
