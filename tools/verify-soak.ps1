@@ -55,6 +55,9 @@ function Get-LogErrorCounts {
 }
 
 $dataDir = Join-Path $RuntimeRoot 'data'
+# 观测起点基线：日志是当日累积的，包含本次长跑之前的记录。
+# 只有「本次窗口内新增」的错误数才是长跑结论的依据，否则历史噪声会直接判失败。
+$baseline = Get-LogErrorCounts -DataDir $dataDir
 $samples = New-Object System.Collections.Generic.List[object]
 Start-Sleep -Seconds 1
 while ((Get-Date) -lt $deadline) {
@@ -84,8 +87,8 @@ while ((Get-Date) -lt $deadline) {
         sessions_bytes = (Get-DirBytes -Path (Join-Path $dataDir 'sessions'))
         logs_bytes = (Get-DirBytes -Path (Join-Path $dataDir 'logs'))
         memory_bytes = (Get-DirBytes -Path (Join-Path $dataDir 'memory'))
-        locked_hits = $counts.locked
-        fenced_hits = $counts.fenced
+        locked_hits = ($counts.locked - $baseline.locked)
+        fenced_hits = ($counts.fenced - $baseline.fenced)
     }
     $samples.Add([pscustomobject]$sample)
     ($sample | ConvertTo-Json -Compress) | Add-Content -LiteralPath $OutFile -Encoding utf8
