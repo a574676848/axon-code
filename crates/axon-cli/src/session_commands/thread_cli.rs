@@ -495,9 +495,9 @@ fn render_turn_text(turn: &Turn) -> String {
     let user = turn_user_content(turn);
     let assistant = turn_assistant_content(turn);
     let mut text = format!(
-        "Turn {} · {:?}\n- turn_id: {}\n- started_at_ms: {}\n- completed_at_ms: {}\n- user_sha256: {}\n- assistant_sha256: {}\n- user_chars: {}\n- assistant_chars: {}\n",
+        "Turn {} · {}\n- turn_id: {}\n- started_at_ms: {}\n- completed_at_ms: {}\n- user_sha256: {}\n- assistant_sha256: {}\n- user_chars: {}\n- assistant_chars: {}\n",
         turn.sequence,
-        turn.status,
+        turn_status_label(turn),
         turn.turn_id,
         turn.started_at_ms,
         turn.completed_at_ms
@@ -518,6 +518,23 @@ fn render_turn_text(turn: &Turn) -> String {
         preview_text(assistant, SESSION_READ_PREVIEW_CHARS)
     );
     text
+}
+
+/// 轮次终态标签。
+///
+/// 用户主动中断在 Thread 里落成 `Failed` 加中断类失败载荷（`category=interrupted`），
+/// 直接打印 Debug 会把「我让它停的」读成「它没做成」，因此这里把它分出来。
+fn turn_status_label(turn: &Turn) -> &'static str {
+    let interrupted_by_user = turn.failure.as_ref().is_some_and(|failure| {
+        failure.category == axon_domain::RUNTIME_FAILURE_CATEGORY_INTERRUPTED
+    });
+    match (turn.status, interrupted_by_user) {
+        (_, true) => "Interrupted",
+        (axon_session::TurnStatus::Active, false) => "Active",
+        (axon_session::TurnStatus::Completed, false) => "Completed",
+        (axon_session::TurnStatus::Interrupted, false) => "Interrupted",
+        (axon_session::TurnStatus::Failed, false) => "Failed",
+    }
 }
 
 fn turn_user_content(turn: &Turn) -> &str {
@@ -657,4 +674,65 @@ fn now_ms() -> u64 {
         .map_or(0, |duration| {
             u64::try_from(duration.as_millis().min(u128::from(u64::MAX))).unwrap_or(u64::MAX)
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use axon_domain::{
+        RUNTIME_FAILURE_CATEGORY_INTERRUPTED, RUNTIME_FAILURE_CODE_INTERRUPTED, RuntimeFailure,
+    };
+    use axon_session::TurnStatus;
+
+    use super::{Turn, turn_status_label};
+
+    fn turn(status: TurnStatus, failure: Option<RuntimeFailure>) -> Turn {
+        Turn {
+            turn_id: "turn-test".to_owned(),
+            sequence: 0,
+            status,
+            history_items: Vec::new(),
+            token_usage_json: None,
+            started_at_ms: 1,
+            completed_at_ms: None,
+            interrupted_at_ms: None,
+            failure,
+        }
+    }
+
+    #[test]
+    fn user_interrupt_is_labelled_interrupted_not_failed() {
+        // 用户按下停止时 Thread 落成 Failed 加中断类载荷：界面读作「中断」而不是「失败」。
+        let interrupted = turn(
+            TurnStatus::Failed,
+            Some(RuntimeFailure::new(
+                RUNTIME_FAILURE_CATEGORY_INTERRUPTED,
+                RUNTIME_FAILURE_CODE_INTERRUPTED,
+                "本轮已由用户中断。",
+                2,
+            )),
+        );
+        assert_eq!(turn_status_label(&interrupted), "Interrupted");
+    }
+
+    #[test]
+    fn genuine_failure_and_completion_keep_their_own_labels() {
+        let failed = turn(
+            TurnStatus::Failed,
+            Some(RuntimeFailure::new(
+                "provider",
+                "provider_failed",
+                "失败",
+                3,
+            )),
+        );
+        assert_eq!(turn_status_label(&failed), "Failed");
+        assert_eq!(
+            turn_status_label(&turn(TurnStatus::Completed, None)),
+            "Completed"
+        );
+        assert_eq!(
+            turn_status_label(&turn(TurnStatus::Interrupted, None)),
+            "Interrupted"
+        );
+    }
 }

@@ -56,8 +56,8 @@
 | --- | --- | --- | --- |
 | X1 | 一端在聊，另一端载入同一会话 | 通过（桌面 ↔ CLI） | 桌面新增一轮后，`axon sessions list` 与 `debug session show` 读到同一 Thread 的完整轮次；`resume` 后 CLI 能接续同一会话 |
 | X2 | CLI 在聊，桌面载入同一会话 | 通过（CLI ↔ 桌面） | CLI 追加一轮（`turns` +1）后，桌面点开该会话能看到该轮正文与回复 |
-| X3 | 两端同时在线，一端发消息 | 未真机验证 | 需要 TUI 与会话级实时帧双端观测，本环境无交互终端 |
-| X4 | 一端中断会话 | 未真机验证 | 同上；桌面侧中断入口已渲染，未取得双端对照证据 |
+| X3 | 两端同时在线，一端发消息 | 通过（桌面 + CLI） | 桌面停在该会话不动，CLI 用 `axon run --session <会话 ID>` 追加一轮；随后同屏多出这一轮的提问与回复，页脚标「来源 CLI」，全程没有刷新窗口。此前该会话两轮，之后三轮 |
+| X4 | 一端中断会话 | 通过（桌面中断，CLI 观察） | 桌面提交「用 shell 跑 Start-Sleep 40」后点「停止生成」，正文出现「本轮已由用户中断。」（用时 21.28s）；Thread 事件里该轮以 `turnFailed` 收口且 `failure.category=interrupted`、`code=run_interrupted`、`redactedMessage=本轮已由用户中断。`；CLI `axon sessions read` 读到该轮终态、空回复与用时。该命令原先把中断显示成 `Failed`，已改为 `Interrupted`（随本版发布） |
 | X5 | 一端新建会话 | 通过（桌面 ↔ CLI） | 桌面新建后 `axon sessions list` 立即可见新会话行 |
 | X6 | 不同渠道发起的轮次标注各自来源 | 通过（桌面 ↔ CLI） | 同一条桌面车道：第一轮在桌面发出，第二轮用 `axon run --session <会话 ID>` 续聊。`inbox` 两行的 `source_channel` 都是 `desktop`，`client` 分别是 `desktop` 与 `cli`；桌面历史同一屏里两个气泡页脚依次是「来源 桌面」「来源 CLI」（CDP 回执：`工作区 \|\| 当前 \|\| 来源 桌面 \|\| 12:20 \|\| 来源 CLI \|\| 12:21 \|\| …`）。更早的索引轮同样带来源：此前只有最新一轮有标注，已在 `indexedTurn` 补齐 |
 | X7 | 同一会话跨渠道续聊并混合计数 | 通过（同 X6） | 该会话 `session_metrics` 为 `turn_count=2`、`channel_mix_json={"cli":1,"desktop":1}`；另一条纯 CLI 车道的会话为 `{"cli":1}`。计数键是**逐轮发起端**，同一条桌面车道出现两种来源即证明跨端续聊已按轮计入 |

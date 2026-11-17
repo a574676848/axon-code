@@ -1,11 +1,15 @@
 {
-  "recordedAt": "2026-11-17T08:26:51.747383+08:00",
+  "recordedAt": "2026-11-17T12:58:40.994554+08:00",
+  "recordedOn": {
+    "platform": "win32",
+    "node": "Alex-ThinkBook"
+  },
   "measurements": {
     "p1_endpoint_reads_assertion": 1,
     "p12_file_route_hits": 0,
-    "runtime_data_mib": 6,
-    "event_append_p99_ms": 0.539,
-    "control_tx_p95_ms": 0.137,
+    "runtime_data_mib": 0,
+    "event_append_p99_ms": 0.931,
+    "control_tx_p95_ms": 0.226,
     "sessions_first_page_ms": 1.0
   },
   "manual": {

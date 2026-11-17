@@ -6,6 +6,10 @@
 - 会话列表首屏由 CLI 的索引验收用例打印；
 - 运行态 data 目录体积直接扫描本机安装树。
 桌面端 P2/P9/P10/P11 属于真机交互读数，只能人工登记。
+
+判定分两道：绝对上限（跨平台契约，任何机器都判）与相对基线回退。相对回退只在
+录制该基线的那台机器上比较，并要求增量越过噪声下限：毫秒级读数在别的机器或
+别的输入规模上差一个数量级是常态，按比例硬比会把测量噪声当成回退。
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 from datetime import datetime
@@ -26,6 +31,20 @@ for _stream in (sys.stdout, sys.stderr):
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REGRESSION_RATIO = 1.05
+# 相对回退的噪声下限：毫秒级读数的 1 毫秒抖动就是 100%，只看比例会把测量噪声
+# 判成回退。因此回退必须同时越过比例与绝对增量两道线。
+REGRESSION_FLOOR = {
+    "event_append_p99_ms": 0.5,
+    "control_tx_p95_ms": 0.5,
+    "sessions_first_page_ms": 2.0,
+    "runtime_data_mib": 8.0,
+    "p2_offline_start_ms": 150.0,
+    "p10_cold_start_ms": 150.0,
+    "p11_upload_1mib_ms": 5.0,
+    "p11_upload_8mib_ms": 5.0,
+    "p11_upload_32mib_ms": 5.0,
+    "p9_idle_cpu_percent": 0.5,
+}
 # §9 的绝对上限：读数超过它就是不合格，与「相对基线回退」是两道独立检查。
 HARD_LIMITS = {
     "event_append_p99_ms": 5.0,
@@ -212,6 +231,9 @@ def main() -> int:
     if args.record:
         document = {
             "recordedAt": datetime.now().astimezone().isoformat(),
+            # 相对基线比较只在录制它的那台机器上有意义：CI 的 Windows runner 与
+            # Linux runner 在同一个用例上差一个数量级，跨机器比相对值只会误报回退。
+            "recordedOn": {"platform": sys.platform, "node": socket.gethostname()},
             "measurements": measurements,
             "manual": manual,
             "pending": pending,
@@ -231,19 +253,42 @@ def main() -> int:
             failures += 1
     if baseline.is_file():
         baseline_document = json.loads(baseline.read_text(encoding="utf-8"))
+        recorder = baseline_document.get("recordedOn") or {}
+        same_machine = recorder.get("platform") == sys.platform and (
+            recorder.get("node") or ""
+        ).casefold() == socket.gethostname().casefold()
+        if not same_machine:
+            print(
+                "[perf] 基线录制于另一台机器（"
+                f"{recorder.get('platform') or '未知平台'} / {recorder.get('node') or '未知主机'}"
+                "）：本次只按绝对上限判定，不做相对回退比较"
+            )
         for bucket, current_map in (
             ("measurements", measurements),
             ("manual", manual),
         ):
+            if not same_machine:
+                break
             previous_map = baseline_document.get(bucket) or {}
             for name, current in current_map.items():
                 previous = previous_map.get(name)
                 if previous is None:
                     continue
-                if float(current) > float(previous) * REGRESSION_RATIO:
+                if float(previous) == 0.0:
+                    # 基线读作 0 时比例没有意义（从零开始的任何增长都是无穷大倍数），
+                    # 这类项只受绝对上限约束。
+                    if float(current) > 0.0:
+                        print(f"[perf] {name} 基线为 0，跳过相对比较（当前 {current}）")
+                    continue
+                floor = REGRESSION_FLOOR.get(name, 0.0)
+                grew = float(current) - float(previous)
+                if (
+                    float(current) > float(previous) * REGRESSION_RATIO
+                    and grew > floor
+                ):
                     print(
                         f"[perf] 回退：{name} 从 {previous} 变成 {current}，"
-                        f"超过 {(REGRESSION_RATIO - 1):.0%} 容忍"
+                        f"超过 {(REGRESSION_RATIO - 1):.0%} 容忍且增量大于噪声 {floor}"
                     )
                     failures += 1
     else:
