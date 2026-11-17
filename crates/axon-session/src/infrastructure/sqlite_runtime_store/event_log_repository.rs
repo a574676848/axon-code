@@ -127,6 +127,34 @@ pub(super) fn replay_events(
         .collect())
 }
 
+/// 读取某条 Interaction 在 `after_sequence` 之后的至多 `limit` 条事件。
+pub(super) fn replay_interaction_events(
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+    interaction_id: &InteractionId,
+    after_sequence: u64,
+    limit: u32,
+) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
+    let path = store.event_log(session_id).path();
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+    // 按键取帧：索引的交互指纹把解压范围收窄到这条交互自己的帧，不再整会话解压。
+    Ok(
+        axon_eventlog::read_interaction_after(
+            &path,
+            interaction_id.as_str(),
+            after_sequence,
+            limit,
+        )
+        .map_err(log_error)?
+        .iter()
+        .map(|record| from_runtime_record(session_id, record))
+        .collect(),
+    )
+}
+
 /// 读取某条 Interaction 自身的尾窗帧，按序号升序。
 pub(super) fn interaction_tail_window(
     store: &SqliteRuntimeStore,
@@ -139,14 +167,14 @@ pub(super) fn interaction_tail_window(
         return Ok(Vec::new());
     }
     let keep = usize::try_from(limit).unwrap_or(usize::MAX);
-    // 尾窗同样从尾部倒推：只要凑够该交互的条数就停，不遍历整条历史。
-    Ok(axon_eventlog::read_tail_matching(&path, keep, |record| {
-        record.interaction_id.as_deref() == Some(interaction_id.as_str())
-    })
-    .map_err(log_error)?
-    .iter()
-    .map(|record| from_runtime_record(session_id, record))
-    .collect())
+    // 尾窗同样从尾部倒推：凑够该交互的条数就停，且按交互指纹跳过别条交互的帧。
+    Ok(
+        axon_eventlog::read_interaction_tail(&path, interaction_id.as_str(), keep)
+            .map_err(log_error)?
+            .iter()
+            .map(|record| from_runtime_record(session_id, record))
+            .collect(),
+    )
 }
 
 /// 事件面真正落盘的末条序号与 generation；日志不存在或没有完整帧时返回 `None`。

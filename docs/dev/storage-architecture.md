@@ -381,15 +381,18 @@ struct RuntimeEventRecord {
 | 读需求 | 现状 | 目标 |
 | --- | --- | --- |
 | `replay_events(session, after_seq, limit)` | `session_events` 索引扫描 | 二分旁挂 `.idx` 定位起点帧后顺序解压；没有索引时从首帧单趟顺序解压（已落地，见下） |
-| `interaction_tail_window(session, interaction, limit)` | `session_events_session_interaction` 索引 | 按 `.idx` 条目从尾帧倒推解压，按 `interaction_id` 过滤（已落地） |
+| `replay_interaction_events(session, interaction, after_seq, limit)` | 整条会话扫描后过滤 | 按键取帧：`.idx` 的交互指纹把解压范围收窄到该交互自己的帧（已落地，见下） |
+| `interaction_tail_window(session, interaction, limit)` | `session_events_session_interaction` 索引 | 按 `.idx` 条目从尾帧倒推解压，按交互指纹跳过别条交互的帧（已落地） |
 | 会话内最近消息列表 | `jarvis_interactions_lane_recent` | 留在 `control.inbox`，按 `(session_id, received_at_ms DESC)` 取 |
 | 会话列表与元数据 | `session_runtimes` | 留在 `control.sessions` |
 | 启动激活状态 | `thread_service` 反向扫描 | 复用现有 `JsonlThreadEventStore::read_thread_activation` |
 | 用量投影 | 只读 `rollout.sqlite3` 的 turn 快照 | 已改为只读 thread 轮次事实（W2-12），见 §9 |
 
-投影缓存不做。首屏延迟确实存在：本机实测 0.6 MB 会话的交互历史首页 650 ms，日志越长越差（同一机制在更大会话上到秒级），根因是 zstd 帧头不带序号，逐次读取只能靠解压帧反查起点，而分页又把这件事重复了「页数」遍。因此按既定口径补 `.idx` 旁挂索引：每帧一条 `(首条序号, 帧偏移, 帧长度)` 定宽记录，写句柄追加时同步维护，读路径二分后只解压需要的帧，不做全量解析。
+投影缓存不做。首屏延迟确实存在：本机实测 0.6 MB 会话的交互历史首页 650 ms，日志越长越差（同一机制在更大会话上到秒级），根因是 zstd 帧头不带序号，逐次读取只能靠解压帧反查起点，而分页又把这件事重复了「页数」遍。因此按既定口径补 `.idx` 旁挂索引：每帧一条 `(首条序号, 帧偏移, 帧长度, 交互指纹)` 定宽记录，写句柄追加时同步维护，读路径二分后只解压需要的帧，不做全量解析。
 
-索引是派生数据：文件头记录「已覆盖日志长度」，与日志真实长度不一致、结构不自洽或文件缺失时一律忽略并按日志重建；写句柄打不开索引文件时退化为「没有索引」，绝不因此挡住事件落盘。
+交互指纹是关键的那一列：一次追加批次就是一帧、且通常属于同一条 Interaction，因此「这条交互的帧」在索引里是连续一段，取一页只需解压这段帧，不必整条会话过一遍。指纹只是缩小解压范围的粗筛，命中后仍逐条确认 `interaction_id`，碰撞只多解压一帧、不会返回别条交互的记录；跨交互批次记 0，读侧保守扫过。实测同一份会话里取一条 587 条事件的交互：整会话分页加过滤 359 ms，按键取帧 28 ms。
+
+索引是派生数据：文件头记录「已覆盖日志长度」，与日志真实长度不一致、结构不自洽或文件缺失时一律忽略并按日志重建；写句柄打不开索引文件时退化为「没有索引」，绝不因此挡住事件落盘。老记录只把归属写在载荷里（没有归属列）时按键取帧一条都命中不到，历史页退回载荷匹配的整条会话扫描，宁可慢也不让老交互展开成空白。
 
 ### 4.9 一致性协议
 

@@ -356,6 +356,12 @@ pub struct InteractionHistoryPage {
 ///
 /// `tail` 为假时保持原有语义：从 `after_sequence` 起按整条会话扫描，按
 /// Interaction 过滤。老记录没有 `interaction_id` 时也走这条路径。
+/// `tail` 为假时从前向后翻这条 Interaction 自己的帧；`tail` 为真时只读它自己的
+/// 尾窗。两条路径都按键取帧，不再为一条 Interaction 把整段会话解压一遍。
+///
+/// 老记录可能只把 `interactionId` 写在载荷里而没有归属列：按键读取会一条都命中
+/// 不到，此时退回「整条会话扫描 + 载荷匹配」的兼容路径，宁可慢也不能让老交互
+/// 展开成空白。
 pub fn interaction_history_page<S>(
     store: &S,
     interaction_id: &InteractionId,
@@ -421,8 +427,8 @@ where
                     .and_then(|event| serde_json::to_string(&event.cursor()).ok()),
             });
         }
-        // 老记录没有归属：先按尾序号截窗扫一遍；扫空说明这个交互的帧远在窗口
-        // 之前，再退回从头扫并保尾。宁可多读一遍，也不能让老交互展开成空白。
+        // 尾窗为空：老记录只把归属写在载荷里。先按尾序号截窗扫一遍，扫空说明这个
+        // 交互的帧远在窗口之前，再退回从头扫并保尾。
         let tail_start = tail_sequence.saturating_sub(u64::try_from(limit).unwrap_or(u64::MAX));
         let tailed = interaction_history_page_from_scan(
             store,
@@ -453,6 +459,23 @@ where
         );
     }
 
+    // 多取一条只为判定 `has_more`：交互页的下一页是否存在，不能拿整会话尾序号猜。
+    let probe_limit = limit.saturating_add(1);
+    let probe_limit = u32::try_from(probe_limit).unwrap_or(u32::MAX);
+    let records = store
+        .replay_interaction_events(&session_id, interaction_id, after_sequence, probe_limit)
+        .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
+    if !records.is_empty() {
+        return interaction_history_page_from_records(
+            store,
+            interaction_id,
+            records,
+            limit,
+            after_sequence,
+            tail_sequence,
+        );
+    }
+    // 按键一条都没命中：退回载荷匹配的整会话扫描，兼容没有归属列的老记录。
     interaction_history_page_from_scan(
         store,
         &session_id,
@@ -462,6 +485,54 @@ where
         tail_sequence,
         false,
     )
+}
+
+/// 把按键取到的记录组装成历史页（`has_more` 由多取的一条决定）。
+fn interaction_history_page_from_records<S>(
+    store: &S,
+    interaction_id: &InteractionId,
+    records: Vec<axon_session::SessionEventRecord>,
+    limit: usize,
+    after_sequence: u64,
+    tail_sequence: u64,
+) -> Result<InteractionHistoryPage, GatewayKernelError>
+where
+    S: RuntimeStore,
+{
+    let has_more = records.len() > limit;
+    let mut missing_archives = 0_usize;
+    let mut first_missing_sequence = None;
+    let mut pending: VecDeque<GatewayEvent> = VecDeque::new();
+    for event in records.iter().take(limit) {
+        if event.event_type == SESSION_EVENT_MISSING_ARCHIVE_TYPE {
+            missing_archives += 1;
+            first_missing_sequence.get_or_insert(event.sequence);
+            continue;
+        }
+        pending.push_back(history_event(event));
+    }
+    if missing_archives > 0 {
+        axon_logger::warning(&format!(
+            "[gateway-http] session 交互页跳过 {missing_archives} 条缺失外置正文的事件（首条 sequence={}）",
+            first_missing_sequence.unwrap_or(0)
+        ));
+    }
+    let next_after = records
+        .get(limit.saturating_sub(1))
+        .map_or(after_sequence, |event| event.sequence);
+    if !has_more {
+        // 补到尾才补终态：翻页中途收口会让界面提前把这一轮判成结束。
+        append_replayed_terminal_status(&mut pending, store, interaction_id)?;
+    }
+    Ok(InteractionHistoryPage {
+        events: pending.into_iter().collect(),
+        next_after,
+        has_more,
+        tail_sequence,
+        tail_cursor: records
+            .get(limit.saturating_sub(1))
+            .and_then(|event| serde_json::to_string(&event.cursor()).ok()),
+    })
 }
 
 /// 整会话扫描路径：从 `after_sequence` 起扫到 `tail_sequence`，按 Interaction 过滤。
@@ -577,6 +648,9 @@ fn history_event(event: &axon_session::SessionEventRecord) -> GatewayEvent {
     }
 }
 
+#[cfg(test)]
+#[path = "gateway_replay_interaction_tests.rs"]
+mod interaction_tests;
 #[cfg(test)]
 #[path = "gateway_replay_tests.rs"]
 mod tests;

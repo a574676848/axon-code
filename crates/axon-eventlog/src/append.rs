@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::EventLog;
 use crate::error::EventLogError;
 use crate::format::{Header, encode_frame, scan_frames, tail_ends_on_frame_boundary};
-use crate::index::{self, FrameIndexEntry};
+use crate::index::{self, FrameIndexEntry, interaction_tag};
 use crate::lock::ExclusiveLock;
 use crate::record::RuntimeEventRecord;
 
@@ -114,7 +114,7 @@ impl EventLogWriter {
         let index_before = self.index_bytes;
         if !self.header_written {
             let frame = encode_frame(&self.header.encode_line()?)?;
-            if let Err(error) = self.write_frame(&frame, None) {
+            if let Err(error) = self.write_frame(&frame, None, 0) {
                 self.rollback(before, index_before);
                 return Err(error);
             }
@@ -129,7 +129,9 @@ impl EventLogWriter {
         let frame = encode_frame(&plain)?;
         // 该帧首条事件的序号：索引按它二分，让读路径直接落在这一帧上。
         let first_sequence = events.first().map(|event| event.sequence);
-        if let Err(error) = self.write_frame(&frame, first_sequence) {
+        // 整批同属一个交互时记下指纹，读侧据此只解压该交互的帧；跨交互批次记 0。
+        let batch_tag = batch_interaction_tag(events);
+        if let Err(error) = self.write_frame(&frame, first_sequence, batch_tag) {
             self.rollback(before, index_before);
             return Err(error);
         }
@@ -145,6 +147,7 @@ impl EventLogWriter {
         &mut self,
         frame: &[u8],
         first_sequence: Option<u64>,
+        interaction_tag: u32,
     ) -> Result<(), EventLogError> {
         let written = u64::try_from(frame.len())
             .map_err(|_| EventLogError::Corrupt("单帧超过可寻址长度".to_owned()))?;
@@ -171,6 +174,7 @@ impl EventLogWriter {
                         first_sequence,
                         offset,
                         len,
+                        interaction_tag,
                     },
                     covered,
                 )?;
@@ -235,6 +239,23 @@ fn now_ms() -> u64 {
         .map_or(0, |elapsed| {
             u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
         })
+}
+
+/// 整批事件同属一个交互时返回它的指纹，否则返回 0（跨交互）。
+///
+/// 追加批次就是一次流式刷新，正常只含同一轮的帧；真的混了多个交互时退回 0，
+/// 读侧会保守地把这一帧纳入候选，正确性不受影响。
+fn batch_interaction_tag(events: &[RuntimeEventRecord]) -> u32 {
+    let mut tag: Option<u32> = None;
+    for event in events {
+        let current = interaction_tag(event.interaction_id.as_deref());
+        match tag {
+            None => tag = Some(current),
+            Some(previous) if previous == current => {}
+            Some(_) => return 0,
+        }
+    }
+    tag.unwrap_or(0)
 }
 impl EventLogWriter {
     /// 由调用方给定下一个序号打开写句柄，不按既有文件推断序号。

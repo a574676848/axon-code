@@ -218,6 +218,148 @@ fn push_matches<F>(
     }
 }
 
+/// 读取某条交互在 `after` 之后的至多 `limit` 条事件。
+///
+/// 索引条目带交互指纹，因此只解压「可能属于这条交互」的帧（指纹相同，或跨交互帧
+/// 这种保守候选），不必为了一条交互把整段会话的帧全解一遍。指纹只是粗筛：命中后
+/// 仍逐条比对 `interaction_id`，碰撞只会多解压一帧，不会返回别条交互的记录。
+///
+/// 没有索引（旧日志、索引落后）时退化为单趟顺序解压加逐条过滤。
+pub fn read_interaction_after(
+    path: &Path,
+    interaction_id: &str,
+    after: u64,
+    limit: usize,
+) -> Result<Vec<RuntimeEventRecord>, EventLogError> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let Some(len) = log_len(path)? else {
+        return Ok(Vec::new());
+    };
+    let mut file = std::fs::File::open(path)?;
+    let tag = index::interaction_tag(Some(interaction_id));
+    let mut collected: Vec<RuntimeEventRecord> = Vec::with_capacity(limit.min(1024));
+    if let Some(index) = index::load(path, len) {
+        // 起点帧之后的条目才可能包含序号大于 `after` 的记录。
+        let begin = index.locate(after).map_or(0, |entry| entry.offset);
+        for entry in index.entries() {
+            if collected.len() >= limit {
+                break;
+            }
+            if entry.offset < begin || !entry.may_hold(tag) {
+                continue;
+            }
+            let (Ok(start), Ok(end)) =
+                (usize::try_from(entry.offset), usize::try_from(entry.end()))
+            else {
+                break;
+            };
+            for record in frame_records(&mut file, &FrameSpan { start, end })? {
+                if record.sequence <= after || !record_belongs_to(&record, interaction_id) {
+                    continue;
+                }
+                collected.push(record);
+                if collected.len() >= limit {
+                    break;
+                }
+            }
+        }
+        return Ok(collected);
+    }
+    let total = usize::try_from(len).unwrap_or(usize::MAX);
+    let mut cursor = 0usize;
+    let mut skip_header = true;
+    while cursor < total {
+        let Some(span) = step_frame(&mut file, cursor, total)? else {
+            break;
+        };
+        cursor = span.end;
+        if skip_header {
+            skip_header = false;
+            continue;
+        }
+        for record in frame_records(&mut file, &span)? {
+            if record.sequence <= after || !record_belongs_to(&record, interaction_id) {
+                continue;
+            }
+            collected.push(record);
+            if collected.len() >= limit {
+                return Ok(collected);
+            }
+        }
+    }
+    Ok(collected)
+}
+
+/// 从尾部倒推读取某条交互的最后 `limit` 条事件（按序号升序返回）。
+pub fn read_interaction_tail(
+    path: &Path,
+    interaction_id: &str,
+    limit: usize,
+) -> Result<Vec<RuntimeEventRecord>, EventLogError> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let Some(len) = log_len(path)? else {
+        return Ok(Vec::new());
+    };
+    let mut file = std::fs::File::open(path)?;
+    let tag = index::interaction_tag(Some(interaction_id));
+    let mut matched: Vec<RuntimeEventRecord> = Vec::new();
+    if let Some(index) = index::load(path, len) {
+        for entry in index.entries().iter().rev() {
+            if matched.len() >= limit {
+                break;
+            }
+            if !entry.may_hold(tag) {
+                continue;
+            }
+            let (Ok(start), Ok(end)) =
+                (usize::try_from(entry.offset), usize::try_from(entry.end()))
+            else {
+                break;
+            };
+            let records = frame_records(&mut file, &FrameSpan { start, end })?;
+            push_belonging(&mut matched, records, interaction_id, limit);
+        }
+        return Ok(matched);
+    }
+    let scan = scan_file_frames(&mut file)?;
+    for span in scan.frames.iter().skip(HEADER_FRAME_INDEX + 1).rev() {
+        if matched.len() >= limit {
+            break;
+        }
+        let records = frame_records(&mut file, span)?;
+        push_belonging(&mut matched, records, interaction_id, limit);
+    }
+    Ok(matched)
+}
+
+/// 记录是否属于目标交互。
+fn record_belongs_to(record: &RuntimeEventRecord, interaction_id: &str) -> bool {
+    record.interaction_id.as_deref() == Some(interaction_id)
+}
+
+/// 把一帧里属于目标交互的记录按序并入尾部窗口，并保持不超过 `limit` 条。
+fn push_belonging(
+    matched: &mut Vec<RuntimeEventRecord>,
+    records: Vec<RuntimeEventRecord>,
+    interaction_id: &str,
+    limit: usize,
+) {
+    let hits: Vec<RuntimeEventRecord> = records
+        .into_iter()
+        .filter(|record| record_belongs_to(record, interaction_id))
+        .collect();
+    for record in hits.into_iter().rev() {
+        matched.insert(0, record);
+    }
+    if matched.len() > limit {
+        matched.drain(..matched.len() - limit);
+    }
+}
+
 /// 读取落盘末条事件；日志不存在或没有完整帧时返回 `None`。
 ///
 /// 会话恢复与写入补偿只要这一条事实：有索引时只解压末帧，不必为拿尾记录把整条

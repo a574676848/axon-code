@@ -8,8 +8,8 @@
 use std::path::{Path, PathBuf};
 
 use axon_eventlog::{
-    EventLog, RuntimeEventKind, RuntimeEventRecord, read_after, read_tail_matching,
-    read_tail_record,
+    EventLog, RuntimeEventKind, RuntimeEventRecord, read_after, read_interaction_after,
+    read_interaction_tail, read_tail_matching, read_tail_record,
 };
 use serde_json::json;
 
@@ -206,6 +206,138 @@ fn append_still_succeeds_when_the_index_path_is_blocked() {
     assert_eq!(sequences, vec![0, 1], "索引降级不得影响事件事实");
     let read = read_after(&log.path(), 0, 10).expect("无索引读取");
     assert_eq!(read.len(), 1, "after 是排他游标：只返回序号 1");
+}
+
+#[test]
+fn interaction_reads_match_full_scan_filtering() {
+    let directory = tempfile::tempdir().expect("临时目录");
+    let log = EventLog::open(directory.path(), "session-session-interaction");
+    let path = log.path();
+    // 两条交互交替写入：索引里的交互指纹必须能把两者分开。
+    let mut writer = log.writer().expect("写句柄");
+    let mut sequence = 0_u64;
+    for round in 0..6 {
+        let interaction = if round % 2 == 0 {
+            "interaction-a"
+        } else {
+            "interaction-b"
+        };
+        let batch: Vec<RuntimeEventRecord> = (0..4)
+            .map(|_| {
+                let record = record(sequence).with_interaction(interaction);
+                sequence = sequence.saturating_add(1);
+                record
+            })
+            .collect();
+        writer.append_batch(&batch).expect("批次写入");
+    }
+    drop(writer);
+
+    let all = snapshot_sequences(&path);
+    for interaction in ["interaction-a", "interaction-b"] {
+        for (after, limit) in [(0_u64, 5_usize), (7, 5), (20, 100), (23, 4)] {
+            let expected: Vec<u64> = all
+                .iter()
+                .copied()
+                .filter(|sequence| *sequence > after)
+                .collect::<Vec<_>>();
+            // 期望值按同一份归属规则过滤后再截断。
+            let expected = expected
+                .into_iter()
+                .filter(|sequence| {
+                    let even_round = (*sequence / 4) % 2 == 0;
+                    (interaction == "interaction-a") == even_round
+                })
+                .take(limit)
+                .collect::<Vec<_>>();
+            let actual: Vec<u64> = read_interaction_after(&path, interaction, after, limit)
+                .expect("按键读取")
+                .iter()
+                .map(|record| record.sequence)
+                .collect();
+            assert_eq!(
+                actual, expected,
+                "按键分页必须与整会话过滤一致：{interaction} after={after} limit={limit}"
+            );
+        }
+    }
+
+    // 删掉索引后同一组断言必须仍然成立（退化路径）。
+    std::fs::remove_file(index_path(&path)).expect("删除索引");
+    let actual: Vec<u64> = read_interaction_after(&path, "interaction-a", 0, 100)
+        .expect("无索引按键读取")
+        .iter()
+        .map(|record| record.sequence)
+        .collect();
+    assert_eq!(actual, vec![1, 2, 3, 8, 9, 10, 11, 16, 17, 18, 19]);
+    // 删索引后必须由写句柄重建，读取路径不写文件。
+    assert!(!index_path(&path).is_file(), "读路径不得擅自重建索引");
+}
+
+#[test]
+fn mixed_batch_is_indexed_as_cross_interaction() {
+    let directory = tempfile::tempdir().expect("临时目录");
+    let log = EventLog::open(directory.path(), "session-session-mixed");
+    let mut writer = log.writer().expect("写句柄");
+    writer
+        .append_batch(&[
+            record(0).with_interaction("interaction-a"),
+            record(1).with_interaction("interaction-b"),
+        ])
+        .expect("跨交互批次");
+    writer
+        .append_batch(&[record(2).with_interaction("interaction-a")])
+        .expect("单交互批次");
+    drop(writer);
+
+    // 跨交互帧按 0 记账，读侧必须保守扫过它而不是漏掉其中的记录。
+    // after 是排他游标：跨交互帧里的序号 0 不在 after=0 的页里。
+    let a: Vec<u64> = read_interaction_after(&log.path(), "interaction-a", 0, 10)
+        .expect("按键读取")
+        .iter()
+        .map(|record| record.sequence)
+        .collect();
+    assert_eq!(a, vec![2], "跨交互帧里的目标记录不得漏读");
+    let b: Vec<u64> = read_interaction_after(&log.path(), "interaction-b", 0, 10)
+        .expect("按键读取")
+        .iter()
+        .map(|record| record.sequence)
+        .collect();
+    assert_eq!(b, vec![1]);
+}
+
+#[test]
+fn interaction_tail_returns_the_last_window() {
+    let directory = tempfile::tempdir().expect("临时目录");
+    let log = EventLog::open(directory.path(), "session-session-tail-window");
+    let mut writer = log.writer().expect("写句柄");
+    let mut sequence = 0_u64;
+    for round in 0..5 {
+        let interaction = if round % 2 == 0 {
+            "interaction-a"
+        } else {
+            "interaction-b"
+        };
+        let batch: Vec<RuntimeEventRecord> = (0..2)
+            .map(|_| {
+                let record = record(sequence).with_interaction(interaction);
+                sequence = sequence.saturating_add(1);
+                record
+            })
+            .collect();
+        writer.append_batch(&batch).expect("批次写入");
+    }
+    drop(writer);
+
+    // 每轮一个批次两条事件：a 拿到 0,1 / 4,5 / 8,9，尾窗三条即 5,8,9。
+    let tail = read_interaction_tail(&log.path(), "interaction-a", 3).expect("按键尾窗");
+    let sequences: Vec<u64> = tail.iter().map(|record| record.sequence).collect();
+    assert_eq!(sequences, vec![5, 8, 9], "尾窗按序号升序且只含目标交互");
+    assert!(
+        tail.iter()
+            .all(|record| { record.interaction_id.as_deref() == Some("interaction-a") }),
+        "尾窗不得混入别条交互"
+    );
 }
 
 #[test]

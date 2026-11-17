@@ -23,7 +23,8 @@ pub use append::{EventLogWriter, append_once};
 pub use error::EventLogError;
 pub use format::{FrameScan, FrameSpan, HEADER_FRAME_INDEX, Header, encode_frame};
 pub use read::{
-    EventLogReader, EventLogSnapshot, read_after, read_tail_matching, read_tail_record,
+    EventLogReader, EventLogSnapshot, read_after, read_interaction_after, read_interaction_tail,
+    read_tail_matching, read_tail_record,
 };
 pub use record::{
     JobOutcome, JobRef, RuntimeEventKind, RuntimeEventRecord, TurnMetrics, TurnOrigin, TurnOutcome,

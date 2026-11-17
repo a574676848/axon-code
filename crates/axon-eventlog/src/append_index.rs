@@ -12,7 +12,7 @@ use std::path::Path;
 
 use crate::error::EventLogError;
 use crate::format::{FrameSpan, HEADER_FRAME_INDEX, Header, scan_file_frames};
-use crate::index::{self, FrameIndexEntry};
+use crate::index::{self, FrameIndexEntry, interaction_tag};
 use crate::read::{decode_header_frame, frame_records, read_snapshot};
 
 /// 用索引还原 header 与下一个序号；索引不可用时退回全量快照并重建索引。
@@ -79,11 +79,28 @@ fn rebuild(path: &Path, committed: u64) -> Result<(), EventLogError> {
         };
         let len = u32::try_from(span.end.saturating_sub(span.start))
             .map_err(|_| EventLogError::Corrupt("单帧长度超出索引可表示范围".to_owned()))?;
+        // 整帧同属一个交互时记下指纹；跨交互帧记 0，由读侧保守扫过。
+        let tag = frame_interaction_tag(&records);
         entries.push(FrameIndexEntry {
             first_sequence: first.sequence,
             offset: u64::try_from(span.start).unwrap_or(u64::MAX),
             len,
+            interaction_tag: tag,
         });
     }
     index::store(path, &entries, committed)
+}
+
+/// 整帧记录同属一个交互时返回它的指纹，否则返回 0（跨交互）。
+fn frame_interaction_tag(records: &[crate::record::RuntimeEventRecord]) -> u32 {
+    let mut tag: Option<u32> = None;
+    for record in records {
+        let current = interaction_tag(record.interaction_id.as_deref());
+        match tag {
+            None => tag = Some(current),
+            Some(previous) if previous == current => {}
+            Some(_) => return 0,
+        }
+    }
+    tag.unwrap_or(0)
 }

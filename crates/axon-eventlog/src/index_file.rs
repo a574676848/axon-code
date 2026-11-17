@@ -1,17 +1,20 @@
 //! 帧索引的落盘格式与读写。
 //!
-//! 文件布局：24 字节文件头 + 若干 20 字节定宽记录。
+//! 文件布局：24 字节文件头 + 若干 24 字节定宽记录。
 //!
 //! ```text
 //! 0  magic "AXONEVLI"      8
 //! 8  version u32           4
 //! 12 reserved u32          4
 //! 16 covered_log_len u64   8      索引覆盖到的日志字节数
-//! 24 entry[0]: first_sequence u64 | offset u64 | len u32
+//! 24 entry[0]: first_sequence u64 | offset u64 | len u32 | interaction_tag u32
 //! ```
 //!
 //! 「已覆盖日志长度」是唯一的新鲜度判据：它必须与日志真实长度逐字节相等，
 //! 否则整份索引按落后处理（读路径退化为单趟顺序解压，写路径重建）。
+//!
+//! 版本 2 起每条记录带交互指纹；版本 1 的索引一律按不兼容处理（读侧退化、写侧重建），
+//! 格式变更不需要迁移代码。
 
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::Path;
@@ -21,14 +24,14 @@ use crate::index::{FrameIndex, FrameIndexEntry, index_path};
 
 /// 索引文件魔数；识别不出就不碰。
 const MAGIC: &[u8; 8] = b"AXONEVLI";
-/// 索引格式版本；布局变更必须递增。
-const VERSION: u32 = 1;
+/// 索引格式版本；布局变更必须递增。版本 2 起记录带交互指纹。
+const VERSION: u32 = 2;
 /// 文件头字节数。
 const HEADER_LEN: usize = 24;
 /// 「已覆盖日志长度」字段在文件头里的偏移。
 const COVERED_OFFSET: u64 = 16;
-/// 单条记录的字节数。
-const ENTRY_LEN: usize = 20;
+/// 单条记录的字节数：首条序号 8 + 帧偏移 8 + 帧长度 4 + 交互指纹 4。
+const ENTRY_LEN: usize = 24;
 
 impl FrameIndexEntry {
     fn encode(&self) -> [u8; ENTRY_LEN] {
@@ -36,6 +39,7 @@ impl FrameIndexEntry {
         bytes[0..8].copy_from_slice(&self.first_sequence.to_le_bytes());
         bytes[8..16].copy_from_slice(&self.offset.to_le_bytes());
         bytes[16..20].copy_from_slice(&self.len.to_le_bytes());
+        bytes[20..24].copy_from_slice(&self.interaction_tag.to_le_bytes());
         bytes
     }
 
@@ -43,10 +47,12 @@ impl FrameIndexEntry {
         let first_sequence = u64::from_le_bytes(bytes.get(0..8)?.try_into().ok()?);
         let offset = u64::from_le_bytes(bytes.get(8..16)?.try_into().ok()?);
         let len = u32::from_le_bytes(bytes.get(16..20)?.try_into().ok()?);
+        let interaction_tag = u32::from_le_bytes(bytes.get(20..24)?.try_into().ok()?);
         Some(Self {
             first_sequence,
             offset,
             len,
+            interaction_tag,
         })
     }
 }

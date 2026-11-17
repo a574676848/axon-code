@@ -431,6 +431,22 @@ impl EventLogStore for SqliteRuntimeStore {
         event_log_repository::replay_events(self, session_id, after_sequence, limit)
     }
 
+    fn replay_interaction_events(
+        &self,
+        session_id: &DaemonSessionId,
+        interaction_id: &InteractionId,
+        after_sequence: u64,
+        limit: u32,
+    ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
+        event_log_repository::replay_interaction_events(
+            self,
+            session_id,
+            interaction_id,
+            after_sequence,
+            limit,
+        )
+    }
+
     fn interaction_tail_window(
         &self,
         session_id: &DaemonSessionId,

@@ -11,6 +11,11 @@
 //! - **读路径**二分索引直接定位起点帧，再顺序解压到够量；索引缺失或落后时退化为
 //!   从首帧顺序解压并跳过起点之前的部分，仍然是单趟，不做重复扫描。
 //!
+//! 每条记录还带一个**交互标签**（`interaction_id` 的 32 位指纹，0 表示跨交互或无
+//! 归属）：一次追加批次就是一个交互的一帧，因此「这条交互的帧」在索引里是连续一段，
+//! 按交互取页不必把整段会话的帧都解压一遍。标签只是缩小解压范围的粗筛，命中与否
+//! 最终仍由解出的记录逐条判定，指纹碰撞只多解压一帧、不会返回错页。
+//!
 //! 索引是纯派生数据：损坏、缺失或落后一律按日志重建，不参与任何事实判定。
 //! 落盘格式与读写见 [`crate::index_file`]。
 
@@ -33,6 +38,8 @@ pub(crate) struct FrameIndexEntry {
     pub(crate) offset: u64,
     /// 该帧的字节长度。
     pub(crate) len: u32,
+    /// 该帧归属的交互指纹；0 表示跨交互（或整帧都没有归属）。
+    pub(crate) interaction_tag: u32,
 }
 
 impl FrameIndexEntry {
@@ -40,6 +47,27 @@ impl FrameIndexEntry {
     pub(crate) fn end(&self) -> u64 {
         self.offset.saturating_add(u64::from(self.len))
     }
+
+    /// 该帧是否可能承载目标交互：跨交互帧（0）必须保守地算作可能。
+    pub(crate) fn may_hold(&self, tag: u32) -> bool {
+        self.interaction_tag == 0 || self.interaction_tag == tag
+    }
+}
+
+/// 交互标识的 32 位指纹；空标识与哈希到 0 的情况都折回 0（跨交互）。
+///
+/// FNV-1a：实现短、对短字符串分布均匀。指纹只用于缩小解压范围，正确性由逐条判定
+/// 兜底，因此不需要密码学强度。
+pub(crate) fn interaction_tag(interaction_id: Option<&str>) -> u32 {
+    let Some(interaction_id) = interaction_id.filter(|value| !value.is_empty()) else {
+        return 0;
+    };
+    let mut hash = 0x811c_9dc5_u32;
+    for byte in interaction_id.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
 }
 
 /// 一份已校验的帧索引（只覆盖数据帧，不含 header 帧）。

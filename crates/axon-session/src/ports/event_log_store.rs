@@ -49,6 +49,19 @@ pub trait EventLogStore: Send + Sync {
         limit: u32,
     ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError>;
 
+    /// 读取某条 Interaction 在 `after_sequence` 之后的至多 `limit` 条事件。
+    ///
+    /// 与 [`Self::replay_events`] 的区别是只返回该 Interaction 自己的帧：一次历史
+    /// 分页不该为了一条交互把整段会话都解压一遍。实现可以借助帧索引的交互指纹缩小
+    /// 解压范围，但命中后仍必须逐条确认归属。
+    fn replay_interaction_events(
+        &self,
+        session_id: &DaemonSessionId,
+        interaction_id: &InteractionId,
+        after_sequence: u64,
+        limit: u32,
+    ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError>;
+
     /// 读取某条 Interaction 自身的尾窗帧，按序号升序。
     fn interaction_tail_window(
         &self,
