@@ -2,6 +2,8 @@
 
 > 验证对象：安装态版本树 `$HOME/.axon/bin/versions/0.0.1/`，与 `target/release/` 逐字节核对一致
 > （本轮 `axon.exe` 与 `axon-desktop.exe` 均 hash-match，安装走 `scripts/install-from-source.ps1 -Components all`）。
+> 绑定关系：安装态二进制构建自提交 `000c25f30`；`axon.exe` SHA-256 `A94602B615BAC5C4DD751203A253D3AD43D1F04E5A5F8FFA7D127545EADFD5A8`，
+> `axon-desktop.exe` SHA-256 `3A10D7C3074771B69FE80EFA9A381DE97027E98D2A9CBFABA617DF01A9A64FB5`。
 > 隔离方式：`AXON_RUNTIME_ROOT` 指向 `$env:TEMP/axon-verify-rt`。目录名不能以 `.axon` 结尾，否则 CLI 会判成
 > 默认运行态根、端点退化成连不上的 `axon-daemon`。根内含 `config.toml`、`.env`、`skills/` 与 `.mcp.json` 的副本；
 > 缺少 `.mcp.json` 时桌面状态栏会显示 MCP 0，补齐并重启 daemon 后恢复 MCP 3。
@@ -18,7 +20,7 @@
 | B4 | `data/` 布局 | 通过 | 空临时根起跑后 `data/` 下只有 `control.sqlite3`、`outbox.sqlite3` 与运行态子目录；递归查 `rollout.sqlite3` 零命中 |
 | B5 | 多回合写入 | 通过 | 每段会话生成 `data/events/<会话>/session.v1.jsonl.zstd` 与 `.lock`；Thread 事件落 `data/sessions/threads/<hex>`，索引为 `data/sessions/thread-index.v1.*` |
 | B6 | Daemon 重启 3 次 | 通过 | 连续三次停/起，`daemon health` 每次回 `"status":"running"`；当日日志中 `database is locked` 与 `Fenced` 命中数为 0；桌面在三次重启后仍能读回正文 |
-| B7 | 24 小时长跑 | 未真机验证 | 未执行 24 小时观测 |
+| B7 | 24 小时长跑 | 观测进行中 | 已启动 24 小时观测（`tools/verify-soak.ps1`，5 分钟采样，证据落在 `%TEMP%\axon-soak\samples.jsonl`）。首轮采样：daemon 存活、工作集 32 MB、`database is locked` 与 `Fenced` 的**本次窗口增量**均为 0（当日更早的 7 次 locked 发生在安装前，按基线抵消，不作本次结论） |
 
 ## 桌面（D1 至 D12）
 
@@ -64,21 +66,19 @@
 
 ## TUI（T1 至 T7）
 
-未真机验证。本环境没有交互式终端（无 TTY），自动化通道也不成立：Windows Terminal 的 UIA 树不暴露终端文本，
-`agent-desktop` 注入的按键对 ConPTY 无效（注入前后截图 SHA 相同）。离线单测（`/sessions` 弹窗、`/new` 与
-`/reset` 拆分）已全绿，但不能替代真机证据。
+本轮的取证通道：真实控制台驱动（`FreeConsole` → `CreateProcessW(CREATE_NEW_CONSOLE)` → `AttachConsole` →
+`ReadConsoleOutputCharacterW` 读渲染后的屏幕缓冲 → `WriteConsoleInputW` 注入按键）。读的是真实屏幕字符而不是
+管道字节流，发键走的是控制台输入队列，与被测进程看到手工敲键同一条路径，因此具备 TTY 语义。
 
-请在有交互终端的机器上按下列清单逐项执行，并把**输出文本**贴回（不看退出码）：
-
-```text
-T1) 启动：在仓库目录执行 axon，期待进入交互界面，状态栏正常显示
-T2) 对话：输入「记住数字 5，只回复两个字：收到」，期待流式渲染出「收到」
-T3) 工具：输入「用 shell 跑 echo t3-ok 并只回复输出」，期待工具行渲染命令与输出 t3-ok
-T4) /sessions：输入 /sessions，期待弹窗列出会话，↑↓ 可选中
-T5) 选中进入：在弹窗里选中一条会话回车，期待历史正文加载正确（含此前手机/桌面发过的内容）
-T6) /new 与 /reset：分别执行，期待 /new 后顶栏会话标识变化，/reset 后会话标识不变、运行实例复位
-T7) /sessions --all：执行，期待归档会话在列表里可见
-```
+| # | 检查 | 结果 | 证据 |
+| --- | --- | --- | --- |
+| T1 | 启动 | 通过 | 经安装根 `axon.cmd` 起 `cmd /c axon`，屏幕出现 `Axon Personal Agent v0.0.1`、`入口已就绪 · MCP 33 · Skill 32` 与输入坞 `› 描述要完成的任务，或输入 / 选择能力` |
+| T2 | 对话 | 通过 | 输入「记住数字 5，只回复两个字：收到」后流式渲染 `◌ 思考 / Thinking · 8.99s` 与回复 `• 收到` |
+| T3 | 工具 | 通过 | 输入「用 shell 跑 echo t3-ok 并只回复输出」后渲染工具行 `执行` / `$ echo t3-ok` / `│ t3-ok`，回复 `• t3-ok`；末行给出 `用时 10.79s · Token 53.5K · 首字 2.66s · 速率 149.6 tok/s` |
+| T4 | /sessions | 通过 | 输入 `/sessions` 后弹窗列出会话，每条含标题与 `provider · model` 行，可 `↑↓` 选中 |
+| T5 | 选中进入 | 通过 | 选中后渲染 `已切换到目标会话，正在加载历史...`，随后按序载入该会话此前的轮次正文与工具证据 |
+| T6 | /new 与 /reset | 通过 | `/new` 渲染 `已开启新会话，下一轮使用新的 session id。` 且顶栏读数清零；`/reset` 不改变顶栏读数与会话归属，仅复位本地运行实例（与 `session_commands.rs` 的客户端等价语义一致） |
+| T7 | /sessions --all | 通过 | 执行后弹窗标题行显示 `会话 含归档 · ↑↓择 · Enter 入 · Esc 闭`，列表中可见仅存在于归档会话里的条目 |
 
 > 追加约定：T6 的「只换 run_generation」在服务端由 `axon sessions reset <id>` 触达（已实现并有单测）；
 > TUI 的 `/reset` 是同一会话上的本地运行实例复位，两者语义在台账 W4-5 行已注明。
