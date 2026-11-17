@@ -81,7 +81,7 @@ fn project_session(row: &SessionSummaryRow) -> SessionSnapshot {
             .as_ref()
             .map_or_else(String::new, |value| value.destination().to_string()),
         audience: audience.as_ref().map_or_else(String::new, audience_label),
-        title: session_title(&row.latest_content),
+        title: preferred_session_title(&row.stored_title, &row.latest_content),
         interaction_count: row.interaction_count,
         running: row.processing_count > 0,
         created_at_ms: row.first_received_ms,
@@ -96,6 +96,27 @@ fn audience_label(audience: &AudienceContext) -> String {
         axon_domain::AudienceKind::Group => "群组",
     }
     .to_string()
+}
+
+/// 车道标题：优先用控制面已生成的标题，缺失时才从消息正文派生。
+///
+/// 生成端（轮后任务）与读取端共用 `sessions.title` 这一列，三端因此看到同一个标题；
+/// 正文派生只作为「标题还没生成」时的占位，不再与生成结果抢同一份事实。
+fn preferred_session_title(stored: &str, latest_content: &str) -> String {
+    let stored_title = clip_title_text(stored);
+    if !stored_title.is_empty() {
+        return stored_title;
+    }
+    session_title(latest_content)
+}
+
+/// 压掉多余空白并截断到上限；空文本返回空串。
+fn clip_title_text(source: &str) -> String {
+    let normalized = source.split_whitespace().collect::<Vec<_>>().join(" ");
+    normalized
+        .chars()
+        .take(SESSION_TITLE_MAX_CHARS)
+        .collect::<String>()
 }
 
 /// 从最近一条 Interaction 正文派生车道标题。
@@ -130,7 +151,7 @@ fn session_title(content: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{SessionQueryService, session_title};
+    use super::{SessionQueryService, preferred_session_title, session_title};
     use crate::ports::{InteractionStoreError, SessionQueryStore, SessionSummaryRow};
     use axon_domain::{
         AudienceContext, AudienceKind, DisclosurePolicy, ReplyRoute, ScopeRef, WorkspaceId,
@@ -157,6 +178,7 @@ mod tests {
             last_updated_ms: 900,
             processing_count: 0,
             latest_content: content.to_string(),
+            stored_title: String::new(),
             latest_channel: "tui".to_string(),
             scope_json: serde_json::to_string(&scope).unwrap(),
             audience_json: serde_json::to_string(&audience).unwrap(),
@@ -173,6 +195,20 @@ mod tests {
         assert_eq!(session_title("\n\n"), "未命名车道");
         let long = session_title(&"超长标题".repeat(20));
         assert_eq!(long.chars().count(), 32);
+    }
+
+    #[test]
+    fn generated_title_wins_over_content_derivation() {
+        // 生成标题存在时，读取端不得再拿最近一条消息覆盖它。
+        assert_eq!(
+            preferred_session_title("排查 Provider 超时", "只回复两个字：收到"),
+            "排查 Provider 超时"
+        );
+        // 标题尚未生成（或只有空白）时才回落到正文派生。
+        assert_eq!(
+            preferred_session_title("   ", "只回复两个字：收到"),
+            "只回复两个字：收到"
+        );
     }
 
     #[test]

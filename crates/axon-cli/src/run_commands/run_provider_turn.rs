@@ -85,6 +85,7 @@ impl CliProviderTurnRunner {
                 &request.prompt,
                 started_at_ms,
                 session_sinks,
+                axon_agent_runtime::ChildExecutionModelIntent::Inherit,
             )
             .map_err(TurnExecutionError::retryable)?;
             let transcript_ref = output

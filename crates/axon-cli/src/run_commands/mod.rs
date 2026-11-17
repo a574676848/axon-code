@@ -75,6 +75,7 @@ pub(crate) mod run_resume_pointer;
 mod run_self_iteration_subagent;
 mod run_semantic_salience;
 pub(crate) mod run_session_store;
+mod run_session_title;
 pub(crate) mod run_shell_job_wake;
 mod run_startup_snapshot;
 mod run_startup_snapshot_cache;
@@ -154,7 +155,7 @@ pub(crate) use run_resume_pointer::{restore_resume_session, snapshot_resume_sess
 pub(crate) use run_session_store::RunSessionRecord;
 pub(crate) use run_session_store::resolved_axon_root;
 pub(crate) use run_startup_snapshot::RunStartupSnapshot;
-pub(crate) use run_startup_snapshot_cache::StartupSnapshotCache;
+pub(crate) use run_startup_snapshot_cache::{StartupSnapshotCache, shared_startup_snapshot_cache};
 pub(crate) use run_stop_control::{RunStopControl, cleanup_stale_run_controls, request_stop};
 pub(crate) const CLI_INTERACTION_CHANNEL: &str = "cli";
 
@@ -378,6 +379,13 @@ fn finish_completed_run(
             record.session_id
         ));
     }
+    // 标题只落在服务端一列，桌面侧靠现有轮询取回；判定与生成都在后台，失败不影响本轮。
+    run_session_title::maybe_spawn_session_title_generation(
+        config_path,
+        &record.session_id,
+        &request.cwd,
+        request.current_agent_path.is_root(),
+    );
     let governance_job = PostRunGovernanceJob {
         config_path: config_path.to_path_buf(),
         request: request.clone(),

@@ -37,6 +37,7 @@ pub(crate) fn execute_standalone_subagent(
     prompt: &str,
     started_at_ms: u64,
     session_sinks: Option<Arc<dyn SubagentSessionSinkFactory>>,
+    model_intent: axon_agent_runtime::ChildExecutionModelIntent,
 ) -> Result<super::run_subagent_executor::RunSubagentExecutionOutput, String> {
     let loaded = ConfigLoader::load_from_path(config_path).map_err(|error| format!("{error:?}"))?;
     let command = RunCommand {
@@ -50,7 +51,12 @@ pub(crate) fn execute_standalone_subagent(
         timeout: None,
         tool: Vec::new(),
     };
-    let startup = RunStartupSnapshot::resolve_for_run(config_path, Some(cwd), None)?;
+    // 与主 turn 共用进程级快照缓存：后台任务不该每轮重跑一遍 Principal、Memory、
+    // Workspace 指令与 MCP 探测；缓存未就绪时才回落到现场构建。
+    let startup = match super::shared_startup_snapshot_cache().acquire(config_path, cwd) {
+        Some(snapshot) => snapshot,
+        None => RunStartupSnapshot::resolve_for_run(config_path, Some(cwd), None)?,
+    };
     let selected = select_channel_balanced_model(
         &command,
         &loaded.config,
@@ -95,7 +101,7 @@ pub(crate) fn execute_standalone_subagent(
         max_runtime_ms: None,
         // 后台执行继承宿主快照（`agent.default_model` 槽 + 主 Agent 推理强度），
         // 而不是钉死在快速委托模型上：Goal 与 cron 是长跑作业，不该用最省的模型跑。
-        model_intent: axon_agent_runtime::ChildExecutionModelIntent::Inherit,
+        model_intent,
         // 后台作业没有调用方指定模型与档位：两者都继承宿主快照。
         model_override: None,
         reasoning_effort_override: None,

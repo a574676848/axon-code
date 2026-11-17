@@ -20,9 +20,12 @@ const SELECT_SESSION_SUMMARIES: &str = "WITH ranked AS (\
        LEFT JOIN work_items AS w ON w.inbox_id = i.interaction_id \
        WHERE i.session_id IS NOT NULL AND i.session_id <> ''\
      ) \
-     SELECT session_id, content, source_channel, scope_json, audience_json, reply_route_json, \
-            updated_at_ms, interaction_count, processing_count, first_received_ms \
-     FROM ranked WHERE rank_in_session = 1 ORDER BY updated_at_ms DESC";
+     SELECT r.session_id, r.content, r.source_channel, r.scope_json, r.audience_json, r.reply_route_json, \
+            r.updated_at_ms, r.interaction_count, r.processing_count, r.first_received_ms, \
+            COALESCE(s.title, '') \
+     FROM ranked AS r \
+     LEFT JOIN sessions AS s ON s.session_id = r.session_id \
+     WHERE r.rank_in_session = 1 ORDER BY r.updated_at_ms DESC";
 
 /// 把底层持久化错误收敛为端口错误。
 fn store_error(error: impl std::fmt::Display) -> InteractionStoreError {
@@ -42,6 +45,7 @@ fn read_session_summary(row: &Row<'_>) -> rusqlite::Result<SessionSummaryRow> {
         interaction_count: u64_value(row.get(7)?)?,
         processing_count: u64_value(row.get(8)?)?,
         first_received_ms: u64_value(row.get(9)?)?,
+        stored_title: row.get(10)?,
     })
 }
 

@@ -183,7 +183,8 @@ fn try_run_daemon_host(
     register_daemon_workspace(&store);
     // 显式 MCP 刷新请求要在 IPC 侧清除健康负缓存并重建快照，因此缓存句柄由运行函数
     // 持有，再分别交给 Worker 与 IPC handler。
-    let startup_snapshots = crate::run_commands::StartupSnapshotCache::default();
+    // 与后台任务（标题生成、Goal/cron 子代理）共用同一份缓存：各自持有一份会让预热只惠及主 turn。
+    let startup_snapshots = crate::run_commands::shared_startup_snapshot_cache().clone();
     startup_snapshots.spawn_prewarm(command.config_path.clone(), command.root.clone());
     // 进程资源遥测：常驻守护进程最容易出现内存单调增长，这里按固定间隔采样自身
     // 内存与 CPU，越过高水位时以 WARN 等级输出量化遥测，样本同时按日落盘。

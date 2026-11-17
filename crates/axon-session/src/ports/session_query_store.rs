@@ -29,6 +29,11 @@ pub struct SessionSummaryRow {
     pub audience_json: String,
     /// 最近一条 Interaction 的回复路由 JSON。
     pub reply_route_json: String,
+    /// 控制面库里已登记的展示标题；空串表示尚未生成。
+    ///
+    /// 标题由轮后任务用快速模型生成并写入 `sessions.title`，因此读取端必须与
+    /// 生成端共用同一列，不能各自从消息正文再派生一套口径。
+    pub stored_title: String,
 }
 
 /// 车道查询端口。

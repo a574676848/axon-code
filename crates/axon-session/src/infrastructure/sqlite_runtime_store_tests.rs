@@ -12,6 +12,30 @@ use axon_domain::{
 };
 
 #[test]
+fn session_summary_reads_title_from_sessions_table() {
+    use crate::ports::SessionQueryStore as _;
+
+    let directory = axon_test_support::test_temp_dir();
+    let path = directory.path().join("runtime.sqlite3");
+    let store = SqliteRuntimeStore::new(&path);
+    store.initialize().expect("初始化目标 schema");
+    let connection = store.connection().expect("连接");
+    connection
+        .execute_batch(
+            "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms,title)
+                 VALUES('session-title','session-title','session-title','/w','idle',NULL,NULL,0,0,0,0,1,1,1,'修复登录超时');
+             INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,received_at_ms,updated_at_ms,session_id)
+                 VALUES('i-1','tui','m-1','{}','{}','{}','只回复两个字：收到',1,1,'session-title');",
+        )
+        .expect("插入会话与入站消息");
+    let rows = store.list_session_summaries().expect("读取车道汇总");
+    assert_eq!(rows.len(), 1);
+    // 标题取控制面已生成的那一列，不再从消息正文重算。
+    assert_eq!(rows[0].stored_title, "修复登录超时");
+    assert_eq!(rows[0].latest_content, "只回复两个字：收到");
+}
+
+#[test]
 fn active_dedupe_index_covers_turn_items_after_session_binding() {
     let directory = axon_test_support::test_temp_dir();
     let path = directory.path().join("runtime.sqlite3");

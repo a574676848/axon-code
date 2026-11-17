@@ -670,7 +670,7 @@ CREATE TABLE sessions (
 
 **`channel` 与 `destination` 不在这个表里。** 它们是 Interaction 的来源与回复路由元数据，不参与会话身份。理由与做法见 §4.13。
 
-`root_session_id` 只对子会话有意义，`title` / `pinned` / `archived` / `sort_order` 承接桌面端已有的车道管理能力（`lane_create` / `lane_rename` / `lane_set_pinned` / `lane_set_archived` / `lane_reorder`）。
+`root_session_id` 只对子会话有意义，`title` / `pinned` / `archived` / `sort_order` 承接桌面端已有的车道管理能力（`lane_create` / `lane_rename` / `lane_set_pinned` / `lane_set_archived` / `lane_reorder`）。`title` 也是会话标题的唯一落点：轮后任务每满三轮用快速模型总结最近用户消息并写回这一列，桌面左侧菜单、TUI `/sessions` 与 CLI `sessions list` 都读同一列，只有该列为空时才回落到消息正文；桌面端的用户重命名留在本地状态里优先覆盖，不回写服务端。
 
 把 `workspace_id` / `trust_scope` / `channel` / `destination` 落成实列，收益是可以直接按渠道或工作区查会话，不必反解哈希。原来的 `run_session_id` 与 `root_session_id` 两列语义重叠，改为 `current_run_id`（可变）+ `run_generation`（单调），`root_session_id` 只对子会话有意义。
 

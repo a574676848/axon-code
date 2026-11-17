@@ -59,6 +59,16 @@ struct CacheEntry {
     verified_at_ms: u64,
 }
 
+/// 进程级共享缓存实例。
+///
+/// Daemon 主 turn 与轮后后台任务（标题生成、Goal/cron 子代理）共用同一份快照缓存：
+/// 各自持有独立实例会让预热只惠及主 turn，后台任务仍然每轮全量重建。
+pub(crate) fn shared_startup_snapshot_cache() -> &'static StartupSnapshotCache {
+    static SHARED: std::sync::LazyLock<StartupSnapshotCache> =
+        std::sync::LazyLock::new(StartupSnapshotCache::default);
+    &SHARED
+}
+
 impl StartupSnapshotCache {
     /// 在后台线程预热首份快照。
     ///
@@ -283,13 +293,21 @@ fn canonical_or_original(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::StartupSnapshotCache;
+    use super::{StartupSnapshotCache, shared_startup_snapshot_cache};
     use std::{
         fs,
         path::PathBuf,
         sync::Arc,
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    #[test]
+    fn shared_cache_is_one_instance_for_main_turns_and_background_jobs() {
+        // 主 turn 与轮后后台任务必须拿到同一个实例，共用预热结果与 TTL 判定。
+        let first = shared_startup_snapshot_cache();
+        let second = shared_startup_snapshot_cache();
+        assert!(std::ptr::eq(first, second));
+    }
 
     #[test]
     fn ttl_expired_entry_renews_without_rebuild_when_fingerprint_is_unchanged() {
