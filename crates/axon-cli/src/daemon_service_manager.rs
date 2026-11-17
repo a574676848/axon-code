@@ -2,8 +2,11 @@ use std::{
     fs,
     io::ErrorKind,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
 };
+
+#[cfg(unix)]
+use std::process::Stdio;
 
 use axon_process::non_interactive_command;
 
@@ -11,7 +14,7 @@ use axon_process::non_interactive_command;
 const SERVICE_NAME: &str = "axon-daemon";
 #[cfg(target_os = "macos")]
 const LAUNCHD_LABEL: &str = "com.axon.daemon";
-#[cfg(any(windows, test))]
+#[cfg(test)]
 use windows_definition::WINDOWS_TASK_NAME;
 pub(super) const DAEMON_PID_FILE_NAME: &str = "daemon.pid";
 const DEFAULT_SOUL_CONTENT: &str = include_str!("../../../assets/defaults/SOUL.md");
@@ -32,10 +35,10 @@ pub(super) fn current_windows_user_sid() -> Result<String, String> {
 
 pub(super) fn installed() -> bool {
     #[cfg(windows)]
-    return windows_task_exists();
+    return windows_task::windows_task_exists();
     #[cfg(not(windows))]
     {
-        platform_definition_path().is_some_and(|path| path.exists())
+        unix_definition::platform_definition_path().is_some_and(|path| path.exists())
     }
 }
 
@@ -43,11 +46,11 @@ pub(super) fn install(config_path: &Path, runtime_dir: &Path) -> Result<(), Stri
     ensure_default_soul(runtime_dir)?;
     let exe = stable_daemon_executable()?;
     #[cfg(target_os = "macos")]
-    return install_launchd(&exe, config_path, runtime_dir);
+    return unix_definition::install_launchd(&exe, config_path, runtime_dir);
     #[cfg(target_os = "linux")]
-    return install_systemd(&exe, config_path, runtime_dir);
+    return unix_definition::install_systemd(&exe, config_path, runtime_dir);
     #[cfg(windows)]
-    return install_windows_task(&exe, config_path, runtime_dir);
+    return windows_task::install_windows_task(&exe, config_path, runtime_dir);
     #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     Err("当前平台暂不支持 daemon 用户服务".to_owned())
 }
@@ -133,26 +136,16 @@ pub(super) fn uninstall(runtime_dir: &Path) -> Result<(), String> {
     let _ = stop(runtime_dir);
     cleanup_stale_ipc_endpoint(runtime_dir);
     #[cfg(windows)]
-    if windows_task_exists() {
-        stop_windows_task(runtime_dir)?;
-        run(
-            non_interactive_command(windows_definition::WINDOWS_TASK_PROGRAM).args([
-                "/delete",
-                "/tn",
-                WINDOWS_TASK_NAME,
-                "/f",
-            ]),
-            "删除 Windows daemon 计划任务",
-        )?;
-    }
+    windows_task::uninstall_windows_task(runtime_dir)?;
     #[cfg(not(windows))]
-    let path = platform_definition_path().ok_or_else(|| "无法解析 daemon 服务路径".to_owned())?;
+    let path = unix_definition::platform_definition_path()
+        .ok_or_else(|| "无法解析 daemon 服务路径".to_owned())?;
     #[cfg(not(windows))]
     if path.exists() {
         fs::remove_file(path).map_err(|error| format!("删除 daemon 服务定义失败: {error}"))?;
     }
     #[cfg(target_os = "linux")]
-    systemctl(&["daemon-reload"])?;
+    unix_definition::systemctl(&["daemon-reload"])?;
     Ok(())
 }
 
@@ -162,11 +155,13 @@ pub(super) fn start(_config_path: &Path, _runtime_dir: &Path) -> Result<(), Stri
     super::daemon_stop_request::clear(_runtime_dir);
     #[cfg(target_os = "macos")]
     {
-        let path =
-            platform_definition_path().ok_or_else(|| "无法解析 LaunchAgents 目录".to_owned())?;
-        let domain = launchd_domain();
+        let path = unix_definition::platform_definition_path()
+            .ok_or_else(|| "无法解析 LaunchAgents 目录".to_owned())?;
+        let domain = unix_definition::launchd_domain();
         let target = format!("{domain}/{LAUNCHD_LABEL}");
-        if !command_success(non_interactive_command("launchctl").args(["print", &target])) {
+        if !unix_definition::command_success(
+            non_interactive_command("launchctl").args(["print", &target]),
+        ) {
             run(
                 non_interactive_command("launchctl").args([
                     "bootstrap",
@@ -180,37 +175,20 @@ pub(super) fn start(_config_path: &Path, _runtime_dir: &Path) -> Result<(), Stri
             non_interactive_command("launchctl").args(["kickstart", &target]),
             "启动 launchd daemon 服务",
         )?;
-        wait_for_service_start(_runtime_dir)
+        unix_definition::wait_for_service_start(_runtime_dir)
     }
     #[cfg(target_os = "linux")]
-    return systemctl(&["start", SERVICE_NAME]);
+    return unix_definition::systemctl(&["start", SERVICE_NAME]);
     #[cfg(windows)]
-    return start_windows_task(_runtime_dir);
+    return windows_task::start_windows_task(_runtime_dir);
     #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     Err("当前平台暂不支持 daemon 用户服务".to_owned())
-}
-
-#[cfg(target_os = "macos")]
-fn wait_for_service_start(runtime_dir: &Path) -> Result<(), String> {
-    let deadline =
-        std::time::Instant::now() + std::time::Duration::from_millis(PROCESS_START_TIMEOUT_MS);
-    while std::time::Instant::now() < deadline {
-        let pid_ready = fs::read_to_string(daemon_pid_path(runtime_dir))
-            .ok()
-            .and_then(|value| value.trim().parse::<u32>().ok())
-            .is_some_and(process_alive);
-        if launchd_service_active() && pid_ready && runtime_dir.join("axon-daemon").exists() {
-            return Ok(());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(PROCESS_STOP_POLL_MS));
-    }
-    Err("Daemon 服务未在启动截止时间内进入 running 状态，请检查 data/logs 日志".to_owned())
 }
 
 pub(super) fn stop(_runtime_dir: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let target = format!("{}/{}", launchd_domain(), LAUNCHD_LABEL);
+        let target = format!("{}/{}", unix_definition::launchd_domain(), LAUNCHD_LABEL);
         let status = non_interactive_command("launchctl")
             .args(["bootout", &target])
             .status()
@@ -221,9 +199,9 @@ pub(super) fn stop(_runtime_dir: &Path) -> Result<(), String> {
         Err("停止 launchd daemon 服务失败".to_owned())
     }
     #[cfg(target_os = "linux")]
-    return systemctl(&["stop", SERVICE_NAME]);
+    return unix_definition::systemctl(&["stop", SERVICE_NAME]);
     #[cfg(windows)]
-    return stop_windows_task(_runtime_dir);
+    return windows_task::stop_windows_task(_runtime_dir);
     #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     Err("当前平台暂不支持 daemon 用户服务".to_owned())
 }
@@ -234,12 +212,12 @@ pub(super) fn restart(config_path: &Path, runtime_dir: &Path) -> Result<(), Stri
     #[cfg(target_os = "macos")]
     {
         stop(runtime_dir)?;
-        wait_for_daemon_exit(runtime_dir)?;
+        unix_definition::wait_for_daemon_exit(runtime_dir)?;
         cleanup_stale_ipc_endpoint(runtime_dir);
         start(config_path, runtime_dir)
     }
     #[cfg(target_os = "linux")]
-    return systemctl(&["restart", SERVICE_NAME]);
+    return unix_definition::systemctl(&["restart", SERVICE_NAME]);
     #[cfg(windows)]
     {
         stop(runtime_dir)?;
@@ -247,25 +225,6 @@ pub(super) fn restart(config_path: &Path, runtime_dir: &Path) -> Result<(), Stri
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     Err("当前平台暂不支持 daemon 用户服务".to_owned())
-}
-
-#[cfg(target_os = "macos")]
-fn wait_for_daemon_exit(runtime_dir: &Path) -> Result<(), String> {
-    let Some(pid) = fs::read_to_string(daemon_pid_path(runtime_dir))
-        .ok()
-        .and_then(|value| value.trim().parse::<u32>().ok())
-    else {
-        return Ok(());
-    };
-    let deadline =
-        std::time::Instant::now() + std::time::Duration::from_millis(PROCESS_STOP_TIMEOUT_MS);
-    while process_alive(pid) && std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(PROCESS_STOP_POLL_MS));
-    }
-    if process_alive(pid) {
-        return Err(format!("Daemon 旧进程未在重启截止时间内退出: pid={pid}"));
-    }
-    Ok(())
 }
 
 fn cleanup_stale_ipc_endpoint(runtime_dir: &Path) {
@@ -287,6 +246,11 @@ fn daemon_pid_path(runtime_dir: &Path) -> PathBuf {
 }
 
 #[cfg(not(any(unix, windows)))]
+fn daemon_pid_path(runtime_dir: &Path) -> PathBuf {
+    runtime_dir.join(DAEMON_PID_FILE_NAME)
+}
+
+#[cfg(windows)]
 fn daemon_pid_path(runtime_dir: &Path) -> PathBuf {
     runtime_dir.join(DAEMON_PID_FILE_NAME)
 }
@@ -318,305 +282,18 @@ pub(crate) fn process_alive(_pid: u32) -> bool {
 
 pub(super) fn service_running(_runtime_dir: &Path) -> bool {
     #[cfg(target_os = "macos")]
-    return launchd_service_active();
+    return unix_definition::launchd_service_active();
     #[cfg(target_os = "linux")]
-    return command_success(non_interactive_command("systemctl").args([
+    return unix_definition::command_success(non_interactive_command("systemctl").args([
         "--user",
         "is-active",
         "--quiet",
         SERVICE_NAME,
     ]));
     #[cfg(windows)]
-    return windows_daemon_process_alive(_runtime_dir);
+    return windows_task::windows_daemon_process_alive(_runtime_dir);
     #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     false
-}
-
-#[cfg(target_os = "macos")]
-fn launchd_service_active() -> bool {
-    let target = format!("{}/{}", launchd_domain(), LAUNCHD_LABEL);
-    let Ok(output) = non_interactive_command("launchctl")
-        .args(["print", &target])
-        .output()
-    else {
-        return false;
-    };
-    if !output.status.success() {
-        return false;
-    }
-    let detail = command_output_detail(&output.stdout, &output.stderr);
-    detail.lines().any(|line| {
-        let line = line.trim();
-        line == "state = running" || line.starts_with("active count = ") && !line.ends_with("= 0")
-    })
-}
-
-#[cfg(target_os = "macos")]
-fn install_launchd(exe: &Path, config: &Path, runtime: &Path) -> Result<(), String> {
-    let path = platform_definition_path().ok_or_else(|| "无法解析 LaunchAgents 目录".to_owned())?;
-    fs::create_dir_all(path.parent().unwrap_or_else(|| Path::new(".")))
-        .map_err(|error| format!("创建 LaunchAgents 目录失败: {error}"))?;
-    fs::create_dir_all(runtime.join("logs"))
-        .map_err(|error| format!("创建 daemon 日志目录失败: {error}"))?;
-    fs::write(&path, launchd_plist(exe, config, runtime))
-        .map_err(|error| format!("写入 launchd plist 失败: {error}"))?;
-    let target = format!("{}/{}", launchd_domain(), LAUNCHD_LABEL);
-    if service_running(runtime) {
-        return restart(config, runtime);
-    }
-    let _ = non_interactive_command("launchctl")
-        .args(["bootout", &target])
-        .status();
-    if service_running(runtime) {
-        Ok(())
-    } else {
-        start(config, runtime)
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn install_systemd(exe: &Path, config: &Path, runtime: &Path) -> Result<(), String> {
-    let path = platform_definition_path().ok_or_else(|| "无法解析 systemd 用户目录".to_owned())?;
-    fs::create_dir_all(path.parent().unwrap_or_else(|| Path::new(".")))
-        .map_err(|error| format!("创建 systemd 用户目录失败: {error}"))?;
-    fs::write(&path, systemd_unit(exe, config, runtime))
-        .map_err(|error| format!("写入 systemd unit 失败: {error}"))?;
-    systemctl(&["daemon-reload"])?;
-    systemctl(&["enable", SERVICE_NAME])?;
-    if service_running(runtime) {
-        restart(config, runtime)
-    } else {
-        start(config, runtime)
-    }
-}
-
-#[cfg(windows)]
-fn install_windows_task(exe: &Path, config: &Path, runtime: &Path) -> Result<(), String> {
-    fs::create_dir_all(runtime).map_err(|error| format!("创建 daemon 运行目录失败: {error}"))?;
-    let powershell = windows_definition::powershell_executable()?;
-    if windows_task_exists() && windows_daemon_process_alive(runtime) {
-        stop_windows_task(runtime)?;
-    }
-    let user_sid = windows_definition::current_user_sid()?;
-    let user_name = windows_definition::current_user_name()?;
-    let xml_path = runtime.join("axon-daemon.task.xml");
-    fs::write(
-        &xml_path,
-        windows_definition::windows_task_xml_bytes(&powershell, exe, config, runtime, &user_sid),
-    )
-    .map_err(|error| format!("写入 Windows daemon 任务定义失败: {error}"))?;
-    let result = run(
-        non_interactive_command(windows_definition::WINDOWS_TASK_PROGRAM).args([
-            "/create",
-            "/tn",
-            WINDOWS_TASK_NAME,
-            "/xml",
-            xml_path.to_string_lossy().as_ref(),
-            "/f",
-            "/ru",
-            &user_name,
-            "/it",
-        ]),
-        "注册 Windows daemon 用户计划任务",
-    );
-    let _ = fs::remove_file(&xml_path);
-    result?;
-    windows_definition::grant_current_user_task_access(&powershell, &user_sid)?;
-    start_windows_task(runtime)
-}
-
-#[cfg(windows)]
-fn windows_task_exists() -> bool {
-    non_interactive_command(windows_definition::WINDOWS_TASK_PROGRAM)
-        .args(["/query", "/tn", WINDOWS_TASK_NAME])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
-/// 守护进程是否仍在运行。
-///
-/// 判据是「`daemon.pid` 指向的 PID 仍由 Axon 进程持有」，而不是计划任务状态：
-/// 计划任务实例可能在守护进程仍存活时就已结束（提权进程不随外壳退出），只看任务会得出相反结论。
-#[cfg(windows)]
-fn windows_daemon_process_alive(runtime_dir: &Path) -> bool {
-    daemon_pid(runtime_dir).is_some_and(daemon_process_alive)
-}
-
-#[cfg(windows)]
-fn start_windows_task(runtime_dir: &Path) -> Result<(), String> {
-    if windows_daemon_process_alive(runtime_dir) {
-        return Ok(());
-    }
-    run(
-        non_interactive_command(windows_definition::WINDOWS_TASK_PROGRAM).args([
-            "/change",
-            "/tn",
-            WINDOWS_TASK_NAME,
-            "/enable",
-        ]),
-        "启用 Windows daemon 用户计划任务",
-    )?;
-    run(
-        non_interactive_command(windows_definition::WINDOWS_TASK_PROGRAM).args([
-            "/run",
-            "/tn",
-            WINDOWS_TASK_NAME,
-        ]),
-        "启动 Windows daemon 用户计划任务",
-    )?;
-    let deadline =
-        std::time::Instant::now() + std::time::Duration::from_millis(PROCESS_START_TIMEOUT_MS);
-    while !windows_daemon_process_alive(runtime_dir) && std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(PROCESS_STOP_POLL_MS));
-    }
-    if windows_daemon_process_alive(runtime_dir) {
-        Ok(())
-    } else {
-        // 任务起来了但进程立刻退出时，光说「超时」等于让人去翻日志：把最近一条错误
-        // 直接写进结论，版本不符这类问题当场就能看到该做什么。
-        let cause = daemon_log_error(runtime_dir);
-        Err(match cause {
-            Some(cause) => format!(
-                "Windows daemon 用户计划任务未在启动截止时间内运行，daemon 日志最后一条错误：{cause}"
-            ),
-            None => {
-                "Windows daemon 用户计划任务未在启动截止时间内运行，请检查用户任务历史与 daemon 日志"
-                    .to_owned()
-            }
-        })
-    }
-}
-
-/// 最近一份 daemon 日志里的最后一条错误行。
-#[cfg(windows)]
-fn daemon_log_error(runtime_dir: &Path) -> Option<String> {
-    const LOG_TAIL_BYTES: u64 = 256 * 1024;
-    let mut logs: Vec<PathBuf> = std::fs::read_dir(runtime_dir.join("logs"))
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "log"))
-        .collect();
-    logs.sort();
-    let path = logs.pop()?;
-    let length = std::fs::metadata(&path).ok()?.len();
-    let mut file = std::fs::File::open(&path).ok()?;
-    if length > LOG_TAIL_BYTES {
-        use std::io::Seek as _;
-        file.seek(std::io::SeekFrom::End(-(LOG_TAIL_BYTES as i64)))
-            .ok()?;
-    }
-    let text = std::io::read_to_string(file).ok()?;
-    text.lines()
-        .rev()
-        .find(|line| line.contains("[ERROR]"))
-        .map(|line| line.trim().to_owned())
-}
-
-#[cfg(windows)]
-fn stop_windows_task(runtime_dir: &Path) -> Result<(), String> {
-    let Some(pid) = daemon_pid(runtime_dir) else {
-        super::daemon_stop_request::clear(runtime_dir);
-        return Ok(());
-    };
-    // 1) 先停自动恢复：否则任务可能在停止过程中把守护进程重新拉起。
-    run(
-        non_interactive_command(windows_definition::WINDOWS_TASK_PROGRAM).args([
-            "/change",
-            "/tn",
-            WINDOWS_TASK_NAME,
-            "/disable",
-        ]),
-        "暂停 Windows daemon 用户计划任务自动恢复",
-    )?;
-    // 2) 首选「请求退出」：守护进程以 HighestAvailable 运行，普通用户结束不了它的进程，
-    //    但它可以自己 drain 收口退出，这条路径与调用方权限无关。
-    super::daemon_stop_request::request(runtime_dir)?;
-    if windows_definition::wait_for_process_exit(pid, GRACEFUL_STOP_TIMEOUT_MS) {
-        super::daemon_stop_request::clear(runtime_dir);
-        return Ok(());
-    }
-    // 3) 兜底一：结束计划任务实例。它只结束 pwsh 外壳，未必带走提权后的守护进程。
-    let task_end_error = run(
-        non_interactive_command(windows_definition::WINDOWS_TASK_PROGRAM).args([
-            "/end",
-            "/tn",
-            WINDOWS_TASK_NAME,
-        ]),
-        "停止 Windows daemon 用户计划任务",
-    )
-    .err();
-    if windows_definition::wait_for_process_exit(pid, PROCESS_STOP_TIMEOUT_MS) {
-        super::daemon_stop_request::clear(runtime_dir);
-        return Ok(());
-    }
-    // 4) 兜底二：强制结束。先核对映像名：PID 可能已被回收给无关进程，
-    //    而 taskkill /T 会连它的整棵子进程树一起带走。
-    if !windows_definition::process_image_is_axon(pid) {
-        super::daemon_stop_request::clear(runtime_dir);
-        return Err(format!(
-            "守护进程未响应停止请求，且 PID {pid} 已不再是 Axon 进程，未执行强制结束；请检查 data/logs 日志"
-        ));
-    }
-    let force_error = run(
-        non_interactive_command("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]),
-        "强制结束 Windows daemon 用户进程",
-    )
-    .err();
-    if windows_definition::wait_for_process_exit(pid, PROCESS_STOP_TIMEOUT_MS) {
-        super::daemon_stop_request::clear(runtime_dir);
-        return Ok(());
-    }
-    super::daemon_stop_request::clear(runtime_dir);
-    let detail = force_error
-        .or(task_end_error)
-        .unwrap_or_else(|| "未返回失败原因".to_owned());
-    Err(format!(
-        "守护进程 {pid} 未在截止时间内停止；最后一次失败原因：{detail}。若该进程以管理员权限运行，请在管理员终端重试"
-    ))
-}
-
-#[cfg(windows)]
-fn daemon_pid(runtime_dir: &Path) -> Option<u32> {
-    fs::read_to_string(daemon_pid_path(runtime_dir))
-        .ok()
-        .and_then(|value| value.trim().parse::<u32>().ok())
-}
-
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn platform_definition_path() -> Option<PathBuf> {
-    #[cfg(target_os = "macos")]
-    return std::env::var_os("HOME").map(PathBuf::from).map(|home| {
-        home.join("Library/LaunchAgents")
-            .join(format!("{LAUNCHD_LABEL}.plist"))
-    });
-    #[cfg(target_os = "linux")]
-    return std::env::var_os("HOME").map(PathBuf::from).map(|home| {
-        home.join(".config/systemd/user")
-            .join(format!("{SERVICE_NAME}.service"))
-    });
-}
-
-#[cfg(target_os = "macos")]
-fn launchd_domain() -> String {
-    let output = non_interactive_command("id").arg("-u").output().ok();
-    let uid = output
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|value| value.trim().to_owned())
-        .unwrap_or_default();
-    format!("gui/{uid}")
-}
-
-#[cfg(target_os = "linux")]
-fn systemctl(args: &[&str]) -> Result<(), String> {
-    run(
-        non_interactive_command("systemctl")
-            .arg("--user")
-            .args(args),
-        "执行 systemd daemon 操作",
-    )
 }
 
 fn run(command: &mut Command, action: &str) -> Result<(), String> {
@@ -635,11 +312,6 @@ fn run(command: &mut Command, action: &str) -> Result<(), String> {
             output.status.code()
         ))
     }
-}
-
-#[cfg(windows)]
-fn daemon_pid_path(runtime_dir: &Path) -> PathBuf {
-    runtime_dir.join(DAEMON_PID_FILE_NAME)
 }
 
 /// 读取目标 PID 的映像名；进程不存在或查询失败时返回 None。
@@ -698,15 +370,6 @@ fn decode_command_output(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn command_success(command: &mut Command) -> bool {
-    command
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
 #[path = "daemon_service_definitions.rs"]
 mod service_definitions;
 #[cfg(any(target_os = "macos", test))]
@@ -714,10 +377,18 @@ use service_definitions::launchd_plist;
 #[cfg(any(target_os = "linux", test))]
 use service_definitions::systemd_unit;
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[path = "daemon_service_unix.rs"]
+mod unix_definition;
+
 #[path = "daemon_service_windows.rs"]
 mod windows_definition;
 #[cfg(test)]
 use windows_definition::{parse_windows_user_sid, windows_task_xml};
+
+#[cfg(windows)]
+#[path = "daemon_service_windows_task.rs"]
+mod windows_task;
 
 #[path = "daemon_process_probe.rs"]
 mod process_probe;
