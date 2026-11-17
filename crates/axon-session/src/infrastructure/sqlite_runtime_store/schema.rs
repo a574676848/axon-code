@@ -4,9 +4,7 @@
 //! `control.sqlite3` 承载需要长期保留、需要原子条件更新的控制面状态；
 //! `outbox.sqlite3` 承载有界、可按过期时间整批删除的待消费队列。
 
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex, PoisonError, RwLock};
+use std::sync::{Mutex, PoisonError};
 
 use rusqlite::{Connection, TransactionBehavior};
 
@@ -42,20 +40,12 @@ impl SchemaKind {
     }
 }
 
-static INITIALIZED_DATABASE_PATHS: LazyLock<RwLock<HashSet<PathBuf>>> =
-    LazyLock::new(|| RwLock::new(HashSet::new()));
-
-/// 进程内首次建库的串行点。
+/// 进程内建库的串行点。
 ///
-/// `INITIALIZED_DATABASE_PATHS` 只能证明「已经建好」，无法阻止多个实例在同一瞬间
-/// 同时进入建库路径。DDL 批次很长，并发执行会让另一个连接在准备语句时反复撞上写锁
-/// 与 schema 变更重载（`SQLITE_BUSY`）。这里用进程级互斥把首次建库串行化：等待者随后
-/// 命中全局缓存直接返回，稳态下每个库只真正执行一次 DDL。
+/// 多个实例可能在同一瞬间进入建库路径。DDL 批次很长，并发执行会让另一个连接在准备语句
+/// 时反复撞上写锁与 schema 变更重载（`SQLITE_BUSY`）。这里用进程级互斥把建库串行化，
+/// 等待者随后在版本确认处直接返回。
 static SCHEMA_INIT_LOCK: Mutex<()> = Mutex::new(());
-
-fn canonical_or_raw(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
-}
 
 /// 确保库处于 WAL 模式。
 ///
@@ -72,30 +62,26 @@ fn ensure_wal_journal_mode(connection: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-pub(super) fn is_schema_initialized_for_path(path: &Path) -> bool {
-    let normalized = canonical_or_raw(path);
-    INITIALIZED_DATABASE_PATHS
-        .read()
-        .map(|paths| paths.contains(&normalized))
-        .unwrap_or(false)
-}
-
-pub(super) fn initialize_schema_for_path(
-    path: &Path,
+/// 让连接上的库处于目标 schema。
+///
+/// 判据只有磁盘现状：`PRAGMA user_version` 是否等于目标版本。**不能**用「这个路径在本
+/// 进程里初始化过」来代替它：库文件被删除、清空或替换后路径不变，但表已经没了（Linux
+/// 上临时目录被提前回收时，连接池新建的连接会在原地长出一个空库，投影写入随即撞上
+/// `no such table`）。已就绪的库只做只读确认，不取写锁；空库与陌生库才进入建库事务。
+pub(super) fn prepare_schema(
     kind: SchemaKind,
     connection: &mut Connection,
 ) -> rusqlite::Result<()> {
     let _guard = SCHEMA_INIT_LOCK
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    // 等待期间库可能已由别的实例建好：此时直接复用，不再进入 DDL。
-    if is_schema_initialized_for_path(path) {
-        return Ok(());
-    }
     // WAL 是库级持久属性，且切换需要独占锁：只在首次建库、并已持有进程内建库互斥时
     // 执行一次。逐连接重复切换会在并发读流下反复争抢独占锁（实测 busy_timeout 到期仍
     // 以 `SQLITE_BUSY` 失败），而稳态下的新连接只需一次无锁的模式读取即可确认。
     ensure_wal_journal_mode(connection)?;
+    if schema_version(connection)? == kind.version() {
+        return Ok(());
+    }
     // 首次建库必须落在一个 IMMEDIATE 写事务里。DDL 批次很长，且 `user_version` 在批次
     // **末尾**才写入：并发首次打开（本机 run、daemon、子代理执行面同时打开同一个库）时，
     // 后来的连接会进入「已建部分表、尚未写版本」的窗口，把正常建库误判为陌生库
@@ -104,11 +90,12 @@ pub(super) fn initialize_schema_for_path(
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     initialize_schema(&transaction, kind)?;
     transaction.commit()?;
-    let normalized = canonical_or_raw(path);
-    if let Ok(mut paths) = INITIALIZED_DATABASE_PATHS.write() {
-        paths.insert(normalized);
-    }
     Ok(())
+}
+
+/// 读取库头记录的 schema 版本；空库为 0。
+fn schema_version(connection: &Connection) -> rusqlite::Result<i64> {
+    connection.query_row("PRAGMA user_version", [], |row| row.get(0))
 }
 
 /// 初始化单个库的 schema。

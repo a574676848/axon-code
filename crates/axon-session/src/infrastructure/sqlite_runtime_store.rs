@@ -174,25 +174,20 @@ impl DatabaseHandle {
     }
 
     fn ensure_schema(&self) -> Result<(), RuntimeStoreError> {
-        if self.schema_ready.load(Ordering::Acquire)
-            || schema::is_schema_initialized_for_path(&self.path)
-        {
-            self.schema_ready.store(true, Ordering::Release);
+        // 「进度位」只能证明本实例建过库；磁盘现状由 `prepare_schema` 按 `user_version`
+        // 确认，不能按路径认定（库文件被删除或替换后路径不变，但表已经没了）。
+        if self.schema_ready.load(Ordering::Acquire) {
             return Ok(());
         }
         let _guard = self
             .schema_init_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self.schema_ready.load(Ordering::Acquire)
-            || schema::is_schema_initialized_for_path(&self.path)
-        {
-            self.schema_ready.store(true, Ordering::Release);
+        if self.schema_ready.load(Ordering::Acquire) {
             return Ok(());
         }
         let mut connection = self.connection()?;
-        schema::initialize_schema_for_path(&self.path, self.kind, &mut connection)
-            .map_err(storage)?;
+        schema::prepare_schema(self.kind, &mut connection).map_err(storage)?;
         self.schema_ready.store(true, Ordering::Release);
         Ok(())
     }

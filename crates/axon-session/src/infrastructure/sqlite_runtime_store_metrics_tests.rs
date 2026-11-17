@@ -1,14 +1,25 @@
 //! `session_metrics` 投影的累加语义。
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use axon_domain::{DaemonSessionId, RuntimeHostId};
 use axon_eventlog::{TurnMetrics, TurnOutcome};
 
 use super::SqliteRuntimeStore;
 use crate::ports::{EventLogStore as _, RuntimeStore as _};
 
+/// 夹具目录序号：同一测试线程内多个用例共用一个线程临时根，路径必须逐用例区分。
+static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
 fn fixture() -> (SqliteRuntimeStore, DaemonSessionId) {
-    let directory = tempfile::tempdir().expect("临时目录");
-    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    // 目录由测试线程根统一回收，整个用例期间必须一直存在：连接池按路径复用连接，目录
+    // 一旦提前消失，Linux 上后续新建的连接会在原地长出一个空库（Windows 上删除仍被打开
+    // 的文件会失败，所以本机看不到这个问题），嵌套取连接的投影写入随即 `no such table`。
+    let directory = axon_test_support::test_temp_path(&format!(
+        "session-metrics-{}",
+        FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let store = SqliteRuntimeStore::new(directory.join("runtime.sqlite3"));
     store.initialize().expect("初始化");
     let host_id = RuntimeHostId::new("host-1").expect("host id");
     let _host = store
@@ -51,6 +62,28 @@ fn metrics(turn_id: &str, ttft_ms: Option<u64>, active_ms: u64, tool_calls: u32)
         outcome: TurnOutcome::Succeeded,
         tool_calls,
     }
+}
+
+/// 夹具的库文件必须在整个用例期间留在磁盘上。
+///
+/// 这是 Linux CI 上三个投影用例失败的根因：夹具曾经在返回时就把临时目录删掉了。Windows
+/// 上删除仍被打开的 SQLite 文件会失败，于是同一份代码在本机一直是绿的；Linux 上目录真的
+/// 消失，连接池为嵌套取用新建的连接会在原地长出一个空库，投影写入随即撞上
+/// `no such table: session_metrics`。本用例固化「夹具目录与 Store 同寿命」这一判据。
+#[test]
+fn fixture_keeps_its_database_files_on_disk_for_the_whole_case() {
+    let (store, _session_id) = fixture();
+    assert!(
+        store.path().is_file() && store.outbox_path().is_file(),
+        "夹具的库文件必须在用例期间存在：{:?} / {:?}",
+        store.path(),
+        store.outbox_path()
+    );
+    // 目录活着，同路径的新实例才能读到既有 schema，而不是一个刚长出来的空库。
+    let reopened = SqliteRuntimeStore::new(store.path());
+    reopened
+        .initialize()
+        .expect("同路径重新初始化必须命中既有 schema");
 }
 
 #[test]

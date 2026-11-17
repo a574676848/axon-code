@@ -5,6 +5,8 @@
 
 use std::sync::{Arc, Barrier};
 
+use axon_domain::DaemonSessionId;
+
 use super::SqliteRuntimeStore;
 use crate::ports::RuntimeStore;
 
@@ -108,4 +110,37 @@ fn legacy_database_is_rejected_instead_of_migrated() {
             .expect("旧库 schema");
     }
     store.initialize().expect_err("旧版本库必须拒绝");
+}
+
+/// 库文件被清空或替换后，重新初始化必须重新建表。
+///
+/// 「这个路径在本进程里初始化过」只能证明过去，不能证明磁盘现状：库文件被删除、清空或
+/// 替换后路径不变，但表已经没了。按路径跳过建库会让后续写入撞上
+/// `no such table: session_metrics`（Linux CI 上临时目录被提前回收时的真实故障形态）。
+/// 本用例不依赖线程调度，直接构造「路径不变、表全没」的库。
+#[test]
+fn recreated_empty_database_is_initialized_again() {
+    let directory = axon_test_support::test_temp_dir();
+    let path = directory.path().join("runtime.sqlite3");
+    let first = SqliteRuntimeStore::new(&path);
+    first.initialize().expect("首次初始化");
+    let control = first.path().to_path_buf();
+    let outbox = first.outbox_path().to_path_buf();
+    let session_id = DaemonSessionId::new("session-schema-recreated").expect("会话 id");
+    first.create_session(&session_id, ".", 10).expect("建会话");
+    // 先释放连接池：Windows 上仍被打开的文件删不掉，也就无法构造「文件被替换」。
+    drop(first);
+    std::fs::remove_dir_all(directory.path()).expect("删除库所在目录");
+    std::fs::create_dir_all(directory.path()).expect("重建库所在目录");
+    // 原地重建两个空库：路径不变、表全没。
+    std::fs::write(&control, b"").expect("重建空控制面库");
+    std::fs::write(&outbox, b"").expect("重建空队列库");
+
+    let reopened = SqliteRuntimeStore::new(&path);
+    reopened.initialize().expect("空库必须重新建表");
+    // 断言落在故障点上：投影读取不得再以 `no such table` 失败。
+    let metrics = reopened
+        .session_metrics(&session_id)
+        .expect("投影读取必须可用");
+    assert!(metrics.is_none(), "重建后的空库不应有历史投影");
 }
