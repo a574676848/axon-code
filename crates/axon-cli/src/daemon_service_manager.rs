@@ -474,11 +474,45 @@ fn start_windows_task(runtime_dir: &Path) -> Result<(), String> {
     if windows_daemon_process_alive(runtime_dir) {
         Ok(())
     } else {
-        Err(
-            "Windows daemon 用户计划任务未在启动截止时间内运行，请检查用户任务历史与 daemon 日志"
-                .to_owned(),
-        )
+        // 任务起来了但进程立刻退出时，光说「超时」等于让人去翻日志：把最近一条错误
+        // 直接写进结论，版本不符这类问题当场就能看到该做什么。
+        let cause = daemon_log_error(runtime_dir);
+        Err(match cause {
+            Some(cause) => format!(
+                "Windows daemon 用户计划任务未在启动截止时间内运行，daemon 日志最后一条错误：{cause}"
+            ),
+            None => {
+                "Windows daemon 用户计划任务未在启动截止时间内运行，请检查用户任务历史与 daemon 日志"
+                    .to_owned()
+            }
+        })
     }
+}
+
+/// 最近一份 daemon 日志里的最后一条错误行。
+#[cfg(windows)]
+fn daemon_log_error(runtime_dir: &Path) -> Option<String> {
+    const LOG_TAIL_BYTES: u64 = 256 * 1024;
+    let mut logs: Vec<PathBuf> = std::fs::read_dir(runtime_dir.join("logs"))
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "log"))
+        .collect();
+    logs.sort();
+    let path = logs.pop()?;
+    let length = std::fs::metadata(&path).ok()?.len();
+    let mut file = std::fs::File::open(&path).ok()?;
+    if length > LOG_TAIL_BYTES {
+        use std::io::Seek as _;
+        file.seek(std::io::SeekFrom::End(-(LOG_TAIL_BYTES as i64)))
+            .ok()?;
+    }
+    let text = std::io::read_to_string(file).ok()?;
+    text.lines()
+        .rev()
+        .find(|line| line.contains("[ERROR]"))
+        .map(|line| line.trim().to_owned())
 }
 
 #[cfg(windows)]
