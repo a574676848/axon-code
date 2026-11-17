@@ -274,6 +274,22 @@ export const MemoryPage: React.FC<MemoryPageProps> = ({ connected }) => {
               icon={<AlertCircleIcon size={14} />}
               title={error}
               details={errorDetails}
+              action={
+                /*
+                 * 读取失败必须给回同一页的重试：这一页的数据全部来自两次请求
+                 * （列表与统计），失败后只留一句红字的话，用户只能靠切筛选碰运气。
+                 */
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    void loadFirstPage(scope, kind, status);
+                    void loadStats(scope, status);
+                  }}
+                >
+                  重试
+                </Button>
+              }
             />
           )}
           {notice !== null && (
@@ -355,7 +371,7 @@ export const MemoryPage: React.FC<MemoryPageProps> = ({ connected }) => {
           <section aria-live="polite" className="flex flex-1 min-h-0 flex-col">
             {loading && records.length === 0 ? (
               <LoadingState label="正在读取记忆" />
-            ) : records.length === 0 ? (
+            ) : records.length === 0 && error === null ? (
               <Panel>
                 <EmptyState
                   icon={<BrainIcon size={24} />}

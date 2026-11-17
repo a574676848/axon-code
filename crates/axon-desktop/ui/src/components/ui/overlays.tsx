@@ -1,6 +1,7 @@
 import React, { useCallback, useRef, useState, useEffect } from 'react';
 import { CheckIcon, ChevronDownIcon } from '../../icons';
 import { createPortal } from 'react-dom';
+import { focusableElements } from './useFocusTrap';
 /*
  * 浮层基元：模态壳、单选下拉、气泡菜单。
  * 三者共享同一套卡片外观（白底、圆角、半像素描边加柔光）与同一套
@@ -15,7 +16,14 @@ const CARD =
 const ITEM =
   'w-full flex items-center gap-2 px-2.5 h-8 rounded-xs text-row text-left transition-colors duration-100 cursor-pointer select-none';
 
-/** 点击组件外部时触发回调。 */
+/**
+ * 菜单项选择器：键盘导航只在菜单项之间移动。
+ *
+ * 菜单挂在 body 上、不在触发区的 DOM 子树里，Tab 从触发区根本走不进它；
+ * 因此这一族浮层必须自己给键盘一条路。
+ */
+const MENU_ITEM = '[role="menuitem"]';
+
 /**
  * 点击外部关闭。
  *
@@ -146,6 +154,13 @@ export const Dropdown: React.FC<DropdownProps> = ({
   );
   const ref = useDismiss(open, close, insideMenu);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+  /** 这一次展开是否已经把焦点交给菜单；位置重算不该把焦点拽回第一项。 */
+  const focusHandedOver = useRef(false);
+
+  /** 把焦点还给触发区：菜单收起后它自己就从 DOM 里消失了，焦点不能就这么掉到 body。 */
+  const returnFocusToTrigger = useCallback(() => {
+    focusableElements(ref.current)[0]?.focus({ preventScroll: true });
+  }, [ref]);
 
   useEffect(() => {
     onOpenChange?.(open);
@@ -207,6 +222,72 @@ export const Dropdown: React.FC<DropdownProps> = ({
     };
   }, [open, align, placement, ref, close]);
 
+  /*
+   * 展开后把焦点交给第一个菜单项。
+   *
+   * 等位置算好再移：菜单在定位完成前是 `visibility: hidden`，那时的元素接不住焦点。
+   * 只交接一次：窗口缩放会让位置重算，那次重算不该把已经用方向键走远的焦点拽回来。
+   * 没有菜单项的浮层（读数明细这类 `dialog` 面板）不抢焦点。
+   */
+  useEffect(() => {
+    if (!open) {
+      focusHandedOver.current = false;
+      return;
+    }
+    if (position === null || focusHandedOver.current) return;
+    const items = focusableElements(menuRef.current, MENU_ITEM);
+    if (items.length === 0) return;
+    focusHandedOver.current = true;
+    items[0].focus({ preventScroll: true });
+  }, [open, position]);
+
+  /**
+   * 菜单内的键盘行为。
+   *
+   * 上下循环移动、Home / End 到两端；Enter 与空格按菜单项自己的动作激活，
+   * 然后收起并把焦点交还触发区。Esc 仍归文档级监听（行为不变），
+   * 这里只补上「收起后焦点落在哪里」。
+   */
+  const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    const items = focusableElements(menuRef.current, MENU_ITEM);
+    if (items.length === 0) return;
+    const current = document.activeElement;
+    const index = current === null ? -1 : items.indexOf(current as HTMLElement);
+    const moveTo = (next: number): void => {
+      event.preventDefault();
+      items[(next + items.length) % items.length].focus({ preventScroll: true });
+    };
+    switch (event.key) {
+      case 'ArrowDown':
+        moveTo(index + 1);
+        return;
+      case 'ArrowUp':
+        moveTo(index <= 0 ? items.length - 1 : index - 1);
+        return;
+      case 'Home':
+        moveTo(0);
+        return;
+      case 'End':
+        moveTo(items.length - 1);
+        return;
+      case 'Enter':
+      case ' ': {
+        event.preventDefault();
+        if (index >= 0) items[index].click();
+        close();
+        returnFocusToTrigger();
+        return;
+      }
+      case 'Escape':
+        event.preventDefault();
+        close();
+        returnFocusToTrigger();
+        return;
+      default:
+        return;
+    }
+  };
+
   return (
     <div className={`relative inline-flex ${className}`} ref={ref}>
       {trigger({ open, toggle: () => setOpen((value) => !value) })}
@@ -215,6 +296,7 @@ export const Dropdown: React.FC<DropdownProps> = ({
           <div
             ref={menuRef}
             role={panelRole}
+            onKeyDown={handleMenuKeyDown}
             style={{
               position: 'fixed',
               left: position?.left ?? 0,

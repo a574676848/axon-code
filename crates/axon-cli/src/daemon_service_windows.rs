@@ -249,6 +249,28 @@ pub(super) fn process_image_is_axon(pid: u32) -> bool {
     super::process_image_name(pid).is_some_and(|image| image.to_ascii_lowercase().contains("axon"))
 }
 
+/// 映像名是否就是 daemon 本体：只认 `axon`（含 `axon.exe`）。
+///
+/// 强制结束前的守卫必须用这条严格判定。`axon-desktop.exe` 与 `axon-launcher.exe`
+/// 的映像名同样含 `axon`，宽松匹配会让 PID 回收后的 `daemon stop` 把用户正在使用的
+/// 桌面端连同其子进程树一起结束。
+#[cfg(any(windows, test))]
+pub(super) fn image_name_is_daemon(image: &str) -> bool {
+    Path::new(image.trim())
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.eq_ignore_ascii_case("axon"))
+}
+
+/// 严格版进程判定：只有 daemon 本体才算命中，供强制结束前的守卫使用。
+///
+/// 存活判定仍走 [`process_image_is_axon`]：`axon-cli` 的测试二进制同样持有 Axon 身份，
+/// 收紧存活口径会把「测试进程算存活 Axon 进程」这条既有契约打掉。
+#[cfg(windows)]
+pub(super) fn process_image_is_daemon(pid: u32) -> bool {
+    super::process_image_name(pid).is_some_and(|image| image_name_is_daemon(&image))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

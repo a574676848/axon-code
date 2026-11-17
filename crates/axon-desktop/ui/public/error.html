@@ -21,19 +21,20 @@
     -->
     <style>
       :root {
-        --color-canvas: #fdfdfd;
-        --color-surface: #ffffff;
-        --color-surface-sunken: #f3f3f5;
+        --color-canvas: #FAFAFC;
+        --color-surface: #FFFFFF;
+        --color-surface-sunken: #F3F3F5;
         --color-hover: rgba(24, 24, 27, 0.04);
-        --color-border-hairline: rgba(24, 24, 27, 0.06);
-        --color-border-strong: rgba(24, 24, 27, 0.13);
+        --color-border-hairline: rgba(24, 24, 27, 0.055);
+        --color-border-strong: rgba(24, 24, 27, 0.125);
         --color-text-primary: #111113;
-        --color-text-secondary: #52525b;
-        --color-text-tertiary: #63636b;
-        --color-primary: #18181b;
-        --color-primary-hover: #27272a;
-        --color-danger: #b91c1c;
+        --color-text-secondary: #52525B;
+        --color-text-tertiary: #63636B;
+        --color-primary: #18181B;
+        --color-primary-hover: #27272A;
+        --color-danger: #B91C1C;
         --color-danger-soft: rgba(185, 28, 28, 0.10);
+        --color-focus: #2563EB;
         --radius-sm: 8px;
         --radius-md: 12px;
         --radius-lg: 18px;
@@ -48,19 +49,20 @@
 
       html[data-theme='obsidian'] {
         color-scheme: dark;
-        --color-canvas: #11141b;
-        --color-surface: #181c25;
-        --color-surface-sunken: #0d1016;
-        --color-hover: rgba(255, 255, 255, 0.06);
-        --color-border-hairline: rgba(255, 255, 255, 0.08);
-        --color-border-strong: rgba(255, 255, 255, 0.14);
-        --color-text-primary: #eceff4;
-        --color-text-secondary: #a6b0c0;
-        --color-text-tertiary: #8b95a7;
-        --color-primary: #2f5fd0;
-        --color-primary-hover: #3b6ce0;
-        --color-danger: #f87171;
+        --color-canvas: #11141B;
+        --color-surface: #181C25;
+        --color-surface-sunken: #0D1016;
+        --color-hover: rgba(255, 255, 255, 0.05);
+        --color-border-hairline: rgba(255, 255, 255, 0.065);
+        --color-border-strong: rgba(255, 255, 255, 0.13);
+        --color-text-primary: #ECEFF4;
+        --color-text-secondary: #A6B0C0;
+        --color-text-tertiary: #8B95A7;
+        --color-primary: #2F5FD0;
+        --color-primary-hover: #3B6FE2;
+        --color-danger: #F87171;
         --color-danger-soft: rgba(248, 113, 113, 0.15);
+        --color-focus: #528BFF;
         --sh-panel: 0 24px 56px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
       }
 
@@ -226,7 +228,7 @@
       }
 
       button:focus-visible {
-        outline: 2px solid var(--color-text-primary);
+        outline: 2px solid var(--color-focus);
         outline-offset: 2px;
       }
 

@@ -133,10 +133,17 @@ fn stable_daemon_executable_from(current: &Path) -> PathBuf {
 }
 
 pub(super) fn uninstall(runtime_dir: &Path) -> Result<(), String> {
-    let _ = stop(runtime_dir);
+    if let Err(error) = stop(runtime_dir) {
+        // 停不下来不阻断卸载，但必须把原因说出来：否则用户会以为服务已被彻底清理。
+        eprintln!("警告：停止 Daemon 服务失败，继续卸载服务定义：{error}");
+    }
     cleanup_stale_ipc_endpoint(runtime_dir);
     #[cfg(windows)]
     windows_task::uninstall_windows_task(runtime_dir)?;
+    // 先 disable 再删单元文件：只删文件会留下 default.target.wants 下的悬空符号链接，
+    // systemd 下次 reconcile 时仍会尝试拉起一个已不存在的单元。
+    #[cfg(target_os = "linux")]
+    let _ = unix_definition::systemctl(&["disable", SERVICE_NAME]);
     #[cfg(not(windows))]
     let path = unix_definition::platform_definition_path()
         .ok_or_else(|| "无法解析 daemon 服务路径".to_owned())?;
@@ -217,7 +224,14 @@ pub(super) fn restart(config_path: &Path, runtime_dir: &Path) -> Result<(), Stri
         start(config_path, runtime_dir)
     }
     #[cfg(target_os = "linux")]
-    return unix_definition::systemctl(&["restart", SERVICE_NAME]);
+    {
+        // 与 macOS 同构：先停、再清陈旧 IPC 端点、最后起。unit 是 Restart=always，
+        // 留着上次崩掉时的 socket 文件会让 systemd 陷入「拉起 → bind 失败 → 退出 → 再拉起」
+        // 的循环，只有 daemon start 才救得回来。
+        stop(runtime_dir)?;
+        cleanup_stale_ipc_endpoint(runtime_dir);
+        unix_definition::systemctl(&["start", SERVICE_NAME])
+    }
     #[cfg(windows)]
     {
         stop(runtime_dir)?;

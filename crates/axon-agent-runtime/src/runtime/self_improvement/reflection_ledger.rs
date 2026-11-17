@@ -20,6 +20,14 @@ pub const REFLECTION_INFLIGHT_FILE: &str = "reflection_pool_inflight.json";
 /// 批次已写候选的台账文件名。按「批次键 + 候选指纹」去重，挡住半批失败后的重试重写。
 pub const REFLECTION_WRITTEN_FILE: &str = "reflection_written.jsonl";
 
+/// 单张台账保留的最大行数。
+///
+/// 两张台账都是「整文件读出、改、整文件写回」的形态：行数只增不删会让**单轮**写入量
+/// 随历史线性增长，累计写入量随之变成 O(轮次²)，台账文件本身也没有上限。而它们的
+/// 唯一用途是挡分钟级的重试（治理队列 5 秒退避、最多 3 次尝试），超出重试窗口的
+/// 历史行没有任何判定价值，因此按写入序保留最近一段，超出即淘汰最旧。
+pub const REFLECTION_LEDGER_MAX_ENTRIES: usize = 2_000;
+
 /// 台账文件位置与读写。
 pub struct ReflectionLedgerRuntime;
 
@@ -99,6 +107,8 @@ impl ReflectionLedgerRuntime {
             updated_at_ms: now_ms,
         })
         .map_err(|error| format!("{error:?}"))?;
+        // 行序即写入序：先淘汰最旧的，再压入本次这一行，保证总行数不超过上限。
+        trim_oldest(&mut kept, 1);
         kept.push(&line);
         let mut body = kept.join("\n");
         body.push('\n');
@@ -137,8 +147,15 @@ impl ReflectionLedgerRuntime {
             written_at_ms: now_ms,
         })
         .map_err(|error| format!("{error:?}"))?;
-        let mut body = std::fs::read_to_string(path).unwrap_or_default();
-        body.push_str(&line);
+        let current = std::fs::read_to_string(path).unwrap_or_default();
+        let mut kept: Vec<&str> = current
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        // 与 `upsert_state` 同一口径：追加前先按写入序淘汰最旧的行。
+        trim_oldest(&mut kept, 1);
+        kept.push(&line);
+        let mut body = kept.join("\n");
         body.push('\n');
         std::fs::write(path, body).map_err(|error| format!("{error:?}"))
     }
@@ -205,6 +222,18 @@ struct WrittenCandidate {
     batch_key: String,
     digest: String,
     written_at_ms: u64,
+}
+
+/// 从最旧一端裁剪台账行，给即将追加的 `incoming` 行留出位置。
+///
+/// 上限口径是「裁剪后 + 即将追加」的总行数，因此预算里扣掉 `incoming`。
+/// 行序等于写入序，`drain` 头部即淘汰最旧。
+fn trim_oldest(lines: &mut Vec<&str>, incoming: usize) {
+    let budget = REFLECTION_LEDGER_MAX_ENTRIES.saturating_sub(incoming);
+    let overflow = lines.len().saturating_sub(budget);
+    if overflow > 0 {
+        lines.drain(..overflow);
+    }
 }
 
 #[cfg(test)]
@@ -303,5 +332,92 @@ mod tests {
             ReflectionLedgerRuntime::take_inflight(&path).is_empty(),
             "未完成批次只能恢复一次"
         );
+    }
+
+    /// 预置一份已经顶到保留上限的台账，返回其中的键（按写入序）。
+    fn seed_processed_at_capacity(path: &Path) -> Vec<String> {
+        let keys = (0..REFLECTION_LEDGER_MAX_ENTRIES)
+            .map(|index| format!("s:t{index}"))
+            .collect::<Vec<_>>();
+        let body = keys
+            .iter()
+            .map(|key| {
+                serde_json::to_string(&ProcessedTurn {
+                    turn_key: key.clone(),
+                    state: PROCESSED_DONE.to_owned(),
+                    updated_at_ms: 1,
+                })
+                .expect("台账行可序列化")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let _ = std::fs::remove_file(path);
+        std::fs::create_dir_all(path.parent().expect("路径应含父目录")).expect("目录可创建");
+        std::fs::write(path, format!("{body}\n")).expect("台账可写入");
+        keys
+    }
+
+    /// 回归：轮次台账不得随轮次无限增长。
+    ///
+    /// 台账是整文件重写，行数无上限会让写入量随历史线性增长（累计 O(轮次²)），
+    /// 且文件本身永久膨胀。这里锁死两点：总行数不超过上限；最新一行可见，
+    /// 最旧一行被淘汰。
+    #[test]
+    fn processed_ledger_stays_within_the_entry_cap() {
+        let path = scratch("processed-cap");
+        let keys = seed_processed_at_capacity(&path);
+
+        ReflectionLedgerRuntime::mark_done(&path, "s:newest", 2).expect("收口");
+
+        let body = std::fs::read_to_string(&path).expect("台账可读");
+        assert_eq!(
+            body.lines().count(),
+            REFLECTION_LEDGER_MAX_ENTRIES,
+            "台账行数必须停在保留上限"
+        );
+        assert!(
+            !body.contains(&format!("\"{}\"", keys[0])),
+            "最旧一行必须被淘汰"
+        );
+        assert!(ReflectionLedgerRuntime::is_done(&path, "s:newest"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 回归：已写候选台账同样有行数上限，且淘汰后去重仍然有效。
+    #[test]
+    fn written_ledger_stays_within_the_entry_cap() {
+        let path = scratch("written-cap");
+        let body = (0..REFLECTION_LEDGER_MAX_ENTRIES)
+            .map(|index| {
+                serde_json::to_string(&WrittenCandidate {
+                    batch_key: format!("b{index}"),
+                    digest: format!("d{index}"),
+                    written_at_ms: 1,
+                })
+                .expect("台账行可序列化")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let _ = std::fs::remove_file(&path);
+        std::fs::create_dir_all(path.parent().expect("路径应含父目录")).expect("目录可创建");
+        std::fs::write(&path, format!("{body}\n")).expect("台账可写入");
+
+        ReflectionLedgerRuntime::mark_written(&path, "b-new", "d-new", 2).expect("记账");
+
+        let body = std::fs::read_to_string(&path).expect("台账可读");
+        assert_eq!(
+            body.lines().count(),
+            REFLECTION_LEDGER_MAX_ENTRIES,
+            "候选台账行数必须停在保留上限"
+        );
+        assert!(
+            ReflectionLedgerRuntime::is_written(&path, "b-new", "d-new"),
+            "新写入的候选必须可判重"
+        );
+        assert!(
+            !ReflectionLedgerRuntime::is_written(&path, "b0", "d0"),
+            "被淘汰的最旧候选不再命中"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 }

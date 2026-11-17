@@ -36,7 +36,14 @@ pub const EVENT_SCRIPT_SCHEMA_JSON: &str = include_str!("event_script_schema.jso
 /// 解析脚本硬超时。
 pub const EVENT_SCRIPT_TIMEOUT: Duration = Duration::from_secs(2);
 /// 解释 provider 解析脚本的程序。
+///
+/// Windows 的 Python 安装包注册的是 `python`；POSIX 发行版只保证 `python3`
+/// （Ubuntu / Debian 与 macOS 都不再随系统提供 `python`），沿用 `python` 会让
+/// provider 解析脚本在 Linux 与 macOS 上直接以「找不到解释器」失败。
+#[cfg(windows)]
 const EVENT_SCRIPT_INTERPRETER: &str = "python";
+#[cfg(not(windows))]
+const EVENT_SCRIPT_INTERPRETER: &str = "python3";
 /// 解释器强制 UTF-8，避免中文 Windows 下按本地代码页输出而与契约冲突。
 const EVENT_SCRIPT_INTERPRETER_UTF8_ENV: (&str, &str) = ("PYTHONUTF8", "1");
 /// provider 脚本允许继承的环境变量；Provider 凭据一律不透传。

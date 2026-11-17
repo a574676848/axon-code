@@ -62,6 +62,33 @@ fn ensure_wal_journal_mode(connection: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// `PRAGMA auto_vacuum` 的 INCREMENTAL 取值。
+const AUTO_VACUUM_INCREMENTAL: i64 = 2;
+
+/// 把空库的 `auto_vacuum` 钉到 INCREMENTAL。
+///
+/// 默认 `auto_vacuum = NONE` 时 `PRAGMA incremental_vacuum(N)` 是**空操作**：删除行只把页
+/// 放回 freelist，库文件永不回落，清理链路上的「有界回收」因此形同虚设（实测同一批删除
+/// 后 `page_count` 完全不变、`freelist` 满额）。该属性只能在**建表之前**改变，已有表的库
+/// 要改必须整库 VACUUM，因此这里只对空库生效：新装用户拿到可持续回收的库，既有库保持
+/// 原状，不在发布期做迁移。
+fn ensure_incremental_auto_vacuum(connection: &Connection) -> rusqlite::Result<()> {
+    let mode: i64 = connection.query_row("PRAGMA auto_vacuum", [], |row| row.get(0))?;
+    if mode == AUTO_VACUUM_INCREMENTAL {
+        return Ok(());
+    }
+    let tables: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+        [],
+        |row| row.get(0),
+    )?;
+    if tables > 0 {
+        return Ok(());
+    }
+    connection.execute_batch(&format!("PRAGMA auto_vacuum = {AUTO_VACUUM_INCREMENTAL}"))?;
+    Ok(())
+}
+
 /// 让连接上的库处于目标 schema。
 ///
 /// 判据只有磁盘现状：`PRAGMA user_version` 是否等于目标版本。**不能**用「这个路径在本
@@ -82,6 +109,8 @@ pub(super) fn prepare_schema(
     if schema_version(connection)? == kind.version() {
         return Ok(());
     }
+    // 建表之前先定下自动回收模式：顺序反过来就再也改不动了（只能整库 VACUUM）。
+    ensure_incremental_auto_vacuum(connection)?;
     // 首次建库必须落在一个 IMMEDIATE 写事务里。DDL 批次很长，且 `user_version` 在批次
     // **末尾**才写入：并发首次打开（本机 run、daemon、子代理执行面同时打开同一个库）时，
     // 后来的连接会进入「已建部分表、尚未写版本」的窗口，把正常建库误判为陌生库

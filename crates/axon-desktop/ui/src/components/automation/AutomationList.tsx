@@ -1,6 +1,6 @@
 import React from "react";
 import type { CronJob } from "../../types";
-import { ClockIcon, PlusIcon, SearchIcon } from "../../icons";
+import { AlertCircleIcon, ClockIcon, PlusIcon, SearchIcon } from "../../icons";
 import { Button, Input, SegmentedControl, type SegmentedOption } from "../ui/controls";
 import {
   Chip,
@@ -46,6 +46,15 @@ export interface AutomationListProps {
   busy: boolean;
   /** 首屏还在读第一页：不要先画一次「还没有任务」的假空态。 */
   loading: boolean;
+  /**
+   * 读取失败的原因。
+   *
+   * 列表里一条数据都没有时必须由它接管：读取失败还说「还没有自动化任务」并递上
+   * 「新建任务」，等于让人对着一次失败的读取去建一条本已存在的任务。
+   */
+  loadError?: string | null;
+  /** 重新读取当前页；只在读取失败的空列表上用得到。 */
+  onRetry: () => void;
   /** 列表里同时存在系统任务与用户任务时，才逐行标注「系统」。 */
   showSystemChip: boolean;
   className?: string;
@@ -70,6 +79,8 @@ export const AutomationList: React.FC<AutomationListProps> = ({
   pageSize,
   busy,
   loading,
+  loadError = null,
+  onRetry,
   showSystemChip,
   className = "",
   onQueryChange,
@@ -102,6 +113,17 @@ export const AutomationList: React.FC<AutomationListProps> = ({
       <div className="flex-1 min-h-0 overflow-y-auto scroll-visible">
         {loading && jobs.length === 0 ? (
           <LoadingState label="正在读取任务" />
+        ) : loadError !== null && jobs.length === 0 ? (
+          <EmptyState
+            icon={<AlertCircleIcon size={24} />}
+            title="自动化任务读取失败"
+            description={loadError}
+            action={
+              <Button variant="outline" size="sm" onClick={onRetry}>
+                重试
+              </Button>
+            }
+          />
         ) : jobs.length === 0 ? (
           <EmptyState
             icon={filtered ? <SearchIcon size={24} /> : <ClockIcon size={24} />}

@@ -290,7 +290,12 @@ export const AutomationPage: React.FC<{
         fill
       >
         <div className={`flex min-h-0 flex-col gap-3 ${CONTENT_HEIGHT}`}>
-          {error !== null && (
+          {/*
+            列表为空时的读取失败交给列表自己呈现（错误态 + 重试）：
+            同一个原因在两处各说一遍，只会让人以为界面上有两个问题。
+            列表里还有数据时（动作失败、翻页失败）才挂这条页面级回执。
+          */}
+          {error !== null && jobs.length > 0 && (
             <div className="shrink-0">
               <Banner
                 tone="danger"
@@ -310,6 +315,8 @@ export const AutomationPage: React.FC<{
               pageSize={PAGE_SIZE}
               busy={busy}
               loading={!loaded}
+              loadError={error}
+              onRetry={() => void refresh()}
               showSystemChip={showSystemChip}
               className={
                 splitView ? "w-[360px] shrink-0 max-xl:hidden" : "flex-1 min-h-0"

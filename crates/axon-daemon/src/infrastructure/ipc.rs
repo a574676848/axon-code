@@ -55,6 +55,11 @@ fn windows_pipe_security_descriptor(
 #[path = "ipc/snapshot_stream.rs"]
 pub mod snapshot_stream;
 
+/// 崩溃遗留的 POSIX 端点文件回收；Windows 命名管道不留文件，不参与编译。
+#[cfg(unix)]
+#[path = "ipc/stale_endpoint.rs"]
+mod stale_endpoint;
+
 /// JSONL 本地 IPC 服务端。
 pub struct JsonlIpcServer {
     listener: Listener,
@@ -107,6 +112,9 @@ impl JsonlIpcServer {
     /// 绑定跨平台 namespaced endpoint。
     pub fn bind(endpoint: &str) -> io::Result<Self> {
         let name = local_socket_name(endpoint)?;
+        // POSIX 上崩溃会留下 socket 文件，bind 前先回收无人监听的那份。
+        #[cfg(unix)]
+        stale_endpoint::reclaim(endpoint);
         let listener = ListenerOptions::new().name(name).create_sync()?;
         Ok(Self { listener })
     }
@@ -118,6 +126,9 @@ impl JsonlIpcServer {
     /// `user_sid` 为空或非 Windows 平台时与 [`JsonlIpcServer::bind`] 等价。
     pub fn bind_with_user_sid(endpoint: &str, user_sid: Option<&str>) -> io::Result<Self> {
         let name = local_socket_name(endpoint)?;
+        // 与 bind 同一口径：Windows 走命名管道不涉及文件，POSIX 先回收残留端点。
+        #[cfg(unix)]
+        stale_endpoint::reclaim(endpoint);
         #[cfg(windows)]
         let options = {
             use interprocess::os::windows::local_socket::ListenerOptionsExt;

@@ -62,6 +62,13 @@ interface WorkspaceTreeProps {
   expanded: Record<string, boolean>;
   /** 网关探测尚未完成：显示骨架而不是「没有工作区」。 */
   loading?: boolean;
+  /**
+   * 会话视图上报的实时在跑会话。
+   *
+   * 侧栏快照每 15 秒刷一次，刚起的一轮在下一份快照到达之前只有这里知道；
+   * 不看它会与主区域的转圈、窗口标题的「运行中」自相矛盾。
+   */
+  liveRunningSessionId?: string | null;
   /** 折叠或展开工作区。 */
   onToggleWorkspace: (id: string) => void;
   /** 选中车道。 */
@@ -87,6 +94,7 @@ export const WorkspaceTree: React.FC<WorkspaceTreeProps> = ({
   sessionMarks,
   expanded,
   loading = false,
+  liveRunningSessionId = null,
   onToggleWorkspace,
   onSelectSession,
   onTogglePin,
@@ -180,6 +188,7 @@ export const WorkspaceTree: React.FC<WorkspaceTreeProps> = ({
                 setDropAt(null);
               }}
               dragging={drag?.sessionId === session.id}
+              liveRunning={session.id === liveRunningSessionId}
               dropHint={
                 dropAt?.sessionId === session.id && drag !== null && drag.sessionId !== session.id
                   ? dropAt.half
@@ -279,6 +288,7 @@ export const WorkspaceTree: React.FC<WorkspaceTreeProps> = ({
               onDrop={() => undefined}
               onDragEnd={() => undefined}
               dragging={false}
+              liveRunning={session.id === liveRunningSessionId}
               dropHint="none"
             />
           );

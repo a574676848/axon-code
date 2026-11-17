@@ -98,8 +98,10 @@ export function formatRelativeTime(timestamp: number): string {
 export function sessionStatusState(
   session: SessionItem,
   activity: string | undefined,
+  /** 会话视图上报的实时轮次事实：刚起的那一轮还没进侧栏的 15 秒快照。 */
+  liveRunning = false,
 ): StateDotState | null {
-  if (session.running) return 'ongoing';
+  if (session.running || liveRunning) return 'ongoing';
   if (activity === 'failed') return 'error';
   if (activity === 'interrupted') return 'warning';
   if (activity !== undefined) return 'done';
@@ -148,6 +150,13 @@ export interface SessionRowProps {
   dragging: boolean;
   /** 落点指示：无、上方、下方。 */
   dropHint: 'none' | 'before' | 'after';
+  /**
+   * 会话视图上报的实时事实说这一条正在跑。
+   *
+   * 侧栏快照每 15 秒才刷一次，刚起的那一轮在下一份快照到来前不会有 `running`；
+   * 少了这一位，主区域已经在转圈、侧栏这一行还挂在静息灰点上。
+   */
+  liveRunning?: boolean;
 }
 
 /** 一条会话：状态槽、标题、行尾槽（时间与图钉，悬浮换成操作区）。 */
@@ -165,6 +174,7 @@ export const SessionRow: React.FC<SessionRowProps> = ({
   onDragEnd,
   dragging,
   dropHint,
+  liveRunning = false,
 }) => {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(session.title);
@@ -178,8 +188,10 @@ export const SessionRow: React.FC<SessionRowProps> = ({
   const titleChanged = session.title !== initialTitleRef.current;
   /** 尚未产生任何交互的会话：按既有工作台产品的语义，它是一条安静的占位行。 */
   const blank = session.pending;
+  /** 这一行此刻是否在跑：侧栏快照与实时轮次事实的并集，与主区域显示同一件事。 */
+  const running = session.running === true || liveRunning;
   /** 前置状态槽里要画的状态；为空表示这一行不占状态位。 */
-  const status = blank ? null : sessionStatusState(session, activity);
+  const status = blank ? null : sessionStatusState(session, activity, liveRunning);
   const hasPendingQuestion = Boolean(
     (session.pending_question_count ?? 0) > 0 || activity?.startsWith('question_'),
   );
@@ -202,14 +214,14 @@ export const SessionRow: React.FC<SessionRowProps> = ({
           </HoverCardLine>
           <HoverCardStatus
             icon={
-              session.running ? (
+              running ? (
                 <SpinnerIcon size={14} className="state-spinner" />
               ) : (
                 <GlobeIcon size={14} />
               )
             }
           >
-            {session.running ? '进行中' : `渠道 ${session.channel}`}
+            {running ? '进行中' : `渠道 ${session.channel}`}
             {session.archived ? ' · 已归档' : ''}
             {session.pinned ? ' · 已置顶' : ''}
           </HoverCardStatus>
@@ -233,15 +245,31 @@ export const SessionRow: React.FC<SessionRowProps> = ({
         onClick={() => {
           if (!editing) onSelect();
         }}
+        /*
+         * 会话行是键盘可达的：Tab 落到行上，Enter 与空格打开。
+         *
+         * 行内还有自己的按钮（置顶、归档、更多菜单），因此这里不能换成 `<button>`；
+         * 改用可聚焦的行本身承担「打开这条会话」。键盘事件只在行自己持有焦点时处理：
+         * 重命名输入框里的 Enter 属于提交重命名，不该顺带切走会话。
+         */
+        role="button"
+        tabIndex={editing || blank ? -1 : 0}
+        aria-current={selected ? 'true' : undefined}
+        onKeyDown={(event) => {
+          if (event.target !== event.currentTarget) return;
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          onSelect();
+        }}
         title={`渠道 ${session.channel} · 目标 ${session.destination || '未指定'} · 共 ${session.interaction_count} 条会话`}
-        className={`${ROW_STATE} ${rowTone(selected)} h-9 pr-1 cursor-pointer select-none ${
+        className={`${ROW_STATE} focus-ring-soft ${rowTone(selected)} h-9 pr-1 cursor-pointer select-none ${
           dragging ? 'opacity-40' : ''
         }`}
       >
         {selected && (
           <span
             aria-hidden="true"
-            className={`${ROW_SELECTED_BAR} ${session.running ? 'dock-ambient-glow' : ''}`}
+            className={`${ROW_SELECTED_BAR} ${running ? 'dock-ambient-glow' : ''}`}
           />
         )}
         {dropHint !== 'none' && (
@@ -432,7 +460,17 @@ export const WorkspaceRow: React.FC<WorkspaceRowProps> = ({
       <div
         onClick={onToggle}
         style={{ paddingLeft: depth * TREE_INDENT }}
-        className={`${ROW_STATE} hover:bg-hover h-8 pr-1 cursor-pointer select-none`}
+        /* 工作区行的展开与收起同样走键盘：Tab 到行上，Enter 或空格开合。 */
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onKeyDown={(event) => {
+          if (event.target !== event.currentTarget) return;
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          onToggle();
+        }}
+        className={`${ROW_STATE} focus-ring-soft hover:bg-hover h-8 pr-1 cursor-pointer select-none`}
       >
         {/*
          * 图标列只有一份图形：收起时是单色文件夹，指针移入或已展开时换成 chevron。

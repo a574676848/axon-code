@@ -24,13 +24,32 @@ pub(super) fn launchd_plist(exe: &Path, config: &Path, runtime: &Path) -> String
 }
 
 #[cfg(any(target_os = "linux", test))]
-pub(super) fn systemd_unit(exe: &Path, config: &Path, runtime: &Path) -> String {
+pub(super) fn systemd_unit(
+    exe: &Path,
+    config: &Path,
+    runtime: &Path,
+    environment: &[(String, String)],
+) -> String {
     let exe = systemd_path(&exe.to_string_lossy());
     let config = systemd_path(&config.to_string_lossy());
+    let environment_lines = systemd_environment(environment);
     format!(
-        "[Unit]\nDescription=Axon Daemon\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=0\n\n[Service]\nType=simple\nExecStart=\"{exe}\" daemon run --root \"{}\" --config-path \"{config}\"\nRestart=always\nRestartSec=5\nKillSignal=SIGTERM\nTimeoutStopSec=20\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=Axon Daemon\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=0\n\n[Service]\nType=simple\n{environment_lines}ExecStart=\"{exe}\" daemon run --root \"{}\" --config-path \"{config}\"\nRestart=always\nRestartSec=5\nKillSignal=SIGTERM\nTimeoutStopSec=20\n\n[Install]\nWantedBy=default.target\n",
         systemd_path(&runtime.parent().unwrap_or(runtime).to_string_lossy())
     )
+}
+
+/// 把环境变量渲染成 systemd 单元的 `Environment=` 行；空表渲染为空串。
+///
+/// systemd 用户实例只提供最小环境，交互 shell 的 `PATH` 扩展与 `SHELL` 都不会被继承，
+/// 因此安装时把现场值固化进单元。值沿用 `systemd_path` 的转义口径（`%` → `%%`、
+/// `\` → `\\`、`"` → `\"`），与 `ExecStart` 里的路径保持同一套规则，不另造第二套。
+#[cfg(any(target_os = "linux", test))]
+fn systemd_environment(environment: &[(String, String)]) -> String {
+    environment
+        .iter()
+        .map(|(key, value)| format!("Environment=\"{}={}\"\n", key, systemd_path(value)))
+        .collect()
 }
 
 #[cfg(any(target_os = "macos", test))]

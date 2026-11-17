@@ -91,10 +91,9 @@ pub(super) fn windows_daemon_process_alive(runtime_dir: &Path) -> bool {
 }
 
 pub(super) fn start_windows_task(runtime_dir: &Path) -> Result<(), String> {
-    if windows_daemon_process_alive(runtime_dir) {
-        return Ok(());
-    }
-    run(
+    // 先恢复任务本身再判断进程：上一条 stop 若停在停进程阶段失败，任务会留在 disabled，
+    // 此后「进程还活着就早返回」会让自动恢复与登录触发器永久失效，用户只看到一次成功启动。
+    let enable = run(
         non_interactive_command(windows_definition::WINDOWS_TASK_PROGRAM).args([
             "/change",
             "/tn",
@@ -102,7 +101,11 @@ pub(super) fn start_windows_task(runtime_dir: &Path) -> Result<(), String> {
             "/enable",
         ]),
         "启用 Windows daemon 用户计划任务",
-    )?;
+    );
+    if windows_daemon_process_alive(runtime_dir) {
+        return Ok(());
+    }
+    enable?;
     run(
         non_interactive_command(windows_definition::WINDOWS_TASK_PROGRAM).args([
             "/run",
@@ -137,22 +140,39 @@ pub(super) fn start_windows_task(runtime_dir: &Path) -> Result<(), String> {
 /// 最近一份 daemon 日志里的最后一条错误行。
 fn daemon_log_error(runtime_dir: &Path) -> Option<String> {
     const LOG_TAIL_BYTES: u64 = 256 * 1024;
-    let mut logs: Vec<PathBuf> = fs::read_dir(runtime_dir.join("logs"))
+    let logs: Vec<PathBuf> = fs::read_dir(runtime_dir.join("logs"))
         .ok()?
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|ext| ext == "log"))
         .collect();
-    logs.sort();
-    let path = logs.pop()?;
+    // 取修改时间最新的一份：按文件名排序只在「一天一个文件」的命名下成立，
+    // 同层一旦出现第二类日志就会取错对象。
+    let path = logs
+        .into_iter()
+        .max_by_key(|path| fs::metadata(path).and_then(|meta| meta.modified()).ok())?;
     let length = fs::metadata(&path).ok()?.len();
     let mut file = fs::File::open(&path).ok()?;
-    if length > LOG_TAIL_BYTES {
+    let truncated = length > LOG_TAIL_BYTES;
+    if truncated {
         use std::io::Seek as _;
         file.seek(std::io::SeekFrom::End(-(LOG_TAIL_BYTES as i64)))
             .ok()?;
     }
-    let text = std::io::read_to_string(file).ok()?;
+    let mut raw = Vec::new();
+    {
+        use std::io::Read as _;
+        file.read_to_end(&mut raw).ok()?;
+    }
+    // 尾窗口的起点可能切在多字节字符中间：这里按字节读入再做有损解码，
+    // 否则一次截断就会让整条可观测性链路退化成通用的「请检查日志」。
+    let text = String::from_utf8_lossy(&raw);
+    let text = if truncated {
+        text.split_once('\n')
+            .map_or(text.as_ref(), |(_, rest)| rest)
+    } else {
+        text.as_ref()
+    };
     text.lines()
         .rev()
         .find(|line| line.contains("[ERROR]"))
@@ -162,6 +182,20 @@ fn daemon_log_error(runtime_dir: &Path) -> Option<String> {
 pub(super) fn stop_windows_task(runtime_dir: &Path) -> Result<(), String> {
     let Some(pid) = daemon_pid(runtime_dir) else {
         daemon_stop_request::clear(runtime_dir);
+        if !windows_task_exists() {
+            return Ok(());
+        }
+        // 没有 pid 文件不等于没有实例：任务还登记着就结束实例。否则 uninstall 删掉任务定义后，
+        // 会留下一个既无人管理、也无法再用 daemon stop 停掉的孤儿进程。
+        run(
+            non_interactive_command(windows_definition::WINDOWS_TASK_PROGRAM).args([
+                "/end",
+                "/tn",
+                windows_definition::WINDOWS_TASK_NAME,
+            ]),
+            "结束 Windows daemon 用户计划任务实例",
+        )
+        .map_err(|error| format!("未找到 daemon.pid，且结束计划任务实例失败：{error}"))?;
         return Ok(());
     };
     // 1) 先停自动恢复：否则任务可能在停止过程中把守护进程重新拉起。
@@ -197,7 +231,7 @@ pub(super) fn stop_windows_task(runtime_dir: &Path) -> Result<(), String> {
     }
     // 4) 兜底二：强制结束。先核对映像名：PID 可能已被回收给无关进程，
     //    而 taskkill /T 会连它的整棵子进程树一起带走。
-    if !windows_definition::process_image_is_axon(pid) {
+    if !windows_definition::process_image_is_daemon(pid) {
         daemon_stop_request::clear(runtime_dir);
         return Err(format!(
             "守护进程未响应停止请求，且 PID {pid} 已不再是 Axon 进程，未执行强制结束；请检查 data/logs 日志"

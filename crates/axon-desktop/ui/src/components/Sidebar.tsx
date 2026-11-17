@@ -158,26 +158,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, []);
 
   const refresh = useCallback(async () => {
-    if (health?.connected !== true) return;
+    if (health?.available !== true) return;
     try {
       ingest(await ipc.fetchWorkspaces());
       setLoadError(null);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : '读取工作区失败');
     }
-  }, [health?.connected, ingest]);
+  }, [health?.available, ingest]);
 
   useEffect(() => {
-    if (health?.connected !== true) return;
+    if (health?.available !== true) return;
     void refresh();
-  }, [health?.connected, refresh]);
+  }, [health?.available, refresh]);
 
   /*
    * 静默轮询：会话可能由其它渠道产生（例如 TUI 新开一条），侧栏必须能自己发现。
    * 轮询只换数据、不动界面状态，失败也不弹错，连接问题由外壳的心跳统一呈现。
    */
   useEffect(() => {
-    if (health?.connected !== true) return;
+    if (health?.available !== true) return;
     const timer = window.setInterval(() => {
       void ipc
         .fetchWorkspaces()
@@ -185,7 +185,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         .catch(() => undefined);
     }, SESSION_REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [health?.connected, ingest]);
+  }, [health?.available, ingest]);
 
   const mutate = useCallback(
     async (action: () => Promise<WorkspaceItem[]>, fallback: string): Promise<boolean> => {
@@ -586,7 +586,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             />
           </div>
         )}
-        {loadError !== null && health?.connected !== false ? (
+        {loadError !== null && health?.available !== false ? (
           <Banner
             tone="danger"
             icon={<AlertCircleIcon size={14} />}
@@ -608,7 +608,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
             activeSessionId={selectedSessionId ?? activeSessionId}
             sessionMarks={sessionMarks}
             expanded={expanded}
-            loading={health === null || (health.connected && !loadedOnce)}
+            loading={health === null || (health.available && !loadedOnce)}
+            /* 实时轮次事实只覆盖当前会话：主区域已经在转圈时，这一行不该还挂在灰点上。 */
+            liveRunningSessionId={
+              runtime !== null && isRunning(runtime) ? runtime.sessionId : null
+            }
             onToggleWorkspace={(id) =>
               setExpanded((current) => ({ ...current, [id]: current[id] !== true }))
             }

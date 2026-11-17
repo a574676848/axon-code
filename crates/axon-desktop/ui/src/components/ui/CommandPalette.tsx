@@ -4,6 +4,7 @@ import { rankCandidateList } from '../../conversation/composerCandidates';
 import { Kbd } from './controls';
 import { Text } from './surfaces';
 import { useExitLifecycle } from './useExitLifecycle';
+import { useFocusTrap } from './useFocusTrap';
 
 /*
  * 命令面板：`Ctrl + K` 与 `Ctrl + F` 的唯一落点。
@@ -56,6 +57,9 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, i
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  /* 与模态同一条焦点纪律：Tab 不越出面板，收起后焦点归还给叫出它的那个位置。 */
+  useFocusTrap(panelRef, open);
 
   const rankable = useMemo<RankableItem[]>(
     () => items.map((item) => ({ ...item, name: item.label })),
@@ -138,10 +142,12 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, i
         aria-hidden="true"
       />
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label="命令面板"
         data-state={lifecycle.state}
+        tabIndex={-1}
         style={{ width: PANEL_WIDTH }}
         className="modal-spring-surface overlay-panel-in relative flex max-w-full flex-col overflow-clip rounded-lg bg-surface shadow-modal hairline border-border"
       >

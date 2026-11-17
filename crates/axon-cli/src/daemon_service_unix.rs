@@ -112,8 +112,11 @@ pub(super) fn install_systemd(exe: &Path, config: &Path, runtime: &Path) -> Resu
     let path = platform_definition_path().ok_or_else(|| "无法解析 systemd 用户目录".to_owned())?;
     fs::create_dir_all(path.parent().unwrap_or_else(|| Path::new(".")))
         .map_err(|error| format!("创建 systemd 用户目录失败: {error}"))?;
-    fs::write(&path, super::systemd_unit(exe, config, runtime))
-        .map_err(|error| format!("写入 systemd unit 失败: {error}"))?;
+    fs::write(
+        &path,
+        super::systemd_unit(exe, config, runtime, &service_environment()),
+    )
+    .map_err(|error| format!("写入 systemd unit 失败: {error}"))?;
     systemctl(&["daemon-reload"])?;
     systemctl(&["enable", super::SERVICE_NAME])?;
     if service_running(runtime) {
@@ -121,6 +124,25 @@ pub(super) fn install_systemd(exe: &Path, config: &Path, runtime: &Path) -> Resu
     } else {
         start(config, runtime)
     }
+}
+
+/// 用户单元必须显式带上安装现场的 `PATH` 与 `SHELL`。
+///
+/// systemd 用户实例只给一份最小环境：交互 shell 里的 `PATH` 扩展（`~/.cargo/bin`、
+/// `~/.local/bin`、版本管理器 shim）与 `SHELL` 都不会被继承。守护进程之下再启动 shell
+/// 工具时会找不到这些命令，缺 `SHELL` 还会退化成 `/bin/sh` 非登录 shell。
+/// 取不到或为空的值一律不写，避免在单元里落一个空变量。
+#[cfg(target_os = "linux")]
+fn service_environment() -> Vec<(String, String)> {
+    ["PATH", "SHELL"]
+        .into_iter()
+        .filter_map(|key| {
+            std::env::var(key)
+                .ok()
+                .filter(|value| !value.is_empty())
+                .map(|value| (key.to_owned(), value))
+        })
+        .collect()
 }
 
 /// 服务定义文件在用户目录下的位置。
@@ -131,10 +153,21 @@ pub(super) fn platform_definition_path() -> Option<PathBuf> {
             .join(format!("{}.plist", super::LAUNCHD_LABEL))
     });
     #[cfg(target_os = "linux")]
-    return std::env::var_os("HOME").map(PathBuf::from).map(|home| {
-        home.join(".config/systemd/user")
-            .join(format!("{}.service", super::SERVICE_NAME))
-    });
+    return systemd_user_unit_dir().map(|dir| dir.join(format!("{}.service", super::SERVICE_NAME)));
+}
+
+/// systemd 用户单元目录。
+///
+/// systemd 只按 `$XDG_CONFIG_HOME/systemd/user` 查找用户单元，未设置该变量时才是
+/// `~/.config/systemd/user`。写死 `~/.config` 会让设置了 `XDG_CONFIG_HOME` 的用户
+/// 装出一份 systemd 永远读不到的服务定义，`systemctl --user start` 报 unit 不存在。
+#[cfg(target_os = "linux")]
+fn systemd_user_unit_dir() -> Option<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .map(|base| base.join("systemd/user"))
 }
 
 /// launchd 的用户域标识：`gui/<uid>`。

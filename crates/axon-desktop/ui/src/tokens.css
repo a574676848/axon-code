@@ -777,6 +777,25 @@ html[data-material] body {
 }
 
 /*
+ * 键盘聚焦兜底环。
+ *
+ * 组件里自带 `focus-visible:outline` 的基元（`Button` / `IconButton`）按类选择器优先，
+ * 不会被这条覆盖；这里接住的是那些直接用 `<button>` 拼出来的行：分段控件的选项、
+ * 菜单项、分页页码、侧栏文字按钮。它们此前只在鼠标上可用，键盘 Tab 过去看不到焦点。
+ *
+ * 取值与通用聚焦环同源：2px `--color-focus`，偏移 1px。偏移取小值是因为这些行常常
+ * 紧贴容器边缘，2px 偏移会被相邻行的描边吃掉。
+ */
+button:focus-visible,
+[role='menuitem']:focus-visible,
+[role='option']:focus-visible,
+[role='tab']:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 1px;
+}
+
+/*
  * 输入坞聚焦内圈：一圈贴着内层核心边缘的焦点线，随输入光标同频呼吸。
  *
  * 只动 `opacity`：线本身是一次性的 inset box-shadow 绘制，呼吸改的是它的透明度，

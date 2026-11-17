@@ -2,6 +2,7 @@ import React, { useContext, useEffect, useRef } from 'react';
 import { CloseIcon } from '../../icons';
 import { Button, IconButton } from './controls';
 import { useExitLifecycle } from './useExitLifecycle';
+import { useFocusTrap } from './useFocusTrap';
 
 /*
  * 模态与对话框：全站浮层的唯一承载实现。
@@ -59,6 +60,11 @@ export const Modal: React.FC<ModalProps> = ({
   const frozen = useRef(children);
   if (open) frozen.current = children;
   const lifecycle = useExitLifecycle(open);
+  /*
+   * 焦点纪律：打开时移进面板、Tab 不越出面板、关闭后归还给打开它的那个控件。
+   * 全站共用 `useFocusTrap` 一处实现，命令面板读同一条规则。
+   */
+  useFocusTrap(dialogRef, open);
 
   useEffect(() => {
     if (!open) return;
@@ -105,6 +111,8 @@ export const Modal: React.FC<ModalProps> = ({
         aria-modal="true"
         aria-label={title}
         data-state={state}
+        /* 面板自身可聚焦：里面一个可聚焦元素都没有时，焦点仍有落点而不是留在背后那一层。 */
+        tabIndex={-1}
         /*
          * `max-h-full` 是硬性约束：外层是 `fixed inset-0` 加内边距的居中容器，
          * 没有它时面板会按内容长高、顶出上下边界（标题被裁掉、列表既看不全也滚不动），

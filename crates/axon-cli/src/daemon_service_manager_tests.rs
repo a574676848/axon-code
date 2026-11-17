@@ -8,9 +8,20 @@ fn service_definitions_enable_restart_and_escape_paths() {
     let plist = launchd_plist(exe, config, runtime);
     assert!(plist.contains("<key>KeepAlive</key><true/>"));
     assert!(plist.contains("Axon &amp; Tool"));
-    let unit = systemd_unit(exe, config, runtime);
+    let unit_path = "/home/tester/.cargo/bin:/usr/local/bin:/usr/bin";
+    let unit = systemd_unit(
+        exe,
+        config,
+        runtime,
+        &[("PATH".to_owned(), unit_path.to_owned())],
+    );
     assert!(unit.contains("Restart=always"));
     assert!(unit.contains("RestartSec=5"));
+    assert!(
+        unit.contains(&format!("Environment=\"PATH={unit_path}\"")),
+        "用户单元必须固化安装时的 PATH：{unit}"
+    );
+    assert!(!unit.contains("SHELL="), "未提供 SHELL 时不得写出空值");
     let launcher = Path::new("C:\\Axon & Tool\\axon-launcher.exe");
     let root = Path::new("C:\\Users\\tester\\.axon");
     let config = root.join("config.toml");
@@ -88,6 +99,29 @@ fn forced_stop_guard_accepts_axon_and_rejects_strangers() {
     ));
     // 不存在的 PID 必须被拒绝，否则 taskkill /T 会带走无关进程树。
     assert!(!super::windows_definition::process_image_is_axon(u32::MAX));
+}
+
+/// 强制结束只允许落在 daemon 本体上：桌面端与 launcher 的映像名同样含 axon。
+#[test]
+fn forced_stop_image_guard_only_accepts_the_daemon() {
+    assert!(super::windows_definition::image_name_is_daemon("axon.exe"));
+    assert!(super::windows_definition::image_name_is_daemon("axon"));
+    // 带盘符的完整路径只在 Windows 上有分隔符语义；POSIX 上反斜杠是普通字符，
+    // 因此这条断言必须按平台门控，否则 Linux 腿会把正常实现判成缺陷。
+    #[cfg(windows)]
+    assert!(super::windows_definition::image_name_is_daemon(
+        r"C:\Users\tester\.axon\bin\versions\0.0.1\axon.exe"
+    ));
+    assert!(!super::windows_definition::image_name_is_daemon(
+        "axon-desktop.exe"
+    ));
+    assert!(!super::windows_definition::image_name_is_daemon(
+        "axon-launcher.exe"
+    ));
+    assert!(!super::windows_definition::image_name_is_daemon(
+        "axon_cli-abc123.exe"
+    ));
+    assert!(!super::windows_definition::image_name_is_daemon(""));
 }
 
 #[test]

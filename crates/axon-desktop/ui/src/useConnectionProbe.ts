@@ -54,8 +54,27 @@ export function useConnectionProbe(): ConnectionProbe {
       if (result.connected) setLastFailure(null);
       connectionRef.current = result.connected;
       setHealth(result);
-    } catch {
-      // 探测本身失败（例如桌面宿主不可用）时保持上一次结论，由界面上的重试接管。
+    } catch (failure) {
+      /*
+       * 探测本身失败（宿主 IPC 不可用、读超时、宿主还没起来）时的两条规矩：
+       * 已经有结论就保留上一份，一次瞬时失败不该推翻它；
+       * 但一次结论都还没有时必须落下结论，否则首屏会永远停在「正在连接 Axon 后台服务」，
+       * 而真正该给的是一张能重试、也会自动重连的不可用舞台。
+       */
+      const message = failure instanceof Error ? failure.message : '无法连接 Axon 后台服务';
+      setHealth((previous) =>
+        previous ?? {
+          connected: false,
+          available: false,
+          consecutive_failures: 0,
+          listening: false,
+          responding: false,
+          target: '',
+          reason: message,
+          actions: [],
+        },
+      );
+      setLastFailure((previous) => previous ?? message);
     } finally {
       probingRef.current = false;
     }
