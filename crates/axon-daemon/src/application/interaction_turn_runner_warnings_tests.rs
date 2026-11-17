@@ -4,11 +4,11 @@ use super::failure_warnings;
 
 #[test]
 fn reads_warnings_from_a_structured_failure_payload() {
-    let message = "运行失败：{\"event\":\"run_failed\",\"warnings\":[\"人格稳定段接近上限（5000 B）\"],\"failure\":{}}";
+    let message = "运行失败：{\"event\":\"run_failed\",\"warnings\":[\"人设未装配：读取 SOUL.md 失败（拒绝访问）\"],\"failure\":{}}";
 
     assert_eq!(
         failure_warnings(message),
-        vec!["人格稳定段接近上限（5000 B）".to_owned()]
+        vec!["人设未装配：读取 SOUL.md 失败（拒绝访问）".to_owned()]
     );
 }
 

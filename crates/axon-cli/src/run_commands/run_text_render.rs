@@ -147,8 +147,14 @@ mod tests {
     #[test]
     fn persona_warnings_are_rendered_as_lines() {
         let mut lines = Vec::new();
-        push_persona_warnings(&mut lines, &["人格稳定段接近上限（5000 B）".to_owned()]);
-        assert_eq!(lines, vec!["告警：人格稳定段接近上限（5000 B）"]);
+        push_persona_warnings(
+            &mut lines,
+            &["人设未装配：读取 SOUL.md 失败（拒绝访问）".to_owned()],
+        );
+        assert_eq!(
+            lines,
+            vec!["告警：人设未装配：读取 SOUL.md 失败（拒绝访问）"]
+        );
     }
 
     #[test]

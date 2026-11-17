@@ -92,7 +92,7 @@ fn load_persona_context_from_root(
     started: Instant,
     budget_ms: u64,
 ) -> Result<PersonaContext, String> {
-    // 合同第 11.6 条：非 trace 级别不执行分段计时，只保留熔断预算所需的一次总计时。
+    // 非 trace 级别不执行分段计时，只保留熔断预算所需的一次总计时。
     let telemetry = first_token_telemetry_enabled();
     let mut soul_read_us = 0;
     let mut soul_parse_us = 0;
@@ -104,7 +104,7 @@ fn load_persona_context_from_root(
         Ok(raw) => raw,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(PersonaContext::empty()),
         Err(error) => {
-            // 权限、编码或 IO 故障只降级，不阻断回合（INV-8）。
+            // 权限、编码或 IO 故障只降级，不阻断回合。
             let mut context = PersonaContext::empty();
             context.warnings.push(format!(
                 "人设未装配：读取 {USER_SOUL_FILE_NAME} 失败（{error}）"
@@ -190,15 +190,16 @@ fn load_persona_context_from_root(
         warnings: state_warnings,
         degraded: false,
     };
-    // 体积承诺必须在装配处兑现：超软门槛预警，超硬上限显式告警（不截断不变量）。
+    // 体积承诺必须在装配处兑现：只写 warning 日志，不进回合告警。体积判定每轮都成立，
+    // 进告警会退化成用户可见的重复噪声。超硬上限表示不变量优先下已无法再收敛。
     if stable_len > 0 && axon_persona::exceeds_hard_limit_len(stable_len) {
-        context.warnings.push(format!(
-            "人格稳定段超出上限（{stable_len} B），已按不变量优先原则保留"
+        axon_logger::warning(&format!(
+            "persona_context: 人格稳定段超出上限（{stable_len} B），已按不变量优先原则保留"
         ));
     } else if stable_len > 0 && axon_persona::exceeds_soft_limit_len(stable_len) {
-        context
-            .warnings
-            .push(format!("人格稳定段接近上限（{stable_len} B）"));
+        axon_logger::warning(&format!(
+            "persona_context: 人格稳定段接近上限（{stable_len} B）"
+        ));
     }
 
     let stable_bytes = context

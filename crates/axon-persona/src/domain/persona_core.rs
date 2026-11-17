@@ -19,7 +19,8 @@ pub struct Identity {
 
 /// 场景规则的条件。
 ///
-/// 只允许 `mode` 与 `audience` 两个键，避免把任意条件塞进人格内核。
+/// 只允许 `mode`、`audience`、`user_affect`、`domain` 与 `fatigue_level` 五个键，
+/// 避免把任意条件塞进人格内核。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RuleCondition {
     /// 命中的模式。

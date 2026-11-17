@@ -98,7 +98,7 @@ fn assembly_over_budget_degrades_and_keeps_the_turn_alive() {
     let root = axon_test_support::test_temp_dir();
     fs::write(root.path().join(USER_SOUL_FILE_NAME), VALID_SOUL).unwrap();
     // 零预算等价于「装配一定超限」：把超预算做成确定输入，而不是靠回拨单调时钟
-    // 去赌真实装配耗时能压住 50 ms 预算（INV-12 的负向验证）。
+    // 去赌真实装配耗时能压住 50 ms 预算（熔断降级的负向验证）。
     let context =
         load_persona_context_from_root(root.path(), scene(), Instant::now(), ZERO_BUDGET_MS)
             .expect("降级不应报错");
@@ -117,9 +117,9 @@ fn assembly_over_budget_degrades_and_keeps_the_turn_alive() {
 }
 
 #[test]
-fn oversized_stable_segment_raises_a_visible_warning() {
+fn oversized_stable_segment_is_logged_but_never_enters_turn_warnings() {
     let root = axon_test_support::test_temp_dir();
-    // 不可违背项按合同不得截断，因此只要它本身超限，稳定段必然超限。
+    // 不可违背项不得截断，因此只要它本身超限，稳定段必然超硬上限。
     let oversized = VALID_SOUL.replace(
         "  - 依据事实作答",
         &format!("  - {}", "不可违背项".repeat(2_000)),
@@ -130,12 +130,10 @@ fn oversized_stable_segment_raises_a_visible_warning() {
         load_persona_context_from_root(root.path(), scene(), Instant::now(), UNBOUNDED_BUDGET_MS)
             .expect("应装配");
 
+    assert!(context.stable.is_some(), "超限照常装配，不阻断回合");
     assert!(
-        context
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("稳定段")),
-        "超限必须有告警：{:?}",
+        context.warnings.is_empty(),
+        "体积判定每轮都成立，只写 warning 日志，不得进用户可见告警：{:?}",
         context.warnings
     );
 }

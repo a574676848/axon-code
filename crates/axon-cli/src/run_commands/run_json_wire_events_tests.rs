@@ -187,7 +187,7 @@ fn wire_builder_uses_receipt_part_id_for_tool_events() {
 #[test]
 fn terminal_lifecycle_carries_persona_warnings_on_both_paths() {
     let warnings = vec![
-        "人格稳定段接近上限（5000 B）".to_owned(),
+        "人设未装配：读取 SOUL.md 失败（拒绝访问）".to_owned(),
         "人格状态未装配：人格库不存在".to_owned(),
     ];
 

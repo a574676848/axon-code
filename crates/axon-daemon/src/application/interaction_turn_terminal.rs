@@ -513,7 +513,7 @@ mod tests {
             r#"{"category":"provider_transport","code":"upstream_503","redactedMessage":"上游返回 503"}"#,
         );
         let (kind, response, report) = classify_turn_failure(&error);
-        let warnings = vec!["人格稳定段接近上限（5000 B）".to_owned()];
+        let warnings = vec!["人设未装配：读取 SOUL.md 失败（拒绝访问）".to_owned()];
         let events = failed_turn_terminal_events(FailedTurnTerminalInput {
             action_id: "action-1",
             action_kind: "user_input",
@@ -534,7 +534,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            emitted.contains("人格稳定段接近上限（5000 B）"),
+            emitted.contains("人设未装配：读取 SOUL.md 失败（拒绝访问）"),
             "失败终态事件必须携带人格告警：{emitted}"
         );
     }

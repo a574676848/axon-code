@@ -561,7 +561,7 @@ mod render_tests {
     #[test]
     fn text_output_renders_persona_warnings() {
         let text = render_projection_output(
-            &projection(vec!["人格稳定段接近上限（5000 B）".to_owned()]),
+            &projection(vec!["人设未装配：读取 SOUL.md 失败（拒绝访问）".to_owned()]),
             OutputFormat::Text,
             false,
         )
@@ -569,7 +569,7 @@ mod render_tests {
 
         assert!(text.contains("完成"));
         assert!(
-            text.contains("告警：人格稳定段接近上限（5000 B）"),
+            text.contains("告警：人设未装配：读取 SOUL.md 失败（拒绝访问）"),
             "{text}"
         );
     }

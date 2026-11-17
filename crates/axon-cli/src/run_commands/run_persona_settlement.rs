@@ -43,7 +43,7 @@ pub(super) fn settle_persona_turn(input: &PersonaSettlementInput<'_>) {
         axon_logger::warning("persona_settlement: 无法解析 Axon 根目录");
         return;
     };
-    // INV-6：群聊轮只读，既不写状态也不发布风格。轮前场景帧优先于披露策略。
+    // 群聊轮只读：既不写状态也不发布风格。轮前场景帧优先于披露策略。
     if !persona_write_allowed(input.disclosure, input.scene_audience) {
         axon_logger::debug("persona_settlement: 非私聊轮只读，跳过结算与发布");
         return;
@@ -120,7 +120,7 @@ pub(super) fn capture_style_candidate(
     let Some(assessment) = assessment else {
         return;
     };
-    // INV-6：群聊轮不采集风格，避免私聊稳定段被群聊内容污染。
+    // 群聊轮不采集风格，避免私聊稳定段被群聊内容污染。
     if disclosure != DisclosurePolicy::PrivateOnly {
         return;
     }
@@ -134,7 +134,7 @@ pub(super) fn capture_style_candidate(
         axon_logger::debug("persona_settlement: style 候选缺少 styleCandidate，忽略");
         return;
     };
-    // 合同第 8.3 条：证据必须引用本轮用户消息，不能用其他引用顶替。
+    // 证据必须引用本轮用户消息，不能用其他引用顶替。
     let Some(evidence_ref) = select_user_evidence(&assessment.evidence_refs, user_message_ref)
     else {
         axon_logger::debug("persona_settlement: style 候选未引用本轮用户消息，忽略");

@@ -5,7 +5,8 @@ use crate::{
     constants::{DYNAMIC_RENDER_MAX_BYTES, STABLE_RENDER_MAX_BYTES},
     domain::{
         persona_core::{Identity, RuleCondition, SceneRule},
-        scene_frame::PersonaMode,
+        persona_state::{FatigueLevel, UserAffect},
+        scene_frame::{Audience, PersonaDomain, PersonaMode},
         voice::{HumorLevel, Verbosity, Voice, VoicePatch},
     },
     infrastructure::StyleEntry,
@@ -82,7 +83,7 @@ fn stable_render_keeps_fixed_section_order() {
 #[test]
 fn invariants_never_disappear_when_budget_is_tight() {
     let mut core = core();
-    core.notes = Some("正文".repeat(4_000));
+    core.notes = Some("正文".repeat(3_000));
     core.invariants = vec!["依据事实作答".to_owned()];
 
     let text = render_stable(&core, &[style_entry(0, "少用寒暄")]);
@@ -95,7 +96,7 @@ fn invariants_never_disappear_when_budget_is_tight() {
 #[test]
 fn learned_style_is_dropped_before_truncation() {
     let styles = (0..40)
-        .map(|index| style_entry(index, &"风格条目".repeat(20)))
+        .map(|index| style_entry(index, &"风格条目".repeat(40)))
         .collect::<Vec<_>>();
 
     let text = render_stable(&core(), &styles);
@@ -164,7 +165,7 @@ fn empty_notes_and_rules_are_not_rendered() {
 fn rules_are_dropped_before_backstory_is_trimmed() {
     let mut core = core();
     core.backstory = "来路".repeat(120);
-    core.rules = (0..200)
+    core.rules = (0..400)
         .map(|_| SceneRule {
             when: RuleCondition {
                 mode: Some(PersonaMode::Incident),
@@ -195,18 +196,48 @@ fn soft_limit_flags_bloat_before_the_hard_cap() {
     assert!(!exceeds_soft_limit(&lean));
 
     let mut bloated = core();
-    bloated.backstory = "来路".repeat(1_500);
+    bloated.backstory = "来路".repeat(2_500);
     let text = render_stable(&bloated, &[]);
 
     assert!(text.len() <= STABLE_RENDER_MAX_BYTES);
-    assert!(exceeds_soft_limit(&text), "越过 4 KiB 即应预警");
+    assert!(exceeds_soft_limit(&text), "越过软门槛即应记 warning");
+}
+
+#[test]
+fn scene_rules_render_every_declared_condition_key() {
+    let mut core = core();
+    core.rules = vec![SceneRule {
+        when: RuleCondition {
+            mode: Some(PersonaMode::Focus),
+            audience: Some(Audience::Group),
+            user_affect: Some(UserAffect::Frustrated),
+            domain: Some(PersonaDomain::Office),
+            fatigue_level: Some(FatigueLevel::High),
+        },
+        voice: VoicePatch {
+            warmth: Some(70),
+            formality: Some(80),
+            humor: Some(HumorLevel::Off),
+            verbosity: Some(Verbosity::Minimal),
+        },
+    }];
+
+    let text = render_stable(&core, &[]);
+
+    // 五个条件键缺一都会让模型读不出规则何时生效，因此逐字断言整行。
+    assert!(
+        text.contains(
+            "- when mode=focus audience=group user_affect=frustrated domain=office fatigue_level=high -> warmth=70 formality=80 humor=off verbosity=minimal"
+        ),
+        "场景规则必须渲染全部条件键：{text}"
+    );
 }
 
 #[test]
 fn dynamic_budget_matches_house_environment_context() {
     assert_eq!(DYNAMIC_RENDER_MAX_BYTES, 1_024);
-    assert_eq!(STABLE_RENDER_SOFT_BYTES, 4_096);
-    assert_eq!(STABLE_RENDER_MAX_BYTES, 6_144);
+    assert_eq!(STABLE_RENDER_SOFT_BYTES, 12_288);
+    assert_eq!(STABLE_RENDER_MAX_BYTES, 16_384);
 }
 
 #[test]

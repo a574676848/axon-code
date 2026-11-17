@@ -9,10 +9,15 @@ pub const SOUL_DOCUMENT_MAX_BYTES: usize = 64 * 1024;
 pub const SOUL_SCHEMA_V1: &str = "axon-soul/v1";
 
 /// 稳定段渲染允许的最大字节数。
-pub const STABLE_RENDER_MAX_BYTES: usize = 6144;
+///
+/// 按 token 口径标定：中文约 1.5 字/token，16 KiB 折合约 3.6k token，与「支持 4k token
+/// 左右」的目标一致。该段属 session-stable 缓存前缀且每轮都进上下文，上限是护栏而非填充目标。
+pub const STABLE_RENDER_MAX_BYTES: usize = 16_384;
 
-/// 稳定段软门槛：越线即预警，硬上限仍是 [STABLE_RENDER_MAX_BYTES]。
-pub const STABLE_RENDER_SOFT_BYTES: usize = 4096;
+/// 稳定段软门槛：越线只在装配处记 warning 日志，硬上限仍是 [STABLE_RENDER_MAX_BYTES]。
+///
+/// 取 12 KiB：中文按一字一 token 保守折算约 4096 token，越线时距硬上限仍留 4 KiB 收敛余量。
+pub const STABLE_RENDER_SOFT_BYTES: usize = 12_288;
 
 /// 动态段渲染允许的最大字节数。
 pub const DYNAMIC_RENDER_MAX_BYTES: usize = 1024;

@@ -45,7 +45,7 @@ pub fn render_stable(core: &PersonaCore, styles: &[StyleEntry]) -> String {
         } else if flags.include_support {
             flags.include_support = false;
         } else {
-            // 只剩 IDENTITY 与 INVARIANTS：按合同不得截断，原样返回并由调用方告警。
+            // 只剩 IDENTITY 与 INVARIANTS：二者不得截断，原样返回并由调用方记日志。
             return text;
         }
     }
@@ -144,6 +144,15 @@ fn rules_text(core: &PersonaCore) -> String {
             if let Some(audience) = rule.when.audience {
                 condition.push(format!("audience={}", audience.as_token()));
             }
+            if let Some(user_affect) = rule.when.user_affect {
+                condition.push(format!("user_affect={}", user_affect.as_token()));
+            }
+            if let Some(domain) = rule.when.domain {
+                condition.push(format!("domain={}", domain.as_token()));
+            }
+            if let Some(fatigue_level) = rule.when.fatigue_level {
+                condition.push(format!("fatigue_level={}", fatigue_level.as_token()));
+            }
             let mut patch = Vec::new();
             if let Some(warmth) = rule.voice.warmth {
                 patch.push(format!("warmth={warmth}"));
@@ -164,7 +173,7 @@ fn rules_text(core: &PersonaCore) -> String {
 }
 /// 渲染动态段正文（不含片段标记）。
 ///
-/// 字段集与合同第 5.6 条一致：模式、表达参数、原因与可选纠偏提示。
+/// 字段集固定为：模式、表达参数、原因与可选纠偏提示。
 #[must_use]
 pub fn render_dynamic(directive: &ExpressionDirective) -> String {
     let mut lines = vec![
