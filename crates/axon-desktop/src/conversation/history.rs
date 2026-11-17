@@ -76,6 +76,9 @@ pub struct InteractionSummary {
     pub status: String,
     /// 来源渠道。
     pub channel: String,
+    /// 发起这一轮的客户端；旧网关缺该字段时为空串。
+    #[serde(default)]
+    pub client: String,
     /// 接收时间（毫秒）。
     pub received_at_ms: u64,
     /// 入站正文。

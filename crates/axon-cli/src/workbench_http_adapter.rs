@@ -117,6 +117,7 @@ pub fn session_interactions_payload(
                     .and_then(|value| value.as_str().map(str::to_owned))
                     .unwrap_or_else(|| "unknown".to_owned()),
                 channel: record.source.channel().to_owned(),
+                client: record.source.client().unwrap_or_default().to_owned(),
                 received_at_ms: record.received_at_ms,
                 content: record.content.clone(),
                 attachments: record.attachments.clone(),

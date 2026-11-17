@@ -98,6 +98,8 @@ pub struct InteractionView {
     pub status: String,
     /// 来源渠道。
     pub channel: String,
+    /// 发起这一轮的客户端；老记录为空串。
+    pub client: String,
     /// 接收时间（毫秒）。
     pub received_at_ms: u64,
     /// 入站正文。会话事件流不含用户消息事件，回放时用户气泡只能由这里还原。

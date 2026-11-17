@@ -148,6 +148,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
         interactionId: string;
         content?: string;
         channel?: string;
+        client?: string;
         attachments?: readonly string[];
       }[],
     ) => {
@@ -155,7 +156,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
         seedsRef.current.set(item.interactionId, {
           text: item.content ?? '',
           attachments: attachmentsFromPaths([...(item.attachments ?? [])]),
-          channel: item.channel ?? '',
+          channel: (item.client ?? '') !== '' ? (item.client ?? '') : (item.channel ?? ''),
         });
       }
     },
