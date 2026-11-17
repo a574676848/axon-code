@@ -43,7 +43,7 @@
 | W2-8 | 已完成（口径修订） | 作业启停与终态有事件落盘、可回放 | `job_runtime/lifecycle.rs` 定义事件与进程级总线，`registry.rs` 在启动与首次终态两处广播；`run_commands/run_job_lifecycle_events.rs` 订阅后写 `job_started` / `job_completed` 并投影 `session_metrics.jobs_running`（会话列表 `openJobCount` 由此有真实来源）。口径修订：临时 Job 是「进程内、单 run」事实源（`job_runtime/mod.rs` 的边界），重启后回放得到的是历史事实，不会让作业复活 |
 | W2-9 | 已完成 | 新库不含 `session_events` 表，直连 SQL 消失 | `crates/axon-session/src/infrastructure/sqlite_runtime_store/schema.rs` 无该表；`cargo test --workspace` 全绿 |
 | W2-10 | 已完成（口径修订） | 分页、cursor 续订、尾部窗口有测试 | `gateway_replay_tests.rs`（分页与续订）+ `sqlite_runtime_store_interaction_tail_tests.rs`（按 Interaction 取尾窗）。口径修订：正文一律内联在事件帧里，「外置正文缺失降级」与 64 MiB 字节预算不再有生产对象，判定为机制随事件面切换而消失，不再保留空判据 |
-| W2-11 | 未开始 | 断网重连后视图与在线态一致（需 CDP 真机证据） | 待 W6-5 真机验收时取证 |
+| W2-11 | 已完成 | 断网重连后视图与在线态一致 | 真机：停掉 daemon 时正文保留、无失败提示；重启后无需手动刷新即恢复，轮次不重复（`记住数字 41` 仅一次）。详见 `device-verification.md` 的 B6/W2-11 段 |
 | W2-12 | 已完成 | `run_rollout_store/**` 与 `rollout.sqlite3` 全仓无引用；`cargo test --workspace` 全绿；`--continue` 可接续；真机 C2/C4/C5 与 X1-X7 取证通过 | 专项计划、进度与门禁证据见 [w2-12-rollout-retirement.md](./w2-12-rollout-retirement.md)。A/B/C/D/E/F 六组全部迁移完成并整删 rollout 模块；离线门禁（fmt/check/clippy/test/verify-architecture/verify-docs）全绿；安装态真机回归已通过：C1 清单单行、C2 指定会话追加、C4 同 cwd 连续两轮带上下文、C5 `resume` 后 `--continue` 接续、C6 `--session` 与指针冲突（见 `device-verification.md`） |
 
 ## W3 控制面与工作项
@@ -72,7 +72,7 @@
 | W4-6 | 已完成 | `run --session` 单次指定，不存在则报错不新建；指定既有会话时真的追加 | `run_session_guard::validate_explicit_session` 与 `explicit_session_tests`（不新建）；真机 C2：取 `sessions list` 里的会话 ID 追加，该会话 `turns` 4→5 且不新增会话行（`device-verification.md`） |
 | W4-7 | 已完成 | `debug session` 子命令全部可用，`axon sessions` 提层 | `crates/axon-cli/src/session_commands/mod.rs`：list/show/read/resume/reset/fork/delete/export/replay/output/doctor 全部接通；会话 ID 与 Thread ID 都由解析层统一处理（`session_resolution`） |
 | W4-8 | 已完成 | 全仓无 `lane_id` 残留 | 仅剩 Win32 `biPlanes` 字段名；`grep -r "lane_id" crates` 零命中 |
-| W4-9 | 未开始 | X1-X7 跨端场景全部有 `OK:` 证据 | 待 W6-5 真机验收时取证 |
+| W4-9 | 进行中 | X1-X7 逐项有真机证据 | 已取证 X1/X2/X5（桌面 + CLI 等价链路）；X6/X7 因「渠道 = 会话表面」与矩阵口径冲突记为不通过，待新增客户端来源字段；X3/X4 待 TUI 侧证据。详见 `device-verification.md` 跨端一节 |
 
 ## W5 文档分层
 
