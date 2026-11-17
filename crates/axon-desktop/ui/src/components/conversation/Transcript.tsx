@@ -31,6 +31,7 @@ import { BUBBLE_RADIUS } from './chatChrome';
 import { DiffStat, DisclosureBody, DisclosureRow } from './DisclosureRow';
 import { FailureCard } from './FailureCard';
 import { ImageLightbox } from './ImageLightbox';
+import { turnChannelLabel } from '../../conversation/channelLabel';
 import { MessageActionButton, MessageFooter } from './MessageFooter';
 import { QuestionCellBlock } from './QuestionCellBlock';
 import { SummaryBlock } from './SummaryBlock';
@@ -75,6 +76,8 @@ const UserBubble: React.FC<{
   carrying?: boolean;
   /** 服务端始终没有认领这条消息；内容还在，可直接重新发送。 */
   undelivered?: boolean;
+  /** 这一轮由哪个渠道发起；历史里逐轮标注来源。 */
+  channel?: string;
 }> = ({
   text,
   atMs,
@@ -82,6 +85,7 @@ const UserBubble: React.FC<{
   pending = false,
   carrying = false,
   undelivered = false,
+  channel,
 }) => {
   const actions = useConversationActions();
   const [copied, setCopied] = React.useState(false);
@@ -137,7 +141,7 @@ const UserBubble: React.FC<{
           <UserText text={text} />
         </div>
       )}
-      <MessageFooter atMs={atMs} align="end">
+      <MessageFooter atMs={atMs} align="end" channel={turnChannelLabel(channel)}>
         <MessageActionButton
           label="复制消息"
           title="复制消息"
@@ -552,6 +556,7 @@ export const TranscriptCellView: React.FC<{
           }
           carrying={cell.requeued === true && cell.undelivered !== true}
           undelivered={cell.undelivered === true}
+          channel={cell.channel}
         />
       );
     case 'assistant':

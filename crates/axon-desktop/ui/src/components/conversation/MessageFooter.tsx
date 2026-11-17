@@ -60,6 +60,8 @@ export interface MessageFooterProps {
   revealActions?: boolean;
   /** 操作按钮；为空时页脚只承载时间。 */
   children?: React.ReactNode;
+  /** 这一轮的来源标签（CLI / 桌面 / TUI）；空串表示没有来源事实。 */
+  channel?: string;
 }
 
 export const MessageFooter: React.FC<MessageFooterProps> = ({
@@ -68,12 +70,16 @@ export const MessageFooter: React.FC<MessageFooterProps> = ({
   status,
   revealActions = false,
   children,
+  channel = '',
 }) => (
   <div
     className={`${MESSAGE_FOOTER_HEIGHT} flex items-center gap-0.5 ${
       align === 'end' ? 'justify-end' : ''
     }`}
   >
+    {channel.length > 0 && (
+      <span className="text-meta text-text-tertiary">来源 {channel}</span>
+    )}
     {atMs !== null && <span className={MESSAGE_TIME_CLASS}>{formatMessageTime(atMs)}</span>}
     {status}
     {children !== undefined && (
