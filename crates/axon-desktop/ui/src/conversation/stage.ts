@@ -37,9 +37,13 @@ export function coverFace(
   slowOpening: boolean,
   hero: boolean,
 ): CoverFace {
-  if (opening) {
-    if (!heldHasTurns) return 'hero';
-    return slowOpening ? 'skeleton' : 'none';
-  }
-  return hero ? 'hero' : 'none';
+  /*
+   * 只有「本来就没有正文」才该看到首屏：还没选会话，或选中的是一条刚建好、空着的会话。
+   *
+   * 打开一条有内容的会话（例如从子代理名册进入子会话）时，上一屏仍然可读，这时候再切
+   * 回首屏就是整块正文闪一下。这类打开一律保持上一屏，只有慢过阈值才用骨架顶上。
+   */
+  if (hero) return 'hero';
+  if (!opening) return 'none';
+  return heldHasTurns && slowOpening ? 'skeleton' : 'none';
 }
