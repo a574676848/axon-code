@@ -66,6 +66,7 @@ Authorization: Bearer <token>
 
 - `sourceChannel`、`eventId`、`observedAtMs`、`expiresAtMs`、`content`、`replyChannel`、`replyDestination` 必填；时间戳为毫秒。
 - `workspaceId` 省略或仅空白时由服务端解析默认 Workspace；显式给出时必须已注册，否则整条事件被拒。
+- `client` 可省略；给出时表示按下发送的一端（`cli`、`desktop`、`tui`、`cron`、`webhook` 或自定入口名）。省略时按 `sourceChannel` 标注：会话历史逐轮显示的就是这个值，因此第三方 webhook 的事件显示为它自己的渠道名，不会冒充桌面或 CLI。
 - `localFiles` 为本地附件的绝对路径数组，可省略。
 - `model` 可省略；给出时表示这一轮显式使用该模型（引用已配置模型的 `name` 或 `id`）。它优先于会话记录的模型与 `agent.default_model`，空白值按未指定处理。桌面工作台在输入坞改过模型时才填它。
 - `reasoningEffort` 可省略；给出时表示这一轮显式使用该思考强度（`none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`），优先于 `agent.reasoning_effort`，空白值按未指定处理。它与 `model` 同源同生命周期：只作用于该轮，不写回配置，桌面工作台与 TUI 在会话内改过档位时才填它。

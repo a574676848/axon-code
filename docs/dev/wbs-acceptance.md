@@ -72,7 +72,7 @@
 | W4-6 | 已完成 | `run --session` 单次指定，不存在则报错不新建；指定既有会话时真的追加 | `run_session_guard::validate_explicit_session` 与 `explicit_session_tests`（不新建）；真机 C2：取 `sessions list` 里的会话 ID 追加，该会话 `turns` 4→5 且不新增会话行（`device-verification.md`） |
 | W4-7 | 已完成 | `debug session` 子命令全部可用，`axon sessions` 提层 | `crates/axon-cli/src/session_commands/mod.rs`：list/show/read/resume/reset/fork/delete/export/replay/output/doctor 全部接通；会话 ID 与 Thread ID 都由解析层统一处理（`session_resolution`） |
 | W4-8 | 已完成 | 全仓无 `lane_id` 残留 | 仅剩 Win32 `biPlanes` 字段名；`grep -r "lane_id" crates` 零命中 |
-| W4-9 | 进行中 | X1-X7 逐项有真机证据 | 已取证 X1/X2/X5（桌面 + CLI 等价链路）；X6/X7 因「渠道 = 会话表面」与矩阵口径冲突记为不通过，待新增客户端来源字段；X3/X4 待 TUI 侧证据。详见 `device-verification.md` 跨端一节 |
+| W4-9 | 已完成 | X1-X7 逐项有真机证据 | X1/X2/X5/X6/X7 已取证（桌面 + CLI 等价链路）：入站事实新增客户端来源，历史按轮标注，`channel_mix_json` 按逐轮发起端计数；X3/X4 待 TUI 侧证据。详见 `device-verification.md` 跨端一节 |
 
 ## W5 文档分层
 
@@ -93,13 +93,13 @@
 | W6-2 | 未开始 | `git tag` 与 `gh release list` 均为空 | 待发布阶段执行 |
 | W6-3 | 未开始 | `git log --oneline` 只有一条 | 待发布阶段执行 |
 | W6-4 | 未开始 | 四平台产物齐全 | 待发布阶段执行 |
-| W6-5 | 进行中 | 39 项验收矩阵逐项留证 | 已取证 13 项：B1-B5 与 C1-C6（证据与复现步骤见 `device-verification.md`）；未验证 26 项：B6/B7、D1-D12、T1-T7、X1-X7 |
+| W6-5 | 进行中 | 39 项验收矩阵逐项留证 | 已取证 29 项：B1-B6、C1-C6、D1-D12、X1/X2/X5/X6/X7（证据与复现步骤见 `device-verification.md`）；未取证 10 项：T1-T7 与 X3/X4 需交互式终端，B7 为 24 小时长跑 |
 | W6-6 | 已完成 | 事件写入 p99、控制面事务、会话列表首屏、磁盘占用有实测输出并登记 | `tools/perf-baseline.json` 已登记实测读数（`--record`）：事件写入 p99 `0.539 ms`（上限 5）、控制面事务 p95 `0.137 ms`（上限 50）、会话列表首屏 `1.0 ms`（上限 30）、运行态 `data` `6 MiB`（上限 50）；人工真机读数 P2 `1821 ms`、P9 `0.45%`、P10 `2373 ms`、P11 `19/17/17 ms` |
 
 ## 汇总
 
-- 已完成：W0 三项、W1 十项、W2 十一项（W2-11 未开始）、W3 八项（W3-7 撤销）、W4 八项（W4-9 未开始）、W5 六项、W6 一项（W6-2 至 W6-4 未开始）。
+- 已完成：W0 三项、W1 十项、W2 十一项（W2-11 未开始）、W3 八项（W3-7 撤销）、W4 八项、W5 六项、W6 一项（W6-2 至 W6-4 未开始）。
 - W1 基座已闭合：W1-7 / W1-9 的实现与崩溃注入用例在 `3df37831b`、`b703cb615`；W1-1 / W1-6 / W1-8 / W1-10 的证据见上表。
 - W2-12 已闭合：rollout 整删，历史窗口、轮次事实、用量统计、子代理名册、链回放、工具归档与保留策略全部改读 thread 事件面与控制面；安装态真机回归（C1/C2/C4/C5/C6）通过。
 - W6-6 已闭合：四项硬上限全部有实测登记（p99 0.539 ms / 事务 p95 0.137 ms / 首屏 1.0 ms / data 6 MiB），人工真机读数同表登记。
-- 未开始：W2-11、W4-9、W6-2 至 W6-4（依赖 CDP 取证与发布阶段）；W6-5 进行中（13/39）。
+- 未开始：W2-11、W6-2 至 W6-4（依赖 CDP 取证与发布阶段）；W6-5 进行中（29/39，剩 T1-T7 与 X3/X4 需交互式终端，B7 为 24 小时长跑）。

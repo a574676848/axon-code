@@ -12,6 +12,7 @@ test('已知渠道给出界面标签', () => {
     assert.equal(turnChannelLabel('desktop'), '桌面');
     assert.equal(turnChannelLabel('tui'), 'TUI');
     assert.equal(turnChannelLabel('cron'), '定时');
+    assert.equal(turnChannelLabel('webhook'), 'Webhook');
     assert.equal(turnChannelLabel('goal'), '目标执行');
 });
 

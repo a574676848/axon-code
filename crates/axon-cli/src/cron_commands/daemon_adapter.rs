@@ -16,7 +16,10 @@ use axon_protocol::{DaemonCommand, DaemonRequest, SubmitInteractionRequest};
 use axon_session::WorkspaceResolver;
 
 use crate::{
-    cron_commands::{CRON_WAKE_SOURCE_PREFIX, CronExecutionAdapter, execute_local_cron_agent},
+    cron_commands::{
+        CRON_WAKE_SOURCE_PREFIX, CronExecutionAdapter, execute_local_cron_agent,
+        wake_client_for_channel,
+    },
     runtime_paths::daemon_endpoint_for_root,
 };
 
@@ -112,8 +115,10 @@ impl CronDaemonAdapter {
             sha256_hex_prefix(identity.as_bytes(), 20)
         ))
         .map_err(|error| error.to_string())?;
+        let client = wake_client_for_channel(channel);
         let source =
             InteractionSource::new(channel, format!("{CRON_WAKE_SOURCE_PREFIX}{identity}"))
+                .and_then(|source| source.with_client(client))
                 .map_err(|error| error.to_string())?;
         let scope = ScopeRef::workspace(workspace_id).map_err(|error| error.to_string())?;
         let route = ReplyRoute::new(channel, destination).map_err(|error| error.to_string())?;

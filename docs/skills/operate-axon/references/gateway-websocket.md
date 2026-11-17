@@ -50,6 +50,7 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
 
 订阅目标语义：
 
+- `submit` 帧不携带客户端字段：这一轮的来源按 `sourceChannel` 标注，会话历史里逐轮显示的就是它，因此外部入口不会冒充桌面或 CLI。
 - 给出 `sessionId` 时按**会话级**订阅处理，此时 `interactionId` 被忽略。
 - 会话级订阅接受两类会话：
   - **子代理会话**，会话标识形如 `parent--subagent--root`；其中的 `parent` 是父的**运行会话标识**，不是车道标识。

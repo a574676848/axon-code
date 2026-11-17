@@ -30,6 +30,16 @@ import {
   type ConversationState,
 } from './transcript';
 import type { SessionTokenBaseline } from './sessionUsage';
+
+/**
+ * 一轮的来源：逐轮客户端优先，缺省回落到渠道。
+ *
+ * 索引轮与回放轮必须用同一份判据，否则同一条会话里两种轮次会给出两套来源口径。
+ */
+function historySource(item: { channel?: string; client?: string }): string {
+  const client = item.client ?? '';
+  return client !== '' ? client : (item.channel ?? '');
+}
 import type { ConversationStreamEvent } from './wire';
 import type { SessionEffectiveModel } from './viewConfig';
 
@@ -156,7 +166,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
         seedsRef.current.set(item.interactionId, {
           text: item.content ?? '',
           attachments: attachmentsFromPaths([...(item.attachments ?? [])]),
-          channel: (item.client ?? '') !== '' ? (item.client ?? '') : (item.channel ?? ''),
+          channel: historySource(item),
         });
       }
     },
@@ -216,7 +226,9 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
        */
       const newest = page.interactions[page.interactions.length - 1];
       if (newest === undefined) return [];
-      const indexed = page.interactions.slice(0, -1).map(indexedTurn);
+      const indexed = page.interactions
+        .slice(0, -1)
+        .map((item) => indexedTurn({ ...item, channel: historySource(item) }));
       if (indexed.length > 0) dispatch({ type: 'prepend-turns', turns: indexed });
       return [newest.interactionId];
     },

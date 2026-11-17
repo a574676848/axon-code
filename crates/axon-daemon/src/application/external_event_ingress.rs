@@ -304,9 +304,10 @@ where
             event.source_channel.clone(),
             format!("{EXTERNAL_EVENT_SOURCE_PREFIX}{digest}"),
         )
-        .and_then(|source| match event.client.as_deref() {
-            Some(client) if !client.trim().is_empty() => source.with_client(client),
-            _ => Ok(source),
+        .and_then(|source| match event.client.as_deref().map(str::trim) {
+            Some(client) if !client.is_empty() => source.with_client(client),
+            // 外部事件没有人类发送端：缺省按渠道本身标注，webhook 渠道即 client=webhook。
+            _ => source.with_client(event.source_channel.trim()),
         })
         .map_err(|error| ExternalEventIngressError::InvalidInput(error.to_string()))?;
         let interaction_id =
@@ -456,6 +457,23 @@ mod tests {
                 .as_str()
                 .starts_with(EXTERNAL_EVENT_INTERACTION_PREFIX)
         );
+    }
+
+    #[test]
+    fn webhook_event_without_explicit_client_is_attributed_to_the_channel() {
+        let directory = axon_test_support::test_temp_dir();
+        let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+        let adapter = ingress(store.clone());
+        let mut webhook = event("workspace-a");
+        webhook.source_channel = "webhook".to_owned();
+        webhook.reply_channel = "webhook".to_owned();
+
+        adapter.submit(webhook).expect("提交 webhook 事件");
+
+        let leases = store
+            .claim_processing(10, NOW_MS, LEASE_MS)
+            .expect("读取 Interaction");
+        assert_eq!(leases[0].interaction.source.client(), Some("webhook"));
     }
 
     #[test]

@@ -48,6 +48,15 @@ test('索引轮形态：用户气泡、过程控件、最终答案', () => {
     assert.equal(answer.atMs, null, '索引不含回答时间：不拿提问时间冒充');
 });
 
+test('索引轮带出逐轮来源：跨端续聊的历史轮同样说得出是谁发起的', () => {
+    assert.equal(indexedTurn(entry({ channel: 'cli' })).cells[0].channel, 'cli');
+    assert.equal(
+        indexedTurn(entry({ interactionId: 'b' })).cells[0].channel,
+        undefined,
+        '索引里没有来源事实时不写占位，气泡页脚自然不显示来源',
+    );
+});
+
 test('纯问答轮不立过程控件：没有思考也没有工具就没有可折的过程', () => {
     const turn = indexedTurn(entry({ toolSummary: '', elapsedMs: 1_200 }));
     assert.deepEqual(

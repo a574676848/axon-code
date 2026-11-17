@@ -35,7 +35,7 @@
 | D9 | 导航条 | 通过 | 置顶后该会话排到首位且 `sessions.pinned=1`；取消置顶后顺序恢复 |
 | D10 | header 指标 | 通过 | `session_metrics` 行（`turn_count=5`、`total_active_ms=19926`、`channel_mix_json`）与 header 的轮次、耗时、token 读数同源；TTFT 与速率取本轮实测 |
 | D11 | 归档会话 | 通过 | 归档后该会话从默认列表消失；`axon sessions list --all` 仍能找回并标注 `[已归档]` |
-| D12 | 来源渠道可见 | 通过（语义按会话表面） | 每轮用户气泡页脚标注「来源 CLI / 桌面」；值是**会话表面的渠道**，不是发起客户端。同一车道被 CLI 续聊时，该轮仍记为该车道的渠道（见 X6/X7） |
+| D12 | 来源渠道可见 | 通过 | 每轮用户气泡页脚标注「来源 桌面 / 来源 CLI / 来源 定时」，取该轮的**发起客户端**；同一条桌面车道被 CLI 续聊时，续聊那一轮标「来源 CLI」（实测见 X6/X7） |
 
 ## CLI 会话（C1 至 C6）
 
@@ -59,8 +59,8 @@
 | X3 | 两端同时在线，一端发消息 | 未真机验证 | 需要 TUI 与会话级实时帧双端观测，本环境无交互终端 |
 | X4 | 一端中断会话 | 未真机验证 | 同上；桌面侧中断入口已渲染，未取得双端对照证据 |
 | X5 | 一端新建会话 | 通过（桌面 ↔ CLI） | 桌面新建后 `axon sessions list` 立即可见新会话行 |
-| X6 | 不同渠道发起的轮次标注各自来源 | **不通过（口径冲突，待裁决）** | 当前「渠道」是会话表面的属性：同一车道被 CLI 续聊时，该轮仍记为该车道的渠道（实测 `channel_mix_json` 仍为 `{"desktop":4}`）。矩阵要求的「同会话内 desktop/tui 混合来源」在当前设计下不成立 |
-| X7 | 同一会话跨渠道续聊并混合计数 | **不通过（同上）** | 实测：桌面会话追加一轮 CLI 后 `turn_count=4`，但 `channel_mix_json` 仍为 `{"desktop":4}`，没有出现 `{"desktop":3,"cli":1}` |
+| X6 | 不同渠道发起的轮次标注各自来源 | 通过（桌面 ↔ CLI） | 同一条桌面车道：第一轮在桌面发出，第二轮用 `axon run --session <会话 ID>` 续聊。`inbox` 两行的 `source_channel` 都是 `desktop`，`client` 分别是 `desktop` 与 `cli`；桌面历史同一屏里两个气泡页脚依次是「来源 桌面」「来源 CLI」（CDP 回执：`工作区 \|\| 当前 \|\| 来源 桌面 \|\| 12:20 \|\| 来源 CLI \|\| 12:21 \|\| …`）。更早的索引轮同样带来源：此前只有最新一轮有标注，已在 `indexedTurn` 补齐 |
+| X7 | 同一会话跨渠道续聊并混合计数 | 通过（同 X6） | 该会话 `session_metrics` 为 `turn_count=2`、`channel_mix_json={"cli":1,"desktop":1}`；另一条纯 CLI 车道的会话为 `{"cli":1}`。计数键是**逐轮发起端**，同一条桌面车道出现两种来源即证明跨端续聊已按轮计入 |
 
 ## TUI（T1 至 T7）
 
@@ -88,4 +88,5 @@
 - 源码安装走 `scripts/install-from-source.ps1 -Components all`（当前唯一合规入口）。脚本会静默提权、重建版本树并拉起一次 Daemon 与桌面端；验证前已全部终止。
 - 该次 Daemon 启动会向真实 `$HOME/.axon` 追加运行态写入；已删除其留下的 `data/daemon.pid`，真实 `config.toml` 哈希未变，真实数据未删除。
 - 验证期间桌面端以 `--remote-debugging-port=9333` 启动，验证结束必须清掉该环境变量与调试端口。
+- X6/X7 取证那次只改了 `crates/axon-desktop/ui/**`，按纯前端快速通道重装：`npm run build` → `cargo build --release --locked -p axon-desktop`（`Finished 'release' profile ... in 2m 07s`）→ 覆盖 `versions/0.0.1/axon-desktop.exe`（12:36:45，与 `target/release` 的 SHA-256 一致，`current.json` 未变）→ 经安装根 `axon.cmd desktop` 重启。任何 Rust 侧改动都不适用这条通道。
 - 临时验证根 `$env:TEMP/axon-verify-rt` 保留供下一轮取证；其中含真实 `.mcp.json` 的副本（含本机 key），收尾时需一并清理。

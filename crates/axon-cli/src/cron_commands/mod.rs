@@ -28,7 +28,7 @@ pub(crate) use application::{
 };
 pub(crate) use execution::{
     CRON_AGENT_CHANNEL, CRON_AGENT_DESTINATION_PREFIX, CronExecutionAdapter,
-    execute_local_cron_agent, local_cron_session_key,
+    execute_local_cron_agent, local_cron_session_key, wake_client_for_channel,
 };
 pub(crate) use tick::{execute_and_persist, run_due_cron_jobs};
 pub(crate) use wake::{CRON_WAKE_SOURCE_PREFIX, parse_wake};

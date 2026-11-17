@@ -11,6 +11,7 @@ const CHANNEL_LABELS: Record<string, string> = {
   desktop: '桌面',
   tui: 'TUI',
   cron: '定时',
+  webhook: 'Webhook',
   goal: '目标执行',
   internal: '内部',
 };

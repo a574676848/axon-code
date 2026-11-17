@@ -10,7 +10,7 @@ use super::{
 };
 use crate::{
     cron_commands::{run_session_cleanup, run_session_cleanup_once},
-    run_commands::{execute_daemon_interaction, interaction_from_prompt},
+    run_commands::{execute_daemon_interaction, prepare_interaction_from_prompt_as},
     runtime_memory_consolidation::run_memory_consolidation_once,
     usage_statistics::{
         PRICING_SYNC_CRON_SCRIPT, USAGE_ROLLUP_CRON_SCRIPT, run_pricing_sync_once,
@@ -20,6 +20,22 @@ use crate::{
 
 pub(crate) const CRON_AGENT_DESTINATION_PREFIX: &str = axon_domain::CRON_SESSION_DESTINATION_PREFIX;
 pub(crate) const CRON_AGENT_CHANNEL: &str = axon_domain::desktop_session_channel();
+/// Cron 按下发送的一端：车道仍走桌面车道，逐轮来源标注为 `cron`。
+pub(crate) const CRON_AGENT_CLIENT: &str = "cron";
+/// Webhook 车道的来源标注：该渠道没有人类发送端，客户端即渠道本身。
+pub(crate) const WEBHOOK_SESSION_CHANNEL: &str = "webhook";
+
+/// 唤醒回合的客户端标注。
+///
+/// 唤醒回合由 Cron 发起，因此默认归 `cron`；但 webhook 车道没有人类发送端，
+/// 标注 `cron` 会让人误以为结果是 Cron 自己的输入，此时取渠道本身。
+pub(crate) fn wake_client_for_channel(channel: &str) -> &'static str {
+    if channel.trim() == WEBHOOK_SESSION_CHANNEL {
+        WEBHOOK_SESSION_CHANNEL
+    } else {
+        CRON_AGENT_CLIENT
+    }
+}
 const CRON_POWERSHELL_UTF8_PREAMBLE: &str = "$utf8 = [System.Text.UTF8Encoding]::new($false); [Console]::OutputEncoding = $utf8; $OutputEncoding = $utf8;";
 const CRON_AGENT_POLICY: &str = "这是用户级 Agent Cron 定时任务。必须遵守：不得创建、修改、暂停、恢复或删除任何 cron 任务；不得请求交互式澄清；配置、凭证或投递目标缺失时必须失败闭环并说明原因。";
 
@@ -57,13 +73,15 @@ pub(crate) fn execute_local_cron_agent(
     prompt: &str,
 ) -> Result<String, String> {
     let cwd = job.workdir.as_deref().map(Path::new).unwrap_or(axon_root);
-    let interaction = interaction_from_prompt(
+    let interaction = prepare_interaction_from_prompt_as(
         CRON_AGENT_CHANNEL,
         &local_cron_session_key(job),
         prompt,
         cwd,
         axon_time::unix_now_ms(),
-    )?;
+        Some(CRON_AGENT_CLIENT),
+    )?
+    .interaction;
     let output =
         execute_daemon_interaction(interaction, cwd, Some(config_path), None, &|| false, None)?;
     Ok(output.response)
@@ -298,6 +316,16 @@ mod tests {
         assert!(!run.delivery_enqueued);
         assert!(run.dispatch_id.is_none());
         assert!(adapter.turns.lock().expect("回合锁应可用").is_empty());
+    }
+
+    #[test]
+    fn wake_turn_client_is_cron_except_for_webhook_lanes() {
+        assert_eq!(wake_client_for_channel("desktop"), CRON_AGENT_CLIENT);
+        assert_eq!(wake_client_for_channel("cli"), CRON_AGENT_CLIENT);
+        assert_eq!(
+            wake_client_for_channel(" webhook "),
+            WEBHOOK_SESSION_CHANNEL
+        );
     }
 
     #[test]

@@ -501,14 +501,16 @@ enum TurnOrigin { External, Cron, Goal, Subagent }
 
 渠道属于轮次，不属于会话。第一轮在桌面发起、后续在 TUI 继续，是同一个 `session_id` 下两条 `turn_metrics`：`origin_channel` 分别为 `desktop` 与 `tui`。`sessions` 表没有渠道列，也不应该有——一旦把渠道写进会话，就等于把 §4.13 的裁决又推翻回去。
 
-会话级的渠道分布由 `session_metrics.channel_mix_json` 维护，纯展示与聚合用途，可由 `turn_metrics` 重放重建：
+会话级的来源分布由 `session_metrics.channel_mix_json` 维护，纯展示与聚合用途，可由 `turn_metrics` 重放重建。键是**逐轮的发起端**：入站事实记下了客户端（`client`）就用它，缺省回落到渠道，两者都没有时记 `internal`：
 
 ```json
 {
-  "desktop": { "turns": 3, "inputTokens": 12000, "outputTokens": 3400 },
-  "tui":     { "turns": 2, "inputTokens":  8000, "outputTokens": 2100 }
+  "desktop": 3,
+  "cli": 1
 }
 ```
+
+因此同一条桌面车道被 CLI 续聊之后，这张表会同时出现 `desktop` 与 `cli` 两个键：渠道属于会话表面，来源属于每一轮。
 
 
 ### 4.11.1 turn_metrics 的生产链
@@ -1552,8 +1554,8 @@ pwsh -File scripts/install-from-source.ps1 -Components all
 | X3 | 两端同时在线，一端发消息 | 另一端实时收到增量，无需刷新 |
 | X4 | 一端中断会话 | 另一端看到中断状态与终态 |
 | X5 | 一端新建会话 | 另一端在 `/sessions` 或左侧菜单能看到新条目 |
-| X6 | 不同渠道发起的轮次 | TUI 发起的一轮在桌面端显示来源为 tui，反之 desktop；cron 触发的一轮不显示为任何外部渠道 |
-| X7 | 同一会话跨渠道续聊 | 桌面先聊两轮后，TUI 载入同一会话再聊一轮；历史里三轮分别标 desktop / desktop / tui，`channel_mix_json` 为 `{"desktop":{"turns":2},"tui":{"turns":1}}` |
+| X6 | 不同渠道发起的轮次 | 每一轮按**发起端**标注来源：TUI 发起的一轮在桌面端显示 tui，反之 desktop；cron 发起的一轮标注「定时」，webhook 车道的一轮标注「Webhook」，都不冒充任何人类入口 |
+| X7 | 同一会话跨渠道续聊 | 桌面先聊两轮后，CLI 载入同一会话再聊一轮；历史里三轮分别标 desktop / desktop / cli，`channel_mix_json` 为 `{"desktop":2,"cli":1}` |
 
 记录方式：每条场景留 CDP `OK:` 行或 TUI 快照；未取得真机证据的条目如实登记"未真机验证"，不得用测试覆盖替代。
 

@@ -365,6 +365,13 @@ export interface IndexedTurnEntry {
   interactionId: string;
   /** 入站正文。 */
   content?: string;
+  /**
+   * 这一轮的发起客户端（缺省时由调用方回落到渠道）。
+   *
+   * 来源是**逐轮**的事实：同一条车道可能先由桌面发起、再由 CLI 续聊，索引轮同样要
+   * 标出各自是谁发起的，否则跨端续聊之后只有最新一轮看起来有来源。
+   */
+  channel?: string;
   /** 入站时落地的本地附件绝对路径。 */
   attachments?: readonly string[];
   receivedAtMs: number;
@@ -398,6 +405,7 @@ export function indexedTurn(entry: IndexedTurnEntry): TurnState {
       text,
       atMs: entry.receivedAtMs,
       attachments,
+      channel: entry.channel,
     });
   }
   /*

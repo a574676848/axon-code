@@ -21,29 +21,6 @@ pub(crate) struct PreparedInteraction {
     pub(crate) workspace: WorkspaceRecord,
 }
 
-/// 从入口文本构造统一 Interaction envelope。
-pub(crate) fn interaction_from_prompt(
-    channel: &str,
-    destination: &str,
-    prompt: &str,
-    cwd: &Path,
-    now_ms: u64,
-) -> Result<InteractionRecord, String> {
-    prepare_interaction_from_prompt(channel, destination, prompt, cwd, now_ms)
-        .map(|prepared| prepared.interaction)
-}
-
-/// 从入口文本构造 Interaction，并保留同次解析得到的 Workspace。
-pub(crate) fn prepare_interaction_from_prompt(
-    channel: &str,
-    destination: &str,
-    prompt: &str,
-    cwd: &Path,
-    now_ms: u64,
-) -> Result<PreparedInteraction, String> {
-    prepare_interaction_from_prompt_as(channel, destination, prompt, cwd, now_ms, None)
-}
-
 /// 带客户端来源的构造函数。
 ///
 /// `channel` 是会话表面的渠道（决定车道与投递路由），`client` 是按下发送的那一端
@@ -158,10 +135,23 @@ fn interaction_store(config_path: Option<&Path>) -> Result<SqliteRuntimeStore, S
 
 #[cfg(test)]
 mod tests {
-    use super::{conversation_session_run_session_id, interaction_from_prompt, interaction_store};
+    use super::{
+        conversation_session_run_session_id, interaction_store, prepare_interaction_from_prompt_as,
+    };
 
     use crate::run_commands::{CLI_INTERACTION_CHANNEL, cli_reply_destination};
     use axon_session::RuntimeStore;
+
+    fn interaction_from_prompt(
+        channel: &str,
+        destination: &str,
+        prompt: &str,
+        cwd: &std::path::Path,
+        now_ms: u64,
+    ) -> Result<axon_domain::InteractionRecord, String> {
+        prepare_interaction_from_prompt_as(channel, destination, prompt, cwd, now_ms, None)
+            .map(|prepared| prepared.interaction)
+    }
 
     #[test]
     fn cli_envelope_uses_a_process_scoped_terminal_route() {
