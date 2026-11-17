@@ -29,7 +29,7 @@ const TERMINAL_REJECTED: &str = "rejected";
 /// 终态：进程中断。
 const TERMINAL_INTERRUPTED: &str = "interrupted";
 const SELECT_INTERACTION_ID_EXISTS: &str = "SELECT 1 FROM inbox WHERE interaction_id=?1";
-const INSERT_INTERACTION: &str = "INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,received_at_ms,updated_at_ms,attachments_json,model,reasoning_effort,session_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?8,?9,?10,?11,?12)";
+const INSERT_INTERACTION: &str = "INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,received_at_ms,updated_at_ms,attachments_json,model,reasoning_effort,session_id,client) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?8,?9,?10,?11,?12,?13)";
 /// session 排他领取候选：没有工作项、或工作项已释放的那些；所属 session 当前不得有在途工作项。
 const SELECT_CLAIMABLE_INTERACTIONS: &str = "SELECT queued.interaction_id,queued.received_at_ms \
      FROM inbox AS queued \
@@ -319,6 +319,8 @@ fn insert_interaction(
                 interaction.reasoning_effort.as_deref(),
                 // session 是主 turn 排他领取的事实源；未绑定 Workspace 的输入统一落在空 session。
                 interaction_session_id(interaction).unwrap_or_default(),
+                // 客户端来源：与车道渠道分开记，逐轮标注与跨端混合统计读它。
+                interaction.source.client().unwrap_or_default(),
             ],
         )
         .map(|_| ())

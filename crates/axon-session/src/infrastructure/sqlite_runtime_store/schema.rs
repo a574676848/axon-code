@@ -29,7 +29,7 @@ impl SchemaKind {
     /// 不做补列、不做回填。
     const fn version(self) -> i64 {
         match self {
-            Self::Control => 5,
+            Self::Control => 6,
             Self::Outbox => 1,
         }
     }
@@ -236,6 +236,7 @@ const CONTROL_DDL: &str = "
         CREATE TABLE IF NOT EXISTS inbox (
             interaction_id TEXT PRIMARY KEY NOT NULL,
             source_channel TEXT NOT NULL,
+            client TEXT NOT NULL DEFAULT '',
             source_message_id TEXT NOT NULL,
             scope_json TEXT NOT NULL,
             audience_json TEXT NOT NULL,

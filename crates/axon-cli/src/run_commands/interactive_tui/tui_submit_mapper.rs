@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::run_commands::{PreparedInteraction, prepare_interaction_from_prompt};
+use crate::run_commands::{PreparedInteraction, prepare_interaction_from_prompt_as};
 use axon_tui_runtime::{
     AgentTuiInputElement, AgentTuiInputElementKind, AgentTuiInputResult, AgentTuiQueuedAction,
     AgentTuiSubmit,
@@ -40,8 +40,14 @@ pub(super) fn interaction_from_tui_submit(
     if content.trim().is_empty() {
         return Ok(None);
     }
-    let mut prepared =
-        prepare_interaction_from_prompt(TUI_CHANNEL, reply_destination, &content, cwd, now_ms)?;
+    let mut prepared = prepare_interaction_from_prompt_as(
+        TUI_CHANNEL,
+        reply_destination,
+        &content,
+        cwd,
+        now_ms,
+        Some("tui"),
+    )?;
     // 附件与占位符绑定：图片在同一提示里会被 Provider 作为视觉输入内联，
     // 其他文件只提供只读引用路径，正文不进入提示词。
     prepared.interaction.attachments = attachment_paths(submission);

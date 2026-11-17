@@ -41,14 +41,34 @@ pub(crate) fn prepare_interaction_from_prompt(
     cwd: &Path,
     now_ms: u64,
 ) -> Result<PreparedInteraction, String> {
+    prepare_interaction_from_prompt_as(channel, destination, prompt, cwd, now_ms, None)
+}
+
+/// 带客户端来源的构造函数。
+///
+/// `channel` 是会话表面的渠道（决定车道与投递路由），`client` 是按下发送的那一端
+/// （cli / desktop / tui / cron）。跨端续聊时两者不同，逐轮来源标注读 `client`。
+pub(crate) fn prepare_interaction_from_prompt_as(
+    channel: &str,
+    destination: &str,
+    prompt: &str,
+    cwd: &Path,
+    now_ms: u64,
+    client: Option<&str>,
+) -> Result<PreparedInteraction, String> {
     let workspace = WorkspaceResolver
         .resolve(cwd, now_ms)
         .map_err(|error| error.to_string())?;
     let interaction_uuid = Uuid::new_v4().to_string();
     let interaction_id = InteractionId::new(format!("{INTERACTION_ID_PREFIX}{interaction_uuid}"))
         .map_err(|error| error.to_string())?;
-    let source =
+    let mut source =
         InteractionSource::new(channel, interaction_uuid).map_err(|error| error.to_string())?;
+    if let Some(client) = client {
+        source = source
+            .with_client(client)
+            .map_err(|error| error.to_string())?;
+    }
     let scope =
         ScopeRef::workspace(workspace.workspace_id.clone()).map_err(|error| error.to_string())?;
     let interaction = InteractionRecord::new(

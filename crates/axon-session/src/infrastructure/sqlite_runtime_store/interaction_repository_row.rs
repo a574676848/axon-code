@@ -25,6 +25,13 @@ pub(super) fn read_record(row: &Row<'_>) -> rusqlite::Result<InteractionRecord> 
         InteractionId::new(row.get::<_, String>(0)?).map_err(|_| rusqlite::Error::InvalidQuery)?;
     let source = InteractionSource::new(row.get::<_, String>(1)?, row.get::<_, String>(2)?)
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    // 客户端来源在列尾：没有客户端事实的老行是空串，按「未知」处理。
+    let source = match row.get::<_, Option<String>>(12)? {
+        Some(client) if !client.trim().is_empty() => source
+            .with_client(client)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        _ => source,
+    };
     let scope = serde_json::from_str(&row.get::<_, String>(3)?)
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
     let audience = serde_json::from_str(&row.get::<_, String>(4)?)

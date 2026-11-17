@@ -82,6 +82,13 @@ impl InteractionId {
 pub struct InteractionSource {
     channel: String,
     source_message_id: String,
+    /// 发起这一轮的客户端（cli / desktop / tui / cron）。
+    ///
+    /// 与 `channel` 分工不同：`channel` 是会话表面的渠道（决定车道与投递路由），
+    /// 客户端是「谁按下的发送」。同一车道被另一端的客户端续聊时两者会分叉，
+    /// 逐轮来源标注与跨端混合统计都读这个字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    client: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for InteractionSource {
@@ -93,10 +100,18 @@ impl<'de> Deserialize<'de> for InteractionSource {
         struct InteractionSourceData {
             channel: String,
             source_message_id: String,
+            #[serde(default)]
+            client: Option<String>,
         }
 
         let data = InteractionSourceData::deserialize(deserializer)?;
-        Self::new(data.channel, data.source_message_id).map_err(D::Error::custom)
+        let source = Self::new(data.channel, data.source_message_id).map_err(D::Error::custom)?;
+        match data.client {
+            Some(client) if !client.trim().is_empty() => {
+                source.with_client(client).map_err(D::Error::custom)
+            }
+            _ => Ok(source),
+        }
     }
 }
 
@@ -111,6 +126,7 @@ impl InteractionSource {
         Ok(Self {
             channel,
             source_message_id,
+            client: None,
         })
     }
 
@@ -118,6 +134,19 @@ impl InteractionSource {
     #[must_use]
     pub fn channel(&self) -> &str {
         &self.channel
+    }
+
+    /// 记下发起这一轮的客户端；空值视为没有客户端事实。
+    pub fn with_client(mut self, client: impl Into<String>) -> Result<Self, InteractionError> {
+        let client = validate_field(client.into(), "client")?;
+        self.client = Some(client);
+        Ok(self)
+    }
+
+    /// 返回发起这一轮的客户端；没有客户端事实时为 `None`。
+    #[must_use]
+    pub fn client(&self) -> Option<&str> {
+        self.client.as_deref()
     }
 
     /// 返回来源消息幂等键。

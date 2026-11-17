@@ -262,7 +262,7 @@ fn interaction_channel(
     let connection = store.connection()?;
     connection
         .query_row(
-            "SELECT source_channel FROM inbox WHERE interaction_id=?1",
+            "SELECT CASE WHEN TRIM(client)='' THEN source_channel ELSE client END FROM inbox WHERE interaction_id=?1",
             params![interaction_id],
             |row| row.get::<_, String>(0),
         )

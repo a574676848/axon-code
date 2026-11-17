@@ -116,7 +116,7 @@ pub(crate) use daemon_interaction_submission::{
     submit_daemon_interaction, submit_prepared_daemon_interaction,
 };
 pub(crate) use interaction_adapter::{
-    PreparedInteraction, interaction_from_prompt, prepare_interaction_from_prompt,
+    PreparedInteraction, interaction_from_prompt, prepare_interaction_from_prompt_as,
     register_workspace, register_workspace_record,
 };
 #[cfg(feature = "tui")]
@@ -195,16 +195,19 @@ pub(crate) fn run_cli_daemon_interaction(
             Ok(surface) => surface,
             Err(error) => return cli_error(&error),
         };
-        let interaction = match interaction_from_prompt(
-            &surface.channel,
-            &surface.destination,
-            &command.prompt,
-            &cwd,
-            axon_time::unix_now_ms(),
-        ) {
-            Ok(interaction) => interaction,
-            Err(error) => return cli_error(error),
-        };
+        let prepared =
+            match crate::run_commands::interaction_adapter::prepare_interaction_from_prompt_as(
+                &surface.channel,
+                &surface.destination,
+                &command.prompt,
+                &cwd,
+                axon_time::unix_now_ms(),
+                Some("cli"),
+            ) {
+                Ok(prepared) => prepared,
+                Err(error) => return cli_error(error),
+            };
+        let interaction = prepared.interaction;
         if let Some(target) = surface.session_id.as_deref()
             && axon_session::interaction_session_id(&interaction).as_deref() != Some(target)
         {
