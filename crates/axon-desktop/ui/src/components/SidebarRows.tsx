@@ -261,7 +261,6 @@ export const SessionRow: React.FC<SessionRowProps> = ({
           event.preventDefault();
           onSelect();
         }}
-        title={`渠道 ${session.channel} · 目标 ${session.destination || '未指定'} · 共 ${session.interaction_count} 条会话`}
         className={`${ROW_STATE} focus-ring-soft ${rowTone(selected)} h-9 pr-1 cursor-pointer select-none ${
           dragging ? 'opacity-40' : ''
         }`}
@@ -495,7 +494,7 @@ export const WorkspaceRow: React.FC<WorkspaceRowProps> = ({
             <FolderIcon size={14} />
           </span>
         </span>
-        <Text size="row" strong truncate title={workspace.path} className="flex-1 min-w-0">
+        <Text size="row" strong truncate className="flex-1 min-w-0">
           {workspace.name}
         </Text>
 

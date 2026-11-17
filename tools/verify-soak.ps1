@@ -114,6 +114,6 @@ $report = [ordered]@{
     working_set_mb_peak = ($samples | Measure-Object -Property working_set_mb -Maximum).Maximum
     evidence = $OutFile
 }
-$summaryPath = Join-Path $RuntimeRoot 'soak-summary.json'
+$summaryPath = Join-Path (Split-Path -Parent $OutFile) 'soak-summary.json'
 $report | ConvertTo-Json | Set-Content -LiteralPath $summaryPath -Encoding utf8
 $report | ConvertTo-Json
