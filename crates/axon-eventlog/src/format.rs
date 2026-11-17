@@ -159,85 +159,101 @@ pub fn scan_source_frames<S: FrameSource>(source: &mut S) -> Result<FrameScan, E
     let mut frames = Vec::new();
     let mut cursor = 0usize;
     while cursor < total {
-        let start = cursor;
-        let magic = source.read_range(cursor, ZSTD_MAGIC.len())?;
-        if magic.len() < ZSTD_MAGIC.len() {
-            return Ok(torn_scan(frames, start));
-        }
-        if magic != ZSTD_MAGIC {
-            return Err(EventLogError::Corrupt(format!("帧魔数无效，偏移 {cursor}")));
-        }
-        cursor += ZSTD_MAGIC.len();
-
-        let descriptor_bytes = source.read_range(cursor, 1)?;
-        let Some(&descriptor) = descriptor_bytes.first() else {
-            return Ok(torn_scan(frames, start));
+        let Some(span) = step_frame(source, cursor, total)? else {
+            return Ok(torn_scan(frames, cursor));
         };
-        cursor += 1;
-        if descriptor & 0b0001_1000 != 0 {
-            return Err(EventLogError::Corrupt(format!(
-                "帧头保留位非零，偏移 {start}"
-            )));
-        }
-        let content_size_flag = descriptor >> 6;
-        let single_segment = descriptor & 0b0010_0000 != 0;
-        let checksum_flag = descriptor & 0b0000_0100 != 0;
-        let dictionary_flag = descriptor & 0b0000_0011;
-        let dictionary_bytes = if dictionary_flag == 3 {
-            4
-        } else {
-            usize::from(dictionary_flag)
-        };
-        let content_size_bytes = if content_size_flag == 0 {
-            usize::from(single_segment)
-        } else {
-            1usize << content_size_flag
-        };
-        let skip = dictionary_bytes + content_size_bytes + usize::from(!single_segment);
-        if total - cursor < skip {
-            return Ok(torn_scan(frames, start));
-        }
-        cursor += skip;
-
-        loop {
-            if total - cursor < 3 {
-                return Ok(torn_scan(frames, start));
-            }
-            let block_header = source.read_range(cursor, 3)?;
-            let [first, second, third] = match block_header.as_slice() {
-                [first, second, third] => [*first, *second, *third],
-                _ => return Ok(torn_scan(frames, start)),
-            };
-            let header = u32::from(first) | (u32::from(second) << 8) | (u32::from(third) << 16);
-            cursor += 3;
-            let last_block = header & 1 == 1;
-            let block_type = (header >> 1) & 0b11;
-            let block_size = (header >> 3) as usize;
-            if block_type == 0b11 {
-                return Err(EventLogError::Corrupt(format!("保留块类型，偏移 {cursor}")));
-            }
-            let payload = if block_type == 0b01 { 1 } else { block_size };
-            if total - cursor < payload {
-                return Ok(torn_scan(frames, start));
-            }
-            cursor += payload;
-            if last_block {
-                break;
-            }
-        }
-
-        if checksum_flag {
-            if total - cursor < 4 {
-                return Ok(torn_scan(frames, start));
-            }
-            cursor += 4;
-        }
-        frames.push(FrameSpan { start, end: cursor });
+        cursor = span.end;
+        frames.push(span);
     }
     Ok(FrameScan {
         frames,
         torn_start: None,
     })
+}
+
+/// 从 `start` 起解析一帧，返回它的字节区间；尾段不足一帧时返回 `None`。
+///
+/// 索引把起点帧定位到字节偏移后，读路径靠它逐帧前进：只解析需要的那几帧，
+/// 不必先把整条日志的帧结构扫一遍。
+pub(crate) fn step_frame<S: FrameSource>(
+    source: &mut S,
+    start: usize,
+    total: usize,
+) -> Result<Option<FrameSpan>, EventLogError> {
+    let mut cursor = start;
+    let magic = source.read_range(cursor, ZSTD_MAGIC.len())?;
+    if magic.len() < ZSTD_MAGIC.len() {
+        return Ok(None);
+    }
+    if magic != ZSTD_MAGIC {
+        return Err(EventLogError::Corrupt(format!("帧魔数无效，偏移 {cursor}")));
+    }
+    cursor += ZSTD_MAGIC.len();
+
+    let descriptor_bytes = source.read_range(cursor, 1)?;
+    let Some(&descriptor) = descriptor_bytes.first() else {
+        return Ok(None);
+    };
+    cursor += 1;
+    if descriptor & 0b0001_1000 != 0 {
+        return Err(EventLogError::Corrupt(format!(
+            "帧头保留位非零，偏移 {start}"
+        )));
+    }
+    let content_size_flag = descriptor >> 6;
+    let single_segment = descriptor & 0b0010_0000 != 0;
+    let checksum_flag = descriptor & 0b0000_0100 != 0;
+    let dictionary_flag = descriptor & 0b0000_0011;
+    let dictionary_bytes = if dictionary_flag == 3 {
+        4
+    } else {
+        usize::from(dictionary_flag)
+    };
+    let content_size_bytes = if content_size_flag == 0 {
+        usize::from(single_segment)
+    } else {
+        1usize << content_size_flag
+    };
+    let skip = dictionary_bytes + content_size_bytes + usize::from(!single_segment);
+    if total - cursor < skip {
+        return Ok(None);
+    }
+    cursor += skip;
+
+    loop {
+        if total - cursor < 3 {
+            return Ok(None);
+        }
+        let block_header = source.read_range(cursor, 3)?;
+        let [first, second, third] = match block_header.as_slice() {
+            [first, second, third] => [*first, *second, *third],
+            _ => return Ok(None),
+        };
+        let header = u32::from(first) | (u32::from(second) << 8) | (u32::from(third) << 16);
+        cursor += 3;
+        let last_block = header & 1 == 1;
+        let block_type = (header >> 1) & 0b11;
+        let block_size = (header >> 3) as usize;
+        if block_type == 0b11 {
+            return Err(EventLogError::Corrupt(format!("保留块类型，偏移 {cursor}")));
+        }
+        let payload = if block_type == 0b01 { 1 } else { block_size };
+        if total - cursor < payload {
+            return Ok(None);
+        }
+        cursor += payload;
+        if last_block {
+            break;
+        }
+    }
+
+    if checksum_flag {
+        if total - cursor < 4 {
+            return Ok(None);
+        }
+        cursor += 4;
+    }
+    Ok(Some(FrameSpan { start, end: cursor }))
 }
 
 fn torn_scan(frames: Vec<FrameSpan>, start: usize) -> FrameScan {

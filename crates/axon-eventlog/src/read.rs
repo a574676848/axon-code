@@ -4,8 +4,9 @@ use std::path::Path;
 
 use crate::error::EventLogError;
 use crate::format::{
-    FrameSpan, HEADER_FRAME_INDEX, Header, decode_frame, scan_file_frames, scan_frames,
+    FrameSpan, HEADER_FRAME_INDEX, Header, decode_frame, scan_file_frames, scan_frames, step_frame,
 };
+use crate::index;
 use crate::record::RuntimeEventRecord;
 
 /// 一次完整读取的结果。
@@ -70,11 +71,11 @@ pub fn read_snapshot(path: &Path) -> Result<EventLogSnapshot, EventLogError> {
 pub struct EventLogReader {
     snapshot: EventLogSnapshot,
 }
-/// 读取序号严格大于 `after` 的至多 `limit` 条事件，只解压必要的尾部帧。
+/// 读取序号严格大于 `after` 的至多 `limit` 条事件。
 ///
-/// 与 [`read_snapshot`] 的区别是**既不整文件入内存，也不做全量解压**：帧结构扫描
-/// 走 [`scan_file_frames`]，只读帧头与块头；解压只针对从尾部倒推覆盖 `after` 的那几帧。
-/// 日志越大收益越明显，分页 replay 每翻一页都从尾部重新定位，不随历史线性变慢。
+/// 有索引时二分到起点帧后只解压需要的帧；没有索引（冷启、旧日志、索引落后）时从
+/// 首帧单趟顺序解压并跳过起点之前的部分。两条路径都是单趟，不会为翻一页把整条
+/// 日志重复解压。
 pub fn read_after(
     path: &Path,
     after: u64,
@@ -83,54 +84,58 @@ pub fn read_after(
     if limit == 0 {
         return Ok(Vec::new());
     }
+    let Some(len) = log_len(path)? else {
+        return Ok(Vec::new());
+    };
     let mut file = std::fs::File::open(path)?;
-    let scan = scan_file_frames(&mut file)?;
-    let frames: Vec<FrameSpan> = scan
-        .frames
-        .iter()
-        .skip(HEADER_FRAME_INDEX + 1)
-        .copied()
-        .collect();
-    // 先把最后一帧的末条序号作为快路径：`after` 已越过全部记录时直接返回空。
-    if let Some(last_span) = frames.last() {
-        let records = frame_records(&mut file, last_span)?;
-        if records.last().is_none_or(|record| record.sequence <= after) {
-            return Ok(Vec::new());
+    let start = index::load(path, len)
+        .and_then(|index| index.locate(after))
+        .map_or(0, |entry| entry.offset);
+    collect_after(&mut file, start, len, after, limit)
+}
+
+/// 从 `start` 起顺序读取并收集序号大于 `after` 的事件。
+fn collect_after(
+    file: &mut std::fs::File,
+    start: u64,
+    total: u64,
+    after: u64,
+    limit: usize,
+) -> Result<Vec<RuntimeEventRecord>, EventLogError> {
+    let total = usize::try_from(total).unwrap_or(usize::MAX);
+    let mut cursor = usize::try_from(start).unwrap_or(0);
+    // 从文件起点开始时，第一帧是 header 帧：它只有一行 header，不是事件记录。
+    let mut skip_header = cursor == 0;
+    // 上限只为挡住调用方传入的极端值，不预分配 `limit` 条（可能是 usize::MAX）。
+    let mut collected: Vec<RuntimeEventRecord> = Vec::with_capacity(limit.min(1024));
+    while cursor < total {
+        let Some(span) = step_frame(file, cursor, total)? else {
+            break;
+        };
+        cursor = span.end;
+        if skip_header {
+            skip_header = false;
+            continue;
         }
-    }
-    // 再从尾部倒推定位「包含 after 的那一帧」，从那一帧往后顺序解压；
-    // 没有任何一帧的第一条序号 <= after 时，说明 after 落在日志起点之前，从头开始。
-    //
-    // 帧内序号单调递增，因此「首条序号 <= after」对帧下标成立单调性：二分即可定位
-    // 最后一个候选起点帧。线性倒推会把从尾部到 after 之间的每一帧都解压一遍，
-    // 读一次从头的历史页就等于把整条日志解压一次。
-    let mut begin = 0usize;
-    let mut low = 0usize;
-    let mut high = frames.len();
-    while low < high {
-        let middle = low + (high - low) / 2;
-        let first = frame_records(&mut file, &frames[middle])?
-            .first()
-            .map(|record| record.sequence);
-        if first.is_some_and(|sequence| sequence <= after) {
-            begin = middle;
-            low = middle + 1;
-        } else {
-            high = middle;
-        }
-    }
-    let mut collected: Vec<RuntimeEventRecord> = Vec::with_capacity(limit);
-    for span in frames.iter().skip(begin) {
-        for record in frame_records(&mut file, span)? {
+        for record in frame_records(file, &span)? {
             if record.sequence > after {
                 collected.push(record);
-            }
-            if collected.len() >= limit {
-                return Ok(collected);
+                if collected.len() >= limit {
+                    return Ok(collected);
+                }
             }
         }
     }
     Ok(collected)
+}
+
+/// 日志文件长度；文件不存在时返回 `None`。
+fn log_len(path: &Path) -> Result<Option<u64>, EventLogError> {
+    match std::fs::metadata(path) {
+        Ok(meta) => Ok(Some(meta.len())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// 从尾部倒推读取满足谓词的最后 `limit` 条事件，只解压必要的尾部帧。
@@ -145,7 +150,32 @@ where
     if limit == 0 {
         return Ok(Vec::new());
     }
+    let Some(len) = log_len(path)? else {
+        return Ok(Vec::new());
+    };
     let mut file = std::fs::File::open(path)?;
+    let mut matched: Vec<RuntimeEventRecord> = Vec::new();
+    // 有索引时按条目倒着解压，连帧结构扫描都省掉。
+    if let Some(index) = index::load(path, len) {
+        for entry in index.entries().iter().rev() {
+            if matched.len() >= limit {
+                break;
+            }
+            let (Ok(start), Ok(end)) =
+                (usize::try_from(entry.offset), usize::try_from(entry.end()))
+            else {
+                break;
+            };
+            let span = FrameSpan { start, end };
+            push_matches(
+                &mut matched,
+                frame_records(&mut file, &span)?,
+                &predicate,
+                limit,
+            );
+        }
+        return Ok(matched);
+    }
     let scan = scan_file_frames(&mut file)?;
     let frames: Vec<FrameSpan> = scan
         .frames
@@ -153,27 +183,77 @@ where
         .skip(HEADER_FRAME_INDEX + 1)
         .copied()
         .collect();
-    let mut matched: Vec<RuntimeEventRecord> = Vec::new();
     for span in frames.iter().rev() {
         if matched.len() >= limit {
             break;
         }
-        let tail: Vec<RuntimeEventRecord> = frame_records(&mut file, span)?
-            .into_iter()
-            .filter(|record| predicate(record))
-            .collect();
-        for record in tail.into_iter().rev() {
-            matched.insert(0, record);
-        }
-    }
-    if matched.len() > limit {
-        matched.drain(..matched.len() - limit);
+        push_matches(
+            &mut matched,
+            frame_records(&mut file, span)?,
+            &predicate,
+            limit,
+        );
     }
     Ok(matched)
 }
 
+/// 把一帧里命中谓词的事件按原序并入 `matched`，保持尾部窗口语义。
+fn push_matches<F>(
+    matched: &mut Vec<RuntimeEventRecord>,
+    records: Vec<RuntimeEventRecord>,
+    predicate: &F,
+    limit: usize,
+) where
+    F: Fn(&RuntimeEventRecord) -> bool,
+{
+    let hits: Vec<RuntimeEventRecord> = records
+        .into_iter()
+        .filter(|record| predicate(record))
+        .collect();
+    for record in hits.into_iter().rev() {
+        matched.insert(0, record);
+    }
+    if matched.len() > limit {
+        matched.drain(..matched.len() - limit);
+    }
+}
+
+/// 读取落盘末条事件；日志不存在或没有完整帧时返回 `None`。
+///
+/// 会话恢复与写入补偿只要这一条事实：有索引时只解压末帧，不必为拿尾记录把整条
+/// 日志解一遍。
+pub fn read_tail_record(path: &Path) -> Result<Option<RuntimeEventRecord>, EventLogError> {
+    let Some(len) = log_len(path)? else {
+        return Ok(None);
+    };
+    let mut file = std::fs::File::open(path)?;
+    if let Some(entry) = index::load(path, len).and_then(|index| index.last()) {
+        let (Ok(start), Ok(end)) = (usize::try_from(entry.offset), usize::try_from(entry.end()))
+        else {
+            return Ok(None);
+        };
+        let span = FrameSpan { start, end };
+        return Ok(frame_records(&mut file, &span)?.pop());
+    }
+    let scan = scan_file_frames(&mut file)?;
+    let Some(span) = scan.frames.iter().skip(HEADER_FRAME_INDEX + 1).next_back() else {
+        return Ok(None);
+    };
+    Ok(frame_records(&mut file, span)?.pop())
+}
+
+/// 解出 header 帧：必须恰好一行，且版本受支持。
+pub(crate) fn decode_header_frame(bytes: &[u8]) -> Option<Header> {
+    let plain = decode_frame(bytes).ok()?;
+    let newlines = plain.iter().filter(|byte| **byte == b'\n').count();
+    if newlines != 1 {
+        return None;
+    }
+    Header::decode_line(&plain).ok()
+}
+
 /// 读出并解压单帧：只把这一帧的字节搬进内存。
-fn frame_records(
+pub(crate) fn frame_records(
     file: &mut std::fs::File,
     span: &FrameSpan,
 ) -> Result<Vec<RuntimeEventRecord>, EventLogError> {

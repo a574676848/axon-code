@@ -152,6 +152,9 @@ pub(super) fn interaction_tail_window(
 /// 事件面真正落盘的末条序号与 generation；日志不存在或没有完整帧时返回 `None`。
 ///
 /// 撕裂尾不算已落盘：它会被写侧截断，水位不该跟着它走。
+///
+/// 只解压末帧：恢复路径要给每个待恢复会话核对水位，逐会话全量解压会把一次恢复
+/// 放大成「会话数 × 日志大小」的读放大。
 pub(super) fn durable_tail(
     store: &SqliteRuntimeStore,
     session_id: &DaemonSessionId,
@@ -160,11 +163,8 @@ pub(super) fn durable_tail(
     if !path.is_file() {
         return Ok(None);
     }
-    let reader = axon_eventlog::EventLogReader::open(&path).map_err(log_error)?;
-    Ok(reader
-        .records()
-        .last()
-        .map(|record| (record.sequence, record.generation.clone())))
+    let tail = axon_eventlog::read_tail_record(&path).map_err(log_error)?;
+    Ok(tail.map(|record| (record.sequence, record.generation.clone())))
 }
 
 /// 事件面写入失败后的水位补偿：把控制面水位退回落盘尾。

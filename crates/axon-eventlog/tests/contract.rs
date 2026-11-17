@@ -371,6 +371,26 @@ fn lazy_paged_read_stays_bounded_on_long_logs() {
     }
     println!("eventlog_head frames={FRAMES} page={head_ms}ms full={full_ms}ms 门槛=30ms");
     assert!(head_ms < 30, "从头部取页超出 30ms 门槛：{head_ms}ms");
+
+    // 连续翻页：页数变多不能带来重复的整条日志扫描（索引缺失时的退化路径也一样）。
+    let paging_started = std::time::Instant::now();
+    let mut after = 0_u64;
+    let mut pages = 0_u32;
+    while pages < 20 {
+        let page = axon_eventlog::read_after(&log.path(), after, 100).expect("翻页");
+        if page.is_empty() {
+            break;
+        }
+        pages = pages.saturating_add(1);
+        after = page.last().map(|record| record.sequence).unwrap_or(after);
+    }
+    let paging_ms = paging_started.elapsed().as_millis();
+    println!("eventlog_paging pages={pages} total={paging_ms}ms 门槛=400ms");
+    assert_eq!(pages, 20, "2000 帧 × 10 条应能翻满 20 页");
+    assert!(
+        paging_ms < 400,
+        "连续翻页总耗时超出 400ms 门槛：{paging_ms}ms"
+    );
 }
 
 #[test]

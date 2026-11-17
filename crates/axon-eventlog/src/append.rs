@@ -8,9 +8,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::EventLog;
 use crate::error::EventLogError;
 use crate::format::{Header, encode_frame, scan_frames, tail_ends_on_frame_boundary};
+use crate::index::{self, FrameIndexEntry};
 use crate::lock::ExclusiveLock;
-use crate::read::read_snapshot;
 use crate::record::RuntimeEventRecord;
+
+/// 索引维护走同目录的 `append_index.rs`：打开既有日志时靠它免掉全量解压。
+#[path = "append_index.rs"]
+mod append_index;
+use append_index::{ensure as ensure_index, restore_metadata};
 
 /// 尾部自检窗口：正常日志只需解码最后一帧就能确认停在帧边界。
 ///
@@ -23,13 +28,18 @@ const TAIL_SCAN_WINDOW_BYTES: u64 = 1 << 20;
 /// 持有期间对同一日志保持跨进程独占。每次 `append_batch` 只做一次顺序写与一次
 /// `fsync`；写失败时把文件截回写入前长度，避免留下半帧。
 ///
-/// 两个细节：
+/// 三个细节：
 /// - 日志文件延迟到首次写入才创建，避免"打开写句柄后崩溃"留下 0 字节文件；
-/// - 打开时若发现上次崩溃留下的不完整尾帧，先截断并持久化，再接受新的追加。
+/// - 打开时若发现上次崩溃留下的不完整尾帧，先截断并持久化，再接受新的追加；
+/// - 每追加一帧同步维护旁挂帧索引，读路径据此二分定位起点帧（见 [`crate::index`]）。
 #[derive(Debug)]
 pub struct EventLogWriter {
     path: PathBuf,
     file: Option<File>,
+    index_file: Option<File>,
+    index_bytes: u64,
+    /// 索引不可用（打不开或走不下去）：只影响读侧快慢，不影响事件落盘。
+    index_disabled: bool,
     _lock: ExclusiveLock,
     header: Header,
     next_sequence: u64,
@@ -44,42 +54,14 @@ impl EventLogWriter {
         let lock = ExclusiveLock::acquire(&lock_path)?;
 
         let (header, next_sequence, header_written, bytes_len) = if path.exists() {
-            let fresh = || (Header::new(log.session_id(), now_ms(), None), 0, false, 0);
-            let snapshot = match read_snapshot(&path) {
-                Ok(snapshot) => snapshot,
-                // 连第一个完整帧都没有时读到的是「半帧头」：这不是损坏数据，
-                // 而是崩溃在写 header 的中途。整段截掉重新开始，避免日志永久不可写。
-                Err(error) => {
-                    let len = std::fs::metadata(&path)?.len();
-                    if repair_torn_tail(&path, len)? == 0 {
-                        return Ok(Self {
-                            path,
-                            file: None,
-                            _lock: lock,
-                            header: fresh().0,
-                            next_sequence: 0,
-                            header_written: false,
-                            bytes_len: 0,
-                        });
-                    }
-                    return Err(error);
-                }
-            };
-            let mut committed = std::fs::metadata(&path)?.len();
-            if let Some(torn_at) = snapshot.torn_truncate_to {
-                let repaired = u64::try_from(torn_at).unwrap_or(committed);
-                let handle = OpenOptions::new().write(true).open(&path)?;
-                handle.set_len(repaired)?;
-                handle.sync_data()?;
-                committed = repaired;
+            let committed = repair_torn_tail(&path, std::fs::metadata(&path)?.len())?;
+            if committed == 0 {
+                // 连第一个完整帧都没有：崩溃发生在写 header 的中途，整段重来。
+                (Header::new(log.session_id(), now_ms(), None), 0, false, 0)
+            } else {
+                let (header, next_sequence) = restore_metadata(&path, committed)?;
+                (header, next_sequence, true, committed)
             }
-            let last = snapshot.records.last().map(|record| record.sequence);
-            (
-                snapshot.header,
-                last.map_or(0, |sequence| sequence + 1),
-                true,
-                committed,
-            )
         } else {
             (Header::new(log.session_id(), now_ms(), None), 0, false, 0)
         };
@@ -87,6 +69,9 @@ impl EventLogWriter {
         Ok(Self {
             path,
             file: None,
+            index_file: None,
+            index_bytes: 0,
+            index_disabled: false,
             _lock: lock,
             header,
             next_sequence,
@@ -126,10 +111,11 @@ impl EventLogWriter {
         }
 
         let before = self.bytes_len;
+        let index_before = self.index_bytes;
         if !self.header_written {
             let frame = encode_frame(&self.header.encode_line()?)?;
-            if let Err(error) = self.write_frame(&frame) {
-                self.rollback(before);
+            if let Err(error) = self.write_frame(&frame, None) {
+                self.rollback(before, index_before);
                 return Err(error);
             }
             self.header_written = true;
@@ -141,8 +127,10 @@ impl EventLogWriter {
             plain.push(b'\n');
         }
         let frame = encode_frame(&plain)?;
-        if let Err(error) = self.write_frame(&frame) {
-            self.rollback(before);
+        // 该帧首条事件的序号：索引按它二分，让读路径直接落在这一帧上。
+        let first_sequence = events.first().map(|event| event.sequence);
+        if let Err(error) = self.write_frame(&frame, first_sequence) {
+            self.rollback(before, index_before);
             return Err(error);
         }
 
@@ -150,18 +138,51 @@ impl EventLogWriter {
         Ok(expected.saturating_sub(1))
     }
 
-    fn write_frame(&mut self, frame: &[u8]) -> Result<(), EventLogError> {
-        let file = self.ensure_file()?;
-        file.write_all(frame)?;
-        file.flush()?;
-        file.sync_data()?;
-        let written = u64::try_from(frame.len()).unwrap_or(u64::MAX);
-        self.bytes_len = self.bytes_len.saturating_add(written);
+    /// 顺序写一帧；`first_sequence` 非空时同步维护旁挂索引。
+    ///
+    /// 顺序固定为「帧 → 索引条目 → 索引覆盖长度」，因此崩溃只会让索引落后于日志。
+    fn write_frame(
+        &mut self,
+        frame: &[u8],
+        first_sequence: Option<u64>,
+    ) -> Result<(), EventLogError> {
+        let written = u64::try_from(frame.len())
+            .map_err(|_| EventLogError::Corrupt("单帧超过可寻址长度".to_owned()))?;
+        let offset = self.bytes_len;
+        let covered = offset.saturating_add(written);
+        self.ensure_files(first_sequence.is_some())?;
+        if let Some(file) = self.file.as_mut() {
+            file.write_all(frame)?;
+            file.flush()?;
+            file.sync_data()?;
+        }
+        if let Some(first_sequence) = first_sequence {
+            let len = u32::try_from(written).map_err(|_| {
+                EventLogError::Corrupt(format!("单帧长度超出索引可表示范围：{written} 字节"))
+            })?;
+            let mut index_bytes = self.index_bytes;
+            if let Some(index_file) = self.index_file.as_mut() {
+                // 索引是派生数据：只交给操作系统，不为它多付一次 `fsync`。崩溃后
+                // 覆盖长度与日志对不上，下一次打开按日志重建即可。
+                index::append(
+                    index_file,
+                    &mut index_bytes,
+                    FrameIndexEntry {
+                        first_sequence,
+                        offset,
+                        len,
+                    },
+                    covered,
+                )?;
+            }
+            self.index_bytes = index_bytes;
+        }
+        self.bytes_len = covered;
         Ok(())
     }
 
     /// 首次写入时才落文件，未写入的日志在磁盘上不存在。
-    fn ensure_file(&mut self) -> Result<&mut File, EventLogError> {
+    fn ensure_files(&mut self, need_index: bool) -> Result<(), EventLogError> {
         if self.file.is_none() {
             if let Some(parent) = self.path.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -173,18 +194,38 @@ impl EventLogWriter {
                 .open(&self.path)?;
             self.file = Some(file);
         }
-        self.file
-            .as_mut()
-            .ok_or_else(|| EventLogError::Io(std::io::Error::other("写句柄未就绪")))
+        if need_index && self.index_file.is_none() && !self.index_disabled {
+            let path = index::index_path(&self.path);
+            // 索引是派生数据：打不开就退化为「没有索引」，绝不因此挡住事件落盘。
+            match OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(&path)
+            {
+                Ok(file) => {
+                    self.index_bytes = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+                    self.index_file = Some(file);
+                }
+                Err(_) => self.index_disabled = true,
+            }
+        }
+        Ok(())
     }
 
-    /// 把文件截回写入前长度；截断失败时不掩盖原始错误。
-    fn rollback(&mut self, before: u64) {
+    /// 把日志与索引截回写入前长度；截断失败时不掩盖原始错误。
+    fn rollback(&mut self, before: u64, index_before: u64) {
         if let Some(file) = self.file.as_ref() {
             let _ = file.set_len(before);
             let _ = file.sync_data();
         }
+        if let Some(index_file) = self.index_file.as_ref() {
+            let _ = index_file.set_len(index_before);
+            let _ = index_file.sync_data();
+        }
         self.bytes_len = before;
+        self.index_bytes = index_before;
     }
 }
 
@@ -214,6 +255,7 @@ impl EventLogWriter {
         let (bytes_len, header_written) = if path.exists() {
             let len = std::fs::metadata(&path)?.len();
             let repaired = repair_torn_tail(&path, len)?;
+            ensure_index(&path, repaired)?;
             (repaired, repaired > 0)
         } else {
             (0, false)
@@ -221,6 +263,9 @@ impl EventLogWriter {
         Ok(Self {
             path,
             file: None,
+            index_file: None,
+            index_bytes: 0,
+            index_disabled: false,
             _lock: lock,
             header: Header::new(log.session_id(), created_at_ms, None),
             next_sequence: expected_next,

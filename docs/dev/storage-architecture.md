@@ -380,14 +380,16 @@ struct RuntimeEventRecord {
 
 | 读需求 | 现状 | 目标 |
 | --- | --- | --- |
-| `replay_events(session, after_seq, limit)` | `session_events` 索引扫描 | 顺序扫描 frame + 二分 `.idx`；冷读时从最后一次 `checkpoint` 事件起扫 |
-| `interaction_tail_window(session, interaction, limit)` | `session_events_session_interaction` 索引 | 反向扫描尾部 frame（复用 `jsonl_store.rs:52-54` 的反向扫描思路），按 `interaction_id` 过滤 |
+| `replay_events(session, after_seq, limit)` | `session_events` 索引扫描 | 二分旁挂 `.idx` 定位起点帧后顺序解压；没有索引时从首帧单趟顺序解压（已落地，见下） |
+| `interaction_tail_window(session, interaction, limit)` | `session_events_session_interaction` 索引 | 按 `.idx` 条目从尾帧倒推解压，按 `interaction_id` 过滤（已落地） |
 | 会话内最近消息列表 | `jarvis_interactions_lane_recent` | 留在 `control.inbox`，按 `(session_id, received_at_ms DESC)` 取 |
 | 会话列表与元数据 | `session_runtimes` | 留在 `control.sessions` |
 | 启动激活状态 | `thread_service` 反向扫描 | 复用现有 `JsonlThreadEventStore::read_thread_activation` |
 | 用量投影 | 只读 `rollout.sqlite3` 的 turn 快照 | 已改为只读 thread 轮次事实（W2-12），见 §9 |
 
-投影缓存不是必须的：会话级日志本身小（预估见 §7），顺序扫几 MB 是可接受的。若真机测出首屏延迟，再加 `.idx` 旁挂索引（记录 `(seq, offset, raw_len)`），不做全量解析。
+投影缓存不做。首屏延迟确实存在：本机实测 0.6 MB 会话的交互历史首页 650 ms，日志越长越差（同一机制在更大会话上到秒级），根因是 zstd 帧头不带序号，逐次读取只能靠解压帧反查起点，而分页又把这件事重复了「页数」遍。因此按既定口径补 `.idx` 旁挂索引：每帧一条 `(首条序号, 帧偏移, 帧长度)` 定宽记录，写句柄追加时同步维护，读路径二分后只解压需要的帧，不做全量解析。
+
+索引是派生数据：文件头记录「已覆盖日志长度」，与日志真实长度不一致、结构不自洽或文件缺失时一律忽略并按日志重建；写句柄打不开索引文件时退化为「没有索引」，绝不因此挡住事件落盘。
 
 ### 4.9 一致性协议
 
