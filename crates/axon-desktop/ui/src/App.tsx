@@ -619,8 +619,13 @@ export const App: React.FC = () => {
           detail={lastFailure}
           open={!connectionDismissed && !isSettingsOpen}
           onClose={() => setConnectionDismissed(true)}
+          /*
+           * 与主舞台那张断连页同一套重试：网关可用性与连接档案读数一起复探。
+           * 只探可用性时，正文已经接回来了，侧栏胶囊却还停在「连不上」；
+           * 那条读数走的是另一份快照，不跟着可用性自己变。
+           */
           onRetry={async () => {
-            await probeGateway();
+            await refreshConnection();
             if (connectionRef.current === true) await refreshWorkspaces();
           }}
           onOpenSettings={() => {

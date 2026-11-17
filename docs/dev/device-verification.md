@@ -9,6 +9,10 @@
 > 缺少 `.mcp.json` 时桌面状态栏会显示 MCP 0，补齐并重启 daemon 后恢复 MCP 3。
 > 真实 `$HOME/.axon/config.toml` 前后 SHA-256 均为 `2208FC66…6646`，未被改动。
 > 判据：只看输出文本与可回读的状态，不看退出码；未取得证据的条目一律标注「未真机验证」。
+> 本轮复验（2026-11-18）：D10/X1/X4/X5 与「断线重连（W2-11）」的证据取自提交 `3497f43b7` 的安装态
+> `versions/0.0.1/`（`axon.exe` SHA-256 `08DBBBCF3D5D8B0E7CFE70BB060C3F5305C476DC085C1F5260BC8EE5B2EB0615`，
+> `axon-desktop.exe` SHA-256 `075C79887482900B654C420224F03AACBF1616F6167355084A8EC2B012274AEF`），
+> 两轮共用同一个版本目录，上面的 `000c25f30` 绑定只对应首轮矩阵。
 
 ## 基础（B）
 
@@ -35,7 +39,7 @@
 | D7 | 切换会话 | 通过 | 点另一会话后正文整体换成该会话历史，无上一会话残留 |
 | D8 | 加载历史会话 | 通过 | 冷启动（重载窗口）后打开旧会话，5 轮正文按序加载，指标区与末轮读数一致 |
 | D9 | 导航条 | 通过 | 置顶后该会话排到首位且 `sessions.pinned=1`；取消置顶后顺序恢复 |
-| D10 | header 指标 | 通过 | `session_metrics` 行（`turn_count=5`、`total_active_ms=19926`、`channel_mix_json`）与 header 的轮次、耗时、token 读数同源；TTFT 与速率取本轮实测 |
+| D10 | header 指标 | 通过 | `session_metrics` 行（`turn_count=5`、`total_active_ms=19926`、`channel_mix_json`）与 header 的轮次、耗时、token 读数同源；TTFT 与速率取本轮实测。`3497f43b7` 复验三组逐字段命中：header `耗时 26.92s` 对 `total_active_ms=26922`、`9.11s` 对 `9112`、`19.5s` 对 `19503`；`累计 225K` 与分桶求和一致，上下文读作 `67K/1M`，均取自最近一次请求 |
 | D11 | 归档会话 | 通过 | 归档后该会话从默认列表消失；`axon sessions list --all` 仍能找回并标注 `[已归档]` |
 | D12 | 来源渠道可见 | 通过 | 每轮用户气泡页脚标注「来源 桌面 / 来源 CLI / 来源 定时」，取该轮的**发起客户端**；同一条桌面车道被 CLI 续聊时，续聊那一轮标「来源 CLI」（实测见 X6/X7） |
 
@@ -56,11 +60,11 @@
 
 | # | 检查 | 结果 | 证据 |
 | --- | --- | --- | --- |
-| X1 | 一端在聊，另一端载入同一会话 | 通过（桌面 ↔ CLI） | 桌面新增一轮后，`axon sessions list` 与 `debug session show` 读到同一 Thread 的完整轮次；`resume` 后 CLI 能接续同一会话 |
+| X1 | 一端在聊，另一端载入同一会话 | 通过（桌面 ↔ CLI） | 桌面新增一轮后，`axon sessions list` 与 `debug session show` 读到同一 Thread 的完整轮次；`resume` 后 CLI 能接续同一会话。`3497f43b7` 复验：桌面连续两轮（回 `收到`、`41`）后 `axon sessions list` 读到 `turns=2`，`axon sessions read` 逐轮读出这两条助手正文 |
 | X2 | CLI 在聊，桌面载入同一会话 | 通过（CLI ↔ 桌面） | CLI 追加一轮（`turns` +1）后，桌面点开该会话能看到该轮正文与回复 |
 | X3 | 两端同时在线，一端发消息 | 通过（桌面 + CLI） | 桌面停在该会话不动，CLI 用 `axon run --session <会话 ID>` 追加一轮；随后同屏多出这一轮的提问与回复，页脚标「来源 CLI」，全程没有刷新窗口。此前该会话两轮，之后三轮 |
-| X4 | 一端中断会话 | 通过（桌面中断，CLI 观察） | 桌面提交「用 shell 跑 Start-Sleep 40」后点「停止生成」，正文出现「本轮已由用户中断。」（用时 21.28s）；Thread 事件里该轮以 `turnFailed` 收口且 `failure.category=interrupted`、`code=run_interrupted`、`redactedMessage=本轮已由用户中断。`；CLI `axon sessions read` 读到该轮终态、空回复与用时。该命令原先把中断显示成 `Failed`，已改为 `Interrupted`（随本版发布） |
-| X5 | 一端新建会话 | 通过（桌面 ↔ CLI） | 桌面新建后 `axon sessions list` 立即可见新会话行 |
+| X4 | 一端中断会话 | 通过（桌面中断，CLI 观察） | 桌面提交「用 shell 跑 Start-Sleep 40」后点「停止生成」，正文出现「本轮已由用户中断。」（用时 21.28s）；Thread 事件里该轮以 `turnFailed` 收口且 `failure.category=interrupted`、`code=run_interrupted`、`redactedMessage=本轮已由用户中断。`；CLI `axon sessions read` 读到该轮终态、空回复与用时。该命令原先把中断显示成 `Failed`，已改为 `Interrupted`（随本版发布）。`3497f43b7` 复验：桌面提交长回答请求后约 5 秒点「停止生成」，正文随即出现「本轮已由用户中断。」，该轮指标行收口为 `用时 7.44s · 出 0`；`axon sessions read` 把该轮读作 `Interrupted`、`assistant: -` |
+| X5 | 一端新建会话 | 通过（桌面 ↔ CLI） | 点「新建会话」后先落本地草稿（控制面无行、侧栏标「新会话」）；发出首条消息即进入控制面，`GET /api/v1/sessions` 与 `axon sessions list` 立即可见该会话行。`3497f43b7` 复验：桌面新建并发出「只回复两个字：收到」后，清单立刻多出这条会话（`turns=1`），原会话仍在（`turns=4`） |
 | X6 | 不同渠道发起的轮次标注各自来源 | 通过（桌面 ↔ CLI） | 同一条桌面车道：第一轮在桌面发出，第二轮用 `axon run --session <会话 ID>` 续聊。`inbox` 两行的 `source_channel` 都是 `desktop`，`client` 分别是 `desktop` 与 `cli`；桌面历史同一屏里两个气泡页脚依次是「来源 桌面」「来源 CLI」（CDP 回执：`工作区 \|\| 当前 \|\| 来源 桌面 \|\| 12:20 \|\| 来源 CLI \|\| 12:21 \|\| …`）。更早的索引轮同样带来源：此前只有最新一轮有标注，已在 `indexedTurn` 补齐 |
 | X7 | 同一会话跨渠道续聊并混合计数 | 通过（同 X6） | 该会话 `session_metrics` 为 `turn_count=2`、`channel_mix_json={"cli":1,"desktop":1}`；另一条纯 CLI 车道的会话为 `{"cli":1}`。计数键是**逐轮发起端**，同一条桌面车道出现两种来源即证明跨端续聊已按轮计入 |
 
@@ -143,6 +147,28 @@
 - 计划：`update_plan` 轮在生成中 header 出现 `计划 0/3`，正文出现 `更新计划 · 建立诊断任务三步计划 1ms`；重开该会话后计划单元仍在（最新一轮保持展开），而 header 的计划段按设计只在有轮次在跑时占位。
 - LSP：该轮的工具行读作 `LSP 诊断类资源`；header 的 LSP 段取实时观测（`activeClients`），本轮未挂上 LSP 客户端（无 rust-analyzer 子进程），因此**未取得** LSP 段的真机证据。
 
+## 断线重连（W2-11）
+
+验证对象：安装态 `versions/0.0.1/axon-desktop.exe`（构建自提交 `3497f43b7`，SHA-256
+`075C79887482900B654C420224F03AACBF1616F6167355084A8EC2B012274AEF`）；网关指向隔离根
+`$env:TEMP/axon-wbs-verify-rt`（`http_bind=127.0.0.1:3243`、`websocket_bind=127.0.0.1:3244`），
+与真实 daemon 并存，互不干扰。
+
+| 阶段 | 观察到的界面事实 |
+| --- | --- |
+| 在线 | 胶囊「本机，已连接，延迟 49 毫秒」；header `耗时 26.92s · 累计 225K · 命中率 89.63% · 67K/1M`、`首字 2.82s · 速率 124.6 tok/s` |
+| 断网（直接杀掉 daemon 进程） | 界面不立刻变：下一次 15 秒静默轮询失败后才切「未连接到 Axon 后台服务」整屏，胶囊转「连不上」，正文让位给断连页，窗口本身存活 |
+| 恢复（重启 daemon，不点重试、不刷新窗口） | 8 秒内断连页自动消失，正文与指标回读为 `耗时 26.92s · 累计 225K · 命中率 89.63% · 67K/1M`，与断网前逐字段一致；胶囊回到「本机，已连接，延迟 4 毫秒」；会话仍在原车道，轮次不重复 |
+
+判定：恢复后胶囊、会话与指标三处都回到在线事实，满足「断网重连后视图与在线态一致」。
+
+修复：断连弹窗的自动重试原先只复探网关可用性，而连接档案读数（胶囊与能力位）走另一份快照，不随可用性变化，
+恢复后仍停在「连不上」。现改为与主舞台断连页同一套 `refreshConnection`（`crates/axon-desktop/ui/src/App.tsx`），
+自动重试与手动重试从此读同一份结论。
+
+口径说明：断连期间正文让位给断连页是这套设计的有意取舍（断连页是唯一舞台，恢复后整页接回），
+因此本条的判据落在「恢复后一致」，不落在「断连期间仍可读正文」。
+
 ## 环境副作用登记
 - 源码安装走 `scripts/install-from-source.ps1 -Components all`（当前唯一合规入口）。脚本会静默提权、重建版本树并拉起一次 Daemon 与桌面端；验证前已全部终止。
 - 该次 Daemon 启动会向真实 `$HOME/.axon` 追加运行态写入；已删除其留下的 `data/daemon.pid`，真实 `config.toml` 哈希未变，真实数据未删除。
@@ -150,3 +176,7 @@
 - X6/X7 取证那次只改了 `crates/axon-desktop/ui/**`，按纯前端快速通道重装：`npm run build` → `cargo build --release --locked -p axon-desktop`（`Finished 'release' profile ... in 2m 07s`）→ 覆盖 `versions/0.0.1/axon-desktop.exe`（12:36:45，与 `target/release` 的 SHA-256 一致，`current.json` 未变）→ 经安装根 `axon.cmd desktop` 重启。任何 Rust 侧改动都不适用这条通道。
 - 本轮回放修复同样只改 `crates/axon-desktop/ui/**`，按同一条快速通道重装（`Finished 'release' profile [optimized] target(s) in 1m 41s`，覆盖后 `axon-desktop.exe` 与 `target/release` 的 SHA-256 一致，`current.json` 仍为 `0.0.1`）。
 - 临时验证根 `$env:TEMP/axon-verify-rt` 保留供下一轮取证；其中含真实 `.mcp.json` 的副本（含本机 key），收尾时需一并清理。
+- 本轮复验（`3497f43b7`）先走完整安装链 `scripts/install-from-source.ps1 -Components all`：前端 `✓ built in 2.13s`，`Finished 'release' profile [optimized] target(s) in 1m 46s`，`axon.exe` 与 `axon-desktop.exe` 均与 `target/release` 哈希一致，`current.json` 仍为 `0.0.1`。首次尝试失败一次：隔离 daemon 正持有 `versions/0.0.1/axon.exe`，安装脚本 30 秒内无法替换版本目录，停掉隔离 daemon 后重跑成功。
+- 本轮隔离根为 `$env:TEMP/axon-wbs-verify-rt`：只复制 `config.toml`、`.env`、`.mcp.json`、`skills/`、`SOUL.md`、`AGENTS.md`、`coding.md`，不放任何真实会话数据；网关改到 3243 / 3244，与真实 daemon 并存。真实 `$HOME/.axon/config.toml` 前后 SHA-256 均为 `2208FC66…6646`，未被改动。
+- W2-11 的胶囊修复只改 `crates/axon-desktop/ui/src/App.tsx`，按纯前端快速通道重装：`npm run build` → `cargo build --release --locked -p axon-desktop`（`Finished 'release' profile [optimized] target(s) in 2m 18s`）→ 覆盖 `versions/0.0.1/axon-desktop.exe`（00:30:18，与 `target/release` 的 SHA-256 一致）→ 经安装根 `axon.cmd desktop` 重启；`current.json` 未变。
+- 残留观察（不属本轮五项，登记备查）：`axon sessions read` 的轮次标题恒为 `Turn 0`，未按序递增；中断轮的终态与空回复本身正确。
