@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::EventLog;
 use crate::error::EventLogError;
 use crate::format::{Header, encode_frame, scan_frames, tail_ends_on_frame_boundary};
-use crate::index::{self, FrameIndexEntry, interaction_tag};
+use crate::index::{self, FrameIndexEntry, record_interaction_tag};
 use crate::lock::ExclusiveLock;
 use crate::record::RuntimeEventRecord;
 
@@ -248,7 +248,7 @@ fn now_ms() -> u64 {
 fn batch_interaction_tag(events: &[RuntimeEventRecord]) -> u32 {
     let mut tag: Option<u32> = None;
     for event in events {
-        let current = interaction_tag(event.interaction_id.as_deref());
+        let current = record_interaction_tag(event);
         match tag {
             None => tag = Some(current),
             Some(previous) if previous == current => {}

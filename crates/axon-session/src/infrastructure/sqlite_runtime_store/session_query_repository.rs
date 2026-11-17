@@ -8,24 +8,28 @@ use super::{SqliteRuntimeStore, helpers::u64_value};
 use crate::ports::{InteractionStoreError, SessionQueryStore, SessionSummaryRow};
 use rusqlite::Row;
 
-/// 按车道聚合 Interaction；只取每组排名第一的行。
-const SELECT_SESSION_SUMMARIES: &str = "WITH ranked AS (\
-       SELECT i.session_id, i.content, i.source_channel, i.scope_json, i.audience_json, i.reply_route_json, \
-              i.received_at_ms, i.updated_at_ms, \
-              ROW_NUMBER() OVER (PARTITION BY i.session_id ORDER BY i.received_at_ms DESC, i.interaction_id DESC) AS rank_in_session, \
-              COUNT(*) OVER (PARTITION BY i.session_id) AS interaction_count, \
-              SUM(CASE WHEN w.status = 'running' THEN 1 ELSE 0 END) OVER (PARTITION BY i.session_id) AS processing_count, \
-              MIN(i.received_at_ms) OVER (PARTITION BY i.session_id) AS first_received_ms \
-       FROM inbox AS i \
-       LEFT JOIN work_items AS w ON w.inbox_id = i.interaction_id \
-       WHERE i.session_id IS NOT NULL AND i.session_id <> ''\
-     ) \
-     SELECT r.session_id, r.content, r.source_channel, r.scope_json, r.audience_json, r.reply_route_json, \
-            r.updated_at_ms, r.interaction_count, r.processing_count, r.first_received_ms, \
-            COALESCE(s.title, '') \
-     FROM ranked AS r \
-     LEFT JOIN sessions AS s ON s.session_id = r.session_id \
-     WHERE r.rank_in_session = 1 ORDER BY r.updated_at_ms DESC";
+/// 按车道取一条汇总：车道清单来自索引去重，每个聚合都走 `inbox_session_recent`。
+///
+/// 不使用「先按 `session_id` 开窗再筛 rank=1」的写法：那条路径会把整张 `inbox`
+/// 物化进临时 B 树并按会话分区，代价随历史总行数增长（实测 4.8 万行 8 条车道
+/// 需 182 ms）。这里由车道数驱动，每个会话只碰自己的索引区间（同规模 17 ms），
+/// 结果逐字段一致；车道仍取自 `inbox` 而不是 `sessions`，因此「有入站事实但会话行
+/// 缺失」的车道照样能列出，与旧口径相同。
+const SELECT_SESSION_SUMMARIES: &str = "SELECT ids.session_id, latest.content, latest.source_channel, \
+        latest.scope_json, latest.audience_json, latest.reply_route_json, latest.updated_at_ms, \
+        (SELECT COUNT(*) FROM inbox AS c WHERE c.session_id = ids.session_id), \
+        (SELECT COUNT(*) FROM inbox AS c JOIN work_items AS w ON w.inbox_id = c.interaction_id \
+         WHERE c.session_id = ids.session_id AND w.status = 'running'), \
+        (SELECT MIN(f.received_at_ms) FROM inbox AS f WHERE f.session_id = ids.session_id), \
+        COALESCE(s.title, '') \
+     FROM (SELECT DISTINCT session_id FROM inbox \
+           WHERE session_id IS NOT NULL AND session_id <> '') AS ids \
+     JOIN inbox AS latest ON latest.session_id = ids.session_id \
+      AND latest.interaction_id = (SELECT x.interaction_id FROM inbox AS x \
+                                   WHERE x.session_id = ids.session_id \
+                                   ORDER BY x.received_at_ms DESC, x.interaction_id DESC LIMIT 1) \
+     LEFT JOIN sessions AS s ON s.session_id = ids.session_id \
+     ORDER BY latest.updated_at_ms DESC";
 
 /// 把底层持久化错误收敛为端口错误。
 fn store_error(error: impl std::fmt::Display) -> InteractionStoreError {

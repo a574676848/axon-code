@@ -8,7 +8,7 @@ use super::*;
 use crate::ActiveTurnSteerSink;
 use axon_domain::{
     ExecutionRecord, ExecutionStatus, GoalId, GoalPlan, GoalRecord, GoalStatus, InteractionRecord,
-    JarvisEvent, JarvisEventId, ResultId, ResultRecord, RuntimeHostId, ScopeRef,
+    LedgerEvent, LedgerEventId, ResultId, ResultRecord, RuntimeHostId, ScopeRef,
 };
 use axon_session::{
     CheckpointTelemetry, ClientDeliveryStore, ClientPresenceRecord, DecisionStore, ExecutionStore,

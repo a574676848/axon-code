@@ -4,7 +4,7 @@ use super::{
 };
 use crate::run_commands::RunAgentIdentity;
 use axon_protocol::wire::WireEventKind;
-use axon_session_runtime::{JarvisRuntimeProfile, ProviderTurnRequest};
+use axon_session_runtime::{ProviderTurnRequest, RuntimeProfile};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -39,7 +39,7 @@ fn provider_turn_request(action_kind: &str) -> ProviderTurnRequest {
         quoted_message: None,
         cwd: ".".to_owned(),
         run_session_id: "run-identity".to_owned(),
-        runtime_profile: JarvisRuntimeProfile::Jarvis,
+        runtime_profile: RuntimeProfile::Primary,
         transport_context: None,
     }
 }

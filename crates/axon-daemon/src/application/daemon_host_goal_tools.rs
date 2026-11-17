@@ -10,7 +10,7 @@ use crate::ports::ProcessIdentity;
 use axon_domain::{
     AudienceContext, AudienceKind, DaemonSessionId, DecisionEffect, DecisionId, DecisionRecord,
     DisclosurePolicy, ExecutionId, GoalCancelCommand, GoalCreateCommand, GoalCreationScope,
-    GoalDetailQuery, GoalId, GoalUpdateCommand, JarvisEvent, JarvisEventId, ScopeRef,
+    GoalDetailQuery, GoalId, GoalUpdateCommand, LedgerEvent, LedgerEventId, ScopeRef,
 };
 use axon_protocol::{GoalSource, GoalStartRequest, GoalToolCommand, GoalToolRequest};
 use axon_session::WorkspaceRecord;
@@ -585,10 +585,10 @@ fn goal_created_event(
     command: &GoalCreateCommand,
     goal_id: &GoalId,
     now_ms: u64,
-) -> Result<JarvisEvent, DaemonHostError> {
+) -> Result<LedgerEvent, DaemonHostError> {
     let event_key = format!("{GOAL_EVENT_ID_PREFIX}{goal_id}");
-    Ok(JarvisEvent {
-        event_id: JarvisEventId::new(event_key.clone())
+    Ok(LedgerEvent {
+        event_id: LedgerEventId::new(event_key.clone())
             .map_err(|error| DaemonHostError::Worker(error.to_string()))?,
         sequence: 0,
         event_type: GOAL_CREATED_EVENT_TYPE.to_owned(),
@@ -609,10 +609,10 @@ fn goal_started_event(
     goal_id: &GoalId,
     revision: u64,
     now_ms: u64,
-) -> Result<JarvisEvent, DaemonHostError> {
+) -> Result<LedgerEvent, DaemonHostError> {
     let event_key = format!("goal.started:{}:{}", goal_id.as_str(), revision);
-    Ok(JarvisEvent {
-        event_id: JarvisEventId::new(format!("event-{event_key}"))
+    Ok(LedgerEvent {
+        event_id: LedgerEventId::new(format!("event-{event_key}"))
             .map_err(|error| DaemonHostError::Worker(error.to_string()))?,
         sequence: 0,
         event_type: "goal.started".to_owned(),

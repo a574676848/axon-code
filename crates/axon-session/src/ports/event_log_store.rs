@@ -69,4 +69,16 @@ pub trait EventLogStore: Send + Sync {
         interaction_id: &InteractionId,
         limit: u32,
     ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError>;
+
+    /// 读取一组 Interaction 各自最近一条 `turn_metrics` 事件，按入参顺序返回。
+    ///
+    /// 历史索引页要为每条轮次给出一行读数（用时、token、首字、速率），权威事实是每轮
+    /// 收口时写下的那条 `turn_metrics`；逐轮整段回放等于把一页正文全部解压一遍。
+    /// 实现可以借助帧索引的交互指纹从尾部倒推，命中后仍必须逐条确认归属；没有该事件的
+    /// 轮次不出现在结果里，由调用方按「读数未知」降级。
+    fn latest_turn_metrics(
+        &self,
+        session_id: &DaemonSessionId,
+        interaction_ids: &[InteractionId],
+    ) -> Result<Vec<(String, axon_eventlog::TurnMetrics)>, RuntimeStoreError>;
 }

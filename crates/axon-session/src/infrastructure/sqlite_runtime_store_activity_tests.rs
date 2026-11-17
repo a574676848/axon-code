@@ -1,6 +1,6 @@
 use super::SqliteRuntimeStore;
 use crate::{ActivityQuery, ActivityService, GoalStore, LedgerEventStore, RuntimeStore};
-use axon_domain::{GoalId, GoalPlan, GoalRecord, GoalStatus, JarvisEvent, JarvisEventId, ScopeRef};
+use axon_domain::{GoalId, GoalPlan, GoalRecord, GoalStatus, LedgerEvent, LedgerEventId, ScopeRef};
 
 fn active_task(id: &str, scope: ScopeRef, now_ms: u64) -> GoalRecord {
     let mut task = GoalRecord::new(
@@ -69,8 +69,8 @@ fn activity_reads_scoped_facts_with_task_result_and_event_bounds() {
     drop(connection);
 
     for sequence in 1..=3 {
-        let event = JarvisEvent {
-            event_id: JarvisEventId::new(format!("activity-event-{sequence}")).expect("Event ID"),
+        let event = LedgerEvent {
+            event_id: LedgerEventId::new(format!("activity-event-{sequence}")).expect("Event ID"),
             sequence,
             event_type: "goal.updated".to_owned(),
             idempotency_key: format!("activity-event-key-{sequence}"),

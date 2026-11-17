@@ -78,7 +78,7 @@ fn authoritative_context_supplies_session_identity() {
                 cwd: "新目录".to_owned(),
                 context_version: 3,
             },
-            runtime_profile: crate::JarvisRuntimeSelector::for_background_execution(),
+            runtime_profile: crate::RuntimeProfileSelector::for_background_execution(),
         })
         .expect("执行成功");
     let requests = runner
@@ -119,7 +119,7 @@ fn provider_payload_rejects_execution_identity_fields() {
                 cwd: "新目录".to_owned(),
                 context_version: 1,
             },
-            runtime_profile: crate::JarvisRuntimeSelector::for_background_execution(),
+            runtime_profile: crate::RuntimeProfileSelector::for_background_execution(),
         })
         .expect_err("Provider payload 不得携带执行身份");
     assert!(error.message().contains("unknown field"));
@@ -154,7 +154,7 @@ fn remote_control_action_is_committed_without_provider_call() {
                 cwd: ".".to_owned(),
                 context_version: 0,
             },
-            runtime_profile: crate::JarvisRuntimeSelector::for_background_execution(),
+            runtime_profile: crate::RuntimeProfileSelector::for_background_execution(),
         })
         .expect("控制 Action 应执行");
     assert!(
@@ -219,7 +219,7 @@ fn preserves_transport_context_without_copying_quoted_message_to_completed_event
                 cwd: ".".to_owned(),
                 context_version: 0,
             },
-            runtime_profile: crate::JarvisRuntimeSelector::for_background_execution(),
+            runtime_profile: crate::RuntimeProfileSelector::for_background_execution(),
         })
         .expect("Turn 应正常执行");
     let requests = runner.requests.lock().unwrap();
@@ -390,7 +390,7 @@ fn live_request(action_id: &str) -> ActionExecutionRequest {
             cwd: ".".to_owned(),
             context_version: 0,
         },
-        runtime_profile: crate::JarvisRuntimeSelector::for_background_execution(),
+        runtime_profile: crate::RuntimeProfileSelector::for_background_execution(),
     }
 }
 
@@ -439,7 +439,7 @@ fn streaming_execution_projects_canonical_terminal_events_before_turn_completed(
                     cwd: ".".to_owned(),
                     context_version: 0,
                 },
-                runtime_profile: crate::JarvisRuntimeSelector::for_background_execution(),
+                runtime_profile: crate::RuntimeProfileSelector::for_background_execution(),
             },
             Some(&sink),
         )

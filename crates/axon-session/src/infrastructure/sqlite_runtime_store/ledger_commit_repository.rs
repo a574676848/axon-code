@@ -3,7 +3,7 @@
 use super::SqliteRuntimeStore;
 use crate::ports::{LedgerCommitError, LedgerCommitStore, RuntimeStore};
 use axon_domain::{
-    ExecutionRecord, ExecutionStatus, GoalRecord, JarvisEvent, ResultErrorKind, ResultRecord,
+    ExecutionRecord, ExecutionStatus, GoalRecord, LedgerEvent, ResultErrorKind, ResultRecord,
 };
 use rusqlite::{TransactionBehavior, params};
 
@@ -18,7 +18,7 @@ impl LedgerCommitStore for SqliteRuntimeStore {
         result: &ResultRecord,
         goal: &GoalRecord,
         expected_goal_revision: u64,
-        event: &JarvisEvent,
+        event: &LedgerEvent,
     ) -> Result<(), LedgerCommitError> {
         validate_commit_inputs(
             execution,
@@ -76,7 +76,7 @@ pub(super) fn commit_in_transaction(
     result: &ResultRecord,
     goal: &GoalRecord,
     expected_goal_revision: u64,
-    event: &JarvisEvent,
+    event: &LedgerEvent,
 ) -> Result<(), LedgerCommitError> {
     validate_commit_inputs(
         execution,
@@ -207,7 +207,7 @@ fn validate_commit_inputs(
     result: &ResultRecord,
     goal: &GoalRecord,
     expected_goal_revision: u64,
-    event: &JarvisEvent,
+    event: &LedgerEvent,
 ) -> Result<(), LedgerCommitError> {
     if !execution.status.is_conclusive() {
         return Err(LedgerCommitError::Conflict(

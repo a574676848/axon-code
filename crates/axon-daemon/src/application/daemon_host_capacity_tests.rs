@@ -6,7 +6,7 @@
 
 use super::*;
 use axon_domain::{
-    ConsumerCursor, GoalPlan, GoalRecord, GoalStatus, JarvisEvent, JarvisEventId, ScopeRef,
+    ConsumerCursor, GoalPlan, GoalRecord, GoalStatus, LedgerEvent, LedgerEventId, ScopeRef,
     SessionActionId, SessionActionStatus,
 };
 use axon_session::{
@@ -20,7 +20,7 @@ use std::{
 };
 
 const CAPACITY_BACKLOG_SIZES: [usize; 2] = [1_000, 10_000];
-const CAPACITY_BACKLOG_ENV: &str = "JARVIS_CAPACITY_BACKLOGS";
+const CAPACITY_BACKLOG_ENV: &str = "Axon_CAPACITY_BACKLOGS";
 const CAPACITY_NOW_MS: u64 = 1_000_000;
 /// 并发入口线程数；覆盖多个入口同时写入同一事实源的写锁争用。
 const CAPACITY_CONCURRENT_THREADS: usize = 8;
@@ -32,9 +32,9 @@ const CAPACITY_PENDING_LIMIT: u32 = 16;
 const CAPACITY_DB_FILE_NAME: &str = "runtime.sqlite3";
 /// WAL 文件名后缀。
 const CAPACITY_WAL_SUFFIX: &str = "-wal";
-const CROSS_PROCESS_DB_ENV: &str = "JARVIS_CROSS_PROCESS_DB";
-const CROSS_PROCESS_CHILD_ENV: &str = "JARVIS_CROSS_PROCESS_CHILD";
-const CROSS_PROCESS_EVENT_COUNT_ENV: &str = "JARVIS_CROSS_PROCESS_EVENT_COUNT";
+const CROSS_PROCESS_DB_ENV: &str = "Axon_CROSS_PROCESS_DB";
+const CROSS_PROCESS_CHILD_ENV: &str = "Axon_CROSS_PROCESS_CHILD";
+const CROSS_PROCESS_EVENT_COUNT_ENV: &str = "Axon_CROSS_PROCESS_EVENT_COUNT";
 const CROSS_PROCESS_CHILDREN: usize = 2;
 const CROSS_PROCESS_EVENTS_PER_CHILD: usize = 64;
 /// 内存采样单位换算：`/proc` 与 `tasklist` 均以 KiB 报告。
@@ -125,8 +125,8 @@ fn cross_process_ledger_append_is_serialized() {
         for index in 0..count {
             let event_key = format!("cross-process:{}:{index}", std::process::id());
             store
-                .append_ledger_event(&JarvisEvent {
-                    event_id: JarvisEventId::new(format!("event-{event_key}")).expect("Event ID"),
+                .append_ledger_event(&LedgerEvent {
+                    event_id: LedgerEventId::new(format!("event-{event_key}")).expect("Event ID"),
                     sequence: 0,
                     event_type: "r9.capacity.probe".to_owned(),
                     idempotency_key: event_key,

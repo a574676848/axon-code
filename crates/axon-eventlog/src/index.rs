@@ -70,6 +70,26 @@ pub(crate) fn interaction_tag(interaction_id: Option<&str>) -> u32 {
     hash
 }
 
+/// 记录归属的指纹：优先用归属列，老记录回落到载荷里的 `interactionId`。
+///
+/// 升级前写入的事件只把归属放在载荷里。重建索引时按载荷补出指纹，老日志的按键
+/// 取帧因此也能命中，不必再靠「每次请求整会话扫描」兜底。
+pub(crate) fn record_interaction_tag(record: &crate::record::RuntimeEventRecord) -> u32 {
+    match record.interaction_id.as_deref() {
+        Some(owner) => interaction_tag(Some(owner)),
+        None => interaction_tag(payload_interaction_id(record)),
+    }
+}
+
+/// 老记录的归属：载荷里的 `interactionId`。新记录不读它（归属列更权威且免解析）。
+pub(crate) fn payload_interaction_id(record: &crate::record::RuntimeEventRecord) -> Option<&str> {
+    record
+        .payload
+        .get("interactionId")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+}
+
 /// 一份已校验的帧索引（只覆盖数据帧，不含 header 帧）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct FrameIndex {

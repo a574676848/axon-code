@@ -115,7 +115,7 @@ pub use error::{
     AxonError, AxonResult, CellError, ConfigError, MemoryError, ProviderError,
     ProviderInvalidResponse, ProviderToolCallIssue, RuntimeError, ToolError,
 };
-pub use event::JarvisEvent;
+pub use event::LedgerEvent;
 pub use execution::{ExecutionCheckpoint, ExecutionLease, ExecutionRecord, ExecutionStatus};
 pub use goal::{
     GoalActivityView, GoalCancelCommand, GoalCapabilityError, GoalCreateCommand, GoalCreationScope,
@@ -133,7 +133,7 @@ pub use interaction::{
     InteractionStatus, MAX_INTERACTION_CONTENT_LENGTH, MAX_INTERACTION_ID_LENGTH,
     QUESTION_ANSWER_SOURCE_PREFIX, SHELL_JOB_WAKE_SOURCE_PREFIX, SYSTEM_SOURCE_CHANNEL,
 };
-pub use ledger_id::{DecisionId, ExecutionId, GoalId, JarvisEventId, ResultId};
+pub use ledger_id::{DecisionId, ExecutionId, GoalId, LedgerEventId, ResultId};
 pub use mcp::{MCP_CONFIG_FILE, McpServerDefinition};
 pub use memory::{
     MEMORY_DEFAULT_TOMBSTONE_REASON, MEMORY_STRONG_MIN_CONFIDENCE_BASIS_POINTS,

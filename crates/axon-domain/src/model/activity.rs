@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{GoalRecord, JarvisEvent, ResultRecord, ScopeRef};
+use super::{GoalRecord, LedgerEvent, ResultRecord, ScopeRef};
 
 /// Activity 查询参数。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,5 +27,5 @@ pub struct ActivitySnapshot {
     /// 当前作用域尚未确认的 Result。
     pub unread_results: Vec<ResultRecord>,
     /// 全局 Event sequence 窗口。
-    pub events: Vec<JarvisEvent>,
+    pub events: Vec<LedgerEvent>,
 }

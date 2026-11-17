@@ -7,8 +7,8 @@ use crate::{
 };
 use axon_domain::{
     DecisionEffect, DecisionId, DecisionRecord, ExecutionId, ExecutionRecord, ExecutionStatus,
-    GoalId, GoalListQuery, GoalPlan, GoalQueryScope, GoalRecord, GoalStatus, JarvisEvent,
-    JarvisEventId, ResultId, ResultRecord, ScopeRef,
+    GoalId, GoalListQuery, GoalPlan, GoalQueryScope, GoalRecord, GoalStatus, LedgerEvent,
+    LedgerEventId, ResultId, ResultRecord, ScopeRef,
 };
 
 #[test]
@@ -189,8 +189,8 @@ fn task_commit_atomically_creates_task_first_execution_and_event_idempotently() 
         goal.goal_id.clone(),
         10,
     );
-    let event = JarvisEvent {
-        event_id: JarvisEventId::new("event-start").expect("Event ID"),
+    let event = LedgerEvent {
+        event_id: LedgerEventId::new("event-start").expect("Event ID"),
         sequence: 0,
         event_type: "goal.created".to_owned(),
         idempotency_key: "goal-start:created".to_owned(),
@@ -283,8 +283,8 @@ fn ledger_commit_rolls_back_all_records_on_stale_task_revision() {
         "已完成",
         5,
     );
-    let event = JarvisEvent {
-        event_id: JarvisEventId::new("event-atomic-commit").expect("Event ID"),
+    let event = LedgerEvent {
+        event_id: LedgerEventId::new("event-atomic-commit").expect("Event ID"),
         sequence: 1,
         event_type: "execution.completed".to_owned(),
         idempotency_key: "execution-atomic-commit:completed".to_owned(),
@@ -402,8 +402,8 @@ fn decision_store_enforces_scope_revision_and_latest_revoke_fails_closed() {
 fn ledger_event_store_is_idempotent_and_replay_does_not_mutate_business_state() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
-    let first = JarvisEvent {
-        event_id: JarvisEventId::new("event-replay-1").expect("Event ID"),
+    let first = LedgerEvent {
+        event_id: LedgerEventId::new("event-replay-1").expect("Event ID"),
         sequence: 1,
         event_type: "goal.created".to_owned(),
         idempotency_key: "goal-replay:created".to_owned(),
@@ -411,8 +411,8 @@ fn ledger_event_store_is_idempotent_and_replay_does_not_mutate_business_state() 
         payload_json: "{}".to_owned(),
         occurred_at_ms: 1,
     };
-    let second = JarvisEvent {
-        event_id: JarvisEventId::new("event-replay-2").expect("Event ID"),
+    let second = LedgerEvent {
+        event_id: LedgerEventId::new("event-replay-2").expect("Event ID"),
         sequence: 2,
         event_type: "goal.completed".to_owned(),
         idempotency_key: "goal-replay:completed".to_owned(),

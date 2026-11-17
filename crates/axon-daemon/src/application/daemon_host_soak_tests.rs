@@ -1,4 +1,4 @@
-//! JARVIS 常驻 soak 报告（R7-07）。
+//! Axon 常驻 soak 报告（R7-07）。
 //!
 //! 默认不参与常规测试；用 `cargo test -p axon-daemon --release daemon_host_soak -- --ignored` 显式触发。
 //! 每个周期覆盖 Host heartbeat、lease 续租、recovery tick 与 Execution 领取/结算，
@@ -21,7 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const SOAK_ITERATIONS_ENV: &str = "JARVIS_SOAK_ITERATIONS";
+const SOAK_ITERATIONS_ENV: &str = "Axon_SOAK_ITERATIONS";
 const DEFAULT_SOAK_ITERATIONS: usize = 1_000;
 const SOAK_SESSION_COUNT: usize = 4;
 const SOAK_BASE_NOW_MS: u64 = 5_000_000;

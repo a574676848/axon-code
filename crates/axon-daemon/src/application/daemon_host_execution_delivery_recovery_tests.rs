@@ -124,8 +124,8 @@ fn crashed_completion_is_recovered_by_supervisor_sweep() {
             &result,
             &updated_goal,
             goal.revision,
-            &JarvisEvent {
-                event_id: JarvisEventId::new("event-recovery-completed").expect("Event ID"),
+            &LedgerEvent {
+                event_id: LedgerEventId::new("event-recovery-completed").expect("Event ID"),
                 sequence: 0,
                 event_type: "execution.completed".to_owned(),
                 idempotency_key: "execution.completed:execution-crashed".to_owned(),

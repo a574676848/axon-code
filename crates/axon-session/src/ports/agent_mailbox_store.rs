@@ -7,7 +7,7 @@
 //! 一条消息的接收方唯一（一个 `AgentPath`），因此「消息」与「投递记录」合并为一张表：
 //! 投递进度由 [`AgentMailboxMessageRecord`] 的 `state` / `attempt_count` /
 //! `last_attempt_at_ms` / `retry_at_ms` / `last_error` / `delivered_at_ms` 列组表达。
-//! `jarvis_completion_*` 之所以拆成通知与渠道两层，是因为一条通知要投递给多个渠道；
+//! `Axon_completion_*` 之所以拆成通知与渠道两层，是因为一条通知要投递给多个渠道；
 //! mailbox 不适用该场景，拆表只会引入无意义的 1:1 连接。
 
 use std::fmt;

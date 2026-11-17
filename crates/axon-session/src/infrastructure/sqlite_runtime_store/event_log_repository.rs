@@ -155,6 +155,37 @@ pub(super) fn replay_interaction_events(
     )
 }
 
+/// 读取一组 Interaction 各自最近一条 `turn_metrics` 事件。
+///
+/// 只解压「可能属于这些交互」的帧：指纹粗筛加逐条确认，一页历史因此是每条交互一次
+/// 尾部定位，而不是把整条会话解压一遍。事件不存在（CLI 直跑、老会话）的轮次不出现在
+/// 结果里，调用方按读数未知降级。
+pub(super) fn latest_turn_metrics(
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+    interaction_ids: &[InteractionId],
+) -> Result<Vec<(String, axon_eventlog::TurnMetrics)>, RuntimeStoreError> {
+    if interaction_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let path = store.event_log(session_id).path();
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let wanted: Vec<&str> = interaction_ids.iter().map(InteractionId::as_str).collect();
+    let kind = axon_eventlog::RuntimeEventKind::TurnMetrics.as_str();
+    let records =
+        axon_eventlog::read_latest_per_interaction(&path, &wanted, kind).map_err(log_error)?;
+    Ok(records
+        .into_iter()
+        .filter_map(|entry| {
+            let metrics =
+                serde_json::from_value::<axon_eventlog::TurnMetrics>(entry.record.payload).ok()?;
+            Some((entry.interaction_id, metrics))
+        })
+        .collect())
+}
+
 /// 读取某条 Interaction 自身的尾窗帧，按序号升序。
 pub(super) fn interaction_tail_window(
     store: &SqliteRuntimeStore,

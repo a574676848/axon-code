@@ -487,6 +487,52 @@ fn turn_metrics_keeps_origin_and_unmeasured_ttft() {
     assert_eq!(parsed.active_ms, 900);
 }
 #[test]
+fn latest_events_are_read_per_interaction_from_the_tail() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let log = EventLog::open(dir.path(), "session-session-readings");
+    let mut writer = log.writer().expect("写句柄");
+    let mut sequence = 0_u64;
+    let mut append =
+        |writer: &mut axon_eventlog::EventLogWriter, interaction: &str, active_ms: u64| {
+            let metrics = TurnMetrics {
+                turn_id: interaction.to_owned(),
+                active_ms,
+                ..TurnMetrics::default()
+            };
+            let event =
+                RuntimeEventRecord::turn_metrics(sequence, 1_700_000_000_000 + sequence, &metrics)
+                    .expect("可构造")
+                    .with_interaction(interaction);
+            sequence += 1;
+            writer.append_batch(&[event]).expect("批次写入");
+        };
+    // 交错写两条交互，各自都有多条指标事件：只能取到各自**最后一条**。
+    append(&mut writer, "interaction-a", 100);
+    append(&mut writer, "interaction-b", 200);
+    append(&mut writer, "interaction-a", 300);
+    append(&mut writer, "interaction-b", 400);
+    drop(writer);
+
+    let found = axon_eventlog::read_latest_per_interaction(
+        &log.path(),
+        &["interaction-a", "interaction-b", "interaction-missing"],
+        RuntimeEventKind::TurnMetrics.as_str(),
+    )
+    .expect("按交互读取");
+    assert_eq!(found.len(), 2, "没有指标事件的交互不出现在结果里");
+    assert_eq!(
+        found[0].interaction_id, "interaction-a",
+        "结果按入参顺序排列"
+    );
+    let first: TurnMetrics =
+        serde_json::from_value(found[0].record.payload.clone()).expect("载荷应可还原");
+    assert_eq!(first.active_ms, 300, "取的是这条交互最近一条指标");
+    let second: TurnMetrics =
+        serde_json::from_value(found[1].record.payload.clone()).expect("载荷应可还原");
+    assert_eq!(second.active_ms, 400);
+}
+
+#[test]
 fn job_events_round_trip() {
     let started = JobRef {
         job_id: "job-1".to_owned(),

@@ -341,6 +341,47 @@ fn interaction_tail_returns_the_last_window() {
 }
 
 #[test]
+fn legacy_payload_ownership_is_honoured_without_a_column() {
+    let directory = tempfile::tempdir().expect("临时目录");
+    let log = EventLog::open(directory.path(), "session-session-legacy");
+    let path = log.path();
+    // 老记录只把归属写在载荷里：归属列始终为空，模拟升级前写入的事件。
+    let legacy = |sequence: u64, interaction: &str| {
+        RuntimeEventRecord::new(
+            sequence,
+            1_700_000_000_000 + sequence,
+            RuntimeEventKind::ToolCall,
+            json!({ "interactionId": interaction }),
+        )
+    };
+    {
+        let mut writer = log.writer().expect("写句柄");
+        writer
+            .append_batch(&[legacy(0, "interaction-old"), legacy(1, "interaction-other")])
+            .expect("老记录批次");
+        writer
+            .append_batch(&[legacy(2, "interaction-old")])
+            .expect("老记录批次");
+    }
+
+    // 按键读取必须能从载荷认出归属；删掉索引走退化路径也要一致。
+    let keyed: Vec<u64> = read_interaction_after(&path, "interaction-old", 0, 10)
+        .expect("按键读取")
+        .iter()
+        .map(|record| record.sequence)
+        .collect();
+    assert_eq!(keyed, vec![2], "after 排他，且只认这条交互的记录");
+
+    std::fs::remove_file(index_path(&path)).expect("删除索引");
+    let fallback: Vec<u64> = read_interaction_after(&path, "interaction-old", 0, 10)
+        .expect("退化路径")
+        .iter()
+        .map(|record| record.sequence)
+        .collect();
+    assert_eq!(fallback, keyed, "两条路径的归属判定必须同口径");
+}
+
+#[test]
 fn tail_reads_work_with_and_without_the_index() {
     let directory = tempfile::tempdir().expect("临时目录");
     let (_log, path) = seed_log(directory.path(), 6);

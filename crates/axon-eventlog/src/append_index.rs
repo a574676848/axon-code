@@ -12,7 +12,7 @@ use std::path::Path;
 
 use crate::error::EventLogError;
 use crate::format::{FrameSpan, HEADER_FRAME_INDEX, Header, scan_file_frames};
-use crate::index::{self, FrameIndexEntry, interaction_tag};
+use crate::index::{self, FrameIndexEntry, record_interaction_tag};
 use crate::read::{decode_header_frame, frame_records, read_snapshot};
 
 /// 用索引还原 header 与下一个序号；索引不可用时退回全量快照并重建索引。
@@ -95,7 +95,7 @@ fn rebuild(path: &Path, committed: u64) -> Result<(), EventLogError> {
 fn frame_interaction_tag(records: &[crate::record::RuntimeEventRecord]) -> u32 {
     let mut tag: Option<u32> = None;
     for record in records {
-        let current = interaction_tag(record.interaction_id.as_deref());
+        let current = record_interaction_tag(record);
         match tag {
             None => tag = Some(current),
             Some(previous) if previous == current => {}

@@ -1,6 +1,6 @@
-//! Work Ledger Jarvis Event 持久化端口。
+//! Work Ledger Ledger Event 持久化端口。
 
-use axon_domain::{GoalId, JarvisEvent};
+use axon_domain::{GoalId, LedgerEvent};
 use std::fmt;
 
 /// Event 存储错误。
@@ -15,8 +15,8 @@ pub enum LedgerEventStoreError {
 impl fmt::Display for LedgerEventStoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Conflict(detail) => write!(formatter, "Jarvis Event 冲突：{detail}"),
-            Self::Storage(detail) => write!(formatter, "Jarvis Event 存储失败：{detail}"),
+            Self::Conflict(detail) => write!(formatter, "Ledger Event 冲突：{detail}"),
+            Self::Storage(detail) => write!(formatter, "Ledger Event 存储失败：{detail}"),
         }
     }
 }
@@ -26,21 +26,21 @@ impl std::error::Error for LedgerEventStoreError {}
 /// Work Ledger Event 持久化端口。
 pub trait LedgerEventStore: Send + Sync {
     /// 幂等追加 Event；重复且内容一致时返回 false。
-    fn append_ledger_event(&self, event: &JarvisEvent) -> Result<bool, LedgerEventStoreError>;
+    fn append_ledger_event(&self, event: &LedgerEvent) -> Result<bool, LedgerEventStoreError>;
 
     /// 读取 sequence 之后的 Event，不修改业务状态。
     fn replay_ledger_events(
         &self,
         after_sequence: u64,
         limit: u32,
-    ) -> Result<Vec<JarvisEvent>, LedgerEventStoreError>;
+    ) -> Result<Vec<LedgerEvent>, LedgerEventStoreError>;
 
     /// 按 Goal ID 读取有界 Event；实现应使用结构化索引避免全局回放。
     fn list_events_for_goal(
         &self,
         goal_id: &GoalId,
         limit: u32,
-    ) -> Result<Vec<JarvisEvent>, LedgerEventStoreError> {
+    ) -> Result<Vec<LedgerEvent>, LedgerEventStoreError> {
         let events = self.replay_ledger_events(0, limit)?;
         Ok(events
             .into_iter()

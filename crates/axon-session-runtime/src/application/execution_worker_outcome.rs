@@ -4,7 +4,7 @@ use super::{ExecutionWorker, ExecutionWorkerError, MAX_EXECUTION_ATTEMPTS};
 use crate::model::{NextExecutionRequest, TURN_COMPLETED_EVENT, TurnExecutionOutcome};
 use crate::ports::{EventPublisher, RuntimeClock, TurnExecutor};
 use axon_domain::{
-    ExecutionId, ExecutionStatus, GoalStatus, JarvisEvent, JarvisEventId, ResultErrorKind,
+    ExecutionId, ExecutionStatus, GoalStatus, LedgerEvent, LedgerEventId, ResultErrorKind,
     ResultId, ResultRecord, SessionActionId, SessionActionStatus,
 };
 use axon_session::{ExecutionSettlement, RuntimeStore, SessionActionRecord};
@@ -151,8 +151,8 @@ where
         } else {
             "execution.failed"
         };
-        let event = JarvisEvent {
-            event_id: JarvisEventId::new(format!("event-outcome-{id}"))
+        let event = LedgerEvent {
+            event_id: LedgerEventId::new(format!("event-outcome-{id}"))
                 .map_err(|error| ExecutionWorkerError::Gate(error.to_string()))?,
             sequence: 0,
             event_type: event_type.to_owned(),

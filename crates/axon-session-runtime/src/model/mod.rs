@@ -12,7 +12,7 @@ pub const TURN_COMPLETED_EVENT: &str = "turn_completed";
 
 use axon_session::{CheckpointTelemetry, SessionActionRecord};
 
-use crate::application::JarvisRuntimeProfile;
+use crate::application::RuntimeProfile;
 
 /// Session Runtime 在执行边界提供的权威上下文。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,7 +33,7 @@ pub struct ActionExecutionRequest {
     /// 从 Session Runtime 读取的权威执行上下文。
     pub context: SessionExecutionContext,
     /// 应用层为本次 turn 选择的统一人格 profile。
-    pub runtime_profile: JarvisRuntimeProfile,
+    pub runtime_profile: RuntimeProfile,
 }
 
 /// completion/compaction 后需要显式创建的下一次 Execution。

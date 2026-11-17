@@ -5,7 +5,7 @@ use super::{
     helpers::{i64_value, u64_value},
 };
 use crate::ports::{GoalMutationStore, GoalPage, GoalStore, GoalStoreError, RuntimeStore};
-use axon_domain::{GoalId, GoalPlan, GoalRecord, GoalStatus, JarvisEvent, ScopeRef};
+use axon_domain::{GoalId, GoalPlan, GoalRecord, GoalStatus, LedgerEvent, ScopeRef};
 use rusqlite::{OptionalExtension, Row, TransactionBehavior, params};
 use uuid::Uuid;
 
@@ -341,7 +341,7 @@ impl GoalMutationStore for SqliteRuntimeStore {
         &self,
         goal: &GoalRecord,
         expected_revision: u64,
-        event: &JarvisEvent,
+        event: &LedgerEvent,
     ) -> Result<(), GoalStoreError> {
         if event.event_type.trim().is_empty() || event.idempotency_key.trim().is_empty() {
             return Err(GoalStoreError::Conflict("Goal 更新 Event 无效".to_owned()));

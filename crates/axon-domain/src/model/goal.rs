@@ -1,6 +1,6 @@
 //! Work Ledger Goal 领域模型。
 
-use super::{ExecutionRecord, GoalId, JarvisEvent, ResultRecord, ScopeRef};
+use super::{ExecutionRecord, GoalId, LedgerEvent, ResultRecord, ScopeRef};
 use serde::{Deserialize, Serialize};
 
 /// Goal 文本字段的最大字符数。
@@ -337,7 +337,7 @@ pub struct GoalActivityView {
     /// 最近多次 Execution。
     pub recent_executions: Vec<ExecutionRecord>,
     /// 最近 Event。
-    pub recent_events: Vec<JarvisEvent>,
+    pub recent_events: Vec<LedgerEvent>,
     /// 最新 Result。
     pub latest_result: Option<ResultRecord>,
     /// 待处理审批标识。

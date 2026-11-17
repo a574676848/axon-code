@@ -1,8 +1,8 @@
-//! JARVIS 主 turn 的 Interaction 消费应用服务。
+//! Axon 主 turn 的 Interaction 消费应用服务。
 
 use axon_domain::{InteractionRecord, InteractionStatus};
 use axon_session::{InteractionProcessingLease, InteractionStore, InteractionStoreError};
-use axon_session_runtime::{JarvisRuntimeProfile, JarvisRuntimeSelector, RuntimeClock};
+use axon_session_runtime::{RuntimeClock, RuntimeProfile, RuntimeProfileSelector};
 use std::{
     marker::PhantomData,
     sync::{
@@ -41,7 +41,7 @@ pub struct PrimaryTurnRequest {
     /// 本次 claim 的 fencing token。
     pub lease_token: String,
     /// 应用运行时选择的统一人格 profile。
-    pub runtime_profile: JarvisRuntimeProfile,
+    pub runtime_profile: RuntimeProfile,
 }
 
 /// 主 turn runner 错误所属的应用层。
@@ -356,7 +356,7 @@ where
         let request = PrimaryTurnRequest {
             interaction: lease.interaction,
             lease_token: lease.lease_token.clone(),
-            runtime_profile: JarvisRuntimeSelector::for_primary_turn(),
+            runtime_profile: RuntimeProfileSelector::for_primary_turn(),
         };
         let mut renewal = self.start_lease_renewal(&interaction_id, &lease.lease_token)?;
         let runner_result = self.runner.run(request);

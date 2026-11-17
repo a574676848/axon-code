@@ -1,5 +1,6 @@
 //! 只读快照与查询。
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::error::EventLogError;
@@ -336,9 +337,15 @@ pub fn read_interaction_tail(
     Ok(matched)
 }
 
-/// 记录是否属于目标交互。
+/// 记录是否属于目标交互：优先归属列，老记录回落到载荷里的 `interactionId`。
+///
+/// 这条回退与网关侧的历史页判定同口径：升级前写入的事件没有归属列，只认列会让
+/// 老交互整段打不开。
 fn record_belongs_to(record: &RuntimeEventRecord, interaction_id: &str) -> bool {
-    record.interaction_id.as_deref() == Some(interaction_id)
+    match record.interaction_id.as_deref() {
+        Some(owner) => owner == interaction_id,
+        None => index::payload_interaction_id(record) == Some(interaction_id),
+    }
 }
 
 /// 把一帧里属于目标交互的记录按序并入尾部窗口，并保持不超过 `limit` 条。
@@ -358,6 +365,246 @@ fn push_belonging(
     if matched.len() > limit {
         matched.drain(..matched.len() - limit);
     }
+}
+
+/// 每个交互在一次批量读取里最多解压的帧数。
+///
+/// 历史索引页要为十几轮补读数，不能因为索引缺失或指纹不可用退化成一整条会话的
+/// 反复解压。触顶时返回已经取到的部分：缺读数的轮次由界面降级成「只有用时」，
+/// 绝不因此挡住历史分页本身。
+const MAX_READING_FRAMES: usize = 4_096;
+
+/// 按交互取到的一条事件。
+#[derive(Debug, Clone, PartialEq)]
+pub struct InteractionRecord {
+    /// 该事件归属的交互标识。
+    pub interaction_id: String,
+    /// 命中的事件记录；同一交互只取最近一条。
+    pub record: RuntimeEventRecord,
+}
+
+/// 批量读取一组交互**各自最近一条**指定类型的事件。
+///
+/// 用途固定：历史索引页要给每条轮次一行读数（用时、token、首字、速率），权威事实是
+/// 每轮收口时写下的那条 `turn_metrics`。逐轮整段回放会把一页十几轮的正文全部解压一遍，
+/// 因此这里按索引里的交互指纹从尾部倒推：每条交互通常只需解压它自己的最后几帧。
+///
+/// 命中后仍逐条比对 `interaction_id`，指纹只是粗筛；指纹碰撞只会多解压一帧。
+/// 没有索引时退化为单趟顺序解压，仍然是「一个会话一遍」，不按轮数重复。
+pub fn read_latest_per_interaction(
+    path: &Path,
+    interaction_ids: &[&str],
+    event_type: &str,
+) -> Result<Vec<InteractionRecord>, EventLogError> {
+    let wanted: Vec<&str> = interaction_ids
+        .iter()
+        .copied()
+        .filter(|id| !id.is_empty())
+        .collect();
+    if wanted.is_empty() {
+        return Ok(Vec::new());
+    }
+    let Some(len) = log_len(path)? else {
+        return Ok(Vec::new());
+    };
+    let mut file = std::fs::File::open(path)?;
+    let distinct: HashSet<&str> = wanted.iter().copied().collect();
+    let mut remaining = distinct.len();
+    let mut found: HashMap<&str, RuntimeEventRecord> = HashMap::new();
+    let tags: Vec<u32> = wanted
+        .iter()
+        .map(|id| index::interaction_tag(Some(id)))
+        .collect();
+    if let Some(index) = index::load(path, len) {
+        let mut scanned = 0_usize;
+        for entry in index.entries().iter().rev() {
+            if remaining == 0 || scanned >= MAX_READING_FRAMES {
+                break;
+            }
+            if !tags.iter().any(|tag| entry.may_hold(*tag)) {
+                continue;
+            }
+            let (Ok(start), Ok(end)) =
+                (usize::try_from(entry.offset), usize::try_from(entry.end()))
+            else {
+                break;
+            };
+            scanned += 1;
+            for record in frame_records(&mut file, &FrameSpan { start, end })? {
+                remaining = collect_latest(&wanted, event_type, record, &mut found, remaining);
+            }
+        }
+    } else {
+        let scan = scan_file_frames(&mut file)?;
+        let spans: Vec<FrameSpan> = scan
+            .frames
+            .iter()
+            .skip(HEADER_FRAME_INDEX + 1)
+            .rev()
+            .take(MAX_READING_FRAMES)
+            .cloned()
+            .collect();
+        for span in spans {
+            if remaining == 0 {
+                break;
+            }
+            for record in frame_records(&mut file, &span)? {
+                remaining = collect_latest(&wanted, event_type, record, &mut found, remaining);
+            }
+        }
+    }
+    let mut collected: Vec<InteractionRecord> = Vec::with_capacity(found.len());
+    for id in wanted {
+        if let Some(record) = found.remove(id) {
+            collected.push(InteractionRecord {
+                interaction_id: id.to_owned(),
+                record,
+            });
+        }
+    }
+    Ok(collected)
+}
+
+/// 收下一条命中记录；返回还差几条交互没有取到。
+fn collect_latest<'a>(
+    wanted: &[&'a str],
+    event_type: &str,
+    record: RuntimeEventRecord,
+    found: &mut HashMap<&'a str, RuntimeEventRecord>,
+    remaining: usize,
+) -> usize {
+    if record.event_type.as_str() != event_type {
+        return remaining;
+    }
+    let Some(id) = record.interaction_id.as_deref() else {
+        return remaining;
+    };
+    let Some(key) = wanted.iter().copied().find(|candidate| **candidate == *id) else {
+        return remaining;
+    };
+    if found.contains_key(key) {
+        return remaining;
+    }
+    found.insert(key, record);
+    remaining.saturating_sub(1)
+}
+
+/// 从尾部倒序扫描记录，由调用方决定何时停下。
+///
+/// 用途固定：历史分页要从最近若干轮里取读数与动作摘要，而「若干轮」换算成帧数随会话
+/// 差异极大。按记录倒序回调，调用方在「已经覆盖到本页最早那一轮」时返回 `false` 即可
+/// 收工：代价正比于这一页真实占用的帧数，与整条日志长度无关。`max_frames` 是硬上限，
+/// 防住异常日志把一次翻页拖成整条会话解压。
+///
+/// 回调收到的是**最新的记录在前**；调用方需要升序时自行收集后反转。
+pub fn read_tail_scan<F>(path: &Path, max_frames: usize, mut visit: F) -> Result<(), EventLogError>
+where
+    F: FnMut(&RuntimeEventRecord) -> bool,
+{
+    if max_frames == 0 {
+        return Ok(());
+    }
+    let Some(len) = log_len(path)? else {
+        return Ok(());
+    };
+    let mut file = std::fs::File::open(path)?;
+    let mut frames = 0_usize;
+    if let Some(index) = index::load(path, len) {
+        for entry in index.entries().iter().rev() {
+            if frames >= max_frames {
+                break;
+            }
+            let (Ok(start), Ok(end)) =
+                (usize::try_from(entry.offset), usize::try_from(entry.end()))
+            else {
+                break;
+            };
+            frames += 1;
+            let records = frame_records(&mut file, &FrameSpan { start, end })?;
+            if !visit_records_newest_first(&records, &mut visit) {
+                return Ok(());
+            }
+        }
+        return Ok(());
+    }
+    let scan = scan_file_frames(&mut file)?;
+    let spans: Vec<FrameSpan> = scan
+        .frames
+        .iter()
+        .skip(HEADER_FRAME_INDEX + 1)
+        .rev()
+        .take(max_frames)
+        .cloned()
+        .collect();
+    for span in spans {
+        let records = frame_records(&mut file, &span)?;
+        if !visit_records_newest_first(&records, &mut visit) {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+/// 把一帧里的记录按「新到旧」喂给回调；返回回调是否要求继续。
+fn visit_records_newest_first<F>(records: &[RuntimeEventRecord], visit: &mut F) -> bool
+where
+    F: FnMut(&RuntimeEventRecord) -> bool,
+{
+    for record in records.iter().rev() {
+        if !visit(record) {
+            return false;
+        }
+    }
+    true
+}
+
+/// 从尾部倒读取最近若干帧里的全部记录（按序号升序返回）。
+///
+/// 用途固定：一页历史要给十几轮补读数与动作摘要，而这条日志可能很长。按帧从尾部倒推
+/// 并封顶，代价只与「最近这几帧」成正比，与会话总体量无关；页里更早的轮次取不到时
+/// 由调用方按「读数未知」降级，绝不为补一页把整条日志解一遍。
+pub fn read_tail_records(
+    path: &Path,
+    max_frames: usize,
+) -> Result<Vec<RuntimeEventRecord>, EventLogError> {
+    if max_frames == 0 {
+        return Ok(Vec::new());
+    }
+    let Some(len) = log_len(path)? else {
+        return Ok(Vec::new());
+    };
+    let mut file = std::fs::File::open(path)?;
+    let mut collected: Vec<RuntimeEventRecord> = Vec::new();
+    if let Some(index) = index::load(path, len) {
+        let entries = index.entries();
+        let first = entries.len().saturating_sub(max_frames);
+        for entry in entries[first..].iter().rev() {
+            let (Ok(start), Ok(end)) =
+                (usize::try_from(entry.offset), usize::try_from(entry.end()))
+            else {
+                break;
+            };
+            let records = frame_records(&mut file, &FrameSpan { start, end })?;
+            for record in records.into_iter().rev() {
+                collected.insert(0, record);
+            }
+        }
+    } else {
+        let scan = scan_file_frames(&mut file)?;
+        for span in scan
+            .frames
+            .iter()
+            .skip(HEADER_FRAME_INDEX + 1)
+            .rev()
+            .take(max_frames)
+        {
+            let records = frame_records(&mut file, span)?;
+            for record in records.into_iter().rev() {
+                collected.insert(0, record);
+            }
+        }
+    }
+    Ok(collected)
 }
 
 /// 读取落盘末条事件；日志不存在或没有完整帧时返回 `None`。

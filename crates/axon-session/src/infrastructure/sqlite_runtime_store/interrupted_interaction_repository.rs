@@ -9,7 +9,7 @@ use crate::application::session_id_for_route;
 use crate::domain::runtime::{DaemonHostRecord, SessionEventRecord};
 use crate::ports::{RuntimeStore, RuntimeStoreError};
 use axon_domain::{
-    AudienceContext, DaemonSessionId, InteractionId, InteractionSource, JarvisEventId, ReplyRoute,
+    AudienceContext, DaemonSessionId, InteractionId, InteractionSource, LedgerEventId, ReplyRoute,
     ScopeRef,
 };
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
@@ -150,7 +150,7 @@ fn settle_interrupted(
         now,
     )
     .map_err(storage)?;
-    let event_id = JarvisEventId::new(format!(
+    let event_id = LedgerEventId::new(format!(
         "event-{LEDGER_EVENT_TYPE}-{}",
         interaction_id.as_str()
     ))

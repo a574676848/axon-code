@@ -1,9 +1,9 @@
-//! JARVIS Goal 查询应用服务。
+//! Axon Goal 查询应用服务。
 
 use std::fmt;
 
 use axon_domain::{
-    GoalActivityView, GoalDetailQuery, GoalListQuery, GoalProgress, GoalRecord, JarvisEvent,
+    GoalActivityView, GoalDetailQuery, GoalListQuery, GoalProgress, GoalRecord, LedgerEvent,
     ScopeRef,
 };
 
@@ -115,7 +115,7 @@ where
         &self,
         goal: &GoalRecord,
         limit: u32,
-    ) -> Result<Vec<JarvisEvent>, GoalQueryServiceError> {
+    ) -> Result<Vec<LedgerEvent>, GoalQueryServiceError> {
         let bounded_limit = limit.min(MAX_DETAIL_ITEMS);
         self.store
             .list_events_for_goal(&goal.goal_id, bounded_limit)

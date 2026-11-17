@@ -4,7 +4,7 @@ use super::execution_projection::ExecutionProjection;
 use crate::model::{ActionExecutionRequest, SessionExecutionContext};
 use crate::ports::{EventPublisher, RuntimeClock, TurnExecutor};
 use axon_domain::{
-    DaemonSessionId, ExecutionId, GoalStatus, JarvisEvent, JarvisEventId, SessionActionId,
+    DaemonSessionId, ExecutionId, GoalStatus, LedgerEvent, LedgerEventId, SessionActionId,
     SessionActionStatus, SessionRuntimeStatus,
 };
 use axon_session::{
@@ -237,7 +237,7 @@ where
                     cwd: runtime.cwd,
                     context_version: runtime.context_version,
                 },
-                runtime_profile: crate::JarvisRuntimeSelector::for_background_execution(),
+                runtime_profile: crate::RuntimeProfileSelector::for_background_execution(),
             },
             self.projection.as_ref().map(ExecutionProjection::sink),
         ) {
@@ -339,8 +339,8 @@ where
             action.action_id.as_str(),
             action.attempt
         );
-        let event = JarvisEvent {
-            event_id: JarvisEventId::new(format!(
+        let event = LedgerEvent {
+            event_id: LedgerEventId::new(format!(
                 "event-started-{}-{}",
                 action.action_id.as_str(),
                 action.attempt
@@ -449,9 +449,9 @@ where
             }
         }
         let event_key = format!("execution.cancelled:{}", action.action_id.as_str());
-        let cancelled_event = JarvisEvent {
-            event_id: JarvisEventId::new(format!("event-cancelled-{}", action.action_id.as_str()))
-                .unwrap_or_else(|_| JarvisEventId::new("event-cancelled").unwrap()),
+        let cancelled_event = LedgerEvent {
+            event_id: LedgerEventId::new(format!("event-cancelled-{}", action.action_id.as_str()))
+                .unwrap_or_else(|_| LedgerEventId::new("event-cancelled").unwrap()),
             sequence: 0,
             event_type: "execution.cancelled".to_owned(),
             idempotency_key: event_key,

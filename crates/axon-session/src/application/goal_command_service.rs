@@ -1,9 +1,9 @@
-//! JARVIS Goal 创建、更新与取消应用服务。
+//! Axon Goal 创建、更新与取消应用服务。
 
 use axon_domain::{
     DaemonSessionId, ExecutionId, ExecutionRecord, GoalCancelCommand, GoalCapabilityError,
     GoalCreateCommand, GoalError, GoalId, GoalPlan, GoalRecord, GoalStatus, GoalUpdateCommand,
-    JarvisEvent, JarvisEventId, ScopeRef,
+    LedgerEvent, LedgerEventId, ScopeRef,
 };
 
 use crate::ports::{
@@ -196,7 +196,7 @@ where
         goal_id: &GoalId,
         expected_revision: u64,
         execution: &GoalExecutionSpec,
-        event: &JarvisEvent,
+        event: &LedgerEvent,
         now_ms: u64,
     ) -> Result<GoalRecord, GoalCommandServiceError> {
         let Some(mut goal) = self
@@ -255,7 +255,7 @@ where
         goal_id: GoalId,
         scope: &ScopeRef,
         execution: Option<&GoalExecutionSpec>,
-        event: &JarvisEvent,
+        event: &LedgerEvent,
         now_ms: u64,
     ) -> Result<GoalRecord, GoalCommandServiceError> {
         command
@@ -294,11 +294,11 @@ where
     }
 }
 
-fn goal_updated_event(goal: &GoalRecord, now_ms: u64) -> Result<JarvisEvent, String> {
+fn goal_updated_event(goal: &GoalRecord, now_ms: u64) -> Result<LedgerEvent, String> {
     let goal_id = goal.goal_id.as_str();
     let revision = goal.revision;
-    Ok(JarvisEvent {
-        event_id: JarvisEventId::new(format!("goal-update-{goal_id}-{revision}"))
+    Ok(LedgerEvent {
+        event_id: LedgerEventId::new(format!("goal-update-{goal_id}-{revision}"))
             .map_err(|error| error.to_string())?,
         sequence: 0,
         event_type: "goal.updated".to_owned(),

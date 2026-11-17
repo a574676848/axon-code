@@ -1,6 +1,6 @@
 use super::SqliteRuntimeStore;
 use crate::{GoalMutationStore, GoalStore, LedgerEventStore};
-use axon_domain::{GoalId, GoalPlan, GoalRecord, GoalStatus, JarvisEvent, JarvisEventId, ScopeRef};
+use axon_domain::{GoalId, GoalPlan, GoalRecord, GoalStatus, LedgerEvent, LedgerEventId, ScopeRef};
 
 fn task(id: &str) -> GoalRecord {
     GoalRecord::new(
@@ -17,9 +17,9 @@ fn task(id: &str) -> GoalRecord {
     .expect("Task")
 }
 
-fn event(id: &str, key: &str, sequence: u64, payload_json: String) -> JarvisEvent {
-    JarvisEvent {
-        event_id: JarvisEventId::new(id).expect("Event ID"),
+fn event(id: &str, key: &str, sequence: u64, payload_json: String) -> LedgerEvent {
+    LedgerEvent {
+        event_id: LedgerEventId::new(id).expect("Event ID"),
         sequence,
         event_type: "goal.updated".to_owned(),
         idempotency_key: key.to_owned(),

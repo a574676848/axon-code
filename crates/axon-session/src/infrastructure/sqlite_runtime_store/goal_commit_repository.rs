@@ -5,7 +5,7 @@ use super::{
     helpers::{i64_value, u64_value},
 };
 use crate::ports::{GoalCommitError, GoalCommitStore, RuntimeStore};
-use axon_domain::{ExecutionRecord, ExecutionStatus, GoalRecord, GoalStatus, JarvisEvent};
+use axon_domain::{ExecutionRecord, ExecutionStatus, GoalRecord, GoalStatus, LedgerEvent};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 impl GoalCommitStore for SqliteRuntimeStore {
@@ -13,7 +13,7 @@ impl GoalCommitStore for SqliteRuntimeStore {
         &self,
         goal: &GoalRecord,
         execution: &ExecutionRecord,
-        event: &JarvisEvent,
+        event: &LedgerEvent,
     ) -> Result<(), GoalCommitError> {
         validate_inputs(goal, execution, event)?;
         self.initialize().map_err(storage_error)?;
@@ -32,7 +32,7 @@ impl GoalCommitStore for SqliteRuntimeStore {
         goal: &GoalRecord,
         expected_revision: u64,
         execution: &ExecutionRecord,
-        event: &JarvisEvent,
+        event: &LedgerEvent,
     ) -> Result<(), GoalCommitError> {
         if goal.status != GoalStatus::Active || goal.revision != expected_revision.saturating_add(1)
         {
@@ -89,7 +89,7 @@ impl GoalCommitStore for SqliteRuntimeStore {
     fn commit_goal_proposal(
         &self,
         goal: &GoalRecord,
-        event: &JarvisEvent,
+        event: &LedgerEvent,
     ) -> Result<(), GoalCommitError> {
         if goal.status != GoalStatus::Proposed
             || goal.revision != 0
@@ -115,7 +115,7 @@ impl GoalCommitStore for SqliteRuntimeStore {
 fn validate_inputs(
     goal: &GoalRecord,
     execution: &ExecutionRecord,
-    event: &JarvisEvent,
+    event: &LedgerEvent,
 ) -> Result<(), GoalCommitError> {
     if goal.status != GoalStatus::Proposed || goal.revision != 0 {
         return Err(GoalCommitError::Conflict(
@@ -280,7 +280,7 @@ fn ensure_execution(
 
 fn ensure_event(
     transaction: &rusqlite::Transaction<'_>,
-    event: &JarvisEvent,
+    event: &LedgerEvent,
 ) -> Result<(), GoalCommitError> {
     type PersistedEvent = (String, i64, String, String, Option<String>, String, i64);
 

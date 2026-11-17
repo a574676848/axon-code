@@ -1,6 +1,6 @@
 //! Goal 首次提交的持久化端口。
 
-use axon_domain::{ExecutionRecord, GoalRecord, JarvisEvent};
+use axon_domain::{ExecutionRecord, GoalRecord, LedgerEvent};
 use std::fmt;
 
 /// Goal 首次提交错误。
@@ -29,7 +29,7 @@ pub trait GoalCommitStore: Send + Sync {
     fn commit_goal_proposal(
         &self,
         goal: &GoalRecord,
-        event: &JarvisEvent,
+        event: &LedgerEvent,
     ) -> Result<(), GoalCommitError>;
 
     /// 原子创建 Goal、首个 queued Execution 与对应 Event。
@@ -39,7 +39,7 @@ pub trait GoalCommitStore: Send + Sync {
         &self,
         goal: &GoalRecord,
         execution: &ExecutionRecord,
-        event: &JarvisEvent,
+        event: &LedgerEvent,
     ) -> Result<(), GoalCommitError>;
 
     /// 原子启动已有 Goal，递增 revision、创建 queued Execution 并追加事件。
@@ -50,7 +50,7 @@ pub trait GoalCommitStore: Send + Sync {
         _goal: &GoalRecord,
         _expected_revision: u64,
         _execution: &ExecutionRecord,
-        _event: &JarvisEvent,
+        _event: &LedgerEvent,
     ) -> Result<(), GoalCommitError> {
         Err(GoalCommitError::Conflict(
             "当前存储未实现已有 Goal 的原子启动".to_owned(),

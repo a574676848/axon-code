@@ -11,7 +11,7 @@ use axon_session::{
     LedgerEventStore, SessionEventRecord, SqliteRuntimeStore, WorkspaceResolver, WorkspaceStore,
 };
 use axon_session_runtime::{
-    ActionExecutionRequest, JarvisRuntimeSelector, TurnExecutionError, TurnExecutionOutcome,
+    ActionExecutionRequest, RuntimeProfileSelector, TurnExecutionError, TurnExecutionOutcome,
     model::RuntimeEvent,
 };
 use std::thread;
@@ -203,7 +203,7 @@ fn daemon_primary_turn_answers_plain_question_without_creating_task() {
     assert_eq!(requests[0].context.cwd, workspace.workspace_root);
     assert_eq!(
         requests[0].runtime_profile,
-        JarvisRuntimeSelector::for_primary_turn()
+        RuntimeProfileSelector::for_primary_turn()
     );
     let crate::application::event_stream_bridge::StreamNotification::SessionEvent(streamed) =
         subscription.try_recv().expect("收到 Primary 实时事件")

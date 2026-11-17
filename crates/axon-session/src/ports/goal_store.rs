@@ -1,6 +1,6 @@
 //! Work Ledger Goal 的持久化端口。
 
-use axon_domain::{GoalId, GoalListQuery, GoalRecord, JarvisEvent, ScopeRef};
+use axon_domain::{GoalId, GoalListQuery, GoalRecord, LedgerEvent, ScopeRef};
 use std::fmt;
 
 /// Goal 存储错误。
@@ -140,6 +140,6 @@ pub trait GoalMutationStore: GoalStore {
         &self,
         goal: &GoalRecord,
         expected_revision: u64,
-        event: &JarvisEvent,
+        event: &LedgerEvent,
     ) -> Result<(), GoalStoreError>;
 }

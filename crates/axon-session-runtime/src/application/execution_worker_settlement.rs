@@ -12,7 +12,7 @@ use super::{ExecutionWorker, ExecutionWorkerError, MAX_EXECUTION_ATTEMPTS};
 use crate::model::{TurnExecutionError, TurnFailureKind};
 use crate::ports::{EventPublisher, RuntimeClock};
 use axon_domain::{
-    ExecutionId, ExecutionStatus, GoalId, GoalRecord, GoalStatus, JarvisEvent, JarvisEventId,
+    ExecutionId, ExecutionStatus, GoalId, GoalRecord, GoalStatus, LedgerEvent, LedgerEventId,
     ResultErrorKind, ResultId, ResultRecord,
 };
 use axon_session::{ExecutionSettlement, RuntimeStore, SessionActionRecord};
@@ -146,13 +146,13 @@ where
         error: &str,
         now_ms: u64,
     ) -> Result<(), ExecutionWorkerError> {
-        let event = JarvisEvent {
-            event_id: JarvisEventId::new(format!(
+        let event = LedgerEvent {
+            event_id: LedgerEventId::new(format!(
                 "event-waiting-{}-{}",
                 action.action_id.as_str(),
                 action.attempt
             ))
-            .unwrap_or_else(|_| JarvisEventId::new("event-waiting").unwrap()),
+            .unwrap_or_else(|_| LedgerEventId::new("event-waiting").unwrap()),
             sequence: 0,
             event_type: RETRY_LEDGER_EVENT.to_owned(),
             idempotency_key: format!(
@@ -283,7 +283,7 @@ fn conclusion_records(
     conclusion: &FailureConclusion,
     message: String,
     now_ms: u64,
-) -> (ResultRecord, JarvisEvent) {
+) -> (ResultRecord, LedgerEvent) {
     let execution_id = ExecutionId::new(action.action_id.as_str())
         .unwrap_or_else(|_| ExecutionId::new("execution-unknown").unwrap());
     let result = ResultRecord::failure(
@@ -299,13 +299,13 @@ fn conclusion_records(
         conclusion.error_kind,
         now_ms,
     );
-    let event = JarvisEvent {
-        event_id: JarvisEventId::new(format!(
+    let event = LedgerEvent {
+        event_id: LedgerEventId::new(format!(
             "event-{}-{}",
             conclusion.ledger_event_type,
             action.action_id.as_str()
         ))
-        .unwrap_or_else(|_| JarvisEventId::new("event-execution-conclusion").unwrap()),
+        .unwrap_or_else(|_| LedgerEventId::new("event-execution-conclusion").unwrap()),
         sequence: 0,
         event_type: conclusion.ledger_event_type.to_owned(),
         idempotency_key: format!(

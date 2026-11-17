@@ -1,4 +1,4 @@
-//! JARVIS Activity 查询应用服务。
+//! Axon Activity 查询应用服务。
 //!
 //! Activity 直接读取 Work Ledger 事实源，不维护 Projection 或独立缓存。
 
@@ -77,7 +77,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use axon_domain::{
-        ExecutionId, GoalId, GoalRecord, JarvisEvent, ResultId, ResultRecord, ScopeRef,
+        ExecutionId, GoalId, GoalRecord, LedgerEvent, ResultId, ResultRecord, ScopeRef,
     };
 
     use super::{ActivityQuery, ActivityService};
@@ -165,7 +165,7 @@ mod tests {
     }
 
     impl LedgerEventStore for RecordingStore {
-        fn append_ledger_event(&self, _: &JarvisEvent) -> Result<bool, LedgerEventStoreError> {
+        fn append_ledger_event(&self, _: &LedgerEvent) -> Result<bool, LedgerEventStoreError> {
             Ok(false)
         }
 
@@ -173,7 +173,7 @@ mod tests {
             &self,
             after_sequence: u64,
             limit: u32,
-        ) -> Result<Vec<JarvisEvent>, LedgerEventStoreError> {
+        ) -> Result<Vec<LedgerEvent>, LedgerEventStoreError> {
             self.calls
                 .lock()
                 .expect("calls lock")

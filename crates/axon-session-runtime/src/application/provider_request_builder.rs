@@ -4,7 +4,7 @@ use axon_domain::QuotedMessageContext;
 use axon_session::SessionActionRecord;
 use serde::Deserialize;
 
-use crate::application::jarvis_runtime_profile::JarvisRuntimeProfile;
+use crate::application::runtime_profile::RuntimeProfile;
 use crate::model::SessionExecutionContext;
 
 /// Provider runner 的规范化输入。
@@ -23,7 +23,7 @@ pub struct ProviderTurnRequest {
     /// Session Runtime 决定的持久 run session ID。
     pub run_session_id: String,
     /// 应用运行时选择的统一人格 profile。
-    pub runtime_profile: JarvisRuntimeProfile,
+    pub runtime_profile: RuntimeProfile,
     /// 由 transport 写入、由事件 journal 原样保留的上下文。
     pub transport_context: Option<serde_json::Value>,
 }
@@ -44,7 +44,7 @@ struct ProviderTurnPayload {
 pub fn build_provider_turn_request(
     action: &SessionActionRecord,
     context: &SessionExecutionContext,
-    runtime_profile: JarvisRuntimeProfile,
+    runtime_profile: RuntimeProfile,
 ) -> Result<ProviderTurnRequest, String> {
     let payload: ProviderTurnPayload = serde_json::from_str(&action.payload_json)
         .map_err(|error| format!("Action payload 解析失败：{error}"))?;
@@ -99,7 +99,7 @@ mod tests {
                 r#"{"prompt":"问题","quotedMessage":{"messageId":"parent","visibleText":"引用"},"transportContext":{"kind":"webhook","chatId":"chat"}}"#,
             ),
             &context(),
-            JarvisRuntimeProfile::Jarvis,
+            RuntimeProfile::Primary,
         )
         .expect("请求应可构造");
 
@@ -107,7 +107,7 @@ mod tests {
         assert_eq!(request.session_id, "session-builder");
         assert_eq!(request.run_session_id, "run-builder");
         assert_eq!(request.cwd, "workspace");
-        assert_eq!(request.runtime_profile, JarvisRuntimeProfile::Jarvis);
+        assert_eq!(request.runtime_profile, RuntimeProfile::Primary);
         assert_eq!(
             request
                 .transport_context
@@ -130,7 +130,7 @@ mod tests {
         let error = build_provider_turn_request(
             &action(r#"{"prompt":"问题","cwd":"错误目录","runSessionId":"错误会话","runtimeProfile":"other"}"#),
             &context(),
-            JarvisRuntimeProfile::Jarvis,
+            RuntimeProfile::Primary,
         )
         .expect_err("payload 不得覆盖权威执行上下文");
 

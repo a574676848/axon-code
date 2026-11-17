@@ -44,7 +44,7 @@ ledger_id!(GoalId, "Work Ledger Goal 标识。");
 ledger_id!(ExecutionId, "Work Ledger Execution 标识。");
 ledger_id!(ResultId, "Work Ledger Result 标识。");
 ledger_id!(DecisionId, "Work Ledger Decision 标识。");
-ledger_id!(JarvisEventId, "JARVIS Event 标识。");
+ledger_id!(LedgerEventId, "Ledger Event 标识。");
 
 /// Work Ledger 标识错误。
 #[derive(Debug, Clone, PartialEq, Eq)]

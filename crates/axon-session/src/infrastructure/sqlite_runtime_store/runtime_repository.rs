@@ -340,93 +340,72 @@ pub(super) fn claim_upgrade_replacement(
     })
 }
 
+/// 恢复租约失效的 Session，并把水位与事件面对齐。
+///
+/// 分三段执行，目的是**把文件 IO 移出写事务**：
+/// 1. 只读取出候选会话与它们的水位（不拿写锁）；
+/// 2. 逐会话读事件面末条（文件 IO，不持锁）；
+/// 3. 一个短写事务里带水位 CAS 落账，水位在期间被别人改过就跳过该会话。
+///
+/// 直接在第一段事务里读日志会把写锁按住整个「会话数 × 单会话文件读」的时间：
+/// 解锁前 WAL 无法回卷，其他写者全部在 `busy_timeout` 里排队，表现为
+/// `database is locked` 风暴。
 pub(super) fn recover_expired_sessions(
     store: &SqliteRuntimeStore,
     host: &DaemonHostRecord,
     now_ms: u64,
     limit: u32,
 ) -> Result<Vec<SessionRuntimeRecord>, RuntimeStoreError> {
+    let plan = plan_recovery(store, host, now_ms, limit)?;
+    if plan.is_empty() {
+        // 没有候选也要过一遍 fence：状态不成立时调用方必须看到 Fenced 而不是空结果。
+        let mut connection = store.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        SqliteRuntimeStore::ensure_fence(&transaction, host, now_ms)?;
+        transaction.commit().map_err(storage)?;
+        return Ok(Vec::new());
+    }
     let mut connection = store.connection()?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(storage)?;
     SqliteRuntimeStore::ensure_fence(&transaction, host, now_ms)?;
-    let mut statement = transaction.prepare(
-        "SELECT runtime.session_id FROM sessions AS runtime \
-         LEFT JOIN daemon_instances AS owner ON owner.host_id = runtime.owner_host_id AND owner.generation = runtime.owner_generation \
-         WHERE runtime.status IN ('running','compacting','waiting') AND (runtime.owner_host_id IS NULL OR owner.host_id IS NULL OR owner.lease_expires_at_ms <= ?1) \
-         ORDER BY runtime.last_activity_at_ms ASC LIMIT ?2"
-    ).map_err(storage)?;
-    let ids = statement
-        .query_map(params![i64_value(now_ms)?, i64::from(limit)], |row| {
-            row.get::<_, String>(0)
-        })
-        .map_err(storage)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(storage)?;
-    drop(statement);
-    let mut recovered = Vec::with_capacity(ids.len());
+    let mut recovered = Vec::with_capacity(plan.len());
     let mut pending_events: Vec<(axon_domain::DaemonSessionId, u64, String)> = Vec::new();
-    for id in ids {
-        let changed = transaction.execute(
-            "UPDATE sessions SET status='recovering',owner_host_id=?1,owner_generation=?2,worker_attempt=worker_attempt+1,last_activity_at_ms=?3,updated_at_ms=?3 WHERE session_id=?4",
-            params![host.host_id.as_str(), host.generation, i64_value(now_ms)?, id],
-        ).map_err(storage)?;
+    for step in plan {
+        // 水位 CAS：第一段到现在之间若有别的写者推进过水位，这一步必须落空，
+        // 否则会用旧水位算出的事件序号覆盖别人的进度。
+        let changed = transaction
+            .execute(
+                "UPDATE sessions SET status='recovering',owner_host_id=?1,owner_generation=?2,\
+                 worker_attempt=worker_attempt+1,last_activity_at_ms=?3,updated_at_ms=?3,\
+                 last_event_sequence=?4 \
+                 WHERE session_id=?5 AND last_event_sequence=?6 \
+                 AND status IN ('running','compacting','waiting')",
+                params![
+                    host.host_id.as_str(),
+                    host.generation,
+                    i64_value(now_ms)?,
+                    step.next_event,
+                    step.session_id.as_str(),
+                    i64_value(step.recorded_sequence)?,
+                ],
+            )
+            .map_err(storage)?;
         if changed == 0 {
             continue;
         }
-        // 水位与事件面对账：控制面记的末条序号必须等于真正落盘的末条序号。
-        // 崩溃可能让两者差开（帧已落盘但水位没推进，或控制面先提交而帧没落盘），
-        // 不对账就会写出序号不单调的日志。日志缺失时保持水位不变。
-        let recorded: i64 = transaction
-            .query_row(
-                "SELECT last_event_sequence FROM sessions WHERE session_id=?1",
-                params![id.clone()],
-                |row| row.get(0),
-            )
-            .map_err(storage)?;
-        let recorded = u64::try_from(recorded)
-            .map_err(|_| RuntimeStoreError::Storage("事件水位为负".to_owned()))?;
-        let session_id = parse_session_id(id.clone())
-            .map_err(|_| RuntimeStoreError::Storage("会话标识无效".to_owned()))?;
-        let durable = super::event_log_repository::durable_tail(store, &session_id)?;
-        let (watermark, reconciliation) = match durable {
-            Some((tail, tail_generation)) if tail != recorded => (
-                tail,
-                serde_json::json!({
-                    "watermarkBefore": recorded,
-                    "watermarkAfter": tail,
-                    "logTail": tail,
-                    "tailGeneration": tail_generation,
-                }),
-            ),
-            _ => (recorded, serde_json::Value::Null),
-        };
-        let next_event = i64::try_from(watermark.saturating_add(1))
-            .map_err(|_| RuntimeStoreError::Storage("事件序号超出范围".to_owned()))?;
-        // 会话级事件，不归属任何 Interaction，故 interaction_id 留空。
-        // 会话级事件，不归属任何 Interaction；事件写入推迟到事务提交之后。
         pending_events.push((
-            session_id.clone(),
-            u64::try_from(next_event)
-                .map_err(|_| RuntimeStoreError::Storage("事件序号超出范围".to_owned()))?,
-            serde_json::json!({
-                "ownerGeneration": host.generation,
-                "checkpointRecovered": true,
-                "watermarkReconciled": reconciliation,
-            })
-            .to_string(),
+            step.session_id.clone(),
+            step.next_sequence,
+            step.payload_json,
         ));
-        transaction
-            .execute(
-                "UPDATE sessions SET last_event_sequence=?1 WHERE session_id=?2",
-                params![next_event, id],
-            )
-            .map_err(storage)?;
         recovered.push(transaction.query_row(
             "SELECT session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms \
              FROM sessions WHERE session_id=?1",
-            params![id],
+            params![step.session_id.as_str()],
             |row| Ok(SessionRuntimeRecord {
                 session_id: parse_session_id(row.get(0)?)?,
                 run_session_id: row.get(1)?,
@@ -456,6 +435,84 @@ pub(super) fn recover_expired_sessions(
         super::event_log_repository::write_records(store, std::slice::from_ref(&record), None)?;
     }
     Ok(recovered)
+}
+
+/// 一段待恢复会话的落账计划：水位、要补的会话级事件与 CAS 条件都已算好。
+struct RecoveryStep {
+    session_id: axon_domain::DaemonSessionId,
+    /// 计划依据的水位；落账时 CAS 比对它，期间被别人推进过就跳过该会话。
+    recorded_sequence: u64,
+    next_event: i64,
+    next_sequence: u64,
+    payload_json: String,
+}
+
+/// 只读取候选会话，并在**不持写锁**的情况下读完事件面末条，产出落账计划。
+fn plan_recovery(
+    store: &SqliteRuntimeStore,
+    host: &DaemonHostRecord,
+    now_ms: u64,
+    limit: u32,
+) -> Result<Vec<RecoveryStep>, RuntimeStoreError> {
+    let connection = store.connection()?;
+    let mut statement = connection
+        .prepare(
+            "SELECT runtime.session_id, runtime.last_event_sequence FROM sessions AS runtime \
+             LEFT JOIN daemon_instances AS owner ON owner.host_id = runtime.owner_host_id AND owner.generation = runtime.owner_generation \
+             WHERE runtime.status IN ('running','compacting','waiting') \
+             AND (runtime.owner_host_id IS NULL OR owner.host_id IS NULL OR owner.lease_expires_at_ms <= ?1) \
+             ORDER BY runtime.last_activity_at_ms ASC LIMIT ?2",
+        )
+        .map_err(storage)?;
+    let candidates = statement
+        .query_map(params![i64_value(now_ms)?, i64::from(limit)], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    drop(statement);
+    let mut plan = Vec::with_capacity(candidates.len());
+    for (raw_id, recorded) in candidates {
+        let recorded = u64::try_from(recorded)
+            .map_err(|_| RuntimeStoreError::Storage("事件水位为负".to_owned()))?;
+        let session_id = parse_session_id(raw_id)
+            .map_err(|_| RuntimeStoreError::Storage("会话标识无效".to_owned()))?;
+        // 水位与事件面对账：控制面记的末条序号必须等于真正落盘的末条序号。
+        // 崩溃可能让两者差开（帧已落盘但水位没推进，或控制面先提交而帧没落盘），
+        // 不对账就会写出序号不单调的日志。日志缺失时保持水位不变。
+        let durable = super::event_log_repository::durable_tail(store, &session_id)?;
+        let (watermark, reconciliation) = match durable {
+            Some((tail, tail_generation)) if tail != recorded => (
+                tail,
+                serde_json::json!({
+                    "watermarkBefore": recorded,
+                    "watermarkAfter": tail,
+                    "logTail": tail,
+                    "tailGeneration": tail_generation,
+                }),
+            ),
+            _ => (recorded, serde_json::Value::Null),
+        };
+        let next_event = i64::try_from(watermark.saturating_add(1))
+            .map_err(|_| RuntimeStoreError::Storage("事件序号超出范围".to_owned()))?;
+        let next_sequence = u64::try_from(next_event)
+            .map_err(|_| RuntimeStoreError::Storage("事件序号超出范围".to_owned()))?;
+        plan.push(RecoveryStep {
+            session_id,
+            recorded_sequence: recorded,
+            next_event,
+            next_sequence,
+            // 会话级事件，不归属任何 Interaction，故 interaction_id 留空。
+            payload_json: serde_json::json!({
+                "ownerGeneration": host.generation,
+                "checkpointRecovered": true,
+                "watermarkReconciled": reconciliation,
+            })
+            .to_string(),
+        });
+    }
+    Ok(plan)
 }
 
 /// Runtime 聚合 repository 视图。

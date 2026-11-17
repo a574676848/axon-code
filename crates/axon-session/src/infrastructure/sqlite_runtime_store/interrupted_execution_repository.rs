@@ -8,7 +8,7 @@ use super::SqliteRuntimeStore;
 use super::helpers::{i64_value, storage, u64_value};
 use crate::domain::runtime::{DaemonHostRecord, SessionEventRecord};
 use crate::ports::{RuntimeStore, RuntimeStoreError};
-use axon_domain::{DaemonSessionId, JarvisEventId};
+use axon_domain::{DaemonSessionId, LedgerEventId};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 
 const UNCERTAIN_STATUS: &str = "uncertain";
@@ -243,7 +243,7 @@ fn settle_uncertain(
             )
             .map_err(storage)?;
     }
-    let event_id = JarvisEventId::new(format!("event-{LEDGER_EVENT_TYPE}-{execution_id}"))
+    let event_id = LedgerEventId::new(format!("event-{LEDGER_EVENT_TYPE}-{execution_id}"))
         .map_err(|error| RuntimeStoreError::InvalidId(error.to_string()))?;
     transaction
         .execute(

@@ -1,6 +1,6 @@
 //! Workspace 内的 Session 复合车道身份。
 //!
-//! Axon 对外只有持续存在的同一个 JARVIS，Session 只是内部运行窗口。Workspace
+//! Axon 对外只有持续存在的同一个 Axon，Session 只是内部运行窗口。Workspace
 //! 决定项目事实范围，但不同 audience 和会话表面不得共享 Provider history。
 
 use axon_crypto::sha256_hex;

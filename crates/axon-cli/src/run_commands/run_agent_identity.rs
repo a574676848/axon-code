@@ -89,7 +89,7 @@ pub(crate) fn run_agent_identity(request: &ProviderTurnRequest) -> RunAgentIdent
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axon_session_runtime::JarvisRuntimeProfile;
+    use axon_session_runtime::RuntimeProfile;
 
     fn request_with(action_kind: &str, context: Option<serde_json::Value>) -> ProviderTurnRequest {
         ProviderTurnRequest {
@@ -99,7 +99,7 @@ mod tests {
             quoted_message: None,
             cwd: ".".to_owned(),
             run_session_id: "r-1".to_owned(),
-            runtime_profile: JarvisRuntimeProfile::Jarvis,
+            runtime_profile: RuntimeProfile::Primary,
             transport_context: context,
         }
     }

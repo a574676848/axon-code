@@ -2,11 +2,11 @@
 
 use super::{SqliteRuntimeStore, helpers::i64_value};
 use crate::ports::{LedgerEventStore, LedgerEventStoreError, RuntimeStore};
-use axon_domain::{GoalId, JarvisEvent, JarvisEventId};
+use axon_domain::{GoalId, LedgerEvent, LedgerEventId};
 use rusqlite::{OptionalExtension, Row, TransactionBehavior, params};
 
 impl LedgerEventStore for SqliteRuntimeStore {
-    fn append_ledger_event(&self, event: &JarvisEvent) -> Result<bool, LedgerEventStoreError> {
+    fn append_ledger_event(&self, event: &LedgerEvent) -> Result<bool, LedgerEventStoreError> {
         if event.event_type.trim().is_empty() || event.idempotency_key.trim().is_empty() {
             return Err(LedgerEventStoreError::Conflict(
                 "Event envelope 无效".to_owned(),
@@ -76,7 +76,7 @@ impl LedgerEventStore for SqliteRuntimeStore {
         &self,
         after_sequence: u64,
         limit: u32,
-    ) -> Result<Vec<JarvisEvent>, LedgerEventStoreError> {
+    ) -> Result<Vec<LedgerEvent>, LedgerEventStoreError> {
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -104,7 +104,7 @@ impl LedgerEventStore for SqliteRuntimeStore {
         &self,
         goal_id: &GoalId,
         limit: u32,
-    ) -> Result<Vec<JarvisEvent>, LedgerEventStoreError> {
+    ) -> Result<Vec<LedgerEvent>, LedgerEventStoreError> {
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -123,9 +123,9 @@ impl LedgerEventStore for SqliteRuntimeStore {
     }
 }
 
-fn read_event(row: &Row<'_>) -> rusqlite::Result<JarvisEvent> {
-    Ok(JarvisEvent {
-        event_id: JarvisEventId::new(row.get::<_, String>(0)?)
+fn read_event(row: &Row<'_>) -> rusqlite::Result<LedgerEvent> {
+    Ok(LedgerEvent {
+        event_id: LedgerEventId::new(row.get::<_, String>(0)?)
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
         sequence: u64::try_from(row.get::<_, i64>(1)?)
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
@@ -133,7 +133,7 @@ fn read_event(row: &Row<'_>) -> rusqlite::Result<JarvisEvent> {
         idempotency_key: row.get(3)?,
         cause_event_id: row
             .get::<_, Option<String>>(4)?
-            .map(|value| JarvisEventId::new(value).map_err(|_| rusqlite::Error::InvalidQuery))
+            .map(|value| LedgerEventId::new(value).map_err(|_| rusqlite::Error::InvalidQuery))
             .transpose()?,
         payload_json: row.get(5)?,
         occurred_at_ms: u64::try_from(row.get::<_, i64>(6)?)

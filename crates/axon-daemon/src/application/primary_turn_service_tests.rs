@@ -351,7 +351,7 @@ fn active_lease_index(
 #[derive(Clone, Default)]
 struct RecordingRunner {
     calls: Arc<Mutex<Vec<String>>>,
-    profiles: Arc<Mutex<Vec<JarvisRuntimeProfile>>>,
+    profiles: Arc<Mutex<Vec<RuntimeProfile>>>,
     active: Arc<AtomicUsize>,
     max_active: Arc<AtomicUsize>,
     /// 可选汇合点：需要观察 session 并发时注入，用同步取代 sleep 时序。
@@ -467,7 +467,7 @@ fn interaction_in_workspace(id: &str, workspace: &str, received_at_ms: u64) -> I
 }
 
 #[test]
-fn primary_turn_uses_jarvis_profile_regardless_of_transport_source() {
+fn primary_turn_uses_Axon_profile_regardless_of_transport_source() {
     let mut source_interaction = interaction();
     source_interaction.source =
         InteractionSource::new("webhook", "message-from-remote").expect("有效来源");
@@ -481,7 +481,7 @@ fn primary_turn_uses_jarvis_profile_regardless_of_transport_source() {
 
     assert_eq!(
         runner.profiles.lock().expect("锁未中毒").as_slice(),
-        [JarvisRuntimeProfile::Jarvis]
+        [RuntimeProfile::Primary]
     );
 }
 

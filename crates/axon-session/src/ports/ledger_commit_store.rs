@@ -1,6 +1,6 @@
 //! Work Ledger 原子提交端口。
 
-use axon_domain::{ExecutionRecord, GoalRecord, JarvisEvent, ResultRecord};
+use axon_domain::{ExecutionRecord, GoalRecord, LedgerEvent, ResultRecord};
 use std::fmt;
 
 /// Work Ledger 提交错误。
@@ -41,7 +41,7 @@ pub struct ExecutionSettlement {
     /// 乐观锁所需的旧 revision。
     pub expected_goal_revision: u64,
     /// 与结算同事务追加的事件。
-    pub event: JarvisEvent,
+    pub event: LedgerEvent,
 }
 
 /// Work Ledger 原子提交端口。
@@ -55,6 +55,6 @@ pub trait LedgerCommitStore: Send + Sync {
         result: &ResultRecord,
         goal: &GoalRecord,
         expected_goal_revision: u64,
-        event: &JarvisEvent,
+        event: &LedgerEvent,
     ) -> Result<(), LedgerCommitError>;
 }
