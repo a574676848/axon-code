@@ -33,6 +33,8 @@ const EXTERNAL_EVENT_INTERACTION_PREFIX: &str = "external-interaction-";
 pub struct ExternalEventEnvelope {
     /// 外部来源渠道，例如 webhook provider 名称。
     pub source_channel: String,
+    /// 发起这一轮的客户端（desktop / cli / tui / cron）；缺省表示没有客户端事实。
+    pub client: Option<String>,
     /// 外部系统提供的稳定事件标识。
     pub event_id: String,
     /// 事件所属 Workspace。
@@ -302,6 +304,10 @@ where
             event.source_channel.clone(),
             format!("{EXTERNAL_EVENT_SOURCE_PREFIX}{digest}"),
         )
+        .and_then(|source| match event.client.as_deref() {
+            Some(client) if !client.trim().is_empty() => source.with_client(client),
+            _ => Ok(source),
+        })
         .map_err(|error| ExternalEventIngressError::InvalidInput(error.to_string()))?;
         let interaction_id =
             InteractionId::new(format!("{EXTERNAL_EVENT_INTERACTION_PREFIX}{digest}"))
@@ -393,6 +399,7 @@ mod tests {
 
     fn event(workspace_id: &str) -> ExternalEventEnvelope {
         ExternalEventEnvelope {
+            client: None,
             source_channel: "github".to_owned(),
             event_id: "push-123".to_owned(),
             workspace_id: workspace_id.to_owned(),
@@ -526,6 +533,7 @@ mod tests {
             .expect("提交第一个事件");
         ingress
             .submit(ExternalEventEnvelope {
+                client: None,
                 event_id: "push-456".to_owned(),
                 workspace_id: "workspace-b".to_owned(),
                 ..event("workspace-a")

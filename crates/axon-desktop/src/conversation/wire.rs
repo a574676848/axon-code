@@ -27,6 +27,9 @@ pub const INTERACTIONS_PATH: &str = "/api/v1/interactions";
 pub struct EventSubmission {
     /// 来源渠道。
     pub source_channel: String,
+    /// 发起这一轮的客户端；桌面端固定为 `desktop`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client: Option<String>,
     /// 客户端生成的稳定幂等键。
     pub event_id: String,
     /// 事件所属 Workspace。
@@ -210,6 +213,7 @@ mod tests {
     #[test]
     fn submission_envelope_uses_camel_case_fields() {
         let value = serde_json::to_value(EventSubmission {
+            client: Some("desktop".to_owned()),
             source_channel: "desktop".to_owned(),
             event_id: "event-1".to_owned(),
             workspace_id: "workspace-a".to_owned(),

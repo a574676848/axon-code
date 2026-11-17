@@ -125,6 +125,7 @@ fn provider_envelope(
         .clone()
         .unwrap_or_else(|| event.event_id.clone());
     ExternalEventEnvelope {
+        client: None,
         source_channel: provider.to_owned(),
         event_id: event.event_id,
         workspace_id: String::new(),
@@ -158,6 +159,9 @@ fn system_now_ms() -> u64 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct HttpEventRequest {
     source_channel: String,
+    /// 发起这一轮的客户端；缺省表示没有客户端事实。
+    #[serde(default)]
+    client: Option<String>,
     event_id: String,
     /// 事件所属 Workspace。
     ///
@@ -185,6 +189,7 @@ struct HttpEventRequest {
 impl HttpEventRequest {
     fn into_event(self) -> Result<ExternalEventEnvelope, ()> {
         Ok(ExternalEventEnvelope {
+            client: self.client,
             source_channel: self.source_channel,
             event_id: self.event_id,
             workspace_id: self.workspace_id.unwrap_or_default().trim().to_owned(),

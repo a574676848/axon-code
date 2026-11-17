@@ -108,6 +108,7 @@ impl Fixture {
 
     fn event(&self, event_id: &str, correlation_key: Option<&str>) -> ExternalEventEnvelope {
         ExternalEventEnvelope {
+            client: None,
             source_channel: "jira".to_owned(),
             event_id: event_id.to_owned(),
             workspace_id: String::new(),

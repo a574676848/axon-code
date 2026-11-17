@@ -35,6 +35,7 @@ pub(super) struct WsEventRequest {
 impl WsEventRequest {
     pub(super) fn into_event(self) -> ExternalEventEnvelope {
         ExternalEventEnvelope {
+            client: None,
             source_channel: self.source_channel,
             event_id: self.event_id,
             workspace_id: self.workspace_id.unwrap_or_default().trim().to_owned(),

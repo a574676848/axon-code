@@ -503,6 +503,7 @@ fn voice_envelope(
 ) -> ExternalEventEnvelope {
     let now_ms = system_now_ms();
     ExternalEventEnvelope {
+        client: None,
         source_channel: VOICE_CHANNEL.to_owned(),
         event_id: format!("voice-{connection_session_id}-{utterance_seq}"),
         workspace_id: request.workspace_id.clone(),

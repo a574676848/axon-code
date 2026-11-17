@@ -62,6 +62,7 @@ pub fn submit_message(
         observed_at_ms: now_ms,
         expires_at_ms: now_ms.saturating_add(EVENT_TTL_MS),
         content: content.to_string(),
+        client: Some("desktop".to_string()),
         reply_channel: DESKTOP_SESSION_CHANNEL.to_string(),
         reply_destination: destination.to_string(),
         local_files: attachments.to_vec(),
