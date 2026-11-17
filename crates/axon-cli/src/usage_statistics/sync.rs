@@ -12,8 +12,10 @@ use std::{
 use serde::Serialize;
 
 use super::pricing_catalog::{
-    local_provider_names, parse_models_dev_catalog, parse_models_dev_json,
+    SYNCED_RULE_PRIORITY, local_model_ids, local_provider_names, parse_catalog_providers,
+    parse_models_dev_catalog, parse_models_dev_json,
 };
+use super::pricing_local::local_model_rules;
 use super::repository::UsageRepository;
 
 /// 手动同步防抖时间间隔（60 秒）。
@@ -146,19 +148,37 @@ impl PricingSyncService {
             }
         };
 
-        // 线上目录是「供应商 → 模型」的分层结构，先按它解析并按本地供应商过滤；
+        // 线上目录是「供应商 → 模型」的分层结构。两条通道都从这一次解析出发：
+        // 1. 与本机配置同名供应商的条目，按目录 id 原样收录；
+        // 2. 本机声明的模型 id，按目录的规范 id 对齐：思考档位后缀、日期戳、
+        //    厂商前缀这些代理侧写法都还原到目录里的同一个模型，价格取厂商自营条目。
         // 分层形状给不出可用条目时（自建镜像或测试夹具用的扁平形状、本地没有可对照的
         // 供应商名）再退回扁平解析，两条路都空就如实回退，而不是报「成功写入 0 条」。
         let local_providers = local_provider_names(axon_root);
-        let catalog_rules = parse_models_dev_catalog(&json_body, now_ms, &local_providers)
-            .unwrap_or_else(|_| Vec::new());
-        let rules = if catalog_rules.is_empty() {
+        let local_ids = local_model_ids(axon_root);
+        let mut rules = match parse_catalog_providers(&json_body) {
+            Ok(catalog) => {
+                let mut rules = parse_models_dev_catalog(&catalog, now_ms, &local_providers);
+                rules.extend(local_model_rules(&catalog, &local_ids, now_ms));
+                rules
+            }
+            Err(_) => Vec::new(),
+        };
+        // 两条通道可能给同一个匹配式各写一条（本机 id 恰好就是目录 id）：只留先到的那条。
+        // 目录通道的规则 id 稳定，后续同步继续按 id 覆盖，不会被别名通道反复改写。
+        let mut seen_patterns = std::collections::BTreeSet::new();
+        rules.retain(|rule| seen_patterns.insert(rule.model_pattern.to_ascii_lowercase()));
+
+        if rules.is_empty() {
             match parse_models_dev_json(&json_body, now_ms) {
-                Ok(rules) if !rules.is_empty() => rules,
+                Ok(flat) if !flat.is_empty() => rules = flat,
                 Ok(_) => {
-                    axon_logger::warning("Models.dev 目录里没有与本地供应商同名的条目，费率未写入");
+                    axon_logger::warning(
+                        "Models.dev 目录里没有能对上本机供应商或本机模型的费率条目，费率未写入",
+                    );
                     return Ok(SyncOutcome::FallbackToExisting {
-                        error: "目录里没有与本机供应商同名的费率条目，本地规则保持原样".to_owned(),
+                        error: "目录里没有能对上本机供应商或本机模型的费率条目，本地规则保持原样"
+                            .to_owned(),
                     });
                 }
                 Err(e) => {
@@ -168,13 +188,23 @@ impl PricingSyncService {
                     return Ok(SyncOutcome::FallbackToExisting { error: e });
                 }
             }
-        } else {
-            catalog_rules
-        };
+        }
+
+        let mut repository = UsageRepository::open(axon_root)?;
+        // 手工规则优先：同一匹配式已经有更高优先级的规则时，同步不再塞一条注定让位的副本，
+        // 否则界面上会出现两条同匹配式的行，谁生效还得靠优先级去猜。
+        let manually_covered: std::collections::BTreeSet<String> = repository
+            .list_pricing_rules()?
+            .into_iter()
+            .filter(|rule| rule.priority > SYNCED_RULE_PRIORITY)
+            .map(|rule| rule.model_pattern.to_ascii_lowercase())
+            .collect();
+        rules.retain(|rule| !manually_covered.contains(&rule.model_pattern.to_ascii_lowercase()));
 
         let count = rules.len();
-        let mut repository = UsageRepository::open(axon_root)?;
-        repository.save_pricing_rules(&rules)?;
+        if count > 0 {
+            repository.save_pricing_rules(&rules)?;
+        }
         self.last_success_at_ms.store(now_ms, Ordering::Release);
 
         Ok(SyncOutcome::Success { rules_saved: count })
@@ -389,5 +419,133 @@ mod tests {
         // 自动同步在 24h 内 -> 触发 RateLimited
         let outcome3 = service.sync(temp.path(), false).await.unwrap();
         assert_eq!(outcome3, SyncOutcome::RateLimited);
+    }
+
+    /// 目录里的规范模型：供应商名与本机配置都对不上，只能靠别名通道定价。
+    const FIXTURE_PROXY_ALIASES: &str = r#"{
+        "google": {
+            "models": {
+                "gemini-4-hydrogen": {
+                    "id": "gemini-4-hydrogen",
+                    "canonical_model_id": "google/gemini-4-hydrogen",
+                    "reasoning_options": [{"type": "effort", "values": ["low", "high", "xhigh"]}],
+                    "cost": { "input": 1.5, "output": 7.5, "cache_read": 0.075 }
+                }
+            }
+        },
+        "deepseek": {
+            "models": {
+                "deepseek-flash": {
+                    "id": "deepseek-flash",
+                    "canonical_model_id": "deepseek/deepseek-v4.1-flash-1017",
+                    "cost": { "input": 0.15, "output": 0.6, "cache_read": 0.003 }
+                }
+            }
+        }
+    }"#;
+
+    /// 只声明代理侧写法的最小配置：供应商名都不在目录里。
+    fn write_proxy_config(root: &Path) {
+        std::fs::write(
+            root.join("config.toml"),
+            r#"[agent]
+default_model = "gemini-3.8-flash"
+fast_model = "fast_model"
+
+[[models]]
+id = "gemini-4-hydrogen-xhigh"
+name = "gemini-3.8-flash"
+provider = "cpa"
+
+[[models]]
+id = "deepseek-v4.1-flash-1017"
+name = "fast_model"
+provider = "tokenrhythm"
+
+[[providers]]
+api_key_env = "CPA_API_KEY"
+base_url = "http://127.0.0.1:8317/v1"
+name = "cpa"
+
+[[providers]]
+api_key_env = "RHYTHM_API_KEY"
+base_url = "http://127.0.0.1:8800/v1"
+name = "tokenrhythm"
+"#,
+        )
+        .expect("隔离配置应可写入");
+    }
+
+    #[tokio::test]
+    async fn test_sync_prices_proxy_side_model_aliases() {
+        let temp = axon_test_support::test_temp_dir();
+        write_proxy_config(temp.path());
+        let transport = Box::new(MockTransport {
+            response: Ok(FIXTURE_PROXY_ALIASES.to_string()),
+        });
+        let service = PricingSyncService::with_transport(transport, 0);
+
+        let outcome = service.sync(temp.path(), true).await.unwrap();
+        assert_eq!(outcome, SyncOutcome::Success { rules_saved: 2 });
+
+        let repo = UsageRepository::open(temp.path()).unwrap();
+        let rules = repo.list_pricing_rules().unwrap();
+
+        // 思考档位后缀：写成 `-xhigh` 的模型按 google 自营价计。
+        let hydrogen = rules
+            .iter()
+            .find(|rule| rule.model_pattern == "gemini-4-hydrogen-xhigh")
+            .expect("思考档位后缀应被同步定价");
+        assert_eq!(hydrogen.input_price_per_m_micros, 1_500_000);
+        assert_eq!(hydrogen.output_price_per_m_micros, 7_500_000);
+        assert_eq!(hydrogen.priority, SYNCED_RULE_PRIORITY);
+
+        // 日期戳别名：规范 id 就是带日期的那一个。
+        let dated = rules
+            .iter()
+            .find(|rule| rule.model_pattern == "deepseek-v4.1-flash-1017")
+            .expect("日期戳别名应被同步定价");
+        assert_eq!(dated.output_price_per_m_micros, 600_000);
+    }
+
+    #[tokio::test]
+    async fn test_sync_leaves_manually_priced_patterns_alone() {
+        let temp = axon_test_support::test_temp_dir();
+        write_proxy_config(temp.path());
+
+        // 人手填的规则（优先级 0）与同步同匹配式：同步不应再写一条注定让位的副本。
+        let manual = ModelPriceRule {
+            id: "pr_manual".to_string(),
+            model_pattern: "gemini-4-hydrogen-xhigh".to_string(),
+            pricing_style: PricingStyle::OpenAi,
+            input_price_per_m_micros: 1_500_000,
+            output_price_per_m_micros: 7_500_000,
+            cache_read_price_per_m_micros: 75_000,
+            cache_write_price_per_m_micros: 0,
+            multiplier_basis_points: 10_000,
+            priority: 0,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        };
+        {
+            let repo = UsageRepository::open(temp.path()).unwrap();
+            repo.save_pricing_rule(&manual).unwrap();
+        }
+
+        let transport = Box::new(MockTransport {
+            response: Ok(FIXTURE_PROXY_ALIASES.to_string()),
+        });
+        let service = PricingSyncService::with_transport(transport, 0);
+        let outcome = service.sync(temp.path(), true).await.unwrap();
+        assert_eq!(outcome, SyncOutcome::Success { rules_saved: 1 });
+
+        let repo = UsageRepository::open(temp.path()).unwrap();
+        let rules = repo.list_pricing_rules().unwrap();
+        let same_pattern: Vec<&ModelPriceRule> = rules
+            .iter()
+            .filter(|rule| rule.model_pattern == "gemini-4-hydrogen-xhigh")
+            .collect();
+        assert_eq!(same_pattern.len(), 1, "同一匹配式不得出现两条规则");
+        assert_eq!(same_pattern[0].priority, 0, "保留下来的必须是手工规则");
     }
 }

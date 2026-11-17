@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveJobs } from '../src/conversation/transcript/derive.ts';
+import { jobRowOf } from '../src/conversation/transcript/derive.ts';
+import { conversationReducer } from '../src/conversation/transcript/reducer.ts';
+import { INITIAL_CONVERSATION } from '../src/conversation/transcript/state.ts';
 import { activeJobCount } from '../src/conversation/runtimeFacts.ts';
 import { jobDotState } from '../src/components/conversation/jobRowStatus.ts';
 
-/** 工具单元的最小事实：派生作业行只读这些字段。 */
+/** 工具单元的最小事实：作业行只读这些字段。 */
 const toolCell = (overrides = {}) => ({
     id: 'cell-1',
     role: 'tool',
@@ -23,96 +25,127 @@ const toolCell = (overrides = {}) => ({
     ...overrides,
 });
 
-const jobsOf = (...cells) => deriveJobs({ turns: [{ cells }] });
+const rowOf = (overrides) => jobRowOf(toolCell(overrides));
 
 test('作业读取工具本身不是后台任务行', () => {
     // 读取工具没有退出码，也不是作业本身：列进「后台任务」会重复出现在同一作业下，
     // 并被判成「未正常退出」。
-    assert.equal(jobsOf(toolCell()).length, 0);
-    assert.equal(jobsOf(toolCell({ toolName: 'builtin.job_kill' })).length, 0);
+    assert.equal(rowOf(), null);
+    assert.equal(rowOf({ toolName: 'builtin.job_kill' }), null);
 });
 
 test('发起作业的 shell 调用仍然留在后台任务列表里', () => {
-    const jobs = jobsOf(
-        toolCell({
-            toolKind: 'shell',
-            toolName: 'builtin.shell_command',
-            command: 'pip install scrapling',
-            exitCode: 0,
-        }),
-    );
-    assert.equal(jobs.length, 1);
-    assert.equal(jobs[0].command, 'pip install scrapling');
-    assert.equal(jobs[0].jobId, '6');
-});
-
-test('一次作业只贡献一行，读取若干次不会把它复制成多行', () => {
-    const jobs = jobsOf(
-        toolCell({ id: 'start', toolKind: 'shell', toolName: 'builtin.shell_command', command: 'pip install scrapling' }),
-        toolCell({ id: 'poll-1', command: '{"job_id":"6"}' }),
-        toolCell({ id: 'poll-2', command: '{"job_id":"6","yield_time_ms":120000}' }),
-    );
-    assert.deepEqual(jobs.map((job) => job.id), ['start']);
+    const row = rowOf({
+        toolKind: 'shell',
+        toolName: 'builtin.shell_command',
+        command: 'pip install scrapling',
+        exitCode: 0,
+    });
+    assert.equal(row.command, 'pip install scrapling');
+    assert.equal(row.jobId, '6');
 });
 
 test('行状态取作业自身状态，启动回执不会让行永远显示运行中', () => {
     // 启动回执的调用状态是 completed，但作业还在跑：行必须显示 running。
-    const running = jobsOf(
-        toolCell({
-            status: 'completed',
-            jobStatus: 'running',
-            toolKind: 'shell',
-            toolName: 'builtin.shell_command',
-            command: 'cargo build',
-        }),
+    assert.equal(
+        rowOf({ jobStatus: 'running', toolKind: 'shell', toolName: 'builtin.shell_command' }).status,
+        'running',
     );
-    assert.equal(running[0].status, 'running');
-
     // 作业真正收口后，行随之变成终态，不再依赖名册对账。
-    const done = jobsOf(
-        toolCell({
-            status: 'completed',
-            jobStatus: 'completed',
-            toolKind: 'shell',
-            toolName: 'builtin.shell_command',
-            command: 'cargo build',
-        }),
+    assert.equal(
+        rowOf({ jobStatus: 'completed', toolKind: 'shell', toolName: 'builtin.shell_command' }).status,
+        'completed',
     );
-    assert.equal(done[0].status, 'completed');
-});
-
-test('没有 jobStatus 的普通工具行仍然用调用状态', () => {
-    const jobs = jobsOf(
-        toolCell({ toolKind: 'shell', toolName: 'builtin.shell_command', command: 'curl -sI', status: 'completed', jobStatus: null }),
+    // 没有 jobStatus 的普通工具行仍然用调用状态。
+    assert.equal(
+        rowOf({ toolKind: 'shell', toolName: 'builtin.shell_command', status: 'completed' }).status,
+        'completed',
     );
-    assert.equal(jobs[0].status, 'completed');
 });
 
 test('前台 shell 调用与交互式会话不进后台任务列表', () => {
-    // 只有回执带回 job_id 的调用才是后台作业：前台命令与 tty 会话给的是 session_id，
-    // 把它们也列进这张面板，会让「后台任务 N」的读数与事实对不上。
-    const foreground = jobsOf(
-        toolCell({
-            id: 'foreground',
-            toolKind: 'shell',
-            toolName: 'builtin.shell_command',
-            command: 'git -C repo status --short',
-            exitCode: 0,
-            jobId: null,
-        }),
-    );
-    assert.equal(foreground.length, 0);
+    // 只有回执带回 job_id 的调用才是后台作业：前台命令与 tty 会话给的是 session_id。
+    assert.equal(rowOf({ toolKind: 'shell', toolName: 'builtin.shell_command', jobId: null }), null);
+});
 
-    const background = jobsOf(
-        toolCell({
-            id: 'background',
-            toolKind: 'shell',
-            toolName: 'builtin.shell_command',
-            command: 'git -C repo switch --create master --track origin/master',
-            jobId: '1',
+/** 一帧 wire 事件。 */
+function wire(sequence, kind, payload) {
+    return {
+        kind: 'frame',
+        subscribeId: 'interaction:i1',
+        eventType: 'wire_event',
+        cursor: `cur-${sequence}`,
+        payloadJson: JSON.stringify({
+            schemaVersion: 'axon.wire.v3',
+            eventId: `e${sequence}`,
+            correlationId: 'job',
+            session: { sessionId: 's1' },
+            sequence,
+            recordedAtMs: 1_000 + sequence,
+            kind: { type: kind, payload },
         }),
-    );
-    assert.deepEqual(background.map((job) => job.id), ['background']);
+    };
+}
+
+/** 一轮后台作业的帧：发起 shell、回执带 jobId、正文与终态。 */
+function jobTurnFrames() {
+    return [
+        wire(1, 'userMessage', { partId: 'u1', messageId: 'm1', content: '后台跑一个 job' }),
+        wire(2, 'toolCall', {
+            partId: 't1',
+            toolCallId: 'call1',
+            toolName: 'shell_command',
+            toolKind: 'shell',
+            summary: 'cargo build',
+            argumentsSummary: '{"command":"cargo build"}',
+        }),
+        wire(3, 'toolResult', {
+            partId: 't1',
+            toolCallId: 'call1',
+            status: 'completed',
+            summary: 'job 2 started',
+            outputPreview: 'job start job_id=2',
+            metadata: { jobId: '2', jobStatus: 'running' },
+        }),
+        wire(4, 'assistantMessage', { partId: 'a1', messageId: 'm2', content: '已启动', delta: false }),
+    ];
+}
+
+test('作业记进会话台账，折叠释放过程单元之后清单仍在', () => {
+    const frames = jobTurnFrames();
+    const opened = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn',
+        turnId: 'i1',
+        nowMs: 990,
+    });
+    let state = conversationReducer(opened, { type: 'frames', frames, nowMs: 5_000 });
+    assert.equal(state.jobs.length, 1);
+    assert.equal(state.jobs[0].jobId, '2');
+    assert.equal(state.jobs[0].status, 'running');
+
+    // 折叠把工具单元整段撤下：台账必须原样留着，否则标题栏的后台任务清单会变空。
+    state = conversationReducer(state, { type: 'fold-turn', turnId: 'i1' });
+    assert.equal(state.turns[0].cells.some((cell) => cell.role === 'tool'), false);
+    assert.equal(state.jobs.length, 1);
+    assert.equal(state.jobs[0].id, 't1');
+});
+
+test('翻页带过来的作业台账与现有台账合并，同一条作业不会出现两行', () => {
+    const frames = jobTurnFrames();
+    const opened = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn',
+        turnId: 'i1',
+        nowMs: 990,
+    });
+    const live = conversationReducer(opened, { type: 'frames', frames, nowMs: 5_000 });
+    const merged = conversationReducer(live, {
+        type: 'append-turns',
+        turns: live.turns,
+        jobs: [{ ...live.jobs[0], status: 'completed' }],
+    });
+    assert.equal(merged.turns.length, 1, '同一轮不会重复接入');
+    assert.equal(merged.jobs.length, 1);
+    assert.equal(merged.jobs[0].status, 'completed', '后到的回执覆盖先到的快照');
 });
 
 test('进行中计数以活作业名册为权威，启动快照不会把已收口的任务算成在跑', () => {

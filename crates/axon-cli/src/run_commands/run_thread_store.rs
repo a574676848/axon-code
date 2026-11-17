@@ -109,10 +109,9 @@ pub(super) fn install_active_compaction_projection(
 #[path = "run_thread_queries.rs"]
 mod queries;
 pub(crate) use queries::{
-    RecentTurnFact, SessionUsageTotals, ThreadTurnMetadata, latest_reflection_notice_at_root,
+    RecentTurnFact, ThreadTurnMetadata, latest_reflection_notice_at_root,
     latest_turn_usage_tokens_at_root, patch_turn_artifacts, previous_reflection_notice,
-    recent_turn_facts, session_model_at_root, session_usage_totals_at_root, turn_record,
-    turn_record_by_sequence, turn_sequence,
+    recent_turn_facts, session_model_at_root, turn_record, turn_record_by_sequence, turn_sequence,
 };
 
 /// Thread mirror 中单个工具回执摘要的字符上限。

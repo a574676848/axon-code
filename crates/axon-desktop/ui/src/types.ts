@@ -512,12 +512,63 @@ export interface InteractionSummary {
   model?: string | null;
   /** 该轮显式指定的推理强度；入口没有选择时缺省。 */
   reasoningEffort?: string | null;
-  /** 该轮用过的工具名（逗号分隔、已去重）；老网关不返回时缺省。 */
+  /** 该轮用过的工具名（逗号分隔、已去重）；只有尚无指标事件的老记录才有。 */
   toolSummary?: string;
   /** 本轮最终交付正文；老网关、非正常收口或正文已过保留期时缺省。 */
   answerText?: string | null;
-  /** 已收口轮次的墙钟用时（毫秒）；读不到时间事实时缺省。 */
+  /**
+   * 本轮用过的工具名，按出现顺序、已去重。
+   *
+   * 索引轮的过程抬头据此立起与实时同一句动作摘要，不必先展开这一轮。
+   */
+  toolNames?: string[];
+  /**
+   * 这一轮的读数（用时、token、首字、速率）。
+   *
+   * 事实源是该轮自己的 `turn_metrics` 事件，与整条会话的累计投影同源：索引页因此
+   * 不必为了显示一行指标去回放整轮正文。读不到任何事实时缺省。
+   */
+  metrics?: TurnMetricsReading | null;
+  /** 已收口轮次的墙钟用时（毫秒）；只在没有指标事件的老记录上出现。 */
   elapsedMs?: number | null;
+}
+
+/** 一轮的读数：字段与 `turn_metrics` 事件一一对应，未测得的一项缺省。 */
+export interface TurnMetricsReading {
+  /** 本轮墙钟用时（毫秒）。 */
+  activeMs: number;
+  /** 首字延迟（毫秒）；未测得时缺省。 */
+  ttftMs?: number | null;
+  /** 生成速率（0.1 tok/s 的整数刻度）；未测得时缺省。 */
+  generationSpeedTpsX10?: number | null;
+  /** 工具调用次数。 */
+  toolCalls: number;
+  /** 未缓存输入。 */
+  inputTokens: number;
+  /** 缓存读取。 */
+  cacheReadTokens: number;
+  /** 缓存写入。 */
+  cacheWriteTokens: number;
+  /** 输出。 */
+  outputTokens: number;
+  /** 推理输出。 */
+  reasoningTokens: number;
+}
+
+/** 会话级后台作业的一行事实。 */
+export interface SessionJobFact {
+  /** 服务端作业标识。 */
+  jobId: string;
+  /** 作业类型（shell / subagent 等）；只有终态事件时为空串。 */
+  kind?: string;
+  /** 启动时刻（Unix 毫秒）。 */
+  startedAtMs?: number | null;
+  /** 终态名称；只有启动事件时缺省，界面按「在跑」呈现。 */
+  status?: string | null;
+  /** 从启动到终态的耗时；未测得时缺省。 */
+  elapsedMs?: number | null;
+  /** 退出码（若可得）。 */
+  exitCode?: number | null;
 }
 
 /**
@@ -528,6 +579,13 @@ export interface InteractionSummary {
  */
 export interface SessionInteractions {
   interactions: InteractionSummary[];
+  /**
+   * 会话级后台作业清单。
+   *
+   * 作业是整条会话的事实，不属于某一轮：重开会话时清单由这里还原，不看这一轮跑过什么。
+   * 事实源是该会话事件流里的 `job_started` / `job_completed`。
+   */
+  jobs?: SessionJobFact[];
   sessionUsage: SessionUsageTotals | null;
   sessionElapsedMs: number | null;
   effectiveModel?: import('./conversation/viewConfig').SessionEffectiveModel | null;

@@ -8,10 +8,9 @@
 
 import { applyFrames } from './frames';
 import { collapseTurn, foldTurn, replaceTurnCells } from './fold';
-import { INITIAL_CONVERSATION, LOCAL_STEER_PREFIX, type AttachmentRef, type ConversationAction, type ConversationState, type TurnState } from './state';
+import { INITIAL_CONVERSATION, LOCAL_STEER_PREFIX, type AttachmentRef, type ConversationAction, type ConversationState, type JobRow, type TurnState } from './state';
 import { pruneSettledQuestions, type PendingQuestion } from '../questions';
-import { visibleUserText } from '../references';
-import { emptyTurn, detachCells, localUserId, openTurn, refreshLiveElapsed, upsertCell, withTurn } from './turns';
+import { emptyTurn, detachCells, localUserId, openTurn, refreshLiveElapsed, refreshLiveSummary, upsertCell, withTurn } from './turns';
 
 /** 归约入口。 */
 export function conversationReducer(
@@ -63,31 +62,45 @@ export function conversationReducer(
     case 'bind':
       return bindTurn(state, action.turnId, action.interactionId);
     case 'attach-history':
-      return attachHistory(state, action.interactionId, action.attachments);
-    case 'seed-history':
-      return seedHistory(
+      return attachHistory(
         state,
         action.interactionId,
-        action.text,
         action.attachments,
         action.channel,
       );
+    case 'seed-jobs': {
+      // 会话级清单只补空位：帧里的行带着命令与输出，比索引更完整，不能被覆盖。
+      const jobs = mergeJobs(state.jobs, action.jobs);
+      return jobs === state.jobs ? state : { ...state, jobs };
+    }
     case 'prepend-turns': {
       if (action.turns.length === 0) return state;
       /*
        * 去重后再接。
        *
-       * 前置进来的既可能是回放算好的一页，也可能是按索引立起来的一轮：
-       * 重连会再取一次首屏页，反复翻页也可能取到与已有窗口重叠的一段。
-       * 同一条 Interaction 只能有一个轮次：重复接进头部就是两份同样的历史。
+       * 前置进来的既可能是回放算好的一页，也可能是重连后再取的一次首屏页：
+       * 同一条 Interaction 只能有一个轮次，重复接进头部就是两份同样的历史。
+       * 作业台账随页一起带过来：它不随单元释放，因此必须在这里合并。
        */
-      const known = new Set(state.turns.map((turn) => turn.id));
-      const fresh = action.turns.filter((turn) => {
-        if (known.has(turn.id)) return false;
-        known.add(turn.id);
-        return true;
-      });
-      return fresh.length === 0 ? state : { ...state, turns: [...fresh, ...state.turns] };
+      const fresh = unseenTurns(state, action.turns);
+      const jobs = mergeJobs(state.jobs, action.jobs);
+      if (fresh.length === 0 && jobs === state.jobs) return state;
+      return {
+        ...state,
+        turns: fresh.length === 0 ? state.turns : [...fresh, ...state.turns],
+        jobs,
+      };
+    }
+    case 'append-turns': {
+      const fresh = unseenTurns(state, action.turns);
+      // 增量接管只接还不认识的轮次：外部事件到达时整屏正文原地延长，不重排。
+      const jobs = mergeJobs(state.jobs, action.jobs);
+      if (fresh.length === 0 && jobs === state.jobs) return state;
+      return {
+        ...state,
+        turns: fresh.length === 0 ? state.turns : [...state.turns, ...fresh],
+        jobs,
+      };
     }
     case 'fold-turn': {
       // 折叠即释放：过程单元在这一步被撤下，控件与内容由 foldTurn 自己算出来。
@@ -99,14 +112,31 @@ export function conversationReducer(
       if (position < 0) return state;
       return withTurn(state, position, (turn) => collapseTurn(turn));
     }
-    case 'replace-turn-cells': {
-      const position = state.turns.findIndex((turn) => turn.id === action.turnId);
-      return position < 0
-        ? state
-        : withTurn(state, position, (turn) => replaceTurnCells(turn, action.cells));
+    case 'replace-turn': {
+      const position = state.turns.findIndex((turn) => turn.id === action.turn.id);
+      if (position < 0) return state;
+      const replaced = withTurn(state, position, () => {
+        const incoming = { ...action.turn, folded: false, summary: action.turn.summary };
+        if (action.mode === 'folded') {
+          // 折叠位置直接用原始单元折：先插控件再折会给「没有过程」的轮次留下一根空抬头。
+          return foldTurn({ ...incoming, keepExpanded: false, expanded: false, summary: '' });
+        }
+        if (action.mode === 'expanded') {
+          return replaceTurnCells(incoming, incoming.cells);
+        }
+        return incoming;
+      });
+      const jobs = mergeJobs(replaced.jobs, action.jobs);
+      return jobs === replaced.jobs ? replaced : { ...replaced, jobs };
     }
     case 'tick':
-      return { ...state, turns: state.turns.map((turn) => refreshLiveElapsed(turn, action.nowMs)) };
+      // 耗时走字的同时刷新分割线：生成中的读数一直在，不必等收口。
+      return {
+        ...state,
+        turns: state.turns.map((turn) =>
+          refreshLiveSummary(refreshLiveElapsed(turn, action.nowMs), action.nowMs),
+        ),
+      };
     case 'frames':
       return applyFrames(state, action.frames, action.nowMs);
     case 'reconcile-questions':
@@ -314,57 +344,46 @@ function activePosition(state: ConversationState): number {
   return state.turns.length - 1;
 }
 
-/**
- * 用历史索引补齐回放轮次的用户气泡。
- *
- * 历史索引先提供入站正文与附件；用户事件到达后认领这条占位消息，
- * 无论索引与事件的到达顺序如何，同一条消息只呈现一次。
- */
-function seedHistory(
-  state: ConversationState,
-  interactionId: string,
-  text: string,
-  attachments: AttachmentRef[],
-  channel: string | undefined,
-): ConversationState {
-  const position = state.turns.findIndex((turn) => turn.id === interactionId);
-  if (position < 0) return state;
-  return withTurn(state, position, (turn) => {
-    const exists = turn.cells.some((cell) => cell.role === 'user');
-    if (exists) {
-      let patched = false;
-      const cells = turn.cells.map((cell) => {
-        if (patched || cell.role !== 'user') return cell;
-        patched = true;
-        return { ...cell, attachments, channel: channel ?? cell.channel };
-      });
-      return { ...turn, cells, pendingAttachments: patched ? [] : attachments };
-    }
-    const seeded = upsertCell(turn, {
-      id: `history-user:${interactionId}`,
-      role: 'user',
-      // 历史索引给出的是提交时的完整正文；展示只保留用户敲的那一段。
-      text: visibleUserText(text),
-      atMs: null,
-      attachments,
-      channel,
-    });
-    return { ...seeded, pendingAttachments: [] };
+/** 同一标识的轮次只能有一份：接进时间线前先摘掉投影里已有的那些。 */
+function unseenTurns(state: ConversationState, incoming: readonly TurnState[]): TurnState[] {
+  const known = new Set(state.turns.map((turn) => turn.id));
+  return incoming.filter((turn) => {
+    if (known.has(turn.id)) return false;
+    known.add(turn.id);
+    return true;
   });
 }
 
+/** 合并一页带来的作业台账：同一条作业只保留一行，后到的覆盖先到的。 */
+function mergeJobs(current: JobRow[], incoming: JobRow[] | undefined): JobRow[] {
+  if (incoming === undefined || incoming.length === 0) return current;
+  const index = new Map(current.map((row, position) => [row.id, position]));
+  const next = [...current];
+  for (const row of incoming) {
+    const known = index.get(row.id);
+    if (known === undefined) {
+      index.set(row.id, next.length);
+      next.push(row);
+    } else {
+      next[known] = row;
+    }
+  }
+  return next;
+}
+
 /**
- * 给回放出来的轮次补上附件。
+ * 用历史索引补齐回放轮次的附件与来源。
  *
- * 会话事件流只承载正文，附件不在 wire 事件里；历史索引是附件的唯一事实源，
- * 因此每一次回放都要把索引里的附件路径贴回对应的用户消息上。
+ * 会话事件流只承载正文，附件与逐轮来源不在 wire 事件里；历史索引是两者唯一的事实源，
+ * 因此每一次回放都要把索引里的附件路径与来源贴回对应的用户消息上。用户消息还没重放
+ * 出来时先记在轮次上，等它落地再贴（见 `applyUserMessage`）。
  */
 function attachHistory(
   state: ConversationState,
   interactionId: string,
   attachments: AttachmentRef[],
+  channel: string | undefined,
 ): ConversationState {
-  if (attachments.length === 0) return state;
   const position = state.turns.findIndex((turn) => turn.id === interactionId);
   if (position < 0) return state;
   return withTurn(state, position, (turn) => {
@@ -372,10 +391,19 @@ function attachHistory(
     const cells = turn.cells.map((cell) => {
       if (patched || cell.role !== 'user') return cell;
       patched = true;
-      return { ...cell, attachments };
+      return {
+        ...cell,
+        attachments: attachments.length > 0 ? attachments : cell.attachments,
+        channel: channel ?? cell.channel,
+      };
     });
-    // 用户消息还没重放出来时先记在轮次上，等它落地再贴。
-    return { ...turn, cells, pendingAttachments: patched ? [] : attachments };
+    // 附件还没落地时先记在轮次上；来源同理，等用户消息到达时一并贴上。
+    return {
+      ...turn,
+      cells,
+      pendingAttachments: patched ? [] : attachments,
+      pendingChannel: channel ?? turn.pendingChannel,
+    };
   });
 }
 

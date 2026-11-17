@@ -50,9 +50,20 @@ export function sessionGenerationMetrics(turns: TurnState[]): SessionGenerationM
       ttftTotal += turn.firstTokenAvgMs;
       ttftSamples += 1;
     }
+    /*
+     * 解码窗口优先读实测值；没有窗口但有 Provider 实测速率时，按「本轮的输出除以它
+     * 自己的速率」还原窗口。历史会话只带 `turn_metrics` 的速率与 token，没有窗口列，
+     * 不这样还原的话速率段在历史会话里永远不出现。
+     */
+    const measuredWindow = turn.decodeMs !== null && turn.decodeMs > 0 ? turn.decodeMs : null;
+    const derivedWindow =
+      measuredWindow === null && turn.generationTpsX10 !== null && turn.generationTpsX10 > 0
+        ? Math.round((turnOutputTokens(turn) * 10_000) / turn.generationTpsX10)
+        : null;
+    const window = measuredWindow ?? derivedWindow;
     // 解码窗口为 0 的轮（没测到、或尚未收口的在跑轮）不参与速率，也不拉高分母。
-    if (turn.decodeMs !== null && turn.decodeMs > 0) {
-      decodeTotal += turn.decodeMs;
+    if (window !== null && window > 0) {
+      decodeTotal += window;
       tokenTotal += turnOutputTokens(turn);
       decodeSamples += 1;
     }

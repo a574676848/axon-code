@@ -22,19 +22,12 @@ export interface QuestionSyncOptions {
   /** 作答被服务端拒绝时的提示入口。 */
   onError?: (err: string) => void;
   /**
-   * 作答之后的续跑不在本视图的订阅里时，用它把车道重新贴一次。
+   * 作答之后的续跑不在本视图的订阅里时，让它把新增的那一轮接进来。
    *
    * 答案直接回灌给活等待者时同一条订阅还在看着那一轮，界面自己会长出后续；
-   * 答案走消息通道时续跑的那一轮由守护进程开启，界面必须重贴车道才能看到。
+   * 答案走消息通道时续跑的那一轮由守护进程开启，界面必须按增量接管才看得到。
    */
   onContinuation?: () => void;
-  /**
-   * 车道重贴的请求序号。
-   *
-   * 重贴会把整个投影连同权威台账一起重置，因此每贴一次都要重新对账一次；
-   * 否则回放出来的挂起帧会把已经答完的提问重新摆成待答。
-   */
-  reattachToken?: number;
 }
 
 export function useQuestionSync({
@@ -43,7 +36,6 @@ export function useQuestionSync({
   dispatch,
   onError,
   onContinuation,
-  reattachToken = 0,
 }: QuestionSyncOptions): UseQuestionSyncReturn {
   // 提取当前活跃提问：优先 pending/extended，其次 suspended
   const activeQuestion = useMemo<PendingQuestion | null>(() => {
@@ -126,13 +118,13 @@ export function useQuestionSync({
   );
 
   /*
-   * UQ-107: 问答状态对账见上：这里只挂载两条触发时机。
-   * 重贴车道同样要重新对账一次：重贴把台账一起重置了。
+   * UQ-107: 问答状态对账见上：这里只挂载触发时机。进入车道对账一次，
+   * 窗口重新聚焦再对账一次（且只在确实存在待答项时请求）。
    */
 
   useEffect(() => {
     void reconcile(false);
-  }, [reconcile, reattachToken]);
+  }, [reconcile]);
 
   useEffect(() => {
     if (!sessionId) return;

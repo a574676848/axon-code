@@ -1,4 +1,4 @@
-//! JARVIS Interaction durable ingress 与 active steer 分流。
+//! Axon Interaction durable ingress 与 active steer 分流。
 
 use axon_domain::{
     AudienceKind, DisclosurePolicy, InteractionId, InteractionRecord, InteractionStatus, ScopeRef,

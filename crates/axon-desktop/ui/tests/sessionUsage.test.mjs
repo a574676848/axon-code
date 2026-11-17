@@ -69,6 +69,7 @@ function baseline(overrides = {}) {
         },
         elapsedMs: 3_600_000,
         turnIds: new Set(['history-1']),
+        openTurnIds: new Set(),
         ...overrides,
     };
 }
@@ -106,14 +107,31 @@ test('基线之后发生的轮次按增量叠加，各桶与耗时同口径', ()
 test('打开时仍在生成的轮次整条由本地增量承担，收口后不回落', () => {
     const running = [turn('history-1', { outputTokens: 400 }, 900)];
 
-    const first = sessionCumulative(running, baseline(), new Set(['history-1']));
+    const first = sessionCumulative(running, baseline({ openTurnIds: new Set(['history-1']) }));
     assert.equal(first.totalTokens, 6_000_400);
     assert.equal(first.elapsedMs, 3_600_900);
     assert.deepEqual(
-        sessionCumulative(running, baseline(), new Set(['history-1'])),
+        sessionCumulative(running, baseline({ openTurnIds: new Set(['history-1']) })),
         first,
         '收口只是换了轮次状态，读数口径不变',
     );
+});
+
+test('基线里仍标着运行中的轮次由增量承担，基线与增量不重复计入', () => {
+    // 取页那一刻这一轮还在跑：账本还没落账，整条由增量承担。
+    const running = sessionCumulative(
+        [turn('history-1', { outputTokens: 400 }, 900)],
+        baseline({ openTurnIds: new Set(['history-1']) }),
+    );
+    assert.equal(running.elapsedMs, 3_600_900);
+
+    // 同一轮已经收口（回放完成之后的常态）：它的账在基线里，不能再算一遍。
+    const settled = sessionCumulative(
+        [turn('history-1', { outputTokens: 400 }, 900)],
+        baseline(),
+    );
+    assert.equal(settled.elapsedMs, 3_600_000, '基线覆盖的轮次不得重复计入耗时');
+    assert.equal(settled.totalTokens, 6_000_000);
 });
 
 test('命中率按整条会话累计，不是最近一轮', () => {
@@ -127,6 +145,7 @@ test('新建会话没有历史时各项都读作 0', () => {
         usage: EMPTY_SESSION_USAGE,
         elapsedMs: 0,
         turnIds: new Set(),
+        openTurnIds: new Set(),
     };
 
     assert.deepEqual(sessionCumulative([], empty), { ...EMPTY_SESSION_USAGE, elapsedMs: 0 });

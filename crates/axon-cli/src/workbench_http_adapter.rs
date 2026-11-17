@@ -15,9 +15,8 @@ use std::sync::{Arc, LazyLock, Mutex};
 use axon_daemon::{GatewayHttpResponse, GatewayHttpRouteHandler};
 use axon_domain::{AudienceContext, AudienceKind, DaemonSessionId, DisclosurePolicy};
 use axon_session::{
-    AXON_RUNTIME_DATA_DIR, InteractionCursor, InteractionQueryStore, RuntimeStore,
-    RuntimeStoreError, SessionQueryService, SessionSnapshot, SqliteRuntimeStore, WorkspaceRecord,
-    WorkspaceStore, session_id_for_route,
+    AXON_RUNTIME_DATA_DIR, InteractionCursor, RuntimeStore, RuntimeStoreError, SessionQueryService,
+    SessionSnapshot, SqliteRuntimeStore, WorkspaceRecord, WorkspaceStore, session_id_for_route,
 };
 use serde::Serialize;
 
@@ -41,7 +40,7 @@ const MAX_SUBAGENT_MESSAGE_CHARS: usize = 8_000;
 #[path = "workbench_http_views.rs"]
 mod workbench_http_views;
 
-pub use workbench_http_views::{InteractionView, SessionView, WorkspaceView};
+pub use workbench_http_views::{InteractionView, SessionView, TurnMetricsView, WorkspaceView};
 
 #[path = "workbench_http_targets.rs"]
 mod workbench_http_targets;
@@ -61,6 +60,11 @@ mod workbench_http_subagents_jobs;
 #[path = "workbench_http_session_readings.rs"]
 mod session_readings;
 
+#[path = "workbench_http_session_interactions.rs"]
+mod session_interactions;
+
+pub use session_interactions::session_interactions_payload;
+
 #[path = "workbench_http_interaction_events.rs"]
 mod interaction_events;
 
@@ -74,77 +78,9 @@ use workbench_http_subagents_jobs::{
 #[path = "workbench_http_adapter_tests.rs"]
 mod workbench_http_adapter_tests;
 
-/// 车道内 Interaction 列表载荷。
+/// 车道内 Interaction 列表载荷的组装在 [`session_interactions`] 里：它与只读列表的
+/// 逐轮读数、最终正文共用同一条「不回放正文」的取数口径，独立成文后本文件只保留路由。
 ///
-/// `before` 是反向分页游标：为空取最近一页，给出则取它之前的一页。
-/// 客户端按「一次一条」向前翻，因此这里不需要额外的页号或总量。
-///
-/// 载荷同时给出整条车道的两个累计读数（token 用量与已收口轮次的墙钟耗时）：界面的
-/// 会话读数要的是整条会话，而不是客户端恰好翻到的那一页，因此这两个数按车道聚合，
-/// 与分页无关。取数失败不牵连历史列表：列表是主事实，累计读数缺了就不给。
-pub fn session_interactions_payload(
-    axon_root: &Path,
-    session_id: &str,
-    limit: u32,
-    before: Option<&InteractionCursor>,
-) -> Result<serde_json::Value, String> {
-    let limit = limit.clamp(1, MAX_SESSION_INTERACTION_LIMIT);
-    let records = runtime_store(axon_root)
-        .interactions_for_session(session_id, limit, before)
-        .map_err(|error| format!("读取车道 Interaction 失败：{error:?}"))?;
-    // 工具动作摘要与本轮用时一次批次查覆盖整页：两者都已在写入时落列，这里不碰事件表。
-    let interaction_ids: Vec<&str> = records
-        .iter()
-        .map(|record| record.interaction_id.as_str())
-        .collect();
-    let facts = session_readings::interaction_facts(axon_root, &interaction_ids);
-    // 最终交付正文按收口事件取回：同样是整页一次索引查，不回放任何一条记录的帧。
-    let answers = session_readings::answer_texts(axon_root, session_id, &interaction_ids);
-    let interactions: Vec<InteractionView> = records
-        .iter()
-        .map(|record| {
-            let interaction_id = record.interaction_id.as_str().to_owned();
-            let fact = facts.get(&interaction_id);
-            InteractionView {
-                tool_summary: fact
-                    .map(|fact| fact.tool_summary.clone())
-                    .unwrap_or_default(),
-                answer_text: answers.get(&interaction_id).cloned().unwrap_or_default(),
-                elapsed_ms: fact.and_then(|fact| fact.elapsed_ms),
-                interaction_id,
-                status: serde_json::to_value(record.status)
-                    .ok()
-                    .and_then(|value| value.as_str().map(str::to_owned))
-                    .unwrap_or_else(|| "unknown".to_owned()),
-                channel: record.source.channel().to_owned(),
-                client: record.source.client().unwrap_or_default().to_owned(),
-                received_at_ms: record.received_at_ms,
-                content: record.content.clone(),
-                attachments: record.attachments.clone(),
-                // 索引只读记录本身：模型与强度是记录上的现成字段，取它们不必扫事件流。
-                model: record.model.clone(),
-                reasoning_effort: record.reasoning_effort.clone(),
-            }
-        })
-        .collect();
-    // 两个累计读数：用量走账本（按 run session 汇总），耗时走已收口轮次的墙钟差。
-    let session_usage = session_readings::session_usage_payload(axon_root, session_id);
-    let session_elapsed_ms = session_readings::settled_elapsed_ms(axon_root, session_id)
-        .map_or(serde_json::Value::Null, serde_json::Value::from);
-    Ok(serde_json::json!({
-        "sessionId": session_id,
-        "interactions": interactions,
-        "totalRecords": interactions.len(),
-        "sessionUsage": session_usage,
-        "sessionElapsedMs": session_elapsed_ms,
-        // 车道当前模型的权威事实：只读该车道最新一轮记录，供输入坞显示真实模型。
-        "effectiveModel": session_readings::effective_model_payload(axon_root, session_id),
-        // 最近一次记忆反思的提示文本：桌面端据此显示「上一次记忆动作」。
-        "reflectionNotice": session_readings::reflection_notice_payload(axon_root, session_id),
-        "rawPayloadPersisted": false,
-    }))
-}
-
 /// 运行态存储句柄缓存：同一个运行态数据目录在进程内只建一次。
 ///
 /// 句柄内部是进程内共享的连接池，克隆代价极低（见 `SqliteRuntimeStore` 的注释）；

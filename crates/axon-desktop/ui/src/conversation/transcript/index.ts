@@ -51,10 +51,10 @@ export { conversationReducer } from './reducer';
 export { applyFrames } from './frames';
 
 /*
- * 折叠判据与索引轮对外可见：控制器据此决定哪一轮折起来，并按索引直接立起一根
- * 已经收好的轮次（用户气泡 + 过程控件 + 最终答案）。
+ * 折叠判据对外可见：控制器据此决定哪一轮折起来。折叠本身只在归约里发生，
+ * 历史与实时共用同一条单元构造，因此这里不再提供「按索引立起一轮」的旁路。
  */
-export { indexedTurn, shouldFold, type IndexedTurnEntry } from './fold';
+export { outlineControl, shouldFold, summaryFromToolNames } from './fold';
 
 export {
   attachmentsFromPaths,

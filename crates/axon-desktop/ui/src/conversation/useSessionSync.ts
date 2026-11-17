@@ -35,7 +35,7 @@ export interface SessionSyncOptions {
   ready: boolean;
   /** 本视图是否有正在跑的轮次。 */
   working: boolean;
-  /** 重新接管：取最新一页并订阅最新那一轮。 */
+  /** 把外部发起的新一轮接进投影：只接新增轮次，不重置、不重放已有历史。 */
   onReattach: () => void;
 }
 

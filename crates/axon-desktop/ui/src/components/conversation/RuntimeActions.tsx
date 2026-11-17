@@ -30,6 +30,14 @@ const STOP_CONFIRM_MS = 3000;
 /** 子代理会话状态的对账间隔。 */
 const SUBAGENT_ROSTER_REFRESH_MS = 10000;
 
+/**
+ * 已结束作业的行数上限。
+ *
+ * 清单是一条会话的累计事实，跑到几十次后台作业的会话并不罕见；逐行铺开会把下拉撑成
+ * 一页长列表。只列最近这些行，其余用一句「还有 N 个已结束作业未列出」交代，读数不丢。
+ */
+const FINISHED_JOB_LIMIT = 20;
+
 /** 行内状态到状态点的映射；表与参考实现的作业状态一一对应。 */
 function statusDotState(status: string): StateDotState {
   if (
@@ -565,7 +573,7 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
                 }}
               />
               {finishedOpen &&
-                finished.map((job) => (
+                finished.slice(0, FINISHED_JOB_LIMIT).map((job) => (
                   <JobLine
                     key={job.id}
                     job={job}
@@ -580,6 +588,11 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
                     onStop={requestStop}
                   />
                 ))}
+              {finishedOpen && finished.length > FINISHED_JOB_LIMIT && (
+                <span className="block px-2 py-1 text-meta text-text-tertiary">
+                  还有 {finished.length - FINISHED_JOB_LIMIT} 个已结束作业未列出
+                </span>
+              )}
             </>
           )}
         </Dropdown>

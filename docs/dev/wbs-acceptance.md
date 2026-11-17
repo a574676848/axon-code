@@ -92,8 +92,8 @@
 | W6-1 | 已完成 | 构建产物版本为 0.0.1 | 提交 `993aba9cc`；`Cargo.toml` workspace 版本 0.0.1 |
 | W6-2 | 已完成 | 旧 tag 与旧 Release 已清空，远端只保留本次发布入口 | 旧 14 个 tag 与既有 Releases 已删除；重建后 `git ls-remote --tags origin` 仅 `v0.0.1`，`gh release list` 仅本次发布 |
 | W6-3 | 撤销 | 不执行孤儿历史重置，发布直接在既有历史上打 tag | `git rev-list --max-parents=0 HEAD` 唯一根提交 `20adc39cc`；当前 400+ 提交按线性历史推进，「git log 只有一条」不再适用 |
-| W6-4 | 已完成 | 三平台六个 target 产物齐全 | tag `v0.0.1` 指向发布提交；Release 由该 tag 触发，产出 windows-msvc、macos-arm64、macos-x64、linux-gnu-x64、linux-gnu-arm64、linux-musl 六 target 后端包与五 target 桌面包，附 MSI/pkg/deb 与 `SHA256SUMS` |
-| W6-5 | 进行中 | 39 项验收矩阵逐项留证 | 已取证 38 项：B1-B6、C1-C6、D1-D12、X1-X7、T1-T7（真实控制台通道）；B7 已启动 24 小时观测并持续采样（按发布要求不阻塞打 tag），首轮采样 daemon 存活、`database is locked` 与 `Fenced` 增量均为 0 |
+| W6-4 | 待完成 | 三平台六个 target 产物齐全 | 打 tag 的前置条件（回放投影收敛为单一路径、折叠三形态、后台任务清单回读）已完成并通过真机取证（见 `device-verification.md` 回放投影一致性一节）；tag `v0.0.1` 尚未创建，Release 待发布轮产出；Release 由该 tag 触发，产出 windows-msvc、macos-arm64、macos-x64、linux-gnu-x64、linux-gnu-arm64、linux-musl 六 target 后端包与五 target 桌面包，附 MSI/pkg/deb 与 `SHA256SUMS` |
+| W6-5 | 进行中 | 39 项验收矩阵逐项留证 | 回放投影一致性已修复：三形态折叠摘要、历史折叠行展开回放、后台任务清单回读、D10 耗时口径逐字段一致均有真机证据；按轮分页已落地并取证：23 轮车道首屏 468 至 781 ms、轮次分割线逐项读数、索引轮折叠摘要、`加载更早` 一次一轮、header 累计/命中率/上下文/首字/速率与生成中读数均见 `device-verification.md` 按轮分页一节；计划单元重开后回读、header 计划段按设计仅在有轮次在跑时占位；LSP 段因本机未挂上客户端**未取证**。已取证 38 项：B1-B6、C1-C6、D1-D12、X1-X7、T1-T7（真实控制台通道）；B7 已启动 24 小时观测并持续采样（按发布要求不阻塞打 tag），首轮采样 daemon 存活、`database is locked` 与 `Fenced` 增量均为 0 |
 | W6-6 | 已完成 | 事件写入 p99、控制面事务、会话列表首屏、磁盘占用有实测输出并登记 | `tools/perf-baseline.json` 已按本机 `--record` 重新登记：事件写入 p99 `0.931 ms`（上限 5）、控制面事务 p95 `0.226 ms`（上限 50）、会话列表首屏 `1.0 ms`（上限 30）、运行态 `data` `0 MiB`（上限 50，本机 data 现仅 0.89 MiB）；人工真机读数 P2 `1821 ms`、P9 `0.45%`、P10 `2373 ms`、P11 `19/17/17 ms`。绝对上限是跨平台契约，相对回退只在与基线同机器时比较，并加了噪声下限（毫秒级读数不再因 1 毫秒抖动误报） |
 
 ## 汇总

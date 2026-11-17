@@ -29,9 +29,7 @@ import type {
 import { useAutoFoldTurns } from './useAutoFoldTurns';
 import { useConversationInterruptControl } from './useConversationInterruptControl';
 import { useElapsedTick } from './useElapsedTick';
-import { replayInteractionHistory } from './interactionReplay';
 import { useSessionPaging } from './useSessionPaging';
-import { useSessionReattach } from './useSessionReattach';
 import { useSessionSync, type SessionSyncFacts } from './useSessionSync';
 import { useQuestionSync } from './useQuestionSync';
 import { useSessionCumulative } from './useSessionCumulative';
@@ -95,10 +93,9 @@ export function useConversation(
   /**
    * 投影所属的目标。
    *
-   * 归约器的重置落在目标 effect 里（提交之后），因此切换那一帧 state 里还是上一会话
-   * 的轮次。按这个标识对齐后，旧投影没有任何机会被画出去。
+   * 换会话时投影继续持有上一屏，直到 `openSession` 把新一页连同重置一起落地：
+   * 中间不出现空投影，车窗也就没有「先塌再长」的那一下。
    */
-  const [projectionKey, setProjectionKey] = useState<string | null>(null);
 
   const [state, dispatch] = useReducer(conversationReducer, INITIAL_CONVERSATION);
   const [submitting, setSubmitting] = useState(false);
@@ -106,7 +103,6 @@ export function useConversation(
   const [questionError, setQuestionError] = useState<string | null>(null);
   const dismissQuestionError = useCallback(() => setQuestionError(null), []);
   const [sessionReadyId, setSessionReadyId] = useState<string | null>(null);
-  const sessionReattach = useSessionReattach();
   /**
    * 车道当前模型的权威事实。
    *
@@ -124,10 +120,8 @@ export function useConversation(
 
   const pendingRef = useRef<ConversationStreamEvent[]>([]);
   const flushRef = useRef<number | null>(null);
-  const queueRef = useRef<string[]>([]);
-  const replayingRef = useRef(false);
   /**
-   * 正文装载中的镜像：目标刚打开，或历史回放还没把 durable 尾交完。
+   * 正文装载中的镜像：目标刚打开，或一页历史还没落地。
    *
    * 工作状态行据此写「正在加载会话…」。用状态而不是只读 ref：这一位要参与渲染，
    * 回放落地那一刻文案就得跟着换，而 ref 的变化不会触发重渲染。
@@ -137,9 +131,8 @@ export function useConversation(
   /**
    * 目标代次。
    *
-   * 回放推进既由帧触发（帧窗口回调）也由空闲计时器触发，两者都会在目标切换之后
-   * 才落地；没有代次围栏时，上一次目标的回放会在新目标下继续订阅旧 Interaction，
-   * 于是每切一次会话就多留几路永不释放的订阅。只有当前代次的调用才允许订阅。
+   * 回放与订阅都在目标切换之后才落地；没有代次围栏时，上一次目标的回放会在新目标下
+   * 继续读旧 Interaction，或把旧订阅留在集合里。只有当前代次的调用才允许落地。
    */
   const generationRef = useRef(0);
   /** 归约器当前轮次快照；提交时需要判断是否处于运行中，但不能因此改变回调身份。 */
@@ -148,9 +141,8 @@ export function useConversation(
   /**
    * 本控制器当前持有订阅的**全部**订阅标识。
    *
-   * 帧过滤的判据只能是这个集合，不能是「当前选中的车道」：车道历史是逐条回放的，
-   * 订阅标识属于被回放的那条 Interaction，与车道标识、与选中的 interactionId 都不同。
-   * 集合内的增删与真正的订阅/取消订阅一一对应。
+   * 帧过滤的判据只能是这个集合：历史回放按 Interaction 订阅，与车道标识、与选中的
+   * interactionId 都不同。集合内的增删与真正的订阅/取消订阅一一对应。
    */
   const subscribedIdsRef = useRef<Set<string>>(new Set());
   const rememberSubscribed = useCallback((subscribeId: string) => {
@@ -159,71 +151,52 @@ export function useConversation(
   const rememberUnsubscribed = useCallback((subscribeId: string) => {
     subscribedIdsRef.current.delete(subscribeId);
   }, []);
-  /**
-   * 回放推进与空闲停止的最新实现。
-   *
-   * 帧监听只装一次（目标切换不重建监听，否则切换瞬间的帧会掉进空档），
-   * 因此它必须经 ref 取当前实现，而不是把回调重新绑进 effect 依赖。
-   * `playNext` 的第三个参数是「即将离开的那条 Interaction」；为空表示保留它的订阅。
-   */
-  const playNextRef = useRef<
-    (workspaceId: string, generation: number, leaving?: string | null) => void
-  >(() => undefined);
   /** 当前车道与工作区：会话目标下没有车道能力，分页与展开也随之不可用。 */
   const pagingSessionId = target !== null && target.kind === 'interaction' ? target.interactionId : null;
 
+  /**
+   * 主投影当前持有的轮次标识。
+   *
+   * 交给分页层做增量接管的判据：只有本视图还不认识的轮次才需要接进来，
+   * 已经在投影里的轮次重放一遍不会带来任何新内容。
+   */
+  const knownTurnIds = useCallback(() => turnsRef.current.map((turn) => turn.id), []);
+  /** 仍有轮次在跑时接上它的实时尾：历史帧只到取帧那一刻，之后是增量。 */
+  const subscribeTail = useCallback(
+    async (interactionId: string, cursor: string | null) => {
+      const workspace = targetRef.current?.workspaceId ?? null;
+      if (workspace === null) return;
+      rememberSubscribed(`interaction:${interactionId}`);
+      watchedRef.current = interactionId;
+      await ipc.conversationWatch(workspace, interactionId, cursor);
+    },
+    [rememberSubscribed],
+  );
   /*
-   * 分页与展开：与主回放共用代次与在途标记，但自己持有临时投影（见 useSessionPaging）。
+   * 分页与展开：一页历史整页回放后一次性接进正文（见 useSessionPaging）。
    */
   const paging = useSessionPaging({
     sessionId: pagingSessionId,
     workspaceId: target?.workspaceId ?? null,
     dispatch,
-    replayingRef,
     generationRef,
-    playNextRef,
     onError: setSubmitError,
+    knownTurnIds,
+    subscribeTail,
     onEffectiveModel: setSessionModel,
     onReflectionNotice: setSessionReflectionNotice,
   });
 
   /**
-   * 回放一条 Interaction 的正文：取数、窗口与放行策略在 `interactionReplay`，
-   * 这里只把帧落点、代次与三个状态回执接上去。
+   * 外部发起的新一轮：只把新增的轮次接进投影。
    *
-   * 窗口终点由分页层给：首屏与展开都是尾部一窗，只有「往前补」时才把它钉在已知起点上。
+   * 跨渠道事件（后台作业唤醒轮、定时投递、目标推进、子代理落地、问答续跑）到达时，
+   * 这里不重置投影、也不重放已有历史：正文原地延长，滚动位置与已展开的过程都不动。
+   * 重置一次就是整屏塌一次，那正是「来一条外部事件闪一下」的来源。
    */
-  const replayHistory = useCallback(
-    (workspace: string, interactionId: string, generation: number) =>
-      replayInteractionHistory(
-        {
-          route: paging.routeFrames,
-          now: Date.now,
-          generation: () => generationRef.current,
-          painted: () => setOpening(false),
-          drained: () => setReplaying(false),
-          subscribed: rememberSubscribed,
-          watch: (target, id, cursor) => ipc.conversationWatch(target, id, cursor),
-          advance: (target, current) => playNextRef.current(target, current, null),
-        },
-        workspace,
-        interactionId,
-        generation,
-      ),
-    [paging.routeFrames, rememberSubscribed],
-  );
-
-  const releaseInteraction = useCallback(
-    (interactionId: string) => {
-      const subscribeId = `interaction:${interactionId}`;
-      if (watchedRef.current === interactionId) {
-        watchedRef.current = null;
-      }
-      rememberUnsubscribed(subscribeId);
-      void ipc.conversationUnsubscribe(subscribeId).catch(() => undefined);
-    },
-    [rememberUnsubscribed],
-  );
+  const appendExternalTurn = useCallback(() => {
+    void paging.appendSession();
+  }, [paging]);
 
   /** 释放本控制器当前持有的全部订阅；返回的 Promise 在退订送达后落地（失败不阻断）。 */
   const releaseAllSubscriptions = useCallback(async () => {
@@ -231,56 +204,6 @@ export function useConversation(
     subscribedIdsRef.current.clear();
     await Promise.all(subscribeIds.map(ipc.conversationUnsubscribe)).catch(() => undefined);
   }, []);
-
-  const playNext = useCallback(
-    (workspace: string, generation: number, leaving: string | null = null) => {
-      // 代次不符即作废：目标已切换，这一次回放属于上一次目标，不再建立任何订阅。
-      //
-      // 判据必须是代次而不是工作区：同一工作区内切换会话时工作区不变，
-      // 只看工作区会把上一次目标的遗留计时器放进来，于是每切一次就多留几路
-      // 永不释放的订阅（实测过：切三次会话订阅数从 2 涨到 5）。
-      if (generation !== generationRef.current) {
-        replayingRef.current = false;
-        setReplaying(false);
-        return;
-      }
-      if (leaving !== null) releaseInteraction(leaving);
-      const next = paging.take(queueRef.current);
-      if (next === undefined) {
-        replayingRef.current = false;
-        setReplaying(false);
-        // 翻页或展开的一次回放排空：由分页接管收口（前置一页 / 换回正文）。
-        if (paging.finish()) return;
-        // 回放排空即正文完整：过渡窗口到此收口，正文一次交出。
-        setOpening(false);
-        return;
-      }
-      replayingRef.current = true;
-      setReplaying(true);
-      watchedRef.current = next;
-      paging.applyAction({ type: 'open-turn', turnId: next, nowMs: Date.now() });
-      const seed = paging.seedOf(next);
-      if (seed !== undefined) {
-        paging.applyAction({
-          type: 'seed-history',
-          interactionId: next,
-          text: seed.text,
-          attachments: seed.attachments,
-          channel: seed.channel,
-        });
-      }
-      void replayHistory(workspace, next, generation).catch(
-        (error: unknown) => {
-          if (generationRef.current !== generation) return;
-          setSubmitError(error instanceof Error ? error.message : '读取会话历史失败');
-          // 读不到正文也要继续推进，否则这一条会把整条车道的回放卡住。
-          playNextRef.current(workspace, generation, watchedRef.current);
-        },
-      );
-    },
-    [paging.applyAction, paging.seedOf, releaseInteraction, replayHistory],
-  );
-  playNextRef.current = playNext;
 
   /** 帧到达：按本控制器持有的订阅标识过滤，入队并在下一帧窗口一次性派发。 */
   const onStreamEvent = useCallback(
@@ -300,20 +223,24 @@ export function useConversation(
         const batch = pendingRef.current;
         pendingRef.current = [];
         if (batch.length === 0) return;
-        // 帧分流交给分页：翻页期间两路帧同时在跑，按订阅标识各归各的投影。
-        paging.routeFrames(batch, Date.now());
-        // 只有车道目标逐条回放历史；会话流由服务端一次重放到底。
-        if (!replayingRef.current || targetKind !== 'interaction' || workspaceId === null) return;
+        // 实时增量与历史回放共用同一个归约入口：这里就是主投影唯一的帧落点。
+        dispatch({ type: 'frames', frames: batch, nowMs: Date.now() });
+        if (targetKind !== 'interaction' || workspaceId === null) return;
         const terminal = batch.some(
           (frame) =>
             frame.kind === 'frame' &&
             (frame.eventType === 'turn_completed' || frame.eventType === 'turn_failed'),
         );
-        // 收到终态帧才释放当前这一条：它已经不会再产生事件，订阅位应当还回去。
-        if (terminal) playNextRef.current(workspaceId, generation, watchedRef.current);
+        // 收到终态帧：这一轮不会再产生事件，把它那一路订阅还回去。
+        if (terminal && watchedRef.current !== null) {
+          const interactionId = watchedRef.current;
+          watchedRef.current = null;
+          rememberUnsubscribed(`interaction:${interactionId}`);
+          void ipc.conversationUnsubscribe(`interaction:${interactionId}`).catch(() => undefined);
+        }
       }, FRAME_FLUSH_MS);
     },
-    [targetKind, workspaceId],
+    [rememberUnsubscribed, targetKind, workspaceId],
   );
 
   useEffect(() => {
@@ -350,31 +277,25 @@ export function useConversation(
     };
   }, [onStreamEvent]);
 
-  /** 目标变更：重置投影，按目标建立订阅；车道目标再按时间顺序逐条回放历史 Interaction。 */
+  /**
+   * 目标变更：按目标建立订阅；车道目标再取最近一页并整页回放。
+   *
+   * 这里**不清空投影**。换会话时上一屏要一直显示到新一页落地（见设计系统 5.6）：
+   * 先塌成空画布再长出来读起来就是切换那一下闪烁。重置与首屏数据在
+   * `paging.openSession` 里同一次落地，正文因此只经历一次整屏替换。
+   */
   useEffect(() => {
-    // 开新代次：上一次目标遗留的帧窗口与回放推进据此全部作废。
+    // 开新代次：上一次目标遗留的回放与订阅据此全部作废。
     generationRef.current += 1;
-    queueRef.current = [];
-    replayingRef.current = false;
-    setReplaying(false);
-    /*
-     * 在途的展开与补窗要就地作废。
-     *
-     * 分页层用「有没有正在跑的临时投影」当发起守卫；不清它，新会话里点控件、翻历史
-     * 都会被静默拒绝，用户除了重启没有别的出路。
-     */
-    paging.abort();
+    setReplaying(true);
     watchedRef.current = null;
     pendingRef.current = [];
     subscribedIdsRef.current = new Set();
-    dispatch({ type: 'reset' });
     dispatch({ type: 'connecting' });
     setSubmitError(null);
     setSessionReadyId(null);
     setSessionModel(null);
     setSessionReflectionNotice(null);
-    // 投影与目标同批对齐：从这一帧起，state 里的旧轮次不再对外可见。
-    setProjectionKey(targetKey);
     const current = targetRef.current;
     if (
       workspaceId === null ||
@@ -384,6 +305,9 @@ export function useConversation(
       normalizeTarget(current).kind !== targetKind ||
       normalizeTarget(current).workspaceId !== workspaceId
     ) {
+      // 没有可订阅的目标（首屏）：旧投影到此为止，不留上一轮的正文。
+      setReplaying(false);
+      dispatch({ type: 'reset' });
       return undefined;
     }
     const watchedId = subscriptionIdOf(current);
@@ -415,20 +339,19 @@ export function useConversation(
     }
 
     const sessionId = current.interactionId;
-    // 车道标识不是 Interaction；由历史索引逐条订阅真实交互，新消息按提交回执订阅。
+    // 车道标识不是 Interaction：正文由这一页里的每条 Interaction 的 durable 帧给出。
     let cancelled = false;
-    // 历史按「一次一条」向前翻：首屏只取最近一条，更早的由「加载更早」按需取。
     void paging
-      .loadNewestPage(sessionId)
-      .then((ids) => {
+      .openSession(sessionId)
+      .then(() => {
         if (cancelled) return;
-        queueRef.current = ids;
-        // 已经收口的交互仍然要回放：正文的事实源就是订阅流上的 durable 事件。
-        playNextRef.current(workspaceId, generationRef.current);
+        setReplaying(false);
+        setOpening(false);
         setSessionReadyId(sessionId);
       })
       .catch((error: unknown) => {
         if (cancelled) return;
+        setReplaying(false);
         setSubmitError(error instanceof Error ? error.message : '读取会话历史失败');
         setOpening(false);
       });
@@ -438,14 +361,14 @@ export function useConversation(
       void releaseAllSubscriptions();
     };
   }, [
-    paging.abort,
+    dispatch,
+    paging.openSession,
     releaseAllSubscriptions,
     rememberSubscribed,
     rememberUnsubscribed,
     workspaceId,
     targetKind,
     targetKey,
-    sessionReattach.token,
   ]);
 
   /** 运行中按节拍刷新耗时：没有轮次在跑时不起表。 */
@@ -456,18 +379,29 @@ export function useConversation(
   /** 是否有轮次在跑：与节拍同源，避免同一判断写两遍。 */
   const working = ticking;
 
-  // 外部发起的新一轮（后台作业唤醒轮、定时投递）靠车道轮数变化补齐接管。
-  useSessionSync({ sessionFacts, targetKind, ready: sessionReadyId === targetKey && !opening, working, onReattach: sessionReattach.reattach });
+  // 外部发起的新一轮（后台作业唤醒轮、定时投递、目标推进）靠车道轮数变化补齐接管。
+  useSessionSync({
+    sessionFacts,
+    targetKind,
+    ready: sessionReadyId === targetKey && !opening,
+    working,
+    onReattach: appendExternalTurn,
+  });
 
   // 折叠生效：最新一轮之外的老轮次撤下过程、只留一根过程控件（见 useAutoFoldTurns）。
   useAutoFoldTurns(state.turns, dispatch);
 
-  /** 过渡窗口的上限：兜底收口，正文区不会一直停在过渡面上。 */
+  /**
+   * 过渡窗口的上限：兜底收口，正文区不会一直停在过渡面上。
+   *
+   * 一页回放本身可能在途（整页读完才落地），那段时间不算卡住，计时让位给它；
+   * 读失败或代次作废时由调用方把 `opening` 收掉。
+   */
   useEffect(() => {
-    if (!opening) return undefined;
+    if (!opening || paging.pageLoading) return undefined;
     const timer = window.setTimeout(() => setOpening(false), OPENING_CEILING_MS);
     return () => window.clearTimeout(timer);
-  }, [opening]);
+  }, [opening, paging.pageLoading]);
 
   const sessionCapability = useMemo<SessionCapability>(
     () =>
@@ -503,8 +437,6 @@ export function useConversation(
       const destination = sessionCapability.destination ?? '';
       setSubmitting(true);
       setSubmitError(null);
-      queueRef.current = [];
-      replayingRef.current = false;
       setReplaying(false);
       // 提交是用户自己的动作：正文立刻可见，不为它保留过渡窗口。
       setOpening(false);
@@ -566,27 +498,23 @@ export function useConversation(
     const workspace = sessionCapability.workspaceId;
     if (sessionId === null || workspace === null) return;
     // 重连第一步是放手旧订阅：订阅断掉后后端那一格仍占着该标识，不退订就重放，
-    // 回放里那次重新订阅会被幂等挡下，界面拼完历史也收不到增量；旧任务若还活着，
-    // 重置后的帧还会打进空投影。
-    paging.abort();
+    // 回放里那次重新订阅会被幂等挡下，界面拼完历史也收不到增量。
     pendingRef.current = [];
     watchedRef.current = null;
-    dispatch({ type: 'reset' });
     setSessionReadyId(null);
     // 重连走的也是同一条回放：同样在过渡面下把正文拼齐，再一次交出。
     setOpening(true);
     void releaseAllSubscriptions()
-      .then(() => paging.loadNewestPage(sessionId))
-      .then((ids) => {
-        queueRef.current = ids;
-        // 重连发生在同一次目标内：代次不变，回放照常推进。
-        playNextRef.current(workspace, generationRef.current);
+      .then(() => paging.openSession(sessionId))
+      .then(() => {
         setSessionReadyId(sessionId);
+        setOpening(false);
       })
       .catch((error: unknown) => {
         setSubmitError(error instanceof Error ? error.message : '重连失败');
+        setOpening(false);
       });
-  }, [sessionCapability, paging, releaseAllSubscriptions]);
+  }, [sessionCapability, paging.openSession, releaseAllSubscriptions]);
 
   /*
    * 中断与转投：三步的先后顺序本身就是语义，因此整条装配收在
@@ -634,8 +562,7 @@ export function useConversation(
     state,
     dispatch,
     onError: setQuestionError,
-    onContinuation: sessionReattach.reattach,
-    reattachToken: sessionReattach.token,
+    onContinuation: appendExternalTurn,
   });
 
   const jobs = useMemo(() => deriveJobs(state), [state]);
@@ -644,10 +571,10 @@ export function useConversation(
   /**
    * 对外的投影。
    *
-   * 只在与当前目标对齐之后才交出去：目标切换那一帧 state 里还是上一会话的轮次，
-   * 直接画出去就是切换时的第一下闪烁。
+   * 直接交出归约器状态：换会话期间它仍是上一屏，新一页落地时与重置同批替换，
+   * 因此调用方只会看到一次替换，不会先看到一屏空的。
    */
-  const projection = projectionKey === targetKey ? state : INITIAL_CONVERSATION;
+  const projection = state;
 
   /** 会话累计读数：网关基线加本地增量；基线未就绪时为空，指标条不画这两段。 */
   const sessionCumulative = useSessionCumulative(projection.turns, paging.sessionBaseline);

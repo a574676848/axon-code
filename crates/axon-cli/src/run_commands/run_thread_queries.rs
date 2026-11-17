@@ -5,9 +5,7 @@
 
 use std::path::Path;
 
-use axon_session::{
-    AppendTurnCommand, JsonlThreadEventStore, RuntimeStore as _, ThreadDetail, ThreadService, Turn,
-};
+use axon_session::{AppendTurnCommand, JsonlThreadEventStore, ThreadDetail, ThreadService, Turn};
 use serde::Serialize;
 
 use super::super::run_session_store::{RunSessionRecord, resolved_axon_root};
@@ -31,22 +29,6 @@ pub(crate) struct RecentTurnFact {
     pub(crate) affect_sequence: Vec<String>,
 }
 
-/// 一条会话的累计用量（读控制面 `session_metrics` 投影）。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct SessionUsageTotals {
-    /// 总量。
-    pub(crate) total_tokens: u64,
-    /// 未缓存输入。
-    pub(crate) input_tokens: u64,
-    /// 缓存读取。
-    pub(crate) cache_read_tokens: u64,
-    /// 缓存写入。
-    pub(crate) cache_write_tokens: u64,
-    /// 输出。
-    pub(crate) output_tokens: u64,
-    /// 推理输出。
-    pub(crate) reasoning_tokens: u64,
-}
 /// 车道当前模型的权威事实：全部来自 thread settings 与最近一轮 metadata。
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -202,33 +184,6 @@ pub(crate) fn turn_sequence(
         .map(|turn| turn.sequence))
 }
 
-/// 读某条会话的累计用量；没有投影时读作全零（新会话本来就是这个状态）。
-pub(crate) fn session_usage_totals_at_root(
-    root: &Path,
-    session_id: &str,
-) -> Result<SessionUsageTotals, String> {
-    let store =
-        axon_session::SqliteRuntimeStore::from_root(root.join(axon_config::AXON_RUNTIME_DATA_DIR));
-    store.initialize().map_err(|error| error.to_string())?;
-    let session = axon_domain::DaemonSessionId::new(session_id.to_owned())
-        .map_err(|_| format!("会话 ID 非法：{session_id}"))?;
-    let Some(metrics) = store
-        .session_metrics(&session)
-        .map_err(|error| error.to_string())?
-    else {
-        return Ok(SessionUsageTotals::default());
-    };
-    Ok(SessionUsageTotals {
-        total_tokens: metrics
-            .total_input_tokens
-            .saturating_add(metrics.total_output_tokens),
-        input_tokens: metrics.total_input_tokens,
-        cache_read_tokens: metrics.total_cache_read_tokens,
-        cache_write_tokens: metrics.total_cache_write_tokens,
-        output_tokens: metrics.total_output_tokens,
-        reasoning_tokens: metrics.total_reasoning_tokens,
-    })
-}
 /// 读某条 thread 的当前模型事实；没有该 thread 或还没有任何一轮时读作 `None`。
 pub(crate) fn session_model_at_root(
     root: &Path,

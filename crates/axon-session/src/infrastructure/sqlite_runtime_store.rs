@@ -455,6 +455,14 @@ impl EventLogStore for SqliteRuntimeStore {
     ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
         event_log_repository::interaction_tail_window(self, session_id, interaction_id, limit)
     }
+
+    fn latest_turn_metrics(
+        &self,
+        session_id: &DaemonSessionId,
+        interaction_ids: &[InteractionId],
+    ) -> Result<Vec<(String, axon_eventlog::TurnMetrics)>, RuntimeStoreError> {
+        event_log_repository::latest_turn_metrics(self, session_id, interaction_ids)
+    }
 }
 #[cfg(test)]
 #[path = "sqlite_runtime_store_metrics_tests.rs"]

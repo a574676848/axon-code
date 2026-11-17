@@ -1,4 +1,4 @@
-//! JARVIS 主 turn session 的长期存活 worker pool。
+//! Axon 主 turn session 的长期存活 worker pool。
 
 use std::{
     fmt,

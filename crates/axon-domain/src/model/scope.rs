@@ -88,7 +88,7 @@ impl<'de> Deserialize<'de> for WorkspaceId {
     }
 }
 
-/// JARVIS 的全局或 Workspace 作用域。
+/// Axon 的全局或 Workspace 作用域。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "workspace_id", rename_all = "snake_case")]
 pub enum ScopeRef {

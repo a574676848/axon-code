@@ -328,6 +328,12 @@ export interface TurnState {
    */
   pendingAttachments: AttachmentRef[];
   /**
+   * 等待贴到用户消息上的逐轮来源。
+   *
+   * 与上一条同源同寿命：来源只有历史索引知道，用户消息要等 durable 事件重放才出现。
+   */
+  pendingChannel: string | null;
+  /**
    * 已折叠：正文单元已经**丢弃**，只剩一行摘要。
    *
    * 折叠不是「藏起来」而是「释放」：`cells` 被替换成单个折叠单元后，工具输出与推理
@@ -378,6 +384,14 @@ export interface ConversationState {
    * 因此它的体量随「答过的题」增长，而不是随问答载荷增长。
    */
   resolvedQuestions: Record<string, ResolvedQuestion>;
+  /**
+   * 会话累计的后台作业台账。
+   *
+   * 与轮次单元分开存：折叠会把过程单元整段释放，而「这条会话跑过哪些后台作业」是
+   * 会话事实，不能随单元的释放一起消失（否则标题栏的后台任务清单会在折叠或回放之后
+   * 变空）。行只在发起作业的那一次调用处新增，后续回执原位更新。
+   */
+  jobs: JobRow[];
 }
 
 export interface ResolvedQuestion {
@@ -411,6 +425,7 @@ export const INITIAL_CONVERSATION: ConversationState = {
   activeTurnCount: 0,
   pendingQuestions: {},
   resolvedQuestions: {},
+  jobs: [],
 };
 
 /** 归约动作。 */
@@ -442,28 +457,56 @@ export type ConversationAction =
    */
   | { type: 'submit-failed'; turnId: string | null; text: string; message: string; nowMs: number }
   | { type: 'bind'; turnId: string; interactionId: string }
-  | { type: 'attach-history'; interactionId: string; attachments: AttachmentRef[] }
-  | {
-      type: 'seed-history';
-      interactionId: string;
-      text: string;
-      attachments: AttachmentRef[];
-      channel?: string;
-    }
+  /**
+   * 把历史索引里的附件与来源贴到已回放出来的一轮上。
+   *
+   * 会话事件流只承载正文，附件与逐轮来源不在 wire 帧里；索引是这两件事的唯一事实源。
+   * 用户消息还没落地时先把附件记在轮次上，等它到达再贴。
+   */
+  | { type: 'attach-history'; interactionId: string; attachments: AttachmentRef[]; channel?: string }
   /**
    * 把更早的一页轮次整段接到时间线头部。
    *
    * 「加载更早」逐条向前翻页时，更早那一页会先在独立投影里回放完，再作为已算好的
-   * 轮次数组前置进来；这样主投影不必为了插入头部而重放整条会话。
+   * 轮次数组前置进来；这样主投影不必为了插入头部而重放整条会话。作业台账随页一起
+   * 带过来：它是会话事实，不能只活在单元里。
    */
-  | { type: 'prepend-turns'; turns: TurnState[] }
+  | { type: 'prepend-turns'; turns: TurnState[]; jobs?: JobRow[] }
+  /**
+   * 把一页新增的轮次整段接到时间线末尾。
+   *
+   * 外部发起的新一轮（后台作业唤醒、定时投递、目标推进）只追加，不重置投影：
+   * 重置会让整屏正文塌一次，读起来就是每来一条外部事件闪一下。
+   */
+  | { type: 'append-turns'; turns: TurnState[]; jobs?: JobRow[] }
+  /**
+   * 用会话级作业清单补齐台账。
+   *
+   * 作业属于整条会话而不是某一轮：打开历史会话时，早先几轮跑过的作业不在本轮帧里，
+   * 只能由索引页的会话级清单补进来。已有同标识的行保持原样（帧里的行更完整）。
+   */
+  | { type: 'seed-jobs'; jobs: JobRow[] }
   /**
    * 折叠一轮：撤下过程单元，在开场输入之后留一根过程控件。
    *
    * 摘要由折叠自身从过程单元里算出来，调用方只说要折哪一轮。
    */
   | { type: 'fold-turn'; turnId: string }
-  | { type: 'replace-turn-cells'; turnId: string; cells: TranscriptCell[] }
+  /**
+   * 用回放算出来的一轮整体替换投影里的那一轮。
+   *
+   * 必须整体替换而不是只换单元：用量、耗时、终态与折叠摘要都长在轮次上，只搬运
+   * `cells` 会让标题栏的会话读数与轮次分割线一起丢掉。`mode` 决定落成哪种形态：
+   * `as-is` 保持展开（最新一轮）、`folded` 折成一根控制行（更早的轮次）、
+   * `expanded` 带控制行展开（用户点开折叠行）。
+   */
+  | {
+      type: 'replace-turn';
+      turn: TurnState;
+      mode?: 'as-is' | 'folded' | 'expanded';
+      /** 这一轮回放出来的作业台账；折叠会释放单元，台账不能跟着丢。 */
+      jobs?: JobRow[];
+    }
   | { type: 'collapse-turn'; turnId: string }
   | { type: 'connecting' }
   | { type: 'frames'; frames: import('../wire').ConversationStreamEvent[]; nowMs: number }

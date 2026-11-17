@@ -163,25 +163,27 @@ const attachment = { path: 'docs/guide.md', name: 'guide.md', image: false };
 function openHistory() {
     return conversationReducer(INITIAL_CONVERSATION, { type: 'open-turn', turnId: 'history', nowMs: 0 });
 }
-function seed(state) {
+function attachFacts(state) {
     return conversationReducer(state, {
-        type: 'seed-history', interactionId: 'history', text: '查看文件', attachments: [attachment],
+        type: 'attach-history', interactionId: 'history', attachments: [attachment], channel: 'desktop',
     });
 }
 
-test('历史索引先到时认领占位消息，保留附件并抵抗重复事件', () => {
-    let state = applyUserMessage(seed(openHistory()), 0, 'user-event', '查看文件', 100);
-    state = applyUserMessage(state, 0, 'user-event', '查看文件', 100);
+test('历史帧落地后再贴索引里的附件与来源，气泡只呈现一次', () => {
+    // 正文由 durable 帧给出（用户气泡不再手搓），索引补的是帧里没有的附件与来源。
+    const replayed = applyUserMessage(openHistory(), 0, 'user-event', '查看文件', 100);
+    const state = attachFacts(replayed);
     assert.equal(state.turns[0].cells.length, 1);
     assert.equal(state.turns[0].index['user-event'], 0);
-    assert.equal(state.turns[0].index['history-user:history'], undefined);
+    assert.equal(state.turns[0].cells[0].channel, 'desktop');
     assert.deepEqual(state.turns[0].cells[0].attachments, [attachment]);
 });
 
-test('历史事件先到时只补附件，不重复生成用户消息', () => {
-    const state = seed(applyUserMessage(openHistory(), 0, 'user-event', '查看文件', 100));
+test('附件先于用户消息到达时暂存，用户消息落地即认领', () => {
+    const state = applyUserMessage(attachFacts(openHistory()), 0, 'user-event', '查看文件', 100);
     assert.equal(state.turns[0].cells.length, 1);
     assert.deepEqual(state.turns[0].cells[0].attachments, [attachment]);
+    assert.equal(state.turns[0].pendingAttachments.length, 0);
 });
 
 test('本地消息确认建立正确索引，不同事件的相同文本仍各自保留', () => {

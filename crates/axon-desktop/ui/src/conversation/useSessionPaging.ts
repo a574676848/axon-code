@@ -1,77 +1,74 @@
 /*
- * 车道历史的分页与展开。
+ * 车道历史的打开、按轮翻页与展开。
  *
- * 两件事分开走：
+ * 轮次大纲加事件窗口：索引给出「每一轮问了什么、算了多久、最后答了什么」，客户端只把
+ * **已加载的一轮**渲染成完整正文。三档粒度：
  *
- * - **翻页只取索引**。一页 Interaction 一次到手，更早的直接按索引立起来
- *   （见 `indexedTurn`），一条都不回放：长会话的历史是几十万帧，
- *   逐条回放等于把翻页变成几十次串行读帧。
- * - **展开才回放**。点开某一条的过程控件时，才在独立投影里回放它的帧，排空后把
- *   算好的单元整段换回主投影。
+ * - **打开**：一次索引页（默认 20 条）立刻立起三形态（用户气泡 + 过程抬头 + 最终回复），
+ *   随后只把**最新一轮**读整轮换成展开形态。首屏不等历史帧，打开成本不随轮数增长。
+ * - **加载更早**：一次一轮（`OLDER_STEP`），取回来立起三形态。滚到顶部才发一次，
+ *   不整批读正文。
+ * - **展开**：点开过程抬头才读整轮；收起即释放（`collapse-turn` 丢掉过程单元）。
  *
- * 展开之所以必须走独立投影：帧的归属规则是「最后一条尚未收口的轮次」，在主投影
- * 里回放历史会把帧记到最新的轮次上。这里因此自持一份临时投影与它自己的订阅标识
- * 集合，回放期间两路帧按订阅标识分流。
- *
- * 编排层只通过四个接缝使用它：`take`（取下一个要回放的标识）、`finish`（排空收口）、
- * `routeFrames`（帧分流）、`applyAction`（按当前模式派发）。
+ * 帧一律喂进与实时同一个归约器；索引提供帧里没有的那几项：附件、逐轮来源，以及每轮的
+ * 指标读数（用时、token、首字、速率）。
  */
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 import * as ipc from '../ipc';
+import type { TurnMetricsReading } from '../types';
+import {
+  completedFrame,
+  historySource,
+  insertControlAfterInput,
+  sessionJobRows,
+  projectFrames,
+  readingFactsOf,
+  statusFrame,
+  turnSummaryFacts,
+  wireFrame,
+  type HistoryFacts,
+} from './historyProjection';
+import { readInteractionFrames } from './interactionReplay';
 import {
   INITIAL_CONVERSATION,
   applyFrames,
   attachmentsFromPaths,
   conversationReducer,
-  indexedTurn,
-  type AttachmentRef,
+  outlineControl,
+  summaryFromToolNames,
   type ConversationAction,
-  type ConversationState,
+  type JobRow,
+  type TurnState,
 } from './transcript';
+import { applyTurnSummary, seedTurnReadings, settleTurn, type TurnSummaryFacts } from './transcript/turns';
 import type { SessionTokenBaseline } from './sessionUsage';
-
-/**
- * 一轮的来源：逐轮客户端优先，缺省回落到渠道。
- *
- * 索引轮与回放轮必须用同一份判据，否则同一条会话里两种轮次会给出两套来源口径。
- */
-function historySource(item: { channel?: string; client?: string }): string {
-  const client = item.client ?? '';
-  return client !== '' ? client : (item.channel ?? '');
-}
 import type { ConversationStreamEvent } from './wire';
 import type { SessionEffectiveModel } from './viewConfig';
 
-/**
- * 历史分页的页大小。
- *
- * 取一页而不是取一条：索引接口的成本与条数无关（实测 limit=1 与 limit=40 同为
- * 53ms、响应不足 13KB），而每多取一条就少一次点击、少一次往返。
- *
- * 整页到手后只有最新的一条进回放队列，更早的按索引直接立起来；正文留给
- * 点开某一条时再取。
- */
+/** 首屏索引页大小：一次拿到最近一页的轮次清单，不参与正文回放。 */
 const HISTORY_PAGE_SIZE = 20;
+/** 「加载更早」每次取的轮数：按轮翻页，不是把更早的一页整批取回来。 */
+const OLDER_STEP = 1;
 
-/** 一次独立回放：展开某一条折叠轮。 */
-interface PagingSession {
-  /** 临时投影。 */
-  state: ConversationState;
-  /** 这一路还要回放哪几条。 */
-  queue: string[];
-  /** 这一次回放自己的订阅标识集合。 */
-  ids: Set<string>;
-  /** 展开的目标：回放排空后把正文换回这一轮。 */
-  replaceTurnId?: string;
-}
+export type { HistoryFacts } from './historyProjection';
 
-/** 历史索引里的一条：用户气泡与附件。 */
-export interface HistorySeed {
-  text: string;
-  attachments: AttachmentRef[];
-  /** 这一轮由哪个渠道发起；历史里逐轮标注来源要用它。 */
-  channel: string;
+/** 索引页里一条 Interaction 的界面相关字段。 */
+interface HistoryEntry {
+  interactionId: string;
+  receivedAtMs: number;
+  status: string;
+  content?: string;
+  answerText?: string | null;
+  /** 老网关才有：没有指标事件时的墙钟用时。 */
+  elapsedMs?: number | null;
+  /** 这一轮的读数；事实源是该轮自己的 `turn_metrics` 事件。 */
+  metrics?: TurnMetricsReading | null;
+  /** 这一轮用过的工具名；索引轮据此立起动作摘要。 */
+  toolNames?: readonly string[];
+  attachments?: readonly string[];
+  channel?: string;
+  client?: string;
 }
 
 export interface SessionPagingOptions {
@@ -81,316 +78,487 @@ export interface SessionPagingOptions {
   workspaceId: string | null;
   /** 主投影的派发入口。 */
   dispatch: (action: ConversationAction) => void;
-  /** 主控制器持有的回放标记与代次：翻页沿用同一套作废语义。 */
-  replayingRef: React.RefObject<boolean>;
+  /** 当前代次；目标切换后旧回放据此作废。 */
   generationRef: React.RefObject<number>;
-  /** 起一次回放（主控制器的 playNext）。 */
-  playNextRef: React.RefObject<
-    (workspace: string, generation: number, leaving?: string | null) => void
-  >;
   /** 取历史失败时的提示入口。 */
   onError: (message: string) => void;
-  /** 车道当前模型的权威事实（网关只读最新一轮记录）；翻到没有结论时给 null。 */
+  /** 主投影当前持有的轮次标识：增量接管据此只接还不认识的那几条。 */
+  knownTurnIds: () => readonly string[];
+  /** 仍有轮次在跑时，从 durable 尾订阅它的增量。 */
+  subscribeTail: (interactionId: string, cursor: string | null) => Promise<void>;
+  /** 车道当前模型的权威事实（网关只读最新一轮记录）；读不到时给 null。 */
   onEffectiveModel?: (model: SessionEffectiveModel | null) => void;
   /** 首页带回来的最近一次记忆反思提示；没有记忆动作时回 null。 */
   onReflectionNotice?: (notice: string | null) => void;
 }
 
 export interface SessionPaging {
-  /** 取某一条的种子。 */
-  seedOf: (interactionId: string) => HistorySeed | undefined;
-  /**
-   * 最近一页历史带下来的会话累计用量基线；还没取回时为 null。
-   *
-   * 基线覆盖的轮次一并给出：界面据此只叠加基线之后发生的轮次，不把同一轮算两次。
-   */
+  /** 最近一页索引带下来的会话累计用量基线；还没取回时为 null。 */
   sessionBaseline: SessionTokenBaseline | null;
-  /** 取最近一页历史：重置种子表与累计基线、记住游标，返回最新一条要回放的标识。 */
-  loadNewestPage: (sessionId: string) => Promise<string[]>;
-  /** 按当前模式派发动作：独立回放时进临时投影，其余进主投影。 */
-  applyAction: (action: ConversationAction) => void;
-  /** 取下一条要回放的标识：展开时取这一路的队列，否则取主队列。 */
-  take: (mainQueue: string[]) => string | undefined;
-  /** 独立回放排空后的收口；返回 true 表示这一次排空由这里处理完了。 */
-  finish: () => boolean;
-  /** 按订阅标识分流一批帧：属于展开那一路的进临时投影，其余进主投影。 */
-  routeFrames: (batch: ConversationStreamEvent[], nowMs: number) => void;
-  /** 加载更早的一页 Interaction：按索引立起来，正文点开控件再取。 */
+  /** 打开一条车道：索引立起三形态，再把最新一轮换成展开形态。 */
+  openSession: (sessionId: string) => Promise<void>;
+  /** 加载更早的一轮：一次一条。 */
   loadOlder: () => Promise<void>;
-  /** 展开一条被折叠的 Interaction：只读尾部一窗。 */
+  /** 把外部发起的新一轮接进投影：只接还不认识的那几条。 */
+  appendSession: () => Promise<void>;
+  /** 展开一条被折叠的 Interaction：读整轮帧后替换该轮单元。 */
   unfoldTurn: (interactionId: string) => void;
   /** 正在展开的那一条；没有时为空。 */
   unfoldingId: string | null;
-  /** 丢弃在途的展开或补窗；目标切换时调用，否则守卫会让新会话点不动。 */
-  abort: () => void;
   hasOlder: boolean;
   loadingOlder: boolean;
+  /** 索引或补帧还在途：过渡窗口的兜底计时据此让位。 */
+  pageLoading: boolean;
   /** 前置计数：正文区据此补偿滚动位置。 */
   prependToken: number;
 }
 
 /** 组装分页与展开能力。 */
 export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
-  const { sessionId, workspaceId, dispatch, replayingRef, generationRef, playNextRef, onError } =
-    options;
-  /** 更早一页的游标；为空表示已经翻到车道开头。 */
+  const {
+    sessionId,
+    workspaceId,
+    dispatch,
+    generationRef,
+    onError,
+    knownTurnIds,
+    subscribeTail,
+    onEffectiveModel,
+    onReflectionNotice,
+  } = options;
+  /** 更早一轮的游标；为空表示已经翻到车道开头。 */
   const olderCursorRef = useRef<{ receivedAtMs: number; interactionId: string } | null>(null);
-  /** 进行中的独立回放。 */
-  const pagingRef = useRef<PagingSession | null>(null);
+  /** 历史索引的补充事实表（附件与来源）。 */
+  const factsRef = useRef(new Map<string, HistoryFacts>());
+  /**
+   * 索引给出的逐轮读数。
+   *
+   * 打开与翻页时随索引一起入库，展开某轮时按标识取回：`turn_metrics` 是这一轮读数的
+   * 权威事实，即使展开后只回放出尾窗帧，分割线也照样完整。
+   */
+  const readingsRef = useRef(new Map<string, TurnMetricsReading>());
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [pageLoading, setPageLoading] = useState(false);
   const [hasOlder, setHasOlder] = useState(false);
   const [prependToken, setPrependToken] = useState(0);
-  /**
-   * 正在展开的那一条。
-   *
-   * 过程控件点开之后要先回放一窗帧，这段时间里它得有个可见的"在动"。只放一个标识：
-   * 它变化时该重渲染的只有那一根控件，正文各轮的 memo 不该被牵连。
-   */
   const [unfoldingId, setUnfoldingId] = useState<string | null>(null);
-  /** 历史索引的种子表。 */
-  const seedsRef = useRef(new Map<string, HistorySeed>());
   /** 会话累计用量的基线；换车道时整份换掉。 */
   const [sessionBaseline, setSessionBaseline] = useState<SessionTokenBaseline | null>(null);
+  /** 展开的防重入：同一条正在读帧时再点不重复发起。 */
+  const unfoldingRef = useRef<string | null>(null);
 
-  const seedHistoryEntries = useCallback(
-    (
-      page: readonly {
-        interactionId: string;
-        content?: string;
-        channel?: string;
-        client?: string;
-        attachments?: readonly string[];
-      }[],
-    ) => {
-      for (const item of page) {
-        seedsRef.current.set(item.interactionId, {
-          text: item.content ?? '',
-          attachments: attachmentsFromPaths([...(item.attachments ?? [])]),
-          channel: historySource(item),
-        });
+  const seedHistoryFacts = useCallback((page: readonly HistoryEntry[]) => {
+    for (const item of page) {
+      factsRef.current.set(item.interactionId, {
+        attachments: attachmentsFromPaths([...(item.attachments ?? [])]),
+        channel: historySource(item),
+      });
+      const metrics = item.metrics ?? null;
+      if (metrics !== null) {
+        readingsRef.current.set(item.interactionId, metrics);
       }
-    },
-    [],
-  );
-
-  const seedOf = useCallback(
-    (interactionId: string) => seedsRef.current.get(interactionId),
-    [],
-  );
-
-  /** 取最近一页历史的游标：更早的由「加载更早」按需取。 */
-  const rememberFirstPage = useCallback(
-    (page: readonly { interactionId: string; receivedAtMs: number }[]) => {
-      const oldest = page[0];
-      olderCursorRef.current =
-        oldest === undefined
-          ? null
-          : { receivedAtMs: oldest.receivedAtMs, interactionId: oldest.interactionId };
-      // 取满一页说明前面可能还有；短页即已经到底。
-      setHasOlder(page.length === HISTORY_PAGE_SIZE);
-    },
-    [],
-  );
+    }
+  }, []);
 
   /**
-   * 取最近一页历史：重置种子表、记住游标，返回这一页要回放的标识。
-   *
-   * 首屏与重连共用这一处。分页口径只能有一份：页大小、游标起点、种子表归属与
-   * 「还有没有更早」都在这里定，调用方不再各自解释「取多少条、从哪往前翻」。
+   * 一轮的分割线读数：索引给出的 `turn_metrics` 优先，缺失时退回帧算出来的那份。
    */
-  const loadNewestPage = useCallback(
-    async (sessionId: string): Promise<string[]> => {
-      // 先丢旧基线：累计读数不能先按上一条会话的数画一帧，再跳到新会话。
-      setSessionBaseline(null);
-      const page = await ipc.conversationHistory(sessionId, HISTORY_PAGE_SIZE);
+  const readingFactsFor = useCallback(
+    (interactionId: string, fallbackElapsedMs: number | null, turn: TurnState): TurnSummaryFacts =>
+      turnSummaryFacts(readingsRef.current.get(interactionId), fallbackElapsedMs, turn),
+    [],
+  );
+
+  /** 索引读数：把 `turn_metrics` 换成归约器认得的形状，供指标条在帧回来之前成立。 */
+  const indexReadings = useCallback(
+    (interactionId: string) => readingFactsOf(readingsRef.current.get(interactionId)),
+    [],
+  );
+
+  /** 记住下一次前翻的游标，并判定车道是否还有更早的轮次。 */
+  const rememberOldest = useCallback((entry: HistoryEntry | undefined, more: boolean) => {
+    if (entry !== undefined) {
+      olderCursorRef.current = {
+        receivedAtMs: entry.receivedAtMs,
+        interactionId: entry.interactionId,
+      };
+    }
+    setHasOlder(more);
+  }, []);
+
+  const fetchNewestPage = useCallback(
+    async (laneId: string) => {
+      const page = await ipc.conversationHistory(laneId, HISTORY_PAGE_SIZE);
       // 权威模型随首页一起回来：只查最新一轮，不遍历历史轮次。
-      options.onEffectiveModel?.(page.effectiveModel ?? null);
+      onEffectiveModel?.(page.effectiveModel ?? null);
       // 记忆提示同一时机取回：它也是「这条会话现在的最新事实」，不能随翻页回退。
-      options.onReflectionNotice?.(page.reflectionNotice ?? null);
-      seedsRef.current = new Map();
-      seedHistoryEntries(page.interactions);
-      rememberFirstPage(page.interactions);
+      onReflectionNotice?.(page.reflectionNotice ?? null);
       if (page.sessionUsage !== null) {
         setSessionBaseline({
           usage: page.sessionUsage,
           elapsedMs: page.sessionElapsedMs ?? 0,
           turnIds: new Set(page.interactions.map((item) => item.interactionId)),
+          // 取页那一刻仍在跑的那几条：账本还没落账，整条由本地增量承担。
+          openTurnIds: new Set(
+            page.interactions
+              .filter((item) => item.status === 'received' || item.status === 'processing')
+              .map((item) => item.interactionId),
+          ),
         });
       }
-      /*
-       * 只把最新一条交给回放：更早的整页按索引直接立起来。
-       *
-       * 打开长会话不该等几十次串行回放：实测一条 40 轮的车道共 12.4 万帧、96.7MB，
-       * 逐条走完要 124 次帧页；而这一页索引只要一次往返，且索引里已经带着用户气泡、
-       * 动作摘要与最终交付正文，因此更早那些轮次立起来就是可读的一轮。
-       */
-      const newest = page.interactions[page.interactions.length - 1];
-      if (newest === undefined) return [];
-      const indexed = page.interactions
-        .slice(0, -1)
-        .map((item) => indexedTurn({ ...item, channel: historySource(item) }));
-      if (indexed.length > 0) dispatch({ type: 'prepend-turns', turns: indexed });
-      return [newest.interactionId];
+      // 会话级后台作业清单随索引一起回来：作业属于整条会话，不能只靠本轮回放。
+      const jobs = sessionJobRows(page.jobs);
+      if (jobs.length > 0) dispatch({ type: 'seed-jobs', jobs });
+      return page.interactions as HistoryEntry[];
     },
-    [dispatch, rememberFirstPage, seedHistoryEntries],
+    [dispatch, onEffectiveModel, onReflectionNotice],
   );
-
-  const applyAction = useCallback(
-    (action: ConversationAction) => {
-      const paging = pagingRef.current;
-      if (paging === null) {
-        dispatch(action);
-        return;
-      }
-      paging.state = conversationReducer(paging.state, action);
-    },
-    [dispatch],
-  );
-
-  const take = useCallback((mainQueue: string[]) => {
-    const paging = pagingRef.current;
-    return paging === null ? mainQueue.shift() : paging.queue.shift();
-  }, []);
 
   /**
-   * 丢弃在途的独立回放。
+   * 索引给出的三形态骨架帧：用户说了什么、最后答了什么。
    *
-   * 展开与补窗都会把一份临时投影挂在这里，而发起动作前有一道守卫：`pagingRef`
-   * 非空就拒绝新的展开与翻页。目标切换时若不把它清掉，新会话里控件点不开、历史
-   * 也翻不动，且用户没有任何办法恢复，只能重启。
+   * 用户单元用本地标识落位，真正的 durable 用户帧到达时会「认领」它并换成服务端标识，
+   * 因此三形态与补帧后的正文之间不会出现两条气泡。
    */
-  const abort = useCallback(() => {
-    pagingRef.current = null;
-    setUnfoldingId(null);
-    setLoadingOlder(false);
+  const provisionalFrames = useCallback((entry: HistoryEntry): ConversationStreamEvent[] => {
+    const frames: ConversationStreamEvent[] = [
+      wireFrame(entry.interactionId, entry.receivedAtMs, 'userMessage', {
+        partId: `local-user:${entry.interactionId}`,
+        messageId: `${entry.interactionId}:user`,
+        content: entry.content ?? '',
+      }),
+    ];
+    const answer = (entry.answerText ?? '').trim();
+    if (entry.status === 'interrupted') {
+      frames.push(statusFrame(entry.interactionId, 1_000, 'interrupted'));
+    } else if (answer.length > 0) {
+      frames.push(completedFrame(entry.interactionId, answer));
+    }
+    return frames;
   }, []);
 
-  const finish = useCallback(() => {
-    const paging = pagingRef.current;
-    if (paging === null) return false;
-    pagingRef.current = null;
-    setUnfoldingId(null);
-    const turnId = paging.replaceTurnId;
-    // 独立投影只在展开时建立；没有目标标识就没有要落地的轮次。
-    if (turnId === undefined) return true;
-    const restored = paging.state.turns.find((turn) => turn.id === turnId);
-    dispatch({ type: 'replace-turn-cells', turnId, cells: restored?.cells ?? [] });
-    return true;
-  }, [dispatch]);
-
-  const routeFrames = useCallback(
-    (batch: ConversationStreamEvent[], nowMs: number) => {
-      const paging = pagingRef.current;
-      if (paging === null) {
-        dispatch({ type: 'frames', frames: batch, nowMs });
-        return;
+  /**
+   * 把一轮投影出来：有帧就纯按帧投影，没有帧才用索引骨架。
+   *
+   * 两条路径不能叠：索引骨架里那条合成的用户消息会与帧里的真实用户消息各成一格，
+   * 而骨架自带的收口帧又会先把这一轮判成结束，让随后的回放帧另起一轮（实测表现为
+   * 「打开会话后最新一轮的过程行整段不见、上下文读数也空着」）。因此这里二选一。
+   */
+  const projectTurn = useCallback(
+    (
+      entry: HistoryEntry,
+      frames: readonly ConversationStreamEvent[] | null,
+    ): { turn: TurnState; jobs: JobRow[] } => {
+      if (frames !== null && frames.length > 0) {
+        return projectFrames(
+          entry.interactionId,
+          frames,
+          factsRef.current.get(entry.interactionId),
+          readingsRef.current.get(entry.interactionId),
+          entry.elapsedMs ?? null,
+        );
       }
+      let state = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn',
+        turnId: entry.interactionId,
+        nowMs: entry.receivedAtMs,
+      });
+      const facts = factsRef.current.get(entry.interactionId);
+      if (facts !== undefined) {
+        state = conversationReducer(state, {
+          type: 'attach-history',
+          interactionId: entry.interactionId,
+          attachments: facts.attachments,
+          channel: facts.channel,
+        });
+      }
+      state = applyFrames(state, provisionalFrames(entry), entry.receivedAtMs);
+      const turn = state.turns[0];
+      if (turn === undefined) {
+        return { turn: state.turns[0], jobs: state.jobs };
+      }
+      const settled =
+        turn.status === 'streaming' || turn.status === 'pending'
+          ? settleTurn(turn, 'completed', entry.elapsedMs ?? null)
+          : turn;
       /*
-       * 展开期间两路帧同时在跑：属于这一路订阅的进临时投影，其余（实时会话）照旧进
-       * 主投影。按订阅标识分流，不靠到达顺序猜。
+       * 索引读数先落到这一轮上：首字、速率与用量在帧回来之前就要在指标条上成立。
+       * 窗口占用不在索引里，因此这一轮只有 token 分桶，上下文段仍等收尾负载。
        */
-      const page: ConversationStreamEvent[] = [];
-      const live: ConversationStreamEvent[] = [];
-      for (const event of batch) {
-        (paging.ids.has(event.subscribeId) ? page : live).push(event);
-      }
-      if (live.length > 0) dispatch({ type: 'frames', frames: live, nowMs });
-      if (page.length > 0) paging.state = applyFrames(paging.state, page, nowMs);
+      const seeded = seedTurnReadings(settled, indexReadings(entry.interactionId));
+      /*
+       * 只读索引的那一轮：给一根折叠行当入口。
+       *
+       * 过程要等点开才读整轮，但读者需要一个「这一轮可以展开」的落点；标题只写中性的
+       * 「过程」，点开之后换成帧算出来的真实动作摘要（没有过程时这一行会消失）。
+       */
+      const elapsed = readingFactsFor(entry.interactionId, entry.elapsedMs ?? null, seeded).durationMs;
+      /*
+       * 没有过程证据就不立折叠行。
+       *
+       * 纯问答轮点开也没有过程可看，给它立一根「过程」抬头只是把一次问答伪装成跑过
+       * 东西的回合。判据取索引里的事实：这一轮有工具名、有工具调用次数或有推理输出，
+       * 三者都没有才认定它没有过程。
+       */
+      const reading = readingsRef.current.get(entry.interactionId);
+      const hasProcess =
+        (entry.toolNames?.length ?? 0) > 0 ||
+        (reading?.toolCalls ?? 0) > 0 ||
+        (reading?.reasoningTokens ?? 0) > 0;
+      const withControl = hasProcess
+        ? insertControlAfterInput(
+            seeded,
+            outlineControl(
+              entry.interactionId,
+              entry.interactionId,
+              entry.receivedAtMs,
+              elapsed,
+              summaryFromToolNames(entry.toolNames ?? []),
+            ),
+          )
+        : seeded;
+      return {
+        turn: applyTurnSummary(
+          withControl,
+          readingFactsFor(entry.interactionId, entry.elapsedMs ?? null, withControl),
+        ),
+        jobs: state.jobs,
+      };
     },
-    [dispatch],
+    [indexReadings, provisionalFrames, readingFactsFor],
+  );
+
+  /** 一条轮次的骨架形态（打开时光标还没落到任何历史帧上）。 */
+  const withProvisional = useCallback(
+    (entries: readonly HistoryEntry[]) => entries.map((entry) => projectTurn(entry, null).turn),
+    [projectTurn],
   );
 
   /**
-   * 加载更早的一页 Interaction。
+   * 打开一条车道：索引立起三形态，再升级最新一轮为展开形态。
    *
-   * 整页按索引立起来，翻页时一条都不回放：一页二十条只有几十 KB，而逐条回放要按帧页
-   * 把这段历史整个读一遍。正文留给点开控件时再取（见 `unfoldTurn`）。
+   * 首屏在索引返回时就交出，不等历史帧；最新一轮的回放随后替换该轮单元。每轮的分割线
+   * 由索引里的 `turn_metrics` 直接给出，因此打开成本 = 一次索引 + 一轮整帧，不随轮数增长。
+   */
+  const openSession = useCallback(
+    async (laneId: string): Promise<void> => {
+      // 先丢旧基线：累计读数不能先按上一条会话的数画一帧，再跳到新会话。
+      setSessionBaseline(null);
+      const generation = generationRef.current;
+      setPageLoading(true);
+      try {
+        const entries = await fetchNewestPage(laneId);
+        if (generation !== generationRef.current) return;
+        factsRef.current = new Map();
+        readingsRef.current = new Map();
+        seedHistoryFacts(entries);
+        rememberOldest(entries[0], entries.length >= HISTORY_PAGE_SIZE);
+        dispatch({ type: 'reset' });
+        if (entries.length > 0) {
+          dispatch({ type: 'prepend-turns', turns: withProvisional(entries) });
+        }
+        const newest = entries[entries.length - 1];
+        if (newest === undefined) return;
+        // 最新一轮读整轮：它是正在读的那一段，思考与工具必须齐全并保持展开。
+        const read = await readInteractionFrames(newest.interactionId, generation, {
+          generation: () => generationRef.current,
+        });
+        if (read !== null && generation === generationRef.current) {
+          const projected = projectTurn(newest, read.frames);
+          dispatch({
+            type: 'replace-turn',
+            turn: projected.turn,
+            jobs: projected.jobs,
+          });
+          if (!read.settled && workspaceId !== null) {
+            void subscribeTail(newest.interactionId, read.cursor);
+          }
+        }
+      } finally {
+        setPageLoading(false);
+      }
+    },
+    [
+      dispatch,
+      fetchNewestPage,
+      generationRef,
+      projectTurn,
+      rememberOldest,
+      seedHistoryFacts,
+      subscribeTail,
+      withProvisional,
+      workspaceId,
+    ],
+  );
+
+  /**
+   * 加载更早的轮次：一次一轮。
+   *
+   * 滚到顶部才发一次，取回来立刻立起三形态（正文区按前置高度差补偿滚动位置）。索引已经
+   * 带上这一轮的读数，因此折叠行与分割线当场就有数，不必再为它们多读一帧。车道再长也
+   * 不会一次读回一页正文。
    */
   const loadOlder = useCallback(async () => {
     const cursor = olderCursorRef.current;
     if (cursor === null || sessionId === null) return;
-    if (pagingRef.current !== null) return;
     const generation = generationRef.current;
     setLoadingOlder(true);
     try {
-      const page = await ipc.conversationHistory(sessionId, HISTORY_PAGE_SIZE, cursor);
-      if (generationRef.current !== generation) return;
-      const entries = page.interactions;
+      const page = await ipc.conversationHistory(sessionId, OLDER_STEP, cursor);
+      if (generation !== generationRef.current) return;
+      const entries = page.interactions as HistoryEntry[];
       if (entries.length === 0) {
         olderCursorRef.current = null;
         setHasOlder(false);
         return;
       }
-      seedHistoryEntries(entries);
-      rememberFirstPage(entries);
-      dispatch({ type: 'prepend-turns', turns: entries.map(indexedTurn) });
-      // 前置一页会让内容整体下移：正文区按同一高度差补偿滚动位置。
+      seedHistoryFacts(entries);
+      rememberOldest(entries[0], true);
+      dispatch({ type: 'prepend-turns', turns: withProvisional(entries) });
       setPrependToken((value) => value + 1);
     } catch (error: unknown) {
       onError(error instanceof Error ? error.message : '加载更早的会话失败');
     } finally {
       setLoadingOlder(false);
     }
-  }, [dispatch, generationRef, sessionId, onError, rememberFirstPage, seedHistoryEntries]);
+  }, [
+    dispatch,
+    generationRef,
+    onError,
+    rememberOldest,
+    seedHistoryFacts,
+    sessionId,
+    withProvisional,
+  ]);
+
+  /**
+   * 增量接管：只接本视图还不认识的轮次。
+   *
+   * 新的一轮照最新一轮处理（读整轮、保持展开）。翻页游标不动；分割线的读数由索引给出。
+   */
+  const appendSession = useCallback(async (): Promise<void> => {
+    if (sessionId === null || workspaceId === null) return;
+    const generation = generationRef.current;
+    try {
+      const entries = await fetchNewestPage(sessionId);
+      if (generation !== generationRef.current) return;
+      seedHistoryFacts(entries);
+      const known = new Set(knownTurnIds());
+      const fresh = entries.filter((entry) => !known.has(entry.interactionId));
+      if (fresh.length === 0) return;
+      dispatch({ type: 'append-turns', turns: withProvisional(fresh) });
+      const newest = fresh[fresh.length - 1];
+      const read = await readInteractionFrames(newest.interactionId, generation, {
+        generation: () => generationRef.current,
+      });
+      if (read !== null && generation === generationRef.current) {
+        const projected = projectTurn(newest, read.frames);
+        dispatch({
+          type: 'replace-turn',
+          turn: projected.turn,
+          jobs: projected.jobs,
+        });
+        if (!read.settled) void subscribeTail(newest.interactionId, read.cursor);
+      }
+    } catch (error: unknown) {
+      onError(error instanceof Error ? error.message : '读取新轮次失败');
+    }
+  }, [
+    dispatch,
+    fetchNewestPage,
+    generationRef,
+    knownTurnIds,
+    onError,
+    projectTurn,
+    seedHistoryFacts,
+    sessionId,
+    subscribeTail,
+    withProvisional,
+    workspaceId,
+  ]);
 
   /**
    * 展开一条被折叠的 Interaction。
    *
-   * 折叠时过程已经撤下，因此这里重新订阅那一条、在独立投影里回放**尾部一窗**，再把
-   * 单元整段换回去。回放落地之前该轮一直显示过程控件，不会先空一屏再长出内容。
-   *
-   * 只读一窗：一条几万帧的轮次整条重放要几十次串行往返，而读者打开它要的是「最近
-   * 发生了什么」；更早的部分不再往回补，只由时间线上那句「更早的 N 条内容已折叠」说明。
+   * 折叠时过程已经撤下，因此这里按同一条读帧口径把整轮重新算一遍，再把单元整段换回去。
+   * 回放落地之前该轮一直显示过程控件，不会先空一屏再长出内容。收起由 `collapse-turn`
+   * 负责，那一步会把过程单元整段丢掉（数据随之释放）。
    */
   const unfoldTurn = useCallback(
     (interactionId: string) => {
-      if (pagingRef.current !== null || workspaceId === null) return;
-      if (interactionId.trim().length === 0) return;
-      pagingRef.current = {
-        state: INITIAL_CONVERSATION,
-        queue: [interactionId],
-        ids: new Set([`interaction:${interactionId}`]),
-        replaceTurnId: interactionId,
-      };
+      if (interactionId.trim().length === 0 || unfoldingRef.current !== null) return;
+      const generation = generationRef.current;
+      unfoldingRef.current = interactionId;
       setUnfoldingId(interactionId);
-      replayingRef.current = true;
-      playNextRef.current(workspaceId, generationRef.current);
+      void readInteractionFrames(interactionId, generation, {
+        generation: () => generationRef.current,
+      })
+        .then((read) => {
+          if (read === null || generation !== generationRef.current) return;
+          /*
+           * 展开只按帧投影，不再叠索引骨架：骨架那条合成的用户消息会与帧里的真实
+           * 用户消息各成一格，正文里就出现两个一样的气泡。
+           */
+          const projected = projectFrames(
+            interactionId,
+            read.frames,
+            factsRef.current.get(interactionId),
+            readingsRef.current.get(interactionId),
+            null,
+          );
+          dispatch({
+            type: 'replace-turn',
+            turn: projected.turn,
+            mode: 'expanded',
+            jobs: projected.jobs,
+          });
+          if (!read.settled && workspaceId !== null) {
+            void subscribeTail(interactionId, read.cursor);
+          }
+        })
+        .catch((error: unknown) => {
+          onError(error instanceof Error ? error.message : '展开这一轮失败');
+        })
+        .finally(() => {
+          unfoldingRef.current = null;
+          setUnfoldingId(null);
+        });
     },
-    [generationRef, playNextRef, replayingRef, workspaceId],
+    [dispatch, generationRef, onError, projectFrames, subscribeTail, workspaceId],
   );
 
   return useMemo(
     () => ({
-      loadNewestPage,
-      seedOf,
-      applyAction,
-      take,
-      finish,
-      routeFrames,
+      sessionBaseline,
+      openSession,
       loadOlder,
+      appendSession,
       unfoldTurn,
       unfoldingId,
-      abort,
       hasOlder,
       loadingOlder,
+      pageLoading,
       prependToken,
-      sessionBaseline,
     }),
     [
-      applyAction,
-      finish,
+      appendSession,
       hasOlder,
-      loadNewestPage,
       loadOlder,
       loadingOlder,
+      openSession,
+      pageLoading,
       prependToken,
-      routeFrames,
-      seedOf,
       sessionBaseline,
-      take,
       unfoldTurn,
       unfoldingId,
-      abort,
     ],
   );
 }
+
+/**
+ * 只按帧投影一轮（展开用）。
+ *
+ * 不叠索引骨架：骨架里那条合成的用户消息与帧里的真实用户消息各成一格，正文里就会
+ * 出现两个一样的气泡。附件与来源仍从索引贴进来，帧里没有这两样东西；分割线的读数
+ * 以索引里的 `turn_metrics` 定稿，回放只负责把过程正文长回来。
+ */

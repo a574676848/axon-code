@@ -12,6 +12,7 @@ pub(crate) mod observability_model;
 pub(crate) mod observability_service;
 mod observability_trend;
 mod pricing_catalog;
+mod pricing_local;
 mod projection;
 pub(crate) mod realtime_aggregator;
 mod render;

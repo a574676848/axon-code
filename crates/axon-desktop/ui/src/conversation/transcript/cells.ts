@@ -152,18 +152,23 @@ export function applyUserMessage(
     const optimistic = turn.cells.find(
       (cell) =>
         cell.role === 'user' &&
-        (cell.id.startsWith('local-user:') || cell.id.startsWith(LOCAL_STEER_PREFIX) ||
-          cell.id.startsWith('history-user:')) &&
+        (cell.id.startsWith('local-user:') || cell.id.startsWith(LOCAL_STEER_PREFIX)) &&
         cell.text === visible,
     );
     if (optimistic !== undefined) {
-      const cells = turn.cells.map((cell) =>
-        cell.id === optimistic.id ? { ...cell, id: partId, atMs: recordedAtMs } : cell,
-      );
+      const cells = turn.cells.map((cell) => {
+        if (cell.id !== optimistic.id || cell.role !== 'user') return cell;
+        return {
+          ...cell,
+          id: partId,
+          atMs: recordedAtMs,
+          channel: cell.channel ?? turn.pendingChannel ?? undefined,
+        };
+      });
       const index = { ...turn.index };
       delete index[optimistic.id];
       index[partId] = cells.findIndex((cell) => cell.id === partId);
-      return { ...turn, cells, index };
+      return { ...turn, cells, index, pendingChannel: null };
     }
     const attachments = turn.pendingAttachments;
     const withCell = upsertCell(turn, {
@@ -172,8 +177,13 @@ export function applyUserMessage(
       text: visible,
       atMs: recordedAtMs,
       attachments,
+      channel: turn.pendingChannel ?? undefined,
     });
-    return attachments.length > 0 ? { ...withCell, pendingAttachments: [] } : withCell;
+    return {
+      ...withCell,
+      pendingAttachments: [],
+      pendingChannel: null,
+    };
   });
 }
 
@@ -489,6 +499,36 @@ export function applyTurnCompletedUsage(
     observed.cacheReadInputTokens +
     observed.outputTokens +
     observed.currentContextTokens;
-  if (observedTokens > 0) return folded;
+  if (observedTokens > 0) {
+    /*
+     * 累加量不能再加一遍，但上下文构成要补。
+     *
+     * 上下文占用与构成是「最近一次请求」的快照，不是累加量；流里的用量帧常常只报
+     * token 增量、不带窗口占用，此时若把收尾快照整份丢掉，指标条的上下文段会在历史
+     * 会话里整段消失（实测正是这条路径）。补的只是快照类字段，累加量一个都不动。
+     */
+    return observed.currentContextTokens > 0
+      ? folded
+      : withTurn(folded, position, (turn) => applyContextComposition(turn, usage));
+  }
   return withTurn(folded, position, (turn) => applyUsage(turn, usage));
+}
+
+/** 只把快照类读数（窗口占用与构成）写进本轮，不动任何累加量。 */
+function applyContextComposition(turn: TurnState, usage: WireUsageUpdate): TurnState {
+  const currentContextTokens = usage.currentContextTokens ?? 0;
+  if (currentContextTokens <= 0) return turn;
+  return {
+    ...turn,
+    usage: {
+      ...turn.usage,
+      currentContextTokens,
+      systemPromptTokens: compositionValue(usage.systemPromptTokens, turn.usage.systemPromptTokens),
+      toolDefinitionTokens: compositionValue(
+        usage.toolDefinitionTokens,
+        turn.usage.toolDefinitionTokens,
+      ),
+      conversationTokens: compositionValue(usage.conversationTokens, turn.usage.conversationTokens),
+    },
+  };
 }

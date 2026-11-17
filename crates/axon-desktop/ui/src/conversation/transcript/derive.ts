@@ -9,39 +9,41 @@ import { formatDurationMillisCompact } from '../format';
 import { mergeStructuredInput } from '../references';
 import { LOCAL_STEER_PREFIX, type AttachmentRef, type ConversationState, type JobRow, type TurnState } from './state';
 
-/** 派生：后台作业行；只收真正发起作业的那一次调用，事实源是订阅流本身。 */
+/**
+ * 派生：后台作业行。
+ *
+ * 读的是会话级台账（`state.jobs`），不再现场扫单元：折叠会把过程单元整段释放，而
+ * 「这条会话跑过哪些后台作业」是会话事实，必须随会话活着。台账由帧归约在作业发起处
+ * 写入，历史回放走同一条路径，因此重开会话时清单能原样回来。
+ */
 export function deriveJobs(state: ConversationState): JobRow[] {
-  const jobs: JobRow[] = [];
-  for (const turn of state.turns) {
-    for (const cell of turn.cells) {
-      if (cell.role !== 'tool') continue;
-      if (!isJobTool(cell.toolKind, cell.toolName)) continue;
-      /*
-       * 只有回执带回 job_id 的调用才是后台作业。
-       *
-       * 前台 shell 调用与交互式会话（回执给的是 session_id）都不是后台任务：把它们
-       * 也列进这张面板，会让「后台任务 N」的读数与事实对不上（实测一个会话里十个
-       * 前台命令会被读成十个后台任务，并且全部挂着退出码排在「已结束」里）。
-       * 作业行由发起作业的那一次调用代表，这是成员规则（§13）。
-       */
-      if (cell.jobId === null) continue;
-      jobs.push({
-        id: cell.id,
-        command: cell.command.length > 0 ? cell.command : cell.summary,
-        // 行状态优先反映**作业**；工具调用状态只在这一格不是作业时才有意义。
-        // 启动回执返回后调用已经收口，用它当行状态会让这一行永远停在 running。
-        status: cell.jobStatus ?? cell.status,
-        output: cell.output,
-        durationMs: cell.durationMs,
-        startedAtMs: cell.startedAtMs,
-        exitCode: cell.exitCode,
-        jobId: cell.jobId,
-        jobStatus: cell.jobStatus,
-        fullOutputAvailable: cell.fullOutputAvailable,
-      });
-    }
-  }
-  return jobs;
+  return state.jobs;
+}
+
+/**
+ * 一个工具单元对应的作业行；不是后台作业时返回 null。
+ *
+ * 三条成员规则都在这里，归约与派生只认这一份：
+ * - 只有回执带回 `jobId` 的调用才是后台作业（前台 shell 与交互式会话都不是）；
+ * - 作业读取类工具（`job_output` / `job_kill`）读的是别的作业，本身不是后台任务；
+ * - 行状态优先反映**作业**：启动回执返回后调用已经收口，用它当状态会让行永远停在 running。
+ */
+export function jobRowOf(cell: TurnState['cells'][number]): JobRow | null {
+  if (cell.role !== 'tool') return null;
+  if (!isJobTool(cell.toolKind, cell.toolName)) return null;
+  if (cell.jobId === null) return null;
+  return {
+    id: cell.id,
+    command: cell.command.length > 0 ? cell.command : cell.summary,
+    status: cell.jobStatus ?? cell.status,
+    output: cell.output,
+    durationMs: cell.durationMs,
+    startedAtMs: cell.startedAtMs,
+    exitCode: cell.exitCode,
+    jobId: cell.jobId,
+    jobStatus: cell.jobStatus,
+    fullOutputAvailable: cell.fullOutputAvailable,
+  };
 }
 
 /** 作业读取类工具：它们读的是**别的**作业，本身不是后台任务。 */

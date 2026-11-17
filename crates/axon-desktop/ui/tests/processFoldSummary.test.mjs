@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { emptyTurn } from '../src/conversation/transcript/turns.ts';
-import { indexedTurn, processSummary, shouldFold } from '../src/conversation/transcript/fold.ts';
+import { processSummary, shouldFold } from '../src/conversation/transcript/fold.ts';
+import { conversationReducer } from '../src/conversation/transcript/reducer.ts';
+import { INITIAL_CONVERSATION } from '../src/conversation/transcript/state.ts';
 
 /*
  * 折叠行的摘要是这一轮「做过什么」的唯一可见说明：读者不展开也要能读出思考与动作。
@@ -43,20 +45,7 @@ test('没有思考也没有工具：不折、不留控件', () => {
         { id: 'a', role: 'assistant', text: '你好', streaming: false, atMs: null },
     ];
     assert.equal(shouldFold(turn, 0, 3), false, '纯问答轮不折');
-    const indexed = indexedTurn({
-        interactionId: 'interaction-quiet',
-        content: '你好',
-        receivedAtMs: 1_000,
-        status: 'understood',
-        toolSummary: '',
-        answerText: '你好',
-        elapsedMs: 800,
-    });
-    assert.equal(
-        indexed.cells.some((entry) => entry.role === 'folded'),
-        false,
-        '索引轮没有工具名时也不立控件',
-    );
+
 });
 
 test('有思考或工具的轮次照旧可折', () => {
@@ -99,4 +88,35 @@ test('Axon 内置工具都落在既有类别里，不会掉进兜底', () => {
         assert.ok(summary.length > 0, `${tool} 必须有摘要`);
         assert.ok(category.length > 0);
     }
+});
+test('回放替换单元：有过程折成一行，没有过程就不插空抬头', () => {
+    const plain = emptyTurn('interaction-plain', 1_000);
+    const plainCells = [
+        { id: 'u', role: 'user', text: '只回复 ok', atMs: 1_000, attachments: [] },
+        { id: 'a', role: 'assistant', text: 'ok', streaming: false, atMs: 1_100 },
+    ];
+    const plainFolded = conversationReducer(
+        { ...INITIAL_CONVERSATION, turns: [plain] },
+        { type: 'replace-turn', turn: { ...plain, cells: plainCells }, mode: 'folded' },
+    ).turns[0];
+    assert.equal(
+        plainFolded.cells.some((cell) => cell.role === 'folded'),
+        false,
+        '纯问答轮不立控件',
+    );
+
+    const worked = emptyTurn('interaction-worked', 2_000);
+    const workedCells = [
+        { id: 'u2', role: 'user', text: '列目录', atMs: 2_000, attachments: [] },
+        { id: 'r2', role: 'reasoning', text: '想一下', done: true, durationMs: 5, startedAtMs: 2_000 },
+        { id: 't2', role: 'tool', toolName: 'shell_command', toolKind: 'shell', command: 'ls', arguments: '', intent: '', status: 'completed', summary: '', output: 'a', durationMs: 3, startedAtMs: 2_000, exitCode: 0, jobId: null, jobStatus: null, fullOutputAvailable: false, filesystemWritePerformed: false, editPath: null, added: 0, removed: 0, diff: null },
+        { id: 'a2', role: 'assistant', text: 'ok', streaming: false, atMs: 2_100 },
+    ];
+    const workedFolded = conversationReducer(
+        { ...INITIAL_CONVERSATION, turns: [worked] },
+        { type: 'replace-turn', turn: { ...worked, cells: workedCells }, mode: 'folded' },
+    ).turns[0];
+    assert.equal(workedFolded.cells.filter((cell) => cell.role === 'folded').length, 1);
+    assert.equal(workedFolded.cells.some((cell) => cell.role === 'reasoning' || cell.role === 'tool'), false);
+    assert.equal(workedFolded.folded, true);
 });

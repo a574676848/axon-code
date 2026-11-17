@@ -3,7 +3,11 @@
 //! 线上 api.json 的形状是 `{ "<provider>": { "models": { "<id>": {...} } } }`，
 //! 与同步客户端（拉取、防抖、落库）分开成篇：解析规则要按真实形状、同名供应商、
 //! 零价条目与去重四条纪律逐条讲清，和 HTTP 传输不是一回事。
+//!
+//! 本机模型 id 的对齐（思考档位后缀、日期戳、厂商前缀）是另一件事，见
+//! [`super::pricing_local`]：那里只消费本模块解析出来的目录，不重复读 JSON。
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -31,13 +35,47 @@ pub struct ModelsDevItem {
     pub output: Option<f64>,
     pub cache_read: Option<f64>,
     pub cache_write: Option<f64>,
+    /// 规范模型 id（`<厂商>/<型号>`）：同一个模型在不同渠道常被写成不同 id，
+    /// 目录用这个字段给出「它们其实是同一个模型」的对齐锚点。
+    pub canonical_model_id: Option<String>,
+    /// 思考档位声明，形如 `[{"type":"effort","values":["low","high"]}]`。
+    pub reasoning_options: Vec<ModelsDevReasoningOption>,
+}
+
+/// Models.dev 条目里的思考档位声明。
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct ModelsDevReasoningOption {
+    /// 档位类型；只有 `effort` 有稳定的取值集合。
+    pub r#type: String,
+    /// 该类型允许的取值。
+    pub values: Vec<String>,
+}
+
+impl ModelsDevReasoningOption {
+    /// 是否按思考力度分档。
+    #[must_use]
+    pub fn is_effort(&self) -> bool {
+        self.r#type.eq_ignore_ascii_case("effort")
+    }
 }
 
 /// Models.dev 的目录条目：一个供应商下的全部模型。
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default)]
-struct ModelsDevProvider {
-    models: HashMap<String, ModelsDevItem>,
+pub struct ModelsDevProvider {
+    pub models: HashMap<String, ModelsDevItem>,
+}
+
+/// 把整份目录解析成「供应商 → 模型」的中间表示。
+///
+/// 同步的两条通道（按同名供应商收录、按本机模型 id 对齐）共用这一次解析：
+/// 几兆的 JSON 解析两遍既浪费，也容易让两边对目录形状的判断跑偏。
+pub(crate) fn parse_catalog_providers(
+    json_str: &str,
+) -> Result<HashMap<String, ModelsDevProvider>, String> {
+    serde_json::from_str(json_str)
+        .map_err(|error| format!("无法识别的 Models.dev 目录格式: {error}"))
 }
 
 /// 同步写入的规则优先级。
@@ -60,13 +98,10 @@ pub const SYNCED_RULE_PRIORITY: i32 = -1;
 /// 3. **按「匹配式 + 单价」去重**：多个同名供应商给出同一份价时只留一条；
 /// 4. 写入的规则优先级取负值，手工规则始终优先（见 [`SYNCED_RULE_PRIORITY`]）。
 pub fn parse_models_dev_catalog(
-    json_str: &str,
+    catalog: &HashMap<String, ModelsDevProvider>,
     now_ms: u64,
     local_providers: &std::collections::BTreeSet<String>,
-) -> Result<Vec<ModelPriceRule>, String> {
-    let catalog: HashMap<String, ModelsDevProvider> = serde_json::from_str(json_str)
-        .map_err(|error| format!("无法识别的 Models.dev 目录格式: {error}"))?;
-
+) -> Vec<ModelPriceRule> {
     let mut rules = Vec::new();
     let mut seen: std::collections::BTreeSet<(String, u64, u64, u64, u64)> =
         std::collections::BTreeSet::new();
@@ -74,11 +109,12 @@ pub fn parse_models_dev_catalog(
         if !local_providers.contains(&provider_name.to_ascii_lowercase()) {
             continue;
         }
-        for (model_key, mut item) in provider.models {
-            if item.id.trim().is_empty() {
-                item.id = model_key;
-            }
-            let Some(mut rule) = rule_from_item(&item, now_ms, Some(&provider_name)) else {
+        for (model_key, item) in &provider.models {
+            // 条目缺 id 时用它在目录里的键补齐（线上目录两种写法都存在）。
+            let item = with_fallback_id(item, model_key);
+            let Some(mut rule) =
+                rule_from_item(item.as_ref(), now_ms, Some(provider_name.as_str()))
+            else {
                 continue;
             };
             if rule.input_price_per_m_micros == 0
@@ -103,7 +139,17 @@ pub fn parse_models_dev_catalog(
         }
     }
     rules.sort_by(|a, b| a.id.cmp(&b.id));
-    Ok(rules)
+    rules
+}
+
+/// 条目自带 id 时原样借用，缺 id 时才用目录键补齐。
+fn with_fallback_id<'a>(item: &'a ModelsDevItem, fallback_id: &str) -> Cow<'a, ModelsDevItem> {
+    if !item.id.trim().is_empty() {
+        return Cow::Borrowed(item);
+    }
+    let mut owned = item.clone();
+    owned.id = fallback_id.to_owned();
+    Cow::Owned(owned)
 }
 
 /// 从一个目录条目构造价格规则；缺少核心单价时返回 None。
@@ -112,6 +158,44 @@ fn rule_from_item(
     now_ms: u64,
     provider: Option<&str>,
 ) -> Option<ModelPriceRule> {
+    let quote = quote_from_item(item)?;
+    // 规则 id 带供应商：同一个模型 id 在不同供应商下是两条不同的费率事实。
+    let id = match provider {
+        Some(provider) => format!("models_dev_{provider}_{}", item.id),
+        None => format!("models_dev_{}", item.id),
+    };
+    Some(ModelPriceRule {
+        id,
+        model_pattern: item.id.clone(),
+        pricing_style: quote.pricing_style,
+        input_price_per_m_micros: quote.input,
+        output_price_per_m_micros: quote.output,
+        cache_read_price_per_m_micros: quote.cache_read,
+        cache_write_price_per_m_micros: quote.cache_write,
+        multiplier_basis_points: 10_000,
+        priority: 0,
+        created_at_ms: now_ms,
+        updated_at_ms: now_ms,
+    })
+}
+
+/// 目录条目折算出的四项单价与计费风格。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CatalogQuote {
+    /// 输入单价（微美元 / 百万 Token）。
+    pub input: u64,
+    /// 输出单价（微美元 / 百万 Token）。
+    pub output: u64,
+    /// 缓存读取单价（微美元 / 百万 Token）。
+    pub cache_read: u64,
+    /// 缓存写入单价（微美元 / 百万 Token）。
+    pub cache_write: u64,
+    /// 计费风格：给出缓存写入单价的按 Claude 风格计，OpenAI 风格下写入不单独计价。
+    pub pricing_style: PricingStyle,
+}
+
+/// 从一个目录条目折算单价；缺少核心单价时返回 None。
+pub(crate) fn quote_from_item(item: &ModelsDevItem) -> Option<CatalogQuote> {
     if item.id.trim().is_empty() {
         return None;
     }
@@ -133,28 +217,16 @@ fn rule_from_item(
         .and_then(|c| c.cache_write)
         .or(item.cache_write)
         .unwrap_or(0.0);
-    let pricing_style = if cache_write_usd > 0.0 {
-        PricingStyle::Claude
-    } else {
-        PricingStyle::OpenAi
-    };
-    // 规则 id 带供应商：同一个模型 id 在不同供应商下是两条不同的费率事实。
-    let id = match provider {
-        Some(provider) => format!("models_dev_{provider}_{}", item.id),
-        None => format!("models_dev_{}", item.id),
-    };
-    Some(ModelPriceRule {
-        id,
-        model_pattern: item.id.clone(),
-        pricing_style,
-        input_price_per_m_micros: quantize_price_per_m_from_usd(input_usd),
-        output_price_per_m_micros: quantize_price_per_m_from_usd(output_usd),
-        cache_read_price_per_m_micros: quantize_price_per_m_from_usd(cache_read_usd),
-        cache_write_price_per_m_micros: quantize_price_per_m_from_usd(cache_write_usd),
-        multiplier_basis_points: 10_000,
-        priority: 0,
-        created_at_ms: now_ms,
-        updated_at_ms: now_ms,
+    Some(CatalogQuote {
+        input: quantize_price_per_m_from_usd(input_usd),
+        output: quantize_price_per_m_from_usd(output_usd),
+        cache_read: quantize_price_per_m_from_usd(cache_read_usd),
+        cache_write: quantize_price_per_m_from_usd(cache_write_usd),
+        pricing_style: if cache_write_usd > 0.0 {
+            PricingStyle::Claude
+        } else {
+            PricingStyle::OpenAi
+        },
     })
 }
 
@@ -169,6 +241,26 @@ pub(super) fn local_provider_names(axon_root: &Path) -> std::collections::BTreeS
         .providers
         .iter()
         .map(|provider| provider.name.to_ascii_lowercase())
+        .collect()
+}
+
+/// 读取本机配置里声明的模型 id（去重，保持声明顺序）。
+///
+/// 用量事实记录的是这里声明的 id，而不是目录 id：代理侧常见的思考档位后缀、
+/// 日期戳、厂商前缀都会原样出现，所以同步必须以这份清单为对照。
+pub(super) fn local_model_ids(axon_root: &Path) -> Vec<String> {
+    let path = axon_root.join("config.toml");
+    let Ok(loaded) = axon_config::ConfigLoader::load_from_path(&path) else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    loaded
+        .config
+        .models
+        .iter()
+        .filter(|model| !model.id.trim().is_empty())
+        .filter(|model| seen.insert(model.id.trim().to_ascii_lowercase()))
+        .map(|model| model.id.trim().to_owned())
         .collect()
 }
 
@@ -304,8 +396,8 @@ mod catalog_tests {
             ["deepseek".to_owned(), "alibaba".to_owned()]
                 .into_iter()
                 .collect();
-        let rules =
-            parse_models_dev_catalog(FIXTURE_CATALOG, 1_000, &providers).expect("目录应可解析");
+        let catalog = parse_catalog_providers(FIXTURE_CATALOG).expect("目录应可解析");
+        let rules = parse_models_dev_catalog(&catalog, 1_000, &providers);
 
         // opencode 不在本地供应商里：它那条同名模型不进来，避免用聚合商的价覆盖厂商自营价。
         assert_eq!(rules.len(), 3);
@@ -365,7 +457,8 @@ mod catalog_tests {
             ["agnes".to_owned(), "sensenova".to_owned()]
                 .into_iter()
                 .collect();
-        let rules = parse_models_dev_catalog(catalog, 1_000, &providers).expect("目录应可解析");
+        let parsed = parse_catalog_providers(catalog).expect("目录应可解析");
+        let rules = parse_models_dev_catalog(&parsed, 1_000, &providers);
 
         // 全零条目是订阅或免费额度这类计划信息，不是可比单价：进了目录会把按量计费的
         // 模型算成免费，因此一律跳过；真要按 0 计价由人显式建规则。
@@ -393,7 +486,8 @@ mod catalog_tests {
         }"#;
         let providers: std::collections::BTreeSet<String> =
             ["deepseek".to_owned()].into_iter().collect();
-        let rules = parse_models_dev_catalog(catalog, 1_000, &providers).expect("目录应可解析");
+        let parsed = parse_catalog_providers(catalog).expect("目录应可解析");
+        let rules = parse_models_dev_catalog(&parsed, 1_000, &providers);
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].model_pattern, "ok");
     }

@@ -507,6 +507,15 @@ const FoldedBlock: React.FC<{ cell: Extract<TranscriptCell, { role: 'folded' }> 
   const unfolding = useUnfoldingInteractionId();
   const expanding = unfolding === cell.interactionId;
   const expanded = cell.expanded === true;
+  /*
+   * 只有索引的轮次没有动作摘要，标题就写中性的标签本身。此时再把同一个词当标题递进去，
+   * 一行里会读成「过程 · 过程」：读者会以为有两个不同的东西。
+   */
+  const summary = cell.summary.trim();
+  const detail = summary.length > 0 && summary !== FOLDED_LABEL ? summary : undefined;
+  /* 没有用时事实就不占位：`0ms` 是「没测到」，不是「零耗时」。 */
+  const elapsed =
+    cell.elapsedMs !== null && cell.elapsedMs > 0 ? compactDuration(cell.elapsedMs) : undefined;
   return (
     <div className="skeleton-row-in w-full">
       <DisclosureRow
@@ -522,15 +531,18 @@ const FoldedBlock: React.FC<{ cell: Extract<TranscriptCell, { role: 'folded' }> 
           actions?.unfoldTurn(cell.interactionId);
         }}
         icon={<ChecklistIcon size={14} />}
-        label="过程"
-        title={cell.summary}
-        titleText={cell.summary}
-        meta={cell.elapsedMs === null ? undefined : compactDuration(cell.elapsedMs)}
+        label={FOLDED_LABEL}
+        title={detail}
+        titleText={detail}
+        meta={elapsed}
         active={expanding}
       />
     </div>
   );
 };
+
+/** 整轮控件的固定标签：只有索引的轮次没有动作摘要，标题就留空、不重复同一句话。 */
+const FOLDED_LABEL = '过程';
 
 /** 单个单元的渲染入口。 */
 export const TranscriptCellView: React.FC<{

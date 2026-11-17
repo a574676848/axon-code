@@ -4,7 +4,7 @@ use std::fmt;
 /// 语义输出文本的最大字符数。
 pub const MAX_SEMANTIC_OUTPUT_LENGTH: usize = 100_000;
 
-/// JARVIS 的渠道无关语义输出。
+/// Axon 的渠道无关语义输出。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SemanticOutput {

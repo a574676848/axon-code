@@ -67,6 +67,14 @@ export interface SessionTokenBaseline {
   elapsedMs: number;
   /** 基线覆盖到的轮次标识。 */
   turnIds: ReadonlySet<string>;
+  /**
+   * 取基线那一刻仍在跑、因此账本里还没有它们的那几条轮次。
+   *
+   * 判据只能来自网关那一页的权威处理状态（`received` / `processing`）：客户端在
+   * 「基线到手」这一刻已经为待回放的最新一轮开好了轮次，凭投影里的状态猜不出来。
+   * 这些轮次收口后不会回填到已经取回的基线，整条由本地增量承担。
+   */
+  openTurnIds: ReadonlySet<string>;
 }
 
 /** 会话累计读数组。 */
@@ -74,9 +82,6 @@ export interface SessionCumulative extends SessionUsageTotals {
   /** 整条会话累计的墙钟耗时（毫秒）。 */
   elapsedMs: number;
 }
-
-/** 空集合：调用方不区分「还没有迟到轮次」与「没有迟到轮次」时用它。 */
-const NO_TURNS: ReadonlySet<string> = new Set<string>();
 
 /** 把一轮的用量加进累计。 */
 function addUsage(total: SessionUsageTotals, usage: TokenUsage): SessionUsageTotals {
@@ -97,19 +102,30 @@ function addUsage(total: SessionUsageTotals, usage: TokenUsage): SessionUsageTot
  * （含正在生成的那一轮，因此读数边跑边涨）。基线还没取回时返回 null，指标条不画这一段：
  * 拿单轮读数顶替会把整条会话说小一个数量级。
  *
- * `lateTurnIds` 是「打开会话时还在跑、因此基线里还没有它们」的那些轮次：它们收口后不会
- * 回填到已经取回的基线里，所以整条都由本地增量承担，读数不会因为收口而回落。
+ * 基线里仍标着运行中的轮次（`openTurnIds`）整条由本地增量承担：账本只在收口时落账，
+ * 它们收口后也不会回填到已经取回的基线里，否则读数会因为收口而回落。
  */
 export function sessionCumulative(
   turns: readonly TurnState[],
   baseline: SessionTokenBaseline | null,
-  lateTurnIds: ReadonlySet<string> = NO_TURNS,
 ): SessionCumulative | null {
   if (baseline === null) return null;
+  /*
+   * 基线没有用量结论时不能把已加载的轮次当成「已计入」。
+   *
+   * 网关的会话用量聚合在读不到账本时会给全零，若照样按 `turnIds` 跳过，标题栏的
+   * 累计、命中率与上下文会整段消失（正文却明明有用量）。这里退回「本视图累计」。
+   */
+  const baselineHasUsage = baseline.usage.totalTokens > 0;
   let usage = baseline.usage;
   let elapsedMs = baseline.elapsedMs;
   for (const turn of turns) {
-    const covered = baseline.turnIds.has(turn.id) && !lateTurnIds.has(turn.id);
+    if (!baselineHasUsage) {
+      // 基线只有耗时结论：用量整段由本视图累计，耗时仍读网关的会话总和。
+      usage = addUsage(usage, turn.usage);
+      continue;
+    }
+    const covered = baseline.turnIds.has(turn.id) && !baseline.openTurnIds.has(turn.id);
     if (covered) continue;
     usage = addUsage(usage, turn.usage);
     elapsedMs += turn.elapsedMs ?? 0;

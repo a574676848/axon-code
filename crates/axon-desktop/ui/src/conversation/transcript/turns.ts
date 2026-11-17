@@ -6,8 +6,9 @@
  * 变更标记，也不会出现同一份事实被就地改写的第二份副本。
  */
 
-import { EMPTY_USAGE, LOCAL_STEER_PREFIX, totalTokens, type ConversationState, type TranscriptCell, type TurnState } from './state';
+import { EMPTY_USAGE, LOCAL_STEER_PREFIX, totalTokens, type ConversationState, type TokenUsage, type TranscriptCell, type TurnState } from './state';
 import { EMPTY_TURN_CHANGES } from './changes';
+import { jobRowOf } from './derive';
 
 /** 新建一个空轮次。 */
 export function emptyTurn(turnId: string, nowMs: number): TurnState {
@@ -32,6 +33,7 @@ export function emptyTurn(turnId: string, nowMs: number): TurnState {
     lastEventAtMs: null,
     changes: EMPTY_TURN_CHANGES,
     pendingAttachments: [],
+    pendingChannel: null,
     folded: false,
     summary: '',
     keepExpanded: false,
@@ -263,26 +265,110 @@ export function detachCells(turn: TurnState, cellIds: readonly string[]): TurnSt
 }
 
 /**
+ * 索引给出的逐轮读数：没有帧的轮次也要在指标条上给出首字、速率与用量。
+ *
+ * 用量只带 token 分桶；窗口占用是「最近一次请求」的快照，索引里没有，因此这里不填，
+ * 等该轮回放时由收尾负载补上。
+ */
+export interface IndexReadings {
+  /** 本轮墙钟用时（毫秒）。 */
+  activeMs: number;
+  /** 首字延迟；未测得时为空。 */
+  ttftMs: number | null;
+  /** 生成速率（0.1 tok/s）；未测得时为空。 */
+  generationTpsX10: number | null;
+  /** 本轮用量；一次观测都没有时为空。 */
+  usage: TokenUsage | null;
+}
+
+/**
+ * 把索引读数落到一轮上：只补这一轮还没有观测的字段，已有观测的帧不动。
+ *
+ * 历史会话的首屏只有索引，没有帧；若不在这里落一次，指标条的首字、速率与用量只能等
+ * 某一轮被回放才出现，而更早的轮次永远不会有帧。索引里的 `turn_metrics` 与帧同源，
+ * 落进来不会引入第二套口径。
+ */
+export function seedTurnReadings(turn: TurnState, readings: IndexReadings | null): TurnState {
+  if (readings === null) return turn;
+  const measured = totalTokens(turn.usage) > 0 ? turn.usage : readings.usage;
+  return {
+    ...turn,
+    usage: measured ?? turn.usage,
+    elapsedMs: turn.elapsedMs ?? (readings.activeMs > 0 ? readings.activeMs : null),
+    firstTokenAvgMs: turn.firstTokenAvgMs ?? readings.ttftMs,
+    generationTpsX10: turn.generationTpsX10 ?? readings.generationTpsX10,
+  };
+}
+
+/**
  * 在轮次收口时补一条摘要行。
  *
  * 与 TUI 同口径：只有真的产生过工作（工具、思考或正文）才补，纯问答不补，
  * 否则每一轮都会多出一条没有信息量的分隔线。
  */
 export function appendTurnSummary(turn: TurnState, elapsedMs: number | null): TurnState {
-  const worked = turn.cells.some(
+  const total = totalTokens(turn.usage);
+  return applyTurnSummary(turn, {
+    durationMs: elapsedMs,
+    usage: total > 0 ? turn.usage : null,
+    firstTokenAvgMs: turn.firstTokenAvgMs,
+    generationTpsX10: turn.generationTpsX10,
+  });
+}
+
+/** 收尾分割线的读数：一轮的用时、用量与生成性能。 */
+export interface TurnSummaryFacts {
+  /** 本轮墙钟用时；读不到时为空。 */
+  durationMs: number | null;
+  /** 本轮用量；一次观测都没有时为空。 */
+  usage: TokenUsage | null;
+  /** 首字延迟；未测得时为空。 */
+  firstTokenAvgMs: number | null;
+  /** 生成速率（0.1 tok/s）；未测得时为空。 */
+  generationTpsX10: number | null;
+}
+
+/** 这一轮是否真的产生过工作：纯问答轮不立分割线。 */
+function hasWorkedCells(turn: TurnState): boolean {
+  return turn.cells.some(
     (cell) =>
       cell.role === 'tool' ||
       cell.role === 'reasoning' ||
       cell.role === 'fileChange' ||
       cell.role === 'assistant',
   );
-  if (!worked) return turn;
-  const total = totalTokens(turn.usage);
+}
+
+/**
+ * 立起（或刷新）这一轮的分割线。
+ *
+ * 生成中与收口后共用同一份口径：用量一旦有观测就立刻上一行，耗时随节拍走字，收口时
+ * 再用终态字段覆盖一次。这样读者不必等整轮结束才看到「这一轮花了多少」。
+ */
+export function applyTurnSummary(turn: TurnState, facts: TurnSummaryFacts): TurnState {
+  if (!hasWorkedCells(turn)) return turn;
   return upsertCell(turn, {
     id: `turn-summary:${turn.id}`,
     role: 'summary',
-    durationMs: elapsedMs,
-    usage: total > 0 ? turn.usage : null,
+    durationMs: facts.durationMs,
+    usage: facts.usage,
+    firstTokenAvgMs: facts.firstTokenAvgMs,
+    generationTpsX10: facts.generationTpsX10,
+  });
+}
+
+/**
+ * 生成中刷新分割线：读数是活的，不等收口。
+ *
+ * 只对真的跑起来、且已经有用量观测的轮次生效；还没观测到用量时不出这一行，避免把
+ * 「一次都还没报」写成一份全零读数。
+ */
+export function refreshLiveSummary(turn: TurnState, nowMs: number): TurnState {
+  if (turn.status !== 'pending' && turn.status !== 'streaming') return turn;
+  if (!hasWorkedCells(turn) || totalTokens(turn.usage) === 0) return turn;
+  return applyTurnSummary(turn, {
+    durationMs: turn.elapsedMs ?? durationFromEvents(turn, nowMs),
+    usage: turn.usage,
     firstTokenAvgMs: turn.firstTokenAvgMs,
     generationTpsX10: turn.generationTpsX10,
   });
@@ -312,4 +398,26 @@ export function closeAssistant(
     // 收口补齐的正文没有更细的时间事实：用收口这一刻的记录时间。
     atMs: recordedAtMs,
   });
+}
+
+/**
+ * 把刚落到单元上的作业事实记进会话台账。
+ *
+ * 台账与单元分开存：折叠会把过程单元整段释放，而「这条会话跑过哪些后台作业」是会话
+ * 事实。历史回放走同一条帧路径，因此重开会话时清单能原样回来。
+ */
+export function withJobLedger(
+  state: ConversationState,
+  position: number,
+  partId: string,
+): ConversationState {
+  const cell = state.turns[position]?.cells.find((candidate) => candidate.id === partId);
+  const row = cell === undefined ? null : jobRowOf(cell);
+  if (row === null) return state;
+  const known = state.jobs.findIndex((candidate) => candidate.id === row.id);
+  if (known < 0) return { ...state, jobs: [...state.jobs, row] };
+  return {
+    ...state,
+    jobs: state.jobs.map((candidate, index) => (index === known ? row : candidate)),
+  };
 }

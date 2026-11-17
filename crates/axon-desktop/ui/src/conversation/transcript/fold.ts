@@ -12,10 +12,7 @@
  * 立起同一形态：用户气泡 + 控件 + 最终答案。中间叙述要等点开回放才补齐，界面不声称它有。
  */
 
-import { visibleUserText } from '../references';
-import { attachmentsFromPaths } from './derive';
 import type { TranscriptCell, TurnState } from './state';
-import { emptyTurn } from './turns';
 
 /** 过程单元：折叠时整段撤下，正文随即失去引用。 */
 const PROCESS_ROLES: ReadonlySet<TranscriptCell['role']> = new Set([
@@ -26,13 +23,20 @@ const PROCESS_ROLES: ReadonlySet<TranscriptCell['role']> = new Set([
   'plan',
 ]);
 
-/** 内容单元：折叠后原位保留。收尾分割线不在其中，它随过程一起折掉。 */
+/**
+ * 内容单元：折叠后原位保留。
+ *
+ * 收尾分割线也在其中：它承载这一轮的用量与速率，而过程抬头的行尾只放用时。把分割线
+ * 跟过程一起折掉，读者就再也看不到这一轮花了多少 token；更早的索引轮又是照着分割线
+ * 立起来的，同一屏里会出现「老轮有读数、新轮没有」两套形态。
+ */
 const CONTENT_ROLES: ReadonlySet<TranscriptCell['role']> = new Set([
   'user',
   'assistant',
   'notice',
   'failure',
   'question',
+  'summary',
 ]);
 
 /** 摘要里最多列几个动作短语，其余并进「等」。 */
@@ -246,6 +250,50 @@ function controlId(turnId: string): string {
 }
 
 /**
+ * 只看工具名时的动作摘要（索引轮用）。
+ *
+ * 与帧算出来的那份共用同一套类别词表与组合规则，因此「索引轮」与「已回放的轮」读起来
+ * 是同一句话。索引给不出工具名时返回空串，由调用方退回中性标签。
+ */
+export function summaryFromToolNames(names: readonly string[]): string {
+  if (names.length === 0) return '';
+  const counts = new Map<string, number>();
+  for (const name of names) {
+    const category = toolCategory(name);
+    counts.set(category, (counts.get(category) ?? 0) + 1);
+  }
+  const ranked = [...counts.entries()].sort((left, right) => right[1] - left[1]);
+  return phraseSummary(ranked.map(([category]) => CATEGORY_PHRASES[category] ?? '已调用工具'));
+}
+
+/**
+ * 只有索引、还没读帧的那一轮的折叠行。
+ *
+ * 历史轮次在打开会话时只有「用户说了什么、最后答了什么」，过程要等点开才读整轮；
+ * 这一行就是那个入口。索引能给出这一轮用过的工具名时，抬头直接写成与实时同一句动作
+ * 摘要；给不出时写中性的「过程」。此刻确实还没有过程证据，不编造。
+ */
+export function outlineControl(
+  turnId: string,
+  interactionId: string,
+  atMs: number | null,
+  elapsedMs: number | null,
+  summary = '',
+): TranscriptCell {
+  return {
+    id: controlId(turnId),
+    role: 'folded',
+    interactionId,
+    summary: summary.length > 0 ? summary : OUTLINE_CONTROL_LABEL,
+    elapsedMs,
+    atMs,
+  };
+}
+
+/** 未读帧那一轮的折叠行标题。 */
+const OUTLINE_CONTROL_LABEL = '过程';
+
+/**
  * 这一轮是否该折。
  *
  * 位置先决：最新一轮永远展开（它是正在读的那一段）。其余条件都是「折了会读错」的
@@ -298,6 +346,24 @@ export function foldTurn(turn: TurnState): TurnState {
  * 收起不是「隐藏」而是「释放」：`collapseTurn` 会把过程单元整段丢掉，只留内容单元。
  */
 export function replaceTurnCells(turn: TurnState, cells: TranscriptCell[]): TurnState {
+  /*
+   * 没有过程就不立控件。
+   *
+   * 纯问答轮展开后与折叠前完全一致；给它插一根「过程已收起」的空抬头，就是把一次
+   * 没有过程可看的问答伪装成一轮跑过东西的回合（实测历史里每条纯文本轮都多出这一行）。
+   */
+  const process = cells.filter(isProcessCell);
+  if (process.length === 0) {
+    return {
+      ...turn,
+      folded: false,
+      keepExpanded: true,
+      expanded: true,
+      summary: '',
+      cells,
+      index: indexOf(cells),
+    };
+  }
   const summary = turn.summary.length > 0 ? turn.summary : processSummary(cells);
   const control: TranscriptCell = {
     id: controlId(turn.id),
@@ -358,123 +424,4 @@ export function collapseTurn(turn: TurnState): TurnState {
     cells,
     index: indexOf(cells),
   };
-}
-
-/** 按索引立起的一轮：用户气泡 + 过程控件 + 最终答案。 */
-export interface IndexedTurnEntry {
-  interactionId: string;
-  /** 入站正文。 */
-  content?: string;
-  /**
-   * 这一轮的发起客户端（缺省时由调用方回落到渠道）。
-   *
-   * 来源是**逐轮**的事实：同一条车道可能先由桌面发起、再由 CLI 续聊，索引轮同样要
-   * 标出各自是谁发起的，否则跨端续聊之后只有最新一轮看起来有来源。
-   */
-  channel?: string;
-  /** 入站时落地的本地附件绝对路径。 */
-  attachments?: readonly string[];
-  receivedAtMs: number;
-  /** 处理状态：received、processing、understood、rejected 或 interrupted。 */
-  status: string;
-  /** 该轮用过的工具名（逗号分隔、已去重）；老网关不返回时为空。 */
-  toolSummary?: string | null;
-  /** 本轮最终交付正文；老网关、非正常收口或正文已过保留期时为空。 */
-  answerText?: string | null;
-  /** 已收口轮次的墙钟用时（毫秒）。 */
-  elapsedMs?: number | null;
-}
-
-/**
- * 索引轮：正文还没取，但这一轮该显示什么已经由索引决定。
- *
- * 形态与折叠出来的一轮完全一致（用户气泡 + 控件 + 最终答案），因此渲染与展开走的都是
- * 既有那条路径：点开控件时按 `interactionId` 回放该轮，再由 `replace-turn-cells` 换成
- * 完整正文。
- */
-export function indexedTurn(entry: IndexedTurnEntry): TurnState {
-  const base = emptyTurn(entry.interactionId, entry.receivedAtMs);
-  const cells: TranscriptCell[] = [];
-  // 索引进来的正文可能带着提交时的结构化输入块与问答回执块：两种都不该当气泡正文展示。
-  const text = visibleUserText(entry.content ?? '');
-  const attachments = attachmentsFromPaths([...(entry.attachments ?? [])]);
-  if (text.trim().length > 0 || attachments.length > 0) {
-    cells.push({
-      id: `${entry.interactionId}:user`,
-      role: 'user',
-      text,
-      atMs: entry.receivedAtMs,
-      attachments,
-      channel: entry.channel,
-    });
-  }
-  /*
-   * 只在这一轮确实动过手时立过程控件。
-   *
-   * 索引里没有「想过没有」这一项，可用的过程事实只有工具名串：它为空就说明索引说不出
-   * 这一轮有过程，此时再挂一根控件，点开只会把同一段问答重放一遍，等于给纯问答轮加噪音。
-   */
-  const summary = indexedSummary(entry);
-  if (summary.length > 0) {
-    cells.push({
-      id: controlId(entry.interactionId),
-      role: 'folded',
-      interactionId: entry.interactionId,
-      summary,
-      elapsedMs: entry.elapsedMs ?? null,
-      atMs: entry.receivedAtMs,
-    });
-  }
-  const answer = (entry.answerText ?? '').trim();
-  if (answer.length > 0 && settledStatus(entry.status) === 'completed') {
-    cells.push({
-      id: `${entry.interactionId}:answer`,
-      role: 'assistant',
-      text: answer,
-      streaming: false,
-      // 索引不含这一格的记录时间：宁可不显示时间，也不拿提问时间冒充回答时间。
-      atMs: null,
-    });
-  }
-  return {
-    ...base,
-    interactionId: entry.interactionId,
-    status: settledStatus(entry.status),
-    startedAtMs: entry.receivedAtMs,
-    elapsedMs: entry.elapsedMs ?? null,
-    folded: true,
-    summary,
-    cells,
-    index: indexOf(cells),
-  };
-}
-
-/**
- * 索引轮的控件标题。
- *
- * 索引里可用的过程事实只有工具名串，因此标题就是按次数排名的类别摘要；串为空说明索引
- * 说不出这一轮有过程，此时返回空串，调用方据此不立控件（纯问答轮不点也看不到新内容）。
- */
-function indexedSummary(entry: IndexedTurnEntry): string {
-  const counts = new Map<string, number>();
-  for (const name of (entry.toolSummary ?? '').split(',')) {
-    const trimmed = name.trim();
-    if (trimmed.length === 0) continue;
-    const category = toolCategory(trimmed);
-    counts.set(category, (counts.get(category) ?? 0) + 1);
-  }
-  const ranked = [...counts.entries()].sort((left, right) => right[1] - left[1]);
-  return phraseSummary(ranked.map(([category]) => CATEGORY_PHRASES[category] ?? '已调用工具'));
-}
-
-/** 索引里的处理状态到轮次终态：读不出来的按已收口处理。 */
-function settledStatus(status: string): TurnState['status'] {
-  switch (status) {
-    case 'interrupted':
-      return 'interrupted';
-    case 'rejected':
-      return 'rejected';
-    default:
-      return 'completed';
-  }
 }

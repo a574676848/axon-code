@@ -1,61 +1,49 @@
 /*
- * 一条 Interaction 的历史回放。
+ * 一条 Interaction 的历史帧读取。
  *
- * 读的是持久日志的尾窗，写完就只订阅实时尾。三件事在这里定死：
+ * 正文的事实源只有一条：durable 帧。分页回放、展开与增量接管都从这里取帧，取回来一律
+ * 交给与实时流同一个归约器（`applyFrames`），因此不存在第二套单元构造。
  *
- * 1. 只读该交互自身的尾窗。首屏与「点开某一轮」同一口径：服务端按
- *    `(session_id, interaction_id)` 直接取最后 HISTORY_WINDOW_FRAMES 帧，
- *    不再先探整条会话的尾序号再算窗口起点。老交互的帧序号远小于整条会话的
- *    尾序号，旧算法会把整个老交互截空。
- * 2. 第一页落地就放行正文。过渡面等的是「有没有内容可看」，不是「整条读完了
- *    没有」；装载标志另走一条线，状态行照常写「正在加载会话」。
- * 3. 补窗不回订阅。往前补的那一段属于历史，接实时尾没有意义，也会把两路帧
- *    混进同一投影。
+ * 三件事在这里定死：
  *
- * 这一层不持有状态：状态更新一律经调用方给的回调，因此它能在没有 React 的
- * 地方被单独验证。
+ * 1. **从头按页推进**，直到补到该 Interaction 的 durable 尾。只取尾窗会丢掉这一轮
+ *    最前面的思考与工具帧（推理总在最前面写），正文因此只剩最终一段。
+ * 2. **单轮预算**。逐页从头部读，超过预算就退化成一次尾窗读取：宁可少一段过程，
+ *    也不能把打开会话拖成几十次串行往返。退化时只投递尾窗，绝不把已经读过的头部
+ *    与尾窗叠着投两遍（推理帧是追加语义，叠一遍就是重复正文）。
+ * 3. **代次在每页之后复核**。目标已经切走时立刻放弃，半截正文不会落进新目标。
+ *
+ * 这一层不持有状态、不碰 React，分页口径由 `tests/interaction-replay.test.mjs` 钉住。
  */
 
 import * as ipc from '../ipc';
 import type { ConversationStreamEvent } from './wire';
 
 /**
- * 一次读的窗口帧数。
+ * 一次读的帧数。
  *
- * 桌面端单次历史帧页的上限是 1000（`MAX_HISTORY_LIMIT`），请求更大的值也会被
- * 截到同一条线上，所以这里直接按上限取：再多也只是把正文读进内存，接着被渲染
- * 窗口折掉。渲染这一侧同时最多挂 240 个单元（见 ConversationStream 的
- * RENDER_WINDOW），1000 帧按实测比例（476 帧约 60 格）约合 126 格，够填满一屏。
- *
- * 更早的帧不再翻页取：老交互的帧可能远在会话尾部之前，服务端会在尾窗扫空时
- * 退回全量扫描并保尾，客户端因此一次往返就能拿到可渲染的尾窗。
- *
- * 窗口起点之后可能没有用户那句话：回放前会按历史索引补一条种子气泡
- * （见 playNext 的 seed-history），所以「这一轮用户说了什么」始终读得到。
+ * 桌面端单次历史帧页的上限是 1000（`MAX_EVENT_PAGE`），请求更大的值也会被截到同一条
+ * 线上，所以这里直接按上限取。
  */
-export const HISTORY_WINDOW_FRAMES = 1_000;
+export const HISTORY_PAGE_FRAMES = 1_000;
 
-/** 回放用的接缝。 */
-export interface InteractionReplayPort {
-  /** 一页帧的落点：主投影或分页临时投影。 */
-  route: (frames: ConversationStreamEvent[], nowMs: number) => void;
-  /** 帧派发时用的时间戳。 */
-  now: () => number;
-  /** 当前代次；与调用时的代次不一致即整次回放作废。 */
-  generation: () => number;
-  /** 第一页落地：正文可以交出去了。 */
-  painted: () => void;
-  /** 补到 durable 尾：此后是实时尾，正文不再是「正在加载」。 */
-  drained: () => void;
-  /** 登记订阅标识。 */
-  subscribed: (subscribeId: string) => void;
-  /** 从尾游标订阅增量。 */
-  watch: (workspace: string, interactionId: string, cursor: string | null) => Promise<void>;
-  /** 已经收口：推进到下一个目标。 */
-  advance: (workspace: string, generation: number) => void;
-}
+/**
+ * 单轮的帧预算。
+ *
+ * 实测一条 40 轮的车道共 12.4 万帧，摊到单轮约 3 千帧，四千帧足够覆盖绝大多数轮次；
+ * 超过预算的轮次退化成尾窗读取，打开会话的网络与内存开销因此有确定的上界。
+ */
+export const HISTORY_REPLAY_BUDGET = 4_000;
 
-/** 终态帧：只会在补到 durable 尾的那一页出现。 */
+/** 历史帧页的来源；缺省走 IPC，测试注入替身以钉住分页口径。 */
+export type HistoryPageFetcher = (
+  interactionId: string,
+  after: number,
+  limit: number,
+  tail: boolean,
+) => Promise<ipc.HistoryPage>;
+
+/** 终态帧：只会在这一轮真正收口之后出现。 */
 function isTerminal(eventType: string): boolean {
   return (
     eventType === 'turn_completed' ||
@@ -64,48 +52,106 @@ function isTerminal(eventType: string): boolean {
   );
 }
 
+/** 一帧历史帧换成事件通道上的同形帧：字段逐项对齐，前端只认一套解析。 */
+function streamFrame(
+  subscribeId: string,
+  frame: ipc.HistoryFrame,
+): ConversationStreamEvent {
+  return {
+    kind: 'frame',
+    subscribeId,
+    eventType: frame.eventType,
+    payloadJson: frame.payloadJson,
+    cursor: frame.cursor,
+  };
+}
+
+/** 一轮帧的读取结论。 */
+export interface InteractionFrames {
+  /** 可直接喂给 `applyFrames` 的帧，按 durable 顺序。 */
+  frames: ConversationStreamEvent[];
+  /** 订阅实时尾用的游标；没有可订阅的尾时为空。 */
+  cursor: string | null;
+  /** 这一轮是否已经收口。 */
+  settled: boolean;
+}
+
+/** 读帧的接缝。 */
+export interface ReadFramesOptions {
+  /** 当前代次；与调用时的代次不一致即整次读取作废。 */
+  generation: () => number;
+  /** 历史帧页来源；缺省走 IPC。 */
+  fetchPage?: HistoryPageFetcher;
+  /**
+   * 只读尾窗。
+   *
+   * 折叠行只要「这一轮最近发生过什么」：工具类别摘要与收口结论都在尾部，而整轮读会
+   * 为一条折叠行付出几十次往返。展开才读整轮（`tailOnly` 为假）。
+   */
+  tailOnly?: boolean;
+  /** 只读第一页（含过程的头部）：折叠行只要工具类别，不把整轮拖回来。 */
+  headOnly?: boolean;
+  /** 单页帧数上限；缺省 `HISTORY_PAGE_FRAMES`。 */
+  limit?: number;
+}
+
 /**
- * 回放一条 Interaction 的尾部一窗历史帧，并从尾游标接上实时增量。
+ * 读一条 Interaction 的帧。
  *
- * 首屏与展开同一口径：只读尾部一窗，更早的部分不提供加载入口：「加载更早」始终
- * 指时间线之上更早的轮次。窗口起点之前那些单元由渲染层折成一行提示，正文不再
- * 往回补：补进来的内容会立刻被同一个渲染预算折掉，等于白读一窗帧。
+ * 两种读法共用一处取数口径：整轮（首屏最新一轮与展开）按页推进到它自己的 durable 尾，
+ * 尾窗（折叠行）只取最后一小段。帧一律换成事件通道同形帧，调用方直接喂 `applyFrames`。
  */
-export async function replayInteractionHistory(
-  port: InteractionReplayPort,
-  workspace: string,
+export async function readInteractionFrames(
   interactionId: string,
   generation: number,
-): Promise<void> {
+  options: ReadFramesOptions,
+): Promise<InteractionFrames | null> {
+  const fetchPage: HistoryPageFetcher = options.fetchPage ?? ipc.conversationHistoryEvents;
+  const stale = () => options.generation() !== generation;
+  const limit = options.limit ?? HISTORY_PAGE_FRAMES;
   const subscribeId = `interaction:${interactionId}`;
-  const page = await ipc.conversationHistoryEvents(
-    interactionId,
-    0,
-    HISTORY_WINDOW_FRAMES,
-    true,
-  );
-  if (generation !== port.generation()) return;
-  const settled = page.events.some((event) => isTerminal(event.eventType));
-  if (page.events.length > 0) {
-    port.route(
-      page.events.map((event) => ({
-        kind: 'frame' as const,
-        subscribeId,
-        eventType: event.eventType,
-        payloadJson: event.payloadJson,
-        cursor: event.cursor,
-      })),
-      port.now(),
-    );
-    port.painted();
+
+  if (options.tailOnly === true) {
+    const tail = await fetchPage(interactionId, 0, limit, true);
+    if (stale()) return null;
+    return {
+      frames: tail.events.map((frame) => streamFrame(subscribeId, frame)),
+      cursor: tail.tailCursor,
+      settled: tail.events.some((frame) => isTerminal(frame.eventType)),
+    };
   }
-  port.drained();
-  if (settled) {
-    // 已经收口：不再订阅，直接把回放推进到下一条。
-    port.advance(workspace, generation);
-    return;
+
+  if (options.headOnly === true) {
+    const head = await fetchPage(interactionId, 0, limit, false);
+    if (stale()) return null;
+    return {
+      frames: head.events.map((frame) => streamFrame(subscribeId, frame)),
+      cursor: head.tailCursor,
+      settled: head.events.some((frame) => isTerminal(frame.eventType)),
+    };
   }
-  // 还在跑：从 durable 尾订阅，事件通道上只会出现真正的增量。
-  port.subscribed(subscribeId);
-  await port.watch(workspace, interactionId, page.tailCursor);
+
+  let page = await fetchPage(interactionId, 0, limit, false);
+  if (stale()) return null;
+  let frames = [...page.events];
+  let read = frames.length;
+  while (page.hasMore && read < HISTORY_REPLAY_BUDGET) {
+    page = await fetchPage(interactionId, page.nextAfter, limit, false);
+    if (stale()) return null;
+    frames = frames.concat(page.events);
+    read += page.events.length;
+  }
+  let cursor = page.tailCursor;
+  if (page.hasMore) {
+    // 单轮帧数超过预算：只保留尾窗（其中一定有终态与最终正文），并改用它的订阅游标。
+    const tail = await fetchPage(interactionId, 0, limit, true);
+    if (stale()) return null;
+    frames = [...tail.events];
+    cursor = tail.tailCursor;
+  }
+  return {
+    frames: frames.map((frame) => streamFrame(subscribeId, frame)),
+    cursor,
+    settled: frames.some((frame) => isTerminal(frame.eventType)),
+  };
 }

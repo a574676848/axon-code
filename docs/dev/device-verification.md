@@ -83,18 +83,70 @@
 > 追加约定：T6 的「只换 run_generation」在服务端由 `axon sessions reset <id>` 触达（已实现并有单测）；
 > TUI 的 `/reset` 是同一会话上的本地运行实例复位，两者语义在台账 W4-5 行已注明。
 
-## 已知缺陷（发版阻断）
+## 回放投影一致性（已修复）
 
-真机复验时发现一处渲染一致性缺陷，在修复前不发布：
+真机复验发现回放与实时曾经是两条独立的投影路径，修复后已收敛为一条。以下为当时的缺陷描述与修复后的真机证据。
 
-- **回放与实时是两条独立的投影路径**。实时链路按 wire 事件逐条构造 `user` / `reasoning` / `tool` / `job` / `subagent` / `assistant` / `summary` 各类单元；历史回放只构造 `user`（`reducer.ts` 的 `history-user:<interactionId>`）与最终文本两类。
-- 后果一：打开会话后思考过程、工具调用、作业与子代理卡片全部消失。
+**缺陷（已消除）**
+
+- **两条独立投影**：实时链路按 wire 事件逐条构造 `user` / `reasoning` / `tool` / `job` / `subagent` / `assistant` / `summary` 各类单元；历史回放一度只按索引拼装 `user`（`history-user:<interactionId>`）与最终文本两类。
+- 后果一：打开会话后思考过程、工具调用、作业与子代理卡片全部消失。索引给不出工具名串时，连折叠行都立不起来。
 - 后果二：打开会话时先按富形态渲染一帧，回放落地后被瘦形态整体替换，正文内容瞬间塌掉，体感就是整屏闪烁。
-- 修法：收敛为单一投影函数，实时与回放都只喂同一串 Thread 事件，只保留一套 cell 构造；并补一条契约测试「同一串事件全量重放与逐条增量喂入的最终 cells 必须深相等」。
+- 后果三：标题栏的后台任务清单读的是轮次里的工具单元，折叠释放单元后清单一并消失，重开会话也回不来。
+
+**修法**
+
+- 回放改为**按页读正式 durable 帧**并喂进与实时同一个 `applyFrames`：一页 Interaction 整页升序回放，扫完一轮即按折叠判据折叠，随后整页一次性接进正文（打开只发生一次替换）。索引只提供帧里没有的附件与逐轮来源。
+- 删除 `history-user:` 手搓单元与「按索引立起一轮」的旁路，`indexedTurn` 整段移除。
+- 后台作业改为会话级台账（`state.jobs`），由帧归约在作业发起处写入，随页回放一起带回来，折叠不再影响它。
+- 会话累计耗时不再重复计入：基线里仍标着运行中的轮次由增量承担（`SessionTokenBaseline.openTurnIds`）。
+- 契约测试：`tests/transcript-replay.test.mjs`（全量喂入与逐条增量喂入的 `cells` 深相等）、`tests/interaction-replay.test.mjs`（整轮按页读、超预算退化尾窗、代次作废）、`tests/history-plan.test.mjs`（整页回放、增量只接新轮次）、`tests/jobRows.test.mjs`（台账在折叠后仍保留）。
+
+**真机证据（安装态 `versions/0.0.1/axon-desktop.exe`，CDP 9333）**
+
+- 单轮会话冷启动后打开：用户气泡 1、思考行 1、执行行 1、指标行 1；头部 `耗时 6.43s` 与 `session_metrics.total_active_ms=6426` 逐字段一致（修复前读成 16.31s）。
+- 三形态与折叠摘要：三轮会话重开后读作「用户气泡 → 过程 · 执行了命令 9.88s / 9.1s → 最终回复」，最新一轮保持展开（思考 511ms、执行 594ms）。
+- 展开历史折叠行：点击第 1 轮的 `过程` 后该轮回放出「思考 766ms + 执行 exit 0 · 1.23s + 最终回复 + 指标行」，与实时形态一致。
+- 后台任务清单：`清理` 会话里跑过一次后台作业，收起会话再打开后标题栏仍显示 `后台任务 1`（修复前为空）。
+- 分页：22 条 Interaction 的车道打开后 `peakTurns=20`、`hasOlder=true`（首屏只取最新一页）。更早一页的点击取证未完成：验证途中安装树被并行开发者的 `install-from-source` 覆盖（`axon.exe` 19:35:52、`axon-desktop.exe` 19:35:17），随后守护进程进入 `goal_id` 空值失败循环、桌面端反复退出，故本条**不作通过结论**。
+- 同一页打开耗时实测 15.8s（20 轮，含守护进程故障窗口）。逐轮读帧目前串行，下一步按小并发并行化；本条列为待优化项，不阻塞正确性。
+
+## 按轮分页与逐轮读数（本轮落地）
+
+打开会话改为「一次索引页 + 一轮正文」：索引页（默认 20 轮）当场立起用户气泡、过程抬头与最终回复，随后只把最新一轮读整轮展开；「加载更早」一次向前取一轮。逐轮读数与动作摘要由网关在一次**有界尾部扫描**里给出（扫到本页最早那一轮即停），与实时同一套口径。
+
+**缺陷（已消除）**
+
+- 会话累计恒为全零：`sessionUsage` 绕经 `sessions.run_session_id` 再查 `session_metrics`，而该投影按会话键落行，rollout 退役后这条路径永远查不到；header 的累计与命中率因此整段消失。
+- 轮次分割线整行消失：逐轮用时就错在 `inbox.updated_at_ms - received_at_ms`，重构后两列恒等，读数恒为 0，指标行没有一行可渲染。
+- 打开会话后最新一轮的过程行与上下文读数丢失：索引骨架自带的收口帧先把该轮判成结束，随后的回放帧另起了一轮，投影取第一轮时把回放结果整段丢掉。
+- 索引轮的过程抬头没有动作摘要、分割线夹在过程中间：抬头只有中性的「过程」，而生成中先行立起的指标行会被后到的工具行与正文插到前面。
+
+**修法**
+
+- 会话读数直接读 `session_metrics`（按会话键），累计口径为「输入 + 缓存读 + 缓存写 + 输出 + 推理」。
+- 逐轮读数、最终正文与工具名由 `page_facts` 一次有界尾部扫描给出：收口事件划定一轮边界，`turn_metrics` 与 `toolCall` 归属最近一次收口；未覆盖的轮次只用工作项终态时间差补用时。
+- 有帧就纯按帧投影（`historyProjection.projectFrames`），无帧才走索引骨架；两路不再叠加。
+- 分割线由 `orderTurnCells` 固定排在该轮全部工作之后、待转投消息之前；生成中用量帧一到即立行并随节拍走字。
+- 契约测试：`tests/liveTurnSummary.test.mjs`、`tests/summaryOrder.test.mjs`、`tests/sessionGeneration.test.mjs`、`crates/axon-eventlog/tests/contract.rs` 的 `latest_events_are_read_per_interaction_from_the_tail`。
+
+**真机证据（安装态 `versions/0.0.1`，CDP 9333）**
+
+- 打开 23 轮车道（事件日志 1.28 MB，首屏 20 轮）：实测 468 至 781 ms 完成首屏，网关索引页耗时 300 ms（修复前同一接口 888 ms）。
+- header 读数：`耗时 2m 35s · 累计 5.48M · 命中率 86.90% · 399K/1M · 首字 4.12s · 速率 48 tok/s`；累计与 `session_metrics` 分桶求和一致，上下文段读作 `399K/1M`。
+- 索引轮分割线：`用时 4.91s · Token 84.9K · 入 14.6K · 缓存命中 70.1K · 出 72 · 推理 61 · 命中率 82.74% · 首字 3.14s · 速率 167.1 tok/s`，逐项来自该轮 `turn_metrics`，未回放正文。
+- 索引轮折叠摘要：`过程 · 执行了命令 12.23s`、`过程 · 执行了命令并已调用工具 13.54s`、`过程 · 已读取文件并执行了命令 6.89s`（「加载更早」取回的更早一轮）。
+- 分割线位置：末轮子节点顺序为「用户 → 过程 → 正文 → 指标行」，指标行是该轮最后一个子节点（`[role=separator]` 在轮内）。
+- 「加载更早」：20 → 21 轮，一次一轮，导航条刻度 20 → 21。
+- 消息导航条：20 个刻度，点击可定位（`role=navigation`）。
+- 生成中打开：提交后重载界面再进会话，header `累计 6M → 8.09M`、`上下文 417K/1M` 持续进位，工作状态行读作 `生成中`，末轮指标行边生成边更新。
+- 计划：`update_plan` 轮在生成中 header 出现 `计划 0/3`，正文出现 `更新计划 · 建立诊断任务三步计划 1ms`；重开该会话后计划单元仍在（最新一轮保持展开），而 header 的计划段按设计只在有轮次在跑时占位。
+- LSP：该轮的工具行读作 `LSP 诊断类资源`；header 的 LSP 段取实时观测（`activeClients`），本轮未挂上 LSP 客户端（无 rust-analyzer 子进程），因此**未取得** LSP 段的真机证据。
 
 ## 环境副作用登记
 - 源码安装走 `scripts/install-from-source.ps1 -Components all`（当前唯一合规入口）。脚本会静默提权、重建版本树并拉起一次 Daemon 与桌面端；验证前已全部终止。
 - 该次 Daemon 启动会向真实 `$HOME/.axon` 追加运行态写入；已删除其留下的 `data/daemon.pid`，真实 `config.toml` 哈希未变，真实数据未删除。
 - 验证期间桌面端以 `--remote-debugging-port=9333` 启动，验证结束必须清掉该环境变量与调试端口。
 - X6/X7 取证那次只改了 `crates/axon-desktop/ui/**`，按纯前端快速通道重装：`npm run build` → `cargo build --release --locked -p axon-desktop`（`Finished 'release' profile ... in 2m 07s`）→ 覆盖 `versions/0.0.1/axon-desktop.exe`（12:36:45，与 `target/release` 的 SHA-256 一致，`current.json` 未变）→ 经安装根 `axon.cmd desktop` 重启。任何 Rust 侧改动都不适用这条通道。
+- 本轮回放修复同样只改 `crates/axon-desktop/ui/**`，按同一条快速通道重装（`Finished 'release' profile [optimized] target(s) in 1m 41s`，覆盖后 `axon-desktop.exe` 与 `target/release` 的 SHA-256 一致，`current.json` 仍为 `0.0.1`）。
 - 临时验证根 `$env:TEMP/axon-verify-rt` 保留供下一轮取证；其中含真实 `.mcp.json` 的副本（含本机 key），收尾时需一并清理。

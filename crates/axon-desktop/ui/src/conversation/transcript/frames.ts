@@ -63,8 +63,10 @@ import {
   findQuestionCell,
   hasTurnSummary,
   openTurn,
+  refreshLiveSummary,
   settleTurn,
   upsertCell,
+  withJobLedger,
   withTurn,
 } from './turns';
 
@@ -285,9 +287,10 @@ function applyWireEvent(
 
   const toolResult = wirePayload<WireToolResult>(kind, 'toolResult');
   if (toolResult !== null) {
-    return withTurn(state, position, (turn) =>
+    const updated = withTurn(state, position, (turn) =>
       applyToolResult(turn, toolResult, envelope.recordedAtMs),
     );
+    return withJobLedger(updated, position, toolResult.partId);
   }
 
   const fileChange = wirePayload<WireFileChange>(kind, 'fileChange');
@@ -297,7 +300,12 @@ function applyWireEvent(
   if (plan !== null) return applyPlan(state, position, plan);
 
   const usage = wirePayload<WireUsageUpdate>(kind, 'usageUpdate');
-  if (usage !== null) return withTurn(state, position, (turn) => applyUsage(turn, usage));
+  if (usage !== null) {
+    // 用量帧一到就把分割线立起来：读数与耗时都是活的，不必等收口才出现。
+    return withTurn(state, position, (turn) =>
+      refreshLiveSummary(applyUsage(turn, usage), nowMs),
+    );
+  }
 
   const error = wirePayload<WireRuntimeFailure>(kind, 'runtimeError');
   if (error !== null) {

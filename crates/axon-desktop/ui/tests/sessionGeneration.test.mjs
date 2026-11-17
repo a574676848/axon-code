@@ -63,3 +63,14 @@ test('没有实测读数的历史轮继续用用量累计兜底', () => {
     const metrics = sessionGenerationMetrics([turn(null, 10_000, 100, 20)]);
     assert.equal(metrics.generationTpsX10, 120, '10s 解码 120 token = 12.0 tok/s');
 });
+
+test('没有解码窗口但有实测速率时，按本轮自己的读数还原窗口', () => {
+    // 120 + 20 = 140 token，速率 60 tok/s → 窗口 2.33s；与另一轮 8s/320 token 加权：
+    // (140 + 320) token / (2.33 + 8)s = 44.5 tok/s
+    const metrics = sessionGenerationMetrics([
+        { firstTokenAvgMs: null, decodeMs: null, generationTpsX10: 600, usage: { outputTokens: 120, reasoningOutputTokens: 20 } },
+        turn(null, 8_000, 300, 20),
+    ]);
+    assert.equal(metrics.decodeSamples, 2, '历史轮没有窗口列也要参与速率');
+    assert.equal(metrics.generationTpsX10, 445);
+});

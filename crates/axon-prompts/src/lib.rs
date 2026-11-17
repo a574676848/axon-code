@@ -210,7 +210,9 @@ mod tests {
         let prompt = render_agent_system_prompt();
 
         assert!(!prompt.contains("<identity>"));
+        // 系统提示词不得再出现旧代号，也不得自报产品名。
         assert!(!prompt.contains("JARVIS"));
+        assert!(!prompt.contains("Axon"));
         assert!(prompt.contains("<workspace_instructions>"));
         assert!(!prompt.contains("<tool_orchestration_protocol>"));
         assert!(!prompt.contains("<lsp_policy>"));
