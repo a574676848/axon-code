@@ -154,7 +154,14 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   /** 递增即要求定位到最新消息：发送消息后必须看到自己刚发的那条。 */
   const [followToken, setFollowToken] = React.useState(0);
   /** 正在查看的子代理；非空时主区域让给它的运行轨迹。 */
-  const [openSubagentId, setOpenSubagentId] = React.useState<string | null>(null);
+  /*
+   * 打开的子代理：状态存整行，不只存标识。
+   *
+   * 名册补出来的行只存在于运行态名册里、不在转录投影里，只按标识回查会查不到，
+   * 表现成「点了没反应」。同时保留标识，用于在转录投影刷新后取更新的那一行。
+   */
+  const [openSubagentRow, setOpenSubagentRow] =
+    React.useState<import('../../conversation/transcript').SubagentRow | null>(null);
   /** 重新打开卡片的请求序号：时间线上的入口每点一次递增一次。 */
   const [questionReopenToken, setQuestionReopenToken] = React.useState(0);
   /** 正文舞台容器：供宽度拖拽手柄量测宽度并注入 CSS 变量。 */
@@ -343,13 +350,13 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   useExpiringNotice(conversation.submitError, conversation.clearSubmitError);
   useExpiringNotice(createError, clearCreateError);
 
-  const openSubagent = React.useMemo(
-    () =>
-      openSubagentId === null
-        ? null
-        : (conversation.state.subagents.find((row) => row.agentId === openSubagentId) ?? null),
-    [conversation.state.subagents, openSubagentId],
-  );
+  const openSubagent = React.useMemo(() => {
+    if (openSubagentRow === null) return null;
+    return (
+      conversation.state.subagents.find((row) => row.agentId === openSubagentRow.agentId) ??
+      openSubagentRow
+    );
+  }, [conversation.state.subagents, openSubagentRow]);
 
   /** 停止本轮：控制器经 ref 取，避免回调每轮换引用而让上报 effect 自激。 */
   const interruptRef = React.useRef(conversation.interrupt);
@@ -470,7 +477,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 sessionId={selection?.sessionId ?? null}
                 working={conversation.working}
                 sessionKey={sessionKey}
-                onOpenSubagent={setOpenSubagentId}
+                onOpenSubagent={setOpenSubagentRow}
                 railExpanded={rail.layout.expanded}
                 onToggleRail={rail.toggleExpanded}
               />
@@ -505,7 +512,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 row={openSubagent}
                 workspaceId={selection?.workspaceId ?? null}
                 sessionId={selection?.sessionId ?? null}
-                onBack={() => setOpenSubagentId(null)}
+                onBack={() => setOpenSubagentRow(null)}
               />
             ) : (
               /*

@@ -144,7 +144,8 @@ export interface RuntimeActionsProps {
   /** 本视图是否有正在跑的轮次：名册只在这段窗口里按间隔对账。 */
   working: boolean;
   /** 打开某个子代理的运行轨迹。 */
-  onOpenSubagent: (agentId: string) => void;
+  /** 打开一条子代理的运行详情：整行一起给出，名册补出来的行同样可点。 */
+  onOpenSubagent: (row: SubagentRow) => void;
 }
 
 export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
@@ -475,7 +476,7 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
               key={row.agentId}
               row={row}
               effectiveStatus={statusOf(row)}
-              onOpen={() => onOpenSubagent(row.agentId)}
+              onOpen={() => onOpenSubagent(row)}
             />
           ))}
         </Dropdown>

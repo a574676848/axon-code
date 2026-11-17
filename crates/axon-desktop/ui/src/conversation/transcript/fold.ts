@@ -45,33 +45,64 @@ const SUMMARY_PHRASE_LIMIT = 3;
  * 认不出来的工具统一并进 `tools`。
  */
 const TOOL_CATEGORIES: Record<string, string> = {
+  // 读取
+  read: 'read',
   read_file: 'read',
+  read_dir: 'read',
   read_image: 'readImage',
   view_image: 'readImage',
+  read_mcp_resource: 'read',
+  list_mcp_resources: 'read',
+  notes_read_file: 'read',
+  notes_list_files_by_prefix: 'read',
+  history_list_items: 'read',
+  history_list_windows: 'read',
+  history_read_item: 'read',
+  // 检索
   search: 'search',
   search_code: 'search',
   grep: 'search',
   glob: 'search',
-  web_search: 'webSearch',
-  web_fetch: 'webFetch',
+  history_search_contents: 'search',
+  notes_search_contents: 'search',
+  // 写入与编辑
+  write: 'write',
   write_file: 'write',
   notes_write_file: 'write',
   notes_append_to_file: 'write',
   edit: 'edit',
   apply_patch: 'edit',
+  apply_diff: 'edit',
   hashline: 'edit',
+  hashline_edit: 'edit',
+  // 命令与代码
+  shell: 'commands',
   shell_command: 'commands',
   exec_command: 'commands',
   write_stdin: 'commands',
   run_code: 'code',
-  delegate_to_fast: 'subagents',
+  // 网页
+  web_search: 'webSearch',
+  web_fetch: 'webFetch',
+  // 子代理与协作
+  subagent: 'subagents',
   spawn_agent: 'subagents',
+  delegate_to_fast: 'subagents',
   send_message: 'subagents',
   list_agents: 'subagents',
+  // 计划与目标
   update_plan: 'plan',
-  create_goal: 'plan',
-  update_goal: 'plan',
-  get_goal: 'plan',
+  goal_create: 'plan',
+  goal_update: 'plan',
+  goal_start: 'plan',
+  goal_cancel: 'plan',
+  goal_get: 'plan',
+  goal_list: 'plan',
+  // Axon 特有的记忆与技能面
+  memory_search: 'memory',
+  memory_write: 'memory',
+  invoke_skill: 'skill',
+  // 提问
   ask_user_question: 'questions',
   request_user_input: 'questions',
 };
@@ -90,6 +121,8 @@ const CATEGORY_PHRASES: Record<string, string> = {
   subagents: '已协调子智能体',
   plan: '更新了计划',
   questions: '向用户提出了问题',
+  memory: '已使用记忆',
+  skill: '已调用技能',
   tools: '已调用工具',
 };
 

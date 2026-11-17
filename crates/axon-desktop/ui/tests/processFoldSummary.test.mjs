@@ -70,3 +70,33 @@ test('有思考或工具的轮次照旧可折', () => {
     ];
     assert.equal(shouldFold(turn, 0, 3), true);
 });
+
+test('Axon 内置工具都落在既有类别里，不会掉进兜底', () => {
+    // 这些名字取自 Axon 的 builtin 工具注册表：词表漏一个，摘要就会退化成「已调用工具」。
+    const cases = [
+        ['builtin.read_file', 'read'],
+        ['builtin.read_dir', 'read'],
+        ['builtin.search', 'search'],
+        ['builtin.glob', 'search'],
+        ['builtin.write_file', 'write'],
+        ['builtin.edit', 'edit'],
+        ['builtin.apply_patch', 'edit'],
+        ['builtin.hashline_edit', 'edit'],
+        ['builtin.shell_command', 'commands'],
+        ['builtin.write_stdin', 'commands'],
+        ['builtin.spawn_agent', 'subagents'],
+        ['builtin.delegate_to_fast', 'subagents'],
+        ['builtin.send_message', 'subagents'],
+        ['builtin.goal_start', 'plan'],
+        ['builtin.update_plan', 'plan'],
+        ['builtin.ask_user_question', 'questions'],
+        ['builtin.memory_search', 'memory'],
+        ['builtin.invoke_skill', 'skill'],
+    ];
+    for (const [tool, category] of cases) {
+        const summary = processSummary([cell(`c-${tool}`, 'tool', { toolName: tool })]);
+        assert.notEqual(summary, '已调用工具', `${tool} 不该落进兜底类别`);
+        assert.ok(summary.length > 0, `${tool} 必须有摘要`);
+        assert.ok(category.length > 0);
+    }
+});

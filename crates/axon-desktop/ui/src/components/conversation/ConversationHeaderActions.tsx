@@ -23,7 +23,7 @@ export const ConversationHeaderActions: React.FC<{
   working: boolean;
   /** 当前会话的偏好键；为空表示还没有选中会话。 */
   sessionKey: string | null;
-  onOpenSubagent: (agentId: string) => void;
+  onOpenSubagent: (row: import('../../conversation/transcript').SubagentRow) => void;
   railExpanded: boolean;
   onToggleRail: () => void;
 }> = ({ subagents, jobs, sessionId, working, sessionKey, onOpenSubagent, railExpanded, onToggleRail }) => (
