@@ -6,6 +6,7 @@
 use std::path::Path;
 
 use axon_agent_runtime::{AgentPath, ChildExecutionModelIntent};
+use rusqlite::OptionalExtension as _;
 
 use super::{run_agent_store, run_request_subagents::execute_standalone_subagent};
 
@@ -51,10 +52,36 @@ pub(super) fn maybe_spawn_session_title_generation(
 fn run_session_title_job(config_path: &Path, cwd: &Path, session_id: &str) -> Result<(), String> {
     let store = run_agent_store::shared_runtime_store(config_path)?;
     let turn_count = count_user_messages(&store, session_id)?;
-    if turn_count < SESSION_TITLE_TURN_INTERVAL || turn_count % SESSION_TITLE_TURN_INTERVAL != 0 {
+    if turn_count < SESSION_TITLE_TURN_INTERVAL {
+        return Ok(());
+    }
+    // 首次补跑：标题还空着且轮次已够就先补一次。否则安装前就存在的旧会话必须等到
+    // 下一个三的倍数才会更新，用户看到的是「明明早就超过三轮却一直没有标题」。
+    let pending_first =
+        stored_session_title(&store, session_id)?.is_none_or(|title| title.trim().is_empty());
+    if !pending_first && turn_count % SESSION_TITLE_TURN_INTERVAL != 0 {
         return Ok(());
     }
     generate_session_title(config_path, cwd, session_id, turn_count)
+}
+
+/// 读取控制面已登记的标题；会话行不存在或标题为空都返回 `None`。
+fn stored_session_title(
+    store: &axon_session::SqliteRuntimeStore,
+    session_id: &str,
+) -> Result<Option<String>, String> {
+    store
+        .with_read_connection(|connection| {
+            connection
+                .query_row(
+                    "SELECT title FROM sessions WHERE session_id=?1",
+                    [session_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()
+        })
+        .map(|title| title.flatten())
+        .map_err(|error| error.to_string())
 }
 
 /// 该车道下用户消息条数；走 `inbox_session_recent` 的索引前缀，不扫正文。
@@ -188,6 +215,7 @@ fn clean_title(raw: &str) -> Option<String> {
 mod tests {
     use super::{
         build_prompt, clean_title, clip_message, count_user_messages, recent_user_messages,
+        stored_session_title,
     };
     use axon_session::RuntimeStore as _;
 
@@ -226,6 +254,27 @@ mod tests {
         // 超上限时保留最新十条，并按时间先后交给模型。
         assert_eq!(messages.first().map(String::as_str), Some("m3"));
         assert_eq!(messages.last().map(String::as_str), Some("m12"));
+    }
+
+    #[test]
+    fn stored_title_distinguishes_first_fill_from_regeneration() {
+        let store = seeded_store(3);
+        // 会话行存在但标题为空：属于首次补跑，不能当成「已经生成过」。
+        assert_eq!(stored_session_title(&store, "session-title").unwrap(), None);
+        assert_eq!(
+            stored_session_title(&store, "session-unknown").unwrap(),
+            None
+        );
+
+        store
+            .update_session_title("session-title", "已有标题")
+            .expect("写入标题");
+        assert_eq!(
+            stored_session_title(&store, "session-title")
+                .unwrap()
+                .as_deref(),
+            Some("已有标题")
+        );
     }
 
     #[test]
