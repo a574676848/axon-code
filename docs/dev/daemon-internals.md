@@ -6,9 +6,9 @@
 
 ## 1. 领取与并发模型
 
-Daemon 是 Axon 的后台长生命周期宿主。当前实现已经把 `PrimaryTurnService` 接入 supervisor tick：Daemon 从 durable Interaction inbox 领取输入，按 Workspace lane 有界并发，并通过 lease token 提交 `Understood` 或 `Rejected` 终态。
+Daemon 是 Axon 的后台长生命周期宿主。当前实现已经把 `PrimaryTurnService` 接入 supervisor tick：Daemon 从 durable Interaction inbox 领取输入，按 Workspace 会话有界并发，并通过 lease token 提交 `Understood` 或 `Rejected` 终态。
 
-主 turn 的并发单元是复合 lane（Workspace + trust scope + channel + destination），不是批次：`jarvis_interactions.lane_id` 是领取排他的持久化事实源，某条 lane 已有未过期 `processing` 时，该 lane 的后续记录不会被领取，同 lane 串行无需调用方维护在途状态。协调线程在同一批内只等待「任意一个 lane」结束，槽位一归还就补位领取并投递，因此某条 lane 的长 turn 不会推迟其他空闲 lane 的新消息；只有并发槽位（默认 4 条 lane）全满时才等待 lane 结束。槽位未满时以 250ms 有界窗口复查新到输入，窗口只是补位周期，不改变 durable 领取顺序。
+主 turn 的并发单元是复合会话（Workspace + trust scope + channel + destination），不是批次：`inbox.session_id` 是领取排他的持久化事实源，某个会话已有未过期 `processing` 时，该会话的后续记录不会被领取，同会话串行无需调用方维护在途状态。协调线程在同一批内只等待「任意一个会话」结束，槽位一归还就补位领取并投递，因此某个会话的长 turn 不会推迟其他空闲会话的新消息；只有并发槽位（默认 4 个会话）全满时才等待会话结束。槽位未满时以 250ms 有界窗口复查新到输入，窗口只是补位周期，不改变 durable 领取顺序。
 ## 当前职责
 
 - 处理 `SubmitInteraction`，不接受旧 `SubmitAction`、`CancelAction`、`GetQueue` 或 `StopSession` 外部命令。
@@ -72,9 +72,11 @@ provider 内容资产位于 `~/.axon/events/{provider}/`，目录名即 provider
 
 Turn 执行过程中，Daemon 按 Provider 生产顺序消费 wire 事件。正文与推理增量、用量、供应商状态只走内存实时通道：订阅者收到即渲染，不写库、不带 cursor、不推进重放水位，慢消费者丢帧也不阻塞本轮。落库只发生在语义边界（工具调用前后、流结束、轮次收口）：边界上先把累积的正文压成一条快照事件（同一 part 的整段文本），再提交该语义事件，因此每个边界一次事务。回放读的是边界快照：整段正文仍可重建，但不再逐帧回放打字过程。Interaction 的实时帧与终态收口都在同一事务内校验当前 processing lease；supervisor 收口为 interrupted 后，旧 worker 的 delta、usage 或 completed 事件不会再进入 durable sequence。
 
-Provider 的每次成功流固定产生 `StreamingStarted -> delta/reasoning/usage/tool -> StreamingCompleted`。整轮收口只追加记忆、技能、治理、运行错误、canonical assistant 等不可由实时增量替代的稳定快照，最后追加唯一 terminal `RunLifecycle`，再写入 `turn_completed`。实时 reasoning、tool、file、plan 与 usage 不在收口阶段重建；投影异常也不会把旧过程事件迟到插回日志。CLI/TUI 与 Gateway 订阅在同一 Workspace lane 回放时均按 `interactionId` 过滤，并直接消费 durable sequence，不建立第二套重排或完成门禁。
+Provider 的每次成功流固定产生 `StreamingStarted -> delta/reasoning/usage/tool -> StreamingCompleted`。整轮收口只追加记忆、技能、治理、运行错误、canonical assistant 等不可由实时增量替代的稳定快照，最后追加唯一 terminal `RunLifecycle`，再写入 `turn_completed`。实时 reasoning、tool、file、plan 与 usage 不在收口阶段重建；投影异常也不会把旧过程事件迟到插回日志。CLI/TUI 与 Gateway 订阅在同一会话回放时均按 `interactionId` 过滤，并直接消费 durable sequence，不建立第二套重排或完成门禁。
 
 整轮的顺序契约是 `canonical assistant -> foreground/run completed -> turn_completed`。canonical 终止事件（最终 assistant 与 terminal `RunLifecycle`）在同一批 `publish_batch` 内原子提交；该批次失败必须终止本轮并形成结构化失败结论，禁止在 durable 缺口上继续写入 `turn_completed`。成功但无正文的回合仍提交 canonical assistant（内容为空），因此该契约对所有成功回合都成立。
+
+后台作业的生命周期同样落事件：作业注册表在启动与首次终态两处广播 `job_started` / `job_completed`，宿主订阅后追加到作业归属会话的事件流，并把「在跑作业数」投影进 `session_metrics.jobs_running`（会话列表的 `openJobCount` 读这个值）。临时作业随进程消亡，事件是历史事实而不是可续跑句柄。
 
 文件差异在工具执行过程中按稳定 part ID 更新：流式参数只能形成预览，工具回执产生的实际结果会在同一实时序列中原地替换预览。终态收口不重新创建旧 `ToolCall`、`ToolResult` 或 `FileChange`。
 
@@ -116,17 +118,13 @@ Windows 实测基线（`--release`，1k/10k backlog 与 8 线程并发入口）�
 
 事实源存储策略固定为：进程内连接池 + WAL + `synchronous=FULL`。`synchronous=FULL` 是因为已提交的外部副作用事实必须承受断电级故障，崩溃恢复只依赖已提交记录，不做重放猜测。写事务统一使用 `TransactionBehavior::Immediate`，使写锁争用落到 `busy_timeout` 上而不是立即返回 `SQLITE_BUSY`。写锁等待上限生产默认为 5 秒；`SqliteRuntimeStore::with_busy_timeout` 允许注入更小的上限，使「超过等待上限后有界失败且不留下幽灵 claim」的确定性验证不必空转完整生产超时。WAL 体积有硬上限：连接统一设置 `journal_size_limit = 64 MiB`，并显式钉住 `wal_autocheckpoint = 1000` 页。没有上限时 WAL 会随每次写入增长到与主库同量级（实测 708 MiB / 703 MiB），一次 checkpoint 需要回写整库并独占写锁数十秒，所有写者按 `busy_timeout` 排队失败。
 
-### 事件正文外置与归档
+### 事件存储布局与回收
 
-`session_events.payload_json` 只承载定长元数据：流式帧（`wire_event`）一律外置，其余事件正文超过 4 KiB 才外置。外置正文按会话追加写入 `data/archive/session-events/<session_id>/<分片>.jsonl`（每 2000 个序号一片），表里保留 `payload_ref`，形如 `<session_id>/<分片>.jsonl@<偏移>+<长度>`，回放时按偏移取回。单条 desktop 车道一天数十万帧，分片让文件数与「会话数 × 保留窗口内分片数」成正比，不会退化成百万小文件。
+事件不再是关系表里的行：每段会话一个目录 `<data>/events/<session>/`，里面是 `session.v<N>.jsonl.zstd` 帧日志与一把 `.lock`。帧本身已压缩，正文一律内联在帧里，没有外置正文、没有 `payload_ref`、没有「按行归档再删行」这一套；读取按序号定位，损坏帧只影响自己那一帧，由读取侧如实报错而不是拼出半条记录。
 
-`session_events` 增量追加 `interaction_id` 列并建 `(session_id, interaction_id, sequence)` 联合索引：带 Interaction 租约的写入把归属落列，历史帧据此只读目标交互自己的帧，不再扫整条会话。老记录该列为空串，读取侧自动回退整会话扫描。外置正文读取失败（缺失、非法名、权限、编码）只把该帧降级为 `archive_missing` 占位并带 `archiveError`，单帧损坏不拖垮整页；清理任务按活跃会话渐进修复悬空 `payload_ref`，改写成内联占位并清空引用，且只在正文文件确实不存在时才改写：该更新不可逆，可恢复或可诊断的临时读取故障只由读取侧降级，不在这里判成永久丢失。
+回收是目录级操作：保留期按会话目录的最后修改时间整目录删除（会话族与 SQLite 事实表按 7 天，日志与临时文件按 3 天），磁盘预算淘汰在时间维度之后执行，上限 4 GiB、高水位 80%、低水位 20%，从最旧的会话开始删且跳过运行中与受保护的会话。旧版本留下的 `data/archive/session-events/<session>` 目录（外置正文时代的产物）只随会话被删除时整目录回收，不再有新写入。
 
-清理走「先归档再删行」：过期事件按 lane 追加写入 `data/archive/session-events/<session_id>.jsonl.zst`（zstd 多帧串联，可分批中断），归档成功后才删除对应行。分片被同一会话的多条事件共用，单条行过期不删整片，由会话族清理统一回收；只有确认删除的行才回收其独占外置正文，整批回收会在并发删除时误删仍被其他行引用的文件。删除与回执由单条 `DELETE ... RETURNING` 一次完成，先查后删会在两条语句之间留出并发窗口，让调用方分不清谁真的被删了。该目录整体排除在 3 天文件保留期之外。归档目录与事件正文外置目录同一处，备份与清理只需看一个路径。
-
-磁盘水位淘汰在时间维度清理之后执行，常量先写死：硬上限 4 GiB、高水位 3.2 GiB、低水位 2 GiB；只淘汰一小时以前且不属于运行中 lane 的事件，同样先归档再删除，随后由 `incremental_vacuum` 归还空闲页。上限按实测高负载口径留出余量（desktop 车道单日约 400 MiB，7 天约 2.8 GiB），避免水位淘汰先于 7 天保留期触发，把保留窗口悄悄缩短。
-
-事件保留窗口按会话状态区分：仍在推进的会话保留最近 200 条事件作为续跑锚点，其余事件按 7 天窗口回收；已终结会话不再有 sequence 回退风险，事件按时间窗全量回收。会话根记录的回收同时覆盖 rollout 索引与运行态两侧，避免不在 rollout 索引里的子代理与历史 desktop 车道永久滞留。
+控制面库因此不随轮次增长：`control.sqlite3` 只放会话、入站、工作项与指标投影，事件体积全部落在事件目录里，备份与容量核算各看一个路径。
 
 ---
 

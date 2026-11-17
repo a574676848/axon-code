@@ -203,6 +203,17 @@ fn task_commit_atomically_creates_task_first_execution_and_event_idempotently() 
         store.replay_ledger_events(0, 10).expect("读取 Event").len(),
         1
     );
+    // 工作项类型必须自证来源：目标执行与普通 turn 在排队、统计与归档时靠它区分。
+    let kind: String = store
+        .with_read_connection(|connection| {
+            connection.query_row(
+                "SELECT kind FROM work_items WHERE execution_id = ?1",
+                [execution.execution_id.as_str()],
+                |row| row.get(0),
+            )
+        })
+        .expect("读取 work_items.kind");
+    assert_eq!(kind, "goal");
 }
 
 #[test]

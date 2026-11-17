@@ -65,7 +65,7 @@ pub(crate) const USAGE_ROLLUP_CRON_SCRIPT: &str = "axon.internal.usage-rollup";
 pub(crate) const USAGE_ROLLUP_CRON_JOB_ID: &str = "axon.system.usage-rollup";
 pub(crate) const USAGE_ROLLUP_CRON_JOB_NAME: &str = "Usage statistics rollup";
 pub(crate) const USAGE_ROLLUP_INTERVAL_MS: u64 = 60_000;
-pub(crate) const USAGE_PROJECTOR_NAME: &str = "rollout-usage-v1";
+pub(crate) const USAGE_PROJECTOR_NAME: &str = "thread-usage-v1";
 
 /*
  * 模型费率自动同步的系统任务。

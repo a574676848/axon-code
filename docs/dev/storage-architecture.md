@@ -920,9 +920,11 @@ GET /api/v1/sessions?workspace=<workspace_id>&include_archived=false
 ```bash
 axon run "把测试跑一遍" --session <session_id>     # 单次指定，继续该会话
 axon sessions list --limit 20                      # 列出会话（含轮次与耗时）
-axon sessions resume <session_id>                  # 设为后续 run 的默认会话
-axon sessions show <session_id>                    # 查看单个会话摘要
+axon sessions resume <id>                          # 设为后续 run 的默认会话
+axon sessions show <id>                            # 查看单个会话摘要
 ```
+
+`<id>` 的解析收敛在一处（`session_commands/session_resolution.rs`）：先按 Thread ID 直接命中事件流，未命中再回落到该会话的运行窗口 `sessions.run_session_id`。会话清单展示的是复合车道 ID，Thread 事件流按运行窗口落盘，两者在 CLI 车道并不相等，因此所有会话命令入口共用这一层解析，不允许各自假定入参属于哪个标识空间。
 
 落点：
 
@@ -1538,7 +1540,7 @@ pwsh -File scripts/install-from-source.ps1 -Components all
 | C2 | `axon run "…" --session <id>` | 追加到指定会话，历史被带入上下文（回复能引用上一轮内容） |
 | C3 | `--session` 指向不存在的 id | 报错并提示，**不隐式新建** |
 | C4 | 不带 `--session` 与 `--continue` | 复用当前工作目录的 CLI 复合车道（同一 cwd 连续 run 接得上上下文），不报错；跨目录或首次使用要接续旧会话时用 `--continue` / `--session` |
-| C5 | `axon sessions resume <id>` 后再 `axon run --continue` | 追加到该会话：`resume` 只设置 resume 指针，`--continue` 按指针取会话并带入历史；普通 `run` 仍走当前目录车道，避免跨目录会话互相串味 |
+| C5 | `axon sessions resume <id>` 后再 `axon run --continue` | 追加到该会话：`resume` 只设置 resume 指针，`--continue` 把指针解析回 Thread 后按该 Thread 取历史（指针为空时取最近一段根会话）；普通 `run` 仍走当前目录车道，避免跨目录会话互相串味 |
 | C6 | `--session` 与已保存的 resume 状态冲突 | `--session` 胜出，运行结束后 resume 指针被还原成运行前的值（快照 + 还原，测试见 `selection_snapshot_restores_the_previous_pointer`） |
 
 #### 12.4.5 跨端同步（本次重构的核心验收）

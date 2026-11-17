@@ -471,6 +471,8 @@ fn init_logger_from_config(cli: &AxonCli) -> axon_domain::AxonResult<()> {
         // 配置路径无效，使用默认日志配置
         return init_default_logger();
     };
+    // 后台作业的生命周期事件要有落点：订阅一次，按作业归属的会话写事件流。
+    crate::run_commands::run_job_lifecycle_events::install(&config_path);
     init_logger_for_config_path(&config_path)
 }
 

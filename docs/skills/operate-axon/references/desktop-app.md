@@ -116,8 +116,8 @@
 | 连接档案 | `connection_state`、`connection_retry_probe`、`connection_test`、`connection_save_profile`、`connection_delete_profile`、`connection_rename_profile`、`connection_switch_profile`、`connection_set_session_secret`、`connection_complete_onboarding`、`connection_skip_onboarding` |
 | 配置 | `config_read`、`config_validate`、`config_validate_values`、`config_write`、`config_apply_values`、`config_reset_key` |
 | Provider 与模型 | `provider_profile_upsert`、`provider_profile_remove`、`discover_models` |
-| 工作区与车道 | `workspace_list`、`workspace_add`、`workspace_remove`、`workspace_list_entries`、`workspace_read_file`、`workspace_read_bytes`、`workspace_stat_path`、`workspace_applications`、`workspace_open_default`、`workspace_open_with`、`workspace_reveal`、`lane_create`、`lane_rename`、`lane_reorder`、`lane_set_pinned`、`lane_set_archived` |
-| 会话 | `conversation_submit`、`conversation_history`、`conversation_watch`、`conversation_watch_session`、`conversation_unsubscribe`、`conversation_interrupt`、`conversation_stop_job`、`conversation_send_subagent_message`、`conversation_lane_jobs`、`conversation_lane_subagents`、`conversation_job_output`（`laneId`、`jobId`、`offset`；按字节游标读一次作业输出增量，供后台任务卡的实时输出使用） |
+| 工作区与会话菜单 | `workspace_list`、`workspace_add`、`workspace_remove`、`workspace_list_entries`、`workspace_read_file`、`workspace_read_bytes`、`workspace_stat_path`、`workspace_applications`、`workspace_open_default`、`workspace_open_with`、`workspace_reveal`、`session_create`、`session_rename`、`session_reorder`、`session_set_pinned`、`session_set_archived` |
+| 会话 | `conversation_submit`、`conversation_history`、`conversation_watch`、`conversation_watch_session`、`conversation_unsubscribe`、`conversation_interrupt`、`conversation_stop_job`、`conversation_send_subagent_message`、`conversation_session_jobs`、`conversation_session_subagents`、`conversation_job_output`（`sessionId`、`jobId`、`offset`；按字节游标读一次作业输出增量，供后台任务卡的实时输出使用） |
 | 语音 | `voice_presets`、`voice_preview`、`voice_tts`、`voice_start`、`voice_stop`、`voice_cancel`、`voice_playback_drained`、`voice_microphone_status`、`voice_open_microphone_settings` |
 | Cron | `cron_list`、`cron_config`、`cron_get`、`cron_history`、`cron_create`、`cron_update`、`cron_pause`、`cron_resume`、`cron_run`、`cron_remove` |
 | MCP 与 Skill | `mcp_list`、`mcp_upsert`、`mcp_upsert_raw`、`mcp_remove`、`mcp_runtime_status`、`mcp_runtime_refresh`、`skills_list` |
@@ -132,7 +132,7 @@
 - 本机打开类动作（`workspace_open_default`、`workspace_open_with`、`workspace_applications`、`workspace_reveal`）只在**本机档案**下可用；云档案下统一拒绝并回「云档案下不支持在本机打开，请在远端服务上操作」。
 - 本机档案下 `workspace_read_file`、`workspace_read_bytes`、`workspace_stat_path`、`workspace_list_entries` 与上述四条打开类动作接受任意绝对路径（含 `~` 路径），工作区之外的文件同样可以预览、定位与用其他应用打开；纯相对路径仍以工作区根为准，不得含 `..`，也不得经符号链接跳出工作区。
 - 附件单文件上限 64 MiB：本机档案直接落到客户端自有根，云档案按块流式 multipart 上传，不把整份文件读进内存两次。
-- 写类命令（`config_write`、`config_apply_values`、`secret_set`、`mcp_upsert`、`cron_*`、`lane_*`、`conversation_submit`、`conversation_interrupt` 等）都是状态变更，先取得用户明确授权。
+- 写类命令（`config_write`、`config_apply_values`、`secret_set`、`mcp_upsert`、`cron_*`、`session_*`、`conversation_submit`、`conversation_interrupt` 等）都是状态变更，先取得用户明确授权。
 - 凭据类命令只回报状态与掩码，不打印密钥原文。
 - `system_info` 的 `github` 字段给出本次构建对应的仓库、发布页、问题反馈与许可标识（都来自构建期元数据）。
 - 连接读数只经 `connection_state` 取得：它给出生效档案、模式、后端地址与版本、延迟、能力位与健康结论。试连接（`connection_test`）只发一次 `GET /api/v1/meta`，失败按凭据不匹配、证书有问题、连不上三类分别回报；它不落档案也不落凭据库。

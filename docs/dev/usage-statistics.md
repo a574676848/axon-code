@@ -95,10 +95,10 @@ axon usage --period all --format json
 Coding Runtime
     │
     ▼ 写入运行记录与完成事件
-sessions/rollout.sqlite3（唯一事实来源，只读接入）
+data/sessions/thread-index.v1.*（唯一事实来源，只读接入；记录随 Thread 事件追加）
     │
     ▼ Daemon + Axon Cron（默认每 60 秒调度）
-usage projector（基于 rowid 水位线增量、幂等事务处理）
+usage projector（基于记录时间水位线增量、幂等事务处理）
     │
     ▼
 usage/usage.sqlite3
@@ -143,8 +143,8 @@ axon usage / 监控看板
 
 ### 状态收敛与终态推进
 
-- **事实源驱动**：投影器以 `rollout.sqlite3` 的 turn 快照为单一事实源。
-- **状态流转与复核**：对于在同一 `(session_id, assistant_part_id)` 原地更新的 turn，投影器除基于 `rowid` 水位线增量扫描外，每轮处理还会针对未完结的 `active` 记录执行有界主键复核（每轮最多 256 条），确保进行中状态（active）在完成后能精准收敛为终态（`completed` / `failed` / `interrupted`）。
+- **事实源驱动**：投影器以 Thread 用量索引（`data/sessions/thread-index.v1.*`）的轮次记录为单一事实源。
+- **状态流转与复核**：对于在同一 `(session_id, assistant_part_id)` 原地更新的轮次，投影器除基于记录时间水位线增量扫描外，每轮处理还会针对未完结的 `active` 记录执行有界主键复核（每轮最多 256 条），确保进行中状态（active）在完成后能精准收敛为终态（`completed` / `failed` / `interrupted`）。
 - **真实未完成判定**：无外部调用且未产生终态事件的尝试保留为 `active`，系统不进行猜测性标记。
 
 ### 生命周期与数据清理
@@ -157,11 +157,11 @@ axon usage / 监控看板
 
 ## 6. 一致性与恢复机制
 
-- **幂等写入**：相同 turn 重复投影时，来源指纹（Source Fingerprint）保持恒定，避免重复计数。
-- **原子提交**：`usage_facts` 增量、预聚合时序桶更新以及 `rowid` 水位线均在单个数据库事务内提交。
+- **幂等写入**：相同轮次重复投影时，来源指纹（Source Fingerprint）保持恒定，避免重复计数。
+- **原子提交**：`usage_facts` 增量、预聚合时序桶更新以及记录时间水位线均在单个数据库事务内提交。
 - **失败回滚**：任一步骤失败则事务整体回滚，水位线不前移，待下一调度周期自动重试。
-- **无锁读隔离**：投影器通过只读（`NO_MUTEX`）连接读取 `rollout.sqlite3`，并设置短 Busy Timeout，绝不阻塞前端交互与模型推理执行链路。
-- **投影可重建性**：`usage.sqlite3` 为完全派生的投影数据，若损坏或丢失，可通过全量回放 `rollout.sqlite3` 无损重建。
+- **无锁读隔离**：投影器通过只读（`NO_MUTEX`）连接读取 Thread 索引分片，并设置短 Busy Timeout，绝不阻塞前端交互与模型推理执行链路。
+- **投影可重建性**：`usage.sqlite3` 为完全派生的投影数据，若损坏或丢失，可通过全量回放 Thread 用量索引无损重建。
 - **陈旧度提示**：CLI 查询输出中的 `projection.stale` 字段明确指示当前投影数据相较于底座事实源是否存在未同步更新。
 
 ---

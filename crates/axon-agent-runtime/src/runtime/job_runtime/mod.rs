@@ -25,12 +25,18 @@
 //! 事实源；Goal/Execution 由 Work Ledger 拥有。本模块**不写入** `goals` 或
 //! `work_items`，也不承载跨轮任务状态。
 
+mod job_record;
+mod lifecycle;
 mod notice;
 mod producer;
 mod registry;
 mod shell_producer;
 mod subagent_producer;
 
+pub use lifecycle::{
+    JobCompleted, JobLifecycleEvent, JobLifecycleHandler, JobLifecycleSubscription, JobStarted,
+    publish_job_lifecycle, subscribe_job_lifecycle,
+};
 pub use notice::{
     CompletionNotice, CompletionNoticeBatch, CompletionNoticeHandler, CompletionNoticeSubscription,
     publish_completion_notice, publish_completion_notices, subscribe_completion_notices,

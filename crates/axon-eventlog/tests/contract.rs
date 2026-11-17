@@ -17,6 +17,30 @@ fn record(
 }
 
 #[test]
+fn header_must_be_exactly_one_line() {
+    let directory = tempfile::tempdir().expect("临时目录");
+    let path = directory.path().join("session.v1.jsonl.zstd");
+    // 人为拼一个「header 帧里塞两行」的日志：读取侧必须拒绝，而不是抽第一行当头部。
+    let header = axon_eventlog::Header::new("session-multiline", 1, None);
+    let mut plain = header.encode_line().expect("header 行");
+    plain.extend_from_slice(&header.encode_line().expect("第二行 header"));
+    let mut bytes = axon_eventlog::encode_frame(&plain).expect("压缩 header 帧");
+    bytes.extend_from_slice(&axon_eventlog::encode_frame(b"").expect("压缩空帧"));
+    std::fs::write(&path, bytes).expect("写日志");
+
+    let error = axon_eventlog::EventLogReader::open(&path).expect_err("多行 header 必须拒绝");
+    match error {
+        EventLogError::Corrupt(reason) => {
+            assert!(
+                reason.contains("换行数") || reason.contains("header"),
+                "拒绝原因应指明 header：{reason}"
+            );
+        }
+        other => panic!("应返回 Corrupt，实际：{other:?}"),
+    }
+}
+
+#[test]
 fn append_then_read_round_trips() {
     let dir = tempfile::tempdir().expect("临时目录");
     let log = EventLog::open(dir.path(), "session-session-a");

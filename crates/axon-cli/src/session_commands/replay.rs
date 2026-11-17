@@ -13,6 +13,8 @@ use crate::{
     },
 };
 
+use super::resolve_session_target;
+
 /// `axon debug session replay` 参数。
 #[derive(Debug, Clone, clap::Args, PartialEq, Eq)]
 pub struct SessionReplayCommand {
@@ -59,11 +61,13 @@ fn build_session_replay_report(
     command: &SessionReplayCommand,
 ) -> Result<SessionReplayReport, String> {
     validate_session_replay_command(command)?;
-    let chain = replay_session_chain(config_path, &command.session_id)?;
-    let turns = replay_session_turns(config_path, &command.session_id).unwrap_or_default();
+    // 入参可能是会话清单里的车道 ID：先解析成 Thread，再回溯 parent 链表。
+    let target = resolve_session_target(config_path, &command.session_id)?;
+    let chain = replay_session_chain(config_path, &target.thread_id)?;
+    let turns = replay_session_turns(config_path, &target.thread_id).unwrap_or_default();
     Ok(SessionReplayReport {
         status: "session_replayed",
-        session_id: command.session_id.clone(),
+        session_id: target.thread_id,
         chain_len: chain.len(),
         chain,
         turn_count: turns.len(),

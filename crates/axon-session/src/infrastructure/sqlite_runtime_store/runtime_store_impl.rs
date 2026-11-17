@@ -7,6 +7,7 @@ use super::{
     SqliteRuntimeStore, action_repository, commit_repository, failure_repository,
     goal_result_document, interrupted_execution_repository, interrupted_interaction_repository,
     runtime_repository, schedule_repository, session_control_repository,
+    session_metrics_repository,
 };
 use crate::domain::runtime::{
     DaemonHostRecord, RuntimeScheduleRecord, SessionActionRecord, SessionEventRecord,
@@ -151,6 +152,16 @@ impl RuntimeStore for SqliteRuntimeStore {
         session_id: &DaemonSessionId,
     ) -> Result<SessionRuntimeRecord, RuntimeStoreError> {
         self.get_session_impl(session_id)
+    }
+
+    fn apply_job_delta(
+        &self,
+        session_id: &DaemonSessionId,
+        started: bool,
+        failed: bool,
+        now_ms: u64,
+    ) -> Result<(), RuntimeStoreError> {
+        session_metrics_repository::apply_job_delta(self, session_id, started, failed, now_ms)
     }
 
     fn recover_expired_sessions(

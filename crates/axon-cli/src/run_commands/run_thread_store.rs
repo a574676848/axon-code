@@ -421,7 +421,19 @@ pub(super) fn prepare_run_session(
     implicit_session_id: Option<&str>,
 ) -> Result<Option<PreparedRunSession>, String> {
     if command.continue_last {
-        return prepare_session_from_lookup(config_path, RunSessionIndexLookup::Latest);
+        // 恢复指针决定接续哪一段：`sessions resume` 之后 `--continue` 必须落在同一个
+        // Thread 上，而不是「全局最近一段」。指针是会话身份，先解析回 Thread。
+        return match crate::run_commands::snapshot_resume_session(config_path)? {
+            Some(pointer) => {
+                let target =
+                    crate::session_commands::resolve_session_target(config_path, &pointer)?;
+                prepare_session_from_lookup(
+                    config_path,
+                    RunSessionIndexLookup::SessionId(&target.thread_id),
+                )
+            }
+            None => prepare_session_from_lookup(config_path, RunSessionIndexLookup::Latest),
+        };
     }
     if let Some(session_id) = command.session.as_deref() {
         return prepare_session_from_lookup(

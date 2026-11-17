@@ -16,6 +16,10 @@
 | [存储架构重构方案](./storage-architecture.md) | 事件面、控制面与投影面的目标架构、影响面、已裁决事项与安装后验收矩阵 |
 | [存储层现状测绘](./storage-map.md) | 全量存储单元、表、写入路径与依赖方向的取证记录（重构附件） |
 | [存储重构 WBS](./reconstruction-wbs.md) | 阶段与任务拆解、依赖关系、里程碑与延后项 |
+| [WBS 验收台账](./wbs-acceptance.md) | 逐条登记 WBS 各项目的状态、判据与可复核证据 |
+| [W2-12 rollout 退役记录](./w2-12-rollout-retirement.md) | 历史窗口改读 thread 文件、恢复指针改存控制面的设计、落点与回归范围 |
+| [混合审计发现清单](./audit-findings.md) | 交叉审计的性能、闭环与稳定性发现及处置结论 |
+| [v0.0.1 真机验收记录](./device-verification.md) | 安装态二进制的 39 项验收矩阵逐项证据与环境副作用登记 |
 
 ## 运行时内部实现
 

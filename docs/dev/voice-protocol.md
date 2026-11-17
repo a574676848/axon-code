@@ -55,7 +55,7 @@ axon-desktop（Rust）── WebSocket /api/v1/voice ──► axon-daemon
 
 ### 5.2 服务端文本帧
 
-`ready`（连接级一次）、`state{phase}`、`partial{utteranceSeq,text}`、`final{utteranceSeq,text,startMs,endMs,finalizeMs}`、`turn{interactionId,turnId,laneId,sessionId,epoch}`、`speak{turnId,epoch,seq,text}`、`stopAudio{epoch,reason}`、`error{code,stage,retryable,message,detail}`、`closed{reason}`。
+`ready`（连接级一次）、`state{phase}`、`partial{utteranceSeq,text}`、`final{utteranceSeq,text,startMs,endMs,finalizeMs}`、`turn{interactionId,turnId,sessionId,epoch}`、`speak{turnId,epoch,seq,text}`、`stopAudio{epoch,reason}`、`error{code,stage,retryable,message,detail}`、`closed{reason}`。
 
 - `ready` 的 `asrModel` 在提供方接入前恒为 `"unavailable"`，`ttsModel` 恒为 `"none"`，`tts` 为 `false`；原因写在 `degraded.detail`（中文）。接入后两者改为提供方配置里的真实模型名。
 - `degraded.asr` 与 `degraded.tts` 只能是 `null`（没有系统音色兜底，也不编造第二套词汇），具体原因统一进 `detail`。

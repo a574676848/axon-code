@@ -38,10 +38,11 @@ axon --format json debug session read <THREAD_ID>
 
 ```bash
 axon sessions list [--limit <n>] [--all]
-axon sessions show <SESSION_ID>
-axon sessions delete <SESSION_ID>
-axon sessions read <THREAD_ID>
-axon sessions resume <THREAD_ID>
+axon sessions show <id>
+axon sessions reset <id>
+axon sessions delete <id>
+axon sessions read <id>
+axon sessions resume <id>
 axon sessions replay [--provider-call-id <id>]
 axon sessions output [--max-chars <n>]
 axon sessions export [--output <path>]
@@ -51,7 +52,9 @@ axon sessions doctor [--repair]
 
 `axon sessions` 是 `debug session` 的提层入口，子命令一一对应；两者行为一致，用户面文档只写前者。
 
-`axon run --session <id>` 只追加到已存在的会话：ID 不存在时直接报错并提示先 `axon sessions list`，不会隐式新建空会话。`axon sessions resume <id>` 只设置 `--continue` 的默认目标，不改变会话内容；带 `--session` 的 run 结束后该默认目标保持运行前的值。
+`<id>` 两个清单里的身份都收：`axon sessions list` 的会话 ID 与 `debug session list` 的 Thread ID。入口先按 Thread 直接命中，未命中再回落到该会话的运行窗口（`sessions.run_session_id`），因此按清单里的 ID 直接执行不会撞上「未找到 thread」。
+
+`axon run --session <id>` 只追加到已存在的会话：ID 不存在时直接报错并提示先 `axon sessions list`，不会隐式新建空会话。`axon sessions resume <id>` 只设置 `--continue` 的默认目标，不改变会话内容；随后的 `axon run --continue` 按指针解析出同一段 Thread 再恢复历史（指针为空时取最近一段根会话）。带 `--session` 的 run 结束后该默认目标保持运行前的值。
 
 ## 4. 相关文档
 

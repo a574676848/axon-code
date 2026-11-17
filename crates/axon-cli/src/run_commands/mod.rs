@@ -31,6 +31,7 @@ mod run_environment_context;
 mod run_execution;
 mod run_failover;
 mod run_file_change_projection;
+pub(crate) mod run_job_lifecycle_events;
 mod run_json_wire_events;
 mod run_mailbox_persistence;
 mod run_memory_autonomy;
@@ -537,7 +538,11 @@ fn publish_turn_metrics(config_path: &Path, record: &RunSessionRecord) {
     };
     let now_ms = axon_time::unix_now_ms();
     // CLI 直连时该会话可能尚未登记：先补齐运行时行，否则事件无处归属。
-    if store.get_session(&session_id).is_err() {
+    // 但复合车道已经认领这段运行窗口时不能再登记一条：同一段对话会在 `sessions list`
+    // 里出现两条（一条有轮次、一条空壳），用户按清单恢复时会挑到空壳那条。
+    if store.get_session(&session_id).is_err()
+        && !crate::session_commands::run_window_has_lane(&store, &record.session_id)
+    {
         let cwd = record.cwd.clone().unwrap_or_default();
         let _ = store.create_session(&session_id, &cwd, now_ms);
     }
@@ -563,8 +568,13 @@ fn publish_turn_metrics(config_path: &Path, record: &RunSessionRecord) {
         cache_read_tokens: usage.cache_read_input_tokens,
         cache_write_tokens: usage.cache_write_input_tokens,
         generation_speed_tps: record.generation_speed_tps,
-        background_jobs_started: 0,
-        background_jobs_running: 0,
+        // 作业计数来自真实生产者：本模块订阅作业生命周期事件，这里只读结果。
+        background_jobs_started: crate::run_commands::run_job_lifecycle_events::take_started_count(
+            &record.session_id,
+        ),
+        background_jobs_running: crate::run_commands::run_job_lifecycle_events::running_count(
+            &record.session_id,
+        ),
         outcome: axon_eventlog::TurnOutcome::Succeeded,
         tool_calls: u32::try_from(record.tool_calls.len()).unwrap_or(u32::MAX),
     };

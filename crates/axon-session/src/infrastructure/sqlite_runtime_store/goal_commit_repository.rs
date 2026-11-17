@@ -234,7 +234,7 @@ fn ensure_execution(
         .map_err(storage_error)?;
     let inserted = transaction
         .execute(
-            "INSERT INTO work_items(execution_id,goal_id,session_id,attempt,priority,dedupe_key,status,context_version,payload_json,lease_json,retry_at_ms,checkpoint_json,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,?5,?6,'queued',?7,?8,NULL,NULL,NULL,?9,?10) ON CONFLICT(execution_id) DO NOTHING",
+            "INSERT INTO work_items(execution_id,goal_id,session_id,kind,attempt,priority,dedupe_key,status,context_version,payload_json,lease_json,retry_at_ms,checkpoint_json,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,'goal',?4,?5,?6,'queued',?7,?8,NULL,NULL,NULL,?9,?10) ON CONFLICT(execution_id) DO NOTHING",
             params![
                 execution.execution_id.as_str(),
                 execution.goal_id.as_str(),

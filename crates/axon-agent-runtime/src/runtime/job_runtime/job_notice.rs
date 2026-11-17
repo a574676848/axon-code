@@ -5,16 +5,6 @@
 
 use super::*;
 
-/// 完成通知所需的作业事实；在持锁期间组装、在释放锁之后投递。
-pub(super) struct JobNoticeFacts {
-    pub(super) owner_id: String,
-    pub(super) producer: JobProducerKind,
-    pub(super) label: String,
-    pub(super) terminal: JobTerminalState,
-    pub(super) summary: Option<String>,
-    pub(super) artifact_ref: PathBuf,
-}
-
 pub(super) fn build_job_notice(id: JobId, facts: JobNoticeFacts) -> Option<CompletionNotice> {
     let kind = facts.terminal.status.terminal_kind()?;
     let epoch = runtime_epoch();

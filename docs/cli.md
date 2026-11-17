@@ -125,7 +125,8 @@ Axon 自行判断是否继续既有工作，并按工作区自动管理上下文
 ```bash
 axon sessions list                     # 列出会话（含标题、最近活动与轮次）
 axon sessions list --all               # 含归档会话
-axon sessions resume <THREAD_ID>       # 设置 --continue 的默认目标
+axon sessions resume <id>               # 设置 --continue 的默认目标（会话 ID 或 Thread ID）
+axon sessions reset <id>                # 保留会话与历史，只换一段新的运行窗口
 ```
 
 人设与人格状态的字段、模式与体积预算见 [人格系统](./persona.md)；`axon doctor --check persona` 给出同一条判定。

@@ -1,8 +1,12 @@
 {
-  "recordedAt": "2026-11-01T07:52:25.9906398Z",
+  "recordedAt": "2026-11-17T08:26:51.747383+08:00",
   "measurements": {
     "p1_endpoint_reads_assertion": 1,
-    "p12_file_route_hits": 0
+    "p12_file_route_hits": 0,
+    "runtime_data_mib": 6,
+    "event_append_p99_ms": 0.539,
+    "control_tx_p95_ms": 0.137,
+    "sessions_first_page_ms": 1.0
   },
   "manual": {
     "p2_offline_start_ms": 1821,

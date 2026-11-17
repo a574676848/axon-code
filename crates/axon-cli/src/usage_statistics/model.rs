@@ -91,7 +91,7 @@ impl UsageStatus {
     }
 }
 
-/// 从 rollout 投影出的使用事实。
+/// 从 Thread 用量索引投影出的使用事实。
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct UsageFact {
     pub(super) session_id: String,

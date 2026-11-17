@@ -158,6 +158,17 @@ pub trait RuntimeStore:
         &self,
         session_id: &DaemonSessionId,
     ) -> Result<SessionRuntimeRecord, RuntimeStoreError>;
+    /// 后台任务计数投影：`started` 为真表示作业开始，为假表示作业收口。
+    ///
+    /// 由作业生命周期事件的生产者调用；同一会话的计数只增不减到 0 为止，
+    /// 因此重复投递同一条事件最多让 `jobs_running` 偏大，不会变成负数。
+    fn apply_job_delta(
+        &self,
+        session_id: &DaemonSessionId,
+        started: bool,
+        failed: bool,
+        now_ms: u64,
+    ) -> Result<(), RuntimeStoreError>;
     /// 限量接管 owner lease 已失效的非终态 Session。
     fn recover_expired_sessions(
         &self,

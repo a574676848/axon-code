@@ -27,9 +27,11 @@ use std::{
 use axon_domain::{AxonError, AxonResult};
 
 use super::{
+    job_record::{Job, JobNoticeFacts},
+    lifecycle::{JobCompleted, JobLifecycleEvent, JobStarted, publish_job_lifecycle},
     notice::{CompletionNotice, publish_completion_notice, publish_completion_notices},
     producer::{
-        JOB_REASON_EXECUTION_ERROR, JobExecution, JobProducer, JobProducerKind, JobTerminalState,
+        JOB_REASON_EXECUTION_ERROR, JobProducer, JobProducerKind, JobTerminalState,
         bounded_job_reason,
     },
     shell_producer::SHELL_JOB_PRODUCER,
@@ -133,100 +135,6 @@ pub struct JobTail {
     pub full_output_available: bool,
 }
 
-/// 作业终态记录。
-struct JobTerminal {
-    status: JobStatus,
-    exit_code: Option<i32>,
-    reason: Option<String>,
-    ended_at: Instant,
-}
-
-/// 单个后台作业。
-struct Job {
-    owner_id: String,
-    label: String,
-    producer: JobProducerKind,
-    started: Instant,
-    last_activity: Instant,
-    execution: Box<dyn JobExecution>,
-    terminal: Option<JobTerminal>,
-}
-
-impl Job {
-    /// 推进作业状态：取消、超时、空闲超时与自然结束。
-    ///
-    /// 返回本次推进是否**首次**进入终态；调用方据此在释放作业锁之后再产出完成通知，
-    /// 避免持锁回调。
-    fn poll(&mut self, now: Instant, idle_timeout: Duration) -> std::io::Result<bool> {
-        if self.terminal.is_some() {
-            return Ok(false);
-        }
-        let outcome = self.execution.poll(now, self.last_activity + idle_timeout);
-        if outcome.is_err() && self.execution.terminal().is_none() {
-            // 执行体自身推进失败时不留下半途状态：终止它并投影为失败终态。
-            let _ = self.execution.terminate();
-        }
-        let terminal = self.execution.terminal();
-        let mut newly_terminal = false;
-        if let Some(terminal) = terminal {
-            newly_terminal = self.mark_terminal(terminal);
-        }
-        outcome.map(|()| newly_terminal)
-    }
-
-    fn mark_terminal(&mut self, state: JobTerminalState) -> bool {
-        if self.terminal.is_some() {
-            return false;
-        }
-        self.terminal = Some(JobTerminal {
-            status: state.status,
-            exit_code: state.exit_code,
-            reason: state.reason,
-            ended_at: Instant::now(),
-        });
-        true
-    }
-
-    /// 组装完成通知所需的全部事实；未终态时为 `None`。
-    ///
-    /// 结算正文与完整结果引用分开取：引用优先使用生产者给出的结果归档，
-    /// 缺失时退回作业自身的输出归档：前者指向落盘的完整结果，
-    /// 后者指向流式输出归档，两者都不参与正文截断（§4 不变量 6）。
-    fn notice_facts(&self) -> Option<JobNoticeFacts> {
-        let terminal = self.terminal.as_ref()?;
-        let settlement = self.execution.notice_settlement();
-        Some(JobNoticeFacts {
-            owner_id: self.owner_id.clone(),
-            producer: self.producer,
-            label: self.label.clone(),
-            terminal: JobTerminalState {
-                status: terminal.status,
-                exit_code: terminal.exit_code,
-                reason: terminal.reason.clone(),
-            },
-            summary: settlement
-                .as_ref()
-                .and_then(|settlement| settlement.final_message.clone()),
-            artifact_ref: settlement
-                .as_ref()
-                .and_then(|settlement| settlement.final_artifact_ref.clone())
-                .map_or_else(|| self.execution.artifact_path(), PathBuf::from),
-        })
-    }
-
-    fn status(&self) -> JobStatus {
-        self.terminal
-            .as_ref()
-            .map_or(JobStatus::Running, |terminal| terminal.status)
-    }
-
-    fn exit_code(&self) -> Option<i32> {
-        self.terminal
-            .as_ref()
-            .and_then(|terminal| terminal.exit_code)
-    }
-}
-
 /// 已回收作业的墓碑；仅用于区分「曾存在但已回收」与「从未存在」。
 struct JobTombstone {
     job_id: JobId,
@@ -306,19 +214,30 @@ impl JobRuntime {
         let id = JobId(self.next_id.fetch_add(1, Ordering::Relaxed));
         let execution = producer.start(id, payload)?;
         let now = Instant::now();
+        let started_at_ms = axon_time::unix_now_ms();
         let job = Job {
             owner_id,
             label,
             producer: producer.kind(),
             started: now,
+            started_at_ms,
             last_activity: now,
             execution,
             terminal: None,
+        };
+        let started_event = JobStarted {
+            job_id: id.0,
+            owner_id: job.owner_id.clone(),
+            producer: job.producer,
+            label: job.label.clone(),
+            started_at_ms,
         };
         self.jobs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id, Arc::new(Mutex::new(job)));
+        // 事件在注册表插入之后广播：订阅方据此读到的一定是「已在册」的作业。
+        publish_job_lifecycle(JobLifecycleEvent::Started(started_event));
         Ok(id)
     }
 
@@ -412,6 +331,7 @@ impl JobRuntime {
         }
         if newly_terminal {
             self.publish_notice(id, &job);
+            self.publish_lifecycle_completed(id, &job);
         }
         self.project(id, &job)
     }
@@ -459,6 +379,7 @@ impl JobRuntime {
         };
         if newly_terminal {
             self.publish_notice(id, &job);
+            self.publish_lifecycle_completed(id, &job);
         }
         Ok(status)
     }
@@ -539,6 +460,39 @@ impl JobRuntime {
         if let Some(facts) = facts {
             publish_job_notice(id, facts);
         }
+    }
+
+    /// 产出一条作业终态事件；只在首次进入终态时调用。
+    ///
+    /// 事件在释放作业锁之后才广播：订阅方要写盘、要读注册表，持锁回调会把作业线程
+    /// 与宿主线程串成死锁。
+    fn publish_lifecycle_completed(&self, id: JobId, job: &Arc<Mutex<Job>>) {
+        let event = {
+            let job = job
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(terminal) = job.terminal.as_ref() else {
+                return;
+            };
+            let Some(terminal_kind) = terminal.status.terminal_kind() else {
+                return;
+            };
+            JobLifecycleEvent::Completed(JobCompleted {
+                job_id: id.0,
+                owner_id: job.owner_id.clone(),
+                producer: job.producer,
+                terminal: terminal_kind,
+                reason: terminal.reason.clone(),
+                exit_code: terminal.exit_code,
+                elapsed_ms: u64::try_from(
+                    terminal.ended_at.duration_since(job.started).as_millis(),
+                )
+                .ok(),
+                started_at_ms: job.started_at_ms,
+                ended_at_ms: axon_time::unix_now_ms(),
+            })
+        };
+        publish_job_lifecycle(event);
     }
 
     /// 按 owner 立即释放已进入终态的作业（父 turn 结束时调用）。
@@ -647,7 +601,7 @@ impl JobRuntime {
 #[path = "job_notice.rs"]
 mod job_notice;
 
-use job_notice::{JobNoticeFacts, build_job_notice, publish_job_notice};
+use job_notice::{build_job_notice, publish_job_notice};
 
 #[path = "job_reaper.rs"]
 mod job_reaper;

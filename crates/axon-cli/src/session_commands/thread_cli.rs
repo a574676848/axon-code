@@ -16,7 +16,9 @@ use crate::{
     management_commands::{cli_error, json_result},
 };
 
-use super::{bounded_session_limit, display_path, thread_event_issue_summaries};
+use super::{
+    bounded_session_limit, display_path, resolve_session_target, thread_event_issue_summaries,
+};
 use crate::runtime_paths::runtime_axon_root_path;
 
 const SESSION_READ_PREVIEW_CHARS: usize = 240;
@@ -137,6 +139,7 @@ struct SessionReadReport {
 struct SessionResumeReport {
     status: &'static str,
     thread_id: String,
+    session_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -215,7 +218,11 @@ pub(crate) fn run_session_show(
         Ok(root) => root,
         Err(error) => return cli_error(error),
     };
-    let detail = match thread_service().read_thread(&root, &command.session_id) {
+    let target = match resolve_session_target(config_path, &command.session_id) {
+        Ok(target) => target,
+        Err(error) => return cli_error(error),
+    };
+    let detail = match thread_service().read_thread(&root, &target.thread_id) {
         Ok(detail) => detail,
         Err(error) => return cli_error(error),
     };
@@ -238,7 +245,11 @@ pub(crate) fn run_session_read(
         Ok(root) => root,
         Err(error) => return cli_error(error),
     };
-    let thread = match thread_service().read_thread(&root, &command.thread_id) {
+    let target = match resolve_session_target(config_path, &command.thread_id) {
+        Ok(target) => target,
+        Err(error) => return cli_error(error),
+    };
+    let thread = match thread_service().read_thread(&root, &target.thread_id) {
         Ok(thread) => thread,
         Err(error) => return cli_error(error),
     };
@@ -261,16 +272,21 @@ pub(crate) fn run_session_resume(
         Ok(root) => root,
         Err(error) => return cli_error(error),
     };
+    let target = match resolve_session_target(config_path, &command.thread_id) {
+        Ok(target) => target,
+        Err(error) => return cli_error(error),
+    };
     if let Err(error) = thread_service().resume_thread(
         &root,
         &ResumeThreadCommand {
-            thread_id: command.thread_id.clone(),
+            thread_id: target.thread_id.clone(),
             recorded_at_ms: now_ms(),
         },
     ) {
         return cli_error(error);
     }
-    if let Err(error) = crate::run_commands::select_resume_session(config_path, &command.thread_id)
+    // 指针写会话身份：`--continue` 要靠它重建同一条车道的渠道与投递目标。
+    if let Err(error) = crate::run_commands::select_resume_session(config_path, &target.session_id)
     {
         return cli_error(error);
     }
@@ -278,7 +294,8 @@ pub(crate) fn run_session_resume(
         format,
         &SessionResumeReport {
             status: "session_resumed",
-            thread_id: command.thread_id.clone(),
+            thread_id: target.thread_id,
+            session_id: target.session_id,
         },
     )
 }
@@ -292,8 +309,12 @@ pub(crate) fn run_session_fork(
         Ok(root) => root,
         Err(error) => return cli_error(error),
     };
+    let target = match resolve_session_target(config_path, &command.thread_id) {
+        Ok(target) => target,
+        Err(error) => return cli_error(error),
+    };
     let service = thread_service();
-    let source = match service.read_thread(&root, &command.thread_id) {
+    let source = match service.read_thread(&root, &target.thread_id) {
         Ok(source) => source,
         Err(error) => return cli_error(error),
     };
@@ -308,7 +329,7 @@ pub(crate) fn run_session_fork(
     if let Err(error) = service.fork_thread(
         &root,
         ForkThreadCommand {
-            source_thread_id: command.thread_id.clone(),
+            source_thread_id: target.thread_id.clone(),
             new_thread_id: new_thread_id.clone(),
             settings: Some(settings),
             ephemeral: false,
@@ -321,7 +342,7 @@ pub(crate) fn run_session_fork(
         format,
         &SessionForkReport {
             status: "session_forked",
-            source_thread_id: command.thread_id.clone(),
+            source_thread_id: target.thread_id,
             new_thread_id,
         },
     )
@@ -336,7 +357,11 @@ pub(crate) fn run_session_export(
         Ok(root) => root,
         Err(error) => return cli_error(error),
     };
-    let detail = match thread_service().read_thread(&root, &command.session_id) {
+    let target = match resolve_session_target(config_path, &command.session_id) {
+        Ok(target) => target,
+        Err(error) => return cli_error(error),
+    };
+    let detail = match thread_service().read_thread(&root, &target.thread_id) {
         Ok(detail) => detail,
         Err(error) => return cli_error(error),
     };
@@ -534,7 +559,10 @@ fn render_resume(format: OutputFormat, report: &SessionResumeReport) -> CliRunRe
         OutputFormat::Json => json_result(report),
         OutputFormat::Text => CliRunResult {
             exit_code: 0,
-            stdout: format!("已恢复 Thread: {}\n", report.thread_id),
+            stdout: format!(
+                "已恢复 Thread: {}\n- session: {}\n",
+                report.thread_id, report.session_id
+            ),
             stderr: String::new(),
         },
     }

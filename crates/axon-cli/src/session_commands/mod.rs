@@ -5,24 +5,27 @@ use axon_crypto::sha256_hex;
 use clap::{Args, Subcommand};
 use serde::Serialize;
 
+use axon_domain::{DaemonSessionId, RuntimeHostId};
 use axon_session::{
-    JsonlThreadEventStore, ThreadEvent, ThreadEventReadIssue, ThreadEventStore as _,
-    ThreadListQuery, ThreadService,
+    JsonlThreadEventStore, RuntimeStore as _, SqliteRuntimeStore, ThreadEvent,
+    ThreadEventReadIssue, ThreadEventStore as _, ThreadListQuery, ThreadService,
 };
 
 use crate::{
     CliRunResult, OutputFormat,
     management_commands::{cli_error, json_result, resolved_config_path},
-    runtime_paths::runtime_axon_root_path,
+    runtime_paths::{runtime_axon_data_path_static, runtime_axon_root_path},
 };
 
 mod output;
 mod replay;
+mod session_resolution;
 mod sessions_list;
 mod thread_cli;
 
 use output::{SessionOutputCommand, run_session_output};
 use replay::{SessionReplayCommand, run_session_replay};
+pub(crate) use session_resolution::{resolve_session_target, run_window_has_lane};
 use sessions_list::{SessionsListCommand, run_sessions_list};
 pub(crate) use thread_cli::session_summary_views_for_root;
 use thread_cli::{
@@ -56,6 +59,8 @@ pub enum SessionSubcommand {
     Resume(SessionResumeCommand),
     /// Fork 一个新 Thread。
     Fork(SessionForkCommand),
+    /// 轮换运行实例：保留会话与历史，只换一段新的运行窗口。
+    Reset(SessionResetCommand),
     /// 删除旧 run 会话记录。
     Delete(SessionDeleteCommand),
     /// 导出单个会话的 ref-only 摘要。
@@ -74,6 +79,15 @@ pub struct SessionDoctorCommand {
     /// 显式请求修复；当前诊断命令默认只读，避免隐式改写事件流。
     #[arg(long)]
     pub repair: bool,
+}
+
+/// `axon sessions reset` 参数。
+///
+/// 只换运行窗口，不动会话本身与历史：新的 `run_session_id` 之后，旧的运行态读数不再累加。
+#[derive(Debug, Clone, Args, PartialEq, Eq)]
+pub struct SessionResetCommand {
+    /// 会话 ID（会话清单 ID 或 Thread ID 均可）。
+    pub session_id: String,
 }
 
 /// `axon debug session delete` 参数。
@@ -108,6 +122,7 @@ pub(crate) fn run_session(
         SessionSubcommand::Read(command) => run_session_read(format, &path, command),
         SessionSubcommand::Resume(command) => run_session_resume(format, &path, command),
         SessionSubcommand::Fork(command) => run_session_fork(format, &path, command),
+        SessionSubcommand::Reset(command) => run_session_reset(format, &path, command),
         SessionSubcommand::Delete(command) => run_session_delete(format, &path, command),
         SessionSubcommand::Export(command) => run_session_export(format, &path, command),
         SessionSubcommand::Replay(command) => run_session_replay(format, &path, command),
@@ -140,6 +155,8 @@ pub enum SessionsSubcommand {
     Resume(SessionResumeCommand),
     /// Fork 一个新会话。
     Fork(SessionForkCommand),
+    /// 轮换运行实例：保留会话与历史，只换一段新的运行窗口。
+    Reset(SessionResetCommand),
     /// 删除会话记录。
     Delete(SessionDeleteCommand),
     /// 导出会话摘要。
@@ -168,6 +185,7 @@ pub(crate) fn run_sessions(
         Some(SessionsSubcommand::Read(sub)) => run_session_read(format, &path, sub),
         Some(SessionsSubcommand::Resume(sub)) => run_session_resume(format, &path, sub),
         Some(SessionsSubcommand::Fork(sub)) => run_session_fork(format, &path, sub),
+        Some(SessionsSubcommand::Reset(sub)) => run_session_reset(format, &path, sub),
         Some(SessionsSubcommand::Delete(sub)) => run_session_delete(format, &path, sub),
         Some(SessionsSubcommand::Export(sub)) => run_session_export(format, &path, sub),
         Some(SessionsSubcommand::Replay(sub)) => run_session_replay(format, &path, sub),
@@ -223,6 +241,11 @@ fn run_session_delete(
         Ok(path) => path,
         Err(error) => return cli_error(error),
     };
+    // 入参可能是会话清单里的车道 ID，也可能是 Thread ID：先解析再按 Thread 清理事件流。
+    let target = match resolve_session_target(config_path, &command.session_id) {
+        Ok(target) => target,
+        Err(error) => return cli_error(error),
+    };
     let store = JsonlThreadEventStore;
     let records = match store.read_all(&root) {
         Ok(records) => records,
@@ -231,14 +254,14 @@ fn run_session_delete(
     let before = records.len();
     let kept = records
         .into_iter()
-        .filter(|record| record.thread_id != command.session_id)
+        .filter(|record| record.thread_id != target.thread_id)
         .collect::<Vec<_>>();
     let deleted_events = before.saturating_sub(kept.len());
     if deleted_events == 0 {
         return cli_error(format!("未找到会话：{}", command.session_id));
     }
     if let Err(error) =
-        JsonlThreadEventStore.rewrite_thread_with_records(&root, &command.session_id, &kept)
+        JsonlThreadEventStore.rewrite_thread_with_records(&root, &target.thread_id, &kept)
     {
         return cli_error(error);
     }
@@ -250,6 +273,66 @@ fn run_session_delete(
         remaining_events: kept.len(),
     };
     render_delete(format, &report)
+}
+
+fn run_session_reset(
+    format: OutputFormat,
+    config_path: &Path,
+    command: &SessionResetCommand,
+) -> CliRunResult {
+    let data_root = match runtime_axon_data_path_static(config_path) {
+        Ok(root) => root,
+        Err(error) => return cli_error(error),
+    };
+    let store = SqliteRuntimeStore::from_root(data_root);
+    if let Err(error) = store.initialize() {
+        return cli_error(error.to_string());
+    }
+    // 入参可能是会话清单里的车道 ID，也可能是 Thread ID：先按会话身份直读，读不到再按
+    // Thread 解析回它归属的会话。reset 是会话级操作，没有 Thread 的空会话同样可以轮换。
+    let given = command.session_id.trim().to_owned();
+    let session = match DaemonSessionId::new(given.clone()) {
+        Ok(session) => session,
+        Err(_) => return cli_error(format!("会话 ID 非法：{given}")),
+    };
+    let resolved = match store.get_session(&session) {
+        Ok(record) => record,
+        Err(_) => {
+            let target = match resolve_session_target(config_path, &given) {
+                Ok(target) => target,
+                Err(error) => return cli_error(error),
+            };
+            match DaemonSessionId::new(target.session_id.clone())
+                .map_err(|_| format!("会话 ID 非法：{}", target.session_id))
+                .and_then(|id| store.get_session(&id).map_err(|error| error.to_string()))
+            {
+                Ok(record) => record,
+                Err(error) => return cli_error(error),
+            }
+        }
+    };
+    let now_ms = axon_time::unix_now_ms();
+    let host_id = match RuntimeHostId::new(format!("cli-reset-{}", std::process::id())) {
+        Ok(host_id) => host_id,
+        Err(error) => return cli_error(error.to_string()),
+    };
+    let host = match store.claim_host(&host_id, std::process::id(), None, now_ms, 60_000) {
+        Ok(host) => host,
+        Err(error) => return cli_error(error.to_string()),
+    };
+    let record = match store.reset_session(&resolved.session_id, &resolved.cwd, &host, now_ms) {
+        Ok(record) => record,
+        Err(error) => return cli_error(error.to_string()),
+    };
+    render_reset(
+        format,
+        &SessionResetReport {
+            status: "session_reset",
+            session_id: record.session_id.as_str().to_owned(),
+            run_session_id: record.run_session_id,
+            cwd: record.cwd,
+        },
+    )
 }
 
 fn run_session_doctor(
@@ -371,6 +454,29 @@ pub(super) fn thread_event_issue_summaries(issues: &[ThreadEventReadIssue]) -> V
     warnings
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionResetReport {
+    status: &'static str,
+    session_id: String,
+    run_session_id: String,
+    cwd: String,
+}
+
+fn render_reset(format: OutputFormat, report: &SessionResetReport) -> CliRunResult {
+    match format {
+        OutputFormat::Json => json_result(report),
+        OutputFormat::Text => CliRunResult {
+            exit_code: 0,
+            stdout: format!(
+                "已轮换运行实例: {}\n- run_session_id: {}\n- cwd: {}\n",
+                report.session_id, report.run_session_id, report.cwd
+            ),
+            stderr: String::new(),
+        },
+    }
+}
+
 fn render_delete(format: OutputFormat, report: &SessionDeleteReport) -> CliRunResult {
     match format {
         OutputFormat::Json => json_result(report),
@@ -424,3 +530,7 @@ fn display_path(path: &Path) -> String {
 #[cfg(test)]
 #[path = "sessions_list_tests.rs"]
 mod sessions_list_tests;
+
+#[cfg(test)]
+#[path = "session_reset_tests.rs"]
+mod session_reset_tests;
