@@ -83,8 +83,16 @@
 > 追加约定：T6 的「只换 run_generation」在服务端由 `axon sessions reset <id>` 触达（已实现并有单测）；
 > TUI 的 `/reset` 是同一会话上的本地运行实例复位，两者语义在台账 W4-5 行已注明。
 
-## 环境副作用登记
+## 已知缺陷（发版阻断）
 
+真机复验时发现一处渲染一致性缺陷，在修复前不发布：
+
+- **回放与实时是两条独立的投影路径**。实时链路按 wire 事件逐条构造 `user` / `reasoning` / `tool` / `job` / `subagent` / `assistant` / `summary` 各类单元；历史回放只构造 `user`（`reducer.ts` 的 `history-user:<interactionId>`）与最终文本两类。
+- 后果一：打开会话后思考过程、工具调用、作业与子代理卡片全部消失。
+- 后果二：打开会话时先按富形态渲染一帧，回放落地后被瘦形态整体替换，正文内容瞬间塌掉，体感就是整屏闪烁。
+- 修法：收敛为单一投影函数，实时与回放都只喂同一串 Thread 事件，只保留一套 cell 构造；并补一条契约测试「同一串事件全量重放与逐条增量喂入的最终 cells 必须深相等」。
+
+## 环境副作用登记
 - 源码安装走 `scripts/install-from-source.ps1 -Components all`（当前唯一合规入口）。脚本会静默提权、重建版本树并拉起一次 Daemon 与桌面端；验证前已全部终止。
 - 该次 Daemon 启动会向真实 `$HOME/.axon` 追加运行态写入；已删除其留下的 `data/daemon.pid`，真实 `config.toml` 哈希未变，真实数据未删除。
 - 验证期间桌面端以 `--remote-debugging-port=9333` 启动，验证结束必须清掉该环境变量与调试端口。
