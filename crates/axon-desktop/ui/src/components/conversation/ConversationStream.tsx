@@ -372,16 +372,24 @@ export const ConversationStream: React.FC<ConversationStreamProps> = ({
             </div>
           )}
           {windowedTurns.map(({ turn, index, hiddenCells: turnHidden }) => (
-            <TurnBlock
+            /*
+             * 只有链尾这一块带入场类：新轮次追加时它会重新挂载，因此只浮一次；
+             * 已有的轮次不会重播动画，滚动位置也不受影响。
+             */
+            <div
               key={turn.id}
-              turn={turn}
-              turnNumber={index + 1}
-              hiddenCells={turnHidden}
-              onAnchor={registerAnchor}
-              onOpenChange={openChange}
-              retryEnabled={turn.id === lastTurn?.id}
-              memoized={index < windowedTurns.length - MEMOIZED_TURNS}
-            />
+              className={index === windowedTurns.length - 1 ? 'turn-enter' : undefined}
+            >
+              <TurnBlock
+                turn={turn}
+                turnNumber={index + 1}
+                hiddenCells={turnHidden}
+                onAnchor={registerAnchor}
+                onOpenChange={openChange}
+                retryEnabled={turn.id === lastTurn?.id}
+                memoized={index < windowedTurns.length - MEMOIZED_TURNS}
+              />
+            </div>
           ))}
 
           {conclusion !== null && (

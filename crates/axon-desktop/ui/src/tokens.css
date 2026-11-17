@@ -882,6 +882,34 @@ summary:focus-visible {
 }
 
 /*
+ * 新轮次入场：只给链尾那一块一次轻微上浮淡入。
+ *
+ * 三条边界写在结构里：只有重新挂载的链尾块带这个类，历史轮次不会重播；只动 opacity 与
+ * transform，不触发布局；减弱动效下直接到位，不做位移。时长压在一屏之内，读起来是内容
+ * 自然长出来，而不是一屏突然出现。
+ */
+@keyframes turn-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.turn-enter {
+  animation: turn-enter 160ms var(--ease-spring-smooth) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .turn-enter {
+    animation: none;
+  }
+}
+
+/*
  * 模态入场：只动 opacity 与 transform。
  * 退场由 `data-state="closed"` 的 110ms 缩放淡出负责（见 `.modal-spring-surface`）。
  */
