@@ -269,13 +269,23 @@ try {
         $_.Path -and ([IO.Path]::GetDirectoryName($_.Path) -ieq $releaseBin)
     } | Stop-Process -Force
     if ($plan.InstallDesktop) {
-        Push-Location (Join-Path $root "crates\axon-desktop\ui")
-        try {
-            & npm ci
-            if ($LASTEXITCODE -ne 0) { throw "前端依赖安装失败" }
-            & npm run build
-            if ($LASTEXITCODE -ne 0) { throw "前端构建失败" }
-        } finally { Pop-Location }
+        # 前置环境变量用于「前端产物已就绪、只需重装二进制」的运维场景：
+        # 提权子进程里重复执行 npm ci 会清空 node_modules 再重装，失败即中断整次安装。
+        if ($env:AXON_SKIP_WEB_BUILD -eq "1") {
+            if (-not (Test-Path (Join-Path $root "crates\axon-desktop\ui\dist\index.html"))) {
+                throw "AXON_SKIP_WEB_BUILD=1 但 ui\dist 不存在，无法沿用它"
+            }
+            Write-Host "[axon] 跳过前端构建（AXON_SKIP_WEB_BUILD=1），沿用现有 ui\dist。" -ForegroundColor Yellow
+        }
+        else {
+            Push-Location (Join-Path $root "crates\axon-desktop\ui")
+            try {
+                & npm ci
+                if ($LASTEXITCODE -ne 0) { throw "前端依赖安装失败" }
+                & npm run build
+                if ($LASTEXITCODE -ne 0) { throw "前端构建失败" }
+            } finally { Pop-Location }
+        }
     }
     $packages = [System.Collections.Generic.List[string]]::new()
     if ($plan.InstallBackend) { $packages.Add("axon-cli") }
