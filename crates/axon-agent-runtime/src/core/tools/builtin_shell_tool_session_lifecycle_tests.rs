@@ -25,12 +25,15 @@ const NEVER_ISSUED_SESSION_ID: &str = "00000000-0000-0000-0000-000000000000";
 const INITIAL_YIELD_MS: u64 = 3_000;
 /// 后续交互窗口。
 const INTERACTION_YIELD_MS: u64 = 1_000;
-/// 等待命令进入终态的最大轮询次数。
+/// 等待命令进入终态的总预算。
 ///
-/// 全量测试并行运行上千个用例时，进程启动可能远超单次等待窗口；因此用
-/// **有界轮询**等待终态，而不是把窗口调大了事：调大窗口只会把偶发失败推后，
-/// 轮询才能消除对机器负载的依赖。
-const TERMINAL_WAIT_ATTEMPTS: usize = 20;
+/// 全量测试并行运行上千个用例时，pty 里的进程启动可能远超单次等待窗口；因此按
+/// **总预算轮询**等待终态：预算要足够覆盖高负载下的真实启动耗时，同时仍然有界，
+/// 真挂死时照样失败退出。此前按次数（20 次 × 25ms）轮询，负载一高就在第 4 秒
+/// 判失败，属于把机器负载写进了判据。
+const TERMINAL_WAIT_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
+/// 两次轮询之间的间隔。
+const TERMINAL_WAIT_INTERVAL_MS: u64 = 50;
 
 /// 终态会话在保留窗口内仍可被工具取回，因此终态回执必须携带 `session_id`。
 #[test]
@@ -202,7 +205,8 @@ fn execute_terminal_command(owner_id: &str) -> ShellCommandExecutionReceipt {
         .execute(execution_input(command, owner_id), None)
         .expect("命令应执行成功");
 
-    for _ in 0..TERMINAL_WAIT_ATTEMPTS {
+    let deadline = std::time::Instant::now() + TERMINAL_WAIT_BUDGET;
+    while std::time::Instant::now() < deadline {
         if receipt.status != ShellCommandExecutionStatus::Running {
             return receipt;
         }
@@ -210,7 +214,7 @@ fn execute_terminal_command(owner_id: &str) -> ShellCommandExecutionReceipt {
             .session_id
             .clone()
             .expect("Running 会话必须返回 session_id");
-        std::thread::sleep(std::time::Duration::from_millis(25));
+        std::thread::sleep(std::time::Duration::from_millis(TERMINAL_WAIT_INTERVAL_MS));
         receipt = manager
             .write_stdin(
                 write_input_with_yield(&session_id, owner_id, None, false, Some(0)),

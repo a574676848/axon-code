@@ -484,19 +484,23 @@ fn render_read_text(report: &SessionReadReport) -> String {
             compaction.before_tokens, compaction.after_tokens, compaction.through_sequence
         );
     }
-    for turn in &report.thread.turns {
+    for (index, turn) in report.thread.turns.iter().enumerate() {
         stdout.push('\n');
-        stdout.push_str(&render_turn_text(turn));
+        stdout.push_str(&render_turn_text(index, turn));
     }
     stdout
 }
 
-fn render_turn_text(turn: &Turn) -> String {
+/// 单轮正文。
+///
+/// `index` 是这一轮在 Thread 里的位置，从 0 起；`Turn.sequence` 是事件序列号（写入侧目前恒为 0），
+/// 直接拿它当编号会让每一轮都显示成 `Turn 0`，因此编号只按位置来。
+fn render_turn_text(index: usize, turn: &Turn) -> String {
     let user = turn_user_content(turn);
     let assistant = turn_assistant_content(turn);
     let mut text = format!(
         "Turn {} · {}\n- turn_id: {}\n- started_at_ms: {}\n- completed_at_ms: {}\n- user_sha256: {}\n- assistant_sha256: {}\n- user_chars: {}\n- assistant_chars: {}\n",
-        turn.sequence,
+        index,
         turn_status_label(turn),
         turn.turn_id,
         turn.started_at_ms,

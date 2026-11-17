@@ -128,7 +128,9 @@ test('同一末段的极端索引不退化：按目录唯一定位，按裸名�
         assert.equal(index.match(`pkg${position * 20}/index.ts`).length, 1);
     }
     const elapsed = Date.now() - started;
-    assert.ok(elapsed < 200, `同名末段 200 次反查耗时 ${elapsed}ms，超出预算`);
+    // 这条守的是「别退化成全表扫描」，不是机器跑得多快：4096 条上退化成线性扫描会是秒级，
+    // 而并行跑全量用例时的调度抖动就能把 200ms 吃掉。预算因此按量级留足。
+    assert.ok(elapsed < 1500, `同名末段 200 次反查耗时 ${elapsed}ms，超出预算`);
 });
 
 test('会话锚点：改动路径与参数路径都进索引，超大参数不解析', () => {
@@ -167,5 +169,6 @@ test('性能守门：4096 条索引上连续反查 1000 次', () => {
         assert.equal(resolution.status, 'resolved');
     }
     const elapsed = Date.now() - started;
-    assert.ok(elapsed < 200, `1000 次反查耗时 ${elapsed}ms，超出预算`);
+    // 与上一条同一口径：守的是复杂度不是机器速度，预算按量级留足。
+    assert.ok(elapsed < 1500, `1000 次反查耗时 ${elapsed}ms，超出预算`);
 });

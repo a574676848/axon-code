@@ -57,3 +57,26 @@ fn genuine_failure_and_completion_keep_their_own_labels() {
         "Interrupted"
     );
 }
+
+#[test]
+fn turn_headings_follow_position_not_event_sequence() {
+    // 写入侧把每一轮的事件序列号都落成 0；编号照抄 sequence 时，三轮会全显示成 Turn 0。
+    let completed = turn(TurnStatus::Completed, None);
+    let headings: Vec<String> = (0..3)
+        .map(|index| {
+            super::render_turn_text(index, &completed)
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(
+        headings,
+        vec![
+            "Turn 0 · Completed",
+            "Turn 1 · Completed",
+            "Turn 2 · Completed"
+        ]
+    );
+}
