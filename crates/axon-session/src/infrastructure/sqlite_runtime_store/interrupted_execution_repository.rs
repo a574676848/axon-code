@@ -100,13 +100,18 @@ fn quarantine_running(
     SqliteRuntimeStore::ensure_fence(&transaction, host, now_ms)?;
     let now = i64_value(now_ms)?;
     let mut records = Vec::new();
-    for (execution_id, goal_id, session_id) in read_candidates(&transaction, now, limit, selector)?
-    {
-        let payload = uncertain_payload(&execution_id, &goal_id);
-        if !settle_uncertain(&transaction, now, &execution_id, &goal_id, &payload)? {
+    for candidate in read_candidates(&transaction, now, limit, selector)? {
+        let payload = uncertain_payload(&candidate.execution_id, candidate.goal_id.as_deref());
+        if !settle_uncertain(
+            &transaction,
+            now,
+            &candidate.execution_id,
+            candidate.goal_id.as_deref(),
+            &payload,
+        )? {
             continue;
         }
-        let Some(session_id) = session_id else {
+        let Some(session_id) = candidate.session_id else {
             continue;
         };
         let Ok(session_id) = DaemonSessionId::new(session_id) else {
@@ -132,12 +137,19 @@ fn quarantine_running(
     Ok(records)
 }
 
+/// 一条待隔离的 running 执行行；`goal_id` 为空表示它没有所属目标。
+struct InterruptedCandidate {
+    execution_id: String,
+    goal_id: Option<String>,
+    session_id: Option<String>,
+}
+
 fn read_candidates(
     transaction: &Transaction<'_>,
     now: i64,
     limit: u32,
     selector: CandidateSelector<'_>,
-) -> Result<Vec<(String, String, Option<String>)>, RuntimeStoreError> {
+) -> Result<Vec<InterruptedCandidate>, RuntimeStoreError> {
     let (sql, owner_host_id, owner_generation) = match selector {
         CandidateSelector::ExpiredLease => (
             "SELECT execution_id,goal_id,session_id FROM work_items \
@@ -174,18 +186,25 @@ fn read_candidates(
     rows.collect::<Result<Vec<_>, _>>().map_err(storage)
 }
 
-fn read_candidate_row(
-    row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<(String, String, Option<String>)> {
-    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+fn read_candidate_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InterruptedCandidate> {
+    // `work_items.goal_id` 对会话动作恒为空（入站领取写的就是 NULL），按非空字符串
+    // 读会让 supervisor 的隔离扫描每次都在这里失败，整个 tick 一并停摆。
+    Ok(InterruptedCandidate {
+        execution_id: row.get(0)?,
+        goal_id: row.get::<_, Option<String>>(1)?,
+        session_id: row.get(2)?,
+    })
 }
 
 /// 把一条 running Execution 收敛为 `uncertain`；已被其他事务处理时返回 false。
+///
+/// `goal_id` 为 `None` 表示这条执行没有所属目标（会话动作）：结果账本与目标状态都
+/// 没有可写入的归属，只留状态收敛与 ledger 事件这两处真实事实。
 fn settle_uncertain(
     transaction: &Transaction<'_>,
     now: i64,
     execution_id: &str,
-    goal_id: &str,
+    goal_id: Option<&str>,
     payload: &str,
 ) -> Result<bool, RuntimeStoreError> {
     let changed = transaction
@@ -199,29 +218,31 @@ fn settle_uncertain(
     if changed == 0 {
         return Ok(false);
     }
-    transaction
-        .execute(
-            "INSERT INTO goal_results(result_id,goal_id,execution_id,succeeded,summary,\
-             receipt_refs_json,artifact_refs_json,error_kind,created_at_ms) \
-             SELECT ?1,?2,?3,0,?4,'[]','[]',?5,?6 \
-             WHERE NOT EXISTS(SELECT 1 FROM goal_results WHERE execution_id=?3)",
-            params![
-                format!("result-uncertain-{execution_id}"),
-                goal_id,
-                execution_id,
-                INTERRUPTED_SUMMARY,
-                UNCERTAIN_ERROR_KIND,
-                now
-            ],
-        )
-        .map_err(storage)?;
-    transaction
-        .execute(
-            "UPDATE goals SET status=?1,revision=revision+1,updated_at_ms=?2 \
-             WHERE goal_id=?3 AND status IN ('proposed','active')",
-            params![WAITING_GOAL_STATUS, now, goal_id],
-        )
-        .map_err(storage)?;
+    if let Some(goal_id) = goal_id {
+        transaction
+            .execute(
+                "INSERT INTO goal_results(result_id,goal_id,execution_id,succeeded,summary,\
+                 receipt_refs_json,artifact_refs_json,error_kind,created_at_ms) \
+                 SELECT ?1,?2,?3,0,?4,'[]','[]',?5,?6 \
+                 WHERE NOT EXISTS(SELECT 1 FROM goal_results WHERE execution_id=?3)",
+                params![
+                    format!("result-uncertain-{execution_id}"),
+                    goal_id,
+                    execution_id,
+                    INTERRUPTED_SUMMARY,
+                    UNCERTAIN_ERROR_KIND,
+                    now
+                ],
+            )
+            .map_err(storage)?;
+        transaction
+            .execute(
+                "UPDATE goals SET status=?1,revision=revision+1,updated_at_ms=?2 \
+                 WHERE goal_id=?3 AND status IN ('proposed','active')",
+                params![WAITING_GOAL_STATUS, now, goal_id],
+            )
+            .map_err(storage)?;
+    }
     let event_id = JarvisEventId::new(format!("event-{LEDGER_EVENT_TYPE}-{execution_id}"))
         .map_err(|error| RuntimeStoreError::InvalidId(error.to_string()))?;
     transaction
@@ -288,7 +309,7 @@ fn update_session_owner(
     Ok(())
 }
 
-fn uncertain_payload(execution_id: &str, goal_id: &str) -> String {
+fn uncertain_payload(execution_id: &str, goal_id: Option<&str>) -> String {
     serde_json::json!({
         "executionId": execution_id,
         "goalId": goal_id,

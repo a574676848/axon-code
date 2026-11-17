@@ -115,7 +115,7 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
 | `subscribe` 回 `subscription_rejected` | 目标标识类型用错（车道标识当 `sessionId`）、目标不存在，或目标执行会话与请求工作区不匹配 |
 | 有 `subscribed` 但长时间没有事件帧 | 目标 Interaction 已结束且无历史帧；先用 `GET /gateway/v1/interactions/<id>` 确认状态 |
 | 事件帧解析失败 | `payload_json` 是字符串化 JSON，且同帧内命名风格混合 |
-| 界面报「连接被重置」（`WebSocket protocol error: Connection reset without closing handshake`） | `data/logs/axon-<日期>.log` 的 `[gateway-ws] 连接级失败 peer=... 原因=...`：有该行是服务端读到了非正常断开，无该行说明断在链路层 |
+| 界面报「连接被重置」（`WebSocket protocol error: Connection reset without closing handshake`） | `data/logs/axon-<日期>.log` 的 `[gateway-ws] 连接级失败 peer=... 原因=...`：默认级别（`[agent] log_level` 缺省 `warn`）只记服务端自身故障；对端主动走人（桌面端刷新、进程退出、端口探测）记在 `debug` 级别，要逐条追溯就把 `[agent] log_level` 设为 `debug`，或临时用 `AXON_LOG_LEVEL=debug` 启动。两种级别都没有该行，说明断在链路层 |
 
 ## 调用脚本
 

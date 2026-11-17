@@ -24,6 +24,9 @@ mod sqlite_runtime_store_execution_session_tests;
 #[path = "sqlite_runtime_store_goal_activity_tests.rs"]
 mod sqlite_runtime_store_goal_activity_tests;
 #[cfg(test)]
+#[path = "sqlite_runtime_store_goal_less_tests.rs"]
+mod sqlite_runtime_store_goal_less_tests;
+#[cfg(test)]
 #[path = "sqlite_runtime_store_health_tests.rs"]
 mod sqlite_runtime_store_health_tests;
 #[cfg(test)]

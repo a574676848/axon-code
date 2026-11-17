@@ -396,9 +396,15 @@ fn protected_release_paths(root: &Path, releases_dir: &Path) -> Result<BTreeSet<
     if !lease_dir.exists() {
         return Ok(protected);
     }
-    let leases =
-        fs::read_dir(&lease_dir).map_err(|error| format!("读取运行 release 租约失败: {error}"))?;
+    // 目录可能在 exists 与 read_dir 之间消失：最后一份租约被持有者收口时整目录也就不
+    // 再需要，此时没有运行中的 release 要保护，不能把整轮回收一起判死。
+    let leases = match fs::read_dir(&lease_dir) {
+        Ok(leases) => leases,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(protected),
+        Err(error) => return Err(format!("读取运行 release 租约失败: {error}")),
+    };
     for lease in leases {
+        // 列举失败一律放弃回收：读不到的条目可能就是运行中的 release。
         let lease = lease.map_err(|error| format!("读取运行 release 租约条目失败: {error}"))?;
         if !lease
             .file_type()
@@ -407,8 +413,11 @@ fn protected_release_paths(root: &Path, releases_dir: &Path) -> Result<BTreeSet<
         {
             return Err("运行 release 租约目录包含非文件条目".to_owned());
         }
-        let target = fs::read_to_string(lease.path())
-            .map_err(|error| format!("读取运行 release 租约失败: {error}"))?;
+        // 租约在列举与读取之间消失：持有者进程已收口并删掉了自己的租约，
+        // 这一份不再保护任何 release。
+        let Some(target) = read_release_lease(&lease.path())? else {
+            continue;
+        };
         if target.trim().is_empty() {
             return Err("运行 release 租约为空".to_owned());
         }
@@ -428,6 +437,18 @@ fn protected_release_paths(root: &Path, releases_dir: &Path) -> Result<BTreeSet<
         protected.insert(release);
     }
     Ok(protected)
+}
+
+/// 读取一份运行 release 租约；条目在列举之后被持有者删除时返回 `None`。
+///
+/// 持有者进程收口时会删掉自己的租约文件，回收扫描与这条收口天然并发。租约消失意味着
+/// 那份 release 已经不再被任何进程使用，属于正常收口而不是读取故障。
+fn read_release_lease(path: &Path) -> Result<Option<String>, String> {
+    match fs::read_to_string(path) {
+        Ok(target) => Ok(Some(target)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("读取运行 release 租约失败: {error}")),
+    }
 }
 
 fn release_owner_alive(pid: u32) -> bool {
@@ -550,6 +571,23 @@ mod tests {
 
         assert!(garbage_collect_releases(root.path()).is_err());
         assert!(obsolete.exists());
+    }
+
+    #[test]
+    fn vanished_release_lease_is_treated_as_already_released() {
+        let root = axon_test_support::test_temp_dir();
+        let lease = root.path().join("4242.lease");
+        fs::write(&lease, b"release-dir").expect("写入租约");
+        assert_eq!(
+            read_release_lease(&lease).expect("读取租约"),
+            Some("release-dir".to_owned())
+        );
+        // 持有者进程收口时删掉自己的租约，回收扫描正好在同一瞬间列举到了它。
+        fs::remove_file(&lease).expect("持有者收口");
+        assert_eq!(
+            read_release_lease(&lease).expect("消失的租约不是回收故障"),
+            None
+        );
     }
 
     fn create_release(releases: &Path, name: &str) -> PathBuf {

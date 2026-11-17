@@ -39,14 +39,23 @@ pub fn goal_list(limit: Option<u32>, workspace_id: Option<String>) -> Result<Val
 /// 不发请求，也不让一个畸形的标识把路由拼到别的资源上。
 #[tauri::command(async)]
 pub fn goal_get(goal_id: String) -> Result<Value, String> {
+    let goal_id = validate_goal_id(&goal_id)?;
+    get(&format!("/goals/{goal_id}"))
+}
+
+/// 校验并规整目标标识。
+///
+/// 去掉首尾空白后必须非空；含路径分隔符、查询串或片段的标识直接拒绝，既不发请求，
+/// 也不让一个畸形的标识把路由拼到别的资源上。
+fn validate_goal_id(goal_id: &str) -> Result<&str, &'static str> {
     let goal_id = goal_id.trim();
     if goal_id.is_empty() {
-        return Err("目标标识不能为空".to_string());
+        return Err("目标标识不能为空");
     }
     if goal_id.contains(['/', '?', '#']) {
-        return Err("目标标识不合法".to_string());
+        return Err("目标标识不合法");
     }
-    get(&format!("/goals/{goal_id}"))
+    Ok(goal_id)
 }
 
 /// GET 一个网关接口，并把非 2xx 翻译成可执行的中文说明。
@@ -63,19 +72,20 @@ fn get(path: &str) -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::goal_get;
+    use super::validate_goal_id;
 
     #[test]
     fn goal_identifiers_are_checked_before_any_request() {
         // 空标识与带路径分隔符的标识都在本地被拒，不会拼出一个越界路径。
-        assert!(goal_get("   ".to_owned()).is_err());
-        assert!(goal_get("goal-1/../../secret".to_owned()).is_err());
-        assert!(goal_get("goal-1?limit=1".to_owned()).is_err());
-        assert!(goal_get("goal-1#frag".to_owned()).is_err());
-        // 合法标识通过校验，随后由网关可达性决定成败；本机没有网关时只要求
-        // 错误不是参数校验那两条。
-        let error = goal_get("goal-01234567-89ab-cdef-0123-456789abcdef".to_owned())
-            .expect_err("没有运行中的网关时不应返回数据");
-        assert!(!error.contains("目标标识"));
+        // 这里只校验标识本身：请求属于运行态，单测不得打真实网关。
+        assert!(validate_goal_id("   ").is_err());
+        assert!(validate_goal_id("goal-1/../../secret").is_err());
+        assert!(validate_goal_id("goal-1?limit=1").is_err());
+        assert!(validate_goal_id("goal-1#frag").is_err());
+        // 合法标识原样透传，首尾空白必须去掉，不能把空格带进路由。
+        assert_eq!(
+            validate_goal_id(" goal-01234567-89ab-cdef-0123-456789abcdef ").expect("合法标识"),
+            "goal-01234567-89ab-cdef-0123-456789abcdef"
+        );
     }
 }

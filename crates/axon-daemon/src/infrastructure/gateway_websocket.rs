@@ -126,9 +126,15 @@ fn run_server(listener: TcpListener, stop: Arc<AtomicBool>, context: GatewayCont
                     // 否则分不清是进程退出、写不动还是链路被拆。安装态的 stderr 不进任何
                     // 文件（Windows 计划任务把子进程输出交给 `Out-Host`），因此走 logger，
                     // 日志落在 data/logs 的当日文件里。
-                    axon_logger::error(&format!(
-                        "[gateway-ws] 连接级失败 peer={peer} 原因={error}"
-                    ));
+                    //
+                    // 对端主动走人（桌面端刷新、进程退出、端口探测）只记 debug：那是最
+                    // 常见的连接终点，按 error 记会把真正的服务端故障埋掉。
+                    let message = format!("[gateway-ws] 连接级失败 peer={peer} 原因={error}");
+                    if is_peer_disconnect(&error) {
+                        axon_logger::debug(&message);
+                    } else {
+                        axon_logger::error(&message);
+                    }
                 }
             });
         }
@@ -478,6 +484,9 @@ use gateway_websocket_event::*;
 #[path = "gateway_websocket_frames.rs"]
 mod gateway_websocket_frames;
 use gateway_websocket_frames::*;
+#[path = "gateway_websocket_peer.rs"]
+mod gateway_websocket_peer;
+use gateway_websocket_peer::*;
 #[cfg(test)]
 mod tests {
     use super::*;

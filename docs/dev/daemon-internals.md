@@ -116,7 +116,7 @@ Windows 实测基线（`--release`，1k/10k backlog 与 8 线程并发入口）�
 | 10k backlog | 2.22ms | 3.51ms | 23.34s | 11.61MB → 11.87MB | 4.17MB |
 | 并发入口 8 线程/1000 动作 | 1.19ms | 1.62ms | 2.29s（另有 2.04s 结算） | 8.87MB → 13.63MB | 4.15MB |
 
-事实源存储策略固定为：进程内连接池 + WAL + `synchronous=FULL`。`synchronous=FULL` 是因为已提交的外部副作用事实必须承受断电级故障，崩溃恢复只依赖已提交记录，不做重放猜测。写事务统一使用 `TransactionBehavior::Immediate`，使写锁争用落到 `busy_timeout` 上而不是立即返回 `SQLITE_BUSY`。写锁等待上限生产默认为 5 秒；`SqliteRuntimeStore::with_busy_timeout` 允许注入更小的上限，使「超过等待上限后有界失败且不留下幽灵 claim」的确定性验证不必空转完整生产超时。WAL 体积有硬上限：连接统一设置 `journal_size_limit = 64 MiB`，并显式钉住 `wal_autocheckpoint = 1000` 页。没有上限时 WAL 会随每次写入增长到与主库同量级（实测 708 MiB / 703 MiB），一次 checkpoint 需要回写整库并独占写锁数十秒，所有写者按 `busy_timeout` 排队失败。
+事实源存储策略固定为：进程内连接池 + WAL + `synchronous=NORMAL`。`synchronous=NORMAL` 是 WAL 下的推荐档位：`COMMIT` 不再逐事务 `fsync`，只在 checkpoint 与显式同步点落盘，代价是断电可能丢掉最近一小段已提交事务，而库结构不会损坏；运行态事实（会话状态、队列、事件水位）接受这一语义弱化，崩溃恢复按「以日志为准回退水位、从结算记录重建叙述」设计。写事务统一使用 `TransactionBehavior::Immediate`，使写锁争用落到 `busy_timeout` 上而不是立即返回 `SQLITE_BUSY`。写锁等待上限生产默认为 1 秒，到期返回 `Busy` 交由上层可观测地失败并等下一次 tick 重试，而不是无限阻塞；`SqliteRuntimeStore::with_busy_timeout` 允许注入更小的上限，使「超过等待上限后有界失败且不留下幽灵 claim」的确定性验证不必空转完整生产超时。WAL 体积有硬上限：连接统一设置 `journal_size_limit = 64 MiB`，并显式钉住 `wal_autocheckpoint = 1000` 页。没有上限时 WAL 会随每次写入增长到与主库同量级（实测 708 MiB / 703 MiB），一次 checkpoint 需要回写整库并独占写锁数十秒，所有写者按 `busy_timeout` 排队失败。
 
 ### 事件存储布局与回收
 

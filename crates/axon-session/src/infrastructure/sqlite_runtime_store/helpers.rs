@@ -169,7 +169,12 @@ impl SqliteRuntimeStore {
     pub(crate) fn read_action(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionActionRecord> {
         Ok(SessionActionRecord {
             action_id: parse_action_id(row.get(0)?)?,
-            goal_id: Some(parse_goal_id(row.get(1)?)?),
+            // 会话动作（session_id 类）没有所属目标：goal_id 列为空是常态，
+            // 按非空字符串读会让每个会话动作都报「Invalid column type Null」。
+            goal_id: row
+                .get::<_, Option<String>>(1)?
+                .map(parse_goal_id)
+                .transpose()?,
             session_id: parse_session_id(row.get(2)?)?,
             kind: row.get(3)?,
             priority: row.get(4)?,
