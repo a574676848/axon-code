@@ -51,14 +51,6 @@ pub const COMPRESSION_CONTEXT_WINDOW_DENOMINATOR: u64 = 10;
 pub fn default_axon_cli_allowed_subcommands() -> Vec<String> {
     Vec::new()
 }
-/// 标准远控 cursor 最大事件数。
-pub const STANDARD_REMOTE_MAX_EVENTS_PER_CURSOR: usize = 200;
-/// 标准远控最大 payload 字节数。
-pub const STANDARD_REMOTE_MAX_PAYLOAD_BYTES: usize = 65_536;
-/// 高吞吐远控 cursor 最大事件数。
-pub const HIGH_THROUGHPUT_REMOTE_MAX_EVENTS_PER_CURSOR: usize = 1_000;
-/// 高吞吐远控最大 payload 字节数。
-pub const HIGH_THROUGHPUT_REMOTE_MAX_PAYLOAD_BYTES: usize = 262_144;
 /// 用户级 Axon 根目录名。
 pub const USER_AXON_DIR: &str = ".axon";
 /// Windows 用户配置目录名。

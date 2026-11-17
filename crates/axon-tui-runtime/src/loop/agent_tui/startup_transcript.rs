@@ -12,7 +12,7 @@ const STARTUP_TITLE: &str = "Axon Personal Agent";
 const AXON_LOGO: &str = "  ⚡\n╭────────╮\n│  <>×<> │\n│  AXON  │\n╰────────╯";
 const AXON_SLOGAN_PRIMARY: &str = "知你所想，办你所托。";
 const AXON_SLOGAN_SECONDARY: &str =
-    "融入你的工作区与工作节奏，在每一次交互中持续深化认知的专属个人智能体。";
+    "融入你的工作区与工作节奏，在每一次交互中持续深化认知的专属助理。";
 const AXON_SLOGAN_EN: &str = "Knowing Your Intent, Delivering Your Outcome - A personal agent deeply woven into your workspace, evolving with every interaction.";
 const AXON_GITHUB_URL: &str = "https://github.com/a574676848/axon-code";
 

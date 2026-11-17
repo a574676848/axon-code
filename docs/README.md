@@ -1,6 +1,6 @@
 # Axon 文档中心
 
-Axon 是基于 Rust 构建的专属个人智能体（Personal Agent）与战术协同平台，**知你所想，办你所托**（*Knowing Your Intent, Delivering Your Outcome*）。它在桌面工作台、终端界面与命令行之间共享同一套会话、记忆与技能，在每一次交互中持续深化认知。
+Axon 是基于 Rust 构建的专属助理（Personal Agent）与战术协同平台，**知你所想，办你所托**（*Knowing Your Intent, Delivering Your Outcome*）。它在桌面工作台、终端界面与命令行之间共享同一套会话、记忆与技能，在每一次交互中持续深化认知。
 
 本页只索引**产品文档**：讲用户能看到、能操作、能配置的行为。开发者与维护者文档见文末的开发者入口。
 

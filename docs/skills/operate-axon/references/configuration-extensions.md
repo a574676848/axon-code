@@ -73,7 +73,6 @@ axon mcp logout <server-id>           # 清除本地 token 与待完成会话
 | `channel_balancer.telemetry_persistence_enabled` | 是否把渠道遥测样本持久化到 `data/channel-metrics` |
 | `memory.embedding.enabled` | 是否启用长期记忆 embedding 检索 |
 | `memory.embedding.model` | Memory 嵌入向量模型，引用顶层 model catalog 的 name 或 id |
-| `remote.mode` | 网关事件流吞吐模式，`standard` 适合默认场景，`high-throughput` 适合高频事件流 |
 | `remote.gateway.api_token_env` | Gateway API token 的环境变量名 |
 | `remote.gateway.http_bind` | Gateway HTTP 面监听地址 |
 | `remote.gateway.websocket_bind` | Gateway WebSocket 面监听地址 |

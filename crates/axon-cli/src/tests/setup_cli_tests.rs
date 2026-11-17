@@ -218,7 +218,7 @@ fn setup_agent_config_supports_empty_and_linked_config_values() {
   "baseUrl": "https://api.example.com/v1",
   "model": "gpt-4o",
   "configValues": {
-    "remote.mode": "high-throughput"
+    "remote.gateway.legacy_token_enabled": "false"
   }
 }"#,
     )
@@ -236,7 +236,7 @@ fn setup_agent_config_supports_empty_and_linked_config_values() {
 
     assert_eq!(result.exit_code, 0, "{}", result.stderr);
     let loaded = ConfigLoader::load_from_path(&config_path).unwrap();
-    assert_eq!(loaded.config.remote.mode.as_str(), "high-throughput");
+    assert!(!loaded.config.remote.gateway.legacy_token_enabled);
     assert!(root.join(".env").is_file());
     let env_text = fs::read_to_string(root.join(".env")).unwrap();
     assert!(env_text.contains("AXON_GATEWAY_API_TOKEN="));
@@ -250,10 +250,12 @@ fn config_keys_json_exposes_setup_choices_for_linked_fields() {
     assert_eq!(result.exit_code, 0, "{}", result.stderr);
     let keys: Value = serde_json::from_str(&result.stdout).unwrap();
     let specs = keys.as_array().unwrap();
-    assert_eq!(find_key(specs, "remote.mode")["setup_module"], "remote");
-    let mode = find_key(specs, "remote.mode");
-    assert_eq!(mode["setup_module"], "remote");
-    assert_eq!(mode["options"], serde_json::json!(["standard", "high-throughput"]));
+    assert_eq!(
+        find_key(specs, "remote.gateway.legacy_token_enabled")["setup_module"],
+        "remote"
+    );
+    let legacy_token = find_key(specs, "remote.gateway.legacy_token_enabled");
+    assert_eq!(legacy_token["options"], serde_json::json!(["true", "false"]));
     assert!(
         specs
             .iter()

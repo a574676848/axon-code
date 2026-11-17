@@ -28,10 +28,6 @@ affinity_ttl_ms = 300000
 # 是否持久化渠道遥测样本；可选值：true、false；默认值：false。
 telemetry_persistence_enabled = false
 
-[remote]
-# 远控吞吐模式；可选值：standard、high-throughput；默认值："standard"。
-mode = "standard"
-
 [remote.gateway]
 # Gateway API token 的环境变量名；可选值：字母、数字、下划线组成的非空名称；默认值："AXON_GATEWAY_API_TOKEN"。
 api_token_env = "AXON_GATEWAY_API_TOKEN"

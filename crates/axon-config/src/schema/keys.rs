@@ -3,7 +3,7 @@ use std::fmt;
 use axon_domain::{AxonError, AxonResult};
 use serde::Serialize;
 
-use crate::{AxonConfig, RemoteMode, keys_specs::CONFIG_KEY_SPECS};
+use crate::{AxonConfig, keys_specs::CONFIG_KEY_SPECS};
 
 /// 配置值类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -107,8 +107,7 @@ fn get_non_terminal_config_value(config: &AxonConfig, key: &str) -> Option<Confi
         "memory.embedding.model" => {
             Some(ConfigValue::String(config.memory.embedding.model.clone()))
         }
-        "remote.mode"
-        | "remote.gateway.api_token_env"
+        "remote.gateway.api_token_env"
         | "remote.gateway.http_bind"
         | "remote.gateway.websocket_bind"
         | "remote.gateway.auth_keys"
@@ -119,7 +118,6 @@ fn get_non_terminal_config_value(config: &AxonConfig, key: &str) -> Option<Confi
 
 fn get_remote_config_value(config: &AxonConfig, key: &str) -> Option<ConfigValue> {
     match key {
-        "remote.mode" => Some(ConfigValue::String(config.remote.mode.as_str().to_owned())),
         "remote.gateway.api_token_env" => Some(ConfigValue::String(
             config.remote.gateway.api_token_env.clone(),
         )),
@@ -200,11 +198,6 @@ fn set_core_config_value(config: &mut AxonConfig, key: &str, raw_value: &str) ->
 
 fn set_remote_config_value(config: &mut AxonConfig, key: &str, raw_value: &str) -> AxonResult<()> {
     match key {
-        "remote.mode" => {
-            config.remote.mode = RemoteMode::parse(raw_value).ok_or(AxonError::config_invalid(
-                "remote.mode 必须为 standard 或 high-throughput",
-            ))?;
-        }
         "remote.gateway.api_token_env" => {
             config.remote.gateway.api_token_env = parse_string(raw_value)?;
         }

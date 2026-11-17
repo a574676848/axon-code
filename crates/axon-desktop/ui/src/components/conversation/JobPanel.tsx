@@ -3,8 +3,9 @@ import { ChevronRightIcon, StopIcon } from '../../icons';
 import { formatDurationUnits } from '../../conversation/format';
 import type { JobRow } from '../../conversation/transcript';
 import { isActiveJob } from '../../conversation/runtimeFacts';
-import { StateDot, type StateDotState } from '../ui/surfaces';
+import { StateDot } from '../ui/surfaces';
 import { DisclosureRow } from './DisclosureRow';
+import { jobDotState } from './jobRowStatus';
 import { useJobStream } from './useJobStream';
 import * as ipc from '../../ipc';
 
@@ -35,17 +36,6 @@ const STATUS_MAX = 'max-w-[60%]';
  * 都标成「未正常退出」。结论必须有证据：作业真的被判成失败、终止、超时才画这个标签。
  */
 const ABNORMAL_JOB_TERMINAL = new Set(['failed', 'killed', 'timeout', 'unresponsive', 'refusal']);
-
-/** 作业状态到状态点的映射；表与参考实现的作业列表逐项一致。 */
-function jobDotState(status: string): StateDotState {
-  if (status === 'running') return 'ongoing';
-  // 正在停止与被停同属「按人的意思收口」，与参考实现共用警示色。
-  if (status === 'stopping' || status === 'killed') return 'warning';
-  if (status === 'completed') return 'done';
-  if (status === 'failed') return 'error';
-  // 既没在跑也没结果的中间态：排队等待与未知状态都落在这一档。
-  return 'idle';
-}
 
 /** 状态的展示文案。 */
 function statusLabel(status: string): string {
@@ -317,7 +307,7 @@ export const JobLine: React.FC<JobLineProps> = ({
             open={observable ? expanded : undefined}
             onToggle={observable ? onToggle : undefined}
             rowRole="menuitem"
-            icon={<StateDot state={jobDotState(job.status)} />}
+            icon={<StateDot state={jobDotState(job.status, { running, stopped: stoppedReason !== null })} />}
             label="命令"
             title={<span className="font-mono">{job.command}</span>}
             titleText={job.command}

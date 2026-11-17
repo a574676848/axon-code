@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { deriveJobs } from '../src/conversation/transcript/derive.ts';
 import { activeJobCount } from '../src/conversation/runtimeFacts.ts';
+import { jobDotState } from '../src/components/conversation/jobRowStatus.ts';
 
 /** 工具单元的最小事实：派生作业行只读这些字段。 */
 const toolCell = (overrides = {}) => ({
@@ -129,4 +130,21 @@ test('进行中计数以活作业名册为权威，启动快照不会把已收�
     assert.equal(activeJobCount([{ status: 'running', jobId: null }], new Set()), 1);
     // 名册清空即全部收口。
     assert.equal(activeJobCount(rows, new Set()), 0);
+});
+
+test('状态点只在作业确实在跑时转圈', () => {
+    // 状态词是转录里的历史快照：名册已不再持有它时，行内文案已经写「已结束」，
+    // 状态点不能还挂着那一枚转圈，否则收口的作业会永远转下去。
+    assert.equal(jobDotState('running', { running: false, stopped: false }), 'idle');
+    // 确实在跑：只有这一档才转。
+    assert.equal(jobDotState('running', { running: true, stopped: false }), 'ongoing');
+    // 本轮被用户停下、状态词还没翻过来：与 killed 同档，共用警示色。
+    assert.equal(jobDotState('running', { running: false, stopped: true }), 'warning');
+    // 终态各自的状态点不受活动事实影响，正在停止也仍是琥珀而不是转圈。
+    assert.equal(jobDotState('completed', { running: false, stopped: false }), 'done');
+    assert.equal(jobDotState('failed', { running: false, stopped: false }), 'error');
+    assert.equal(jobDotState('killed', { running: false, stopped: false }), 'warning');
+    assert.equal(jobDotState('stopping', { running: true, stopped: false }), 'warning');
+    // 排队与未知状态落在静息灰点。
+    assert.equal(jobDotState('pending', { running: false, stopped: false }), 'idle');
 });

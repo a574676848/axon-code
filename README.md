@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>知你所想，办你所托。</strong><br>
-  <sub>融入你的工作区与工作节奏，在每一次交互中持续深化认知的专属个人智能体。</sub><br>
+  <sub>融入你的工作区与工作节奏，在每一次交互中持续深化认知的专属助理。</sub><br>
   <sub><em>Knowing Your Intent, Delivering Your Outcome - A personal agent deeply woven into your workspace, evolving with every interaction.</em></sub>
 </p>
 
@@ -20,7 +20,7 @@
 
 ---
 
-Axon 是为个人与工程创造者打造的**专属个人智能体与首席战术副官（Personal Agent & Tactical Aide）**。系统恪守严格的洋葱架构（Onion Architecture），在**跨平台桌面端（Desktop Workbench）**、**终端全屏交互（Terminal TUI）**与**无头命令行（Headless CLI）**之间复用同一套高性能 Agent 运行时、状态机模型、工具权限边界、模型路由以及上下文认知体系。
+Axon 是为个人与工程创造者打造的**专属助理与首席战术副官（Personal Agent & Tactical Aide）**。系统恪守严格的洋葱架构（Onion Architecture），在**跨平台桌面端（Desktop Workbench）**、**终端全屏交互（Terminal TUI）**与**无头命令行（Headless CLI）**之间复用同一套高性能 Agent 运行时、状态机模型、工具权限边界、模型路由以及上下文认知体系。
 
 ## 核心特性
 

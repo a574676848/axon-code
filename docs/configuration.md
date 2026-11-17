@@ -98,14 +98,13 @@ Axon 使用以下用户级目录布局：
 
 | 配置项 | 类型 | 可选值/范围 | 默认值 |
 | --- | --- | --- | --- |
-| `remote.mode` | 字符串 | `standard`、`high-throughput` | `"standard"` |
 | `remote.gateway.api_token_env` | 字符串 | 仅含字母、数字、下划线的非空名称 | `"AXON_GATEWAY_API_TOKEN"` |
 | `remote.gateway.http_bind` | 字符串 | 有效的 IP:端口地址 | `"127.0.0.1:3143"` |
 | `remote.gateway.websocket_bind` | 字符串 | 有效的 IP:端口地址 | `"127.0.0.1:3144"` |
 | `remote.gateway.auth_keys` | 字符串 | 多 Key 存储文件路径；空串表示后端运行时根下 `data/gateway/auth-keys.json` | `""` |
 | `remote.gateway.legacy_token_enabled` | 布尔值 | `true`、`false`；关闭后全局 token 不再对业务路由生效，只有签发的 Key 生效 | `true` |
 
-`remote.mode` 只改变运行时内部的 cursor 与 payload 预算，不再单独配置事件数或字节上限。Gateway 默认仅监听本机地址；对外提供服务时把两个 bind 改到需要的网卡，并按部署方的运维策略放行端口。
+Gateway 默认仅监听本机地址；对外提供服务时把两个 bind 改到需要的网卡，并按部署方的运维策略放行端口。
 
 #### 网关凭据分两级
 
@@ -460,9 +459,6 @@ axon --config ./.axon/config.toml run "分析当前项目"
 Gateway 是 Daemon 对桌面端与外部系统暴露的 HTTP 与 WebSocket 面。配置文件只保存监听地址、凭据变量名与多 Key 存储位置：
 
 ```toml
-[remote]
-mode = "standard"
-
 [remote.gateway]
 api_token_env = "AXON_GATEWAY_API_TOKEN"
 http_bind = "127.0.0.1:3143"
@@ -473,13 +469,6 @@ websocket_bind = "127.0.0.1:3144"
 # 桌面端只需填 http 这一个地址与端口，事件流端口由 GET /api/v1/system/status
 # 的 webSocketPort 自报，客户端据此把 WebSocket 请求指到同一主机的该端口。
 ```
-
-`remote.mode` 是网关事件流吞吐治理的用户入口：
-
-| 模式 | 适用场景 |
-|------|----------|
-| `standard` | 常规事件频率，默认选择 |
-| `high-throughput` | 高频事件流、密集并发订阅 |
 
 完整命令与状态机见 [CLI 参考](./cli.md) 的 daemon 与 cron 部分。
 

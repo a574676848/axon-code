@@ -7,7 +7,7 @@ fn user_config_file_save_and_load_roundtrip() {
         .join(format!("axon-config-{}-roundtrip.toml", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let mut config = AxonConfig::default();
-    config.remote.mode = RemoteMode::HighThroughput;
+    config.channel_balancer.failure_threshold = 5;
     config.providers.push(crate::ProviderConfig::new(
         "openai",
         "openai",
@@ -37,10 +37,10 @@ fn user_config_file_save_and_load_roundtrip() {
     assert!(!saved.contains("memory_internal"));
     assert!(!saved.contains("concurrency ="));
     assert!(!saved.contains("reasoning_effort = \"medium\""));
-    assert!(saved.contains("mode = \"high-throughput\""));
+    assert!(saved.contains("failure_threshold = 5"));
     let loaded = ConfigLoader::load_from_path(&path).unwrap();
 
-    assert_eq!(loaded.config.remote.mode, RemoteMode::HighThroughput);
+    assert_eq!(loaded.config.channel_balancer.failure_threshold, 5);
 
     let _ = std::fs::remove_file(path);
 }
@@ -144,7 +144,7 @@ fn save_to_path_backs_up_only_before_content_changes() {
     assert_eq!(config_backup_count(&root), 0);
 
     let mut updated = original;
-    updated.remote.mode = crate::RemoteMode::HighThroughput;
+    updated.channel_balancer.failure_threshold = 5;
     ConfigLoader::save_to_path(&path, &updated).unwrap();
     assert_eq!(config_backup_count(&root), 1);
     let backup = std::fs::read_dir(&root)
@@ -164,7 +164,7 @@ fn save_to_path_backs_up_only_before_content_changes() {
     assert!(
         std::fs::read_to_string(&path)
             .unwrap()
-            .contains("mode = \"high-throughput\"")
+            .contains("failure_threshold = 5")
     );
 }
 
@@ -284,13 +284,13 @@ fn save_to_path_writes_in_place_without_leaving_temporary_files() {
     ConfigLoader::save_to_path(&path, &AxonConfig::default()).unwrap();
 
     let mut updated = AxonConfig::default();
-    updated.remote.mode = crate::RemoteMode::HighThroughput;
+    updated.channel_balancer.failure_threshold = 5;
     ConfigLoader::save_to_path(&path, &updated).unwrap();
 
     assert!(
         std::fs::read_to_string(&path)
             .unwrap()
-            .contains("mode = \"high-throughput\"")
+            .contains("failure_threshold = 5")
     );
 
     let leftovers: Vec<String> = std::fs::read_dir(&root)
@@ -326,7 +326,7 @@ fn save_to_path_preserves_existing_file_permissions() {
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
     let mut updated = AxonConfig::default();
-    updated.remote.mode = crate::RemoteMode::HighThroughput;
+    updated.channel_balancer.failure_threshold = 5;
     ConfigLoader::save_to_path(&path, &updated).unwrap();
 
     let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;

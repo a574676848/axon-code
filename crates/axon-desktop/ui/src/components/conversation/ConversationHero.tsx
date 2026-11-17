@@ -23,8 +23,8 @@ export const ConversationHero: React.FC = () => (
       <p className="text-heading-1 font-semibold tracking-[-0.02em] text-text-primary">
         {BRAND_SLOGAN}
       </p>
-      <p className="max-w-md text-body text-text-secondary leading-6">
-        融入你的工作区与工作节奏，在每一次交互中持续深化认知的专属个人智能体。
+      <p className="whitespace-nowrap text-body text-text-secondary leading-6">
+        融入你的工作区与工作节奏，在每一次交互中持续深化认知的专属助理。
       </p>
     </div>
   </div>

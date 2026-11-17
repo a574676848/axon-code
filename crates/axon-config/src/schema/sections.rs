@@ -8,8 +8,6 @@ use crate::{
     DEFAULT_AGENT_REASONING_EFFORT, DEFAULT_BREAKER_COOLDOWN_MS, DEFAULT_BREAKER_FAILURE_THRESHOLD,
     DEFAULT_CHANNEL_METRICS_PERSISTENCE_ENABLED, DEFAULT_GATEWAY_API_TOKEN_ENV,
     DEFAULT_GATEWAY_HTTP_BIND, DEFAULT_GATEWAY_WEBSOCKET_BIND,
-    HIGH_THROUGHPUT_REMOTE_MAX_EVENTS_PER_CURSOR, HIGH_THROUGHPUT_REMOTE_MAX_PAYLOAD_BYTES,
-    STANDARD_REMOTE_MAX_EVENTS_PER_CURSOR, STANDARD_REMOTE_MAX_PAYLOAD_BYTES,
 };
 
 /// Agent 配置。
@@ -59,46 +57,12 @@ pub struct SkillsConfig {
     pub disabled: BTreeSet<String>,
 }
 
-/// 远控运行模式。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum RemoteMode {
-    /// 常规远控模式。
-    #[default]
-    Standard,
-    /// 高频事件流模式。
-    HighThroughput,
-}
-
-impl RemoteMode {
-    /// 返回配置文件中的稳定字符串。
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Standard => "standard",
-            Self::HighThroughput => "high-throughput",
-        }
-    }
-
-    /// 从配置字符串解析远控模式。
-    #[must_use]
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim() {
-            "standard" => Some(Self::Standard),
-            "high-throughput" => Some(Self::HighThroughput),
-            _ => None,
-        }
-    }
-}
-
 /// 远控配置。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RemoteConfig {
     /// 统一 Gateway 配置；远控目标态始终启用。
     pub gateway: RemoteGatewayConfig,
-    /// 远控运行模式。
-    pub mode: RemoteMode,
 }
 
 /// 统一 Gateway 配置。
@@ -125,26 +89,6 @@ impl Default for RemoteGatewayConfig {
             websocket_bind: DEFAULT_GATEWAY_WEBSOCKET_BIND.to_owned(),
             auth_keys: String::new(),
             legacy_token_enabled: true,
-        }
-    }
-}
-
-impl RemoteConfig {
-    /// 当前模式下的 cursor 最大事件数。
-    #[must_use]
-    pub const fn max_events_per_cursor(&self) -> usize {
-        match self.mode {
-            RemoteMode::Standard => STANDARD_REMOTE_MAX_EVENTS_PER_CURSOR,
-            RemoteMode::HighThroughput => HIGH_THROUGHPUT_REMOTE_MAX_EVENTS_PER_CURSOR,
-        }
-    }
-
-    /// 当前模式下的 payload 最大字节数。
-    #[must_use]
-    pub const fn max_payload_bytes(&self) -> usize {
-        match self.mode {
-            RemoteMode::Standard => STANDARD_REMOTE_MAX_PAYLOAD_BYTES,
-            RemoteMode::HighThroughput => HIGH_THROUGHPUT_REMOTE_MAX_PAYLOAD_BYTES,
         }
     }
 }

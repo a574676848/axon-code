@@ -171,14 +171,4 @@ pub(crate) const CONFIG_KEY_SPECS: &[ConfigKeySpec] = &[
         options: &["true", "false"],
         depends_on: &["remote.gateway.api_token_env"],
     },
-    ConfigKeySpec {
-        key: "remote.mode",
-        kind: ConfigValueKind::String,
-        editable: true,
-        description: "远控运行模式，standard 适合默认场景，high-throughput 适合高频事件流",
-        setup_module: "remote",
-        default_value: "standard",
-        options: &["standard", "high-throughput"],
-        depends_on: &[],
-    },
 ];

@@ -1,6 +1,6 @@
 # 贡献指南
 
-感谢你关注并参与 Axon 的开源建设。Axon 是基于 Rust 构建的专属个人智能体（Personal Agent）与多端战术协同平台。
+感谢你关注并参与 Axon 的开源建设。Axon 是基于 Rust 构建的专属助理（Personal Agent）与多端战术协同平台。
 
 ---
 

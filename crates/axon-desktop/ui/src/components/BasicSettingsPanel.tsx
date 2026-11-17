@@ -104,7 +104,7 @@ const SECTIONS: SectionSpec[] = [
   {
     id: 'remote',
     label: '远控',
-    description: '网关监听地址与远控模式',
+    description: '网关监听地址与访问凭据',
     footer: '每一项改动即时写入 config.toml',
     icon: PulseIcon,
     prefixes: ['remote.'],

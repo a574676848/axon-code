@@ -60,7 +60,14 @@ const CONFIG_COPY: Record<string, ConfigCopy> = {
     label: 'WebSocket 监听地址',
     detail: '接收长连接的地址',
   },
-  'remote.mode': { label: '远控模式', detail: '常规模式够用，高频事件流再切换' },
+  'remote.gateway.auth_keys': {
+    label: '多 Key 存储路径',
+    detail: '留空时使用运行目录下的默认文件',
+  },
+  'remote.gateway.legacy_token_enabled': {
+    label: '保留全局密钥通道',
+    detail: '关闭后业务接口只接受已签发的 Key',
+  },
 };
 
 /** 判断文本里是否含中文。 */

@@ -62,7 +62,6 @@ fn remote_key_detail(key: &str) -> Option<&'static str> {
         "remote.gateway.legacy_token_enabled" => Some(
             "是否仍接受全局 token 访问业务路由；关闭后只有签发的 Key 生效，本机连接档案需改用 Key。",
         ),
-        "remote.mode" => Some("远控运行模式：standard 或 high-throughput。"),
         _ => None,
     }
 }
@@ -121,8 +120,6 @@ pub(super) fn option_detail(context: &str, value: &str) -> Option<&'static str> 
         ("推理强度" | "agent.reasoning_effort", "max") => {
             Some("Anthropic 最大推理预算，仅在模型支持时使用")
         }
-        ("remote.mode", "standard") => Some("默认远控模式，适合常规消息频率"),
-        ("remote.mode", "high-throughput") => Some("高吞吐远控模式，适合高频事件流"),
         _ => None,
     }
 }

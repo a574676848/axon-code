@@ -73,7 +73,7 @@
             <text x="0" y="68" class="term-text"><tspan class="c-blue">[1]</tspan> Providers &amp; Gateways   <tspan class="term-muted">（OpenAI / Anthropic / DashScope 等通道）</tspan></text>
             <text x="0" y="102" class="term-text"><tspan class="c-blue">[2]</tspan> Models &amp; Context       <tspan class="term-muted">（默认模型、上下文窗口、Vision、Reasoning）</tspan></text>
             <text x="0" y="136" class="term-text"><tspan class="c-blue">[3]</tspan> Agent Behaviors         <tspan class="term-muted">（审批策略：ask / agent / allow）</tspan></text>
-            <text x="0" y="170" class="term-text"><tspan class="c-blue">[4]</tspan> Remote (Gateway)       <tspan class="term-muted">（网关监听地址、访问凭据与吞吐模式）</tspan></text>
+            <text x="0" y="170" class="term-text"><tspan class="c-blue">[4]</tspan> Remote (Gateway)       <tspan class="term-muted">（网关监听地址与访问凭据）</tspan></text>
             <text x="0" y="204" class="term-text"><tspan class="c-blue">[5]</tspan> Advanced Config         <tspan class="term-muted">（Memory、日志与运行参数）</tspan></text>
 
             <line x1="0" y1="240" x2="630" y2="240" stroke="#30363d" stroke-width="1"/>

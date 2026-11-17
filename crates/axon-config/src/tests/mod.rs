@@ -1,7 +1,5 @@
 use super::{
-    AxonConfig, ConfigLoader, ConfigValue, HIGH_THROUGHPUT_REMOTE_MAX_EVENTS_PER_CURSOR,
-    HIGH_THROUGHPUT_REMOTE_MAX_PAYLOAD_BYTES, ModelConfig, REASONING_EFFORT_VALUES, RemoteMode,
-    STANDARD_REMOTE_MAX_EVENTS_PER_CURSOR, STANDARD_REMOTE_MAX_PAYLOAD_BYTES, USER_AXON_DIR,
+    AxonConfig, ConfigLoader, ConfigValue, ModelConfig, REASONING_EFFORT_VALUES, USER_AXON_DIR,
     USER_CONFIG_FILE, config_key_specs, default_user_axon_root_path_from_env, get_config_value,
     set_config_value,
 };
@@ -120,7 +118,6 @@ fn config_key_registry_exposes_editability() {
         "remote.gateway.websocket_bind",
         "remote.gateway.auth_keys",
         "remote.gateway.legacy_token_enabled",
-        "remote.mode",
     ];
 
     for key in editable_keys {
@@ -270,28 +267,6 @@ fn removed_runtime_config_keys_are_not_user_editable() {
 }
 
 #[test]
-fn remote_mode_config_value_roundtrips() {
-    let mut config = AxonConfig::default();
-
-    let value = set_config_value(
-        &mut config,
-        "remote.mode",
-        RemoteMode::HighThroughput.as_str(),
-    )
-    .unwrap();
-    assert_eq!(
-        value,
-        ConfigValue::String(RemoteMode::HighThroughput.as_str().to_owned())
-    );
-    assert_eq!(
-        get_config_value(&config, "remote.mode"),
-        Some(ConfigValue::String(
-            RemoteMode::HighThroughput.as_str().to_owned()
-        ))
-    );
-}
-
-#[test]
 fn gateway_listener_addresses_roundtrip_and_validate() {
     let mut config = AxonConfig::default();
     set_config_value(&mut config, "remote.gateway.http_bind", "0.0.0.0:3143").unwrap();
@@ -408,29 +383,19 @@ concurrency = 8
 }
 
 #[test]
-fn remote_mode_derives_internal_limits_and_validates_values() {
+fn gateway_keys_policy_roundtrips_and_validates() {
     let mut config = AxonConfig::default();
 
-    assert_eq!(config.remote.mode, RemoteMode::Standard);
-    assert_eq!(
-        config.remote.max_events_per_cursor(),
-        STANDARD_REMOTE_MAX_EVENTS_PER_CURSOR
-    );
-    assert_eq!(
-        config.remote.max_payload_bytes(),
-        STANDARD_REMOTE_MAX_PAYLOAD_BYTES
-    );
+    assert!(config.remote.gateway.auth_keys.is_empty());
+    assert!(config.remote.gateway.legacy_token_enabled);
 
-    config.remote.mode = RemoteMode::HighThroughput;
+    set_config_value(&mut config, "remote.gateway.legacy_token_enabled", "false").unwrap();
+    assert!(!config.remote.gateway.legacy_token_enabled);
+    assert_eq!(
+        get_config_value(&config, "remote.gateway.legacy_token_enabled"),
+        Some(ConfigValue::Bool(false))
+    );
     assert!(config.validate().is_ok());
-    assert_eq!(
-        config.remote.max_events_per_cursor(),
-        HIGH_THROUGHPUT_REMOTE_MAX_EVENTS_PER_CURSOR
-    );
-    assert_eq!(
-        config.remote.max_payload_bytes(),
-        HIGH_THROUGHPUT_REMOTE_MAX_PAYLOAD_BYTES
-    );
 }
 
 fn assert_target_config_keys_removed(specs: &[super::ConfigKeySpec]) {
