@@ -7,7 +7,7 @@
  */
 
 import { applyFrames } from './frames';
-import { foldTurn, replaceTurnCells } from './fold';
+import { collapseTurn, foldTurn, replaceTurnCells } from './fold';
 import { INITIAL_CONVERSATION, LOCAL_STEER_PREFIX, type AttachmentRef, type ConversationAction, type ConversationState, type TurnState } from './state';
 import { pruneSettledQuestions, type PendingQuestion } from '../questions';
 import { visibleUserText } from '../references';
@@ -65,7 +65,13 @@ export function conversationReducer(
     case 'attach-history':
       return attachHistory(state, action.interactionId, action.attachments);
     case 'seed-history':
-      return seedHistory(state, action.interactionId, action.text, action.attachments);
+      return seedHistory(
+        state,
+        action.interactionId,
+        action.text,
+        action.attachments,
+        action.channel,
+      );
     case 'prepend-turns': {
       if (action.turns.length === 0) return state;
       /*
@@ -87,6 +93,11 @@ export function conversationReducer(
       // 折叠即释放：过程单元在这一步被撤下，控件与内容由 foldTurn 自己算出来。
       const position = state.turns.findIndex((turn) => turn.id === action.turnId);
       return position < 0 ? state : withTurn(state, position, (turn) => foldTurn(turn));
+    }
+    case 'collapse-turn': {
+      const position = state.turns.findIndex((turn) => turn.id === action.turnId);
+      if (position < 0) return state;
+      return withTurn(state, position, (turn) => collapseTurn(turn));
     }
     case 'replace-turn-cells': {
       const position = state.turns.findIndex((turn) => turn.id === action.turnId);
@@ -314,6 +325,7 @@ function seedHistory(
   interactionId: string,
   text: string,
   attachments: AttachmentRef[],
+  channel: string | undefined,
 ): ConversationState {
   const position = state.turns.findIndex((turn) => turn.id === interactionId);
   if (position < 0) return state;
@@ -324,7 +336,7 @@ function seedHistory(
       const cells = turn.cells.map((cell) => {
         if (patched || cell.role !== 'user') return cell;
         patched = true;
-        return { ...cell, attachments };
+        return { ...cell, attachments, channel: channel ?? cell.channel };
       });
       return { ...turn, cells, pendingAttachments: patched ? [] : attachments };
     }
@@ -335,6 +347,7 @@ function seedHistory(
       text: visibleUserText(text),
       atMs: null,
       attachments,
+      channel,
     });
     return { ...seeded, pendingAttachments: [] };
   });

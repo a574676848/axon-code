@@ -35,6 +35,7 @@ export function emptyTurn(turnId: string, nowMs: number): TurnState {
     folded: false,
     summary: '',
     keepExpanded: false,
+  expanded: false,
   };
 }
 

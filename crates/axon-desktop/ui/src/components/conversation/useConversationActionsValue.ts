@@ -24,6 +24,7 @@ export interface ConversationActionsSource {
   ) => void;
   /** 按标识回放并展开一条被折叠的交互。 */
   unfoldTurn: (interactionId: string) => void;
+  collapseTurn: (interactionId: string) => void;
   /** 在右侧停靠栏打开一个资源地址。 */
   openResource: (address: string, params?: { index: number }) => void;
   /** 把问答卡片叫回输入坞。 */
@@ -89,6 +90,7 @@ export function useConversationActionsValue(
       openQuestion: () => sourceRef.current.openQuestion(),
       // 过程控件自带标识：展开时按它重新回放那一条交互。
       unfoldTurn: (interactionId) => sourceRef.current.unfoldTurn(interactionId),
+    collapseTurn: (interactionId) => sourceRef.current.collapseTurn(interactionId),
       // 正文里的相对图片路径以当前工作区为准，与输入坞的 `@` 引用同作用域。
       workspaceRoot,
       // 换会话就换车道：这个值进依赖，切换时重建一次集合是应该的。

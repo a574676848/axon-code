@@ -34,11 +34,31 @@ export type ConversationTarget =
     }
   | { kind: 'session'; workspaceId: string; sessionId: string };
 
+/**
+ * 独立会话：由后台驱动、正文按会话订阅。
+ *
+ * 目标执行（`goal`）与定时任务（`cron`）的会话有独立的运行身份，网关按会话放行订阅；
+ * 子代理会话同理。普通车道（桌面 / CLI / TUI）没有这层绑定，正文的事实源是 Interaction
+ * 流，按会话订阅会被网关拒绝（`subscription_rejected`）。
+ */
+const STANDALONE_CHANNELS = new Set(['goal', 'cron']);
+
+/** 该会话是否走会话级订阅（后台驱动的独立会话）。 */
+export function isStandaloneSession(
+  selection: Pick<SessionSelection, 'sessionId' | 'channel'>,
+): boolean {
+  return (
+    STANDALONE_CHANNELS.has(selection.channel ?? '') ||
+    selection.sessionId.includes('--subagent--')
+  );
+}
+
 /** 从车道选择得到订阅目标。 */
 export function targetOfSession(selection: SessionSelection): ConversationTarget {
-  if (selection.sessionId !== undefined && selection.sessionId.length > 0) {
+  if (isStandaloneSession(selection)) {
     return { kind: 'session', workspaceId: selection.workspaceId, sessionId: selection.sessionId };
   }
+  // 车道目标用会话标识当历史索引键：真正的订阅在历史装载之后按每条 Interaction 建立。
   return {
     kind: 'interaction',
     workspaceId: selection.workspaceId,
@@ -159,6 +179,8 @@ export interface ConversationController {
   prependToken: number;
   /** 展开一条被折叠的 Interaction：按标识重新回放后把正文换回来。 */
   unfoldTurn: (interactionId: string) => void;
+  /** 收起已展开的一轮：释放过程正文，只留抬头。 */
+  collapseTurn: (interactionId: string) => void;
   /** 提交正文到当前目标；目标不具备车道能力时明确失败，不静默丢弃。 */
   submit: (
     text: string,

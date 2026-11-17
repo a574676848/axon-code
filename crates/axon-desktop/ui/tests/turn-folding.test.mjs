@@ -85,7 +85,7 @@ test('形态：用户气泡、过程控件、回复原位，一句话都不搬�
     const control = folded.cells[1];
     assert.equal(control.role, 'folded');
     assert.equal(control.interactionId, 'interaction-1', '点开回放要认得出是哪一条');
-    assert.equal(control.summary, '已读取文件，执行了命令');
+    assert.equal(control.summary, '已读取文件并执行了命令');
     assert.equal(folded.index[control.id], 1, '下标索引要跟着重建');
 });
 
@@ -151,7 +151,7 @@ test('摘要按动作短语去重、最多三个，其余并成等', () => {
         toolCell('edit'),
         toolCell('shell_command'),
     ]);
-    assert.equal(processSummary(turn.cells), '已读取文件，已搜索代码，修改了文件等');
+    assert.equal(processSummary(turn.cells), '已读取文件，已搜索代码，修改了文件等', '按次数排名：读取两次排第一');
 });
 
 test('没有工具的过程按类别给一句，不写「已生成长回复」这类含糊话', () => {
@@ -159,13 +159,13 @@ test('没有工具的过程按类别给一句，不写「已生成长回复」�
         userCell('想一想'),
         { id: 'r1', role: 'reasoning', text: '思考正文', done: true, durationMs: null, startedAtMs: null },
     ]);
-    assert.equal(processSummary(reasoning.cells), '已思考');
+    assert.equal(processSummary(reasoning.cells), '已完成分析', '只有思考时用分析文案');
 
     const changes = turnOf([
         userCell('改一下'),
         { id: 'f1', role: 'fileChange', path: 'a.ts', changeType: 'edit', added: 1, removed: 0, diff: '' },
     ]);
-    assert.equal(processSummary(changes.cells), '改动了文件');
+    assert.equal(processSummary(changes.cells), '修改了文件', '文件改动仍归到编辑类别');
 });
 
 test('展开换回正文并标记保持展开', () => {
@@ -175,8 +175,12 @@ test('展开换回正文并标记保持展开', () => {
 
     assert.equal(restored.folded, false);
     assert.equal(restored.keepExpanded, true, '展开过的一轮不再被自动折叠');
-    assert.equal(restored.cells.length, heavy.cells.length);
-    assert.equal(restored.index[heavy.cells[1].id], 1, '下标索引要跟着重建');
+    assert.equal(restored.expanded, true, '展开态由控件箭头表达');
+    // 展开态仍保留过程控件（在开场输入之后），因此比原单元多一根抬头。
+    assert.equal(restored.cells.length, heavy.cells.length + 1);
+    assert.equal(restored.cells[1].role, 'folded');
+    assert.equal(restored.cells[1].expanded, true);
+    assert.equal(restored.index[heavy.cells[1].id], 2, '下标索引要跟着重建');
     assert.equal(shouldFold(restored, 0, 2), false);
 });
 

@@ -105,7 +105,7 @@ pub fn patch(session_id: &str, pinned: Option<bool>, archived: Option<bool>) -> 
         body.insert("archived".to_string(), serde_json::Value::Bool(archived));
     }
     let path = format!("{SESSIONS_PATH}/{}", encode(session_id));
-    let (status, response) = gateway::patch_raw(&path, &serde_json::Value::Object(body))?;
+    let (status, response) = gateway::patch_raw_at(&path, &serde_json::Value::Object(body))?;
     match status {
         200..=299 => Ok(()),
         // 404 是「这条会话还不在运行态登记里」：新建但尚未产生回合的会话就是这种状态。

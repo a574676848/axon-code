@@ -87,6 +87,30 @@ fn test_question_targets_parsing() {
 }
 
 #[test]
+fn sessions_route_returns_the_desktop_contract_shape() {
+    // 桌面左侧菜单按 `{ sessions: [...] }` 解析，并且每条会话要带会话表面的渠道与目标。
+    // 这条用例锁住「清单读路由归工作台」：裸数组会让桌面直接报「网关响应缺少 sessions 字段」。
+    let temp_root = axon_test_support::test_temp_root();
+    // 运行态库要先建出来：没有表时投影会如实报错，而不是伪装成空清单。
+    axon_session::SqliteRuntimeStore::from_root(temp_root.join("data"))
+        .initialize()
+        .expect("初始化运行态库");
+    let adapter = WorkbenchHttpAdapter::from_root(&temp_root);
+    let response = adapter
+        .handle_request("GET", "/api/v1/sessions", None, &[])
+        .expect("工作台必须接管会话清单读路由");
+    assert_eq!(response.status, 200);
+    let payload: serde_json::Value =
+        serde_json::from_slice(&response.body).expect("响应是 JSON 对象");
+    assert!(
+        payload
+            .get("sessions")
+            .is_some_and(|value| value.is_array()),
+        "载荷必须是带 sessions 数组的对象：{payload}"
+    );
+}
+
+#[test]
 fn test_workbench_adapter_with_answer_service() {
     let temp_root = axon_test_support::test_temp_root();
     let store = Arc::new(axon_session::SqliteRuntimeStore::from_root(

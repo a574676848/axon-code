@@ -266,6 +266,7 @@ export function useConversation(
           interactionId: next,
           text: seed.text,
           attachments: seed.attachments,
+          channel: seed.channel,
         });
       }
       void replayHistory(workspace, next, generation).catch(
@@ -693,6 +694,7 @@ export function useConversation(
     loadingOlder: paging.loadingOlder,
     prependToken: paging.prependToken,
     unfoldTurn: paging.unfoldTurn,
+    collapseTurn: (turnId: string) => dispatch({ type: 'collapse-turn', turnId }),
     clearSubmitError: () => setSubmitError(null),
   };
 }

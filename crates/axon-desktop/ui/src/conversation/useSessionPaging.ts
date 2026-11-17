@@ -60,6 +60,8 @@ interface PagingSession {
 export interface HistorySeed {
   text: string;
   attachments: AttachmentRef[];
+  /** 这一轮由哪个渠道发起；历史里逐轮标注来源要用它。 */
+  channel: string;
 }
 
 export interface SessionPagingOptions {
@@ -145,6 +147,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
       page: readonly {
         interactionId: string;
         content?: string;
+        channel?: string;
         attachments?: readonly string[];
       }[],
     ) => {
@@ -152,6 +155,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
         seedsRef.current.set(item.interactionId, {
           text: item.content ?? '',
           attachments: attachmentsFromPaths([...(item.attachments ?? [])]),
+          channel: item.channel ?? '',
         });
       }
     },

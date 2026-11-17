@@ -18,6 +18,12 @@ export type TranscriptCell =
       text: string;
       atMs: number | null;
       attachments: AttachmentRef[];
+      /**
+       * 这一轮由哪个渠道发起（cli / desktop / tui / cron / goal）。
+       *
+       * 历史里逐轮标注来源：同一会话可能由两端先后续聊，会话级统一值会撒谎。
+       */
+      channel?: string;
       /** 服务端始终没有认领这条消息（发送失败，或中断时还没被注入）。 */
       undelivered?: boolean;
       /**
@@ -71,6 +77,8 @@ export type TranscriptCell =
       /** 这一轮的用时；没有时间事实时为空。 */
       elapsedMs: number | null;
       atMs: number | null;
+      /** 展开态：箭头朝下，点一下即收起并释放过程正文。 */
+      expanded?: boolean;
     }
   | {
       id: string;
@@ -331,6 +339,8 @@ export interface TurnState {
   summary: string;
   /** 用户显式展开过：不再自动折叠，避免刚点开就被收回去。 */
   keepExpanded: boolean;
+  /** 展开态：过程控件仍在，正文已经摆出来，可以再收起（收起即释放正文）。 */
+  expanded: boolean;
 }
 
 /** 订阅连接状态。 */
@@ -433,7 +443,13 @@ export type ConversationAction =
   | { type: 'submit-failed'; turnId: string | null; text: string; message: string; nowMs: number }
   | { type: 'bind'; turnId: string; interactionId: string }
   | { type: 'attach-history'; interactionId: string; attachments: AttachmentRef[] }
-  | { type: 'seed-history'; interactionId: string; text: string; attachments: AttachmentRef[] }
+  | {
+      type: 'seed-history';
+      interactionId: string;
+      text: string;
+      attachments: AttachmentRef[];
+      channel?: string;
+    }
   /**
    * 把更早的一页轮次整段接到时间线头部。
    *
@@ -448,6 +464,7 @@ export type ConversationAction =
    */
   | { type: 'fold-turn'; turnId: string }
   | { type: 'replace-turn-cells'; turnId: string; cells: TranscriptCell[] }
+  | { type: 'collapse-turn'; turnId: string }
   | { type: 'connecting' }
   | { type: 'frames'; frames: import('../wire').ConversationStreamEvent[]; nowMs: number }
   /**

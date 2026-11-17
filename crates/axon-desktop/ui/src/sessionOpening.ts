@@ -6,13 +6,20 @@
  */
 
 import type { SessionSelection } from './conversation/targets';
+import { isStandaloneSession } from './conversation/targets';
 
 /** 后台驱动会话的只读说明：输入坞禁用时显示在占位位置。 */
 export const READ_ONLY_PLACEHOLDER = '目标由后台执行，这里只读';
 
-/** 独立会话（session 目标）由后台驱动，界面只读；车道会话仍由用户提交。 */
-export const isReadOnlySession = (selection: Pick<SessionSelection, 'sessionId'> | null): boolean =>
-  (selection?.sessionId ?? '').length > 0;
+/**
+ * 独立会话（目标执行 / 定时任务 / 子代理）由后台驱动，界面只读；车道会话仍由用户提交。
+ *
+ * 判据是会话渠道而不是「有没有会话标识」：车道会话同样带会话标识，按后者判会把
+ * 所有车道都锁成只读。
+ */
+export const isReadOnlySession = (
+  selection: Pick<SessionSelection, 'sessionId' | 'channel'> | null,
+): boolean => selection !== null && isStandaloneSession(selection);
 
 /** 目标执行会话的选择：带上 `sessionId` 才会按 session 目标订阅。 */
 export function goalSessionSelection(target: {

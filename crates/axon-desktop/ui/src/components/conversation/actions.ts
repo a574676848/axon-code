@@ -36,6 +36,10 @@ export interface ConversationActions {
    */
   unfoldTurn: (interactionId: string) => void;
   /**
+   * 收起已经展开的那一轮：撤下过程正文并释放，回到一根抬头。
+   */
+  collapseTurn: (interactionId: string) => void;
+  /**
    * 当前工作区根目录；正文里的相对图片路径以它为准。
    *
    * 与输入坞的 `@` 引用同作用域，因此正文写 `assets/shot.png` 与引用同一个文件

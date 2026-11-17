@@ -502,11 +502,17 @@ const FoldedBlock: React.FC<{ cell: Extract<TranscriptCell, { role: 'folded' }> 
    */
   const unfolding = useUnfoldingInteractionId();
   const expanding = unfolding === cell.interactionId;
+  const expanded = cell.expanded === true;
   return (
     <div className="skeleton-row-in w-full">
       <DisclosureRow
-        open={false}
+        open={expanded}
         onToggle={() => {
+          // 展开态点一下即收起：收起会释放过程正文，只留这一根抬头。
+          if (expanded) {
+            actions?.collapseTurn(cell.interactionId);
+            return;
+          }
           // 同一条正在回放时不重复发起：第二次订阅会与第一路抢同一份临时投影。
           if (expanding) return;
           actions?.unfoldTurn(cell.interactionId);

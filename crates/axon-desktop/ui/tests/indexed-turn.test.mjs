@@ -42,35 +42,39 @@ test('索引轮形态：用户气泡、过程控件、最终答案', () => {
     const [user, control, answer] = turn.cells;
     assert.equal(user.text, '把这一轮的历史读出来');
     assert.equal(user.atMs, 1_000, '用户气泡的时间就是入站时间');
-    assert.equal(control.summary, '已读取文件，执行了命令');
+    assert.equal(control.summary, '已读取文件并执行了命令');
     assert.equal(control.elapsedMs, 5_690, '控件行尾的用时来自索引');
     assert.equal(answer.text, '读完了，结论在这里。');
     assert.equal(answer.atMs, null, '索引不含回答时间：不拿提问时间冒充');
 });
 
-test('纯问答轮也留一根控件：索引说不清里面有没有过程', () => {
+test('纯问答轮不立过程控件：没有思考也没有工具就没有可折的过程', () => {
     const turn = indexedTurn(entry({ toolSummary: '', elapsedMs: 1_200 }));
     assert.deepEqual(
         turn.cells.map((cell) => cell.role),
-        ['user', 'folded', 'assistant'],
+        ['user', 'assistant'],
+        '没有过程事实的一轮只留气泡与回答',
     );
-    assert.equal(turn.cells[1].summary, '已完成', '没有工具名时给状态短语');
-    assert.equal(turn.cells[1].elapsedMs, 1_200);
+    assert.equal(turn.folded, true, '轮次本身仍是收口态');
+    assert.equal(turn.summary, '', '没有过程就不写摘要');
 });
 
-test('非正常收口：控件写状态短语，没有正文就不补空回答', () => {
+test('非正常收口：没有工具名同样不立控件，也不补空回答', () => {
     const interrupted = indexedTurn(
         entry({ status: 'interrupted', toolSummary: '', answerText: null }),
     );
     assert.equal(interrupted.status, 'interrupted');
     assert.deepEqual(
         interrupted.cells.map((cell) => cell.role),
-        ['user', 'folded'],
+        ['user'],
+        '中断轮没有正文也没有过程时只剩用户气泡',
     );
-    assert.equal(interrupted.cells[1].summary, '已中断');
-    assert.equal(
-        indexedTurn(entry({ status: 'rejected', toolSummary: '' })).cells[1].summary,
-        '未执行',
+    assert.deepEqual(
+        indexedTurn(entry({ status: 'rejected', toolSummary: '' })).cells.map(
+            (cell) => cell.role,
+        ),
+        ['user'],
+        '驳回轮不补回答，也不立过程控件',
     );
 });
 

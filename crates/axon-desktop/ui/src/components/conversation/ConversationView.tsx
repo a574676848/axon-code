@@ -252,6 +252,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
         );
       },
       unfoldTurn: (interactionId) => conversationRef.current.unfoldTurn(interactionId),
+    collapseTurn: (interactionId) => conversationRef.current.collapseTurn(interactionId),
       openResource: (address, params) => railRef.current.openResource(address, params),
       openQuestion: () => setQuestionReopenToken((value) => value + 1),
       // 正文里的相对路径要靠会话已知路径才能落到真路径上；真值在点击时从当前

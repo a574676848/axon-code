@@ -305,7 +305,15 @@ pub fn post_json(path: &str, payload: &serde_json::Value) -> Result<serde_json::
 /// 等于把没提到的字段一并重置。需要按状态码分档的调用方（例如 404 表示会话还不在
 /// 运行态登记里）走这一层，只关心成败的调用方自己决定怎么翻译。
 pub fn patch_raw(path: &str, payload: &serde_json::Value) -> Result<(u16, String), String> {
-    let url = endpoint(path)?;
+    patch_raw_at(&endpoint(path)?, payload)
+}
+
+/// 同 [`patch_raw`]，但传**完整路径**（自带 `/api/v1` 前缀）。
+///
+/// 会话清单这类路径常量本身就是完整地址（列表读取走 [`get_json_at`]），再经
+/// [`endpoint`] 拼一次就会变成 `/api/v1/api/v1/...`，网关如实回 404。
+pub fn patch_raw_at(full_path: &str, payload: &serde_json::Value) -> Result<(u16, String), String> {
+    let url = endpoint_at(full_path)?;
     let mut request = agent()
         .patch(&url)
         .header("accept", "application/json")

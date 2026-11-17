@@ -38,42 +38,74 @@ const CONTENT_ROLES: ReadonlySet<TranscriptCell['role']> = new Set([
 /** 摘要里最多列几个动作短语，其余并进「等」。 */
 const SUMMARY_PHRASE_LIMIT = 3;
 
-/** 工具类别到摘要短语的映射；认不出来的一律并进兜底短语。 */
-const TOOL_PHRASES: Record<string, string> = {
-  read_file: '已读取文件',
-  write_file: '修改了文件',
-  edit: '修改了文件',
-  search: '已搜索代码',
-  glob: '已匹配文件',
-  shell_command: '执行了命令',
-  write_stdin: '已操作终端',
-  invoke_skill: '已调用技能',
-  memory_search: '已检索记忆',
-  memory_write: '已写入记忆',
-  update_plan: '已更新计划',
-  job_output: '已读取作业输出',
-  job_kill: '已终止作业',
-  delegate_to_fast: '已委托子代理',
-  spawn_agent: '已创建子代理',
-  send_message: '已发送消息',
-  list_agents: '已查看子代理',
-  ask_user_question: '已向用户提问',
-  notes_write_file: '已写入便签',
-  notes_append_to_file: '已写入便签',
-  notes_read_file: '已读取便签',
+/**
+ * 工具类别到摘要短语的映射。
+ *
+ * 词表沿用工作台折叠组标题的既有契约：同一件事只该有一种说法，两边不必换算措辞。
+ * 认不出来的工具统一并进 `tools`。
+ */
+const TOOL_CATEGORIES: Record<string, string> = {
+  read_file: 'read',
+  read_image: 'readImage',
+  view_image: 'readImage',
+  search: 'search',
+  search_code: 'search',
+  grep: 'search',
+  glob: 'search',
+  web_search: 'webSearch',
+  web_fetch: 'webFetch',
+  write_file: 'write',
+  notes_write_file: 'write',
+  notes_append_to_file: 'write',
+  edit: 'edit',
+  apply_patch: 'edit',
+  hashline: 'edit',
+  shell_command: 'commands',
+  exec_command: 'commands',
+  write_stdin: 'commands',
+  run_code: 'code',
+  delegate_to_fast: 'subagents',
+  spawn_agent: 'subagents',
+  send_message: 'subagents',
+  list_agents: 'subagents',
+  update_plan: 'plan',
+  create_goal: 'plan',
+  update_goal: 'plan',
+  get_goal: 'plan',
+  ask_user_question: 'questions',
+  request_user_input: 'questions',
 };
 
-/** 认不出来的工具统一并成这一句。 */
-const TOOL_PHRASE_FALLBACK = '已调用工具';
+/** 类别到已结束摘要短语（工作台既有措辞，逐字沿用）。 */
+const CATEGORY_PHRASES: Record<string, string> = {
+  read: '已读取文件',
+  readImage: '已读取图片',
+  search: '已搜索代码',
+  write: '已写入文件',
+  edit: '修改了文件',
+  commands: '执行了命令',
+  code: '运行了代码',
+  webSearch: '已搜索网页',
+  webFetch: '已访问网页',
+  subagents: '已协调子智能体',
+  plan: '更新了计划',
+  questions: '向用户提出了问题',
+  tools: '已调用工具',
+};
 
-/** 单个工具名到摘要短语。 */
-function toolPhrase(toolName: string): string {
+/** 没有任何工具类别时的摘要：这一轮只想了没动手。 */
+const THINKING_PHRASE = '已完成分析';
+
+/** 两个短语共用的前缀：都以它开头时，第二个前缀省略。 */
+const SHARED_PREFIX = '已';
+
+/** 单个工具名到类别。 */
+function toolCategory(toolName: string): string {
   const bare = toolName.includes('.')
     ? toolName.slice(toolName.lastIndexOf('.') + 1)
     : toolName;
-  return TOOL_PHRASES[bare] ?? TOOL_PHRASE_FALLBACK;
+  return TOOL_CATEGORIES[bare] ?? 'tools';
 }
-
 /** 这一格是不是过程。 */
 function isProcessCell(cell: TranscriptCell): boolean {
   return PROCESS_ROLES.has(cell.role);
@@ -109,45 +141,63 @@ function inputAfterProcess(turn: TurnState): boolean {
   return false;
 }
 
-/** 这一轮有没有可折的过程。没有过程时折叠与展开完全一致，因此不做这件事。 */
+/**
+ * 这一轮有没有值得折叠的过程。
+ *
+ * 判据是「想过」或「动过手」：只有压缩标记、计划或文件改动的轮次不折，纯问答轮更不折。
+ * 没有过程的轮次折起来只是一根没有信息的行，点开也看不到新内容。
+ */
 function hasProcess(turn: TurnState): boolean {
-  return turn.cells.some(isProcessCell);
+  return turn.cells.some(
+    (cell) => cell.role === 'reasoning' || cell.role === 'tool',
+  );
 }
 
-/** 动作短语收口：最多列三个，其余并成「等」。 */
+/**
+ * 摘要收口：沿用工作台既有的组合规则。
+ *
+ * 一条直接用它自己；两条用「并」连，且都以「已」开头时第二条省略前缀（读作
+ * `已读取文件并搜索代码`）；三条用顿号并列；超过三条只留前三条并补「等」。
+ */
 function phraseSummary(phrases: readonly string[]): string {
-  const head = phrases.slice(0, SUMMARY_PHRASE_LIMIT).join('，');
-  return phrases.length > SUMMARY_PHRASE_LIMIT ? `${head}等` : head;
+  if (phrases.length === 0) return '';
+  const first = phrases[0];
+  if (phrases.length === 1) return first;
+  const second = phrases[1];
+  if (phrases.length === 2) {
+    const shared = first.startsWith(SHARED_PREFIX) && second.startsWith(SHARED_PREFIX);
+    return `${first}并${shared ? second.slice(SHARED_PREFIX.length) : second}`;
+  }
+  const title = phrases.slice(0, SUMMARY_PHRASE_LIMIT).join('，');
+  return phrases.length > SUMMARY_PHRASE_LIMIT ? `${title}等` : title;
 }
 
-/** 过程段的动作摘要：工具名优先，其次按过程类别给一句，全都没有时为空。 */
+/**
+ * 过程段的摘要。
+ *
+ * 类别按出现次数排名、同次数按首次出现顺序；三端读同一份事实就该给同一句话，
+ * 因此排序与措辞都照工作台折叠组标题的既有契约来。只有思考没有工具时给「已完成分析」，
+ * 两者都没有时为空（调用方据此不立折叠行）。
+ */
 export function processSummary(cells: readonly TranscriptCell[]): string {
-  const phrases: string[] = [];
+  const counts = new Map<string, number>();
   for (const cell of cells) {
     if (cell.role !== 'tool') continue;
-    const phrase = toolPhrase(cell.toolName);
-    if (!phrases.includes(phrase)) phrases.push(phrase);
+    const category = toolCategory(cell.toolName);
+    counts.set(category, (counts.get(category) ?? 0) + 1);
   }
-  if (phrases.length > 0) return phraseSummary(phrases);
-  if (cells.some((cell) => cell.role === 'reasoning')) return '已思考';
-  if (cells.some((cell) => cell.role === 'fileChange')) return '改动了文件';
-  if (cells.some((cell) => cell.role === 'plan')) return '更新了计划';
-  if (cells.some((cell) => cell.role === 'history')) return '压缩了上下文';
-  return '';
-}
-
-/** 索引里的状态到界面短语。 */
-function statusText(status: string): string {
-  switch (status) {
-    case 'interrupted':
-      return '已中断';
-    case 'rejected':
-      return '未执行';
-    default:
-      return '已完成';
+  const thinking = cells.some((cell) => cell.role === 'reasoning');
+  if (counts.size === 0) {
+    if (thinking) return THINKING_PHRASE;
+    if (cells.some((cell) => cell.role === 'fileChange')) return '修改了文件';
+    if (cells.some((cell) => cell.role === 'plan')) return '更新了计划';
+    if (cells.some((cell) => cell.role === 'history')) return '已完成分析';
+    return '';
   }
+  // Map 保留首次插入顺序：先按次数降序，同次数保持首次出现顺序。
+  const ranked = [...counts.entries()].sort((left, right) => right[1] - left[1]);
+  return phraseSummary(ranked.map(([category]) => CATEGORY_PHRASES[category] ?? '已调用工具'));
 }
-
 /** 按单元顺序重建下标表。 */
 function indexOf(cells: readonly TranscriptCell[]): Record<string, number> {
   const index: Record<string, number> = {};
@@ -209,10 +259,72 @@ export function foldTurn(turn: TurnState): TurnState {
 }
 
 /**
- * 展开一轮：换回重新算出来的单元，并记下「用户要它保持展开」。
+ * 展开一轮：换回重新算出来的单元，并在开头留一根可折叠的抬头。
+ *
+ * 展开态仍保留过程控件（箭头朝下）：用户能一口气看完全过程，也能再点一下把它收回去。
+ * 收起不是「隐藏」而是「释放」：`collapseTurn` 会把过程单元整段丢掉，只留内容单元。
  */
 export function replaceTurnCells(turn: TurnState, cells: TranscriptCell[]): TurnState {
-  return { ...turn, folded: false, keepExpanded: true, cells, index: indexOf(cells) };
+  const summary = turn.summary.length > 0 ? turn.summary : processSummary(cells);
+  const control: TranscriptCell = {
+    id: controlId(turn.id),
+    role: 'folded',
+    interactionId: turn.interactionId ?? turn.id,
+    summary: summary.length > 0 ? summary : '过程已收起',
+    elapsedMs: turn.elapsedMs,
+    atMs: turn.startedAtMs,
+    expanded: true,
+  };
+  const content = cells.filter(isContentCell);
+  const lead = leadingUserCount(content);
+  const withControl = [control, ...cells];
+  const insertAt = lead === 0 ? 0 : lead;
+  const ordered = [...cells.slice(0, insertAt), control, ...cells.slice(insertAt)];
+  void withControl;
+  return {
+    ...turn,
+    folded: false,
+    keepExpanded: true,
+    expanded: true,
+    summary: control.summary,
+    cells: ordered,
+    index: indexOf(ordered),
+  };
+}
+
+/**
+ * 收起一轮：撤下过程单元并释放正文，回到「一根抬头 + 内容」的形态。
+ *
+ * 这条路径与自动折叠共用同一份释放语义：收完之后轮次不再引用任何工具输出与推理正文。
+ */
+export function collapseTurn(turn: TurnState): TurnState {
+  const process = turn.cells.filter(isProcessCell);
+  const content = turn.cells.filter(isContentCell);
+  const summary =
+    turn.summary.length > 0
+      ? turn.summary
+      : processSummary(process).length > 0
+        ? processSummary(process)
+        : '过程已收起';
+  const control: TranscriptCell = {
+    id: controlId(turn.id),
+    role: 'folded',
+    interactionId: turn.interactionId ?? turn.id,
+    summary,
+    elapsedMs: turn.elapsedMs,
+    atMs: turn.startedAtMs,
+  };
+  const lead = leadingUserCount(content);
+  const cells = [...content.slice(0, lead), control, ...content.slice(lead)];
+  return {
+    ...turn,
+    folded: true,
+    keepExpanded: false,
+    expanded: false,
+    summary,
+    cells,
+    index: indexOf(cells),
+  };
 }
 
 /** 按索引立起的一轮：用户气泡 + 过程控件 + 最终答案。 */
@@ -255,15 +367,23 @@ export function indexedTurn(entry: IndexedTurnEntry): TurnState {
       attachments,
     });
   }
+  /*
+   * 只在这一轮确实动过手时立过程控件。
+   *
+   * 索引里没有「想过没有」这一项，可用的过程事实只有工具名串：它为空就说明索引说不出
+   * 这一轮有过程，此时再挂一根控件，点开只会把同一段问答重放一遍，等于给纯问答轮加噪音。
+   */
   const summary = indexedSummary(entry);
-  cells.push({
-    id: controlId(entry.interactionId),
-    role: 'folded',
-    interactionId: entry.interactionId,
-    summary,
-    elapsedMs: entry.elapsedMs ?? null,
-    atMs: entry.receivedAtMs,
-  });
+  if (summary.length > 0) {
+    cells.push({
+      id: controlId(entry.interactionId),
+      role: 'folded',
+      interactionId: entry.interactionId,
+      summary,
+      elapsedMs: entry.elapsedMs ?? null,
+      atMs: entry.receivedAtMs,
+    });
+  }
   const answer = (entry.answerText ?? '').trim();
   if (answer.length > 0 && settledStatus(entry.status) === 'completed') {
     cells.push({
@@ -291,21 +411,19 @@ export function indexedTurn(entry: IndexedTurnEntry): TurnState {
 /**
  * 索引轮的控件标题。
  *
- * 有工具名就是那句动作摘要；没有工具名时给状态短语（已完成、已中断、未执行）。
- * 每一条已收口的索引轮都留这根控件：索引只说明这一轮怎么结束，说不清里面有没有过程，
- * 因此它同时是「点开加载全过程」的唯一入口。纯问答轮点开只会看到同样的正文，代价是
- * 一次用户主动发起的回放，而不是默认就替所有人回放一遍。
+ * 索引里可用的过程事实只有工具名串，因此标题就是按次数排名的类别摘要；串为空说明索引
+ * 说不出这一轮有过程，此时返回空串，调用方据此不立控件（纯问答轮不点也看不到新内容）。
  */
 function indexedSummary(entry: IndexedTurnEntry): string {
-  const phrases: string[] = [];
+  const counts = new Map<string, number>();
   for (const name of (entry.toolSummary ?? '').split(',')) {
     const trimmed = name.trim();
     if (trimmed.length === 0) continue;
-    const phrase = toolPhrase(trimmed);
-    if (!phrases.includes(phrase)) phrases.push(phrase);
+    const category = toolCategory(trimmed);
+    counts.set(category, (counts.get(category) ?? 0) + 1);
   }
-  if (phrases.length > 0) return phraseSummary(phrases);
-  return statusText(entry.status);
+  const ranked = [...counts.entries()].sort((left, right) => right[1] - left[1]);
+  return phraseSummary(ranked.map(([category]) => CATEGORY_PHRASES[category] ?? '已调用工具'));
 }
 
 /** 索引里的处理状态到轮次终态：读不出来的按已收口处理。 */

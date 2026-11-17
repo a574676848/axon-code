@@ -1,6 +1,10 @@
-//! 会话列表适配器的行为测试：排序、过滤、标题回落与中位数口径。
+//! 会话列表投影与写入路由的行为测试。
+//!
+//! 读路径归 read_session_rows（axon sessions list 与性能门槛共用）；HTTP 侧只保留
+//! 写入，GET /api/v1/sessions 由工作台投影接管，因此这里同时锁住「不抢读路由」这条契约。
+//! 写入，GET /api/v1/sessions 由工作台投影接管，因此这里同时锁住「不抢读路由」这条契约。
 
-use super::{QueryFilters, SessionsHttpAdapter, clip_title, median_of_histogram};
+use super::{SessionsHttpAdapter, clip_title, median_of_histogram};
 use axon_daemon::GatewayHttpRouteHandler;
 use axon_session::{RuntimeStore, SqliteRuntimeStore};
 use rusqlite::params;
@@ -9,7 +13,8 @@ use serde_json::Value;
 /// 初始化一个带两条会话的运行时库，返回临时目录（保持存活）。
 fn fixture() -> (axon_test_support::TestTempDir, SqliteRuntimeStore) {
     let directory = axon_test_support::test_temp_dir();
-    let store = SqliteRuntimeStore::from_root(directory.path());
+    // 适配器持有运行态根，库落在其 data 子目录：fixture 与生产路径保持一致。
+    let store = SqliteRuntimeStore::from_root(directory.path().join("data"));
     store.initialize().expect("初始化运行态库");
     (directory, store)
 }
@@ -51,14 +56,14 @@ fn seed_inbox(store: &SqliteRuntimeStore, session_id: &str, content: &str, recei
         .expect("写入入站事实");
 }
 
-fn request(adapter: &SessionsHttpAdapter, query: Option<&str>) -> Vec<Value> {
-    let response = adapter
-        .handle_request("GET", "/api/v1/sessions", query, &[])
-        .expect("命中共用路由");
-    let parsed: Value = serde_json::from_slice(&response.body).expect("响应是 JSON");
-    parsed.as_array().cloned().unwrap_or_default()
+/// 直接读投影，等价于 xon sessions list 的数据来源。
+fn rows(store: &SqliteRuntimeStore) -> Vec<Value> {
+    super::read_session_rows(store)
+        .expect("读取会话清单")
+        .iter()
+        .map(super::SessionListRow::to_json)
+        .collect()
 }
-
 /// 会话清单每行两条相关子查询：缺 `inbox_session_recent` 时每次都要全表扫描 inbox。
 fn measure_session_list(store: &SqliteRuntimeStore) -> (usize, u128) {
     let mut best = u128::MAX;
@@ -134,15 +139,14 @@ fn session_list_query_uses_inbox_session_index_and_stays_within_budget() {
 
 #[test]
 fn lists_sessions_with_title_from_first_inbound_message_and_pinned_first() {
-    let (directory, store) = fixture();
+    let (_directory, store) = fixture();
     seed_session(&store, "session-idle", 0, 0);
     seed_session(&store, "session-pinned", 1, 0);
     seed_inbox(&store, "session-idle", "  第一行标题\n第二行 ", 10);
     seed_inbox(&store, "session-idle", "更晚的一条", 20);
     seed_inbox(&store, "session-pinned", "置顶会话", 5);
 
-    let adapter = SessionsHttpAdapter::new(directory.path().to_path_buf());
-    let sessions = request(&adapter, None);
+    let sessions = rows(&store);
 
     assert_eq!(sessions.len(), 2);
     assert_eq!(
@@ -158,28 +162,18 @@ fn lists_sessions_with_title_from_first_inbound_message_and_pinned_first() {
 }
 
 #[test]
-fn archived_sessions_are_hidden_unless_requested() {
-    let (directory, store) = fixture();
+fn archived_flag_is_projected_for_callers_to_filter() {
+    let (_directory, store) = fixture();
     seed_session(&store, "session-live", 0, 0);
     seed_session(&store, "session-archived", 0, 1);
 
-    let adapter = SessionsHttpAdapter::new(directory.path().to_path_buf());
-    let visible = request(&adapter, None);
-    assert_eq!(visible.len(), 1);
-    assert_eq!(visible[0]["sessionId"], "session-live");
-
-    let all = request(&adapter, Some("include_archived=true"));
-    assert_eq!(all.len(), 2, "显式请求时归档会话必须出现");
-}
-
-#[test]
-fn workspace_filter_matches_scope_derived_workspace() {
-    let (directory, store) = fixture();
-    seed_session(&store, "session-a", 0, 0);
-
-    let adapter = SessionsHttpAdapter::new(directory.path().to_path_buf());
-    assert_eq!(request(&adapter, Some("workspace=ws-a")).len(), 1);
-    assert!(request(&adapter, Some("workspace=ws-b")).is_empty());
+    let sessions = rows(&store);
+    assert_eq!(sessions.len(), 2, "投影保留归档行，过滤由调用方决定");
+    let archived = sessions
+        .iter()
+        .find(|row| row["sessionId"] == "session-archived")
+        .expect("归档会话在投影里");
+    assert_eq!(archived["archived"], true);
 }
 
 #[test]
@@ -216,16 +210,12 @@ fn unknown_method_and_path_are_not_claimed() {
             .is_none(),
         "子路径不接管"
     );
-}
-
-#[test]
-fn filters_parse_percent_encoded_workspace() {
-    let filters = QueryFilters::parse(Some("workspace=ws%2Da&include_archived=1"));
-    assert_eq!(filters.workspace_id.as_deref(), Some("ws-a"));
-    assert!(filters.include_archived);
-    let default = QueryFilters::parse(None);
-    assert!(default.workspace_id.is_none());
-    assert!(!default.include_archived);
+    assert!(
+        adapter
+            .handle_request("GET", "/api/v1/sessions", None, &[])
+            .is_none(),
+        "清单读取必须让位给工作台投影：桌面契约要求会话表面渠道与目标"
+    );
 }
 
 #[test]
@@ -245,12 +235,11 @@ fn creates_a_session_and_lists_it() {
     let session_id = created["sessionId"].as_str().expect("返回会话 ID");
     assert!(session_id.starts_with("session-"), "会话 ID 应带前缀");
 
-    // 会话确实落到了控制面库。
-    let listed = request(&adapter, Some("workspace=ws-a"));
+    // 会话确实落到了控制面库，并出现在清单投影里。
+    let listed = rows(&store);
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0]["sessionId"], session_id);
     assert_eq!(listed[0]["title"], "新会话");
-    drop(store);
 }
 
 #[test]
@@ -268,7 +257,7 @@ fn patches_pinned_and_archived_state() {
         )
         .expect("命中单会话路由");
     assert_eq!(response.status, 200);
-    let listed = request(&adapter, None);
+    let listed = rows(&store);
     assert_eq!(listed[0]["pinned"], true);
 
     let archived = adapter
@@ -280,12 +269,9 @@ fn patches_pinned_and_archived_state() {
         )
         .expect("命中单会话路由");
     assert_eq!(archived.status, 200);
-    assert!(request(&adapter, None).is_empty(), "归档后默认列表为空");
-    assert_eq!(
-        request(&adapter, Some("include_archived=true")).len(),
-        1,
-        "显式请求时归档会话仍可找回"
-    );
+    let after = rows(&store);
+    assert_eq!(after.len(), 1, "归档不删行，只标记状态");
+    assert_eq!(after[0]["archived"], true, "归档位写进控制面");
 }
 
 #[test]

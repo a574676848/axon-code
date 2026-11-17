@@ -16,8 +16,6 @@ use serde_json::{Value, json};
 
 /// 会话路由前缀。
 const SESSIONS_PATH: &str = "/api/v1/sessions";
-/// 单次返回的会话上限：运行态会话数量由用户实际使用决定，这里只防止异常放大。
-const SESSION_LIST_LIMIT: i64 = 500;
 /// 会话清单的扫描上限：工作区过滤在内存里做，扫描窗口必须明显大于单页上限，
 /// 否则先截断再过滤会让「该工作区有会话」在长列表尾部时返回空页。
 const SESSION_SCAN_LIMIT: i64 = 4_096;
@@ -38,24 +36,6 @@ impl SessionsHttpAdapter {
     pub(crate) fn new(runtime_root: PathBuf) -> Self {
         Self { runtime_root }
     }
-
-    fn list(&self, query: Option<&str>) -> Value {
-        let filters = QueryFilters::parse(query);
-        // 复用进程内运行态句柄：每个请求都 `from_root` 等于每次重开 SQLite 并重建连接池。
-        let store = crate::workbench_http_adapter::runtime_store_for_data_dir(&self.runtime_root);
-        let rows = match read_session_rows(&store) {
-            Ok(rows) => rows,
-            // 库还没建出来、被锁或没有表：返回空列表而不是 500，调用方据此展示空态。
-            Err(_) => return json!([]),
-        };
-        let sessions = rows
-            .into_iter()
-            .filter(|row| filters.matches(row))
-            .take(usize::try_from(SESSION_LIST_LIMIT).unwrap_or(usize::MAX))
-            .map(|row| row.to_json())
-            .collect::<Vec<_>>();
-        json!(sessions)
-    }
 }
 
 impl GatewayHttpRouteHandler for SessionsHttpAdapter {
@@ -63,12 +43,14 @@ impl GatewayHttpRouteHandler for SessionsHttpAdapter {
         &self,
         method: &str,
         path: &str,
-        query: Option<&str>,
+        _query: Option<&str>,
         body: &[u8],
     ) -> Option<GatewayHttpResponse> {
         if path == SESSIONS_PATH {
+            // 清单读取归工作台投影：桌面契约要求每条会话带上会话表面的渠道、目标与受众，
+            // 那份投影与 /workspaces 同源；本适配器只保留写入（创建、置顶、归档）。
+            // GET 在这里返回 None，由后续处理器接管，避免两个投影抢同一路由。
             return match method {
-                "GET" => Some(GatewayHttpResponse::json(200, &self.list(query))),
                 "POST" => Some(self.create(body)),
                 _ => None,
             };
@@ -116,7 +98,9 @@ impl SessionsHttpAdapter {
         let Ok(payload) = serde_json::from_slice::<CreateSessionBody>(body) else {
             return GatewayHttpResponse::json(400, &json!({"error": "invalid_body"}));
         };
-        let store = SqliteRuntimeStore::from_root(&self.runtime_root);
+        // 适配器持有的是运行态根，不是数据目录：这里必须走同一份根到库的解析，
+        // 否则会把库开到根目录上、在一个空库里做写入，现象是「会话不存在」。
+        let store = crate::workbench_http_adapter::runtime_store(&self.runtime_root);
         if store.initialize().is_err() {
             return GatewayHttpResponse::json(500, &json!({"error": "runtime_unavailable"}));
         }
@@ -173,7 +157,9 @@ impl SessionsHttpAdapter {
         if payload.pinned.is_none() && payload.archived.is_none() {
             return GatewayHttpResponse::json(400, &json!({"error": "empty_patch"}));
         }
-        let store = SqliteRuntimeStore::from_root(&self.runtime_root);
+        // 适配器持有的是运行态根，不是数据目录：这里必须走同一份根到库的解析，
+        // 否则会把库开到根目录上、在一个空库里做写入，现象是「会话不存在」。
+        let store = crate::workbench_http_adapter::runtime_store(&self.runtime_root);
         if store.initialize().is_err() {
             return GatewayHttpResponse::json(500, &json!({"error": "runtime_unavailable"}));
         }
@@ -202,84 +188,11 @@ impl SessionsHttpAdapter {
         }
     }
 }
-/// 查询过滤条件：`workspace` 精确匹配，`include_archived` 决定是否包含归档会话。
-#[derive(Debug, Default)]
-struct QueryFilters {
-    workspace_id: Option<String>,
-    include_archived: bool,
-}
-
-impl QueryFilters {
-    fn parse(query: Option<&str>) -> Self {
-        let mut filters = Self::default();
-        let Some(query) = query else {
-            return filters;
-        };
-        for pair in query.split('&') {
-            let mut parts = pair.splitn(2, '=');
-            let key = parts.next().unwrap_or_default();
-            let value = parts.next().unwrap_or_default();
-            match key {
-                "workspace" if !value.is_empty() => {
-                    filters.workspace_id = Some(percent_decode(value));
-                }
-                "include_archived" => {
-                    filters.include_archived = matches!(value, "1" | "true" | "yes");
-                }
-                _ => {}
-            }
-        }
-        filters
-    }
-
-    fn matches(&self, row: &SessionListRow) -> bool {
-        if row.archived && !self.include_archived {
-            return false;
-        }
-        match &self.workspace_id {
-            Some(workspace) => row.workspace_id.as_deref() == Some(workspace.as_str()),
-            None => true,
-        }
-    }
-}
-
-/// 最小百分号解码：只处理 `%XX` 与 `+`，不做字符集转换。
-fn percent_decode(value: &str) -> String {
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'%' if index + 2 < bytes.len() => {
-                let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).unwrap_or_default();
-                match u8::from_str_radix(hex, 16) {
-                    Ok(byte) => {
-                        decoded.push(byte);
-                        index += 3;
-                    }
-                    Err(_) => {
-                        decoded.push(bytes[index]);
-                        index += 1;
-                    }
-                }
-            }
-            b'+' => {
-                decoded.push(b' ');
-                index += 1;
-            }
-            byte => {
-                decoded.push(byte);
-                index += 1;
-            }
-        }
-    }
-    String::from_utf8(decoded).unwrap_or_else(|_| value.to_owned())
-}
 
 /// 一行会话列表数据。
 ///
-/// HTTP 路由与 `axon sessions list` 共用这一份投影：字段与 SQL 只在这里定义一次，
-/// 避免两个出口对同一份运行态事实给出不同口径。
+/// `axon sessions list` 的唯一投影：字段与 SQL 只在这里定义一次，命令行与桌面左侧
+/// 菜单各取所需字段，但都来自同一批运行态事实。
 pub(crate) struct SessionListRow {
     pub(crate) session_id: String,
     pub(crate) title: String,
