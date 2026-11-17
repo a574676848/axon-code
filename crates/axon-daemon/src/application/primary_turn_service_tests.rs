@@ -467,7 +467,7 @@ fn interaction_in_workspace(id: &str, workspace: &str, received_at_ms: u64) -> I
 }
 
 #[test]
-fn primary_turn_uses_Axon_profile_regardless_of_transport_source() {
+fn primary_turn_uses_axon_profile_regardless_of_transport_source() {
     let mut source_interaction = interaction();
     source_interaction.source =
         InteractionSource::new("webhook", "message-from-remote").expect("有效来源");
