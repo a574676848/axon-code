@@ -102,6 +102,8 @@ export interface ConversationStreamProps {
    *
    * 落在时间线尾部而不是正文上方的固定带：它是上一次收口之后的产物，属于这两轮之间
    * 的一行注记。钉在正文上方会被读成常驻横幅，也跟着指标条一起脱离阅读顺序。
+   *
+   * 传空即整行不渲染；停留多久、什么时候退场由上层决定。
    */
   reflectionNotice?: string | null;
 }

@@ -18,12 +18,19 @@ export const NOTICE_FAILURE_MS = 6000;
  *
  * `clear` 经 ref 取当前值，不进依赖数组：调用方多数直接传内联回调，每次重渲染都会
  * 换一个新引用，进依赖数组就等于每渲染一次重新计时，提示永远等不到退场那一刻。
- * 因此重新计时只有一个触发点，就是提示内容本身变了。
+ * 因此重新计时只有两个触发点：提示内容本身变了，或者 `identity` 换了主人。
  */
 export function useExpiringNotice(
   message: string | null,
   clear: () => void,
   ms: number = NOTICE_FAILURE_MS,
+  /**
+   * 计时身份。
+   *
+   * 文案一字不差但换了主人时（换会话、换轮次）靠它区分：不传就只认文案本身，
+   * 与过去的行为一致。
+   */
+  identity: string | null = null,
 ): void {
   const clearRef = React.useRef(clear);
   clearRef.current = clear;
@@ -31,5 +38,5 @@ export function useExpiringNotice(
     if (message === null) return undefined;
     const timer = window.setTimeout(() => clearRef.current(), ms);
     return () => window.clearTimeout(timer);
-  }, [message, ms]);
+  }, [message, identity, ms]);
 }

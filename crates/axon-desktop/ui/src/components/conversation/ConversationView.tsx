@@ -41,6 +41,7 @@ import { useConversationWidth } from './useConversationWidth';
 import { useExpiringNotice } from './composerNotice';
 import { useSettledValue } from './conversationViewUtils';
 import { useComposerPick } from './useComposerPick';
+import { useReflectionNotice } from './useReflectionNotice';
 import { useExplicitTurnSettings } from './useExplicitTurnSettings';
 import { useOpeningStage } from './useOpeningStage';
 import { useInterruptOnEscape, useRailShortcuts } from './useConversationShortcuts';
@@ -249,6 +250,9 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    * 另一条会话的记忆动作。
    */
   const settledReflection = useSettledValue(memoryReflection, settling);
+
+  /** 亮 30 秒就退场：它是轮后注记，不是要一直挂在时间线尾部的状态。 */
+  const visibleReflection = useReflectionNotice(settledReflection, sessionKey);
 
   /** 中断当前这一轮；Esc 与停止按钮共用同一个入口。 */
   const interruptTurn = conversation.interrupt;
@@ -558,7 +562,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                         loadingOlder={conversation.loadingOlder}
                         onLoadOlder={() => void conversation.loadOlder()}
                         prependToken={conversation.prependToken}
-                        reflectionNotice={settledReflection}
+                        reflectionNotice={visibleReflection}
                       />
                     </UnfoldingProvider>
                   </div>
