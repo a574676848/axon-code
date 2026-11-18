@@ -469,7 +469,7 @@ W10 是三端用户可见回归，依赖 W4 与 W5 完成后才能全量开跑�
 | W10.3 | 待执行 | CLI `--session` 续接未真机回归 |
 | W10.4 | 已完成 | 不存在的会话 id 显式报错且不产生会话行（用例覆盖）；未真机复核 |
 | W10.5 | 待执行 | `sessions resume` 与 `--session` 优先级未复核 |
-| W10.6 | 待执行 | `session_resolution.rs` 的双重回落未简化 |
+| W10.6 | 已完成 | `session_resolution.rs` 收敛为一次解析：新增 `TargetKind::Session` / `TargetKind::Thread`，会话入口只读一次会话行并取 `current_run_id`，Thread 入口只按 `sessions.current_run_id` 反查归属；删除「先当 Thread 命中、再按会话回落」的串行回落与 `sessions reset` 的二次回落分支，Thread 无归属行时如实返回 `None`、不伪造会话标识；`run_window_has_lane` 更名 `run_window_registered`。用例锁定互不回落（会话入口拒收 Thread ID、Thread 入口拒收会话 ID、fork Thread 不伪造会话、按列反查不靠前缀），`axon debug session` 只收 Thread ID，`axon sessions` 只收会话 ID，`reset` 两处入口都只收会话 ID |
 | W10.7 | 待执行 | 桌面左侧菜单四项未真机回归 |
 | W10.8 | 待执行 | 桌面分页渲染未真机回归 |
 | W10.9 | 待执行 | 跨端接续可见性未真机回归 |

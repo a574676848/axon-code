@@ -424,8 +424,11 @@ pub(super) fn prepare_run_session(
         // Thread 上，而不是「全局最近一段」。指针是会话身份，先解析回 Thread。
         return match crate::run_commands::snapshot_resume_session(config_path)? {
             Some(pointer) => {
-                let target =
-                    crate::session_commands::resolve_session_target(config_path, &pointer)?;
+                let target = crate::session_commands::resolve_session_target(
+                    config_path,
+                    crate::session_commands::TargetKind::Session,
+                    &pointer,
+                )?;
                 prepare_session_from_lookup(
                     config_path,
                     RunSessionIndexLookup::SessionId(&target.thread_id),

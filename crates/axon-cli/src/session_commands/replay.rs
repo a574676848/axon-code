@@ -13,7 +13,7 @@ use crate::{
     },
 };
 
-use super::resolve_session_target;
+use super::{TargetKind, resolve_session_target};
 
 /// `axon debug session replay` 参数。
 #[derive(Debug, Clone, clap::Args, PartialEq, Eq)]
@@ -49,8 +49,9 @@ pub(super) fn run_session_replay(
     format: OutputFormat,
     config_path: &Path,
     command: &SessionReplayCommand,
+    kind: TargetKind,
 ) -> CliRunResult {
-    match build_session_replay_report(config_path, command) {
+    match build_session_replay_report(config_path, command, kind) {
         Ok(report) => render_replay(format, &report),
         Err(error) => cli_error(error),
     }
@@ -59,10 +60,11 @@ pub(super) fn run_session_replay(
 fn build_session_replay_report(
     config_path: &Path,
     command: &SessionReplayCommand,
+    kind: TargetKind,
 ) -> Result<SessionReplayReport, String> {
     validate_session_replay_command(command)?;
-    // 入参可能是会话清单里的车道 ID：先解析成 Thread，再回溯 parent 链表。
-    let target = resolve_session_target(config_path, &command.session_id)?;
+    // 先按入口的标识空间解析成 Thread，再回溯 parent 链表。
+    let target = resolve_session_target(config_path, kind, &command.session_id)?;
     let chain = replay_session_chain(config_path, &target.thread_id)?;
     let turns = replay_session_turns(config_path, &target.thread_id).unwrap_or_default();
     Ok(SessionReplayReport {

@@ -6,21 +6,18 @@
 
 ```bash
 axon debug session list [--limit <n>] [--cursor <c>] [--cwd <dir>] [--archived]
-axon debug session show <SESSION_ID>
-axon debug session delete <SESSION_ID>
+axon debug session show <THREAD_ID>
+axon debug session delete <THREAD_ID>
 axon debug session read <THREAD_ID>
 axon debug session resume <THREAD_ID>
-axon debug session replay [--provider-call-id <id>]
+axon debug session replay <THREAD_ID> [--provider-call-id <id>]
 axon debug session output [--max-chars <n>]
-axon debug session export [--output <path>]
-axon debug session fork [--new-thread-id <id>] [--cwd <dir>]
+axon debug session export <THREAD_ID> [--output <path>]
+axon debug session fork <THREAD_ID> [--new-thread-id <id>] [--cwd <dir>]
 axon debug session doctor [--repair]
 ```
 
-两个标识不可互换：
-
-- `show` / `delete` 收 `SESSION_ID`（运行态会话标识）。
-- `read` / `resume` 收 `THREAD_ID`（历史线程标识）。
+两个标识不可互换：`axon debug session` 只收 `THREAD_ID`（`debug session list` 给出的历史线程标识），`axon sessions` 只收会话 ID（`sessions list` 给出的 ULID）。两个入口各有一次性解析，不做互相回落；传错标识空间直接报错并提示对应的清单命令。`reset` 是会话级操作，两个入口都只收会话 ID。
 
 `list` 读运行态会话清单，字段与 `axon sessions list` 同源，`--archived` 表示包含归档会话。
 
@@ -43,16 +40,16 @@ axon sessions reset <id>
 axon sessions delete <id>
 axon sessions read <id>
 axon sessions resume <id>
-axon sessions replay [--provider-call-id <id>]
+axon sessions replay <id> [--provider-call-id <id>]
 axon sessions output [--max-chars <n>]
-axon sessions export [--output <path>]
-axon sessions fork [--new-thread-id <id>] [--cwd <dir>]
+axon sessions export <id> [--output <path>]
+axon sessions fork <id> [--new-thread-id <id>] [--cwd <dir>]
 axon sessions doctor [--repair]
 ```
 
-`axon sessions` 是 `debug session` 的提层入口，子命令一一对应；两者行为一致，用户面文档只写前者。
+`axon sessions` 与 `debug session` 子命令一一对应，差别只在标识空间：前者收会话 ID，后者收 Thread ID。用户面文档只写前者。
 
-`<id>` 两个清单里的身份都收：`axon sessions list` 的会话 ID 与 `debug session list` 的 Thread ID。入口先按 Thread 直接命中，未命中再回落到该会话的运行窗口（`sessions.run_session_id`），因此按清单里的 ID 直接执行不会撞上「未找到 thread」。
+`<id>` 就是 `axon sessions list` 列出的会话 ID：会话行读一次，Thread 取自该行的 `current_run_id`。Thread 标识只在 `axon debug session` 出现，按 `sessions.current_run_id` 反查归属会话；没有归属行的 Thread（例如 `fork` 出来尚未登记会话的）仍可读取与回放，但不能作为 `resume` 的目标。
 
 `axon run --session <id>` 只追加到已存在的会话：ID 不存在时直接报错并提示先 `axon sessions list`，不会隐式新建空会话。`axon sessions resume <id>` 只设置 `--continue` 的默认目标，不改变会话内容；随后的 `axon run --continue` 按指针解析出同一段 Thread 再恢复历史（指针为空时取最近一段根会话）。带 `--session` 的 run 结束后该默认目标保持运行前的值。
 

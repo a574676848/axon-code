@@ -553,7 +553,7 @@ fn publish_turn_metrics(config_path: &Path, record: &RunSessionRecord) {
     // 但复合车道已经认领这段运行窗口时不能再登记一条：同一段对话会在 `sessions list`
     // 里出现两条（一条有轮次、一条空壳），用户按清单恢复时会挑到空壳那条。
     if store.get_session(&session_id).is_err()
-        && !crate::session_commands::run_window_has_lane(&store, &record.session_id)
+        && !crate::session_commands::run_window_registered(&store, &record.session_id)
     {
         let cwd = record.cwd.clone().unwrap_or_default();
         let _ = store.create_session(&session_id, &cwd, now_ms);

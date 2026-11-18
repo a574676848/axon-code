@@ -152,7 +152,7 @@ fn persist(config_path: &Path, record: LifecycleRecord) {
     let now_ms = axon_time::unix_now_ms();
     // 作业可能来自尚未登记会话行的直连运行：补登一次，已被车道认领时不重复登记。
     if store.get_session(&session_id).is_err()
-        && !crate::session_commands::run_window_has_lane(&store, session_id.as_str())
+        && !crate::session_commands::run_window_registered(&store, session_id.as_str())
     {
         let cwd = std::env::current_dir()
             .map(|path| path.to_string_lossy().into_owned())

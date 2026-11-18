@@ -17,7 +17,8 @@ use crate::{
 };
 
 use super::{
-    bounded_session_limit, display_path, resolve_session_target, thread_event_issue_summaries,
+    TargetKind, bounded_session_limit, display_path, resolve_session_target,
+    thread_event_issue_summaries,
 };
 use crate::runtime_paths::runtime_axon_root_path;
 
@@ -43,28 +44,28 @@ pub struct SessionListCommand {
 /// `axon debug session show` 参数。
 #[derive(Debug, Clone, Args, PartialEq, Eq)]
 pub struct SessionShowCommand {
-    /// 会话 ID。
+    /// 会话 ID（`axon sessions`）或 Thread ID（`axon debug session`）。
     pub session_id: String,
 }
 
 /// `axon debug session read` 参数。
 #[derive(Debug, Clone, Args, PartialEq, Eq)]
 pub struct SessionReadCommand {
-    /// Thread ID。
+    /// 会话 ID（`axon sessions`）或 Thread ID（`axon debug session`）。
     pub thread_id: String,
 }
 
 /// `axon debug session resume` 参数。
 #[derive(Debug, Clone, Args, PartialEq, Eq)]
 pub struct SessionResumeCommand {
-    /// Thread ID。
+    /// 会话 ID（`axon sessions`）或 Thread ID（`axon debug session`）；Thread 必须已登记会话。
     pub thread_id: String,
 }
 
 /// `axon debug session fork` 参数。
 #[derive(Debug, Clone, Args, PartialEq, Eq)]
 pub struct SessionForkCommand {
-    /// 来源 Thread ID。
+    /// 来源标识：会话 ID（`axon sessions`）或 Thread ID（`axon debug session`）。
     pub thread_id: String,
     /// 新 Thread ID；省略时自动生成。
     #[arg(long)]
@@ -77,7 +78,7 @@ pub struct SessionForkCommand {
 /// `axon debug session export` 参数。
 #[derive(Debug, Clone, Args, PartialEq, Eq)]
 pub struct SessionExportCommand {
-    /// 会话 ID。
+    /// 会话 ID（`axon sessions`）或 Thread ID（`axon debug session`）。
     pub session_id: String,
     /// 输出 JSON 文件；缺省时写 stdout。
     #[arg(long)]
@@ -213,12 +214,13 @@ pub(crate) fn run_session_show(
     format: OutputFormat,
     config_path: &Path,
     command: &SessionShowCommand,
+    kind: TargetKind,
 ) -> CliRunResult {
     let root = match runtime_axon_root_path(config_path) {
         Ok(root) => root,
         Err(error) => return cli_error(error),
     };
-    let target = match resolve_session_target(config_path, &command.session_id) {
+    let target = match resolve_session_target(config_path, kind, &command.session_id) {
         Ok(target) => target,
         Err(error) => return cli_error(error),
     };
@@ -240,12 +242,13 @@ pub(crate) fn run_session_read(
     format: OutputFormat,
     config_path: &Path,
     command: &SessionReadCommand,
+    kind: TargetKind,
 ) -> CliRunResult {
     let root = match runtime_axon_root_path(config_path) {
         Ok(root) => root,
         Err(error) => return cli_error(error),
     };
-    let target = match resolve_session_target(config_path, &command.thread_id) {
+    let target = match resolve_session_target(config_path, kind, &command.thread_id) {
         Ok(target) => target,
         Err(error) => return cli_error(error),
     };
@@ -267,14 +270,22 @@ pub(crate) fn run_session_resume(
     format: OutputFormat,
     config_path: &Path,
     command: &SessionResumeCommand,
+    kind: TargetKind,
 ) -> CliRunResult {
     let root = match runtime_axon_root_path(config_path) {
         Ok(root) => root,
         Err(error) => return cli_error(error),
     };
-    let target = match resolve_session_target(config_path, &command.thread_id) {
+    let target = match resolve_session_target(config_path, kind, &command.thread_id) {
         Ok(target) => target,
         Err(error) => return cli_error(error),
+    };
+    // 恢复指针写会话身份：`--continue` 要靠它接续同一条会话，因此 Thread 必须已登记会话。
+    let Some(session_id) = target.session_id else {
+        return cli_error(format!(
+            "Thread 未登记会话，无法作为续聊目标：{}",
+            target.thread_id
+        ));
     };
     if let Err(error) = thread_service().resume_thread(
         &root,
@@ -285,9 +296,7 @@ pub(crate) fn run_session_resume(
     ) {
         return cli_error(error);
     }
-    // 指针写会话身份：`--continue` 要靠它重建同一条车道的渠道与投递目标。
-    if let Err(error) = crate::run_commands::select_resume_session(config_path, &target.session_id)
-    {
+    if let Err(error) = crate::run_commands::select_resume_session(config_path, &session_id) {
         return cli_error(error);
     }
     render_resume(
@@ -295,7 +304,7 @@ pub(crate) fn run_session_resume(
         &SessionResumeReport {
             status: "session_resumed",
             thread_id: target.thread_id,
-            session_id: target.session_id,
+            session_id,
         },
     )
 }
@@ -304,12 +313,13 @@ pub(crate) fn run_session_fork(
     format: OutputFormat,
     config_path: &Path,
     command: &SessionForkCommand,
+    kind: TargetKind,
 ) -> CliRunResult {
     let root = match runtime_axon_root_path(config_path) {
         Ok(root) => root,
         Err(error) => return cli_error(error),
     };
-    let target = match resolve_session_target(config_path, &command.thread_id) {
+    let target = match resolve_session_target(config_path, kind, &command.thread_id) {
         Ok(target) => target,
         Err(error) => return cli_error(error),
     };
@@ -352,12 +362,13 @@ pub(crate) fn run_session_export(
     format: OutputFormat,
     config_path: &Path,
     command: &SessionExportCommand,
+    kind: TargetKind,
 ) -> CliRunResult {
     let root = match runtime_axon_root_path(config_path) {
         Ok(root) => root,
         Err(error) => return cli_error(error),
     };
-    let target = match resolve_session_target(config_path, &command.session_id) {
+    let target = match resolve_session_target(config_path, kind, &command.session_id) {
         Ok(target) => target,
         Err(error) => return cli_error(error),
     };

@@ -1,13 +1,15 @@
-//! 会话 ID 到 Thread ID 的解析。
+//! 会话标识与运行窗口标识的解析。
 //!
-//! `axon sessions list` 列的是运行态会话（控制面 `sessions` 行），而 Thread 事件流按运行
-//! 窗口 `current_run_id` 落盘：CLI 复合车道发起的会话两者并不相等。用户会把清单里的 ID
-//! 原样交给 `sessions show` / `read` / `resume` / `fork` / `export` / `replay` / `delete`，
-//! 因此这些入口统一先解析一次：先把入参当 Thread 直接命中（`debug session list` 与
-//! `--session` 用的就是 Thread ID），未命中再回落到该会话所属的运行窗口。
+//! 两个标识空间各有唯一入口，互不回落：
 //!
-//! 解析同时给出一个可写进 `--continue` 恢复指针的会话身份：指针要能重建渠道与投递目标，
-//! 因此优先用控制面会话 ID，而不是 Thread ID。
+//! - 会话标识是 `sessions.session_id`（服务端生成的 ULID），用户可见的稳定身份。
+//!   `axon sessions` 与 `--continue` 恢复指针只认它；解析读一次会话行，运行窗口取自
+//!   `sessions.current_run_id`。
+//! - 运行窗口标识是 `sessions.current_run_id`，只在 `axon debug session` 的 Thread 级
+//!   入口出现。解析只做两件事：确认事件流里存在这段窗口，按归属列反查会话。
+//!
+//! 不做「先当 Thread 命中、再按会话回落」的串行回落，也不做「先查自己的行、再查认领者」
+//! 的二次回落：传入哪一类标识就只走那一条路径，查不到直接报错。
 
 use std::path::Path;
 
@@ -17,18 +19,28 @@ use rusqlite::OptionalExtension as _;
 
 use crate::runtime_paths::{runtime_axon_data_path_static, runtime_axon_root_path};
 
-/// 解析结果：Thread 身份与恢复指针要用的会话身份。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ResolvedSession {
-    /// Thread 事件流线程 ID。
-    pub(crate) thread_id: String,
-    /// 控制面会话 ID；`--continue` 指针写这个值才能重建渠道与投递目标。
-    pub(crate) session_id: String,
+/// 入口接受的标识空间。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TargetKind {
+    /// 会话标识：`axon sessions` 与 `--continue` 恢复指针。
+    Session,
+    /// 运行窗口标识：`axon debug session`。
+    Thread,
 }
 
-/// 把用户输入的会话 ID 解析成 Thread ID。
+/// 解析结果：要操作的 Thread 与它归属的会话。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedSession {
+    /// Thread 事件流线程 ID，即会话行的 `current_run_id`。
+    pub(crate) thread_id: String,
+    /// 会话标识；Thread 尚未登记会话时为 `None`。
+    pub(crate) session_id: Option<String>,
+}
+
+/// 按入口的标识空间解析一次，给出要操作的 Thread。
 pub(crate) fn resolve_session_target(
     config_path: &Path,
+    kind: TargetKind,
     given: &str,
 ) -> Result<ResolvedSession, String> {
     let given = given.trim();
@@ -36,50 +48,51 @@ pub(crate) fn resolve_session_target(
         return Err("会话 ID 不能为空".to_owned());
     }
     let root = runtime_axon_root_path(config_path)?;
-    let store = open_store(config_path)?;
-    // 1) 直接按 Thread 命中：`debug session list`、`--session`、fork 出来的 ID 都走这里。
-    if thread_exists(&root, given)? {
-        let session_id = owning_session_id(&store, given)?;
-        return Ok(ResolvedSession {
-            thread_id: given.to_owned(),
-            session_id: session_id.unwrap_or_else(|| given.to_owned()),
-        });
+    match kind {
+        TargetKind::Session => resolve_by_session(config_path, &root, given),
+        TargetKind::Thread => resolve_by_thread(config_path, &root, given),
     }
-    // 2) 按运行态会话回落：会话行的 current_run_id 就是它的 Thread。
+}
+
+/// 会话标识 → 运行窗口。只读一次会话行，再把运行窗口确认到事件流。
+fn resolve_by_session(
+    config_path: &Path,
+    root: &Path,
+    given: &str,
+) -> Result<ResolvedSession, String> {
     let session =
         DaemonSessionId::new(given.to_owned()).map_err(|_| format!("会话 ID 非法：{given}"))?;
+    let store = open_store(config_path)?;
     let record = store
         .get_session(&session)
         .map_err(|_| session_not_found(given))?;
-    if !thread_exists(&root, &record.current_run_id)? {
+    if !thread_exists(root, &record.current_run_id)? {
         return Err(session_not_found(given));
     }
     Ok(ResolvedSession {
         thread_id: record.current_run_id,
-        session_id: given.to_owned(),
+        session_id: Some(record.session_id.as_str().to_owned()),
     })
 }
 
-/// 该 Thread 是否是某个复合车道会话的运行窗口。
-///
-/// 只用于一处判断：CLI 直跑时补齐会话行前先确认没有车道认领这段运行窗口，
-/// 否则会给同一段对话再登记一条重复会话。
-pub(crate) fn run_window_has_lane(store: &SqliteRuntimeStore, thread_id: &str) -> bool {
-    store
-        .with_read_connection(|connection| {
-            connection
-                .query_row(
-                    "SELECT 1 FROM sessions WHERE current_run_id = ?1 LIMIT 1",
-                    [thread_id],
-                    |row| row.get::<_, i64>(0),
-                )
-                .optional()
-        })
-        .is_ok_and(|found| found.is_some())
+/// 运行窗口标识 → Thread 本身，并带回归属会话（可能尚未登记）。
+fn resolve_by_thread(
+    config_path: &Path,
+    root: &Path,
+    given: &str,
+) -> Result<ResolvedSession, String> {
+    if !thread_exists(root, given)? {
+        return Err(thread_not_found(given));
+    }
+    let store = open_store(config_path)?;
+    Ok(ResolvedSession {
+        thread_id: given.to_owned(),
+        session_id: thread_session_id(&store, given)?,
+    })
 }
 
-/// 找出该 Thread 对应的会话身份：自己的行优先，其次回落到认领该运行窗口的车道。
-fn owning_session_id(
+/// 运行窗口归属的会话标识；没有归属行返回 `None`。
+pub(crate) fn thread_session_id(
     store: &SqliteRuntimeStore,
     thread_id: &str,
 ) -> Result<Option<String>, String> {
@@ -87,24 +100,21 @@ fn owning_session_id(
         .with_read_connection(|connection| {
             connection
                 .query_row(
-                    "SELECT session_id FROM sessions WHERE session_id = ?1 LIMIT 1",
+                    "SELECT session_id FROM sessions WHERE current_run_id = ?1 LIMIT 1",
                     [thread_id],
                     |row| row.get::<_, String>(0),
                 )
                 .optional()
-                .and_then(|own| match own {
-                    Some(session_id) => Ok(Some(session_id)),
-                    None => connection
-                        .query_row(
-                            "SELECT session_id FROM sessions WHERE current_run_id = ?1
-                             ORDER BY last_activity_at_ms DESC LIMIT 1",
-                            [thread_id],
-                            |row| row.get::<_, String>(0),
-                        )
-                        .optional(),
-                })
         })
         .map_err(|error| error.to_string())
+}
+
+/// 该运行窗口是否已由会话行登记。
+///
+/// 只用于一处判断：CLI 直跑时补齐会话行前先确认没有会话认领这段运行窗口，
+/// 否则会给同一段对话再登记一条重复会话。
+pub(crate) fn run_window_registered(store: &SqliteRuntimeStore, thread_id: &str) -> bool {
+    thread_session_id(store, thread_id).is_ok_and(|found| found.is_some())
 }
 
 fn thread_exists(root: &Path, thread_id: &str) -> Result<bool, String> {
@@ -112,9 +122,11 @@ fn thread_exists(root: &Path, thread_id: &str) -> Result<bool, String> {
 }
 
 fn session_not_found(given: &str) -> String {
-    format!(
-        "未找到会话：{given}。先用 `axon sessions list` 或 `axon debug session list` 查看可用 ID"
-    )
+    format!("未找到会话：{given}。先用 `axon sessions list` 确认可用会话 ID")
+}
+
+fn thread_not_found(given: &str) -> String {
+    format!("未找到 Thread：{given}。先用 `axon debug session list` 确认可用 Thread ID")
 }
 
 fn open_store(config_path: &Path) -> Result<SqliteRuntimeStore, String> {

@@ -25,7 +25,7 @@ mod thread_cli;
 
 use output::{SessionOutputCommand, run_session_output};
 use replay::{SessionReplayCommand, run_session_replay};
-pub(crate) use session_resolution::{resolve_session_target, run_window_has_lane};
+pub(crate) use session_resolution::{TargetKind, resolve_session_target, run_window_registered};
 use sessions_list::{SessionsListCommand, run_sessions_list};
 pub(crate) use thread_cli::session_summary_views_for_root;
 use thread_cli::{
@@ -86,14 +86,14 @@ pub struct SessionDoctorCommand {
 /// 只换运行窗口，不动会话本身与历史：新的 `current_run_id` 之后，旧的运行态读数不再累加。
 #[derive(Debug, Clone, Args, PartialEq, Eq)]
 pub struct SessionResetCommand {
-    /// 会话 ID（会话清单 ID 或 Thread ID 均可）。
+    /// 会话 ID（`axon sessions list` 给出）。
     pub session_id: String,
 }
 
 /// `axon debug session delete` 参数。
 #[derive(Debug, Clone, Args, PartialEq, Eq)]
 pub struct SessionDeleteCommand {
-    /// 会话 ID。
+    /// 会话 ID（`axon sessions`）或 Thread ID（`axon debug session`）。
     pub session_id: String,
 }
 
@@ -118,14 +118,28 @@ pub(crate) fn run_session(
             }));
     match subcommand {
         SessionSubcommand::List(command) => run_session_list(format, &path, command),
-        SessionSubcommand::Show(command) => run_session_show(format, &path, command),
-        SessionSubcommand::Read(command) => run_session_read(format, &path, command),
-        SessionSubcommand::Resume(command) => run_session_resume(format, &path, command),
-        SessionSubcommand::Fork(command) => run_session_fork(format, &path, command),
+        SessionSubcommand::Show(command) => {
+            run_session_show(format, &path, command, TargetKind::Thread)
+        }
+        SessionSubcommand::Read(command) => {
+            run_session_read(format, &path, command, TargetKind::Thread)
+        }
+        SessionSubcommand::Resume(command) => {
+            run_session_resume(format, &path, command, TargetKind::Thread)
+        }
+        SessionSubcommand::Fork(command) => {
+            run_session_fork(format, &path, command, TargetKind::Thread)
+        }
         SessionSubcommand::Reset(command) => run_session_reset(format, &path, command),
-        SessionSubcommand::Delete(command) => run_session_delete(format, &path, command),
-        SessionSubcommand::Export(command) => run_session_export(format, &path, command),
-        SessionSubcommand::Replay(command) => run_session_replay(format, &path, command),
+        SessionSubcommand::Delete(command) => {
+            run_session_delete(format, &path, command, TargetKind::Thread)
+        }
+        SessionSubcommand::Export(command) => {
+            run_session_export(format, &path, command, TargetKind::Thread)
+        }
+        SessionSubcommand::Replay(command) => {
+            run_session_replay(format, &path, command, TargetKind::Thread)
+        }
         SessionSubcommand::Output(command) => run_session_output(format, command),
         SessionSubcommand::Doctor(command) => run_session_doctor(format, &path, command),
     }
@@ -181,14 +195,28 @@ pub(crate) fn run_sessions(
     match command.command.as_ref() {
         None => run_sessions_list(format, &path, &SessionsListCommand::default()),
         Some(SessionsSubcommand::List(list)) => run_sessions_list(format, &path, list),
-        Some(SessionsSubcommand::Show(sub)) => run_session_show(format, &path, sub),
-        Some(SessionsSubcommand::Read(sub)) => run_session_read(format, &path, sub),
-        Some(SessionsSubcommand::Resume(sub)) => run_session_resume(format, &path, sub),
-        Some(SessionsSubcommand::Fork(sub)) => run_session_fork(format, &path, sub),
+        Some(SessionsSubcommand::Show(sub)) => {
+            run_session_show(format, &path, sub, TargetKind::Session)
+        }
+        Some(SessionsSubcommand::Read(sub)) => {
+            run_session_read(format, &path, sub, TargetKind::Session)
+        }
+        Some(SessionsSubcommand::Resume(sub)) => {
+            run_session_resume(format, &path, sub, TargetKind::Session)
+        }
+        Some(SessionsSubcommand::Fork(sub)) => {
+            run_session_fork(format, &path, sub, TargetKind::Session)
+        }
         Some(SessionsSubcommand::Reset(sub)) => run_session_reset(format, &path, sub),
-        Some(SessionsSubcommand::Delete(sub)) => run_session_delete(format, &path, sub),
-        Some(SessionsSubcommand::Export(sub)) => run_session_export(format, &path, sub),
-        Some(SessionsSubcommand::Replay(sub)) => run_session_replay(format, &path, sub),
+        Some(SessionsSubcommand::Delete(sub)) => {
+            run_session_delete(format, &path, sub, TargetKind::Session)
+        }
+        Some(SessionsSubcommand::Export(sub)) => {
+            run_session_export(format, &path, sub, TargetKind::Session)
+        }
+        Some(SessionsSubcommand::Replay(sub)) => {
+            run_session_replay(format, &path, sub, TargetKind::Session)
+        }
         Some(SessionsSubcommand::Output(sub)) => run_session_output(format, sub),
         Some(SessionsSubcommand::Doctor(sub)) => run_session_doctor(format, &path, sub),
     }
@@ -233,6 +261,7 @@ fn run_session_delete(
     format: OutputFormat,
     config_path: &Path,
     command: &SessionDeleteCommand,
+    kind: TargetKind,
 ) -> CliRunResult {
     if command.session_id.trim().is_empty() {
         return cli_error("session id 不能为空");
@@ -241,8 +270,8 @@ fn run_session_delete(
         Ok(path) => path,
         Err(error) => return cli_error(error),
     };
-    // 入参可能是会话清单里的车道 ID，也可能是 Thread ID：先解析再按 Thread 清理事件流。
-    let target = match resolve_session_target(config_path, &command.session_id) {
+    // 按入口的标识空间解析一次，再按解析出的 Thread 清理事件流。
+    let target = match resolve_session_target(config_path, kind, &command.session_id) {
         Ok(target) => target,
         Err(error) => return cli_error(error),
     };
@@ -288,8 +317,7 @@ fn run_session_reset(
     if let Err(error) = store.initialize() {
         return cli_error(error.to_string());
     }
-    // 入参可能是会话清单里的车道 ID，也可能是 Thread ID：先按会话身份直读，读不到再按
-    // Thread 解析回它归属的会话。reset 是会话级操作，没有 Thread 的空会话同样可以轮换。
+    // 会话标识是 reset 唯一的入口：它轮换的是会话的运行窗口，Thread 标识不属于这里。
     let given = command.session_id.trim().to_owned();
     let session = match DaemonSessionId::new(given.clone()) {
         Ok(session) => session,
@@ -298,17 +326,9 @@ fn run_session_reset(
     let resolved = match store.get_session(&session) {
         Ok(record) => record,
         Err(_) => {
-            let target = match resolve_session_target(config_path, &given) {
-                Ok(target) => target,
-                Err(error) => return cli_error(error),
-            };
-            match DaemonSessionId::new(target.session_id.clone())
-                .map_err(|_| format!("会话 ID 非法：{}", target.session_id))
-                .and_then(|id| store.get_session(&id).map_err(|error| error.to_string()))
-            {
-                Ok(record) => record,
-                Err(error) => return cli_error(error),
-            }
+            return cli_error(format!(
+                "未找到会话：{given}。先用 `axon sessions list` 确认可用会话 ID"
+            ));
         }
     };
     let now_ms = axon_time::unix_now_ms();
