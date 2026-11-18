@@ -207,6 +207,61 @@ fn projection_records_the_inbound_channel_instead_of_internal() {
     );
 }
 
+/// 单轮投影的读改写必须落在同一个立即事务里。
+///
+/// 这条用例守住 `apply_turn_metrics` 的写法：读旧行、在内存累加、一次 UPSERT 写回，三步
+/// 同事务。若把读挪到事务外（或者先读后写两次），并发写入立刻丢更新，`turn_count` 与
+/// 渠道分布都会小于实际轮次。
+#[test]
+fn turn_projection_accumulates_atomically_within_one_transaction() {
+    const WORKERS: usize = 8;
+    const TURNS_PER_WORKER: usize = 20;
+
+    let (store, session_id) = fixture();
+    let handles = (0..WORKERS)
+        .map(|worker| {
+            let store = store.clone();
+            let session_id = session_id.clone();
+            std::thread::spawn(move || {
+                for index in 0..TURNS_PER_WORKER {
+                    let turn_id = format!("t-{worker}-{index}");
+                    super::session_metrics_repository::apply_turn_metrics(
+                        &store,
+                        &session_id,
+                        &metrics(&turn_id, None, 100, 0),
+                        Some("desktop"),
+                        20,
+                    )
+                    .expect("并发写入投影");
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    for handle in handles {
+        handle.join().expect("投影写入线程不 panic");
+    }
+
+    let snapshot = store
+        .session_metrics(&session_id)
+        .expect("读取投影")
+        .expect("投影应存在");
+    let expected = WORKERS * TURNS_PER_WORKER;
+    assert_eq!(
+        usize::try_from(snapshot.turn_count).expect("轮次数"),
+        expected,
+        "读改写不在同一事务里会丢更新"
+    );
+    assert_eq!(
+        usize::try_from(snapshot.total_active_ms / 100).expect("活动耗时"),
+        expected
+    );
+    assert_eq!(
+        snapshot.channel_mix.get("desktop"),
+        Some(&u64::try_from(expected).expect("轮次数")),
+        "每轮只累加一次渠道分布，不做二次读改写"
+    );
+}
+
 #[test]
 fn rebuild_replays_the_event_log_and_restores_channel_mix() {
     let (store, session_id) = fixture();
