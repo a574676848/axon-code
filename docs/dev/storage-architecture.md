@@ -530,7 +530,7 @@ enum TurnOrigin { External, Cron, Goal, Subagent }
 
 三条硬规则：
 
-- **整轮 token 是各条 provider 流之和，绝不取最后一条流。** 一轮里每次工具循环都会开一条新流，每条流都对应一次真实请求；最后一条往往只是一段空响应（`input` 等于整份上下文、不带缓存明细），拿它当整轮读数会让会话累计少记一个量级。
+- **整轮 token 是各条 provider 流之和，绝不取最后一条流。** 一轮里每次工具循环都会开一条新流，每条流都对应一次真实请求；最后一条往往只是一段空响应（`input` 等于整份上下文、不带缓存明细），拿它当整轮读数会让会话累计少记一个量级。五类 token 一律走这份累加，不按解码窗口长短二次筛选（解码窗口只服务速率）。
 - **轮收口只认 `turn_completed`。** 单条 provider 流收口同样是 `status=completed` 的 `turnLifecycle` 帧；用它判定会让 `turn_metrics` 在该轮第一段就定稿（每轮只写一条），同轮后续所有流的用量再也进不了指标。
 - **未测得不得用 0 冒充。** `ttft_ms` 与 `generation_speed_tps` 用 `Option` 表达未测得，`ttft_samples` 只统计测得值；五类 token 字段目前仍是 `u64`，Provider 缺缓存明细时只能写 0，下游无法与"确实 0 命中"区分，这是已知缺口。
 

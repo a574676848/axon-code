@@ -288,3 +288,102 @@ fn terminal_event_and_turn_metrics_land_in_one_batch() {
         ["turn_completed".to_owned()]
     );
 }
+
+#[test]
+fn turn_metrics_output_tokens_follow_the_ledger_not_the_speed_window() {
+    let root = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::from_root(root.path().join("data"));
+    let clock = AdvancingClock::new(1_000);
+    let host_id = RuntimeHostId::new("host-output-ledger").expect("Host ID");
+    let host = store
+        .claim_host(&host_id, 1, None, clock.now_ms(), 60_000)
+        .expect("注册 Host");
+    let session_id = DaemonSessionId::new("session-output-ledger").expect("Session ID");
+    store
+        .create_session(&session_id, "/workspace", clock.now_ms())
+        .expect("创建会话");
+    let interaction = InteractionRecord::new(
+        InteractionId::new("interaction-output-ledger").expect("Interaction ID"),
+        InteractionSource::new("cli", "message-output-ledger").expect("来源"),
+        ScopeRef::global(),
+        AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly),
+        ReplyRoute::new("cli", "terminal").expect("回复路由"),
+        "跑一轮",
+        clock.now_ms(),
+    )
+    .expect("Interaction");
+    let interaction_id = interaction.interaction_id.clone();
+    store.append(&interaction).expect("追加 Interaction");
+    let lease = store
+        .claim_processing_by_id(&interaction_id, clock.now_ms(), 60_000)
+        .expect("领取 Interaction")
+        .expect("应领取到一条待处理 Interaction");
+    let publisher = RecordingPublisher {
+        published: Arc::new(Mutex::new(Vec::new())),
+    };
+    let bridge = EventStreamBridge::new();
+    let sink = RuntimeTurnEventSink::new(
+        &store,
+        CommittedEventEgress::new(&publisher, &bridge),
+        &host,
+        &session_id,
+        &interaction_id,
+        &lease.lease_token,
+        &clock,
+        None,
+        Arc::new(ChildSessionSinkFactory {
+            store: store.clone(),
+            host: host.clone(),
+            clock: clock.clone(),
+            cwd: "/workspace".to_owned(),
+            stream_bridge: Arc::new(EventStreamBridge::new()),
+        }),
+    );
+
+    // 两条流都在毫秒级收口：解码窗口短于速率下限，会被速率口径整条丢弃，
+    // 但它们确实生成了 token，整轮读数必须算进去。
+    for (output, reasoning) in [(265_u64, 1_012_u64), (40, 403)] {
+        for (status, kind) in [
+            ("started", "StreamingStarted"),
+            ("completed", "StreamingCompleted"),
+        ] {
+            if status == "completed" {
+                sink.publish(&runtime_event(
+                    "wire_event",
+                    wire_payload(
+                        "usageUpdate",
+                        json!({
+                            "inputTokens": 100,
+                            "cachedInputTokens": 900,
+                            "outputTokens": output,
+                            "reasoningOutputTokens": reasoning,
+                        }),
+                    ),
+                ))
+                .expect("用量帧应落库");
+            }
+            sink.publish(&runtime_event(
+                "wire_event",
+                wire_payload("turnLifecycle", json!({ "status": status, "kind": kind })),
+            ))
+            .expect("流边界应落库");
+        }
+    }
+    sink.publish(&runtime_event(
+        "turn_completed",
+        json!({ "interactionId": interaction_id.as_str(), "response": "答案" }).to_string(),
+    ))
+    .expect("终态事件应落库");
+
+    let events = store.replay_events(&session_id, 0, 64).expect("回放事件");
+    let metrics_event = events
+        .iter()
+        .find(|event| event.event_type == "turn_metrics")
+        .expect("终态应派生一条指标事件");
+    let metrics: axon_eventlog::TurnMetrics =
+        serde_json::from_str(&metrics_event.payload_json).expect("指标载荷应可解析");
+
+    assert_eq!(metrics.output_tokens, 305, "短窗口流的输出也必须计入整轮");
+    assert_eq!(metrics.reasoning_tokens, 1_415);
+    assert_eq!(metrics.cache_read_tokens, 1_800, "五类 token 同源累加");
+}

@@ -76,26 +76,28 @@ pub(super) struct RuntimeTurnEventSink<'a, S, P, C> {
 
 /// 收尾指标需要的用量快照。
 ///
-/// 三个字段都是整轮按 provider 流累加的结果，不是「最后一条观测」：一轮里每条流都是
+/// 五个字段都是整轮按 provider 流累加的结果，不是「最后一条观测」：一轮里每条流都是
 /// 一次真实请求，最后一条往往只是一段空响应。
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct TurnUsageSnapshot {
     pub(super) input_tokens: u64,
     pub(super) cached_input_tokens: u64,
     pub(super) cache_write_input_tokens: u64,
+    /// 整轮生成输出：被速率口径丢弃的短窗口流也计在这里。
+    pub(super) output_tokens: u64,
+    /// 整轮推理输出。
+    pub(super) reasoning_output_tokens: u64,
 }
 
-/// 收尾与实时帧共用的生成指标读数。
+/// 收尾与实时帧共用的生成读数。
+///
+/// 只留速率所需的两项：token 一律从用量账本取累加值，与输入、缓存同源。
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct TurnGenerationReadout {
     /// 首字耗时；未测得时为 None。
     pub(super) ttft_ms: Option<u64>,
     /// 解码窗口；没有可测样本时为 None。
     pub(super) decode_ms: Option<u64>,
-    /// 本轮实测输出 token；没有可测样本时为 0。
-    pub(super) output_tokens: u64,
-    /// 本轮实测推理输出 token；没有可测样本时为 0。
-    pub(super) reasoning_output_tokens: u64,
 }
 
 /// 一轮收口时的终态读数。
@@ -109,10 +111,6 @@ pub(super) struct TurnFinalReadout {
     pub(super) active_ms: u64,
     /// 首字延迟。
     pub(super) ttft_ms: Option<u64>,
-    /// 本轮实测输出 token。
-    pub(super) output_tokens: u64,
-    /// 本轮实测推理输出 token。
-    pub(super) reasoning_output_tokens: u64,
 }
 
 impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
@@ -193,14 +191,9 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
         fallback_total_ms: Option<u64>,
     ) -> TurnGenerationReadout {
         let ttft_ms = self.application_ttft_ms();
-        let (decode_ms, output_tokens, reasoning_output_tokens) =
-            self.generation_watch().readout(ttft_ms, fallback_total_ms);
-        TurnGenerationReadout {
-            ttft_ms,
-            decode_ms,
-            output_tokens,
-            reasoning_output_tokens,
-        }
+        // 输出 token 不从窗口样本取：短窗口流会被速率口径丢弃，而它们的输出确实发生了。
+        let (decode_ms, _, _) = self.generation_watch().readout(ttft_ms, fallback_total_ms);
+        TurnGenerationReadout { ttft_ms, decode_ms }
     }
 
     /// 组装本轮指标事件；每轮只产出一次。
@@ -220,8 +213,9 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
         }
         let now_ms = self.clock.now_ms();
         let readout = self.generation_readout(None);
-        // 整轮 token 取账本累加：一条空响应流就能把「最后一条」的读数抹成 0，
-        // 而这一轮实际跑过的每一条流都付过 prompt。
+        // 整轮 token 一律取账本累加：一条空响应流就能把「最后一条」的读数抹成 0，
+        // 而这一轮实际跑过的每一条流都付过 prompt。输入、缓存、输出、推理同源，
+        // 不按流的解码窗口长短做二次筛选。
         let usage = self.usage_snapshot();
         /*
          * 整轮读数优先取收尾观测已定稿的那一份。
@@ -241,15 +235,12 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
         let ttft_ms = final_readout
             .and_then(|final_| final_.ttft_ms)
             .or(readout.ttft_ms);
-        let output_tokens =
-            final_readout.map_or(readout.output_tokens, |final_| final_.output_tokens);
-        let reasoning_tokens = final_readout.map_or(readout.reasoning_output_tokens, |final_| {
-            final_.reasoning_output_tokens
-        });
         let generate_ms = ttft_ms
             .unwrap_or(0)
             .saturating_add(readout.decode_ms.unwrap_or(0));
-        let generated_tokens = output_tokens.saturating_add(reasoning_tokens);
+        let generated_tokens = usage
+            .output_tokens
+            .saturating_add(usage.reasoning_output_tokens);
         let speed = if readout.decode_ms.unwrap_or(0) > 0 && generated_tokens > 0 {
             Some((generated_tokens as f64) * 1_000.0 / (readout.decode_ms.unwrap_or(1) as f64))
         } else {
@@ -262,8 +253,8 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             provider_duration_ms: generate_ms,
             tool_ms: active_ms.saturating_sub(generate_ms),
             input_tokens: usage.input_tokens,
-            output_tokens,
-            reasoning_tokens,
+            output_tokens: usage.output_tokens,
+            reasoning_tokens: usage.reasoning_output_tokens,
             cache_read_tokens: usage.cached_input_tokens,
             cache_write_tokens: usage.cache_write_input_tokens,
             generation_speed_tps: speed,
