@@ -218,7 +218,7 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
     /// 指标是终态事件的派生事实，因此不单独开一批写入：调用方把它并进终态批次，
     /// 每轮省掉一次控制面事务与一次 fsync，也不会出现「终态已落盘而指标丢失」。
     /// 序列化失败按派生事实处理：告警并返回 `None`，不阻断本轮投递。
-    fn turn_metrics_event(&self) -> Option<(String, String)>
+    pub(super) fn turn_metrics_event(&self) -> Option<(String, String)>
     where
         C: RuntimeClock,
     {

@@ -184,6 +184,12 @@ struct HttpEventRequest {
     #[serde(default)]
     client: Option<String>,
     event_id: String,
+    /// 请求落到的 Workspace；桌面等工作台客户端会带上，外部 webhook 不带。
+    ///
+    /// 带上时本轮落到该 Workspace 的会话（没有就建一条主会话）；不带时按外部事件处理，
+    /// 落到服务端固定会话。会话标识仍由服务端给出，不接受客户端自带。
+    #[serde(default)]
+    workspace_id: Option<String>,
     observed_at_ms: u64,
     expires_at_ms: u64,
     content: String,
@@ -208,8 +214,9 @@ impl HttpEventRequest {
             event_id: self.event_id,
             // 外部事件不对外暴露会话标识：它们统一落到服务端内部的固定会话。
             session_id: None,
-            // 外部事件不对外暴露 Workspace：固定落到 Axon 根目录这一条。
-            workspace_id: String::new(),
+            // Workspace 可以显式给出：工作台客户端按用户选定的 Workspace 投递，
+            // 空串表示外部 webhook 这类没有 Workspace 的来源。
+            workspace_id: self.workspace_id.unwrap_or_default(),
             observed_at_ms: self.observed_at_ms,
             expires_at_ms: self.expires_at_ms,
             content: self.content,
@@ -306,16 +313,25 @@ mod tests {
     }
 
     #[test]
-    fn external_event_wire_rejects_workspace_and_session_fields() {
-        // 外部事件不接受任何外部 Workspace 与会话标识：这两个字段现在都属于未知字段。
+    fn external_event_wire_accepts_workspace_but_rejects_session_fields() {
+        // 工作台客户端带 workspaceId（`.axon` 也是正经 Workspace，用户选哪个就落哪个）；
+        // 会话标识仍由服务端按 Workspace 落定，客户端自带的一律按未知字段拒绝。
+        let with_workspace = serde_json::from_str::<HttpEventRequest>(
+            r#"{"sourceChannel":"desktop","eventId":"event-1","workspaceId":"workspace-a","observedAtMs":100,"expiresAtMs":200,"content":"hello","replyChannel":"desktop","replyDestination":"client-1"}"#,
+        )
+        .expect("工作台必须能带 Workspace");
+        assert_eq!(
+            with_workspace.into_event().expect("事件映射").workspace_id,
+            "workspace-a"
+        );
+
         for payload in [
-            r#"{"sourceChannel":"http","eventId":"event-1","workspaceId":"workspace-a","observedAtMs":100,"expiresAtMs":200,"content":"hello","replyChannel":"http","replyDestination":"client-1"}"#,
             r#"{"sourceChannel":"http","eventId":"event-1","sessionId":"01J8XQ7K3M4N5P6Q7R8S9T0V1W","observedAtMs":100,"expiresAtMs":200,"content":"hello","replyChannel":"http","replyDestination":"client-1"}"#,
             r#"{"sourceChannel":"http","eventId":"event-1","observedAtMs":100,"expiresAtMs":200,"content":"hello","replyChannel":"http","replyDestination":"client-1","unknownField":true}"#,
         ] {
             assert!(
                 serde_json::from_str::<HttpEventRequest>(payload).is_err(),
-                "外部事件不接受外部 Workspace 与会话标识：{payload}"
+                "会话标识由服务端落定，未知字段一律拒绝：{payload}"
             );
         }
     }

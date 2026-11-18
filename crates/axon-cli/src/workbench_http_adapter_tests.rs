@@ -111,45 +111,6 @@ fn sessions_route_returns_the_desktop_contract_shape() {
 }
 
 #[test]
-fn pending_question_counts_are_read_from_the_outbox_database() {
-    // `user_questions` 落在待消费队列库。按控制面库查会以「no such table」失败并被
-    // 调用方吞成 0，桌面左侧菜单因此永远看不到「有待答提问」：库选错在界面上就是
-    // 一条静默缺失的读数，只能靠这条用例钉住。
-    use axon_session::UserQuestionStore as _;
-    let temp_root = axon_test_support::test_temp_root();
-    let store = axon_session::SqliteRuntimeStore::from_root(temp_root.join("data"));
-    store.initialize().expect("初始化运行态库");
-    store
-        .insert_question(&axon_domain::UserQuestionRecord {
-            question_id: "uq-pending-1".to_owned(),
-            idempotency_key: "idem-pending-1".to_owned(),
-            session_id: "session-pending-question".to_owned(),
-            interaction_id: "interaction-pending-question".to_owned(),
-            turn_id: "turn-pending-question".to_owned(),
-            tool_call_id: "call-pending-question".to_owned(),
-            questions_json: r#"[{"question":"继续吗"}]"#.to_owned(),
-            handoff_text: None,
-            state: axon_domain::UserQuestionState::Pending,
-            deadline_at_ms: 60_000,
-            answer_json: None,
-            answered_at_ms: None,
-            answered_channel: None,
-            delivered: false,
-            delivery_mode: None,
-            created_at_ms: 10,
-            expires_at_ms: 60_000,
-        })
-        .expect("写入待答提问");
-
-    let counts = session_pending_question_counts(&temp_root).expect("读取待答计数");
-    assert_eq!(
-        counts.get("session-pending-question").copied(),
-        Some(1),
-        "待答计数必须来自待消费队列库：{counts:?}"
-    );
-}
-
-#[test]
 fn test_workbench_adapter_with_answer_service() {
     let temp_root = axon_test_support::test_temp_root();
     let store = Arc::new(axon_session::SqliteRuntimeStore::from_root(

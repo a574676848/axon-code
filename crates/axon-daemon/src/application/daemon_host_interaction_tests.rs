@@ -297,8 +297,12 @@ fn primary_turn_projects_live_event_before_completion() {
             .iter()
             .map(|event| event.event_type.as_str())
             .collect::<Vec<_>>(),
-        [LIVE_WIRE_EVENT_TYPE, TURN_COMPLETED_EVENT_TYPE],
-        "durable 日志只保留用户事实与收口，过程帧由实时通道承载"
+        [
+            LIVE_WIRE_EVENT_TYPE,
+            TURN_COMPLETED_EVENT_TYPE,
+            "turn_metrics"
+        ],
+        "durable 日志只保留用户事实、收口与收口派生的指标，过程帧由实时通道承载"
     );
     assert!(
         events
@@ -309,6 +313,10 @@ fn primary_turn_projects_live_event_before_completion() {
     assert_eq!(
         events[1].emitted_at_ms, LIVE_COMMIT_NOW_MS,
         "durable commit 时间必须取自提交前时钟"
+    );
+    assert_eq!(
+        events[2].emitted_at_ms, events[1].emitted_at_ms,
+        "指标与收口同批提交，不得另开一次事务"
     );
 }
 
@@ -369,9 +377,10 @@ fn streamed_text_is_compacted_into_one_durable_snapshot() {
         [
             LIVE_WIRE_EVENT_TYPE,
             LIVE_WIRE_EVENT_TYPE,
-            TURN_COMPLETED_EVENT_TYPE
+            TURN_COMPLETED_EVENT_TYPE,
+            "turn_metrics"
         ],
-        "两段增量必须压成一条快照，而不是各占一行"
+        "两段增量必须压成一条快照，收口后补一条派生指标，而不是各占一行"
     );
     let snapshot: serde_json::Value =
         serde_json::from_str(&events[1].payload_json).expect("解析快照 payload");

@@ -4,7 +4,7 @@ use std::path::Path;
 
 use axon_domain::{
     AudienceContext, AudienceKind, DaemonSessionId, DisclosurePolicy, InteractionRecord,
-    InteractionSource, ReplyRoute, ScopeRef,
+    InteractionSource, ReplyRoute, ScopeRef, WorkspaceId,
 };
 use axon_session::{
     RuntimeStore, SessionTrustScope, SqliteRuntimeStore, WorkspaceRecord, WorkspaceResolver,
@@ -21,8 +21,10 @@ pub(crate) struct PreparedInteraction {
 
 /// 带客户端来源的构造函数。
 ///
-/// `session` 是调用方显式给出的会话标识：给出时必须是该 Workspace 下已登记的会话，
-/// 未登记直接报错、不隐式新建；为 `None` 时解析该 Workspace 的活跃会话，没有才新建。
+/// `session` 是调用方显式给出的会话标识：给出时必须是已登记的主会话，未登记直接报错、
+/// 不隐式新建；为 `None` 时解析当前目录所属 Workspace 的活跃会话，没有才新建。
+/// 显式给出会话时**本轮工作区跟随该会话**：会话已带 Workspace，不再用进程 cwd 反推，
+/// 否则从别的目录续聊同一条会话会被误判成「其他工作区」。
 /// `client` 是按下发送的那一端（cli / desktop / tui / cron）。
 pub(crate) fn prepare_interaction_from_prompt_as(
     session: Option<&DaemonSessionId>,
@@ -34,7 +36,7 @@ pub(crate) fn prepare_interaction_from_prompt_as(
     now_ms: u64,
     client: Option<&str>,
 ) -> Result<PreparedInteraction, String> {
-    let workspace = WorkspaceResolver
+    let cwd_workspace = WorkspaceResolver
         .resolve(cwd, now_ms)
         .map_err(|error| error.to_string())?;
     // 交互标识由服务端生成（ULID）；来源幂等键仍是一次性的消息标识。
@@ -47,13 +49,12 @@ pub(crate) fn prepare_interaction_from_prompt_as(
             .with_client(client)
             .map_err(|error| error.to_string())?;
     }
-    let scope =
-        ScopeRef::workspace(workspace.workspace_id.clone()).map_err(|error| error.to_string())?;
     let store = interaction_store(config_path)?;
+    // 进程所在目录始终登记一次：桌面与目标看板按 Workspace 筛选时要用到它。
     store
-        .register_workspace(&workspace)
+        .register_workspace(&cwd_workspace)
         .map_err(|error| error.to_string())?;
-    let session_id = match session {
+    let (session_id, workspace) = match session {
         Some(session_id) => {
             let record = store
                 .get_session(session_id)
@@ -65,26 +66,43 @@ pub(crate) fn prepare_interaction_from_prompt_as(
                     session_id.as_str()
                 ));
             }
-            if record.workspace_id.as_deref() != Some(workspace.workspace_id.as_str()) {
-                return Err(format!(
-                    "无法续接会话 {}：该会话属于其他工作区",
-                    session_id.as_str()
-                ));
-            }
-            record.session_id
+            // 会话带 Workspace 就以它为事实源；未绑定（历史行）时才回落到当前目录。
+            let workspace = match record.workspace_id.as_deref() {
+                Some(owner) => {
+                    let workspace_id =
+                        WorkspaceId::new(owner.to_owned()).map_err(|error| error.to_string())?;
+                    store
+                        .get_workspace(&workspace_id)
+                        .map_err(|error| error.to_string())?
+                        .ok_or_else(|| {
+                            format!(
+                                "无法续接会话 {}：其工作区 {owner} 未登记",
+                                session_id.as_str()
+                            )
+                        })?
+                }
+                None => cwd_workspace.clone(),
+            };
+            (record.session_id, workspace)
         }
         None => {
-            store
+            let resolved = store
                 .resolve_workspace_session(&WorkspaceSessionRequest {
-                    workspace_id: workspace.workspace_id.clone(),
-                    cwd: workspace.workspace_root.clone(),
+                    workspace_id: cwd_workspace.workspace_id.clone(),
+                    cwd: cwd_workspace.workspace_root.clone(),
                     trust_scope: SessionTrustScope::Private,
                     now_ms,
                 })
-                .map_err(|error| error.to_string())?
-                .session_id
+                .map_err(|error| error.to_string())?;
+            (resolved.session_id, cwd_workspace.clone())
         }
     };
+    // 会话可能属于别的工作区：把那个工作区也确认登记，事件 scope 与它保持一致。
+    store
+        .register_workspace(&workspace)
+        .map_err(|error| error.to_string())?;
+    let scope =
+        ScopeRef::workspace(workspace.workspace_id.clone()).map_err(|error| error.to_string())?;
     let interaction = InteractionRecord::new(
         session_id,
         interaction_id,

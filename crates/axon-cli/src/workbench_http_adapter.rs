@@ -15,8 +15,8 @@ use std::sync::{Arc, LazyLock, Mutex};
 use axon_daemon::{GatewayHttpResponse, GatewayHttpRouteHandler};
 use axon_domain::DaemonSessionId;
 use axon_session::{
-    AXON_RUNTIME_DATA_DIR, InteractionCursor, RuntimeStore, RuntimeStoreError, SessionQueryService,
-    SessionSnapshot, SqliteRuntimeStore, WorkspaceRecord, WorkspaceStore,
+    AXON_RUNTIME_DATA_DIR, InteractionCursor, RuntimeStore, RuntimeStoreError, SqliteRuntimeStore,
+    WorkspaceRecord, WorkspaceStore,
 };
 use serde::Serialize;
 
@@ -40,7 +40,7 @@ const MAX_SUBAGENT_MESSAGE_CHARS: usize = 8_000;
 #[path = "workbench_http_views.rs"]
 mod workbench_http_views;
 
-pub use workbench_http_views::{InteractionView, SessionView, TurnMetricsView, WorkspaceView};
+pub use workbench_http_views::{InteractionView, TurnMetricsView, WorkspaceView};
 
 #[path = "workbench_http_targets.rs"]
 mod workbench_http_targets;
@@ -120,60 +120,29 @@ pub fn workspaces_payload(axon_root: &Path) -> Result<serde_json::Value, String>
 }
 
 /// 车道载荷；给定 `workspace` 时只返回该工作区下的车道。
+///
+/// 字段直接取 `read_session_rows`：桌面左侧菜单与 CLI `sessions list` 读同一份投影，
+/// 标题、置顶、归档、最近活动与会话累计读数因此不会再出现两套口径。
 pub fn sessions_payload(
     axon_root: &Path,
     workspace_filter: Option<&str>,
+    include_archived: bool,
 ) -> Result<serde_json::Value, String> {
-    let mut sessions = SessionQueryService::new(runtime_store(axon_root))
-        .list_sessions()
-        .map_err(|error| format!("读取车道列表失败：{error:?}"))?;
-    if let Some(workspace_id) = workspace_filter {
-        sessions.retain(|session| session.workspace_id == workspace_id);
-    }
-    let pending_counts = session_pending_question_counts(axon_root).unwrap_or_default();
-    let sessions: Vec<SessionView> = sessions
+    let rows = super::sessions_http_adapter::read_session_rows(&runtime_store(axon_root))
+        .map_err(|error| format!("读取会话列表失败：{error:?}"))?;
+    let sessions: Vec<serde_json::Value> = rows
         .iter()
-        .map(|session| {
-            let mut view = SessionView::from(session);
-            view.pending_question_count = pending_counts
-                .get(&session.session_id)
-                .copied()
-                .unwrap_or(0);
-            view
+        .filter(|row| {
+            workspace_filter.is_none_or(|workspace| row.workspace_id.as_deref() == Some(workspace))
         })
+        .filter(|row| include_archived || !row.archived)
+        .map(super::sessions_http_adapter::SessionListRow::to_json)
         .collect();
     Ok(serde_json::json!({
         "sessions": sessions,
         "totalRecords": sessions.len(),
         "rawPayloadPersisted": false,
     }))
-}
-
-/// 单条聚合 SQL 查询各车道待答提问数量（P9 判据）。
-///
-/// `user_questions` 落在待消费队列库上，控制面库里没有这张表：按控制面库查会以
-/// 「no such table」失败并被调用方吞成 0，界面上因此永远看不到「有待答提问」。
-/// 这里改走待消费队列的共享连接池，既不查错库，也不为每个请求重开一次 SQLite 连接。
-fn session_pending_question_counts(
-    axon_root: &Path,
-) -> Result<std::collections::HashMap<String, u64>, String> {
-    runtime_store(axon_root)
-        .with_outbox_read_connection(|connection| {
-            let mut statement = connection.prepare(
-                "SELECT session_id, COUNT(*) FROM user_questions \
-                 WHERE state IN ('pending', 'suspended') GROUP BY session_id",
-            )?;
-            let rows = statement.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
-            })?;
-            let mut counts = std::collections::HashMap::new();
-            for row in rows {
-                let (session_id, count) = row?;
-                counts.insert(session_id, count);
-            }
-            Ok(counts)
-        })
-        .map_err(|error| error.to_string())
 }
 
 /// 工作区注册请求。
@@ -403,12 +372,17 @@ impl GatewayHttpRouteHandler for WorkbenchHttpAdapter {
             }),
             "sessions" => {
                 let filter = query_param(query, "workspace");
-                Some(match sessions_payload(&self.axon_root, filter.as_deref()) {
-                    Ok(payload) => GatewayHttpResponse::json(200, &payload),
-                    Err(error) => {
-                        GatewayHttpResponse::json(500, &serde_json::json!({ "error": error }))
-                    }
-                })
+                // 归档会话只有显式请求才返回：列表默认只给当前在用的那些。
+                let include_archived = query_param(query, "include_archived")
+                    .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+                Some(
+                    match sessions_payload(&self.axon_root, filter.as_deref(), include_archived) {
+                        Ok(payload) => GatewayHttpResponse::json(200, &payload),
+                        Err(error) => {
+                            GatewayHttpResponse::json(500, &serde_json::json!({ "error": error }))
+                        }
+                    },
+                )
             }
             _ => session_subagents_target(subpath)
                 .map(

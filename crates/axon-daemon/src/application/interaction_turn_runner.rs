@@ -123,6 +123,7 @@ where
                     events,
                     performance.as_deref(),
                     None,
+                    None,
                 )?;
                 if kind == TurnFailureKind::Interrupted {
                     return Err(PrimaryTurnRunnerError::Interrupted(response));
@@ -140,6 +141,9 @@ where
             self.clock.now_ms(),
         );
         let summary = completion_summary_from_events(&outcome.events);
+        // 终态与它派生的指标同批落盘：`session_metrics` 由 `turn_metrics` 累加，
+        // 缺了它 header 的会话累计耗时与 token 读数整段消失。
+        let turn_metrics = sink.turn_metrics_event();
         self.persist_and_publish(
             &session_id,
             &interaction.interaction_id,
@@ -147,6 +151,7 @@ where
             outcome.events,
             performance.as_deref(),
             generation,
+            turn_metrics,
         )?;
         self.settle_completion_delivery(&interaction, summary.as_deref());
         Ok(())
@@ -206,9 +211,24 @@ where
             .get_workspace(workspace_id)
             .map_err(runtime_error)?
             .ok_or_else(|| runtime_error("Interaction 对应 Workspace 未注册"))?;
-        self.store
+        let mut runtime = self
+            .store
             .create_session(session_id, &workspace.workspace_root, self.now_ms)
-            .map_err(runtime_error)
+            .map_err(runtime_error)?;
+        // 会话 cwd 只是恢复提示，不是身份的一部分：历史行可能在建行时留空（网关固定会话
+        // 就不绑定项目工作区）。Provider 需要一个可访问的工作目录，留空会整轮失败，
+        // 因此这一轮按该 Interaction 所属 Workspace 的根目录补齐。
+        runtime.cwd = effective_cwd(&runtime.cwd, &workspace.workspace_root);
+        Ok(runtime)
+    }
+}
+
+/// 本轮实际使用的工作目录：会话行有值就用它，留空回落到所属 Workspace 的根目录。
+fn effective_cwd(session_cwd: &str, workspace_root: &str) -> String {
+    if session_cwd.trim().is_empty() {
+        workspace_root.to_owned()
+    } else {
+        session_cwd.to_owned()
     }
 }
 
@@ -262,6 +282,7 @@ where
         events: Vec<RuntimeEvent>,
         performance: Option<&AtomicTurnPerformanceRecorder>,
         generation: Option<TurnGenerationMetrics>,
+        turn_metrics: Option<(String, String)>,
     ) -> Result<(), PrimaryTurnRunnerError> {
         let performance = performance.map(AtomicTurnPerformanceRecorder::snapshot);
         let payloads = events
@@ -288,6 +309,9 @@ where
                 .map_err(runtime_error)
             })
             .collect::<Result<Vec<_>, _>>()?;
+        // 指标只落库、不投递实时通道：它与终态共享同一次事务与一次 fsync，
+        // 但订阅者看到的帧序列里不该多出一条派生读数。
+        let (payloads, publishable) = terminal_batch(payloads, turn_metrics);
         let persisted = self
             .store
             .append_interaction_events(
@@ -300,7 +324,7 @@ where
             )
             .map_err(runtime_error)?;
         let egress = CommittedEventEgress::new(&self.publisher, self.stream_bridge.as_ref());
-        for event in &persisted {
+        for event in persisted.iter().take(publishable) {
             egress
                 .publish_for_interaction(interaction_id, event, &event.cursor())
                 .map_err(PrimaryTurnRunnerError::Renderer)?;
@@ -378,6 +402,21 @@ use interaction_turn_payloads::{
 #[path = "interaction_turn_runner_performance_tests.rs"]
 mod performance_tests;
 
+/// 终态批次的载荷布局：事件按序在前，派生的 `turn_metrics` 追加在后。
+///
+/// 返回值第二项是「可投递前缀」长度：`turn_metrics` 只落库，不投递实时通道。
+fn terminal_batch(
+    payloads: Vec<(String, String)>,
+    metrics: Option<(String, String)>,
+) -> (Vec<(String, String)>, usize) {
+    let publishable = payloads.len();
+    let mut payloads = payloads;
+    if let Some(metrics) = metrics {
+        payloads.push(metrics);
+    }
+    (payloads, publishable)
+}
+
 /// 从失败回执里取出本轮告警；取不到就是空。
 fn failure_warnings(message: &str) -> Vec<String> {
     let Some(start) = message.find("{") else {
@@ -398,6 +437,14 @@ fn failure_warnings(message: &str) -> Vec<String> {
         })
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+#[path = "interaction_turn_runner_cwd_tests.rs"]
+mod cwd_tests;
+
+#[cfg(test)]
+#[path = "interaction_turn_runner_metrics_tests.rs"]
+mod metrics_tests;
 
 #[cfg(test)]
 #[path = "interaction_turn_runner_warnings_tests.rs"]

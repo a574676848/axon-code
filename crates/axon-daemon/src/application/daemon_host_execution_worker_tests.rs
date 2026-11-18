@@ -218,11 +218,11 @@ fn daemon_primary_turn_answers_plain_question_without_creating_task() {
         panic!("应收到 Primary 收口事件");
     };
     assert_eq!(streamed.event.event_type, "turn_completed");
-    // 本轮 durable 事实依次是：用户消息、收口事件。
+    // 本轮 durable 事实依次是：用户消息、收口事件、以及收口派生的指标。
     let replayed = store
         .replay_events(&streamed.event.session_id, 0, 10)
         .expect("读取 durable Session 事件");
-    assert_eq!(replayed.len(), 2);
+    assert_eq!(replayed.len(), 3);
     let user_payload: serde_json::Value =
         serde_json::from_str(&replayed[0].payload_json).expect("解析用户消息 payload");
     assert_eq!(
@@ -231,6 +231,15 @@ fn daemon_primary_turn_answers_plain_question_without_creating_task() {
         "首条事实必须是本轮的用户消息"
     );
     assert_eq!(replayed[1], streamed.event);
+    // 指标与终态同批落盘且不进实时通道：`session_metrics` 全靠它累加。
+    assert_eq!(replayed[2].event_type, "turn_metrics");
+    assert_eq!(
+        replayed[2].emitted_at_ms, replayed[1].emitted_at_ms,
+        "指标必须与终态同批提交"
+    );
+    let metrics: axon_eventlog::TurnMetrics =
+        serde_json::from_str(&replayed[2].payload_json).expect("解析指标 payload");
+    assert_eq!(metrics.outcome, axon_eventlog::TurnOutcome::Succeeded);
     assert!(store.list_active_goals(10).expect("读取 Goal").is_empty());
     let execution_id = primary_execution_id(&interaction);
     assert!(

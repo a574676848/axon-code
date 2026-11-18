@@ -52,8 +52,10 @@ pub struct SessionEntry {
     #[serde(default)]
     pub workspace_id: String,
     /// 会话表面渠道。
+    #[serde(default)]
     pub channel: String,
     /// 会话表面目标。
+    #[serde(default)]
     pub destination: String,
     /// 受众边界标签。
     #[serde(default)]

@@ -216,6 +216,14 @@ pub(crate) struct SessionListRow {
     pub(crate) ttft_p50_ms: Option<u64>,
     pub(crate) ttft_max_ms: u64,
     pub(crate) open_job_count: u64,
+    /// 最近一轮的来源渠道（客户端优先，与 `origin_channel` 同口径）。
+    pub(crate) channel: String,
+    /// 最近一轮的回复去向。
+    pub(crate) destination: String,
+    /// 受众边界；由 `trust_scope` 映射成可展示标签。
+    pub(crate) audience: String,
+    /// 该会话已有的入站条数。
+    pub(crate) interaction_count: u64,
 }
 
 impl SessionListRow {
@@ -233,6 +241,12 @@ impl SessionListRow {
             "ttftP50Ms": self.ttft_p50_ms,
             "ttftMaxMs": self.ttft_max_ms,
             "openJobCount": self.open_job_count,
+            // 会话不存渠道与目标（渠道属于轮次）：这里给出的是最近一轮的来源与去向，
+            // 以及该会话已有的入站条数，供桌面的会话条目浮层直接展示。
+            "channel": self.channel,
+            "destination": self.destination,
+            "audience": self.audience,
+            "interactionCount": self.interaction_count,
         })
     }
 }
@@ -254,7 +268,15 @@ fn read_sessions(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<Sess
                 (SELECT i.content FROM inbox AS i WHERE i.session_id = s.session_id
                  ORDER BY i.received_at_ms ASC, i.interaction_id ASC LIMIT 1),
                 (SELECT i.scope_json FROM inbox AS i WHERE i.session_id = s.session_id
-                 ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1)
+                 ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1),
+                COALESCE((SELECT CASE WHEN TRIM(i.client) = '' THEN i.source_channel ELSE i.client END
+                          FROM inbox AS i WHERE i.session_id = s.session_id
+                          ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1), ''),
+                COALESCE((SELECT json_extract(i.reply_route_json, '$.destination')
+                          FROM inbox AS i WHERE i.session_id = s.session_id
+                          ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1), ''),
+                s.trust_scope,
+                (SELECT COUNT(*) FROM inbox AS i WHERE i.session_id = s.session_id)
          FROM sessions AS s
          LEFT JOIN session_metrics AS m ON m.session_id = s.session_id
          WHERE s.kind = 'primary'
@@ -268,6 +290,7 @@ fn read_sessions(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<Sess
         let ttft_histogram_json: Option<String> = row.get(12)?;
         let first_content: Option<String> = row.get(13)?;
         let scope_json: Option<String> = row.get(14)?;
+        let trust_scope: String = row.get(17)?;
         let workspace_id = stored_workspace
             .filter(|value| !value.is_empty())
             .or_else(|| scope_json.as_deref().and_then(workspace_of_scope));
@@ -287,9 +310,24 @@ fn read_sessions(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<Sess
             ttft_max_ms: u64::try_from(row.get::<_, i64>(10)?).unwrap_or(0),
             open_job_count: u64::try_from(row.get::<_, i64>(11)?).unwrap_or(0),
             ttft_p50_ms: ttft_histogram_json.as_deref().and_then(median_of_histogram),
+            channel: row.get(15)?,
+            destination: row.get(16)?,
+            audience: audience_label(&trust_scope),
+            interaction_count: u64::try_from(row.get::<_, i64>(18)?).unwrap_or(0),
         })
     })?;
     rows.collect()
+}
+
+/// 受众边界的展示标签：表里存的是 `trust_scope` 取值域。
+fn audience_label(trust_scope: &str) -> String {
+    match trust_scope {
+        "private" => "私密",
+        "group_workspace" => "群聊工作区",
+        "restricted" => "受限",
+        other => other,
+    }
+    .to_owned()
 }
 
 /// 从作用域 JSON 中取出 Workspace 标识；全局作用域返回 `None`。

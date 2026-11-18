@@ -40,51 +40,6 @@ impl From<&WorkspaceRecord> for WorkspaceView {
 }
 
 /// 车道协议载荷。
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionView {
-    /// 车道标识。
-    pub session_id: String,
-    /// 所属 Workspace 标识。
-    pub workspace_id: String,
-    /// 会话表面渠道。
-    pub channel: String,
-    /// 会话表面目标。
-    pub destination: String,
-    /// 受众边界标签。
-    pub audience: String,
-    /// 车道标题。
-    pub title: String,
-    /// Interaction 总数。
-    pub interaction_count: u64,
-    /// 是否有一条 Interaction 正在处理中。
-    pub running: bool,
-    /// 最早活动时间（毫秒）。
-    pub created_at_ms: u64,
-    /// 最近活动时间（毫秒）。
-    pub updated_at_ms: u64,
-    /// 待答提问数量（pending 或 suspended 状态）。
-    pub pending_question_count: u64,
-}
-
-impl From<&SessionSnapshot> for SessionView {
-    fn from(snapshot: &SessionSnapshot) -> Self {
-        Self {
-            session_id: snapshot.session_id.clone(),
-            workspace_id: snapshot.workspace_id.clone(),
-            channel: snapshot.channel.clone(),
-            destination: snapshot.destination.clone(),
-            audience: snapshot.audience.clone(),
-            title: snapshot.title.clone(),
-            interaction_count: snapshot.interaction_count,
-            running: snapshot.running,
-            created_at_ms: snapshot.created_at_ms,
-            updated_at_ms: snapshot.updated_at_ms,
-            pending_question_count: 0,
-        }
-    }
-}
-
 /// 车道内一条 Interaction 的协议载荷。
 ///
 /// 只透出回放所需的最小事实：稳定标识、状态与接收时间。正文不走这里，

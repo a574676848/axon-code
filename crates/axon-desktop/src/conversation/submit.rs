@@ -17,8 +17,8 @@ const EVENT_TTL_MS: u64 = 10 * 60 * 1_000;
 
 /// 提交一条用户消息。
 ///
-/// `workspace_id` 是用户选定的工作区归属：桌面端显式给出它，会话才会落在
-/// 正确的项目下，而不是 daemon 自己的默认工作区。
+/// `workspace_id` 是用户在下拉里选定的 Workspace：服务端据此选定本轮会话，`.axon`
+/// 与项目目录一视同仁。会话标识仍由服务端给出，客户端不携带。
 /// `attachments` 是已经落地到磁盘的附件绝对路径，后端把它们投影为 Provider turn
 /// 的输入素材；空数组表示纯文本消息。
 /// `model` 是用户在本会话里显式选定的模型（`agent.default_model` 的 `name` 或 `id`）。
@@ -58,9 +58,9 @@ pub fn submit_message(
             DESKTOP_SESSION_CHANNEL,
             crate::workspace::generate_uuid()
         ),
-        workspace_id: workspace_id.to_string(),
         observed_at_ms: now_ms,
         expires_at_ms: now_ms.saturating_add(EVENT_TTL_MS),
+        workspace_id: workspace_id.to_owned(),
         content: content.to_string(),
         client: Some("desktop".to_string()),
         reply_channel: DESKTOP_SESSION_CHANNEL.to_string(),

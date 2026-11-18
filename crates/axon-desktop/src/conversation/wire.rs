@@ -19,9 +19,9 @@ pub const INTERACTIONS_PATH: &str = "/api/v1/interactions";
 
 /// 提交信封。
 ///
-/// 与后端 `HttpEventRequest` 一一对应：`workspaceId` 是显式工作区归属，
-/// 缺省时后端会回落到它自己的默认工作区，因此桌面端必须填写，
-/// 否则会话会落到与用户所选无关的工作区里。
+/// 与后端 `HttpEventRequest` 逐字段对齐，字段集合必须一致：后端 `deny_unknown_fields`，
+/// 多一个字段整条提交就被判 `invalid_json` 400。会话标识不在这里：它由服务端按 Workspace
+/// 落定；`workspaceId` 是用户在下拉里选定的 Workspace，决定本轮落到哪条会话。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventSubmission {
@@ -32,7 +32,7 @@ pub struct EventSubmission {
     pub client: Option<String>,
     /// 客户端生成的稳定幂等键。
     pub event_id: String,
-    /// 事件所属 Workspace。
+    /// 本轮落到的 Workspace：服务端用它选定会话。
     pub workspace_id: String,
     /// 观测时间（毫秒）。
     pub observed_at_ms: u64,
@@ -228,11 +228,13 @@ mod tests {
         })
         .expect("提交信封应可序列化");
         assert_eq!(value["sourceChannel"], "desktop");
-        assert_eq!(value["workspaceId"], "workspace-a");
         assert_eq!(value["replyDestination"], "workbench-1");
         assert!(value["localFiles"].is_array(), "附件字段必须存在且为数组");
         assert_eq!(value["model"], "balanced");
         assert_eq!(value["reasoningEffort"], "high");
+        // `workspaceId` 决定本轮落到哪条会话；会话标识由服务端按 Workspace 落定。
+        assert_eq!(value["workspaceId"], "workspace-a");
+        assert!(value.get("sessionId").is_none(), "信封不得携带 sessionId");
     }
 
     #[test]

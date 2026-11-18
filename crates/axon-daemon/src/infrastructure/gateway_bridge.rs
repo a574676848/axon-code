@@ -8,6 +8,8 @@ pub use event_options::{EVENT_CONTENT_INLINE_LIMIT_CHARS, GatewayEventOptions};
 use super::gateway_debounce::GatewayDebouncer;
 #[path = "gateway_session_cache.rs"]
 mod session_cache;
+#[path = "gateway_session_routing.rs"]
+mod session_routing;
 use super::gateway_kernel::{
     GatewayEgress, GatewayEvent, GatewayEventStream, GatewayIngress, GatewayKernelError,
     GatewaySubscriptionRequest,
@@ -106,73 +108,7 @@ impl<S: RuntimeStore, C> DaemonGatewayBridge<S, C> {
         }
     }
 
-    /// 取一条会话的放行判定：先看缓存，未命中才查一次主键并记下。
-    fn admission_of(
-        &self,
-        session_id: &DaemonSessionId,
-        now_ms: u64,
-    ) -> Result<SessionAdmission, GatewayKernelError> {
-        if let Some(admission) = self.admissions.get(session_id.as_str(), now_ms) {
-            return Ok(admission);
-        }
-        let session = self
-            .dependencies
-            .store
-            .get_session(session_id)
-            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
-        let admission = SessionAdmission {
-            workspace_id: session.workspace_id,
-            trust_scope: session.trust_scope,
-        };
-        self.admissions.put(session_id.as_str(), &admission, now_ms);
-        Ok(admission)
-    }
-
-    /// 取（必要时登记）网关外部事件的固定会话标识。
-    ///
-    /// 外部事件没有会话标识可携带，也不能按投递目标派生：它们全部落在一条固定会话上，
-    /// 首次到达时创建，此后复用，因此 webhook 历史始终连续。放行判定走缓存：这条会话
-    /// 一旦登记就不再变化，后续入站不必每帧回表。
-    ///
-    /// 这条会话**不绑定任何项目 Workspace**：外部事件的处理根固定是 Axon 根目录
-    /// `~/.axon`（provider 脚本在 `~/.axon/events`、正文归档在 `~/.axon/data`），
-    /// 事件不属于任何项目工作区，因此 `workspace_id` 留空、`cwd` 也留空。
-    fn gateway_event_session(&self, now_ms: u64) -> Result<DaemonSessionId, GatewayKernelError> {
-        let session_id = DaemonSessionId::new(GATEWAY_EVENT_SESSION_ID)
-            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
-        if self.admissions.get(session_id.as_str(), now_ms).is_some() {
-            return Ok(session_id);
-        }
-        let session = match self.dependencies.store.get_session(&session_id) {
-            Ok(session) => session,
-            Err(_) => self
-                .dependencies
-                .store
-                .create_session_with(&axon_session::NewSessionRequest {
-                    session_id: session_id.clone(),
-                    kind: axon_session::SessionKind::Primary,
-                    trust_scope: axon_session::SessionTrustScope::Private,
-                    workspace_id: None,
-                    root_session_id: None,
-                    agent_path: None,
-                    goal_id: None,
-                    execution_id: None,
-                    cwd: String::new(),
-                    now_ms,
-                })
-                .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?,
-        };
-        self.admissions.put(
-            session_id.as_str(),
-            &SessionAdmission {
-                workspace_id: session.workspace_id,
-                trust_scope: session.trust_scope,
-            },
-            now_ms,
-        );
-        Ok(session_id)
-    }
-
+    // 会话落点与放行判定在 `gateway_session_routing`：主体只做事件归一化、订阅与投递。
     fn absorb_debounced(
         &self,
         correlation_key: Option<&str>,
@@ -192,14 +128,21 @@ where
         &self,
         mut event: ExternalEventEnvelope,
     ) -> Result<SubmitInteractionReceipt, GatewayKernelError> {
-        // 外部事件不对外暴露 Workspace 与会话：Workspace 固定取网关默认（Axon 根目录），
-        // 会话固定取内部常量。
-        event.workspace_id = self.default_workspace_id.clone().ok_or_else(|| {
-            GatewayKernelError::Ingress("无法解析 Gateway 默认 Workspace".to_owned())
-        })?;
+        // 会话与 Workspace 的落点：工作台客户端带 Workspace，按该 Workspace 的会话投递；
+        // 外部 webhook 没有 Workspace，落到网关默认 Workspace 的固定会话。
+        let requested_workspace = event.workspace_id.trim().to_owned();
+        let explicit_workspace = !requested_workspace.is_empty();
+        event.workspace_id = if explicit_workspace {
+            requested_workspace
+        } else {
+            self.default_workspace_id.clone().ok_or_else(|| {
+                GatewayKernelError::Ingress("无法解析 Gateway 默认 Workspace".to_owned())
+            })?
+        };
         let now_ms = self.dependencies.clock.now_ms();
-        // 会话标识：显式给出时必须在控制面已登记且归属一致；未给出时（外部 webhook 无从
-        // 预知标识）解析该 Workspace 的活跃会话，没有才新建一条主会话并继续投递。
+        // 会话标识：显式给出时必须在控制面已登记且归属一致；未给出时按来源分两种：
+        // 有 Workspace 的客户端落到该 Workspace 的活跃会话（没有才新建），
+        // 没有 Workspace 的外部事件落到固定会话。
         let session_id = match event.session_id.clone() {
             Some(session_id) => {
                 let admission = self.admission_of(&session_id, now_ms)?;
@@ -214,6 +157,7 @@ where
                 }
                 session_id
             }
+            None if explicit_workspace => self.workspace_session(&event.workspace_id, now_ms)?,
             None => self.gateway_event_session(now_ms)?,
         };
         event.session_id = Some(session_id);

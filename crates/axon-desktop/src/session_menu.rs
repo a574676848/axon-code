@@ -82,7 +82,13 @@ pub fn list(
     include_archived: bool,
 ) -> Result<Vec<SessionMenuEntry>, String> {
     let payload = gateway::get_json_at(&list_path(workspace, include_archived))?;
-    serde_json::from_value(payload).map_err(|error| format!("解析会话清单失败：{error}"))
+    // 网关载荷是 `{ sessions: [...], totalRecords, rawPayloadPersisted }`；
+    // 兼容裸数组形态，避免把「有会话」读成空列表。
+    let items = payload
+        .get("sessions")
+        .cloned()
+        .unwrap_or_else(|| payload.clone());
+    serde_json::from_value(items).map_err(|error| format!("解析会话清单失败：{error}"))
 }
 
 /// 写入置顶与归档状态。
