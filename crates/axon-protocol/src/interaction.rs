@@ -65,6 +65,8 @@ mod tests {
     fn request() -> SubmitInteractionRequest {
         SubmitInteractionRequest {
             interaction: InteractionRecord::new(
+                axon_domain::DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V1W")
+                    .expect("合法会话 ID"),
                 InteractionId::new("interaction-1").expect("合法 ID"),
                 InteractionSource::new("cli", "message-1").expect("合法来源"),
                 ScopeRef::workspace("workspace-a").expect("合法作用域"),

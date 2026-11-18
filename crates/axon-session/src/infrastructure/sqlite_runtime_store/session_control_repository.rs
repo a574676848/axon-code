@@ -51,7 +51,7 @@ pub(super) fn reset_session(
     host: &DaemonHostRecord,
     now_ms: u64,
 ) -> Result<SessionRuntimeRecord, RuntimeStoreError> {
-    let run_session_id = Uuid::new_v4().to_string();
+    let current_run_id = Uuid::new_v4().to_string();
     let mut connection = store.connection()?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -61,13 +61,13 @@ pub(super) fn reset_session(
     let changed = transaction
         .execute(
             "UPDATE sessions
-             SET run_session_id=?1,cwd=?2,status='created',
+             SET current_run_id=?1,cwd=?2,status='created',
                  owner_host_id=?3,owner_generation=?4,worker_attempt=worker_attempt+1,
                  context_version=context_version+1,run_generation=run_generation+1,
                  last_activity_at_ms=?5,updated_at_ms=?5
              WHERE session_id=?6",
             params![
-                run_session_id,
+                current_run_id,
                 cwd,
                 host.host_id.as_str(),
                 host.generation,

@@ -330,7 +330,7 @@ pub(super) fn execute_memory_write(
     match context.memory_write_runtime.trigger(AgentMemoryWriteInput {
         config_path,
         cwd: &context.cwd,
-        session_id: context.session_id,
+        session_id: context.memory_session_key(),
         cell_id: context.cell_id,
         kind,
         summary,

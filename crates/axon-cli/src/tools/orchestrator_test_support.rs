@@ -12,7 +12,6 @@ pub(super) fn make_test_context(
     ToolOrchestratorContext {
         config_path: Some(config_path),
         cwd: std::env::current_dir().unwrap_or_default(),
-        session_id: axon_domain::SessionId(1),
         thread_session_id: session_id.to_owned(),
         cell_id: axon_domain::CellId(1),
         model_messages: Vec::new(),

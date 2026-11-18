@@ -91,8 +91,7 @@ struct DaemonPrimaryTurnSteerSink {
 
 impl ActiveTurnSteerSink for DaemonPrimaryTurnSteerSink {
     fn try_steer(&self, interaction: &InteractionRecord) -> Result<bool, String> {
-        let session_id = interaction_session_id(interaction)
-            .ok_or_else(|| "Primary Turn steer 必须绑定 Workspace".to_owned())?;
+        let session_id = interaction_session_id(interaction);
         self.active_primary_turns
             .try_send_message(
                 &ActivePrimaryTurnRegistry::affinity_key(&session_id),
@@ -108,8 +107,7 @@ impl ActiveTurnSteerSink for DaemonPrimaryTurnSteerSink {
         if interaction.source.channel() == SYSTEM_SOURCE_CHANNEL {
             return Ok(None);
         }
-        let session_id = interaction_session_id(interaction)
-            .ok_or_else(|| "Primary Turn append 必须绑定 Workspace".to_owned())?;
+        let session_id = interaction_session_id(interaction);
         self.active_primary_turns.try_send_message(
             &ActivePrimaryTurnRegistry::affinity_key(&session_id),
             steer_message(interaction),

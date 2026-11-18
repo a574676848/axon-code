@@ -71,7 +71,7 @@ fn run_session_title_job(config_path: &Path, cwd: &Path, session_id: &str) -> Re
 
 /// 把执行会话标识换算成车道标识。
 ///
-/// 车道行把本轮 `run_session_id` 记在 `sessions.run_session_id` 里，反查即可命中；
+/// 会话行把本轮运行实例记在 `sessions.current_run_id` 里，反查即可命中；
 /// 传入值本身就是车道标识（CLI 直跑等场景）时查不到，由调用方原样沿用。
 fn resolve_lane_session_id(
     store: &axon_session::SqliteRuntimeStore,
@@ -84,7 +84,7 @@ fn resolve_lane_session_id(
         .with_read_connection(|connection| {
             connection
                 .query_row(
-                    "SELECT session_id FROM sessions WHERE run_session_id=?1 \
+                    "SELECT session_id FROM sessions WHERE current_run_id=?1 \
                      ORDER BY last_activity_at_ms DESC LIMIT 1",
                     [run_session_id],
                     |row| row.get::<_, String>(0),
@@ -259,8 +259,8 @@ mod tests {
         let store = axon_session::SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
         store.initialize().expect("初始化运行态库");
         let mut batch = format!(
-            "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms)
-                 VALUES('{lane}','{run_id}','{lane}','/w','idle',NULL,NULL,0,0,0,0,1,1,1);"
+            "INSERT INTO sessions(session_id,current_run_id,root_session_id,trust_scope,kind,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms)
+                 VALUES('{lane}','{run_id}',NULL,'private','primary','/w','idle',NULL,NULL,0,0,0,0,1,1,1);"
         );
         for index in 1..=messages {
             batch.push_str(&format!(

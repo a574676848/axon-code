@@ -310,4 +310,4 @@ curl -sS -H "Authorization: Bearer ${!TOKEN_ENV}" "$BASE/api/v1/observability/ov
 - 回执以状态码加响应体为准；不把自然语言结论当作调用成功。
 - 出现 401 时依次核对 token 名、token 取值来源与 Daemon 是否已重新加载 env 文件。
 - 出现 404 且路径含 provider 名时，先确认 `events/<provider>/` 与解析脚本是否存在。
-- 修改费率、重算用量、中断车道、停止作业、投递子代理消息都属于状态变更，须先取得用户授权。
+- 修改费率、重算用量、中断会话、停止作业、投递子代理消息都属于状态变更，须先取得用户授权。

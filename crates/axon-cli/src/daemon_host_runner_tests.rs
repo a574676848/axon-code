@@ -315,6 +315,7 @@ fn seed_answer_session(store: &SqliteRuntimeStore) -> String {
         InteractionSource, ReplyRoute, ScopeRef,
     };
     let seed = InteractionRecord::new(
+        axon_domain::DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V1W").expect("合法会话 ID"),
         InteractionId::new("interaction-ipc-answer").expect("合法 ID"),
         InteractionSource::new("tui", "seed-message-1").expect("合法来源"),
         ScopeRef::workspace("workspace-ipc-answer").expect("合法作用域"),
@@ -324,7 +325,7 @@ fn seed_answer_session(store: &SqliteRuntimeStore) -> String {
         1,
     )
     .expect("合法 Interaction");
-    let session_id = axon_session::interaction_session_id(&seed).expect("种子记录绑定 Workspace");
+    let session_id = axon_session::interaction_session_id(&seed);
     axon_session::InteractionStore::append(store, &seed).expect("种子 Interaction 落库");
     session_id
 }

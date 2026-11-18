@@ -19,8 +19,7 @@ use super::gateway_voice_worker::{MAX_AUDIO_FRAME_BYTES, PushOutcome, VoiceOut, 
 use crate::application::ExternalEventEnvelope;
 use crate::infrastructure::gateway_auth::query_token;
 use crate::infrastructure::gateway_kernel::GatewayKernelError;
-use axon_domain::{AudienceContext, AudienceKind, DisclosurePolicy};
-use axon_session::session_id_for_route;
+use axon_domain::DaemonSessionId;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderMap, Uri};
@@ -384,7 +383,7 @@ async fn handle_final(
         Ok(Ok(receipt)) => {
             let interaction_id = receipt.interaction_id.as_str().to_owned();
             let assigned = voice.submitted(&interaction_id);
-            let session_id = session_id_for(request);
+            let session_id = request.session_id.clone();
             let frame = turn_json(&interaction_id, &assigned, &session_id);
             let stop = Arc::new(AtomicBool::new(false));
             if let Some(previous) = subscription.replace(Arc::clone(&stop)) {
@@ -506,6 +505,7 @@ fn voice_envelope(
         client: None,
         source_channel: VOICE_CHANNEL.to_owned(),
         event_id: format!("voice-{connection_session_id}-{utterance_seq}"),
+        session_id: Some(DaemonSessionId::new(request.session_id.clone()).expect("语音会话标识")),
         workspace_id: request.workspace_id.clone(),
         observed_at_ms: now_ms,
         expires_at_ms: now_ms.saturating_add(VOICE_EVENT_TTL_MS),
@@ -518,17 +518,6 @@ fn voice_envelope(
         model: None,
         reasoning_effort: None,
     }
-}
-
-/// 与文本入口同一条车道：`(workspace, 私有信任域, desktop, destination)`。
-fn session_id_for(request: &StartRequest) -> String {
-    let audience = AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly);
-    session_id_for_route(
-        &request.workspace_id,
-        &audience,
-        VOICE_CHANNEL,
-        &request.reply_destination,
-    )
 }
 
 /// 网关拒绝原因的中文稳定说法；不把内部错误原文透给客户端。

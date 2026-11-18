@@ -74,10 +74,12 @@ pub(crate) fn execute_local_cron_agent(
 ) -> Result<String, String> {
     let cwd = job.workdir.as_deref().map(Path::new).unwrap_or(axon_root);
     let interaction = prepare_interaction_from_prompt_as(
+        None,
+        cwd,
+        Some(config_path),
         CRON_AGENT_CHANNEL,
         &local_cron_session_key(job),
         prompt,
-        cwd,
         axon_time::unix_now_ms(),
         Some(CRON_AGENT_CLIENT),
     )?

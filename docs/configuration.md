@@ -382,7 +382,7 @@ AXON_RUNTIME_ROOT（后端运行时根）
   > 后端默认 $HOME/.axon
 ```
 
-客户端数据根存放桌面端自己的状态与暂存数据：`desktop-state.v2.json`（连接档案、工作区与车道投影，以及输入坞最近选过的模型名称与思考强度）、`attachments/`、`logs/desktop-ui-failure.jsonl` 与云档案的输入历史（按档案 id 分文件）。后端运行时根继续存放 `config.toml`、配置相邻的 `.env`、`data/`、`skills/`、`.mcp.json`、`SOUL.md` 与 `AGENTS.md`；本机档案的输入历史仍是后端根下的 `data/runtime/draft_history.jsonl`，与 TUI 共用同一份文件。
+客户端数据根存放桌面端自己的状态与暂存数据：`desktop-state.v2.json`（连接档案、工作区与会话投影，以及输入坞最近选过的模型名称与思考强度）、`attachments/`、`logs/desktop-ui-failure.jsonl` 与云档案的输入历史（按档案 id 分文件）。后端运行时根继续存放 `config.toml`、配置相邻的 `.env`、`data/`、`skills/`、`.mcp.json`、`SOUL.md` 与 `AGENTS.md`；本机档案的输入历史仍是后端根下的 `data/runtime/draft_history.jsonl`，与 TUI 共用同一份文件。
 
 `AXON_CLIENT_ROOT` 指向后端运行时根之内时会被忽略并退回默认位置，因为那会把桌面端状态写进 daemon 的运行态目录。
 

@@ -130,11 +130,8 @@ fn test_timeouts(drained: Duration) -> VoiceTimeouts {
 }
 
 fn session_id() -> String {
-    let audience = axon_domain::AudienceContext::new(
-        axon_domain::AudienceKind::Private,
-        axon_domain::DisclosurePolicy::PrivateOnly,
-    );
-    axon_session::session_id_for_route("w-1", &audience, "desktop", "desktop")
+    // 测试夹具：会话标识是显式输入，这里只给一个可读的合法标识，不做任何派生。
+    "01J8XQ7K3M4N5P6Q7R8S9T0V1W".to_owned()
 }
 
 fn wire_delta(text: &str) -> GatewayEvent {
@@ -232,6 +229,7 @@ async fn open_session(server: &TestServer, tts: bool) -> Socket {
             "clientSessionId": "c-1",
             "workspaceId": "w-1",
             "replyDestination": "desktop",
+            "sessionId": "01J8XQ7K3M4N5P6Q7R8S9T0V1W",
             "mode": "full_duplex",
             "lang": "zh",
             "tts": tts,

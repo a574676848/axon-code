@@ -70,6 +70,7 @@ fn append_plain_interaction(
     source_message_id: &str,
 ) {
     let interaction = InteractionRecord::new(
+        axon_domain::DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V1W").expect("合法会话 ID"),
         InteractionId::new(format!("plain-{source_message_id}")).expect("Interaction ID"),
         InteractionSource::new("tui", source_message_id).expect("来源"),
         ScopeRef::workspace(workspace.workspace_id.as_str().to_owned()).expect("作用域"),

@@ -153,6 +153,7 @@ impl ActiveTurnSteerSink for Sink {
 
 fn interaction() -> InteractionRecord {
     InteractionRecord::new(
+        axon_domain::DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V1W").expect("合法会话 ID"),
         InteractionId::new("ingress-interaction").expect("ID"),
         InteractionSource::new("tui", "ingress-message").expect("来源"),
         ScopeRef::workspace("ingress-workspace").expect("作用域"),
@@ -166,6 +167,7 @@ fn interaction() -> InteractionRecord {
 
 fn group_interaction() -> InteractionRecord {
     InteractionRecord::new(
+        axon_domain::DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V1W").expect("合法会话 ID"),
         InteractionId::new("group-interaction").expect("ID"),
         InteractionSource::new("webhook", "group-message").expect("来源"),
         ScopeRef::workspace("group-workspace").expect("作用域"),

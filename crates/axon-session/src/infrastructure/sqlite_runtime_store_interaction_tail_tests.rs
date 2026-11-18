@@ -21,8 +21,8 @@ fn interaction_tail_window_reads_only_the_target_interaction() {
         .expect("host lease");
     let interaction = sample_interaction();
     store.append(&interaction).expect("追加 Interaction");
-    let session_id = DaemonSessionId::new(interaction_session_id(&interaction).expect("session"))
-        .expect("Session ID");
+    let session_id =
+        DaemonSessionId::new(interaction_session_id(&interaction)).expect("Session ID");
     store.create_session(&session_id, ".", 1).expect("Session");
     let lease = store
         .claim_processing_by_id(&interaction.interaction_id, 20, LEASE_DURATION_MS)

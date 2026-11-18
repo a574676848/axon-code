@@ -5,7 +5,9 @@
 
 use super::helpers::u64_value;
 use crate::ports::InteractionStoreError;
-use axon_domain::{InteractionId, InteractionRecord, InteractionSource, InteractionStatus};
+use axon_domain::{
+    DaemonSessionId, InteractionId, InteractionRecord, InteractionSource, InteractionStatus,
+};
 use rusqlite::Row;
 
 /// 已可靠接收，等待主 turn 领取。
@@ -41,6 +43,8 @@ pub(super) fn read_record(row: &Row<'_>) -> rusqlite::Result<InteractionRecord> 
     let status = parse_status(&row.get::<_, String>(7)?)?;
     Ok(InteractionRecord {
         interaction_id,
+        session_id: DaemonSessionId::new(row.get::<_, String>(13)?)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
         source,
         scope,
         audience,

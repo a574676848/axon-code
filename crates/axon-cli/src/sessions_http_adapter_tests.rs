@@ -24,10 +24,10 @@ fn seed_session(store: &SqliteRuntimeStore, session_id: &str, pinned: i64, archi
         .with_read_connection(|connection| {
             connection
                 .execute(
-                    "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,
+                    "INSERT INTO sessions(session_id,current_run_id,root_session_id,trust_scope,kind,cwd,status,
                      worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,
                      last_activity_at_ms,created_at_ms,updated_at_ms,pinned,archived,workspace_id)
-                 VALUES(?1,?1,?1,'/workspace','idle',0,0,0,0,?2,?2,?2,?3,?4,'ws-a')",
+                 VALUES(?1,?1,NULL,'private','primary','/workspace','idle',0,0,0,0,?2,?2,?2,?3,?4,'ws-a')",
                     params![session_id, 1_000_i64, pinned, archived],
                 )
                 .map(|_| ())
@@ -87,7 +87,7 @@ fn session_list_query_uses_inbox_session_index_and_stays_within_budget() {
             connection.execute_batch("BEGIN IMMEDIATE")?;
             for session in 0..SESSIONS {
                 connection.execute(
-                    "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,
+                    "INSERT INTO sessions(session_id,current_run_id,root_session_id,trust_scope,kind,cwd,status,
                      worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,
                      last_activity_at_ms,created_at_ms,updated_at_ms,pinned,archived,workspace_id)
                      VALUES(?1,?1,?1,'/workspace','idle',0,0,0,0,?2,?2,?2,0,0,'ws-a')",
@@ -233,7 +233,10 @@ fn creates_a_session_and_lists_it() {
     assert_eq!(response.status, 200);
     let created: Value = serde_json::from_slice(&response.body).expect("JSON");
     let session_id = created["sessionId"].as_str().expect("返回会话 ID");
-    assert!(session_id.starts_with("session-"), "会话 ID 应带前缀");
+    assert!(
+        axon_session::is_ulid(session_id),
+        "会话标识必须是服务端生成的 ULID：{session_id}"
+    );
 
     // 会话确实落到了控制面库，并出现在清单投影里。
     let listed = rows(&store);

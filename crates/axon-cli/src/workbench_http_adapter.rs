@@ -13,10 +13,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use axon_daemon::{GatewayHttpResponse, GatewayHttpRouteHandler};
-use axon_domain::{AudienceContext, AudienceKind, DaemonSessionId, DisclosurePolicy};
+use axon_domain::DaemonSessionId;
 use axon_session::{
     AXON_RUNTIME_DATA_DIR, InteractionCursor, RuntimeStore, RuntimeStoreError, SessionQueryService,
-    SessionSnapshot, SqliteRuntimeStore, WorkspaceRecord, WorkspaceStore, session_id_for_route,
+    SessionSnapshot, SqliteRuntimeStore, WorkspaceRecord, WorkspaceStore,
 };
 use serde::Serialize;
 
@@ -176,15 +176,6 @@ fn session_pending_question_counts(
         .map_err(|error| error.to_string())
 }
 
-/// 新车道标识派生请求。
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SessionIdentityRequest {
-    workspace_id: String,
-    channel: String,
-    destination: String,
-}
-
 /// 工作区注册请求。
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -198,29 +189,6 @@ struct WorkspaceRegisterRequest {
 struct SubagentMessageRequest {
     /// 消息正文。
     content: String,
-}
-
-/// 解析入站车道标识派生载荷。
-fn derive_session_identity(body: &[u8]) -> Result<serde_json::Value, String> {
-    let request: SessionIdentityRequest =
-        serde_json::from_slice(body).map_err(|error| format!("解析车道标识请求失败：{error}"))?;
-    if request.workspace_id.trim().is_empty() {
-        return Err("workspaceId 不能为空".to_string());
-    }
-    if request.channel.trim().is_empty() {
-        return Err("channel 不能为空".to_string());
-    }
-    if request.destination.trim().is_empty() {
-        return Err("destination 不能为空".to_string());
-    }
-    let audience = AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly);
-    let session_id = session_id_for_route(
-        &request.workspace_id,
-        &audience,
-        &request.channel,
-        &request.destination,
-    );
-    Ok(serde_json::json!({ "sessionId": session_id }))
 }
 
 /// 工作台 HTTP 路由适配器。
@@ -376,14 +344,6 @@ impl GatewayHttpRouteHandler for WorkbenchHttpAdapter {
     ) -> Option<GatewayHttpResponse> {
         let subpath = path.strip_prefix(WORKBENCH_PATH_PREFIX)?;
         let subpath = subpath.strip_prefix('/').unwrap_or(subpath);
-        if method == "POST" && subpath == "sessions/identity" {
-            return Some(match derive_session_identity(body) {
-                Ok(payload) => GatewayHttpResponse::json(200, &payload),
-                Err(error) => {
-                    GatewayHttpResponse::json(400, &serde_json::json!({ "error": error }))
-                }
-            });
-        }
         if method == "POST" && subpath == "workspaces" {
             return Some(match register_workspace(&self.axon_root, body) {
                 Ok(payload) => GatewayHttpResponse::json(200, &payload),

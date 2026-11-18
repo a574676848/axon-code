@@ -55,7 +55,7 @@ fn reset_rotates_the_run_window_and_keeps_the_session() {
         .expect("读取会话");
     assert_eq!(after.session_id, before.session_id, "会话本身不变");
     assert_ne!(
-        after.run_session_id, before.run_session_id,
+        after.current_run_id, before.current_run_id,
         "运行窗口必须换成新的一段"
     );
 }

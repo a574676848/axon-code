@@ -5,7 +5,6 @@ use axon_agent_runtime::{
     READ_FILE_IMAGE_SOURCE_PREFIX, agent_run_tool_result_messages,
     agent_run_tool_result_receipt_from_facts,
 };
-use axon_domain::SessionId;
 use image::{ExtendedColorType, ImageEncoder, Rgb, RgbImage, codecs::png::PngEncoder};
 
 use super::*;
@@ -309,7 +308,6 @@ fn context(cwd: &Path) -> ToolOrchestratorContext {
     ToolOrchestratorContext {
         config_path: None,
         cwd: cwd.to_path_buf(),
-        session_id: SessionId(1),
         thread_session_id: "thread-image".to_owned(),
         cell_id: axon_domain::CellId(1),
         model_messages: Vec::new(),

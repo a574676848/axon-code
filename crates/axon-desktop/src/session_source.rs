@@ -85,13 +85,8 @@ pub trait SessionSource: Send + Sync {
     /// 全部真实车道。
     fn sessions(&self) -> Result<Vec<SessionEntry>, String>;
 
-    /// 派生一条新车道的标识；派生在服务端完成。
-    fn derive_session_id(
-        &self,
-        workspace_id: &str,
-        channel: &str,
-        destination: &str,
-    ) -> Result<String, String>;
+    /// 新建一条会话并返回服务端生成的标识。
+    fn create_session(&self, workspace_id: &str, cwd: Option<&str>) -> Result<String, String>;
 
     /// 注册（或刷新）一个工作区根目录，返回其权威身份。
     ///
@@ -135,18 +130,13 @@ impl SessionSource for GatewaySessionSource {
         entries(&payload, "sessions")
     }
 
-    fn derive_session_id(
-        &self,
-        workspace_id: &str,
-        channel: &str,
-        destination: &str,
-    ) -> Result<String, String> {
+    fn create_session(&self, workspace_id: &str, cwd: Option<&str>) -> Result<String, String> {
+        // 会话标识由服务端生成，客户端不派生；渠道与投递目标只决定这一轮怎么投递。
         let payload = gateway::post_json(
-            "/sessions/identity",
+            "/sessions",
             &serde_json::json!({
                 "workspaceId": workspace_id,
-                "channel": channel,
-                "destination": destination,
+                "cwd": cwd,
             }),
         )?;
         payload

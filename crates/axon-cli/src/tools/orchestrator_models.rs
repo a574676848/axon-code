@@ -58,14 +58,11 @@ pub(crate) enum ToolKind {
 pub(crate) struct ToolOrchestratorContext {
     pub(crate) config_path: Option<PathBuf>,
     pub(crate) cwd: PathBuf,
-    /// 执行域的数值会话身份（车道标识的稳定数值摘要）。
+    /// 会话标识：全工具层只保留这一个。
     ///
-    /// 只用于那些必须按数值索引的内部归属：作用域派生、工具调度、作业 owner。
-    /// **一切跨出进程、要给客户端看或要写进 durable 事件流的会话标识，一律取
-    /// [`Self::thread_session_id`]**：客户端按车道串订阅、查询与校验，拿摘要去写会让
-    /// 查询恒为空、校验恒不匹配。用户问答曾在这里取错字段而整条通道失效。
-    pub(crate) session_id: SessionId,
-    /// 车道标识，即客户端可见、可订阅、可查询的那个会话串。
+    /// 它是客户端可见、可订阅、可查询的那一个串，一切跨出进程、要写 durable 事件流或
+    /// 要给客户端看的会话标识都取这个字段。工具层不再保存第二套派生表示；确实需要
+    /// 数值键的内部索引（记忆子系统）统一走 [`Self::memory_session_key`]。
     pub(crate) thread_session_id: String,
     pub(crate) cell_id: CellId,
     pub(crate) model_messages: Vec<axon_agent_runtime::AgentModelMessage>,
@@ -98,7 +95,6 @@ impl std::fmt::Debug for ToolOrchestratorContext {
             .debug_struct("ToolOrchestratorContext")
             .field("config_path", &self.config_path)
             .field("cwd", &self.cwd)
-            .field("session_id", &self.session_id)
             .field("thread_session_id", &self.thread_session_id)
             .field("cell_id", &self.cell_id)
             .field("model_messages_len", &self.model_messages.len())
@@ -120,6 +116,17 @@ impl std::fmt::Debug for ToolOrchestratorContext {
 }
 
 impl ToolOrchestratorContext {
+    /// 记忆子系统的数值会话键。
+    ///
+    /// 记忆库按数值索引会话，这是它自己的键空间，不是会话身份；工具层里只有这一处
+    /// 把会话标识折算成数值，任何要写 durable 事实或给客户端看的标识都直接取
+    /// [`Self::thread_session_id`]。
+    pub(crate) fn memory_session_key(&self) -> SessionId {
+        SessionId(crate::stable_ids::stable_numeric_id(
+            &self.thread_session_id,
+        ))
+    }
+
     pub(crate) fn is_cancelled(&self) -> bool {
         self.cancel_token
             .as_ref()

@@ -83,7 +83,7 @@ pub struct SessionDoctorCommand {
 
 /// `axon sessions reset` 参数。
 ///
-/// 只换运行窗口，不动会话本身与历史：新的 `run_session_id` 之后，旧的运行态读数不再累加。
+/// 只换运行窗口，不动会话本身与历史：新的 `current_run_id` 之后，旧的运行态读数不再累加。
 #[derive(Debug, Clone, Args, PartialEq, Eq)]
 pub struct SessionResetCommand {
     /// 会话 ID（会话清单 ID 或 Thread ID 均可）。
@@ -329,7 +329,7 @@ fn run_session_reset(
         &SessionResetReport {
             status: "session_reset",
             session_id: record.session_id.as_str().to_owned(),
-            run_session_id: record.run_session_id,
+            current_run_id: record.current_run_id,
             cwd: record.cwd,
         },
     )
@@ -459,7 +459,7 @@ pub(super) fn thread_event_issue_summaries(issues: &[ThreadEventReadIssue]) -> V
 struct SessionResetReport {
     status: &'static str,
     session_id: String,
-    run_session_id: String,
+    current_run_id: String,
     cwd: String,
 }
 
@@ -469,8 +469,8 @@ fn render_reset(format: OutputFormat, report: &SessionResetReport) -> CliRunResu
         OutputFormat::Text => CliRunResult {
             exit_code: 0,
             stdout: format!(
-                "已轮换运行实例: {}\n- run_session_id: {}\n- cwd: {}\n",
-                report.session_id, report.run_session_id, report.cwd
+                "已轮换运行实例: {}\n- current_run_id: {}\n- cwd: {}\n",
+                report.session_id, report.current_run_id, report.cwd
             ),
             stderr: String::new(),
         },

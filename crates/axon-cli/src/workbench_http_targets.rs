@@ -193,6 +193,6 @@ pub(crate) fn session_owns_owner(
     Ok(owner_matches_session(
         session_id.as_str(),
         owner,
-        Some(record.run_session_id.as_str()),
+        Some(record.current_run_id.as_str()),
     ))
 }

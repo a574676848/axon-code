@@ -19,6 +19,8 @@ const PROBE_BUDGET: Duration = Duration::from_secs(3);
 /// 读体前拒绝的耗时预算：远超一次本机往返，又远小于连接读取超时。
 const PRE_BODY_REJECT_BUDGET: Duration = Duration::from_secs(2);
 /// 合法事件报文。
+///
+/// `sessionId` 是必填字段：服务端不按投递目标派生会话，也不隐式建会话。
 const EVENT_BODY: &str = r#"{"sourceChannel":"http","eventId":"event-1","observedAtMs":100,"expiresAtMs":200,"content":"hello","replyChannel":"http","replyDestination":"client-1"}"#;
 
 #[test]

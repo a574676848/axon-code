@@ -66,7 +66,10 @@ pub use result_store::{
     RESULT_ACK_SOURCE_EXPIRED, RESULT_ACK_SOURCE_READ, ResultStore, ResultStoreError,
 };
 pub use resume_pointer_store::{ResumePointerStore, ResumePointerStoreError};
-pub use runtime_store::{CheckpointTelemetry, RuntimeStore, RuntimeStoreError};
+pub use runtime_store::{
+    CheckpointTelemetry, NewSessionRequest, RuntimeStore, RuntimeStoreError,
+    WorkspaceSessionRequest,
+};
 pub use session_query_store::{SessionQueryStore, SessionSummaryRow};
 pub use user_question_store::{UserQuestionStore, UserQuestionStoreError};
 pub use workspace_store::{WorkspaceStore, WorkspaceStoreError};

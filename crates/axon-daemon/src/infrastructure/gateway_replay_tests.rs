@@ -234,6 +234,7 @@ fn seed_interaction(
         .expect("注册 Host");
     let interaction_id = InteractionId::new(interaction_id).expect("Interaction ID");
     let record = InteractionRecord::new(
+        axon_domain::DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V1W").expect("合法会话 ID"),
         interaction_id.clone(),
         InteractionSource::new("desktop", format!("message-{}", interaction_id.as_str()))
             .expect("有效来源"),
@@ -411,6 +412,7 @@ fn history_page_resumes_at_the_last_consumed_event() {
 
     let interaction_id = InteractionId::new("gateway-history-interaction").expect("Interaction ID");
     let record = InteractionRecord::new(
+        axon_domain::DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V1W").expect("合法会话 ID"),
         interaction_id.clone(),
         InteractionSource::new("desktop", "message-gateway-history").expect("有效来源"),
         ScopeRef::workspace("workspace-history").expect("有效作用域"),

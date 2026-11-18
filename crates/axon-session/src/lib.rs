@@ -18,13 +18,13 @@ pub use application::{
     SessionSnapshot, StartEmptyThreadCommand, StartThreadCommand, StartTurnCommand, ThreadService,
     TurnRepairOutcome, WorkspaceGitSnapshot, WorkspaceIdentity, WorkspaceResolver,
     WorkspaceResolverError, WorkspaceSnapshot, WorkspaceSnapshotFieldState, interaction_session_id,
-    project_threads, session_id_for_route,
+    is_ulid, new_interaction_id, new_session_id, new_ulid, project_threads,
 };
 pub use domain::WorkspaceRecord;
 pub use domain::session_action::{default_action_priority, effective_action_priority};
 pub use domain::{
-    DaemonHostRecord, RuntimeScheduleRecord, SessionActionRecord, SessionEventRecord,
-    SessionRuntimeRecord,
+    DaemonHostRecord, RuntimeScheduleRecord, SessionActionRecord, SessionEventRecord, SessionKind,
+    SessionRuntimeRecord, SessionTrustScope,
 };
 pub use domain::{
     Thread, ThreadCompaction, ThreadDetail, ThreadEvent, ThreadEventRecord, ThreadHistoryFileRef,
@@ -56,10 +56,10 @@ pub use ports::{
     GoalPage, GoalStore, GoalStoreError, HealthStore, InteractionAppendReceipt, InteractionCursor,
     InteractionProcessingLease, InteractionQueryStore, InteractionStore, InteractionStoreError,
     LedgerCommitError, LedgerCommitStore, LedgerEventStore, LedgerEventStoreError,
-    NotificationDeliveryState, RESULT_ACK_SOURCE_EXPIRED, RESULT_ACK_SOURCE_READ, ResultStore,
-    ResultStoreError, RuntimeHealthCounters, RuntimeStore, RuntimeStoreError, SessionQueryStore,
-    SessionSummaryRow, UserQuestionStore, UserQuestionStoreError, WorkspaceStore,
-    WorkspaceStoreError,
+    NewSessionRequest, NotificationDeliveryState, RESULT_ACK_SOURCE_EXPIRED,
+    RESULT_ACK_SOURCE_READ, ResultStore, ResultStoreError, RuntimeHealthCounters, RuntimeStore,
+    RuntimeStoreError, SessionQueryStore, SessionSummaryRow, UserQuestionStore,
+    UserQuestionStoreError, WorkspaceSessionRequest, WorkspaceStore, WorkspaceStoreError,
 };
 pub use ports::{ResumePointerStore, ResumePointerStoreError};
 

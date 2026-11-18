@@ -70,8 +70,7 @@ impl ActiveTurnSteerSink for PrimaryTurnSteerSink {
 }
 
 fn interaction_session_id(interaction: &InteractionRecord) -> Result<String, String> {
-    axon_session::interaction_session_id(interaction)
-        .ok_or_else(|| "问答答案注入必须绑定 Workspace".to_owned())
+    Ok(axon_session::interaction_session_id(interaction))
 }
 
 /// 生产答案消息注入器。
@@ -151,7 +150,11 @@ impl QuestionMessageSteerer for HostQuestionMessageSteerer {
         )
         .map_err(|error| format!("答案 Interaction 来源非法: {error}"))?;
         let now_ms = crate::tool_orchestrator::now_ms();
+        // 答案必须落回提问所属会话：标识由调用方给出，不按投递目标派生。
+        let session_id = axon_domain::DaemonSessionId::new(session_id.to_owned())
+            .map_err(|error| format!("答案 Interaction 会话标识非法: {error}"))?;
         let interaction = InteractionRecord::new(
+            session_id.clone(),
             interaction_id,
             source,
             scope,
@@ -178,11 +181,12 @@ impl QuestionMessageSteerer for HostQuestionMessageSteerer {
         // 投递由答案 Interaction 的稳定幂等键去重：重复投递只命中同一条记录，不会被
         // 领取成第二轮。
         if receipt.delivery == InteractionDelivery::Queued {
-            self.wake_claim(session_id);
+            self.wake_claim(session_id.as_str());
         }
         // 运行会话身份只用于留痕：注入路由完全由车道决定。
         axon_logger::debug(&format!(
-            "用户答案已投递: session={session_id} session={session_id} delivery={:?}",
+            "用户答案已投递: session={} delivery={:?}",
+            session_id.as_str(),
             receipt.delivery
         ));
         Ok(())

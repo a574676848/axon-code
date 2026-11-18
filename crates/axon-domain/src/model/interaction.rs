@@ -1,4 +1,4 @@
-use super::{AudienceContext, ReplyRoute, ScopeRef};
+use super::{AudienceContext, DaemonSessionId, ReplyRoute, ScopeRef};
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use std::fmt;
 
@@ -177,6 +177,11 @@ pub enum InteractionStatus {
 pub struct InteractionRecord {
     /// 交互记录标识。
     pub interaction_id: InteractionId,
+    /// 所属会话标识。
+    ///
+    /// 会话身份由客户端显式携带、服务端查表确认，不由投递目标派生；渠道属于轮次事实，
+    /// 不参与会话身份。
+    pub session_id: DaemonSessionId,
     /// 来源与幂等键。
     pub source: InteractionSource,
     /// 作用域。
@@ -222,6 +227,7 @@ impl<'de> Deserialize<'de> for InteractionRecord {
         #[serde(deny_unknown_fields)]
         struct InteractionRecordData {
             interaction_id: InteractionId,
+            session_id: DaemonSessionId,
             source: InteractionSource,
             scope: ScopeRef,
             audience: AudienceContext,
@@ -237,6 +243,7 @@ impl<'de> Deserialize<'de> for InteractionRecord {
 
         let data = InteractionRecordData::deserialize(deserializer)?;
         let mut record = Self::new(
+            data.session_id,
             data.interaction_id,
             data.source,
             data.scope,
@@ -256,6 +263,7 @@ impl<'de> Deserialize<'de> for InteractionRecord {
 impl InteractionRecord {
     /// 创建待处理的 Interaction。
     pub fn new(
+        session_id: DaemonSessionId,
         interaction_id: InteractionId,
         source: InteractionSource,
         scope: ScopeRef,
@@ -273,6 +281,7 @@ impl InteractionRecord {
         }
         Ok(Self {
             interaction_id,
+            session_id,
             source,
             scope,
             audience,
@@ -324,6 +333,7 @@ mod tests {
 
     fn sample() -> InteractionRecord {
         InteractionRecord::new(
+            DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V1W").expect("合法会话 ID"),
             InteractionId::new("interaction-1").expect("合法 ID"),
             InteractionSource::new("tui", "message-1").expect("合法来源"),
             ScopeRef::workspace("workspace-a").expect("合法作用域"),
@@ -366,6 +376,7 @@ mod tests {
         let base = sample();
         assert!(
             InteractionRecord::new(
+                base.session_id.clone(),
                 base.interaction_id.clone(),
                 base.source.clone(),
                 base.scope.clone(),
@@ -378,6 +389,7 @@ mod tests {
         );
         assert!(
             InteractionRecord::new(
+                base.session_id,
                 base.interaction_id,
                 base.source,
                 base.scope,

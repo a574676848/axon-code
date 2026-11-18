@@ -8,7 +8,6 @@ use std::{
     time::Duration,
 };
 
-const GLOBAL_SESSION_KEY: &str = "global";
 const SESSION_RESULT_CHANNEL_CLOSED_ERROR: &str = "Primary turn session 结果通道意外关闭";
 
 pub(super) fn group_sessions(
@@ -16,8 +15,7 @@ pub(super) fn group_sessions(
 ) -> BTreeMap<String, Vec<InteractionProcessingLease>> {
     let mut sessions = BTreeMap::new();
     for lease in leases {
-        let key = interaction_session_id(&lease.interaction)
-            .unwrap_or_else(|| GLOBAL_SESSION_KEY.to_owned());
+        let key = interaction_session_id(&lease.interaction);
         sessions.entry(key).or_insert_with(Vec::new).push(lease);
     }
     sessions

@@ -103,7 +103,7 @@ Memory usefulness 的 `Memory cited ... adopted ...` 事件仅用于 durable 审
 
 Resume 恢复保留历史消息、工具结果和真实文件变更，但不重新投影历史 Thinking/Reasoning，也不显示没有实际增删内容的 `(+0 -0)` 文件变更；这些事件仍保留在会话快照中，不影响审计事实与恢复后的实时投影。
 
-进入 TUI 时，CLI 先在当前 Workspace 的 TUI 车道中查找仍处于 processing 的 Interaction；若找到，即沿该 Interaction 原有 destination 车道恢复并继续渲染，不要求新 TUI 复用旧车道 ID。若没有进行中的 Interaction，再定位 Workspace 内最近一次 TUI Interaction 对应的 durable 事件流，投影最近已完成 `turn_completed` 的最终 assistant 回复、真实 token usage 分割线，并绑定对应 Session 到 Header；没有历史完成回合或 Daemon/存储暂不可读时，保持普通启动页，不阻断新任务。
+进入 TUI 时，CLI 先在当前 Workspace 的 TUI 会话中查找仍处于 processing 的 Interaction；若找到，即沿该 Interaction 原有 destination 会话恢复并继续渲染，不要求新 TUI 复用旧会话 ID。若没有进行中的 Interaction，再定位 Workspace 内最近一次 TUI Interaction 对应的 durable 事件流，投影最近已完成 `turn_completed` 的最终 assistant 回复、真实 token usage 分割线，并绑定对应 Session 到 Header；没有历史完成回合或 Daemon/存储暂不可读时，保持普通启动页，不阻断新任务。
 
 `axon run` 复用统一 Daemon durable/realtime 事件订阅链路，按 Interaction 等待并恢复 `turn_completed`。Text 模式会通过同一订阅实时写出 assistant 增量，终态只补未投影尾部；JSON 模式保留完整结构化 wire 事件，TUI 与渠道继续消费完整的过程事件。
 

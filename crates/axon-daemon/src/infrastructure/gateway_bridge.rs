@@ -14,13 +14,12 @@ use super::gateway_replay::{
     DEFAULT_GATEWAY_REPLAY_PAGE_SIZE, interaction_status_event, live_ceiling_cursor,
     subscribe_and_replay, subscribe_and_replay_session,
 };
-use super::goal_trace::{GOAL_SESSION_FIELD, GoalTrace};
 use crate::application::event_stream_bridge::STREAM_RESET_REASON_GENERATION_CHANGE;
 use crate::application::{
     EventStreamBridge, EventStreamSubscription, ExternalEventEnvelope, ExternalEventIngress,
     GatewayHostDependencies, StreamEvent, StreamNotification,
 };
-use axon_domain::{ConsumerCursor, InteractionId, WorkspaceId};
+use axon_domain::{ConsumerCursor, InteractionId};
 use axon_protocol::SubmitInteractionReceipt;
 use axon_session::{RuntimeStore, WorkspaceResolver};
 use axon_session_runtime::RuntimeClock;
@@ -29,10 +28,12 @@ use std::sync::Arc;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
-/// 子代理会话标识的分隔符；会话级订阅据此认定「这是一个子代理会话」。
-const SUBAGENT_SESSION_ID_SEPARATOR: &str = "--subagent--";
-
 const GATEWAY_ADAPTER_ID: &str = "gateway";
+/// 网关外部事件的固定会话标识。
+///
+/// 外部 webhook 无从预知服务端生成的会话标识，因此这类事件统一落到这一条固定会话：
+/// 首次到达时登记，此后所有外部事件复用它。标识是一次性常量，不参与任何派生。
+const GATEWAY_EVENT_SESSION_ID: &str = "01J8XQ7K3M4N5P6Q7R8S9T0V1W";
 
 /// Daemon Gateway 的统一 ingress/egress 实现。
 ///
@@ -92,33 +93,37 @@ impl<S: RuntimeStore, C> DaemonGatewayBridge<S, C> {
         }
     }
 
-    /// 解析入站事件的目标 Workspace。
+    /// 取（必要时登记）网关外部事件的固定会话。
     ///
-    /// 客户端显式给出时必须命中 Workspace 注册表：车道身份是
-    /// `(workspace, audience, channel, destination)` 的复合哈希，接受一个未注册的
-    /// Workspace 等于凭空造出一条谁也无法解析归属的车道，因此这里 fail-closed。
-    /// 缺省时保持既有语义，回落到运行态解析出的默认 Workspace。
-    fn resolve_workspace_id(&self, requested: &str) -> Result<String, GatewayKernelError> {
-        let requested = requested.trim();
-        if requested.is_empty() {
-            return self.default_workspace_id.clone().ok_or_else(|| {
-                GatewayKernelError::Ingress("无法解析 Gateway 默认 Workspace".to_owned())
-            });
+    /// 外部事件没有会话标识可携带，也不能按投递目标派生：它们全部落在一条固定会话上，
+    /// 首次到达时创建，此后复用，因此 webhook 历史始终连续。
+    ///
+    /// 这条会话**不绑定任何项目 Workspace**：外部事件的处理根固定是 Axon 根目录
+    /// `~/.axon`（provider 脚本在 `~/.axon/events`、正文归档在 `~/.axon/data`），
+    /// 事件不属于任何项目工作区，因此 `workspace_id` 留空、`cwd` 也留空。
+    fn gateway_event_session(
+        &self,
+        now_ms: u64,
+    ) -> Result<axon_session::SessionRuntimeRecord, GatewayKernelError> {
+        let session_id = axon_domain::DaemonSessionId::new(GATEWAY_EVENT_SESSION_ID)
+            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
+        if let Ok(session) = self.dependencies.store.get_session(&session_id) {
+            return Ok(session);
         }
-        let workspace_id = WorkspaceId::new(requested.to_owned())
-            .map_err(|error| GatewayKernelError::Ingress(format!("Workspace ID 无效：{error}")))?;
-        let known = self
-            .dependencies
+        self.dependencies
             .store
-            .get_workspace(&workspace_id)
-            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?
-            .is_some();
-        if !known {
-            return Err(GatewayKernelError::Ingress(format!(
-                "事件指定的 Workspace 未注册：{requested}"
-            )));
-        }
-        Ok(workspace_id.as_str().to_owned())
+            .create_session_with(&axon_session::NewSessionRequest {
+                session_id,
+                kind: axon_session::SessionKind::Primary,
+                trust_scope: axon_session::SessionTrustScope::Private,
+                workspace_id: None,
+                root_session_id: None,
+                goal_id: None,
+                execution_id: None,
+                cwd: String::new(),
+                now_ms,
+            })
+            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))
     }
 
     fn absorb_debounced(
@@ -140,8 +145,35 @@ where
         &self,
         mut event: ExternalEventEnvelope,
     ) -> Result<SubmitInteractionReceipt, GatewayKernelError> {
-        event.workspace_id = self.resolve_workspace_id(&event.workspace_id)?;
+        // 外部事件不对外暴露 Workspace 与会话：Workspace 固定取网关默认（Axon 根目录），
+        // 会话固定取内部常量。
+        event.workspace_id = self.default_workspace_id.clone().ok_or_else(|| {
+            GatewayKernelError::Ingress("无法解析 Gateway 默认 Workspace".to_owned())
+        })?;
         let now_ms = self.dependencies.clock.now_ms();
+        // 会话标识：显式给出时必须在控制面已登记且归属一致；未给出时（外部 webhook 无从
+        // 预知标识）解析该 Workspace 的活跃会话，没有才新建一条主会话并继续投递。
+        let session = match event.session_id.clone() {
+            Some(session_id) => {
+                let session = self
+                    .dependencies
+                    .store
+                    .get_session(&session_id)
+                    .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
+                if session
+                    .workspace_id
+                    .as_deref()
+                    .is_some_and(|workspace| workspace != event.workspace_id.as_str())
+                {
+                    return Err(GatewayKernelError::Ingress(
+                        "会话不属于该 Workspace".to_owned(),
+                    ));
+                }
+                session
+            }
+            None => self.gateway_event_session(now_ms)?,
+        };
+        event.session_id = Some(session.session_id.clone());
         let debounce_key = event
             .correlation_key
             .clone()
@@ -362,19 +394,7 @@ where
             .store
             .get_session(&session_id)
             .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
-        match session_id
-            .as_str()
-            .split_once(SUBAGENT_SESSION_ID_SEPARATOR)
-        {
-            Some((parent_session_id, _)) => {
-                if parent_session_id.is_empty() {
-                    return Err(GatewayKernelError::Ingress(
-                        "子代理会话缺少父会话前缀".to_owned(),
-                    ));
-                }
-            }
-            None => self.authorize_goal_session(workspace_id, &session_id, &session)?,
-        }
+        self.authorize_session(workspace_id, &session)?;
         let live_ceiling = live_ceiling_cursor(
             &self.dependencies.store,
             &session_id,
@@ -408,84 +428,23 @@ where
         }))
     }
 
-    /// 目标执行会话的订阅放行判定；除已登记的会话外只多三条按索引的读取。
-    fn authorize_goal_session(
+    /// 会话订阅的放行判定：会话存在，且工作区与受众边界匹配。
+    fn authorize_session(
         &self,
         workspace_id: &str,
-        session_id: &axon_domain::DaemonSessionId,
         session: &axon_session::SessionRuntimeRecord,
     ) -> Result<(), GatewayKernelError> {
-        let trace = GoalTrace::start(GOAL_SESSION_FIELD);
-        let outcome = self.check_goal_session(workspace_id, session_id, session);
-        if let Some(trace) = trace {
-            trace.finish(if outcome.is_ok() {
-                "allowed"
-            } else {
-                "rejected"
-            });
+        if session
+            .workspace_id
+            .as_deref()
+            .is_some_and(|owner| owner != workspace_id)
+        {
+            return Err(rejection("会话与请求工作区不匹配"));
         }
-        if let Err(error) = &outcome {
-            // 拒绝码对客户端只有一种，具体原因在这里留痕，便于分辨是绑定缺失还是工作区不符。
-            axon_logger::debug(&format!("目标执行会话订阅被拒：{error}"));
-        }
-        outcome
-    }
-
-    fn check_goal_session(
-        &self,
-        workspace_id: &str,
-        session_id: &axon_domain::DaemonSessionId,
-        session: &axon_session::SessionRuntimeRecord,
-    ) -> Result<(), GatewayKernelError> {
-        let Some(execution) = self
-            .dependencies
-            .store
-            .execution_for_session(session_id)
-            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?
-        else {
-            return Err(rejection("会话既不是子代理会话，也没有目标执行绑定"));
-        };
-        let Some(goal) = self
-            .dependencies
-            .store
-            .get_goal(&execution.goal_id)
-            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?
-        else {
-            return Err(rejection("目标执行绑定的目标已不存在"));
-        };
-        let resolved = match &goal.scope {
-            axon_domain::ScopeRef::Workspace(resolved) => resolved.as_str().to_owned(),
-            axon_domain::ScopeRef::Global => self.global_goal_workspace(session)?,
-        };
-        if resolved != workspace_id {
-            return Err(rejection("目标会话与请求工作区不匹配"));
+        if session.trust_scope == axon_session::SessionTrustScope::Restricted {
+            return Err(rejection("会话受众边界受限，本层无法证明受众"));
         }
         Ok(())
-    }
-
-    /// 全局目标按会话 cwd 精确匹配 Workspace 注册表根目录；匹配必须唯一。
-    fn global_goal_workspace(
-        &self,
-        session: &axon_session::SessionRuntimeRecord,
-    ) -> Result<String, GatewayKernelError> {
-        let cwd = normalize_root(&session.cwd);
-        let workspaces = self
-            .dependencies
-            .store
-            .list_workspaces()
-            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
-        let matches: Vec<String> = workspaces
-            .into_iter()
-            .filter(|workspace| normalize_root(&workspace.workspace_root) == cwd)
-            .map(|workspace| workspace.workspace_id)
-            .collect();
-        match matches.len() {
-            1 => matches
-                .into_iter()
-                .next()
-                .ok_or_else(|| rejection("全局目标会话的 cwd 未匹配到工作区")),
-            _ => Err(rejection("全局目标会话的 cwd 无法唯一匹配工作区")),
-        }
     }
 }
 
@@ -655,11 +614,6 @@ pub fn normalize_workspace_root(value: &str) -> String {
     let unified = value.trim().replace('\\', "/");
     let trimmed = unified.trim_end_matches('/');
     trimmed.to_owned()
-}
-
-/// 本模块内的短别名。
-fn normalize_root(value: &str) -> String {
-    normalize_workspace_root(value)
 }
 
 fn resolve_default_workspace_id() -> Option<String> {

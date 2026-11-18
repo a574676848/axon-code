@@ -476,6 +476,7 @@ fn subscription_request(session_id: &DaemonSessionId, interaction_id: &str) -> D
 
 fn interaction(workspace_id: &str) -> InteractionRecord {
     InteractionRecord::new(
+        axon_domain::DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V1W").expect("合法会话 ID"),
         InteractionId::new("subscription-interaction").expect("Interaction ID"),
         InteractionSource::new("cli", "subscription-message").expect("来源"),
         ScopeRef::workspace(workspace_id).expect("作用域"),

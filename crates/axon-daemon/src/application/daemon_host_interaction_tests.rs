@@ -465,6 +465,7 @@ fn request(request_id: &str, command: DaemonCommand) -> DaemonRequest {
 
 fn interaction(workspace_id: &str) -> InteractionRecord {
     InteractionRecord::new(
+        axon_domain::DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V1W").expect("合法会话 ID"),
         InteractionId::new("interaction-ipc-query").expect("Interaction ID"),
         InteractionSource::new("cli", "message-ipc-query").expect("来源"),
         ScopeRef::workspace(workspace_id).expect("作用域"),

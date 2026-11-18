@@ -381,7 +381,7 @@ Axon 会为每次执行注入模型友好的环境变量：非 TTY 场景注入 
 - `yield_time_ms` 的上界是 **10000 毫秒（10 秒）**：schema 的 `maximum`、参数解析与等待时长收敛三处同源，超限在参数层直接拒绝并点名该字段，不做静默截断。刚启动、仍在 `running` 且已运行不足 10 秒的作业，带正 `yield_time_ms` 的读取会被运行时守卫驳回（`yield_time_ms` 为 0 或省略的即时快照仍可用）：后台作业的输出由桌面端与 TUI 实时呈现，完成由 durable 事件回流，前台阻塞轮询不属于这条通道。
 - 输出是**增量**的：每次读取消费并返回自上次读取以来新增的片段，单次回执不是全部输出。预览受 `max_output_tokens` 约束，超出时保留头尾并标记截断，完整内容按 `artifactPath` 读取；`fullOutputAvailable` 为假时归档本身已被容量上限截断。
 - 作业在终态后按保留窗口回收（终态保留 5 分钟，墓碑保留 30 分钟）；超窗读取提示「已结束并超出保留窗口，请重新执行命令」，与从未产生过的 ID 可区分。
-- 作业进入终态时产生**统一完成通知**：若原回合仍在运行，则通过原回合的 steer 通道实时注入；若原回合已结束（`Inactive`）且非父回合取消导致的 Shell 作业终态，则由 `ShellJobWakeBridge` 包装为 `shell-job-wake:` Interaction 保留原 `model` 与 `reasoning_effort` 投递回原会话车道并唤醒下一轮响应，无需模型轮询。通知载荷自证归属（生产者、作业引用、终态、退出原因、有界摘要或归档引用、待读 mailbox 引用）。daemon 侧 Goal Execution 完成沿用既有的持久投递收件箱。
+- 作业进入终态时产生**统一完成通知**：若原回合仍在运行，则通过原回合的 steer 通道实时注入；若原回合已结束（`Inactive`）且非父回合取消导致的 Shell 作业终态，则由 `ShellJobWakeBridge` 包装为 `shell-job-wake:` Interaction 保留原 `model` 与 `reasoning_effort` 投递回原会话会话并唤醒下一轮响应，无需模型轮询。通知载荷自证归属（生产者、作业引用、终态、退出原因、有界摘要或归档引用、待读 mailbox 引用）。daemon 侧 Goal Execution 完成沿用既有的持久投递收件箱。
 - `builtin.job_kill` 终止作业及其进程树；对子代理则执行上述完整中断语义。作业已进入终态时返回提示而非重复终止。终止后仍可用 `builtin.job_output` 读取已产生的输出与终态。
 
 并发收益是这一层独立出来的直接原因：`builtin.write_stdin` 声明为 `Exclusive`，需要独占执行窗口；作业工具是 `ParallelSafe`，因此含作业的批次仍可与其他只读工具并行。

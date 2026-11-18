@@ -26,6 +26,7 @@ fn health_counts_statuses_and_oldest_execution_age() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
     let interaction = InteractionRecord::new(
+        axon_domain::DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V1W").expect("合法会话 ID"),
         InteractionId::new("health-interaction").expect("interaction"),
         InteractionSource::new("cli", "health-message").expect("来源"),
         ScopeRef::global(),

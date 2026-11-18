@@ -27,6 +27,8 @@ pub(crate) enum ClientFrame {
         workspace_id: String,
         /// 回复目的地。
         reply_destination: String,
+        /// 目标会话标识：语音入站与文本入口共用同一条会话。
+        session_id: String,
         /// 是否朗读文本轮。
         tts: bool,
         /// 定稿是否提交为一轮对话；听写模式只回文本、不进会话。
@@ -59,6 +61,9 @@ struct StartWire {
     client_session_id: String,
     workspace_id: String,
     reply_destination: String,
+    /// 目标会话标识；缺省表示来源没有提供会话，这类帧在校验阶段被拒。
+    #[serde(default)]
+    session_id: String,
     mode: String,
     lang: String,
     tts: bool,
@@ -116,8 +121,10 @@ pub(super) struct StartRequest {
     pub(super) client_session_id: String,
     /// 工作区 id。
     pub(super) workspace_id: String,
-    /// 回复目的地，与文本入口同车道键。
+    /// 回复目的地。
     pub(super) reply_destination: String,
+    /// 目标会话标识。
+    pub(super) session_id: String,
     /// 本轮是否朗读。
     pub(super) tts: bool,
     /// 定稿是否提交为一轮对话。
@@ -131,6 +138,7 @@ pub(crate) fn classify(started: bool, text: &str) -> Result<Classified, ()> {
             client_session_id,
             workspace_id,
             reply_destination,
+            session_id,
             tts,
             submit,
         } => {
@@ -141,6 +149,7 @@ pub(crate) fn classify(started: bool, text: &str) -> Result<Classified, ()> {
                     client_session_id,
                     workspace_id,
                     reply_destination,
+                    session_id,
                     tts,
                     submit,
                 }))
@@ -190,6 +199,7 @@ pub(crate) fn parse_client_frame(text: &str) -> Result<ClientFrame, ()> {
                 || wire.client_session_id.len() > 64
                 || wire.workspace_id.is_empty()
                 || wire.reply_destination.is_empty()
+                || wire.session_id.trim().is_empty()
                 || !matches!(wire.mode.as_str(), "push_to_talk" | "full_duplex")
                 || !matches!(wire.lang.as_str(), "zh" | "en" | "auto")
             {
@@ -200,6 +210,7 @@ pub(crate) fn parse_client_frame(text: &str) -> Result<ClientFrame, ()> {
                 client_session_id: wire.client_session_id,
                 workspace_id: wire.workspace_id,
                 reply_destination: wire.reply_destination,
+                session_id: wire.session_id,
                 tts: wire.tts,
                 submit: wire.submit,
             })
@@ -235,7 +246,7 @@ mod tests {
     use super::{CancelReason, Classified, ClientFrame, classify, parse_client_frame};
 
     fn start_json() -> &'static str {
-        r#"{"type":"start","protocolVersion":1,"clientSessionId":"c-1","workspaceId":"w-1","replyDestination":"desktop","mode":"full_duplex","lang":"zh","tts":false}"#
+        r#"{"type":"start","protocolVersion":1,"clientSessionId":"c-1","workspaceId":"w-1","replyDestination":"desktop","sessionId":"01J8XQ7K3M4N5P6Q7R8S9T0V1W","mode":"full_duplex","lang":"zh","tts":false}"#
     }
 
     #[test]

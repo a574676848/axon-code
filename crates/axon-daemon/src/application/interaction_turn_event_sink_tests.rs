@@ -203,6 +203,7 @@ fn terminal_event_and_turn_metrics_land_in_one_batch() {
         .expect("创建会话");
 
     let interaction = InteractionRecord::new(
+        axon_domain::DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V1W").expect("合法会话 ID"),
         InteractionId::new("interaction-turn-metrics-batch").expect("Interaction ID"),
         InteractionSource::new("cli", "message-turn-metrics-batch").expect("来源"),
         ScopeRef::global(),
@@ -303,6 +304,7 @@ fn turn_metrics_output_tokens_follow_the_ledger_not_the_speed_window() {
         .create_session(&session_id, "/workspace", clock.now_ms())
         .expect("创建会话");
     let interaction = InteractionRecord::new(
+        axon_domain::DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V1W").expect("合法会话 ID"),
         InteractionId::new("interaction-output-ledger").expect("Interaction ID"),
         InteractionSource::new("cli", "message-output-ledger").expect("来源"),
         ScopeRef::global(),

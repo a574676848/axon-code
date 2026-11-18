@@ -27,7 +27,7 @@ impl SchemaKind {
     /// 不做补列、不做回填。
     const fn version(self) -> i64 {
         match self {
-            Self::Control => 6,
+            Self::Control => 7,
             Self::Outbox => 1,
         }
     }
@@ -159,16 +159,37 @@ const CONTROL_DDL: &str = "
         CREATE INDEX IF NOT EXISTS daemon_instances_retention
             ON daemon_instances(lease_expires_at_ms, host_id);
         CREATE TABLE IF NOT EXISTS sessions (
-            session_id TEXT PRIMARY KEY, run_session_id TEXT NOT NULL, root_session_id TEXT NOT NULL,
-            cwd TEXT NOT NULL, status TEXT NOT NULL, owner_host_id TEXT, owner_generation TEXT,
-            worker_attempt INTEGER NOT NULL, context_version INTEGER NOT NULL,
-            last_checkpoint_seq INTEGER NOT NULL, last_event_sequence INTEGER NOT NULL,
-            last_activity_at_ms INTEGER NOT NULL, created_at_ms INTEGER NOT NULL,
-            updated_at_ms INTEGER NOT NULL,
-            workspace_id TEXT, title TEXT,
-            pinned INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,
+            session_id TEXT PRIMARY KEY NOT NULL,
+            workspace_id TEXT,
+            trust_scope TEXT NOT NULL
+                CHECK (trust_scope IN ('private','group_workspace','restricted')),
+            kind TEXT NOT NULL CHECK (kind IN ('primary','subagent','cron','goal')),
+            root_session_id TEXT,
+            goal_id TEXT,
+            execution_id TEXT,
+            current_run_id TEXT NOT NULL,
             run_generation INTEGER NOT NULL DEFAULT 0,
-            provider TEXT, model TEXT, model_name TEXT
+            title TEXT,
+            pinned INTEGER NOT NULL DEFAULT 0,
+            archived INTEGER NOT NULL DEFAULT 0,
+            sort_order INTEGER,
+            cwd TEXT NOT NULL,
+            status TEXT NOT NULL,
+            owner_host_id TEXT,
+            owner_generation TEXT,
+            worker_attempt INTEGER NOT NULL DEFAULT 0,
+            context_version INTEGER NOT NULL DEFAULT 0,
+            last_checkpoint_seq INTEGER NOT NULL DEFAULT 0,
+            last_event_sequence INTEGER NOT NULL DEFAULT 0,
+            provider TEXT,
+            model TEXT,
+            model_name TEXT,
+            created_at_ms INTEGER NOT NULL,
+            last_activity_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            CHECK (root_session_id IS NULL OR kind = 'subagent'),
+            CHECK (goal_id IS NULL OR kind IN ('cron','goal')),
+            CHECK (execution_id IS NULL OR kind IN ('cron','goal'))
         );
         CREATE INDEX IF NOT EXISTS sessions_recovery
             ON sessions(status, owner_host_id, owner_generation);
@@ -178,6 +199,10 @@ const CONTROL_DDL: &str = "
             ON sessions(owner_host_id);
         CREATE INDEX IF NOT EXISTS sessions_by_activity
             ON sessions(pinned DESC, last_activity_at_ms DESC);
+        CREATE INDEX IF NOT EXISTS sessions_by_workspace
+            ON sessions(workspace_id, archived, sort_order, last_activity_at_ms);
+        CREATE INDEX IF NOT EXISTS sessions_by_kind_root
+            ON sessions(kind, root_session_id);
         CREATE TABLE IF NOT EXISTS session_metrics (
             session_id TEXT PRIMARY KEY,
             turn_count INTEGER NOT NULL DEFAULT 0,
@@ -263,7 +288,7 @@ const CONTROL_DDL: &str = "
             attachments_json TEXT NOT NULL DEFAULT '[]',
             model TEXT,
             reasoning_effort TEXT,
-            session_id TEXT NOT NULL DEFAULT '',
+            session_id TEXT NOT NULL,
             tool_summary TEXT NOT NULL DEFAULT ''
         );
         CREATE UNIQUE INDEX IF NOT EXISTS inbox_source

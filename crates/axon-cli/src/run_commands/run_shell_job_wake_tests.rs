@@ -16,7 +16,7 @@ use axon_domain::{
     InteractionSource, InteractionStatus, ReplyRoute, SHELL_JOB_WAKE_SOURCE_PREFIX,
     SYSTEM_SOURCE_CHANNEL, ScopeRef,
 };
-use axon_session::{InteractionQueryStore, InteractionStore, SqliteRuntimeStore};
+use axon_session::{InteractionQueryStore, InteractionStore, RuntimeStore, SqliteRuntimeStore};
 use axon_session_runtime::RuntimeClock;
 
 use super::{ShellJobWakeBridge, WakeRouteInfo};
@@ -64,6 +64,8 @@ struct TestFixture {
     wakes: Arc<AtomicUsize>,
     bridge: ShellJobWakeBridge,
     session_id: String,
+    /// 当前运行实例标识：唤醒路由按它登记，会话身份按 `session_id` 记账。
+    run_id: String,
 }
 
 impl TestFixture {
@@ -80,6 +82,7 @@ impl TestFixture {
             Ok(())
         });
         let seed = InteractionRecord::new(
+            axon_domain::DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V1W").expect("合法会话 ID"),
             InteractionId::new(format!("interaction-seed-{}", uuid::Uuid::new_v4())).expect("ID"),
             InteractionSource::new(channel, format!("msg-{}", uuid::Uuid::new_v4())).expect("来源"),
             ScopeRef::workspace(workspace_id).expect("作用域"),
@@ -89,8 +92,16 @@ impl TestFixture {
             1,
         )
         .expect("Interaction");
-        let session_id = axon_session::interaction_session_id(&seed).expect("车道 ID");
+        let session_id = axon_session::interaction_session_id(&seed);
         store.append(&seed).expect("种子入库");
+        let session = store
+            .create_session(
+                &axon_domain::DaemonSessionId::new(session_id.clone()).expect("会话标识"),
+                ".",
+                1,
+            )
+            .expect("会话行");
+        let run_id = session.current_run_id.clone();
         let service = PrimaryTurnService::new(
             store.clone(),
             RecordingRunner::default(),
@@ -111,6 +122,7 @@ impl TestFixture {
             wakes,
             bridge,
             session_id,
+            run_id,
         }
     }
 
@@ -159,7 +171,7 @@ fn active_turn_receives_completion_notice_in_band_without_opening_wake_turn() {
     fixture.bridge.register_turn(
         &owner,
         WakeRouteInfo {
-            session_id: fixture.session_id.clone(),
+            session_id: fixture.run_id.clone(),
             model: Some("gpt-6-astra".to_owned()),
             reasoning_effort: Some("high".to_owned()),
             turn_cancel_token: cancel_token,
@@ -195,7 +207,7 @@ fn ended_turn_wakes_new_turn_preserving_model_and_effort_for_shell_job() {
     fixture.bridge.register_turn(
         &owner,
         WakeRouteInfo {
-            session_id: fixture.session_id.clone(),
+            session_id: fixture.run_id.clone(),
             model: Some("gpt-6-astra".to_owned()),
             reasoning_effort: Some("high".to_owned()),
             turn_cancel_token: cancel_token,
@@ -205,7 +217,7 @@ fn ended_turn_wakes_new_turn_preserving_model_and_effort_for_shell_job() {
     fixture.bridge.register_turn(
         &owner,
         WakeRouteInfo {
-            session_id: fixture.session_id.clone(),
+            session_id: fixture.run_id.clone(),
             model: Some("gpt-6-astra".to_owned()),
             reasoning_effort: Some("high".to_owned()),
             turn_cancel_token: RunCancelToken::default(),
@@ -271,7 +283,7 @@ fn cancelled_turn_does_not_wake_but_subagent_and_shell_terminals_do() {
     fixture.bridge.register_turn(
         &owner,
         WakeRouteInfo {
-            session_id: fixture.session_id.clone(),
+            session_id: fixture.run_id.clone(),
             model: None,
             reasoning_effort: None,
             turn_cancel_token: cancel_token,
@@ -306,7 +318,7 @@ fn cancelled_turn_does_not_wake_but_subagent_and_shell_terminals_do() {
     fixture.bridge.register_turn(
         &owner,
         WakeRouteInfo {
-            session_id: fixture.session_id.clone(),
+            session_id: fixture.run_id.clone(),
             model: None,
             reasoning_effort: None,
             turn_cancel_token: RunCancelToken::default(),
@@ -329,7 +341,7 @@ fn multi_notice_batch_respects_interaction_id_length_and_ignores_system_channel(
     fixture.bridge.register_turn(
         &owner,
         WakeRouteInfo {
-            session_id: fixture.session_id.clone(),
+            session_id: fixture.run_id.clone(),
             model: None,
             reasoning_effort: None,
             turn_cancel_token: RunCancelToken::default(),
@@ -355,7 +367,7 @@ fn multi_notice_batch_respects_interaction_id_length_and_ignores_system_channel(
     system_fixture.bridge.register_turn(
         &sys_owner,
         WakeRouteInfo {
-            session_id: system_fixture.session_id.clone(),
+            session_id: system_fixture.run_id.clone(),
             model: None,
             reasoning_effort: None,
             turn_cancel_token: RunCancelToken::default(),
@@ -377,7 +389,7 @@ fn releasing_an_idle_turn_drops_the_route_and_its_subscription() {
     fixture.bridge.register_turn(
         &owner,
         WakeRouteInfo {
-            session_id: fixture.session_id.clone(),
+            session_id: fixture.run_id.clone(),
             model: None,
             reasoning_effort: None,
             turn_cancel_token: RunCancelToken::default(),
@@ -414,7 +426,7 @@ fn releasing_an_idle_turn_drops_the_route_and_its_subscription() {
     fixture.bridge.register_turn(
         &live_owner,
         WakeRouteInfo {
-            session_id: fixture.session_id.clone(),
+            session_id: fixture.run_id.clone(),
             model: None,
             reasoning_effort: None,
             turn_cancel_token: RunCancelToken::default(),

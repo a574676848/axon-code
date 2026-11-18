@@ -35,6 +35,7 @@ fn fixture(directory: &std::path::Path) -> Fixture {
     let mut session_id = None;
     for interaction_id in [&first, &second] {
         let record = InteractionRecord::new(
+            axon_domain::DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V1W").expect("合法会话 ID"),
             interaction_id.clone(),
             InteractionSource::new("desktop", format!("message-{}", interaction_id.as_str()))
                 .expect("有效来源"),

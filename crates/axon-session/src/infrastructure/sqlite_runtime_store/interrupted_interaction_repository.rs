@@ -5,13 +5,9 @@
 
 use super::SqliteRuntimeStore;
 use super::helpers::{i64_value, storage, u64_value};
-use crate::application::session_id_for_route;
 use crate::domain::runtime::{DaemonHostRecord, SessionEventRecord};
 use crate::ports::{RuntimeStore, RuntimeStoreError};
-use axon_domain::{
-    AudienceContext, DaemonSessionId, InteractionId, InteractionSource, LedgerEventId, ReplyRoute,
-    ScopeRef,
-};
+use axon_domain::{DaemonSessionId, InteractionId, LedgerEventId};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 
 const WORK_RUNNING: &str = "running";
@@ -69,7 +65,7 @@ fn read_candidates(
     let mut statement = transaction
         .prepare(
             "SELECT i.interaction_id,i.scope_json,i.audience_json,i.source_channel,i.source_message_id,\
-                    i.reply_route_json \
+                    i.reply_route_json,i.session_id \
              FROM work_items AS w JOIN inbox AS i ON i.interaction_id=w.inbox_id \
              WHERE w.status=?1 AND w.lease_expires_at_ms<=?2 \
              ORDER BY w.lease_expires_at_ms ASC, i.received_at_ms ASC, i.interaction_id ASC LIMIT ?3",
@@ -96,27 +92,7 @@ fn read_candidate_row(
 }
 
 fn candidate_session_id(row: &rusqlite::Row<'_>) -> Result<DaemonSessionId, String> {
-    let scope_json: String = row.get(1).map_err(|error| error.to_string())?;
-    let audience_json: String = row.get(2).map_err(|error| error.to_string())?;
-    let source_channel: String = row.get(3).map_err(|error| error.to_string())?;
-    let source_message_id: String = row.get(4).map_err(|error| error.to_string())?;
-    let reply_route_json: String = row.get(5).map_err(|error| error.to_string())?;
-    let scope = serde_json::from_str::<ScopeRef>(&scope_json).map_err(|error| error.to_string())?;
-    let audience = serde_json::from_str::<AudienceContext>(&audience_json)
-        .map_err(|error| error.to_string())?;
-    let source = InteractionSource::new(source_channel, source_message_id)
-        .map_err(|error| error.to_string())?;
-    let reply_route =
-        serde_json::from_str::<ReplyRoute>(&reply_route_json).map_err(|error| error.to_string())?;
-    let workspace_id = scope
-        .workspace_id()
-        .ok_or_else(|| "未绑定 Workspace".to_owned())?;
-    let session_id = session_id_for_route(
-        workspace_id.as_str(),
-        &audience,
-        source.channel(),
-        reply_route.destination(),
-    );
+    let session_id: String = row.get(6).map_err(|error| error.to_string())?;
     DaemonSessionId::new(session_id).map_err(|error| error.to_string())
 }
 
@@ -257,7 +233,7 @@ mod tests {
         let interaction =
             crate::infrastructure::sqlite_runtime_store_interaction_tests::sample_interaction();
         store.append(&interaction).expect("追加 Interaction");
-        let session_id = crate::interaction_session_id(&interaction).expect("session");
+        let session_id = crate::interaction_session_id(&interaction);
         let session_id = DaemonSessionId::new(session_id).expect("Session ID");
         store.create_session(&session_id, ".", 1).expect("Session");
         store

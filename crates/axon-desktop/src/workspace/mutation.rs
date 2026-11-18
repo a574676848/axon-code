@@ -6,9 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::session_source::{
-    DESKTOP_SESSION_CHANNEL, SessionSource, WorkspaceEntry as RegistryWorkspace,
-};
+use crate::session_source::{SessionSource, WorkspaceEntry as RegistryWorkspace};
 use crate::state::{DesktopState, RegisteredWorkspace, directory_label, load_state, save_state};
 
 use super::model::{WorkspaceDto, generate_uuid, normalize, now_millis};
@@ -164,9 +162,8 @@ pub fn execute_session_create(
         return build_workspaces(source);
     }
     let destination = format!("workbench-{}", generate_uuid());
-    // 车道标识在服务端派生，本地不复刻哈希算法。
-    let session_id =
-        source.derive_session_id(workspace_id, DESKTOP_SESSION_CHANNEL, &destination)?;
+    // 会话标识由 `POST /api/v1/sessions` 生成，客户端不再本地派生。
+    let session_id = source.create_session(workspace_id, None)?;
 
     /*
      * 写入前重新读取本地状态。

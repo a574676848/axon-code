@@ -1,9 +1,7 @@
 //! Session Runtime repository 边界。
 use super::HOST_STATE_RUNNING;
 use super::SqliteRuntimeStore;
-use super::helpers::{
-    i64_value, parse_host_id, parse_runtime_status, parse_session_id, storage, u64_value,
-};
+use super::helpers::{i64_value, parse_session_id, session_runtime_row, storage};
 use crate::domain::runtime::{DaemonHostRecord, SessionRuntimeRecord};
 use crate::ports::{RuntimeStore, RuntimeStoreError};
 use axon_domain::RuntimeHostId;
@@ -69,29 +67,13 @@ pub(super) fn list_runnable_execution_sessions(
 ) -> Result<Vec<SessionRuntimeRecord>, RuntimeStoreError> {
     let connection = store.connection()?;
     let mut statement = connection
-        .prepare("SELECT r.session_id,r.run_session_id,r.root_session_id,r.cwd,r.status,r.owner_host_id,r.owner_generation,r.worker_attempt,r.context_version,r.last_checkpoint_seq,r.last_event_sequence,r.last_activity_at_ms FROM sessions r WHERE r.status IN ('created','idle','running','recovering') AND EXISTS (SELECT 1 FROM work_items a WHERE a.session_id=r.session_id AND (a.status='queued' OR (a.status='running' AND a.cancellation_requested_at_ms IS NULL AND a.lease_expires_at_ms <= ?1))) ORDER BY r.last_activity_at_ms ASC LIMIT ?2")
+        .prepare("SELECT r.session_id,r.current_run_id,r.root_session_id,r.kind,r.trust_scope,r.workspace_id,r.cwd,r.status,r.owner_host_id,r.owner_generation,r.worker_attempt,r.context_version,r.last_checkpoint_seq,r.last_event_sequence,r.last_activity_at_ms FROM sessions r WHERE r.status IN ('created','idle','running','recovering') AND EXISTS (SELECT 1 FROM work_items a WHERE a.session_id=r.session_id AND (a.status='queued' OR (a.status='running' AND a.cancellation_requested_at_ms IS NULL AND a.lease_expires_at_ms <= ?1))) ORDER BY r.last_activity_at_ms ASC LIMIT ?2")
         .map_err(storage)?;
     let rows = statement
-        .query_map(params![i64_value(now_ms)?, i64::from(limit)], |row| {
-            Ok(SessionRuntimeRecord {
-                session_id: parse_session_id(row.get(0)?)?,
-                run_session_id: row.get(1)?,
-                root_session_id: parse_session_id(row.get(2)?)?,
-                cwd: row.get(3)?,
-                status: parse_runtime_status(&row.get::<_, String>(4)?),
-                owner_host_id: row
-                    .get::<_, Option<String>>(5)?
-                    .map(parse_host_id)
-                    .transpose()?,
-                owner_generation: row.get(6)?,
-                worker_attempt: u32::try_from(row.get::<_, i64>(7)?)
-                    .map_err(|_| rusqlite::Error::InvalidQuery)?,
-                context_version: u64_value(row.get(8)?)?,
-                last_checkpoint_seq: u64_value(row.get(9)?)?,
-                last_event_sequence: u64_value(row.get(10)?)?,
-                last_activity_at_ms: u64_value(row.get(11)?)?,
-            })
-        })
+        .query_map(
+            params![i64_value(now_ms)?, i64::from(limit)],
+            session_runtime_row,
+        )
         .map_err(storage)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(storage)
 }
@@ -403,23 +385,10 @@ pub(super) fn recover_expired_sessions(
             step.payload_json,
         ));
         recovered.push(transaction.query_row(
-            "SELECT session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms \
+            "SELECT session_id,current_run_id,root_session_id,kind,trust_scope,workspace_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms \
              FROM sessions WHERE session_id=?1",
             params![step.session_id.as_str()],
-            |row| Ok(SessionRuntimeRecord {
-                session_id: parse_session_id(row.get(0)?)?,
-                run_session_id: row.get(1)?,
-                root_session_id: parse_session_id(row.get(2)?)?,
-                cwd: row.get(3)?,
-                status: parse_runtime_status(&row.get::<_, String>(4)?),
-                owner_host_id: row.get::<_, Option<String>>(5)?.map(parse_host_id).transpose()?,
-                owner_generation: row.get(6)?,
-                worker_attempt: u32::try_from(row.get::<_, i64>(7)?).map_err(|_| rusqlite::Error::InvalidQuery)?,
-                context_version: u64_value(row.get(8)?)?,
-                last_checkpoint_seq: u64_value(row.get(9)?)?,
-                last_event_sequence: u64_value(row.get(10)?)?,
-                last_activity_at_ms: u64_value(row.get(11)?)?,
-            }),
+            session_runtime_row,
         ).map_err(storage)?);
     }
     transaction.commit().map_err(storage)?;

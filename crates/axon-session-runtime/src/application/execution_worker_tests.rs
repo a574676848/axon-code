@@ -128,7 +128,7 @@ fn reset_discards_old_action_and_executes_next_action_with_new_context() {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     assert_eq!(requests.len(), 1);
     assert_execution_context(&requests[0].context, &reset);
-    assert_ne!(reset.run_session_id, original.run_session_id);
+    assert_ne!(reset.current_run_id, original.current_run_id);
 }
 
 #[test]
@@ -330,7 +330,7 @@ fn action(session_id: &DaemonSessionId, action_id: &str, prompt: &str) -> Sessio
 }
 
 fn assert_execution_context(actual: &SessionExecutionContext, runtime: &SessionRuntimeRecord) {
-    assert_eq!(actual.run_session_id, runtime.run_session_id);
+    assert_eq!(actual.run_session_id, runtime.current_run_id);
     assert_eq!(actual.cwd, runtime.cwd);
     assert_eq!(actual.context_version, runtime.context_version);
 }

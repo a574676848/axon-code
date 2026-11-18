@@ -574,7 +574,7 @@ trait 对象实现：`impl RuntimeStore for SqliteRuntimeStore`，`crates/axon-s
 | 子代理消息 / 列表 | `crates/axon-desktop/src/conversation/subagent_message.rs:45`；`session_read.rs:73` |
 | 提问对账 / 作答 | `crates/axon-desktop/src/conversation/question_sync.rs:178`；`answer_question.rs:41` |
 | 作业列表 / 停止 / 输出 | `lane_jobs.rs:32`；`job_stop.rs:41`；`job_output.rs:67` |
-| 车道中断 | `crates/axon-desktop/src/conversation/interrupt.rs:31` |
+| 会话中断 | `crates/axon-desktop/src/conversation/interrupt.rs:31` |
 | 用量与费率：桌面端不读 `usage.sqlite3` | 声明 `crates/axon-desktop/src/usage.rs:4`；`crates/axon-desktop/src/pricing.rs:4` |
 | 架构门禁禁止依赖 `axon-session`/`rusqlite` | 仓库 `AGENTS.md`「数据一律经网关」条；`tools/verify-architecture.ps1` |
 
@@ -586,11 +586,11 @@ trait 对象实现：`impl RuntimeStore for SqliteRuntimeStore`，`crates/axon-s
 | 工作台 HTTP `lanes` | `LaneQueryService::list_lanes`（`Connection` 级读）`crates/axon-cli/src/workbench_http_adapter.rs:184-185`、`:491` |
 | 工作台 HTTP 交互事实 | 裸 SQL 读 `jarvis_interactions` `crates/axon-cli/src/workbench_http_lane_readings.rs:46-51` |
 | 工作台 HTTP 最终正文 | 裸 SQL 读 `session_events`（`turn_completed`）`crates/axon-cli/src/workbench_http_lane_readings.rs:98-103` |
-| 车道 run_session 解析 | 裸 SQL 读 `session_runtimes` `crates/axon-cli/src/workbench_http_lane_readings.rs:248` |
+| 会话 run_session 解析 | 裸 SQL 读 `session_runtimes` `crates/axon-cli/src/workbench_http_lane_readings.rs:248` |
 | 提问计数 | 裸 SQL 读 `jarvis_user_questions` `crates/axon-cli/src/workbench_http_adapter.rs:214` |
 | Ledger 上下文 | `list_active_goals_for_scope` / `get_latest_decision` / `list_unread_results` `crates/axon-cli/src/run_commands/run_request_payload.rs:309-320` |
 | 子代理名册 | `child_session_rows`（thread 事件面）`crates/axon-cli/src/workbench_http_subagents_jobs.rs:59` |
-| 作业唤醒读车道 | `LaneQueryStore` `crates/axon-cli/src/run_commands/run_shell_job_wake.rs:21`、`:65` |
+| 作业唤醒读会话 | `LaneQueryStore` `crates/axon-cli/src/run_commands/run_shell_job_wake.rs:21`、`:65` |
 | `axon serve`（headless）/v1/lanes、/v1/sessions | `crates/axon-cli/src/commands/serve.rs:150`、`:154`、`:187`、`:224` |
 | usage 看板 / pricing | `UsageRepository` `crates/axon-cli/src/usage_statistics/repository.rs:53-73` |
 

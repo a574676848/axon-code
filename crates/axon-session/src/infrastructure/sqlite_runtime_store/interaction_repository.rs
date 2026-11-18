@@ -11,7 +11,6 @@ use super::interaction_query_repository::{WORK_RUNNING, select_inbox};
 use super::interaction_repository_row::{
     read_record, runtime_error, serialize_error, storage_error,
 };
-use crate::application::interaction_session_id;
 use crate::ports::{
     InteractionAppendReceipt, InteractionProcessingLease, InteractionStore, InteractionStoreError,
     RuntimeStore,
@@ -317,8 +316,8 @@ fn insert_interaction(
                 interaction.model.as_deref(),
                 // 推理强度与模型同源：随本轮下发，不写进 Workspace 或 session 身份。
                 interaction.reasoning_effort.as_deref(),
-                // session 是主 turn 排他领取的事实源；未绑定 Workspace 的输入统一落在空 session。
-                interaction_session_id(interaction).unwrap_or_default(),
+                // session 是主 turn 排他领取的事实源：入站时必须由调用方显式给出会话标识。
+                interaction.session_id.as_str(),
                 // 客户端来源：与车道渠道分开记，逐轮标注与跨端混合统计读它。
                 interaction.source.client().unwrap_or_default(),
             ],

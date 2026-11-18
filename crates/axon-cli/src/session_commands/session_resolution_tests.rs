@@ -64,11 +64,11 @@ fn lane_session_resolves_to_its_run_window() {
     let record = store
         .create_session(&lane, "/workspace", 1)
         .expect("登记车道会话");
-    seed_thread(&config_path, &record.run_session_id);
+    seed_thread(&config_path, &record.current_run_id);
 
     let resolved = resolve_session_target(&config_path, lane.as_str()).expect("车道 ID 应可解析");
 
-    assert_eq!(resolved.thread_id, record.run_session_id);
+    assert_eq!(resolved.thread_id, record.current_run_id);
     assert_eq!(resolved.session_id, lane.as_str());
 }
 
@@ -83,10 +83,10 @@ fn thread_id_resolves_directly_and_keeps_own_session_identity() {
         .with_read_connection(|connection| {
             connection
                 .execute(
-                    "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,
+                    "INSERT INTO sessions(session_id,current_run_id,root_session_id,trust_scope,kind,cwd,status,
                          worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,
                          last_activity_at_ms,created_at_ms,updated_at_ms)
-                     VALUES(?1,?2,?1,'/workspace','created',0,0,0,0,5,5,5)",
+                     VALUES(?1,?2,NULL,'private','primary','/workspace','created',0,0,0,0,5,5,5)",
                     params![thread_id, "own-run-window"],
                 )
                 .map(|_| ())
@@ -107,12 +107,12 @@ fn thread_id_without_own_row_falls_back_to_owning_lane() {
     let record = store
         .create_session(&lane, "/workspace", 1)
         .expect("登记车道会话");
-    seed_thread(&config_path, &record.run_session_id);
+    seed_thread(&config_path, &record.current_run_id);
 
     let resolved =
-        resolve_session_target(&config_path, &record.run_session_id).expect("Thread ID 应可解析");
+        resolve_session_target(&config_path, &record.current_run_id).expect("Thread ID 应可解析");
 
-    assert_eq!(resolved.thread_id, record.run_session_id);
+    assert_eq!(resolved.thread_id, record.current_run_id);
     assert_eq!(resolved.session_id, lane.as_str());
 }
 
@@ -153,6 +153,6 @@ fn run_window_lane_detection_distinguishes_owned_windows() {
         .create_session(&lane, "/workspace", 1)
         .expect("登记车道会话");
 
-    assert!(run_window_has_lane(&store, &record.run_session_id));
+    assert!(run_window_has_lane(&store, &record.current_run_id));
     assert!(!run_window_has_lane(&store, "thread-without-lane"));
 }

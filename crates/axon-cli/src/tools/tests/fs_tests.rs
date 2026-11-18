@@ -1,5 +1,5 @@
 use super::*;
-use axon_domain::{CellId, SessionId, ToolCallInput};
+use axon_domain::{CellId, ToolCallInput};
 use serde_json::Value;
 use std::fs;
 use std::time::Duration;
@@ -390,7 +390,6 @@ pub(crate) fn context(cwd: &Path) -> ToolOrchestratorContext {
     ToolOrchestratorContext {
         config_path: None,
         cwd: cwd.to_path_buf(),
-        session_id: SessionId(1),
         thread_session_id: "test-thread".to_owned(),
         cell_id: CellId(1),
         model_messages: Vec::new(),

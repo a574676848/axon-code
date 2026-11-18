@@ -77,14 +77,14 @@ fn seed(connection: &Connection, batch: &str, what: &str) {
 fn cleanup_protects_active_and_unread_records() {
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
-    seed(&connection, "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES('s-run','s-run','s-run','/w','running',NULL,NULL,0,0,0,0,1,1,1);
+    seed(&connection, "INSERT INTO sessions(session_id,current_run_id,root_session_id,trust_scope,kind,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES('s-run','s-run',NULL,'private','primary','/w','running',NULL,NULL,0,0,0,0,1,1,1);
              INSERT INTO goals(goal_id,scope_json,parent_goal_id,title,status,revision,plan_json,acceptance_json,progress_json,waiting_reason,next_step,priority,deadline_ms,created_from_interaction_id,cancellation_reason,cancellation_requested_at_ms,created_at_ms,updated_at_ms)
                  VALUES('t-done','{}',NULL,'完成任务','completed',1,'{}','{}',NULL,NULL,NULL,0,NULL,NULL,NULL,NULL,1,1);
              INSERT INTO work_item_history(work_id,goal_id,session_id,kind,payload_json,attempt,priority,status,terminal_kind,started_at_ms,committed_at_ms,created_at_ms,updated_at_ms,finished_at_ms)
                  VALUES('e-done','t-done',NULL,'turn','{}',1,0,'completed','completed',1,NULL,1,1,1);
              INSERT INTO goal_results VALUES('r-unread','t-done','e-done',1,'done','[]','[]',NULL,1);
-             INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,received_at_ms,updated_at_ms,attachments_json)
-                 VALUES('i-live','tui','m-2','{}','{}','{}','hi',1,1,'[]');", "测试数据应可写入");
+             INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,received_at_ms,updated_at_ms,attachments_json,session_id)
+                 VALUES('i-live','tui','m-2','{}','{}','{}','hi',1,1,'[]','s-run');", "测试数据应可写入");
     drop(connection);
 
     let dry_run = count_runtime_cleanup(root.path(), 100).expect("dry-run 应成功");
@@ -106,7 +106,7 @@ fn explicit_session_family_cleanup_rechecks_active_state_and_execution_reference
         let connection = open_fixture(root.path());
         connection
             .execute(
-                "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES('protected','protected','protected','/w',?1,NULL,NULL,0,0,0,0,1,1,1)",
+                "INSERT INTO sessions(session_id,current_run_id,root_session_id,trust_scope,kind,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES('protected','protected',NULL,'private','primary','/w',?1,NULL,NULL,0,0,0,0,1,1,1)",
                 [status],
             )
             .expect("受保护 Session 应可写入");
@@ -150,7 +150,7 @@ fn explicit_session_family_cleanup_reclaims_terminal_work_items() {
     let connection = open_fixture(root.path());
     connection
         .execute_batch(
-            "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES('stale','stale','stale','/w','idle',NULL,NULL,0,0,0,0,1,1,1);
+            "INSERT INTO sessions(session_id,current_run_id,root_session_id,trust_scope,kind,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES('stale','stale',NULL,'private','primary','/w','idle',NULL,NULL,0,0,0,0,1,1,1);
              INSERT INTO work_items(
                  execution_id,goal_id,session_id,payload_json,attempt,priority,status,created_at_ms,updated_at_ms
              ) VALUES('done','task','stale','{}',1,0,'completed',1,1);
@@ -203,8 +203,9 @@ fn explicit_session_family_cleanup_reclaims_terminal_work_items() {
 fn dry_run_counts_match_real_deletion() {
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
-    seed(&connection, "INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,received_at_ms,updated_at_ms,attachments_json)
-                 VALUES('i-1','tui','m-1','{}','{}','{}','hi',1,1,'[]');
+    seed(&connection, "INSERT INTO sessions(session_id,current_run_id,root_session_id,trust_scope,kind,cwd,status,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES('s-cleanup','s-cleanup',NULL,'private','primary','/w','idle',0,0,0,0,1,1,1);
+             INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,received_at_ms,updated_at_ms,attachments_json,session_id)
+                 VALUES('i-1','tui','m-1','{}','{}','{}','hi',1,1,'[]','s-cleanup');
              INSERT INTO work_item_history(work_id,kind,attempt,priority,status,inbox_id,terminal_kind,created_at_ms,updated_at_ms,finished_at_ms)
                  VALUES('w-i-1','turn',1,0,'cancelled','i-1','rejected',1,1,1);
              INSERT INTO decisions VALUES('d-1','{}','user','allow',1,1,1);", "测试数据应可写入");
@@ -253,11 +254,12 @@ fn expired_events_beyond_floor_are_removed() {
 fn cleanup_stops_at_time_budget_and_resumes_next_run() {
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
-    seed(&connection, "WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 1000)
+    seed(&connection, "INSERT INTO sessions(session_id,current_run_id,root_session_id,trust_scope,kind,cwd,status,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES('s-cleanup','s-cleanup',NULL,'private','primary','/w','idle',0,0,0,0,1,1,1);
+             WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 1000)
              INSERT INTO inbox
                  (interaction_id, source_channel, source_message_id, scope_json, audience_json,
-                  reply_route_json, content, received_at_ms, updated_at_ms)
-             SELECT 'i-'||n, 'tui', 'm-'||n, '{}', '{}', '{}', 'hi', 1, 1
+                  reply_route_json, content, received_at_ms, updated_at_ms, session_id)
+             SELECT 'i-'||n, 'tui', 'm-'||n, '{}', '{}', '{}', 'hi', 1, 1, 's-cleanup'
              FROM seq;
              INSERT INTO work_item_history
                  (work_id, kind, attempt, priority, status, inbox_id, terminal_kind, created_at_ms, updated_at_ms, finished_at_ms)
@@ -283,11 +285,12 @@ fn cleanup_large_runtime_history_is_bounded() {
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
     seed(&connection, "BEGIN;
+             INSERT INTO sessions(session_id,current_run_id,root_session_id,trust_scope,kind,cwd,status,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES('s-cleanup','s-cleanup',NULL,'private','primary','/w','idle',0,0,0,0,1,1,1);
              WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 50000)
-             INSERT INTO inbox
+                          INSERT INTO inbox
                  (interaction_id, source_channel, source_message_id, scope_json, audience_json,
-                  reply_route_json, content, received_at_ms, updated_at_ms)
-             SELECT 'i-'||n, 'tui', 'm-'||n, '{}', '{}', '{}', 'hi', 1, 1
+                  reply_route_json, content, received_at_ms, updated_at_ms, session_id)
+             SELECT 'i-'||n, 'tui', 'm-'||n, '{}', '{}', '{}', 'hi', 1, 1, 's-cleanup'
              FROM seq;
              INSERT INTO work_item_history
                  (work_id, kind, attempt, priority, status, inbox_id, terminal_kind, created_at_ms, updated_at_ms, finished_at_ms)
@@ -327,11 +330,12 @@ fn cleanup_does_not_stall_concurrent_writes() {
     let root = axon_test_support::test_temp_dir();
     let connection = open_fixture(root.path());
     seed(&connection, "BEGIN;
+             INSERT INTO sessions(session_id,current_run_id,root_session_id,trust_scope,kind,cwd,status,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES('s-cleanup','s-cleanup',NULL,'private','primary','/w','idle',0,0,0,0,1,1,1);
              WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 20000)
-             INSERT INTO inbox
+                          INSERT INTO inbox
                  (interaction_id, source_channel, source_message_id, scope_json, audience_json,
-                  reply_route_json, content, received_at_ms, updated_at_ms)
-             SELECT 'i-'||n, 'tui', 'm-'||n, '{}', '{}', '{}', 'hi', 1, 1
+                  reply_route_json, content, received_at_ms, updated_at_ms, session_id)
+             SELECT 'i-'||n, 'tui', 'm-'||n, '{}', '{}', '{}', 'hi', 1, 1, 's-cleanup'
              FROM seq;
              INSERT INTO work_item_history
                  (work_id, kind, attempt, priority, status, inbox_id, terminal_kind, created_at_ms, updated_at_ms, finished_at_ms)

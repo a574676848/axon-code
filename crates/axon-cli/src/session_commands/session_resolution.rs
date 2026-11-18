@@ -1,7 +1,7 @@
 //! 会话 ID 到 Thread ID 的解析。
 //!
 //! `axon sessions list` 列的是运行态会话（控制面 `sessions` 行），而 Thread 事件流按运行
-//! 窗口 `run_session_id` 落盘：CLI 复合车道发起的会话两者并不相等。用户会把清单里的 ID
+//! 窗口 `current_run_id` 落盘：CLI 复合车道发起的会话两者并不相等。用户会把清单里的 ID
 //! 原样交给 `sessions show` / `read` / `resume` / `fork` / `export` / `replay` / `delete`，
 //! 因此这些入口统一先解析一次：先把入参当 Thread 直接命中（`debug session list` 与
 //! `--session` 用的就是 Thread ID），未命中再回落到该会话所属的运行窗口。
@@ -45,17 +45,17 @@ pub(crate) fn resolve_session_target(
             session_id: session_id.unwrap_or_else(|| given.to_owned()),
         });
     }
-    // 2) 按运行态会话回落：车道会话的 run_session_id 就是它的 Thread。
+    // 2) 按运行态会话回落：会话行的 current_run_id 就是它的 Thread。
     let session =
         DaemonSessionId::new(given.to_owned()).map_err(|_| format!("会话 ID 非法：{given}"))?;
     let record = store
         .get_session(&session)
         .map_err(|_| session_not_found(given))?;
-    if !thread_exists(&root, &record.run_session_id)? {
+    if !thread_exists(&root, &record.current_run_id)? {
         return Err(session_not_found(given));
     }
     Ok(ResolvedSession {
-        thread_id: record.run_session_id,
+        thread_id: record.current_run_id,
         session_id: given.to_owned(),
     })
 }
@@ -69,7 +69,7 @@ pub(crate) fn run_window_has_lane(store: &SqliteRuntimeStore, thread_id: &str) -
         .with_read_connection(|connection| {
             connection
                 .query_row(
-                    "SELECT 1 FROM sessions WHERE run_session_id = ?1 LIMIT 1",
+                    "SELECT 1 FROM sessions WHERE current_run_id = ?1 LIMIT 1",
                     [thread_id],
                     |row| row.get::<_, i64>(0),
                 )
@@ -96,7 +96,7 @@ fn owning_session_id(
                     Some(session_id) => Ok(Some(session_id)),
                     None => connection
                         .query_row(
-                            "SELECT session_id FROM sessions WHERE run_session_id = ?1
+                            "SELECT session_id FROM sessions WHERE current_run_id = ?1
                              ORDER BY last_activity_at_ms DESC LIMIT 1",
                             [thread_id],
                             |row| row.get::<_, String>(0),

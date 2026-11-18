@@ -75,7 +75,7 @@
 | D3 | 会话类型编进 id 字符串，表内无 `kind` | `goal-session-<goalId>`、子代理拼接 |
 | D4 | `trust_scope` 只存在于哈希输入 | `sessions` 表无该列 |
 | D5 | 问答记录把 cell id 当 interaction id | `crates/axon-cli/src/tools/orchestrator.rs` 的问答记录构造 |
-| D6 | 文档仍写 `primaryLaneId`，代码只有 `primarySessionId` | 文档与代码不一致 |
+| D6 | 文档仍写车道时代的旧线上字段名，代码只有 `primarySessionId` | 文档与代码不一致 |
 | D7 | `interaction_id` 生成形态不统一 | `external-interaction-<hash>` 与 `cron-wake-<hash>` |
 | D8 | 会话标识返回 `Option` | `interaction_session_id` |
 

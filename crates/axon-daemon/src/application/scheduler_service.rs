@@ -202,7 +202,14 @@ fn scheduled_interaction(
         .map_err(|error| RuntimeStoreError::InvalidId(error.to_string()))?;
     let route = ReplyRoute::new(SYSTEM_SOURCE_CHANNEL, workspace_id)
         .map_err(|error| RuntimeStoreError::InvalidId(error.to_string()))?;
+    // 会话标识必须由任务定义显式给出：服务端不按投递目标派生，也不隐式建会话。
+    let session_id = schedule.session_id.clone().ok_or_else(|| {
+        RuntimeStoreError::InvalidId(
+            "RuntimeSchedule 必须提供 sessionId：定时唤醒不得隐式建会话".to_owned(),
+        )
+    })?;
     InteractionRecord::new(
+        session_id,
         interaction_id,
         source,
         scope,

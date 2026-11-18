@@ -6,16 +6,96 @@ use axon_domain::{
 };
 use serde::{Deserialize, Serialize};
 
+/// 会话类型。取值域与 `sessions.kind` 的 CHECK 约束一一对应。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionKind {
+    /// 主会话：用户直接对话的那一条。
+    Primary,
+    /// 子代理会话：由父会话派发，`root_session_id` 指向父会话。
+    Subagent,
+    /// 定时任务会话：来源是 Cron 唤醒。
+    Cron,
+    /// 目标看板会话：来源是目标/执行看板。
+    Goal,
+}
+
+impl SessionKind {
+    /// 落库取值。
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Primary => "primary",
+            Self::Subagent => "subagent",
+            Self::Cron => "cron",
+            Self::Goal => "goal",
+        }
+    }
+
+    /// 解析落库取值；未知取值返回 `None`。
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "primary" => Some(Self::Primary),
+            "subagent" => Some(Self::Subagent),
+            "cron" => Some(Self::Cron),
+            "goal" => Some(Self::Goal),
+            _ => None,
+        }
+    }
+}
+
+/// 会话受众隔离维度。取值域与 `sessions.trust_scope` 的 CHECK 约束一一对应。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionTrustScope {
+    /// 仅当前私密上下文可见。
+    Private,
+    /// 允许披露 Workspace 内容的群聊边界。
+    GroupWorkspace,
+    /// 未知受众组合的保守边界。
+    Restricted,
+}
+
+impl SessionTrustScope {
+    /// 落库取值。
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Private => "private",
+            Self::GroupWorkspace => "group_workspace",
+            Self::Restricted => "restricted",
+        }
+    }
+
+    /// 解析落库取值；未知取值返回 `None`。
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "private" => Some(Self::Private),
+            "group_workspace" => Some(Self::GroupWorkspace),
+            "restricted" => Some(Self::Restricted),
+            _ => None,
+        }
+    }
+}
+
 /// Session Runtime 记录。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionRuntimeRecord {
     /// 稳定 Session ID。
     pub session_id: DaemonSessionId,
-    /// 当前运行会话 ID。
-    pub run_session_id: String,
-    /// 根 Session ID。
-    pub root_session_id: DaemonSessionId,
+    /// 当前运行实例 ID：`/new` 重置时换新值，`run_generation` 同步递增。
+    pub current_run_id: String,
+    /// 根 Session ID：只在子代理会话上有值。
+    pub root_session_id: Option<DaemonSessionId>,
+    /// 会话类型。
+    pub kind: SessionKind,
+    /// 受众隔离维度。
+    pub trust_scope: SessionTrustScope,
+    /// 归属 Workspace；未绑定 Workspace 的输入为空。
+    pub workspace_id: Option<String>,
     /// 工作目录。
     pub cwd: String,
     /// 当前状态。

@@ -18,8 +18,8 @@ pub use history::{
     ThreadHistoryStatus,
 };
 pub use runtime::{
-    DaemonHostRecord, RuntimeScheduleRecord, SessionActionRecord, SessionEventRecord,
-    SessionRuntimeRecord,
+    DaemonHostRecord, RuntimeScheduleRecord, SessionActionRecord, SessionEventRecord, SessionKind,
+    SessionRuntimeRecord, SessionTrustScope,
 };
 pub use settings::ThreadSettings;
 pub use thread::{

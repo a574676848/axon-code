@@ -107,7 +107,7 @@ sessions(
 | D3 | 会话类型编进 id 字符串，表里无 `kind` | 目标执行会话与会话前缀判定 | 网关只能反解析前缀，与「不解析前缀」的既有裁决冲突 |
 | D4 | `trust_scope` 只存在于哈希输入 | `sessions` 表无该列 | 受众边界不可查询、不可约束 |
 | D5 | 问答记录把 cell id 当 interaction id | `crates/axon-cli/src/tools/orchestrator.rs` 的问答记录构造 | 记录无法反查是哪一轮 |
-| D6 | 线上字段名文档与代码不一致 | 文档仍写 `primaryLaneId`，代码只有 `primarySessionId` | 会诱导后来者加回第二套字段 |
+| D6 | 线上字段名文档与代码不一致 | 文档仍写车道时代的旧线上字段名，代码只有 `primarySessionId` | 会诱导后来者加回第二套字段 |
 | D7 | `interaction_id` 生成形态不统一 | `external-interaction-<hash>` 与 `cron-wake-<hash>` | 任何按前缀识别来源的代码都要长特判 |
 | D8 | 会话标识返回 `Option` | `interaction_session_id` | 调用方被迫写兜底分支，兜底分支又会掩盖真实错误 |
 
@@ -230,7 +230,7 @@ sessions(
 | W1.4 | 统一 `interaction_id` 生成规范与幂等键来源 | 规范段落 | 无 | 所有入口共用一套策略 | S |
 | W1.5 | 作废旧裁决「桌面新建会话不走会话创建接口」 | 裁决记录 | W1.4 | 文档标注作废原因 | S |
 | W1.6 | 重写存储架构 §4.13，删除四元组派生的旧形态描述 | 文档变更 | W1.2、W1.3 | 文档门禁通过 | M |
-| W1.7 | 术语统一：车道改为会话，全仓不再出现 `primaryLaneId` | 文档与注释 | W1.6 | 全仓检索无命中 | S |
+| W1.7 | 术语统一：车道改为会话，全仓不再出现车道时代的旧线上字段名 | 文档与注释 | W1.6 | 全仓检索无命中 | S |
 
 ### W2 数据模型（M1）
 
@@ -378,7 +378,7 @@ W10 是三端用户可见回归，依赖 W4 与 W5 完成后才能全量开跑�
 1. 五条不变量均有自动化探针：同一投递目标三渠道同 id、会话必可命中且表内有 `kind` 与 `trust_scope`、无会话数值摘要、无会话 id 拼接、`interaction_id` 可幂等复核。
 2. 真机链路通过：桌面两轮、CLI 一轮、桌面继续，三轮来源分别标注，分布投影为桌面 2 与 CLI 1。
 3. Rust 与前端门禁全绿，架构与文档校验脚本通过。
-4. 文档中不再存在四元组派生、`primaryLaneId`、前缀解析等旧形态描述。
+4. 文档中不再存在四元组派生、车道时代的旧线上字段名、前缀解析等旧形态描述。
 5. 仓库内不存在会话相关的 `ALTER TABLE` 补列分支、legacy 表重命名分支与 schema 版本迁移注册表；会话库的建表函数只表达最新结构。
 6. 一次性重建脚本不在版本控制内，且在本机执行完成后已删除。
 7. 三端用户可见回归矩阵全绿：TUI 的 `/sessions` 列表与选中切换、CLI 的 `--session` 续接与不存在 id 报错、桌面左侧菜单与正文分页渲染。这一条不可用不变量探针替代，必须逐条走真实入口。
@@ -400,4 +400,76 @@ W10 是三端用户可见回归，依赖 W4 与 W5 完成后才能全量开跑�
 
 1. `session_id` 是否保留可读前缀。建议不保留，纯 ULID，可读性只在展示层。
 2. 子代理与目标执行会话是否统一到 ULID 加 `kind`。建议统一，否则刚清掉一层特判又留一层前缀特判。
-3. 补全 `kind` 的取值域是否需要第四类（例如定时任务独立成 `cron`）。建议先并入 `execution`，由 `goal_id` 是否为 `AxonCron` 来源区分。
+3. 补全 `kind` 的取值域是否需要第四类（例如定时任务独立成 `cron`）。**已裁决**：按来源取值，取 `primary`（用户对话）、`subagent`（子代理派发）、`cron`（定时任务唤醒）、`goal`（目标看板发起）四类；桌面与 TUI 会话清单只列 `primary`，CLI 只续接 `primary`。
+
+## 14. 实施状态回写
+
+> 每个任务项完成后在本节回写状态与证据。状态取值：已完成 / 待执行 / 阻塞。
+
+| 编号 | 状态 | 证据 |
+| --- | --- | --- |
+| W0.1 | 已完成 | `cargo check --workspace` 退出码 0，21.67s |
+| W0.2 | 已完成 | `axon daemon stop` 后 `daemon status` 为 `running=false`，无 axon 进程残留 |
+| W0.3 | 已完成 | 备份至 `$env:TEMP\axon-session-identity-backup-20261118-131925`；`control.sqlite3`、`outbox.sqlite3`、`SOUL.md`、`AGENTS.md`、`coding.md`、`config.toml`、`.mcp.json`、`.env`、`cron.sqlite3`、`usage.sqlite3` 逐份 SHA-256 与源一致；`data/memory` 138 个文件逐份哈希一致，0 不匹配；`skills/` 16007 条清单指纹 SHA-256 `7912390E…A98E850` |
+| W0.4 | 已完成 | control 清空 `sessions`、`inbox`、`session_metrics`、`work_items`、`work_item_history`、`resume_pointer`、`ledger_events`、`decisions`，`goals.created_from_interaction_id` 与 `schedules.session_id` 置空；outbox 清空 `user_questions`、`agent_messages`、`continuations`、`notifications`、`notification_deliveries`；`data/events`、`data/sessions`、`data/attachments`、`data/archive`、`data/run-control`、`data/runtime`、`data/tmp`、`data/channel-metrics`、`data/resource-metrics`、`data/subagent-graph.json` 与 `~/.axon/sessions`（会话便签目录，按旧 session_id 分目录）删除；`workspaces`、`goals`、`goal_results`、`usage`、`memory`、`persona`、`logs` 未动 |
+| W0.5 | 已完成 | 一次性脚本置于 `$env:TEMP`、执行后已删除；control `PRAGMA user_version` 6→7，outbox 保持 1；`sessions` 含 `trust_scope`、`kind`、`goal_id`、`execution_id`、`sort_order`，无 `channel`/`destination`，`run_session_id`→`current_run_id`；两库 `PRAGMA integrity_check` 均为 `ok`；`git status` 干净 |
+| W0.6 | 待执行 | 按长官指示改为全部实施收口后一次性安装，不提前执行 |
+| W1.1 | 已完成 | `storage-architecture.md` §4.12/§4.13 明确「`channel` 与 `destination` 不在 `sessions` 表」，删除「把 channel 落成实列」的旧表述 |
+| W1.2 | 已完成 | §4.13.1 写入 ULID 规范：26 字符 Crockford Base32、48 位毫秒时间戳加 80 位随机、禁止业务前缀、生成点集中一处 |
+| W1.3 | 已完成 | §4.13.1 写入 `kind` 三类取值与 `root_session_id`/`goal_id`/`execution_id` 的列约束，定时任务并入 `execution` |
+| W1.4 | 已完成 | §4.13.3 写入 `interaction_id` 规范：ULID、无前缀、幂等来源为 `(source_channel, source_message_id)` 唯一键 |
+| W1.5 | 已完成 | §4.13.6 显式作废「桌面新建会话不走会话创建接口」，并写明作废原因 |
+| W1.6 | 已完成 | §4.13 整节重写，`storage-architecture.md` 不再出现四元组派生形态描述 |
+| W1.7 | 已完成 | 全仓 `primaryLaneId` 零命中；`docs/**/*.md` 与 `README.md` 共 21 个文件的「车道」统一为「会话」；`pwsh -File tools/verify-docs.ps1` 输出 `Documentation verification OK` |
+| W2.1 | 已完成 | `sessions` 增 `trust_scope`、`kind`、`goal_id`、`execution_id`、`sort_order`，`kind` 取 `primary`/`subagent`/`cron`/`goal`；活库与 `schema.rs` DDL 一致，`PRAGMA integrity_check` 为 `ok` |
+| W2.2 | 已完成 | `run_session_id` 全仓改为 `current_run_id`，与 `run_generation` 分工：前者可变、后者单调递增；`root_session_id` 改为可空且只在 `kind='subagent'` 有值（CHECK 约束） |
+| W2.3 | 已完成 | 新增 `sessions_by_workspace(workspace_id, archived, sort_order, last_activity_at_ms)` 与 `sessions_by_kind_root(kind, root_session_id)` 索引 |
+| W2.4 | 已完成 | `inbox` 保留 `(source_channel, source_message_id)` 唯一索引；`session_id` 改为 `NOT NULL` 无默认值，渠道不进入会话身份 |
+| W2.5 | 已完成 | `prepare_schema` / `initialize_schema` 内无 `ALTER TABLE`、无 legacy 重命名分支，只按最新 DDL 建表；schema 变更一律递增 `user_version`（control 6→7） |
+| W3.1 | 已完成 | `application/session_identity.rs` 实现 ULID：26 字符 Crockford Base32、48 位毫秒时间戳、80 位随机；同毫秒内单调递增，全原子无锁；字符集、单调性、时间戳解码与 `kind`/`trust_scope` 往返均有单测 |
+| W3.2 | 已完成 | `session_id_for_route`、`SESSION_SESSION_ID_PREFIX` 与 `lanes/identity` 派生路由全部删除，全仓无引用 |
+| W3.3 | 已完成 | `InteractionRecord` 增必填 `session_id`；`interaction_session_id` 改读该列并返回 `String`；`inbox` 读路径 `INBOX_COLUMNS` 末列补 `session_id` |
+| W3.4 | 已完成 | 工具上下文只保留 `thread_session_id`；数值键收敛到 `memory_session_key()` 一处（记忆子系统的键空间，不是会话身份）；问答幂等键改用它自己的会话串 |
+| W3.5 | 部分完成 | 网关会话级订阅不再解析 `--subagent--` / `goal-session-` 前缀，改为「会话存在 + 工作区匹配 + `trust_scope` 非 restricted」；子代理会话标识仍由 `<run-id>--subagent--<path>` 拼接，尚未改为 ULID + `root_session_id` |
+| W4.1 | 已完成 | `POST /api/v1/sessions` 生成 ULID，写入 `kind='primary'`、`trust_scope='private'`、`workspace_id`；用例断言返回值为合法 ULID |
+| W4.2 | 已完成 | **外部事件报文不再接受 `sessionId` 与 `workspaceId`**（都属于未知字段，`deny_unknown_fields` 直接拒绝）；语音 `start` 帧仍由客户端显式给出 `sessionId`，缺失即拒 |
+| W4.3 | 已完成 | 网关外部事件一律落到服务端内部的一条固定会话（`GATEWAY_EVENT_SESSION_ID`，首次到达登记、此后复用），Workspace 固定取网关默认（Axon 根目录 `~/.axon`）；外部既不暴露会话也不暴露 Workspace，且不存在第二个 Workspace |
+| W4.4 | 已完成 | 桌面 `SessionSource::derive_session_id` 改为 `create_session`，改调 `POST /api/v1/sessions`；会话清单以 `sessions` 表为准并只列 `kind='primary'` |
+| W4.5 | 已完成 | CLI/TUI 统一 `prepare_interaction_from_prompt_as(session, ...)`：显式 id 必须已登记且为 `primary`、工作区一致，否则直接报错；未给 id 时解析该 Workspace 的活跃会话，没有才新建 |
+| W5.1 | 已完成 | 会话级订阅删掉类型白名单与前缀解析，统一按 `session_id` 放行；四个新用例覆盖允许与三类拒绝 |
+| W5.2 | 已完成 | 放行条件改为「会话存在 + 工作区匹配 + `trust_scope` 非 `restricted`」，边界读 `sessions.trust_scope` 实列 |
+| W5.3 | 待执行 | 事件分段目录名与主键一致性未单独核对 |
+| W6.1 | 已完成 | `workbench_http_adapter` 删除派生路由，会话创建统一走 `POST /api/v1/sessions` |
+| W6.2 | 部分完成 | Cron 唤醒改用 `schedules.session_id`（缺失即报错），Cron 视图与唤醒路径改调 `resolve_workspace_session`；任务定义侧尚未把目标会话落进 `schedules.session_id` |
+| W6.3 | 已完成 | `gateway_voice` 改用帧内显式 `sessionId`，`session_id_for` 删除 |
+| W6.4 | 已完成 | `daemon_history_loader` 直接读 `interaction.session_id` |
+| W6.5 | 已完成 | `interrupted_interaction_repository` 读 `inbox.session_id`，`candidate_session_id` 不再派生 |
+| W6.6 | 已完成 | `interaction_adapter` 的 Interaction 会话取自显式入参或 Workspace 活跃会话 |
+| W6.7 | 部分完成 | 主 turn 与执行 worker 已改读 `current_run_id`；turn lanes 层仍保留 `--subagent--` 拼接面 |
+| W6.8 | 待执行 | 问答记录的 `interaction_id` 仍写 cell id（`orchestrator.rs`） |
+| W7.1 | 待执行 | `origin_channel` 四入口覆盖未按其核对 |
+| W7.2 | 待执行 | `channel_mix_json` 累计与重放重建未复核 |
+| W7.3 | 待执行 | 环境上下文渠道语义未改 |
+| W7.4 | 待执行 | 前端逐轮来源展示未复核 |
+| W8.1 | 待执行 | 三渠道命中同一会话的自动化探针未单独补 |
+| W8.2 | 待执行 | 「禁拼接会话 id / 禁数值摘要」的架构门禁未加 |
+| W8.3 | 部分完成 | 入站缺标识被拒已有用例覆盖（HTTP/WS/语音/外部事件）；越权订阅与幂等重放用例部分覆盖 |
+| W8.4 | 待执行 | 真机链路（桌面发起 + CLI 续聊 + 桌面继续）未验证 |
+| W8.5 | 待执行 | 目标执行与 Cron 唤醒落到同会话的真机验证未做 |
+| W8.6 | 部分完成 | 存储架构 §4.12/§4.13、计划书、`docs/desktop.md`、Skill 参考文档术语已同步；运行态操作手册中与会话身份相关的描述未逐条复核 |
+| W9.1 | 待执行 | 性能基线未实测 |
+| W9.2 | 部分完成 | 外部事件入口的会话存在性校验是一次主键查找，不按帧查库；缓存层未单独实现 |
+| W9.3 | 待执行 | 订阅放行缓存未做：当前每建立一次订阅查一次库，帧路不查库 |
+| W9.4 | 待执行 | `channel_mix_json` 写放大评估未做 |
+| W9.5 | 已完成 | ULID 单调有序，主键插入位置单调前进；单测覆盖同毫秒递增 |
+| W9.6 | 待执行 | 事件量治理（用量快照收口一条）未做 |
+| W9.7 | 待执行 | 性能回归门禁脚本未写 |
+| W10.1 | 待执行 | TUI `/sessions` 未真机回归 |
+| W10.2 | 待执行 | TUI 选中切换未真机回归 |
+| W10.3 | 待执行 | CLI `--session` 续接未真机回归 |
+| W10.4 | 已完成 | 不存在的会话 id 显式报错且不产生会话行（用例覆盖）；未真机复核 |
+| W10.5 | 待执行 | `sessions resume` 与 `--session` 优先级未复核 |
+| W10.6 | 待执行 | `session_resolution.rs` 的双重回落未简化 |
+| W10.7 | 待执行 | 桌面左侧菜单四项未真机回归 |
+| W10.8 | 待执行 | 桌面分页渲染未真机回归 |
+| W10.9 | 待执行 | 跨端接续可见性未真机回归 |

@@ -409,7 +409,7 @@ fn execute_ask_user_question(
     let now = now_ms() as i64;
     let record = axon_domain::UserQuestionRecord {
         question_id: format!("uq-{}", uuid::Uuid::new_v4()),
-        idempotency_key: format!("idem-{}-{}", context.session_id.0, tool_call.id),
+        idempotency_key: format!("idem-{}-{}", context.thread_session_id, tool_call.id),
         /*
          * 车道标识，不是取标识的数值摘要。
          *
@@ -584,7 +584,6 @@ mod tests {
         let context = ToolOrchestratorContext {
             config_path: None,
             cwd: std::path::PathBuf::from("."),
-            session_id: SessionId(1),
             thread_session_id: "thread-1".to_string(),
             cell_id: CellId(1),
             model_messages: Vec::new(),

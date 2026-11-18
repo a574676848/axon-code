@@ -27,6 +27,7 @@ pub(crate) fn new_tui_reply_destination() -> String {
 pub(super) fn interaction_from_tui_submit(
     submission: &AgentTuiSubmit,
     cwd: &Path,
+    config_path: Option<&Path>,
     now_ms: u64,
     reply_destination: &str,
 ) -> Result<Option<PreparedInteraction>, String> {
@@ -41,10 +42,12 @@ pub(super) fn interaction_from_tui_submit(
         return Ok(None);
     }
     let mut prepared = prepare_interaction_from_prompt_as(
+        None,
+        cwd,
+        config_path,
         TUI_CHANNEL,
         reply_destination,
         &content,
-        cwd,
         now_ms,
         Some("tui"),
     )?;
@@ -146,6 +149,13 @@ mod tests {
 
     use super::{interaction_from_tui_submit, prompt_from_tui_submit};
 
+    /// 隔离的运行库配置：测试绝不写进真实用户的运行态库。
+    fn isolated_config(cwd: &std::path::Path) -> std::path::PathBuf {
+        let path = cwd.join("isolated-config.toml");
+        std::fs::write(&path, "[agent]\ndefault_model = \"balanced\"\n").expect("写入配置");
+        path
+    }
+
     #[test]
     fn plain_submit_becomes_workspace_interaction() {
         let cwd = axon_test_support::test_temp_dir();
@@ -154,9 +164,15 @@ mod tests {
             elements: Vec::new(),
         });
 
-        let prepared = interaction_from_tui_submit(&submission, cwd.path(), 42, "terminal-1")
-            .expect("构造 Interaction")
-            .expect("普通输入应进入 durable ingress");
+        let prepared = interaction_from_tui_submit(
+            &submission,
+            cwd.path(),
+            Some(&isolated_config(cwd.path())),
+            42,
+            "terminal-1",
+        )
+        .expect("构造 Interaction")
+        .expect("普通输入应进入 durable ingress");
         assert_eq!(
             prepared
                 .interaction
@@ -184,9 +200,15 @@ mod tests {
         });
         let cwd = axon_test_support::test_temp_dir();
         assert!(
-            interaction_from_tui_submit(&submission, cwd.path(), 42, "terminal-1")
-                .expect("控制输入应跳过")
-                .is_none()
+            interaction_from_tui_submit(
+                &submission,
+                cwd.path(),
+                Some(&isolated_config(cwd.path())),
+                42,
+                "terminal-1"
+            )
+            .expect("控制输入应跳过")
+            .is_none()
         );
     }
 
@@ -199,9 +221,15 @@ mod tests {
         let cwd = axon_test_support::test_temp_dir();
 
         assert!(
-            interaction_from_tui_submit(&submission, cwd.path(), 42, "terminal-1")
-                .expect("空输入应跳过")
-                .is_none()
+            interaction_from_tui_submit(
+                &submission,
+                cwd.path(),
+                Some(&isolated_config(cwd.path())),
+                42,
+                "terminal-1"
+            )
+            .expect("空输入应跳过")
+            .is_none()
         );
     }
 
@@ -233,9 +261,15 @@ mod tests {
             elements: vec![image_element(&image), file_element(&file)],
         });
 
-        let prepared = interaction_from_tui_submit(&submission, cwd.path(), 42, "terminal-1")
-            .expect("构造 Interaction")
-            .expect("带附件的普通输入应进入 durable ingress");
+        let prepared = interaction_from_tui_submit(
+            &submission,
+            cwd.path(),
+            Some(&isolated_config(cwd.path())),
+            42,
+            "terminal-1",
+        )
+        .expect("构造 Interaction")
+        .expect("带附件的普通输入应进入 durable ingress");
 
         assert_eq!(
             prepared.interaction.attachments,
@@ -252,9 +286,15 @@ mod tests {
             elements: vec![image_element(&image), image_element(&image)],
         });
 
-        let prepared = interaction_from_tui_submit(&submission, cwd.path(), 42, "terminal-1")
-            .expect("构造 Interaction")
-            .expect("重复附件不应阻断提交");
+        let prepared = interaction_from_tui_submit(
+            &submission,
+            cwd.path(),
+            Some(&isolated_config(cwd.path())),
+            42,
+            "terminal-1",
+        )
+        .expect("构造 Interaction")
+        .expect("重复附件不应阻断提交");
 
         assert_eq!(
             prepared.interaction.attachments,

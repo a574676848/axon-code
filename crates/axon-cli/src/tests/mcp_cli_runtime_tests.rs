@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axon_domain::{CellId, ModelProfileId, PermissionSnapshotId, SessionId};
+use axon_domain::{CellId, ModelProfileId, PermissionSnapshotId};
 use axon_mcp_runtime::RuntimeMcpToolCallFailureKind;
 
 fn required_fields(tool: &axon_agent_runtime::ModelToolDefinition) -> Vec<&str> {
@@ -266,7 +266,6 @@ fn tool_context(
     crate::tool_orchestrator::ToolOrchestratorContext {
         config_path,
         cwd: cwd.to_path_buf(),
-        session_id: SessionId(1),
         thread_session_id: "test-thread".to_owned(),
         cell_id: CellId(1),
         model_messages: Vec::new(),

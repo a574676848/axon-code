@@ -11,9 +11,7 @@ use axon_agent_runtime::{
     LspCatalogRuntime, ProviderToolCall, SubagentSessionRuntime, ToolRegistry,
 };
 use axon_config::ConfigLoader;
-use axon_domain::{
-    CellId, ModelProfileId, PermissionSnapshotId, SessionId, ToolCallInput, ToolInputFormat,
-};
+use axon_domain::{CellId, ModelProfileId, PermissionSnapshotId, ToolCallInput, ToolInputFormat};
 use serde::Serialize;
 
 use crate::run_commands::{
@@ -446,7 +444,7 @@ fn run_builtin_tool(
             std::slice::from_ref(&tool_call),
             NON_PROVIDER_TURN_ID,
             &context.cwd,
-            context.session_id,
+            context.memory_session_key(),
             context.cell_id,
             now_ms(),
         ) {
@@ -499,7 +497,6 @@ fn debug_tool_context(
     ToolOrchestratorContext {
         config_path: Some(config_path),
         cwd,
-        session_id: SessionId(1),
         thread_session_id: "debug-session".to_owned(),
         cell_id: CellId(1),
         model_messages: Vec::new(),

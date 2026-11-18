@@ -32,7 +32,7 @@ fn session_run_session_id(axon_root: &Path, session_id: &str) -> Result<String, 
     let session_id =
         DaemonSessionId::new(session_id).map_err(|error| format!("车道标识非法：{error:?}"))?;
     match store.get_session(&session_id) {
-        Ok(record) => Ok(record.run_session_id),
+        Ok(record) => Ok(record.current_run_id),
         Err(RuntimeStoreError::NotFound(_)) => Ok(String::new()),
         Err(error) => Err(format!("读取车道运行会话失败：{error:?}")),
     }
@@ -110,7 +110,7 @@ pub(super) fn session_jobs_payload(
         DaemonSessionId::new(session_id).map_err(|error| format!("车道标识非法：{error:?}"))?;
     let job_ids = match store.get_session(&session_id) {
         Ok(record) => JobRuntime::global()
-            .pending_job_ids(&record.run_session_id)
+            .pending_job_ids(&record.current_run_id)
             .into_iter()
             .map(|id| id.0.to_string())
             .collect::<Vec<_>>(),

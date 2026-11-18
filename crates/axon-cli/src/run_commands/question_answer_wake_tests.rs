@@ -292,6 +292,7 @@ impl WakeFixture {
         let store = SqliteRuntimeStore::from_root(axon_test_support::test_temp_root());
         let active_primary_turns = ActivePrimaryTurnRegistry::default();
         let seed = InteractionRecord::new(
+            axon_domain::DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V1W").expect("合法会话 ID"),
             InteractionId::new("interaction-session-seed").expect("合法 ID"),
             InteractionSource::new(SESSION_CHANNEL, "seed-message-1").expect("合法来源"),
             ScopeRef::workspace(WORKSPACE_ID).expect("合法作用域"),
@@ -301,8 +302,7 @@ impl WakeFixture {
             1,
         )
         .expect("合法 Interaction");
-        let session_id =
-            axon_session::interaction_session_id(&seed).expect("种子记录必须绑定 Workspace");
+        let session_id = axon_session::interaction_session_id(&seed);
         store.append(&seed).expect("种子 Interaction 落库");
         let fixture = Self {
             store,

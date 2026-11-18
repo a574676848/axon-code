@@ -1,12 +1,12 @@
 use axon_daemon::{GatewayHttpResponse, GatewayHttpRouteHandler};
 use axon_domain::{CronJob, CronJobInput, CronJobStatus, CronJobUpdate, CronRunRecord};
-use axon_session::{WorkspaceResolver, session_id_for_route};
+use axon_session::{RuntimeStore as _, WorkspaceResolver};
 use serde::Deserialize;
 use std::path::PathBuf;
 
 use crate::cron_commands::{
-    CRON_AGENT_CHANNEL, MEMORY_CONSOLIDATION_CRON_JOB_ID, SESSION_CLEANUP_CRON_JOB_ID,
-    execute_and_persist, is_system_job, load_cron_adapter, local_cron_session_key, parse_wake,
+    MEMORY_CONSOLIDATION_CRON_JOB_ID, SESSION_CLEANUP_CRON_JOB_ID, execute_and_persist,
+    is_system_job, load_cron_adapter, local_cron_session_key, parse_wake,
     repository::CronRepository,
     schedule::{parse_schedule, require_next_run},
     wake_text,
@@ -72,6 +72,13 @@ impl CronHttpAdapter {
 
     fn repository(&self) -> Result<CronRepository, String> {
         CronRepository::open(&self.axon_root)
+    }
+
+    /// 运行态库句柄：会话标识只在控制面的 `sessions` 表里存在。
+    fn runtime_store(&self) -> Result<axon_session::SqliteRuntimeStore, CronHttpError> {
+        let data_root = crate::runtime_paths::runtime_axon_data_path_static(&self.config_path)
+            .map_err(CronHttpError::internal)?;
+        Ok(axon_session::SqliteRuntimeStore::from_root(data_root))
     }
 
     fn response(result: Result<serde_json::Value, CronHttpError>) -> GatewayHttpResponse {
@@ -155,15 +162,19 @@ impl CronHttpAdapter {
         } else {
             crate::cron_commands::cron_agent_config(&self.config_path, &destination)?
         };
-        let session_id = session_id_for_route(
-            workspace.workspace_id.as_str(),
-            &axon_domain::AudienceContext::new(
-                axon_domain::AudienceKind::Private,
-                axon_domain::DisclosurePolicy::PrivateOnly,
-            ),
-            CRON_AGENT_CHANNEL,
-            &destination,
-        );
+        // 会话标识来自控制面：该 Workspace 的既有会话直接复用，没有才新建。
+        let session_id = self
+            .runtime_store()?
+            .resolve_workspace_session(&axon_session::WorkspaceSessionRequest {
+                workspace_id: workspace.workspace_id.as_str().to_owned(),
+                cwd: workspace.workspace_root.clone(),
+                trust_scope: axon_session::SessionTrustScope::Private,
+                now_ms: axon_time::unix_now_ms(),
+            })
+            .map_err(|error| CronHttpError::internal(format!("解析 Cron 会话失败：{error}")))?
+            .session_id
+            .as_str()
+            .to_owned();
         let mut payload =
             serde_json::to_value(&job).map_err(|e| CronHttpError::internal(e.to_string()))?;
         if let Some(object) = payload.as_object_mut() {

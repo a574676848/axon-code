@@ -22,8 +22,8 @@ fn session_summary_reads_title_from_sessions_table() {
     let connection = store.connection().expect("连接");
     connection
         .execute_batch(
-            "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms,title)
-                 VALUES('session-title','session-title','session-title','/w','idle',NULL,NULL,0,0,0,0,1,1,1,'修复登录超时');
+            "INSERT INTO sessions(session_id,current_run_id,root_session_id,trust_scope,kind,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms,title)
+                 VALUES('session-title','session-title',NULL,'private','primary','/w','idle',NULL,NULL,0,0,0,0,1,1,1,'修复登录超时');
              INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,received_at_ms,updated_at_ms,session_id)
                  VALUES('i-1','tui','m-1','{}','{}','{}','只回复两个字：收到',1,1,'session-title');",
         )
@@ -44,8 +44,8 @@ fn active_dedupe_index_covers_turn_items_after_session_binding() {
     let connection = store.connection().expect("连接");
     connection
         .execute_batch(
-            "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms)
-                 VALUES('session-dedupe','session-dedupe','session-dedupe','/w','idle',NULL,NULL,0,0,0,0,1,1,1);
+            "INSERT INTO sessions(session_id,current_run_id,root_session_id,trust_scope,kind,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms)
+                 VALUES('session-dedupe','session-dedupe',NULL,'private','primary','/w','idle',NULL,NULL,0,0,0,0,1,1,1);
              INSERT INTO work_items(execution_id,session_id,kind,payload_json,attempt,priority,status,dedupe_key,created_at_ms,updated_at_ms)
                  VALUES('work-first','session-dedupe','turn','{}',1,0,'queued','turn:1',1,1);",
         )

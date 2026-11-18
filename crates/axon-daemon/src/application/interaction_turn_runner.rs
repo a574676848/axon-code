@@ -171,8 +171,7 @@ where
     {
         let interaction = request.interaction;
         let interaction_id = interaction.interaction_id.as_str();
-        let session_id = interaction_session_id(&interaction)
-            .ok_or_else(|| runtime_error("Primary Turn 必须绑定 Workspace"))?;
+        let session_id = interaction_session_id(&interaction);
         let session_id =
             DaemonSessionId::new(session_id).map_err(|error| runtime_error(error.to_string()))?;
         let runtime = self.open_runtime(&interaction, &session_id)?;
@@ -189,7 +188,7 @@ where
                 interaction_payload(&interaction),
             ),
             context: SessionExecutionContext {
-                run_session_id: runtime.run_session_id,
+                run_session_id: runtime.current_run_id,
                 cwd: runtime.cwd,
                 context_version: runtime.context_version,
             },
@@ -358,11 +357,14 @@ where
 /// channel/destination 组合的相邻输入必须收敛到同一个 Session 才能延续 Provider
 /// history；不同组合之间不得共享运行窗口。逐条 Interaction 只决定幂等与投递，
 /// 不决定 Session 身份。
+/// 读取主 turn 的会话标识。
+///
+/// 会话标识是入站事实的一列，随 Interaction 一起持久化；本函数只读取，不派生，也不再
+/// 依赖 Workspace 是否绑定。
 pub fn primary_session_id_for_interaction(
     interaction: &InteractionRecord,
 ) -> Result<DaemonSessionId, String> {
-    let session_id = interaction_session_id(interaction)
-        .ok_or_else(|| "Primary Turn 必须绑定 Workspace".to_owned())?;
+    let session_id = interaction_session_id(interaction);
     DaemonSessionId::new(session_id).map_err(|error| error.to_string())
 }
 

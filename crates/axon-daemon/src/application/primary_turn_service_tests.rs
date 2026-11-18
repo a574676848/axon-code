@@ -442,6 +442,7 @@ impl PrimaryTurnRunner for WaitForLeaseRenewalRunner {
 
 fn interaction() -> InteractionRecord {
     InteractionRecord::new(
+        axon_domain::DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V1W").expect("合法会话 ID"),
         InteractionId::new("interaction-primary").expect("有效 ID"),
         InteractionSource::new("tui", "message-primary").expect("有效来源"),
         ScopeRef::workspace("workspace-primary").expect("有效作用域"),
@@ -455,6 +456,8 @@ fn interaction() -> InteractionRecord {
 
 fn interaction_in_workspace(id: &str, workspace: &str, received_at_ms: u64) -> InteractionRecord {
     InteractionRecord::new(
+        // 测试夹具：会话标识是显式输入，这里直接用 Workspace 名，不经过任何派生逻辑。
+        axon_domain::DaemonSessionId::new(workspace).expect("合法会话 ID"),
         InteractionId::new(id).expect("有效 ID"),
         InteractionSource::new("tui", format!("message-{id}")).expect("有效来源"),
         ScopeRef::workspace(workspace).expect("有效作用域"),

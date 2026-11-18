@@ -21,7 +21,7 @@ axon desktop
 axon run "为 API 添加错误处理"
 axon run --format json "检查测试失败原因"
 
-# 沿用当前工作区车道继续任务
+# 沿用当前工作区会话继续任务
 axon run --continue "继续处理上一轮任务"
 
 # 请求停止运行中的会话
@@ -85,7 +85,7 @@ Daemon 是 Axon 的常驻后台服务，负责接收输入、按工作区有序�
 ```bash
 axon cron --help                       # 管理定时任务（list / create / update / pause / resume / run / remove / tick / holiday）
 axon cron create --name 巡检 --schedule "0 9 * * *" --prompt "巡检仓库" --wake session:desktop:workbench-xxx
-                                       # --wake 决定执行完唤醒哪条会话车道：向它注入一轮主 turn 继续跟进；
+                                       # --wake 决定执行完唤醒哪条会话会话：向它注入一轮主 turn 继续跟进；
                                        # 形态为 session:<channel>:<destination>[:<workspace>]，
                                        # 省略时只记录运行事实，不产生任何投递
 axon cron create --name 工时提醒 --schedule "workday:0 8-20 * * *" --prompt "提醒记录工时"

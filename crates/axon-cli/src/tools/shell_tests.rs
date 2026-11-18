@@ -419,7 +419,6 @@ fn test_context(cwd: std::path::PathBuf) -> ToolOrchestratorContext {
     ToolOrchestratorContext {
         config_path: None,
         cwd,
-        session_id: axon_domain::SessionId(1),
         thread_session_id: "test-thread".to_owned(),
         cell_id: axon_domain::CellId(1),
         model_messages: Vec::new(),

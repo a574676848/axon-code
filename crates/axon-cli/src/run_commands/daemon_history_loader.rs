@@ -3,13 +3,9 @@
 use axon_session::EventLogStore as _;
 use std::path::Path;
 
-use axon_domain::{
-    AudienceContext, AudienceKind, DaemonSessionId, DisclosurePolicy, InteractionRecord,
-};
+use axon_domain::{DaemonSessionId, InteractionRecord};
 use axon_protocol::wire::{WireEventEnvelope, WireEventKind};
-use axon_session::{
-    InteractionQueryStore, SessionEventRecord, SqliteRuntimeStore, session_id_for_route,
-};
+use axon_session::{InteractionQueryStore, SessionEventRecord, SqliteRuntimeStore};
 use serde::Deserialize;
 
 const TURN_COMPLETED_EVENT: &str = "turn_completed";
@@ -72,14 +68,8 @@ pub(crate) fn load_latest_completed_turn_for_workspace(
     else {
         return Ok(None);
     };
-    let session_id = session_id_for_route(
-        &workspace.workspace_id,
-        &AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly),
-        interaction.reply_route.channel(),
-        interaction.reply_route.destination(),
-    );
-    let session_id = DaemonSessionId::new(session_id)
-        .map_err(|error| format!("解析 Daemon 历史 Session ID 失败：{error}"))?;
+    // 会话标识是入站事实的一列：直接读最近那条 Interaction 的会话，不再按投递目标派生。
+    let session_id = interaction.session_id.clone();
     load_completed_turn_from_store(&store, &session_id)
 }
 

@@ -2,9 +2,7 @@ use super::*;
 use axon_agent_runtime::{
     AgentControlRuntime, AgentPath, LocalAgentGraphStore, SubagentSessionRuntime,
 };
-use axon_domain::{
-    CellId, ExecutionRequestId, ModelProfileId, PermissionSnapshotId, SessionId, ToolCallId,
-};
+use axon_domain::{CellId, ExecutionRequestId, ModelProfileId, PermissionSnapshotId, ToolCallId};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -97,7 +95,6 @@ fn context(cwd: &Path, config_path: PathBuf) -> ToolOrchestratorContext {
     ToolOrchestratorContext {
         config_path: Some(config_path),
         cwd: cwd.to_path_buf(),
-        session_id: SessionId(1),
         thread_session_id: "test-thread".to_owned(),
         cell_id: CellId(1),
         model_messages: Vec::new(),

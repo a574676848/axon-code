@@ -45,6 +45,8 @@ struct Fixture {
     providers: Arc<EventProviderRegistry>,
     clock: TestClock,
     wake_count: Arc<AtomicU64>,
+    /// 外部事件必须显式指向一条已登记的会话。
+    session_id: axon_domain::DaemonSessionId,
     // 字段顺序即析构顺序：临时目录必须最后析构，先释放事件库与数据根下的 SQLite 句柄。
     _temp: axon_test_support::TestTempDir,
 }
@@ -55,13 +57,36 @@ impl Fixture {
         let data_root = temp.path().join("data");
         fs::create_dir_all(&data_root).expect("创建运行数据目录");
         let providers = Arc::new(EventProviderRegistry::new(temp.path().join("events")));
-        Self {
+        let fixture = Self {
             data_root,
             providers,
             clock: TestClock::new(BASE_NOW_MS),
             wake_count: Arc::new(AtomicU64::new(0)),
+            session_id: axon_domain::DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V1W")
+                .expect("合法会话 ID"),
             _temp: temp,
-        }
+        };
+        fixture.seed_session();
+        fixture
+    }
+
+    /// 登记外部事件指向的会话：网关入站只接受已存在的会话。
+    fn seed_session(&self) {
+        let store = self.store();
+        store.initialize().expect("初始化运行态库");
+        store
+            .create_session_with(&axon_session::NewSessionRequest {
+                session_id: self.session_id.clone(),
+                kind: axon_session::SessionKind::Primary,
+                trust_scope: axon_session::SessionTrustScope::Private,
+                workspace_id: None,
+                root_session_id: None,
+                goal_id: None,
+                execution_id: None,
+                cwd: "/workspace".to_owned(),
+                now_ms: BASE_NOW_MS,
+            })
+            .expect("种子会话");
     }
 
     fn events_root(&self) -> PathBuf {
@@ -111,6 +136,7 @@ impl Fixture {
             client: None,
             source_channel: "jira".to_owned(),
             event_id: event_id.to_owned(),
+            session_id: Some(self.session_id.clone()),
             workspace_id: String::new(),
             observed_at_ms: self.clock.now_ms(),
             expires_at_ms: self.clock.now_ms() + EVENT_TTL_MS,
@@ -128,6 +154,36 @@ impl Fixture {
 
 fn archive_directory(fixture: &Fixture) -> PathBuf {
     fixture.data_root.join(CONTENT_ARCHIVE_DIR_NAME)
+}
+
+#[test]
+fn events_without_session_id_land_in_the_fixed_gateway_session() {
+    let fixture = Fixture::new();
+    let bridge = fixture.bridge();
+    // 外部 webhook 无从预知会话标识：两条事件都必须落到同一条固定会话上。
+    let mut first = fixture.event("jira:AXON-1", None);
+    first.session_id = None;
+    let mut second = fixture.event("jira:AXON-2", None);
+    second.session_id = None;
+
+    let first_receipt = bridge
+        .submit_external_event(first)
+        .expect("缺省会话标识的外部事件必须被接收");
+    let second_receipt = bridge
+        .submit_external_event(second)
+        .expect("第二条外部事件同样必须被接收");
+
+    let expected = axon_domain::DaemonSessionId::new(GATEWAY_EVENT_SESSION_ID).expect("固定会话");
+    assert_eq!(
+        fixture.interaction(&first_receipt).session_id,
+        expected,
+        "外部事件必须落到固定网关会话"
+    );
+    assert_eq!(
+        fixture.interaction(&second_receipt).session_id,
+        expected,
+        "后续外部事件必须复用同一条固定会话"
+    );
 }
 
 #[test]

@@ -7,7 +7,7 @@ use std::{
 };
 
 use axon_agent_runtime::{ProviderToolCall, agent_run_failed_tool_receipt};
-use axon_domain::{CellId, SessionId, ToolConcurrencyPolicy};
+use axon_domain::{CellId, ToolConcurrencyPolicy};
 
 use super::{
     RunRequest,
@@ -19,7 +19,6 @@ use super::{
         ToolAccessScope, WorkspaceWriteCoordinator, tool_access_scope, workspace_write_coordinator,
     },
 };
-use crate::stable_ids::stable_numeric_id;
 #[cfg(test)]
 use crate::tool_orchestrator::NON_PROVIDER_TURN_ID;
 use crate::tool_orchestrator::{
@@ -59,7 +58,7 @@ pub(super) fn execute_supported_tool_calls_for_turn(
     let context = ToolOrchestratorContext {
         config_path: Some(request.config_path.clone()),
         cwd: request.cwd.clone(),
-        session_id: SessionId(stable_numeric_id(&request.session_id)),
+
         thread_session_id: request.session_id.clone(),
         cell_id: CellId(1),
         model_messages: request.model_payload.messages.clone(),
@@ -95,7 +94,7 @@ pub(super) fn execute_supported_tool_calls_for_turn(
         tool_calls,
         provider_turn_id,
         &context.cwd,
-        context.session_id,
+        context.memory_session_key(),
         context.cell_id,
         super::now_ms(),
     ) {

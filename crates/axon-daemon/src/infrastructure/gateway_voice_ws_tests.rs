@@ -161,7 +161,7 @@ fn voice_ws_requires_token_and_reports_provider_unavailable() {
         assert_eq!(ready["sampleRate"], 16_000);
 
         use futures_util::SinkExt;
-        let start = r#"{"type":"start","protocolVersion":1,"clientSessionId":"c-1","workspaceId":"w-1","replyDestination":"desktop","mode":"full_duplex","lang":"zh","tts":false}"#;
+        let start = r#"{"type":"start","protocolVersion":1,"clientSessionId":"c-1","workspaceId":"w-1","replyDestination":"desktop","sessionId":"01J8XQ7K3M4N5P6Q7R8S9T0V1W","mode":"full_duplex","lang":"zh","tts":false}"#;
         socket
             .send(tokio_tungstenite::tungstenite::Message::Text(start.into()))
             .await

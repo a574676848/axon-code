@@ -233,7 +233,7 @@ where
             ActionExecutionRequest {
                 action: action.clone(),
                 context: SessionExecutionContext {
-                    run_session_id: runtime.run_session_id,
+                    run_session_id: runtime.current_run_id,
                     cwd: runtime.cwd,
                     context_version: runtime.context_version,
                 },

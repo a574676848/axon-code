@@ -169,8 +169,7 @@ pub(super) fn interaction_transport_context(interaction: &InteractionRecord) -> 
             .scope
             .workspace_id()
             .map_or_else(String::new, |value| value.as_str().to_owned()),
-        "primarySessionId": interaction_session_id(interaction)
-            .unwrap_or_default(),
+        "primarySessionId": interaction_session_id(interaction),
         "audience": interaction.audience.clone(),
     });
     // 入站附件以结构化路径进入 Provider turn（`transport_files` 读取 `files`），
@@ -260,6 +259,7 @@ mod tests {
 
     fn interaction(model: Option<&str>) -> InteractionRecord {
         let mut record = InteractionRecord::new(
+            axon_domain::DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V1W").expect("合法会话 ID"),
             InteractionId::new("interaction-model").expect("合法 ID"),
             InteractionSource::new("tui", "message-model").expect("合法来源"),
             ScopeRef::workspace("workspace-a").expect("合法作用域"),

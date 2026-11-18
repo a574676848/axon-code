@@ -275,9 +275,9 @@ fn attach_spawned_subagent_session(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let handle = sessions.start(axon_agent_runtime::SubagentSessionStartInput {
-        parent_session_id: context.session_id,
+        parent_session_id: context.memory_session_key(),
         task_path: task_name.clone(),
-        forked_from_session_id: Some(context.session_id),
+        forked_from_session_id: Some(context.memory_session_key()),
         pane_id: PaneId(context.cell_id.0),
         cwd: context.cwd.to_string_lossy().to_string(),
         model_profile_id: context.model_profile_id,

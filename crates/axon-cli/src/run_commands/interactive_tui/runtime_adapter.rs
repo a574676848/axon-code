@@ -262,6 +262,7 @@ impl AgentTuiRuntimeAdapter for CliAgentTuiRuntimeAdapter {
         let prepared = interaction_from_tui_submit(
             submission,
             &submission.cwd,
+            self.config_path.as_deref(),
             axon_time::unix_now_ms(),
             &self.reply_destination,
         )
@@ -367,6 +368,7 @@ impl AgentTuiRuntimeAdapter for CliAgentTuiRuntimeAdapter {
         let prepared = interaction_from_tui_submit(
             submission,
             &submission.cwd,
+            self.config_path.as_deref(),
             axon_time::unix_now_ms(),
             &self.reply_destination,
         )

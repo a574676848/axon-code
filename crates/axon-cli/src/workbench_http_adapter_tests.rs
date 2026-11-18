@@ -325,7 +325,7 @@ fn stop_records_user_reason_for_the_session_run_session() {
     let record = runtime_store(&root)
         .create_session(&session_id, ".", 1)
         .expect("登记车道运行会话必须成功");
-    let job_id = start_job(&record.run_session_id);
+    let job_id = start_job(&record.current_run_id);
 
     let payload = stop_session_job(&root, session_id.as_str(), &job_id.0.to_string())
         .expect("本车道运行会话的作业必须可停止");

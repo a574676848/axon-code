@@ -255,6 +255,8 @@ fn interaction(
     content: &str,
 ) -> InteractionRecord {
     InteractionRecord::new(
+        // 测试夹具：会话标识是显式输入，这里直接用 Workspace 名，不经过任何派生逻辑。
+        axon_domain::DaemonSessionId::new(workspace_id).expect("合法会话 ID"),
         InteractionId::new(interaction_id).expect("Interaction ID"),
         InteractionSource::new("cli", source_message_id).expect("来源"),
         ScopeRef::workspace(workspace_id).expect("作用域"),
@@ -375,7 +377,7 @@ fn reset_pending_action_survives_previous_worker_panic_without_daemon_restart() 
         .unwrap_or_else(PoisonError::into_inner);
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[1].action.action_id, submitted.action_id);
-    assert_eq!(requests[1].context.run_session_id, reset.run_session_id);
+    assert_eq!(requests[1].context.run_session_id, reset.current_run_id);
     assert_eq!(requests[1].context.cwd, reset.cwd);
     assert_eq!(requests[1].context.context_version, reset.context_version);
 }

@@ -25,7 +25,7 @@ Axon 是为个人与工程创造者打造的**专属助理与首席战术副官�
 ## 核心特性
 
 - **多端统一运行时 (Unified Multi-Interface Runtime)**：无论从现代化桌面窗口、终端全屏 TUI，还是非交互命令行 `axon run`，均运行在同一底层 Agent 运行时上，实现状态与上下文的无缝漫游。
-- **开发者桌面工作台 (Axon Desktop Workbench)**：基于 Tauri 2 构建的工业级桌面端，秉承黑白极简主义设计，支持多工作区与独立任务车道（Lanes）、实时流式 Token 投影、交互式问答卡片（支持单选/多选/输入与自动唤醒）、工作区文件查看器与系统关联应用打开、集成终端和可视化 MCP/模型设置。
+- **开发者桌面工作台 (Axon Desktop Workbench)**：基于 Tauri 2 构建的工业级桌面端，秉承黑白极简主义设计，支持多工作区与独立任务会话（Lanes）、实时流式 Token 投影、交互式问答卡片（支持单选/多选/输入与自动唤醒）、工作区文件查看器与系统关联应用打开、集成终端和可视化 MCP/模型设置。
 - **终端全屏交互 (Terminal TUI)**：基于 Ratatui 构建的高性能终端界面，具备毫秒级首字极速渲染、多状态仪表盘、转录行折叠与交互式问答面板。
 - **严格洋葱架构与持久化事实 (Onion Architecture & Durable State)**：领域层 `axon-domain` 绝对解耦；系统以原子入账的 `Interaction`、`Goal` 与 `Execution` 作为单一事实来源，支持分布式排他租约、故障自动恢复与历史精准重放。
 - **智能模型路由与容灾 (Model Routing & Failover)**：支持 OpenAI、Anthropic、DeepSeek、Ollama 及兼容 Provider；具备智能负载均衡、自动化 Failover 容灾、流式响应处理与长会话 Prompt Cache 缓存优化。
@@ -117,7 +117,7 @@ axon run "检查 Cargo.toml 依赖并报告潜在安全风险"
 
 | 形态 | 适用场景 | 启动命令 |
 |---|---|---|
-| **桌面端工作台 (Desktop)** | 多任务并行、可视化车道管理、复杂问答卡片交互、工程文件协同 | `axon desktop` |
+| **桌面端工作台 (Desktop)** | 多任务并行、可视化会话管理、复杂问答卡片交互、工程文件协同 | `axon desktop` |
 | **终端全屏 (TUI)** | 纯命令行环境、沉浸式开发、低资源占用与高频快捷键操作 | `axon` 或 `axon "prompt"` |
 | **无头命令 (Run)** | 单次任务执行、流水线调用、结构化 JSON 输出 | `axon run "prompt"` |
 | **后台常驻 (Daemon)** | 异步长周期任务、定时计划 (Cron)、跨应用网络网关、系统监控 | `axon daemon start` |
@@ -161,7 +161,7 @@ axon usage                                      # 查看 Token 消耗与成本�
 
 - **概念与架构**
   - [系统概览](./docs/overview.md) - 系统全景与端到端执行流
-  - [核心概念](./docs/concepts.md) - 状态机模型、车道概念与上下文装配
+  - [核心概念](./docs/concepts.md) - 状态机模型、会话概念与上下文装配
   - [记忆管理系统](./docs/memory-management.md) - 分层认知模型、检索投影与记忆治理
   - [人格系统](./docs/persona.md) - 人设格式、模式推导、人格状态与体积预算
 - **使用指南**

@@ -106,14 +106,14 @@ pub(super) fn execute_turn_trace(
             }
         },
         None => (
-            explicit_session.unwrap_or_else(|| context.session_id.0.to_string()),
+            explicit_session.unwrap_or_else(|| context.thread_session_id.clone()),
             explicit_sequence,
         ),
     };
 
     // 跨会话一律拒绝：只允许读当前会话自己的轮次。daemon 与远端通道共用同一份归档，
     // 不加归属校验就等于把别人的工具原文开放给任意调用方。
-    if session_id != context.session_id.0.to_string() {
+    if session_id != context.thread_session_id {
         return failed_tool_receipt(
             tool_call,
             format!("builtin.turn_trace 拒绝跨会话引用：{session_id} 不是当前会话"),
@@ -290,13 +290,12 @@ mod turn_trace_tests {
     use std::sync::{Arc, RwLock};
 
     use axon_agent_runtime::{AgentPath, ToolRegistry};
-    use axon_domain::{CellId, ModelProfileId, PermissionSnapshotId, SessionId};
+    use axon_domain::{CellId, ModelProfileId, PermissionSnapshotId};
 
     fn trace_context(config_path: Option<PathBuf>) -> ToolOrchestratorContext {
         ToolOrchestratorContext {
             config_path,
             cwd: PathBuf::from("."),
-            session_id: SessionId(1),
             thread_session_id: "thread-1".to_owned(),
             cell_id: CellId(1),
             model_messages: Vec::new(),

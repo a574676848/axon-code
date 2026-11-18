@@ -5,8 +5,8 @@ use super::interaction_ingress::{
 };
 use axon_crypto::sha256_hex;
 use axon_domain::{
-    AudienceContext, AudienceKind, DisclosurePolicy, InteractionId, InteractionRecord,
-    InteractionSource, ReplyRoute, ScopeRef,
+    AudienceContext, AudienceKind, DaemonSessionId, DisclosurePolicy, InteractionId,
+    InteractionRecord, InteractionSource, ReplyRoute, ScopeRef,
 };
 use axon_session::{InteractionStore, InteractionStoreError};
 use thiserror::Error;
@@ -37,6 +37,11 @@ pub struct ExternalEventEnvelope {
     pub client: Option<String>,
     /// 外部系统提供的稳定事件标识。
     pub event_id: String,
+    /// 目标会话标识。
+    ///
+    /// 必须由调用方显式给出并在控制面已存在：服务端不按投递目标派生会话，也不隐式建会话。
+    /// `None` 只用于表达「来源没有提供会话」，这类事件会在校验阶段被拒。
+    pub session_id: Option<DaemonSessionId>,
     /// 事件所属 Workspace。
     pub workspace_id: String,
     /// 适配器观测事件的时间。
@@ -79,6 +84,9 @@ pub enum ExternalEventIngressError {
     /// 事件作用域与适配器绑定的 Workspace 不一致。
     #[error("外部事件 Workspace scope 不匹配")]
     WorkspaceMismatch,
+    /// 入站没有携带会话标识，或该会话在控制面不存在。
+    #[error("外部事件会话无效：{0}")]
+    SessionUnavailable(String),
     /// 观测时间超出允许的时钟偏差。
     #[error("外部事件观测时间超出允许时钟偏差")]
     ClockSkew,
@@ -227,7 +235,18 @@ where
         self.ingress.route_input(&interaction).map_err(Into::into)
     }
 
+    /// 解析目标会话：缺失即拒。存在性与归属由网关层查表确认，本层不做隐式建会话。
+    fn resolve_session_id(
+        &self,
+        event: &ExternalEventEnvelope,
+    ) -> Result<DaemonSessionId, ExternalEventIngressError> {
+        event.session_id.clone().ok_or_else(|| {
+            ExternalEventIngressError::SessionUnavailable("入站必须显式携带会话标识".to_owned())
+        })
+    }
+
     fn validate(&self, event: &ExternalEventEnvelope) -> Result<(), ExternalEventIngressError> {
+        self.resolve_session_id(event)?;
         let event_workspace_id = non_empty(event.workspace_id.clone(), "workspace_id")?;
         if self
             .workspace_id
@@ -316,6 +335,7 @@ where
         let route = ReplyRoute::new(event.reply_channel.clone(), event.reply_destination.clone())
             .map_err(|error| ExternalEventIngressError::InvalidInput(error.to_string()))?;
         let mut record = InteractionRecord::new(
+            self.resolve_session_id(event)?,
             interaction_id,
             source,
             scope,
@@ -398,11 +418,17 @@ mod tests {
     const NOW_MS: u64 = 10_000;
     const LEASE_MS: u64 = 1_000;
 
+    /// 测试夹具：会话标识由调用方显式给出，这里只把可读串包成合法标识。
+    fn test_session_id(workspace_id: &str) -> DaemonSessionId {
+        DaemonSessionId::new(format!("session-{workspace_id}")).expect("测试会话标识")
+    }
+
     fn event(workspace_id: &str) -> ExternalEventEnvelope {
         ExternalEventEnvelope {
             client: None,
             source_channel: "github".to_owned(),
             event_id: "push-123".to_owned(),
+            session_id: Some(test_session_id(workspace_id)),
             workspace_id: workspace_id.to_owned(),
             observed_at_ms: NOW_MS,
             expires_at_ms: NOW_MS + 60_000,

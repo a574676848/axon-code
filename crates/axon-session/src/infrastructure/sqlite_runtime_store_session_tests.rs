@@ -129,7 +129,7 @@ fn reset_session_cancels_pending_actions_and_rotates_run_identity() {
     let reset = store
         .reset_session(&session_id, "new-cwd", &host, 20)
         .expect("重置");
-    assert_ne!(reset.run_session_id, original.run_session_id);
+    assert_ne!(reset.current_run_id, original.current_run_id);
     assert_eq!(reset.context_version, original.context_version + 1);
     assert_eq!(reset.cwd, "new-cwd");
     assert_eq!(reset.status, SessionRuntimeStatus::Created);
@@ -179,7 +179,7 @@ fn stop_session_cancels_pending_actions_without_rotating_run_identity() {
     store.enqueue_action(&action, 11).expect("入队");
 
     let stopped = store.stop_session(&session_id, &host, 20).expect("停止");
-    assert_eq!(stopped.run_session_id, original.run_session_id);
+    assert_eq!(stopped.current_run_id, original.current_run_id);
     assert_eq!(stopped.status, SessionRuntimeStatus::Idle);
     assert!(
         store

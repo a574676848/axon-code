@@ -1,13 +1,55 @@
 use super::{
     DaemonHostRecord, RuntimeScheduleRecord, RuntimeStoreError, SessionActionRecord,
-    SessionActionStatus, SessionIngressCursorStore, SqliteRuntimeStore,
+    SessionActionStatus, SessionIngressCursorStore, SessionRuntimeRecord, SqliteRuntimeStore,
 };
-use crate::ports::RuntimeStore;
+use crate::application::new_session_id;
+use crate::domain::runtime::{SessionKind, SessionTrustScope};
+use crate::ports::{NewSessionRequest, RuntimeStore, WorkspaceSessionRequest};
 use axon_domain::{DaemonSessionId, GoalId, RuntimeHostId, SessionActionId, SessionRuntimeStatus};
 use rusqlite::{OptionalExtension, params};
 use uuid::Uuid;
 
 const HOST_STATE_RUNNING: &str = "running";
+
+/// 按标识读取单个会话：字段顺序与 `session_runtime_row` 一一对应。
+pub(crate) const SELECT_SESSION_BY_ID: &str = "SELECT session_id,current_run_id,root_session_id,kind,trust_scope,workspace_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms FROM sessions WHERE session_id=?1";
+
+pub(crate) fn parse_session_kind(value: String) -> rusqlite::Result<SessionKind> {
+    SessionKind::parse(&value).ok_or(rusqlite::Error::InvalidQuery)
+}
+pub(crate) fn parse_trust_scope(value: String) -> rusqlite::Result<SessionTrustScope> {
+    SessionTrustScope::parse(&value).ok_or(rusqlite::Error::InvalidQuery)
+}
+
+/// 按 [`SELECT_SESSION`] 的列顺序构造会话记录。
+pub(crate) fn session_runtime_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<SessionRuntimeRecord> {
+    Ok(SessionRuntimeRecord {
+        session_id: parse_session_id(row.get(0)?)?,
+        current_run_id: row.get(1)?,
+        root_session_id: row
+            .get::<_, Option<String>>(2)?
+            .map(parse_session_id)
+            .transpose()?,
+        kind: parse_session_kind(row.get(3)?)?,
+        trust_scope: parse_trust_scope(row.get(4)?)?,
+        workspace_id: row.get(5)?,
+        cwd: row.get(6)?,
+        status: parse_runtime_status(&row.get::<_, String>(7)?),
+        owner_host_id: row
+            .get::<_, Option<String>>(8)?
+            .map(parse_host_id)
+            .transpose()?,
+        owner_generation: row.get(9)?,
+        worker_attempt: u32::try_from(row.get::<_, i64>(10)?)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        context_version: u64_value(row.get(11)?)?,
+        last_checkpoint_seq: u64_value(row.get(12)?)?,
+        last_event_sequence: u64_value(row.get(13)?)?,
+        last_activity_at_ms: u64_value(row.get(14)?)?,
+    })
+}
 
 pub(crate) fn storage(error: rusqlite::Error) -> RuntimeStoreError {
     RuntimeStoreError::Storage(error.to_string())
@@ -64,26 +106,42 @@ pub(crate) fn parse_action_status(value: &str) -> SessionActionStatus {
 impl SqliteRuntimeStore {
     pub(crate) fn create_session_impl(
         &self,
-        session_id: &DaemonSessionId,
-        cwd: &str,
-        now_ms: u64,
+        request: &NewSessionRequest,
     ) -> Result<crate::domain::runtime::SessionRuntimeRecord, RuntimeStoreError> {
         self.initialize()?;
-        let run_session_id = Uuid::new_v4().to_string();
+        let current_run_id = Uuid::new_v4().to_string();
         let inserted = {
             let connection = self.connection()?;
             connection
-                .execute("INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES(?1,?2,?1,?3,?4,0,0,0,0,?5,?5,?5) ON CONFLICT(session_id) DO NOTHING", params![session_id.as_str(), run_session_id, cwd, SessionRuntimeStatus::Created.as_str(), i64_value(now_ms)?])
+                .execute(
+                    "INSERT INTO sessions(session_id,workspace_id,trust_scope,kind,root_session_id,goal_id,execution_id,current_run_id,run_generation,title,pinned,archived,sort_order,cwd,status,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,0,NULL,0,0,NULL,?9,?10,0,0,0,0,?11,?11,?11) ON CONFLICT(session_id) DO NOTHING",
+                    params![
+                        request.session_id.as_str(),
+                        request.workspace_id.as_deref(),
+                        request.trust_scope.as_str(),
+                        request.kind.as_str(),
+                        request.root_session_id.as_ref().map(|value| value.as_str()),
+                        request.goal_id.as_deref(),
+                        request.execution_id.as_deref(),
+                        current_run_id,
+                        request.cwd.as_str(),
+                        SessionRuntimeStatus::Created.as_str(),
+                        i64_value(request.now_ms)?,
+                    ],
+                )
                 .map_err(storage)?
         };
         if inserted == 0 {
-            return self.get_session_impl(session_id);
+            return self.get_session_impl(&request.session_id);
         }
         Ok(crate::domain::runtime::SessionRuntimeRecord {
-            session_id: session_id.clone(),
-            run_session_id,
-            root_session_id: session_id.clone(),
-            cwd: cwd.to_owned(),
+            session_id: request.session_id.clone(),
+            current_run_id,
+            root_session_id: request.root_session_id.clone(),
+            kind: request.kind,
+            trust_scope: request.trust_scope,
+            workspace_id: request.workspace_id.clone(),
+            cwd: request.cwd.clone(),
             status: SessionRuntimeStatus::Created,
             owner_host_id: None,
             owner_generation: None,
@@ -91,8 +149,56 @@ impl SqliteRuntimeStore {
             context_version: 0,
             last_checkpoint_seq: 0,
             last_event_sequence: 0,
-            last_activity_at_ms: now_ms,
+            last_activity_at_ms: request.now_ms,
         })
+    }
+
+    pub(crate) fn resolve_workspace_session_impl(
+        &self,
+        request: &WorkspaceSessionRequest,
+    ) -> Result<crate::domain::runtime::SessionRuntimeRecord, RuntimeStoreError> {
+        self.initialize()?;
+        let existing = {
+            let connection = self.connection()?;
+            connection
+                .query_row(
+                    "SELECT session_id FROM sessions \
+                     WHERE workspace_id=?1 AND kind='primary' AND archived=0 \
+                     ORDER BY last_activity_at_ms DESC, session_id ASC LIMIT 1",
+                    params![request.workspace_id.as_str()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(storage)?
+        };
+        if let Some(session_id) = existing {
+            let session_id = parse_session_id(session_id).map_err(storage)?;
+            return self.get_session_impl(&session_id);
+        }
+        let mut created =
+            NewSessionRequest::primary(new_session_id(), request.cwd.as_str(), request.now_ms);
+        created.workspace_id = Some(request.workspace_id.clone());
+        created.trust_scope = request.trust_scope;
+        self.create_session_impl(&created)
+    }
+
+    pub(crate) fn session_id_for_run_impl(
+        &self,
+        current_run_id: &str,
+    ) -> Result<Option<DaemonSessionId>, RuntimeStoreError> {
+        let connection = self.connection()?;
+        let found = connection
+            .query_row(
+                "SELECT session_id FROM sessions WHERE current_run_id=?1 LIMIT 1",
+                params![current_run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(storage)?;
+        match found {
+            Some(session_id) => Ok(Some(parse_session_id(session_id).map_err(storage)?)),
+            None => Ok(None),
+        }
     }
 
     pub(crate) fn get_session_impl(
@@ -101,7 +207,13 @@ impl SqliteRuntimeStore {
     ) -> Result<crate::domain::runtime::SessionRuntimeRecord, RuntimeStoreError> {
         let connection = self.connection()?;
         connection
-            .query_row("SELECT session_id,run_session_id,root_session_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms FROM sessions WHERE session_id=?1", params![session_id.as_str()], |row| Ok(crate::domain::runtime::SessionRuntimeRecord { session_id: parse_session_id(row.get(0)?)?, run_session_id: row.get(1)?, root_session_id: parse_session_id(row.get(2)?)?, cwd: row.get(3)?, status: parse_runtime_status(&row.get::<_, String>(4)?), owner_host_id: row.get::<_, Option<String>>(5)?.map(parse_host_id).transpose()?, owner_generation: row.get(6)?, worker_attempt: u32::try_from(row.get::<_, i64>(7)?).map_err(|_| rusqlite::Error::InvalidQuery)?, context_version: u64_value(row.get(8)?)?, last_checkpoint_seq: u64_value(row.get(9)?)?, last_event_sequence: u64_value(row.get(10)?)?, last_activity_at_ms: u64_value(row.get(11)?)? })).optional().map_err(storage)?
+            .query_row(
+                SELECT_SESSION_BY_ID,
+                params![session_id.as_str()],
+                session_runtime_row,
+            )
+            .optional()
+            .map_err(storage)?
             .ok_or_else(|| RuntimeStoreError::NotFound(session_id.to_string()))
     }
 

@@ -1,6 +1,7 @@
 //! `runtime.sqlite3` 的统一事实源。
 use crate::domain::runtime::{
     DaemonHostRecord, RuntimeScheduleRecord, SessionActionRecord, SessionEventRecord,
+    SessionRuntimeRecord,
 };
 use crate::ports::{
     EventLogStore, RuntimeStoreError, ingress_cursor_store::SessionIngressCursorStore,

@@ -94,6 +94,8 @@ struct PatchSessionBody {
 
 impl SessionsHttpAdapter {
     /// 新建一个空会话：只登记运行态行，第一条消息到来时才产生事件。
+    ///
+    /// 标识由服务端生成 ULID，类型与受众边界在创建时写死，此后不变。
     fn create(&self, body: &[u8]) -> GatewayHttpResponse {
         let Ok(payload) = serde_json::from_slice::<CreateSessionBody>(body) else {
             return GatewayHttpResponse::json(400, &json!({"error": "invalid_body"}));
@@ -104,19 +106,13 @@ impl SessionsHttpAdapter {
         if store.initialize().is_err() {
             return GatewayHttpResponse::json(500, &json!({"error": "runtime_unavailable"}));
         }
-        let session_id = format!("session-{}", uuid::Uuid::new_v4());
-        let Ok(parsed) = axon_domain::DaemonSessionId::new(session_id.clone()) else {
-            return GatewayHttpResponse::json(500, &json!({"error": "invalid_session_id"}));
-        };
+        let session_id = axon_session::new_session_id();
         let cwd = payload
             .cwd
             .clone()
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_default();
         let now_ms = axon_time::unix_now_ms();
-        if store.create_session(&parsed, &cwd, now_ms).is_err() {
-            return GatewayHttpResponse::json(500, &json!({"error": "create_failed"}));
-        }
         let title = payload
             .title
             .as_deref()
@@ -126,15 +122,28 @@ impl SessionsHttpAdapter {
             .workspace_id
             .as_deref()
             .map(str::trim)
-            .filter(|value| !value.is_empty());
-        if title.is_some() || workspace_id.is_some() {
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        let request = axon_session::NewSessionRequest {
+            session_id: session_id.clone(),
+            kind: axon_session::SessionKind::Primary,
+            trust_scope: axon_session::SessionTrustScope::Private,
+            workspace_id: workspace_id.clone(),
+            root_session_id: None,
+            goal_id: None,
+            execution_id: None,
+            cwd: cwd.clone(),
+            now_ms,
+        };
+        if store.create_session_with(&request).is_err() {
+            return GatewayHttpResponse::json(500, &json!({"error": "create_failed"}));
+        }
+        if let Some(title) = title {
             let _ = store.with_read_connection(|connection| {
                 connection
                     .execute(
-                        "UPDATE sessions SET title=COALESCE(?1, title),
-                             workspace_id=COALESCE(?2, workspace_id)
-                         WHERE session_id=?3",
-                        rusqlite::params![title, workspace_id, session_id.as_str()],
+                        "UPDATE sessions SET title=?1 WHERE session_id=?2",
+                        rusqlite::params![title, session_id.as_str()],
                     )
                     .map(|_| ())
             });
@@ -142,7 +151,7 @@ impl SessionsHttpAdapter {
         GatewayHttpResponse::json(
             200,
             &json!({
-                "sessionId": session_id,
+                "sessionId": session_id.as_str(),
                 "workspaceId": workspace_id,
                 "createdAtMs": now_ms,
             }),
@@ -247,6 +256,7 @@ fn read_sessions(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<Sess
                  ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1)
          FROM sessions AS s
          LEFT JOIN session_metrics AS m ON m.session_id = s.session_id
+         WHERE s.kind = 'primary'
          ORDER BY s.pinned DESC, s.last_activity_at_ms DESC, s.session_id ASC
          LIMIT ?1",
     )?;

@@ -18,7 +18,7 @@ use axon_domain::{
     AudienceContext, InteractionId, InteractionRecord, InteractionSource, ReplyRoute,
     SHELL_JOB_WAKE_SOURCE_PREFIX, SYSTEM_SOURCE_CHANNEL, ScopeRef,
 };
-use axon_session::{SessionQueryStore, SessionSummaryRow, SqliteRuntimeStore};
+use axon_session::{RuntimeStore as _, SessionQueryStore, SessionSummaryRow, SqliteRuntimeStore};
 
 use super::run_execution::now_ms;
 use super::run_steer::{
@@ -263,8 +263,19 @@ impl ShellJobWakeBridge {
         route_info: &WakeRouteInfo,
         batch: &CompletionNoticeBatch,
     ) -> Result<(), String> {
-        let Some((scope, audience, reply_route)) = self.session_route(&route_info.session_id)?
+        // 唤醒必须落回作业所属的稳定会话：`route_info.session_id` 是运行实例标识，不能当会话用。
+        let Some(session_id) = self
+            .store
+            .session_id_for_run(&route_info.session_id)
+            .map_err(|error| format!("解析唤醒目标会话失败: {error}"))?
         else {
+            axon_logger::warning(&format!(
+                "后台 Shell 作业唤醒跳过未登记的运行窗口: run={}",
+                route_info.session_id
+            ));
+            return Ok(());
+        };
+        let Some((scope, audience, reply_route)) = self.session_route(session_id.as_str())? else {
             return Ok(());
         };
         if reply_route.channel() == SYSTEM_SOURCE_CHANNEL {
@@ -281,6 +292,7 @@ impl ShellJobWakeBridge {
         .map_err(|error| format!("构造唤醒 Interaction 来源失败: {error}"))?;
         let timestamp = now_ms();
         let mut interaction = InteractionRecord::new(
+            session_id,
             interaction_id,
             source,
             scope,

@@ -445,7 +445,7 @@ pub(super) fn reflection_notice_payload(axon_root: &Path, session_id: &str) -> s
 
 /// 车道的运行时 session 标识。
 ///
-/// 只有「最新一轮记录」还留在运行会话名下（`sessions.run_session_id`）：模型事实与
+/// 只有「最新一轮记录」还留在运行会话名下（`sessions.current_run_id`）：模型事实与
 /// 反思提示按它对 thread 反查。会话累计与逐轮读数不再经这一层，它们直接按车道键读
 /// 投影与事件。
 fn session_run_session_id(axon_root: &Path, session_id: &str) -> Option<String> {
@@ -453,7 +453,7 @@ fn session_run_session_id(axon_root: &Path, session_id: &str) -> Option<String> 
     store
         .with_read_connection(|connection| {
             connection.query_row(
-                "SELECT run_session_id FROM sessions WHERE session_id = ?1",
+                "SELECT current_run_id FROM sessions WHERE session_id = ?1",
                 [session_id],
                 |row| row.get::<_, String>(0),
             )

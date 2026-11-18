@@ -498,27 +498,25 @@ mod tests {
     }
 
     #[test]
-    fn websocket_submit_wire_carries_explicit_workspace_id() {
-        let result = serde_json::from_str::<WsClientRequest>(
+    fn websocket_submit_wire_rejects_external_workspace_and_session_fields() {
+        // 外部事件不接受任何外部 Workspace 与会话标识：两个字段都属于未知字段。
+        for payload in [
             r#"{"type":"submit","sourceChannel":"http","eventId":"event-1","workspaceId":"workspace-a","observedAtMs":100,"expiresAtMs":200,"content":"hello","replyChannel":"http","replyDestination":"client-1"}"#,
-        )
-        .expect("显式 workspaceId 必须可解析");
-        let WsClientRequest::Submit(request) = result else {
-            panic!("应为 submit");
-        };
-        assert_eq!(
-            request.into_event().workspace_id,
-            "workspace-a",
-            "客户端显式给出的 Workspace 必须原样透传，由 bridge 决定采纳或回落"
-        );
+            r#"{"type":"submit","sourceChannel":"http","eventId":"event-1","sessionId":"01J8XQ7K3M4N5P6Q7R8S9T0V1W","observedAtMs":100,"expiresAtMs":200,"content":"hello","replyChannel":"http","replyDestination":"client-1"}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<WsClientRequest>(payload).is_err(),
+                "外部事件不接受外部 Workspace 与会话标识：{payload}"
+            );
+        }
     }
 
     #[test]
-    fn websocket_submit_wire_allows_server_side_workspace_resolution() {
+    fn websocket_submit_wire_leaves_workspace_to_the_gateway() {
         let result = serde_json::from_str::<WsClientRequest>(
             r#"{"type":"submit","sourceChannel":"http","eventId":"event-1","observedAtMs":100,"expiresAtMs":200,"content":"hello","replyChannel":"http","replyDestination":"client-1"}"#,
         )
-        .expect("缺省 workspaceId 应可解析");
+        .expect("外部事件报文应可解析");
         let WsClientRequest::Submit(request) = result else {
             panic!("应为 submit");
         };

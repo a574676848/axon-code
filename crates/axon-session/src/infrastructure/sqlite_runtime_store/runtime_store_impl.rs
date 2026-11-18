@@ -13,7 +13,7 @@ use crate::domain::runtime::{
     DaemonHostRecord, RuntimeScheduleRecord, SessionActionRecord, SessionEventRecord,
     SessionRuntimeRecord,
 };
-use crate::ports::{RuntimeStore, RuntimeStoreError};
+use crate::ports::{NewSessionRequest, RuntimeStore, RuntimeStoreError, WorkspaceSessionRequest};
 use axon_domain::{
     DaemonSessionId, RuntimeHostId, SessionActionId, SessionActionStatus, SessionRuntimeStatus,
 };
@@ -125,7 +125,28 @@ impl RuntimeStore for SqliteRuntimeStore {
         cwd: &str,
         now_ms: u64,
     ) -> Result<SessionRuntimeRecord, RuntimeStoreError> {
-        self.create_session_impl(session_id, cwd, now_ms)
+        self.create_session_impl(&NewSessionRequest::primary(session_id.clone(), cwd, now_ms))
+    }
+
+    fn create_session_with(
+        &self,
+        request: &NewSessionRequest,
+    ) -> Result<SessionRuntimeRecord, RuntimeStoreError> {
+        self.create_session_impl(request)
+    }
+
+    fn resolve_workspace_session(
+        &self,
+        request: &WorkspaceSessionRequest,
+    ) -> Result<SessionRuntimeRecord, RuntimeStoreError> {
+        self.resolve_workspace_session_impl(request)
+    }
+
+    fn session_id_for_run(
+        &self,
+        current_run_id: &str,
+    ) -> Result<Option<DaemonSessionId>, RuntimeStoreError> {
+        self.session_id_for_run_impl(current_run_id)
     }
 
     fn stop_session(

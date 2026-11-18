@@ -11,11 +11,6 @@ use crate::application::ExternalEventEnvelope;
 pub(super) struct WsEventRequest {
     source_channel: String,
     event_id: String,
-    /// 事件所属 Workspace；缺省时由服务端解析默认 Workspace。
-    ///
-    /// 与 HTTP 信封同语义：外部发送方不填，自带工作区上下文的客户端才填。
-    #[serde(default)]
-    workspace_id: Option<String>,
     observed_at_ms: u64,
     expires_at_ms: u64,
     content: String,
@@ -38,7 +33,10 @@ impl WsEventRequest {
             client: None,
             source_channel: self.source_channel,
             event_id: self.event_id,
-            workspace_id: self.workspace_id.unwrap_or_default().trim().to_owned(),
+            // 外部事件不对外暴露会话标识：统一落到服务端内部的固定会话。
+            session_id: None,
+            // 外部事件不对外暴露 Workspace：固定落到 Axon 根目录这一条。
+            workspace_id: String::new(),
             observed_at_ms: self.observed_at_ms,
             expires_at_ms: self.expires_at_ms,
             content: self.content,

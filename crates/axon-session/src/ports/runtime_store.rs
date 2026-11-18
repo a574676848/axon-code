@@ -1,13 +1,69 @@
 //! Session Runtime 持久化端口。
 
 use crate::domain::runtime::{
-    DaemonHostRecord, RuntimeScheduleRecord, SessionActionRecord, SessionEventRecord,
-    SessionRuntimeRecord,
+    DaemonHostRecord, RuntimeScheduleRecord, SessionActionRecord, SessionEventRecord, SessionKind,
+    SessionRuntimeRecord, SessionTrustScope,
 };
 use axon_domain::{
     DaemonSessionId, RuntimeHostId, SessionActionId, SessionActionStatus, SessionRuntimeStatus,
 };
 use thiserror::Error;
+
+/// 解析 Workspace 活跃会话的输入。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceSessionRequest {
+    /// 归属 Workspace。
+    pub workspace_id: String,
+    /// 需要新建会话时使用的工作目录。
+    pub cwd: String,
+    /// 新建会话时的受众隔离维度。
+    pub trust_scope: SessionTrustScope,
+    /// 判定时间。
+    pub now_ms: u64,
+}
+
+/// 新建会话的显式身份属性。
+///
+/// 会话标识、类型、受众边界与归属都由调用方给出：服务端不推断会话，也不按投递目标派生。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewSessionRequest {
+    /// 会话标识，由调用方生成（ULID）。
+    pub session_id: DaemonSessionId,
+    /// 会话类型。
+    pub kind: SessionKind,
+    /// 受众隔离维度。
+    pub trust_scope: SessionTrustScope,
+    /// 归属 Workspace。
+    pub workspace_id: Option<String>,
+    /// 子代理的根会话；只有 `kind=Subagent` 才允许有值。
+    pub root_session_id: Option<DaemonSessionId>,
+    /// 目标执行会话的目标标识；只有 `kind=Execution` 才允许有值。
+    pub goal_id: Option<String>,
+    /// 目标执行会话的执行标识；只有 `kind=Execution` 才允许有值。
+    pub execution_id: Option<String>,
+    /// 工作目录。
+    pub cwd: String,
+    /// 创建时间。
+    pub now_ms: u64,
+}
+
+impl NewSessionRequest {
+    /// 主会话的缺省形态：私密受众、不绑定 Workspace 与目标。
+    #[must_use]
+    pub fn primary(session_id: DaemonSessionId, cwd: impl Into<String>, now_ms: u64) -> Self {
+        Self {
+            session_id,
+            kind: SessionKind::Primary,
+            trust_scope: SessionTrustScope::Private,
+            workspace_id: None,
+            root_session_id: None,
+            goal_id: None,
+            execution_id: None,
+            cwd: cwd.into(),
+            now_ms,
+        }
+    }
+}
 
 use super::{
     AgentContinuationStore, AgentMailboxStore, ClientDeliveryStore, DecisionStore, EventLogStore,
@@ -132,12 +188,37 @@ pub trait RuntimeStore:
         lease_duration_ms: u64,
     ) -> Result<DaemonHostRecord, RuntimeStoreError>;
     /// 创建 Session Runtime。
+    ///
+    /// 便捷入口：`kind='primary'`、`trust_scope='private'`、不绑定 Workspace 与目标。
     fn create_session(
         &self,
         session_id: &DaemonSessionId,
         cwd: &str,
         now_ms: u64,
     ) -> Result<SessionRuntimeRecord, RuntimeStoreError>;
+    /// 按显式身份属性创建 Session Runtime。
+    ///
+    /// 会话类型、受众边界与归属 Workspace 一律由调用方给出，服务端不推断；标识已存在时
+    /// 返回既有行，不做原地改写。
+    fn create_session_with(
+        &self,
+        request: &NewSessionRequest,
+    ) -> Result<SessionRuntimeRecord, RuntimeStoreError>;
+    /// 解析某个 Workspace 当前的主会话；没有可用会话时创建一个新的主会话。
+    ///
+    /// 这是「解析到该 Workspace 的活跃会话」的唯一实现：不按渠道、投递目标或哈希派生，
+    /// 只读 `sessions` 表里该 Workspace 最近活动且未归档的主会话。
+    fn resolve_workspace_session(
+        &self,
+        request: &WorkspaceSessionRequest,
+    ) -> Result<SessionRuntimeRecord, RuntimeStoreError>;
+    /// 按当前运行实例反查它所属的稳定会话标识。
+    ///
+    /// 运行实例标识只用于 rollout 恢复，不能当会话标识使用；需要会话身份的路径必须过这里。
+    fn session_id_for_run(
+        &self,
+        current_run_id: &str,
+    ) -> Result<Option<DaemonSessionId>, RuntimeStoreError>;
     /// 停止 Session 当前运行并取消所有未完成 Action。
     fn stop_session(
         &self,

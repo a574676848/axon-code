@@ -3,10 +3,7 @@
 use super::SqliteRuntimeStore;
 use crate::ports::EventLogStore as _;
 use crate::{InteractionQueryStore, InteractionStore, RuntimeStore, interaction_session_id};
-use axon_domain::{
-    AudienceContext, AudienceKind, DaemonSessionId, DisclosurePolicy, InteractionId,
-    InteractionRecord, InteractionSource, InteractionStatus, ReplyRoute, RuntimeHostId, ScopeRef,
-};
+use axon_domain::{DaemonSessionId, InteractionStatus, ReplyRoute, RuntimeHostId};
 
 const FIRST_CLAIM_AT_MS: u64 = 20;
 const RELEASE_AT_MS: u64 = 30;
@@ -16,51 +13,21 @@ const SETTLE_AT_MS: u64 = 130;
 const VERIFY_TERMINAL_AT_MS: u64 = 140;
 pub(super) const LEASE_DURATION_MS: u64 = 100;
 
-pub(super) fn sample_interaction() -> InteractionRecord {
-    interaction_record("interaction-test", "message-test", 10)
-}
-
-fn interaction_record(
-    interaction_id: &str,
-    message_id: &str,
-    received_at_ms: u64,
-) -> InteractionRecord {
-    InteractionRecord::new(
-        InteractionId::new(interaction_id).expect("交互 ID"),
-        InteractionSource::new("tui", message_id).expect("来源"),
-        ScopeRef::workspace("workspace-test").expect("作用域"),
-        AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly),
-        ReplyRoute::new("tui", "terminal-test").expect("路由"),
-        "检查状态",
-        received_at_ms,
-    )
-    .expect("Interaction")
-}
-
-/// 构造指定复合 session（Workspace + 渠道 + 会话表面）的 Interaction。
-fn interaction_in_session(
-    interaction_id: &str,
-    workspace: &str,
-    destination: &str,
-    received_at_ms: u64,
-) -> InteractionRecord {
-    InteractionRecord::new(
-        InteractionId::new(interaction_id).expect("交互 ID"),
-        InteractionSource::new("tui", format!("message-{interaction_id}")).expect("来源"),
-        ScopeRef::workspace(workspace).expect("作用域"),
-        AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly),
-        ReplyRoute::new("tui", destination).expect("路由"),
-        "检查状态",
-        received_at_ms,
-    )
-    .expect("Interaction")
-}
+pub(super) use super::sqlite_runtime_store_interaction_fixtures::sample_interaction;
+use super::sqlite_runtime_store_interaction_fixtures::{
+    interaction_in_session, interaction_record, test_session,
+};
 
 #[test]
 fn interaction_attachments_round_trip_through_every_read_path() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
-    let mut interaction = interaction_record("interaction-attachment", "message-attachment", 10);
+    let mut interaction = interaction_record(
+        &test_session("session-attachment"),
+        "interaction-attachment",
+        "message-attachment",
+        10,
+    );
     interaction.attachments = vec![
         "/var/axon/media/image/a.png".to_owned(),
         "/var/axon/media/file/b.pdf".to_owned(),
@@ -96,7 +63,12 @@ fn interaction_attachments_round_trip_through_every_read_path() {
     assert_eq!(claimed[0].interaction.attachments, interaction.attachments);
 
     // 第二条记录用于覆盖按 ID 领取路径（第一条已被 lease 持有）。
-    let mut second = interaction_record("interaction-attachment-2", "message-attachment-2", 11);
+    let mut second = interaction_record(
+        &test_session("session-attachment"),
+        "interaction-attachment-2",
+        "message-attachment-2",
+        11,
+    );
     second.attachments = vec!["/var/axon/media/image/c.png".to_owned()];
     assert!(store.append(&second).expect("追加第二条").inserted);
     let claimed_by_id = store
@@ -127,7 +99,12 @@ fn interaction_explicit_turn_settings_round_trip_and_stay_empty_for_implicit_tur
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
 
     // 渠道与系统入站没有显式模型与强度：必须读回 None，不能凭空造出设置。
-    let implicit = interaction_record("interaction-implicit", "message-implicit", 10);
+    let implicit = interaction_record(
+        &test_session("session-settings"),
+        "interaction-implicit",
+        "message-implicit",
+        10,
+    );
     assert!(store.append(&implicit).expect("追加").inserted);
     let read = store
         .get_interaction(&implicit.interaction_id)
@@ -136,7 +113,12 @@ fn interaction_explicit_turn_settings_round_trip_and_stay_empty_for_implicit_tur
     assert_eq!(read.model, None);
     assert_eq!(read.reasoning_effort, None);
 
-    let mut explicit = interaction_record("interaction-explicit", "message-explicit", 11);
+    let mut explicit = interaction_record(
+        &test_session("session-settings"),
+        "interaction-explicit",
+        "message-explicit",
+        11,
+    );
     explicit.model = Some("balanced".to_owned());
     explicit.reasoning_effort = Some("high".to_owned());
     assert!(store.append(&explicit).expect("追加").inserted);
@@ -227,7 +209,7 @@ fn interrupted_interaction_appends_durable_session_and_ledger_events() {
         .expect("host lease");
     let interaction = sample_interaction();
     store.append(&interaction).expect("追加 Interaction");
-    let session_id = interaction_session_id(&interaction).expect("session");
+    let session_id = interaction_session_id(&interaction);
     let session_id = DaemonSessionId::new(session_id).expect("Session ID");
     store.create_session(&session_id, ".", 1).expect("Session");
     let lease = store
@@ -291,9 +273,24 @@ fn interrupted_interaction_appends_durable_session_and_ledger_events() {
 fn claim_keeps_arrival_order_across_queued_and_expired_records() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
-    let earliest = interaction_record("interaction-earliest", "message-earliest", 10);
-    let middle = interaction_record("interaction-middle", "message-middle", 40);
-    let latest = interaction_record("interaction-latest", "message-latest", 70);
+    let earliest = interaction_record(
+        &test_session("session-order"),
+        "interaction-earliest",
+        "message-earliest",
+        10,
+    );
+    let middle = interaction_record(
+        &test_session("session-order"),
+        "interaction-middle",
+        "message-middle",
+        40,
+    );
+    let latest = interaction_record(
+        &test_session("session-order"),
+        "interaction-latest",
+        "message-latest",
+        70,
+    );
     store.append(&earliest).expect("追加最早记录");
     store.append(&middle).expect("追加中间记录");
     store.append(&latest).expect("追加最新记录");
@@ -320,6 +317,7 @@ fn claim_keeps_session_exclusive_while_a_turn_is_in_flight() {
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
     store
         .append(&interaction_in_session(
+            &test_session("session-a"),
             "interaction-session-a-1",
             "workspace-a",
             "terminal-a",
@@ -328,6 +326,7 @@ fn claim_keeps_session_exclusive_while_a_turn_is_in_flight() {
         .expect("追加");
     store
         .append(&interaction_in_session(
+            &test_session("session-a"),
             "interaction-session-a-2",
             "workspace-a",
             "terminal-a",
@@ -336,6 +335,7 @@ fn claim_keeps_session_exclusive_while_a_turn_is_in_flight() {
         .expect("追加");
     store
         .append(&interaction_in_session(
+            &test_session("session-b"),
             "interaction-session-b-1",
             "workspace-b",
             "terminal-b",
@@ -596,8 +596,18 @@ fn expired_lease_token_cannot_renew_or_settle_reclaimed_interaction() {
 fn workspace_channel_queries_find_latest_history_and_active_turn() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
-    let first = interaction_record("interaction-first", "message-first", 10);
-    let mut second = interaction_record("interaction-second", "message-second", 20);
+    let first = interaction_record(
+        &test_session("session-history"),
+        "interaction-first",
+        "message-first",
+        10,
+    );
+    let mut second = interaction_record(
+        &test_session("session-history"),
+        "interaction-second",
+        "message-second",
+        20,
+    );
     second.reply_route = ReplyRoute::new("tui", "terminal-second").expect("路由");
     store.append(&first).expect("追加第一条");
     store.append(&second).expect("追加第二条");
@@ -641,8 +651,8 @@ fn expired_interaction_lease_cannot_append_late_runtime_events() {
         .expect("host lease");
     let interaction = sample_interaction();
     store.append(&interaction).expect("追加 Interaction");
-    let session_id = DaemonSessionId::new(interaction_session_id(&interaction).expect("session"))
-        .expect("Session ID");
+    let session_id =
+        DaemonSessionId::new(interaction_session_id(&interaction)).expect("Session ID");
     store.create_session(&session_id, ".", 1).expect("Session");
     let lease = store
         .claim_processing_by_id(&interaction.interaction_id, 20, LEASE_DURATION_MS)

@@ -478,6 +478,7 @@ where
         let scope = ScopeRef::workspace(notification.workspace_id.clone())
             .map_err(|error| error.to_string())?;
         let interaction = InteractionRecord::new(
+            completion_route.session_id.clone(),
             interaction_id,
             source,
             scope,

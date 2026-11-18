@@ -132,7 +132,7 @@ fn lane_owned_run_window_does_not_get_a_duplicate_session_row() {
         .store
         .create_session(&lane, "/workspace", 2)
         .expect("登记车道会话");
-    let run_window = lane_row.run_session_id;
+    let run_window = lane_row.current_run_id;
 
     persist(
         &fixture.config_path,
@@ -143,7 +143,7 @@ fn lane_owned_run_window_does_not_get_a_duplicate_session_row() {
         .store
         .with_read_connection(|connection| {
             connection.query_row(
-                "SELECT COUNT(*) FROM sessions WHERE run_session_id = ?1",
+                "SELECT COUNT(*) FROM sessions WHERE current_run_id = ?1",
                 [run_window.as_str()],
                 |row| row.get::<_, i64>(0),
             )

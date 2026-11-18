@@ -94,7 +94,7 @@ fn workspace_id(cwd: &Path) -> Option<String> {
 fn idempotency_key(context: &ToolOrchestratorContext, tool_call: &ProviderToolCall) -> String {
     derive_idempotency_key(&[
         context.thread_session_id.as_str(),
-        &context.session_id.0.to_string(),
+        &context.thread_session_id,
         tool_call.id.as_str(),
     ])
 }

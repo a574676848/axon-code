@@ -54,12 +54,12 @@ fn child_session_is_registered_and_keeps_its_own_event_stream() {
     })
     .expect("子会话事件应落库");
 
-    // 子会话必须是一条真实会话：运行态行可读，且带自己的 run_session_id。
+    // 子会话必须是一条真实会话：运行态行可读，且带自己的 current_run_id。
     let record = store
         .get_session(&DaemonSessionId::new(child_id).expect("子会话 ID"))
         .expect("子会话运行态行应存在");
     assert_eq!(record.session_id.as_str(), child_id);
-    assert!(!record.run_session_id.is_empty());
+    assert!(!record.current_run_id.is_empty());
 
     // 事件落在**它自己**的会话流里，而不是父会话流里。
     let events = store
@@ -73,6 +73,6 @@ fn child_session_is_registered_and_keeps_its_own_event_stream() {
     let again = store
         .get_session(&DaemonSessionId::new(child_id).expect("子会话 ID"))
         .expect("再读一次");
-    assert_eq!(again.run_session_id, record.run_session_id);
+    assert_eq!(again.current_run_id, record.current_run_id);
     let _ = Arc::new(factory);
 }

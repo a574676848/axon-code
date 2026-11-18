@@ -28,10 +28,10 @@ fn seed_session(
         .with_read_connection(|connection| {
             connection
                 .execute(
-                    "INSERT INTO sessions(session_id,run_session_id,root_session_id,cwd,status,
+                    "INSERT INTO sessions(session_id,current_run_id,root_session_id,trust_scope,kind,cwd,status,
                          worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,
                          last_activity_at_ms,created_at_ms,updated_at_ms,pinned,archived)
-                     VALUES(?1,?1,?1,'/workspace','idle',0,0,0,0,?2,?2,?2,?3,?4)",
+                     VALUES(?1,?1,NULL,'private','primary','/workspace','idle',0,0,0,0,?2,?2,?2,?3,?4)",
                     params![session_id, last_activity_at_ms, pinned, archived],
                 )
                 .map(|_| ())

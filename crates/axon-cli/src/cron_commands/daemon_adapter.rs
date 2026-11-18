@@ -13,7 +13,7 @@ use axon_domain::{
     InteractionSource, ReplyRoute, ScopeRef,
 };
 use axon_protocol::{DaemonCommand, DaemonRequest, SubmitInteractionRequest};
-use axon_session::WorkspaceResolver;
+use axon_session::{RuntimeStore as _, WorkspaceResolver};
 
 use crate::{
     cron_commands::{
@@ -120,9 +120,21 @@ impl CronDaemonAdapter {
             InteractionSource::new(channel, format!("{CRON_WAKE_SOURCE_PREFIX}{identity}"))
                 .and_then(|source| source.with_client(client))
                 .map_err(|error| error.to_string())?;
-        let scope = ScopeRef::workspace(workspace_id).map_err(|error| error.to_string())?;
+        let scope = ScopeRef::workspace(workspace_id.clone()).map_err(|error| error.to_string())?;
         let route = ReplyRoute::new(channel, destination).map_err(|error| error.to_string())?;
+        // 唤醒必须落回该 Workspace 的既有会话：会话标识由控制面给出，不按投递目标派生。
+        let store = crate::run_commands::interaction_store(Some(&self.config_path))?;
+        let session_id = store
+            .resolve_workspace_session(&axon_session::WorkspaceSessionRequest {
+                workspace_id,
+                cwd: self.workdir(job).to_string_lossy().into_owned(),
+                trust_scope: axon_session::SessionTrustScope::Private,
+                now_ms,
+            })
+            .map_err(|error| error.to_string())?
+            .session_id;
         let interaction = InteractionRecord::new(
+            session_id,
             interaction_id,
             source,
             scope,

@@ -381,7 +381,7 @@ struct RuntimeEventRecord {
 | `replay_interaction_events(session, interaction, after_seq, limit)` | 按键取帧：`.idx` 的交互指纹把解压范围收窄到该交互自己的帧（已落地，见下） |
 | `interaction_tail_window(session, interaction, limit)` | 按 `.idx` 条目从尾帧倒推解压，按交互指纹跳过别条交互的帧（已落地） |
 | 逐轮读数（`turn_metrics` 一条一轮） | `read_latest_per_interaction`：一次索引加载，按交互指纹从尾部倒推各自最近一条 `turn_metrics`（已落地）。历史索引页因此能给每轮一行读数，而不必回放正文 |
-| 会话内最近消息列表 | 留在 `control.inbox`，按 `(session_id, received_at_ms DESC)` 取；车道清单由索引去重驱动，不物化整表（已落地，见下） |
+| 会话内最近消息列表 | 留在 `control.inbox`，按 `(session_id, received_at_ms DESC)` 取；会话清单由索引去重驱动，不物化整表（已落地，见下） |
 | 会话列表与元数据 | 留在 `control.sessions` |
 | 启动激活状态 | 复用现有 `JsonlThreadEventStore::read_thread_activation` |
 | 用量投影 | 只读 thread 轮次事实（W2-12），见 §9 |
@@ -392,7 +392,7 @@ struct RuntimeEventRecord {
 
 索引是派生数据：文件头记录「已覆盖日志长度」，与日志真实长度不一致、结构不自洽或文件缺失时一律忽略并按日志重建；写句柄打不开索引文件时退化为「没有索引」，绝不因此挡住事件落盘。老记录只把归属写在载荷里（没有归属列）时，按键取帧的归属判定回落到载荷里的 `interactionId`，重建索引时也按载荷补出指纹：老日志在第一次有写入、索引重建之后就自动走按键取帧，不需要为兼容单独留一条「每次请求整会话扫描」的常驻路径。历史页仍保留载荷匹配的整会话扫描作为无索引时的最后兜底。
 
-会话列表不做投影也能收敛：车道清单由 `inbox` 的索引去重得到，每会话的「最近一条、总数、首条时间、运行中数」全部走 `inbox_session_recent` 索引区间，代价随车道数而不是历史总行数增长。实测 4.8 万行 `inbox`、8 条车道：窗口函数物化整表 182 ms，索引驱动 17 ms，两侧结果逐字段一致。
+会话列表不做投影也能收敛：会话清单由 `inbox` 的索引去重得到，每会话的「最近一条、总数、首条时间、运行中数」全部走 `inbox_session_recent` 索引区间，代价随会话数而不是历史总行数增长。实测 4.8 万行 `inbox`、8 条会话：窗口函数物化整表 182 ms，索引驱动 17 ms，两侧结果逐字段一致。
 
 ### 4.9 一致性协议
 
@@ -478,7 +478,7 @@ struct TurnMetrics {
     background_jobs_running: u32,      // 收口时仍在跑的
 }
 
-struct JobRef { job_id: String, kind: String, lane_id: String, started_at_ms: u64 }
+struct JobRef { job_id: String, kind: String, session_id: String, started_at_ms: u64 }
 struct JobOutcome {
     job_id: String, status: JobStatus, elapsed_ms: u64,
     exit_code: Option<i32>, terminal_reason: Option<String>,
@@ -515,7 +515,7 @@ enum TurnOrigin { External, Cron, Goal, Subagent }
 }
 ```
 
-因此同一条桌面车道被 CLI 续聊之后，这张表会同时出现 `desktop` 与 `cli` 两个键：渠道属于会话表面，来源属于每一轮。
+因此同一条桌面会话被 CLI 续聊之后，这张表会同时出现 `desktop` 与 `cli` 两个键：渠道属于会话表面，来源属于每一轮。
 
 
 ### 4.11.1 turn_metrics 的生产链
@@ -620,135 +620,176 @@ CREATE TABLE session_metrics (
 - 会话级事实应当随会话走，删会话一起删，不留孤儿。
 - 桌面端要看的是"这个会话"，不是"这个月"。
 
-### 4.12 会话身份（一）：Lane 一词的废除
+### 4.12 会话身份（一）：术语收口与两级模型
 
-现状是三个词指两个实体，其中一个词纯属历史包袱。
+会话只有一个实体，就是 `control.sessions`。代码与文档里统一叫 `session`，"lane"这个词已经不存在，任何地方再出现它都属于旧形态。
 
-**证据链**
+**证据链（收口前）**
 
-1. `crates/axon-session/src/application/session_lane.rs:24-38`：`session_lane_id` 的返回值是 `"session-lane-" + sha256([workspace_id, trust_scope, channel, destination])`。
-2. 同文件 `:42-49`：`interaction_session_lane_id` 直接从 Interaction 派生这个值。
-3. `crates/axon-cli/src/workbench_http_lane_readings.rs:248`：用 lane 去查 `session_runtimes.session_id`。
-4. `crates/axon-cli/src/run_commands/run_question_projection.rs:240` 的注释直说："Daemon 主 turn 的车道就是它的运行会话身份（`primaryLaneId`）"。
-5. 本机删除前的实测数据里，`session_events.session_id` 的取值就是 `session-lane-9107a38c6c05df9fd8c6b47d7ac...` 这种格式。
+1. `crates/axon-session/src/application/session_lane.rs`：`session_lane_id` 的返回值是 `"session-lane-" + sha256([workspace_id, trust_scope, channel, destination])`。
+2. 同文件 `interaction_session_lane_id` 直接从 Interaction 派生这个值。
+3. 主 turn 的很多注释把派生值当成运行会话身份，派生值于是成了第二套标识空间。
 
-结论：**`lane_id` 恒等于 `session_id`，两个名字指同一列值。** Lane 不是实体，是 Session 的复合主键构造方式。
+结论：**派生值恒等于 `session_id`，两个名字指同一列值。** 它从来不是独立实体，只是 Session 主键的构造方式。
 
 **为什么会有两个名字**
 
-`session_lane.rs` 的模块注释交代了设计意图："Axon 对外只有持续存在的同一个 JARVIS，Session 只是内部运行窗口。"也就是说他们想区分"对外持续身份"与"内部运行窗口"，但实现上把两者编成了同一个 ID，于是名字留下了、区分没留下。
+原模块注释交代的设计意图是"Axon 对外只有持续存在的同一个 JARVIS，Session 只是内部运行窗口"，想区分"对外持续身份"与"内部运行窗口"，但实现上把两者编成了同一个 ID，于是名字留下了、区分没留下。
 
 **收敛方案**
 
 1. **`lane` 这个词从代码与文档中消失**，统一叫 `session`。
-2. `interactions.lane_id` 改名 `session_id`，外键直指 `control.sessions.session_id`。
+2. 入站事实的 `session_id` 直指 `control.sessions.session_id`，渠道下沉为轮次事实。
 3. 真正的两级区分是 **稳定身份** 与 **运行实例**，用两列表达，不新增表：
 
 ```sql
 CREATE TABLE sessions (
-    session_id        TEXT PRIMARY KEY,   -- ULID，客户端可引用；不再由哈希派生
-    workspace_id      TEXT NOT NULL,
-    trust_scope       TEXT NOT NULL,      -- 安全隔离维度：private / group-workspace / restricted
-    title             TEXT NOT NULL,
-    pinned            INTEGER NOT NULL,
-    archived          INTEGER NOT NULL,
-    sort_order        INTEGER NOT NULL,
-    current_run_id    TEXT NOT NULL,      -- 当前运行实例；/new 重置时换新值
-    run_generation    INTEGER NOT NULL,   -- 递增，替代原来的 run_session_id 语义
-    root_session_id   TEXT NOT NULL,      -- 子代理的根会话
-    cwd               TEXT NOT NULL,
-    status            TEXT NOT NULL,
-    owner_instance_id TEXT,
-    owner_generation  TEXT,
-    worker_attempt    INTEGER NOT NULL,
-    context_version   INTEGER NOT NULL,
-    last_checkpoint_seq INTEGER NOT NULL,
-    last_event_sequence INTEGER NOT NULL,
+    session_id         TEXT PRIMARY KEY NOT NULL,  -- ULID，服务端生成，此后不变
+    workspace_id       TEXT,
+    trust_scope        TEXT NOT NULL               -- 安全隔离维度
+        CHECK (trust_scope IN ('private', 'group_workspace', 'restricted')),
+    kind               TEXT NOT NULL               -- 会话来源类型
+        CHECK (kind IN ('primary', 'subagent', 'cron', 'goal')),
+    root_session_id    TEXT,                       -- 子代理指向根会话
+    goal_id            TEXT,                       -- kind='execution' 且来自目标
+    execution_id       TEXT,                       -- kind='execution' 且来自执行
+    current_run_id     TEXT NOT NULL,              -- 当前运行实例；/new 重置时换新值
+    run_generation     INTEGER NOT NULL DEFAULT 0, -- 递增，替代原来的 run_session_id 语义
+    title              TEXT,
+    pinned             INTEGER NOT NULL DEFAULT 0,
+    archived           INTEGER NOT NULL DEFAULT 0,
+    sort_order         INTEGER,
+    cwd                TEXT NOT NULL,
+    status             TEXT NOT NULL,
+    owner_host_id      TEXT,
+    owner_generation   TEXT,
+    worker_attempt     INTEGER NOT NULL DEFAULT 0,
+    context_version    INTEGER NOT NULL DEFAULT 0,
+    last_checkpoint_seq INTEGER NOT NULL DEFAULT 0,
+    last_event_sequence INTEGER NOT NULL DEFAULT 0,
+    provider           TEXT,
+    model              TEXT,
+    model_name         TEXT,
+    created_at_ms      INTEGER NOT NULL,
     last_activity_at_ms INTEGER NOT NULL,
-    created_at_ms     INTEGER NOT NULL,
-    updated_at_ms     INTEGER NOT NULL
+    updated_at_ms      INTEGER NOT NULL,
+    CHECK (root_session_id IS NULL OR kind = 'subagent'),
+    CHECK (goal_id IS NULL OR kind IN ('cron', 'goal')),
+    CHECK (execution_id IS NULL OR kind IN ('cron', 'goal'))
 );
+CREATE INDEX sessions_recovery
+    ON sessions(status, owner_host_id, owner_generation);
+CREATE INDEX sessions_retention
+    ON sessions(last_activity_at_ms, status, session_id);
+CREATE INDEX sessions_owner
+    ON sessions(owner_host_id);
+CREATE INDEX sessions_by_activity
+    ON sessions(pinned DESC, last_activity_at_ms DESC);
+CREATE INDEX sessions_by_workspace
+    ON sessions(workspace_id, archived, sort_order, last_activity_at_ms);
+CREATE INDEX sessions_by_kind_root
+    ON sessions(kind, root_session_id);
 ```
 
 **`channel` 与 `destination` 不在这个表里。** 它们是 Interaction 的来源与回复路由元数据，不参与会话身份。理由与做法见 §4.13。
 
-`root_session_id` 只对子会话有意义，`title` / `pinned` / `archived` / `sort_order` 承接桌面端已有的车道管理能力（`lane_create` / `lane_rename` / `lane_set_pinned` / `lane_set_archived` / `lane_reorder`）。`title` 也是会话标题的唯一落点：轮后任务每满三轮用快速模型总结最近用户消息并写回这一列，桌面左侧菜单、TUI `/sessions` 与 CLI `sessions list` 都读同一列，只有该列为空时才回落到消息正文；桌面端的用户重命名留在本地状态里优先覆盖，不回写服务端。
+`root_session_id` 只对 `kind='subagent'` 有值，`title` / `pinned` / `archived` / `sort_order` 承接桌面端的会话管理能力（`POST /api/v1/sessions` 创建、`PATCH /api/v1/sessions/<id>` 置顶与归档）。`title` 也是会话标题的唯一落点：轮后任务每满三轮用快速模型总结最近用户消息并写回这一列，桌面左侧菜单、TUI `/sessions` 与 CLI `sessions list` 都读同一列，只有该列为空时才回落到消息正文；桌面端的用户重命名留在本地状态里优先覆盖，不回写服务端。
 
-把 `workspace_id` / `trust_scope` / `channel` / `destination` 落成实列，收益是可以直接按渠道或工作区查会话，不必反解哈希。原来的 `run_session_id` 与 `root_session_id` 两列语义重叠，改为 `current_run_id`（可变）+ `run_generation`（单调），`root_session_id` 只对子会话有意义。
+`workspace_id` 与 `trust_scope` 落成实列，收益是可以直接按工作区或受众边界查会话，不必反解哈希。原来的 `run_session_id` 与 `root_session_id` 两列语义重叠，改为 `current_run_id`（可变）+ `run_generation`（单调），`root_session_id` 只对子会话有意义。
 
-4. `primaryLaneId` 这个线上字段名保留（前端与网关契约不动），但服务端内部一律叫 `session_id`，并在文档里写明两者同值。
+4. `primarySessionId` 这个线上字段名保留（前端与网关契约不动），值就是 `interaction.session_id`；服务端内部一律叫 `session_id`，并在文档里写明两者同值。
 
 **收敛后的模型**
 
 | 概念 | 实体 | 说明 |
 | --- | --- | --- |
-| Session | `control.sessions` | 稳定对话身份：一个 Workspace 的一个渠道表面。等价于原来的 Lane |
+| Session | `control.sessions` | 稳定对话身份，跨端恒定。渠道不参与身份 |
 | Run | `sessions.current_run_id` + `run_generation` | 一次运行实例，`/new` 重置时递增 |
 | Interaction | `control.inbox` | 一条入站消息，幂等，属于某个 Session |
 | Turn / Execution | `control.work_items` / `work_item_history` | 一次执行，属于某个 Interaction，可重试 |
 
-三个词（Lane / Interaction / Session）变成两个实体（Session / Interaction）加一个运行实例标记。这符合 OpenAI Assistants 的 thread/run 与 Anthropic 的 conversation 两级模型。
+三个词（Lane / Interaction / Session）变成两个实体（Session / Interaction）加一个运行实例标记，其中 Lane 一词已废除。这符合 OpenAI Assistants 的 thread/run 与 Anthropic 的 conversation 两级模型。
 
 **顺带消掉的东西**
 
-- `session_lane.rs` 整个模块可以删除，哈希构造下沉到 `sessions` 写入路径的一次计算。
-- `lane_id`、`session_lane_id`、`primaryLaneId` 三套命名在代码里并存，收敛为一套。
+- 派生模块整体删除，会话标识改为服务端生成一次。
+- 三套并行命名（派生串、会话表面、运行窗口）在代码里并存，收敛为 `session_id` 一套。
 - `session_metrics.session_id` 直接指向稳定身份，不需要区分"lane 维度"与"session 维度"两套统计。
 
 ### 4.13 会话身份（二）：channel 不参与，多端同会话
 
 目标：不同 channel 看到同一份数据；多端请求同一会话时渲染同步。
 
-**现状为什么不成立**
+#### 4.13.1 身份契约
 
-会话身份是 `sha256(workspace, trust_scope, channel, destination)`（`session_lane.rs:24-38`），channel 和 destination 都是哈希输入：
+会话身份只有一个事实源：`control.sessions.session_id` 主键。它是服务端生成的 ULID，生成一次、此后不变，与渠道、投递目标、受众、工作区都无关。
 
-- 桌面端用固定常量 `DESKTOP_LANE_CHANNEL` 派生自己的车道（`crates/axon-desktop/src/workspace/mutation.rs:167`）。
-- TUI 走 `tui` channel（`session_lane.rs:69` 的测试就是这个组合）。
-- CLI 每条调用各一份。
+**ULID 规范**
 
-结果：TUI 与桌面永远是两个 session、两条事件流，两边谁改都看不见对方；CLI 再各一份。
+- 形态：26 个字符的 Crockford Base32（`0-9A-Z`，去掉 `I`、`L`、`O`、`U`），入库统一大写。
+- 布局：前 48 位是毫秒时间戳，后 80 位是随机量。整体字典序单调递增，主键插入位置单调前进，避免随机主键造成的 B-tree 页分裂。
+- 禁止业务前缀：`session-`、`goal-session-`、`external-interaction-` 这类前缀一律不得进入标识。可读性只允许出现在展示层（界面截断、日志附注），不得回写标识本身。
+- 生成点集中在一处，任何模块不得自行拼接或用哈希派生会话标识。
 
-**新模型**
+**维度落列**
 
-会话是**显式实体**，不由接入方式派生：
+会话语义全部落列，不用前缀表达：
 
-| 维度 | 旧 | 新 |
+| 列 | 取值 | 语义 |
 | --- | --- | --- |
-| 身份 | `sha256(workspace, trust_scope, channel, destination)` | `session_id`（ULID）+ `workspace_id` + `trust_scope` |
-| channel | 身份的一部分 | Interaction 的来源元数据，只用于回发 |
-| destination | 身份的一部分 | Interaction 的回复路由，只用于回发 |
-| 创建 | 首次收到该车道消息时隐式建 | 显式创建，或解析到该 Workspace 的活跃会话 |
-| 多端 | 每个 channel 一个会话 | 一个会话被多个连接订阅 |
+| `workspace_id` | Workspace 标识或空 | 只决定项目事实范围，不参与身份 |
+| `trust_scope` | `private`、`group_workspace`、`restricted` | 受众隔离维度；群聊看到私聊上下文只由它拦 |
+| `kind` | `primary`、`subagent`、`cron`、`goal` | 会话来源类型：用户对话、子代理、定时任务、目标看板 |
+| `root_session_id` | 根会话标识 | 只在 `kind='subagent'` 时有值 |
+| `goal_id` | 目标标识 | 只在 `kind='cron'` 或 `kind='goal'` 时有值 |
+| `execution_id` | 执行标识 | 只在 `kind='cron'` 或 `kind='goal'` 时有值 |
 
-**多端同步机制**
+`kind` 按来源取值：普通对话是 `primary`，子代理派发是 `subagent`，Cron 唤醒是 `cron`，目标看板发起是 `goal`，不新增第五类。桌面与 TUI 的会话清单只列 `primary`，CLI 只续接 `primary`；`subagent` / `cron` / `goal` 三类会话由各自入口按标识直接打开，不进用户列表。
+
+**渠道落点**
+
+`channel` 与 `destination` 不进 `sessions` 表：
+
+- 每轮来源落 `turn_metrics.origin_channel`，只有外部来源有值。
+- 会话级分布落 `session_metrics.channel_mix_json`，可由轮次事件重放重建。
+- 环境上下文里的渠道语义是本轮来源渠道，不是会话所属渠道。
+- `inbox` 保留 `(source_channel, source_message_id)` 唯一键作为幂等事实，渠道只在这里出现。
+
+#### 4.13.2 入站、订阅与创建契约
+
+**入站**：`HttpEventRequest` 必填 `session_id`，`deny_unknown_fields` 保持。网关查表命中即用，未命中直接拒绝，不隐式建会话、不按 destination 派生。
+
+**订阅**：按 `session_id` 订阅，放行条件只剩「会话存在且受众边界匹配」，边界读 `trust_scope` 实列；删除按前缀的类型白名单。
+
+**创建**：唯一入口 `POST /api/v1/sessions`，服务端生成 ULID 并写入 `kind`、`trust_scope`、`workspace_id`。桌面、TUI 与 CLI 都从这里或从会话清单拿标识，不再本地派生。
+
+**线上字段名**：`primarySessionId` 的取值就是 `interaction.session_id`；服务端内部一律叫 `session_id`，两者同值。
+
+#### 4.13.3 interaction_id 规范
+
+- `interaction_id` 是一次入站的稳定身份，每次入站生成，形态为 ULID，不带业务前缀。
+- 幂等来源是 `inbox` 的 `(source_channel, source_message_id)` 唯一键，不是标识字符串；同一外部消息重放必须落到同一行。
+- 禁止任何按前缀识别来源的代码；来源一律读 `inbox.source_channel`。
+- 与会话身份无直接关系的边角不得借用 `interaction_id`：问答记录与工具上下文里必须写真实轮次标识。
+
+#### 4.13.4 多端同步机制
 
 1. 服务端只有一个事件流事实源。所有端订阅同一个 `session_id`，按各自 cursor 重放并接收实时广播。
 2. 每个 `SubscribeEvents` 连接独立 cursor，不共享游标，不依赖端侧状态同步。
-3. 同一会话的写入串行（现状的车道排他等价于会话排他）。两个端同时发消息时，先到者进入 processing，后到者进 `received` 队列，广播按序推进。
+3. 同一会话的写入串行。两个端同时发消息时，先到者进入 processing，后到者进 `received` 队列，广播按序推进。
 4. 端侧渲染完全由事件驱动：任何一端收到事件就更新，不做端到端对账。
 
-**四个必须处理的点**
+#### 4.13.5 会话管理落点
 
-1. **`trust_scope` 不能丢。** 它是防"群聊看到私聊上下文"的唯一隔离维度（`session_lane.rs:52-58`）。保留为会话创建时的属性，不再作为哈希输入。
-2. **客户端必须显式携带 `session_id`，服务端不做推断。** 桌面左侧菜单栏就是 `sessions` 列表（现为车道列表），选中即切换；TUI 用 `--session <id>` 指定或启动时从列表选择。服务端收到不带 `session_id` 的请求直接拒绝，不猜、不隐式建会话。
-3. **三端直接传 `session_id`。** 桌面、TUI 与 CLI 都在建立连接时拿到显式会话标识；不存在无界面入站渠道，因此不设渠道绑定表，任何跨端接续都靠同一个 `session_id` 完成。
-4. **协议字段改名。** `primaryLaneId`（`interaction_turn_payloads.rs:163`）、`laneId`（`crates/axon-protocol/src/daemon.rs:88`、`user_question.rs:158`）统一改 `sessionId`。这是破坏性协议变更，`crates/axon-desktop/ui` 的 `frames.ts` 与 store 必须同批改。
-5. **会话管理的落点。** 桌面端已有 `lane_create` / `lane_rename` / `lane_set_pinned` / `lane_set_archived` / `lane_reorder`（`crates/axon-desktop/src/workspace/mod.rs:61-100`），语义直接迁到 `sessions` 表的 `title` / `pinned` / `archived` / `sort_order` 四列。左侧菜单读的就是 `(workspace_id, archived, sort_order)` 索引。
+`title` / `pinned` / `archived` / `sort_order` 四列承接会话管理：
 
-**影响面：约 250 处 `lane_id`**
+- 创建走 `POST /api/v1/sessions`，置顶与归档走 `PATCH /api/v1/sessions/<id>`。
+- 左侧菜单与 TUI `/sessions` 读 `(workspace_id, archived, sort_order, last_activity_at_ms)` 索引。
+- 桌面端的用户重命名留在本地状态里优先覆盖，不回写服务端。
 
-| 层 | 代表位置 | 改动 |
-| --- | --- | --- |
-| 领域 | `crates/axon-session/src/application/session_lane.rs` | 整个模块删除 |
-| 会话 | `interaction_turn_runner.rs:176、:366`、`primary_turn_lanes.rs:19` | 改为读 `interaction.session_id` |
-| 网关 | `interaction_turn_payloads.rs:163`（`primaryLaneId`） | 改 `sessionId` |
-| 桌面 | `workspace/mutation.rs:167`（`derive_lane_id`） | 改为从会话列表选择 |
-| CLI HTTP | `workbench_http_*` 全套 `lane_*` 函数与路由 | 改名 `session_*` |
-| TUI | `bottom_view.rs:39`、`state.rs:265` | 改名 |
-| 协议 | `crates/axon-protocol/src/daemon.rs:88`、`user_question.rs:158` | 改名 |
+#### 4.13.6 已作废的裁决
 
-这条改动与存储重构是同一批：两者都在改会话身份与归属，分开做会返工两次。
+**作废：桌面新建会话不走会话创建接口。** 该裁决成立于会话标识按四元组哈希派生、创建接口生成 `session-<uuid>` 与派生值不同源的时期。标识改为服务端生成的 ULID 后，创建接口就是唯一入口，桌面新建直接调它拿同一个 id；继续保留本地派生会重新造出第二套标识空间。
 
 ### 4.14 工作项模型：Interaction 与 Execution 的重划
 
@@ -772,7 +813,7 @@ CREATE TABLE sessions (
 
 1. 入站事实：来源、幂等键、内容、附件、受众、回复路由（应当只读追加）。
 2. 处理状态机：`status`、`lease_token`、`lease_expires_at_ms`、`tool_summary`（每轮被 UPDATE 多次）。
-3. 展示元数据：`model`、`reasoning_effort`、`tool_summary`（供车道列表读）。
+3. 展示元数据：`model`、`reasoning_effort`、`tool_summary`（供会话列表读）。
 
 第 2 类是写放大的来源：一条消息从 `received` 到终态要经历多次 UPDATE，每次都进 WAL。而这些 UPDATE 与事件写入抢同一把锁。
 
@@ -824,7 +865,7 @@ CREATE TABLE inbox (
     attachments_json  TEXT NOT NULL,
     model             TEXT,
     reasoning_effort  TEXT,
-    lane_id           TEXT NOT NULL,      -- 车道聚合键，随 W4 改名 session_id
+    session_id        TEXT NOT NULL,      -- 直指 control.sessions.session_id
     tool_summary      TEXT NOT NULL,      -- 展示元数据，每轮更新一次
     received_at_ms    INTEGER NOT NULL,
     updated_at_ms     INTEGER NOT NULL,
@@ -849,11 +890,11 @@ CREATE TABLE inbox (
 1. 一套 claim / lease / 重试 / 死信，替代三套并行实现。
 2. `inbox` 变成纯追加，写完不再更新；写放大只落在 `work_items` 的在途行上（行数等于在途数）。
 3. 状态机只有一处，`waiting`（等用户作答）、`queued`（等资源）、`running` 是同一张表的不同状态，不再分散到 `jarvis_user_questions` 与 `jarvis_agent_messages`。
-4. 车道排他与目标幂等仍然是同一个 `dedupe_key` 唯一索引，语义不丢。
+4. 会话排他与目标幂等仍然是同一个 `dedupe_key` 唯一索引，语义不丢。
 
 **代价**
 
-1. 桌面端车道列表要 `inbox JOIN work_items` 才能拿到"这条消息在跑还是完了"。现在是一次单表查询，之后是两表 JOIN。索引都在主键上，代价可接受。
+1. 桌面端会话列表要 `inbox JOIN work_items` 才能拿到"这条消息在跑还是完了"。现在是一次单表查询，之后是两表 JOIN。索引都在主键上，代价可接受。
 2. `waiting` 状态要能表达"等用户回答"，`jarvis_user_questions` 从独立表变成 `work_items` 的一种状态 + outbox 里的一条待投递记录。这让"问答"复用同一套超时与恢复逻辑。
 
 **结论**
@@ -888,7 +929,7 @@ GET /api/v1/sessions?workspace=<workspace_id>&include_archived=false
    }]
 ```
 
-已实施（`crates/axon-cli/src/sessions_http_adapter.rs`）：排序固定为「置顶优先、再按最近活动倒序」；`include_archived` 默认关闭；标题回落到该车道第一条入站消息的首个非空行；`ttftP50Ms` 由 TTFT 直方图求累计过半桶的中点。
+已实施（`crates/axon-cli/src/sessions_http_adapter.rs`）：排序固定为「置顶优先、再按最近活动倒序」；`include_archived` 默认关闭；标题回落到该会话第一条入站消息的首个非空行；`ttftP50Ms` 由 TTFT 直方图求累计过半桶的中点。
 
 **`lastTtftMs` 暂缺**：投影里只有累计、样本数、最大值与直方图，没有「最后一次」的值。补它要在 `session_metrics` 增加一列并在每轮投影时写入，属于 W4 之后的增量，不阻塞三端会话选择。
 
@@ -928,7 +969,7 @@ axon sessions resume <id>                          # 设为后续 run 的默认�
 axon sessions show <id>                            # 查看单个会话摘要
 ```
 
-`<id>` 的解析收敛在一处（`session_commands/session_resolution.rs`）：先按 Thread ID 直接命中事件流，未命中再回落到该会话的运行窗口 `sessions.run_session_id`。会话清单展示的是复合车道 ID，Thread 事件流按运行窗口落盘，两者在 CLI 车道并不相等，因此所有会话命令入口共用这一层解析，不允许各自假定入参属于哪个标识空间。
+`<id>` 的解析收敛在一处（`session_commands/session_resolution.rs`）：会话清单与服务端写入都只认 `control.sessions.session_id` 一个标识空间；历史命令入口曾按运行窗口 ID 回落，该回落已废弃，不允许再假定入参属于第二个标识空间。
 
 落点：
 
@@ -1452,7 +1493,7 @@ pwsh -File scripts/install-from-source.ps1 -Components all
 
 | # | 议题 | 结论 |
 | --- | --- | --- |
-| 1 | 客户端会话归属 | **必须显式携带 `session_id`**，服务端不推断。桌面左侧菜单栏即 `sessions` 列表（现为车道列表），选中即切换；TUI 用 `--session <id>` 指定。无 UI 渠道靠 `control.channel_bindings` 映射 |
+| 1 | 客户端会话归属 | **必须显式携带 `session_id`**，服务端不推断。桌面左侧菜单栏即 `sessions` 列表，选中即切换；TUI 用 `--session <id>` 指定。无 UI 渠道靠 `control.channel_bindings` 映射 |
 | 2 | 事件写入与 fence 的原子性 | **先 fence 后写文件**，代际交错由 `generation` 列过滤。不引入 intent / pending 表，崩溃时按水位回退并从结算记录重建 `session_recovered` |
 | 3 | `LivePart` 快照粒度 | **保持现状**：每个 part 结束时各落一条，assistant 与 reasoning 都落。帧分类逻辑不动 |
 | 4 | 备份恢复 | **全部不恢复**。备份 `<home>/.axon-backup-20261116-154743`（21.8 MB）保留不动，作冷存档 |
@@ -1543,8 +1584,8 @@ pwsh -File scripts/install-from-source.ps1 -Components all
 | C1 | `axon sessions list` | 列出会话，含 title、lastActivity、turnCount |
 | C2 | `axon run "…" --session <id>` | 追加到指定会话，历史被带入上下文（回复能引用上一轮内容） |
 | C3 | `--session` 指向不存在的 id | 报错并提示，**不隐式新建** |
-| C4 | 不带 `--session` 与 `--continue` | 复用当前工作目录的 CLI 复合车道（同一 cwd 连续 run 接得上上下文），不报错；跨目录或首次使用要接续旧会话时用 `--continue` / `--session` |
-| C5 | `axon sessions resume <id>` 后再 `axon run --continue` | 追加到该会话：`resume` 只设置 resume 指针，`--continue` 把指针解析回 Thread 后按该 Thread 取历史（指针为空时取最近一段根会话）；普通 `run` 仍走当前目录车道，避免跨目录会话互相串味 |
+| C4 | 不带 `--session` 与 `--continue` | 复用当前工作目录的 CLI 会话（同一 cwd 连续 run 接得上上下文），不报错；跨目录或首次使用要接续旧会话时用 `--continue` / `--session` |
+| C5 | `axon sessions resume <id>` 后再 `axon run --continue` | 追加到该会话：`resume` 只设置 resume 指针，`--continue` 把指针解析回会话后按该会话取历史（指针为空时取最近一段根会话）；普通 `run` 仍走当前目录会话，避免跨目录会话互相串味 |
 | C6 | `--session` 与已保存的 resume 状态冲突 | `--session` 胜出，运行结束后 resume 指针被还原成运行前的值（快照 + 还原，测试见 `selection_snapshot_restores_the_previous_pointer`） |
 
 #### 12.4.5 跨端同步（本次重构的核心验收）
@@ -1556,14 +1597,14 @@ pwsh -File scripts/install-from-source.ps1 -Components all
 | X3 | 两端同时在线，一端发消息 | 另一端实时收到增量，无需刷新 |
 | X4 | 一端中断会话 | 另一端看到中断状态与终态 |
 | X5 | 一端新建会话 | 另一端在 `/sessions` 或左侧菜单能看到新条目 |
-| X6 | 不同渠道发起的轮次 | 每一轮按**发起端**标注来源：TUI 发起的一轮在桌面端显示 tui，反之 desktop；cron 发起的一轮标注「定时」，webhook 车道的一轮标注「Webhook」，都不冒充任何人类入口 |
+| X6 | 不同渠道发起的轮次 | 每一轮按**发起端**标注来源：TUI 发起的一轮在桌面端显示 tui，反之 desktop；cron 发起的一轮标注「定时」，webhook 会话的一轮标注「Webhook」，都不冒充任何人类入口 |
 | X7 | 同一会话跨渠道续聊 | 桌面先聊两轮后，CLI 载入同一会话再聊一轮；历史里三轮分别标 desktop / desktop / cli，`channel_mix_json` 为 `{"desktop":2,"cli":1}` |
 
 记录方式：每条场景留 CDP `OK:` 行或 TUI 快照；未取得真机证据的条目如实登记"未真机验证"，不得用测试覆盖替代。
 
 ### 12.5 延后清单
 
-原清单四项已全部完成：`work_items` / `work_item_history` 拆表（W3-4）、统一 claim（W3-5，`work_item_claim.rs`）、协议字段 `laneId` → `sessionId`（W4-2 / W4-8，全仓无 `lane_id` 残留）、`rollout.sqlite3` 退役（W2-12）。
+原清单四项已全部完成：`work_items` / `work_item_history` 拆表（W3-4）、统一 claim（W3-5，`work_item_claim.rs`）、协议字段统一为 `sessionId`（W4-2 / W4-8）、`rollout.sqlite3` 退役（W2-12）。
 
 | 项 | 现状 | 补的时候必须带什么 |
 | --- | --- | --- |
@@ -1577,7 +1618,7 @@ pwsh -File scripts/install-from-source.ps1 -Components all
 
 ### 13.1 为什么要重置
 
-重构把存储契约、表名、协议字段全部换掉。旧历史与旧产物里出现的 `runtime.sqlite3`、`jarvis_*`、`lane_id`、`payload_ref` 在新代码里已不存在。保留它们会让 `git log`、`git blame`、issue 引用、release 下载页全部指向已删除的结构，读者无法判断哪些是当前事实。
+重构把存储契约、表名、协议字段全部换掉。旧历史与旧产物里出现的 `runtime.sqlite3`、`jarvis_*`、派生会话标识、`payload_ref` 在新代码里已不存在。保留它们会让 `git log`、`git blame`、issue 引用、release 下载页全部指向已删除的结构，读者无法判断哪些是当前事实。
 
 ### 13.2 版本号归零
 

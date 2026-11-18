@@ -109,7 +109,7 @@ axon upgrade [--manifest-url <url>] [--download] [--apply] [--rollback] [--outpu
 - `--format` 既可作为顶层参数（`axon --format json <command> ...`），也可由支持它的子命令自己接收（如 `axon usage`、`axon models`、`axon pricing`、`axon skills`、`axon setup`、`axon providers`、`axon auth`、`axon upgrade`、`axon package`）。子命令帮助里没有 `--format` 的命令（如 `axon config get`、`axon debug session read`）必须用顶层写法。
 - 会话清单有两个入口：`axon sessions list` 列运行态会话（标题、最近活动、轮次），`axon debug session list` 列 Thread。`show`、`read`、`resume`、`fork`、`export`、`replay`、`delete` 两个清单里的 ID 都接受，命令自行解析到同一段 Thread；解析不到时报错并提示这两个清单命令。
 - `axon run --session <id>` 只追加到**已存在**的会话：ID 不存在时直接报错并提示先 `axon sessions list`，不会隐式新建空会话。
-- `axon sessions resume <id>` 只设置 `--continue` 的默认目标，不改变会话内容，输出 `已恢复 Thread: <thread-id>` 与 `- session: <id>`。随后 `axon run --continue` 接续该 Thread 并带入历史；指针为空时取最近一段根会话。普通 `axon run` 仍落在当前工作目录的车道。带 `--session` 的 run 结束后该默认目标保持运行前的值。
+- `axon sessions resume <id>` 只设置 `--continue` 的默认目标，不改变会话内容，输出 `已恢复 Thread: <thread-id>` 与 `- session: <id>`。随后 `axon run --continue` 接续该 Thread 并带入历史；指针为空时取最近一段根会话。普通 `axon run` 仍落在当前工作目录的会话。带 `--session` 的 run 结束后该默认目标保持运行前的值。
 - `axon sessions reset <id>` 保留会话与历史，只轮换运行窗口，输出新的 `run_session_id`；之后的轮次在同一会话上从新窗口起算。
 - 接续既有会话（`--continue`、`--session` 或同一会话的后续 turn）且未传 `--model` 时，本轮沿用该会话记录的模型；只有该模型在配置内已不存在（`[[models]]` 条目被移除或所属 Provider 停用）才回退 `agent.default_model`。TUI `/model` 的显式选择随该轮下传，优先于会话模型。
 - `axon debug channel-metrics` 查询已持久化的渠道性能、缓存与连接指标。`--since-hours` 默认读取最近 24 小时，设置为 `0` 取消时间过滤；可用 `--model`、`--provider` 过滤，`--limit` 控制最多输出的渠道数。只有启用 `channel_balancer.telemetry_persistence_enabled` 后，运行遥测才会写入 `~/.axon/data/channel-metrics`。
