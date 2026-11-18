@@ -1,6 +1,6 @@
 //! Session Index - 线程命名历史索引层。
 //!
-//! 参考 codex-rs `rollout/src/session_index.rs` 设计，实现：
+//! 实现：
 //! - Append-only JSONL 持久化
 //! - 线程名称索引管理（thread_name <-> thread_id 映射）
 //! - 从文件末尾倒序扫描查找最新记录

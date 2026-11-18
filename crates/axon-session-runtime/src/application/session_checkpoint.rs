@@ -19,6 +19,6 @@ pub struct SessionCheckpoint {
     pub time_usage_ms: Option<u64>,
     /// Agent tree 摘要。
     pub agent_tree_summary: Option<String>,
-    /// transcript/rollout 外部引用。
+    /// transcript/运行会话外部引用。
     pub transcript_ref: Option<String>,
 }

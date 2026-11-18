@@ -43,7 +43,7 @@ pub(super) fn stop_session(
     store.get_session_impl(session_id)
 }
 
-/// 停止旧 rollout 并复用 transport Session ID 创建新的 rollout 身份。
+/// 停止旧运行会话并复用 transport Session ID 创建新的运行会话身份。
 pub(super) fn reset_session(
     store: &SqliteRuntimeStore,
     session_id: &DaemonSessionId,

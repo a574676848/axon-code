@@ -286,7 +286,7 @@ fn format_tui_run_output_surfaces_stderr_as_error() {
 fn format_tui_run_output_structures_stderr_runtime_reason() {
     let result = CliRunResult {
         stdout: String::new(),
-        stderr: "error: rollout 会话 JSON 无效".to_owned(),
+        stderr: "error: 会话 JSON 无效".to_owned(),
         exit_code: 2,
     };
 
@@ -306,7 +306,7 @@ fn format_tui_run_output_structures_stderr_runtime_reason() {
         error
             .details
             .iter()
-            .any(|detail| { detail == "原因 error: rollout 会话 JSON 无效" })
+            .any(|detail| { detail == "原因 error: 会话 JSON 无效" })
     );
 }
 

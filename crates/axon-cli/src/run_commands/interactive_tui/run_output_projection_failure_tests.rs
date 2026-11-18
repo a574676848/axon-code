@@ -127,9 +127,9 @@ fn format_tui_run_output_prefers_wire_runtime_error_over_top_level_duplicate() {
                 &json!({
                     "type": "runtimeError",
                     "payload": {
-                        "category": "rollout_store",
-                        "code": "rollout_json_invalid",
-                        "redactedMessage": "rollout 会话 JSON 无效",
+                        "category": "session_store",
+                        "code": "session_json_invalid",
+                        "redactedMessage": "会话 JSON 无效",
                         "visibleOutputEmitted": false,
                         "retryable": false,
                         "replaySafe": true,
@@ -157,16 +157,16 @@ fn format_tui_run_output_prefers_wire_runtime_error_over_top_level_duplicate() {
         .collect::<Vec<_>>();
 
     assert_eq!(errors.len(), 1);
-    assert_eq!(errors[0].error_type.as_deref(), Some("rollout_store"));
+    assert_eq!(errors[0].error_type.as_deref(), Some("session_store"));
     assert_eq!(
         errors[0].error_code.as_deref(),
-        Some("rollout_json_invalid")
+        Some("session_json_invalid")
     );
     assert_eq!(
         errors[0].caused_by_runtime_event.as_deref(),
         Some("event-7")
     );
-    assert_eq!(errors[0].message, "rollout 会话 JSON 无效");
+    assert_eq!(errors[0].message, "会话 JSON 无效");
 }
 
 #[test]

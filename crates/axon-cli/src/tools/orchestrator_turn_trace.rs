@@ -183,7 +183,7 @@ fn parse_trace_id(trace_id: &str) -> Option<(String, Option<u64>)> {
 ///
 /// `sequence` 是 thread 轮次在会话内的序号，与 `replay_chain` 的会话祖先链下标是
 /// 两套编号；用后者当轮序会把祖先会话的记录当成这一轮。轮次事实统一由 thread
-/// 事件流反向重建，不再回查 rollout 账本。
+/// 事件流反向重建，不再回查任何外部账本。
 fn load_turn_record(
     config_path: &std::path::Path,
     session_id: &str,
@@ -424,7 +424,7 @@ mod turn_trace_tests {
     }
 
     #[test]
-    fn missing_rollout_store_reports_reference_invalidation() {
+    fn missing_run_session_reports_reference_invalidation() {
         let root = temp_root("no-store");
 
         let receipt = execute_turn_trace(

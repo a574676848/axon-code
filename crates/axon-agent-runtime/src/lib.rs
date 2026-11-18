@@ -202,8 +202,6 @@ mod context_budget_exports;
 #[path = "core/tools/edit_repair.rs"]
 mod edit_repair;
 mod exports;
-#[path = "runtime/verification/fix_strategy.rs"]
-mod fix_strategy;
 #[path = "core/context/focus_resolver.rs"]
 mod focus_resolver;
 #[path = "git/git_diff_semantic_analyzer.rs"]

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 pub struct SessionRuntimeRecord {
     /// 稳定 Session ID。
     pub session_id: DaemonSessionId,
-    /// 当前 rollout ID。
+    /// 当前运行会话 ID。
     pub run_session_id: String,
     /// 根 Session ID。
     pub root_session_id: DaemonSessionId,

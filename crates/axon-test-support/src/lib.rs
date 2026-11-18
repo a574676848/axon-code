@@ -456,7 +456,7 @@ mod tests {
         ));
         let own_root = scan_dir.join("axon-test-0-own");
         let other_root = scan_dir.join("axon-test-1-other");
-        let not_a_root = scan_dir.join("axon-rollout-test");
+        let not_a_root = scan_dir.join("axon-scan-test");
         for path in [&own_root, &other_root, &not_a_root] {
             fs::create_dir_all(path).expect("扫描目录应可创建");
         }

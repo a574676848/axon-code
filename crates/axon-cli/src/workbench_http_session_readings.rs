@@ -370,7 +370,7 @@ pub(super) fn settled_elapsed_ms(axon_root: &Path, session_id: &str) -> Option<u
 /// 车道的累计用量载荷。
 ///
 /// 按车道 `session_id` 直接读 `session_metrics`（会话投影就是这个键）：账号账本在
-/// rollout 退役后已不在读路径上，绕经 run session 只会读到一行不存在的键并恒给全零。
+/// 该来源已不在读路径上，绕经 run session 只会读到一行不存在的键并恒给全零。
 ///
 /// 总量口径与界面一致：输入、缓存读写、输出与推理相加。运维与计费的分桶仍各自保留。
 ///

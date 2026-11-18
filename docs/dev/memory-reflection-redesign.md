@@ -225,7 +225,7 @@ pub struct ToolReceiptRef {
 
 设计要点：
 
-- `tool_receipts` 只存引用与指纹，正文不在轨迹里。轮次记录（`rollout_turns.record_json`）保存工具回执的 `summary` 与 `output_ref` 指针，输出原文在 `output_ref` 指向的归档文件里；回取走 `builtin.turn_trace` 读归档。Trace 本身有界，可安全随卡片流转。
+- `tool_receipts` 只存引用与指纹，正文不在轨迹里。轮次记录（thread 轮次 metadata）保存工具回执的 `summary` 与 `output_ref` 指针，输出原文在 `output_ref` 指向的归档文件里；回取走 `builtin.turn_trace` 读归档。Trace 本身有界，可安全随卡片流转。
 - `receipt_ref` 必须做到可点查回原文，这是「零截断」的唯一保障。
 - `digest` 不可逆，只用于去重、相似度与漂移比对，不承载语义。
 
@@ -318,7 +318,7 @@ pub struct EvidenceRange {
 | `intent` | string | 是 | 调用目的，与其他内置工具口径一致 |
 | `receipt_ref` | string | 三选一 | 精确回取单条工具回执原文，最省 |
 | `trace_id` | string | 三选一 | 取整轮的工具回执切片 |
-| `session_id` + `sequence` | string + integer | 三选一 | 按会话与轮序定位。`sequence` 是 `rollout_turns.sequence`（会话内轮序），不是 `replay_chain` 的会话祖先链下标，两者不可互换 |
+| `session_id` + `sequence` | string + integer | 三选一 | 按会话与轮序定位。`sequence` 是 thread 轮次序（会话内轮序），不是 `replay_chain` 的会话祖先链下标，两者不可互换 |
 | `max_chars` | integer | 否 | 单次返回上限，默认 8000，上限 32000 |
 
 寻址规则：`trace_id` 决定轮次，`receipt_ref` 决定该轮内的哪一条，两者可以叠加（此时 `receipt_ref` 退化为轮内过滤）；只给 `receipt_ref` 时必须同时给出 `trace_id` 或 `session_id` 加 `sequence`——脱离轮次的 `receipt:<n>` 不唯一，工具直接拒绝而不猜轮次。三组都不给时按当前会话最新一轮取整轮切片。
@@ -416,7 +416,7 @@ pub struct EvidenceRange {
 2. 池文件以 `turn_id` + `trace_id` + `segment_index` 为幂等键。文件损坏、重复写入或补跑重放时按幂等键去重，不会重复入池。
 3. 三本台账（`data/runtime/reflection_processed.jsonl`、`reflection_pool_inflight.json`、`reflection_written.jsonl`）分工明确：processed 记「这一轮跑到哪一步」（`started` / `done`，只有 `done` 让重试整条跳过；崩在中途的只剩 `started`，会重跑）；inflight 记「这批已出池、还没跑完」；written 按「批次键 + 候选指纹」记「这条候选已写进库」，挡住半批失败后的重试重写。
 4. 出池顺序是「先写 inflight、再回写池」。反过来的话，崩在两步之间会让这批卡片既不在池里也不在 inflight 里，整批静默消失。池文件的 `load → append → rewrite` 全程持跨进程锁（`reflection_pool.lock`），避免两个治理 worker 互相吞卡；锁文件超过 60 秒视为崩溃残留，允许抢占。
-5. 池文件不是事实源，只是索引。它损坏时已入池卡片会丢；由于显著度无法从 `rollout_turns` 复原（那里只有证据，没有五维评分），当前不自动重建——重建只能凭零显著度造弱卡，等于往池里灌垃圾并每 30 分钟白烧一次子代理。丢池的代价是「这些轮次不再被反思」，证据本身仍在。
+5. 池文件不是事实源，只是索引。它损坏时已入池卡片会丢；由于显著度无法从 thread 轮次事实复原（那里只有证据，没有五维评分），当前不自动重建——重建只能凭零显著度造弱卡，等于往池里灌垃圾并每 30 分钟白烧一次子代理。丢池的代价是「这些轮次不再被反思」，证据本身仍在。
 
 ### 6.3 时序
 
@@ -520,7 +520,7 @@ turn 收口
 
 ### R1 观测与止血（零行为变更）
 
-- 界面提示已改为由真实结果回写：`publish_turn_artifacts` 在「本轮确有写入」时写「新增、淘汰或归档 N 条记忆」，在「卡片已入池待跑」时写「线索已入候选池」，其余不写提示。规划期恒为 false 的 `memory_updated_info_visible` 字段已删除。提示、`turn_trace` 与回执三份产物必须合成同一条 record 只提交一次：`commit_session_to_rollout` 是按 `(session_id, assistant_part_id)` 整条覆盖，分两次提交会让后一次用旧 record 把前一次刚写的字段抹掉。提示的投影位置是正文时间线尾部，与轮次收尾分割线同一行样式（发丝线加 12px 次级文本），不出现在指标条下的固定带里：它描述的是上一次收口之后发生的事，钉在正文上方会被读成常驻横幅，也会跟着指标条一起脱离阅读顺序。展示层另把提示开头的「本轮」改写成「上一轮」（`ui/src/conversation/reflectionNotice.ts`，由 `npm test` 锁定）：提示总在下一轮才到达界面，原样呈现会被读成正在跑的那一轮。界面停留 30 秒即退场（`REFLECTION_NOTICE_MS`，换会话或提示内容变化重新计时），把时间线尾部还给下一轮正文。
+- 界面提示已改为由真实结果回写：`publish_turn_artifacts` 在「本轮确有写入」时写「新增、淘汰或归档 N 条记忆」，在「卡片已入池待跑」时写「线索已入候选池」，其余不写提示。规划期恒为 false 的 `memory_updated_info_visible` 字段已删除。提示、`turn_trace` 与回执三份产物必须合成同一条 record 只提交一次：轮次提交是按 `(session_id, assistant_part_id)` 整条覆盖，分两次提交会让后一次用旧 record 把前一次刚写的字段抹掉。提示的投影位置是正文时间线尾部，与轮次收尾分割线同一行样式（发丝线加 12px 次级文本），不出现在指标条下的固定带里：它描述的是上一次收口之后发生的事，钉在正文上方会被读成常驻横幅，也会跟着指标条一起脱离阅读顺序。展示层另把提示开头的「本轮」改写成「上一轮」（`ui/src/conversation/reflectionNotice.ts`，由 `npm test` 锁定）：提示总在下一轮才到达界面，原样呈现会被读成正在跑的那一轮。界面停留 30 秒即退场（`REFLECTION_NOTICE_MS`，换会话或提示内容变化重新计时），把时间线尾部还给下一轮正文。
 - 反思回执已在本轮收口处直接落盘：`append_reflection_receipt` 调用 `SelfIterationReceiptStoreRuntime::append_record`，按「有写入 / 已入池待跑 / 跑了无产出」三态分别记 `Persisted` / `NotAttempted` / `SkippedNoChange`；零调用的调度器链路已整体删除，含 `memory_auto_scheduler` 与 `memory_auto_candidate` 两个模块。
 - 来源可审计口径：回执 `source_trace` 固定为 `self-iteration:memory_update:<session>:<assistantPartId>`，按此前缀即可筛出全部反思写入。不新增 `MemorySourceOrigin` 变体，因为反思经运行时统一写入、无法随调用携带来源，新增无消费方的枚举只会增加维护面。
 - 验收：跑一轮真实会话后，运行态回执文件出现记录；按来源维度能筛出反思产物；界面提示与实际写入一致。
@@ -530,7 +530,7 @@ turn 收口
 
 实现状态：已完成（2026-11-13）。契约、工具定义、执行层、指纹采集与轨迹落盘全部落地：`TurnTrace` 含 `EvidenceRange.rejected_count` 与指纹注入入口，`builtin.turn_trace` 打通三选一寻址与归档回取，轮次记录新增 `turn_trace` 字段并由 post-run 采集写回。验收测试：runtime 侧 9 个用例（含 `rejected_count` 与指纹注入），CLI 侧 9 个用例（三选一寻址、引用失效报错、max_chars 边界）。
 
-- 新增 `TurnTrace`、`ToolReceiptRef` 采集，落 `rollout_turns` 扩展字段。`ExplicitSignals` 在本期只落类型与默认值；六字段的真实采集已由 R4 接通，见 9 节。
+- 新增 `TurnTrace`、`ToolReceiptRef` 采集，落 thread 轮次 metadata 扩展字段。`ExplicitSignals` 在本期只落类型与默认值；六字段的真实采集已由 R4 接通，见 9 节。
 - 新增 `builtin.turn_trace`，打通 `receipt_ref` 到原文的点查。
 - 验收：任取一轮历史会话，能凭回执引用取回工具原文；超过 `max_chars` 时 `truncated` 与总量如实上报。
 - 回滚：新工具与采集都可独立关闭，关闭后退回摘要输入。
@@ -588,7 +588,7 @@ turn 收口
 
 实现状态：已完成（2026-11-13）。规则层落在 `persona_rules.rs`：纯函数、零 IO、零模型，只输出一档精力与一句可读原因。篇幅与语气不另开维度——人格域的 `base_voice` 已经以 `fatigue_level` 为输入做收敛，再给一套平行档位只会出现两套口径互相打架，且没有消费方。
 
-- **信号真填**：`collect_explicit_signals` 从 rollout 账本与时钟取字段。`consecutive_turns` 取本轮轮序加一；`turns_last_30min` 按落盘时间在 30 分钟窗口内计数（治理队列异步消费，窗口会整体后移，因此它衡量「这台机器最近多密」而不是「用户几点说的」）；`input_len_delta` 与 `failure_streak` 从最近 24 轮投影，`failure_streak` 只统计本轮之前；`hour_bucket` 由 `hour_bucket_of` 按东八区常量换算（`axon_time` 只有 UTC、不引时区库，偏移做成参数以便换地）；`affect_sequence` 自举——收口时把本轮评估出的 `user_affect` 追加进轨迹，下一轮读回上一轮序列，不新增存储，也不编造 `unknown`。
+- **信号真填**：`collect_explicit_signals` 从 thread 轮次事实与时钟取字段。`consecutive_turns` 取本轮轮序加一；`turns_last_30min` 按落盘时间在 30 分钟窗口内计数（治理队列异步消费，窗口会整体后移，因此它衡量「这台机器最近多密」而不是「用户几点说的」）；`input_len_delta` 与 `failure_streak` 从最近 24 轮投影，`failure_streak` 只统计本轮之前；`hour_bucket` 由 `hour_bucket_of` 按东八区常量换算（`axon_time` 只有 UTC、不引时区库，偏移做成参数以便换地）；`affect_sequence` 自举——收口时把本轮评估出的 `user_affect` 追加进轨迹，下一轮读回上一轮序列，不新增存储，也不编造 `unknown`。
 - **性能**：账本读取用 `json_extract` 只做标量投影，不反序列化整条 `record_json`。单条 record 含完整工具回执与事件流，24 条可达数百 KB，整条解析的成本远超它提供的信息量；投影后只取 prompt 长度、failure 存在性与 affect 序列，全部在 SQLite 侧完成。采集失败写 warning 后按默认值结算，不让「规则层从不生效」变成第二个静默故障。
 - **接入方式（三条真实通路）**：`settle_persona_turn` 收 `signals`，规则层只补评估器没给的部分。
   1. `fatigue_level`：评估器缺席时用规则档，模型给了就以模型为准；它进 `resolve_expression` 的 `base_voice`，直接决定表达收敛强度。
@@ -607,7 +607,7 @@ turn 收口
 
 | 源 | 用途 |
 |---|---|
-| `rollout_turns`（`session_id` + `sequence` + `record_json`） | 轮次骨架与工具回执指针；每条回执带 `summary` 与 `output_ref`，不含输出原文 |
+| thread 轮次 metadata（`session_id` + `sequence` + record） | 轮次骨架与工具回执指针；每条回执带 `summary` 与 `output_ref`，不含输出原文 |
 | `output_ref` 指向的归档文件 | 工具输出的完整原文，按引用定位，受保留窗口约束 |
 | `memory_records` / `memory_supersessions` | 既有产出与版本链，用于去重与冲突校验 |
 | `memory_runtime_quality` | turn 级计数基线，用于触发率与产出率对比 |
@@ -717,4 +717,4 @@ turn 收口
 - 执行分发：同文件 `match request.kind` 分支加 `ToolKind::TurnTrace => execute_turn_trace(tool_call, context)`。
 - 分类分支：`run_progress_views.rs` 的显示名与 `run_tool_result_cache.rs` 的缓存分类各需一个分支，漏了编译器会提示。
 - 执行体范式：`tools/orchestrator_builtin.rs` 的 `execute_memory_search`。用 `context.config_path` 取本地根、`tool_call.input.as_json()` 取参、`failed_tool_input_receipt` 报参数错误。
-- 数据链路：`config_path` 推出运行态根，归档目录在其下；轮次骨架走 `run_rollout_store::load_session_turn(config_path, session_id, assistant_part_id)`，因此 `sequence` 必须先映射到 `assistant_part_id`；工具原文由回执 `output_ref` 指向的归档文件提供。
+- 数据链路：`config_path` 推出运行态根，归档目录在其下；轮次骨架改由 thread 轮次事实反向重建（`run_thread_queries.rs` 的 `turn_record` / `turn_record_by_sequence`），因此 `sequence` 必须先映射到 `assistant_part_id`；工具原文由回执 `output_ref` 指向的归档文件提供。

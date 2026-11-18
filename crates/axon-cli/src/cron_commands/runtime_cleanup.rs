@@ -301,7 +301,7 @@ pub(super) fn protected_runtime_session_ids(
     Ok(protected)
 }
 
-/// 精确统计 rollout stale IDs 对应的 runtime Session family，不产生写入。
+/// 精确统计待清理会话 ID 对应的 runtime Session family，不产生写入。
 pub(super) fn count_runtime_session_families(
     root: &Path,
     session_ids: &[String],
@@ -330,7 +330,7 @@ pub(super) fn count_runtime_session_families(
     Ok(counts)
 }
 
-/// 按 rollout stale IDs 清理 runtime Session family。
+/// 按待清理会话 ID 清理 runtime Session family。
 pub(super) fn cleanup_runtime_session_families(
     root: &Path,
     session_ids: &[String],
@@ -519,8 +519,8 @@ fn outbox_database_path(root: &Path) -> std::path::PathBuf {
 
 /// 运行态侧自判的过期会话：最后一次活动早于保留期、已不在推进、且无在途 Execution。
 ///
-/// rollout 索引只覆盖一部分会话（子代理车道与历史 desktop 车道不在其中），
-/// 只按 rollout 取候选会让这些会话根记录永久滞留，其事件也就永远没有回收入口。
+/// 单一会话索引只覆盖一部分会话（子代理车道与历史 desktop 车道不在其中），
+/// 只按该索引取候选会让这些会话根记录永久滞留，其事件也就永远没有回收入口。
 /// 在途判定按状态过滤：终态工作项不构成引用，真正拦删除的是排队/等待/运行中的行。
 pub(super) fn stale_runtime_session_ids(
     root: &Path,

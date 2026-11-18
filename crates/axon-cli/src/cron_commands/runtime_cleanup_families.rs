@@ -287,7 +287,7 @@ pub(super) fn delete_session_families_by_ids(
         })
         .map_err(|_| "Daemon runtime Session family Execution 引用复核失败".to_owned())?;
     if active > 0 || executions > 0 {
-        return Err("Daemon runtime Session family 已重新活跃，保留 rollout 重试锚点".to_owned());
+        return Err("Daemon runtime Session family 已重新活跃，保留重试锚点".to_owned());
     }
     // 派生投影与入站事实同样属于会话族：留着就是指向已删会话的孤儿行，
     // 既算进积压统计，也会让「已收到」的派生状态永远不收敛。

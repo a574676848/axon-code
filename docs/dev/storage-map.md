@@ -16,12 +16,12 @@
 | CLI 侧 data 目录 `runtime_axon_data_path_static` | `crates/axon-cli/src/runtime/paths.rs:26` |
 | CLI 侧 `RUNTIME_DATA_DIR = "data"` | `crates/axon-cli/src/daemon_commands.rs:22` |
 | Daemon 侧 `RuntimePaths::new`（`root/data`、`root/data/logs`） | `crates/axon-daemon/src/infrastructure/runtime_paths.rs:19-27` |
-| Daemon 侧 `runtime.sqlite3` 路径 | `crates/axon-daemon/src/infrastructure/runtime_paths.rs:30-32` |
+| Daemon 侧 `control.sqlite3` / `outbox.sqlite3` 路径 | `crates/axon-daemon/src/infrastructure/runtime_paths.rs:28-36`（`control_database` `:30-31`、`outbox_database` `:35-36`） |
 | Session 持久化目录 `session_store_path(root) = root/data/sessions` | `crates/axon-session/src/infrastructure/mod.rs:61-63` |
 | 目录名常量 `SESSION_STORE_DIR = "sessions"` | `crates/axon-session/src/infrastructure/mod.rs:57` |
 | `axon run` / daemon 共享 runtime 库的唯一解析点 | `crates/axon-cli/src/run_commands/run_agent_store.rs:12-15` |
-| `SqliteRuntimeStore::from_root` | `crates/axon-session/src/infrastructure/sqlite_runtime_store.rs:182-184` |
-| `runtime.sqlite3` 文件名常量 `DATABASE_FILE_NAME` | `crates/axon-session/src/infrastructure/sqlite_runtime_store.rs:91` |
+| `SqliteRuntimeStore::from_root` | `crates/axon-session/src/infrastructure/sqlite_runtime_store.rs:287-289` |
+| 运行态两库的文件名常量 `CONTROL_DATABASE_FILE_NAME` / `OUTBOX_DATABASE_FILE_NAME` | `crates/axon-session/src/infrastructure/sqlite_runtime_store.rs:100`、`:102`（原 `DATABASE_FILE_NAME` 已随分库删除） |
 | 事件正文归档根 `event_archive_root()` | `crates/axon-session/src/infrastructure/sqlite_runtime_store.rs:222-227` |
 
 ---
@@ -32,31 +32,25 @@
 
 | # | 文件名常量 | 文件名字面量定义位置 | 物理路径 | 所属 crate | 创建/打开代码位置 |
 | --- | --- | --- | --- | --- | --- |
-| 1 | `DATABASE_FILE_NAME` | `crates/axon-session/src/infrastructure/sqlite_runtime_store.rs:91` | `<axon_root>/data/runtime.sqlite3` | `axon-session` | `SqliteRuntimeStore::from_root` `crates/axon-session/src/infrastructure/sqlite_runtime_store.rs:182`；实际 `Connection::open` 在 `.../sqlite_runtime_store/connection_pool.rs:92` |
-| 2 | `CLI_ROLLOUT_DB_FILE` | `crates/axon-cli/src/run_commands/run_rollout_store.rs:51` | `<axon_root>/data/sessions/rollout.sqlite3`（`session_store_path(...).join(...)`，`crates/axon-cli/src/run_commands/run_rollout_store.rs:508-510`） | `axon-cli` | `RolloutSqliteStore::open` `crates/axon-cli/src/run_commands/run_rollout_store.rs:154-159` → `schema::open_connection` `.../run_rollout_store/schema.rs:125-141` |
-| 2b | 只读变体 | 同上 | 同上 | `axon-cli` | `RolloutSqliteStore::open_read_only` `crates/axon-cli/src/run_commands/run_rollout_store.rs:162-165` → `.../run_rollout_store/schema.rs:197-207`（`SQLITE_OPEN_READ_ONLY`） |
-| 3 | `CRON_DATABASE_FILE` | `crates/axon-cli/src/cron_commands/repository.rs:17` | `<axon_root>/cron/cron.sqlite3`（`crates/axon-cli/src/cron_commands/repository.rs:41-45`） | `axon-cli` | `CronRepository::open` `crates/axon-cli/src/cron_commands/repository.rs:40-49` → `connection()` `crates/axon-cli/src/cron_commands/repository.rs:350` |
-| 4 | `USAGE_DATABASE_FILE` | `crates/axon-cli/src/usage_statistics/repository.rs:27` | `<axon_root>/usage/usage.sqlite3`（`crates/axon-cli/src/usage_statistics/repository.rs:54-57`；清理侧同一路径 `crates/axon-cli/src/usage_statistics/mod.rs:103`） | `axon-cli` | `UsageRepository::open` `crates/axon-cli/src/usage_statistics/repository.rs:53-73` |
-| 5 | `"persona.sqlite3"`（路径拼接，无独立常量） | `crates/axon-persona/src/infrastructure/sqlite_persona_store.rs:172-179` | `<axon_root>/data/persona/persona.sqlite3` | `axon-persona` | `PersonaStore::open` `crates/axon-persona/src/infrastructure/sqlite_persona_store.rs:200-213`；只读 `open_read_only` `:224-234` |
-| 6 | `GOVERNANCE_DB_FILE` | `crates/axon-cli/src/run_commands/run_post_run_governance_store.rs:10` | `<axon_root>/data/sessions/post_run_governance.sqlite3`（`crates/axon-cli/src/run_commands/run_post_run_governance_store.rs:36-40`） | `axon-cli` | `GovernanceQueue::open` `crates/axon-cli/src/run_commands/run_post_run_governance_store.rs:35-56` |
-| 7 | `MCP_SCHEMA_CACHE_FILE` | `crates/axon-mcp-runtime/src/runtime/mcp_schema_cache.rs:14`；清理侧同名常量 `crates/axon-cli/src/cron_commands/session_cleanup_files.rs:24` | `<axon_root>/cache/mcp_tool_schemas.sqlite3`（`crates/axon-mcp-runtime/src/runtime/mcp_schema_cache.rs:228-230`） | `axon-mcp-runtime`（写读）/`axon-cli`（清理删除行） | `open_cache` `crates/axon-mcp-runtime/src/runtime/mcp_schema_cache.rs:197-209` |
-| 8 | `MEMORY_DB_FILE = "memory.db"` | `crates/axon-memory/src/lib.rs:156` | `<axon_root>/data/memory/memory.db`（`MEMORY_DATA_PARENT_DIR`/`MEMORY_DATA_DIR` `crates/axon-memory/src/lib.rs:152-154`；只读侧 `<root>/data/memory` `crates/axon-memory-read/src/lib.rs:144`） | `axon-memory` | `crates/axon-memory/src/store/store_schema.rs:187-195` |
-| 9 | 测试 fixture 私有库（非产品存储） | `crates/axon-cli/src/cron_commands/session_cleanup_sqlite.rs:106` 的 `maintenance.sqlite3` 仅出现在 `#[cfg(test)]` | — | — | 仅测试 |
+| 1 | `CONTROL_DATABASE_FILE_NAME` / `OUTBOX_DATABASE_FILE_NAME` | `crates/axon-session/src/infrastructure/sqlite_runtime_store.rs:100`、`:102` | `<axon_root>/data/control.sqlite3`、`<axon_root>/data/outbox.sqlite3`（`SqliteRuntimeStore::build` 在库目录下 `join`，`sqlite_runtime_store.rs:233-246`） | `axon-session` | `SqliteRuntimeStore::from_root` `crates/axon-session/src/infrastructure/sqlite_runtime_store.rs:287-289`；实际 `Connection::open` 在 `.../sqlite_runtime_store/connection_pool.rs:97` |
+| 2 | `CRON_DATABASE_FILE` | `crates/axon-cli/src/cron_commands/repository.rs:17` | `<axon_root>/cron/cron.sqlite3`（`crates/axon-cli/src/cron_commands/repository.rs:41-45`） | `axon-cli` | `CronRepository::open` `crates/axon-cli/src/cron_commands/repository.rs:40-49` → `connection()` `crates/axon-cli/src/cron_commands/repository.rs:350` |
+| 3 | `USAGE_DATABASE_FILE` | `crates/axon-cli/src/usage_statistics/repository.rs:27` | `<axon_root>/usage/usage.sqlite3`（`crates/axon-cli/src/usage_statistics/repository.rs:54-57`；清理侧同一路径 `crates/axon-cli/src/usage_statistics/mod.rs:103`） | `axon-cli` | `UsageRepository::open` `crates/axon-cli/src/usage_statistics/repository.rs:49-73` |
+| 4 | `"persona.sqlite3"`（路径拼接，无独立常量） | `crates/axon-persona/src/infrastructure/sqlite_persona_store.rs:172-179` | `<axon_root>/data/persona/persona.sqlite3` | `axon-persona` | `PersonaStore::open` `crates/axon-persona/src/infrastructure/sqlite_persona_store.rs:200-213`；只读 `open_read_only` `:224-234` |
+| 5 | `GOVERNANCE_DB_FILE` | `crates/axon-cli/src/run_commands/run_post_run_governance_store.rs:10` | `<axon_root>/data/sessions/post_run_governance.sqlite3`（`crates/axon-cli/src/run_commands/run_post_run_governance_store.rs:36-40`） | `axon-cli` | `GovernanceQueue::open` `crates/axon-cli/src/run_commands/run_post_run_governance_store.rs:36-56` |
+| 6 | `MCP_SCHEMA_CACHE_FILE` | `crates/axon-mcp-runtime/src/runtime/mcp_schema_cache.rs:14`；清理侧同名常量 `crates/axon-cli/src/cron_commands/session_cleanup_files.rs:24` | `<axon_root>/cache/mcp_tool_schemas.sqlite3`（`crates/axon-mcp-runtime/src/runtime/mcp_schema_cache.rs:228-230`） | `axon-mcp-runtime`（写读）/`axon-cli`（清理删除行） | `open_cache` `crates/axon-mcp-runtime/src/runtime/mcp_schema_cache.rs:197-209` |
+| 7 | `MEMORY_DB_FILE = "memory.db"` | `crates/axon-memory/src/lib.rs:156` | `<axon_root>/data/memory/memory.db`（`MEMORY_DATA_PARENT_DIR`/`MEMORY_DATA_DIR` `crates/axon-memory/src/lib.rs:152-154`；只读侧 `<root>/data/memory` `crates/axon-memory-read/src/lib.rs:144`） | `axon-memory` | `crates/axon-memory/src/store/store_schema.rs:187-195` |
+| 8 | 测试 fixture 私有库（非产品存储） | `crates/axon-cli/src/cron_commands/session_cleanup_sqlite.rs:106` 的 `maintenance.sqlite3` 仅出现在 `#[cfg(test)]` | — | — | 仅测试 |
 
 补充事实（SQLite 库级）：
 
 - 会话清理会**递归扫描 `<axon_root>` 下所有 `*.sqlite3`** 做 VACUUM 维护：后缀常量 `crates/axon-cli/src/cron_commands/session_cleanup_sqlite.rs:11`，扫描 `:33-64`，仅当 `PRAGMA freelist_count > 0` 且 `PRAGMA quick_check(1) == ok` 才执行 `VACUUM;`（`:66-81`）。
-- rollout、usage、governance 三个库在打开时设置 `auto_vacuum = INCREMENTAL`：`crates/axon-cli/src/run_commands/run_rollout_store/schema.rs:30`、`crates/axon-cli/src/usage_statistics/repository/retention.rs:400-422`、`crates/axon-cli/src/run_commands/run_post_run_governance_store.rs:48`。`runtime.sqlite3` 与 `cron.sqlite3`、`persona.sqlite3`、`mcp_tool_schemas.sqlite3` 的打开路径**没有** `PRAGMA auto_vacuum` 语句（依据：全仓 `auto_vacuum` 命中点仅上述三处 + `crates/axon-cli/src/cron_commands/session_cleanup_sqlite.rs:111` 的测试 fixture）。
+- usage、governance 两个库在打开时设置 `auto_vacuum = INCREMENTAL`：`crates/axon-cli/src/usage_statistics/repository/retention.rs:400-422`、`crates/axon-cli/src/run_commands/run_post_run_governance_store.rs:48`。运行态库（`control.sqlite3` 与 `outbox.sqlite3`）也会设 `INCREMENTAL`，但仅对**空库**在建表前生效（`crates/axon-session/src/infrastructure/sqlite_runtime_store/schema.rs:75-90`，调用点 `:113`）；`cron.sqlite3`、`persona.sqlite3`、`mcp_tool_schemas.sqlite3` 的打开路径**没有** `PRAGMA auto_vacuum` 语句（依据：全仓 `auto_vacuum` 命中点为上述各处 + `crates/axon-cli/src/cron_commands/session_cleanup_sqlite.rs:111` 的测试 fixture）。
 
-### 1.2 各 SQLite 库的表清单（除 runtime 见第 2 节）
+
+### 1.2 各 SQLite 库的表清单（除运行态库见第 2 节）
 
 | 库 | 表 | 定义位置 |
 | --- | --- | --- |
-| `rollout.sqlite3` | `rollout_sessions` | `crates/axon-cli/src/run_commands/run_rollout_store/schema.rs:46-57` |
-| | `rollout_turns` | 同上 `:58-67`（PK `(session_id, sequence)`，UNIQUE `(session_id, assistant_part_id)`） |
-| | `rollout_events` | 同上 `:68-75`（PK `(session_id, sequence)`） |
-| | `rollout_current_session` | 同上 `:76-80`（单例键 `CHECK (singleton_key = 1)`） |
-| | 索引 `idx_rollout_created_at`、`idx_rollout_parent` | 同上 `:81-84` |
 | `cron.sqlite3` | `cron_jobs` | `crates/axon-cli/src/cron_commands/repository_schema.rs:31` |
 | | `cron_runs` | `crates/axon-cli/src/cron_commands/repository_schema.rs:46` |
 | | `cron_agent_config` | `crates/axon-cli/src/cron_commands/repository.rs:367` |
@@ -99,7 +93,7 @@
 | 附件归档 | `<data>/attachments`（子目录 `blobs`、`previews`） | `ATTACHMENT_ARCHIVE_DIR_NAME = "attachments"` `crates/axon-agent-runtime/src/attachment_runtime.rs:39`；`BLOB_DIR_NAME` `:47`、`PREVIEW_DIR_NAME` `:48`；清理侧 `crates/axon-cli/src/cron_commands/session_cleanup_files.rs:30` | `axon-agent-runtime` |
 | Memory 倒排索引（Tantivy） | `<memory_dir>/tantivy` | `MEMORY_TANTIVY_DIR` `crates/axon-memory/src/lib.rs:158` | `axon-memory` |
 | Memory 向量索引（HNSW 镜像） | `<memory_dir>/hnsw.idx` | `MEMORY_HNSW_FILE` `crates/axon-memory/src/lib.rs:160` | `axon-memory` |
-| Memory 工作区产物 | `raw_memories.md`、`rollout_summaries/`、`extensions/` | `crates/axon-memory/src/workspace/artifacts.rs:13,15,17` | `axon-memory` |
+| Memory 工作区产物 | `raw_memories.md`、`turn_summaries/`、`extensions/` | `crates/axon-memory/src/workspace/artifacts.rs:13,15,17` | `axon-memory` |
 | 语义检索索引（workspace） | `<workspace>/.axon` 侧 `search-index/index.json`，格式版本 1、候选 schema 版本 3 | `SEARCH_INDEX_DIRECTORY = "search-index"` / `SEARCH_INDEX_FILE = "index.json"` `crates/axon-agent-runtime/src/core/tools/search_index/model.rs:10-11`；`INDEX_FORMAT_VERSION` `:9`；`SEARCH_INDEX_SCHEMA_VERSION` `:24` | `axon-agent-runtime` |
 | 会话索引 | `session_index.jsonl` | `crates/axon-agent-runtime/src/core/session/session_index.rs:17` | `axon-agent-runtime` |
 | 自迭代回执 | `self_iteration_receipts.jsonl` | `crates/axon-agent-runtime/src/runtime/self_improvement/self_iteration_receipt_store.rs:16` | `axon-agent-runtime` |
@@ -133,7 +127,7 @@
 
 ---
 
-## 2. `runtime.sqlite3` 完整表清单与职责
+## 2. 运行态库（`control.sqlite3` / `outbox.sqlite3`）完整表清单与职责
 
 Schema 全部定义在一个 DDL 批次：`crates/axon-session/src/infrastructure/sqlite_runtime_store/schema.rs:107-499`。
 Schema 身份常量 `SCHEMA_IDENTITY = "jarvis-runtime-goal-v1"`：`.../schema.rs:9`；身份表与校验：`:500-516`。
@@ -314,7 +308,7 @@ Schema 身份常量 `SCHEMA_IDENTITY = "jarvis-runtime-goal-v1"`：`.../schema.r
 
 ## 3. 写入路径与频率
 
-### 3.1 会写 `runtime.sqlite3` 的全部入口
+### 3.1 会写运行态库的全部入口
 
 | # | 入口 | 代码位置 | 写入的表 | 运行环境 |
 | --- | --- | --- | --- | --- |
@@ -429,7 +423,7 @@ Schema 身份常量 `SCHEMA_IDENTITY = "jarvis-runtime-goal-v1"`：`.../schema.r
 | Ledger 上下文读 | `crates/axon-cli/src/run_commands/run_request_payload.rs:305-320` |
 | 历史装载（读） | `crates/axon-cli/src/run_commands/daemon_history_loader.rs:32`、`:49`、`:67` |
 
-CLI 侧**没有** `session_events` 的追加调用点（全仓 `append_event*` 命中里，CLI 侧仅 `crates/axon-cli/src/run_commands/run_rollout_store/api.rs:239` 的 rollout 事件与 `crates/axon-cli/src/daemon_host_runner_question_durable.rs:39` 的问答帧）。
+CLI 侧**没有** `session_events` 的追加调用点（全仓 `append_event*` 命中里，CLI 侧仅 `crates/axon-cli/src/daemon_host_runner_question_durable.rs:39` 的问答帧）。
 
 **Cron**
 
@@ -441,40 +435,42 @@ CLI 侧**没有** `session_events` 的追加调用点（全仓 `append_event*` �
 | 事件归档（先归档再删） | `crates/axon-cli/src/cron_commands/runtime_event_archive.rs:65-95`、`:100-139` |
 | 悬空 payload_ref 修复 | `crates/axon-cli/src/cron_commands/runtime_cleanup_session_events.rs:194` |
 | 全库 VACUUM | `crates/axon-cli/src/cron_commands/session_cleanup_sqlite.rs:16-31` |
-| 会话族清理（rollout + 目录） | `crates/axon-cli/src/cron_commands/session_family_cleanup.rs` |
+| 会话族清理（thread 事件面 + 目录） | `crates/axon-cli/src/cron_commands/session_family_cleanup.rs` |
 | 文件面清理 | `crates/axon-cli/src/cron_commands/session_cleanup_files.rs:49-117` |
 
 ---
 
 ## 4. 连接与 PRAGMA 配置
 
-### 4.1 `runtime.sqlite3`（`axon-session` 连接池）
+### 4.1 运行态库（`axon-session` 连接池：`control.sqlite3` 与 `outbox.sqlite3`）
 
 | 事实 | 位置 |
 | --- | --- |
-| 连接池结构 `ConnectionPool { path, busy_timeout, idle: Mutex<Vec<Connection>> }` | `crates/axon-session/src/infrastructure/sqlite_runtime_store/connection_pool.rs:40-44` |
+| 连接池结构 `ConnectionPool { path, busy_timeout, idle: Mutex<Vec<Connection>> }` | `crates/axon-session/src/infrastructure/sqlite_runtime_store/connection_pool.rs:45-49` |
 | 空闲连接上限 `MAX_IDLE_CONNECTIONS = 8` | `connection_pool.rs:16` |
-| 写锁等待 `BUSY_TIMEOUT_MS = 5_000` → `DEFAULT_BUSY_TIMEOUT` | `connection_pool.rs:18-20` |
-| 逐连接 PRAGMA 批次 | `connection_pool.rs:34-35`：`PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA wal_autocheckpoint = 1000;` |
-| 打开顺序：`create_dir_all(parent)` → `Connection::open` → `busy_timeout` → `execute_batch(PRAGMA)` | `connection_pool.rs:87-103` |
-| `journal_mode = WAL`：只在首次建库路径确保一次（库级持久属性） | `schema.rs:32-41`（`ensure_wal_journal_mode`），调用点 `schema.rs:65` |
-| 取用/归还（`PooledConnection` + `Drop` 归还） | `connection_pool.rs:71-85`、`:105-111`、`:113-139` |
-| 连接池在 Store 内共享（`Arc<ConnectionPool>`） | `sqlite_runtime_store.rs:122-128` |
-| 注入自定义 busy_timeout 的构造器 | `sqlite_runtime_store.rs:149-160` |
-| 只读查询复用池连接 `with_read_connection` | `sqlite_runtime_store.rs:172-178` |
-| WAL 被动回写 `PRAGMA wal_checkpoint(PASSIVE)` | `sqlite_runtime_store.rs:205-216` |
+| 写锁等待 `BUSY_TIMEOUT_MS = 1_000` → `DEFAULT_BUSY_TIMEOUT` | `connection_pool.rs:18-20` |
+| 逐连接 PRAGMA 批次 | `connection_pool.rs:39-40`：`PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL; PRAGMA journal_size_limit = 67108864; PRAGMA wal_autocheckpoint = 1000;` |
+| 打开顺序：`create_dir_all(parent)` → `Connection::open` → `busy_timeout` → `execute_batch(PRAGMA)` | `connection_pool.rs:92-108` |
+| `journal_mode = WAL`：只在首次建库路径确保一次（库级持久属性），不逐连接切换 | `schema.rs:50-63`（`ensure_wal_journal_mode`），调用点 `schema.rs:108` |
+| 取用/归还（`PooledConnection` + `Drop` 归还） | `connection_pool.rs:76-90`、`:110-115`、`:118-144` |
+| 连接池在 Store 内共享（每个库一份 `Arc<DatabaseHandle>`，内部持有 `ConnectionPool`） | `sqlite_runtime_store.rs:139-157` |
+| 注入自定义 busy_timeout 的构造器 | `sqlite_runtime_store.rs:229-231`（`with_busy_timeout`） |
+| 只读查询复用池连接 `with_read_connection` | `sqlite_runtime_store.rs:268` |
+| WAL 被动回写 `PRAGMA wal_checkpoint(PASSIVE)`，回写结果经 `WalCheckpoint` 暴露 | `sqlite_runtime_store.rs:198-209` |
 
-**是否只读打开**：`runtime.sqlite3` 在 `axon-session` 内**没有**只读连接；`SqliteRuntimeStore` 只有可写连接池。Cron 清理侧对同一文件用 `SQLITE_OPEN_READ_ONLY` 打开做候选统计与过期会话扫描（`crates/axon-cli/src/cron_commands/runtime_cleanup.rs:594-604`，调用点 `:623`）。
+`synchronous` 取 `NORMAL` 而非 `FULL`：`FULL` 让每批流式帧都承担一次持久性代价，直接决定单帧延迟上限；`NORMAL` 下 `COMMIT` 不逐事务 fsync，只在 checkpoint 与显式同步点落盘，代价是断电可能丢失最近一小段已提交事务但库结构不损坏，崩溃恢复按「以日志为准回退水位」设计，可接受该语义弱化（判据见 `connection_pool.rs:21-38` 的常量文档）。
 
-**`auto_vacuum`**：`runtime.sqlite3` 的所有打开路径都没有 `PRAGMA auto_vacuum` 语句。
+
+**是否只读打开**：运行态库（`control.sqlite3` / `outbox.sqlite3`）在 `axon-session` 内**没有**只读连接；`SqliteRuntimeStore` 只有可写连接池。Cron 清理侧对同一文件用 `SQLITE_OPEN_READ_ONLY` 打开做候选统计与过期会话扫描（`crates/axon-cli/src/cron_commands/runtime_cleanup.rs:594-604`，调用点 `:623`）。
+
+**`auto_vacuum`**：运行态库并非从不设置 `auto_vacuum`。`ensure_incremental_auto_vacuum`（`schema.rs:75-90`，调用点 `schema.rs:113`）只对**空库**在建表之前设 `INCREMENTAL`；既有非空库保持 `NONE`，对它执行 `PRAGMA incremental_vacuum` 是空操作，要改只能整库 VACUUM。
 
 ### 4.2 其他库
 
 | 库 | journal_mode | synchronous | busy_timeout | foreign_keys | journal_size_limit | auto_vacuum | 只读打开 | 位置 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `rollout.sqlite3` | `WAL`（`pragma_update`） | 未设置（SQLite 默认） | 5_000ms | `ON` | 未设置 | `INCREMENTAL`（`schema.rs:30`） | 有（`schema.rs:197-207`） | `crates/axon-cli/src/run_commands/run_rollout_store/schema.rs:125-141` |
 | `cron.sqlite3` | `WAL`（批次内） | `NORMAL` | 5_000ms | `ON` | 未设置 | 未设置 | 无 | `crates/axon-cli/src/cron_commands/repository.rs:347-372`（PRAGMA 批次 `:353-355`） |
-| `usage.sqlite3` | `WAL`（批次内） | `NORMAL` | 250ms（主）/ 50ms（源库） | `ON` | 未设置 | `INCREMENTAL`（`retention.rs:400-422`，含 VACUUM 重试 3 次） | 未设置 | `crates/axon-cli/src/usage_statistics/repository.rs:58-66`、`:28-29`、`:516` |
+| `usage.sqlite3` | `WAL`（批次内） | `NORMAL` | 250ms（`USAGE_BUSY_TIMEOUT_MS`） | `ON` | 未设置 | `INCREMENTAL`（`retention.rs:400-422`，含 VACUUM 重试 3 次） | 未设置 | `crates/axon-cli/src/usage_statistics/repository.rs:49-73`（PRAGMA 批次 `:60`、超时常量 `:25`） |
 | `persona.sqlite3` | `WAL`（`ensure_wal`，`inline fn` 于 `:613-618`） | 未设置 | 写：`PERSONA_WRITE_BUSY_TIMEOUT_MS`；读：`PERSONA_READ_BUSY_TIMEOUT_MS` | 未设置 | 未设置 | 未设置 | 有（`open_read_only` `:224-234`，语义上复用同一 `Connection::open`） | `crates/axon-persona/src/infrastructure/sqlite_persona_store.rs:205-212`、`:228-232` |
 | `post_run_governance.sqlite3` | 未设置（默认） | 未设置 | 2_000ms | 未设置 | 未设置 | `INCREMENTAL`（`:48`） | 无 | `crates/axon-cli/src/run_commands/run_post_run_governance_store.rs:45-52` |
 | `mcp_tool_schemas.sqlite3` | 未设置 | 未设置 | 2_000ms | 未设置 | 未设置 | 未设置 | 无 | `crates/axon-mcp-runtime/src/runtime/mcp_schema_cache.rs:203-206` |
@@ -488,7 +484,6 @@ CLI 侧**没有** `session_events` 的追加调用点（全仓 `append_event*` �
 | Cron 会话族清理 | `busy_timeout(SQLITE_BUSY_TIMEOUT)` + `PRAGMA incremental_vacuum(256)` | `crates/axon-cli/src/cron_commands/session_family_cleanup.rs:375`、`:389` |
 | Cron 文件面清理（mcp schema 缓存行） | `busy_timeout(SQLITE_BUSY_TIMEOUT)` | `crates/axon-cli/src/cron_commands/session_cleanup_files.rs:245` |
 | Cron 全库 VACUUM | `busy_timeout(2s)`，`VACUUM;` | `crates/axon-cli/src/cron_commands/session_cleanup_sqlite.rs:13`、`:90-97`、`:77-79` |
-| rollout 保留清理 | `PRAGMA incremental_vacuum(批次)` | `crates/axon-cli/src/run_commands/run_rollout_store/retention.rs:217` |
 | governance 保留清理 | `PRAGMA incremental_vacuum(256)` | `crates/axon-cli/src/run_commands/run_post_run_governance_store.rs:205` |
 | cron 历史清理 | `PRAGMA incremental_vacuum(256)` | `crates/axon-cli/src/cron_commands/repository.rs:288` |
 
@@ -594,11 +589,10 @@ trait 对象实现：`impl RuntimeStore for SqliteRuntimeStore`，`crates/axon-s
 | 车道 run_session 解析 | 裸 SQL 读 `session_runtimes` `crates/axon-cli/src/workbench_http_lane_readings.rs:248` |
 | 提问计数 | 裸 SQL 读 `jarvis_user_questions` `crates/axon-cli/src/workbench_http_adapter.rs:214` |
 | Ledger 上下文 | `list_active_goals_for_scope` / `get_latest_decision` / `list_unread_results` `crates/axon-cli/src/run_commands/run_request_payload.rs:309-320` |
-| 子代理名册 | 读 rollout 只读库 `crates/axon-cli/src/workbench_http_subagents_jobs.rs:59` |
+| 子代理名册 | `child_session_rows`（thread 事件面）`crates/axon-cli/src/workbench_http_subagents_jobs.rs:59` |
 | 作业唤醒读车道 | `LaneQueryStore` `crates/axon-cli/src/run_commands/run_shell_job_wake.rs:21`、`:65` |
 | `axon serve`（headless）/v1/lanes、/v1/sessions | `crates/axon-cli/src/commands/serve.rs:150`、`:154`、`:187`、`:224` |
 | usage 看板 / pricing | `UsageRepository` `crates/axon-cli/src/usage_statistics/repository.rs:53-73` |
-| rollout 回放 / resume | `RolloutSqliteStore` `crates/axon-cli/src/run_commands/run_rollout_store.rs:152-505` |
 
 **session-query（会话检索面）**
 
@@ -766,9 +760,9 @@ trait 对象实现：`impl RuntimeStore for SqliteRuntimeStore`，`crates/axon-s
 
 | crate | 拥有的持久化 |
 | --- | --- |
-| `axon-session` | `runtime.sqlite3` schema 与全部仓储；`data/sessions/threads/*.jsonl`（thread 事件）；`data/archive/session-events/**`（外置正文） |
-| `axon-cli` | `rollout.sqlite3`；`cron.sqlite3`；`usage.sqlite3`；`post_run_governance.sqlite3`；清理与 `.jsonl.zst` 归档；`channel-metrics`、资源遥测 JSONL；`update.json`、`daemon.pid`、`daemon.stop` |
-| `axon-daemon` | `data/gateway/auth-keys.json`、`data/logs/gateway-keys-audit.jsonl`；不拥有独立 SQLite 库（复用 `axon-session` 的 `runtime.sqlite3`） |
+| `axon-session` | `control.sqlite3` 与 `outbox.sqlite3` schema 与全部仓储；`data/sessions/threads/*.jsonl`（thread 事件）；`data/archive/session-events/**`（外置正文） |
+| `axon-cli` | `cron.sqlite3`；`usage.sqlite3`；`post_run_governance.sqlite3`；清理与 `.jsonl.zst` 归档；`channel-metrics`、资源遥测 JSONL；`update.json`、`daemon.pid`、`daemon.stop` |
+| `axon-daemon` | `data/gateway/auth-keys.json`、`data/logs/gateway-keys-audit.jsonl`；不拥有独立 SQLite 库（复用 `axon-session` 的运行态库） |
 | `axon-persona` | `data/persona/persona.sqlite3` |
 | `axon-memory` | `data/memory/memory.db`、`tantivy/`、`hnsw.idx`、工作区产物 |
 | `axon-memory-ops` | `memory_sync_audit.jsonl` |
@@ -782,13 +776,13 @@ trait 对象实现：`impl RuntimeStore for SqliteRuntimeStore`，`crates/axon-s
 
 ---
 
-## 附录 A：`runtime.sqlite3` 打开点汇总（生产代码）
+## 附录 A：运行态库打开点汇总（`control.sqlite3` / `outbox.sqlite3`）
 
 | 打开点 | 位置 | 用途 |
 | --- | --- | --- |
-| `SqliteRuntimeStore::from_root`（通用） | `crates/axon-session/src/infrastructure/sqlite_runtime_store.rs:182-184` | 所有按根目录解析的调用方 |
-| `SqliteRuntimeStore::new`（按路径） | 同上 `:133-141` | 测试与显式路径调用方 |
-| `SqliteRuntimeStore::with_busy_timeout` | 同上 `:149-160` | 注入更小写锁上限（有界失败验证） |
+| `SqliteRuntimeStore::from_root`（通用） | `crates/axon-session/src/infrastructure/sqlite_runtime_store.rs:287-289` | 所有按根目录解析的调用方 |
+| `SqliteRuntimeStore::new`（按路径） | 同上 `:219-221` | 测试与显式路径调用方 |
+| `SqliteRuntimeStore::with_busy_timeout` | 同上 `:229-231` | 注入更小写锁上限（有界失败验证） |
 | Daemon 主链路 | `crates/axon-cli/src/daemon_host_runner.rs:182` | `axon daemon` |
 | 共享 runtime 库（run 级协作事实） | `crates/axon-cli/src/run_commands/run_agent_store.rs:14` | CLI run |
 | Interaction 适配 | `crates/axon-cli/src/run_commands/interaction_adapter.rs:136` | CLI run |

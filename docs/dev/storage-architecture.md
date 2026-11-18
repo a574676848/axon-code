@@ -342,9 +342,6 @@ data/
     <session-id-escaped>/
       session.v1.jsonl.zstd     # 当前规范代
       session.v1.jsonl.zstd.idx # 可选：每 frame 的 (seq_start, byte_offset, raw_len)
-  rollout/
-    <session-id-escaped>/
-      turn.v1.jsonl.zstd
   threads/                      # 维持现有布局不变
     <thread-prefix>.jsonl
 ```
@@ -1573,7 +1570,7 @@ pwsh -File scripts/install-from-source.ps1 -Components all
 
 | 项 | 现状 | 补的时候必须带什么 |
 | --- | --- | --- |
-| `rollout.sqlite3` 退役 | 已完成（W2-12）：恢复链、轮次事实、用量投影、子代理名册、回放与保留策略全部改读 thread 事件面与控制面；`run_rollout_store/**` 与 `rollout.sqlite3` 已删除，见 `docs/dev/w2-12-rollout-retirement.md` | 真实多轮对话回归（C2/C4/C5、X1-X7）仍需真机取证 |
+| `rollout.sqlite3` 退役 | 已完成（W2-12）：恢复链、轮次事实、用量投影、子代理名册、回放与保留策略全部改读 thread 事件面与控制面；`run_rollout_store/**` 与 `rollout.sqlite3` 已删除 | 真实多轮对话回归（C2/C4/C5、X1-X7）仍需真机取证 |
 
 已完成的项在代码与验收台账（`docs/dev/wbs-acceptance.md`）里有对应证据，不再保留「延后」表述。
 

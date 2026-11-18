@@ -36,7 +36,7 @@ macro_rules! text_id {
 }
 
 text_id!(DaemonSessionId, "后台 Session 稳定 ID。");
-text_id!(RunSessionId, "Agent rollout/transcript ID。");
+text_id!(RunSessionId, "Agent 运行会话/transcript ID。");
 text_id!(SessionActionId, "Session Action 幂等 ID。");
 text_id!(RuntimeHostId, "Daemon Host 实例 ID。");
 

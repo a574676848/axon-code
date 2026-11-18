@@ -181,9 +181,6 @@ pub use crate::context_assembler::{
 };
 pub use crate::context_budget_exports::*;
 pub use crate::environment_context::EnvironmentContext;
-pub use crate::fix_strategy::{
-    ForkMode, RolloutContext, RolloutFilterStrategy, RolloutItem, RolloutItemKind, RolloutManager,
-};
 pub use crate::focus_resolver::{
     FocusResolution, FocusResolutionInput, FocusResolutionReason, FocusResolverRuntime,
 };

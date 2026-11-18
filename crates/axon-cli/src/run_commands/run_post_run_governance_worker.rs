@@ -443,7 +443,7 @@ fn execute_governance_payload(
     ) {
         axon_logger::error(&format!("post-run quality metrics failed: {error}"));
     }
-    // 提示、回执与轨迹必须一次提交：`commit_session_to_rollout` 按
+    // 提示、回执与轨迹必须一次提交：轮次提交按
     // `(session_id, assistant_part_id)` 整条覆盖 record，分两次提交会让后一次
     // 拿旧 record 把前一次刚写的字段抹掉。
     publish_turn_artifacts(payload, session_record, &self_iteration, &turn_trace);

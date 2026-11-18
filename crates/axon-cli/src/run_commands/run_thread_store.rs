@@ -440,7 +440,7 @@ pub(super) fn prepare_run_session(
             RunSessionIndexLookup::SessionId(session_id),
         );
     }
-    // 未显式指定 Session 时加载当前复合车道运行窗口的既有 rollout；
+    // 未显式指定 Session 时加载当前复合车道运行窗口的既有运行会话；
     // 没有车道（子代理等隔离入口）时不恢复任何历史，由调用方自行建档。
     let Some(session_id) = implicit_session_id else {
         return Ok(None);

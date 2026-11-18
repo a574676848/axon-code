@@ -39,7 +39,7 @@ pub enum RuntimeStoreError {
 /// Provider turn 提交 checkpoint 时的遥测。
 #[derive(Debug, Clone, Default)]
 pub struct CheckpointTelemetry {
-    /// transcript/rollout 引用。
+    /// transcript/运行会话引用。
     pub transcript_ref: Option<String>,
     /// token 使用量。
     pub token_usage: Option<u64>,
@@ -145,7 +145,7 @@ pub trait RuntimeStore:
         host: &DaemonHostRecord,
         now_ms: u64,
     ) -> Result<SessionRuntimeRecord, RuntimeStoreError>;
-    /// 原子停止旧 rollout 并创建新的 rollout 身份。
+    /// 原子停止旧运行会话并创建新的运行会话身份。
     fn reset_session(
         &self,
         session_id: &DaemonSessionId,

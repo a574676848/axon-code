@@ -25,7 +25,7 @@ where
             .map_err(Into::into)
     }
 
-    /// 原子停止旧 rollout，并为同一 transport Session 创建新的 rollout 身份。
+    /// 原子停止旧运行会话，并为同一 transport Session 创建新的运行会话身份。
     pub fn reset_session(
         &self,
         session_id: &DaemonSessionId,

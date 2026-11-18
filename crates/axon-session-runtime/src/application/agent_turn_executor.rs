@@ -22,7 +22,7 @@ pub struct ProviderTurnResult {
     pub wire_events: Vec<WireEventEnvelope>,
     /// 可选下一步 continuation。
     pub continuation: Option<ContinuationResult>,
-    /// 可选 transcript/rollout 引用。
+    /// 可选 transcript/运行会话引用。
     pub transcript_ref: Option<String>,
     /// Provider 返回的 token 使用量。
     pub token_usage: Option<u64>,

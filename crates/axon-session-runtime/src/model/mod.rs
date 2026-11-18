@@ -17,7 +17,7 @@ use crate::application::RuntimeProfile;
 /// Session Runtime 在执行边界提供的权威上下文。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionExecutionContext {
-    /// 当前 rollout ID。
+    /// 当前运行会话 ID。
     pub run_session_id: String,
     /// 当前工作目录。
     pub cwd: String,

@@ -18,7 +18,6 @@
 | [存储重构 WBS](./reconstruction-wbs.md) | 阶段与任务拆解、依赖关系、里程碑与延后项 |
 | [会话身份重构计划书](./session-identity-refactor-plan.md) | 会话标识唯一化方案、现状飘逸清单、会话数据删除与表结构重建步骤、WBS 与性能红线 |
 | [WBS 验收台账](./wbs-acceptance.md) | 逐条登记 WBS 各项目的状态、判据与可复核证据 |
-| [W2-12 rollout 退役记录](./w2-12-rollout-retirement.md) | 历史窗口改读 thread 文件、恢复指针改存控制面的设计、落点与回归范围 |
 | [混合审计发现清单](./audit-findings.md) | 交叉审计的性能、闭环与稳定性发现及处置结论 |
 | [v0.0.1 真机验收记录](./device-verification.md) | 安装态二进制的 39 项验收矩阵逐项结果、证据与环境副作用登记（未取证项已标注） |
 

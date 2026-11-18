@@ -229,7 +229,6 @@ $productTermRules = @(
     @{ Pattern = "\.sqlite3"; Message = "database file name is not allowed in product docs" },
     @{ Pattern = "session_events"; Message = "internal table name is not allowed in product docs" },
     @{ Pattern = "runtime\.sqlite3"; Message = "database file name is not allowed in product docs" },
-    @{ Pattern = "rollout\.sqlite3"; Message = "database file name is not allowed in product docs" },
     @{ Pattern = "crates/"; Message = "source path is not allowed in product docs" },
     @{ Pattern = "payload_ref"; Message = "internal field name is not allowed in product docs" },
     @{ Pattern = "lane_id"; Message = "internal field name is not allowed in product docs" },
