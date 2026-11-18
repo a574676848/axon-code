@@ -26,6 +26,9 @@ import { SessionUsagePopover } from './SessionUsagePopover';
  * 四簇按语义排开：身份（在不在干活）、预算（会话累计、上下文与缓存）、性能（首字、速率、耗时）、辅助（LSP 与计划）。
  * 此前是十段用「·」连成一条，装不下就从中间硬裁，读起来像一串调试输出。
  *
+ * 簇与簇之间只用间距分隔，不画竖线：这一行里唯一要读的是读数本身，一条从头到脚的
+ * 竖线会把「耗时 9.7s」这类变长的读数切成一根会跟着字数左右挪的柱子。
+ *
  * MCP 台数与技能条数不在这里：它们是「这台机器上挂着什么」，与打开哪条会话无关，
  * 由侧栏底栏的连接行常驻承载。
  *
@@ -139,7 +142,7 @@ export const ConversationHeader: React.FC<ConversationHeaderProps> = ({
             key={cluster.kind}
             data-header-cluster={cluster.kind}
             className={`${CLUSTER_VISIBILITY[cluster.kind]} min-w-0 items-center gap-2.5 ${
-              position > 0 ? 'pl-3.5 hairline-l border-border-hairline' : ''
+              position > 0 ? 'pl-3.5' : ''
             }`}
           >
             {cluster.segments.map((segment) => {
