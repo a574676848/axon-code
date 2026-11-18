@@ -90,12 +90,11 @@ pub(crate) struct CronCreateCommand {
     pub(crate) skills: Vec<String>,
     /// 完成后的通知目标。
     ///
-    /// `session:<channel>:<destination>[:<workspace>]`：向该会话注入一轮主 turn，用于让
-    /// 发布任务的会话自己跟进结果，按一轮对话计费。要回调当前会话，把运行上下文里给出的
-    /// `session_channel`、`session_destination`、`session_workspace` 原样填上；会话身份
-    /// 含 workspace 维度，跨项目的同名会话靠第四段区分，省略时按任务执行目录反推。
+    /// `session:<session-id>`：向该会话注入一轮主 turn，用于让发布任务的会话自己跟进结果，
+    /// 按一轮对话计费。给的是已经登记的既有会话标识（会话清单里可见的 `sessionId`），
+    /// 不是渠道与车道标识：会话标识即会话身份。
     ///
-    /// channel 只支持 desktop 与 tui。省略时任务执行完只记录运行事实，不产生任何投递。
+    /// 省略时任务执行完只记录运行事实，不产生任何投递。
     #[arg(long, verbatim_doc_comment)]
     pub(crate) wake: Option<String>,
     #[arg(long)]
@@ -129,8 +128,7 @@ pub(crate) struct CronUpdateCommand {
     pub(crate) clear_skills: bool,
     /// 新的通知目标，语义与 create 的 `--wake` 一致。
     ///
-    /// `session:<channel>:<destination>[:<workspace>]` 注入一轮主 turn，
-    /// 注入一轮主 turn。channel 只支持 desktop 与 tui。
+    /// `session:<session-id>` 向该已登记会话注入一轮主 turn。
     #[arg(long, verbatim_doc_comment)]
     pub(crate) wake: Option<String>,
     /// 清空通知目标；此后的执行不再产生任何投递。

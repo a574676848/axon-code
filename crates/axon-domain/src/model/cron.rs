@@ -50,11 +50,7 @@ impl CronWakeTarget {
                 if session_id.is_empty() {
                     return Err("会话唤醒目标的会话标识不能为空".to_owned());
                 }
-                // 会话标识由服务端按 `session-<ULID>` 生成：不带该前缀的文本只可能是
-                // 旧的「渠道 + 车道标识」形式，不能当作会话身份落库。
-                if !session_id.starts_with("session-") {
-                    return Err("会话唤醒目标的会话标识必须以 session- 开头".to_owned());
-                }
+                // 标识本身只要求非空：具体格式由生成端决定，会话是否存在由投递入口校验。
                 crate::DaemonSessionId::new(session_id.to_owned())
                     .map_err(|error| format!("会话唤醒目标的会话标识无效：{error}"))?;
             }
@@ -426,16 +422,12 @@ mod tests {
     }
 
     #[test]
-    fn wake_target_rejects_empty_or_malformed_session() {
+    fn wake_target_rejects_empty_session() {
         let empty = CronWakeTarget::Session {
             session_id: "   ".to_owned(),
         };
-        let malformed = CronWakeTarget::Session {
-            session_id: "workbench-1".to_owned(),
-        };
 
         assert!(empty.validate().is_err());
-        assert!(malformed.validate().is_err(), "非会话标识的文本必须被拒绝");
         assert!(wake_target().validate().is_ok());
     }
 

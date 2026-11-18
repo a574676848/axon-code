@@ -280,18 +280,16 @@ fn run_session_delete(
         Ok(records) => records,
         Err(error) => return cli_error(error),
     };
-    let before = records.len();
-    let kept = records
-        .into_iter()
-        .filter(|record| record.thread_id != target.thread_id)
-        .collect::<Vec<_>>();
-    let deleted_events = before.saturating_sub(kept.len());
+    let deleted_events = records
+        .iter()
+        .filter(|record| record.thread_id == target.thread_id)
+        .count();
     if deleted_events == 0 {
         return cli_error(format!("未找到会话：{}", command.session_id));
     }
-    if let Err(error) =
-        JsonlThreadEventStore.rewrite_thread_with_records(&root, &target.thread_id, &kept)
-    {
+    // 只删目标 thread 自己的分片：重写入口只接受同一 thread 的记录，把其他 thread
+    // 的记录一并交进去会被如实拒绝，删除也会因此整体失败。
+    if let Err(error) = store.remove_thread(&root, &target.thread_id) {
         return cli_error(error);
     }
     let report = SessionDeleteReport {
@@ -299,7 +297,7 @@ fn run_session_delete(
         store_path: display_path(&JsonlThreadEventStore::path(&root)),
         session_id: command.session_id.clone(),
         deleted_events,
-        remaining_events: kept.len(),
+        remaining_events: records.len().saturating_sub(deleted_events),
     };
     render_delete(format, &report)
 }
