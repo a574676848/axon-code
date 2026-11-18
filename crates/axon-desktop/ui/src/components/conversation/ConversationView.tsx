@@ -162,6 +162,9 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    *
    * 它由「首页历史」带回，与权威模型同一时机、同一寿命：换目标时一起清空，翻页不回退。
    * 空白一律当没有：网关偶尔会给出空串，渲染一行空白等于凭空造出一条提示。
+   *
+   * 投影落在时间线尾部，与轮次收尾分割线同一行样式，见 `ConversationStream` 的
+   * `reflectionNotice`。
    */
   const memoryReflection = conversation.sessionReflectionNotice?.trim() || null;
   /** 递增即要求定位到最新消息：发送消息后必须看到自己刚发的那条。 */
@@ -236,6 +239,14 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
       : null;
 
   const { settling, slowOpening } = useOpeningStage(conversation.opening, sessionKey);
+
+  /*
+   * 轮后提示与正文同一时机交接。
+   *
+   * 它长在时间线尾部，比正文先换一行就会挂到上一屏的正文下面，那一瞬间读到的是
+   * 另一条会话的记忆动作。
+   */
+  const settledReflection = useSettledValue(memoryReflection, settling);
 
   /** 中断当前这一轮；Esc 与停止按钮共用同一个入口。 */
   const interruptTurn = conversation.interrupt;
@@ -494,11 +505,6 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
             }
           />
           {originBar !== null && <SessionOriginBar {...originBar} model={effectiveModel.label} />}
-          {memoryReflection !== null && (
-            <div aria-live="polite" className="shrink-0 px-4 pt-1">
-              {memoryReflection}
-            </div>
-          )}
 
           {failure !== null && (
             <div className="shrink-0 px-4 pt-1">
@@ -550,6 +556,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                         loadingOlder={conversation.loadingOlder}
                         onLoadOlder={() => void conversation.loadOlder()}
                         prependToken={conversation.prependToken}
+                        reflectionNotice={settledReflection}
                       />
                     </UnfoldingProvider>
                   </div>

@@ -4,6 +4,7 @@ import type { TurnState } from '../../conversation/transcript';
 import { Text } from '../ui/surfaces';
 import { MessageRail } from './MessageRail';
 import { TurnBlock } from './TranscriptTurn';
+import { DividerMetaRow } from './DividerMetaRow';
 import { turnWindow } from './turnWindow';
 import { useConversationActions } from './actions';
 import { failureBanner } from '../../conversation/failureBanner';
@@ -96,6 +97,13 @@ export interface ConversationStreamProps {
    * 补偿同样的高度差，读者眼前的这一段不会跳走。
    */
   prependToken?: number;
+  /**
+   * 轮后提示：这条会话最近一次记忆动作的投影。
+   *
+   * 落在时间线尾部而不是正文上方的固定带：它是上一次收口之后的产物，属于这两轮之间
+   * 的一行注记。钉在正文上方会被读成常驻横幅，也跟着指标条一起脱离阅读顺序。
+   */
+  reflectionNotice?: string | null;
 }
 
 export const ConversationStream: React.FC<ConversationStreamProps> = ({
@@ -108,6 +116,7 @@ export const ConversationStream: React.FC<ConversationStreamProps> = ({
   loadingOlder = false,
   onLoadOlder,
   prependToken = 0,
+  reflectionNotice = null,
 }) => {
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const sentinelRef = React.useRef<HTMLDivElement>(null);
@@ -396,6 +405,15 @@ export const ConversationStream: React.FC<ConversationStreamProps> = ({
             <Text tone="danger" size="meta" className="block">
               {conclusion.text}
             </Text>
+          )}
+
+          {/*
+            轮后提示排在全部工作之后：它是这条会话最近一次记忆动作的结论，
+            与轮次收尾分割线同一行样式（发丝线加元信息），因此读起来是时间线的尾巴
+            而不是压在上面的另一块界面。
+          */}
+          {reflectionNotice !== null && (
+            <DividerMetaRow ariaLive="polite">{reflectionNotice}</DividerMetaRow>
           )}
 
           <div ref={sentinelRef} className="h-px shrink-0 pointer-events-none" />
