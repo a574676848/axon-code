@@ -19,7 +19,9 @@
 
 ### 2.1 结构检索必须走 codebase-memory-mcp
 
-- 动手前先 `list_projects`。本项目可能同时存在 `axon-code` 与 `E-zbg-axon-code` 两个条目指向同一仓库，此时必须对两者各跑一次 `index_status`，用最后一次索引时间与节点、边数量判断哪份更新，只对更新的那份下结论；判定不清就 `index_repository` 重建一份再用，不能对着旧图谱下结论。未索引或明显过期时同样用 `index_repository` 补。
+- 本项目唯一的图索引是 `E-zbg-axon-code`，直接用它，不要再对 `axon-code` 做任何假设。此前存在过的同名旧索引已删除，原因是它的索引范围把 `crates/axon-cli/src/tools` 与 `crates/axon-agent-runtime/src/core/tools` 整目录排除在外，而那正是本次改动最密集的两处，用它会得出错误结论。
+- 动手前仍先 `list_projects` 确认 `E-zbg-axon-code` 在场且 `status` 为 `ready`；发现问题或索引明显过期时用 `index_repository` 重建，不要退回文本搜索手工替代。
+- 注意该索引的覆盖标记：`parse_partial` 列出了若干文件的具体行区间，`not_indexed` 是按忽略规则主动排除的目录与文件。前者在对应行区间内必须改用 read 精确核对，后者属设计行为不算缺口。
 - 找定义、调用者、被调用者、影响面，一律先走图工具，禁止首选手写 grep：
   - `search_graph`：按名称或自然语言定位符号、路由、变量。
   - `trace_path`：追踪 inbound 与 outbound 调用拓扑，改共享符号前必跑一次。
