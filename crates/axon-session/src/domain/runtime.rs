@@ -90,6 +90,8 @@ pub struct SessionRuntimeRecord {
     pub current_run_id: String,
     /// 根 Session ID：只在子代理会话上有值。
     pub root_session_id: Option<DaemonSessionId>,
+    /// 子代理的代理路径：只在子代理会话上有值，与根会话一起构成子代理的身份。
+    pub agent_path: Option<String>,
     /// 会话类型。
     pub kind: SessionKind,
     /// 受众隔离维度。

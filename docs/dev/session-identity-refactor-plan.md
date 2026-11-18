@@ -430,7 +430,7 @@ W10 是三端用户可见回归，依赖 W4 与 W5 完成后才能全量开跑�
 | W3.2 | 已完成 | `session_id_for_route`、`SESSION_SESSION_ID_PREFIX` 与 `lanes/identity` 派生路由全部删除，全仓无引用 |
 | W3.3 | 已完成 | `InteractionRecord` 增必填 `session_id`；`interaction_session_id` 改读该列并返回 `String`；`inbox` 读路径 `INBOX_COLUMNS` 末列补 `session_id` |
 | W3.4 | 已完成 | 工具上下文只保留 `thread_session_id`；数值键收敛到 `memory_session_key()` 一处（记忆子系统的键空间，不是会话身份）；问答幂等键改用它自己的会话串 |
-| W3.5 | 部分完成 | 网关会话级订阅不再解析 `--subagent--` / `goal-session-` 前缀，改为「会话存在 + 工作区匹配 + `trust_scope` 非 restricted」；子代理会话标识仍由 `<run-id>--subagent--<path>` 拼接，尚未改为 ULID + `root_session_id` |
+| W3.5 | 已完成 | 两处拼接全部删除：目标执行会话按 `goal_id` 唯一索引解析，子代理按 `(root_session_id, agent_path)` 唯一索引解析，标识一律为服务端 ULID；`sessions` 增 `agent_path` 列（schema v8）与两个部分唯一索引；子代理逐字稿按登记身份写入，缺行时补登记同一身份而不是另建主会话；名册 slug 改读 `agent_path`；桌面「独立会话」判定改读渠道，不再按标识内容猜类型。真机回归并入 W8.4 |
 | W4.1 | 已完成 | `POST /api/v1/sessions` 生成 ULID，写入 `kind='primary'`、`trust_scope='private'`、`workspace_id`；用例断言返回值为合法 ULID |
 | W4.2 | 已完成 | **外部事件报文不再接受 `sessionId` 与 `workspaceId`**（都属于未知字段，`deny_unknown_fields` 直接拒绝）；语音 `start` 帧仍由客户端显式给出 `sessionId`，缺失即拒 |
 | W4.3 | 已完成 | 网关外部事件一律落到服务端内部的一条固定会话（`GATEWAY_EVENT_SESSION_ID`，首次到达登记、此后复用），Workspace 固定取网关默认（Axon 根目录 `~/.axon`）；外部既不暴露会话也不暴露 Workspace，且不存在第二个 Workspace |
@@ -445,7 +445,7 @@ W10 是三端用户可见回归，依赖 W4 与 W5 完成后才能全量开跑�
 | W6.4 | 已完成 | `daemon_history_loader` 直接读 `interaction.session_id` |
 | W6.5 | 已完成 | `interrupted_interaction_repository` 读 `inbox.session_id`，`candidate_session_id` 不再派生 |
 | W6.6 | 已完成 | `interaction_adapter` 的 Interaction 会话取自显式入参或 Workspace 活跃会话 |
-| W6.7 | 部分完成 | 主 turn 与执行 worker 已改读 `current_run_id`；turn lanes 层仍保留 `--subagent--` 拼接面 |
+| W6.7 | 已完成 | 主 turn 与执行 worker 已改读 `current_run_id`；turn lanes 与子代理装配层不再派生会话标识：原 `child_session_id(父会话, 路径)` 已删除，统一走 `resolve_subagent_session`，唤醒前置校验按 `(根会话, 代理路径)` 反查 |
 | W6.8 | 已完成 | `RunRequest` 增 `interaction_id`（来自 daemon 信封的 `transportContext.interactionId`）；工具上下文增 `interaction_id` 与 `turn_id`；问答记录改用它自己的真实入站标识，`turn_id` 改用与本轮持久化 `Turn.turn_id` 逐字一致的构造 |
 | W7.1 | 待执行 | `origin_channel` 四入口覆盖未按其核对 |
 | W7.2 | 待执行 | `channel_mix_json` 累计与重放重建未复核 |

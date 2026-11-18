@@ -41,16 +41,13 @@ export type ConversationTarget =
  * 子代理会话同理。普通车道（桌面 / CLI / TUI）没有这层绑定，正文的事实源是 Interaction
  * 流，按会话订阅会被网关拒绝（`subscription_rejected`）。
  */
-const STANDALONE_CHANNELS = new Set(['goal', 'cron']);
+const STANDALONE_CHANNELS = new Set(['goal', 'cron', 'subagent']);
 
 /** 该会话是否走会话级订阅（后台驱动的独立会话）。 */
 export function isStandaloneSession(
   selection: Pick<SessionSelection, 'sessionId' | 'channel'>,
 ): boolean {
-  return (
-    STANDALONE_CHANNELS.has(selection.channel ?? '') ||
-    selection.sessionId.includes('--subagent--')
-  );
+  return STANDALONE_CHANNELS.has(selection.channel ?? '');
 }
 
 /** 从车道选择得到订阅目标。 */

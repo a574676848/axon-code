@@ -116,7 +116,10 @@ where
     C: RuntimeClock + Clone + Send + Sync + 'static,
     P: EventPublisher + Clone + Send + Sync + 'static,
 {
-    fn sink_for(&self, _session_id: &str) -> Result<Arc<dyn TurnEventSink>, String> {
+    fn sink_for(
+        &self,
+        _identity: &axon_session_runtime::SubagentSessionIdentity,
+    ) -> Result<Arc<dyn TurnEventSink>, String> {
         // 请求的子会话标识被有意忽略：后台执行的逐字稿只能落在执行会话上，
         // 否则界面要额外知道派生子会话的标识，卡片入口与执行绑定也会分叉。
         Ok(Arc::new(ExecutionSessionSink {

@@ -13,8 +13,13 @@ use super::runtime_store;
 use super::workbench_http_targets::session_owns_owner;
 use crate::run_commands::run_thread_children::child_session_rows;
 
-/// 子代理会话 ID 的分隔符，与运行侧 `child_session_id` 保持一致。
-const SUBAGENT_SESSION_ID_SEPARATOR: &str = "--subagent--";
+/// 子代理会话在名册里的 slug：代理路径去掉开头斜杠、层级用下划线连接。
+///
+/// slug 只用于展示与前端对账，不参与任何查找：子会话身份是 `(root_session_id, agent_path)`。
+fn slug_of_agent_path(agent_path: &str) -> String {
+    agent_path.trim().trim_start_matches('/').replace('/', "_")
+}
+
 /// 一次车道子代理列举的上限。
 const MAX_SESSION_SUBAGENTS: usize = 200;
 
@@ -55,18 +60,20 @@ pub(super) fn session_subagents_payload(
             "subagents": [],
         }));
     }
-    let prefix = format!("{run_session_id}{SUBAGENT_SESSION_ID_SEPARATOR}");
     let rows = child_session_rows(axon_root, &run_session_id, MAX_SESSION_SUBAGENTS)?;
+    let store = runtime_store(axon_root);
     let mut subagents = Vec::with_capacity(rows.len());
     for row in rows {
-        let slug = row
-            .session_id
-            .strip_prefix(&prefix)
-            .unwrap_or_default()
-            .to_owned();
-        let has_runtime = DaemonSessionId::new(row.session_id.as_str())
+        // 会话标识是 ULID，路径只从登记表读：子代理的 slug 不是标识的一部分。
+        let runtime = DaemonSessionId::new(row.session_id.as_str())
             .ok()
-            .is_some_and(|id| runtime_store(axon_root).get_session(&id).is_ok());
+            .and_then(|id| store.get_session(&id).ok());
+        let slug = runtime
+            .as_ref()
+            .and_then(|record| record.agent_path.as_deref())
+            .map(slug_of_agent_path)
+            .unwrap_or_default();
+        let has_runtime = runtime.is_some();
         // 状态列存的是会话自己的终态：在跑、完成、中断、失败。界面用它回答
         // 「这条子代理还在跑吗」，末轮状态直接取它，没有状态列的旧行读作未知。
         // 运行侧把失败写成 errored，对外统一成 failed：名册只给界面认得的取值。

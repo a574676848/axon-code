@@ -27,7 +27,8 @@ impl SchemaKind {
     /// 不做补列、不做回填。
     const fn version(self) -> i64 {
         match self {
-            Self::Control => 7,
+            // 8：会话表增 `agent_path`，子代理身份从「父会话前缀拼接」改为 ULID + 根会话关系。
+            Self::Control => 8,
             Self::Outbox => 1,
         }
     }
@@ -165,6 +166,7 @@ const CONTROL_DDL: &str = "
                 CHECK (trust_scope IN ('private','group_workspace','restricted')),
             kind TEXT NOT NULL CHECK (kind IN ('primary','subagent','cron','goal')),
             root_session_id TEXT,
+            agent_path TEXT,
             goal_id TEXT,
             execution_id TEXT,
             current_run_id TEXT NOT NULL,
@@ -188,9 +190,16 @@ const CONTROL_DDL: &str = "
             last_activity_at_ms INTEGER NOT NULL,
             updated_at_ms INTEGER NOT NULL,
             CHECK (root_session_id IS NULL OR kind = 'subagent'),
+            CHECK (agent_path IS NULL OR kind = 'subagent'),
             CHECK (goal_id IS NULL OR kind IN ('cron','goal')),
             CHECK (execution_id IS NULL OR kind IN ('cron','goal'))
         );
+        CREATE UNIQUE INDEX IF NOT EXISTS sessions_subagent_path
+            ON sessions(root_session_id, agent_path)
+            WHERE kind = 'subagent' AND agent_path IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS sessions_goal_binding
+            ON sessions(goal_id)
+            WHERE kind = 'goal' AND goal_id IS NOT NULL;
         CREATE INDEX IF NOT EXISTS sessions_recovery
             ON sessions(status, owner_host_id, owner_generation);
         CREATE INDEX IF NOT EXISTS sessions_retention

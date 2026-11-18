@@ -13,7 +13,10 @@ use crate::domain::runtime::{
     DaemonHostRecord, RuntimeScheduleRecord, SessionActionRecord, SessionEventRecord,
     SessionRuntimeRecord,
 };
-use crate::ports::{NewSessionRequest, RuntimeStore, RuntimeStoreError, WorkspaceSessionRequest};
+use crate::ports::{
+    GoalSessionRequest, NewSessionRequest, RuntimeStore, RuntimeStoreError, SubagentSessionRequest,
+    WorkspaceSessionRequest,
+};
 use axon_domain::{
     DaemonSessionId, RuntimeHostId, SessionActionId, SessionActionStatus, SessionRuntimeStatus,
 };
@@ -133,6 +136,28 @@ impl RuntimeStore for SqliteRuntimeStore {
         request: &NewSessionRequest,
     ) -> Result<SessionRuntimeRecord, RuntimeStoreError> {
         self.create_session_impl(request)
+    }
+
+    fn resolve_subagent_session(
+        &self,
+        request: &SubagentSessionRequest,
+    ) -> Result<SessionRuntimeRecord, RuntimeStoreError> {
+        self.resolve_subagent_session_impl(request)
+    }
+
+    fn find_subagent_session(
+        &self,
+        root_session_id: &DaemonSessionId,
+        agent_path: &str,
+    ) -> Result<Option<SessionRuntimeRecord>, RuntimeStoreError> {
+        self.find_subagent_session_impl(root_session_id, agent_path)
+    }
+
+    fn resolve_goal_session(
+        &self,
+        request: &GoalSessionRequest,
+    ) -> Result<SessionRuntimeRecord, RuntimeStoreError> {
+        self.resolve_goal_session_impl(request)
     }
 
     fn resolve_workspace_session(

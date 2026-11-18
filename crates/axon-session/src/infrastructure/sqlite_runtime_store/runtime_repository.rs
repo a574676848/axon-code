@@ -67,7 +67,7 @@ pub(super) fn list_runnable_execution_sessions(
 ) -> Result<Vec<SessionRuntimeRecord>, RuntimeStoreError> {
     let connection = store.connection()?;
     let mut statement = connection
-        .prepare("SELECT r.session_id,r.current_run_id,r.root_session_id,r.kind,r.trust_scope,r.workspace_id,r.cwd,r.status,r.owner_host_id,r.owner_generation,r.worker_attempt,r.context_version,r.last_checkpoint_seq,r.last_event_sequence,r.last_activity_at_ms FROM sessions r WHERE r.status IN ('created','idle','running','recovering') AND EXISTS (SELECT 1 FROM work_items a WHERE a.session_id=r.session_id AND (a.status='queued' OR (a.status='running' AND a.cancellation_requested_at_ms IS NULL AND a.lease_expires_at_ms <= ?1))) ORDER BY r.last_activity_at_ms ASC LIMIT ?2")
+        .prepare("SELECT r.session_id,r.current_run_id,r.root_session_id,r.agent_path,r.kind,r.trust_scope,r.workspace_id,r.cwd,r.status,r.owner_host_id,r.owner_generation,r.worker_attempt,r.context_version,r.last_checkpoint_seq,r.last_event_sequence,r.last_activity_at_ms FROM sessions r WHERE r.status IN ('created','idle','running','recovering') AND EXISTS (SELECT 1 FROM work_items a WHERE a.session_id=r.session_id AND (a.status='queued' OR (a.status='running' AND a.cancellation_requested_at_ms IS NULL AND a.lease_expires_at_ms <= ?1))) ORDER BY r.last_activity_at_ms ASC LIMIT ?2")
         .map_err(storage)?;
     let rows = statement
         .query_map(
@@ -385,7 +385,7 @@ pub(super) fn recover_expired_sessions(
             step.payload_json,
         ));
         recovered.push(transaction.query_row(
-            "SELECT session_id,current_run_id,root_session_id,kind,trust_scope,workspace_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms \
+            "SELECT session_id,current_run_id,root_session_id,agent_path,kind,trust_scope,workspace_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms \
              FROM sessions WHERE session_id=?1",
             params![step.session_id.as_str()],
             session_runtime_row,

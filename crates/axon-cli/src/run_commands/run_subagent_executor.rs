@@ -38,7 +38,7 @@ use super::{
     },
     run_session_store::{RunSessionPartialInput, RunSessionRecord},
     run_subagent_completion::log_completion_failure,
-    run_subagent_executor_support::child_session_id,
+    run_subagent_executor_support::resolve_child_session,
     run_subagent_lifecycle::{
         SubagentLifecyclePublisher, SubagentLifecycleRegistry,
         subagent_explicit_terminal_lifecycle, subagent_started_lifecycle,
@@ -183,7 +183,12 @@ impl ProviderRunSubagentExecutor {
             self.environment.cwd.clone(),
             performance.clone(),
         );
-        let session_id = child_session_id(&self.environment.parent_session_id, &input.task_path);
+        let session_id = resolve_child_session(
+            &self.environment.config_path,
+            &self.environment.parent_session_id,
+            &self.environment.cwd.to_string_lossy(),
+            &input.task_path,
+        )?;
         let model_selection = self.child_model_selection(input, &session_id)?;
         let command = RunCommand {
             prompt: input.message.clone(),
@@ -494,7 +499,13 @@ impl ProviderRunSubagentExecutor {
         &self,
         input: &RunSubagentExecutionInput,
     ) -> Option<String> {
-        let session_id = child_session_id(&self.environment.parent_session_id, &input.task_path);
+        let session_id = resolve_child_session(
+            &self.environment.config_path,
+            &self.environment.parent_session_id,
+            &self.environment.cwd.to_string_lossy(),
+            &input.task_path,
+        )
+        .ok()?;
         self.child_model_selection(input, &session_id)
             .ok()
             .map(|selection| model_display_name(&selection.model))

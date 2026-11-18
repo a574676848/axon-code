@@ -12,9 +12,10 @@ use axon_agent_runtime::{
     JOB_REASON_BUDGET_EXHAUSTED, JobId, JobTerminalKind, SubagentJobHandle, SubagentJobOutcome,
     SubagentSessionHandle, SubagentSessionRuntime, SubagentSessionStatus, job_reference, millis_of,
 };
-use axon_domain::{AxonError, AxonResult};
+use axon_domain::{AxonError, AxonResult, DaemonSessionId};
 use axon_session::{
-    AgentContinuationQuery, AgentContinuationRecord, AgentContinuationStore, SqliteRuntimeStore,
+    AgentContinuationQuery, AgentContinuationRecord, AgentContinuationStore, RuntimeStore,
+    SqliteRuntimeStore,
 };
 
 use super::{
@@ -23,7 +24,7 @@ use super::{
         RunSubagentExecutionInput, RunSubagentExecutionOutput, RunSubagentExecutionStatus,
         extract_result_path, strip_result_path,
     },
-    run_subagent_executor_support::child_session_id,
+    run_subagent_executor_support::resolve_child_session,
     run_subagent_lifecycle::{
         SubagentLifecyclePublisher, SubagentLifecycleRegistry, subagent_terminal_lifecycle,
     },
@@ -51,6 +52,7 @@ const CONTINUATION_KEY_PREFIX: &str = "continuation";
 #[derive(Clone)]
 pub(crate) struct RunSubagentContinuationSink {
     store: SqliteRuntimeStore,
+    config_path: std::path::PathBuf,
     owner_id: String,
     parent_session_id: String,
 }
@@ -66,6 +68,7 @@ impl RunSubagentContinuationSink {
     ) -> Result<Self, String> {
         Ok(Self {
             store: super::run_agent_store::shared_runtime_store(config_path)?,
+            config_path: config_path.to_path_buf(),
             owner_id: owner_id.into(),
             parent_session_id: parent_session_id.into(),
         })
@@ -76,11 +79,10 @@ impl RunSubagentContinuationSink {
     /// 这是**会话级 re-attach 的前置校验**（设计 §6.2）：有引用才说明这个子代理真的
     /// 跑过、子会话已经落盘；没有引用的「空闲」目标只是控制面里的空壳，唤醒它等于
     /// 凭空造一个没有历史的会话。
-    ///
-    /// 查询键用 `child_session_id`，与终态写入时是同一个推导口径
-    /// （`child_session_id(父会话, AgentPath)`），因此查询结果与写入口径不会漂移。
     pub(crate) fn has_terminal_reference(&self, task_path: &axon_agent_runtime::AgentPath) -> bool {
-        let child_session_id = child_session_id(&self.parent_session_id, task_path);
+        let Some(child_session_id) = self.find_child_session_id(task_path) else {
+            return false;
+        };
         self.store
             .list_continuations(&AgentContinuationQuery {
                 owner_id: Some(self.owner_id.clone()),
@@ -90,6 +92,32 @@ impl RunSubagentContinuationSink {
                 limit: 1,
             })
             .is_ok_and(|records| !records.is_empty())
+    }
+
+    /// 这个子代理的会话标识；从未登记过时返回 `None`（只读，不建行）。
+    fn find_child_session_id(&self, task_path: &axon_agent_runtime::AgentPath) -> Option<String> {
+        let root = DaemonSessionId::new(self.parent_session_id.clone()).ok()?;
+        self.store
+            .find_subagent_session(&root, task_path.as_str())
+            .ok()
+            .flatten()
+            .map(|record| record.session_id.as_str().to_owned())
+    }
+
+    /// 收口用的会话标识：没有登记过就补登记，终态必须挂到具体的会话上。
+    fn resolve_child_session_id(
+        &self,
+        task_path: &axon_agent_runtime::AgentPath,
+    ) -> Option<String> {
+        if let Some(found) = self.find_child_session_id(task_path) {
+            return Some(found);
+        }
+        let cwd = DaemonSessionId::new(self.parent_session_id.clone())
+            .ok()
+            .and_then(|root| self.store.get_session(&root).ok())
+            .map(|record| record.cwd)
+            .unwrap_or_default();
+        resolve_child_session(&self.config_path, &self.parent_session_id, &cwd, task_path).ok()
     }
 }
 
@@ -307,7 +335,10 @@ impl RunSubagentCompletionSink {
         let Some(sink) = self.continuation.as_ref() else {
             return;
         };
-        let child_session_id = child_session_id(&sink.parent_session_id, &input.task_path);
+        let Some(child_session_id) = sink.resolve_child_session_id(&input.task_path) else {
+            errors.push("continuation=子代理会话未登记，终态引用未写入".to_owned());
+            return;
+        };
         let terminal_kind = continuation_terminal_kind(output.status);
         let now_ms = crate::tool_orchestrator::now_ms();
         let mut record = AgentContinuationRecord::pending(

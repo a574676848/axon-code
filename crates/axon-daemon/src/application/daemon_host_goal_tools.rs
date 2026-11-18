@@ -8,9 +8,9 @@ use super::goal_execution;
 use super::{DaemonHost, DaemonHostError};
 use crate::ports::ProcessIdentity;
 use axon_domain::{
-    AudienceContext, AudienceKind, DaemonSessionId, DecisionEffect, DecisionId, DecisionRecord,
-    DisclosurePolicy, ExecutionId, GoalCancelCommand, GoalCreateCommand, GoalCreationScope,
-    GoalDetailQuery, GoalId, GoalUpdateCommand, LedgerEvent, LedgerEventId, ScopeRef,
+    AudienceContext, AudienceKind, DecisionEffect, DecisionId, DecisionRecord, DisclosurePolicy,
+    ExecutionId, GoalCancelCommand, GoalCreateCommand, GoalCreationScope, GoalDetailQuery, GoalId,
+    GoalUpdateCommand, LedgerEvent, LedgerEventId, ScopeRef,
 };
 use axon_protocol::{GoalSource, GoalStartRequest, GoalToolCommand, GoalToolRequest};
 use axon_session::WorkspaceRecord;
@@ -23,7 +23,6 @@ const GOAL_CREATED_EVENT_TYPE: &str = "goal.created";
 /// 工具驱动 Goal 的派生标识前缀。
 const GOAL_ID_PREFIX: &str = "goal-";
 const GOAL_EXECUTION_ID_PREFIX: &str = "execution-";
-const GOAL_SESSION_ID_PREFIX: &str = "goal-session-";
 const GOAL_EVENT_ID_PREFIX: &str = "event-";
 const GOAL_DECISION_ID_PREFIX: &str = "decision-";
 /// scope 内尚无 Decision 时的期望 revision 基线。
@@ -405,8 +404,18 @@ where
         let workspace = workspace.ok_or_else(|| {
             DaemonHostError::Worker("后台 Execution 必须绑定 Workspace".to_owned())
         })?;
-        let session_id = DaemonSessionId::new(format!("{GOAL_SESSION_ID_PREFIX}{goal_id}"))
-            .map_err(|error| DaemonHostError::Worker(error.to_string()))?;
+        // 执行会话由登记表解析：标识是服务端 ULID，同一个目标恒定落到同一条会话。
+        // 这里不拼任何前缀，目标与会话的关系只落在 `sessions.goal_id` 上。
+        let session_id = self
+            .store
+            .resolve_goal_session(&axon_session::GoalSessionRequest {
+                goal_id: goal_id.as_str().to_owned(),
+                workspace_id: Some(workspace.workspace_id.clone()),
+                cwd: workspace.workspace_root.clone(),
+                now_ms,
+            })
+            .map_err(goal_service_error)?
+            .session_id;
         let prompt = goal_execution::prompt(
             &command.title,
             &command.objective,
@@ -464,9 +473,6 @@ where
         transport_context["goalId"] = json!(goal_id);
         transport_context["stage"] = json!("initial");
         transport_context["source"] = json!(source);
-        self.store
-            .create_session(&session_id, &workspace.workspace_root, now_ms)
-            .map_err(goal_service_error)?;
         Ok(Some(GoalExecutionSpec {
             execution_id: ExecutionId::new(execution_revision.map_or_else(
                 || format!("{GOAL_EXECUTION_ID_PREFIX}{goal_id}"),

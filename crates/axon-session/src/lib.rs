@@ -53,13 +53,14 @@ pub use ports::{
     ClientInboxEntry, ClientPresenceRecord, CompletionDeliveryRecord, CompletionDeliveryTarget,
     CompletionNotificationRecord, DecisionStore, DecisionStoreError, EventLogStore, ExecutionStore,
     ExecutionStoreError, ExecutionTrigger, GoalCommitError, GoalCommitStore, GoalMutationStore,
-    GoalPage, GoalStore, GoalStoreError, HealthStore, InteractionAppendReceipt, InteractionCursor,
-    InteractionProcessingLease, InteractionQueryStore, InteractionStore, InteractionStoreError,
-    LedgerCommitError, LedgerCommitStore, LedgerEventStore, LedgerEventStoreError,
-    NewSessionRequest, NotificationDeliveryState, RESULT_ACK_SOURCE_EXPIRED,
+    GoalPage, GoalSessionRequest, GoalStore, GoalStoreError, HealthStore, InteractionAppendReceipt,
+    InteractionCursor, InteractionProcessingLease, InteractionQueryStore, InteractionStore,
+    InteractionStoreError, LedgerCommitError, LedgerCommitStore, LedgerEventStore,
+    LedgerEventStoreError, NewSessionRequest, NotificationDeliveryState, RESULT_ACK_SOURCE_EXPIRED,
     RESULT_ACK_SOURCE_READ, ResultStore, ResultStoreError, RuntimeHealthCounters, RuntimeStore,
-    RuntimeStoreError, SessionQueryStore, SessionSummaryRow, UserQuestionStore,
-    UserQuestionStoreError, WorkspaceSessionRequest, WorkspaceStore, WorkspaceStoreError,
+    RuntimeStoreError, SessionQueryStore, SessionSummaryRow, SubagentSessionRequest,
+    UserQuestionStore, UserQuestionStoreError, WorkspaceSessionRequest, WorkspaceStore,
+    WorkspaceStoreError,
 };
 pub use ports::{ResumePointerStore, ResumePointerStoreError};
 

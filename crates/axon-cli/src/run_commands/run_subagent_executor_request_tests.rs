@@ -2,6 +2,7 @@
 
 use super::super::child_persistence::SUBAGENT_RESULT_INLINE_CHAR_LIMIT;
 use super::*;
+use axon_session::RuntimeStore as _;
 
 #[test]
 fn child_request_overrides_system_prompt_without_tools() {
@@ -137,10 +138,27 @@ fn provider_child_request_inherits_parent_runtime_context() {
         .child_request(&input, Some(parent_cancel.child_token()))
         .expect("继承模型应能生成子代理请求");
 
-    assert_eq!(
-        child_request.session_id,
-        "parent-session--subagent--root_review"
+    // 子会话标识由登记表解析：ULID，关系落在 (根会话, 代理路径) 上，不再拼接。
+    assert!(
+        axon_session::is_ulid(&child_request.session_id),
+        "子代理会话标识必须是 ULID：{}",
+        child_request.session_id
     );
+    assert_eq!(
+        child_request.parent_session_id.as_deref(),
+        Some("parent-session")
+    );
+    let store = super::super::super::run_agent_store::shared_runtime_store(&config_path).unwrap();
+    let resolved = store
+        .find_subagent_session(
+            &axon_domain::DaemonSessionId::new("parent-session").unwrap(),
+            "/root/review",
+        )
+        .unwrap()
+        .expect("子代理会话应已登记");
+    assert_eq!(resolved.session_id.as_str(), child_request.session_id);
+    assert_eq!(resolved.kind, axon_session::SessionKind::Subagent);
+    assert_eq!(resolved.agent_path.as_deref(), Some("root/review"));
     assert_eq!(child_request.config_path, config_path);
     assert_eq!(child_request.cwd, environment.cwd);
     assert_eq!(child_request.prompt, "审查当前改动");

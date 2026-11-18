@@ -52,11 +52,11 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
 
 - `submit` 帧不携带客户端字段：这一轮的来源按 `sourceChannel` 标注，会话历史里逐轮显示的就是它，因此外部入口不会冒充桌面或 CLI。
 - 给出 `sessionId` 时按**会话级**订阅处理，此时 `interactionId` 被忽略。
-- 会话级订阅接受两类会话：
-  - **子代理会话**，会话标识形如 `parent--subagent--root`；其中的 `parent` 是父的**运行会话标识**，不是会话标识。
-  - **目标执行会话**，即目标执行账本里绑定到该会话的执行记录所对应的会话（形如 `goal-session-<goalId>`）。服务端按执行绑定裁决，**不解析标识前缀**：没有执行绑定的会话即使标识看起来像目标会话也会被拒。
+- 会话级订阅的放行条件是**会话本身**，不解析任何标识前缀：会话必须已在运行态登记，归属工作区与请求一致（未绑定工作区的会话不作限制），且受众边界不是受限档。
+  - **子代理会话**同样是登记过的一等会话（`kind='subagent'`），标识与其他会话一样是服务端生成的 ULID，不再由父会话与代理路径拼出来。
+  - **目标执行会话**按执行账本里绑定到该会话的执行记录裁决；没有执行绑定的会话仍可订阅，只要它满足上面的会话级条件。
 - 目标执行会话还要通过工作区校验：工作区作用域的目标，其作用域工作区必须等于请求的 `workspaceId`；全局作用域的目标按会话 `cwd` 精确匹配工作区注册表根目录，匹配必须唯一（零个或多个都拒绝）。
-- 把会话标识当 `sessionId` 传会被拒为 `subscription_rejected`；既不是子代理会话、也没有执行绑定的普通会话同样被拒。主会话会话用 `interactionId` 订阅，交互标识可从 `GET /api/v1/sessions/<sessionId>/interactions` 取得。
+- 把交互标识当 `sessionId` 传、或该会话从未登记，才会被拒为 `subscription_rejected`。主会话一般都按 `interactionId` 订阅，交互标识可从 `GET /api/v1/sessions/<sessionId>/interactions` 取得。
 - `subscribeId` 由客户端生成，必须在同一连接内唯一；建议直接由目标推导（`interaction:<id>` 或 `session:<id>`）。
 - `resumeCursor` 用于从既有游标续读；省略时从头回放。
 

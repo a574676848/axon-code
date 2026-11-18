@@ -1,9 +1,19 @@
 use super::super::child_persistence::SUBAGENT_RESULT_INLINE_CHAR_LIMIT;
 use super::*;
+use axon_session::RuntimeStore as _;
 use std::path::Path;
 
 pub(super) fn assert_completed_child_thread(config_path: &Path, task_path: &AgentPath) {
-    let child_session_id = child_session_id("parent-session", task_path);
+    // 子会话标识由登记表解析：路径不再是标识的一部分，必须按 (根会话, 代理路径) 查。
+    let store = super::super::super::run_agent_store::shared_runtime_store(config_path).unwrap();
+    let root_session_id = axon_domain::DaemonSessionId::new("parent-session").unwrap();
+    let child_session_id = store
+        .find_subagent_session(&root_session_id, task_path.as_str())
+        .unwrap()
+        .expect("子代理会话应已登记")
+        .session_id
+        .as_str()
+        .to_owned();
     let root = super::super::super::run_session_store::resolved_axon_root(config_path).unwrap();
     let detail = ThreadService::new(JsonlThreadEventStore)
         .read_thread(&root, &child_session_id)

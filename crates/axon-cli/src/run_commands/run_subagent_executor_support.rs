@@ -1,13 +1,35 @@
 //! Provider 子代理执行器的纯支持逻辑。
 
+use std::path::Path;
+
 use axon_agent_runtime::AgentPath;
 use axon_config::{ModelConfig, ProviderConfig};
+use axon_domain::DaemonSessionId;
+use axon_session::{RuntimeStore, SubagentSessionRequest};
 
-pub(crate) const SUBAGENT_SESSION_ID_SEPARATOR: &str = "--subagent--";
-
-pub(crate) fn child_session_id(parent_session_id: &str, task_path: &AgentPath) -> String {
-    let suffix = task_path.as_str().trim_start_matches('/').replace('/', "_");
-    format!("{parent_session_id}{SUBAGENT_SESSION_ID_SEPARATOR}{suffix}")
+/// 解析这个子代理的会话：同一个根会话下的同一个代理路径恒定落到同一条会话。
+///
+/// 会话标识是服务端 ULID，不再由「父会话 + 分隔符 + 路径」拼出来：关系落在
+/// `sessions.root_session_id` 与 `sessions.agent_path` 两列上，因此这里必须查登记表。
+/// 查询与登记是同一个入口，并发派发也不会长出两条子会话。
+pub(crate) fn resolve_child_session(
+    config_path: &Path,
+    parent_session_id: &str,
+    cwd: &str,
+    task_path: &AgentPath,
+) -> Result<String, String> {
+    let root_session_id = DaemonSessionId::new(parent_session_id.to_owned())
+        .map_err(|error| format!("父会话标识非法：{error:?}"))?;
+    let store = super::run_agent_store::shared_runtime_store(config_path)?;
+    store
+        .resolve_subagent_session(&SubagentSessionRequest {
+            root_session_id,
+            agent_path: task_path.as_str().to_owned(),
+            cwd: cwd.to_owned(),
+            now_ms: axon_time::unix_now_ms(),
+        })
+        .map(|record| record.session_id.as_str().to_owned())
+        .map_err(|error| format!("子代理会话登记失败：{error:?}"))
 }
 
 #[derive(Debug, Clone)]

@@ -72,11 +72,6 @@ where
                 store: self.store.clone(),
                 host: self.host.clone(),
                 clock: self.clock.clone(),
-                cwd: self
-                    .store
-                    .get_session(&session_id)
-                    .map(|record| record.cwd)
-                    .unwrap_or_default(),
                 stream_bridge: Arc::clone(&self.stream_bridge),
             });
         let sink = RuntimeTurnEventSink::new(

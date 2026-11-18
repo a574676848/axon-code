@@ -81,13 +81,31 @@ pub trait TurnEventSink: Send + Sync {
     }
 }
 
+/// 子代理会话的身份：标识、根会话与代理路径。
+///
+/// 三者必须一起给出：会话标识是服务端 ULID，不能由后两项拼出来；反过来，只给标识
+/// 也说不清它属于谁。谁先到谁登记，登记结果与先到者无关。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentSessionIdentity {
+    /// 这条子代理会话的标识。
+    pub session_id: String,
+    /// 派发它的根会话。
+    pub root_session_id: String,
+    /// 它在根会话内的代理路径。
+    pub agent_path: String,
+}
+
 /// 为子代理会话提供 durable sink 的工厂。
 ///
-/// 由宿主（持 host 代际与租约的一方）实现：登记子会话运行态行并按其会话标识
-/// 追加事件。运行侧拿到 sink 后只做交付，不关心存储细节。
+/// 由宿主（持 host 代际与租约的一方）实现：确保子会话运行态行存在，并按它的会话标识
+/// 追加事件。子代理会话与普通会话同为一等会话，登记形态也一致，只是 `kind` 不同。
+/// 运行侧拿到 sink 后只做交付，不关心存储细节。
 pub trait SubagentSessionSinkFactory: Send + Sync {
     /// 取（必要时先登记）某个子代理会话的 durable sink。
-    fn sink_for(&self, session_id: &str) -> Result<std::sync::Arc<dyn TurnEventSink>, String>;
+    fn sink_for(
+        &self,
+        identity: &SubagentSessionIdentity,
+    ) -> Result<std::sync::Arc<dyn TurnEventSink>, String>;
 
     /// 失败终态是否由调度侧（Session Worker）结算并写事件。
     ///

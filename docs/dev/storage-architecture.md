@@ -741,10 +741,17 @@ CREATE INDEX sessions_by_kind_root
 | `trust_scope` | `private`、`group_workspace`、`restricted` | 受众隔离维度；群聊看到私聊上下文只由它拦 |
 | `kind` | `primary`、`subagent`、`cron`、`goal` | 会话来源类型：用户对话、子代理、定时任务、目标看板 |
 | `root_session_id` | 根会话标识 | 只在 `kind='subagent'` 时有值 |
+| `agent_path` | 代理路径（如 `root/delegate`） | 只在 `kind='subagent'` 时有值；与 `root_session_id` 组成唯一键，落库前去掉首尾空白与开头斜杠 |
 | `goal_id` | 目标标识 | 只在 `kind='cron'` 或 `kind='goal'` 时有值 |
 | `execution_id` | 执行标识 | 只在 `kind='cron'` 或 `kind='goal'` 时有值 |
 
 `kind` 按来源取值：普通对话是 `primary`，子代理派发是 `subagent`，Cron 唤醒是 `cron`，目标看板发起是 `goal`，不新增第五类。桌面与 TUI 的会话清单只列 `primary`，CLI 只续接 `primary`；`subagent` / `cron` / `goal` 三类会话由各自入口按标识直接打开，不进用户列表。
+
+**除清单过滤外，四类会话没有区别**：标识同为 ULID，行内字段同构，事件流、轮次、租约与订阅放行走的是同一条路径。差别只有三点，且都不在身份上：
+
+- 谁发起：`primary` 由人或 CLI 发起，另外三类由宿主（派发方、调度侧、执行账本）发起。
+- 从哪里认出来：子代理靠 `(root_session_id, agent_path)` 唯一索引，目标执行会话靠 `goal_id` 唯一索引，都不靠标识字符串。
+- 能不能提交：界面对后台驱动的三类会话只读，因为那一轮由后台写，不因为它们是「另一种会话」。
 
 **渠道落点**
 
@@ -761,7 +768,9 @@ CREATE INDEX sessions_by_kind_root
 
 **订阅**：按 `session_id` 订阅，放行条件只剩「会话存在且受众边界匹配」，边界读 `trust_scope` 实列；删除按前缀的类型白名单。
 
-**创建**：唯一入口 `POST /api/v1/sessions`，服务端生成 ULID 并写入 `kind`、`trust_scope`、`workspace_id`。桌面、TUI 与 CLI 都从这里或从会话清单拿标识，不再本地派生。
+**创建**：对外唯一入口是 `POST /api/v1/sessions`，服务端生成 ULID 并写入 `kind`、`trust_scope`、`workspace_id`。桌面、TUI 与 CLI 都从这里或从会话清单拿标识，不再本地派生。
+
+服务端内部另有两个登记入口，只给宿主用，不对外暴露：子代理按 `(root_session_id, agent_path)` 解析，目标执行会话按 `goal_id` 解析。两者都是「先查后建」：命中原行就复用，查不到就生成新 ULID 并落行；并发撞唯一索引时回读已有行，因此同一件事永远只有一条会话。
 
 **线上字段名**：`primarySessionId` 的取值就是 `interaction.session_id`；服务端内部一律叫 `session_id`，两者同值。
 

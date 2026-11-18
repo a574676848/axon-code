@@ -118,6 +118,7 @@ impl<S: RuntimeStore, C> DaemonGatewayBridge<S, C> {
                 trust_scope: axon_session::SessionTrustScope::Private,
                 workspace_id: None,
                 root_session_id: None,
+                agent_path: None,
                 goal_id: None,
                 execution_id: None,
                 cwd: String::new(),

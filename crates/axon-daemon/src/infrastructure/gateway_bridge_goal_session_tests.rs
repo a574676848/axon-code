@@ -67,6 +67,7 @@ impl Fixture {
                 trust_scope,
                 workspace_id: workspace_id.map(str::to_owned),
                 root_session_id: None,
+                agent_path: None,
                 goal_id: None,
                 execution_id: None,
                 cwd: "/repo-a".to_owned(),

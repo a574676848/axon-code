@@ -27,10 +27,11 @@ test('后台驱动的独立会话按会话订阅', () => {
   const cron = targetOfSession({ ...lane, sessionId: 'run-2', channel: 'cron' });
   assert.equal(cron.kind, 'session');
 
+  // 子代理会话由渠道判定：会话标识是 ULID，不再靠标识里的一段字符认类型。
   const subagent = targetOfSession({
     ...lane,
-    sessionId: 'run-3--subagent--root',
-    channel: 'desktop',
+    sessionId: '01J8Z000000000000000000AA',
+    channel: 'subagent',
   });
   assert.equal(subagent.kind, 'session');
 });

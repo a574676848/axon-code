@@ -61,8 +61,14 @@ pub(super) fn run_subagent_provider_turn(
     let failures_settled_by_scheduler = session_sinks
         .as_ref()
         .is_some_and(|factory| factory.failures_settled_by_scheduler());
-    let child_sink =
-        session_sinks.and_then(|factory| match factory.sink_for(&request.session_id) {
+    let child_sink = session_sinks.and_then(|factory| {
+        // 子会话身份的三项一起交给宿主：标识是 ULID，根会话与代理路径负责说清它属于谁。
+        let identity = axon_session_runtime::SubagentSessionIdentity {
+            session_id: request.session_id.clone(),
+            root_session_id: request.parent_session_id.clone().unwrap_or_default(),
+            agent_path: task_path.as_str().to_owned(),
+        };
+        match factory.sink_for(&identity) {
             Ok(sink) => Some(sink),
             Err(error) => {
                 axon_logger::warning(&format!(
@@ -71,7 +77,8 @@ pub(super) fn run_subagent_provider_turn(
                 ));
                 None
             }
-        });
+        }
+    });
     // 子代理的任务提示就是这条会话的用户消息：与主会话一样，它必须进自己的事件流，
     // 否则界面的归约器打不开回合，整段逐字稿都无处安放。
     if let Some(sink) = &child_sink {

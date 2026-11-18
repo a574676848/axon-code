@@ -11,8 +11,12 @@
 use std::sync::Arc;
 
 use axon_domain::DaemonSessionId;
-use axon_session::{DaemonHostRecord, RuntimeStore};
-use axon_session_runtime::{RuntimeClock, RuntimeEvent, SubagentSessionSinkFactory, TurnEventSink};
+use axon_session::{
+    DaemonHostRecord, NewSessionRequest, RuntimeStore, SessionKind, SessionTrustScope,
+};
+use axon_session_runtime::{
+    RuntimeClock, RuntimeEvent, SubagentSessionIdentity, SubagentSessionSinkFactory, TurnEventSink,
+};
 
 use crate::application::event_stream_bridge::EventStreamBridge;
 
@@ -21,7 +25,6 @@ pub(super) struct ChildSessionSinkFactory<S, C> {
     pub(super) store: S,
     pub(super) host: DaemonHostRecord,
     pub(super) clock: C,
-    pub(super) cwd: String,
     /// 实时订阅桥：子会话事件落库后要像主会话一样推给订阅者。
     pub(super) stream_bridge: Arc<EventStreamBridge>,
 }
@@ -31,14 +34,13 @@ where
     S: RuntimeStore + Clone + Send + Sync + 'static,
     C: RuntimeClock + Clone + Send + Sync + 'static,
 {
-    fn sink_for(&self, session_id: &str) -> Result<Arc<dyn TurnEventSink>, String> {
-        let session_id = DaemonSessionId::new(session_id)
+    fn sink_for(
+        &self,
+        identity: &SubagentSessionIdentity,
+    ) -> Result<Arc<dyn TurnEventSink>, String> {
+        let session_id = DaemonSessionId::new(identity.session_id.as_str())
             .map_err(|error| format!("子代理会话标识非法：{error:?}"))?;
-        // 登记（或复用）子会话运行态行：这是「一等会话」的登记面，
-        // 同时让宿主代际围栏对这条会话生效。
-        self.store
-            .create_session(&session_id, &self.cwd, self.clock.now_ms())
-            .map_err(|error| format!("登记子代理会话失败：{error:?}"))?;
+        self.ensure_session(identity, &session_id)?;
         Ok(Arc::new(ChildSessionSink {
             store: self.store.clone(),
             host: self.host.clone(),
@@ -46,6 +48,51 @@ where
             clock: self.clock.clone(),
             stream_bridge: Arc::clone(&self.stream_bridge),
         }))
+    }
+}
+
+impl<S, C> ChildSessionSinkFactory<S, C>
+where
+    S: RuntimeStore + Clone + Send + Sync + 'static,
+    C: RuntimeClock + Clone + Send + Sync + 'static,
+{
+    /// 确保子代理会话已登记。
+    ///
+    /// 子代理与普通会话同为一等会话：标识、类型、根会话与代理路径都由派发方给出，
+    /// 这里只在真的缺行时补登记。根会话已登记时，受众边界与工作区从它继承，
+    /// 因此子会话与父会话属于同一个 Workspace、同一条披露边界。
+    fn ensure_session(
+        &self,
+        identity: &SubagentSessionIdentity,
+        session_id: &DaemonSessionId,
+    ) -> Result<(), String> {
+        if self.store.get_session(session_id).is_ok() {
+            return Ok(());
+        }
+        let root_session_id = DaemonSessionId::new(identity.root_session_id.as_str())
+            .map_err(|error| format!("子代理根会话标识非法：{error:?}"))?;
+        let root = self.store.get_session(&root_session_id).ok();
+        let request = NewSessionRequest {
+            session_id: session_id.clone(),
+            kind: SessionKind::Subagent,
+            trust_scope: root
+                .as_ref()
+                .map_or(SessionTrustScope::Private, |record| record.trust_scope),
+            workspace_id: root.as_ref().and_then(|record| record.workspace_id.clone()),
+            root_session_id: Some(root_session_id),
+            agent_path: Some(identity.agent_path.clone()),
+            goal_id: None,
+            execution_id: None,
+            cwd: root
+                .as_ref()
+                .map(|record| record.cwd.clone())
+                .unwrap_or_default(),
+            now_ms: self.clock.now_ms(),
+        };
+        self.store
+            .create_session_with(&request)
+            .map(|_| ())
+            .map_err(|error| format!("登记子代理会话失败：{error:?}"))
     }
 }
 

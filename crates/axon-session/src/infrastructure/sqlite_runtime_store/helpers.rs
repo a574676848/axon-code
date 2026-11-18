@@ -11,11 +11,24 @@ use uuid::Uuid;
 
 const HOST_STATE_RUNNING: &str = "running";
 
-/// 按标识读取单个会话：字段顺序与 `session_runtime_row` 一一对应。
-pub(crate) const SELECT_SESSION_BY_ID: &str = "SELECT session_id,current_run_id,root_session_id,kind,trust_scope,workspace_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms FROM sessions WHERE session_id=?1";
+/// 会话行的列顺序；`session_runtime_row` 按它取值，任何查询都必须照抄这一份。
+pub(crate) const SESSION_COLUMNS: &str = "session_id,current_run_id,root_session_id,agent_path,kind,trust_scope,workspace_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms";
+
+/// 按标识读取单个会话。
+pub(crate) fn sql_select_session_by_id() -> String {
+    format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE session_id=?1")
+}
 
 pub(crate) fn parse_session_kind(value: String) -> rusqlite::Result<SessionKind> {
     SessionKind::parse(&value).ok_or(rusqlite::Error::InvalidQuery)
+}
+
+/// 代理路径的规范形态：去掉首尾空白与开头的斜杠。
+///
+/// 各个入口给的是同一个 `AgentPath`，但落地与查询前都先归一，避免 `/root/a`
+/// 与 `root/a` 被认成两个子代理。
+pub(crate) fn normalize_agent_path(value: &str) -> String {
+    value.trim().trim_start_matches('/').to_owned()
 }
 pub(crate) fn parse_trust_scope(value: String) -> rusqlite::Result<SessionTrustScope> {
     SessionTrustScope::parse(&value).ok_or(rusqlite::Error::InvalidQuery)
@@ -32,22 +45,23 @@ pub(crate) fn session_runtime_row(
             .get::<_, Option<String>>(2)?
             .map(parse_session_id)
             .transpose()?,
-        kind: parse_session_kind(row.get(3)?)?,
-        trust_scope: parse_trust_scope(row.get(4)?)?,
-        workspace_id: row.get(5)?,
-        cwd: row.get(6)?,
-        status: parse_runtime_status(&row.get::<_, String>(7)?),
+        agent_path: row.get(3)?,
+        kind: parse_session_kind(row.get(4)?)?,
+        trust_scope: parse_trust_scope(row.get(5)?)?,
+        workspace_id: row.get(6)?,
+        cwd: row.get(7)?,
+        status: parse_runtime_status(&row.get::<_, String>(8)?),
         owner_host_id: row
-            .get::<_, Option<String>>(8)?
+            .get::<_, Option<String>>(9)?
             .map(parse_host_id)
             .transpose()?,
-        owner_generation: row.get(9)?,
-        worker_attempt: u32::try_from(row.get::<_, i64>(10)?)
+        owner_generation: row.get(10)?,
+        worker_attempt: u32::try_from(row.get::<_, i64>(11)?)
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
-        context_version: u64_value(row.get(11)?)?,
-        last_checkpoint_seq: u64_value(row.get(12)?)?,
-        last_event_sequence: u64_value(row.get(13)?)?,
-        last_activity_at_ms: u64_value(row.get(14)?)?,
+        context_version: u64_value(row.get(12)?)?,
+        last_checkpoint_seq: u64_value(row.get(13)?)?,
+        last_event_sequence: u64_value(row.get(14)?)?,
+        last_activity_at_ms: u64_value(row.get(15)?)?,
     })
 }
 
@@ -110,17 +124,20 @@ impl SqliteRuntimeStore {
     ) -> Result<crate::domain::runtime::SessionRuntimeRecord, RuntimeStoreError> {
         self.initialize()?;
         let current_run_id = Uuid::new_v4().to_string();
+        // 代理路径在这一处归一：任何写入口都不会因为开头斜杠不同而落下两份身份。
+        let agent_path = request.agent_path.as_deref().map(normalize_agent_path);
         let inserted = {
             let connection = self.connection()?;
             connection
                 .execute(
-                    "INSERT INTO sessions(session_id,workspace_id,trust_scope,kind,root_session_id,goal_id,execution_id,current_run_id,run_generation,title,pinned,archived,sort_order,cwd,status,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,0,NULL,0,0,NULL,?9,?10,0,0,0,0,?11,?11,?11) ON CONFLICT(session_id) DO NOTHING",
+                    "INSERT INTO sessions(session_id,workspace_id,trust_scope,kind,root_session_id,agent_path,goal_id,execution_id,current_run_id,run_generation,title,pinned,archived,sort_order,cwd,status,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,0,NULL,0,0,NULL,?10,?11,0,0,0,0,?12,?12,?12) ON CONFLICT(session_id) DO NOTHING",
                     params![
                         request.session_id.as_str(),
                         request.workspace_id.as_deref(),
                         request.trust_scope.as_str(),
                         request.kind.as_str(),
                         request.root_session_id.as_ref().map(|value| value.as_str()),
+                        agent_path.as_deref(),
                         request.goal_id.as_deref(),
                         request.execution_id.as_deref(),
                         current_run_id,
@@ -138,6 +155,7 @@ impl SqliteRuntimeStore {
             session_id: request.session_id.clone(),
             current_run_id,
             root_session_id: request.root_session_id.clone(),
+            agent_path: agent_path.clone(),
             kind: request.kind,
             trust_scope: request.trust_scope,
             workspace_id: request.workspace_id.clone(),
@@ -208,7 +226,7 @@ impl SqliteRuntimeStore {
         let connection = self.connection()?;
         connection
             .query_row(
-                SELECT_SESSION_BY_ID,
+                &sql_select_session_by_id(),
                 params![session_id.as_str()],
                 session_runtime_row,
             )

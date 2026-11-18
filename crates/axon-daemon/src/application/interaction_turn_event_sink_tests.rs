@@ -238,7 +238,6 @@ fn terminal_event_and_turn_metrics_land_in_one_batch() {
             store: store.clone(),
             host: host.clone(),
             clock: clock.clone(),
-            cwd: "/workspace".to_owned(),
             stream_bridge: Arc::new(EventStreamBridge::new()),
         }),
     );
@@ -337,7 +336,6 @@ fn turn_metrics_output_tokens_follow_the_ledger_not_the_speed_window() {
             store: store.clone(),
             host: host.clone(),
             clock: clock.clone(),
-            cwd: "/workspace".to_owned(),
             stream_bridge: Arc::new(EventStreamBridge::new()),
         }),
     );

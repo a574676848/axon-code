@@ -37,6 +37,11 @@ pub struct NewSessionRequest {
     pub workspace_id: Option<String>,
     /// 子代理的根会话；只有 `kind=Subagent` 才允许有值。
     pub root_session_id: Option<DaemonSessionId>,
+    /// 子代理的代理路径；只有 `kind=Subagent` 才允许有值。
+    ///
+    /// 它与 `root_session_id` 一起构成子代理的身份：会话标识本身是 ULID，不携带路径，
+    /// 因此「同一个父会话下的同一个代理」只能由这一对列认出来。
+    pub agent_path: Option<String>,
     /// 目标执行会话的目标标识；只有 `kind=Execution` 才允许有值。
     pub goal_id: Option<String>,
     /// 目标执行会话的执行标识；只有 `kind=Execution` 才允许有值。
@@ -57,12 +62,42 @@ impl NewSessionRequest {
             trust_scope: SessionTrustScope::Private,
             workspace_id: None,
             root_session_id: None,
+            agent_path: None,
             goal_id: None,
             execution_id: None,
             cwd: cwd.into(),
             now_ms,
         }
     }
+}
+
+/// 解析子代理会话的输入。
+///
+/// 子代理标识是 ULID，不能由父会话与路径拼出来，因此「同一个子代理」只能靠
+/// `(root_session_id, agent_path)` 这一对认出来。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentSessionRequest {
+    /// 根会话：派发这个子代理的那条会话。
+    pub root_session_id: DaemonSessionId,
+    /// 子代理在根会话内的代理路径。
+    pub agent_path: String,
+    /// 需要新建会话时使用的工作目录。
+    pub cwd: String,
+    /// 判定时间。
+    pub now_ms: u64,
+}
+
+/// 解析目标执行会话的输入。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoalSessionRequest {
+    /// 目标标识。
+    pub goal_id: String,
+    /// 归属 Workspace；执行会话没有绑定时为空。
+    pub workspace_id: Option<String>,
+    /// 需要新建会话时使用的工作目录。
+    pub cwd: String,
+    /// 判定时间。
+    pub now_ms: u64,
 }
 
 use super::{
@@ -203,6 +238,25 @@ pub trait RuntimeStore:
     fn create_session_with(
         &self,
         request: &NewSessionRequest,
+    ) -> Result<SessionRuntimeRecord, RuntimeStoreError>;
+    /// 解析某个根会话下某个代理路径的子代理会话；没有就建一条。
+    ///
+    /// 标识由服务端按 ULID 生成，先按 `(root_session_id, agent_path)` 查，查不到再建；
+    /// 并发下撞唯一键时回读已有行，因此同一个子代理不会长出两条会话。
+    fn resolve_subagent_session(
+        &self,
+        request: &SubagentSessionRequest,
+    ) -> Result<SessionRuntimeRecord, RuntimeStoreError>;
+    /// 只读查某个根会话下某个代理路径的子代理会话；不存在返回 `None`，不创建。
+    fn find_subagent_session(
+        &self,
+        root_session_id: &DaemonSessionId,
+        agent_path: &str,
+    ) -> Result<Option<SessionRuntimeRecord>, RuntimeStoreError>;
+    /// 解析某个目标的执行会话；没有就建一条。
+    fn resolve_goal_session(
+        &self,
+        request: &GoalSessionRequest,
     ) -> Result<SessionRuntimeRecord, RuntimeStoreError>;
     /// 解析某个 Workspace 当前的主会话；没有可用会话时创建一个新的主会话。
     ///

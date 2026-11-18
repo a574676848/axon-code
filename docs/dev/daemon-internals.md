@@ -156,7 +156,7 @@ Get-ChildItem "$env:USERPROFILE\.axon\data\resource-metrics" -Filter 'samples-*.
 
 会话恢复分三段，目的是把文件 IO 移出写事务：先只读取候选会话与水位，再不持锁逐会话读事件面末条并算出落账计划，最后用一个短写事务带水位 CAS 落账。水位在两段之间被别人推进过的会话在这一步落空并被跳过，宁可下一轮再恢复，也不用旧水位覆盖别人的进度。把日志读取放在事务里会让写锁按住「会话数 × 单会话文件读」的时间，WAL 因此无法回卷，其他写者全部卡在 `busy_timeout` 上，最终表现为 `database is locked` 风暴。
 
-后台 Execution 的逐字稿写在它绑定的运行时会话里（`goal-session-<goalId>` 这类标识）；被隔离为 `uncertain` 的执行只有一条终态记录，回看该会话时是空态而不是伪造的正文。
+后台 Execution 的逐字稿写在它绑定的运行时会话里（会话标识是服务端生成的 ULID，与目标的关系落在 `sessions.goal_id` 上，不靠标识前缀表达）；被隔离为 `uncertain` 的执行只有一条终态记录，回看该会话时是空态而不是伪造的正文。
 
 ---
 
