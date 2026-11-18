@@ -26,8 +26,8 @@ import { SessionUsagePopover } from './SessionUsagePopover';
  * 四簇按语义排开：身份（在不在干活）、预算（会话累计、上下文与缓存）、性能（首字、速率、耗时）、辅助（LSP 与计划）。
  * 此前是十段用「·」连成一条，装不下就从中间硬裁，读起来像一串调试输出。
  *
- * 簇与簇之间只用间距分隔，不画竖线：这一行里唯一要读的是读数本身，一条从头到脚的
- * 竖线会把「耗时 9.7s」这类变长的读数切成一根会跟着字数左右挪的柱子。
+ * 簇与簇之间用一个圆点分隔，不画竖线：一条从头到脚的竖线会随读数长短左右挪，把一行
+ * 读数切成表格栏线；圆点与读数同一节奏，读起来仍是一句话。
  *
  * MCP 台数与技能条数不在这里：它们是「这台机器上挂着什么」，与打开哪条会话无关，
  * 由侧栏底栏的连接行常驻承载。
@@ -127,7 +127,7 @@ export const ConversationHeader: React.FC<ConversationHeaderProps> = ({
       }
       className="shrink-0 h-10 pl-4 pr-4 flex items-center gap-3 hairline-b border-border-hairline bg-canvas select-text"
     >
-      <div className="@container flex-1 min-w-0 flex items-center gap-3.5 overflow-hidden whitespace-nowrap">
+      <div className="@container flex-1 min-w-0 flex items-center gap-2.5 overflow-hidden whitespace-nowrap">
         {hasPendingQuestion && (
           <span
             className="shrink-0 inline-flex items-center gap-1 rounded-xs px-1.5 py-0.5 bg-gold-soft text-xs text-gold-ink confirm-pop"
@@ -141,10 +141,19 @@ export const ConversationHeader: React.FC<ConversationHeaderProps> = ({
           <div
             key={cluster.kind}
             data-header-cluster={cluster.kind}
-            className={`${CLUSTER_VISIBILITY[cluster.kind]} min-w-0 items-center gap-2.5 ${
-              position > 0 ? 'pl-3.5' : ''
-            }`}
+            className={`${CLUSTER_VISIBILITY[cluster.kind]} min-w-0 items-center gap-2.5`}
           >
+            {/*
+              簇的间隔就是这一枚圆点本身：它长在簇内部，因此整簇收起时圆点跟着一起走，
+              不会在行尾留下一个孤零零的分隔符。簇间距与簇内间距取同一档，读数之间
+              因此是一串等节奏的字，而不是被空白分栏的表格。
+            */}
+            {position > 0 && (
+              <span aria-hidden="true" className="shrink-0 text-text-tertiary">
+                ·
+              </span>
+            )}
+
             {cluster.segments.map((segment) => {
               const withContextCard = segment.kind === 'context' && contextUsage !== null;
               const withUsageCard = segment.kind === 'sessionTokens' && sessionCumulative !== null;
