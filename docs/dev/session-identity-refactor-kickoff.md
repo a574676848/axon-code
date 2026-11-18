@@ -19,7 +19,7 @@
 
 ### 2.1 结构检索必须走 codebase-memory-mcp
 
-- 动手前先 `list_projects`，本项目通常已索引为 `axon-code` 或 `E-zbg-axon-code`；未索引或明显过期时用 `index_repository` 补。
+- 动手前先 `list_projects`。本项目可能同时存在 `axon-code` 与 `E-zbg-axon-code` 两个条目指向同一仓库，此时必须对两者各跑一次 `index_status`，用最后一次索引时间与节点、边数量判断哪份更新，只对更新的那份下结论；判定不清就 `index_repository` 重建一份再用，不能对着旧图谱下结论。未索引或明显过期时同样用 `index_repository` 补。
 - 找定义、调用者、被调用者、影响面，一律先走图工具，禁止首选手写 grep：
   - `search_graph`：按名称或自然语言定位符号、路由、变量。
   - `trace_path`：追踪 inbound 与 outbound 调用拓扑，改共享符号前必跑一次。
