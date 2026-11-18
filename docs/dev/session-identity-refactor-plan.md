@@ -449,7 +449,7 @@ W10 是三端用户可见回归，依赖 W4 与 W5 完成后才能全量开跑�
 | W6.8 | 已完成 | `RunRequest` 增 `interaction_id`（来自 daemon 信封的 `transportContext.interactionId`）；工具上下文增 `interaction_id` 与 `turn_id`；问答记录改用它自己的真实入站标识，`turn_id` 改用与本轮持久化 `Turn.turn_id` 逐字一致的构造 |
 | W7.1 | 已完成 | 探针 `origin_channel_covers_all_four_inbound_entries`：桌面 / CLI / TUI / 外部事件各跑一轮真实入站（桌面、CLI、TUI 带客户端，外部事件没有客户端），逐轮断言 `turn_metrics.origin_channel` 与 `channel_mix_json` 都是该入口自己，且不出现 `internal` |
 | W7.2 | 已完成 | 真实交互链路上的在线累计与 `rebuild_session_metrics` 重放一致（`rebuild_restores_the_same_channel_mix_after_real_interactions`），重复重建幂等；此前只有手工 `with_origin` 事件的重建用例 |
-| W7.3 | 已完成 | 环境上下文 `session_channel` 改名 `origin_channel`，取值改**本轮来源**：daemon 的 `transportContext` 增 `originChannel`（客户端优先、没有客户端退回来源渠道，与投影同一口径），旧载荷退回 `channel`；目标执行显式标 `goal`；本批同时把对外请求的 User-Agent 扩到六个入口（`axon-tui` / `axon-desktop` / `axon-cli` / `axon-webhook` / `axon-cron` / `axon-goal`），取值同样走 `originChannel` |
+| W7.3 | 已完成 | 环境上下文 `session_channel` 改名 `origin_channel`，取值改**本轮来源**：daemon 的 `transportContext` 增 `originChannel`（客户端优先、没有客户端退回来源渠道，与投影同一口径），旧载荷退回 `channel`；目标执行显式标 `goal`；本批同时把对外请求的 User-Agent 扩到六个入口（`axon-tui` / `axon-desktop` / `axon-cli` / `axon-webhook` / `axon-cron` / `axon-goal`），取值同样走 `originChannel`；外部事件另给 `userAgentChannel=webhook`，UA 报 webhook 而来源标注仍是具体厂商 |
 | W7.4 | 已完成 | 历史索引本身已逐轮给出 `channel` 与 `client`，前端 `historySource` 客户端优先；新增三轮用例（桌面 / CLI 续聊 / 定时）锁定「同一会话三轮各标各的」 |
 | W8.1 | 待执行 | 三渠道命中同一会话的自动化探针未单独补 |
 | W8.2 | 已完成 | `tools/verify-architecture.py` 增两条门禁：①**禁拼接会话 id** —— 生产源码里 `format!`/`starts_with`/`contains`/`strip_prefix`/`ends_with` 不得出现 `--subagent--` 或 `goal-session-`，也不得为它们定义分隔符或前缀常量；②**禁会话数值摘要** —— `stable_numeric_id` 只允许出现在 6 个既有内存句柄文件，新增即失败（注释与测试源码不计）。两条均以临时探针验证过「违例即 exit 1」，随后删除探针 |

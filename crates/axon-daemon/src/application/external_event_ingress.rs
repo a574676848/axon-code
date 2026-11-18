@@ -1,5 +1,6 @@
 //! 外部 Watch/Event 适配器的统一 durable ingress。
 
+use super::EXTERNAL_EVENT_SOURCE_PREFIX;
 use super::interaction_ingress::{
     ActiveTurnSteerSink, InteractionIngressReceipt, PrimaryTurnIngress,
 };
@@ -25,7 +26,7 @@ pub const MAX_EXTERNAL_EVENT_CORRELATION_KEY_LENGTH: usize = 256;
 pub const MAX_EXTERNAL_EVENT_MODEL_LENGTH: usize = 256;
 /// 本轮推理强度的长度上限：档位是固定枚举，留出余量即可拒绝明显异常输入。
 const MAX_EXTERNAL_EVENT_REASONING_EFFORT_LENGTH: usize = 32;
-const EXTERNAL_EVENT_SOURCE_PREFIX: &str = "external:";
+/// 外部事件交互标识的前缀：与来源键同一份摘要，重放命中同一行。
 const EXTERNAL_EVENT_INTERACTION_PREFIX: &str = "external-interaction-";
 
 /// 外部 Watch/Event 适配器输入。

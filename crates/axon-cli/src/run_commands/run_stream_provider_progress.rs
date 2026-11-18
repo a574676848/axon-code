@@ -194,6 +194,8 @@ pub(super) fn first_visible_wire_event(kind: &WireEventKind) -> bool {
 
 /// 本轮入口渠道的 transport 键：客户端优先、没有客户端退回来源渠道。
 const ORIGIN_CHANNEL_KEY: &str = "originChannel";
+/// 只给 User-Agent 用的入口渠道：外部事件在这里标成 webhook，具体来源仍留在渠道上。
+const USER_AGENT_CHANNEL_KEY: &str = "userAgentChannel";
 /// 车道渠道的 transport 键：旧载荷没有 `originChannel` 时退回它。
 const CHANNEL_KEY: &str = "channel";
 
@@ -201,13 +203,15 @@ const CHANNEL_KEY: &str = "channel";
 ///
 /// 这是对外 User-Agent 的取值来源：同一条会话被另一端续聊时，
 /// `originChannel` 已经是续聊那一端，因此 UA 跟着换，而不是一直挂着会话所属渠道。
+/// 外部事件另有 `userAgentChannel`（webhook），它只影响 UA，不改变来源标注。
 pub(crate) fn client_channel_of(
     transport_context: Option<&serde_json::Value>,
 ) -> axon_client_identity::ClientChannel {
     let value = transport_context
         .and_then(|context| {
             context
-                .get(ORIGIN_CHANNEL_KEY)
+                .get(USER_AGENT_CHANNEL_KEY)
+                .or_else(|| context.get(ORIGIN_CHANNEL_KEY))
                 .or_else(|| context.get(CHANNEL_KEY))
         })
         .and_then(serde_json::Value::as_str);
@@ -273,5 +277,16 @@ mod tests {
         let context = serde_json::json!({"channel": "tui"});
         assert_eq!(client_channel_of(Some(&context)), ClientChannel::Tui);
         assert_eq!(client_channel_of(None), ClientChannel::Cli);
+    }
+
+    #[test]
+    fn external_event_turns_use_the_webhook_user_agent() {
+        // 外部事件的来源渠道是具体厂商，来源标注保留它，但 UA 一律报 webhook 入口。
+        let context = serde_json::json!({
+            "channel": "github",
+            "originChannel": "github",
+            "userAgentChannel": "webhook",
+        });
+        assert_eq!(client_channel_of(Some(&context)), ClientChannel::Webhook);
     }
 }

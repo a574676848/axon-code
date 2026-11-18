@@ -761,6 +761,7 @@ CREATE INDEX sessions_by_kind_root
 - 会话级分布落 `session_metrics.channel_mix_json`，可由轮次事件重放重建。
 - 环境上下文里的渠道语义是本轮来源渠道，不是会话所属渠道。
 - 对外请求的 User-Agent 同样取本轮来源渠道：`axon-tui` / `axon-desktop` / `axon-cli` / `axon-webhook` / `axon-cron` / `axon-goal`，未知入口按 CLI 处理。取值与 `origin_channel` 同一口径（客户端优先），因此同一条会话被另一端续聊时 UA 跟着换。
+- 外部事件是唯一例外：它没有人类发送端，User-Agent 一律报 `axon-webhook`（transport context 的 `userAgentChannel`），具体来源渠道（`github`、`jira` 等）仍留在 `channel` 与逐轮来源标注上。
 - `inbox` 保留 `(source_channel, source_message_id)` 唯一键作为幂等事实，渠道只在这里出现。
 
 #### 4.13.2 入站、订阅与创建契约

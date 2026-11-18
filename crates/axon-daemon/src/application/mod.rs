@@ -17,6 +17,9 @@ mod scheduler_service;
 mod session_registry;
 mod worker_supervisor;
 
+/// 外部事件来源消息键的前缀：表达「这一轮来自外部事件」的来源出处，不参与会话身份。
+pub(crate) const EXTERNAL_EVENT_SOURCE_PREFIX: &str = "external:";
+
 pub use daemon_host::{
     DaemonHost, DaemonHostError, GatewayHostDependencies, HostTickReport, PRIMARY_TURN_ACTION_KIND,
     SessionAttachSnapshot, primary_session_id_for_interaction, queued_action,

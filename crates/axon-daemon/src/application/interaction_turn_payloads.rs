@@ -5,6 +5,7 @@
 
 use super::interaction_turn_event_sink::TurnGenerationReadout;
 use super::*;
+use crate::application::EXTERNAL_EVENT_SOURCE_PREFIX;
 
 pub(super) fn runtime_error(error: impl std::fmt::Display) -> PrimaryTurnRunnerError {
     PrimaryTurnRunnerError::Runtime(error.to_string())
@@ -207,6 +208,18 @@ pub(super) fn interaction_transport_context(interaction: &InteractionRecord) -> 
         context["sourceMessageId"] =
             serde_json::Value::String(interaction.source.source_message_id().to_owned());
     }
+    /*
+     * 外部事件没有人类发送端：它对上游一律是 webhook 入口，具体是哪一家（github、jira…）
+     * 仍留在 `channel` 上。User-Agent 取这一项，因此外部事件报 `axon-webhook`，
+     * 而不是被当成命令行。
+     */
+    if interaction
+        .source
+        .source_message_id()
+        .starts_with(EXTERNAL_EVENT_SOURCE_PREFIX)
+    {
+        context["userAgentChannel"] = serde_json::Value::String("webhook".to_owned());
+    }
     context
 }
 
@@ -304,6 +317,30 @@ mod tests {
         assert!(
             context.get("reasoningEffort").is_none(),
             "没有显式强度时不得写入该键，强度必须继续由配置决定"
+        );
+    }
+
+    #[test]
+    fn external_events_are_labelled_webhook_for_the_user_agent() {
+        let mut record = interaction(None);
+        record.source = InteractionSource::new("github", "external:abc123")
+            .and_then(|source| source.with_client("github"))
+            .expect("合法外部来源");
+
+        let context = interaction_transport_context(&record);
+
+        // 来源仍是具体厂商；只有 User-Agent 那一层统一成 webhook 入口。
+        assert_eq!(context["channel"], serde_json::json!("github"));
+        assert_eq!(context["originChannel"], serde_json::json!("github"));
+        assert_eq!(context["userAgentChannel"], serde_json::json!("webhook"));
+    }
+
+    #[test]
+    fn local_turns_carry_no_user_agent_override() {
+        let context = interaction_transport_context(&interaction(None));
+        assert!(
+            context.get("userAgentChannel").is_none(),
+            "只有外部事件才改写 User-Agent 入口，本地轮次按来源渠道说话"
         );
     }
 
