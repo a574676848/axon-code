@@ -255,6 +255,14 @@ where
         else {
             return Ok(queued_receipt(append));
         };
+        // 系统生成的完成与唤醒输入必须独立成轮：并进用户正在进行的回合会让它只剩
+        // 一句 steer，既不产出汇总回复，也不会结算渠道投递，用户最终什么也收不到。
+        // 活跃轮仍然尽力即时提示一次，但队列条目必须保留，由主 turn 结束后独立领取。
+        if is_system_generated(interaction) {
+            let _ = self.steer_sink.try_steer(interaction);
+            self.release_to_queue(&lease)?;
+            return Ok(queued_receipt(append));
+        }
         match self.steer_sink.try_steer(interaction) {
             Ok(true) => {
                 self.store.mark_understood(

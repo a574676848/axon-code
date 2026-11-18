@@ -460,3 +460,41 @@ fn ingress_policy_rejects_non_received_initial_status() {
     let error = ingress.submit(&forged).expect_err("入站不得伪造终态");
     assert!(error.to_string().contains("received"));
 }
+
+#[test]
+fn system_completion_input_is_never_steered_into_active_turn() {
+    let store = Store {
+        inserted: true,
+        ..Store::default()
+    };
+    let sink = Sink {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        result: Ok(true),
+    };
+    let ingress = ingress(store.clone(), sink.clone());
+    let mut completion = interaction();
+    completion.source =
+        InteractionSource::new("desktop", "completion-steer-execution-1").expect("来源");
+    completion.reply_route = ReplyRoute::new("desktop", "ingress-workbench").expect("路由");
+
+    let receipt = ingress
+        .submit_new_interaction(&completion)
+        .expect("完成通知应落成独立排队轮次");
+
+    assert!(receipt.inserted);
+    assert_eq!(receipt.delivery, InteractionDelivery::Queued);
+    assert_eq!(
+        sink.calls.lock().expect("锁未中毒").len(),
+        1,
+        "活跃轮只允许收到一次即时提示"
+    );
+    assert_eq!(
+        store.released.lock().expect("锁未中毒").len(),
+        1,
+        "已领取的租约必须放回队列等待主 turn 领取"
+    );
+    assert!(
+        store.understood.lock().expect("锁未中毒").is_empty(),
+        "并入活跃轮不得把系统输入结算成已理解"
+    );
+}
