@@ -11,16 +11,16 @@ use crate::MemoryConfig;
 
 /// raw memories 文件。
 pub const MEMORY_ARTIFACTS_RAW_MEMORIES_FILE: &str = "raw_memories.md";
-/// rollout summaries 目录。
-pub const MEMORY_ARTIFACTS_ROLLOUT_SUMMARIES_DIR: &str = "rollout_summaries";
+/// 轮次摘要目录。
+pub const MEMORY_ARTIFACTS_TURN_SUMMARIES_DIR: &str = "turn_summaries";
 /// extensions 目录。
 pub const MEMORY_ARTIFACTS_EXTENSIONS_DIR: &str = "extensions";
 /// Phase2 workspace diff 文件。
 pub const MEMORY_ARTIFACTS_PHASE2_DIFF_FILE: &str = "phase2_workspace_diff.md";
 
-/// Rollout summary artifact。
+/// 轮次摘要 artifact。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MemoryRolloutSummaryArtifact {
+pub struct MemoryTurnSummaryArtifact {
     /// 文件 stem。
     pub stem: String,
     /// Markdown 内容。
@@ -54,10 +54,10 @@ impl MemoryArtifactsWorkspace {
         self.root.join(MEMORY_ARTIFACTS_RAW_MEMORIES_FILE)
     }
 
-    /// rollout summaries 路径。
+    /// 轮次摘要路径。
     #[must_use]
-    pub fn rollout_summaries_dir(&self) -> PathBuf {
-        self.root.join(MEMORY_ARTIFACTS_ROLLOUT_SUMMARIES_DIR)
+    pub fn turn_summaries_dir(&self) -> PathBuf {
+        self.root.join(MEMORY_ARTIFACTS_TURN_SUMMARIES_DIR)
     }
 
     /// extensions 路径。
@@ -75,7 +75,7 @@ impl MemoryArtifactsWorkspace {
     /// 确保 workspace 目录存在。
     pub fn ensure_layout(&self) -> AxonResult<()> {
         fs::create_dir_all(&self.root)
-            .and_then(|()| fs::create_dir_all(self.rollout_summaries_dir()))
+            .and_then(|()| fs::create_dir_all(self.turn_summaries_dir()))
             .and_then(|()| fs::create_dir_all(self.extensions_dir()))
             .map_err(|_| AxonError::memory_persistence("Memory artifacts 目录创建失败"))
     }
@@ -87,33 +87,30 @@ impl MemoryArtifactsWorkspace {
             .map_err(|_| AxonError::memory_persistence("Memory raw memories 写入失败"))
     }
 
-    /// 同步 rollout summaries。
-    pub fn sync_rollout_summaries(
-        &self,
-        artifacts: &[MemoryRolloutSummaryArtifact],
-    ) -> AxonResult<()> {
+    /// 同步轮次摘要。
+    pub fn sync_turn_summaries(&self, artifacts: &[MemoryTurnSummaryArtifact]) -> AxonResult<()> {
         self.ensure_layout()?;
         for artifact in artifacts {
             validate_artifact(artifact)?;
             fs::write(
-                self.rollout_summaries_dir()
+                self.turn_summaries_dir()
                     .join(format!("{}.md", artifact.stem)),
                 &artifact.markdown,
             )
-            .map_err(|_| AxonError::memory_persistence("Memory rollout summary 写入失败"))?;
+            .map_err(|_| AxonError::memory_persistence("Memory 轮次摘要写入失败"))?;
         }
         Ok(())
     }
 }
 
-fn validate_artifact(artifact: &MemoryRolloutSummaryArtifact) -> AxonResult<()> {
+fn validate_artifact(artifact: &MemoryTurnSummaryArtifact) -> AxonResult<()> {
     if artifact.stem.trim().is_empty()
         || artifact.stem.contains('/')
         || artifact.stem.contains('\\')
         || artifact.markdown.trim().is_empty()
     {
         return Err(AxonError::memory_persistence(
-            "Memory rollout summary artifact 无效",
+            "Memory 轮次摘要 artifact 无效",
         ));
     }
     Ok(())

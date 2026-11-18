@@ -261,7 +261,7 @@ fn memory_artifacts_stats(context: &MemoryCliContext) -> MemoryArtifactsStatsVie
     let workspace = MemoryArtifactsWorkspace::new(context.orchestrator.config());
     MemoryArtifactsStatsView {
         raw_memories_present: workspace.raw_memories_path().is_file(),
-        rollout_summary_count: count_dir_entries(workspace.rollout_summaries_dir()),
+        turn_summary_count: count_dir_entries(workspace.turn_summaries_dir()),
         extension_count: count_dir_entries(workspace.extensions_dir()),
         phase2_diff_present: workspace.phase2_diff_path().is_file(),
     }

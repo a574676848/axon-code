@@ -115,8 +115,8 @@ impl MemoryPipelineStateStore {
                     thread_id TEXT PRIMARY KEY,
                     source_updated_at_ms INTEGER NOT NULL,
                     raw_memory TEXT NOT NULL,
-                    rollout_summary TEXT NOT NULL,
-                    rollout_slug TEXT,
+                    turn_summary TEXT NOT NULL,
+                    turn_slug TEXT,
                     generated_at_ms INTEGER NOT NULL,
                     usage_count INTEGER NOT NULL DEFAULT 0,
                     last_usage_ms INTEGER,
@@ -144,7 +144,60 @@ impl MemoryPipelineStateStore {
                     ON memory_pipeline_jobs(kind, status, lease_until_ms);
                 ",
             )
-            .map_err(|_| AxonError::memory_persistence("Memory pipeline schema 初始化失败"))
+            .map_err(|_| AxonError::memory_persistence("Memory pipeline schema 初始化失败"))?;
+        self.migrate_legacy_stage1_columns()
+    }
+
+    /// 老库升级：`memory_stage1_outputs` 的历史列名统一由 `turn_*` 承担。
+    ///
+    /// 只做一次「新增列 + 回填 + 删除旧列」，不保留双写：两个列名是同一份事实的两种
+    /// 叫法，并存会让后续写入方无法判断该写哪一列。新建库在建表时已直接使用
+    /// `turn_*`，因此这里只对遗留库生效。
+    fn migrate_legacy_stage1_columns(&self) -> AxonResult<()> {
+        let mut columns = Vec::new();
+        {
+            let mut statement = self
+                .connection
+                .prepare("PRAGMA table_info(memory_stage1_outputs)")
+                .map_err(|_| AxonError::memory_persistence("Memory pipeline schema 读取失败"))?;
+            let rows = statement
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(|_| AxonError::memory_persistence("Memory pipeline schema 读取失败"))?;
+            for row in rows {
+                let column = row.map_err(|_| {
+                    AxonError::memory_persistence("Memory pipeline schema 读取失败")
+                })?;
+                columns.push(column);
+            }
+        }
+        let has = |name: &str| columns.iter().any(|column| column == name);
+        if !has("rollout_summary") && !has("rollout_slug") {
+            return Ok(());
+        }
+        let mut batch = String::new();
+        if !has("turn_summary") {
+            batch.push_str(
+                "ALTER TABLE memory_stage1_outputs ADD COLUMN turn_summary TEXT NOT NULL DEFAULT '';\n",
+            );
+        }
+        if !has("turn_slug") {
+            batch.push_str("ALTER TABLE memory_stage1_outputs ADD COLUMN turn_slug TEXT;\n");
+        }
+        if has("rollout_summary") {
+            batch.push_str("UPDATE memory_stage1_outputs SET turn_summary = rollout_summary;\n");
+        }
+        if has("rollout_slug") {
+            batch.push_str("UPDATE memory_stage1_outputs SET turn_slug = rollout_slug;\n");
+        }
+        if has("rollout_summary") {
+            batch.push_str("ALTER TABLE memory_stage1_outputs DROP COLUMN rollout_summary;\n");
+        }
+        if has("rollout_slug") {
+            batch.push_str("ALTER TABLE memory_stage1_outputs DROP COLUMN rollout_slug;\n");
+        }
+        self.connection
+            .execute_batch(&batch)
+            .map_err(|_| AxonError::memory_persistence("Memory pipeline schema 迁移失败"))
     }
 
     /// 插入或更新 job。
@@ -315,4 +368,86 @@ fn i64_from_u64(value: u64) -> AxonResult<i64> {
 
 fn u64_from_i64(value: i64) -> rusqlite::Result<u64> {
     value.try_into().map_err(|_| rusqlite::Error::InvalidQuery)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 按遗留布局建表：新列尚不存在，历史列名仍在且已有一行数据。
+    fn legacy_table(connection: &Connection) {
+        connection
+            .execute_batch(
+                "CREATE TABLE memory_stage1_outputs (
+                     thread_id TEXT PRIMARY KEY,
+                     source_updated_at_ms INTEGER NOT NULL,
+                     raw_memory TEXT NOT NULL,
+                     rollout_summary TEXT NOT NULL,
+                     rollout_slug TEXT,
+                     generated_at_ms INTEGER NOT NULL,
+                     usage_count INTEGER NOT NULL DEFAULT 0,
+                     last_usage_ms INTEGER,
+                     selected_for_phase2 INTEGER NOT NULL DEFAULT 0,
+                     selected_for_phase2_source_updated_at_ms INTEGER
+                 );
+                 INSERT INTO memory_stage1_outputs
+                     (thread_id, source_updated_at_ms, raw_memory, rollout_summary, rollout_slug, generated_at_ms)
+                 VALUES ('t-1', 10, 'raw', '旧轮次摘要', 'slug-a', 20);",
+            )
+            .expect("遗留库建表");
+    }
+
+    fn stage1_columns(store: &MemoryPipelineStateStore) -> Vec<String> {
+        let mut statement = store
+            .connection
+            .prepare("PRAGMA table_info(memory_stage1_outputs)")
+            .expect("读取列信息");
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("查询列名");
+        rows.map(|row| row.expect("读取列名")).collect()
+    }
+
+    #[test]
+    fn legacy_schema_is_upgraded_to_turn_columns_with_backfill() {
+        let connection = Connection::open_in_memory().expect("内存库");
+        legacy_table(&connection);
+        let store = MemoryPipelineStateStore { connection };
+
+        store.initialize_schema().expect("遗留库升级");
+
+        let columns = stage1_columns(&store);
+        assert!(columns.iter().any(|column| column == "turn_summary"));
+        assert!(columns.iter().any(|column| column == "turn_slug"));
+        assert!(
+            !columns.iter().any(|column| column.starts_with("rollout_")),
+            "迁移后不得保留历史列：{columns:?}"
+        );
+        let (summary, slug) = store
+            .connection
+            .query_row(
+                "SELECT turn_summary, turn_slug FROM memory_stage1_outputs WHERE thread_id = 't-1'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .expect("回填后原有行必须仍在");
+        assert_eq!(summary, "旧轮次摘要");
+        assert_eq!(slug.as_deref(), Some("slug-a"));
+    }
+
+    #[test]
+    fn fresh_schema_never_creates_legacy_columns() {
+        let connection = Connection::open_in_memory().expect("内存库");
+        let store = MemoryPipelineStateStore { connection };
+
+        store.initialize_schema().expect("新建库建表");
+
+        let columns = stage1_columns(&store);
+        assert!(columns.iter().any(|column| column == "turn_summary"));
+        assert!(columns.iter().any(|column| column == "turn_slug"));
+        assert!(
+            !columns.iter().any(|column| column.starts_with("rollout_")),
+            "新建库不应出现历史列：{columns:?}"
+        );
+    }
 }

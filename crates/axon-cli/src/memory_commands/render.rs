@@ -49,7 +49,7 @@ pub(super) struct MemoryConsolidationStatsView {
 #[serde(rename_all = "camelCase")]
 pub(super) struct MemoryArtifactsStatsView {
     pub(super) raw_memories_present: bool,
-    pub(super) rollout_summary_count: usize,
+    pub(super) turn_summary_count: usize,
     pub(super) extension_count: usize,
     pub(super) phase2_diff_present: bool,
 }
@@ -145,7 +145,7 @@ pub(super) fn render_stats(format: OutputFormat, report: &MemoryStatsReport) -> 
                 report.remote_write_allowed,
                 format_duration_millis_compact(report.consolidation.interval_ms),
                 report.artifacts.raw_memories_present,
-                report.artifacts.rollout_summary_count,
+                report.artifacts.turn_summary_count,
                 report.artifacts.extension_count,
                 report.artifacts.phase2_diff_present,
                 report.pipeline.explicit_write,
@@ -281,7 +281,7 @@ mod tests {
                 },
                 artifacts: MemoryArtifactsStatsView {
                     raw_memories_present: false,
-                    rollout_summary_count: 0,
+                    turn_summary_count: 0,
                     extension_count: 0,
                     phase2_diff_present: false,
                 },

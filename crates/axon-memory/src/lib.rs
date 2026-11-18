@@ -59,8 +59,8 @@ pub use aging::{
 };
 pub use artifacts::{
     MEMORY_ARTIFACTS_EXTENSIONS_DIR, MEMORY_ARTIFACTS_PHASE2_DIFF_FILE,
-    MEMORY_ARTIFACTS_RAW_MEMORIES_FILE, MEMORY_ARTIFACTS_ROLLOUT_SUMMARIES_DIR,
-    MemoryArtifactsWorkspace, MemoryRolloutSummaryArtifact,
+    MEMORY_ARTIFACTS_RAW_MEMORIES_FILE, MEMORY_ARTIFACTS_TURN_SUMMARIES_DIR,
+    MemoryArtifactsWorkspace, MemoryTurnSummaryArtifact,
 };
 pub use citation::{
     MEMORY_CITATION_END_TAG, MEMORY_CITATION_START_TAG, MemoryCitation, MemoryCitationParseIssue,
