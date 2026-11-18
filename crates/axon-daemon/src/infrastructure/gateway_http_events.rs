@@ -11,6 +11,9 @@ use crate::infrastructure::event_scripts::{
 use axum::response::Response;
 use serde::Deserialize;
 
+/// 拒绝审计出口：`(level, message)`，由调用方注入结构化日志 sink。
+pub(super) type EventAudit<'a> = &'a dyn Fn(&str, &str);
+
 /// provider 事件默认有效期。
 const PROVIDER_EVENT_TTL_MS: u64 = 24 * 60 * 60 * 1_000;
 
@@ -53,6 +56,7 @@ pub(super) fn normalized_event(
     route: &GatewayRoute,
     body: &[u8],
     providers: &EventProviderRegistry,
+    audit: EventAudit<'_>,
 ) -> Result<ExternalEventEnvelope, Response> {
     match route {
         GatewayRoute::Generic => {
@@ -64,19 +68,19 @@ pub(super) fn normalized_event(
         }
         GatewayRoute::Envelope(provider) | GatewayRoute::Raw(provider) => {
             if !providers.is_registered(provider) {
-                audit_event_rejection(provider, "provider 未注册");
+                audit_event_rejection(audit, "WARNING", provider, "provider 未注册");
                 return Err(json_error(404, "provider_not_configured"));
             }
             let received_at_ms = system_now_ms();
             let parsed = match route {
                 GatewayRoute::Raw(_) => {
-                    parse_provider_payload(provider, body, providers, received_at_ms)?
+                    parse_provider_payload(provider, body, providers, received_at_ms, audit)?
                 }
                 _ => serde_json::from_slice::<EventScriptEvent>(body)
                     .map_err(|_| json_error(400, "invalid_event"))?,
             };
             let event = EventScriptEvent::validate(provider, parsed).map_err(|error| {
-                audit_event_rejection(provider, &error.to_string());
+                audit_event_rejection(audit, "WARNING", provider, &error.to_string());
                 json_error(400, "invalid_event")
             })?;
             Ok(provider_envelope(provider, event, received_at_ms))
@@ -90,16 +94,26 @@ fn parse_provider_payload(
     body: &[u8],
     providers: &EventProviderRegistry,
     received_at_ms: u64,
+    audit: EventAudit<'_>,
 ) -> Result<EventScriptEvent, Response> {
     let payload = serde_json::from_slice::<serde_json::Value>(body)
         .map_err(|_| json_error(400, "invalid_json"))?;
     providers
         .run_parser(provider, &payload, received_at_ms)
         .map_err(|error| {
-            audit_event_rejection(provider, &error.to_string());
             let (status, code) = script_failure_response(&error);
+            let level = rejection_level(&error);
+            audit_event_rejection(audit, level, provider, &error.to_string());
             json_error(status, code)
         })
+}
+
+/// 拒绝的审计级别：业务过滤是正常运行态，脚本故障才按错误曝光。
+fn rejection_level(error: &EventScriptError) -> &'static str {
+    match error {
+        EventScriptError::Filtered { .. } => "INFO",
+        _ => "ERROR",
+    }
 }
 
 fn script_failure_response(error: &EventScriptError) -> (u16, &'static str) {
@@ -108,6 +122,8 @@ fn script_failure_response(error: &EventScriptError) -> (u16, &'static str) {
         | EventScriptError::UnknownProvider(_)
         | EventScriptError::MissingParser(_) => (404, "provider_not_configured"),
         EventScriptError::Timeout => (504, "event_script_timeout"),
+        // 过滤是确定性结果：用 4xx 让调用方停止重试，避免同一事件被投递两次。
+        EventScriptError::Filtered { .. } => (400, "event_filtered"),
         EventScriptError::Spawn(_)
         | EventScriptError::Failed { .. }
         | EventScriptError::InvalidJson(_)
@@ -143,8 +159,11 @@ fn provider_envelope(
 }
 
 /// 审计被丢弃的外部事件：fail-closed，不进入耐久存储。
-fn audit_event_rejection(provider: &str, reason: &str) {
-    eprintln!("[gateway-events] provider={provider} 事件被丢弃：{reason}");
+fn audit_event_rejection(audit: EventAudit<'_>, level: &str, provider: &str, reason: &str) {
+    audit(
+        level,
+        &format!("[gateway-events] provider={provider} 事件被丢弃：{reason}"),
+    );
 }
 
 fn system_now_ms() -> u64 {
@@ -252,6 +271,12 @@ mod tests {
         assert_eq!(
             script_failure_response(&EventScriptError::InvalidJson("坏输出".to_owned())),
             (502, "event_script_failed")
+        );
+        assert_eq!(
+            script_failure_response(&EventScriptError::Filtered {
+                reason: "未带触发前缀".to_owned(),
+            }),
+            (400, "event_filtered")
         );
     }
 

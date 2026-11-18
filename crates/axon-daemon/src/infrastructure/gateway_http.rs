@@ -91,11 +91,16 @@ pub(super) struct GatewayHttpState {
 }
 
 impl GatewayHttpState {
-    /// 写一条访问日志；未注入 sink 时什么也不做。
-    pub(super) fn log_access(&self, level: &str, message: &str) {
+    /// 写一条结构化日志；未注入 sink 时什么也不做。
+    pub(super) fn log(&self, level: &str, message: &str) {
         if let Some(sink) = self.log_sink.as_deref() {
             sink.append(level, message);
         }
+    }
+
+    /// 写一条访问日志；未注入 sink 时什么也不做。
+    pub(super) fn log_access(&self, level: &str, message: &str) {
+        self.log(level, message);
     }
 }
 

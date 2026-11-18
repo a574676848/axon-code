@@ -420,7 +420,8 @@ fn interaction_response(state: &GatewayHttpState, interaction_id: &str) -> Respo
 
 /// 外部事件提交。
 fn submit_event(state: &GatewayHttpState, route: &GatewayRoute, body: &[u8]) -> Response {
-    let event = match normalized_event(route, body, &state.providers) {
+    let audit = |level: &str, message: &str| state.log(level, message);
+    let event = match normalized_event(route, body, &state.providers, &audit) {
         Ok(event) => event,
         Err(response) => return response,
     };

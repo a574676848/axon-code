@@ -184,6 +184,21 @@ fn parser_script_round_trip_and_failures_are_fail_closed() {
     write_provider(
         temp.path(),
         PROVIDER,
+        "import sys\nsys.stderr.write('未带触发前缀')\nsys.exit(2)\n",
+    );
+    match registry
+        .run_parser(PROVIDER, &payload(), 0)
+        .expect_err("过滤退出码必须失败")
+    {
+        EventScriptError::Filtered { reason } => {
+            assert!(reason.contains("未带触发前缀"));
+        }
+        other => panic!("期望 Filtered，实际 {other:?}"),
+    }
+
+    write_provider(
+        temp.path(),
+        PROVIDER,
         "import sys\nsys.stderr.write('boom')\nsys.exit(3)\n",
     );
     match registry

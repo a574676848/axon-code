@@ -76,6 +76,8 @@ Authorization: Bearer <token>
 
 `/gateway/v1/events/<provider>` 与 `/gateway/v1/events/<provider>/raw` 要求该 provider 已在运行根的 `events/<provider>/` 目录中配置（目录名即 provider 名，其中解析脚本 `parser.py` 必填、`sop.md` 可选）。未配置时返回 `404`。
 
+解析脚本的进程退出码即判定：`0` 放行；`2` 表示按业务纪律主动丢弃该事件，网关以 `400 event_filtered` 回执并在运行日志记 `[gateway-events] provider=<名> 事件被丢弃：<原因>`，调用方不得重试；其余非零一律视为脚本故障，按 `502 event_script_failed` 处理。
+
 ### 扩展路由族（`/api/v1`，全部需要鉴权）
 
 本前缀下**不存在免鉴权面**：鉴权在路由层无条件执行，adapter 拿不到豁免权。凭据有两个通道，`/api/v1` 业务路由任一命中即通过：`Authorization: Bearer <token>`，或 `?api_token=<token>`。管理面（`/api/v1/keys`）只认 `Authorization` 头，不接受查询串。
@@ -213,6 +215,7 @@ Cron：
 |---|---|---|
 | 401 | `UNAUTHORIZED` | token 缺失或不匹配，或实例未配置 token；先核对 token 名与取值 |
 | 400 | `invalid_json`、`invalid_event` | 报文不合法；核对 JSON、字段拼写与取值 |
+| 400 | `event_filtered` | provider 解析脚本按业务纪律主动丢弃该事件（非受理事件类型、自身回声、未带触发前缀等）；属确定性结果，不要重试。逐条原因按 INFO 记运行日志，需要追溯时先把 `agent.log_level` 调到 `info`，再按 `[gateway-events]` 检索 `data/logs/axon-<日期>.log` |
 | 403 | `event_rejected` | 事件被入口策略拒绝，事件未入账 |
 | 404 | `not_found`、`provider_not_configured`、`interaction_not_found` | 路由未命中，或 provider 未在 `events/<provider>/` 配置 |
 | 405 | `method_not_allowed` | 方法不被该路由接受 |

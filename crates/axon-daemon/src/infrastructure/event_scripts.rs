@@ -35,6 +35,12 @@ pub const EVENT_SCRIPT_OUTPUT_FIELDS: [&str; 4] =
 pub const EVENT_SCRIPT_SCHEMA_JSON: &str = include_str!("event_script_schema.json");
 /// 解析脚本硬超时。
 pub const EVENT_SCRIPT_TIMEOUT: Duration = Duration::from_secs(2);
+/// 解析脚本用该退出码声明「按业务纪律主动丢弃事件」。
+///
+/// 必须与脚本故障分开：过滤是正常运行态（消息未带触发前缀、自身回声、非受理的
+/// 事件类型等），重试与告警都没有意义；故障才需要按错误曝光。沿用 POSIX 惯例取
+/// 2（0 放行、2 过滤、其余非零一律视为故障）。
+pub const EVENT_SCRIPT_FILTER_EXIT_CODE: i32 = 2;
 /// 解释 provider 解析脚本的程序。
 ///
 /// Windows 的 Python 安装包注册的是 `python`；POSIX 发行版只保证 `python3`
@@ -141,6 +147,12 @@ pub enum EventScriptError {
         /// stderr 审计摘要。
         stderr: String,
     },
+    /// 脚本按业务纪律主动丢弃事件：确定性过滤，不是故障。
+    #[error("provider 脚本按纪律丢弃事件：{reason}")]
+    Filtered {
+        /// 脚本给出的丢弃原因。
+        reason: String,
+    },
     /// 脚本 stdout 不是合法契约 JSON。
     #[error("provider 脚本输出不是合法 JSON：{0}")]
     InvalidJson(String),
@@ -210,10 +222,12 @@ impl EventProviderRegistry {
         .map_err(|error| EventScriptError::Spawn(error.to_string()))?;
         let (status, stdout, stderr) = self.run_script(&parser, input)?;
         if !status.success() {
-            return Err(EventScriptError::Failed {
-                code: status.code(),
-                stderr: audit_excerpt(&stderr),
-            });
+            let code = status.code();
+            let stderr = audit_excerpt(&stderr);
+            if code == Some(EVENT_SCRIPT_FILTER_EXIT_CODE) {
+                return Err(EventScriptError::Filtered { reason: stderr });
+            }
+            return Err(EventScriptError::Failed { code, stderr });
         }
         let event = serde_json::from_slice::<EventScriptEvent>(&stdout)
             .map_err(|error| EventScriptError::InvalidJson(error.to_string()))?;

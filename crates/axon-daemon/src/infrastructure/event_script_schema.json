@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Axon 外部事件解析脚本输出契约",
-  "description": "provider 解析脚本 stdout 必须输出的唯一 JSON 对象；除下列字段外不接受任何额外字段。event_id 必须 provider 命名空间化（以 {provider}: 开头），且严禁掺入接收时间或随机数，否则 durable ingress 的幂等键失效。",
+  "description": "provider 解析脚本 stdout 必须输出的唯一 JSON 对象；除下列字段外不接受任何额外字段。event_id 必须 provider 命名空间化（以 {provider}: 开头），且严禁掺入接收时间或随机数，否则 durable ingress 的幂等键失效。进程退出码即判定：0 放行；2 表示按业务纪律主动丢弃（非受理事件类型、自身回声、未带触发前缀等），Daemon 以 400 event_filtered 回执并记 [gateway-events] 原因，调用方不得重试；其余非零一律视为脚本故障，按 502 event_script_failed 处理。",
   "type": "object",
   "additionalProperties": false,
   "required": ["event_id", "title", "content"],

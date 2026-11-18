@@ -59,7 +59,7 @@ WebSocket 的 `event` 帧包含 `subscribeId`、`event_type`、`payload_json`、
 
 provider 内容资产位于 `~/.axon/events/{provider}/`，目录名即 provider 名，其中 `parser.py` 必填、`sop.md` 可选。仓库内只保留输出契约 `crates/axon-daemon/src/infrastructure/event_script_schema.json` 与测试夹具，不存放任何 provider 业务脚本；新增外部系统只需新增目录，Rust 代码零改动。
 
-解析脚本从 stdin 读取 UTF-8 JSON `{provider, received_at_ms, payload}`，向 stdout 写出 `{event_id, correlation_key?, title, content}`。`event_id` 必须带 `{provider}:` 命名空间，且不得掺入接收时间或随机数，否则 durable 幂等键失效。脚本以非交互方式启动：环境变量清空后只注入白名单项与 `PYTHONUTF8=1`，拿不到任何凭据；超过 2 秒按超时终止并整树回收进程。脚本缺失、崩溃、超时或输出不合契约时事件一律 fail-closed 丢弃并留下审计行，分别返回 404 / 504 / 502。
+解析脚本从 stdin 读取 UTF-8 JSON `{provider, received_at_ms, payload}`，向 stdout 写出 `{event_id, correlation_key?, title, content}`。`event_id` 必须带 `{provider}:` 命名空间，且不得掺入接收时间或随机数，否则 durable 幂等键失效。脚本以非交互方式启动：环境变量清空后只注入白名单项与 `PYTHONUTF8=1`，拿不到任何凭据；超过 2 秒按超时终止并整树回收进程。进程退出码即判定：`0` 放行；`2` 表示按业务纪律主动丢弃（正常运行态，按 `400 event_filtered` 回执）；其余非零视为脚本故障（`502 event_script_failed`）。脚本缺失、超时与输出不合契约同样 fail-closed，分别返回 404 / 504 / 502。每次丢弃都经 `LogSink` 记一行 `[gateway-events] provider=<名> 事件被丢弃：<原因>`：业务过滤记 INFO，脚本故障记 ERROR，provider 未注册与信封不合契约记 WARNING；INFO 行受 `[agent] log_level` 门控，默认 `warning` 下只保留状态码与故障行。
 
 归一化后的事件在进入 durable ingress 前有两条增强：`content` 超过 4000 个 Unicode 字符时原子归档为 `~/.axon/data/archive/*.md`，Interaction 正文只保留包含归档路径与 `sop.md` 路径的简报，由主 turn 用 `builtin.read_file` 按 offset/limit 分页读取；带关联键的事件（provider 路由未显式给出时回落为 `event_id`）按该键做 3000ms 滑动窗口合并，窗口内的同类事件只唤醒主 turn 一次。事件有效期 24 小时，过期事件按既有策略拒绝。事件 durable 入账成功后立即唤醒主 turn，与 CLI/TUI 的 IPC 提交走同一条唤醒路径，不再依赖 1 秒维护定时兜底；被防抖吸收或幂等命中的提交不产生新记录，因此也不重复唤醒。
 
