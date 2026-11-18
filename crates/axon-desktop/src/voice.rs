@@ -110,24 +110,32 @@ fn session_slot() -> &'static Mutex<Option<VoiceSession>> {
 ///
 /// 返回时连接已就绪，前端可以开始推送音频帧；重复调用会先结束上一路。
 ///
+/// `session_id` 是这次语音要落进去的那条会话：语音入站与文本入口共用同一条会话，
+/// 因此它必须由界面显式给出，宿主不派生、也不回落到「最近一条」。
+///
 /// # Errors
 ///
-/// 缺少工作区或回复目的地、网关不可达、鉴权失败或就绪超时。
+/// 缺少工作区、回复目的地或会话标识、网关不可达、鉴权失败或就绪超时。
 #[tauri::command]
 pub async fn voice_start(
     app: tauri::AppHandle,
     workspace_id: String,
     reply_destination: String,
+    session_id: String,
     tts: Option<bool>,
     submit: Option<bool>,
 ) -> Result<(), String> {
     let workspace_id = workspace_id.trim();
     let reply_destination = reply_destination.trim();
+    let session_id = session_id.trim();
     if workspace_id.is_empty() {
         return Err("当前会话缺少工作区，无法开始语音输入".to_owned());
     }
     if reply_destination.is_empty() {
         return Err("当前会话缺少回复目的地，无法开始语音输入".to_owned());
+    }
+    if session_id.is_empty() {
+        return Err("当前会话缺少会话标识，无法开始语音输入".to_owned());
     }
     stop_current_session();
     let url = gateway::voice_websocket_url()?;
@@ -135,6 +143,7 @@ pub async fn voice_start(
     let start = start_frame(
         workspace_id,
         reply_destination,
+        session_id,
         &client_session_id,
         tts.unwrap_or(false),
         submit.unwrap_or(false),
@@ -428,6 +437,7 @@ fn update_utterance(current: &Arc<AtomicU32>, final_seq: u64) {
 fn start_frame(
     workspace_id: &str,
     reply_destination: &str,
+    session_id: &str,
     client_session_id: &str,
     tts: bool,
     submit: bool,
@@ -438,6 +448,11 @@ fn start_frame(
         "clientSessionId": client_session_id,
         "workspaceId": workspace_id,
         "replyDestination": reply_destination,
+        /*
+         * 目标会话标识：语音入站与文本入口写进同一条会话。
+         * 网关按它落信封，缺省即拒，因此这里不省略、也不回落到「最近一条」。
+         */
+        "sessionId": session_id,
         "mode": "push_to_talk",
         "lang": "zh",
         "tts": tts,
@@ -533,6 +548,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&start_frame(
             "workspace-a",
             "desktop",
+            "01J8Z0000000000000000000AA",
             "desktop-1",
             true,
             false,
@@ -540,8 +556,11 @@ mod tests {
         .expect("首帧应为合法 JSON");
         assert_eq!(value["type"], "start");
         assert_eq!(value["protocolVersion"], 1);
+        assert_eq!(value["clientSessionId"], "desktop-1");
         assert_eq!(value["workspaceId"], "workspace-a");
         assert_eq!(value["replyDestination"], "desktop");
+        // 目标会话由客户端显式给出：网关缺这一项即拒，因此它永远不会缺席。
+        assert_eq!(value["sessionId"], "01J8Z0000000000000000000AA");
         assert_eq!(value["mode"], "push_to_talk");
         assert_eq!(value["lang"], "zh");
         assert_eq!(value["tts"], true);
@@ -551,11 +570,13 @@ mod tests {
         let dialogue: serde_json::Value = serde_json::from_str(&start_frame(
             "workspace-a",
             "desktop",
+            "01J8Z0000000000000000000AB",
             "desktop-2",
             true,
             true,
         ))
         .expect("对话模式首帧");
+        assert_eq!(dialogue["sessionId"], "01J8Z0000000000000000000AB");
         assert_eq!(dialogue["submit"], true);
     }
 

@@ -441,7 +441,7 @@ W10 是三端用户可见回归，依赖 W4 与 W5 完成后才能全量开跑�
 | W5.3 | 待执行 | 事件分段目录名与主键一致性未单独核对 |
 | W6.1 | 已完成 | `workbench_http_adapter` 删除派生路由，会话创建统一走 `POST /api/v1/sessions` |
 | W6.2 | 部分完成 | Cron 唤醒改用 `schedules.session_id`（缺失即报错），Cron 视图与唤醒路径改调 `resolve_workspace_session`；任务定义侧尚未把目标会话落进 `schedules.session_id` |
-| W6.3 | 已完成 | `gateway_voice` 改用帧内显式 `sessionId`，`session_id_for` 删除 |
+| W6.3 | 已完成 | `gateway_voice` 改用帧内显式 `sessionId`，`session_id_for` 删除；桌面侧同步收口：`voice_start` 与输入坞语音入口显式传当前会话标识，首帧必带 `sessionId`，缺省由界面与宿主各自拦下 |
 | W6.4 | 已完成 | `daemon_history_loader` 直接读 `interaction.session_id` |
 | W6.5 | 已完成 | `interrupted_interaction_repository` 读 `inbox.session_id`，`candidate_session_id` 不再派生 |
 | W6.6 | 已完成 | `interaction_adapter` 的 Interaction 会话取自显式入参或 Workspace 活跃会话 |

@@ -24,11 +24,17 @@ export interface VoiceSessionOptions {
 export async function startVoiceSession(
   workspaceId: string,
   replyDestination: string,
+  sessionId: string,
   options: VoiceSessionOptions = {},
 ): Promise<void> {
   await call('voice_start', {
     workspaceId,
     replyDestination,
+    /*
+     * 目标会话：语音定稿与文本输入落进同一条会话，因此这里必须是当前会话的标识。
+     * 网关缺这一项即拒，宿主不派生、也不回落到「最近一条」，缺了就只能报错。
+     */
+    sessionId,
     tts: options.tts ?? false,
     submit: options.submit ?? false,
   });

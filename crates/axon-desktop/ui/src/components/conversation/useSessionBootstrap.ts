@@ -42,8 +42,12 @@ export interface SessionBootstrap {
     /** 新会话沿用的思考强度；空表示交给 `agent.reasoning_effort`。 */
     reasoningEffort?: string | null,
   ) => void;
-  /** 首屏起语音时先建会话，返回这一轮可用的工作区与目的地。 */
-  ensureVoiceSession: () => Promise<{ workspaceId: string; replyDestination: string } | null>;
+  /** 首屏起语音时先建会话，返回这一轮可用的工作区、目的地与会话标识。 */
+  ensureVoiceSession: () => Promise<{
+    workspaceId: string;
+    replyDestination: string;
+    sessionId: string;
+  } | null>;
 }
 
 export function useSessionBootstrap(options: SessionBootstrapOptions): SessionBootstrap {
@@ -100,15 +104,20 @@ export function useSessionBootstrap(options: SessionBootstrapOptions): SessionBo
   }, [onSelectSession, workspace]);
 
   /**
-   * 首屏直接起语音时先建一条会话，返回这一轮可用的工作区与目的地。
+   * 首屏直接起语音时先建一条会话，返回这一轮可用的工作区、目的地与会话标识。
    *
    * 语音定稿由网关直接提交，界面没有第二次机会去补建车道；因此入口必须在
-   * 采集开始之前就拿到一个真实目的地，否则用户说完话只会被告知「缺少工作区」。
+   * 采集开始之前就拿到一个真实目的地与真实的会话标识，否则用户说完话只会被告知
+   * 「缺少工作区」或「尚未就绪」。
    */
   const ensureVoiceSession = useCallback(async () => {
     const created = await createSession();
     if (created === null) return null;
-    return { workspaceId: created.workspaceId, replyDestination: created.destination };
+    return {
+      workspaceId: created.workspaceId,
+      replyDestination: created.destination,
+      sessionId: created.sessionId,
+    };
   }, [createSession]);
 
   /** 首屏直接提交：先建会话，等这一轮目标就绪后再发送。 */

@@ -47,11 +47,13 @@ axon-desktop（Rust）── WebSocket /api/v1/voice ──► axon-daemon
 
 | 帧 | 字段 | 说明 |
 | --- | --- | --- |
-| `start` | `protocolVersion=1`、`clientSessionId`、`workspaceId`、`replyDestination`、`mode`（`push_to_talk`/`full_duplex`）、`lang`（`zh`/`en`/`auto`）、`tts`、`deviceId?` | 会话首帧，重复即协议错误 |
+| `start` | `protocolVersion=1`、`clientSessionId`、`workspaceId`、`replyDestination`、`sessionId`、`mode`（`push_to_talk`/`full_duplex`）、`lang`（`zh`/`en`/`auto`）、`tts`、`deviceId?` | 会话首帧，重复即协议错误 |
 | `stop` | `utteranceSeq` | 结束当前句，会话保持 |
 | `cancel` | `reason`（`user_cancel`/`client_close`） | 客户端不得发 `barge`，打断判决只在 daemon |
 | `playbackDrained` | `epoch` | 客户端已清空该轮队列 |
 | `setTts` / `setPreset` / `preview` / `cancelPreview` / `cueEnded` / `cueAck` | 见协议文档 | 当前已解析但不改变行为（`preview` 走 HTTP 接口） |
+
+`sessionId` 是这次语音要落进去的那条会话，语音入站与文本入口共用它：客户端显式给出，缺省或空白即拒首帧；daemon 不派生、不回落到「最近一条」，也不接受由工作区与目的地拼出来的标识。
 
 ### 5.2 服务端文本帧
 

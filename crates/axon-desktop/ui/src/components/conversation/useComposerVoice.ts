@@ -49,10 +49,12 @@ const ELAPSED_TICK_MS = 200;
  */
 const MAX_RECORDING_MS = 120_000;
 
-/** 首屏起语音时临时建立的车道目标。 */
+/** 语音会话的落点：工作区、回复目的地，以及要写进去的那条会话。 */
 export interface VoiceEntry {
   workspaceId: string;
   replyDestination: string;
+  /** 目标会话标识：语音入站与文本入口共用同一条会话。 */
+  sessionId: string;
 }
 
 export type { ComposerPermissionPrompt, VoiceMode } from './useVoicePermission';
@@ -64,6 +66,8 @@ export interface ComposerVoiceOptions {
   workspaceId: string | null;
   /** 当前会话的回复目的地；首屏为空时交给 `ensureSession`。 */
   replyDestination: string;
+  /** 当前会话标识；首屏为空时交给 `ensureSession`。 */
+  sessionId: string;
   /** 当前草稿；听写定稿与拒收回退都写到这里。 */
   text: string;
   /** 既有编辑控制器写入入口。 */
@@ -120,6 +124,7 @@ export function useComposerVoice({
   enabled,
   workspaceId,
   replyDestination,
+  sessionId,
   text,
   commit,
   mode = 'dictation',
@@ -435,7 +440,7 @@ export function useComposerVoice({
 
   /** 真正开始采集；此时授权已经确认。 */
   const beginCapture = React.useCallback(
-    async (workspace: string, destination: string) => {
+    async (workspace: string, destination: string, session: string) => {
       const generation = generationRef.current + 1;
       generationRef.current = generation;
       setError(null);
@@ -452,7 +457,7 @@ export function useComposerVoice({
       try {
         // 先建立语音会话：宿主拉起与模型预热都在这一步，期间不采集，
         // 因此不会出现「还没连上就开始读麦克风」造成的积压。
-        await startVoiceSession(workspace, destination, {
+        await startVoiceSession(workspace, destination, session, {
           tts: readAloudRef.current,
           submit: mode === 'conversation',
         });
@@ -512,12 +517,13 @@ export function useComposerVoice({
   /** 解析目标会话：首屏没有车道时先建一条。 */
   const resolveTarget = React.useCallback(async (): Promise<VoiceEntry | null> => {
     const destination = replyDestination.trim();
-    if (workspaceId !== null && destination.length > 0) {
-      return { workspaceId, replyDestination: destination };
+    const session = sessionId.trim();
+    if (workspaceId !== null && destination.length > 0 && session.length > 0) {
+      return { workspaceId, replyDestination: destination, sessionId: session };
     }
     if (ensureSession === undefined) return null;
     return ensureSession();
-  }, [ensureSession, replyDestination, workspaceId]);
+  }, [ensureSession, replyDestination, sessionId, workspaceId]);
 
   /** 入口可用：语音入口可见、桌面宿主，并且有工作区或能在首屏建一条。 */
   const available = React.useMemo(
@@ -537,10 +543,10 @@ export function useComposerVoice({
     }
     const target = await resolveTarget();
     if (target === null) {
-      setError('当前会话缺少工作区，无法开始语音输入');
+      setError('当前会话尚未就绪，无法开始语音输入');
       return;
     }
-    await beginCapture(target.workspaceId, target.replyDestination);
+    await beginCapture(target.workspaceId, target.replyDestination, target.sessionId);
   }, [available, beginCapture, mode, resolveTarget, access]);
 
   // 授权确认后继续的动作：hook 早于这个回调声明，因此在这里补上实现。

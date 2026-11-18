@@ -490,7 +490,7 @@ export interface ConfigReadResult {
   provider_wire_transports: string[];
 }
 
-/** 提交回执；Interaction 标识由服务端派生，客户端无法预知。 */
+/** 提交回执；Interaction 标识由服务端生成，客户端无法预知。 */
 export interface SubmissionReceipt {
   interactionId: string;
   accepted: boolean;
