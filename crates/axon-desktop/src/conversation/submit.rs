@@ -1,6 +1,6 @@
 //! 提交用户消息：走网关 HTTP 交互事件面。
 //!
-//! 交互标识由服务端派生（`external-interaction-<hash>`），客户端无法预知，
+//! 交互标识由服务端生成（ULID，不带来源前缀），客户端无法预知，
 //! 因此提交成功后的第一件事是把回执里的标识交给订阅器。
 
 use crate::conversation::wire::{EVENTS_PATH, EventSubmission, SubmissionReceipt};

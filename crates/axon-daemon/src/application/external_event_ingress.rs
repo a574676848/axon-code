@@ -6,8 +6,8 @@ use super::interaction_ingress::{
 };
 use axon_crypto::sha256_hex;
 use axon_domain::{
-    AudienceContext, AudienceKind, DaemonSessionId, DisclosurePolicy, InteractionId,
-    InteractionRecord, InteractionSource, ReplyRoute, ScopeRef,
+    AudienceContext, AudienceKind, DaemonSessionId, DisclosurePolicy, InteractionRecord,
+    InteractionSource, ReplyRoute, ScopeRef,
 };
 use axon_session::{InteractionStore, InteractionStoreError};
 use thiserror::Error;
@@ -26,8 +26,6 @@ pub const MAX_EXTERNAL_EVENT_CORRELATION_KEY_LENGTH: usize = 256;
 pub const MAX_EXTERNAL_EVENT_MODEL_LENGTH: usize = 256;
 /// 本轮推理强度的长度上限：档位是固定枚举，留出余量即可拒绝明显异常输入。
 const MAX_EXTERNAL_EVENT_REASONING_EFFORT_LENGTH: usize = 32;
-/// 外部事件交互标识的前缀：与来源键同一份摘要，重放命中同一行。
-const EXTERNAL_EVENT_INTERACTION_PREFIX: &str = "external-interaction-";
 
 /// 外部 Watch/Event 适配器输入。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -316,8 +314,8 @@ where
         let scope = ScopeRef::workspace(workspace_id.to_owned())
             .map_err(|error| ExternalEventIngressError::InvalidInput(error.to_string()))?;
         let source_key = format!(
-            "{EXTERNAL_EVENT_SOURCE_PREFIX}{}:{}:{}",
-            self.adapter_id, workspace_id, event.event_id
+            "{EXTERNAL_EVENT_SOURCE_PREFIX}{}:{}:{}:{}",
+            self.adapter_id, event.source_channel, workspace_id, event.event_id
         );
         let digest = sha256_hex(source_key.as_bytes());
         let source = InteractionSource::new(
@@ -330,9 +328,9 @@ where
             _ => source.with_client(event.source_channel.trim()),
         })
         .map_err(|error| ExternalEventIngressError::InvalidInput(error.to_string()))?;
-        let interaction_id =
-            InteractionId::new(format!("{EXTERNAL_EVENT_INTERACTION_PREFIX}{digest}"))
-                .map_err(|error| ExternalEventIngressError::InvalidInput(error.to_string()))?;
+        // 交互标识是服务端生成的 ULID：它不携带来源、也不由事件内容派生，
+        // 幂等完全由 (source_channel, source_message_id) 唯一键承担。
+        let interaction_id = axon_session::new_interaction_id();
         let route = ReplyRoute::new(event.reply_channel.clone(), event.reply_destination.clone())
             .map_err(|error| ExternalEventIngressError::InvalidInput(error.to_string()))?;
         let mut record = InteractionRecord::new(
@@ -470,19 +468,48 @@ mod tests {
         let first = adapter.submit(event("workspace-a")).expect("首次提交");
         let duplicate = adapter.submit(event("workspace-a")).expect("重复提交");
 
-        assert!(first.inserted);
-        assert!(!duplicate.inserted);
+        assert!(first.inserted, "首次提交必须新写入一行");
+        assert!(!duplicate.inserted, "重放不得新写入第二行");
+        // 重放拿到的必须是**同一条**交互：回执标识与落盘标识一致，客户端才不会各投一路。
+        assert_eq!(
+            first.interaction_id, duplicate.interaction_id,
+            "重放回执必须指回首次落盘的那一条"
+        );
         let leases = store
             .claim_processing(10, NOW_MS, LEASE_MS)
             .expect("读取 Interaction");
-        assert_eq!(leases.len(), 1);
+        assert_eq!(leases.len(), 1, "同一条外部事件只允许一行 Interaction");
+        assert_eq!(leases[0].interaction.interaction_id, first.interaction_id);
         assert_eq!(leases[0].interaction.status, InteractionStatus::Processing);
+        // 标识是服务端生成的 ULID：不带来源前缀，也不由事件内容派生。
         assert!(
-            leases[0]
-                .interaction
-                .interaction_id
-                .as_str()
-                .starts_with(EXTERNAL_EVENT_INTERACTION_PREFIX)
+            axon_session::is_ulid(leases[0].interaction.interaction_id.as_str()),
+            "外部事件交互标识必须是 ULID：{}",
+            leases[0].interaction.interaction_id.as_str()
+        );
+    }
+
+    #[test]
+    fn the_same_event_id_on_another_channel_is_a_different_interaction() {
+        // 幂等键是 (source_channel, source_message_id)：渠道不同就是另一条事件。
+        let directory = axon_test_support::test_temp_dir();
+        let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+        let adapter = ingress(store.clone());
+
+        let github = adapter.submit(event("workspace-a")).expect("github 事件");
+        let mut jira = event("workspace-a");
+        jira.source_channel = "jira".to_owned();
+        jira.reply_channel = "jira".to_owned();
+        let jira = adapter.submit(jira).expect("jira 事件");
+
+        assert!(github.inserted && jira.inserted);
+        assert_ne!(github.interaction_id, jira.interaction_id);
+        assert_eq!(
+            store
+                .claim_processing(10, NOW_MS, LEASE_MS)
+                .expect("读取 Interaction")
+                .len(),
+            2
         );
     }
 

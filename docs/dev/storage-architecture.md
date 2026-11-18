@@ -782,6 +782,7 @@ CREATE INDEX sessions_by_kind_root
 
 - `interaction_id` 是一次入站的稳定身份，每次入站生成，形态为 ULID，不带业务前缀。
 - 幂等来源是 `inbox` 的 `(source_channel, source_message_id)` 唯一键，不是标识字符串；同一外部消息重放必须落到同一行。
+- 命中已有行时以库里的标识为准：重放方生成的那枚标识被丢弃，回执返回既有标识。因此内容比对不看标识，只看事件内容与投递路由。
 - 禁止任何按前缀识别来源的代码；来源一律读 `inbox.source_channel`。
 - 与会话身份无直接关系的边角不得借用 `interaction_id`：问答记录与工具上下文里必须写真实轮次标识。
 

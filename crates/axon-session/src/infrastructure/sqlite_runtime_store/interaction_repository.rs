@@ -487,8 +487,12 @@ fn ensure_same_interaction(
     existing: &InteractionRecord,
     requested: &InteractionRecord,
 ) -> Result<(), InteractionStoreError> {
-    if existing.interaction_id != requested.interaction_id
-        || existing.content != requested.content
+    /*
+     * 幂等身份是来源键 `(source_channel, source_message_id)`，不是交互标识：标识由服务端
+     * 生成（ULID），重放方不可能复现。因此这里只比较「这条事件是什么」，不比较它的 id；
+     * 命中已有行时以库里的标识为准，回执一并返回它。
+     */
+    if existing.content != requested.content
         || existing.scope != requested.scope
         || existing.audience != requested.audience
         || existing.reply_route != requested.reply_route
