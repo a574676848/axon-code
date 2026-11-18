@@ -185,8 +185,7 @@ mod tests {
         fn wake_session(
             &self,
             _job: &CronJob,
-            _channel: &str,
-            _destination: &str,
+            _session_id: &str,
             _body: &str,
             _now_ms: u64,
         ) -> Result<String, String> {

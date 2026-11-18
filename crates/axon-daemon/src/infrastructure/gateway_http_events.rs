@@ -186,10 +186,15 @@ struct HttpEventRequest {
     event_id: String,
     /// 请求落到的 Workspace；桌面等工作台客户端会带上，外部 webhook 不带。
     ///
-    /// 带上时本轮落到该 Workspace 的会话（没有就建一条主会话）；不带时按外部事件处理，
-    /// 落到服务端固定会话。会话标识仍由服务端给出，不接受客户端自带。
+    /// 带上时本轮落到该 Workspace；不带时按外部事件处理，落到服务端固定会话。
     #[serde(default)]
     workspace_id: Option<String>,
+    /// 目标会话；工作台客户端携带用户正在看的那条会话，外部 webhook 不带。
+    ///
+    /// 带上时必须是已登记会话且归属与 `workspace_id` 一致；不带时按来源落定
+    /// （有 Workspace 就新建一条，外部事件落固定会话）。
+    #[serde(default)]
+    session_id: Option<String>,
     observed_at_ms: u64,
     expires_at_ms: u64,
     content: String,
@@ -212,8 +217,10 @@ impl HttpEventRequest {
             client: self.client,
             source_channel: self.source_channel,
             event_id: self.event_id,
-            // 外部事件不对外暴露会话标识：它们统一落到服务端内部的固定会话。
-            session_id: None,
+            session_id: match self.session_id {
+                Some(value) => Some(axon_domain::DaemonSessionId::new(value).map_err(|_| ())?),
+                None => None,
+            },
             // Workspace 可以显式给出：工作台客户端按用户选定的 Workspace 投递，
             // 空串表示外部 webhook 这类没有 Workspace 的来源。
             workspace_id: self.workspace_id.unwrap_or_default(),
@@ -313,27 +320,34 @@ mod tests {
     }
 
     #[test]
-    fn external_event_wire_accepts_workspace_but_rejects_session_fields() {
-        // 工作台客户端带 workspaceId（`.axon` 也是正经 Workspace，用户选哪个就落哪个）；
-        // 会话标识仍由服务端按 Workspace 落定，客户端自带的一律按未知字段拒绝。
-        let with_workspace = serde_json::from_str::<HttpEventRequest>(
-            r#"{"sourceChannel":"desktop","eventId":"event-1","workspaceId":"workspace-a","observedAtMs":100,"expiresAtMs":200,"content":"hello","replyChannel":"desktop","replyDestination":"client-1"}"#,
+    fn external_event_wire_carries_workspace_and_optional_session() {
+        // 工作台客户端带 workspaceId 与当前会话（`.axon` 也是正经 Workspace，选哪个落哪个）；
+        // 外部 webhook 两者都不带，落到服务端固定会话。
+        let with_session = serde_json::from_str::<HttpEventRequest>(
+            r#"{"sourceChannel":"desktop","eventId":"event-1","workspaceId":"workspace-a","sessionId":"session-01ARZ3NDEKTSV4RRFFQ69G5FAV","observedAtMs":100,"expiresAtMs":200,"content":"hello","replyChannel":"desktop","replyDestination":"client-1"}"#,
         )
-        .expect("工作台必须能带 Workspace");
+        .expect("工作台必须能带 Workspace 与会话");
+        let event = with_session.into_event().expect("事件映射");
+        assert_eq!(event.workspace_id, "workspace-a");
         assert_eq!(
-            with_workspace.into_event().expect("事件映射").workspace_id,
-            "workspace-a"
+            event.session_id.as_ref().map(|id| id.as_str()),
+            Some("session-01ARZ3NDEKTSV4RRFFQ69G5FAV")
         );
 
-        for payload in [
-            r#"{"sourceChannel":"http","eventId":"event-1","sessionId":"01J8XQ7K3M4N5P6Q7R8S9T0V1W","observedAtMs":100,"expiresAtMs":200,"content":"hello","replyChannel":"http","replyDestination":"client-1"}"#,
-            r#"{"sourceChannel":"http","eventId":"event-1","observedAtMs":100,"expiresAtMs":200,"content":"hello","replyChannel":"http","replyDestination":"client-1","unknownField":true}"#,
-        ] {
-            assert!(
-                serde_json::from_str::<HttpEventRequest>(payload).is_err(),
-                "会话标识由服务端落定，未知字段一律拒绝：{payload}"
-            );
-        }
+        // 空白会话标识在报文层即拒，不进入 ingress。
+        let blank = serde_json::from_str::<HttpEventRequest>(
+            r#"{"sourceChannel":"desktop","eventId":"event-1","workspaceId":"workspace-a","sessionId":"   ","observedAtMs":100,"expiresAtMs":200,"content":"hello","replyChannel":"desktop","replyDestination":"client-1"}"#,
+        )
+        .expect("空白会话标识可解析");
+        assert!(blank.into_event().is_err(), "空白会话标识必须被拒");
+
+        // 未知字段仍按 deny_unknown_fields 拒绝。
+        assert!(
+            serde_json::from_str::<HttpEventRequest>(
+                r#"{"sourceChannel":"http","eventId":"event-1","observedAtMs":100,"expiresAtMs":200,"content":"hello","replyChannel":"http","replyDestination":"client-1","unknownField":true}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

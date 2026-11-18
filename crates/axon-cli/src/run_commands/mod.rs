@@ -185,8 +185,8 @@ pub(crate) fn run_cli_daemon_interaction(
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let interaction = {
-        // 会话由（工作区、受众、渠道、投递目标）推导：显式续接必须复用目标会话的
-        // 渠道与投递目标，否则 Daemon 会推导出另一条会话。
+        // 显式续接必须复用目标会话的渠道与投递目标；未指定会话时新建一条主会话，
+        // 投递目标只决定投递，不参与会话身份。
         let surface = match run_cli_surface::resolve_cli_run_surface(
             cli.global.config.as_deref(),
             command.session.as_deref(),

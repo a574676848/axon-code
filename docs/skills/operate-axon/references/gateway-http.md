@@ -52,7 +52,8 @@ Authorization: Bearer <token>
 {
   "sourceChannel": "jira",
   "eventId": "AX-1024",
-  "workspaceId": "",
+  "workspaceId": "<workspace-id>",
+  "sessionId": "<session-id>",
   "observedAtMs": 1730000000000,
   "expiresAtMs": 1730086400000,
   "content": "事件正文",
@@ -66,6 +67,7 @@ Authorization: Bearer <token>
 
 - `sourceChannel`、`eventId`、`observedAtMs`、`expiresAtMs`、`content`、`replyChannel`、`replyDestination` 必填；时间戳为毫秒。
 - `workspaceId` 省略或仅空白时由服务端解析默认 Workspace；显式给出时必须已注册，否则整条事件被拒。
+- `sessionId` 可省略；给出时表示这一轮落进该已登记会话，其归属必须与 `workspaceId` 一致。桌面工作台提交时携带当前打开的会话；省略时服务端按 `workspaceId` 新建一条主会话；外部 webhook 两者都不给，落到服务端固定会话。
 - `client` 可省略；给出时表示按下发送的一端（`cli`、`desktop`、`tui`、`cron`、`webhook` 或自定入口名）。省略时按 `sourceChannel` 标注：会话历史逐轮显示的就是这个值，因此第三方 webhook 的事件显示为它自己的渠道名，不会冒充桌面或 CLI。
 - `localFiles` 为本地附件的绝对路径数组，可省略。
 - `model` 可省略；给出时表示这一轮显式使用该模型（引用已配置模型的 `name` 或 `id`）。它优先于会话记录的模型与 `agent.default_model`，空白值按未指定处理。桌面工作台在输入坞改过模型时才填它。

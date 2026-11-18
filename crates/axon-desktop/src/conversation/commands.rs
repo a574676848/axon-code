@@ -26,6 +26,7 @@ use crate::conversation::wire::{SubmissionReceipt, UserAnswerItem};
 #[tauri::command(async)]
 pub fn conversation_submit(
     workspace_id: String,
+    session_id: Option<String>,
     destination: String,
     content: String,
     attachments: Option<Vec<String>>,
@@ -34,6 +35,7 @@ pub fn conversation_submit(
 ) -> Result<SubmissionReceipt, String> {
     submit::submit_message(
         &workspace_id,
+        session_id.as_deref(),
         &destination,
         &content,
         attachments.as_deref().unwrap_or_default(),

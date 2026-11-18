@@ -30,6 +30,7 @@ pub(super) fn interaction_from_tui_submit(
     config_path: Option<&Path>,
     now_ms: u64,
     reply_destination: &str,
+    session: Option<&axon_domain::DaemonSessionId>,
 ) -> Result<Option<PreparedInteraction>, String> {
     if !matches!(
         submission.input,
@@ -42,7 +43,7 @@ pub(super) fn interaction_from_tui_submit(
         return Ok(None);
     }
     let mut prepared = prepare_interaction_from_prompt_as(
-        None,
+        session,
         cwd,
         config_path,
         TUI_CHANNEL,
@@ -170,6 +171,7 @@ mod tests {
             Some(&isolated_config(cwd.path())),
             42,
             "terminal-1",
+            None,
         )
         .expect("构造 Interaction")
         .expect("普通输入应进入 durable ingress");
@@ -205,7 +207,8 @@ mod tests {
                 cwd.path(),
                 Some(&isolated_config(cwd.path())),
                 42,
-                "terminal-1"
+                "terminal-1",
+                None
             )
             .expect("控制输入应跳过")
             .is_none()
@@ -226,7 +229,8 @@ mod tests {
                 cwd.path(),
                 Some(&isolated_config(cwd.path())),
                 42,
-                "terminal-1"
+                "terminal-1",
+                None
             )
             .expect("空输入应跳过")
             .is_none()
@@ -267,6 +271,7 @@ mod tests {
             Some(&isolated_config(cwd.path())),
             42,
             "terminal-1",
+            None,
         )
         .expect("构造 Interaction")
         .expect("带附件的普通输入应进入 durable ingress");
@@ -292,6 +297,7 @@ mod tests {
             Some(&isolated_config(cwd.path())),
             42,
             "terminal-1",
+            None,
         )
         .expect("构造 Interaction")
         .expect("重复附件不应阻断提交");

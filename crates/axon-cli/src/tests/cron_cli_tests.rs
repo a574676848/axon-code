@@ -33,7 +33,7 @@ fn cron_create_projects_wake_target_and_uses_cron_store() {
         "--prompt",
         "总结今日进展",
         "--wake",
-        "session:desktop:workbench-1:workspace-cron",
+        "session:session-01ARZ3NDEKTSV4RRFFQ69G5FAV",
     ]);
 
     let create_result = run_parsed_cli(&create);
@@ -54,7 +54,7 @@ fn cron_create_projects_wake_target_and_uses_cron_store() {
     assert_eq!(create_body["status"], "cron_created");
     assert_eq!(
         create_body["jobs"][0]["wake"],
-        "session:desktop:workbench-1:workspace-cron"
+        "session:session-01ARZ3NDEKTSV4RRFFQ69G5FAV"
     );
     assert!(
         create_body["storePath"]
@@ -119,7 +119,7 @@ fn cron_without_wake_runs_silently_without_advancing_schedule() {
 
 
 #[test]
-fn create_rejects_unstable_session_wake_session() {
+fn create_rejects_malformed_wake_session() {
     let root = test_root("cron-unstable-session");
     let config_path = root.join("config.toml");
     let path_arg = config_path.to_string_lossy().to_string();
@@ -132,21 +132,21 @@ fn create_rejects_unstable_session_wake_session() {
         "cron",
         "create",
         "--name",
-        "不稳定车道",
+        "非法目标",
         "--schedule",
         "interval:1h",
         "--prompt",
         "执行",
         "--wake",
-        "session:tui:terminal-1",
+        "session:desktop:workbench-1",
     ]);
 
     let result = run_parsed_cli(&create);
 
     assert_ne!(result.exit_code, 0);
     assert!(
-        result.stderr.contains("desktop"),
-        "错误里必须说明受支持的渠道：{}",
+        result.stderr.contains("会话标识"),
+        "错误里必须说明是会话标识无效：{}",
         result.stderr
     );
     let _ = fs::remove_dir_all(root);

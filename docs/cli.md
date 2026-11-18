@@ -84,9 +84,9 @@ Daemon 是 Axon 的常驻后台服务，负责接收输入、按工作区有序�
 
 ```bash
 axon cron --help                       # 管理定时任务（list / create / update / pause / resume / run / remove / tick / holiday）
-axon cron create --name 巡检 --schedule "0 9 * * *" --prompt "巡检仓库" --wake session:desktop:workbench-xxx
-                                       # --wake 决定执行完唤醒哪条会话会话：向它注入一轮主 turn 继续跟进；
-                                       # 形态为 session:<channel>:<destination>[:<workspace>]，
+axon cron create --name 巡检 --schedule "0 9 * * *" --prompt "巡检仓库" --wake session:session-01ARZ3NDEKTSV4RRFFQ69G5FAV
+                                       # --wake 决定执行完唤醒哪条会话：向它注入一轮主 turn 继续跟进；
+                                       # 形态为 session:<session-id>，给的是已登记会话的标识，
                                        # 省略时只记录运行事实，不产生任何投递
 axon cron create --name 工时提醒 --schedule "workday:0 8-20 * * *" --prompt "提醒记录工时"
                                        # 计划表达式字段可自由组合：区间 1-9、步长 */5、范围步长 9-18/2；

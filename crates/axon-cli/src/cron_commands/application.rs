@@ -495,16 +495,7 @@ fn job_view(job: &CronJob) -> CronJobView {
 /// 唤醒目标的命令行展示文本；与 `--wake` 的输入格式一致。
 pub(crate) fn wake_text(wake: &CronWakeTarget) -> String {
     match wake {
-        CronWakeTarget::Session {
-            channel,
-            destination,
-            workspace,
-        } => match workspace.as_deref().map(str::trim) {
-            Some(workspace) if !workspace.is_empty() => {
-                format!("session:{channel}:{destination}:{workspace}")
-            }
-            _ => format!("session:{channel}:{destination}"),
-        },
+        CronWakeTarget::Session { session_id } => format!("session:{session_id}"),
     }
 }
 

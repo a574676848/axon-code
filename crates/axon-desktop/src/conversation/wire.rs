@@ -32,7 +32,12 @@ pub struct EventSubmission {
     pub client: Option<String>,
     /// 客户端生成的稳定幂等键。
     pub event_id: String,
-    /// 本轮落到的 Workspace：服务端用它选定会话。
+    /// 本轮目标会话；桌面端带上用户正在看的那条会话。
+    ///
+    /// 不带时服务端按 Workspace 新建一条主会话：会话身份不再按「最近活跃」推断。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// 本轮落到的 Workspace：服务端用它校验会话归属。
     pub workspace_id: String,
     /// 观测时间（毫秒）。
     pub observed_at_ms: u64,
@@ -217,6 +222,7 @@ mod tests {
             source_channel: "desktop".to_owned(),
             event_id: "event-1".to_owned(),
             workspace_id: "workspace-a".to_owned(),
+            session_id: Some("session-01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned()),
             observed_at_ms: 10,
             expires_at_ms: 20,
             content: "你好".to_owned(),
@@ -232,9 +238,9 @@ mod tests {
         assert!(value["localFiles"].is_array(), "附件字段必须存在且为数组");
         assert_eq!(value["model"], "balanced");
         assert_eq!(value["reasoningEffort"], "high");
-        // `workspaceId` 决定本轮落到哪条会话；会话标识由服务端按 Workspace 落定。
+        // `workspaceId` 与 `sessionId` 一起决定本轮落到哪条会话。
         assert_eq!(value["workspaceId"], "workspace-a");
-        assert!(value.get("sessionId").is_none(), "信封不得携带 sessionId");
+        assert_eq!(value["sessionId"], "session-01ARZ3NDEKTSV4RRFFQ69G5FAV");
     }
 
     #[test]

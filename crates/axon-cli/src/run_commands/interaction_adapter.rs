@@ -7,8 +7,8 @@ use axon_domain::{
     InteractionSource, ReplyRoute, ScopeRef, WorkspaceId,
 };
 use axon_session::{
-    RuntimeStore, SessionTrustScope, SqliteRuntimeStore, WorkspaceRecord, WorkspaceResolver,
-    WorkspaceSessionRequest, WorkspaceStore,
+    NewSessionRequest, RuntimeStore, SqliteRuntimeStore, WorkspaceRecord, WorkspaceResolver,
+    WorkspaceStore,
 };
 use uuid::Uuid;
 
@@ -22,9 +22,9 @@ pub(crate) struct PreparedInteraction {
 /// 带客户端来源的构造函数。
 ///
 /// `session` 是调用方显式给出的会话标识：给出时必须是已登记的主会话，未登记直接报错、
-/// 不隐式新建；为 `None` 时解析当前目录所属 Workspace 的活跃会话，没有才新建。
-/// 显式给出会话时**本轮工作区跟随该会话**：会话已带 Workspace，不再用进程 cwd 反推，
-/// 否则从别的目录续聊同一条会话会被误判成「其他工作区」。
+/// 不隐式新建；为 `None` 时**新建一条主会话**，归属与工作目录取当前目录解析出的
+/// Workspace。会话身份不按「该 Workspace 最近活跃的会话」推断：那会让两个终端、两次
+/// 独立调用悄悄写进同一条会话历史。
 /// `client` 是按下发送的那一端（cli / desktop / tui / cron）。
 pub(crate) fn prepare_interaction_from_prompt_as(
     session: Option<&DaemonSessionId>,
@@ -149,15 +149,16 @@ fn prepare_interaction_with(
             (record.session_id, workspace)
         }
         None => {
-            let resolved = store
-                .resolve_workspace_session(&WorkspaceSessionRequest {
-                    workspace_id: cwd_workspace.workspace_id.clone(),
-                    cwd: cwd_workspace.workspace_root.clone(),
-                    trust_scope: SessionTrustScope::Private,
-                    now_ms,
-                })
+            let mut created = NewSessionRequest::primary(
+                axon_session::new_session_id(),
+                cwd_workspace.workspace_root.as_str(),
+                now_ms,
+            );
+            created.workspace_id = Some(cwd_workspace.workspace_id.as_str().to_owned());
+            let record = store
+                .create_session_with(&created)
                 .map_err(|error| error.to_string())?;
-            (resolved.session_id, cwd_workspace.clone())
+            (record.session_id, cwd_workspace.clone())
         }
     };
     // 会话可能属于别的工作区：把那个工作区也确认登记，事件 scope 与它保持一致。
@@ -223,13 +224,14 @@ pub(crate) fn conversation_session_run_session_id(
     store
         .register_workspace(&workspace)
         .map_err(|error| error.to_string())?;
+    let mut created = NewSessionRequest::primary(
+        axon_session::new_session_id(),
+        workspace.workspace_root.as_str(),
+        now_ms,
+    );
+    created.workspace_id = Some(workspace.workspace_id.as_str().to_owned());
     store
-        .resolve_workspace_session(&WorkspaceSessionRequest {
-            workspace_id: workspace.workspace_id.clone(),
-            cwd: workspace.workspace_root.clone(),
-            trust_scope: SessionTrustScope::Private,
-            now_ms,
-        })
+        .create_session_with(&created)
         .map(|runtime| runtime.current_run_id)
         .map_err(|error| error.to_string())
 }
@@ -310,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_cli_surfaces_do_not_share_a_run_window() {
+    fn concurrent_cli_surfaces_get_distinct_run_windows() {
         let root = axon_test_support::test_temp_dir();
         let config_path = root.path().join("isolated-config.toml");
         std::fs::write(&config_path, "[agent]\ndefault_model = \"balanced\"\n").expect("写入配置");
@@ -333,14 +335,14 @@ mod tests {
         )
         .expect("第二个 CLI 进程");
 
-        assert_eq!(
+        assert_ne!(
             first, second,
-            "同一 Workspace 的连续 axon run 必须复用同一条会话的运行窗口"
+            "两次独立入口必须各自新建会话，不得悄悄写进同一段历史"
         );
     }
 
     #[test]
-    fn workspace_session_loads_existing_run_window_instead_of_creating_one() {
+    fn workspace_session_creates_a_new_session_on_every_call() {
         let root = axon_test_support::test_temp_dir();
         let config_path = root.path().join("isolated-config.toml");
         std::fs::write(&config_path, "[agent]\ndefault_model = \"balanced\"\n").expect("写入配置");
@@ -353,25 +355,6 @@ mod tests {
             cli_reply_destination(),
         )
         .expect("首次进入 Workspace");
-        let interaction = interaction_from_prompt(
-            Some(&config_path),
-            CLI_INTERACTION_CHANNEL,
-            cli_reply_destination(),
-            "检查仓库",
-            root.path(),
-            1,
-        )
-        .expect("构造 CLI Interaction");
-        // CLI 与 Daemon 必须解析到同一条车道，否则两个入口会各自维护一段历史。
-        let session = axon_daemon::primary_session_id_for_interaction(&interaction)
-            .expect("Daemon 车道身份一致");
-        let runtime = interaction_store(Some(&config_path))
-            .expect("打开运行库")
-            .get_session(&session)
-            .expect("车道 Session 已建立");
-        assert_eq!(runtime.session_id, session);
-        assert_eq!(runtime.current_run_id, first);
-
         let second = conversation_session_run_session_id(
             root.path(),
             Some(&config_path),
@@ -380,7 +363,18 @@ mod tests {
             cli_reply_destination(),
         )
         .expect("再次进入 Workspace");
-        assert_eq!(second, first, "同一复合车道必须复用已有运行窗口");
+
+        assert_ne!(second, first, "每次进入都必须新建一条会话的运行窗口");
+        let store = interaction_store(Some(&config_path)).expect("打开运行库");
+        let first_session = store
+            .session_id_for_run(&first)
+            .expect("反查首次窗口")
+            .expect("首次窗口已有归属会话");
+        let second_session = store
+            .session_id_for_run(&second)
+            .expect("反查第二次窗口")
+            .expect("第二次窗口已有归属会话");
+        assert_ne!(first_session, second_session, "两次入口不得共用会话");
     }
 
     #[test]

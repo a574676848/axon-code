@@ -433,10 +433,10 @@ W10 是三端用户可见回归，依赖 W4 与 W5 完成后才能全量开跑�
 | W3.4 | 已完成 | 工具上下文只保留 `thread_session_id`；数值键收敛到 `memory_session_key()` 一处（记忆子系统的键空间，不是会话身份）；问答幂等键改用它自己的会话串 |
 | W3.5 | 已完成 | 两处拼接全部删除：目标执行会话按 `goal_id` 唯一索引解析，子代理按 `(root_session_id, agent_path)` 唯一索引解析，标识一律为服务端 ULID；`sessions` 增 `agent_path` 列（schema v8）与两个部分唯一索引；子代理逐字稿按登记身份写入，缺行时补登记同一身份而不是另建主会话；名册 slug 改读 `agent_path`；桌面「独立会话」判定改读渠道，不再按标识内容猜类型。真机回归并入 W8.4 |
 | W4.1 | 已完成 | `POST /api/v1/sessions` 生成 ULID，写入 `kind='primary'`、`trust_scope='private'`、`workspace_id`；用例断言返回值为合法 ULID |
-| W4.2 | 已完成 | **外部事件报文不再接受 `sessionId` 与 `workspaceId`**（都属于未知字段，`deny_unknown_fields` 直接拒绝）；语音 `start` 帧仍由客户端显式给出 `sessionId`，缺失即拒 |
+| W4.2 | 已完成（已失效，见 W10.13） | **外部事件报文不再接受 `sessionId` 与 `workspaceId`**（都属于未知字段，`deny_unknown_fields` 直接拒绝）；语音 `start` 帧仍由客户端显式给出 `sessionId`，缺失即拒 |
 | W4.3 | 已完成 | 网关外部事件一律落到服务端内部的一条固定会话（`GATEWAY_EVENT_SESSION_ID`，首次到达登记、此后复用），Workspace 固定取网关默认（Axon 根目录 `~/.axon`）；外部既不暴露会话也不暴露 Workspace，且不存在第二个 Workspace |
 | W4.4 | 已完成 | 桌面 `SessionSource::derive_session_id` 改为 `create_session`，改调 `POST /api/v1/sessions`；会话清单以 `sessions` 表为准并只列 `kind='primary'` |
-| W4.5 | 已完成 | CLI/TUI 统一 `prepare_interaction_from_prompt_as(session, ...)`：显式 id 必须已登记且为 `primary`、工作区一致，否则直接报错；未给 id 时解析该 Workspace 的活跃会话，没有才新建 |
+| W4.5 | 已完成（已被 W10.13 取代） | CLI/TUI 统一 `prepare_interaction_from_prompt_as(session, ...)`：显式 id 必须已登记且为 `primary`、工作区一致，否则直接报错；未给 id 时解析该 Workspace 的活跃会话，没有才新建 |
 | W5.1 | 已完成 | 会话级订阅删掉类型白名单与前缀解析，统一按 `session_id` 放行；四个新用例覆盖允许与三类拒绝 |
 | W5.2 | 已完成 | 放行条件改为「会话存在 + 工作区匹配 + `trust_scope` 非 `restricted`」，边界读 `sessions.trust_scope` 实列 |
 | W5.3 | 已完成 | 事件分段目录名与主键一致性已核对：`EventLog::encode_segment` 对 ULID 不产生任何转义，目录名与主键逐字相同；补了两条用例（ULID 主键 → 目录名即主键；不同主键永不共用目录）与一条会话侧一致性用例（`store.event_log(id)` 的目录名等于主键） |
@@ -445,7 +445,7 @@ W10 是三端用户可见回归，依赖 W4 与 W5 完成后才能全量开跑�
 | W6.3 | 已完成 | `gateway_voice` 改用帧内显式 `sessionId`，`session_id_for` 删除；桌面侧同步收口：`voice_start` 与输入坞语音入口显式传当前会话标识，首帧必带 `sessionId`，缺省由界面与宿主各自拦下 |
 | W6.4 | 已完成 | `daemon_history_loader` 直接读 `interaction.session_id` |
 | W6.5 | 已完成 | `interrupted_interaction_repository` 读 `inbox.session_id`，`candidate_session_id` 不再派生 |
-| W6.6 | 已完成 | `interaction_adapter` 的 Interaction 会话取自显式入参或 Workspace 活跃会话 |
+| W6.6 | 已完成（已被 W10.13 取代） | `interaction_adapter` 的 Interaction 会话取自显式入参或 Workspace 活跃会话 |
 | W6.7 | 已完成 | 主 turn 与执行 worker 已改读 `current_run_id`；turn lanes 与子代理装配层不再派生会话标识：原 `child_session_id(父会话, 路径)` 已删除，统一走 `resolve_subagent_session`，唤醒前置校验按 `(根会话, 代理路径)` 反查 |
 | W6.8 | 已完成 | `RunRequest` 增 `interaction_id`（来自 daemon 信封的 `transportContext.interactionId`）；工具上下文增 `interaction_id` 与 `turn_id`；问答记录改用它自己的真实入站标识，`turn_id` 改用与本轮持久化 `Turn.turn_id` 逐字一致的构造 |
 | W7.1 | 已完成 | 探针 `origin_channel_covers_all_four_inbound_entries`：桌面 / CLI / TUI / 外部事件各跑一轮真实入站（桌面、CLI、TUI 带客户端，外部事件没有客户端），逐轮断言 `turn_metrics.origin_channel` 与 `channel_mix_json` 都是该入口自己，且不出现 `internal` |
@@ -481,3 +481,4 @@ W10 是三端用户可见回归，依赖 W4 与 W5 完成后才能全量开跑�
 | W10.10 | 待执行 | 目标看板进入会话详情跟主会话同一个渲染路径未验证 |
 | W10.11 | 待执行 | cron进入会话详情跟主会话同一个渲染路径未验证 |
 | W10.12 | 待执行 | 子代理进入会话详情跟主会话同一个渲染路径未验证 |
+| W10.13 | 已完成 | 会话身份收口（长官裁决）：删除 `resolve_workspace_session` 及其端口、SQLite 实现与全部调用点；CLI/TUI 未给 `--session` 时一律新建主会话；网关入站未带 `sessionId` 时按 Workspace 新建主会话，桌面提交信封改为携带当前会话 `sessionId`；cron `--wake` 收敛为 `session:<session-id>`，旧的「渠道 + 车道标识 + Workspace」形式与「按 Workspace 活跃会话投递」一并删除 |

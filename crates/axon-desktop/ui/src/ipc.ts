@@ -281,6 +281,7 @@ export const gatewayStartService = (mode: 'start' | 'install' | 'restart'): Prom
 /** 提交一条用户消息，返回服务端回执。 */
 export const conversationSubmit = (
   workspaceId: string,
+  sessionId: string | null,
   destination: string,
   content: string,
   attachments: string[] = [],
@@ -291,6 +292,7 @@ export const conversationSubmit = (
 ): Promise<SubmissionReceipt> =>
   call('conversation_submit', {
     workspaceId,
+    sessionId,
     destination,
     content,
     attachments,

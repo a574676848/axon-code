@@ -38,6 +38,11 @@ pub(super) struct CliAgentTuiRuntimeAdapter {
     pub(super) reply_destination: String,
     /// 用户在本进程里显式选过的模型与推理强度；随每次提交下传为本轮显式设置。
     pub(super) explicit_turn: Arc<Mutex<ExplicitTurnSelection>>,
+    /// 本进程的会话：首次提交时新建一条主会话，此后每轮复用它。
+    ///
+    /// TUI 是长驻进程：未给 `--session` 时「新会话」指进程启动时新建的那一条，
+    /// 不是每次提交都新建，否则同一段对话会被拆成多条会话历史。
+    pub(super) session: Arc<Mutex<Option<axon_domain::DaemonSessionId>>>,
 }
 
 impl AgentTuiRuntimeAdapter for CliAgentTuiRuntimeAdapter {
@@ -265,6 +270,7 @@ impl AgentTuiRuntimeAdapter for CliAgentTuiRuntimeAdapter {
             self.config_path.as_deref(),
             axon_time::unix_now_ms(),
             &self.reply_destination,
+            self.current_session().as_ref(),
         )
         .map_err(RuntimeError::runtime)
         .map_err(AgentTuiSubmitFailure::without_output)?
@@ -273,6 +279,7 @@ impl AgentTuiRuntimeAdapter for CliAgentTuiRuntimeAdapter {
                 "TUI Interaction 内容不能为空",
             ))
         })?;
+        self.remember_session(&prepared.interaction.session_id);
         let mut interaction = prepared.interaction;
         // 显式选择随本轮下传：Daemon 把它投影为 transportContext 的模型与推理强度，
         // Provider turn 据此覆盖会话模型与配置默认值。
@@ -371,9 +378,11 @@ impl AgentTuiRuntimeAdapter for CliAgentTuiRuntimeAdapter {
             self.config_path.as_deref(),
             axon_time::unix_now_ms(),
             &self.reply_destination,
+            self.current_session().as_ref(),
         )
         .map_err(RuntimeError::runtime)?
         .ok_or_else(|| RuntimeError::runtime("TUI steer 内容不能为空"))?;
+        self.remember_session(&prepared.interaction.session_id);
         submit_prepared_daemon_interaction(
             &prepared.interaction,
             &prepared.workspace,
@@ -391,6 +400,25 @@ impl CliAgentTuiRuntimeAdapter {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
+    }
+
+    /// 本进程当前会话；首次提交前为 `None`。
+    fn current_session(&self) -> Option<axon_domain::DaemonSessionId> {
+        self.session
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// 记录本轮落定的会话；只写一次，之后每轮都沿用它。
+    fn remember_session(&self, session_id: &axon_domain::DaemonSessionId) {
+        let mut slot = self
+            .session
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if slot.is_none() {
+            *slot = Some(session_id.clone());
+        }
     }
 }
 

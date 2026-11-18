@@ -12,12 +12,12 @@ use axon_domain::{
     ReplyRoute, ScopeRef,
 };
 use axon_protocol::{DaemonCommand, DaemonRequest, SubmitInteractionRequest};
-use axon_session::{RuntimeStore as _, WorkspaceResolver};
+use axon_session::RuntimeStore as _;
 
 use crate::{
     cron_commands::{
-        CRON_WAKE_SOURCE_PREFIX, CronExecutionAdapter, execute_local_cron_agent,
-        wake_client_for_channel,
+        CRON_AGENT_CHANNEL, CRON_AGENT_CLIENT, CRON_WAKE_SOURCE_PREFIX, CronExecutionAdapter,
+        execute_local_cron_agent,
     },
     runtime_paths::daemon_endpoint_for_root,
 };
@@ -74,62 +74,51 @@ impl CronDaemonAdapter {
             .unwrap_or(&self.axon_root)
     }
 
-    /// 解析并注册任务所属 Workspace；唤醒必须绑定已注册的 Workspace。
-    fn resolve_workspace_id(&self, job: &CronJob, now_ms: u64) -> Result<String, String> {
-        // 会话唤醒必须落在任务创建时的那条车道上：车道身份含 workspace 维度，
-        // 用任务执行目录反推会把结果投进另一个项目的同名会话。
-        if let Some(workspace_id) = job
-            .wake
-            .as_ref()
-            .and_then(axon_domain::CronWakeTarget::workspace)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            return Ok(workspace_id.to_owned());
-        }
-        let workdir = self.workdir(job);
-        crate::run_commands::register_workspace(workdir, now_ms, Some(&self.config_path))?;
-        WorkspaceResolver
-            .resolve(workdir, now_ms)
-            .map(|workspace| workspace.workspace_id.as_str().to_owned())
-            .map_err(|error| format!("解析 Cron 任务 Workspace 失败：{error}"))
-    }
-
-    /// 向目标复合车道提交一次主 turn 注入。
+    /// 向目标会话提交一次主 turn 注入。
     ///
     /// 身份按「任务 + 启动时刻」稳定派生：同一轮重复提交命中来源幂等键，不会在目标
-    /// 会话里刷出两轮相同的唤醒回合。
+    /// 会话里刷出两轮相同的唤醒回合。目标会话必须是已登记的既有会话：会话自带
+    /// Workspace，唤醒不再按任务执行目录反推归属。
     fn submit_wake_turn(
         &self,
         job: &CronJob,
-        channel: &str,
-        destination: &str,
+        session_id: &str,
         body: &str,
         now_ms: u64,
     ) -> Result<String, String> {
-        let workspace_id = self.resolve_workspace_id(job, now_ms)?;
         let identity = format!("{}:{now_ms}", job.job_id);
+        let store = crate::run_commands::interaction_store(Some(&self.config_path))?;
+        let session_id = axon_domain::DaemonSessionId::new(session_id.to_owned())
+            .map_err(|error| format!("唤醒目标会话标识无效：{error}"))?;
+        let record = store
+            .get_session(&session_id)
+            .map_err(|error| format!("唤醒目标会话不可用：{error}"))?;
+        if record.kind == axon_session::SessionKind::Cron {
+            return Err("唤醒目标不能是 Cron 自身会话".to_owned());
+        }
+        let workspace_id = match record.workspace_id.as_deref() {
+            Some(owner) => owner.to_owned(),
+            None => crate::run_commands::register_workspace(
+                self.workdir(job),
+                now_ms,
+                Some(&self.config_path),
+            )?
+            .workspace_id
+            .as_str()
+            .to_owned(),
+        };
         // 交互标识由服务端生成（ULID）：幂等由来源键 `cron-wake:{identity}` 承担，
         // 同一轮重复提交命中已有行并拿回它的标识。
         let interaction_id = axon_session::new_interaction_id();
-        let client = wake_client_for_channel(channel);
-        let source =
-            InteractionSource::new(channel, format!("{CRON_WAKE_SOURCE_PREFIX}{identity}"))
-                .and_then(|source| source.with_client(client))
-                .map_err(|error| error.to_string())?;
-        let scope = ScopeRef::workspace(workspace_id.clone()).map_err(|error| error.to_string())?;
-        let route = ReplyRoute::new(channel, destination).map_err(|error| error.to_string())?;
-        // 唤醒必须落回该 Workspace 的既有会话：会话标识由控制面给出，不按投递目标派生。
-        let store = crate::run_commands::interaction_store(Some(&self.config_path))?;
-        let session_id = store
-            .resolve_workspace_session(&axon_session::WorkspaceSessionRequest {
-                workspace_id,
-                cwd: self.workdir(job).to_string_lossy().into_owned(),
-                trust_scope: axon_session::SessionTrustScope::Private,
-                now_ms,
-            })
-            .map_err(|error| error.to_string())?
-            .session_id;
+        let source = InteractionSource::new(
+            CRON_AGENT_CHANNEL,
+            format!("{CRON_WAKE_SOURCE_PREFIX}{identity}"),
+        )
+        .and_then(|source| source.with_client(CRON_AGENT_CLIENT))
+        .map_err(|error| error.to_string())?;
+        let scope = ScopeRef::workspace(workspace_id).map_err(|error| error.to_string())?;
+        let route = ReplyRoute::new(CRON_AGENT_CHANNEL, session_id.as_str())
+            .map_err(|error| error.to_string())?;
         let interaction = InteractionRecord::new(
             session_id,
             interaction_id,
@@ -169,12 +158,11 @@ impl CronExecutionAdapter for CronDaemonAdapter {
     fn wake_session(
         &self,
         job: &CronJob,
-        channel: &str,
-        destination: &str,
+        session_id: &str,
         body: &str,
         now_ms: u64,
     ) -> Result<String, String> {
-        self.submit_wake_turn(job, channel, destination, body, now_ms)
+        self.submit_wake_turn(job, session_id, body, now_ms)
     }
 }
 

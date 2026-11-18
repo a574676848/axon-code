@@ -145,7 +145,7 @@ weekend:0 9 * * *          周末 9 点
 | `session_destination` | 当前会话的投递目标 |
 | `session_workspace` | 当前会话所属的 Workspace |
 
-`--wake` 只有一种形态，用于让任务执行完**唤醒指定会话**继续跟进（查结果、补后续动作）：`--wake session:<session_channel>:<session_destination>[:<session_workspace>]`。这三个字段是投递路由与目标 Workspace，不是会话身份：会话标识由服务端生成，唤醒时按目标 Workspace 的活跃会话投递，不按它们拼出会话。
+`--wake` 只有一种形态，用于让任务执行完**唤醒指定会话**继续跟进（查结果、补后续动作）：`--wake session:<session-id>`。这里给的是已经登记的既有会话标识（会话清单里可见的 `sessionId`），不是渠道与车道标识；唤醒直接注入该会话，会话标识即会话身份。目标会话必须已存在，且不能是定时任务自己的会话。
 
 判定顺序：
 

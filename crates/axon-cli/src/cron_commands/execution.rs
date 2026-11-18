@@ -23,20 +23,7 @@ pub(crate) const CRON_AGENT_DESTINATION_PREFIX: &str = axon_domain::CRON_SESSION
 pub(crate) const CRON_AGENT_CHANNEL: &str = axon_domain::desktop_session_channel();
 /// Cron 按下发送的一端：车道仍走桌面车道，逐轮来源标注为 `cron`。
 pub(crate) const CRON_AGENT_CLIENT: &str = "cron";
-/// Webhook 车道的来源标注：该渠道没有人类发送端，客户端即渠道本身。
-pub(crate) const WEBHOOK_SESSION_CHANNEL: &str = "webhook";
 
-/// 唤醒回合的客户端标注。
-///
-/// 唤醒回合由 Cron 发起，因此默认归 `cron`；但 webhook 车道没有人类发送端，
-/// 标注 `cron` 会让人误以为结果是 Cron 自己的输入，此时取渠道本身。
-pub(crate) fn wake_client_for_channel(channel: &str) -> &'static str {
-    if channel.trim() == WEBHOOK_SESSION_CHANNEL {
-        WEBHOOK_SESSION_CHANNEL
-    } else {
-        CRON_AGENT_CLIENT
-    }
-}
 const CRON_POWERSHELL_UTF8_PREAMBLE: &str = "$utf8 = [System.Text.UTF8Encoding]::new($false); [Console]::OutputEncoding = $utf8; $OutputEncoding = $utf8;";
 const CRON_AGENT_POLICY: &str = "这是用户级 Agent Cron 定时任务。必须遵守：不得创建、修改、暂停、恢复或删除任何 cron 任务；不得请求交互式澄清；配置、凭证或投递目标缺失时必须失败闭环并说明原因。";
 
@@ -52,12 +39,11 @@ pub(crate) trait CronExecutionAdapter: Send + Sync {
     /// 执行 Agent 任务并返回可投递正文。
     fn execute_agent(&self, job: &CronJob, prompt: &str) -> Result<String, String>;
 
-    /// 向目标复合车道提交一次主 turn 注入。
+    /// 向目标会话提交一次主 turn 注入。
     fn wake_session(
         &self,
         job: &CronJob,
-        channel: &str,
-        destination: &str,
+        session_id: &str,
         body: &str,
         now_ms: u64,
     ) -> Result<String, String>;
@@ -252,7 +238,7 @@ mod tests {
     struct RecordingAdapter {
         root: std::path::PathBuf,
         agent_body: Result<String, String>,
-        turns: Mutex<Vec<(String, String, String)>>,
+        turns: Mutex<Vec<(String, String)>>,
     }
 
     impl RecordingAdapter {
@@ -281,16 +267,14 @@ mod tests {
         fn wake_session(
             &self,
             _job: &CronJob,
-            channel: &str,
-            destination: &str,
+            session_id: &str,
             body: &str,
             _now_ms: u64,
         ) -> Result<String, String> {
-            self.turns.lock().expect("回合锁应可用").push((
-                channel.to_owned(),
-                destination.to_owned(),
-                body.to_owned(),
-            ));
+            self.turns
+                .lock()
+                .expect("回合锁应可用")
+                .push((session_id.to_owned(), body.to_owned()));
             Ok("interaction-test".to_owned())
         }
     }
@@ -325,24 +309,12 @@ mod tests {
     }
 
     #[test]
-    fn wake_turn_client_is_cron_except_for_webhook_lanes() {
-        assert_eq!(wake_client_for_channel("desktop"), CRON_AGENT_CLIENT);
-        assert_eq!(wake_client_for_channel("cli"), CRON_AGENT_CLIENT);
-        assert_eq!(
-            wake_client_for_channel(" webhook "),
-            WEBHOOK_SESSION_CHANNEL
-        );
-    }
-
-    #[test]
     fn session_wake_injects_turn_into_declared_session() {
         let adapter = RecordingAdapter::new(Ok("已生成报告".to_owned()));
         let job = job_with_wake(
             "cron-session",
             Some(CronWakeTarget::Session {
-                channel: "desktop".to_owned(),
-                destination: "workbench-1".to_owned(),
-                workspace: None,
+                session_id: "session-01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned(),
             }),
             false,
         );
@@ -353,10 +325,9 @@ mod tests {
         assert_eq!(run.dispatch_id.as_deref(), Some("interaction-test"));
         let turns = adapter.turns.lock().expect("回合锁应可用");
         assert_eq!(turns.len(), 1);
-        assert_eq!(turns[0].0, "desktop");
-        assert_eq!(turns[0].1, "workbench-1");
-        assert!(turns[0].2.contains("已执行完成"));
-        assert!(turns[0].2.contains("结果摘要"));
+        assert_eq!(turns[0].0, "session-01ARZ3NDEKTSV4RRFFQ69G5FAV");
+        assert!(turns[0].1.contains("已执行完成"));
+        assert!(turns[0].1.contains("结果摘要"));
     }
 
     #[test]
@@ -365,9 +336,7 @@ mod tests {
         let job = job_with_wake(
             "cron-failed-wake",
             Some(CronWakeTarget::Session {
-                channel: "desktop".to_owned(),
-                destination: "workbench-1".to_owned(),
-                workspace: None,
+                session_id: "session-01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned(),
             }),
             false,
         );

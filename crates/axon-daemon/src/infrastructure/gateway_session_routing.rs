@@ -5,7 +5,7 @@
 //! 就落哪个；只有没有 Workspace 的外部 webhook 才落到服务端固定会话。
 
 use axon_domain::DaemonSessionId;
-use axon_session::RuntimeStore;
+use axon_session::{NewSessionRequest, RuntimeStore};
 use axon_session_runtime::RuntimeClock;
 
 use super::{DaemonGatewayBridge, GATEWAY_EVENT_SESSION_ID, session_cache::SessionAdmission};
@@ -103,11 +103,12 @@ where
             .map_or_else(String::new, |workspace| workspace.workspace_root)
     }
 
-    /// 工作台客户端指定 Workspace 的活跃主会话；没有就建一条，并登记放行缓存。
+    /// 工作台客户端指定 Workspace 时新建一条主会话，并登记放行缓存。
     ///
     /// `.axon` 与项目目录都是正经 Workspace：用户在下拉里选了哪个，会话就属于哪个，
-    /// 会话清单随后按同一列筛选，不会被别端的续聊改写归属。
-    pub(super) fn workspace_session(
+    /// 会话清单随后按同一列筛选，不会被别端的续聊改写归属。这里只新建、不复用该
+    /// Workspace 已有的会话：复用会把两次互不相干的入站悄悄并进同一段历史。
+    pub(super) fn create_workspace_session(
         &self,
         workspace_id: &str,
         now_ms: u64,
@@ -122,15 +123,16 @@ where
             .ok_or_else(|| {
                 GatewayKernelError::Ingress(format!("Workspace 未登记：{}", workspace_id.as_str()))
             })?;
+        let mut created = NewSessionRequest::primary(
+            axon_session::new_session_id(),
+            workspace.workspace_root.as_str(),
+            now_ms,
+        );
+        created.workspace_id = Some(workspace.workspace_id.as_str().to_owned());
         let session = self
             .dependencies
             .store
-            .resolve_workspace_session(&axon_session::WorkspaceSessionRequest {
-                workspace_id: workspace.workspace_id.clone(),
-                cwd: workspace.workspace_root.clone(),
-                trust_scope: axon_session::SessionTrustScope::Private,
-                now_ms,
-            })
+            .create_session_with(&created)
             .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
         self.admissions.put(
             session.session_id.as_str(),

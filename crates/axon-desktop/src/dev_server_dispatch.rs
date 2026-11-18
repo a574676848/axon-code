@@ -466,6 +466,7 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
         "pricing_set_auto_sync" => Ok(crate::pricing::pricing_set_auto_sync(as_bool("enabled")?)?),
         "conversation_submit" => Ok(serde_json::to_value(conversation::submit::submit_message(
             &as_str("workspaceId")?,
+            args.get("sessionId").and_then(Value::as_str),
             &as_str("destination")?,
             &as_str("content")?,
             &args

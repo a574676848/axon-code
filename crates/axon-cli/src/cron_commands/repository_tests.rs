@@ -302,9 +302,7 @@ fn test_job(next_run_at_ms: u64) -> CronJob {
         "cron-test",
         next_run_at_ms,
         Some(CronWakeTarget::Session {
-            channel: "desktop".to_owned(),
-            destination: "workbench-1".to_owned(),
-            workspace: None,
+            session_id: "session-01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned(),
         }),
     )
 }

@@ -9,19 +9,6 @@ use axon_domain::{
 };
 use thiserror::Error;
 
-/// 解析 Workspace 活跃会话的输入。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkspaceSessionRequest {
-    /// 归属 Workspace。
-    pub workspace_id: String,
-    /// 需要新建会话时使用的工作目录。
-    pub cwd: String,
-    /// 新建会话时的受众隔离维度。
-    pub trust_scope: SessionTrustScope,
-    /// 判定时间。
-    pub now_ms: u64,
-}
-
 /// 新建会话的显式身份属性。
 ///
 /// 会话标识、类型、受众边界与归属都由调用方给出：服务端不推断会话，也不按投递目标派生。
@@ -278,14 +265,6 @@ pub trait RuntimeStore:
     fn resolve_schedule_session(
         &self,
         request: &ScheduleSessionRequest,
-    ) -> Result<SessionRuntimeRecord, RuntimeStoreError>;
-    /// 解析某个 Workspace 当前的主会话；没有可用会话时创建一个新的主会话。
-    ///
-    /// 这是「解析到该 Workspace 的活跃会话」的唯一实现：不按渠道、投递目标或哈希派生，
-    /// 只读 `sessions` 表里该 Workspace 最近活动且未归档的主会话。
-    fn resolve_workspace_session(
-        &self,
-        request: &WorkspaceSessionRequest,
     ) -> Result<SessionRuntimeRecord, RuntimeStoreError>;
     /// 按当前运行实例反查它所属的稳定会话标识。
     ///

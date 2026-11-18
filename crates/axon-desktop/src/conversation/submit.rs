@@ -17,8 +17,8 @@ const EVENT_TTL_MS: u64 = 10 * 60 * 1_000;
 
 /// 提交一条用户消息。
 ///
-/// `workspace_id` 是用户在下拉里选定的 Workspace：服务端据此选定本轮会话，`.axon`
-/// 与项目目录一视同仁。会话标识仍由服务端给出，客户端不携带。
+/// `workspace_id` 是用户在下拉里选定的 Workspace；`session_id` 是用户正在看的会话，
+/// 服务端据此把这一轮落进既有会话。两者都必须给出：会话身份不按「最近活跃」推断。
 /// `attachments` 是已经落地到磁盘的附件绝对路径，后端把它们投影为 Provider turn
 /// 的输入素材；空数组表示纯文本消息。
 /// `model` 是用户在本会话里显式选定的模型（`agent.default_model` 的 `name` 或 `id`）。
@@ -26,6 +26,7 @@ const EVENT_TTL_MS: u64 = 10 * 60 * 1_000;
 /// 未给出时模型完全由会话历史与配置决定。
 pub fn submit_message(
     workspace_id: &str,
+    session_id: Option<&str>,
     destination: &str,
     content: &str,
     attachments: &[String],
@@ -61,6 +62,10 @@ pub fn submit_message(
         observed_at_ms: now_ms,
         expires_at_ms: now_ms.saturating_add(EVENT_TTL_MS),
         workspace_id: workspace_id.to_owned(),
+        session_id: session_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
         content: content.to_string(),
         client: Some("desktop".to_string()),
         reply_channel: DESKTOP_SESSION_CHANNEL.to_string(),
@@ -88,26 +93,47 @@ mod tests {
 
     #[test]
     fn empty_content_is_rejected_before_any_request() {
-        assert!(submit_message("workspace-a", "workbench-1", "   ", &[], None, None).is_err());
+        assert!(
+            submit_message("workspace-a", None, "workbench-1", "   ", &[], None, None).is_err()
+        );
     }
 
     #[test]
     fn missing_workspace_or_destination_is_rejected_before_any_request() {
-        assert!(submit_message("", "workbench-1", "你好", &[], None, None).is_err());
-        assert!(submit_message("workspace-a", "  ", "你好", &[], None, None).is_err());
+        assert!(submit_message("", None, "workbench-1", "你好", &[], None, None).is_err());
+        assert!(submit_message("workspace-a", None, "  ", "你好", &[], None, None).is_err());
     }
 
     #[test]
     fn oversized_content_is_rejected_with_a_readable_reason() {
         let content = "好".repeat(MAX_CONTENT_CHARS + 1);
-        let error = submit_message("workspace-a", "workbench-1", &content, &[], None, None)
-            .expect_err("必须拒绝");
+        let error = submit_message(
+            "workspace-a",
+            None,
+            "workbench-1",
+            &content,
+            &[],
+            None,
+            None,
+        )
+        .expect_err("必须拒绝");
         assert!(error.contains("字符"), "错误必须指明是长度问题：{error}");
     }
 
     #[test]
     fn attachments_make_an_empty_caption_acceptable() {
         // 只发一张图不带文字是合法输入；空文本且无附件才应被拒绝。
-        assert!(submit_message("", "workbench-1", "", &["a.png".to_string()], None, None).is_err());
+        assert!(
+            submit_message(
+                "",
+                None,
+                "workbench-1",
+                "",
+                &["a.png".to_string()],
+                None,
+                None
+            )
+            .is_err()
+        );
     }
 }

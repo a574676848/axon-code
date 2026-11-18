@@ -18,28 +18,22 @@ const WAKE_NOTICE_SUMMARY_MAX_CHARS: usize = 1_200;
 
 /// 解析 `--wake` 参数。
 ///
-/// 支持 `session:<channel>:<destination>[:<workspace>]`。会话目标只在第二层切分：
-/// `destination` 不含冒号时，第三段就是目标所属 Workspace。
+/// 只支持 `session:<session-id>`：目标是已经存在的一条会话，标识即会话身份，
+/// 不再接受「渠道 + 车道标识」派生。
 pub(crate) fn parse_wake(value: &str) -> Result<CronWakeTarget, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err("--wake 目标不能为空".to_owned());
     }
     if let Some(rest) = trimmed.strip_prefix("session:") {
-        let Some((channel, remainder)) = rest.split_once(':') else {
+        let session_id = rest.trim();
+        // 会话标识是一个整体，内部不再分段：带冒号的输入只可能是旧的
+        // 「渠道 + 车道标识」形式，直接拒绝而不是把它当成标识本身。
+        if session_id.contains(':') {
             return Err(WAKE_FORMAT_HINT.to_owned());
-        };
-        // 第三段是目标会话所属的 Workspace：车道身份由
-        // (workspace, trust_scope, channel, destination) 派生，只给后两维无法
-        // 区分跨项目的同名会话。省略时退回按任务执行目录反推。
-        let (destination, workspace) = match remainder.split_once(':') {
-            Some((destination, workspace)) => (destination, Some(workspace.trim().to_owned())),
-            None => (remainder, None),
-        };
+        }
         let target = CronWakeTarget::Session {
-            channel: channel.trim().to_owned(),
-            destination: destination.trim().to_owned(),
-            workspace: workspace.filter(|value| !value.is_empty()),
+            session_id: session_id.to_owned(),
         };
         target.validate()?;
         return Ok(target);
@@ -48,8 +42,7 @@ pub(crate) fn parse_wake(value: &str) -> Result<CronWakeTarget, String> {
 }
 
 /// `--wake` 目标格式提示。
-const WAKE_FORMAT_HINT: &str =
-    "--wake 目标格式必须是 session:<channel>:<destination>[:<workspace>]";
+const WAKE_FORMAT_HINT: &str = "--wake 目标格式必须是 session:<session-id>（会话标识不含冒号）";
 
 /// 派发一次唤醒；没有声明目标时什么都不做。
 ///
@@ -65,15 +58,10 @@ pub(crate) fn dispatch_wake(
     let Some(wake) = job.wake.as_ref() else {
         return Ok(None);
     };
-    let CronWakeTarget::Session {
-        channel,
-        destination,
-        ..
-    } = wake;
+    let CronWakeTarget::Session { session_id } = wake;
     let dispatch_id = adapter.wake_session(
         job,
-        channel.trim(),
-        destination.trim(),
+        session_id.trim(),
         &turn_injection_body(job, run_id, body, success),
         now_ms,
     )?;
@@ -124,26 +112,17 @@ mod tests {
     #[test]
     fn wake_target_parses_supported_forms_only() {
         assert_eq!(
-            parse_wake(" session:desktop:workbench-1 ").expect("会话目标应可解析"),
+            parse_wake(" session:session-01ARZ3NDEKTSV4RRFFQ69G5FAV ").expect("会话目标应可解析"),
             CronWakeTarget::Session {
-                channel: "desktop".to_owned(),
-                destination: "workbench-1".to_owned(),
-                workspace: None,
-            }
-        );
-        assert_eq!(
-            parse_wake("session:desktop:workbench-1:workspace-9d4b642b")
-                .expect("会话目标应可携带 Workspace"),
-            CronWakeTarget::Session {
-                channel: "desktop".to_owned(),
-                destination: "workbench-1".to_owned(),
-                workspace: Some("workspace-9d4b642b".to_owned()),
+                session_id: "session-01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned(),
             }
         );
         assert!(parse_wake("webhook:oc_123").is_err());
-        assert!(parse_wake("session:desktop").is_err());
-        assert!(parse_wake("tui:terminal-1").is_err());
-        assert!(parse_wake("session:tui:terminal-1").is_err());
+        assert!(parse_wake("session:").is_err());
+        assert!(
+            parse_wake("session:desktop:workbench-1").is_err(),
+            "渠道加车道标识的旧形式必须被拒绝"
+        );
         assert!(parse_wake("").is_err());
     }
 
@@ -173,9 +152,7 @@ mod tests {
                 prompt: "执行".to_owned(),
                 skills: Vec::new(),
                 wake: Some(CronWakeTarget::Session {
-                    channel: "desktop".to_owned(),
-                    destination: "workbench-1".to_owned(),
-                    workspace: None,
+                    session_id: "session-01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned(),
                 }),
                 workdir: None,
                 no_agent: false,

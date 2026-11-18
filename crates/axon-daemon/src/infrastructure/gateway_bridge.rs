@@ -141,7 +141,7 @@ where
         };
         let now_ms = self.dependencies.clock.now_ms();
         // 会话标识：显式给出时必须在控制面已登记且归属一致；未给出时按来源分两种：
-        // 有 Workspace 的客户端落到该 Workspace 的活跃会话（没有才新建），
+        // 有 Workspace 的客户端新建一条该 Workspace 的主会话，
         // 没有 Workspace 的外部事件落到固定会话。
         let session_id = match event.session_id.clone() {
             Some(session_id) => {
@@ -157,7 +157,9 @@ where
                 }
                 session_id
             }
-            None if explicit_workspace => self.workspace_session(&event.workspace_id, now_ms)?,
+            None if explicit_workspace => {
+                self.create_workspace_session(&event.workspace_id, now_ms)?
+            }
             None => self.gateway_event_session(now_ms)?,
         };
         event.session_id = Some(session_id);

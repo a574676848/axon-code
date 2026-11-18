@@ -15,7 +15,7 @@ use crate::domain::runtime::{
 };
 use crate::ports::{
     GoalSessionRequest, NewSessionRequest, RuntimeStore, RuntimeStoreError, ScheduleSessionRequest,
-    SubagentSessionRequest, WorkspaceSessionRequest,
+    SubagentSessionRequest,
 };
 use axon_domain::{
     DaemonSessionId, RuntimeHostId, SessionActionId, SessionActionStatus, SessionRuntimeStatus,
@@ -165,13 +165,6 @@ impl RuntimeStore for SqliteRuntimeStore {
         request: &ScheduleSessionRequest,
     ) -> Result<SessionRuntimeRecord, RuntimeStoreError> {
         self.resolve_schedule_session_impl(request)
-    }
-
-    fn resolve_workspace_session(
-        &self,
-        request: &WorkspaceSessionRequest,
-    ) -> Result<SessionRuntimeRecord, RuntimeStoreError> {
-        self.resolve_workspace_session_impl(request)
     }
 
     fn session_id_for_run(

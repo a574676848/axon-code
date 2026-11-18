@@ -6,8 +6,8 @@ pub const CRON_SCHEMA_VERSION: u32 = 2;
 
 /// Cron 自身主 turn 车道的 destination 前缀。
 ///
-/// Cron 任务在自己的车道里执行，该车道没有人类消费者，因此不允许把唤醒目标指向它，
-/// 否则每轮执行都会唤醒一轮新的 Agent 回合。
+/// Cron 任务在自己的车道里执行，该车道没有人类消费者；唤醒目标按会话标识直接指定，
+/// 不再从 destination 推断，这里只用于给任务自己的会话派生命名。
 pub const CRON_SESSION_DESTINATION_PREFIX: &str = "cron-";
 
 /// Cron 完成后要唤醒的目标。
@@ -17,45 +17,22 @@ pub const CRON_SESSION_DESTINATION_PREFIX: &str = "cron-";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CronWakeTarget {
-    /// 复合车道主 turn 注入。
+    /// 复合车道主 turn 注入：落到指定的既有会话。
     Session {
-        /// 会话表面渠道，例如 `desktop`。
-        channel: String,
-        /// 渠道内会话表面标识。
-        destination: String,
-        /// 目标会话所属的 Workspace。
+        /// 目标会话标识。
         ///
-        /// 车道身份由 `(workspace, trust_scope, channel, destination)` 派生，而
-        /// destination 只在渠道内唯一：同一个桌面会话标识可以同时出现在多个
-        /// Workspace 里。缺了这一维就只能按任务执行目录反推，唤醒便会落进另一个
-        /// 项目的同名会话。旧任务的载荷没有该字段，解析后退回按 workdir 反推。
-        #[serde(default)]
-        workspace: Option<String>,
+        /// 会话是唯一的一等身份：唤醒不再按「渠道 + 车道标识 + Workspace」三元组派生，
+        /// 那套派生在同一个车道标识出现在多个 Workspace 时会落进另一条会话。
+        session_id: String,
     },
 }
 
 impl CronWakeTarget {
-    /// 目标投递渠道。
+    /// 目标会话标识。
     #[must_use]
-    pub fn channel(&self) -> &str {
+    pub fn session_id(&self) -> &str {
         match self {
-            Self::Session { channel, .. } => channel,
-        }
-    }
-
-    /// 会话目标显式声明的 Workspace。
-    #[must_use]
-    pub fn workspace(&self) -> Option<&str> {
-        match self {
-            Self::Session { workspace, .. } => workspace.as_deref(),
-        }
-    }
-
-    /// 渠道内的投递目标。
-    #[must_use]
-    pub fn destination(&self) -> &str {
-        match self {
-            Self::Session { destination, .. } => destination,
+            Self::Session { session_id } => session_id,
         }
     }
 
@@ -68,30 +45,18 @@ impl CronWakeTarget {
     /// 校验目标形态；返回中文原因便于直接呈现给调用方。
     pub fn validate(&self) -> Result<(), String> {
         match self {
-            Self::Session {
-                channel,
-                destination,
-                ..
-            } => {
-                let channel = channel.trim();
-                let destination = destination.trim();
-                if channel.is_empty() {
-                    return Err("会话唤醒目标的渠道不能为空".to_owned());
+            Self::Session { session_id } => {
+                let session_id = session_id.trim();
+                if session_id.is_empty() {
+                    return Err("会话唤醒目标的会话标识不能为空".to_owned());
                 }
-                if destination.is_empty() {
-                    return Err("会话唤醒目标的车道标识不能为空".to_owned());
+                // 会话标识由服务端按 `session-<ULID>` 生成：不带该前缀的文本只可能是
+                // 旧的「渠道 + 车道标识」形式，不能当作会话身份落库。
+                if !session_id.starts_with("session-") {
+                    return Err("会话唤醒目标的会话标识必须以 session- 开头".to_owned());
                 }
-                // TUI 车道标识按进程随机生成，定时任务触发时早已失效，注入只会得到
-                // 一条无人消费的孤儿回合。
-                if channel != desktop_session_channel() {
-                    return Err(format!(
-                        "会话唤醒目标只支持 {}，不支持 {channel}",
-                        desktop_session_channel()
-                    ));
-                }
-                if destination.starts_with(CRON_SESSION_DESTINATION_PREFIX) {
-                    return Err("会话唤醒目标不能指向 Cron 自身车道".to_owned());
-                }
+                crate::DaemonSessionId::new(session_id.to_owned())
+                    .map_err(|error| format!("会话唤醒目标的会话标识无效：{error}"))?;
             }
         }
         Ok(())
@@ -419,22 +384,11 @@ mod tests {
     #[test]
     fn cron_job_transition_replaces_wake_target() {
         let job = CronJob::new(test_input(), 10, Some(20)).expect("合法任务应可创建");
-        assert_eq!(
-            job.wake,
-            Some(CronWakeTarget::Session {
-                channel: "desktop".to_owned(),
-                destination: "workbench-1".to_owned(),
-                workspace: None,
-            })
-        );
+        assert_eq!(job.wake, Some(wake_target()));
         let updated = job
             .with_update(
                 CronJobUpdate {
-                    wake: Some(CronWakeTarget::Session {
-                        channel: "desktop".to_owned(),
-                        destination: "workbench-1".to_owned(),
-                        workspace: None,
-                    }),
+                    wake: Some(wake_target()),
                     replace_wake: true,
                     ..CronJobUpdate::default()
                 },
@@ -455,21 +409,10 @@ mod tests {
             )
             .expect("清空唤醒目标应成功");
 
+        assert_eq!(updated.wake, Some(wake_target()));
         assert_eq!(
-            updated.wake,
-            Some(CronWakeTarget::Session {
-                channel: "desktop".to_owned(),
-                destination: "workbench-1".to_owned(),
-                workspace: None,
-            })
-        );
-        assert_eq!(
-            updated.wake.as_ref().map(CronWakeTarget::channel),
-            Some("desktop")
-        );
-        assert_eq!(
-            updated.wake.as_ref().map(CronWakeTarget::destination),
-            Some("workbench-1")
+            updated.wake.as_ref().map(CronWakeTarget::session_id),
+            Some(TEST_SESSION_ID)
         );
         assert!(
             updated
@@ -483,35 +426,17 @@ mod tests {
     }
 
     #[test]
-    fn wake_target_rejects_unstable_or_self_session() {
-        let tui = CronWakeTarget::Session {
-            channel: "tui".to_owned(),
-            destination: "terminal-1".to_owned(),
-            workspace: None,
+    fn wake_target_rejects_empty_or_malformed_session() {
+        let empty = CronWakeTarget::Session {
+            session_id: "   ".to_owned(),
         };
-        let self_session = CronWakeTarget::Session {
-            channel: "desktop".to_owned(),
-            destination: format!("{CRON_SESSION_DESTINATION_PREFIX}cron-abc"),
-            workspace: None,
-        };
-        let empty_chat = CronWakeTarget::Session {
-            channel: "   ".to_owned(),
-            destination: "   ".to_owned(),
-            workspace: None,
-        };
-        let valid = CronWakeTarget::Session {
-            channel: "desktop".to_owned(),
-            destination: "workbench-1".to_owned(),
-            workspace: None,
+        let malformed = CronWakeTarget::Session {
+            session_id: "workbench-1".to_owned(),
         };
 
-        assert!(
-            tui.validate().is_err(),
-            "TUI 车道标识不稳定，不得作为唤醒目标"
-        );
-        assert!(self_session.validate().is_err(), "不得唤醒 Cron 自身车道");
-        assert!(empty_chat.validate().is_err());
-        assert!(valid.validate().is_ok());
+        assert!(empty.validate().is_err());
+        assert!(malformed.validate().is_err(), "非会话标识的文本必须被拒绝");
+        assert!(wake_target().validate().is_ok());
     }
 
     #[test]
@@ -551,14 +476,18 @@ mod tests {
             schedule: "interval:1h".to_owned(),
             prompt: "执行测试".to_owned(),
             skills: Vec::new(),
-            wake: Some(CronWakeTarget::Session {
-                channel: "desktop".to_owned(),
-                destination: "workbench-1".to_owned(),
-                workspace: None,
-            }),
+            wake: Some(wake_target()),
             workdir: None,
             no_agent: false,
             script: None,
+        }
+    }
+
+    const TEST_SESSION_ID: &str = "session-01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+    fn wake_target() -> CronWakeTarget {
+        CronWakeTarget::Session {
+            session_id: TEST_SESSION_ID.to_owned(),
         }
     }
 }

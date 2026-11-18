@@ -454,6 +454,7 @@ export function useConversation(
       try {
         const receipt = await ipc.conversationSubmit(
           workspace,
+          sessionCapability.sessionId,
           destination,
           // 结构化输入只进入发出去的正文：正文气泡仍显示用户自己敲的那一段。
           structuredInput.length > 0 ? `${visibleText}${structuredInput}` : visibleText,

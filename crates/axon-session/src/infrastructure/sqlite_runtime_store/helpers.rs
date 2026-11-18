@@ -2,9 +2,8 @@ use super::{
     DaemonHostRecord, RuntimeScheduleRecord, RuntimeStoreError, SessionActionRecord,
     SessionActionStatus, SessionIngressCursorStore, SessionRuntimeRecord, SqliteRuntimeStore,
 };
-use crate::application::new_session_id;
 use crate::domain::runtime::{SessionKind, SessionTrustScope};
-use crate::ports::{NewSessionRequest, RuntimeStore, WorkspaceSessionRequest};
+use crate::ports::{NewSessionRequest, RuntimeStore};
 use axon_domain::{DaemonSessionId, GoalId, RuntimeHostId, SessionActionId, SessionRuntimeStatus};
 use rusqlite::{OptionalExtension, params};
 use uuid::Uuid;
@@ -169,35 +168,6 @@ impl SqliteRuntimeStore {
             last_event_sequence: 0,
             last_activity_at_ms: request.now_ms,
         })
-    }
-
-    pub(crate) fn resolve_workspace_session_impl(
-        &self,
-        request: &WorkspaceSessionRequest,
-    ) -> Result<crate::domain::runtime::SessionRuntimeRecord, RuntimeStoreError> {
-        self.initialize()?;
-        let existing = {
-            let connection = self.connection()?;
-            connection
-                .query_row(
-                    "SELECT session_id FROM sessions \
-                     WHERE workspace_id=?1 AND kind='primary' AND archived=0 \
-                     ORDER BY last_activity_at_ms DESC, session_id ASC LIMIT 1",
-                    params![request.workspace_id.as_str()],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()
-                .map_err(storage)?
-        };
-        if let Some(session_id) = existing {
-            let session_id = parse_session_id(session_id).map_err(storage)?;
-            return self.get_session_impl(&session_id);
-        }
-        let mut created =
-            NewSessionRequest::primary(new_session_id(), request.cwd.as_str(), request.now_ms);
-        created.workspace_id = Some(request.workspace_id.clone());
-        created.trust_scope = request.trust_scope;
-        self.create_session_impl(&created)
     }
 
     pub(crate) fn session_id_for_run_impl(

@@ -91,6 +91,7 @@ pub(crate) fn run_agent_tui_entry(cli: &AxonCli, prompt: Option<&str>) -> CliRun
         config_path: config_path.clone(),
         reply_destination: new_tui_reply_destination(),
         explicit_turn: Arc::new(Mutex::new(runtime_adapter::ExplicitTurnSelection::default())),
+        session: Arc::new(Mutex::new(None)),
     };
     let explicit_turn = Arc::clone(&adapter.explicit_turn);
     match axon_tui_runtime::run_agent_tui_cli_with_runtime_adapter_and_settings(
