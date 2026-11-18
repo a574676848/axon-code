@@ -567,3 +567,29 @@ fn cancelling_task_persists_request_and_event_and_blocks_claim() {
         .expect("查询取消事件");
     assert_eq!(event_count, 1);
 }
+
+#[test]
+fn event_segment_directory_is_the_session_primary_key() {
+    // 事件日志按会话分目录，目录名就是主键：对不上就等于历史读不到。
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    let session_id =
+        axon_domain::DaemonSessionId::new("01J8ZQ7K3M4N5P6Q7R8S9T0V1W").expect("会话标识");
+    store.create_session(&session_id, ".", 10).expect("建会话");
+
+    let path = store.event_log(&session_id).path();
+    let segment = path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+        .expect("事件分段目录名");
+    assert_eq!(
+        segment,
+        session_id.as_str(),
+        "事件目录名必须等于会话主键：{path:?}"
+    );
+    assert!(
+        path.to_string_lossy().ends_with("session.v1.jsonl.zstd"),
+        "日志文件名保持当前格式化代：{path:?}"
+    );
+}

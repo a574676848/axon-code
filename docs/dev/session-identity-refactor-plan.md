@@ -438,7 +438,7 @@ W10 是三端用户可见回归，依赖 W4 与 W5 完成后才能全量开跑�
 | W4.5 | 已完成 | CLI/TUI 统一 `prepare_interaction_from_prompt_as(session, ...)`：显式 id 必须已登记且为 `primary`、工作区一致，否则直接报错；未给 id 时解析该 Workspace 的活跃会话，没有才新建 |
 | W5.1 | 已完成 | 会话级订阅删掉类型白名单与前缀解析，统一按 `session_id` 放行；四个新用例覆盖允许与三类拒绝 |
 | W5.2 | 已完成 | 放行条件改为「会话存在 + 工作区匹配 + `trust_scope` 非 `restricted`」，边界读 `sessions.trust_scope` 实列 |
-| W5.3 | 待执行 | 事件分段目录名与主键一致性未单独核对 |
+| W5.3 | 已完成 | 事件分段目录名与主键一致性已核对：`EventLog::encode_segment` 对 ULID 不产生任何转义，目录名与主键逐字相同；补了两条用例（ULID 主键 → 目录名即主键；不同主键永不共用目录）与一条会话侧一致性用例（`store.event_log(id)` 的目录名等于主键） |
 | W6.1 | 已完成 | `workbench_http_adapter` 删除派生路由，会话创建统一走 `POST /api/v1/sessions` |
 | W6.2 | 已完成 | Cron 唤醒改用 `schedules.session_id`（缺失即报错），Cron 视图与唤醒路径改调 `resolve_workspace_session`；**任务定义侧同步收口**：`resolve_schedule_session` 先读任务已有绑定、没有才建一条 `kind=cron` 会话（工作区与根目录取自 Workspace 注册表），`upsert_interval_schedule` 在省略 `--session-id` 时调用它并在同一次落库里写回 `schedules.session_id`，显式给出的会话仍先校验已登记。用例覆盖「省略会话→落定 cron 会话」「同一任务重复定义→沿用同一会话」「未登记会话→定义侧即拒」 |
 | W6.3 | 已完成 | `gateway_voice` 改用帧内显式 `sessionId`，`session_id_for` 删除；桌面侧同步收口：`voice_start` 与输入坞语音入口显式传当前会话标识，首帧必带 `sessionId`，缺省由界面与宿主各自拦下 |
@@ -451,14 +451,14 @@ W10 是三端用户可见回归，依赖 W4 与 W5 完成后才能全量开跑�
 | W7.2 | 已完成 | 真实交互链路上的在线累计与 `rebuild_session_metrics` 重放一致（`rebuild_restores_the_same_channel_mix_after_real_interactions`），重复重建幂等；此前只有手工 `with_origin` 事件的重建用例 |
 | W7.3 | 已完成 | 环境上下文 `session_channel` 改名 `origin_channel`，取值改**本轮来源**：daemon 的 `transportContext` 增 `originChannel`（客户端优先、没有客户端退回来源渠道，与投影同一口径），旧载荷退回 `channel`；目标执行显式标 `goal`；本批同时把对外请求的 User-Agent 扩到六个入口（`axon-tui` / `axon-desktop` / `axon-cli` / `axon-webhook` / `axon-cron` / `axon-goal`），取值同样走 `originChannel`；外部事件另给 `userAgentChannel=webhook`，UA 报 webhook 而来源标注仍是具体厂商 |
 | W7.4 | 已完成 | 历史索引本身已逐轮给出 `channel` 与 `client`，前端 `historySource` 客户端优先；新增三轮用例（桌面 / CLI 续聊 / 定时）锁定「同一会话三轮各标各的」 |
-| W8.1 | 待执行 | 三渠道命中同一会话的自动化探针未单独补 |
+| W8.1 | 已完成 | 新增入站探针：同一投递目标、desktop / cli / tui 三渠道各提交一轮，全部落在同一条会话（三条入站、一条会话，且投递目标一致），守住「不得按渠道或投递目标另建会话」 |
 | W8.2 | 已完成 | `tools/verify-architecture.py` 增两条门禁：①**禁拼接会话 id** —— 生产源码里 `format!`/`starts_with`/`contains`/`strip_prefix`/`ends_with` 不得出现 `--subagent--` 或 `goal-session-`，也不得为它们定义分隔符或前缀常量；②**禁会话数值摘要** —— `stable_numeric_id` 只允许出现在 6 个既有内存句柄文件，新增即失败（注释与测试源码不计）。两条均以临时探针验证过「违例即 exit 1」，随后删除探针 |
-| W8.3 | 部分完成 | 入站缺标识被拒已有用例覆盖（HTTP/WS/语音/外部事件）；外部事件「重放幂等」用例已补齐（重放命中同一标识、同一渠道同事件只一行、同事件号跨渠道是另一条），并且交互标识已改服务端 ULID、幂等只认 `(source_channel, source_message_id)`；越权订阅与幂等重放的其余分支仍需补 |
+| W8.3 | 已完成 | 三类契约均有用例：入站缺标识被拒（HTTP/WS/语音/外部事件，此前已覆盖）；越权订阅被拒（未登记、工作区不匹配、受众受限三条拒绝 + 三条允许，见 `gateway_bridge_goal_session_tests`）；幂等重放（同记录重放命中同一标识且只一行、重放方换标识仍命中库里那一条、来源键相同但内容不同一律 Conflict，外加外部事件入口的同事件跨渠道判为两条） |
 | W8.4 | 待执行 | 真机链路（桌面发起 + CLI 续聊 + 桌面继续）未验证 |
 | W8.5 | 待执行 | 目标执行与 Cron 唤醒落到同会话的真机验证未做 |
-| W8.6 | 部分完成 | 存储架构 §4.12/§4.13、计划书、`docs/desktop.md`、Skill 参考文档术语已同步；运行态操作手册中与会话身份相关的描述未逐条复核 |
+| W8.6 | 已完成 | 运行态操作手册逐条复核并修正：`POST /api/v1/sessions/identity` 已删除（改为 `POST /api/v1/sessions`）；订阅放行口径与拒绝原因改写为「会话已登记 + 工作区匹配 + 受众不受限」；环境上下文字段表更新为 `origin_channel` / `session_id` / `session_destination` / `session_workspace`；`sessions reset` 输出改为 `current_run_id`；清掉车道时代遗留的「会话会话」重复词与「TUI 会话标识按进程随机」的旧解释 |
 | W9.1 | 待执行 | 性能基线未实测 |
-| W9.2 | 部分完成 | 外部事件入口的会话存在性校验是一次主键查找，不按帧查库；缓存层未单独实现 |
+| W9.2 | 已完成 | 新增会话放行缓存（定容 1024、TTL 30 秒）：入站与订阅共用同一份「会话归属 + 受众边界」判定，未命中才查一次主键；用例证明同一会话的第二次放行不回表（删掉会话行后仍放行），TTL 到期后重新回表并拒绝已删会话；缓存自身的命中/过期/容量淘汰有单测 |
 | W9.3 | 待执行 | 订阅放行缓存未做：当前每建立一次订阅查一次库，帧路不查库 |
 | W9.4 | 待执行 | `channel_mix_json` 写放大评估未做 |
 | W9.5 | 已完成 | ULID 单调有序，主键插入位置单调前进；单测覆盖同毫秒递增 |
@@ -473,3 +473,6 @@ W10 是三端用户可见回归，依赖 W4 与 W5 完成后才能全量开跑�
 | W10.7 | 待执行 | 桌面左侧菜单四项未真机回归 |
 | W10.8 | 待执行 | 桌面分页渲染未真机回归 |
 | W10.9 | 待执行 | 跨端接续可见性未真机回归 |
+| W10.10 | 待执行 | 目标看板进入会话详情跟主会话同一个渲染路径未验证 |
+| W10.11 | 待执行 | cron进入会话详情跟主会话同一个渲染路径未验证 |
+| W10.12 | 待执行 | 子代理进入会话详情跟主会话同一个渲染路径未验证 |

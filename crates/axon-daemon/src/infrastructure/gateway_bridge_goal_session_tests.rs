@@ -162,3 +162,89 @@ fn session_without_workspace_binding_is_not_restricted_by_workspace() {
     assert!(fixture.subscribe("workspace-a", &session_id).is_ok());
     assert!(fixture.subscribe(OTHER_WORKSPACE, &session_id).is_ok());
 }
+
+/// W9.2：同一会话的重复放行判定由缓存承担，不再每次回表。
+///
+/// 做法是把会话行从库里删掉再订阅一次：若仍回表，会以「会话未登记」被拒；
+/// 仍能放行说明第二次判定读的是缓存。
+#[test]
+fn repeated_session_admission_is_served_from_the_cache() {
+    let fixture = Fixture::new();
+    let session_id = fixture.session(
+        "01J8ZQ7K3M4N5P6Q7R8S9T0V4W",
+        Some("workspace-a"),
+        SessionTrustScope::Private,
+    );
+    let bridge = fixture.bridge();
+    let request = || GatewaySubscriptionRequest {
+        workspace_id: "workspace-a".to_owned(),
+        interaction_id: String::new(),
+        session_id: Some(session_id.as_str().to_owned()),
+        resume_cursor: None,
+    };
+
+    GatewayEgress::subscribe(&bridge, request()).expect("首次订阅应放行");
+
+    let connection = rusqlite::Connection::open(fixture.store.path()).expect("打开运行态库");
+    connection
+        .execute(
+            "DELETE FROM sessions WHERE session_id=?1",
+            [session_id.as_str()],
+        )
+        .expect("删掉会话行，制造「回表就会失败」的条件");
+
+    GatewayEgress::subscribe(&bridge, request()).expect("TTL 内的第二次判定必须命中缓存");
+}
+
+/// 缓存有寿命：过期之后必须重新回表，删掉的会话因此会被拒。
+#[test]
+fn expired_admission_falls_back_to_the_store() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[derive(Clone)]
+    struct StepClock(Arc<AtomicU64>);
+
+    impl RuntimeClock for StepClock {
+        fn now_ms(&self) -> u64 {
+            self.0.load(Ordering::Acquire)
+        }
+    }
+
+    let fixture = Fixture::new();
+    let session_id = fixture.session(
+        "01J8ZQ7K3M4N5P6Q7R8S9T0V4X",
+        Some("workspace-a"),
+        SessionTrustScope::Private,
+    );
+    let now = Arc::new(AtomicU64::new(NOW_MS));
+    let bridge = DaemonGatewayBridge::new(GatewayHostDependencies {
+        store: fixture.store.clone(),
+        active_turn_steer_sink: Arc::new(NoActiveTurnSteerSink),
+        clock: StepClock(Arc::clone(&now)),
+        action_lease_duration_ms: ACTION_LEASE_DURATION_MS,
+        stream_bridge: Arc::clone(&fixture.stream_bridge),
+        host_generation: None,
+    });
+    let request = || GatewaySubscriptionRequest {
+        workspace_id: "workspace-a".to_owned(),
+        interaction_id: String::new(),
+        session_id: Some(session_id.as_str().to_owned()),
+        resume_cursor: None,
+    };
+    GatewayEgress::subscribe(&bridge, request()).expect("首次订阅应放行");
+
+    let connection = rusqlite::Connection::open(fixture.store.path()).expect("打开运行态库");
+    connection
+        .execute(
+            "DELETE FROM sessions WHERE session_id=?1",
+            [session_id.as_str()],
+        )
+        .expect("删掉会话行");
+    // 缓存寿终（30 秒）之后再判一次：必须回表，并因会话不存在而被拒。
+    now.fetch_add(30_000, Ordering::AcqRel);
+    let error = match GatewayEgress::subscribe(&bridge, request()) {
+        Ok(_) => panic!("过期后必须回表，删掉的会话不得再被放行"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, GatewayKernelError::Ingress(_)), "{error:?}");
+}

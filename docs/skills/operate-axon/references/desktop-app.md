@@ -28,7 +28,7 @@
 | `GET/PUT /api/v1/mcp/config`、`GET /api/v1/skills`、`DELETE /api/v1/skills/{id}` | MCP 配置、技能清单与技能移除（设置 › 技能 的「移除」经它删除技能目录，确认后才发请求） |
 | `GET/PUT /api/v1/documents/soul`、`/documents/agents` | 人设与行为文件 |
 | `GET /api/v1/workspaces`、`GET /api/v1/sessions` | 工作区与会话列表 |
-| `POST /api/v1/workspaces`、`POST /api/v1/sessions/identity` | 注册工作区、推导会话标识 |
+| `POST /api/v1/workspaces`、`POST /api/v1/sessions` | 注册工作区、新建会话（会话标识由服务端生成） |
 | `POST /api/v1/sessions/<sessionId>/interrupt` | 中断该会话当前运行 |
 | `POST /api/v1/sessions/<sessionId>/jobs/<jobId>/stop` | 停止该会话的后台作业 |
 | `POST /api/v1/sessions/<sessionId>/subagents/<agent>/messages` | 给该会话的子代理追加消息 |

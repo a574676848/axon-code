@@ -136,7 +136,7 @@ Authorization: Bearer <token>
 | `GET /api/v1/workspaces` | 工作区注册表 |
 | `POST /api/v1/workspaces` | 注册工作区 |
 | `GET /api/v1/sessions` | 会话清单，可用 `?workspace=<id>` 过滤（字段与排序见上文会话族） |
-| `POST /api/v1/sessions/identity` | 由报文体推导会话标识 |
+| `POST /api/v1/sessions` | 新建会话：服务端生成会话标识，请求体可带 `workspaceId`、`title`、`cwd` |
 | `GET /api/v1/sessions/<sessionId>/subagents` | 该会话的子代理清单 |
 | `POST /api/v1/sessions/<sessionId>/interrupt` | 中断该会话的运行 |
 | `GET /api/v1/sessions/<sessionId>/interactions` | 该会话的交互记录；`?limit=<n>` 限制条数，`?before_ms=<毫秒>&before_id=<交互标识>` 向前翻页（取该条之前的一页，两个参数必须成对给出）。响应带 `sessionUsage`、`sessionElapsedMs` 与 `effectiveModel`（该会话**最新一轮**的 `provider`、`model`、`name` 与 `reasoningEffort`，只读一条记录，不遍历历史；`name` 是用户当时选择的模型别名，同一 `provider` 与 `model` 可能对应多条别名，旧记录没有该字段时为 null；整段读不到时为 null） |

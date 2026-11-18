@@ -139,4 +139,37 @@ mod tests {
             "{text}"
         );
     }
+
+    #[test]
+    fn ulid_session_id_is_its_own_directory_name() {
+        // 事件分段目录名必须等于会话主键：ULID 只含 ASCII 大写字母与数字，
+        // 编码器不产生任何转义，因此目录名与主键逐字相同。
+        let session_id = "01J8ZQ7K3M4N5P6Q7R8S9T0V1W";
+        let log = EventLog::open("/tmp/events", session_id);
+        let text = log.path().to_string_lossy().replace('\\', "/");
+        assert_eq!(EventLog::encode_segment(session_id), session_id);
+        assert!(
+            text.ends_with(&format!("/{session_id}/session.v1.jsonl.zstd")),
+            "事件目录必须就是主键：{text}"
+        );
+    }
+
+    #[test]
+    fn distinct_session_ids_never_share_a_segment() {
+        // 目录名是查找键：不同主键落到同一目录就等于串了日志。
+        let ids = [
+            "01J8ZQ7K3M4N5P6Q7R8S9T0V1W",
+            "01J8ZQ7K3M4N5P6Q7R8S9T0V1X",
+            "session-1",
+            "session_1",
+            "session_1_2F",
+        ];
+        let mut seen = std::collections::BTreeMap::new();
+        for id in ids {
+            let segment = EventLog::encode_segment(id);
+            if let Some(previous) = seen.insert(segment.clone(), id) {
+                panic!("会话 {previous} 与 {id} 共用目录 {segment}");
+            }
+        }
+    }
 }

@@ -136,15 +136,16 @@ weekend:0 9 * * *          周末 9 点
 
 ### 定时任务的唤醒目标
 
-运行上下文会给出会话会话的事实字段，直接用它们，不要自己猜或抄历史：
+运行上下文会给出会话的事实字段，直接用它们，不要自己猜或抄历史：
 
 | 字段 | 含义 |
 |---|---|
-| `session_channel` | 当前会话会话所属渠道 |
-| `session_destination` | 当前会话会话目标 |
+| `origin_channel` | 本轮来源渠道（客户端优先：desktop、cli、tui、cron、webhook、goal） |
+| `session_id` | 当前会话标识（服务端生成的 ULID） |
+| `session_destination` | 当前会话的投递目标 |
 | `session_workspace` | 当前会话所属的 Workspace |
 
-`--wake` 只有一种形态，用于让任务执行完**唤醒指定会话会话**继续跟进（查结果、补后续动作）：`--wake session:<session_channel>:<session_destination>:<session_workspace>`。会话会话身份含 Workspace 维度；同一个会话标识在不同项目下是不同会话，漏了它就会投进别的项目的同名会话。
+`--wake` 只有一种形态，用于让任务执行完**唤醒指定会话**继续跟进（查结果、补后续动作）：`--wake session:<session_channel>:<session_destination>[:<session_workspace>]`。这三个字段是投递路由与目标 Workspace，不是会话身份：会话标识由服务端生成，唤醒时按目标 Workspace 的活跃会话投递，不按它们拼出会话。
 
 判定顺序：
 
@@ -156,5 +157,5 @@ weekend:0 9 * * *          周末 9 点
 
 - 省略 `--wake` 时任务执行完只写运行记录，不产生任何投递。
 - 改或清空已有目标用 `axon cron update <JOB_ID> --wake <目标>` 或 `--clear-wake`；`axon cron list` 的 `wake` 列可核对当前值。
-- `session_channel` 只接受 `desktop`。TUI 的会话标识按进程随机生成，任务触发时已失效，因此不接受 `session:tui:...`。
+- `session_channel` 只接受 `desktop`：这是当前唯一可唤醒的持久渠道，`session:tui:...` 等其它渠道会被拒绝。
 - 后端没有消息直投通道：需要把结果另行发到 IM 时，在任务 prompt 里直接要求执行者自己调用 `lark-cli im +messages-send --as bot --chat-id <chat_id> --text "<摘要>"` 发送，`chat_id` 由用户在创建任务时给出。

@@ -500,3 +500,65 @@ fn system_completion_input_is_never_steered_into_active_turn() {
         "并入活跃轮不得把系统输入结算成已理解"
     );
 }
+
+/// W8.1 探针：同一投递目标、三个不同渠道，只允许落进同一条会话。
+///
+/// 会话身份由入站显式给出，渠道与投递目标都不参与派生；这条用例守的是「没有任何一层
+/// 按渠道或目标另建一条会话」。
+#[test]
+fn three_channels_with_the_same_destination_land_in_one_session() {
+    use axon_session::{InteractionQueryStore as _, RuntimeStore as _, SqliteRuntimeStore};
+
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    let session_id =
+        axon_domain::DaemonSessionId::new("01J8ZQ7K3M4N5P6Q7R8S9T0V1W").expect("会话标识");
+    store
+        .create_session(&session_id, ".", TEST_NOW_MS)
+        .expect("建会话");
+    let ingress = PrimaryTurnIngress::new(
+        store.clone(),
+        super::NoActiveTurnSteerSink,
+        TEST_NOW_MS,
+        TEST_LEASE_DURATION_MS,
+    );
+
+    for (index, channel) in ["desktop", "cli", "tui"].iter().enumerate() {
+        let interaction = InteractionRecord::new(
+            session_id.clone(),
+            InteractionId::new(format!("01J8ZQ7K3M4N5P6Q7R8S9T0V2{index}")).expect("交互标识"),
+            InteractionSource::new(*channel, format!("message-{index}"))
+                .and_then(|source| source.with_client(*channel))
+                .expect("来源"),
+            ScopeRef::workspace("workspace-a").expect("作用域"),
+            AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly),
+            // 三渠道共用同一个投递目标：旧模型会按它与渠道派生出三条会话。
+            ReplyRoute::new(*channel, "workbench-1").expect("回复路由"),
+            "继续处理",
+            TEST_NOW_MS + u64::try_from(index).expect("序号"),
+        )
+        .expect("Interaction");
+        let receipt = ingress.route_input(&interaction).expect("入站应成功");
+        assert!(receipt.inserted, "三条入站都必须是新记录");
+    }
+
+    let rows = store
+        .interactions_for_session(session_id.as_str(), 10, None)
+        .expect("读取会话入站");
+    assert_eq!(rows.len(), 3, "三个渠道的三条入站都应落在同一条会话里");
+    assert!(
+        rows.iter().all(|row| row.session_id == session_id),
+        "任何一条都不得被改投到别的会话"
+    );
+    assert!(
+        rows.iter()
+            .all(|row| row.reply_route.destination() == "workbench-1"),
+        "三条入站共用同一个投递目标"
+    );
+    let sessions: i64 = store
+        .with_read_connection(|connection| {
+            connection.query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+        })
+        .expect("统计会话");
+    assert_eq!(sessions, 1, "不得按渠道或投递目标另建会话");
+}

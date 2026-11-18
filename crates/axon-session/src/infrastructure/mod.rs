@@ -36,6 +36,9 @@ mod sqlite_runtime_store_health_tests;
 #[path = "sqlite_runtime_store_interaction_fixtures.rs"]
 pub(super) mod sqlite_runtime_store_interaction_fixtures;
 #[cfg(test)]
+#[path = "sqlite_runtime_store_interaction_idempotency_tests.rs"]
+mod sqlite_runtime_store_interaction_idempotency_tests;
+#[cfg(test)]
 #[path = "sqlite_runtime_store_interaction_tail_tests.rs"]
 mod sqlite_runtime_store_interaction_tail_tests;
 #[cfg(test)]

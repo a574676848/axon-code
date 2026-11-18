@@ -101,7 +101,7 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
 | `event_rejected` | 提交的事件被入口策略拒绝，未入账 |
 | `subscribe_missing_id` | `subscribe` 未带 `subscribeId`；该帧不回显标识 |
 | `subscribe_duplicate_id` | 同一连接复用了 `subscribeId`；只拒这一次，连接保持 |
-| `subscription_rejected` | 目标不存在或不可订阅（含子代理会话、目标执行会话之外的普通会话，以及目标会话与请求工作区不匹配）；回显 `subscribeId`，Daemon 侧日志留有具体原因 |
+| `subscription_rejected` | 会话未登记、会话与请求工作区不匹配、受众边界受限，或把交互标识当 `sessionId` 传入；回显 `subscribeId`，Daemon 侧日志留有具体原因 |
 | `event_projection_failed` | 事件投影失败；服务端以错误帧显式回执，不静默丢帧 |
 
 ## 排障对照
@@ -112,7 +112,7 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
 | 连接直接失败并报 404 | 路径必须精确为 `/gateway/v1/ws` |
 | 连上后无任何回帧 | 这是正常行为：服务端不发欢迎帧，先发 `ping` 或 `subscribe` |
 | `subscribe` 回 `invalid_json` | 漏了 `workspaceId`，或字段名不是 camelCase |
-| `subscribe` 回 `subscription_rejected` | 目标标识类型用错（会话标识当 `sessionId`）、目标不存在，或目标执行会话与请求工作区不匹配 |
+| `subscribe` 回 `subscription_rejected` | 目标标识类型用错（把交互标识当 `sessionId`）、该会话从未登记，或会话与请求工作区不匹配 |
 | 有 `subscribed` 但长时间没有事件帧 | 目标 Interaction 已结束且无历史帧；先用 `GET /gateway/v1/interactions/<id>` 确认状态 |
 | 事件帧解析失败 | `payload_json` 是字符串化 JSON，且同帧内命名风格混合 |
 | 界面报「连接被重置」（`WebSocket protocol error: Connection reset without closing handshake`） | `data/logs/axon-<日期>.log` 的 `[gateway-ws] 连接级失败 peer=... 原因=...`：默认级别（`[agent] log_level` 缺省 `warn`）只记服务端自身故障；对端主动走人（桌面端刷新、进程退出、端口探测）记在 `debug` 级别，要逐条追溯就把 `[agent] log_level` 设为 `debug`，或临时用 `AXON_LOG_LEVEL=debug` 启动。两种级别都没有该行，说明断在链路层 |
@@ -125,7 +125,7 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
 # 连通性与鉴权
 pwsh -File scripts/gateway-ws.ps1 -Action ping
 
-# 订阅主会话会话（interaction 级）
+# 订阅交互（interaction 级）
 pwsh -File scripts/gateway-ws.ps1 -Action subscribe -WorkspaceId <workspace-id> `
   -InteractionId <interaction-id> -SubscribeId "interaction:<interaction-id>" -ListenMs 5000
 
