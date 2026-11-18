@@ -386,4 +386,7 @@ fn turn_metrics_output_tokens_follow_the_ledger_not_the_speed_window() {
     assert_eq!(metrics.output_tokens, 305, "短窗口流的输出也必须计入整轮");
     assert_eq!(metrics.reasoning_tokens, 1_415);
     assert_eq!(metrics.cache_read_tokens, 1_800, "五类 token 同源累加");
+    // 速率只有窗口可测的流才参与：这两条流都在毫秒级收口，分母为 0，
+    // 因此本轮不给速率，绝不能拿累加 token 去除一个不覆盖它们的窗口。
+    assert_eq!(metrics.generation_speed_tps, None);
 }

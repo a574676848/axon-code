@@ -93,14 +93,14 @@ pub(super) fn publish_turn_performance(
     let frame = axon_domain::RuntimeObservationFrame::new(now_ms, "", interaction_id.as_str())
         .with_generation(generation);
     let _ = sink.publish_turn_observation(&frame);
-    let usage = sink.usage_snapshot();
     Some(TurnGenerationMetrics {
         ttft_ms,
         decode_ms,
-        // 没有实测样本时不写 0：客户端据此区分「没测到」与「测得 0」。
-        output_tokens: (usage.output_tokens > 0).then_some(usage.output_tokens),
-        reasoning_output_tokens: (usage.reasoning_output_tokens > 0)
-            .then_some(usage.reasoning_output_tokens),
+        // 这两个数是速率的分子，必须与解码窗口同源（只数窗口可测的流）；
+        // 没有实测样本时不写 0，客户端据此区分「没测到」与「测得 0」。
+        output_tokens: (readout.output_tokens > 0).then_some(readout.output_tokens),
+        reasoning_output_tokens: (readout.reasoning_output_tokens > 0)
+            .then_some(readout.reasoning_output_tokens),
         usage: sink.last_usage_payload(),
     })
 }
@@ -138,8 +138,8 @@ fn turn_generation_metrics(
         total_input_tokens: usage.input_tokens,
         cache_read_input_tokens: usage.cached_input_tokens,
         cache_write_input_tokens: usage.cache_write_input_tokens,
-        output_tokens: usage.output_tokens,
-        reasoning_output_tokens: usage.reasoning_output_tokens,
+        output_tokens: readout.output_tokens,
+        reasoning_output_tokens: readout.reasoning_output_tokens,
         cache_hit_rate_basis_points: u16::try_from(cache_hit_rate_basis_points(&usage))
             .unwrap_or(u16::MAX),
         ..Default::default()

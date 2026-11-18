@@ -91,13 +91,18 @@ pub(crate) struct TurnUsageSnapshot {
 
 /// 收尾与实时帧共用的生成读数。
 ///
-/// 只留速率所需的两项：token 一律从用量账本取累加值，与输入、缓存同源。
+/// 这里的 token 只服务速率：解码窗口来自「窗口可测」的流，分子必须同样只数这些流，
+/// 否则短窗口流的输出会让速率凭空变高。显示口径的 token 一律从用量账本取累加值。
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct TurnGenerationReadout {
     /// 首字耗时；未测得时为 None。
     pub(super) ttft_ms: Option<u64>,
     /// 解码窗口；没有可测样本时为 None。
     pub(super) decode_ms: Option<u64>,
+    /// 窗口可测流的输出，仅用于速率分子。
+    pub(super) output_tokens: u64,
+    /// 窗口可测流的推理输出，仅用于速率分子。
+    pub(super) reasoning_output_tokens: u64,
 }
 
 /// 一轮收口时的终态读数。
@@ -191,9 +196,14 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
         fallback_total_ms: Option<u64>,
     ) -> TurnGenerationReadout {
         let ttft_ms = self.application_ttft_ms();
-        // 输出 token 不从窗口样本取：短窗口流会被速率口径丢弃，而它们的输出确实发生了。
-        let (decode_ms, _, _) = self.generation_watch().readout(ttft_ms, fallback_total_ms);
-        TurnGenerationReadout { ttft_ms, decode_ms }
+        let (decode_ms, output_tokens, reasoning_output_tokens) =
+            self.generation_watch().readout(ttft_ms, fallback_total_ms);
+        TurnGenerationReadout {
+            ttft_ms,
+            decode_ms,
+            output_tokens,
+            reasoning_output_tokens,
+        }
     }
 
     /// 组装本轮指标事件；每轮只产出一次。
@@ -238,11 +248,13 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
         let generate_ms = ttft_ms
             .unwrap_or(0)
             .saturating_add(readout.decode_ms.unwrap_or(0));
-        let generated_tokens = usage
+        // 速率的分子分母必须同源：解码窗口只覆盖窗口可测的流，分子也只能数这些流。
+        // 显示口径的输出走下面的 usage 累加值，两者不混用。
+        let rated_tokens = readout
             .output_tokens
-            .saturating_add(usage.reasoning_output_tokens);
-        let speed = if readout.decode_ms.unwrap_or(0) > 0 && generated_tokens > 0 {
-            Some((generated_tokens as f64) * 1_000.0 / (readout.decode_ms.unwrap_or(1) as f64))
+            .saturating_add(readout.reasoning_output_tokens);
+        let speed = if readout.decode_ms.unwrap_or(0) > 0 && rated_tokens > 0 {
+            Some((rated_tokens as f64) * 1_000.0 / (readout.decode_ms.unwrap_or(1) as f64))
         } else {
             None
         };
