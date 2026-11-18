@@ -440,7 +440,7 @@ W10 是三端用户可见回归，依赖 W4 与 W5 完成后才能全量开跑�
 | W5.2 | 已完成 | 放行条件改为「会话存在 + 工作区匹配 + `trust_scope` 非 `restricted`」，边界读 `sessions.trust_scope` 实列 |
 | W5.3 | 待执行 | 事件分段目录名与主键一致性未单独核对 |
 | W6.1 | 已完成 | `workbench_http_adapter` 删除派生路由，会话创建统一走 `POST /api/v1/sessions` |
-| W6.2 | 部分完成 | Cron 唤醒改用 `schedules.session_id`（缺失即报错），Cron 视图与唤醒路径改调 `resolve_workspace_session`；任务定义侧尚未把目标会话落进 `schedules.session_id` |
+| W6.2 | 已完成 | Cron 唤醒改用 `schedules.session_id`（缺失即报错），Cron 视图与唤醒路径改调 `resolve_workspace_session`；**任务定义侧同步收口**：`resolve_schedule_session` 先读任务已有绑定、没有才建一条 `kind=cron` 会话（工作区与根目录取自 Workspace 注册表），`upsert_interval_schedule` 在省略 `--session-id` 时调用它并在同一次落库里写回 `schedules.session_id`，显式给出的会话仍先校验已登记。用例覆盖「省略会话→落定 cron 会话」「同一任务重复定义→沿用同一会话」「未登记会话→定义侧即拒」 |
 | W6.3 | 已完成 | `gateway_voice` 改用帧内显式 `sessionId`，`session_id_for` 删除；桌面侧同步收口：`voice_start` 与输入坞语音入口显式传当前会话标识，首帧必带 `sessionId`，缺省由界面与宿主各自拦下 |
 | W6.4 | 已完成 | `daemon_history_loader` 直接读 `interaction.session_id` |
 | W6.5 | 已完成 | `interrupted_interaction_repository` 读 `inbox.session_id`，`candidate_session_id` 不再派生 |
@@ -452,7 +452,7 @@ W10 是三端用户可见回归，依赖 W4 与 W5 完成后才能全量开跑�
 | W7.3 | 待执行 | 环境上下文渠道语义未改 |
 | W7.4 | 待执行 | 前端逐轮来源展示未复核 |
 | W8.1 | 待执行 | 三渠道命中同一会话的自动化探针未单独补 |
-| W8.2 | 待执行 | 「禁拼接会话 id / 禁数值摘要」的架构门禁未加 |
+| W8.2 | 已完成 | `tools/verify-architecture.py` 增两条门禁：①**禁拼接会话 id** —— 生产源码里 `format!`/`starts_with`/`contains`/`strip_prefix`/`ends_with` 不得出现 `--subagent--` 或 `goal-session-`，也不得为它们定义分隔符或前缀常量；②**禁会话数值摘要** —— `stable_numeric_id` 只允许出现在 6 个既有内存句柄文件，新增即失败（注释与测试源码不计）。两条均以临时探针验证过「违例即 exit 1」，随后删除探针 |
 | W8.3 | 部分完成 | 入站缺标识被拒已有用例覆盖（HTTP/WS/语音/外部事件）；越权订阅与幂等重放用例部分覆盖 |
 | W8.4 | 待执行 | 真机链路（桌面发起 + CLI 续聊 + 桌面继续）未验证 |
 | W8.5 | 待执行 | 目标执行与 Cron 唤醒落到同会话的真机验证未做 |

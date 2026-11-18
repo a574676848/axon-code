@@ -14,8 +14,7 @@ use crate::ports::{DeliveryHealthStore, ProcessIdentity};
 use axon_domain::{DaemonSessionId, InteractionId, InteractionStatus, RuntimeHostId};
 use axon_protocol::{SubmitInteractionReceipt, SubmitInteractionRequest};
 use axon_session::{
-    DaemonHostRecord, InteractionStore, RuntimeScheduleRecord, RuntimeStore, RuntimeStoreError,
-    SessionRuntimeRecord,
+    DaemonHostRecord, InteractionStore, RuntimeStore, RuntimeStoreError, SessionRuntimeRecord,
 };
 use axon_session_runtime::{EventPublisher, RuntimeClock, TurnExecutor};
 use std::{
@@ -47,6 +46,9 @@ mod daemon_host_health_tests;
 #[path = "daemon_host_interaction_tests.rs"]
 mod daemon_host_interaction_tests;
 #[cfg(test)]
+#[path = "daemon_host_schedule_tests.rs"]
+mod daemon_host_schedule_tests;
+#[cfg(test)]
 #[path = "daemon_host_soak_tests.rs"]
 mod daemon_host_soak_tests;
 
@@ -67,6 +69,8 @@ mod daemon_host_execution_runtime;
 mod daemon_host_execution_worker;
 #[path = "daemon_host_goal_tools.rs"]
 mod daemon_host_goal_tools;
+#[path = "daemon_host_schedule.rs"]
+mod daemon_host_schedule;
 #[path = "execution_session_sink.rs"]
 mod execution_session_sink;
 use execution_session_sink::execution_session_projection;
@@ -89,10 +93,6 @@ const DEFAULT_SCHEDULE_LEASE_DURATION_MS: u64 = 30_000;
 const PRIMARY_TURN_MAX_CONCURRENCY: usize = 4;
 const EXECUTION_WORKER_MAX_CONCURRENCY: usize = 4;
 const EXECUTION_WORKER_QUEUE_CAPACITY: usize = 64;
-const INTERVAL_SCHEDULE_EXPRESSION_PREFIX: &str = "interval_ms:";
-const DELIVERY_MODE_FOLLOW_UP: &str = "follow_up";
-const DELIVERY_MODE_STEER: &str = "steer";
-const SCHEDULE_STATUS_ACTIVE: &str = "active";
 use daemon_host_status::{decode as host_status_from_code, encode as host_status_code};
 
 /// 通用 Daemon Host。
@@ -387,59 +387,6 @@ where
             accepted: true,
             deduplicated: !receipt.inserted,
         })
-    }
-
-    /// 创建或更新只由 Daemon Scheduler 领取的 interval schedule。
-    pub fn upsert_interval_schedule(
-        &self,
-        schedule_id: String,
-        session_id: Option<DaemonSessionId>,
-        kind: String,
-        interval_ms: u64,
-        delivery_mode: String,
-        payload: serde_json::Value,
-    ) -> Result<RuntimeScheduleRecord, DaemonHostError> {
-        let _ = self.started_host()?;
-        if self.status() != DaemonHostStatus::Running {
-            return Err(DaemonHostError::Draining);
-        }
-        if interval_ms == 0 {
-            return Err(DaemonHostError::Worker(
-                "schedule interval 必须大于 0".to_owned(),
-            ));
-        }
-        if !matches!(
-            delivery_mode.as_str(),
-            DELIVERY_MODE_FOLLOW_UP | DELIVERY_MODE_STEER
-        ) {
-            return Err(DaemonHostError::Worker(
-                "schedule delivery mode 无效".to_owned(),
-            ));
-        }
-        if let Some(session_id) = session_id.as_ref() {
-            self.store.get_session(session_id)?;
-        }
-        if !payload.is_object() {
-            return Err(DaemonHostError::Worker(
-                "schedule payload 必须是 JSON object".to_owned(),
-            ));
-        }
-        let now_ms = self.clock.now_ms();
-        let schedule = RuntimeScheduleRecord {
-            schedule_id,
-            session_id,
-            kind,
-            expression: format!("{INTERVAL_SCHEDULE_EXPRESSION_PREFIX}{interval_ms}"),
-            payload_json: payload.to_string(),
-            delivery_mode,
-            status: SCHEDULE_STATUS_ACTIVE.to_owned(),
-            next_run_at_ms: Some(now_ms.saturating_add(interval_ms)),
-            lease_owner: None,
-            lease_expires_at_ms: None,
-            failure_count: 0,
-        };
-        self.store.upsert_schedule(&schedule)?;
-        Ok(schedule)
     }
 
     /// 在独立协调线程中领取并运行 Primary Turn。

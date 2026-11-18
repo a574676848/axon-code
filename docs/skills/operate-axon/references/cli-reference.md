@@ -39,7 +39,7 @@ axon daemon health [--endpoint <name>]              # 内部健康快照：host�
 axon daemon drain [--endpoint <name>] [--reason <text>]
 axon daemon run --root <dir> --config-path <file> [--endpoint <name>]
 axon daemon attach [--endpoint <name>] [--sequence <n>] [--generation <id>]
-axon daemon schedule --session-id <id> --kind <kind> --prompt <text> [--workspace-id <id>] [--interval-ms <ms>] [--delivery-mode <mode>]
+axon daemon schedule [--session-id <id>] --kind <kind> --prompt <text> --workspace-id <id> --interval-ms <ms> [--delivery-mode <mode>] <schedule-id>   # 省略 --session-id 时由定义侧落定一条定时任务会话
 
 axon persona validate [--file <path>]|status [--json]
 axon persona style list [--all]|retire <style-id>

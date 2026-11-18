@@ -58,9 +58,9 @@ pub use ports::{
     InteractionStoreError, LedgerCommitError, LedgerCommitStore, LedgerEventStore,
     LedgerEventStoreError, NewSessionRequest, NotificationDeliveryState, RESULT_ACK_SOURCE_EXPIRED,
     RESULT_ACK_SOURCE_READ, ResultStore, ResultStoreError, RuntimeHealthCounters, RuntimeStore,
-    RuntimeStoreError, SessionQueryStore, SessionSummaryRow, SubagentSessionRequest,
-    UserQuestionStore, UserQuestionStoreError, WorkspaceSessionRequest, WorkspaceStore,
-    WorkspaceStoreError,
+    RuntimeStoreError, ScheduleSessionRequest, SessionQueryStore, SessionSummaryRow,
+    SubagentSessionRequest, UserQuestionStore, UserQuestionStoreError, WorkspaceSessionRequest,
+    WorkspaceStore, WorkspaceStoreError,
 };
 pub use ports::{ResumePointerStore, ResumePointerStoreError};
 

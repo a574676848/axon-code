@@ -356,6 +356,99 @@ def verify_target_state_forbidden_symbols(root: Path) -> None:
         fail("Target-state forbidden symbol or table detected:\n" + "\n".join(hits))
 
 
+# 会话标识不得由字符串拼接表达：标识一律是服务端生成的 ULID，关系落列、不落前缀。
+#
+# 只扫生产源码：测试里的历史字面量用来证明旧数据仍能被读出来（它们现在只是普通字符串），
+# 不属于拼接面。
+SESSION_ID_CONCAT_RULES = [
+    (
+        re.compile(r"(?i)\b(?:format!|starts_with|ends_with|contains|strip_prefix)\s*\([^\n]*--subagent--"),
+        "session id must not be built from or detected by `--subagent--`; subagent identity is (root_session_id, agent_path)",
+    ),
+    (
+        re.compile(r"(?i)\b(?:format!|starts_with|ends_with|contains|strip_prefix)\s*\([^\n]*goal-session-"),
+        "session id must not be built from or detected by `goal-session-`; goal session identity is sessions.goal_id",
+    ),
+    (
+        re.compile(r"(?im)^\s*const\s+[A-Z0-9_]*SUBAGENT[A-Z0-9_]*\s*:\s*&str\s*=\s*\"--subagent--\""),
+        "subagent session separator constant is forbidden",
+    ),
+    (
+        re.compile(r"(?im)^\s*const\s+[A-Z0-9_]*SESSION_ID_PREFIX[^=\n]*=\s*\"goal-session-\""),
+        "goal session id prefix constant is forbidden",
+    ),
+]
+
+
+def is_test_source(path: Path) -> bool:
+    """测试源码：文件名带 test/tests，或位于 tests 目录。"""
+    parts = {part.lower() for part in path.parts}
+    return "tests" in parts or "test" in path.name.lower() or "tests" in path.name.lower()
+
+
+def verify_session_id_concatenation(root: Path) -> None:
+    """会话标识必须生成一次，不得拼接。"""
+    hits: list[str] = []
+    for relative_dir in ("crates", "apps"):
+        directory = root / relative_dir
+        if not directory.exists():
+            continue
+        for path in sorted(directory.rglob("*.rs")):
+            if not path.is_file() or is_excluded(root, path) or is_test_source(path):
+                continue
+            text = path.read_text(encoding="utf-8")
+            for pattern, message in SESSION_ID_CONCAT_RULES:
+                for match in pattern.finditer(text):
+                    line_number = text.count("\n", 0, match.start()) + 1
+                    hits.append(f"{rel(root, path)}:{line_number}: {message}")
+    if hits:
+        fail("session id concatenation detected:\n" + "\n".join(hits))
+
+
+# 会话标识不得再长出数值摘要副本：`stable_numeric_id` 只服务于已知的内存句柄
+# （agent 控制树根、记忆写入格、执行回执、工具编排 SessionId），这些句柄不参与会话身份。
+# 白名单之外出现即视为新的数值摘要，必须改为直接使用会话标识。
+SESSION_NUMERIC_DIGEST_SYMBOL = "stable_numeric_id"
+SESSION_NUMERIC_DIGEST_ALLOWLIST = {
+    "crates/axon-cli/src/runtime/stable_ids.rs",
+    "crates/axon-cli/src/run_commands/run_reflection_apply.rs",
+    "crates/axon-cli/src/run_commands/run_request_subagents.rs",
+    "crates/axon-cli/src/run_commands/run_self_iteration_subagent.rs",
+    "crates/axon-cli/src/run_commands/run_turn_outcome.rs",
+    "crates/axon-cli/src/tools/orchestrator_models.rs",
+}
+
+
+def verify_session_numeric_digest(root: Path) -> None:
+    """会话标识不得被摘要成数字当身份用。"""
+    hits: list[str] = []
+    for relative_dir in ("crates", "apps"):
+        directory = root / relative_dir
+        if not directory.exists():
+            continue
+        for path in sorted(directory.rglob("*.rs")):
+            if not path.is_file() or is_excluded(root, path) or is_test_source(path):
+                continue
+            relative = rel(root, path)
+            if relative in SESSION_NUMERIC_DIGEST_ALLOWLIST:
+                continue
+            text = path.read_text(encoding="utf-8")
+            for line_number, line in enumerate(text.splitlines(), 1):
+                stripped = line.lstrip()
+                if stripped.startswith(("//", "/*", "*")):
+                    continue
+                if SESSION_NUMERIC_DIGEST_SYMBOL in line:
+                    hits.append(
+                        f"{relative}:{line_number}: {SESSION_NUMERIC_DIGEST_SYMBOL} "
+                        "outside the approved in-memory handles"
+                    )
+    if hits:
+        fail(
+            "session id numeric digest appeared outside the approved in-memory handles:\n"
+            + "\n".join(hits)
+        )
+
+
 def verify_legacy_external_entries(root: Path) -> None:
     LEGACY_EXTERNAL_ENTRY_PATTERN = re.compile(
         r"\b(?:CreateSession|ResetSession|SubmitAction|ResumeSession|AgentTuiStartupAction|"
@@ -388,12 +481,16 @@ def main() -> int:
     verify_target_state_forbidden_symbols(root)
     verify_docs(root)
     verify_legacy_external_entries(root)
+    verify_session_id_concatenation(root)
+    verify_session_numeric_digest(root)
     print("TUI architecture layer verification OK")
     print("File size verification OK")
     print("Comment dash verification OK")
     print("TUI naming verification OK")
     print("Target-state forbidden symbols verification OK")
     print("Documentation verification OK")
+    print("Session identity concatenation verification OK")
+    print("Session identity numeric digest verification OK")
     print("Architecture verification OK")
     return 0
 

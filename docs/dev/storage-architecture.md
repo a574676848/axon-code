@@ -772,6 +772,8 @@ CREATE INDEX sessions_by_kind_root
 
 服务端内部另有两个登记入口，只给宿主用，不对外暴露：子代理按 `(root_session_id, agent_path)` 解析，目标执行会话按 `goal_id` 解析。两者都是「先查后建」：命中原行就复用，查不到就生成新 ULID 并落行；并发撞唯一索引时回读已有行，因此同一件事永远只有一条会话。
 
+定时任务的目标会话同样只有一个落点：`schedules.session_id`。**定义侧**解析（已有绑定就沿用，没有才建一条 `kind=cron` 会话）并在同一次落库里写回；**唤醒侧**只读该列，缺失即报错，不隐式建会话、也不按投递目标派生。因此一个任务的多次唤醒落在同一条会话里。
+
 **线上字段名**：`primarySessionId` 的取值就是 `interaction.session_id`；服务端内部一律叫 `session_id`，两者同值。
 
 #### 4.13.3 interaction_id 规范

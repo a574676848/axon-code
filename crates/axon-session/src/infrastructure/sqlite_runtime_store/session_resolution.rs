@@ -1,16 +1,19 @@
-//! 会话解析：子代理会话与目标执行会话的「先查后建」。
+//! 会话解析：子代理会话、目标执行会话与定时任务会话的「先查后建」。
 //!
 //! 会话标识是 ULID，不携带业务前缀或路径，因此「同一个子代理」只能由
 //! `(root_session_id, agent_path)` 认出来，「同一个目标的执行会话」只能由 `goal_id`
-//! 认出来。两条路径姿势一致：先按唯一键查，查不到再建一条 ULID，撞唯一键就回读，
-//! 因此并发下同一件事不会长出两条会话。
+//! 认出来，「同一个定时任务」只能由 `schedules.session_id` 认出来。三条路径姿势一致：
+//! 先按唯一键查，查不到再建一条 ULID，撞唯一键就回读，因此并发下同一件事不会长出两条会话。
 
 use super::helpers::{SESSION_COLUMNS, normalize_agent_path, session_runtime_row, storage};
 use super::{RuntimeStoreError, SqliteRuntimeStore};
 use crate::application::new_session_id;
 use crate::domain::runtime::{SessionKind, SessionRuntimeRecord, SessionTrustScope};
-use crate::ports::{GoalSessionRequest, NewSessionRequest, RuntimeStore, SubagentSessionRequest};
-use axon_domain::DaemonSessionId;
+use crate::ports::{
+    GoalSessionRequest, NewSessionRequest, RuntimeStore, ScheduleSessionRequest,
+    SubagentSessionRequest, WorkspaceStore,
+};
+use axon_domain::{DaemonSessionId, WorkspaceId};
 use rusqlite::{OptionalExtension, params};
 
 impl SqliteRuntimeStore {
@@ -146,5 +149,83 @@ impl SqliteRuntimeStore {
             .optional()
             .map_err(storage)?;
         Ok(found.flatten())
+    }
+
+    /// 解析定时任务的目标会话：绑定存在就沿用，没有才建一条 `kind=cron` 会话。
+    ///
+    /// 绑定的事实源是 `schedules.session_id`，这里只读不写：写回由定义侧的
+    /// `upsert_schedule` 在同一次落库里完成，因此不存在「任务已建、会话没绑定」的中间态。
+    pub(crate) fn resolve_schedule_session_impl(
+        &self,
+        request: &ScheduleSessionRequest,
+    ) -> Result<SessionRuntimeRecord, RuntimeStoreError> {
+        self.initialize()?;
+        let schedule_id = request.schedule_id.trim();
+        if schedule_id.is_empty() {
+            return Err(RuntimeStoreError::Storage(
+                "定时任务缺少任务标识".to_owned(),
+            ));
+        }
+        if let Some(session_id) = self.bound_schedule_session(schedule_id)? {
+            match self.get_session_impl(&session_id) {
+                Ok(record) => return Ok(record),
+                // 绑定指向的会话已不存在：按同一条任务重新落一条会话，不报错卡住唤醒。
+                Err(RuntimeStoreError::NotFound(_)) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        let candidate = NewSessionRequest {
+            session_id: new_session_id(),
+            kind: SessionKind::Cron,
+            trust_scope: SessionTrustScope::Private,
+            workspace_id: request.workspace_id.clone(),
+            root_session_id: None,
+            agent_path: None,
+            goal_id: None,
+            execution_id: None,
+            cwd: self.workspace_cwd(request.workspace_id.as_deref()),
+            now_ms: request.now_ms,
+        };
+        self.create_session_impl(&candidate)
+    }
+
+    /// 任务已绑定的会话标识；没有绑定返回 `None`。
+    fn bound_schedule_session(
+        &self,
+        schedule_id: &str,
+    ) -> Result<Option<DaemonSessionId>, RuntimeStoreError> {
+        let connection = self.connection()?;
+        let found = connection
+            .query_row(
+                "SELECT session_id FROM schedules WHERE schedule_id=?1",
+                params![schedule_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(storage)?
+            .flatten();
+        found
+            .map(|value| {
+                DaemonSessionId::new(value).map_err(|error| {
+                    RuntimeStoreError::Storage(format!("定时任务会话标识非法：{error:?}"))
+                })
+            })
+            .transpose()
+    }
+
+    /// 任务归属 Workspace 的根目录；未登记或没有归属时留空。
+    ///
+    /// 会话的 `cwd` 只是恢复时的提示，不是身份的一部分，因此这里查不到也不报错。
+    fn workspace_cwd(&self, workspace_id: Option<&str>) -> String {
+        let Some(workspace_id) = workspace_id else {
+            return String::new();
+        };
+        let Ok(workspace_id) = WorkspaceId::new(workspace_id.to_owned()) else {
+            return String::new();
+        };
+        self.get_workspace(&workspace_id)
+            .ok()
+            .flatten()
+            .map_or_else(String::new, |record| record.workspace_root)
     }
 }

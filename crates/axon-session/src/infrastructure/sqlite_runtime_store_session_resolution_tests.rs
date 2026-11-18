@@ -1,8 +1,11 @@
-//! 子代理会话与目标执行会话的解析测试：标识是 ULID，关系只落在列上。
+//! 子代理会话、目标执行会话与定时任务会话的解析测试：标识是 ULID，关系只落在列上。
 
 use super::SqliteRuntimeStore;
 use crate::SessionKind;
-use crate::ports::{GoalSessionRequest, NewSessionRequest, RuntimeStore, SubagentSessionRequest};
+use crate::ports::{
+    GoalSessionRequest, NewSessionRequest, RuntimeStore, ScheduleSessionRequest,
+    SubagentSessionRequest, WorkspaceStore,
+};
 use axon_domain::DaemonSessionId;
 
 fn store() -> (axon_test_support::TestTempDir, SqliteRuntimeStore) {
@@ -154,4 +157,85 @@ fn goal_session_is_a_ulid_and_reused_per_goal() {
             .session_id,
         first.session_id
     );
+}
+
+/// 登记一个 Workspace：定时任务会话从它继承工作区与根目录。
+fn register_workspace(store: &SqliteRuntimeStore) {
+    store
+        .register_workspace(&crate::WorkspaceRecord {
+            workspace_id: "workspace-a".to_owned(),
+            display_name: "workspace-a".to_owned(),
+            workspace_root: "E:/work".to_owned(),
+            git_remote: None,
+            default_branch: None,
+            aliases: Vec::new(),
+            memory_namespace: "workspace-a".to_owned(),
+            pinned: false,
+            last_seen_at_ms: 10,
+        })
+        .expect("登记 Workspace");
+}
+
+#[test]
+fn schedule_session_is_a_ulid_cron_session_with_workspace_binding() {
+    let (_directory, store) = store();
+    register_workspace(&store);
+    let resolved = store
+        .resolve_schedule_session(&ScheduleSessionRequest {
+            schedule_id: "heartbeat-a".to_owned(),
+            workspace_id: Some("workspace-a".to_owned()),
+            now_ms: 60,
+        })
+        .expect("解析定时任务会话");
+    assert_eq!(resolved.kind, SessionKind::Cron);
+    assert!(crate::is_ulid(resolved.session_id.as_str()));
+    assert_eq!(resolved.workspace_id.as_deref(), Some("workspace-a"));
+    assert_eq!(resolved.cwd, "E:/work");
+}
+
+#[test]
+fn bound_schedule_session_is_reused_instead_of_creating_another() {
+    let (_directory, store) = store();
+    register_workspace(&store);
+    let first = store
+        .resolve_schedule_session(&ScheduleSessionRequest {
+            schedule_id: "heartbeat-a".to_owned(),
+            workspace_id: Some("workspace-a".to_owned()),
+            now_ms: 60,
+        })
+        .expect("首次解析");
+    // 定义侧把会话写进调度记录，这就是绑定的事实源。
+    store
+        .upsert_schedule(&crate::RuntimeScheduleRecord {
+            schedule_id: "heartbeat-a".to_owned(),
+            session_id: Some(first.session_id.clone()),
+            kind: "heartbeat".to_owned(),
+            expression: "interval_ms:60000".to_owned(),
+            payload_json: "{}".to_owned(),
+            delivery_mode: "follow_up".to_owned(),
+            status: "active".to_owned(),
+            next_run_at_ms: Some(120),
+            lease_owner: None,
+            lease_expires_at_ms: None,
+            failure_count: 0,
+        })
+        .expect("保存调度");
+
+    let second = store
+        .resolve_schedule_session(&ScheduleSessionRequest {
+            schedule_id: "heartbeat-a".to_owned(),
+            workspace_id: Some("workspace-a".to_owned()),
+            now_ms: 70,
+        })
+        .expect("再次解析");
+    assert_eq!(second.session_id, first.session_id);
+    // 另一个任务拿到的是另一条会话。
+    let other = store
+        .resolve_schedule_session(&ScheduleSessionRequest {
+            schedule_id: "heartbeat-b".to_owned(),
+            workspace_id: Some("workspace-a".to_owned()),
+            now_ms: 80,
+        })
+        .expect("另一个任务");
+    assert_ne!(other.session_id, first.session_id);
 }

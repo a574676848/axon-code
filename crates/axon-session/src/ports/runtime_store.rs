@@ -100,6 +100,20 @@ pub struct GoalSessionRequest {
     pub now_ms: u64,
 }
 
+/// 解析定时任务的目标会话的输入。
+///
+/// 定时任务的会话绑定只在 `schedules.session_id` 一处：定义侧落定，唤醒侧只读。
+/// 已有绑定就沿用，没有才建一条 `kind=cron` 会话，因此同一个任务的多轮唤醒落在同一条会话里。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduleSessionRequest {
+    /// 定时任务标识。
+    pub schedule_id: String,
+    /// 任务归属的 Workspace；没有绑定则为空。
+    pub workspace_id: Option<String>,
+    /// 判定时间。
+    pub now_ms: u64,
+}
+
 use super::{
     AgentContinuationStore, AgentMailboxStore, ClientDeliveryStore, DecisionStore, EventLogStore,
     ExecutionStore, GoalCommitStore, GoalMutationStore, GoalStore, HealthStore,
@@ -257,6 +271,13 @@ pub trait RuntimeStore:
     fn resolve_goal_session(
         &self,
         request: &GoalSessionRequest,
+    ) -> Result<SessionRuntimeRecord, RuntimeStoreError>;
+    /// 解析某个定时任务的目标会话；任务已绑定就沿用，没有绑定才新建。
+    ///
+    /// 标识由服务端按 ULID 生成，类型固定为 `cron`；只读不匹配的绑定不会被这里改写。
+    fn resolve_schedule_session(
+        &self,
+        request: &ScheduleSessionRequest,
     ) -> Result<SessionRuntimeRecord, RuntimeStoreError>;
     /// 解析某个 Workspace 当前的主会话；没有可用会话时创建一个新的主会话。
     ///

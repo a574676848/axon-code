@@ -94,7 +94,7 @@ pub struct DaemonScheduleCommand {
     pub endpoint: String,
     /// 稳定 schedule ID。
     pub schedule_id: String,
-    /// 目标 Session；省略时仅保留调度记录。
+    /// 目标 Session；省略时按载荷的 workspaceId 新建（或沿用）一条定时任务会话。
     #[arg(long)]
     pub session_id: Option<String>,
     /// 调度 Action 类型。

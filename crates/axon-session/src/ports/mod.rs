@@ -68,7 +68,7 @@ pub use result_store::{
 pub use resume_pointer_store::{ResumePointerStore, ResumePointerStoreError};
 pub use runtime_store::{
     CheckpointTelemetry, GoalSessionRequest, NewSessionRequest, RuntimeStore, RuntimeStoreError,
-    SubagentSessionRequest, WorkspaceSessionRequest,
+    ScheduleSessionRequest, SubagentSessionRequest, WorkspaceSessionRequest,
 };
 pub use session_query_store::{SessionQueryStore, SessionSummaryRow};
 pub use user_question_store::{UserQuestionStore, UserQuestionStoreError};
