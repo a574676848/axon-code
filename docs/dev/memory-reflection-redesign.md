@@ -520,7 +520,7 @@ turn 收口
 
 ### R1 观测与止血（零行为变更）
 
-- 界面提示已改为由真实结果回写：`publish_turn_artifacts` 在「本轮确有写入」时写「新增、淘汰或归档 N 条记忆」，在「卡片已入池待跑」时写「线索已入候选池」，其余不写提示。规划期恒为 false 的 `memory_updated_info_visible` 字段已删除。提示、`turn_trace` 与回执三份产物必须合成同一条 record 只提交一次：`commit_session_to_rollout` 是按 `(session_id, assistant_part_id)` 整条覆盖，分两次提交会让后一次用旧 record 把前一次刚写的字段抹掉。提示的投影位置是正文时间线尾部，与轮次收尾分割线同一行样式（发丝线加 12px 次级文本），不出现在指标条下的固定带里：它描述的是上一次收口之后发生的事，钉在正文上方会被读成常驻横幅，也会跟着指标条一起脱离阅读顺序。
+- 界面提示已改为由真实结果回写：`publish_turn_artifacts` 在「本轮确有写入」时写「新增、淘汰或归档 N 条记忆」，在「卡片已入池待跑」时写「线索已入候选池」，其余不写提示。规划期恒为 false 的 `memory_updated_info_visible` 字段已删除。提示、`turn_trace` 与回执三份产物必须合成同一条 record 只提交一次：`commit_session_to_rollout` 是按 `(session_id, assistant_part_id)` 整条覆盖，分两次提交会让后一次用旧 record 把前一次刚写的字段抹掉。提示的投影位置是正文时间线尾部，与轮次收尾分割线同一行样式（发丝线加 12px 次级文本），不出现在指标条下的固定带里：它描述的是上一次收口之后发生的事，钉在正文上方会被读成常驻横幅，也会跟着指标条一起脱离阅读顺序。展示层另把提示开头的「本轮」改写成「上一轮」（`ui/src/conversation/reflectionNotice.ts`，由 `npm test` 锁定）：提示总在下一轮才到达界面，原样呈现会被读成正在跑的那一轮。
 - 反思回执已在本轮收口处直接落盘：`append_reflection_receipt` 调用 `SelfIterationReceiptStoreRuntime::append_record`，按「有写入 / 已入池待跑 / 跑了无产出」三态分别记 `Persisted` / `NotAttempted` / `SkippedNoChange`；零调用的调度器链路已整体删除，含 `memory_auto_scheduler` 与 `memory_auto_candidate` 两个模块。
 - 来源可审计口径：回执 `source_trace` 固定为 `self-iteration:memory_update:<session>:<assistantPartId>`，按此前缀即可筛出全部反思写入。不新增 `MemorySourceOrigin` 变体，因为反思经运行时统一写入、无法随调用携带来源，新增无消费方的枚举只会增加维护面。
 - 验收：跑一轮真实会话后，运行态回执文件出现记录；按来源维度能筛出反思产物；界面提示与实际写入一致。

@@ -3,6 +3,7 @@ import * as ipc from '../../ipc';
 import type { CronJob, WorkspaceItem } from '../../types';
 import { targetOfSession, useConversation, type SessionSelection } from '../../conversation/useConversation';
 import { sessionGenerationMetrics } from '../../conversation/sessionGeneration';
+import { reflectionNoticeText } from '../../conversation/reflectionNotice';
 import { lastObservedUsage } from '../../conversation/sessionUsage';
 import { coverFace, type StageFrame } from '../../conversation/stage';
 import { useSessionAutoRead, useStopSpeechOnSessionChange } from '../../speech';
@@ -164,9 +165,10 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    * 空白一律当没有：网关偶尔会给出空串，渲染一行空白等于凭空造出一条提示。
    *
    * 投影落在时间线尾部，与轮次收尾分割线同一行样式，见 `ConversationStream` 的
-   * `reflectionNotice`。
+   * `reflectionNotice`。文案里的「本轮」在这一层改写成「上一轮」：提示总是落后一轮
+   * 到达界面，落在时间线尾部时，不这么写就会被读成正在跑的那一轮。
    */
-  const memoryReflection = conversation.sessionReflectionNotice?.trim() || null;
+  const memoryReflection = reflectionNoticeText(conversation.sessionReflectionNotice);
   /** 递增即要求定位到最新消息：发送消息后必须看到自己刚发的那条。 */
   const [followToken, setFollowToken] = React.useState(0);
   /** 正在查看的子代理；非空时主区域让给它的运行轨迹。 */
