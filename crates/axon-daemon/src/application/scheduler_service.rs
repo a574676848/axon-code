@@ -1,10 +1,9 @@
 //! 通用持久调度器。
 
 use super::interaction_ingress::{ActiveTurnSteerSink, NoActiveTurnSteerSink, PrimaryTurnIngress};
-use axon_crypto::sha256_hex;
 use axon_domain::{
-    AudienceContext, AudienceKind, DisclosurePolicy, InteractionId, InteractionRecord,
-    InteractionSource, ReplyRoute, SYSTEM_SOURCE_CHANNEL, ScopeRef, SessionRuntimeStatus,
+    AudienceContext, AudienceKind, DisclosurePolicy, InteractionRecord, InteractionSource,
+    ReplyRoute, SYSTEM_SOURCE_CHANNEL, ScopeRef, SessionRuntimeStatus,
 };
 use axon_session::{
     DaemonHostRecord, InteractionStoreError, RuntimeScheduleRecord, RuntimeStore, RuntimeStoreError,
@@ -15,7 +14,6 @@ use thiserror::Error;
 const SCHEDULE_KIND_HEARTBEAT: &str = "heartbeat";
 const DELIVERY_MODE_FOLLOW_UP: &str = "follow_up";
 const DEFAULT_DEFER_MS: u64 = 30_000;
-const SCHEDULE_INTERACTION_ID_PREFIX: &str = "schedule-interaction-";
 const SCHEDULE_SOURCE_ID_PREFIX: &str = "schedule:";
 const SCHEDULE_WORKSPACE_PAYLOAD_KEY: &str = "workspaceId";
 const SCHEDULE_PROMPT_PAYLOAD_KEY: &str = "prompt";
@@ -188,11 +186,8 @@ fn scheduled_interaction(
             RuntimeStoreError::InvalidId("RuntimeSchedule 必须提供 workspaceId".to_owned())
         })?;
     let source_identity = format!("{}:{fire_at_ms}", schedule.schedule_id);
-    let interaction_id = InteractionId::new(format!(
-        "{SCHEDULE_INTERACTION_ID_PREFIX}{}",
-        sha256_hex(source_identity.as_bytes())
-    ))
-    .map_err(|error| RuntimeStoreError::InvalidId(error.to_string()))?;
+    // 交互标识由服务端生成（ULID）；幂等仍由来源键 `schedule:{任务}:{触发时刻}` 承担。
+    let interaction_id = axon_session::new_interaction_id();
     let source = InteractionSource::new(
         SYSTEM_SOURCE_CHANNEL,
         format!("{SCHEDULE_SOURCE_ID_PREFIX}{source_identity}"),

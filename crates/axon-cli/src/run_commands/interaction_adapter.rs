@@ -3,16 +3,14 @@
 use std::path::Path;
 
 use axon_domain::{
-    AudienceContext, AudienceKind, DaemonSessionId, DisclosurePolicy, InteractionId,
-    InteractionRecord, InteractionSource, ReplyRoute, ScopeRef,
+    AudienceContext, AudienceKind, DaemonSessionId, DisclosurePolicy, InteractionRecord,
+    InteractionSource, ReplyRoute, ScopeRef,
 };
 use axon_session::{
     RuntimeStore, SessionTrustScope, SqliteRuntimeStore, WorkspaceRecord, WorkspaceResolver,
     WorkspaceSessionRequest, WorkspaceStore,
 };
 use uuid::Uuid;
-
-const INTERACTION_ID_PREFIX: &str = "interaction-";
 
 /// 已完成 Workspace 解析的 Interaction 提交输入。
 #[derive(Debug, Clone)]
@@ -39,11 +37,11 @@ pub(crate) fn prepare_interaction_from_prompt_as(
     let workspace = WorkspaceResolver
         .resolve(cwd, now_ms)
         .map_err(|error| error.to_string())?;
-    let interaction_uuid = Uuid::new_v4().to_string();
-    let interaction_id = InteractionId::new(format!("{INTERACTION_ID_PREFIX}{interaction_uuid}"))
-        .map_err(|error| error.to_string())?;
+    // 交互标识由服务端生成（ULID）；来源幂等键仍是一次性的消息标识。
+    let message_id = Uuid::new_v4().to_string();
+    let interaction_id = axon_session::new_interaction_id();
     let mut source =
-        InteractionSource::new(channel, interaction_uuid).map_err(|error| error.to_string())?;
+        InteractionSource::new(channel, message_id).map_err(|error| error.to_string())?;
     if let Some(client) = client {
         source = source
             .with_client(client)

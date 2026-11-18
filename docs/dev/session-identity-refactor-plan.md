@@ -453,7 +453,7 @@ W10 是三端用户可见回归，依赖 W4 与 W5 完成后才能全量开跑�
 | W7.4 | 已完成 | 历史索引本身已逐轮给出 `channel` 与 `client`，前端 `historySource` 客户端优先；新增三轮用例（桌面 / CLI 续聊 / 定时）锁定「同一会话三轮各标各的」 |
 | W8.1 | 已完成 | 新增入站探针：同一投递目标、desktop / cli / tui 三渠道各提交一轮，全部落在同一条会话（三条入站、一条会话，且投递目标一致），守住「不得按渠道或投递目标另建会话」 |
 | W8.2 | 已完成 | `tools/verify-architecture.py` 增两条门禁：①**禁拼接会话 id** —— 生产源码里 `format!`/`starts_with`/`contains`/`strip_prefix`/`ends_with` 不得出现 `--subagent--` 或 `goal-session-`，也不得为它们定义分隔符或前缀常量；②**禁会话数值摘要** —— `stable_numeric_id` 只允许出现在 6 个既有内存句柄文件，新增即失败（注释与测试源码不计）。两条均以临时探针验证过「违例即 exit 1」，随后删除探针 |
-| W8.3 | 已完成 | 三类契约均有用例：入站缺标识被拒（HTTP/WS/语音/外部事件，此前已覆盖）；越权订阅被拒（未登记、工作区不匹配、受众受限三条拒绝 + 三条允许，见 `gateway_bridge_goal_session_tests`）；幂等重放（同记录重放命中同一标识且只一行、重放方换标识仍命中库里那一条、来源键相同但内容不同一律 Conflict，外加外部事件入口的同事件跨渠道判为两条）。D7 剩余的两种派生交互标识（`cron-wake-<hash>`、`shell-job-wake-<hash>`）也已改为服务端 ULID，幂等由各自的来源键承担 |
+| W8.3 | 已完成 | 三类契约均有用例：入站缺标识被拒（HTTP/WS/语音/外部事件，此前已覆盖）；越权订阅被拒（未登记、工作区不匹配、受众受限三条拒绝 + 三条允许，见 `gateway_bridge_goal_session_tests`）；幂等重放（同记录重放命中同一标识且只一行、重放方换标识仍命中库里那一条、来源键相同但内容不同一律 Conflict，外加外部事件入口的同事件跨渠道判为两条）。D7 的四类派生交互标识（`external-interaction-`、`cron-wake-`、`shell-job-wake-`、`interaction-` / `schedule-interaction-`）全部改为服务端 ULID，五个生成点统一走 `new_interaction_id()`，幂等由各自的来源键承担 |
 | W8.4 | 待执行 | 真机链路（桌面发起 + CLI 续聊 + 桌面继续）未验证 |
 | W8.5 | 待执行 | 目标执行与 Cron 唤醒落到同会话的真机验证未做 |
 | W8.6 | 已完成 | 运行态操作手册逐条复核并修正：`POST /api/v1/sessions/identity` 已删除（改为 `POST /api/v1/sessions`）；订阅放行口径与拒绝原因改写为「会话已登记 + 工作区匹配 + 受众不受限」；环境上下文字段表更新为 `origin_channel` / `session_id` / `session_destination` / `session_workspace`；`sessions reset` 输出改为 `current_run_id`；清掉车道时代遗留的「会话会话」重复词与「TUI 会话标识按进程随机」的旧解释 |
