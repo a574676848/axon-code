@@ -131,7 +131,7 @@ fn turn_generation_metrics(
     sink: &RuntimeTurnEventSink<'_, impl RuntimeStore, impl EventPublisher, impl RuntimeClock>,
     readout: TurnGenerationReadout,
 ) -> axon_domain::GenerationMetrics {
-    let usage = sink.last_usage().unwrap_or_default();
+    let usage = sink.usage_snapshot();
     axon_domain::GenerationMetrics {
         ttft_ms: readout.ttft_ms,
         decode_ms: readout.decode_ms,

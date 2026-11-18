@@ -522,20 +522,17 @@ enum TurnOrigin { External, Cron, Goal, Subagent }
 
 采集发生在 CLI 进程（`run_session_store` 已能算出 TTFT 与速率），消费发生在 daemon 进程（结算时落事件），两者当前没有通道。落法分三段：
 
-1. **采集（CLI）**：provider turn 结束时构造 `TurnMetrics`：
-   - `ttft_ms` ← `compute_request_ttft_ms`
-   - `generation_speed_tps` ← `compute_generation_speed_tps`
-   - 五类 token ← `TokenUsageTelemetry`
-   - `active_ms` ← turn 起止时间差
-   - `outcome` ← turn 终态（succeeded / failed / interrupted）
-   - 结果写进 `SessionActionRecord.payload_json` 的 `metrics` 键，与 `axon_eventlog::TurnMetrics` 同构。
-2. **搬运（daemon 结算）**：`execution_worker_settlement::commit_conclusion` 从 action payload 取出 `metrics`，转成一条 `turn_metrics` 事件，与终态事件一起传给 `commit_action` 的 `events`。
+主 turn（用户轮）与独立 CLI 轮的生产链不同，两者都不经过 `commit_action`：
+
+1. **主 turn（daemon 结算）**：`RuntimeTurnEventSink` 的生成账本按 provider 流记账。每条流收口时把该流的最终用量并入本轮累加，收尾读数与实时指标帧都从这份累加取；真正的轮收口只认 `turn_completed` 帧，`turn_metrics` 与它同批落盘（一次控制面事务、一次 fsync）。
+2. **CLI 直跑**：`axon run` 自己 claim 一个 60 秒短租约 host 后直接追加一条 `turn_metrics`，取值为 `AgentRunResponse.token_usage`（agent runtime 的轮级累加），见 §4.11.2。
 3. **投影（自动）**：`event_log_repository::apply_projections` 识别该事件并累加进 `session_metrics`，不需要额外接线。
 
-两条硬规则：
+三条硬规则：
 
-- `payload_json.metrics` 缺失时按"本轮未测得"处理，**不填 0**，否则平均值被稀释。
-- `metrics` 只是回传通道，不是权威事实：权威事实是落盘后的 `turn_metrics` 事件。
+- **整轮 token 是各条 provider 流之和，绝不取最后一条流。** 一轮里每次工具循环都会开一条新流，每条流都对应一次真实请求；最后一条往往只是一段空响应（`input` 等于整份上下文、不带缓存明细），拿它当整轮读数会让会话累计少记一个量级。
+- **轮收口只认 `turn_completed`。** 单条 provider 流收口同样是 `status=completed` 的 `turnLifecycle` 帧；用它判定会让 `turn_metrics` 在该轮第一段就定稿（每轮只写一条），同轮后续所有流的用量再也进不了指标。
+- **未测得不得用 0 冒充。** `ttft_ms` 与 `generation_speed_tps` 用 `Option` 表达未测得，`ttft_samples` 只统计测得值；五类 token 字段目前仍是 `u64`，Provider 缺缓存明细时只能写 0，下游无法与"确实 0 命中"区分，这是已知缺口。
 
 ### 4.11.2 CLI 路径的 fence 裁决
 

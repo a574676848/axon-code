@@ -43,6 +43,43 @@ pub(super) struct UsageObservation {
     pub(super) reasoning_output_tokens: u64,
 }
 
+impl UsageObservation {
+    /// 并入另一份观测。
+    ///
+    /// 一轮的总消耗是各条 provider 流之和：每条流都对应一次真实请求，累加才对得上
+    /// 「这轮一共付了多少 prompt」。取最后一条流只会留下最后一小段。
+    fn add_assign(&mut self, other: Self) {
+        self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
+        self.cached_input_tokens = self
+            .cached_input_tokens
+            .saturating_add(other.cached_input_tokens);
+        self.cache_write_input_tokens = self
+            .cache_write_input_tokens
+            .saturating_add(other.cache_write_input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
+        self.reasoning_output_tokens = self
+            .reasoning_output_tokens
+            .saturating_add(other.reasoning_output_tokens);
+    }
+
+    /// 撤掉已计入的一份观测：晚到快照按整组覆盖时用它重记，避免同一份计两次。
+    fn saturating_sub(self, other: Self) -> Self {
+        Self {
+            input_tokens: self.input_tokens.saturating_sub(other.input_tokens),
+            cached_input_tokens: self
+                .cached_input_tokens
+                .saturating_sub(other.cached_input_tokens),
+            cache_write_input_tokens: self
+                .cache_write_input_tokens
+                .saturating_sub(other.cache_write_input_tokens),
+            output_tokens: self.output_tokens.saturating_sub(other.output_tokens),
+            reasoning_output_tokens: self
+                .reasoning_output_tokens
+                .saturating_sub(other.reasoning_output_tokens),
+        }
+    }
+}
+
 /// 一条 wire 事件对生成账本的写入意图。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum GenerationSignal {
@@ -120,10 +157,8 @@ fn read_u64(value: &serde_json::Value, field: &str) -> u64 {
 struct StreamSample {
     /// 该条流从 StreamingStarted 到 StreamingCompleted 的实测耗时。
     duration_ms: u64,
-    /// 该条流最终用量快照的输出 token。
-    output_tokens: u64,
-    /// 该条流最终用量快照的推理输出 token。
-    reasoning_output_tokens: u64,
+    /// 该条流的最终用量快照。
+    usage: UsageObservation,
 }
 
 /// 一轮的生成账本：provider 流式窗口与实测输出。
@@ -135,6 +170,10 @@ pub(super) struct TurnGenerationWatch {
     samples: Vec<StreamSample>,
     /// 在跑流已到达的用量快照；流收口时与窗口一起成样本。
     pending: StreamSample,
+    /// 已收口流的用量累加。
+    ///
+    /// 本轮总消耗取这个值，不取最后一条流：一条空响应流就能把整轮读数抹成 0。
+    usage_total: UsageObservation,
     /// 自上次取用以来是否有 provider 流收口。
     stream_settled: bool,
 }
@@ -151,6 +190,7 @@ impl TurnGenerationWatch {
     /// 一条 provider 流收口：把它的实测耗时与用量快照一起存成样本。
     pub(super) fn settle_stream(&mut self, now: Instant) {
         if let Some(started_at) = self.stream_started_at.take() {
+            self.usage_total.add_assign(self.pending.usage);
             self.samples.push(StreamSample {
                 duration_ms: elapsed_ms(started_at, now),
                 ..self.pending
@@ -164,16 +204,29 @@ impl TurnGenerationWatch {
     pub(super) fn record_usage(&mut self, observation: UsageObservation) {
         if self.stream_started_at.is_none()
             && let Some(last) = self.samples.last_mut()
-            && last.output_tokens == 0
-            && last.reasoning_output_tokens == 0
+            && last.usage.output_tokens == 0
+            && last.usage.reasoning_output_tokens == 0
         {
             // 用量帧晚于流收口到达：补给它所属的那条流，不落到下一条流身上。
-            last.output_tokens = observation.output_tokens;
-            last.reasoning_output_tokens = observation.reasoning_output_tokens;
+            // 按整组快照重记：先撤掉该流已计入的那份，再把新快照记回去，
+            // 晚到的输入与缓存读数因此不会漏，也不会把同一份计两次。
+            self.usage_total = self.usage_total.saturating_sub(last.usage);
+            last.usage = observation;
+            self.usage_total.add_assign(observation);
             return;
         }
-        self.pending.output_tokens = observation.output_tokens;
-        self.pending.reasoning_output_tokens = observation.reasoning_output_tokens;
+        self.pending.usage = observation;
+    }
+
+    /// 本轮截至当前的用量累加。
+    ///
+    /// 已收口流全部计入；仍在跑的那条流按它最新的快照额外并入，收口瞬间也不会回落。
+    pub(super) fn accumulated_usage(&self) -> UsageObservation {
+        let mut usage = self.usage_total;
+        if self.stream_started_at.is_some() {
+            usage.add_assign(self.pending.usage);
+        }
+        usage
     }
 
     /// 速率读数：解码窗口与本轮实测输出。
@@ -207,9 +260,9 @@ impl TurnGenerationWatch {
                 continue;
             }
             window_ms = window_ms.saturating_add(decode_ms);
-            output_tokens = output_tokens.saturating_add(sample.output_tokens);
+            output_tokens = output_tokens.saturating_add(sample.usage.output_tokens);
             reasoning_output_tokens =
-                reasoning_output_tokens.saturating_add(sample.reasoning_output_tokens);
+                reasoning_output_tokens.saturating_add(sample.usage.reasoning_output_tokens);
             kept = kept.saturating_add(1);
         }
         if kept == 0 {
@@ -446,5 +499,59 @@ mod tests {
         watch.settle_stream(t0 + Duration::from_millis(10));
         assert!(watch.take_stream_settled());
         assert!(!watch.take_stream_settled(), "同一帧实时指标只补发一次");
+    }
+
+    #[test]
+    fn turn_usage_accumulates_every_stream_not_the_last_one() {
+        // 取自 2026-11-18 那轮的真实帧序列：11 条 provider 流，最后一条是空响应
+        // （input 为整份上下文、不带缓存明细）。逐条取「最后一份快照」会被它抹成 0，
+        // 按流累加才是这一轮真实付过的量。
+        let mut watch = TurnGenerationWatch::default();
+        for (input, cached, output, reasoning) in [
+            (507_313, 0, 362, 2_502),
+            (42_963, 507_314, 506, 901),
+            (23_996, 550_278, 417, 805),
+            (24_571, 574_275, 390, 1_526),
+            (20_347, 598_847, 348, 887),
+            (20_463, 619_195, 452, 1_018),
+            (683_693, 0, 434, 383),
+            (42_749, 683_694, 503, 1_739),
+            (48_964, 726_444, 390, 416),
+            (29_796, 775_409, 1_810, 1_657),
+            (796_889, 0, 0, 0),
+        ] {
+            let t0 = Instant::now();
+            watch.begin_stream(t0);
+            watch.record_usage(UsageObservation {
+                input_tokens: input,
+                cached_input_tokens: cached,
+                output_tokens: output,
+                reasoning_output_tokens: reasoning,
+                ..UsageObservation::default()
+            });
+            watch.settle_stream(t0);
+        }
+
+        let usage = watch.accumulated_usage();
+        assert_eq!(usage.cached_input_tokens, 5_035_456, "缓存读取按流累加");
+        assert_eq!(usage.input_tokens, 2_241_744);
+        assert_eq!(usage.output_tokens, 5_612);
+        assert_eq!(usage.reasoning_output_tokens, 11_834);
+    }
+
+    #[test]
+    fn in_flight_stream_counts_before_it_settles() {
+        // 收口瞬间读数不能回落：最后一条流还没收口时，也要算进本轮累计。
+        let mut watch = TurnGenerationWatch::default();
+        watch.begin_stream(Instant::now());
+        watch.record_usage(UsageObservation {
+            input_tokens: 10,
+            cached_input_tokens: 90,
+            ..UsageObservation::default()
+        });
+
+        let usage = watch.accumulated_usage();
+        assert_eq!(usage.input_tokens, 10);
+        assert_eq!(usage.cached_input_tokens, 90);
     }
 }

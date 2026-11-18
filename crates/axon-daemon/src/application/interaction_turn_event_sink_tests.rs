@@ -111,19 +111,35 @@ fn runtime_event(event_type: &str, payload_json: String) -> RuntimeEvent {
 }
 
 #[test]
-fn turn_terminal_covers_the_completion_event_and_terminal_lifecycles() {
+fn turn_terminal_is_only_the_completion_event() {
     assert!(is_turn_terminal(&runtime_event(
         "turn_completed",
         "{}".to_owned()
     )));
 
+    // 一条 provider 流收口也是 `status=completed` 的 turnLifecycle 帧。把它当轮收口，
+    // turn_metrics 就会在第一段定稿（每轮只写一条），同轮后续所有流的用量全部丢失。
     for status in ["completed", "failed", "cancelled", "aborted"] {
-        let payload = wire_payload("turnLifecycle", json!({ "status": status }));
+        let streaming = wire_payload(
+            "turnLifecycle",
+            json!({ "status": status, "kind": "StreamingCompleted" }),
+        );
         assert!(
-            is_turn_terminal(&runtime_event("wire_event", payload)),
-            "{status} 属于收口终态"
+            !is_turn_terminal(&runtime_event("wire_event", streaming)),
+            "{status} 的单条流收口不是轮收口"
         );
     }
+
+    // 整轮生命周期同样不承担收口判定：真正收口由 `turn_completed` 表达，
+    // 两处都认会在同一轮写出两次指标。
+    let run_lifecycle = wire_payload(
+        "turnLifecycle",
+        json!({ "status": "completed", "kind": "RunLifecycle" }),
+    );
+    assert!(!is_turn_terminal(&runtime_event(
+        "wire_event",
+        run_lifecycle
+    )));
 
     // 运行中的生命周期不是收口：误判会把正在发生的阶段一起抹掉。
     let running = wire_payload("turnLifecycle", json!({ "status": "running" }));

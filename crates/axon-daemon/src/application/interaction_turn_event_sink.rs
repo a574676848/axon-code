@@ -55,12 +55,9 @@ pub(super) struct RuntimeTurnEventSink<'a, S, P, C> {
     pub(super) performance: Option<Arc<AtomicTurnPerformanceRecorder>>,
     /// 子代理会话 sink 工厂：由宿主实现，运行侧据此把子代理逐字稿写进它自己的会话。
     pub(super) subagent_session_sinks: Arc<dyn SubagentSessionSinkFactory>,
-    /// 本轮最后一条用量更新。
+    /// 本轮用量帧的原始载荷；收尾载荷按它保存与实时帧相同的形状。
     ///
-    /// 流式事件经 sink 直接投递，不经过 `TurnExecutionOutcome`，因此收尾指标
-    /// 只能在这里留痕；否则速率永远算不出来。
-    last_usage: Mutex<Option<TurnUsageSnapshot>>,
-    /// 本轮最后一条用量帧的原始载荷；收尾指标与回放副本共用。
+    /// 数值不从这里取：整轮 token 由生成账本按流累加，这里只留形状与快照类字段。
     last_usage_payload: Mutex<Option<Value>>,
     /// 已落库的用量快照：同值不再重复写，省掉一次事务。
     last_committed_usage: Mutex<Option<Value>>,
@@ -79,7 +76,8 @@ pub(super) struct RuntimeTurnEventSink<'a, S, P, C> {
 
 /// 收尾指标需要的用量快照。
 ///
-/// 只留上下文与缓存读数：输出 token 由账本按流累加，不能取「最后一条观测」。
+/// 三个字段都是整轮按 provider 流累加的结果，不是「最后一条观测」：一轮里每条流都是
+/// 一次真实请求，最后一条往往只是一段空响应。
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct TurnUsageSnapshot {
     pub(super) input_tokens: u64,
@@ -141,7 +139,6 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             clock,
             performance,
             subagent_session_sinks,
-            last_usage: Mutex::new(None),
             last_usage_payload: Mutex::new(None),
             last_committed_usage: Mutex::new(None),
             generation_watch: Mutex::new(TurnGenerationWatch::default()),
@@ -223,11 +220,9 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
         }
         let now_ms = self.clock.now_ms();
         let readout = self.generation_readout(None);
-        let usage = self
-            .last_usage
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .unwrap_or_default();
+        // 整轮 token 取账本累加：一条空响应流就能把「最后一条」的读数抹成 0，
+        // 而这一轮实际跑过的每一条流都付过 prompt。
+        let usage = self.usage_snapshot();
         /*
          * 整轮读数优先取收尾观测已定稿的那一份。
          *
