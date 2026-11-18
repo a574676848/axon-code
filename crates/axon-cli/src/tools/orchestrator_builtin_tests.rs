@@ -429,3 +429,105 @@ fn half_specified_window_is_rejected() {
     let value = serde_json::json!({ "since_ms": 100 });
     assert!(resolve_memory_search_time_range(&value, "上周").is_err());
 }
+
+/// 预算快照必须按 Provider 实测维护步均采样；估算值不得参与采样，
+/// 否则中位数会被两种口径的差值污染。
+#[test]
+fn token_budget_snapshot_tracks_step_pace_from_provider_measurements() {
+    let session_id = format!("test_step_pace_{}", std::process::id());
+    for current in [1_000, 13_000, 25_000] {
+        record_token_budget_snapshot(
+            &session_id,
+            "owner",
+            800_000,
+            current,
+            TokenBudgetMeasurementSource::ProviderUsage,
+        );
+    }
+    let snapshot = {
+        let snapshots = TOKEN_BUDGET_SNAPSHOTS
+            .get()
+            .expect("快照表应已初始化")
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        snapshots.get(&session_id).cloned().expect("快照应存在")
+    };
+    assert_eq!(snapshot.step_pace.sample_count(), 2);
+    assert_eq!(snapshot.step_pace.tokens_per_step(), Some(12_000));
+
+    // 估算口径插入后，下一轮实测必须重新建立基线，不能跨口径求差。
+    record_token_budget_snapshot(
+        &session_id,
+        "owner",
+        800_000,
+        99_000,
+        TokenBudgetMeasurementSource::LocalEstimate,
+    );
+    record_token_budget_snapshot(
+        &session_id,
+        "owner",
+        800_000,
+        5_000,
+        TokenBudgetMeasurementSource::ProviderUsage,
+    );
+    record_token_budget_snapshot(
+        &session_id,
+        "owner",
+        800_000,
+        17_000,
+        TokenBudgetMeasurementSource::ProviderUsage,
+    );
+    let snapshot = {
+        let snapshots = TOKEN_BUDGET_SNAPSHOTS
+            .get()
+            .expect("快照表应已初始化")
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        snapshots.get(&session_id).cloned().expect("快照应存在")
+    };
+    assert_eq!(snapshot.step_pace.tokens_per_step(), Some(12_000));
+    clear_token_budget_snapshot(&session_id, "owner");
+}
+
+/// 预算回执必须同时给出剩余 token、步均与剩余步数，模型据此判断继续还是收尾。
+#[test]
+fn get_context_remaining_reports_step_projection() {
+    let temp_root = axon_test_support::test_temp_root()
+        .join(format!("axon_context_remaining_{}", std::process::id()));
+    let session_id = "test_context_remaining_steps";
+    let session_dir = temp_root.join("sessions").join(session_id);
+    let config_path = temp_root.join("config.toml");
+    let _ = std::fs::create_dir_all(&session_dir);
+    let _ = std::fs::write(&config_path, "");
+    let context = make_test_context(config_path, session_id);
+
+    for current in [100_000, 112_000, 124_000] {
+        record_token_budget_snapshot(
+            session_id,
+            "owner",
+            800_000,
+            current,
+            TokenBudgetMeasurementSource::ProviderUsage,
+        );
+    }
+    let call = ProviderToolCall::new("call_budget", "builtin.get_context_remaining", "{}");
+    let receipt = execute_get_context_remaining(&call, &context);
+    assert!(
+        receipt.summary.contains("大约还能跑"),
+        "{}",
+        receipt.summary
+    );
+    let metadata = receipt.metadata.as_ref().expect("回执应带元信息");
+    assert_eq!(
+        metadata.get("tokensLeft"),
+        Some(&serde_json::json!(676_000))
+    );
+    assert_eq!(
+        metadata.get("tokensPerStep"),
+        Some(&serde_json::json!(12_000))
+    );
+    assert_eq!(metadata.get("stepsLeft"), Some(&serde_json::json!(56)));
+
+    clear_token_budget_snapshot(session_id, "owner");
+    let _ = std::fs::remove_dir_all(&temp_root);
+}

@@ -13,6 +13,13 @@ use serde::{Deserialize, Serialize};
 pub enum AgentRuntimeNoteKind {
     /// payload 预算门控说明。
     PayloadBudgetGate,
+    /// 记忆保值提示：预算仍充足，但当前是记录成本最低的时刻。
+    ///
+    /// 与 `PayloadBudgetGate` 刻意分开：后者报告预算水位并催促收尾换窗，
+    /// 本类型只解决「关键结论还只活在对话里」的记忆保值问题，触发条件、
+    /// 去重规则与所在文案都不同；复用同一个 tag 会让消费侧无法区分
+    /// 「快没预算了」与「现在写下来最便宜」。
+    MemoryHygiene,
     /// 工具调用纠错反馈。
     ToolFeedback,
     /// edit 写后延迟到达的 LSP diagnostics。
@@ -55,6 +62,7 @@ impl AgentRuntimeNoteKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::PayloadBudgetGate => "payload-budget-gate",
+            Self::MemoryHygiene => "memory-hygiene",
             Self::ToolFeedback => "tool-feedback",
             Self::DeferredDiagnostics => "deferred-diagnostics",
             Self::QuotedMessageContext => "quoted-message-context",

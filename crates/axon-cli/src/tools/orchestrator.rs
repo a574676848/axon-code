@@ -47,10 +47,9 @@ pub(crate) use orchestrator_receipt::{
 pub(crate) use orchestrator_time::now_ms;
 
 use orchestrator_builtin::{
-    TokenBudgetMeasurementSource, TokenBudgetSnapshot, clear_token_budget_snapshot,
-    execute_get_context_remaining, execute_memory_search, execute_memory_write,
-    execute_new_context, execute_search, execute_turn_trace, execute_update_plan,
-    record_token_budget_snapshot,
+    TokenBudgetMeasurementSource, clear_token_budget_snapshot, execute_get_context_remaining,
+    execute_memory_search, execute_memory_write, execute_new_context, execute_search,
+    execute_turn_trace, execute_update_plan, record_token_budget_snapshot,
 };
 use orchestrator_notes_history::{execute_history_tool, execute_notes_tool};
 use orchestrator_subagent::execute_subagent_tool;
@@ -154,12 +153,10 @@ pub(crate) fn record_provider_token_budget_snapshot(
         );
     record_token_budget_snapshot(
         session_id,
-        TokenBudgetSnapshot {
-            owner_id: owner_id.to_owned(),
-            rollover_limit_tokens,
-            current_context_tokens,
-            source,
-        },
+        owner_id,
+        rollover_limit_tokens,
+        current_context_tokens,
+        source,
     );
 }
 

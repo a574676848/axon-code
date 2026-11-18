@@ -9,15 +9,15 @@ use axon_domain::{AxonError, AxonResult, TurnId};
 
 use crate::agent_model_tool_history::normalize_provider_history;
 use crate::insert_then_compress_classification::compressible_len;
-use crate::token_budget_guard::TokenBudgetRuntimePolicy;
+use crate::token_budget_guard::{StepPace, TokenBudgetRuntimePolicy};
 pub use crate::token_estimator::{
     estimated_history_tokens, estimated_history_tokens_for_provider,
     estimated_history_tokens_for_provider_with_capabilities,
 };
 use crate::{
-    AgentModelHistorySnapshot, AgentModelMessage, AgentModelMessageKind, AgentRuntimeNoteKind,
-    AgentTurnEvent, AgentTurnEventKind, CanonicalCheckpoint, ModelToolDefinition,
-    PromptCacheProviderWireFormat, ProviderVisibleProjectionMetrics,
+    AgentModelHistorySnapshot, AgentModelMessage, AgentRuntimeNoteKind, AgentTurnEvent,
+    AgentTurnEventKind, CanonicalCheckpoint, ModelToolDefinition, PromptCacheProviderWireFormat,
+    ProviderVisibleProjectionMetrics,
 };
 
 #[path = "insert_then_compress_history.rs"]
@@ -25,6 +25,8 @@ mod history;
 pub use history::CompactedHistory;
 #[path = "insert_then_compress_completion.rs"]
 mod completion;
+#[path = "budget_notice.rs"]
+mod notice;
 use completion::{
     CompactionCompletionContext, CompactionFailureMetrics, complete_compaction,
     compression_failed_event,
@@ -35,20 +37,6 @@ const ROLLOVER_FAILURE_CONTEXT_OVERFLOW: &str = "context_overflow";
 const ROLLOVER_FAILURE_NO_PROGRESS: &str = "no_progress";
 const ROLLOVER_TRIGGER_REQUESTED: &str = "requested";
 const ROLLOVER_TRIGGER_AUTOMATIC: &str = "automatic";
-
-const TOKEN_BUDGET_REMINDER_MESSAGE_PREFIX: &str = "当前任务窗口距离自动换窗还剩 ";
-
-/// 窗口耗尽时下发的唯一交接指令。
-///
-/// 预算数字从常量拼装而不是写死在字面量里：常量一调，提示语自动跟着走，
-/// 不会出现「代码改成 8K、提示语还写 4K」这种漂移。
-fn token_budget_fallback_message() -> String {
-    format!(
-        "当前任务窗口已耗尽。不要在本窗口继续任务或给出最终答复，新窗口不会自动包含本次对话。现在只允许一次便签写入：调用 builtin.notes_write_file 覆盖写入 checkpoint.md，这是全会话唯一的便签，既记录工作状态也承担这次交接。内容自由组织，没有固定段落也不必套模板，但要把当前仍然有效的结论一并带过来，讲清「在做什么、做到哪一步、下一步动作、不能违反的约束、已验证事实」。上限 {max_tokens} tokens（按 UTF-8 字节数除以 4 估算，约 {max_token_kib} KiB 文本）：超限会被拒绝并要求重写；压不进预算的便签，换窗时只会带路径与行数，新窗口得回读才能恢复上下文。写完后立即调用 builtin.new_context，不要使用除便签与 new_context 之外的任何工具。",
-        max_tokens = crate::session_notes::SESSION_NOTES_CHECKPOINT_MAX_TOKENS,
-        max_token_kib = crate::session_notes::SESSION_NOTES_CHECKPOINT_MAX_TOKENS * 4 / 1024,
-    )
-}
 
 /// 窗口轮转 checkpoint 前缀，向 agent 标识当前任务交接事实。
 pub const WINDOW_ROLLOVER_CHECKPOINT_PREFIX: &str = "当前窗口交接事实：";
@@ -116,8 +104,15 @@ pub struct WindowRolloverPolicyRuntime {
     model_tools: Vec<ModelToolDefinition>,
     supports_vision: bool,
     token_budget: TokenBudgetRuntimePolicy,
-    reminder_emitted: bool,
+    /// 当前窗口是否已发过收尾预警。
+    warn_emitted: bool,
+    /// 当前窗口是否已发过中段保值提示。
+    midway_emitted: bool,
     fallback_emitted: bool,
+    /// 模型单步上下文消耗的滚动采样。
+    step_pace: StepPace,
+    /// 距上一次便签写入的 assistant 步数。
+    steps_since_notes: usize,
 }
 
 impl WindowRolloverPolicyRuntime {
@@ -131,8 +126,11 @@ impl WindowRolloverPolicyRuntime {
             model_tools: Vec::new(),
             supports_vision: true,
             token_budget: TokenBudgetRuntimePolicy::default(),
-            reminder_emitted: false,
+            warn_emitted: false,
+            midway_emitted: false,
             fallback_emitted: false,
+            step_pace: StepPace::default(),
+            steps_since_notes: 0,
         }
     }
     /// 绑定当前 turn 的 provider 可见投影配置。
@@ -182,39 +180,6 @@ impl WindowRolloverPolicyRuntime {
         );
         ProviderVisibleWindow { messages, tokens }
     }
-    /// 从当前运行态消息恢复窗口内提醒去重标记。
-    ///
-    /// 只扫描运行态标记，不做历史规范化或深拷贝；FreshWindow 装配上下文推迟到
-    /// 门禁通过的换窗时刻捕获，避免长会话在每轮 turn 顶部重复复制完整历史。
-    pub(crate) fn refresh_rollover_markers(&mut self, messages: &[AgentModelMessage]) {
-        let fallback_note = crate::runtime_note_content(
-            AgentRuntimeNoteKind::PayloadBudgetGate,
-            &token_budget_fallback_message(),
-        );
-        let mut reminder_emitted = false;
-        let mut fallback_emitted = false;
-        for message in messages {
-            if !matches!(
-                &message.kind,
-                AgentModelMessageKind::RuntimeNote(AgentRuntimeNoteKind::PayloadBudgetGate)
-            ) {
-                continue;
-            }
-            if message
-                .content
-                .contains(TOKEN_BUDGET_REMINDER_MESSAGE_PREFIX)
-            {
-                reminder_emitted = true;
-            }
-            if message.content == fallback_note {
-                reminder_emitted = true;
-                fallback_emitted = true;
-            }
-        }
-        self.reminder_emitted = reminder_emitted;
-        self.fallback_emitted = fallback_emitted;
-    }
-
     /// 用本次轮转唯一的规范化历史捕获 FreshWindow 装配上下文。
     ///
     /// 必须在 `provider_visible_window` 与保存代际门禁之后调用，确保捕获的稳定
@@ -243,45 +208,17 @@ impl WindowRolloverPolicyRuntime {
     fn record_outcome(&mut self, outcome: CompressionOutcome) {
         match outcome {
             CompressionOutcome::Compressed => {
-                self.reminder_emitted = false;
+                self.warn_emitted = false;
+                self.midway_emitted = false;
                 self.fallback_emitted = false;
+                // 新窗口的步幅与旧窗口无关，采样必须从零开始。
+                self.step_pace.reset();
+                self.steps_since_notes = 0;
             }
             CompressionOutcome::Prompted | CompressionOutcome::Idle => {}
         }
     }
-    fn maybe_emit_budget_reminder(
-        &mut self,
-        messages: &mut AgentModelHistorySnapshot,
-        current_context_tokens: Option<u64>,
-    ) -> bool {
-        let Some(current) = current_context_tokens else {
-            return false;
-        };
-        if current >= self.policy.trigger_tokens {
-            return false;
-        }
-        let remaining = TokenBudgetRuntimePolicy::remaining_before_rollover(
-            self.policy.trigger_tokens,
-            current,
-        );
-        if self.reminder_emitted
-            || !self
-                .token_budget
-                .should_emit_reminder(self.policy.trigger_tokens, current)
-        {
-            return false;
-        }
-        messages.push(AgentModelMessage::runtime_note(
-            AgentRuntimeNoteKind::PayloadBudgetGate,
-            format!(
-                "{TOKEN_BUDGET_REMINDER_MESSAGE_PREFIX}{remaining} tokens。请在当前阶段结束前调用 builtin.notes_write_file 覆盖写入 checkpoint.md 作为交接摘要：这是全会话唯一的便签，内容自由组织，把当前仍然有效的结论一并带过来，讲清「在做什么、做到哪一步、下一步动作、约束与已验证事实」。上限 {max_tokens} tokens（按 UTF-8 字节数除以 4 估算，约 {max_token_kib} KiB 文本），超限会被拒绝并要求重写；压不进预算的便签换窗时只带路径与行数，新窗口需回读。写入后可调用 builtin.new_context 主动开启新窗口。旧消息会保存在会话记录中，可在新窗口用 builtin.history_list_items 或 builtin.history_search_contents 按需查找。",
-                max_tokens = crate::session_notes::SESSION_NOTES_CHECKPOINT_MAX_TOKENS,
-                max_token_kib = crate::session_notes::SESSION_NOTES_CHECKPOINT_MAX_TOKENS * 4 / 1024,
-            ),
-        ));
-        self.reminder_emitted = true;
-        true
-    }
+
     /// 根据 Provider usage 与 fallback 缓冲判断是否必须轮转窗口。
     #[must_use]
     pub fn should_compress(
@@ -318,7 +255,7 @@ impl WindowRolloverPolicyRuntime {
         self.fallback_emitted = true;
         messages.push(AgentModelMessage::runtime_note(
             AgentRuntimeNoteKind::PayloadBudgetGate,
-            token_budget_fallback_message(),
+            notice::fallback_note(),
         ));
     }
 
@@ -503,10 +440,13 @@ impl WindowRolloverRuntime<'_> {
         turn_events: &mut Vec<AgentTurnEvent>,
     ) -> CompressionOutcome {
         self.last_projection_metrics = None;
+        if let Some(current) = current_context_tokens {
+            self.runtime.observe_context(current);
+        }
         if !force_rollover
             && self
                 .runtime
-                .maybe_emit_budget_reminder(messages, current_context_tokens)
+                .maybe_emit_budget_notice(messages, current_context_tokens)
         {
             return CompressionOutcome::Idle;
         }
@@ -660,3 +600,7 @@ fn now_ms() -> u64 {
             u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
         })
 }
+
+#[cfg(test)]
+#[path = "budget_notice_tests.rs"]
+mod budget_notice_tests;

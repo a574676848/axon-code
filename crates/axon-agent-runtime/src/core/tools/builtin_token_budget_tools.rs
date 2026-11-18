@@ -32,7 +32,7 @@ fn get_context_remaining_tool_definition() -> ToolDefinition {
         namespace: crate::AGENT_TOOL_NAMESPACE.to_owned(),
         name: GET_CONTEXT_REMAINING_TOOL_NAME.to_owned(),
         description:
-            "获取当前记忆窗口距离自动换窗还剩多少 token，并说明数值来自 Provider 实测还是本地估算。"
+            "获取当前记忆窗口距离自动换窗还剩多少 token、数值来自 Provider 实测还是本地估算，以及按最近步幅折算的剩余步数；剩余步数装不下当前工作单元时，先写入便签再换窗。"
                 .to_owned(),
         schema: ToolSchema::object(1, std::iter::empty::<&str>(), Vec::new()),
         enabled: true,

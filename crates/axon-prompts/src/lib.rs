@@ -598,6 +598,13 @@ mod tests {
         assert!(guidance.contains("<memory_window_protocol>"));
         assert!(guidance.contains("严禁向用户提及"));
         assert!(guidance.contains("未写入会被系统直接拦截"));
+        assert!(guidance.contains("写入判据（与预算无关）"));
+        assert!(guidance.contains("装不下当前这个工作单元"));
+        assert!(guidance.contains("可中断点"));
+        assert!(
+            !guidance.contains("15%"),
+            "大窗口永远到不了的红线不应留在判据里"
+        );
         assert!(!guidance.contains("{{"));
     }
 }

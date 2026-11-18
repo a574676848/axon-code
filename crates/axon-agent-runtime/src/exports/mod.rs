@@ -480,6 +480,7 @@ pub use crate::subagent_session_runtime::{
     SubagentSessionHandle, SubagentSessionRuntime, SubagentSessionStartInput,
     SubagentSessionStatus, SubagentSpawnIntentClaim, SubagentSpawnIntentWaiter,
 };
+pub use crate::token_budget_guard::StepPace;
 pub use crate::token_estimator::{ContextTokenComposition, estimated_tool_definition_tokens};
 pub use crate::token_usage::{
     NormalizedProviderTokenUsage, ProviderTokenUsage, ProviderTokenUsageSemantics,

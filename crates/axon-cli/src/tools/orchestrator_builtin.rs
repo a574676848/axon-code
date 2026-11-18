@@ -8,7 +8,7 @@ use axon_agent_runtime::{
     AgentModelMessage, AgentRuntimeNoteKind, MEMORY_SEARCH_DEFAULT_LIMIT,
     MEMORY_WRITE_TOOL_EVIDENCE_FIELD, MEMORY_WRITE_TOOL_KIND_FIELD, MEMORY_WRITE_TOOL_KINDS,
     MEMORY_WRITE_TOOL_SUMMARY_FIELD, MEMORY_WRITE_TOOL_SUPERSEDES_IDS_FIELD, ProviderToolCall,
-    SearchToolRuntime, SessionNotesRuntime, UpdatePlanToolRuntime,
+    SearchToolRuntime, SessionNotesRuntime, StepPace, UpdatePlanToolRuntime,
     agent_run_search_tool_input_from_provider_args, agent_run_search_tool_receipt,
 };
 
@@ -33,6 +33,8 @@ pub(super) struct TokenBudgetSnapshot {
     pub(super) rollover_limit_tokens: u64,
     pub(super) current_context_tokens: u64,
     pub(super) source: TokenBudgetMeasurementSource,
+    /// 模型单步上下文消耗的滚动采样，供回执折算“大约还能跑几步”。
+    pub(super) step_pace: StepPace,
 }
 
 static TOKEN_BUDGET_SNAPSHOTS: OnceLock<Mutex<HashMap<String, TokenBudgetSnapshot>>> =
@@ -43,12 +45,38 @@ const GET_CONTEXT_REMAINING_INPUT_GUIDANCE: &str =
 const NEW_CONTEXT_INPUT_GUIDANCE: &str = "请仅提供可选的 reason 文本，说明当前为何适合开启新窗口。";
 const NEW_CONTEXT_REQUIRES_SAVED_STATE: &str = "换窗未执行：当前窗口尚未成功写入任务便签。请先调用 builtin.notes_write_file 或 builtin.notes_append_to_file，写入目标、关键决策、进展、经验教训与下一步动作，以及仍在处理的相关请求和重要工具动作的 window ID、item ID；便签写入成功后，再调用 builtin.new_context。";
 
-pub(super) fn record_token_budget_snapshot(session_id: &str, snapshot: TokenBudgetSnapshot) {
-    TOKEN_BUDGET_SNAPSHOTS
+/// 更新当前会话的预算快照，并顺带维护步均采样。
+///
+/// 只在连续两次都是 Provider 实测时才产生采样：实测与本地估算混算会把中位数
+/// 污染成既不代表真实步幅、也不代表估算误差的中间值。
+pub(super) fn record_token_budget_snapshot(
+    session_id: &str,
+    owner_id: &str,
+    rollover_limit_tokens: u64,
+    current_context_tokens: u64,
+    source: TokenBudgetMeasurementSource,
+) {
+    let mut snapshots = TOKEN_BUDGET_SNAPSHOTS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(session_id.to_owned(), snapshot);
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut step_pace = snapshots
+        .get(session_id)
+        .filter(|previous| previous.source == TokenBudgetMeasurementSource::ProviderUsage)
+        .map_or_else(StepPace::default, |previous| previous.step_pace);
+    if source == TokenBudgetMeasurementSource::ProviderUsage {
+        step_pace.observe(current_context_tokens);
+    }
+    snapshots.insert(
+        session_id.to_owned(),
+        TokenBudgetSnapshot {
+            owner_id: owner_id.to_owned(),
+            rollover_limit_tokens,
+            current_context_tokens,
+            source,
+            step_pace,
+        },
+    );
 }
 
 pub(super) fn clear_token_budget_snapshot(session_id: &str, owner_id: &str) {
@@ -133,11 +161,27 @@ pub(super) fn execute_get_context_remaining(
         TokenBudgetMeasurementSource::ProviderUsage => ("Provider 实测", "provider_usage", false),
         TokenBudgetMeasurementSource::LocalEstimate => ("本地估算", "local_estimate", true),
     };
+    let tokens_per_step = snapshot.step_pace.tokens_per_step();
+    let steps_left = tokens_per_step
+        .filter(|step| *step > 0)
+        .map(|step| tokens_left / step);
+    let pace_summary = match (tokens_per_step, steps_left) {
+        (Some(step), Some(steps)) => format!(
+            "，按最近 {} 步平均（约 {step} tokens/步）大约还能跑 {steps} 步",
+            snapshot.step_pace.sample_count()
+        ),
+        _ => "（步均样本不足，暂不折算步数）".to_owned(),
+    };
     completed_tool_receipt(
         tool_call,
-        format!("当前记忆窗口距离自动换窗还剩 {tokens_left} tokens（{source_label}）。"),
+        format!(
+            "当前记忆窗口距离自动换窗还剩 {tokens_left} tokens{pace_summary}（{source_label}）。"
+        ),
         Some(serde_json::json!({
             "tokensLeft": tokens_left,
+            "tokensPerStep": tokens_per_step,
+            "stepsLeft": steps_left,
+            "stepSamples": snapshot.step_pace.sample_count(),
             "source": source_code,
             "estimated": estimated,
             "scope": "rollover_limit",
