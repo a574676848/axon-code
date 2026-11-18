@@ -60,6 +60,13 @@ pub(super) fn execute_supported_tool_calls_for_turn(
         cwd: request.cwd.clone(),
 
         thread_session_id: request.session_id.clone(),
+        interaction_id: request.interaction_id.clone(),
+        // 与本轮持久化的 `Turn.turn_id` 同一构造：`{session}-turn-{assistant_part_id}`。
+        turn_id: format!(
+            "{}-turn-{}",
+            request.session_id,
+            super::run_session_store::run_persistence_assistant_part_id(request)
+        ),
         cell_id: CellId(1),
         model_messages: request.model_payload.messages.clone(),
         execution_tools: Arc::clone(&request.execution_tools),

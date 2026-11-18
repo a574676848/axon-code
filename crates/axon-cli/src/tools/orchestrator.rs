@@ -420,7 +420,7 @@ fn execute_ask_user_question(
          * 回放里也永远没有这一问。
          */
         session_id: context.thread_session_id.clone(),
-        interaction_id: context.cell_id.0.to_string(),
+        interaction_id: context.interaction_id.clone(),
         turn_id,
         tool_call_id: tool_call.id.clone(),
         questions_json,
@@ -585,6 +585,8 @@ mod tests {
             config_path: None,
             cwd: std::path::PathBuf::from("."),
             thread_session_id: "thread-1".to_string(),
+            interaction_id: String::new(),
+            turn_id: String::new(),
             cell_id: CellId(1),
             model_messages: Vec::new(),
             execution_tools: Arc::new(std::sync::RwLock::new(ToolRegistry::new())),

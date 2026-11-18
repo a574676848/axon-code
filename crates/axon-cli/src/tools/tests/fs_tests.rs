@@ -391,6 +391,8 @@ pub(crate) fn context(cwd: &Path) -> ToolOrchestratorContext {
         config_path: None,
         cwd: cwd.to_path_buf(),
         thread_session_id: "test-thread".to_owned(),
+        interaction_id: String::new(),
+        turn_id: String::new(),
         cell_id: CellId(1),
         model_messages: Vec::new(),
         execution_tools: std::sync::Arc::new(std::sync::RwLock::new(

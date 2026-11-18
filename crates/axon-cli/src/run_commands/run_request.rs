@@ -50,6 +50,8 @@ pub(super) struct RunRequest {
     pub(super) client_channel: ClientChannel,
     pub(super) config_path: PathBuf,
     pub(super) session_id: String,
+    /// 本轮入站事实标识（`inbox.interaction_id`）；本地直跑路径没有入站事实时为空。
+    pub(super) interaction_id: String,
     pub(super) invocation_id: String,
     pub(super) resumed_from: Option<String>,
     pub(super) parent_session_id: Option<String>,

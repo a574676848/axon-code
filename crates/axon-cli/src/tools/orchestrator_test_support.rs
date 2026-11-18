@@ -13,6 +13,8 @@ pub(super) fn make_test_context(
         config_path: Some(config_path),
         cwd: std::env::current_dir().unwrap_or_default(),
         thread_session_id: session_id.to_owned(),
+        interaction_id: String::new(),
+        turn_id: String::new(),
         cell_id: axon_domain::CellId(1),
         model_messages: Vec::new(),
         execution_tools: std::sync::Arc::new(std::sync::RwLock::new(

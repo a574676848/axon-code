@@ -109,6 +109,14 @@ impl RunRequest {
             client_channel,
             config_path: config_path.to_path_buf(),
             session_id,
+            // 入站事实标识由 daemon 的信封带进来；本地直跑与子代理没有入站事实时为空。
+            interaction_id: options
+                .transport_context
+                .as_ref()
+                .and_then(|value| value.get("interactionId"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
             resumed_from: previous_session.map(|session| session.facts.session_id.clone()),
             parent_session_id: prepared.parent_session_id,
             cwd,

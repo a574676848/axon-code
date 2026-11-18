@@ -130,6 +130,7 @@ fn fixture_request() -> RunRequest {
         client_channel: axon_client_identity::ClientChannel::Cli,
         config_path,
         session_id: session_id.clone(),
+        interaction_id: String::new(),
         invocation_id: format!("test-invocation:{session_id}"),
         resumed_from: None,
         parent_session_id: None,

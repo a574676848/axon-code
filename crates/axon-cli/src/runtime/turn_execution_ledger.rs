@@ -133,11 +133,7 @@ fn sort_json(value: &mut serde_json::Value) {
 }
 
 pub(crate) fn turn_id(context: &crate::tool_orchestrator::ToolOrchestratorContext) -> String {
-    format!(
-        "{}:messages:{}",
-        context.thread_session_id,
-        context.model_messages.len()
-    )
+    context.turn_id.clone()
 }
 
 pub(crate) fn scope_id(context: &crate::tool_orchestrator::ToolOrchestratorContext) -> String {

@@ -336,6 +336,8 @@ fn test_context(owner: &str) -> ToolOrchestratorContext {
         config_path: None,
         cwd: test_workspace(),
         thread_session_id: owner.to_owned(),
+        interaction_id: String::new(),
+        turn_id: String::new(),
         cell_id: axon_domain::CellId(1),
         model_messages: Vec::new(),
         execution_tools: std::sync::Arc::new(std::sync::RwLock::new(

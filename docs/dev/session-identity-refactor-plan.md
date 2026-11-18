@@ -446,7 +446,7 @@ W10 是三端用户可见回归，依赖 W4 与 W5 完成后才能全量开跑�
 | W6.5 | 已完成 | `interrupted_interaction_repository` 读 `inbox.session_id`，`candidate_session_id` 不再派生 |
 | W6.6 | 已完成 | `interaction_adapter` 的 Interaction 会话取自显式入参或 Workspace 活跃会话 |
 | W6.7 | 部分完成 | 主 turn 与执行 worker 已改读 `current_run_id`；turn lanes 层仍保留 `--subagent--` 拼接面 |
-| W6.8 | 待执行 | 问答记录的 `interaction_id` 仍写 cell id（`orchestrator.rs`） |
+| W6.8 | 已完成 | `RunRequest` 增 `interaction_id`（来自 daemon 信封的 `transportContext.interactionId`）；工具上下文增 `interaction_id` 与 `turn_id`；问答记录改用它自己的真实入站标识，`turn_id` 改用与本轮持久化 `Turn.turn_id` 逐字一致的构造 |
 | W7.1 | 待执行 | `origin_channel` 四入口覆盖未按其核对 |
 | W7.2 | 待执行 | `channel_mix_json` 累计与重放重建未复核 |
 | W7.3 | 待执行 | 环境上下文渠道语义未改 |

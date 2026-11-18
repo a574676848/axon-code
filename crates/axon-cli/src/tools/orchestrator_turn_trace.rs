@@ -297,6 +297,8 @@ mod turn_trace_tests {
             config_path,
             cwd: PathBuf::from("."),
             thread_session_id: "thread-1".to_owned(),
+            interaction_id: String::new(),
+            turn_id: String::new(),
             cell_id: CellId(1),
             model_messages: Vec::new(),
             execution_tools: Arc::new(RwLock::new(ToolRegistry::new())),

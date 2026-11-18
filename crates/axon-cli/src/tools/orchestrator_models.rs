@@ -64,6 +64,13 @@ pub(crate) struct ToolOrchestratorContext {
     /// 要给客户端看的会话标识都取这个字段。工具层不再保存第二套派生表示；确实需要
     /// 数值键的内部索引（记忆子系统）统一走 [`Self::memory_session_key`]。
     pub(crate) thread_session_id: String,
+    /// 本轮入站事实标识（`inbox.interaction_id`）；本地直跑没有入站事实时为空。
+    ///
+    /// 这是能回查「这条输入属于会话的哪一轮」的唯一键：事件帧、幂等与 durable 审计都在
+    /// 这同一个串上，任何要落库的轮次归属都必须取它，不能用工具调度单元序号顶替。
+    pub(crate) interaction_id: String,
+    /// 本轮在转录里的轮次标识，与本轮持久化的 `Turn.turn_id` 逐字一致。
+    pub(crate) turn_id: String,
     pub(crate) cell_id: CellId,
     pub(crate) model_messages: Vec<axon_agent_runtime::AgentModelMessage>,
     pub(crate) execution_tools: Arc<RwLock<axon_agent_runtime::ToolRegistry>>,
@@ -96,6 +103,8 @@ impl std::fmt::Debug for ToolOrchestratorContext {
             .field("config_path", &self.config_path)
             .field("cwd", &self.cwd)
             .field("thread_session_id", &self.thread_session_id)
+            .field("interaction_id", &self.interaction_id)
+            .field("turn_id", &self.turn_id)
             .field("cell_id", &self.cell_id)
             .field("model_messages_len", &self.model_messages.len())
             .field("timeout", &self.timeout)
