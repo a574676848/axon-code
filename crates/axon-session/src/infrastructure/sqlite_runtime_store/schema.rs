@@ -200,6 +200,10 @@ const CONTROL_DDL: &str = "
         CREATE UNIQUE INDEX IF NOT EXISTS sessions_goal_binding
             ON sessions(goal_id)
             WHERE kind = 'goal' AND goal_id IS NOT NULL;
+        -- 定时任务的会话绑定键是任务标识：同一任务多次运行复用同一条 kind='cron' 会话。
+        CREATE UNIQUE INDEX IF NOT EXISTS sessions_cron_binding
+            ON sessions(execution_id)
+            WHERE kind = 'cron' AND execution_id IS NOT NULL;
         CREATE INDEX IF NOT EXISTS sessions_recovery
             ON sessions(status, owner_host_id, owner_generation);
         CREATE INDEX IF NOT EXISTS sessions_retention

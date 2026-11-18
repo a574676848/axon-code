@@ -6,11 +6,12 @@ use axon_process::non_interactive_command;
 
 use super::{
     MEMORY_CONSOLIDATION_CRON_SCRIPT, SESSION_CLEANUP_CRON_SCRIPT,
-    session_cleanup::SESSION_CLEANUP_DRY_RUN_CRON_SCRIPT, wake::dispatch_wake,
+    session_binding::resolve_cron_session, session_cleanup::SESSION_CLEANUP_DRY_RUN_CRON_SCRIPT,
+    wake::dispatch_wake,
 };
 use crate::{
     cron_commands::{run_session_cleanup, run_session_cleanup_once},
-    run_commands::{execute_daemon_interaction, prepare_interaction_from_prompt_as},
+    run_commands::{execute_daemon_interaction, prepare_background_interaction},
     runtime_memory_consolidation::run_memory_consolidation_once,
     usage_statistics::{
         PRICING_SYNC_CRON_SCRIPT, USAGE_ROLLUP_CRON_SCRIPT, run_pricing_sync_once,
@@ -72,9 +73,12 @@ pub(crate) fn execute_local_cron_agent(
     job: &CronJob,
     prompt: &str,
 ) -> Result<String, String> {
+    // 任务自己的一轮落进它自己的 cron 会话：绝不落到该 Workspace 最近活跃的 primary
+    // 会话（那是用户的对话）。会话标识按 `job_id` 稳定解析，重复运行复用同一条。
+    let session = resolve_cron_session(config_path, job, axon_root, axon_time::unix_now_ms())?;
     let cwd = job.workdir.as_deref().map(Path::new).unwrap_or(axon_root);
-    let interaction = prepare_interaction_from_prompt_as(
-        None,
+    let interaction = prepare_background_interaction(
+        &session,
         cwd,
         Some(config_path),
         CRON_AGENT_CHANNEL,

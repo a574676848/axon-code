@@ -216,10 +216,15 @@ pub(crate) struct SessionListRow {
     pub(crate) ttft_p50_ms: Option<u64>,
     pub(crate) ttft_max_ms: u64,
     pub(crate) open_job_count: u64,
-    /// 最近一轮的来源渠道（客户端优先，与 `origin_channel` 同口径）。
+    /// 会话表面渠道（首条入站，客户端优先）。
+    ///
+    /// 这是会话归属的那一端，界面据此判定是否独立会话（Cron / 子代理 / 目标执行只读）；
+    /// 最近一轮是谁发的不进这一列，避免同一会话被别端续聊后界面把它当成另一种会话。
     pub(crate) channel: String,
-    /// 最近一轮的回复去向。
+    /// 会话表面去向（首条入站的回复路由）。
     pub(crate) destination: String,
+    /// 最近一轮的来源渠道；只用来说明「最后一次是谁说的」。
+    pub(crate) last_channel: String,
     /// 受众边界；由 `trust_scope` 映射成可展示标签。
     pub(crate) audience: String,
     /// 该会话已有的入站条数。
@@ -241,10 +246,11 @@ impl SessionListRow {
             "ttftP50Ms": self.ttft_p50_ms,
             "ttftMaxMs": self.ttft_max_ms,
             "openJobCount": self.open_job_count,
-            // 会话不存渠道与目标（渠道属于轮次）：这里给出的是最近一轮的来源与去向，
-            // 以及该会话已有的入站条数，供桌面的会话条目浮层直接展示。
+            // 会话不存渠道与目标（渠道属于轮次）：这里给出会话表面的那一端（首条入站）
+            // 与最近一轮的来源，供桌面的会话条目浮层与会话视图分别使用。
             "channel": self.channel,
             "destination": self.destination,
+            "lastChannel": self.last_channel,
             "audience": self.audience,
             "interactionCount": self.interaction_count,
         })
@@ -271,8 +277,11 @@ fn read_sessions(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<Sess
                  ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1),
                 COALESCE((SELECT CASE WHEN TRIM(i.client) = '' THEN i.source_channel ELSE i.client END
                           FROM inbox AS i WHERE i.session_id = s.session_id
-                          ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1), ''),
+                          ORDER BY i.received_at_ms ASC, i.interaction_id ASC LIMIT 1), ''),
                 COALESCE((SELECT json_extract(i.reply_route_json, '$.destination')
+                          FROM inbox AS i WHERE i.session_id = s.session_id
+                          ORDER BY i.received_at_ms ASC, i.interaction_id ASC LIMIT 1), ''),
+                COALESCE((SELECT CASE WHEN TRIM(i.client) = '' THEN i.source_channel ELSE i.client END
                           FROM inbox AS i WHERE i.session_id = s.session_id
                           ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1), ''),
                 s.trust_scope,
@@ -290,7 +299,7 @@ fn read_sessions(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<Sess
         let ttft_histogram_json: Option<String> = row.get(12)?;
         let first_content: Option<String> = row.get(13)?;
         let scope_json: Option<String> = row.get(14)?;
-        let trust_scope: String = row.get(17)?;
+        let trust_scope: String = row.get(18)?;
         let workspace_id = stored_workspace
             .filter(|value| !value.is_empty())
             .or_else(|| scope_json.as_deref().and_then(workspace_of_scope));
@@ -312,8 +321,9 @@ fn read_sessions(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<Sess
             ttft_p50_ms: ttft_histogram_json.as_deref().and_then(median_of_histogram),
             channel: row.get(15)?,
             destination: row.get(16)?,
+            last_channel: row.get(17)?,
             audience: audience_label(&trust_scope),
-            interaction_count: u64::try_from(row.get::<_, i64>(18)?).unwrap_or(0),
+            interaction_count: u64::try_from(row.get::<_, i64>(19)?).unwrap_or(0),
         })
     })?;
     rows.collect()

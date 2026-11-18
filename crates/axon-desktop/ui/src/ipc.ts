@@ -665,6 +665,17 @@ export const desktopSetSidebarCollapsed = (collapsed: boolean): Promise<DesktopP
 export const desktopSetTheme = (theme: ThemeId): Promise<DesktopPreferences> =>
   call('desktop_set_theme', { theme });
 
+/**
+ * 记下「上次看到哪」：工作区目录、会话标识与展开着的工作区。
+ *
+ * 只写本地状态文件，与服务端无关；启动时读同一份事实直接展开该工作区并打开那条会话。
+ */
+export const desktopRememberView = (view: {
+  workspaceDir?: string | null;
+  sessionId?: string | null;
+  expandedWorkspaceIds?: string[] | null;
+}): Promise<DesktopPreferences> => call('desktop_remember_view', view);
+
 /** 记下输入坞改选的主模型名称；新开会话时优先沿用。 */
 export const desktopSetComposerModel = (model: string): Promise<DesktopPreferences> =>
   call('desktop_set_composer_model', { model });

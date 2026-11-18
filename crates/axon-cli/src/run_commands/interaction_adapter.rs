@@ -36,6 +36,66 @@ pub(crate) fn prepare_interaction_from_prompt_as(
     now_ms: u64,
     client: Option<&str>,
 ) -> Result<PreparedInteraction, String> {
+    prepare_interaction_with(
+        SessionKindPolicy::PrimaryOnly,
+        session,
+        cwd,
+        config_path,
+        channel,
+        destination,
+        prompt,
+        now_ms,
+        client,
+    )
+}
+
+/// 显式会话的会话类型约束。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionKindPolicy {
+    /// 用户入口只续接主会话（CLI / TUI 的对话）。
+    PrimaryOnly,
+    /// 后台任务落它自己的会话：会话类型由调用方在创建时定死，这里只校验存在与归属。
+    AnyKind,
+}
+
+/// 后台任务（Cron / 目标执行）提交一轮的入口。
+///
+/// 与用户入口同一条构造逻辑，唯一差别是不把会话类型限死为 `primary`：后台任务本来
+/// 就落在自己那条 `kind='cron'` / `kind='goal'` 会话上。
+pub(crate) fn prepare_background_interaction(
+    session: &DaemonSessionId,
+    cwd: &Path,
+    config_path: Option<&Path>,
+    channel: &str,
+    destination: &str,
+    prompt: &str,
+    now_ms: u64,
+    client: Option<&str>,
+) -> Result<PreparedInteraction, String> {
+    prepare_interaction_with(
+        SessionKindPolicy::AnyKind,
+        Some(session),
+        cwd,
+        config_path,
+        channel,
+        destination,
+        prompt,
+        now_ms,
+        client,
+    )
+}
+
+fn prepare_interaction_with(
+    kind_policy: SessionKindPolicy,
+    session: Option<&DaemonSessionId>,
+    cwd: &Path,
+    config_path: Option<&Path>,
+    channel: &str,
+    destination: &str,
+    prompt: &str,
+    now_ms: u64,
+    client: Option<&str>,
+) -> Result<PreparedInteraction, String> {
     let cwd_workspace = WorkspaceResolver
         .resolve(cwd, now_ms)
         .map_err(|error| error.to_string())?;
@@ -59,8 +119,11 @@ pub(crate) fn prepare_interaction_from_prompt_as(
             let record = store
                 .get_session(session_id)
                 .map_err(|error| format!("会话不可用：{error}"))?;
-            // CLI 只续接主会话：定时任务、目标看板与子代理会话不对外提供入口。
-            if record.kind != axon_session::SessionKind::Primary {
+            // 用户入口只续接主会话：定时任务、目标看板与子代理会话不对外提供入口。
+            // 后台任务（Cron / 目标执行）自带会话类型，只校验存在与归属。
+            if kind_policy == SessionKindPolicy::PrimaryOnly
+                && record.kind != axon_session::SessionKind::Primary
+            {
                 return Err(format!(
                     "无法续接会话 {}：只有主会话可以续聊",
                     session_id.as_str()

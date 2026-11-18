@@ -36,12 +36,16 @@ fn theme_of(state: &DesktopState) -> String {
 
 /// 组成一次快照，避免读写两处各拼一遍字段。
 fn snapshot(state: &DesktopState, runtime: &Runtime) -> DesktopPreferences {
+    let client = runtime.document().client;
     DesktopPreferences {
         notifications_enabled: state.notifications_enabled,
         theme: theme_of(state),
         sidebar_collapsed: runtime.sidebar_collapsed(),
         composer_model: runtime.composer_model(),
         composer_reasoning_effort: runtime.composer_reasoning_effort(),
+        last_workspace_dir: client.last_workspace_dir,
+        last_session_id: client.last_session_id,
+        expanded_workspace_ids: client.expanded_workspace_ids,
     }
 }
 
@@ -59,6 +63,48 @@ pub struct DesktopPreferences {
     pub composer_model: Option<String>,
     /// 输入坞最近一次显式选择的思考强度；空值表示用户从未选过。
     pub composer_reasoning_effort: Option<String>,
+    /// 上次打开的工作区目录；空值表示还没有打开过。
+    pub last_workspace_dir: Option<String>,
+    /// 上次打开的会话标识；空值表示还没有打开过。
+    pub last_session_id: Option<String>,
+    /// 侧栏展开着的工作区标识。
+    pub expanded_workspace_ids: Vec<String>,
+}
+
+/// Tauri IPC 命令：记下「上次看到哪」。
+///
+/// 三个入参各自可缺省：只点开会话时只写会话，只折叠工作区时只写展开清单。
+/// 这份事实与展示完全在本地状态文件里，不向服务端推导。
+///
+/// # Errors
+///
+/// 状态文件只读或写盘失败。
+#[tauri::command(async)]
+pub fn desktop_remember_view(
+    workspace_dir: Option<String>,
+    session_id: Option<String>,
+    expanded_workspace_ids: Option<Vec<String>>,
+) -> Result<DesktopPreferences, String> {
+    let runtime = crate::connection::runtime();
+    runtime.update_document(|document| {
+        if let Some(workspace_dir) = workspace_dir {
+            let trimmed = workspace_dir.trim().to_owned();
+            document.client.last_workspace_dir = (!trimmed.is_empty()).then_some(trimmed);
+        }
+        if let Some(session_id) = session_id {
+            let trimmed = session_id.trim().to_owned();
+            document.client.last_session_id = (!trimmed.is_empty()).then_some(trimmed);
+        }
+        if let Some(expanded) = expanded_workspace_ids {
+            document.client.expanded_workspace_ids = expanded
+                .into_iter()
+                .map(|id| id.trim().to_owned())
+                .filter(|id| !id.is_empty())
+                .collect();
+        }
+        Ok(())
+    })?;
+    Ok(snapshot(&load_state(), runtime))
 }
 
 /// Tauri IPC 命令：读取桌面偏好。
@@ -139,6 +185,9 @@ mod tests {
             sidebar_collapsed: Some(true),
             composer_model: Some("deepseek-v4.1-flash".to_string()),
             composer_reasoning_effort: Some("high".to_string()),
+            last_workspace_dir: Some("C:/Users/tester/.axon".to_string()),
+            last_session_id: Some("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string()),
+            expanded_workspace_ids: vec!["workspace-a".to_string()],
         })
         .expect("序列化");
         assert_eq!(value["notificationsEnabled"], true);
@@ -146,6 +195,10 @@ mod tests {
         assert_eq!(value["sidebarCollapsed"], true);
         assert_eq!(value["composerModel"], "deepseek-v4.1-flash");
         assert_eq!(value["composerReasoningEffort"], "high");
+        // 「上次看到哪」全在本地状态文件里，界面按这三项恢复展开与会话。
+        assert_eq!(value["lastWorkspaceDir"], "C:/Users/tester/.axon");
+        assert_eq!(value["lastSessionId"], "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+        assert_eq!(value["expandedWorkspaceIds"][0], "workspace-a");
     }
 
     #[test]
@@ -157,10 +210,18 @@ mod tests {
             sidebar_collapsed: None,
             composer_model: None,
             composer_reasoning_effort: None,
+            last_workspace_dir: None,
+            last_session_id: None,
+            expanded_workspace_ids: Vec::new(),
         })
         .expect("序列化");
         assert!(value["composerModel"].is_null());
         assert!(value["composerReasoningEffort"].is_null());
+        assert!(value["lastSessionId"].is_null());
+        assert_eq!(
+            value["expandedWorkspaceIds"].as_array().map(Vec::len),
+            Some(0)
+        );
     }
 
     #[test]

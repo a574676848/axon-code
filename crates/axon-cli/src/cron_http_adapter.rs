@@ -1,6 +1,6 @@
 use axon_daemon::{GatewayHttpResponse, GatewayHttpRouteHandler};
 use axon_domain::{CronJob, CronJobInput, CronJobStatus, CronJobUpdate, CronRunRecord};
-use axon_session::{RuntimeStore as _, WorkspaceResolver};
+use axon_session::WorkspaceResolver;
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -162,19 +162,14 @@ impl CronHttpAdapter {
         } else {
             crate::cron_commands::cron_agent_config(&self.config_path, &destination)?
         };
-        // 会话标识来自控制面：该 Workspace 的既有会话直接复用，没有才新建。
-        let session_id = self
-            .runtime_store()?
-            .resolve_workspace_session(&axon_session::WorkspaceSessionRequest {
-                workspace_id: workspace.workspace_id.as_str().to_owned(),
-                cwd: workspace.workspace_root.clone(),
-                trust_scope: axon_session::SessionTrustScope::Private,
-                now_ms: axon_time::unix_now_ms(),
-            })
-            .map_err(|error| CronHttpError::internal(format!("解析 Cron 会话失败：{error}")))?
-            .session_id
-            .as_str()
-            .to_owned();
+        // 自动化列表里的「进入会话」读的是任务创建时就绑定好的那条 cron 会话：
+        // 绑定点是 `sessions.execution_id = job_id`（唯一），不按时间挑「最近一条」，
+        // 也不会指向该 Workspace 最近活跃的 primary 会话（那是用户的对话）。
+        let session_id = self.runtime_store().ok().and_then(|store| {
+            crate::cron_commands::find_cron_session(&store, &job.job_id)
+                .ok()
+                .flatten()
+        });
         let mut payload =
             serde_json::to_value(&job).map_err(|e| CronHttpError::internal(e.to_string()))?;
         if let Some(object) = payload.as_object_mut() {
@@ -190,7 +185,9 @@ impl CronHttpAdapter {
             object.insert("system".to_owned(), serde_json::Value::Bool(system));
             object.insert(
                 "sessionId".to_owned(),
-                serde_json::Value::String(session_id),
+                session_id.map_or(serde_json::Value::Null, |id| {
+                    serde_json::Value::String(id.as_str().to_owned())
+                }),
             );
             object.insert(
                 "workspaceId".to_owned(),
@@ -259,6 +256,9 @@ impl CronHttpAdapter {
             Some(require_next_run(&schedule, now).map_err(CronHttpError::bad_request)?),
         )
         .map_err(|e| CronHttpError::bad_request(e.to_string()))?;
+        // 创建即绑定会话：与 CLI 共用同一处逻辑，任务一存在就有自己那条 cron 会话。
+        crate::cron_commands::bind_new_job_session(&self.config_path, &self.axon_root, &job, now)
+            .map_err(CronHttpError::internal)?;
         self.repository()?
             .save_job(&job)
             .map_err(CronHttpError::internal)?;

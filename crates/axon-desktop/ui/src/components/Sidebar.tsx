@@ -21,6 +21,7 @@ import {
 } from './SidebarRows';
 import { ArchiveSessionDialog, RemoveWorkspaceDialog } from './SidebarConfirmations';
 import { WorkspaceTree } from './WorkspaceTree';
+import { buildSidebarTree } from './sidebarTree';
 import type { ArchivedFilter, GroupMode, OrderMode } from './ViewOptionsMenu';
 import { SidebarFooter } from './SidebarFooter';
 
@@ -82,6 +83,12 @@ interface SidebarProps {
   mcpReading?: McpHeaderReading | null;
   /** 已安装技能条数；清单未就绪时为空。 */
   skillCount?: number | null;
+  /** 上次打开的工作区标识：启动时默认展开它。 */
+  preferredWorkspaceId?: string;
+  /** 本地状态文件记录的展开清单：启动时按它恢复展开态。 */
+  expandedWorkspaceIds?: string[];
+  /** 展开态变化回执：由外壳写回本地状态文件。 */
+  onExpandedChange?: (ids: string[]) => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -98,6 +105,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   sessionMarks,
   mcpReading = null,
   skillCount = null,
+  preferredWorkspaceId = '',
+  expandedWorkspaceIds,
+  onExpandedChange,
 }) => {
   const [width, setWidth] = useState(DEFAULT_WIDTH);
   const [resizing, setResizing] = useState(false);
@@ -152,10 +162,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
     );
     setExpanded((current) => {
       const next = { ...current };
-      for (const workspace of list) next[workspace.id] ??= workspace.active;
+      /*
+       * 展开态跟着本地状态文件走：启动时把上次展开的工作区原样展开（并保证上次打开的
+       * 那条也在展开集里）；状态文件里还没有记录时，退回「展开当前工作区」的老行为。
+       * 这里只补缺省值（`??=`），用户在本次会话里手动收起的不被抢回来。
+       */
+      const recorded = expandedWorkspaceIds ?? [];
+      for (const workspace of list) {
+        next[workspace.id] ??= recorded.length > 0
+          ? recorded.includes(workspace.id) || workspace.id === preferredWorkspaceId
+          : workspace.active || workspace.id === preferredWorkspaceId;
+      }
       return next;
     });
-  }, []);
+  }, [expandedWorkspaceIds, preferredWorkspaceId]);
 
   const refresh = useCallback(async () => {
     if (health?.available !== true) return;
@@ -419,48 +439,30 @@ export const Sidebar: React.FC<SidebarProps> = ({
               pendingRemove.sessions.some((session) => session.id === runtime.sessionId)),
         };
 
-  /** 按搜索、归档筛选与排序规则加工展示数据。 */
-  const presented = useMemo(() => {
-    const keyword = query.trim().toLowerCase();
-    const currentSession = selectedSessionId ?? activeSessionId;
-    const currentWorkspace = workspaces.find((workspace) =>
-      workspace.sessions.some((session) => session.id === currentSession),
-    )?.id ?? activeWorkspaceId;
-    const sessionsOf = (workspace: WorkspaceItem): SessionItem[] =>
-      workspace.sessions
-        .filter((session) => {
-          if (archivedFilter === 'hide' && session.archived) return false;
-          if (archivedFilter === 'only' && !session.archived) return false;
-          // 未激活会话是「即将开始的会话」，只保留当前这一条：
-          // 历史遗留的空会话不该在列表里长期占位，这与既有工作台产品一致。
-          if (session.pending && session.id !== currentSession) return false;
-          if (keyword.length === 0) return true;
-          return (
-            session.title.toLowerCase().includes(keyword) ||
-            workspace.name.toLowerCase().includes(keyword)
-          );
-        })
-        .sort((left, right) => {
-          /*
-           * 置顶块优先、其余按最近活动倒序，与网关 `sessions` 清单的排序规则一致。
-           *
-           * 置顶与最近活动都由运行态投影给出（桌面端不再自存一份状态），因此这里只是把
-           * 同一条规则重放一遍，不会算出一个与网关不同的次序；「手动顺序」档保留后端
-           * 给出的次序，用户在列表里拖动过之后就以那次拖动为准。
-           */
-          if (orderBy !== 'updated') return 0;
-          if (left.pinned !== right.pinned) return left.pinned ? -1 : 1;
-          return right.updated_at - left.updated_at;
-        });
-
-    return workspaces.map((workspace) => ({
-      ...workspace,
-      active: workspace.id === currentWorkspace,
-      sessions: sessionsOf(workspace),
-      // 树形分组需要真实路径做父子判定。
-      path: fullPaths[workspace.id] ?? workspace.path,
-    }));
-  }, [workspaces, query, archivedFilter, orderBy, fullPaths, selectedSessionId, activeSessionId, activeWorkspaceId]);
+  /** 按搜索、归档筛选与排序规则加工展示数据（纯计算见 `sidebarTree.ts`）。 */
+  const presented = useMemo(
+    () =>
+      buildSidebarTree({
+        workspaces,
+        fullPaths,
+        query,
+        archivedFilter,
+        orderBy,
+        selectedSessionId,
+        activeSessionId,
+        activeWorkspaceId,
+      }),
+    [
+      workspaces,
+      query,
+      archivedFilter,
+      orderBy,
+      fullPaths,
+      selectedSessionId,
+      activeSessionId,
+      activeWorkspaceId,
+    ],
+  );
 
   /*
    * 收轨态整块不渲染连接胶囊，也不给 RailButton 加状态槽：图标轨每一格都是一个
@@ -613,9 +615,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
             liveRunningSessionId={
               runtime !== null && isRunning(runtime) ? runtime.sessionId : null
             }
-            onToggleWorkspace={(id) =>
-              setExpanded((current) => ({ ...current, [id]: current[id] !== true }))
-            }
+            onToggleWorkspace={(id) => {
+              const next = { ...expanded, [id]: expanded[id] !== true };
+              setExpanded(next);
+              onExpandedChange?.(
+                Object.entries(next)
+                  .filter(([, open]) => open)
+                  .map(([key]) => key),
+              );
+            }}
             onSelectSession={(workspaceId, sessionId) => {
               setActiveWorkspaceId(workspaceId);
               setActiveSessionId(sessionId);

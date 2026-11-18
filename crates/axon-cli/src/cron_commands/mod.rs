@@ -15,7 +15,9 @@ mod runtime_cleanup_counts;
 mod runtime_cleanup_families;
 mod runtime_event_archive;
 pub(crate) mod schedule;
+mod session_binding;
 mod session_cleanup;
+pub(crate) use session_binding::{bind_new_job_session, find_cron_session};
 mod tick;
 mod wake;
 

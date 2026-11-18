@@ -117,8 +117,8 @@ pub(crate) use daemon_interaction_submission::{
     submit_daemon_interaction, submit_prepared_daemon_interaction,
 };
 pub(crate) use interaction_adapter::{
-    PreparedInteraction, interaction_store, prepare_interaction_from_prompt_as, register_workspace,
-    register_workspace_record,
+    PreparedInteraction, interaction_store, prepare_background_interaction,
+    prepare_interaction_from_prompt_as, register_workspace, register_workspace_record,
 };
 #[cfg(feature = "tui")]
 pub(crate) use interactive_tui::run_agent_tui_entry;

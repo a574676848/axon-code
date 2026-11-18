@@ -407,6 +407,12 @@ export interface DesktopPreferences {
   composerModel: string | null;
   /** 输入坞最近一次显式选择的思考强度；空值表示从未选过。 */
   composerReasoningEffort: string | null;
+  /** 上次打开的工作区目录；空值表示还没有打开过。 */
+  lastWorkspaceDir?: string | null;
+  /** 上次打开的会话标识；空值表示还没有打开过。 */
+  lastSessionId?: string | null;
+  /** 侧栏展开着的工作区标识；启动时据此恢复展开态。 */
+  expandedWorkspaceIds?: string[];
 }
 
 /** 问答结算回执。 */

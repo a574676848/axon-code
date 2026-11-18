@@ -20,6 +20,7 @@ import { CommandPalette } from './components/ui/CommandPalette';
 import { AutomationPage } from './components/AutomationPage';
 import { GoalsPage } from './components/goals/GoalsPage';
 import { goalSessionSelection, originBarFor } from './sessionOpening';
+import { useLastViewRestore } from './useLastViewRestore';
 import { buildPaletteItems } from './paletteItems';
 import { MemoryPage } from './components/MemoryPage';
 import { WorkspaceOverview } from './components/WorkspaceOverview';
@@ -215,6 +216,18 @@ export const App: React.FC = () => {
       cancelled = true;
     };
   }, []);
+
+  /*
+   * 启动恢复：展开上次打开的工作区并打开它最后一条会话。
+   *
+   * 事实来自本地状态文件，不向服务端推导；恢复只做一次，之后用户手动收起或换会话，
+   * 轮询回来不会抢回选中的那一屏。
+   */
+  const viewRestore = useLastViewRestore({
+    workspaces,
+    selection,
+    onRestore: selectSession,
+  });
 
   /*
    * 启动即检测一次新版本，并读一次连接档案事实。
@@ -532,6 +545,9 @@ export const App: React.FC = () => {
         runtime={sessionRuntime}
         mcpReading={mcp.reading}
         skillCount={skillCount}
+        preferredWorkspaceId={viewRestore.preferredWorkspaceId}
+        expandedWorkspaceIds={viewRestore.expandedWorkspaceIds}
+        onExpandedChange={viewRestore.rememberExpanded}
       />
 
       {/*

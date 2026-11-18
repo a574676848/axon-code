@@ -244,6 +244,26 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
             crate::desktop_preferences::desktop_set_composer_reasoning_effort(as_str("effort")?)?,
         )
         .map_err(stringify)?),
+        "desktop_remember_view" => Ok(serde_json::to_value(
+            crate::desktop_preferences::desktop_remember_view(
+                args.get("workspaceDir")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                args.get("sessionId")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                args.get("expandedWorkspaceIds")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(ToOwned::to_owned)
+                            .collect::<Vec<_>>()
+                    }),
+            )?,
+        )
+        .map_err(stringify)?),
         "pick_directory" => Ok(Value::Null),
         "document_catalog" => {
             Ok(serde_json::to_value(crate::documents::document_catalog()?).map_err(stringify)?)

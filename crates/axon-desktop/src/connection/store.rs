@@ -75,6 +75,16 @@ pub struct ClientLayer {
     pub composer_reasoning_effort: Option<String>,
     /// 上一次在原生目录选择器中选中的目录。
     pub last_workspace_dir: Option<String>,
+    /// 上一次打开的会话标识。
+    ///
+    /// 与 `last_workspace_dir` 一起表达「上次看到哪」，启动时据此直接展开那个工作区
+    /// 并打开那条会话；不在服务端做任何推导。
+    pub last_session_id: Option<String>,
+    /// 侧栏展开着的工作区标识。
+    ///
+    /// 用户手动收起的也会记在这里：启动时按这份清单恢复展开态，未登记的按当前工作区
+    /// 兜底，因此不会出现「上次展开的组这次全收起来」。
+    pub expanded_workspace_ids: Vec<String>,
     /// 当前生效档案 id。
     pub last_profile_id: Option<String>,
     /// 切换前的档案 id，供重启失败回滚。
@@ -92,6 +102,8 @@ impl Default for ClientLayer {
             composer_model: None,
             composer_reasoning_effort: None,
             last_workspace_dir: None,
+            last_session_id: None,
+            expanded_workspace_ids: Vec::new(),
             last_profile_id: None,
             previous_profile_id: None,
             onboarding_version: 0,
