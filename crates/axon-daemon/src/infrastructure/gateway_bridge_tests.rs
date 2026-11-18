@@ -72,6 +72,7 @@ fn subscriber_lag_transparently_replays_missing_durable_events() {
         subscription,
         pending: VecDeque::new(),
         replay_cursor: None,
+        admissions: None,
     };
     let sequences = (0..3)
         .map(|_| {
@@ -155,6 +156,7 @@ fn replay_hands_over_to_live_without_dropping_tail_events() {
         subscription,
         pending: VecDeque::new(),
         replay_cursor: None,
+        admissions: None,
     };
     let (subscription, pending, replay_cursor) = subscribe_and_replay(
         &stream.store,

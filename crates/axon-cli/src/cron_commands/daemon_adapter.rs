@@ -6,11 +6,10 @@
 
 use std::path::{Path, PathBuf};
 
-use axon_crypto::sha256_hex_prefix;
 use axon_daemon::infrastructure::ipc::JsonlIpcClient;
 use axon_domain::{
-    AudienceContext, AudienceKind, CronJob, DisclosurePolicy, InteractionId, InteractionRecord,
-    InteractionSource, ReplyRoute, ScopeRef,
+    AudienceContext, AudienceKind, CronJob, DisclosurePolicy, InteractionRecord, InteractionSource,
+    ReplyRoute, ScopeRef,
 };
 use axon_protocol::{DaemonCommand, DaemonRequest, SubmitInteractionRequest};
 use axon_session::{RuntimeStore as _, WorkspaceResolver};
@@ -110,11 +109,9 @@ impl CronDaemonAdapter {
     ) -> Result<String, String> {
         let workspace_id = self.resolve_workspace_id(job, now_ms)?;
         let identity = format!("{}:{now_ms}", job.job_id);
-        let interaction_id = InteractionId::new(format!(
-            "cron-wake-{}",
-            sha256_hex_prefix(identity.as_bytes(), 20)
-        ))
-        .map_err(|error| error.to_string())?;
+        // 交互标识由服务端生成（ULID）：幂等由来源键 `cron-wake:{identity}` 承担，
+        // 同一轮重复提交命中已有行并拿回它的标识。
+        let interaction_id = axon_session::new_interaction_id();
         let client = wake_client_for_channel(channel);
         let source =
             InteractionSource::new(channel, format!("{CRON_WAKE_SOURCE_PREFIX}{identity}"))

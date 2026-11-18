@@ -15,7 +15,7 @@ use axon_agent_runtime::{
 use axon_crypto::sha256_hex_prefix;
 use axon_daemon::{InteractionDelivery, PrimaryTurnIngress};
 use axon_domain::{
-    AudienceContext, InteractionId, InteractionRecord, InteractionSource, ReplyRoute,
+    AudienceContext, InteractionRecord, InteractionSource, ReplyRoute,
     SHELL_JOB_WAKE_SOURCE_PREFIX, SYSTEM_SOURCE_CHANNEL, ScopeRef,
 };
 use axon_session::{RuntimeStore as _, SessionQueryStore, SessionSummaryRow, SqliteRuntimeStore};
@@ -26,9 +26,7 @@ use super::run_steer::{
 };
 use crate::user_question::turn_steerer::{PrimaryTurnSteerSink, PrimaryTurnWakeHook};
 
-/// 跨 Turn 唤醒 Interaction ID 的前缀。
-const SHELL_JOB_WAKE_INTERACTION_PREFIX: &str = "shell-job-wake-";
-/// 唤醒标识哈希前缀长度（96 位十六进制前缀，确保不超过 Interaction ID 长度上限）。
+/// 唤醒标识哈希前缀长度（96 位十六进制前缀，够区分同一批通知且便于日志比对）。
 const SHELL_JOB_WAKE_HASH_CHARS: usize = 24;
 /// 唤醒路由在最后一次活跃之后保留的时长。
 ///
@@ -282,9 +280,8 @@ impl ShellJobWakeBridge {
             return Ok(());
         }
         let digest = wake_identity(&batch.notices);
-        let interaction_id =
-            InteractionId::new(format!("{SHELL_JOB_WAKE_INTERACTION_PREFIX}{digest}"))
-                .map_err(|error| format!("构造唤醒 Interaction ID 失败: {error}"))?;
+        // 交互标识由服务端生成（ULID）：同一批通知的幂等键是来源键里的 wake 摘要。
+        let interaction_id = axon_session::new_interaction_id();
         let source = InteractionSource::new(
             reply_route.channel(),
             format!("{SHELL_JOB_WAKE_SOURCE_PREFIX}{digest}"),

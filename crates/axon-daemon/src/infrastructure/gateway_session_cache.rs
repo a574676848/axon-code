@@ -80,6 +80,13 @@ impl SessionAdmissionCache {
         );
     }
 
+    /// 丢掉一条判定：订阅关闭时调用，避免为没人再看的会话保留条目。
+    pub(super) fn invalidate(&self, session_id: &str) {
+        if let Ok(mut entries) = self.entries.lock() {
+            entries.remove(session_id);
+        }
+    }
+
     /// 当前条目数；只给用例断言用。
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
@@ -148,5 +155,17 @@ mod tests {
         cache.put("session-a", &admission("workspace-a"), 10);
         assert_eq!(cache.len(), 0);
         assert_eq!(cache.get("session-a", 20), None);
+    }
+
+    #[test]
+    fn invalidate_evicts_only_the_named_session() {
+        let cache = SessionAdmissionCache::new(8, 10_000);
+        cache.put("session-a", &admission("workspace-a"), 10);
+        cache.put("session-b", &admission("workspace-b"), 10);
+
+        cache.invalidate("session-a");
+
+        assert_eq!(cache.get("session-a", 20), None, "被失效的会话必须回表");
+        assert!(cache.get("session-b", 20).is_some(), "别的会话不受影响");
     }
 }

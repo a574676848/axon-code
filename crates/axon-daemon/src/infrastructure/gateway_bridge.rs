@@ -401,6 +401,8 @@ where
             subscription,
             pending,
             replay_cursor,
+            // 交互级订阅不经过会话放行，关闭时也不需要回收放行缓存。
+            admissions: None,
         }))
     }
 }
@@ -412,16 +414,14 @@ where
 {
     /// 建立一条会话级订阅（不按 Interaction 过滤）。
     ///
-    /// 放行两类会话，其余一律拒绝：
+    /// 放行条件只看会话本身，不解析任何标识前缀：
     ///
-    /// 1. **子代理会话**：会话必须已在运行态登记，且标识里带子代理分隔符。子代理会话 ID
-    ///    只能从主 turn 的子代理清单里拿到，因此「只能从主 turn 的子代理区域进入」在
-    ///    服务端同样成立，而不是只靠界面自觉。
-    /// 2. **目标执行会话**：必须能在执行账本里查到按该会话的绑定，且目标解析出的工作区
-    ///    与请求工作区一致。**不解析 `goal-session-` 前缀**：前缀只是生成约定，不是授权事实。
+    /// 1. 会话必须已在运行态登记（`sessions` 主键命中）；
+    /// 2. 归属 Workspace 与请求一致（未绑定工作区的会话不作限制）；
+    /// 3. 受众边界不是受限档。
     ///
-    /// 注意：子会话 ID 里嵌的是父的**运行会话 ID**（运行会话的 UUID），而不是车道 ID，
-    /// 所以这里不能拿它去查 `sessions`（那张表登记的是车道会话）。
+    /// 放行判定走放行缓存：会话归属与受众边界建行后不再变化，重复订阅同一会话不必回表；
+    /// 订阅关闭时回收这条会话的缓存条目。
     fn subscribe_session_stream(
         &self,
         workspace_id: &str,
@@ -463,6 +463,8 @@ where
             subscription,
             pending,
             replay_cursor,
+            // 会话级订阅关闭时回收这条会话的放行缓存。
+            admissions: Some(Arc::clone(&self.admissions)),
         }))
     }
 
@@ -499,6 +501,19 @@ struct DaemonGatewayEventStream<S> {
     pending: VecDeque<GatewayEvent>,
     /// 重放已同步到的 durable 水位；仅用于消除"先订阅、后 replay"竞态产生的重叠事件。
     replay_cursor: Option<ConsumerCursor>,
+    /// 会话级订阅持有的放行缓存：关闭订阅即回收这条会话的缓存条目。
+    admissions: Option<Arc<SessionAdmissionCache>>,
+}
+
+impl<S> Drop for DaemonGatewayEventStream<S> {
+    fn drop(&mut self) {
+        // 关闭事件是缓存失效点：没人再看这条会话时，不必替它留着放行判定。
+        if self.interaction_id.is_none()
+            && let Some(admissions) = self.admissions.as_deref()
+        {
+            admissions.invalidate(self.session_id.as_str());
+        }
+    }
 }
 
 impl<S> DaemonGatewayEventStream<S>
