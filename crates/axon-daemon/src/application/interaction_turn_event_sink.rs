@@ -234,12 +234,18 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             .turn_readout
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let active_ms = final_readout
-            .map_or_else(|| now_ms.saturating_sub(self.started_at_ms), |final_| final_.active_ms);
-        let ttft_ms = final_readout.and_then(|final_| final_.ttft_ms).or(readout.ttft_ms);
-        let output_tokens = final_readout.map_or(readout.output_tokens, |final_| final_.output_tokens);
-        let reasoning_tokens =
-            final_readout.map_or(readout.reasoning_output_tokens, |final_| final_.reasoning_output_tokens);
+        let active_ms = final_readout.map_or_else(
+            || now_ms.saturating_sub(self.started_at_ms),
+            |final_| final_.active_ms,
+        );
+        let ttft_ms = final_readout
+            .and_then(|final_| final_.ttft_ms)
+            .or(readout.ttft_ms);
+        let output_tokens =
+            final_readout.map_or(readout.output_tokens, |final_| final_.output_tokens);
+        let reasoning_tokens = final_readout.map_or(readout.reasoning_output_tokens, |final_| {
+            final_.reasoning_output_tokens
+        });
         let generate_ms = ttft_ms
             .unwrap_or(0)
             .saturating_add(readout.decode_ms.unwrap_or(0));
