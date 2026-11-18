@@ -6,7 +6,7 @@
 
 use super::{SessionsHttpAdapter, clip_title, median_of_histogram};
 use axon_daemon::GatewayHttpRouteHandler;
-use axon_session::{RuntimeStore, SqliteRuntimeStore};
+use axon_session::{InteractionStore as _, RuntimeStore, SqliteRuntimeStore};
 use rusqlite::params;
 use serde_json::Value;
 
@@ -90,7 +90,7 @@ fn session_list_query_uses_inbox_session_index_and_stays_within_budget() {
                     "INSERT INTO sessions(session_id,current_run_id,root_session_id,trust_scope,kind,cwd,status,
                      worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,
                      last_activity_at_ms,created_at_ms,updated_at_ms,pinned,archived,workspace_id)
-                     VALUES(?1,?1,?1,'/workspace','idle',0,0,0,0,?2,?2,?2,0,0,'ws-a')",
+                     VALUES(?1,?1,NULL,'private','primary','/workspace','idle',0,0,0,0,?2,?2,?2,0,0,'ws-a')",
                     params![
                         format!("session-{session:04}"),
                         i64::try_from(session).unwrap_or(0)
@@ -307,4 +307,82 @@ fn create_rejects_malformed_body() {
         .handle_request("POST", "/api/v1/sessions", None, b"not-json")
         .expect("命中共用路由");
     assert_eq!(response.status, 400);
+}
+
+/// 打开会话首屏：读取该 Interaction 的尾窗索引页必须远低于 300ms。
+///
+/// 这四项性能基线（会话列表、打开会话首屏、单次入站、订阅放行）是存储架构 §10.1 的
+/// 红线。这里取真实尾窗读取路径 `interaction_history_page(tail=true)`：桌面打开会话时
+/// 读的就是这一页，正文一次取回，之后才从 `nextAfter` 接实时尾。
+#[test]
+#[ignore = "性能验收：20 轮 × 200 帧的会话首屏尾窗索引页必须 <= 300ms"]
+fn session_first_screen_index_page_stays_within_budget() {
+    const TURNS: usize = 20;
+    const EVENTS_PER_TURN: usize = 200;
+    const SCREEN_LIMIT: u32 = 200;
+    const ITERATIONS: usize = 5;
+
+    let (_directory, store) = fixture();
+    let session_id =
+        axon_domain::DaemonSessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FC0").expect("合法会话 ID");
+    store
+        .create_session(&session_id, "/workspace", 1)
+        .expect("登记会话");
+    let interaction = axon_domain::InteractionRecord::new(
+        session_id.clone(),
+        axon_domain::InteractionId::new("interaction-first-screen").expect("合法交互 ID"),
+        axon_domain::InteractionSource::new("desktop", "message-first-screen").expect("来源"),
+        axon_domain::ScopeRef::global(),
+        axon_domain::AudienceContext::new(
+            axon_domain::AudienceKind::Private,
+            axon_domain::DisclosurePolicy::PrivateOnly,
+        ),
+        axon_domain::ReplyRoute::new("desktop", "window-1").expect("回复路由"),
+        "打开会话",
+        1,
+    )
+    .expect("Interaction");
+    store.append(&interaction).expect("追加 Interaction");
+
+    // 事件面按真实形状写入：帧都带 interactionId 与归属列，尾窗按键读取。
+    let total = TURNS * EVENTS_PER_TURN;
+    let records = (0..total)
+        .map(|index| {
+            let sequence = u64::try_from(index).expect("序号");
+            axon_eventlog::RuntimeEventRecord::new(
+                sequence,
+                1_000 + sequence,
+                axon_eventlog::RuntimeEventKind::Other("wire_event".to_owned()),
+                serde_json::json!({
+                    "interactionId": interaction.interaction_id.as_str(),
+                    "kind": {
+                        "type": "assistantMessage",
+                        "payload": {"partId": format!("part-{index}"), "content": "帧"},
+                    },
+                }),
+            )
+            .with_interaction(interaction.interaction_id.as_str())
+        })
+        .collect::<Vec<_>>();
+    axon_eventlog::append_once(&store.event_log(&session_id), 0, 1_000, &records)
+        .expect("写入事件面");
+
+    let mut best = u128::MAX;
+    for _ in 0..ITERATIONS {
+        let started = std::time::Instant::now();
+        let page = axon_daemon::infrastructure::gateway_replay::interaction_history_page(
+            &store,
+            &interaction.interaction_id,
+            0,
+            SCREEN_LIMIT,
+            true,
+        )
+        .expect("读取会话首屏尾窗");
+        assert!(!page.events.is_empty(), "首屏必须读到帧");
+        best = best.min(started.elapsed().as_millis());
+    }
+    println!(
+        "session_first_screen_ms={best} turns={TURNS} events={total} page={SCREEN_LIMIT} 门槛=300ms"
+    );
+    assert!(best < 300, "会话首屏超出 300ms 门槛：{best}ms");
 }

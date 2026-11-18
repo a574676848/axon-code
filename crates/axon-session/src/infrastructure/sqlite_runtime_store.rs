@@ -470,3 +470,6 @@ impl EventLogStore for SqliteRuntimeStore {
 #[cfg(test)]
 #[path = "sqlite_runtime_store_metrics_tests.rs"]
 mod metrics_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_perf_tests.rs"]
+mod perf_tests;

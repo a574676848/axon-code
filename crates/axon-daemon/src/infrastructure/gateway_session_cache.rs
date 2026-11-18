@@ -168,4 +168,37 @@ mod tests {
         assert_eq!(cache.get("session-a", 20), None, "被失效的会话必须回表");
         assert!(cache.get("session-b", 20).is_some(), "别的会话不受影响");
     }
+
+    /// 订阅放行：命中缓存时帧路上必须零查库。
+    ///
+    /// 存储架构 §10.1 的红线是「订阅放行帧路零查库，命中进程内缓存」。放行发生在每一帧上，
+    /// 因此这里按微秒计量并把上限钉在 50µs：超过它说明缓存退化成回表或锁竞争。
+    #[test]
+    #[ignore = "性能验收：订阅放行的缓存命中必须零查库，p95 上限 50µs"]
+    fn cached_subscription_admission_stays_within_the_frame_budget() {
+        const SESSION_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        const SAMPLES: usize = 100_000;
+
+        let cache = SessionAdmissionCache::new(1_024, 30_000);
+        cache.put(SESSION_ID, &admission("workspace-a"), 1_000);
+        for _ in 0..1_000 {
+            assert!(cache.get(SESSION_ID, 1_001).is_some(), "预热必须命中");
+        }
+
+        let mut samples = Vec::with_capacity(SAMPLES);
+        for _ in 0..SAMPLES {
+            let started = std::time::Instant::now();
+            let hit = cache.get(SESSION_ID, 1_001);
+            let elapsed_us = started.elapsed().as_secs_f64() * 1_000_000.0;
+            assert!(hit.is_some(), "缓存必须命中，命中时才谈得上零查库");
+            samples.push(elapsed_us);
+        }
+        samples.sort_by(|left, right| left.partial_cmp(right).expect("微秒读数可比"));
+        let p95_us = samples[samples.len() * 95 / 100];
+        println!("subscription_admission_cached_us={p95_us:.3} samples={SAMPLES} 门槛=50us");
+        assert!(
+            p95_us <= 50.0,
+            "订阅放行缓存命中超出 50µs：p95={p95_us:.3}µs"
+        );
+    }
 }
