@@ -149,6 +149,16 @@ impl InteractionSource {
         self.client.as_deref()
     }
 
+    /// 本轮从哪个端进入：客户端优先，没有客户端时退回来源渠道。
+    ///
+    /// 这是**轮次**事实，与会话所属渠道是两件事：同一条会话被另一端续聊时，
+    /// `channel` 不变而这里变。它与 `turn_metrics.origin_channel` 同一个口径
+    /// （投影层用 `client` 列优先、空串退回 `source_channel` 复现同一条规则）。
+    #[must_use]
+    pub fn origin_channel(&self) -> &str {
+        self.client().unwrap_or(&self.channel)
+    }
+
     /// 返回来源消息幂等键。
     #[must_use]
     pub fn source_message_id(&self) -> &str {

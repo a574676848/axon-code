@@ -35,10 +35,11 @@ pub struct EnvironmentContext {
     pub shell: Option<String>,
     /// 受控的 Terminal 摘要。
     pub terminal: Option<String>,
-    /// 本轮所属会话车道的渠道标识。
+    /// 本轮从哪个端进入：客户端优先（cli / desktop / tui），没有客户端时退回渠道。
     ///
+    /// 它是**轮次事实**而不是会话属性：同一条会话被另一端续聊时，这一行必须换成续聊那一端。
     /// 只给事实，不给用法：这些字段由技能与文档解释，避免提示词随命令面变化而失效。
-    pub session_channel: Option<String>,
+    pub origin_channel: Option<String>,
     /// 本轮所属会话车道的完整标识。
     ///
     /// 这是客户端订阅、查询与校验所用的同一个串，也是车道身份的最终键。只给
@@ -111,7 +112,7 @@ impl EnvironmentContext {
         );
         append_complete_line(
             &mut lines,
-            format_line("session_channel", self.session_channel.as_deref()),
+            format_line("origin_channel", self.origin_channel.as_deref()),
             footer,
         );
         append_complete_line(
@@ -268,7 +269,7 @@ mod tests {
             ),
             terminal: Some("WindowsTerminal".to_owned()),
             session_id: Some("session-session-env-fixture".to_owned()),
-            session_channel: Some("desktop".to_owned()),
+            origin_channel: Some("desktop".to_owned()),
             session_destination: Some("workbench-1".to_owned()),
             session_workspace: Some("workspace-1".to_owned()),
             notification_chat_id: Some("oc_notify".to_owned()),
@@ -304,7 +305,7 @@ mod tests {
         assert!(rendered.contains("shell: bad "));
         assert!(!rendered.contains("bad\n"));
         assert!(rendered.ends_with("</environment-context>"));
-        assert!(rendered.contains("session_channel: desktop"));
+        assert!(rendered.contains("origin_channel: desktop"));
         assert!(rendered.contains("session_destination: workbench-1"));
         assert!(rendered.contains("notification_chat_id: oc_notify"));
     }
@@ -364,7 +365,7 @@ mod tests {
     fn session_facts_are_emitted_as_plain_fields() {
         let rendered = context().render();
         // 只输出事实字段，不写死任何命令示例：用法由技能与文档解释。
-        assert!(rendered.contains("session_channel: desktop"));
+        assert!(rendered.contains("origin_channel: desktop"));
         assert!(!rendered.contains("axon cron"));
     }
 
@@ -376,14 +377,14 @@ mod tests {
         value.local_offset_minutes = None;
         value.shell = None;
         value.terminal = None;
-        value.session_channel = None;
+        value.origin_channel = None;
         value.session_destination = None;
         value.session_workspace = None;
         value.notification_chat_id = None;
         value.delegatable_models = Vec::new();
         value.reasoning_effort_tiers = Vec::new();
         let rendered = value.render();
-        assert!(!rendered.contains("session_channel:"));
+        assert!(!rendered.contains("origin_channel:"));
         assert!(!rendered.contains("local_time:"));
         assert!(!rendered.contains("shell:"));
         assert!(!rendered.contains("delegatable_models:"));
@@ -417,7 +418,7 @@ mod tests {
             shell: Some("/bin/bash".to_owned()),
             terminal: Some("xterm-256color".to_owned()),
             session_id: None,
-            session_channel: None,
+            origin_channel: None,
             session_destination: None,
             session_workspace: None,
             notification_chat_id: None,

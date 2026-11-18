@@ -471,6 +471,11 @@ where
         }
         transport_context["workspaceId"] = json!(workspace.workspace_id);
         transport_context["goalId"] = json!(goal_id);
+        /*
+         * 本轮入口是目标执行：User-Agent 与环境上下文据此把它与用户直接发起的轮次区分开，
+         * 不再借用目标来源渠道（那可能是 desktop 或 cron）。
+         */
+        transport_context["originChannel"] = json!("goal");
         transport_context["stage"] = json!("initial");
         transport_context["source"] = json!(source);
         Ok(Some(GoalExecutionSpec {

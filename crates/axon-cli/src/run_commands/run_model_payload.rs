@@ -661,12 +661,15 @@ mod tests {
     fn environment_context_carries_session_facts_from_transport() {
         let transport = serde_json::json!({
             "channel": "desktop",
+            "originChannel": "cli",
             "destination": "workbench-1",
         });
         let context = cli_environment_context(Some(&transport), Some("oc_notify"), &[]);
         let rendered = context.render();
 
-        assert!(rendered.contains("session_channel: desktop"));
+        // 车道渠道是 desktop，但这一轮由 CLI 续聊：环境上下文说的是本轮来源。
+        assert!(rendered.contains("origin_channel: cli"));
+        assert!(!rendered.contains("origin_channel: desktop"));
         assert!(rendered.contains("session_destination: workbench-1"));
         assert!(rendered.contains("notification_chat_id: oc_notify"));
         // 提示词只给事实：具体用法由技能与文档解释，命令面变化时这里不用改。
@@ -678,7 +681,7 @@ mod tests {
         let context = cli_environment_context(None, Some("   "), &[]);
         let rendered = context.render();
 
-        assert!(!rendered.contains("session_channel:"));
+        assert!(!rendered.contains("origin_channel:"));
         assert!(!rendered.contains("session_destination:"));
         assert!(!rendered.contains("notification_chat_id:"));
     }

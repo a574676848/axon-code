@@ -54,11 +54,17 @@ impl RunAgentIdentity {
 }
 
 /// 把客户端渠道映射为人格场景帧的渠道记号。
+///
+/// 人格场景只分三档入口；定时任务、目标执行与 webhook 车道在人格层面按命令行处理，
+/// 它们的轮次来源由 `origin_channel` 表达，不往人格模型里塞第四档。
 pub(crate) fn persona_channel(channel: axon_client_identity::ClientChannel) -> Channel {
     match channel {
         axon_client_identity::ClientChannel::Tui => Channel::Tui,
         axon_client_identity::ClientChannel::Desktop => Channel::Desktop,
-        axon_client_identity::ClientChannel::Cli => Channel::Cli,
+        axon_client_identity::ClientChannel::Cli
+        | axon_client_identity::ClientChannel::Webhook
+        | axon_client_identity::ClientChannel::Cron
+        | axon_client_identity::ClientChannel::Goal => Channel::Cli,
     }
 }
 

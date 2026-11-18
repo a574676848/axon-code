@@ -45,7 +45,12 @@ pub(super) fn cli_environment_context(
         architecture: std::env::consts::ARCH.to_owned(),
         shell: Some(axon_agent_runtime::default_shell_program()),
         terminal: first_environment_value(&["TERM_PROGRAM", "TERM"]),
-        session_channel: field("channel"),
+        /*
+         * 本轮来源渠道：`originChannel` 是 daemon 按「客户端优先、没有客户端退回来源渠道」
+         * 算出的轮次事实，与 `turn_metrics.origin_channel` 同一个口径。旧载荷没有该键时
+         * 退回车道渠道，行为与改造前一致。
+         */
+        origin_channel: field("originChannel").or_else(|| field("channel")),
         /*
          * 会话车道标识：与客户端订阅、查询与作答校验用的是同一个串。
          *

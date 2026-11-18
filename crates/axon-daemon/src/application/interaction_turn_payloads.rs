@@ -163,6 +163,11 @@ pub(super) fn cache_hit_rate_basis_points(
 pub(super) fn interaction_transport_context(interaction: &InteractionRecord) -> serde_json::Value {
     let mut context = serde_json::json!({
         "channel": interaction.source.channel(),
+        /*
+         * 本轮来源渠道：客户端优先、没有客户端退回来源渠道，与 `turn_metrics.origin_channel`
+         * 同一个口径。环境上下文读它，因此同一条会话被另一端续聊时，本轮看到的是续聊那一端。
+         */
+        "originChannel": interaction.source.origin_channel(),
         "destination": interaction.reply_route.destination(),
         "interactionId": interaction.interaction_id.as_str(),
         "workspaceId": interaction

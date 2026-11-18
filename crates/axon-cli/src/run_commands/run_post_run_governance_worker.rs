@@ -143,8 +143,12 @@ fn agent_identity_token(disclosure: axon_domain::DisclosurePolicy) -> String {
 fn client_channel_token(channel: axon_client_identity::ClientChannel) -> &'static str {
     match channel {
         axon_client_identity::ClientChannel::Tui => "tui",
-        axon_client_identity::ClientChannel::Cli => "cli",
         axon_client_identity::ClientChannel::Desktop => "desktop",
+        // 人格场景只有三档入口：后台驱动的入口按命令行处理，轮次来源由 origin_channel 承担。
+        axon_client_identity::ClientChannel::Cli
+        | axon_client_identity::ClientChannel::Webhook
+        | axon_client_identity::ClientChannel::Cron
+        | axon_client_identity::ClientChannel::Goal => "cli",
     }
 }
 

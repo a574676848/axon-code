@@ -198,6 +198,8 @@ fn cron_source_persists_explicit_delivery_target_in_execution_payload() {
     assert_eq!(payload["transportContext"]["channel"], "webhook");
     assert_eq!(payload["transportContext"]["destination"], "oc_test");
     assert_eq!(payload["transportContext"]["source"]["kind"], "axon_cron");
+    // 入口是目标执行：即便来源渠道是 webhook，本轮也要标成 goal。
+    assert_eq!(payload["transportContext"]["originChannel"], "goal");
 }
 
 #[test]

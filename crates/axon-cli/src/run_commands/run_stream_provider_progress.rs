@@ -157,12 +157,7 @@ fn provider_progress_options<'a>(
     cancel_token: RunCancelToken,
     user_question_port: Option<std::sync::Arc<dyn axon_agent_runtime::UserQuestionPort>>,
 ) -> RunProgressOptions<'a> {
-    let client_channel = request
-        .transport_context
-        .as_ref()
-        .and_then(|value| value.get("channel").and_then(|value| value.as_str()))
-        .map(|value| axon_client_identity::ClientChannel::parse(Some(value)))
-        .unwrap_or(axon_client_identity::ClientChannel::Cli);
+    let client_channel = client_channel_of(request.transport_context.as_ref());
     RunProgressOptions {
         client_channel,
         progress: Some(progress),
@@ -197,6 +192,28 @@ pub(super) fn first_visible_wire_event(kind: &WireEventKind) -> bool {
     }
 }
 
+/// 本轮入口渠道的 transport 键：客户端优先、没有客户端退回来源渠道。
+const ORIGIN_CHANNEL_KEY: &str = "originChannel";
+/// 车道渠道的 transport 键：旧载荷没有 `originChannel` 时退回它。
+const CHANNEL_KEY: &str = "channel";
+
+/// 解析本轮入口渠道。
+///
+/// 这是对外 User-Agent 的取值来源：同一条会话被另一端续聊时，
+/// `originChannel` 已经是续聊那一端，因此 UA 跟着换，而不是一直挂着会话所属渠道。
+pub(crate) fn client_channel_of(
+    transport_context: Option<&serde_json::Value>,
+) -> axon_client_identity::ClientChannel {
+    let value = transport_context
+        .and_then(|context| {
+            context
+                .get(ORIGIN_CHANNEL_KEY)
+                .or_else(|| context.get(CHANNEL_KEY))
+        })
+        .and_then(serde_json::Value::as_str);
+    axon_client_identity::ClientChannel::parse(value)
+}
+
 /// 把本轮车道登记进问答事件路由，返回 RAII 注销句柄。
 ///
 /// 进程级问答宿主按车道身份把事件投进这条通道；run 收口即摘除，尾随事件显式丢弃。
@@ -218,4 +235,43 @@ fn question_event_registration(
         }
     });
     router.register(&session_id, bus)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::client_channel_of;
+    use axon_client_identity::ClientChannel;
+
+    #[test]
+    fn origin_channel_wins_over_the_lane_channel() {
+        // 车道是 desktop，这一轮由 CLI 续聊：User-Agent 必须跟着续聊那一端走。
+        let context = serde_json::json!({"channel": "desktop", "originChannel": "cli"});
+        assert_eq!(client_channel_of(Some(&context)), ClientChannel::Cli);
+    }
+
+    #[test]
+    fn every_background_entry_has_its_own_channel() {
+        for (token, expected) in [
+            ("webhook", ClientChannel::Webhook),
+            ("cron", ClientChannel::Cron),
+            ("goal", ClientChannel::Goal),
+            ("tui", ClientChannel::Tui),
+            ("desktop", ClientChannel::Desktop),
+            ("cli", ClientChannel::Cli),
+        ] {
+            let context = serde_json::json!({"channel": "desktop", "originChannel": token});
+            assert_eq!(
+                client_channel_of(Some(&context)),
+                expected,
+                "入口 {token} 必须解析成自己的渠道"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_payload_falls_back_to_the_lane_channel() {
+        let context = serde_json::json!({"channel": "tui"});
+        assert_eq!(client_channel_of(Some(&context)), ClientChannel::Tui);
+        assert_eq!(client_channel_of(None), ClientChannel::Cli);
+    }
 }
