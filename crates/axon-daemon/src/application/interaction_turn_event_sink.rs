@@ -2,6 +2,7 @@
 //!
 //! 流式增量只走内存实时通道；落库只发生在语义边界（工具调用前后、流结束、轮次收口），
 //! 边界上把累积正文压成一条快照事件，因此回放等价而写量从「每增量一行」降到「每边界一行」。
+//! 用量帧同理：实时侧逐帧投递，落库只留每条 provider 流的最后一条。
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -14,12 +15,14 @@ use axon_session_runtime::{
 };
 use serde_json::Value;
 
-use super::interaction_turn_generation_watch::{TurnGenerationWatch, usage_payload};
+use super::interaction_turn_generation_watch::TurnGenerationWatch;
 use crate::application::egress_bridge::CommittedEventEgress;
 use crate::application::event_stream_bridge::LiveStreamEvent;
 
 #[path = "interaction_turn_event_frame_class.rs"]
 mod frame_class;
+#[path = "interaction_turn_event_replay_copy.rs"]
+mod replay_copy;
 #[path = "interaction_turn_event_signals.rs"]
 mod signals;
 #[path = "interaction_turn_event_usage.rs"]
@@ -29,6 +32,7 @@ use frame_class::{
     FrameClass, LivePartKind, annotate_live_event, assistant_part_key, classify_frame,
     live_part_text,
 };
+use replay_copy::PendingReplayCopy;
 use signals::{compute_application_ttft_ms, is_turn_terminal};
 
 /// 一个正在累积的正文 part。
@@ -59,6 +63,8 @@ pub(super) struct RuntimeTurnEventSink<'a, S, P, C> {
     ///
     /// 数值不从这里取：整轮 token 由生成账本按流累加，这里只留形状与快照类字段。
     last_usage_payload: Mutex<Option<Value>>,
+    /// 待落库的过程读数：同一条 provider 流只保留最后一条，收口时一次写入。
+    pending_replay_copy: Mutex<Option<PendingReplayCopy>>,
     /// 已落库的用量快照：同值不再重复写，省掉一次事务。
     last_committed_usage: Mutex<Option<Value>>,
     /// 本轮生成账本：provider 流式窗口与累计输出。
@@ -143,6 +149,7 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             performance,
             subagent_session_sinks,
             last_usage_payload: Mutex::new(None),
+            pending_replay_copy: Mutex::new(None),
             last_committed_usage: Mutex::new(None),
             generation_watch: Mutex::new(TurnGenerationWatch::default()),
             started_at_ms: std::time::SystemTime::now()
@@ -291,7 +298,9 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
         S: RuntimeStore + Send + Sync,
         C: RuntimeClock,
     {
-        self.flush_live_parts()
+        self.flush_live_parts()?;
+        self.flush_replay_copy();
+        Ok(())
     }
 
     /// 逐帧分派：实时帧立即投递，语义事件先落边界快照再落库。
@@ -314,15 +323,16 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
                     }
                 }
                 FrameClass::Snapshot => {
-                    // 实时侧先看增量，再补一份可回放的副本：两条通道不是同一份投递。
+                    // 实时侧逐帧投递，落库只留这条流的最后一条：两条通道不是同一份投递。
                     // 复用已标注的那一份载荷，同一帧不必再解析一次 JSON。
                     let payload_json = self.publish_live_frame(event, None)?;
-                    self.commit_replay_copy(event, &payload_json);
+                    self.stage_replay_copy(event, payload_json);
                 }
                 FrameClass::Durable => {
-                    // 边界：先用快照把已累积的正文落库，再提交这个语义事件。
+                    // 边界：先用快照把已累积的正文与用量读数落库，再提交这个语义事件。
                     self.retire_part_for(event);
                     self.flush_live_parts()?;
+                    self.flush_replay_copy();
                     let terminal = is_turn_terminal(event);
                     // 终态与它派生的指标同批落盘：一次控制面事务、一次 fsync。
                     let metrics = if terminal {
@@ -340,6 +350,8 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
                 }
             }
             if self.take_stream_settled() {
+                // 流收口：这条流最后一条用量读数落一次库，再补一帧实时指标。
+                self.flush_replay_copy();
                 // 每收口一条 provider 流就补一帧实时指标，指标帧失败不影响本轮投递。
                 super::interaction_turn_payloads::publish_stream_settled_generation(
                     self,
@@ -497,48 +509,6 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             )
             .map(|_| ())
             .map_err(|error| error.to_string())
-    }
-
-    /// 给可回放的过程读数补一份持久副本。
-    ///
-    /// 载荷由调用方复用实时投递那一份（已带 `interactionId`），这里不再解析第二遍。
-    /// 不走正文 part 的累积与边界切分；同值快照不重复写；写失败只告警。
-    fn commit_replay_copy(&self, event: &RuntimeEvent, payload: &str)
-    where
-        S: RuntimeStore + Send + Sync,
-        C: RuntimeClock,
-    {
-        let body = usage_payload(payload);
-        if let Some(body) = &body {
-            let last = self
-                .last_committed_usage
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if last.as_ref() == Some(body) {
-                return;
-            }
-        }
-        match self.store.append_interaction_events(
-            self.session_id,
-            self.host,
-            self.interaction_id,
-            self.lease_token,
-            &[(event.event_type.clone(), payload.to_owned())],
-            self.clock.now_ms(),
-        ) {
-            Ok(_) => {
-                // 只有落库成功才记下这份快照：写失败时后续同值帧仍然值得再试一次。
-                if let Some(body) = body {
-                    *self
-                        .last_committed_usage
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(body);
-                }
-            }
-            Err(error) => {
-                axon_logger::warning(&format!("用量帧持久化失败（不影响本轮）: {error:?}"));
-            }
-        }
     }
 
     /// 终态正文到达后丢掉同名累积：它的全文已经由这条事件承载，不必再写快照。

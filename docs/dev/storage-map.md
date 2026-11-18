@@ -373,7 +373,7 @@ Schema 身份常量 `SCHEMA_IDENTITY = "jarvis-runtime-goal-v1"`：`.../schema.r
 | --- | --- | --- | --- | --- |
 | Primary Turn durable sink `commit_and_publish_slice` | `crates/axon-daemon/src/application/interaction_turn_event_sink.rs:469-479` | `append_interaction_events` | 单个 `Durable` 帧（`std::slice::from_ref`，`:207`）| Daemon 主 turn；只在语义边界落库 |
 | Primary Turn 边界快照冲刷 `flush_live_parts` → `commit_durable_only` | `.../interaction_turn_event_sink.rs:309-351`、`:354-374` | `append_interaction_events` | 每个累积正文 part 1 行（`:324-346`）；空排空直接返回（`:319-321`） | Daemon 主 turn；工具调用前后、流结束、轮次收口等边界 |
-| 用量快照补持久副本 `commit_replay_copy` | `.../interaction_turn_event_sink.rs:380-416` | `append_interaction_events` | 1 | Daemon 主 turn；同值快照跳过（`:387-394`） |
+| 用量快照补持久副本 `stage_replay_copy` → `flush_replay_copy` | `.../interaction_turn_event_sink.rs:524-536`、`:538-586` | `append_interaction_events` | 每条 provider 流 1 行（流收口、语义事件前、轮次边界各冲刷一次） | Daemon 主 turn；流内逐帧只做内存替换，同值快照跳过 |
 | `InteractionTurnRunner` 逐帧提交 | `crates/axon-daemon/src/application/interaction_turn_runner.rs:299-309` | `append_interaction_events` | `payloads` 全部（该次收集到的帧） | Daemon 主 turn 运行器 |
 | 执行会话 sink `ExecutionSessionSink::publish` | `crates/axon-daemon/src/application/execution_session_sink.rs:69-89` | `append_events` | 1 | Daemon 后台执行（goal/cron 执行会话） |
 | 子代理会话 sink `ChildSessionSink::publish` | `crates/axon-daemon/src/application/child_session_event_sink.rs:66-81` | `append_events` | 1 | Daemon 子代理会话（先 `create_session` `:39-41`） |
@@ -389,13 +389,13 @@ Schema 身份常量 `SCHEMA_IDENTITY = "jarvis-runtime-goal-v1"`：`.../schema.r
 **是否有节流或批处理窗口**：
 
 - 仓储层：无时间窗、无定时 flush、无写入队列。每次 `append_*` 调用即一次 IMMEDIATE 事务 + 一次 `commit()`。
-- 帧级节流在上层 `RuntimeTurnEventSink::dispatch`（`crates/axon-daemon/src/application/interaction_turn_event_sink.rs:179-226`）：按 `classify_frame`（`crates/axon-daemon/src/application/interaction_turn_event_frame_class.rs:44-79`）把帧分成四类：
-  - `LivePart`（`reasoningDelta`、`delta=true` 的 `assistantMessage`）→ 只进内存累积缓冲（`:188-190`、`:278-306`）；
-  - `LiveOnly`（`providerStatus`）→ 只走实时通道，`remember=true` 时留可补发副本（`:191-196`、`:262-276`）；
-  - `Snapshot`（`usageUpdate`）→ 实时 + 一次持久副本（`:197-202`、`:380-416`）；
-  - `Durable` → 先 `retire_part_for` + `flush_live_parts`，再 `commit_and_publish_slice`（`:203-214`）。
-- 因此每个 turn 的 `session_events` 行数 ≈ 语义事件数 + 正文 part 快照数 + 用量快照数，与 token/增量帧数解耦（设计说明见 `.../interaction_turn_event_sink.rs:1-6`）。
-- 唯一显式节流计数是「同值用量快照不重复写」：`.../interaction_turn_event_sink.rs:387-394`。
+- 帧级节流在上层 `RuntimeTurnEventSink::dispatch`（`crates/axon-daemon/src/application/interaction_turn_event_sink.rs:313-368`）：按 `classify_frame`（`crates/axon-daemon/src/application/interaction_turn_event_frame_class.rs:45-80`）把帧分成四类：
+  - `LivePart`（`reasoningDelta`、`delta=true` 的 `assistantMessage`）→ 只进内存累积缓冲（`:322-324`、`:421-449`）；
+  - `LiveOnly`（`providerStatus`）→ 只走实时通道，`remember=true` 时留可补发副本（`:325-330`、`:404-419`）；
+  - `Snapshot`（`usageUpdate`）→ 逐帧走实时通道，持久副本只在流收口/边界冲刷一次（`:331-336`、`:524-586`）；
+  - `Durable` → 先 `retire_part_for` + `flush_live_parts` + `flush_replay_copy`，再 `commit_and_publish_slice`（`:337-357`）。
+- 因此每个 turn 的 `session_events` 行数 ≈ 语义事件数 + 正文 part 快照数 + 每条 provider 流一条用量快照，与 token/增量帧数解耦（设计说明见 `.../interaction_turn_event_sink.rs:1-7`）。
+- 节流计数有两处：「同值用量快照不重复写」与「同一条流内后到的用量帧覆盖先到的」（`.../interaction_turn_event_sink.rs:538-586`）。
 
 ### 3.3 三条运行形态下的写入归属
 

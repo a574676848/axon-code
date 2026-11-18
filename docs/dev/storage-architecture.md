@@ -80,7 +80,7 @@ Schema 定义在 `crates/axon-session/src/infrastructure/sqlite_runtime_store/sc
 | --- | --- | --- |
 | `LivePart` | `reasoningDelta`、`assistantMessage` 且 `delta=true` | **不逐帧落库**：只走实时投递并累积，到语义边界由 `flush_live_parts` 落一条快照 |
 | `LiveOnly` | `providerStatus` | 只走实时，另留一份可补发副本（内存） |
-| `Snapshot` | `usageUpdate` | 实时投递 + 一份持久副本 |
+| `Snapshot` | `usageUpdate` | 实时逐帧投递；每条 provider 流收口时落一条持久副本（同一条流只留最后一条读数） |
 | `Durable` | 其余全部 kind | 先 `retire_part_for` + `flush_live_parts`，再落这一条语义事件 |
 
 也就是说"正文增量逐帧入库"这个问题**在代码里已经被修掉了**。§1.5 的 186 万行是修复上线之前的历史存量，不能当作当前写入速率的证据。

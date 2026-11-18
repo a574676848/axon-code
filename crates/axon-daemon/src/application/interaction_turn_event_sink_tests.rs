@@ -390,3 +390,160 @@ fn turn_metrics_output_tokens_follow_the_ledger_not_the_speed_window() {
     // 因此本轮不给速率，绝不能拿累加 token 去除一个不覆盖它们的窗口。
     assert_eq!(metrics.generation_speed_tps, None);
 }
+
+/// 用量帧按 token 逐帧投递，但持久面只留每条 provider 流的最后一条。
+///
+/// 真实一轮里 96% 的事件都是用量快照（同一条流把累计值推了几百上千次）。这条用例钉住
+/// 两件事：实时通道确实逐帧投递（界面读数不受影响），落库只保留每条流的收口读数
+/// （回放读数不丢、事件面不再被每 token 一行撑大）。
+#[test]
+fn usage_frames_reach_the_live_channel_but_only_the_stream_tail_is_persisted() {
+    const STREAMS: usize = 3;
+    const FRAMES_PER_STREAM: usize = 120;
+
+    let root = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::from_root(root.path().join("data"));
+    let clock = AdvancingClock::new(1_000);
+    let host_id = RuntimeHostId::new("host-usage-coalesce").expect("Host ID");
+    let host = store
+        .claim_host(&host_id, 1, None, clock.now_ms(), 60_000)
+        .expect("注册 Host");
+    let session_id = DaemonSessionId::new("session-usage-coalesce").expect("Session ID");
+    store
+        .create_session(&session_id, "/workspace", clock.now_ms())
+        .expect("创建会话");
+    let interaction = InteractionRecord::new(
+        axon_domain::DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V1W").expect("合法会话 ID"),
+        InteractionId::new("interaction-usage-coalesce").expect("Interaction ID"),
+        InteractionSource::new("cli", "message-usage-coalesce").expect("来源"),
+        ScopeRef::global(),
+        AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly),
+        ReplyRoute::new("cli", "terminal").expect("回复路由"),
+        "跑一轮",
+        clock.now_ms(),
+    )
+    .expect("Interaction");
+    let interaction_id = interaction.interaction_id.clone();
+    store.append(&interaction).expect("追加 Interaction");
+    let lease = store
+        .claim_processing_by_id(&interaction_id, clock.now_ms(), 60_000)
+        .expect("领取 Interaction")
+        .expect("应领取到一条待处理 Interaction");
+
+    let published = Arc::new(Mutex::new(Vec::new()));
+    let publisher = RecordingPublisher {
+        published: Arc::clone(&published),
+    };
+    let bridge = EventStreamBridge::new();
+    // 实时通道必须先订阅：桥接按订阅投递，容量要容得下这轮全部用量帧。
+    let subscription = bridge
+        .subscribe_session_with_capacity(session_id.clone(), None, 2_048)
+        .expect("订阅实时通道");
+    let sink = RuntimeTurnEventSink::new(
+        &store,
+        CommittedEventEgress::new(&publisher, &bridge),
+        &host,
+        &session_id,
+        &interaction_id,
+        &lease.lease_token,
+        &clock,
+        None,
+        Arc::new(ChildSessionSinkFactory {
+            store: store.clone(),
+            host: host.clone(),
+            clock: clock.clone(),
+            stream_bridge: Arc::new(EventStreamBridge::new()),
+        }),
+    );
+
+    for stream in 0..STREAMS {
+        sink.publish(&runtime_event(
+            "wire_event",
+            wire_payload(
+                "turnLifecycle",
+                json!({"status": "started", "kind": "StreamingStarted"}),
+            ),
+        ))
+        .expect("流开始应落库");
+        for frame in 0..FRAMES_PER_STREAM {
+            sink.publish(&runtime_event(
+                "wire_event",
+                wire_payload(
+                    "usageUpdate",
+                    json!({
+                        "inputTokens": 100,
+                        "outputTokens": u64::try_from(stream * FRAMES_PER_STREAM + frame + 1).expect("帧序号"),
+                    }),
+                ),
+            ))
+            .expect("用量帧应投递");
+        }
+        sink.publish(&runtime_event(
+            "wire_event",
+            wire_payload(
+                "turnLifecycle",
+                json!({"status": "completed", "kind": "StreamingCompleted"}),
+            ),
+        ))
+        .expect("流收口应落库");
+    }
+    sink.publish(&runtime_event(
+        "turn_completed",
+        json!({ "interactionId": interaction_id.as_str(), "response": "答案" }).to_string(),
+    ))
+    .expect("终态事件应落库");
+
+    // 实时通道：每一帧用量都投递过，界面读数不受影响。
+    let mut live_usage = 0_usize;
+    while let Ok(notification) = subscription.try_recv() {
+        if let crate::StreamNotification::LiveEvent(event) = notification
+            && event.payload_json.contains("\"usageUpdate\"")
+        {
+            live_usage += 1;
+        }
+    }
+    assert_eq!(
+        live_usage,
+        STREAMS * FRAMES_PER_STREAM,
+        "实时通道必须逐帧投递用量"
+    );
+
+    // 持久面：每条流只留最后一条。
+    let events = store
+        .replay_events(&session_id, 0, 1_024)
+        .expect("回放事件");
+    let persisted_usage = events
+        .iter()
+        .filter(|event| {
+            event.event_type == "wire_event" && event.payload_json.contains("\"usageUpdate\"")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        persisted_usage.len(),
+        STREAMS,
+        "一条 provider 流只该落一条用量快照"
+    );
+    let tail: Value =
+        serde_json::from_str(&persisted_usage[STREAMS - 1].payload_json).expect("载荷应合法");
+    assert_eq!(
+        tail["kind"]["payload"]["outputTokens"],
+        json!(u64::try_from(STREAMS * FRAMES_PER_STREAM).expect("帧数")),
+        "落库的必须是这条流的最后一条读数"
+    );
+
+    // 读数不变：整轮 token 仍按流累加，与落库条数无关。
+    let metrics_event = events
+        .iter()
+        .find(|event| event.event_type == "turn_metrics")
+        .expect("终态应派生一条指标事件");
+    let metrics: axon_eventlog::TurnMetrics =
+        serde_json::from_str(&metrics_event.payload_json).expect("指标载荷应可解析");
+    let stream_tails = (1..=STREAMS)
+        .map(|stream| stream * FRAMES_PER_STREAM)
+        .sum::<usize>();
+    assert_eq!(
+        metrics.output_tokens,
+        u64::try_from(stream_tails).expect("总输出"),
+        "按流累加的整轮输出不得因收口而变"
+    );
+}

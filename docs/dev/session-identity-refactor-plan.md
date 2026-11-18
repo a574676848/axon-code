@@ -462,7 +462,8 @@ W10 是三端用户可见回归，依赖 W4 与 W5 完成后才能全量开跑�
 | W9.3 | 已完成 | 订阅放行缓存按会话标识定容（1024）并带 TTL（30 秒）与受众边界，入站与订阅共用同一份判定；会话级订阅关闭即回收该会话条目，TTL 到期同样回表。用例覆盖订阅存活期间重复放行不回表、TTL 到期回表、关闭后回表 |
 | W9.4 | 已完成 | 写放大复核 + 并发用例。`apply_turn_metrics` 在同一个 `IMMEDIATE` 事务内完成「读旧行 → 内存累加 → 一次 UPSERT 写回」，`channel_mix_json` 只在这一处累加一次；作业计数走 `apply_job_delta` 的纯 SQL 算术 UPSERT（`jobs_started = jobs_started + excluded.jobs_started`），不做二次读改写。`apply_projections` 只对 `turn_metrics` 事件调用，不按帧调用。新增 `turn_projection_accumulates_atomically_within_one_transaction`：8 线程各 20 轮共 160 轮并发写入后 `turn_count`、活动耗时与渠道分布都精确等于 160，证明读改写同事务且渠道分布不重复累加。单轮实际写入耗时并入 W9.1 基线 |
 | W9.5 | 已完成 | ULID 单调有序，主键插入位置单调前进；单测覆盖同毫秒递增 |
-| W9.6 | 待执行 | 事件量治理（用量快照收口一条）未做 |
+| W9.6 | 已完成 | 用量快照改「逐帧实时投递 + 每流收口落一条持久副本」：`FrameClass::Snapshot` 分支只把载荷暂存（`stage_replay_copy`，一次内存替换，不做 JSON 解析、不碰库），落库推迟到三个边界（provider 流收口、语义事件前、轮次边界）由 `flush_replay_copy` 一次写入，同值快照仍去重。热路径因此从「每 token 一次 IMMEDIATE 事务 + fsync」变成「每 token 一次内存替换」。用例 `usage_frames_reach_the_live_channel_but_only_the_stream_tail_is_persisted`：3 条流各 120 帧（共 360 帧）时实时通道仍投递 360 帧、持久面只落 3 条（每条流最后一条读数）、`turn_metrics` 输出仍为按流累加的 720，读数不变。真机单轮帧数实测见 W9.1 |
+
 | W9.7 | 待执行 | 性能回归门禁脚本未写 |
 | W10.1 | 待执行 | TUI `/sessions` 未真机回归 |
 | W10.2 | 待执行 | TUI 选中切换未真机回归 |
