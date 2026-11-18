@@ -1490,6 +1490,9 @@ pwsh -File scripts/install-from-source.ps1 -Components all
 | 断线重连 | 桌面端断网重连后视图与在线态一致 |
 | 磁盘下降 | 同等工作量下运行态目录小于现状的 10% |
 | 会话列表首屏 | 一次索引查找出结果，不扫事件表；500 条上限内 p95 < 30 ms（本机实测口径见 `tools/verify-performance.ps1`） |
+| 打开会话首屏 | 尾窗索引页读取 < 300 ms（`interaction_history_page(tail=true)`，20 轮 × 200 帧口径，实测 37 至 78 ms） |
+| 单次入站 | 会话存在性校验为一次主键点查，p95 < 1 ms（实测 p95 0.0118 至 0.0731 ms） |
+| 订阅放行 | 帧路零查库，命中进程内缓存 p95 < 50 µs（实测 p95 0.3 至 0.9 µs） |
 | 测试隔离 | 全仓测试运行结束后 `$HOME/.axon/data` 无新增文件；真机验收只写 `AXON_RUNTIME_ROOT` 临时根 |
 
 ## 10. 风险与决策点

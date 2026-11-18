@@ -465,7 +465,8 @@ W10 是三端用户可见回归，依赖 W4 与 W5 完成后才能全量开跑�
 | W9.5 | 已完成 | ULID 单调有序，主键插入位置单调前进；单测覆盖同毫秒递增 |
 | W9.6 | 已完成 | 用量快照改「逐帧实时投递 + 每流收口落一条持久副本」：`FrameClass::Snapshot` 分支只把载荷暂存（`stage_replay_copy`，一次内存替换，不做 JSON 解析、不碰库），落库推迟到三个边界（provider 流收口、语义事件前、轮次边界）由 `flush_replay_copy` 一次写入，同值快照仍去重。热路径因此从「每 token 一次 IMMEDIATE 事务 + fsync」变成「每 token 一次内存替换」。用例 `usage_frames_reach_the_live_channel_but_only_the_stream_tail_is_persisted`：3 条流各 120 帧（共 360 帧）时实时通道仍投递 360 帧、持久面只落 3 条（每条流最后一条读数）、`turn_metrics` 输出仍为按流累加的 720，读数不变。真机单轮帧数实测见 W9.1 |
 
-| W9.7 | 待执行 | 性能回归门禁脚本未写 |
+| W9.7 | 已完成 | 四项基线全部接入 `tools/verify_performance.py`：新增 `session_first_screen_ms`、`inbound_session_lookup_p95_ms`、`subscription_admission_cached_us` 三条 Rust 测量项（各自对应 W9.1 的 `#[ignore]` 用例），与既有 `sessions_first_page_ms` 一起进 `HARD_LIMITS`（30 / 300 / 1 / 50）与 `REGRESSION_FLOOR`（2 / 10 / 0.05 / 2）。门禁现判定 7 项硬上限、全部通过；`--record` 已把本机读数写回 `tools/perf-baseline.json`（会话列表 2ms、首屏 37ms、入站 p95 0.0118ms、放行 p95 0.3µs、事件 p99 1.339ms、控制面 p95 0.411ms、data 1.53MiB）。负向探针：把首屏上限临时改成 1.0 后门禁输出「session_first_screen_ms = 42.0 / 上限 1.0 → 超限」并以退出码 1 收尾，恢复 300.0 后重新通过。控制面事务 p95 基线由 0.226ms 漂到 0.411ms（存储重写后本机抖动区间 0.39 至 0.50ms，仍低于上限 50ms 两个数量级），噪声下限与抖动说明已同步更新 |
+
 | W10.1 | 待执行 | TUI `/sessions` 未真机回归 |
 | W10.2 | 待执行 | TUI 选中切换未真机回归 |
 | W10.3 | 待执行 | CLI `--session` 续接未真机回归 |

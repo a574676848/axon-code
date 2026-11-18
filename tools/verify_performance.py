@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """性能契约门禁的跨平台实现（对应 tools/perf-baseline.json）。
 
-存储架构 §9 的四项硬上限全部由本脚本产出读数：
+存储架构 §9 的四项硬上限与会话身份重构 §10.1 的三项已量化红线全部由本脚本产出读数：
 - 事件写入 p99 与控制面事务 p95 由 Rust 侧 ignored 测量用例打印，脚本解析后比对；
 - 会话列表首屏由 CLI 的索引验收用例打印；
+- 打开会话首屏（尾窗索引页）由 CLI 的历史帧页用例打印；
+- 单次入站的会话存在性校验由 axon-session 的主键点查用例打印；
+- 订阅放行的缓存命中由 axon-daemon 的放行缓存用例打印；
 - 运行态 data 目录体积直接扫描本机安装树。
 桌面端 P2/P9/P10/P11 属于真机交互读数，只能人工登记。
 
@@ -43,13 +46,17 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 REGRESSION_RATIO = 1.05
 # 相对回退的噪声下限：毫秒级读数的 1 毫秒抖动就是 100%，只看比例会把测量噪声
 # 判成回退。因此回退必须同时越过比例与绝对增量两道线。下限按各指标在本机的实测
-# 抖动设定（背靠背复测的离散区间）：event p99 1.22~1.49ms、控制面 p95 0.15~0.24ms
-# （负载尖峰 0.52ms）、首屏 1~2ms（读数以整毫秒量化）。下限刻意贴近抖动区间，
-# 不能更大：下限一旦超过基线值的一半，相对判定就再也无法在 1.5 倍基线前报警。
+# 抖动设定（背靠背复测的离散区间）：event p99 1.22~1.49ms、控制面 p95 0.39~0.50ms
+# （存储重写前的旧读数 0.15~0.24ms，负载尖峰 0.52ms）、首屏 1~2ms（读数以整毫秒
+# 量化）。下限刻意贴近抖动区间，不能更大：下限一旦超过基线值的一半，相对判定就再也
+# 无法在 1.5 倍基线前报警。
 REGRESSION_FLOOR = {
     "event_append_p99_ms": 0.5,
     "control_tx_p95_ms": 0.15,
     "sessions_first_page_ms": 2.0,
+    "session_first_screen_ms": 10.0,
+    "inbound_session_lookup_p95_ms": 0.05,
+    "subscription_admission_cached_us": 2.0,
     "runtime_data_mib": 8.0,
     "p2_offline_start_ms": 150.0,
     "p10_cold_start_ms": 150.0,
@@ -58,11 +65,15 @@ REGRESSION_FLOOR = {
     "p11_upload_32mib_ms": 5.0,
     "p9_idle_cpu_percent": 0.5,
 }
-# §9 的绝对上限：读数超过它就是不合格，与「相对基线回退」是两道独立检查。
+# §9 的绝对上限与会话身份 §10.1 的已量化红线：读数超过它就是不合格，与「相对基线
+# 回退」是两道独立检查。会话列表（sessions_first_page_ms）同时属于两组契约。
 HARD_LIMITS = {
     "event_append_p99_ms": 5.0,
     "control_tx_p95_ms": 50.0,
     "sessions_first_page_ms": 30.0,
+    "session_first_screen_ms": 300.0,
+    "inbound_session_lookup_p95_ms": 1.0,
+    "subscription_admission_cached_us": 50.0,
     "runtime_data_mib": 50.0,
 }
 GATEWAY_PREFIXES = ("/api/v1/files", "/api/v1/fs/dirs", "/api/v1/attachments")
@@ -114,6 +125,51 @@ RUST_MEASUREMENTS = (
             "--nocapture",
         ],
         r"indexed=([0-9]+)ms",
+    ),
+    (
+        "session_first_screen_ms",
+        [
+            "cargo",
+            "test",
+            "-p",
+            "axon-cli",
+            "--lib",
+            "--",
+            "--ignored",
+            "session_first_screen",
+            "--nocapture",
+        ],
+        r"session_first_screen_ms=([0-9.]+)",
+    ),
+    (
+        "inbound_session_lookup_p95_ms",
+        [
+            "cargo",
+            "test",
+            "-p",
+            "axon-session",
+            "--lib",
+            "--",
+            "--ignored",
+            "inbound_session_lookup",
+            "--nocapture",
+        ],
+        r"inbound_session_lookup_p95_ms=([0-9.]+)",
+    ),
+    (
+        "subscription_admission_cached_us",
+        [
+            "cargo",
+            "test",
+            "-p",
+            "axon-daemon",
+            "--lib",
+            "--",
+            "--ignored",
+            "cached_subscription_admission",
+            "--nocapture",
+        ],
+        r"subscription_admission_cached_us=([0-9.]+)",
     ),
 )
 RUST_COMMANDS = {
