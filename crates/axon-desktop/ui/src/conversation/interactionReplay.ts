@@ -4,14 +4,15 @@
  * 正文的事实源只有一条：durable 帧。分页回放、展开与增量接管都从这里取帧，取回来一律
  * 交给与实时流同一个归约器（`applyFrames`），因此不存在第二套单元构造。
  *
- * 三件事在这里定死：
+ * 四件事在这里定死：
  *
  * 1. **从头按页推进**，直到补到该 Interaction 的 durable 尾。只取尾窗会丢掉这一轮
- *    最前面的思考与工具帧（推理总在最前面写），正文因此只剩最终一段。
- * 2. **单轮预算**。逐页从头部读，超过预算就退化成一次尾窗读取：宁可少一段过程，
- *    也不能把打开会话拖成几十次串行往返。退化时只投递尾窗，绝不把已经读过的头部
- *    与尾窗叠着投两遍（推理帧是追加语义，叠一遍就是重复正文）。
- * 3. **代次在每页之后复核**。目标已经切走时立刻放弃，半截正文不会落进新目标。
+ *    最前面的用户消息、提问与工具帧（推理总在最前面写），正文因此只剩最终一段。
+ * 2. **用量快照按流压缩**。一条 provider 流会连发几百上千条同形快照，而归约器只在流
+ *    收口时读最后一条；逐帧投递等于把九成以上的解压与归约成本花在会被立刻覆盖的数据上。
+ * 3. **页数有上限**。逐页从头部读，超过上限就退化成「首页 + 尾窗」：首页保住这一轮的
+ *    抬头（用户消息、提问、最早的动作），尾窗保住最终结论与终态帧，中间一段如实略过。
+ * 4. **代次在每页之后复核**。目标已经切走时立刻放弃，半截正文不会落进新目标。
  *
  * 这一层不持有状态、不碰 React，分页口径由 `tests/interaction-replay.test.mjs` 钉住。
  */
@@ -28,12 +29,26 @@ import type { ConversationStreamEvent } from './wire';
 export const HISTORY_PAGE_FRAMES = 1_000;
 
 /**
- * 单轮的帧预算。
+ * 单轮最多读多少页。
  *
- * 实测一条 40 轮的车道共 12.4 万帧，摊到单轮约 3 千帧，四千帧足够覆盖绝大多数轮次；
- * 超过预算的轮次退化成尾窗读取，打开会话的网络与内存开销因此有确定的上界。
+ * 事件流里绝大多数帧是 `usageUpdate` 快照：实测一条 9.7 秒的轮次共 14543 帧，其中
+ * 14006 帧（96.3%）是它，真正带正文的不足 4%。快照在本层按流压缩成最后一帧之后，
+ * 页数才是仅剩的成本边界。四十页足够覆盖一条极长的轮次；超过就不再多读，改用
+ * 「首页 + 尾窗」，绝不重演「只交尾窗、开头整段消失」。
  */
-export const HISTORY_REPLAY_BUDGET = 4_000;
+export const HISTORY_REPLAY_PAGES = 40;
+
+/** 用量快照帧在 wire 契约里的类型名。 */
+const USAGE_WIRE_TYPE = 'usageUpdate';
+
+/**
+ * 用量快照帧的载荷标记。
+ *
+ * 分页一页就是上千帧，逐帧 `JSON.parse` 只为判断类型是净亏；wire 信封里类型只以
+ * `"type":"usageUpdate"` 这一种写法出现，用标记直接判掉。判错的后果（漏压缩或误压缩）
+ * 由 `interaction-replay` 的压缩等价用例兜住：压缩前后过同一个归约器必须深相等。
+ */
+const USAGE_PAYLOAD_MARKER = `"${USAGE_WIRE_TYPE}"`;
 
 /** 历史帧页的来源；缺省走 IPC，测试注入替身以钉住分页口径。 */
 export type HistoryPageFetcher = (
@@ -66,6 +81,69 @@ function streamFrame(
   };
 }
 
+/** 是否为用量快照帧。 */
+export function isUsageSnapshot(frame: ConversationStreamEvent): boolean {
+  if (frame.kind !== 'frame') return false;
+  return frame.eventType === 'wire_event' && frame.payloadJson.includes(USAGE_PAYLOAD_MARKER);
+}
+
+/** 是否为终态帧；订阅确认一类非帧事件一律不算。 */
+function isTerminalStreamEvent(frame: ConversationStreamEvent): boolean {
+  return frame.kind === 'frame' && isTerminal(frame.eventType);
+}
+
+/**
+ * 把连续的用量快照压成最后一帧。
+ *
+ * 归约器按流记账：流内的快照是覆盖语义，只在流收口（`StreamingStarted` /
+ * `StreamingCompleted`）时读最后一条。因此同一段连续快照里只留最后一条，喂进归约器的
+ * 结果逐字段相同，而被丢掉的全是被后一条覆盖掉的中间态。
+ */
+export function compactUsageSnapshots(
+  frames: readonly ConversationStreamEvent[],
+): ConversationStreamEvent[] {
+  const kept: ConversationStreamEvent[] = [];
+  let pending: ConversationStreamEvent | null = null;
+  for (const frame of frames) {
+    if (isUsageSnapshot(frame)) {
+      pending = frame;
+      continue;
+    }
+    if (pending !== null) {
+      kept.push(pending);
+      pending = null;
+    }
+    kept.push(frame);
+  }
+  if (pending !== null) kept.push(pending);
+  return kept;
+}
+
+/**
+ * 首页与尾窗按游标合并。
+ *
+ * 两段正常情况下互不相交；窄轮次里尾窗会与首页重叠，因此按游标去重，绝不把同一帧
+ * 投两遍（推理帧是追加语义，叠一遍就是重复正文）。
+ */
+function mergeWithoutOverlap(
+  head: readonly ipc.HistoryFrame[],
+  tail: readonly ipc.HistoryFrame[],
+): ipc.HistoryFrame[] {
+  const merged = [...head];
+  const seen = new Set<string>();
+  for (const frame of head) {
+    if (frame.cursor !== null) seen.add(frame.cursor);
+  }
+  for (const frame of tail) {
+    if (frame.cursor !== null) {
+      if (seen.has(frame.cursor)) continue;
+      seen.add(frame.cursor);
+    }
+    merged.push(frame);
+  }
+  return merged;
+}
+
 /** 一轮帧的读取结论。 */
 export interface InteractionFrames {
   /** 可直接喂给 `applyFrames` 的帧，按 durable 顺序。 */
@@ -74,6 +152,8 @@ export interface InteractionFrames {
   cursor: string | null;
   /** 这一轮是否已经收口。 */
   settled: boolean;
+  /** 中段是否被页数上限略过：界面据此如实说明，而不是假装这一轮只有这些内容。 */
+  truncated: boolean;
 }
 
 /** 读帧的接缝。 */
@@ -114,44 +194,62 @@ export async function readInteractionFrames(
   if (options.tailOnly === true) {
     const tail = await fetchPage(interactionId, 0, limit, true);
     if (stale()) return null;
+    const frames = compactUsageSnapshots(
+      tail.events.map((frame) => streamFrame(subscribeId, frame)),
+    );
     return {
-      frames: tail.events.map((frame) => streamFrame(subscribeId, frame)),
+      frames,
       cursor: tail.tailCursor,
-      settled: tail.events.some((frame) => isTerminal(frame.eventType)),
+      settled: frames.some(isTerminalStreamEvent),
+      truncated: tail.hasMore,
     };
   }
 
   if (options.headOnly === true) {
     const head = await fetchPage(interactionId, 0, limit, false);
     if (stale()) return null;
+    const frames = compactUsageSnapshots(
+      head.events.map((frame) => streamFrame(subscribeId, frame)),
+    );
     return {
-      frames: head.events.map((frame) => streamFrame(subscribeId, frame)),
+      frames,
       cursor: head.tailCursor,
-      settled: head.events.some((frame) => isTerminal(frame.eventType)),
+      settled: frames.some(isTerminalStreamEvent),
+      truncated: head.hasMore,
     };
   }
 
   let page = await fetchPage(interactionId, 0, limit, false);
   if (stale()) return null;
+  const first = page;
   let frames = [...page.events];
-  let read = frames.length;
-  while (page.hasMore && read < HISTORY_REPLAY_BUDGET) {
+  let pages = 1;
+  while (page.hasMore && pages < HISTORY_REPLAY_PAGES) {
     page = await fetchPage(interactionId, page.nextAfter, limit, false);
     if (stale()) return null;
     frames = frames.concat(page.events);
-    read += page.events.length;
+    pages += 1;
   }
   let cursor = page.tailCursor;
+  let truncated = false;
   if (page.hasMore) {
-    // 单轮帧数超过预算：只保留尾窗（其中一定有终态与最终正文），并改用它的订阅游标。
+    /*
+     * 页数用尽：保留首页与尾窗。首页里是这一轮的抬头（用户消息、提问、最早的动作），
+     * 尾窗里是最后的动作、结论与终态帧；中间一段如实略过并标记出来。
+     */
     const tail = await fetchPage(interactionId, 0, limit, true);
     if (stale()) return null;
-    frames = [...tail.events];
+    frames = mergeWithoutOverlap(first.events, tail.events);
     cursor = tail.tailCursor;
+    truncated = true;
   }
+  const streamed = compactUsageSnapshots(
+    frames.map((frame) => streamFrame(subscribeId, frame)),
+  );
   return {
-    frames: frames.map((frame) => streamFrame(subscribeId, frame)),
+    frames: streamed,
     cursor,
-    settled: frames.some((frame) => isTerminal(frame.eventType)),
+    settled: streamed.some(isTerminalStreamEvent),
+    truncated,
   };
 }

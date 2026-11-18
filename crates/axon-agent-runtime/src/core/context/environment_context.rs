@@ -39,6 +39,12 @@ pub struct EnvironmentContext {
     ///
     /// 只给事实，不给用法：这些字段由技能与文档解释，避免提示词随命令面变化而失效。
     pub session_channel: Option<String>,
+    /// 本轮所属会话车道的完整标识。
+    ///
+    /// 这是客户端订阅、查询与校验所用的同一个串，也是车道身份的最终键。只给
+    /// channel 与 destination，模型无法在任何工具里指名「当前这条会话」：它只能
+    /// 猜，而猜出来的东西一旦被当真就写进 durable 记录。
+    pub session_id: Option<String>,
     /// 本轮所属会话车道的目标标识。
     pub session_destination: Option<String>,
     /// 当前会话所属的 Workspace。
@@ -98,6 +104,11 @@ impl EnvironmentContext {
             footer,
         );
         // 会话事实排在时间与 shell 之前：预算不足时它们是最后才该被丢弃的信息。
+        append_complete_line(
+            &mut lines,
+            format_line("session_id", self.session_id.as_deref()),
+            footer,
+        );
         append_complete_line(
             &mut lines,
             format_line("session_channel", self.session_channel.as_deref()),
@@ -256,6 +267,7 @@ mod tests {
                 "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe".to_owned(),
             ),
             terminal: Some("WindowsTerminal".to_owned()),
+            session_id: Some("session-session-env-fixture".to_owned()),
             session_channel: Some("desktop".to_owned()),
             session_destination: Some("workbench-1".to_owned()),
             session_workspace: Some("workspace-1".to_owned()),
@@ -404,6 +416,7 @@ mod tests {
             architecture: "x86_64".to_owned(),
             shell: Some("/bin/bash".to_owned()),
             terminal: Some("xterm-256color".to_owned()),
+            session_id: None,
             session_channel: None,
             session_destination: None,
             session_workspace: None,

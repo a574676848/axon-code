@@ -46,6 +46,14 @@ pub(super) fn cli_environment_context(
         shell: Some(axon_agent_runtime::default_shell_program()),
         terminal: first_environment_value(&["TERM_PROGRAM", "TERM"]),
         session_channel: field("channel"),
+        /*
+         * 会话车道标识：与客户端订阅、查询与作答校验用的是同一个串。
+         *
+         * 唯一来源是投递信封的 `primarySessionId`，即 daemon 按「工作区、受众、渠道、
+         * 投递目标」四元组规范化后派生的车道键（`session_id_for_route`）。缺这个字段
+         * 就不注入：模型宁可不指名，也不该拿猜出来的串去写记录。
+         */
+        session_id: field("primarySessionId"),
         session_destination: field("destination"),
         session_workspace: field("workspaceId"),
         notification_chat_id: notification_chat_id

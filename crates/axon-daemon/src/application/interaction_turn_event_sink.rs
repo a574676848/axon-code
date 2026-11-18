@@ -73,6 +73,8 @@ pub(super) struct RuntimeTurnEventSink<'a, S, P, C> {
     started_at_ms: u64,
     /// 本轮指标是否已落事件：每轮只写一条。
     turn_metrics_emitted: std::sync::atomic::AtomicBool,
+    /// 收尾时已算好的整轮读数；为空表示还没算（失败路径不经过收尾观测）。
+    turn_readout: Mutex<Option<TurnFinalReadout>>,
 }
 
 /// 收尾指标需要的用量快照。
@@ -95,6 +97,23 @@ pub(super) struct TurnGenerationReadout {
     /// 本轮实测输出 token；没有可测样本时为 0。
     pub(super) output_tokens: u64,
     /// 本轮实测推理输出 token；没有可测样本时为 0。
+    pub(super) reasoning_output_tokens: u64,
+}
+
+/// 一轮收口时的终态读数。
+///
+/// `turn_metrics` 与 `turn_completed.generation` 讲的是同一轮的两份读数，必须同源：
+/// 各自再算一次会给出互相矛盾的结论（实测同一轮一处写 10.6K 输出，另一处只写 214），
+/// 而 `session_metrics` 由前者派生，错的那一刻就固化进会话累计。
+#[derive(Debug, Clone, Copy)]
+pub(super) struct TurnFinalReadout {
+    /// 整轮墙钟耗时：从这一轮真正开始跑算到收口，不是事件接收器的建造时刻。
+    pub(super) active_ms: u64,
+    /// 首字延迟。
+    pub(super) ttft_ms: Option<u64>,
+    /// 本轮实测输出 token。
+    pub(super) output_tokens: u64,
+    /// 本轮实测推理输出 token。
     pub(super) reasoning_output_tokens: u64,
 }
 
@@ -132,7 +151,19 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
                     u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
                 }),
             turn_metrics_emitted: std::sync::atomic::AtomicBool::new(false),
+            turn_readout: Mutex::new(None),
         }
+    }
+
+    /// 记下这一轮收口时的整轮读数，供 `turn_metrics` 与终态载荷共用同一份事实。
+    ///
+    /// 只有收尾观测那一步知道整轮到底跑了多久、生成了多少 token；`turn_metrics` 在
+    /// 终态批次里生成时复用它，两处不再各算一遍。
+    pub(super) fn record_final_readout(&self, readout: TurnFinalReadout) {
+        *self
+            .turn_readout
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(readout);
     }
 
     /// 发布本轮的收尾观测帧。
@@ -197,14 +228,27 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .unwrap_or_default();
-        let active_ms = now_ms.saturating_sub(self.started_at_ms);
-        let generate_ms = readout
-            .ttft_ms
+        /*
+         * 整轮读数优先取收尾观测已定稿的那一份。
+         *
+         * 现算一遍的结果取决于此刻样本落齐到什么程度，而收尾观测是这一轮最后的
+         * 机会；两者不一致时，界面上 `耗时` 与 `累计` 会各说一套。墙钟同理：事件
+         * 接收器的建造时刻不是这一轮的开始时刻，进程重启或重派之后它会晚一大截。
+         */
+        let final_readout = *self
+            .turn_readout
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let active_ms = final_readout
+            .map_or_else(|| now_ms.saturating_sub(self.started_at_ms), |final_| final_.active_ms);
+        let ttft_ms = final_readout.and_then(|final_| final_.ttft_ms).or(readout.ttft_ms);
+        let output_tokens = final_readout.map_or(readout.output_tokens, |final_| final_.output_tokens);
+        let reasoning_tokens =
+            final_readout.map_or(readout.reasoning_output_tokens, |final_| final_.reasoning_output_tokens);
+        let generate_ms = ttft_ms
             .unwrap_or(0)
             .saturating_add(readout.decode_ms.unwrap_or(0));
-        let generated_tokens = readout
-            .output_tokens
-            .saturating_add(readout.reasoning_output_tokens);
+        let generated_tokens = output_tokens.saturating_add(reasoning_tokens);
         let speed = if readout.decode_ms.unwrap_or(0) > 0 && generated_tokens > 0 {
             Some((generated_tokens as f64) * 1_000.0 / (readout.decode_ms.unwrap_or(1) as f64))
         } else {
@@ -212,13 +256,13 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
         };
         let metrics = axon_eventlog::TurnMetrics {
             turn_id: self.interaction_id.as_str().to_owned(),
-            ttft_ms: readout.ttft_ms,
+            ttft_ms,
             active_ms,
             provider_duration_ms: generate_ms,
             tool_ms: active_ms.saturating_sub(generate_ms),
             input_tokens: usage.input_tokens,
-            output_tokens: readout.output_tokens,
-            reasoning_tokens: readout.reasoning_output_tokens,
+            output_tokens,
+            reasoning_tokens,
             cache_read_tokens: usage.cached_input_tokens,
             cache_write_tokens: usage.cache_write_input_tokens,
             generation_speed_tps: speed,

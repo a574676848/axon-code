@@ -25,6 +25,7 @@ import {
   applyTurnSummary,
   seedTurnReadings,
   settleTurn,
+  upsertCell,
   type IndexReadings,
   type TurnSummaryFacts,
 } from './transcript/turns';
@@ -56,6 +57,9 @@ export function historySource(item: { channel?: string; client?: string }): stri
  * 不叠索引骨架：骨架里那条合成的用户消息与帧里的真实用户消息各成一格，正文里就会
  * 出现两个一样的气泡。附件与来源从索引贴进来，帧里没有这两样东西；分割线的读数以
  * 索引里的 `turn_metrics` 定稿，回放只负责把过程正文长回来。
+ *
+ * 回放因页数上限只取到「首页 + 尾窗」时，这一轮中间一段是真的没有读到；`truncated`
+ * 就是那件事，界面上要如实说一句，而不是把略过的过程当成从没发生过。
  */
 export function projectFrames(
   interactionId: string,
@@ -63,6 +67,7 @@ export function projectFrames(
   facts: HistoryFacts | undefined,
   reading: TurnMetricsReading | undefined,
   fallbackElapsedMs: number | null,
+  truncated = false,
 ): { turn: TurnState; jobs: JobRow[] } {
   let state = conversationReducer(INITIAL_CONVERSATION, {
     type: 'open-turn',
@@ -82,14 +87,26 @@ export function projectFrames(
   if (turn === undefined) {
     return { turn: state.turns[0], jobs: state.jobs };
   }
+  const observed = truncated ? upsertCell(turn, truncationCell(interactionId)) : turn;
   const settled =
-    turn.status === 'streaming' || turn.status === 'pending'
-      ? settleTurn(turn, 'completed', turn.elapsedMs ?? fallbackElapsedMs)
-      : turn;
+    observed.status === 'streaming' || observed.status === 'pending'
+      ? settleTurn(observed, 'completed', observed.elapsedMs ?? fallbackElapsedMs)
+      : observed;
   const seeded = seedTurnReadings(settled, readingFactsOf(reading));
   return {
     turn: applyTurnSummary(seeded, turnSummaryFacts(reading, fallbackElapsedMs, seeded)),
     jobs: state.jobs,
+  };
+}
+
+/** 中段被页数上限略过时的一句如实说明：不冒充过程完整。 */
+function truncationCell(interactionId: string): TranscriptCell {
+  return {
+    id: `${interactionId}:truncated`,
+    role: 'notice',
+    title: '过程已截断',
+    summary: '这一轮的过程过长，中间一段没有读回来；开头的用户消息与最近的记录都在。',
+    tone: 'info',
   };
 }
 

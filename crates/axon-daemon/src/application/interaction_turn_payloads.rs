@@ -80,6 +80,16 @@ pub(super) fn publish_turn_performance(
         return None;
     }
     let generation = turn_generation_metrics(sink, readout);
+    /*
+     * 同一次读数同时定稿成整轮读数：`turn_metrics` 复用它，两处不再各算一遍。
+     * 墙钟取调用方给的整轮耗时，不从接收器的建造时刻推算。
+     */
+    sink.record_final_readout(super::interaction_turn_event_sink::TurnFinalReadout {
+        active_ms: total_ms,
+        ttft_ms,
+        output_tokens: readout.output_tokens,
+        reasoning_output_tokens: readout.reasoning_output_tokens,
+    });
     // 观测帧按广播投递：会话级路由键与订阅端登记的键不必同源，
     // 而帧本身带 turnId，接收端据此即可确认归属，靠广播最不容易丢。
     let frame = axon_domain::RuntimeObservationFrame::new(now_ms, "", interaction_id.as_str())

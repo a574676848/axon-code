@@ -243,11 +243,14 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
    * 两条路径不能叠：索引骨架里那条合成的用户消息会与帧里的真实用户消息各成一格，
    * 而骨架自带的收口帧又会先把这一轮判成结束，让随后的回放帧另起一轮（实测表现为
    * 「打开会话后最新一轮的过程行整段不见、上下文读数也空着」）。因此这里二选一。
+   *
+   * `truncated` 是回放自己交回来的事实：这一轮中间一段没读到，正文要如实标一句。
    */
   const projectTurn = useCallback(
     (
       entry: HistoryEntry,
       frames: readonly ConversationStreamEvent[] | null,
+      truncated = false,
     ): { turn: TurnState; jobs: JobRow[] } => {
       if (frames !== null && frames.length > 0) {
         return projectFrames(
@@ -256,6 +259,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
           factsRef.current.get(entry.interactionId),
           readingsRef.current.get(entry.interactionId),
           entry.elapsedMs ?? null,
+          truncated,
         );
       }
       let state = conversationReducer(INITIAL_CONVERSATION, {
@@ -364,7 +368,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
           generation: () => generationRef.current,
         });
         if (read !== null && generation === generationRef.current) {
-          const projected = projectTurn(newest, read.frames);
+          const projected = projectTurn(newest, read.frames, read.truncated);
           dispatch({
             type: 'replace-turn',
             turn: projected.turn,
@@ -452,7 +456,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
         generation: () => generationRef.current,
       });
       if (read !== null && generation === generationRef.current) {
-        const projected = projectTurn(newest, read.frames);
+        const projected = projectTurn(newest, read.frames, read.truncated);
         dispatch({
           type: 'replace-turn',
           turn: projected.turn,
@@ -505,6 +509,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
             factsRef.current.get(interactionId),
             readingsRef.current.get(interactionId),
             null,
+            read.truncated,
           );
           dispatch({
             type: 'replace-turn',

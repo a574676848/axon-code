@@ -58,7 +58,14 @@ pub(crate) enum ToolKind {
 pub(crate) struct ToolOrchestratorContext {
     pub(crate) config_path: Option<PathBuf>,
     pub(crate) cwd: PathBuf,
+    /// 执行域的数值会话身份（车道标识的稳定数值摘要）。
+    ///
+    /// 只用于那些必须按数值索引的内部归属：作用域派生、工具调度、作业 owner。
+    /// **一切跨出进程、要给客户端看或要写进 durable 事件流的会话标识，一律取
+    /// [`Self::thread_session_id`]**：客户端按车道串订阅、查询与校验，拿摘要去写会让
+    /// 查询恒为空、校验恒不匹配。用户问答曾在这里取错字段而整条通道失效。
     pub(crate) session_id: SessionId,
+    /// 车道标识，即客户端可见、可订阅、可查询的那个会话串。
     pub(crate) thread_session_id: String,
     pub(crate) cell_id: CellId,
     pub(crate) model_messages: Vec<axon_agent_runtime::AgentModelMessage>,

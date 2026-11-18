@@ -410,7 +410,16 @@ fn execute_ask_user_question(
     let record = axon_domain::UserQuestionRecord {
         question_id: format!("uq-{}", uuid::Uuid::new_v4()),
         idempotency_key: format!("idem-{}-{}", context.session_id.0, tool_call.id),
-        session_id: context.session_id.0.to_string(),
+        /*
+         * 车道标识，不是取标识的数值摘要。
+         *
+         * 这条记录的读者是客户端：它按订阅与查询所用的同一个串（`GET
+         * /api/v1/sessions/{sessionId}/questions`、作答路由的车道校验）来对账，
+         * 提问事件也按这个串落进会话事件流。写成 `context.session_id`（
+         * `stable_numeric_id` 的摘要）会让三方全对不上：查询恒为空，作答被判车道不符，
+         * 回放里也永远没有这一问。
+         */
+        session_id: context.thread_session_id.clone(),
         interaction_id: context.cell_id.0.to_string(),
         turn_id,
         tool_call_id: tool_call.id.clone(),
