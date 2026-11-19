@@ -15,7 +15,7 @@ use rusqlite::{Connection, OptionalExtension as _, TransactionBehavior, params};
 
 const CRON_RUNTIME_DIR: &str = "cron";
 const CRON_DATABASE_FILE: &str = "cron.sqlite3";
-const CRON_DATABASE_SCHEMA_VERSION: i64 = 2;
+const CRON_DATABASE_SCHEMA_VERSION: i64 = 3;
 const CRON_BUSY_TIMEOUT_MS: u64 = 5_000;
 const CRON_CLAIM_LEASE_MS: u64 = 120_000;
 const CRON_HEARTBEAT_MS: u64 = 30_000;
@@ -369,6 +369,38 @@ impl CronRepository {
             )
             .map_err(db_error("创建 Cron 模型配置表"))?;
         Ok(connection)
+    }
+
+    /// 读任务创建时绑定的 cron 会话标识；从未绑定过时返回 `None`。
+    ///
+    /// 绑定存在 cron 自己的任务行上，而不是 `sessions.execution_id`：后者记的是
+    /// 「当前这一轮是谁」，每次执行都会被运行侧覆写，当稳定键用必然丢绑定。
+    pub(crate) fn session_id(&self, job_id: &str) -> Result<Option<String>, String> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT session_id FROM cron_jobs WHERE job_id = ?1",
+                [job_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(db_error("读取 cron 会话绑定"))
+            .map(Option::flatten)
+    }
+
+    /// 写入任务绑定的 cron 会话标识；任务行不存在时显式失败，避免绑定静默丢失。
+    pub(crate) fn set_session_id(&self, job_id: &str, session_id: &str) -> Result<(), String> {
+        let connection = self.connection()?;
+        let changed = connection
+            .execute(
+                "UPDATE cron_jobs SET session_id = ?2 WHERE job_id = ?1",
+                params![job_id, session_id],
+            )
+            .map_err(db_error("写入 cron 会话绑定"))?;
+        if changed == 0 {
+            return Err(format!("cron 任务不存在，无法写入会话绑定：{job_id}"));
+        }
+        Ok(())
     }
 
     pub(crate) fn latest_run_for_job(&self, job_id: &str) -> Result<Option<CronRunRecord>, String> {

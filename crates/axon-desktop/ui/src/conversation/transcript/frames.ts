@@ -211,9 +211,17 @@ function applyWireEvent(
   /*
    * 独立会话（目标执行、cron）一轮一条轮次：上一条已经收口时，新的用户消息
    * 就是下一轮的开场。没有这条规则，后台跑几轮都会挤进同一条轮次里。
+   *
+   * 轮次标识优先用帧里的 Interaction 标识：索引骨架轮就以它为标识，若改用
+   * 用户消息的 partId（`user:<action-id>`），同一轮会先有一份骨架、再长出一份帧轮，
+   * 正文里就会出现两条一样的用户消息。
    */
   if (incomingUser !== null && state.turns.length > 0 && !hasOpenTurn(state)) {
-    state = openTurn(state, incomingUser.partId, envelope.recordedAtMs);
+    state = openTurn(
+      state,
+      envelope.interactionId ?? incomingUser.partId,
+      envelope.recordedAtMs,
+    );
   }
   if (state.turns.length === 0) {
     if (incomingUser === null && question === null) return state;

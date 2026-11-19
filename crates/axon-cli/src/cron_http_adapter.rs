@@ -74,13 +74,6 @@ impl CronHttpAdapter {
         CronRepository::open(&self.axon_root)
     }
 
-    /// 运行态库句柄：会话标识只在控制面的 `sessions` 表里存在。
-    fn runtime_store(&self) -> Result<axon_session::SqliteRuntimeStore, CronHttpError> {
-        let data_root = crate::runtime_paths::runtime_axon_data_path_static(&self.config_path)
-            .map_err(CronHttpError::internal)?;
-        Ok(axon_session::SqliteRuntimeStore::from_root(data_root))
-    }
-
     fn response(result: Result<serde_json::Value, CronHttpError>) -> GatewayHttpResponse {
         match result {
             Ok(payload) => GatewayHttpResponse::json(200, &payload),
@@ -163,13 +156,11 @@ impl CronHttpAdapter {
             crate::cron_commands::cron_agent_config(&self.config_path, &destination)?
         };
         // 自动化列表里的「进入会话」读的是任务创建时就绑定好的那条 cron 会话：
-        // 绑定点是 `sessions.execution_id = job_id`（唯一），不按时间挑「最近一条」，
-        // 也不会指向该 Workspace 最近活跃的 primary 会话（那是用户的对话）。
-        let session_id = self.runtime_store().ok().and_then(|store| {
-            crate::cron_commands::find_cron_session(&store, &job.job_id)
-                .ok()
-                .flatten()
-        });
+        // 绑定事实源是 cron 库的绑定表，不按时间挑「最近一条」，也不会指向该
+        // Workspace 最近活跃的 primary 会话（那是用户的对话）。
+        let session_id = crate::cron_commands::find_cron_session(&self.axon_root, &job.job_id)
+            .ok()
+            .flatten();
         let mut payload =
             serde_json::to_value(&job).map_err(|e| CronHttpError::internal(e.to_string()))?;
         if let Some(object) = payload.as_object_mut() {

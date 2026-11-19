@@ -12,7 +12,7 @@ use axon_session::{RuntimeStore, RuntimeStoreError};
 
 use super::runtime_store;
 use super::workbench_http_targets::session_owns_owner;
-use crate::run_commands::run_thread_children::child_session_rows;
+use crate::run_commands::run_thread_children::{child_session_rows, is_internal_agent_path};
 
 /// 子代理会话在名册里的 slug：代理路径去掉开头斜杠、层级用下划线连接。
 ///
@@ -96,6 +96,14 @@ pub(super) fn session_subagents_payload(
         let runtime = session_of_thread
             .get(&row.session_id)
             .and_then(|session_id| runtimes.get(session_id.as_str()));
+        // 运行侧内务子代理（自迭代、反思、语义显著度）由轮后治理派生，不是用户要的
+        // 委派：它们没有可进入的逐字稿，出现在名册里只会得到一条空视图。
+        if runtime
+            .and_then(|record| record.agent_path.as_deref())
+            .is_some_and(is_internal_agent_path)
+        {
+            continue;
+        }
         let slug = runtime
             .as_ref()
             .and_then(|record| record.agent_path.as_deref())

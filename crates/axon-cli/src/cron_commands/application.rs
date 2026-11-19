@@ -322,14 +322,15 @@ fn create_job(
         Some(require_next_run(&schedule, created_at_ms)?),
     )
     .map_err(|error| error.to_string())?;
-    // 创建即绑定会话：CLI 与桌面共用这一处，任务一存在就有自己那条 cron 会话。
+    // 先落任务行，再绑定会话：绑定写在 `cron_jobs.session_id` 列上，行不存在时
+    // 兜不住（写入会被静默丢掉）。创建即绑定，任务一出现就有自己那条 cron 会话。
+    repository.save_job(&job)?;
     super::session_binding::bind_new_job_session(
         adapter.config_path(),
         adapter.axon_root(),
         &job,
         created_at_ms,
     )?;
-    repository.save_job(&job)?;
     report(adapter, CRON_STATUS_CREATED, &[job], Vec::new(), 0, false)
 }
 

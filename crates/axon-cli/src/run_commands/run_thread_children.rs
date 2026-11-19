@@ -11,6 +11,19 @@ use axon_session::{
 
 use super::run_session_store::resolved_axon_root;
 
+/// 运行侧内务子代理的 agent 路径段前缀。
+///
+/// 自迭代、反思与语义显著度都按这个前缀派生子任务；它们不是用户要的子代理，
+/// 名册与子代理视图都不得把它们当成可进入的委派。
+pub(crate) const SELF_ITERATION_AGENT_PREFIX: &str = "self_iteration";
+
+/// 该 agent 路径是否属于运行侧内务子代理。
+pub(crate) fn is_internal_agent_path(agent_path: &str) -> bool {
+    agent_path
+        .split('/')
+        .any(|segment| segment.starts_with(SELF_ITERATION_AGENT_PREFIX))
+}
+
 /// 子代理会话来源：用户可见的委派。
 pub(crate) const CHILD_SESSION_ORIGIN_DELEGATED: &str = "delegated";
 /// 子代理会话来源：运行侧内务（自迭代、反思、语义显著度）。

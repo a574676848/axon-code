@@ -38,7 +38,8 @@ const CRON_JOBS_CREATE_SQL: &str = "CREATE TABLE cron_jobs (
         (json_extract(payload_json, '$.createdAtMs')) VIRTUAL,
     updated_at_ms INTEGER NOT NULL,
     claim_id TEXT,
-    claim_until_ms INTEGER
+    claim_until_ms INTEGER,
+    session_id TEXT
 );";
 
 const CRON_JOBS_INDEX_SQL: &str = "CREATE INDEX IF NOT EXISTS idx_cron_jobs_due ON cron_jobs(status, next_run_at_ms, claim_until_ms);";
@@ -69,6 +70,7 @@ const CRON_JOBS_SPEC: TableSpec = TableSpec {
         "updated_at_ms",
         "claim_id",
         "claim_until_ms",
+        "session_id",
     ],
     generated_columns: &["created_at_ms"],
     writable_columns: &[
@@ -80,6 +82,7 @@ const CRON_JOBS_SPEC: TableSpec = TableSpec {
         ("updated_at_ms", "0"),
         ("claim_id", "NULL"),
         ("claim_until_ms", "NULL"),
+        ("session_id", "NULL"),
     ],
 };
 

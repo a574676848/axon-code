@@ -24,10 +24,10 @@ use super::{
         RunSubagentCompletionSink, RunSubagentExecutionInput, RunSubagentExecutionOutput,
         RunSubagentExecutionStatus, RunSubagentModelIntent,
     },
+    run_thread_children::SELF_ITERATION_AGENT_PREFIX,
     run_turn_outcome::build_turn_outcome,
 };
 
-const SELF_ITERATION_AGENT_PREFIX: &str = "self_iteration";
 const SELF_ITERATION_AGENT_ROLE: &str = "self_iteration";
 const SELF_ITERATION_MEMORY_SUMMARY: &str = "自闭环记忆更新";
 const SELF_ITERATION_EXECUTOR_UNAVAILABLE: &str = "自我迭代子代理执行器不可用";
@@ -398,13 +398,10 @@ fn complete_self_iteration_setup_failure(
 
 /// 该 agent 路径是否属于运行侧内务子代理（自迭代、反思、语义显著度）。
 ///
-/// 判据只看 agent 路径里的段名前缀：`self_iteration_*` 是轮后治理自己派出去的
-/// 子任务，不是用户要的子代理。命名来源是本文件的 `SELF_ITERATION_AGENT_PREFIX`，
-/// 与 spawn 时的 `task_name` 同源，因此不靠会话标识拼串去猜。
+/// 判据与名册共用 `run_thread_children::is_internal_agent_path`：命名来源是
+/// spawn 时的 `task_name`，因此不靠会话标识拼串去猜。
 pub(super) fn is_internal_agent_path(path: &AgentPath) -> bool {
-    path.as_str()
-        .split('/')
-        .any(|segment| segment.starts_with(SELF_ITERATION_AGENT_PREFIX))
+    super::run_thread_children::is_internal_agent_path(path.as_str())
 }
 
 fn self_iteration_spawn_request(

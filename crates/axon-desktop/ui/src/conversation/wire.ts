@@ -100,6 +100,8 @@ export interface WireEventEnvelope {
   schemaVersion: string;
   eventId: string;
   correlationId: string;
+  /** 这一帧所属的 Interaction；后台注入轮（cron、目标回调）靠它与索引轮对齐。 */
+  interactionId?: string;
   session: { sessionId: string; runId?: string; parentSessionId?: string };
   sequence: number;
   recordedAtMs: number;

@@ -76,7 +76,10 @@ test('Axon 内置工具都落在既有类别里，不会掉进兜底', () => {
         ['builtin.spawn_agent', 'subagents'],
         ['builtin.delegate_to_fast', 'subagents'],
         ['builtin.send_message', 'subagents'],
-        ['builtin.goal_start', 'plan'],
+        ['builtin.goal_create', 'goalCreate'],
+        ['builtin.goal_update', 'goal'],
+        ['builtin.goal_start', 'goal'],
+        ['builtin.goal_cancel', 'goal'],
         ['builtin.update_plan', 'plan'],
         ['builtin.ask_user_question', 'questions'],
         ['builtin.memory_search', 'memory'],
@@ -89,6 +92,19 @@ test('Axon 内置工具都落在既有类别里，不会掉进兜底', () => {
         assert.ok(category.length > 0);
     }
 });
+test('创建目标与更新计划是两件事，摘要不混用', () => {
+    assert.equal(
+        processSummary([cell('g', 'tool', { toolName: 'builtin.goal_create' })]),
+        '创建了目标',
+        '创建目标不能写成「更新了计划」',
+    );
+    assert.equal(
+        processSummary([cell('p', 'plan')]),
+        '更新了计划',
+        '真正的计划更新仍写「更新了计划」',
+    );
+});
+
 test('回放替换单元：有过程折成一行，没有过程就不插空抬头', () => {
     const plain = emptyTurn('interaction-plain', 1_000);
     const plainCells = [

@@ -153,7 +153,8 @@ export function applyUserMessage(
       (cell) =>
         cell.role === 'user' &&
         (cell.id.startsWith('local-user:') || cell.id.startsWith(LOCAL_STEER_PREFIX)) &&
-        cell.text === visible,
+        // 索引骨架与 durable 帧可能只在首尾空白上不同：比较可见正文，不比较原始串。
+        cell.text.trim() === visible.trim(),
     );
     if (optimistic !== undefined) {
       const cells = turn.cells.map((cell) => {
