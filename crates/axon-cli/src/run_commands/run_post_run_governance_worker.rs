@@ -131,7 +131,6 @@ impl DurableGovernancePayload {
 fn payload_agent_identity(payload: &DurableGovernancePayload) -> RunAgentIdentity {
     match payload.agent_identity.as_deref() {
         Some("primary_workspace") => RunAgentIdentity::PrimaryWorkspace,
-        Some("goal_execution_subagent") => RunAgentIdentity::GoalExecutionSubagent,
         _ => RunAgentIdentity::PrimaryPrivate,
     }
 }

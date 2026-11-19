@@ -8,6 +8,11 @@ use crate::ports::{
 };
 use axon_domain::DaemonSessionId;
 
+/// 根会话标识：生产侧由 `new_session_id()` 生成，形态固定为 ULID。
+const ROOT_SESSION: &str = "01J8XQ7K3M4N5P6Q7R8S9T0V1W";
+const ROOT_A: &str = "01J8XQ7K3M4N5P6Q7R8S9T0V2W";
+const ROOT_B: &str = "01J8XQ7K3M4N5P6Q7R8S9T0V3W";
+
 fn store() -> (axon_test_support::TestTempDir, SqliteRuntimeStore) {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
@@ -28,7 +33,7 @@ fn root_session(store: &SqliteRuntimeStore, session_id: &str) -> DaemonSessionId
 #[test]
 fn subagent_session_is_a_ulid_with_root_and_agent_path() {
     let (_directory, store) = store();
-    let root = root_session(&store, "root-session");
+    let root = root_session(&store, ROOT_SESSION);
     let resolved = store
         .resolve_subagent_session(&SubagentSessionRequest {
             root_session_id: root.clone(),
@@ -54,7 +59,7 @@ fn subagent_session_is_a_ulid_with_root_and_agent_path() {
 #[test]
 fn resolving_the_same_agent_path_returns_the_same_session() {
     let (_directory, store) = store();
-    let root = root_session(&store, "root-session");
+    let root = root_session(&store, ROOT_SESSION);
     let request = SubagentSessionRequest {
         root_session_id: root.clone(),
         agent_path: "root/delegate".to_owned(),
@@ -75,8 +80,8 @@ fn resolving_the_same_agent_path_returns_the_same_session() {
 #[test]
 fn different_roots_or_paths_get_different_sessions() {
     let (_directory, store) = store();
-    let root_a = root_session(&store, "root-a");
-    let root_b = root_session(&store, "root-b");
+    let root_a = root_session(&store, ROOT_A);
+    let root_b = root_session(&store, ROOT_B);
     let base = SubagentSessionRequest {
         root_session_id: root_a.clone(),
         agent_path: "root/delegate".to_owned(),
@@ -103,7 +108,7 @@ fn different_roots_or_paths_get_different_sessions() {
 #[test]
 fn find_subagent_session_does_not_create_anything() {
     let (_directory, store) = store();
-    let root = root_session(&store, "root-session");
+    let root = root_session(&store, ROOT_SESSION);
     assert!(
         store
             .find_subagent_session(&root, "root/missing")
@@ -121,6 +126,30 @@ fn find_subagent_session_does_not_create_anything() {
         })
         .expect("计数");
     assert_eq!(subagents, 0);
+}
+
+/// 根会话列只收会话 ULID：Thread 标识是 36 位 UUID，混进来会让子代理永远找不到父会话。
+#[test]
+fn subagent_root_rejects_thread_uuid_instead_of_mixing_identity_spaces() {
+    let (_directory, store) = store();
+    let thread_id =
+        DaemonSessionId::new("5f0b8c1e-2a3d-4e5f-8a9b-0c1d2e3f4a5b".to_owned()).expect("非空");
+    let error = store
+        .resolve_subagent_session(&SubagentSessionRequest {
+            root_session_id: thread_id.clone(),
+            agent_path: "root/delegate".to_owned(),
+            cwd: "E:/repo".to_owned(),
+            now_ms: 20,
+        })
+        .expect_err("Thread 标识不得充当根会话");
+    assert!(error.to_string().contains("ULID"), "{error}");
+    // 拒绝发生在唯一写入口：库里不会留下这条既找不到父会话、又占着唯一键的行。
+    assert!(
+        store
+            .find_subagent_session(&thread_id, "root/delegate")
+            .expect("查询成功")
+            .is_none()
+    );
 }
 
 #[test]

@@ -126,12 +126,38 @@ pub(crate) fn parse_action_status(value: &str) -> SessionActionStatus {
     }
 }
 
+/// 子代理会话的根会话列只认会话标识。
+///
+/// `root_session_id` 表达「属于哪条会话」。Thread 标识是 36 位 UUID，一旦混进来，按
+/// `(root_session_id, agent_path)` 认子代理的查询就会静默落空，界面看到一条永远找不到
+/// 父会话的子会话。校验放在唯一写入口，CLI、daemon 与测试都绕不过去。
+fn ensure_root_session_column(request: &NewSessionRequest) -> Result<(), RuntimeStoreError> {
+    if request.kind != SessionKind::Subagent {
+        return Ok(());
+    }
+    let Some(root) = request.root_session_id.as_ref() else {
+        return Err(RuntimeStoreError::Storage(
+            "子代理会话缺少根会话标识".to_owned(),
+        ));
+    };
+    if crate::application::is_ulid(root.as_str()) {
+        return Ok(());
+    }
+    Err(RuntimeStoreError::Storage(format!(
+        "子代理根会话标识必须是会话 ULID，收到 {} 位文本：{}",
+        root.as_str().chars().count(),
+        root.as_str()
+    )))
+}
+
 impl SqliteRuntimeStore {
     pub(crate) fn create_session_impl(
         &self,
         request: &NewSessionRequest,
     ) -> Result<crate::domain::runtime::SessionRuntimeRecord, RuntimeStoreError> {
         self.initialize()?;
+        // 关系列的口径在写入口一次判死：读侧与索引都假设它们是会话标识或代理路径。
+        ensure_root_session_column(request)?;
         let current_run_id = Uuid::new_v4().to_string();
         // 代理路径在这一处归一：任何写入口都不会因为开头斜杠不同而落下两份身份。
         let agent_path = request.agent_path.as_deref().map(normalize_agent_path);

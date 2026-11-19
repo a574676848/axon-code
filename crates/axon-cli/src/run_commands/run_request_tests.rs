@@ -82,7 +82,7 @@ fn run_request_uses_configured_control_limits() {
 }
 
 #[test]
-fn goal_execution_subagent_runs_fast_model_without_main_turn_reasoning() {
+fn background_fast_subagent_runs_fast_model_without_main_turn_reasoning() {
     let workspace = axon_test_support::test_temp_root().join(format!(
         "axon-run-task-execution-{}",
         std::time::SystemTime::now()
@@ -155,7 +155,7 @@ fn goal_execution_subagent_runs_fast_model_without_main_turn_reasoning() {
     };
 
     let primary = build(RunAgentIdentity::PrimaryPrivate);
-    let execution = build(RunAgentIdentity::GoalExecutionSubagent);
+    let execution = build(RunAgentIdentity::BackgroundFastSubagent);
 
     assert_eq!(primary.model.id, "main-model");
     assert_eq!(primary.reasoning_effort.as_deref(), Some("high"));
@@ -166,12 +166,12 @@ fn goal_execution_subagent_runs_fast_model_without_main_turn_reasoning() {
         RunAgentIdentity::PrimaryWorkspace.memory_disclosure_policy(),
         axon_domain::DisclosurePolicy::Workspace
     );
-    // 后台 Goal Execution 与 fast 子代理一致：fast 模型、不继承主 turn 思考强度、不加载 Soul。
+    // 后台快速执行子代理：fast 模型、不继承主 turn 思考强度、不加载 Soul。
     assert_eq!(execution.model.id, "fast-model");
     assert_eq!(execution.reasoning_effort, None);
-    assert!(!RunAgentIdentity::GoalExecutionSubagent.includes_user_soul());
+    assert!(!RunAgentIdentity::BackgroundFastSubagent.includes_user_soul());
     assert_eq!(
-        RunAgentIdentity::GoalExecutionSubagent.memory_disclosure_policy(),
+        RunAgentIdentity::BackgroundFastSubagent.memory_disclosure_policy(),
         axon_domain::DisclosurePolicy::Workspace
     );
     let context_text = |request: &RunRequest| {

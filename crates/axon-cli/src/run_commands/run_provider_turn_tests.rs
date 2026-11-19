@@ -8,8 +8,8 @@ use axon_session_runtime::{ProviderTurnRequest, RuntimeProfile};
 use serde_json::{Value, json};
 use std::path::Path;
 
-/// `work_items.kind` 默认值：后台 Goal Execution 的持久 Action 类型。
-const GOAL_EXECUTION_ACTION_KIND: &str = "turn";
+/// `work_items.kind` 默认值：后台轮的持久 Action 类型（cron、shell 唤醒与目标执行共用）。
+const BACKGROUND_TURN_ACTION_KIND: &str = "turn";
 
 /// 真机样本：中继回 response.failed 不给 code，渠道链已尝试 2 次。
 ///
@@ -134,8 +134,8 @@ fn provider_turn_identity_follows_action_kind() {
         RunAgentIdentity::PrimaryPrivate
     );
     assert_eq!(
-        run_agent_identity(&provider_turn_request(GOAL_EXECUTION_ACTION_KIND)),
-        RunAgentIdentity::GoalExecutionSubagent
+        run_agent_identity(&provider_turn_request(BACKGROUND_TURN_ACTION_KIND)),
+        RunAgentIdentity::BackgroundFastSubagent
     );
 }
 

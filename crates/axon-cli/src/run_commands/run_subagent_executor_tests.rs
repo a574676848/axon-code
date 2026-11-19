@@ -72,7 +72,7 @@ fn fixture_environment(config_path: PathBuf) -> ProviderRunSubagentEnvironment {
     ProviderRunSubagentEnvironment {
         config,
         config_path,
-        parent_session_id: "parent-session".to_owned(),
+        parent_session_id: "01J8XQ7K3M4N5P6Q7R8S9T0V4W".to_owned(),
         parent_run_session_id: "parent-window".to_owned(),
         cwd,
         provider: provider.clone(),

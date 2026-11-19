@@ -373,7 +373,7 @@ fn latest_execution_points_at_the_execution_child_session() {
         trust_scope: axon_session::SessionTrustScope::Private,
         workspace_id: None,
         root_session_id: Some(
-            DaemonSessionId::new("goal-session-goal-child").expect("root session"),
+            DaemonSessionId::new("01M7RQ9NYW8S6SQ8GTNM730M96").expect("root session"),
         ),
         agent_path: Some("root/task-goal-child".to_owned()),
         goal_id: None,

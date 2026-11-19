@@ -9,7 +9,7 @@ use axon_domain::{BreakerPolicy, ModelProfileId};
 use super::run_channel_affinity::{with_affinity_cache, with_health_registry, with_metrics_router};
 use crate::RunCommand;
 
-/// `agent.fast_model` 配置槽位名；fast 子代理与后台 Goal Execution 共用该槽位。
+/// `agent.fast_model` 配置槽位名；后台快速执行子代理（cron、shell 作业唤醒）使用该槽位。
 pub(super) const FAST_MODEL_SLOT_NAME: &str = "agent.fast_model";
 
 /// 渠道负载均衡后的模型选择结果。

@@ -24,22 +24,22 @@ fn is_goal_execution(request: &ProviderTurnRequest) -> bool {
 /// 本次 Provider turn 的执行身份。
 ///
 /// 执行身份和受众信任域都由运行时权威写入 transportContext；Provider 层只消费
-/// 该合同，不再自行推断。主代理承担用户可见的人格与决策，后台 Goal Execution
-/// 是隔离的快速执行子代理。
+/// 该合同，不再自行推断。主代理承担用户可见的人格与决策；cron、shell 作业唤醒等
+/// 后台轮按隔离的快速执行子代理装载。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RunAgentIdentity {
     /// 私聊或本地主代理 turn：可见 Personal Memory。
     PrimaryPrivate,
     /// 群聊或受限主代理 turn：只可见 Workspace Memory。
     PrimaryWorkspace,
-    /// 后台 Goal Execution 的快速执行子代理：不装配 Soul、不继承主 turn 思考强度。
-    GoalExecutionSubagent,
+    /// 后台轮（cron、shell 作业唤醒等）的快速执行子代理：不装配 Soul、不继承主 turn 思考强度。
+    BackgroundFastSubagent,
 }
 
 impl RunAgentIdentity {
     /// 是否装配完整用户 Soul；主代理即使进入群聊也仍是同一个主智能体。
     pub(crate) const fn includes_user_soul(self) -> bool {
-        !matches!(self, Self::GoalExecutionSubagent)
+        !matches!(self, Self::BackgroundFastSubagent)
     }
 
     /// 是否装配 owner 私有的 Personal Memory。
@@ -49,7 +49,7 @@ impl RunAgentIdentity {
 
     /// 是否保持主 turn 的模型槽位、推理强度、工具策略与稳定前缀。
     pub(crate) const fn is_primary(self) -> bool {
-        !matches!(self, Self::GoalExecutionSubagent)
+        !matches!(self, Self::BackgroundFastSubagent)
     }
 
     /// 本次请求的 Memory 披露边界。
@@ -58,7 +58,7 @@ impl RunAgentIdentity {
     pub(crate) const fn memory_disclosure_policy(self) -> DisclosurePolicy {
         match self {
             Self::PrimaryPrivate => DisclosurePolicy::PrivateOnly,
-            Self::PrimaryWorkspace | Self::GoalExecutionSubagent => DisclosurePolicy::Workspace,
+            Self::PrimaryWorkspace | Self::BackgroundFastSubagent => DisclosurePolicy::Workspace,
         }
     }
 }
@@ -78,12 +78,12 @@ pub(crate) fn persona_channel(channel: axon_client_identity::ClientChannel) -> C
     }
 }
 
-/// 后台 Goal Execution 是隔离的快速执行子代理；其余 Provider turn 都是用户可见的主代理。
+/// 目标执行与用户可见轮次都按主代理装载；其余后台轮（cron、shell 作业唤醒）按快速执行子代理装载。
 pub(crate) fn run_agent_identity(request: &ProviderTurnRequest) -> RunAgentIdentity {
     // 目标执行是「不展示在会话列表里的主会话」：它按主代理装载，只是入口在目标看板。
     // 其余后台轮（cron、shell 作业唤醒等）仍按快速执行子代理装载。
     if request.action_kind != PRIMARY_TURN_ACTION_KIND && !is_goal_execution(request) {
-        return RunAgentIdentity::GoalExecutionSubagent;
+        return RunAgentIdentity::BackgroundFastSubagent;
     }
     let Some(context) = request.transport_context.as_ref() else {
         return RunAgentIdentity::PrimaryPrivate;
@@ -167,10 +167,10 @@ mod tests {
     }
 
     #[test]
-    fn non_primary_action_kind_is_goal_execution_subagent() {
+    fn non_primary_action_kind_is_background_fast_subagent() {
         let identity = run_agent_identity(&request_with("other_action", None));
 
-        assert_eq!(identity, RunAgentIdentity::GoalExecutionSubagent);
+        assert_eq!(identity, RunAgentIdentity::BackgroundFastSubagent);
         assert!(!identity.includes_user_soul());
         assert!(!identity.is_primary());
     }
@@ -207,7 +207,7 @@ mod tests {
 
         let identity = run_agent_identity(&request);
 
-        assert_eq!(identity, RunAgentIdentity::GoalExecutionSubagent);
+        assert_eq!(identity, RunAgentIdentity::BackgroundFastSubagent);
         assert!(!identity.includes_user_soul());
     }
 }

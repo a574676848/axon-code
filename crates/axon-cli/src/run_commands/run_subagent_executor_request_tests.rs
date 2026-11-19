@@ -146,12 +146,12 @@ fn provider_child_request_inherits_parent_runtime_context() {
     );
     assert_eq!(
         child_request.parent_session_id.as_deref(),
-        Some("parent-session")
+        Some("01J8XQ7K3M4N5P6Q7R8S9T0V4W")
     );
     let store = super::super::super::run_agent_store::shared_runtime_store(&config_path).unwrap();
     let resolved = store
         .find_subagent_session(
-            &axon_domain::DaemonSessionId::new("parent-session").unwrap(),
+            &axon_domain::DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V4W").unwrap(),
             "/root/review",
         )
         .unwrap()

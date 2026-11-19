@@ -25,9 +25,9 @@ const LEASE_DURATION_MS: u64 = super::sqlite_runtime_store_interaction_tests::LE
 fn claim_skips_sessions_the_primary_worker_does_not_drive() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
-    let primary = test_session("session-primary");
-    let subagent = test_session("session-subagent");
-    let cron = test_session("session-cron");
+    let primary = test_session("01J8XQ7K3M4N5P6Q7R8S9T0V1W");
+    let subagent = test_session("01J8XQ7K3M4N5P6Q7R8S9T0V2W");
+    let cron = test_session("01J8XQ7K3M4N5P6Q7R8S9T0V3W");
     for (session, kind, agent_path) in [
         (&primary, SessionKind::Primary, None),
         (&subagent, SessionKind::Subagent, Some("root/task")),
