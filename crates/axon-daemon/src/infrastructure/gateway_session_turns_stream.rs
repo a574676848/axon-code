@@ -19,7 +19,10 @@ use axon_session::InteractionTurnHead;
 /// 活跃节拍：新轮与收口要尽快被看见。
 const TURNS_POLL_MIN: Duration = Duration::from_millis(700);
 /// 空闲节拍上限：连续多次没有差异后逐步退到这里，久坐的会话不再按活跃频率查库。
-const TURNS_POLL_MAX: Duration = Duration::from_secs(5);
+///
+/// 新轮只能靠一次轮询发现（在途判定救不了第一条），因此上限按下限的约三倍取 2 秒：
+/// 再慢会让目标执行与子代理会话的新轮入口明显迟滞。
+const TURNS_POLL_MAX: Duration = Duration::from_secs(2);
 /// 连续多少次无差异后开始退避。
 const TURNS_IDLE_POLLS_BEFORE_BACKOFF: u32 = 4;
 /// 每次比较读取的轮次上限：只关心头部有没有出现新轮、有没有收口。
@@ -71,6 +74,8 @@ where
             pending: Vec::new(),
         };
         stream.prime()?;
+        // 基线刚读过一次，下一个节拍从此刻起算：首帧不会立刻再查一遍同一份轮次头。
+        stream.last_poll = Some(Instant::now());
         Ok(stream)
     }
 

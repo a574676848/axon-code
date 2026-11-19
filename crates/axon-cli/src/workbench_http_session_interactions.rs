@@ -98,8 +98,8 @@ fn origin_of_kind(kind: axon_session::SessionKind) -> &'static str {
 /// 与分页无关。取数失败不牵连历史列表：列表是主事实，累计读数缺了就不给。
 ///
 /// `brief` 是翻页专用档：向前翻页只补历史轮次，会话能力块、作业清单、累计读数与
-/// 车道最新事实都与页码无关，重复下发只是白读一遍线程。此档只返回 `interactions`
-/// 与 `totalRecords`，其余键缺省。
+/// 车道最新事实都与页码无关，重复下发只是白读一遍线程。此档只返回 `sessionId`、
+/// `interactions`、`totalRecords` 与 `rawPayloadPersisted`，其余键缺省。
 pub fn session_interactions_payload(
     axon_root: &Path,
     session_id: &str,

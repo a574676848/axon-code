@@ -186,17 +186,25 @@ fn env_file_token(name: &str) -> Option<String> {
 /// 系统信任什么，这里就信任什么。
 ///
 /// 客户端按超时档缓存：`ureq` 的连接池挂在 Agent 上，每次请求新建 Agent 等于每次
-/// 重新握手，会话列表、翻页与事件回放会各自付一遍 TCP 与 TLS 成本。同一档超时复用
-/// 同一个 Agent，跨档不共享（全局超时是 Agent 配置的一部分）。
+/// 重新握手，会话列表、翻页与事件回放会各自付一遍 TCP 与 TLS 成本。超时按 250ms
+/// 向上取整成一档，探活预算这类逐次变化的数值不会每次造出一个新池；档位超过 8 个
+/// 时整体清空重建，避免长跑进程无界增长（连接池本来也会在空闲后自然过期）。
 #[must_use]
 pub fn http_agent(timeout: Duration) -> ureq::Agent {
     static AGENTS: Mutex<Option<HashMap<u64, ureq::Agent>>> = Mutex::new(None);
-    let key = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
+    const AGENT_BUCKET_MS: u64 = 250;
+    const MAX_AGENT_BUCKETS: usize = 8;
+    let millis = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
+    let key = millis.div_ceil(AGENT_BUCKET_MS).max(1);
+    let bucketed = Duration::from_millis(key.saturating_mul(AGENT_BUCKET_MS));
     let mut cache = AGENTS.lock().unwrap_or_else(PoisonError::into_inner);
-    cache
-        .get_or_insert_with(HashMap::new)
+    let agents = cache.get_or_insert_with(HashMap::new);
+    if !agents.contains_key(&key) && agents.len() >= MAX_AGENT_BUCKETS {
+        agents.clear();
+    }
+    agents
         .entry(key)
-        .or_insert_with(|| build_http_agent(timeout))
+        .or_insert_with(|| build_http_agent(bucketed))
         .clone()
 }
 

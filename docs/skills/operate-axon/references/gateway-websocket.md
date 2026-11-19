@@ -51,7 +51,7 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
 订阅目标语义：
 
 - `submit` 帧不携带客户端字段：这一轮的来源按 `sourceChannel` 标注，会话历史里逐轮显示的就是它，因此外部入口不会冒充桌面或 CLI。
-- 正文订阅一律以 `interactionId` 为目标；裸会话目标（`sessionId` 不给 `interactionId`）回 `subscribe_missing_interaction`，不再按会话整条回放。
+- 正文订阅一律以 `interactionId` 为目标；订阅帧不再接受 `sessionId` 字段（旧帧按未知字段拒为 `invalid_json`），完全不带 `interactionId` 且标识不以 `session-turns:` 开头时回 `subscribe_missing_interaction`，不再按会话整条回放。
 - 子代理会话与目标执行会话的正文也走各自的 Interaction 订阅：`interactionId` 从 `GET /api/v1/sessions/<sessionId>/interactions` 取得。它们不在侧栏清单里，入口是子代理区域与目标看板；发现新轮用 `session-turns:` 订阅，不重放正文。
 - `subscribeId` 由客户端生成，必须在同一连接内唯一；建议直接由目标推导（`interaction:<id>` 或 `session-turns:<id>`）。`session-turns:<id>` 只推 `interaction.created` 与 `interaction.settled` 两类轻帧（`interactionId` 与 `status`），不推正文、不回放历史，用于发现不在侧栏清单里的独立会话新轮与收口。
 - `session-turns:` 的 `subscribed` 回执带 `baseline`：`latestInteractionId` / `latestInteractionStatus` / `latestInteractionReceivedAtMs`，表示订阅建立那一刻这条流已经知道的最新一轮。**正确顺序是「先订阅、收到 subscribed、再读索引」**；如果实现只能先读索引，则必须在收到 `subscribed` 后拿 `baseline.latestInteractionId` 与索引里的最新一轮比对，不一致就再读一次索引。否则两次动作之间新建的那一轮会被折进基线，`interaction.created` 永不播报。
@@ -98,7 +98,7 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
 | `event_rejected` | 提交的事件被入口策略拒绝，未入账 |
 | `subscribe_missing_id` | `subscribe` 未带 `subscribeId`；该帧不回显标识 |
 | `subscribe_duplicate_id` | 同一连接复用了 `subscribeId`；只拒这一次，连接保持 |
-| `subscription_rejected` | 会话未登记、会话与请求工作区不匹配、受众边界受限，或把交互标识当 `sessionId` 传入；回显 `subscribeId`，Daemon 侧日志留有具体原因 |
+| `subscription_rejected` | 目标 Interaction 不存在、所属会话与请求工作区不匹配，或受众边界受限；回显 `subscribeId`，Daemon 侧日志留有具体原因 |
 | `event_projection_failed` | 事件投影失败；服务端以错误帧显式回执，不静默丢帧 |
 
 ## 排障对照
@@ -110,7 +110,7 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
 | 连上后无任何回帧 | 这是正常行为：服务端不发欢迎帧，先发 `ping` 或 `subscribe` |
 | `subscribe` 回 `invalid_json` | 漏了 `workspaceId`，或字段名不是 camelCase |
 | `subscribe` 回 `subscription_rejected` | 目标 Interaction 不存在、所属会话与请求工作区不匹配，或会话从未登记 |
-| `subscribe` 回 `subscribe_missing_interaction` | 正文订阅只带 `sessionId` 没带 `interactionId`；按 Interaction 重新订阅 |
+| `subscribe` 回 `subscribe_missing_interaction` | 正文订阅没有 `interactionId`；按 Interaction 重新订阅，轮次头改用 `session-turns:` 标识 |
 | 有 `subscribed` 但长时间没有事件帧 | 目标 Interaction 已结束且无历史帧；先用 `GET /gateway/v1/interactions/<id>` 确认状态 |
 | 事件帧解析失败 | `payload_json` 是字符串化 JSON，且同帧内命名风格混合 |
 | 界面报「连接被重置」（`WebSocket protocol error: Connection reset without closing handshake`） | `data/logs/axon-<日期>.log` 的 `[gateway-ws] 连接级失败 peer=... 原因=...`：默认级别（`[agent] log_level` 缺省 `warn`）只记服务端自身故障；对端主动走人（桌面端刷新、进程退出、端口探测）记在 `debug` 级别，要逐条追溯就把 `[agent] log_level` 设为 `debug`，或临时用 `AXON_LOG_LEVEL=debug` 启动。两种级别都没有该行，说明断在链路层 |
@@ -129,7 +129,7 @@ pwsh -File scripts/gateway-ws.ps1 -Action subscribe -WorkspaceId <workspace-id> 
 
 # 订阅子代理会话的轮次头（session-turns 级）
 pwsh -File scripts/gateway-ws.ps1 -Action subscribe -WorkspaceId <workspace-id> `
-  -SessionId <session-id> -SubscribeId "session-turns:<session-id>"
+  -SubscribeId "session-turns:<session-id>"
 
 # 经 WS 提交一条外部事件
 pwsh -File scripts/gateway-ws.ps1 -Action submit -SourceChannel jira -EventId AX-1024 `

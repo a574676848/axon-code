@@ -48,6 +48,8 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
   React.useEffect(() => {
     if (knownSessionId.length > 0) {
       setLocatedSessionId(knownSessionId);
+      // 名册行本身带着模型；标题没有更细的来源时退回 row.label，与转录行一致。
+      setModel(row.model ?? null);
       setLocateError(null);
       return undefined;
     }

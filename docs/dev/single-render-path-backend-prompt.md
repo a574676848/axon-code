@@ -138,7 +138,7 @@
 - 首轮只建基线、不补历史。为消除「先读索引、后订阅」的竞态，`subscribed` 回执额外带 `baseline`（`latestInteractionId` / `latestInteractionStatus` / `latestInteractionReceivedAtMs`），表示这条流在建立时已经知道哪些轮次。
 - 客户端顺序固定为**先订阅、收到 `subscribed`、再读索引**。只能先读索引的实现，必须拿 `baseline.latestInteractionId` 与索引最新一轮比对，落后就再读一次；否则两次动作之间新建的轮次会被折进基线，`interaction.created` 永不播报。
 
-**验收**：目标执行在跑时，只订阅轮次头即可发现新轮（可用 `python websockets` 带 Authorization 复现）；`session-turns:` 与既有 `session:` / `interaction:` 前缀不冲突；订阅建立后立刻新建的一轮在下一个节拍内播报 `interaction.created`；空会话的 `subscribed` 不带 `baseline`。
+**验收**：目标执行在跑时，只订阅轮次头即可发现新轮（可用 `python websockets` 带 Authorization 复现）；`session-turns:` 与 `interaction:` 前缀不冲突；订阅建立后立刻新建的一轮在下一个节拍内播报 `interaction.created`；空会话的 `subscribed` 不带 `baseline`。
 
 ### W6 中断与取消链路（P1，已定稿）
 

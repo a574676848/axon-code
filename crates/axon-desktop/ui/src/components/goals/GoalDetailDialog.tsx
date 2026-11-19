@@ -7,7 +7,6 @@ import {
   executionUnavailableText,
   goalStatusMeta,
   hasSessionBinding,
-  isSettled,
 } from '../../goals/model';
 import { formatDateTime } from '../pageFormat';
 import { Dialog } from '../ui/overlays';
@@ -116,7 +115,7 @@ export const GoalDetailDialog: React.FC<GoalDetailDialogProps> = ({
             {executionUnavailableText(latestExecution.unavailableReason)}
           </Text>
         )}
-        {!isSettled(located.status) && (
+        {(located.status === 'active' || located.status === 'waiting') && (
           <Text tone="tertiary" size="xs">
             运行中的目标只能由主会话调用目标工具取消
           </Text>

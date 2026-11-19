@@ -39,7 +39,7 @@ axon config get remote.gateway.websocket_bind
 | HTTP 接口 429 或 503 | 连接或处理队列已满、准备失败；稍后重试并读取回执正文的错误码 |
 | WS 握手 401 或 404 | token 是否与 Daemon 一致（WS 不支持查询串 token）、路径是否为 `/gateway/v1/ws` |
 | WS 回 `invalid_json` | 订阅帧漏了 `workspaceId`，或字段名不是 camelCase |
-| WS 回 `subscription_rejected` | 目标标识类型用错（会话标识不能当 `sessionId`），或目标已不存在 |
+| WS 回 `subscription_rejected` | 目标 Interaction 不存在，或所属会话与请求工作区不匹配 |
 | WS 已 `subscribed` 但无事件帧 | 先用 `GET /gateway/v1/interactions/<id>` 确认目标状态，再区分「已结束无历史帧」与「未订阅成功」 |
 
 ## 处理原则
