@@ -79,6 +79,7 @@ fn authoritative_context_supplies_session_identity() {
                 context_version: 3,
             },
             runtime_profile: crate::RuntimeProfileSelector::for_background_execution(),
+            record_turn_input: true,
         })
         .expect("执行成功");
     let requests = runner
@@ -120,6 +121,7 @@ fn provider_payload_rejects_execution_identity_fields() {
                 context_version: 1,
             },
             runtime_profile: crate::RuntimeProfileSelector::for_background_execution(),
+            record_turn_input: true,
         })
         .expect_err("Provider payload 不得携带执行身份");
     assert!(error.message().contains("unknown field"));
@@ -155,6 +157,7 @@ fn remote_control_action_is_committed_without_provider_call() {
                 context_version: 0,
             },
             runtime_profile: crate::RuntimeProfileSelector::for_background_execution(),
+            record_turn_input: true,
         })
         .expect("控制 Action 应执行");
     assert!(
@@ -220,6 +223,7 @@ fn preserves_transport_context_without_copying_quoted_message_to_completed_event
                 context_version: 0,
             },
             runtime_profile: crate::RuntimeProfileSelector::for_background_execution(),
+            record_turn_input: true,
         })
         .expect("Turn 应正常执行");
     let requests = runner.requests.lock().unwrap();
@@ -391,6 +395,7 @@ fn live_request(action_id: &str) -> ActionExecutionRequest {
             context_version: 0,
         },
         runtime_profile: crate::RuntimeProfileSelector::for_background_execution(),
+        record_turn_input: true,
     }
 }
 
@@ -440,6 +445,7 @@ fn streaming_execution_projects_canonical_terminal_events_before_turn_completed(
                     context_version: 0,
                 },
                 runtime_profile: crate::RuntimeProfileSelector::for_background_execution(),
+                record_turn_input: true,
             },
             Some(&sink),
         )

@@ -238,6 +238,8 @@ where
                     context_version: runtime.context_version,
                 },
                 runtime_profile: crate::RuntimeProfileSelector::for_background_execution(),
+                // 后台 execution 没有别的写入点：首条用户消息由执行器负责。
+                record_turn_input: true,
             },
             self.projection.as_ref().map(ExecutionProjection::sink),
         ) {

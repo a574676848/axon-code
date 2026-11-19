@@ -1,6 +1,7 @@
 //! 工作台子代理与后台作业 HTTP 接口实现。
 
 use std::{
+    collections::HashMap,
     io::{Read, Seek, SeekFrom},
     path::Path,
 };
@@ -62,16 +63,39 @@ pub(super) fn session_subagents_payload(
     }
     let rows = child_session_rows(axon_root, &run_session_id, MAX_SESSION_SUBAGENTS)?;
     let store = runtime_store(axon_root);
-    // 一次批量读回整页会话行：逐行回表在 200 行上限下就是 200 次点查。
-    let ids: Vec<DaemonSessionId> = rows
+    // 名册的 thread 标识是运行实例标识（`current_run_id`），会话行按稳定会话标识
+    // （ULID）存放：两套标识不能直接对表，先按实例反查会话，再批量读回会话行。
+    // 直接命中保留给「thread 标识就是会话标识」的旧记录。
+    let mut session_of_thread: HashMap<String, String> = HashMap::new();
+    let direct_ids: Vec<DaemonSessionId> = rows
         .iter()
         .filter_map(|row| DaemonSessionId::new(row.session_id.clone()).ok())
         .collect();
-    let runtimes = store.sessions_by_ids(&ids).unwrap_or_default();
+    let mut runtimes = store.sessions_by_ids(&direct_ids).unwrap_or_default();
+    for row in &rows {
+        if runtimes.contains_key(row.session_id.as_str()) {
+            session_of_thread.insert(row.session_id.clone(), row.session_id.clone());
+            continue;
+        }
+        // 实例标识查不到就是没有运行态会话：如实留空，不猜一个会话标识出来。
+        if let Ok(Some(session_id)) = store.session_id_for_run(&row.session_id) {
+            session_of_thread.insert(row.session_id.clone(), session_id.to_string());
+        }
+    }
+    let resolved_ids: Vec<DaemonSessionId> = session_of_thread
+        .values()
+        .filter(|session_id| !runtimes.contains_key(session_id.as_str()))
+        .filter_map(|session_id| DaemonSessionId::new(session_id.clone()).ok())
+        .collect();
+    if !resolved_ids.is_empty() {
+        runtimes.extend(store.sessions_by_ids(&resolved_ids).unwrap_or_default());
+    }
     let mut subagents = Vec::with_capacity(rows.len());
     for row in rows {
         // 会话标识是 ULID，路径只从登记表读：子代理的 slug 不是标识的一部分。
-        let runtime = runtimes.get(row.session_id.as_str());
+        let runtime = session_of_thread
+            .get(&row.session_id)
+            .and_then(|session_id| runtimes.get(session_id.as_str()));
         let slug = runtime
             .as_ref()
             .and_then(|record| record.agent_path.as_deref())
@@ -93,12 +117,14 @@ pub(super) fn session_subagents_payload(
             .as_ref()
             .and_then(|record| record.agent_path.clone());
         let agent_id = agent_path.as_ref().map(|path| format!("subagent:{path}"));
+        // 对外只给稳定会话标识：运行实例标识只在名册内部用来对齐 thread 行。
+        let session_id = if has_runtime {
+            session_of_thread.get(&row.session_id).cloned()
+        } else {
+            None
+        };
         subagents.push(serde_json::json!({
-            "sessionId": if has_runtime {
-                serde_json::Value::String(row.session_id.clone())
-            } else {
-                serde_json::Value::Null
-            },
+            "sessionId": session_id.map_or(serde_json::Value::Null, serde_json::Value::String),
             "agentPath": agent_path,
             "agentId": agent_id,
             "unavailableReason": if has_runtime {

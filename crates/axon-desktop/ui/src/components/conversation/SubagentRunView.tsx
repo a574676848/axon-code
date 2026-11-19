@@ -41,6 +41,9 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
   const [locateError, setLocateError] = React.useState<string | null>(null);
   const [sending, setSending] = React.useState(false);
   const [sendError, setSendError] = React.useState<string | null>(null);
+  /** 子代理会话里要回放的那一轮 Interaction；会话标识不能直接当 Interaction 用。 */
+  const [turnId, setTurnId] = React.useState<string | null>(null);
+  const [turnLoading, setTurnLoading] = React.useState(false);
 
   // 会话定位：子代理会话挂在车道的运行会话之下，用 slug 与界面上的 agent 路径对齐。
   // 名册已经把会话标识补给行时直接用，不再为此重拉一次名册。
@@ -94,18 +97,47 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
     };
   }, [knownSessionId, sessionId, row.agentId, row.model]);
 
+  /*
+   * 逐字稿的入口是这条子代理会话里的一轮 Interaction：
+   * 正文订阅按 Interaction 过滤，会话标识本身没有可订阅的正文流。
+   */
+  React.useEffect(() => {
+    if (locatedSessionId === null) {
+      setTurnId(null);
+      setTurnLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setTurnLoading(true);
+    void ipc
+      .conversationHistory(locatedSessionId, 1)
+      .then((page) => {
+        if (cancelled) return;
+        setTurnId(page.interactions[0]?.interactionId ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setTurnId(null);
+      })
+      .finally(() => {
+        if (!cancelled) setTurnLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [locatedSessionId]);
+
   const target = React.useMemo(
     () =>
-      workspaceId === null || locatedSessionId === null
+      workspaceId === null || turnId === null
         ? null
         : ({
             kind: 'interaction',
             workspaceId,
-            interactionId: locatedSessionId,
+            interactionId: turnId,
             // 子代理轮次不支持用户提交：投递走专用通道，因此这里不提供回复目标。
             destination: '',
           } as const),
-    [workspaceId, locatedSessionId],
+    [workspaceId, turnId],
   );
   const conversation = useConversation(target);
 
@@ -128,7 +160,12 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
       .finally(() => setSending(false));
   };
 
-  const failure = locateError ?? conversation.state.failure?.message ?? null;
+  const emptyTurnHint = turnLoading
+    ? '正在读取逐字稿…'
+    : locatedSessionId !== null && turnId === null
+      ? '这次执行没有留下可回看的轮次'
+      : null;
+  const failure = locateError ?? emptyTurnHint ?? conversation.state.failure?.message ?? null;
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">

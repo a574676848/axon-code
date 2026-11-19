@@ -149,6 +149,7 @@ impl<R: ProviderTurnRunner> AgentTurnExecutor<R> {
             action,
             context,
             runtime_profile,
+            record_turn_input,
         } = request;
         if action.kind == REMOTE_CONTROL_ACTION_KIND {
             return execute_remote_control_action(&action, &context);
@@ -158,8 +159,11 @@ impl<R: ProviderTurnRunner> AgentTurnExecutor<R> {
         let transport_context = input.transport_context.clone();
         if let Some(sink) = sink {
             // 会话的第一帧是它的输入事实：主 turn 与子代理都这样开场，后台执行同样如此，
-            // 否则前端只能给这类会话另写「没有首条消息」的渲染分支。
-            publish_turn_input(sink, &action, &input.prompt)?;
+            // 否则前端只能给这类会话另写「没有首条消息」的渲染分支。主 turn 已经在
+            // 入队后写过一条带附件的，不在这里重复。
+            if record_turn_input {
+                publish_turn_input(sink, &action, &input.prompt)?;
+            }
         }
         let mut result = self.runner.run_streaming(input, sink)?;
         if action.goal_id.is_some()

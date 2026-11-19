@@ -34,6 +34,11 @@ pub struct ActionExecutionRequest {
     pub context: SessionExecutionContext,
     /// 应用层为本次 turn 选择的统一人格 profile。
     pub runtime_profile: RuntimeProfile,
+    /// 是否由执行器写本轮首条用户消息。
+    ///
+    /// 主 turn 在入队后立刻写过一条带附件的用户消息，这里置 `false`；后台 execution
+    /// 没有别的写入点，置 `true`。两处都写会让同一轮出现两条用户气泡。
+    pub record_turn_input: bool,
 }
 
 /// completion/compaction 后需要显式创建的下一次 Execution。

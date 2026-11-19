@@ -196,6 +196,8 @@ where
                 context_version: runtime.context_version,
             },
             runtime_profile: request.runtime_profile,
+            // 本轮的用户消息（含附件）已在上面写入事件流，执行器不再重复写。
+            record_turn_input: false,
         };
         Ok((interaction, session_id, execution_request))
     }
