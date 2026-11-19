@@ -511,6 +511,8 @@ export interface InteractionSummary {
   interactionId: string;
   status: string;
   channel: string;
+  /** 发起这一轮的客户端；执行侧派发轮用它区分目标执行与子代理。 */
+  client?: string;
   receivedAtMs: number;
   /** 入站正文。 */
   content: string;

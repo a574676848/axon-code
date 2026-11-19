@@ -14,6 +14,9 @@ export const READ_ONLY_PLACEHOLDER = '目标由后台执行，这里只读';
 /** 能力事实还没到达时的占位说明：此刻不能确认这条会话可写。 */
 export const CAPABILITY_PENDING_PLACEHOLDER = '正在读取会话…';
 
+/** 能力事实到达、但会话行不存在时的占位说明。 */
+export const UNREGISTERED_SESSION_PLACEHOLDER = '会话还没有登记';
+
 /** 写入口的结论：可写性只由网关能力事实回答。 */
 export interface SessionWriteGate {
   /** 能力事实是否已到达；首屏与草稿没有服务端事实，天然就绪。 */
@@ -22,12 +25,17 @@ export interface SessionWriteGate {
   readOnly: boolean;
   /** 是否允许作答；后台链不注入提问端口，因此只有主会话可答。 */
   answerable: boolean;
+  /** 当前轮次是否允许中断；能力事实缺席时按不可中断处理。 */
+  canInterrupt: boolean;
+  /** 能力事实已到达但会话行不存在：这条会话还没有登记。 */
+  unregistered: boolean;
 }
 
-/** 按能力事实算出写入口的三项结论，界面只读它。 */
+/** 按能力事实算出写入口的结论，界面只读它。 */
 export function sessionWriteGate(
   selection: Pick<SessionSelection, 'draft'> | null,
   facts: SessionFacts | null,
+  loaded: boolean,
 ): SessionWriteGate {
   const fresh = selection === null || selection.draft === true;
   const ready = fresh || facts !== null;
@@ -35,6 +43,8 @@ export function sessionWriteGate(
     ready,
     readOnly: facts !== null && facts.writable === false,
     answerable: ready && facts?.canAnswerQuestions !== false,
+    canInterrupt: facts?.canInterrupt === true,
+    unregistered: !fresh && loaded && facts === null,
   };
 }
 

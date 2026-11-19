@@ -208,7 +208,7 @@ export const InputDock: React.FC<InputDockProps> = ({
    * 与 TUI 的 Enter/Esc 分工一致：Enter 排队发送，Esc 中断。提交在途时（busy）
    * 必须保持发送按钮，否则「点一下发送」会在回执回来之前变成「点一下中断」。
    */
-  const showStop = working !== null && !hasContent && !busy;
+  const showStop = working !== null && working.interruptible && !hasContent && !busy;
 
   /**
    * 输入法组合中。

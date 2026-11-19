@@ -170,6 +170,9 @@ struct SessionInteractionsPayload {
     /// 形状由网关定义、界面按键读取，因此原样透传：桌面端不重新建模一份，避免两侧
     /// 字段各改一次才对齐。网关恒返回该键，值可以是 `null`（会话行不存在）。
     session: serde_json::Value,
+    /// 会话级后台作业清单：与打开哪一轮无关，界面据此还原时间线与作业读数。
+    #[serde(default)]
+    jobs: Vec<serde_json::Value>,
 }
 
 /// 车道当前模型的权威事实。
@@ -238,6 +241,9 @@ pub struct SessionInteractions {
     pub reflection_notice: Option<String>,
     /// 会话能力与身份事实（可写性、可中断、可答问）；原样透传网关形状。
     pub session: serde_json::Value,
+    /// 会话级后台作业清单；网关按会话聚合，与翻到第几页无关。
+    #[serde(default)]
+    pub jobs: Vec<serde_json::Value>,
 }
 
 /// 反向分页游标：按「已加载窗口里最早那一条」的排序键向前翻。
@@ -287,6 +293,7 @@ pub fn session_interactions(
             effective_model: parsed.effective_model,
             reflection_notice: parsed.reflection_notice,
             session: parsed.session,
+            jobs: parsed.jobs,
         })
         .map_err(|error| format!("解析车道历史失败：{error}"))
 }

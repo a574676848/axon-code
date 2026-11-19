@@ -14,6 +14,20 @@
 import type { SessionSubagentSummary } from '../types';
 import type { SubagentRow } from './transcript';
 
+/**
+ * 代理标识的规范形态：`subagent:/root/x`。
+ *
+ * 两侧来源不同：转录行的标识来自事件摘要里的绝对路径，网关名册的 `agentId` 来自库里
+ * 的 `agent_path`（不带前导斜杠）。匹配与去重都必须先过这一层，否则同一子代理会被
+ * 算成两条、入口也永远定位不到。
+ */
+export function canonicalAgentId(agentId: string | null | undefined): string {
+  const raw = (agentId ?? '').trim();
+  if (raw.length === 0) return '';
+  const path = raw.replace(/^subagent:/, '').replace(/^\/+/, '');
+  return path.length === 0 ? '' : `subagent:/${path}`;
+}
+
 /** 名册里的线程状态与末轮状态折算成行状态。 */
 function rosterStatus(entry: SessionSubagentSummary): SubagentRow['status'] {
   const last = entry.lastTurnStatus ?? null;
@@ -39,11 +53,11 @@ export function mergeSubagentRoster(
   roster: readonly SessionSubagentSummary[] | null,
 ): SubagentRow[] {
   if (roster === null || roster.length === 0) return [...rows];
-  // 转录行与名册行按同一枚 `agentId` 对账：两侧都由运行侧派生，界面不做二次归一化。
-  const known = new Set(rows.map((row) => row.agentId));
+  // 转录行与名册行按同一枚规范代理标识对账；空标识的行没有可匹配的对象，直接跳过。
+  const known = new Set(rows.map((row) => canonicalAgentId(row.agentId)).filter((id) => id.length > 0));
   const extra: SubagentRow[] = [];
   for (const entry of roster) {
-    const agentId = (entry.agentId ?? '').trim();
+    const agentId = canonicalAgentId(entry.agentId);
     if (agentId.length === 0 || known.has(agentId)) continue;
     known.add(agentId);
     extra.push({

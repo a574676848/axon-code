@@ -37,6 +37,14 @@ export const HISTORY_PAGE_FRAMES = 1_000;
  * 「首页 + 尾窗」，绝不重演「只交尾窗、开头整段消失」。
  */
 export const HISTORY_REPLAY_PAGES = 40;
+/**
+ * 允许顺序补齐的缺口上限（帧数）。
+ *
+ * 尾窗与首页之间的缺口不超过这个量级时，逐页读完更保真；超过就只交「首页 + 尾窗」并
+ * 标记截断。四页是往返次数与保真度的折中：正常轮次根本走不到这里，超长轮次也不会
+ * 被迫打几十个串行请求。
+ */
+export const SEQUENTIAL_REPLAY_FRAMES = HISTORY_PAGE_FRAMES * 4;
 
 /** 用量快照帧在 wire 契约里的类型名。 */
 const USAGE_WIRE_TYPE = 'usageUpdate';
@@ -219,29 +227,45 @@ export async function readInteractionFrames(
     };
   }
 
-  let page = await fetchPage(interactionId, 0, limit, false);
+  const page = await fetchPage(interactionId, 0, limit, false);
   if (stale()) return null;
   const first = page;
   let frames = [...page.events];
-  let pages = 1;
-  while (page.hasMore && pages < HISTORY_REPLAY_PAGES) {
-    page = await fetchPage(interactionId, page.nextAfter, limit, false);
-    if (stale()) return null;
-    frames = frames.concat(page.events);
-    pages += 1;
-  }
   let cursor = page.tailCursor;
   let truncated = false;
   if (page.hasMore) {
     /*
-     * 页数用尽：保留首页与尾窗。首页里是这一轮的抬头（用户消息、提问、最早的动作），
-     * 尾窗里是最后的动作、结论与终态帧；中间一段如实略过并标记出来。
+     * 先用首页带回的 durable 尾定界，再决定要不要逐页读完整轮。
+     *
+     * 缺口只有几页时顺序读完更保真；缺口很大时只交「首页 + 尾窗」两次往返，中间一段
+     * 如实标记为略过。旧实现无论缺口多大都先逐页读到上限（40 页）再丢掉中间、回头取
+     * 尾窗，等于先白读几十页：超长轮次的首屏因此被几十个串行往返拖住。
      */
-    const tail = await fetchPage(interactionId, 0, limit, true);
-    if (stale()) return null;
-    frames = mergeWithoutOverlap(first.events, tail.events);
-    cursor = tail.tailCursor;
-    truncated = true;
+    const gapFrames = Math.max(0, page.tailSequence - page.nextAfter);
+    if (gapFrames <= SEQUENTIAL_REPLAY_FRAMES) {
+      let current = page;
+      let pages = 1;
+      while (current.hasMore && pages < HISTORY_REPLAY_PAGES) {
+        current = await fetchPage(interactionId, current.nextAfter, limit, false);
+        if (stale()) return null;
+        frames = frames.concat(current.events);
+        pages += 1;
+      }
+      cursor = current.tailCursor;
+      if (current.hasMore) {
+        const tail = await fetchPage(interactionId, 0, limit, true);
+        if (stale()) return null;
+        frames = mergeWithoutOverlap(first.events, tail.events);
+        cursor = tail.tailCursor;
+        truncated = true;
+      }
+    } else {
+      const tail = await fetchPage(interactionId, 0, limit, true);
+      if (stale()) return null;
+      frames = mergeWithoutOverlap(first.events, tail.events);
+      cursor = tail.tailCursor;
+      truncated = true;
+    }
   }
   const streamed = compactUsageSnapshots(
     frames.map((frame) => streamFrame(subscribeId, frame)),

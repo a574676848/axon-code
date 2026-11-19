@@ -9,7 +9,7 @@ import { coverFace, type StageFrame } from '../../conversation/stage';
 import { useSessionAutoRead, useStopSpeechOnSessionChange } from '../../speech';
 import { ConversationHeader } from './ConversationHeader';
 import { SessionOriginBar } from './SessionOriginBar';
-import { CAPABILITY_PENDING_PLACEHOLDER, READ_ONLY_PLACEHOLDER, sessionWriteGate, type SessionOriginBarState } from '../../sessionOpening';
+import { CAPABILITY_PENDING_PLACEHOLDER, READ_ONLY_PLACEHOLDER, UNREGISTERED_SESSION_PLACEHOLDER, sessionWriteGate, type SessionOriginBarState } from '../../sessionOpening';
 import { ConversationHeaderActions } from './ConversationHeaderActions';
 import { useAutoReadReply } from './useAutoReadReply';
 import { ConversationStream } from './ConversationStream';
@@ -164,7 +164,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    * 文案里的「本轮」在渲染层改写成「上一轮」：提示总落后一轮到达。
    */
   const memoryReflection = reflectionNoticeText(conversation.sessionReflectionNotice);
-  const gate = sessionWriteGate(selection, conversation.sessionFacts);
+  const gate = sessionWriteGate(selection, conversation.sessionFacts, conversation.sessionFactsLoaded);
   /** 递增即要求定位到最新消息：发送消息后必须看到自己刚发的那条。 */
   const [followToken, setFollowToken] = React.useState(0);
   /** 正在查看的子代理；非空时主区域让给它的运行轨迹。 */
@@ -253,11 +253,8 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   const interruptTurn = conversation.interrupt;
   const turnRunning = conversation.working;
 
-  /*
-   * Esc 统一中断：与 TUI 同语义。本轮跑着的时候，Esc 就是中断当前请求，
-   * 不需要先找到停止按钮。空闲时不接管这一键，它仍归各浮层与草稿使用。
-   */
-  useInterruptOnEscape(turnRunning && !conversation.loadingHistory, () => void interruptTurn());
+  /* Esc 统一中断：本轮在跑且服务端说可中断时才接管；空闲与装载中仍归浮层与草稿。 */
+  useInterruptOnEscape(turnRunning && gate.canInterrupt && !conversation.loadingHistory, () => void interruptTurn());
 
   /**
    * 工作区根目录只取路径字符串。
@@ -618,11 +615,13 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 }}
                 enabled={gate.ready && !gate.readOnly && (workspace !== null || selection !== null)}
                 disabledPlaceholder={
-                  !gate.ready
-                    ? CAPABILITY_PENDING_PLACEHOLDER
-                    : gate.readOnly
-                      ? READ_ONLY_PLACEHOLDER
-                      : undefined
+                  gate.unregistered
+                    ? UNREGISTERED_SESSION_PLACEHOLDER
+                    : !gate.ready
+                      ? CAPABILITY_PENDING_PLACEHOLDER
+                      : gate.readOnly
+                        ? READ_ONLY_PLACEHOLDER
+                        : undefined
                 }
                 busy={conversation.submitting || creating}
                 hintVisible={hintVisible}
@@ -665,7 +664,11 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 }
                 onRunCommand={mcp.run}
                 error={dockError}
-                working={dockWorking}
+                working={
+                  dockWorking === null
+                    ? null
+                    : { ...dockWorking, interruptible: dockWorking.interruptible && gate.canInterrupt }
+                }
                 onInterrupt={() => void conversation.interrupt()}
                 sessionKey={sessionKey}
                 activeQuestion={gate.answerable ? conversation.activeQuestion : null}

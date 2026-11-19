@@ -2,6 +2,7 @@ import React from 'react';
 import { AgentIcon, ChevronRightIcon } from '../../icons';
 import * as ipc from '../../ipc';
 import { useConversation } from '../../conversation/useConversation';
+import { canonicalAgentId } from '../../conversation/subagentRoster';
 import type { SubagentRow } from '../../conversation/transcript';
 import { ConversationStream } from './ConversationStream';
 import { InputDock } from './InputDock';
@@ -53,10 +54,11 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
       .then((list) => {
         if (cancelled) return;
         /*
-         * 匹配键就是网关给出的 `agentId`（`subagent:/root/x`）：它与转录行里的标识同源，
-         * 因此不需要任何归一化。
+         * 匹配键是规范化的代理标识：网关给的是库里的相对路径，转录行给的是绝对路径，
+         * 两者只在去掉前导斜杠后同源。
          */
-        const match = list.subagents.find((item) => item.agentId === row.agentId);
+        const wanted = canonicalAgentId(row.agentId);
+        const match = list.subagents.find((item) => canonicalAgentId(item.agentId) === wanted);
         if (match === undefined) {
           setLocateError('还没有读到这个子代理的会话记录');
           return;

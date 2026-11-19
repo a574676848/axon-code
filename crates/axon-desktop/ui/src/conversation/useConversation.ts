@@ -87,6 +87,7 @@ export function useConversation(
   const receiveSessionFacts = useCallback((facts: SessionFacts | null) => {
     setCapabilityFacts(facts);
     setCapabilityTarget(capabilityTargetRef.current);
+    setCapabilityLoaded(true);
   }, []);
 
   /** 已经进入过渡窗口的目标；与当前目标不一致的那一帧就是切换那一帧。 */
@@ -136,6 +137,8 @@ export function useConversation(
    * 只认它（以及入口声明的只读），不再按来源渠道推断。
    */
   const [capabilityFacts, setCapabilityFacts] = useState<SessionFacts | null>(null);
+  /** 能力事实是否已经取回：与「事实为空」分开，后者表示会话行不存在。 */
+  const [capabilityLoaded, setCapabilityLoaded] = useState(false);
   /**
    * 能力事实所属的目标。
    *
@@ -357,6 +360,7 @@ export function useConversation(
     setSessionModel(null);
     setSessionReflectionNotice(null);
     setCapabilityFacts(null);
+    setCapabilityLoaded(false);
     const current = targetRef.current;
     if (
       workspaceId === null ||
@@ -667,6 +671,8 @@ export function useConversation(
     sessionReflectionNotice,
     /** 会话能力事实：可写性、可中断与可答问；只认归当前目标的那一份。 */
     sessionFacts: capabilityTarget === targetKey ? capabilityFacts : null,
+    /** 能力事实是否已经取回过（`null` 也算取回过，代表会话行不存在）。 */
+    sessionFactsLoaded: capabilityTarget === targetKey && capabilityLoaded,
     sessionAvailable: sessionCapability.available,
     opening,
     queued,

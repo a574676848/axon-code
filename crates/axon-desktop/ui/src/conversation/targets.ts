@@ -58,18 +58,6 @@ export interface NormalizedTarget {
   workspaceId: string;
 }
 
-/**
- * 目标对应的订阅标识；必须与 Rust 侧 `SubscribeTarget::subscribe_id` 逐字符一致。
- *
- * 用**交互标识**（`interactionId`）：网关车道 API 的 `sessionId` 与 Interaction 的
- * `interactionId` 是两个不同的串，订阅与事件回显用的都是后者。曾经这里误用
- * `SessionSelection.sessionId`，结果是帧全部到达、又被过滤器按「标识不匹配」整批丢掉，
- * 界面永远停在「生成回复中」。
- */
-export function subscriptionIdOf(target: ConversationTarget): string {
-  return `interaction:${target.interactionId}`;
-}
-
 /** 归一化订阅目标。 */
 export function normalizeTarget(target: ConversationTarget): NormalizedTarget {
   return {
@@ -127,6 +115,13 @@ export interface ConversationController {
    * 首页历史索引到达后才有效；在此之前为空，界面按入口声明给首帧默认值。
    */
   sessionFacts: import('./sessionFacts').SessionFacts | null;
+  /**
+   * 能力事实是否已经取回。
+   *
+   * 与 `sessionFacts` 分开：`session` 块可以是 `null`（会话行不存在），那时「取回过」
+   * 与「还没取」是两种不同的结论，界面必须能分开说。
+   */
+  sessionFactsLoaded: boolean;
   /**
    * 最近一次记忆反思的提示文本；该会话还没有记忆动作时为空。
    *

@@ -237,6 +237,10 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
     const answer = (entry.answerText ?? '').trim();
     if (entry.status === 'interrupted') {
       frames.push(statusFrame(entry.interactionId, 1_000, 'interrupted'));
+    } else if (entry.status === 'rejected' || entry.status === 'failed') {
+      // 失败与中断是两种结论：都必须在骨架上落地，否则会读成「已完成但没有回答」。
+      // 网关的失败终态词是 `rejected`；老记录若写 `failed`，同样按失败收口。
+      frames.push(statusFrame(entry.interactionId, 1_000, 'rejected'));
     } else if (answer.length > 0) {
       frames.push(completedFrame(entry.interactionId, answer));
     }

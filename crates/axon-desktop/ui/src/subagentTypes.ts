@@ -10,8 +10,13 @@
 export interface SessionSubagentSummary {
   /** 子代理会话标识；没有运行态会话行时为空，原因写在 `unavailableReason`。 */
   sessionId: string | null;
-  /** 带前缀的稳定代理标识（例如 `subagent:/root/review`）：唯一匹配键。 */
-  agentId: string;
+  /**
+   * 代理标识；没有运行态会话行时为空。
+   *
+   * 两侧的形态不保证一致（网关是相对路径、转录行来自绝对路径），对账一律先过
+   * `canonicalAgentId` 归一，不直接比较原串。
+   */
+  agentId: string | null;
   /** `sessionId` 为空时的原因码；非空时界面按它给出可读说明。 */
   unavailableReason?: string | null;
   title?: string | null;
@@ -20,7 +25,6 @@ export interface SessionSubagentSummary {
   updatedAtMs?: number;
   /** 线程真实状态：`active` 才是此刻仍在运行。 */
   status?: string;
-  turnCount?: number;
   /** 末轮状态：结束/中断/失败由它决定。 */
   lastTurnStatus?: string | null;
   lastTurnAtMs?: number | null;

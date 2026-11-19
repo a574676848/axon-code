@@ -14,6 +14,9 @@ const CHANNEL_LABELS: Record<string, string> = {
   webhook: 'Webhook',
   goal: '目标执行',
   internal: '内部',
+  // 执行侧派发与系统事件：界面上不出现内部词，统一读成中文来源。
+  agent: '后台执行',
+  system: '系统',
 };
 
 /** 一轮的来源标签；没有渠道事实时返回空串。 */
