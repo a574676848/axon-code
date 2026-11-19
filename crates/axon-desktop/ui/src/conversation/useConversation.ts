@@ -44,6 +44,10 @@ const FRAME_FLUSH_MS = 16;
  * 过渡面上。
  */
 const OPENING_CEILING_MS = 900;
+/** 轮次头订阅的标识前缀；与正文订阅（`interaction:`）必须分开。 */
+const SESSION_TURNS_PREFIX = 'session-turns:';
+/** 轮次头帧的合并窗口：一轮刚创建时可能连发数帧，只唤一次索引。 */
+const TURNS_REFRESH_COALESCE_MS = 250;
 /**
  * 目标与契约类型整块移到 `targets.ts`：它们是纯类型与纯函数，编排文件只负责流程。
  * 这里原样再导出，调用方的引用不必改。
@@ -229,11 +233,43 @@ export function useConversation(
     await Promise.all(subscribeIds.map(ipc.conversationUnsubscribe)).catch(() => undefined);
   }, []);
 
+  /**
+   * 轮次头刷新：把「多了一轮」翻译成一次索引重读。
+   *
+   * 走 ref 而不是直接闭包，是为了让帧回调保持引用稳定：它挂在流监听上，换一次身份就
+   * 要重装监听。真正的重读由 `appendSession` 做，它按已加载的轮次标识去重，因此
+   * 轮次头与轮数轮询同时命中也不会把同一轮接两遍。
+   */
+  const appendSessionRef = useRef<() => void>(() => undefined);
+  appendSessionRef.current = () => {
+    void paging.appendSession();
+  };
+  const turnRefreshTimerRef = useRef<number | null>(null);
+  const requestTurnRefresh = useCallback(() => {
+    if (turnRefreshTimerRef.current !== null) return;
+    turnRefreshTimerRef.current = window.setTimeout(() => {
+      turnRefreshTimerRef.current = null;
+      appendSessionRef.current();
+    }, TURNS_REFRESH_COALESCE_MS);
+  }, []);
   /** 帧到达：按本控制器持有的订阅标识过滤，入队并在下一帧窗口一次性派发。 */
   const onStreamEvent = useCallback(
     (event: ConversationStreamEvent) => {
       // 一条连接承载多路订阅；只收属于自己的那几路，其余（别的视图的订阅）直接丢弃。
       if (!subscribedIdsRef.current.has(event.subscribeId)) return;
+      /*
+       * 轮次头只表达「这条会话的轮次清单变了」：它不进正文投影，也不和正文帧混批。
+       * 收到就唤一次索引重读，由 `appendSession` 只接本视图还不认识的那几条。
+       */
+      if (event.subscribeId.startsWith(SESSION_TURNS_PREFIX)) {
+        if (
+          event.kind === 'frame' &&
+          (event.eventType === 'interaction.created' || event.eventType === 'interaction.settled')
+        ) {
+          requestTurnRefresh();
+        }
+        return;
+      }
       pendingRef.current.push(event);
       if (flushRef.current !== null) return;
       const generation = generationRef.current;
@@ -264,7 +300,7 @@ export function useConversation(
         }
       }, FRAME_FLUSH_MS);
     },
-    [rememberUnsubscribed, workspaceId],
+    [rememberUnsubscribed, requestTurnRefresh, workspaceId],
   );
 
   useEffect(() => {
@@ -348,6 +384,13 @@ export function useConversation(
       setOpening(false);
       return undefined;
     }
+    /*
+     * 轮次头先于索引建立：先订阅再读索引，两者之间新建的那一轮不会漏；订阅首读只建
+     * 基线，因此历史轮不会被当成新轮再播一遍。
+     */
+    const turnsId = `${SESSION_TURNS_PREFIX}${sessionId}`;
+    rememberSubscribed(turnsId);
+    void ipc.conversationWatchTurns(workspaceId, sessionId).catch(() => undefined);
     let cancelled = false;
     void paging
       .openSession(sessionId)
@@ -365,6 +408,11 @@ export function useConversation(
       });
     return () => {
       cancelled = true;
+      // 轮次头的合并定时器属于这一代目标：切走后不再触发一次过期重读。
+      if (turnRefreshTimerRef.current !== null) {
+        window.clearTimeout(turnRefreshTimerRef.current);
+        turnRefreshTimerRef.current = null;
+      }
       // 实时续聊的订阅也属于当前视图，离开时全部释放，重新进入才能从头回放。
       void releaseAllSubscriptions();
     };
@@ -512,6 +560,11 @@ export function useConversation(
     // 重连走的也是同一条回放：同样在过渡面下把正文拼齐，再一次交出。
     setOpening(true);
     void releaseAllSubscriptions()
+      .then(() => {
+        // 轮次头随正文一起重建：重连之后界面仍要能发现新轮。
+        rememberSubscribed(`${SESSION_TURNS_PREFIX}${sessionId}`);
+        return ipc.conversationWatchTurns(workspace, sessionId).catch(() => undefined);
+      })
       .then(() => paging.openSession(sessionId))
       .then(() => {
         setSessionReadyId(sessionId);
@@ -521,7 +574,7 @@ export function useConversation(
         setSubmitError(error instanceof Error ? error.message : '重连失败');
         setOpening(false);
       });
-  }, [sessionCapability, paging.openSession, releaseAllSubscriptions]);
+  }, [sessionCapability, paging.openSession, releaseAllSubscriptions, rememberSubscribed]);
 
   /*
    * 中断与转投：三步的先后顺序本身就是语义，因此整条装配收在

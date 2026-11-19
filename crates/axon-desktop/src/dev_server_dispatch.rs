@@ -538,11 +538,10 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
             });
             Ok(Value::Null)
         }
-        "conversation_watch_session" => {
-            conversation::stream::shared().watch(conversation::SubscribeTarget::Session {
+        "conversation_watch_turns" => {
+            conversation::stream::shared().watch(conversation::SubscribeTarget::SessionTurns {
                 workspace_id: as_str("workspaceId")?,
                 session_id: as_str("sessionId")?,
-                resume_cursor: optional_string("resumeCursor"),
             });
             Ok(Value::Null)
         }

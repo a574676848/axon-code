@@ -47,7 +47,7 @@ pub use commands::{
     conversation_interrupt, conversation_job_output, conversation_send_subagent_message,
     conversation_session_jobs, conversation_session_questions, conversation_session_subagents,
     conversation_set_active_session, conversation_stop_job, conversation_submit,
-    conversation_unsubscribe, conversation_watch, conversation_watch_session,
+    conversation_unsubscribe, conversation_watch, conversation_watch_turns,
 };
 pub use history::{
     InteractionSummary, SessionEffectiveModel, SessionInteractions, SessionUsageTotals,

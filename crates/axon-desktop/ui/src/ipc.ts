@@ -392,6 +392,12 @@ export const conversationWatch = (
   resumeCursor: string | null,
 ): Promise<void> => call('conversation_watch', { workspaceId, interactionId, resumeCursor });
 
+/** 订阅一条会话的轮次头：只推「多了一轮」与「这一轮收口了」；独立会话靠它发现新轮。 */
+export const conversationWatchTurns = (
+  workspaceId: string,
+  sessionId: string,
+): Promise<void> => call('conversation_watch_turns', { workspaceId, sessionId });
+
 /**
  * 取消一条订阅。
  *

@@ -198,15 +198,15 @@ pub fn conversation_watch(
     Ok(())
 }
 
-/// Tauri IPC 命令：订阅一条**会话**的事件流（子代理会话）。
+/// Tauri IPC 命令：订阅一条会话的**轮次头**。
 ///
-/// 与车道订阅共用同一条连接上的不同订阅，互不干扰；同一个目标重复订阅是幂等的。
+/// 只推「多了一轮」与「这一轮收口了」两类轻帧，不推正文。独立会话不在会话清单里，
+/// 界面靠这一路订阅发现新轮，再回来读一次索引。
 #[tauri::command(async)]
-pub fn conversation_watch_session(
+pub fn conversation_watch_turns(
     state: State<'_, AppState>,
     workspace_id: String,
     session_id: String,
-    resume_cursor: Option<String>,
 ) -> Result<(), String> {
     if session_id.trim().is_empty() {
         return Err("会话标识不能为空".to_string());
@@ -214,10 +214,9 @@ pub fn conversation_watch_session(
     if workspace_id.trim().is_empty() {
         return Err("工作区标识不能为空".to_string());
     }
-    state.conversation.watch(SubscribeTarget::Session {
+    state.conversation.watch(SubscribeTarget::SessionTurns {
         workspace_id,
         session_id,
-        resume_cursor,
     });
     Ok(())
 }

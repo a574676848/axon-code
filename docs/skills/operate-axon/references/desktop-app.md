@@ -119,7 +119,7 @@
 | 配置 | `config_read`、`config_validate`、`config_validate_values`、`config_write`、`config_apply_values`、`config_reset_key` |
 | Provider 与模型 | `provider_profile_upsert`、`provider_profile_remove`、`discover_models` |
 | 工作区与会话菜单 | `workspace_list`、`workspace_add`、`workspace_remove`、`workspace_list_entries`、`workspace_read_file`、`workspace_read_bytes`、`workspace_stat_path`、`workspace_applications`、`workspace_open_default`、`workspace_open_with`、`workspace_reveal`、`session_create`、`session_rename`、`session_reorder`、`session_set_pinned`、`session_set_archived` |
-| 会话 | `conversation_submit`、`conversation_history`、`conversation_watch`、`conversation_watch_session`、`conversation_unsubscribe`、`conversation_interrupt`、`conversation_stop_job`、`conversation_send_subagent_message`、`conversation_session_jobs`、`conversation_session_subagents`、`conversation_job_output`（`sessionId`、`jobId`、`offset`；按字节游标读一次作业输出增量，供后台任务卡的实时输出使用） |
+| 会话 | `conversation_submit`、`conversation_history`、`conversation_watch`、`conversation_watch_turns`、`conversation_unsubscribe`、`conversation_interrupt`、`conversation_stop_job`、`conversation_send_subagent_message`、`conversation_session_jobs`、`conversation_session_subagents`、`conversation_job_output`（`sessionId`、`jobId`、`offset`；按字节游标读一次作业输出增量，供后台任务卡的实时输出使用） |
 | 语音 | `voice_presets`、`voice_preview`、`voice_tts`、`voice_start`、`voice_stop`、`voice_cancel`、`voice_playback_drained`、`voice_microphone_status`、`voice_open_microphone_settings` |
 | Cron | `cron_list`、`cron_config`、`cron_get`、`cron_history`、`cron_create`、`cron_update`、`cron_pause`、`cron_resume`、`cron_run`、`cron_remove` |
 | MCP 与 Skill | `mcp_list`、`mcp_upsert`、`mcp_upsert_raw`、`mcp_remove`、`mcp_runtime_status`、`mcp_runtime_refresh`、`skills_list` |

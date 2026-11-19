@@ -248,14 +248,15 @@ pub enum SubscribeTarget {
         /// 断点续订游标；缺省表示全量重放。
         resume_cursor: Option<String>,
     },
-    /// 按会话订阅：子代理会话用它（不属于任何 Interaction）。
-    Session {
+    /// 会话轮次头：只推「多了一轮」与「这一轮收口了」，不推正文。
+    ///
+    /// 独立会话（目标执行、子代理）不在会话清单里，界面没有别的渠道发现新轮；
+    /// 这条订阅因此与正文订阅并存：正文仍按 Interaction 走，轮次头只负责唤一次索引。
+    SessionTurns {
         /// 目标所属工作区。
         workspace_id: String,
         /// 目标会话标识。
         session_id: String,
-        /// 断点续订游标；缺省表示全量重放。
-        resume_cursor: Option<String>,
     },
 }
 
@@ -265,7 +266,7 @@ impl SubscribeTarget {
     pub fn subscribe_id(&self) -> String {
         match self {
             Self::Interaction { interaction_id, .. } => format!("interaction:{interaction_id}"),
-            Self::Session { session_id, .. } => format!("session:{session_id}"),
+            Self::SessionTurns { session_id, .. } => format!("session-turns:{session_id}"),
         }
     }
 
@@ -282,16 +283,15 @@ impl SubscribeTarget {
                 session_id: None,
                 resume_cursor,
             },
-            Self::Session {
+            Self::SessionTurns {
                 workspace_id,
                 session_id,
-                resume_cursor,
             } => ClientFrame::Subscribe {
                 subscribe_id,
                 workspace_id,
                 interaction_id: None,
                 session_id: Some(session_id),
-                resume_cursor,
+                resume_cursor: None,
             },
         }
     }
@@ -524,46 +524,41 @@ mod tests {
             interaction_id: "interaction-1".to_owned(),
             resume_cursor: None,
         };
-        let session_target = SubscribeTarget::Session {
+        let turns_target = SubscribeTarget::SessionTurns {
             workspace_id: "workspace-a".to_owned(),
             session_id: "parent--subagent--root".to_owned(),
-            resume_cursor: None,
         };
         assert_eq!(
             interaction_target.subscribe_id(),
             "interaction:interaction-1"
         );
         assert_eq!(
-            session_target.subscribe_id(),
-            "session:parent--subagent--root"
+            turns_target.subscribe_id(),
+            "session-turns:parent--subagent--root"
         );
         assert_ne!(
             interaction_target.subscribe_id(),
-            session_target.subscribe_id(),
-            "交互流与会话流必须落在不同的订阅标识上，否则一条连接上会互相顶掉"
+            turns_target.subscribe_id(),
+            "正文流与轮次头必须落在不同的订阅标识上，否则一条连接上会互相顶掉"
         );
     }
 
     #[test]
-    fn session_subscribe_frame_carries_the_id_and_no_interaction() {
-        let frame = SubscribeTarget::Session {
+    fn turns_subscribe_frame_carries_the_id_and_no_interaction() {
+        let frame = SubscribeTarget::SessionTurns {
             workspace_id: "workspace-a".to_owned(),
             session_id: "parent--subagent--root".to_owned(),
-            resume_cursor: Some("{\"generation\":\"g1\",\"sequence\":4}".to_owned()),
         }
-        .into_frame("session:parent--subagent--root".to_owned());
+        .into_frame("session-turns:parent--subagent--root".to_owned());
         let value = serde_json::to_value(frame).expect("订阅帧应可序列化");
         assert_eq!(value["type"], "subscribe");
-        assert_eq!(value["subscribeId"], "session:parent--subagent--root");
+        assert_eq!(value["subscribeId"], "session-turns:parent--subagent--root");
         assert_eq!(value["sessionId"], "parent--subagent--root");
         assert!(
             value.get("interactionId").is_none(),
-            "会话级订阅不得带 Interaction 占位"
+            "轮次头订阅不得带 Interaction 占位"
         );
-        assert_eq!(
-            value["resumeCursor"],
-            "{\"generation\":\"g1\",\"sequence\":4}"
-        );
+        assert!(value.get("resumeCursor").is_none(), "轮次头没有历史可续订");
     }
 
     #[test]
