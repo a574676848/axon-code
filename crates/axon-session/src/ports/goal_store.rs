@@ -73,6 +73,15 @@ pub trait GoalStore: Send + Sync {
         Ok(())
     }
 
+    /// 请求终止该目标在途的执行轮次，不改目标状态、不写取消事件。
+    ///
+    /// 暂停与取消都必须让在途轮次真的停下来：界面写着「已暂停」而后台继续跑是错的。
+    /// 标记只作用于 `status='running'` 的轮次，已结算的轮次不受影响。
+    fn request_execution_stop(&self, goal_id: &GoalId, now_ms: u64) -> Result<(), GoalStoreError> {
+        let _ = (goal_id, now_ms);
+        Ok(())
+    }
+
     /// 在同一事务内更新 Goal 并持久化取消请求。
     fn cancel_goal(
         &self,

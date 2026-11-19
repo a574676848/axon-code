@@ -11,6 +11,7 @@ mod session_attach_snapshot;
 mod session_checkpoint;
 mod session_recovery;
 mod tool_environment;
+mod turn_profile;
 
 pub use agent_turn_executor::{
     AgentTurnExecutor, ContinuationResult, ProviderTurnResult, ProviderTurnRunner,
@@ -24,3 +25,7 @@ pub use session_attach_snapshot::SnapshotChunker;
 pub use session_checkpoint::SessionCheckpoint;
 pub use session_recovery::SessionRecovery;
 pub use tool_environment::ProviderToolEnvironment;
+pub use turn_profile::{
+    ORIGIN_CHANNEL_GOAL, ORIGIN_CHANNEL_KEY, PRIMARY_TURN_ACTION_KIND, TerminalAccounting,
+    TerminalFailureOwner, TurnContextProfile, TurnOrigin, TurnProfile,
+};

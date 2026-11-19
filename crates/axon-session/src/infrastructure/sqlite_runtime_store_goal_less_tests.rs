@@ -106,3 +106,46 @@ fn expired_goal_less_execution_quarantines_without_touching_goal_ledgers() {
             .is_empty()
     );
 }
+
+/// 暂停与取消都要真的让在途轮次停下来：标记落库，运行侧按会话查得到。
+#[test]
+fn execution_stop_marks_the_running_work_item_for_its_session() {
+    use crate::ports::GoalStore as _;
+    use axon_domain::GoalId;
+
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    let session_id = DaemonSessionId::new("session-stop").expect("session");
+    store.create_session(&session_id, ".", 10).expect("session");
+    let other = DaemonSessionId::new("session-other").expect("session");
+    store.create_session(&other, ".", 10).expect("session");
+
+    let connection = rusqlite::Connection::open(store.path()).expect("打开数据库");
+    connection
+        .execute(
+            "INSERT INTO work_items(execution_id,goal_id,session_id,kind,payload_json,attempt,priority,status,created_at_ms,updated_at_ms) \
+             VALUES('exec-stop','goal-stop','session-stop','turn','{}',0,0,'running',10,10)",
+            [],
+        )
+        .expect("插入执行行");
+    drop(connection);
+
+    assert!(
+        !store
+            .session_cancellation_requested(&session_id)
+            .expect("查询")
+    );
+    store
+        .request_execution_stop(&GoalId::new("goal-stop").expect("goal"), 20)
+        .expect("写终止标记");
+    assert!(
+        store
+            .session_cancellation_requested(&session_id)
+            .expect("查询"),
+        "暂停或取消之后，运行侧必须能查到终止标记"
+    );
+    assert!(
+        !store.session_cancellation_requested(&other).expect("查询"),
+        "标记只作用于该目标自己的会话"
+    );
+}

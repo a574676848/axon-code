@@ -65,6 +65,14 @@ pub(crate) fn execute_standalone_subagent(
         started_at_ms,
     )?;
     let workspace_files = Arc::new(WorkspaceFileSession::default());
+    // 取消或暂停目标只在 `work_items` 上留一条终止标记：运行侧在这里起看门狗消费它，
+    // 命中即触发本轮取消令牌，provider 循环据此收口，界面说停了就真的停。
+    let cancel_token = RunCancelToken::default();
+    let _stop_watch = super::run_execution_stop_watch::ExecutionStopWatch::start(
+        config_path,
+        session_id,
+        cancel_token.clone(),
+    );
     let wiring = run_subagent_execution_wiring(RunSubagentExecutionWiringInput {
         config: &loaded.config,
         config_path,
@@ -79,7 +87,7 @@ pub(crate) fn execute_standalone_subagent(
         routing_key: &selected.routing_key,
         command: &command,
         startup: &startup,
-        cancel_token: None,
+        cancel_token: Some(cancel_token.clone()),
         workspace_files,
         subagent_event_bus: None,
         subagent_session_sinks: session_sinks,

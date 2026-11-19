@@ -16,19 +16,18 @@
 | W10.5 优先级 | 行为通过，文档曾不一致 | 单次 `--session` 高于 resume 默认并还原指针；`resume` 只喂 `--continue`；裸 `run` 新建 |
 | W10.1 TUI `/sessions` | 不通过 | 见 F9 至 F14 |
 | W10.2 TUI 选中切换 | 部分不通过 | 正文切换与零写入通过；高亮重绘、指标跟随不通过（F15 至 F18） |
-| W8.5 目标执行分支 | 不可判定 | 修复执行路径后仅跑通一次；渠道与历史连续待复核（F1） |
+| W8.5 目标执行分支 | 部分生效 | 真机确认执行轮落 `kind='goal'` 会话、逐字稿落 `kind='subagent'` 执行子会话；指标投影缺行见 F22，子会话未绑定目标与执行标识见 F23 |
 | W10.7 至 W10.12 桌面项 | 待取证 | 第一轮桌面取证被中断，未留完整证据 |
 
 ## 一、数据链路
 
 | 编号 | 严重度 | 问题 | 证据 | 根因位置 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| F1 | 阻断 | ULID 会话标识大写未收敛成合法 AgentPath 段，后台执行整轮被拒 | 目标执行返回 `Runtime(InvalidState("agent_control:invalid_path"))`，该 goal 落 `status=failed`；修复后同一探针 `goal_start` 转 `completed` | `crates/axon-cli/src/run_commands/run_provider_turn.rs` 的 `background_task_path`：会话标识只做小写归一，空标识与非法字符直接报错，失败文本带会话标识 | 已修、已生效 |
-| F2 | 高 | 主 turn 的 `turn_metrics` 落库依赖运行态 host 租约，daemon 持租约时 CLI 直接跳过 | 日志当日 10 次以上 `CLI 未能取得 host lease，跳过 turn_metrics 写入` | `crates/axon-cli/src/run_commands/mod.rs` 的 `publish_turn_metrics` 与 `claim_host` 的单活跃 host 判定 | 待修 |
-| F3 | 高 | 后台执行 turn 从不落 `turn_metrics`，`session_metrics` 缺行 | 目标执行会话（`kind='goal'`、completed）零行；24 条 `kind='subagent'` 会话零行；桌面 header 因此缺「耗时 / 累计 / 命中率」，首字与速率同源缺失 | `run_provider_turn.rs` 的 `action_kind != PRIMARY_TURN_ACTION_KIND` 分支走 `execute_standalone_subagent`，该执行器不产出终态指标 | 待修 |
-| F4 | 高 | 一次 turn 存在两套执行器，指标只在其中一条产出 | 主 turn 走 `execute_provider_command` + 终态批次；后台 turn 走 `execute_standalone_subagent` | 同上 | 待修（方向：统一管线，长官已裁决） |
+| F4 | 高 | 一次 turn 存在两套执行器，指标只在其中一条产出 | 主 turn 走 `run_run_with_progress`；执行子会话走 `ProviderRunSubagentExecutor` | 执行段已合并为 `execute_turn`（provider 循环在 `run_turn_execution`，终态在 `run_turn_terminal`）；装载差异收敛在 `TurnSpec`，运行后差异只剩 `TurnCompletion` | 已修复 |
 | F5 | 中 | 新工作区首轮瞬态失败 | `Session Worker 失败：Interaction 存储失败：Query is not read-only`，183ms 失败；同形态复跑三次均成功，根因未定位 | 未定位 | 待取证 |
 | F6 | 中 | `sessions.root_session_id` 标识空间混用 | 同一列既有会话 ULID，也有 Thread UUID（两条不同派生点） | 子代理登记点与自迭代登记点 | 待修 |
+| F22 | 高 | 执行子会话的轮次指标只进 `usage_facts`，`session_metrics` 无行 | 真机：`usage_facts` 有 `01M7S13T0J…`、`01M7S132F…` 等子会话各 1 行；`session_metrics` 全库仅 3 行且全为 `kind='primary'`，`kind='goal'` 会话与 `kind='subagent'` 执行子会话均无行（含执行成功的 `goal-4bd82aab…`） | 终态记账已按来源统一到 `account_completed_turn`，各来源的 `metrics` 口径均为真；真机行数未复验 | 待取证 |
+| F23 | 中 | 执行子会话未绑定目标与执行标识，状态停在 `created` | 真机：`01M7S0KNSR86BR8AY9YAQ3KWNG` 的 `goal_id`、`execution_id` 均为空，`status='created'`，而 `last_event_sequence=16421`、thread 3.7 MB | 子会话登记点只写 `root_session_id` 与 `agent_path`，未回填 `goal_id`/`execution_id`，轮次状态也没有推进 | 待修 |
 
 ## 二、CLI 面
 
@@ -56,15 +55,16 @@
 
 | 编号 | 严重度 | 问题 | 证据 | 根因位置 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| F19 | 高 | 目标看板进入的 goal 会话详情，header 缺「累计耗时 / 累计消耗 / 缓存命中率」，速率与首字同缺 | 真机截图；该会话 `session_metrics` 零行 | 同 F3（数据面缺投影），前端按「取不到基线不渲染该段」的既有规则如实缺省 | 待修（依赖 F3） |
 | F20 | 中 | 探针 goal 的执行代理越界修改仓库源码 | 执行期间自行改写 `run_provider_turn.rs` 与其测试文件 | 目标执行提示词未约束「禁止修改文件」 | 待修（探针侧已加约束） |
 | F21 | 待取证 | W10.7 / W10.8 / W10.9 / W10.10 / W10.11 / W10.12 未取得完整真机证据 | 第一轮桌面取证被中断 | 无 | 待取证 |
 
 ## 五、未取证与边界登记
 
-- W10.7 至 W10.12 全部待取证：需要 20 轮以上会话的分页证据、左侧菜单四项与会话表的逐项对照、跨端三轮来源标注、以及目标 / cron / 子代理三个入口的渲染路径比对。
-- W8.5 只完成「目标执行能跑通并落在 `kind='goal'` 会话」这一层；`origin_channel=goal`、重复执行落同一条会话（历史连续）、渠道分布投影三项待复核。
+- 数据面真机取证（本次）：安装态 `$HOME/.axon/bin/versions/0.0.1/axon.exe` 与 `target/release/axon.exe` 同为 149060608 字节、同 `2026-11-19 12:19:39` 时间戳，运行中的 daemon（PID 12300）即该版本目录内二进制。在该版本上跑目标执行 `goal-2e3f2a7f88c4c0590f00a8523825e438`，对照来源会话 `01M7S0KNRM9SZ9VZ2X92JDA3NZ`（`kind='goal'`、`last_event_sequence=283`、无 thread 实体）与执行子会话 `01M7S0KNSR86BR8AY9YAQ3KWNG`（`kind='subagent'`、`root_session_id=01M7S0KNRM9SZ9VZ2X92JDA3NZ`、`agent_path=root/task-01m7s0knrm9sz9vz2x92jda3nz`、`last_event_sequence=16421`、thread 3.7 MB）：逐字稿只落执行子会话成立；指标两侧都没有 `session_metrics` 行，见 F22。复核命令：`sqlite3 -readonly $HOME/.axon/data/control.sqlite3` 查 `sessions` 与 `session_metrics`，`sqlite3 -readonly $HOME/.axon/usage/usage.sqlite3` 查 `usage_facts`；`session_events` 不是可查表，逐字稿以 thread jsonl 与 `sessions.last_event_sequence` 为准。
 - 历史会话的 `session_metrics` 不会因修复自动补齐；是否按事件重放回填待裁决。
+- 失败轮的子会话终态：运行侧已恢复写入（`failures_settled_by_scheduler` 为假），来源会话的调度终态仍由 Worker 写；两条卡是否会在界面上同时出现待真机确认。
+- W10.7 至 W10.12 全部待取证：需要 20 轮以上会话的分页证据、左侧菜单四项与会话表的逐项对照、跨端三轮来源标注、以及目标 / cron / 子代理三个入口的渲染路径比对。
+- W8.5：`kind='goal'` 会话与按 `(root_session_id, agent_path)` 固定的执行子会话在真机上已成立（标识位见上条）；`origin_channel=goal` 的渠道分布因 `session_metrics` 缺行暂时无处可看，并入 F22；「重复执行续在同一条子会话」仍未取证。
 
 ## 六、复现与取证手段
 

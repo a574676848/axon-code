@@ -99,6 +99,21 @@ impl ExecutionView {
             updated_at_ms: record.updated_at_ms,
         }
     }
+
+    /// 由领域执行记录投影，并把会话标识换成这一轮实际所在的会话。
+    ///
+    /// 执行记录绑定的是来源会话（`kind=goal` 或 `kind=cron`）；逐字稿与指标改落执行子会话后，
+    /// 「进入会话」必须指向子会话。调用方一次批量查好映射再传进来，查询数与执行条数无关。
+    pub(crate) fn from_record_with_session(
+        record: &ExecutionRecord,
+        session_id: Option<&str>,
+    ) -> Self {
+        let mut view = Self::from_record(record);
+        if let Some(session_id) = session_id {
+            view.session_id = Some(session_id.to_owned());
+        }
+        view
+    }
 }
 
 /// 一次目标结果的只读投影。
@@ -181,6 +196,7 @@ pub(crate) fn goal_card_view(
     latest_execution: Option<&ExecutionRecord>,
     latest_result: Option<&ResultRecord>,
     workspace: Option<&WorkspaceRecord>,
+    latest_session_id: Option<&str>,
 ) -> GoalCardView {
     let last_activity_at_ms = goal
         .updated_at_ms
@@ -219,7 +235,8 @@ pub(crate) fn goal_card_view(
         created_at_ms: goal.created_at_ms,
         updated_at_ms: goal.updated_at_ms,
         last_activity_at_ms,
-        latest_execution: latest_execution.map(ExecutionView::from_record),
+        latest_execution: latest_execution
+            .map(|record| ExecutionView::from_record_with_session(record, latest_session_id)),
         latest_result: latest_result.map(ResultView::from_record),
     }
 }
@@ -266,6 +283,7 @@ pub(crate) fn goal_detail_view(
     goal: &GoalRecord,
     executions: &[ExecutionRecord],
     latest_result: Option<&ResultRecord>,
+    subagent_sessions: &std::collections::HashMap<String, String>,
 ) -> GoalDetailView {
     let (objective, objective_truncated) =
         truncate_chars(&goal.plan.objective, DETAIL_OBJECTIVE_CHARS);
@@ -282,7 +300,16 @@ pub(crate) fn goal_detail_view(
         recent_executions: executions
             .iter()
             .take(DETAIL_EXECUTION_LIMIT as usize)
-            .map(ExecutionView::from_record)
+            .map(|record| {
+                ExecutionView::from_record_with_session(
+                    record,
+                    record
+                        .session_id
+                        .as_ref()
+                        .and_then(|session| subagent_sessions.get(session.as_str()))
+                        .map(String::as_str),
+                )
+            })
             .collect(),
         latest_result: latest_result.map(ResultView::from_record),
     }

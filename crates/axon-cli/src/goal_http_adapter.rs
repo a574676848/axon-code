@@ -166,7 +166,9 @@ impl GoalHttpAdapter {
         workspaces: &[WorkspaceRecord],
     ) -> Result<Vec<GoalCardView>, String> {
         let store = runtime_store(&self.axon_root);
-        let mut cards = Vec::with_capacity(page.goals.len());
+        // 两次循环：先取每条目标的事实，再一次性取「执行会话 → 执行子会话」映射。
+        // 批量查一次即可覆盖整页，查询数因此与目标条数无关。
+        let mut facts = Vec::with_capacity(page.goals.len());
         for goal in &page.goals {
             let latest_execution = store
                 .list_executions_for_goal(&goal.goal_id, 1)
@@ -182,16 +184,37 @@ impl GoalHttpAdapter {
                 })
                 .transpose()?
                 .flatten();
+            facts.push((goal, latest_execution, latest_result));
+        }
+        let roots: Vec<axon_domain::DaemonSessionId> = facts
+            .iter()
+            .filter_map(|(_, execution, _)| {
+                execution
+                    .as_ref()
+                    .and_then(|record| record.session_id.clone())
+            })
+            .collect();
+        let subagent_sessions = store
+            .latest_subagent_session_ids(&roots)
+            .map_err(|error| format!("读取执行子会话失败：{error}"))?;
+        let mut cards = Vec::with_capacity(facts.len());
+        for (goal, latest_execution, latest_result) in facts {
             // 列表只按作用域标识取工作区：合同第 7.3 条把查询数上界固定为
             // 1 + 2N + 1，逐个全局目标解析会话 cwd 会多出 N 条查询，因此这一步
             // 留给详情。列表里全局目标的工作区三段字段因此为空，界面据此降级为
             // 「查看详情」，由详情给出解析结果与进入会话的入口。
             let workspace = scope_workspace(goal, workspaces);
+            let latest_session = latest_execution
+                .as_ref()
+                .and_then(|record| record.session_id.as_ref())
+                .and_then(|session| subagent_sessions.get(session.as_str()))
+                .map(String::as_str);
             cards.push(goal_card_view(
                 goal,
                 latest_execution.as_ref(),
                 latest_result.as_ref(),
                 workspace,
+                latest_session,
             ));
         }
         cards.sort_by(|left, right| {
@@ -240,17 +263,35 @@ impl GoalHttpAdapter {
             view.latest_execution.as_ref(),
             &workspaces,
         );
+        // 详情同样一次批量取子会话映射：条数上限 8，查询数与会话条数无关。
+        let roots: Vec<axon_domain::DaemonSessionId> = view
+            .recent_executions
+            .iter()
+            .filter_map(|record| record.session_id.clone())
+            .collect();
+        let subagent_sessions = match store.latest_subagent_session_ids(&roots) {
+            Ok(found) => found,
+            Err(error) => {
+                return query_failed(&format!("读取执行子会话失败：{error}"));
+            }
+        };
         let card = goal_card_view(
             &view.goal,
             view.latest_execution.as_ref(),
             view.latest_result.as_ref(),
             workspace,
+            view.latest_execution
+                .as_ref()
+                .and_then(|record| record.session_id.as_ref())
+                .and_then(|session| subagent_sessions.get(session.as_str()))
+                .map(String::as_str),
         );
         let detail = goal_detail_view(
             card,
             &view.goal,
             &view.recent_executions,
             view.latest_result.as_ref(),
+            &subagent_sessions,
         );
         GatewayHttpResponse::json(200, &detail)
     }

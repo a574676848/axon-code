@@ -508,3 +508,25 @@ fn enqueue_error(error: rusqlite::Error) -> ExecutionStoreError {
         storage_error(error)
     }
 }
+
+impl SqliteRuntimeStore {
+    /// 该会话是否有正在运行且已被请求取消的执行轮次。
+    ///
+    /// 走 `(session_id, status)` 索引前缀，只判存在性，代价与在途轮次数无关。
+    pub(super) fn session_cancellation_requested_impl(
+        &self,
+        session_id: &DaemonSessionId,
+    ) -> Result<bool, crate::ports::RuntimeStoreError> {
+        let connection = self.connection()?;
+        let found = connection
+            .query_row(
+                "SELECT 1 FROM work_items WHERE session_id=?1 AND status='running' \
+                 AND cancellation_requested_at_ms IS NOT NULL LIMIT 1",
+                params![session_id.as_str()],
+                |_row| Ok(()),
+            )
+            .optional()
+            .map_err(super::helpers::storage)?;
+        Ok(found.is_some())
+    }
+}

@@ -4,10 +4,7 @@ use std::path::{Path, PathBuf};
 
 use axon_agent_runtime::ContentArchiveRuntime;
 
-use super::{
-    RunRequest, RunSessionPartialInput, RunSessionRecord, derive_thread_title,
-    mirror_session_started, mirror_session_terminal, mirror_session_to_thread,
-};
+use super::{RunRequest, derive_thread_title, mirror_session_terminal};
 use crate::run_commands::run_self_iteration_subagent::is_internal_agent_path;
 use crate::run_commands::run_thread_children::{
     CHILD_SESSION_ORIGIN_DELEGATED, CHILD_SESSION_ORIGIN_INTERNAL, record_child_origin,
@@ -187,48 +184,32 @@ fn mark_child_origin(request: &RunRequest) {
 }
 
 pub(super) fn persist_child_turn_started(request: &RunRequest) {
-    let input = RunSessionPartialInput {
-        provider: request.provider.name.clone(),
-        model: request.model.id.clone(),
-        tool_calls: Vec::new(),
-        tool_receipts: Vec::new(),
-        reasoning_messages: Vec::new(),
-        turn_events: Vec::new(),
-    };
-    let record = RunSessionRecord::from_partial(request, &input);
-    let title = derive_thread_title(&record.prompt);
-    if let Err(error) = mirror_session_started(&request.config_path, &record) {
-        axon_logger::warning(&format!(
+    // 起始态与主 turn 走同一条记录、同一处投影；子代理把失败降级为告警，不阻断起跑。
+    match crate::run_commands::run_turn_start::persist_turn_started(request) {
+        Ok(record) => {
+            let title = derive_thread_title(&record.prompt);
+            if let Err(error) = crate::run_commands::run_thread_title::mirror_thread_title(
+                &request.config_path,
+                &record,
+                &title,
+            ) {
+                axon_logger::warning(&format!(
+                    "child thread title projection skipped: session_id={}, error={error}",
+                    request.session_id
+                ));
+            }
+        }
+        Err(error) => axon_logger::warning(&format!(
             "child thread start projection skipped: session_id={}, error={error}",
             request.session_id
-        ));
-    } else if let Err(error) = crate::run_commands::run_thread_title::mirror_thread_title(
-        &request.config_path,
-        &record,
-        &title,
-    ) {
-        axon_logger::warning(&format!(
-            "child thread title projection skipped: session_id={}, error={error}",
-            request.session_id
-        ));
+        )),
     }
+    // 名册登记与状态推进是子代理专属：父轮要能发现这一条，并看到它真的在跑。
     mark_child_origin(request);
+    mark_child_session_running(request);
 }
 
-pub(super) fn persist_child_turn_completed(
-    request: &RunRequest,
-    response: &super::super::run_execution::RunResponse,
-) {
-    let record = RunSessionRecord::from_completed(
-        request,
-        response,
-        None,
-        &request.startup.workspace_instructions,
-    );
-    persist_child_record(request, &record);
-}
-
-pub(super) fn persist_child_turn_terminal(
+pub(in crate::run_commands) fn persist_child_turn_terminal(
     request: &RunRequest,
     status: &str,
     summary: &str,
@@ -257,23 +238,37 @@ pub(super) fn persist_child_turn_terminal(
             request.session_id
         ));
     }
+    mark_child_session_status(request, CHILD_SESSION_STATUS_IDLE);
 }
 
-fn persist_child_record(request: &RunRequest, record: &RunSessionRecord) {
-    let title = derive_thread_title(&record.prompt);
-    if let Err(error) = mirror_session_to_thread(&request.config_path, record) {
-        axon_logger::warning(&format!(
-            "child thread projection skipped: session_id={}, error={error}",
-            request.session_id
-        ));
-    } else if let Err(error) = crate::run_commands::run_thread_title::mirror_thread_title(
-        &request.config_path,
-        record,
-        &title,
-    ) {
-        axon_logger::warning(&format!(
-            "child thread title projection skipped: session_id={}, error={error}",
-            request.session_id
-        ));
-    }
+/// 子会话回到静息：一轮结束后由终态记账的调用方推进。
+///
+/// 与 `mark_child_session_running` 成对：状态必须反映运行态，不能停在 `created`。
+pub(in crate::run_commands) fn mark_child_session_idle(request: &RunRequest) {
+    mark_child_session_status(request, CHILD_SESSION_STATUS_IDLE);
+}
+
+/// 子会话状态常量：运行中与静息。
+const CHILD_SESSION_STATUS_RUNNING: &str = "running";
+const CHILD_SESSION_STATUS_IDLE: &str = "idle";
+
+/// 推进子代理会话的真实状态。
+///
+/// 子会话由派发方登记，但它是被执行的那个会话：状态必须反映运行态，
+/// 不能永远停在 `created`。写失败只影响投影，不阻断本轮。
+fn mark_child_session_status(request: &RunRequest, status: &str) {
+    let Ok(store) = crate::run_commands::run_turn_metrics::shared_store(&request.config_path)
+    else {
+        return;
+    };
+    let Ok(session_id) = axon_domain::DaemonSessionId::new(request.session_id.clone()) else {
+        return;
+    };
+    use axon_session::RuntimeStore as _;
+    let _ = store.mark_subagent_session_status(&session_id, status, axon_time::unix_now_ms());
+}
+
+/// 子会话进入运行态。
+pub(super) fn mark_child_session_running(request: &RunRequest) {
+    mark_child_session_status(request, CHILD_SESSION_STATUS_RUNNING);
 }

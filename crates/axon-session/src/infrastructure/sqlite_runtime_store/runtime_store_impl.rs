@@ -153,6 +153,36 @@ impl RuntimeStore for SqliteRuntimeStore {
         self.find_subagent_session_impl(root_session_id, agent_path)
     }
 
+    fn latest_subagent_session_ids(
+        &self,
+        root_session_ids: &[DaemonSessionId],
+    ) -> Result<std::collections::HashMap<String, String>, RuntimeStoreError> {
+        self.latest_subagent_session_ids_impl(root_session_ids)
+    }
+
+    fn session_cancellation_requested(
+        &self,
+        session_id: &DaemonSessionId,
+    ) -> Result<bool, RuntimeStoreError> {
+        self.session_cancellation_requested_impl(session_id)
+    }
+
+    fn mark_subagent_session_status(
+        &self,
+        session_id: &DaemonSessionId,
+        status: &str,
+        now_ms: u64,
+    ) -> Result<(), RuntimeStoreError> {
+        self.mark_subagent_session_status_impl(session_id, status, now_ms)
+    }
+
+    fn session_goal_id(
+        &self,
+        session_id: &DaemonSessionId,
+    ) -> Result<Option<String>, RuntimeStoreError> {
+        self.session_goal_id_impl(session_id)
+    }
+
     fn resolve_goal_session(
         &self,
         request: &GoalSessionRequest,

@@ -13,8 +13,10 @@ use crate::ports::{
     GoalSessionRequest, NewSessionRequest, RuntimeStore, ScheduleSessionRequest,
     SubagentSessionRequest, WorkspaceStore,
 };
+use std::collections::HashMap;
+
 use axon_domain::{DaemonSessionId, WorkspaceId};
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, params, params_from_iter};
 
 impl SqliteRuntimeStore {
     /// 解析某个根会话下某个代理路径的子代理会话；没有就建一条。
@@ -29,32 +31,25 @@ impl SqliteRuntimeStore {
                 "子代理会话缺少代理路径".to_owned(),
             ));
         }
-        if let Some(found) =
-            self.find_subagent_session_impl(&request.root_session_id, &agent_path)?
-        {
-            return Ok(found);
-        }
-        let candidate = NewSessionRequest {
-            session_id: new_session_id(),
-            kind: SessionKind::Subagent,
-            trust_scope: SessionTrustScope::Private,
-            workspace_id: self.root_workspace_id(&request.root_session_id)?,
-            root_session_id: Some(request.root_session_id.clone()),
-            agent_path: Some(agent_path.clone()),
-            goal_id: None,
-            execution_id: None,
-            cwd: request.cwd.clone(),
-            now_ms: request.now_ms,
-        };
-        if let Err(error) = self.create_session_impl(&candidate) {
-            // 并发下唯一键可能已被另一路占位：回读成功就用它，不把冲突报上去。
-            return match self.find_subagent_session_impl(&request.root_session_id, &agent_path)? {
-                Some(existing) => Ok(existing),
-                None => Err(error),
-            };
-        }
-        self.find_subagent_session_impl(&request.root_session_id, &agent_path)?
-            .ok_or_else(|| RuntimeStoreError::Storage("子代理会话登记后回读为空".to_owned()))
+        let root_session_id = &request.root_session_id;
+        self.resolve_or_create_session(
+            |store| store.find_subagent_session_impl(root_session_id, &agent_path),
+            || {
+                Ok(NewSessionRequest {
+                    session_id: new_session_id(),
+                    kind: SessionKind::Subagent,
+                    trust_scope: SessionTrustScope::Private,
+                    workspace_id: self.root_workspace_id(&request.root_session_id)?,
+                    root_session_id: Some(request.root_session_id.clone()),
+                    agent_path: Some(agent_path.clone()),
+                    goal_id: None,
+                    execution_id: None,
+                    cwd: request.cwd.clone(),
+                    now_ms: request.now_ms,
+                })
+            },
+            "子代理会话登记后回读为空",
+        )
     }
 
     /// 只读查某个根会话下某个代理路径的子代理会话；不存在返回 `None`。
@@ -82,6 +77,45 @@ impl SqliteRuntimeStore {
             .map_err(storage)
     }
 
+    /// 按根会话批量读取它最近活动的子代理会话标识。
+    ///
+    /// 一次查询覆盖一整页目标：查询数与根会话条数无关。同一根有多条子会话时按最近活动
+    /// 取一条，因此结果就是「这一轮落在哪条会话」。
+    pub(crate) fn latest_subagent_session_ids_impl(
+        &self,
+        root_session_ids: &[DaemonSessionId],
+    ) -> Result<HashMap<String, String>, RuntimeStoreError> {
+        if root_session_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        self.initialize()?;
+        let connection = self.connection()?;
+        let placeholders = (1..=root_session_ids.len())
+            .map(|index| format!("?{index}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT root_session_id, session_id FROM sessions \
+             WHERE kind='subagent' AND agent_path IS NOT NULL \
+               AND root_session_id IN ({placeholders}) \
+             ORDER BY last_activity_at_ms DESC, session_id ASC"
+        );
+        let mut statement = connection.prepare(&sql).map_err(storage)?;
+        let rows = statement
+            .query_map(
+                params_from_iter(root_session_ids.iter().map(DaemonSessionId::as_str)),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .map_err(storage)?;
+        let mut found: HashMap<String, String> = HashMap::with_capacity(root_session_ids.len());
+        for row in rows {
+            let (root, child) = row.map_err(storage)?;
+            // 排序是最近活动在前，首次出现即该根的最新子会话。
+            found.entry(root).or_insert(child);
+        }
+        Ok(found)
+    }
+
     /// 解析某个目标的执行会话；没有就建一条。
     pub(crate) fn resolve_goal_session_impl(
         &self,
@@ -94,29 +128,48 @@ impl SqliteRuntimeStore {
                 "目标执行会话缺少目标标识".to_owned(),
             ));
         }
-        if let Some(found) = self.find_goal_session_impl(goal_id)? {
+        self.resolve_or_create_session(
+            |store| store.find_goal_session_impl(goal_id),
+            || {
+                Ok(NewSessionRequest {
+                    session_id: new_session_id(),
+                    kind: SessionKind::Goal,
+                    trust_scope: SessionTrustScope::Private,
+                    workspace_id: request.workspace_id.clone(),
+                    root_session_id: None,
+                    agent_path: None,
+                    goal_id: Some(goal_id.to_owned()),
+                    execution_id: None,
+                    cwd: request.cwd.clone(),
+                    now_ms: request.now_ms,
+                })
+            },
+            "目标执行会话登记后回读为空",
+        )
+    }
+
+    /// 解析或登记一条 turn 会话：先按调用方条件查，查不到再建。
+    ///
+    /// 「查不到才建、并发撞唯一键就回读复用」这段骨架在同构来源上完全一致，区别只在
+    /// 查询条件与新建请求。冲突回读必须保留：并发派发时唯一键已被另一路占位，直接把
+    /// 冲突报上去会让派发方看到假失败。
+    fn resolve_or_create_session(
+        &self,
+        find: impl Fn(&Self) -> Result<Option<SessionRuntimeRecord>, RuntimeStoreError>,
+        candidate: impl FnOnce() -> Result<NewSessionRequest, RuntimeStoreError>,
+        empty_reason: &'static str,
+    ) -> Result<SessionRuntimeRecord, RuntimeStoreError> {
+        if let Some(found) = find(self)? {
             return Ok(found);
         }
-        let candidate = NewSessionRequest {
-            session_id: new_session_id(),
-            kind: SessionKind::Goal,
-            trust_scope: SessionTrustScope::Private,
-            workspace_id: request.workspace_id.clone(),
-            root_session_id: None,
-            agent_path: None,
-            goal_id: Some(goal_id.to_owned()),
-            execution_id: None,
-            cwd: request.cwd.clone(),
-            now_ms: request.now_ms,
-        };
+        let candidate = candidate()?;
         if let Err(error) = self.create_session_impl(&candidate) {
-            return match self.find_goal_session_impl(goal_id)? {
+            return match find(self)? {
                 Some(existing) => Ok(existing),
                 None => Err(error),
             };
         }
-        self.find_goal_session_impl(goal_id)?
-            .ok_or_else(|| RuntimeStoreError::Storage("目标执行会话登记后回读为空".to_owned()))
+        find(self)?.ok_or_else(|| RuntimeStoreError::Storage(empty_reason.to_owned()))
     }
 
     fn find_goal_session_impl(
@@ -155,6 +208,9 @@ impl SqliteRuntimeStore {
     ///
     /// 绑定的事实源是 `schedules.session_id`，这里只读不写：写回由定义侧的
     /// `upsert_schedule` 在同一次落库里完成，因此不存在「任务已建、会话没绑定」的中间态。
+    ///
+    /// 这里不走上面的骨架：它的「查」读的是任务绑定表而不是会话表，且 cron 会话没有
+    /// 唯一键可冲突，回读复用语义不存在。强行合并只会多一次 SELECT 并模糊两条路径。
     pub(crate) fn resolve_schedule_session_impl(
         &self,
         request: &ScheduleSessionRequest,
@@ -227,5 +283,49 @@ impl SqliteRuntimeStore {
             .ok()
             .flatten()
             .map_or_else(String::new, |record| record.workspace_root)
+    }
+}
+
+impl SqliteRuntimeStore {
+    /// 推进子代理会话的状态与活跃时间（只作用于 `kind='subagent'` 的行）。
+    pub(super) fn mark_subagent_session_status_impl(
+        &self,
+        session_id: &DaemonSessionId,
+        status: &str,
+        now_ms: u64,
+    ) -> Result<(), crate::ports::RuntimeStoreError> {
+        let connection = self.connection()?;
+        connection
+            .execute(
+                "UPDATE sessions SET status=?2,last_activity_at_ms=?3,updated_at_ms=?3 \
+                 WHERE session_id=?1 AND kind='subagent'",
+                params![
+                    session_id.as_str(),
+                    status,
+                    super::helpers::i64_value(now_ms)?
+                ],
+            )
+            .map_err(super::helpers::storage)?;
+        Ok(())
+    }
+}
+
+impl SqliteRuntimeStore {
+    /// 读该会话绑定的目标标识。
+    pub(super) fn session_goal_id_impl(
+        &self,
+        session_id: &DaemonSessionId,
+    ) -> Result<Option<String>, crate::ports::RuntimeStoreError> {
+        use rusqlite::OptionalExtension as _;
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT goal_id FROM sessions WHERE session_id=?1",
+                params![session_id.as_str()],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map(|found| found.flatten())
+            .map_err(super::helpers::storage)
     }
 }

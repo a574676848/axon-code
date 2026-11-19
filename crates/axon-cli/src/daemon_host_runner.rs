@@ -215,6 +215,11 @@ fn try_run_daemon_host(
         Arc::clone(&primary_turn_signal),
     )?;
     host.start().map_err(|error| error.to_string())?;
+    // 指标写入通道复用宿主代际：注册必须放在 host 启动之后，未启动时拿不到 host 记录。
+    // 注册后每轮指标只追加一次事件，不再与其他 Host 争抢单活跃租约。
+    if let Ok(record) = host.host_record() {
+        crate::run_commands::register_process_host(record);
+    }
     // 宿主起来之后才有 host 记录与订阅桥；迟到作答的问答帧靠它落进会话事件流。
     questions.install_durable_question_events(&host, question_store);
     let _pid_file = DaemonPidFileGuard::acquire(&runtime_root)?;

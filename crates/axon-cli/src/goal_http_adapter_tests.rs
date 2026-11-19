@@ -356,3 +356,53 @@ fn unrelated_methods_and_paths_fall_through() {
             .is_none()
     );
 }
+
+/// 进入会话必须指向执行子会话：来源会话只做账本，逐字稿与指标都在子会话。
+#[test]
+fn latest_execution_points_at_the_execution_child_session() {
+    let (_directory, adapter, store) = fixture();
+    store
+        .create_goal(&goal("goal-child", ScopeRef::global(), 100))
+        .expect("goal");
+    bind_execution_at(&store, "goal-child", 300, "/workspace-a");
+    // 执行子会话：根会话是执行会话本身，并携带代理路径；同一轮的所有事实都落在它上面。
+    let child = axon_session::NewSessionRequest {
+        session_id: DaemonSessionId::new("01M7RSKXXX8VNSK4WM3BN77R0H").expect("child session"),
+        kind: axon_session::SessionKind::Subagent,
+        trust_scope: axon_session::SessionTrustScope::Private,
+        workspace_id: None,
+        root_session_id: Some(
+            DaemonSessionId::new("goal-session-goal-child").expect("root session"),
+        ),
+        agent_path: Some("root/task-goal-child".to_owned()),
+        goal_id: None,
+        execution_id: None,
+        cwd: "/workspace-a".to_owned(),
+        now_ms: 400,
+    };
+    store.create_session_with(&child).expect("child session");
+
+    let (status, body) = get(&adapter, &list_path(), None);
+    assert_eq!(status, 200);
+    assert_eq!(
+        body["goals"][0]["latestExecution"]["sessionId"], "01M7RSKXXX8VNSK4WM3BN77R0H",
+        "进入会话必须指向执行子会话，而不是只承接账本的来源会话"
+    );
+}
+
+/// 没有子会话时回落到执行记录绑定的会话：不必为此拒绝进入。
+#[test]
+fn latest_execution_falls_back_to_the_bound_session() {
+    let (_directory, adapter, store) = fixture();
+    store
+        .create_goal(&goal("goal-plain", ScopeRef::global(), 100))
+        .expect("goal");
+    bind_execution_at(&store, "goal-plain", 300, "/workspace-a");
+
+    let (status, body) = get(&adapter, &list_path(), None);
+    assert_eq!(status, 200);
+    assert_eq!(
+        body["goals"][0]["latestExecution"]["sessionId"],
+        "goal-session-goal-plain"
+    );
+}

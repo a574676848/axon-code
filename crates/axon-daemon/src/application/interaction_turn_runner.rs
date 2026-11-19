@@ -8,7 +8,7 @@ use super::super::primary_turn_service::{
 use super::completion_delivery::{completion_notification_id, completion_steer_execution_id};
 use super::daemon_host_projection::queued_action;
 #[path = "child_session_event_sink.rs"]
-mod child_session_event_sink;
+pub(super) mod child_session_event_sink;
 #[path = "interaction_turn_event_sink.rs"]
 mod interaction_turn_event_sink;
 #[path = "interaction_turn_generation_watch.rs"]
@@ -18,6 +18,11 @@ mod interaction_turn_terminal;
 use axon_crypto::sha256_hex;
 use axon_domain::{DaemonSessionId, InteractionRecord, SessionActionId};
 use axon_session::{DaemonHostRecord, RuntimeStore, SessionRuntimeRecord, interaction_session_id};
+/// Daemon Primary Turn 使用的稳定 Action 类型。
+///
+/// 取值定义在会话运行时一侧（`axon_session_runtime::PRIMARY_TURN_ACTION_KIND`），
+/// 这里只做转发：主 turn 判据不允许在两处各写一份字面量。
+pub use axon_session_runtime::PRIMARY_TURN_ACTION_KIND;
 use axon_session_runtime::model::{RuntimeEvent, TURN_COMPLETED_EVENT};
 use axon_session_runtime::{
     ActionExecutionRequest, AtomicTurnPerformanceRecorder, EventPublisher, RuntimeClock,
@@ -29,8 +34,6 @@ use interaction_turn_event_sink::RuntimeTurnEventSink;
 use interaction_turn_terminal::{FailedTurnTerminalInput, failed_turn_terminal_events};
 use interaction_turn_terminal::{TurnFailureKind, classify_turn_failure};
 use std::sync::Arc;
-/// Daemon Primary Turn 使用的稳定 Action 类型。
-pub const PRIMARY_TURN_ACTION_KIND: &str = "user_input";
 const PRIMARY_ACTION_ID_PREFIX: &str = "interaction-action-";
 /// 用户消息事件的关联标识。
 const USER_CORRELATION_ID: &str = "user";

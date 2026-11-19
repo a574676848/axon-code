@@ -2,8 +2,7 @@
 
 use axon_agent_runtime::agent_run_tool_receipt_completed_from_facts;
 
-use super::{RunRequest, RunSubagentExecutionInput};
-use crate::run_commands::RunStopControl;
+use super::RunSubagentExecutionInput;
 
 pub(super) fn child_model_history_json(
     input: &RunSubagentExecutionInput,
@@ -23,14 +22,6 @@ pub(super) fn child_model_history_json(
     serde_json::to_string(&messages)
         .map(Some)
         .map_err(|error| format!("子代理继承历史序列化失败：{error}"))
-}
-
-pub(super) fn start_child_stop_control(request: &RunRequest) -> Result<RunStopControl, String> {
-    let cancel_token = request
-        .cancel_token
-        .clone()
-        .ok_or_else(|| "普通 coding child 缺少取消令牌".to_owned())?;
-    RunStopControl::start(&request.config_path, &request.session_id, cancel_token)
 }
 
 pub(super) fn persisted_memory_write_count(

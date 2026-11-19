@@ -28,7 +28,7 @@ pub(crate) use super::run_subagent_completion::{
 };
 use super::{
     RunCancelToken, RunCommand, RunRequest,
-    run_execution::ProviderStreamingRunner,
+    run_execution::{ProviderStreamingRunner, RunResponse},
     run_model_routing::resolve_model_profile_id,
     run_progress::RunProgressEventBus,
     run_request::{CLI_RUN_DEFAULT_MODEL_PROFILE_ID, prepare_model_input_and_tools},
@@ -36,7 +36,6 @@ use super::{
     run_request_payload::{
         BuildRunModelPayloadInput, RunWorkspaceSnapshotPrewarm, build_run_model_payload,
     },
-    run_session_store::{RunSessionPartialInput, RunSessionRecord},
     run_subagent_completion::log_completion_failure,
     run_subagent_executor_support::resolve_child_session,
     run_subagent_lifecycle::{
@@ -47,12 +46,13 @@ use super::{
     run_subagent_performance::{
         log_subagent_performance, record_subagent_history_ready, start_subagent_performance,
     },
-    run_subagent_progress::{SubagentProviderTurnRunner, run_subagent_provider_turn},
-    run_thread_store::{
-        mirror_session_started, mirror_session_terminal, mirror_session_to_thread,
-        prepare_run_session,
-    },
+    run_subagent_progress::ChildTurnProjection,
+    run_thread_store::{mirror_session_terminal, prepare_run_session},
     run_thread_title::derive_thread_title,
+    run_turn_execution::{TurnProviderRunner, TurnTeardownScope, execute_turn_with},
+    run_turn_spec::TurnSpec,
+    run_turn_start::start_turn_stop_control,
+    run_turn_terminal::{complete_turn, fail_turn},
 };
 #[path = "run_subagent_persistence.rs"]
 mod child_persistence;
@@ -67,15 +67,14 @@ pub(crate) use axon_agent_runtime::{
     ChildExecutionOutput as RunSubagentExecutionOutput,
     ChildExecutionStatus as RunSubagentExecutionStatus,
 };
+use child_persistence::persist_child_turn_started;
 pub(super) use child_persistence::{
     SUBAGENT_RESULT_MARKER_TEXT, append_result_path, extract_result_path, persist_subagent_result,
     should_persist_subagent_result, strip_result_path, subagent_archive_root,
     subagent_result_instruction,
 };
-use child_persistence::{
-    persist_child_turn_completed, persist_child_turn_started, persist_child_turn_terminal,
-};
-use helpers::{child_model_history_json, persisted_memory_write_count, start_child_stop_control};
+pub(super) use child_persistence::{mark_child_session_idle, persist_child_turn_terminal};
+use helpers::{child_model_history_json, persisted_memory_write_count};
 
 /// 子代理执行器。
 pub(crate) trait RunSubagentExecutor: Send + Sync {
@@ -146,7 +145,7 @@ const MAIN_TURN_ONLY_TOOL_QUALIFIED_NAMES: &[&str] = &[
 pub(crate) struct ProviderRunSubagentExecutor {
     environment: ProviderRunSubagentEnvironment,
     lifecycle_registry: SubagentLifecycleRegistry,
-    provider_turn_runner: SubagentProviderTurnRunner,
+    provider_turn_runner: TurnProviderRunner,
 }
 
 impl ProviderRunSubagentExecutor {
@@ -165,7 +164,7 @@ impl ProviderRunSubagentExecutor {
     #[cfg(test)]
     fn with_provider_turn_runner(
         environment: ProviderRunSubagentEnvironment,
-        provider_turn_runner: SubagentProviderTurnRunner,
+        provider_turn_runner: TurnProviderRunner,
     ) -> Self {
         let mut executor = Self::new(environment);
         executor.provider_turn_runner = provider_turn_runner;
@@ -351,8 +350,9 @@ impl ProviderRunSubagentExecutor {
         publisher: &SubagentLifecyclePublisher,
     ) -> RunSubagentExecutionOutput {
         persist_child_turn_started(child_request);
-        let _stop_control = match start_child_stop_control(child_request) {
-            Ok(control) => Some(control),
+        // 子代理的 run-control 通道失败只降级为告警：停不下这一轮也照常跑完再回报。
+        let _stop_control = match start_turn_stop_control(child_request) {
+            Ok(control) => control,
             Err(error) => {
                 axon_logger::warning(&format!(
                     "子代理 run-control 不可用，继续使用运行时取消令牌: session_id={}, error={error}",
@@ -362,84 +362,82 @@ impl ProviderRunSubagentExecutor {
             }
         };
         let model = model_display_name(&child_request.model);
-        let output = match run_subagent_provider_turn(
+        // 子代理只是别人的一段工作：收尾归父轮，这里不清理任何父轮作用域的资源。
+        let teardown = TurnTeardownScope::none();
+        let provider = ChildTurnProjection::begin(
             child_request,
             &input.task_path,
             input.started_at_ms,
             &model,
             publisher,
-            self.provider_turn_runner,
             self.environment.subagent_session_sinks.clone(),
-        ) {
-            Ok(response) => {
+        )
+        .run(child_request, |progress| {
+            execute_turn_with(
+                self.provider_turn_runner,
+                child_request,
+                progress,
+                &teardown,
+            )
+            .provider
+        });
+        let output = match provider {
+            Ok(response) if is_empty_child_result(&response) => {
                 // 空结果守卫：完成却既无文本也无任何工具回执（且非 max-tokens 截断），
                 // 视为失败而非静默放行：父代理不得把空结果误读为任务完成。
-                let empty_result = response.content.trim().is_empty()
-                    && response.tool_receipts.is_empty()
-                    && !response.max_tokens_truncated;
-                if empty_result {
-                    axon_logger::warning(&format!(
-                        "子代理完成但未产生任何结果（空内容且无工具调用），标记为失败: session_id={}, task_path={}",
-                        child_request.session_id, input.task_path
-                    ));
-                    persist_child_turn_terminal(
-                        child_request,
-                        "errored",
-                        "子代理完成但未产生任何结果（空内容且无工具调用）",
-                        None,
-                    );
-                    RunSubagentExecutionOutput {
-                        status: RunSubagentExecutionStatus::Errored,
-                        summary:
-                            "子代理完成但未产生任何结果（空内容且无工具调用）。常见原因：通道回退后模型返回空响应。"
-                                .to_owned(),
-                        memory_write_count: 0,
-                        token_usage: response.token_usage,
-                        model: Some(model),
-                        budget_exhausted: false,
-                    }
-                } else {
-                    persist_child_turn_completed(child_request, &response);
-                    let memory_write_count = persisted_memory_write_count(&response);
-                    RunSubagentExecutionOutput {
-                        status: RunSubagentExecutionStatus::Completed,
-                        summary: response.content,
-                        memory_write_count,
-                        token_usage: response.token_usage,
-                        model: Some(model),
-                        budget_exhausted: response.max_tokens_truncated,
-                    }
-                }
-            }
-            Err(error) if error.error_type == AGENT_RUN_ERROR_TYPE_INTERRUPTED => {
-                persist_child_turn_terminal(child_request, "interrupted", &error.message, None);
+                axon_logger::warning(&format!(
+                    "子代理完成但未产生任何结果（空内容且无工具调用），标记为失败: session_id={}, task_path={}",
+                    child_request.session_id, input.task_path
+                ));
+                persist_child_turn_terminal(
+                    child_request,
+                    "errored",
+                    EMPTY_CHILD_RESULT_REASON,
+                    None,
+                );
                 RunSubagentExecutionOutput {
-                    status: RunSubagentExecutionStatus::Interrupted,
-                    summary: error.message,
+                    status: RunSubagentExecutionStatus::Errored,
+                    summary: EMPTY_CHILD_RESULT_SUMMARY.to_owned(),
                     memory_write_count: 0,
-                    token_usage: error.token_usage,
+                    token_usage: response.token_usage,
                     model: Some(model),
                     budget_exhausted: false,
                 }
             }
+            Ok(response) => {
+                // 与主 turn 同一条终态记账：差异只在规格里的完成去向与收口口径。
+                let completed = complete_turn(&TurnSpec::subagent(), child_request, response);
+                mark_child_session_idle(child_request);
+                let memory_write_count = persisted_memory_write_count(&completed.response);
+                RunSubagentExecutionOutput {
+                    status: RunSubagentExecutionStatus::Completed,
+                    summary: completed.response.content,
+                    memory_write_count,
+                    token_usage: completed.response.token_usage,
+                    model: Some(model),
+                    budget_exhausted: completed.response.max_tokens_truncated,
+                }
+            }
             Err(error) => {
-                let failure = super::run_session_store::runtime_failure_from_execution_error(
-                    &child_request.session_id,
-                    error.as_ref(),
-                    "",
-                    super::run_execution::now_ms(),
-                );
-                persist_child_turn_terminal(
+                // 与主 turn 同一条失败落账：去向决定它写进子会话终态还是父轮轮次记录。
+                let interrupted = error.error_type == AGENT_RUN_ERROR_TYPE_INTERRUPTED;
+                let failed = fail_turn(
+                    &child_request.config_path,
+                    &self.environment.config,
+                    &TurnSpec::subagent(),
                     child_request,
-                    "errored",
-                    &error.message,
-                    Some(&failure),
+                    error,
+                    String::new(),
                 );
                 RunSubagentExecutionOutput {
-                    status: RunSubagentExecutionStatus::Errored,
-                    summary: error.message,
+                    status: if interrupted {
+                        RunSubagentExecutionStatus::Interrupted
+                    } else {
+                        RunSubagentExecutionStatus::Errored
+                    },
+                    summary: failed.error.message,
                     memory_write_count: 0,
-                    token_usage: error.token_usage,
+                    token_usage: failed.error.token_usage,
                     model: Some(model),
                     budget_exhausted: false,
                 }
@@ -633,6 +631,21 @@ fn model_display_name(model: &ModelConfig) -> String {
     }
 }
 
+/// 空结果的落账正文：既无文本也无工具回执的一轮不算完成。
+const EMPTY_CHILD_RESULT_REASON: &str = "子代理完成但未产生任何结果（空内容且无工具调用）";
+
+/// 空结果回给父代理的摘要：比落账正文多一句常见原因，便于父代理判断是否重试。
+const EMPTY_CHILD_RESULT_SUMMARY: &str =
+    "子代理完成但未产生任何结果（空内容且无工具调用）。常见原因：通道回退后模型返回空响应。";
+
+/// 空结果守卫：完成却既无文本也无任何工具回执（且非 max-tokens 截断）视为失败。
+///
+/// 不静默放行：父代理不得把空结果误读为任务完成。
+fn is_empty_child_result(response: &RunResponse) -> bool {
+    response.content.trim().is_empty()
+        && response.tool_receipts.is_empty()
+        && !response.max_tokens_truncated
+}
 /// 把一条协作消息渲染为低权威 runtime note 正文。
 ///
 /// 渲染收敛在 `axon-agent-runtime` 的同一处：mailbox 的每次消费都用同一段措辞，

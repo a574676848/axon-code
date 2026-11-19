@@ -100,7 +100,8 @@ fn failed_run_record_rejects_previous_turn_snapshot() {
     previous.assistant_part_id = "assistant-part:previous".to_owned();
     previous.response = "上一轮结果".to_owned();
 
-    let selected = super::super::select_failed_run_record(started.clone(), Some(previous));
+    let selected =
+        super::super::run_turn_terminal::select_failed_run_record(started.clone(), Some(previous));
 
     assert_eq!(selected.assistant_part_id, started.assistant_part_id);
     assert!(selected.response.is_empty());
@@ -113,7 +114,8 @@ fn failed_run_record_preserves_current_turn_partial() {
     let mut partial = started.clone();
     partial.response = "当前 partial".to_owned();
 
-    let selected = super::super::select_failed_run_record(started, Some(partial));
+    let selected =
+        super::super::run_turn_terminal::select_failed_run_record(started, Some(partial));
 
     assert_eq!(selected.response, "当前 partial");
 }

@@ -293,6 +293,40 @@ pub trait RuntimeStore:
         &self,
         session_id: &DaemonSessionId,
     ) -> Result<SessionRuntimeRecord, RuntimeStoreError>;
+    /// 按根会话批量读取它最近活动的子代理会话标识。
+    ///
+    /// 一次查询覆盖一整页，查询数与根会话条数无关。没有子会话的根不出现在结果里；
+    /// 同一根有多条子会话时取最近活动的一条，因此调用方拿到的就是「这一轮落在哪条会话」。
+    fn latest_subagent_session_ids(
+        &self,
+        root_session_ids: &[DaemonSessionId],
+    ) -> Result<std::collections::HashMap<String, String>, RuntimeStoreError>;
+    /// 该会话是否有正在运行且已被请求取消的执行轮次。
+    ///
+    /// 运行侧在后台执行期间按有界周期查询它：命中即中止本轮。取消与暂停目标都写这个标记，
+    /// 这里是它唯一的消费点，因此「界面说停了、后台还在跑」不再成立。
+    fn session_cancellation_requested(
+        &self,
+        session_id: &DaemonSessionId,
+    ) -> Result<bool, RuntimeStoreError>;
+    /// 推进子代理会话的状态与活跃时间。
+    ///
+    /// 子会话由派发方登记，但它是**被执行的那个会话**：状态必须反映真实运行态，
+    /// 不能永远停在 `created`。这里只允许改 `kind='subagent'` 的行，不碰宿主租约。
+    fn mark_subagent_session_status(
+        &self,
+        session_id: &DaemonSessionId,
+        status: &str,
+        now_ms: u64,
+    ) -> Result<(), RuntimeStoreError>;
+    /// 读该会话绑定的目标标识；没有绑定时为空。
+    ///
+    /// 子会话要继承根会话的目标归属，而 `SessionRuntimeRecord` 不带这一列，
+    /// 因此单列读取，避免为一条归属事实去解析整行。
+    fn session_goal_id(
+        &self,
+        session_id: &DaemonSessionId,
+    ) -> Result<Option<String>, RuntimeStoreError>;
     /// 后台任务计数投影：`started` 为真表示作业开始，为假表示作业收口。
     ///
     /// 由作业生命周期事件的生产者调用；同一会话的计数只增不减到 0 为止，

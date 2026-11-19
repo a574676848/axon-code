@@ -9,6 +9,9 @@ use axon_domain::{GoalId, GoalPlan, GoalRecord, GoalStatus, LedgerEvent, ScopeRe
 use rusqlite::{OptionalExtension, Row, TransactionBehavior, params};
 use uuid::Uuid;
 
+/// 暂停目标时写进在途执行轮次的终止原因。
+const GOAL_PAUSED_STOP_REASON: &str = "目标已暂停";
+
 impl GoalStore for SqliteRuntimeStore {
     fn create_goal(&self, goal: &GoalRecord) -> Result<bool, GoalStoreError> {
         self.initialize().map_err(runtime_error)?;
@@ -136,6 +139,20 @@ impl GoalStore for SqliteRuntimeStore {
         } else {
             Err(GoalStoreError::Conflict("Goal revision 已过期".to_owned()))
         }
+    }
+
+    fn request_execution_stop(&self, goal_id: &GoalId, now_ms: u64) -> Result<(), GoalStoreError> {
+        self.initialize().map_err(runtime_error)?;
+        let mut connection = self.connection().map_err(runtime_error)?;
+        let transaction = connection.transaction().map_err(storage_error)?;
+        let now = i64_value(now_ms).map_err(runtime_error)?;
+        transaction
+            .execute(
+                "UPDATE work_items SET cancellation_requested_at_ms=?1,cancellation_reason=?2,updated_at_ms=?1 WHERE goal_id=?3 AND status='running'",
+                params![now, GOAL_PAUSED_STOP_REASON, goal_id.as_str()],
+            )
+            .map_err(storage_error)?;
+        transaction.commit().map_err(storage_error)
     }
 
     fn request_cancellation(

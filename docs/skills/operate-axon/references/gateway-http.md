@@ -156,10 +156,10 @@ Authorization: Bearer <token>
 
 | 方法与路径 | 用途 |
 |---|---|
-| `GET /api/v1/goals` | 可见目标列表。`?limit=<1-256>`，缺省 256，越界返回 400 `invalid_query`；`?workspaceId=<id>` 只返回该工作区的目标。返回 `goals`、`returned`、`truncated`。每个目标带 `goalId`、`title`、`status`、`revision`、`objectivePreview`（按 160 字符截断）、`stepCount`、`nextStep`、`waitingReason`、`priority`、`deadlineMs`、`scopeKind`（`workspace` 或 `global`）、`workspaceId`、`workspaceName`、`workspacePath`、`createdAtMs`、`updatedAtMs`、`lastActivityAtMs`、`latestExecution`、`latestResult`。`lastActivityAtMs` 取更新时间、最近执行更新时间与最近结果时间三者最大；`truncated` 为真表示本次读取达到上限且仍有更多目标 |
+| `GET /api/v1/goals` | 可见目标列表。`?limit=<1-256>`，缺省 256，越界返回 400 `invalid_query`；`?workspaceId=<id>` 只返回该工作区的目标。返回 `goals`、`returned`、`truncated`。每个目标带 `goalId`、`title`、`status`、`revision`、`objectivePreview`（按 160 字符截断）、`stepCount`、`nextStep`、`waitingReason`、`priority`、`deadlineMs`、`scopeKind`（`workspace` 或 `global`）、`workspaceId`、`workspaceName`、`workspacePath`、`createdAtMs`、`updatedAtMs`、`lastActivityAtMs`、`latestExecution`、`latestResult`。`latestExecution.sessionId` 指向这一轮的执行子会话（`kind=subagent`），没有子会话时回落到执行记录绑定的来源会话；`lastActivityAtMs` 取更新时间、最近执行更新时间与最近结果时间三者最大；`truncated` 为真表示本次读取达到上限且仍有更多目标 |
 | `GET /api/v1/goals/<goalId>` | 单个目标详情。在列表同构的 `goal` 之上追加 `objective`（最多 20000 字符）、`steps`、`acceptance`（各最多 64 条、单条最多 2000 字符）、`cancellationReason`、`objectiveTruncated`、`listsTruncated`、`recentExecutions`（最多 8 条，按 `createdAtMs` 降序）与 `latestResult`。目标不存在或不可见返回 404 `goal_not_found` |
 
-目标执行会话的逐字稿不另立路由：走 WebSocket 的会话级订阅，见 `gateway-websocket.md`。
+目标执行子会话的逐字稿不另立路由：走 WebSocket 的会话级订阅，订阅标识取 `latestExecution.sessionId`，见 `gateway-websocket.md`。
 
 人格状态（只读；桌面设置 › 人设 的状态面板经此读取）：
 

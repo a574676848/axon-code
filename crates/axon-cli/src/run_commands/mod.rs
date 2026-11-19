@@ -1,6 +1,6 @@
 use super::*;
 use crate::management_commands::{cli_config_error, cli_error, json_result, resolved_config_path};
-use axon_config::{AxonConfig, load_provider_credentials_from_env_file};
+use axon_config::load_provider_credentials_from_env_file;
 use std::io::Write as IoWrite;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -29,6 +29,7 @@ mod run_completion_notice_subscription;
 mod run_continuation_assembly;
 mod run_environment_context;
 mod run_execution;
+mod run_execution_stop_watch;
 mod run_failover;
 mod run_file_change_projection;
 pub(crate) mod run_job_lifecycle_events;
@@ -101,7 +102,13 @@ mod run_thread_title;
 mod run_tool_loop;
 mod run_tool_pool;
 mod run_tool_result_cache;
+mod run_turn_accounting;
+mod run_turn_execution;
+mod run_turn_metrics;
 mod run_turn_outcome;
+mod run_turn_spec;
+mod run_turn_start;
+mod run_turn_terminal;
 pub(crate) mod run_workspace_identity;
 pub(crate) use run_tool_result_cache::workspace_revision;
 mod run_tool_result_wire;
@@ -123,21 +130,13 @@ pub(crate) use interaction_adapter::{
 #[cfg(feature = "tui")]
 pub(crate) use interactive_tui::run_agent_tui_entry;
 pub(crate) use run_agent_identity::RunAgentIdentity;
-use run_execution::{
-    ProviderStreamingRunner, RunExecutionError, RunJsonEvent, RunResponse, new_run_session_id,
-    now_ms,
-};
+use run_execution::{RunJsonEvent, new_run_session_id, now_ms};
 use run_json_wire_events::CompletedRunWireEventsInput;
-use run_memory_autonomy::apply_memory_autonomy_feedback;
 use run_memory_recall::RunMemoryRecallEvent;
-use run_memory_usefulness::memory_usefulness_for_completed;
 pub(crate) use run_memory_write::AgentMemorySearchInput;
 use run_model_routing::{
     FAST_MODEL_SLOT_NAME, select_channel_balanced_model,
     select_channel_balanced_model_for_agent_slot,
-};
-use run_post_run_governance::{
-    PostRunGovernanceJob, PostRunGovernanceReceipt, start_post_run_governance_job,
 };
 pub(crate) use run_post_run_governance_worker::run_governance_worker;
 pub(crate) use run_progress::question_part_id;
@@ -231,10 +230,7 @@ pub(crate) fn run_cli_daemon_interaction(
     )
 }
 
-use run_thread_store::{
-    mirror_failed_session_to_thread, mirror_session_started, mirror_session_to_thread,
-    prepare_run_session,
-};
+use run_thread_store::{mirror_session_started, prepare_run_session};
 
 pub(crate) fn run_planned_invocation(cli: &AxonCli) -> CliRunResult {
     match plan_invocation(cli) {
@@ -335,180 +331,6 @@ mod env_file_tests {
     }
 }
 
-struct CompletedRun {
-    response: RunResponse,
-    session_title: Option<String>,
-    memory_usefulness: Option<run_memory_usefulness::RunMemoryUsefulnessEvent>,
-    memory_autonomy: Option<axon_agent_runtime::MemoryAutonomyFeedbackReport>,
-    post_run_governance: Option<PostRunGovernanceReceipt>,
-    /// 上一轮的记忆反思提示；本轮治理还没跑，拿不到自己那条。
-    memory_reflection_notice: Option<String>,
-}
-
-fn finish_completed_run(
-    config_path: &Path,
-    request: &RunRequest,
-    response: RunResponse,
-) -> Result<CompletedRun, String> {
-    let memory_usefulness = memory_usefulness_for_completed(request, &response);
-    let record = RunSessionRecord::from_completed(
-        request,
-        &response,
-        memory_usefulness.as_ref(),
-        &request.startup.workspace_instructions,
-    );
-    publish_turn_metrics(config_path, &record);
-    let session_title = run_thread_title::derive_thread_title(&record.prompt);
-
-    // 反思是轮后异步治理的产物：本轮治理尚未启动，能确定看到的只有上一次的结果。
-    // 这条提示随 run 输出交给界面，用户在下一轮开头看到上一轮的记忆动作。
-    let memory_reflection_notice = run_thread_tail::previous_reflection_notice_at_tail(
-        config_path,
-        &record.session_id,
-        &record.assistant_part_id,
-    );
-    if let Err(error) = mirror_session_to_thread(config_path, &record) {
-        axon_logger::warning(&format!(
-            "thread projection skipped: session_id={}, error={error}",
-            record.session_id
-        ));
-    } else if let Err(error) =
-        run_thread_title::mirror_thread_title(config_path, &record, &session_title)
-    {
-        axon_logger::warning(&format!(
-            "thread title projection skipped: session_id={}, error={error}",
-            record.session_id
-        ));
-    }
-    // 标题只落在服务端一列，桌面侧靠现有轮询取回；判定与生成都在后台，失败不影响本轮。
-    run_session_title::maybe_spawn_session_title_generation(
-        config_path,
-        &record.session_id,
-        &request.cwd,
-        request.current_agent_path.is_root(),
-    );
-    let governance_job = PostRunGovernanceJob {
-        config_path: config_path.to_path_buf(),
-        request: request.clone(),
-        session_record: record,
-        memory_usefulness: memory_usefulness.clone(),
-    };
-    let post_run_governance = Some(start_post_run_governance_job(&governance_job));
-    Ok(CompletedRun {
-        response,
-        session_title: Some(session_title),
-        memory_usefulness,
-        memory_autonomy: None,
-        post_run_governance,
-        memory_reflection_notice,
-    })
-}
-
-fn finish_failed_run(
-    config_path: &Path,
-    config: &AxonConfig,
-    request: &RunRequest,
-    error: &RunExecutionError,
-    output: OutputFormat,
-    progress: Option<&run_progress::RunProgressSink<'_>>,
-) -> CliRunResult {
-    let partial_response =
-        progress.map_or_else(String::new, |sink| sink.partial_assistant_content());
-    let timestamp = run_execution::now_ms();
-    // 失败轮不入治理队列，因此人格结算在这里直接完成，保证失败转移在生产路径可达。
-    // 用户中断与真正的失败必须分开记账：前者按「本轮被中断」，后者才累加失败连击。
-    let final_status = if request
-        .cancel_token
-        .as_ref()
-        .is_some_and(axon_agent_runtime::RunCancelToken::is_cancelled)
-    {
-        axon_persona::TurnFinalStatus::Interrupted
-    } else {
-        axon_persona::TurnFinalStatus::Failed
-    };
-    let part_id = format!("failed:{timestamp}");
-    run_persona_settlement::settle_persona_turn(&run_persona_settlement::PersonaSettlementInput {
-        config_path,
-        session_id: &request.session_id,
-        assistant_part_id: &part_id,
-        disclosure: request.goal_disclosure_policy,
-        final_status,
-        user_affect: None,
-        user_fatigue: None,
-        persona_drift_bp: None,
-        drift_reason: None,
-        scene_audience: None,
-        // 失败路径没有轨迹也没有评估：不给信号，结算退回旧行为。
-        signals: None,
-    });
-    let failure = run_session_store::runtime_failure_from_execution_error(
-        &request.session_id,
-        error,
-        &partial_response,
-        timestamp,
-    );
-    if let Err(persistence_error) =
-        persist_failed_run(config_path, request, error, partial_response, &failure)
-    {
-        axon_logger::warning(&format!(
-            "failed run persistence skipped: session_id={}, error={persistence_error}",
-            request.session_id
-        ));
-    }
-    let memory_usefulness = run_memory_usefulness::memory_usefulness_for_failed(request, error);
-    let memory_autonomy = apply_memory_autonomy_feedback(
-        config_path,
-        config,
-        request,
-        memory_usefulness.as_ref(),
-        false,
-    );
-    let report = RunJsonEvent::failed(
-        request,
-        error,
-        &failure,
-        memory_usefulness.as_ref(),
-        memory_autonomy.as_ref(),
-    );
-    match output {
-        OutputFormat::Text => CliRunResult {
-            exit_code: 1,
-            stdout: super::run_commands::run_text_render::render_text_run_failure(request, error),
-            stderr: String::new(),
-        },
-        OutputFormat::Json => {
-            let mut result = json_result(&report);
-            result.exit_code = 1;
-            result
-        }
-    }
-}
-
-fn persist_failed_run(
-    config_path: &Path,
-    request: &RunRequest,
-    error: &RunExecutionError,
-    partial_response: String,
-    failure: &axon_domain::RuntimeFailure,
-) -> Result<(), String> {
-    let started = RunSessionRecord::started(request);
-    let persisted =
-        run_thread_store::turn_record_by_sequence(config_path, &request.session_id, None)?
-            .map(|(record, _)| record);
-    let mut record = select_failed_run_record(started, persisted);
-    record.mark_failed(failure.clone(), partial_response, error);
-    mirror_failed_session_to_thread(config_path, &record, failure)
-}
-
-fn select_failed_run_record(
-    started: RunSessionRecord,
-    persisted: Option<RunSessionRecord>,
-) -> RunSessionRecord {
-    persisted
-        .filter(|record| record.assistant_part_id == started.assistant_part_id)
-        .unwrap_or(started)
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CliRuntimePendingReport {
@@ -532,73 +354,4 @@ impl CliRuntimePendingReport {
 }
 
 pub(crate) use run_memory_write::{AgentMemoryWriteInput, AgentMemoryWriteRuntime};
-/// 把本轮指标写进会话事件流。
-///
-/// CLI 是独立进程，必须先 claim 一个短租约 host 才能通过 fence 校验；拿不到 lease
-/// （daemon 正持有同一库的 host 行）时跳过写入，不阻断本轮执行。
-fn publish_turn_metrics(config_path: &Path, record: &RunSessionRecord) {
-    use axon_session::{EventLogStore as _, RuntimeStore as _};
-
-    let Ok(store) = run_agent_store::shared_runtime_store(config_path) else {
-        return;
-    };
-    let Ok(session_id) = axon_domain::DaemonSessionId::new(record.session_id.clone()) else {
-        return;
-    };
-    let Ok(host_id) = axon_domain::RuntimeHostId::new(format!("cli-{}", std::process::id())) else {
-        return;
-    };
-    let now_ms = axon_time::unix_now_ms();
-    // CLI 直连时该会话可能尚未登记：先补齐运行时行，否则事件无处归属。
-    // 但复合车道已经认领这段运行窗口时不能再登记一条：同一段对话会在 `sessions list`
-    // 里出现两条（一条有轮次、一条空壳），用户按清单恢复时会挑到空壳那条。
-    if store.get_session(&session_id).is_err()
-        && !crate::session_commands::run_window_registered(&store, &record.session_id)
-    {
-        let cwd = record.cwd.clone().unwrap_or_default();
-        let _ = store.create_session(&session_id, &cwd, now_ms);
-    }
-    let Ok(host) = store.claim_host(&host_id, std::process::id(), None, now_ms, 60_000) else {
-        axon_logger::warning("CLI 未能取得 host lease，跳过 turn_metrics 写入");
-        return;
-    };
-    let usage = record.usage.unwrap_or_default();
-    let active_ms = record
-        .turn_events
-        .iter()
-        .filter_map(|event| event.duration_ms)
-        .fold(0_u64, |total, value| total.saturating_add(value));
-    let metrics = axon_eventlog::TurnMetrics {
-        turn_id: record.assistant_part_id.clone(),
-        ttft_ms: record.ttft_ms,
-        active_ms,
-        provider_duration_ms: active_ms,
-        tool_ms: 0,
-        input_tokens: usage.input_tokens,
-        output_tokens: usage.output_tokens,
-        reasoning_tokens: usage.reasoning_output_tokens,
-        cache_read_tokens: usage.cache_read_input_tokens,
-        cache_write_tokens: usage.cache_write_input_tokens,
-        generation_speed_tps: record.generation_speed_tps,
-        // 作业计数来自真实生产者：本模块订阅作业生命周期事件，这里只读结果。
-        background_jobs_started: crate::run_commands::run_job_lifecycle_events::take_started_count(
-            &record.session_id,
-        ),
-        background_jobs_running: crate::run_commands::run_job_lifecycle_events::running_count(
-            &record.session_id,
-        ),
-        outcome: axon_eventlog::TurnOutcome::Succeeded,
-        tool_calls: u32::try_from(record.tool_calls.len()).unwrap_or(u32::MAX),
-    };
-    let Ok(payload) = serde_json::to_string(&metrics) else {
-        return;
-    };
-    if let Err(error) = store.append_events(
-        &session_id,
-        &host,
-        &[("turn_metrics".to_owned(), payload)],
-        now_ms,
-    ) {
-        axon_logger::warning(&format!("turn_metrics 写入失败：{error}"));
-    }
-}
+pub(crate) use run_turn_metrics::{publish_turn_metrics, register_process_host};

@@ -1,9 +1,11 @@
-//! 后台执行的会话投影：把子代理逐字稿写进**执行会话本身**。
+//! 后台执行的投影：逐字稿落 turn 所属子会话，执行会话退为来源账本。
 //!
-//! 目标与 cron 的执行会话是 `goal-session-<goalId>`：执行绑定、订阅放行与看板入口
-//! 都指向这一条会话。运行侧原本按「派生子会话」写逐字稿（`<parent>--subagent--<path>`），
-//! 本模块把落点重定向到执行会话，界面因此不需要知道派生子会话的标识，也不需要
-//! 为后台执行另造一套视图。
+//! 一次后台执行的归属是「来源会话 + 执行子会话」：目标与 cron 的执行会话
+//! （`kind=goal|cron`）只保留轮次状态、收口标记与账本关系；子会话
+//! （`kind=subagent`，`agent_path=/root/task-<来源会话>`）承载逐字稿与轮次指标。
+//!
+//! 这样同一轮的所有事实只有一个落点，界面用与会话完全相同的投影即可渲染，
+//! 不需要为后台执行另造一套视图，也不会出现「正文在 A 会话、指标在 B 会话」。
 //!
 //! 写入口径与子代理会话完全一致：宿主代际围栏下 `append_events`，落库之后再发布，
 //! 订阅者看到的每一帧都已经是 durable 事实。
@@ -92,10 +94,8 @@ where
         Some(Arc::new(ExecutionSessionSinkFactory {
             store: self.store.clone(),
             host: self.host.clone(),
-            session_id: self.session_id.clone(),
             clock: self.clock.clone(),
             publisher: self.publisher.clone(),
-            terminal_written: Arc::clone(&self.terminal_written),
         }))
     }
 }
@@ -104,10 +104,8 @@ where
 struct ExecutionSessionSinkFactory<S, C, P> {
     store: S,
     host: DaemonHostRecord,
-    session_id: DaemonSessionId,
     clock: C,
     publisher: P,
-    terminal_written: Arc<AtomicBool>,
 }
 
 impl<S, C, P> SubagentSessionSinkFactory for ExecutionSessionSinkFactory<S, C, P>
@@ -118,23 +116,37 @@ where
 {
     fn sink_for(
         &self,
-        _identity: &axon_session_runtime::SubagentSessionIdentity,
+        identity: &axon_session_runtime::SubagentSessionIdentity,
     ) -> Result<Arc<dyn TurnEventSink>, String> {
-        // 请求的子会话标识被有意忽略：后台执行的逐字稿只能落在执行会话上，
-        // 否则界面要额外知道派生子会话的标识，卡片入口与执行绑定也会分叉。
+        // 逐字稿落 turn 所属子会话：执行会话只保留轮次状态与收口标记。
+        // 子会话行必须在这里登记，否则事件没有地方推进序号水位。
+        let session_id = DaemonSessionId::new(identity.session_id.as_str())
+            .map_err(|error| format!("执行子会话标识非法：{error:?}"))?;
+        super::interaction_turn_runner::child_session_event_sink::ensure_subagent_session(
+            &self.store,
+            self.clock.now_ms(),
+            identity,
+        )?;
         Ok(Arc::new(ExecutionSessionSink {
             store: self.store.clone(),
             host: self.host.clone(),
-            session_id: self.session_id.clone(),
+            session_id,
             clock: self.clock.clone(),
             publisher: self.publisher.clone(),
-            terminal_written: Arc::clone(&self.terminal_written),
+            // 子会话的收口标记与执行会话无关：共用会让运行侧一写子会话终态，
+            // Worker 就误判「执行会话已收口」而跳过来源账本的终态卡。
+            terminal_written: Arc::new(AtomicBool::new(false)),
         }))
     }
 
     fn failures_settled_by_scheduler(&self) -> bool {
-        // 失败终态由 Worker 结算并写 `turn_failed` / `turn_retry_scheduled`：
-        // 运行侧再写一条 `turn_completed` 会让同一轮出现两张失败卡。
-        true
+        // 逐字稿与终态都落 turn 所属子会话：子会话的失败卡必须由运行侧写，否则它的历史
+        // 会在失败轮悬空。执行会话（来源账本）的调度终态 `turn_failed` / `turn_retry_scheduled`
+        // 仍由 Worker 写，两条会话各有一张卡，不再互相覆盖。
+        false
     }
 }
+
+#[cfg(test)]
+#[path = "execution_session_sink_tests.rs"]
+mod tests;

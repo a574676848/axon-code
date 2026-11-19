@@ -4,18 +4,18 @@ use std::sync::Arc;
 
 use axon_session_runtime::{
     AtomicTurnPerformanceRecorder, TurnPerformanceRecorder, TurnPerformanceStage,
-    first_token_telemetry_enabled,
 };
 
 const SUBAGENT_PERFORMANCE_LOG_PREFIX: &str = "subagent_first_token_telemetry=";
 
+/// 子代理的轮次性能采集：无条件开启。
+///
+/// 首字与速率是产品指标，不是诊断开关：受 trace 开关控制会让 `/turn_metrics` 里
+/// 这两项恒为空，轮次分割线因此读不出首字与速率。trace 开关只决定是否写逐阶段明细日志。
 pub(super) fn start_subagent_performance() -> Option<Arc<dyn TurnPerformanceRecorder>> {
-    first_token_telemetry_enabled().then(|| {
-        let recorder: Arc<dyn TurnPerformanceRecorder> =
-            Arc::new(AtomicTurnPerformanceRecorder::new());
-        recorder.record(TurnPerformanceStage::WorkerClaimed);
-        recorder
-    })
+    let recorder: Arc<dyn TurnPerformanceRecorder> = Arc::new(AtomicTurnPerformanceRecorder::new());
+    recorder.record(TurnPerformanceStage::WorkerClaimed);
+    Some(recorder)
 }
 
 pub(super) fn record_subagent_history_ready(performance: Option<&dyn TurnPerformanceRecorder>) {

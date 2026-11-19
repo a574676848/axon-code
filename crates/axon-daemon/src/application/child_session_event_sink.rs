@@ -40,7 +40,7 @@ where
     ) -> Result<Arc<dyn TurnEventSink>, String> {
         let session_id = DaemonSessionId::new(identity.session_id.as_str())
             .map_err(|error| format!("子代理会话标识非法：{error:?}"))?;
-        self.ensure_session(identity, &session_id)?;
+        ensure_subagent_session(&self.store, self.clock.now_ms(), identity)?;
         Ok(Arc::new(ChildSessionSink {
             store: self.store.clone(),
             host: self.host.clone(),
@@ -51,49 +51,52 @@ where
     }
 }
 
-impl<S, C> ChildSessionSinkFactory<S, C>
+/// 确保子代理会话已登记。
+///
+/// 子代理与普通会话同为一等会话：标识、类型、根会话与代理路径都由派发方给出，
+/// 这里只在真的缺行时补登记。根会话已登记时，受众边界与工作区从它继承，
+/// 因此子会话与父会话属于同一个 Workspace、同一条披露边界。
+///
+/// 模型子代理与后台执行两个 sink 工厂共用这一套登记口径：落点都是 turn 所属子会话。
+pub(in crate::application::daemon_host) fn ensure_subagent_session<S>(
+    store: &S,
+    now_ms: u64,
+    identity: &SubagentSessionIdentity,
+) -> Result<(), String>
 where
-    S: RuntimeStore + Clone + Send + Sync + 'static,
-    C: RuntimeClock + Clone + Send + Sync + 'static,
+    S: RuntimeStore,
 {
-    /// 确保子代理会话已登记。
-    ///
-    /// 子代理与普通会话同为一等会话：标识、类型、根会话与代理路径都由派发方给出，
-    /// 这里只在真的缺行时补登记。根会话已登记时，受众边界与工作区从它继承，
-    /// 因此子会话与父会话属于同一个 Workspace、同一条披露边界。
-    fn ensure_session(
-        &self,
-        identity: &SubagentSessionIdentity,
-        session_id: &DaemonSessionId,
-    ) -> Result<(), String> {
-        if self.store.get_session(session_id).is_ok() {
-            return Ok(());
-        }
-        let root_session_id = DaemonSessionId::new(identity.root_session_id.as_str())
-            .map_err(|error| format!("子代理根会话标识非法：{error:?}"))?;
-        let root = self.store.get_session(&root_session_id).ok();
-        let request = NewSessionRequest {
-            session_id: session_id.clone(),
-            kind: SessionKind::Subagent,
-            trust_scope: root
-                .as_ref()
-                .map_or(SessionTrustScope::Private, |record| record.trust_scope),
-            workspace_id: root.as_ref().and_then(|record| record.workspace_id.clone()),
-            root_session_id: Some(root_session_id),
-            agent_path: Some(identity.agent_path.clone()),
-            goal_id: None,
-            execution_id: None,
-            cwd: root
-                .as_ref()
-                .map(|record| record.cwd.clone())
-                .unwrap_or_default(),
-            now_ms: self.clock.now_ms(),
-        };
-        self.store
-            .create_session_with(&request)
-            .map(|_| ())
-            .map_err(|error| format!("登记子代理会话失败：{error:?}"))
+    let session_id = DaemonSessionId::new(identity.session_id.as_str())
+        .map_err(|error| format!("子代理会话标识非法：{error:?}"))?;
+    if store.get_session(&session_id).is_ok() {
+        return Ok(());
     }
+    let root_session_id = DaemonSessionId::new(identity.root_session_id.as_str())
+        .map_err(|error| format!("子代理根会话标识非法：{error:?}"))?;
+    let root = store.get_session(&root_session_id).ok();
+    // 执行子会话要说清自己属于哪个目标：目标标识从根会话继承，执行标识由调度侧另行回填。
+    let goal_id = store.session_goal_id(&root_session_id).ok().flatten();
+    let request = NewSessionRequest {
+        session_id,
+        kind: SessionKind::Subagent,
+        trust_scope: root
+            .as_ref()
+            .map_or(SessionTrustScope::Private, |record| record.trust_scope),
+        workspace_id: root.as_ref().and_then(|record| record.workspace_id.clone()),
+        root_session_id: Some(root_session_id),
+        agent_path: Some(identity.agent_path.clone()),
+        goal_id,
+        execution_id: None,
+        cwd: root
+            .as_ref()
+            .map(|record| record.cwd.clone())
+            .unwrap_or_default(),
+        now_ms,
+    };
+    store
+        .create_session_with(&request)
+        .map(|_| ())
+        .map_err(|error| format!("登记子代理会话失败：{error:?}"))
 }
 
 /// 单个子代理会话的 durable sink。

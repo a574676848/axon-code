@@ -23,12 +23,6 @@ const TURN_STATUS_INTERRUPTED: &str = "interrupted";
 /// 中断的展示正文；与主会话收口文案一致，避免把「我让它停的」说成「它没做成」。
 const SUBAGENT_INTERRUPTED_RESPONSE: &str = "本轮已由用户中断。";
 
-pub(super) type SubagentProviderTurnRunner =
-    for<'a> fn(
-        &RunRequest,
-        Option<&RunProgressSink<'a>>,
-    ) -> Result<RunResponse, Box<RunExecutionError>>;
-
 const PHASE_CONNECTING: &str = "provider_connecting";
 const PHASE_RUNNING: &str = "running";
 const PHASE_GENERATING: &str = "provider_generating";
@@ -39,112 +33,149 @@ const PHASE_TOOL_RUNNING: &str = "tool_running";
 const PHASE_TOOL_COMPLETED: &str = "tool_completed";
 const PROVIDER_MODEL_SEPARATOR: &str = "/";
 
-pub(super) fn run_subagent_provider_turn(
-    request: &RunRequest,
-    task_path: &axon_agent_runtime::AgentPath,
-    started_at_ms: u64,
-    model: &str,
-    publisher: &SubagentLifecyclePublisher,
-    runner: SubagentProviderTurnRunner,
-    session_sinks: Option<Arc<dyn SubagentSessionSinkFactory>>,
-) -> Result<RunResponse, Box<RunExecutionError>> {
-    let mut projection = SubagentProgressProjection::new(
-        task_path.as_str().to_owned(),
-        started_at_ms,
-        model.to_owned(),
-    );
-    // 子代理是独立会话：原始 wire 事件先落进**它自己**的会话事件流，再做父轮可见性投影。
-    // 界面因此能用与普通会话完全相同的一条管线渲染它，而不是另造一套摘要视图。
-    //
-    // 落库失败只降级为告警：父轮的进度可见性不该因为宿主端存储异常而中断。
-    // 失败终态的归属先问清楚：后台执行（Goal / cron）由调度侧结算，运行侧不写。
-    let failures_settled_by_scheduler = session_sinks
-        .as_ref()
-        .is_some_and(|factory| factory.failures_settled_by_scheduler());
-    let child_sink = session_sinks.and_then(|factory| {
-        // 子会话身份的三项一起交给宿主：标识是 ULID，根会话与代理路径负责说清它属于谁。
-        let identity = axon_session_runtime::SubagentSessionIdentity {
-            session_id: request.session_id.clone(),
-            root_session_id: request.parent_session_id.clone().unwrap_or_default(),
-            agent_path: task_path.as_str().to_owned(),
-        };
-        match factory.sink_for(&identity) {
-            Ok(sink) => Some(sink),
-            Err(error) => {
-                axon_logger::warning(&format!(
-                    "子代理会话 sink 不可用，逐字稿将只保留父轮投影: session_id={}, error={error}",
+pub(super) struct ChildTurnProjection {
+    child_sink: Option<Arc<dyn TurnEventSink>>,
+    publisher: SubagentLifecyclePublisher,
+    projection: SubagentProgressProjection,
+    session_id: String,
+    archive_root: Option<std::path::PathBuf>,
+    /// 失败终态是否由调度侧结算；决定出错时运行侧还写不写终态。
+    failures_settled_by_scheduler: bool,
+}
+
+impl ChildTurnProjection {
+    /// 打开一条子会话的投影通道：登记它自己的事件 sink，并补上这条会话的用户消息。
+    ///
+    /// 子代理是独立会话：原始 wire 事件先落进**它自己**的会话事件流，再做父轮可见性投影。
+    /// 界面因此能用与普通会话完全相同的一条管线渲染它，而不是另造一套摘要视图。
+    pub(super) fn begin(
+        request: &RunRequest,
+        task_path: &axon_agent_runtime::AgentPath,
+        started_at_ms: u64,
+        model: &str,
+        publisher: &SubagentLifecyclePublisher,
+        session_sinks: Option<Arc<dyn SubagentSessionSinkFactory>>,
+    ) -> Self {
+        // 落库失败只降级为告警：父轮的进度可见性不该因为宿主端存储异常而中断。
+        let failures_settled_by_scheduler = session_sinks
+            .as_ref()
+            .is_some_and(|factory| factory.failures_settled_by_scheduler());
+        let child_sink = session_sinks.and_then(|factory| {
+            // 子会话身份的三项一起交给宿主：标识是 ULID，根会话与代理路径负责说清它属于谁。
+            let identity = axon_session_runtime::SubagentSessionIdentity {
+                session_id: request.session_id.clone(),
+                root_session_id: request.parent_session_id.clone().unwrap_or_default(),
+                agent_path: task_path.as_str().to_owned(),
+            };
+            match factory.sink_for(&identity) {
+                Ok(sink) => Some(sink),
+                Err(error) => {
+                    axon_logger::warning(&format!(
+                        "子代理会话 sink 不可用，逐字稿将只保留父轮投影: session_id={}, error={error}",
+                        request.session_id
+                    ));
+                    None
+                }
+            }
+        });
+        // 子代理的任务提示就是这条会话的用户消息：与主会话一样，它必须进自己的事件流，
+        // 否则界面的归约器打不开回合，整段逐字稿都无处安放。
+        if let Some(sink) = &child_sink {
+            match subagent_user_message_event(request, started_at_ms) {
+                Ok(event) => {
+                    if let Err(error) = TurnEventSink::publish(sink.as_ref(), &event) {
+                        axon_logger::warning(&format!(
+                            "子代理用户消息追加失败: session_id={}, error={error}",
+                            request.session_id
+                        ));
+                    }
+                }
+                Err(error) => axon_logger::warning(&format!(
+                    "子代理用户消息构造失败: session_id={}, error={error}",
                     request.session_id
-                ));
-                None
+                )),
             }
         }
-    });
-    // 子代理的任务提示就是这条会话的用户消息：与主会话一样，它必须进自己的事件流，
-    // 否则界面的归约器打不开回合，整段逐字稿都无处安放。
-    if let Some(sink) = &child_sink {
-        match subagent_user_message_event(request, started_at_ms) {
-            Ok(event) => {
-                if let Err(error) = TurnEventSink::publish(sink.as_ref(), &event) {
-                    axon_logger::warning(&format!(
-                        "子代理用户消息追加失败: session_id={}, error={error}",
-                        request.session_id
-                    ));
-                }
-            }
-            Err(error) => axon_logger::warning(&format!(
-                "子代理用户消息构造失败: session_id={}, error={error}",
-                request.session_id
-            )),
+        Self {
+            child_sink,
+            publisher: publisher.clone(),
+            projection: SubagentProgressProjection::new(
+                task_path.as_str().to_owned(),
+                started_at_ms,
+                model.to_owned(),
+            ),
+            session_id: request.session_id.clone(),
+            archive_root: crate::runtime_paths::runtime_axon_data_path_static(&request.config_path)
+                .ok(),
+            failures_settled_by_scheduler,
         }
     }
-    let mut emit = |event: RunProgressWireEvent| {
+
+    /// 跑一轮：把共用的执行段接上这条会话的投影通道，再收口它自己的终态。
+    ///
+    /// 编排（provider 循环、收尾、终态记账）全部由传入的执行段承担；这里只决定
+    /// 事件往哪写、父轮看到什么。`execute` 就是 [`super::run_turn_execution::execute_turn`]。
+    pub(super) fn run(
+        self,
+        request: &RunRequest,
+        execute: impl FnOnce(
+            Option<&RunProgressSink<'_>>,
+        ) -> Result<RunResponse, Box<RunExecutionError>>,
+    ) -> Result<RunResponse, Box<RunExecutionError>> {
+        let Self {
+            child_sink,
+            publisher,
+            mut projection,
+            session_id,
+            archive_root,
+            failures_settled_by_scheduler,
+        } = self;
+        let outcome = {
+            let mut emit = |event: RunProgressWireEvent| {
+                if let Some(sink) = &child_sink
+                    && let Ok(runtime_event) =
+                        axon_session_runtime::wire_event_to_runtime_event(&event.event)
+                    && let Err(error) = TurnEventSink::publish(sink.as_ref(), &runtime_event)
+                {
+                    axon_logger::warning(&format!(
+                        "子代理会话事件追加失败: session_id={session_id}, error={error}"
+                    ));
+                }
+                if let Some(view) = projection.project(event) {
+                    let _ = publisher.publish(view);
+                }
+            };
+            let progress = match archive_root {
+                Some(root) => RunProgressSink::with_session_id(&mut emit, session_id.clone())
+                    .with_tool_result_archive_root(root),
+                None => RunProgressSink::with_session_id(&mut emit, session_id.clone()),
+            };
+            execute(Some(&progress))
+        };
+        // 回合终态同样属于这条会话：主会话的轮次分割线与指标都来自它，
+        // 子代理要「与普通会话完全一致」，就必须和普通会话一样留下这一条。
+        //
+        // 例外：后台执行（Goal / cron）的失败终态归调度侧结算，这里再写一条会让
+        // 同一轮出现两张失败卡，因此只在成功、或宿主明确由运行侧收口时才写。
         if let Some(sink) = &child_sink
-            && let Ok(runtime_event) =
-                axon_session_runtime::wire_event_to_runtime_event(&event.event)
-            && let Err(error) = TurnEventSink::publish(sink.as_ref(), &runtime_event)
+            && !(outcome.is_err() && failures_settled_by_scheduler)
         {
-            axon_logger::warning(&format!(
-                "子代理会话事件追加失败: session_id={}, error={error}",
-                request.session_id
-            ));
-        }
-        if let Some(view) = projection.project(event) {
-            let _ = publisher.publish(view);
-        }
-    };
-    let progress = match crate::runtime_paths::runtime_axon_data_path_static(&request.config_path) {
-        Ok(root) => RunProgressSink::with_session_id(&mut emit, request.session_id.clone())
-            .with_tool_result_archive_root(root),
-        Err(_) => RunProgressSink::with_session_id(&mut emit, request.session_id.clone()),
-    };
-    let outcome = runner(request, Some(&progress));
-    // 回合终态同样属于这条会话：主会话的轮次分割线与指标都来自它，
-    // 子代理要「与普通会话完全一致」，就必须和普通会话一样留下这一条。
-    //
-    // 例外：后台执行（Goal / cron）的失败终态归调度侧结算，这里再写一条会让
-    // 同一轮出现两张失败卡，因此只在成功、或宿主明确由运行侧收口时才写。
-    let terminal_by_scheduler = failures_settled_by_scheduler;
-    let write_terminal = !(outcome.is_err() && terminal_by_scheduler);
-    if let Some(sink) = &child_sink
-        && write_terminal
-    {
-        let terminal = SubagentTurnTerminal::from_outcome(request, &outcome);
-        match subagent_turn_terminal_event(request, &terminal) {
-            Ok(event) => {
-                if let Err(error) = TurnEventSink::publish(sink.as_ref(), &event) {
-                    axon_logger::warning(&format!(
-                        "子代理回合终态追加失败: session_id={}, error={error}",
-                        request.session_id
-                    ));
+            let terminal = SubagentTurnTerminal::from_outcome(request, &outcome);
+            match subagent_turn_terminal_event(request, &terminal) {
+                Ok(event) => {
+                    if let Err(error) = TurnEventSink::publish(sink.as_ref(), &event) {
+                        axon_logger::warning(&format!(
+                            "子代理回合终态追加失败: session_id={session_id}, error={error}"
+                        ));
+                    }
                 }
+                Err(error) => axon_logger::warning(&format!(
+                    "子代理回合终态构造失败: session_id={session_id}, error={error}"
+                )),
             }
-            Err(error) => axon_logger::warning(&format!(
-                "子代理回合终态构造失败: session_id={}, error={error}",
-                request.session_id
-            )),
         }
+        outcome
     }
-    outcome
 }
 
 /// 子代理回合终态的状态取值；中断与失败必须分开成两种事实。

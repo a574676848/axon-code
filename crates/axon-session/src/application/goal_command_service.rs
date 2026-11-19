@@ -138,6 +138,13 @@ where
                 })?,
             )
             .map_err(GoalCommandServiceError::Store)?;
+        // 暂停与取消一样是「不要再跑了」：必须同时让在途轮次停下来，
+        // 否则界面显示已暂停、后台仍在继续消耗 token。
+        if goal.status == GoalStatus::Paused {
+            self.store
+                .request_execution_stop(&goal.goal_id, now_ms)
+                .map_err(GoalCommandServiceError::Store)?;
+        }
         Ok(goal)
     }
 

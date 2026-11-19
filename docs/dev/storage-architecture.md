@@ -522,11 +522,12 @@ enum TurnOrigin { External, Cron, Goal, Subagent }
 
 采集发生在 CLI 进程（`run_session_store` 已能算出 TTFT 与速率），消费发生在 daemon 进程（结算时落事件），两者当前没有通道。落法分三段：
 
-主 turn（用户轮）与独立 CLI 轮的生产链不同，两者都不经过 `commit_action`：
+主 turn（用户轮）、派生 turn（子代理与后台执行）与独立 CLI 轮的生产链不同，三者都不经过 `commit_action`：
 
 1. **主 turn（daemon 结算）**：`RuntimeTurnEventSink` 的生成账本按 provider 流记账。每条流收口时把该流的最终用量并入本轮累加，收尾读数与实时指标帧都从这份累加取；真正的轮收口只认 `turn_completed` 帧，`turn_metrics` 与它同批落盘（一次控制面事务、一次 fsync）。
-2. **CLI 直跑**：`axon run` 自己 claim 一个 60 秒短租约 host 后直接追加一条 `turn_metrics`，取值为 `AgentRunResponse.token_usage`（agent runtime 的轮级累加），见 §4.11.2。
-3. **投影（自动）**：`event_log_repository::apply_projections` 识别该事件并累加进 `session_metrics`，不需要额外接线。
+2. **派生 turn（子代理与后台执行）**：终态记账与主 turn 走同一入口 `account_completed_turn`，指标恒写、标题与轮后治理按 `TurnProfile` 决定。落点是这一轮**自己的会话**：模型子代理落它的子会话，目标与 cron 的执行落执行子会话；来源会话（`kind=goal` / `kind=cron`）只保留账本关系与调度侧终态卡。
+3. **CLI 直跑**：`axon run` 走同一记账入口，取值为 `AgentRunResponse.token_usage`（agent runtime 的轮级累加），见 §4.11.2。
+4. **投影（自动）**：`event_log_repository::apply_projections` 识别该事件并累加进 `session_metrics`，不需要额外接线。
 
 三条硬规则：
 
@@ -549,7 +550,7 @@ enum TurnOrigin { External, Cron, Goal, Subagent }
 | B | `append_events` 允许 `host=None` 跳过 fence，仅 CLI 使用 | 削弱 fence：CLI 与 daemon 同时写同一会话时失去保护 |
 | C | CLI 不写事件，`turn_metrics` 只覆盖 daemon 托管的会话 | 实现最简单，但 CLI 与 TUI 的轮次在 header 指标里缺失 |
 
-**裁决：A。** CLI 在写 `turn_metrics` 前 claim 一个 60 秒租约的 host（host id 为 `cli-<pid>`），写完整批事件后即结束，不续租。拿不到 lease（daemon 正持有同一库的 host 行）时只记一条警告并跳过写入：本轮执行不因指标缺失而失败，fence 语义也不被削弱。这与 B 的差别在于「宁缺勿弱」：宁可少一条指标，也不打开一条不受 fence 约束的写入口。
+**裁决：A，并按进程内的 host 复用落地。** 写指标前先取 host：守护进程启动时把自己的 host 记录注册给记账层，此后每轮直接复用该代际，**不再申请租约**；独立进程（`axon run`）按需 claim 一个 5 分钟租约的 host（host id 为 `cli-<pid>`）并在进程内缓存，只在租约将尽或围栏拒绝时刷新一次。共享 runtime 库按 data 根在进程内缓存，因此每轮不重建连接池。拿不到 host 时只记一条警告并跳过写入：本轮执行不因指标缺失而失败，fence 语义也不被削弱。这与 B 的差别在于「宁缺勿弱」：宁可少一条指标，也不打开一条不受 fence 约束的写入口。
 
 **采集策略**
 
@@ -772,7 +773,9 @@ CREATE INDEX sessions_by_kind_root
 
 **创建**：对外唯一入口是 `POST /api/v1/sessions`，服务端生成 ULID 并写入 `kind`、`trust_scope`、`workspace_id`。桌面、TUI 与 CLI 都从这里或从会话清单拿标识，不再本地派生。
 
-服务端内部另有两个登记入口，只给宿主用，不对外暴露：子代理按 `(root_session_id, agent_path)` 解析，目标执行会话按 `goal_id` 解析。两者都是「先查后建」：命中原行就复用，查不到就生成新 ULID 并落行；并发撞唯一索引时回读已有行，因此同一件事永远只有一条会话。
+服务端内部有三个登记入口，只给宿主用，不对外暴露：子代理按 `(root_session_id, agent_path)` 解析，目标执行会话按 `goal_id` 解析，定时任务会话按 `schedules.session_id` 绑定。三者都是「先查后建」：命中原行就复用，查不到就生成新 ULID 并落行；并发撞唯一索引时回读已有行，因此同一件事永远只有一条会话。前两条共用同一段骨架 `resolve_or_create_session`，第三条不走它：它的「查」读的是任务绑定表而不是会话表，且 cron 会话没有唯一键可冲突。
+
+**目标执行的落点**：来源会话（`kind=goal`）只做账本，逐字稿、轮次指标与 thread 镜像都落它派生的执行子会话（`kind=subagent`，`agent_path=root/task-<来源会话>`）。因此「进入会话」指向的是子会话，来源会话只保留轮次状态与调度侧终态卡。
 
 定时任务的目标会话同样只有一个落点：`schedules.session_id`。**定义侧**解析（已有绑定就沿用，没有才建一条 `kind=cron` 会话）并在同一次落库里写回；**唤醒侧**只读该列，缺失即报错，不隐式建会话、也不按投递目标派生。因此一个任务的多次唤醒落在同一条会话里。
 

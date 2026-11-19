@@ -27,8 +27,8 @@ impl SchemaKind {
     /// 不做补列、不做回填。
     const fn version(self) -> i64 {
         match self {
-            // 8：会话表增 `agent_path`，子代理身份从「父会话前缀拼接」改为 ULID + 根会话关系。
-            Self::Control => 8,
+            // 9：子代理会话允许携带 goal_id 与 execution_id（执行子会话必须能说清属于哪个目标、哪次执行）。
+            Self::Control => 9,
             Self::Outbox => 1,
         }
     }
@@ -191,8 +191,8 @@ const CONTROL_DDL: &str = "
             updated_at_ms INTEGER NOT NULL,
             CHECK (root_session_id IS NULL OR kind = 'subagent'),
             CHECK (agent_path IS NULL OR kind = 'subagent'),
-            CHECK (goal_id IS NULL OR kind IN ('cron','goal')),
-            CHECK (execution_id IS NULL OR kind IN ('cron','goal'))
+            CHECK (goal_id IS NULL OR kind IN ('cron','goal','subagent')),
+            CHECK (execution_id IS NULL OR kind IN ('cron','goal','subagent'))
         );
         CREATE UNIQUE INDEX IF NOT EXISTS sessions_subagent_path
             ON sessions(root_session_id, agent_path)

@@ -18,8 +18,8 @@ use axon_memory_read::init_memory_orchestrator;
 use axon_protocol::wire::WireEventKind;
 
 use super::{
-    RunRequest, RunResponse, finish_completed_run,
-    run_execution::RunJsonEvent,
+    RunRequest,
+    run_execution::{RunJsonEvent, RunResponse},
     run_json_wire_events::CompletedRunWireEventsInput,
     run_post_run_governance_worker::run_governance_worker_with_request,
     run_progress::RunProgressSink,
@@ -30,6 +30,8 @@ use super::{
     },
     run_tool_loop::RunToolReceipt,
     run_turn_outcome::build_turn_outcome,
+    run_turn_spec::TurnSpec,
+    run_turn_terminal::complete_turn,
 };
 
 #[test]
@@ -110,8 +112,7 @@ fn completed_run_governs_reflection_off_main_path() {
     let mut collect = |event| events.push(event);
     let sink = RunProgressSink::with_session_id(&mut collect, "test-session".to_owned());
 
-    let completed = finish_completed_run(&config_path, &request, response)
-        .expect("post-run 完成链路不应被 session/thread 副作用打断");
+    let completed = complete_turn(&TurnSpec::primary(), &request, response);
     drop(sink);
 
     let receipt = completed
@@ -156,6 +157,24 @@ fn completed_run_governs_reflection_off_main_path() {
     assert_eq!(
         governance_job_status(std::path::Path::new(status_path), &receipt.job_id),
         "completed"
+    );
+
+    // 终态记账必须给这一轮留下指标：缺行时界面上的耗时与用量没有基线。
+    let store = crate::run_commands::run_agent_store::shared_runtime_store(&config_path)
+        .expect("共享 runtime 库必须可解析");
+    let session_id =
+        axon_domain::DaemonSessionId::new(request.session_id.clone()).expect("合法会话标识");
+    let replayed = axon_session::EventLogStore::replay_events(&store, &session_id, 0, 64)
+        .expect("必须能读回本轮事件");
+    assert!(
+        replayed
+            .iter()
+            .any(|event| event.event_type == "turn_metrics"),
+        "完成一轮后必须落下 turn_metrics，实际事件类型 {:?}",
+        replayed
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect::<Vec<_>>()
     );
 
     let kinds = events
@@ -246,8 +265,7 @@ fn completed_run_keeps_high_risk_selected_skill_untouched() {
     let mut collect = |event| events.push(event);
     let sink = RunProgressSink::with_session_id(&mut collect, "test-session".to_owned());
 
-    let completed = finish_completed_run(&config_path, &request, response)
-        .expect("高风险静默 trace 不应打断 post-run 完成链路");
+    let completed = complete_turn(&TurnSpec::primary(), &request, response);
     drop(sink);
 
     let receipt = completed
@@ -304,8 +322,7 @@ fn durable_governance_requeues_failed_subagent_execution() {
     ]);
     response.turn_events.extend(provider_turn_events(7));
 
-    let completed = finish_completed_run(&config_path, &request, response)
-        .expect("完成链路应成功持久化 governance job");
+    let completed = complete_turn(&TurnSpec::primary(), &request, response);
     let receipt = completed
         .post_run_governance
         .as_ref()

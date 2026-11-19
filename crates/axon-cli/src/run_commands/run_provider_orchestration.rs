@@ -1,22 +1,24 @@
 use super::{
-    CliRunResult, CompletedRun, CompletedRunWireEventsInput, ConfigLoader, OutputFormat,
-    ProviderStreamingRunner, RunAgentIdentity, RunCancelToken, RunCommand, RunJsonEvent,
-    RunRequest, RunRequestBuildOptions, RunRequestSession, RunResponse, RunSessionRecord,
-    RunStartupSnapshot, RunStopControl, cli_config_error, cli_error, finish_completed_run,
-    finish_failed_run, json_result, load_run_env_file, mirror_session_started, new_run_session_id,
-    prepare_run_session, resolved_config_path, run_execution, run_outcome_diagnostics,
-    run_progress, run_request_payload::RunWorkspaceSnapshotPrewarm, run_steer,
+    CliRunResult, CompletedRunWireEventsInput, ConfigLoader, OutputFormat, RunAgentIdentity,
+    RunCancelToken, RunCommand, RunJsonEvent, RunRequest, RunRequestBuildOptions,
+    RunRequestSession, RunStartupSnapshot, cli_config_error, cli_error, json_result,
+    load_run_env_file, new_run_session_id, prepare_run_session, resolved_config_path,
+    run_execution, run_outcome_diagnostics, run_progress,
+    run_request_payload::RunWorkspaceSnapshotPrewarm,
+    run_steer,
+    run_turn_execution::{TurnTeardownScope, execute_turn},
+    run_turn_spec::TurnSpec,
+    run_turn_start::{persist_turn_started, start_turn_stop_control},
+    run_turn_terminal::{CompletedTurn, FailedTurn, complete_turn, fail_turn},
 };
-use axon_agent_runtime::{AgentPath, ShellCommandToolRuntime};
 use axon_client_identity::ClientChannel;
 use axon_domain::QuotedMessageContext;
 use axon_session_runtime::{
     SubagentSessionSinkFactory, TurnPerformanceRecorder, TurnPerformanceStage,
 };
 use std::{
-    collections::HashMap,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 pub(crate) struct RunProgressOptions<'a> {
@@ -190,54 +192,48 @@ pub(crate) fn run_run_with_progress(
     }
     request.quoted_message = options.quoted_message;
     request.goal_transport_context = options.transport_context;
-    if let Err(error) = persist_cli_run_started(&request) {
+    if let Err(error) = persist_turn_started(&request) {
         return cli_error(format!("Provider turn 起始持久化失败：{error}"));
     }
     if let Some(performance) = &request.performance {
         performance.record(TurnPerformanceStage::ThreadStartMirrorReady);
         performance.record(TurnPerformanceStage::RunStartedPersisted);
     }
-    let _stop_control = match start_external_stop_control(
-        options.external_stop_control,
-        &path,
-        &request,
-        cancel_token,
-    ) {
-        Ok(control) => control,
-        Err(error) => return cli_error(error),
+    // 主 turn 只有在调用方要求外部停止源时才暴露 run-control 通道；失败即中止本轮。
+    let _stop_control = if options.external_stop_control {
+        match start_turn_stop_control(&request) {
+            Ok(control) => control,
+            Err(error) => return cli_error(error),
+        }
+    } else {
+        None
     };
-    let started_at_ms = run_execution::now_ms();
-    let provider_result = ProviderStreamingRunner::run(&request, progress.as_ref());
-    axon_logger::debug(&format!(
-        "ProviderStreamingRunner 返回: session={}, elapsed_ms={}",
-        request.session_id,
-        run_execution::now_ms().saturating_sub(started_at_ms)
-    ));
-    cancel_all_running_subagents(&request.subagent_cancel_tokens);
-    ShellCommandToolRuntime::terminate_sessions_for_owner(&request.session_id);
-    // 父 turn 已结束：终态作业的查询消费者不复存在（结果只经完成主动通知交付），
-    // 立即释放该 owner 的终态作业，不让后台保留窗拖住本轮交付链路。
-    axon_agent_runtime::JobRuntime::global()
-        .release_terminal_for_owner(&request.session_id, std::time::Instant::now());
+    let spec = TurnSpec::primary();
+    let teardown = TurnTeardownScope::primary(&request);
+    let execution = execute_turn(&request, progress.as_ref(), &teardown);
     let teardown_started_ms = run_execution::now_ms();
-    let run_result = match provider_result {
-        Ok(response) => finish_successful_provider_run(
-            &CompletedRunContext {
-                path: &path,
-                request: &request,
-                elapsed_ms: run_execution::now_ms().saturating_sub(started_at_ms),
-                output,
-            },
-            response,
-        ),
-        Err(error) => finish_failed_run(
-            &path,
-            &loaded.config,
+    let elapsed_ms = run_execution::now_ms().saturating_sub(execution.started_at_ms);
+    let run_result = match execution.provider {
+        Ok(response) => render_completed_turn(
             &request,
-            &error,
+            complete_turn(&spec, &request, response),
             output,
-            progress.as_ref(),
+            elapsed_ms,
         ),
+        Err(error) => {
+            let partial_response = progress
+                .as_ref()
+                .map_or_else(String::new, |sink| sink.partial_assistant_content());
+            let failed = fail_turn(
+                &path,
+                &loaded.config,
+                &spec,
+                &request,
+                error,
+                partial_response,
+            );
+            render_failed_turn(&request, &failed, output)
+        }
     };
     axon_logger::debug(&format!(
         "run 收尾持久化完成: session={}, teardown_ms={}",
@@ -245,18 +241,6 @@ pub(crate) fn run_run_with_progress(
         run_execution::now_ms().saturating_sub(teardown_started_ms)
     ));
     run_result
-}
-
-fn cancel_all_running_subagents(cancel_tokens: &Arc<Mutex<HashMap<AgentPath, RunCancelToken>>>) {
-    let tokens = {
-        let mut cancel_tokens = cancel_tokens
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        std::mem::take(&mut *cancel_tokens)
-    };
-    for token in tokens.into_values() {
-        token.cancel();
-    }
 }
 
 fn prepare_run_environment(
@@ -278,53 +262,9 @@ fn run_cancel_token(options: &RunProgressOptions<'_>) -> Option<RunCancelToken> 
         .or_else(|| options.external_stop_control.then(RunCancelToken::default))
 }
 
-fn start_external_stop_control(
-    enabled: bool,
-    config_path: &Path,
+fn render_completed_turn(
     request: &RunRequest,
-    cancel_token: Option<RunCancelToken>,
-) -> Result<Option<RunStopControl>, String> {
-    if !enabled {
-        return Ok(None);
-    }
-    RunStopControl::start(
-        config_path,
-        &request.session_id,
-        cancel_token.expect("CLI stop 控制必须创建取消令牌"),
-    )
-    .map(Some)
-}
-
-fn persist_cli_run_started(request: &RunRequest) -> Result<(), String> {
-    let record = RunSessionRecord::started(request);
-    mirror_session_started(&request.config_path, &record)
-}
-
-struct CompletedRunContext<'a> {
-    path: &'a Path,
-    request: &'a RunRequest,
-    elapsed_ms: u64,
-    output: OutputFormat,
-}
-
-fn finish_successful_provider_run(
-    context: &CompletedRunContext<'_>,
-    response: RunResponse,
-) -> CliRunResult {
-    match finish_completed_run(context.path, context.request, response) {
-        Ok(completed) => render_completed_run(
-            context.request,
-            completed,
-            context.output,
-            context.elapsed_ms,
-        ),
-        Err(error) => cli_error(format!("完成 Provider turn 持久化失败：{error}")),
-    }
-}
-
-fn render_completed_run(
-    request: &RunRequest,
-    completed: CompletedRun,
+    completed: CompletedTurn,
     output: OutputFormat,
     provider_turn_elapsed_ms: u64,
 ) -> CliRunResult {
@@ -372,25 +312,28 @@ fn render_completed_run(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parent_terminal_cancels_all_running_subagents() {
-        let first_path = AgentPath::parse("/root/first").unwrap();
-        let second_path = AgentPath::parse("/root/second").unwrap();
-        let first_token = RunCancelToken::default();
-        let second_token = RunCancelToken::default();
-        let cancel_tokens = Arc::new(Mutex::new(HashMap::from([
-            (first_path, first_token.clone()),
-            (second_path, second_token.clone()),
-        ])));
-
-        cancel_all_running_subagents(&cancel_tokens);
-
-        assert!(first_token.is_cancelled());
-        assert!(second_token.is_cancelled());
-        assert!(cancel_tokens.lock().unwrap().is_empty());
+fn render_failed_turn(
+    request: &RunRequest,
+    failed: &FailedTurn,
+    output: OutputFormat,
+) -> CliRunResult {
+    let report = RunJsonEvent::failed(
+        request,
+        &failed.error,
+        &failed.failure,
+        failed.memory_usefulness.as_ref(),
+        failed.memory_autonomy.as_ref(),
+    );
+    match output {
+        OutputFormat::Text => CliRunResult {
+            exit_code: 1,
+            stdout: super::run_text_render::render_text_run_failure(request, &failed.error),
+            stderr: String::new(),
+        },
+        OutputFormat::Json => {
+            let mut result = json_result(&report);
+            result.exit_code = 1;
+            result
+        }
     }
 }
