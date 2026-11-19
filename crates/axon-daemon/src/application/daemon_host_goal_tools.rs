@@ -234,6 +234,10 @@ where
         let goal = GoalCommandService::new(self.store.clone())
             .create(command, goal_id, &scope, execution.as_ref(), &event, now_ms)
             .map_err(goal_service_error)?;
+        // 目标创建即执行：执行轮与账本同批入队，之后再没有任何后台专用入口。
+        if let Some(execution) = execution.as_ref() {
+            self.submit_goal_execution_interaction(&goal, execution, now_ms)?;
+        }
         self.note_goal_turn(
             &goal,
             Self::goal_tool_label(goal.status),
@@ -345,6 +349,8 @@ where
                 now_ms,
             )
             .map_err(goal_service_error)?;
+        // 账本与执行轮同批：启动即提交主 turn Interaction，执行不再经过后台专用入口。
+        self.submit_goal_execution_interaction(&goal, &execution, now_ms)?;
         self.note_goal_turn(
             &started,
             "目标已启动",
@@ -527,8 +533,25 @@ where
         let goal = GoalCommandService::new(self.store.clone())
             .update(command, now_ms)
             .map_err(goal_service_error)?;
+        // 更新不是终点：契约变了的这一笔新要求必须真正落到目标会话，执行才会按新目标继续。
+        // 投递失败不能吞掉已经生效的更新，回执里如实给出投递结论。
+        let dispatch = self.submit_goal_update_interaction(
+            &goal,
+            workspace.map(|item| item.workspace_id.as_str()),
+            workspace.map_or("", |item| item.workspace_root.as_str()),
+            disclosure_policy,
+            now_ms,
+        );
+        let mut receipt = goal_receipt("goal_update", &goal, true);
+        match dispatch {
+            Ok(dispatched) => receipt["dispatched"] = json!(dispatched),
+            Err(error) => {
+                receipt["dispatched"] = json!(false);
+                receipt["dispatchError"] = json!(error.to_string());
+            }
+        }
         self.note_goal_turn(&goal, "目标已更新", idempotency_key, workspace, now_ms);
-        Ok(goal_receipt("goal_update", &goal, true))
+        Ok(receipt)
     }
 
     fn goal_cancel_value(

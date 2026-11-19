@@ -903,7 +903,7 @@ CREATE TABLE inbox (
 
 **尚未落地的部分（W3-4 / W3-5）**
 
-`work_items` 与 `work_item_history` 的在途/终态拆分、以及 Action 领取与 Execution 领取合并到同一套 claim 仍未实施。当前状态：turn 领取已并入 `work_items`，goal 结算仍走 `claim_executions` / `claim_next_action` 两条独立路径。
+`work_items` 与 `work_item_history` 的在途/终态拆分、以及 Action 领取合并到同一套 claim 仍未实施。当前状态：turn 领取已并入 `work_items`，目标执行也由主 turn 领取（目标会话的入站事实与用户轮同一条管道），`claim_executions` / `claim_next_action` 已无生产者，仅作为历史读取接口存在。
 
 **收益**
 

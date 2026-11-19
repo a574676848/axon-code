@@ -2,10 +2,7 @@
 
 use std::{
     fmt,
-    sync::{
-        Arc, Mutex,
-        mpsc::{self, TrySendError},
-    },
+    sync::{Arc, Mutex, mpsc},
     thread::{self, JoinHandle},
 };
 
@@ -62,22 +59,6 @@ impl PrimaryTurnWorkerPool {
             .ok_or_else(|| WORKER_QUEUE_CLOSED_ERROR.to_owned())?
             .send(Box::new(job))
             .map_err(|_| WORKER_QUEUE_CLOSED_ERROR.to_owned())
-    }
-
-    pub(super) fn try_execute<F>(&self, job: F) -> Result<(), String>
-    where
-        F: FnOnce() + Send + 'static,
-    {
-        let sender = self
-            .inner
-            .sender
-            .as_ref()
-            .ok_or_else(|| WORKER_QUEUE_CLOSED_ERROR.to_owned())?;
-        match sender.try_send(Box::new(job)) {
-            Ok(()) => Ok(()),
-            Err(TrySendError::Full(_)) => Err("Primary turn worker pool 队列已满".to_owned()),
-            Err(TrySendError::Disconnected(_)) => Err(WORKER_QUEUE_CLOSED_ERROR.to_owned()),
-        }
     }
 }
 
@@ -179,7 +160,7 @@ mod tests {
     use std::sync::{Arc, Barrier};
 
     #[test]
-    fn try_execute_rejects_when_worker_and_queue_are_full() {
+    fn queued_jobs_run_after_the_running_one_finishes() {
         let pool = PrimaryTurnWorkerPool::new_with_capacity(1, 1).expect("创建有界池");
         let started = Arc::new(Barrier::new(2));
         let release = Arc::new(Barrier::new(2));
@@ -192,9 +173,14 @@ mod tests {
         .expect("提交首个任务");
         started.wait();
 
-        pool.try_execute(|| {}).expect("队列应容纳一个等待任务");
-        assert!(pool.try_execute(|| {}).is_err());
+        let done = Arc::new(Barrier::new(2));
+        let job_done = Arc::clone(&done);
+        pool.execute(move || {
+            job_done.wait();
+        })
+        .expect("队列应容纳一个等待任务");
 
         release.wait();
+        done.wait();
     }
 }

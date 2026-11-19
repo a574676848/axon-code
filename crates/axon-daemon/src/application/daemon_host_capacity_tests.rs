@@ -7,11 +7,10 @@
 use super::*;
 use axon_domain::{
     ConsumerCursor, GoalPlan, GoalRecord, GoalStatus, LedgerEvent, LedgerEventId, ScopeRef,
-    SessionActionId, SessionActionStatus,
 };
 use axon_session::{
-    CheckpointTelemetry, GoalStore, HealthStore, LedgerEventStore, SessionActionRecord,
-    SessionEventRecord, SqliteRuntimeStore, WorkspaceResolver, WorkspaceStore,
+    CheckpointTelemetry, GoalStore, HealthStore, LedgerEventStore, SessionEventRecord,
+    SqliteRuntimeStore, WorkspaceResolver, WorkspaceStore,
 };
 use axon_session_runtime::{ActionExecutionRequest, TurnExecutionError, TurnExecutionOutcome};
 use std::{
@@ -26,8 +25,6 @@ const CAPACITY_NOW_MS: u64 = 1_000_000;
 const CAPACITY_CONCURRENT_THREADS: usize = 8;
 /// 并发入口动作总数，按线程均分。
 const CAPACITY_CONCURRENT_ACTIONS: usize = 1_000;
-/// 未完成 Action 读取上限；用于断言入口动作已被全部消费。
-const CAPACITY_PENDING_LIMIT: u32 = 16;
 /// 事实源文件名；报告据此直接测量数据库与 WAL 体积。
 const CAPACITY_DB_FILE_NAME: &str = "runtime.sqlite3";
 /// WAL 文件名后缀。
@@ -218,11 +215,12 @@ fn run_capacity_case(backlog: usize) -> String {
 
     let started = Instant::now();
     let mut latencies = Vec::with_capacity(context.session_ids.len());
-    for session_id in &context.session_ids {
+    for _ in &context.session_ids {
         let action_started = Instant::now();
-        host.pump_session_once(session_id.clone())
-            .expect("处理单个 Session")
-            .expect("应处理排队的 Action");
+        let report = host
+            .primary_turn_tick(1)
+            .expect("处理单个 Session 的主 turn");
+        assert_eq!(report.claimed, 1, "应领取到排队的 Interaction");
         latencies.push(action_started.elapsed());
     }
     let total = started.elapsed();
@@ -301,18 +299,15 @@ fn run_concurrent_ingress_case() -> String {
 
     let host = test_host(store.clone());
     let drain_started = Instant::now();
-    for session_id in &session_ids {
-        host.pump_session_once(session_id.clone())
-            .expect("处理单个 Session")
-            .expect("应处理排队的 Action");
+    for _ in &session_ids {
+        let report = host
+            .primary_turn_tick(1)
+            .expect("处理单个 Session 的主 turn");
+        assert_eq!(report.claimed, 1, "应领取到排队的 Interaction");
     }
     let drain_total = drain_started.elapsed();
-    for session_id in &session_ids {
-        let pending = store
-            .list_pending_actions(session_id, CAPACITY_PENDING_LIMIT)
-            .expect("未完成 Action");
-        assert!(pending.is_empty(), "并发入口后仍有未消费 Action");
-    }
+    let idle = host.primary_turn_tick(1).expect("空闲 tick");
+    assert_eq!(idle.claimed, 0, "并发入口后仍有未消费 Interaction");
     let rss_after = resident_memory_bytes();
     let wal_bytes = file_len(
         &directory
@@ -395,13 +390,13 @@ fn seed_backlog(
     CapacityContext { session_ids }
 }
 
-/// 为一个 Session 写入容量审计用 Task 与已排队 Action。
+/// 为一个 Session 写入容量审计用 Task 与一条已排队的 Interaction。
 fn enqueue_seeded_action(
     store: &SqliteRuntimeStore,
     scope: &ScopeRef,
     session_id: &DaemonSessionId,
     suffix: &str,
-) -> Result<(), axon_session::RuntimeStoreError> {
+) -> Result<(), String> {
     let mut goal = GoalRecord::new(
         axon_domain::GoalId::new(format!("capacity-goal-{suffix}")).expect("Task"),
         scope.clone(),
@@ -416,27 +411,30 @@ fn enqueue_seeded_action(
     )
     .expect("Task");
     goal.transition(GoalStatus::Active, 11).expect("Task 激活");
-    store.create_goal(&goal).expect("Task 写入");
-    store.enqueue_action(
-        &SessionActionRecord {
-            action_id: SessionActionId::new(format!("capacity-action-{suffix}")).expect("Action"),
-            goal_id: Some(goal.goal_id.clone()),
-            session_id: session_id.clone(),
-            kind: "user_input".to_owned(),
-            priority: 0,
-            status: SessionActionStatus::Queued,
-            dedupe_key: None,
-            payload_json: format!(r#"{{"prompt":"容量审计 {suffix}"}}"#),
-            goal_revision: None,
-            context_version: None,
-            claimed_by: None,
-            claimed_generation: None,
-            lease_expires_at_ms: None,
-            attempt: 0,
-        },
+    store
+        .create_goal(&goal)
+        .map_err(|error| error.to_string())?;
+    let interaction = axon_domain::InteractionRecord::new(
+        session_id.clone(),
+        axon_domain::InteractionId::new(format!("capacity-interaction-{suffix}"))
+            .map_err(|error| error.to_string())?,
+        axon_domain::InteractionSource::new("capacity", format!("capacity-{suffix}"))
+            .map_err(|error| error.to_string())?,
+        scope.clone(),
+        axon_domain::AudienceContext::new(
+            axon_domain::AudienceKind::Private,
+            axon_domain::DisclosurePolicy::PrivateOnly,
+        ),
+        axon_domain::ReplyRoute::new("capacity", session_id.as_str())
+            .map_err(|error| error.to_string())?,
+        format!("容量审计 {suffix}"),
         10,
-    )?;
-    Ok(())
+    )
+    .map_err(|error| error.to_string())?;
+    store
+        .append(&interaction)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 fn register_capacity_workspace(store: &SqliteRuntimeStore, path: &std::path::Path) -> ScopeRef {

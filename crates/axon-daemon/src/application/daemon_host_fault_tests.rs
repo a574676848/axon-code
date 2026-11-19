@@ -9,12 +9,11 @@
 use super::*;
 use axon_domain::{
     ConsumerCursor, DecisionEffect, DecisionId, DecisionRecord, ExecutionId, ExecutionRecord,
-    ExecutionStatus, GoalId, GoalPlan, GoalRecord, GoalStatus, ScopeRef, SessionActionId,
-    SessionActionStatus,
+    ExecutionStatus, GoalId, GoalPlan, GoalRecord, GoalStatus, ScopeRef,
 };
 use axon_session::{
-    CheckpointTelemetry, DecisionStore, ExecutionStore, GoalStore, HealthStore,
-    SessionActionRecord, SessionEventRecord, SqliteRuntimeStore,
+    CheckpointTelemetry, DecisionStore, ExecutionStore, GoalStore, HealthStore, SessionEventRecord,
+    SqliteRuntimeStore, WorkspaceStore,
 };
 use axon_session_runtime::{ActionExecutionRequest, TurnExecutionError, TurnExecutionOutcome};
 use std::{
@@ -124,21 +123,17 @@ fn provider_timeout_requeues_without_permanent_running_and_retries_after_backoff
     let executor = TimeoutOnceExecutor::new();
     let mut host = fault_host(store.clone(), executor.clone(), clock.clone());
     host.start().expect("启动 Host");
-    let session_id = create_fault_session(&store, FAULT_BASE_NOW_MS);
-    let execution_id = seed_fault_action(&store, &session_id, "fault-provider-timeout");
+    let execution_id = seed_fault_interaction(&store, directory.path(), "fault-provider-timeout");
 
-    host.supervisor_tick(DEFAULT_QUEUE_LIMIT)
-        .expect("supervisor tick");
+    // 目标轮与用户轮同一条管道：主 turn tick 领取并执行，可重试失败收口后退避重排。
+    host.primary_turn_tick(DEFAULT_QUEUE_LIMIT)
+        .expect("主 turn tick");
     wait_for_executor_calls(&executor, 1);
     let execution = wait_for_execution(
         &store,
         &execution_id,
         "可重试超时回到队列并写入退避",
         |execution| execution.status == ExecutionStatus::Queued && execution.retry_at_ms.is_some(),
-    );
-    assert!(
-        execution.lease.is_none(),
-        "重排后的 Execution 不得保留 lease"
     );
     assert!(
         execution
@@ -152,9 +147,12 @@ fn provider_timeout_requeues_without_permanent_running_and_retries_after_backoff
         "重排后不得残留 running/claimed"
     );
 
+    // 退避到期后 supervisor 重投一条 Interaction，第二轮由主 turn 执行并完成。
     clock.advance_by(FAULT_RETRY_ADVANCE_MS);
     host.supervisor_tick(DEFAULT_QUEUE_LIMIT)
         .expect("退避后的 supervisor tick");
+    host.primary_turn_tick(DEFAULT_QUEUE_LIMIT)
+        .expect("重投后的主 turn tick");
     wait_for_executor_calls(&executor, 2);
     let execution = wait_for_execution(
         &store,
@@ -168,7 +166,6 @@ fn provider_timeout_requeues_without_permanent_running_and_retries_after_backoff
         ExecutionStatus::Completed,
         "第二次尝试应完成 Execution"
     );
-    assert!(execution.lease.is_none(), "结论态不得保留 lease");
     assert_eq!(executor.calls(), 2, "退避期间不得重复执行");
     assert_eq!(
         transient_executions(&store, clock.now_ms()),
@@ -304,15 +301,29 @@ fn create_fault_session(store: &SqliteRuntimeStore, now_ms: u64) -> DaemonSessio
     session_id
 }
 
-/// 写入一个排队 Action；Worker 领取后以 Action ID 作为 Execution ID 结算。
-fn seed_fault_action(
+/// 写入一次目标执行：账本行加与它同标识的 Interaction。
+///
+/// 目标轮与用户轮同一条管道，因此故障注入只需要在会话里放一条待领取的入站事实。
+fn seed_fault_interaction(
     store: &SqliteRuntimeStore,
-    session_id: &DaemonSessionId,
-    action_id: &str,
+    path: &std::path::Path,
+    execution_id: &str,
 ) -> ExecutionId {
+    let workspace = axon_session::WorkspaceResolver
+        .resolve(path, FAULT_BASE_NOW_MS)
+        .expect("解析 Workspace");
+    store
+        .register_workspace(&workspace)
+        .expect("注册 Workspace");
+    let scope = ScopeRef::workspace(&workspace.workspace_id).expect("构造作用域");
+    let session_id = DaemonSessionId::new(format!("{execution_id}-session")).expect("Session ID");
+    store
+        .create_session(&session_id, &workspace.workspace_root, FAULT_BASE_NOW_MS)
+        .expect("创建 Session");
+    let goal_id = GoalId::new(format!("{execution_id}-task")).expect("Goal ID");
     let mut task = GoalRecord::new(
-        GoalId::new(format!("{action_id}-task")).expect("Goal ID"),
-        ScopeRef::global(),
+        goal_id.clone(),
+        scope.clone(),
         "故障注入任务",
         GoalPlan {
             objective: "验证故障注入后的收敛".to_owned(),
@@ -326,12 +337,11 @@ fn seed_fault_action(
     task.transition(GoalStatus::Active, FAULT_BASE_NOW_MS)
         .expect("激活 Task");
     store.create_goal(&task).expect("写入 Task");
-    // Ledger gate 要求 Task 作用域存在有效 Decision，否则 Action 会被判定为不可执行。
     store
         .append_decision(
             &DecisionRecord {
-                decision_id: DecisionId::new(format!("{action_id}-allow")).expect("Decision ID"),
-                scope: ScopeRef::global(),
+                decision_id: DecisionId::new(format!("{execution_id}-allow")).expect("Decision ID"),
+                scope: scope.clone(),
                 actor: "fault-injection".to_owned(),
                 effect: DecisionEffect::Allow,
                 revision: 1,
@@ -341,28 +351,48 @@ fn seed_fault_action(
             0,
         )
         .expect("写入 Allow Decision");
+    let execution_id = ExecutionId::new(execution_id).expect("Execution ID");
+    let payload = serde_json::json!({
+        "prompt": "故障注入",
+        "transportContext": {
+            "channel": axon_domain::AGENT_DISPATCH_SOURCE_CHANNEL,
+            "destination": session_id.as_str(),
+            "audience": {"kind": "private", "disclosure": "private_only"},
+        },
+    });
     store
-        .enqueue_action(
-            &SessionActionRecord {
-                action_id: SessionActionId::new(action_id).expect("Action ID"),
-                goal_id: Some(task.goal_id),
-                session_id: session_id.clone(),
-                kind: "user_input".to_owned(),
-                priority: 0,
-                status: SessionActionStatus::Queued,
-                dedupe_key: None,
-                payload_json: serde_json::json!({"prompt": "故障注入"}).to_string(),
-                goal_revision: None,
-                context_version: None,
-                claimed_by: None,
-                claimed_generation: None,
-                lease_expires_at_ms: None,
-                attempt: 0,
-            },
-            FAULT_BASE_NOW_MS,
+        .enqueue_execution(
+            &ExecutionRecord::new(execution_id.clone(), goal_id.clone(), FAULT_BASE_NOW_MS)
+                .with_session_id(session_id.clone())
+                .with_payload_json(payload.to_string()),
         )
-        .expect("入队 Action");
-    ExecutionId::new(action_id).expect("Execution ID")
+        .expect("入队 Execution");
+    let source = axon_domain::InteractionSource::new(
+        axon_domain::AGENT_DISPATCH_SOURCE_CHANNEL,
+        format!("goal-execution:{}:1", goal_id.as_str()),
+    )
+    .and_then(|source| source.with_client(axon_session_runtime::ORIGIN_CHANNEL_GOAL))
+    .expect("目标执行来源");
+    let interaction = axon_domain::InteractionRecord::new(
+        session_id.clone(),
+        axon_domain::InteractionId::new(execution_id.as_str()).expect("Interaction ID"),
+        source,
+        scope,
+        axon_domain::AudienceContext::new(
+            axon_domain::AudienceKind::Private,
+            axon_domain::DisclosurePolicy::PrivateOnly,
+        ),
+        axon_domain::ReplyRoute::new(
+            axon_domain::AGENT_DISPATCH_SOURCE_CHANNEL,
+            session_id.as_str(),
+        )
+        .expect("回复路由"),
+        "故障注入".to_owned(),
+        FAULT_BASE_NOW_MS,
+    )
+    .expect("Interaction");
+    store.append(&interaction).expect("入队 Interaction");
+    execution_id
 }
 
 /// 直接写入排队 Execution；用于在不启动 Worker 的前提下注入 SQLite busy。

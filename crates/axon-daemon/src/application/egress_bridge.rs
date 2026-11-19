@@ -15,67 +15,6 @@ pub(crate) struct CommittedEventEgress<'a, P> {
     stream_bridge: &'a EventStreamBridge,
 }
 
-/// Execution Worker 使用的拥有型适配器；与借用型桥保持完全相同的顺序语义。
-#[derive(Clone)]
-pub(crate) struct CommittedEventPublisher<P> {
-    publisher: P,
-    stream_bridge: std::sync::Arc<EventStreamBridge>,
-}
-
-impl<P> CommittedEventPublisher<P> {
-    /// 绑定既有 publisher 和实时桥。
-    pub(crate) fn new(publisher: P, stream_bridge: std::sync::Arc<EventStreamBridge>) -> Self {
-        Self {
-            publisher,
-            stream_bridge,
-        }
-    }
-}
-
-impl<P> EventPublisher for CommittedEventPublisher<P>
-where
-    P: EventPublisher,
-{
-    fn publish(&self, event: &SessionEventRecord, cursor: &ConsumerCursor) -> Result<(), String> {
-        self.publisher.publish(event, cursor)?;
-        self.stream_bridge.publish(event, cursor);
-        Ok(())
-    }
-
-    fn publish_observation(&self, frame: &RuntimeObservationFrame) -> Result<(), String> {
-        self.publisher.publish_observation(frame)?;
-        if let Ok(session_id) = DaemonSessionId::new(&frame.session_id) {
-            self.stream_bridge.publish_observation(&session_id, frame);
-        } else {
-            self.stream_bridge.broadcast_observation(frame);
-        }
-        Ok(())
-    }
-
-    fn publish_live(
-        &self,
-        session_id: &str,
-        interaction_id: &str,
-        event_type: &str,
-        payload_json: &str,
-    ) -> Result<(), String> {
-        self.publisher
-            .publish_live(session_id, interaction_id, event_type, payload_json)?;
-        if let (Ok(session_id), Ok(interaction_id)) = (
-            DaemonSessionId::new(session_id),
-            axon_domain::InteractionId::new(interaction_id),
-        ) {
-            self.stream_bridge.publish_live(&LiveStreamEvent {
-                session_id,
-                interaction_id,
-                event_type: event_type.to_owned(),
-                payload_json: payload_json.to_owned(),
-            });
-        }
-        Ok(())
-    }
-}
-
 impl<'a, P> CommittedEventEgress<'a, P> {
     /// 绑定既有 durable publisher 与实时事件桥，不创建新的存储或队列。
     pub(crate) fn new(publisher: &'a P, stream_bridge: &'a EventStreamBridge) -> Self {

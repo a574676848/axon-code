@@ -15,7 +15,6 @@ mod primary_turn_sessions;
 mod primary_turn_worker_pool;
 mod scheduler_service;
 mod session_registry;
-mod worker_supervisor;
 
 /// 外部事件来源消息键的前缀：表达「这一轮来自外部事件」的来源出处，不参与会话身份。
 pub(crate) const EXTERNAL_EVENT_SOURCE_PREFIX: &str = "external:";
@@ -44,4 +43,3 @@ pub use primary_turn_service::{
 };
 pub use scheduler_service::{SchedulerError, SchedulerService, SchedulerTickReport};
 pub use session_registry::SessionRegistry;
-pub use worker_supervisor::WorkerSupervisorState;

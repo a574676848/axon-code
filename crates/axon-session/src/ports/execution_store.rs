@@ -79,6 +79,50 @@ pub trait ExecutionStore: Send + Sync {
     /// 幂等写入排队 Execution。
     fn enqueue_execution(&self, execution: &ExecutionRecord) -> Result<bool, ExecutionStoreError>;
 
+    /// 把排队中的执行推进为正在执行。
+    ///
+    /// 目标执行已改由主 turn 承担：一轮只对应一条 Interaction，唯一性由入站主键保证，
+    /// 账本因此不再需要自己的租约。这里只做一次状态推进，重复调用返回当前记录。
+    fn begin_execution(
+        &self,
+        _execution_id: &ExecutionId,
+        _now_ms: u64,
+    ) -> Result<Option<ExecutionRecord>, ExecutionStoreError> {
+        Ok(None)
+    }
+
+    /// 结算执行终态；只前移未终结的执行，已终结的保持原状。
+    fn finish_execution(
+        &self,
+        _execution_id: &ExecutionId,
+        _status: ExecutionStatus,
+        _now_ms: u64,
+    ) -> Result<(), ExecutionStoreError> {
+        Ok(())
+    }
+
+    /// 读取退避已到期、等待重新投递的执行。
+    fn due_execution_retries(
+        &self,
+        _now_ms: u64,
+        _limit: u32,
+    ) -> Result<Vec<ExecutionRecord>, ExecutionStoreError> {
+        Ok(Vec::new())
+    }
+
+    /// 记录一次可重试失败：未达上限时进入退避队列，达到上限时进入 failed 终态。
+    ///
+    /// 返回是否还会再投递一轮。重试不重新领取旧轮，而是到期后再提交一条新 Interaction。
+    fn retry_execution(
+        &self,
+        _execution_id: &ExecutionId,
+        _retry_at_ms: u64,
+        _max_attempts: u32,
+        _now_ms: u64,
+    ) -> Result<bool, ExecutionStoreError> {
+        Ok(false)
+    }
+
     /// 读取 Execution。
     fn get_execution(
         &self,

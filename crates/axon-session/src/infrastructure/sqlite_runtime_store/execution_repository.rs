@@ -102,6 +102,128 @@ impl ExecutionStore for SqliteRuntimeStore {
         }
     }
 
+    /// 把排队中的执行推进为正在执行；重复推进只刷新时间戳。
+    fn begin_execution(
+        &self,
+        execution_id: &ExecutionId,
+        now_ms: u64,
+    ) -> Result<Option<ExecutionRecord>, ExecutionStoreError> {
+        self.initialize().map_err(runtime_error)?;
+        let connection = self.connection().map_err(runtime_error)?;
+        connection
+            .execute(
+                "UPDATE work_items SET status='running',retry_at_ms=NULL,updated_at_ms=?2 \
+                 WHERE execution_id=?1 AND status IN ('queued','waiting')",
+                params![
+                    execution_id.as_str(),
+                    i64_value(now_ms).map_err(runtime_error)?
+                ],
+            )
+            .map_err(storage_error)?;
+        self.get_execution(execution_id)
+    }
+
+    /// 结算执行终态；只前移未终结的执行。
+    fn finish_execution(
+        &self,
+        execution_id: &ExecutionId,
+        status: ExecutionStatus,
+        now_ms: u64,
+    ) -> Result<(), ExecutionStoreError> {
+        self.initialize().map_err(runtime_error)?;
+        let connection = self.connection().map_err(runtime_error)?;
+        connection
+            .execute(
+                "UPDATE work_items SET status=?2,retry_at_ms=NULL,updated_at_ms=?3 \
+                 WHERE execution_id=?1 AND status IN ('queued','running','waiting')",
+                params![
+                    execution_id.as_str(),
+                    status_code(status),
+                    i64_value(now_ms).map_err(runtime_error)?
+                ],
+            )
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
+    /// 读取退避已到期、等待重新投递的执行。
+    fn due_execution_retries(
+        &self,
+        now_ms: u64,
+        limit: u32,
+    ) -> Result<Vec<ExecutionRecord>, ExecutionStoreError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        self.initialize().map_err(runtime_error)?;
+        let connection = self.connection().map_err(runtime_error)?;
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT {EXECUTION_COLUMNS} FROM work_items_all \
+                 WHERE status='queued' AND retry_at_ms IS NOT NULL AND retry_at_ms<=?1 \
+                 ORDER BY retry_at_ms ASC, execution_id ASC LIMIT ?2"
+            ))
+            .map_err(storage_error)?;
+        statement
+            .query_map(
+                params![i64_value(now_ms).map_err(runtime_error)?, i64::from(limit)],
+                read_execution,
+            )
+            .map_err(storage_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage_error)
+    }
+
+    /// 记录一次可重试失败：未达上限进退避队列，达到上限落 failed。
+    fn retry_execution(
+        &self,
+        execution_id: &ExecutionId,
+        retry_at_ms: u64,
+        max_attempts: u32,
+        now_ms: u64,
+    ) -> Result<bool, ExecutionStoreError> {
+        if max_attempts == 0 {
+            return Err(ExecutionStoreError::Conflict(
+                "最大尝试次数必须大于 0".to_owned(),
+            ));
+        }
+        self.initialize().map_err(runtime_error)?;
+        let connection = self.connection().map_err(runtime_error)?;
+        let attempt: Option<u32> = connection
+            .query_row(
+                "SELECT attempt FROM work_items WHERE execution_id=?1 \
+                 AND status IN ('queued','running','waiting')",
+                params![execution_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        let Some(attempt) = attempt else {
+            return Ok(false);
+        };
+        let next = attempt.saturating_add(1);
+        let retrying = next < max_attempts;
+        let retry_at = if retrying {
+            Some(i64_value(retry_at_ms).map_err(runtime_error)?)
+        } else {
+            None
+        };
+        connection
+            .execute(
+                "UPDATE work_items SET attempt=?2,status=?3,retry_at_ms=?4,updated_at_ms=?5 \
+                 WHERE execution_id=?1 AND status IN ('queued','running','waiting')",
+                params![
+                    execution_id.as_str(),
+                    i64::from(next),
+                    if retrying { "queued" } else { "failed" },
+                    retry_at,
+                    i64_value(now_ms).map_err(runtime_error)?
+                ],
+            )
+            .map_err(storage_error)?;
+        Ok(retrying)
+    }
+
     fn get_execution(
         &self,
         execution_id: &ExecutionId,

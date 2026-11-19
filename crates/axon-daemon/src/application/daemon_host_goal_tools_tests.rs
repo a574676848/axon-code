@@ -148,8 +148,8 @@ fn create_with_execution_records_scope_allow_decision() {
             GoalToolCommand::Create(create_command(true)),
         ))
         .expect("创建 Goal 成功");
-    // 新建 Goal 处于 proposed 初始态：只有 Worker 实际推进后才进入 active。
-    assert_eq!(receipt["status"], json!(GoalStatus::Proposed));
+    // 创建即执行：首轮 Execution 已入队，目标直接进入执行态。
+    assert_eq!(receipt["status"], json!(GoalStatus::Active));
 
     let goal_id = goal_id_of(&receipt);
     let goal = store
@@ -226,8 +226,9 @@ fn tool_updates_are_recorded_as_goal_session_turns() {
         .expect("取消 Goal 成功");
     assert_eq!(cancel["status"], json!(GoalStatus::Cancelled));
 
-    // 每一次工具更新都在目标会话里留下一条已收口的派发轮次：创建、更新、取消各一条。
-    let rows: Vec<(String, String, String)> = store
+    // 每一次工具更新都在目标会话里留下一条已收口的派发轮次：创建、更新、取消各一条；
+    // 目标创建即执行，因此同一条会话里还有一条待主 turn 领取的执行轮次。
+    let rows: Vec<(String, String, Option<String>)> = store
         .with_read_connection(|connection| {
             connection
                 .prepare(
@@ -240,26 +241,32 @@ fn tool_updates_are_recorded_as_goal_session_turns() {
                             Ok((
                                 row.get::<_, String>(0)?,
                                 row.get::<_, String>(1)?,
-                                row.get::<_, String>(2)?,
+                                row.get::<_, Option<String>>(2)?,
                             ))
                         })
                         .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
                 })
         })
         .expect("读取目标会话轮次");
-    assert_eq!(rows.len(), 3, "创建、更新、取消各留一条轮次：{rows:?}");
-    assert!(
-        rows.iter()
-            .all(|(_, channel, terminal)| channel == "agent" && terminal == "understood")
+    assert_eq!(
+        rows.len(),
+        5,
+        "三条工具轮加两条执行要求（创建与更新各一条）：{rows:?}"
     );
-    let contents: Vec<&str> = rows
+    assert!(
+        rows.iter().all(|(_, channel, _)| channel == "agent"),
+        "目标会话的轮次都走派发渠道：{rows:?}"
+    );
+    let settled = rows
         .iter()
+        .filter(|(_, _, terminal)| terminal.as_deref() == Some("understood"))
         .map(|(content, _, _)| content.as_str())
-        .collect();
-    for expected in ["目标已创建：整理发布说明", "目标已更新", "目标已取消"] {
+        .collect::<Vec<_>>();
+    assert_eq!(settled.len(), 3, "工具轮落库即收口：{rows:?}");
+    for expected in ["目标已启动：整理发布说明", "目标已更新", "目标已取消"] {
         assert!(
-            contents.iter().any(|content| content.contains(expected)),
-            "缺少 {expected} 的记录：{contents:?}"
+            settled.iter().any(|content| content.contains(expected)),
+            "缺少 {expected} 的工具轮：{settled:?}"
         );
     }
 }

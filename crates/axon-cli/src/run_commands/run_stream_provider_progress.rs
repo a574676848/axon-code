@@ -181,15 +181,9 @@ fn provider_progress_options<'a>(
         cancel_token: Some(cancel_token),
         user_question_port,
         turn_origin,
-        // 目标执行没有外部入站：它的输入事实由运行侧按完整提示补写。
-        turn_input: if turn_origin == axon_session_runtime::TurnOrigin::GoalExecution {
-            super::run_turn_spec::TurnInput::Generated {
-                channel: axon_domain::AGENT_DISPATCH_SOURCE_CHANNEL,
-                client: Some("goal"),
-            }
-        } else {
-            super::run_turn_spec::TurnInput::Submitted
-        },
+        // 目标执行与用户轮一样，输入事实在入队时就已经落进 inbox：Daemon 启动目标时
+        // 提交的那条 Interaction 就是本轮的入站事实，运行侧不再补写第二条。
+        turn_input: super::run_turn_spec::TurnInput::Submitted,
     }
 }
 

@@ -4,7 +4,7 @@ use super::{DaemonHost, DaemonHostError};
 use crate::ports::ProcessIdentity;
 use axon_domain::DaemonSessionId;
 use axon_session::{RuntimeStore, SessionRuntimeRecord};
-use axon_session_runtime::{EventPublisher, ExecutionWorkerError, RuntimeClock, TurnExecutor};
+use axon_session_runtime::{EventPublisher, RuntimeClock, TurnExecutor};
 
 impl<S, E, P, C, I> DaemonHost<S, E, P, C, I>
 where
@@ -35,15 +35,5 @@ where
         self.store
             .reset_session(session_id, cwd, host, self.clock.now_ms())
             .map_err(Into::into)
-    }
-}
-
-pub(super) fn map_execution_worker_error(error: ExecutionWorkerError) -> DaemonHostError {
-    match error {
-        ExecutionWorkerError::Store(error) => DaemonHostError::Store(error),
-        ExecutionWorkerError::Execution(error) | ExecutionWorkerError::Publish(error) => {
-            DaemonHostError::Worker(error)
-        }
-        ExecutionWorkerError::Gate(error) => DaemonHostError::Worker(error),
     }
 }

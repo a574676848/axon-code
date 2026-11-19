@@ -8,7 +8,6 @@ use super::interaction_ingress::{
 };
 use super::primary_turn_worker_pool::PrimaryTurnWorkerPoolSlot;
 use super::scheduler_service::{SchedulerService, SchedulerTickReport};
-use super::worker_supervisor::ExecutionWorkerRegistry;
 use crate::model::{DaemonHostStatus, UpgradeAdmission};
 use crate::ports::{DeliveryHealthStore, ProcessIdentity};
 use axon_domain::{DaemonSessionId, InteractionId, InteractionStatus, RuntimeHostId};
@@ -40,6 +39,9 @@ mod daemon_host_capacity_tests;
 #[path = "daemon_host_fault_tests.rs"]
 mod daemon_host_fault_tests;
 #[cfg(test)]
+#[path = "daemon_host_goal_interaction_tests.rs"]
+mod daemon_host_goal_interaction_tests;
+#[cfg(test)]
 #[path = "daemon_host_health_tests.rs"]
 mod daemon_host_health_tests;
 #[cfg(test)]
@@ -65,19 +67,16 @@ pub use daemon_host_projection::{SessionAttachSnapshot, queued_action};
 mod daemon_health;
 #[path = "daemon_host_execution_runtime.rs"]
 mod daemon_host_execution_runtime;
-#[path = "daemon_host_execution_worker.rs"]
-mod daemon_host_execution_worker;
+#[path = "daemon_host_goal_execution_interaction.rs"]
+mod daemon_host_goal_execution_interaction;
 #[path = "daemon_host_goal_inbox.rs"]
 mod daemon_host_goal_inbox;
 #[path = "daemon_host_goal_tools.rs"]
 mod daemon_host_goal_tools;
-#[path = "daemon_host_schedule.rs"]
-mod daemon_host_schedule;
-#[path = "execution_session_sink.rs"]
-mod execution_session_sink;
-use execution_session_sink::execution_session_projection;
 #[path = "daemon_host_request.rs"]
 mod daemon_host_request;
+#[path = "daemon_host_schedule.rs"]
+mod daemon_host_schedule;
 #[path = "goal_execution.rs"]
 mod goal_execution;
 #[path = "interaction_turn_runner.rs"]
@@ -93,8 +92,6 @@ const NO_LEASE_MS: u64 = 0;
 pub(super) const DEFAULT_QUEUE_LIMIT: u32 = 100;
 const DEFAULT_SCHEDULE_LEASE_DURATION_MS: u64 = 30_000;
 const PRIMARY_TURN_MAX_CONCURRENCY: usize = 4;
-const EXECUTION_WORKER_MAX_CONCURRENCY: usize = 4;
-const EXECUTION_WORKER_QUEUE_CAPACITY: usize = 64;
 use daemon_host_status::{decode as host_status_from_code, encode as host_status_code};
 
 /// 通用 Daemon Host。
@@ -110,9 +107,7 @@ pub struct DaemonHost<S, E, P, C, I> {
     status: Arc<AtomicU8>,
     host_lease_duration_ms: u64,
     action_lease_duration_ms: u64,
-    worker_registry: Arc<ExecutionWorkerRegistry>,
     primary_turn_worker_pool: PrimaryTurnWorkerPoolSlot,
-    execution_worker_pool: PrimaryTurnWorkerPoolSlot,
     stream_bridge: Arc<EventStreamBridge>,
     active_turn_steer_sink: Arc<dyn ActiveTurnSteerSink>,
     delivery_health: Option<Arc<dyn DeliveryHealthStore>>,
@@ -193,9 +188,7 @@ where
             status: Arc::new(AtomicU8::new(host_status_code(DaemonHostStatus::Stopped))),
             host_lease_duration_ms,
             action_lease_duration_ms,
-            worker_registry: Arc::new(ExecutionWorkerRegistry::default()),
             primary_turn_worker_pool: PrimaryTurnWorkerPoolSlot::default(),
-            execution_worker_pool: PrimaryTurnWorkerPoolSlot::default(),
             stream_bridge,
             active_turn_steer_sink: Arc::new(NoActiveTurnSteerSink),
             delivery_health: None,
@@ -452,17 +445,13 @@ where
             &self.stream_bridge,
             &interrupted_interactions,
         );
-        let sessions = if accepting_work {
-            self.store.list_runnable_execution_sessions(now_ms, limit)?
+        // 目标轮与用户轮共用主 turn 管道：这里只负责把退避到期的执行重新投递成
+        // 一条 Interaction，由主 turn 领取执行，不再有后台专用执行入口。
+        let pumped = if accepting_work {
+            self.redispatch_goal_executions(now_ms, limit)
         } else {
-            Vec::new()
+            0
         };
-        let mut pumped = 0_u32;
-        for session in sessions {
-            if self.wake_session(session.session_id) {
-                pumped = pumped.saturating_add(1);
-            }
-        }
         // 崩溃补偿：commit 成功但通知未落库的 Execution 必须在这里被重新发现，
         // 否则对应 Result 会永久滞留未读。
         if let Err(error) = self.recover_missing_completions(limit) {

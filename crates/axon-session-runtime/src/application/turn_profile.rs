@@ -38,18 +38,18 @@ pub enum TurnOrigin {
 impl TurnOrigin {
     /// 按持久 Action 类型与 transport 上下文判定来源。
     ///
-    /// 判据只看两个既有事实：Action 类型是否为 `user_input`，以及 transport 是否打了目标标记。
-    /// 不做任何字符串前缀拼接或启发式推断。
+    /// 目标标记优先于 Action 类型：目标执行与用户输入现在共用主 turn 的 Action 类型，
+    /// 来源只剩 transport 上这一个判据，先判 Action 类型会把目标执行错判成用户轮。
     #[must_use]
     pub fn from_action(action_kind: &str, transport_context: Option<&serde_json::Value>) -> Self {
-        if action_kind == PRIMARY_TURN_ACTION_KIND {
-            return Self::Primary;
-        }
         let origin_channel = transport_context
             .and_then(|context| context.get(ORIGIN_CHANNEL_KEY))
             .and_then(serde_json::Value::as_str);
         if origin_channel == Some(ORIGIN_CHANNEL_GOAL) {
             return Self::GoalExecution;
+        }
+        if action_kind == PRIMARY_TURN_ACTION_KIND {
+            return Self::Primary;
         }
         Self::Background
     }
@@ -284,11 +284,17 @@ mod tests {
     }
 
     #[test]
-    fn origin_is_decided_by_action_kind_then_marker_only() {
-        // 主 turn 即使携带目标标记也不改变来源：Action 类型是唯一的第一判据。
+    fn goal_marker_wins_over_primary_action_kind() {
+        // 目标执行与用户输入共用主 turn 的 Action 类型：来源只剩 transport 上的目标标记，
+        // 因此标记必须优先于 Action 类型，否则目标执行会被错判成用户轮。
         let transport = serde_json::json!({ ORIGIN_CHANNEL_KEY: ORIGIN_CHANNEL_GOAL });
         assert_eq!(
             TurnOrigin::from_action("user_input", Some(&transport)),
+            TurnOrigin::GoalExecution
+        );
+        // 主 turn 没有目标标记时仍是主 turn。
+        assert_eq!(
+            TurnOrigin::from_action("user_input", None),
             TurnOrigin::Primary
         );
         // 非字符串或缺失的标记不得推断成目标执行。

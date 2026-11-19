@@ -268,7 +268,7 @@ where
         command
             .validate()
             .map_err(GoalCommandServiceError::Domain)?;
-        let goal = GoalRecord::new(
+        let mut goal = GoalRecord::new(
             goal_id,
             scope.clone(),
             command.title.clone(),
@@ -291,6 +291,14 @@ where
                 self.store
                     .commit_goal_start(&goal, &execution, event)
                     .map_err(GoalCommandServiceError::Commit)?;
+                // 创建即执行：首轮 Execution 已入队，目标随即进入执行态；否则目标停在提案态，
+                // 之后的更新不会被当成「执行中的新要求」投递出去，看板也会显示未启动。
+                let expected_revision = goal.revision;
+                goal.transition(axon_domain::GoalStatus::Active, now_ms)
+                    .map_err(GoalCommandServiceError::Goal)?;
+                self.store
+                    .update_goal(&goal, expected_revision)
+                    .map_err(GoalCommandServiceError::Store)?;
             }
             None => {
                 self.store

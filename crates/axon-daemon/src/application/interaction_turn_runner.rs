@@ -16,7 +16,10 @@ mod interaction_turn_generation_watch;
 #[path = "interaction_turn_terminal.rs"]
 mod interaction_turn_terminal;
 use axon_crypto::sha256_hex;
-use axon_domain::{DaemonSessionId, InteractionRecord, SessionActionId};
+use axon_domain::{
+    DaemonSessionId, ExecutionRecord, ExecutionStatus, GoalStatus, InteractionRecord,
+    SessionActionId,
+};
 use axon_session::{DaemonHostRecord, RuntimeStore, SessionRuntimeRecord, interaction_session_id};
 /// Daemon Primary Turn 使用的稳定 Action 类型。
 ///
@@ -37,6 +40,10 @@ use std::sync::Arc;
 const PRIMARY_ACTION_ID_PREFIX: &str = "interaction-action-";
 /// 用户消息事件的关联标识。
 const USER_CORRELATION_ID: &str = "user";
+/// 目标执行失败后的退避间隔。
+const GOAL_EXECUTION_RETRY_BACKOFF_MS: u64 = 30_000;
+/// 目标执行的最大尝试轮数。
+const GOAL_EXECUTION_MAX_ATTEMPTS: u32 = 3;
 #[derive(Clone)]
 pub(super) struct InteractionTurnRunner<S, E, P, C> {
     pub(super) store: S,
@@ -65,6 +72,14 @@ where
             Some(recorder)
         };
         let (interaction, session_id, execution_request) = self.execution_request(request)?;
+        // 目标执行轮在账本上的那一行随本轮前进：入站即认领，收口即结算。
+        // 一轮只对应一条 Interaction，唯一性由入站主键保证，账本不再需要自己的租约。
+        let goal_execution = self.goal_execution_record(&interaction);
+        if let Some(execution) = goal_execution.as_ref() {
+            let _ = self
+                .store
+                .begin_execution(&execution.execution_id, self.clock.now_ms());
+        }
         let transport_context = interaction_transport_context(&interaction);
         // 运行过程中的逐条投影与收口时的批量投影共用同一条落库/发布路径，
         // 使订阅者在 Provider 连接、工具调用与回复生成的当下即可见。
@@ -129,8 +144,10 @@ where
                     None,
                 )?;
                 if kind == TurnFailureKind::Interrupted {
+                    self.settle_goal_execution(goal_execution.as_ref(), ExecutionStatus::Cancelled);
                     return Err(PrimaryTurnRunnerError::Interrupted(response));
                 }
+                self.retry_goal_execution(goal_execution.as_ref());
                 return Err(PrimaryTurnRunnerError::Provider(message));
             }
         };
@@ -144,6 +161,7 @@ where
             self.clock.now_ms(),
         );
         let summary = completion_summary_from_events(&outcome.events);
+        let next_stage = outcome.next_execution;
         // 终态与它派生的指标同批落盘：`session_metrics` 由 `turn_metrics` 累加，
         // 缺了它 header 的会话累计耗时与 token 读数整段消失。
         let turn_metrics = sink.turn_metrics_event();
@@ -156,6 +174,13 @@ where
             generation,
             turn_metrics,
         )?;
+        // 目标轮声明了下一阶段时不终结目标：下一阶段就是一条新的入站事实。
+        let continued = next_stage.is_some_and(|next| {
+            self.continue_goal_execution(&interaction, &session_id, goal_execution.as_ref(), next)
+        });
+        if !continued {
+            self.complete_goal_execution(goal_execution.as_ref());
+        }
         self.settle_completion_delivery(&interaction, summary.as_deref());
         Ok(())
     }
@@ -167,6 +192,150 @@ where
     P: EventPublisher,
     C: RuntimeClock,
 {
+    /// 本轮对应的执行账本行：只有目标执行轮才有。
+    ///
+    /// 按标识直取，不按会话回落：`work_items` 同一张在途表里还有入站轮次的行，
+    /// 按会话取最近一条可能把本轮自己的 turn 行当成账本行，进而改坏它的处理状态。
+    fn goal_execution_record(&self, interaction: &InteractionRecord) -> Option<ExecutionRecord> {
+        if interaction.source.client() != Some(axon_session_runtime::ORIGIN_CHANNEL_GOAL) {
+            return None;
+        }
+        let interaction_id = interaction.interaction_id.as_str();
+        for candidate in [
+            interaction_id.to_owned(),
+            retry_base_execution_id(interaction_id),
+        ] {
+            if let Ok(execution_id) = axon_domain::ExecutionId::new(candidate)
+                && let Ok(Some(record)) = self.store.get_execution(&execution_id)
+            {
+                return Some(record);
+            }
+        }
+        None
+    }
+
+    /// 目标轮声明了下一阶段：把下一阶段要求提交成一条新 Interaction，本阶段不终结目标。
+    ///
+    /// 多阶段目标与首次执行走同一条入站事实通道，因此阶段推进不需要任何后台调度：
+    /// 下一轮由主 turn 领取，正文、指标与终态与首阶段完全同源。
+    fn continue_goal_execution(
+        &self,
+        interaction: &InteractionRecord,
+        session_id: &DaemonSessionId,
+        execution: Option<&ExecutionRecord>,
+        next: axon_session_runtime::NextExecutionRequest,
+    ) -> bool {
+        let Some(execution) = execution else {
+            return false;
+        };
+        let prompt = serde_json::from_str::<serde_json::Value>(&next.payload_json)
+            .ok()
+            .and_then(|payload| {
+                payload
+                    .get("prompt")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .filter(|prompt| !prompt.trim().is_empty());
+        let Some(prompt) = prompt else {
+            return false;
+        };
+        let stage = next.stage.unwrap_or_else(|| "next".to_owned());
+        let source = axon_domain::InteractionSource::new(
+            interaction.source.channel(),
+            format!("goal-stage:{}:{stage}", execution.goal_id.as_str()),
+        )
+        .and_then(|source| source.with_client(axon_session_runtime::ORIGIN_CHANNEL_GOAL));
+        let Ok(source) = source else {
+            return false;
+        };
+        let Ok(route) =
+            axon_domain::ReplyRoute::new(interaction.source.channel(), session_id.as_str())
+        else {
+            return false;
+        };
+        let Ok(record) = InteractionRecord::new(
+            session_id.clone(),
+            axon_session::new_interaction_id(),
+            source,
+            interaction.scope.clone(),
+            interaction.audience.clone(),
+            route,
+            prompt,
+            self.clock.now_ms(),
+        ) else {
+            return false;
+        };
+        self.store.append(&record).is_ok()
+    }
+
+    /// 目标执行成功：账本结算，目标推进到已完成。
+    ///
+    /// 完成通知由 supervisor 的补偿扫描按「已终结且未通知」派生，因此这里不直接发通知：
+    /// 一条路径只写一次事实，崩溃窗口也由同一处扫描补齐。
+    fn complete_goal_execution(&self, execution: Option<&ExecutionRecord>) {
+        let Some(execution) = execution else {
+            return;
+        };
+        let now_ms = self.clock.now_ms();
+        self.settle_goal_execution(Some(execution), ExecutionStatus::Completed);
+        let Ok(Some(mut goal)) = self.store.get_goal(&execution.goal_id) else {
+            return;
+        };
+        if goal.status.is_terminal() {
+            return;
+        }
+        let expected_revision = goal.revision;
+        if goal.transition(GoalStatus::Completed, now_ms).is_err() {
+            return;
+        }
+        if let Err(error) = self.store.update_goal(&goal, expected_revision) {
+            axon_logger::warning(&format!(
+                "目标状态结算失败: goal={}, error={error}",
+                goal.goal_id.as_str()
+            ));
+        }
+    }
+
+    /// 把目标执行轮的终态写回账本。
+    ///
+    /// 账本写失败只影响看板读数，不得改变本轮已经产生的正文与终态，因此这里只告警。
+    fn settle_goal_execution(&self, execution: Option<&ExecutionRecord>, status: ExecutionStatus) {
+        let Some(execution) = execution else {
+            return;
+        };
+        if let Err(error) =
+            self.store
+                .finish_execution(&execution.execution_id, status, self.clock.now_ms())
+        {
+            axon_logger::warning(&format!(
+                "目标执行账本结算失败: execution={}, error={error}",
+                execution.execution_id.as_str()
+            ));
+        }
+    }
+
+    /// 目标执行失败：未达上限时排一次退避重投，达到上限时落 failed。
+    ///
+    /// 重试不重新领取旧轮，而是到期后再提交一条新 Interaction，走同一套领取与执行路径。
+    fn retry_goal_execution(&self, execution: Option<&ExecutionRecord>) {
+        let Some(execution) = execution else {
+            return;
+        };
+        let now_ms = self.clock.now_ms();
+        if let Err(error) = self.store.retry_execution(
+            &execution.execution_id,
+            now_ms.saturating_add(GOAL_EXECUTION_RETRY_BACKOFF_MS),
+            GOAL_EXECUTION_MAX_ATTEMPTS,
+            now_ms,
+        ) {
+            axon_logger::warning(&format!(
+                "目标执行重试排期失败: execution={}, error={error}",
+                execution.execution_id.as_str()
+            ));
+        }
+    }
+
     fn execution_request(
         &self,
         request: PrimaryTurnRequest,
@@ -394,6 +563,21 @@ pub fn primary_session_id_for_interaction(
 
 pub(super) fn stable_interaction_id(prefix: &str, interaction_id: &str) -> String {
     format!("{prefix}{}", sha256_hex(interaction_id.as_bytes()))
+}
+
+/// 重试轮标识回落到账本标识：`{execution_id}-r{attempt}` 去掉重试后缀。
+///
+/// 后缀只在目标执行重投时写入，形状由本模块自己决定，因此解析它是安全的；
+/// 其余标识原样返回，交给精确查找判空。
+fn retry_base_execution_id(interaction_id: &str) -> String {
+    match interaction_id.rsplit_once("-r") {
+        Some((head, suffix))
+            if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) =>
+        {
+            head.to_owned()
+        }
+        _ => interaction_id.to_owned(),
+    }
 }
 
 #[path = "interaction_turn_payloads.rs"]

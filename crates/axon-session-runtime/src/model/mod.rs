@@ -2,7 +2,6 @@
 
 pub mod action_dispatch;
 pub mod execution_failure;
-pub mod execution_worker_state;
 pub mod recovery_decision;
 
 pub use execution_failure::{TurnExecutionError, TurnFailureKind};

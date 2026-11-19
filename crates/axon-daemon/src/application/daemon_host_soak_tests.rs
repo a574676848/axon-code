@@ -7,18 +7,17 @@
 
 use super::*;
 use axon_domain::{
-    ConsumerCursor, DecisionEffect, DecisionId, DecisionRecord, GoalPlan, GoalRecord, GoalStatus,
-    HealthStatusCounts, ScopeRef, SessionActionId, SessionActionStatus,
+    ConsumerCursor, DecisionEffect, DecisionId, DecisionRecord, HealthStatusCounts, ScopeRef,
 };
 use axon_session::{
-    CheckpointTelemetry, DecisionStore, GoalStore, HealthStore, SessionActionRecord,
-    SessionEventRecord, SqliteRuntimeStore, WorkspaceResolver, WorkspaceStore,
+    CheckpointTelemetry, DecisionStore, HealthStore, SessionEventRecord, SqliteRuntimeStore,
+    WorkspaceResolver, WorkspaceStore,
 };
 use axon_session_runtime::{ActionExecutionRequest, TurnExecutionError, TurnExecutionOutcome};
 use std::{
     path::Path,
     sync::atomic::{AtomicU64, Ordering},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 const SOAK_ITERATIONS_ENV: &str = "Axon_SOAK_ITERATIONS";
@@ -28,8 +27,6 @@ const SOAK_BASE_NOW_MS: u64 = 5_000_000;
 const SOAK_CYCLE_MS: u64 = 1_000;
 const SOAK_HOST_LEASE_MS: u64 = 3_000;
 const SOAK_ACTION_LEASE_MS: u64 = 2_000;
-const SOAK_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
-const SOAK_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(1);
 const SOAK_MAX_WAL_BYTES: u64 = 64 * 1024 * 1024;
 const WAL_FILE_NAME: &str = "runtime.sqlite3-wal";
 const NON_TERMINAL_EXECUTION_STATUSES: [&str; 4] = ["queued", "claimed", "running", "retrying"];
@@ -127,55 +124,21 @@ fn run_soak_case(iterations: usize) -> String {
     seed_allow_decision(&store, &scope);
     let sessions = seed_sessions(&store, &clock, directory.path());
     let started = Instant::now();
-    let mut peak_active_sessions = 0_usize;
-    let mut peak_pending_sessions = 0_usize;
     for iteration in 0..iterations {
         let now_ms = SOAK_BASE_NOW_MS.saturating_add(iteration as u64 * SOAK_CYCLE_MS);
         clock.advance_to(now_ms);
         // heartbeat：每轮续租，跨越多轮 Host lease 窗口。
         host.renew().expect("Host 续租");
         let session_id = sessions[iteration % sessions.len()].clone();
-        seed_execution(&store, &session_id, &scope, iteration, now_ms);
-        host.supervisor_tick(DEFAULT_QUEUE_LIMIT)
-            .expect("supervisor tick");
-        drain_until_idle(&store, &clock, now_ms);
-        peak_active_sessions = peak_active_sessions.max(host.worker_registry.active_sessions());
-        peak_pending_sessions = peak_pending_sessions.max(host.worker_registry.pending_sessions());
+        seed_interaction(&store, &session_id, &scope, iteration, now_ms);
+        // 目标执行与用户轮同一条管道：一轮一条 Interaction，主 turn tick 即完成领取与结算。
+        host.primary_turn_tick(DEFAULT_QUEUE_LIMIT)
+            .expect("主 turn tick");
     }
     let health = store.read_runtime_health(clock.now_ms()).expect("健康快照");
     let snapshot = host.health_snapshot().expect("宿主健康快照");
     let stuck = non_terminal_executions(&health.executions);
     assert_eq!(stuck, 0, "soak 结束后仍有非终态 Execution");
-    // 结算完成与 Worker 登记释放之间存在收尾时序：等到登记真正清空再断言，
-    // 避免把正常的退出时序误判为泄漏。
-    let registry_deadline = Instant::now() + SOAK_DRAIN_TIMEOUT;
-    while host.worker_registry.tracked_sessions() > 0 {
-        assert!(
-            Instant::now() < registry_deadline,
-            "soak 结束后仍登记着 Session Worker"
-        );
-        std::thread::sleep(SOAK_DRAIN_POLL_INTERVAL);
-    }
-    assert!(
-        peak_active_sessions <= SOAK_SESSION_COUNT,
-        "Session Worker 活跃登记峰值 {peak_active_sessions} 超出并发上限"
-    );
-    assert!(
-        peak_pending_sessions <= SOAK_SESSION_COUNT,
-        "Session Worker 待唤醒登记峰值 {peak_pending_sessions} 超出有界上限"
-    );
-    let workers = host
-        .execution_worker_pool
-        .get_or_create_with_capacity(
-            EXECUTION_WORKER_MAX_CONCURRENCY,
-            EXECUTION_WORKER_QUEUE_CAPACITY,
-        )
-        .expect("执行 Worker 池")
-        .worker_count();
-    assert!(
-        workers <= EXECUTION_WORKER_MAX_CONCURRENCY,
-        "执行 Worker 线程数 {workers} 超出上限"
-    );
     let wal_bytes = file_len(&directory.path().join(WAL_FILE_NAME));
     assert!(
         wal_bytes <= SOAK_MAX_WAL_BYTES,
@@ -185,9 +148,6 @@ fn run_soak_case(iterations: usize) -> String {
         "iterations": iterations,
         "sessions": SOAK_SESSION_COUNT,
         "duration_ms": started.elapsed().as_millis(),
-        "peak_active_sessions": peak_active_sessions,
-        "peak_pending_sessions": peak_pending_sessions,
-        "execution_worker_threads": workers,
         "terminal_executions": health.executions.total,
         "execution_statuses": health.executions.by_status,
         "stuck_executions": stuck,
@@ -195,24 +155,6 @@ fn run_soak_case(iterations: usize) -> String {
         "wal_bytes": wal_bytes,
     })
     .to_string()
-}
-
-/// 推进到没有非终态 Execution 为止；超时是 soak 失败而不是放弃等待。
-fn drain_until_idle(store: &SqliteRuntimeStore, clock: &SoakClock, now_ms: u64) {
-    let deadline = Instant::now() + SOAK_DRAIN_TIMEOUT;
-    loop {
-        let health = store.read_runtime_health(now_ms).expect("健康快照");
-        if non_terminal_executions(&health.executions) == 0 && health.execution_backlog.pending == 0
-        {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "等待 Execution 结算超时：{}",
-            clock.now_ms()
-        );
-        std::thread::sleep(SOAK_DRAIN_POLL_INTERVAL);
-    }
 }
 
 fn non_terminal_executions(counts: &HealthStatusCounts) -> u64 {
@@ -258,51 +200,29 @@ fn seed_sessions(
         .collect()
 }
 
-fn seed_execution(
+fn seed_interaction(
     store: &SqliteRuntimeStore,
     session_id: &DaemonSessionId,
     scope: &ScopeRef,
     iteration: usize,
     now_ms: u64,
 ) {
-    let mut task = GoalRecord::new(
-        axon_domain::GoalId::new(format!("soak-task-{iteration}")).expect("Goal ID"),
+    let interaction = axon_domain::InteractionRecord::new(
+        session_id.clone(),
+        axon_domain::InteractionId::new(format!("soak-interaction-{iteration}"))
+            .expect("Interaction ID"),
+        axon_domain::InteractionSource::new("soak", format!("soak-{iteration}")).expect("来源"),
         scope.clone(),
-        format!("soak 任务 {iteration}"),
-        GoalPlan {
-            objective: "验证常驻 heartbeat 与执行 churn".to_owned(),
-            steps: Vec::new(),
-            write_policy: Default::default(),
-        },
-        Vec::new(),
+        axon_domain::AudienceContext::new(
+            axon_domain::AudienceKind::Private,
+            axon_domain::DisclosurePolicy::PrivateOnly,
+        ),
+        axon_domain::ReplyRoute::new("soak", session_id.as_str()).expect("回复路由"),
+        format!("soak 轮次 {iteration}"),
         now_ms,
     )
-    .expect("Task");
-    task.transition(GoalStatus::Active, now_ms)
-        .expect("激活 Task");
-    store.create_goal(&task).expect("写入 Task");
-    store
-        .enqueue_action(
-            &SessionActionRecord {
-                action_id: SessionActionId::new(format!("soak-action-{iteration}"))
-                    .expect("Action"),
-                goal_id: Some(task.goal_id.clone()),
-                session_id: session_id.clone(),
-                kind: "user_input".to_owned(),
-                priority: 0,
-                status: SessionActionStatus::Queued,
-                dedupe_key: None,
-                payload_json: format!(r#"{{"prompt":"soak 轮次 {iteration}"}}"#),
-                goal_revision: None,
-                context_version: None,
-                claimed_by: None,
-                claimed_generation: None,
-                lease_expires_at_ms: None,
-                attempt: 0,
-            },
-            now_ms,
-        )
-        .expect("入队 Action");
+    .expect("Interaction");
+    store.append(&interaction).expect("入队 Interaction");
 }
 
 fn file_len(path: &Path) -> u64 {

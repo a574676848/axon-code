@@ -95,17 +95,8 @@ where
 {
     /// 记录并派发一个已形成结论的 Execution 的完成通知。
     ///
-    /// 该入口同时服务于实时结算与崩溃补偿扫描：只要 Result 已提交，通知就一定
-    /// 会进入持久收件箱，不会因为进程中断而丢失。
-    pub(super) fn record_execution_completion(
-        &self,
-        execution_id: &ExecutionId,
-    ) -> Result<(), DaemonHostError> {
-        self.record_execution_completion_inbox(execution_id)?;
-        self.dispatch_pending_completions(COMPLETION_DISPATCH_BATCH_LIMIT)?;
-        Ok(())
-    }
-
+    /// 崩溃补偿扫描与首次结算共用这一处：只要 Result 已提交，通知一定会进入持久收件箱，
+    /// 不会因为进程中断而丢失。
     fn record_execution_completion_inbox(
         &self,
         execution_id: &ExecutionId,
