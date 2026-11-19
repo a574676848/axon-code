@@ -36,7 +36,7 @@ import {
   attachmentsFromPaths,
   conversationReducer,
   outlineControl,
-  summaryFromToolNames,
+  summaryFromIndexFacts,
   type ConversationAction,
   type JobRow,
   type TurnState,
@@ -327,7 +327,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
               entry.interactionId,
               entry.receivedAtMs,
               elapsed,
-              summaryFromToolNames(entry.toolNames ?? []),
+              summaryFromIndexFacts(entry.toolNames ?? [], reading?.reasoningTokens),
             ),
           )
         : seeded;

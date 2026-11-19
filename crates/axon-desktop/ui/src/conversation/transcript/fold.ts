@@ -267,6 +267,21 @@ export function summaryFromToolNames(names: readonly string[]): string {
 }
 
 /**
+ * 只有索引事实时的过程摘要。
+ *
+ * 工具名给得出动作短语就用动作短语；这一轮没有工具、但有推理输出时写「已完成分析」，
+ * 否则留空，由折叠行写中性的标签。历史轮只有索引，不能因为没读到帧就丢掉摘要。
+ */
+export function summaryFromIndexFacts(
+  names: readonly string[],
+  reasoningTokens: number | null | undefined,
+): string {
+  const fromTools = summaryFromToolNames(names);
+  if (fromTools.length > 0) return fromTools;
+  return (reasoningTokens ?? 0) > 0 ? THINKING_PHRASE : '';
+}
+
+/**
  * 只有索引、还没读帧的那一轮的折叠行。
  *
  * 历史轮次在打开会话时只有「用户说了什么、最后答了什么」，过程要等点开才读整轮；
