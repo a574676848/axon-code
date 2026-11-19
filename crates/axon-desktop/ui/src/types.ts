@@ -614,6 +614,8 @@ export interface InterruptReceipt {
   sessionId: string;
   /** 服务端的真实结论：没有活跃轮次时为 false。 */
   interrupted: boolean;
+  /** 取消是否已受理：为真表示会在下一个安全检查点收口，而不是已经停下。 */
+  cancellationRequested: boolean;
   interactionId?: string | null;
 }
 

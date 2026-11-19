@@ -2,7 +2,13 @@ import React from 'react';
 
 import { FolderIcon } from '../../icons';
 import type { GoalCardView, GoalDetailView } from '../../goalTypes';
-import { executionStatusLabel, goalStatusMeta, hasSessionBinding } from '../../goals/model';
+import {
+  executionStatusLabel,
+  executionUnavailableText,
+  goalStatusMeta,
+  hasSessionBinding,
+  isSettled,
+} from '../../goals/model';
 import { formatDateTime } from '../pageFormat';
 import { Dialog } from '../ui/overlays';
 import { Chip, StateDot, Text } from '../ui/surfaces';
@@ -104,6 +110,17 @@ export const GoalDetailDialog: React.FC<GoalDetailDialogProps> = ({
             </Text>
           </div>
         </div>
+
+        {latestExecution !== null && latestExecution.unavailableReason != null && (
+          <Text tone="tertiary" size="xs">
+            {executionUnavailableText(latestExecution.unavailableReason)}
+          </Text>
+        )}
+        {!isSettled(located.status) && (
+          <Text tone="tertiary" size="xs">
+            运行中的目标只能由主会话调用目标工具取消
+          </Text>
+        )}
 
         <GoalContractSections
           variant="dialog"

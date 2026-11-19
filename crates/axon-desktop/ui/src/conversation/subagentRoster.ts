@@ -56,6 +56,18 @@ export function mergeSubagentRoster(
   if (roster === null || roster.length === 0) return [...rows];
   // 转录行与名册行按同一枚规范代理标识对账；空标识的行没有可匹配的对象，直接跳过。
   const known = new Set(rows.map((row) => canonicalAgentId(row.agentId)).filter((id) => id.length > 0));
+  // 名册已经知道会话标识：顺手补给转录行，打开子代理视图时不必再定位一次。
+  const sessionById = new Map<string, string>();
+  for (const entry of roster) {
+    const agentId = canonicalAgentId(entry.agentId);
+    if (agentId.length > 0 && entry.sessionId !== null && entry.sessionId !== '') {
+      sessionById.set(agentId, entry.sessionId);
+    }
+  }
+  const withSession = rows.map((row) => {
+    const sessionId = sessionById.get(canonicalAgentId(row.agentId));
+    return sessionId === undefined || row.sessionId === sessionId ? row : { ...row, sessionId };
+  });
   const extra: SubagentRow[] = [];
   for (const entry of roster) {
     const agentId = canonicalAgentId(entry.agentId);
@@ -74,11 +86,12 @@ export function mergeSubagentRoster(
       cacheHitRateBasisPoints: null,
       model: (entry.model ?? '').trim() || null,
       summary: null,
+      sessionId: entry.sessionId ?? null,
       events: [],
     });
   }
-  if (extra.length === 0) return [...rows];
-  return [...rows, ...extra];
+  if (extra.length === 0) return withSession;
+  return [...withSession, ...extra];
 }
 
 /**

@@ -283,3 +283,21 @@ export async function call<T>(command: string, args: Record<string, unknown> = {
     throw error;
   }
 }
+
+/**
+ * 同一时刻只跑一次的读请求。
+ *
+ * 侧栏与外壳各自静默轮询同一份工作区清单，两处同时发起时共享同一次后端调用：
+ * 只读、幂等、结果一致，合并不会改变任何一方的结论。失败也会释放占用，不缓存错误。
+ */
+const inFlightReads = new Map<string, Promise<unknown>>();
+
+export function singleFlight<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const existing = inFlightReads.get(key) as Promise<T> | undefined;
+  if (existing !== undefined) return existing;
+  const pending = run().finally(() => {
+    inFlightReads.delete(key);
+  });
+  inFlightReads.set(key, pending);
+  return pending;
+}

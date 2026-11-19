@@ -43,7 +43,14 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
   const [sendError, setSendError] = React.useState<string | null>(null);
 
   // 会话定位：子代理会话挂在车道的运行会话之下，用 slug 与界面上的 agent 路径对齐。
+  // 名册已经把会话标识补给行时直接用，不再为此重拉一次名册。
+  const knownSessionId = (row.sessionId ?? '').trim();
   React.useEffect(() => {
+    if (knownSessionId.length > 0) {
+      setLocatedSessionId(knownSessionId);
+      setLocateError(null);
+      return undefined;
+    }
     if (sessionId === null) {
       setLocateError('这条会话没有绑定车道，无法定位子代理会话');
       return undefined;
@@ -83,7 +90,7 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
     return () => {
       cancelled = true;
     };
-  }, [sessionId, row.agentId, row.model]);
+  }, [knownSessionId, sessionId, row.agentId, row.model]);
 
   const target = React.useMemo(
     () =>

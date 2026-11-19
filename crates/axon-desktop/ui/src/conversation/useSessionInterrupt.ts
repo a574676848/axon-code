@@ -38,6 +38,8 @@ export function useSessionInterrupt(options: SessionInterruptOptions): () => Pro
       const receipt = await ipc.conversationInterrupt(session);
       if (!receipt.interrupted) {
         onNotice('本轮已经结束，无需中断');
+      } else if (receipt.cancellationRequested) {
+        onNotice('已请求取消，本轮会在安全点收口');
       }
     } catch (error) {
       onNotice(error instanceof Error ? error.message : '中断失败');

@@ -98,6 +98,18 @@ export const hasSessionBinding = (goal: GoalCardView): boolean =>
 export const cardActionLabel = (goal: GoalCardView): string =>
   hasSessionBinding(goal) ? '进入会话' : '查看详情';
 
+/**
+ * 逐字稿不可进入时的可读原因。
+ *
+ * 原因码由网关给出（`execution-not-started` / `transcript-empty`），这里只翻译成
+ * 一句用户能行动的话：要么这次执行还没开始，要么确实没有留下正文。
+ */
+export function executionUnavailableText(reason: string | null | undefined): string {
+  if (reason === 'execution-not-started') return '这次执行还没开始，没有可回看的逐字稿';
+  if (reason === 'transcript-empty') return '这次执行没有留下逐字稿';
+  return '这次执行没有可回看的逐字稿';
+}
+
 /** 目标摘要去重：当预览与标题完全一致时不再重复展示第二遍。 */
 export function distinctObjectivePreview(
   goal: Pick<GoalCardView, 'title' | 'objectivePreview'>,

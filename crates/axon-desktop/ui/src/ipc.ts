@@ -49,7 +49,7 @@ import type {
 import type { ConversationStreamPayload, ConversationStreamEvent } from './conversation/wire';
 import { expandStreamPayload } from './conversation/wire';
 import type { AnswerItem, QuestionSnapshot } from './conversation/questions';
-import { BRIDGE_PORT, call, isDesktopHost } from './backend';
+import { BRIDGE_PORT, call, isDesktopHost, singleFlight } from './backend';
 
 const CONVERSATION_EVENT = 'axon://conversation';
 
@@ -174,7 +174,8 @@ export const discoverModels = (
 
 // --------------------------------------------------------- 工作区与车道
 
-export const fetchWorkspaces = (): Promise<WorkspaceItem[]> => call('workspace_list');
+export const fetchWorkspaces = (): Promise<WorkspaceItem[]> =>
+  singleFlight('workspace_list', () => call('workspace_list'));
 
 export const addWorkspace = (path: string): Promise<WorkspaceItem[]> =>
   call('workspace_add', { path });

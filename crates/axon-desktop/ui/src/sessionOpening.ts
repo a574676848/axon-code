@@ -8,8 +8,13 @@
 import type { SessionSelection } from './conversation/targets';
 import type { SessionFacts } from './conversation/sessionFacts';
 
-/** 后台驱动会话的只读说明：输入坞禁用时显示在占位位置。 */
-export const READ_ONLY_PLACEHOLDER = '目标由后台执行，这里只读';
+/**
+ * 后台驱动会话的只读说明：输入坞禁用时显示在占位位置。
+ *
+ * 目标执行没有进程内取消令牌：取消只能由主会话调用目标工具发起，因此这里把
+ * 出口直接写出来，避免用户在只读会话里找停止按钮。
+ */
+export const READ_ONLY_PLACEHOLDER = '目标由后台执行，这里只读；需要取消请由主会话调用目标工具';
 
 /** 能力事实还没到达时的占位说明：此刻不能确认这条会话可写。 */
 export const CAPABILITY_PENDING_PLACEHOLDER = '正在读取会话…';

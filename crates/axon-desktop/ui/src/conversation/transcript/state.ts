@@ -171,6 +171,8 @@ export interface SubagentRow {
   cacheHitRateBasisPoints: number | null;
   model: string | null;
   summary: string | null;
+  /** 名册给出的运行态会话标识；转录行本身不带，对账后补上。 */
+  sessionId?: string | null;
   /** 该子代理的生命周期轨迹，用于在主区域回看它这一轮到底做了什么。 */
   events: SubagentEvent[];
 }

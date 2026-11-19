@@ -374,10 +374,13 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
 
   const openSubagent = React.useMemo(() => {
     if (openSubagentRow === null) return null;
-    return (
-      conversation.state.subagents.find((row) => row.agentId === openSubagentRow.agentId) ??
-      openSubagentRow
-    );
+    const current =
+      conversation.state.subagents.find((row) => row.agentId === openSubagentRow.agentId) ?? null;
+    if (current === null) return openSubagentRow;
+    // 入口行来自名册合并，带着会话标识；转录行本身没有，合并时以入口行为准。
+    return openSubagentRow.sessionId
+      ? { ...current, sessionId: openSubagentRow.sessionId }
+      : current;
   }, [conversation.state.subagents, openSubagentRow]);
 
   /** 停止本轮：控制器经 ref 取，避免回调每轮换引用而让上报 effect 自激。 */
