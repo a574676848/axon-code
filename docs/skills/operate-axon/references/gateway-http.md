@@ -140,7 +140,7 @@ Authorization: Bearer <token>
 | `GET /api/v1/sessions` | 会话清单，可用 `?workspace=<id>` 过滤（字段与排序见上文会话族） |
 | `POST /api/v1/sessions` | 新建会话：服务端生成会话标识，请求体可带 `workspaceId`、`title`、`cwd` |
 | `GET /api/v1/sessions/<sessionId>/subagents` | 该会话的子代理清单 |
-| `POST /api/v1/sessions/<sessionId>/interrupt` | 中断该会话的运行：主 turn 走进程内取消令牌，目标执行与 cron 轮次走 durable 取消标记（运行侧看门狗在有界周期内消费）。响应 `interrupted` 如实反映是否真的有轮次被打到 |
+| `POST /api/v1/sessions/<sessionId>/interrupt` | 中断该会话正在运行的主 turn（进程内取消令牌）。只对 `primary` 会话有效：目标执行不走这里，只能用 `builtin.goal_cancel` 取消；cron 与子代理也不提供中断入口。响应 `interrupted` 如实反映是否真的有轮次被打到 |
 | `GET /api/v1/sessions/<sessionId>/interactions` | 该会话的交互记录；响应另带 `session` 块：`kind`、`origin`（human/goal/cron/subagent）、`writable`、`canAnswerQuestions`、`canInterrupt`、`title`、`provider`、`model`、`modelName`、`interactionCount`、`latestInteractionId`；能力位由服务端按会话类型给出，客户端只读字段、不按 channel 推断；`?limit=<n>` 限制条数，`?before_ms=<毫秒>&before_id=<交互标识>` 向前翻页（取该条之前的一页，两个参数必须成对给出）。响应带 `sessionUsage`、`sessionElapsedMs` 与 `effectiveModel`（该会话**最新一轮**的 `provider`、`model`、`name` 与 `reasoningEffort`，只读一条记录，不遍历历史；`name` 是用户当时选择的模型别名，同一 `provider` 与 `model` 可能对应多条别名，旧记录没有该字段时为 null；整段读不到时为 null） |
 | `GET /api/v1/interactions/<interactionId>/events` | 该交互的历史帧页；`?after=<序号>` 从该序号之后续读（缺省从头），`?limit=<n>` 为本页帧数（缺省 800，上限 2000，越界按 1 与 2000 夹取），`?tail=1` 直接取该交互自身的尾窗（首屏一次往返拿到可渲染的尾部窗口）。返回 `events`、`nextAfter`、`hasMore`、`tailSequence`、`tailCursor`：`hasMore` 为真时按 `nextAfter` 继续翻页，读完用 `tailCursor` 订阅 WebSocket 即可只收增量。交互标识非法返回 400 `invalid_interaction_id`，记录不存在或已被清理返回 404 `interaction_not_found`，其余读取失败返回 500 `gateway_error`。外置正文缺失的帧由存储层降级为 `eventType=archive_missing` 的占位记录；网关读取时跳过这些占位帧，不返回给客户端，整页照常返回，扫描路径另记一条带跳过条数的 warning 日志 |
 | `GET /api/v1/sessions/<sessionId>/jobs` | 该会话的作业清单 |

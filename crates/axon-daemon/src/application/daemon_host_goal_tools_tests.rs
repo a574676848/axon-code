@@ -6,8 +6,8 @@
 use super::*;
 use crate::ports::ProcessIdentity;
 use axon_domain::{
-    ConsumerCursor, DisclosurePolicy, ExecutionId, ExecutionStatus, GoalListQuery, GoalQueryScope,
-    GoalStatus, GoalUpdateCommand, RuntimeHostId,
+    ConsumerCursor, DisclosurePolicy, ExecutionId, ExecutionStatus, GoalCancelCommand,
+    GoalListQuery, GoalQueryScope, GoalStatus, GoalUpdateCommand, RuntimeHostId,
 };
 use axon_session::{
     CheckpointTelemetry, DecisionStore, ExecutionStore, GoalStore, SessionEventRecord,
@@ -169,6 +169,99 @@ fn create_with_execution_records_scope_allow_decision() {
         .expect("读取 Decision")
         .expect("Goal 创建必须写入授权 Decision");
     assert!(decision.is_effective_at(TEST_NOW_MS));
+}
+
+#[test]
+fn tool_updates_are_recorded_as_goal_session_turns() {
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    let workspace_id = register_workspace(&store, directory.path());
+    let host = start_host(&store, "goal-inbox-host");
+
+    let receipt = host
+        .goal_tool_value(tool_request(
+            Some(&workspace_id),
+            "inbox-create",
+            GoalToolCommand::Create(create_command(true)),
+        ))
+        .expect("创建 Goal 成功");
+    let goal_id = goal_id_of(&receipt);
+    let revision = receipt["revision"].as_u64().expect("回执包含 revision");
+    // 创建本身就带执行：目标会话在创建时已登记，第一条更新即可落进同一条会话。
+    let goal_session = store
+        .resolve_goal_session(&axon_session::GoalSessionRequest {
+            goal_id: goal_id.as_str().to_owned(),
+            workspace_id: Some(workspace_id.clone()),
+            cwd: directory.path().to_string_lossy().into_owned(),
+            now_ms: TEST_NOW_MS,
+        })
+        .expect("解析目标会话")
+        .session_id;
+
+    host.goal_tool_value(tool_request(
+        Some(&workspace_id),
+        "inbox-update",
+        GoalToolCommand::Update(GoalUpdateCommand {
+            goal_id: goal_id.clone(),
+            expected_revision: revision,
+            title: Some("整理发布说明（修订）".to_owned()),
+            waiting_reason: None,
+            next_step: None,
+            priority: None,
+            status: None,
+        }),
+    ))
+    .expect("更新 Goal 成功");
+
+    let cancel = host
+        .goal_tool_value(tool_request(
+            Some(&workspace_id),
+            "inbox-cancel",
+            GoalToolCommand::Cancel(GoalCancelCommand {
+                goal_id: goal_id.clone(),
+                expected_revision: revision + 1,
+                reason: "需求撤回".to_owned(),
+            }),
+        ))
+        .expect("取消 Goal 成功");
+    assert_eq!(cancel["status"], json!(GoalStatus::Cancelled));
+
+    // 每一次工具更新都在目标会话里留下一条已收口的派发轮次：创建、更新、取消各一条。
+    let rows: Vec<(String, String, String)> = store
+        .with_read_connection(|connection| {
+            connection
+                .prepare(
+                    "SELECT content, source_channel, terminal_kind FROM inbox \
+                     WHERE session_id = ?1 ORDER BY received_at_ms ASC, interaction_id ASC",
+                )
+                .and_then(|mut statement| {
+                    statement
+                        .query_map([goal_session.as_str()], |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, String>(2)?,
+                            ))
+                        })
+                        .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
+                })
+        })
+        .expect("读取目标会话轮次");
+    assert_eq!(rows.len(), 3, "创建、更新、取消各留一条轮次：{rows:?}");
+    assert!(
+        rows.iter()
+            .all(|(_, channel, terminal)| channel == "agent" && terminal == "understood")
+    );
+    let contents: Vec<&str> = rows
+        .iter()
+        .map(|(content, _, _)| content.as_str())
+        .collect();
+    for expected in ["目标已创建：整理发布说明", "目标已更新", "目标已取消"] {
+        assert!(
+            contents.iter().any(|content| content.contains(expected)),
+            "缺少 {expected} 的记录：{contents:?}"
+        );
+    }
 }
 
 #[test]

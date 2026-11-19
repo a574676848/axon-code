@@ -17,7 +17,9 @@ mod runtime_event_archive;
 pub(crate) mod schedule;
 mod session_binding;
 mod session_cleanup;
-pub(crate) use session_binding::{bind_new_job_session, find_cron_session};
+pub(crate) use session_binding::{
+    bind_new_job_session, find_cron_session, resolve_session_bound_to,
+};
 mod tick;
 mod wake;
 

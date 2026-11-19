@@ -18,6 +18,8 @@ const SUBAGENT_RESULT_STREAM: &str = "subagent-result";
 const SUBAGENT_RESULT_MARKER: &str = "结果文件：";
 /// 子代理回执的内联字符上限；超过该上限的回执整体归档，主代理按引用分页读取。
 pub(crate) const SUBAGENT_RESULT_INLINE_CHAR_LIMIT: usize = 4_000;
+/// 子代理回执里标记结果文件路径的词语；测试复用它切出 `transcript_ref`。
+#[cfg(test)]
 pub(crate) const SUBAGENT_RESULT_MARKER_TEXT: &str = SUBAGENT_RESULT_MARKER;
 
 /// 已归档的子代理回执：内联预览与归档绝对路径。

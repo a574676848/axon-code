@@ -74,12 +74,20 @@ where
             GoalToolCommand::Get(query) => {
                 self.goal_get_value(&query, workspace.as_ref(), disclosure_policy)
             }
-            GoalToolCommand::Update(command) => {
-                self.goal_update_value(&command, workspace.as_ref(), disclosure_policy, now_ms)
-            }
-            GoalToolCommand::Cancel(command) => {
-                self.goal_cancel_value(&command, workspace.as_ref(), disclosure_policy, now_ms)
-            }
+            GoalToolCommand::Update(command) => self.goal_update_value(
+                &command,
+                &idempotency_key,
+                workspace.as_ref(),
+                disclosure_policy,
+                now_ms,
+            ),
+            GoalToolCommand::Cancel(command) => self.goal_cancel_value(
+                &command,
+                &idempotency_key,
+                workspace.as_ref(),
+                disclosure_policy,
+                now_ms,
+            ),
             GoalToolCommand::Start(command) => self.start_goal_value(GoalStartRequest {
                 goal_id: command.goal_id,
                 expected_revision: command.expected_revision,
@@ -226,6 +234,13 @@ where
         let goal = GoalCommandService::new(self.store.clone())
             .create(command, goal_id, &scope, execution.as_ref(), &event, now_ms)
             .map_err(goal_service_error)?;
+        self.note_goal_turn(
+            &goal,
+            Self::goal_tool_label(goal.status),
+            idempotency_key,
+            workspace,
+            now_ms,
+        );
         let mut receipt = goal_receipt("goal_create", &goal, true);
         receipt["executionId"] = json!(execution.as_ref().map(|item| &item.execution_id));
         receipt["started"] = json!(execution.is_some());
@@ -330,6 +345,13 @@ where
                 now_ms,
             )
             .map_err(goal_service_error)?;
+        self.note_goal_turn(
+            &started,
+            "目标已启动",
+            &idempotency_key,
+            workspace.as_ref(),
+            now_ms,
+        );
         Ok(json!({
             "tool": "goal_start",
             "goalId": started.goal_id,
@@ -496,6 +518,7 @@ where
     fn goal_update_value(
         &self,
         command: &GoalUpdateCommand,
+        idempotency_key: &str,
         workspace: Option<&WorkspaceRecord>,
         disclosure_policy: Option<DisclosurePolicy>,
         now_ms: u64,
@@ -504,12 +527,14 @@ where
         let goal = GoalCommandService::new(self.store.clone())
             .update(command, now_ms)
             .map_err(goal_service_error)?;
+        self.note_goal_turn(&goal, "目标已更新", idempotency_key, workspace, now_ms);
         Ok(goal_receipt("goal_update", &goal, true))
     }
 
     fn goal_cancel_value(
         &self,
         command: &GoalCancelCommand,
+        idempotency_key: &str,
         workspace: Option<&WorkspaceRecord>,
         disclosure_policy: Option<DisclosurePolicy>,
         now_ms: u64,
@@ -518,6 +543,14 @@ where
         let goal = GoalCommandService::new(self.store.clone())
             .cancel(command, now_ms)
             .map_err(goal_service_error)?;
+        self.note_goal_turn(
+            &goal,
+            Self::goal_tool_label(goal.status),
+            idempotency_key,
+            workspace,
+            now_ms,
+        );
+        self.mark_goal_session_cancelled(&goal, &command.reason, workspace, now_ms);
         Ok(json!({
             "tool": "goal_cancel",
             "goalId": goal.goal_id,

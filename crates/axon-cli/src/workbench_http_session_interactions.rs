@@ -59,7 +59,6 @@ fn session_capability_block(
         return Err(format!("会话 kind 取值非法：{kind}"));
     };
     let primary = kind == SessionKind::Primary;
-    let interruptible = !matches!(kind, SessionKind::Subagent);
     Ok(serde_json::json!({
         "kind": kind.as_str(),
         // 来源只由会话类型映射，禁止用 `source_channel` 猜：同一会话可能被别端续聊。
@@ -67,9 +66,9 @@ fn session_capability_block(
         "writable": primary,
         // 后台链不注入用户提问端口，因此只有主会话能答问。
         "canAnswerQuestions": primary,
-        // 主 turn 走进程内取消令牌，goal / cron 走 durable 取消标记，两条链路都已接通；
-        // 子会话没有独立入口（它随父轮一起收口），因此如实给 false。
-        "canInterrupt": interruptible,
+        // 只有主 turn 有进程内取消令牌。目标执行不经过中断接口：它的取消只能由来源
+        // 会话调用 Goal 工具发起；cron 与子会话同理不提供中断入口。
+        "canInterrupt": primary,
         "title": crate::sessions_http_adapter::display_session_title(title, first_content, &cwd),
         "provider": provider.unwrap_or_default(),
         "model": model.unwrap_or_default(),

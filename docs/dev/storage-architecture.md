@@ -526,7 +526,7 @@ enum TurnOrigin { External, Cron, Goal, Subagent }
 主 turn（用户轮）、派生 turn（子代理与后台执行）与独立 CLI 轮的生产链不同，三者都不经过 `commit_action`：
 
 1. **主 turn（daemon 结算）**：`RuntimeTurnEventSink` 的生成账本按 provider 流记账。每条流收口时把该流的最终用量并入本轮累加，收尾读数与实时指标帧都从这份累加取；真正的轮收口只认 `turn_completed` 帧，`turn_metrics` 与它同批落盘（一次控制面事务、一次 fsync）。
-2. **派生 turn（子代理与后台执行）**：终态记账与主 turn 走同一入口 `account_completed_turn`，指标恒写、标题与轮后治理按 `TurnProfile` 决定。落点是这一轮**自己的会话**：模型子代理落它的子会话，目标与 cron 的执行落执行子会话；来源会话（`kind=goal` / `kind=cron`）只保留账本关系与调度侧终态卡。
+2. **派生 turn（子代理与后台执行）**：终态记账与主 turn 走同一入口 `account_completed_turn`，指标恒写、标题与轮后治理按 `TurnProfile` 决定。落点是这一轮**自己的会话**：模型子代理落它的子会话；目标执行与 cron 运行是**各自会话上的一轮主 turn**（`kind=goal` / `kind=cron`），账本、逐字稿、指标与收口都落在这一条会话上，不再派生执行子会话。目标工具自身的创建、更新、启动、取消另在目标会话里追加一条已收口的派发轮次，使目标时间线包含「谁在什么时候改了它」。
 3. **CLI 直跑**：`axon run` 走同一记账入口，取值为 `AgentRunResponse.token_usage`（agent runtime 的轮级累加），见 §4.11.2。
 4. **投影（自动）**：`event_log_repository::apply_projections` 识别该事件并累加进 `session_metrics`，不需要额外接线。
 

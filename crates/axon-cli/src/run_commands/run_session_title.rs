@@ -5,13 +5,17 @@
 
 use std::path::Path;
 
-use axon_agent_runtime::{AgentPath, ChildExecutionModelIntent};
+use axon_session::SessionKind;
 use rusqlite::OptionalExtension as _;
 
-use super::{run_agent_store, run_request_subagents::execute_standalone_subagent};
+use super::run_agent_store;
 
 /// 触发间隔：每满三轮对话更新一次标题。
 const SESSION_TITLE_TURN_INTERVAL: u64 = 3;
+/// 标题轮所在内部会话的绑定键前缀：键是 `<前缀><目标会话标识>`，会话按此稳定复用。
+const SESSION_TITLE_SESSION_KEY_PREFIX: &str = "session-title:";
+/// 标题轮的来源客户端标识：与 cron 的 `axon-cron` 并列，便于按来源区分后台轮次。
+const SESSION_TITLE_CLIENT_ID: &str = "axon-title";
 /// 送给模型的用户消息上限；超过时取最新这些条。
 const SESSION_TITLE_MAX_MESSAGES: usize = 10;
 /// 单条消息进入提示词的截断长度，避免一次超长粘贴把提示词撑爆。
@@ -125,14 +129,18 @@ fn recent_user_messages(
     Ok(messages)
 }
 
-/// 生成并写回标题。
+/// 生成并写回标题：走与 cron 相同的一次后台轮（提交 Interaction，等 durable 终态）。
+///
+/// 标题轮落在一条按 `session-title:<目标会话>` 绑定的内部会话上（`kind=cron`，
+/// 不进侧栏清单）：它有完整逐字稿可复查，但不会在用户会话里留下可见轮次。
+/// 本函数只在后台线程里被调用，因此这里等 daemon 终态也不占主回合。
 fn generate_session_title(
     config_path: &Path,
     cwd: &Path,
     session_id: &str,
     turn_count: u64,
 ) -> Result<(), String> {
-    let store = run_agent_store::shared_runtime_store(config_path)?;
+    let store = super::run_turn_metrics::shared_store(config_path)?;
     let messages = recent_user_messages(&store, session_id, SESSION_TITLE_MAX_MESSAGES)?;
     if messages.is_empty() {
         return Err("没有可用的用户消息".to_owned());
@@ -140,27 +148,45 @@ fn generate_session_title(
     let Some(prompt) = build_prompt(&messages) else {
         return Err("用户消息全部为空".to_owned());
     };
-    // 任务路径带轮次：同一会话会多次生成，路径必须唯一，否则控制面会拒绝重复注册。
-    let task_path = AgentPath::parse(format!("/root/session-title-{turn_count}"))
-        .map_err(|error| format!("任务路径非法：{error:?}"))?;
-    let output = execute_standalone_subagent(
+    let loaded = axon_config::ConfigLoader::load_from_path(config_path)
+        .map_err(|error| format!("{error:?}"))?;
+    // 内部会话按键稳定绑定：同一目标会话的所有标题轮共用一条，历史连续。
+    let key = format!("{SESSION_TITLE_SESSION_KEY_PREFIX}{session_id}");
+    let internal_session = crate::cron_commands::resolve_session_bound_to(
         config_path,
+        SessionKind::Cron,
+        &key,
         cwd,
-        session_id,
-        task_path,
+        axon_time::unix_now_ms(),
+    )?;
+    let mut interaction = super::prepare_background_interaction(
+        &internal_session,
+        cwd,
+        Some(config_path),
+        crate::cron_commands::CRON_AGENT_CHANNEL,
+        &key,
         &prompt,
         axon_time::unix_now_ms(),
-        // 不挂会话 sink：标题生成是内部任务，不该在界面里留下一条逐字稿。
+        Some(SESSION_TITLE_CLIENT_ID),
+    )?
+    .interaction;
+    // 标题生成固定用快速模型：它只做一句话概括，不该占据主力模型的一轮。
+    interaction.model = Some(loaded.config.agent.fast_model.clone());
+    let output = super::execute_daemon_interaction(
+        interaction,
+        cwd,
+        Some(config_path),
         None,
-        ChildExecutionModelIntent::FastDelegate,
+        &|| false,
+        None,
     )?;
-    if output.status != axon_agent_runtime::ChildExecutionStatus::Completed {
-        return Err(format!("生成状态非 Completed: {:?}", output.status));
-    }
-    let title = clean_title(&output.summary).ok_or_else(|| "模型输出没有可用标题".to_owned())?;
+    let title = clean_title(&output.response).ok_or_else(|| "模型输出没有可用标题".to_owned())?;
     store
         .update_session_title(session_id, &title)
         .map_err(|error| error.to_string())?;
+    axon_logger::debug(&format!(
+        "会话标题已更新: session_id={session_id}, turns={turn_count}, title={title}"
+    ));
     Ok(())
 }
 

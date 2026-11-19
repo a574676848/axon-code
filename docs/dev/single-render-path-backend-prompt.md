@@ -76,7 +76,7 @@
 
 - `writable` 仅 `kind=primary` 为 `true`；`goal` / `cron` / `subagent` 一律 `false`。
 - `canAnswerQuestions` 仅 `primary` 为 `true`（后台链不注入用户提问端口，见 `run_provider_orchestration.rs:164-166`）。
-- `canInterrupt` 只有在 W6 落地后按真实能力给值；W6 未落地前恒为 `false`。
+- `canInterrupt` 仅 `primary` 为 `true`：只有主 turn 有进程内取消令牌。目标执行的取消**不经过**中断接口，只能由来源会话调用 Goal 工具发起（见 W6）；`cron` 与 `subagent` 同样不提供中断入口。
 - `origin` 由 `sessions.kind` 映射得到，禁止用 `source_channel` 猜。
 
 **验收**：`GET /api/v1/sessions/{goalSessionId}/interactions?limit=1` 返回 `session` 块；`goal` 与 `subagent` 会话 `writable=false`；`primary` 会话 `writable=true`。
@@ -139,13 +139,16 @@
 
 **验收**：目标执行在跑时，只订阅轮次头即可发现新轮（可用 `python websockets` 带 Authorization 复现）；`session-turns:` 与既有 `session:` / `interaction:` 前缀不冲突。
 
-### W6 中断链路（P1）
+### W6 中断与取消链路（P1，已定稿）
 
-**现状**：`/api/v1/sessions/{id}/interrupt` 只作用于 `active_primary_turns`，worker 驱动的 `goal` / `cron` 轮与子代理轮打不到，调用会返回 `interrupted=false`。
+**结论**：中断接口只服务主 turn。`/api/v1/sessions/{id}/interrupt` 置位 `active_primary_turns` 里那条轮的取消令牌，其余会话一律回 `interrupted=false`，`canInterrupt` 也只对 `primary` 为 `true`。
 
-**改动**：把这三类轮的取消令牌纳入同一中断入口（run-control 停止链路已存在，接上即可）；做不到就在 W1 把 `canInterrupt` 如实给 `false`。
+**目标执行不走中断接口**：它的取消只能由来源会话调用 Goal 工具（`builtin.goal_cancel`）发起。工具成功后做两件事，缺一不可：
 
-**验收**：目标执行运行中调用 interrupt 返回 `interrupted=true`，该轮以 `interrupted` 收口；否则 `canInterrupt=false`。
+1. 在目标会话的 `work_items` 上写一条取消标记，运行侧的看门狗按有界周期消费它并触发本轮取消令牌（与主 turn 的取消令牌同一条收口链路）；
+2. 在目标会话的 `inbox` 里追加一条已收口的派发轮次，把这次取消记成该会话的一轮（`create` / `update` / `start` 同样各记一条）。
+
+**验收**：目标执行运行中调用 `goal_cancel` 后该轮以 `interrupted` 收口；`goal` 会话的中断按钮不出现（`canInterrupt=false`）；`goal` 会话的轮次列表里能看到创建、更新、启动、取消各自的记录。
 
 ### W7 子代理名册结构（P2）
 

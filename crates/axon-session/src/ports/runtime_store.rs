@@ -329,11 +329,11 @@ pub trait RuntimeStore:
         session_id: &DaemonSessionId,
     ) -> Result<bool, RuntimeStoreError>;
 
-    /// 请求取消该会话当前正在跑的轮次，返回被标记的轮次数。
+    /// 请求取消目标会话当前正在跑的轮次，返回被标记的轮次数。
     ///
-    /// 主 turn 由运行侧直接置位取消令牌，不需要这条路径；独立会话（目标执行、cron）
-    /// 只有 durable 事实可用，因此写一条取消标记，由运行侧的看门狗在有界周期内消费。
-    /// 返回 0 表示这条会话当前没有在跑的轮次，调用方据此如实回执「没有可中断的轮次」。
+    /// 主 turn 由运行侧直接置位取消令牌，不需要这条路径；目标执行的取消只能由来源
+    /// 会话调用 Goal 工具发起，工具成功后写一条取消标记，由运行侧的看门狗在有界
+    /// 周期内消费。返回 0 表示这条会话当前没有在跑的轮次。
     fn request_session_cancellation(
         &self,
         session_id: &DaemonSessionId,

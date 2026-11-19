@@ -5,124 +5,23 @@ use std::{
 };
 
 use axon_agent_runtime::{
-    AgentControlRuntime, AgentGraphStore, AgentPath, ChildExecutionInput, FileAgentGraphStore,
-    LocalAgentGraphStore, SubagentForkContextReport, SubagentSessionRuntime, WorkspaceFileSession,
+    AgentControlRuntime, AgentGraphStore, AgentPath, FileAgentGraphStore, LocalAgentGraphStore,
+    SubagentSessionRuntime, WorkspaceFileSession,
 };
-use axon_config::{AxonConfig, ConfigLoader, ModelConfig, ProviderConfig};
+use axon_config::{AxonConfig, ModelConfig, ProviderConfig};
 use axon_session_runtime::SubagentSessionSinkFactory;
 
 use crate::stable_ids::stable_numeric_id;
 
+use super::run_session_store::resolved_axon_root;
 use super::{
     RunCancelToken, RunCommand, RunStartupSnapshot, provider_stream_idle_timeout,
-    run_model_routing::select_channel_balanced_model,
     run_progress::RunProgressEventBus,
     run_request::CLI_RUN_DEFAULT_PERMISSION_SNAPSHOT_ID,
-    run_request::hash_session_selector,
-    run_session_store::resolved_axon_root,
     run_subagent_executor::{
         ProviderRunSubagentEnvironment, ProviderRunSubagentExecutor, RunSubagentExecutor,
     },
 };
-
-/// 运行独立子代理；Goal Execution 与 cron 共用完整子代理生命周期。
-///
-/// `session_sinks` 是宿主提供的逐字稿落点工厂：后台执行把它重定向到执行会话本身，
-/// 于是目标与 cron 的会话也能像普通子代理会话一样被界面读取。
-pub(crate) fn execute_standalone_subagent(
-    config_path: &Path,
-    cwd: &Path,
-    session_id: &str,
-    task_path: AgentPath,
-    prompt: &str,
-    started_at_ms: u64,
-    session_sinks: Option<Arc<dyn SubagentSessionSinkFactory>>,
-    model_intent: axon_agent_runtime::ChildExecutionModelIntent,
-) -> Result<super::run_subagent_executor::RunSubagentExecutionOutput, String> {
-    let loaded = ConfigLoader::load_from_path(config_path).map_err(|error| format!("{error:?}"))?;
-    // 后台执行的会话身份由宿主给出，运行窗口取同一行会话上的 `current_run_id`。
-    let identities = super::run_identities::session_identities(config_path, session_id)?;
-    let command = RunCommand {
-        prompt: prompt.to_owned(),
-        model: None,
-        reasoning_effort: None,
-        format: None,
-        continue_last: false,
-        session: Some(identities.session_id.clone()),
-        run_session_id: Some(identities.run_session_id.clone()),
-        file: Vec::new(),
-        timeout: None,
-        tool: Vec::new(),
-    };
-    // 与主 turn 共用进程级快照缓存：后台任务不该每轮重跑一遍 Principal、Memory、
-    // Workspace 指令与 MCP 探测；缓存未就绪时才回落到现场构建。
-    let startup = match super::shared_startup_snapshot_cache().acquire(config_path, cwd) {
-        Some(snapshot) => snapshot,
-        None => RunStartupSnapshot::resolve_for_run(config_path, Some(cwd), None)?,
-    };
-    let selected = select_channel_balanced_model(
-        &command,
-        &loaded.config,
-        session_id,
-        hash_session_selector(session_id),
-        started_at_ms,
-    )?;
-    let workspace_files = Arc::new(WorkspaceFileSession::default());
-    // 取消或暂停目标只在 `work_items` 上留一条终止标记：运行侧在这里起看门狗消费它，
-    // 命中即触发本轮取消令牌，provider 循环据此收口，界面说停了就真的停。
-    let cancel_token = RunCancelToken::default();
-    let _stop_watch = super::run_execution_stop_watch::ExecutionStopWatch::start(
-        config_path,
-        session_id,
-        cancel_token.clone(),
-    );
-    let wiring = run_subagent_execution_wiring(RunSubagentExecutionWiringInput {
-        config: &loaded.config,
-        config_path,
-        session_id: &identities.session_id,
-        run_session_id: &identities.run_session_id,
-        cwd,
-        provider: &selected.provider,
-        model: &selected.model,
-        // 后台执行没有父轮可继承，推理强度回落到主 Agent 默认档，
-        // 与 `Inherit` 拿到的 default_model 保持同一套口径。
-        reasoning_effort: Some(loaded.config.agent.reasoning_effort.clone()),
-        channel_chain: &selected.chain,
-        routing_key: &selected.routing_key,
-        command: &command,
-        startup: &startup,
-        cancel_token: Some(cancel_token.clone()),
-        workspace_files,
-        subagent_event_bus: None,
-        subagent_session_sinks: session_sinks,
-    })?;
-    let input = ChildExecutionInput {
-        task_path,
-        message: prompt.to_owned(),
-        structured_output: None,
-        system_prompt_override: None,
-        tools_enabled: true,
-        fork_context: SubagentForkContextReport {
-            messages: Vec::new(),
-            original_count: 0,
-            retained_count: 0,
-            dropped_count: 0,
-            reasons: Vec::new(),
-        },
-        started_at_ms,
-        max_runtime_ms: None,
-        // 后台执行继承宿主快照（`agent.default_model` 槽 + 主 Agent 推理强度），
-        // 而不是钉死在快速委托模型上：Goal 与 cron 是长跑作业，不该用最省的模型跑。
-        model_intent,
-        // 后台作业没有调用方指定模型与档位：两者都继承宿主快照。
-        model_override: None,
-        reasoning_effort_override: None,
-    };
-    wiring
-        .subagent_executor
-        .execute(input)
-        .ok_or_else(|| "独立子代理执行器未接管任务".to_owned())
-}
 
 pub(super) struct RunSubagentExecutionWiring {
     pub(super) agent_control: Arc<Mutex<AgentControlRuntime>>,

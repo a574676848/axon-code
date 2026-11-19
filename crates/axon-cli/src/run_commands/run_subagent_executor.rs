@@ -67,9 +67,11 @@ pub(crate) use axon_agent_runtime::{
     ChildExecutionOutput as RunSubagentExecutionOutput,
     ChildExecutionStatus as RunSubagentExecutionStatus,
 };
+#[cfg(test)]
+pub(super) use child_persistence::SUBAGENT_RESULT_MARKER_TEXT;
 use child_persistence::persist_child_turn_started;
 pub(super) use child_persistence::{
-    SUBAGENT_RESULT_MARKER_TEXT, append_result_path, extract_result_path, persist_subagent_result,
+    append_result_path, extract_result_path, persist_subagent_result,
     should_persist_subagent_result, strip_result_path, subagent_archive_root,
     subagent_result_instruction,
 };

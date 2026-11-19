@@ -98,6 +98,16 @@ pub(crate) fn run_run_with_progress(
         performance.record(TurnPerformanceStage::HistoryReady);
     }
     let cancel_token = run_cancel_token(&options);
+    // 目标执行的取消只能由来源会话调用 Goal 工具发起：工具在 `work_items` 上留一条终止
+    // 标记，运行侧在这里起看门狗消费它，命中即触发本轮取消令牌，provider 循环据此收口。
+    // 与用户轮、定时轮一样，目标轮自己的账本、逐字稿与终态都由这一轮承担。
+    let _goal_cancel_watch = (options.turn_origin == TurnOrigin::GoalExecution).then(|| {
+        super::run_execution_stop_watch::ExecutionStopWatch::start(
+            &path,
+            identities.session_id.as_str(),
+            cancel_token.clone().unwrap_or_default(),
+        )
+    });
     let progress = options.progress.map(|emit| {
         let sink =
             run_progress::RunProgressSink::with_session_id(emit, identities.session_id.clone());

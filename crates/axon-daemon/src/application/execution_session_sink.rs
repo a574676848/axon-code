@@ -100,7 +100,7 @@ where
     }
 }
 
-/// 把运行侧派生的子会话 sink 重定向到执行会话。
+/// 按子会话身份派发 sink：每个子代理的逐字稿落它自己的会话，执行会话只保留本轮。
 struct ExecutionSessionSinkFactory<S, C, P> {
     store: S,
     host: DaemonHostRecord,

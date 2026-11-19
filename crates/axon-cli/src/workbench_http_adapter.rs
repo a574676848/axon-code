@@ -219,11 +219,11 @@ impl WorkbenchHttpAdapter {
         crate::user_question::http_adapter::handle_submit_answer(service, session_id, call_id, body)
     }
 
-    /// 中断某条会话上正在运行的轮次。
+    /// 中断某条会话上正在运行的主 turn。
     ///
-    /// 两条链路缺一不可：主 turn 在进程内注册了取消令牌，置位即收口；独立会话（目标执行、
-    /// cron）没有进程内句柄，只能写 durable 取消标记，由运行侧的看门狗在有界周期内消费。
-    /// 两条都打不到时如实回执 `interrupted=false`，不假装成功。
+    /// 只有主 turn 有进程内取消令牌：置位即收口。目标执行**不经过这里**，它的取消只能
+    /// 由来源会话调用 Goal 工具发起；打不到活跃主 turn 时如实回执 `interrupted=false`，
+    /// 不假装成功。
     fn interrupt_session(&self, session_id: &str) -> Result<serde_json::Value, String> {
         let session_id = session_id.trim();
         if session_id.is_empty() {
@@ -237,19 +237,9 @@ impl WorkbenchHttpAdapter {
                 "interactionId": interaction_id.as_str(),
             }));
         }
-        // 没有主 turn 句柄：落到 durable 标记，覆盖 worker 驱动的目标执行与 cron 轮次。
-        let durable = axon_domain::DaemonSessionId::new(session_id.to_owned())
-            .map_err(|error| format!("会话标识非法：{error}"))?;
-        let marked = axon_session::RuntimeStore::request_session_cancellation(
-            &runtime_store(&self.axon_root),
-            &durable,
-            "用户从前端中断",
-            axon_time::unix_now_ms(),
-        )
-        .map_err(|error| format!("请求取消失败：{error}"))?;
         Ok(serde_json::json!({
             "sessionId": session_id,
-            "interrupted": marked > 0,
+            "interrupted": false,
             "interactionId": serde_json::Value::Null,
         }))
     }

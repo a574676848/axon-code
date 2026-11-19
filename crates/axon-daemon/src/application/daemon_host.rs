@@ -67,6 +67,8 @@ mod daemon_health;
 mod daemon_host_execution_runtime;
 #[path = "daemon_host_execution_worker.rs"]
 mod daemon_host_execution_worker;
+#[path = "daemon_host_goal_inbox.rs"]
+mod daemon_host_goal_inbox;
 #[path = "daemon_host_goal_tools.rs"]
 mod daemon_host_goal_tools;
 #[path = "daemon_host_schedule.rs"]

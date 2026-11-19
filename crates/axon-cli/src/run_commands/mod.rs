@@ -158,7 +158,6 @@ pub(crate) use run_question_projection::{
 use run_request::RunRequest;
 use run_request_build_options::RunRequestBuildOptions;
 use run_request_session::RunRequestSession;
-pub(crate) use run_request_subagents::execute_standalone_subagent;
 pub(crate) use run_resume_pointer::select_resume_session;
 pub(crate) use run_resume_pointer::{restore_resume_session, snapshot_resume_session};
 pub(crate) use run_session_store::RunSessionRecord;

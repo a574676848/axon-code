@@ -1,6 +1,6 @@
 use super::{
-    background_task_path, build_provider_turn_result, compact_structured_failure,
-    provider_run_command, run_agent_identity,
+    build_provider_turn_result, compact_structured_failure, provider_run_command,
+    run_agent_identity,
 };
 use crate::run_commands::RunAgentIdentity;
 use axon_protocol::wire::WireEventKind;
@@ -246,27 +246,4 @@ fn authoritative_final_snapshot_keeps_call_and_result_facts() {
         })
         .collect::<Vec<_>>();
     assert_eq!(kinds, vec!["call", "result"]);
-}
-
-/// 会话标识是 Crockford Base32 的大写 ULID；任务路径的合法段只接受小写。
-#[test]
-fn background_task_path_lowercases_run_state_ids() {
-    let task_path = background_task_path("01M7RQ9NYW8S6SQ8GTNM730M96")
-        .expect("大写会话标识必须归一成合法任务路径");
-    assert_eq!(
-        task_path.as_str().strip_prefix("/root/task-"),
-        Some("01m7rq9nyw8s6sq8gtnm730m96")
-    );
-}
-
-/// 该路径段是子会话身份的一半：非法字符必须整轮报错，不能折叠成 `-` 去撞同一条子会话。
-#[test]
-fn background_task_path_rejects_illegal_run_state_ids() {
-    for illegal in ["goal:1/2", "task.1", "会话 1", ""] {
-        let error = background_task_path(illegal).expect_err("非法会话标识必须直接报错");
-        assert!(
-            format!("{error:?}").contains(axon_agent_runtime::AGENT_CONTROL_REASON_INVALID_PATH),
-            "失败必须保留 canonical 原因码：{illegal:?} -> {error:?}"
-        );
-    }
 }

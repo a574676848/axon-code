@@ -183,6 +183,8 @@ Goal 工具是主 turn 的持久工作能力。它们只装配到主 turn 的 `<
 
 取消必须校验 scope 和 revision；Goal 原子进入 `cancelled`，queued Execution 不得领取，running Execution 收到持久 cancellation request 并在安全检查点停止。迟到 Result 不得覆盖取消事实；若 Goal 已完成、失败或已取消，返回明确的终态结果而不重复产生副作用。
 
+**取消入口唯一**：目标执行只能被 `builtin.goal_cancel` 取消，`/api/v1/sessions/{id}/interrupt` 对目标会话不生效（`canInterrupt=false`），因此「谁发起的目标」就是「谁能取消它」（通常是来源会话）。
+
 ### 执行边界
 
 Goal 工具不设审批等待状态：`GoalToolCommand` 只包含 create / list / get / start / update / cancel 六个命令，不存在授权类命令。
@@ -190,6 +192,8 @@ Goal 工具不设审批等待状态：`GoalToolCommand` 只包含 create / list 
 执行边界的唯一裁决者是工具自身的 `ToolExecutionPermission` 与远端会话能力门（`RemoteCapabilityPolicy`）：`Allowed` 直接执行并记录审计，`Forbidden` 返回结构化拒绝原因且不产生副作用。
 
 所有 Goal 工具均返回结构化回执；写工具回执包含最新 `revision`，列表回执包含 `next_cursor`。回执失败不会伪造成功状态，也不会改变账本事实。
+
+**每次写入都留一条轮次**：`goal_create` / `goal_update` / `goal_start` / `goal_cancel` 成功后，目标会话的轮次列表里会多一条已收口的记录（例如「目标已更新：整理发布说明」），说明这次变更是谁、在什么时候改的。这条记录没有模型参与，不占用量、不触发标题，也不改变目标的 `revision`。
 
 ## 工具指引的分层约定
 
