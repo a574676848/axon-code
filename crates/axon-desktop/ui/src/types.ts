@@ -596,6 +596,12 @@ export interface SessionInteractions {
   jobs?: SessionJobFact[];
   sessionUsage: SessionUsageTotals | null;
   sessionElapsedMs: number | null;
+  /**
+   * 会话能力与身份事实；网关恒下发该键，值可以是 `null`（会话行不存在）。
+   *
+   * 可写性、可中断与可答问都由它回答，界面不再按来源渠道推断。
+   */
+  session: unknown;
   effectiveModel?: import('./conversation/viewConfig').SessionEffectiveModel | null;
   /** 最近一次记忆反思的提示文本；该会话还没有记忆动作时为 null。 */
   reflectionNotice?: string | null;
@@ -640,31 +646,8 @@ export interface SessionJobsRoster {
   jobIds: string[];
 }
 
-/** 车道下的一条子代理会话。 */
-export interface SessionSubagentSummary {
-  sessionId: string;
-  /** 会话标识里属于代理路径的那段，用于与 agent 路径对齐。 */
-  slug: string;
-  title?: string | null;
-  model?: string;
-  provider?: string;
-  updatedAtMs?: number;
-  /** 线程真实状态：`active` 才是此刻仍在运行。 */
-  status?: string;
-  turnCount?: number;
-  /** 末轮状态：结束/中断/失败由它决定。 */
-  lastTurnStatus?: string | null;
-  lastTurnAtMs?: number | null;
-  /** 是否有运行态会话行；false 表示这次执行早于「子代理会话化」。 */
-  hasRuntime?: boolean;
-}
-
-/** 一条车道的子代理会话清单。 */
-export interface SessionSubagents {
-  sessionId: string;
-  runSessionId?: string | null;
-  subagents: SessionSubagentSummary[];
-}
+/** 子代理名册的两种视图；定义在 `subagentTypes.ts`，这里原样再导出。 */
+export type { SessionSubagentSummary, SessionSubagents } from './subagentTypes';
 
 /** 已落地的附件。 */
 export interface StagedAttachment {

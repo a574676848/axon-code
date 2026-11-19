@@ -27,10 +27,8 @@ export interface SessionSyncFacts {
 
 /** 组装参数。 */
 export interface SessionSyncOptions {
-  /** 当前车道的外部事实；没有可观察的车道时为空。 */
+  /** 当前会话的外部事实；这条会话不在会话清单里时为空（例如目标执行会话）。 */
   sessionFacts: SessionSyncFacts | null;
-  /** 目标种类；只有车道（Interaction）目标才按轮数接管。 */
-  targetKind: 'interaction' | 'session' | null;
   /** 目标是否已经完成首次加载：首屏没落地时接管会和首次加载抢同一页历史。 */
   ready: boolean;
   /** 本视图是否有正在跑的轮次。 */
@@ -39,12 +37,12 @@ export interface SessionSyncOptions {
   onReattach: () => void;
 }
 
-/** 按车道轮数变化接管外部发起的新一轮。 */
+/** 按会话轮数变化接管外部发起的新一轮。 */
 export function useSessionSync(options: SessionSyncOptions): void {
-  const { sessionFacts, targetKind, ready, working, onReattach } = options;
+  const { sessionFacts, ready, working, onReattach } = options;
   const cursorRef = useRef<SessionSyncCursor>(EMPTY_SESSION_SYNC_CURSOR);
   useEffect(() => {
-    if (sessionFacts === null || targetKind !== 'interaction' || !ready) return;
+    if (sessionFacts === null || !ready) return;
     const step = advanceSessionSync(
       cursorRef.current,
       sessionFacts.sessionId,
@@ -53,5 +51,5 @@ export function useSessionSync(options: SessionSyncOptions): void {
     );
     cursorRef.current = step.cursor;
     if (step.reattach) onReattach();
-  }, [sessionFacts, working, onReattach, ready, targetKind]);
+  }, [sessionFacts, working, onReattach, ready]);
 }

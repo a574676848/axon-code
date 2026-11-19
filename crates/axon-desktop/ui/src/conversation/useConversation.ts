@@ -20,7 +20,7 @@ import {
 } from './transcript';
 import type { ConversationStreamEvent } from './wire';
 import type { SessionEffectiveModel } from './viewConfig';
-import { normalizeTarget, subscriptionIdOf } from './targets';
+import { normalizeTarget } from './targets';
 import type {
   ConversationController,
   ConversationTarget,
@@ -33,6 +33,7 @@ import { useSessionPaging } from './useSessionPaging';
 import { useSessionSync, type SessionSyncFacts } from './useSessionSync';
 import { useQuestionSync } from './useQuestionSync';
 import { useSessionCumulative } from './useSessionCumulative';
+import type { SessionFacts } from './sessionFacts';
 
 /** 一帧的合并窗口，与 TUI 的助手增量归并窗口同量级。 */
 const FRAME_FLUSH_MS = 16;
@@ -60,22 +61,29 @@ export function useConversation(
   // 目标对象的身份每次渲染都可能变，因此只在「归一化后的稳定串」上做依赖。
   const normalized = target === null ? null : normalizeTarget(target);
   const workspaceId = normalized?.workspaceId ?? null;
-  const targetKind = normalized?.kind ?? null;
   /**
    * 目标自身的稳定标识，effect 由它触发重跑。
    *
    * 不能只看 workspace 与 kind：同一工作区内切换会话时两者都不变，effect 不重跑，
    * 投影就会留着上一条会话的轮次（实测表现为「切换会话还是渲染上一个会话的内容」）。
    */
-  const targetKey =
-    target === null
-      ? null
-      : target.kind === 'session'
-        ? target.sessionId
-        : target.interactionId;
+  const targetKey = target === null ? null : target.interactionId;
   /** 目标快照：effect 只在稳定串上重跑，但提交需要拿到当下的 destination。 */
   const targetRef = useRef<ConversationTarget | null>(target);
   targetRef.current = target;
+  /**
+   * 能力事实的回调必须**引用稳定**。
+   *
+   * 它会经 `fetchNewestPage` → `openSession` → `paging` 一路进入目标切换 effect 的依赖表；
+   * 每渲染新建一次，那个 effect 就会在每次渲染后重跑，而它首行又派发一次状态，
+   * 于是形成自激循环。当前目标因此用 ref 读取，依赖表保持为空。
+   */
+  const capabilityTargetRef = useRef<string | null>(targetKey);
+  capabilityTargetRef.current = targetKey;
+  const receiveSessionFacts = useCallback((facts: SessionFacts | null) => {
+    setCapabilityFacts(facts);
+    setCapabilityTarget(capabilityTargetRef.current);
+  }, []);
 
   /** 已经进入过渡窗口的目标；与当前目标不一致的那一帧就是切换那一帧。 */
   const [openedTarget, setOpenedTarget] = useState<string | null>(targetKey);
@@ -117,6 +125,21 @@ export function useConversation(
    * 的产物，界面按「上一次记忆动作」呈现，不承诺与当前轮同步。
    */
   const [sessionReflectionNotice, setSessionReflectionNotice] = useState<string | null>(null);
+  /**
+   * 会话能力事实。
+   *
+   * 与模型、反思提示同一生命周期：随首页历史索引一起取回，换目标即清空。可写性判断
+   * 只认它（以及入口声明的只读），不再按来源渠道推断。
+   */
+  const [capabilityFacts, setCapabilityFacts] = useState<SessionFacts | null>(null);
+  /**
+   * 能力事实所属的目标。
+   *
+   * 换会话时新旧目标在同一帧里交替，若只按「对象是否为空」判断，会先用上一条会话的
+   * 能力位渲染一帧（例如从只读会话切到可写会话时，输入坞短暂仍是灰的）。因此把事实与
+   * 目标一起记，读的时候要求两者一致。
+   */
+  const [capabilityTarget, setCapabilityTarget] = useState<string | null>(null);
 
   const pendingRef = useRef<ConversationStreamEvent[]>([]);
   const flushRef = useRef<number | null>(null);
@@ -151,8 +174,8 @@ export function useConversation(
   const rememberUnsubscribed = useCallback((subscribeId: string) => {
     subscribedIdsRef.current.delete(subscribeId);
   }, []);
-  /** 当前车道与工作区：会话目标下没有车道能力，分页与展开也随之不可用。 */
-  const pagingSessionId = target !== null && target.kind === 'interaction' ? target.interactionId : null;
+  /** 当前会话标识（历史索引键）；首屏为空。 */
+  const pagingSessionId = target?.interactionId ?? null;
 
   /**
    * 主投影当前持有的轮次标识。
@@ -185,6 +208,7 @@ export function useConversation(
     subscribeTail,
     onEffectiveModel: setSessionModel,
     onReflectionNotice: setSessionReflectionNotice,
+    onSessionFacts: receiveSessionFacts,
   });
 
   /**
@@ -225,7 +249,7 @@ export function useConversation(
         if (batch.length === 0) return;
         // 实时增量与历史回放共用同一个归约入口：这里就是主投影唯一的帧落点。
         dispatch({ type: 'frames', frames: batch, nowMs: Date.now() });
-        if (targetKind !== 'interaction' || workspaceId === null) return;
+        if (workspaceId === null) return;
         const terminal = batch.some(
           (frame) =>
             frame.kind === 'frame' &&
@@ -240,7 +264,7 @@ export function useConversation(
         }
       }, FRAME_FLUSH_MS);
     },
-    [rememberUnsubscribed, targetKind, workspaceId],
+    [rememberUnsubscribed, workspaceId],
   );
 
   useEffect(() => {
@@ -296,48 +320,19 @@ export function useConversation(
     setSessionReadyId(null);
     setSessionModel(null);
     setSessionReflectionNotice(null);
+    setCapabilityFacts(null);
     const current = targetRef.current;
     if (
       workspaceId === null ||
-      targetKind === null ||
       targetKey === null ||
       current === null ||
-      normalizeTarget(current).kind !== targetKind ||
-      normalizeTarget(current).workspaceId !== workspaceId
+      current.workspaceId !== workspaceId
     ) {
       // 没有可订阅的目标（首屏）：旧投影到此为止，不留上一轮的正文。
       setReplaying(false);
       dispatch({ type: 'reset' });
       return undefined;
     }
-    const watchedId = subscriptionIdOf(current);
-
-    const report = (message: string, retryable: boolean) => {
-      // 订阅失败要如实亮出来，不能停在过渡面上。
-      setOpening(false);
-      dispatch({
-        type: 'frames',
-        frames: [{ kind: 'failure', subscribeId: watchedId, message, retryable }],
-        nowMs: Date.now(),
-      });
-    };
-
-    if (current.kind === 'session') {
-      rememberSubscribed(watchedId);
-      void ipc
-        .conversationWatchSession(workspaceId, current.sessionId, null)
-        .catch((error: unknown) => {
-          report(
-            error instanceof Error ? error.message : '订阅子代理会话事件流失败',
-            false,
-          );
-        });
-      return () => {
-        rememberUnsubscribed(watchedId);
-        void ipc.conversationUnsubscribe(watchedId).catch(() => undefined);
-      };
-    }
-
     const sessionId = current.interactionId;
     // 车道标识不是 Interaction：正文由这一页里的每条 Interaction 的 durable 帧给出。
     /*
@@ -380,7 +375,6 @@ export function useConversation(
     rememberSubscribed,
     rememberUnsubscribed,
     workspaceId,
-    targetKind,
     targetKey,
   ]);
 
@@ -392,10 +386,9 @@ export function useConversation(
   /** 是否有轮次在跑：与节拍同源，避免同一判断写两遍。 */
   const working = ticking;
 
-  // 外部发起的新一轮（后台作业唤醒轮、定时投递、目标推进）靠车道轮数变化补齐接管。
+  // 外部发起的新一轮（后台作业唤醒轮、定时投递、目标推进）靠会话轮数变化补齐接管。
   useSessionSync({
     sessionFacts,
-    targetKind,
     ready: sessionReadyId === targetKey && !opening,
     working,
     onReattach: appendExternalTurn,
@@ -418,14 +411,14 @@ export function useConversation(
 
   const sessionCapability = useMemo<SessionCapability>(
     () =>
-      target !== null && target.kind === 'interaction'
-        ? {
+      target === null
+        ? { available: false, sessionId: null, workspaceId: null, destination: null }
+        : {
             available: true,
             sessionId: target.interactionId,
             workspaceId: target.workspaceId,
             destination: target.destination,
-          }
-        : { available: false, sessionId: null, workspaceId: null, destination: null },
+          },
     [target],
   );
 
@@ -619,6 +612,8 @@ export function useConversation(
     /** 车道当前模型的权威事实：网关只读该车道最新一轮记录。 */
     sessionModel,
     sessionReflectionNotice,
+    /** 会话能力事实：可写性、可中断与可答问；只认归当前目标的那一份。 */
+    sessionFacts: capabilityTarget === targetKey ? capabilityFacts : null,
     sessionAvailable: sessionCapability.available,
     opening,
     queued,

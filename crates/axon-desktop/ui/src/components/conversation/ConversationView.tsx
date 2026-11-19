@@ -9,7 +9,7 @@ import { coverFace, type StageFrame } from '../../conversation/stage';
 import { useSessionAutoRead, useStopSpeechOnSessionChange } from '../../speech';
 import { ConversationHeader } from './ConversationHeader';
 import { SessionOriginBar } from './SessionOriginBar';
-import { isReadOnlySession, READ_ONLY_PLACEHOLDER, type SessionOriginBarState } from '../../sessionOpening';
+import { CAPABILITY_PENDING_PLACEHOLDER, READ_ONLY_PLACEHOLDER, sessionWriteGate, type SessionOriginBarState } from '../../sessionOpening';
 import { ConversationHeaderActions } from './ConversationHeaderActions';
 import { useAutoReadReply } from './useAutoReadReply';
 import { ConversationStream } from './ConversationStream';
@@ -160,16 +160,11 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     conversation.sessionModel,
   );
   /**
-   * 最近一次记忆反思提示。
-   *
-   * 它由「首页历史」带回，与权威模型同一时机、同一寿命：换目标时一起清空，翻页不回退。
-   * 空白一律当没有：网关偶尔会给出空串，渲染一行空白等于凭空造出一条提示。
-   *
-   * 投影落在时间线尾部，与轮次收尾分割线同一行样式，见 `ConversationStream` 的
-   * `reflectionNotice`。文案里的「本轮」在这一层改写成「上一轮」：提示总是落后一轮
-   * 到达界面，落在时间线尾部时，不这么写就会被读成正在跑的那一轮。
+   * 最近一次记忆反思提示：随首页历史带回，换目标即清空，翻页不回退。空白一律当没有。
+   * 文案里的「本轮」在渲染层改写成「上一轮」：提示总落后一轮到达。
    */
   const memoryReflection = reflectionNoticeText(conversation.sessionReflectionNotice);
+  const gate = sessionWriteGate(selection, conversation.sessionFacts);
   /** 递增即要求定位到最新消息：发送消息后必须看到自己刚发的那条。 */
   const [followToken, setFollowToken] = React.useState(0);
   /** 正在查看的子代理；非空时主区域让给它的运行轨迹。 */
@@ -563,14 +558,12 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                         onLoadOlder={() => void conversation.loadOlder()}
                         prependToken={conversation.prependToken}
                         reflectionNotice={visibleReflection}
+                        readOnly={gate.readOnly}
                       />
                     </UnfoldingProvider>
                   </div>
 
-                  {/*
-                    手柄只长在正文舞台的有效高度里：跨到输入坞上方时，
-                    坞两侧的留白会变成一块 col-resize 的隐形热区。
-                  */}
+                  {/* 手柄只长在正文舞台的有效高度里，避免坞两侧留白变成隐形热区。 */}
                   {cover === 'none' && chatWidth.handlesVisible && (
                     <ConversationWidthControls
                       onStart={chatWidth.startDrag}
@@ -623,8 +616,14 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 voiceTarget={{
                   ensureSession: ensureVoiceSession,
                 }}
-                enabled={!isReadOnlySession(selection) && (workspace !== null || selection !== null)}
-                disabledPlaceholder={isReadOnlySession(selection) ? READ_ONLY_PLACEHOLDER : undefined}
+                enabled={gate.ready && !gate.readOnly && (workspace !== null || selection !== null)}
+                disabledPlaceholder={
+                  !gate.ready
+                    ? CAPABILITY_PENDING_PLACEHOLDER
+                    : gate.readOnly
+                      ? READ_ONLY_PLACEHOLDER
+                      : undefined
+                }
                 busy={conversation.submitting || creating}
                 hintVisible={hintVisible}
                 model={effectiveModel.label}
@@ -669,7 +668,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 working={dockWorking}
                 onInterrupt={() => void conversation.interrupt()}
                 sessionKey={sessionKey}
-                activeQuestion={conversation.activeQuestion}
+                activeQuestion={gate.answerable ? conversation.activeQuestion : null}
                 onAnswerQuestion={conversation.answerQuestion}
                 reopenToken={questionReopenToken}
                 questionError={conversation.questionError}

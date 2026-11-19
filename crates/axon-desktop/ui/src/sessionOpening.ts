@@ -6,22 +6,39 @@
  */
 
 import type { SessionSelection } from './conversation/targets';
-import { isStandaloneSession } from './conversation/targets';
+import type { SessionFacts } from './conversation/sessionFacts';
 
 /** 后台驱动会话的只读说明：输入坞禁用时显示在占位位置。 */
 export const READ_ONLY_PLACEHOLDER = '目标由后台执行，这里只读';
 
-/**
- * 独立会话（目标执行 / 定时任务 / 子代理）由后台驱动，界面只读；车道会话仍由用户提交。
- *
- * 判据是会话渠道而不是「有没有会话标识」：车道会话同样带会话标识，按后者判会把
- * 所有车道都锁成只读。
- */
-export const isReadOnlySession = (
-  selection: Pick<SessionSelection, 'sessionId' | 'channel'> | null,
-): boolean => selection !== null && isStandaloneSession(selection);
+/** 能力事实还没到达时的占位说明：此刻不能确认这条会话可写。 */
+export const CAPABILITY_PENDING_PLACEHOLDER = '正在读取会话…';
 
-/** 目标执行会话的选择：带上 `sessionId` 才会按 session 目标订阅。 */
+/** 写入口的结论：可写性只由网关能力事实回答。 */
+export interface SessionWriteGate {
+  /** 能力事实是否已到达；首屏与草稿没有服务端事实，天然就绪。 */
+  ready: boolean;
+  /** 是否只读。 */
+  readOnly: boolean;
+  /** 是否允许作答；后台链不注入提问端口，因此只有主会话可答。 */
+  answerable: boolean;
+}
+
+/** 按能力事实算出写入口的三项结论，界面只读它。 */
+export function sessionWriteGate(
+  selection: Pick<SessionSelection, 'draft'> | null,
+  facts: SessionFacts | null,
+): SessionWriteGate {
+  const fresh = selection === null || selection.draft === true;
+  const ready = fresh || facts !== null;
+  return {
+    ready,
+    readOnly: facts !== null && facts.writable === false,
+    answerable: ready && facts?.canAnswerQuestions !== false,
+  };
+}
+
+/** 目标执行会话的选择。 */
 export function goalSessionSelection(target: {
   workspaceId: string;
   workspacePath: string;

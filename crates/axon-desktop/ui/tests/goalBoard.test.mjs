@@ -50,6 +50,7 @@ function card(overrides) {
             status: 'running',
             attempt: 1,
             sessionId: 'goal-session-goal-1',
+            hasTranscript: true,
             createdAtMs: 1_000,
             updatedAtMs: 2_000,
         },
@@ -270,7 +271,7 @@ test('目标概览条统计文案按步骤与验收数量组合', () => {
     assert.equal(goalContractSummary(0, 0), '目标说明');
 });
 
-test('只有同时有执行会话与工作区才进入会话，否则退回详情', () => {
+test('只有同时有逐字稿与工作区才进入会话，否则退回详情', () => {
     assert.equal(hasSessionBinding(card()), true);
     assert.equal(cardActionLabel(card()), '进入会话');
 
@@ -278,8 +279,15 @@ test('只有同时有执行会话与工作区才进入会话，否则退回详�
     assert.equal(hasSessionBinding(noExecution), false);
     assert.equal(cardActionLabel(noExecution), '查看详情');
 
+    // 有会话标识但没有逐字稿：入口不能进，按详情处理。
+    const noTranscript = card({
+        latestExecution: { ...card().latestExecution, hasTranscript: false },
+    });
+    assert.equal(hasSessionBinding(noTranscript), false);
+    assert.equal(cardActionLabel(noTranscript), '查看详情');
+
     const noSession = card({
-        latestExecution: { ...card().latestExecution, sessionId: null },
+        latestExecution: { ...card().latestExecution, sessionId: null, hasTranscript: false },
     });
     assert.equal(hasSessionBinding(noSession), false);
 

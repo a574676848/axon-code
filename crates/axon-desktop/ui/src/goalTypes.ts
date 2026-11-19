@@ -21,8 +21,12 @@ export interface GoalExecutionView {
   executionId: string;
   status: string;
   attempt: number;
-  /** 绑定的运行时会话；未绑定时为空，此时无法进入会话视图。 */
+  /** 逐字稿所在会话；未绑定时为空，此时无法进入会话视图。 */
   sessionId: string | null;
+  /** 这一轮是否真有可打开的逐字稿；入口可进入性只看它。 */
+  hasTranscript: boolean;
+  /** 没有逐字稿时的原因码；有逐字稿时为空。 */
+  unavailableReason?: string | null;
   createdAtMs: number;
   updatedAtMs: number;
 }

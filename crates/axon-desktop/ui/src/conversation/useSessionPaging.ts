@@ -43,6 +43,7 @@ import {
 } from './transcript';
 import { applyTurnSummary, seedTurnReadings, settleTurn, type TurnSummaryFacts } from './transcript/turns';
 import type { SessionTokenBaseline } from './sessionUsage';
+import { sessionFactsOf, type SessionFacts } from './sessionFacts';
 import type { ConversationStreamEvent } from './wire';
 import type { SessionEffectiveModel } from './viewConfig';
 
@@ -90,6 +91,8 @@ export interface SessionPagingOptions {
   onEffectiveModel?: (model: SessionEffectiveModel | null) => void;
   /** 首页带回来的最近一次记忆反思提示；没有记忆动作时回 null。 */
   onReflectionNotice?: (notice: string | null) => void;
+  /** 首页带回来的会话能力事实：可写性、可中断与可答问都读它。 */
+  onSessionFacts?: (facts: SessionFacts | null) => void;
 }
 
 export interface SessionPaging {
@@ -125,6 +128,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
     subscribeTail,
     onEffectiveModel,
     onReflectionNotice,
+    onSessionFacts,
   } = options;
   /** 更早一轮的游标；为空表示已经翻到车道开头。 */
   const olderCursorRef = useRef<{ receivedAtMs: number; interactionId: string } | null>(null);
@@ -191,6 +195,8 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
       const page = await ipc.conversationHistory(laneId, HISTORY_PAGE_SIZE);
       // 权威模型随首页一起回来：只查最新一轮，不遍历历史轮次。
       onEffectiveModel?.(page.effectiveModel ?? null);
+      // 会话能力同一时机取回：可写性与能力位是「此刻这条会话能做什么」的唯一判据。
+      onSessionFacts?.(sessionFactsOf(page.session));
       // 记忆提示同一时机取回：它也是「这条会话现在的最新事实」，不能随翻页回退。
       onReflectionNotice?.(page.reflectionNotice ?? null);
       if (page.sessionUsage !== null) {
@@ -211,7 +217,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
       if (jobs.length > 0) dispatch({ type: 'seed-jobs', jobs });
       return page.interactions as HistoryEntry[];
     },
-    [dispatch, onEffectiveModel, onReflectionNotice],
+    [dispatch, onEffectiveModel, onReflectionNotice, onSessionFacts],
   );
 
   /**
@@ -348,6 +354,8 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
     async (laneId: string): Promise<void> => {
       // 先丢旧基线：累计读数不能先按上一条会话的数画一帧，再跳到新会话。
       setSessionBaseline(null);
+      // 能力事实同理：上一条会话的可写性不能沿用，否则切会话会短暂放出错误的写入口。
+      onSessionFacts?.(null);
       const generation = generationRef.current;
       setPageLoading(true);
       try {
@@ -391,6 +399,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
       seedHistoryFacts,
       subscribeTail,
       withProvisional,
+      onSessionFacts,
       workspaceId,
     ],
   );

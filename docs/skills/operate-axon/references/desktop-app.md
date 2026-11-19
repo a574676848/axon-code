@@ -40,7 +40,7 @@
 | `POST /api/v1/mcp/status`、`/refresh` | 指标条的 MCP 读数与输入坞的 `/mcp`：读 daemon 启动快照里的加载结论，`/refresh` 才会重探 |
 | `ws://<http 监听地址>/api/v1/voice` | 语音上行与朗读下行：鉴权后发 `start`（必带目标会话 `sessionId`，另有 `tts` 与 `submit`），推 `0x01` 音频帧收 `final`；`submit=false` 是听写，只回文本，`submit=true` 才提交成一轮并下发 `turn` |
 | `POST /api/v1/voice/tts`、`/preview`、`/presets`、`GET /api/v1/voice/status` | 单条朗读、音色试听、音色清单与语音运行时读数 |
-| `GET /api/v1/goals`、`/goals/<goalId>` | 目标看板的列表与详情；目标执行会话的逐字稿走 WS 的会话级订阅 |
+| `GET /api/v1/goals`、`/goals/<goalId>` | 目标看板的列表与详情；目标执行会话的逐字稿与侧栏会话同链路：`GET /api/v1/sessions/<id>/interactions` 取索引、`/interactions/<id>/events` 取逐轮帧、WS `interaction:<id>` 订阅实时尾 |
 
 工作台打开的会话订阅会计入 `axon daemon health` 的 `streamSubscribers`：切换会话与关闭窗口后该数应回落到 0，不回落说明订阅未释放。
 

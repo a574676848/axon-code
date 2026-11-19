@@ -14,20 +14,6 @@
 import type { SessionSubagentSummary } from '../types';
 import type { SubagentRow } from './transcript';
 
-/** 子代理行标识前缀。 */
-const AGENT_PREFIX = 'subagent:';
-
-/**
- * 子代理会话的 slug。
- *
- * 与运行侧 `child_session_id` 的尾段同一套写法：去掉 agent 路径前缀，斜杠换成下划线。
- * 名册按 slug 对账，两侧必须是同一个函数，否则同一条子代理会同时以「转录行」与
- * 「名册行」出现两次。
- */
-export function subagentSlug(agentId: string): string {
-  return agentId.replace(/^subagent:/, '').replace(/^\/+/, '').replaceAll('/', '_');
-}
-
 /** 名册里的线程状态与末轮状态折算成行状态。 */
 function rosterStatus(entry: SessionSubagentSummary): SubagentRow['status'] {
   const last = entry.lastTurnStatus ?? null;
@@ -53,15 +39,16 @@ export function mergeSubagentRoster(
   roster: readonly SessionSubagentSummary[] | null,
 ): SubagentRow[] {
   if (roster === null || roster.length === 0) return [...rows];
-  const known = new Set(rows.map((row) => subagentSlug(row.agentId)));
+  // 转录行与名册行按同一枚 `agentId` 对账：两侧都由运行侧派生，界面不做二次归一化。
+  const known = new Set(rows.map((row) => row.agentId));
   const extra: SubagentRow[] = [];
   for (const entry of roster) {
-    const slug = (entry.slug ?? '').trim();
-    if (slug.length === 0 || known.has(slug)) continue;
-    known.add(slug);
+    const agentId = (entry.agentId ?? '').trim();
+    if (agentId.length === 0 || known.has(agentId)) continue;
+    known.add(agentId);
     extra.push({
-      agentId: `${AGENT_PREFIX}${slug}`,
-      label: (entry.title ?? '').trim() || slug,
+      agentId,
+      label: (entry.title ?? '').trim() || agentId,
       status: rosterStatus(entry),
       // 名册没有阶段、用量与耗时：留空，渲染层按「缺读数就不占位」处理。
       activity: '',

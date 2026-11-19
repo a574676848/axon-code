@@ -25,41 +25,24 @@ export interface SessionSelection {
   fixedReasoningEffort?: string | null;
 }
 
-/** 会话订阅目标：一条连接上的一路订阅。 */
-export type ConversationTarget =
-  | {
-      kind: 'interaction';
-      workspaceId: string;
-      interactionId: string;
-      /** 消息投递目标；车道专属，提交时必填。 */
-      destination: string;
-      /** 本机草稿：还没有任何服务端事实，历史索引一次都不该去读。 */
-      draft?: boolean;
-    }
-  | { kind: 'session'; workspaceId: string; sessionId: string };
-
-/**
- * 独立会话：由后台驱动、正文按会话订阅。
- *
- * 目标执行（`goal`）与定时任务（`cron`）的会话有独立的运行身份，网关按会话放行订阅；
- * 子代理会话同理。普通车道（桌面 / CLI / TUI）没有这层绑定，正文的事实源是 Interaction
- * 流，按会话订阅会被网关拒绝（`subscription_rejected`）。
- */
-const STANDALONE_CHANNELS = new Set(['goal', 'cron', 'subagent']);
-
-/** 该会话是否走会话级订阅（后台驱动的独立会话）。 */
-export function isStandaloneSession(
-  selection: Pick<SessionSelection, 'sessionId' | 'channel'>,
-): boolean {
-  return STANDALONE_CHANNELS.has(selection.channel ?? '');
+/** 会话订阅目标：一条连接上的一路 Interaction 订阅。 */
+export interface ConversationTarget {
+  readonly kind: 'interaction';
+  workspaceId: string;
+  interactionId: string;
+  /** 消息投递目标；车道专属，提交时必填。 */
+  destination: string;
+  /** 本机草稿：还没有任何服务端事实，历史索引一次都不该去读。 */
+  draft?: boolean;
 }
 
-/** 从车道选择得到订阅目标。 */
+/**
+ * 从选中会话得到订阅目标：一律 Interaction 目标。
+ *
+ * 目标执行、定时任务与子代理都有入站事实（`agent-dispatch` 行），正文的事实源与侧栏会话
+ * 相同，因此不存在第二种目标：历史索引、分页、展开与逐轮读数只有一份实现。
+ */
 export function targetOfSession(selection: SessionSelection): ConversationTarget {
-  if (isStandaloneSession(selection)) {
-    return { kind: 'session', workspaceId: selection.workspaceId, sessionId: selection.sessionId };
-  }
-  // 车道目标用会话标识当历史索引键：真正的订阅在历史装载之后按每条 Interaction 建立。
   return {
     kind: 'interaction',
     workspaceId: selection.workspaceId,
@@ -78,15 +61,13 @@ export interface NormalizedTarget {
 /**
  * 目标对应的订阅标识；必须与 Rust 侧 `SubscribeTarget::subscribe_id` 逐字符一致。
  *
- * 车道目标用**交互标识**（`interactionId`）：网关车道 API 的 `sessionId` 与 Interaction 的
+ * 用**交互标识**（`interactionId`）：网关车道 API 的 `sessionId` 与 Interaction 的
  * `interactionId` 是两个不同的串，订阅与事件回显用的都是后者。曾经这里误用
  * `SessionSelection.sessionId`，结果是帧全部到达、又被过滤器按「标识不匹配」整批丢掉，
  * 界面永远停在「生成回复中」。
  */
 export function subscriptionIdOf(target: ConversationTarget): string {
-  return target.kind === 'session'
-    ? `session:${target.sessionId}`
-    : `interaction:${target.interactionId}`;
+  return `interaction:${target.interactionId}`;
 }
 
 /** 归一化订阅目标。 */
@@ -140,6 +121,12 @@ export interface ConversationController {
   sessionReadyId: string | null;
   /** 车道当前模型的权威事实；网关只读该车道最新一轮记录，解析不到时为空。 */
   sessionModel: import('./viewConfig').SessionEffectiveModel | null;
+  /**
+   * 会话能力事实（可写性、可中断、可答问）。
+   *
+   * 首页历史索引到达后才有效；在此之前为空，界面按入口声明给首帧默认值。
+   */
+  sessionFacts: import('./sessionFacts').SessionFacts | null;
   /**
    * 最近一次记忆反思的提示文本；该会话还没有记忆动作时为空。
    *

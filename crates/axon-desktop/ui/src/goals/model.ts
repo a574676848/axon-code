@@ -80,11 +80,14 @@ export type GoalFilter = 'all' | 'open' | 'settled';
 export const isSettled = (status: GoalStatus): boolean =>
   goalStatusMeta(status).column === 'settled';
 
-/** 目标是否已经绑定一个可订阅的执行会话。 */
+/**
+ * 目标是否已经绑定一个可进入的执行会话。
+ *
+ * 判据是服务端给出的 `hasTranscript`：它回答「这一轮真有逐字稿吗」。`sessionId` 只说明
+ * 绑定关系，不能替代可进入性。
+ */
 export const hasSessionBinding = (goal: GoalCardView): boolean =>
-  goal.latestExecution !== null &&
-  goal.latestExecution.sessionId !== null &&
-  goal.workspaceId !== null;
+  goal.workspaceId !== null && goal.latestExecution?.hasTranscript === true;
 
 /**
  * 卡片页脚的动作文案。

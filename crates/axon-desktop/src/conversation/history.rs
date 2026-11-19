@@ -165,6 +165,11 @@ struct SessionInteractionsPayload {
     /// 最近一次记忆反思的提示文本；该会话还没有记忆动作时缺省为空。
     #[serde(default)]
     reflection_notice: Option<String>,
+    /// 会话能力与身份事实（可写性、可中断、可答问）。
+    ///
+    /// 形状由网关定义、界面按键读取，因此原样透传：桌面端不重新建模一份，避免两侧
+    /// 字段各改一次才对齐。网关恒返回该键，值可以是 `null`（会话行不存在）。
+    session: serde_json::Value,
 }
 
 /// 车道当前模型的权威事实。
@@ -210,7 +215,7 @@ pub struct SessionUsageTotals {
 ///
 /// 两个累计读数都会话翻到第几页无关：界面要的是整条会话的消耗与耗时，因此它们由网关
 /// 按车道聚合，客户端不靠自己已经回放到哪一条去推算。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionInteractions {
     /// 这一页的 Interaction，按接收时间升序。
@@ -231,6 +236,8 @@ pub struct SessionInteractions {
     /// 呈现，不承诺与当前轮同步。
     #[serde(default)]
     pub reflection_notice: Option<String>,
+    /// 会话能力与身份事实（可写性、可中断、可答问）；原样透传网关形状。
+    pub session: serde_json::Value,
 }
 
 /// 反向分页游标：按「已加载窗口里最早那一条」的排序键向前翻。
@@ -279,6 +286,7 @@ pub fn session_interactions(
             session_elapsed_ms: parsed.session_elapsed_ms,
             effective_model: parsed.effective_model,
             reflection_notice: parsed.reflection_notice,
+            session: parsed.session,
         })
         .map_err(|error| format!("解析车道历史失败：{error}"))
 }

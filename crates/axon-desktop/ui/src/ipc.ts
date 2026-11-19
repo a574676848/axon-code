@@ -392,13 +392,6 @@ export const conversationWatch = (
   resumeCursor: string | null,
 ): Promise<void> => call('conversation_watch', { workspaceId, interactionId, resumeCursor });
 
-/** 订阅一个**会话**的事件流（子代理会话）；与车道订阅并存于同一条连接上。 */
-export const conversationWatchSession = (
-  workspaceId: string,
-  sessionId: string,
-  resumeCursor: string | null,
-): Promise<void> => call('conversation_watch_session', { workspaceId, sessionId, resumeCursor });
-
 /**
  * 取消一条订阅。
  *

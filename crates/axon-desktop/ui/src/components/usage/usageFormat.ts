@@ -147,6 +147,13 @@ export function sourceLabel(source: string | null | undefined): string {
       return '主 Agent';
     case 'subagent':
       return '子代理';
+    // 执行侧派发的轮次：`agent` 是落库渠道，`goal` 是目标执行的归因客户端。
+    case 'agent':
+      return '后台执行';
+    case 'goal':
+      return '目标执行';
+    case 'cron':
+      return '定时任务';
     case 'all':
     case undefined:
     case null:

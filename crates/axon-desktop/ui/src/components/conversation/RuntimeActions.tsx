@@ -7,7 +7,7 @@ import {
   formatDurationPadded,
 } from '../../conversation/format';
 import type { JobRow, SubagentRow } from '../../conversation/transcript';
-import { mergeSubagentRoster, shouldPollSubagentRoster, subagentSlug } from '../../conversation/subagentRoster';
+import { mergeSubagentRoster, shouldPollSubagentRoster } from '../../conversation/subagentRoster';
 import type { SessionSubagentSummary } from '../../types';
 import { isActiveJob, JOB_ROSTER_REFRESH_MS } from '../../conversation/runtimeFacts';
 import { Dropdown } from '../ui/overlays';
@@ -358,12 +358,13 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
     };
   }, [sessionId]);
 
-  /** 名册按 slug 索引的实时状态。 */
+  /** 名册按代理标识索引的实时状态。 */
   const liveSubagents = React.useMemo(() => {
     if (roster === null) return null;
     const map = new Map<string, { status: string; lastTurnStatus: string | null }>();
     for (const item of roster) {
-      map.set(item.slug, {
+      if (item.agentId.length === 0) continue;
+      map.set(item.agentId, {
         status: item.status ?? 'notLoaded',
         lastTurnStatus: item.lastTurnStatus ?? null,
       });
@@ -371,13 +372,10 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
     return map;
   }, [roster]);
 
-  /** 该子代理的会话 slug，规则与运行侧 `child_session_id` 一致。 */
-  const slugOfAgent = subagentSlug;
-
   /** 后端对账后的真实状态；无法对账时沿用事件流里的状态。 */
   const statusOf = React.useCallback(
     (row: SubagentRow): SubagentRow['status'] => {
-      const live = liveSubagents?.get(slugOfAgent(row.agentId));
+      const live = liveSubagents?.get(row.agentId);
       if (live === undefined || live === null) return row.status;
       // 后端说这条会话仍在跑，就以事件流为准（它可能已经有更新的阶段）。
       if (live.status === 'active') return row.status;
@@ -389,7 +387,7 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
       if (live.lastTurnStatus === 'interrupted') return 'interrupted';
       return 'completed';
     },
-    [liveSubagents, slugOfAgent],
+    [liveSubagents],
   );
 
   /*

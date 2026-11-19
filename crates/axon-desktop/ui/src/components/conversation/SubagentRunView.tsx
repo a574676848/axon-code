@@ -10,18 +10,18 @@ import { Text } from '../ui/surfaces';
 /*
  * 子代理会话视图。
  *
- * 子代理是**独立会话**：这里就是它的会话界面，走的是与普通会话完全相同的一条管线
- * （同一个控制器、同一份 durable 事件流、同一个归约器、同一套渲染），只是订阅目标
- * 从 Interaction 换成会话。两条订阅并存于同一条连接上，因此在这里来回切换不会
- * 掐断主会话的流，也不会重建连接。
+ * 子代理是**独立会话**，但与主会话走同一条渲染管线与同一套取数：同一个控制器、
+ * 同一份历史索引、同一个归约器。两条订阅并存于同一条连接上，因此在这里来回切换
+ * 不会掐断主会话的流，也不会重建连接。
  *
  * 输入条直接复用主输入坞的紧凑变体：字号、发送按钮、键盘与历史都是同一份实现，
  * 这里只关掉模型选择与附件（那两项由委派时的意图决定）。
  */
 
-/** 子代理标识到会话标识里的那段 slug：`subagent:/root/x` 与 `/root/x` 都接受。 */
-function slugOf(agentId: string): string {
-  return agentId.replace(/^subagent:/, '').replace(/^\/+/, '').replaceAll('/', '_');
+/** 没有运行态会话行时的可读结论：原因码由网关给出，这里只翻译成一句话。 */
+function unavailableText(reason: string | null | undefined): string {
+  if (reason === 'no-runtime-session') return '这次执行早于子代理会话化，没有可回看的逐字稿';
+  return '这条子代理还没有可回看的会话';
 }
 
 export interface SubagentRunViewProps {
@@ -52,14 +52,17 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
       .conversationSessionSubagents(sessionId)
       .then((list) => {
         if (cancelled) return;
-        const slug = slugOf(row.agentId);
-        const match = list.subagents.find((item) => item.slug === slug);
+        /*
+         * 匹配键就是网关给出的 `agentId`（`subagent:/root/x`）：它与转录行里的标识同源，
+         * 因此不需要任何归一化。
+         */
+        const match = list.subagents.find((item) => item.agentId === row.agentId);
         if (match === undefined) {
           setLocateError('还没有读到这个子代理的会话记录');
           return;
         }
-        if (match.hasRuntime === false) {
-          setLocateError('这次执行早于子代理会话化，没有可回看的逐字稿');
+        if (match.sessionId === null || match.sessionId === '') {
+          setLocateError(unavailableText(match.unavailableReason));
           return;
         }
         setLocatedSessionId(match.sessionId);
@@ -80,7 +83,13 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
     () =>
       workspaceId === null || locatedSessionId === null
         ? null
-        : ({ kind: 'session', workspaceId, sessionId: locatedSessionId } as const),
+        : ({
+            kind: 'interaction',
+            workspaceId,
+            interactionId: locatedSessionId,
+            // 子代理轮次不支持用户提交：投递走专用通道，因此这里不提供回复目标。
+            destination: '',
+          } as const),
     [workspaceId, locatedSessionId],
   );
   const conversation = useConversation(target);
@@ -150,6 +159,10 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
           turns={conversation.state.turns}
           followToken={conversation.state.turns.length}
           subagentSession={{ interrupted: row.status === 'interrupted' }}
+          hasOlder={conversation.hasOlder}
+          loadingOlder={conversation.loadingOlder}
+          onLoadOlder={() => void conversation.loadOlder()}
+          prependToken={conversation.prependToken}
         />
       )}
 
