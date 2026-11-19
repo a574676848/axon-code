@@ -62,12 +62,16 @@ pub(super) fn session_subagents_payload(
     }
     let rows = child_session_rows(axon_root, &run_session_id, MAX_SESSION_SUBAGENTS)?;
     let store = runtime_store(axon_root);
+    // 一次批量读回整页会话行：逐行回表在 200 行上限下就是 200 次点查。
+    let ids: Vec<DaemonSessionId> = rows
+        .iter()
+        .filter_map(|row| DaemonSessionId::new(row.session_id.clone()).ok())
+        .collect();
+    let runtimes = store.sessions_by_ids(&ids).unwrap_or_default();
     let mut subagents = Vec::with_capacity(rows.len());
     for row in rows {
         // 会话标识是 ULID，路径只从登记表读：子代理的 slug 不是标识的一部分。
-        let runtime = DaemonSessionId::new(row.session_id.as_str())
-            .ok()
-            .and_then(|id| store.get_session(&id).ok());
+        let runtime = runtimes.get(row.session_id.as_str());
         let slug = runtime
             .as_ref()
             .and_then(|record| record.agent_path.as_deref())

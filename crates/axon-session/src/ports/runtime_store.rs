@@ -304,6 +304,14 @@ pub trait RuntimeStore:
         &self,
         session_id: &DaemonSessionId,
     ) -> Result<SessionRuntimeRecord, RuntimeStoreError>;
+    /// 按标识批量读取会话行；不存在的标识不出现在结果里。
+    ///
+    /// 名册这类「一次要补 N 行的会话事实」按行回表会放大成 N 次点查；这里一次 IN 读回，
+    /// 调用方按标识索引即可。
+    fn sessions_by_ids(
+        &self,
+        session_ids: &[DaemonSessionId],
+    ) -> Result<std::collections::HashMap<String, SessionRuntimeRecord>, RuntimeStoreError>;
     /// 按根会话批量读取它最近活动的子代理会话标识。
     ///
     /// 一次查询覆盖一整页，查询数与根会话条数无关。没有子会话的根不出现在结果里；

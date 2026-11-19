@@ -153,6 +153,13 @@ impl RuntimeStore for SqliteRuntimeStore {
         self.find_subagent_session_impl(root_session_id, agent_path)
     }
 
+    fn sessions_by_ids(
+        &self,
+        session_ids: &[DaemonSessionId],
+    ) -> Result<std::collections::HashMap<String, SessionRuntimeRecord>, RuntimeStoreError> {
+        self.sessions_by_ids_impl(session_ids)
+    }
+
     fn latest_subagent_session_ids(
         &self,
         root_session_ids: &[DaemonSessionId],

@@ -77,6 +77,38 @@ impl SqliteRuntimeStore {
             .map_err(storage)
     }
 
+    /// 按标识批量读取会话行：一次 IN 读回，名册不再逐行回表。
+    pub(crate) fn sessions_by_ids_impl(
+        &self,
+        session_ids: &[DaemonSessionId],
+    ) -> Result<HashMap<String, SessionRuntimeRecord>, RuntimeStoreError> {
+        if session_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        self.initialize()?;
+        let connection = self.connection()?;
+        let placeholders = (1..=session_ids.len())
+            .map(|index| format!("?{index}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT {} FROM sessions WHERE session_id IN ({placeholders})",
+            super::helpers::SESSION_COLUMNS
+        );
+        let mut statement = connection.prepare(&sql).map_err(storage)?;
+        let rows = statement
+            .query_map(
+                params_from_iter(session_ids.iter().map(DaemonSessionId::as_str)),
+                super::helpers::session_runtime_row,
+            )
+            .map_err(storage)?;
+        let mut found = HashMap::with_capacity(session_ids.len());
+        for row in rows {
+            let record = row.map_err(storage)?;
+            found.insert(record.session_id.as_str().to_owned(), record);
+        }
+        Ok(found)
+    }
     /// 按根会话批量读取它最近活动的子代理会话标识。
     ///
     /// 一次查询覆盖一整页目标：查询数与根会话条数无关。同一根有多条子会话时按最近活动

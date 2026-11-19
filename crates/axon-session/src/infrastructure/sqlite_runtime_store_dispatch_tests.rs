@@ -157,3 +157,22 @@ fn repeated_archive_history_does_not_duplicate_the_turn_row() {
     assert_eq!(heads.len(), 1);
     assert_eq!(heads[0].status, InteractionStatus::Understood);
 }
+
+#[test]
+fn sessions_by_ids_reads_many_rows_and_skips_unknown_ids() {
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    let first = test_session("batch-session-a");
+    let second = test_session("batch-session-b");
+    store.create_session(&first, ".", 1).expect("会话行");
+    store.create_session(&second, ".", 2).expect("会话行");
+    let missing = test_session("batch-session-missing");
+
+    let found = store
+        .sessions_by_ids(&[first.clone(), second.clone(), missing])
+        .expect("批量读取");
+    assert_eq!(found.len(), 2, "不存在的标识不得出现在结果里");
+    assert!(found.contains_key(first.as_str()));
+    assert!(found.contains_key(second.as_str()));
+    assert!(store.sessions_by_ids(&[]).expect("空输入").is_empty());
+}
