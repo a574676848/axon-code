@@ -167,6 +167,15 @@ impl RuntimeStore for SqliteRuntimeStore {
         self.session_cancellation_requested_impl(session_id)
     }
 
+    fn request_session_cancellation(
+        &self,
+        session_id: &DaemonSessionId,
+        reason: &str,
+        now_ms: u64,
+    ) -> Result<u64, RuntimeStoreError> {
+        self.request_session_cancellation_impl(session_id, reason, now_ms)
+    }
+
     fn mark_subagent_session_status(
         &self,
         session_id: &DaemonSessionId,

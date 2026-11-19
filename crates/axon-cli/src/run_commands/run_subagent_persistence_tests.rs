@@ -6,7 +6,8 @@ use std::path::Path;
 pub(super) fn assert_completed_child_thread(config_path: &Path, task_path: &AgentPath) {
     // 子会话标识由登记表解析：路径不再是标识的一部分，必须按 (根会话, 代理路径) 查。
     let store = super::super::super::run_agent_store::shared_runtime_store(config_path).unwrap();
-    let root_session_id = axon_domain::DaemonSessionId::new("parent-session").unwrap();
+    let root_session_id =
+        axon_domain::DaemonSessionId::new(super::fixture_parent_session_id()).unwrap();
     let child_session_id = store
         .find_subagent_session(&root_session_id, task_path.as_str())
         .unwrap()
@@ -34,9 +35,9 @@ fn child_thread_is_active_before_provider_turn_and_closes_interrupted() {
     fs::create_dir_all(config_path.parent().unwrap()).unwrap();
     let executor = ProviderRunSubagentExecutor::new(fixture_environment(config_path.clone()));
     let input = fixture_execution_input("/root/thread_lifecycle");
-    let child_request = executor.child_request(&input, None).unwrap();
+    let mut child_request = executor.child_request(&input, None).unwrap();
 
-    persist_child_turn_started(&child_request, &TurnSpec::subagent());
+    persist_child_turn_started(&mut child_request, &TurnSpec::subagent());
 
     let root = super::super::super::run_session_store::resolved_axon_root(&config_path).unwrap();
     let service = ThreadService::new(JsonlThreadEventStore);

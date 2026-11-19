@@ -41,6 +41,19 @@ pub trait EventLogStore: Send + Sync {
         now_ms: u64,
     ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError>;
 
+    /// 按 Interaction 归属追加一组事件，不校验租约。
+    ///
+    /// 逐轮指标与终态徽标都在轮次收口之后写入，那时租约早就释放了。本入口只写归属列，
+    /// 不碰状态机：收口后的事实因此仍能落到所属轮次上，而无租约写入也改不了任何状态。
+    fn append_attributed_events(
+        &self,
+        session_id: &DaemonSessionId,
+        host: &DaemonHostRecord,
+        interaction_id: &InteractionId,
+        events: &[(String, String)],
+        now_ms: u64,
+    ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError>;
+
     /// 读取序号严格大于 `after_sequence` 的至多 `limit` 条事件。
     fn replay_events(
         &self,

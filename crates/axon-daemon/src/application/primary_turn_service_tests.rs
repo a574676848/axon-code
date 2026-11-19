@@ -68,6 +68,14 @@ impl TestStore {
 }
 
 impl InteractionStore for TestStore {
+    fn settle_dispatch(
+        &self,
+        _interaction_id: &axon_domain::InteractionId,
+        _terminal_kind: axon_session::DispatchTerminalKind,
+        _now_ms: u64,
+    ) -> Result<(), axon_session::InteractionStoreError> {
+        Ok(())
+    }
     fn append(
         &self,
         interaction: &InteractionRecord,
@@ -211,6 +219,14 @@ impl BatchStore {
 }
 
 impl InteractionStore for BatchStore {
+    fn settle_dispatch(
+        &self,
+        _interaction_id: &axon_domain::InteractionId,
+        _terminal_kind: axon_session::DispatchTerminalKind,
+        _now_ms: u64,
+    ) -> Result<(), axon_session::InteractionStoreError> {
+        Ok(())
+    }
     fn append(
         &self,
         interaction: &InteractionRecord,

@@ -316,10 +316,7 @@ fn read_sessions(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<Sess
             .or_else(|| scope_json.as_deref().and_then(workspace_of_scope));
         Ok(SessionListRow {
             session_id: row.get(0)?,
-            title: stored_title
-                .filter(|value| !value.trim().is_empty())
-                .or_else(|| first_content.map(|content| clip_title(&content)))
-                .unwrap_or_else(|| cwd.clone()),
+            title: display_session_title(stored_title, first_content, &cwd),
             status: row.get(2)?,
             pinned: row.get::<_, i64>(3)? != 0,
             archived: row.get::<_, i64>(4)? != 0,
@@ -344,6 +341,20 @@ fn read_sessions(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<Sess
 }
 
 /// 受众边界的展示标签：表里存的是 `trust_scope` 取值域。
+/// 会话标题：控制面登记优先，其次首条入站正文，最后回落到工作目录。
+///
+/// 清单与索引页共用同一口径，避免同一条会话在两个入口显示成不同的名字。
+pub(crate) fn display_session_title(
+    stored: Option<String>,
+    first_content: Option<String>,
+    cwd: &str,
+) -> String {
+    stored
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| first_content.map(|content| clip_title(&content)))
+        .unwrap_or_else(|| cwd.to_owned())
+}
+
 fn audience_label(trust_scope: &str) -> String {
     match trust_scope {
         "private" => "私密",

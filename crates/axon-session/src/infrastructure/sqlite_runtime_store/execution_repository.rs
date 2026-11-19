@@ -535,4 +535,28 @@ impl SqliteRuntimeStore {
             .map_err(super::helpers::storage)?;
         Ok(found.is_some())
     }
+
+    /// 请求取消该会话正在跑的轮次：只写取消标记，不动执行终态。
+    ///
+    /// 终态必须由运行侧收口写入（它才知道本轮到底产出了什么）。这里写标记的语义与目标
+    /// 取消完全一致，因此运行侧同一条看门狗就能消费两条来源。
+    pub(super) fn request_session_cancellation_impl(
+        &self,
+        session_id: &DaemonSessionId,
+        reason: &str,
+        now_ms: u64,
+    ) -> Result<u64, crate::ports::RuntimeStoreError> {
+        let now = super::helpers::i64_value(now_ms)?;
+        let updated = self
+            .connection()?
+            .execute(
+                "UPDATE work_items SET cancellation_requested_at_ms=?1, \
+                 cancellation_reason=?2, updated_at_ms=?1 \
+                 WHERE session_id=?3 AND status='running' \
+                 AND cancellation_requested_at_ms IS NULL",
+                params![now, reason, session_id.as_str()],
+            )
+            .map_err(super::helpers::storage)?;
+        Ok(u64::try_from(updated).unwrap_or(0))
+    }
 }

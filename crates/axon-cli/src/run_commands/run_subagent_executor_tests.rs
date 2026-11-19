@@ -48,6 +48,11 @@ fn temp_config_path(label: &str) -> PathBuf {
         .join("config.toml")
 }
 
+/// 父会话身份必须是会话 ULID：子会话登记按 ULID 校验根标识。
+pub(super) fn fixture_parent_session_id() -> &'static str {
+    "01J8XQ7K3M4N5P6Q7R8S9T0V4W"
+}
+
 fn fixture_environment(config_path: PathBuf) -> ProviderRunSubagentEnvironment {
     let provider = ProviderConfig::new(
         "fixture",
@@ -72,7 +77,7 @@ fn fixture_environment(config_path: PathBuf) -> ProviderRunSubagentEnvironment {
     ProviderRunSubagentEnvironment {
         config,
         config_path,
-        parent_session_id: "01J8XQ7K3M4N5P6Q7R8S9T0V4W".to_owned(),
+        parent_session_id: fixture_parent_session_id().to_owned(),
         parent_run_session_id: "parent-window".to_owned(),
         cwd,
         provider: provider.clone(),

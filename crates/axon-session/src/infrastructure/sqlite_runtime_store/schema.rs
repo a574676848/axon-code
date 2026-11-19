@@ -28,7 +28,9 @@ impl SchemaKind {
     const fn version(self) -> i64 {
         match self {
             // 9：子代理会话允许携带 goal_id 与 execution_id（执行子会话必须能说清属于哪个目标、哪次执行）。
-            Self::Control => 10,
+            // 10：sessions.execution_id 记「当前这一轮是谁」。
+            // 11：inbox 增 terminal_kind：派发轮没有 work_item、拿不到 lease，终态只能直接落在入站行上。
+            Self::Control => 11,
             Self::Outbox => 1,
         }
     }
@@ -330,7 +332,10 @@ const CONTROL_DDL: &str = "
             model TEXT,
             reasoning_effort TEXT,
             session_id TEXT NOT NULL,
-            tool_summary TEXT NOT NULL DEFAULT ''
+            tool_summary TEXT NOT NULL DEFAULT '',
+            -- 派发轮的终态（understood / rejected / interrupted）：只有 source_channel='agent'
+            -- 的行会被写，正常入站轮的终态仍在 work_item 上。
+            terminal_kind TEXT
         );
         CREATE UNIQUE INDEX IF NOT EXISTS inbox_source
             ON inbox(source_channel, source_message_id);

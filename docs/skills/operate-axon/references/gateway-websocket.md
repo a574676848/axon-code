@@ -37,6 +37,7 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
 {"type":"ping"}
 {"type":"subscribe","subscribeId":"interaction:<interaction-id>","workspaceId":"<workspace-id>","interactionId":"<interaction-id>","resumeCursor":"<cursor>"}
 {"type":"subscribe","subscribeId":"session:<session-id>","workspaceId":"<workspace-id>","sessionId":"<session-id>"}
+{"type":"subscribe","subscribeId":"session-turns:<session-id>","workspaceId":"<workspace-id>","sessionId":"<session-id>"}
 {"type":"unsubscribe","subscribeId":"<subscribe-id>"}
 {"type":"submit","sourceChannel":"jira","eventId":"AX-1024","workspaceId":"<workspace-id>","sessionId":"<session-id>","observedAtMs":1730000000000,"expiresAtMs":1730086400000,"content":"事件正文","replyChannel":"jira","replyDestination":"AX-1024","localFiles":[],"model":"","reasoningEffort":""}
 ```
@@ -57,7 +58,7 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
   - **目标执行的逐字稿就在目标会话上**（`kind='goal'`，不派生逐字稿子会话）：订阅它与订阅其他会话同一套条件；该会话不展示在会话清单里，入口只有目标看板。
 - 会话级订阅只比对会话登记时的 `workspace_id`，不做 cwd 反查：目标的可见范围（工作区作用域与全局目标）由 `GET /api/v1/goals` 的可见集合决定，与订阅放行是两件事。
 - 把交互标识当 `sessionId` 传、或该会话从未登记，才会被拒为 `subscription_rejected`。主会话一般都按 `interactionId` 订阅，交互标识可从 `GET /api/v1/sessions/<sessionId>/interactions` 取得。
-- `subscribeId` 由客户端生成，必须在同一连接内唯一；建议直接由目标推导（`interaction:<id>` 或 `session:<id>`）。
+- `subscribeId` 由客户端生成，必须在同一连接内唯一；建议直接由目标推导（`interaction:<id>` 或 `session:<id>`）。`session-turns:<id>` 是第三种：只推 `interaction.created` 与 `interaction.settled` 两类轻帧（`interactionId` 与 `status`），不推正文、不回放历史，用于发现不在侧栏清单里的独立会话新轮与收口。
 - `resumeCursor` 用于从既有游标续读；省略时从头回放。
 
 ## 服务端帧

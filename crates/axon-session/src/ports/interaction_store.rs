@@ -119,6 +119,41 @@ pub trait InteractionStore: Send + Sync {
         lease_token: &str,
         now_ms: u64,
     ) -> Result<(), InteractionStoreError>;
+
+    /// 结算一条派发轮：只落在入站行上，不依赖 lease。
+    ///
+    /// 执行侧的派发记录没有 `work_items`，因此拿不到 lease，也无法走 `mark_*`。它的终态
+    /// 由运行侧在轮次收口时直接标记；判据在库里（只有 `source_channel='agent'` 的行会被写），
+    /// 调用方对任意一轮调用都不会污染正常入站轮的终态。
+    fn settle_dispatch(
+        &self,
+        interaction_id: &InteractionId,
+        terminal_kind: DispatchTerminalKind,
+        now_ms: u64,
+    ) -> Result<(), InteractionStoreError>;
+}
+
+/// 派发轮的终态：与正常入站轮的终态同名，但落在另一个位置。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchTerminalKind {
+    /// 这一轮成功收口。
+    Understood,
+    /// 这一轮失败。
+    Rejected,
+    /// 这一轮被中断。
+    Interrupted,
+}
+
+impl DispatchTerminalKind {
+    /// 落库取值。
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Understood => "understood",
+            Self::Rejected => "rejected",
+            Self::Interrupted => "interrupted",
+        }
+    }
 }
 
 /// Interaction 状态查询端口。

@@ -404,6 +404,19 @@ impl GatewayIngress for NoopIngress {
 struct NoopEgress;
 
 impl GatewayEgress for NoopEgress {
+    fn subscribe_session_turns(
+        &self,
+        _request: crate::infrastructure::gateway_kernel::GatewaySessionTurnsRequest,
+    ) -> Result<
+        Box<dyn crate::infrastructure::gateway_kernel::GatewayEventStream>,
+        crate::infrastructure::gateway_kernel::GatewayKernelError,
+    > {
+        Err(
+            crate::infrastructure::gateway_kernel::GatewayKernelError::Ingress(
+                "轮次头订阅在测试替身中不可用".to_owned(),
+            ),
+        )
+    }
     fn subscribe(
         &self,
         _request: GatewaySubscriptionRequest,

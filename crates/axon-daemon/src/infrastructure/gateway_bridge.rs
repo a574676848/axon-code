@@ -12,12 +12,13 @@ mod session_cache;
 mod session_routing;
 use super::gateway_kernel::{
     GatewayEgress, GatewayEvent, GatewayEventStream, GatewayIngress, GatewayKernelError,
-    GatewaySubscriptionRequest,
+    GatewaySessionTurnsRequest, GatewaySubscriptionRequest,
 };
 use super::gateway_replay::{
     DEFAULT_GATEWAY_REPLAY_PAGE_SIZE, interaction_status_event, live_ceiling_cursor,
     subscribe_and_replay, subscribe_and_replay_session,
 };
+use super::gateway_session_turns_stream::SessionTurnsStream;
 use crate::application::event_stream_bridge::STREAM_RESET_REASON_GENERATION_CHANGE;
 use crate::application::{
     EventStreamBridge, EventStreamSubscription, ExternalEventEnvelope, ExternalEventIngress,
@@ -351,6 +352,25 @@ where
             admissions: None,
         }))
     }
+
+    /// 轮次头订阅：只校验会话可读，不建立任何事件流回放。
+    ///
+    /// 它推的是「轮次清单的差异」，不是事件流：历史由索引页负责，这里只保证新轮与收口
+    /// 可被发现，因此不需要 durable 游标，也不会重放正文。
+    fn subscribe_session_turns(
+        &self,
+        request: GatewaySessionTurnsRequest,
+    ) -> Result<Box<dyn GatewayEventStream>, GatewayKernelError> {
+        let workspace_id = non_empty(request.workspace_id, "workspace_id")?;
+        let session_id = DaemonSessionId::new(request.session_id)
+            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
+        let admission = self.admission_of(&session_id, self.dependencies.clock.now_ms())?;
+        self.authorize_session(&workspace_id, &admission)?;
+        Ok(Box::new(SessionTurnsStream::new(
+            self.dependencies.store.clone(),
+            session_id,
+        )))
+    }
 }
 
 impl<S, C> DaemonGatewayBridge<S, C>
@@ -433,7 +453,6 @@ where
         Ok(())
     }
 }
-
 struct DaemonGatewayEventStream<S> {
     store: S,
     stream_bridge: Arc<EventStreamBridge>,

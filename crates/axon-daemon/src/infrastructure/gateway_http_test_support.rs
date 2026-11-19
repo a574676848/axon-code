@@ -131,6 +131,19 @@ impl GatewayIngress for RecordingIngress {
 struct RejectingEgress;
 
 impl GatewayEgress for RejectingEgress {
+    fn subscribe_session_turns(
+        &self,
+        _request: crate::infrastructure::gateway_kernel::GatewaySessionTurnsRequest,
+    ) -> Result<
+        Box<dyn crate::infrastructure::gateway_kernel::GatewayEventStream>,
+        crate::infrastructure::gateway_kernel::GatewayKernelError,
+    > {
+        Err(
+            crate::infrastructure::gateway_kernel::GatewayKernelError::Ingress(
+                "轮次头订阅在测试替身中不可用".to_owned(),
+            ),
+        )
+    }
     fn subscribe(
         &self,
         _request: GatewaySubscriptionRequest,
@@ -171,6 +184,19 @@ impl ScriptedEgress {
 }
 
 impl GatewayEgress for ScriptedEgress {
+    fn subscribe_session_turns(
+        &self,
+        _request: crate::infrastructure::gateway_kernel::GatewaySessionTurnsRequest,
+    ) -> Result<
+        Box<dyn crate::infrastructure::gateway_kernel::GatewayEventStream>,
+        crate::infrastructure::gateway_kernel::GatewayKernelError,
+    > {
+        Err(
+            crate::infrastructure::gateway_kernel::GatewayKernelError::Ingress(
+                "轮次头订阅在测试替身中不可用".to_owned(),
+            ),
+        )
+    }
     fn subscribe(
         &self,
         _request: GatewaySubscriptionRequest,

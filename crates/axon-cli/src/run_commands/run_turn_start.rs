@@ -47,15 +47,18 @@ fn bind_turn_execution(session_id: &str, execution_id: &str, config_path: &std::
 ///
 /// 内容就是本轮交给模型的完整提示（子代理是任务提示，目标执行是目标要干的事的全文），
 /// 不是摘要：会话视图里用户看到的第一条消息必须是真实输入。
-pub(crate) fn record_turn_input(spec: &TurnSpec, request: &RunRequest) {
+pub(crate) fn record_turn_input(spec: &TurnSpec, request: &mut RunRequest) {
     let Some((channel, client)) = spec.input.generated() else {
         return;
     };
-    if let Err(error) = append_turn_input(channel, client, request) {
-        axon_logger::warning(&format!(
+    match append_turn_input(channel, client, request) {
+        // 运行侧自己派发的轮次也要有归属：回填标识后，execution 绑定、逐轮读数与
+        // 轮次终态都落在这一枚 interaction 上，不再从旁路猜。
+        Ok(interaction_id) => request.interaction_id = interaction_id,
+        Err(error) => axon_logger::warning(&format!(
             "turn input skipped: session_id={}, error={error}",
             request.session_id
-        ));
+        )),
     }
 }
 
@@ -63,7 +66,7 @@ fn append_turn_input(
     channel: &'static str,
     client: Option<&'static str>,
     request: &RunRequest,
-) -> Result<(), String> {
+) -> Result<String, String> {
     use axon_session::{InteractionStore as _, RuntimeStore as _};
     let store = super::run_turn_metrics::shared_store(&request.config_path)?;
     let session_id = axon_domain::DaemonSessionId::new(request.session_id.clone())
@@ -89,7 +92,7 @@ fn append_turn_input(
         .map_err(|error| error.to_string())?,
         client,
     )?;
-    let interaction = axon_domain::InteractionRecord::new(
+    let mut interaction = axon_domain::InteractionRecord::new(
         session_id,
         axon_session::new_interaction_id(),
         source,
@@ -111,9 +114,13 @@ fn append_turn_input(
         super::run_execution::now_ms(),
     )
     .map_err(|error| error.to_string())?;
+    // 本轮模型与强度随入站事实一起落库：读侧据此给出真实模型，不必回退去猜。
+    interaction.model = Some(request.model.name.clone());
+    interaction.reasoning_effort = request.reasoning_effort.clone();
+    let interaction_id = interaction.interaction_id.as_str().to_owned();
     store
         .append(&interaction)
-        .map(|_| ())
+        .map(|_| interaction_id)
         .map_err(|error| error.to_string())
 }
 

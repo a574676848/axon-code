@@ -175,7 +175,7 @@ pub(crate) fn run_run_with_progress(
     request.goal_transport_context = options.transport_context;
     let spec = TurnSpec::for_origin(options.turn_origin, options.turn_input);
     // 派发轮先落输入事实：会话视图的第一条消息因此是真实输入而不是空。
-    record_turn_input(&spec, &request);
+    record_turn_input(&spec, &mut request);
     if let Err(error) = persist_turn_started(&request) {
         return cli_error(format!("Provider turn 起始持久化失败：{error}"));
     }

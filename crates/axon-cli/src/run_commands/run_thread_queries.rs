@@ -371,6 +371,7 @@ fn turn_record_from_part(
         // 父会话身份不在 Thread 里：投影只还原本轮内容，身份由调用方补齐。
         parent_session_id: None,
         parent_thread_id: detail.thread.parent_thread_id.clone(),
+        interaction_id: String::new(),
         created_at_ms: turn.started_at_ms,
         startup_timeline: super::super::run_startup_snapshot::RunStartupTimeline {
             total_ms: 0,

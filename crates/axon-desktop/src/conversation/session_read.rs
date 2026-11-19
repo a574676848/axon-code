@@ -13,8 +13,18 @@ use crate::gateway;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionSubagentSummary {
-    /// 子代理会话标识。
-    pub session_id: String,
+    /// 子代理会话标识；没有运行态会话行时为 None。
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// 代理路径（例如 /root/review）：可直接与界面上的 agent 对齐。
+    #[serde(default)]
+    pub agent_path: Option<String>,
+    /// 带前缀的稳定代理标识（例如 subagent:/root/review）：唯一的匹配键。
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    /// sessionId 为空时的原因；非空时界面按它给出可读说明。
+    #[serde(default)]
+    pub unavailable_reason: Option<String>,
     /// 会话标识里属于代理路径的那一段，用于与界面上的 agent 路径对齐。
     #[serde(default)]
     pub slug: String,

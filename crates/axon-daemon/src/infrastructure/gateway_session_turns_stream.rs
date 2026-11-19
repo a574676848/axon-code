@@ -1,0 +1,187 @@
+//! 会话轮次头订阅：只推「新增一轮」与「这一轮收口了」，不推正文。
+//!
+//! 独立会话（目标执行、子代理）不在侧栏清单里，前端没有别的渠道发现「又多了一轮」。
+//! 这一路订阅因此只做差异比较：按固定节拍把会话最近的轮次清单读一遍，比上次多出来的
+//! 报 `interaction.created`，状态从在途变成终态的报 `interaction.settled`。
+//!
+//! 清单直接走 `interactions_for_session` 端口：终态判定与索引页同源（同一个状态表达式），
+//! 这里不再自己拼 SQL，否则两处口径迟早漂移。
+
+use std::collections::HashSet;
+use std::time::{Duration, Instant};
+
+use axon_domain::DaemonSessionId;
+
+use super::gateway_kernel::{GatewayEvent, GatewayEventStream, GatewayKernelError};
+
+/// 节拍：轻帧允许一个轮询间隔的延迟，换掉的是不必给每条会话常驻一条事件流。
+const TURNS_POLL_INTERVAL: Duration = Duration::from_millis(700);
+/// 每次比较读取的轮次上限：只关心头部有没有出现新轮、有没有收口。
+const TURNS_WINDOW: u32 = 50;
+/// 已知轮次集合的容量上限：超出后按窗口修剪，避免长会话无界增长。
+const TURNS_KNOWN_LIMIT: usize = 256;
+
+/// 轮次头事件类型。
+pub(super) const INTERACTION_CREATED_EVENT: &str = "interaction.created";
+/// 轮次收口事件类型。
+pub(super) const INTERACTION_SETTLED_EVENT: &str = "interaction.settled";
+
+/// 只看轮次头的会话订阅。
+pub(super) struct SessionTurnsStream<S> {
+    store: S,
+    session_id: DaemonSessionId,
+    /// 已经播报过的轮次标识（含基线里已有的）。
+    known: HashSet<String>,
+    /// 已经播报过终态的轮次标识。
+    settled: HashSet<String>,
+    /// 第一次读取只建立基线，不补发历史：历史由索引页负责。
+    primed: bool,
+    last_poll: Option<Instant>,
+    pending: Vec<GatewayEvent>,
+}
+
+impl<S> SessionTurnsStream<S>
+where
+    S: axon_session::InteractionQueryStore + Clone,
+{
+    pub(super) fn new(store: S, session_id: DaemonSessionId) -> Self {
+        Self {
+            store,
+            session_id,
+            known: HashSet::new(),
+            settled: HashSet::new(),
+            primed: false,
+            last_poll: None,
+            pending: Vec::new(),
+        }
+    }
+
+    fn due(&mut self) -> bool {
+        let now = Instant::now();
+        let due = self
+            .last_poll
+            .is_none_or(|last| now.duration_since(last) >= TURNS_POLL_INTERVAL);
+        if due {
+            self.last_poll = Some(now);
+        }
+        due
+    }
+
+    /// 读一次轮次清单并产出与上次的差异。
+    fn poll(&mut self) -> Result<(), GatewayKernelError> {
+        let rows = self
+            .store
+            .interactions_for_session(self.session_id.as_str(), TURNS_WINDOW, None)
+            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
+        let current: HashSet<&str> = rows
+            .iter()
+            .map(|record| record.interaction_id.as_str())
+            .collect();
+        for record in &rows {
+            let interaction_id = record.interaction_id.as_str().to_owned();
+            let status = status_name(record.status);
+            if !self.primed {
+                // 基线：已有的轮次都算「已经知道」，已收口的直接记为已播报。
+                if is_terminal(&status) {
+                    self.settled.insert(interaction_id.clone());
+                }
+                self.known.insert(interaction_id);
+                continue;
+            }
+            if is_terminal(&status) {
+                if self.settled.insert(interaction_id.clone()) {
+                    self.known.insert(interaction_id.clone());
+                    self.pending.push(self.event(
+                        INTERACTION_SETTLED_EVENT,
+                        serde_json::json!({
+                            "interactionId": interaction_id,
+                            "status": status,
+                        }),
+                    ));
+                }
+                continue;
+            }
+            if self.known.insert(interaction_id.clone()) {
+                self.pending.push(self.event(
+                    INTERACTION_CREATED_EVENT,
+                    serde_json::json!({
+                        "interactionId": interaction_id,
+                        "receivedAtMs": record.received_at_ms,
+                        "status": status,
+                    }),
+                ));
+            }
+        }
+        self.primed = true;
+        // 修剪：只保留仍在这个窗口里的标识，旧标识离窗后不会再出现在头部比较里。
+        if self.known.len() > TURNS_KNOWN_LIMIT {
+            self.known.retain(|id| current.contains(id.as_str()));
+        }
+        if self.settled.len() > TURNS_KNOWN_LIMIT {
+            self.settled.retain(|id| current.contains(id.as_str()));
+        }
+        Ok(())
+    }
+
+    fn event(&self, event_type: &str, payload: serde_json::Value) -> GatewayEvent {
+        GatewayEvent {
+            event_type: event_type.to_owned(),
+            payload_json: payload.to_string(),
+            cursor: None,
+            replay: false,
+        }
+    }
+}
+
+impl<S> GatewayEventStream for SessionTurnsStream<S>
+where
+    S: axon_session::InteractionQueryStore + Clone + Send,
+{
+    fn recv_timeout(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<GatewayEvent>, GatewayKernelError> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(event) = self.pending.first().cloned() {
+                self.pending.remove(0);
+                return Ok(Some(event));
+            }
+            if self.due() {
+                self.poll()?;
+                continue;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Ok(None);
+            }
+            std::thread::sleep(Duration::from_millis(50).min(deadline - now));
+        }
+    }
+}
+
+/// 终态判定：与索引页的状态表达式同一套取值。
+fn is_terminal(status: &str) -> bool {
+    matches!(status, "understood" | "rejected" | "interrupted")
+}
+
+fn status_name(status: axon_domain::InteractionStatus) -> String {
+    serde_json::to_value(status)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "unknown".to_owned())
+}
+
+/// 订阅目标解析：`session-turns:` 前缀只认会话标识。
+pub(super) fn session_turns_target(subscribe_id: &str) -> Option<&str> {
+    let session_id = subscribe_id.strip_prefix("session-turns:")?.trim();
+    if session_id.is_empty() {
+        None
+    } else {
+        Some(session_id)
+    }
+}
+
+#[cfg(test)]
+#[path = "gateway_session_turns_stream_tests.rs"]
+mod tests;

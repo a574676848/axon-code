@@ -18,6 +18,9 @@ mod sqlite_runtime_store_agent_mailbox_tests;
 #[path = "sqlite_runtime_store_channel_origin_tests.rs"]
 mod sqlite_runtime_store_channel_origin_tests;
 #[cfg(test)]
+#[path = "sqlite_runtime_store_dispatch_tests.rs"]
+mod sqlite_runtime_store_dispatch_tests;
+#[cfg(test)]
 #[path = "sqlite_runtime_store_execution_lease_tests.rs"]
 mod sqlite_runtime_store_execution_lease_tests;
 #[cfg(test)]

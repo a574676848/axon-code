@@ -634,10 +634,10 @@ pub(super) fn tool_batch_ranges(scopes: &[ToolAccessScope]) -> Vec<Range<usize>>
 }
 
 #[cfg(test)]
-fn unique_test_thread_session_id(prefix: &str) -> String {
-    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("{prefix}-{}-{id}", std::process::id())
+fn unique_test_thread_session_id(_prefix: &str) -> String {
+    // 会话身份是服务端 ULID：登记子代理会话时会校验根会话必须是 ULID，
+    // 测试用例不能再用「前缀 + 进程号」这种可读串冒充会话标识。
+    axon_session::new_session_id().as_str().to_owned()
 }
 
 #[cfg(test)]

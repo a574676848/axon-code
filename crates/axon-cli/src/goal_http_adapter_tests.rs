@@ -365,16 +365,26 @@ fn latest_execution_points_at_the_execution_child_session() {
     store
         .create_goal(&goal("goal-child", ScopeRef::global(), 100))
         .expect("goal");
-    bind_execution_at(&store, "goal-child", 300, "/workspace-a");
+    // 根会话必须是服务端 ULID：子会话登记按 ULID 校验根标识。
+    let root = DaemonSessionId::new("01M7RQ9NYW8S6SQ8GTNM730M96").expect("root session");
+    store
+        .create_session(&root, "/workspace-a", 10)
+        .expect("root session row");
+    let mut execution = axon_domain::ExecutionRecord::new(
+        axon_domain::ExecutionId::new("execution-goal-child".to_owned()).expect("execution"),
+        axon_domain::GoalId::new("goal-child".to_owned()).expect("goal id"),
+        300,
+    );
+    execution.session_id = Some(root.clone());
+    execution.updated_at_ms = 300;
+    store.enqueue_execution(&execution).expect("execution");
     // 执行子会话：根会话是执行会话本身，并携带代理路径；同一轮的所有事实都落在它上面。
     let child = axon_session::NewSessionRequest {
         session_id: DaemonSessionId::new("01M7RSKXXX8VNSK4WM3BN77R0H").expect("child session"),
         kind: axon_session::SessionKind::Subagent,
         trust_scope: axon_session::SessionTrustScope::Private,
         workspace_id: None,
-        root_session_id: Some(
-            DaemonSessionId::new("01M7RQ9NYW8S6SQ8GTNM730M96").expect("root session"),
-        ),
+        root_session_id: Some(root),
         agent_path: Some("root/task-goal-child".to_owned()),
         goal_id: None,
         execution_id: None,

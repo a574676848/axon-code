@@ -23,6 +23,7 @@ pub(crate) fn resolve_child_session(
     let root_session_id = DaemonSessionId::new(parent_session_id.to_owned())
         .map_err(|error| format!("父会话标识非法：{error:?}"))?;
     let store = super::run_agent_store::shared_runtime_store(config_path)?;
+    // 登记入口直接回整行会话：会话身份与运行窗口一次拿全，不必再回表。
     let record = store
         .resolve_subagent_session(&SubagentSessionRequest {
             root_session_id,
@@ -31,12 +32,9 @@ pub(crate) fn resolve_child_session(
             now_ms: axon_time::unix_now_ms(),
         })
         .map_err(|error| format!("子代理会话登记失败：{error:?}"))?;
-    let session = store
-        .get_session(&record.session_id)
-        .map_err(|error| format!("子代理会话不可读：{error:?}"))?;
     Ok(super::RunIdentities::new(
-        session.session_id.as_str().to_owned(),
-        session.current_run_id,
+        record.session_id.as_str().to_owned(),
+        record.current_run_id,
     ))
 }
 

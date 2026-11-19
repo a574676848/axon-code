@@ -79,8 +79,12 @@ pub(crate) struct ExecutionView {
     pub(crate) status: &'static str,
     /// 尝试次数。
     pub(crate) attempt: u32,
-    /// 绑定的运行时会话标识；未绑定时为空。
+    /// 逐字稿所在会话标识；未绑定时为空。
     pub(crate) session_id: Option<String>,
+    /// 这一轮是否有可打开的逐字稿：入口文案与可进入性都由它决定。
+    pub(crate) has_transcript: bool,
+    /// 没有逐字稿时的原因；有逐字稿时为 `None`。
+    pub(crate) unavailable_reason: Option<String>,
     /// 创建时间。
     pub(crate) created_at_ms: u64,
     /// 更新时间。
@@ -90,19 +94,23 @@ pub(crate) struct ExecutionView {
 impl ExecutionView {
     /// 由领域执行记录投影。
     pub(crate) fn from_record(record: &ExecutionRecord) -> Self {
-        Self {
+        let mut view = Self {
             execution_id: record.execution_id.as_str().to_owned(),
             status: execution_status_code(record.status),
             attempt: record.attempt,
             session_id: record.session_id.as_ref().map(|id| id.as_str().to_owned()),
+            has_transcript: false,
+            unavailable_reason: None,
             created_at_ms: record.created_at_ms,
             updated_at_ms: record.updated_at_ms,
-        }
+        };
+        view.refresh_transcript_capability();
+        view
     }
 
     /// 由领域执行记录投影，并把会话标识换成这一轮实际所在的会话。
     ///
-    /// 执行记录绑定的是来源会话（`kind=goal` 或 `kind=cron`）；逐字稿与指标改落执行子会话后，
+    /// 执行记录绑定的是来源会话（`kind=goal` 或 `kind=cron`）；逐字稿若另落子会话，
     /// 「进入会话」必须指向子会话。调用方一次批量查好映射再传进来，查询数与执行条数无关。
     pub(crate) fn from_record_with_session(
         record: &ExecutionRecord,
@@ -112,7 +120,18 @@ impl ExecutionView {
         if let Some(session_id) = session_id {
             view.session_id = Some(session_id.to_owned());
         }
+        view.refresh_transcript_capability();
         view
+    }
+
+    /// 入口可进入性只由「逐字稿会话在不在」决定，调用方不再二分猜。
+    fn refresh_transcript_capability(&mut self) {
+        self.has_transcript = self.session_id.is_some();
+        self.unavailable_reason = if self.has_transcript {
+            None
+        } else {
+            Some("execution-not-started".to_owned())
+        };
     }
 }
 

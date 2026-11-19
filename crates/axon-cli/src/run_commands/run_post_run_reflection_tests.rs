@@ -166,15 +166,25 @@ fn completed_run_governs_reflection_off_main_path() {
         axon_domain::DaemonSessionId::new(request.session_id.clone()).expect("合法会话标识");
     let replayed = axon_session::EventLogStore::replay_events(&store, &session_id, 0, 64)
         .expect("必须能读回本轮事件");
-    assert!(
-        replayed
-            .iter()
-            .any(|event| event.event_type == "turn_metrics"),
-        "完成一轮后必须落下 turn_metrics，实际事件类型 {:?}",
-        replayed
-            .iter()
-            .map(|event| event.event_type.as_str())
-            .collect::<Vec<_>>()
+    let metrics = replayed
+        .iter()
+        .find(|event| event.event_type == "turn_metrics")
+        .unwrap_or_else(|| {
+            panic!(
+                "完成一轮后必须落下 turn_metrics，实际事件类型 {:?}",
+                replayed
+                    .iter()
+                    .map(|event| event.event_type.as_str())
+                    .collect::<Vec<_>>()
+            )
+        });
+    // 轮次键必须就是这一轮的 interaction 标识：客户端按 	urnId === turn.id 匹配收尾指标帧。
+    let payload: serde_json::Value =
+        serde_json::from_str(&metrics.payload_json).expect("turn_metrics 载荷");
+    assert_eq!(
+        payload["turnId"].as_str(),
+        Some(request.interaction_id.as_str()),
+        "逐轮读数必须挂在 interaction 标识上，而不是消息分段标识"
     );
 
     let kinds = events

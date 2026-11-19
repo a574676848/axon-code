@@ -297,6 +297,21 @@ async fn handle_request(
                     .await?;
                 return Ok(true);
             }
+            // 轮次头订阅：`session-turns:<sessionId>` 只推新轮与收口两类轻帧，
+            // 与 `session:` / `interaction:` 前缀三分清晰，互不串台。
+            if let Some(turns_session_id) = gateway_websocket_turns::turns_target(&subscribe_id) {
+                return gateway_websocket_turns::handle_subscribe(
+                    context,
+                    &subscribe_id,
+                    &workspace_id,
+                    turns_session_id,
+                    event_sender,
+                    subscriptions,
+                    socket,
+                )
+                .await;
+            }
+
             // 订阅要读 durable 尾游标并分页重放，同样是同步 IO，必须离开 runtime 线程。
             let subscription = super::gateway_kernel::GatewaySubscriptionRequest {
                 workspace_id,
@@ -386,10 +401,10 @@ async fn handle_request(
 /// 又因为 tokio 有界通道的 `Sender::is_closed()` 只反映「接收端已丢弃」，
 /// 拿它当收口信号是错的（接收端一直握在 socket 循环里）。因此这里给每条订阅
 /// 一个显式的收口标志：条目一被摘除就置位，线程在下一轮询里自行退出并释放事件流。
-struct SubscriptionEntry {
+pub(super) struct SubscriptionEntry {
     /// 投影线程句柄；交出一次后为空。
-    thread: Option<JoinHandle<()>>,
-    shutdown: Arc<AtomicBool>,
+    pub(super) thread: Option<JoinHandle<()>>,
+    pub(super) shutdown: Arc<AtomicBool>,
 }
 
 impl SubscriptionEntry {
@@ -408,9 +423,9 @@ impl Drop for SubscriptionEntry {
 }
 
 /// 一条连接上并存的全部订阅，按 `subscribeId` 索引。
-type Subscriptions = HashMap<String, SubscriptionEntry>;
+pub(super) type Subscriptions = HashMap<String, SubscriptionEntry>;
 
-fn forward_events(
+pub(super) fn forward_events(
     subscribe_id: &str,
     mut stream: Box<dyn GatewayEventStream>,
     sender: mpsc::Sender<TaggedEvent>,
@@ -480,10 +495,12 @@ enum WsClientRequest {
 
 #[path = "gateway_websocket_event.rs"]
 mod gateway_websocket_event;
+use super::gateway_websocket_turns;
 use gateway_websocket_event::*;
 #[path = "gateway_websocket_frames.rs"]
 mod gateway_websocket_frames;
 use gateway_websocket_frames::*;
+pub(super) use gateway_websocket_frames::{TaggedEvent, subscription_error_json};
 #[path = "gateway_websocket_peer.rs"]
 mod gateway_websocket_peer;
 use gateway_websocket_peer::*;

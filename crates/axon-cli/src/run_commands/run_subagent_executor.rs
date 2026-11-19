@@ -354,7 +354,7 @@ impl ProviderRunSubagentExecutor {
 
     fn execute_child_request(
         &self,
-        child_request: &RunRequest,
+        child_request: &mut RunRequest,
         input: &RunSubagentExecutionInput,
         publisher: &SubagentLifecyclePublisher,
     ) -> RunSubagentExecutionOutput {
@@ -467,7 +467,7 @@ impl ProviderRunSubagentExecutor {
             .as_ref()
             .map(RunCancelToken::child_token)
             .unwrap_or_default();
-        let child_request = match self.child_request(input, Some(cancel_token)) {
+        let mut child_request = match self.child_request(input, Some(cancel_token)) {
             Ok(child_request) => child_request,
             Err(error) => {
                 let output = self.attach_result_artifact(
@@ -492,7 +492,7 @@ impl ProviderRunSubagentExecutor {
         };
         let output = self.attach_result_artifact(
             input,
-            self.execute_child_request(&child_request, input, &publisher),
+            self.execute_child_request(&mut child_request, input, &publisher),
         );
         let _ = publisher.publish_terminal(subagent_terminal_lifecycle(
             input,
@@ -596,8 +596,8 @@ impl RunSubagentExecutor for ProviderRunSubagentExecutor {
         let _ = publisher.publish(subagent_started_lifecycle(&input, model.as_deref()));
         std::thread::spawn(move || {
             let output = match executor.child_request(&input, Some(cancel_token)) {
-                Ok(child_request) => {
-                    executor.execute_child_request(&child_request, &input, &publisher)
+                Ok(mut child_request) => {
+                    executor.execute_child_request(&mut child_request, &input, &publisher)
                 }
                 Err(error) => RunSubagentExecutionOutput {
                     status: RunSubagentExecutionStatus::Errored,

@@ -184,7 +184,7 @@ fn mark_child_origin(request: &RunRequest) {
     }
 }
 
-pub(super) fn persist_child_turn_started(request: &RunRequest, spec: &TurnSpec) {
+pub(super) fn persist_child_turn_started(request: &mut RunRequest, spec: &TurnSpec) {
     // 输入事实先落：即使这一轮随后就失败，子会话也已经有了「谁让它做什么」的记录。
     crate::run_commands::run_turn_start::record_turn_input(spec, request);
     // 起始态与主 turn 走同一条记录、同一处投影；子代理把失败降级为告警，不阻断起跑。

@@ -69,7 +69,8 @@ pub(super) fn request_fixture_with_executor(
         config_path,
         session_id: session_id.clone(),
         run_session_id: run_window.clone(),
-        interaction_id: String::new(),
+        // 每轮都要有归属：逐轮读数与轮次终态按这一枚标识落库。
+        interaction_id: format!("interaction-{}", uuid::Uuid::new_v4()),
         invocation_id: format!("test-invocation:{session_id}"),
         resumed_from: None,
         parent_session_id: None,

@@ -437,6 +437,24 @@ impl EventLogStore for SqliteRuntimeStore {
             Some((interaction_id, lease_token)),
         )
     }
+
+    fn append_attributed_events(
+        &self,
+        session_id: &DaemonSessionId,
+        host: &DaemonHostRecord,
+        interaction_id: &InteractionId,
+        events: &[(String, String)],
+        now_ms: u64,
+    ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
+        event_log_repository::append_attributed_events(
+            self,
+            session_id,
+            host,
+            interaction_id,
+            events,
+            now_ms,
+        )
+    }
     fn replay_events(
         &self,
         session_id: &DaemonSessionId,

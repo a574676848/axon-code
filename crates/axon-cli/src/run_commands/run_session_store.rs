@@ -39,6 +39,9 @@ pub(crate) struct RunSessionRecord {
     /// 父运行窗口；Thread 的父链接用它。
     #[serde(default)]
     pub(super) parent_thread_id: Option<String>,
+    /// 这一轮归属的入站事实（inbox.interaction_id）：逐轮读数与轮次终态都用它做键。
+    #[serde(default)]
+    pub(crate) interaction_id: String,
     pub(super) created_at_ms: u64,
     pub(crate) startup_timeline: RunStartupTimeline,
     #[serde(default)]
@@ -191,6 +194,7 @@ impl RunSessionRecord {
             thread_id: request.run_session_id.clone(),
             parent_session_id: request.parent_session_id.clone(),
             parent_thread_id: request.parent_thread_id.clone(),
+            interaction_id: request.interaction_id.clone(),
             created_at_ms,
             startup_timeline: request.startup.timeline.clone(),
             cwd: Some(request.cwd.to_string_lossy().to_string()),
@@ -245,6 +249,7 @@ impl RunSessionRecord {
             thread_id: request.run_session_id.clone(),
             parent_session_id: request.parent_session_id.clone(),
             parent_thread_id: request.parent_thread_id.clone(),
+            interaction_id: request.interaction_id.clone(),
             created_at_ms,
             startup_timeline: request.startup.timeline.clone(),
             cwd: Some(request.cwd.to_string_lossy().to_string()),

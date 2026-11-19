@@ -4,7 +4,7 @@ use super::*;
 
 /// 带订阅标识的连接级事件信封：socket 循环据此把帧写回正确的订阅。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct TaggedEvent {
+pub(crate) struct TaggedEvent {
     pub(super) subscribe_id: String,
     pub(super) event: GatewayEvent,
 }
@@ -45,7 +45,7 @@ pub(super) fn error_json(code: &str) -> String {
 }
 
 /// 订阅级错误帧：带回 `subscribeId`，让客户端能定位是哪一路订阅被拒。
-pub(super) fn subscription_error_json(code: &str, subscribe_id: Option<&str>) -> String {
+pub(crate) fn subscription_error_json(code: &str, subscribe_id: Option<&str>) -> String {
     let mut payload = serde_json::json!({ "type": "error", "error": code });
     if let Some(subscribe_id) = subscribe_id {
         payload["subscribeId"] = serde_json::Value::String(subscribe_id.to_owned());

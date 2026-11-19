@@ -83,8 +83,25 @@ pub(super) fn session_subagents_payload(
         } else {
             "idle"
         };
+        // 匹配键只给可直接使用的那两个：gentPath 是路径本身，gentId 是它带前缀的
+        // 稳定标识；没有运行态会话行时 sessionId 如实为 null 并给出原因，调用方不必猜。
+        let agent_path = runtime
+            .as_ref()
+            .and_then(|record| record.agent_path.clone());
+        let agent_id = agent_path.as_ref().map(|path| format!("subagent:{path}"));
         subagents.push(serde_json::json!({
-            "sessionId": row.session_id,
+            "sessionId": if has_runtime {
+                serde_json::Value::String(row.session_id.clone())
+            } else {
+                serde_json::Value::Null
+            },
+            "agentPath": agent_path,
+            "agentId": agent_id,
+            "unavailableReason": if has_runtime {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::String("no-runtime-session".to_owned())
+            },
             "slug": slug,
             "title": row.title,
             "model": row.model,

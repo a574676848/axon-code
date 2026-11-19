@@ -10,7 +10,8 @@ use rusqlite::{OptionalExtension, params};
 
 pub(super) const INBOX_COLUMNS: &str = "i.interaction_id,i.source_channel,i.source_message_id,i.scope_json,\
 i.audience_json,i.reply_route_json,i.content,\
-CASE WHEN w.status='running' THEN 'processing' \
+CASE WHEN i.terminal_kind IS NOT NULL THEN i.terminal_kind \
+     WHEN w.status='running' THEN 'processing' \
      WHEN h.terminal_kind IS NOT NULL THEN h.terminal_kind \
      WHEN w.terminal_kind IS NOT NULL THEN w.terminal_kind \
      ELSE 'received' END,\

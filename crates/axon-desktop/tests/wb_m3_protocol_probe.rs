@@ -58,11 +58,12 @@ fn real_target() -> Option<RealTarget> {
             session_read::session_subagents(&session_id)
                 .ok()
                 .and_then(|roster| {
+                    // 名册现在把「无会话」表示为 sessionId=null：直接取 Option 即可。
                     roster
                         .subagents
                         .into_iter()
-                        .find(|row| row.has_runtime)
-                        .map(|row| row.session_id)
+                        .find(|row| row.session_id.is_some())
+                        .and_then(|row| row.session_id)
                 });
         return Some(RealTarget {
             workspace_id,

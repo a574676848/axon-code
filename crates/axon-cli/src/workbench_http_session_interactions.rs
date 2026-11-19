@@ -11,6 +11,84 @@ use axon_session::{InteractionCursor, InteractionQueryStore as _};
 use super::session_readings;
 use super::{InteractionView, MAX_SESSION_INTERACTION_LIMIT, TurnMetricsView, runtime_store};
 
+/// 会话能力块：可写性、可中断与可答问都由服务端给出。
+///
+/// 前端此前只能按 `channel` 推断「这条会话能不能发消息」，推断在目标看板与子代理上必然
+/// 出错。这里把判断权搬回服务端：`kind` 是唯一依据，能力位是派生结果，前端只读字段。
+fn session_capability_block(
+    axon_root: &Path,
+    session_id: &str,
+) -> Result<serde_json::Value, String> {
+    use axon_session::SessionKind;
+    use rusqlite::OptionalExtension as _;
+    let row = runtime_store(axon_root)
+        .with_read_connection(|connection| {
+            connection
+                .query_row(
+                    "SELECT s.kind, s.title, s.provider, s.model, s.model_name, s.cwd,
+                            (SELECT i.content FROM inbox AS i WHERE i.session_id = s.session_id
+                             ORDER BY i.received_at_ms ASC, i.interaction_id ASC LIMIT 1),
+                            (SELECT COUNT(*) FROM inbox AS i WHERE i.session_id = s.session_id),
+                            (SELECT i.interaction_id FROM inbox AS i WHERE i.session_id = s.session_id
+                             ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1)
+                     FROM sessions AS s WHERE s.session_id = ?1",
+                    [session_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                            row.get::<_, Option<String>>(4)?,
+                            row.get::<_, String>(5)?,
+                            row.get::<_, Option<String>>(6)?,
+                            row.get::<_, i64>(7)?,
+                            row.get::<_, Option<String>>(8)?,
+                        ))
+                    },
+                )
+                .optional()
+        })
+        .map_err(|error| format!("读取会话能力事实失败：{error:?}"))?;
+    let Some((kind, title, provider, model, model_name, cwd, first_content, count, latest)) = row
+    else {
+        // 会话行不存在时如实给空：索引页本身仍可读，界面据此知道这是未登记会话。
+        return Ok(serde_json::Value::Null);
+    };
+    let Some(kind) = SessionKind::parse(&kind) else {
+        return Err(format!("会话 kind 取值非法：{kind}"));
+    };
+    let primary = kind == SessionKind::Primary;
+    let interruptible = !matches!(kind, SessionKind::Subagent);
+    Ok(serde_json::json!({
+        "kind": kind.as_str(),
+        // 来源只由会话类型映射，禁止用 `source_channel` 猜：同一会话可能被别端续聊。
+        "origin": origin_of_kind(kind),
+        "writable": primary,
+        // 后台链不注入用户提问端口，因此只有主会话能答问。
+        "canAnswerQuestions": primary,
+        // 主 turn 走进程内取消令牌，goal / cron 走 durable 取消标记，两条链路都已接通；
+        // 子会话没有独立入口（它随父轮一起收口），因此如实给 false。
+        "canInterrupt": interruptible,
+        "title": crate::sessions_http_adapter::display_session_title(title, first_content, &cwd),
+        "provider": provider.unwrap_or_default(),
+        "model": model.unwrap_or_default(),
+        "modelName": model_name.unwrap_or_default(),
+        "interactionCount": u64::try_from(count).unwrap_or(0),
+        "latestInteractionId": latest.unwrap_or_default(),
+    }))
+}
+
+/// 会话类型到来源的映射：一条会话只有一种来源，不随轮次变化。
+fn origin_of_kind(kind: axon_session::SessionKind) -> &'static str {
+    match kind {
+        axon_session::SessionKind::Primary => "human",
+        axon_session::SessionKind::Goal => "goal",
+        axon_session::SessionKind::Cron => "cron",
+        axon_session::SessionKind::Subagent => "subagent",
+    }
+}
+
 /// 车道内 Interaction 列表载荷。
 ///
 /// `before` 是反向分页游标：为空取最近一页，给出则取它之前的一页。
@@ -90,6 +168,8 @@ pub fn session_interactions_payload(
         .map_or(serde_json::Value::Null, serde_json::Value::from);
     Ok(serde_json::json!({
         "sessionId": session_id,
+        // 会话能力与身份事实：界面只读这一块，不再按渠道推断只读与可写。
+        "session": session_capability_block(axon_root, session_id)?,
         "interactions": interactions,
         "totalRecords": interactions.len(),
         // 会话级后台作业清单：与打开哪一轮无关，重开会话时据此还原标题栏的作业读数。
@@ -118,3 +198,7 @@ fn tokens_per_second_x10(value: f64) -> u64 {
         scaled as u64
     }
 }
+
+#[cfg(test)]
+#[path = "workbench_http_session_interactions_tests.rs"]
+mod tests;

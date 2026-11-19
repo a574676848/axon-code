@@ -28,6 +28,50 @@ pub(super) fn append_events(
     now_ms: u64,
     interaction_lease: Option<(&InteractionId, &str)>,
 ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
+    append_events_with(
+        store,
+        session_id,
+        host,
+        events,
+        now_ms,
+        interaction_lease,
+        None,
+    )
+}
+
+/// 只写归属、不校验租约的追加：轮次已收口时用。
+///
+/// 租约是「这一轮还在跑」的凭据，收口之后就必然失效；而逐轮指标、终态摘要这类事实
+/// 恰恰在收口之后才写。本入口因此只做归属，不碰状态机：既不打开「无租约也能改状态」
+/// 的口子，也不让先收口的轮次永远拿不到自己的读数。
+pub(super) fn append_attributed_events(
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+    host: &DaemonHostRecord,
+    interaction_id: &InteractionId,
+    events: &[(String, String)],
+    now_ms: u64,
+) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
+    append_events_with(
+        store,
+        session_id,
+        host,
+        events,
+        now_ms,
+        None,
+        Some(interaction_id),
+    )
+}
+
+fn append_events_with(
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+    host: &DaemonHostRecord,
+    events: &[(String, String)],
+    now_ms: u64,
+    interaction_lease: Option<(&InteractionId, &str)>,
+    attribution: Option<&InteractionId>,
+) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
     if events.is_empty() {
         return Ok(Vec::new());
     }
@@ -86,7 +130,9 @@ pub(super) fn append_events(
     transaction.commit().map_err(storage)?;
 
     // 阶段 2：事件面追加。不持有任何数据库锁。
-    let interaction_column = interaction_lease.map(|(interaction_id, _)| interaction_id.as_str());
+    let interaction_column = attribution
+        .or(interaction_lease.map(|(interaction_id, _)| interaction_id))
+        .map(InteractionId::as_str);
     let origin_channel = interaction_channel(store, interaction_column)?;
     let records = build_records(session_id, host, events, start, now_ms);
     let runtime_records = records

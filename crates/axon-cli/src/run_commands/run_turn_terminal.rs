@@ -91,6 +91,7 @@ pub(crate) fn complete_turn(
         .accounting
         .governance
         .then(|| start_post_run_governance_job(&governance_job));
+    settle_dispatch_terminal(request, axon_session::DispatchTerminalKind::Understood);
     CompletedTurn {
         response,
         session_title: Some(session_title),
@@ -122,6 +123,20 @@ pub(crate) fn fail_turn(
         &error,
         &partial_response,
         timestamp,
+    );
+    // 终态先落：中断与失败都必须在派发轮的入站行上留下结论，界面才不会永远停在「已收到」。
+    let interrupted = error.error_type == AGENT_RUN_ERROR_TYPE_INTERRUPTED
+        || request
+            .cancel_token
+            .as_ref()
+            .is_some_and(axon_agent_runtime::RunCancelToken::is_cancelled);
+    settle_dispatch_terminal(
+        request,
+        if interrupted {
+            axon_session::DispatchTerminalKind::Interrupted
+        } else {
+            axon_session::DispatchTerminalKind::Rejected
+        },
     );
     let (memory_usefulness, memory_autonomy) = match spec.completion {
         TurnCompletion::ChildSession => {
@@ -228,4 +243,30 @@ pub(super) fn select_failed_run_record(
     persisted
         .filter(|record| record.assistant_part_id == started.assistant_part_id)
         .unwrap_or(started)
+}
+
+/// 派发轮的终态：只落在执行侧派发的入站行上。
+///
+/// 正常入站轮的终态由 daemon 按 lease 结算，`settle_dispatch` 在库里就只认
+/// `source_channel='agent'`，因此这里对任何一轮调用都不会污染主会话的状态机。
+fn settle_dispatch_terminal(request: &RunRequest, terminal: axon_session::DispatchTerminalKind) {
+    if request.interaction_id.is_empty() {
+        return;
+    }
+    let Ok(interaction_id) = axon_domain::InteractionId::new(request.interaction_id.clone()) else {
+        return;
+    };
+    let Ok(store) = super::run_agent_store::shared_runtime_store(&request.config_path) else {
+        return;
+    };
+    use axon_session::InteractionStore as _;
+    if let Err(error) =
+        store.settle_dispatch(&interaction_id, terminal, super::run_execution::now_ms())
+    {
+        axon_logger::warning(&format!(
+            "派发轮终态未落库: session_id={}, terminal={}, error={error}",
+            request.session_id,
+            terminal.as_str()
+        ));
+    }
 }

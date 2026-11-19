@@ -101,6 +101,24 @@ pub trait GatewayEgress: Send + Sync {
         &self,
         request: GatewaySubscriptionRequest,
     ) -> Result<Box<dyn GatewayEventStream>, GatewayKernelError>;
+
+    /// 只推轮次头的订阅：`interaction.created` 与 `interaction.settled`。
+    ///
+    /// 目标执行与子代理会话不在侧栏清单里，前端无法靠 `interaction_count` 发现新轮；
+    /// 这一路订阅把「又多了一轮」「这一轮收口了」变成可订阅的轻事实，不推任何正文。
+    fn subscribe_session_turns(
+        &self,
+        request: GatewaySessionTurnsRequest,
+    ) -> Result<Box<dyn GatewayEventStream>, GatewayKernelError>;
+}
+
+/// 轮次头订阅请求：只跟一条会话的轮次清单。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewaySessionTurnsRequest {
+    /// 会话所属 Workspace。
+    pub workspace_id: String,
+    /// 目标会话。
+    pub session_id: String,
 }
 
 /// 事件订阅请求；Workspace/Session 由调用方解析，不在 Kernel 固定。
@@ -199,6 +217,15 @@ impl GatewayContext {
     ) -> Result<Box<dyn GatewayEventStream>, GatewayKernelError> {
         self.ensure_running()?;
         self.egress.subscribe(request)
+    }
+
+    /// 建立轮次头订阅；排空或停止后拒绝新订阅。
+    pub fn subscribe_session_turns(
+        &self,
+        request: GatewaySessionTurnsRequest,
+    ) -> Result<Box<dyn GatewayEventStream>, GatewayKernelError> {
+        self.ensure_running()?;
+        self.egress.subscribe_session_turns(request)
     }
 
     /// 按稳定 ID 查询外部交互结果；排空或停止后拒绝查询。

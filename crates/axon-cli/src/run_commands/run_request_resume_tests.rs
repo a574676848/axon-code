@@ -219,6 +219,7 @@ fn historical_session_with_alias(
         thread_id: "historical-session".to_owned(),
         parent_session_id: None,
         parent_thread_id: None,
+        interaction_id: String::new(),
         created_at_ms: 1,
         startup_timeline: super::super::run_startup_snapshot::test_startup_timeline(),
         cwd: None,

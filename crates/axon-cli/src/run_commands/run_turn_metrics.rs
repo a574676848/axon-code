@@ -123,7 +123,15 @@ pub(crate) fn publish_turn_metrics(config_path: &Path, record: &RunSessionRecord
         return;
     };
     record_session_model(&store, &session_id, record);
-    let Some(payload) = metrics_payload(record) else {
+    // 逐轮读数必须挂在具体某一轮上：没有归属标识就没有可匹配的轮次，宁可不写。
+    let Some((interaction_id, payload)) = metrics_payload(record) else {
+        return;
+    };
+    let Ok(interaction_id) = axon_domain::InteractionId::new(interaction_id) else {
+        axon_logger::warning(&format!(
+            "turn_metrics 归属标识非法，跳过写入: session_id={}",
+            record.session_id
+        ));
         return;
     };
     let now_ms = axon_time::unix_now_ms();
@@ -135,9 +143,11 @@ pub(crate) fn publish_turn_metrics(config_path: &Path, record: &RunSessionRecord
             ));
             return;
         };
-        match store.append_events(
+        // 收口之后租约已释放：只写归属，不校验租约，读数才不会整轮丢失。
+        match store.append_attributed_events(
             &session_id,
             &host,
+            &interaction_id,
             &[("turn_metrics".to_owned(), payload.clone())],
             now_ms,
         ) {
@@ -177,8 +187,14 @@ fn record_session_model(
     }
 }
 
-/// 组装本轮指标载荷。
-fn metrics_payload(record: &RunSessionRecord) -> Option<String> {
+/// 组装本轮指标载荷；返回它的归属交互标识。
+///
+/// `TurnMetrics.turn_id` 就是这枚 interaction 标识：客户端按 `turnId === turn.id`
+/// 过滤收尾指标帧，`assistant_part_id` 只是消息分段标识，两者不可互换。
+fn metrics_payload(record: &RunSessionRecord) -> Option<(String, String)> {
+    if record.interaction_id.is_empty() {
+        return None;
+    }
     let usage = record.usage.unwrap_or_default();
     let active_ms = record
         .turn_events
@@ -186,7 +202,7 @@ fn metrics_payload(record: &RunSessionRecord) -> Option<String> {
         .filter_map(|event| event.duration_ms)
         .fold(0_u64, |total, value| total.saturating_add(value));
     let metrics = axon_eventlog::TurnMetrics {
-        turn_id: record.assistant_part_id.clone(),
+        turn_id: record.interaction_id.clone(),
         ttft_ms: record.ttft_ms,
         active_ms,
         provider_duration_ms: active_ms,
@@ -207,5 +223,7 @@ fn metrics_payload(record: &RunSessionRecord) -> Option<String> {
         outcome: axon_eventlog::TurnOutcome::Succeeded,
         tool_calls: u32::try_from(record.tool_calls.len()).unwrap_or(u32::MAX),
     };
-    serde_json::to_string(&metrics).ok()
+    serde_json::to_string(&metrics)
+        .ok()
+        .map(|payload| (record.interaction_id.clone(), payload))
 }

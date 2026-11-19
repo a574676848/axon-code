@@ -260,6 +260,7 @@ fn partial_updates_append_only_new_history_items() {
                 thread_id: first.session_id.clone(),
                 session_root_id: first.session_id.clone(),
                 parent_thread_id: None,
+
                 forked_from_thread_id: None,
                 source: ThreadSource::CliRun,
                 ephemeral: false,
@@ -513,6 +514,7 @@ fn stale_active_turn_is_recovered_before_mirroring_next_run() {
                 thread_id: crashed.session_id.clone(),
                 session_root_id: crashed.session_id.clone(),
                 parent_thread_id: None,
+
                 forked_from_thread_id: None,
                 source: ThreadSource::CliRun,
                 ephemeral: false,
@@ -590,6 +592,7 @@ fn session_record(user: &str, assistant: &str, at_ms: u64) -> RunSessionRecord {
         thread_id: "session-1".to_owned().clone(),
         parent_session_id: None,
         parent_thread_id: None.clone(),
+        interaction_id: String::new(),
         created_at_ms: at_ms,
         startup_timeline: crate::run_commands::run_startup_snapshot::test_startup_timeline(),
         cwd: Some("E:/zbg/axon-code".to_owned()),

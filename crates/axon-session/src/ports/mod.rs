@@ -56,8 +56,8 @@ pub use goal_store::{GoalMutationStore, GoalPage, GoalStore, GoalStoreError};
 pub use health_store::{HealthStore, RuntimeHealthCounters};
 pub use ingress_cursor_store::SessionIngressCursorStore;
 pub use interaction_store::{
-    InteractionAppendReceipt, InteractionCursor, InteractionProcessingLease, InteractionQueryStore,
-    InteractionStore, InteractionStoreError,
+    DispatchTerminalKind, InteractionAppendReceipt, InteractionCursor, InteractionProcessingLease,
+    InteractionQueryStore, InteractionStore, InteractionStoreError,
 };
 pub use lease_store::LeaseStore;
 pub use ledger_commit_store::{ExecutionSettlement, LedgerCommitError, LedgerCommitStore};

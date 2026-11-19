@@ -69,6 +69,7 @@ fn previous_session_record(session_id: &str) -> RunSessionRecord {
         thread_id: session_id.to_owned(),
         parent_session_id: None,
         parent_thread_id: None,
+        interaction_id: String::new(),
         created_at_ms: 1,
         startup_timeline: crate::run_commands::run_startup_snapshot::test_startup_timeline(),
         cwd: None,
@@ -139,6 +140,7 @@ fn fixture_request() -> RunRequest {
         resumed_from: None,
         parent_session_id: None,
         parent_thread_id: None,
+
         cwd,
         prompt: "恢复子代理".to_owned(),
         quoted_message: None,

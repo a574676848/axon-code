@@ -89,6 +89,19 @@ impl GatewayIngress for RejectingIngress {
 struct RejectingEgress;
 
 impl GatewayEgress for RejectingEgress {
+    fn subscribe_session_turns(
+        &self,
+        _request: crate::infrastructure::gateway_kernel::GatewaySessionTurnsRequest,
+    ) -> Result<
+        Box<dyn crate::infrastructure::gateway_kernel::GatewayEventStream>,
+        crate::infrastructure::gateway_kernel::GatewayKernelError,
+    > {
+        Err(
+            crate::infrastructure::gateway_kernel::GatewayKernelError::Ingress(
+                "轮次头订阅在测试替身中不可用".to_owned(),
+            ),
+        )
+    }
     fn subscribe(
         &self,
         _request: GatewaySubscriptionRequest,
@@ -124,6 +137,19 @@ impl GatewayEventStream for IdleEventStream {
 struct StoryEgress;
 
 impl GatewayEgress for StoryEgress {
+    fn subscribe_session_turns(
+        &self,
+        _request: crate::infrastructure::gateway_kernel::GatewaySessionTurnsRequest,
+    ) -> Result<
+        Box<dyn crate::infrastructure::gateway_kernel::GatewayEventStream>,
+        crate::infrastructure::gateway_kernel::GatewayKernelError,
+    > {
+        Err(
+            crate::infrastructure::gateway_kernel::GatewayKernelError::Ingress(
+                "轮次头订阅在测试替身中不可用".to_owned(),
+            ),
+        )
+    }
     fn subscribe(
         &self,
         _request: GatewaySubscriptionRequest,
@@ -148,6 +174,19 @@ impl GatewayEgress for StoryEgress {
 struct TaggedEgress;
 
 impl GatewayEgress for TaggedEgress {
+    fn subscribe_session_turns(
+        &self,
+        _request: crate::infrastructure::gateway_kernel::GatewaySessionTurnsRequest,
+    ) -> Result<
+        Box<dyn crate::infrastructure::gateway_kernel::GatewayEventStream>,
+        crate::infrastructure::gateway_kernel::GatewayKernelError,
+    > {
+        Err(
+            crate::infrastructure::gateway_kernel::GatewayKernelError::Ingress(
+                "轮次头订阅在测试替身中不可用".to_owned(),
+            ),
+        )
+    }
     fn subscribe(
         &self,
         request: GatewaySubscriptionRequest,
@@ -176,6 +215,19 @@ struct CountingEgress {
 }
 
 impl GatewayEgress for CountingEgress {
+    fn subscribe_session_turns(
+        &self,
+        _request: crate::infrastructure::gateway_kernel::GatewaySessionTurnsRequest,
+    ) -> Result<
+        Box<dyn crate::infrastructure::gateway_kernel::GatewayEventStream>,
+        crate::infrastructure::gateway_kernel::GatewayKernelError,
+    > {
+        Err(
+            crate::infrastructure::gateway_kernel::GatewayKernelError::Ingress(
+                "轮次头订阅在测试替身中不可用".to_owned(),
+            ),
+        )
+    }
     fn subscribe(
         &self,
         _request: GatewaySubscriptionRequest,

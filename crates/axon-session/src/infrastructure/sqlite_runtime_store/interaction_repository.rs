@@ -7,13 +7,15 @@
 
 use super::SqliteRuntimeStore;
 use super::helpers::i64_value;
-use super::interaction_query_repository::{WORK_RUNNING, select_inbox};
+use super::interaction_query_repository::{
+    AGENT_DISPATCH_SOURCE_CHANNEL, WORK_RUNNING, select_inbox,
+};
 use super::interaction_repository_row::{
     read_record, runtime_error, serialize_error, storage_error,
 };
 use crate::ports::{
-    InteractionAppendReceipt, InteractionProcessingLease, InteractionStore, InteractionStoreError,
-    RuntimeStore,
+    DispatchTerminalKind, InteractionAppendReceipt, InteractionProcessingLease, InteractionStore,
+    InteractionStoreError, RuntimeStore,
 };
 use axon_domain::{InteractionId, InteractionRecord, InteractionStatus};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
@@ -244,6 +246,31 @@ impl InteractionStore for SqliteRuntimeStore {
             "failed",
             TERMINAL_INTERRUPTED,
         )
+    }
+
+    fn settle_dispatch(
+        &self,
+        interaction_id: &InteractionId,
+        terminal_kind: DispatchTerminalKind,
+        now_ms: u64,
+    ) -> Result<(), InteractionStoreError> {
+        self.initialize().map_err(runtime_error)?;
+        let now = i64_value(now_ms).map_err(runtime_error)?;
+        // 只认派发行的渠道：正常入站轮的终态在 work_item 上，这里绝不能替它改状态。
+        self.connection()
+            .map_err(runtime_error)?
+            .execute(
+                "UPDATE inbox SET terminal_kind=?2, updated_at_ms=?3 \
+                 WHERE interaction_id=?1 AND source_channel=?4",
+                params![
+                    interaction_id.as_str(),
+                    terminal_kind.as_str(),
+                    now,
+                    AGENT_DISPATCH_SOURCE_CHANNEL
+                ],
+            )
+            .map_err(storage_error)?;
+        Ok(())
     }
 }
 

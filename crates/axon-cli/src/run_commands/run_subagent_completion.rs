@@ -117,9 +117,18 @@ impl RunSubagentContinuationSink {
             .and_then(|root| self.store.get_session(&root).ok())
             .map(|record| record.cwd)
             .unwrap_or_default();
-        resolve_child_session(&self.config_path, &self.parent_session_id, &cwd, task_path)
-            .ok()
-            .map(|identities| identities.session_id)
+        match resolve_child_session(&self.config_path, &self.parent_session_id, &cwd, task_path) {
+            Ok(identities) => Some(identities.session_id),
+            Err(error) => {
+                // 登记失败只影响终态引用：消息仍在 mailbox 里可查，但必须留痕才能定位。
+                axon_logger::warning(&format!(
+                    "子代理终态引用未写入：根会话={}，任务路径={}，原因={error}",
+                    self.parent_session_id,
+                    task_path.as_str()
+                ));
+                None
+            }
+        }
     }
 }
 

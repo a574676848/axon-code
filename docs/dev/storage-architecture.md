@@ -251,7 +251,7 @@ SQLite 没有跨库事务，所以拆库不能按业务随意切，只能按**�
 | `daemon_instances` | `daemon_hosts` | `instance_id` | `(lease_expires_at_ms)` | 进程实例租约，fencing 的唯一锚点 |
 | `sessions` | `session_runtimes` | `session_id` | `(status, owner_instance_id, owner_generation)`、`(last_activity_at_ms, status)`、`(workspace_id, archived, sort_order)` | 稳定对话身份 + 当前运行实例。**不含 channel / destination**，见 §4.13 |
 | `session_metrics` | 新增（投影） | `session_id` | 主键即索引 | 会话累计：轮次、三类耗时、首字分布、token、作业计数。可由事件重放重建，见 §4.11 |
-| `inbox` | `jarvis_interactions` | `inbox_id` | `(channel, source_message_id)` 唯一、`(session_id, received_at_ms DESC, inbox_id DESC)` | 只读入站事实：来源、幂等键、内容、受众、回复路由。**不含状态机**，见 §4.14 |
+| `inbox` | `jarvis_interactions` | `inbox_id` | `(channel, source_message_id)` 唯一、`(session_id, received_at_ms DESC, inbox_id DESC)` | 只读入站事实：来源、幂等键、内容、受众、回复路由。**不含状态机**，见 §4.14。派发轮（`source_channel='agent'`）例外地在这里落 `terminal_kind`：它没有 work_item、拿不到 lease，终态只能直接写在入站行上，读侧状态表达式优先取该列 |
 | `work_items` | `jarvis_executions`（在途） | `work_id` | `(status, kind, available_at_ms)`、`(session_id, priority DESC, created_at_ms)`、`(dedupe_key)` 部分唯一 | 统一队列：turn / goal / cron / subagent。**一套 claim 与 lease** |
 | `work_item_history` | `jarvis_executions`（终态） | `work_id` | `(goal_id, finished_at_ms DESC)`、`(session_id, finished_at_ms DESC)` | 终态与重试历史，append-only |
 | `goals` | `jarvis_goals` | `goal_id` | `(status, updated_at_ms)`、`(scope_json, status, updated_at_ms)` | 目标权威状态 |
