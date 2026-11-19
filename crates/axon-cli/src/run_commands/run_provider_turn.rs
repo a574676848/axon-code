@@ -69,11 +69,18 @@ impl CliProviderTurnRunner {
     ) -> Result<ProviderTurnResult, TurnExecutionError> {
         let started_at_ms = crate::run_commands::run_execution::now_ms();
         if request.action_kind != PRIMARY_TURN_ACTION_KIND {
-            let task_path = axon_agent_runtime::AgentPath::parse(format!(
-                "/root/task-{}",
-                sanitize_agent_path_segment(&request.session_id)
-            ))
-            .map_err(|error| TurnExecutionError::permanent(format!("{error:?}")))?;
+            // 任务路径是后台执行的身份：拼不出来就没有可寻址的执行目标，整轮必须拒绝。
+            // 拒绝时把会话标识同时写进日志与失败文本，否则定位只能靠探针复现。
+            let task_path = background_task_path(&request.session_id).map_err(|error| {
+                axon_logger::error(&format!(
+                    "后台执行任务路径非法，整轮拒绝: session_id={}, action_kind={}, error={error:?}",
+                    request.session_id, request.action_kind
+                ));
+                TurnExecutionError::permanent(format!(
+                    "后台执行任务路径非法: session_id={}, error={error:?}",
+                    request.session_id
+                ))
+            })?;
             // 后台执行的逐字稿落在执行会话本身：宿主在 sink 上暴露的工厂会把
             // 派生子会话的事件重定向过去，界面因此用同一条会话管线就能读。
             let session_sinks = sink.and_then(TurnEventSink::subagent_session_sinks);
@@ -525,22 +532,21 @@ fn extract_wire_events(payload: &serde_json::Value) -> Result<Vec<WireEventEnvel
         .map_err(|error| format!("解析 Provider wireEvents 失败：{error}"))
 }
 
-fn sanitize_agent_path_segment(value: &str) -> String {
-    let sanitized = value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    if sanitized.is_empty() {
-        "task".to_owned()
-    } else {
-        sanitized
+/// 后台执行（目标与 cron 共用）的任务路径。
+///
+/// 会话标识是 Crockford Base32 的大写 ULID，而 `AgentPath` 的合法段只接受小写：这里只做
+/// 大小写归一，该映射是双射，不改变会话身份。空标识与其余字符一律直接判非法，不做
+/// 「非法字符折成 `-`」的有损折叠：路径段是子会话身份 `(root_session_id, agent_path)`
+/// 的一半，折叠会让两个不同标识收敛成同一条子会话。
+fn background_task_path(
+    session_id: &str,
+) -> axon_domain::AxonResult<axon_agent_runtime::AgentPath> {
+    if session_id.trim().is_empty() {
+        return Err(axon_domain::AxonError::runtime_invalid_state(
+            axon_agent_runtime::AGENT_CONTROL_REASON_INVALID_PATH,
+        ));
     }
+    axon_agent_runtime::AgentPath::parse(format!("/root/task-{}", session_id.to_ascii_lowercase()))
 }
 
 #[cfg(test)]
