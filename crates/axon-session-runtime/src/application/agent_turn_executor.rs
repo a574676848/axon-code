@@ -84,6 +84,47 @@ pub trait ProviderTurnRunner: Send + Sync {
     }
 }
 
+/// 把本轮的输入写成会话流的第一条用户消息。
+///
+/// 与主 turn 的 `publish_user_message`、子代理的 `subagent_user_message_event` 同一套帧：
+/// 会话从一条用户消息开始，界面不需要任何特殊起点逻辑。
+fn publish_turn_input(
+    sink: &dyn TurnEventSink,
+    action: &axon_session::SessionActionRecord,
+    content: &str,
+) -> Result<(), TurnExecutionError> {
+    use axon_protocol::wire::{
+        WireCorrelationId, WireEventEnvelope, WireEventKind, WireSchemaVersion, WireSessionRef,
+        WireUserMessage,
+    };
+    let action_id = action.action_id.as_str();
+    let recorded_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or_default();
+    let envelope = WireEventEnvelope {
+        schema_version: WireSchemaVersion::default(),
+        event_id: WireCorrelationId(format!("{action_id}:user")),
+        correlation_id: WireCorrelationId("user".to_owned()),
+        session: WireSessionRef {
+            session_id: action.session_id.as_str().to_owned(),
+            run_id: None,
+            parent_session_id: None,
+        },
+        sequence: 0,
+        recorded_at_ms,
+        kind: WireEventKind::UserMessage(WireUserMessage {
+            part_id: format!("user:{action_id}"),
+            message_id: format!("user-message:{action_id}"),
+            content: content.to_owned(),
+            local_files: Vec::new(),
+        }),
+    };
+    let event =
+        crate::wire_event_to_runtime_event(&envelope).map_err(TurnExecutionError::permanent)?;
+    sink.publish(&event).map_err(TurnExecutionError::permanent)
+}
+
 /// 把持久 Action 转换为 provider 输入并规范化事件输出。
 #[derive(Debug, Clone)]
 pub struct AgentTurnExecutor<R> {
@@ -115,6 +156,11 @@ impl<R: ProviderTurnRunner> AgentTurnExecutor<R> {
         let input = build_provider_turn_request(&action, &context, runtime_profile)
             .map_err(TurnExecutionError::permanent)?;
         let transport_context = input.transport_context.clone();
+        if let Some(sink) = sink {
+            // 会话的第一帧是它的输入事实：主 turn 与子代理都这样开场，后台执行同样如此，
+            // 否则前端只能给这类会话另写「没有首条消息」的渲染分支。
+            publish_turn_input(sink, &action, &input.prompt)?;
+        }
         let mut result = self.runner.run_streaming(input, sink)?;
         if action.goal_id.is_some()
             && result.continuation.is_none()

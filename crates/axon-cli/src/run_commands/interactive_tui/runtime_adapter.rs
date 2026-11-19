@@ -137,6 +137,11 @@ impl AgentTuiRuntimeAdapter for CliAgentTuiRuntimeAdapter {
     }
 
     fn load_initial_history(&self, request: &AgentTuiLaunchRequest) -> Option<AgentTuiRunOutput> {
+        // 冷启动回放只服务「明确接续同一条会话」的启动：默认启动的首轮会新建主会话，
+        // 把上一条会话的正文与读数铺在屏幕上，等于让用户以为那是本轮上下文。
+        if !request.overrides.continue_last && request.overrides.session.is_none() {
+            return None;
+        }
         let history =
             crate::run_commands::daemon_interaction_client::load_latest_completed_turn_for_workspace(
                 &request.cwd,
@@ -144,6 +149,9 @@ impl AgentTuiRuntimeAdapter for CliAgentTuiRuntimeAdapter {
                 super::TUI_CHANNEL,
             )
             .ok()??;
+        if !initial_history_applies(&request.overrides, &history.session_id) {
+            return None;
+        }
         Some(super::run_output_renderer::format_tui_initial_history(
             history.session_id,
             history.response,
@@ -602,6 +610,54 @@ mod tests {
                 .details
                 .iter()
                 .any(|detail| detail.contains("原因"))
+        );
+    }
+}
+
+/// 冷启动回放是否属于本次启动要接续的会话。
+///
+/// 默认启动的首轮会新建主会话，因此只有两种启动允许回放：显式 `--continue`
+/// （回放最近一轮，紧接着的提交会接续它），或显式指定会话且回放来源正是那一条。
+fn initial_history_applies(
+    overrides: &axon_tui_runtime::AgentTuiRunOverrides,
+    history_session_id: &str,
+) -> bool {
+    match overrides.session.as_deref() {
+        Some(target) => target == history_session_id,
+        None => overrides.continue_last,
+    }
+}
+
+#[cfg(test)]
+mod initial_history_tests {
+    use super::initial_history_applies;
+    use axon_tui_runtime::AgentTuiRunOverrides;
+
+    fn overrides(session: Option<&str>, continue_last: bool) -> AgentTuiRunOverrides {
+        AgentTuiRunOverrides {
+            session: session.map(str::to_owned),
+            continue_last,
+            ..AgentTuiRunOverrides::default()
+        }
+    }
+
+    #[test]
+    fn cold_start_replay_requires_an_explicit_continue_target() {
+        assert!(
+            !initial_history_applies(&overrides(None, false), "session-a"),
+            "默认启动首轮新建会话：不得回放上一条会话"
+        );
+        assert!(
+            initial_history_applies(&overrides(Some("session-a"), false), "session-a"),
+            "显式指定会话且与回放来源一致时允许回放"
+        );
+        assert!(
+            !initial_history_applies(&overrides(Some("session-b"), false), "session-a"),
+            "显式指定的会话不是回放来源时不得回放"
+        );
+        assert!(
+            initial_history_applies(&overrides(None, true), "session-a"),
+            "--continue 回放最近一轮，随后接续同一条会话"
         );
     }
 }

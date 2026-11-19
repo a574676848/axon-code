@@ -13,7 +13,34 @@ use super::{
 pub(crate) fn persist_turn_started(request: &RunRequest) -> Result<RunSessionRecord, String> {
     let record = RunSessionRecord::started(request);
     mirror_session_started(&request.config_path, &record)?;
+    // 会话行上的轮次标识就是「当前这一轮是谁」：主会话用它记入站事实，
+    // 目标执行记执行标识（由 worker 在领到动作时绑定），两者同一列语义。
+    if !request.interaction_id.is_empty() {
+        bind_turn_execution(
+            &record.session_id,
+            &request.interaction_id,
+            &request.config_path,
+        );
+    }
     Ok(record)
+}
+
+fn bind_turn_execution(session_id: &str, execution_id: &str, config_path: &std::path::Path) {
+    let Ok(session_id) = axon_domain::DaemonSessionId::new(session_id.to_owned()) else {
+        return;
+    };
+    let Ok(store) = super::run_turn_metrics::shared_store(config_path) else {
+        return;
+    };
+    use axon_session::RuntimeStore as _;
+    if let Err(error) =
+        store.bind_session_execution(&session_id, execution_id, super::run_execution::now_ms())
+    {
+        axon_logger::warning(&format!(
+            "turn execution binding skipped: session_id={}, error={error}",
+            session_id.as_str()
+        ));
+    }
 }
 
 /// 为运行侧自己派发的轮次补一条输入事实。

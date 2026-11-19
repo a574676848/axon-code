@@ -33,11 +33,28 @@ impl AgentTuiState {
     /// [`Self::take_pending_session_switch`] 后交给宿主读取，再走与冷启动同一条
     /// [`Self::apply_session_history`] 路径写进转录，不新增渲染分支。
     pub(super) fn begin_session_switch(&mut self, session_id: &str) {
-        self.header.overrides.session = Some(session_id.to_owned());
-        self.header.overrides.continue_last = false;
+        self.bind_session_identity(session_id);
         self.begin_resume_replay();
         self.push_replay_note(SESSION_SWITCH_VIEW_NOTE);
         self.bridge.pending_session_switch = Some(session_id.to_owned());
+    }
+
+    /// 把会话身份绑到目标会话，并清掉上一条会话的读数。
+    ///
+    /// 顶栏的「累计 / 上一轮 / 摘要 / 运行模型」都是**会话级**读数：身份换了而读数没换，
+    /// 界面就会把别人的数当成本会话的数。同一会话重复绑定（每轮都会带一次身份行）不重置，
+    /// 否则累计读数会被逐轮清零。
+    pub(in crate::r#loop::agent_tui) fn bind_session_identity(&mut self, session_id: &str) {
+        if self.header.overrides.session.as_deref() == Some(session_id) {
+            return;
+        }
+        self.header.overrides.session = Some(session_id.to_owned());
+        self.header.overrides.continue_last = false;
+        self.header.session_usage = AgentTuiTokenUsage::default();
+        self.header.last_turn_usage = AgentTuiTokenUsage::default();
+        self.header.session_summary = AgentTuiSessionSummary::default();
+        self.header.session_run_model = None;
+        self.bridge.session_generation = SessionGenerationLedger::default();
     }
 
     /// 取出待载入历史的会话 ID。

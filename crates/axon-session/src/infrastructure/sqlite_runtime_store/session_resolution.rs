@@ -308,6 +308,27 @@ impl SqliteRuntimeStore {
             .map_err(super::helpers::storage)?;
         Ok(())
     }
+    /// 把会话当前轮次标识绑定到这一枚执行标识（只作用于 worker 驱动的会话）。
+    pub(super) fn bind_session_execution_impl(
+        &self,
+        session_id: &DaemonSessionId,
+        execution_id: &str,
+        now_ms: u64,
+    ) -> Result<(), crate::ports::RuntimeStoreError> {
+        let connection = self.connection()?;
+        connection
+            .execute(
+                "UPDATE sessions SET execution_id=?2,last_activity_at_ms=?3,updated_at_ms=?3 \
+                 WHERE session_id=?1",
+                params![
+                    session_id.as_str(),
+                    execution_id,
+                    super::helpers::i64_value(now_ms)?
+                ],
+            )
+            .map_err(super::helpers::storage)?;
+        Ok(())
+    }
 }
 
 impl SqliteRuntimeStore {

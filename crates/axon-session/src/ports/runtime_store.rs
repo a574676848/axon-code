@@ -327,6 +327,16 @@ pub trait RuntimeStore:
         &self,
         session_id: &DaemonSessionId,
     ) -> Result<Option<String>, RuntimeStoreError>;
+    /// 把会话当前轮次标识绑定到这一枚执行标识。
+    ///
+    /// 与会话行的其它轮次事实同一个定义：`execution_id` 就是「这一轮是谁」。
+    /// 只对由 worker 驱动的会话（`goal` / `cron`）生效，主会话不使用这一列。
+    fn bind_session_execution(
+        &self,
+        session_id: &DaemonSessionId,
+        execution_id: &str,
+        now_ms: u64,
+    ) -> Result<(), RuntimeStoreError>;
     /// 记录该会话最近一轮实际使用的 provider 与模型。
     ///
     /// 会话清单要显示 `provider · model`，这份事实只在轮次收口时产生；它属于会话元数据，

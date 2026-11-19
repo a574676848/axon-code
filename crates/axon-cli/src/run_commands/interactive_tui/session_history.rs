@@ -21,12 +21,16 @@ pub(super) fn load_session_history(
     let detail = ThreadService::new(JsonlThreadEventStore)
         .read_thread(&root, session_id)
         .ok()?;
-    let output = session_history_output(&detail);
+    let output = session_history_output(&detail, session_id);
     (!output.is_empty()).then_some(output)
 }
 
 /// 把 thread 历史投影成 TUI 历史回放载荷。
-fn session_history_output(detail: &ThreadDetail) -> AgentTuiRunOutput {
+///
+/// 身份行带的是**用户选中的会话标识**，不是 thread 标识：界面与后续提交都在会话标识
+/// 这一套里，历史回放若回填 thread id，切换后顶栏会显示另一种标识、下一轮也会落到
+/// thread id 上。旧数据的 thread id 与 session id 并不相等，因此不能用它顶替。
+fn session_history_output(detail: &ThreadDetail, session_id: &str) -> AgentTuiRunOutput {
     let messages = detail
         .turns
         .iter()
@@ -38,7 +42,7 @@ fn session_history_output(detail: &ThreadDetail) -> AgentTuiRunOutput {
     }
     let mut output = AgentTuiRunOutput::empty();
     output.push(AgentTuiRunLine::Session(AgentTuiRunSessionInfo::new(
-        detail.thread.thread_id.clone(),
+        session_id.to_owned(),
         None,
     )));
     for message in messages {
@@ -114,7 +118,7 @@ mod tests {
             compacted_history: None,
         };
 
-        let output = super::session_history_output(&detail);
+        let output = super::session_history_output(&detail, "session-selected");
         let messages = output
             .lines()
             .iter()
@@ -139,6 +143,14 @@ mod tests {
             Some(true),
             "历史回放必须先带会话身份行"
         );
+        // 身份行必须是用户选中的会话标识，而不是 thread 标识（旧数据两者不同）。
+        assert_eq!(
+            output.lines().first().map(|line| match line {
+                AgentTuiRunLine::Session(info) => info.session_id.clone(),
+                _ => String::new(),
+            }),
+            Some("session-selected".to_owned())
+        );
     }
 
     #[test]
@@ -149,7 +161,7 @@ mod tests {
             compacted_history: None,
         };
 
-        assert!(super::session_history_output(&detail).is_empty());
+        assert!(super::session_history_output(&detail, "session-selected").is_empty());
     }
 
     fn thread_fixture() -> Thread {

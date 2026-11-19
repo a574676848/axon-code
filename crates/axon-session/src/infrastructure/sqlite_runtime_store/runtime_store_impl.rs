@@ -183,6 +183,15 @@ impl RuntimeStore for SqliteRuntimeStore {
         self.session_goal_id_impl(session_id)
     }
 
+    fn bind_session_execution(
+        &self,
+        session_id: &DaemonSessionId,
+        execution_id: &str,
+        now_ms: u64,
+    ) -> Result<(), RuntimeStoreError> {
+        self.bind_session_execution_impl(session_id, execution_id, now_ms)
+    }
+
     fn record_session_model(
         &self,
         session_id: &DaemonSessionId,

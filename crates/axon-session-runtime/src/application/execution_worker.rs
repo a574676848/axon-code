@@ -319,6 +319,9 @@ where
             SessionRuntimeStatus::Running,
             now_ms,
         )?;
+        // 会话行的轮次标识就是「这一轮是谁」：与主会话同一列语义，随轮次推进。
+        self.store
+            .bind_session_execution(&self.session_id, action.action_id.as_str(), now_ms)?;
         let goal_id = match action.goal_id.clone() {
             Some(goal_id) => goal_id,
             None => {

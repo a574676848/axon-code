@@ -315,8 +315,8 @@ impl AgentTuiState {
     fn apply_run_line(&mut self, line: AgentTuiRunLine) {
         match line {
             AgentTuiRunLine::Session(info) => {
-                self.header.overrides.session = Some(info.session_id.clone());
-                self.header.overrides.continue_last = false;
+                // 身份与读数绑在一起：换成另一条会话时，上一条会话的累计读数必须一起清掉。
+                self.bind_session_identity(&info.session_id);
                 self.clear_transient_runtime_state();
                 self.header.session_summary.record_session(
                     info.session_id,

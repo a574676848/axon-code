@@ -94,6 +94,12 @@ impl AgentTuiState {
         self.composer.selected_command_suggestion.hash(hasher);
         self.hash_composer_popup_signature(hasher);
         self.composer.bottom_views.top_kind().hash(hasher);
+        // 选中项是高亮与回车的共同依据：漏进签名时方向键只改内存，屏幕高亮不动。
+        self.composer
+            .bottom_views
+            .top_view()
+            .map_or(0, crate::r#loop::agent_tui::bottom_view::BottomView::selection_index)
+            .hash(hasher);
         self.composer
             .bottom_views
             .top_lifecycle()

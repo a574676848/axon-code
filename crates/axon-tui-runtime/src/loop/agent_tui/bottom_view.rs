@@ -85,6 +85,20 @@ impl BottomView {
         }
     }
 
+    /// 底部视图内部选中项的位置。
+    ///
+    /// 帧签名必须包含它：不包含时方向键只改了内存里的选中项，屏幕上的高亮仍是旧行，
+    /// 用户看到的与回车载入的会话会分叉。
+    pub(crate) fn selection_index(&self) -> usize {
+        match self {
+            Self::Question(view) => view.focused_option(),
+            Self::Selection(view) => view.selected(),
+            Self::Sessions(view) => view.selected(),
+            Self::SkillsToggle(view) => view.selected(),
+            Self::ToolOutputViewer(_) | Self::ShortcutHelp(_) => 0,
+        }
+    }
+
     pub(crate) fn kind(&self) -> DockKind {
         match self {
             Self::Question(view) => view.kind(),

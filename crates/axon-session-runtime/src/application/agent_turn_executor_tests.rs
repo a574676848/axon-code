@@ -450,11 +450,18 @@ fn streaming_execution_projects_canonical_terminal_events_before_turn_completed(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
+    // 会话的第一帧是本轮的输入事实：后台执行与会话视图共用同一条开场。
+    let input_event =
+        serde_json::from_str::<WireEventEnvelope>(&published[0]).expect("输入 wire 事件应可解析");
+    assert!(matches!(
+        input_event.kind,
+        axon_protocol::wire::WireEventKind::UserMessage(_)
+    ));
     assert_eq!(
-        published.first().map(String::as_str),
+        published.get(1).map(String::as_str),
         Some(LIVE_EVENT_PAYLOAD)
     );
-    let terminal_events = published[1..]
+    let terminal_events = published[2..]
         .iter()
         .map(|payload| {
             serde_json::from_str::<WireEventEnvelope>(payload).expect("终态 wire 事件应可解析")
