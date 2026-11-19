@@ -15,10 +15,10 @@ use axon_agent_runtime::{
 use axon_crypto::sha256_hex_prefix;
 use axon_daemon::{InteractionDelivery, PrimaryTurnIngress};
 use axon_domain::{
-    AudienceContext, InteractionRecord, InteractionSource, ReplyRoute,
+    AudienceContext, DaemonSessionId, InteractionRecord, InteractionSource, ReplyRoute,
     SHELL_JOB_WAKE_SOURCE_PREFIX, SYSTEM_SOURCE_CHANNEL, ScopeRef,
 };
-use axon_session::{RuntimeStore as _, SessionQueryStore, SessionSummaryRow, SqliteRuntimeStore};
+use axon_session::{SessionQueryStore, SessionSummaryRow, SqliteRuntimeStore};
 
 use super::run_execution::now_ms;
 use super::run_steer::{
@@ -37,7 +37,7 @@ const SHELL_JOB_WAKE_ROUTE_TTL_MS: u64 = 45 * 60 * 1_000;
 /// 同时保留的唤醒路由上限，超出后按最近活跃时间淘汰最旧者。
 const SHELL_JOB_WAKE_ROUTE_CAPACITY: usize = 256;
 
-/// 单个 `run_session_id` 在原回合结束后的跨 Turn 唤醒路由上下文。
+/// 单个会话在原回合结束后的跨 Turn 唤醒路由上下文。
 #[derive(Clone)]
 pub(crate) struct WakeRouteInfo {
     pub(crate) session_id: String,
@@ -55,7 +55,7 @@ struct WakeRouteEntry {
 
 /// 进程内临时后台 Shell Job 的跨 Turn 唤醒桥。
 ///
-/// 由 Daemon 组合根持有并在整个进程生命周期内复用：每个活跃的 `run_session_id`
+/// 由 Daemon 组合根持有并在整个进程生命周期内复用：每个活跃会话
 /// 只建立唯一一份持久订阅，不随单次 Provider turn 结束而退订，因此原回合完成后
 /// 才收口的后台 Shell 作业依然能唤醒同一车道上的下一轮响应。
 #[derive(Clone)]
@@ -85,7 +85,7 @@ impl ShellJobWakeBridge {
         }
     }
 
-    /// 为指定 `owner_id`（即 `run_session_id`）登记或刷新跨 Turn 唤醒路由，并确保只持有一份订阅。
+    /// 为指定 `owner_id`（即会话身份）登记或刷新跨 Turn 唤醒路由，并确保只持有一份订阅。
     ///
     /// 每次登记都会顺带回收过期与超额路由：路由持有通知订阅，而订阅句柄只有在路由被
     /// 移除时才会随 `Drop` 退订，不设上界就等于让通知总线上的订阅随运行时长单调增长。
@@ -141,7 +141,7 @@ impl ShellJobWakeBridge {
 
     /// 原回合收口后按需注销：本 owner 名下已无未终态作业时摘除路由与订阅。
     ///
-    /// 作业只在所属回合内提交，回合结束且作业全部收口后，这个 `run_session_id` 不会再
+    /// 作业只在所属回合内提交，回合结束且作业全部收口后，这个会话不会再
     /// 产生完成通知，订阅留着纯占内存。仍在后台跑的作业会保留路由，跨 Turn 终态照常唤醒。
     pub(crate) fn release_idle_turn(&self, owner_id: &str) {
         let trimmed_owner = owner_id.trim();
@@ -261,18 +261,10 @@ impl ShellJobWakeBridge {
         route_info: &WakeRouteInfo,
         batch: &CompletionNoticeBatch,
     ) -> Result<(), String> {
-        // 唤醒必须落回作业所属的稳定会话：`route_info.session_id` 是运行实例标识，不能当会话用。
-        let Some(session_id) = self
-            .store
-            .session_id_for_run(&route_info.session_id)
-            .map_err(|error| format!("解析唤醒目标会话失败: {error}"))?
-        else {
-            axon_logger::warning(&format!(
-                "后台 Shell 作业唤醒跳过未登记的运行窗口: run={}",
-                route_info.session_id
-            ));
-            return Ok(());
-        };
+        // 唤醒落回作业所属的会话本身：`route_info.session_id` 就是会话身份（ULID），
+        // 作业归属、订阅与 durable Interaction 用的是同一个串，不再做窗口反查。
+        let session_id = DaemonSessionId::new(route_info.session_id.clone())
+            .map_err(|error| format!("唤醒目标会话标识非法: {error:?}"))?;
         let Some((scope, audience, reply_route)) = self.session_route(session_id.as_str())? else {
             return Ok(());
         };

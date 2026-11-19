@@ -63,9 +63,8 @@ struct TestFixture {
     store: SqliteRuntimeStore,
     wakes: Arc<AtomicUsize>,
     bridge: ShellJobWakeBridge,
+    /// 会话身份：作业归属、唤醒路由与 durable Interaction 用同一个串。
     session_id: String,
-    /// 当前运行实例标识：唤醒路由按它登记，会话身份按 `session_id` 记账。
-    run_id: String,
 }
 
 impl TestFixture {
@@ -81,8 +80,10 @@ impl TestFixture {
             wake_counter.fetch_add(1, Ordering::AcqRel);
             Ok(())
         });
+        // 会话身份按 fixture 唯一：迟送登记与完成订阅都是进程级表，固定的 ID 会跨测试串台。
+        let session_id = axon_session::new_session_id().as_str().to_owned();
         let seed = InteractionRecord::new(
-            axon_domain::DaemonSessionId::new("01J8XQ7K3M4N5P6Q7R8S9T0V1W").expect("合法会话 ID"),
+            axon_domain::DaemonSessionId::new(session_id.clone()).expect("合法会话 ID"),
             InteractionId::new(format!("interaction-seed-{}", uuid::Uuid::new_v4())).expect("ID"),
             InteractionSource::new(channel, format!("msg-{}", uuid::Uuid::new_v4())).expect("来源"),
             ScopeRef::workspace(workspace_id).expect("作用域"),
@@ -92,16 +93,14 @@ impl TestFixture {
             1,
         )
         .expect("Interaction");
-        let session_id = axon_session::interaction_session_id(&seed);
         store.append(&seed).expect("种子入库");
-        let session = store
+        store
             .create_session(
                 &axon_domain::DaemonSessionId::new(session_id.clone()).expect("会话标识"),
                 ".",
                 1,
             )
             .expect("会话行");
-        let run_id = session.current_run_id.clone();
         let service = PrimaryTurnService::new(
             store.clone(),
             RecordingRunner::default(),
@@ -122,7 +121,6 @@ impl TestFixture {
             wakes,
             bridge,
             session_id,
-            run_id,
         }
     }
 
@@ -166,12 +164,12 @@ fn shell_notice(
 #[test]
 fn active_turn_receives_completion_notice_in_band_without_opening_wake_turn() {
     let fixture = TestFixture::new("webhook", "oc_chat_active", "ws-active");
-    let owner = format!("run-active-{}", uuid::Uuid::new_v4());
+    let owner = fixture.session_id.clone();
     let cancel_token = RunCancelToken::default();
     fixture.bridge.register_turn(
         &owner,
         WakeRouteInfo {
-            session_id: fixture.run_id.clone(),
+            session_id: fixture.session_id.clone(),
             model: Some("gpt-6-astra".to_owned()),
             reasoning_effort: Some("high".to_owned()),
             turn_cancel_token: cancel_token,
@@ -202,12 +200,12 @@ fn active_turn_receives_completion_notice_in_band_without_opening_wake_turn() {
 #[test]
 fn ended_turn_wakes_new_turn_preserving_model_and_effort_for_shell_job() {
     let fixture = TestFixture::new("webhook", "oc_chat_wake", "ws-wake");
-    let owner = format!("run-ended-{}", uuid::Uuid::new_v4());
+    let owner = fixture.session_id.clone();
     let cancel_token = RunCancelToken::default();
     fixture.bridge.register_turn(
         &owner,
         WakeRouteInfo {
-            session_id: fixture.run_id.clone(),
+            session_id: fixture.session_id.clone(),
             model: Some("gpt-6-astra".to_owned()),
             reasoning_effort: Some("high".to_owned()),
             turn_cancel_token: cancel_token,
@@ -217,7 +215,7 @@ fn ended_turn_wakes_new_turn_preserving_model_and_effort_for_shell_job() {
     fixture.bridge.register_turn(
         &owner,
         WakeRouteInfo {
-            session_id: fixture.run_id.clone(),
+            session_id: fixture.session_id.clone(),
             model: Some("gpt-6-astra".to_owned()),
             reasoning_effort: Some("high".to_owned()),
             turn_cancel_token: RunCancelToken::default(),
@@ -277,13 +275,13 @@ fn ended_turn_wakes_new_turn_preserving_model_and_effort_for_shell_job() {
 #[test]
 fn cancelled_turn_does_not_wake_but_subagent_and_shell_terminals_do() {
     let fixture = TestFixture::new("desktop", "workbench-1", "ws-cancel");
-    let owner = format!("run-cancel-{}", uuid::Uuid::new_v4());
+    let owner = fixture.session_id.clone();
     let cancel_token = RunCancelToken::default();
     cancel_token.cancel();
     fixture.bridge.register_turn(
         &owner,
         WakeRouteInfo {
-            session_id: fixture.run_id.clone(),
+            session_id: fixture.session_id.clone(),
             model: None,
             reasoning_effort: None,
             turn_cancel_token: cancel_token,
@@ -318,7 +316,7 @@ fn cancelled_turn_does_not_wake_but_subagent_and_shell_terminals_do() {
     fixture.bridge.register_turn(
         &owner,
         WakeRouteInfo {
-            session_id: fixture.run_id.clone(),
+            session_id: fixture.session_id.clone(),
             model: None,
             reasoning_effort: None,
             turn_cancel_token: RunCancelToken::default(),
@@ -337,11 +335,11 @@ fn cancelled_turn_does_not_wake_but_subagent_and_shell_terminals_do() {
 fn multi_notice_batch_respects_interaction_id_length_and_ignores_system_channel() {
     // 多条长 notice_key 合并成一批时，InteractionId 与 source_message_id 仍必须满足长度上界。
     let fixture = TestFixture::new("desktop", "workbench-multi", "ws-multi");
-    let owner = format!("run-multi-{}", uuid::Uuid::new_v4());
+    let owner = fixture.session_id.clone();
     fixture.bridge.register_turn(
         &owner,
         WakeRouteInfo {
-            session_id: fixture.run_id.clone(),
+            session_id: fixture.session_id.clone(),
             model: None,
             reasoning_effort: None,
             turn_cancel_token: RunCancelToken::default(),
@@ -363,11 +361,11 @@ fn multi_notice_batch_respects_interaction_id_length_and_ignores_system_channel(
 
     // system 渠道不得触发唤醒。
     let system_fixture = TestFixture::new(SYSTEM_SOURCE_CHANNEL, "internal", "ws-sys");
-    let sys_owner = format!("run-sys-{}", uuid::Uuid::new_v4());
+    let sys_owner = system_fixture.session_id.clone();
     system_fixture.bridge.register_turn(
         &sys_owner,
         WakeRouteInfo {
-            session_id: system_fixture.run_id.clone(),
+            session_id: system_fixture.session_id.clone(),
             model: None,
             reasoning_effort: None,
             turn_cancel_token: RunCancelToken::default(),
@@ -385,11 +383,11 @@ fn multi_notice_batch_respects_interaction_id_length_and_ignores_system_channel(
 #[test]
 fn releasing_an_idle_turn_drops_the_route_and_its_subscription() {
     let fixture = TestFixture::new("desktop", "workbench-release", "ws-release");
-    let owner = format!("run-release-{}", uuid::Uuid::new_v4());
+    let owner = fixture.session_id.clone();
     fixture.bridge.register_turn(
         &owner,
         WakeRouteInfo {
-            session_id: fixture.run_id.clone(),
+            session_id: fixture.session_id.clone(),
             model: None,
             reasoning_effort: None,
             turn_cancel_token: RunCancelToken::default(),
@@ -426,7 +424,7 @@ fn releasing_an_idle_turn_drops_the_route_and_its_subscription() {
     fixture.bridge.register_turn(
         &live_owner,
         WakeRouteInfo {
-            session_id: fixture.run_id.clone(),
+            session_id: fixture.session_id.clone(),
             model: None,
             reasoning_effort: None,
             turn_cancel_token: RunCancelToken::default(),

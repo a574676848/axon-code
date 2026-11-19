@@ -261,14 +261,14 @@ fn execute_provider_command(
     // 回合已收口：本 owner 名下若再无未终态后台作业，摘除跨 Turn 唤醒路由与通知订阅。
     // 仍在跑的作业会保留路由，终态照常唤醒下一轮。
     if let Some(bridge) = shell_job_wake {
-        bridge.release_idle_turn(&request.run_session_id);
+        bridge.release_idle_turn(&request.session_id);
     }
     Ok(result)
 }
 
 /// 为 Daemon 非系统主 turn 登记跨 Turn Shell 作业唤醒路由。
 ///
-/// 订阅键固定为 `request.run_session_id`（与作业 owner_id 同源），避免误用车道 ID
+/// 订阅键固定为 `request.session_id`（与作业 owner_id 同源），避免误用运行窗口 ID
 /// 导致跨 Turn 完成通知匹配不到作业归属；返回是否成功建立持久订阅，用于避免
 /// `run_failover` 再建第二份重复订阅。
 fn register_shell_job_wake(
@@ -303,7 +303,7 @@ fn register_shell_job_wake(
         return false;
     };
     wake_bridge.register_turn(
-        &request.run_session_id,
+        &request.session_id,
         WakeRouteInfo {
             session_id: session_id.to_owned(),
             model: command.model.clone(),
