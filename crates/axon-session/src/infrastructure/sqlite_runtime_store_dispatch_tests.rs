@@ -118,3 +118,42 @@ fn attributed_events_reach_the_owning_interaction_without_a_lease() {
         .expect("再读归属轮次事件");
     assert_eq!(framed.len(), 1, "无归属帧不得混入这一轮");
 }
+#[test]
+fn repeated_archive_history_does_not_duplicate_the_turn_row() {
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    let session = test_session("session-history-dup");
+    store.create_session(&session, ".", 1).expect("会话行");
+    let turn = interaction_record(
+        &session,
+        "interaction-history-dup",
+        "message-history-dup",
+        10,
+    );
+    store.append(&turn).expect("交互入库");
+    // 正常入站轮：work_item 已结算但没有终态列，终态只出现在归档历史里，且被归档了两次。
+    let batch = format!(
+        "INSERT INTO work_items(execution_id,session_id,attempt,priority,inbox_id,status,created_at_ms,updated_at_ms) \
+             VALUES('exec-1','{session}',1,0,'{interaction}','completed',10,10); \
+         INSERT INTO work_item_history(work_id,session_id,attempt,priority,inbox_id,terminal_kind,status,created_at_ms,updated_at_ms,finished_at_ms) \
+             VALUES('work-1','{session}',1,0,'{interaction}','understood','completed',10,10,11); \
+         INSERT INTO work_item_history(work_id,session_id,attempt,priority,inbox_id,terminal_kind,status,created_at_ms,updated_at_ms,finished_at_ms) \
+             VALUES('work-2','{session}',1,0,'{interaction}','understood','completed',12,12,13);",
+        session = session.as_str(),
+        interaction = turn.interaction_id.as_str(),
+    );
+    store
+        .with_read_connection(|connection| connection.execute_batch(&batch))
+        .expect("写入工作项与重复归档");
+
+    // 同一轮被归档两次时，索引页与轮次头都只能各出现一次。
+    let records = store
+        .interactions_for_session(session.as_str(), 10, None)
+        .expect("索引页");
+    assert_eq!(records.len(), 1, "重复归档不得让同一轮在索引页出现两次");
+    let heads = store
+        .interaction_turn_heads(session.as_str(), 10)
+        .expect("轮次头");
+    assert_eq!(heads.len(), 1);
+    assert_eq!(heads[0].status, InteractionStatus::Understood);
+}

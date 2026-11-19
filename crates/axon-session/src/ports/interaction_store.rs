@@ -221,6 +221,27 @@ pub trait InteractionQueryStore: Send + Sync {
         limit: u32,
         before: Option<&InteractionCursor>,
     ) -> Result<Vec<InteractionRecord>, InteractionStoreError>;
+
+    /// 只取轮次头：标识、派生状态与接收时间。
+    ///
+    /// 轮次头订阅按固定节拍比较「有没有新一轮、有没有收口」，只需要这三列；整条记录还
+    /// 带正文、附件与受众，按节拍解码它们是纯浪费。状态列与完整记录共用同一份表达式。
+    fn interaction_turn_heads(
+        &self,
+        session_id: &str,
+        limit: u32,
+    ) -> Result<Vec<InteractionTurnHead>, InteractionStoreError>;
+}
+
+/// 一条轮次头：订阅只关心「它还在跑吗、什么时候来的」。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InteractionTurnHead {
+    /// 轮次标识。
+    pub interaction_id: String,
+    /// 派生状态。
+    pub status: axon_domain::InteractionStatus,
+    /// 接收时间（毫秒）。
+    pub received_at_ms: u64,
 }
 
 /// 车道内 Interaction 的反向分页游标。

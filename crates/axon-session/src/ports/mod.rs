@@ -57,7 +57,7 @@ pub use health_store::{HealthStore, RuntimeHealthCounters};
 pub use ingress_cursor_store::SessionIngressCursorStore;
 pub use interaction_store::{
     DispatchTerminalKind, InteractionAppendReceipt, InteractionCursor, InteractionProcessingLease,
-    InteractionQueryStore, InteractionStore, InteractionStoreError,
+    InteractionQueryStore, InteractionStore, InteractionStoreError, InteractionTurnHead,
 };
 pub use lease_store::LeaseStore;
 pub use ledger_commit_store::{ExecutionSettlement, LedgerCommitError, LedgerCommitStore};

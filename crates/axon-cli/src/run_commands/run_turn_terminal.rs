@@ -256,7 +256,8 @@ fn settle_dispatch_terminal(request: &RunRequest, terminal: axon_session::Dispat
     let Ok(interaction_id) = axon_domain::InteractionId::new(request.interaction_id.clone()) else {
         return;
     };
-    let Ok(store) = super::run_agent_store::shared_runtime_store(&request.config_path) else {
+    // 用进程内缓存的 store：终态写入不必为了两条 UPDATE 重建连接与重跑建库检查。
+    let Ok(store) = super::run_turn_metrics::shared_store(&request.config_path) else {
         return;
     };
     use axon_session::InteractionStore as _;

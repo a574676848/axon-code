@@ -3,23 +3,38 @@
 //! 写入与状态机在 `interaction_repository`；这里只负责把两者 JOIN 起来读。
 
 use super::SqliteRuntimeStore;
-use super::interaction_repository_row::{read_record, runtime_error, storage_error};
-use crate::ports::{InteractionCursor, InteractionQueryStore, InteractionStoreError, RuntimeStore};
+use super::interaction_repository_row::{parse_status, read_record, runtime_error, storage_error};
+use crate::ports::{
+    InteractionCursor, InteractionQueryStore, InteractionStoreError, InteractionTurnHead,
+    RuntimeStore,
+};
 use axon_domain::{InteractionId, InteractionRecord};
 use rusqlite::{OptionalExtension, params};
 
-pub(super) const INBOX_COLUMNS: &str = "i.interaction_id,i.source_channel,i.source_message_id,i.scope_json,\
-i.audience_json,i.reply_route_json,i.content,\
-CASE WHEN i.terminal_kind IS NOT NULL THEN i.terminal_kind \
+/// 派生的交互状态表达式：读取侧只有这一处口径。
+///
+/// 终态列优先：派发轮没有 work_item，终态直接写在入站行上；正常入站轮仍按
+/// 「在跑优先、其次历史归档、再次工作项终态、最后已收到」的顺序派生。
+pub(super) const INBOX_STATE_EXPR: &str = "CASE WHEN i.terminal_kind IS NOT NULL THEN i.terminal_kind \
      WHEN w.status='running' THEN 'processing' \
      WHEN h.terminal_kind IS NOT NULL THEN h.terminal_kind \
      WHEN w.terminal_kind IS NOT NULL THEN w.terminal_kind \
-     ELSE 'received' END,\
-i.received_at_ms,i.attachments_json,i.model,i.reasoning_effort,i.client,i.session_id";
-/// 入站事实与工作项的连接：一个 inbox 行最多对应一个工作项。
+     ELSE 'received' END";
+
+/// 完整记录列：状态列复用同一份表达式，避免两处口径漂移。
+pub(super) fn inbox_columns() -> String {
+    format!(
+        "i.interaction_id,i.source_channel,i.source_message_id,i.scope_json,\
+i.audience_json,i.reply_route_json,i.content,{INBOX_STATE_EXPR},\
+i.received_at_ms,i.attachments_json,i.model,i.reasoning_effort,i.client,i.session_id"
+    )
+}
 pub(super) const INBOX_STATE_JOIN: &str = "FROM inbox AS i \
      LEFT JOIN work_items AS w ON w.inbox_id = i.interaction_id \
-     LEFT JOIN work_item_history AS h ON h.inbox_id = i.interaction_id";
+     LEFT JOIN work_item_history AS h ON h.inbox_id = i.interaction_id \
+         AND h.terminal_kind IS NOT NULL \
+         AND h.rowid = (SELECT MIN(h2.rowid) FROM work_item_history AS h2 \
+                        WHERE h2.inbox_id = i.interaction_id AND h2.terminal_kind IS NOT NULL)";
 /// 工作项的在途状态。
 pub(super) const WORK_RUNNING: &str = "running";
 pub(super) const SYSTEM_SOURCE_CHANNEL: &str = axon_domain::SYSTEM_SOURCE_CHANNEL;
@@ -27,10 +42,40 @@ pub(super) const SYSTEM_SOURCE_CHANNEL: &str = axon_domain::SYSTEM_SOURCE_CHANNE
 pub(super) const AGENT_DISPATCH_SOURCE_CHANNEL: &str = axon_domain::AGENT_DISPATCH_SOURCE_CHANNEL;
 
 pub(super) fn select_inbox(where_clause: &str) -> String {
-    format!("SELECT {INBOX_COLUMNS} {INBOX_STATE_JOIN} {where_clause}")
+    format!(
+        "SELECT {} {INBOX_STATE_JOIN} {where_clause}",
+        inbox_columns()
+    )
 }
 
 impl InteractionQueryStore for SqliteRuntimeStore {
+    fn interaction_turn_heads(
+        &self,
+        session_id: &str,
+        limit: u32,
+    ) -> Result<Vec<InteractionTurnHead>, InteractionStoreError> {
+        self.initialize().map_err(runtime_error)?;
+        let connection = self.connection().map_err(runtime_error)?;
+        let sql = format!(
+            "SELECT i.interaction_id,{INBOX_STATE_EXPR},i.received_at_ms {INBOX_STATE_JOIN} \
+             WHERE i.session_id=?1 ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT ?2"
+        );
+        let mut statement = connection.prepare(&sql).map_err(storage_error)?;
+        let rows = statement
+            .query_map(params![session_id, i64::from(limit)], |row| {
+                let interaction_id: String = row.get(0)?;
+                let raw_status: String = row.get(1)?;
+                let received_at_ms: i64 = row.get(2)?;
+                Ok(InteractionTurnHead {
+                    interaction_id,
+                    status: parse_status(&raw_status)?,
+                    received_at_ms: u64::try_from(received_at_ms).unwrap_or(0),
+                })
+            })
+            .map_err(storage_error)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(storage_error)
+    }
     fn get_interaction(
         &self,
         interaction_id: &InteractionId,

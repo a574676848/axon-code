@@ -69,21 +69,22 @@ where
 
     /// 读一次轮次清单并产出与上次的差异。
     fn poll(&mut self) -> Result<(), GatewayKernelError> {
+        // 只读轮次头三列：整条记录带正文与附件，按节拍解码它们是纯浪费。
         let rows = self
             .store
-            .interactions_for_session(self.session_id.as_str(), TURNS_WINDOW, None)
+            .interaction_turn_heads(self.session_id.as_str(), TURNS_WINDOW)
             .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
         let current: HashSet<&str> = rows
             .iter()
-            .map(|record| record.interaction_id.as_str())
+            .map(|head| head.interaction_id.as_str())
             .collect();
-        for record in &rows {
-            let interaction_id = record.interaction_id.as_str().to_owned();
-            let status = status_name(record.status);
+        for head in &rows {
+            let interaction_id = head.interaction_id.clone();
+            let status = status_name(head.status);
             let first_seen = self.known.insert(interaction_id.clone());
             if !self.primed {
                 // 基线：已有的轮次都算「已经知道」，已收口的直接记为已播报。
-                if is_terminal(&status) {
+                if is_terminal(status) {
                     self.settled.insert(interaction_id);
                 }
                 continue;
@@ -95,12 +96,12 @@ where
                     INTERACTION_CREATED_EVENT,
                     serde_json::json!({
                         "interactionId": interaction_id,
-                        "receivedAtMs": record.received_at_ms,
+                        "receivedAtMs": head.received_at_ms,
                         "status": status,
                     }),
                 ));
             }
-            if is_terminal(&status) && self.settled.insert(interaction_id.clone()) {
+            if is_terminal(status) && self.settled.insert(interaction_id.clone()) {
                 self.pending.push(self.event(
                     INTERACTION_SETTLED_EVENT,
                     serde_json::json!({
@@ -153,7 +154,17 @@ where
             if now >= deadline {
                 return Ok(None);
             }
-            std::thread::sleep(Duration::from_millis(50).min(deadline - now));
+            // 直接睡到下一次该查库的时刻：空闲订阅每秒醒 20 次没有意义，
+            // 睡到节拍点后唤醒次数与查库次数同阶。
+            let next_poll = self
+                .last_poll
+                .map(|last| last + TURNS_POLL_INTERVAL)
+                .unwrap_or(now);
+            let wake_at = next_poll.min(deadline);
+            let nap = wake_at.saturating_duration_since(now);
+            if !nap.is_zero() {
+                std::thread::sleep(nap);
+            }
         }
     }
 }
@@ -163,11 +174,15 @@ fn is_terminal(status: &str) -> bool {
     matches!(status, "understood" | "rejected" | "interrupted")
 }
 
-fn status_name(status: axon_domain::InteractionStatus) -> String {
-    serde_json::to_value(status)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_else(|| "unknown".to_owned())
+/// 状态取值与库里的派生列同名：协议帧直接用这一套词。
+fn status_name(status: axon_domain::InteractionStatus) -> &'static str {
+    match status {
+        axon_domain::InteractionStatus::Received => "received",
+        axon_domain::InteractionStatus::Processing => "processing",
+        axon_domain::InteractionStatus::Understood => "understood",
+        axon_domain::InteractionStatus::Rejected => "rejected",
+        axon_domain::InteractionStatus::Interrupted => "interrupted",
+    }
 }
 
 /// 订阅目标解析：`session-turns:` 前缀只认会话标识。

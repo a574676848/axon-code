@@ -73,7 +73,7 @@ pub(super) fn read_record(row: &Row<'_>) -> rusqlite::Result<InteractionRecord> 
     })
 }
 
-fn parse_status(value: &str) -> rusqlite::Result<InteractionStatus> {
+pub(super) fn parse_status(value: &str) -> rusqlite::Result<InteractionStatus> {
     match value {
         STATUS_RECEIVED => Ok(InteractionStatus::Received),
         STATUS_PROCESSING => Ok(InteractionStatus::Processing),

@@ -11,7 +11,8 @@ use axon_session::{InteractionStore as _, RuntimeStore as _, SqliteRuntimeStore}
 use super::{INTERACTION_CREATED_EVENT, INTERACTION_SETTLED_EVENT, SessionTurnsStream};
 use crate::infrastructure::gateway_kernel::{GatewayEvent, GatewayEventStream};
 
-const WAIT: Duration = Duration::from_secs(2);
+// 上限只用来兜住 CI 极端负载：正常路径在 1 到 2 个节拍内返回。
+const WAIT: Duration = Duration::from_secs(5);
 
 struct Fixture {
     store: SqliteRuntimeStore,
