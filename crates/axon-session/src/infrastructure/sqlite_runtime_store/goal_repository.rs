@@ -1,5 +1,6 @@
 //! `goals` 的 SQLite repository。
 
+use super::decode::decode_error;
 use super::{
     SqliteRuntimeStore,
     helpers::{i64_value, u64_value},
@@ -447,22 +448,22 @@ fn cursor_fingerprint(
 fn read_goal(row: &Row<'_>) -> rusqlite::Result<GoalRecord> {
     Ok(GoalRecord {
         goal_id: GoalId::new(row.get::<_, String>(0)?)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("goals", error))?,
         scope: serde_json::from_str(&row.get::<_, String>(1)?)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("goals", error))?,
         parent_goal_id: None,
         title: row.get(2)?,
         status: parse_status(&row.get::<_, String>(3)?)?,
         revision: u64_value(row.get(4)?)?,
         plan: serde_json::from_str::<GoalPlan>(&row.get::<_, String>(5)?)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("goals", error))?,
         acceptance: serde_json::from_str(&row.get::<_, String>(6)?)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("goals", error))?,
         progress: row
             .get::<_, Option<String>>(7)?
             .map(|value| serde_json::from_str(&value))
             .transpose()
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("goals", error))?,
         waiting_reason: row.get(8)?,
         next_step: row.get(9)?,
         priority: row.get(10)?,
@@ -484,7 +485,7 @@ fn parse_status(value: &str) -> rusqlite::Result<GoalStatus> {
         "completed" => Ok(GoalStatus::Completed),
         "failed" => Ok(GoalStatus::Failed),
         "cancelled" => Ok(GoalStatus::Cancelled),
-        _ => Err(rusqlite::Error::InvalidQuery),
+        _ => Err(decode_error("goals.status", value)),
     }
 }
 

@@ -12,6 +12,7 @@
 
 **性能是同一等约束**，不是上线后再调：单次事件写入 p99 < 5 ms（不含 fsync）、含 fsync < 20 ms；控制面事务毫秒级；桌面会话列表首屏一次索引查找，不扫事件；同等工作量下运行态目录小于现状的 10%。口径与测量方式见 §9。
 
+**错误口径：用户看语义，日志看原始。** 运行态库的失败不允许把底层库的文案直接抛给用户。行解码失败统一走 `decode::decode_error`（`crates/axon-session/src/infrastructure/sqlite_runtime_store/decode.rs`）：对外只给「本地运行态数据中存在无法识别的记录，可能由其他版本的程序写入」，字段名与原始取值写日志并留在 `Debug` 里。schema 版本不符同理，只给「重启 Axon 后台服务后重试」，期望/实际版本进日志。`tools/verify-architecture.py` 有一条门禁禁止运行态库里再出现 `rusqlite::Error::InvalidQuery`。
 **测试与验收不得污染生产环境**：单元测试只用 `axon-test-support` 的线程临时根；真机验收把 `AXON_RUNTIME_ROOT` 指向临时根，真实 `config.toml` 全程只读并前后核验 SHA-256。任何写入 `$HOME/.axon` 的测试都按缺陷处理。
 
 > 本文所有结论均来自当前仓库源码与运行态实测，关键位置标注 `文件:行号`。

@@ -449,6 +449,40 @@ def verify_session_numeric_digest(root: Path) -> None:
         )
 
 
+# 运行态库的行解码失败必须走 `decode::decode_error`：对外一句人话，原始字段与取值进日志。
+# `rusqlite::Error::InvalidQuery` 的 Display 是「Query is not read-only」，既误导又不可自证，
+# 一旦有新解码点写回它，用户又会看到一句与真实原因无关的话。
+ROW_DECODE_FORBIDDEN = "rusqlite::Error::InvalidQuery"
+ROW_DECODE_SCOPE = "crates/axon-session/src/infrastructure/sqlite_runtime_store"
+ROW_DECODE_EXEMPT = {"sqlite_runtime_store/decode.rs"}
+
+
+def verify_row_decode_errors(root: Path) -> None:
+    """运行态库行解码不得回通用 InvalidQuery。"""
+    directory = root / ROW_DECODE_SCOPE
+    if not directory.exists():
+        return
+    hits: list[str] = []
+    for path in sorted(directory.rglob("*.rs")):
+        if not path.is_file():
+            continue
+        relative = rel(root, path)
+        if any(relative.endswith(exempt) for exempt in ROW_DECODE_EXEMPT):
+            continue
+        text = path.read_text(encoding="utf-8")
+        for line_number, line in enumerate(text.splitlines(), 1):
+            stripped = line.lstrip()
+            if stripped.startswith(("//", "/*", "*")):
+                continue
+            if ROW_DECODE_FORBIDDEN in line:
+                hits.append(
+                    f"{relative}:{line_number}: 行解码失败必须走 decode_error，"
+                    "不得回 rusqlite::Error::InvalidQuery"
+                )
+    if hits:
+        fail("row decode errors must use decode::decode_error:\n" + "\n".join(hits))
+
+
 def verify_legacy_external_entries(root: Path) -> None:
     LEGACY_EXTERNAL_ENTRY_PATTERN = re.compile(
         r"\b(?:CreateSession|ResetSession|SubmitAction|ResumeSession|AgentTuiStartupAction|"
@@ -483,6 +517,7 @@ def main() -> int:
     verify_legacy_external_entries(root)
     verify_session_id_concatenation(root)
     verify_session_numeric_digest(root)
+    verify_row_decode_errors(root)
     print("TUI architecture layer verification OK")
     print("File size verification OK")
     print("Comment dash verification OK")
@@ -491,6 +526,7 @@ def main() -> int:
     print("Documentation verification OK")
     print("Session identity concatenation verification OK")
     print("Session identity numeric digest verification OK")
+    print("Row decode error verification OK")
     print("Architecture verification OK")
     return 0
 

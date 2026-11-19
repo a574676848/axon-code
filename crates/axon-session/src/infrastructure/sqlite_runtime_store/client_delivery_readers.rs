@@ -1,5 +1,6 @@
 //! Client delivery 查询结果映射。
 
+use super::super::decode::decode_error;
 use super::super::helpers::u64_value;
 use crate::ports::{
     ClientDeliveryStoreError, ClientInboxEntry, ClientPresenceRecord, CompletionDeliveryRecord,
@@ -41,8 +42,9 @@ pub(super) fn read_notification(row: &Row<'_>) -> rusqlite::Result<CompletionNot
         content: row.get(4)?,
         summary: row.get(5)?,
         result_ids: serde_json::from_str(&row.get::<_, String>(6)?)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
-        state: NotificationDeliveryState::parse(&state).ok_or(rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("client_delivery", error))?,
+        state: NotificationDeliveryState::parse(&state)
+            .ok_or_else(|| decode_error("client_delivery.state", &state))?,
         created_at_ms: u64_value(row.get(8)?)?,
         updated_at_ms: u64_value(row.get(9)?)?,
         expires_at_ms: u64_value(row.get(10)?)?,
@@ -55,7 +57,8 @@ pub(super) fn read_delivery(row: &Row<'_>) -> rusqlite::Result<CompletionDeliver
         notification_id: row.get(0)?,
         channel: row.get(1)?,
         destination: row.get(2)?,
-        state: NotificationDeliveryState::parse(&state).ok_or(rusqlite::Error::InvalidQuery)?,
+        state: NotificationDeliveryState::parse(&state)
+            .ok_or_else(|| decode_error("client_delivery.state", &state))?,
         created_at_ms: u64_value(row.get(4)?)?,
         updated_at_ms: u64_value(row.get(5)?)?,
     })

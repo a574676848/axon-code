@@ -1,5 +1,6 @@
 //! `work_items` 的 SQLite repository。
 
+use super::decode::decode_error;
 use super::{
     SqliteRuntimeStore,
     helpers::{i64_value, u64_value},
@@ -425,22 +426,27 @@ impl ExecutionStore for SqliteRuntimeStore {
 }
 
 fn read_execution(row: &Row<'_>) -> rusqlite::Result<ExecutionRecord> {
-    let execution_id =
-        ExecutionId::new(row.get::<_, String>(0)?).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let execution_id = ExecutionId::new(row.get::<_, String>(0)?)
+        .map_err(|error| decode_error("executions", error))?;
     // `work_items.goal_id` 对无目标执行（入站领取的会话轮次）是 NULL。写入侧对这类执行
     // 一律填自身 id，读取侧必须按同一口径还原：目标是「无」，归属标识就是执行自己。
     let goal_id = match row.get::<_, Option<String>>(1)? {
-        Some(value) => GoalId::new(value).map_err(|_| rusqlite::Error::InvalidQuery)?,
-        None => GoalId::new(execution_id.as_str()).map_err(|_| rusqlite::Error::InvalidQuery)?,
+        Some(value) => GoalId::new(value).map_err(|error| decode_error("executions", error))?,
+        None => {
+            GoalId::new(execution_id.as_str()).map_err(|error| decode_error("executions", error))?
+        }
     };
     Ok(ExecutionRecord {
         execution_id,
         goal_id,
         session_id: row
             .get::<_, Option<String>>(2)?
-            .map(|value| DaemonSessionId::new(value).map_err(|_| rusqlite::Error::InvalidQuery))
+            .map(|value| {
+                DaemonSessionId::new(value).map_err(|error| decode_error("executions", error))
+            })
             .transpose()?,
-        attempt: u32::try_from(row.get::<_, i64>(3)?).map_err(|_| rusqlite::Error::InvalidQuery)?,
+        attempt: u32::try_from(row.get::<_, i64>(3)?)
+            .map_err(|error| decode_error("executions", error))?,
         priority: row.get(4)?,
         dedupe_key: row.get(5)?,
         status: parse_status(&row.get::<_, String>(6)?)?,
@@ -448,13 +454,13 @@ fn read_execution(row: &Row<'_>) -> rusqlite::Result<ExecutionRecord> {
             .get::<_, Option<String>>(7)?
             .map(|value| serde_json::from_str(&value))
             .transpose()
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("executions", error))?,
         retry_at_ms: row.get::<_, Option<i64>>(8)?.map(u64_value).transpose()?,
         checkpoint: row
             .get::<_, Option<String>>(9)?
             .map(|value| serde_json::from_str(&value))
             .transpose()
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("executions", error))?,
         created_at_ms: u64_value(row.get(10)?)?,
         updated_at_ms: u64_value(row.get(11)?)?,
         payload_json: row.get(12)?,
@@ -470,7 +476,7 @@ fn parse_status(value: &str) -> rusqlite::Result<ExecutionStatus> {
         "completed" => Ok(ExecutionStatus::Completed),
         "failed" => Ok(ExecutionStatus::Failed),
         "cancelled" => Ok(ExecutionStatus::Cancelled),
-        _ => Err(rusqlite::Error::InvalidQuery),
+        _ => Err(decode_error("executions.status", value)),
     }
 }
 

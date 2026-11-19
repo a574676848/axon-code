@@ -30,6 +30,8 @@ mod commit_repository;
 mod connection_pool;
 #[path = "sqlite_runtime_store/decision_repository.rs"]
 mod decision_repository;
+/// 行解码错误的统一入口。
+mod decode;
 #[path = "sqlite_runtime_store/event_log_repository.rs"]
 mod event_log_repository;
 #[path = "sqlite_runtime_store/execution_repository.rs"]

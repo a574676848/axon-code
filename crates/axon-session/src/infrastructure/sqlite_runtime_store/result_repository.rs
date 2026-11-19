@@ -1,5 +1,6 @@
 //! `goal_results` 的 SQLite 查询与读取确认持久化。
 
+use super::decode::decode_error;
 use super::{SqliteRuntimeStore, helpers::u64_value};
 use crate::ports::{
     RESULT_ACK_SOURCE_EXPIRED, RESULT_ACK_SOURCE_READ, ResultStore, ResultStoreError, RuntimeStore,
@@ -85,17 +86,17 @@ impl ResultStore for SqliteRuntimeStore {
 fn read_result(row: &Row<'_>) -> rusqlite::Result<ResultRecord> {
     Ok(ResultRecord {
         result_id: ResultId::new(row.get::<_, String>(0)?)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("results", error))?,
         goal_id: GoalId::new(row.get::<_, String>(1)?)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("results", error))?,
         execution_id: ExecutionId::new(row.get::<_, String>(2)?)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("results", error))?,
         succeeded: row.get::<_, bool>(3)?,
         summary: row.get(4)?,
         receipt_refs: serde_json::from_str(&row.get::<_, String>(5)?)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("results", error))?,
         artifact_refs: serde_json::from_str(&row.get::<_, String>(6)?)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("results", error))?,
         error_kind: row
             .get::<_, Option<String>>(7)?
             .map(|value| match value.as_str() {
@@ -103,7 +104,7 @@ fn read_result(row: &Row<'_>) -> rusqlite::Result<ResultRecord> {
                 "permission" => Ok(ResultErrorKind::Permission),
                 "uncertain" => Ok(ResultErrorKind::Uncertain),
                 "runtime" => Ok(ResultErrorKind::Runtime),
-                _ => Err(rusqlite::Error::InvalidQuery),
+                _ => Err(decode_error("results.error_kind", value)),
             })
             .transpose()?,
         created_at_ms: u64_value(row.get(8)?)?,

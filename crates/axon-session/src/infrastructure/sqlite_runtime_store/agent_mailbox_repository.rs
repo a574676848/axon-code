@@ -10,6 +10,7 @@
 //! `ON CONFLICT DO NOTHING`，受影响行数为 `0`，调用方据此判断「本条是不是首次入队」。
 //! 状态迁移一律用条件 `UPDATE` 的受影响行数裁决，因此不存在重复迁移。
 
+use super::decode::decode_error;
 use super::{
     SqliteRuntimeStore,
     helpers::{i64_value, optional_u64, u64_value},
@@ -403,11 +404,13 @@ fn read_message(row: &Row<'_>) -> rusqlite::Result<AgentMailboxMessageRecord> {
         owner_id: row.get(2)?,
         author: row.get(3)?,
         recipient: row.get(4)?,
-        kind: AgentMailboxMessageKind::parse(&kind).ok_or(rusqlite::Error::InvalidQuery)?,
+        kind: AgentMailboxMessageKind::parse(&kind)
+            .ok_or_else(|| decode_error("agent_mailbox.kind", &kind))?,
         content: row.get(6)?,
         trigger_turn: row.get::<_, i64>(7)? != 0,
         continuation_id: row.get(8)?,
-        state: AgentMailboxMessageState::parse(&state).ok_or(rusqlite::Error::InvalidQuery)?,
+        state: AgentMailboxMessageState::parse(&state)
+            .ok_or_else(|| decode_error("agent_mailbox.state", &state))?,
         attempt_count: u32::try_from(u64_value(row.get(10)?)?).unwrap_or(u32::MAX),
         last_attempt_at_ms: optional_u64(row.get(11)?)?,
         retry_at_ms: optional_u64(row.get(12)?)?,

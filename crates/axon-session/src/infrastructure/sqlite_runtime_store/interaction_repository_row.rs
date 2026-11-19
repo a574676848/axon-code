@@ -3,7 +3,8 @@
 //! 列顺序是本模块与各条 SELECT 的共同契约：新增列必须同时出现在每条 SELECT 的
 //! 同一位置并在这里按同一位置读取，否则所有读取路径都会整体列错位。
 
-use super::helpers::{decode_error, u64_value};
+use super::decode::{decode_error, decode_json};
+use super::helpers::u64_value;
 use crate::ports::InteractionStoreError;
 use axon_domain::{
     DaemonSessionId, InteractionId, InteractionRecord, InteractionSource, InteractionStatus,
@@ -70,11 +71,6 @@ pub(super) fn read_record(row: &Row<'_>) -> rusqlite::Result<InteractionRecord> 
         status,
         received_at_ms: u64_value(row.get(8)?)?,
     })
-}
-
-/// 解析 JSON 列；失败时保留列名与解析错误进日志。
-fn decode_json<T: serde::de::DeserializeOwned>(raw: String, field: &str) -> rusqlite::Result<T> {
-    serde_json::from_str(&raw).map_err(|error| decode_error(field, error))
 }
 
 fn parse_status(value: &str) -> rusqlite::Result<InteractionStatus> {

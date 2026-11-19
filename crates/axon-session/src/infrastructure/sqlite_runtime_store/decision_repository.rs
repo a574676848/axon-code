@@ -1,5 +1,6 @@
 //! `decisions` 的 SQLite repository。
 
+use super::decode::decode_error;
 use super::{SqliteRuntimeStore, helpers::i64_value};
 use crate::ports::{DecisionStore, DecisionStoreError, RuntimeStore};
 use axon_domain::{DecisionEffect, DecisionRecord, ScopeRef};
@@ -88,20 +89,20 @@ impl DecisionStore for SqliteRuntimeStore {
 fn read_decision(row: &Row<'_>) -> rusqlite::Result<DecisionRecord> {
     Ok(DecisionRecord {
         decision_id: axon_domain::DecisionId::new(row.get::<_, String>(0)?)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("decisions", error))?,
         scope: serde_json::from_str(&row.get::<_, String>(1)?)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("decisions", error))?,
         actor: row.get(2)?,
         effect: parse_effect(&row.get::<_, String>(3)?)?,
         revision: u64::try_from(row.get::<_, i64>(4)?)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("decisions", error))?,
         expires_at_ms: row
             .get::<_, Option<i64>>(5)?
             .map(u64::try_from)
             .transpose()
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("decisions", error))?,
         created_at_ms: u64::try_from(row.get::<_, i64>(6)?)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("decisions", error))?,
     })
 }
 
@@ -118,7 +119,7 @@ fn parse_effect(value: &str) -> rusqlite::Result<DecisionEffect> {
         "allow" => Ok(DecisionEffect::Allow),
         "deny" => Ok(DecisionEffect::Deny),
         "revoke" => Ok(DecisionEffect::Revoke),
-        _ => Err(rusqlite::Error::InvalidQuery),
+        _ => Err(decode_error("decisions.effect", value)),
     }
 }
 

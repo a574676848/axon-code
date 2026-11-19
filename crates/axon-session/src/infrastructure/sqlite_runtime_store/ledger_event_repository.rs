@@ -1,5 +1,6 @@
 //! `ledger_events` 的 SQLite repository。
 
+use super::decode::decode_error;
 use super::{SqliteRuntimeStore, helpers::i64_value};
 use crate::ports::{LedgerEventStore, LedgerEventStoreError, RuntimeStore};
 use axon_domain::{GoalId, LedgerEvent, LedgerEventId};
@@ -126,18 +127,20 @@ impl LedgerEventStore for SqliteRuntimeStore {
 fn read_event(row: &Row<'_>) -> rusqlite::Result<LedgerEvent> {
     Ok(LedgerEvent {
         event_id: LedgerEventId::new(row.get::<_, String>(0)?)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("ledger_events", error))?,
         sequence: u64::try_from(row.get::<_, i64>(1)?)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("ledger_events", error))?,
         event_type: row.get(2)?,
         idempotency_key: row.get(3)?,
         cause_event_id: row
             .get::<_, Option<String>>(4)?
-            .map(|value| LedgerEventId::new(value).map_err(|_| rusqlite::Error::InvalidQuery))
+            .map(|value| {
+                LedgerEventId::new(value).map_err(|error| decode_error("ledger_events", error))
+            })
             .transpose()?,
         payload_json: row.get(5)?,
         occurred_at_ms: u64::try_from(row.get::<_, i64>(6)?)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("ledger_events", error))?,
     })
 }
 

@@ -1,5 +1,6 @@
 //! Workspace registry 的 SQLite repository。
 
+use super::decode::decode_error;
 use super::{SqliteRuntimeStore, helpers::i64_value};
 use crate::{
     WorkspaceRecord,
@@ -75,11 +76,12 @@ fn read_workspace(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkspaceRecord> 
         workspace_root: row.get(2)?,
         git_remote: row.get(3)?,
         default_branch: row.get(4)?,
-        aliases: serde_json::from_str(&aliases_json).map_err(|_| rusqlite::Error::InvalidQuery)?,
+        aliases: serde_json::from_str(&aliases_json)
+            .map_err(|error| decode_error("workspaces", error))?,
         memory_namespace: row.get(6)?,
         pinned: row.get(7)?,
         last_seen_at_ms: u64::try_from(last_seen_at_ms)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|error| decode_error("workspaces", error))?,
     })
 }
 

@@ -6,6 +6,7 @@
 //! **同一 continuation 最多产生一次有效执行**：产生侧靠幂等键唯一索引，
 //! 消费侧靠条件 `UPDATE` 的受影响行数。并发或重复消费拿到 `0` 行，必须放弃。
 
+use super::decode::decode_error;
 use super::{
     SqliteRuntimeStore,
     helpers::{i64_value, optional_u64, u64_value},
@@ -310,7 +311,8 @@ fn read_continuation(row: &Row<'_>) -> rusqlite::Result<AgentContinuationRecord>
         token_input: optional_u64(row.get(12)?)?,
         token_output: optional_u64(row.get(13)?)?,
         token_reasoning: optional_u64(row.get(14)?)?,
-        state: AgentContinuationState::parse(&state).ok_or(rusqlite::Error::InvalidQuery)?,
+        state: AgentContinuationState::parse(&state)
+            .ok_or_else(|| decode_error("continuations.state", &state))?,
         consumed_at_ms: optional_u64(row.get(16)?)?,
         consumed_by: row.get(17)?,
         attempt_count: u32::try_from(u64_value(row.get(18)?)?).unwrap_or(u32::MAX),
