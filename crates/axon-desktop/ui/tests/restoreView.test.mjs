@@ -102,3 +102,53 @@ test('no workspace or no session leaves the hero screen untouched', () => {
         null,
     );
 });
+
+test('a local draft is never restored: it has no content to return to', () => {
+    const workspaces = [
+        workspace('ws-home', 'C:/Users/Me/.axon', [
+            session('draft-a', 900, { draft: true, pending: true, interaction_count: 0 }),
+            session('live', 100),
+        ]),
+    ];
+    const target = resolveRestoreTarget(workspaces, { workspaceDir: 'C:/Users/Me/.axon' });
+    assert.equal(target?.session.id, 'live', '草稿比 live 更新，但它不是「上次看到哪」');
+});
+
+test('a session without a single turn is never restored', () => {
+    const workspaces = [
+        workspace('ws-home', 'C:/Users/Me/.axon', [
+            session('empty', 900, { interaction_count: 0 }),
+            session('live', 100),
+        ]),
+    ];
+    const target = resolveRestoreTarget(workspaces, { workspaceDir: 'C:/Users/Me/.axon' });
+    assert.equal(target?.session.id, 'live', '零轮会话被自动选中才会看起来像刚被创建出来');
+});
+
+test('a recorded session id pointing at an empty session falls back to real content', () => {
+    const workspaces = [
+        workspace('ws-home', 'C:/Users/Me/.axon', [
+            session('ghost', 900, { interaction_count: 0 }),
+            session('live', 100),
+        ]),
+    ];
+    const target = resolveRestoreTarget(workspaces, {
+        workspaceDir: 'C:/Users/Me/.axon',
+        sessionId: 'ghost',
+    });
+    assert.equal(target?.session.id, 'live', '记录里的标识失效时退回有内容的最近一条');
+});
+
+test('a workspace holding only empty sessions stays on the hero screen', () => {
+    const workspaces = [
+        workspace('ws-home', 'C:/Users/Me/.axon', [
+            session('ghost', 900, { interaction_count: 0 }),
+            session('draft-b', 950, { draft: true, pending: true, interaction_count: 0 }),
+        ]),
+    ];
+    assert.equal(
+        resolveRestoreTarget(workspaces, { workspaceDir: 'C:/Users/Me/.axon', sessionId: 'ghost' }),
+        null,
+        '没有任何有内容的会话时停在首屏，不硬造一条',
+    );
+});

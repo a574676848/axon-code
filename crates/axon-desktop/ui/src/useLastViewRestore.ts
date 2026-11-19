@@ -69,6 +69,7 @@ export function useLastViewRestore(input: {
       title: target.session.title,
       channel: target.session.channel,
       pending: target.session.pending,
+      draft: target.session.draft,
     });
   }, [selection, workspaces, onRestore]);
 

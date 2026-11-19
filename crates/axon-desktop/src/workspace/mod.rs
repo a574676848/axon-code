@@ -23,20 +23,29 @@ mod tests;
 use tauri::State;
 
 use crate::AppState;
+use crate::session_source::SessionSource;
 
-pub use model::{SessionDto, WorkspaceDto, strip_extended_prefix};
+pub use model::{SessionDto, WorkspaceDto, is_draft_id, strip_extended_prefix};
 pub(crate) use model::{generate_uuid, now_millis};
 pub use mutation::{
-    execute_session_create, execute_session_rename, execute_session_reorder,
-    execute_session_set_archived, execute_session_set_pinned, execute_workspace_add,
-    execute_workspace_remove,
+    SessionCreation, execute_session_create, execute_session_draft, execute_session_rename,
+    execute_session_reorder, execute_session_set_archived, execute_session_set_pinned,
+    execute_workspace_add, execute_workspace_remove,
 };
 pub use projection::workspace_list_at;
+
+/// 读取工作区与车道列表，顺带清理失效的待激活记录。
+///
+/// 清理是维护动作而不是列表前提：它读不到运行态清单时原样返回，列表照常渲染。
+pub fn workspace_list_maintained(source: &dyn SessionSource) -> Result<Vec<WorkspaceDto>, String> {
+    mutation::prune_pending_sessions(source);
+    workspace_list_at(source)
+}
 
 /// Tauri IPC 命令：获取真实工作区与车道列表。
 #[tauri::command(async)]
 pub fn workspace_list(state: State<'_, AppState>) -> Result<Vec<WorkspaceDto>, String> {
-    workspace_list_at(state.sessions.as_ref())
+    workspace_list_maintained(state.sessions.as_ref())
 }
 
 /// Tauri IPC 命令：登记一个真实存在的工作区目录。
@@ -57,12 +66,24 @@ pub fn workspace_remove(
     execute_workspace_remove(state.sessions.as_ref(), &id)
 }
 
-/// Tauri IPC 命令：在指定工作区内新建一条车道。
+/// Tauri IPC 命令：在指定工作区内登记一条本机草稿会话。
+///
+/// 草稿只存在于本地状态里，客户端不会因此向服务端建会话；首条消息提交前由
+/// [`session_create`] 把它物化成真实会话。
+#[tauri::command(async)]
+pub fn session_draft(
+    workspace_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<WorkspaceDto>, String> {
+    execute_session_draft(state.sessions.as_ref(), &workspace_id)
+}
+
+/// Tauri IPC 命令：把草稿会话物化成真实会话，返回服务端生成的标识。
 #[tauri::command(async)]
 pub fn session_create(
     workspace_id: String,
     state: State<'_, AppState>,
-) -> Result<Vec<WorkspaceDto>, String> {
+) -> Result<SessionCreation, String> {
     execute_session_create(state.sessions.as_ref(), &workspace_id)
 }
 

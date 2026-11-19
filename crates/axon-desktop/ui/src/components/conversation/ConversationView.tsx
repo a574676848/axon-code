@@ -636,7 +636,13 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 onModelChange={onModelChange}
                 onReasoningEffortChange={onReasoningEffortChange}
                 onSubmit={
-                  selection === null
+                  /*
+                   * 首屏与草稿走同一条路：都没有真实会话可以写。
+                   *
+                   * 草稿的目标是服务端还没见过的一条占位，直接提交只会换来「会话不存在」；
+                   * 因此先在提交前把它物化成真实会话（服务端生成标识），目标就绪后再发出这一轮。
+                   */
+                  selection === null || selection.draft === true
                     ? (text, attachments, structuredInput) => {
                         setFollowToken((value) => value + 1);
                         submitFromHero(

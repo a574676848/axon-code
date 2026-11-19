@@ -36,20 +36,33 @@ export function workspaceOfDir(
   return workspaces.find((workspace) => normalizePathForCompare(workspace.path) === target) ?? null;
 }
 
-/** 一条工作区里最近活动的会话（置顶与归档不影响这里：只回答「最后一条」）。 */
+/** 一条会话是否已经有内容：草稿与零轮会话都不是「上次看到哪」。 */
+function hasContent(session: SessionItem): boolean {
+  return session.draft !== true && session.pending !== true && session.interaction_count > 0;
+}
+
+/**
+ * 一条工作区里最近活动、且确实有内容的那条会话。
+ *
+ * 归档会话不参与：恢复的目标是「上次在读的东西」，不是回收站里的一条。
+ */
 function mostRecentSession(workspace: WorkspaceItem): SessionItem | null {
-  const live = workspace.sessions.filter((session) => !session.archived);
-  const pool = live.length > 0 ? live : workspace.sessions;
+  const pool = workspace.sessions.filter((session) => !session.archived && hasContent(session));
   if (pool.length === 0) return null;
-  return pool.reduce((newest, session) => (session.updated_at > newest.updated_at ? session : newest));
+  return pool.reduce((newest, session) =>
+    session.updated_at > newest.updated_at ? session : newest,
+  );
 }
 
 /**
  * 决定启动时展开哪个工作区、打开哪条会话。
  *
  * 优先级：上次打开的工作区 > 上次会话所在工作区 > 最近有活动的工作区 > 当前工作区 > 首个。
- * 会话：上次打开的会话 > 该工作区最近活动的会话。两者都没有时返回 `null`，
+ * 会话：上次打开的会话 > 该工作区最近活动的一条。两者都没有时返回 `null`，
  * 界面停在首屏而不是硬造一条会话。
+ *
+ * **只恢复有内容的会话**：本机草稿与「还没发出任何消息」的会话都不算「上次看到哪」，
+ * 恢复它们只会让一条空会话自动被选中、看起来像刚被创建出来。
  */
 export function resolveRestoreTarget(
   workspaces: WorkspaceItem[],
@@ -57,25 +70,31 @@ export function resolveRestoreTarget(
 ): { workspace: WorkspaceItem; session: SessionItem } | null {
   if (workspaces.length === 0) return null;
   const sessionId = (last.sessionId ?? '').trim();
-  const owning = sessionId === ''
-    ? null
-    : workspaces.find((workspace) => workspace.sessions.some((session) => session.id === sessionId)) ?? null;
-  const recent = [...workspaces]
-    .filter((workspace) => mostRecentSession(workspace) !== null)
-    .sort((left, right) => {
-      const leftAt = mostRecentSession(left)?.updated_at ?? 0;
-      const rightAt = mostRecentSession(right)?.updated_at ?? 0;
-      return rightAt - leftAt;
-    })[0] ?? null;
+  const owning =
+    sessionId === ''
+      ? null
+      : (workspaces.find((workspace) =>
+          workspace.sessions.some((session) => session.id === sessionId && hasContent(session)),
+        ) ?? null);
+  const recent =
+    [...workspaces]
+      .filter((workspace) => mostRecentSession(workspace) !== null)
+      .sort((left, right) => {
+        const leftAt = mostRecentSession(left)?.updated_at ?? 0;
+        const rightAt = mostRecentSession(right)?.updated_at ?? 0;
+        return rightAt - leftAt;
+      })[0] ?? null;
   const workspace =
     workspaceOfDir(workspaces, last.workspaceDir) ??
     owning ??
     recent ??
     workspaces.find((item) => item.active) ??
     workspaces[0];
-  const byId = sessionId === ''
-    ? null
-    : workspace.sessions.find((session) => session.id === sessionId) ?? null;
+  const byId =
+    sessionId === ''
+      ? null
+      : (workspace.sessions.find((session) => session.id === sessionId && hasContent(session)) ??
+        null);
   const session = byId ?? mostRecentSession(workspace);
   if (session === null) return null;
   return { workspace, session };

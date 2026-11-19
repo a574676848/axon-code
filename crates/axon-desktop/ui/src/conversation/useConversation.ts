@@ -340,6 +340,19 @@ export function useConversation(
 
     const sessionId = current.interactionId;
     // 车道标识不是 Interaction：正文由这一页里的每条 Interaction 的 durable 帧给出。
+    /*
+     * 本机草稿还没有任何服务端事实：一条历史都不该去读。
+     *
+     * 按「空会话已就绪」直接收口，界面因此不会为一条还不存在的会话报读取失败；
+     * 首条消息提交前会先把它物化成真实会话，历史再按真实标识读取。
+     */
+    if (current.draft === true) {
+      dispatch({ type: 'reset' });
+      setReplaying(false);
+      setOpening(false);
+      setSessionReadyId(sessionId);
+      return undefined;
+    }
     let cancelled = false;
     void paging
       .openSession(sessionId)

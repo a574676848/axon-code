@@ -264,6 +264,7 @@ export const App: React.FC = () => {
           title: session.title,
           channel: session.channel,
           pending: session.pending,
+          draft: session.draft,
         });
         return;
       }

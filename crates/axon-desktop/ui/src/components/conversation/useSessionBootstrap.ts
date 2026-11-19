@@ -75,10 +75,11 @@ export function useSessionBootstrap(options: SessionBootstrapOptions): SessionBo
     setCreating(true);
     setCreateError(null);
     try {
-      const list = await ipc.createSession(workspace.id);
-      const target = list.find((item) => item.id === workspace.id) ?? list[0];
-      const pending = (target?.sessions ?? []).filter((session) => session.pending);
-      const created = pending.sort((left, right) => right.created_at - left.created_at)[0];
+      // 物化：服务端在此刻生成会话标识，本条草稿同时被替换成真实会话。
+      const creation = await ipc.createSession(workspace.id);
+      const target =
+        creation.sessions.find((item) => item.id === workspace.id) ?? creation.sessions[0];
+      const created = target?.sessions.find((session) => session.id === creation.sessionId);
       if (created === undefined) {
         setCreateError('新建会话失败：后端未返回新车道');
         return null;
@@ -91,7 +92,8 @@ export function useSessionBootstrap(options: SessionBootstrapOptions): SessionBo
         title: created.title,
         channel: created.channel,
         // 刚建好的会话还没有内容：主区域继续留在首屏，直到第一条消息发出。
-        pending: true,
+        pending: created.pending,
+        draft: false,
       };
       onSelectSession(next);
       return next;

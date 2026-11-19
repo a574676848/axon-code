@@ -101,6 +101,7 @@ export function buildPaletteItems(sources: PaletteSources): CommandPaletteItem[]
           title: session.title,
           channel: session.channel,
           pending: session.pending,
+          draft: session.draft,
         });
         navigate('chat');
       },

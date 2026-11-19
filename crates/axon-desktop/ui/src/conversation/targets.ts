@@ -19,6 +19,8 @@ export interface SessionSelection {
   channel: string;
   /** 这条会话是否还没有任何内容（刚新建、尚未产生 Interaction）；首屏据此保留。 */
   pending?: boolean;
+  /** 这条会话是否只是本机草稿：服务端还没有它，首条消息提交前必须先物化。 */
+  draft?: boolean;
   fixedModel?: string | null;
   fixedReasoningEffort?: string | null;
 }
@@ -31,6 +33,8 @@ export type ConversationTarget =
       interactionId: string;
       /** 消息投递目标；车道专属，提交时必填。 */
       destination: string;
+      /** 本机草稿：还没有任何服务端事实，历史索引一次都不该去读。 */
+      draft?: boolean;
     }
   | { kind: 'session'; workspaceId: string; sessionId: string };
 
@@ -61,6 +65,7 @@ export function targetOfSession(selection: SessionSelection): ConversationTarget
     workspaceId: selection.workspaceId,
     interactionId: selection.sessionId,
     destination: selection.destination,
+    draft: selection.draft === true,
   };
 }
 

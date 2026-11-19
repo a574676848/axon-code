@@ -61,6 +61,8 @@ export interface SessionItem {
   archived: boolean;
   /** 是否为本应用新建、尚未产生 Interaction 的车道。 */
   pending: boolean;
+  /** 是否为本机草稿：只在桌面状态里，服务端从未登记过这条会话。 */
+  draft: boolean;
   /** 该车道当前是否有 Interaction 正在处理中。 */
   running: boolean;
   /** 待答提问数量。 */
@@ -674,6 +676,12 @@ export interface StagedAttachment {
   image: boolean;
   /** 字节数，用于展示体量。 */
   bytes: number;
+}
+
+/** 新建会话的落库结论：刷新后的目录树与服务端刚给出的会话标识。 */
+export interface SessionCreation {
+  sessions: WorkspaceItem[];
+  sessionId: string;
 }
 
 /*

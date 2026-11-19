@@ -6,11 +6,31 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::session_source::{SessionSource, WorkspaceEntry as RegistryWorkspace};
-use crate::state::{DesktopState, RegisteredWorkspace, directory_label, load_state, save_state};
+use serde::Serialize;
 
-use super::model::{WorkspaceDto, generate_uuid, normalize, now_millis};
+use crate::session_source::{SessionEntry, SessionSource, WorkspaceEntry as RegistryWorkspace};
+use crate::state::{
+    DesktopState, PendingSession, RegisteredWorkspace, directory_label, load_state, save_state,
+};
+
+use super::model::{WorkspaceDto, draft_id, generate_uuid, is_draft_id, normalize, now_millis};
 use super::projection::build_workspaces;
+
+/// 待激活会话的有效期：超过这个时长服务端还看不见，就按废弃记录处理。
+///
+/// 一条草稿只要没提交过消息，服务端就永远不会有它；留着既不会被打开，也不该在
+/// 状态文件里越积越多。
+const PENDING_TTL_MS: u64 = 24 * 60 * 60 * 1_000;
+
+/// 新建会话的落库结论：工作区快照与服务端刚给出的会话标识。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionCreation {
+    /// 刷新后的工作区与车道列表。
+    pub sessions: Vec<WorkspaceDto>,
+    /// 真实的会话标识；界面据此把目标切到这一条。
+    pub session_id: String,
+}
 
 /// 移除范围：同一条登记项的两个身份。
 ///
@@ -131,37 +151,77 @@ pub fn execute_workspace_remove(
     build_workspaces(source)
 }
 
-/// 在给定数据源上新建一条待激活车道。
+/// 新建一条本机草稿会话：只落本地占位，不向服务端登记任何东西。
 ///
-/// 车道的真实活动由运行时的 Interaction 产生，因此这里登记的是
-/// 本应用渠道下的待激活车道：身份立即确定并可见，首个 Interaction
-/// 落地后即转为活跃车道。
+/// 草稿的标识带 [`super::model::DRAFT_ID_PREFIX`] 前缀，服务端从未见过它；首条消息
+/// 提交前必须先物化成真实会话（[`execute_session_create`]）。这样点一次「新建会话」
+/// 不会在控制面留下一条永远没有内容、又删不掉的空间话。
 ///
-/// **同一工作区已有待激活车道时直接复用**，不再新建第二条：待激活车道是
-/// 「尚未开始的会话」，同一时刻每个工作区只需要一条；允许堆积只会留下一串
-/// 既没有内容、也没有意义可言的空会话。
-pub fn execute_session_create(
+/// **同一工作区同一时刻只需要一条草稿**：点两次不该留下两条空会话，因此已有草稿时
+/// 直接复用。
+pub fn execute_session_draft(
     source: &dyn SessionSource,
     workspace_id: &str,
 ) -> Result<Vec<WorkspaceDto>, String> {
-    // 只有「服务端还看不见」的待激活车道才值得复用；已经产生 Interaction 的车道
-    // 早就是真实车道了，再拿它当新建目标会让「新会话」什么都不做。
+    let workspace_id = workspace_id.trim();
+    if workspace_id.is_empty() {
+        return Err("工作区标识不能为空".to_string());
+    }
+    let mut desktop = load_state();
+    let occupied = desktop
+        .pending_sessions
+        .iter()
+        .any(|session| session.workspace_id == workspace_id && is_draft_id(&session.session_id));
+    if !occupied {
+        desktop.pending_sessions.push(PendingSession {
+            session_id: draft_id(),
+            workspace_id: workspace_id.to_string(),
+            destination: format!("workbench-{}", generate_uuid()),
+            created_at: now_millis(),
+        });
+        save_state(&desktop)?;
+    }
+    build_workspaces(source)
+}
+
+/// 物化一条会话：向服务端登记并返回真实标识。
+///
+/// 桌面新建的会话在本机先是草稿，首条消息提交前才来到这里：会话标识由
+/// `POST /api/v1/sessions` 生成（客户端不派生），本机把那条草稿记录换成这个标识，
+/// 回复目标与创建时间沿用草稿里的那一份，因此物化之后再提交仍然投得回去。
+pub fn execute_session_create(
+    source: &dyn SessionSource,
+    workspace_id: &str,
+) -> Result<SessionCreation, String> {
+    let workspace_id = workspace_id.trim();
+    if workspace_id.is_empty() {
+        return Err("工作区标识不能为空".to_string());
+    }
+    // 只有「服务端还看不见」的待激活记录才值得处理；已经产生 Interaction 的会话
+    // 早就是真实会话了，再拿它当新建目标会让「新会话」什么都不做。
     let observed: std::collections::HashSet<String> = source
         .sessions()?
         .into_iter()
         .map(|session| session.session_id)
         .collect();
-    // 复用判断先按当前快照早退一次：能复用就不必再向服务端派生车道标识。
+    // 已登记、只是服务端还没来得及列出的那条连同目标直接复用；草稿留到下面物化，
+    // 两种情况都不向服务端多建一条。
     let current = load_state();
-    let reusable = |desktop: &crate::state::DesktopState| {
-        desktop.pending_sessions.iter().any(|session| {
+    let reusable = current
+        .pending_sessions
+        .iter()
+        .find(|session| {
             session.workspace_id == workspace_id && !observed.contains(&session.session_id)
         })
-    };
-    if reusable(&current) {
-        return build_workspaces(source);
+        .cloned();
+    if let Some(record) = reusable
+        && !is_draft_id(&record.session_id)
+    {
+        return Ok(SessionCreation {
+            sessions: build_workspaces(source)?,
+            session_id: record.session_id,
+        });
     }
-    let destination = format!("workbench-{}", generate_uuid());
     // 会话标识由 `POST /api/v1/sessions` 生成，客户端不再本地派生。
     let session_id = source.create_session(workspace_id, None)?;
 
@@ -171,30 +231,95 @@ pub fn execute_session_create(
      * 「读 → 网络 → 写」会留下一个丢失更新的窗口：窗口里来自别处的状态变更
      * （另一个窗口、命令行工具、用户直接编辑）都会被这次写入静默覆盖掉
      * （实测过：恢复桌面状态的同时新建会话，会把刚恢复的内容冲掉）。
-     * 因此真正要写的那份状态必须在所有网络往返之后取，并在它上面再判一次复用。
+     * 因此真正要写的那份状态必须在所有网络往返之后取。
      */
     let mut desktop = load_state();
-    if reusable(&desktop) {
-        return build_workspaces(source);
-    }
-    // 顺手清掉已落地为真实车道的本地待激活记录，避免越积越多。
+    // 顺手清掉已落地为真实会话的本地待激活记录，避免越积越多。
     desktop
         .pending_sessions
         .retain(|session| !observed.contains(&session.session_id));
 
-    desktop
-        .pending_sessions
-        .retain(|session| session.session_id != session_id);
-    desktop.pending_sessions.push(crate::state::PendingSession {
-        session_id: session_id.clone(),
-        workspace_id: workspace_id.to_string(),
-        destination,
-        created_at: now_millis(),
+    let draft_at = desktop.pending_sessions.iter().position(|session| {
+        session.workspace_id == workspace_id && is_draft_id(&session.session_id)
     });
+    if let Some(index) = draft_at {
+        // 就地换成真实标识：回复目标与创建时间都是用户刚才那一手的延续。
+        let draft_id = desktop.pending_sessions[index].session_id.clone();
+        desktop.pending_sessions[index].session_id = session_id.clone();
+        // 用户在这条草稿上改过的名字与拖拽次序跟着标识一起搬过去：
+        // 否则物化之后重命名与排序会静默失效。
+        if let Some(title) = desktop.session_title.remove(&draft_id) {
+            desktop.session_title.insert(session_id.clone(), title);
+        }
+        for order in desktop.session_order.values_mut() {
+            for entry in order.iter_mut() {
+                if *entry == draft_id {
+                    *entry = session_id.clone();
+                }
+            }
+        }
+    } else {
+        desktop
+            .pending_sessions
+            .retain(|session| session.session_id != session_id);
+        desktop.pending_sessions.push(PendingSession {
+            session_id: session_id.clone(),
+            workspace_id: workspace_id.to_string(),
+            destination: format!("workbench-{}", generate_uuid()),
+            created_at: now_millis(),
+        });
+    }
     // 本地只保存用户重命名；未命名车道的占位文案在构建时回落。
     save_state(&desktop)?;
 
-    build_workspaces(source)
+    Ok(SessionCreation {
+        sessions: build_workspaces(source)?,
+        session_id,
+    })
+}
+
+/// 清理一条待激活记录是否已经失效。
+///
+/// 判据分两档：
+/// - 服务端已经看得见、且已经有内容：会话表面的渠道、目标与标题都由服务端给出，
+///   本地镜像不再承担任何职责；
+/// - 服务端一直看不见、且超过有效期：那是一条废弃的草稿（或更早版本留下的孤儿
+///   记录），留着既不会被打开，也只会在状态文件里越积越多。
+fn pending_is_stale(pending: &PendingSession, sessions: &[SessionEntry], now_ms: u64) -> bool {
+    match sessions
+        .iter()
+        .find(|session| session.session_id == pending.session_id)
+    {
+        Some(session) => session.interaction_count > 0,
+        None => now_ms.saturating_sub(pending.created_at) >= PENDING_TTL_MS,
+    }
+}
+
+/// 按运行态清单清理待激活记录；返回是否真的改动了状态。
+pub(super) fn prune_pending(
+    desktop: &mut DesktopState,
+    sessions: &[SessionEntry],
+    now_ms: u64,
+) -> bool {
+    let before = desktop.pending_sessions.len();
+    desktop
+        .pending_sessions
+        .retain(|pending| !pending_is_stale(pending, sessions, now_ms));
+    desktop.pending_sessions.len() != before
+}
+
+/// 读取运行态清单并落盘清理一次。
+///
+/// 清单读不到时原样返回、一条都不删：网关不可达不代表这些会话不存在，凭一次读失败
+/// 丢掉本地记录等于让用户下次打开时凭空少一条会话。
+pub(super) fn prune_pending_sessions(source: &dyn SessionSource) {
+    let Ok(sessions) = source.sessions() else {
+        return;
+    };
+    let mut desktop = load_state();
+    if prune_pending(&mut desktop, &sessions, now_millis()) {
+        let _ = save_state(&desktop);
+    }
 }
 
 /// 在给定数据源上设置或取消车道置顶。

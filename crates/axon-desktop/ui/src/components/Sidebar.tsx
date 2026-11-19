@@ -227,10 +227,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       const target = workspaceId ?? activeWorkspaceId;
       if (target.length === 0) return;
       try {
-        const list = await ipc.createSession(target);
+        // 新建只落一条本机草稿：服务端此刻还没有这条会话，首条消息提交时才登记。
+        const list = await ipc.createSessionDraft(target);
         const workspace = list.find((item) => item.id === target);
         const created = workspace?.sessions
-          .filter((session) => session.pending)
+          .filter((session) => session.draft)
           .sort((left, right) => right.created_at - left.created_at)[0];
         ingest(list);
         if (created !== undefined) {
@@ -244,6 +245,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             title: created.title,
             channel: created.channel,
             pending: created.pending,
+            draft: created.draft,
           });
         }
         setExpanded((current) => ({ ...current, [target]: true }));
@@ -640,6 +642,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   title: session.title,
                   channel: session.channel,
                   pending: session.pending,
+                  draft: session.draft,
                 });
               }
               onSelectTab('chat');

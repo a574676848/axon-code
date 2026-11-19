@@ -131,9 +131,10 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
             optional_string("apiKeyEnv"),
         )?)
         .map_err(stringify)?),
-        "workspace_list" => {
-            Ok(serde_json::to_value(workspace::workspace_list_at(&source)?).map_err(stringify)?)
-        }
+        "workspace_list" => Ok(serde_json::to_value(workspace::workspace_list_maintained(
+            &source,
+        )?)
+        .map_err(stringify)?),
         "workspace_add" => Ok(serde_json::to_value(workspace::execute_workspace_add(
             &source,
             &as_str("path")?,
@@ -142,6 +143,11 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
         "workspace_remove" => Ok(serde_json::to_value(workspace::execute_workspace_remove(
             &source,
             &as_str("id")?,
+        )?)
+        .map_err(stringify)?),
+        "session_draft" => Ok(serde_json::to_value(workspace::execute_session_draft(
+            &source,
+            &as_str("workspaceId")?,
         )?)
         .map_err(stringify)?),
         "session_create" => Ok(serde_json::to_value(workspace::execute_session_create(

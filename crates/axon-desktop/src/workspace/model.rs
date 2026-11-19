@@ -35,8 +35,28 @@ pub struct SessionDto {
     pub archived: bool,
     /// 是否尚未产生任何 Interaction 的新建车道。
     pub pending: bool,
+    /// 是否为本机草稿：只存在于桌面状态里，服务端从未登记过这条会话。
+    pub draft: bool,
     /// 该车道当前是否有 Interaction 正在处理中。
     pub running: bool,
+}
+
+/// 本机草稿标识前缀。
+///
+/// 服务端标识是 26 位 ULID，不可能以这个前缀开头，因此前缀判定既不会与真实会话
+/// 混淆，也不必给状态文件再加一个标志位。草稿只是界面上的占位：它出现时还没有
+/// 任何服务端事实，首条消息提交前必须先物化成真实会话。
+pub const DRAFT_ID_PREFIX: &str = "draft-";
+
+/// 是否为本机草稿标识。
+#[must_use]
+pub fn is_draft_id(id: &str) -> bool {
+    id.starts_with(DRAFT_ID_PREFIX)
+}
+
+/// 生成一条本机草稿标识；它永远不等于任何服务端会话标识。
+pub(crate) fn draft_id() -> String {
+    format!("{DRAFT_ID_PREFIX}{}", generate_uuid())
 }
 
 /// 工作区数据模型。

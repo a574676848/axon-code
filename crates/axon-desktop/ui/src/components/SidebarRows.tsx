@@ -334,11 +334,16 @@ export const SessionRow: React.FC<SessionRowProps> = ({
             style={{ width: SESSION_TRAILING_WIDTH }}
           >
             {/*
-             * 静止态显示时间与图钉，hover 时整块换成操作区：两态同宽，
+             * 静止态显示时间与图钉，hover 或键盘聚焦时整块换成操作区：两态同宽，
              * 因此标题宽度不随指针进出变化（这正是跑马灯误判溢出的来源）。
+             *
+             * 两个状态必须互斥：只让悬浮收起时间、却在聚焦时放出操作区，
+             * 会让「时间 + 三枚操作图标」同时挤进 88px 的槽里，时间被顶到标题上。
              */}
             <span
-              className={`inline-flex items-center gap-1.5 ${menuOpen ? 'hidden' : 'group-hover:hidden'}`}
+              className={`inline-flex items-center gap-1.5 ${
+                menuOpen ? 'hidden' : 'group-hover:hidden group-focus-within:hidden'
+              }`}
             >
               <span className="text-[11px] leading-4 tabular-nums text-text-tertiary">
                 {formatRelativeTime(session.updated_at)}
@@ -372,12 +377,15 @@ export const SessionRow: React.FC<SessionRowProps> = ({
                   </IconButton>
                 )}
               >
-                <MenuItem
-                  icon={session.pinned ? <PinFillIcon size={14} /> : <PinIcon size={14} />}
-                  onSelect={onTogglePin}
-                >
-                  {session.pinned ? '取消置顶' : '置顶会话'}
-                </MenuItem>
+                {/* 草稿还没有服务端会话：置顶与归档写不进去，因此这两项不出现。 */}
+                {!session.draft && (
+                  <MenuItem
+                    icon={session.pinned ? <PinFillIcon size={14} /> : <PinIcon size={14} />}
+                    onSelect={onTogglePin}
+                  >
+                    {session.pinned ? '取消置顶' : '置顶会话'}
+                  </MenuItem>
+                )}
                 <MenuItem
                   icon={<EditIcon size={14} />}
                   onSelect={() => {
@@ -387,30 +395,38 @@ export const SessionRow: React.FC<SessionRowProps> = ({
                 >
                   重命名
                 </MenuItem>
-                <MenuSeparator />
-                <MenuItem icon={<ArchiveIcon size={14} />} onSelect={onToggleArchive}>
-                  {session.archived ? '取消归档' : '归档会话'}
-                </MenuItem>
+                {!session.draft && (
+                  <>
+                    <MenuSeparator />
+                    <MenuItem icon={<ArchiveIcon size={14} />} onSelect={onToggleArchive}>
+                      {session.archived ? '取消归档' : '归档会话'}
+                    </MenuItem>
+                  </>
+                )}
               </Dropdown>
               {/* 悬浮即出现的快捷操作：归档与置顶，与既有工作台产品一致 */}
-              <IconButton
-                label={session.archived ? '取消归档' : '归档会话'}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onToggleArchive();
-                }}
-              >
-                <ArchiveIcon size={14} />
-              </IconButton>
-              <IconButton
-                label={session.pinned ? '取消置顶' : '置顶会话'}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onTogglePin();
-                }}
-              >
-                {session.pinned ? <PinFillIcon size={14} /> : <PinIcon size={14} />}
-              </IconButton>
+              {!session.draft && (
+                <>
+                  <IconButton
+                    label={session.archived ? '取消归档' : '归档会话'}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onToggleArchive();
+                    }}
+                  >
+                    <ArchiveIcon size={14} />
+                  </IconButton>
+                  <IconButton
+                    label={session.pinned ? '取消置顶' : '置顶会话'}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onTogglePin();
+                    }}
+                  >
+                    {session.pinned ? <PinFillIcon size={14} /> : <PinIcon size={14} />}
+                  </IconButton>
+                </>
+              )}
             </RowActions>
           </div>
         )}
@@ -502,7 +518,11 @@ export const WorkspaceRow: React.FC<WorkspaceRowProps> = ({
           className="shrink-0 flex items-center justify-end whitespace-nowrap"
           style={{ width: WORKSPACE_TRAILING_WIDTH }}
         >
-          <span className={`inline-flex items-center ${menuOpen ? 'hidden' : 'group-hover:hidden'}`}>
+          <span
+            className={`inline-flex items-center ${
+              menuOpen ? 'hidden' : 'group-hover:hidden group-focus-within:hidden'
+            }`}
+          >
             {workspace.active ? (
               <Text tone="tertiary" size="meta">
                 当前

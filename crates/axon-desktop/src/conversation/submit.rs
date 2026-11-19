@@ -6,6 +6,7 @@
 use crate::conversation::wire::{EVENTS_PATH, EventSubmission, SubmissionReceipt};
 use crate::gateway;
 use crate::session_source::DESKTOP_SESSION_CHANNEL;
+use crate::workspace::is_draft_id;
 
 /// 提交正文的字符上限。
 ///
@@ -49,6 +50,11 @@ pub fn submit_message(
     let destination = destination.trim();
     if destination.is_empty() {
         return Err("会话目标缺失，请先新建会话".to_string());
+    }
+    // 草稿只活在桌面本地状态里，服务端从未登记过它：拿它当会话标识去提交，
+    // 只会换来一条「会话不存在」。界面应当在提交前先把它物化成真实会话。
+    if session_id.map(is_draft_id).unwrap_or(false) {
+        return Err("这条会话还没有建立，请重新发送一次".to_string());
     }
 
     let now_ms = crate::workspace::now_millis();

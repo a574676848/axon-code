@@ -6,10 +6,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::model::{SessionDto, normalize};
-use super::mutation::RemovalScope;
+use super::model::{SessionDto, draft_id, is_draft_id, normalize};
+use super::mutation::{RemovalScope, prune_pending};
 use super::projection::apply_session_facts;
 use crate::session_menu::SessionMenuEntry;
+use crate::session_source::SessionEntry;
 use crate::session_source::WorkspaceEntry as RegistryWorkspace;
 use crate::state::{DesktopState, PendingSession, RegisteredWorkspace, directory_label};
 
@@ -141,6 +142,7 @@ fn session_dto(id: &str, title: &str, pinned: bool, archived: bool, updated_at: 
         pinned,
         archived,
         pending: false,
+        draft: false,
         running: false,
     }
 }
@@ -231,4 +233,94 @@ fn a_session_without_a_runtime_session_keeps_its_local_state() {
     assert!(!sessions[0].archived);
     assert_eq!(sessions[0].updated_at, 5);
     assert_eq!(sessions[0].title, "新会话");
+}
+
+/// 造一条运行态会话条目；只给与清理判定相关的字段。
+fn session_entry(id: &str, interaction_count: u64) -> SessionEntry {
+    SessionEntry {
+        session_id: id.to_string(),
+        workspace_id: "workspace-target".to_string(),
+        channel: "desktop".to_string(),
+        destination: "workbench-1".to_string(),
+        audience: "私密".to_string(),
+        title: String::new(),
+        interaction_count,
+        pending_question_count: 0,
+        running: false,
+        created_at_ms: 1,
+        updated_at_ms: 1,
+    }
+}
+
+/// 造一条待激活记录。
+fn pending_record(session_id: &str, created_at: u64) -> PendingSession {
+    PendingSession {
+        session_id: session_id.to_string(),
+        workspace_id: "workspace-target".to_string(),
+        destination: "workbench-1".to_string(),
+        created_at,
+    }
+}
+
+#[test]
+fn a_draft_that_never_reached_the_server_expires_after_its_ttl() {
+    // 草稿只要没提交过消息，服务端就永远不会有它：留着既不会被打开，
+    // 也只会让状态文件越积越多。
+    let ttl = 24 * 60 * 60 * 1_000;
+    let mut desktop = DesktopState {
+        pending_sessions: vec![
+            pending_record("draft-old", 0),
+            pending_record("draft-new", 100),
+        ],
+        ..DesktopState::default()
+    };
+
+    assert!(prune_pending(&mut desktop, &[], ttl + 50));
+    assert_eq!(desktop.pending_sessions.len(), 1);
+    assert_eq!(desktop.pending_sessions[0].session_id, "draft-new");
+}
+
+#[test]
+fn a_fresh_draft_survives_the_cleanup() {
+    let mut desktop = DesktopState {
+        pending_sessions: vec![pending_record("draft-fresh", 1_000)],
+        ..DesktopState::default()
+    };
+
+    assert!(!prune_pending(&mut desktop, &[], 2_000));
+    assert_eq!(desktop.pending_sessions.len(), 1);
+}
+
+#[test]
+fn a_materialized_session_keeps_its_local_target_until_it_has_content() {
+    // 物化之后、首条消息之前：服务端已经看得见这条会话，但渠道与回复目标还是空的，
+    // 本地记录是提交这一轮唯一的依据，因此不能清理。
+    let mut desktop = DesktopState {
+        pending_sessions: vec![pending_record("01M7QQ5VJQ", 0)],
+        ..DesktopState::default()
+    };
+
+    assert!(!prune_pending(
+        &mut desktop,
+        &[session_entry("01M7QQ5VJQ", 0)],
+        10_000_000
+    ));
+    assert_eq!(desktop.pending_sessions.len(), 1);
+
+    // 有了内容之后，会话表面事实由服务端给出，本地镜像退场。
+    assert!(prune_pending(
+        &mut desktop,
+        &[session_entry("01M7QQ5VJQ", 1)],
+        10_000_000
+    ));
+    assert!(desktop.pending_sessions.is_empty());
+}
+
+#[test]
+fn draft_ids_never_collide_with_server_identities() {
+    let first = draft_id();
+    assert!(is_draft_id(&first));
+    assert_ne!(first, draft_id(), "每一条草稿都必须是独立标识");
+    // 服务端标识是 26 位 ULID：既不带前缀，也不会被判成本机草稿。
+    assert!(!is_draft_id("01M7RQ6K658M5BCYXFKJN3FM91"));
 }

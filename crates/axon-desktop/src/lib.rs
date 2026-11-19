@@ -149,8 +149,8 @@ use voice::{
 };
 use voice_permission::{voice_microphone_status, voice_open_microphone_settings};
 use workspace::{
-    session_create, session_rename, session_reorder, session_set_archived, session_set_pinned,
-    workspace_add, workspace_list, workspace_remove,
+    session_create, session_draft, session_rename, session_reorder, session_set_archived,
+    session_set_pinned, workspace_add, workspace_list, workspace_remove,
 };
 use workspace_apps::{workspace_applications, workspace_open_with};
 use workspace_files::{
@@ -338,6 +338,7 @@ pub fn run() {
             workspace_add,
             workspace_remove,
             pick_directory,
+            session_draft,
             session_create,
             session_set_pinned,
             session_set_archived,

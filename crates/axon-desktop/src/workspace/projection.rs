@@ -10,7 +10,7 @@ use crate::session_menu::SessionMenuEntry;
 use crate::session_source::{DESKTOP_SESSION_CHANNEL, SessionSource};
 use crate::state::{directory_label, load_state};
 
-use super::model::{SessionDto, WorkspaceDto, normalize, runtime_workspace_dir};
+use super::model::{SessionDto, WorkspaceDto, is_draft_id, normalize, runtime_workspace_dir};
 
 /// 工作区在界面上的登记项。
 struct WorkspaceEntry {
@@ -160,6 +160,18 @@ pub(super) fn build_workspaces(source: &dyn SessionSource) -> Result<Vec<Workspa
      */
     let facts = crate::session_menu::list(None, true).unwrap_or_default();
 
+    /*
+     * 本地待激活记录按标识索引一份：服务端已经看得见的那条只用来补字段。
+     *
+     * 会话表面的渠道与回复目标取自首条入站，因此刚登记、还没有消息的会话在服务端
+     * 这两项是空的；本地记录里的那一份正是它此刻唯一的来源，提交首条消息要用它。
+     */
+    let supplements: HashMap<&str, &crate::state::PendingSession> = state
+        .pending_sessions
+        .iter()
+        .map(|pending| (pending.session_id.as_str(), pending))
+        .collect();
+
     // 车道先按 workspace_id 归堆；未登记工作区的车道单独兜底，绝不静默丢弃。
     let mut buckets: HashMap<String, Vec<SessionDto>> = HashMap::new();
     let mut observed: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -183,6 +195,19 @@ pub(super) fn build_workspaces(source: &dyn SessionSource) -> Result<Vec<Workspa
             title
         };
         observed.insert(session.session_id.clone());
+        let supplement = supplements.get(session.session_id.as_str()).copied();
+        let channel = if session.channel.trim().is_empty() {
+            DESKTOP_SESSION_CHANNEL.to_string()
+        } else {
+            session.channel
+        };
+        let destination = if session.destination.trim().is_empty() {
+            supplement
+                .map(|pending| pending.destination.clone())
+                .unwrap_or_default()
+        } else {
+            session.destination
+        };
         buckets.entry(workspace_id).or_default().push(SessionDto {
             pinned: state
                 .session_pinned
@@ -192,17 +217,20 @@ pub(super) fn build_workspaces(source: &dyn SessionSource) -> Result<Vec<Workspa
                 .session_archived
                 .iter()
                 .any(|id| id == &session.session_id),
+            interaction_count: session.interaction_count,
             id: session.session_id,
             title,
-            channel: session.channel,
-            destination: session.destination,
+            channel,
+            destination,
             audience: session.audience,
-            interaction_count: session.interaction_count,
             // 待答计数由服务端按库里的问答记录聚合；字段缺失时按无待答处理。
             pending_question_count: session.pending_question_count,
             created_at: session.created_at_ms,
             updated_at: session.updated_at_ms,
-            pending: false,
+            // 「待激活」按内容判定：还没有任何一轮的会话都是尚未开始的会话，
+            // 与它是否已在服务端登记无关。侧栏据此只留当前那一条，空会话不再长期占位。
+            pending: session.interaction_count == 0,
+            draft: false,
             running: session.running,
         });
     }
@@ -236,6 +264,7 @@ pub(super) fn build_workspaces(source: &dyn SessionSource) -> Result<Vec<Workspa
                 created_at: pending.created_at,
                 updated_at: pending.created_at,
                 pending: true,
+                draft: is_draft_id(&pending.session_id),
                 running: false,
             });
     }
