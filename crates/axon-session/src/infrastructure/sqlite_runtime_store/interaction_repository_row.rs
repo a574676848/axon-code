@@ -21,6 +21,13 @@ pub(super) const STATUS_REJECTED: &str = "rejected";
 /// 进程中断后无法继续。
 pub(super) const STATUS_INTERRUPTED: &str = "interrupted";
 
+/// 队列口径的正常收口：账本结算把工作项写成 `completed`。
+const STATUS_COMPLETED: &str = "completed";
+/// 队列口径的被取消：取消路径把工作项写成 `cancelled`。
+const STATUS_CANCELLED: &str = "cancelled";
+/// 队列口径的失败：执行失败路径把工作项写成 `failed`。
+const STATUS_FAILED: &str = "failed";
+
 /// 按 SELECT 的固定列序还原一条 Interaction。
 pub(super) fn read_record(row: &Row<'_>) -> rusqlite::Result<InteractionRecord> {
     let interaction_id =
@@ -66,12 +73,36 @@ fn parse_status(value: &str) -> rusqlite::Result<InteractionStatus> {
     match value {
         STATUS_RECEIVED => Ok(InteractionStatus::Received),
         STATUS_PROCESSING => Ok(InteractionStatus::Processing),
-        STATUS_UNDERSTOOD => Ok(InteractionStatus::Understood),
+        // 派生列同时承载两套词汇：结算写入的 Interaction 口径，与历史表由
+        // `COALESCE(terminal_kind,status)` 带出来的队列口径。后者漏认一个词，
+        // 含该轮的整条车道历史就整体读不出来。
+        STATUS_UNDERSTOOD | STATUS_COMPLETED => Ok(InteractionStatus::Understood),
         STATUS_REJECTED => Ok(InteractionStatus::Rejected),
-        STATUS_INTERRUPTED => Ok(InteractionStatus::Interrupted),
-        _ => Err(rusqlite::Error::InvalidQuery),
+        // 失败与取消在 Interaction 口径下都表示本轮没有正常收口。
+        STATUS_INTERRUPTED | STATUS_FAILED | STATUS_CANCELLED => Ok(InteractionStatus::Interrupted),
+        _ => Err(unknown_status(value)),
     }
 }
+
+/// 派生列出现词汇表之外的取值。
+///
+/// 行解码失败过去一律回 `rusqlite::Error::InvalidQuery`，它的 Display 是
+/// 「Query is not read-only」，与真正的原因（状态列里有个陌生词）毫无关系，只能靠猜。
+/// 把实际取值带出来，错误信息才自证。
+fn unknown_status(value: &str) -> rusqlite::Error {
+    rusqlite::Error::ToSqlConversionFailure(Box::new(UnknownInteractionStatus(value.to_owned())))
+}
+
+#[derive(Debug)]
+struct UnknownInteractionStatus(String);
+
+impl std::fmt::Display for UnknownInteractionStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "无法识别的 Interaction 状态：{}", self.0)
+    }
+}
+
+impl std::error::Error for UnknownInteractionStatus {}
 
 pub(super) fn runtime_error(error: impl std::fmt::Display) -> InteractionStoreError {
     InteractionStoreError::Storage(error.to_string())
