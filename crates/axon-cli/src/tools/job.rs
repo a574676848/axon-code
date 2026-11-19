@@ -2,7 +2,7 @@
 //!
 //! 后台作业与 Shell 会话是两条**独立通道**：作业注册表在 `JobRuntime` 里，
 //! 因此 `session_id` 永远不会被这里的两个工具接受，`job_id` 也永远不会被
-//! `write_stdin` 接受。owner 语义与 shell 工具同源（`thread_session_id`），
+//! `write_stdin` 接受。owner 语义与 shell 工具同源（`session_id`），
 //! 作业的可见范围因此与发起它的 Agent run 完全一致。
 
 use axon_agent_runtime::{
@@ -42,7 +42,7 @@ pub(crate) fn execute_job_output(
     };
     // 第二道防线：刚启动运行（耗时低于上界）且仍在 Running 的后台任务，严禁前台阻塞等待。
     let requested_yield_ms = args.yield_time_ms.unwrap_or(0);
-    if let Some(tail) = JobRuntime::global().tail_owned(args.job_id, &context.thread_session_id)
+    if let Some(tail) = JobRuntime::global().tail_owned(args.job_id, &context.session_id)
         && tail.status == JobStatus::Running
         && requested_yield_ms > 0
         && tail.elapsed_ms < JOB_TOOL_MAX_YIELD_TIME_MS
@@ -62,7 +62,7 @@ pub(crate) fn execute_job_output(
         .map(|token| &**token as &dyn Fn() -> bool);
     match JobRuntime::global().read_until_cancelled(
         args.job_id,
-        &context.thread_session_id,
+        &context.session_id,
         args.yield_time_ms,
         cancelled,
     ) {
@@ -84,7 +84,7 @@ pub(crate) fn execute_job_kill(
         Ok(args) => args,
         Err(message) => return failed_tool_input_receipt(tool_call, message),
     };
-    match JobRuntime::global().kill(args.job_id, &context.thread_session_id) {
+    match JobRuntime::global().kill(args.job_id, &context.session_id) {
         Ok(status) => tool_receipt_from_runtime(agent_run_job_kill_tool_receipt(
             tool_call,
             args.job_id,

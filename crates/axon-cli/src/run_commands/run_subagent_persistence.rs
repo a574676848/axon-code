@@ -232,7 +232,7 @@ pub(in crate::run_commands) fn persist_child_turn_terminal(
     });
     if let Err(error) = mirror_session_terminal(
         &request.config_path,
-        &request.session_id,
+        &request.run_session_id,
         status,
         failure.as_ref(),
     ) {

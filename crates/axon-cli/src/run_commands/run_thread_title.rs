@@ -43,7 +43,7 @@ pub(super) fn mirror_thread_title(
     ThreadService::new(JsonlThreadEventStore).name_thread(
         &root,
         NameThreadCommand {
-            thread_id: record.session_id.clone(),
+            thread_id: record.thread_id.clone(),
             recorded_at_ms: now_ms(),
             name: Some(title.to_owned()),
         },

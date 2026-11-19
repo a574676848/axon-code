@@ -147,7 +147,7 @@ pub(super) fn execute_get_context_remaining(
         snapshots
             .lock()
             .ok()
-            .and_then(|snapshots| snapshots.get(&context.thread_session_id).cloned())
+            .and_then(|snapshots| snapshots.get(&context.session_id).cloned())
     }) else {
         return failed_tool_receipt(
             tool_call,
@@ -475,7 +475,7 @@ fn parse_memory_id_value(value: &serde_json::Value) -> Option<u64> {
 pub(super) fn current_session_directory(
     context: &ToolOrchestratorContext,
 ) -> Result<PathBuf, String> {
-    session_directory_for_session_id(context, &context.thread_session_id)
+    session_directory_for_session_id(context, &context.session_id)
 }
 
 pub(super) fn session_directory_for_session_id(

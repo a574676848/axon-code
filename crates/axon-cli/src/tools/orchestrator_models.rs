@@ -63,7 +63,7 @@ pub(crate) struct ToolOrchestratorContext {
     /// 它是客户端可见、可订阅、可查询的那一个串，一切跨出进程、要写 durable 事件流或
     /// 要给客户端看的会话标识都取这个字段。工具层不再保存第二套派生表示；确实需要
     /// 数值键的内部索引（记忆子系统）统一走 [`Self::memory_session_key`]。
-    pub(crate) thread_session_id: String,
+    pub(crate) session_id: String,
     /// 本轮入站事实标识（`inbox.interaction_id`）；本地直跑没有入站事实时为空。
     ///
     /// 这是能回查「这条输入属于会话的哪一轮」的唯一键：事件帧、幂等与 durable 审计都在
@@ -102,7 +102,7 @@ impl std::fmt::Debug for ToolOrchestratorContext {
             .debug_struct("ToolOrchestratorContext")
             .field("config_path", &self.config_path)
             .field("cwd", &self.cwd)
-            .field("thread_session_id", &self.thread_session_id)
+            .field("session_id", &self.session_id)
             .field("interaction_id", &self.interaction_id)
             .field("turn_id", &self.turn_id)
             .field("cell_id", &self.cell_id)
@@ -129,11 +129,9 @@ impl ToolOrchestratorContext {
     ///
     /// 记忆库按数值索引会话，这是它自己的键空间，不是会话身份；工具层里只有这一处
     /// 把会话标识折算成数值，任何要写 durable 事实或给客户端看的标识都直接取
-    /// [`Self::thread_session_id`]。
+    /// [`Self::session_id`]。
     pub(crate) fn memory_session_key(&self) -> SessionId {
-        SessionId(crate::stable_ids::stable_numeric_id(
-            &self.thread_session_id,
-        ))
+        SessionId(crate::stable_ids::stable_numeric_id(&self.session_id))
     }
 
     pub(crate) fn is_cancelled(&self) -> bool {

@@ -36,6 +36,7 @@ impl RunRequest {
         let prompt = prepared.prompt;
         let attached_files = prepared.attached_files;
         let session_id = prepared.session_id;
+        let run_session_id = prepared.run_session_id;
         let model_history_json = prepared.model_history_json;
         let balanced = match resolved_channel {
             Some((provider_name, model_id)) => {
@@ -92,6 +93,7 @@ impl RunRequest {
             config,
             config_path,
             session_id: &session_id,
+            run_session_id: &run_session_id,
             cwd: &cwd,
             provider: &provider,
             model: &model,
@@ -109,6 +111,7 @@ impl RunRequest {
             client_channel,
             config_path: config_path.to_path_buf(),
             session_id,
+            run_session_id,
             // 入站事实标识由 daemon 的信封带进来；本地直跑与子代理没有入站事实时为空。
             interaction_id: options
                 .transport_context
@@ -117,8 +120,10 @@ impl RunRequest {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
                 .to_owned(),
-            resumed_from: previous_session.map(|session| session.facts.session_id.clone()),
-            parent_session_id: prepared.parent_session_id,
+            resumed_from: previous_session.map(|session| session.facts.thread_id.clone()),
+            // 主 turn 没有父会话；父线程链接只用于恢复出来的子代理线程。
+            parent_session_id: None,
+            parent_thread_id: prepared.parent_thread_id,
             cwd,
             prompt,
             structured_output: None,

@@ -180,6 +180,9 @@ pub struct RunCommand {
     /// 指定会话 ID。
     #[arg(long)]
     pub session: Option<String>,
+    /// 本轮运行窗口；宿主桥接随会话一并注入，不作为用户参数。
+    #[arg(skip)]
+    pub run_session_id: Option<String>,
     /// 附带文件路径。
     #[arg(long)]
     pub file: Vec<PathBuf>,

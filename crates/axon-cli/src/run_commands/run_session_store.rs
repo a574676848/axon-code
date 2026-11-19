@@ -28,8 +28,17 @@ const RUN_PERSISTENCE_ASSISTANT_PART_PREFIX: &str = "assistant-run";
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RunSessionRecord {
+    /// 会话身份：`sessions.session_id`（服务端 ULID）。
     pub(crate) session_id: String,
+    /// 运行窗口：`sessions.current_run_id`，Thread 事件流的线程标识。
+    #[serde(default)]
+    pub(crate) thread_id: String,
+    /// 父会话身份（ULID）；只有子代理的一轮才有。
+    #[serde(default)]
     pub(super) parent_session_id: Option<String>,
+    /// 父运行窗口；Thread 的父链接用它。
+    #[serde(default)]
+    pub(super) parent_thread_id: Option<String>,
     pub(super) created_at_ms: u64,
     pub(crate) startup_timeline: RunStartupTimeline,
     #[serde(default)]
@@ -179,7 +188,9 @@ impl RunSessionRecord {
         );
         Self {
             session_id: request.session_id.clone(),
+            thread_id: request.run_session_id.clone(),
             parent_session_id: request.parent_session_id.clone(),
+            parent_thread_id: request.parent_thread_id.clone(),
             created_at_ms,
             startup_timeline: request.startup.timeline.clone(),
             cwd: Some(request.cwd.to_string_lossy().to_string()),
@@ -231,7 +242,9 @@ impl RunSessionRecord {
         let ttft_ms = compute_request_ttft_ms(request);
         Self {
             session_id: request.session_id.clone(),
+            thread_id: request.run_session_id.clone(),
             parent_session_id: request.parent_session_id.clone(),
+            parent_thread_id: request.parent_thread_id.clone(),
             created_at_ms,
             startup_timeline: request.startup.timeline.clone(),
             cwd: Some(request.cwd.to_string_lossy().to_string()),
@@ -543,12 +556,6 @@ pub(super) fn runtime_failure_from_execution_error(
 
 pub(crate) fn resolved_axon_root(config_path: &Path) -> Result<PathBuf, &'static str> {
     runtime_axon_root_path_static(config_path)
-}
-
-/// 恢复目标查找方式：显式会话 ID 或最近一个未归档会话。
-pub(super) enum RunSessionIndexLookup<'a> {
-    Latest,
-    SessionId(&'a str),
 }
 
 #[cfg(test)]

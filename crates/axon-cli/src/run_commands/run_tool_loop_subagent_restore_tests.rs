@@ -33,6 +33,7 @@ fn run_command(prompt: &str) -> RunCommand {
         format: Some(OutputFormat::Json),
         continue_last: false,
         session: None,
+        run_session_id: None,
         file: Vec::new(),
         timeout: None,
         tool: Vec::new(),
@@ -65,7 +66,9 @@ fn config_with_fixture_model() -> axon_config::AxonConfig {
 fn previous_session_record(session_id: &str) -> RunSessionRecord {
     RunSessionRecord {
         session_id: session_id.to_owned(),
+        thread_id: session_id.to_owned(),
         parent_session_id: None,
+        parent_thread_id: None,
         created_at_ms: 1,
         startup_timeline: crate::run_commands::run_startup_snapshot::test_startup_timeline(),
         cwd: None,
@@ -103,7 +106,7 @@ fn prepared_session(session_id: &str) -> PreparedRunSession {
     let record = previous_session_record(session_id);
     PreparedRunSession {
         facts: crate::run_commands::run_thread_store::ResumedSessionFacts {
-            session_id: record.session_id.clone(),
+            thread_id: record.thread_id.clone(),
             parent_session_id: record.parent_session_id.clone(),
             cwd: record.cwd.clone(),
             provider: record.provider.clone(),
@@ -130,10 +133,12 @@ fn fixture_request() -> RunRequest {
         client_channel: axon_client_identity::ClientChannel::Cli,
         config_path,
         session_id: session_id.clone(),
+        run_session_id: session_id.clone(),
         interaction_id: String::new(),
         invocation_id: format!("test-invocation:{session_id}"),
         resumed_from: None,
         parent_session_id: None,
+        parent_thread_id: None,
         cwd,
         prompt: "恢复子代理".to_owned(),
         quoted_message: None,
@@ -201,7 +206,7 @@ fn new_run_request_reopens_file_graph_and_restores_child() {
         &run_command("首轮任务"),
         &config,
         &config_path,
-        RunRequestSession::with_id(None, crate::run_commands::new_run_session_id()),
+        RunRequestSession::with_id(None, crate::run_commands::unique_test_run_identities()),
         Some(&workspace),
         RunRequestBuildOptions {
             transport_context: None,
@@ -232,7 +237,14 @@ fn new_run_request_reopens_file_graph_and_restores_child() {
         &run_command("恢复后继续"),
         &config,
         &config_path,
-        RunRequestSession::with_id(Some(&previous), previous.facts.session_id.clone()),
+        RunRequestSession::with_id(
+            Some(&previous),
+            // 同一段运行窗口的第二轮：身份必须与首轮一致，否则 graph store 会换命名空间。
+            crate::run_commands::RunIdentities::new(
+                first.session_id.clone(),
+                first.run_session_id.clone(),
+            ),
+        ),
         Some(&workspace),
         RunRequestBuildOptions {
             transport_context: None,

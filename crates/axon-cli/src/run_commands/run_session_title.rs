@@ -51,48 +51,19 @@ pub(super) fn maybe_spawn_session_title_generation(
 /// 后台任务主体：先按轮次判断要不要生成，再取消息、调模型、写回。
 fn run_session_title_job(config_path: &Path, cwd: &Path, session_id: &str) -> Result<(), String> {
     let store = run_agent_store::shared_runtime_store(config_path)?;
-    // 宿主传进来的是本轮执行会话标识（run_session_id），而入站消息与标题都挂在
-    // 车道行上：不先换算成车道标识，计数永远为 0，生成器一次都不会触发。
-    let lane_id =
-        resolve_lane_session_id(&store, session_id)?.unwrap_or_else(|| session_id.to_owned());
-    let turn_count = count_user_messages(&store, &lane_id)?;
+    // 入站消息、会话标题与轮数都挂在会话身份上：这里收到的就是会话标识，不再换算。
+    let turn_count = count_user_messages(&store, session_id)?;
     if turn_count < SESSION_TITLE_TURN_INTERVAL {
         return Ok(());
     }
     // 首次补跑：标题还空着且轮次已够就先补一次。否则安装前就存在的旧会话必须等到
     // 下一个三的倍数才会更新，用户看到的是「明明早就超过三轮却一直没有标题」。
     let pending_first =
-        stored_session_title(&store, &lane_id)?.is_none_or(|title| title.trim().is_empty());
+        stored_session_title(&store, session_id)?.is_none_or(|title| title.trim().is_empty());
     if !pending_first && turn_count % SESSION_TITLE_TURN_INTERVAL != 0 {
         return Ok(());
     }
-    generate_session_title(config_path, cwd, &lane_id, turn_count)
-}
-
-/// 把执行会话标识换算成车道标识。
-///
-/// 会话行把本轮运行实例记在 `sessions.current_run_id` 里，反查即可命中；
-/// 传入值本身就是车道标识（CLI 直跑等场景）时查不到，由调用方原样沿用。
-fn resolve_lane_session_id(
-    store: &axon_session::SqliteRuntimeStore,
-    run_session_id: &str,
-) -> Result<Option<String>, String> {
-    if run_session_id.is_empty() {
-        return Ok(None);
-    }
-    store
-        .with_read_connection(|connection| {
-            connection
-                .query_row(
-                    "SELECT session_id FROM sessions WHERE current_run_id=?1 \
-                     ORDER BY last_activity_at_ms DESC LIMIT 1",
-                    [run_session_id],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()
-        })
-        .map(|lane| lane.filter(|lane| lane != run_session_id))
-        .map_err(|error| error.to_string())
+    generate_session_title(config_path, cwd, session_id, turn_count)
 }
 
 /// 读取控制面已登记的标题；会话行不存在或标题为空都返回 `None`。
@@ -245,7 +216,7 @@ fn clean_title(raw: &str) -> Option<String> {
 mod tests {
     use super::{
         build_prompt, clean_title, clip_message, count_user_messages, recent_user_messages,
-        resolve_lane_session_id, stored_session_title,
+        stored_session_title,
     };
     use axon_session::RuntimeStore as _;
 
@@ -272,20 +243,6 @@ mod tests {
             .with_read_connection(|connection| connection.execute_batch(&batch))
             .expect("插入入站消息");
         store
-    }
-
-    #[test]
-    fn run_identifier_resolves_to_its_lane_row() {
-        let store = seeded_lane("lane-a", "run-9", 4);
-        // 宿主交给生成器的是执行会话标识，必须换算成车道才能查到入站消息。
-        assert_eq!(
-            resolve_lane_session_id(&store, "run-9").unwrap().as_deref(),
-            Some("lane-a")
-        );
-        assert_eq!(count_user_messages(&store, "lane-a").unwrap(), 4);
-        // 传入值已经是车道标识（或为空）时不做换算。
-        assert_eq!(resolve_lane_session_id(&store, "lane-a").unwrap(), None);
-        assert_eq!(resolve_lane_session_id(&store, "").unwrap(), None);
     }
 
     #[test]

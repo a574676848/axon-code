@@ -197,7 +197,7 @@ pub(super) fn visit_history_item_views_from_record(
     }
     visit(HistoryItemView::User {
         sequence,
-        part_id: format!("user:{}:{}", record.session_id, record.assistant_part_id),
+        part_id: format!("user:{}:{}", record.thread_id, record.assistant_part_id),
         content: &record.prompt,
         local_images: &record.local_images,
         local_files: &record.local_files,
@@ -231,7 +231,7 @@ pub(super) fn visit_history_item_views_from_record(
             |value| Cow::Owned(value.tool_call_id.to_string()),
         );
         let operation_id = crate::turn_execution_ledger::persisted_operation_id(
-            &record.session_id,
+            &record.thread_id,
             &part_id,
             tool_call,
         );

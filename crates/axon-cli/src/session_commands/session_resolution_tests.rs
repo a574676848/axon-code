@@ -12,7 +12,7 @@ use axon_session::{
 };
 use rusqlite::params;
 
-use super::{TargetKind, resolve_session_target, run_window_registered};
+use super::{TargetKind, resolve_session_target};
 
 fn fixture() -> (axon_test_support::TestTempDir, PathBuf) {
     let directory = axon_test_support::test_temp_dir();
@@ -168,19 +168,6 @@ fn empty_id_is_rejected() {
     let error = resolve_session_target(&config_path, TargetKind::Session, "   ")
         .expect_err("空 ID 必须拒绝");
     assert!(error.contains("不能为空"), "{error}");
-}
-
-#[test]
-fn run_window_registration_distinguishes_owned_windows() {
-    let (_directory, config_path) = fixture();
-    let store = store_for(&config_path);
-    let owner = session("01ARZ3NDEKTSV4RRFFQ69G5FAZ");
-    let record = store
-        .create_session(&owner, "/workspace", 1)
-        .expect("登记会话");
-
-    assert!(run_window_registered(&store, &record.current_run_id));
-    assert!(!run_window_registered(&store, "thread-without-session"));
 }
 
 #[test]

@@ -51,7 +51,11 @@ fn injected_context_survives_thread_roundtrip() {
     let expected = record.injected_context_messages.clone();
 
     mirror_session_to_thread(&config_path, &record).expect("写入 thread 必须成功");
-    let restored = turn_record(&config_path, &record.session_id, &record.assistant_part_id)
+    let identities = super::super::super::RunIdentities::new(
+        record.session_id.clone(),
+        record.thread_id.clone(),
+    );
+    let restored = turn_record(&config_path, &identities, &record.assistant_part_id)
         .expect("读取 thread 必须成功")
         .expect("thread 轮次必须存在");
 

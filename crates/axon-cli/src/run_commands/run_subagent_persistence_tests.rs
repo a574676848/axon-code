@@ -14,9 +14,14 @@ pub(super) fn assert_completed_child_thread(config_path: &Path, task_path: &Agen
         .session_id
         .as_str()
         .to_owned();
+    // Thread 以子会话的运行窗口为键，会话身份只在 sessions 行上。
+    let child_window = store
+        .get_session(&axon_domain::DaemonSessionId::new(child_session_id.clone()).unwrap())
+        .unwrap()
+        .current_run_id;
     let root = super::super::super::run_session_store::resolved_axon_root(config_path).unwrap();
     let detail = ThreadService::new(JsonlThreadEventStore)
-        .read_thread(&root, &child_session_id)
+        .read_thread(&root, &child_window)
         .unwrap();
     assert_eq!(detail.thread.status, ThreadStatus::Idle);
     assert_eq!(detail.turns.len(), 1);
@@ -36,12 +41,13 @@ fn child_thread_is_active_before_provider_turn_and_closes_interrupted() {
     let root = super::super::super::run_session_store::resolved_axon_root(&config_path).unwrap();
     let service = ThreadService::new(JsonlThreadEventStore);
     let active = service
-        .read_thread(&root, &child_request.session_id)
+        .read_thread(&root, &child_request.run_session_id)
         .unwrap();
     assert_eq!(active.thread.status, ThreadStatus::Active);
     assert_eq!(
         active.thread.parent_thread_id.as_deref(),
-        Some("parent-session")
+        // 父链接是 Thread 级：写到父运行窗口上，父会话身份在 sessions 行上。
+        Some("parent-window")
     );
     assert_eq!(active.turns.len(), 1);
     assert_eq!(active.turns[0].status, TurnStatus::Active);
@@ -50,7 +56,7 @@ fn child_thread_is_active_before_provider_turn_and_closes_interrupted() {
     persist_child_turn_terminal(&child_request, "interrupted", "用户中断", None);
 
     let interrupted = service
-        .read_thread(&root, &child_request.session_id)
+        .read_thread(&root, &child_request.run_session_id)
         .unwrap();
     assert_eq!(interrupted.thread.status, ThreadStatus::Idle);
     assert_eq!(interrupted.turns.len(), 1);

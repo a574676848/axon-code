@@ -150,15 +150,6 @@ fn persist(config_path: &Path, record: LifecycleRecord) {
         return;
     };
     let now_ms = axon_time::unix_now_ms();
-    // 作业可能来自尚未登记会话行的直连运行：补登一次，已被车道认领时不重复登记。
-    if store.get_session(&session_id).is_err()
-        && !crate::session_commands::run_window_registered(&store, session_id.as_str())
-    {
-        let cwd = std::env::current_dir()
-            .map(|path| path.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let _ = store.create_session(&session_id, &cwd, now_ms);
-    }
     // 指标投影与事件落盘走同一份事实：任一侧失败都只影响观测，不影响作业。
     if let Err(error) = store.apply_job_delta(&session_id, record.started, record.failed, now_ms) {
         axon_logger::warning(&format!("作业计数投影失败：{error}"));

@@ -176,6 +176,7 @@ fn resume_command(model: Option<&str>) -> RunCommand {
         format: Some(OutputFormat::Json),
         continue_last: true,
         session: Some("historical-session".to_owned()),
+        run_session_id: None,
         file: Vec::new(),
         timeout: None,
         tool: Vec::new(),
@@ -215,7 +216,9 @@ fn historical_session_with_alias(
 ) -> PreparedRunSession {
     let record = RunSessionRecord {
         session_id: "historical-session".to_owned(),
+        thread_id: "historical-session".to_owned(),
         parent_session_id: None,
+        parent_thread_id: None,
         created_at_ms: 1,
         startup_timeline: super::super::run_startup_snapshot::test_startup_timeline(),
         cwd: None,
@@ -249,7 +252,7 @@ fn historical_session_with_alias(
     };
     PreparedRunSession {
         facts: crate::run_commands::run_thread_store::ResumedSessionFacts {
-            session_id: record.session_id.clone(),
+            thread_id: record.thread_id.clone(),
             parent_session_id: record.parent_session_id.clone(),
             cwd: record.cwd.clone(),
             provider: record.provider.clone(),

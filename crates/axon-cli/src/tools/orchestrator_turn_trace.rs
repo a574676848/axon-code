@@ -106,14 +106,14 @@ pub(super) fn execute_turn_trace(
             }
         },
         None => (
-            explicit_session.unwrap_or_else(|| context.thread_session_id.clone()),
+            explicit_session.unwrap_or_else(|| context.session_id.clone()),
             explicit_sequence,
         ),
     };
 
     // 跨会话一律拒绝：只允许读当前会话自己的轮次。daemon 与远端通道共用同一份归档，
     // 不加归属校验就等于把别人的工具原文开放给任意调用方。
-    if session_id != context.thread_session_id {
+    if session_id != context.session_id {
         return failed_tool_receipt(
             tool_call,
             format!("builtin.turn_trace 拒绝跨会话引用：{session_id} 不是当前会话"),
@@ -195,9 +195,11 @@ fn load_turn_record(
     ),
     String,
 > {
+    // trace 标识用的是会话身份；Thread 事件流按运行窗口读，先解析出这一对标识。
+    let identities = crate::run_commands::session_identities(config_path, session_id)?;
     crate::run_commands::run_thread_store::turn_record_by_sequence(
         config_path,
-        session_id,
+        &identities,
         sequence,
     )?
     .ok_or_else(|| match sequence {
@@ -296,7 +298,7 @@ mod turn_trace_tests {
         ToolOrchestratorContext {
             config_path,
             cwd: PathBuf::from("."),
-            thread_session_id: "thread-1".to_owned(),
+            session_id: "thread-1".to_owned(),
             interaction_id: String::new(),
             turn_id: String::new(),
             cell_id: CellId(1),

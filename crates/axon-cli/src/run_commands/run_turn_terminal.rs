@@ -76,7 +76,7 @@ pub(crate) fn complete_turn(
     let memory_reflection_notice = match spec.completion {
         TurnCompletion::Surface => super::run_thread_tail::previous_reflection_notice_at_tail(
             config_path,
-            &record.session_id,
+            &record.thread_id,
             &record.assistant_part_id,
         ),
         TurnCompletion::ChildSession => None,
@@ -201,10 +201,22 @@ fn persist_failed_run(
     failure: &axon_domain::RuntimeFailure,
 ) -> Result<(), String> {
     let started = RunSessionRecord::started(request);
-    let persisted =
-        super::run_thread_store::turn_record_by_sequence(config_path, &request.session_id, None)?
-            .map(|(record, _)| record);
+    let persisted = super::run_thread_store::turn_record_by_sequence(
+        config_path,
+        &super::RunIdentities::new(request.session_id.clone(), request.run_session_id.clone()),
+        None,
+    )?
+    .map(|(record, _)| record);
     let mut record = select_failed_run_record(started, persisted);
+    // 身份只认本轮请求：反查回来的记录只是同一段 Thread 的投影，标识以请求为准。
+    record.session_id.clone_from(&request.session_id);
+    record.thread_id.clone_from(&request.run_session_id);
+    record
+        .parent_session_id
+        .clone_from(&request.parent_session_id);
+    record
+        .parent_thread_id
+        .clone_from(&request.parent_thread_id);
     record.mark_failed(failure.clone(), partial_response, error);
     super::run_thread_store::mirror_failed_session_to_thread(config_path, &record, failure)
 }

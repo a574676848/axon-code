@@ -137,7 +137,7 @@ pub(crate) fn turn_id(context: &crate::tool_orchestrator::ToolOrchestratorContex
 }
 
 pub(crate) fn scope_id(context: &crate::tool_orchestrator::ToolOrchestratorContext) -> String {
-    context.thread_session_id.clone()
+    context.session_id.clone()
 }
 
 pub(crate) fn restore_thread_history(session_id: &str, detail: &ThreadDetail) {

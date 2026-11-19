@@ -406,7 +406,7 @@ fn execute_ask_user_question(
     let now = now_ms() as i64;
     let record = axon_domain::UserQuestionRecord {
         question_id: format!("uq-{}", uuid::Uuid::new_v4()),
-        idempotency_key: format!("idem-{}-{}", context.thread_session_id, tool_call.id),
+        idempotency_key: format!("idem-{}-{}", context.session_id, tool_call.id),
         /*
          * 车道标识，不是取标识的数值摘要。
          *
@@ -416,7 +416,7 @@ fn execute_ask_user_question(
          * `stable_numeric_id` 的摘要）会让三方全对不上：查询恒为空，作答被判车道不符，
          * 回放里也永远没有这一问。
          */
-        session_id: context.thread_session_id.clone(),
+        session_id: context.session_id.clone(),
         interaction_id: context.interaction_id.clone(),
         turn_id,
         tool_call_id: tool_call.id.clone(),
@@ -581,7 +581,7 @@ mod tests {
         let context = ToolOrchestratorContext {
             config_path: None,
             cwd: std::path::PathBuf::from("."),
-            thread_session_id: "thread-1".to_string(),
+            session_id: "thread-1".to_string(),
             interaction_id: String::new(),
             turn_id: String::new(),
             cell_id: CellId(1),

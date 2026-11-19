@@ -117,7 +117,9 @@ impl RunSubagentContinuationSink {
             .and_then(|root| self.store.get_session(&root).ok())
             .map(|record| record.cwd)
             .unwrap_or_default();
-        resolve_child_session(&self.config_path, &self.parent_session_id, &cwd, task_path).ok()
+        resolve_child_session(&self.config_path, &self.parent_session_id, &cwd, task_path)
+            .ok()
+            .map(|identities| identities.session_id)
     }
 }
 

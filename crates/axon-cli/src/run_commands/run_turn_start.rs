@@ -139,5 +139,11 @@ pub(crate) fn start_turn_stop_control(
     let Some(cancel_token) = request.cancel_token.clone() else {
         return Ok(None);
     };
-    RunStopControl::start(&request.config_path, &request.session_id, cancel_token).map(Some)
+    RunStopControl::start(
+        &request.config_path,
+        &request.session_id,
+        &request.run_session_id,
+        cancel_token,
+    )
+    .map(Some)
 }

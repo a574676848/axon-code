@@ -335,7 +335,7 @@ fn test_context(owner: &str) -> ToolOrchestratorContext {
     ToolOrchestratorContext {
         config_path: None,
         cwd: test_workspace(),
-        thread_session_id: owner.to_owned(),
+        session_id: owner.to_owned(),
         interaction_id: String::new(),
         turn_id: String::new(),
         cell_id: axon_domain::CellId(1),

@@ -136,6 +136,7 @@ fn contract_command() -> RunCommand {
         format: None,
         continue_last: false,
         session: None,
+        run_session_id: None,
         file: Vec::new(),
         timeout: None,
         tool: Vec::new(),

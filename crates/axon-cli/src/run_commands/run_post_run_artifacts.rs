@@ -38,7 +38,7 @@ pub(super) fn publish_turn_artifacts(
     }
     if let Err(error) = super::run_thread_store::patch_turn_artifacts(
         &payload.config_path,
-        &session_record.session_id,
+        &session_record.thread_id,
         &session_record.assistant_part_id,
         notice.as_deref(),
         &trace.signals.affect_sequence,
@@ -207,7 +207,7 @@ pub(super) fn sequence_option(
 ) -> Option<u64> {
     match super::run_thread_tail::turn_sequence_at_tail(
         &payload.config_path,
-        &session_record.session_id,
+        &session_record.thread_id,
         &session_record.assistant_part_id,
     ) {
         Ok(Some(sequence)) => Some(sequence),
@@ -246,7 +246,7 @@ fn collect_explicit_signals(
 ) -> axon_agent_runtime::ExplicitSignals {
     let facts = match super::run_thread_tail::recent_turn_facts_at_tail(
         &payload.config_path,
-        &session_record.session_id,
+        &session_record.thread_id,
         EXPLICIT_SIGNALS_HISTORY_TURNS,
     ) {
         Ok(facts) => facts,

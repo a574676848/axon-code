@@ -40,13 +40,16 @@ pub(crate) fn execute_standalone_subagent(
     model_intent: axon_agent_runtime::ChildExecutionModelIntent,
 ) -> Result<super::run_subagent_executor::RunSubagentExecutionOutput, String> {
     let loaded = ConfigLoader::load_from_path(config_path).map_err(|error| format!("{error:?}"))?;
+    // 后台执行的会话身份由宿主给出，运行窗口取同一行会话上的 `current_run_id`。
+    let identities = super::run_identities::session_identities(config_path, session_id)?;
     let command = RunCommand {
         prompt: prompt.to_owned(),
         model: None,
         reasoning_effort: None,
         format: None,
         continue_last: false,
-        session: Some(session_id.to_owned()),
+        session: Some(identities.session_id.clone()),
+        run_session_id: Some(identities.run_session_id.clone()),
         file: Vec::new(),
         timeout: None,
         tool: Vec::new(),
@@ -76,7 +79,8 @@ pub(crate) fn execute_standalone_subagent(
     let wiring = run_subagent_execution_wiring(RunSubagentExecutionWiringInput {
         config: &loaded.config,
         config_path,
-        session_id,
+        session_id: &identities.session_id,
+        run_session_id: &identities.run_session_id,
         cwd,
         provider: &selected.provider,
         model: &selected.model,
@@ -131,7 +135,10 @@ pub(super) struct RunSubagentExecutionWiring {
 pub(super) struct RunSubagentExecutionWiringInput<'a> {
     pub(super) config: &'a AxonConfig,
     pub(super) config_path: &'a Path,
+    /// 父会话身份（`sessions.session_id`）。
     pub(super) session_id: &'a str,
+    /// 父运行窗口（`sessions.current_run_id`）。
+    pub(super) run_session_id: &'a str,
     pub(super) cwd: &'a Path,
     pub(super) provider: &'a ProviderConfig,
     pub(super) model: &'a ModelConfig,
@@ -182,6 +189,7 @@ pub(super) fn run_subagent_execution_wiring(
             config: input.config.clone(),
             config_path: input.config_path.to_path_buf(),
             parent_session_id: input.session_id.to_owned(),
+            parent_run_session_id: input.run_session_id.to_owned(),
             cwd: input.cwd.to_path_buf(),
             provider: input.provider.clone(),
             model: input.model.clone(),

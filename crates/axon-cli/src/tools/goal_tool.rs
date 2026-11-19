@@ -55,7 +55,7 @@ pub(super) fn execute_goal_tool(
         request_id: format!("goal-tool-{idempotency_key}"),
         protocol_version: DAEMON_PROTOCOL_VERSION,
         client_id: GOAL_TOOL_CLIENT_ID.to_owned(),
-        session_id: Some(context.thread_session_id.clone()),
+        session_id: Some(context.session_id.clone()),
         command: DaemonCommand::GoalTool(GoalToolRequest {
             actor: GOAL_TOOL_DEFAULT_ACTOR.to_owned(),
             workspace_id: workspace_id(&context.cwd),
@@ -93,8 +93,8 @@ fn workspace_id(cwd: &Path) -> Option<String> {
 /// 由会话与 provider 调用标识派生稳定幂等键，保证工具重试不产生重复 Goal。
 fn idempotency_key(context: &ToolOrchestratorContext, tool_call: &ProviderToolCall) -> String {
     derive_idempotency_key(&[
-        context.thread_session_id.as_str(),
-        &context.thread_session_id,
+        context.session_id.as_str(),
+        &context.session_id,
         tool_call.id.as_str(),
     ])
 }

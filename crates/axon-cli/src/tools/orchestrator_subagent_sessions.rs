@@ -93,8 +93,8 @@ fn wake_recovered_subagent(
     };
     let Ok(sink) = RunSubagentContinuationSink::open(
         config_path,
-        context.thread_session_id.clone(),
-        context.thread_session_id.clone(),
+        context.session_id.clone(),
+        context.session_id.clone(),
     ) else {
         return Ok(SubagentToolExecutionPlan::Ready(receipt));
     };

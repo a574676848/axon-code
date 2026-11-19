@@ -59,12 +59,12 @@ pub(super) fn execute_supported_tool_calls_for_turn(
         config_path: Some(request.config_path.clone()),
         cwd: request.cwd.clone(),
 
-        thread_session_id: request.session_id.clone(),
+        session_id: request.session_id.clone(),
         interaction_id: request.interaction_id.clone(),
-        // 与本轮持久化的 `Turn.turn_id` 同一构造：`{session}-turn-{assistant_part_id}`。
+        // 与本轮持久化的 `Turn.turn_id` 同一构造：`{thread}-turn-{assistant_part_id}`。
         turn_id: format!(
             "{}-turn-{}",
-            request.session_id,
+            request.run_session_id,
             super::run_session_store::run_persistence_assistant_part_id(request)
         ),
         cell_id: CellId(1),
@@ -284,7 +284,7 @@ fn execute_parallel_tool_calls(
     let total = execution_requests.len();
     let context = Arc::new(context.clone());
     let write_coordinator = workspace_write_coordinator(&context.cwd);
-    let pool = session_tool_pool(&context.thread_session_id, capacity);
+    let pool = session_tool_pool(&context.session_id, capacity);
     let (event_tx, event_rx) = mpsc::channel();
     let mut started = 0usize;
     for (index, execution_request) in execution_requests.iter().enumerate() {

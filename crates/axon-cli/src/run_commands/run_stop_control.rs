@@ -44,9 +44,14 @@ pub(crate) struct RunStopControl {
 }
 
 impl RunStopControl {
+    /// 起一条 stop 通道。
+    ///
+    /// 控制目录按会话身份建（xon stop --session 给的就是会话 ID），中断终态却写进
+    /// 运行窗口的 Thread，因此两个标识都要传进来。
     pub(crate) fn start(
         config_path: &Path,
         session_id: &str,
+        run_session_id: &str,
         cancel_token: RunCancelToken,
     ) -> Result<Self, String> {
         let paths = control_paths(config_path, session_id)?;
@@ -67,12 +72,13 @@ impl RunStopControl {
         let stop_path = paths.stop_path.clone();
         let config_path = config_path.to_path_buf();
         let session_id = session_id.to_owned();
+        let run_session_id = run_session_id.to_owned();
         let watcher = thread::spawn(move || {
             while watcher_active.load(Ordering::Acquire) {
                 if stop_path.exists() {
                     if let Err(error) = super::run_thread_store::mirror_session_terminal(
                         &config_path,
-                        &session_id,
+                        &run_session_id,
                         "interrupted",
                         None,
                     ) {

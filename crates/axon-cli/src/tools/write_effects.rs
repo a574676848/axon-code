@@ -84,7 +84,7 @@ pub(crate) fn reconcile_workspace_write(
         reconcile_target(context, &root, effect, &mut warnings);
     }
     let changes = effects.iter().flat_map(lsp_changes).collect::<Vec<_>>();
-    let session_id = context.thread_session_id.clone();
+    let session_id = context.session_id.clone();
     let deferred_sink: LspDeferredDiagnosticsSink = Arc::new(move |report| {
         let payload = serde_json::to_string(&report)
             .unwrap_or_else(|_| "{\"status\":\"unavailable\"}".to_owned());

@@ -8,12 +8,11 @@ use axon_session::{
     AppendTurnCommand, AppendTurnItemsCommand, CompactThreadCommand, FailTurnCommand,
     InterruptTurnCommand, JsonlThreadEventStore, RepairOpenTurnCommand, StartEmptyThreadCommand,
     StartThreadCommand, StartTurnCommand, ThreadCompaction, ThreadDetail, ThreadService,
-    ThreadSettings, ThreadSource, ThreadStatus, Turn, TurnRepairOutcome, TurnStatus,
+    ThreadSettings, ThreadSource, Turn, TurnRepairOutcome, TurnStatus,
 };
 
 use super::{
-    RunCommand,
-    run_session_store::{RunSessionIndexLookup, RunSessionRecord, resolved_axon_root},
+    run_session_store::{RunSessionRecord, resolved_axon_root},
     run_thread_history::{history_items_from_record, record_has_unsettled_tool_call},
 };
 #[path = "run_thread_model_history.rs"]
@@ -27,7 +26,8 @@ pub(super) use model_history::thread_model_history_json;
 /// 不再从第二个数据库副本反推。
 #[derive(Debug, Clone)]
 pub(super) struct ResumedSessionFacts {
-    pub(super) session_id: String,
+    /// 这段对话所属的运行窗口（Thread 线程标识）。
+    pub(super) thread_id: String,
     pub(super) parent_session_id: Option<String>,
     pub(super) cwd: Option<String>,
     pub(super) provider: String,
@@ -42,7 +42,7 @@ impl ResumedSessionFacts {
             turn_metadata(&turn.token_usage_json).and_then(|metadata| metadata.model_name)
         });
         Self {
-            session_id: detail.thread.thread_id.clone(),
+            thread_id: detail.thread.thread_id.clone(),
             parent_session_id: detail.thread.parent_thread_id.clone(),
             cwd: Some(settings.cwd.clone()).filter(|cwd| !cwd.trim().is_empty()),
             provider: settings.provider.clone(),
@@ -157,17 +157,17 @@ pub(super) fn mirror_session_to_thread(
     let root = resolved_axon_root(config_path)?;
     let service = ThreadService::new(JsonlThreadEventStore);
     let turn = turn_from_record(record, 0)?;
-    match service.read_thread(&root, &record.session_id) {
+    match service.read_thread(&root, &record.thread_id) {
         Ok(detail) => {
-            mirror_existing_turn(&service, &root, &record.session_id, &detail, turn, record)
+            mirror_existing_turn(&service, &root, &record.thread_id, &detail, turn, record)
         }
         Err(_) if turn.status == TurnStatus::Active => {
             service.start_empty_thread(
                 &root,
                 StartEmptyThreadCommand {
-                    thread_id: record.session_id.clone(),
-                    session_root_id: record.session_id.clone(),
-                    parent_thread_id: record.parent_session_id.clone(),
+                    thread_id: record.thread_id.clone(),
+                    session_root_id: record.thread_id.clone(),
+                    parent_thread_id: record.parent_thread_id.clone(),
                     forked_from_thread_id: None,
                     source: ThreadSource::CliRun,
                     ephemeral: false,
@@ -178,7 +178,7 @@ pub(super) fn mirror_session_to_thread(
             service.start_turn(
                 &root,
                 StartTurnCommand {
-                    thread_id: record.session_id.clone(),
+                    thread_id: record.thread_id.clone(),
                     recorded_at_ms: record.created_at_ms,
                     turn,
                 },
@@ -187,9 +187,9 @@ pub(super) fn mirror_session_to_thread(
         Err(_) => service.start_thread(
             &root,
             StartThreadCommand {
-                thread_id: record.session_id.clone(),
-                session_root_id: record.session_id.clone(),
-                parent_thread_id: record.parent_session_id.clone(),
+                thread_id: record.thread_id.clone(),
+                session_root_id: record.thread_id.clone(),
+                parent_thread_id: record.parent_thread_id.clone(),
                 forked_from_thread_id: None,
                 source: ThreadSource::CliRun,
                 ephemeral: false,
@@ -213,7 +213,7 @@ pub(super) fn mirror_session_started(
     turn.completed_at_ms = None;
     turn.interrupted_at_ms = None;
 
-    let activation = service.read_thread_activation(&root, &record.session_id)?;
+    let activation = service.read_thread_activation(&root, &record.thread_id)?;
     if activation.exists {
         if activation.active_turn_id.as_deref() == Some(turn.turn_id.as_str()) {
             return Ok(());
@@ -228,7 +228,7 @@ pub(super) fn mirror_session_started(
             match service.repair_open_turn(
                 &root,
                 RepairOpenTurnCommand {
-                    thread_id: record.session_id.clone(),
+                    thread_id: record.thread_id.clone(),
                     turn_id: stale,
                     recorded_at_ms: record.created_at_ms,
                     // 激活快照刚刚读过，直接复用它的序号，省掉一次反向扫日志。
@@ -240,19 +240,19 @@ pub(super) fn mirror_session_started(
                     synthetic_results,
                 }) => axon_logger::warning(&format!(
                     "Thread {} 遗留轮次 {turn_id} 已收口，补合成工具结果 {synthetic_results} 条",
-                    record.session_id
+                    record.thread_id
                 )),
                 Ok(TurnRepairOutcome::Balanced) => {}
                 Err(error) => axon_logger::warning(&format!(
                     "Thread {} 遗留轮次收口失败，仍尝试开始新轮：{error}",
-                    record.session_id
+                    record.thread_id
                 )),
             }
         }
         service.start_turn(
             &root,
             StartTurnCommand {
-                thread_id: record.session_id.clone(),
+                thread_id: record.thread_id.clone(),
                 recorded_at_ms: record.created_at_ms,
                 turn,
             },
@@ -261,9 +261,9 @@ pub(super) fn mirror_session_started(
         service.start_empty_thread(
             &root,
             StartEmptyThreadCommand {
-                thread_id: record.session_id.clone(),
-                session_root_id: record.session_id.clone(),
-                parent_thread_id: record.parent_session_id.clone(),
+                thread_id: record.thread_id.clone(),
+                session_root_id: record.thread_id.clone(),
+                parent_thread_id: record.parent_thread_id.clone(),
                 forked_from_thread_id: None,
                 source: ThreadSource::CliRun,
                 ephemeral: false,
@@ -274,7 +274,7 @@ pub(super) fn mirror_session_started(
         service.start_turn(
             &root,
             StartTurnCommand {
-                thread_id: record.session_id.clone(),
+                thread_id: record.thread_id.clone(),
                 recorded_at_ms: record.created_at_ms,
                 turn,
             },
@@ -412,77 +412,39 @@ pub(super) fn mirror_existing_turn(
     )
 }
 
-/// 从 SQLite SSOT 恢复 run 上下文。
+/// 从 SQLite SSOT 恢复一段运行窗口的上下文。
 /// 一次完成恢复目标定位、SQLite turn 读取与模型历史装配。
+///
+/// 入参是本轮运行窗口（`sessions.current_run_id`）：窗口与会话的对应关系由标识解析给出，
+/// 这里只按窗口读 Thread 事件流。
 pub(super) fn prepare_run_session(
     config_path: &Path,
-    command: &RunCommand,
-    implicit_session_id: Option<&str>,
+    identities: &super::RunIdentities,
 ) -> Result<Option<PreparedRunSession>, String> {
-    if command.continue_last {
-        // 恢复指针决定接续哪一段：`sessions resume` 之后 `--continue` 必须落在同一个
-        // Thread 上，而不是「全局最近一段」。指针是会话身份，先解析回 Thread。
-        return match crate::run_commands::snapshot_resume_session(config_path)? {
-            Some(pointer) => {
-                let target = crate::session_commands::resolve_session_target(
-                    config_path,
-                    crate::session_commands::TargetKind::Session,
-                    &pointer,
-                )?;
-                prepare_session_from_lookup(
-                    config_path,
-                    RunSessionIndexLookup::SessionId(&target.thread_id),
-                )
-            }
-            None => prepare_session_from_lookup(config_path, RunSessionIndexLookup::Latest),
-        };
-    }
-    if let Some(session_id) = command.session.as_deref() {
-        return prepare_session_from_lookup(
-            config_path,
-            RunSessionIndexLookup::SessionId(session_id),
-        );
-    }
-    // 未显式指定 Session 时加载当前复合车道运行窗口的既有运行会话；
-    // 没有车道（子代理等隔离入口）时不恢复任何历史，由调用方自行建档。
-    let Some(session_id) = implicit_session_id else {
-        return Ok(None);
-    };
-    prepare_session_from_lookup(config_path, RunSessionIndexLookup::SessionId(session_id))
-}
-
-fn prepare_session_from_lookup(
-    config_path: &Path,
-    lookup: RunSessionIndexLookup<'_>,
-) -> Result<Option<PreparedRunSession>, String> {
+    let run_session_id = identities.run_session_id.as_str();
     let root = resolved_axon_root(config_path)?;
     let service = ThreadService::new(JsonlThreadEventStore);
-    let thread_id = match lookup {
-        RunSessionIndexLookup::Latest => latest_thread_id(&service, &root)?,
-        RunSessionIndexLookup::SessionId(session_id) => Some(session_id.to_owned()),
-    };
-    let Some(thread_id) = thread_id else {
-        return Ok(None);
-    };
     // 「不存在」与「读不出来」必须分开：前者如实返回没有可恢复会话，后者是数据损坏，
     // 静默当成空会话会让用户先看到失忆、再在起跑时才看到报错。
-    if JsonlThreadEventStore::thread_shard_paths(&root, &thread_id)?.is_empty() {
+    if JsonlThreadEventStore::thread_shard_paths(&root, run_session_id)?.is_empty() {
         return Ok(None);
     }
     // 崩溃遗留的 active turn 必须在装配模型历史之前收口：否则第一次 provider 请求会带着
     // 「有 tool_calls 却没有 tool 结果」的悬空历史，必然被拒一次。
-    repair_open_turn_before_restore(&service, &root, &thread_id)?;
+    repair_open_turn_before_restore(&service, &root, run_session_id)?;
     let detail = service
-        .read_thread(&root, &thread_id)
-        .map_err(|error| format!("会话历史读取失败：{thread_id}，{error}"))?;
-    if detail.compacted_history.is_none() && window_number_exceeds_first(config_path, &thread_id)? {
+        .read_thread(&root, run_session_id)
+        .map_err(|error| format!("会话历史读取失败：{run_session_id}，{error}"))?;
+    if detail.compacted_history.is_none()
+        && window_number_exceeds_first(config_path, run_session_id)?
+    {
         return Err(
             "会话已换窗但活动窗口投影缺失，拒绝恢复旧聊天历史；请先修复窗口投影".to_owned(),
         );
     }
     let facts = ResumedSessionFacts::from_detail(&detail);
     let model_history_json = thread_model_history_json(&detail)?;
-    crate::turn_execution_ledger::restore_thread_history(&facts.session_id, &detail);
+    crate::turn_execution_ledger::restore_thread_history(&identities.session_id, &detail);
     Ok(Some(PreparedRunSession {
         facts,
         model_history_json,
@@ -525,34 +487,6 @@ fn repair_open_turn_before_restore(
     Ok(())
 }
 
-/// 最近一个未归档 thread：`--continue` 没有指针时的兜底候选。
-fn latest_thread_id(
-    service: &ThreadService<JsonlThreadEventStore>,
-    root: &Path,
-) -> Result<Option<String>, String> {
-    // `--continue` 的权威目标是恢复指针；只有从未设置过指针时才回退「最近一个根会话」。
-    // 回退必须排除子代理/内务 thread，否则用户会续到工具的会话上。
-    if let Some(snapshot) = JsonlThreadEventStore.read_thread_index(root)? {
-        if let Some(entry) = snapshot
-            .entries
-            .iter()
-            .filter(|entry| !entry.archived)
-            .filter(|entry| entry.parent_thread_id.is_none())
-            .max_by_key(|entry| entry.updated_at_ms)
-        {
-            return Ok(Some(entry.thread_id.clone()));
-        }
-        return Ok(None);
-    }
-    let summaries = service.list_threads(root, 20)?;
-    Ok(summaries
-        .into_iter()
-        .filter(|summary| summary.status != ThreadStatus::Archived)
-        .filter(|summary| summary.parent_thread_id.is_none())
-        .max_by_key(|summary| summary.updated_at_ms)
-        .map(|summary| summary.thread_id))
-}
-
 /// 换窗后的 thread 必须带活动窗口投影，否则恢复出来的历史会跨窗。
 fn window_number_exceeds_first(config_path: &Path, thread_id: &str) -> Result<bool, String> {
     let session_dir = resolved_axon_root(config_path)?
@@ -572,6 +506,9 @@ pub(super) fn turn_metadata(token_usage_json: &Option<String>) -> Option<ThreadT
 }
 
 #[cfg(test)]
+use axon_session::ThreadStatus;
+
+#[cfg(test)]
 fn thread_detail_from_records(records: &[RunSessionRecord]) -> Result<ThreadDetail, String> {
     let fallback = records
         .last()
@@ -588,9 +525,9 @@ fn thread_detail_from_records(records: &[RunSessionRecord]) -> Result<ThreadDeta
         .collect::<Result<Vec<_>, _>>()?;
     Ok(ThreadDetail {
         thread: Thread {
-            thread_id: fallback.session_id.clone(),
-            session_root_id: fallback.session_id.clone(),
-            parent_thread_id: fallback.parent_session_id.clone(),
+            thread_id: fallback.thread_id.clone(),
+            session_root_id: fallback.thread_id.clone(),
+            parent_thread_id: fallback.parent_thread_id.clone(),
             forked_from_thread_id: None,
             name: None,
             status: ThreadStatus::Idle,
@@ -623,7 +560,7 @@ pub(super) fn mirror_failed_session_to_thread(
 ) -> Result<(), String> {
     let root = resolved_axon_root(config_path)?;
     let service = ThreadService::new(JsonlThreadEventStore);
-    let detail = service.read_thread(&root, &record.session_id)?;
+    let detail = service.read_thread(&root, &record.thread_id)?;
     let active = detail
         .turns
         .iter()
@@ -637,7 +574,7 @@ pub(super) fn mirror_failed_session_to_thread(
         service.append_turn_items(
             &root,
             AppendTurnItemsCommand {
-                thread_id: record.session_id.clone(),
+                thread_id: record.thread_id.clone(),
                 turn_id: active.turn_id.clone(),
                 items,
                 recorded_at_ms: failure.timestamp,
@@ -647,7 +584,7 @@ pub(super) fn mirror_failed_session_to_thread(
     service.fail_turn(
         &root,
         FailTurnCommand {
-            thread_id: record.session_id.clone(),
+            thread_id: record.thread_id.clone(),
             turn_id: active.turn_id.clone(),
             failure: failure.clone(),
             recorded_at_ms: failure.timestamp,
@@ -670,7 +607,7 @@ pub(super) fn turn_from_record(record: &RunSessionRecord, sequence: u64) -> Resu
         TurnStatus::Completed
     };
     Ok(Turn {
-        turn_id: format!("{}-turn-{}", record.session_id, record.assistant_part_id),
+        turn_id: format!("{}-turn-{}", record.thread_id, record.assistant_part_id),
         sequence,
         status,
         history_items: history_items_from_record(record, sequence),

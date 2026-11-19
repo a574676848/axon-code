@@ -71,7 +71,8 @@ fn explicit_turn_model_is_the_highest_priority_model_source() {
         provider_run_command(Path::new("missing-config.toml"), &request).expect("命令应可构造");
 
     assert_eq!(command.model.as_deref(), Some("balanced"));
-    assert_eq!(command.session.as_deref(), Some("run-identity"));
+    assert_eq!(command.session.as_deref(), Some("session-identity"));
+    assert_eq!(command.run_session_id.as_deref(), Some("run-identity"));
 }
 
 /// 强度与模型同一条通道：随本轮下发的值优先于配置里的固定值。

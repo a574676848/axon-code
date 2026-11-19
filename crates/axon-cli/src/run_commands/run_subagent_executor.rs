@@ -105,7 +105,10 @@ pub(crate) trait RunSubagentExecutor: Send + Sync {
 pub(crate) struct ProviderRunSubagentEnvironment {
     pub(crate) config: axon_config::AxonConfig,
     pub(crate) config_path: std::path::PathBuf,
+    /// 父会话身份（`sessions.session_id`）：子会话登记与续接引用挂在它上面。
     pub(crate) parent_session_id: String,
+    /// 父运行窗口：子代理 Thread 的父链接只认它。
+    pub(crate) parent_run_session_id: String,
     pub(crate) cwd: std::path::PathBuf,
     pub(crate) provider: ProviderConfig,
     pub(crate) model: ModelConfig,
@@ -182,12 +185,14 @@ impl ProviderRunSubagentExecutor {
             self.environment.cwd.clone(),
             performance.clone(),
         );
-        let session_id = resolve_child_session(
+        let child = resolve_child_session(
             &self.environment.config_path,
             &self.environment.parent_session_id,
             &self.environment.cwd.to_string_lossy(),
             &input.task_path,
         )?;
+        let session_id = child.session_id.clone();
+        let run_session_id = child.run_session_id.clone();
         let model_selection = self.child_model_selection(input, &session_id)?;
         let command = RunCommand {
             prompt: input.message.clone(),
@@ -196,11 +201,12 @@ impl ProviderRunSubagentExecutor {
             format: None,
             continue_last: false,
             session: Some(session_id.clone()),
+            run_session_id: Some(run_session_id.clone()),
             file: Vec::new(),
             timeout: None,
             tool: Vec::new(),
         };
-        let previous_session = prepare_run_session(&self.environment.config_path, &command, None)?;
+        let previous_session = prepare_run_session(&self.environment.config_path, &child)?;
         record_subagent_history_ready(performance.as_deref());
         let fork_history = child_model_history_json(input)?;
         let model_history_json = previous_session
@@ -305,10 +311,13 @@ impl ProviderRunSubagentExecutor {
             client_channel: axon_client_identity::ClientChannel::Cli,
             config_path: self.environment.config_path.clone(),
             session_id,
+            run_session_id,
             // 子代理执行不是入站事实：它没有自己的 Interaction。
             interaction_id: String::new(),
-            resumed_from: previous_session.map(|session| session.facts.session_id),
+            resumed_from: previous_session.map(|session| session.facts.thread_id),
+            // 父会话身份用于登记与续接引用，父运行窗口用于 Thread 的父链接。
             parent_session_id: Some(self.environment.parent_session_id.clone()),
+            parent_thread_id: Some(self.environment.parent_run_session_id.clone()),
             cwd: self.environment.cwd.clone(),
             prompt: input.message.clone(),
             structured_output: input.structured_output.clone(),
@@ -505,7 +514,7 @@ impl ProviderRunSubagentExecutor {
             &input.task_path,
         )
         .ok()?;
-        self.child_model_selection(input, &session_id)
+        self.child_model_selection(input, &session_id.session_id)
             .ok()
             .map(|selection| model_display_name(&selection.model))
     }

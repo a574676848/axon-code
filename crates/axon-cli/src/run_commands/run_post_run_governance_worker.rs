@@ -42,8 +42,12 @@ const GOVERNANCE_SCOPE_MISMATCH: &str = "scope_mismatch";
 #[serde(rename_all = "camelCase")]
 pub(super) struct GovernanceSessionReference {
     session_id: String,
+    /// 本轮运行窗口（Thread 线程标识）。
+    thread_id: String,
     assistant_part_id: String,
     parent_session_id: Option<String>,
+    /// 父运行窗口（Thread 父链接）。
+    parent_thread_id: Option<String>,
     cwd: Option<String>,
     provider: String,
     model: String,
@@ -100,8 +104,10 @@ impl DurableGovernancePayload {
             config_path: job.config_path.clone(),
             session_record: GovernanceSessionReference {
                 session_id: record.session_id.clone(),
+                thread_id: record.thread_id.clone(),
                 assistant_part_id: record.assistant_part_id.clone(),
                 parent_session_id: record.parent_session_id.clone(),
+                parent_thread_id: record.parent_thread_id.clone(),
                 cwd: record.cwd.clone(),
                 provider: record.provider.clone(),
                 model: record.model.clone(),
@@ -332,7 +338,10 @@ fn load_governance_session_record(
 ) -> Result<RunSessionRecord, String> {
     super::run_thread_store::turn_record(
         &payload.config_path,
-        &payload.session_record.session_id,
+        &crate::run_commands::RunIdentities::new(
+            payload.session_record.session_id.clone(),
+            payload.session_record.thread_id.clone(),
+        ),
         &payload.session_record.assistant_part_id,
     )?
     .ok_or_else(|| {
@@ -503,7 +512,10 @@ fn rebuild_request(
         &command,
         config,
         &payload.config_path,
-        RunRequestSession::explicit(payload.session_record.session_id.clone()),
+        RunRequestSession::explicit(super::RunIdentities::new(
+            payload.session_record.session_id.clone(),
+            payload.session_record.thread_id.clone(),
+        )),
         Some(cwd),
         RunRequestBuildOptions {
             transport_context: None,
@@ -520,6 +532,9 @@ fn rebuild_request(
     request
         .parent_session_id
         .clone_from(&payload.session_record.parent_session_id);
+    request
+        .parent_thread_id
+        .clone_from(&payload.session_record.parent_thread_id);
     request
         .selected_skill_name
         .clone_from(&payload.session_record.selected_skill_name);
@@ -544,6 +559,7 @@ fn rewire_subagents(
         config,
         config_path: &request.config_path,
         session_id: &request.session_id,
+        run_session_id: &request.run_session_id,
         cwd: &request.cwd,
         provider: &request.provider,
         model: &request.model,
@@ -572,7 +588,8 @@ fn governance_run_command(payload: &DurableGovernancePayload, prompt: &str) -> R
         reasoning_effort: None,
         format: None,
         continue_last: false,
-        session: None,
+        session: Some(payload.session_record.session_id.clone()),
+        run_session_id: Some(payload.session_record.thread_id.clone()),
         file: Vec::new(),
         timeout: None,
         tool: Vec::new(),

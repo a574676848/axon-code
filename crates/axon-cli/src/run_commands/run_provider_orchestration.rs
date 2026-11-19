@@ -2,7 +2,7 @@ use super::{
     CliRunResult, CompletedRunWireEventsInput, ConfigLoader, OutputFormat, RunAgentIdentity,
     RunCancelToken, RunCommand, RunJsonEvent, RunRequest, RunRequestBuildOptions,
     RunRequestSession, RunStartupSnapshot, cli_config_error, cli_error, json_result,
-    load_run_env_file, new_run_session_id, prepare_run_session, resolved_config_path,
+    load_run_env_file, prepare_run_session, resolve_run_identities, resolved_config_path,
     run_execution, run_outcome_diagnostics, run_progress,
     run_request_payload::RunWorkspaceSnapshotPrewarm,
     run_steer,
@@ -84,48 +84,23 @@ pub(crate) fn run_run_with_progress(
             options.performance.clone(),
         )
     });
-    // 隐式入口（未指定 --continue/--session）先解析当前 CLI 复合车道：已有 Session
-    // 直接加载，未建才创建，使同表面相邻输入延续同一段上下文。显式入口与子代理不受影响。
-    let implicit_session_id = match (command.continue_last, command.session.as_deref(), cwd) {
-        (false, None, Some(cwd)) => {
-            match super::interaction_adapter::conversation_session_run_session_id(
-                cwd,
-                Some(&path),
-                run_execution::now_ms(),
-                super::CLI_INTERACTION_CHANNEL,
-                super::cli_reply_destination(),
-            ) {
-                Ok(session_id) => Some(session_id),
-                Err(error) => return cli_error(error),
-            }
-        }
-        _ => None,
+    // 本轮挂在哪条会话上、属于哪段运行窗口，由标识解析一处给出：
+    // 显式会话、恢复指针、宿主桥接与隐式入口都在里面归一到同一行会话。
+    let identities = match resolve_run_identities(&path, command, cwd) {
+        Ok(identities) => identities,
+        Err(error) => return cli_error(error),
     };
-    let previous_session = match prepare_run_session(&path, command, implicit_session_id.as_deref())
-    {
+    let previous_session = match prepare_run_session(&path, &identities) {
         Ok(session) => session,
         Err(error) => return cli_error(error),
     };
     if let Some(performance) = &options.performance {
         performance.record(TurnPerformanceStage::HistoryReady);
     }
-    let session_id = match (
-        previous_session
-            .as_ref()
-            .map(|session| session.facts.session_id.clone()),
-        command.session.clone(),
-        implicit_session_id,
-    ) {
-        (Some(session_id), _, _) => session_id,
-        (None, Some(session_id), _) => session_id,
-        // 未显式指定 Session 时收敛到当前 CLI 复合车道：已建则复用同一个运行窗口，
-        // 未建则刚以同一个稳定身份建档。不同会话表面仍相互隔离，不共享 Provider history。
-        (None, None, Some(session_id)) => session_id,
-        (None, None, None) => new_run_session_id(),
-    };
     let cancel_token = run_cancel_token(&options);
     let progress = options.progress.map(|emit| {
-        let sink = run_progress::RunProgressSink::with_session_id(emit, session_id.clone());
+        let sink =
+            run_progress::RunProgressSink::with_session_id(emit, identities.session_id.clone());
         // 超预算的工具结果全文落在运行态数据根下，事件里只带路径。
         match crate::runtime_paths::runtime_axon_data_path_static(&path) {
             Ok(root) => sink.with_tool_result_archive_root(root),
@@ -159,7 +134,7 @@ pub(crate) fn run_run_with_progress(
     if let Some(performance) = &options.performance {
         performance.record(TurnPerformanceStage::StartupReady);
     }
-    let request_session = RunRequestSession::with_id(previous_session.as_ref(), session_id);
+    let request_session = RunRequestSession::with_id(previous_session.as_ref(), identities);
     let request_performance = options.performance.clone();
     let mut request = match RunRequest::from_command(
         command,

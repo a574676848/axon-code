@@ -3,7 +3,7 @@
 //! 后台子代理注册进**同一**作业注册表，因此获得与 Shell 作业一致的 owner 校验、
 //! 终态保留、墓碑与回收，以及同一条 `job_output` / `job_kill` 消费通道。
 //!
-//! owner 与 Shell 作业同源（运行时注入的 `thread_session_id`），不由模型提供；
+//! owner 与 Shell 作业同源（运行时注入的 `session_id`），不由模型提供；
 //! 跨 owner 访问由注册表稳定拒绝。
 //!
 //! 边界：寻址规则写死：生命周期操作（读输出、等待、终止）走 `job_id`，
@@ -36,7 +36,7 @@ pub(super) fn submit_background_subagent_job(
     max_runtime_ms: Option<u64>,
 ) -> axon_domain::AxonResult<SubagentJobBridge> {
     let spec = SubagentJobSpec {
-        owner_id: context.thread_session_id.clone(),
+        owner_id: context.session_id.clone(),
         label: path.to_string(),
         tee_root: shell_tee_root(context),
         max_runtime_ms,

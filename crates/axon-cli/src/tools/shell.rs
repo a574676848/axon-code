@@ -46,7 +46,7 @@ fn execute_shell_command(
     };
     if !args.run_in_background
         && !JobRuntime::global()
-            .pending_job_ids(&context.thread_session_id)
+            .pending_job_ids(&context.session_id)
             .is_empty()
         && let Some(detected) = detect_pure_sleep_in_command(&args.command)
     {
@@ -108,7 +108,7 @@ fn execute_shell_args(
     });
     match ShellCommandToolRuntime.execute_with_output_observer(
         ShellCommandExecutionInput {
-            owner_id: context.thread_session_id.clone(),
+            owner_id: context.session_id.clone(),
             command,
             cwd: cwd.clone(),
             timeout_ms: args.timeout_ms,
@@ -141,7 +141,7 @@ fn execute_shell_background(
     args: AgentRunShellToolArgs,
 ) -> ToolReceipt {
     match ShellCommandToolRuntime.start_background(ShellCommandExecutionInput {
-        owner_id: context.thread_session_id.clone(),
+        owner_id: context.session_id.clone(),
         command: args.command,
         cwd: args.cwd,
         timeout_ms: args.timeout_ms,
@@ -169,7 +169,7 @@ fn execute_write_stdin(
     let tool_call = &request.tool_call;
     let input = match agent_run_write_stdin_tool_input_from_provider_args(
         &tool_call.canonical_input(),
-        &context.thread_session_id,
+        &context.session_id,
     ) {
         Ok(input) => input,
         Err(message) => return failed_tool_input_receipt(tool_call, message),

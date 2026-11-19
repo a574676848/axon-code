@@ -497,7 +497,7 @@ fn debug_tool_context(
     ToolOrchestratorContext {
         config_path: Some(config_path),
         cwd,
-        thread_session_id: "debug-session".to_owned(),
+        session_id: "debug-session".to_owned(),
         interaction_id: String::new(),
         turn_id: String::new(),
         cell_id: CellId(1),

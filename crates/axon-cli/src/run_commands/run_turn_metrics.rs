@@ -122,7 +122,6 @@ pub(crate) fn publish_turn_metrics(config_path: &Path, record: &RunSessionRecord
     let Ok(session_id) = DaemonSessionId::new(record.session_id.clone()) else {
         return;
     };
-    ensure_session_row(&store, &session_id, record);
     record_session_model(&store, &session_id, record);
     let Some(payload) = metrics_payload(record) else {
         return;
@@ -176,25 +175,6 @@ fn record_session_model(
             record.session_id
         ));
     }
-}
-
-/// CLI 直连时该会话可能尚未登记：先补齐运行时行，否则事件无处归属。
-///
-/// 复合车道已经认领这段运行窗口时不能再登记一条，否则同一次对话会在会话清单里出现
-/// 两条（一条有轮次、一条空壳）。
-fn ensure_session_row(
-    store: &SqliteRuntimeStore,
-    session_id: &DaemonSessionId,
-    record: &RunSessionRecord,
-) {
-    if store.get_session(session_id).is_ok() {
-        return;
-    }
-    if crate::session_commands::run_window_registered(store, &record.session_id) {
-        return;
-    }
-    let cwd = record.cwd.clone().unwrap_or_default();
-    let _ = store.create_session(session_id, &cwd, axon_time::unix_now_ms());
 }
 
 /// 组装本轮指标载荷。

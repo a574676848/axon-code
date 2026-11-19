@@ -95,7 +95,7 @@ fn context(cwd: &Path, config_path: PathBuf) -> ToolOrchestratorContext {
     ToolOrchestratorContext {
         config_path: Some(config_path),
         cwd: cwd.to_path_buf(),
-        thread_session_id: "test-thread".to_owned(),
+        session_id: "test-thread".to_owned(),
         interaction_id: String::new(),
         turn_id: String::new(),
         cell_id: CellId(1),

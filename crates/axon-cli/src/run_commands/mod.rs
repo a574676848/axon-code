@@ -32,6 +32,7 @@ mod run_execution;
 mod run_execution_stop_watch;
 mod run_failover;
 mod run_file_change_projection;
+mod run_identities;
 pub(crate) mod run_job_lifecycle_events;
 mod run_json_wire_events;
 mod run_mailbox_persistence;
@@ -57,6 +58,15 @@ mod run_post_run_reflection_tests;
 mod run_progress;
 mod run_progress_apply_patch_snapshot;
 mod run_progress_hashline_snapshot;
+pub(crate) use run_identities::session_identities;
+use run_identities::{RunIdentities, resolve_run_identities};
+
+/// 测试用：一对同源的会话身份与运行窗口。
+#[cfg(test)]
+pub(crate) fn unique_test_run_identities() -> RunIdentities {
+    let id = run_execution::new_run_session_id();
+    RunIdentities::new(id.clone(), id)
+}
 mod run_progress_streaming_diff_preview;
 mod run_provider_loop;
 mod run_provider_turn;
@@ -130,7 +140,7 @@ pub(crate) use interaction_adapter::{
 #[cfg(feature = "tui")]
 pub(crate) use interactive_tui::run_agent_tui_entry;
 pub(crate) use run_agent_identity::RunAgentIdentity;
-use run_execution::{RunJsonEvent, new_run_session_id, now_ms};
+use run_execution::{RunJsonEvent, now_ms};
 use run_json_wire_events::CompletedRunWireEventsInput;
 use run_memory_recall::RunMemoryRecallEvent;
 pub(crate) use run_memory_write::AgentMemorySearchInput;

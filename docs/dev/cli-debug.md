@@ -51,7 +51,7 @@ axon sessions doctor [--repair]
 
 `<id>` 就是 `axon sessions list` 列出的会话 ID：会话行读一次，Thread 取自该行的 `current_run_id`。Thread 标识只在 `axon debug session` 出现，按 `sessions.current_run_id` 反查归属会话；没有归属行的 Thread（例如 `fork` 出来尚未登记会话的）仍可读取与回放，但不能作为 `resume` 的目标。
 
-`axon run --session <id>` 只追加到已存在的会话：ID 不存在时直接报错并提示先 `axon sessions list`，不会隐式新建空会话。`axon sessions resume <id>` 只设置 `--continue` 的默认目标，不改变会话内容；随后的 `axon run --continue` 按指针解析出同一段 Thread 再恢复历史（指针为空时取最近一段根会话）。带 `--session` 的 run 结束后该默认目标保持运行前的值。
+`axon run --session <id>` 只追加到已存在的会话：ID 不存在时直接报错并提示先 `axon sessions list`，不会隐式新建空会话。`axon sessions resume <id>` 只设置 `--continue` 的默认目标，不改变会话内容；随后的 `axon run --continue` 按指针解析出同一段 Thread 再恢复历史（指针为空时接续最近一段有内容的主会话（没有归属 Thread 的零轮会话会被跳过））。带 `--session` 的 run 结束后该默认目标保持运行前的值。
 
 ## 4. 相关文档
 

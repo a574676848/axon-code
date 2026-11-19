@@ -205,17 +205,17 @@ pub(crate) fn register_workspace_record(
         .map_err(|error| error.to_string())
 }
 
-/// 解析当前 Workspace 的会话运行窗口身份。
+/// 在指定 Workspace 下新建一条主会话，返回它的会话身份与运行窗口。
 ///
-/// 会话身份来自 `sessions` 表：该 Workspace 已有的最近活动主会话直接复用，没有时才新建
-/// 一条。渠道与投递目标只决定投递，不再参与会话身份。
-pub(crate) fn conversation_session_run_session_id(
+/// 返回的是同一行会话的两个标识：会话身份（ULID）与会话行上的 `current_run_id`。
+/// 渠道与投递目标只决定投递，不参与会话身份。
+pub(crate) fn conversation_session_identities(
     cwd: &Path,
     config_path: Option<&Path>,
     now_ms: u64,
     _channel: &str,
     _destination: &str,
-) -> Result<String, String> {
+) -> Result<(String, String), String> {
     let workspace = WorkspaceResolver
         .resolve(cwd, now_ms)
         .map_err(|error| error.to_string())?;
@@ -232,7 +232,12 @@ pub(crate) fn conversation_session_run_session_id(
     created.workspace_id = Some(workspace.workspace_id.as_str().to_owned());
     store
         .create_session_with(&created)
-        .map(|runtime| runtime.current_run_id)
+        .map(|runtime| {
+            (
+                runtime.session_id.as_str().to_owned(),
+                runtime.current_run_id,
+            )
+        })
         .map_err(|error| error.to_string())
 }
 
@@ -253,7 +258,7 @@ pub(crate) fn interaction_store(config_path: Option<&Path>) -> Result<SqliteRunt
 #[cfg(test)]
 mod tests {
     use super::{
-        conversation_session_run_session_id, interaction_store, prepare_interaction_from_prompt_as,
+        conversation_session_identities, interaction_store, prepare_interaction_from_prompt_as,
     };
 
     use crate::run_commands::{CLI_INTERACTION_CHANNEL, cli_reply_destination};
@@ -318,7 +323,7 @@ mod tests {
         std::fs::write(&config_path, "[agent]\ndefault_model = \"balanced\"\n").expect("写入配置");
 
         // 模拟两个独立 CLI 进程：各自持有不同的会话表面 ID。
-        let first = conversation_session_run_session_id(
+        let (first_session, first) = conversation_session_identities(
             root.path(),
             Some(&config_path),
             1,
@@ -326,7 +331,7 @@ mod tests {
             "terminal-a",
         )
         .expect("首个 CLI 进程");
-        let second = conversation_session_run_session_id(
+        let (second_session, second) = conversation_session_identities(
             root.path(),
             Some(&config_path),
             2,
@@ -339,6 +344,10 @@ mod tests {
             first, second,
             "两次独立入口必须各自新建会话，不得悄悄写进同一段历史"
         );
+        assert_ne!(
+            first_session, second_session,
+            "两次独立入口不得共用会话身份"
+        );
     }
 
     #[test]
@@ -347,7 +356,7 @@ mod tests {
         let config_path = root.path().join("isolated-config.toml");
         std::fs::write(&config_path, "[agent]\ndefault_model = \"balanced\"\n").expect("写入配置");
 
-        let first = conversation_session_run_session_id(
+        let (first_session, first) = conversation_session_identities(
             root.path(),
             Some(&config_path),
             1,
@@ -355,7 +364,7 @@ mod tests {
             cli_reply_destination(),
         )
         .expect("首次进入 Workspace");
-        let second = conversation_session_run_session_id(
+        let (second_session, second) = conversation_session_identities(
             root.path(),
             Some(&config_path),
             2,
@@ -365,16 +374,19 @@ mod tests {
         .expect("再次进入 Workspace");
 
         assert_ne!(second, first, "每次进入都必须新建一条会话的运行窗口");
+        assert_ne!(second_session, first_session, "两次入口不得共用会话");
         let store = interaction_store(Some(&config_path)).expect("打开运行库");
-        let first_session = store
+        // 两个标识必须来自同一行会话：反查窗口能命中本次新建的会话身份。
+        let first_owner = store
             .session_id_for_run(&first)
             .expect("反查首次窗口")
             .expect("首次窗口已有归属会话");
-        let second_session = store
+        let second_owner = store
             .session_id_for_run(&second)
             .expect("反查第二次窗口")
             .expect("第二次窗口已有归属会话");
-        assert_ne!(first_session, second_session, "两次入口不得共用会话");
+        assert_eq!(first_owner.as_str(), first_session);
+        assert_eq!(second_owner.as_str(), second_session);
     }
 
     #[test]
@@ -384,7 +396,7 @@ mod tests {
         let config_path = root.path().join("isolated-config.toml");
         std::fs::write(&config_path, "[agent]\ndefault_model = \"balanced\"\n").expect("写入配置");
 
-        let first = conversation_session_run_session_id(
+        let (first_session, first) = conversation_session_identities(
             root.path(),
             Some(&config_path),
             1,
@@ -392,14 +404,10 @@ mod tests {
             cli_reply_destination(),
         )
         .expect("首个 Workspace");
-        let second = conversation_session_run_session_id(
-            other.path(),
-            Some(&config_path),
-            2,
-            "cli",
-            "terminal",
-        )
-        .expect("另一个 Workspace");
+        let (second_session, second) =
+            conversation_session_identities(other.path(), Some(&config_path), 2, "cli", "terminal")
+                .expect("另一个 Workspace");
         assert_ne!(first, second, "不同 Workspace 不得共用运行窗口");
+        assert_ne!(first_session, second_session, "不同 Workspace 不得共用会话");
     }
 }

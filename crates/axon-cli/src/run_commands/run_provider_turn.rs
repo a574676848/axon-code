@@ -192,7 +192,10 @@ fn provider_run_command(
             .or_else(|| fixed.map(|(_, effort)| effort)),
         format: Some(OutputFormat::Json),
         continue_last: false,
-        session: Some(request.run_session_id.clone()),
+        // 会话身份与运行窗口都由宿主从同一行会话取出：前者是 Thread 的归属，
+        // 后者是这段 Thread 本身，两者不得互换。
+        session: Some(request.session_id.clone()),
+        run_session_id: Some(request.run_session_id.clone()),
         file: transport_files(request.transport_context.as_ref()),
         timeout: None,
         tool: Vec::new(),

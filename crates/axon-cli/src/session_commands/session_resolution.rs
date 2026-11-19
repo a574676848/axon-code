@@ -62,7 +62,7 @@ fn resolve_by_session(
 ) -> Result<ResolvedSession, String> {
     let session =
         DaemonSessionId::new(given.to_owned()).map_err(|_| format!("会话 ID 非法：{given}"))?;
-    let store = open_store(config_path)?;
+    let store = open_control_store(config_path)?;
     let record = store
         .get_session(&session)
         .map_err(|_| session_not_found(given))?;
@@ -84,15 +84,15 @@ fn resolve_by_thread(
     if !thread_exists(root, given)? {
         return Err(thread_not_found(given));
     }
-    let store = open_store(config_path)?;
+    let store = open_control_store(config_path)?;
     Ok(ResolvedSession {
         thread_id: given.to_owned(),
-        session_id: thread_session_id(&store, given)?,
+        session_id: session_of_thread(&store, given)?,
     })
 }
 
 /// 运行窗口归属的会话标识；没有归属行返回 `None`。
-pub(crate) fn thread_session_id(
+pub(crate) fn session_of_thread(
     store: &SqliteRuntimeStore,
     thread_id: &str,
 ) -> Result<Option<String>, String> {
@@ -109,14 +109,6 @@ pub(crate) fn thread_session_id(
         .map_err(|error| error.to_string())
 }
 
-/// 该运行窗口是否已由会话行登记。
-///
-/// 只用于一处判断：CLI 直跑时补齐会话行前先确认没有会话认领这段运行窗口，
-/// 否则会给同一段对话再登记一条重复会话。
-pub(crate) fn run_window_registered(store: &SqliteRuntimeStore, thread_id: &str) -> bool {
-    thread_session_id(store, thread_id).is_ok_and(|found| found.is_some())
-}
-
 fn thread_exists(root: &Path, thread_id: &str) -> Result<bool, String> {
     JsonlThreadEventStore::thread_shard_paths(root, thread_id).map(|paths| !paths.is_empty())
 }
@@ -129,7 +121,8 @@ fn thread_not_found(given: &str) -> String {
     format!("未找到 Thread：{given}。先用 `axon debug session list` 确认可用 Thread ID")
 }
 
-fn open_store(config_path: &Path) -> Result<SqliteRuntimeStore, String> {
+/// 打开控制面库：会话身份与运行窗口的唯一读取入口。
+pub(crate) fn open_control_store(config_path: &Path) -> Result<SqliteRuntimeStore, String> {
     let data_root = runtime_axon_data_path_static(config_path)?;
     let store = SqliteRuntimeStore::from_root(data_root);
     store.initialize().map_err(|error| error.to_string())?;

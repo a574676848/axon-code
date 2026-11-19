@@ -160,6 +160,7 @@ pub(super) fn wire_recorded_at_ms() -> i64 {
     i64::try_from(now_ms()).unwrap_or(i64::MAX)
 }
 
+#[cfg(test)]
 pub(super) fn new_run_session_id() -> String {
     format!("run-{}-{}", std::process::id(), now_ms())
 }

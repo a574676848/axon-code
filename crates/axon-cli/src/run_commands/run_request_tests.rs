@@ -44,6 +44,7 @@ fn run_request_uses_configured_control_limits() {
         format: Some(OutputFormat::Json),
         continue_last: false,
         session: None,
+        run_session_id: None,
         file: Vec::new(),
         timeout: None,
         tool: Vec::new(),
@@ -54,7 +55,7 @@ fn run_request_uses_configured_control_limits() {
         &command,
         &config,
         &config_path,
-        RunRequestSession::with_id(None, super::new_run_session_id()),
+        RunRequestSession::with_id(None, super::unique_test_run_identities()),
         Some(&workspace),
         RunRequestBuildOptions {
             transport_context: None,
@@ -125,6 +126,7 @@ fn goal_execution_subagent_runs_fast_model_without_main_turn_reasoning() {
         format: Some(OutputFormat::Json),
         continue_last: false,
         session: None,
+        run_session_id: None,
         file: Vec::new(),
         timeout: None,
         tool: Vec::new(),
@@ -135,7 +137,7 @@ fn goal_execution_subagent_runs_fast_model_without_main_turn_reasoning() {
             &command,
             &config,
             &config_path,
-            RunRequestSession::with_id(None, super::new_run_session_id()),
+            RunRequestSession::with_id(None, super::unique_test_run_identities()),
             Some(&workspace),
             RunRequestBuildOptions {
                 transport_context: None,
@@ -210,6 +212,7 @@ fn image_attachment_is_not_inlined_into_prompt() {
         format: Some(OutputFormat::Json),
         continue_last: false,
         session: None,
+        run_session_id: None,
         file: vec![image_path.clone()],
         timeout: None,
         tool: Vec::new(),
@@ -237,6 +240,7 @@ fn text_attachment_is_not_inlined_and_can_be_the_only_user_input() {
         format: Some(OutputFormat::Json),
         continue_last: false,
         session: None,
+        run_session_id: None,
         file: vec![file_path.clone()],
         timeout: None,
         tool: Vec::new(),
@@ -287,6 +291,7 @@ fn subagent_graph_store_uses_session_root_thread_id() {
         format: Some(OutputFormat::Json),
         continue_last: false,
         session: None,
+        run_session_id: None,
         file: Vec::new(),
         timeout: None,
         tool: Vec::new(),
@@ -296,7 +301,7 @@ fn subagent_graph_store_uses_session_root_thread_id() {
         &command,
         &config,
         &config_path,
-        RunRequestSession::with_id(None, super::new_run_session_id()),
+        RunRequestSession::with_id(None, super::unique_test_run_identities()),
         Some(&workspace),
         RunRequestBuildOptions {
             transport_context: None,
@@ -373,11 +378,11 @@ fn subagent_graph_store_uses_session_root_thread_id() {
 #[test]
 fn resumed_parent_session_rejects_self_reference() {
     assert_eq!(
-        resumed_parent_session_id("session-1", Some("session-1")),
+        resumed_parent_thread_id("session-1", Some("session-1")),
         None
     );
     assert_eq!(
-        resumed_parent_session_id("session-1", Some("parent-1")).as_deref(),
+        resumed_parent_thread_id("session-1", Some("parent-1")).as_deref(),
         Some("parent-1")
     );
 }
@@ -392,7 +397,7 @@ fn transport_context_keeps_explicit_turn_model_and_effort() {
         &command,
         &config,
         &config_path,
-        RunRequestSession::with_id(None, super::new_run_session_id()),
+        RunRequestSession::with_id(None, super::unique_test_run_identities()),
         Some(&workspace),
         RunRequestBuildOptions {
             transport_context: Some(serde_json::json!({
@@ -469,6 +474,7 @@ fn pinned_model_command() -> RunCommand {
         format: Some(OutputFormat::Json),
         continue_last: false,
         session: None,
+        run_session_id: None,
         file: Vec::new(),
         timeout: None,
         tool: Vec::new(),

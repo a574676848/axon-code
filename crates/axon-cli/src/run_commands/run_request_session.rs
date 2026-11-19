@@ -5,31 +5,31 @@ use std::path::Path;
 use axon_config::AxonConfig;
 
 use super::{
-    RunCommand,
+    RunCommand, RunIdentities,
     run_request::{PreparedRunInput, prepare_run_input},
     run_thread_store,
 };
 
 pub(super) struct RunRequestSession<'a> {
     previous: Option<&'a run_thread_store::PreparedRunSession>,
-    session_id: String,
+    identities: RunIdentities,
 }
 
 impl<'a> RunRequestSession<'a> {
     pub(super) fn with_id(
         previous: Option<&'a run_thread_store::PreparedRunSession>,
-        session_id: String,
+        identities: RunIdentities,
     ) -> Self {
         Self {
             previous,
-            session_id,
+            identities,
         }
     }
 
-    pub(super) fn explicit(session_id: String) -> Self {
+    pub(super) fn explicit(identities: RunIdentities) -> Self {
         Self {
             previous: None,
-            session_id,
+            identities,
         }
     }
 
@@ -46,7 +46,7 @@ impl<'a> RunRequestSession<'a> {
         String,
     > {
         let previous = self.previous;
-        let prepared = prepare_run_input(command, previous, self.session_id, config, cwd)?;
+        let prepared = prepare_run_input(command, previous, self.identities, config, cwd)?;
         Ok((prepared, previous))
     }
 }

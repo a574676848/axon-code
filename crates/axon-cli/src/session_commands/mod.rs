@@ -25,7 +25,7 @@ mod thread_cli;
 
 use output::{SessionOutputCommand, run_session_output};
 use replay::{SessionReplayCommand, run_session_replay};
-pub(crate) use session_resolution::{TargetKind, resolve_session_target, run_window_registered};
+pub(crate) use session_resolution::{TargetKind, open_control_store, resolve_session_target};
 use sessions_list::{SessionsListCommand, run_sessions_list};
 pub(crate) use thread_cli::session_summary_views_for_root;
 use thread_cli::{

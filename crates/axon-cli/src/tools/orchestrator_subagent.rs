@@ -459,8 +459,8 @@ fn start_subagent_executor(
         match context.config_path.as_deref() {
             Some(config_path) => match RunSubagentContinuationSink::open(
                 config_path,
-                context.thread_session_id.clone(),
-                context.thread_session_id.clone(),
+                context.session_id.clone(),
+                context.session_id.clone(),
             ) {
                 Ok(sink) => completion.with_continuation(sink),
                 Err(error) => {

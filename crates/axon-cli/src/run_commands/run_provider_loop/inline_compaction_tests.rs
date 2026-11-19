@@ -51,18 +51,11 @@ fn initialize_session(request: &RunRequest) -> PathBuf {
 }
 
 fn restore(request: &RunRequest) -> Result<Vec<AgentModelMessage>, String> {
-    let command = crate::RunCommand {
-        prompt: "继续".to_owned(),
-        model: None,
-        reasoning_effort: None,
-        format: None,
-        continue_last: false,
-        session: Some(request.session_id.clone()),
-        file: Vec::new(),
-        timeout: None,
-        tool: Vec::new(),
-    };
-    let prepared = prepare_run_session(&request.config_path, &command, None)?.unwrap();
+    let identities = crate::run_commands::RunIdentities::new(
+        request.session_id.clone(),
+        request.run_session_id.clone(),
+    );
+    let prepared = prepare_run_session(&request.config_path, &identities)?.unwrap();
     serde_json::from_str(&prepared.model_history_json).map_err(|error| error.to_string())
 }
 

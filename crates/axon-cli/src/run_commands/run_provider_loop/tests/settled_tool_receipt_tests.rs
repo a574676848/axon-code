@@ -54,9 +54,13 @@ fn settled_tool_receipt_is_durable_before_next_provider_turn() {
 
     let assistant_part_id =
         crate::run_commands::run_session_store::run_persistence_assistant_part_id(&request);
+    let identities = crate::run_commands::RunIdentities::new(
+        request.session_id.clone(),
+        request.run_session_id.clone(),
+    );
     let persisted = crate::run_commands::run_thread_store::turn_record(
         &request.config_path,
-        &request.session_id,
+        &identities,
         &assistant_part_id,
     )
     .expect("thread 轮次应可读取")

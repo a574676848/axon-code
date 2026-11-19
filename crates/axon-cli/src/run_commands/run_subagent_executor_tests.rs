@@ -73,6 +73,7 @@ fn fixture_environment(config_path: PathBuf) -> ProviderRunSubagentEnvironment {
         config,
         config_path,
         parent_session_id: "parent-session".to_owned(),
+        parent_run_session_id: "parent-window".to_owned(),
         cwd,
         provider: provider.clone(),
         model: model.clone(),

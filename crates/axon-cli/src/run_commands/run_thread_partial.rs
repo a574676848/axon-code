@@ -22,7 +22,7 @@ pub(super) fn mirror_session_partial(
 ) -> Result<(), String> {
     let root = resolved_axon_root(config_path)?;
     let service = ThreadService::new(JsonlThreadEventStore);
-    let Ok(activation) = service.read_thread_activation(&root, &record.session_id) else {
+    let Ok(activation) = service.read_thread_activation(&root, &record.thread_id) else {
         return super::run_thread_store::mirror_session_started(config_path, record);
     };
     if !activation.exists {
@@ -35,13 +35,13 @@ pub(super) fn mirror_session_partial(
     }
     let existing = match super::run_thread_tail::active_turn_items(
         config_path,
-        &record.session_id,
+        &record.thread_id,
         &turn.turn_id,
     )? {
         Some(items) => items,
         None => {
             // 尾部不足以覆盖本轮起跑：回退整条读，绝不在缺少现状时盲目追加。
-            let detail = service.read_thread(&root, &record.session_id)?;
+            let detail = service.read_thread(&root, &record.thread_id)?;
             let active = detail
                 .turns
                 .iter()
@@ -60,7 +60,7 @@ pub(super) fn mirror_session_partial(
     append.interrupted_at_ms = None;
     service.append_turn_items_at_sequence(
         &root,
-        &record.session_id,
+        &record.thread_id,
         append.turn_id.clone(),
         items,
         record.created_at_ms,

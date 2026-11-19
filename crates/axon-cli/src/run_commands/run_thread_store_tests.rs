@@ -451,7 +451,7 @@ fn attachments_roundtrip_sqlite_thread_jsonl_and_resume_history() {
     mirror_session_to_thread(&config_path, &record).unwrap();
 
     let stored_thread = ThreadService::new(JsonlThreadEventStore)
-        .read_thread(&root, &record.session_id)
+        .read_thread(&root, &record.thread_id)
         .unwrap();
     let ThreadHistoryItem::UserMessage {
         local_images,
@@ -466,22 +466,12 @@ fn attachments_roundtrip_sqlite_thread_jsonl_and_resume_history() {
 
     let prepared = prepare_run_session(
         &config_path,
-        &RunCommand {
-            prompt: "继续".to_owned(),
-            model: None,
-            reasoning_effort: None,
-            format: None,
-            continue_last: false,
-            session: Some(record.session_id.clone()),
-            file: Vec::new(),
-            timeout: None,
-            tool: Vec::new(),
-        },
-        None,
+        &super::super::RunIdentities::new(record.session_id.clone(), record.thread_id.clone()),
     )
     .unwrap()
     .expect("应恢复持久化 session");
-    assert_eq!(prepared.facts.session_id, record.session_id);
+    // 恢复出来的事实带的是运行窗口，会话身份由标识解析另行给出。
+    assert_eq!(prepared.facts.thread_id, record.thread_id);
     assert_eq!(prepared.facts.cwd, record.cwd);
     let messages: Vec<AgentModelMessage> =
         serde_json::from_str(&prepared.model_history_json).unwrap();
@@ -597,7 +587,9 @@ fn session_record_with_tools() -> RunSessionRecord {
 fn session_record(user: &str, assistant: &str, at_ms: u64) -> RunSessionRecord {
     RunSessionRecord {
         session_id: "session-1".to_owned(),
+        thread_id: "session-1".to_owned().clone(),
         parent_session_id: None,
+        parent_thread_id: None.clone(),
         created_at_ms: at_ms,
         startup_timeline: crate::run_commands::run_startup_snapshot::test_startup_timeline(),
         cwd: Some("E:/zbg/axon-code".to_owned()),

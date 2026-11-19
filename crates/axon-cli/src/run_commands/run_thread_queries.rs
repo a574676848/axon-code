@@ -311,26 +311,31 @@ pub(crate) fn patch_turn_artifacts(
 /// 留空，由消费方按缺省处理。
 pub(crate) fn turn_record(
     config_path: &Path,
-    session_id: &str,
+    identities: &crate::run_commands::RunIdentities,
     assistant_part_id: &str,
 ) -> Result<Option<RunSessionRecord>, String> {
-    let Some(detail) = read_thread_detail(config_path, session_id) else {
+    let Some(detail) = read_thread_detail(config_path, &identities.run_session_id) else {
         return Ok(None);
     };
     let found = detail.turns.iter().find_map(|turn| {
         let metadata = turn_metadata(&turn.token_usage_json)?;
         (metadata.assistant_part_id == assistant_part_id).then_some((turn, metadata))
     });
-    Ok(found.map(|(turn, metadata)| turn_record_from_part(&detail, turn, &metadata)))
+    let Some((turn, metadata)) = found else {
+        return Ok(None);
+    };
+    Ok(Some(turn_record_from_part(
+        &detail, turn, &metadata, identities,
+    )))
 }
 
 /// 按轮序或最新一轮取回 thread 轮次记录，并带回解出的轮序。
 pub(crate) fn turn_record_by_sequence(
     config_path: &Path,
-    session_id: &str,
+    identities: &crate::run_commands::RunIdentities,
     sequence: Option<u64>,
 ) -> Result<Option<(RunSessionRecord, u64)>, String> {
-    let Some(detail) = read_thread_detail(config_path, session_id) else {
+    let Some(detail) = read_thread_detail(config_path, &identities.run_session_id) else {
         return Ok(None);
     };
     let found = match sequence {
@@ -348,7 +353,7 @@ pub(crate) fn turn_record_by_sequence(
         return Ok(None);
     };
     Ok(Some((
-        turn_record_from_part(&detail, turn, &metadata),
+        turn_record_from_part(&detail, turn, &metadata, identities),
         sequence,
     )))
 }
@@ -357,11 +362,15 @@ fn turn_record_from_part(
     detail: &ThreadDetail,
     turn: &Turn,
     metadata: &ThreadTurnMetadata,
+    identities: &crate::run_commands::RunIdentities,
 ) -> RunSessionRecord {
     let projection = super::super::run_thread_history::turn_item_projection(&turn.history_items);
     RunSessionRecord {
-        session_id: detail.thread.thread_id.clone(),
-        parent_session_id: detail.thread.parent_thread_id.clone(),
+        session_id: identities.session_id.clone(),
+        thread_id: detail.thread.thread_id.clone(),
+        // 父会话身份不在 Thread 里：投影只还原本轮内容，身份由调用方补齐。
+        parent_session_id: None,
+        parent_thread_id: detail.thread.parent_thread_id.clone(),
         created_at_ms: turn.started_at_ms,
         startup_timeline: super::super::run_startup_snapshot::RunStartupTimeline {
             total_ms: 0,

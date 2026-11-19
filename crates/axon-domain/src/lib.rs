@@ -120,7 +120,7 @@ pub use execution::{ExecutionCheckpoint, ExecutionLease, ExecutionRecord, Execut
 pub use goal::{
     GoalActivityView, GoalCancelCommand, GoalCapabilityError, GoalCreateCommand, GoalCreationScope,
     GoalDetailQuery, GoalError, GoalListQuery, GoalPlan, GoalProgress, GoalQueryScope, GoalRecord,
-    GoalStatus, GoalUpdateCommand, MAX_GOAL_TEXT_LENGTH,
+    GoalStatus, GoalUpdateCommand, GoalWritePolicy, MAX_GOAL_TEXT_LENGTH,
 };
 pub use ids::{
     AttachmentId, ByteChunkId, CellId, ExecutionRequestId, LongRunningJobId, MemoryCandidateId,

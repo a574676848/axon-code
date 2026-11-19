@@ -322,7 +322,7 @@ fn shell_command_blocks_pure_sleep_only_when_pending_background_job_exists() {
 
     let mut context = test_context(root.clone());
     context.config_path = Some(root.join("config.toml"));
-    context.thread_session_id = owner.clone();
+    context.session_id = owner.clone();
     let sleep_call = ProviderToolCall::new(
         "call-sleep",
         "builtin.shell_command",
@@ -377,7 +377,7 @@ fn shell_command_allows_sleep_when_no_pending_background_job_exists() {
     let root = temp_workspace("shell-sleep-guard-idle");
     let mut context = test_context(root.clone());
     context.config_path = Some(root.join("config.toml"));
-    context.thread_session_id = format!("cli-shell-sleep-idle-{}", std::process::id());
+    context.session_id = format!("cli-shell-sleep-idle-{}", std::process::id());
     let call = ProviderToolCall::new(
         "call-no-job-sleep",
         "builtin.shell_command",
@@ -419,7 +419,7 @@ fn test_context(cwd: std::path::PathBuf) -> ToolOrchestratorContext {
     ToolOrchestratorContext {
         config_path: None,
         cwd,
-        thread_session_id: "test-thread".to_owned(),
+        session_id: "test-thread".to_owned(),
         interaction_id: String::new(),
         turn_id: String::new(),
         cell_id: axon_domain::CellId(1),
