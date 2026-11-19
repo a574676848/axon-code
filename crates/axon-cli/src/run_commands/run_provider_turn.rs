@@ -133,7 +133,6 @@ impl CliProviderTurnRunner {
         let startup_snapshot = self
             .startup_snapshots
             .acquire(&self.config_path, Path::new(&request.cwd));
-        let run_session_id = command.session.clone().unwrap_or_default();
         // 该边界内的失败只会发生在注册与准备阶段，尚未发出 Provider 请求，可安全重试。
         let run_result = execute_provider_command(
             &self.config_path,
@@ -149,7 +148,8 @@ impl CliProviderTurnRunner {
         // Provider turn 已经执行，之后的收尾失败无法证明外部结果，必须进入 uncertain。
         let run_result = finalize_provider_run(run_result, &command, started_at_ms)
             .map_err(TurnExecutionError::external_outcome_unknown)?;
-        build_provider_turn_result(&self.config_path, &run_session_id, &run_result)
+        // 逐字稿按运行窗口读：会话身份只用于归属，读不到窗口就取不到这一轮的用量。
+        build_provider_turn_result(&self.config_path, &request.run_session_id, &run_result)
             .map_err(TurnExecutionError::external_outcome_unknown)
     }
 }
@@ -361,7 +361,7 @@ fn finalize_provider_run(
     started_at_ms: u64,
 ) -> Result<CliRunResult, String> {
     axon_logger::debug(&format!(
-        "Daemon Provider runner 返回: run_session_id={}, exit_code={}, elapsed_ms={}",
+        "Daemon Provider runner 返回: session_id={}, exit_code={}, elapsed_ms={}",
         command.session.clone().unwrap_or_default(),
         run_result.exit_code,
         crate::run_commands::run_execution::now_ms().saturating_sub(started_at_ms)
