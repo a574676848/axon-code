@@ -98,7 +98,10 @@ impl AgentTuiState {
         self.composer
             .bottom_views
             .top_view()
-            .map_or(0, crate::r#loop::agent_tui::bottom_view::BottomView::selection_index)
+            .map_or(
+                0,
+                crate::r#loop::agent_tui::bottom_view::BottomView::selection_index,
+            )
             .hash(hasher);
         self.composer
             .bottom_views

@@ -275,7 +275,9 @@ mod tests {
 
 #[cfg(test)]
 mod session_binding_tests {
-    use crate::r#loop::agent_tui::{AgentTuiTokenUsage, state::runtime_flow_test_support::test_state};
+    use crate::r#loop::agent_tui::{
+        AgentTuiTokenUsage, state::runtime_flow_test_support::test_state,
+    };
 
     fn usage_with(input_tokens: u64) -> AgentTuiTokenUsage {
         AgentTuiTokenUsage {
