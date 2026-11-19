@@ -25,7 +25,8 @@ export function canonicalAgentId(agentId: string | null | undefined): string {
   const raw = (agentId ?? '').trim();
   if (raw.length === 0) return '';
   const path = raw.replace(/^subagent:/, '').replace(/^\/+/, '');
-  return path.length === 0 ? '' : `subagent:/${path}`;
+  // 没有层级分隔的标识不是代理路径（例如事件里退化出来的 partId），不参与对账。
+  return path.includes('/') ? `subagent:/${path}` : '';
 }
 
 /** 名册里的线程状态与末轮状态折算成行状态。 */

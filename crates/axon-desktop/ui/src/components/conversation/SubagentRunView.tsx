@@ -58,6 +58,10 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
          * 两者只在去掉前导斜杠后同源。
          */
         const wanted = canonicalAgentId(row.agentId);
+        if (wanted.length === 0) {
+          setLocateError('这次委派没有记录代理路径，无法定位它的会话');
+          return;
+        }
         const match = list.subagents.find((item) => canonicalAgentId(item.agentId) === wanted);
         if (match === undefined) {
           setLocateError('还没有读到这个子代理的会话记录');
