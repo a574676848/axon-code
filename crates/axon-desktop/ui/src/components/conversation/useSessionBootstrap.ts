@@ -145,6 +145,8 @@ export function useSessionBootstrap(options: SessionBootstrapOptions): SessionBo
   useEffect(() => {
     const pending = pendingHeroText.current;
     if (pending === null || selection === null) return;
+    // 草稿还没有服务端会话：这一轮要等物化把目标换成真实标识之后再发。
+    if (selection.draft === true) return;
     if (conversation.sessionReadyId !== selection.sessionId) return;
     pendingHeroText.current = null;
     void conversation.submit(

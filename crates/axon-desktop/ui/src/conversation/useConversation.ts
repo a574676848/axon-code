@@ -343,14 +343,14 @@ export function useConversation(
     /*
      * 本机草稿还没有任何服务端事实：一条历史都不该去读。
      *
-     * 按「空会话已就绪」直接收口，界面因此不会为一条还不存在的会话报读取失败；
-     * 首条消息提交前会先把它物化成真实会话，历史再按真实标识读取。
+     * 按「空会话已就绪」收口，但**不能**把 `sessionReadyId` 标成草稿标识：那一格是
+     * 「可以往这条会话发消息了」的判据，草稿恰恰还没有服务端会话可以写。标上它会让
+     * 首条消息在物化完成之前就发出去，结果只换来一次「会话还没建立」并把正文丢掉。
      */
     if (current.draft === true) {
       dispatch({ type: 'reset' });
       setReplaying(false);
       setOpening(false);
-      setSessionReadyId(sessionId);
       return undefined;
     }
     let cancelled = false;
