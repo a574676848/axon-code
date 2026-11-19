@@ -12,6 +12,7 @@ axon-crypto = { path = "../axon-crypto" }
 axon-domain = { path = "../axon-domain" }
 axon-logger = { path = "../axon-logger" }
 axon-process = { path = "../axon-process" }
+axon-prompts = { path = "../axon-prompts" }
 axon-protocol = { path = "../axon-protocol" }
 axon-session = { path = "../axon-session" }
 axon-session-runtime = { path = "../axon-session-runtime" }

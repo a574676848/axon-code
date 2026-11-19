@@ -21,6 +21,7 @@ fn execution_store_claims_with_lease_and_requires_matching_owner_to_settle() {
         GoalPlan {
             objective: "执行".to_owned(),
             steps: Vec::new(),
+            write_policy: Default::default(),
         },
         vec!["完成".to_owned()],
         1,
@@ -71,6 +72,7 @@ fn execution_store_rejects_duplicate_active_business_key_and_releases_it_after_t
         GoalPlan {
             objective: "验证幂等".to_owned(),
             steps: Vec::new(),
+            write_policy: Default::default(),
         },
         vec!["完成".to_owned()],
         1,
@@ -124,6 +126,7 @@ fn execution_store_claims_in_priority_then_creation_order() {
         GoalPlan {
             objective: "验证排序".to_owned(),
             steps: Vec::new(),
+            write_policy: Default::default(),
         },
         vec!["完成".to_owned()],
         1,
@@ -171,6 +174,7 @@ fn execution_store_applies_failure_backoff_and_excludes_uncertain_from_claims() 
         GoalPlan {
             objective: "验证失败退避".to_owned(),
             steps: Vec::new(),
+            write_policy: Default::default(),
         },
         vec!["完成".to_owned()],
         1,

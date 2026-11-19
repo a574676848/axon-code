@@ -151,6 +151,7 @@ fn ledger_gate_blocks_paused_task_and_denied_decision() {
         GoalPlan {
             objective: "paused".to_owned(),
             steps: vec!["wait".to_owned()],
+            write_policy: Default::default(),
         },
         vec!["resume".to_owned()],
         10,
@@ -196,6 +197,7 @@ fn ledger_gate_blocks_paused_task_and_denied_decision() {
         GoalPlan {
             objective: "denied".to_owned(),
             steps: vec!["stop".to_owned()],
+            write_policy: Default::default(),
         },
         vec!["none".to_owned()],
         10,
@@ -261,6 +263,7 @@ fn ledger_gate_uses_persisted_goal_id_when_execution_id_differs() {
         GoalPlan {
             objective: "验证执行关联".to_owned(),
             steps: vec!["运行 Worker".to_owned()],
+            write_policy: Default::default(),
         },
         vec!["执行一次".to_owned()],
         10,
@@ -428,6 +431,7 @@ fn execution_completion_persists_result_record_and_completes_task() {
         GoalPlan {
             objective: "执行并完成".to_owned(),
             steps: vec!["第一步".to_owned()],
+            write_policy: Default::default(),
         },
         vec!["产生结果".to_owned()],
         10,
@@ -498,6 +502,7 @@ fn executor_success_completes_goal_without_extra_artifact_gate() {
         GoalPlan {
             objective: "生成代码产物".to_owned(),
             steps: vec!["步骤 1".to_owned()],
+            write_policy: Default::default(),
         },
         vec!["必须提供 artifact 产物交付".to_owned()],
         10,
@@ -569,6 +574,7 @@ fn cancelled_task_aborts_commit_and_emits_cancelled_event() {
         GoalPlan {
             objective: "执行中取消".to_owned(),
             steps: vec!["步骤 1".to_owned()],
+            write_policy: Default::default(),
         },
         vec!["无需产物".to_owned()],
         10,

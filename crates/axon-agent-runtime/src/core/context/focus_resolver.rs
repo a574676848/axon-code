@@ -118,6 +118,7 @@ mod tests {
             GoalPlan {
                 objective: objective.to_owned(),
                 steps: vec!["执行".to_owned()],
+                write_policy: Default::default(),
             },
             vec!["完成".to_owned()],
             updated_at_ms,

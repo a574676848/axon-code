@@ -317,6 +317,7 @@ fn seed_fault_action(
         GoalPlan {
             objective: "验证故障注入后的收敛".to_owned(),
             steps: Vec::new(),
+            write_policy: Default::default(),
         },
         Vec::new(),
         FAULT_BASE_NOW_MS,
@@ -378,6 +379,7 @@ fn seed_queued_execution(
         GoalPlan {
             objective: "验证写锁竞争下的领取语义".to_owned(),
             steps: Vec::new(),
+            write_policy: Default::default(),
         },
         Vec::new(),
         FAULT_BASE_NOW_MS,

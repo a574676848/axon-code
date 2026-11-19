@@ -164,6 +164,7 @@ fn ledger_context_precedes_memory_and_drops_invalid_decision() {
         GoalPlan {
             objective: "完成发布".to_owned(),
             steps: vec!["验证构建".to_owned()],
+            write_policy: Default::default(),
         },
         vec!["通过测试".to_owned()],
         1,

@@ -77,6 +77,7 @@ fn next_execution_inherits_goal_id_when_execution_id_differs() {
         GoalPlan {
             objective: "验证 Task 关联".to_owned(),
             steps: vec!["提交下一次 Execution".to_owned()],
+            write_policy: Default::default(),
         },
         vec!["Goal ID 不变".to_owned()],
         10,

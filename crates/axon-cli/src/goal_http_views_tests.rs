@@ -18,6 +18,7 @@ fn goal_record(objective: &str, steps: Vec<String>, now_ms: u64) -> GoalRecord {
         GoalPlan {
             objective: objective.to_owned(),
             steps,
+            write_policy: Default::default(),
         },
         vec!["通过".to_owned()],
         now_ms,

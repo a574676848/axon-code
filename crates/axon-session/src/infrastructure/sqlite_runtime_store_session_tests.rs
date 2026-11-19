@@ -538,6 +538,7 @@ fn interrupted_running_execution_is_quarantined_as_uncertain_without_reclaim() {
         GoalPlan {
             objective: "验证中断隔离".to_owned(),
             steps: Vec::new(),
+            write_policy: Default::default(),
         },
         vec!["产出结论".to_owned()],
         10,
@@ -618,6 +619,7 @@ fn upgrade_deadline_interrupts_running_execution_as_uncertain_instead_of_requeue
         GoalPlan {
             objective: "验证升级 deadline 不盲目重跑".to_owned(),
             steps: Vec::new(),
+            write_policy: Default::default(),
         },
         Vec::new(),
         11,

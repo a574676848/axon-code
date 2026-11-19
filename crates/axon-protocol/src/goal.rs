@@ -124,6 +124,7 @@ mod tests {
                 steps: vec!["执行".to_owned()],
                 acceptance: vec!["完成".to_owned()],
                 create_execution: true,
+                write_policy: Default::default(),
             }),
         }
     }

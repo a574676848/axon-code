@@ -44,6 +44,7 @@ fn health_counts_statuses_and_oldest_execution_age() {
         GoalPlan {
             objective: "验证健康聚合".to_owned(),
             steps: Vec::new(),
+            write_policy: Default::default(),
         },
         Vec::new(),
         1_000,

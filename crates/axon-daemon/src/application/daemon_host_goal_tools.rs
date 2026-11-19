@@ -296,6 +296,7 @@ where
             steps: goal.plan.steps.clone(),
             acceptance: goal.acceptance.clone(),
             create_execution: true,
+            write_policy: goal.plan.write_policy,
         };
         let execution = self
             .new_goal_execution(
@@ -421,6 +422,7 @@ where
             &command.objective,
             &command.steps,
             &command.acceptance,
+            command.write_policy,
         );
         let source = source.cloned().unwrap_or(GoalSource::OneOff);
         let mut transport_context = match &source {

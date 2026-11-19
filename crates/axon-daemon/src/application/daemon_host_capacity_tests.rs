@@ -409,6 +409,7 @@ fn enqueue_seeded_action(
         GoalPlan {
             objective: "验证 backlog 领取与结算容量".to_owned(),
             steps: Vec::new(),
+            write_policy: Default::default(),
         },
         Vec::new(),
         10,

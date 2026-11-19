@@ -80,6 +80,7 @@ fn goal(index: usize, scope: ScopeRef, now_ms: u64) -> GoalRecord {
                 "补回归测试".to_owned(),
                 "复核打包流程".to_owned(),
             ],
+            write_policy: Default::default(),
         },
         vec!["全部用例通过".to_owned(), "打包产物体积不变".to_owned()],
         now_ms,

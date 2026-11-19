@@ -272,6 +272,7 @@ fn seed_execution(
         GoalPlan {
             objective: "验证常驻 heartbeat 与执行 churn".to_owned(),
             steps: Vec::new(),
+            write_policy: Default::default(),
         },
         Vec::new(),
         now_ms,

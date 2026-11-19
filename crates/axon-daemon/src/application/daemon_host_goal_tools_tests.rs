@@ -108,6 +108,7 @@ fn create_command(create_execution: bool) -> GoalCreateCommand {
         steps: vec!["汇总变更".to_owned()],
         acceptance: vec!["发布说明通过审阅".to_owned()],
         create_execution,
+        write_policy: Default::default(),
     }
 }
 
@@ -407,6 +408,7 @@ fn unregistered_workspace_keeps_global_goal_available() {
                 steps: vec!["创建全局 Goal".to_owned()],
                 acceptance: vec!["Goal 落库可供全局查询".to_owned()],
                 create_execution: false,
+                write_policy: Default::default(),
             }),
         ))
         .expect("未注册 Workspace 下仍可创建全局 Goal");

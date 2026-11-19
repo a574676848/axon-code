@@ -10,6 +10,7 @@ fn active_task(id: &str, scope: ScopeRef, now_ms: u64) -> GoalRecord {
         GoalPlan {
             objective: format!("{id} objective"),
             steps: Vec::new(),
+            write_policy: Default::default(),
         },
         Vec::new(),
         now_ms,

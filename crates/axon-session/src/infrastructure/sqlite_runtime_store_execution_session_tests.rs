@@ -13,6 +13,7 @@ fn goal(goal_id: &str, now_ms: u64) -> GoalRecord {
         GoalPlan {
             objective: "验证按会话取最近执行".to_owned(),
             steps: vec!["写入三条执行".to_owned()],
+            write_policy: Default::default(),
         },
         vec!["取到最近一条".to_owned()],
         now_ms,

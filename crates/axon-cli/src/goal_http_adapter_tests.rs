@@ -32,6 +32,7 @@ fn goal(goal_id: &str, scope: ScopeRef, updated_at_ms: u64) -> GoalRecord {
         GoalPlan {
             objective: format!("完成 {goal_id}"),
             steps: vec!["第一步".to_owned(), "第二步".to_owned()],
+            write_policy: Default::default(),
         },
         vec!["验收通过".to_owned()],
         updated_at_ms,

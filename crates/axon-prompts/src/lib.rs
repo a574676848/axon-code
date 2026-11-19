@@ -11,6 +11,7 @@ const AXON_CONTEXT_WINDOW_GUIDANCE_TEMPLATE: &str =
     include_str!("../templates/agent/context_window_guidance.md");
 const AXON_TOOL_USAGE_GUIDANCE_TEMPLATE: &str =
     include_str!("../templates/agent/tool_usage_guidance.md");
+const AXON_GOAL_EXECUTION_TEMPLATE: &str = include_str!("../templates/agent/goal_execution.md");
 /// 主 turn 工具编排协议模板自带的标签。
 ///
 /// 标签由模板正文承载（fragment markers 留空），运行时按它判定主 turn 稳定前缀
@@ -125,6 +126,76 @@ pub fn render_tool_usage_guidance() -> String {
     normalize_line_endings(AXON_TOOL_USAGE_GUIDANCE_TEMPLATE.trim())
 }
 
+/// Goal 执行期的写权限口径。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GoalExecutionScope {
+    /// 允许改动文件。
+    AllowWrites,
+    /// 只读执行。
+    ReadOnly,
+}
+
+/// Goal 执行模板输入。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoalExecutionTemplateInput {
+    /// 目标标题。
+    pub title: String,
+    /// 可验收目标。
+    pub objective: String,
+    /// 有序执行步骤。
+    pub steps: Vec<String>,
+    /// 验收条件。
+    pub acceptance: Vec<String>,
+    /// 执行期写权限。
+    pub scope: GoalExecutionScope,
+}
+
+/// 渲染后台 Goal 执行指令。
+///
+/// 模板不对字段做 XML 转义：执行步骤与验收条件可能含代码片段，转义会把它们改坏；
+/// 这里只做占位符替换。
+#[must_use]
+pub fn render_goal_execution(input: &GoalExecutionTemplateInput) -> String {
+    render_template(
+        AXON_GOAL_EXECUTION_TEMPLATE,
+        &[
+            (
+                "execution_scope",
+                goal_execution_scope_text(input.scope).to_owned(),
+            ),
+            ("title", input.title.clone()),
+            ("objective", input.objective.clone()),
+            ("steps", bullet_list(&input.steps)),
+            ("acceptance", bullet_list(&input.acceptance)),
+        ],
+    )
+}
+
+/// 写权限对应的执行边界说明。
+///
+/// 目标执行是无人值守的后台 turn，提示词是执行开始前唯一能表达「能不能动文件」的位置：
+/// 只读档必须明说不得改文件，允许档必须限定改动范围，避免顺手改无关代码。
+fn goal_execution_scope_text(scope: GoalExecutionScope) -> &'static str {
+    match scope {
+        GoalExecutionScope::ReadOnly => {
+            "本次执行为只读：不得修改、创建或删除仓库内任何文件，也不得执行有副作用的命令。需要改动时，\
+在结论里写清应改什么、由谁执行，不要自己动手。"
+        }
+        GoalExecutionScope::AllowWrites => {
+            "只改目标与执行步骤能追溯到的那部分：不要顺手重构、清理或格式化无关文件；不要提交、推送或删除\
+仓库内文件，除非目标明确要求。"
+        }
+    }
+}
+
+fn bullet_list(items: &[String]) -> String {
+    items
+        .iter()
+        .map(|item| format!("- {item}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn render_template(template: &str, values: &[(&str, String)]) -> String {
     let mut rendered = template.to_owned();
     for (key, value) in values {
@@ -163,6 +234,8 @@ pub enum AgentTemplateKind {
     ContextWindowGuidance,
     /// 工具使用规约模板。
     ToolUsageGuidance,
+    /// 后台 Goal 执行指令模板。
+    GoalExecution,
 }
 
 /// 返回 Agent 模板源码，供审计和 snapshot 测试使用。
@@ -174,6 +247,7 @@ pub fn agent_template_source(kind: AgentTemplateKind) -> Cow<'static, str> {
         AgentTemplateKind::ToolPolicy => AXON_TOOL_POLICY_TEMPLATE,
         AgentTemplateKind::ContextWindowGuidance => AXON_CONTEXT_WINDOW_GUIDANCE_TEMPLATE,
         AgentTemplateKind::ToolUsageGuidance => AXON_TOOL_USAGE_GUIDANCE_TEMPLATE,
+        AgentTemplateKind::GoalExecution => AXON_GOAL_EXECUTION_TEMPLATE,
     })
 }
 
@@ -204,6 +278,53 @@ fn optional_block(value: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Goal 执行模板必须渲染出契约字段，并按写权限给出执行边界。
+    fn goal_execution_input(scope: GoalExecutionScope) -> GoalExecutionTemplateInput {
+        GoalExecutionTemplateInput {
+            title: "标题".to_owned(),
+            objective: "可验收目标".to_owned(),
+            steps: vec!["第一步".to_owned(), "第二步".to_owned()],
+            acceptance: vec!["验收条件".to_owned()],
+            scope,
+        }
+    }
+
+    #[test]
+    fn goal_execution_prompt_renders_contract_fields_and_allows_scoped_writes() {
+        let rendered =
+            render_goal_execution(&goal_execution_input(GoalExecutionScope::AllowWrites));
+
+        assert!(rendered.contains("标题：标题"));
+        assert!(rendered.contains("目标：可验收目标"));
+        assert!(rendered.contains("- 第一步"));
+        assert!(rendered.contains("- 第二步"));
+        assert!(rendered.contains("- 验收条件"));
+        assert!(!rendered.contains("{{ "), "占位符必须全部替换：{rendered}");
+        assert!(
+            rendered.contains("不要顺手重构"),
+            "允许档必须限定改动范围：{rendered}"
+        );
+        assert!(
+            !rendered.contains("本次执行为只读"),
+            "允许档不得声明只读：{rendered}"
+        );
+    }
+
+    #[test]
+    fn goal_execution_read_only_prompt_forbids_file_changes() {
+        let rendered = render_goal_execution(&goal_execution_input(GoalExecutionScope::ReadOnly));
+
+        assert!(rendered.contains("本次执行为只读"));
+        assert!(rendered.contains("不得修改、创建或删除仓库内任何文件"));
+        assert!(
+            rendered.contains("在结论里写清应改什么"),
+            "只读档必须给出改动诉求的出口：{rendered}"
+        );
+        assert!(
+            !rendered.contains("不要顺手重构"),
+            "只读档不与允许档共用文案：{rendered}"
+        );
+    }
 
     #[test]
     fn agent_system_prompt_is_composed_from_agent_templates() {

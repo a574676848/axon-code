@@ -34,6 +34,21 @@ impl GoalStatus {
     }
 }
 
+/// Goal 执行期的写权限。
+///
+/// 目标执行是无人值守后台 turn，工具集与主 turn 相同。目标本身决定这一档：
+/// 「实现某件事」允许改文件；「核验、巡检、取证」只能读。写在这里是因为它必须随
+/// 目标一起持久化，重启或重新启动目标时不能退回默认值。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GoalWritePolicy {
+    /// 允许改动文件（缺省）：目标要求交付改动时用这一档。
+    #[default]
+    Allow,
+    /// 只读执行：不得改动仓库文件，需要改动时在结论里说明。
+    ReadOnly,
+}
+
 /// Goal 的持久计划内容。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GoalPlan {
@@ -41,6 +56,9 @@ pub struct GoalPlan {
     pub objective: String,
     /// 有序执行步骤。
     pub steps: Vec<String>,
+    /// 执行期写权限；旧记录没有这一项时按允许处理。
+    #[serde(default)]
+    pub write_policy: GoalWritePolicy,
 }
 
 /// Work Ledger 中的持久 Goal。
@@ -113,7 +131,11 @@ impl GoalRecord {
             parent_goal_id: None,
             status: GoalStatus::Proposed,
             revision: 0,
-            plan: GoalPlan { objective, steps },
+            plan: GoalPlan {
+                objective,
+                steps,
+                write_policy: Default::default(),
+            },
             acceptance,
             progress: None,
             waiting_reason: None,
@@ -244,6 +266,9 @@ pub struct GoalCreateCommand {
     pub steps: Vec<String>,
     /// 验收条件。
     pub acceptance: Vec<String>,
+    /// 执行期写权限；缺省为允许改动。
+    #[serde(default)]
+    pub write_policy: GoalWritePolicy,
     /// 是否创建首个 queued Execution。
     pub create_execution: bool,
 }
@@ -479,6 +504,7 @@ mod tests {
             GoalPlan {
                 objective: "完成构建".to_owned(),
                 steps: vec!["运行 cargo".to_owned()],
+                write_policy: Default::default(),
             },
             vec!["测试通过".to_owned()],
             1,
@@ -499,6 +525,7 @@ mod tests {
             steps: vec!["定位失败用例".to_owned()],
             acceptance: vec!["工作区检查通过".to_owned()],
             create_execution: true,
+            write_policy: Default::default(),
         };
         assert!(valid.validate().is_ok());
 
@@ -519,5 +546,32 @@ mod tests {
             blank_acceptance.validate().unwrap_err(),
             GoalCapabilityError::EmptyCreationPlan
         );
+    }
+}
+
+#[cfg(test)]
+mod write_policy_tests {
+    use super::{GoalPlan, GoalWritePolicy};
+
+    #[test]
+    fn legacy_plan_without_write_policy_reads_as_allow() {
+        let plan: GoalPlan = serde_json::from_str(r#"{"objective":"目标","steps":["步骤"]}"#)
+            .expect("旧记录必须可读");
+
+        assert_eq!(plan.write_policy, GoalWritePolicy::Allow);
+    }
+
+    #[test]
+    fn write_policy_round_trips_as_snake_case() {
+        let plan = GoalPlan {
+            objective: "目标".to_owned(),
+            steps: vec!["步骤".to_owned()],
+            write_policy: GoalWritePolicy::ReadOnly,
+        };
+
+        let encoded = serde_json::to_string(&plan).expect("可序列化");
+        assert!(encoded.contains("\"read_only\""), "{encoded}");
+        let decoded: GoalPlan = serde_json::from_str(&encoded).expect("可反序列化");
+        assert_eq!(decoded, plan);
     }
 }

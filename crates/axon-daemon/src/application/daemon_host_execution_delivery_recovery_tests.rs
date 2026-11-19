@@ -14,6 +14,7 @@ fn new_goal(goal_id: &GoalId, scope: &ScopeRef, title: &str) -> GoalRecord {
         GoalPlan {
             objective: format!("验证{title}"),
             steps: vec!["步骤 1".to_owned()],
+            write_policy: Default::default(),
         },
         vec!["验收标准".to_owned()],
         TEST_NOW_MS,

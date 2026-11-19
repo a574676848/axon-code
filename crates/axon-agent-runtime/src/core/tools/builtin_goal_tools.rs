@@ -2,9 +2,9 @@
 
 use axon_domain::{
     GoalCancelCommand, GoalCreateCommand, GoalCreationScope, GoalDetailQuery, GoalId,
-    GoalListQuery, GoalQueryScope, GoalStatus, GoalUpdateCommand, ToolConcurrencyPolicy,
-    ToolDefinition, ToolId, ToolOutputPolicy, ToolPermissionPolicy, ToolSchema, ToolSchemaField,
-    ToolSchemaFieldKind,
+    GoalListQuery, GoalQueryScope, GoalStatus, GoalUpdateCommand, GoalWritePolicy,
+    ToolConcurrencyPolicy, ToolDefinition, ToolId, ToolOutputPolicy, ToolPermissionPolicy,
+    ToolSchema, ToolSchemaField, ToolSchemaFieldKind,
 };
 use axon_protocol::{GoalStartCommand, GoalToolCommand};
 use serde::{Deserialize, Serialize};
@@ -55,6 +55,9 @@ pub struct GoalCreateToolInput {
     pub steps: Vec<String>,
     /// 验收条件。
     pub acceptance: Vec<String>,
+    /// 执行期写权限：`allow` 允许改文件，`read_only` 只做核验。
+    #[serde(default)]
+    pub write_policy: GoalWritePolicy,
     /// 是否同时创建首个 queued Execution。
     #[serde(default)]
     pub create_execution: bool,
@@ -160,6 +163,7 @@ impl GoalToolRuntime {
             steps: input.steps,
             acceptance: input.acceptance,
             create_execution: input.create_execution,
+            write_policy: input.write_policy,
         };
         command
             .validate()
@@ -306,6 +310,11 @@ fn goal_create() -> ToolDefinition {
                 ToolSchemaFieldKind::Boolean,
                 "是否立即后台执行；由你根据任务需要决定，无需额外询问用户。",
             ),
+            field(
+                "writePolicy",
+                ToolSchemaFieldKind::NonBlankString,
+                "执行期写权限：allow（默认，允许改文件）或 read_only（只做核验，不得改动仓库文件）。验收只要求核验、检查或回答时传 read_only。",
+            ),
         ],
     );
     // 字段最多的写工具：用一条完整调用示例固定参数形状，intent 与其余必填字段同批出现。
@@ -317,6 +326,7 @@ fn goal_create() -> ToolDefinition {
         "steps": ["梳理现状", "拆解 Issue", "逐项实施", "审计修复"],
         "acceptance": ["23 个 Issue 全部有验收命令"],
         "createExecution": false,
+        "writePolicy": "read_only",
     }]);
     definition(
         GOAL_CREATE_TOOL_ID,

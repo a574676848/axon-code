@@ -505,6 +505,7 @@ mod tests {
             axon_domain::GoalPlan {
                 objective: "从 SQLite 恢复".to_owned(),
                 steps: vec!["读取事实源".to_owned()],
+                write_policy: Default::default(),
             },
             vec!["不使用摘要推断".to_owned()],
             10,
@@ -601,6 +602,7 @@ mod tests {
             axon_domain::GoalPlan {
                 objective: "从 SQLite 恢复".to_owned(),
                 steps: vec!["读取事实源".to_owned()],
+                write_policy: Default::default(),
             },
             vec!["不使用摘要推断".to_owned()],
             10,

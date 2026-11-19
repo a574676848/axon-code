@@ -188,6 +188,7 @@ fn goal_tool_definitions_freeze_the_six_external_schemas() {
                 "scope",
                 "steps",
                 "title",
+                "writePolicy",
             ],
         ),
         (
@@ -339,4 +340,55 @@ fn command_variant(command: &GoalToolCommand) -> &'static str {
         GoalToolCommand::Cancel(_) => GOAL_CANCEL_TOOL_NAME,
         GoalToolCommand::Start(_) => GOAL_START_TOOL_NAME,
     }
+}
+
+/// 创建工具必须接受 `writePolicy`，缺省为允许改动。
+#[test]
+fn goal_create_accepts_write_policy_and_defaults_to_allow() {
+    let base = json!({
+        "scope": "current_workspace",
+        "title": "W8.5 探针",
+        "objective": "只核验目标执行落点",
+        "steps": ["读取目标", "验证会话"],
+        "acceptance": ["执行产生终态"],
+        "createExecution": true,
+    });
+
+    let allowed = GoalToolRuntime::parse_create(&base).expect("缺省即允许改动");
+    assert_eq!(allowed.write_policy, axon_domain::GoalWritePolicy::Allow);
+
+    let mut read_only_input = base;
+    read_only_input["writePolicy"] = json!("read_only");
+    let read_only = GoalToolRuntime::parse_create(&read_only_input).expect("只读档必须可解析");
+    assert_eq!(
+        read_only.write_policy,
+        axon_domain::GoalWritePolicy::ReadOnly
+    );
+
+    let mut unknown = read_only_input;
+    unknown["writePolicy"] = json!("sometimes");
+    assert_tool_invalid_arguments(
+        GoalToolRuntime::parse_create(&unknown).unwrap_err(),
+        "越界的 writePolicy",
+    );
+}
+
+/// 创建工具的 schema 必须把写权限暴露给模型，否则它永远只能拿到缺省档。
+#[test]
+fn goal_create_schema_exposes_write_policy() {
+    let schema = super::goal_create();
+    let properties = &schema.schema.input_schema["properties"];
+
+    assert!(
+        properties.get("writePolicy").is_some(),
+        "writePolicy 必须在工具 schema 里：{properties}"
+    );
+    let required = schema.schema.input_schema["required"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !required.iter().any(|value| value == "writePolicy"),
+        "writePolicy 必须可选，否则老调用会全部失效"
+    );
 }

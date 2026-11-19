@@ -108,6 +108,7 @@ fn failure_fixture(prefix: &str) -> FailureFixture {
         GoalPlan {
             objective: "验证失败结算".to_owned(),
             steps: vec!["执行一次".to_owned()],
+            write_policy: Default::default(),
         },
         vec!["产出结论".to_owned()],
         10,

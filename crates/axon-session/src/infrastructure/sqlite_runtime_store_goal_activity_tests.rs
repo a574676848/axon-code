@@ -10,6 +10,7 @@ fn task(id: &str) -> GoalRecord {
         GoalPlan {
             objective: "验证 Goal 账本一致性".to_owned(),
             steps: vec!["读取事件".to_owned()],
+            write_policy: Default::default(),
         },
         vec!["事件可查询".to_owned()],
         1,

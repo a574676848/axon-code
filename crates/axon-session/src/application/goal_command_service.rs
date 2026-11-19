@@ -275,6 +275,7 @@ where
             GoalPlan {
                 objective: command.objective.clone(),
                 steps: command.steps.clone(),
+                write_policy: command.write_policy,
             },
             command.acceptance.clone(),
             now_ms,

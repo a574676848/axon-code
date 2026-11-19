@@ -14,6 +14,7 @@ fn result_store_reads_only_unacknowledged_results_in_scope() {
         GoalPlan {
             objective: "验证 unread 投影".to_owned(),
             steps: Vec::new(),
+            write_policy: Default::default(),
         },
         Vec::new(),
         1,

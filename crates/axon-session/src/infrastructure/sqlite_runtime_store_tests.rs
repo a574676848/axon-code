@@ -179,6 +179,7 @@ fn task_commit_atomically_creates_task_first_execution_and_event_idempotently() 
         GoalPlan {
             objective: "验证原子创建".to_owned(),
             steps: vec!["创建首个执行".to_owned()],
+            write_policy: Default::default(),
         },
         vec!["事件可重放".to_owned()],
         10,
@@ -251,6 +252,7 @@ fn ledger_commit_rolls_back_all_records_on_stale_task_revision() {
         GoalPlan {
             objective: "验证事务回滚".to_owned(),
             steps: Vec::new(),
+            write_policy: Default::default(),
         },
         vec!["结果写入".to_owned()],
         1,
@@ -449,6 +451,7 @@ fn goal_store_uses_idempotency_and_revision_compare_and_swap() {
         GoalPlan {
             objective: "完成编译和测试".to_owned(),
             steps: vec!["cargo check".to_owned()],
+            write_policy: Default::default(),
         },
         vec!["检查通过".to_owned()],
         1,
@@ -473,6 +476,7 @@ fn goal_list_cursor_is_bound_to_scope_and_status_filter() {
         GoalPlan {
             objective: "分页".to_owned(),
             steps: vec!["一步".to_owned()],
+            write_policy: Default::default(),
         },
         vec!["完成".to_owned()],
         1,
@@ -486,6 +490,7 @@ fn goal_list_cursor_is_bound_to_scope_and_status_filter() {
         GoalPlan {
             objective: "分页二".to_owned(),
             steps: vec!["一步".to_owned()],
+            write_policy: Default::default(),
         },
         vec!["完成".to_owned()],
         2,
@@ -530,6 +535,7 @@ fn cancelling_task_persists_request_and_event_and_blocks_claim() {
         GoalPlan {
             objective: "取消".to_owned(),
             steps: vec!["一步".to_owned()],
+            write_policy: Default::default(),
         },
         vec!["完成".to_owned()],
         1,

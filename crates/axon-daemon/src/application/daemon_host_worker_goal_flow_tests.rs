@@ -80,6 +80,7 @@ fn supervisor_tick_quarantines_interrupted_execution_before_reclaim() {
         GoalPlan {
             objective: "验证中断隔离".to_owned(),
             steps: Vec::new(),
+            write_policy: Default::default(),
         },
         vec!["产出结论".to_owned()],
         1,

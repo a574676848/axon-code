@@ -68,6 +68,7 @@ fn no_progress_without_receipts_terminates_task_as_failed() {
         GoalPlan {
             objective: "多次尝试但无成果".to_owned(),
             steps: vec!["步骤 1".to_owned()],
+            write_policy: Default::default(),
         },
         vec!["仅验证执行逻辑".to_owned()],
         10,
@@ -194,6 +195,7 @@ fn successful_execution_summary_prefers_final_response_over_decision_objective()
         GoalPlan {
             objective: OBJECTIVE.to_owned(),
             steps: vec!["执行 Start-Sleep".to_owned()],
+            write_policy: Default::default(),
         },
         vec!["报告实际耗时".to_owned()],
         10,

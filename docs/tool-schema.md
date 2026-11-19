@@ -96,9 +96,12 @@ Goal 工具是主 turn 的持久工作能力。它们只装配到主 turn 的 `<
   "objective": "可验证的目标",
   "steps": ["步骤一", "步骤二"],
   "acceptance": ["验收条件"],
-  "createExecution": true
+  "createExecution": true,
+  "writePolicy": "read_only"
 }
 ```
+
+`writePolicy` 只接受 `allow`（缺省，允许改动文件）与 `read_only`（只做核验，不得改动仓库文件）；验收只要求核验、检查或回答时必须传 `read_only`，它会随目标持久化并写进每次后台执行的指令。
 
 `scope` 只接受 `global`、`current_workspace`；省略时由当前场景确定。Goal 创建后 scope 固化，Workspace 切换不会迁移它。没有跨 turn 承诺时不要调用该工具。
 
