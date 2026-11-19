@@ -7,8 +7,17 @@ use super::BottomViewEvent;
 use crate::app_shell::composer_dock::DockKind;
 use crate::ui_workflow::action::{UiKeyCode, UiKeyEvent};
 
-/// 弹窗一次最多展示的会话行数。
-const MAX_VISIBLE_ITEMS: usize = 8;
+/// 标题行占用的行数。
+const TITLE_ROWS: u16 = 1;
+/// 底部提示行占用的行数；没有溢出时留空，保证高度与容量一一对应。
+const HINT_ROWS: u16 = 1;
+/// 每个候选占用的行数：标题行 + 来源行。
+const ITEM_ROWS: u16 = 2;
+/// 弹窗一次最多展示的候选数。
+///
+/// 面板实际可用高度由 ComposerDock 决定，可能小于这里申请的容量；
+/// 渲染侧按真实高度算窗口并滚动，选中项因此始终可见。
+const MAX_VISIBLE_ITEMS: usize = 6;
 /// 归档会话在描述行里的前缀。
 const ARCHIVED_PREFIX: &str = "已归档 · ";
 /// 会话缺少 provider/model 时的占位描述。
@@ -77,7 +86,13 @@ impl SessionsView {
 
     pub(crate) fn height(&self) -> u16 {
         let visible_items = self.items.len().clamp(1, MAX_VISIBLE_ITEMS);
-        u16::try_from(visible_items.saturating_mul(2).saturating_add(2)).unwrap_or(u16::MAX)
+        // 高度与容量一一对应：标题行 + 提示行 + 每个候选自己的行数。
+        let item_rows = u16::try_from(visible_items)
+            .unwrap_or(u16::MAX)
+            .saturating_mul(ITEM_ROWS);
+        item_rows
+            .saturating_add(TITLE_ROWS)
+            .saturating_add(HINT_ROWS)
     }
 
     fn select_previous(&mut self) {
