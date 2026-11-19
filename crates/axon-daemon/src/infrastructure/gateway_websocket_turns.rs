@@ -67,6 +67,8 @@ pub(super) async fn handle_subscribe(
             return Ok(true);
         }
     };
+    // 对齐锚点在流交给转发线程之前取出：subscribed 回执必须与这条流的基线同源。
+    let baseline = stream.subscription_baseline();
     let thread_sender = event_sender.clone();
     let shutdown = Arc::new(AtomicBool::new(false));
     let thread_shutdown = Arc::clone(&shutdown);
@@ -80,12 +82,12 @@ pub(super) async fn handle_subscribe(
             shutdown,
         },
     );
+    let mut receipt = serde_json::json!({ "type": "subscribed", "subscribeId": subscribe_id });
+    if let Some(baseline) = baseline {
+        receipt["baseline"] = baseline;
+    }
     socket
-        .send(Message::Text(
-            serde_json::json!({ "type": "subscribed", "subscribeId": subscribe_id })
-                .to_string()
-                .into(),
-        ))
+        .send(Message::Text(receipt.to_string().into()))
         .await?;
     Ok(true)
 }

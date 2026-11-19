@@ -76,7 +76,7 @@
 
 - `writable` 仅 `kind=primary` 为 `true`；`goal` / `cron` / `subagent` 一律 `false`。
 - `canAnswerQuestions` 仅 `primary` 为 `true`（后台链不注入用户提问端口，见 `run_provider_orchestration.rs:164-166`）。
-- `canInterrupt` 仅 `primary` 为 `true`：只有主 turn 有进程内取消令牌。目标执行的取消**不经过**中断接口，只能由来源会话调用 Goal 工具发起（见 W6）；`cron` 与 `subagent` 同样不提供中断入口。
+- `canInterrupt` 仅 `primary` 为 `true`：只有主 turn 有进程内取消令牌。目标执行的取消**不经过**中断接口，只能由来源会话调用 Goal 工具发起（见 W6）；`cron` 与 `subagent` 同样不提供中断入口。子代理给 `false` 是产品口径而不是「打不到」：父轮取消会连带它的收口走同一条停止链路。
 - `origin` 由 `sessions.kind` 映射得到，禁止用 `source_channel` 猜。
 
 **验收**：`GET /api/v1/sessions/{goalSessionId}/interactions?limit=1` 返回 `session` 块；`goal` 与 `subagent` 会话 `writable=false`；`primary` 会话 `writable=true`。
@@ -132,12 +132,13 @@
 
 **现状**：前端靠 `workspace.sessions` 里的 `interaction_count` 发现「这条会话又多了一轮」；独立会话不在该清单，切成交互订阅后，跑动中的新轮次不会被接管，界面停在旧轮。
 
-**改动**（二选一，推荐 a）：
+**改动**（已定稿）：
 
-- a) WS 新增一路订阅 `subscribeId=session-turns:{sessionId}`，只推 `interaction.created` 与 `interaction.settled` 两类轻帧，不推正文；订阅、退订、游标语义沿用现有 WS 协议。
-- b) 由 W1 的 `interactionCount` / `latestInteractionId` 支撑前端节拍轮询（此时后端只需保证字段实时）。
+- WS 新增一路订阅 `subscribeId=session-turns:{sessionId}`，只推 `interaction.created` 与 `interaction.settled` 两类轻帧，不推正文；订阅、退订语义沿用现有 WS 协议。
+- 首轮只建基线、不补历史。为消除「先读索引、后订阅」的竞态，`subscribed` 回执额外带 `baseline`（`latestInteractionId` / `latestInteractionStatus` / `latestInteractionReceivedAtMs`），表示这条流在建立时已经知道哪些轮次。
+- 客户端顺序固定为**先订阅、收到 `subscribed`、再读索引**。只能先读索引的实现，必须拿 `baseline.latestInteractionId` 与索引最新一轮比对，落后就再读一次；否则两次动作之间新建的轮次会被折进基线，`interaction.created` 永不播报。
 
-**验收**：目标执行在跑时，只订阅轮次头即可发现新轮（可用 `python websockets` 带 Authorization 复现）；`session-turns:` 与既有 `session:` / `interaction:` 前缀不冲突。
+**验收**：目标执行在跑时，只订阅轮次头即可发现新轮（可用 `python websockets` 带 Authorization 复现）；`session-turns:` 与既有 `session:` / `interaction:` 前缀不冲突；订阅建立后立刻新建的一轮在下一个节拍内播报 `interaction.created`；空会话的 `subscribed` 不带 `baseline`。
 
 ### W6 中断与取消链路（P1，已定稿）
 

@@ -231,6 +231,17 @@ pub trait InteractionQueryStore: Send + Sync {
         session_id: &str,
         limit: u32,
     ) -> Result<Vec<InteractionTurnHead>, InteractionStoreError>;
+
+    /// 批量判断这些会话里哪些真的有可读的逐字稿。
+    ///
+    /// 判定同时看两件事：会话是否写过事件（`last_event_sequence > 0`，覆盖执行轮与历史
+    /// 子会话逐字稿），或是否有过轮次行（`inbox` 至少一行，覆盖只有派发记录的工具轮）。
+    /// 只看「执行记录带会话标识」会把起跑前就失败、实际空无一物的会话也算成可进入。
+    /// 一次 IN 查询覆盖整页，查询数与会话条数无关。
+    fn sessions_with_transcripts(
+        &self,
+        session_ids: &[axon_domain::DaemonSessionId],
+    ) -> Result<std::collections::HashSet<String>, InteractionStoreError>;
 }
 
 /// 一条轮次头：订阅只关心「它还在跑吗、什么时候来的」。

@@ -104,7 +104,7 @@ impl ExecutionView {
             created_at_ms: record.created_at_ms,
             updated_at_ms: record.updated_at_ms,
         };
-        view.refresh_transcript_capability();
+        view.refresh_transcript_capability(&std::collections::HashSet::new());
         view
     }
 
@@ -115,20 +115,32 @@ impl ExecutionView {
     pub(crate) fn from_record_with_session(
         record: &ExecutionRecord,
         session_id: Option<&str>,
+        sessions_with_turns: &std::collections::HashSet<String>,
     ) -> Self {
         let mut view = Self::from_record(record);
         if let Some(session_id) = session_id {
             view.session_id = Some(session_id.to_owned());
         }
-        view.refresh_transcript_capability();
+        view.refresh_transcript_capability(sessions_with_turns);
         view
     }
 
-    /// 入口可进入性只由「逐字稿会话在不在」决定，调用方不再二分猜。
-    fn refresh_transcript_capability(&mut self) {
-        self.has_transcript = self.session_id.is_some();
+    /// 入口可进入性由「会话真的落过一轮」决定，而不是「执行记录带会话标识」。
+    ///
+    /// 起跑前就失败的执行同样会被登记会话，但那里没有任何逐字稿可读；这种执行
+    /// 如实给出原因，卡片因此不会显示一个点开是空视图的入口。
+    fn refresh_transcript_capability(
+        &mut self,
+        sessions_with_turns: &std::collections::HashSet<String>,
+    ) {
+        self.has_transcript = self
+            .session_id
+            .as_deref()
+            .is_some_and(|session| sessions_with_turns.contains(session));
         self.unavailable_reason = if self.has_transcript {
             None
+        } else if self.session_id.is_some() {
+            Some("transcript-empty".to_owned())
         } else {
             Some("execution-not-started".to_owned())
         };
@@ -216,6 +228,7 @@ pub(crate) fn goal_card_view(
     latest_result: Option<&ResultRecord>,
     workspace: Option<&WorkspaceRecord>,
     latest_session_id: Option<&str>,
+    sessions_with_turns: &std::collections::HashSet<String>,
 ) -> GoalCardView {
     let last_activity_at_ms = goal
         .updated_at_ms
@@ -254,8 +267,9 @@ pub(crate) fn goal_card_view(
         created_at_ms: goal.created_at_ms,
         updated_at_ms: goal.updated_at_ms,
         last_activity_at_ms,
-        latest_execution: latest_execution
-            .map(|record| ExecutionView::from_record_with_session(record, latest_session_id)),
+        latest_execution: latest_execution.map(|record| {
+            ExecutionView::from_record_with_session(record, latest_session_id, sessions_with_turns)
+        }),
         latest_result: latest_result.map(ResultView::from_record),
     }
 }
@@ -303,6 +317,7 @@ pub(crate) fn goal_detail_view(
     executions: &[ExecutionRecord],
     latest_result: Option<&ResultRecord>,
     subagent_sessions: &std::collections::HashMap<String, String>,
+    sessions_with_turns: &std::collections::HashSet<String>,
 ) -> GoalDetailView {
     let (objective, objective_truncated) =
         truncate_chars(&goal.plan.objective, DETAIL_OBJECTIVE_CHARS);
@@ -320,14 +335,12 @@ pub(crate) fn goal_detail_view(
             .iter()
             .take(DETAIL_EXECUTION_LIMIT as usize)
             .map(|record| {
-                ExecutionView::from_record_with_session(
-                    record,
-                    record
-                        .session_id
-                        .as_ref()
-                        .and_then(|session| subagent_sessions.get(session.as_str()))
-                        .map(String::as_str),
-                )
+                let session_id = record
+                    .session_id
+                    .as_ref()
+                    .and_then(|session| subagent_sessions.get(session.as_str()))
+                    .map(String::as_str);
+                ExecutionView::from_record_with_session(record, session_id, sessions_with_turns)
             })
             .collect(),
         latest_result: latest_result.map(ResultView::from_record),

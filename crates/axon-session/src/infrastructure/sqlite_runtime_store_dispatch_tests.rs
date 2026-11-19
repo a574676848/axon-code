@@ -159,6 +159,82 @@ fn repeated_archive_history_does_not_duplicate_the_turn_row() {
 }
 
 #[test]
+fn sessions_with_transcripts_distinguishes_empty_sessions() {
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    // 只登记、没有任何轮次的会话：起跑前就失败的执行就是这种形态。
+    let empty = test_session("transcript-empty-session");
+    // 只有派发轮记录、没有事件（目标工具更新）：仍然是有内容的时间线。
+    let dispatch_only = test_session("transcript-dispatch-session");
+    // 真跑过一轮的会话：事件水位已推进。
+    let executed = test_session("transcript-executed-session");
+    let missing = test_session("transcript-missing-session");
+    store.create_session(&empty, ".", 1).expect("空会话");
+    store
+        .create_session(&dispatch_only, ".", 2)
+        .expect("派发会话");
+    store.create_session(&executed, ".", 3).expect("执行会话");
+    let turn = interaction_record(
+        &dispatch_only,
+        "interaction-transcript-dispatch",
+        "message-transcript-dispatch",
+        10,
+    );
+    store.append(&turn).expect("交互入库");
+    store
+        .with_read_connection(|connection| {
+            connection.execute(
+                "UPDATE sessions SET last_event_sequence=7 WHERE session_id=?1",
+                [executed.as_str()],
+            )
+        })
+        .expect("推进事件水位");
+
+    let found = store
+        .sessions_with_transcripts(&[
+            empty.clone(),
+            dispatch_only.clone(),
+            executed.clone(),
+            missing,
+        ])
+        .expect("批量判定");
+    assert!(
+        !found.contains(empty.as_str()),
+        "只登记过、没有任何内容的会话不得算成有逐字稿"
+    );
+    assert!(found.contains(dispatch_only.as_str()));
+    assert!(found.contains(executed.as_str()));
+    assert!(
+        store
+            .sessions_with_transcripts(&[])
+            .expect("空输入")
+            .is_empty()
+    );
+
+    // 性能约束：这条判定在目标看板每页调用一次，必须是索引查找而不是全表扫描。
+    let plan: Vec<String> = store
+        .with_read_connection(|connection| {
+            let mut statement = connection.prepare(
+                "EXPLAIN QUERY PLAN SELECT s.session_id FROM sessions AS s \
+                 WHERE s.session_id IN (?,?) \
+                   AND (s.last_event_sequence > 0 \
+                        OR EXISTS (SELECT 1 FROM inbox AS i WHERE i.session_id = s.session_id))",
+            )?;
+            let rows = statement.query_map(["a", "b"], |row| row.get::<_, String>(3))?;
+            rows.collect::<rusqlite::Result<Vec<String>>>()
+        })
+        .expect("查询计划");
+    assert!(
+        plan.iter().any(|line| line.contains("SEARCH")),
+        "必须走索引查找：{plan:?}"
+    );
+    assert!(
+        !plan.iter().any(|line| line.contains("SCAN s")),
+        "不得对 sessions 做全表扫描：{plan:?}"
+    );
+}
+
+#[test]
 fn sessions_by_ids_reads_many_rows_and_skips_unknown_ids() {
     let directory = axon_test_support::test_temp_dir();
     let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));

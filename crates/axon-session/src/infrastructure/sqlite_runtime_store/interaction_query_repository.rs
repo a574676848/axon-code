@@ -76,6 +76,34 @@ impl InteractionQueryStore for SqliteRuntimeStore {
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(storage_error)
     }
+    fn sessions_with_transcripts(
+        &self,
+        session_ids: &[axon_domain::DaemonSessionId],
+    ) -> Result<std::collections::HashSet<String>, InteractionStoreError> {
+        if session_ids.is_empty() {
+            return Ok(std::collections::HashSet::new());
+        }
+        self.initialize().map_err(runtime_error)?;
+        let connection = self.connection().map_err(runtime_error)?;
+        let placeholders = vec!["?"; session_ids.len()].join(",");
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT s.session_id FROM sessions AS s \
+                 WHERE s.session_id IN ({placeholders}) \
+                   AND (s.last_event_sequence > 0 \
+                        OR EXISTS (SELECT 1 FROM inbox AS i WHERE i.session_id = s.session_id))"
+            ))
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map(
+                rusqlite::params_from_iter(session_ids.iter().map(|id| id.as_str())),
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(storage_error)?;
+        rows.collect::<rusqlite::Result<std::collections::HashSet<_>>>()
+            .map_err(storage_error)
+    }
+
     fn get_interaction(
         &self,
         interaction_id: &InteractionId,

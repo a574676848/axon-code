@@ -183,7 +183,7 @@ Goal 工具是主 turn 的持久工作能力。它们只装配到主 turn 的 `<
 
 取消必须校验 scope 和 revision；Goal 原子进入 `cancelled`，queued Execution 不得领取，running Execution 收到持久 cancellation request 并在安全检查点停止。迟到 Result 不得覆盖取消事实；若 Goal 已完成、失败或已取消，返回明确的终态结果而不重复产生副作用。
 
-**取消入口唯一**：目标执行只能被 `builtin.goal_cancel` 取消，`/api/v1/sessions/{id}/interrupt` 对目标会话不生效（`canInterrupt=false`），因此「谁发起的目标」就是「谁能取消它」（通常是来源会话）。
+**取消入口唯一**：目标执行只能被 `builtin.goal_cancel` 取消，`/api/v1/sessions/{id}/interrupt` 对目标会话不生效（`canInterrupt=false`），因此「谁发起的目标」就是「谁能取消它」（通常是来源会话）。回执语义是**已请求取消**：运行中的那一轮由看门狗在有界周期内（约 2 秒）发现标记并在安全检查点收口，不是回执返回时就已经停止。
 
 ### 执行边界
 

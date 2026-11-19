@@ -52,6 +52,18 @@ fn execution(id: &str, created_at_ms: u64, updated_at_ms: u64) -> ExecutionRecor
     record
 }
 
+/// 带指定会话的执行记录：用于区分「会话已登记」与「会话真有内容」。
+fn execution_with_session(
+    id: &str,
+    session_id: &str,
+    created_at_ms: u64,
+    updated_at_ms: u64,
+) -> ExecutionRecord {
+    let mut record = execution(id, created_at_ms, updated_at_ms);
+    record.session_id = Some(DaemonSessionId::new(session_id.to_owned()).expect("session"));
+    record
+}
+
 #[test]
 fn preview_truncates_on_character_boundary() {
     // 160 个字符不截断，161 个字符截断并补省略号；中文按字符而非字节计数。
@@ -68,13 +80,53 @@ fn preview_truncates_on_character_boundary() {
 }
 
 #[test]
+fn transcript_entry_requires_actual_session_content() {
+    let goal = goal_record("补回归测试", vec!["改代码".to_owned()], 100);
+    let empty_session = "session-empty";
+    let execution = execution_with_session("execution-empty", empty_session, 300, 900);
+    // 会话已登记但没有任何内容：入口必须如实关闭，并给出与「未起跑」不同的原因。
+    let card = goal_card_view(
+        &goal,
+        Some(&execution),
+        None,
+        None,
+        Some(empty_session),
+        &std::collections::HashSet::new(),
+    );
+    let view = card.latest_execution.expect("执行视图");
+    assert!(!view.has_transcript);
+    assert_eq!(view.unavailable_reason.as_deref(), Some("transcript-empty"));
+
+    // 该会话真有一轮（或一段事件）时可进入，且不再给原因。
+    let mut with_content = std::collections::HashSet::new();
+    with_content.insert(empty_session.to_owned());
+    let card = goal_card_view(
+        &goal,
+        Some(&execution),
+        None,
+        None,
+        Some(empty_session),
+        &with_content,
+    );
+    let view = card.latest_execution.expect("执行视图");
+    assert!(view.has_transcript);
+    assert!(view.unavailable_reason.is_none());
+}
+#[test]
 fn card_view_uses_preview_and_reports_missing_workspace_as_empty() {
     let goal = goal_record(
         &"目".repeat(PREVIEW_CHARS + 5),
         vec!["第一步".to_owned()],
         100,
     );
-    let card = goal_card_view(&goal, None, None, None, None);
+    let card = goal_card_view(
+        &goal,
+        None,
+        None,
+        None,
+        None,
+        &std::collections::HashSet::new(),
+    );
     assert_eq!(card.objective_preview.chars().count(), PREVIEW_CHARS);
     assert_eq!(card.goal_id, "goal-view");
     assert_eq!(card.status, status_code(axon_domain::GoalStatus::Proposed));
@@ -96,6 +148,7 @@ fn card_view_fills_workspace_for_workspace_scope() {
         None,
         Some(&workspace("workspace-1", "/repo")),
         None,
+        &std::collections::HashSet::new(),
     );
     assert_eq!(card.scope_kind, "workspace");
     assert_eq!(card.workspace_id.as_deref(), Some("workspace-1"));
@@ -107,7 +160,14 @@ fn workspace_scope_keeps_identifier_even_without_registry_entry() {
     // 注册表缺这项时只留名称与路径为空：标识是作用域事实，不能跟着一起丢。
     let mut goal = goal_record("工作区目标", vec!["一步".to_owned()], 100);
     goal.scope = ScopeRef::workspace("workspace-unknown").expect("scope");
-    let card = goal_card_view(&goal, None, None, None, None);
+    let card = goal_card_view(
+        &goal,
+        None,
+        None,
+        None,
+        None,
+        &std::collections::HashSet::new(),
+    );
     assert_eq!(card.scope_kind, "workspace");
     assert_eq!(card.workspace_id.as_deref(), Some("workspace-unknown"));
     assert!(card.workspace_name.is_none());
@@ -126,7 +186,14 @@ fn last_activity_takes_the_maximum_of_three_facts() {
         "全部用例通过",
         1_500,
     );
-    let card = goal_card_view(&goal, Some(&execution), Some(&result), None, None);
+    let card = goal_card_view(
+        &goal,
+        Some(&execution),
+        Some(&result),
+        None,
+        None,
+        &std::collections::HashSet::new(),
+    );
     assert_eq!(card.last_activity_at_ms, 1_500);
     assert_eq!(
         card.latest_execution.as_ref().map(|view| view.status),
@@ -140,7 +207,14 @@ fn last_activity_takes_the_maximum_of_three_facts() {
     );
 
     // 没有执行与结果时等于 updatedAtMs。
-    let bare = goal_card_view(&goal, None, None, None, None);
+    let bare = goal_card_view(
+        &goal,
+        None,
+        None,
+        None,
+        None,
+        &std::collections::HashSet::new(),
+    );
     assert_eq!(bare.last_activity_at_ms, 200);
 }
 
@@ -155,7 +229,14 @@ fn result_summary_is_truncated_to_preview_length() {
         "好".repeat(PREVIEW_CHARS + 1),
         120,
     );
-    let card = goal_card_view(&goal, Some(&execution), Some(&result), None, None);
+    let card = goal_card_view(
+        &goal,
+        Some(&execution),
+        Some(&result),
+        None,
+        None,
+        &std::collections::HashSet::new(),
+    );
     let preview = card
         .latest_result
         .as_ref()
@@ -178,13 +259,21 @@ fn detail_bounds_objective_lists_and_executions() {
     let executions: Vec<ExecutionRecord> = (0..DETAIL_EXECUTION_LIMIT as usize + 3)
         .map(|index| execution(&format!("execution-{index}"), index as u64, index as u64))
         .collect();
-    let card = goal_card_view(&goal, executions.first(), None, None, None);
+    let card = goal_card_view(
+        &goal,
+        executions.first(),
+        None,
+        None,
+        None,
+        &std::collections::HashSet::new(),
+    );
     let detail = goal_detail_view(
         card,
         &goal,
         &executions,
         None,
         &std::collections::HashMap::new(),
+        &std::collections::HashSet::new(),
     );
 
     assert!(detail.objective_truncated);
@@ -202,8 +291,22 @@ fn detail_bounds_objective_lists_and_executions() {
 fn detail_keeps_short_content_untruncated() {
     // 未超限时不置任何截断标志，界面因此不会平白警告一次。
     let goal = goal_record("短目标", vec!["一步".to_owned(), "两步".to_owned()], 100);
-    let card = goal_card_view(&goal, None, None, None, None);
-    let detail = goal_detail_view(card, &goal, &[], None, &std::collections::HashMap::new());
+    let card = goal_card_view(
+        &goal,
+        None,
+        None,
+        None,
+        None,
+        &std::collections::HashSet::new(),
+    );
+    let detail = goal_detail_view(
+        card,
+        &goal,
+        &[],
+        None,
+        &std::collections::HashMap::new(),
+        &std::collections::HashSet::new(),
+    );
     assert!(!detail.objective_truncated);
     assert!(!detail.lists_truncated);
     assert_eq!(detail.steps, vec!["一步".to_owned(), "两步".to_owned()]);

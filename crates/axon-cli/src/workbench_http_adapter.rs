@@ -230,16 +230,19 @@ impl WorkbenchHttpAdapter {
             return Err("会话标识不能为空".to_string());
         }
         let affinity_key = ActivePrimaryTurnRegistry::affinity_key(session_id);
+        // 回执语义是「已请求取消」：令牌置位后由本轮在安全检查点收口，不是「已停止」。
         if let Some(interaction_id) = self.active_primary_turns.interrupt(&affinity_key)? {
             return Ok(serde_json::json!({
                 "sessionId": session_id,
                 "interrupted": true,
+                "cancellationRequested": true,
                 "interactionId": interaction_id.as_str(),
             }));
         }
         Ok(serde_json::json!({
             "sessionId": session_id,
             "interrupted": false,
+            "cancellationRequested": false,
             "interactionId": serde_json::Value::Null,
         }))
     }

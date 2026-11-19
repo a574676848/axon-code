@@ -17,8 +17,8 @@ use axon_domain::{
     ExecutionRecord, GoalDetailQuery, GoalId, GoalListQuery, GoalQueryScope, GoalRecord, ScopeRef,
 };
 use axon_session::{
-    ExecutionStore, GoalPage, GoalQueryService, ResultStore, RuntimeStore, SqliteRuntimeStore,
-    WorkspaceRecord, WorkspaceStore,
+    ExecutionStore, GoalPage, GoalQueryService, InteractionQueryStore, ResultStore, RuntimeStore,
+    SqliteRuntimeStore, WorkspaceRecord, WorkspaceStore,
 };
 use serde_json::json;
 
@@ -197,10 +197,11 @@ impl GoalHttpAdapter {
         let subagent_sessions = store
             .latest_subagent_session_ids(&roots)
             .map_err(|error| format!("读取执行子会话失败：{error}"))?;
+        let sessions_with_turns = transcript_sessions(&store, &roots, &subagent_sessions)?;
         let mut cards = Vec::with_capacity(facts.len());
         for (goal, latest_execution, latest_result) in facts {
             // 列表只按作用域标识取工作区：合同第 7.3 条把查询数上界固定为
-            // 1 + 2N + 1，逐个全局目标解析会话 cwd 会多出 N 条查询，因此这一步
+            // 1 + 2N + 2（多出的 1 条是整页共用的逐字稿判定），逐个全局目标解析会话 cwd 会多出 N 条查询，因此这一步
             // 留给详情。列表里全局目标的工作区三段字段因此为空，界面据此降级为
             // 「查看详情」，由详情给出解析结果与进入会话的入口。
             let workspace = scope_workspace(goal, workspaces);
@@ -215,6 +216,7 @@ impl GoalHttpAdapter {
                 latest_result.as_ref(),
                 workspace,
                 latest_session,
+                &sessions_with_turns,
             ));
         }
         cards.sort_by(|left, right| {
@@ -275,6 +277,10 @@ impl GoalHttpAdapter {
                 return query_failed(&format!("读取执行子会话失败：{error}"));
             }
         };
+        let sessions_with_turns = match transcript_sessions(&store, &roots, &subagent_sessions) {
+            Ok(found) => found,
+            Err(error) => return query_failed(&error),
+        };
         let card = goal_card_view(
             &view.goal,
             view.latest_execution.as_ref(),
@@ -285,6 +291,7 @@ impl GoalHttpAdapter {
                 .and_then(|record| record.session_id.as_ref())
                 .and_then(|session| subagent_sessions.get(session.as_str()))
                 .map(String::as_str),
+            &sessions_with_turns,
         );
         let detail = goal_detail_view(
             card,
@@ -292,6 +299,7 @@ impl GoalHttpAdapter {
             &view.recent_executions,
             view.latest_result.as_ref(),
             &subagent_sessions,
+            &sessions_with_turns,
         );
         GatewayHttpResponse::json(200, &detail)
     }
@@ -324,6 +332,32 @@ impl GatewayHttpRouteHandler for GoalHttpAdapter {
     }
 }
 
+/// 判断这批执行实际会打开哪些会话，并一次查清哪些会话真有逐字稿。
+///
+/// 入口显示的是「这一轮实际所在会话」：历史执行若把逐字稿落在子会话，就查子会话；
+/// 统一到主 turn 之后执行落在目标会话本身。查询固定一次，与执行条数无关。
+fn transcript_sessions(
+    store: &SqliteRuntimeStore,
+    roots: &[axon_domain::DaemonSessionId],
+    subagent_sessions: &std::collections::HashMap<String, String>,
+) -> Result<std::collections::HashSet<String>, String> {
+    let mut effective: Vec<axon_domain::DaemonSessionId> = Vec::with_capacity(roots.len());
+    let mut seen = std::collections::HashSet::new();
+    for root in roots {
+        let target = subagent_sessions
+            .get(root.as_str())
+            .map_or(root.as_str(), String::as_str);
+        let Ok(session) = axon_domain::DaemonSessionId::new(target.to_owned()) else {
+            continue;
+        };
+        if seen.insert(session.as_str().to_owned()) {
+            effective.push(session);
+        }
+    }
+    store
+        .sessions_with_transcripts(&effective)
+        .map_err(|error| format!("读取逐字稿会话失败：{error}"))
+}
 /// 解析 `limit`；缺省取硬上限，越界或非数字一律拒绝，不做静默夹取。
 fn parse_limit(query: Option<&str>) -> Result<u32, String> {
     match query_value(query, "limit") {

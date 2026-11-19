@@ -366,10 +366,8 @@ where
             .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
         let admission = self.admission_of(&session_id, self.dependencies.clock.now_ms())?;
         self.authorize_session(&workspace_id, &admission)?;
-        Ok(Box::new(SessionTurnsStream::new(
-            self.dependencies.store.clone(),
-            session_id,
-        )))
+        let stream = SessionTurnsStream::new(self.dependencies.store.clone(), session_id)?;
+        Ok(Box::new(stream))
     }
 }
 

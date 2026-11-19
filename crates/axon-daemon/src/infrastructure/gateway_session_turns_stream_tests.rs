@@ -51,7 +51,7 @@ impl Fixture {
     }
 
     fn stream(&self) -> SessionTurnsStream<SqliteRuntimeStore> {
-        SessionTurnsStream::new(self.store.clone(), self.session_id.clone())
+        SessionTurnsStream::new(self.store.clone(), self.session_id.clone()).expect("基线读取")
     }
 }
 
@@ -68,6 +68,48 @@ fn payload_interaction_id(event: &GatewayEvent) -> String {
         .to_owned()
 }
 
+#[test]
+fn baseline_exposes_the_latest_turn_for_client_alignment() {
+    let fixture = Fixture::new();
+    // 没有任何轮次时没有锚点：客户端只看索引即可，不必对齐。
+    let empty = fixture.stream();
+    assert!(empty.subscription_baseline().is_none());
+
+    let turn = fixture.dispatch("baseline", 42);
+    let stream = fixture.stream();
+    let baseline = stream.subscription_baseline().expect("必须有锚点");
+    assert_eq!(
+        baseline["latestInteractionId"],
+        turn.interaction_id.as_str()
+    );
+    assert_eq!(baseline["latestInteractionStatus"], "received");
+    assert_eq!(baseline["latestInteractionReceivedAtMs"], 42);
+}
+
+#[test]
+fn turn_created_between_index_read_and_subscribe_is_reported() {
+    // 复现 W5 竞态：客户端先读索引、再订阅。两者之间新建的那一轮必须在订阅后播报，
+    // 而不是被折进基线永久静音。
+    let fixture = Fixture::new();
+    fixture.dispatch("before-index", 10);
+    // 客户端读到索引（此时最新一轮是 before-index）。
+    let mut stream = fixture.stream();
+    assert_eq!(
+        stream.subscription_baseline().expect("锚点")["latestInteractionId"],
+        "interaction-before-index"
+    );
+    // 索引读完、订阅建立之后立刻又来了一轮。
+    let racer = fixture.dispatch("racer", 20);
+    let event = stream
+        .recv_timeout(WAIT)
+        .expect("轮询应成功")
+        .expect("订阅之后的新轮必须播报");
+    assert_eq!(event_type(&event), INTERACTION_CREATED_EVENT);
+    assert_eq!(
+        payload_interaction_id(&event),
+        racer.interaction_id.as_str()
+    );
+}
 #[test]
 fn new_turn_is_reported_once_and_history_is_not_replayed() {
     let fixture = Fixture::new();

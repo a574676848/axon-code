@@ -141,6 +141,17 @@ pub trait GatewayEventStream: Send {
         &mut self,
         timeout: Duration,
     ) -> Result<Option<GatewayEvent>, GatewayKernelError>;
+
+    /// 订阅建立那一刻的对齐锚点：这条流已经知道的最新事实。
+    ///
+    /// 轮次头订阅首轮只建基线、不补历史。客户端如果在读索引之后才订阅，两次动作
+    /// 之间新建的那一轮会被折进基线、永远不播报。把基线放进 `subscribed` 回执后，
+    /// 客户端可以拿它与自己读到的索引对齐，发现落后就再读一次。
+    ///
+    /// 默认没有锚点：正文与事件订阅走 durable 游标，不需要额外对齐事实。
+    fn subscription_baseline(&self) -> Option<serde_json::Value> {
+        None
+    }
 }
 
 /// 由 Daemon durable event bridge 映射出的最小事件。
