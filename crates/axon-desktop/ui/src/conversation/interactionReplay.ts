@@ -36,15 +36,14 @@ export const HISTORY_PAGE_FRAMES = 1_000;
  * 页数才是仅剩的成本边界。四十页足够覆盖一条极长的轮次；超过就不再多读，改用
  * 「首页 + 尾窗」，绝不重演「只交尾窗、开头整段消失」。
  */
-export const HISTORY_REPLAY_PAGES = 40;
 /**
- * 允许顺序补齐的缺口上限（帧数）。
+ * 顺序补齐的页数上限。
  *
- * 尾窗与首页之间的缺口不超过这个量级时，逐页读完更保真；超过就只交「首页 + 尾窗」并
- * 标记截断。四页是往返次数与保真度的折中：正常轮次根本走不到这里，超长轮次也不会
- * 被迫打几十个串行请求。
+ * 一轮真的超过这个页数时，只交「已读的页 + 尾窗」并如实标记截断。旧实现按 40 页读满
+ * 再丢掉中段，超长轮次的首屏因此被几十个串行往返拖住；这个上限把往返次数钉在
+ * 上限 + 1 次（含尾窗），同时保住开头与结论。
  */
-export const SEQUENTIAL_REPLAY_FRAMES = HISTORY_PAGE_FRAMES * 4;
+export const SEQUENTIAL_REPLAY_PAGES = 5;
 
 /** 用量快照帧在 wire 契约里的类型名。 */
 const USAGE_WIRE_TYPE = 'usageUpdate';
@@ -229,40 +228,29 @@ export async function readInteractionFrames(
 
   const page = await fetchPage(interactionId, 0, limit, false);
   if (stale()) return null;
-  const first = page;
   let frames = [...page.events];
   let cursor = page.tailCursor;
   let truncated = false;
   if (page.hasMore) {
     /*
-     * 先用首页带回的 durable 尾定界，再决定要不要逐页读完整轮。
-     *
-     * 缺口只有几页时顺序读完更保真；缺口很大时只交「首页 + 尾窗」两次往返，中间一段
-     * 如实标记为略过。旧实现无论缺口多大都先逐页读到上限（40 页）再丢掉中间、回头取
-     * 尾窗，等于先白读几十页：超长轮次的首屏因此被几十个串行往返拖住。
+     * 按页顺序补齐，到上限即停：到那时还没有读完，就再取一次尾窗，把「开头 + 已经读过
+     * 的部分 + 结论」一起交出去，中段如实标记被略过。往返次数因此有上界，且不依赖
+     * 会话级尾序号（那是整条会话的尾，不是这一轮自己的尾，拿来判断会把旧轮次误判成
+     * 缺口过大而直接截断）。
      */
-    const gapFrames = Math.max(0, page.tailSequence - page.nextAfter);
-    if (gapFrames <= SEQUENTIAL_REPLAY_FRAMES) {
-      let current = page;
-      let pages = 1;
-      while (current.hasMore && pages < HISTORY_REPLAY_PAGES) {
-        current = await fetchPage(interactionId, current.nextAfter, limit, false);
-        if (stale()) return null;
-        frames = frames.concat(current.events);
-        pages += 1;
-      }
-      cursor = current.tailCursor;
-      if (current.hasMore) {
-        const tail = await fetchPage(interactionId, 0, limit, true);
-        if (stale()) return null;
-        frames = mergeWithoutOverlap(first.events, tail.events);
-        cursor = tail.tailCursor;
-        truncated = true;
-      }
-    } else {
+    let current = page;
+    let pages = 1;
+    while (current.hasMore && pages < SEQUENTIAL_REPLAY_PAGES) {
+      current = await fetchPage(interactionId, current.nextAfter, limit, false);
+      if (stale()) return null;
+      frames = frames.concat(current.events);
+      pages += 1;
+    }
+    cursor = current.tailCursor;
+    if (current.hasMore) {
       const tail = await fetchPage(interactionId, 0, limit, true);
       if (stale()) return null;
-      frames = mergeWithoutOverlap(first.events, tail.events);
+      frames = mergeWithoutOverlap(frames, tail.events);
       cursor = tail.tailCursor;
       truncated = true;
     }

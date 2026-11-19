@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
     HISTORY_PAGE_FRAMES,
-    HISTORY_REPLAY_PAGES,
+    SEQUENTIAL_REPLAY_PAGES,
     compactUsageSnapshots,
     readInteractionFrames,
 } from '../src/conversation/interactionReplay.ts';
@@ -102,7 +102,7 @@ test('这一轮还在跑时同样压缩快照，界面拿到的仍是同一条�
 
 test('单轮页数超过上限时保留首页与尾窗，绝不把开头整段丢掉', async () => {
     const pages = [];
-    for (let index = 0; index < HISTORY_REPLAY_PAGES; index += 1) {
+    for (let index = 0; index < SEQUENTIAL_REPLAY_PAGES; index += 1) {
         const frames = [
             frame('wire_event', `head-${index}-0`),
             frame('wire_event', `head-${index}-1`),
@@ -118,13 +118,26 @@ test('单轮页数超过上限时保留首页与尾窗，绝不把开头整段�
     assert.equal(tailCall.after, 0);
     assert.equal(
         calls.filter((call) => call.tail === false).length,
-        HISTORY_REPLAY_PAGES,
+        SEQUENTIAL_REPLAY_PAGES,
         '头部按页数上限读满即停',
     );
     assert.deepEqual(
         read.frames.map((item) => item.cursor),
-        ['head-0-0', 'head-0-1', 'tail-0', 'tail-1'],
-        '首页的抬头与尾窗的结论都要交出去，中段如实略过',
+        [
+            'head-0-0',
+            'head-0-1',
+            'head-1-0',
+            'head-1-1',
+            'head-2-0',
+            'head-2-1',
+            'head-3-0',
+            'head-3-1',
+            'head-4-0',
+            'head-4-1',
+            'tail-0',
+            'tail-1',
+        ],
+        '已读到的开头与尾窗结论都要交出去，中间被略过的一段如实标记',
     );
     assert.equal(read.truncated, true, '中段被略过必须如实标记');
     assert.equal(read.settled, true);
@@ -133,7 +146,7 @@ test('单轮页数超过上限时保留首页与尾窗，绝不把开头整段�
 
 test('首页与尾窗重叠时按游标去重，同一帧不投两遍', async () => {
     const pages = [];
-    for (let index = 0; index < HISTORY_REPLAY_PAGES; index += 1) {
+    for (let index = 0; index < SEQUENTIAL_REPLAY_PAGES; index += 1) {
         pages.push(page([frame('wire_event', `dup-${index}`)], index + 1, true, `dup-${index}`));
     }
     // 尾窗把首页那一帧又取回来一次：实际发生过，窄轮次里两段本来就相交。
@@ -143,7 +156,7 @@ test('首页与尾窗重叠时按游标去重，同一帧不投两遍', async ()
 
     assert.deepEqual(
         read.frames.map((item) => item.cursor),
-        ['dup-0', 'dup-tail'],
+        ['dup-0', 'dup-1', 'dup-2', 'dup-3', 'dup-4', 'dup-tail'],
         '重复的帧只留一份',
     );
 });
