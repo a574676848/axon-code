@@ -2,7 +2,10 @@
 
 use super::super::{
     AgentTuiCatalog, AgentTuiCatalogLoadState, TUI_HINT_COMMAND, TUI_HINT_IDLE,
-    commands::{AgentTuiCommandSuggestion, command_suggestions, command_supports_inline_args},
+    commands::{
+        AgentTuiCommandSuggestion, argument_hint_is_optional, command_suggestions,
+        command_supports_inline_args,
+    },
     state::AgentTuiState,
 };
 use crate::surface::{
@@ -48,6 +51,10 @@ impl AgentTuiState {
         true
     }
 
+    /// 回车对命令建议的语义：可执行就执行，缺必填参数才只补全。
+    ///
+    /// 可选参数（提示写成 `[--all]`）不应拦下回车：`/sessions` 裸跑本来就成立，
+    /// 先补成 `--all` 再要第二次回车，等于把「执行」拖成两拍。
     pub(in crate::r#loop::agent_tui) fn accept_selected_command_suggestion_for_enter(
         &mut self,
     ) -> bool {
@@ -55,8 +62,9 @@ impl AgentTuiState {
             return true;
         };
         let command = selected.command.clone();
-        let waits_for_argument =
-            !selected.argument_hint.is_empty() && !command.contains(char::is_whitespace);
+        let waits_for_argument = !selected.argument_hint.is_empty()
+            && !argument_hint_is_optional(&selected.argument_hint)
+            && !command.contains(char::is_whitespace);
         if waits_for_argument {
             if let Some(has_inline_args) = self.complete_inline_command(&command) {
                 return has_inline_args;

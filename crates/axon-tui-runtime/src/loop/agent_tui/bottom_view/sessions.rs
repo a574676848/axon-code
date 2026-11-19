@@ -95,6 +95,37 @@ impl SessionsView {
             .saturating_add(HINT_ROWS)
     }
 
+    /// 面板实际可用高度能放下几条候选。
+    ///
+    /// 高度由 ComposerDock 决定，可能小于这里申请的容量；渲染侧必须按真实高度开窗，
+    /// 否则选中项会跑到可视区外面。
+    pub(crate) fn visible_capacity(&self, area_height: u16) -> usize {
+        usize::from(area_height.saturating_sub(TITLE_ROWS) / ITEM_ROWS)
+    }
+
+    /// 让选中项落在窗口内的起始下标。
+    ///
+    /// 窗口只由「选中项 + 可用容量」推导，不额外存滚动状态：每帧都自洽，
+    /// 也不会出现「滚出可视区后回不来」的偏移。
+    pub(crate) fn window_start(&self, capacity: usize) -> usize {
+        if capacity == 0 || self.items.len() <= capacity {
+            return 0;
+        }
+        self.selected
+            .saturating_sub(capacity - 1)
+            .min(self.items.len() - capacity)
+    }
+
+    /// 测试用：把选中项移到指定下标（真实入口是方向键，视图内部不对外暴露定位）。
+    #[cfg(test)]
+    pub(crate) fn select_index_for_test(&mut self, index: usize) {
+        if self.items.is_empty() {
+            self.selected = 0;
+            return;
+        }
+        self.selected = index.min(self.items.len() - 1);
+    }
+
     fn select_previous(&mut self) {
         if self.items.is_empty() {
             return;
@@ -245,6 +276,37 @@ mod tests {
             BottomViewEvent::Close
         );
         assert_eq!(empty.height(), 4);
+    }
+
+    #[test]
+    fn session_popup_capacity_follows_the_real_panel_height() {
+        let view = view(true);
+
+        // 标题行之外每项占 2 行：高度 1 放不下任何候选，高度 3 只放得下一条。
+        assert_eq!(view.visible_capacity(1), 0);
+        assert_eq!(view.visible_capacity(3), 1);
+        assert_eq!(view.visible_capacity(14), 6);
+    }
+
+    #[test]
+    fn session_popup_window_keeps_the_selected_item_visible() {
+        let items = (0..12)
+            .map(|index| SessionsViewItem::from_catalog_item(&item(&format!("s-{index}"), false)))
+            .collect::<Vec<_>>();
+        let mut view = SessionsView::new(items, false);
+
+        assert_eq!(view.window_start(3), 0, "顶部选中项窗口贴顶");
+        for _ in 0..3 {
+            view.handle_key(key(UiKeyCode::Down));
+        }
+        assert_eq!(view.window_start(3), 1, "选中第 4 项时窗口必须下移一行");
+        for _ in 0..8 {
+            view.handle_key(key(UiKeyCode::Down));
+        }
+        assert_eq!(view.selected(), 11);
+        assert_eq!(view.window_start(3), 9, "末尾选中项窗口贴底");
+        assert_eq!(view.window_start(0), 0, "容量为 0 时不滚动");
+        assert_eq!(view.window_start(20), 0, "放得下时窗口贴顶");
     }
 
     const fn key(code: UiKeyCode) -> UiKeyEvent {

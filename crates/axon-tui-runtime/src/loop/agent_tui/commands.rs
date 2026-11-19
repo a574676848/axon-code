@@ -206,6 +206,15 @@ pub(super) fn command_supports_inline_args(command: &str) -> bool {
     false
 }
 
+/// 参数提示是否可省略：整段被方括号包住即视为可选。
+///
+/// `/sessions [--all]` 这类命令裸跑就成立：用户打完命令直接回车应当执行，
+/// 而不是被补全改写一次、再按第二次。必填参数的提示不带方括号（如 `<path>`）。
+pub(super) fn argument_hint_is_optional(hint: &str) -> bool {
+    let hint = hint.trim();
+    hint.starts_with('[') && hint.ends_with(']')
+}
+
 fn builtin_command_suggestions(filter: &str, task_running: bool) -> Vec<AgentTuiCommandSuggestion> {
     COMMANDS
         .iter()

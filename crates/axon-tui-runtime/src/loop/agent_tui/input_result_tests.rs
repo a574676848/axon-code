@@ -437,5 +437,31 @@ fn temp_file(name: &str) -> PathBuf {
     path
 }
 
+/// 可选参数不该拦下回车：`/sessions` 打完直接回车就执行，不再先补成 `--all`。
+#[test]
+fn enter_runs_command_whose_argument_is_optional() {
+    let mut state = test_state(AgentTuiCatalog::default());
+    state.replace_draft("/sessions".to_owned());
+    assert!(state.command_suggestions_open());
+
+    assert!(state.accept_selected_command_suggestion_for_enter());
+    assert_eq!(
+        state.composer.draft.text(),
+        "/sessions",
+        "可选参数命令必须原样提交，不被补全改写"
+    );
+}
+
+/// 必填参数仍然先补全：第一次回车只把命令补成待填形态，交给用户写参数。
+#[test]
+fn enter_only_completes_command_whose_argument_is_required() {
+    let mut state = test_state(AgentTuiCatalog::default());
+    state.replace_draft("/think".to_owned());
+    assert!(state.command_suggestions_open());
+
+    assert!(!state.accept_selected_command_suggestion_for_enter());
+    assert_ne!(state.composer.draft.text(), "/think");
+}
+
 #[path = "input_popup_mention_tests.rs"]
 mod input_popup_mention_tests;
