@@ -31,7 +31,6 @@ import type {
   SystemInfo,
   UpdateCheck,
   SkillItem,
-  SessionCreation,
   WorkspaceItem,
   DesktopPreferences,
   ThemeId,
@@ -186,14 +185,13 @@ export const removeWorkspace = (id: string): Promise<WorkspaceItem[]> =>
 /** 打开系统原生目录选择器，返回选中路径；取消或不可用时返回 null。 */
 export const pickDirectory = (): Promise<string | null> => call('pick_directory');
 
-export const createSession = (workspaceId: string): Promise<SessionCreation> =>
+/** 新建会话的落库结论：刷新后的目录树与服务端刚给出的会话标识。 */
+export const createSession = (
+  workspaceId: string,
+): Promise<{ sessions: WorkspaceItem[]; sessionId: string }> =>
   call('session_create', { workspaceId });
 
-/**
- * 登记一条本机草稿会话：只写桌面状态，服务端不会因此多出一条空会话。
- *
- * 首条消息提交时才走 `createSession` 把它物化成真实会话。
- */
+/** 登记一条本机草稿会话：只写桌面状态，首条消息提交时才物化成真实会话。 */
 export const createSessionDraft = (workspaceId: string): Promise<WorkspaceItem[]> =>
   call('session_draft', { workspaceId });
 

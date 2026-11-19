@@ -678,12 +678,6 @@ export interface StagedAttachment {
   bytes: number;
 }
 
-/** 新建会话的落库结论：刷新后的目录树与服务端刚给出的会话标识。 */
-export interface SessionCreation {
-  sessions: WorkspaceItem[];
-  sessionId: string;
-}
-
 /*
  * 用量统计的传输模型单独成篇（`usageTypes.ts`）：领域模型按块拆分，
  * 单文件才守得住行数硬限。这里整体转出去，调用方仍旧只从 `types` 取模型。
