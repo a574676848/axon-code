@@ -31,7 +31,7 @@ fn child_thread_is_active_before_provider_turn_and_closes_interrupted() {
     let input = fixture_execution_input("/root/thread_lifecycle");
     let child_request = executor.child_request(&input, None).unwrap();
 
-    persist_child_turn_started(&child_request);
+    persist_child_turn_started(&child_request, &TurnSpec::subagent());
 
     let root = super::super::super::run_session_store::resolved_axon_root(&config_path).unwrap();
     let service = ThreadService::new(JsonlThreadEventStore);

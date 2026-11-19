@@ -19,6 +19,17 @@ pub const SYSTEM_SOURCE_CHANNEL: &str = "system";
 /// 不属于用户真实渠道使用记录，因此「最近使用渠道」扫描必须排除它们。
 pub const COMPLETION_STEER_SOURCE_PREFIX: &str = "completion-steer-";
 
+/// 执行侧派发 Interaction 的渠道标识。
+///
+/// 子代理与目标执行的任务提示不是用户输入：它们落的是执行子会话，只作为
+/// 「这条会话的输入事实」存在，既不属于用户真实渠道使用记录，也不进入主 turn 的领取队列。
+pub const AGENT_DISPATCH_SOURCE_CHANNEL: &str = "agent";
+
+/// 执行侧派发 Interaction 的来源 ID 前缀。
+///
+/// 键里含父子会话与代理路径，因此同一个代理路径在不同父会话下不会撞来源唯一索引。
+pub const AGENT_DISPATCH_SOURCE_PREFIX: &str = "agent-dispatch:";
+
 /// Cron 唤醒回合的来源 ID 前缀。
 ///
 /// 唤醒回合由系统派生，不属于用户真实输入：它必须独立成一轮，绝不能插入用户正在

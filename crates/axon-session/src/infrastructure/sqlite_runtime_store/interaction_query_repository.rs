@@ -22,6 +22,8 @@ pub(super) const INBOX_STATE_JOIN: &str = "FROM inbox AS i \
 /// 工作项的在途状态。
 pub(super) const WORK_RUNNING: &str = "running";
 pub(super) const SYSTEM_SOURCE_CHANNEL: &str = axon_domain::SYSTEM_SOURCE_CHANNEL;
+/// 执行侧派发记录的渠道：不属于用户真实渠道使用记录，最近渠道扫描必须与系统渠道一并排除。
+pub(super) const AGENT_DISPATCH_SOURCE_CHANNEL: &str = axon_domain::AGENT_DISPATCH_SOURCE_CHANNEL;
 
 pub(super) fn select_inbox(where_clause: &str) -> String {
     format!("SELECT {INBOX_COLUMNS} {INBOX_STATE_JOIN} {where_clause}")
@@ -54,13 +56,15 @@ impl InteractionQueryStore for SqliteRuntimeStore {
             .map_err(runtime_error)?
             .query_row(
                 &select_inbox(
-                    "WHERE i.scope_json=?1 AND i.source_channel<>?2 AND i.source_message_id NOT LIKE ?3 \
+                    "WHERE i.scope_json=?1 AND i.source_channel<>?2 AND i.source_channel<>?4 \
+                       AND i.source_message_id NOT LIKE ?3 \
                      ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1",
                 ),
                 params![
                     scope_json,
                     SYSTEM_SOURCE_CHANNEL,
-                    format!("{}%", axon_domain::COMPLETION_STEER_SOURCE_PREFIX)
+                    format!("{}%", axon_domain::COMPLETION_STEER_SOURCE_PREFIX),
+                    AGENT_DISPATCH_SOURCE_CHANNEL
                 ],
                 read_record,
             )
@@ -78,7 +82,8 @@ impl InteractionQueryStore for SqliteRuntimeStore {
             .map_err(runtime_error)?
             .query_row(
                 &select_inbox(
-                    "WHERE i.scope_json=?1 AND i.source_channel<>?2 AND i.source_message_id NOT LIKE ?3 \
+                    "WHERE i.scope_json=?1 AND i.source_channel<>?2 AND i.source_channel<>?5 \
+                       AND i.source_message_id NOT LIKE ?3 \
                        AND w.status=?4 \
                      ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1",
                 ),
@@ -87,6 +92,7 @@ impl InteractionQueryStore for SqliteRuntimeStore {
                     SYSTEM_SOURCE_CHANNEL,
                     format!("{}%", axon_domain::COMPLETION_STEER_SOURCE_PREFIX),
                     WORK_RUNNING,
+                    AGENT_DISPATCH_SOURCE_CHANNEL,
                 ],
                 read_record,
             )
@@ -151,12 +157,14 @@ impl InteractionQueryStore for SqliteRuntimeStore {
             .map_err(runtime_error)?
             .query_row(
                 &select_inbox(
-                    "WHERE i.source_channel<>?1 AND i.source_message_id NOT LIKE ?2 \
+                    "WHERE i.source_channel<>?1 AND i.source_channel<>?3 \
+                       AND i.source_message_id NOT LIKE ?2 \
                      ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1",
                 ),
                 params![
                     SYSTEM_SOURCE_CHANNEL,
-                    format!("{}%", axon_domain::COMPLETION_STEER_SOURCE_PREFIX)
+                    format!("{}%", axon_domain::COMPLETION_STEER_SOURCE_PREFIX),
+                    AGENT_DISPATCH_SOURCE_CHANNEL
                 ],
                 read_record,
             )

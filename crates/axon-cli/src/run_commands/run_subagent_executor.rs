@@ -349,7 +349,8 @@ impl ProviderRunSubagentExecutor {
         input: &RunSubagentExecutionInput,
         publisher: &SubagentLifecyclePublisher,
     ) -> RunSubagentExecutionOutput {
-        persist_child_turn_started(child_request);
+        let spec = TurnSpec::subagent();
+        persist_child_turn_started(child_request, &spec);
         // 子代理的 run-control 通道失败只降级为告警：停不下这一轮也照常跑完再回报。
         let _stop_control = match start_turn_stop_control(child_request) {
             Ok(control) => control,
@@ -406,7 +407,7 @@ impl ProviderRunSubagentExecutor {
             }
             Ok(response) => {
                 // 与主 turn 同一条终态记账：差异只在规格里的完成去向与收口口径。
-                let completed = complete_turn(&TurnSpec::subagent(), child_request, response);
+                let completed = complete_turn(&spec, child_request, response);
                 mark_child_session_idle(child_request);
                 let memory_write_count = persisted_memory_write_count(&completed.response);
                 RunSubagentExecutionOutput {
@@ -424,7 +425,7 @@ impl ProviderRunSubagentExecutor {
                 let failed = fail_turn(
                     &child_request.config_path,
                     &self.environment.config,
-                    &TurnSpec::subagent(),
+                    &spec,
                     child_request,
                     error,
                     String::new(),

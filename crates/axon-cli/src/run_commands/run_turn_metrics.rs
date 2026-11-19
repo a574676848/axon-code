@@ -112,6 +112,9 @@ fn invalidate_host() {
 /// 把本轮指标写入会话事件流。
 ///
 /// 失败不阻断本轮执行：指标是投影事实，缺一条会在界面上表现为该轮缺数，不影响对话本身。
+///
+/// 会话行的模型事实也在这里落地：这是所有来源唯一的终态记账点，复用同一次 `store`，
+/// 因此不必为它多开一次连接，也不需要另一处再补一遍。
 pub(crate) fn publish_turn_metrics(config_path: &Path, record: &RunSessionRecord) {
     let Ok(store) = shared_store(config_path) else {
         return;
@@ -120,6 +123,7 @@ pub(crate) fn publish_turn_metrics(config_path: &Path, record: &RunSessionRecord
         return;
     };
     ensure_session_row(&store, &session_id, record);
+    record_session_model(&store, &session_id, record);
     let Some(payload) = metrics_payload(record) else {
         return;
     };
@@ -149,6 +153,28 @@ pub(crate) fn publish_turn_metrics(config_path: &Path, record: &RunSessionRecord
                 }
             }
         }
+    }
+}
+
+/// 记录会话最近一轮实际使用的 provider 与模型。
+///
+/// 会话清单只读 `sessions` 三列，因此这份事实必须每轮落地；写入是条件单行 UPDATE，
+/// 连续多轮同一模型时 0 行命中，不产生页写，也不新增查询。
+fn record_session_model(
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+    record: &RunSessionRecord,
+) {
+    if let Err(error) = store.record_session_model(
+        session_id,
+        &record.provider,
+        &record.model,
+        record.model_name.as_deref(),
+    ) {
+        axon_logger::warning(&format!(
+            "会话模型事实写入失败: session_id={}, error={error:?}",
+            record.session_id
+        ));
     }
 }
 

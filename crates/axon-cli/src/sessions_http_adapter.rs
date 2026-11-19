@@ -229,6 +229,12 @@ pub(crate) struct SessionListRow {
     pub(crate) audience: String,
     /// 该会话已有的入站条数。
     pub(crate) interaction_count: u64,
+    /// 最近一轮实际使用的 Provider；从未跑过轮次的会话为空。
+    pub(crate) provider: String,
+    /// 最近一轮实际观测到的上游模型 id。
+    pub(crate) model: String,
+    /// 用户当时选择的模型别名；展示与恢复优先用它。
+    pub(crate) model_name: Option<String>,
 }
 
 impl SessionListRow {
@@ -253,6 +259,10 @@ impl SessionListRow {
             "lastChannel": self.last_channel,
             "audience": self.audience,
             "interactionCount": self.interaction_count,
+            // 会话最近一轮实际使用的模型：会话行只记最近一次，不是每轮的模型历史。
+            "provider": self.provider,
+            "model": self.model,
+            "modelName": self.model_name,
         })
     }
 }
@@ -285,7 +295,8 @@ fn read_sessions(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<Sess
                           FROM inbox AS i WHERE i.session_id = s.session_id
                           ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1), ''),
                 s.trust_scope,
-                (SELECT COUNT(*) FROM inbox AS i WHERE i.session_id = s.session_id)
+                (SELECT COUNT(*) FROM inbox AS i WHERE i.session_id = s.session_id),
+                s.provider, s.model, s.model_name
          FROM sessions AS s
          LEFT JOIN session_metrics AS m ON m.session_id = s.session_id
          WHERE s.kind = 'primary'
@@ -324,6 +335,9 @@ fn read_sessions(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<Sess
             last_channel: row.get(17)?,
             audience: audience_label(&trust_scope),
             interaction_count: u64::try_from(row.get::<_, i64>(19)?).unwrap_or(0),
+            provider: row.get::<_, Option<String>>(20)?.unwrap_or_default(),
+            model: row.get::<_, Option<String>>(21)?.unwrap_or_default(),
+            model_name: row.get(22)?,
         })
     })?;
     rows.collect()

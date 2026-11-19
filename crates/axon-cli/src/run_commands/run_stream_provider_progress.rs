@@ -158,6 +158,12 @@ fn provider_progress_options<'a>(
     user_question_port: Option<std::sync::Arc<dyn axon_agent_runtime::UserQuestionPort>>,
 ) -> RunProgressOptions<'a> {
     let client_channel = client_channel_of(request.transport_context.as_ref());
+    // 本轮来源由服务端写入的 action 与 transport 共同决定；这里只做一次判定，
+    // 装载、记账与投影都认这一个值。
+    let turn_origin = axon_session_runtime::TurnOrigin::from_action(
+        &request.action_kind,
+        request.transport_context.as_ref(),
+    );
     RunProgressOptions {
         client_channel,
         progress: Some(progress),
@@ -174,6 +180,16 @@ fn provider_progress_options<'a>(
         // 两者都只是把它置位，收口路径完全一致。
         cancel_token: Some(cancel_token),
         user_question_port,
+        turn_origin,
+        // 目标执行没有外部入站：它的输入事实由运行侧按完整提示补写。
+        turn_input: if turn_origin == axon_session_runtime::TurnOrigin::GoalExecution {
+            super::run_turn_spec::TurnInput::Generated {
+                channel: axon_domain::AGENT_DISPATCH_SOURCE_CHANNEL,
+                client: Some("goal"),
+            }
+        } else {
+            super::run_turn_spec::TurnInput::Submitted
+        },
     }
 }
 

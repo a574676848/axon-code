@@ -13,6 +13,14 @@ const HOST_STATE_RUNNING: &str = "running";
 /// 会话行的列顺序；`session_runtime_row` 按它取值，任何查询都必须照抄这一份。
 pub(crate) const SESSION_COLUMNS: &str = "session_id,current_run_id,root_session_id,agent_path,kind,trust_scope,workspace_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms";
 
+/// 记录会话最近一轮的 provider 与模型。
+///
+/// 条件里逐个比对新旧值：同一模型连续多轮时条件不成立，UPDATE 一行也不写，
+/// 因此会话清单要读的这三列可以在每轮收口时刷新而不放大写入。
+pub(crate) const SQL_RECORD_SESSION_MODEL: &str = "\
+UPDATE sessions SET provider=?2,model=?3,model_name=?4 \
+WHERE session_id=?1 AND (provider IS NOT ?2 OR model IS NOT ?3 OR model_name IS NOT ?4)";
+
 /// 按标识读取单个会话。
 pub(crate) fn sql_select_session_by_id() -> String {
     format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE session_id=?1")

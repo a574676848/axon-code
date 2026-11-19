@@ -9,6 +9,7 @@ use crate::run_commands::run_self_iteration_subagent::is_internal_agent_path;
 use crate::run_commands::run_thread_children::{
     CHILD_SESSION_ORIGIN_DELEGATED, CHILD_SESSION_ORIGIN_INTERNAL, record_child_origin,
 };
+use crate::run_commands::run_turn_spec::TurnSpec;
 
 /// 子代理长回执归档使用的文件后缀：Markdown 便于按 `builtin.read_file` 分页阅读。
 const SUBAGENT_RESULT_FILE_SUFFIX: &str = ".md";
@@ -183,7 +184,9 @@ fn mark_child_origin(request: &RunRequest) {
     }
 }
 
-pub(super) fn persist_child_turn_started(request: &RunRequest) {
+pub(super) fn persist_child_turn_started(request: &RunRequest, spec: &TurnSpec) {
+    // 输入事实先落：即使这一轮随后就失败，子会话也已经有了「谁让它做什么」的记录。
+    crate::run_commands::run_turn_start::record_turn_input(spec, request);
     // 起始态与主 turn 走同一条记录、同一处投影；子代理把失败降级为告警，不阻断起跑。
     match crate::run_commands::run_turn_start::persist_turn_started(request) {
         Ok(record) => {
@@ -209,14 +212,14 @@ pub(super) fn persist_child_turn_started(request: &RunRequest) {
     mark_child_session_running(request);
 }
 
+/// 子会话的失败终态落账：中断不是失败，只有真正的失败才落失败事实。
 pub(in crate::run_commands) fn persist_child_turn_terminal(
     request: &RunRequest,
     status: &str,
     summary: &str,
     failure: Option<&axon_domain::RuntimeFailure>,
 ) {
-    // 中断不是失败：只有真正的失败才落失败事实。调用方给不出结构化失败时，
-    // 才退回通用运行时失败，保证「失败终态必定带 failure」这条不变量。
+    // 调用方给不出结构化失败时，才退回通用运行时失败，保证「失败终态必定带 failure」。
     let failure = (status != "interrupted").then(|| {
         failure.cloned().unwrap_or_else(|| {
             axon_domain::RuntimeFailure::new(
@@ -238,7 +241,7 @@ pub(in crate::run_commands) fn persist_child_turn_terminal(
             request.session_id
         ));
     }
-    mark_child_session_status(request, CHILD_SESSION_STATUS_IDLE);
+    mark_child_session_idle(request);
 }
 
 /// 子会话回到静息：一轮结束后由终态记账的调用方推进。

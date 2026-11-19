@@ -177,7 +177,14 @@ impl TurnProfile {
                 context: TurnContextProfile::primary(),
                 accounting: TerminalAccounting::primary(),
             },
-            TurnOrigin::GoalExecution | TurnOrigin::Background => Self {
+            // 目标执行是「不展示在会话列表里的主会话」：装载与收口都按主会话走，
+            // 它与会话清单的关系由 `kind` 决定，不由口径决定。
+            TurnOrigin::GoalExecution => Self {
+                origin,
+                context: TurnContextProfile::primary(),
+                accounting: TerminalAccounting::primary(),
+            },
+            TurnOrigin::Background => Self {
                 origin,
                 context: TurnContextProfile::child(),
                 accounting: TerminalAccounting::background(),
@@ -238,19 +245,18 @@ mod tests {
     }
 
     #[test]
-    fn goal_execution_action_gets_child_profile() {
+    fn goal_execution_action_gets_primary_profile() {
         let transport = serde_json::json!({ ORIGIN_CHANNEL_KEY: ORIGIN_CHANNEL_GOAL });
         let profile = TurnProfile::for_request(&request("turn", Some(transport)));
         assert_eq!(profile.origin, TurnOrigin::GoalExecution);
-        assert_eq!(profile.context, TurnContextProfile::child());
+        // 目标执行是「不展示在会话列表里的主会话」：装载与收口都按主会话走，
+        // 它与会话清单的关系由 `kind` 决定，不由口径决定。
+        assert_eq!(profile.context, TurnContextProfile::primary());
+        assert_eq!(profile.accounting, TerminalAccounting::primary());
         assert_eq!(
             profile.accounting.failure_owner,
-            TerminalFailureOwner::Scheduler
+            TerminalFailureOwner::Runtime
         );
-        // 派生 turn 不再派生标题与轮后治理，但指标必须照写。
-        assert!(profile.accounting.metrics);
-        assert!(!profile.accounting.title);
-        assert!(!profile.accounting.governance);
     }
 
     #[test]

@@ -696,6 +696,8 @@ CREATE INDEX sessions_by_kind_root
 
 `root_session_id` 只对 `kind='subagent'` 有值，`title` / `pinned` / `archived` / `sort_order` 承接桌面端的会话管理能力（`POST /api/v1/sessions` 创建、`PATCH /api/v1/sessions/<id>` 置顶与归档）。`title` 也是会话标题的唯一落点：轮后任务每满三轮用快速模型总结最近用户消息并写回这一列，桌面左侧菜单、TUI `/sessions` 与 CLI `sessions list` 都读同一列，只有该列为空时才回落到消息正文；桌面端的用户重命名留在本地状态里优先覆盖，不回写服务端。
 
+`provider` / `model` / `model_name` 记该会话**最近一轮**实际使用的模型：轮次终态记账时做一次条件单行写回（`WHERE session_id=? AND (provider IS NOT ? OR model IS NOT ? OR model_name IS NOT ?)`），同一模型连续多轮时命中 0 行、不产生页写，也不改活跃时间。`model` 是上游模型 id，`model_name` 是用户当初选择的配置别名，展示优先用别名。会话清单（CLI、TUI、桌面）都读这三列，不再去 thread 镜像里拼 provider 与模型。
+
 `workspace_id` 与 `trust_scope` 落成实列，收益是可以直接按工作区或受众边界查会话，不必反解哈希。原来的 `run_session_id` 与 `root_session_id` 两列语义重叠，改为 `current_run_id`（可变）+ `run_generation`（单调），`root_session_id` 只对子会话有意义。
 
 4. `primarySessionId` 这个线上字段名保留（前端与网关契约不动），值就是 `interaction.session_id`；服务端内部一律叫 `session_id`，并在文档里写明两者同值。
@@ -775,7 +777,7 @@ CREATE INDEX sessions_by_kind_root
 
 服务端内部有三个登记入口，只给宿主用，不对外暴露：子代理按 `(root_session_id, agent_path)` 解析，目标执行会话按 `goal_id` 解析，定时任务会话按 `schedules.session_id` 绑定。三者都是「先查后建」：命中原行就复用，查不到就生成新 ULID 并落行；并发撞唯一索引时回读已有行，因此同一件事永远只有一条会话。前两条共用同一段骨架 `resolve_or_create_session`，第三条不走它：它的「查」读的是任务绑定表而不是会话表，且 cron 会话没有唯一键可冲突。
 
-**目标执行的落点**：来源会话（`kind=goal`）只做账本，逐字稿、轮次指标与 thread 镜像都落它派生的执行子会话（`kind=subagent`，`agent_path=root/task-<来源会话>`）。因此「进入会话」指向的是子会话，来源会话只保留轮次状态与调度侧终态卡。
+**目标执行的落点**：目标会话（`kind=goal`）本身就是执行会话，逐字稿、轮次指标与 thread 镜像都落这一条，不再派生 `kind=subagent` 的逐字稿子会话。它在会话清单里不展示（清单按 kind=primary 过滤），入口只有目标看板；账本与逐字稿因此落在同一条会话上。
 
 定时任务的目标会话同样只有一个落点：`schedules.session_id`。**定义侧**解析（已有绑定就沿用，没有才建一条 `kind=cron` 会话）并在同一次落库里写回；**唤醒侧**只读该列，缺失即报错，不隐式建会话、也不按投递目标派生。因此一个任务的多次唤醒落在同一条会话里。
 

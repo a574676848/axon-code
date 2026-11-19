@@ -327,6 +327,20 @@ pub trait RuntimeStore:
         &self,
         session_id: &DaemonSessionId,
     ) -> Result<Option<String>, RuntimeStoreError>;
+    /// 记录该会话最近一轮实际使用的 provider 与模型。
+    ///
+    /// 会话清单要显示 `provider · model`，这份事实只在轮次收口时产生；它属于会话元数据，
+    /// 与是否产出指标无关。持久实现必须是单行点写且幂等：值没变时不产生写入。
+    fn record_session_model(
+        &self,
+        session_id: &DaemonSessionId,
+        provider: &str,
+        model: &str,
+        model_name: Option<&str>,
+    ) -> Result<(), RuntimeStoreError> {
+        let _ = (session_id, provider, model, model_name);
+        Ok(())
+    }
     /// 后台任务计数投影：`started` 为真表示作业开始，为假表示作业收口。
     ///
     /// 由作业生命周期事件的生产者调用；同一会话的计数只增不减到 0 为止，

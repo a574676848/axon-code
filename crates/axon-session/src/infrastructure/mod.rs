@@ -33,6 +33,9 @@ mod sqlite_runtime_store_goal_less_tests;
 #[path = "sqlite_runtime_store_health_tests.rs"]
 mod sqlite_runtime_store_health_tests;
 #[cfg(test)]
+#[path = "sqlite_runtime_store_interaction_dispatch_tests.rs"]
+mod sqlite_runtime_store_interaction_dispatch_tests;
+#[cfg(test)]
 #[path = "sqlite_runtime_store_interaction_fixtures.rs"]
 pub(super) mod sqlite_runtime_store_interaction_fixtures;
 #[cfg(test)]
@@ -53,6 +56,9 @@ mod sqlite_runtime_store_result_tests;
 #[cfg(test)]
 #[path = "sqlite_runtime_store_schema_tests.rs"]
 mod sqlite_runtime_store_schema_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_session_model_tests.rs"]
+mod sqlite_runtime_store_session_model_tests;
 #[cfg(test)]
 #[path = "sqlite_runtime_store_session_resolution_tests.rs"]
 mod sqlite_runtime_store_session_resolution_tests;

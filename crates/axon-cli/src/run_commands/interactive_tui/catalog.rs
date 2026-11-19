@@ -14,8 +14,9 @@ use axon_tui_runtime::{
 use crate::management_commands::resolved_config_path;
 use crate::run_commands::{AxonCli, run_session_store::resolved_axon_root};
 
-const TUI_CATALOG_LIMIT: usize = 12;
-/// `/sessions --all` 需要看到归档会话，未归档列表因此单独取一份，避免归档项挤掉在用会话。
+/// `/sessions` 默认列出的主会话条数；与会话清单默认页同源，两处条数因此一致。
+const TUI_CATALOG_LIMIT: usize = crate::session_commands::SESSION_CLI_DEFAULT_LIMIT;
+/// `/sessions --all` 需要看到归档会话，归档项单独取一份，避免归档项挤掉在用会话。
 const TUI_ARCHIVED_CATALOG_LIMIT: usize = 8;
 
 pub(super) fn resolve_agent_tui_catalog(cli: &AxonCli) -> AgentTuiCatalog {
@@ -257,55 +258,61 @@ fn mcp_catalog_load_state(servers: &[AgentTuiMcpServerCatalogItem]) -> AgentTuiC
     }
 }
 
+/// 读取用户可见的会话目录。
+///
+/// 唯一事实源是 `sessions(kind='primary')`：thread 是所有轮次（自迭代、目标执行、
+/// 子代理）的镜像，按 thread 目录列会话会把内部线程混进用户列表，归档口径也与
+/// 会话表分叉。
 fn load_tui_session_items(config_path: &Path) -> Vec<AgentTuiSessionCatalogItem> {
-    let Ok(root) = resolved_axon_root(config_path) else {
+    let Ok(store) = crate::run_commands::run_agent_store::shared_runtime_store(config_path) else {
         return Vec::new();
     };
-    let service = axon_session::ThreadService::new(axon_session::JsonlThreadEventStore);
-    let mut threads = list_threads(&service, &root, TUI_CATALOG_LIMIT, false);
-    threads.extend(list_threads(
-        &service,
-        &root,
-        TUI_ARCHIVED_CATALOG_LIMIT,
-        true,
-    ));
-    threads
-        .into_iter()
-        .map(session_catalog_item)
-        .collect::<Vec<_>>()
+    let Ok(rows) = crate::sessions_http_adapter::read_session_rows(&store) else {
+        return Vec::new();
+    };
+    session_catalog_items(rows)
 }
 
-/// 按归档状态分页取会话摘要；读取失败按空目录处理，不阻断 TUI 启动。
-fn list_threads(
-    service: &axon_session::ThreadService<axon_session::JsonlThreadEventStore>,
-    root: &Path,
-    limit: usize,
-    archived: bool,
-) -> Vec<axon_session::ThreadSummary> {
-    service
-        .list_thread_page(
-            root,
-            &axon_session::ThreadListQuery {
-                limit,
-                archived: Some(archived),
-                ..axon_session::ThreadListQuery::default()
-            },
-        )
-        .map(|page| page.threads)
-        .unwrap_or_default()
+/// 会话清单行到 TUI 目录的投影：默认只留一页在用会话，归档项另收一页。
+///
+/// 与会话清单读同一批行，条数因此只有「一页」这一种口径，不再按两个不同上限拼凑。
+fn session_catalog_items(
+    rows: Vec<crate::sessions_http_adapter::SessionListRow>,
+) -> Vec<AgentTuiSessionCatalogItem> {
+    let mut active = Vec::new();
+    let mut archived = Vec::new();
+    for row in rows {
+        let item = session_catalog_item(row);
+        if item.archived {
+            if archived.len() < TUI_ARCHIVED_CATALOG_LIMIT {
+                archived.push(item);
+            }
+        } else if active.len() < TUI_CATALOG_LIMIT {
+            active.push(item);
+        }
+        if active.len() >= TUI_CATALOG_LIMIT && archived.len() >= TUI_ARCHIVED_CATALOG_LIMIT {
+            break;
+        }
+    }
+    active.extend(archived);
+    active
 }
 
-/// 会话摘要到 TUI 目录项的投影：归档标记直接来自 thread 真实状态。
-fn session_catalog_item(thread: axon_session::ThreadSummary) -> AgentTuiSessionCatalogItem {
-    let archived = thread.status == axon_session::ThreadStatus::Archived;
+/// 会话清单行到 TUI 目录项的投影：标题、来源与归档位都来自会话表本身。
+///
+/// 展示优先用用户当初选择的模型别名，别名缺失时才回落到上游模型 id。
+fn session_catalog_item(
+    row: crate::sessions_http_adapter::SessionListRow,
+) -> AgentTuiSessionCatalogItem {
+    let model = row.model_name.clone().unwrap_or_else(|| row.model.clone());
     AgentTuiSessionCatalogItem::new(
-        thread.thread_id,
-        thread.name,
-        thread.provider,
-        thread.model,
-        thread.updated_at_ms,
+        row.session_id,
+        Some(row.title),
+        row.provider,
+        model,
+        row.last_activity_at_ms,
     )
-    .with_archived(archived)
+    .with_archived(row.archived)
 }
 
 #[cfg(test)]
@@ -443,6 +450,89 @@ mod tests {
         assert_eq!(
             mcp_auth_failure_hint("gitnexus", failure.to_owned()),
             failure
+        );
+    }
+
+    /// 会话清单行：只填与目录投影相关的列，其余取默认值。
+    fn session_row(
+        session_id: &str,
+        provider: &str,
+        model: &str,
+        model_name: Option<&str>,
+        archived: bool,
+    ) -> crate::sessions_http_adapter::SessionListRow {
+        crate::sessions_http_adapter::SessionListRow {
+            session_id: session_id.to_owned(),
+            title: format!("{session_id} 标题"),
+            status: "idle".to_owned(),
+            pinned: false,
+            archived,
+            workspace_id: None,
+            last_activity_at_ms: 10,
+            turn_count: 1,
+            total_active_ms: 0,
+            ttft_p50_ms: None,
+            ttft_max_ms: 0,
+            open_job_count: 0,
+            channel: "tui".to_owned(),
+            destination: String::new(),
+            last_channel: "tui".to_owned(),
+            audience: "私密".to_owned(),
+            interaction_count: 1,
+            provider: provider.to_owned(),
+            model: model.to_owned(),
+            model_name: model_name.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn session_catalog_items_use_session_rows_and_split_archived_bucket() {
+        let items = session_catalog_items(vec![
+            session_row("s-active", "openai", "gpt-5.5-id", Some("gpt-5.5"), false),
+            session_row("s-archived", "anthropic", "claude-4", None, true),
+        ]);
+
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.session_id.as_str())
+                .collect::<Vec<_>>(),
+            ["s-active", "s-archived"],
+            "在用会话在前，归档项在后"
+        );
+        assert!(!items[0].archived);
+        assert!(items[1].archived);
+        // 展示优先用用户选择的别名，没有别名才回落到上游模型 id。
+        assert_eq!(items[0].provider, "openai");
+        assert_eq!(items[0].model, "gpt-5.5");
+        assert_eq!(items[1].model, "claude-4");
+    }
+
+    #[test]
+    fn session_catalog_items_cap_active_and_archived_pages() {
+        let mut rows = (0..TUI_CATALOG_LIMIT + 5)
+            .map(|index| session_row(&format!("active-{index}"), "openai", "gpt-5.5", None, false))
+            .collect::<Vec<_>>();
+        rows.extend((0..TUI_ARCHIVED_CATALOG_LIMIT + 3).map(|index| {
+            session_row(
+                &format!("archived-{index}"),
+                "openai",
+                "gpt-5.5",
+                None,
+                true,
+            )
+        }));
+
+        let items = session_catalog_items(rows);
+
+        assert_eq!(items.len(), TUI_CATALOG_LIMIT + TUI_ARCHIVED_CATALOG_LIMIT);
+        assert_eq!(
+            items.iter().filter(|item| item.archived).count(),
+            TUI_ARCHIVED_CATALOG_LIMIT
+        );
+        assert_eq!(
+            items.iter().filter(|item| !item.archived).count(),
+            TUI_CATALOG_LIMIT
         );
     }
 }

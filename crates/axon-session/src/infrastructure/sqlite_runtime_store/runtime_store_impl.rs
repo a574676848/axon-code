@@ -183,6 +183,23 @@ impl RuntimeStore for SqliteRuntimeStore {
         self.session_goal_id_impl(session_id)
     }
 
+    fn record_session_model(
+        &self,
+        session_id: &DaemonSessionId,
+        provider: &str,
+        model: &str,
+        model_name: Option<&str>,
+    ) -> Result<(), RuntimeStoreError> {
+        // 单行点写：值没变时条件不成立，不产生任何页写，会话清单每轮都能安全刷新这三列。
+        self.connection()?
+            .execute(
+                super::helpers::SQL_RECORD_SESSION_MODEL,
+                params![session_id.as_str(), provider, model, model_name],
+            )
+            .map_err(storage)?;
+        Ok(())
+    }
+
     fn resolve_goal_session(
         &self,
         request: &GoalSessionRequest,

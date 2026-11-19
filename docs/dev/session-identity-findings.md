@@ -14,7 +14,7 @@
 | W10.3 CLI 续接 | 通过 | `run --session` 后该会话 `turns 1→2`，Thread 未变，全库会话行数不变 |
 | W10.4 不存在 id | 通过（旁证） | `--session` 指向不存在 id 时退出码 2、不产生会话行 |
 | W10.5 优先级 | 行为通过，文档曾不一致 | 单次 `--session` 高于 resume 默认并还原指针；`resume` 只喂 `--continue`；裸 `run` 新建 |
-| W10.1 TUI `/sessions` | 不通过 | 见 F9 至 F14 |
+| W10.1 TUI `/sessions` | 不通过 | 数据源与条数口径已修（F9 至 F11）；滚动、键位与标题渲染待修（F12 至 F14） |
 | W10.2 TUI 选中切换 | 部分不通过 | 正文切换与零写入通过；高亮重绘、指标跟随不通过（F15 至 F18） |
 | W8.5 目标执行分支 | 部分生效 | 真机确认执行轮落 `kind='goal'` 会话、逐字稿落 `kind='subagent'` 执行子会话；指标投影缺行见 F22，子会话未绑定目标与执行标识见 F23 |
 | W10.7 至 W10.12 桌面项 | 待取证 | 第一轮桌面取证被中断，未留完整证据 |
@@ -27,6 +27,7 @@
 | F5 | 中 | 新工作区首轮瞬态失败 | `Session Worker 失败：Interaction 存储失败：Query is not read-only`，183ms 失败；同形态复跑三次均成功，根因未定位 | 未定位 | 待取证 |
 | F6 | 中 | `sessions.root_session_id` 标识空间混用 | 同一列既有会话 ULID，也有 Thread UUID（两条不同派生点） | 子代理登记点与自迭代登记点 | 待修 |
 | F22 | 高 | 执行子会话的轮次指标只进 `usage_facts`，`session_metrics` 无行 | 真机：`usage_facts` 有 `01M7S13T0J…`、`01M7S132F…` 等子会话各 1 行；`session_metrics` 全库仅 3 行且全为 `kind='primary'`，`kind='goal'` 会话与 `kind='subagent'` 执行子会话均无行（含执行成功的 `goal-4bd82aab…`） | 终态记账已按来源统一到 `account_completed_turn`，各来源的 `metrics` 口径均为真；真机行数未复验 | 待取证 |
+| F6b | 中 | 子代理与目标执行的轮次没有自己的入站事实，前端必须为这两类会话另写渲染分支 | 会话清单是 `FROM sessions`，但首条输入、来源渠道、投递目标都读 `inbox`；子会话这些列全为空，标题回落成 cwd | 已收口：领取按 `sessions.kind` 只领 `primary`/`cron`，派发轮在起跑时补写输入事实（内容是本轮交给模型的完整提示，目标执行保留 `client=goal` 归因）；目标执行按主会话口径装载与收口，完成回流改投创建它的主会话 | 已完成 |
 | F23 | 中 | 执行子会话未绑定目标与执行标识，状态停在 `created` | 真机：`01M7S0KNSR86BR8AY9YAQ3KWNG` 的 `goal_id`、`execution_id` 均为空，`status='created'`，而 `last_event_sequence=16421`、thread 3.7 MB | 子会话登记点只写 `root_session_id` 与 `agent_path`，未回填 `goal_id`/`execution_id`，轮次状态也没有推进 | 待修 |
 
 ## 二、CLI 面
@@ -40,9 +41,6 @@
 
 | 编号 | 严重度 | 问题 | 证据 | 根因位置 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| F9 | 高 | `/sessions` 数据源是 JSONL thread 目录，不是 `sessions(kind='primary')`，把内部线程混进用户会话列表 | 列表出现「评估以下有界事实包：」「后台 Goal 阶段结束」与 UUID 标题 | `axon-cli/src/run_commands/interactive_tui/catalog.rs` 的 `load_tui_session_items` | 待修 |
-| F10 | 中 | 归档口径失效，`--all` 形同虚设 | thread 派生索引归档 0 条，而 `sessions.archived=1` 有 6 条；列表无「已归档 · 」前缀 | 同上 | 待修 |
-| F11 | 中 | 条数与任何口径都对不上 | 目录上限 12、屏幕只画 9 个标题（8 条带 `provider · model`）、`axon sessions list` 是 5 条（`--all` 11 条） | 弹窗容量、目录上限与列表投影三处口径不一 | 待修 |
 | F12 | 中 | 弹窗无滚动，选中项可能完全不可见 | 内部选中可达 index 11，屏幕只可见前 9 条 | `axon-tui-runtime` 的会话弹窗高度计算 | 待修 |
 | F13 | 中 | Enter 被命令建议弹窗劫持，补全后输入坞不重绘 | 输入 `/sessions` 第一次 Enter 不执行（补成 `/sessions --all`），第二次才执行 | 命令补全与输入提交的键位分流 | 待修 |
 | F14 | 低 | 超宽标题硬截断且无省略号 | 屏幕显示 `仅复盘随附的 turn outcome 与 evidence r` | 会话行标题渲染 | 待修 |
@@ -62,6 +60,7 @@
 
 - 数据面真机取证（本次）：安装态 `$HOME/.axon/bin/versions/0.0.1/axon.exe` 与 `target/release/axon.exe` 同为 149060608 字节、同 `2026-11-19 12:19:39` 时间戳，运行中的 daemon（PID 12300）即该版本目录内二进制。在该版本上跑目标执行 `goal-2e3f2a7f88c4c0590f00a8523825e438`，对照来源会话 `01M7S0KNRM9SZ9VZ2X92JDA3NZ`（`kind='goal'`、`last_event_sequence=283`、无 thread 实体）与执行子会话 `01M7S0KNSR86BR8AY9YAQ3KWNG`（`kind='subagent'`、`root_session_id=01M7S0KNRM9SZ9VZ2X92JDA3NZ`、`agent_path=root/task-01m7s0knrm9sz9vz2x92jda3nz`、`last_event_sequence=16421`、thread 3.7 MB）：逐字稿只落执行子会话成立；指标两侧都没有 `session_metrics` 行，见 F22。复核命令：`sqlite3 -readonly $HOME/.axon/data/control.sqlite3` 查 `sessions` 与 `session_metrics`，`sqlite3 -readonly $HOME/.axon/usage/usage.sqlite3` 查 `usage_facts`；`session_events` 不是可查表，逐字稿以 thread jsonl 与 `sessions.last_event_sequence` 为准。
 - 历史会话的 `session_metrics` 不会因修复自动补齐；是否按事件重放回填待裁决。
+- W10.1 的 F9 至 F11 已修待取证：`/sessions` 改读 `sessions(kind='primary')`，与会话清单同一批行、同一页大小；模型行改读会话行的 `provider` / `model_name`（轮次收口时条件单行写回）。需在安装态用 PTY 取证：列表无内部线程标题、`--all` 含归档并带前缀、条数与 `axon sessions list` 一致、每条带 `provider · model`。
 - 失败轮的子会话终态：运行侧已恢复写入（`failures_settled_by_scheduler` 为假），来源会话的调度终态仍由 Worker 写；两条卡是否会在界面上同时出现待真机确认。
 - W10.7 至 W10.12 全部待取证：需要 20 轮以上会话的分页证据、左侧菜单四项与会话表的逐项对照、跨端三轮来源标注、以及目标 / cron / 子代理三个入口的渲染路径比对。
 - W8.5：`kind='goal'` 会话与按 `(root_session_id, agent_path)` 固定的执行子会话在真机上已成立（标识位见上条）；`origin_channel=goal` 的渠道分布因 `session_metrics` 缺行暂时无处可看，并入 F22；「重复执行续在同一条子会话」仍未取证。

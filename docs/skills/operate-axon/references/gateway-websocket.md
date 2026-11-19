@@ -54,7 +54,7 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
 - 给出 `sessionId` 时按**会话级**订阅处理，此时 `interactionId` 被忽略。
 - 会话级订阅的放行条件是**会话本身**，不解析任何标识前缀：会话必须已在运行态登记，归属工作区与请求一致（未绑定工作区的会话不作限制），且受众边界不是受限档。
   - **子代理会话**同样是登记过的一等会话（`kind='subagent'`），标识与其他会话一样是服务端生成的 ULID，不再由父会话与代理路径拼出来。
-  - **目标执行的逐字稿在它派生的执行子会话上**（`kind='subagent'`，`agentPath=root/task-<来源会话>`）：订阅这条子会话与订阅其他子会话同一套条件；来源会话（`kind=goal`）只保留账本与调度侧终态卡，通常没有正文可读。
+  - **目标执行的逐字稿就在目标会话上**（`kind='goal'`，不派生逐字稿子会话）：订阅它与订阅其他会话同一套条件；该会话不展示在会话清单里，入口只有目标看板。
 - 会话级订阅只比对会话登记时的 `workspace_id`，不做 cwd 反查：目标的可见范围（工作区作用域与全局目标）由 `GET /api/v1/goals` 的可见集合决定，与订阅放行是两件事。
 - 把交互标识当 `sessionId` 传、或该会话从未登记，才会被拒为 `subscription_rejected`。主会话一般都按 `interactionId` 订阅，交互标识可从 `GET /api/v1/sessions/<sessionId>/interactions` 取得。
 - `subscribeId` 由客户端生成，必须在同一连接内唯一；建议直接由目标推导（`interaction:<id>` 或 `session:<id>`）。

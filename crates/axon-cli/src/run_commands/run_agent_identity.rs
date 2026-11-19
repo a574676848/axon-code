@@ -6,10 +6,20 @@
 use axon_daemon::PRIMARY_TURN_ACTION_KIND;
 use axon_domain::{AudienceContext, AudienceKind, DisclosurePolicy};
 use axon_persona::Channel;
-use axon_session_runtime::ProviderTurnRequest;
+use axon_session_runtime::{ORIGIN_CHANNEL_GOAL, ORIGIN_CHANNEL_KEY, ProviderTurnRequest};
 
 /// Execution payload 中携带原始受众信任域的字段。
 const TRANSPORT_AUDIENCE_KEY: &str = "audience";
+
+/// 本轮是不是目标执行：由服务端写入的 `originChannel=goal` 判定，不看 action 类型。
+fn is_goal_execution(request: &ProviderTurnRequest) -> bool {
+    request
+        .transport_context
+        .as_ref()
+        .and_then(|context| context.get(ORIGIN_CHANNEL_KEY))
+        .and_then(serde_json::Value::as_str)
+        == Some(ORIGIN_CHANNEL_GOAL)
+}
 
 /// 本次 Provider turn 的执行身份。
 ///
@@ -70,7 +80,9 @@ pub(crate) fn persona_channel(channel: axon_client_identity::ClientChannel) -> C
 
 /// 后台 Goal Execution 是隔离的快速执行子代理；其余 Provider turn 都是用户可见的主代理。
 pub(crate) fn run_agent_identity(request: &ProviderTurnRequest) -> RunAgentIdentity {
-    if request.action_kind != PRIMARY_TURN_ACTION_KIND {
+    // 目标执行是「不展示在会话列表里的主会话」：它按主代理装载，只是入口在目标看板。
+    // 其余后台轮（cron、shell 作业唤醒等）仍按快速执行子代理装载。
+    if request.action_kind != PRIMARY_TURN_ACTION_KIND && !is_goal_execution(request) {
         return RunAgentIdentity::GoalExecutionSubagent;
     }
     let Some(context) = request.transport_context.as_ref() else {
@@ -161,5 +173,41 @@ mod tests {
         assert_eq!(identity, RunAgentIdentity::GoalExecutionSubagent);
         assert!(!identity.includes_user_soul());
         assert!(!identity.is_primary());
+    }
+
+    /// 目标执行是「不展示在会话列表里的主会话」：它按主代理装载，入口在目标看板。
+    #[test]
+    fn goal_execution_origin_loads_as_primary_agent() {
+        let audience = AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly);
+        let request = request_with(
+            "goal_execution",
+            Some(serde_json::json!({
+                ORIGIN_CHANNEL_KEY: ORIGIN_CHANNEL_GOAL,
+                "audience": audience,
+            })),
+        );
+
+        let identity = run_agent_identity(&request);
+
+        assert!(identity.is_primary());
+        assert!(identity.includes_user_soul());
+        assert_eq!(
+            identity.memory_disclosure_policy(),
+            DisclosurePolicy::PrivateOnly
+        );
+    }
+
+    /// 其余后台轮（cron、shell 作业唤醒）仍按快速执行子代理装载，不随目标执行一起抬升。
+    #[test]
+    fn other_background_origins_keep_the_fast_subagent_load() {
+        let request = request_with(
+            "cron_wake",
+            Some(serde_json::json!({ ORIGIN_CHANNEL_KEY: "cron" })),
+        );
+
+        let identity = run_agent_identity(&request);
+
+        assert_eq!(identity, RunAgentIdentity::GoalExecutionSubagent);
+        assert!(!identity.includes_user_soul());
     }
 }

@@ -48,16 +48,27 @@ where
     let context = payload
         .get(TRANSPORT_CONTEXT_KEY)
         .ok_or_else(|| "Execution payload 缺少 transportContext".to_owned())?;
-    // 会话首先取执行行上持久化的绑定；只有在旧载荷里没有绑定时才回落到 transportContext。
-    let session_id = match execution.session_id.clone() {
-        Some(session_id) => session_id,
-        None => transport_context_session_id(context)?,
-    };
+    let session_id = completion_session_id(execution.session_id.clone(), context)?;
     Ok(ExecutionCompletionRoute {
         target: transport_context_target(context)?,
         audience: transport_context_audience(context)?,
         session_id,
     })
+}
+
+/// 完成回流落回**创建这一轮的主会话**。
+///
+/// 执行行上的 session 是执行自己那条（目标会话），把它当投递目标会让完成通知在目标
+/// 会话里自己唤醒自己，创建者永远不知道结果。旧载荷没有 `primarySessionId` 时才退回
+/// 执行行绑定。
+fn completion_session_id(
+    execution_session_id: Option<DaemonSessionId>,
+    context: &serde_json::Value,
+) -> Result<DaemonSessionId, String> {
+    match transport_context_session_id(context) {
+        Ok(session_id) => Ok(session_id),
+        Err(error) => execution_session_id.ok_or(error),
+    }
 }
 
 /// 从运行时上下文恢复原始回复路由。
@@ -101,4 +112,42 @@ fn transport_context_audience(context: &serde_json::Value) -> Result<AudienceCon
         .ok_or_else(|| "Execution transportContext 缺少 audience".to_owned())?;
     serde_json::from_value(audience.clone())
         .map_err(|error| format!("Execution transportContext audience 无效：{error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::completion_session_id;
+    use axon_domain::DaemonSessionId;
+
+    fn session(value: &str) -> DaemonSessionId {
+        DaemonSessionId::new(value.to_owned()).expect("会话标识")
+    }
+
+    /// 创建者主会话优先于执行行绑定：否则完成通知只会唤醒目标会话自己。
+    #[test]
+    fn completion_returns_to_the_creating_primary_session() {
+        let context = serde_json::json!({ "primarySessionId": "01PRIMARYSESSION" });
+
+        let routed = completion_session_id(Some(session("01GOALSESSION")), &context)
+            .expect("应解析出投递会话");
+
+        assert_eq!(routed.as_str(), "01PRIMARYSESSION");
+    }
+
+    /// 旧载荷没有 `primarySessionId` 时退回执行行绑定，不丢投递。
+    #[test]
+    fn completion_falls_back_to_the_execution_binding() {
+        let context = serde_json::json!({});
+
+        let routed = completion_session_id(Some(session("01GOALSESSION")), &context)
+            .expect("应回落到执行行绑定");
+
+        assert_eq!(routed.as_str(), "01GOALSESSION");
+    }
+
+    /// 两者都缺时必须报错：静默丢一次完成通知等于父轮永远等不到结果。
+    #[test]
+    fn completion_without_any_session_is_an_error() {
+        assert!(completion_session_id(None, &serde_json::json!({})).is_err());
+    }
 }

@@ -29,11 +29,18 @@ const TERMINAL_REJECTED: &str = "rejected";
 const TERMINAL_INTERRUPTED: &str = "interrupted";
 const SELECT_INTERACTION_ID_EXISTS: &str = "SELECT 1 FROM inbox WHERE interaction_id=?1";
 const INSERT_INTERACTION: &str = "INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,received_at_ms,updated_at_ms,attachments_json,model,reasoning_effort,session_id,client) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?8,?9,?10,?11,?12,?13)";
-/// session 排他领取候选：没有工作项、或工作项已释放的那些；所属 session 当前不得有在途工作项。
+/// 主 turn 领取候选：只有「由主 turn 调度器驱动」的会话类型可领。
+///
+/// `sessions.kind` 已经是「谁负责驱动这类会话」的既有事实：`primary` 与 `cron` 的轮次
+/// 由主 turn 调度器驱动，因此它们的入站事实可领；`subagent` 由父 turn 的执行段驱动、
+/// `goal` 由执行侧 work_items 驱动，这两类会话的入站事实只作记录，一旦被这里领走就会
+/// 在别人的会话里再跑一轮。会话行缺失的历史车道按 `primary` 兜底，避免迁移期丢领取资格。
 const SELECT_CLAIMABLE_INTERACTIONS: &str = "SELECT queued.interaction_id,queued.received_at_ms \
      FROM inbox AS queued \
+     LEFT JOIN sessions AS owner ON owner.session_id=queued.session_id \
      LEFT JOIN work_items AS current ON current.inbox_id=queued.interaction_id \
-     WHERE (current.execution_id IS NULL OR current.status=?1) \
+     WHERE COALESCE(owner.kind,'primary') IN ('primary','cron') \
+       AND (current.execution_id IS NULL OR current.status=?1) \
        AND NOT EXISTS(SELECT 1 FROM work_item_history AS done \
                       WHERE done.inbox_id=queued.interaction_id) \
        AND NOT EXISTS(SELECT 1 FROM work_items AS active \

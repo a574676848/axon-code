@@ -34,7 +34,8 @@ use thread_cli::{
     run_session_list, run_session_read, run_session_resume, run_session_show,
 };
 
-const SESSION_CLI_DEFAULT_LIMIT: usize = 20;
+/// 会话清单默认页大小；TUI 的会话目录与它同源，两处条数因此一致。
+pub(crate) const SESSION_CLI_DEFAULT_LIMIT: usize = 20;
 const SESSION_CLI_MAX_LIMIT: usize = 100;
 const SESSION_DIAGNOSTIC_ISSUE_PREVIEW_LIMIT: usize = 3;
 

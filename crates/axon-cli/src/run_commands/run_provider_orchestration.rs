@@ -7,14 +7,14 @@ use super::{
     run_request_payload::RunWorkspaceSnapshotPrewarm,
     run_steer,
     run_turn_execution::{TurnTeardownScope, execute_turn},
-    run_turn_spec::TurnSpec,
-    run_turn_start::{persist_turn_started, start_turn_stop_control},
+    run_turn_spec::{TurnInput, TurnSpec},
+    run_turn_start::{persist_turn_started, record_turn_input, start_turn_stop_control},
     run_turn_terminal::{CompletedTurn, FailedTurn, complete_turn, fail_turn},
 };
 use axon_client_identity::ClientChannel;
 use axon_domain::QuotedMessageContext;
 use axon_session_runtime::{
-    SubagentSessionSinkFactory, TurnPerformanceRecorder, TurnPerformanceStage,
+    SubagentSessionSinkFactory, TurnOrigin, TurnPerformanceRecorder, TurnPerformanceStage,
 };
 use std::{
     path::{Path, PathBuf},
@@ -39,6 +39,10 @@ pub(crate) struct RunProgressOptions<'a> {
     /// 本次运行的身份；默认是用户可见的主代理 turn。
     pub(crate) agent_identity: RunAgentIdentity,
     pub(crate) performance: Option<Arc<dyn TurnPerformanceRecorder>>,
+    /// 本轮来源：装载与收口口径由它决定，入口不得再自行假设「一律主 turn」。
+    pub(crate) turn_origin: TurnOrigin,
+    /// 本轮的输入事实由谁落：入站轮已由前端提交，派发轮由运行侧补写。
+    pub(crate) turn_input: TurnInput,
 }
 
 impl Default for RunProgressOptions<'_> {
@@ -57,6 +61,8 @@ impl Default for RunProgressOptions<'_> {
             external_stop_control: false,
             agent_identity: RunAgentIdentity::PrimaryPrivate,
             performance: None,
+            turn_origin: TurnOrigin::Primary,
+            turn_input: TurnInput::Submitted,
         }
     }
 }
@@ -192,6 +198,9 @@ pub(crate) fn run_run_with_progress(
     }
     request.quoted_message = options.quoted_message;
     request.goal_transport_context = options.transport_context;
+    let spec = TurnSpec::for_origin(options.turn_origin, options.turn_input);
+    // 派发轮先落输入事实：会话视图的第一条消息因此是真实输入而不是空。
+    record_turn_input(&spec, &request);
     if let Err(error) = persist_turn_started(&request) {
         return cli_error(format!("Provider turn 起始持久化失败：{error}"));
     }
@@ -208,7 +217,6 @@ pub(crate) fn run_run_with_progress(
     } else {
         None
     };
-    let spec = TurnSpec::primary();
     let teardown = TurnTeardownScope::primary(&request);
     let execution = execute_turn(&request, progress.as_ref(), &teardown);
     let teardown_started_ms = run_execution::now_ms();
