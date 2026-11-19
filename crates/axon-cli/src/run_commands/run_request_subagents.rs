@@ -121,7 +121,7 @@ pub(crate) fn execute_standalone_subagent(
     wiring
         .subagent_executor
         .execute(input)
-        .ok_or_else(|| "cron 子代理执行器未接管任务".to_owned())
+        .ok_or_else(|| "独立子代理执行器未接管任务".to_owned())
 }
 
 pub(super) struct RunSubagentExecutionWiring {
