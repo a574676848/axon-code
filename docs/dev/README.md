@@ -18,6 +18,7 @@
 | [存储重构 WBS](./reconstruction-wbs.md) | 阶段与任务拆解、依赖关系、里程碑与延后项 |
 | [会话身份重构计划书](./session-identity-refactor-plan.md) | 会话标识唯一化方案、现状飘逸清单、会话数据删除与表结构重建步骤、WBS 与性能红线 |
 | [会话身份重构开工提示词](./session-identity-refactor-kickoff.md) | 实施会话的首条指令：任务、工具纪律、事实底座、执行顺序、门禁与验收口径 |
+| [会话身份真机取证问题清单](./session-identity-findings.md) | 会话身份重构 W8.5 与 W10 各项在安装态真机上暴露的问题点、证据与状态 |
 | [WBS 验收台账](./wbs-acceptance.md) | 逐条登记 WBS 各项目的状态、判据与可复核证据 |
 | [混合审计发现清单](./audit-findings.md) | 交叉审计的性能、闭环与稳定性发现及处置结论 |
 | [v0.0.1 真机验收记录](./device-verification.md) | 安装态二进制的 39 项验收矩阵逐项结果、证据与环境副作用登记（未取证项已标注） |

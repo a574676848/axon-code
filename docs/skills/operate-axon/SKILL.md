@@ -55,7 +55,7 @@ description: 已安装 Axon 的运行时操作手册。用于配置和模型、A
 ## 常用 CLI
 
 - 全局：`axon --version`、`axon --help`、`axon <command> --help` 用于确认当前版本和命令。需要指定配置或工作区时，把 `--config <path>` 或 `--cwd <path>` 放在 `axon` 后、子命令前。
-- Agent：`axon run` 执行一次有界任务，支持 `--model`、`--reasoning-effort`、`--session`、`--continue`、`--file`、`--tool`、`--timeout` 和 `--format json`。同一工作目录下的连续 `axon run` 落在同一条会话会话上，上下文自动延续；要跨目录接续或明确指定别的会话时，用 `axon run --continue`（接续 `axon sessions resume` 选定的会话）或 `--session <id>`（ID 取自 `axon sessions list`，不存在直接报错、不隐式新建）。`axon stop [--session <id>]` 请求停止非交互任务。
+- Agent：`axon run` 执行一次有界任务，支持 `--model`、`--reasoning-effort`、`--session`、`--continue`、`--file`、`--tool`、`--timeout` 和 `--format json`。未给 `--session` 与 `--continue` 时，每次 `axon run` 新建一条主会话，不复用同目录的既有会话；接续既有会话用 `axon run --continue`（接续 `axon sessions resume` 选定的会话）或 `--session <id>`（ID 取自 `axon sessions list`，不存在直接报错、不隐式新建；只覆盖单次，运行结束后续接指针还原为运行前的值）。`axon stop [--session <id>]` 请求停止非交互任务。
 - 会话诊断：`axon debug session list|show|read|replay|doctor` 用于只读检查，`resume|fork|delete|export|output` 改变会话；该命令位于 `debug` 命名空间，用户不需要也不应管理 session_id。
 - 本地执行与变更：`axon exec [--timeout-ms <ms>] [--kind command|test] <command...>` 执行本机命令；文件编辑由已获授权的工具调用直接完成并记录审计。
 - 配置、认证和模型：用 `axon config path|env-path|validate|show|keys|get` 先检查，`config edit|set` 才会写入。用 `axon providers`、`axon models`、`axon auth status` 查看状态，只有用户要求时运行 `setup`、`providers add|remove` 或写入密钥。

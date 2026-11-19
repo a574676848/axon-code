@@ -891,7 +891,7 @@ CREATE TABLE inbox (
 
 - `inbox` 不再有 `status` / `lease_token` / `lease_expires_at_ms`，写入后只有 `tool_summary` 与 `updated_at_ms` 会被更新。
 - `work_items` 增加 `inbox_id`（部分唯一索引：一条入站事实最多一个工作项）、`terminal_kind`（`understood` / `rejected` / `interrupted`）与 `lease_token`；`goal_id` 改为可空，turn 工作项不需要 Goal。
-- 领取、续租、释放、结算全部只更新 `work_items` 一行；读取侧 `inbox LEFT JOIN work_items` 派生回领域状态，上层 `InteractionRecord` 语义不变。
+- 领取、续租、释放、结算全部只更新 `work_items` 一行；读取侧 `inbox LEFT JOIN work_items` 派生回领域状态，上层 `InteractionRecord` 语义不变。派生列里同时可能出现队列口径的 `completed` / `cancelled` / `failed`：终态行搬进 `work_item_history` 时 `terminal_kind` 取 `COALESCE(terminal_kind, status)`。读侧必须两套词汇都认，漏认一个词会让含该轮的车道历史整体读不出来。
 - 事件写入前的 Interaction lease 校验改为校验工作项租约（`work_items.lease_token` + 未过期）。
 - 中断收敛与保留期清理都改为按工作项判定：前者扫过期 `running` 工作项，后者按 `terminal_kind` 选行。
 
@@ -979,7 +979,7 @@ GET /api/v1/sessions?workspace=<workspace_id>&include_archived=false
 ```bash
 axon run "把测试跑一遍" --session <session_id>     # 单次指定，继续该会话
 axon sessions list --limit 20                      # 列出会话（含轮次与耗时）
-axon sessions resume <id>                          # 设为后续 run 的默认会话
+axon sessions resume <id>                          # 设置 --continue 的默认目标（会话 ID）
 axon sessions show <id>                            # 查看单个会话摘要
 ```
 
@@ -1601,8 +1601,8 @@ pwsh -File scripts/install-from-source.ps1 -Components all
 | C1 | `axon sessions list` | 列出会话，含 title、lastActivity、turnCount |
 | C2 | `axon run "…" --session <id>` | 追加到指定会话，历史被带入上下文（回复能引用上一轮内容） |
 | C3 | `--session` 指向不存在的 id | 报错并提示，**不隐式新建** |
-| C4 | 不带 `--session` 与 `--continue` | 复用当前工作目录的 CLI 会话（同一 cwd 连续 run 接得上上下文），不报错；跨目录或首次使用要接续旧会话时用 `--continue` / `--session` |
-| C5 | `axon sessions resume <id>` 后再 `axon run --continue` | 追加到该会话：`resume` 只设置 resume 指针，`--continue` 把指针解析回会话后按该会话取历史（指针为空时取最近一段根会话）；普通 `run` 仍走当前目录会话，避免跨目录会话互相串味 |
+| C4 | 不带 `--session` 与 `--continue` | 新建一条主会话（`kind=primary`），不复用同 cwd 的既有会话；要接续旧会话时用 `--continue` / `--session` |
+| C5 | `axon sessions resume <id>` 后再 `axon run --continue` | 追加到该会话：`resume` 只设置 resume 指针，`--continue` 把指针解析回会话后按该会话取历史（指针为空时取最近一段根会话）；不带 `--continue` 的 `run` 新建主会话，指针不参与解析 |
 | C6 | `--session` 与已保存的 resume 状态冲突 | `--session` 胜出，运行结束后 resume 指针被还原成运行前的值（快照 + 还原，测试见 `selection_snapshot_restores_the_previous_pointer`） |
 
 #### 12.4.5 跨端同步（本次重构的核心验收）

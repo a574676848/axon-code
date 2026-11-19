@@ -165,7 +165,7 @@ pub enum SessionsSubcommand {
     Show(SessionShowCommand),
     /// 读取单个会话详情。
     Read(SessionReadCommand),
-    /// 恢复会话，让后续 run 追加到同一会话。
+    /// 恢复会话，让后续 `axon run --continue` 追加到同一会话。
     Resume(SessionResumeCommand),
     /// Fork 一个新会话。
     Fork(SessionForkCommand),

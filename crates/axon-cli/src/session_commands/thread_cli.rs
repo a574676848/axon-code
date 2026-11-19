@@ -58,7 +58,7 @@ pub struct SessionReadCommand {
 /// `axon debug session resume` 参数。
 #[derive(Debug, Clone, Args, PartialEq, Eq)]
 pub struct SessionResumeCommand {
-    /// 会话 ID（`axon sessions`）或 Thread ID（`axon debug session`）；Thread 必须已登记会话。
+    /// 目标标识：`axon sessions resume` 只收会话 ID（ULID）；`axon debug session resume` 只收 Thread ID。两个入口互不回落。
     pub thread_id: String,
 }
 
