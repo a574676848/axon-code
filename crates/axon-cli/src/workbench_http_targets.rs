@@ -14,14 +14,16 @@ pub(super) fn query_param(query: Option<&str>, name: &str) -> Option<String> {
     })
 }
 
-/// 解析 `sessions/<sessionId>/interactions` 子路径，返回车道标识、条数上限与反向游标。
+/// 解析 `sessions/<sessionId>/interactions` 子路径，返回车道标识、条数上限、反向游标
+/// 与翻页档标记。
 ///
 /// 游标由 `before_ms` 与 `before_id` 两个参数共同给出，它们就是查询的排序键
 /// `(received_at_ms, interaction_id)`；只给一半按未给处理，不做猜测。
+/// `brief=1` 表示这一页只用于向前翻历史，会话级事实不重复下发。
 pub(super) fn session_interactions_target(
     subpath: &str,
     query: Option<&str>,
-) -> Option<(String, u32, Option<InteractionCursor>)> {
+) -> Option<(String, u32, Option<InteractionCursor>, bool)> {
     let rest = subpath.strip_prefix("sessions/")?;
     let (session_id, tail) = rest.split_once('/')?;
     if session_id.is_empty() || tail != "interactions" {
@@ -42,7 +44,8 @@ pub(super) fn session_interactions_target(
         }
         _ => None,
     };
-    Some((session_id.to_owned(), limit, before))
+    let brief = query_param(query, "brief").is_some_and(|value| value == "1");
+    Some((session_id.to_owned(), limit, before, brief))
 }
 
 /// 解析 `sessions/<sessionId>/interrupt` 子路径，返回车道标识。

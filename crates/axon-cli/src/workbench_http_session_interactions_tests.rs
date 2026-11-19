@@ -80,7 +80,8 @@ impl Fixture {
     }
 
     fn payload(&self) -> serde_json::Value {
-        session_interactions_payload(&self.root, &self.session_id, 10, None).expect("索引载荷")
+        session_interactions_payload(&self.root, &self.session_id, 10, None, false)
+            .expect("索引载荷")
     }
 }
 
@@ -156,7 +157,7 @@ fn capability_block_contract_keeps_every_field() {
 fn missing_session_row_yields_null_block_and_keeps_index_readable() {
     let fixture = Fixture::new("primary", "desktop", None);
     let orphan = axon_session::new_session_id().as_str().to_owned();
-    let payload = session_interactions_payload(&fixture.root, &orphan, 10, None)
+    let payload = session_interactions_payload(&fixture.root, &orphan, 10, None, false)
         .expect("未登记会话的索引页仍必须可读");
     assert!(payload["session"].is_null());
     assert_eq!(payload["interactions"].as_array().map(Vec::len), Some(0));

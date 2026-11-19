@@ -96,11 +96,16 @@ fn origin_of_kind(kind: axon_session::SessionKind) -> &'static str {
 /// 载荷同时给出整条车道的两个累计读数（token 用量与已收口轮次的墙钟耗时）：界面的
 /// 会话读数要的是整条会话，而不是客户端恰好翻到的那一页，因此这两个数按车道聚合，
 /// 与分页无关。取数失败不牵连历史列表：列表是主事实，累计读数缺了就不给。
+///
+/// `brief` 是翻页专用档：向前翻页只补历史轮次，会话能力块、作业清单、累计读数与
+/// 车道最新事实都与页码无关，重复下发只是白读一遍线程。此档只返回 `interactions`
+/// 与 `totalRecords`，其余键缺省。
 pub fn session_interactions_payload(
     axon_root: &Path,
     session_id: &str,
     limit: u32,
     before: Option<&InteractionCursor>,
+    brief: bool,
 ) -> Result<serde_json::Value, String> {
     let limit = limit.clamp(1, MAX_SESSION_INTERACTION_LIMIT);
     let records = runtime_store(axon_root)
@@ -161,6 +166,16 @@ pub fn session_interactions_payload(
             }
         })
         .collect();
+    // 翻页档到此为止：历史轮次已经足够，剩下的键都要再读一遍车道级投影。
+    if brief {
+        let total = interactions.len();
+        return Ok(serde_json::json!({
+            "sessionId": session_id,
+            "interactions": interactions,
+            "totalRecords": total,
+            "rawPayloadPersisted": false,
+        }));
+    }
     // 两个累计读数：用量读 `session_metrics` 投影，耗时是各轮墙钟之和。
     let session_usage = session_readings::session_usage_payload(axon_root, session_id);
     let session_elapsed_ms = session_readings::settled_elapsed_ms(axon_root, session_id)

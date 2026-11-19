@@ -442,11 +442,12 @@ impl GatewayHttpRouteHandler for WorkbenchHttpAdapter {
                 })
                 .or_else(|| {
                     session_interactions_target(subpath, query).map(
-                        |(session_id, limit, before)| match session_interactions_payload(
+                        |(session_id, limit, before, brief)| match session_interactions_payload(
                             &self.axon_root,
                             &session_id,
                             limit,
                             before.as_ref(),
+                            brief,
                         ) {
                             Ok(payload) => GatewayHttpResponse::json(200, &payload),
                             Err(error) => GatewayHttpResponse::json(
