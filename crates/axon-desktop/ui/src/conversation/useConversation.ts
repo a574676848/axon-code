@@ -19,7 +19,8 @@ import {
   type AttachmentRef,
 } from './transcript';
 import type { ConversationStreamEvent } from './wire';
-import { SESSION_TURNS_PREFIX, handleTurnsFrame } from './sessionTurns';
+import { SESSION_TURNS_PREFIX } from './sessionTurns';
+import { useTurnHeadRefresh } from './useTurnHeadRefresh';
 import type { SessionEffectiveModel } from './viewConfig';
 import { normalizeTarget } from './targets';
 import type {
@@ -45,7 +46,6 @@ const FRAME_FLUSH_MS = 16;
  * 过渡面上。
  */
 const OPENING_CEILING_MS = 900;
-const TURNS_REFRESH_COALESCE_MS = 250;
 /**
  * 目标与契约类型整块移到 `targets.ts`：它们是纯类型与纯函数，编排文件只负责流程。
  * 这里原样再导出，调用方的引用不必改。
@@ -241,18 +241,18 @@ export function useConversation(
    * 要重装监听。真正的重读由 `appendSession` 做，它按已加载的轮次标识去重，因此
    * 轮次头与轮数轮询同时命中也不会把同一轮接两遍。
    */
-  const appendSessionRef = useRef<() => void>(() => undefined);
-  appendSessionRef.current = () => {
-    void paging.appendSession();
-  };
-  const turnRefreshTimerRef = useRef<number | null>(null);
-  const requestTurnRefresh = useCallback(() => {
-    if (turnRefreshTimerRef.current !== null) return;
-    turnRefreshTimerRef.current = window.setTimeout(() => {
-      turnRefreshTimerRef.current = null;
-      appendSessionRef.current();
-    }, TURNS_REFRESH_COALESCE_MS);
-  }, []);
+  const {
+    handle: handleTurnHeadFrame,
+    reset: resetTurnHead,
+    clearTimers: clearTurnHeadTimers,
+  } = useTurnHeadRefresh({
+    targetRef,
+    knownTurnIds: () => turnsRef.current.map((turn) => turn.id),
+    appendSession: () => {
+      void paging.appendSession();
+    },
+    dispatch,
+  });
   /** 帧到达：按本控制器持有的订阅标识过滤，入队并在下一帧窗口一次性派发。 */
   const onStreamEvent = useCallback(
     (event: ConversationStreamEvent) => {
@@ -262,9 +262,7 @@ export function useConversation(
        * 轮次头只表达「这条会话的轮次清单变了」：它不进正文投影，也不和正文帧混批。
        * 收到就唤一次索引重读，由 `appendSession` 只接本视图还不认识的那几条。
        */
-      if (handleTurnsFrame(event, turnsRef.current.map((turn) => turn.id), requestTurnRefresh)) {
-        return;
-      }
+      if (handleTurnHeadFrame(event)) return;
       pendingRef.current.push(event);
       if (flushRef.current !== null) return;
       const generation = generationRef.current;
@@ -295,7 +293,7 @@ export function useConversation(
         }
       }, FRAME_FLUSH_MS);
     },
-    [rememberUnsubscribed, requestTurnRefresh, workspaceId],
+    [handleTurnHeadFrame, rememberUnsubscribed, workspaceId],
   );
 
   useEffect(() => {
@@ -353,6 +351,8 @@ export function useConversation(
     setSessionReflectionNotice(null);
     setCapabilityFacts(null);
     setCapabilityLoaded(false);
+    // 换目标即重置轮次头的重试预算：上一条会话的失败次数不该压到这一条上。
+    resetTurnHead();
     const current = targetRef.current;
     if (
       workspaceId === null ||
@@ -404,11 +404,8 @@ export function useConversation(
       });
     return () => {
       cancelled = true;
-      // 轮次头的合并定时器属于这一代目标：切走后不再触发一次过期重读。
-      if (turnRefreshTimerRef.current !== null) {
-        window.clearTimeout(turnRefreshTimerRef.current);
-        turnRefreshTimerRef.current = null;
-      }
+      // 轮次头的定时器属于这一代目标：切走后不再触发过期动作。
+      clearTurnHeadTimers();
       // 实时续聊的订阅也属于当前视图，离开时全部释放，重新进入才能从头回放。
       void releaseAllSubscriptions();
     };
@@ -553,6 +550,9 @@ export function useConversation(
     pendingRef.current = [];
     watchedRef.current = null;
     setSessionReadyId(null);
+    // 重连重开一轮：清掉上一次的定时器，并把重试预算复位。
+    clearTurnHeadTimers();
+    resetTurnHead();
     // 重连走的也是同一条回放：同样在过渡面下把正文拼齐，再一次交出。
     setOpening(true);
     void releaseAllSubscriptions()
