@@ -370,3 +370,33 @@ mod tests {
         assert_ne!(state.frame_render_signature(), first);
     }
 }
+
+#[cfg(test)]
+mod bottom_selection_signature_tests {
+    use crate::r#loop::agent_tui::AgentTuiSessionCatalogItem;
+    use crate::r#loop::agent_tui::state::runtime_flow_test_support::test_state;
+    use crate::ui_workflow::action::{UiKeyCode, UiKeyEvent};
+
+    fn session_item(session_id: &str, title: &str) -> AgentTuiSessionCatalogItem {
+        AgentTuiSessionCatalogItem::new(session_id, Some(title.to_owned()), "openai", "gpt-5.5", 1)
+    }
+
+    #[test]
+    fn signature_changes_when_session_popup_selection_changes() {
+        let mut state = test_state();
+        state.header.catalog.sessions = vec![
+            session_item("session-a", "会话 A"),
+            session_item("session-b", "会话 B"),
+        ];
+        assert!(state.open_sessions_view(false));
+        let first = state.frame_render_signature();
+
+        let _ = state.handle_bottom_view_key(UiKeyEvent::plain(UiKeyCode::Down));
+
+        assert_ne!(
+            state.frame_render_signature(),
+            first,
+            "选中项进不了帧签名时，高亮会钉在旧行"
+        );
+    }
+}
