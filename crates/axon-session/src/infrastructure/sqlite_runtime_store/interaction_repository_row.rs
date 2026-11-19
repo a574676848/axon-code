@@ -3,7 +3,7 @@
 //! 列顺序是本模块与各条 SELECT 的共同契约：新增列必须同时出现在每条 SELECT 的
 //! 同一位置并在这里按同一位置读取，否则所有读取路径都会整体列错位。
 
-use super::helpers::u64_value;
+use super::helpers::{decode_error, u64_value};
 use crate::ports::InteractionStoreError;
 use axon_domain::{
     DaemonSessionId, InteractionId, InteractionRecord, InteractionSource, InteractionStatus,
@@ -29,29 +29,32 @@ const STATUS_CANCELLED: &str = "cancelled";
 const STATUS_FAILED: &str = "failed";
 
 /// 按 SELECT 的固定列序还原一条 Interaction。
+///
+/// 每一列都走 `decode_error`：失败时用户看到的是「数据无法识别」，原始字段与取值进日志。
 pub(super) fn read_record(row: &Row<'_>) -> rusqlite::Result<InteractionRecord> {
-    let interaction_id =
-        InteractionId::new(row.get::<_, String>(0)?).map_err(|_| rusqlite::Error::InvalidQuery)?;
-    let source = InteractionSource::new(row.get::<_, String>(1)?, row.get::<_, String>(2)?)
-        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let raw_interaction_id = row.get::<_, String>(0)?;
+    let interaction_id = InteractionId::new(raw_interaction_id.clone())
+        .map_err(|_| decode_error("inbox.interaction_id", &raw_interaction_id))?;
+    let raw_channel = row.get::<_, String>(1)?;
+    let raw_message_id = row.get::<_, String>(2)?;
+    let source = InteractionSource::new(raw_channel.clone(), raw_message_id.clone())
+        .map_err(|_| decode_error("inbox.source", format!("{raw_channel}/{raw_message_id}")))?;
     // 客户端来源在列尾：没有客户端事实的老行是空串，按「未知」处理。
     let source = match row.get::<_, Option<String>>(12)? {
         Some(client) if !client.trim().is_empty() => source
-            .with_client(client)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .with_client(client.clone())
+            .map_err(|_| decode_error("inbox.client", &client))?,
         _ => source,
     };
-    let scope = serde_json::from_str(&row.get::<_, String>(3)?)
-        .map_err(|_| rusqlite::Error::InvalidQuery)?;
-    let audience = serde_json::from_str(&row.get::<_, String>(4)?)
-        .map_err(|_| rusqlite::Error::InvalidQuery)?;
-    let reply_route = serde_json::from_str(&row.get::<_, String>(5)?)
-        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let scope = decode_json(row.get::<_, String>(3)?, "inbox.scope_json")?;
+    let audience = decode_json(row.get::<_, String>(4)?, "inbox.audience_json")?;
+    let reply_route = decode_json(row.get::<_, String>(5)?, "inbox.reply_route_json")?;
     let status = parse_status(&row.get::<_, String>(7)?)?;
+    let raw_session_id = row.get::<_, String>(13)?;
     Ok(InteractionRecord {
         interaction_id,
-        session_id: DaemonSessionId::new(row.get::<_, String>(13)?)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        session_id: DaemonSessionId::new(raw_session_id.clone())
+            .map_err(|_| decode_error("inbox.session_id", &raw_session_id))?,
         source,
         scope,
         audience,
@@ -69,6 +72,11 @@ pub(super) fn read_record(row: &Row<'_>) -> rusqlite::Result<InteractionRecord> 
     })
 }
 
+/// 解析 JSON 列；失败时保留列名与解析错误进日志。
+fn decode_json<T: serde::de::DeserializeOwned>(raw: String, field: &str) -> rusqlite::Result<T> {
+    serde_json::from_str(&raw).map_err(|error| decode_error(field, error))
+}
+
 fn parse_status(value: &str) -> rusqlite::Result<InteractionStatus> {
     match value {
         STATUS_RECEIVED => Ok(InteractionStatus::Received),
@@ -80,37 +88,9 @@ fn parse_status(value: &str) -> rusqlite::Result<InteractionStatus> {
         STATUS_REJECTED => Ok(InteractionStatus::Rejected),
         // 失败与取消在 Interaction 口径下都表示本轮没有正常收口。
         STATUS_INTERRUPTED | STATUS_FAILED | STATUS_CANCELLED => Ok(InteractionStatus::Interrupted),
-        _ => Err(unknown_status(value)),
+        _ => Err(decode_error("inbox.status", value)),
     }
 }
-
-/// 派生列出现词汇表之外的取值。
-///
-/// 行解码失败过去一律回 `rusqlite::Error::InvalidQuery`，它的 Display 是
-/// 「Query is not read-only」，与真正的原因（状态列里有个陌生词）毫无关系，只能靠猜。
-/// 把实际取值带出来，错误信息才自证。
-fn unknown_status(value: &str) -> rusqlite::Error {
-    // 原始取值只进日志：用户可见文案不出现内部词表，但排查时必须能拿到它。
-    axon_logger::error(&format!("无法识别的 Interaction 状态: {value}"));
-    rusqlite::Error::ToSqlConversionFailure(Box::new(UnknownInteractionStatus(value.to_owned())))
-}
-
-struct UnknownInteractionStatus(String);
-
-impl std::fmt::Debug for UnknownInteractionStatus {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // 原始取值留在 Debug：它只服务日志取证，不进入用户可见文案。
-        write!(formatter, "UnknownInteractionStatus({:?})", self.0)
-    }
-}
-
-impl std::fmt::Display for UnknownInteractionStatus {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("会话历史中存在无法识别的状态记录，可能由其他版本的程序写入")
-    }
-}
-
-impl std::error::Error for UnknownInteractionStatus {}
 
 pub(super) fn runtime_error(error: impl std::fmt::Display) -> InteractionStoreError {
     InteractionStoreError::Storage(error.to_string())

@@ -4,7 +4,7 @@
 //! 静默重跑，必须在事务内收敛为显式终态，并留下 durable 中断证据。
 
 use super::SqliteRuntimeStore;
-use super::helpers::{i64_value, storage, u64_value};
+use super::helpers::{decode_error, i64_value, storage, u64_value};
 use crate::domain::runtime::{DaemonHostRecord, SessionEventRecord};
 use crate::ports::{RuntimeStore, RuntimeStoreError};
 use axon_domain::{DaemonSessionId, InteractionId, LedgerEventId};
@@ -85,8 +85,9 @@ fn read_candidates(
 fn read_candidate_row(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<(InteractionId, Option<DaemonSessionId>)> {
-    let interaction_id =
-        InteractionId::new(row.get::<_, String>(0)?).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let raw_interaction_id = row.get::<_, String>(0)?;
+    let interaction_id = InteractionId::new(raw_interaction_id.clone())
+        .map_err(|_| decode_error("inbox.interaction_id", &raw_interaction_id))?;
     let session_id = candidate_session_id(row).ok();
     Ok((interaction_id, session_id))
 }

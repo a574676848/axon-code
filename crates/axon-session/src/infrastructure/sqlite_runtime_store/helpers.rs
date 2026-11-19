@@ -26,8 +26,46 @@ pub(crate) fn sql_select_session_by_id() -> String {
     format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE session_id=?1")
 }
 
+/// 行解码失败。
+///
+/// 以前一律回 `rusqlite::Error::InvalidQuery`：它的 Display 是「Query is not read-only」，
+/// 用户看不懂，排查也只能靠猜。对外只给一句人话，原始字段与取值写日志并留在 Debug 里。
+pub(super) fn decode_error(field: &str, value: impl std::fmt::Display) -> rusqlite::Error {
+    let value = value.to_string();
+    axon_logger::error(&format!("运行态库行解码失败: field={field}, value={value}"));
+    rusqlite::Error::ToSqlConversionFailure(Box::new(UnrecognizedColumnValue {
+        field: field.to_owned(),
+        value,
+    }))
+}
+
+/// 无法识别的列取值。
+struct UnrecognizedColumnValue {
+    field: String,
+    value: String,
+}
+
+impl std::fmt::Debug for UnrecognizedColumnValue {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // 原始字段与取值只服务日志取证，不进用户可见文案。
+        write!(
+            formatter,
+            "UnrecognizedColumnValue {{ field: {:?}, value: {:?} }}",
+            self.field, self.value
+        )
+    }
+}
+
+impl std::fmt::Display for UnrecognizedColumnValue {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("本地运行态数据中存在无法识别的记录，可能由其他版本的程序写入")
+    }
+}
+
+impl std::error::Error for UnrecognizedColumnValue {}
+
 pub(crate) fn parse_session_kind(value: String) -> rusqlite::Result<SessionKind> {
-    SessionKind::parse(&value).ok_or(rusqlite::Error::InvalidQuery)
+    SessionKind::parse(&value).ok_or_else(|| decode_error("sessions.kind", &value))
 }
 
 /// 代理路径的规范形态：去掉首尾空白与开头的斜杠。
@@ -38,7 +76,7 @@ pub(crate) fn normalize_agent_path(value: &str) -> String {
     value.trim().trim_start_matches('/').to_owned()
 }
 pub(crate) fn parse_trust_scope(value: String) -> rusqlite::Result<SessionTrustScope> {
-    SessionTrustScope::parse(&value).ok_or(rusqlite::Error::InvalidQuery)
+    SessionTrustScope::parse(&value).ok_or_else(|| decode_error("sessions.trust_scope", &value))
 }
 
 /// 按 [`SELECT_SESSION`] 的列顺序构造会话记录。
@@ -64,7 +102,7 @@ pub(crate) fn session_runtime_row(
             .transpose()?,
         owner_generation: row.get(10)?,
         worker_attempt: u32::try_from(row.get::<_, i64>(11)?)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            .map_err(|value| decode_error("sessions.worker_attempt", value))?,
         context_version: u64_value(row.get(12)?)?,
         last_checkpoint_seq: u64_value(row.get(13)?)?,
         last_event_sequence: u64_value(row.get(14)?)?,
@@ -80,23 +118,23 @@ pub(crate) fn i64_value(value: u64) -> Result<i64, RuntimeStoreError> {
         .map_err(|_| RuntimeStoreError::Storage("数值超出 SQLite INTEGER 范围".to_owned()))
 }
 pub(crate) fn u64_value(value: i64) -> rusqlite::Result<u64> {
-    u64::try_from(value).map_err(|_| rusqlite::Error::InvalidQuery)
+    u64::try_from(value).map_err(|_| decode_error("整数列", value))
 }
 
 pub(crate) fn parse_goal_id(value: String) -> rusqlite::Result<GoalId> {
-    GoalId::new(value).map_err(|_| rusqlite::Error::InvalidQuery)
+    GoalId::new(value).map_err(|error| decode_error("goals.goal_id", error))
 }
 pub(crate) fn optional_u64(value: Option<i64>) -> rusqlite::Result<Option<u64>> {
     value.map(u64_value).transpose()
 }
 pub(crate) fn parse_session_id(value: String) -> rusqlite::Result<DaemonSessionId> {
-    DaemonSessionId::new(value).map_err(|_| rusqlite::Error::InvalidQuery)
+    DaemonSessionId::new(value).map_err(|error| decode_error("sessions.session_id", error))
 }
 pub(crate) fn parse_action_id(value: String) -> rusqlite::Result<SessionActionId> {
-    SessionActionId::new(value).map_err(|_| rusqlite::Error::InvalidQuery)
+    SessionActionId::new(value).map_err(|error| decode_error("work_items.execution_id", error))
 }
 pub(crate) fn parse_host_id(value: String) -> rusqlite::Result<RuntimeHostId> {
-    RuntimeHostId::new(value).map_err(|_| rusqlite::Error::InvalidQuery)
+    RuntimeHostId::new(value).map_err(|error| decode_error("daemon_instances.host_id", error))
 }
 pub(crate) fn parse_runtime_status(value: &str) -> SessionRuntimeStatus {
     match value {
@@ -298,7 +336,7 @@ impl SqliteRuntimeStore {
             claimed_generation: row.get(11)?,
             lease_expires_at_ms: optional_u64(row.get(12)?)?,
             attempt: u32::try_from(row.get::<_, i64>(13)?)
-                .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                .map_err(|value| decode_error("work_items.attempt", value))?,
         })
     }
 
@@ -323,7 +361,7 @@ impl SqliteRuntimeStore {
                 .transpose()?,
             lease_expires_at_ms: optional_u64(row.get(9)?)?,
             failure_count: u32::try_from(row.get::<_, i64>(10)?)
-                .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                .map_err(|value| decode_error("schedules.failure_count", value))?,
         })
     }
 }
@@ -355,5 +393,35 @@ impl SessionIngressCursorStore for SqliteRuntimeStore {
         let connection = self.connection()?;
         connection.execute("INSERT INTO ingress_cursors(adapter,partition_key,cursor_json,updated_at_ms) VALUES(?1,?2,?3,?4) ON CONFLICT(adapter,partition_key) DO UPDATE SET cursor_json=excluded.cursor_json,updated_at_ms=excluded.updated_at_ms", params![adapter, partition, cursor_json, i64_value(now_ms)?]).map_err(storage)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod decode_error_tests {
+    use super::decode_error;
+
+    /// 对外只给产品语义，原始取值留在 Debug 与日志里。
+    #[test]
+    fn decode_error_hides_raw_value_from_display_and_keeps_it_in_debug() {
+        let error = decode_error("inbox.interaction_id", "bad-value");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("无法识别的记录"),
+            "用户可见文案必须是人话：{message}"
+        );
+        assert!(
+            !message.contains("bad-value"),
+            "原始取值不得进入用户可见文案：{message}"
+        );
+        assert!(
+            !message.contains("read-only"),
+            "不得回 rusqlite 的误导文案：{message}"
+        );
+        let debug = format!("{error:?}");
+        assert!(
+            debug.contains("bad-value") && debug.contains("inbox.interaction_id"),
+            "Debug 必须保留字段与取值供日志取证：{debug}"
+        );
     }
 }

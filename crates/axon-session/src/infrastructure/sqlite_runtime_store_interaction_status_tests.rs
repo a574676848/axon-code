@@ -54,7 +54,7 @@ fn unrecognized_terminal_kind_reports_the_value_instead_of_a_sql_error() {
     // 对外只给产品语义：用户不需要认识内部状态词表。
     let message = error.to_string();
     assert!(
-        message.contains("无法识别的状态记录"),
+        message.contains("无法识别的记录"),
         "错误信息必须能被人读懂：{message}"
     );
     assert!(
