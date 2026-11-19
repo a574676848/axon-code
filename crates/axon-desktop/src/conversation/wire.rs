@@ -126,6 +126,13 @@ pub enum ServerFrame {
         /// 被确认的订阅标识；服务端一律回显。
         #[serde(default, rename = "subscribeId")]
         subscribe_id: Option<String>,
+        /// 订阅建立时的对齐锚点；只有轮次头订阅会带。
+        ///
+        /// 服务端在流建立那一刻读一次基线，把「已经知道的最新一轮」放进回执：
+        /// 前端据此和自己的索引比对，落后就再读一次，因此「先读索引、后订阅」
+        /// 也不会丢掉两次动作之间新建的那一轮。
+        #[serde(default)]
+        baseline: Option<serde_json::Value>,
     },
     /// 订阅流上的一条事件。
     #[serde(rename = "event")]
@@ -180,6 +187,10 @@ pub enum StreamEvent {
     Subscribed {
         /// 被确认的订阅标识。
         subscribe_id: String,
+        /// 订阅建立时的对齐锚点：轮次头订阅带着「已经知道的最新一轮」，
+        /// 前端据此和索引比对一次，补齐订阅建立之前新建的那一轮。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        baseline: Option<serde_json::Value>,
     },
     /// 订阅流上的一条事件。
     #[serde(rename_all = "camelCase")]
@@ -348,7 +359,8 @@ mod tests {
             serde_json::from_str::<ServerFrame>(r#"{"type":"subscribed","subscribeId":"s1"}"#)
                 .expect("确认帧应可解析"),
             ServerFrame::Subscribed {
-                subscribe_id: Some("s1".to_owned())
+                subscribe_id: Some("s1".to_owned()),
+                baseline: None,
             }
         );
         assert_eq!(

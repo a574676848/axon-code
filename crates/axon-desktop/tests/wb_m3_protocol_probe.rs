@@ -121,7 +121,9 @@ async fn wait_subscribed(
 ) -> Result<(), String> {
     loop {
         match next_frame(socket).await {
-            Some(ServerFrame::Subscribed { subscribe_id: id }) => {
+            Some(ServerFrame::Subscribed {
+                subscribe_id: id, ..
+            }) => {
                 return match id.as_deref() {
                     Some(value) if value == subscribe_id => Ok(()),
                     other => Err(format!("确认帧回显的标识不符：{other:?}")),

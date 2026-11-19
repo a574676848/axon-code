@@ -19,6 +19,7 @@ import {
   type AttachmentRef,
 } from './transcript';
 import type { ConversationStreamEvent } from './wire';
+import { SESSION_TURNS_PREFIX, handleTurnsFrame } from './sessionTurns';
 import type { SessionEffectiveModel } from './viewConfig';
 import { normalizeTarget } from './targets';
 import type {
@@ -44,9 +45,6 @@ const FRAME_FLUSH_MS = 16;
  * 过渡面上。
  */
 const OPENING_CEILING_MS = 900;
-/** 轮次头订阅的标识前缀；与正文订阅（`interaction:`）必须分开。 */
-const SESSION_TURNS_PREFIX = 'session-turns:';
-/** 轮次头帧的合并窗口：一轮刚创建时可能连发数帧，只唤一次索引。 */
 const TURNS_REFRESH_COALESCE_MS = 250;
 /**
  * 目标与契约类型整块移到 `targets.ts`：它们是纯类型与纯函数，编排文件只负责流程。
@@ -264,13 +262,7 @@ export function useConversation(
        * 轮次头只表达「这条会话的轮次清单变了」：它不进正文投影，也不和正文帧混批。
        * 收到就唤一次索引重读，由 `appendSession` 只接本视图还不认识的那几条。
        */
-      if (event.subscribeId.startsWith(SESSION_TURNS_PREFIX)) {
-        if (
-          event.kind === 'frame' &&
-          (event.eventType === 'interaction.created' || event.eventType === 'interaction.settled')
-        ) {
-          requestTurnRefresh();
-        }
+      if (handleTurnsFrame(event, turnsRef.current.map((turn) => turn.id), requestTurnRefresh)) {
         return;
       }
       pendingRef.current.push(event);

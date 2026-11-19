@@ -370,9 +370,10 @@ async fn run_subscription(
 /// 失败同样带上标识，前端才能只把属于自己目标的结论算进状态机。
 fn forward_frame(stream: &ConversationStream, subscribe_id: &str, text: &str) -> bool {
     match serde_json::from_str::<ServerFrame>(text) {
-        Ok(ServerFrame::Subscribed { .. }) => {
+        Ok(ServerFrame::Subscribed { baseline, .. }) => {
             stream.publish(StreamEvent::Subscribed {
                 subscribe_id: subscribe_id.to_owned(),
+                baseline,
             });
             true
         }
@@ -569,11 +570,13 @@ mod tests {
         drop(second);
         stream.publish(StreamEvent::Subscribed {
             subscribe_id: "interaction:interaction-1".to_owned(),
+            baseline: None,
         });
         assert_eq!(
             first.recv().expect("首个订阅者应收到事件"),
             StreamEvent::Subscribed {
-                subscribe_id: "interaction:interaction-1".to_owned()
+                subscribe_id: "interaction:interaction-1".to_owned(),
+                baseline: None,
             }
         );
         assert_eq!(

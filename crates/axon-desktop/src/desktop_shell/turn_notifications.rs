@@ -256,7 +256,7 @@ impl NotificationState {
                 payload_json,
                 ..
             } => (subscribe_id, event_type, payload_json),
-            StreamEvent::Subscribed { subscribe_id }
+            StreamEvent::Subscribed { subscribe_id, .. }
             | StreamEvent::Failure { subscribe_id, .. } => {
                 self.replies.remove(subscribe_id);
                 return None;

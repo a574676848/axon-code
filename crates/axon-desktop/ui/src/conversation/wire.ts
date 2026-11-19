@@ -14,8 +14,30 @@
  * 一条 Tauri 事件通道承载全部订阅的帧，因此每条都带 `subscribeId`：
  * 调用方按它过滤，属于别的目标的帧直接丢弃。
  */
+/** 轮次头订阅的对齐锚点：订阅建立那一刻服务端已经知道的最新一轮。 */
+export interface SessionTurnsBaseline {
+  latestInteractionId: string;
+  latestInteractionStatus: InteractionStatus;
+  latestInteractionReceivedAtMs: number;
+}
+
+/**
+ * 基线是否指向本视图还没读到的轮次。
+ *
+ * 只认标识：标识不在已知集合里，说明这一轮在索引读完、订阅建立之间到达，
+ * 不会再作为 interaction.created 播报，必须补读一次索引。
+ */
+export const baselineNeedsRefresh = (
+  baseline: SessionTurnsBaseline | null | undefined,
+  knownTurnIds: readonly string[],
+): boolean => {
+  const latest = baseline?.latestInteractionId;
+  if (latest === undefined || latest === '') return false;
+  return !knownTurnIds.includes(latest);
+};
+
 export type ConversationStreamEvent =
-  | { kind: 'subscribed'; subscribeId: string }
+  | { kind: 'subscribed'; subscribeId: string; baseline?: SessionTurnsBaseline | null }
   | {
       kind: 'frame';
       subscribeId: string;
