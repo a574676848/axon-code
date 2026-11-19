@@ -272,3 +272,47 @@ mod tests {
         assert!(!state.is_working());
     }
 }
+
+#[cfg(test)]
+mod session_binding_tests {
+    use crate::r#loop::agent_tui::{AgentTuiTokenUsage, state::runtime_flow_test_support::test_state};
+
+    fn usage_with(input_tokens: u64) -> AgentTuiTokenUsage {
+        AgentTuiTokenUsage {
+            input_tokens,
+            ..AgentTuiTokenUsage::default()
+        }
+    }
+
+    #[test]
+    fn switching_session_clears_previous_session_readings() {
+        let mut state = test_state();
+        state.bind_session_identity("session-a");
+        state.header.session_usage = usage_with(42);
+        state.header.last_turn_usage = usage_with(7);
+
+        state.begin_session_switch("session-b");
+
+        assert_eq!(
+            state.header.session_usage.input_tokens, 0,
+            "累计读数必须跟着会话身份走"
+        );
+        assert_eq!(
+            state.header.last_turn_usage.input_tokens, 0,
+            "上一轮读数不得跨会话残留"
+        );
+        assert_eq!(state.header.overrides.session.as_deref(), Some("session-b"));
+    }
+
+    #[test]
+    fn rebinding_the_same_session_keeps_cumulative_readings() {
+        let mut state = test_state();
+        state.bind_session_identity("session-a");
+        state.header.session_usage = usage_with(42);
+
+        // 每轮输出都会带一次身份行：同一会话重复绑定不得清空累计。
+        state.bind_session_identity("session-a");
+
+        assert_eq!(state.header.session_usage.input_tokens, 42);
+    }
+}
