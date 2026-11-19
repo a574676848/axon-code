@@ -10,6 +10,7 @@ axon-eventlog = { path = "../axon-eventlog" }
 axon-crypto = { workspace = true }
 axon-domain = { path = "../axon-domain" }
 axon-jsonl = { path = "../axon-jsonl" }
+axon-logger = { path = "../axon-logger" }
 axon-process = { path = "../axon-process" }
 axon-time = { path = "../axon-time" }
 fs4.workspace = true

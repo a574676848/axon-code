@@ -126,6 +126,17 @@ pub enum RuntimeStoreError {
     /// 幂等冲突。
     #[error("运行时幂等键冲突：{0}")]
     Conflict(String),
+    /// 运行态数据与当前程序不兼容。
+    ///
+    /// 对外只给产品语义：版本号属于诊断细节，留在 `Debug` 与日志里。用户能做的动作只有
+    /// 「重启后台服务」，把它翻译成 SQLite 的错误文案只会让人以为是自己操作错了。
+    #[error("运行态数据与当前程序版本不一致，请重启 Axon 后台服务后重试")]
+    DataIncompatible {
+        /// 当前程序期望的 schema 版本。
+        expected: i64,
+        /// 库头实际记录的 schema 版本。
+        found: i64,
+    },
 }
 
 /// Provider turn 提交 checkpoint 时的遥测。

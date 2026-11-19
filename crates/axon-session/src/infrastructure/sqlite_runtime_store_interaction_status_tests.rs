@@ -51,14 +51,20 @@ fn unrecognized_terminal_kind_reports_the_value_instead_of_a_sql_error() {
     let error = store
         .interactions_for_session(session.as_str(), 10, None)
         .expect_err("陌生词汇必须显式报错");
+    // 对外只给产品语义：用户不需要认识内部状态词表。
     let message = error.to_string();
     assert!(
-        message.contains("quantum"),
-        "错误信息必须带出实际取值：{message}"
+        message.contains("无法识别的状态记录"),
+        "错误信息必须能被人读懂：{message}"
     );
     assert!(
         !message.contains("read-only"),
         "不得再回 rusqlite 的误导文案：{message}"
+    );
+    // 原始取值只进日志（`unknown_status` 里落盘），不再出现在用户可见文案里。
+    assert!(
+        !message.contains("quantum"),
+        "内部词表不得混进用户可见文案：{message}"
     );
 }
 

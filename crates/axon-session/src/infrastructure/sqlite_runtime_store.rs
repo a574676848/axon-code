@@ -192,7 +192,17 @@ impl DatabaseHandle {
             return Ok(());
         }
         let mut connection = self.connection()?;
-        schema::prepare_schema(self.kind, &mut connection).map_err(storage)?;
+        schema::prepare_schema(self.kind, &mut connection).map_err(|error| match error {
+            schema::SchemaPrepareError::VersionMismatch { expected, found } => {
+                // 版本号只进日志：用户可见文案只留「重启后台服务」这一条可执行动作。
+                axon_logger::error(&format!(
+                    "运行态库 schema 版本不匹配: kind={:?}, expected={expected}, found={found}",
+                    self.kind
+                ));
+                RuntimeStoreError::DataIncompatible { expected, found }
+            }
+            schema::SchemaPrepareError::Sqlite(error) => storage(error),
+        })?;
         self.schema_ready.store(true, Ordering::Release);
         Ok(())
     }

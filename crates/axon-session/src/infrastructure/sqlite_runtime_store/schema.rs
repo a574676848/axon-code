@@ -99,7 +99,7 @@ fn ensure_incremental_auto_vacuum(connection: &Connection) -> rusqlite::Result<(
 pub(super) fn prepare_schema(
     kind: SchemaKind,
     connection: &mut Connection,
-) -> rusqlite::Result<()> {
+) -> Result<(), SchemaPrepareError> {
     let _guard = SCHEMA_INIT_LOCK
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
@@ -128,8 +128,33 @@ fn schema_version(connection: &Connection) -> rusqlite::Result<i64> {
     connection.query_row("PRAGMA user_version", [], |row| row.get(0))
 }
 
+/// 建库阶段的失败。
+///
+/// 版本不匹配与 SQLite 错误必须分开：前者意味着库属于另一个版本的程序，用户能做的只有
+/// 重启后台服务；把它混进 SQLite 的文案会让错误看起来像查询写错了。
+pub(super) enum SchemaPrepareError {
+    /// SQLite 层错误。
+    Sqlite(rusqlite::Error),
+    /// 库已有表，但版本与当前程序不一致。
+    VersionMismatch {
+        /// 当前程序期望的版本。
+        expected: i64,
+        /// 库头实际记录的版本。
+        found: i64,
+    },
+}
+
+impl From<rusqlite::Error> for SchemaPrepareError {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::Sqlite(error)
+    }
+}
+
 /// 初始化单个库的 schema。
-pub(super) fn initialize_schema(connection: &Connection, kind: SchemaKind) -> rusqlite::Result<()> {
+pub(super) fn initialize_schema(
+    connection: &Connection,
+    kind: SchemaKind,
+) -> Result<(), SchemaPrepareError> {
     let existing_tables: i64 = connection.query_row(
         "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
         [],
@@ -137,7 +162,10 @@ pub(super) fn initialize_schema(connection: &Connection, kind: SchemaKind) -> ru
     )?;
     let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if existing_tables > 0 && version != kind.version() {
-        return Err(rusqlite::Error::InvalidQuery);
+        return Err(SchemaPrepareError::VersionMismatch {
+            expected: kind.version(),
+            found: version,
+        });
     }
     // 只给空库建表：既有库不跑 DDL。`CREATE ... IF NOT EXISTS` 在版本一致时执行等于
     // 一条「缺表就补表」的迁移通道，与「不迁移、缺表即不兼容」的目标态冲突。

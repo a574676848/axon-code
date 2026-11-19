@@ -24,7 +24,7 @@
 | 编号 | 严重度 | 问题 | 证据 | 根因位置 | 状态 |
 | --- | --- | --- | --- | --- | --- |
 | F4 | 高 | 一次 turn 存在两套执行器，指标只在其中一条产出 | 主 turn 走 `run_run_with_progress`；执行子会话走 `ProviderRunSubagentExecutor` | 执行段已合并为 `execute_turn`（provider 循环在 `run_turn_execution`，终态在 `run_turn_terminal`）；装载差异收敛在 `TurnSpec`，运行后差异只剩 `TurnCompletion` | 已修复 |
-| F5 | 中 | 新工作区首轮瞬态失败 | `Session Worker 失败：Interaction 存储失败：Query is not read-only`，183ms 失败；同形态复跑三次均成功，根因未定位 | 未定位 | 待取证 |
+| F5 | 中 | 新工作区首轮瞬态失败 | `Session Worker 失败：Interaction 存储失败：Query is not read-only`（183ms，复跑三次成功） | 该文案是 rusqlite `InvalidQuery` 的 Display：交互状态词表（已由 97d8c1007 改为自证错误）与 schema 版本不匹配（本次改为 `DataIncompatible`）都曾落到这一句 | 已修待取证 |
 | F6 | 中 | `sessions.root_session_id` 标识空间混用 | 同一列既有会话 ULID，也有 Thread UUID（两条不同派生点） | 子代理登记点与自迭代登记点 | 待修 |
 | F22 | 高 | 执行子会话的轮次指标只进 `usage_facts`，`session_metrics` 无行 | 真机：`usage_facts` 有 `01M7S13T0J…`、`01M7S132F…` 等子会话各 1 行；`session_metrics` 全库仅 3 行且全为 `kind='primary'`，`kind='goal'` 会话与 `kind='subagent'` 执行子会话均无行（含执行成功的 `goal-4bd82aab…`） | 终态记账已按来源统一到 `account_completed_turn`，各来源的 `metrics` 口径均为真；真机行数未复验 | 待取证 |
 | F6b | 中 | 子代理与目标执行的轮次没有自己的入站事实，前端必须为这两类会话另写渲染分支 | 会话清单是 `FROM sessions`，但首条输入、来源渠道、投递目标都读 `inbox`；子会话这些列全为空，标题回落成 cwd | 已收口：领取按 `sessions.kind` 只领 `primary`/`cron`，派发轮在起跑时补写输入事实（内容是本轮交给模型的完整提示，目标执行保留 `client=goal` 归因）；目标执行按主会话口径装载与收口，完成回流改投创建它的主会话 | 已完成 |

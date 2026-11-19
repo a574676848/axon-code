@@ -957,6 +957,7 @@ dependencies = [
  "axon-domain",
  "axon-eventlog",
  "axon-jsonl",
+ "axon-logger",
  "axon-process",
  "axon-test-support",
  "axon-time",

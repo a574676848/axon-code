@@ -90,15 +90,23 @@ fn parse_status(value: &str) -> rusqlite::Result<InteractionStatus> {
 /// 「Query is not read-only」，与真正的原因（状态列里有个陌生词）毫无关系，只能靠猜。
 /// 把实际取值带出来，错误信息才自证。
 fn unknown_status(value: &str) -> rusqlite::Error {
+    // 原始取值只进日志：用户可见文案不出现内部词表，但排查时必须能拿到它。
+    axon_logger::error(&format!("无法识别的 Interaction 状态: {value}"));
     rusqlite::Error::ToSqlConversionFailure(Box::new(UnknownInteractionStatus(value.to_owned())))
 }
 
-#[derive(Debug)]
 struct UnknownInteractionStatus(String);
+
+impl std::fmt::Debug for UnknownInteractionStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // 原始取值留在 Debug：它只服务日志取证，不进入用户可见文案。
+        write!(formatter, "UnknownInteractionStatus({:?})", self.0)
+    }
+}
 
 impl std::fmt::Display for UnknownInteractionStatus {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "无法识别的 Interaction 状态：{}", self.0)
+        formatter.write_str("会话历史中存在无法识别的状态记录，可能由其他版本的程序写入")
     }
 }
 

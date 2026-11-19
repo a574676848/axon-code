@@ -144,3 +144,39 @@ fn recreated_empty_database_is_initialized_again() {
         .expect("投影读取必须可用");
     assert!(metrics.is_none(), "重建后的空库不应有历史投影");
 }
+
+/// 版本不匹配：对外只给产品语义，版本号留在 Debug 与日志里。
+#[test]
+fn schema_version_mismatch_reports_product_message_with_versions_in_debug() {
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    let control = store.path().to_path_buf();
+    let legacy = rusqlite::Connection::open(&control).expect("打开旧数据库");
+    legacy
+        .execute_batch(
+            "CREATE TABLE legacy_goal_brain(goal_id TEXT PRIMARY KEY NOT NULL);
+             PRAGMA user_version = 99;",
+        )
+        .expect("构造旧版本库");
+    drop(legacy);
+
+    let error = store.initialize().expect_err("版本不匹配必须失败");
+    let message = error.to_string();
+    assert!(
+        message.contains("运行态数据与当前程序版本不一致"),
+        "用户可见文案必须是产品语义：{message}"
+    );
+    assert!(
+        message.contains("重启"),
+        "文案必须给出可执行动作：{message}"
+    );
+    assert!(
+        !message.contains("read-only"),
+        "不得回 rusqlite 的误导文案：{message}"
+    );
+    let debug = format!("{error:?}");
+    assert!(
+        debug.contains("99"),
+        "原始版本必须留在 Debug 供日志取证：{debug}"
+    );
+}
