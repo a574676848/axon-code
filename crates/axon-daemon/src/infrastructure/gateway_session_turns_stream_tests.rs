@@ -111,6 +111,48 @@ fn new_turn_is_reported_once_and_history_is_not_replayed() {
 }
 
 #[test]
+fn turn_settling_within_one_poll_reports_created_then_settled() {
+    let fixture = Fixture::new();
+    let mut stream = fixture.stream();
+    assert!(
+        stream
+            .recv_timeout(Duration::from_millis(50))
+            .expect("首读")
+            .is_none(),
+        "基线阶段不得补发历史轮次"
+    );
+
+    // 一轮在两个节拍之间跑完：订阅者必须先看到它存在，再看到它收口。
+    let turn = fixture.dispatch("fast", 20);
+    fixture
+        .store
+        .settle_dispatch(
+            &turn.interaction_id,
+            axon_session::DispatchTerminalKind::Understood,
+            30,
+        )
+        .expect("结算派发轮");
+
+    let created = stream
+        .recv_timeout(WAIT)
+        .expect("轮询应成功")
+        .expect("必须先报新轮");
+    assert_eq!(event_type(&created), INTERACTION_CREATED_EVENT);
+    assert_eq!(
+        payload_interaction_id(&created),
+        turn.interaction_id.as_str()
+    );
+    let settled = stream
+        .recv_timeout(WAIT)
+        .expect("轮询应成功")
+        .expect("随后必须报收口");
+    assert_eq!(event_type(&settled), INTERACTION_SETTLED_EVENT);
+    assert_eq!(
+        payload_interaction_id(&settled),
+        turn.interaction_id.as_str()
+    );
+}
+#[test]
 fn settled_turn_is_reported_with_its_terminal_status() {
     let fixture = Fixture::new();
     let turn = fixture.dispatch("manual", 10);

@@ -80,33 +80,31 @@ where
         for record in &rows {
             let interaction_id = record.interaction_id.as_str().to_owned();
             let status = status_name(record.status);
+            let first_seen = self.known.insert(interaction_id.clone());
             if !self.primed {
                 // 基线：已有的轮次都算「已经知道」，已收口的直接记为已播报。
                 if is_terminal(&status) {
-                    self.settled.insert(interaction_id.clone());
-                }
-                self.known.insert(interaction_id);
-                continue;
-            }
-            if is_terminal(&status) {
-                if self.settled.insert(interaction_id.clone()) {
-                    self.known.insert(interaction_id.clone());
-                    self.pending.push(self.event(
-                        INTERACTION_SETTLED_EVENT,
-                        serde_json::json!({
-                            "interactionId": interaction_id,
-                            "status": status,
-                        }),
-                    ));
+                    self.settled.insert(interaction_id);
                 }
                 continue;
             }
-            if self.known.insert(interaction_id.clone()) {
+            // 先报「多了一轮」再报「这一轮收口了」：轮询间隔内跑完的一轮也必须让订阅者
+            // 先看到它的存在，否则界面会凭空收到一条没有行号的收口帧。
+            if first_seen {
                 self.pending.push(self.event(
                     INTERACTION_CREATED_EVENT,
                     serde_json::json!({
                         "interactionId": interaction_id,
                         "receivedAtMs": record.received_at_ms,
+                        "status": status,
+                    }),
+                ));
+            }
+            if is_terminal(&status) && self.settled.insert(interaction_id.clone()) {
+                self.pending.push(self.event(
+                    INTERACTION_SETTLED_EVENT,
+                    serde_json::json!({
+                        "interactionId": interaction_id,
                         "status": status,
                     }),
                 ));
