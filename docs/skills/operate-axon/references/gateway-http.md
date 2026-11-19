@@ -159,7 +159,7 @@ Authorization: Bearer <token>
 | `GET /api/v1/goals` | 可见目标列表。`?limit=<1-256>`，缺省 256，越界返回 400 `invalid_query`；`?workspaceId=<id>` 只返回该工作区的目标。返回 `goals`、`returned`、`truncated`。每个目标带 `goalId`、`title`、`status`、`revision`、`objectivePreview`（按 160 字符截断）、`stepCount`、`nextStep`、`waitingReason`、`priority`、`deadlineMs`、`scopeKind`（`workspace` 或 `global`）、`workspaceId`、`workspaceName`、`workspacePath`、`createdAtMs`、`updatedAtMs`、`lastActivityAtMs`、`latestExecution`、`latestResult`。`latestExecution.sessionId` 指向这一轮逐字稿真正所在的会话（统一到主 turn 后就是目标会话 `kind=goal`；历史执行若落在子会话则指向子会话）；`hasTranscript` 只有当该会话真的有内容（写过事件或有过轮次行）时才为真，否则给 `unavailableReason`（`execution-not-started` 表示还没起跑，`transcript-empty` 表示起跑前就失败、会话里空无一物），界面据此不显示「进入会话」入口；`lastActivityAtMs` 取更新时间、最近执行更新时间与最近结果时间三者最大；`truncated` 为真表示本次读取达到上限且仍有更多目标 |
 | `GET /api/v1/goals/<goalId>` | 单个目标详情。在列表同构的 `goal` 之上追加 `objective`（最多 20000 字符）、`steps`、`acceptance`（各最多 64 条、单条最多 2000 字符）、`cancellationReason`、`objectiveTruncated`、`listsTruncated`、`recentExecutions`（最多 8 条，按 `createdAtMs` 降序）与 `latestResult`。目标不存在或不可见返回 404 `goal_not_found` |
 
-目标执行会话的逐字稿不另立路由：`GET /api/v1/sessions/<id>/interactions` 与别处同一套索引，逐轮帧走 `/interactions/<interactionId>/events`，实时尾走 WS 的 `interaction:<interactionId>` 订阅（会话级订阅仍保留给轮次头等轻量场景，见 `gateway-websocket.md`）。
+目标执行会话的逐字稿不另立路由：`GET /api/v1/sessions/<id>/interactions` 与别处同一套索引，逐轮帧走 `/interactions/<interactionId>/events`，实时尾走 WS 的 `interaction:<interactionId>` 订阅（新轮发现见 `gateway-websocket.md` 的 `session-turns:`）。
 
 人格状态（只读；桌面设置 › 人设 的状态面板经此读取）：
 

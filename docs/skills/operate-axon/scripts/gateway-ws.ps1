@@ -3,7 +3,7 @@
 #
 # 用法：
 #   pwsh -File gateway-ws.ps1 -Action ping
-#   pwsh -File gateway-ws.ps1 -Action subscribe -SessionId <session-id> -SubscribeId "session:<session-id>"
+#   pwsh -File gateway-ws.ps1 -Action subscribe -SubscribeId "session-turns:<session-id>"
 #   pwsh -File gateway-ws.ps1 -Action subscribe -InteractionId <interaction-id> -SubscribeId "interaction:<interaction-id>" -ListenMs 5000
 #   pwsh -File gateway-ws.ps1 -Action submit -SourceChannel jira -EventId AX-1024 `
 #     -Content "事件正文" -ReplyChannel jira -ReplyDestination AX-1024
@@ -20,7 +20,6 @@ param(
     [string]$SubscribeId = '',
     [string]$WorkspaceId = '',
     [string]$InteractionId = '',
-    [string]$SessionId = '',
     [string]$ResumeCursor = '',
 
     # 事件字段（-Action submit）
@@ -53,8 +52,8 @@ if ($Action -eq 'subscribe' -and -not $SubscribeId) {
 if ($Action -eq 'subscribe' -and -not $WorkspaceId) {
     Write-WsResult 'ERR:ws' 'subscribe 需要 -WorkspaceId（订阅帧的必填字段，缺省会被服务端拒为 invalid_json）' 1
 }
-if ($Action -eq 'subscribe' -and -not $InteractionId -and -not $SessionId) {
-    Write-WsResult 'ERR:ws' 'subscribe 需要 -InteractionId 或 -SessionId' 1
+if ($Action -eq 'subscribe' -and -not $InteractionId -and -not $SubscribeId.StartsWith('session-turns:')) {
+    Write-WsResult 'ERR:ws' 'subscribe 需要 -InteractionId（正文订阅），或 -SubscribeId 以 session-turns: 开头（轮次头订阅）' 1
 }
 if ($Action -eq 'submit' -and (-not $SourceChannel -or -not $EventId -or -not $Content -or -not $ReplyChannel -or -not $ReplyDestination)) {
     Write-WsResult 'ERR:ws' 'submit 需要 -SourceChannel、-EventId、-Content、-ReplyChannel、-ReplyDestination' 1
@@ -90,7 +89,7 @@ if ($Action -eq 'ping') {
 } elseif ($Action -eq 'subscribe') {
     $frame = [ordered]@{ type = 'subscribe'; subscribeId = $SubscribeId }
     if ($WorkspaceId) { $frame['workspaceId'] = $WorkspaceId }
-    if ($SessionId) { $frame['sessionId'] = $SessionId } elseif ($InteractionId) { $frame['interactionId'] = $InteractionId }
+    if ($InteractionId) { $frame['interactionId'] = $InteractionId }
     if ($ResumeCursor) { $frame['resumeCursor'] = $ResumeCursor }
     Send-Frame ($frame | ConvertTo-Json -Depth 6 -Compress)
 } else {

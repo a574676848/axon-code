@@ -437,7 +437,7 @@ W10 是三端用户可见回归，依赖 W4 与 W5 完成后才能全量开跑�
 | W4.3 | 已完成 | 网关外部事件一律落到服务端内部的一条固定会话（`GATEWAY_EVENT_SESSION_ID`，首次到达登记、此后复用），Workspace 固定取网关默认（Axon 根目录 `~/.axon`）；外部既不暴露会话也不暴露 Workspace，且不存在第二个 Workspace |
 | W4.4 | 已完成 | 桌面 `SessionSource::derive_session_id` 改为 `create_session`，改调 `POST /api/v1/sessions`；会话清单以 `sessions` 表为准并只列 `kind='primary'` |
 | W4.5 | 已完成（已被 W10.13 取代） | CLI/TUI 统一 `prepare_interaction_from_prompt_as(session, ...)`：显式 id 必须已登记且为 `primary`、工作区一致，否则直接报错；未给 id 时解析该 Workspace 的活跃会话，没有才新建 |
-| W5.1 | 已完成 | 会话级订阅删掉类型白名单与前缀解析，统一按 `session_id` 放行；四个新用例覆盖允许与三类拒绝 |
+| W5.1 | 已完成（正文会话级订阅已移除） | 会话级订阅当时删掉类型白名单与前缀解析，统一按 `session_id` 放行；正文订阅后来统一到 Interaction，裸会话目标只保留在 `session-turns:` 轮次头，放行判定与四类用例迁到轮次头 |
 | W5.2 | 已完成 | 放行条件改为「会话存在 + 工作区匹配 + `trust_scope` 非 `restricted`」，边界读 `sessions.trust_scope` 实列 |
 | W5.3 | 已完成 | 事件分段目录名与主键一致性已核对：`EventLog::encode_segment` 对 ULID 不产生任何转义，目录名与主键逐字相同；补了两条用例（ULID 主键 → 目录名即主键；不同主键永不共用目录）与一条会话侧一致性用例（`store.event_log(id)` 的目录名等于主键） |
 | W6.1 | 已完成 | `workbench_http_adapter` 删除派生路由，会话创建统一走 `POST /api/v1/sessions` |
@@ -462,7 +462,7 @@ W10 是三端用户可见回归，依赖 W4 与 W5 完成后才能全量开跑�
 | W9.1 | 已完成 | 四项基线各有本机实测（Windows 11 / debug 构建 / 本机 SSD）：①**会话列表** `sessions_first_page_ms=1ms`（200 会话 × 20 万入站事实，走 `inbox_session_recent`；删索引后同一查询 18008ms，收益 4 个数量级，门槛 30ms）；②**打开会话首屏** `session_first_screen_ms=78ms`（20 轮 × 200 帧 = 4000 帧的会话，`interaction_history_page(tail=true, limit=200)` 尾窗索引页，门槛 300ms）；③**单次入站** `inbound_session_lookup_p95_ms=0.0731ms`（500 会话、1000 次主键点查，上限 1ms）；④**订阅放行** `subscription_admission_cached_us=0.900µs`（10 万次缓存命中 p95，帧路零查库，上限 50µs）。三项新测量都是 `#[ignore]` 用例：`session_first_screen_index_page_stays_within_budget`（axon-cli）、`inbound_session_lookup_is_a_single_primary_key_read`（axon-session）、`cached_subscription_admission_stays_within_the_frame_budget`（axon-daemon）。同时修复原有 `session_list_query_uses_inbox_session_index_and_stays_within_budget` 的两处硬伤：INSERT 列值数不符（15 值对 17 列）与 `root_session_id` 违反 CHECK，该用例此前一跑即崩，性能门禁的会话列表一项实际长期缺测 |
 
 | W9.2 | 已完成 | 新增会话放行缓存（定容 1024、TTL 30 秒）：入站与订阅共用同一份「会话归属 + 受众边界」判定，未命中才查一次主键；用例证明同一会话的第二次放行不回表（删掉会话行后仍放行），TTL 到期后重新回表并拒绝已删会话；缓存自身的命中/过期/容量淘汰有单测 |
-| W9.3 | 已完成 | 订阅放行缓存按会话标识定容（1024）并带 TTL（30 秒）与受众边界，入站与订阅共用同一份判定；会话级订阅关闭即回收该会话条目，TTL 到期同样回表。用例覆盖订阅存活期间重复放行不回表、TTL 到期回表、关闭后回表 |
+| W9.3 | 已完成（回收方式已变） | 订阅放行缓存按会话标识定容（1024）并带 TTL（30 秒）与受众边界，入站与订阅共用同一份判定；正文会话级订阅移除后缓存只按 TTL 到期回表，不再随订阅关闭回收。用例覆盖重复放行不回表、TTL 到期回表、容量淘汰回表 |
 | W9.4 | 已完成 | 写放大复核 + 并发用例。`apply_turn_metrics` 在同一个 `IMMEDIATE` 事务内完成「读旧行 → 内存累加 → 一次 UPSERT 写回」，`channel_mix_json` 只在这一处累加一次；作业计数走 `apply_job_delta` 的纯 SQL 算术 UPSERT（`jobs_started = jobs_started + excluded.jobs_started`），不做二次读改写。`apply_projections` 只对 `turn_metrics` 事件调用，不按帧调用。新增 `turn_projection_accumulates_atomically_within_one_transaction`：8 线程各 20 轮共 160 轮并发写入后 `turn_count`、活动耗时与渠道分布都精确等于 160，证明读改写同事务且渠道分布不重复累加。单轮实际写入耗时并入 W9.1 基线 |
 | W9.5 | 已完成 | ULID 单调有序，主键插入位置单调前进；单测覆盖同毫秒递增 |
 | W9.6 | 已完成 | 用量快照改「逐帧实时投递 + 每流收口落一条持久副本」：`FrameClass::Snapshot` 分支只把载荷暂存（`stage_replay_copy`，一次内存替换，不做 JSON 解析、不碰库），落库推迟到三个边界（provider 流收口、语义事件前、轮次边界）由 `flush_replay_copy` 一次写入，同值快照仍去重。热路径因此从「每 token 一次 IMMEDIATE 事务 + fsync」变成「每 token 一次内存替换」。用例 `usage_frames_reach_the_live_channel_but_only_the_stream_tail_is_persisted`：3 条流各 120 帧（共 360 帧）时实时通道仍投递 360 帧、持久面只落 3 条（每条流最后一条读数）、`turn_metrics` 输出仍为按流累加的 720，读数不变。真机单轮帧数实测见 W9.1 |
