@@ -276,8 +276,8 @@ async fn handle_request(
             subscribe_id,
             workspace_id,
             interaction_id,
-            session_id,
             resume_cursor,
+            ..
         } => {
             let subscribe_id = subscribe_id.unwrap_or_default().trim().to_owned();
             if subscribe_id.is_empty() {
@@ -298,7 +298,7 @@ async fn handle_request(
                 return Ok(true);
             }
             // 轮次头订阅：`session-turns:<sessionId>` 只推新轮与收口两类轻帧，
-            // 与 `session:` / `interaction:` 前缀三分清晰，互不串台。
+            // 与 `interaction:` 前缀清晰分开，互不串台。
             if let Some(turns_session_id) = gateway_websocket_turns::turns_target(&subscribe_id) {
                 return gateway_websocket_turns::handle_subscribe(
                     context,
@@ -311,12 +311,26 @@ async fn handle_request(
                 )
                 .await;
             }
+            // 正文订阅一律以 Interaction 为目标；裸会话目标已并入轮次头，缺目标
+            // 必须回可读错误码，不能退化成空串 Interaction 再报「不存在」。
+            let interaction_id = interaction_id.unwrap_or_default();
+            if interaction_id.trim().is_empty() {
+                socket
+                    .send(Message::Text(
+                        subscription_error_json(
+                            "subscribe_missing_interaction",
+                            Some(&subscribe_id),
+                        )
+                        .into(),
+                    ))
+                    .await?;
+                return Ok(true);
+            }
 
             // 订阅要读 durable 尾游标并分页重放，同样是同步 IO，必须离开 runtime 线程。
             let subscription = super::gateway_kernel::GatewaySubscriptionRequest {
                 workspace_id,
-                interaction_id: interaction_id.unwrap_or_default(),
-                session_id,
+                interaction_id,
                 resume_cursor,
             };
             let subscribe_context = context.clone();
@@ -477,12 +491,9 @@ enum WsClientRequest {
         #[serde(default)]
         subscribe_id: Option<String>,
         workspace_id: String,
-        /// 目标 Interaction；会话级订阅（子代理会话）时为空。
+        /// 目标 Interaction；正文订阅必填。
         #[serde(default)]
         interaction_id: Option<String>,
-        /// 目标会话；给出时按会话级订阅处理，不看 Interaction。
-        #[serde(default)]
-        session_id: Option<String>,
         resume_cursor: Option<String>,
     },
     /// 取消一条订阅；只影响该标识对应的那一路。
@@ -550,8 +561,8 @@ mod tests {
             subscribe_id,
             workspace_id,
             interaction_id,
-            session_id,
             resume_cursor,
+            ..
         } = result
         else {
             panic!("应为 subscribe");
@@ -559,7 +570,6 @@ mod tests {
         assert_eq!(subscribe_id.as_deref(), Some("interaction:interaction-1"));
         assert_eq!(workspace_id, "workspace-a");
         assert_eq!(interaction_id.as_deref(), Some("interaction-1"));
-        assert!(session_id.is_none(), "车道订阅不得带会话目标");
         assert_eq!(resume_cursor.as_deref(), Some("cursor"));
 
         assert!(
@@ -572,35 +582,13 @@ mod tests {
     }
 
     #[test]
-    fn websocket_subscribe_wire_accepts_session_target_and_omits_interaction() {
+    fn websocket_subscribe_wire_rejects_bare_session_target() {
+        // 轮次头目标只由 `subscribeId` 推导：订阅帧不再接受独立的会话字段，
+        // 旧形态按未知字段被明确拒绝，不会静默忽略一个与标识不一致的目标。
         let result = serde_json::from_str::<WsClientRequest>(
-            r#"{"type":"subscribe","subscribeId":"session:parent--subagent--root","workspaceId":"workspace-a","sessionId":"parent--subagent--root"}"#,
-        )
-        .expect("会话级订阅帧应可解析");
-        let WsClientRequest::Subscribe {
-            subscribe_id,
-            interaction_id,
-            session_id,
-            resume_cursor,
-            ..
-        } = result
-        else {
-            panic!("应为 subscribe");
-        };
-        assert_eq!(
-            subscribe_id.as_deref(),
-            Some("session:parent--subagent--root")
+            r#"{"type":"subscribe","subscribeId":"session-turns:parent--subagent--root","workspaceId":"workspace-a","sessionId":"parent--subagent--root"}"#,
         );
-        assert!(
-            interaction_id.is_none(),
-            "会话级订阅缺省 Interaction 时必须解析为 None，不能退化成空串目标"
-        );
-        assert_eq!(
-            session_id.as_deref(),
-            Some("parent--subagent--root"),
-            "会话级订阅必须原样透传会话标识"
-        );
-        assert!(resume_cursor.is_none());
+        assert!(result.is_err(), "订阅帧不得携带独立的会话目标");
     }
 
     #[test]

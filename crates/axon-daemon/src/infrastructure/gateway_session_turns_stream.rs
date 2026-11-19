@@ -4,7 +4,7 @@
 //! 这一路订阅因此只做差异比较：按固定节拍把会话最近的轮次清单读一遍，比上次多出来的
 //! 报 `interaction.created`，状态从在途变成终态的报 `interaction.settled`。
 //!
-//! 清单直接走 `interactions_for_session` 端口：终态判定与索引页同源（同一个状态表达式），
+//! 清单直接走 `interaction_turn_heads` 端口：终态判定与索引页同源（同一个状态表达式），
 //! 这里不再自己拼 SQL，否则两处口径迟早漂移。
 
 use std::collections::HashSet;
@@ -16,8 +16,12 @@ use super::gateway_kernel::{GatewayEvent, GatewayEventStream, GatewayKernelError
 
 use axon_session::InteractionTurnHead;
 
-/// 节拍：轻帧允许一个轮询间隔的延迟，换掉的是不必给每条会话常驻一条事件流。
-const TURNS_POLL_INTERVAL: Duration = Duration::from_millis(700);
+/// 活跃节拍：新轮与收口要尽快被看见。
+const TURNS_POLL_MIN: Duration = Duration::from_millis(700);
+/// 空闲节拍上限：连续多次没有差异后逐步退到这里，久坐的会话不再按活跃频率查库。
+const TURNS_POLL_MAX: Duration = Duration::from_secs(5);
+/// 连续多少次无差异后开始退避。
+const TURNS_IDLE_POLLS_BEFORE_BACKOFF: u32 = 4;
 /// 每次比较读取的轮次上限：只关心头部有没有出现新轮、有没有收口。
 const TURNS_WINDOW: u32 = 50;
 /// 已知轮次集合的容量上限：超出后按窗口修剪，避免长会话无界增长。
@@ -39,6 +43,10 @@ pub(super) struct SessionTurnsStream<S> {
     /// 基线锚点：订阅建立那一刻最新的一轮；随 subscribed 回执交给客户端对齐。
     baseline: Option<InteractionTurnHead>,
     last_poll: Option<Instant>,
+    /// 当前节拍：活跃时是下限，连续无差异后退避到上限。
+    interval: Duration,
+    /// 连续无差异的轮询次数；出现差异立即归零。
+    idle_polls: u32,
     pending: Vec<GatewayEvent>,
 }
 
@@ -58,6 +66,8 @@ where
             settled: HashSet::new(),
             baseline: None,
             last_poll: None,
+            interval: TURNS_POLL_MIN,
+            idle_polls: 0,
             pending: Vec::new(),
         };
         stream.prime()?;
@@ -86,11 +96,25 @@ where
         let now = Instant::now();
         let due = self
             .last_poll
-            .is_none_or(|last| now.duration_since(last) >= TURNS_POLL_INTERVAL);
+            .is_none_or(|last| now.duration_since(last) >= self.interval);
         if due {
             self.last_poll = Some(now);
         }
         due
+    }
+
+    /// 按本次是否有差异调整节拍：有差异回到活跃频率，连续无差异逐级退避。
+    fn tune_pace(&mut self, changed: bool) {
+        if changed {
+            self.idle_polls = 0;
+            self.interval = TURNS_POLL_MIN;
+            return;
+        }
+        self.idle_polls = self.idle_polls.saturating_add(1);
+        if self.idle_polls < TURNS_IDLE_POLLS_BEFORE_BACKOFF {
+            return;
+        }
+        self.interval = (self.interval * 2).min(TURNS_POLL_MAX);
     }
 
     /// 读一次轮次清单并产出与上次的差异。
@@ -137,6 +161,12 @@ where
         if self.settled.len() > TURNS_KNOWN_LIMIT {
             self.settled.retain(|id| current.contains(id.as_str()));
         }
+        let changed = !self.pending.is_empty();
+        // 在途轮次保持活跃节拍：收口那一刻的帧不该等退避结束才被看见。
+        let busy = rows
+            .iter()
+            .any(|head| !is_terminal(status_name(head.status)));
+        self.tune_pace(changed || busy);
         Ok(())
     }
 
@@ -180,7 +210,7 @@ where
             // 睡到节拍点后唤醒次数与查库次数同阶。
             let next_poll = self
                 .last_poll
-                .map(|last| last + TURNS_POLL_INTERVAL)
+                .map(|last| last + self.interval)
                 .unwrap_or(now);
             let wake_at = next_poll.min(deadline);
             let nap = wake_at.saturating_duration_since(now);

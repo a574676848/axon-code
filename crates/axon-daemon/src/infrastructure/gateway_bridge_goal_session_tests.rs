@@ -1,4 +1,4 @@
-//! 会话订阅放行契约测试：会话存在性与受众边界一律读 `sessions` 实列，不解析标识前缀。
+//! 轮次头订阅放行契约测试：会话存在性与受众边界一律读 `sessions` 实列，不解析标识前缀。
 
 use super::*;
 use crate::application::{EventStreamBridge, NoActiveTurnSteerSink};
@@ -83,13 +83,11 @@ impl Fixture {
         session_id: &DaemonSessionId,
     ) -> Result<(), GatewayKernelError> {
         let bridge = self.bridge();
-        GatewayEgress::subscribe(
+        GatewayEgress::subscribe_session_turns(
             &bridge,
-            GatewaySubscriptionRequest {
+            GatewaySessionTurnsRequest {
                 workspace_id: workspace_id.to_owned(),
-                interaction_id: String::new(),
-                session_id: Some(session_id.as_str().to_owned()),
-                resume_cursor: None,
+                session_id: session_id.as_str().to_owned(),
             },
         )
         .map(|_| ())
@@ -176,15 +174,13 @@ fn repeated_session_admission_is_served_from_the_cache() {
         SessionTrustScope::Private,
     );
     let bridge = fixture.bridge();
-    let request = || GatewaySubscriptionRequest {
+    let request = || GatewaySessionTurnsRequest {
         workspace_id: "workspace-a".to_owned(),
-        interaction_id: String::new(),
-        session_id: Some(session_id.as_str().to_owned()),
-        resume_cursor: None,
+        session_id: session_id.as_str().to_owned(),
     };
 
-    // 首条订阅必须持有：关闭订阅会立刻回收放行缓存，那是另一个用例要验证的行为。
-    let _live = GatewayEgress::subscribe(&bridge, request()).expect("首次订阅应放行");
+    // 首次判定写入缓存；此后的重复订阅在 TTL 内不再回表。
+    let _live = GatewayEgress::subscribe_session_turns(&bridge, request()).expect("首次订阅应放行");
 
     let connection = rusqlite::Connection::open(fixture.store.path()).expect("打开运行态库");
     connection
@@ -194,7 +190,8 @@ fn repeated_session_admission_is_served_from_the_cache() {
         )
         .expect("删掉会话行，制造「回表就会失败」的条件");
 
-    GatewayEgress::subscribe(&bridge, request()).expect("TTL 内的第二次判定必须命中缓存");
+    GatewayEgress::subscribe_session_turns(&bridge, request())
+        .expect("TTL 内的第二次判定必须命中缓存");
 }
 
 /// 缓存有寿命：过期之后必须重新回表，删掉的会话因此会被拒。
@@ -226,14 +223,12 @@ fn expired_admission_falls_back_to_the_store() {
         stream_bridge: Arc::clone(&fixture.stream_bridge),
         host_generation: None,
     });
-    let request = || GatewaySubscriptionRequest {
+    let request = || GatewaySessionTurnsRequest {
         workspace_id: "workspace-a".to_owned(),
-        interaction_id: String::new(),
-        session_id: Some(session_id.as_str().to_owned()),
-        resume_cursor: None,
+        session_id: session_id.as_str().to_owned(),
     };
-    // 首条订阅必须持有：关闭订阅会立刻回收放行缓存，那是另一个用例要验证的行为。
-    let _live = GatewayEgress::subscribe(&bridge, request()).expect("首次订阅应放行");
+    // 首次判定写入缓存；随后删行，验证 TTL 到期后必须重新回表。
+    let _live = GatewayEgress::subscribe_session_turns(&bridge, request()).expect("首次订阅应放行");
 
     let connection = rusqlite::Connection::open(fixture.store.path()).expect("打开运行态库");
     connection
@@ -244,42 +239,8 @@ fn expired_admission_falls_back_to_the_store() {
         .expect("删掉会话行");
     // 缓存寿终（30 秒）之后再判一次：必须回表，并因会话不存在而被拒。
     now.fetch_add(30_000, Ordering::AcqRel);
-    let error = match GatewayEgress::subscribe(&bridge, request()) {
+    let error = match GatewayEgress::subscribe_session_turns(&bridge, request()) {
         Ok(_) => panic!("过期后必须回表，删掉的会话不得再被放行"),
-        Err(error) => error,
-    };
-    assert!(matches!(error, GatewayKernelError::Ingress(_)), "{error:?}");
-}
-
-/// 关闭订阅即回收放行缓存：之后必须重新回表。
-#[test]
-fn closing_the_subscription_evicts_the_admission() {
-    let fixture = Fixture::new();
-    let session_id = fixture.session(
-        "01J8ZQ7K3M4N5P6Q7R8S9T0V4Y",
-        Some("workspace-a"),
-        SessionTrustScope::Private,
-    );
-    let bridge = fixture.bridge();
-    let request = || GatewaySubscriptionRequest {
-        workspace_id: "workspace-a".to_owned(),
-        interaction_id: String::new(),
-        session_id: Some(session_id.as_str().to_owned()),
-        resume_cursor: None,
-    };
-
-    // 订阅建立后立刻关闭：这条会话的放行判定随之作废。
-    drop(GatewayEgress::subscribe(&bridge, request()).expect("首次订阅应放行"));
-
-    let connection = rusqlite::Connection::open(fixture.store.path()).expect("打开运行态库");
-    connection
-        .execute(
-            "DELETE FROM sessions WHERE session_id=?1",
-            [session_id.as_str()],
-        )
-        .expect("删掉会话行");
-    let error = match GatewayEgress::subscribe(&bridge, request()) {
-        Ok(_) => panic!("关闭订阅后必须回表，删掉的会话不得再被放行"),
         Err(error) => error,
     };
     assert!(matches!(error, GatewayKernelError::Ingress(_)), "{error:?}");

@@ -56,7 +56,6 @@ pub(super) fn spawn_turn_subscription(
         let request = GatewaySubscriptionRequest {
             workspace_id,
             interaction_id,
-            session_id: None,
             resume_cursor: None,
         };
         let mut stream = match context.subscribe(request) {

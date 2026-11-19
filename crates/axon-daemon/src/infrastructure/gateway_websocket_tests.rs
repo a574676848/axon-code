@@ -191,11 +191,7 @@ impl GatewayEgress for TaggedEgress {
         &self,
         request: GatewaySubscriptionRequest,
     ) -> Result<Box<dyn GatewayEventStream>, GatewayKernelError> {
-        let target = if request.session_id.is_some() {
-            "session".to_owned()
-        } else {
-            request.interaction_id.clone()
-        };
+        let target = request.interaction_id.clone();
         Ok(Box::new(IdleEventStream {
             pending: (0..MULTI_STREAM_EVENT_COUNT)
                 .map(|index| GatewayEvent {
@@ -350,17 +346,6 @@ fn subscribe_frame(interaction_id: &str) -> String {
         "subscribeId": format!("interaction:{interaction_id}"),
         "workspaceId": "workspace-a",
         "interactionId": interaction_id,
-    })
-    .to_string()
-}
-
-/// 会话级订阅帧：不带 Interaction，走会话流。
-fn session_subscribe_frame(subscribe_id: &str, session_id: &str) -> String {
-    serde_json::json!({
-        "type": "subscribe",
-        "subscribeId": subscribe_id,
-        "workspaceId": "workspace-a",
-        "sessionId": session_id,
     })
     .to_string()
 }

@@ -66,13 +66,12 @@ fn subscriber_lag_transparently_replays_missing_durable_events() {
         store,
         stream_bridge,
         session_id,
-        interaction_id: Some(interaction_id),
+        interaction_id,
         replay_page_size: TEST_REPLAY_PAGE_SIZE,
         host_generation: None,
         subscription,
         pending: VecDeque::new(),
         replay_cursor: None,
-        admissions: None,
     };
     let sequences = (0..3)
         .map(|_| {
@@ -150,22 +149,18 @@ fn replay_hands_over_to_live_without_dropping_tail_events() {
         store,
         stream_bridge,
         session_id,
-        interaction_id: Some(interaction_id),
+        interaction_id,
         replay_page_size: TEST_REPLAY_PAGE_SIZE,
         host_generation: Some(host.generation.clone()),
         subscription,
         pending: VecDeque::new(),
         replay_cursor: None,
-        admissions: None,
     };
     let (subscription, pending, replay_cursor) = subscribe_and_replay(
         &stream.store,
         &stream.stream_bridge,
         &stream.session_id,
-        stream
-            .interaction_id
-            .as_ref()
-            .expect("测试路径按 Interaction 订阅"),
+        &stream.interaction_id,
         None,
         stream.replay_page_size,
         ceiling,
@@ -176,10 +171,7 @@ fn replay_hands_over_to_live_without_dropping_tail_events() {
     stream.replay_cursor = replay_cursor;
 
     // 订阅后的实时尾部投影：序号 5、6 只能靠实时流补齐。
-    let interaction_id = stream
-        .interaction_id
-        .clone()
-        .expect("测试路径按 Interaction 订阅");
+    let interaction_id = stream.interaction_id.clone();
     let mut live_events = Vec::new();
     for _ in 0..TEST_REPLAY_PAGE_SIZE {
         live_events.push(

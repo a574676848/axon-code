@@ -98,21 +98,22 @@ fn one_connection_serves_two_subscriptions_with_independent_cursors() {
             .await
             .expect("发送第一路订阅帧");
         socket
-            .send(Message::Text(
-                session_subscribe_frame("session:sub-1", "parent--subagent--root").into(),
-            ))
+            .send(Message::Text(subscribe_frame("interaction-2").into()))
             .await
             .expect("发送第二路订阅帧");
 
         // 两路确认帧谁先到由服务端调度决定，必须等齐两路再往下走。
-        let taps =
-            read_until_two_subscribed(&mut socket, "interaction:interaction-1", "session:sub-1")
-                .await;
+        let taps = read_until_two_subscribed(
+            &mut socket,
+            "interaction:interaction-1",
+            "interaction:interaction-2",
+        )
+        .await;
         // 两路事件交错到达：必须按标识分流，而不是按到达顺序切分。
         let (interaction_cursors, session_cursors) = collect_two_stream_cursors(
             &mut socket,
             "interaction:interaction-1",
-            "session:sub-1",
+            "interaction:interaction-2",
             taps.first_cursors,
             taps.second_cursors,
         )
@@ -139,7 +140,7 @@ fn one_connection_serves_two_subscriptions_with_independent_cursors() {
     assert_eq!(
         session_cursors,
         vec!["{\"sequence\":0}".to_owned(), "{\"sequence\":1}".to_owned()],
-        "会话那一路有独立的游标，不受另一路影响"
+        "第二路有独立的游标，不受另一路影响"
     );
 }
 
@@ -223,12 +224,10 @@ fn disconnect_releases_every_subscription_of_the_connection() {
             .expect("发送第一路订阅帧");
         assert!(read_until_subscribed(&mut socket, "interaction:interaction-1").await);
         socket
-            .send(Message::Text(
-                session_subscribe_frame("session:sub-1", "parent--subagent--root").into(),
-            ))
+            .send(Message::Text(subscribe_frame("interaction-2").into()))
             .await
             .expect("发送第二路订阅帧");
-        assert!(read_until_subscribed(&mut socket, "session:sub-1").await);
+        assert!(read_until_subscribed(&mut socket, "interaction:interaction-2").await);
         // 台账在断开之前采样：断开之后才读会把「已经释放」误当成「从未建立」。
         let established = live.load(Ordering::Acquire);
         socket.close(None).await.expect("发送关闭帧");

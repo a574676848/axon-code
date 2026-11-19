@@ -16,7 +16,7 @@ use super::gateway_kernel::{
 };
 use super::gateway_replay::{
     DEFAULT_GATEWAY_REPLAY_PAGE_SIZE, interaction_status_event, live_ceiling_cursor,
-    subscribe_and_replay, subscribe_and_replay_session,
+    subscribe_and_replay,
 };
 use super::gateway_session_turns_stream::SessionTurnsStream;
 use crate::application::event_stream_bridge::STREAM_RESET_REASON_GENERATION_CHANGE;
@@ -283,16 +283,6 @@ where
         request: GatewaySubscriptionRequest,
     ) -> Result<Box<dyn GatewayEventStream>, GatewayKernelError> {
         let workspace_id = non_empty(request.workspace_id, "workspace_id")?;
-        // 会话级订阅：客户端直接给出会话（子代理会话只能由主 turn 的子代理区域进入），
-        // 因此这里校验「会话存在」与「它是本工作区某条车道会话派生出来的子会话」，
-        // 而不是绕过 Interaction 校验去订阅任意会话。
-        if let Some(session_id) = request.session_id.clone() {
-            return self.subscribe_session_stream(
-                &workspace_id,
-                &session_id,
-                request.resume_cursor,
-            );
-        }
         let interaction_id = InteractionId::new(request.interaction_id)
             .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
         let interaction = self
@@ -342,14 +332,12 @@ where
             store: self.dependencies.store.clone(),
             stream_bridge: self.dependencies.stream_bridge.clone(),
             session_id,
-            interaction_id: Some(interaction_id),
+            interaction_id,
             replay_page_size: self.replay_page_size,
             host_generation: self.dependencies.host_generation.clone(),
             subscription,
             pending,
             replay_cursor,
-            // 交互级订阅不经过会话放行，关闭时也不需要回收放行缓存。
-            admissions: None,
         }))
     }
 
@@ -376,62 +364,6 @@ where
     S: RuntimeStore + Clone + Send + Sync + 'static,
     C: RuntimeClock + Clone + Send + Sync + 'static,
 {
-    /// 建立一条会话级订阅（不按 Interaction 过滤）。
-    ///
-    /// 放行条件只看会话本身，不解析任何标识前缀：
-    ///
-    /// 1. 会话必须已在运行态登记（`sessions` 主键命中）；
-    /// 2. 归属 Workspace 与请求一致（未绑定工作区的会话不作限制）；
-    /// 3. 受众边界不是受限档。
-    ///
-    /// 放行判定走放行缓存：会话归属与受众边界建行后不再变化，重复订阅同一会话不必回表；
-    /// 订阅关闭时回收这条会话的缓存条目。
-    fn subscribe_session_stream(
-        &self,
-        workspace_id: &str,
-        session_id: &str,
-        resume_cursor: Option<String>,
-    ) -> Result<Box<dyn GatewayEventStream>, GatewayKernelError> {
-        let session_id = DaemonSessionId::new(session_id)
-            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
-        // 放行判定走缓存：会话归属与受众边界建行后不变，重复订阅同一会话不必回表。
-        let admission = self.admission_of(&session_id, self.dependencies.clock.now_ms())?;
-        self.authorize_session(workspace_id, &admission)?;
-        let live_ceiling = live_ceiling_cursor(
-            &self.dependencies.store,
-            &session_id,
-            self.dependencies.host_generation.as_deref(),
-        )?;
-        let cursor = resume_cursor.as_deref().map(parse_cursor).transpose()?;
-        let replay_cursor = cursor.filter(|value| {
-            self.dependencies
-                .host_generation
-                .as_ref()
-                .is_none_or(|generation| generation == &value.generation)
-        });
-        let (subscription, pending, replay_cursor) = subscribe_and_replay_session(
-            &self.dependencies.store,
-            &self.dependencies.stream_bridge,
-            &session_id,
-            replay_cursor,
-            self.replay_page_size,
-            live_ceiling,
-        )?;
-        Ok(Box::new(DaemonGatewayEventStream {
-            store: self.dependencies.store.clone(),
-            stream_bridge: self.dependencies.stream_bridge.clone(),
-            session_id,
-            interaction_id: None,
-            replay_page_size: self.replay_page_size,
-            host_generation: self.dependencies.host_generation.clone(),
-            subscription,
-            pending,
-            replay_cursor,
-            // 会话级订阅关闭时回收这条会话的放行缓存。
-            admissions: Some(Arc::clone(&self.admissions)),
-        }))
-    }
-
     /// 会话订阅的放行判定：会话已登记，且工作区与受众边界匹配。
     fn authorize_session(
         &self,
@@ -455,8 +387,8 @@ struct DaemonGatewayEventStream<S> {
     store: S,
     stream_bridge: Arc<EventStreamBridge>,
     session_id: axon_domain::DaemonSessionId,
-    /// 订阅的 Interaction；`None` 表示会话级订阅（子代理会话没有 Interaction）。
-    interaction_id: Option<InteractionId>,
+    /// 订阅的 Interaction。
+    interaction_id: InteractionId,
     replay_page_size: u32,
     /// Host 代际；仅用于标注 durable 上界 cursor，不参与序号判定。
     host_generation: Option<String>,
@@ -464,19 +396,6 @@ struct DaemonGatewayEventStream<S> {
     pending: VecDeque<GatewayEvent>,
     /// 重放已同步到的 durable 水位；仅用于消除"先订阅、后 replay"竞态产生的重叠事件。
     replay_cursor: Option<ConsumerCursor>,
-    /// 会话级订阅持有的放行缓存：关闭订阅即回收这条会话的缓存条目。
-    admissions: Option<Arc<SessionAdmissionCache>>,
-}
-
-impl<S> Drop for DaemonGatewayEventStream<S> {
-    fn drop(&mut self) {
-        // 关闭事件是缓存失效点：没人再看这条会话时，不必替它留着放行判定。
-        if self.interaction_id.is_none()
-            && let Some(admissions) = self.admissions.as_deref()
-        {
-            admissions.invalidate(self.session_id.as_str());
-        }
-    }
 }
 
 impl<S> DaemonGatewayEventStream<S>
@@ -499,25 +418,15 @@ where
             &self.session_id,
             self.host_generation.as_deref(),
         )?;
-        let (subscription, pending, replay_cursor) = match self.interaction_id.as_ref() {
-            Some(interaction_id) => subscribe_and_replay(
-                &self.store,
-                &self.stream_bridge,
-                &self.session_id,
-                interaction_id,
-                resume_cursor,
-                self.replay_page_size,
-                live_ceiling,
-            )?,
-            None => subscribe_and_replay_session(
-                &self.store,
-                &self.stream_bridge,
-                &self.session_id,
-                resume_cursor,
-                self.replay_page_size,
-                live_ceiling,
-            )?,
-        };
+        let (subscription, pending, replay_cursor) = subscribe_and_replay(
+            &self.store,
+            &self.stream_bridge,
+            &self.session_id,
+            &self.interaction_id,
+            resume_cursor,
+            self.replay_page_size,
+            live_ceiling,
+        )?;
         self.subscription = subscription;
         self.pending = pending;
         self.replay_cursor = replay_cursor;

@@ -343,13 +343,12 @@ fn gateway_stream_receives_runtime_observation_without_cursor() {
         store,
         stream_bridge,
         session_id: session_id.clone(),
-        interaction_id: Some(interaction_id.clone()),
+        interaction_id: interaction_id.clone(),
         replay_page_size: 2,
         host_generation: None,
         subscription,
         pending: VecDeque::new(),
         replay_cursor: None,
-        admissions: None,
     };
 
     let frame = axon_domain::RuntimeObservationFrame::new(

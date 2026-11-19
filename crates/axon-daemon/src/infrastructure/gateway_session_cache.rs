@@ -80,13 +80,6 @@ impl SessionAdmissionCache {
         );
     }
 
-    /// 丢掉一条判定：订阅关闭时调用，避免为没人再看的会话保留条目。
-    pub(super) fn invalidate(&self, session_id: &str) {
-        if let Ok(mut entries) = self.entries.lock() {
-            entries.remove(session_id);
-        }
-    }
-
     /// 当前条目数；只给用例断言用。
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
@@ -158,15 +151,16 @@ mod tests {
     }
 
     #[test]
-    fn invalidate_evicts_only_the_named_session() {
-        let cache = SessionAdmissionCache::new(8, 10_000);
+    fn evicted_entries_fall_back_to_the_store() {
+        let cache = SessionAdmissionCache::new(2, 10_000);
         cache.put("session-a", &admission("workspace-a"), 10);
-        cache.put("session-b", &admission("workspace-b"), 10);
+        cache.put("session-b", &admission("workspace-b"), 20);
+        // 容量触顶后淘汰最旧的一半：被淘汰的会话必须重新回表。
+        cache.put("session-c", &admission("workspace-c"), 30);
 
-        cache.invalidate("session-a");
-
-        assert_eq!(cache.get("session-a", 20), None, "被失效的会话必须回表");
-        assert!(cache.get("session-b", 20).is_some(), "别的会话不受影响");
+        assert_eq!(cache.get("session-a", 40), None, "被淘汰的会话必须回表");
+        assert!(cache.get("session-b", 40).is_some(), "较新的条目保留");
+        assert!(cache.get("session-c", 40).is_some());
     }
 
     /// 订阅放行：命中缓存时帧路上必须零查库。
