@@ -280,17 +280,12 @@ impl SubscribeTarget {
                 subscribe_id,
                 workspace_id,
                 interaction_id: Some(interaction_id),
-                session_id: None,
                 resume_cursor,
             },
-            Self::SessionTurns {
-                workspace_id,
-                session_id,
-            } => ClientFrame::Subscribe {
+            Self::SessionTurns { workspace_id, .. } => ClientFrame::Subscribe {
                 subscribe_id,
                 workspace_id,
                 interaction_id: None,
-                session_id: Some(session_id),
                 resume_cursor: None,
             },
         }
@@ -554,7 +549,10 @@ mod tests {
         let value = serde_json::to_value(frame).expect("订阅帧应可序列化");
         assert_eq!(value["type"], "subscribe");
         assert_eq!(value["subscribeId"], "session-turns:parent--subagent--root");
-        assert_eq!(value["sessionId"], "parent--subagent--root");
+        assert!(
+            value.get("sessionId").is_none(),
+            "轮次头目标只由订阅标识承载，不重复会话字段"
+        );
         assert!(
             value.get("interactionId").is_none(),
             "轮次头订阅不得带 Interaction 占位"

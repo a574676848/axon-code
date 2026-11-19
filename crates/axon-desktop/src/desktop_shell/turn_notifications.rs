@@ -275,12 +275,8 @@ impl NotificationState {
         }
         let mut notice = turn_notice(event_type, payload_json)?;
         let reply = self.replies.remove(subscribe_id);
-        // 主会话的两种终态共用 Interaction ID；子代理的轮次标识按会话隔离。
-        let key = if subscribe_id.starts_with("session:") {
-            format!("{subscribe_id}:{}", notice.id)
-        } else {
-            notice.id.clone()
-        };
+        // 终态按 Interaction 去重；订阅标识只有 `interaction:` 与 `session-turns:` 两种。
+        let key = notice.id.clone();
         if notice.id.is_empty() || !self.finished.insert(key) {
             return None;
         }

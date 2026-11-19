@@ -168,7 +168,9 @@ struct SessionInteractionsPayload {
     /// 会话能力与身份事实（可写性、可中断、可答问）。
     ///
     /// 形状由网关定义、界面按键读取，因此原样透传：桌面端不重新建模一份，避免两侧
-    /// 字段各改一次才对齐。网关恒返回该键，值可以是 `null`（会话行不存在）。
+    /// 字段各改一次才对齐。网关首屏恒返回该键，值可以是 `null`（会话行不存在）；
+    /// 翻页档不带该键，缺省即 `null`。
+    #[serde(default)]
     session: serde_json::Value,
     /// 会话级后台作业清单：与打开哪一轮无关，界面据此还原时间线与作业读数。
     #[serde(default)]
@@ -280,7 +282,7 @@ pub fn session_interactions(
         let encoded: String =
             url::form_urlencoded::byte_serialize(cursor.interaction_id.as_bytes()).collect();
         path.push_str(&format!(
-            "&before_ms={}&before_id={encoded}",
+            "&before_ms={}&before_id={encoded}&brief=1",
             cursor.received_at_ms
         ));
     }

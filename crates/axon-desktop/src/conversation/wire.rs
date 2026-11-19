@@ -93,12 +93,9 @@ pub enum ClientFrame {
         subscribe_id: String,
         /// 目标所属 Workspace，必须与目标的 scope 完全一致。
         workspace_id: String,
-        /// 目标 Interaction；会话级订阅（子代理会话）时不带该字段。
+        /// 目标 Interaction；订阅正文时必填。
         #[serde(skip_serializing_if = "Option::is_none")]
         interaction_id: Option<String>,
-        /// 目标会话；给出时按**会话级订阅**处理，不看 Interaction。
-        #[serde(skip_serializing_if = "Option::is_none")]
-        session_id: Option<String>,
         /// 断点续订游标；缺省表示从序号 0 全量重放。
         #[serde(skip_serializing_if = "Option::is_none")]
         resume_cursor: Option<String>,
@@ -260,7 +257,6 @@ mod tests {
             subscribe_id: "interaction:interaction-1".to_owned(),
             workspace_id: "workspace-a".to_owned(),
             interaction_id: Some("interaction-1".to_owned()),
-            session_id: None,
             resume_cursor: None,
         };
         let value = serde_json::to_value(frame).expect("订阅帧应可序列化");
@@ -268,7 +264,6 @@ mod tests {
         assert_eq!(value["subscribeId"], "interaction:interaction-1");
         assert_eq!(value["workspaceId"], "workspace-a");
         assert_eq!(value["interactionId"], "interaction-1");
-        assert!(value.get("sessionId").is_none(), "缺省会话不得占位");
         assert!(value.get("resumeCursor").is_none(), "缺省游标不得占位");
     }
 
@@ -281,7 +276,6 @@ mod tests {
             subscribe_id: "interaction:external-interaction-a212f001".to_owned(),
             workspace_id: "workspace-66867af015c61de4".to_owned(),
             interaction_id: Some("external-interaction-a212f001".to_owned()),
-            session_id: None,
             resume_cursor: None,
         };
         let value = serde_json::to_value(frame).expect("订阅帧应可序列化");
@@ -315,23 +309,26 @@ mod tests {
     }
 
     #[test]
-    fn session_subscribe_frame_carries_session_id_and_no_interaction() {
+    fn session_turns_subscribe_carries_only_the_derived_subscribe_id() {
+        // 轮次头订阅的目标由 subscribeId 自身承载，帧里不再重复一个会话字段。
         let frame = ClientFrame::Subscribe {
-            subscribe_id: "session:parent--subagent--root_delegate_fast_1".to_owned(),
+            subscribe_id: "session-turns:parent--subagent--root_delegate_fast_1".to_owned(),
             workspace_id: "workspace-a".to_owned(),
             interaction_id: None,
-            session_id: Some("parent--subagent--root_delegate_fast_1".to_owned()),
-            resume_cursor: Some("{\"generation\":\"g1\",\"sequence\":4}".to_owned()),
+            resume_cursor: None,
         };
         let value = serde_json::to_value(frame).expect("订阅帧应可序列化");
-        assert_eq!(value["sessionId"], "parent--subagent--root_delegate_fast_1");
+        assert_eq!(
+            value["subscribeId"],
+            "session-turns:parent--subagent--root_delegate_fast_1"
+        );
         assert!(
             value.get("interactionId").is_none(),
-            "会话级订阅不得带 Interaction 占位"
+            "轮次头订阅不得带 Interaction 占位"
         );
-        assert_eq!(
-            value["resumeCursor"],
-            "{\"generation\":\"g1\",\"sequence\":4}"
+        assert!(
+            value.get("sessionId").is_none(),
+            "轮次头目标只由 subscribeId 推导，不重复会话字段"
         );
     }
 

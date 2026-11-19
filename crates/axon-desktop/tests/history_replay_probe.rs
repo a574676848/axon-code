@@ -52,7 +52,6 @@ async fn installed_gateway_explicitly_marks_history_as_replay() {
         subscribe_id: SUBSCRIBE_ID.to_owned(),
         workspace_id,
         interaction_id: Some(interaction_id),
-        session_id: None,
         resume_cursor: None,
     };
     socket

@@ -17,7 +17,6 @@
 use std::time::Duration;
 
 use axon_desktop::conversation::history;
-use axon_desktop::conversation::session_read;
 use axon_desktop::conversation::wire::{ClientFrame, ServerFrame, WS_PATH};
 use axon_desktop::gateway;
 use futures_util::{SinkExt, StreamExt};
@@ -37,11 +36,9 @@ struct RealTarget {
     workspace_id: String,
     session_id: String,
     interaction_id: String,
-    /// 该车道下真实登记过的子代理会话标识；没有时为空。
-    subagent_session_id: Option<String>,
 }
 
-/// 从真实库里挑一条有历史的车道，并尽量找一条它名下的子代理会话。
+/// 从真实库里挑一条有历史的车道。
 fn real_target() -> Option<RealTarget> {
     let payload = gateway::get_json_at("/api/v1/sessions").ok()?;
     let sessions = payload.get("sessions")?.as_array()?;
@@ -54,22 +51,10 @@ fn real_target() -> Option<RealTarget> {
         let Some(first) = page.interactions.first() else {
             continue;
         };
-        let subagent_session_id =
-            session_read::session_subagents(&session_id)
-                .ok()
-                .and_then(|roster| {
-                    // 名册现在把「无会话」表示为 sessionId=null：直接取 Option 即可。
-                    roster
-                        .subagents
-                        .into_iter()
-                        .find(|row| row.session_id.is_some())
-                        .and_then(|row| row.session_id)
-                });
         return Some(RealTarget {
             workspace_id,
             session_id,
             interaction_id: first.interaction_id.clone(),
-            subagent_session_id,
         });
     }
     None
@@ -182,17 +167,6 @@ fn session_frame(workspace_id: &str, subscribe_id: &str, interaction_id: &str) -
         subscribe_id: subscribe_id.to_owned(),
         workspace_id: workspace_id.to_owned(),
         interaction_id: Some(interaction_id.to_owned()),
-        session_id: None,
-        resume_cursor: None,
-    }
-}
-
-fn session_frame_v2(workspace_id: &str, subscribe_id: &str, session_id: &str) -> ClientFrame {
-    ClientFrame::Subscribe {
-        subscribe_id: subscribe_id.to_owned(),
-        workspace_id: workspace_id.to_owned(),
-        interaction_id: None,
-        session_id: Some(session_id.to_owned()),
         resume_cursor: None,
     }
 }
@@ -295,7 +269,8 @@ async fn run_probe() -> Vec<Observation> {
     };
 
     let interaction_subscribe_id = format!("interaction:{}", target.interaction_id);
-    let session_subscribe_id = "session:wb-m3-probe-session".to_owned();
+    // 第二路订阅同一个 Interaction、换一个标识：验证单连接上的多路互不干扰。
+    let second_subscribe_id = format!("{interaction_subscribe_id}#probe-second");
     let mut collected: Vec<(String, Option<String>)> = Vec::new();
 
     // 1. 同一条连接上连发两条订阅，两条都必须建立成功。
@@ -318,22 +293,22 @@ async fn run_probe() -> Vec<Observation> {
         eprintln!("[probe] 第一路订阅失败：{code}");
     }
 
-    if let Some(session_id) = target.subagent_session_id.clone() {
-        send(
-            &mut socket,
-            &session_frame_v2(&target.workspace_id, &session_subscribe_id, &session_id),
-        )
-        .await;
-        let session_ok = wait_subscribed(&mut socket, &session_subscribe_id, &mut collected).await;
-        observations.push(Observation::new(
-            "同一条连接上的第二条订阅（会话级）建立成功",
-            session_ok.is_ok(),
-        ));
-        if let Err(code) = &session_ok {
-            eprintln!("[probe] 第二路订阅失败：{code}");
-        }
-    } else {
-        eprintln!("[probe] 该车道下没有登记过的子代理会话，跳过第二路（会话级）订阅");
+    send(
+        &mut socket,
+        &session_frame(
+            &target.workspace_id,
+            &second_subscribe_id,
+            &target.interaction_id,
+        ),
+    )
+    .await;
+    let second_ok = wait_subscribed(&mut socket, &second_subscribe_id, &mut collected).await;
+    observations.push(Observation::new(
+        "同一条连接上的第二路订阅建立成功",
+        second_ok.is_ok(),
+    ));
+    if let Err(code) = &second_ok {
+        eprintln!("[probe] 第二路订阅失败：{code}");
     }
 
     // 2. 重放事件必须带上所属订阅的标识，且每一路自己的游标单调推进。
@@ -341,23 +316,23 @@ async fn run_probe() -> Vec<Observation> {
         "重放事件帧回显 subscribeId（事件按订阅归位）",
         collected
             .iter()
-            .all(|(id, _)| id == &interaction_subscribe_id || id == &session_subscribe_id),
+            .all(|(id, _)| id == &interaction_subscribe_id || id == &second_subscribe_id),
     ));
     let interaction_cursors = cursors_of(&collected, &interaction_subscribe_id);
-    let session_cursors = cursors_of(&collected, &session_subscribe_id);
+    let second_cursors = cursors_of(&collected, &second_subscribe_id);
     observations.push(Observation::new(
         "交互那一路的游标单调推进",
         is_monotonic(&interaction_cursors),
     ));
     observations.push(Observation::new(
-        "会话那一路的游标单调推进（两路互不干扰）",
-        is_monotonic(&session_cursors),
+        "第二路的游标单调推进（两路互不干扰）",
+        is_monotonic(&second_cursors),
     ));
     println!(
-        "[probe] 目标车道 {}：车道订阅重放 {} 条事件，会话订阅重放 {} 条事件，合计 {} 条事件帧",
+        "[probe] 目标车道 {}：第一路重放 {} 条事件，第二路重放 {} 条事件，合计 {} 条事件帧",
         target.session_id,
-        session_cursors.len(),
-        session_cursors.len(),
+        interaction_cursors.len(),
+        second_cursors.len(),
         collected.len()
     );
 
@@ -368,7 +343,6 @@ async fn run_probe() -> Vec<Observation> {
             subscribe_id: String::new(),
             workspace_id: target.workspace_id.clone(),
             interaction_id: Some(target.interaction_id.clone()),
-            session_id: None,
             resume_cursor: None,
         },
     )
@@ -404,7 +378,7 @@ async fn run_probe() -> Vec<Observation> {
             duplicate
                 .as_ref()
                 .and_then(|(_, id)| id.as_deref())
-                .is_some_and(|id| id == session_subscribe_id),
+                .is_some_and(|id| id == second_subscribe_id),
         ));
 
         // 重标识只拒绝那一次，不得影响已建立的那一路：再发一条事件查询仍然有回音。
@@ -418,14 +392,14 @@ async fn run_probe() -> Vec<Observation> {
         send(
             &mut socket,
             &ClientFrame::Unsubscribe {
-                subscribe_id: session_subscribe_id.clone(),
+                subscribe_id: second_subscribe_id.clone(),
             },
         )
         .await;
         let unsubscribed = wait_unsubscribed(&mut socket).await;
         observations.push(Observation::new(
             "取消订阅回执回显 subscribeId",
-            unsubscribed.as_deref() == Some(session_subscribe_id.as_str()),
+            unsubscribed.as_deref() == Some(second_subscribe_id.as_str()),
         ));
         send(&mut socket, &ClientFrame::Ping {}).await;
         observations.push(Observation::new(
@@ -434,7 +408,7 @@ async fn run_probe() -> Vec<Observation> {
         ));
 
         // 从另一条连接上确认：这一路的标识已经被真正释放（不是只从本地表里摘掉）。
-        let holder = probe_subscription_holder(&session_subscribe_id, &target).await;
+        let holder = probe_subscription_holder(&second_subscribe_id, &target).await;
         observations.push(Observation::new(
             "取消之后该订阅标识确实被释放（独立连接可重新占用）",
             holder == HolderProbe::Released,
@@ -448,7 +422,7 @@ async fn run_probe() -> Vec<Observation> {
             &mut socket,
             &session_frame(
                 &target.workspace_id,
-                &interaction_subscribe_id,
+                &second_subscribe_id,
                 &target.interaction_id,
             ),
         )
@@ -456,14 +430,14 @@ async fn run_probe() -> Vec<Observation> {
         let mut again = Vec::new();
         observations.push(Observation::new(
             "取消后同一标识可以重新订阅（条目被真正摘除）",
-            wait_subscribed(&mut socket, &session_subscribe_id, &mut again)
+            wait_subscribed(&mut socket, &second_subscribe_id, &mut again)
                 .await
                 .is_ok(),
         ));
         send(
             &mut socket,
             &ClientFrame::Unsubscribe {
-                subscribe_id: session_subscribe_id.clone(),
+                subscribe_id: second_subscribe_id.clone(),
             },
         )
         .await;
@@ -471,20 +445,6 @@ async fn run_probe() -> Vec<Observation> {
     }
 
     // 6. 两路都收口之后连接仍然存活。
-    if target.subagent_session_id.is_some() {
-        send(
-            &mut socket,
-            &ClientFrame::Unsubscribe {
-                subscribe_id: session_subscribe_id.clone(),
-            },
-        )
-        .await;
-        let second = wait_unsubscribed(&mut socket).await;
-        observations.push(Observation::new(
-            "第二路取消同样精确到标识",
-            second.as_deref() == Some(session_subscribe_id.as_str()),
-        ));
-    }
     send(&mut socket, &ClientFrame::Ping {}).await;
     observations.push(Observation::new(
         "两路都取消后连接仍存活（订阅释放不影响连接本身）",

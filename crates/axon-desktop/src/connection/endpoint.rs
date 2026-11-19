@@ -11,6 +11,8 @@
 //! 全量配置解析加校验」，这里走 [`axon_config::raw_string_values`] 的轻路径。
 //! 状态文件与凭据**不进**请求路径。
 
+use std::collections::HashMap;
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use axon_config::{ConfigLoader, raw_string_values};
@@ -182,8 +184,24 @@ fn env_file_token(name: &str) -> Option<String> {
 /// 供应商侧走平台验证器、网关侧若只信编译进二进制的 Mozilla 根，会在企业 TLS
 /// 中间盒下出现「模型能调通、网关连不上」。因此网关客户端统一取平台根：
 /// 系统信任什么，这里就信任什么。
+///
+/// 客户端按超时档缓存：`ureq` 的连接池挂在 Agent 上，每次请求新建 Agent 等于每次
+/// 重新握手，会话列表、翻页与事件回放会各自付一遍 TCP 与 TLS 成本。同一档超时复用
+/// 同一个 Agent，跨档不共享（全局超时是 Agent 配置的一部分）。
 #[must_use]
 pub fn http_agent(timeout: Duration) -> ureq::Agent {
+    static AGENTS: Mutex<Option<HashMap<u64, ureq::Agent>>> = Mutex::new(None);
+    let key = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
+    let mut cache = AGENTS.lock().unwrap_or_else(PoisonError::into_inner);
+    cache
+        .get_or_insert_with(HashMap::new)
+        .entry(key)
+        .or_insert_with(|| build_http_agent(timeout))
+        .clone()
+}
+
+/// 建一个新的 Agent；只由 [`http_agent`] 的缓存填充调用。
+fn build_http_agent(timeout: Duration) -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
         // 非 2xx 也交回响应对象：网关拒绝请求时会在响应体里给出原因，

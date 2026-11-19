@@ -17,6 +17,9 @@ pub struct InterruptReceipt {
     pub session_id: String,
     /// 是否确实中断了一轮。
     pub interrupted: bool,
+    /// 取消是否已受理：为真表示本轮会在下一个安全检查点收口，而不是已经停下。
+    #[serde(default)]
+    pub cancellation_requested: bool,
     /// 被中断的 Interaction 标识；没有活跃 turn 时为空。
     #[serde(default)]
     pub interaction_id: Option<String>,
