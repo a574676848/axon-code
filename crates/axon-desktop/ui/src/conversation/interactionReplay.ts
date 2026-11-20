@@ -6,12 +6,14 @@
  *
  * 四件事在这里定死：
  *
- * 1. **从头按页推进**，直到补到该 Interaction 的 durable 尾。只取尾窗会丢掉这一轮
- *    最前面的用户消息、提问与工具帧（推理总在最前面写），正文因此只剩最终一段。
+ * 1. **两种读法，都按 durable 顺序交出帧**。首屏（打开会话、接管新轮）走「尾窗先行」：
+ *    先用一次往返取该轮尾窗出屏，再在后台从头部按页补齐、整轮重投，超大轮次的首屏因此
+ *    不再等串行往返；展开与折叠行仍走「从头按页推进」或只读一段，两处都要确定性而不是
+ *    速度。无论哪条路，帧都按序号升序交出，缺段如实标记。
  * 2. **用量快照按流压缩**。一条 provider 流会连发几百上千条同形快照，而归约器只在流
  *    收口时读最后一条；逐帧投递等于把九成以上的解压与归约成本花在会被立刻覆盖的数据上。
- * 3. **页数有上限**。逐页从头部读，超过上限就退化成「首页 + 尾窗」：首页保住这一轮的
- *    抬头（用户消息、提问、最早的动作），尾窗保住最终结论与终态帧，中间一段如实略过。
+ * 3. **页数有上限，且按轮次体量自适应**。补前段时先按「尾窗起点之前有多少帧」估出页数，
+ *    再夹进硬上限；估算不足时如实标记中段被略过，绝不假装这一轮只有这些内容。
  * 4. **代次在每页之后复核**。目标已经切走时立刻放弃，半截正文不会落进新目标。
  *
  * 这一层不持有状态、不碰 React，分页口径由 `tests/interaction-replay.test.mjs` 钉住。
@@ -44,6 +46,45 @@ export const HISTORY_PAGE_FRAMES = 1_000;
  * 上限 + 1 次（含尾窗），同时保住开头与结论。
  */
 export const SEQUENTIAL_REPLAY_PAGES = 5;
+
+/**
+ * 补前段时允许的页数硬上限。
+ *
+ * 自适应的估算（见 [`replayPageBudget`]）在病态长轮次上会算出很大的页数；这个上限保证
+ * 后台补读的往返次数有界，触顶时如实标记中段被略过。它只在后台发生，不挡首屏。
+ */
+export const REPLAY_MAX_PAGES = 12;
+
+/**
+ * 补前段要读多少页。
+ *
+ * 判据是「尾窗起点之前有多少帧」：事件序号是会话内单调的，尾窗首帧的序号就是它之前的
+ * 帧数上界（这一轮的帧是其中的子集），除以页大小即所需页数。估算只是页数预算：
+ * 多估不会多花往返（读到尾窗起点就停），少估才会撞上硬上限并如实标记截断。
+ */
+export function replayPageBudget(framesBeforeTail: number, pageSize: number): number {
+  if (pageSize <= 0) return 1;
+  const pages = Math.ceil(Math.max(0, framesBeforeTail) / pageSize);
+  return Math.min(REPLAY_MAX_PAGES, Math.max(1, pages));
+}
+
+/**
+ * 从 durable 游标里取事件序号；老记录的游标缺失或不是 JSON 时为空。
+ *
+ * 游标是 `{generation, sequence}` 的 JSON 文本：补前段要用序号判「读到哪一段为止」，
+ * 缺它就只能退回「从头读到尾」，那正是尾窗先行要省掉的那部分代价。
+ */
+export function cursorSequence(cursor: string | null): number | null {
+  if (cursor === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(cursor);
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const sequence = (parsed as { sequence?: unknown }).sequence;
+    return typeof sequence === 'number' && Number.isFinite(sequence) ? sequence : null;
+  } catch {
+    return null;
+  }
+}
 
 /** 用量快照帧在 wire 契约里的类型名。 */
 const USAGE_WIRE_TYPE = 'usageUpdate';
@@ -180,6 +221,86 @@ export interface ReadFramesOptions {
   headOnly?: boolean;
   /** 单页帧数上限；缺省 `HISTORY_PAGE_FRAMES`。 */
   limit?: number;
+}
+
+// 单条 Interaction 的帧读取接缝在下面：尾窗先行（首屏）与从头推进（展开）共用一处取数口径。
+
+/** 尾窗先行的选项。 */
+export interface TailFirstReadOptions extends ReadFramesOptions {
+  /**
+   * 尾窗读回来时立刻回调：调用方在这里先出一屏。
+   *
+   * 回调里的帧只覆盖这一轮的最后一段；补齐之后同一个回调不会再被调用，整轮重投由
+   * 返回值承担。
+   */
+  onTail: (read: InteractionFrames) => void;
+}
+
+/**
+ * 首屏读法：先交尾窗，再在后台把前段补齐。
+ *
+ * 为什么这样做：超大轮次有上万帧，从头按页推进要让首屏等若干个串行往返（实测 1.5 至
+ * 3.5 秒）；而读者打开会话时先要看的是**最近发生了什么**，更早的过程按需展开即可。
+ * 尾窗一次往返就能把结论、终态与最近的工具行交出去，前段随后补齐并整轮重投，过程因此
+ * 不再挡首屏。
+ *
+ * 尾窗不足一页说明这一轮的全部帧都在里面（网关按该轮自己的帧数保尾），此时不再补读，
+ * 行为与一次整轮读完全一致。
+ */
+export async function readInteractionFramesTailFirst(
+  interactionId: string,
+  generation: number,
+  options: TailFirstReadOptions,
+): Promise<InteractionFrames | null> {
+  const fetchPage: HistoryPageFetcher = options.fetchPage ?? ipc.conversationHistoryEvents;
+  const stale = () => options.generation() !== generation;
+  const limit = options.limit ?? HISTORY_PAGE_FRAMES;
+  const subscribeId = `interaction:${interactionId}`;
+
+  const tail = await fetchPage(interactionId, 0, limit, true);
+  if (stale()) return null;
+  const tailRead: InteractionFrames = {
+    frames: compactUsageSnapshots(tail.events.map((frame) => streamFrame(subscribeId, frame))),
+    cursor: tail.tailCursor,
+    settled: tail.events.some((frame) => isTerminal(frame.eventType)),
+    truncated: false,
+  };
+  options.onTail(tailRead);
+
+  // 尾窗没被填满：这一轮的所有帧都已经在这里，不必再补前段。
+  if (tail.events.length < limit) return tailRead;
+  const firstSequence = cursorSequence(tail.events[0]?.cursor ?? null);
+  if (firstSequence === null) return tailRead;
+
+  const budget = replayPageBudget(firstSequence, limit);
+  let head: ipc.HistoryFrame[] = [];
+  let current = await fetchPage(interactionId, 0, limit, false);
+  if (stale()) return null;
+  let pages = 0;
+  let complete = false;
+  for (;;) {
+    pages += 1;
+    head = head.concat(current.events);
+    // 已读到尾窗起点：前段与尾窗首尾相接，整轮齐了。
+    if (current.nextAfter >= firstSequence) {
+      complete = true;
+      break;
+    }
+    if (!current.hasMore || pages >= budget) break;
+    current = await fetchPage(interactionId, current.nextAfter, limit, false);
+    if (stale()) return null;
+  }
+
+  const merged = mergeWithoutOverlap(head, tail.events);
+  const streamed = compactUsageSnapshots(
+    merged.map((frame) => streamFrame(subscribeId, frame)),
+  );
+  return {
+    frames: streamed,
+    cursor: tail.tailCursor,
+    settled: streamed.some(isTerminalStreamEvent),
+    truncated: !complete,
+  };
 }
 
 /**

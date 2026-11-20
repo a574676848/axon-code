@@ -18,19 +18,17 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import * as ipc from '../ipc';
 import type { TurnMetricsReading } from '../types';
 import {
-  completedFrame,
   historySource,
   insertControlAfterInput,
   interactionStillRunning,
   sessionJobRows,
   projectFrames,
   readingFactsOf,
-  statusFrame,
   turnSummaryFacts,
-  wireFrame,
   type HistoryFacts,
 } from './historyProjection';
-import { readInteractionFrames } from './interactionReplay';
+import { readInteractionFrames, readInteractionFramesTailFirst } from './interactionReplay';
+import { provisionalFrames, withOpeningInput, type HistoryEntry } from './pagingSkeleton';
 import {
   INITIAL_CONVERSATION,
   applyFrames,
@@ -55,24 +53,7 @@ const HISTORY_PAGE_SIZE = 20;
 const OLDER_STEP = 1;
 
 export type { HistoryFacts } from './historyProjection';
-
-/** 索引页里一条 Interaction 的界面相关字段。 */
-interface HistoryEntry {
-  interactionId: string;
-  receivedAtMs: number;
-  status: string;
-  content?: string;
-  answerText?: string | null;
-  /** 老网关才有：没有指标事件时的墙钟用时。 */
-  elapsedMs?: number | null;
-  /** 这一轮的读数；事实源是该轮自己的 `turn_metrics` 事件。 */
-  metrics?: TurnMetricsReading | null;
-  /** 这一轮用过的工具名；索引轮据此立起动作摘要。 */
-  toolNames?: readonly string[];
-  attachments?: readonly string[];
-  channel?: string;
-  client?: string;
-}
+export type { HistoryEntry } from './pagingSkeleton';
 
 export interface SessionPagingOptions {
   /** 当前车道标识；会话目标下为空。 */
@@ -229,38 +210,6 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
     },
     [dispatch, onEffectiveModel, onReflectionNotice, onSessionFacts],
   );
-
-  /**
-   * 索引给出的三形态骨架帧：用户说了什么、最后答了什么。
-   *
-   * 用户单元用本地标识落位，真正的 durable 用户帧到达时会「认领」它并换成服务端标识，
-   * 因此三形态与补帧后的正文之间不会出现两条气泡。
-   */
-  const provisionalFrames = useCallback((entry: HistoryEntry): ConversationStreamEvent[] => {
-    const frames: ConversationStreamEvent[] = [
-      wireFrame(entry.interactionId, entry.receivedAtMs, 'userMessage', {
-        partId: `local-user:${entry.interactionId}`,
-        messageId: `${entry.interactionId}:user`,
-        content: entry.content ?? '',
-      }),
-    ];
-    const answer = (entry.answerText ?? '').trim();
-    /*
-     * 还在跑的一轮没有终态帧：索引里的 answerText 只是此刻的片段，把它当结论收口，
-     * 就等于用半截正文宣布这一轮结束。
-     */
-    if (interactionStillRunning(entry.status)) return frames;
-    if (entry.status === 'interrupted') {
-      frames.push(statusFrame(entry.interactionId, 1_000, 'interrupted'));
-    } else if (entry.status === 'rejected' || entry.status === 'failed') {
-      // 失败与中断是两种结论：都必须在骨架上落地，否则会读成「已完成但没有回答」。
-      // 网关的失败终态词是 `rejected`；老记录若写 `failed`，同样按失败收口。
-      frames.push(statusFrame(entry.interactionId, 1_000, 'rejected'));
-    } else if (answer.length > 0) {
-      frames.push(completedFrame(entry.interactionId, answer));
-    }
-    return frames;
-  }, []);
 
   /**
    * 把一轮投影出来：有帧就纯按帧投影，没有帧才用索引骨架。
@@ -447,11 +396,31 @@ function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null
         }
         const newest = newestExpandable(entries) ?? entries[entries.length - 1];
         if (newest === undefined) return;
-        // 最新一轮读整轮：它是正在读的那一段，思考与工具必须齐全并保持展开。
-        const read = await readInteractionFrames(newest.interactionId, generation, {
+        /*
+         * 最新一轮走「尾窗先行」：一次往返把这一轮的结论与最近的过程先出屏，前段随后在
+         * 后台补齐并整轮重投。超大轮次的首屏因此不再等一串串行往返。
+         */
+        let tailShown = false;
+        const read = await readInteractionFramesTailFirst(newest.interactionId, generation, {
           generation: () => generationRef.current,
+          onTail: (tail) => {
+            if (generation !== generationRef.current) return;
+            tailShown = true;
+            const projected = projectTurn(
+              newest,
+              withOpeningInput(newest, tail),
+              tail.truncated,
+              tail.settled,
+            );
+            dispatch({
+              type: 'replace-turn',
+              turn: projected.turn,
+              jobs: projected.jobs,
+            });
+          },
         }).catch((error: unknown) => {
-          settleUnread(newest);
+          // 尾窗已经出屏时不再退回骨架：正文已有内容，退回只会把它抹成空壳。
+          if (!tailShown) settleUnread(newest);
           throw error;
         });
         if (read !== null && generation === generationRef.current) {
@@ -478,6 +447,7 @@ function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null
       seedHistoryFacts,
       settleUnread,
       subscribeTail,
+      withOpeningInput,
       withProvisional,
       onSessionFacts,
       workspaceId,
@@ -549,16 +519,29 @@ function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null
       const newest = fresh[fresh.length - 1];
       // 这一轮的帧读不到（例如刚被清理）不该把整条会话变成错误：骨架已经立起来，
       // 正文缺过程只是少了一段，下一次轮次头会再补。
-      const read = await readInteractionFrames(newest.interactionId, generation, {
+      let tailShown = false;
+      const read = await readInteractionFramesTailFirst(newest.interactionId, generation, {
         generation: () => generationRef.current,
+        onTail: (tail) => {
+          if (generation !== generationRef.current) return;
+          tailShown = true;
+          const projected = projectTurn(
+            newest,
+            withOpeningInput(newest, tail),
+            tail.truncated,
+            tail.settled,
+          );
+          dispatch({ type: 'replace-turn', turn: projected.turn, jobs: projected.jobs });
+        },
       }).catch(() => null);
       /*
        * 读不到帧就把骨架收口：骨架是按「还在跑」立起来的，此刻却没有任何证据支持
        * 这一轮仍在推进（帧没读到，实时尾也订不上）。让转圈永远转下去比少一段过程
-       * 更误导，因此退回按历史收口的形态，下一次轮次头再补正文。
+       * 更误导，因此退回按历史收口的形态，下一次轮次头再补正文；尾窗已经出屏时
+       * 不退回，正文已经有内容。
        */
       if (read === null) {
-        if (generation === generationRef.current) settleUnread(newest);
+        if (generation === generationRef.current && !tailShown) settleUnread(newest);
         return;
       }
       if (generation === generationRef.current) {
@@ -584,6 +567,7 @@ function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null
     sessionId,
     settleUnread,
     subscribeTail,
+    withOpeningInput,
     withProvisional,
     workspaceId,
   ]);

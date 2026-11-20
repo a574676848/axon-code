@@ -4,8 +4,10 @@ import type { TranscriptCell, TurnState } from '../../conversation/transcript/st
 import { orderTurnCells } from '../../conversation/transcript/order';
 import { retryPromptOf } from '../../conversation/transcript/retryPrompt';
 import { ChangedFilesCard } from './ChangedFilesCard';
+import { DisclosureRow } from './DisclosureRow';
 import { foldJobReads } from './jobFolding';
 import { TranscriptCellView } from './Transcript';
+import { LATEST_PROCESS_ROW_LIMIT, hiddenProcessRows } from './turnWindow';
 
 /*
  * 一轮的正文块。
@@ -37,6 +39,10 @@ interface CellRow {
   repeats: number;
   /** 这些读取的耗时合计；一条都取不到耗时时为空。 */
   repeatsMs: number | null;
+  /** 是否属于「过程」：思考、执行、工具、改动、历史轮。 */
+  process: boolean;
+  /** 这一行是「更早的 N 行过程已收起」的替身时给出 N。 */
+  collapsedProcess?: number;
 }
 
 /** 排序定稿后按相邻同作业读取折行，并为每行补上稳定身份。 */
@@ -49,10 +55,33 @@ function foldRows(cells: TranscriptCell[]): CellRow[] {
       cell: item.cell,
       repeats: item.repeats,
       repeatsMs: item.repeatsMs,
+      process: PROCESS_ROLES.has(item.cell.role),
     });
     cursor += item.repeats;
   }
   return rows;
+}
+
+/**
+ * 把最新一轮里被收起的过程行换成一根替身行。
+ *
+ * 替身落在**第一根被收起的过程行**的位置上：那一行原本就在这里，读者看到的先后顺序
+ * 因此不变；其余被收起的行整行不渲染，展开时回到原位。
+ */
+function withCollapsedProcess(rows: CellRow[], hidden: readonly number[]): CellRow[] {
+  if (hidden.length === 0) return rows;
+  const hiddenSet = new Set(hidden);
+  const anchor = hidden[0];
+  const display: CellRow[] = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    if (index === anchor) {
+      display.push({ ...rows[index], collapsedProcess: hidden.length });
+      continue;
+    }
+    if (hiddenSet.has(index)) continue;
+    display.push(rows[index]);
+  }
+  return display;
 }
 
 interface CellGroup {
@@ -65,13 +94,12 @@ interface CellGroup {
 function groupCells(rows: CellRow[]): CellGroup[] {
   const groups: CellGroup[] = [];
   for (const row of rows) {
-    const process = PROCESS_ROLES.has(row.cell.role);
     const last = groups[groups.length - 1];
-    if (process && last !== undefined && last.process) {
+    if (row.process && last !== undefined && last.process) {
       last.rows.push(row);
       continue;
     }
-    groups.push({ key: `group:${row.key}`, process, rows: [row] });
+    groups.push({ key: `group:${row.key}`, process: row.process, rows: [row] });
   }
   return groups;
 }
@@ -94,6 +122,14 @@ export interface TurnBlockProps {
    */
   retryEnabled?: boolean;
   /**
+   * 这一轮是否最新一轮（正在跑或刚跑完）。
+   *
+   * 只有它会把过程行收成一个窗口：最新一轮是全站唯一会持续长高的正文，几十行工具
+   * 调用之后最近几行会被推到视野之外。更早的轮次要么已经整轮折叠，要么是用户主动
+   * 展开的，两处都不该再替他收起。
+   */
+  live?: boolean;
+  /**
    * 是否按历史段落做原生虚拟化。
    *
    * 只对滚动窗口之外的历史轮次成立：`content-visibility: auto` 让浏览器跳过
@@ -103,7 +139,16 @@ export interface TurnBlockProps {
 }
 
 export const TurnBlock = React.memo<TurnBlockProps>(
-  ({ turn, turnNumber, hiddenCells, onAnchor, onOpenChange, retryEnabled = false, memoized = false }) => {
+  ({
+    turn,
+    turnNumber,
+    hiddenCells,
+    onAnchor,
+    onOpenChange,
+    retryEnabled = false,
+    live = false,
+    memoized = false,
+  }) => {
     const files = changedFilesOf(turn.changes);
     const cells = orderTurnCells(hiddenCells > 0 ? turn.cells.slice(hiddenCells) : turn.cells);
     /*
@@ -116,6 +161,17 @@ export const TurnBlock = React.memo<TurnBlockProps>(
      * 窗口只影响正文可见性，不该让失败卡突然失去重试入口。
      */
     const retryPrompt = retryEnabled ? retryPromptOf(turn.cells) : null;
+    /*
+     * 最新一轮的过程行窗口：超过上限只留最近这些行，更早的收成一根替身行。
+     *
+     * 展开只改这一处的本地状态：行本身一直在内存里，点开即原位恢复，不触发回放，
+     * 也不向网关再要一次正文。
+     */
+    const [allProcessVisible, setAllProcessVisible] = React.useState(false);
+    const displayRows = React.useMemo(() => {
+      if (!live || allProcessVisible) return rows;
+      return withCollapsedProcess(rows, hiddenProcessRows(rows, LATEST_PROCESS_ROW_LIMIT));
+    }, [allProcessVisible, live, rows]);
     const tail = cells[cells.length - 1];
     const endsWithSummary = tail !== undefined && tail.role === 'summary';
     /*
@@ -129,7 +185,7 @@ export const TurnBlock = React.memo<TurnBlockProps>(
           onOpen={(index) => onOpenChange(turn.id, turnNumber, index)}
         />
       );
-    const groups = groupCells(rows);
+    const groups = groupCells(displayRows);
     const nodeRef = React.useRef<HTMLDivElement>(null);
 
     /*
@@ -171,13 +227,27 @@ export const TurnBlock = React.memo<TurnBlockProps>(
               }
             >
               {group.rows.map((row) => (
-                <TranscriptCellView
-                  key={row.key}
-                  cell={row.cell}
-                  repeats={row.repeats}
-                  repeatsMs={row.repeatsMs}
-                  retryPrompt={row.cell.role === 'failure' ? retryPrompt : undefined}
-                />
+                row.collapsedProcess === undefined ? (
+                  <TranscriptCellView
+                    key={row.key}
+                    cell={row.cell}
+                    repeats={row.repeats}
+                    repeatsMs={row.repeatsMs}
+                    retryPrompt={row.cell.role === 'failure' ? retryPrompt : undefined}
+                  />
+                ) : (
+                  /*
+                   * 「更早的 N 行过程已收起」：与思考、执行同款的可展开行（28px、不铺
+                   * 底色、悬浮只提行首图形），点开即把被收起的行放回原位，不回放。
+                   */
+                  <DisclosureRow
+                    key={row.key}
+                    open={false}
+                    onToggle={() => setAllProcessVisible(true)}
+                    title={`更早的 ${row.collapsedProcess} 行过程已收起`}
+                    titleText={`展开这 ${row.collapsedProcess} 行已收起的过程`}
+                  />
+                )
               ))}
             </div>
           </React.Fragment>

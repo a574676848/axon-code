@@ -28,6 +28,37 @@ export interface WindowedTurn {
   hiddenCells: number;
 }
 
+/**
+ * 最新一轮最多直接展开多少行过程行。
+ *
+ * 运行中的那一轮是全站唯一会持续长高的正文：工具调用一行一行往上堆，几十行之后最新
+ * 那一段被推到视野之外，而读者要看的恰恰是最近几行。限 10 行既保住「正在发生什么」，
+ * 也让这一轮的 DOM 行数有上界。
+ */
+export const LATEST_PROCESS_ROW_LIMIT = 10;
+
+/**
+ * 最新一轮里该收起的过程行下标（升序）。
+ *
+ * 只数过程行（思考、执行、工具、改动、历史轮），叙述与用户气泡一律不参与：收起过程
+ * 不等于把这一轮压成一行，`叙述 A → 工具 → 叙述 B` 收起后仍读作
+ * `叙述 A → 叙述 B`，被收起的只是中间那些过程行。
+ *
+ * 返回的下标里第一个就是那句「更早的 N 行过程已收起」的落点，其余在展开时回到原位。
+ */
+export function hiddenProcessRows(
+  rows: readonly { process: boolean }[],
+  limit: number = LATEST_PROCESS_ROW_LIMIT,
+): number[] {
+  const processIndices: number[] = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    if (rows[index].process) processIndices.push(index);
+  }
+  const keep = Math.max(0, limit);
+  if (processIndices.length <= keep) return [];
+  return processIndices.slice(0, processIndices.length - keep);
+}
+
 /** 切窗口的结果。 */
 export interface TurnWindow {
   /** 窗口内的轮次，顺序与完整列表一致（由早到晚）。 */
