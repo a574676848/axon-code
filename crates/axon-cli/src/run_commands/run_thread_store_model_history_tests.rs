@@ -89,3 +89,45 @@ fn model_history_projects_native_tool_call_and_result_from_same_items() {
     assert!(result.output.contains("找到结果"));
     assert!(result.success);
 }
+
+/// 收口闭环：轮次落 thread 之后，轮序随侧车一起可点查。
+///
+/// 治理回写（反思提示、`trace:<session>:<sequence>` 标识）只查侧车，不再为了一个标量
+/// 读 thread 尾窗；缺行时读侧会回落整条 thread 读，长会话上就是每轮一次 O(语料)。
+#[test]
+fn settled_turn_sequence_lands_in_the_sidecar() {
+    use axon_session::RuntimeStore as _;
+
+    let root = temp_root("turn-facts-sequence");
+    let config_path = root.join("runtime").join("config.toml");
+    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    axon_config::ConfigLoader::save_to_path(&config_path, &axon_config::AxonConfig::default())
+        .unwrap();
+    // 侧车只写既存的控制面库：先把库建出来，收口才会落行。
+    let data_dir = crate::runtime_paths::runtime_axon_data_path_static(&config_path)
+        .expect("运行态数据目录应可解析");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    axon_session::SqliteRuntimeStore::from_root(&data_dir)
+        .initialize()
+        .expect("控制面库应可初始化");
+
+    let first = session_record("第一轮问题", "第一轮回答", 100);
+    mirror_session_to_thread(&config_path, &first).expect("首轮收口必须成功");
+    let mut second = session_record("第二轮问题", "第二轮回答", 200);
+    second.assistant_part_id = "assistant:session-1:second".to_owned();
+    mirror_session_to_thread(&config_path, &second).expect("次轮收口必须成功");
+
+    let facts = crate::run_commands::run_thread_facts::turn_facts(
+        &config_path,
+        &second.thread_id,
+        &second.assistant_part_id,
+    )
+    .expect("侧车必须有一行");
+    assert_eq!(
+        facts.sequence,
+        Some(1),
+        "轮序必须随侧车落地，否则治理回写每轮都要退回整条 thread 读"
+    );
+    assert_eq!(facts.recorded_at_ms, 200, "收口时刻必须是本轮的时间");
+    let _ = std::fs::remove_dir_all(root);
+}

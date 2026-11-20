@@ -44,7 +44,7 @@
 补充事实（SQLite 库级）：
 
 - 会话清理会**递归扫描 `<axon_root>` 下所有 `*.sqlite3`** 做 VACUUM 维护：后缀常量 `crates/axon-cli/src/cron_commands/session_cleanup_sqlite.rs:11`，扫描 `:33-64`，仅当 `PRAGMA freelist_count > 0` 且 `PRAGMA quick_check(1) == ok` 才执行 `VACUUM;`（`:66-81`）。
-- usage、governance 两个库在打开时设置 `auto_vacuum = INCREMENTAL`：`crates/axon-cli/src/usage_statistics/repository/retention.rs:400-422`、`crates/axon-cli/src/run_commands/run_post_run_governance_store.rs:48`。运行态库（`control.sqlite3` 与 `outbox.sqlite3`）也会设 `INCREMENTAL`，但仅对**空库**在建表前生效（`crates/axon-session/src/infrastructure/sqlite_runtime_store/schema.rs:75-90`，调用点 `:113`）；`cron.sqlite3`、`persona.sqlite3`、`mcp_tool_schemas.sqlite3` 的打开路径**没有** `PRAGMA auto_vacuum` 语句（依据：全仓 `auto_vacuum` 命中点为上述各处 + `crates/axon-cli/src/cron_commands/session_cleanup_sqlite.rs:111` 的测试 fixture）。
+- usage、governance、cron 三个库在打开时设置 `auto_vacuum = INCREMENTAL`：`crates/axon-cli/src/usage_statistics/repository/retention.rs:400-422`、`crates/axon-cli/src/run_commands/run_post_run_governance_store.rs:48`、`crates/axon-cli/src/cron_commands/repository.rs:357-370`（cron 库是「仍是 NONE 时做一次 `PRAGMA auto_vacuum=INCREMENTAL; VACUUM;`」的一次性迁移）。运行态库（`control.sqlite3` 与 `outbox.sqlite3`）也会设 `INCREMENTAL`，但仅对**空库**在建表前生效（`crates/axon-session/src/infrastructure/sqlite_runtime_store/schema.rs:75-90`，调用点 `:113`）；`persona.sqlite3`、`mcp_tool_schemas.sqlite3` 的打开路径**没有** `PRAGMA auto_vacuum` 语句（依据：全仓 `auto_vacuum` 命中点为上述各处 + `crates/axon-cli/src/cron_commands/session_cleanup_sqlite.rs:111` 的测试 fixture）。
 
 
 ### 1.2 各 SQLite 库的表清单（除运行态库见第 2 节）
