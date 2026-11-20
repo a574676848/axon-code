@@ -75,6 +75,20 @@ pub enum ThreadEvent {
         /// 结构化失败事实。
         failure: RuntimeFailure,
     },
+    /// 点对点补写某一轮 metadata 里由轮后治理产生的两项事实。
+    ///
+    /// 治理回写不再复制整份轮次记录（实测单条记录 676 KB 到数 MB），只追加这一条增量；
+    /// 投影时套用到该轮，因此读侧拿到的 metadata 与整份重写完全一致。
+    TurnMetadataPatched {
+        /// 该轮的 assistant part 标识：轮次在 thread 里的稳定身份。
+        assistant_part_id: String,
+        /// 记忆反思提示；`None` 表示这一项不改。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        notice: Option<String>,
+        /// 本轮的 affect 序列；空表示这一项不改。
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        affect_sequence: Vec<String>,
+    },
     /// 恢复 thread。
     ThreadResumed,
     /// 安装压缩后的上下文历史。

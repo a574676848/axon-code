@@ -324,6 +324,7 @@ fn index_patch(record: &ThreadEventRecord) -> Option<ThreadIndexPatch> {
         }
         // 纯噪声事件不写索引：只有会话级标量变化才值得一行，否则索引会随 item 数量膨胀。
         ThreadEvent::TurnItemsAppended { .. }
+        | ThreadEvent::TurnMetadataPatched { .. }
         | ThreadEvent::ThreadResumed
         | ThreadEvent::ThreadCompacted { .. }
         | ThreadEvent::ThreadCheckpoint { .. }

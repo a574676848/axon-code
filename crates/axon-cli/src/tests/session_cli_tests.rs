@@ -307,7 +307,7 @@ fn thread_started(
     model: &str,
 ) -> String {
     serde_json::json!({
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "threadId": thread_id,
         "sequence": sequence,
         "recordedAtMs": recorded_at_ms,
@@ -338,7 +338,7 @@ fn turn_completed(
     assistant_message: &str,
 ) -> String {
     serde_json::json!({
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "threadId": thread_id,
         "sequence": sequence,
         "recordedAtMs": recorded_at_ms,

@@ -124,26 +124,6 @@ where
         )
     }
 
-    /// 追加一个完成 turn，不做整条读回的前置校验。
-    ///
-    /// 只给「已经从尾窗确认过该轮存在」的调用方用（治理回写）：`append_turn` 的前置
-    /// `read_thread` 与历史长度成正比，实测单会话 80 MiB，一条回写要付两次全量反序列化。
-    pub fn append_turn_at_tail(
-        &self,
-        root: &Path,
-        command: AppendTurnCommand,
-    ) -> Result<(), String> {
-        self.append_simple(
-            root,
-            &command.thread_id,
-            command
-                .turn
-                .completed_at_ms
-                .unwrap_or(command.recorded_at_ms),
-            ThreadEvent::TurnCompleted { turn: command.turn },
-        )
-    }
-
     /// 命名 thread。
     pub fn name_thread(&self, root: &Path, command: NameThreadCommand) -> Result<(), String> {
         self.read_thread(root, &command.thread_id)?;
@@ -397,45 +377,6 @@ where
     fn project_thread(&self, root: &Path, thread_id: &str) -> Result<ThreadDetail, String> {
         let events = self.store.read_thread(root, thread_id)?;
         project_thread_records(&events, thread_id)
-    }
-
-    pub(super) fn append_simple(
-        &self,
-        root: &Path,
-        thread_id: &str,
-        recorded_at_ms: u64,
-        event: ThreadEvent,
-    ) -> Result<(), String> {
-        let record = ThreadEventRecord {
-            schema_version: THREAD_EVENT_SCHEMA_VERSION,
-            thread_id: thread_id.to_owned(),
-            sequence: self.next_sequence(root, thread_id)?,
-            recorded_at_ms,
-            event,
-        };
-        self.store.append(root, &record)
-    }
-
-    pub(super) fn append_at_sequence(
-        &self,
-        root: &Path,
-        thread_id: &str,
-        sequence: u64,
-        recorded_at_ms: u64,
-        event: ThreadEvent,
-    ) -> Result<(), String> {
-        let record = ThreadEventRecord {
-            schema_version: THREAD_EVENT_SCHEMA_VERSION,
-            thread_id: thread_id.to_owned(),
-            sequence,
-            recorded_at_ms,
-            event,
-        };
-        self.store.append(root, &record)
-    }
-
-    fn next_sequence(&self, root: &Path, thread_id: &str) -> Result<u64, String> {
-        self.store.next_sequence(root, thread_id)
     }
 }
 

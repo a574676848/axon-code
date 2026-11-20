@@ -401,7 +401,7 @@ pub trait WindowRolloverTransaction {
     /// 记录本次失败的**具体原因**，供随后的 [`Self::abort`] 投影使用。
     ///
     /// 默认实现忽略：只有真正持有诊断状态的事务才需要覆盖它。有了这条约定，
-    /// `abort` 就不必再用「未通过门禁」这类默认文案盖住真实错误——
+    /// `abort` 就不必再用「未通过门禁」这类默认文案盖住真实错误。
     /// 换窗是会话自救的唯一动作，失败原因不可辨等于把会话钉死在满上下文。
     fn note_failure_reason(&mut self, _reason: &str) {}
 

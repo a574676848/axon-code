@@ -6,8 +6,7 @@
 use std::path::Path;
 
 use axon_session::{
-    AppendTurnCommand, JsonlThreadEventStore, ThreadDetail, ThreadEvent, ThreadEventRecord,
-    ThreadService, Turn,
+    JsonlThreadEventStore, ThreadDetail, ThreadEvent, ThreadEventRecord, ThreadService, Turn,
 };
 use serde::Serialize;
 
@@ -159,7 +158,8 @@ pub(crate) fn latest_turn_facts_at_root(root: &Path, thread_id: &str) -> Option<
     let tail = JsonlThreadEventStore
         .read_thread_tail(root, thread_id, THREAD_TAIL_BUDGET_BYTES)
         .ok()?;
-    let metadata = latest_turn_metadata(&tail.records)?;
+    let (assistant_part_id, mut metadata) = latest_turn_metadata(&tail.records)?;
+    apply_metadata_patches(&tail.records, &assistant_part_id, &mut metadata);
     Some(LatestTurnFacts {
         model_name: metadata.model_name,
         reasoning_effort: metadata.reasoning_effort,
@@ -167,13 +167,42 @@ pub(crate) fn latest_turn_facts_at_root(root: &Path, thread_id: &str) -> Option<
     })
 }
 
-/// 尾部记录里的最新一轮 metadata。
+/// 把尾窗里的治理增量套到该轮 metadata 上。
+///
+/// 增量事件可能有多条（反思提示与 affect 序列分开补写），按记录顺序叠加即最终值。
+fn apply_metadata_patches(
+    records: &[ThreadEventRecord],
+    assistant_part_id: &str,
+    metadata: &mut ThreadTurnMetadata,
+) {
+    for record in records {
+        let ThreadEvent::TurnMetadataPatched {
+            assistant_part_id: part,
+            notice,
+            affect_sequence,
+        } = &record.event
+        else {
+            continue;
+        };
+        if part != assistant_part_id {
+            continue;
+        }
+        if let Some(notice) = notice {
+            metadata.reflection_notice = Some(notice.clone());
+        }
+        if !affect_sequence.is_empty() {
+            metadata.affect_sequence = affect_sequence.clone();
+        }
+    }
+}
+
+/// 尾部记录里的最新一轮 metadata，附上它的 assistant part 标识。
 ///
 /// 判据是**轮序最大**，而不是「最后一条轮次记录」：治理回写是另一条记录、可能迟到，
 /// 按位置取会拿到更早一轮的模型别名与推理强度。
-fn latest_turn_metadata(records: &[ThreadEventRecord]) -> Option<ThreadTurnMetadata> {
+fn latest_turn_metadata(records: &[ThreadEventRecord]) -> Option<(String, ThreadTurnMetadata)> {
     let mut newest: Option<u64> = None;
-    let mut metadata: Option<ThreadTurnMetadata> = None;
+    let mut found: Option<(String, ThreadTurnMetadata)> = None;
     for record in records {
         let Some(turn) = thread_record_turn(record) else {
             continue;
@@ -181,18 +210,18 @@ fn latest_turn_metadata(records: &[ThreadEventRecord]) -> Option<ThreadTurnMetad
         if newest.is_some_and(|known| turn.sequence < known) {
             continue;
         }
-        let found = turn_metadata(&turn.token_usage_json);
+        let parsed = turn_metadata(&turn.token_usage_json);
         if newest == Some(turn.sequence) {
             // 同一轮的后写覆盖前写；只有真的解析出 metadata 才覆盖。
-            if found.is_some() {
-                metadata = found;
+            if let Some(metadata) = parsed {
+                found = Some((metadata.assistant_part_id.clone(), metadata));
             }
             continue;
         }
         newest = Some(turn.sequence);
-        metadata = found;
+        found = parsed.map(|metadata| (metadata.assistant_part_id.clone(), metadata));
     }
-    metadata
+    found
 }
 
 /// 一条 thread 记录的轮次；不是轮次记录时为空。
@@ -304,6 +333,11 @@ pub(crate) fn previous_reflection_notice(
 /// 整条 `RunSessionRecord` 重写会把 thread 投影里不再收录的字段（reasoning 条数、
 /// turn event 条数等）抹成零，因此这里按 `(thread, turn)` 点对点补写 metadata，
 /// 其余字段原样保留；`None` 提示表示「本轮没有新提示」，不覆盖已有值，也不触发写。
+/// 治理收口产物回写：只补写本轮 metadata 中由 post-run 产生的两项事实。
+///
+/// 写的是**增量事件**（`TurnMetadataPatched`），不再复制整份轮次记录：轮次记录本身
+/// 会随历史 items 长到数 MB，复制一次等于把它再写一遍。
+/// `None` 提示表示「本轮没有新提示」，不覆盖已有值，也不触发写。
 pub(crate) fn patch_turn_artifacts(
     config_path: &Path,
     session_id: &str,
@@ -312,53 +346,33 @@ pub(crate) fn patch_turn_artifacts(
     affect_sequence: &[String],
 ) -> Result<(), String> {
     let root = resolved_axon_root(config_path)?;
-    /*
-     * 没有要补写的事实就到此为止。
-     *
-     * 追加一次就是再写一条完整轮次记录（实测单条 676 KB）：治理跑过但没有产物时，
-     * 留痕由回执承担，thread 不再陪写一条一模一样的记录。
-     */
+    // 没有要补写的事实就到此为止：留痕由反射回执承担，thread 不再陪写一条空事件。
     if notice.is_none() && affect_sequence.is_empty() {
         return Ok(());
     }
-    let service = ThreadService::new(JsonlThreadEventStore);
     /*
      * 定位只在尾部窗口里做：治理回写紧跟在该轮收口之后，最新一轮就在尾部。尾部找不到
      * （异常顺序、单条记录超过窗口）才退回整条读，宁可慢一次也不把产物写到别的轮次上。
      */
-    let mut turn = match tail_turn_by_part(&root, session_id, assistant_part_id) {
-        Some(turn) => turn,
-        None => service
+    if tail_turn_by_part(&root, session_id, assistant_part_id).is_none()
+        && !ThreadService::new(JsonlThreadEventStore)
             .read_thread(&root, session_id)?
             .turns
             .iter()
-            .find(|turn| {
+            .any(|turn| {
                 turn_metadata(&turn.token_usage_json)
                     .is_some_and(|metadata| metadata.assistant_part_id == assistant_part_id)
             })
-            .cloned()
-            .ok_or_else(|| format!("thread {session_id} 缺少轮次 {assistant_part_id}"))?,
-    };
-    let mut metadata = turn_metadata(&turn.token_usage_json)
-        .ok_or_else(|| format!("thread {session_id} 轮次 {assistant_part_id} 缺少 metadata"))?;
-    if let Some(notice) = notice {
-        metadata.reflection_notice = Some(notice.to_owned());
+    {
+        return Err(format!("thread {session_id} 缺少轮次 {assistant_part_id}"));
     }
-    if !affect_sequence.is_empty() {
-        metadata.affect_sequence = affect_sequence.to_vec();
-    }
-    turn.token_usage_json = Some(
-        serde_json::to_string(&metadata)
-            .map_err(|_| "thread turn metadata 序列化失败".to_owned())?,
-    );
-    // 尾部已经确认过该轮存在：追加不再整条读回做前置校验（那次读与历史长度成正比）。
-    service.append_turn_at_tail(
+    ThreadService::new(JsonlThreadEventStore).append_turn_metadata_patch(
         &root,
-        AppendTurnCommand {
-            thread_id: session_id.to_owned(),
-            recorded_at_ms: crate::run_commands::run_execution::now_ms(),
-            turn,
-        },
+        session_id,
+        crate::run_commands::run_execution::now_ms(),
+        assistant_part_id,
+        notice,
+        affect_sequence,
     )
 }
 

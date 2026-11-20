@@ -7,9 +7,14 @@ pub(crate) mod projection;
 mod session_identity;
 mod session_query_service;
 mod thread_service;
+mod thread_service_append;
 mod workspace_resolver;
 
-pub(crate) const THREAD_EVENT_SCHEMA_VERSION: u32 = 3;
+/// thread 事件 schema 版本。
+///
+/// 4：新增 `turnMetadataPatched`（治理回写只追加增量，不再复制整份轮次记录）。
+/// 旧日志一律拒绝读取，不做补列与回填。
+pub(crate) const THREAD_EVENT_SCHEMA_VERSION: u32 = 4;
 
 pub use activity_service::{
     ActivityQuery, ActivityService, ActivityServiceError, ActivitySnapshot,

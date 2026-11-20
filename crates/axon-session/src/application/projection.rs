@@ -84,6 +84,17 @@ fn apply_record(details: &mut BTreeMap<String, ThreadDetail>, record: &ThreadEve
         ThreadEvent::TurnFailed { turn_id, failure } => {
             apply_turn_failed(details, record, turn_id, failure);
         }
+        ThreadEvent::TurnMetadataPatched {
+            assistant_part_id,
+            notice,
+            affect_sequence,
+        } => apply_turn_metadata_patched(
+            details,
+            record,
+            assistant_part_id,
+            notice.as_deref(),
+            affect_sequence,
+        ),
         ThreadEvent::ThreadResumed | ThreadEvent::ThreadUnarchived => {
             update_status(details, record, ThreadStatus::Idle);
         }
@@ -279,5 +290,164 @@ fn apply_thread_archived(details: &mut BTreeMap<String, ThreadDetail>, record: &
         detail.thread.status = ThreadStatus::Archived;
         detail.thread.archived_at_ms = Some(record.recorded_at_ms);
         detail.thread.updated_at_ms = record.recorded_at_ms;
+    }
+}
+
+/// 套用治理回写增量：只改该轮 metadata 的两个字段，轮次状态与其余字段一律不动。
+///
+/// 找轮次的判据是 metadata 里的 `assistantPartId`：它是轮次在 thread 里的稳定身份，
+/// 与 `turn_id`（由 part 派生）互为冗余，但 metadata 在读写两侧都存在。
+fn apply_turn_metadata_patched(
+    details: &mut BTreeMap<String, ThreadDetail>,
+    record: &ThreadEventRecord,
+    assistant_part_id: &str,
+    notice: Option<&str>,
+    affect_sequence: &[String],
+) {
+    let Some(detail) = details.get_mut(&record.thread_id) else {
+        return;
+    };
+    let Some(turn) = detail
+        .turns
+        .iter_mut()
+        .find(|turn| turn_metadata_has_part(turn.token_usage_json.as_deref(), assistant_part_id))
+    else {
+        return;
+    };
+    let Some(raw) = turn.token_usage_json.as_deref() else {
+        return;
+    };
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return;
+    };
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    if let Some(notice) = notice {
+        object.insert(
+            "reflectionNotice".to_owned(),
+            serde_json::Value::String(notice.to_owned()),
+        );
+    }
+    if !affect_sequence.is_empty()
+        && let Ok(sequence) = serde_json::to_value(affect_sequence)
+    {
+        object.insert("affectSequence".to_owned(), sequence);
+    }
+    turn.token_usage_json = serde_json::to_string(&value).ok();
+    detail.thread.updated_at_ms = record.recorded_at_ms;
+}
+
+/// 轮次 metadata 是否属于指定 assistant part。
+fn turn_metadata_has_part(raw: Option<&str>, assistant_part_id: &str) -> bool {
+    raw.and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+        .and_then(|value| {
+            value
+                .get("assistantPartId")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .is_some_and(|part| part == assistant_part_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{
+        ThreadEvent, ThreadEventRecord, ThreadSettings, ThreadSource, Turn, TurnStatus,
+    };
+
+    const THREAD: &str = "thread-1";
+    const PART: &str = "assistant-part-1";
+
+    fn record(sequence: u64, event: ThreadEvent) -> ThreadEventRecord {
+        ThreadEventRecord {
+            schema_version: crate::application::THREAD_EVENT_SCHEMA_VERSION,
+            thread_id: THREAD.to_owned(),
+            sequence,
+            recorded_at_ms: 1_000 + sequence,
+            event,
+        }
+    }
+
+    fn started() -> ThreadEventRecord {
+        record(
+            1,
+            ThreadEvent::ThreadStarted {
+                session_root_id: THREAD.to_owned(),
+                parent_thread_id: None,
+                forked_from_thread_id: None,
+                source: ThreadSource::CliRun,
+                ephemeral: false,
+                settings: ThreadSettings {
+                    cwd: "/w".to_owned(),
+                    provider: "provider-a".to_owned(),
+                    model: "model-a".to_owned(),
+                    selected_skill_name: None,
+                },
+            },
+        )
+    }
+
+    fn completed(notice: Option<&str>) -> ThreadEventRecord {
+        let metadata = serde_json::json!({
+            "assistantPartId": PART,
+            "modelName": "model-a",
+            "reasoningEffort": "max",
+            "reflectionNotice": notice,
+        });
+        record(
+            2,
+            ThreadEvent::TurnCompleted {
+                turn: Turn {
+                    turn_id: "turn-1".to_owned(),
+                    sequence: 0,
+                    status: TurnStatus::Completed,
+                    history_items: Vec::new(),
+                    token_usage_json: Some(metadata.to_string()),
+                    started_at_ms: 1_000,
+                    completed_at_ms: Some(2_000),
+                    interrupted_at_ms: None,
+                    failure: None,
+                },
+            },
+        )
+    }
+
+    #[test]
+    fn metadata_patch_applies_to_the_matching_turn_only() {
+        let patched = record(
+            3,
+            ThreadEvent::TurnMetadataPatched {
+                assistant_part_id: PART.to_owned(),
+                notice: Some("记忆反思：本轮新增 1 条记忆".to_owned()),
+                affect_sequence: vec!["calm".to_owned()],
+            },
+        );
+        let other = record(
+            4,
+            ThreadEvent::TurnMetadataPatched {
+                assistant_part_id: "assistant-part-other".to_owned(),
+                notice: Some("不该生效".to_owned()),
+                affect_sequence: Vec::new(),
+            },
+        );
+        let detail = &project_threads(&[started(), completed(None), patched, other])[0];
+        let raw = detail.turns[0]
+            .token_usage_json
+            .as_deref()
+            .expect("轮次必须还带着 metadata");
+        let value: serde_json::Value = serde_json::from_str(raw).expect("metadata 必须是 JSON");
+        assert_eq!(
+            value["reflectionNotice"], "记忆反思：本轮新增 1 条记忆",
+            "同一条轮的增量必须落地"
+        );
+        assert_eq!(value["affectSequence"], serde_json::json!(["calm"]));
+        assert_eq!(value["modelName"], "model-a", "其余字段原样保留");
+        assert_eq!(
+            detail.turns[0].status,
+            TurnStatus::Completed,
+            "增量不得改写轮次状态"
+        );
     }
 }
