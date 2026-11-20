@@ -225,9 +225,10 @@ fn store(key: &CacheKey, payload: &serde_json::Value) {
 mod tests {
     use super::*;
 
-    fn key(session_id: &str, event_sequence: u64, interaction_count: u64) -> CacheKey {
+    /// 每个用例一个独立数据根：缓存按根分桶，共用根会让并行用例互相挤掉条目。
+    fn key(root: &str, session_id: &str, event_sequence: u64, interaction_count: u64) -> CacheKey {
         CacheKey {
-            root: PathBuf::from("/fixture-root"),
+            root: PathBuf::from(root),
             session_id: session_id.to_owned(),
             event_sequence,
             interaction_count,
@@ -241,7 +242,7 @@ mod tests {
 
     #[test]
     fn lookup_returns_the_stored_payload_for_the_same_key() {
-        let key = key("session-cache-hit", 7, 3);
+        let key = key("/root-hit", "session-cache-hit", 7, 3);
         store(&key, &serde_json::json!({ "interactions": [1, 2] }));
         let hit = lookup(&key).expect("同键必须命中");
         assert_eq!(hit["interactions"][1], 2);
@@ -249,14 +250,14 @@ mod tests {
 
     #[test]
     fn a_moving_watermark_or_row_count_misses_the_cache() {
-        let stored = key("session-cache-invalidate", 7, 3);
+        let stored = key("/root-move", "session-cache-invalidate", 7, 3);
         store(&stored, &serde_json::json!({ "value": "old" }));
         assert!(
-            lookup(&key("session-cache-invalidate", 8, 3)).is_none(),
+            lookup(&key("/root-move", "session-cache-invalidate", 8, 3)).is_none(),
             "事件水位前进后必须失效"
         );
         assert!(
-            lookup(&key("session-cache-invalidate", 7, 4)).is_none(),
+            lookup(&key("/root-move", "session-cache-invalidate", 7, 4)).is_none(),
             "交互条数变化后必须失效"
         );
         assert!(lookup(&stored).is_some(), "未变化的那一条必须仍然命中");
@@ -265,7 +266,7 @@ mod tests {
     /// 水位与条数都不动、但派生事实变了（换标题、投影补齐）：同样必须失效。
     #[test]
     fn derived_facts_invalidate_without_an_event() {
-        let mut stored = key("session-cache-derived", 7, 3);
+        let mut stored = key("/root-derived", "session-cache-derived", 7, 3);
         store(&stored, &serde_json::json!({ "value": "old" }));
         let mut renamed = stored.clone();
         renamed.title = "新标题".to_owned();
@@ -284,7 +285,7 @@ mod tests {
     fn the_cache_stays_within_its_entry_bound() {
         for index in 0..(MAX_ENTRIES_PER_ROOT + 4) {
             store(
-                &key(&format!("session-bound-{index}"), 1, 1),
+                &key("/root-bound", &format!("session-bound-{index}"), 1, 1),
                 &serde_json::json!({ "index": index }),
             );
         }

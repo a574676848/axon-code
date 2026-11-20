@@ -23,8 +23,13 @@ import { LATEST_PROCESS_ROW_LIMIT, hiddenProcessRows } from './turnWindow';
  * 轮内顺序交给 `transcript/order`：运行中追加的用户消息只在还没被模型接住时挪到轮末。
  */
 
-/** 属于「过程」的单元：同一组内相邻时不再加间距。 */
-const PROCESS_ROLES = new Set(['reasoning', 'tool', 'fileChange', 'history']);
+/**
+ * 属于「过程」的单元：同一组内相邻时不再加间距。
+ *
+ * 与整轮折叠（`transcript/fold.ts` 的 `PROCESS_ROLES`）刻意不同：那边连计划一起撤下，
+ * 这里的窗口只管会持续变长的过程行。两处同名会让新增 role 时漏改一处，因此名字区分开。
+ */
+const WINDOW_PROCESS_ROLES = new Set(['reasoning', 'tool', 'fileChange', 'history']);
 
 /*
  * 渲染行：一个单元，或一组并掉的同类作业读取。
@@ -55,7 +60,7 @@ function foldRows(cells: TranscriptCell[]): CellRow[] {
       cell: item.cell,
       repeats: item.repeats,
       repeatsMs: item.repeatsMs,
-      process: PROCESS_ROLES.has(item.cell.role),
+      process: WINDOW_PROCESS_ROLES.has(item.cell.role),
     });
     cursor += item.repeats;
   }

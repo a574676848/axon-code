@@ -400,7 +400,11 @@ impl SqliteRuntimeStore {
     /// 窗口，WAL 大小留待下一轮再压。
     pub fn checkpoint_wal_truncate(&self) -> Result<WalCheckpoint, RuntimeStoreError> {
         let control = self.control.checkpoint_truncate()?;
-        let _ = self.outbox.checkpoint_truncate();
+        // 队列库体量有界、下一轮还会再试，但失败必须留痕：静默丢掉一个库的截断，
+        // 排查「WAL 为什么没缩」时只会看到控制面是干净的。
+        if let Err(error) = self.outbox.checkpoint_truncate() {
+            axon_logger::warning(&format!("待消费队列库 WAL 截断失败：{error}"));
+        }
         Ok(control)
     }
 
