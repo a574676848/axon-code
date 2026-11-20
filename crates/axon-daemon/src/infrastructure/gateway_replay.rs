@@ -247,6 +247,11 @@ pub struct InteractionHistoryPage {
     pub tail_sequence: u64,
     /// 从 durable 尾继续订阅时用的游标；为空表示会话还没有任何事件。
     pub tail_cursor: Option<String>,
+    /// 因正文归档已被回收而跳过的帧数。
+    ///
+    /// 占位帧不会交给客户端（它们的载荷是回收事实而不是正文），但「跳过」这一事实
+    /// 必须下发给消费方：否则界面会把「正文已回收」读成「这一轮本来就没有过程」。
+    pub skipped_archived_frames: u32,
 }
 
 /// 读取一段历史帧：正文一次取回，实时尾才交给订阅流。
@@ -326,6 +331,7 @@ where
                 tail_cursor: window
                     .last()
                     .and_then(|event| serde_json::to_string(&event.cursor()).ok()),
+                skipped_archived_frames: u32::try_from(missing_archives).unwrap_or(u32::MAX),
             });
         }
         // 尾窗为空：老记录只把归属写在载荷里。先按尾序号截窗扫一遍，扫空说明这个
@@ -433,6 +439,7 @@ where
         tail_cursor: records
             .get(limit.saturating_sub(1))
             .and_then(|event| serde_json::to_string(&event.cursor()).ok()),
+        skipped_archived_frames: u32::try_from(missing_archives).unwrap_or(u32::MAX),
     })
 }
 
@@ -536,6 +543,7 @@ where
         has_more,
         tail_sequence,
         tail_cursor,
+        skipped_archived_frames: u32::try_from(missing_archives).unwrap_or(u32::MAX),
     })
 }
 

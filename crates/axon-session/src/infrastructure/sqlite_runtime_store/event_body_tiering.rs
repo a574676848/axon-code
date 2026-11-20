@@ -5,14 +5,14 @@
 //! 投影里，正文可以离开日志、留一份可按需回读的归档。
 //!
 //! 两个阶段共用同一套判定（[`tiered_interactions`]）：dry-run 只算账、不落盘；执行阶段
-//! 在日志写锁内写归档、重写日志、重建索引。记录条数与序号在分级前后完全一致，因此这是
-//! 一次纯粹的内容替换。
+//! 在日志写锁之外读快照与写归档，锁内只做「尾部未变」的乐观校验后重写日志。记录条数与
+//! 序号在分级前后完全一致，因此这是一次纯粹的内容替换。
 
 use std::collections::HashMap;
 use std::path::Path;
 
 use axon_domain::DaemonSessionId;
-use axon_eventlog::{EventLogReader, RuntimeEventRecord, rewrite_log_in_place};
+use axon_eventlog::{EventLogReader, RuntimeEventRecord, rewrite_log_if_unchanged};
 
 use super::SqliteRuntimeStore;
 use crate::infrastructure::SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES;
@@ -44,6 +44,8 @@ pub struct EventBodyTieringReport {
     pub tiered_frames: usize,
     /// 已写入归档的正文载荷字节数。
     pub tiered_bytes: u64,
+    /// 归档实际落盘字节（压缩后）。
+    pub archive_bytes: u64,
     /// 分级前的日志字节数。
     pub log_bytes_before: u64,
     /// 分级并重写后的日志字节数。
@@ -53,10 +55,19 @@ pub struct EventBodyTieringReport {
 }
 
 impl EventBodyTieringReport {
-    /// 日志实际回收的字节数；重写后可能反而更大（帧边界变化），此时按 0 计。
+    /// 日志侧回收的字节数；重写后可能反而更大（帧边界变化），此时按 0 计。
     #[must_use]
     pub fn reclaimed_bytes(&self) -> u64 {
         self.log_bytes_before.saturating_sub(self.log_bytes_after)
+    }
+
+    /// 净回收字节数：日志减少量扣掉归档新增量。
+    ///
+    /// 归档是压缩后的副本，正常远小于原文，因此净值为正；把归档算进来是因为「日志变小、
+    /// 磁盘变大」不该被记成回收。
+    #[must_use]
+    pub fn net_reclaimed_bytes(&self) -> u64 {
+        self.reclaimed_bytes().saturating_sub(self.archive_bytes)
     }
 }
 
@@ -101,34 +112,46 @@ impl SqliteRuntimeStore {
 
     /// 执行分级：写归档、重写日志、重建索引。
     ///
-    /// 全程持有日志写锁：先读后锁会漏掉其间新追加的帧，重写等于把它们删掉。
-    /// 单个交互归档写入失败不阻断整轮，正文保持内联并计入 `skipped_interactions`。
+    /// 读快照与写归档都在日志写锁**之外**：把整条日志解压进内存可能持续数秒，按住主
+    /// 写锁会让并发追加在锁超时（5 秒）后失败。锁内只做一次「末条序号是否仍是快照那
+    /// 一条」的乐观校验，对不上就说明期间有人写过，本轮放弃、下一轮重来。
+    ///
+    /// 单会话体量上限见 [`MAX_TIERING_LOG_BYTES`]：超过就只告警不处理，避免一次治理把
+    /// 进程内存打满。
     pub fn tier_event_body(
         &self,
         session_id: &DaemonSessionId,
         keep_interactions: usize,
     ) -> Result<Option<EventBodyTieringReport>, RuntimeStoreError> {
-        let archive_root = self.event_archive_root();
         let log = self.event_log(session_id);
         let log_path = log.path();
-        let mut log_bytes_before = 0u64;
+        if !log_path.is_file() {
+            return Ok(None);
+        }
+        let log_bytes_before = std::fs::metadata(&log_path).map_or(0, |meta| meta.len());
+        if log_bytes_before > MAX_TIERING_LOG_BYTES {
+            axon_logger::warning(&format!(
+                "会话事件日志超过分级上限，跳过本轮: session={} bytes={log_bytes_before} limit={MAX_TIERING_LOG_BYTES}",
+                session_id.as_str()
+            ));
+            return Ok(None);
+        }
+        let reader = EventLogReader::open(&log_path).map_err(log_error)?;
+        let header = reader.header().clone();
+        let mut records = reader.records().to_vec();
+        let Some(expected_tail) = records.last().map(|record| record.sequence) else {
+            return Ok(None);
+        };
+        let archive_root = self.event_archive_root();
         let mut stats = TieringStats::default();
-        let outcome = rewrite_log_in_place(&log, |_header, mut records| {
-            log_bytes_before = std::fs::metadata(&log_path).map_or(0, |meta| meta.len());
-            if !apply_tiering(
-                &mut records,
-                session_id.as_str(),
-                keep_interactions,
-                &archive_root,
-                &mut stats,
-            ) {
-                return Ok(None);
-            }
-            Ok(Some(records))
-        })
-        .map_err(log_error)?;
-        let Some(outcome) = outcome else {
-            // 全部候选的归档都没写成功：日志一字未动，但「跳过」这一事实要如实上报。
+        if !apply_tiering(
+            &mut records,
+            session_id.as_str(),
+            keep_interactions,
+            &archive_root,
+            &mut stats,
+        ) {
+            // 没有可改动的记录（或全部归档都写失败）：日志一字未动，但「跳过」要上报。
             if stats.skipped_interactions == 0 {
                 return Ok(None);
             }
@@ -136,15 +159,27 @@ impl SqliteRuntimeStore {
                 tiered_interactions: 0,
                 tiered_frames: 0,
                 tiered_bytes: 0,
+                archive_bytes: 0,
                 log_bytes_before,
                 log_bytes_after: log_bytes_before,
                 skipped_interactions: stats.skipped_interactions,
             }));
+        }
+        let Some(outcome) =
+            rewrite_log_if_unchanged(&log, expected_tail, &header, &records).map_err(log_error)?
+        else {
+            // 读快照之后有人追加过：本次重写会盖掉那些帧，直接放弃。
+            axon_logger::warning(&format!(
+                "会话事件日志在分级期间被追加，本轮放弃: session={}",
+                session_id.as_str()
+            ));
+            return Ok(None);
         };
         Ok(Some(EventBodyTieringReport {
             tiered_interactions: stats.tiered_interactions,
             tiered_frames: stats.tiered_frames,
             tiered_bytes: stats.tiered_bytes,
+            archive_bytes: stats.archive_bytes,
             log_bytes_before,
             log_bytes_after: outcome.bytes,
             skipped_interactions: stats.skipped_interactions,
@@ -152,12 +187,20 @@ impl SqliteRuntimeStore {
     }
 }
 
+/// 单条会话事件日志参与分级的体量上限。
+///
+/// 分级要把整条日志解压成记录集：几百 MiB 的日志对应 GiB 级内存，daemon 会在此时
+/// 直接 abort。超过上限的会话本轮跳过并告警，宁可让它继续大，也不拿进程内存换。
+const MAX_TIERING_LOG_BYTES: u64 = 256 * 1024 * 1024;
+
 /// 执行阶段的累计读数。
 #[derive(Debug, Clone, Copy, Default)]
 struct TieringStats {
     tiered_interactions: usize,
     tiered_frames: usize,
     tiered_bytes: u64,
+    /// 归档落盘字节（压缩后）：净回收要把这部分从日志减少量里扣掉。
+    archive_bytes: u64,
     skipped_interactions: usize,
 }
 
@@ -177,11 +220,16 @@ fn apply_tiering(
             .iter()
             .filter_map(|index| records.get(*index).cloned())
             .collect();
-        if write_body_archive(archive_root, session_id, &item.interaction_id, &bodies).is_err() {
-            // 归档没落盘就不能把正文从日志里拿走：保持内联，下一轮重来。
-            stats.skipped_interactions = stats.skipped_interactions.saturating_add(1);
-            continue;
-        }
+        let written =
+            match write_body_archive(archive_root, session_id, &item.interaction_id, &bodies) {
+                Ok(written) => written,
+                Err(_) => {
+                    // 归档没落盘就不能把正文从日志里拿走：保持内联，下一轮重来。
+                    stats.skipped_interactions = stats.skipped_interactions.saturating_add(1);
+                    continue;
+                }
+            };
+        stats.archive_bytes = stats.archive_bytes.saturating_add(written);
         let archive_ref = body_archive_ref(session_id, &item.interaction_id);
         for (index, body) in item.body_indices.iter().zip(bodies.iter()) {
             if let Some(slot) = records.get_mut(*index) {

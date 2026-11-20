@@ -398,42 +398,46 @@ function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null
         if (newest === undefined) return;
         /*
          * 最新一轮走「尾窗先行」：一次往返把这一轮的结论与最近的过程先出屏，前段随后在
-         * 后台补齐并整轮重投。超大轮次的首屏因此不再等一串串行往返。
+         * 后台补齐并整轮重投。
+         *
+         * 这里只等尾窗：过渡面与「正在加载会话」都以它为准。若把补齐也 await 掉，超大
+         * 轮次的首屏仍会被后台往返拖住，等于没做这条读法。
          */
-        let tailShown = false;
-        const read = await readInteractionFramesTailFirst(newest.interactionId, generation, {
+        const reading = readInteractionFramesTailFirst(newest.interactionId, generation, {
           generation: () => generationRef.current,
-          onTail: (tail) => {
-            if (generation !== generationRef.current) return;
-            tailShown = true;
+          onTail: () => undefined,
+        });
+        const tail = await reading.tail;
+        let tailShown = false;
+        if (tail !== null && generation === generationRef.current) {
+          tailShown = true;
+          const projected = projectTurn(
+            newest,
+            withOpeningInput(newest, tail),
+            tail.truncated,
+            tail.settled,
+          );
+          dispatch({ type: 'replace-turn', turn: projected.turn, jobs: projected.jobs });
+        }
+        void reading.full
+          .then((full) => {
+            if (full === null || generation !== generationRef.current) return;
             const projected = projectTurn(
               newest,
-              withOpeningInput(newest, tail),
-              tail.truncated,
-              tail.settled,
+              withOpeningInput(newest, full),
+              full.truncated,
+              full.settled,
             );
-            dispatch({
-              type: 'replace-turn',
-              turn: projected.turn,
-              jobs: projected.jobs,
-            });
-          },
-        }).catch((error: unknown) => {
-          // 尾窗已经出屏时不再退回骨架：正文已有内容，退回只会把它抹成空壳。
-          if (!tailShown) settleUnread(newest);
-          throw error;
-        });
-        if (read !== null && generation === generationRef.current) {
-          const projected = projectTurn(newest, read.frames, read.truncated, read.settled);
-          dispatch({
-            type: 'replace-turn',
-            turn: projected.turn,
-            jobs: projected.jobs,
+            dispatch({ type: 'replace-turn', turn: projected.turn, jobs: projected.jobs });
+            if (!full.settled && workspaceId !== null) {
+              void subscribeTail(newest.interactionId, full.cursor);
+            }
+          })
+          .catch((error: unknown) => {
+            // 首屏已经有意料中的内容时不退回骨架：退回只会把正文抹成空壳。
+            if (!tailShown) settleUnread(newest);
+            onError(error instanceof Error ? error.message : '读取最新一轮失败');
           });
-          if (!read.settled && workspaceId !== null) {
-            void subscribeTail(newest.interactionId, read.cursor);
-          }
-        }
       } finally {
         setPageLoading(false);
       }
@@ -442,6 +446,7 @@ function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null
       dispatch,
       fetchNewestPage,
       generationRef,
+      onError,
       projectTurn,
       rememberOldest,
       seedHistoryFacts,
@@ -519,40 +524,40 @@ function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null
       const newest = fresh[fresh.length - 1];
       // 这一轮的帧读不到（例如刚被清理）不该把整条会话变成错误：骨架已经立起来，
       // 正文缺过程只是少了一段，下一次轮次头会再补。
-      let tailShown = false;
-      const read = await readInteractionFramesTailFirst(newest.interactionId, generation, {
+      const reading = readInteractionFramesTailFirst(newest.interactionId, generation, {
         generation: () => generationRef.current,
-        onTail: (tail) => {
-          if (generation !== generationRef.current) return;
-          tailShown = true;
+        onTail: () => undefined,
+      });
+      const tail = await reading.tail;
+      let tailShown = false;
+      if (tail !== null && generation === generationRef.current) {
+        tailShown = true;
+        const projected = projectTurn(
+          newest,
+          withOpeningInput(newest, tail),
+          tail.truncated,
+          tail.settled,
+        );
+        dispatch({ type: 'replace-turn', turn: projected.turn, jobs: projected.jobs });
+      }
+      void reading.full
+        .then((full) => {
+          if (full === null || generation !== generationRef.current) return;
           const projected = projectTurn(
             newest,
-            withOpeningInput(newest, tail),
-            tail.truncated,
-            tail.settled,
+            withOpeningInput(newest, full),
+            full.truncated,
+            full.settled,
           );
           dispatch({ type: 'replace-turn', turn: projected.turn, jobs: projected.jobs });
-        },
-      }).catch(() => null);
-      /*
-       * 读不到帧就把骨架收口：骨架是按「还在跑」立起来的，此刻却没有任何证据支持
-       * 这一轮仍在推进（帧没读到，实时尾也订不上）。让转圈永远转下去比少一段过程
-       * 更误导，因此退回按历史收口的形态，下一次轮次头再补正文；尾窗已经出屏时
-       * 不退回，正文已经有内容。
-       */
-      if (read === null) {
-        if (generation === generationRef.current && !tailShown) settleUnread(newest);
-        return;
-      }
-      if (generation === generationRef.current) {
-        const projected = projectTurn(newest, read.frames, read.truncated, read.settled);
-        dispatch({
-          type: 'replace-turn',
-          turn: projected.turn,
-          jobs: projected.jobs,
+          if (!full.settled) void subscribeTail(newest.interactionId, full.cursor);
+        })
+        .catch(() => {
+          // 读不到帧就把骨架收口：骨架是按「还在跑」立起来的，此刻却没有任何证据支持
+          // 这一轮仍在推进（帧没读到，实时尾也订不上）。让转圈永远转下去比少一段过程
+          // 更误导；尾窗已经出屏时不退回，正文已经有内容。
+          if (generation === generationRef.current && !tailShown) settleUnread(newest);
         });
-        if (!read.settled) void subscribeTail(newest.interactionId, read.cursor);
-      }
     } catch (error: unknown) {
       onError(error instanceof Error ? error.message : '读取新轮次失败');
     }

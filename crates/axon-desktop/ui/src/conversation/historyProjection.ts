@@ -138,13 +138,18 @@ export function projectFrames(
   };
 }
 
-/** 中段被页数上限略过时的一句如实说明：不冒充过程完整。 */
+/**
+ * 这一轮的过程不完整时的一句如实说明。
+ *
+ * 两种来源共用一句：页数上限略过了中段，或部分正文已按保留期回收。对读者而言结论一样
+ * （这一段过程看不到），但都不能冒充「过程完整」。
+ */
 function truncationCell(interactionId: string): TranscriptCell {
   return {
     id: `${interactionId}:truncated`,
     role: 'notice',
-    title: '过程已截断',
-    summary: '这一轮的过程过长，中间一段没有读回来；开头的用户消息与最近的记录都在。',
+    title: '过程不完整',
+    summary: '这一轮的部分过程没有读回来（内容过长，或较早的正文已按保留期回收）；开头的用户消息与最近的记录都在。',
     tone: 'info',
   };
 }

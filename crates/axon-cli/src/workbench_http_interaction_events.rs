@@ -70,6 +70,9 @@ pub(super) fn interaction_events_payload(
             "hasMore": page.has_more,
             "tailSequence": page.tail_sequence,
             "tailCursor": page.tail_cursor,
+            // 因正文归档已回收而被跳过的帧数：界面据此说明「这一轮的部分过程已回收」，
+            // 而不是把缺帧读成「这一轮本来就没有过程」。
+            "skippedArchivedFrames": page.skipped_archived_frames,
             "rawPayloadPersisted": false,
         }),
     )

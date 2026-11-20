@@ -13,6 +13,7 @@
 import type { TurnMetricsReading } from '../types';
 import { completedFrame, interactionStillRunning, statusFrame, wireFrame } from './historyProjection';
 import type { InteractionFrames } from './interactionReplay';
+import { visibleUserText } from './references';
 import type { ConversationStreamEvent } from './wire';
 
 /** 索引页里一条 Interaction 的界面相关字段。 */
@@ -44,7 +45,9 @@ export function provisionalFrames(entry: HistoryEntry): ConversationStreamEvent[
     wireFrame(entry.interactionId, entry.receivedAtMs, 'userMessage', {
       partId: `local-user:${entry.interactionId}`,
       messageId: `${entry.interactionId}:user`,
-      content: entry.content ?? '',
+      // 与真实帧同一口径：索引正文里可能带结构化输入块（附件、引用、作答回执），
+      // 气泡只显示剥掉块之后的那段文字。存原文会让真帧到达时认领不上，出现两条气泡。
+      content: visibleUserText(entry.content ?? ''),
     }),
   ];
   const answer = (entry.answerText ?? '').trim();

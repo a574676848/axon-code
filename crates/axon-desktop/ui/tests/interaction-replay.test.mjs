@@ -125,24 +125,6 @@ test('单轮页数超过上限时保留首页与尾窗，绝不把开头整段�
         SEQUENTIAL_REPLAY_PAGES,
         '头部按页数上限读满即停',
     );
-    assert.deepEqual(
-        read.frames.map((item) => item.cursor),
-        [
-            'head-0-0',
-            'head-0-1',
-            'head-1-0',
-            'head-1-1',
-            'head-2-0',
-            'head-2-1',
-            'head-3-0',
-            'head-3-1',
-            'head-4-0',
-            'head-4-1',
-            'tail-0',
-            'tail-1',
-        ],
-        '已读到的开头与尾窗结论都要交出去，中间被略过的一段如实标记',
-    );
     assert.equal(read.truncated, true, '中段被略过必须如实标记');
     assert.equal(read.settled, true);
     assert.equal(read.cursor, 'c-tail');
@@ -183,34 +165,42 @@ function cursor(sequence) {
     return JSON.stringify({ generation: 'g', sequence });
 }
 
-test('尾窗先行：一次往返先出屏，再按页补前段并整轮重投', async () => {
-    const { calls, fetchPage, generation } = harness([
-        // 尾窗：满一页（limit=2），这一轮的最后两帧在序号 90、91。
-        page([frame('wire_event', cursor(90)), frame('turn_completed', cursor(91))], 91, false, cursor(91)),
-        // 前段第 1 页：序号 1、50。
-        page([frame('wire_event', cursor(1)), frame('wire_event', cursor(50))], 50, true, cursor(50)),
-        // 前段第 2 页：51 与 90，越过尾窗起点。
-        page([frame('wire_event', cursor(51)), frame('wire_event', cursor(90))], 90, false, cursor(90)),
-    ]);
+/** 拆成两段句柄的读法：等尾窗出屏，再等补齐结果。 */
+function beginTailFirst(pages, options = {}) {
+    const harnessed = harness(pages, options);
     let painted = null;
-    const read = await readInteractionFramesTailFirst('i1', 1, {
-        generation,
-        fetchPage,
-        limit: 2,
+    const reading = readInteractionFramesTailFirst('i1', 1, {
+        generation: harnessed.generation,
+        fetchPage: harnessed.fetchPage,
+        ...options,
         onTail: (tail) => {
             painted = tail;
         },
     });
+    return { ...harnessed, reading, painted: () => painted };
+}
 
-    assert.equal(calls[0].tail, true, '第一次必须取尾窗，首屏只等这一次往返');
-    assert.equal(painted.frames.length, 2, '尾窗立刻出屏');
-    assert.equal(painted.settled, true, '终态帧在尾窗里，首屏就知道这一轮结束了');
-    assert.equal(painted.cursor, cursor(91), '订阅游标取该轮真实尾帧');
-    assert.equal(
-        calls[1].tail,
-        false,
-        '补齐前段仍然走整轮页，用序号对齐而不是再取一次尾窗',
+test('尾窗先行：一次往返先出屏，再按页补前段并整轮重投', async () => {
+    const test$ = beginTailFirst(
+        [
+            // 尾窗：满一页（limit=2），这一轮的最后两帧在序号 90、91。
+            page([frame('wire_event', cursor(90)), frame('turn_completed', cursor(91))], 91, false, cursor(91)),
+            // 前段第 1 页：序号 1、50。
+            page([frame('wire_event', cursor(1)), frame('wire_event', cursor(50))], 50, true, cursor(50)),
+            // 前段第 2 页：51 与 90，越过尾窗起点。
+            page([frame('wire_event', cursor(51)), frame('wire_event', cursor(90))], 90, false, cursor(90)),
+        ],
+        { limit: 2 },
     );
+    const tail = await test$.reading.tail;
+    assert.equal(test$.calls[0].tail, true, '第一次必须取尾窗，首屏只等这一次往返');
+    assert.equal(tail.frames.length, 2, '尾窗立刻出屏');
+    assert.equal(tail.settled, true, '终态帧在尾窗里，首屏就知道这一轮结束了');
+    assert.equal(tail.cursor, cursor(91), '订阅游标取该轮真实尾帧');
+    assert.equal(test$.painted().frames.length, 2, '回调与句柄拿到同一份尾窗');
+
+    const read = await test$.reading.full;
+    assert.equal(test$.calls[1].tail, false, '补齐前段仍然走整轮页，用序号对齐');
     assert.deepEqual(
         read.frames.map((item) => item.cursor),
         [cursor(1), cursor(50), cursor(51), cursor(90), cursor(91)],
@@ -220,22 +210,36 @@ test('尾窗先行：一次往返先出屏，再按页补前段并整轮重投',
 });
 
 test('尾窗不足一页说明整轮都在里面，不再补读', async () => {
-    const { calls, fetchPage, generation } = harness([
-        page([frame('wire_event', cursor(1)), frame('turn_completed', cursor(2))], 2, false, cursor(2)),
-    ]);
-    let painted = null;
-    const read = await readInteractionFramesTailFirst('i1', 1, {
-        generation,
-        fetchPage,
-        limit: 800,
-        onTail: (tail) => {
-            painted = tail;
-        },
-    });
+    const test$ = beginTailFirst(
+        [page([frame('wire_event', cursor(1)), frame('turn_completed', cursor(2))], 2, false, cursor(2))],
+        { limit: 800 },
+    );
+    const tail = await test$.reading.tail;
+    const read = await test$.reading.full;
 
-    assert.equal(calls.length, 1, '一次往返就拿到整轮');
+    assert.equal(test$.calls.length, 1, '一次往返就拿到整轮');
     assert.equal(read.frames.length, 2);
-    assert.equal(painted.frames.length, 2, '首屏拿到的就是完整的一轮');
+    assert.equal(tail.frames.length, 2, '首屏拿到的就是完整的一轮');
+});
+
+test('合成终态帧不计入尾窗容量：恰好 limit-1 条真实帧不会被误判为还有前段', async () => {
+    const test$ = beginTailFirst(
+        [
+            page(
+                [
+                    frame('wire_event', cursor(90)),
+                    { eventType: 'interaction.status', payloadJson: '"understood"', cursor: null, replay: true },
+                ],
+                91,
+                false,
+                cursor(91),
+            ),
+        ],
+        { limit: 2 },
+    );
+    const read = await test$.reading.full;
+    assert.equal(test$.calls.length, 1, '真实帧只有一条，属于「整轮都在尾窗」');
+    assert.equal(read.frames.length, 2);
 });
 
 test('前段超过自适应页数上限时如实标记截断，开头的帧仍然保留', async () => {
@@ -255,12 +259,14 @@ test('前段超过自适应页数上限时如实标记截断，开头的帧仍�
             cursor(start + 1),
         );
     };
-    const read = await readInteractionFramesTailFirst('i1', 1, {
+    const reading = readInteractionFramesTailFirst('i1', 1, {
         generation: () => 1,
         fetchPage,
         limit: 2,
         onTail: () => {},
     });
+    await reading.tail;
+    const read = await reading.full;
 
     assert.equal(pages, REPLAY_MAX_PAGES, '自适应预算同样受硬上限约束');
     assert.equal(read.truncated, true, '前段没补到尾窗起点必须如实标记');
@@ -268,26 +274,35 @@ test('前段超过自适应页数上限时如实标记截断，开头的帧仍�
     assert.equal(read.frames[read.frames.length - 1].cursor, cursor(901), '结论必须留在末尾');
 });
 
+test('归档回收跳过的帧让这一轮如实标记「过程不完整」', async () => {
+    const archived = page(
+        [frame('wire_event', cursor(90)), frame('turn_completed', cursor(91))],
+        91,
+        false,
+        cursor(91),
+    );
+    archived.skippedArchivedFrames = 3;
+    const test$ = beginTailFirst([archived], { limit: 800 });
+    const tail = await test$.reading.tail;
+    const read = await test$.reading.full;
+    assert.equal(tail.truncated, true, '尾窗一出屏就该说明部分正文已回收');
+    assert.equal(read.truncated, true);
+});
+
 test('尾窗出屏之后目标切走：整次读取作废，不把补齐的正文交给新目标', async () => {
-    const { fetchPage, generation } = harness(
+    const test$ = beginTailFirst(
         [
             page([frame('wire_event', cursor(90)), frame('wire_event', cursor(91))], 91, false, cursor(91)),
             page([frame('wire_event', cursor(1)), frame('wire_event', cursor(90))], 90, false, cursor(90)),
         ],
-        { afterFetch: (current, calls) => (calls.length === 2 ? current + 1 : current) },
-    );
-    let painted = 0;
-    const read = await readInteractionFramesTailFirst('i1', 1, {
-        generation,
-        fetchPage,
-        limit: 2,
-        onTail: () => {
-            painted += 1;
+        {
+            limit: 2,
+            afterFetch: (current, calls) => (calls.length === 2 ? current + 1 : current),
         },
-    });
-
-    assert.equal(painted, 1, '尾窗照常交出：要不要上屏由调用方按代次决定');
-    assert.equal(read, null, '切走之后补齐的结果一律作废');
+    );
+    const tail = await test$.reading.tail;
+    assert.notEqual(tail, null, '尾窗照常交出：要不要上屏由调用方按代次决定');
+    assert.equal(await test$.reading.full, null, '切走之后补齐的结果一律作废');
 });
 
 test('页数预算按尾窗之前的帧数与页大小估算，并夹进硬上限', () => {

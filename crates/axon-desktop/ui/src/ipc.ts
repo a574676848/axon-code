@@ -370,6 +370,10 @@ export interface HistoryPage {
   hasMore: boolean;
   tailSequence: number;
   tailCursor: string | null;
+  /**
+   * 因正文归档已回收而被跳过的帧数（老网关无此字段）：界面据此说明「部分过程已回收」。
+   */
+  skippedArchivedFrames?: number;
 }
 
 /**
@@ -686,13 +690,11 @@ export const desktopRememberView = (view: {
 }): Promise<DesktopPreferences> => call('desktop_remember_view', view);
 
 /** 记下输入坞改选的主模型名称；新开会话时优先沿用。 */
-export const desktopSetComposerModel = (model: string): Promise<DesktopPreferences> =>
-  call('desktop_set_composer_model', { model });
+export const desktopSetComposerModel = (model: string): Promise<DesktopPreferences> => call('desktop_set_composer_model', { model });
 
 /** 记下输入坞改选的思考强度；新开会话时优先沿用。 */
 export const desktopSetComposerReasoningEffort = (
   effort: string,
 ): Promise<DesktopPreferences> => call('desktop_set_composer_reasoning_effort', { effort });
-
 
 export * from './ipcService';

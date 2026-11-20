@@ -186,9 +186,9 @@ Schema 身份常量 `SCHEMA_IDENTITY = "jarvis-runtime-goal-v1"`：`.../schema.r
   - `failure_repository.rs:67`（`fail_action`）；
   - `runtime_repository.rs:386`（`recover_expired_sessions`）；
   - `interrupted_execution_repository.rs:269`、`interrupted_interaction_repository.rs:203`（隔离中断时补终态事件）。
-- 改：`crates/axon-cli/src/cron_commands/runtime_cleanup_session_events.rs:194`（`UPDATE session_events SET payload_json=?1, payload_ref=NULL` — 悬空引用收口为内联占位）。
-- 删：`crates/axon-cli/src/cron_commands/runtime_event_archive.rs:321`（`DELETE ... RETURNING rowid`）。
-- 读：`event_repository.rs:340`（`replay_events`）、`:378`（`interaction_tail_window`）；`crates/axon-cli/src/workbench_http_lane_readings.rs:100`（`turn_completed` 载荷取正文）；`interrupted_interaction_repository.rs:288`；`crates/axon-cli/src/cron_commands/runtime_event_archive.rs:113`、`:295`；`crates/axon-cli/src/cron_commands/runtime_cleanup_session_events.rs:152`；`crates/axon-cli/src/cron_commands/runtime_cleanup.rs:477`。
+- 改：**无**（正文分级不按行改写事件面：它整体重写同一条会话日志，见 §6）。
+- 删：`crates/axon-cli/src/cron_commands/runtime_event_archive.rs:120-176`（保留期与预算淘汰整目录删除）。
+- 读：`event_log_repository.rs:157`（`replay_events`）、`:235`（`interaction_tail_window`）；`crates/axon-cli/src/workbench_http_session_readings.rs`（索引页尾扫）；`interrupted_interaction_repository.rs`；`crates/axon-cli/src/cron_commands/runtime_event_archive.rs`；`crates/axon-cli/src/commands/export.rs`。
 
 **`session_checkpoints`**
 
@@ -302,7 +302,7 @@ Schema 身份常量 `SCHEMA_IDENTITY = "jarvis-runtime-goal-v1"`：`.../schema.r
 | 增量回收页数 `INCREMENTAL_VACUUM_PAGE_BATCH = 4096` | `crates/axon-cli/src/cron_commands/runtime_cleanup.rs:37`、执行 `:661-667` |
 | 活跃 Session 状态白名单（不参与回收） | `crates/axon-cli/src/cron_commands/runtime_cleanup.rs:46-47` |
 | 终态 Interaction / Task 状态白名单 | `crates/axon-cli/src/cron_commands/runtime_cleanup.rs:40`、`:42` |
-| 清理顺序：先归档 → 再删事件 → 修悬空引用 → goals/interactions/decisions/events/hosts/presence/deliveries/... | `crates/axon-cli/src/cron_commands/runtime_cleanup.rs:164-229` |
+| 清理顺序：过期事件目录（连同同名正文归档）整目录删除 → 各表过期行（goals/interactions/decisions/events/hosts/presence/deliveries/...）→ 事件目录预算淘汰 → 会话族清理 | `crates/axon-cli/src/cron_commands/runtime_cleanup.rs:164-229` |
 | 清理入口在 Cron 内 | `crates/axon-cli/src/cron_commands/session_cleanup.rs:189-202`（先 `SqliteRuntimeStore::initialize`，再 `cleanup_runtime_data`） |
 
 ---
@@ -340,7 +340,7 @@ Schema 身份常量 `SCHEMA_IDENTITY = "jarvis-runtime-goal-v1"`：`.../schema.r
 | 25 | `SessionIngressCursorStore::save_ingress_cursor` | `helpers.rs:197-207` | `transport_ingress_cursors` | Daemon 外部事件 ingress |
 | 26 | `save_goal_result_document` | `goal_result_document.rs:11-53` | 落盘文件（非表），返回绝对路径 | Daemon / CLI |
 | 27 | `checkpoint_wal`（PRAGMA 写，不写表） | `sqlite_runtime_store.rs:205-216` | — | Daemon supervisor 每 5 分钟 |
-| 28 | Cron 清理：归档 + 删除 + 悬空引用修复 + VACUUM | `crates/axon-cli/src/cron_commands/runtime_cleanup.rs:121-681`；`runtime_event_archive.rs:65-334`；`runtime_cleanup_session_events.rs:194`；`session_cleanup_sqlite.rs:16-31` | 全部业务表（删）、`session_events`（改/删） | Cron |
+| 28 | Cron 清理：过期目录整删 + 各表过期行 + VACUUM | `crates/axon-cli/src/cron_commands/runtime_cleanup.rs:121-681`；`runtime_event_archive.rs`；`session_cleanup_sqlite.rs:16-31` | 全部业务表（删） | Cron |
 | 29 | CLI run 写入 `jarvis_results` | `crates/axon-cli/src/run_commands/run_request_payload.rs:545`、`:641` | `jarvis_results` | CLI `axon run` |
 | 30 | CLI 侧 runtime store 单例（工作台 HTTP 适配器） | `crates/axon-cli/src/workbench_http_adapter.rs:162`（`entry(...).or_insert_with(SqliteRuntimeStore::from_root)`） | 读为主；写入经各 trait 方法 | `axon serve` 工作台 HTTP |
 
@@ -433,8 +433,8 @@ CLI 侧**没有** `session_events` 的追加调用点（全仓 `append_event*` �
 | cron 库自身 | `crates/axon-cli/src/cron_commands/repository.rs:55-586` |
 | runtime 清理入口 | `crates/axon-cli/src/cron_commands/session_cleanup.rs:82-202` |
 | runtime 清理主体 | `crates/axon-cli/src/cron_commands/runtime_cleanup.rs:121-681` |
-| 事件归档（先归档再删） | `crates/axon-cli/src/cron_commands/runtime_event_archive.rs:65-95`、`:100-139` |
-| 悬空 payload_ref 修复 | `crates/axon-cli/src/cron_commands/runtime_cleanup_session_events.rs:194` |
+| 事件目录保留期与预算淘汰（连同同名正文归档） | `crates/axon-cli/src/cron_commands/runtime_event_archive.rs:56-146` |
+| 长会话治理（thread 窗口重写 / 事件正文分级 / WAL 截断） | `crates/axon-cli/src/cron_commands/session_governance.rs` |
 | 全库 VACUUM | `crates/axon-cli/src/cron_commands/session_cleanup_sqlite.rs:16-31` |
 | 会话族清理（thread 事件面 + 目录） | `crates/axon-cli/src/cron_commands/session_family_cleanup.rs` |
 | 文件面清理 | `crates/axon-cli/src/cron_commands/session_cleanup_files.rs:49-117` |

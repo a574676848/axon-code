@@ -95,10 +95,15 @@ impl JsonlThreadEventStore {
     /// 用完整记录集原子重写指定 thread 的全部分片；空记录集删除该 thread。
     ///
     /// 该方法只服务于跨 shard 的管理型重写；正常追加仍走 `ThreadEventStore`。
+    ///
+    /// `expected_sequence` 是调用方读到快照时该 thread 的末条事件序号。读-改-写必须
+    /// 带上这一条校验：两次读之间别人追加的事件一旦被 `lines.clone()` 整段覆盖，就是
+    /// 一次静默的丢失更新。序号对不上时返回冲突，调用方下一轮重来。
     pub fn rewrite_thread_with_records(
         &self,
         root: &Path,
         thread_id: &str,
+        expected_sequence: u64,
         records: &[ThreadEventRecord],
     ) -> Result<(), String> {
         let logical = Self::thread_logical_path(root, thread_id);
@@ -115,13 +120,12 @@ impl JsonlThreadEventStore {
             .rewrite_with(logical, |current_lines| {
                 let current = Self::parse_lines(&Self::join_lines(current_lines))
                     .map_err(std::io::Error::other)?;
-                let expected_sequence = current.last().map_or(0, |record| record.sequence);
-                let actual_sequence = records.last().map_or(0, |record| record.sequence);
-                if actual_sequence > expected_sequence {
+                let actual_sequence = current.last().map_or(0, |record| record.sequence);
+                if actual_sequence != expected_sequence {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         format!(
-                            "thread 事件重写序列冲突: expected<={expected_sequence} actual={actual_sequence}"
+                            "thread 事件重写冲突: expected={expected_sequence} actual={actual_sequence}"
                         ),
                     ));
                 }
@@ -568,7 +572,7 @@ mod tests {
         assert!(JsonlThreadEventStore::shard_path(&root, "rewrite-thread", 1).exists());
 
         store
-            .rewrite_thread_with_records(&root, "rewrite-thread", std::slice::from_ref(&first))
+            .rewrite_thread_with_records(&root, "rewrite-thread", 2, std::slice::from_ref(&first))
             .unwrap();
         assert_eq!(
             store.read_thread(&root, "rewrite-thread").unwrap(),
@@ -577,7 +581,7 @@ mod tests {
         assert!(!JsonlThreadEventStore::shard_path(&root, "rewrite-thread", 1).exists());
 
         store
-            .rewrite_thread_with_records(&root, "rewrite-thread", &[])
+            .rewrite_thread_with_records(&root, "rewrite-thread", 1, &[])
             .unwrap();
         assert!(
             store

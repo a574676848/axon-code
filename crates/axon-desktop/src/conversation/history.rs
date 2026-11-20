@@ -13,6 +13,12 @@ use crate::gateway;
 
 /// 单次拉取的历史条数上限。
 const MAX_HISTORY_LIMIT: u32 = 1_000;
+/// 单次拉取的历史**帧数**上限。
+///
+/// 与会话条数上限分开：帧页的网关上限是 2000（`workbench_http_adapter.rs` 的
+/// `MAX_INTERACTION_EVENTS_LIMIT`），此前复用条数上限等于把客户端锁在一半的窗口上，
+/// 数值碰巧一致只是巧合，不是契约。
+const MAX_EVENT_PAGE: u32 = 2_000;
 /// 默认拉取的历史条数。
 const DEFAULT_HISTORY_LIMIT: u32 = 200;
 /// 单次历史帧页的默认帧数：一次取够一屏正文，又不至于让单次响应过大。
@@ -43,6 +49,9 @@ pub struct InteractionHistoryPage {
     /// 从 durable 尾继续订阅时用的游标；为空表示会话还没有任何事件。
     #[serde(default)]
     pub tail_cursor: Option<String>,
+    /// 因正文归档已回收而被跳过的帧数；老网关没有该字段时为 0。
+    #[serde(default)]
+    pub skipped_archived_frames: u32,
 }
 
 /// 历史页里的一帧。
@@ -355,9 +364,7 @@ pub fn interaction_events(
     if interaction_id.is_empty() {
         return Err("交互标识不能为空".to_string());
     }
-    let limit = limit
-        .unwrap_or(DEFAULT_EVENT_PAGE)
-        .clamp(1, MAX_HISTORY_LIMIT);
+    let limit = limit.unwrap_or(DEFAULT_EVENT_PAGE).clamp(1, MAX_EVENT_PAGE);
     // 交互标识来自网关下发，仍按 URL 段转义：客户端不假定它的字符集。
     let encoded: String = url::form_urlencoded::byte_serialize(interaction_id.as_bytes()).collect();
     let after = after.unwrap_or(0);

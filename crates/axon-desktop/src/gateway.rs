@@ -107,9 +107,34 @@ fn authorized_get_with_timeout(
 pub fn get_json(path: &str) -> Result<serde_json::Value, String> {
     let (status, body) = get_raw(path)?;
     if !(200..300).contains(&status) {
-        return Err(format!("网关返回状态码 {status}"));
+        return Err(http_error_message(status, &body));
     }
     serde_json::from_str(&body).map_err(|_| "网关响应不是合法 JSON".to_string())
+}
+
+/// 非 2xx 的结论：带上网关给出的错误码与说明。
+///
+/// 只报状态码会让「交互标识非法 / 这一轮已被清理 / 网关内部错误」三件事都读成数字，
+/// 而它们的修复动作完全不同（改参数、放弃、重启后台）。网关的 400/404/500 响应体里
+/// 有 `error` 与可选 `message`，这里原样带出来，取不到就退回状态码。
+fn http_error_message(status: u16, body: &str) -> String {
+    let parsed = serde_json::from_str::<serde_json::Value>(body).ok();
+    let code = parsed
+        .as_ref()
+        .and_then(|value| value.get("error"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty());
+    let message = parsed
+        .as_ref()
+        .and_then(|value| value.get("message"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty());
+    match (code, message) {
+        (Some(code), Some(message)) => format!("网关返回状态码 {status}（{code}）：{message}"),
+        (Some(code), None) => format!("网关返回状态码 {status}（{code}）"),
+        (None, Some(message)) => format!("网关返回状态码 {status}：{message}"),
+        (None, None) => format!("网关返回状态码 {status}"),
+    }
 }
 
 /// GET 一个网关接口，返回状态码与响应体。

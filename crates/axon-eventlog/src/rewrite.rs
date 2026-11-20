@@ -78,6 +78,31 @@ where
     Ok(Some(write_locked(log, &snapshot.header, &records)?))
 }
 
+/// 用「锁外读出的快照」重写日志，并在锁内校验日志尾部没有被追加过。
+///
+/// 为什么要这个入口：把整条日志读进内存（解压 + 反序列化）可能持续数秒，主写锁不能
+/// 被它按住，否则并发追加会在 5 秒锁超时后失败。这里把读放到锁外，锁内只做一次
+/// 「末条序号是否仍是读快照时那一条」的核对：对不上就说明期间有人写过，本次放弃，
+/// 由调用方下一轮重来。核对通过时，快照覆盖的正是文件当前内容，重写不会丢帧。
+pub fn rewrite_log_if_unchanged(
+    log: &EventLog,
+    expected_tail_sequence: u64,
+    header: &Header,
+    records: &[RuntimeEventRecord],
+) -> Result<Option<RewriteOutcome>, EventLogError> {
+    validate_sequences(records)?;
+    let path = log.path();
+    let _lock = ExclusiveLock::acquire(&path.with_extension("lock"))?;
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let tail = crate::read::read_tail_record(&path)?;
+    if tail.map(|record| record.sequence) != Some(expected_tail_sequence) {
+        return Ok(None);
+    }
+    Ok(Some(write_locked(log, header, records)?))
+}
+
 /// 已持有写锁时的落盘：编码、原子替换、重建索引。
 fn write_locked(
     log: &EventLog,

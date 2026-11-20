@@ -53,8 +53,12 @@ pub(super) fn low_water_bytes() -> u64 {
 }
 
 /// 删除最后活动时间早于 `cutoff_ms` 的会话事件目录，返回删除的会话数。
+///
+/// 正文归档目录与事件目录同名（同一个编码片段），因此事件目录过期时归档一起删：只删
+/// 事件目录会把归档留成孤儿，而归档既不适用 3 天文件保留期、也不在会话族的删除清单里。
 pub(super) fn archive_expired_session_dirs(
     events_root: &Path,
+    archive_root: &Path,
     cutoff_ms: u64,
 ) -> Result<usize, String> {
     if !events_root.is_dir() {
@@ -66,6 +70,14 @@ pub(super) fn archive_expired_session_dirs(
             fs::remove_dir_all(&directory).map_err(|error| {
                 format!("删除过期事件目录失败 {}：{error}", directory.display())
             })?;
+            if let Some(name) = directory.file_name() {
+                let archived = archive_root.join(name);
+                if archived.is_dir() {
+                    fs::remove_dir_all(&archived).map_err(|error| {
+                        format!("删除正文归档目录失败 {}：{error}", archived.display())
+                    })?;
+                }
+            }
             removed = removed.saturating_add(1);
         }
     }
@@ -74,11 +86,15 @@ pub(super) fn archive_expired_session_dirs(
 
 /// 超过高水位时从最旧会话开始删除，直到落到低水位；返回删除的会话数。
 ///
+/// 每个会话的占用按「事件目录 + 同名正文归档目录」合计：归档是同一份正文的另一份
+/// 副本，只统计事件目录会让预算在看不清的地方被吃掉。
+///
 /// `protected` 是仍在推进的会话目录名（已按事件目录规则编码）：它们的事件还会被
 /// 读写，磁盘紧张也不能删。全部候选都被保护时本函数如实返回 0，由上层报警，
 /// 不做「删活跃会话换水位」的交换。
 pub(super) fn enforce_events_disk_budget(
     events_root: &Path,
+    archive_root: &Path,
     high_bytes: u64,
     low_bytes: u64,
     protected: &HashSet<String>,
@@ -86,7 +102,7 @@ pub(super) fn enforce_events_disk_budget(
     if !events_root.is_dir() {
         return Ok(0);
     }
-    let mut sessions = session_dirs_with_size(events_root)?;
+    let mut sessions = session_dirs_with_size(events_root, archive_root)?;
     let mut total = sessions
         .iter()
         .fold(0u64, |sum, (_, size, _)| sum.saturating_add(*size));
@@ -99,15 +115,20 @@ pub(super) fn enforce_events_disk_budget(
         if total <= low_bytes {
             break;
         }
-        let name = directory
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default();
+        let Some(name) = directory.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
         if protected.contains(name) {
             continue;
         }
         fs::remove_dir_all(&directory)
             .map_err(|error| format!("淘汰事件目录失败 {}：{error}", directory.display()))?;
+        // 同名正文归档一起淘汰：它是这条会话正文的另一份副本，留下就成了孤儿。
+        let archived = archive_root.join(name);
+        if archived.is_dir() {
+            fs::remove_dir_all(&archived)
+                .map_err(|error| format!("淘汰正文归档目录失败 {}：{error}", archived.display()))?;
+        }
         total = total.saturating_sub(size);
         removed = removed.saturating_add(1);
     }
@@ -115,15 +136,15 @@ pub(super) fn enforce_events_disk_budget(
 }
 
 /// 整条会话被删除后，回收它的外置正文归档目录。
+///
+/// 目录名与事件目录同一套编码（`EventLog::encode_segment`），因此这里必须先编码：
+/// 直接拿原始会话标识拼路径，遇到非 ULID 标识（含 `:`、非 ASCII）会永远对不上，
+/// 归档目录就此变成没人回收的孤儿。
 pub(super) fn reclaim_session_archive_dir(archive_root: &Path, session_id: &str) {
-    if session_id.is_empty()
-        || session_id == "."
-        || session_id == ".."
-        || session_id.contains(['/', '\\'])
-    {
+    if session_id.is_empty() || session_id == "." || session_id == ".." {
         return;
     }
-    let directory = archive_root.join(session_id);
+    let directory = archive_root.join(axon_eventlog::EventLog::encode_segment(session_id));
     if directory.is_dir() {
         let _ = fs::remove_dir_all(directory);
     }
@@ -142,10 +163,20 @@ fn session_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(directories)
 }
 
-fn session_dirs_with_size(root: &Path) -> Result<Vec<(PathBuf, u64, u64)>, String> {
+fn session_dirs_with_size(
+    root: &Path,
+    archive_root: &Path,
+) -> Result<Vec<(PathBuf, u64, u64)>, String> {
     let mut sessions = Vec::new();
     for directory in session_dirs(root)? {
-        let size = directory_size(&directory)?;
+        let mut size = directory_size(&directory)?;
+        // 同名正文归档计入这条会话的占用：预算必须看见磁盘上的全部副本。
+        if let Some(name) = directory.file_name() {
+            let archived = archive_root.join(name);
+            if archived.is_dir() {
+                size = size.saturating_add(directory_size(&archived)?);
+            }
+        }
         let modified = latest_modified_ms(&directory)?;
         sessions.push((directory, size, modified));
     }
@@ -205,7 +236,8 @@ mod tests {
         let root = tempfile::tempdir().expect("临时目录");
         let events = root.path().join("events");
         write_file(&events.join("session-old"), "session.v1.jsonl.zstd", 16);
-        let removed = archive_expired_session_dirs(&events, u64::MAX).expect("清理");
+        let removed = archive_expired_session_dirs(&events, &root.path().join("archive"), u64::MAX)
+            .expect("清理");
         assert_eq!(removed, 1);
         assert!(!events.join("session-old").exists());
     }
@@ -216,7 +248,14 @@ mod tests {
         let events = root.path().join("events");
         write_file(&events.join("session-a"), "session.v1.jsonl.zstd", 64);
         write_file(&events.join("session-b"), "session.v1.jsonl.zstd", 64);
-        let removed = enforce_events_disk_budget(&events, 1, 1, &HashSet::new()).expect("淘汰");
+        let removed = enforce_events_disk_budget(
+            &events,
+            &root.path().join("archive"),
+            1,
+            1,
+            &HashSet::new(),
+        )
+        .expect("淘汰");
         assert_eq!(removed, 2, "超过低水位前应持续淘汰");
     }
 
@@ -225,8 +264,14 @@ mod tests {
         let root = tempfile::tempdir().expect("临时目录");
         let events = root.path().join("events");
         write_file(&events.join("session-a"), "session.v1.jsonl.zstd", 8);
-        let removed =
-            enforce_events_disk_budget(&events, 1024, 512, &HashSet::new()).expect("检查");
+        let removed = enforce_events_disk_budget(
+            &events,
+            &root.path().join("archive"),
+            1024,
+            512,
+            &HashSet::new(),
+        )
+        .expect("检查");
         assert_eq!(removed, 0);
     }
 
@@ -238,13 +283,46 @@ mod tests {
         write_file(&events.join("session-dead"), "session.v1.jsonl.zstd", 64);
         let protected = HashSet::from(["session-live".to_owned()]);
         // 低水位 1 字节：不保护就得全删；保护后活跃目录必须留下。
-        let removed = enforce_events_disk_budget(&events, 1, 1, &protected).expect("淘汰");
+        let removed =
+            enforce_events_disk_budget(&events, &root.path().join("archive"), 1, 1, &protected)
+                .expect("淘汰");
         assert_eq!(removed, 1, "只淘汰非活跃会话");
         assert!(
             events.join("session-live").exists(),
             "活跃会话事件目录不得被淘汰"
         );
         assert!(!events.join("session-dead").exists());
+    }
+
+    #[test]
+    fn expired_session_dirs_take_their_body_archive_with_them() {
+        let root = tempfile::tempdir().expect("临时目录");
+        let events = root.path().join("events");
+        let archive = root.path().join("archive");
+        write_file(&events.join("session-old"), "session.v1.jsonl.zstd", 16);
+        write_file(&archive.join("session-old"), "body.jsonl.zst", 16);
+        let removed = archive_expired_session_dirs(&events, &archive, u64::MAX).expect("清理");
+        assert_eq!(removed, 1);
+        assert!(!events.join("session-old").exists());
+        assert!(
+            !archive.join("session-old").exists(),
+            "正文归档必须跟着事件目录一起删，否则会变成没人回收的孤儿"
+        );
+    }
+
+    #[test]
+    fn disk_budget_counts_and_evicts_the_body_archive() {
+        let root = tempfile::tempdir().expect("临时目录");
+        let events = root.path().join("events");
+        let archive = root.path().join("archive");
+        write_file(&events.join("session-old"), "session.v1.jsonl.zstd", 8);
+        // 归档比事件目录还大：只统计事件目录会让预算看不见它。
+        write_file(&archive.join("session-old"), "body.jsonl.zst", 64);
+        write_file(&events.join("session-new"), "session.v1.jsonl.zstd", 8);
+        let removed =
+            enforce_events_disk_budget(&events, &archive, 1, 1, &HashSet::new()).expect("淘汰");
+        assert_eq!(removed, 2, "两个会话都会被淘汰到低水位");
+        assert!(!archive.join("session-old").exists());
     }
 
     #[test]

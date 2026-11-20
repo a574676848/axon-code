@@ -382,6 +382,21 @@ where
         let events = self.store.read_thread(root, thread_id)?;
         project_thread_records(&events, thread_id)
     }
+
+    /// 投影 thread，并带回「读到的末条事件序号」。
+    ///
+    /// 管理型重写（窗口重写）需要拿它做乐观校验：读-改-写之间若有人追加过事件，序号
+    /// 就会变，重写必须撤销而不是覆盖别人的写入。
+    pub(super) fn project_thread_with_tail(
+        &self,
+        root: &Path,
+        thread_id: &str,
+    ) -> Result<(ThreadDetail, u64), String> {
+        let events = self.store.read_thread(root, thread_id)?;
+        let tail = events.last().map_or(0, |record| record.sequence);
+        let detail = project_thread_records(&events, thread_id)?;
+        Ok((detail, tail))
+    }
 }
 
 fn project_thread_records(

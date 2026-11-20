@@ -17,13 +17,17 @@ use std::time::{Duration, Instant};
 
 use axon_domain::DaemonSessionId;
 use axon_session::{
-    AXON_RUNTIME_DATA_DIR, JsonlThreadEventStore, SqliteRuntimeStore, ThreadService,
+    AXON_RUNTIME_DATA_DIR, JsonlThreadEventStore, SqliteRuntimeStore, ThreadIndexSnapshot,
+    ThreadService,
 };
 
-/// 单轮治理阶段的墙上时钟预算（执行态）。
-const GOVERNANCE_TIME_BUDGET: Duration = Duration::from_secs(30);
-/// 单轮治理阶段的墙上时钟预算（dry-run）：只算账也必须保持交互可接受。
-const GOVERNANCE_DRY_RUN_TIME_BUDGET: Duration = Duration::from_secs(10);
+/// 单轮治理阶段每个阶段的墙上时钟预算（执行态）。
+///
+/// 两个阶段各拿一份：共用一份时，第一个阶段的候选会把时间吃光，第二个阶段永远拿不到
+/// 时间片（实测长会话里 thread 阶段很容易跑满）。
+const GOVERNANCE_TIME_BUDGET: Duration = Duration::from_secs(15);
+/// 单轮治理阶段每个阶段的墙上时钟预算（dry-run）：只算账也必须保持交互可接受。
+const GOVERNANCE_DRY_RUN_TIME_BUDGET: Duration = Duration::from_secs(5);
 /// thread 窗口保留的轮数。
 ///
 /// 取 20：界面一屏放不下更多，而模型可见历史由压缩快照承担，不依赖这段窗口。
@@ -73,12 +77,8 @@ pub(super) fn govern_thread_windows(
     dry_run: bool,
     budget: &GovernanceBudget,
 ) -> Result<(usize, usize), String> {
-    let store = JsonlThreadEventStore;
-    let Some(snapshot) = store
-        .read_thread_index(root)
-        .map_err(|error| format!("读取 thread 索引失败：{error}"))?
-    else {
-        // 索引缺失说明还没有可治理对象：整表投影的代价远大于本阶段收益。
+    let Some(snapshot) = thread_index_or_rebuild(root)? else {
+        // 重建后仍然没有索引：没有任何可治理对象。
         return Ok((0, 0));
     };
     let service = ThreadService::new(JsonlThreadEventStore);
@@ -159,7 +159,9 @@ pub(super) fn tier_event_bodies(
         match store.tier_event_body(&session_id, EVENT_BODY_KEEP_INTERACTIONS) {
             Ok(Some(report)) => {
                 frames = frames.saturating_add(report.tiered_frames);
-                reclaimed = reclaimed.saturating_add(report.reclaimed_bytes());
+                // 净回收：日志减少量扣掉归档新增量。只报日志侧会把「日志变小、磁盘变大」
+                // 记成回收。
+                reclaimed = reclaimed.saturating_add(report.net_reclaimed_bytes());
                 if report.skipped_interactions > 0 {
                     axon_logger::warning(&format!(
                         "事件正文归档写入失败，正文保持内联: session={} interactions={}",
@@ -202,6 +204,28 @@ pub(super) fn truncate_wal(root: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// 取 thread 索引；缺失就先重建一次再读。
+///
+/// 索引是派生缓存，单条补丁写失败只丢缓存；`session_governance` 若因此静默跳过，那些
+/// 被漏写的 thread 永远轮不到治理，且没有任何自愈路径。索引缺失本身极少发生，重建代价
+/// 只在这一次付。
+fn thread_index_or_rebuild(root: &Path) -> Result<Option<ThreadIndexSnapshot>, String> {
+    let store = JsonlThreadEventStore;
+    let snapshot = store
+        .read_thread_index(root)
+        .map_err(|error| format!("读取 thread 索引失败：{error}"))?;
+    if snapshot.is_some() {
+        return Ok(snapshot);
+    }
+    axon_logger::warning("thread 索引缺失，先重建再治理会话");
+    store
+        .rebuild_thread_index(root)
+        .map_err(|error| format!("重建 thread 索引失败：{error}"))?;
+    store
+        .read_thread_index(root)
+        .map_err(|error| format!("读取 thread 索引失败：{error}"))
 }
 
 /// 一条 thread 的全部分片体量与最近写入时刻；没有分片时按 0 计。

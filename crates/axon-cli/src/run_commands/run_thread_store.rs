@@ -446,8 +446,20 @@ pub(super) fn mirror_existing_turn(
             },
         );
     }
-    let sequence =
-        u64::try_from(detail.turns.len()).map_err(|_| "thread turn 数过大".to_owned())?;
+    /*
+     * 下一轮的序号取「当前最大序号 + 1」，不是「轮数」。
+     *
+     * thread 被治理重写之后，文件里只剩快照之后的窗口，序号从中间开始（例如 5..24），
+     * 轮数却是 20；按轮数取号会与保留下来的 `sequence == 20` 那一轮撞号，进而让
+     * `trace:<session>:<sequence>` 的标识、按序号的轮次定位与 affect 序列的先后判定
+     * 全部指向错的轮次。
+     */
+    let sequence = detail
+        .turns
+        .iter()
+        .map(|turn| turn.sequence)
+        .max()
+        .map_or(0, |last| last.saturating_add(1));
     service.append_turn_at_tail(
         root,
         AppendTurnCommand {
@@ -573,41 +585,12 @@ pub(super) fn turn_metadata(token_usage_json: &Option<String>) -> Option<ThreadT
 #[cfg(test)]
 use axon_session::ThreadStatus;
 
+/// 测试夹具独立成文：主文件贴 700 行硬限，夹具不该占正文的行数。
 #[cfg(test)]
-fn thread_detail_from_records(records: &[RunSessionRecord]) -> Result<ThreadDetail, String> {
-    let fallback = records
-        .last()
-        .ok_or_else(|| "SQLite thread turns 不能为空".to_owned())?;
-    let turns = records
-        .iter()
-        .cloned()
-        .enumerate()
-        .map(|(sequence, record)| {
-            u64::try_from(sequence)
-                .map_err(|_| "SQLite thread turn 数过大".to_owned())
-                .and_then(|sequence| turn_from_record(&record, sequence))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(ThreadDetail {
-        thread: Thread {
-            thread_id: fallback.thread_id.clone(),
-            session_root_id: fallback.thread_id.clone(),
-            parent_thread_id: fallback.parent_thread_id.clone(),
-            forked_from_thread_id: None,
-            name: None,
-            status: ThreadStatus::Idle,
-            source: ThreadSource::CliRun,
-            ephemeral: false,
-            settings: settings_from_record(fallback),
-            child_origin: None,
-            created_at_ms: fallback.created_at_ms,
-            updated_at_ms: fallback.created_at_ms,
-            archived_at_ms: None,
-        },
-        turns,
-        compacted_history: None,
-    })
-}
+#[path = "run_thread_store_test_support.rs"]
+mod test_support;
+#[cfg(test)]
+pub(super) use test_support::thread_detail_from_records;
 
 fn settings_from_record(record: &RunSessionRecord) -> ThreadSettings {
     ThreadSettings {

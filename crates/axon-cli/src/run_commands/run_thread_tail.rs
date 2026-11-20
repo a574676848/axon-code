@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use axon_session::{JsonlThreadEventStore, ThreadEvent, ThreadEventRecord};
+use axon_session::{JsonlThreadEventStore, ThreadEvent, ThreadEventRecord, ThreadEventStore as _};
 
 use super::run_session_store::resolved_axon_root;
 use super::run_thread_store::ThreadTurnMetadata;
@@ -58,19 +58,36 @@ impl ThreadTailView {
 }
 
 /// 读取尾部轮次视图；thread 不存在时返回空视图。
+///
+/// 尾部读不到（例如唯一一条记录超过尾部预算、整条落不进预算窗口）时回退整条读：
+/// 这条路径的答案（轮序、反思提示、显式信号）全部是人格与治理的事实，宁可慢一次，
+/// 也不能因为读不到就静默退化成「没有事实」。
 pub(super) fn tail_view(
     config_path: &Path,
     session_id: &str,
 ) -> Result<Option<ThreadTailView>, String> {
     let root = resolved_axon_root(config_path)?;
     let store = JsonlThreadEventStore;
-    let tail = store
-        .read_thread_tail(&root, session_id, TAIL_BUDGET_BYTES)
-        .map_err(|error| format!("读取 thread 尾部失败：{error}"))?;
-    if tail.records.is_empty() {
-        return Ok(None);
+    match store.read_thread_tail(&root, session_id, TAIL_BUDGET_BYTES) {
+        Ok(tail) => {
+            if tail.records.is_empty() {
+                return Ok(None);
+            }
+            Ok(Some(project_tail(&tail.records, tail.complete)))
+        }
+        Err(error) => {
+            axon_logger::warning(&format!(
+                "thread 尾部读取失败，回退整条读: thread={session_id} error={error}"
+            ));
+            let records = store
+                .read_thread(&root, session_id)
+                .map_err(|error| format!("读取 thread 事件失败：{error}"))?;
+            if records.is_empty() {
+                return Ok(None);
+            }
+            Ok(Some(project_tail(&records, true)))
+        }
     }
-    Ok(Some(project_tail(&tail.records, tail.complete)))
 }
 
 fn project_tail(records: &[ThreadEventRecord], complete: bool) -> ThreadTailView {
@@ -149,6 +166,34 @@ fn project_tail(records: &[ThreadEventRecord], complete: bool) -> ThreadTailView
                             None => existing.history_items.push(item.clone()),
                         }
                     }
+                }
+            }
+            ThreadEvent::TurnMetadataPatched {
+                assistant_part_id,
+                notice,
+                affect_sequence,
+            } => {
+                /*
+                 * 治理增量（反思提示与 affect 序列）只由这条事件携带：收口那一轮写下的
+                 * 轮次记录里这两项恒为空。尾部投影若不合并它，任何「当前轮已在尾部」
+                 * 的查询都会得出「没有提示」的结论，而且不会再回退整条读。
+                 */
+                let Some(metadata) = turns
+                    .iter_mut()
+                    .find(|item| {
+                        item.metadata
+                            .as_ref()
+                            .is_some_and(|meta| meta.assistant_part_id == *assistant_part_id)
+                    })
+                    .and_then(|item| item.metadata.as_mut())
+                else {
+                    continue;
+                };
+                if let Some(notice) = notice {
+                    metadata.reflection_notice = Some(notice.clone());
+                }
+                if !affect_sequence.is_empty() {
+                    metadata.affect_sequence = affect_sequence.clone();
                 }
             }
             _ => {}

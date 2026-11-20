@@ -133,7 +133,7 @@ AXON 目前同时维护两份会话正文：
 | 分片 JSONL 存储 | `crates/axon-jsonl/src/store.rs` | 已具备：shard 滚动（默认 8 MiB）、单条 64 MiB 上限、`fs4` 跨进程文件锁 + 进程内 Mutex、崩溃尾行修复 `repair_tail`、`sync_data` 持久化模式、保留期淘汰 `append_retained_line`、容量预算 `append_bounded_line`、原子重写 `rewrite_with` |
 | Thread 事件层 | `crates/axon-session/src/infrastructure/jsonl_store.rs` | 已具备：按 thread 分片、hex/摘要文件名规避 Windows 路径上限（`:70-80`）、反向扫描激活状态（`:52-54`）、容错扫描 |
 | zstd 依赖 | workspace `Cargo.toml:171` | 已有 `zstd = "0.14"`，`axon-cli`、`axon-provider-transport` 已使用 |
-| 归档压缩 | `crates/axon-cli/src/cron_commands/runtime_event_archive.rs` | 已实现 `.jsonl.zst` 分批归档（`ARCHIVE_BATCH_ROWS = 2000`，`ARCHIVE_ZSTD_LEVEL = 3`） |
+| 归档压缩 | `crates/axon-session/src/infrastructure/session_event_body_archive.rs` | 逐交互整文件 zstd（`axon_eventlog::encode_frame`，与事件日志同一档）；旧的按行 `.jsonl.zst` 分批归档已随事件面切换删除 |
 | 文件锁 | workspace `Cargo.toml:157` | 已有 `fs4` |
 
 ## 2. DSH 的设计要素
@@ -328,7 +328,7 @@ SQLite 没有跨库事务，所以拆库不能按业务随意切，只能按**�
 | 事件流 | `session_events`（单会话叙述）+ `jarvis_events`（跨会话审计） | 职责分离：前者进文件，后者进 `control.sqlite3` |
 | 检查点 | `session_checkpoints` 表 + `sessions.last_checkpoint_seq` 列 | 事件 `kind = checkpoint` + 一列水位 |
 | 已读标记 | `jarvis_result_reads` 独立表 | 并入 `goal_results` 两列 |
-| 正文载体 | 内联 `payload_json` + `payload_ref` + `event_payload_store` 分片 + `archive/*.jsonl.zst` | 写入时一套：正文全部内联在 zstd 帧里。长期运行后由 brain cleanup 把旧交互的大载荷正文分级到 `data/archive/session-events/<session>/<interaction>.jsonl`，日志里那一帧换成 `interaction_body_archived` 标记，按交互读取历史帧时按需回源，归档缺失降级为 `archive_missing` 占位 |
+| 正文载体 | 内联 `payload_json` + `payload_ref` + `event_payload_store` 分片 + `archive/*.jsonl.zst` | 写入时一套：正文全部内联在 zstd 帧里。长期运行后由 brain cleanup 把旧交互的大载荷正文分级到 `data/archive/session-events/<session>/<interaction>.jsonl.zst`（单帧 zstd），日志里那一帧换成 `interaction_body_archived` 标记，按交互读取历史帧时按需回源，归档缺失降级为 `archive_missing` 占位 |
 | 正文载体（续） | 归档由「按行归档再删行 + 引用修复」维护 | 归档是整文件粒度：一条交互一个 JSONL，先写临时文件再原子替换，随会话删除整目录回收；分级不改记录条数与序号，`.idx` 按新布局整体重建 |
 
 `SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES = 4 KiB` 保留为**分级阈值**：载荷达到它、且属于内容帧（`wire_event`、工具调用、工具结果、assistant 正文）的旧交互记录才值得搬进归档。写入路径仍然一律内联，因此没有 `payload_ref` 指针、没有逐行归档、也没有悬空指针修复这一套；答案、工具名与逐轮读数留在 `turn_activity` 投影里，索引页不依赖被分级的正文。
@@ -1160,8 +1160,8 @@ axon sessions show <id>                            # 查看单个会话摘要
 | `axon-session/.../runtime_repository.rs:386` | quarantine INSERT |
 | `axon-cli/src/workbench_http_lane_readings.rs:100` | 桌面端每页正文反向扫描 |
 | `axon-cli/src/cron_commands/runtime_cleanup.rs:383、477` | 过期计数与筛选 |
-| `axon-cli/src/cron_commands/runtime_cleanup_session_events.rs:152` | 悬空引用修复扫描 |
-| `axon-cli/src/cron_commands/runtime_event_archive.rs:113、295、321、406、472、495` | 归档、最小序号、`DELETE ... RETURNING`、回写 |
+| `axon-cli/src/cron_commands/runtime_cleanup_families.rs` | 会话族删除：`session_metrics`、`inbox`、`turn_activity`、`thread_turn_facts` 随会话/终态交互一起回收 |
+| `axon-cli/src/cron_commands/runtime_event_archive.rs` | 事件目录保留期与预算淘汰（整目录删除，连同同名正文归档） |
 
 **`jarvis_events`（账本，带幂等唯一索引，不能简单并入事件流）**
 

@@ -23,8 +23,11 @@ use crate::ports::RuntimeStoreError;
 
 /// 被分级事件的正文标记类型：日志里只留这一条轻量标记。
 pub const SESSION_EVENT_BODY_ARCHIVED_TYPE: &str = "interaction_body_archived";
-/// 归档文件后缀（逐行 JSONL）。
-const BODY_ARCHIVE_SUFFIX: &str = ".jsonl";
+/// 归档文件后缀：单帧 zstd 压缩的 JSONL。
+///
+/// 与事件日志本身同一套压缩（level 3、自带校验和）。归档不压缩等于把已经压过的正文
+/// 以明文再存一遍：日志确实变小了，磁盘总量反而变大，"分级回收"就成了账面游戏。
+const BODY_ARCHIVE_SUFFIX: &str = ".jsonl.zst";
 /// 归档临时文件后缀。
 const BODY_ARCHIVE_TMP_SUFFIX: &str = ".tmp";
 /// 流式帧的线上事件类型：它承载对话正文的绝大部分字节。
@@ -93,7 +96,7 @@ pub fn is_body_marker(record: &RuntimeEventRecord) -> bool {
     record.event_type.as_str() == SESSION_EVENT_BODY_ARCHIVED_TYPE
 }
 
-/// 写入一条交互的正文归档，返回写入字节数。
+/// 写入一条交互的正文归档，返回落盘字节数（压缩后）。
 ///
 /// 先写同目录临时文件再原子替换：中途失败时不会留下半份归档被读侧当成完整正文。
 pub fn write_body_archive(
@@ -108,18 +111,20 @@ pub fn write_body_archive(
             RuntimeStoreError::Storage(format!("创建正文归档目录失败：{error}"))
         })?;
     }
-    let mut bytes = Vec::new();
+    let mut plain = Vec::new();
     for record in records {
         let line = record.encode_line().map_err(|error| {
             RuntimeStoreError::Storage(format!("序列化正文归档记录失败：{error}"))
         })?;
-        bytes.extend_from_slice(&line);
-        bytes.push(b'\n');
+        plain.extend_from_slice(&line);
+        plain.push(b'\n');
     }
+    let body = axon_eventlog::encode_frame(&plain)
+        .map_err(|error| RuntimeStoreError::Storage(format!("压缩正文归档失败：{error}")))?;
     let temporary = temporary_path(&path);
     let written = (|| {
         let mut file = std::fs::File::create(&temporary)?;
-        file.write_all(&bytes)?;
+        file.write_all(&body)?;
         file.sync_data()
     })();
     if let Err(error) = written {
@@ -134,7 +139,7 @@ pub fn write_body_archive(
             "替换正文归档失败：{error}"
         )));
     }
-    Ok(u64::try_from(bytes.len()).unwrap_or(u64::MAX))
+    Ok(u64::try_from(body.len()).unwrap_or(u64::MAX))
 }
 
 /// 读回一条交互的正文归档；文件不存在（已被回收）时返回 `None`。
@@ -144,8 +149,8 @@ pub fn read_body_archive(
     interaction_id: &str,
 ) -> Result<Option<Vec<RuntimeEventRecord>>, RuntimeStoreError> {
     let path = body_archive_path(archive_root, session_id, interaction_id);
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
+    let body = match std::fs::read(&path) {
+        Ok(body) => body,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(RuntimeStoreError::Storage(format!(
@@ -153,8 +158,10 @@ pub fn read_body_archive(
             )));
         }
     };
+    let plain = axon_eventlog::decode_frame(&body)
+        .map_err(|error| RuntimeStoreError::Storage(format!("正文归档解压失败：{error}")))?;
     let mut records = Vec::new();
-    for line in bytes.split(|byte| *byte == b'\n') {
+    for line in plain.split(|byte| *byte == b'\n') {
         let line = line.strip_suffix(b"\r").unwrap_or(line);
         if line.iter().all(u8::is_ascii_whitespace) {
             continue;

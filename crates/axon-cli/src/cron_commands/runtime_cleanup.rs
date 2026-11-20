@@ -152,9 +152,11 @@ fn run_runtime_cleanup_with_budget(
     let deadline = Instant::now() + time_budget;
     let mut counts = RuntimeCleanupCounts::default();
     let events_root = runtime_event_archive::events_root(&control_path);
+    let archive_root = runtime_event_archive::event_archive_root(&control_path);
     // 事件按会话目录存放：保留期一到整目录删除，不再按行归档成 .jsonl.zst。
     let removed_dirs = runtime_event_archive::archive_expired_session_dirs(
         &events_root,
+        &archive_root,
         u64::try_from(cutoff_ms).unwrap_or(u64::MAX),
     )?;
     if removed_dirs > 0 {
@@ -203,6 +205,7 @@ fn run_runtime_cleanup_with_budget(
     let protected_dirs = active_event_dir_names(root)?;
     let evicted = runtime_event_archive::enforce_events_disk_budget(
         &events_root,
+        &archive_root,
         runtime_event_archive::high_water_bytes(),
         runtime_event_archive::low_water_bytes(),
         &protected_dirs,

@@ -89,6 +89,9 @@ export function cursorSequence(cursor: string | null): number | null {
 /** 用量快照帧在 wire 契约里的类型名。 */
 const USAGE_WIRE_TYPE = 'usageUpdate';
 
+/// 网关补在历史页末尾的合成终态帧类型：它不是这一轮的 durable 帧。
+const INTERACTION_STATUS_EVENT = 'interaction.status';
+
 /**
  * 用量快照帧的载荷标记。
  *
@@ -237,6 +240,20 @@ export interface TailFirstReadOptions extends ReadFramesOptions {
 }
 
 /**
+ * 尾窗先行的两段句柄。
+ *
+ * `tail` 在尾窗落地（或失败）时结算，调用方据此撤掉过渡面、放出首屏；`full` 在前段补齐
+ * 后结算，用于整轮重投。两段分开是这条读法的要害：把 `full` 也 await 掉，首屏就仍然
+ * 被后台补齐的往返拖住，等于没做尾窗先行。
+ */
+export interface TailFirstRead {
+  /** 尾窗读法；目标已切走或读取失败时为 null。 */
+  tail: Promise<InteractionFrames | null>;
+  /** 补齐后的整轮；无需补齐、目标切走或失败时为 null。 */
+  full: Promise<InteractionFrames | null>;
+}
+
+/**
  * 首屏读法：先交尾窗，再在后台把前段补齐。
  *
  * 为什么这样做：超大轮次有上万帧，从头按页推进要让首屏等若干个串行往返（实测 1.5 至
@@ -247,60 +264,89 @@ export interface TailFirstReadOptions extends ReadFramesOptions {
  * 尾窗不足一页说明这一轮的全部帧都在里面（网关按该轮自己的帧数保尾），此时不再补读，
  * 行为与一次整轮读完全一致。
  */
-export async function readInteractionFramesTailFirst(
+export function readInteractionFramesTailFirst(
   interactionId: string,
   generation: number,
   options: TailFirstReadOptions,
-): Promise<InteractionFrames | null> {
+): TailFirstRead {
   const fetchPage: HistoryPageFetcher = options.fetchPage ?? ipc.conversationHistoryEvents;
   const stale = () => options.generation() !== generation;
   const limit = options.limit ?? HISTORY_PAGE_FRAMES;
   const subscribeId = `interaction:${interactionId}`;
+  let settleTail: (read: InteractionFrames | null) => void = () => {};
+  const tailHandle = new Promise<InteractionFrames | null>((resolve) => {
+    settleTail = resolve;
+  });
 
-  const tail = await fetchPage(interactionId, 0, limit, true);
-  if (stale()) return null;
-  const tailRead: InteractionFrames = {
-    frames: compactUsageSnapshots(tail.events.map((frame) => streamFrame(subscribeId, frame))),
-    cursor: tail.tailCursor,
-    settled: tail.events.some((frame) => isTerminal(frame.eventType)),
-    truncated: false,
-  };
-  options.onTail(tailRead);
-
-  // 尾窗没被填满：这一轮的所有帧都已经在这里，不必再补前段。
-  if (tail.events.length < limit) return tailRead;
-  const firstSequence = cursorSequence(tail.events[0]?.cursor ?? null);
-  if (firstSequence === null) return tailRead;
-
-  const budget = replayPageBudget(firstSequence, limit);
-  let head: ipc.HistoryFrame[] = [];
-  let current = await fetchPage(interactionId, 0, limit, false);
-  if (stale()) return null;
-  let pages = 0;
-  let complete = false;
-  for (;;) {
-    pages += 1;
-    head = head.concat(current.events);
-    // 已读到尾窗起点：前段与尾窗首尾相接，整轮齐了。
-    if (current.nextAfter >= firstSequence) {
-      complete = true;
-      break;
+  const full = (async (): Promise<InteractionFrames | null> => {
+    const tail = await fetchPage(interactionId, 0, limit, true);
+    if (stale()) {
+      settleTail(null);
+      return null;
     }
-    if (!current.hasMore || pages >= budget) break;
-    current = await fetchPage(interactionId, current.nextAfter, limit, false);
-    if (stale()) return null;
-  }
+    const tailRead: InteractionFrames = {
+      frames: compactUsageSnapshots(tail.events.map((frame) => streamFrame(subscribeId, frame))),
+      cursor: tail.tailCursor,
+      settled: tail.events.some((frame) => isTerminal(frame.eventType)),
+      truncated: skippedArchived(tail) > 0,
+    };
+    options.onTail(tailRead);
+    settleTail(tailRead);
 
-  const merged = mergeWithoutOverlap(head, tail.events);
-  const streamed = compactUsageSnapshots(
-    merged.map((frame) => streamFrame(subscribeId, frame)),
-  );
-  return {
-    frames: streamed,
-    cursor: tail.tailCursor,
-    settled: streamed.some(isTerminalStreamEvent),
-    truncated: !complete,
-  };
+    /*
+     * 尾窗没被填满：这一轮的所有帧都已经在这里，不必再补前段。
+     *
+     * 计数时剔除网关补在末尾的合成终态帧：它不是这一轮的 durable 帧，算进去会让
+     * 「真实帧数恰好等于 limit-1」的完整轮次被误判成「还有前段」。
+     */
+    const durableCount = tail.events.filter(
+      (frame) => frame.eventType !== INTERACTION_STATUS_EVENT,
+    ).length;
+    if (durableCount < limit) return tailRead;
+    const firstSequence = cursorSequence(tail.events[0]?.cursor ?? null);
+    if (firstSequence === null) return tailRead;
+
+    const budget = replayPageBudget(firstSequence, limit);
+    let head: ipc.HistoryFrame[] = [];
+    let current = await fetchPage(interactionId, 0, limit, false);
+    if (stale()) return null;
+    let pages = 0;
+    let complete = false;
+    let skipped = skippedArchived(tail);
+    for (;;) {
+      pages += 1;
+      head = head.concat(current.events);
+      skipped += skippedArchived(current);
+      // 已读到尾窗起点：前段与尾窗首尾相接，整轮齐了。
+      if (current.nextAfter >= firstSequence) {
+        complete = true;
+        break;
+      }
+      if (!current.hasMore || pages >= budget) break;
+      current = await fetchPage(interactionId, current.nextAfter, limit, false);
+      if (stale()) return null;
+    }
+
+    const merged = mergeWithoutOverlap(head, tail.events);
+    const streamed = compactUsageSnapshots(
+      merged.map((frame) => streamFrame(subscribeId, frame)),
+    );
+    return {
+      frames: streamed,
+      cursor: tail.tailCursor,
+      settled: streamed.some(isTerminalStreamEvent),
+      // 归档回收同样算「这一段没读到」：界面要如实说明，而不是让这一轮看起来没跑过过程。
+      truncated: !complete || skipped > 0,
+    };
+  })();
+  // 尾窗第一段永远要结算：`full` 抛错时也要把首屏从「正在加载」里放出来。
+  void full.catch(() => settleTail(null));
+  return { tail: tailHandle, full };
+}
+
+/** 一页里因正文归档已回收被跳过的帧数；老网关没有该字段时为 0。 */
+function skippedArchived(page: ipc.HistoryPage): number {
+  return page.skippedArchivedFrames ?? 0;
 }
 
 /**
@@ -329,7 +375,7 @@ export async function readInteractionFrames(
       frames,
       cursor: tail.tailCursor,
       settled: frames.some(isTerminalStreamEvent),
-      truncated: tail.hasMore,
+      truncated: tail.hasMore || skippedArchived(tail) > 0,
     };
   }
 
@@ -343,7 +389,7 @@ export async function readInteractionFrames(
       frames,
       cursor: head.tailCursor,
       settled: frames.some(isTerminalStreamEvent),
-      truncated: head.hasMore,
+      truncated: head.hasMore || skippedArchived(head) > 0,
     };
   }
 
@@ -351,7 +397,7 @@ export async function readInteractionFrames(
   if (stale()) return null;
   let frames = [...page.events];
   let cursor = page.tailCursor;
-  let truncated = false;
+  let truncated = skippedArchived(page) > 0;
   if (page.hasMore) {
     /*
      * 按页顺序补齐，到上限即停：到那时还没有读完，就再取一次尾窗，把「开头 + 已经读过
@@ -365,6 +411,7 @@ export async function readInteractionFrames(
       current = await fetchPage(interactionId, current.nextAfter, limit, false);
       if (stale()) return null;
       frames = frames.concat(current.events);
+      truncated = truncated || skippedArchived(current) > 0;
       pages += 1;
     }
     cursor = current.tailCursor;

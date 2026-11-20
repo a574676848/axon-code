@@ -77,6 +77,8 @@ pub(crate) struct SessionCleanupReport {
     pub(crate) deleted_attachment_file_count: usize,
     /// 被重写为「会话头 + 压缩快照 + 最近窗口」的 thread 数。
     pub(crate) rewritten_thread_count: usize,
+    /// 窗口重写移出 thread 文件的轮次数。
+    pub(crate) dropped_turn_count: usize,
     /// 被换成归档标记的事件正文帧数。
     pub(crate) tiered_event_body_frame_count: usize,
     /// 本轮回收的字节数（事件日志正文分级部分）；dry-run 为预计值。
@@ -141,11 +143,13 @@ fn run_cleanup_dry_run(
 
 /// 只算账的长会话治理：报告与执行态同口径，但一字节都不写。
 fn dry_run_governance(root: &Path) -> Result<GovernanceCounts, String> {
-    let budget = GovernanceBudget::new(true);
-    let (rewritten_threads, _dropped) = govern_thread_windows(root, true, &budget)?;
-    let (frames, reclaimed) = tier_event_bodies(root, true, &budget)?;
+    // 两阶段各自一份预算：共用一份时前一阶段会把时间吃光，后一阶段永远轮不到。
+    let (rewritten_threads, dropped) =
+        govern_thread_windows(root, true, &GovernanceBudget::new(true))?;
+    let (frames, reclaimed) = tier_event_bodies(root, true, &GovernanceBudget::new(true))?;
     Ok(GovernanceCounts {
         rewritten_threads,
+        dropped_turn_count: dropped,
         tiered_event_body_frames: frames,
         reclaimed_bytes: reclaimed,
     })
@@ -155,6 +159,7 @@ fn dry_run_governance(root: &Path) -> Result<GovernanceCounts, String> {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct GovernanceCounts {
     rewritten_threads: usize,
+    dropped_turn_count: usize,
     tiered_event_body_frames: usize,
     reclaimed_bytes: u64,
 }
@@ -163,6 +168,9 @@ fn apply_governance_counts(report: &mut SessionCleanupReport, counts: Governance
     report.rewritten_thread_count = report
         .rewritten_thread_count
         .saturating_add(counts.rewritten_threads);
+    report.dropped_turn_count = report
+        .dropped_turn_count
+        .saturating_add(counts.dropped_turn_count);
     report.tiered_event_body_frame_count = report
         .tiered_event_body_frame_count
         .saturating_add(counts.tiered_event_body_frames);
@@ -188,13 +196,14 @@ fn run_cleanup_deletion(
     apply_file_cleanup_counts(&mut report, cleanup_runtime_files(root, file_cutoff_ms())?);
     cleanup_session_family_data(root, cutoff_ms, stale_sessions, &mut report)?;
     // 治理排在会话族删除之后：过期会话已被整族回收，剩下的都是活着但过长的会话。
-    let budget = GovernanceBudget::new(false);
-    let (rewritten_threads, _dropped) = govern_thread_windows(root, false, &budget)?;
-    let (frames, reclaimed) = tier_event_bodies(root, false, &budget)?;
+    let (rewritten_threads, dropped) =
+        govern_thread_windows(root, false, &GovernanceBudget::new(false))?;
+    let (frames, reclaimed) = tier_event_bodies(root, false, &GovernanceBudget::new(false))?;
     apply_governance_counts(
         &mut report,
         GovernanceCounts {
             rewritten_threads,
+            dropped_turn_count: dropped,
             tiered_event_body_frames: frames,
             reclaimed_bytes: reclaimed,
         },

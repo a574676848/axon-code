@@ -291,10 +291,20 @@ pub(super) fn delete_session_families_by_ids(
     }
     // 派生投影与入站事实同样属于会话族：留着就是指向已删会话的孤儿行，
     // 既算进积压统计，也会让「已收到」的派生状态永远不收敛。
-    // 这两张表不在报告分项里，只删不计数（dry-run 口径与真实删除保持一致）。
-    for table in ["session_metrics", "inbox"] {
+    // 这三张表不在报告分项里，只删不计数（dry-run 口径与真实删除保持一致）。
+    //
+    // `turn_activity` 与 `thread_turn_facts` 是 B1/B2 两张投影表：它们按会话/线程累积
+    // 全部轮次的事实，本身没有保留期判定，只能跟着会话族一起删，否则会单调增长。
+    for table in ["session_metrics", "inbox", "turn_activity"] {
         delete_ids_in(&transaction, table, "session_id", &placeholders, ids)?;
     }
+    delete_ids_in(
+        &transaction,
+        "thread_turn_facts",
+        "thread_id",
+        &placeholders,
+        ids,
+    )?;
     // 恢复指针指向已删会话时一并清掉：指针只是「下次接续谁」的缓存，不构成事实。
     transaction
         .execute(
@@ -384,6 +394,14 @@ pub(super) fn delete_terminal_interactions(
             transaction,
             "work_item_history",
             "inbox_id",
+            &placeholders,
+            ids,
+        )?;
+        // 逐轮事实随终态入站事实一起回收：它按 interaction 累积，入站事实没了就是孤儿。
+        delete_ids_in(
+            transaction,
+            "turn_activity",
+            "interaction_id",
             &placeholders,
             ids,
         )?;
