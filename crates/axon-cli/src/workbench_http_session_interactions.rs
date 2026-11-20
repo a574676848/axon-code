@@ -172,7 +172,9 @@ fn build_page(
                         output_tokens: reading.output_tokens,
                         reasoning_tokens: reading.reasoning_tokens,
                     }),
-                elapsed_ms: reading.and_then(|reading| reading.active_ms),
+                elapsed_ms: reading
+                    .filter(|reading| !reading.has_facts())
+                    .and_then(|reading| reading.active_ms),
                 interaction_id,
                 status: serde_json::to_value(record.status)
                     .ok()

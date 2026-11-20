@@ -25,10 +25,10 @@ import type { ConversationStreamEvent } from './wire';
 /**
  * 一次读的帧数。
  *
- * 桌面端单次历史帧页的上限是 1000（`MAX_EVENT_PAGE`），请求更大的值也会被截到同一条
- * 线上，所以这里直接按上限取。
+ * 与网关 `?limit` 的上限同值（2000）：取小值等于把尾窗砍半，长轮次会更早进入「尾窗 +
+ * 补前段」的路径，更容易撞上页数上限并打出「过程不完整」。
  */
-export const HISTORY_PAGE_FRAMES = 1_000;
+export const HISTORY_PAGE_FRAMES = 2_000;
 
 /**
  * 单轮最多读多少页。

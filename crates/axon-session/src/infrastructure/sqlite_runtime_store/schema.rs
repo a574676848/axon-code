@@ -34,7 +34,8 @@ impl SchemaKind {
             // 13：新增 turn_activity 逐轮事实投影（索引页不再扫事件日志）。
             // 14：删掉无人使用的 turn_activity_latest 索引；thread_turn_facts 增 turn_sequence。
             Self::Control => 14,
-            Self::Outbox => 1,
+            // 2：三张保留期表各增一个以 expires_at_ms 前导的清理索引，清批不再整索引扫描。
+            Self::Outbox => 2,
         }
     }
 
@@ -609,8 +610,7 @@ const OUTBOX_DDL: &str = "
             ON notification_deliveries(channel, state, updated_at_ms ASC, notification_id ASC);
         CREATE INDEX IF NOT EXISTS notification_deliveries_target_inbox
             ON notification_deliveries(channel, destination, state, updated_at_ms ASC, notification_id ASC);
-        CREATE INDEX IF NOT EXISTS notification_deliveries_retention
-            ON notification_deliveries(state, updated_at_ms ASC, notification_id ASC);
+        CREATE INDEX IF NOT EXISTS notification_deliveries_retention ON notification_deliveries(state, updated_at_ms ASC, notification_id ASC);
         CREATE TABLE IF NOT EXISTS agent_messages (
             message_id TEXT PRIMARY KEY NOT NULL,
             idempotency_key TEXT NOT NULL,
@@ -636,8 +636,8 @@ const OUTBOX_DDL: &str = "
             ON agent_messages(owner_id, recipient, state, created_at_ms, message_id);
         CREATE INDEX IF NOT EXISTS agent_messages_retry
             ON agent_messages(state, retry_at_ms, message_id);
-        CREATE INDEX IF NOT EXISTS agent_messages_retention
-            ON agent_messages(state, expires_at_ms, message_id);
+        CREATE INDEX IF NOT EXISTS agent_messages_retention ON agent_messages(state, expires_at_ms, message_id);
+        CREATE INDEX IF NOT EXISTS agent_messages_cleanup ON agent_messages(expires_at_ms, message_id);
         CREATE TABLE IF NOT EXISTS continuations (
             continuation_id TEXT PRIMARY KEY NOT NULL,
             idempotency_key TEXT NOT NULL,
@@ -670,8 +670,8 @@ const OUTBOX_DDL: &str = "
             ON continuations(owner_id, state, created_at_ms, continuation_id);
         CREATE INDEX IF NOT EXISTS continuations_child
             ON continuations(child_session_id, created_at_ms DESC, continuation_id);
-        CREATE INDEX IF NOT EXISTS continuations_retention
-            ON continuations(state, expires_at_ms, continuation_id);
+        CREATE INDEX IF NOT EXISTS continuations_retention ON continuations(state, expires_at_ms, continuation_id);
+        CREATE INDEX IF NOT EXISTS continuations_cleanup ON continuations(expires_at_ms, continuation_id);
         CREATE TABLE IF NOT EXISTS user_questions (
             question_id TEXT PRIMARY KEY NOT NULL,
             idempotency_key TEXT NOT NULL,
@@ -695,6 +695,6 @@ const OUTBOX_DDL: &str = "
             ON user_questions(idempotency_key);
         CREATE INDEX IF NOT EXISTS user_questions_session_state
             ON user_questions(session_id, state, created_at_ms DESC);
-        CREATE INDEX IF NOT EXISTS user_questions_reconcile
-            ON user_questions(state, delivered, expires_at_ms);
+        CREATE INDEX IF NOT EXISTS user_questions_reconcile ON user_questions(state, delivered, expires_at_ms);
+        CREATE INDEX IF NOT EXISTS user_questions_cleanup ON user_questions(expires_at_ms, question_id);
 ";

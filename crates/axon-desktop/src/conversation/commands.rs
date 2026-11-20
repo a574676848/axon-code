@@ -97,13 +97,14 @@ pub fn conversation_history_events(
 /// 返回的每一条都已经完成字段适配（`state` 翻译成界面状态、作答内容取 `answer`、
 /// 缺失的 partId 按 callId 派生），前端直接消费即可，不必自己解释网关协议。
 /// 失败时返回原因且不产生任何本地副作用：调用方保留本地事实。
+///
+/// 不带状态过滤：对账必须看到全部状态，只查其一会把另一种误判成已结算。
 #[tauri::command(async)]
 pub fn conversation_session_questions(
     session_id: String,
-    state: Option<String>,
     limit: Option<u32>,
 ) -> Result<Vec<QuestionSnapshot>, String> {
-    question_sync::session_questions(&session_id, state.as_deref(), limit)
+    question_sync::session_questions(&session_id, limit)
 }
 
 /// Tauri IPC 命令：中断某条车道上正在运行的主 turn。
@@ -223,8 +224,8 @@ pub fn conversation_watch_turns(
 
 /// Tauri IPC 命令：取消一条订阅。
 ///
-/// 必须按**订阅标识**精确取消：一条连接上并存多路订阅，整体关闭会把仍在服务的
-/// 那一路一起掐掉（子代理视图与车道视图正是这种并存关系）。
+/// 必须按**订阅标识**精确取消：每个订阅目标各持一条连接，按标识退订才不会误伤同视图
+/// 的其他目标（子代理视图与车道视图正是这种并存关系）。
 #[tauri::command(async)]
 pub fn conversation_unsubscribe(
     state: State<'_, AppState>,

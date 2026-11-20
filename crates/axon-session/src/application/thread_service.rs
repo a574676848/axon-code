@@ -101,6 +101,23 @@ where
         self.project_thread(root, thread_id)
     }
 
+    /// 读取 thread；这条 thread 还不存在时给 `Ok(None)`。
+    ///
+    /// 「不存在」与「读不出来」必须分开：解析失败、IO 错误都是后者。收口镜像据此决定
+    /// 「新建 thread」还是向上报错，把后者当成前者会追加一条新的 `ThreadStarted`，投影
+    /// 随即整条重置，模型可见历史无声清零。
+    pub fn read_thread_optional(
+        &self,
+        root: &Path,
+        thread_id: &str,
+    ) -> Result<Option<ThreadDetail>, String> {
+        let events = self.store.read_thread(root, thread_id)?;
+        if events.is_empty() {
+            return Ok(None);
+        }
+        project_thread_records(&events, thread_id).map(Some)
+    }
+
     /// 读取启动链路使用的轻量激活状态。
     pub fn read_thread_activation(
         &self,

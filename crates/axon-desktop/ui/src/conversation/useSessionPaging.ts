@@ -28,7 +28,7 @@ import {
   type HistoryFacts,
 } from './historyProjection';
 import { readInteractionFrames, readInteractionFramesTailFirst } from './interactionReplay';
-import { newestReceivedAtMs, turnsNewerThanFloor } from './pagingBounds';
+import { newestReceivedAtMs, newestExpandable, isAuditTurn, turnsNewerThanFloor } from './pagingBounds';
 import { provisionalFrames, withOpeningInput, type HistoryEntry } from './pagingSkeleton';
 import {
   INITIAL_CONVERSATION,
@@ -345,38 +345,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
     [dispatch, projectTurn],
   );
 
-/**
- * 审计轮：派发渠道写入、已收口、但没有模型正文。
- *
- * 目标工具每改一次目标就在目标会话里留一条记录（「目标已启动：…」）。它不是对话：
- * 没有提问者，也没有回答，把它画成一条用户气泡再接一段空白，读起来就是「说了话没人
- * 答」。这类记录只属于目标看板的活动时间线，正文转录不渲染它。
- */
-function isAuditTurn(entry: HistoryEntry): boolean {
-  return (
-    entry.channel === 'agent' &&
-    entry.status === 'understood' &&
-    (entry.answerText ?? '').trim() === ''
-  );
-}
-
-/**
- * 打开会话时要展开的那一轮：优先最近一条「有正文或在跑」的轮次。
- *
- * 目标与会话里还有一类已收口但没有正文的轮次（Goal 工具更新、派发记录），它们只有
- * 一句系统说明，没有过程可供展开；把最新一格让给它们，正文区会读成「这一轮什么都没
- * 发生」，顶部的上下文与首字读数也跟着整组消失。
- */
-function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null {
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const entry = entries[index];
-    if (entry === undefined || isAuditTurn(entry)) continue;
-    if ((entry.answerText ?? '').trim() !== '' || entry.status !== 'understood') {
-      return entry;
-    }
-  }
-  return null;
-}  /**
+  /**
    * 打开一条车道：索引立起三形态，再升级最新一轮为展开形态。
    *
    * 首屏在索引返回时就交出，不等历史帧；最新一轮的回放随后替换该轮单元。每轮的分割线
@@ -388,6 +357,10 @@ function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null
       setSessionBaseline(null);
       // 能力事实同理：上一条会话的可写性不能沿用，否则切会话会短暂放出错误的写入口。
       onSessionFacts?.(null);
+      // 翻页游标同样属于上一条会话：失败路径不会再走到下面的成功分支，残留的旧游标会被
+      // 下一次「加载更早」拿去查新会话，取回该时刻之前的一条前置进正文即形成缺轮。
+      olderCursorRef.current = null;
+      setHasOlder(false);
       const generation = generationRef.current;
       setPageLoading(true);
       try {
@@ -448,6 +421,18 @@ function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null
             if (!tailShown) settleUnread(newest);
             onError(error instanceof Error ? error.message : '读取最新一轮失败');
           });
+      } catch (error: unknown) {
+        /*
+         * 打开失败必须把投影清空：否则上一条会话的正文会以新会话的身份继续渲染，而唯一的
+         * 提示只是输入坞里一条到点自动退场的回执。这里只做复位与上报，重试入口由调用方给。
+         */
+        if (generation === generationRef.current) {
+          factsRef.current = new Map();
+          readingsRef.current = new Map();
+          newestReceivedAtRef.current = null;
+          dispatch({ type: 'reset' });
+        }
+        throw error;
       } finally {
         setPageLoading(false);
       }
@@ -540,42 +525,60 @@ function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null
       if (fresh.length === 0) return;
       dispatch({ type: 'append-turns', turns: withProvisional(fresh) });
       const newest = fresh[fresh.length - 1];
-      // 这一轮的帧读不到（例如刚被清理）不该把整条会话变成错误：骨架已经立起来，
-      // 正文缺过程只是少了一段，下一次轮次头会再补。
-      const reading = readInteractionFramesTailFirst(newest.interactionId, generation, {
-        generation: () => generationRef.current,
-        onTail: () => undefined,
-      });
-      const tail = await reading.tail;
-      let tailShown = false;
-      if (tail !== null && generation === generationRef.current) {
-        tailShown = true;
-        const projected = projectTurn(
-          newest,
-          withOpeningInput(newest, tail),
-          tail.truncated,
-          tail.settled,
-        );
-        dispatch({ type: 'replace-turn', turn: projected.turn, jobs: projected.jobs });
-      }
-      void reading.full
-        .then((full) => {
-          if (full === null || generation !== generationRef.current) return;
+      /*
+       * 一条新轮接管：先要尾窗，再在后台补整轮。
+       *
+       * 这一轮的帧读不到（例如刚被清理）不该把整条会话变成错误：骨架已经立起来，正文缺
+       * 过程只是少了一段，下一次轮次头会再补。
+       */
+      const takeOver = async (entry: HistoryEntry, expand: boolean): Promise<void> => {
+        const reading = readInteractionFramesTailFirst(entry.interactionId, generation, {
+          generation: () => generationRef.current,
+          onTail: () => undefined,
+        });
+        const tail = await reading.tail;
+        let tailShown = false;
+        if (tail !== null && generation === generationRef.current) {
+          tailShown = true;
           const projected = projectTurn(
-            newest,
-            withOpeningInput(newest, full),
-            full.truncated,
-            full.settled,
+            entry,
+            withOpeningInput(entry, tail),
+            tail.truncated,
+            tail.settled,
           );
           dispatch({ type: 'replace-turn', turn: projected.turn, jobs: projected.jobs });
-          if (!full.settled) void subscribeTail(newest.interactionId, full.cursor);
-        })
-        .catch(() => {
-          // 读不到帧就把骨架收口：骨架是按「还在跑」立起来的，此刻却没有任何证据支持
-          // 这一轮仍在推进（帧没读到，实时尾也订不上）。让转圈永远转下去比少一段过程
-          // 更误导；尾窗已经出屏时不退回，正文已经有内容。
-          if (generation === generationRef.current && !tailShown) settleUnread(newest);
-        });
+          // 只有最新一条走「整轮展开」，其余新轮拿到尾窗就够；但它们仍在跑时必须各订一条
+          // 实时尾，否则会永久停在骨架的 streaming 态。
+          if (!expand && !tail.settled) void subscribeTail(entry.interactionId, tail.cursor);
+        }
+        if (!expand) return;
+        void reading.full
+          .then((full) => {
+            if (full === null || generation !== generationRef.current) return;
+            const projected = projectTurn(
+              entry,
+              withOpeningInput(entry, full),
+              full.truncated,
+              full.settled,
+            );
+            dispatch({ type: 'replace-turn', turn: projected.turn, jobs: projected.jobs });
+            if (!full.settled) void subscribeTail(entry.interactionId, full.cursor);
+          })
+          .catch(() => {
+            // 读不到帧就把骨架收口：骨架是按「还在跑」立起来的，此刻却没有任何证据支持
+            // 这一轮仍在推进（帧没读到，实时尾也订不上）。让转圈永远转下去比少一段过程
+            // 更误导；尾窗已经出屏时不退回，正文已经有内容。
+            if (generation === generationRef.current && !tailShown) settleUnread(entry);
+          });
+      };
+      /*
+       * 每一条新轮都要接管，而不是只给最后一条读帧：前面仍在跑的那几条会永久停在骨架的
+       * streaming 态（轮次头再触发也会被「已认识」去重过滤），工作状态行恒转，用户随后的
+       * 每条消息都会被当成 steer 排进一个永不收口的轮次。
+       */
+      const running = fresh.filter((entry) => entry.status !== 'understood');
+      const targets = running.includes(newest) ? running : [...running, newest];
+      await Promise.all(targets.map((entry) => takeOver(entry, entry === newest)));
     } catch (error: unknown) {
       onError(error instanceof Error ? error.message : '读取新轮次失败');
     }

@@ -118,7 +118,6 @@ pub fn workspaces_payload(axon_root: &Path) -> Result<serde_json::Value, String>
     Ok(serde_json::json!({
         "workspaces": workspaces,
         "totalRecords": workspaces.len(),
-        "rawPayloadPersisted": false,
     }))
 }
 
@@ -144,7 +143,6 @@ pub fn sessions_payload(
     Ok(serde_json::json!({
         "sessions": sessions,
         "totalRecords": sessions.len(),
-        "rawPayloadPersisted": false,
     }))
 }
 

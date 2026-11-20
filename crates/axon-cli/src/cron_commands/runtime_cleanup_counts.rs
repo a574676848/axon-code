@@ -12,9 +12,11 @@ use super::runtime_cleanup::{
     quoted_list, task_expiry_filter,
 };
 use super::runtime_cleanup_families::{
-    expired_agent_messages_filter, expired_client_presence_filter, expired_continuations_filter,
-    expired_user_questions_filter, settled_completion_deliveries_filter,
-    settled_completion_notifications_filter,
+    expired_client_presence_filter,
+    retention::{
+        expired_agent_messages_filter, expired_continuations_filter, expired_user_questions_filter,
+    },
+    settled_completion_deliveries_filter, settled_completion_notifications_filter,
 };
 
 /// 统计即将被清理的行数，不产生任何写入。
@@ -37,6 +39,16 @@ pub(super) fn count_expired_rows(
             ),
             cutoff_ms,
         )?;
+        // 派发轮没有工作项，终态直接落在入站行上：dry-run 必须与删除路径口径一致。
+        counts.interactions = counts.interactions.saturating_add(count_rows(
+            connection,
+            &format!(
+                "SELECT COUNT(*) FROM inbox
+                 WHERE terminal_kind IN ({terminal}) AND received_at_ms < ?1",
+                terminal = quoted_list(&INTERACTION_TERMINAL_KINDS),
+            ),
+            cutoff_ms,
+        )?);
         counts.goals = count_rows(
             connection,
             &format!("SELECT COUNT(*) {task_filter}"),

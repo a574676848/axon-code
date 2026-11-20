@@ -248,6 +248,16 @@ impl ShardedJsonlStore {
         })
     }
 
+    /// 在锁内截断撕裂的尾行。
+    ///
+    /// 读路径也要它：尾行撕裂（崩溃或断电留下半行）会让整条 JSONL 解析失败，而写路径
+    /// 分配序号前必须先读，于是「修不了也写不进」。这里只做一次受锁截断，由调用方重读。
+    pub fn repair_torn_tail(&self, logical_path: impl AsRef<Path>) -> io::Result<()> {
+        self.with_lock(logical_path, |store, logical_path| {
+            store.repair_tail(logical_path)
+        })
+    }
+
     fn append_target(&self, logical_path: &Path, line_bytes: usize) -> io::Result<PathBuf> {
         let line_bytes = u64::try_from(line_bytes)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "JSONL 行长度无效"))?;

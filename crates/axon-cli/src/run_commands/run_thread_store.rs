@@ -171,10 +171,8 @@ pub(super) fn tool_receipt_mirror(
 /// 将一次完成的 run 写入统一 Thread 事件流。
 ///
 /// 采样覆盖整次收口（读整份 thread + 增量落盘）：这是每轮固定发生的 O(语料) 成本，
-/// 长会话是否越用越慢就看这条曲线。
-///
-/// 返回本轮在 thread 里的轮序：它由收口路径算出，随侧车一起落地，读侧因此不必再为了
-/// 一个标量去读尾窗。
+/// 长会话是否越用越慢就看这条曲线。返回本轮在 thread 里的轮序：它由收口路径算出，
+/// 随侧车一起落地，读侧因此不必再为了一个标量去读尾窗。
 pub(super) fn mirror_session_to_thread(
     config_path: &Path,
     record: &RunSessionRecord,
@@ -205,11 +203,13 @@ fn mirror_session_to_thread_inner(
     let root = resolved_axon_root(config_path)?;
     let service = ThreadService::new(JsonlThreadEventStore);
     let turn = turn_from_record(record, 0)?;
-    match service.read_thread(&root, &record.thread_id) {
-        Ok(detail) => {
+    // 「不存在」与「读不出来」必须分开：尾行撕裂、分片被重写临时挪走、文件被占用都是
+    // 后者。把后者当成前者会追加新的 `ThreadStarted`，投影随即重置、历史无声清零。
+    match service.read_thread_optional(&root, &record.thread_id) {
+        Ok(Some(detail)) => {
             mirror_existing_turn(&service, &root, &record.thread_id, &detail, turn, record)
         }
-        Err(_) if turn.status == TurnStatus::Active => {
+        Ok(None) if turn.status == TurnStatus::Active => {
             service.start_empty_thread(
                 &root,
                 StartEmptyThreadCommand {
@@ -234,7 +234,7 @@ fn mirror_session_to_thread_inner(
                 )
                 .map(|()| None)
         }
-        Err(_) => service
+        Ok(None) => service
             .start_thread(
                 &root,
                 StartThreadCommand {
@@ -250,6 +250,8 @@ fn mirror_session_to_thread_inner(
                 },
             )
             .map(|()| None),
+        // 读不出来不是「不存在」：向上报，由调用方重试，绝不重置已有历史。
+        Err(error) => Err(error),
     }
 }
 

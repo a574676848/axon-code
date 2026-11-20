@@ -182,6 +182,13 @@ impl JsonlThreadEventStore {
         Ok(files)
     }
 
+    /// 受锁截断撕裂的尾行；调用方随后重读一次。
+    pub(crate) fn repair_torn_tail(root: &Path, thread_id: &str) -> Result<(), String> {
+        SHARD_STORE
+            .repair_torn_tail(Self::thread_logical_path(root, thread_id))
+            .map_err(|_| "无法修复 thread 撕裂尾行".to_owned())
+    }
+
     fn read_file(path: &Path) -> Result<Vec<ThreadEventRecord>, String> {
         if !path.exists() {
             return Ok(Vec::new());
@@ -322,6 +329,26 @@ impl ThreadEventStore for JsonlThreadEventStore {
     }
 
     fn read_thread_activation(
+        &self,
+        root: &Path,
+        thread_id: &str,
+    ) -> Result<ThreadActivationSnapshot, String> {
+        // 尾行撕裂时先受锁截断再重扫一次：激活快照是「能不能继续这一轮」的唯一判据，
+        // 读失败会让会话既不能恢复也不能继续。
+        match self.scan_thread_activation(root, thread_id) {
+            Ok(snapshot) => Ok(snapshot),
+            Err(error) => {
+                Self::repair_torn_tail(root, thread_id)?;
+                self.scan_thread_activation(root, thread_id)
+                    .map_err(|_| error)
+            }
+        }
+    }
+}
+
+impl JsonlThreadEventStore {
+    /// 激活快照的一次扫描：不修复，撕裂尾行由调用方截断后重试。
+    fn scan_thread_activation(
         &self,
         root: &Path,
         thread_id: &str,

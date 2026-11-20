@@ -147,17 +147,10 @@ const PLAN_STEP_LIMIT: usize = 64;
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct SessionPlanSnapshot {
-    /// transcript part ID，计划单元的稳定身份。
-    pub part_id: String,
     /// 计划标题。
     pub title: String,
     /// 步骤明细，已按上限截断。
     pub steps: Vec<SessionPlanStep>,
-    /// 发出这次更新的那一轮；会话级帧没有归属时为空。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub interaction_id: Option<String>,
-    /// 这次更新的时刻（Unix 毫秒）。
-    pub updated_at_ms: u64,
 }
 
 /// 计划快照里的一步。
@@ -302,11 +295,7 @@ pub(super) fn page_facts(
                      * 取到即止。热路径只做一次 `kind.type` 比较，非计划帧不反序列化、不分配。
                      */
                     if facts.plan.is_none()
-                        && let Some(plan) = plan_snapshot(
-                            &record.payload,
-                            record.interaction_id.as_deref(),
-                            record.emitted_at_ms,
-                        )
+                        && let Some(plan) = plan_snapshot(&record.payload)
                     {
                         facts.plan = Some(plan);
                     }
@@ -353,11 +342,7 @@ pub(super) fn page_facts(
 ///
 /// 热路径：先做一次 `kind.type` 字符串比较，命中才反序列化。载荷按协议类型解析
 /// （`WirePlanUpdate`），网关不再另抄一份字段名，协议改名时编译期就会报出来。
-fn plan_snapshot(
-    payload: &serde_json::Value,
-    interaction_id: Option<&str>,
-    emitted_at_ms: u64,
-) -> Option<SessionPlanSnapshot> {
+fn plan_snapshot(payload: &serde_json::Value) -> Option<SessionPlanSnapshot> {
     let kind = payload.get("kind")?;
     if kind.get("type").and_then(serde_json::Value::as_str) != Some("planUpdate") {
         return None;
@@ -375,11 +360,8 @@ fn plan_snapshot(
         })
         .collect();
     Some(SessionPlanSnapshot {
-        part_id: plan.part_id,
         title: plan.title,
         steps,
-        interaction_id: interaction_id.map(str::to_owned),
-        updated_at_ms: emitted_at_ms,
     })
 }
 

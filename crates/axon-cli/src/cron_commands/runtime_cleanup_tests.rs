@@ -3,8 +3,13 @@ use axon_session::{NotificationDeliveryState, RuntimeStore};
 use crate::cron_commands::runtime_cleanup_families::{
     expired_daemon_instances_selection_sql, expired_decisions_selection_sql,
     expired_events_selection_sql, expired_upgrade_admissions_selection_sql,
+    retention::{
+        expired_agent_messages_selection_sql, expired_continuations_selection_sql,
+        expired_user_questions_selection_sql,
+    },
     settled_completion_deliveries_selection_sql_for_state,
-    settled_completion_notifications_selection_sql_for_state, terminal_goals_selection_sql,
+    settled_completion_notifications_selection_sql_for_state,
+    terminal_dispatch_interactions_selection_sql, terminal_goals_selection_sql,
     terminal_interactions_selection_sql,
 };
 
@@ -217,6 +222,42 @@ fn dry_run_counts_match_real_deletion() {
 
     let real = cleanup_runtime_data(root.path(), 100).expect("清理应成功");
     assert_eq!(real, dry_run);
+}
+
+#[test]
+fn dispatch_turn_inbox_rows_are_reclaimed_without_work_items() {
+    let root = axon_test_support::test_temp_dir();
+    let connection = open_fixture(root.path());
+    // 派发轮（source_channel = 'agent'）的终态直接落在入站行上，没有工作项历史行：
+    // 只按 work_item_history 选批会让这行永远删不掉，inbox 因此单调增长。
+    seed(&connection, "INSERT INTO sessions(session_id,current_run_id,root_session_id,trust_scope,kind,cwd,status,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES('s-dispatch','s-dispatch',NULL,'private','primary','/w','idle',0,0,0,0,1,1,1);
+             INSERT INTO inbox(interaction_id,source_channel,source_message_id,scope_json,audience_json,reply_route_json,content,received_at_ms,updated_at_ms,attachments_json,session_id,terminal_kind)
+                 VALUES('i-dispatch','agent','m-dispatch','{}','{}','{}','hi',1,1,'[]','s-dispatch','understood');", "派发轮入站事实应可写入");
+    drop(connection);
+
+    let dry_run = count_runtime_cleanup(root.path(), 100).expect("dry-run 应成功");
+    assert_eq!(
+        dry_run.interactions, 1,
+        "dry-run 必须与删除路径用同一份口径，否则容量评估会低估"
+    );
+
+    let real = cleanup_runtime_data(root.path(), 100).expect("清理应成功");
+    assert_eq!(real.interactions, 1);
+
+    let connection = Connection::open(
+        root.path()
+            .join(axon_config::AXON_RUNTIME_DATA_DIR)
+            .join(CONTROL_DATABASE_FILE),
+    )
+    .expect("runtime 应可重开");
+    let remaining: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM inbox WHERE interaction_id='i-dispatch'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("统计应成功");
+    assert_eq!(remaining, 0, "派发轮的入站行必须被回收");
 }
 
 #[test]
@@ -435,6 +476,10 @@ fn cleanup_selection_plans_use_indexes_without_full_scan_or_temp_sort() {
             "terminal_interactions",
             terminal_interactions_selection_sql(),
         ),
+        (
+            "terminal_dispatch_interactions",
+            terminal_dispatch_interactions_selection_sql(),
+        ),
         ("expired_decisions", expired_decisions_selection_sql()),
         ("expired_events", expired_events_selection_sql()),
         (
@@ -465,10 +510,26 @@ fn cleanup_selection_plans_use_indexes_without_full_scan_or_temp_sort() {
                 NotificationDeliveryState::Expired,
             ),
         ),
+        (
+            "expired_agent_messages",
+            expired_agent_messages_selection_sql(),
+        ),
+        (
+            "expired_continuations",
+            expired_continuations_selection_sql(),
+        ),
+        (
+            "expired_user_questions",
+            expired_user_questions_selection_sql(),
+        ),
     ];
     for (label, sql) in selections {
-        // 投递记录与通知本体在队列库，其余在控制面库。
-        let target = if label.starts_with("settled_completion") || label == "client_presence" {
+        // 投递记录、通知本体与三张保留期表都在队列库，其余在控制面库。
+        let target = if label.starts_with("settled_completion")
+            || label == "expired_agent_messages"
+            || label == "expired_continuations"
+            || label == "expired_user_questions"
+        {
             &outbox
         } else {
             &connection

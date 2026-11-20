@@ -15,11 +15,13 @@ use rusqlite::{Connection, OpenFlags, TransactionBehavior, params_from_iter};
 
 use super::runtime_cleanup_counts::count_expired_rows;
 use super::runtime_cleanup_families::{
-    delete_expired_agent_messages, delete_expired_client_presence, delete_expired_continuations,
-    delete_expired_daemon_instances, delete_expired_decisions, delete_expired_events,
-    delete_expired_upgrade_admissions, delete_expired_user_questions,
-    delete_session_families_by_ids, delete_settled_completion_deliveries,
-    delete_settled_completion_notifications, delete_terminal_goals, delete_terminal_interactions,
+    delete_expired_client_presence, delete_expired_daemon_instances, delete_expired_decisions,
+    delete_expired_events, delete_expired_upgrade_admissions, delete_session_families_by_ids,
+    delete_settled_completion_deliveries, delete_settled_completion_notifications,
+    delete_terminal_goals, delete_terminal_interactions,
+    retention::{
+        delete_expired_agent_messages, delete_expired_continuations, delete_expired_user_questions,
+    },
 };
 use super::runtime_event_archive;
 
@@ -38,7 +40,8 @@ const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// 单轮增量回收的页数：4 KiB 页下约等于 16 MiB，避免删了行文件却不缩。
 const INCREMENTAL_VACUUM_PAGE_BATCH: u32 = 4_096;
 
-/// 终态工作项类别：入站事实的终态由工作项的 terminal_kind 表达。
+/// 终态工作项类别：普通入站轮的终态由工作项的 terminal_kind 表达；派发轮没有工作项，
+/// 终态直接写在 `inbox.terminal_kind` 上，两处共用这一组取值。
 pub(super) const INTERACTION_TERMINAL_KINDS: [&str; 2] = ["understood", "rejected"];
 /// 终态 Task 状态：长期承诺结束后才允许回收。
 pub(super) const TASK_TERMINAL_STATUSES: [&str; 3] = ["completed", "failed", "cancelled"];

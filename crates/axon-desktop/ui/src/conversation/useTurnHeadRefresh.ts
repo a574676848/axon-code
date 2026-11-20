@@ -87,6 +87,11 @@ export function useTurnHeadRefresh(options: TurnHeadRefreshOptions): TurnHeadRef
       if (current === null) return;
       void ipc
         .conversationWatchTurns(current.workspaceId, current.interactionId)
+        .then(() => {
+          // 重订阅成功即归还预算：否则一次会话里累计断三次之后，后续断流只报「界面不会
+          // 自动发现新轮次」，外部发起的新轮次再也不接管。
+          retryCountRef.current = 0;
+        })
         .catch(() => undefined);
     }, TURNS_RETRY_MS);
   }, [dispatch, targetRef]);

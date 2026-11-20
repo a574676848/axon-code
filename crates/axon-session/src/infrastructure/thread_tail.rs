@@ -35,8 +35,25 @@ impl JsonlThreadEventStore {
 
     /// 从尾部向前读取，直到用满 `max_bytes` 或读完所有分片。
     ///
-    /// 分片自身不超过 8 MiB，因此正常会话（末分片即最近活动）一次读就够了。
+    /// 分片自身不超过 8 MiB，因此正常会话（末分片即最近活动）一次读就够了。尾行撕裂
+    /// 时先受锁截断再重读一次：否则这一轮既读不到也写不进（写路径要先取序号）。
     pub fn read_thread_tail(
+        &self,
+        root: &Path,
+        thread_id: &str,
+        max_bytes: u64,
+    ) -> Result<ThreadTailRead, String> {
+        match self.read_thread_tail_unrepaired(root, thread_id, max_bytes) {
+            Ok(read) => Ok(read),
+            Err(error) => {
+                Self::repair_torn_tail(root, thread_id)?;
+                self.read_thread_tail_unrepaired(root, thread_id, max_bytes)
+                    .map_err(|_| error)
+            }
+        }
+    }
+
+    fn read_thread_tail_unrepaired(
         &self,
         root: &Path,
         thread_id: &str,
@@ -117,8 +134,24 @@ fn trim_partial_head(bytes: Vec<u8>) -> Vec<u8> {
     }
 }
 impl JsonlThreadEventStore {
-    /// 顺序读取整条 thread；只在尾部预算不足以回答问题时使用。
+    /// 读取整条 thread；尾行撕裂时先受锁截断再重读一次。
+    ///
+    /// 撕裂尾行（崩溃或断电留下半行）会让解析整体失败；写路径分配序号前必须先读，若读
+    /// 失败就永远走不到会截断尾行的 `repair_tail`，会话因此既不能恢复也不能继续。
     pub(crate) fn read_thread_full(
+        root: &Path,
+        thread_id: &str,
+    ) -> Result<Vec<crate::domain::ThreadEventRecord>, String> {
+        match Self::read_thread_full_unrepaired(root, thread_id) {
+            Ok(records) => Ok(records),
+            Err(error) => {
+                Self::repair_torn_tail(root, thread_id)?;
+                Self::read_thread_full_unrepaired(root, thread_id).map_err(|_| error)
+            }
+        }
+    }
+
+    fn read_thread_full_unrepaired(
         root: &Path,
         thread_id: &str,
     ) -> Result<Vec<crate::domain::ThreadEventRecord>, String> {

@@ -82,7 +82,7 @@ pub fn list(
     include_archived: bool,
 ) -> Result<Vec<SessionMenuEntry>, String> {
     let payload = gateway::get_json_at(&list_path(workspace, include_archived))?;
-    // 网关载荷是 `{ sessions: [...], totalRecords, rawPayloadPersisted }`；
+    // 网关载荷是 `{ sessions: [...], totalRecords }`；
     // 兼容裸数组形态，避免把「有会话」读成空列表。
     let items = payload
         .get("sessions")

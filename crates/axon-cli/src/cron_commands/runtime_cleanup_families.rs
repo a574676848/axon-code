@@ -378,6 +378,11 @@ pub(super) fn delete_terminal_goals(
 
 /// 删除终态且超出保留期的 Interaction。
 ///
+/// 终态有两个载体：普通入站轮的终态在 `work_item_history.terminal_kind` 上，派发轮
+/// （`source_channel = 'agent'`）不建工作项，终态直接写在 `inbox.terminal_kind` 上。
+/// 两个载体各选一批：只查前者会让派发轮的入站行永远进不了候选集，`inbox` 因此单调
+/// 增长，而且每轮清理都要把它们从头扫一遍。
+///
 /// `inbox_retention` 以 `received_at_ms` 为前导列：强制走该索引
 /// 可同时满足范围过滤与 `ORDER BY`，避免优化器改走覆盖索引后追加临时排序。
 pub(super) fn delete_terminal_interactions(
@@ -385,36 +390,49 @@ pub(super) fn delete_terminal_interactions(
     cutoff_ms: i64,
     deadline: Instant,
 ) -> Result<RuntimeCleanupCounts, String> {
-    let sql = terminal_interactions_selection_sql();
-    delete_family(connection, cutoff_ms, deadline, &sql, |transaction, ids| {
-        let placeholders = placeholders(ids.len());
-        // 工作项随入站事实一同回收：终态队列行没有独立保留价值，留着只会拖慢清扫。
-        delete_ids_in(transaction, "work_items", "inbox_id", &placeholders, ids)?;
-        delete_ids_in(
-            transaction,
-            "work_item_history",
-            "inbox_id",
-            &placeholders,
-            ids,
-        )?;
-        // 逐轮事实随终态入站事实一起回收：它按 interaction 累积，入站事实没了就是孤儿。
-        delete_ids_in(
-            transaction,
-            "turn_activity",
-            "interaction_id",
-            &placeholders,
-            ids,
-        )?;
-        Ok(RuntimeCleanupCounts {
-            interactions: delete_ids_in(
-                transaction,
-                "inbox",
-                "interaction_id",
-                &placeholders,
-                ids,
-            )?,
-            ..RuntimeCleanupCounts::default()
-        })
+    let mut counts = delete_family(
+        connection,
+        cutoff_ms,
+        deadline,
+        &terminal_interactions_selection_sql(),
+        delete_terminal_interactions_by_ids,
+    )?;
+    counts.merge(delete_family(
+        connection,
+        cutoff_ms,
+        deadline,
+        &terminal_dispatch_interactions_selection_sql(),
+        delete_terminal_interactions_by_ids,
+    )?);
+    Ok(counts)
+}
+
+/// 按主键回收一批终态入站事实及其依赖。
+fn delete_terminal_interactions_by_ids(
+    transaction: &rusqlite::Transaction<'_>,
+    ids: &[String],
+) -> Result<RuntimeCleanupCounts, String> {
+    let placeholders = placeholders(ids.len());
+    // 工作项随入站事实一同回收：终态队列行没有独立保留价值，留着只会拖慢清扫。
+    delete_ids_in(transaction, "work_items", "inbox_id", &placeholders, ids)?;
+    delete_ids_in(
+        transaction,
+        "work_item_history",
+        "inbox_id",
+        &placeholders,
+        ids,
+    )?;
+    // 逐轮事实随终态入站事实一起回收：它按 interaction 累积，入站事实没了就是孤儿。
+    delete_ids_in(
+        transaction,
+        "turn_activity",
+        "interaction_id",
+        &placeholders,
+        ids,
+    )?;
+    Ok(RuntimeCleanupCounts {
+        interactions: delete_ids_in(transaction, "inbox", "interaction_id", &placeholders, ids)?,
+        ..RuntimeCleanupCounts::default()
     })
 }
 
@@ -519,6 +537,22 @@ pub(super) fn terminal_interactions_selection_sql() -> String {
     )
 }
 
+/// 派发轮 Interaction 清理的批次选择 SQL：终态直接落在入站行上。
+///
+/// 派发轮（`source_channel = 'agent'`）没有工作项，`work_item_history` 上不可能有它的
+/// 终态行；因此这一族按 `inbox.terminal_kind` 选批，其余删除依赖与普通轮相同。
+pub(super) fn terminal_dispatch_interactions_selection_sql() -> String {
+    format!(
+        "SELECT interaction_id FROM inbox
+         INDEXED BY inbox_retention
+         WHERE terminal_kind IN ({terminal})
+           AND received_at_ms < ?1
+         ORDER BY received_at_ms ASC
+         LIMIT ?2",
+        terminal = quoted_list(&INTERACTION_TERMINAL_KINDS),
+    )
+}
+
 /// Decision 清理的批次选择 SQL：过期行由部分索引按到期时间有序定位。
 pub(super) fn expired_decisions_selection_sql() -> String {
     "SELECT decision_id FROM decisions
@@ -558,134 +592,9 @@ pub(super) fn expired_daemon_instances_selection_sql() -> String {
         .to_owned()
 }
 
-/// 删除越过保留窗口的 agent 间消息。
+/// 纯保留期族（agent 间消息、子代理终态引用、用户提问）的清理实现。
 ///
-/// 消息的保留窗口由自身 `expires_at_ms` 表达（`MAILBOX_MESSAGE_RETENTION`）：到期后
-/// 既不可能再被投递（重试扫描按同一时刻过滤），也不可能被读取，因此它是权威的
-/// 「不再有意义」边界。Cron 的 cutoff 是更长的一道水位，两者同时满足才回收，
-/// 从而不会把仍可被 `axon debug mailbox` 观察到的待投递事实提前删掉。
-pub(super) fn delete_expired_agent_messages(
-    connection: &mut Connection,
-    cutoff_ms: i64,
-    deadline: Instant,
-) -> Result<RuntimeCleanupCounts, String> {
-    delete_family(
-        connection,
-        cutoff_ms,
-        deadline,
-        &expired_agent_messages_selection_sql(),
-        |transaction, ids| {
-            let placeholders = placeholders(ids.len());
-            Ok(RuntimeCleanupCounts {
-                agent_messages: delete_ids_in(
-                    transaction,
-                    "agent_messages",
-                    "message_id",
-                    &placeholders,
-                    ids,
-                )?,
-                ..RuntimeCleanupCounts::default()
-            })
-        },
-    )
-}
-
-/// agent 间消息保留谓词（`?1` 为保留截止时间）：dry-run 与实际删除共用。
-pub(super) fn expired_agent_messages_filter() -> &'static str {
-    "FROM agent_messages
-     INDEXED BY agent_messages_retention
-     WHERE expires_at_ms < ?1"
-}
-
-/// agent 间消息清理的批次选择 SQL：走保留索引按到期时间有序推进。
-pub(super) fn expired_agent_messages_selection_sql() -> String {
-    format!(
-        "SELECT message_id {} ORDER BY expires_at_ms ASC, message_id ASC LIMIT ?2",
-        expired_agent_messages_filter()
-    )
-}
-
-/// 删除越过保留窗口的子代理终态引用。
-///
-/// 与消息同理：`expires_at_ms` 是 continuation 自身的保留窗口
-/// （`CONTINUATION_RETENTION`），越过之后待装配扫描不会再取到它，消费侧也永远
-/// 无法再产生有效执行。**未装配的 pending 记录同样参与回收**，且只因
-/// 「自身窗口 + Cron 水位」双双越过才被删除，不存在静默丢弃仍可装配事实的路径。
-pub(super) fn delete_expired_continuations(
-    connection: &mut Connection,
-    cutoff_ms: i64,
-    deadline: Instant,
-) -> Result<RuntimeCleanupCounts, String> {
-    delete_family(
-        connection,
-        cutoff_ms,
-        deadline,
-        &expired_continuations_selection_sql(),
-        |transaction, ids| {
-            let placeholders = placeholders(ids.len());
-            Ok(RuntimeCleanupCounts {
-                continuations: delete_ids_in(
-                    transaction,
-                    "continuations",
-                    "continuation_id",
-                    &placeholders,
-                    ids,
-                )?,
-                ..RuntimeCleanupCounts::default()
-            })
-        },
-    )
-}
-
-/// continuation 保留谓词（`?1` 为保留截止时间）：dry-run 与实际删除共用。
-pub(super) fn expired_continuations_filter() -> &'static str {
-    "FROM continuations
-     INDEXED BY continuations_retention
-     WHERE expires_at_ms < ?1"
-}
-
-/// continuation 清理的批次选择 SQL：走保留索引按到期时间有序推进。
-pub(super) fn expired_continuations_selection_sql() -> String {
-    format!(
-        "SELECT continuation_id {} ORDER BY expires_at_ms ASC, continuation_id ASC LIMIT ?2",
-        expired_continuations_filter()
-    )
-}
-
-/// 删除越过保留窗口的用户提问记录。
-pub(super) fn delete_expired_user_questions(
-    connection: &mut Connection,
-    cutoff_ms: i64,
-    deadline: Instant,
-) -> Result<RuntimeCleanupCounts, String> {
-    delete_family(
-        connection,
-        cutoff_ms,
-        deadline,
-        &expired_user_questions_selection_sql(),
-        |transaction, ids| {
-            let placeholders = placeholders(ids.len());
-            Ok(RuntimeCleanupCounts {
-                user_questions: delete_ids_in(
-                    transaction,
-                    "user_questions",
-                    "question_id",
-                    &placeholders,
-                    ids,
-                )?,
-                ..RuntimeCleanupCounts::default()
-            })
-        },
-    )
-}
-
-pub(super) fn expired_user_questions_filter() -> &'static str {
-    "FROM user_questions WHERE expires_at_ms < ?1"
-}
-
-pub(super) fn expired_user_questions_selection_sql() -> String {
-    format!(
-        "SELECT question_id {} ORDER BY expires_at_ms ASC, question_id ASC LIMIT ?2",
-        expired_user_questions_filter()
-    )
-}
+/// 这三族只关心自身 `expires_at_ms` 是否越过，与会话族/执行引用保护无关，因此单独成
+/// 文件；调用方与执行计划守卫测试直接从 `retention` 取入口与选批 SQL。
+#[path = "runtime_cleanup_retention.rs"]
+pub(super) mod retention;

@@ -320,14 +320,11 @@ export const conversationAnswerQuestion = (
  * 按网关权威记录对账某条车道下的问答状态。
  *
  * 后端已完成字段适配（状态翻译、作答内容与 partId 补齐），这里拿到的就是可直接
- * 覆盖本地投影的形状。`state` 缺省表示不加状态过滤：待决与挂起是两种状态，
- * 只查其一会把另一种误判成已结算。
+ * 覆盖本地投影的形状。对账必须看到全部状态：网关的 `state` 只能取单值，而「待决」与
+ * 「挂起」是两种状态，只查其一会把另一种误判成已结算，因此这里不传过滤条件。
  */
-export const conversationSessionQuestions = (
-  sessionId: string,
-  state: string | null = null,
-): Promise<QuestionSnapshot[]> =>
-  call('conversation_session_questions', { sessionId, state });
+export const conversationSessionQuestions = (sessionId: string): Promise<QuestionSnapshot[]> =>
+  call('conversation_session_questions', { sessionId });
 
 /** 登记当前会话，供系统通知的标题与点击跳转使用。 */
 export const conversationSetActiveSession = (sessionId: string, title: string): Promise<void> =>
@@ -467,8 +464,8 @@ export const conversationSessionSubagents = (sessionId: string): Promise<Session
  * 监听会话事件流。
  *
  * 桌面宿主走 Tauri 事件通道，浏览器调试走调试桥的 SSE；两条通道承载同一种帧结构，
- * 且**车道流与会话流共用这一条通道**（帧内自带 `subscribeId`，调用方按它分发），
- * 因此这里只有一个入口、一个 SSE 端点。
+ * 且**车道流与会话流合并到同一条 Tauri 事件通道**（每个订阅目标各持一条连接，帧内
+ * 自带 `subscribeId`，调用方按它分发），因此这里只有一个入口、一个 SSE 端点。
  */
 export async function listenConversation(
   handler: (event: ConversationStreamEvent) => void,

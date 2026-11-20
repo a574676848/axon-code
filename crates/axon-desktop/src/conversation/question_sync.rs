@@ -160,12 +160,10 @@ fn derive_part_key(call_id: &str, question_id: &str) -> String {
 
 /// 列出某条车道下的问答记录。
 ///
-/// `state` 给定时只取该状态；缺省时不加状态过滤。**默认不加过滤是有意的**：
-/// 网关的 `state` 只能取单值，而「待决」与「挂起」是两种状态，只查 pending 会把
-/// 挂起项误判成已结算。对账需要看到全部状态才能让本地投影真正收敛。
+/// **有意不带状态过滤**：网关的 `state` 只能取单值，而「待决」与「挂起」是两种状态，
+/// 只查 pending 会把挂起项误判成已结算。对账需要看到全部状态才能让本地投影真正收敛。
 pub fn session_questions(
     session_id: &str,
-    state: Option<&str>,
     limit: Option<u32>,
 ) -> Result<Vec<QuestionSnapshot>, String> {
     let session_id = session_id.trim();
@@ -175,10 +173,7 @@ pub fn session_questions(
     let limit = limit
         .unwrap_or(DEFAULT_QUESTION_LIMIT)
         .clamp(1, MAX_QUESTION_LIMIT);
-    let mut path = format!("{SESSIONS_PATH}/{session_id}/questions?limit={limit}");
-    if let Some(state) = state.map(str::trim).filter(|value| !value.is_empty()) {
-        path.push_str(&format!("&state={state}"));
-    }
+    let path = format!("{SESSIONS_PATH}/{session_id}/questions?limit={limit}");
     let payload = gateway::get_json_at(&path)?;
     let parsed: SessionQuestionsPayload =
         serde_json::from_value(payload).map_err(|error| format!("解析车道问答失败：{error}"))?;
@@ -191,7 +186,7 @@ mod tests {
 
     #[test]
     fn empty_session_id_is_rejected_before_any_request() {
-        assert!(super::session_questions("  ", None, None).is_err());
+        assert!(super::session_questions("  ", None).is_err());
     }
 
     #[test]

@@ -39,11 +39,11 @@ impl From<&WorkspaceRecord> for WorkspaceView {
     }
 }
 
-/// 车道协议载荷。
 /// 车道内一条 Interaction 的协议载荷。
 ///
-/// 只透出回放所需的最小事实：稳定标识、状态与接收时间。正文不走这里，
-/// 它由会话事件订阅流按 `part_id` 归并还原，避免同一份正文出现两条口径。
+/// 索引页承载「不读事件流就能画出一轮」的全部事实：稳定标识、状态与接收时间、入站正文
+/// 与附件、最终交付正文、用过的工具名与逐轮读数。用户气泡与结论因此不必回放整轮帧，
+/// 只有展开某一轮的过程时才去读事件流。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InteractionView {
@@ -84,8 +84,8 @@ pub struct InteractionView {
     pub tool_names: Vec<String>,
     /// 已收口轮次的墙钟用时（毫秒）；读不到时间事实时为空。
     ///
-    /// 只在没有 `turn_metrics` 事件的老记录上出现：有指标事件的轮次由 `metrics` 给出
-    /// 完整读数，界面不读这一列。
+    /// 只给没有 `turn_metrics` 事件的老记录兜底：有指标事件的轮次由 `metrics` 给出完整
+    /// 读数，两列同时填等于同一份事实发两遍。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub elapsed_ms: Option<u64>,
     /// 这一轮的读数（用时、token、首字、速率）；一个事实都读不到时为空。
