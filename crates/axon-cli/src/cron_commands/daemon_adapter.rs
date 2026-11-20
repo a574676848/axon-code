@@ -59,7 +59,7 @@ impl CronDaemonAdapter {
         let mut client = JsonlIpcClient::connect(&endpoint)
             .map_err(|error| format!("连接 Daemon IPC 失败：{error}"))?;
         let response = client
-            .send(&request)
+            .send_with_timeout(&request, crate::daemon_commands::DAEMON_IPC_TIMEOUT)
             .map_err(|error| format!("发送 Daemon 命令失败：{error}"))?;
         if !response.ok {
             return Err(format!("Daemon 拒绝命令：{}", response.body));

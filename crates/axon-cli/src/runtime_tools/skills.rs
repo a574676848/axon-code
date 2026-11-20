@@ -48,6 +48,15 @@ pub(crate) fn load_runtime_skills_snapshot(
 ) -> Result<RuntimeSkillsSnapshot, String> {
     let manager = build_runtime_skills_manager(config_path, cwd)?;
     let outcome = manager.load();
+    // 加载失败必须留痕：目录缺失、frontmatter 写坏、name 非法都会让一个技能「静默消失」，
+    // 而运行态只表现为「这个技能不存在」，模型与用户都看不出是加载失败。
+    for error in &outcome.errors {
+        axon_logger::warning(&format!(
+            "Skill 加载失败：{}：{}",
+            error.path.display(),
+            error.message
+        ));
+    }
     let revision = skill_catalog_revision(&outcome);
     Ok(RuntimeSkillsSnapshot { outcome, revision })
 }

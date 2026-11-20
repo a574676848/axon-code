@@ -84,7 +84,9 @@ fn read_host_lease() -> Result<HostLease, String> {
         command: DaemonCommand::GetHealth,
     };
     let response = JsonlIpcClient::connect(&endpoint)
-        .and_then(|mut client| client.send(&request))
+        .and_then(|mut client| {
+            client.send_with_timeout(&request, crate::daemon_commands::DAEMON_IPC_TIMEOUT)
+        })
         .map_err(|error| error.to_string())?;
     if !response.ok {
         return Err(format!("Daemon 拒绝健康查询：{}", response.body));

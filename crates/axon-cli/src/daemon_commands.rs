@@ -7,7 +7,7 @@ use clap::{Args, Subcommand};
 use serde_json::json;
 use std::{
     path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 #[path = "daemon_host_runner.rs"]
@@ -20,6 +20,11 @@ pub(crate) use daemon_service_manager::daemon_process_alive;
 
 pub(crate) const DEFAULT_ENDPOINT: &str = crate::runtime_paths::DEFAULT_DAEMON_ENDPOINT;
 pub(crate) const RUNTIME_DATA_DIR: &str = "data";
+/// 管理面 IPC 请求的时限。
+///
+/// Daemon 卡在写锁或长请求时，管理命令（health/drain/status/cron 唤醒）必须失败返回而不是
+/// 永久阻塞；超时是「结果未知」的安全失败，调用方按未确认重试。
+pub(crate) const DAEMON_IPC_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// `axon daemon` 命令。
 #[derive(Debug, Clone, Args, PartialEq, Eq)]
@@ -243,7 +248,9 @@ fn send_request(endpoint: &str, command: ProtocolCommand) -> crate::CliRunResult
         Ok(endpoint) => endpoint,
         Err(error) => return cli_error_result(error),
     };
-    match JsonlIpcClient::connect(&endpoint).and_then(|mut client| client.send(&request)) {
+    match JsonlIpcClient::connect(&endpoint)
+        .and_then(|mut client| client.send_with_timeout(&request, DAEMON_IPC_TIMEOUT))
+    {
         Ok(response) => crate::CliRunResult {
             exit_code: u8::from(!response.ok),
             stdout: response.body.to_string(),

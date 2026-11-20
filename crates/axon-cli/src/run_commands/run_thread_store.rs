@@ -433,6 +433,12 @@ fn prepare_run_session_inner(
     // 「不存在」与「读不出来」必须分开：前者如实返回没有可恢复会话，后者是数据损坏，
     // 静默当成空会话会让用户先看到失忆、再在起跑时才看到报错。
     if JsonlThreadEventStore::thread_shard_paths(&root, run_session_id)?.is_empty() {
+        // 分片一个不剩但目录里还留着重写临时文件：这是崩溃现场，必须报错而不是空历史开跑。
+        if JsonlThreadEventStore::thread_has_unfinished_write(&root, run_session_id) {
+            return Err(format!(
+                "会话 {run_session_id} 的事件文件不完整（存在未完成重写），拒绝以空历史恢复"
+            ));
+        }
         return Ok(None);
     }
     // 崩溃遗留的 active turn 必须在装配模型历史之前收口：否则第一次 provider 请求会带着

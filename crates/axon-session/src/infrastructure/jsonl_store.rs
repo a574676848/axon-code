@@ -193,7 +193,7 @@ impl JsonlThreadEventStore {
     ///
     /// 有临时文件却一条事件都读不到，说明重写崩在了替换分片的中间：读侧必须报错，
     /// 不能把它当成「从不存在」的新会话重建，否则旧历史会被孤儿文件永久埋掉。
-    pub(crate) fn thread_has_unfinished_write(root: &Path, thread_id: &str) -> bool {
+    pub fn thread_has_unfinished_write(root: &Path, thread_id: &str) -> bool {
         SHARD_STORE
             .has_stale_rewrite_temporaries(Self::thread_logical_path(root, thread_id))
             .unwrap_or(false)
