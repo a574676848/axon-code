@@ -432,7 +432,8 @@ pub(super) fn mirror_existing_turn(
         .iter()
         .find(|value| value.status == TurnStatus::Active)
     {
-        return service.append_turn(
+        // detail 已确认过这一轮：追加不再把整条 thread 读第二遍。
+        return service.append_turn_at_tail(
             root,
             AppendTurnCommand {
                 thread_id: thread_id.to_owned(),
@@ -447,7 +448,7 @@ pub(super) fn mirror_existing_turn(
     }
     let sequence =
         u64::try_from(detail.turns.len()).map_err(|_| "thread turn 数过大".to_owned())?;
-    service.append_turn(
+    service.append_turn_at_tail(
         root,
         AppendTurnCommand {
             thread_id: thread_id.to_owned(),

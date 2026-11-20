@@ -374,7 +374,11 @@ where
         Ok(command.new_thread_id)
     }
 
-    fn project_thread(&self, root: &Path, thread_id: &str) -> Result<ThreadDetail, String> {
+    pub(super) fn project_thread(
+        &self,
+        root: &Path,
+        thread_id: &str,
+    ) -> Result<ThreadDetail, String> {
         let events = self.store.read_thread(root, thread_id)?;
         project_thread_records(&events, thread_id)
     }
