@@ -11,8 +11,8 @@ import { ConversationHeader } from './ConversationHeader';
 import { SessionOriginBar } from './SessionOriginBar';
 import { CAPABILITY_PENDING_PLACEHOLDER, READ_ONLY_PLACEHOLDER, UNREGISTERED_SESSION_PLACEHOLDER, sessionWriteGate, type SessionOriginBarState } from '../../sessionOpening';
 import { ConversationHeaderActions } from './ConversationHeaderActions';
-import * as goalIpc from '../../goalIpc';
-import type { GoalCardView } from '../../goalTypes';
+import { useSessionGoals } from './useSessionGoals';
+import { useLiveJobIds } from './useLiveJobIds';
 import { goalSessionSelection } from '../../sessionOpening';
 import { useAutoReadReply } from './useAutoReadReply';
 import { ConversationStream } from './ConversationStream';
@@ -30,7 +30,6 @@ import { changedFilesOf, workingLineOf } from '../../conversation/transcript';
 import {
   isActiveSubagent,
   activeJobCount,
-  JOB_ROSTER_REFRESH_MS,
   type SessionRuntimeFacts,
 } from '../../conversation/runtimeFacts';
 import { SubagentRunView } from './SubagentRunView';
@@ -62,8 +61,6 @@ const CRON_DESTINATION_PREFIX = 'cron-';
 /** 配置还没读回来时的模型目录：稳定的空清单，避免每帧重算继承值。 */
 const NO_COMPOSER_MODELS: string[] = [];
 
-/** 目标清单静默刷新间隔：会话里出现目标变化时才需要更新。 */
-const GOAL_LIST_REFRESH_MS = 15_000;
 /** 后台驱动的独立会话在输入坞里的禁用说明。 */
 export interface ConversationViewProps {
   /** 当前选中的会话；为空时展示首屏空态。 */
@@ -399,69 +396,12 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   const activeSubagents = conversation.state.subagents.filter((row) =>
     isActiveSubagent(row.status),
   ).length;
-  /*
-   * 活作业名册：转录状态只是启动那一刻的快照，作业收口后这一行不会自己更新。
-   * 归档判断拿它当权威，避免把已经跑完的后台任务算成「还在运行」。
-   */
-  const [liveJobIds, setLiveJobIds] = React.useState<Set<string> | null>(null);
   const selectedSessionId = selection?.sessionId ?? null;
-  React.useEffect(() => {
-    if (selectedSessionId === null) {
-      setLiveJobIds(null);
-      return undefined;
-    }
-    let cancelled = false;
-    const refresh = () => {
-      void ipc
-        .conversationSessionJobs(selectedSessionId)
-        .then((roster) => {
-          if (!cancelled) setLiveJobIds(new Set(roster.jobIds));
-        })
-        .catch(() => {
-          // 对账失败保留上一次结论：宁可多提示一次，也不要误判成没有任务。
-        });
-    };
-    refresh();
-    const timer = window.setInterval(refresh, JOB_ROSTER_REFRESH_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [selectedSessionId]);
+  const liveJobIds = useLiveJobIds(selectedSessionId);
   const activeJobs = activeJobCount(conversation.jobs, liveJobIds);
+  /** 本会话创建的目标清单；点其中的一行进入它的执行会话。 */
+  const sessionGoals = useSessionGoals(selection?.sessionId ?? null, selection?.workspaceId ?? null);
 
-  /*
-   * 本会话创建的目标：目标清单只列自己建过的那些，别人的目标不在这里出现。
-   * 有人从这条会话建目标时清单立即更新，因此它与轮次一起按同一个开关刷新。
-   */
-  const [sessionGoals, setSessionGoals] = React.useState<GoalCardView[]>([]);
-  React.useEffect(() => {
-    const sessionId = selection?.sessionId ?? null;
-    if (sessionId === null) {
-      setSessionGoals([]);
-      return undefined;
-    }
-    let cancelled = false;
-    const refresh = () => {
-      void goalIpc
-        .goalList(undefined, selection?.workspaceId ?? null)
-        .then((view) => {
-          if (cancelled) return;
-          setSessionGoals(
-            view.goals.filter((goal) => goal.createdFromSessionId === sessionId),
-          );
-        })
-        .catch(() => {
-          // 读不到就保留上一次清单：它与正文无关，不该打断阅读。
-        });
-    };
-    refresh();
-    const timer = window.setInterval(refresh, GOAL_LIST_REFRESH_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [selection?.sessionId, selection?.workspaceId]);
 
   React.useEffect(() => {
     onRuntimeFacts?.({

@@ -4,6 +4,7 @@
 //! Interaction。领取、执行、逐条投影、指标与终态全部由主 turn 承担，所以这里只负责把
 //! 目标契约翻译成一条入站事实，不碰执行。
 
+use super::daemon_host_goal_tools_ledger::goal_service_error;
 use super::goal_execution;
 use super::{DaemonHost, DaemonHostError};
 use crate::ports::ProcessIdentity;
@@ -30,6 +31,29 @@ where
     C: RuntimeClock + Clone + 'static,
     I: ProcessIdentity + Clone + 'static,
 {
+    /// 更新之后把已收尾的目标放回执行态；取消与仍在执行的保持原状。
+    pub(super) fn reactivate_goal_after_update(
+        &self,
+        goal: &axon_domain::GoalRecord,
+        now_ms: u64,
+    ) -> Result<axon_domain::GoalRecord, DaemonHostError> {
+        if !matches!(
+            goal.status,
+            axon_domain::GoalStatus::Completed | axon_domain::GoalStatus::Failed
+        ) {
+            return Ok(goal.clone());
+        }
+        let expected_revision = goal.revision;
+        let mut reactivated = goal.clone();
+        reactivated
+            .transition(axon_domain::GoalStatus::Active, now_ms)
+            .map_err(|error| DaemonHostError::Worker(error.to_string()))?;
+        self.store
+            .update_goal(&reactivated, expected_revision)
+            .map_err(goal_service_error)?;
+        Ok(reactivated)
+    }
+
     /// 把一次目标执行提交成一条主 turn Interaction。
     ///
     /// 目标执行与用户输入从此只剩一处区别：这条 Interaction 由 Daemon 在启动目标时写，

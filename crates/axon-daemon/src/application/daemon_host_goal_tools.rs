@@ -590,29 +590,6 @@ where
         Ok(goal)
     }
 
-    /// 更新之后把已收尾的目标放回执行态；取消与仍在执行的保持原状。
-    fn reactivate_goal_after_update(
-        &self,
-        goal: &axon_domain::GoalRecord,
-        now_ms: u64,
-    ) -> Result<axon_domain::GoalRecord, DaemonHostError> {
-        if !matches!(
-            goal.status,
-            axon_domain::GoalStatus::Completed | axon_domain::GoalStatus::Failed
-        ) {
-            return Ok(goal.clone());
-        }
-        let expected_revision = goal.revision;
-        let mut reactivated = goal.clone();
-        reactivated
-            .transition(axon_domain::GoalStatus::Active, now_ms)
-            .map_err(|error| DaemonHostError::Worker(error.to_string()))?;
-        self.store
-            .update_goal(&reactivated, expected_revision)
-            .map_err(goal_service_error)?;
-        Ok(reactivated)
-    }
-
     fn goal_cancel_value(
         &self,
         command: &GoalCancelCommand,
