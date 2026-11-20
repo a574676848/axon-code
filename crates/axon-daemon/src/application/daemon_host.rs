@@ -73,6 +73,8 @@ mod daemon_host_goal_execution_interaction;
 mod daemon_host_goal_inbox;
 #[path = "daemon_host_goal_tools.rs"]
 mod daemon_host_goal_tools;
+#[path = "daemon_host_goal_tools_ledger.rs"]
+mod daemon_host_goal_tools_ledger;
 #[path = "daemon_host_request.rs"]
 mod daemon_host_request;
 #[path = "daemon_host_schedule.rs"]

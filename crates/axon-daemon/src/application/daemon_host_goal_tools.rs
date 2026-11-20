@@ -4,13 +4,16 @@
 //! 与运行时绑定的 Workspace；本层负责重新读取权威事实、校验可见作用域、
 //! 调用应用服务，并返回结构化回执供主 turn 自然语言解释。
 
+use super::daemon_host_goal_tools_ledger::{
+    goal_created_event, goal_receipt, goal_service_error, goal_started_event,
+};
 use super::goal_execution;
 use super::{DaemonHost, DaemonHostError};
 use crate::ports::ProcessIdentity;
 use axon_domain::{
     AudienceContext, AudienceKind, DecisionEffect, DecisionId, DecisionRecord, DisclosurePolicy,
     ExecutionId, GoalCancelCommand, GoalCreateCommand, GoalCreationScope, GoalDetailQuery, GoalId,
-    GoalUpdateCommand, LedgerEvent, LedgerEventId, ScopeRef,
+    GoalUpdateCommand, ScopeRef,
 };
 use axon_protocol::{GoalSource, GoalStartRequest, GoalToolCommand, GoalToolRequest};
 use axon_session::WorkspaceRecord;
@@ -18,12 +21,13 @@ use axon_session::{GoalCommandService, GoalExecutionSpec, GoalQueryService, Runt
 use axon_session_runtime::{EventPublisher, RuntimeClock, TurnExecutor};
 use serde_json::{Value, json};
 
-/// Goal 创建事件的稳定类型。
-const GOAL_CREATED_EVENT_TYPE: &str = "goal.created";
+/// Goal 创建事件类型；账本事件构造在同目录的 ledger 模块里。
+pub(super) const GOAL_CREATED_EVENT_TYPE: &str = "goal.created";
 /// 工具驱动 Goal 的派生标识前缀。
 const GOAL_ID_PREFIX: &str = "goal-";
 const GOAL_EXECUTION_ID_PREFIX: &str = "execution-";
-const GOAL_EVENT_ID_PREFIX: &str = "event-";
+/// 账本事件标识前缀。
+pub(super) const GOAL_EVENT_ID_PREFIX: &str = "event-";
 const GOAL_DECISION_ID_PREFIX: &str = "decision-";
 /// scope 内尚无 Decision 时的期望 revision 基线。
 const EMPTY_DECISION_REVISION: u64 = 0;
@@ -646,68 +650,6 @@ fn visible_scope_set(
             visible_scopes(workspace, disclosure_policy)
         }
     }
-}
-
-/// 构造 GoalCreated Event；payload 只暴露 Goal 身份与目标，不泄露内部执行细节。
-fn goal_created_event(
-    scope: &ScopeRef,
-    command: &GoalCreateCommand,
-    goal_id: &GoalId,
-    now_ms: u64,
-) -> Result<LedgerEvent, DaemonHostError> {
-    let event_key = format!("{GOAL_EVENT_ID_PREFIX}{goal_id}");
-    Ok(LedgerEvent {
-        event_id: LedgerEventId::new(event_key.clone())
-            .map_err(|error| DaemonHostError::Worker(error.to_string()))?,
-        sequence: 0,
-        event_type: GOAL_CREATED_EVENT_TYPE.to_owned(),
-        idempotency_key: event_key,
-        cause_event_id: None,
-        payload_json: serde_json::to_string(&json!({
-            "goal_id": goal_id.as_str(),
-            "scope": scope,
-            "title": command.title,
-            "create_execution": command.create_execution,
-        }))
-        .map_err(|error| DaemonHostError::Worker(error.to_string()))?,
-        occurred_at_ms: now_ms,
-    })
-}
-
-fn goal_started_event(
-    goal_id: &GoalId,
-    revision: u64,
-    now_ms: u64,
-) -> Result<LedgerEvent, DaemonHostError> {
-    let event_key = format!("goal.started:{}:{}", goal_id.as_str(), revision);
-    Ok(LedgerEvent {
-        event_id: LedgerEventId::new(format!("event-{event_key}"))
-            .map_err(|error| DaemonHostError::Worker(error.to_string()))?,
-        sequence: 0,
-        event_type: "goal.started".to_owned(),
-        idempotency_key: event_key,
-        cause_event_id: None,
-        payload_json: serde_json::json!({
-            "goal_id": goal_id.as_str(),
-            "revision": revision,
-        })
-        .to_string(),
-        occurred_at_ms: now_ms,
-    })
-}
-
-fn goal_receipt(tool: &str, goal: &axon_domain::GoalRecord, created: bool) -> Value {
-    json!({
-        "tool": tool,
-        "goalId": goal.goal_id,
-        "status": goal.status,
-        "revision": goal.revision,
-        "created": created,
-    })
-}
-
-fn goal_service_error(error: impl std::fmt::Display) -> DaemonHostError {
-    DaemonHostError::Worker(error.to_string())
 }
 
 #[cfg(test)]
