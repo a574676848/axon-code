@@ -23,6 +23,14 @@ export interface SessionSelection {
   draft?: boolean;
   fixedModel?: string | null;
   fixedReasoningEffort?: string | null;
+  /**
+   * 进入这条会话之前所在的位置。
+   *
+   * 后台会话（目标执行、定时任务）不是侧栏里的常驻条目，返回必须回到「从哪儿点进来的」：
+   * 从会话里的目标清单进来就回那条会话，从看板进来就回看板。存的是可序列化的目标本身，
+   * 不存回调，因此它跟着选择一起持久化也不会坏。
+   */
+  backTo?: SessionSelection | null;
 }
 
 /** 会话订阅目标：一条连接上的一路 Interaction 订阅。 */

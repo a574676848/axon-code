@@ -482,12 +482,15 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 goals={sessionGoals}
                 onOpenGoal={(goal) => {
                   onSelectSession(
-                    goalSessionSelection({
-                      workspaceId: goal.workspaceId ?? selection?.workspaceId ?? '',
-                      workspacePath: goal.workspacePath ?? '',
-                      sessionId: goal.latestExecution?.sessionId ?? '',
-                      title: goal.title,
-                    }),
+                    goalSessionSelection(
+                      {
+                        workspaceId: goal.workspaceId ?? selection?.workspaceId ?? '',
+                        workspacePath: goal.workspacePath ?? '',
+                        sessionId: goal.latestExecution?.sessionId ?? '',
+                        title: goal.title,
+                      },
+                      selection,
+                    ),
                   );
                 }}
                 railExpanded={rail.layout.expanded}

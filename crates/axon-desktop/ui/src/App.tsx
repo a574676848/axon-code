@@ -622,7 +622,7 @@ export const App: React.FC = () => {
               configRevision={configRevision}
               onSelectSession={selectSession}
               onRuntimeFacts={applyRuntimeFacts}
-              originBar={originBarFor(selection, setCurrentTab)}
+              originBar={originBarFor(selection, setCurrentTab, selectSession)}
               mcp={mcp}
             />
           </ErrorBoundary>

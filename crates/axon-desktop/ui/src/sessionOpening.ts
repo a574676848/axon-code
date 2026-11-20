@@ -54,12 +54,16 @@ export function sessionWriteGate(
 }
 
 /** 目标执行会话的选择。 */
-export function goalSessionSelection(target: {
-  workspaceId: string;
-  workspacePath: string;
-  sessionId: string;
-  title: string;
-}): SessionSelection {
+export function goalSessionSelection(
+  target: {
+    workspaceId: string;
+    workspacePath: string;
+    sessionId: string;
+    title: string;
+  },
+  /** 从哪条会话点进来的；给出时返回键回到那条会话，而不是看板。 */
+  backTo: SessionSelection | null = null,
+): SessionSelection {
   return {
     workspaceId: target.workspaceId,
     workspacePath: target.workspacePath,
@@ -67,6 +71,7 @@ export function goalSessionSelection(target: {
     destination: '',
     title: target.title,
     channel: 'goal',
+    backTo: backTo === null ? null : { ...backTo, backTo: null },
   };
 }
 
@@ -83,8 +88,14 @@ export interface SessionOriginBarState {
 export function originBarFor(
   selection: SessionSelection | null,
   navigate: (tab: 'goals' | 'automation') => void,
+  openSession: (next: SessionSelection) => void,
 ): SessionOriginBarState | null {
   if (selection === null) return null;
+  // 从别的会话点进来的后台会话：返回那一条会话，而不是它所属的页面。
+  const backTo = selection.backTo ?? null;
+  if (backTo !== null) {
+    return { backLabel: '返回会话', title: selection.title, onBack: () => openSession(backTo) };
+  }
   if (selection.channel === 'goal') {
     return { backLabel: '返回看板', title: selection.title, onBack: () => navigate('goals') };
   }
