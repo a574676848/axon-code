@@ -22,7 +22,6 @@ export interface SessionFacts {
   canInterrupt: boolean;
   /** 这条会话是否可以作答；后台链不注入提问端口，因此只有主会话为 true。 */
   canAnswerQuestions: boolean;
-  title: string;
   provider: string;
   model: string;
   modelName: string;
@@ -53,7 +52,6 @@ export function sessionFactsOf(raw: unknown): SessionFacts | null {
     writable: asBoolean(value.writable),
     canInterrupt: asBoolean(value.canInterrupt),
     canAnswerQuestions: asBoolean(value.canAnswerQuestions),
-    title: asString(value.title),
     provider: asString(value.provider),
     model: asString(value.model),
     modelName: asString(value.modelName),

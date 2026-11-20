@@ -8,14 +8,8 @@
 
 /** 会话级计划快照：网关索引里带回来的「当前那一份计划」。 */
 export interface SessionPlanSnapshot {
-  /** transcript part ID，计划单元的稳定身份。 */
-  partId: string;
   /** 计划标题。 */
   title: string;
   /** 步骤明细（网关按上限截断）。 */
   steps: { step: string; status: string }[];
-  /** 发出这次更新的那一轮；会话级帧没有归属时为空。 */
-  interactionId?: string | null;
-  /** 这次更新的时刻（Unix 毫秒）。 */
-  updatedAtMs: number;
 }

@@ -95,7 +95,6 @@ fn primary_session_capability_block_is_writable_and_answerable() {
     assert_eq!(session["writable"], true);
     assert_eq!(session["canAnswerQuestions"], true);
     assert_eq!(session["canInterrupt"], true, "主会话可被中断");
-    assert_eq!(session["title"], "目标执行：补完整交互索引");
     assert_eq!(session["provider"], "fixture-provider");
     assert_eq!(session["model"], "fixture-model");
     assert_eq!(session["modelName"], "fixture-alias");
@@ -158,7 +157,6 @@ fn capability_block_contract_keeps_every_field() {
             "modelName",
             "origin",
             "provider",
-            "title",
             "writable",
         ]
     );
@@ -226,15 +224,12 @@ fn index_carries_the_latest_plan_snapshot() {
 
     let plan = &fixture.payload()["sessionPlan"];
     assert_eq!(plan["title"], "整理文档");
-    assert_eq!(plan["partId"], "plan:1");
     assert_eq!(
         plan["steps"].as_array().map(Vec::len),
         Some(3),
         "取最近一次更新，不是最早那条"
     );
     assert_eq!(plan["steps"][1]["status"], "in_progress");
-    assert_eq!(plan["interactionId"], fixture.interaction_id);
-    assert_eq!(plan["updatedAtMs"], 1_001);
 }
 
 #[test]

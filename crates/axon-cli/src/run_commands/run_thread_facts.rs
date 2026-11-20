@@ -23,7 +23,14 @@ fn control_store_ready(config_path: &Path) -> bool {
 }
 
 /// 收口时写入本轮标量事实。
-pub(crate) fn record_turn_facts(config_path: &Path, record: &RunSessionRecord) {
+///
+/// `sequence` 来自本轮收口时算出的轮序：读侧（轨迹标识、治理回写定位）拿它就不必再为了
+/// 一个标量去读 thread 尾窗，更不必在单条记录超过窗口时退化成整条读。
+pub(crate) fn record_turn_facts(
+    config_path: &Path,
+    record: &RunSessionRecord,
+    sequence: Option<u64>,
+) {
     if !control_store_ready(config_path) {
         return;
     }
@@ -39,6 +46,7 @@ pub(crate) fn record_turn_facts(config_path: &Path, record: &RunSessionRecord) {
         thread_id: record.thread_id.clone(),
         assistant_part_id: metadata.assistant_part_id,
         recorded_at_ms: record.created_at_ms,
+        sequence,
         model_name: metadata.model_name,
         reasoning_effort: metadata.reasoning_effort,
         reflection_notice: metadata.reflection_notice,
@@ -46,6 +54,25 @@ pub(crate) fn record_turn_facts(config_path: &Path, record: &RunSessionRecord) {
     if let Err(error) = store.upsert_thread_turn_facts(&facts, axon_time::unix_now_ms()) {
         axon_logger::warning(&format!("轮次事实侧车写入失败: {error}"));
     }
+}
+
+/// 点查一轮的标量事实；控制面库不存在或没有这一行时为空。
+///
+/// 读侧据此先问侧车，命中就不碰 thread：轮次记录带完整历史 items，为三个标量读尾窗
+/// 在长会话上等于读整条历史。
+pub(crate) fn turn_facts(
+    config_path: &Path,
+    thread_id: &str,
+    assistant_part_id: &str,
+) -> Option<ThreadTurnFacts> {
+    if !control_store_ready(config_path) {
+        return None;
+    }
+    let store = super::run_turn_metrics::shared_store(config_path).ok()?;
+    store
+        .thread_turn_facts_for(thread_id, assistant_part_id)
+        .ok()
+        .flatten()
 }
 
 /// 治理回写时补写反思提示：只改一个字段，行不存在则什么都不做。

@@ -522,8 +522,6 @@ export interface InteractionSummary {
   model?: string | null;
   /** 该轮显式指定的推理强度；入口没有选择时缺省。 */
   reasoningEffort?: string | null;
-  /** 该轮用过的工具名（逗号分隔、已去重）；只有尚无指标事件的老记录才有。 */
-  toolSummary?: string;
   /** 本轮最终交付正文；老网关、非正常收口或正文已过保留期时缺省。 */
   answerText?: string | null;
   /**

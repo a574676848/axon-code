@@ -25,9 +25,7 @@ fn session_row_facts(
         .with_read_connection(|connection| {
             connection
                 .query_row(
-                    "SELECT s.kind, s.title, s.provider, s.model, s.model_name, s.cwd,
-                            (SELECT i.content FROM inbox AS i WHERE i.session_id = s.session_id
-                             ORDER BY i.received_at_ms ASC, i.interaction_id ASC LIMIT 1),
+                    "SELECT s.kind, s.provider, s.model, s.model_name,
                             (SELECT COUNT(*) FROM inbox AS i WHERE i.session_id = s.session_id),
                             (SELECT i.interaction_id FROM inbox AS i WHERE i.session_id = s.session_id
                              ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1)
@@ -39,19 +37,15 @@ fn session_row_facts(
                             row.get::<_, Option<String>>(1)?,
                             row.get::<_, Option<String>>(2)?,
                             row.get::<_, Option<String>>(3)?,
-                            row.get::<_, Option<String>>(4)?,
-                            row.get::<_, String>(5)?,
-                            row.get::<_, Option<String>>(6)?,
-                            row.get::<_, i64>(7)?,
-                            row.get::<_, Option<String>>(8)?,
+                            row.get::<_, i64>(4)?,
+                            row.get::<_, Option<String>>(5)?,
                         ))
                     },
                 )
                 .optional()
         })
         .map_err(|error| format!("读取会话能力事实失败：{error:?}"))?;
-    let Some((kind, title, provider, model, model_name, cwd, first_content, count, latest)) = row
-    else {
+    let Some((kind, provider, model, model_name, count, latest)) = row else {
         return Ok(None);
     };
     let Some(kind) = SessionKind::parse(&kind) else {
@@ -77,7 +71,6 @@ fn session_row_facts(
         // 只有主 turn 有进程内取消令牌。目标执行不经过中断接口：它的取消只能由来源
         // 会话调用 Goal 工具发起；cron 与子会话同理不提供中断入口。
         "canInterrupt": primary,
-        "title": crate::sessions_http_adapter::display_session_title(title, first_content, &cwd),
         "provider": provider,
         "model": model,
         "modelName": model_name,
@@ -113,7 +106,7 @@ fn origin_of_kind(kind: axon_session::SessionKind) -> &'static str {
 ///
 /// `brief` 是翻页专用档：向前翻页只补历史轮次，会话能力块、作业清单、累计读数与
 /// 车道最新事实都与页码无关，重复下发只是白读一遍线程。此档只返回 `sessionId`、
-/// `interactions`、`totalRecords` 与 `rawPayloadPersisted`，其余键缺省。
+/// `interactions` 与 `totalRecords`，其余键缺省。
 pub fn session_interactions_payload(
     axon_root: &Path,
     session_id: &str,
@@ -154,7 +147,6 @@ fn build_page(
             let interaction_id = record.interaction_id.as_str().to_owned();
             let reading = facts.readings.get(&interaction_id);
             InteractionView {
-                tool_summary: String::new(),
                 answer_text: facts
                     .answers
                     .get(&interaction_id)
@@ -204,7 +196,6 @@ fn build_page(
             "sessionId": session_id,
             "interactions": interactions,
             "totalRecords": total,
-            "rawPayloadPersisted": false,
         }));
     }
     // 两个累计读数：用量读 `session_metrics` 投影，耗时是各轮墙钟之和。
@@ -247,7 +238,6 @@ fn build_page(
         ),
         // 最近一次记忆反思的提示文本：桌面端据此显示「上一次记忆动作」。
         "reflectionNotice": session_readings::reflection_notice_payload(latest_turn.as_ref()),
-        "rawPayloadPersisted": false,
     }))
 }
 

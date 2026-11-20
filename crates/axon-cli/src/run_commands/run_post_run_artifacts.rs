@@ -205,6 +205,17 @@ pub(super) fn sequence_option(
     payload: &DurableGovernancePayload,
     session_record: &RunSessionRecord,
 ) -> Option<u64> {
+    // 侧车优先：轮序在收口时随本轮一起落行，点查与历史长度无关。尾窗只在缺行时兜底
+    // （控制面库不存在、写入失败，或在侧车表出现之前就已收口的老轮次）。
+    if let Some(sequence) = super::run_thread_facts::turn_facts(
+        &payload.config_path,
+        &session_record.thread_id,
+        &session_record.assistant_part_id,
+    )
+    .and_then(|facts| facts.sequence)
+    {
+        return Some(sequence);
+    }
     match super::run_thread_tail::turn_sequence_at_tail(
         &payload.config_path,
         &session_record.thread_id,

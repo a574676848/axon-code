@@ -351,10 +351,18 @@ pub(crate) fn patch_turn_artifacts(
         return Ok(());
     }
     /*
-     * 定位只在尾部窗口里做：治理回写紧跟在该轮收口之后，最新一轮就在尾部。尾部找不到
-     * （异常顺序、单条记录超过窗口）才退回整条读，宁可慢一次也不把产物写到别的轮次上。
+     * 存在性先问侧车：本轮收口时已按 `(thread, 轮次)` 落过一行，点查与历史长度无关。
+     * 侧车缺行（控制面库不存在、写入失败）才退回尾窗定位，尾部找不到再整条读：宁可慢
+     * 一次也不把产物写到别的轮次上。
      */
-    if tail_turn_by_part(&root, session_id, assistant_part_id).is_none()
+    let known_in_sidecar = crate::run_commands::run_thread_facts::turn_facts(
+        config_path,
+        session_id,
+        assistant_part_id,
+    )
+    .is_some();
+    if !known_in_sidecar
+        && tail_turn_by_part(&root, session_id, assistant_part_id).is_none()
         && !ThreadService::new(JsonlThreadEventStore)
             .read_thread(&root, session_id)?
             .turns

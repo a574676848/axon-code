@@ -26,6 +26,7 @@ fn facts(thread_id: &str, part: &str, recorded_at_ms: u64) -> crate::ThreadTurnF
         thread_id: thread_id.to_owned(),
         assistant_part_id: part.to_owned(),
         recorded_at_ms,
+        sequence: Some(recorded_at_ms / 1_000),
         model_name: Some("model-a".to_owned()),
         reasoning_effort: Some("max".to_owned()),
         reflection_notice: None,
@@ -98,5 +99,31 @@ fn missing_thread_reads_as_absent() {
             .expect("缺行不是错误")
             .is_none(),
         "缺行必须显式为空，由读侧回落尾窗读"
+    );
+}
+
+/// 轮序与其余标量同一次点查取回：轮序缺失时退化为「只有时间」，读侧因此可以逐项回退。
+#[test]
+fn turn_facts_point_query_returns_sequence_and_time_of_that_turn() {
+    let store = fixture();
+    store
+        .upsert_thread_turn_facts(&facts("thread-1", "part-old", 1_000), 1_000)
+        .expect("写旧轮");
+    store
+        .upsert_thread_turn_facts(&facts("thread-1", "part-new", 2_000), 2_000)
+        .expect("写新轮");
+
+    let old = store
+        .thread_turn_facts_for("thread-1", "part-old")
+        .expect("点查")
+        .expect("必须有一行");
+    assert_eq!(old.sequence, Some(1));
+    assert_eq!(old.recorded_at_ms, 1_000);
+    assert!(
+        store
+            .thread_turn_facts_for("thread-1", "part-missing")
+            .expect("缺行不是错误")
+            .is_none(),
+        "点查按 (thread, 轮次) 命中，不存在的轮次显式为空"
     );
 }

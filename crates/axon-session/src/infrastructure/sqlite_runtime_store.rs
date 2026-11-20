@@ -575,6 +575,15 @@ impl SqliteRuntimeStore {
         thread_turn_facts_repository::latest_turn_facts(self, thread_id)
     }
 
+    /// 按 `(thread, 轮次)` 点查一轮的标量事实；没有这一行时为空。
+    pub fn thread_turn_facts_for(
+        &self,
+        thread_id: &str,
+        assistant_part_id: &str,
+    ) -> Result<Option<ThreadTurnFacts>, RuntimeStoreError> {
+        thread_turn_facts_repository::turn_facts(self, thread_id, assistant_part_id)
+    }
+
     /// 写入或更新一轮的活动事实（索引页投影）。
     pub fn upsert_turn_activity(
         &self,

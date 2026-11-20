@@ -105,9 +105,6 @@ pub struct InteractionSummary {
     /// 该轮显式指定的推理强度；入口没有选择时为空。
     #[serde(default)]
     pub reasoning_effort: Option<String>,
-    /// 该轮用过的工具名（逗号分隔、已去重）；老网关不返回时为空。
-    #[serde(default)]
-    pub tool_summary: String,
     /// 本轮最终交付正文；老网关、非正常收口或正文已过保留期时为空。
     ///
     /// 历史轮折叠后要能直接读到结论，因此正文随索引一起回来，客户端不必为看见它
@@ -235,17 +232,10 @@ pub struct SessionUsageTotals {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionPlanSnapshot {
-    /// transcript part ID，计划单元的稳定身份。
-    pub part_id: String,
     /// 计划标题。
     pub title: String,
     /// 步骤明细。
     pub steps: Vec<SessionPlanStep>,
-    /// 发出这次更新的那一轮；会话级帧没有归属时为空。
-    #[serde(default)]
-    pub interaction_id: Option<String>,
-    /// 这次更新的时刻（Unix 毫秒）。
-    pub updated_at_ms: u64,
 }
 
 /// 计划快照里的一步。

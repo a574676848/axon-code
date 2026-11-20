@@ -28,6 +28,7 @@ import {
   type HistoryFacts,
 } from './historyProjection';
 import { readInteractionFrames, readInteractionFramesTailFirst } from './interactionReplay';
+import { newestReceivedAtMs, turnsNewerThanFloor } from './pagingBounds';
 import { provisionalFrames, withOpeningInput, type HistoryEntry } from './pagingSkeleton';
 import {
   INITIAL_CONVERSATION,
@@ -116,6 +117,14 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
   } = options;
   /** 更早一轮的游标；为空表示已经翻到车道开头。 */
   const olderCursorRef = useRef<{ receivedAtMs: number; interactionId: string } | null>(null);
+  /**
+   * 已加载轮次里最新的接收时刻。
+   *
+   * 增量接管按「本视图还不认识」去重，但补回的老轮同样不认识：向前翻过页之后，最新一页
+   * 窗口里会同时含已被替换成历史的老轮，把它们当新轮追加会让旧对话出现在对话末尾。
+   * 因此再按时间设一道下界：只有不早于已加载最新时刻的轮次才算新轮。
+   */
+  const newestReceivedAtRef = useRef<number | null>(null);
   /** 历史索引的补充事实表（附件与来源）。 */
   const factsRef = useRef(new Map<string, HistoryFacts>());
   /**
@@ -387,6 +396,7 @@ function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null
         factsRef.current = new Map();
         readingsRef.current = new Map();
         seedHistoryFacts(entries);
+        newestReceivedAtRef.current = newestReceivedAtMs(entries);
         rememberOldest(entries[0], entries.length >= HISTORY_PAGE_SIZE);
         dispatch({ type: 'reset' });
         // 快照在重置之后才落地：先 reset 再 seed，首屏就有当前计划，且不会被抹掉。
@@ -516,9 +526,17 @@ function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null
       const known = new Set(knownTurnIds());
       // 审计轮不进投影，也就不该触发读帧：它们只有一句系统说明，没有 durable 事件，
       // 去读只会换来一条「交互记录不存在」的错误卡。
-      const fresh = entries.filter(
-        (entry) => !known.has(entry.interactionId) && !isAuditTurn(entry),
+      const fresh = turnsNewerThanFloor(
+        entries.filter((entry) => !isAuditTurn(entry)),
+        known,
+        (entry) => entry.interactionId,
+        newestReceivedAtRef.current,
       );
+      const newestSeen = newestReceivedAtMs(entries);
+      const floor = newestReceivedAtRef.current;
+      if (newestSeen !== null && (floor === null || newestSeen > floor)) {
+        newestReceivedAtRef.current = newestSeen;
+      }
       if (fresh.length === 0) return;
       dispatch({ type: 'append-turns', turns: withProvisional(fresh) });
       const newest = fresh[fresh.length - 1];

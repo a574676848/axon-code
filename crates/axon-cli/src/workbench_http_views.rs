@@ -70,12 +70,6 @@ pub struct InteractionView {
     /// 本轮显式指定的推理强度；入口没有选择时为空。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
-    /// 本轮用过的工具名（逗号分隔、已去重）；老记录为空。
-    ///
-    /// 折叠成一行时它就是那句「执行了命令、已读取文件」；写成列而不是查询时聚合，
-    /// 是因为工具名只在事件载荷里，没有可用索引，聚合一次要扫完整条会话。
-    #[serde(default)]
-    pub tool_summary: String,
     /// 本轮最终交付正文。
     ///
     /// 历史轮折叠后正文与用户消息一样要直接可读，不能只留一行摘要等人点开。正文由网关

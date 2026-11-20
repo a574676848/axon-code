@@ -172,16 +172,19 @@ pub(super) fn tool_receipt_mirror(
 ///
 /// 采样覆盖整次收口（读整份 thread + 增量落盘）：这是每轮固定发生的 O(语料) 成本，
 /// 长会话是否越用越慢就看这条曲线。
+///
+/// 返回本轮在 thread 里的轮序：它由收口路径算出，随侧车一起落地，读侧因此不必再为了
+/// 一个标量去读尾窗。
 pub(super) fn mirror_session_to_thread(
     config_path: &Path,
     record: &RunSessionRecord,
-) -> Result<(), String> {
+) -> Result<Option<u64>, String> {
     let started = Instant::now();
     let thread_id = record.thread_id.clone();
     let result = mirror_session_to_thread_inner(config_path, record);
     // 侧车与 thread 记录同一次收口落地：读侧因此不必为了三个标量再读大记录。
-    if result.is_ok() {
-        super::run_thread_facts::record_turn_facts(config_path, record);
+    if let Ok(sequence) = &result {
+        super::run_thread_facts::record_turn_facts(config_path, record, *sequence);
     }
     if let Ok(root) = resolved_axon_root(config_path) {
         crate::runtime_thread_io_metrics::record(
@@ -198,7 +201,7 @@ pub(super) fn mirror_session_to_thread(
 fn mirror_session_to_thread_inner(
     config_path: &Path,
     record: &RunSessionRecord,
-) -> Result<(), String> {
+) -> Result<Option<u64>, String> {
     let root = resolved_axon_root(config_path)?;
     let service = ThreadService::new(JsonlThreadEventStore);
     let turn = turn_from_record(record, 0)?;
@@ -220,29 +223,33 @@ fn mirror_session_to_thread_inner(
                     created_at_ms: record.created_at_ms,
                 },
             )?;
-            service.start_turn(
+            service
+                .start_turn(
+                    &root,
+                    StartTurnCommand {
+                        thread_id: record.thread_id.clone(),
+                        recorded_at_ms: record.created_at_ms,
+                        turn,
+                    },
+                )
+                .map(|()| None)
+        }
+        Err(_) => service
+            .start_thread(
                 &root,
-                StartTurnCommand {
+                StartThreadCommand {
                     thread_id: record.thread_id.clone(),
-                    recorded_at_ms: record.created_at_ms,
+                    session_root_id: record.thread_id.clone(),
+                    parent_thread_id: record.parent_thread_id.clone(),
+                    forked_from_thread_id: None,
+                    source: ThreadSource::CliRun,
+                    ephemeral: false,
+                    settings: settings_from_record(record),
+                    created_at_ms: record.created_at_ms,
                     turn,
                 },
             )
-        }
-        Err(_) => service.start_thread(
-            &root,
-            StartThreadCommand {
-                thread_id: record.thread_id.clone(),
-                session_root_id: record.thread_id.clone(),
-                parent_thread_id: record.parent_thread_id.clone(),
-                forked_from_thread_id: None,
-                source: ThreadSource::CliRun,
-                ephemeral: false,
-                settings: settings_from_record(record),
-                created_at_ms: record.created_at_ms,
-                turn,
-            },
-        ),
+            .map(|()| None),
     }
 }
 
@@ -394,7 +401,7 @@ pub(super) fn mirror_existing_turn(
     detail: &ThreadDetail,
     turn: Turn,
     record: &RunSessionRecord,
-) -> Result<(), String> {
+) -> Result<Option<u64>, String> {
     if turn.status == TurnStatus::Active {
         if let Some(active) = detail
             .turns
@@ -406,26 +413,30 @@ pub(super) fn mirror_existing_turn(
             }
             let items = pending_turn_items(&active.history_items, &turn.history_items);
             if items.is_empty() {
-                return Ok(());
+                return Ok(None);
             }
-            return service.append_turn_items(
-                root,
-                AppendTurnItemsCommand {
-                    thread_id: thread_id.to_owned(),
-                    turn_id: turn.turn_id,
-                    items,
-                    recorded_at_ms: record.created_at_ms,
-                },
-            );
+            return service
+                .append_turn_items(
+                    root,
+                    AppendTurnItemsCommand {
+                        thread_id: thread_id.to_owned(),
+                        turn_id: turn.turn_id,
+                        items,
+                        recorded_at_ms: record.created_at_ms,
+                    },
+                )
+                .map(|()| None);
         }
-        return service.start_turn(
-            root,
-            StartTurnCommand {
-                thread_id: thread_id.to_owned(),
-                recorded_at_ms: record.created_at_ms,
-                turn,
-            },
-        );
+        return service
+            .start_turn(
+                root,
+                StartTurnCommand {
+                    thread_id: thread_id.to_owned(),
+                    recorded_at_ms: record.created_at_ms,
+                    turn,
+                },
+            )
+            .map(|()| None);
     }
     if let Some(active) = detail
         .turns
@@ -433,18 +444,20 @@ pub(super) fn mirror_existing_turn(
         .find(|value| value.status == TurnStatus::Active)
     {
         // detail 已确认过这一轮：追加不再把整条 thread 读第二遍。
-        return service.append_turn_at_tail(
-            root,
-            AppendTurnCommand {
-                thread_id: thread_id.to_owned(),
-                recorded_at_ms: record.created_at_ms,
-                turn: Turn {
-                    turn_id: active.turn_id.clone(),
-                    sequence: active.sequence,
-                    ..turn
+        return service
+            .append_turn_at_tail(
+                root,
+                AppendTurnCommand {
+                    thread_id: thread_id.to_owned(),
+                    recorded_at_ms: record.created_at_ms,
+                    turn: Turn {
+                        turn_id: active.turn_id.clone(),
+                        sequence: active.sequence,
+                        ..turn
+                    },
                 },
-            },
-        );
+            )
+            .map(|()| Some(active.sequence));
     }
     /*
      * 下一轮的序号取「当前最大序号 + 1」，不是「轮数」。
@@ -460,14 +473,16 @@ pub(super) fn mirror_existing_turn(
         .map(|turn| turn.sequence)
         .max()
         .map_or(0, |last| last.saturating_add(1));
-    service.append_turn_at_tail(
-        root,
-        AppendTurnCommand {
-            thread_id: thread_id.to_owned(),
-            recorded_at_ms: record.created_at_ms,
-            turn: Turn { sequence, ..turn },
-        },
-    )
+    service
+        .append_turn_at_tail(
+            root,
+            AppendTurnCommand {
+                thread_id: thread_id.to_owned(),
+                recorded_at_ms: record.created_at_ms,
+                turn: Turn { sequence, ..turn },
+            },
+        )
+        .map(|()| Some(sequence))
 }
 
 /// 从 SQLite SSOT 恢复一段运行窗口的上下文。
