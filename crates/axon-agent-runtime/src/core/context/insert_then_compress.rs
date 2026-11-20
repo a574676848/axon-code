@@ -41,6 +41,14 @@ const ROLLOVER_TRIGGER_AUTOMATIC: &str = "automatic";
 /// 窗口轮转 checkpoint 前缀，向 agent 标识当前任务交接事实。
 pub const WINDOW_ROLLOVER_CHECKPOINT_PREFIX: &str = "当前窗口交接事实：";
 
+/// 自动换窗连续失败后的退避步长（token）。
+///
+/// 失败原因（新窗口仍超线、便签超预算、投影写失败）通常在同一上下文读数上持续存在，
+/// 逐轮重试只会让每一轮都付一次「归档加回滚」的整份语料成本。这里让每次连续失败都
+/// 要求上下文再涨一个步长才允许重试：读数单调增长，最终一定会越过退避线，因此不会
+/// 永久放弃自救；而同一读数上的重复尝试被压掉。
+const AUTO_ROLLOVER_RETRY_BACKOFF_TOKENS: u64 = 4_096;
+
 /// 循环内窗口轮转策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompressionPolicy {
@@ -113,6 +121,10 @@ pub struct WindowRolloverPolicyRuntime {
     step_pace: StepPace,
     /// 距上一次便签写入的 assistant 步数。
     steps_since_notes: usize,
+    /// 连续失败的自动换窗次数。
+    auto_rollover_failure_streak: u32,
+    /// 上一次自动换窗失败时的上下文读数，用于退避比较。
+    last_auto_rollover_failure_tokens: Option<u64>,
 }
 
 impl WindowRolloverPolicyRuntime {
@@ -131,6 +143,8 @@ impl WindowRolloverPolicyRuntime {
             fallback_emitted: false,
             step_pace: StepPace::default(),
             steps_since_notes: 0,
+            auto_rollover_failure_streak: 0,
+            last_auto_rollover_failure_tokens: None,
         }
     }
     /// 绑定当前 turn 的 provider 可见投影配置。
@@ -205,7 +219,7 @@ impl WindowRolloverPolicyRuntime {
             .ok()
             .map(|bytes| (sha256_hex(&bytes), messages.len()))
     }
-    fn record_outcome(&mut self, outcome: CompressionOutcome) {
+    pub(crate) fn record_outcome(&mut self, outcome: CompressionOutcome) {
         match outcome {
             CompressionOutcome::Compressed => {
                 self.warn_emitted = false;
@@ -214,6 +228,9 @@ impl WindowRolloverPolicyRuntime {
                 // 新窗口的步幅与旧窗口无关，采样必须从零开始。
                 self.step_pace.reset();
                 self.steps_since_notes = 0;
+                // 换窗成功即解除退避：新窗口的失败计数与旧窗口无关。
+                self.auto_rollover_failure_streak = 0;
+                self.last_auto_rollover_failure_tokens = None;
             }
             CompressionOutcome::Prompted | CompressionOutcome::Idle => {}
         }
@@ -236,7 +253,31 @@ impl WindowRolloverPolicyRuntime {
                         self.policy.trigger_tokens,
                         self.policy.context_window,
                     )
+                && self.auto_rollover_backoff_satisfied(tokens)
         })
+    }
+
+    /// 记一次自动换窗失败，并把重试门槛抬到「本次读数加一个退避步长」。
+    ///
+    /// 只由自动路径调用：模型主动换窗是需要它自己看回执后重试的决策，不该被运行时代为退避。
+    pub(crate) fn note_auto_rollover_failure(&mut self, current_context_tokens: u64) {
+        self.auto_rollover_failure_streak = self.auto_rollover_failure_streak.saturating_add(1);
+        self.last_auto_rollover_failure_tokens = Some(current_context_tokens);
+    }
+
+    /// 上下文是否已经涨过上一次自动换窗失败的重试门槛。
+    ///
+    /// 门槛随连续失败次数线性抬高，并夹在模型窗口内：读数单调增长，因此最终一定会越过，
+    /// 不会把会话永久钉在满上下文上；夹断只避免要求值超出窗口本身。
+    fn auto_rollover_backoff_satisfied(&self, current_context_tokens: u64) -> bool {
+        let Some(last) = self.last_auto_rollover_failure_tokens else {
+            return true;
+        };
+        let streak = u64::from(self.auto_rollover_failure_streak.max(1));
+        let required = last
+            .saturating_add(AUTO_ROLLOVER_RETRY_BACKOFF_TOKENS.saturating_mul(streak))
+            .min(self.policy.context_window);
+        current_context_tokens >= required
     }
 
     fn should_emit_fallback(&self, current_context_tokens: u64) -> bool {
@@ -577,6 +618,12 @@ impl WindowRolloverRuntime<'_> {
         };
         if outcome == CompressionOutcome::Prompted {
             self.runtime.emit_fallback(messages);
+            // 失败一次就把自动重试门槛抬高：同一读数上再试一次只会重复付归档与回滚，
+            // 而失败原因（新窗口仍超线、便签超预算、投影写失败）往往要等上下文再涨或
+            // 外部条件变化才可能好转。
+            if validation_mode == WindowRolloverValidationMode::Automatic {
+                self.runtime.note_auto_rollover_failure(before_tokens);
+            }
         }
         if outcome == CompressionOutcome::Compressed {
             let result_tokens = result_tokens.unwrap_or_default();

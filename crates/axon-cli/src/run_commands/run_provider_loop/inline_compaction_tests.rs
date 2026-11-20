@@ -455,6 +455,58 @@ fn checkpoint_note_is_recorded_as_model_source() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// 摘要来源落库失败时，Thread 投影不得先于它写入。
+///
+/// 整体回滚只覆盖 session 目录，撤销不了已经写进 thread 的快照：顺序一旦颠倒，
+/// 来源失败时 thread 已指向新窗口、notes 却回滚到旧窗口，恢复侧会拿新窗口历史
+/// 去配旧窗口的边界。
+#[test]
+fn source_failure_happens_before_thread_projection() {
+    let root = temp_workspace("inline-rollover-source-failure-order");
+    let request = request_with_rollover(root.clone());
+    let session_dir = initialize_session(&request);
+    SessionNotesRuntime::write_note_file(&session_dir, "progress.md", "已验证事实", 1).unwrap();
+
+    let messages = &request.model_payload.messages;
+    let mut rollover = InlineWindowRollover::new(&request, None);
+    let checkpoint = rollover.prepare(messages).expect("prepare 必须成功");
+    let policy_runtime = WindowRolloverPolicyRuntime::new(CompressionPolicy {
+        trigger_tokens: TEST_ROLLOVER_LIMIT,
+        context_window: TEST_CONTEXT_WINDOW,
+    });
+    let window = policy_runtime.provider_visible_window(messages);
+    let replacement = policy_runtime
+        .build_validated_replacement(
+            &window,
+            &checkpoint,
+            WindowRolloverValidationMode::Requested,
+        )
+        .expect("replacement 必须通过校验");
+
+    super::FORCE_SOURCE_FAILURE.with(|flag| flag.set(true));
+    rollover
+        .commit(messages, &checkpoint, &replacement)
+        .expect_err("来源落库失败必须让整次提交流产");
+
+    let notes = SessionNotes::load_from_session(&session_dir)
+        .unwrap()
+        .expect("回滚后便签必须仍在");
+    assert_eq!(notes.window_number, 1, "窗口号必须回滚到换窗前");
+    assert!(
+        notes.checkpoint_source.is_none(),
+        "来源字段不得留下半状态：{notes:?}"
+    );
+
+    let detail = axon_session::ThreadService::new(axon_session::JsonlThreadEventStore)
+        .read_thread(&root, &request.run_session_id)
+        .expect("thread 必须仍可读");
+    assert!(
+        detail.compacted_history.is_none(),
+        "来源落库排在投影之前：它失败时 thread 不得已带压缩投影"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// 会话身份与 Thread 身份是两个空间：`session_id` 是会话 ULID，`run_session_id` 才是
 /// Thread 事件流的键。
 ///

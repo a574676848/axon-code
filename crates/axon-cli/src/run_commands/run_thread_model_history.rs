@@ -28,8 +28,63 @@ pub(crate) fn thread_model_history_json(detail: &ThreadDetail) -> Result<String,
         .turns
         .iter()
         .filter(|turn| turn.sequence >= compaction.through_sequence);
-    append_turn_model_messages(&mut messages, recent_turns);
+    let recent = collect_turn_model_messages(recent_turns);
+    // 换窗可能发生在多步 turn 中途：那一轮的 user 消息已经落过 thread，交接摘要的尾部
+    // 也带了同一条输入。拼接前剔除重复的一条，否则重启恢复后模型会把同一句话看两次。
+    let recent = drop_repeated_leading_user(&messages, recent);
+    messages.extend(
+        recent
+            .into_iter()
+            .filter_map(|message| model_message_history_value(&message).ok()),
+    );
     serde_json::to_string(&messages).map_err(|error| format!("历史序列化失败：{error}"))
+}
+
+/// 收集若干轮次投影出的模型消息，不写入外部缓冲。
+fn collect_turn_model_messages<'a>(
+    turns: impl IntoIterator<Item = &'a Turn>,
+) -> Vec<AgentModelMessage> {
+    let mut messages = Vec::new();
+    for turn in turns {
+        messages.extend(model_messages_from_turn(turn));
+    }
+    messages
+}
+
+/// 丢弃续接部分里与已装配历史末条 user 重复的那一条。
+///
+/// 只比较纯文本 user 内容：多模态、空内容或与末条不同的提问一律不动，宁可保留一次
+/// 重复也不误删用户输入。
+fn drop_repeated_leading_user(
+    previous: &[serde_json::Value],
+    recent: Vec<AgentModelMessage>,
+) -> Vec<AgentModelMessage> {
+    let Some(first) = recent.first() else {
+        return recent;
+    };
+    if first.role != "user" {
+        return recent;
+    }
+    let Ok(current) = model_message_history_value(first) else {
+        return recent;
+    };
+    let Some(text) = current
+        .get("content")
+        .and_then(serde_json::Value::as_str)
+        .filter(|text| !text.trim().is_empty())
+    else {
+        return recent;
+    };
+    let last_user_text = previous
+        .iter()
+        .rev()
+        .find(|value| value.get("role").and_then(serde_json::Value::as_str) == Some("user"))
+        .and_then(|value| value.get("content"))
+        .and_then(serde_json::Value::as_str);
+    if last_user_text != Some(text) {
+        return recent;
+    }
+    recent.into_iter().skip(1).collect()
 }
 
 fn model_messages_from_turns(turns: &[Turn]) -> Result<String, String> {
@@ -284,4 +339,52 @@ fn history_status_name(status: ThreadHistoryStatus) -> String {
         ThreadHistoryStatus::Rejected => "rejected",
     }
     .to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn user_value(text: &str) -> serde_json::Value {
+        serde_json::json!({"role": "user", "content": text})
+    }
+
+    /// 多步 turn 中途换窗后，续接部分的首条提问与摘要尾部同文时只保留一条。
+    #[test]
+    fn repeated_leading_user_is_dropped_once() {
+        let previous = vec![user_value("同一句提问")];
+        let recent = vec![
+            AgentModelMessage::text("user", "同一句提问"),
+            AgentModelMessage::text("assistant", "回答"),
+        ];
+        let kept = drop_repeated_leading_user(&previous, recent);
+        assert_eq!(kept.len(), 1, "重复的用户提问必须只留一条");
+        assert_eq!(kept[0].role, "assistant");
+    }
+
+    /// 不同提问、非 user 开头、或空内容都不判重，宁可保留也不误删用户输入。
+    #[test]
+    fn non_matching_leading_message_is_kept() {
+        let previous = vec![user_value("另一句提问")];
+        let different = vec![AgentModelMessage::text("user", "新提问")];
+        assert_eq!(
+            drop_repeated_leading_user(&previous, different).len(),
+            1,
+            "内容不同的提问不得被丢弃"
+        );
+
+        let assistant_first = vec![AgentModelMessage::text("assistant", "继续")];
+        assert_eq!(
+            drop_repeated_leading_user(&previous, assistant_first).len(),
+            1,
+            "首条不是 user 时不得丢弃"
+        );
+
+        let empty = vec![AgentModelMessage::text("user", "")];
+        assert_eq!(
+            drop_repeated_leading_user(&[user_value("")], empty).len(),
+            1,
+            "空内容不得参与判重"
+        );
+    }
 }

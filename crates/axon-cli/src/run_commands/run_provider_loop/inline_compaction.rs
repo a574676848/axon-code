@@ -38,6 +38,13 @@ thread_local! {
     /// 仅在测试构建中生效，生产行为不变。
     pub(super) static FORCE_PROJECTION_FAILURE: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
+
+    /// 测试用故障注入：置位后本线程下一次「摘要来源落库」强制失败。
+    ///
+    /// 用来锁住提交顺序：来源落库必须排在 Thread 投影之前，否则来源失败时
+    /// thread 已经指向新窗口、notes 却回滚到旧窗口，恢复侧会拿新窗口历史配旧边界。
+    pub(super) static FORCE_SOURCE_FAILURE: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
 }
 
 struct PreparedInlineWindowRollover {
@@ -384,18 +391,31 @@ impl InlineWindowRollover<'_, '_> {
             prepared.persisted_at_ms,
         )?;
 
-        // 投影与「摘要来源落库」同属一次提交：任一步失败都整体回滚，
+        // 投影与「摘要来源落库」同属一次提交，任一步失败都整体回滚，
         // 不留下「窗口已推进但来源未知」的半状态。
-        let projection =
+        //
+        // 顺序必须是「先落摘要来源，再装 Thread 投影」：整体回滚只覆盖 session 目录
+        // （归档、notes、窗口身份），撤销不了已经写进 thread 的快照。若先装投影再落来源，
+        // 来源失败时 thread 已指向新窗口、notes 却回滚到旧窗口，恢复侧会拿新窗口历史
+        // 配旧窗口边界。把来源放前面，任一步失败时两侧都还停在换窗前。
+        let source_result = {
+            #[cfg(test)]
+            let injected = FORCE_SOURCE_FAILURE.with(|flag| flag.replace(false));
+            #[cfg(not(test))]
+            let injected = false;
+            if injected {
+                Err("注入的摘要来源落库失败".to_owned())
+            } else {
+                super::record_checkpoint_source(
+                    &prepared.session_dir,
+                    prepared.checkpoint_source,
+                    prepared.current_window_number,
+                )
+            }
+        };
+        let projection = source_result.and_then(|()| {
             install_compaction_projection(self.request, &root, expected_sequence, compaction)
-                .and_then(|through_sequence| {
-                    super::record_checkpoint_source(
-                        &prepared.session_dir,
-                        prepared.checkpoint_source,
-                        prepared.current_window_number,
-                    )?;
-                    Ok(through_sequence)
-                });
+        });
         match projection {
             Ok(through_sequence) => Ok((through_sequence, rollover)),
             Err(error) => {
