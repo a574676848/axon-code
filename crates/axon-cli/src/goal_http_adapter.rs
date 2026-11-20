@@ -27,9 +27,7 @@ use crate::workbench_http_adapter::{WORKBENCH_PATH_PREFIX, runtime_store};
 #[path = "goal_http_views.rs"]
 mod goal_http_views;
 
-use goal_http_views::{
-    DETAIL_EXECUTION_LIMIT, GoalCardView, goal_card_view, goal_detail_view, transcript_session_of,
-};
+use goal_http_views::{DETAIL_EXECUTION_LIMIT, GoalCardView, goal_card_view, goal_detail_view};
 
 /// 目标路由在 `/api/v1` 下的子路径。
 const GOALS_SUBPATH: &str = "goals";
@@ -196,10 +194,8 @@ impl GoalHttpAdapter {
                     .and_then(|record| record.session_id.clone())
             })
             .collect();
-        let subagent_sessions = store
-            .latest_subagent_session_ids(&roots)
-            .map_err(|error| format!("读取执行子会话失败：{error}"))?;
-        let sessions_with_turns = transcript_sessions(&store, &roots, &subagent_sessions)?;
+        // 逐字稿就落在执行绑定的会话里：入口标识不需要任何映射。
+        let sessions_with_turns = transcript_sessions(&store, &roots)?;
         let mut cards = Vec::with_capacity(facts.len());
         for (goal, latest_execution, latest_result) in facts {
             // 列表只按作用域标识取工作区：合同第 7.3 条把查询数上界固定为
@@ -207,15 +203,11 @@ impl GoalHttpAdapter {
             // 留给详情。列表里全局目标的工作区三段字段因此为空，界面据此降级为
             // 「查看详情」，由详情给出解析结果与进入会话的入口。
             let workspace = scope_workspace(goal, workspaces);
-            let latest_session = latest_execution.as_ref().and_then(|record| {
-                transcript_session_of(record, &subagent_sessions, &sessions_with_turns)
-            });
             cards.push(goal_card_view(
                 goal,
                 latest_execution.as_ref(),
                 latest_result.as_ref(),
                 workspace,
-                latest_session,
                 &sessions_with_turns,
             ));
         }
@@ -271,13 +263,7 @@ impl GoalHttpAdapter {
             .iter()
             .filter_map(|record| record.session_id.clone())
             .collect();
-        let subagent_sessions = match store.latest_subagent_session_ids(&roots) {
-            Ok(found) => found,
-            Err(error) => {
-                return query_failed(&format!("读取执行子会话失败：{error}"));
-            }
-        };
-        let sessions_with_turns = match transcript_sessions(&store, &roots, &subagent_sessions) {
+        let sessions_with_turns = match transcript_sessions(&store, &roots) {
             Ok(found) => found,
             Err(error) => return query_failed(&error),
         };
@@ -286,9 +272,6 @@ impl GoalHttpAdapter {
             view.latest_execution.as_ref(),
             view.latest_result.as_ref(),
             workspace,
-            view.latest_execution.as_ref().and_then(|record| {
-                transcript_session_of(record, &subagent_sessions, &sessions_with_turns)
-            }),
             &sessions_with_turns,
         );
         let detail = goal_detail_view(
@@ -296,7 +279,6 @@ impl GoalHttpAdapter {
             &view.goal,
             &view.recent_executions,
             view.latest_result.as_ref(),
-            &subagent_sessions,
             &sessions_with_turns,
         );
         GatewayHttpResponse::json(200, &detail)
@@ -337,25 +319,12 @@ impl GatewayHttpRouteHandler for GoalHttpAdapter {
 fn transcript_sessions(
     store: &SqliteRuntimeStore,
     roots: &[axon_domain::DaemonSessionId],
-    subagent_sessions: &std::collections::HashMap<String, String>,
 ) -> Result<std::collections::HashSet<String>, String> {
-    let mut effective: Vec<axon_domain::DaemonSessionId> = Vec::with_capacity(roots.len() * 2);
+    let mut effective: Vec<axon_domain::DaemonSessionId> = Vec::with_capacity(roots.len());
     let mut seen = std::collections::HashSet::new();
     for root in roots {
-        // 执行会话与它可能派生的子会话都要判定：目标执行与用户轮同一条管道后，逐字稿
-        // 落在执行自己的会话里；旧数据里它落在子会话。只认其中一边会让另一边的入口消失。
-        for target in [
-            root.as_str(),
-            subagent_sessions
-                .get(root.as_str())
-                .map_or("", String::as_str),
-        ] {
-            let Ok(session) = axon_domain::DaemonSessionId::new(target.to_owned()) else {
-                continue;
-            };
-            if seen.insert(session.as_str().to_owned()) {
-                effective.push(session);
-            }
+        if seen.insert(root.as_str().to_owned()) {
+            effective.push(root.clone());
         }
     }
     store

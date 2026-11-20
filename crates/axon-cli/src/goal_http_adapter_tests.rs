@@ -358,9 +358,9 @@ fn unrelated_methods_and_paths_fall_through() {
     );
 }
 
-/// 进入会话必须指向执行子会话：来源会话只做账本，逐字稿与指标都在子会话。
+/// 进入会话指向执行绑定的会话：子代理会话是执行过程的派生视图，不接收入口。
 #[test]
-fn latest_execution_points_at_the_execution_child_session() {
+fn latest_execution_points_at_the_bound_session() {
     let (_directory, adapter, store) = fixture();
     store
         .create_goal(&goal("goal-child", ScopeRef::global(), 100))
@@ -396,8 +396,8 @@ fn latest_execution_points_at_the_execution_child_session() {
     let (status, body) = get(&adapter, &list_path(), None);
     assert_eq!(status, 200);
     assert_eq!(
-        body["goals"][0]["latestExecution"]["sessionId"], "01M7RSKXXX8VNSK4WM3BN77R0H",
-        "进入会话必须指向执行子会话，而不是只承接账本的来源会话"
+        body["goals"][0]["latestExecution"]["sessionId"], "01M7RQ9NYW8S6SQ8GTNM730M96",
+        "进入会话必须指向执行绑定的会话，执行过程中派生的子会话不接收入口"
     );
 }
 

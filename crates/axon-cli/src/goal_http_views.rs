@@ -93,7 +93,12 @@ pub(crate) struct ExecutionView {
 
 impl ExecutionView {
     /// 由领域执行记录投影。
-    pub(crate) fn from_record(record: &ExecutionRecord) -> Self {
+    ///
+    /// 会话标识直接取执行绑定值：逐字稿就落在那里，不存在「另落子会话」的分支。
+    pub(crate) fn from_record(
+        record: &ExecutionRecord,
+        sessions_with_turns: &std::collections::HashSet<String>,
+    ) -> Self {
         let mut view = Self {
             execution_id: record.execution_id.as_str().to_owned(),
             status: execution_status_code(record.status),
@@ -104,23 +109,6 @@ impl ExecutionView {
             created_at_ms: record.created_at_ms,
             updated_at_ms: record.updated_at_ms,
         };
-        view.refresh_transcript_capability(&std::collections::HashSet::new());
-        view
-    }
-
-    /// 由领域执行记录投影，并把会话标识换成这一轮实际所在的会话。
-    ///
-    /// 执行记录绑定的是来源会话（`kind=goal` 或 `kind=cron`）；逐字稿若另落子会话，
-    /// 「进入会话」必须指向子会话。调用方一次批量查好映射再传进来，查询数与执行条数无关。
-    pub(crate) fn from_record_with_session(
-        record: &ExecutionRecord,
-        session_id: Option<&str>,
-        sessions_with_turns: &std::collections::HashSet<String>,
-    ) -> Self {
-        let mut view = Self::from_record(record);
-        if let Some(session_id) = session_id {
-            view.session_id = Some(session_id.to_owned());
-        }
         view.refresh_transcript_capability(sessions_with_turns);
         view
     }
@@ -227,7 +215,6 @@ pub(crate) fn goal_card_view(
     latest_execution: Option<&ExecutionRecord>,
     latest_result: Option<&ResultRecord>,
     workspace: Option<&WorkspaceRecord>,
-    latest_session_id: Option<&str>,
     sessions_with_turns: &std::collections::HashSet<String>,
 ) -> GoalCardView {
     let last_activity_at_ms = goal
@@ -267,28 +254,10 @@ pub(crate) fn goal_card_view(
         created_at_ms: goal.created_at_ms,
         updated_at_ms: goal.updated_at_ms,
         last_activity_at_ms,
-        latest_execution: latest_execution.map(|record| {
-            ExecutionView::from_record_with_session(record, latest_session_id, sessions_with_turns)
-        }),
+        latest_execution: latest_execution
+            .map(|record| ExecutionView::from_record(record, sessions_with_turns)),
         latest_result: latest_result.map(ResultView::from_record),
     }
-}
-
-/// 一次执行的逐字稿会话：优先执行自己的会话，只有它没有逐字稿时才回落到子代理会话。
-///
-/// 目标执行与用户轮共用主 turn 管道，逐字稿就落在执行绑定的会话里；子代理会话是执行
-/// 过程中的派生视图，拿它当入口会打开一条与这一轮无关的会话（进去只有子代理的过程）。
-/// 旧数据里逐字稿确实落在子会话，因此回落这一支必须保留。
-pub(crate) fn transcript_session_of<'a>(
-    record: &'a ExecutionRecord,
-    subagent_sessions: &'a std::collections::HashMap<String, String>,
-    sessions_with_turns: &std::collections::HashSet<String>,
-) -> Option<&'a str> {
-    let own = record.session_id.as_ref().map(|session| session.as_str())?;
-    if sessions_with_turns.contains(own) {
-        return Some(own);
-    }
-    subagent_sessions.get(own).map(String::as_str)
 }
 
 /// 作用域类型在协议里的取值。
@@ -333,7 +302,6 @@ pub(crate) fn goal_detail_view(
     goal: &GoalRecord,
     executions: &[ExecutionRecord],
     latest_result: Option<&ResultRecord>,
-    subagent_sessions: &std::collections::HashMap<String, String>,
     sessions_with_turns: &std::collections::HashSet<String>,
 ) -> GoalDetailView {
     let (objective, objective_truncated) =
@@ -351,11 +319,7 @@ pub(crate) fn goal_detail_view(
         recent_executions: executions
             .iter()
             .take(DETAIL_EXECUTION_LIMIT as usize)
-            .map(|record| {
-                let session_id =
-                    transcript_session_of(record, subagent_sessions, sessions_with_turns);
-                ExecutionView::from_record_with_session(record, session_id, sessions_with_turns)
-            })
+            .map(|record| ExecutionView::from_record(record, sessions_with_turns))
             .collect(),
         latest_result: latest_result.map(ResultView::from_record),
     }
