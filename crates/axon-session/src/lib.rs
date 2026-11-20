@@ -38,9 +38,11 @@ pub use infrastructure::{
     session_store_path,
 };
 pub use infrastructure::{
-    SESSION_EVENT_ARCHIVE_SUBDIR, SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES,
-    SESSION_EVENT_MISSING_ARCHIVE_TYPE, SqliteRuntimeStore, ThreadTurnFacts, TurnActivity,
-    WalCheckpoint,
+    CONTROL_DATABASE_FILE_NAME, EventBodyTieringPlan, EventBodyTieringReport,
+    SESSION_EVENT_ARCHIVE_SUBDIR, SESSION_EVENT_BODY_ARCHIVED_TYPE,
+    SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES, SESSION_EVENT_MISSING_ARCHIVE_TYPE,
+    SqliteRuntimeStore, ThreadTurnFacts, TurnActivity, WalCheckpoint, body_archive_path,
+    body_archive_ref, read_body_archive,
 };
 pub use ports::ExecutionSettlement;
 pub use ports::ThreadActivationSnapshot;

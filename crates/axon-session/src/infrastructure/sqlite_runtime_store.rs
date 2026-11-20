@@ -32,6 +32,8 @@ mod connection_pool;
 mod decision_repository;
 /// 行解码错误的统一入口。
 mod decode;
+#[path = "sqlite_runtime_store/event_body_tiering.rs"]
+mod event_body_tiering;
 #[path = "sqlite_runtime_store/event_log_repository.rs"]
 mod event_log_repository;
 #[path = "sqlite_runtime_store/execution_repository.rs"]
@@ -108,7 +110,7 @@ mod work_item_archive;
 mod work_item_claim;
 
 /// 控制面库文件名：会话、队列、目标、调度、游标、账本。
-const CONTROL_DATABASE_FILE_NAME: &str = "control.sqlite3";
+pub const CONTROL_DATABASE_FILE_NAME: &str = "control.sqlite3";
 /// 待消费队列库文件名：Agent 消息、continuation、通知、用户提问、客户端在线。
 const OUTBOX_DATABASE_FILE_NAME: &str = "outbox.sqlite3";
 /// 会话事件日志根目录名。
@@ -217,9 +219,21 @@ impl DatabaseHandle {
 
     /// 在空闲窗口把 WAL 回写主库。
     fn checkpoint_wal(&self) -> Result<WalCheckpoint, RuntimeStoreError> {
+        self.checkpoint("PASSIVE")
+    }
+
+    /// 把 WAL 全量回写主库并截断 WAL 文件本身。
+    ///
+    /// `PASSIVE` 只回写、不缩文件，WAL 会一直占着历史峰值大小；维护窗口用
+    /// `TRUNCATE` 把它压回 0。它会等待现有读者，因此只在清理任务里用，不进热路径。
+    fn checkpoint_truncate(&self) -> Result<WalCheckpoint, RuntimeStoreError> {
+        self.checkpoint("TRUNCATE")
+    }
+
+    fn checkpoint(&self, mode: &str) -> Result<WalCheckpoint, RuntimeStoreError> {
         let connection = self.connection()?;
         connection
-            .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+            .query_row(&format!("PRAGMA wal_checkpoint({mode})"), [], |row| {
                 Ok(WalCheckpoint {
                     busy: row.get::<_, i64>(0)? != 0,
                     log_frames: row.get(1)?,
@@ -379,6 +393,17 @@ impl SqliteRuntimeStore {
         Ok(control)
     }
 
+    /// 把两个库的 WAL 回写主库并截断 WAL 文件。
+    ///
+    /// 只给维护任务（brain cleanup）用：`TRUNCATE` 会等待现有读者，热路径用
+    /// [`Self::checkpoint_wal`] 的非阻塞回写即可。`busy` 为真表示这一轮没等到干净
+    /// 窗口，WAL 大小留待下一轮再压。
+    pub fn checkpoint_wal_truncate(&self) -> Result<WalCheckpoint, RuntimeStoreError> {
+        let control = self.control.checkpoint_truncate()?;
+        let _ = self.outbox.checkpoint_truncate();
+        Ok(control)
+    }
+
     /// 事件正文归档根目录：`<库目录>/archive/session-events`。
     ///
     /// 与网关事件归档同处 `data/archive` 下，便于运维按一个目录做备份与清理。
@@ -507,6 +532,7 @@ impl EventLogStore for SqliteRuntimeStore {
 /// 轮次事实侧车表的读写入口。
 ///
 /// 侧车表是投影：写入失败不阻断主流程，读侧在缺行时回落尾窗读。
+pub use event_body_tiering::{EventBodyTieringPlan, EventBodyTieringReport};
 pub use thread_turn_facts_repository::ThreadTurnFacts;
 pub use turn_activity_repository::TurnActivity;
 

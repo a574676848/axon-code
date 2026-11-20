@@ -18,18 +18,20 @@ mod index;
 mod lock;
 mod read;
 mod record;
+mod rewrite;
 mod tail;
 
 pub use append::{EventLogWriter, append_once};
 pub use error::EventLogError;
 pub use format::{FrameScan, FrameSpan, HEADER_FRAME_INDEX, Header, encode_frame};
 pub use read::{
-    EventLogReader, EventLogSnapshot, read_after, read_interaction_after, read_interaction_tail,
-    read_tail_matching, read_tail_record, read_tail_records, read_tail_scan,
+    EventLogReader, EventLogSnapshot, read_after, read_header, read_interaction_after,
+    read_interaction_tail, read_tail_matching, read_tail_record, read_tail_records, read_tail_scan,
 };
 pub use record::{
     JobOutcome, JobRef, RuntimeEventKind, RuntimeEventRecord, TurnMetrics, TurnOrigin, TurnOutcome,
 };
+pub use rewrite::{RewriteOutcome, rewrite_log, rewrite_log_in_place};
 pub use tail::{InteractionRecord, read_latest_per_interaction};
 
 use std::path::{Path, PathBuf};

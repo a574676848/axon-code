@@ -86,8 +86,8 @@
 | --- | --- | --- | --- |
 | Thread 事件 JSONL 分片 | `<axon_root>/data/sessions/threads/` 下按 thread 分片，后缀 `.jsonl` | 目录名 `THREAD_EVENTS_FILE = "threads"` `crates/axon-session/src/infrastructure/jsonl_store.rs:22`；路径 `JsonlThreadEventStore::path` `:59-61` | `axon-session` |
 | 通用 JSONL 分片存储（shared） | 逻辑路径 + 物理 shard，宽度 6 位序号 | `ShardedJsonlStore` `crates/axon-jsonl/src/store.rs:29`；`JSONL_SUFFIX = ".jsonl"` `:25`；`SHARD_SEQUENCE_WIDTH = 6` `:21`；默认分片上限 8 MiB `:12`；单条记录硬上限 64 MiB `:19` | `axon-jsonl` |
-| 会话事件正文外置分片 | `<db_dir>/archive/session-events/<session>/<shard>.jsonl`，5 位零填充 shard 号 | `crates/axon-session/src/infrastructure/sqlite_runtime_store/event_payload_store.rs:53-57`；目录常量 `EVENT_ARCHIVE_DIR = "archive"` `.../sqlite_runtime_store.rs:231`，`SESSION_EVENT_ARCHIVE_SUBDIR = "session-events"` `.../sqlite_runtime_store.rs:233` | `axon-session` |
-| 会话事件离线归档（zstd） | `<db_dir>/archive/session-events/<session_id>.jsonl.zst`，追加写、每帧独立 zstd 段 | `crates/axon-cli/src/cron_commands/runtime_event_archive.rs:190-211`；目录 `event_archive_root` `:59-62` | `axon-cli` |
+| 会话事件正文归档 | `<db_dir>/archive/session-events/<enc(session)>/<enc(interaction)>.jsonl`，一条交互一个文件 | `crates/axon-session/src/infrastructure/session_event_body_archive.rs`（`body_archive_path` / `write_body_archive`）；目录常量 `EVENT_ARCHIVE_DIR = "archive"`、`SESSION_EVENT_ARCHIVE_SUBDIR = "session-events"` 与归档根 `SqliteRuntimeStore::event_archive_root` 在 `.../sqlite_runtime_store.rs` | `axon-session` |
+| 会话事件日志 | `<data>/events/<session>/session.v1.jsonl.zstd`，按会话整目录保留（无离线归档文件） | `crates/axon-eventlog/src/lib.rs`（`EventLog::path`）；保留与预算淘汰 `crates/axon-cli/src/cron_commands/runtime_event_archive.rs` | `axon-eventlog` |
 | 内容归档（provider 工具输出） | `<data>/archive` 下（目录名复用 `CONTENT_ARCHIVE_DIR_NAME`） | 引用常量 `crates/axon-cli/src/cron_commands/session_cleanup_files.rs:28` | `axon-agent-runtime` |
 | Shell 完整输出归档 | `<data>/logs/tee`，后缀 `.shell.log`；回退到 `%TEMP%/tee` | `SHELL_ARTIFACT_DIR_NAME = "tee"` `crates/axon-agent-runtime/src/runtime_limits.rs:62`；后缀 `:65`；回收侧 `crates/axon-cli/src/cron_commands/session_cleanup_files.rs:32-34,77-81` | `axon-agent-runtime` |
 | 附件归档 | `<data>/attachments`（子目录 `blobs`、`previews`） | `ATTACHMENT_ARCHIVE_DIR_NAME = "attachments"` `crates/axon-agent-runtime/src/attachment_runtime.rs:39`；`BLOB_DIR_NAME` `:47`、`PREVIEW_DIR_NAME` `:48`；清理侧 `crates/axon-cli/src/cron_commands/session_cleanup_files.rs:30` | `axon-agent-runtime` |
@@ -634,69 +634,58 @@ trait 对象实现：`impl RuntimeStore for SqliteRuntimeStore`，`crates/axon-s
 
 ---
 
-## 6. 会话事件的外部化与归档
+## 6. 会话事件正文的分级与归档
 
-### 6.1 内联阈值
+正文在**写入时一律内联**在 zstd 帧里：没有 `payload_ref`、没有逐行归档、没有悬空引用修复。
+长时间运行的会话由 brain cleanup 把**旧交互**的大载荷正文分级到归档，日志里那一帧换成
+`interaction_body_archived` 标记；按交互读取历史帧时按需回源，归档已被回收时降级为
+`archive_missing` 占位（网关跳过并记 warning）。
+
+### 6.1 分级阈值与判定
 
 | 常量 | 值 | 位置 | 语义 |
 | --- | --- | --- | --- |
-| `SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES` | `4 * 1024`（4096 B） | `crates/axon-session/src/infrastructure/sqlite_runtime_store.rs:102` | 非流式事件的正文内联上限；超过则外置 |
-| `EVENT_TYPE_WIRE` | `"wire_event"` | `.../sqlite_runtime_store/event_payload_store.rs:31` | 流式帧事件类型 |
-| `WIRE_EVENT_INLINE_PAYLOAD_LIMIT_BYTES` | `0` | `.../event_payload_store.rs:33` | 流式帧一律外置 |
-| 选择函数 | `inline_limit_for(event_type)` | `.../event_payload_store.rs:180-186` | `wire_event` → 0；其余 → 4096 |
-| 判定条件 | `payload_json.len() <= inline_limit_for(...)` → 返回 `None`（留在库内） | `.../event_payload_store.rs:50-52` | |
+| `SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES` | `4 * 1024` | `crates/axon-session/src/infrastructure/sqlite_runtime_store.rs` | 判定「正文」的载荷字节下限 |
+| `SESSION_EVENT_BODY_ARCHIVED_TYPE` | `"interaction_body_archived"` | `crates/axon-session/src/infrastructure/session_event_body_archive.rs` | 日志里的正文标记事件类型 |
+| `SESSION_EVENT_MISSING_ARCHIVE_TYPE` | `"archive_missing"` | `.../sqlite_runtime_store.rs` | 归档缺失时的占位事件类型 |
+| 内容帧范围 | `wire_event`、`tool_call`、`tool_result`、`assistant_message` | `.../session_event_body_archive.rs`（`is_body_record`） | 只有这四类参与分级；`turn_metrics`、`turn_completed`、`job_*` 一律留在日志里 |
+| 保留窗口 | 最近 40 条交互 | `crates/axon-cli/src/cron_commands/session_governance.rs`（`EVENT_BODY_KEEP_INTERACTIONS`） | 按交互最近事件时间倒序，窗口之外才分级 |
+| 体量预筛 | 日志 ≥ 2 MiB 才进分级 | 同上（`EVENT_BODY_MIN_LOG_BYTES`） | 小日志不值得一次整体重写 |
+| 静默期 | 30 分钟内被写过的对象一律跳过 | 同上（`GOVERNANCE_MIN_IDLE_MS`） | 重写要在写锁内读全量再整体替换，与正在跑的一轮撞上会让写入方超时失败 |
 
-### 6.2 目录布局与文件名规则
+### 6.2 目录布局与写入
 
 | 事实 | 位置 |
 | --- | --- |
-| 归档根 = `<db 目录>/archive/session-events` | `crates/axon-session/src/infrastructure/sqlite_runtime_store.rs:222-227`（拼接 `EVENT_ARCHIVE_DIR` + `SESSION_EVENT_ARCHIVE_SUBDIR`） |
-| 目录常量 `EVENT_ARCHIVE_DIR = "archive"` | `.../sqlite_runtime_store.rs:231` |
-| 子目录常量 `SESSION_EVENT_ARCHIVE_SUBDIR = "session-events"`（`pub`，供清理任务排除） | `.../sqlite_runtime_store.rs:233` |
-| 分片跨度 `EVENT_PAYLOAD_SHARD_ROWS = 2_000` | `.../event_payload_store.rs:29` |
-| 分片相对路径 `"{session_id}/{shard:05}.jsonl"`，`shard = sequence / 2000` | `.../event_payload_store.rs:53-57` |
-| 引用格式 `"{relative}@{offset}+{len}"` | `.../event_payload_store.rs:72-75`；分隔符常量 `REFERENCE_SPAN_SEPARATOR = '@'` `:35`、`REFERENCE_LENGTH_SEPARATOR = '+'` `:37` |
-| 追加方式 | `OpenOptions::new().create(true).append(true)`，先 `metadata().len()` 取偏移，再 `write_all(payload)` + `write_all(b"\n")`：`.../event_payload_store.rs:64-71` |
-| 写文件失败时的降级 | 返回 `None` → 正文内联落库（`.../event_payload_store.rs:41-42`、`:50-52`、`:59-75` 的 `.ok()?` 链） |
-| 外置成功的行内联列清空 | `crates/axon-session/src/infrastructure/sqlite_runtime_store/event_repository.rs:167-172`（`inline_payload = ""`） |
-| 历史单文件格式兼容 `{session}/{sequence}.json` | 读取时若无 `@` 即按整文件读：`.../event_payload_store.rs:83-85`；测试 `:262-277` |
-| Windows verbatim 安全路径解析 `payload_storage_path` | `.../event_payload_store.rs:121-128` |
-| 引用是否独占文件 `is_exclusive_payload_reference` | `.../event_payload_store.rs:134-136`（无 `@` 即独占） |
-| 读侧降级：任何读取失败只把该帧降级为占位事件 | `.../event_repository.rs:288-315`（事件类型 `SESSION_EVENT_MISSING_ARCHIVE_TYPE = "archive_missing"`，`.../sqlite_runtime_store.rs:235`） |
+| 归档根 = `<db 目录>/archive/session-events` | `SqliteRuntimeStore::event_archive_root`（`.../sqlite_runtime_store.rs`） |
+| 目录常量 `EVENT_ARCHIVE_DIR = "archive"`、`SESSION_EVENT_ARCHIVE_SUBDIR = "session-events"` | 同上 |
+| 文件路径 `<归档根>/<enc(session)>/<enc(interaction)>.jsonl` | `body_archive_path`（`.../session_event_body_archive.rs`）：标识按 `EventLog::encode_segment` 转义，路径不含绝对路径与上跳 |
+| 写入方式：先写同目录 `*.tmp`、`sync_data` 后原子替换 | `write_body_archive` 同上 |
+| 分级后的日志重写：临时文件 + `rename` + 按新布局重建 `.idx` | `crates/axon-eventlog/src/rewrite.rs`（`rewrite_log`） |
+| 分级不改记录条数与序号，只换事件类型与载荷 | `.../sqlite_runtime_store/event_body_tiering.rs` |
 
-### 6.3 回收逻辑
+### 6.3 回读与回收
 
 | 路径 | 触发 | 位置 |
 | --- | --- | --- |
-| 整片回收 `reclaim_shards_before(archive_root, session_id, min_live_sequence)` | 删行事务提交后，按会话取 `MIN(sequence)` 作保底线；`shard_end <= min_live` 或会话已无存活行则删整片 | `.../event_payload_store.rs:146-178`；调用点 `crates/axon-cli/src/cron_commands/runtime_event_archive.rs:286-305` |
-| 独占引用文件回收 `reclaim_exclusive_payloads(archive_root, refs)` | 只对 `deleted` 集合中确认为独占引用的行删除文件，并清理空会话目录 | `crates/axon-cli/src/cron_commands/runtime_event_archive.rs:233-261`（`remove_file` `:254`，`remove_dir` `:258`） |
-| 会话族整体回收 `reclaim_session_archive_dir` | 会话家族被删除后清空 `<archive>/<session_id>` 目录（保留 `.jsonl.zst`） | `crates/axon-cli/src/cron_commands/runtime_event_archive.rs:264-276` |
-| 悬空引用修复 | 读取失败的行改为内联占位并置 `payload_ref = NULL` | `crates/axon-cli/src/cron_commands/runtime_cleanup_session_events.rs:194`；入口 `crates/axon-cli/src/cron_commands/runtime_cleanup.rs:197-201`（`repair_dangling_payload_refs`） |
-| 文件保留期不误删外置目录 | `archive` 目录递归清理时显式排除 `session-events` 子目录 | `crates/axon-cli/src/cron_commands/session_cleanup_files.rs:104-109` |
+| 回源：读取历史帧时替换标记 | `replay_events` / `replay_interaction_events` / `interaction_tail_window` 三条读路径 | `.../sqlite_runtime_store/event_log_repository.rs`，实现见 `hydrate_archived_page` / `hydrate_archived_records` |
+| 归档缺失降级 | 文件不存在或不可读 → `archive_missing` 占位（保留序号与归属） | `reclaimed_placeholder`（`.../session_event_body_archive.rs`） |
+| 会话族整体回收 | 会话被整族删除后清空 `<归档根>/<enc(session)>` 目录 | `reclaim_session_archive_dir`（`crates/axon-cli/src/cron_commands/runtime_event_archive.rs`） |
+| 文件保留期不误删外置目录 | `archive` 目录递归清理时显式排除 `session-events` 子目录 | `crates/axon-cli/src/cron_commands/session_cleanup_files.rs` |
+| WAL 截断 | brain cleanup 末尾执行 `wal_checkpoint(TRUNCATE)` | `SqliteRuntimeStore::checkpoint_wal_truncate`（`.../sqlite_runtime_store.rs`） |
 
-### 6.4 `runtime_event_archive`（`.jsonl.zst` 归档）
+### 6.4 `runtime_event_archive`（目录级保留与预算淘汰）
 
 | 事实 | 位置 |
 | --- | --- |
 | 模块文件 | `crates/axon-cli/src/cron_commands/runtime_event_archive.rs` |
-| 归档前删除的硬约束（先归档再删行） | `runtime_event_archive.rs:64-95`、`:428-457`（测试）；主流程 `crates/axon-cli/src/cron_commands/runtime_cleanup.rs:164-193` |
-| 归档文件路径 `<archive_root>/<session_id>.jsonl.zst` | `runtime_event_archive.rs:190-195` |
-| 写入方式：按 session 分组、追加打开、每行一个 JSON、段末 `encoder.finish()` | `runtime_event_archive.rs:179-216` |
-| zstd 压缩级别 `ARCHIVE_ZSTD_LEVEL = 3` | `runtime_event_archive.rs:35` |
-| 每批行数 `ARCHIVE_BATCH_ROWS = 2_000` | `runtime_event_archive.rs:33` |
-| 归档行字段 | `sessionId`、`sequence`、`eventType`、`emittedAtMs`、`payload`：`runtime_event_archive.rs:200-206` |
-| 正文解析：有 `payload_ref` 则从外置文件读，失败写 `<正文归档不可读：{reference}>` | `runtime_event_archive.rs:218-225` |
-| 删除回执：单条 `DELETE ... RETURNING rowid` | `runtime_event_archive.rs:313-334` |
-| 触发 1：保留期过期（`session_event_expiry_filter()`） | `runtime_event_archive.rs:65-95`（选择 SQL `:71-74`） |
-| 触发 2：磁盘高水位淘汰 | `runtime_event_archive.rs:100-139` |
-| 磁盘上限 `RUNTIME_MAX_DISK_BYTES = 4 GiB` | `runtime_event_archive.rs:25` |
-| 高水位 `RUNTIME_HIGH_WATER_BYTES = 4 GiB / 10 * 8`（3.2 GiB） | `runtime_event_archive.rs:27` |
-| 低水位 `RUNTIME_LOW_WATER_BYTES = 4 GiB / 2`（2 GiB） | `runtime_event_archive.rs:29` |
-| 水位淘汰最小事件年龄 `WATERMARK_MIN_AGE_MS = 1 小时` | `runtime_event_archive.rs:31` |
-| 水位淘汰排除运行中 lane（`status IN ('running','recovering')`） | `runtime_event_archive.rs:112-116` |
-| 磁盘占用口径：主库 + `-wal` − `page_size * freelist_count` | `runtime_event_archive.rs:340-354`；`PRAGMA page_size` `:345`，`PRAGMA freelist_count` `:348` |
-| 归档根与被外置正文共用 | `runtime_event_archive.rs:59-62`（`event_archive_root(database_path)`） |
+| 保留期回收：按会话目录最后修改时间整目录删除 | `archive_expired_session_dirs` |
+| 磁盘预算淘汰：上限 4 GiB、高水位 80%、低水位 20%，从最旧会话开始且跳过受保护会话 | `enforce_events_disk_budget` / `high_water_bytes` / `low_water_bytes` |
+| 会话族删除后回收它的正文归档目录 | `reclaim_session_archive_dir` |
+| 事件目录根 `<data>/events` | `events_root` |
 | 清理任务标识 | 由 `axon.internal.brain-cleanup` / `axon.system.brain-cleanup` 触发，见 1.3 节末 4 条 |
+
+事件帧本身已压缩，不再有「按行归档成 `.jsonl.zst` 再删行」这套机制。
 
 ---
 

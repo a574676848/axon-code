@@ -508,6 +508,35 @@ pub fn read_tail_record(path: &Path) -> Result<Option<RuntimeEventRecord>, Event
     Ok(frame_records(&mut file, span)?.pop())
 }
 
+/// 读 header 时最多扫描的前缀字节数。
+///
+/// header 是一行小 JSON（含会话标识与工作目录），远小于这个上限；只在旁挂索引不可用
+/// 时用得到，索引可用时按它的首帧偏移精确读取。
+const HEADER_PREFIX_BYTES: u64 = 64 * 1024;
+
+/// 读取日志头部；文件不存在或没有完整 header 帧时返回 `None`。
+///
+/// 维护任务按会话给日志分级时要先知道它的真实会话标识：事件目录名是转义后的片段，
+/// 不可逆，而 header 里的 `sessionId` 就是权威事实。
+pub fn read_header(path: &Path) -> Result<Option<Header>, EventLogError> {
+    let Some(len) = log_len(path)? else {
+        return Ok(None);
+    };
+    if len == 0 {
+        return Ok(None);
+    }
+    let prefix_len = index::load(path, len)
+        .map(|index| index.header_end(len))
+        .unwrap_or(HEADER_PREFIX_BYTES)
+        .min(len);
+    let bytes = index::read_range(path, 0, prefix_len)?;
+    let scan = scan_frames(&bytes)?;
+    let Some(span) = scan.frames.first() else {
+        return Ok(None);
+    };
+    Ok(decode_header_frame(&bytes[span.start..span.end]))
+}
+
 /// 解出 header 帧：必须恰好一行，且版本受支持。
 pub(crate) fn decode_header_frame(bytes: &[u8]) -> Option<Header> {
     let plain = decode_frame(bytes).ok()?;

@@ -109,6 +109,10 @@ impl ThreadService<crate::JsonlThreadEventStore> {
     /// 去掉，模型可见历史由快照承担，因此**不丢上下文**；没有压缩快照时一律不动，
     /// 因为删掉旧轮次就等于删掉模型历史。
     ///
+    /// 窗口下界取两条约束的较大者：最多留 `keep_turns` 轮，且绝不切掉
+    /// `sequence >= through_sequence` 的轮次，那是压缩快照之后仍然对模型可见的历史，
+    /// 只按轮数切会在「快照覆盖的轮次少于 keep_turns」时把它们删掉。
+    ///
     /// 返回是否真的重写：轮数未超阈值、或还没有压缩快照时返回 `false`。
     pub fn rewrite_to_window(
         &self,
@@ -116,14 +120,49 @@ impl ThreadService<crate::JsonlThreadEventStore> {
         thread_id: &str,
         keep_turns: usize,
     ) -> Result<bool, String> {
-        let detail = self.project_thread(root, thread_id)?;
-        if detail.turns.len() <= keep_turns {
-            return Ok(false);
-        }
-        let Some(compaction) = detail.compacted_history.clone() else {
+        let Some((records, _dropped)) = self.window_records(root, thread_id, keep_turns)? else {
             return Ok(false);
         };
-        let keep_from = detail.turns.len().saturating_sub(keep_turns);
+        self.store
+            .rewrite_thread_with_records(root, thread_id, &records)?;
+        Ok(true)
+    }
+
+    /// 只算账不落盘：返回将被移出文件的轮次数；不需要重写时返回 `None`。
+    pub fn plan_thread_window(
+        &self,
+        root: &Path,
+        thread_id: &str,
+        keep_turns: usize,
+    ) -> Result<Option<usize>, String> {
+        Ok(self
+            .window_records(root, thread_id, keep_turns)?
+            .map(|(_, dropped)| dropped))
+    }
+
+    /// 构造窗口重写后的完整记录集；不满足重写条件时返回 `None`。
+    fn window_records(
+        &self,
+        root: &Path,
+        thread_id: &str,
+        keep_turns: usize,
+    ) -> Result<Option<(Vec<ThreadEventRecord>, usize)>, String> {
+        let detail = self.project_thread(root, thread_id)?;
+        if detail.turns.len() <= keep_turns {
+            return Ok(None);
+        }
+        let Some(compaction) = detail.compacted_history.clone() else {
+            return Ok(None);
+        };
+        let visible_from = detail
+            .turns
+            .iter()
+            .position(|turn| turn.sequence >= compaction.through_sequence)
+            .unwrap_or(detail.turns.len());
+        let keep_from = visible_from.max(detail.turns.len().saturating_sub(keep_turns));
+        if keep_from == 0 {
+            return Ok(None);
+        }
         let thread = &detail.thread;
         let mut records = Vec::with_capacity(keep_turns.saturating_add(2));
         records.push(ThreadEventRecord {
@@ -159,9 +198,7 @@ impl ThreadService<crate::JsonlThreadEventStore> {
                 event: ThreadEvent::TurnCompleted { turn: turn.clone() },
             });
         }
-        self.store
-            .rewrite_thread_with_records(root, thread_id, &records)?;
-        Ok(true)
+        Ok(Some((records, keep_from)))
     }
 }
 
@@ -289,5 +326,45 @@ mod tests {
                 .expect("缺压缩快照"),
             "没有压缩快照时宁可不动，删旧轮次等于删模型历史"
         );
+    }
+
+    #[test]
+    fn rewrite_never_cuts_turns_still_visible_to_the_model() {
+        let directory = axon_test_support::test_temp_path("thread-window-visible");
+        let root = directory.as_path();
+        let service = seed(root, 5);
+        let mut snapshot = compaction();
+        // 两个数字都卡在边界上：快照只覆盖到第 4 轮，而 keep_turns 比「快照之后的轮数」更大。
+        snapshot.through_sequence = 4;
+        service
+            .compact_thread(
+                root,
+                CompactThreadCommand {
+                    thread_id: "thread-1".to_owned(),
+                    recorded_at_ms: 30,
+                    expected_sequence: 5,
+                    compaction: snapshot,
+                },
+            )
+            .expect("写压缩快照");
+
+        assert_eq!(
+            service
+                .plan_thread_window(root, "thread-1", 2)
+                .expect("算账"),
+            Some(4),
+            "dry-run 与执行必须给出同一个丢弃轮数"
+        );
+        assert!(
+            service
+                .rewrite_to_window(root, "thread-1", 2)
+                .expect("重写"),
+            "有可丢弃的旧轮次时必须真的重写"
+        );
+        let detail = ThreadService::new(JsonlThreadEventStore)
+            .read_thread(root, "thread-1")
+            .expect("读回");
+        assert_eq!(detail.turns.len(), 1, "只保留快照之后仍可见的一轮");
+        assert_eq!(detail.turns[0].sequence, 4, "模型可见轮次不得被切掉");
     }
 }

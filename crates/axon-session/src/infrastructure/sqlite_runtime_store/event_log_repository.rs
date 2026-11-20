@@ -166,8 +166,10 @@ pub(super) fn replay_events(
     }
     let limit = usize::try_from(limit).unwrap_or(usize::MAX);
     // 分页只解压覆盖请求范围的尾部帧：历史越长越不能每次全量解压。
-    Ok(axon_eventlog::read_after(&path, after_sequence, limit)
-        .map_err(log_error)?
+    let records = axon_eventlog::read_after(&path, after_sequence, limit).map_err(log_error)?;
+    // 整条会话回放同样要拿到正文：被分级的旧交互按归档回源，归档缺失时降级为占位。
+    let records = super::event_body_tiering::hydrate_archived_page(store, session_id, records);
+    Ok(records
         .iter()
         .map(|record| from_runtime_record(session_id, record))
         .collect())
@@ -187,18 +189,24 @@ pub(super) fn replay_interaction_events(
     }
     let limit = usize::try_from(limit).unwrap_or(usize::MAX);
     // 按键取帧：索引的交互指纹把解压范围收窄到这条交互自己的帧，不再整会话解压。
-    Ok(
-        axon_eventlog::read_interaction_after(
-            &path,
-            interaction_id.as_str(),
-            after_sequence,
-            limit,
-        )
-        .map_err(log_error)?
+    let records = axon_eventlog::read_interaction_after(
+        &path,
+        interaction_id.as_str(),
+        after_sequence,
+        limit,
+    )
+    .map_err(log_error)?;
+    // 被分级的正文按需从归档回源；归档已回收时降级为占位记录。
+    let records = super::event_body_tiering::hydrate_archived_records(
+        store,
+        session_id,
+        interaction_id.as_str(),
+        records,
+    );
+    Ok(records
         .iter()
         .map(|record| from_runtime_record(session_id, record))
-        .collect(),
-    )
+        .collect())
 }
 
 /// 读取一组 Interaction 各自最近一条 `turn_metrics` 事件。
@@ -245,13 +253,18 @@ pub(super) fn interaction_tail_window(
     }
     let keep = usize::try_from(limit).unwrap_or(usize::MAX);
     // 尾窗同样从尾部倒推：凑够该交互的条数就停，且按交互指纹跳过别条交互的帧。
-    Ok(
-        axon_eventlog::read_interaction_tail(&path, interaction_id.as_str(), keep)
-            .map_err(log_error)?
-            .iter()
-            .map(|record| from_runtime_record(session_id, record))
-            .collect(),
-    )
+    let records = axon_eventlog::read_interaction_tail(&path, interaction_id.as_str(), keep)
+        .map_err(log_error)?;
+    let records = super::event_body_tiering::hydrate_archived_records(
+        store,
+        session_id,
+        interaction_id.as_str(),
+        records,
+    );
+    Ok(records
+        .iter()
+        .map(|record| from_runtime_record(session_id, record))
+        .collect())
 }
 
 /// 事件面真正落盘的末条序号与 generation；日志不存在或没有完整帧时返回 `None`。

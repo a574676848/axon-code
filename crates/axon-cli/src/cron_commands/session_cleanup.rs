@@ -13,6 +13,9 @@ use self::session_cleanup_sqlite::vacuum_session_sqlite_files;
 use self::session_family_cleanup::{
     cleanup_session_family_data, count_session_family_data, stale_session_family_ids,
 };
+use self::session_governance::{
+    GovernanceBudget, govern_thread_windows, tier_event_bodies, truncate_wal,
+};
 use super::repository::CronRepository;
 use super::runtime_cleanup::{RuntimeCleanupCounts, cleanup_runtime_data, count_runtime_cleanup};
 use crate::run_commands::resolved_axon_root;
@@ -72,6 +75,12 @@ pub(crate) struct SessionCleanupReport {
     pub(crate) deleted_mcp_schema_cache_count: usize,
     pub(crate) deleted_archive_file_count: usize,
     pub(crate) deleted_attachment_file_count: usize,
+    /// 被重写为「会话头 + 压缩快照 + 最近窗口」的 thread 数。
+    pub(crate) rewritten_thread_count: usize,
+    /// 被换成归档标记的事件正文帧数。
+    pub(crate) tiered_event_body_frame_count: usize,
+    /// 本轮回收的字节数（事件日志正文分级部分）；dry-run 为预计值。
+    pub(crate) reclaimed_bytes: u64,
     pub(crate) elapsed_ms: u64,
 }
 
@@ -126,7 +135,40 @@ fn run_cleanup_dry_run(
     report.deleted_cron_job_count = cron_jobs;
     apply_runtime_cleanup_counts(&mut report, count_runtime_cleanup(root, cutoff_ms)?);
     apply_file_cleanup_counts(&mut report, count_runtime_files(root, file_cutoff_ms())?);
+    apply_governance_counts(&mut report, dry_run_governance(root)?);
     Ok(report)
+}
+
+/// 只算账的长会话治理：报告与执行态同口径，但一字节都不写。
+fn dry_run_governance(root: &Path) -> Result<GovernanceCounts, String> {
+    let budget = GovernanceBudget::new(true);
+    let (rewritten_threads, _dropped) = govern_thread_windows(root, true, &budget)?;
+    let (frames, reclaimed) = tier_event_bodies(root, true, &budget)?;
+    Ok(GovernanceCounts {
+        rewritten_threads,
+        tiered_event_body_frames: frames,
+        reclaimed_bytes: reclaimed,
+    })
+}
+
+/// 长会话治理的读数。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct GovernanceCounts {
+    rewritten_threads: usize,
+    tiered_event_body_frames: usize,
+    reclaimed_bytes: u64,
+}
+
+fn apply_governance_counts(report: &mut SessionCleanupReport, counts: GovernanceCounts) {
+    report.rewritten_thread_count = report
+        .rewritten_thread_count
+        .saturating_add(counts.rewritten_threads);
+    report.tiered_event_body_frame_count = report
+        .tiered_event_body_frame_count
+        .saturating_add(counts.tiered_event_body_frames);
+    report.reclaimed_bytes = report
+        .reclaimed_bytes
+        .saturating_add(counts.reclaimed_bytes);
 }
 
 fn run_cleanup_deletion(
@@ -145,7 +187,21 @@ fn run_cleanup_deletion(
     initialize_and_cleanup_runtime(root, cutoff_ms, &mut report)?;
     apply_file_cleanup_counts(&mut report, cleanup_runtime_files(root, file_cutoff_ms())?);
     cleanup_session_family_data(root, cutoff_ms, stale_sessions, &mut report)?;
+    // 治理排在会话族删除之后：过期会话已被整族回收，剩下的都是活着但过长的会话。
+    let budget = GovernanceBudget::new(false);
+    let (rewritten_threads, _dropped) = govern_thread_windows(root, false, &budget)?;
+    let (frames, reclaimed) = tier_event_bodies(root, false, &budget)?;
+    apply_governance_counts(
+        &mut report,
+        GovernanceCounts {
+            rewritten_threads,
+            tiered_event_body_frames: frames,
+            reclaimed_bytes: reclaimed,
+        },
+    );
     report.vacuumed_sqlite_count = vacuum_sqlite_files(root)?;
+    // WAL 截断放最后：前面所有写都落盘之后，TRUNCATE 才能真正把 WAL 文件压回 0。
+    truncate_wal(root)?;
     report.status = "completed".to_owned();
     Ok(report)
 }
@@ -248,3 +304,5 @@ mod session_cleanup_run;
 mod session_cleanup_sqlite;
 #[path = "session_family_cleanup.rs"]
 mod session_family_cleanup;
+#[path = "session_governance.rs"]
+mod session_governance;

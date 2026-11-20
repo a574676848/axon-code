@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 mod jsonl_store;
+mod session_event_body_archive;
 mod sqlite_runtime_store;
 
 #[cfg(test)]
@@ -20,6 +21,9 @@ mod sqlite_runtime_store_channel_origin_tests;
 #[cfg(test)]
 #[path = "sqlite_runtime_store_dispatch_tests.rs"]
 mod sqlite_runtime_store_dispatch_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_event_body_tests.rs"]
+mod sqlite_runtime_store_event_body_tests;
 #[cfg(test)]
 #[path = "sqlite_runtime_store_execution_lease_tests.rs"]
 mod sqlite_runtime_store_execution_lease_tests;
@@ -91,7 +95,11 @@ mod thread_tail;
 pub use jsonl_store::{
     JsonlThreadEventStore, THREAD_EVENTS_FILE, ThreadEventReadIssue, ThreadEventScan,
 };
+pub use session_event_body_archive::{
+    SESSION_EVENT_BODY_ARCHIVED_TYPE, body_archive_path, body_archive_ref, read_body_archive,
+};
 pub use sqlite_runtime_store::{
+    CONTROL_DATABASE_FILE_NAME, EventBodyTieringPlan, EventBodyTieringReport,
     SESSION_EVENT_ARCHIVE_SUBDIR, SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES,
     SESSION_EVENT_MISSING_ARCHIVE_TYPE, SqliteRuntimeStore, ThreadTurnFacts, TurnActivity,
     WalCheckpoint,

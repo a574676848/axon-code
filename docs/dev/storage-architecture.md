@@ -328,9 +328,10 @@ SQLite 没有跨库事务，所以拆库不能按业务随意切，只能按**�
 | 事件流 | `session_events`（单会话叙述）+ `jarvis_events`（跨会话审计） | 职责分离：前者进文件，后者进 `control.sqlite3` |
 | 检查点 | `session_checkpoints` 表 + `sessions.last_checkpoint_seq` 列 | 事件 `kind = checkpoint` + 一列水位 |
 | 已读标记 | `jarvis_result_reads` 独立表 | 并入 `goal_results` 两列 |
-| 正文载体 | 内联 `payload_json` + `payload_ref` + `event_payload_store` 分片 + `archive/*.jsonl.zst` | 一套：zstd frame 内联，取消外置与归档两套机制 |
+| 正文载体 | 内联 `payload_json` + `payload_ref` + `event_payload_store` 分片 + `archive/*.jsonl.zst` | 写入时一套：正文全部内联在 zstd 帧里。长期运行后由 brain cleanup 把旧交互的大载荷正文分级到 `data/archive/session-events/<session>/<interaction>.jsonl`，日志里那一帧换成 `interaction_body_archived` 标记，按交互读取历史帧时按需回源，归档缺失降级为 `archive_missing` 占位 |
+| 正文载体（续） | 归档由「按行归档再删行 + 引用修复」维护 | 归档是整文件粒度：一条交互一个 JSONL，先写临时文件再原子替换，随会话删除整目录回收；分级不改记录条数与序号，`.idx` 按新布局整体重建 |
 
-最后一条收益最大：现在有 `SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES = 4 KiB`（`sqlite_runtime_store.rs:102`）、`WIRE_EVENT_INLINE_PAYLOAD_LIMIT_BYTES = 0`（`event_payload_store.rs:33`）两套阈值、一套 `{session}/{shard:05}.jsonl@{offset}+{len}` 引用格式、一套归档回收逻辑、一套悬空引用修复。全部可以删除。
+`SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES = 4 KiB` 保留为**分级阈值**：载荷达到它、且属于内容帧（`wire_event`、工具调用、工具结果、assistant 正文）的旧交互记录才值得搬进归档。写入路径仍然一律内联，因此没有 `payload_ref` 指针、没有逐行归档、也没有悬空指针修复这一套；答案、工具名与逐轮读数留在 `turn_activity` 投影里，索引页不依赖被分级的正文。
 
 ### 4.7 事件面格式
 
