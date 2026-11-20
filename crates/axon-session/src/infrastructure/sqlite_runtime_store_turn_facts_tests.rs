@@ -102,6 +102,50 @@ fn missing_thread_reads_as_absent() {
     );
 }
 
+/// 窗口重写后侧车整条失效：轮序会被重排，旧行必须能被清掉，读侧回落尾窗。
+#[test]
+fn thread_turn_facts_can_be_dropped_after_a_window_rewrite() {
+    let store = fixture();
+    store
+        .upsert_thread_turn_facts(&facts("thread-1", "part-old", 1_000), 1_000)
+        .expect("写旧轮");
+    store
+        .upsert_thread_turn_facts(&facts("thread-1", "part-new", 2_000), 2_000)
+        .expect("写新轮");
+    store
+        .upsert_thread_turn_facts(&facts("thread-2", "part-other", 3_000), 3_000)
+        .expect("写另一条 thread");
+
+    assert_eq!(
+        store
+            .delete_thread_turn_facts("thread-1")
+            .expect("删除应成功"),
+        2,
+        "整条 thread 的侧车行一次清空"
+    );
+    assert!(
+        store
+            .thread_turn_facts_for("thread-1", "part-old")
+            .expect("点查")
+            .is_none(),
+        "重写后旧轮序不得再被读到"
+    );
+    assert!(
+        store
+            .latest_thread_turn_facts("thread-1")
+            .expect("读最新")
+            .is_none(),
+        "读侧必须回落尾窗"
+    );
+    assert!(
+        store
+            .thread_turn_facts_for("thread-2", "part-other")
+            .expect("点查")
+            .is_some(),
+        "只清指定 thread，别的 thread 不受影响"
+    );
+}
+
 /// 轮序与其余标量同一次点查取回：轮序缺失时退化为「只有时间」，读侧因此可以逐项回退。
 #[test]
 fn turn_facts_point_query_returns_sequence_and_time_of_that_turn() {

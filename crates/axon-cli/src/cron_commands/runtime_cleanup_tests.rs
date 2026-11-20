@@ -260,6 +260,34 @@ fn dispatch_turn_inbox_rows_are_reclaimed_without_work_items() {
     assert_eq!(remaining, 0, "派发轮的入站行必须被回收");
 }
 
+/// 会话族清理必须按「当前运行窗口」删 thread 侧车：会话 ULID 与 thread 键不重合，
+/// 直接按会话 id 删恒零命中，侧车会变成无人回收的孤儿。
+#[test]
+fn session_family_cleanup_maps_session_ids_to_thread_run_windows() {
+    let root = axon_test_support::test_temp_dir();
+    let connection = open_fixture(root.path());
+    seed(&connection, "INSERT INTO sessions(session_id,current_run_id,root_session_id,trust_scope,kind,cwd,status,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms,created_at_ms,updated_at_ms) VALUES('01SESSIONULID','0f8f-run-window',NULL,'private','primary','/w','idle',0,0,0,0,1,1,1);
+             INSERT INTO thread_turn_facts(thread_id,assistant_part_id,recorded_at_ms,turn_sequence,updated_at_ms)
+                 VALUES('0f8f-run-window','part-1',1,0,1);", "会话与侧车应可写入");
+    drop(connection);
+
+    cleanup_runtime_session_families(root.path(), &["01SESSIONULID".to_owned()])
+        .expect("清理应成功");
+
+    let connection = Connection::open(
+        root.path()
+            .join(axon_config::AXON_RUNTIME_DATA_DIR)
+            .join(CONTROL_DATABASE_FILE),
+    )
+    .expect("runtime 应可重开");
+    let remaining: i64 = connection
+        .query_row("SELECT COUNT(*) FROM thread_turn_facts", [], |row| {
+            row.get(0)
+        })
+        .expect("统计应成功");
+    assert_eq!(remaining, 0, "侧车行必须随会话族回收，否则表单调增长");
+}
+
 #[test]
 fn expired_events_beyond_floor_are_removed() {
     let root = axon_test_support::test_temp_dir();

@@ -19,6 +19,9 @@ use super::{
 #[path = "run_thread_model_history.rs"]
 mod model_history;
 pub(super) use model_history::thread_model_history_json;
+#[path = "run_thread_mirror_turn.rs"]
+mod mirror_turn;
+pub(super) use mirror_turn::mirror_existing_turn;
 
 /// 恢复会话所需的事实：全部来自 thread 文件的 settings 与最近一轮 turn metadata。
 ///
@@ -394,97 +397,6 @@ pub(super) fn mirror_session_terminal(
             },
         )
     }
-}
-
-pub(super) fn mirror_existing_turn(
-    service: &ThreadService<JsonlThreadEventStore>,
-    root: &Path,
-    thread_id: &str,
-    detail: &ThreadDetail,
-    turn: Turn,
-    record: &RunSessionRecord,
-) -> Result<Option<u64>, String> {
-    if turn.status == TurnStatus::Active {
-        if let Some(active) = detail
-            .turns
-            .iter()
-            .find(|value| value.status == TurnStatus::Active)
-        {
-            if active.turn_id != turn.turn_id {
-                return Err("thread 已存在不同 active turn".to_owned());
-            }
-            let items = pending_turn_items(&active.history_items, &turn.history_items);
-            if items.is_empty() {
-                return Ok(None);
-            }
-            return service
-                .append_turn_items(
-                    root,
-                    AppendTurnItemsCommand {
-                        thread_id: thread_id.to_owned(),
-                        turn_id: turn.turn_id,
-                        items,
-                        recorded_at_ms: record.created_at_ms,
-                    },
-                )
-                .map(|()| None);
-        }
-        return service
-            .start_turn(
-                root,
-                StartTurnCommand {
-                    thread_id: thread_id.to_owned(),
-                    recorded_at_ms: record.created_at_ms,
-                    turn,
-                },
-            )
-            .map(|()| None);
-    }
-    if let Some(active) = detail
-        .turns
-        .iter()
-        .find(|value| value.status == TurnStatus::Active)
-    {
-        // detail 已确认过这一轮：追加不再把整条 thread 读第二遍。
-        return service
-            .append_turn_at_tail(
-                root,
-                AppendTurnCommand {
-                    thread_id: thread_id.to_owned(),
-                    recorded_at_ms: record.created_at_ms,
-                    turn: Turn {
-                        turn_id: active.turn_id.clone(),
-                        sequence: active.sequence,
-                        ..turn
-                    },
-                },
-            )
-            .map(|()| Some(active.sequence));
-    }
-    /*
-     * 下一轮的序号取「当前最大序号 + 1」，不是「轮数」。
-     *
-     * thread 被治理重写之后，文件里只剩快照之后的窗口，序号从中间开始（例如 5..24），
-     * 轮数却是 20；按轮数取号会与保留下来的 `sequence == 20` 那一轮撞号，进而让
-     * `trace:<session>:<sequence>` 的标识、按序号的轮次定位与 affect 序列的先后判定
-     * 全部指向错的轮次。
-     */
-    let sequence = detail
-        .turns
-        .iter()
-        .map(|turn| turn.sequence)
-        .max()
-        .map_or(0, |last| last.saturating_add(1));
-    service
-        .append_turn_at_tail(
-            root,
-            AppendTurnCommand {
-                thread_id: thread_id.to_owned(),
-                recorded_at_ms: record.created_at_ms,
-                turn: Turn { sequence, ..turn },
-            },
-        )
-        .map(|()| Some(sequence))
 }
 
 /// 从 SQLite SSOT 恢复一段运行窗口的上下文。

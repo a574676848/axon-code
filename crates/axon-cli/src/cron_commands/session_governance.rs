@@ -103,7 +103,10 @@ pub(super) fn govern_thread_windows(
             continue;
         }
         match service.rewrite_to_window(root, &entry.thread_id, THREAD_WINDOW_KEEP_TURNS) {
-            Ok(true) => rewritten = rewritten.saturating_add(1),
+            Ok(true) => {
+                rewritten = rewritten.saturating_add(1);
+                forget_thread_turn_facts(root, &entry.thread_id);
+            }
             Ok(false) => {}
             // 单个 thread 重写失败不阻断整轮：事件面仍完整，下一轮再试。
             Err(error) => axon_logger::warning(&format!(
@@ -113,6 +116,20 @@ pub(super) fn govern_thread_windows(
         }
     }
     Ok((rewritten, dropped))
+}
+
+/// 窗口重写后让轮次事实侧车失效。
+///
+/// 重写会把已并入压缩快照的旧轮次移出 thread：这些轮次的侧车行留着，迟到的治理回写就会
+/// 拿它当存在性依据，把补丁写进已不存在的轮次。整条删掉，读侧回落尾窗，存活轮次的行在
+/// 下一轮收口时重建。
+fn forget_thread_turn_facts(root: &Path, thread_id: &str) {
+    let store = SqliteRuntimeStore::from_root(root.join(AXON_RUNTIME_DATA_DIR));
+    if let Err(error) = store.delete_thread_turn_facts(thread_id) {
+        axon_logger::warning(&format!(
+            "轮次事实侧车失效失败（读侧回落尾窗）: thread={thread_id} error={error:?}"
+        ));
+    }
 }
 
 /// 分级旧交互的事件正文；返回（换成标记的帧数，回收的日志字节数）。

@@ -584,6 +584,14 @@ impl SqliteRuntimeStore {
         thread_turn_facts_repository::turn_facts(self, thread_id, assistant_part_id)
     }
 
+    /// 删除一条 thread 的全部轮次事实；返回删除行数。
+    ///
+    /// 窗口重写会把已并入压缩快照的旧轮次移出 thread；侧车行必须一起消失，否则迟到的
+    /// 治理回写会拿侧车行当存在性依据，把补丁写进已不存在的轮次。
+    pub fn delete_thread_turn_facts(&self, thread_id: &str) -> Result<usize, RuntimeStoreError> {
+        thread_turn_facts_repository::delete_thread(self, thread_id)
+    }
+
     /// 写入或更新一轮的活动事实（索引页投影）。
     pub fn upsert_turn_activity(
         &self,

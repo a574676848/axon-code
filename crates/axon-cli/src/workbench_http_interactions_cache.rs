@@ -27,12 +27,13 @@ const MAX_ENTRIES: usize = 256;
 /// 缓存载荷总字节上限；单页载荷正常在几百 KB 量级。
 const MAX_BYTES: usize = 16 * 1024 * 1024;
 
-/// 一条缓存键：数据根、会话、事件水位、交互条数、标题、两张投影表的更新时间、
+/// 一条缓存键：数据根、会话、事件水位、交互条数、三张投影/派生表的更新时间、
 /// 页大小与翻页档。
 ///
 /// 水位与条数只证明「事件写了没有」，而派生事实是在水位提交之后才写的：逐轮答案落在
-/// `turn_activity`、累计读数落在 `session_metrics`，标题由后台线程单独写。把这三样一起
-/// 放进键，缓存才覆盖得住「事件已经落定、投影随后补齐」的那一段。
+/// `turn_activity`、累计读数落在 `session_metrics`，没有指标事件的轮次用时兜底读
+/// `work_item_history`。把这三样一起放进键，缓存才覆盖得住「事件已经落定、派生事实
+/// 随后补齐」的那一段。
 ///
 /// 数据根必须进键：同一进程里 `serve` 与 daemon 可能指向不同运行态目录，测试也是
 /// 各自一个临时根；漏掉它会把 A 根的一页发给 B 根。
@@ -42,9 +43,9 @@ struct CacheKey {
     session_id: String,
     event_sequence: u64,
     interaction_count: u64,
-    title: String,
     activity_updated_ms: u64,
     metrics_updated_ms: u64,
+    work_items_updated_ms: u64,
     limit: u32,
     brief: bool,
 }
@@ -83,9 +84,9 @@ where
         session_id: session_id.to_owned(),
         event_sequence: freshness.event_sequence,
         interaction_count: freshness.interaction_count,
-        title: freshness.title,
         activity_updated_ms: freshness.activity_updated_ms,
         metrics_updated_ms: freshness.metrics_updated_ms,
+        work_items_updated_ms: freshness.work_items_updated_ms,
         limit,
         brief,
     };
@@ -99,8 +100,9 @@ where
 
 /// 这条会话当前的新鲜度键；会话行不存在时为 `None`。
 ///
-/// 四层事实合起来才够：事件水位（有没有新事件）、交互条数（有没有新入站行）、标题
-/// （后台线程写的重命名）、两张投影表的更新时间（答案与读数补齐了没有）。
+/// 四层事实合起来才够：事件水位（有没有新事件）、交互条数（有没有新入站行）、
+/// `turn_activity` 与 `session_metrics` 的更新时间（答案与读数补齐了没有），以及
+/// `work_item_history` 的更新时间（没有指标事件的老记录靠它给出轮次用时）。
 fn freshness(axon_root: &Path, session_id: &str) -> Option<Freshness> {
     use rusqlite::OptionalExtension as _;
     let row = runtime_store(axon_root)
@@ -109,18 +111,19 @@ fn freshness(axon_root: &Path, session_id: &str) -> Option<Freshness> {
                 .query_row(
                     "SELECT s.last_event_sequence,
                             (SELECT COUNT(*) FROM inbox AS i WHERE i.session_id = s.session_id),
-                            COALESCE(s.title, ''),
                             (SELECT COALESCE(MAX(a.updated_at_ms), 0) FROM turn_activity AS a
                               WHERE a.session_id = s.session_id),
                             COALESCE((SELECT m.updated_at_ms FROM session_metrics AS m
-                                       WHERE m.session_id = s.session_id), 0)
+                                       WHERE m.session_id = s.session_id), 0),
+                            COALESCE((SELECT MAX(h.updated_at_ms) FROM work_item_history AS h
+                                       WHERE h.session_id = s.session_id), 0)
                        FROM sessions AS s WHERE s.session_id = ?1",
                     [session_id],
                     |row| {
                         Ok((
                             row.get::<_, i64>(0)?,
                             row.get::<_, i64>(1)?,
-                            row.get::<_, String>(2)?,
+                            row.get::<_, i64>(2)?,
                             row.get::<_, i64>(3)?,
                             row.get::<_, i64>(4)?,
                         ))
@@ -147,9 +150,9 @@ fn freshness(axon_root: &Path, session_id: &str) -> Option<Freshness> {
     Some(Freshness {
         event_sequence: u64::try_from(row.0).unwrap_or(0),
         interaction_count: u64::try_from(row.1).unwrap_or(0),
-        title: row.2,
-        activity_updated_ms: u64::try_from(row.3).unwrap_or(0),
-        metrics_updated_ms: u64::try_from(row.4).unwrap_or(0),
+        activity_updated_ms: u64::try_from(row.2).unwrap_or(0),
+        metrics_updated_ms: u64::try_from(row.3).unwrap_or(0),
+        work_items_updated_ms: u64::try_from(row.4).unwrap_or(0),
     })
 }
 
@@ -157,9 +160,9 @@ fn freshness(axon_root: &Path, session_id: &str) -> Option<Freshness> {
 struct Freshness {
     event_sequence: u64,
     interaction_count: u64,
-    title: String,
     activity_updated_ms: u64,
     metrics_updated_ms: u64,
+    work_items_updated_ms: u64,
 }
 
 /// 命中则返回整页并把条目提到最前。
@@ -232,9 +235,9 @@ mod tests {
             session_id: session_id.to_owned(),
             event_sequence,
             interaction_count,
-            title: String::new(),
             activity_updated_ms: 0,
             metrics_updated_ms: 0,
+            work_items_updated_ms: 0,
             limit: 200,
             brief: false,
         }
@@ -263,22 +266,24 @@ mod tests {
         assert!(lookup(&stored).is_some(), "未变化的那一条必须仍然命中");
     }
 
-    /// 水位与条数都不动、但派生事实变了（换标题、投影补齐）：同样必须失效。
+    /// 水位与条数都不动、但派生事实变了（工作项用时兜底、投影补齐）：同样必须失效。
     #[test]
     fn derived_facts_invalidate_without_an_event() {
-        let mut stored = key("/root-derived", "session-cache-derived", 7, 3);
+        let stored = key("/root-derived", "session-cache-derived", 7, 3);
         store(&stored, &serde_json::json!({ "value": "old" }));
-        let mut renamed = stored.clone();
-        renamed.title = "新标题".to_owned();
-        assert!(lookup(&renamed).is_none(), "标题变更后必须失效");
         let mut activity = stored.clone();
         activity.activity_updated_ms = 42;
         assert!(lookup(&activity).is_none(), "逐轮答案补齐后必须失效");
         let mut metrics = stored.clone();
         metrics.metrics_updated_ms = 43;
         assert!(lookup(&metrics).is_none(), "累计读数写入后必须失效");
+        let mut work_items = stored.clone();
+        work_items.work_items_updated_ms = 44;
+        assert!(
+            lookup(&work_items).is_none(),
+            "工作项终态写入后必须失效，否则轮次用时会被缓存成「没有」"
+        );
         assert!(lookup(&stored).is_some(), "原键仍然命中");
-        stored.title.clear();
     }
 
     #[test]

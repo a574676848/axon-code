@@ -83,6 +83,14 @@ pub trait ThreadEventStore {
     /// 追加一条事件。
     fn append(&self, root: &Path, record: &ThreadEventRecord) -> Result<(), String>;
 
+    /// 这条 thread 是否留下了未完成写入的痕迹（重写临时文件等）。
+    ///
+    /// 只用于把「读不到任何事件」区分为「从不存在」与「数据不完整」：前者可以新建，
+    /// 后者必须报错。默认实现按「没有痕迹」处理，只有真正落盘的存储才需要覆盖。
+    fn has_unfinished_write(&self, _root: &Path, _thread_id: &str) -> bool {
+        false
+    }
+
     /// 在「当前末尾序号等于期望值」的前提下追加一条事件。
     ///
     /// 与 `append` 的区别是带回执校验：读了末尾再写，若期间别人已经写过，拒绝覆盖。

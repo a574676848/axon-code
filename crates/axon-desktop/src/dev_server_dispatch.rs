@@ -583,6 +583,16 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
             conversation::session_read::session_subagents(&as_str("sessionId")?)?,
         )
         .map_err(stringify)?),
+        // 问答对账：调试桥与 Tauri 命令共用同一实现，否则浏览器等价验证拿不到权威状态。
+        "conversation_session_questions" => Ok(serde_json::to_value(
+            conversation::question_sync::session_questions(
+                &as_str("sessionId")?,
+                args.get("limit")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u32::try_from(value).ok()),
+            )?,
+        )
+        .map_err(stringify)?),
         "attachment_stage" => Ok(serde_json::to_value(crate::conversation::attachment::stage(
             &as_str("name")?,
             &as_str("dataBase64")?,

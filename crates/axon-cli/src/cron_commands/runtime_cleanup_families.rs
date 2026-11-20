@@ -298,13 +298,23 @@ pub(super) fn delete_session_families_by_ids(
     for table in ["session_metrics", "inbox", "turn_activity"] {
         delete_ids_in(&transaction, table, "session_id", &placeholders, ids)?;
     }
-    delete_ids_in(
-        &transaction,
-        "thread_turn_facts",
-        "thread_id",
-        &placeholders,
-        ids,
-    )?;
+    // `thread_turn_facts.thread_id` 存的是运行窗口（`sessions.current_run_id`），而候选里
+    // 一半是会话 ULID、一半本来就是 thread id：两个键空间都要试。映射必须在删 `sessions`
+    // 行之前用掉（同一事务内，行还在）。
+    transaction
+        .execute(
+            &format!(
+                "DELETE FROM thread_turn_facts
+                  WHERE thread_id IN ({placeholders})
+                     OR thread_id IN (
+                         SELECT current_run_id FROM sessions
+                          WHERE session_id IN ({placeholders})
+                            AND current_run_id IS NOT NULL AND current_run_id <> ''
+                     )"
+            ),
+            params_from_iter(ids.iter().chain(ids.iter())),
+        )
+        .map_err(|_| "Daemon runtime 轮次事实侧车清理失败".to_owned())?;
     // 恢复指针指向已删会话时一并清掉：指针只是「下次接续谁」的缓存，不构成事实。
     transaction
         .execute(

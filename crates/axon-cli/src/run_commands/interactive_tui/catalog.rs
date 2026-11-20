@@ -271,10 +271,14 @@ fn load_tui_session_items(
     config_path: &Path,
     cwd: Option<&Path>,
 ) -> Vec<AgentTuiSessionCatalogItem> {
+    // 空目录与「库打不开」必须留痕：后者（例如版本不兼容）会让会话面板看起来像「一条
+    // 会话都没有」，而真实原因是运行态库需要重建。
     let Ok(store) = crate::run_commands::run_agent_store::shared_runtime_store(config_path) else {
+        axon_logger::warning("TUI 会话目录读取失败：运行态库不可用");
         return Vec::new();
     };
     let Ok(rows) = crate::sessions_http_adapter::read_session_rows(&store) else {
+        axon_logger::warning("TUI 会话目录读取失败：会话表不可读（可能是运行态库版本不兼容）");
         return Vec::new();
     };
     session_catalog_items(rows, workspace_id_for_cwd(cwd))

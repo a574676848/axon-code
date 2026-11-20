@@ -132,6 +132,24 @@ pub(super) fn turn_facts(
         .map_err(storage)
 }
 
+/// 删除一条 thread 的全部轮次事实；返回删除行数。
+///
+/// 窗口重写会把已并入压缩快照的旧轮次移出 thread，这些轮次的侧车行必须一起消失：否则
+/// 迟到的治理回写会用侧车行做存在性判断，把补丁写进已不存在的轮次（静默无操作并留下
+/// 脏行）。整条删除比逐轮筛选更简单，存活轮次的行会在下一轮收口时重建。
+pub(super) fn delete_thread(
+    store: &SqliteRuntimeStore,
+    thread_id: &str,
+) -> Result<usize, RuntimeStoreError> {
+    let connection = store.connection()?;
+    connection
+        .execute(
+            "DELETE FROM thread_turn_facts WHERE thread_id = ?1",
+            [thread_id],
+        )
+        .map_err(storage)
+}
+
 /// 读一条 thread 最新一轮的事实；没有这一行时为空。
 pub(super) fn latest_turn_facts(
     store: &SqliteRuntimeStore,

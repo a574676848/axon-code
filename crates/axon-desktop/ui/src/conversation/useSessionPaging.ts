@@ -52,6 +52,8 @@ import type { SessionEffectiveModel } from './viewConfig';
 const HISTORY_PAGE_SIZE = 20;
 /** 「加载更早」每次取的轮数：按轮翻页，不是把更早的一页整批取回来。 */
 const OLDER_STEP = 1;
+/** 增量接管一条新轮时的并发上限：避免一页多条新轮同时压满网关。 */
+const TAKEOVER_CONCURRENCY = 3;
 
 export type { HistoryFacts } from './historyProjection';
 export type { HistoryEntry } from './pagingSkeleton';
@@ -77,7 +79,8 @@ export interface SessionPagingOptions {
   onReflectionNotice?: (notice: string | null) => void;
   /** 首页带回来的会话能力事实：可写性、可中断与可答问都读它。 */
   onSessionFacts?: (facts: SessionFacts | null) => void;
-
+  /** 打开失败：能力事实没有到达，界面必须退回「正在读取」而不是判成未登记。 */
+  onSessionFactsPending?: () => void;
 }
 
 export interface SessionPaging {
@@ -114,6 +117,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
     onEffectiveModel,
     onReflectionNotice,
     onSessionFacts,
+    onSessionFactsPending,
   } = options;
   /** 更早一轮的游标；为空表示已经翻到车道开头。 */
   const olderCursorRef = useRef<{ receivedAtMs: number; interactionId: string } | null>(null);
@@ -121,8 +125,8 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
    * 已加载轮次里最新的接收时刻。
    *
    * 增量接管按「本视图还不认识」去重，但补回的老轮同样不认识：向前翻过页之后，最新一页
-   * 窗口里会同时含已被替换成历史的老轮，把它们当新轮追加会让旧对话出现在对话末尾。
-   * 因此再按时间设一道下界：只有不早于已加载最新时刻的轮次才算新轮。
+   * 窗口里会同时含已被替换成历史的老轮，把它们当新轮追加会让旧对话出现在对话末尾；因此
+   * 再按时间设一道下界，只有不早于已加载最新时刻的轮次才算新轮。
    */
   const newestReceivedAtRef = useRef<number | null>(null);
   /** 历史索引的补充事实表（附件与来源）。 */
@@ -432,6 +436,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
           newestReceivedAtRef.current = null;
           dispatch({ type: 'reset' });
         }
+        onSessionFactsPending?.();
         throw error;
       } finally {
         setPageLoading(false);
@@ -450,6 +455,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
       withOpeningInput,
       withProvisional,
       onSessionFacts,
+      onSessionFactsPending,
       workspaceId,
     ],
   );
@@ -526,10 +532,8 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
       dispatch({ type: 'append-turns', turns: withProvisional(fresh) });
       const newest = fresh[fresh.length - 1];
       /*
-       * 一条新轮接管：先要尾窗，再在后台补整轮。
-       *
-       * 这一轮的帧读不到（例如刚被清理）不该把整条会话变成错误：骨架已经立起来，正文缺
-       * 过程只是少了一段，下一次轮次头会再补。
+       * 一条新轮接管：先要尾窗，再在后台补整轮。帧读不到不该把整条会话变成错误：骨架
+       * 已经立起来，正文缺过程只是少了一段，下一次轮次头会再补。
        */
       const takeOver = async (entry: HistoryEntry, expand: boolean): Promise<void> => {
         const reading = readInteractionFramesTailFirst(entry.interactionId, generation, {
@@ -551,7 +555,11 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
           // 实时尾，否则会永久停在骨架的 streaming 态。
           if (!expand && !tail.settled) void subscribeTail(entry.interactionId, tail.cursor);
         }
-        if (!expand) return;
+        if (!expand) {
+          // 尾窗读不到时骨架没有任何证据支持它仍在跑：收口成历史形态，别让转圈永远转下去。
+          if (!tailShown) settleUnread(entry);
+          return;
+        }
         void reading.full
           .then((full) => {
             if (full === null || generation !== generationRef.current) return;
@@ -578,7 +586,12 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
        */
       const running = fresh.filter((entry) => entry.status !== 'understood');
       const targets = running.includes(newest) ? running : [...running, newest];
-      await Promise.all(targets.map((entry) => takeOver(entry, entry === newest)));
+      // 一次最多三条并发：一页最多 20 条新轮，全部在跑时二十路 2000 帧的尾窗请求会同时
+      // 压向网关，单页载荷可达数 MB。
+      for (let index = 0; index < targets.length; index += TAKEOVER_CONCURRENCY) {
+        const group = targets.slice(index, index + TAKEOVER_CONCURRENCY);
+        await Promise.all(group.map((entry) => takeOver(entry, entry === newest)));
+      }
     } catch (error: unknown) {
       onError(error instanceof Error ? error.message : '读取新轮次失败');
     }

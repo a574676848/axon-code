@@ -189,6 +189,16 @@ impl JsonlThreadEventStore {
             .map_err(|_| "无法修复 thread 撕裂尾行".to_owned())
     }
 
+    /// 这条 thread 是否留下了未完成重写的临时文件。
+    ///
+    /// 有临时文件却一条事件都读不到，说明重写崩在了替换分片的中间：读侧必须报错，
+    /// 不能把它当成「从不存在」的新会话重建，否则旧历史会被孤儿文件永久埋掉。
+    pub(crate) fn thread_has_unfinished_write(root: &Path, thread_id: &str) -> bool {
+        SHARD_STORE
+            .has_stale_rewrite_temporaries(Self::thread_logical_path(root, thread_id))
+            .unwrap_or(false)
+    }
+
     fn read_file(path: &Path) -> Result<Vec<ThreadEventRecord>, String> {
         if !path.exists() {
             return Ok(Vec::new());
@@ -233,6 +243,10 @@ impl JsonlThreadEventStore {
 }
 
 impl ThreadEventStore for JsonlThreadEventStore {
+    fn has_unfinished_write(&self, root: &Path, thread_id: &str) -> bool {
+        Self::thread_has_unfinished_write(root, thread_id)
+    }
+
     fn append(&self, root: &Path, record: &ThreadEventRecord) -> Result<(), String> {
         let line = serde_json::to_string(record).map_err(|_| "thread 事件序列化失败".to_owned())?;
         SHARD_STORE
@@ -447,6 +461,34 @@ mod tests {
                 },
             },
         }
+    }
+
+    /// 只剩重写临时文件时不得当作「新会话」：这是崩溃现场，必须报错而不是重建。
+    #[test]
+    fn thread_with_only_rewrite_debris_is_not_treated_as_missing() {
+        let root = axon_test_support::test_temp_root().join(format!(
+            "axon-thread-debris-{}-{}",
+            std::process::id(),
+            axon_time::unix_now_ms()
+        ));
+        std::fs::create_dir_all(JsonlThreadEventStore::path(&root)).unwrap();
+        // 落盘文件名是编码后的 thread 前缀，这里从分片名反推同一前缀，保证临时文件命名口径一致。
+        let shard = JsonlThreadEventStore::shard_path(&root, "debris", 0);
+        let file_name = shard.file_name().unwrap().to_string_lossy().into_owned();
+        let prefix = file_name.split('.').next().unwrap().to_owned();
+        let temporary = shard.with_file_name(format!("{prefix}.rewrite0.tmp"));
+        std::fs::write(&temporary, b"{}").unwrap();
+        assert!(
+            JsonlThreadEventStore::thread_has_unfinished_write(&root, "debris"),
+            "临时文件必须被识别为未完成写入（{}）",
+            temporary.display()
+        );
+
+        let service = ThreadService::new(JsonlThreadEventStore);
+        let error = service
+            .read_thread_optional(&root, "debris")
+            .expect_err("有未完成写入痕迹时必须报错");
+        assert!(error.contains("不完整"), "{error}");
     }
 
     #[test]

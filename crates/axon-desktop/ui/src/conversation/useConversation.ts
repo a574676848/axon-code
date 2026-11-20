@@ -87,6 +87,11 @@ export function useConversation(
     setCapabilityTarget(capabilityTargetRef.current);
     setCapabilityLoaded(true);
   }, []);
+  /** 打开失败：能力事实从未到达，退回「正在读取」而不是判成「会话还没有登记」。 */
+  const markSessionFactsPending = useCallback(() => {
+    setCapabilityTarget(capabilityTargetRef.current);
+    setCapabilityLoaded(false);
+  }, []);
 
   /** 已经进入过渡窗口的目标；与当前目标不一致的那一帧就是切换那一帧。 */
   const [openedTarget, setOpenedTarget] = useState<string | null>(targetKey);
@@ -214,6 +219,7 @@ export function useConversation(
     onEffectiveModel: setSessionModel,
     onReflectionNotice: setSessionReflectionNotice,
     onSessionFacts: receiveSessionFacts,
+    onSessionFactsPending: markSessionFactsPending,
   });
 
   /**
@@ -279,15 +285,22 @@ export function useConversation(
         // 实时增量与历史回放共用同一个归约入口：这里就是主投影唯一的帧落点。
         dispatch({ type: 'frames', frames: batch, nowMs: Date.now() });
         if (workspaceId === null) return;
-        const terminal = batch.some(
-          (frame) =>
+        // 收到终态帧：这一轮不会再产生事件，按**帧自带的订阅标识**还回那一路订阅。
+        // 不能按 `watchedRef` 退订：多轮并行时它只记得最后一条，退掉的会是另一条仍在跑的流。
+        const terminalIds = new Set<string>();
+        for (const frame of batch) {
+          if (
             frame.kind === 'frame' &&
-            (frame.eventType === 'turn_completed' || frame.eventType === 'turn_failed'),
-        );
-        // 收到终态帧：这一轮不会再产生事件，把它那一路订阅还回去。
-        if (terminal && watchedRef.current !== null) {
-          const interactionId = watchedRef.current;
-          watchedRef.current = null;
+            (frame.eventType === 'turn_completed' || frame.eventType === 'turn_failed')
+          ) {
+            const prefix = 'interaction:';
+            if (frame.subscribeId.startsWith(prefix)) {
+              terminalIds.add(frame.subscribeId.slice(prefix.length));
+            }
+          }
+        }
+        for (const interactionId of terminalIds) {
+          if (watchedRef.current === interactionId) watchedRef.current = null;
           rememberUnsubscribed(`interaction:${interactionId}`);
           void ipc.conversationUnsubscribe(`interaction:${interactionId}`).catch(() => undefined);
         }

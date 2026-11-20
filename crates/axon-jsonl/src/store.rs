@@ -258,6 +258,54 @@ impl ShardedJsonlStore {
         })
     }
 
+    /// 这条逻辑文件是否遗留了未完成重写的临时文件（崩溃后的现场）。
+    ///
+    /// 读路径用它把「一条事件都没有」区分为「从不存在」与「数据不完整」：后者必须报错，
+    /// 否则一次崩溃就会被当成新会话重建。
+    pub fn has_stale_rewrite_temporaries(
+        &self,
+        logical_path: impl AsRef<Path>,
+    ) -> io::Result<bool> {
+        Ok(!self.rewrite_temporaries(logical_path.as_ref())?.is_empty())
+    }
+
+    /// 清掉上一轮重写崩溃留下的临时文件。
+    ///
+    /// 临时文件既不属于任何分片也无法回放；每次重写前清一次，避免目录随失败重试堆积。
+    fn remove_stale_rewrite_temporaries(&self, logical_path: &Path) -> io::Result<()> {
+        for path in self.rewrite_temporaries(logical_path)? {
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+
+    /// 列出 `<stem>.rewrite<序号>.tmp` 形态的临时文件。
+    fn rewrite_temporaries(&self, logical_path: &Path) -> io::Result<Vec<PathBuf>> {
+        let Some(directory) = logical_path.parent() else {
+            return Ok(Vec::new());
+        };
+        if !directory.exists() {
+            return Ok(Vec::new());
+        }
+        let Some(stem) = logical_path.file_stem().and_then(|value| value.to_str()) else {
+            return Ok(Vec::new());
+        };
+        let prefix = format!("{stem}.rewrite");
+        let mut found = Vec::new();
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with(&prefix) && name.ends_with(".tmp") {
+                found.push(entry.path());
+            }
+        }
+        Ok(found)
+    }
+
     fn append_target(&self, logical_path: &Path, line_bytes: usize) -> io::Result<PathBuf> {
         let line_bytes = u64::try_from(line_bytes)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "JSONL 行长度无效"))?;
@@ -335,10 +383,14 @@ impl ShardedJsonlStore {
 
     fn rewrite_unlocked(&self, logical_path: &Path, lines: Vec<Vec<u8>>) -> io::Result<()> {
         // 重写允许跨多个分片（历史超过 8 MiB 的会话同样要能换窗）。顺序是：
-        // 先把全部新分片写成临时文件，再逐个就位，最后删除序号超出的旧分片。
-        // 「先写后替换」保证任何一步崩溃都不会让会话归零；读取侧按 sequence 去重，
-        // 因此「新分片已就位、旧分片尚未删除」这个窗口不会产生重复轮次。
+        // 先把全部新分片写成临时文件，再逐块原子替换，最后删除序号超出的旧分片。
+        //
+        // 替换步骤**不能**先删目标再改名：那一瞬崩溃会让这一块分片凭空消失，而 tmp 不
+        // 属于任何分片（`shard_entries` 只认 `NNNNNN.jsonl`），读取侧只会把整条 thread
+        // 看成缺块甚至不存在。`fs::rename` 在目标已存在时直接覆盖，因此直接改名即可；
+        // 仅在改名失败（占用、杀软扫描）时才退回删除后重试。
         let chunks = self.chunk_rewrite_lines(&lines)?;
+        self.remove_stale_rewrite_temporaries(logical_path)?;
         let mut temporaries = Vec::with_capacity(chunks.len());
         for (index, chunk) in chunks.iter().enumerate() {
             let temporary = logical_path.with_extension(format!("rewrite{index}.tmp"));
@@ -351,6 +403,10 @@ impl ShardedJsonlStore {
         }
         for (index, temporary) in temporaries.iter().enumerate() {
             let target = shard_path(logical_path, index as u64)?;
+            if let Ok(()) = fs::rename(temporary, &target) {
+                continue;
+            }
+            // 目标被占用时改名会失败：删掉目标再改名一次，失败则保留 tmp 并向上报。
             match fs::remove_file(&target) {
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}

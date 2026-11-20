@@ -200,7 +200,8 @@ pub(super) fn count_session_family_data(
     report: &mut SessionCleanupReport,
 ) -> Result<(), String> {
     report.deleted_governance_count = count_governance(root, session_ids, cutoff_ms)?;
-    report.deleted_thread_file_count = count_thread_files(root, session_ids)?;
+    report.deleted_thread_file_count =
+        count_thread_files(root, &thread_keys_for_sessions(root, session_ids)?)?;
     apply_context_counts(report, count_session_context_files(root, session_ids)?);
     super::apply_runtime_cleanup_counts(report, count_runtime_session_families(root, session_ids)?);
     Ok(())
@@ -224,6 +225,8 @@ pub(super) fn cleanup_session_family_data(
         if Instant::now() >= deadline {
             break;
         }
+        // 先取线程键：会话行一删，`current_run_id` 这个唯一映射同时消失。
+        let thread_keys = thread_keys_for_sessions(root, ids)?;
         super::apply_runtime_cleanup_counts(report, cleanup_runtime_session_families(root, ids)?);
         report.deleted_governance_count = report
             .deleted_governance_count
@@ -231,7 +234,7 @@ pub(super) fn cleanup_session_family_data(
         // 先删会话上下文、后删 thread 文件：上下文删除失败时 thread 轮次仍在，
         // 下一轮清理还能凭它重新定位整个家族，不会留下无人认领的孤儿数据。
         remove_session_context_files(root, ids, report)?;
-        remove_thread_files(root, ids, report)?;
+        remove_thread_files(root, &thread_keys, report)?;
         processed.extend(ids.iter().cloned());
     }
     report.deleted_session_count = processed.len();
@@ -334,9 +337,51 @@ fn governance_values(session_ids: &[String], cutoff_ms: u64) -> Vec<Value> {
     values
 }
 
-fn count_thread_files(root: &Path, session_ids: &[String]) -> Result<usize, String> {
+/// 会话族候选里可能出现的两种线程键。
+///
+/// 候选集一半来自 thread 索引（本身就是 thread id），一半来自运行态库（会话 ULID）；
+/// thread 文件与 `thread_turn_facts` 按前者命名。两个键空间都要试，否则总有一半删不掉。
+fn thread_keys_for_sessions(root: &Path, session_ids: &[String]) -> Result<Vec<String>, String> {
+    let mut keys = session_ids.to_vec();
+    keys.extend(thread_ids_for_sessions(root, session_ids)?);
+    keys.sort_unstable();
+    keys.dedup();
+    Ok(keys)
+}
+
+/// 会话 id → 运行窗口（thread）id。
+fn thread_ids_for_sessions(root: &Path, session_ids: &[String]) -> Result<Vec<String>, String> {
+    if session_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let path = root
+        .join(axon_config::AXON_RUNTIME_DATA_DIR)
+        .join(crate::cron_commands::runtime_cleanup::CONTROL_DATABASE_FILE);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let connection = open_database(&path, "控制面")?;
+    let sql = format!(
+        "SELECT current_run_id FROM sessions
+          WHERE session_id IN ({})
+            AND current_run_id IS NOT NULL AND current_run_id <> ''",
+        placeholders(session_ids.len())
+    );
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|_| "运行窗口映射读取失败".to_owned())?;
+    let rows = statement
+        .query_map(params_from_iter(session_ids.iter()), |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|_| "运行窗口映射读取失败".to_owned())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|_| "运行窗口映射读取失败".to_owned())
+}
+
+fn count_thread_files(root: &Path, thread_ids: &[String]) -> Result<usize, String> {
     let mut count = 0_usize;
-    for id in session_ids {
+    for id in thread_ids {
         if !JsonlThreadEventStore::thread_shard_paths(root, id)?.is_empty() {
             count += 1;
         }
@@ -346,12 +391,12 @@ fn count_thread_files(root: &Path, session_ids: &[String]) -> Result<usize, Stri
 
 fn remove_thread_files(
     root: &Path,
-    session_ids: &[String],
+    thread_ids: &[String],
     report: &mut SessionCleanupReport,
 ) -> Result<(), String> {
     let thread_store = JsonlThreadEventStore;
-    for session_id in session_ids {
-        if thread_store.remove_thread(root, session_id)? {
+    for thread_id in thread_ids {
+        if thread_store.remove_thread(root, thread_id)? {
             report.deleted_thread_file_count += 1;
         }
     }

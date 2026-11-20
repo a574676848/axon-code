@@ -90,6 +90,57 @@ fn model_history_projects_native_tool_call_and_result_from_same_items() {
     assert!(result.success);
 }
 
+/// 生产链路：起跑先建占位轮次、收口再定轮序；每轮必须递增。
+///
+/// 占位轮次的序号一律从 0 起，若收口沿用 `active.sequence`，每一轮都会拿到 0，
+/// `trace:<session>:<sequence>`、`card_id` 与「按序号定位轮次」随即全轮撞车。
+#[test]
+fn settled_turns_get_increasing_sequences_through_the_started_path() {
+    use axon_session::RuntimeStore as _;
+
+    let root = temp_root("turn-sequence-started");
+    let config_path = root.join("runtime").join("config.toml");
+    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    axon_config::ConfigLoader::save_to_path(&config_path, &axon_config::AxonConfig::default())
+        .unwrap();
+    let data_dir = crate::runtime_paths::runtime_axon_data_path_static(&config_path)
+        .expect("运行态数据目录应可解析");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    axon_session::SqliteRuntimeStore::from_root(&data_dir)
+        .initialize()
+        .expect("控制面库应可初始化");
+
+    let mut first = session_record("第一轮问题", "第一轮回答", 100);
+    first.assistant_part_id = "assistant:session-1:first".to_owned();
+    mirror_session_started(&config_path, &first).expect("首轮起跑镜像");
+    mirror_session_to_thread(&config_path, &first).expect("首轮收口");
+
+    let mut second = session_record("第二轮问题", "第二轮回答", 200);
+    second.assistant_part_id = "assistant:session-1:second".to_owned();
+    mirror_session_started(&config_path, &second).expect("次轮起跑镜像");
+    mirror_session_to_thread(&config_path, &second).expect("次轮收口");
+
+    let first_facts = crate::run_commands::run_thread_facts::turn_facts(
+        &config_path,
+        &first.thread_id,
+        &first.assistant_part_id,
+    )
+    .expect("首轮侧车必须有一行");
+    let second_facts = crate::run_commands::run_thread_facts::turn_facts(
+        &config_path,
+        &second.thread_id,
+        &second.assistant_part_id,
+    )
+    .expect("次轮侧车必须有一行");
+    assert_eq!(first_facts.sequence, Some(0), "首轮轮序为 0");
+    assert_eq!(
+        second_facts.sequence,
+        Some(1),
+        "轮序必须逐轮递增，否则 trace/card 全轮撞车"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// 收口闭环：轮次落 thread 之后，轮序随侧车一起可点查。
 ///
 /// 治理回写（反思提示、`trace:<session>:<sequence>` 标识）只查侧车，不再为了一个标量

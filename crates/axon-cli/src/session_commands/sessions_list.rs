@@ -41,8 +41,12 @@ pub(crate) fn run_sessions_list(
         Err(error) => return cli_error(error),
     };
     let store = SqliteRuntimeStore::from_root(data_root);
-    // 运行态库还没建出来时如实报告空清单，不是错误。
-    let rows = read_session_rows(&store).unwrap_or_default();
+    // 运行态库还没建出来时如实报告空清单；但「库打不开」（例如版本不兼容）必须冒泡：
+    // 吞成空列表会让升级后看起来像「会话全没了」，而真实原因是库需要重建。
+    let rows = match read_session_rows(&store) {
+        Ok(rows) => rows,
+        Err(error) => return cli_error(error.to_string()),
+    };
     let visible = rows
         .into_iter()
         .filter(|row| command.all || !row.archived)

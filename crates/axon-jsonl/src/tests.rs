@@ -54,6 +54,33 @@ fn append_retains_only_records_at_or_after_cutoff() {
     assert_eq!(lines, [b"{\"recordedAtMs\":90}".to_vec()]);
 }
 
+/// 重写不得先删目标再改名：替换必须一步到位，且崩溃留下的临时文件在下次重写前清掉。
+#[test]
+fn rewrite_replaces_shards_atomically_and_drops_stale_temporaries() {
+    let directory = axon_test_support::test_temp_dir();
+    let logical = directory.path().join("atomic.jsonl");
+    let store = ShardedJsonlStore::new();
+    store.append_line(&logical, br#"{"id":1}"#).expect("append");
+    store.append_line(&logical, br#"{"id":2}"#).expect("append");
+
+    // 模拟上一次重写崩溃：留下一个不属于任何分片的临时文件。
+    let stale = logical.with_extension("rewrite9.tmp");
+    fs::write(&stale, b"{\"id\":9}").expect("写临时文件");
+    assert!(store.has_stale_rewrite_temporaries(&logical).expect("探测"));
+
+    store
+        .rewrite_with(&logical, |_| Ok(((), vec![br#"{"id":3}"#.to_vec()])))
+        .expect("重写");
+
+    assert!(!stale.exists(), "重写前必须清掉遗留临时文件");
+    assert!(
+        !store.has_stale_rewrite_temporaries(&logical).expect("探测"),
+        "重写后不得留下临时文件"
+    );
+    let lines = store.read_lines(&logical).expect("lines");
+    assert_eq!(lines, [br#"{"id":3}"#.to_vec()]);
+}
+
 #[test]
 fn rewrite_removes_superseded_shards() {
     let directory = axon_test_support::test_temp_dir();
