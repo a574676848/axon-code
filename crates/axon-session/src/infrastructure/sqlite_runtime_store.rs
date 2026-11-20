@@ -96,6 +96,10 @@ pub(crate) mod session_metrics_repository;
 mod thread_turn_facts_repository;
 #[path = "sqlite_runtime_store/transaction.rs"]
 pub mod transaction;
+#[path = "sqlite_runtime_store/turn_activity_projection.rs"]
+mod turn_activity_projection;
+#[path = "sqlite_runtime_store/turn_activity_repository.rs"]
+mod turn_activity_repository;
 #[path = "sqlite_runtime_store/user_question_repository.rs"]
 mod user_question_repository;
 #[path = "sqlite_runtime_store/work_item_archive.rs"]
@@ -504,6 +508,7 @@ impl EventLogStore for SqliteRuntimeStore {
 ///
 /// 侧车表是投影：写入失败不阻断主流程，读侧在缺行时回落尾窗读。
 pub use thread_turn_facts_repository::ThreadTurnFacts;
+pub use turn_activity_repository::TurnActivity;
 
 impl SqliteRuntimeStore {
     /// 写入或更新一轮的标量事实。
@@ -539,6 +544,27 @@ impl SqliteRuntimeStore {
     ) -> Result<Option<ThreadTurnFacts>, RuntimeStoreError> {
         thread_turn_facts_repository::latest_turn_facts(self, thread_id)
     }
+
+    /// 写入或更新一轮的活动事实（索引页投影）。
+    pub fn upsert_turn_activity(
+        &self,
+        activity: &turn_activity_repository::TurnActivity,
+        now_ms: u64,
+    ) -> Result<(), RuntimeStoreError> {
+        turn_activity_repository::upsert_activity(self, activity, now_ms)
+    }
+
+    /// 一批交互的逐轮事实；缺行由调用方回落日志尾扫。
+    pub fn turn_activities_for(
+        &self,
+        session_id: &str,
+        interaction_ids: &[&str],
+    ) -> Result<
+        std::collections::HashMap<String, turn_activity_repository::TurnActivity>,
+        RuntimeStoreError,
+    > {
+        turn_activity_repository::activities_for(self, session_id, interaction_ids)
+    }
 }
 #[cfg(test)]
 #[path = "sqlite_runtime_store_metrics_tests.rs"]
@@ -546,6 +572,9 @@ mod metrics_tests;
 #[cfg(test)]
 #[path = "sqlite_runtime_store_perf_tests.rs"]
 mod perf_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_turn_activity_tests.rs"]
+mod turn_activity_tests;
 #[cfg(test)]
 #[path = "sqlite_runtime_store_turn_facts_tests.rs"]
 mod turn_facts_tests;

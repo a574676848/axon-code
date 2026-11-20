@@ -483,6 +483,8 @@ fn apply_projections(
     origin_channel: Option<&str>,
     now_ms: u64,
 ) {
+    // 逐轮事实：收口批次里同时带着终态与它派生的指标，一次投影就够。
+    super::turn_activity_projection::project_turn_activity(store, session_id, events, now_ms);
     for (event_type, payload_json) in events {
         if event_type != "turn_metrics" {
             continue;

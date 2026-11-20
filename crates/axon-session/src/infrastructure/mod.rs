@@ -93,7 +93,8 @@ pub use jsonl_store::{
 };
 pub use sqlite_runtime_store::{
     SESSION_EVENT_ARCHIVE_SUBDIR, SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES,
-    SESSION_EVENT_MISSING_ARCHIVE_TYPE, SqliteRuntimeStore, ThreadTurnFacts, WalCheckpoint,
+    SESSION_EVENT_MISSING_ARCHIVE_TYPE, SqliteRuntimeStore, ThreadTurnFacts, TurnActivity,
+    WalCheckpoint,
 };
 pub use sqlite_runtime_store::{
     action_repository::ActionRepository, lease_repository::LeaseRepository,

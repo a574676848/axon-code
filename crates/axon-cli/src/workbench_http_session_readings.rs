@@ -113,6 +113,12 @@ const ANSWER_TEXT_LIMIT_CHARS: usize = 16 * 1024;
 /// 尾部扫描的硬上限：防住异常日志把一次翻页拖成整条会话解压。
 const PAGE_TAIL_MAX_FRAMES: usize = 16_384;
 
+/// 整页都已命中投影行时的兜底尾扫窗口。
+///
+/// 这时尾扫只为会话级事实（后台作业与计划快照）服务，不再需要覆盖整页轮次，
+/// 因此窗口可以小两个数量级：索引页的代价从「页内帧数」降到常量。
+const SESSION_TAIL_MAX_FRAMES: usize = 2_000;
+
 /// 一页历史的逐轮事实：读数、最终正文与动作摘要。
 #[derive(Debug, Clone, Default)]
 pub(super) struct PageFacts {
@@ -202,12 +208,50 @@ pub(super) fn page_facts(
     let Ok(session) = DaemonSessionId::new(session_id.to_owned()) else {
         return facts;
     };
+    /*
+     * 投影表优先：答案、工具名与逐轮读数都在 `turn_activity` 里，一次按会话的区间查询
+     * 就能给整页，不必再为它们扫事件日志。
+     */
+    let mut covered = 0usize;
+    if let Ok(projected) = store.turn_activities_for(session_id, interaction_ids) {
+        for interaction_id in interaction_ids {
+            let Some(row) = projected.get(*interaction_id) else {
+                continue;
+            };
+            covered += 1;
+            if let Some(answer) = row.answer_text.as_deref() {
+                facts
+                    .answers
+                    .entry((*interaction_id).to_owned())
+                    .or_insert_with(|| clamp_answer_text(answer));
+            }
+            if !row.tool_names.is_empty() {
+                facts
+                    .tool_names
+                    .insert((*interaction_id).to_owned(), row.tool_names.clone());
+            }
+            if let Some(metrics_json) = row.metrics_json.as_deref()
+                && let Ok(metrics) = serde_json::from_str::<TurnMetrics>(metrics_json)
+            {
+                facts.readings.insert(
+                    (*interaction_id).to_owned(),
+                    TurnReadings::from_metrics(&metrics),
+                );
+            }
+        }
+    }
+    // 整页都有投影行时，尾扫只补会话级事实，窗口因此可以小两个数量级。
+    let tail_frames = if covered == interaction_ids.len() {
+        SESSION_TAIL_MAX_FRAMES
+    } else {
+        PAGE_TAIL_MAX_FRAMES
+    };
     let path = store.event_log(&session).path();
     if path.exists() {
         // 只扫到「本页最早那一轮」为止：代价正比于这一页真实占用的帧数，与日志总长无关。
         let mut current: Option<String> = None;
         let mut covered: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let _ = axon_eventlog::read_tail_scan(&path, PAGE_TAIL_MAX_FRAMES, |record| {
+        let _ = axon_eventlog::read_tail_scan(&path, tail_frames, |record| {
             match record.event_type.as_str() {
                 "turn_completed" => {
                     let Some(interaction_id) = record

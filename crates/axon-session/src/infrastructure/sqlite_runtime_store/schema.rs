@@ -31,7 +31,8 @@ impl SchemaKind {
             // 10：sessions.execution_id 记「当前这一轮是谁」。
             // 11：inbox 增 terminal_kind：派发轮没有 work_item、拿不到 lease，终态只能直接落在入站行上。
             // 12：新增 thread_turn_facts 侧车表（长会话的轮次标量事实不再读大记录）。
-            Self::Control => 12,
+            // 13：新增 turn_activity 逐轮事实投影（索引页不再扫事件日志）。
+            Self::Control => 13,
             Self::Outbox => 1,
         }
     }
@@ -277,14 +278,17 @@ const CONTROL_DDL: &str = "
             last_turn_at_ms INTEGER,
             updated_at_ms INTEGER NOT NULL
         );
-        -- 轮次事实侧车表：打开会话只需三个标量，不再读那条 676 KB 到数 MB 的轮次记录。
+        -- 两张投影表：轮次标量事实与逐轮活动，读侧只查主键，不再读大记录或扫事件日志。
         CREATE TABLE IF NOT EXISTS thread_turn_facts (
-            thread_id TEXT NOT NULL, assistant_part_id TEXT NOT NULL,
-            recorded_at_ms INTEGER NOT NULL, model_name TEXT, reasoning_effort TEXT,
-            reflection_notice TEXT, updated_at_ms INTEGER NOT NULL,
-            PRIMARY KEY (thread_id, assistant_part_id)
-        );
+            thread_id TEXT NOT NULL, assistant_part_id TEXT NOT NULL, recorded_at_ms INTEGER NOT NULL,
+            model_name TEXT, reasoning_effort TEXT, reflection_notice TEXT, updated_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (thread_id, assistant_part_id));
         CREATE INDEX IF NOT EXISTS thread_turn_facts_latest ON thread_turn_facts(thread_id, recorded_at_ms DESC);
+        CREATE TABLE IF NOT EXISTS turn_activity (
+            session_id TEXT NOT NULL, interaction_id TEXT NOT NULL, received_at_ms INTEGER NOT NULL,
+            answer_text TEXT, tool_names_json TEXT, metrics_json TEXT, updated_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (session_id, interaction_id));
+        CREATE INDEX IF NOT EXISTS turn_activity_latest ON turn_activity(session_id, received_at_ms DESC);
         CREATE TABLE IF NOT EXISTS schedules (
             schedule_id TEXT PRIMARY KEY, session_id TEXT, kind TEXT NOT NULL,
             expression TEXT NOT NULL, payload_json TEXT NOT NULL, delivery_mode TEXT NOT NULL, status TEXT NOT NULL,
