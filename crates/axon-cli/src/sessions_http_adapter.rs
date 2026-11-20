@@ -235,6 +235,18 @@ pub(crate) struct SessionListRow {
     pub(crate) model: String,
     /// 用户当时选择的模型别名；展示与恢复优先用它。
     pub(crate) model_name: Option<String>,
+    /// 是否有一条 Interaction 正在处理中。
+    ///
+    /// 与领域口径同源：`session_query_service` 用「`work_items.status = 'running'` 的轮次
+    /// 计数大于零」定义运行态。桌面左侧菜单靠这一位决定会话标题前的状态槽画不画转圈，
+    /// 因此它必须随清单一起下发，而不是留给客户端按 `status` 去猜：`sessions.status`
+    /// 在运行期不会被改写，按它判会把所有会话永远读成「没在跑」。
+    pub(crate) running: bool,
+    /// 当前待答复的提问数。
+    ///
+    /// `user_questions` 落在 outbox 库，与这份清单不是同一个文件，因此这一列只能在
+    /// 清单之外补一次聚合（见 `read_session_rows`）；补不到时按 0 处理，角标不亮。
+    pub(crate) pending_question_count: u64,
 }
 
 impl SessionListRow {
@@ -263,15 +275,28 @@ impl SessionListRow {
             "provider": self.provider,
             "model": self.model,
             "modelName": self.model_name,
+            // 运行态：桌面标题前的状态槽与「进行中」浮层都读这一位。
+            "running": self.running,
+            // 待答提问：桌面标题前的琥珀角标读这一位。
+            "pendingQuestionCount": self.pending_question_count,
         })
     }
 }
 
 /// 读取会话清单：置顶优先、再按最近活动倒序。
+///
+/// 待答提问数在这里补：`user_questions` 落在 outbox 库，与清单不是同一个文件，并不进
+/// 那条 SQL。整份清单只多一次聚合，不随会话数增长；读失败按「没有待答」处理，角标
+/// 缺失比整份清单不可用轻。
 pub(crate) fn read_session_rows(
     store: &SqliteRuntimeStore,
 ) -> Result<Vec<SessionListRow>, axon_session::RuntimeStoreError> {
-    store.with_read_connection(read_sessions)
+    let mut rows = store.with_read_connection(read_sessions)?;
+    let pending = store.pending_question_counts().unwrap_or_default();
+    for row in &mut rows {
+        row.pending_question_count = pending.get(&row.session_id).copied().unwrap_or(0);
+    }
+    Ok(rows)
 }
 
 fn read_sessions(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<SessionListRow>> {
@@ -296,7 +321,10 @@ fn read_sessions(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<Sess
                           ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1), ''),
                 s.trust_scope,
                 (SELECT COUNT(*) FROM inbox AS i WHERE i.session_id = s.session_id),
-                s.provider, s.model, s.model_name
+                s.provider, s.model, s.model_name,
+                -- 运行态：该会话名下仍在跑的轮次数。判据与领域一致（见 SessionListRow::running）。
+                (SELECT COUNT(*) FROM inbox AS i JOIN work_items AS w ON w.inbox_id = i.interaction_id
+                 WHERE i.session_id = s.session_id AND w.status = 'running')
          FROM sessions AS s
          LEFT JOIN session_metrics AS m ON m.session_id = s.session_id
          WHERE s.kind = 'primary'
@@ -335,6 +363,9 @@ fn read_sessions(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<Sess
             provider: row.get::<_, Option<String>>(20)?.unwrap_or_default(),
             model: row.get::<_, Option<String>>(21)?.unwrap_or_default(),
             model_name: row.get(22)?,
+            running: row.get::<_, i64>(23)? > 0,
+            // 待答提问在 outbox 库，由 read_session_rows 在清单之外补上。
+            pending_question_count: 0,
         })
     })?;
     rows.collect()

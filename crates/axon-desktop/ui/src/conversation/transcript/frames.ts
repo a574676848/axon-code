@@ -83,22 +83,14 @@ export function applyFrames(
   for (const frame of frames) {
     next = applyFrame(next, frame, nowMs);
   }
-  return withoutSettledPlan(next);
-}
-
-/**
- * 整轮收口即撤掉计划投影。
- *
- * 固定计划坞读的是「会话当前计划」：这一轮跑完之后它已经过期，继续钉在输入坞上方
- * 只会让人以为还在执行。时间线里的计划单元是每次 planUpdate 的原子记录，不在这里
- * 清除，下一轮再给出 planUpdate 时投影照常长回来。
- */
-function withoutSettledPlan(state: ConversationState): ConversationState {
-  if (state.plan === null) return state;
-  const running = state.turns.some(
-    (turn) => turn.status === 'pending' || turn.status === 'streaming',
-  );
-  return running ? state : { ...state, plan: null };
+  /*
+   * 计划投影不随轮次收口撤下：它挂在输入坞上方的计划坞里，是「这条会话当前的那个计划」。
+   *
+   * 收口就清掉的话，一轮跑完计划坞会整块消失、下一轮再长回来，读起来像计划丢了；而折叠
+   * 只管正文区里的过程行，两者不共享生命周期。换会话由 `reset` 收口，下一次
+   * `update_plan` 则整份替换。
+   */
+  return next;
 }
 
 /** 单帧路由：先按事件类型分流，wire 事件内部再由载荷类型二次判别。 */

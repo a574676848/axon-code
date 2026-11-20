@@ -124,6 +124,44 @@ pub(super) struct PageFacts {
     pub tool_names: HashMap<String, Vec<String>>,
     /// 会话级后台作业清单：启动与终态各一条事件，属于整条会话而不是某一轮。
     pub jobs: Vec<SessionJobFact>,
+    /// 会话级计划快照：本次扫描窗口里最近一次 `update_plan`。
+    pub plan: Option<SessionPlanSnapshot>,
+}
+
+/// 计划快照里的步骤上限。
+///
+/// 索引是首屏载荷，`update_plan` 再怎么失控也不该把一页历史撑大：超出即截断，
+/// 进度读数与计划坞只关心「几步做完」，多出来的步骤不改变结论。
+const PLAN_STEP_LIMIT: usize = 64;
+
+/// 会话级计划快照：事件流里最近一次 `update_plan` 的投影。
+///
+/// 与时间线上的计划单元同源：那边保留每次更新的原子记录，这里是「当前那一份」，
+/// 供输入坞上方的计划坞在打开会话时立起进度，不必等回放恰好读到那一帧。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SessionPlanSnapshot {
+    /// transcript part ID，计划单元的稳定身份。
+    pub part_id: String,
+    /// 计划标题。
+    pub title: String,
+    /// 步骤明细，已按上限截断。
+    pub steps: Vec<SessionPlanStep>,
+    /// 发出这次更新的那一轮；会话级帧没有归属时为空。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interaction_id: Option<String>,
+    /// 这次更新的时刻（Unix 毫秒）。
+    pub updated_at_ms: u64,
+}
+
+/// 计划快照里的一步。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SessionPlanStep {
+    /// 步骤内容。
+    pub step: String,
+    /// 步骤状态；界面按后端原值归类。
+    pub status: String,
 }
 
 /// 会话级后台作业的一行事实。
@@ -215,6 +253,19 @@ pub(super) fn page_facts(
                         .or_insert_with(|| TurnReadings::from_metrics(&metrics));
                 }
                 "wire_event" => {
+                    /*
+                     * 计划是会话级事实：反向扫描遇到的第一个 `planUpdate` 就是最新那一份，
+                     * 取到即止。热路径只做一次 `kind.type` 比较，非计划帧不反序列化、不分配。
+                     */
+                    if facts.plan.is_none()
+                        && let Some(plan) = plan_snapshot(
+                            &record.payload,
+                            record.interaction_id.as_deref(),
+                            record.emitted_at_ms,
+                        )
+                    {
+                        facts.plan = Some(plan);
+                    }
                     let (Some(owner), Some(name)) =
                         (current.as_deref(), tool_call_name(&record.payload))
                     else {
@@ -252,6 +303,40 @@ pub(super) fn page_facts(
         facts.readings.entry(interaction_id).or_default().active_ms = Some(elapsed);
     }
     facts
+}
+
+/// 从一帧 wire 事件里取计划快照；不是计划帧时返回空。
+///
+/// 热路径：先做一次 `kind.type` 字符串比较，命中才反序列化。载荷按协议类型解析
+/// （`WirePlanUpdate`），网关不再另抄一份字段名，协议改名时编译期就会报出来。
+fn plan_snapshot(
+    payload: &serde_json::Value,
+    interaction_id: Option<&str>,
+    emitted_at_ms: u64,
+) -> Option<SessionPlanSnapshot> {
+    let kind = payload.get("kind")?;
+    if kind.get("type").and_then(serde_json::Value::as_str) != Some("planUpdate") {
+        return None;
+    }
+    let plan =
+        serde_json::from_value::<axon_protocol::wire::WirePlanUpdate>(kind.get("payload")?.clone())
+            .ok()?;
+    let steps = plan
+        .steps
+        .into_iter()
+        .take(PLAN_STEP_LIMIT)
+        .map(|step| SessionPlanStep {
+            step: step.step,
+            status: step.status,
+        })
+        .collect();
+    Some(SessionPlanSnapshot {
+        part_id: plan.part_id,
+        title: plan.title,
+        steps,
+        interaction_id: interaction_id.map(str::to_owned),
+        updated_at_ms: emitted_at_ms,
+    })
 }
 
 /// 收下一条作业事件；启动与终态合并成同一行。
@@ -403,44 +488,61 @@ pub(super) fn session_usage_payload(axon_root: &Path, session_id: &str) -> serde
     })
 }
 
-/// 车道当前模型的权威事实：只读该车道运行会话的**最新一条**轮次记录。
+/// 会话行上的车道身份事实：能力块与模型读数共用同一次读取。
+pub(super) struct SessionRowFacts {
+    /// 能力块载荷：可写性、可中断与可答问都由它承载。
+    pub(super) capability: serde_json::Value,
+    /// 该车道使用的 provider。
+    pub(super) provider: String,
+    /// 该车道使用的模型标识。
+    pub(super) model: String,
+    /// 该车道展示用的模型名。
+    pub(super) model_name: String,
+}
+
+/// 最新一轮的 metadata 事实：一次尾窗轻读取回，供模型强度与反思提示共用。
 ///
-/// 性能约束（CRITICAL）：不遍历历史轮次，也不回放 Interaction 事件帧。一次
-/// `sessions` 单行查 + 一次 `sessions` 最新行查就够；解析不到运行会话、
-/// 或该会话还没有任何一轮时给 null，由界面回退配置默认值（那也是运行时会选的模型）。
-pub(super) fn effective_model_payload(axon_root: &Path, session_id: &str) -> serde_json::Value {
-    let Some(run_session_id) = session_run_session_id(axon_root, session_id) else {
+/// 口径只有一条：只读最新一轮的 metadata，读不到就当没有（`None`），不回退整条 thread。
+pub(super) fn latest_turn_facts(
+    axon_root: &Path,
+    session_id: &str,
+) -> Option<crate::run_commands::run_thread_store::LatestTurnFacts> {
+    let run_session_id = session_run_session_id(axon_root, session_id)?;
+    crate::run_commands::run_thread_store::latest_turn_facts_at_root(axon_root, &run_session_id)
+}
+
+/// 车道当前模型的权威事实。
+///
+/// provider 与模型标识取会话行（同一请求已经读过）；展示别名与思考强度只有最新一轮
+/// metadata 里才有，取到就用它、取不到就退回会话行的名字或为空，绝不为此回读整条 thread。
+pub(super) fn effective_model_payload(
+    row: Option<&SessionRowFacts>,
+    latest: Option<&crate::run_commands::run_thread_store::LatestTurnFacts>,
+) -> serde_json::Value {
+    let Some(row) = row else {
         return serde_json::Value::Null;
     };
-    let Ok(Some(facts)) =
-        crate::run_commands::run_thread_store::session_model_at_root(axon_root, &run_session_id)
-    else {
-        return serde_json::Value::Null;
-    };
+    let name = latest
+        .and_then(|facts| facts.model_name.clone())
+        .unwrap_or_else(|| row.model_name.clone());
     serde_json::json!({
-        "provider": facts.provider,
-        "model": facts.model,
-        "name": facts.model_name,
-        "reasoningEffort": facts.reasoning_effort,
+        "provider": row.provider,
+        "model": row.model,
+        "name": name,
+        "reasoningEffort": latest.and_then(|facts| facts.reasoning_effort.clone()),
     })
 }
 
 /// 该车道最近一轮的记忆反思提示；读不到时返回 `Null`。
 ///
-/// 与 `effective_model_payload` 同一读法：先把车道解析成 run session，再读它最新
-/// 一轮记录里的 `reflectionNotice`。反思是轮后异步治理的产物，这里给的是「最近一次
-/// 已完成治理」的结果，界面按「上一次记忆动作」呈现，不承诺与当前轮同步。
-pub(super) fn reflection_notice_payload(axon_root: &Path, session_id: &str) -> serde_json::Value {
-    let Some(run_session_id) = session_run_session_id(axon_root, session_id) else {
-        return serde_json::Value::Null;
-    };
-    // 反思提示随 thread 轮次落盘，只读接口直接从 thread 投影取。`axon_root` 的数据目录
-    // 与 CLI 一致，直接复用同一实现。
-    crate::run_commands::run_thread_store::latest_reflection_notice_at_root(
-        axon_root,
-        &run_session_id,
-    )
-    .map_or(serde_json::Value::Null, serde_json::Value::from)
+/// 反思是轮后异步治理写进轮次 metadata 的产物，只认最新那一轮；没有就是没有，
+/// 不拿更早的轮次或整条 thread 来补。
+pub(super) fn reflection_notice_payload(
+    latest: Option<&crate::run_commands::run_thread_store::LatestTurnFacts>,
+) -> serde_json::Value {
+    latest
+        .and_then(|facts| facts.reflection_notice.clone())
+        .map_or(serde_json::Value::Null, serde_json::Value::from)
 }
 
 /// 车道的运行时 session 标识。

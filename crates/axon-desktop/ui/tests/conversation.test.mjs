@@ -885,7 +885,7 @@ test('轮次内部的阶段事件不结束整轮，窗口轮转失败只落一�
     assert.equal(history.status, '失败');
 });
 
-test('RunLifecycle 才是整轮终态，收口之后计划投影随之撤下', () => {
+test('RunLifecycle 才是整轮终态，收口之后计划投影仍留在计划坞', () => {
     let state = conversationReducer(openLiveTurn(), {
         type: 'frames',
         nowMs: 1_000,
@@ -932,7 +932,7 @@ test('RunLifecycle 才是整轮终态，收口之后计划投影随之撤下', (
     });
 
     assert.equal(state.turns[0].status, 'completed', 'RunLifecycle 收口整轮');
-    assert.equal(state.plan, null, '整轮跑完，固定计划坞不再占位');
+    assert.equal(state.plan.total, 2, '计划坞是会话事实：收口后进度照常可见，不整块消失');
     assert.equal(
         state.turns[0].cells.some(({ role }) => role === 'plan'),
         true,

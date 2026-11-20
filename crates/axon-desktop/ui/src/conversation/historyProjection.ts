@@ -10,6 +10,9 @@
  * - **分割线以索引读数为准**。回放可能因为帧预算只读到尾窗，而 `turn_metrics` 是这一
  *   轮读数的权威事实；索引给不出时才退回帧算出来的那份。
  * - **窗口占用只认收尾负载**。索引里没有窗口占用，不编近似值；上下文读数等回放补。
+ * - **在跑的一轮不收口**。收口是服务端的事实（终态帧，或索引给出的 lifecycle），不是
+ *   回放的默认值：把还在流式输出的一轮判成完成，`working` 会当场变假，输入坞的工作
+ *   状态行、中断入口与侧栏的转圈一起消失，而正文其实还在长。
  */
 
 import {
@@ -52,6 +55,30 @@ export function historySource(item: { channel?: string; client?: string }): stri
 }
 
 /**
+ * 索引里的 lifecycle 是否表示「这一轮还没收口」。
+ *
+ * `received` 是排队待领、`processing` 是已被主 turn 领取；`understood`、`rejected`、
+ * `interrupted` 都是终态。回放与骨架都只认这一条判据，「在不在跑」因此不会出现第二
+ * 套说法。
+ */
+export function interactionStillRunning(status: string): boolean {
+  return status === 'received' || status === 'processing';
+}
+
+/**
+ * 回放投影的调用方事实：中段是否截断、这一轮是否已收口。
+ *
+ * 这两项都只有取数那一层知道，投影不自己推断：推断出来的收口会让运行中的一轮当场
+ * 变成「已完成」。
+ */
+export interface FrameProjectionOptions {
+  /** 中段是否被页数上限略过。 */
+  truncated?: boolean;
+  /** 这一轮在服务端是否已经收口；缺省为真（调用点确认过是历史）。 */
+  settled?: boolean;
+}
+
+/**
  * 只按帧投影一轮（打开会话的最新一轮与展开共用）。
  *
  * 不叠索引骨架：骨架里那条合成的用户消息与帧里的真实用户消息各成一格，正文里就会
@@ -60,6 +87,9 @@ export function historySource(item: { channel?: string; client?: string }): stri
  *
  * 回放因页数上限只取到「首页 + 尾窗」时，这一轮中间一段是真的没有读到；`truncated`
  * 就是那件事，界面上要如实说一句，而不是把略过的过程当成从没发生过。
+ *
+ * 收口与起跑时刻都由调用方给的事实决定，投影不替服务端下结论：`settled` 为假表示这
+ * 一轮还在跑，投影保持 `streaming`，收口交给随后到达的终态帧。
  */
 export function projectFrames(
   interactionId: string,
@@ -67,12 +97,20 @@ export function projectFrames(
   facts: HistoryFacts | undefined,
   reading: TurnMetricsReading | undefined,
   fallbackElapsedMs: number | null,
-  truncated = false,
+  options: FrameProjectionOptions = {},
 ): { turn: TurnState; jobs: JobRow[] } {
+  const { truncated = false, settled = true } = options;
+  const nowMs = Date.now();
+  /*
+   * 起点先在本地兜一档：帧自带记录时刻时，归约器会用首条 durable 事件把它盖掉
+   * （见 `turnStartFromEvent`），因此这里只在没有可用帧时生效。用索引用时还原，
+   * 而不是用回放这一刻，运行中的耗时才不会从零重算。
+   */
+  const startedAtMs = nowMs - Math.max(0, fallbackElapsedMs ?? 0);
   let state = conversationReducer(INITIAL_CONVERSATION, {
     type: 'open-turn',
     turnId: interactionId,
-    nowMs: Date.now(),
+    nowMs: startedAtMs,
   });
   if (facts !== undefined) {
     state = conversationReducer(state, {
@@ -82,17 +120,18 @@ export function projectFrames(
       channel: facts.channel,
     });
   }
-  state = applyFrames(state, [...frames], Date.now());
+  state = applyFrames(state, [...frames], nowMs);
   const turn = state.turns[0];
   if (turn === undefined) {
     return { turn: state.turns[0], jobs: state.jobs };
   }
   const observed = truncated ? upsertCell(turn, truncationCell(interactionId)) : turn;
-  const settled =
-    observed.status === 'streaming' || observed.status === 'pending'
+  const open = observed.status === 'streaming' || observed.status === 'pending';
+  const closed =
+    open && settled
       ? settleTurn(observed, 'completed', observed.elapsedMs ?? fallbackElapsedMs)
       : observed;
-  const seeded = seedTurnReadings(settled, readingFactsOf(reading));
+  const seeded = seedTurnReadings(closed, readingFactsOf(reading));
   return {
     turn: applyTurnSummary(seeded, turnSummaryFacts(reading, fallbackElapsedMs, seeded)),
     jobs: state.jobs,

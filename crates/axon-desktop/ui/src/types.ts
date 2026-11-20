@@ -599,6 +599,13 @@ export interface SessionInteractions {
   sessionUsage: SessionUsageTotals | null;
   sessionElapsedMs: number | null;
   /**
+   * 会话级计划快照：网关索引扫描窗口里最近一次 `update_plan`。
+   *
+   * 计划坞是会话级事实，打开会话时据此立起当前进度，不必等回放恰好读到那一帧；
+   * 窗口里没有计划帧时为 null，界面据此不画计划坞。
+   */
+  sessionPlan?: import('./sessionPlan').SessionPlanSnapshot | null;
+  /**
    * 会话能力与身份事实；网关恒下发该键，值可以是 `null`（会话行不存在）。
    *
    * 可写性、可中断与可答问都由它回答，界面不再按来源渠道推断。

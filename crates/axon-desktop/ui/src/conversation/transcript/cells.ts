@@ -35,7 +35,7 @@ import {
   previewCommand,
   stringField,
 } from './derive';
-import type { ConversationState, TokenUsage, TurnState } from './state';
+import type { ConversationState, PlanProjection, TokenUsage, TurnState } from './state';
 import {
   activeTurnIndex,
   elapsedSince,
@@ -340,6 +340,24 @@ export function planHeading(title: string): string | undefined {
   return trimmed.length === 0 || trimmed === PLAN_LABEL ? undefined : trimmed;
 }
 
+/**
+ * 计划投影：标题、步骤与计数同源。
+ *
+ * 指标条的「计划 N/M」与输入坞上方的计划坞都只读这一份，因此计数规则只有一处：
+ * 状态恰好是 `completed` 的步骤计入已完成，其余（含来源未识别的状态）都算未完成。
+ */
+export function planProjectionOf(
+  title: string,
+  steps: { step: string; status: string }[],
+): PlanProjection {
+  return {
+    title,
+    completed: steps.filter((step) => step.status === 'completed').length,
+    total: steps.length,
+    steps,
+  };
+}
+
 export function applyPlan(
   state: ConversationState,
   position: number,
@@ -354,12 +372,8 @@ export function applyPlan(
       steps,
     }),
   );
-  const completed = steps.filter((step) => step.status === 'completed').length;
   // 投影带全量步骤：固定计划坞与指标条读同一份事实，不再各自推算。
-  return {
-    ...next,
-    plan: { title: plan.title, completed, total: steps.length, steps },
-  };
+  return { ...next, plan: planProjectionOf(plan.title, steps) };
 }
 
 /*

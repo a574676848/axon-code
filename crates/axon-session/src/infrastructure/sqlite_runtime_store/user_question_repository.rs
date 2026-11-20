@@ -4,6 +4,7 @@ use super::SqliteRuntimeStore;
 use crate::ports::{RuntimeStore, RuntimeStoreError, UserQuestionStore, UserQuestionStoreError};
 use axon_domain::{UserQuestionRecord, UserQuestionState};
 use rusqlite::{OptionalExtension, Row, params};
+use std::collections::HashMap;
 
 const USER_QUESTION_COLUMNS: &str = "\
     question_id, idempotency_key, session_id, interaction_id, turn_id, tool_call_id, \
@@ -325,6 +326,44 @@ fn read_user_question(row: &Row<'_>) -> rusqlite::Result<UserQuestionRecord> {
         created_at_ms: row.get(15)?,
         expires_at_ms: row.get(16)?,
     })
+}
+
+impl SqliteRuntimeStore {
+    /// 各会话当前待答的提问数。
+    ///
+    /// `user_questions` 落在 outbox 库，与会话清单不是同一个文件，因此这一项不能并进
+    /// 清单那条 SQL。这里一次取全部会话，不随会话数逐条回查。
+    ///
+    /// 状态口径与桌面问答对账一致：只有 `pending` 与 `suspended` 还算「在等用户回答」，
+    /// `answered`、`cancelled`、`expired` 都是终态；把终态算进来，角标会在答完之后还挂着。
+    ///
+    /// # Errors
+    ///
+    /// 读 outbox 失败时返回存储错误，由调用方决定是否降级成「没有待答」。
+    pub fn pending_question_counts(&self) -> Result<HashMap<String, u64>, UserQuestionStoreError> {
+        self.initialize().map_err(runtime_error)?;
+        let connection = self.outbox_connection().map_err(runtime_error)?;
+        let mut statement = connection
+            .prepare(
+                "SELECT session_id, COUNT(*) FROM user_questions \
+                 WHERE state IN ('pending', 'suspended') \
+                 GROUP BY session_id",
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                let session_id: String = row.get(0)?;
+                let count: i64 = row.get(1)?;
+                Ok((session_id, u64::try_from(count).unwrap_or(0)))
+            })
+            .map_err(storage_error)?;
+        let mut counts = HashMap::new();
+        for row in rows {
+            let (session_id, count) = row.map_err(storage_error)?;
+            counts.insert(session_id, count);
+        }
+        Ok(counts)
+    }
 }
 
 fn storage_error(error: rusqlite::Error) -> UserQuestionStoreError {

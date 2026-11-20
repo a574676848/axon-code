@@ -699,6 +699,8 @@ CREATE INDEX sessions_by_kind_root
 
 `provider` / `model` / `model_name` 记该会话**最近一轮**实际使用的模型：轮次终态记账时做一次条件单行写回（`WHERE session_id=? AND (provider IS NOT ? OR model IS NOT ? OR model_name IS NOT ?)`），同一模型连续多轮时命中 0 行、不产生页写，也不改活跃时间。`model` 是上游模型 id，`model_name` 是用户当初选择的配置别名，展示优先用别名。会话清单（CLI、TUI、桌面）都读这三列，不再去 thread 镜像里拼 provider 与模型。
 
+会话清单的载荷另带两个**派生**字段，它们描述「此刻」而不是历史，因此随清单现算、不落列：`running` 表示该会话有 `work_items.status='running'` 的轮次（判据与 `session_query_service` 的运行态同源），`pendingQuestionCount` 表示 `user_questions` 里 `pending` 与 `suspended` 的条数（答完、取消、过期都不算）。前者决定桌面标题前的状态槽画不画转圈，后者决定琥珀角标亮不亮；`sessions.status` 在运行期不会被改写，不能拿来判运行态。
+
 `workspace_id` 与 `trust_scope` 落成实列，收益是可以直接按工作区或受众边界查会话，不必反解哈希。原来的 `run_session_id` 与 `root_session_id` 两列语义重叠，改为 `current_run_id`（可变）+ `run_generation`（单调），`root_session_id` 只对子会话有意义。
 
 4. `primarySessionId` 这个线上字段名保留（前端与网关契约不动），值就是 `interaction.session_id`；服务端内部一律叫 `session_id`，并在文档里写明两者同值。

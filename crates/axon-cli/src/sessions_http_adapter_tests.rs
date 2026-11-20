@@ -56,6 +56,22 @@ fn seed_inbox(store: &SqliteRuntimeStore, session_id: &str, content: &str, recei
         .expect("写入入站事实");
 }
 
+/// 给一条入站事实补一行派发记录：运行态判据取的是 work_items 的 status。
+fn seed_work_item(store: &SqliteRuntimeStore, session_id: &str, inbox_id: &str, status: &str) {
+    store
+        .with_read_connection(|connection| {
+            connection
+                .execute(
+                    "INSERT INTO work_items(execution_id,session_id,kind,payload_json,attempt,priority,
+                     inbox_id,status,created_at_ms,updated_at_ms)
+                 VALUES(?1,?2,'turn','{}',1,0,?3,?4,1,1)",
+                    params![format!("exec-{inbox_id}"), session_id, inbox_id, status],
+                )
+                .map(|_| ())
+        })
+        .expect("写入派发记录");
+}
+
 /// 直接读投影，等价于 xon sessions list 的数据来源。
 fn rows(store: &SqliteRuntimeStore) -> Vec<Value> {
     super::read_session_rows(store)
@@ -174,6 +190,110 @@ fn archived_flag_is_projected_for_callers_to_filter() {
         .find(|row| row["sessionId"] == "session-archived")
         .expect("归档会话在投影里");
     assert_eq!(archived["archived"], true);
+}
+
+/// 给一条会话写一条提问记录：待答角标只认 pending 与 suspended。
+fn seed_question(
+    store: &SqliteRuntimeStore,
+    session_id: &str,
+    call_id: &str,
+    state: axon_domain::UserQuestionState,
+) {
+    use axon_session::UserQuestionStore as _;
+    store
+        .insert_question(&axon_domain::UserQuestionRecord {
+            question_id: format!("uq-{call_id}"),
+            idempotency_key: format!("idem-{call_id}"),
+            session_id: session_id.to_owned(),
+            interaction_id: format!("inbox-{call_id}"),
+            turn_id: "turn-1".to_owned(),
+            tool_call_id: call_id.to_owned(),
+            questions_json: "[]".to_owned(),
+            handoff_text: None,
+            state,
+            deadline_at_ms: 1,
+            answer_json: None,
+            answered_at_ms: None,
+            answered_channel: None,
+            delivered: false,
+            delivery_mode: None,
+            created_at_ms: 1,
+            expires_at_ms: 1,
+        })
+        .expect("写入提问记录");
+}
+
+#[test]
+fn pending_question_count_follows_open_questions() {
+    // 桌面标题前的琥珀角标读这一位：答完的提问不能继续挂着。
+    let (_directory, store) = fixture();
+    seed_session(&store, "session-asking", 0, 0);
+    seed_session(&store, "session-answered", 0, 0);
+    seed_question(
+        &store,
+        "session-asking",
+        "call-pending",
+        axon_domain::UserQuestionState::Pending,
+    );
+    seed_question(
+        &store,
+        "session-asking",
+        "call-suspended",
+        axon_domain::UserQuestionState::Suspended,
+    );
+    seed_question(
+        &store,
+        "session-asking",
+        "call-answered",
+        axon_domain::UserQuestionState::Answered,
+    );
+    seed_question(
+        &store,
+        "session-answered",
+        "call-done",
+        axon_domain::UserQuestionState::Answered,
+    );
+
+    let sessions = rows(&store);
+    let asking = sessions
+        .iter()
+        .find(|row| row["sessionId"] == "session-asking")
+        .expect("待答的会话在清单里");
+    assert_eq!(
+        asking["pendingQuestionCount"], 2,
+        "只有 pending 与 suspended 算待答"
+    );
+    let answered = sessions
+        .iter()
+        .find(|row| row["sessionId"] == "session-answered")
+        .expect("已答的会话在清单里");
+    assert_eq!(answered["pendingQuestionCount"], 0, "答完的提问不再挂角标");
+}
+
+#[test]
+fn running_follows_open_turn_state() {
+    // 桌面标题前的状态槽读这一位：缺了它，所有会话都会被读成「没在跑」。
+    let (_directory, store) = fixture();
+    seed_session(&store, "session-running", 0, 0);
+    seed_session(&store, "session-settled", 0, 0);
+    seed_inbox(&store, "session-running", "在跑的那一轮", 10);
+    seed_inbox(&store, "session-running", "更早的一轮", 5);
+    seed_inbox(&store, "session-settled", "已经答完", 20);
+    seed_work_item(&store, "session-running", "inbox-10", "running");
+    seed_work_item(&store, "session-running", "inbox-5", "completed");
+    seed_work_item(&store, "session-settled", "inbox-20", "completed");
+
+    let sessions = rows(&store);
+    let running = sessions
+        .iter()
+        .find(|row| row["sessionId"] == "session-running")
+        .expect("在跑的会话在清单里");
+    assert_eq!(running["running"], true, "有一条轮次在跑就是运行态");
+    let settled = sessions
+        .iter()
+        .find(|row| row["sessionId"] == "session-settled")
+        .expect("已收口的会话在清单里");
+    assert_eq!(settled["running"], false, "只跑完过的会话不是运行态");
 }
 
 #[test]

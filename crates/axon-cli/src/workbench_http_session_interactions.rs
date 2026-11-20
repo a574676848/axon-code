@@ -11,14 +11,13 @@ use axon_session::{InteractionCursor, InteractionQueryStore as _};
 use super::session_readings;
 use super::{InteractionView, MAX_SESSION_INTERACTION_LIMIT, TurnMetricsView, runtime_store};
 
-/// 会话能力块：可写性、可中断与可答问都由服务端给出。
+/// 会话行事实：能力块与车道模型读数共用同一次读取。
 ///
-/// 前端此前只能按 `channel` 推断「这条会话能不能发消息」，推断在目标看板与子代理上必然
-/// 出错。这里把判断权搬回服务端：`kind` 是唯一依据，能力位是派生结果，前端只读字段。
-fn session_capability_block(
+/// 会话行不存在时给 `None`（索引页本身仍可读，界面据此知道这是未登记会话）。
+fn session_row_facts(
     axon_root: &Path,
     session_id: &str,
-) -> Result<serde_json::Value, String> {
+) -> Result<Option<session_readings::SessionRowFacts>, String> {
     use axon_session::SessionKind;
     use rusqlite::OptionalExtension as _;
     let row = runtime_store(axon_root)
@@ -52,8 +51,7 @@ fn session_capability_block(
         .map_err(|error| format!("读取会话能力事实失败：{error:?}"))?;
     let Some((kind, title, provider, model, model_name, cwd, first_content, count, latest)) = row
     else {
-        // 会话行不存在时如实给空：索引页本身仍可读，界面据此知道这是未登记会话。
-        return Ok(serde_json::Value::Null);
+        return Ok(None);
     };
     let Some(kind) = SessionKind::parse(&kind) else {
         return Err(format!("会话 kind 取值非法：{kind}"));
@@ -65,7 +63,10 @@ fn session_capability_block(
         kind,
         SessionKind::Primary | SessionKind::Cron | SessionKind::Subagent
     );
-    Ok(serde_json::json!({
+    let provider = provider.unwrap_or_default();
+    let model = model.unwrap_or_default();
+    let model_name = model_name.unwrap_or_default();
+    let capability = serde_json::json!({
         "kind": kind.as_str(),
         // 来源只由会话类型映射，禁止用 `source_channel` 猜：同一会话可能被别端续聊。
         "origin": origin_of_kind(kind),
@@ -76,11 +77,17 @@ fn session_capability_block(
         // 会话调用 Goal 工具发起；cron 与子会话同理不提供中断入口。
         "canInterrupt": primary,
         "title": crate::sessions_http_adapter::display_session_title(title, first_content, &cwd),
-        "provider": provider.unwrap_or_default(),
-        "model": model.unwrap_or_default(),
-        "modelName": model_name.unwrap_or_default(),
+        "provider": provider,
+        "model": model,
+        "modelName": model_name,
         "interactionCount": u64::try_from(count).unwrap_or(0),
         "latestInteractionId": latest.unwrap_or_default(),
+    });
+    Ok(Some(session_readings::SessionRowFacts {
+        capability,
+        provider,
+        model,
+        model_name,
     }))
 }
 
@@ -186,20 +193,42 @@ pub fn session_interactions_payload(
     let session_usage = session_readings::session_usage_payload(axon_root, session_id);
     let session_elapsed_ms = session_readings::settled_elapsed_ms(axon_root, session_id)
         .map_or(serde_json::Value::Null, serde_json::Value::from);
+    /*
+     * 会话级计划快照：本次索引扫描窗口里最近一次 `update_plan`。
+     *
+     * 计划坞是会话级事实，不能只靠「回放刚好读到那一帧」才出现；随索引一起下发之后，
+     * 打开会话首屏就能立起当前进度。扫描窗口之外的计划（比本页更早的轮次）仍为空，
+     * 那是这一档读取的边界，不用加扫来换。
+     */
+    let session_plan = facts.plan.as_ref().map_or(serde_json::Value::Null, |plan| {
+        serde_json::to_value(plan).unwrap_or(serde_json::Value::Null)
+    });
+    /*
+     * 会话行事实(能力块 + 车道模型)读一次；metadata 一侧只读最新一轮。
+     *
+     * 思考强度与记忆反思只存在于轮次 metadata：只认最新那一轮，尾窗读不到就当没有，
+     * 既不回退整条 thread，也不拿更早的轮次顶替。
+     */
+    let row_facts = session_row_facts(axon_root, session_id)?;
+    let latest_turn = session_readings::latest_turn_facts(axon_root, session_id);
     Ok(serde_json::json!({
         "sessionId": session_id,
         // 会话能力与身份事实：界面只读这一块，不再按渠道推断只读与可写。
-        "session": session_capability_block(axon_root, session_id)?,
+        "session": row_facts.as_ref().map(|facts| facts.capability.clone()),
         "interactions": interactions,
         "totalRecords": interactions.len(),
         // 会话级后台作业清单：与打开哪一轮无关，重开会话时据此还原标题栏的作业读数。
         "jobs": facts.jobs,
         "sessionUsage": session_usage,
         "sessionElapsedMs": session_elapsed_ms,
-        // 车道当前模型的权威事实：只读该车道最新一轮记录，供输入坞显示真实模型。
-        "effectiveModel": session_readings::effective_model_payload(axon_root, session_id),
+        "sessionPlan": session_plan,
+        // 车道当前模型的权威事实：provider 与模型取会话行，强度取最新一轮 metadata。
+        "effectiveModel": session_readings::effective_model_payload(
+            row_facts.as_ref(),
+            latest_turn.as_ref(),
+        ),
         // 最近一次记忆反思的提示文本：桌面端据此显示「上一次记忆动作」。
-        "reflectionNotice": session_readings::reflection_notice_payload(axon_root, session_id),
+        "reflectionNotice": session_readings::reflection_notice_payload(latest_turn.as_ref()),
         "rawPayloadPersisted": false,
     }))
 }

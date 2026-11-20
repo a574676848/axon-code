@@ -21,6 +21,7 @@ import { AutomationPage } from './components/AutomationPage';
 import { GoalsPage } from './components/goals/GoalsPage';
 import { goalSessionSelection, originBarFor } from './sessionOpening';
 import { useLastViewRestore } from './useLastViewRestore';
+import { useSessionPresence } from './useSessionPresence';
 import { buildPaletteItems } from './paletteItems';
 import { MemoryPage } from './components/MemoryPage';
 import { WorkspaceOverview } from './components/WorkspaceOverview';
@@ -141,6 +142,9 @@ export const App: React.FC = () => {
       return next_marks;
     });
   }, []);
+
+  // 删除与归档后主区回到首屏；判定与观察集中在一个 hook 里（见 useSessionPresence）。
+  useSessionPresence(selection, workspaces, selectSession);
 
   /*
    * 窗口宽度是这一层唯一的外形事实：窄窗自动收成 56px 图标轨，

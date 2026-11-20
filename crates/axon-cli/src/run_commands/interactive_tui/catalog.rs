@@ -506,6 +506,8 @@ mod tests {
             provider: provider.to_owned(),
             model: model.to_owned(),
             model_name: model_name.map(str::to_owned),
+            running: false,
+            pending_question_count: 0,
         }
     }
 

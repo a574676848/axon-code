@@ -20,6 +20,9 @@ export function conversationReducer(
   switch (action.type) {
     case 'reset':
       return INITIAL_CONVERSATION;
+    case 'plan-seed':
+      // 快照只是「打开那一刻的当前计划」：已有计划（来自回放帧或实时帧）时一律不动。
+      return state.plan === null ? { ...state, plan: action.plan } : state;
     case 'connecting':
       return { ...state, connection: 'connecting', failure: null };
     case 'open-turn':

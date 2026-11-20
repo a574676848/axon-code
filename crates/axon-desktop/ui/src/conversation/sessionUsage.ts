@@ -117,18 +117,23 @@ export function sessionCumulative(
    * 累计、命中率与上下文会整段消失（正文却明明有用量）。这里退回「本视图累计」。
    */
   const baselineHasUsage = baseline.usage.totalTokens > 0;
+  /*
+   * 耗时比用量更容易整段消失：基线全零往往意味着账本里一轮都还没落账（新建会话的
+   * 第一轮、运行态库重建之后的老会话）。此时若仍然只读网关那一份总和，指标条的耗时段
+   * 就不画了，而累计与命中率照常显示。与 TUI 同口径：已落账部分读总和，没落账的部分
+   * 由本视图补，缺任一份都会在读着的时候停住。
+   */
+  const baselineHasElapsed = baseline.elapsedMs > 0;
   let usage = baseline.usage;
   let elapsedMs = baseline.elapsedMs;
   for (const turn of turns) {
-    if (!baselineHasUsage) {
-      // 基线只有耗时结论：用量整段由本视图累计，耗时仍读网关的会话总和。
-      usage = addUsage(usage, turn.usage);
-      continue;
-    }
-    const covered = baseline.turnIds.has(turn.id) && !baseline.openTurnIds.has(turn.id);
-    if (covered) continue;
-    usage = addUsage(usage, turn.usage);
-    elapsedMs += turn.elapsedMs ?? 0;
+    /*
+     * 「已计入」按两条事实各自判定：用量没结论时不能拿 `turnIds` 跳过量，耗时没结论时
+     * 也不能跳过耗时；反过来，某条结论在基线里时，它覆盖到的轮次不得再按增量算一遍。
+     */
+    const counted = baseline.turnIds.has(turn.id) && !baseline.openTurnIds.has(turn.id);
+    if (!baselineHasUsage || !counted) usage = addUsage(usage, turn.usage);
+    if (!baselineHasElapsed || !counted) elapsedMs += turn.elapsedMs ?? 0;
   }
   return { ...usage, elapsedMs };
 }

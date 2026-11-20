@@ -21,6 +21,7 @@ import {
   completedFrame,
   historySource,
   insertControlAfterInput,
+  interactionStillRunning,
   sessionJobRows,
   projectFrames,
   readingFactsOf,
@@ -36,6 +37,7 @@ import {
   attachmentsFromPaths,
   conversationReducer,
   outlineControl,
+  planProjectionOf,
   summaryFromIndexFacts,
   type ConversationAction,
   type JobRow,
@@ -93,6 +95,7 @@ export interface SessionPagingOptions {
   onReflectionNotice?: (notice: string | null) => void;
   /** 首页带回来的会话能力事实：可写性、可中断与可答问都读它。 */
   onSessionFacts?: (facts: SessionFacts | null) => void;
+
 }
 
 export interface SessionPaging {
@@ -199,6 +202,13 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
       onSessionFacts?.(sessionFactsOf(page.session));
       // 记忆提示同一时机取回：它也是「这条会话现在的最新事实」，不能随翻页回退。
       onReflectionNotice?.(page.reflectionNotice ?? null);
+      /*
+       * 计划快照只交给调用方，不在这里派发：它必须在换会话的 `reset` 之后落地，
+       * 否则刚读回来的快照会被紧接着的重置擦掉（自己抹一遍自己的新鲜事实）。
+       */
+      const snapshot = page.sessionPlan ?? null;
+      const plan = snapshot === null ? null : planProjectionOf(snapshot.title, snapshot.steps);
+
       if (page.sessionUsage !== null) {
         setSessionBaseline({
           usage: page.sessionUsage,
@@ -207,7 +217,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
           // 取页那一刻仍在跑的那几条：账本还没落账，整条由本地增量承担。
           openTurnIds: new Set(
             page.interactions
-              .filter((item) => item.status === 'received' || item.status === 'processing')
+              .filter((item) => interactionStillRunning(item.status))
               .map((item) => item.interactionId),
           ),
         });
@@ -215,7 +225,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
       // 会话级后台作业清单随索引一起回来：作业属于整条会话，不能只靠本轮回放。
       const jobs = sessionJobRows(page.jobs);
       if (jobs.length > 0) dispatch({ type: 'seed-jobs', jobs });
-      return page.interactions as HistoryEntry[];
+      return { entries: page.interactions as HistoryEntry[], plan };
     },
     [dispatch, onEffectiveModel, onReflectionNotice, onSessionFacts],
   );
@@ -235,6 +245,11 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
       }),
     ];
     const answer = (entry.answerText ?? '').trim();
+    /*
+     * 还在跑的一轮没有终态帧：索引里的 answerText 只是此刻的片段，把它当结论收口，
+     * 就等于用半截正文宣布这一轮结束。
+     */
+    if (interactionStillRunning(entry.status)) return frames;
     if (entry.status === 'interrupted') {
       frames.push(statusFrame(entry.interactionId, 1_000, 'interrupted'));
     } else if (entry.status === 'rejected' || entry.status === 'failed') {
@@ -261,6 +276,14 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
       entry: HistoryEntry,
       frames: readonly ConversationStreamEvent[] | null,
       truncated = false,
+      /*
+       * 这一轮在服务端是否已经收口。
+       *
+       * 有帧时由 `InteractionFrames.settled` 给（帧里有没有终态帧），没有帧的骨架路径按
+       * 索引里的 lifecycle 判。两条路都不替服务端下结论：还在跑的一轮必须留在
+       * `streaming`，否则 `working` 当场变假，工作状态行与侧栏转圈一起消失。
+       */
+      settled = !interactionStillRunning(entry.status),
     ): { turn: TurnState; jobs: JobRow[] } => {
       if (frames !== null && frames.length > 0) {
         return projectFrames(
@@ -269,7 +292,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
           factsRef.current.get(entry.interactionId),
           readingsRef.current.get(entry.interactionId),
           entry.elapsedMs ?? null,
-          truncated,
+          { truncated, settled },
         );
       }
       let state = conversationReducer(INITIAL_CONVERSATION, {
@@ -291,15 +314,15 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
       if (turn === undefined) {
         return { turn: state.turns[0], jobs: state.jobs };
       }
-      const settled =
-        turn.status === 'streaming' || turn.status === 'pending'
+      const closed =
+        settled && (turn.status === 'streaming' || turn.status === 'pending')
           ? settleTurn(turn, 'completed', entry.elapsedMs ?? null)
           : turn;
       /*
        * 索引读数先落到这一轮上：首字、速率与用量在帧回来之前就要在指标条上成立。
        * 窗口占用不在索引里，因此这一轮只有 token 分桶，上下文段仍等收尾负载。
        */
-      const seeded = seedTurnReadings(settled, indexReadings(entry.interactionId));
+      const seeded = seedTurnReadings(closed, indexReadings(entry.interactionId));
       /*
        * 只读索引的那一轮：给一根折叠行当入口。
        *
@@ -349,6 +372,21 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
     [projectTurn],
   );
 
+  /**
+   * 帧读不到时的收口兜底。
+   *
+   * 骨架已经按「在跑」立起来了，但这一轮此刻没有任何证据（帧没读到，实时尾也没订上）：
+   * 继续挂着 `streaming` 会让工作状态行与侧栏转圈永远转下去，比少一段过程更误导。
+   * 退回按历史收口的骨架，失败本身仍由调用方如实上报。
+   */
+  const settleUnread = useCallback(
+    (entry: HistoryEntry) => {
+      const settled = projectTurn(entry, null, false, true);
+      dispatch({ type: 'replace-turn', turn: settled.turn, jobs: settled.jobs });
+    },
+    [dispatch, projectTurn],
+  );
+
 /**
  * 审计轮：派发渠道写入、已收口、但没有模型正文。
  *
@@ -395,13 +433,15 @@ function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null
       const generation = generationRef.current;
       setPageLoading(true);
       try {
-        const entries = await fetchNewestPage(laneId);
+        const { entries, plan } = await fetchNewestPage(laneId);
         if (generation !== generationRef.current) return;
         factsRef.current = new Map();
         readingsRef.current = new Map();
         seedHistoryFacts(entries);
         rememberOldest(entries[0], entries.length >= HISTORY_PAGE_SIZE);
         dispatch({ type: 'reset' });
+        // 快照在重置之后才落地：先 reset 再 seed，首屏就有当前计划，且不会被抹掉。
+        if (plan !== null) dispatch({ type: 'plan-seed', plan });
         if (entries.length > 0) {
           dispatch({ type: 'prepend-turns', turns: withProvisional(entries) });
         }
@@ -410,9 +450,12 @@ function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null
         // 最新一轮读整轮：它是正在读的那一段，思考与工具必须齐全并保持展开。
         const read = await readInteractionFrames(newest.interactionId, generation, {
           generation: () => generationRef.current,
+        }).catch((error: unknown) => {
+          settleUnread(newest);
+          throw error;
         });
         if (read !== null && generation === generationRef.current) {
-          const projected = projectTurn(newest, read.frames, read.truncated);
+          const projected = projectTurn(newest, read.frames, read.truncated, read.settled);
           dispatch({
             type: 'replace-turn',
             turn: projected.turn,
@@ -433,6 +476,7 @@ function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null
       projectTurn,
       rememberOldest,
       seedHistoryFacts,
+      settleUnread,
       subscribeTail,
       withProvisional,
       onSessionFacts,
@@ -489,9 +533,11 @@ function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null
     if (sessionId === null || workspaceId === null) return;
     const generation = generationRef.current;
     try {
-      const entries = await fetchNewestPage(sessionId);
+      const { entries, plan } = await fetchNewestPage(sessionId);
       if (generation !== generationRef.current) return;
       seedHistoryFacts(entries);
+      // 计划坞为空时用这份快照补上；已有计划（回放或实时帧给过）时归约器会忽略它。
+      if (plan !== null) dispatch({ type: 'plan-seed', plan });
       const known = new Set(knownTurnIds());
       // 审计轮不进投影，也就不该触发读帧：它们只有一句系统说明，没有 durable 事件，
       // 去读只会换来一条「交互记录不存在」的错误卡。
@@ -506,8 +552,17 @@ function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null
       const read = await readInteractionFrames(newest.interactionId, generation, {
         generation: () => generationRef.current,
       }).catch(() => null);
-      if (read !== null && generation === generationRef.current) {
-        const projected = projectTurn(newest, read.frames, read.truncated);
+      /*
+       * 读不到帧就把骨架收口：骨架是按「还在跑」立起来的，此刻却没有任何证据支持
+       * 这一轮仍在推进（帧没读到，实时尾也订不上）。让转圈永远转下去比少一段过程
+       * 更误导，因此退回按历史收口的形态，下一次轮次头再补正文。
+       */
+      if (read === null) {
+        if (generation === generationRef.current) settleUnread(newest);
+        return;
+      }
+      if (generation === generationRef.current) {
+        const projected = projectTurn(newest, read.frames, read.truncated, read.settled);
         dispatch({
           type: 'replace-turn',
           turn: projected.turn,
@@ -527,6 +582,7 @@ function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null
     projectTurn,
     seedHistoryFacts,
     sessionId,
+    settleUnread,
     subscribeTail,
     withProvisional,
     workspaceId,
@@ -560,7 +616,7 @@ function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null
             factsRef.current.get(interactionId),
             readingsRef.current.get(interactionId),
             null,
-            read.truncated,
+            { truncated: read.truncated, settled: read.settled },
           );
           dispatch({
             type: 'replace-turn',

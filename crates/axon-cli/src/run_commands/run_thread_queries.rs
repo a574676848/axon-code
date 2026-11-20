@@ -5,7 +5,10 @@
 
 use std::path::Path;
 
-use axon_session::{AppendTurnCommand, JsonlThreadEventStore, ThreadDetail, ThreadService, Turn};
+use axon_session::{
+    AppendTurnCommand, JsonlThreadEventStore, ThreadDetail, ThreadEvent, ThreadEventRecord,
+    ThreadService, Turn,
+};
 use serde::Serialize;
 
 use super::super::run_session_store::{RunSessionRecord, resolved_axon_root};
@@ -132,13 +135,72 @@ pub(super) fn thread_turn_metadata_from_record(record: &RunSessionRecord) -> Thr
     }
 }
 
-/// 车道当前模型的权威事实：全部来自 thread settings 与最近一轮 metadata。
-pub(crate) struct SessionModelFacts {
-    pub(crate) provider: String,
-    pub(crate) model: String,
+/// 最新一轮 metadata 里只有 metadata 才有的那几项事实。
+///
+/// 读口径只有一条：从 thread 尾部窗口里取**最新一轮**记录的 metadata；读不到就当作
+/// 没有（`None`），既不回退整条 thread、也不另找第二个事实源。provider、model 与
+/// 别名不在这里：它们是会话行上的现成字段，同一请求已经读过，不必为它们再读 thread。
+pub(crate) struct LatestTurnFacts {
     /// 用户当时选择的别名；旧轮次没有该字段时为 `None`。
     pub(crate) model_name: Option<String>,
     pub(crate) reasoning_effort: Option<String>,
+    /// 最近一次记忆反思提示；尾部窗口读不到时为空。
+    pub(crate) reflection_notice: Option<String>,
+}
+
+/// 尾部预算：最新一轮 metadata 落在末尾记录里，实测单条记录在百 KB 到数 MB 量级。
+///
+/// 取 4 MiB 是为了覆盖「最新一轮就是最大一条」的常见情形：超长的末轮记录如果被截成
+/// 半行，就只能退回整条 thread 读，那一次是按 80 MiB 计的。
+const THREAD_TAIL_BUDGET_BYTES: u64 = 4 * 1024 * 1024;
+
+/// 轻读最新一轮的 metadata；thread 不存在或尾部读不到时返回 `None`。
+pub(crate) fn latest_turn_facts_at_root(root: &Path, thread_id: &str) -> Option<LatestTurnFacts> {
+    let tail = JsonlThreadEventStore
+        .read_thread_tail(root, thread_id, THREAD_TAIL_BUDGET_BYTES)
+        .ok()?;
+    let metadata = latest_turn_metadata(&tail.records)?;
+    Some(LatestTurnFacts {
+        model_name: metadata.model_name,
+        reasoning_effort: metadata.reasoning_effort,
+        reflection_notice: metadata.reflection_notice,
+    })
+}
+
+/// 尾部记录里的最新一轮 metadata。
+///
+/// 判据是**轮序最大**，而不是「最后一条轮次记录」：治理回写是另一条记录、可能迟到，
+/// 按位置取会拿到更早一轮的模型别名与推理强度。
+fn latest_turn_metadata(records: &[ThreadEventRecord]) -> Option<ThreadTurnMetadata> {
+    let mut newest: Option<u64> = None;
+    let mut metadata: Option<ThreadTurnMetadata> = None;
+    for record in records {
+        let Some(turn) = thread_record_turn(record) else {
+            continue;
+        };
+        if newest.is_some_and(|known| turn.sequence < known) {
+            continue;
+        }
+        let found = turn_metadata(&turn.token_usage_json);
+        if newest == Some(turn.sequence) {
+            // 同一轮的后写覆盖前写；只有真的解析出 metadata 才覆盖。
+            if found.is_some() {
+                metadata = found;
+            }
+            continue;
+        }
+        newest = Some(turn.sequence);
+        metadata = found;
+    }
+    metadata
+}
+
+/// 一条 thread 记录的轮次；不是轮次记录时为空。
+fn thread_record_turn(record: &ThreadEventRecord) -> Option<&Turn> {
+    match &record.event {
+        ThreadEvent::TurnCompleted { turn } | ThreadEvent::TurnStarted { turn } => Some(turn),
+        _ => None,
+    }
 }
 
 /// 最近若干轮的事实摘要，供显式信号采集；顺序为由旧到新。
@@ -188,32 +250,6 @@ pub(crate) fn turn_sequence(
         .iter()
         .find(|turn| turn.turn_id.ends_with(&suffix))
         .map(|turn| turn.sequence))
-}
-
-/// 读某条 thread 的当前模型事实；没有该 thread 或还没有任何一轮时读作 `None`。
-pub(crate) fn session_model_at_root(
-    root: &Path,
-    session_id: &str,
-) -> Result<Option<SessionModelFacts>, String> {
-    let session_id = session_id.trim();
-    if session_id.is_empty() {
-        return Err("会话标识不能为空".to_owned());
-    }
-    let Ok(detail) = ThreadService::new(JsonlThreadEventStore).read_thread(root, session_id) else {
-        return Ok(None);
-    };
-    let settings = &detail.thread.settings;
-    let metadata = detail
-        .turns
-        .iter()
-        .rev()
-        .find_map(|turn| turn_metadata(&turn.token_usage_json));
-    Ok(Some(SessionModelFacts {
-        provider: settings.provider.clone(),
-        model: settings.model.clone(),
-        model_name: metadata.as_ref().and_then(|value| value.model_name.clone()),
-        reasoning_effort: metadata.and_then(|value| value.reasoning_effort),
-    }))
 }
 
 /// 某条 thread 最近一轮观测到的 token 用量合计。
@@ -267,7 +303,7 @@ pub(crate) fn previous_reflection_notice(
 ///
 /// 整条 `RunSessionRecord` 重写会把 thread 投影里不再收录的字段（reasoning 条数、
 /// turn event 条数等）抹成零，因此这里按 `(thread, turn)` 点对点补写 metadata，
-/// 其余字段原样保留；`None` 提示表示「本轮没有新提示」，不覆盖已有值。
+/// 其余字段原样保留；`None` 提示表示「本轮没有新提示」，不覆盖已有值，也不触发写。
 pub(crate) fn patch_turn_artifacts(
     config_path: &Path,
     session_id: &str,
@@ -276,17 +312,33 @@ pub(crate) fn patch_turn_artifacts(
     affect_sequence: &[String],
 ) -> Result<(), String> {
     let root = resolved_axon_root(config_path)?;
+    /*
+     * 没有要补写的事实就到此为止。
+     *
+     * 追加一次就是再写一条完整轮次记录（实测单条 676 KB）：治理跑过但没有产物时，
+     * 留痕由回执承担，thread 不再陪写一条一模一样的记录。
+     */
+    if notice.is_none() && affect_sequence.is_empty() {
+        return Ok(());
+    }
     let service = ThreadService::new(JsonlThreadEventStore);
-    let detail = service.read_thread(&root, session_id)?;
-    let mut turn = detail
-        .turns
-        .iter()
-        .find(|turn| {
-            turn_metadata(&turn.token_usage_json)
-                .is_some_and(|metadata| metadata.assistant_part_id == assistant_part_id)
-        })
-        .cloned()
-        .ok_or_else(|| format!("thread {session_id} 缺少轮次 {assistant_part_id}"))?;
+    /*
+     * 定位只在尾部窗口里做：治理回写紧跟在该轮收口之后，最新一轮就在尾部。尾部找不到
+     * （异常顺序、单条记录超过窗口）才退回整条读，宁可慢一次也不把产物写到别的轮次上。
+     */
+    let mut turn = match tail_turn_by_part(&root, session_id, assistant_part_id) {
+        Some(turn) => turn,
+        None => service
+            .read_thread(&root, session_id)?
+            .turns
+            .iter()
+            .find(|turn| {
+                turn_metadata(&turn.token_usage_json)
+                    .is_some_and(|metadata| metadata.assistant_part_id == assistant_part_id)
+            })
+            .cloned()
+            .ok_or_else(|| format!("thread {session_id} 缺少轮次 {assistant_part_id}"))?,
+    };
     let mut metadata = turn_metadata(&turn.token_usage_json)
         .ok_or_else(|| format!("thread {session_id} 轮次 {assistant_part_id} 缺少 metadata"))?;
     if let Some(notice) = notice {
@@ -299,7 +351,8 @@ pub(crate) fn patch_turn_artifacts(
         serde_json::to_string(&metadata)
             .map_err(|_| "thread turn metadata 序列化失败".to_owned())?,
     );
-    service.append_turn(
+    // 尾部已经确认过该轮存在：追加不再整条读回做前置校验（那次读与历史长度成正比）。
+    service.append_turn_at_tail(
         &root,
         AppendTurnCommand {
             thread_id: session_id.to_owned(),
@@ -307,6 +360,22 @@ pub(crate) fn patch_turn_artifacts(
             turn,
         },
     )
+}
+
+/// 尾部窗口里按 `assistant_part_id` 找轮次；找不到时为空。
+fn tail_turn_by_part(root: &Path, thread_id: &str, assistant_part_id: &str) -> Option<Turn> {
+    let tail = JsonlThreadEventStore
+        .read_thread_tail(root, thread_id, THREAD_TAIL_BUDGET_BYTES)
+        .ok()?;
+    tail.records
+        .iter()
+        .rev()
+        .filter_map(thread_record_turn)
+        .find(|turn| {
+            turn_metadata(&turn.token_usage_json)
+                .is_some_and(|metadata| metadata.assistant_part_id == assistant_part_id)
+        })
+        .cloned()
 }
 
 /// 由 thread 轮次反向重建整条 run 记录。
@@ -415,14 +484,4 @@ fn turn_record_from_part(
         turn_trace: None,
         origin_channel: metadata.origin_channel.clone(),
     }
-}
-
-/// 只读接口用的入口：调用方手里是 Axon 根目录，不是配置文件路径。
-pub(crate) fn latest_reflection_notice_at_root(root: &Path, session_id: &str) -> Option<String> {
-    let detail = ThreadService::new(JsonlThreadEventStore)
-        .read_thread(root, session_id)
-        .ok()?;
-    detail.turns.iter().rev().find_map(|turn| {
-        turn_metadata(&turn.token_usage_json).and_then(|value| value.reflection_notice)
-    })
 }

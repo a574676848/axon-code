@@ -140,6 +140,38 @@ test('命中率按整条会话累计，不是最近一轮', () => {
     assert.equal(cumulativeCacheHitBasisPoints(totals), 8_275);
 });
 
+test('账本还没落账时耗时同样退回本视图累计，指标条不丢耗时段', () => {
+    // 会话的第一轮还在跑（或运行态库重建后老会话的投影行缺失）：网关给的是全零基线。
+    const empty = {
+        usage: EMPTY_SESSION_USAGE,
+        elapsedMs: 0,
+        turnIds: new Set(['turn-1']),
+        openTurnIds: new Set(),
+    };
+
+    const totals = sessionCumulative(
+        [turn('turn-1', { inputTokens: 300, cacheReadInputTokens: 62_000, outputTokens: 120 }, 42_000)],
+        empty,
+    );
+
+    assert.equal(totals.totalTokens, 62_420);
+    assert.equal(totals.elapsedMs, 42_000, '基线没有耗时事实时耗时不得整段消失');
+});
+
+test('基线只有耗时结论时耗时仍读网关总和，用量由本视图累计', () => {
+    const elapsedOnly = {
+        usage: EMPTY_SESSION_USAGE,
+        elapsedMs: 3_600_000,
+        turnIds: new Set(['turn-1']),
+        openTurnIds: new Set(),
+    };
+
+    const totals = sessionCumulative([turn('turn-1', { outputTokens: 900 }, 999)], elapsedOnly);
+
+    assert.equal(totals.totalTokens, 900);
+    assert.equal(totals.elapsedMs, 3_600_000, '基线覆盖的耗时不得被增量重复计入');
+});
+
 test('新建会话没有历史时各项都读作 0', () => {
     const empty = {
         usage: EMPTY_SESSION_USAGE,

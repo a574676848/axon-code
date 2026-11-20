@@ -174,3 +174,120 @@ fn missing_session_row_yields_null_block_and_keeps_index_readable() {
     assert_eq!(payload["interactions"].as_array().map(Vec::len), Some(0));
     let _ = &fixture.store;
 }
+
+/// 写一条 durable 的 `planUpdate` wire 帧。
+fn append_plan_update(
+    fixture: &Fixture,
+    writer: &mut axon_eventlog::EventLogWriter,
+    sequence: u64,
+    steps: serde_json::Value,
+) {
+    let record = axon_eventlog::RuntimeEventRecord::new(
+        sequence,
+        1_000 + sequence,
+        axon_eventlog::RuntimeEventKind::Other("wire_event".to_owned()),
+        serde_json::json!({
+            "interactionId": fixture.interaction_id,
+            "kind": {
+                "type": "planUpdate",
+                "payload": { "partId": "plan:1", "title": "整理文档", "steps": steps },
+            },
+        }),
+    )
+    .with_interaction(fixture.interaction_id.clone());
+    writer.append_batch(&[record]).expect("写入计划事件");
+}
+
+#[test]
+fn index_carries_the_latest_plan_snapshot() {
+    let fixture = Fixture::new("primary", "desktop", None);
+    let session = DaemonSessionId::new(fixture.session_id.clone()).expect("合法会话标识");
+    let mut writer = fixture
+        .store
+        .event_log(&session)
+        .writer()
+        .expect("事件日志写入");
+    append_plan_update(
+        &fixture,
+        &mut writer,
+        0,
+        serde_json::json!([{ "step": "审计现状", "status": "completed" }]),
+    );
+    append_plan_update(
+        &fixture,
+        &mut writer,
+        1,
+        serde_json::json!([
+            { "step": "审计现状", "status": "completed" },
+            { "step": "改写章节", "status": "in_progress" },
+            { "step": "补齐索引", "status": "pending" },
+        ]),
+    );
+
+    let plan = &fixture.payload()["sessionPlan"];
+    assert_eq!(plan["title"], "整理文档");
+    assert_eq!(plan["partId"], "plan:1");
+    assert_eq!(
+        plan["steps"].as_array().map(Vec::len),
+        Some(3),
+        "取最近一次更新，不是最早那条"
+    );
+    assert_eq!(plan["steps"][1]["status"], "in_progress");
+    assert_eq!(plan["interactionId"], fixture.interaction_id);
+    assert_eq!(plan["updatedAtMs"], 1_001);
+}
+
+#[test]
+fn plan_snapshot_truncates_steps_to_keep_the_index_small() {
+    let fixture = Fixture::new("primary", "desktop", None);
+    let session = DaemonSessionId::new(fixture.session_id.clone()).expect("合法会话标识");
+    let mut writer = fixture
+        .store
+        .event_log(&session)
+        .writer()
+        .expect("事件日志写入");
+    let steps: Vec<serde_json::Value> = (0..70)
+        .map(|index| serde_json::json!({ "step": format!("第 {index} 步"), "status": "pending" }))
+        .collect();
+    append_plan_update(&fixture, &mut writer, 0, serde_json::json!(steps));
+
+    let plan = &fixture.payload()["sessionPlan"];
+    assert_eq!(
+        plan["steps"].as_array().map(Vec::len),
+        Some(64),
+        "步骤数按上限截断，索引载荷不随计划失控"
+    );
+}
+
+#[test]
+fn plan_snapshot_is_null_when_the_window_has_none() {
+    let fixture = Fixture::new("primary", "desktop", None);
+    assert!(
+        fixture.payload()["sessionPlan"].is_null(),
+        "窗口里没有计划帧时如实给 null，界面据此不画计划坞"
+    );
+}
+
+#[test]
+fn brief_page_leaves_the_plan_snapshot_out() {
+    let fixture = Fixture::new("primary", "desktop", None);
+    let session = DaemonSessionId::new(fixture.session_id.clone()).expect("合法会话标识");
+    let mut writer = fixture
+        .store
+        .event_log(&session)
+        .writer()
+        .expect("事件日志写入");
+    append_plan_update(
+        &fixture,
+        &mut writer,
+        0,
+        serde_json::json!([{ "step": "审计现状", "status": "completed" }]),
+    );
+
+    let brief = session_interactions_payload(&fixture.root, &fixture.session_id, 1, None, true)
+        .expect("翻页档载荷");
+    assert!(
+        brief.get("sessionPlan").is_none(),
+        "翻页档不带计划快照：更早那一页的计划不能覆盖当前计划"
+    );
+}

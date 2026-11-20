@@ -433,6 +433,12 @@ export const INITIAL_CONVERSATION: ConversationState = {
 /** 归约动作。 */
 export type ConversationAction =
   | { type: 'reset' }
+  /**
+   * 会话级计划快照：打开会话时随索引带回，供计划坞在首屏立起当前进度。
+   *
+   * 只在投影还没有计划时落地：回放帧与实时帧都比这份快照新，快照绝不能反向覆盖它们。
+   */
+  | { type: 'plan-seed'; plan: PlanProjection }
   | { type: 'open-turn'; turnId: string; nowMs: number }
   | { type: 'submit'; turnId: string; text: string; nowMs: number; attachments: AttachmentRef[] }
   | { type: 'steer'; text: string; nowMs: number; attachments: AttachmentRef[]; structuredInput: string }

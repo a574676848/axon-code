@@ -159,6 +159,9 @@ struct SessionInteractionsPayload {
     /// 整条车道已收口轮次的累计墙钟耗时；网关没给结论时缺省为空。
     #[serde(default)]
     session_elapsed_ms: Option<u64>,
+    /// 会话级计划快照：网关索引扫描窗口里最近一次 `update_plan`。
+    #[serde(default)]
+    session_plan: Option<SessionPlanSnapshot>,
     /// 车道当前模型的权威事实；网关读不到时缺省为空。
     #[serde(default)]
     effective_model: Option<SessionEffectiveModel>,
@@ -216,6 +219,36 @@ pub struct SessionUsageTotals {
     pub reasoning_tokens: u64,
 }
 
+/// 会话级计划快照：网关索引里带回来的「当前那一份计划」。
+///
+/// 与时间线上的计划单元同源：那边保留每次更新的原子记录，这里是最近一次。字段与网关
+/// 响应同名同形，桌面端不另造一套命名。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionPlanSnapshot {
+    /// transcript part ID，计划单元的稳定身份。
+    pub part_id: String,
+    /// 计划标题。
+    pub title: String,
+    /// 步骤明细。
+    pub steps: Vec<SessionPlanStep>,
+    /// 发出这次更新的那一轮；会话级帧没有归属时为空。
+    #[serde(default)]
+    pub interaction_id: Option<String>,
+    /// 这次更新的时刻（Unix 毫秒）。
+    pub updated_at_ms: u64,
+}
+
+/// 计划快照里的一步。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionPlanStep {
+    /// 步骤内容。
+    pub step: String,
+    /// 步骤状态；界面按后端原值归类。
+    pub status: String,
+}
+
 /// 一页车道历史：这一页的 Interaction，加上整条车道的累计读数。
 ///
 /// 两个累计读数都会话翻到第几页无关：界面要的是整条会话的消耗与耗时，因此它们由网关
@@ -231,6 +264,12 @@ pub struct SessionInteractions {
     /// 整条车道已收口轮次的累计墙钟耗时；读不到结论时为空。
     #[serde(default)]
     pub session_elapsed_ms: Option<u64>,
+    /// 会话级计划快照；网关扫描窗口里没有计划帧时为空。
+    ///
+    /// 计划坞是会话级事实：打开会话时不必等回放刚好读到 `update_plan` 那一帧，
+    /// 首屏就能立起当前进度。比窗口更早的计划仍为空，那是这一档读取的边界。
+    #[serde(default)]
+    pub session_plan: Option<SessionPlanSnapshot>,
     /// 车道当前模型的权威事实；读不到结论时为空。
     #[serde(default)]
     pub effective_model: Option<SessionEffectiveModel>,
@@ -292,6 +331,7 @@ pub fn session_interactions(
             interactions: parsed.interactions,
             session_usage: parsed.session_usage,
             session_elapsed_ms: parsed.session_elapsed_ms,
+            session_plan: parsed.session_plan,
             effective_model: parsed.effective_model,
             reflection_notice: parsed.reflection_notice,
             session: parsed.session,

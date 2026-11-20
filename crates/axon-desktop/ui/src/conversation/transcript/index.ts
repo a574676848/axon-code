@@ -70,4 +70,4 @@ export {
   type CarriedPrompt,
 } from './derive';
 
-export { PLAN_LABEL, planHeading } from './cells';
+export { PLAN_LABEL, planHeading, planProjectionOf } from './cells';
