@@ -95,7 +95,9 @@ where
                 },
             ));
         }
-        if goal.status.is_terminal() {
+        // 只有取消是不可逆的终局：已完成或已失败的目标允许带着新想法继续更新，
+        // 由调用方把它重新放回执行态。
+        if goal.status == axon_domain::GoalStatus::Cancelled {
             return Err(GoalCommandServiceError::Domain(
                 GoalCapabilityError::TerminalGoal,
             ));

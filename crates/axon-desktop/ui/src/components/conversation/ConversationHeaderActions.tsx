@@ -2,9 +2,11 @@ import React from 'react';
 import { IconButton } from '../ui/controls';
 import { PanelRightIcon } from '../../icons';
 import { RuntimeActions } from './RuntimeActions';
+import { GoalActions } from './GoalActions';
 import { VoiceSessionToggle } from './VoiceSessionToggle';
 import { VOICE_UI_ENABLED } from '../../speech/enabled';
 import type { JobRow, SubagentRow } from '../../conversation/transcript';
+import type { GoalCardView } from '../../goalTypes';
 
 /*
  * 指标条右侧的操作区。
@@ -17,6 +19,10 @@ import type { JobRow, SubagentRow } from '../../conversation/transcript';
 export const ConversationHeaderActions: React.FC<{
   subagents: SubagentRow[];
   jobs: JobRow[];
+  /** 本会话创建的目标；为空时目标入口整枚收起。 */
+  goals: GoalCardView[];
+  /** 点目标行进入它的执行会话。 */
+  onOpenGoal: (goal: GoalCardView) => void;
   /** 当前会话车道；停止作业时作为归属参数。 */
   sessionId: string | null;
   /** 本视图是否有正在跑的轮次：子代理名册只在这段窗口里按间隔对账。 */
@@ -26,9 +32,21 @@ export const ConversationHeaderActions: React.FC<{
   onOpenSubagent: (row: import('../../conversation/transcript').SubagentRow) => void;
   railExpanded: boolean;
   onToggleRail: () => void;
-}> = ({ subagents, jobs, sessionId, working, sessionKey, onOpenSubagent, railExpanded, onToggleRail }) => (
+}> = ({
+  subagents,
+  jobs,
+  goals,
+  onOpenGoal,
+  sessionId,
+  working,
+  sessionKey,
+  onOpenSubagent,
+  railExpanded,
+  onToggleRail,
+}) => (
   <>
     {VOICE_UI_ENABLED && <VoiceSessionToggle sessionKey={sessionKey} />}
+    <GoalActions goals={goals} onOpenGoal={onOpenGoal} />
     <RuntimeActions
       subagents={subagents}
       jobs={jobs}

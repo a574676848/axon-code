@@ -302,3 +302,55 @@ fn updating_a_running_goal_delivers_a_new_requirement() {
         "目标会话必须收到更新后的新要求：{rows:?}"
     );
 }
+
+#[test]
+fn updating_a_completed_goal_reactivates_and_runs_again() {
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    let workspace_id = register_workspace(&store, directory.path());
+    let host = start_host(&store, "goal-reactivate-host");
+    let (goal_id, _, _) = create_running_goal(&host, &store, &workspace_id);
+    host.primary_turn_tick(DEFAULT_QUEUE_LIMIT)
+        .expect("首轮主 turn tick");
+    let completed = store
+        .get_goal(&goal_id)
+        .expect("读取目标")
+        .expect("目标已存在");
+    assert_eq!(completed.status, GoalStatus::Completed);
+
+    // 用户带着新想法回来：目标回到进行中，并把新要求投进同一会话。
+    let receipt = host
+        .goal_tool_value(tool_request(
+            &workspace_id,
+            "goal-reactivate-update",
+            GoalToolCommand::Update(axon_domain::GoalUpdateCommand {
+                goal_id: goal_id.clone(),
+                expected_revision: completed.revision,
+                title: None,
+                waiting_reason: None,
+                next_step: Some("补充隐藏文件说明".to_owned()),
+                priority: None,
+                status: None,
+            }),
+        ))
+        .expect("更新目标");
+    assert_eq!(receipt["dispatched"], json!(true));
+    let reactivated = store
+        .get_goal(&goal_id)
+        .expect("读取目标")
+        .expect("目标已存在");
+    assert_eq!(
+        reactivated.status,
+        GoalStatus::Active,
+        "更新即重新开始，目标必须从已完成回到进行中"
+    );
+
+    // 新一轮按新想法执行，收口后目标再次完成。
+    host.primary_turn_tick(DEFAULT_QUEUE_LIMIT)
+        .expect("第二轮主 turn tick");
+    let finished = store
+        .get_goal(&goal_id)
+        .expect("读取目标")
+        .expect("目标已存在");
+    assert_eq!(finished.status, GoalStatus::Completed);
+}

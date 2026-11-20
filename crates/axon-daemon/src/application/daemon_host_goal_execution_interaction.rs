@@ -80,7 +80,8 @@ where
         disclosure_policy: Option<DisclosurePolicy>,
         now_ms: u64,
     ) -> Result<bool, DaemonHostError> {
-        if !matches!(goal.status, GoalStatus::Active | GoalStatus::Waiting) {
+        // 除了已取消，任何状态都该接收新想法：刚收尾的目标也要能被唤醒继续执行。
+        if goal.status == GoalStatus::Cancelled {
             return Ok(false);
         }
         let session_id = self

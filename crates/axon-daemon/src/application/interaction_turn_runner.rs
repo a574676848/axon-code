@@ -44,6 +44,10 @@ const USER_CORRELATION_ID: &str = "user";
 const GOAL_EXECUTION_RETRY_BACKOFF_MS: u64 = 30_000;
 /// 目标执行的最大尝试轮数。
 const GOAL_EXECUTION_MAX_ATTEMPTS: u32 = 3;
+/// 目标更新轮次的来源前缀：与目标工具写入侧同源。
+const GOAL_UPDATE_SOURCE_PREFIX: &str = "goal-update:";
+/// 目标阶段推进轮次的来源前缀：与阶段续跑写入侧同源。
+const GOAL_STAGE_SOURCE_PREFIX: &str = "goal-stage:";
 #[derive(Clone)]
 pub(super) struct InteractionTurnRunner<S, E, P, C> {
     pub(super) store: S,
@@ -211,7 +215,14 @@ where
                 return Some(record);
             }
         }
-        None
+        // 更新与阶段推进是同一目标的后继轮次：它们没有自己的账本行，按目标取最近一条。
+        // 这些轮次收口时也要能把目标从进行中推到已完成，缺了这一步目标会一直停在执行态。
+        let goal_id = derived_goal_id(interaction.source.source_message_id())?;
+        self.store
+            .list_executions_for_goal(&goal_id, 1)
+            .ok()?
+            .into_iter()
+            .next()
     }
 
     /// 目标轮声明了下一阶段：把下一阶段要求提交成一条新 Interaction，本阶段不终结目标。
@@ -563,6 +574,17 @@ pub fn primary_session_id_for_interaction(
 
 pub(super) fn stable_interaction_id(prefix: &str, interaction_id: &str) -> String {
     format!("{prefix}{}", sha256_hex(interaction_id.as_bytes()))
+}
+
+/// 从后继轮次的来源键解析目标标识：`goal-update:{goal_id}:{n}` 与 `goal-stage:{goal_id}:{stage}`。
+fn derived_goal_id(source_message_id: &str) -> Option<axon_domain::GoalId> {
+    for prefix in [GOAL_UPDATE_SOURCE_PREFIX, GOAL_STAGE_SOURCE_PREFIX] {
+        if let Some(rest) = source_message_id.strip_prefix(prefix) {
+            let goal_id = rest.split(':').next()?;
+            return axon_domain::GoalId::new(goal_id.to_owned()).ok();
+        }
+    }
+    None
 }
 
 /// 重试轮标识回落到账本标识：`{execution_id}-r{attempt}` 去掉重试后缀。

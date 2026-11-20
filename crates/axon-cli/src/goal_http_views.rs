@@ -203,6 +203,8 @@ pub(crate) struct GoalCardView {
     pub(crate) latest_execution: Option<ExecutionView>,
     /// 最近一次结果。
     pub(crate) latest_result: Option<ResultView>,
+    /// 创建这个目标的会话标识；来源会话据此展示自己的目标清单。
+    pub(crate) created_from_session_id: Option<String>,
 }
 
 /// 把三个事实合成一张卡片视图。
@@ -257,6 +259,7 @@ pub(crate) fn goal_card_view(
         latest_execution: latest_execution
             .map(|record| ExecutionView::from_record(record, sessions_with_turns)),
         latest_result: latest_result.map(ResultView::from_record),
+        created_from_session_id: goal.created_from_interaction_id.clone(),
     }
 }
 

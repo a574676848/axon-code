@@ -152,7 +152,8 @@ impl GoalRecord {
 
     /// 按合法迁移表变更状态并递增 revision。
     pub fn transition(&mut self, next: GoalStatus, now_ms: u64) -> Result<(), GoalError> {
-        if self.status.is_terminal() || !valid_transition(self.status, next) {
+        // 取消是唯一不可逆的终局：完成或失败的目标可以因为用户带着新想法回来而重新激活。
+        if self.status == GoalStatus::Cancelled || !valid_transition(self.status, next) {
             return Err(GoalError::InvalidTransition {
                 from: self.status,
                 to: next,
@@ -184,6 +185,9 @@ fn valid_transition(from: GoalStatus, to: GoalStatus) -> bool {
         ) | (
             GoalStatus::Paused,
             GoalStatus::Active | GoalStatus::Cancelled
+        ) | (
+            GoalStatus::Completed | GoalStatus::Failed,
+            GoalStatus::Active
         )
     )
 }
@@ -513,7 +517,12 @@ mod tests {
         goal.transition(GoalStatus::Active, 2).expect("激活");
         goal.transition(GoalStatus::Completed, 3).expect("完成");
         assert_eq!(goal.revision, 2);
-        assert!(goal.transition(GoalStatus::Active, 4).is_err());
+        // 完成不是终局：用户带着新想法回来时目标会重新进入执行态。
+        goal.transition(GoalStatus::Active, 4).expect("重新激活");
+        assert_eq!(goal.revision, 3);
+        // 取消才是不可逆的终局。
+        goal.transition(GoalStatus::Cancelled, 5).expect("取消");
+        assert!(goal.transition(GoalStatus::Active, 6).is_err());
     }
 
     #[test]

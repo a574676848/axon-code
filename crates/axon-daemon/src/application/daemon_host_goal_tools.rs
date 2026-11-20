@@ -238,6 +238,8 @@ where
         let goal = GoalCommandService::new(self.store.clone())
             .create(command, goal_id, &scope, execution.as_ref(), &event, now_ms)
             .map_err(goal_service_error)?;
+        // 记下「谁创建了这个目标」：创建轮所在会话是目标清单按会话归集的唯一依据。
+        let goal = self.bind_goal_creator(goal, transport_context, now_ms)?;
         // 目标创建即执行：执行轮与账本同批入队，之后再没有任何后台专用入口。
         if let Some(execution) = execution.as_ref() {
             self.submit_goal_execution_interaction(&goal, execution, now_ms)?;
@@ -537,6 +539,9 @@ where
         let goal = GoalCommandService::new(self.store.clone())
             .update(command, now_ms)
             .map_err(goal_service_error)?;
+        // 用户带着新想法回来时，已经收过尾的目标要重新进入执行态：更新即重新开始，
+        // 否则看板会说「已完成」而会话里正在跑新一轮。
+        let goal = self.reactivate_goal_after_update(&goal, now_ms)?;
         // 更新不是终点：契约变了的这一笔新要求必须真正落到目标会话，执行才会按新目标继续。
         // 投递失败不能吞掉已经生效的更新，回执里如实给出投递结论。
         let dispatch = self.submit_goal_update_interaction(
@@ -556,6 +561,56 @@ where
         }
         self.note_goal_turn(&goal, "目标已更新", idempotency_key, workspace, now_ms);
         Ok(receipt)
+    }
+
+    /// 把创建目标的会话写进目标记录；缺会话事实时保持空。
+    fn bind_goal_creator(
+        &self,
+        mut goal: axon_domain::GoalRecord,
+        transport_context: Option<&Value>,
+        now_ms: u64,
+    ) -> Result<axon_domain::GoalRecord, DaemonHostError> {
+        let Some(session_id) = transport_context
+            .and_then(|context| context.get("primarySessionId"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(goal);
+        };
+        if goal.created_from_interaction_id.as_deref() == Some(session_id) {
+            return Ok(goal);
+        }
+        let expected_revision = goal.revision;
+        goal.created_from_interaction_id = Some(session_id.to_owned());
+        goal.updated_at_ms = now_ms;
+        self.store
+            .update_goal(&goal, expected_revision)
+            .map_err(goal_service_error)?;
+        Ok(goal)
+    }
+
+    /// 更新之后把已收尾的目标放回执行态；取消与仍在执行的保持原状。
+    fn reactivate_goal_after_update(
+        &self,
+        goal: &axon_domain::GoalRecord,
+        now_ms: u64,
+    ) -> Result<axon_domain::GoalRecord, DaemonHostError> {
+        if !matches!(
+            goal.status,
+            axon_domain::GoalStatus::Completed | axon_domain::GoalStatus::Failed
+        ) {
+            return Ok(goal.clone());
+        }
+        let expected_revision = goal.revision;
+        let mut reactivated = goal.clone();
+        reactivated
+            .transition(axon_domain::GoalStatus::Active, now_ms)
+            .map_err(|error| DaemonHostError::Worker(error.to_string()))?;
+        self.store
+            .update_goal(&reactivated, expected_revision)
+            .map_err(goal_service_error)?;
+        Ok(reactivated)
     }
 
     fn goal_cancel_value(

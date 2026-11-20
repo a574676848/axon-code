@@ -62,6 +62,8 @@ export interface GoalCardView {
   lastActivityAtMs: number;
   latestExecution: GoalExecutionView | null;
   latestResult: GoalResultView | null;
+  /** 创建这个目标的会话标识；来源会话据此只列自己建过的目标。 */
+  createdFromSessionId?: string | null;
 }
 
 /** 列表载荷。 */
