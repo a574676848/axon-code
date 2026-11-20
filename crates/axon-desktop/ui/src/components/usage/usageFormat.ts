@@ -143,17 +143,18 @@ export function formatRelative(ms: number, now: number): string {
 /** 请求来源的展示名。 */
 export function sourceLabel(source: string | null | undefined): string {
   switch (source) {
+    // 主会话：用户直接发起的一轮（含 tui / cli / desktop / webhook 入口）。
+    case 'primary':
+      return '主会话';
+    // 存量行没有来源列，落库值仍是入口渠道名：它们同样属于主会话。
     case 'axon_cli':
-      return '主 Agent';
+      return '主会话';
     case 'subagent':
       return '子代理';
-    // 执行侧派发的轮次：`agent` 是落库渠道，`goal` 是目标执行的归因客户端。
-    case 'agent':
-      return '后台执行';
-    case 'goal':
-      return '目标执行';
     case 'cron':
       return '定时任务';
+    case 'goal':
+      return '目标执行';
     case 'all':
     case undefined:
     case null:

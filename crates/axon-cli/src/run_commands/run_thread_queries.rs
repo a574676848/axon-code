@@ -73,6 +73,11 @@ pub(crate) struct ThreadTurnMetadata {
     /// 生成速度（token/s）；未测量时为空。
     #[serde(default)]
     pub(crate) generation_speed_tps: Option<f64>,
+    /// 本轮入口渠道（`tui` / `cli` / `desktop` / `webhook` / `cron` / `goal`）。
+    ///
+    /// 用量统计按它归类来源；存量轮次没有这一列，读侧按主会话处理。
+    #[serde(default)]
+    pub(crate) origin_channel: Option<String>,
     /// 本轮 provider 调用次数；用量投影需要，不落原始事件。
     #[serde(default)]
     pub(crate) provider_call_count: u64,
@@ -110,6 +115,7 @@ pub(super) fn thread_turn_metadata_from_record(record: &RunSessionRecord) -> Thr
         speed_mode: record.speed_mode.clone(),
         ttft_ms: record.ttft_ms,
         generation_speed_tps: record.generation_speed_tps,
+        origin_channel: record.origin_channel.clone(),
         provider_call_count: record
             .turn_events
             .iter()
@@ -407,6 +413,7 @@ fn turn_record_from_part(
         generation_speed_tps: None,
         reflection_notice: metadata.reflection_notice.clone(),
         turn_trace: None,
+        origin_channel: metadata.origin_channel.clone(),
     }
 }
 

@@ -39,34 +39,63 @@ pub enum UsageSourceFilter {
     /// 不限制来源。
     #[default]
     All,
-    /// Axon 顶层 Coding turn。
-    AxonCli,
-    /// 子代理 Coding turn。
+    /// 用户直接发起的主会话轮次。
+    Primary,
+    /// 子代理轮次。
     Subagent,
+    /// 定时任务轮次。
+    Cron,
+    /// 目标执行轮次。
+    Goal,
 }
 
 impl UsageSourceFilter {
     pub(super) const fn as_query(self) -> Option<&'static str> {
         match self {
             Self::All => None,
-            Self::AxonCli => Some(UsageSource::AxonCli.as_str()),
+            Self::Primary => Some(UsageSource::Primary.as_str()),
             Self::Subagent => Some(UsageSource::Subagent.as_str()),
+            Self::Cron => Some(UsageSource::Cron.as_str()),
+            Self::Goal => Some(UsageSource::Goal.as_str()),
         }
     }
 }
 
 /// 统计事实来源。
+///
+/// 归类只看两件既有事实：这一轮是不是子会话，以及入口渠道（`origin_channel`）。
+/// 存量轮次没有渠道列，归入主会话：它们确实由用户直接发起。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum UsageSource {
-    AxonCli,
+    /// 用户直接发起的主会话轮次。
+    Primary,
+    /// 子代理轮次。
     Subagent,
+    /// 定时任务轮次。
+    Cron,
+    /// 目标执行轮次。
+    Goal,
 }
 
 impl UsageSource {
     pub(super) const fn as_str(self) -> &'static str {
         match self {
-            Self::AxonCli => "axon_cli",
+            Self::Primary => "primary",
             Self::Subagent => "subagent",
+            Self::Cron => "cron",
+            Self::Goal => "goal",
+        }
+    }
+
+    /// 由子会话事实与入口渠道归类来源。
+    pub(super) fn from_origin(is_subagent: bool, origin_channel: Option<&str>) -> Self {
+        if is_subagent {
+            return Self::Subagent;
+        }
+        match origin_channel.map(str::trim).unwrap_or_default() {
+            "cron" => Self::Cron,
+            "goal" => Self::Goal,
+            _ => Self::Primary,
         }
     }
 }
@@ -276,6 +305,8 @@ pub(super) struct ThreadUsageRecord {
     pub(super) session_id: String,
     /// 是否子会话：子代理轮的用量单独归因。
     pub(super) is_subagent: bool,
+    /// 本轮入口渠道；存量轮次为空，按主会话归因。
+    pub(super) origin_channel: Option<String>,
     pub(super) provider: String,
     pub(super) model: String,
     pub(super) assistant_part_id: String,

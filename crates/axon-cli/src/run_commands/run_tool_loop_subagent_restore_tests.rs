@@ -96,6 +96,7 @@ fn previous_session_record(session_id: &str) -> RunSessionRecord {
         request_path: None,
         reflection_notice: None,
         turn_trace: None,
+        origin_channel: None,
         speed_mode: None,
         ttft_ms: None,
         generation_speed_tps: None,

@@ -47,10 +47,15 @@ pub fn submit_message(
     if workspace_id.is_empty() {
         return Err("必须先选定工作区才能发送消息".to_string());
     }
-    let destination = destination.trim();
-    if destination.is_empty() {
+    // 回复目标：会话内续聊可以回到会话本身，因此缺目标时用会话标识兜底。
+    // 自动化任务自带目的地，草稿与新会话仍必须由调用方给出。
+    let destination = match destination.trim() {
+        "" => session_id.map(str::trim).filter(|value| !value.is_empty()),
+        value => Some(value),
+    };
+    let Some(destination) = destination else {
         return Err("会话目标缺失，请先新建会话".to_string());
-    }
+    };
     // 草稿只活在桌面本地状态里，服务端从未登记过它：拿它当会话标识去提交，
     // 只会换来一条「会话不存在」。界面应当在提交前先把它物化成真实会话。
     if session_id.map(is_draft_id).unwrap_or(false) {

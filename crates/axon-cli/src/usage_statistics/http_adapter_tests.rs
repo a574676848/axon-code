@@ -42,7 +42,7 @@ fn seed_fact(
         day_bucket_ms: (recorded_at_ms / 86_400_000) * 86_400_000,
         provider: "google".to_owned(),
         model: model.to_owned(),
-        source: UsageSource::AxonCli,
+        source: UsageSource::Primary,
         status: UsageStatus::Completed,
         total_input_tokens: 10_000,
         cache_read_input_tokens: 2_000,

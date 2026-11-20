@@ -348,7 +348,23 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
     [projectTurn],
   );
 
-  /**
+/**
+ * 打开会话时要展开的那一轮：优先最近一条「有正文或在跑」的轮次。
+ *
+ * 目标与会话里还有一类已收口但没有正文的轮次（Goal 工具更新、派发记录），它们只有
+ * 一句系统说明，没有过程可供展开；把最新一格让给它们，正文区会读成「这一轮什么都没
+ * 发生」，顶部的上下文与首字读数也跟着整组消失。
+ */
+function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry === undefined) continue;
+    if ((entry.answerText ?? '').trim() !== '' || entry.status !== 'understood') {
+      return entry;
+    }
+  }
+  return null;
+}  /**
    * 打开一条车道：索引立起三形态，再升级最新一轮为展开形态。
    *
    * 首屏在索引返回时就交出，不等历史帧；最新一轮的回放随后替换该轮单元。每轮的分割线
@@ -373,7 +389,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
         if (entries.length > 0) {
           dispatch({ type: 'prepend-turns', turns: withProvisional(entries) });
         }
-        const newest = entries[entries.length - 1];
+        const newest = newestExpandable(entries) ?? entries[entries.length - 1];
         if (newest === undefined) return;
         // 最新一轮读整轮：它是正在读的那一段，思考与工具必须齐全并保持展开。
         const read = await readInteractionFrames(newest.interactionId, generation, {

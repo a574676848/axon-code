@@ -46,7 +46,7 @@ fn make_fact(
         day_bucket_ms: (recorded_at_ms / 86_400_000) * 86_400_000,
         provider: "openai".to_owned(),
         model: "gpt-5-turbo".to_owned(),
-        source: UsageSource::AxonCli,
+        source: UsageSource::Primary,
         status,
         total_input_tokens: 1000,
         cache_read_input_tokens: 300,

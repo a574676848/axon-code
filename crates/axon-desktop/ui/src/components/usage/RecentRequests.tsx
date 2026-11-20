@@ -190,8 +190,10 @@ export const RecentRequests: React.FC<{
               className="w-[120px]"
               options={[
                 { value: '', label: '全部来源' },
-                { value: 'axon_cli', label: '主 Agent' },
+                { value: 'primary', label: '主会话' },
                 { value: 'subagent', label: '子代理' },
+                { value: 'cron', label: '定时任务' },
+                { value: 'goal', label: '目标执行' },
               ]}
               onChange={(value) =>
                 onFilterChange({ ...filter, source: value === '' ? undefined : value })

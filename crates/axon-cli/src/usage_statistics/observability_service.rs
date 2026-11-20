@@ -45,7 +45,7 @@ pub fn query_overview(
     let period_start_ms = period_start_ms(period, now_ms)?;
 
     let source_filter = match source {
-        Some("axon_cli") => super::model::UsageSourceFilter::AxonCli,
+        Some("primary") => super::model::UsageSourceFilter::Primary,
         Some("subagent") => super::model::UsageSourceFilter::Subagent,
         _ => super::model::UsageSourceFilter::All,
     };

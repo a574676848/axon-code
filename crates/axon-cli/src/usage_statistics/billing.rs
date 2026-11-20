@@ -123,7 +123,7 @@ mod tests {
             day_bucket_ms: 1000,
             provider: "openai".to_string(),
             model: model.to_string(),
-            source: UsageSource::AxonCli,
+            source: UsageSource::Primary,
             status: UsageStatus::Completed,
             total_input_tokens: input,
             cache_read_input_tokens: 0,

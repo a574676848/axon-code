@@ -106,6 +106,7 @@ fn read_thread_usage_rows(
                 record: ThreadUsageRecord {
                     session_id: thread.thread_id.clone(),
                     is_subagent: thread.parent_thread_id.is_some(),
+                    origin_channel: metadata.origin_channel.clone(),
                     provider: thread.settings.provider.clone(),
                     model: thread.settings.model.clone(),
                     assistant_part_id: metadata.assistant_part_id.clone(),
@@ -205,11 +206,7 @@ fn fact_from_source(
         day_bucket_ms,
         provider: source.provider.clone(),
         model: source.model.clone(),
-        source: if source.is_subagent {
-            UsageSource::Subagent
-        } else {
-            UsageSource::AxonCli
-        },
+        source: UsageSource::from_origin(source.is_subagent, source.origin_channel.as_deref()),
         status: source.status,
         total_input_tokens: usage.total_input_tokens,
         cache_read_input_tokens: usage.cache_read_input_tokens,
@@ -320,6 +317,7 @@ mod tests {
         let record = ThreadUsageRecord {
             session_id: "session-real".to_owned(),
             is_subagent: false,
+            origin_channel: None,
             provider: "provider-real".to_owned(),
             model: "model-real".to_owned(),
             assistant_part_id: "assistant-real".to_owned(),
@@ -364,6 +362,7 @@ mod tests {
         let record = ThreadUsageRecord {
             session_id: "sess-price".to_owned(),
             is_subagent: false,
+            origin_channel: None,
             provider: "openai".to_owned(),
             model: "gpt-4o".to_owned(),
             assistant_part_id: "asst-price".to_owned(),

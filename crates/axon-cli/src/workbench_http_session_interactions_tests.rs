@@ -115,16 +115,27 @@ fn goal_session_capability_block_is_read_only() {
 }
 
 #[test]
-fn subagent_session_capability_block_is_read_only() {
+fn subagent_session_capability_block_allows_continuation() {
     let fixture = Fixture::new("subagent", "agent", None);
     let session = &fixture.payload()["session"];
     assert_eq!(session["kind"], "subagent");
     assert_eq!(session["origin"], "subagent");
-    assert_eq!(session["writable"], false);
+    // 子代理会话可以续聊，但没有独立中断入口与问答端口。
+    assert_eq!(session["writable"], true);
     assert_eq!(
         session["canInterrupt"], false,
         "子会话没有独立中断入口，必须如实给 false"
     );
+    assert_eq!(session["canAnswerQuestions"], false);
+}
+
+#[test]
+fn cron_session_capability_block_allows_continuation() {
+    let fixture = Fixture::new("cron", "cron", Some("cron"));
+    let session = &fixture.payload()["session"];
+    assert_eq!(session["kind"], "cron");
+    assert_eq!(session["writable"], true);
+    assert_eq!(session["canInterrupt"], false);
     assert_eq!(session["canAnswerQuestions"], false);
 }
 

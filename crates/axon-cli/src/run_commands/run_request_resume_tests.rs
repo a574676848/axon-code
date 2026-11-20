@@ -246,6 +246,7 @@ fn historical_session_with_alias(
         request_path: None,
         reflection_notice: None,
         turn_trace: None,
+        origin_channel: None,
         speed_mode: None,
         ttft_ms: None,
         generation_speed_tps: None,

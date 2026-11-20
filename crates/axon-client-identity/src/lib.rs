@@ -47,6 +47,22 @@ impl ClientChannel {
             Self::Goal => "axon-goal",
         }
     }
+
+    /// 入口渠道的稳定取值：与 `parse` 的入参同一套词表。
+    ///
+    /// 观测与统计都按这个值归类来源，因此它必须与请求入口一一对应，
+    /// 不能改名或增删：改一次就要重写全部历史行的口径。
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Tui => "tui",
+            Self::Cli => "cli",
+            Self::Desktop => "desktop",
+            Self::Webhook => "webhook",
+            Self::Cron => "cron",
+            Self::Goal => "goal",
+        }
+    }
 }
 
 /// 生成请求级 User-Agent。

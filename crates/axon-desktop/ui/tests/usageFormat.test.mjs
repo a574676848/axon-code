@@ -65,8 +65,12 @@ test('相对时间按分钟与小时分档', () => {
 });
 
 test('来源与终态按界面口径翻译，未知取值原样透出', () => {
-    assert.equal(sourceLabel('axon_cli'), '主 Agent');
+    assert.equal(sourceLabel('primary'), '主会话');
+    // 存量行落库值仍是入口渠道名，显示同样归到主会话。
+    assert.equal(sourceLabel('axon_cli'), '主会话');
     assert.equal(sourceLabel('subagent'), '子代理');
+    assert.equal(sourceLabel('cron'), '定时任务');
+    assert.equal(sourceLabel('goal'), '目标执行');
     assert.equal(sourceLabel('other'), 'other');
     assert.equal(statusLabel('completed'), '成功');
     assert.equal(statusLabel('interrupted'), '中断');

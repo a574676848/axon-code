@@ -95,6 +95,12 @@ pub(crate) struct RunSessionRecord {
     pub(super) ttft_ms: Option<u64>,
     #[serde(default)]
     pub(super) generation_speed_tps: Option<f64>,
+    /// 本轮入口渠道：`tui` / `cli` / `desktop` / `webhook` / `cron` / `goal`。
+    ///
+    /// 与 `client_channel` 同源，落进轮次记录是为了让用量统计能按来源归类；
+    /// 存量轮次没有这一列，读侧按主会话处理。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) origin_channel: Option<String>,
     /// 本轮记忆反思产生变更时的简要提示；无变更或缺省。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) reflection_notice: Option<String>,
@@ -235,6 +241,7 @@ impl RunSessionRecord {
             speed_mode: None,
             ttft_ms,
             generation_speed_tps,
+            origin_channel: Some(request.client_channel.as_str().to_owned()),
             reflection_notice: None,
             turn_trace: None,
         }
@@ -282,6 +289,7 @@ impl RunSessionRecord {
             speed_mode: None,
             ttft_ms,
             generation_speed_tps: None,
+            origin_channel: Some(request.client_channel.as_str().to_owned()),
             reflection_notice: None,
             turn_trace: None,
         }

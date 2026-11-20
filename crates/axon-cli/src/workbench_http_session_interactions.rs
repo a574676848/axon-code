@@ -59,11 +59,17 @@ fn session_capability_block(
         return Err(format!("会话 kind 取值非法：{kind}"));
     };
     let primary = kind == SessionKind::Primary;
+    // 可写性：用户可以直接续聊的会话类型。目标执行保持只读，它由目标契约驱动，
+    // 取消也只能由来源会话调用目标工具发起；cron 与子代理会话允许用户追加消息。
+    let writable = matches!(
+        kind,
+        SessionKind::Primary | SessionKind::Cron | SessionKind::Subagent
+    );
     Ok(serde_json::json!({
         "kind": kind.as_str(),
         // 来源只由会话类型映射，禁止用 `source_channel` 猜：同一会话可能被别端续聊。
         "origin": origin_of_kind(kind),
-        "writable": primary,
+        "writable": writable,
         // 后台链不注入用户提问端口，因此只有主会话能答问。
         "canAnswerQuestions": primary,
         // 只有主 turn 有进程内取消令牌。目标执行不经过中断接口：它的取消只能由来源
