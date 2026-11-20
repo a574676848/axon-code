@@ -171,6 +171,19 @@ pub fn conversation_send_subagent_message(
 #[tauri::command(async)]
 pub fn conversation_set_active_session(session_id: String, title: String) -> Result<(), String> {
     crate::session_context::set_active_session(&session_id, &title);
+    /*
+     * 续聊指针随切换一起前移：`--continue` 落在「人最后在看的那条会话」上。
+     * 走后台线程，切换本身不等这一次网络往返；写失败只记录，不阻塞界面，
+     * 因为指针是锦上添花，不是打开会话的前置条件。
+     */
+    let pointer_session = session_id.trim().to_owned();
+    if !pointer_session.is_empty() {
+        std::thread::spawn(move || {
+            if let Err(error) = crate::session_menu::move_resume_pointer(&pointer_session) {
+                eprintln!("WARNING: 续聊指针更新失败：{error}");
+            }
+        });
+    }
     Ok(())
 }
 

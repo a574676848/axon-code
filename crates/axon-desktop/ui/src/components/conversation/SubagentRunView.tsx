@@ -224,6 +224,7 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
           workspaceRoot={null}
           enabled={locatedSessionId !== null}
           busy={sending}
+          model={model ?? ''}
           placeholder={`把下一步交给 ${row.label}`}
           hint={
             conversation.working

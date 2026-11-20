@@ -320,6 +320,8 @@ Linux/macOS 安装器会将 `$HOME/.axon/bin`（或自定义 `AXON_INSTALL_DIR`�
    ```bash
    # 仅删除指定会话事件，不影响其他数据
    axon debug session delete <ID>
+   # 归属会话已被删除、留下无人认领的子代理或自动会话时，一次性收掉
+   axon debug session prune --orphans
    ```
 
 ## 性能问题

@@ -349,6 +349,7 @@ fn gateway_stream_receives_runtime_observation_without_cursor() {
         subscription,
         pending: VecDeque::new(),
         replay_cursor: None,
+        replay_report: Default::default(),
     };
 
     let frame = axon_domain::RuntimeObservationFrame::new(

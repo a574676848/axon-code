@@ -124,6 +124,24 @@ pub fn patch(session_id: &str, pinned: Option<bool>, archived: Option<bool>) -> 
     }
 }
 
+/// 把 `--continue` 的恢复指针指向这条会话。
+///
+/// 切会话是客户端唯一知道「人现在在看哪一条」的时刻：在这里把指针推给网关，命令行
+/// 下一次 `--continue` 才会落到同一条会话，三端对「上次在看什么」保持一致。非主
+/// 会话由网关按类型跳过，桌面不需要自己判类型。
+pub fn move_resume_pointer(session_id: &str) -> Result<(), String> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return Ok(());
+    }
+    let path = format!("{SESSIONS_PATH}/{}", encode(session_id));
+    let (status, response) = gateway::patch_raw_at(&path, &serde_json::json!({ "resume": true }))?;
+    match status {
+        200..=299 => Ok(()),
+        _ => Err(gateway::gateway_status_message(status, &response)),
+    }
+}
+
 /// 百分号编码：只保留 `unreserved` 字符，其余按字节转义。
 ///
 /// 查询串与路径段共用一个实现：会话标识与工作区标识都由服务端生成，但客户端不能

@@ -621,7 +621,11 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 hintVisible={hintVisible}
                 model={effectiveModel.label}
                 models={config?.models ?? []}
-                configLocked={selection?.channel === 'cron' || cronJobId !== null}
+                configLocked={
+                  selection?.channel === 'cron' ||
+                  cronJobId !== null ||
+                  (conversation.sessionFacts?.kind ?? 'primary') !== 'primary'
+                }
                 reasoningEffort={
                   fixedReasoningEffort ?? explicitReasoningEffort ?? config?.reasoningEffort ?? null
                 }

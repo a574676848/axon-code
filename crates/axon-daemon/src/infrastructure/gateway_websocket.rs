@@ -364,6 +364,8 @@ async fn handle_request(
                     return Ok(true);
                 }
             };
+            // 回放缺口在把流交给转发线程之前取出来：确认帧必须与这条流的建立事实同源。
+            let replay_report = stream.replay_report();
             // 线程持一份发送端用于投递；订阅表持收口标志，条目摘除即要求线程退出。
             let thread_sender = event_sender.clone();
             let shutdown = Arc::new(AtomicBool::new(false));
@@ -378,12 +380,18 @@ async fn handle_request(
                     shutdown,
                 },
             );
+            let mut receipt =
+                serde_json::json!({ "type": "subscribed", "subscribeId": subscribe_id });
+            // 缺帧与截断只在真的发生时出现：正常的确认帧不塞零值噪声。
+            if replay_report.skipped_archived_frames > 0 {
+                receipt["skippedArchivedFrames"] =
+                    serde_json::Value::from(replay_report.skipped_archived_frames);
+            }
+            if replay_report.replay_truncated {
+                receipt["replayTruncated"] = serde_json::Value::Bool(true);
+            }
             socket
-                .send(Message::Text(
-                    serde_json::json!({ "type": "subscribed", "subscribeId": subscribe_id })
-                        .to_string()
-                        .into(),
-                ))
+                .send(Message::Text(receipt.to_string().into()))
                 .await?;
         }
         WsClientRequest::Unsubscribe { subscribe_id } => {

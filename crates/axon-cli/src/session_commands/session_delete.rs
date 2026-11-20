@@ -37,16 +37,16 @@ const WORK_ITEM_ACTIVE_STATUSES: [&str; 3] = ["queued", "waiting", "running"];
 /// 会话事件归档目录：`<data>/archive/session-events`，与事件目录同名存放。
 const EVENT_ARCHIVE_DIRS: [&str; 2] = ["archive", "session-events"];
 /// 会话上下文目录（便签、运行笔记）所在的根子目录名。
-const SESSION_CONTEXT_DIR: &str = "sessions";
+pub(super) const SESSION_CONTEXT_DIR: &str = "sessions";
 
 /// 一次删除在各表上的行数，逐项如实报告给调用方。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct DeletedRows {
     /// `sessions` 行：0 表示控制面本来就没有这条会话。
-    sessions: usize,
+    pub(super) sessions: usize,
     /// 入站事实。
-    inbox: usize,
+    pub(super) inbox: usize,
     /// 在途工作项。
     work_items: usize,
     /// 工作项历史。
@@ -62,7 +62,7 @@ pub(super) struct DeletedRows {
     /// `--continue` 恢复指针；指向已删会话的指针一并清掉。
     resume_pointer: usize,
     /// 待答提问（落在 outbox 库）。
-    user_questions: usize,
+    pub(super) user_questions: usize,
 }
 
 /// 删除回执。
@@ -157,7 +157,13 @@ pub(super) fn run_session_delete(
     let mut warnings = Vec::new();
     let deleted_rows = match target.session_id.as_deref() {
         Some(session_id) => {
-            match delete_session_family(&store, session_id, &target.thread_ids, &mut warnings) {
+            match delete_session_family(
+                &store,
+                session_id,
+                &target.thread_ids,
+                false,
+                &mut warnings,
+            ) {
                 Ok(rows) => rows,
                 // 事务已回滚：控制面、thread 分片与事件目录都原样保留。
                 Err(error) => return cli_error(error),
@@ -249,6 +255,20 @@ fn resolve_delete_target(
     }
 }
 
+/// 孤儿清理入口：只删「归属会话已经不在」的非主会话。
+///
+/// 放行只发生在调用方已确认归属缺失之后；本函数不再自行判断树关系，
+/// 判定与列举都在 `session_prune`，避免两处对「孤儿」各说各话。
+pub(super) fn delete_orphan_family(
+    store: &SqliteRuntimeStore,
+    session_id: &str,
+    thread_ids: &[String],
+) -> Result<(DeletedRows, Vec<String>), String> {
+    let mut warnings = Vec::new();
+    let rows = delete_session_family(store, session_id, thread_ids, true, &mut warnings)?;
+    Ok((rows, warnings))
+}
+
 /// 在单个 `IMMEDIATE` 事务里删掉会话族；提交之后再补 outbox 侧。
 ///
 /// 事务之外不再有任何控制面写入：失败路径只会把 `warnings` 填上磁盘残留，
@@ -257,13 +277,14 @@ fn delete_session_family(
     store: &SqliteRuntimeStore,
     session_id: &str,
     thread_ids: &[String],
+    allow_non_primary: bool,
     warnings: &mut Vec<String>,
 ) -> Result<DeletedRows, String> {
     let outcome = store
         .with_read_connection(|connection| {
             let transaction =
                 Transaction::new_unchecked(connection, TransactionBehavior::Immediate)?;
-            match family_state(&transaction, session_id)? {
+            match family_state(&transaction, session_id, allow_non_primary)? {
                 FamilyState::Missing => {
                     transaction.rollback()?;
                     return Ok(FamilyDelete::Missing);
@@ -310,7 +331,14 @@ fn delete_session_family(
 }
 
 /// 事务内的终态判定：不存在、受保护、可删。
-fn family_state(transaction: &Transaction<'_>, session_id: &str) -> rusqlite::Result<FamilyState> {
+///
+/// `allow_non_primary` 只给孤儿清理用：子代理、Cron 与目标会话平时由会话树与保留策略
+/// 维护，只有它们的归属会话已经不存在时，才由 `session prune --orphans` 显式放行。
+fn family_state(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+    allow_non_primary: bool,
+) -> rusqlite::Result<FamilyState> {
     let row = transaction
         .query_row(
             "SELECT status, kind FROM sessions WHERE session_id = ?1",
@@ -321,7 +349,7 @@ fn family_state(transaction: &Transaction<'_>, session_id: &str) -> rusqlite::Re
     let Some((status, kind)) = row else {
         return Ok(FamilyState::Missing);
     };
-    if kind != "primary" {
+    if kind != "primary" && !allow_non_primary {
         // 子代理、Cron 与目标会话的归属挂在会话树与保留策略上：从这里删会让父会话
         // 的子会话清单出现断点，因此只允许主会话走用户入口。
         return Ok(FamilyState::Blocked(format!(
@@ -383,14 +411,14 @@ fn delete_outbox_questions(store: &SqliteRuntimeStore, session_id: &str) -> Resu
 }
 
 /// 事件归档根：与事件目录同级的 `archive/session-events`。
-fn archive_root(data_root: &Path) -> std::path::PathBuf {
+pub(super) fn archive_root(data_root: &Path) -> std::path::PathBuf {
     EVENT_ARCHIVE_DIRS
         .iter()
         .fold(data_root.to_path_buf(), |path, segment| path.join(segment))
 }
 
 /// 目录不存在按「已回收」处理；删不掉只记残留，不回滚已经提交的控制面结论。
-fn remove_dir_if_present(path: &Path, label: &str, warnings: &mut Vec<String>) -> bool {
+pub(super) fn remove_dir_if_present(path: &Path, label: &str, warnings: &mut Vec<String>) -> bool {
     if !path.exists() {
         return false;
     }

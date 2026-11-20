@@ -58,7 +58,7 @@ fn replay_reads_to_durable_ceiling_across_pages() {
     assert_eq!(ceiling.sequence, 6);
 
     let stream_bridge = EventStreamBridge::new();
-    let (subscription, pending, replay_cursor) = subscribe_and_replay(
+    let (subscription, pending, replay_cursor, _report) = subscribe_and_replay(
         &store,
         &stream_bridge,
         &session_id,
@@ -122,7 +122,7 @@ fn replay_watermark_covers_every_scanned_page() {
     assert_eq!(ceiling.sequence, u64::from(total));
 
     let stream_bridge = EventStreamBridge::new();
-    let (subscription, pending, replay_cursor) = subscribe_and_replay(
+    let (subscription, pending, replay_cursor, _report) = subscribe_and_replay(
         &store,
         &stream_bridge,
         &session_id,
@@ -186,7 +186,7 @@ fn replay_reaches_the_newest_interaction_of_a_long_session() {
     assert_eq!(ceiling.sequence, u64::from(prefix) + 2);
 
     let stream_bridge = EventStreamBridge::new();
-    let (subscription, pending, _) = subscribe_and_replay(
+    let (subscription, pending, _, _report) = subscribe_and_replay(
         &store,
         &stream_bridge,
         &session_id,
@@ -296,7 +296,7 @@ fn replay_appends_terminal_status_for_finished_interaction_without_events() {
     let ceiling = live_ceiling_cursor(&store, &session_id, Some(host.generation.as_str()))
         .expect("读取 durable 尾");
     let stream_bridge = EventStreamBridge::new();
-    let (subscription, pending, _) = subscribe_and_replay(
+    let (subscription, pending, _, _report) = subscribe_and_replay(
         &store,
         &stream_bridge,
         &session_id,
@@ -347,7 +347,7 @@ fn replay_keeps_terminal_status_after_replayed_history() {
     let ceiling = live_ceiling_cursor(&store, &session_id, Some(host.generation.as_str()))
         .expect("读取 durable 尾");
     let stream_bridge = EventStreamBridge::new();
-    let (subscription, pending, _) = subscribe_and_replay(
+    let (subscription, pending, _, _report) = subscribe_and_replay(
         &store,
         &stream_bridge,
         &session_id,
@@ -381,7 +381,7 @@ fn replay_leaves_running_interaction_open() {
         let ceiling = live_ceiling_cursor(&store, &session_id, Some(host.generation.as_str()))
             .expect("读取 durable 尾");
         let stream_bridge = EventStreamBridge::new();
-        let (subscription, pending, _) = subscribe_and_replay(
+        let (subscription, pending, _, _report) = subscribe_and_replay(
             &store,
             &stream_bridge,
             &session_id,
@@ -591,4 +591,61 @@ fn tail_page_falls_back_to_a_full_scan_for_legacy_events() {
         "尾窗不得混入其他交互的帧"
     );
     assert!(!page.has_more, "保尾扫描已到 durable 尾");
+}
+
+/// 回放缺口必须随订阅一起可见：缺失外置正文的帧被跳过时，报告要如实计数。
+#[test]
+fn replay_report_counts_frames_skipped_for_missing_archive() {
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    let host_id = RuntimeHostId::new("gateway-report-host").expect("Host ID");
+    let host = store
+        .claim_host(&host_id, 1, None, 10, 10_000)
+        .expect("注册 Host");
+    let session_id = DaemonSessionId::new("gateway-report-session").expect("Session ID");
+    store
+        .create_session(&session_id, ".", 10)
+        .expect("创建 Session");
+    store
+        .set_session_status(&session_id, &host, SessionRuntimeStatus::Running, 11)
+        .expect("启动 Session");
+
+    let interaction_id = InteractionId::new("gateway-report-interaction").expect("Interaction ID");
+    store
+        .append_event(
+            &session_id,
+            &host,
+            axon_session::SESSION_EVENT_MISSING_ARCHIVE_TYPE,
+            "{\"interactionId\":\"gateway-report-interaction\"}",
+            12,
+        )
+        .expect("追加缺失外置正文的事件");
+    store
+        .append_event(
+            &session_id,
+            &host,
+            "wire_event",
+            "{\"interactionId\":\"gateway-report-interaction\",\"text\":\"kept\"}",
+            13,
+        )
+        .expect("追加正常事件");
+
+    let ceiling = live_ceiling_cursor(&store, &session_id, Some(host.generation.as_str()))
+        .expect("读取 durable 尾");
+    let stream_bridge = EventStreamBridge::new();
+    let (subscription, pending, _replay_cursor, report) = subscribe_and_replay(
+        &store,
+        &stream_bridge,
+        &session_id,
+        &interaction_id,
+        Some(ConsumerCursor::new(host.generation.as_str(), 0)),
+        TEST_REPLAY_PAGE_SIZE,
+        ceiling,
+    )
+    .expect("重放不应失败");
+
+    assert_eq!(report.skipped_archived_frames, 1, "缺帧必须计数");
+    assert!(!report.replay_truncated, "读到尾就不算截断");
+    assert_eq!(pending.len(), 1, "只有正常事件进入回放");
+    drop(subscription);
 }

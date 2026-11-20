@@ -2,6 +2,8 @@
 //!
 //! 指针只回答一个问题：下一次不带 `--session` 的接续应该落到哪个会话。
 //! 它是控制面的单行状态，与会话内容无关；桌面与 TUI 走显式 `session_id`，不读它。
+//! 桌面切会话时会把指针推给网关（只有主会话移动指针），因此 `--continue` 跟随的是
+//! 人最后选择的那条会话，而不是最后一次执行 `sessions resume` 的那条。
 
 use axon_domain::DaemonSessionId;
 

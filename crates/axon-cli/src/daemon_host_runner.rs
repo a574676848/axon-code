@@ -607,6 +607,18 @@ fn serve_daemon_ipc(
         }
         responses
     };
+    // 健康快照旁路：探活不再排队等主处理链上的长请求（线程与旁路实现见模块文档）。
+    let mut snapshot_host = host.clone();
+    let fast_path = crate::daemon_health_snapshot::spawn(
+        move |request| snapshot_host.handle_ipc_request(request),
+        // 停机判据与接受循环同源：停机请求与 fence 都要让快照线程收手。
+        {
+            let snapshot_exit = exit_signals.clone();
+            move || snapshot_exit.should_stop()
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let server = server.with_fast_path(fast_path);
     let served = {
         // 停止判据同时覆盖「外部停机请求」与「租约被 fence」：两者都要让接受循环收手，
         // 差别只在收手之后的退出码。

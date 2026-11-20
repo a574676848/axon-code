@@ -8,6 +8,7 @@
 axon debug session list [--limit <n>] [--cursor <c>] [--cwd <dir>] [--archived]
 axon debug session show <THREAD_ID>
 axon debug session delete <THREAD_ID>
+axon debug session prune --orphans
 axon debug session read <THREAD_ID>
 axon debug session resume <THREAD_ID>
 axon debug session replay <THREAD_ID> [--provider-call-id <id>]
@@ -20,6 +21,8 @@ axon debug session doctor [--repair]
 两个标识不可互换：`axon debug session` 只收 `THREAD_ID`（`debug session list` 给出的历史线程标识），`axon sessions` 只收会话 ID（`sessions list` 给出的 ULID）。两个入口各有一次性解析，不做互相回落；传错标识空间直接报错并提示对应的清单命令。`reset` 是会话级操作，两个入口都只收会话 ID。
 
 `list` 读运行态会话清单，字段与 `axon sessions list` 同源，`--archived` 表示包含归档会话。
+
+`prune --orphans` 只清理归属会话已经消失的非主会话（子代理、Cron、目标执行）：它按 `root_session_id` 判定归属，归属仍在或仍在运行的一律跳过并在回执里给出原因；不写 `--orphans` 时命令拒绝执行。日常删除单个会话仍走 `axon sessions delete`。
 
 ## 2. 输出格式
 

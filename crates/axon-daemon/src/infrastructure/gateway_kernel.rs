@@ -153,6 +153,24 @@ pub trait GatewayEventStream: Send {
     fn subscription_baseline(&self) -> Option<serde_json::Value> {
         None
     }
+
+    /// 建立这条流时 durable 回放留下的缺口。
+    ///
+    /// 客户端必须能看见「回放不完整」这件事：跳过缺失外置正文的帧、或字节预算耗尽
+    /// 没追到 durable 尾时，界面要能说清楚自己看的是残缺历史，而不是把缺帧当成
+    /// 会话本来就长这样。默认没有缺口。
+    fn replay_report(&self) -> GatewayReplayReport {
+        GatewayReplayReport::default()
+    }
+}
+
+/// 一次 durable 回放的缺口统计。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GatewayReplayReport {
+    /// 因外置正文缺失而跳过的帧数。
+    pub skipped_archived_frames: u64,
+    /// 字节预算耗尽、尚未追到 durable 尾。
+    pub replay_truncated: bool,
 }
 
 /// 由 Daemon durable event bridge 映射出的最小事件。

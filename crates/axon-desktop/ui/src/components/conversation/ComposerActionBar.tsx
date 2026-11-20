@@ -24,10 +24,8 @@ export interface ComposerActionBarProps {
   effort: string;
   configBusy: boolean;
   configLocked: boolean;
-  /** 主按钮就是停止键（输入框空着、正在跑）。 */
+  /** 主按钮就是停止键（输入为空、正在跑）。 */
   showStop: boolean;
-  /** 本轮可中断：停止入口至少要在某处出现。 */
-  stopAvailable: boolean;
   sendable: boolean;
   busy: boolean;
   commandRunning: boolean;
@@ -58,7 +56,6 @@ export const ComposerActionBar: React.FC<ComposerActionBarProps> = ({
   configBusy,
   configLocked,
   showStop,
-  stopAvailable,
   sendable,
   busy,
   commandRunning,
@@ -74,19 +71,16 @@ export const ComposerActionBar: React.FC<ComposerActionBarProps> = ({
   onSubmit,
 }) => {
   const reducedMotion = useReducedMotion();
+  /*
+   * 主按钮一键两用：输入为空且本轮可中断时它就是停止键；一旦有正文或附件，自动切回
+   * 发送键。这样同一位置永远表达「现在这一下会发生什么」，不并列两个语义相反的按钮。
+   */
   const activeButton = showStop || sendable || (commandRunning && !hasContent);
   const iconState = showStop
     ? 'stop'
     : busy || (commandRunning && !hasContent)
       ? 'busy'
       : 'send';
-  /*
-   * 停止入口常驻。
-   *
-   * 主按钮在输入框空着时就是停止键，此时不再多画一枚；一旦有内容（或提交在途），
-   * 主按钮回到发送，停止改由它左边这枚 28px 图标承担，因此边打字边停手仍然有点可点。
-   */
-  const stopIcon = stopAvailable && !showStop;
 
   return (
     <div className="flex items-center gap-1 px-2.5 pb-2">
@@ -130,31 +124,19 @@ export const ComposerActionBar: React.FC<ComposerActionBarProps> = ({
       <span className="flex-1" />
 
       {/*
-        模型选择按「这一轮由谁跑」显示：只读会话（目标执行这类后台会话）不能换模型，
-        因此整块不渲染，除非存在别的锁（自动化会话由后端锁定）时才照常显示并置灰。
+        模型区域始终显示当前取值，与主会话一致：只有主会话能改；目标、子代理、cron
+        会话照常显示这个模型与思考强度，但选择器锁定，点不开也不可变更。
       */}
-      {!compact && !readOnly && (enabled || model !== '') && (
+      {(model !== '' || !compact) && (
         <ComposerPicker
           model={model}
           models={models}
           effort={effort}
           configBusy={configBusy}
-          configLocked={configLocked}
+          configLocked={configLocked || readOnly || compact}
           onModelChange={(value) => onModelChange?.(value)}
           onReasoningEffortChange={(value) => onReasoningEffortChange?.(value)}
         />
-      )}
-
-      {stopIcon && (
-        <button
-          type="button"
-          aria-label="停止生成"
-          title="停止生成（Esc）"
-          onClick={onInterrupt}
-          className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-text-secondary transition-colors duration-100 hover:bg-hover hover:text-text-primary active:scale-95 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
-        >
-          <StopIcon size={14} />
-        </button>
       )}
 
       <button

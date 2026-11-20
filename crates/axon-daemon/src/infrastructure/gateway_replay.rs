@@ -10,7 +10,7 @@
 //! 没有任何依据收口（界面停在「生成中」）。补在末尾而不是开头：客户端按「最后一条
 //! 未收口的轮次」归约，先收口会让随后回放的正文落到上一轮去。
 
-use super::gateway_kernel::{GatewayEvent, GatewayKernelError};
+use super::gateway_kernel::{GatewayEvent, GatewayKernelError, GatewayReplayReport};
 use crate::application::{EventStreamBridge, EventStreamSubscription};
 use axon_domain::{ConsumerCursor, InteractionId, InteractionStatus};
 use axon_session::{RuntimeStore, RuntimeStoreError, SESSION_EVENT_MISSING_ARCHIVE_TYPE};
@@ -54,6 +54,7 @@ pub(super) fn subscribe_and_replay<S>(
         EventStreamSubscription,
         VecDeque<GatewayEvent>,
         Option<ConsumerCursor>,
+        GatewayReplayReport,
     ),
     GatewayKernelError,
 >
@@ -67,7 +68,7 @@ where
             resume_cursor.clone(),
         )
         .map_err(|error| GatewayKernelError::Ingress(format!("{error:?}")))?;
-    let mut pending = replay_until_ceiling(
+    let (mut pending, report) = replay_until_ceiling(
         store,
         session_id,
         interaction_id,
@@ -76,7 +77,7 @@ where
         live_ceiling.sequence,
     )?;
     append_replayed_terminal_status(&mut pending, store, interaction_id)?;
-    Ok((subscription, pending, Some(live_ceiling)))
+    Ok((subscription, pending, Some(live_ceiling), report))
 }
 
 /// Interaction 状态帧：载荷就是状态字符串，实时与回放两条路径形状一致。
@@ -140,11 +141,12 @@ where
     ))
 }
 
-/// 从 `after_sequence` 起分页重放至 durable 尾，返回按序号升序的匹配事件。
+/// 从 `after_sequence` 起分页重放至 durable 尾，返回按序号升序的匹配事件与缺口统计。
 ///
 /// 单页上限只是 window，不是总量；一次 Subscribe 必须读到 durable 尾，否则
 /// 尾部（例如快速失败回合的 `turn_completed`）会永久漏收。字节预算触顶时走 logger
-/// 显式审计（安装态 stderr 不落任何文件），避免"安安静静少投递"。
+/// 显式审计（安装态 stderr 不落任何文件），避免"安安静静少投递"；同一份结论也随
+/// 订阅确认帧下发，让客户端自己知道这次回放是残缺的。
 fn replay_until_ceiling<S>(
     store: &S,
     session_id: &axon_domain::DaemonSessionId,
@@ -152,7 +154,7 @@ fn replay_until_ceiling<S>(
     after_sequence: u64,
     replay_page_size: u32,
     ceiling_sequence: u64,
-) -> Result<VecDeque<GatewayEvent>, GatewayKernelError>
+) -> Result<(VecDeque<GatewayEvent>, GatewayReplayReport), GatewayKernelError>
 where
     S: RuntimeStore,
 {
@@ -209,7 +211,13 @@ where
             session_id.as_str()
         ));
     }
-    Ok(pending)
+    Ok((
+        pending,
+        GatewayReplayReport {
+            skipped_archived_frames: missing_archives as u64,
+            replay_truncated: after < ceiling_sequence,
+        },
+    ))
 }
 
 /// 判断 durable 事件是否属于目标 Interaction；payload 缺失该字段时视为不匹配。

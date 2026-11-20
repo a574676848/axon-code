@@ -20,6 +20,7 @@ use crate::{
 mod output;
 mod replay;
 mod session_delete;
+mod session_prune;
 mod session_resolution;
 mod sessions_list;
 mod thread_cli;
@@ -27,6 +28,7 @@ mod thread_cli;
 use output::{SessionOutputCommand, run_session_output};
 use replay::{SessionReplayCommand, run_session_replay};
 use session_delete::run_session_delete;
+use session_prune::run_session_prune;
 pub(crate) use session_resolution::{TargetKind, open_control_store, resolve_session_target};
 use sessions_list::{SessionsListCommand, run_sessions_list};
 pub(crate) use thread_cli::session_summary_views_for_root;
@@ -66,6 +68,8 @@ pub enum SessionSubcommand {
     Reset(SessionResetCommand),
     /// 删除运行窗口：控制面会话族与 thread 分片一起删，失败整体回滚。
     Delete(SessionDeleteCommand),
+    /// 清理归属会话已经消失的非主会话；只删确定的孤儿，归属仍在的一律不动。
+    Prune(SessionPruneCommand),
     /// 导出单个会话的 ref-only 摘要。
     Export(SessionExportCommand),
     /// 回放 resume 链：沿 parent 回溯并按时间正序输出整条会话链。
@@ -98,6 +102,14 @@ pub struct SessionResetCommand {
 pub struct SessionDeleteCommand {
     /// 会话 ID（`axon sessions`）或 Thread ID（`axon debug session`）。
     pub session_id: String,
+}
+
+/// `axon debug session prune` 参数。
+#[derive(Debug, Clone, Args, PartialEq, Eq)]
+pub struct SessionPruneCommand {
+    /// 只清理归属会话已消失的非主会话；不写这一项时命令拒绝执行。
+    #[arg(long)]
+    pub orphans: bool,
 }
 
 pub(crate) fn run_session(
@@ -137,6 +149,7 @@ pub(crate) fn run_session(
         SessionSubcommand::Delete(command) => {
             run_session_delete(format, &path, command, TargetKind::Thread)
         }
+        SessionSubcommand::Prune(command) => run_session_prune(format, &path, command),
         SessionSubcommand::Export(command) => {
             run_session_export(format, &path, command, TargetKind::Thread)
         }

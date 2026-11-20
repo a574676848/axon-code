@@ -528,7 +528,6 @@ export const InputDock: React.FC<InputDockProps> = ({
                   configBusy={configBusy}
                   configLocked={configLocked}
                   showStop={showStop}
-                  stopAvailable={interruptible}
                   sendable={sendable}
                   busy={busy}
                   commandRunning={command.running !== null}

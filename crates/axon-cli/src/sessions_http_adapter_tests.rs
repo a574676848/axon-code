@@ -420,6 +420,66 @@ fn patch_rejects_unknown_session_and_empty_body() {
 }
 
 #[test]
+fn patch_resume_moves_the_continue_pointer_for_primary_sessions_only() {
+    // 桌面切会话时把指针推过来：`--continue` 从此跟随人最后看的那条会话。
+    let (directory, store) = fixture();
+    seed_session(&store, "session-live", 0, 0);
+    store
+        .with_read_connection(|connection| {
+            connection
+                .execute(
+                    "INSERT INTO sessions(session_id,current_run_id,root_session_id,trust_scope,kind,cwd,status,
+                     worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,
+                     last_activity_at_ms,created_at_ms,updated_at_ms,pinned,archived,workspace_id)
+                 VALUES('session-sub','session-sub',NULL,'private','subagent','/workspace','idle',0,0,0,0,1,1,1,0,0,'ws-a')",
+                    [],
+                )
+                .map(|_| ())
+        })
+        .expect("写入子代理会话");
+    let adapter = SessionsHttpAdapter::new(directory.path().to_path_buf());
+
+    let written = adapter
+        .handle_request(
+            "PATCH",
+            "/api/v1/sessions/session-live",
+            None,
+            br#"{"resume":true}"#,
+        )
+        .expect("命中单会话路由");
+    assert_eq!(written.status, 200);
+    let written_body: Value = serde_json::from_slice(&written.body).expect("JSON");
+    assert_eq!(
+        written_body["resume"], "written",
+        "主会话的指针必须真实写入：{written_body}"
+    );
+    let pointer = axon_session::ResumePointerStore::read_resume_pointer(&store)
+        .expect("读取恢复指针")
+        .expect("指针已写入");
+    assert_eq!(pointer.as_str(), "session-live");
+
+    // 子代理会话不是 `--continue` 的落点：按类型跳过，并如实回报。
+    let skipped = adapter
+        .handle_request(
+            "PATCH",
+            "/api/v1/sessions/session-sub",
+            None,
+            br#"{"resume":true}"#,
+        )
+        .expect("命中单会话路由");
+    assert_eq!(skipped.status, 200);
+    let skipped_body: Value = serde_json::from_slice(&skipped.body).expect("JSON");
+    assert_eq!(
+        skipped_body["resume"], "skipped_non_primary",
+        "非主会话必须回报跳过：{skipped_body}"
+    );
+    let pointer = axon_session::ResumePointerStore::read_resume_pointer(&store)
+        .expect("读取恢复指针")
+        .expect("指针保持原值");
+    assert_eq!(pointer.as_str(), "session-live", "非主会话不得移动指针");
+}
+
+#[test]
 fn patch_writes_the_title_into_the_control_plane() {
     // 桌面重命名必须落到 `sessions.title`：只写本地镜像会让 TUI 与命令行继续看到旧名字。
     let (directory, store) = fixture();

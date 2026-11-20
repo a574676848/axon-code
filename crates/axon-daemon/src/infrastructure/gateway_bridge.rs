@@ -12,7 +12,7 @@ mod session_cache;
 mod session_routing;
 use super::gateway_kernel::{
     GatewayEgress, GatewayEvent, GatewayEventStream, GatewayIngress, GatewayKernelError,
-    GatewaySessionTurnsRequest, GatewaySubscriptionRequest,
+    GatewayReplayReport, GatewaySessionTurnsRequest, GatewaySubscriptionRequest,
 };
 use super::gateway_replay::{
     DEFAULT_GATEWAY_REPLAY_PAGE_SIZE, interaction_status_event, live_ceiling_cursor,
@@ -319,7 +319,7 @@ where
                 .as_ref()
                 .is_none_or(|generation| generation == &value.generation)
         });
-        let (subscription, pending, replay_cursor) = subscribe_and_replay(
+        let (subscription, pending, replay_cursor, replay_report) = subscribe_and_replay(
             &self.dependencies.store,
             &self.dependencies.stream_bridge,
             &session_id,
@@ -338,6 +338,7 @@ where
             subscription,
             pending,
             replay_cursor,
+            replay_report,
         }))
     }
 
@@ -396,6 +397,8 @@ struct DaemonGatewayEventStream<S> {
     pending: VecDeque<GatewayEvent>,
     /// 重放已同步到的 durable 水位；仅用于消除"先订阅、后 replay"竞态产生的重叠事件。
     replay_cursor: Option<ConsumerCursor>,
+    /// 建立这条流时 durable 回放的缺口；随 `subscribed` 确认帧下发给客户端。
+    replay_report: GatewayReplayReport,
 }
 
 impl<S> DaemonGatewayEventStream<S>
@@ -418,7 +421,7 @@ where
             &self.session_id,
             self.host_generation.as_deref(),
         )?;
-        let (subscription, pending, replay_cursor) = subscribe_and_replay(
+        let (subscription, pending, replay_cursor, replay_report) = subscribe_and_replay(
             &self.store,
             &self.stream_bridge,
             &self.session_id,
@@ -430,6 +433,7 @@ where
         self.subscription = subscription;
         self.pending = pending;
         self.replay_cursor = replay_cursor;
+        self.replay_report = replay_report;
         Ok(())
     }
 }
@@ -495,6 +499,10 @@ where
                 }
             }
         }
+    }
+
+    fn replay_report(&self) -> GatewayReplayReport {
+        self.replay_report
     }
 }
 

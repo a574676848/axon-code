@@ -96,6 +96,12 @@ struct PatchSessionBody {
     /// 展示标题；桌面重命名写的就是这一列。
     #[serde(default)]
     title: Option<String>,
+    /// 把 `--continue` 的恢复指针指向这条会话。
+    ///
+    /// 只有主会话会移动指针：cron、子代理与目标执行的会话不是 `--continue` 的落点，
+    /// 这里按类型跳过并在响应里说明，不假装写成。
+    #[serde(default)]
+    resume: Option<bool>,
 }
 
 impl SessionsHttpAdapter {
@@ -173,7 +179,11 @@ impl SessionsHttpAdapter {
         let Ok(payload) = serde_json::from_slice::<PatchSessionBody>(body) else {
             return GatewayHttpResponse::json(400, &json!({"error": "invalid_body"}));
         };
-        if payload.pinned.is_none() && payload.archived.is_none() && payload.title.is_none() {
+        if payload.pinned.is_none()
+            && payload.archived.is_none()
+            && payload.title.is_none()
+            && payload.resume.is_none()
+        {
             return GatewayHttpResponse::json(400, &json!({"error": "empty_patch"}));
         }
         let title = payload.title.as_deref().map(str::trim);
@@ -203,16 +213,70 @@ impl SessionsHttpAdapter {
         });
         match changed {
             Ok(0) => GatewayHttpResponse::json(404, &json!({"error": "session_not_found"})),
-            Ok(_) => GatewayHttpResponse::json(
-                200,
-                &json!({
-                    "sessionId": session_id,
-                    "pinned": payload.pinned,
-                    "archived": payload.archived,
-                    "title": title,
-                }),
-            ),
+            Ok(_) => {
+                let resume = match payload.resume {
+                    Some(true) => match self.move_resume_pointer(&store, session_id) {
+                        Ok(state) => Some(state),
+                        Err(response) => return response,
+                    },
+                    _ => None,
+                };
+                GatewayHttpResponse::json(
+                    200,
+                    &json!({
+                        "sessionId": session_id,
+                        "pinned": payload.pinned,
+                        "archived": payload.archived,
+                        "title": title,
+                        "resume": resume,
+                    }),
+                )
+            }
             Err(_) => GatewayHttpResponse::json(500, &json!({"error": "update_failed"})),
+        }
+    }
+
+    /// 把 `--continue` 的恢复指针指向这条会话；非主会话如实回报「跳过」。
+    ///
+    /// 指针是控制面的单行状态，写失败必须让调用方看见：静默失败会让 `--continue`
+    /// 悄悄落到上一条会话，比报错更难排查。
+    fn move_resume_pointer(
+        &self,
+        store: &axon_session::SqliteRuntimeStore,
+        session_id: &str,
+    ) -> Result<&'static str, GatewayHttpResponse> {
+        let kind = store.with_read_connection(|connection| {
+            connection.query_row(
+                "SELECT kind FROM sessions WHERE session_id=?1",
+                rusqlite::params![session_id],
+                |row| row.get::<_, String>(0),
+            )
+        });
+        match kind {
+            Ok(kind) if kind != "primary" => Ok("skipped_non_primary"),
+            Ok(_) => {
+                let Ok(session) = axon_domain::DaemonSessionId::new(session_id.to_owned()) else {
+                    return Err(GatewayHttpResponse::json(
+                        400,
+                        &json!({"error": "invalid_session_id"}),
+                    ));
+                };
+                match axon_session::ResumePointerStore::write_resume_pointer(
+                    store,
+                    &session,
+                    axon_time::unix_now_ms(),
+                ) {
+                    Ok(()) => Ok("written"),
+                    Err(_) => Err(GatewayHttpResponse::json(
+                        500,
+                        &json!({"error": "resume_pointer_failed"}),
+                    )),
+                }
+            }
+            Err(_) => Err(GatewayHttpResponse::json(
+                500,
+                &json!({"error": "session_kind_unreadable"}),
+            )),
         }
     }
 }
