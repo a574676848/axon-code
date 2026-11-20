@@ -1,5 +1,13 @@
 import React from 'react';
-import { classifyDroppedItems } from '../../conversation/dropFiles';
+import {
+  attachmentSizeError,
+  classifyDroppedItems,
+  partitionBySize,
+} from '../../conversation/dropFiles';
+import {
+  composerAttachmentsFor,
+  rememberComposerAttachments,
+} from '../../conversation/composerDrafts';
 import {
   base64FromText,
   exportMarkdownName,
@@ -49,11 +57,32 @@ export interface ComposerAttachmentsController {
 }
 
 /** 附件控制器：三条落地路径共用一个提示位，停留时长见 composerNotice。 */
-export function useComposerAttachments(): ComposerAttachmentsController {
+export function useComposerAttachments(
+  /**
+   * 附件所属的会话键。
+   *
+   * 附件与正文同属一份草稿：换会话时先存下这一条的附件，再把目标会话的接过来，
+   * 否则上一条会话的附件会跟着新会话一起发出去。
+   */
+  draftKey: string | null = null,
+): ComposerAttachmentsController {
   const [attachments, setAttachments] = React.useState<AttachmentRef[]>([]);
   const [notice, setNotice] = React.useState<ComposerNotice | null>(null);
   const [dragging, setDragging] = React.useState(false);
   const timer = React.useRef<number | null>(null);
+  /** 附件清单的即时值：切换会话时按它存盘。 */
+  const attachmentsRef = React.useRef<AttachmentRef[]>(attachments);
+  attachmentsRef.current = attachments;
+  /** 上一次同步过附件的会话键；`undefined` 表示还没同步过（挂载那一帧）。 */
+  const syncedKey = React.useRef<string | null | undefined>(undefined);
+
+  React.useEffect(() => {
+    if (syncedKey.current === draftKey) return;
+    const previous = syncedKey.current;
+    syncedKey.current = draftKey;
+    if (previous !== undefined) rememberComposerAttachments(previous, attachmentsRef.current);
+    setAttachments(composerAttachmentsFor(draftKey));
+  }, [draftKey]);
 
   const notify = React.useCallback((text: string, tone: ComposerNoticeTone = 'info') => {
     setNotice({ tone, text });
@@ -72,6 +101,15 @@ export function useComposerAttachments(): ComposerAttachmentsController {
   const stageFile = React.useCallback(
     (file: File): Promise<AttachmentRef> =>
       new Promise((resolve, reject) => {
+        /*
+         * 体量先挡一道：落盘要把整个文件读成 base64，几 GB 的文件在读取阶段就会把
+         * 渲染进程顶死，而用户真正需要的是一句「这个太大了」。上限与图片读取同一口径。
+         */
+        const tooLarge = attachmentSizeError(file.name, file.size);
+        if (tooLarge !== null) {
+          reject(new Error(tooLarge));
+          return;
+        }
         const reader = new FileReader();
         reader.onerror = () => reject(new Error(`读取 ${file.name} 失败`));
         reader.onload = () => {
@@ -89,7 +127,18 @@ export function useComposerAttachments(): ComposerAttachmentsController {
   const addFiles = React.useCallback(
     (files: File[]) => {
       if (files.length === 0) return;
-      void Promise.all(files.map(stageFile)).then(
+      // 超限的单独报一次：混在失败原因里会让人以为整个操作都没成。
+      const { accepted, rejected } = partitionBySize(files);
+      if (rejected.length > 0) {
+        notify(
+          rejected
+            .map((file) => attachmentSizeError(file.name, file.size) ?? `不支持的文件：${file.name}`)
+            .join('；'),
+          'danger',
+        );
+      }
+      if (accepted.length === 0) return;
+      void Promise.all(accepted.map(stageFile)).then(
         (staged) => {
           setAttachments((current) => [...current, ...staged]);
           notify(`已添加 ${staged.length} 个附件`);

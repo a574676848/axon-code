@@ -31,6 +31,16 @@ const LABEL_COLUMN = 'shrink-0 whitespace-nowrap';
  */
 export const DISCLOSURE_BODY_INDENT = 'ml-[34px]';
 
+/**
+ * 过程行「标题列」的左缘。
+ *
+ * 行头由固定几段拼成：外 2px + 箭头 12 + 间距 6 + 图标 14 + 间距 6 + 标签列 56
+ * （过程行的标签最多四个字，13px 字号下约 52px 再加 4px 余量），再加一档 6px 的列间距
+ * 得到 102px。提示行这类「没有行头、但正文要落在同一条竖线」的内容按它缩进，
+ * 因此整段正文的左缘仍是一条线，不再各处各写一个魔法数。
+ */
+export const DISCLOSURE_TITLE_COLUMN = 'pl-[102px]';
+
 export const DISCLOSURE_ROW_HEIGHT = 'h-7';
 
 export interface DisclosureRowProps {

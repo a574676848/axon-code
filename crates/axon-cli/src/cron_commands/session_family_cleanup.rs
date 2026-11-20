@@ -341,12 +341,44 @@ fn governance_values(session_ids: &[String], cutoff_ms: u64) -> Vec<Value> {
 ///
 /// 候选集一半来自 thread 索引（本身就是 thread id），一半来自运行态库（会话 ULID）；
 /// thread 文件与 `thread_turn_facts` 按前者命名。两个键空间都要试，否则总有一半删不掉。
+///
+/// 但要排除「另一条存活会话的 ULID」：两者的 id 空间理论上不重合，一旦重合（手工指定 id、
+/// 未来改可读 id），把会话 ULID 当线程键就会删掉别的会话的 thread 文件与侧车。
 fn thread_keys_for_sessions(root: &Path, session_ids: &[String]) -> Result<Vec<String>, String> {
-    let mut keys = session_ids.to_vec();
-    keys.extend(thread_ids_for_sessions(root, session_ids)?);
+    let live = live_session_ids(root, session_ids)?;
+    let mut keys = thread_ids_for_sessions(root, session_ids)?;
+    keys.extend(session_ids.iter().filter(|id| !live.contains(*id)).cloned());
     keys.sort_unstable();
     keys.dedup();
     Ok(keys)
+}
+
+/// 不在本次删除集合里的会话标识：它们对应的 id 不得被当成线程键。
+fn live_session_ids(root: &Path, deleting: &[String]) -> Result<HashSet<String>, String> {
+    if deleting.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let path = root
+        .join(axon_config::AXON_RUNTIME_DATA_DIR)
+        .join(crate::cron_commands::runtime_cleanup::CONTROL_DATABASE_FILE);
+    if !path.exists() {
+        return Ok(HashSet::new());
+    }
+    let connection = open_database(&path, "控制面")?;
+    let sql = format!(
+        "SELECT session_id FROM sessions WHERE session_id NOT IN ({})",
+        placeholders(deleting.len())
+    );
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|_| "存活会话读取失败".to_owned())?;
+    let rows = statement
+        .query_map(params_from_iter(deleting.iter()), |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|_| "存活会话读取失败".to_owned())?;
+    rows.collect::<rusqlite::Result<HashSet<_>>>()
+        .map_err(|_| "存活会话读取失败".to_owned())
 }
 
 /// 会话 id → 运行窗口（thread）id。

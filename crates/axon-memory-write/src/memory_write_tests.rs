@@ -287,6 +287,81 @@ fn semantic_supersession_rejects_cross_scope_and_rolls_back() {
     );
 }
 
+/// 合并路径必须与新建路径同一口径地补齐文本/向量投影并计算终态。
+///
+/// 只按 supersession 判成功的旧口径会把缺投影的合并记录标成 succeeded：修复线看不到它，
+/// 检索也一直缺这条更新过的事实。这里用「同一条候选再写一次」制造合并，断言投影真的落了。
+#[test]
+fn merged_duplicate_writes_derived_projections_and_reports_their_status() {
+    let temp = axon_test_support::test_temp_dir();
+    let orchestrator = orchestrator(&temp);
+    let shared = scope("namespace:merge-projection");
+    let embedding = valid_embedding();
+    MemoryWriteTriggerRuntime
+        .trigger(
+            &orchestrator,
+            &input(
+                candidate(7, "合并前的旧摘要"),
+                70,
+                shared.clone(),
+                Vec::new(),
+                Some(embedding.clone()),
+                Some("embedding:model".to_owned()),
+                1_000,
+            ),
+        )
+        .unwrap();
+
+    // 同一条内容引用再次写入：命中重复记录，走 merge 分支。
+    let merged = MemoryWriteTriggerRuntime
+        .trigger(
+            &orchestrator,
+            &input(
+                candidate(7, "合并后强化过的摘要"),
+                71,
+                shared,
+                Vec::new(),
+                Some(embedding.clone()),
+                Some("embedding:model".to_owned()),
+                2_000,
+            ),
+        )
+        .unwrap();
+
+    assert!(merged.merged_existing, "同内容引用必须走合并");
+    assert_eq!(merged.duplicate_memory_id, Some(MemoryId(70)));
+    assert_eq!(
+        merged.text_index_written,
+        cfg!(feature = "memory-text-index"),
+        "合并必须真的重写文本投影"
+    );
+    assert!(
+        merged.vector_projection_written,
+        "合并必须真的重写向量投影，而不是硬编码 false"
+    );
+    let projection = orchestrator
+        .vector_projection_store()
+        .unwrap()
+        .projection_by_vector_id(70)
+        .unwrap()
+        .expect("合并记录的向量投影必须存在");
+    assert_eq!(projection.memory_id, MemoryId(70));
+    assert_eq!(projection.embedding_hash, memory_embedding_hash(&embedding));
+    if cfg!(feature = "memory-vector-index") {
+        assert_eq!(merged.pipeline_status, MemoryPipelineJobStatus::Succeeded);
+        assert!(!merged.needs_repair);
+    } else {
+        assert_eq!(merged.pipeline_status, MemoryPipelineJobStatus::NeedsRepair);
+        assert!(merged.needs_repair, "缺向量索引时必须如实标成待修复");
+    }
+    let job = MemoryPipelineStateStore::open(orchestrator.config())
+        .unwrap()
+        .get_job(MemoryPipelineJobKind::ExplicitWrite, "memory:71")
+        .unwrap()
+        .expect("合并也要写 pipeline 状态");
+    assert_eq!(job.status, merged.pipeline_status);
+}
+
 fn orchestrator(temp: &axon_test_support::TestTempDir) -> MemoryOrchestrator {
     MemoryOrchestrator::init(
         MemoryConfig::from_config_dir(temp.path(), true, MEMORY_CONFIG_DEFAULT_EMBEDDING_DIMENSION)

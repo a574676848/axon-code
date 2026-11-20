@@ -129,6 +129,14 @@ export interface DropdownProps {
   className?: string;
   /** 浮层语义角色：菜单用 menu，读数明细这类内容用 dialog。 */
   panelRole?: 'menu' | 'dialog';
+  /**
+   * 选中即收起。
+   *
+   * 单选类菜单（模型、推理等级、排序）选完不需要留在原处。菜单挂在 body 上，
+   * 点菜单项不会被判成点外部，因此收起必须由这一位显式声明；收起时焦点同样
+   * 还给触发区，指针与键盘两条路径的手感一致。
+   */
+  closeOnSelect?: boolean;
   /** 展开状态变化回调，供外层保持触发区可见。 */
   onOpenChange?: (open: boolean) => void;
 }
@@ -142,6 +150,7 @@ export const Dropdown: React.FC<DropdownProps> = ({
   surfaceClassName = CARD,
   className = '',
   panelRole = 'menu',
+  closeOnSelect = false,
   onOpenChange,
 }) => {
   const [open, setOpen] = useState(false);
@@ -297,6 +306,17 @@ export const Dropdown: React.FC<DropdownProps> = ({
             ref={menuRef}
             role={panelRole}
             onKeyDown={handleMenuKeyDown}
+            onClick={
+              closeOnSelect
+                ? (event) => {
+                    const target = event.target;
+                    if (!(target instanceof HTMLElement)) return;
+                    if (target.closest('[role="menuitem"]') === null) return;
+                    close();
+                    returnFocusToTrigger();
+                  }
+                : undefined
+            }
             style={{
               position: 'fixed',
               left: position?.left ?? 0,

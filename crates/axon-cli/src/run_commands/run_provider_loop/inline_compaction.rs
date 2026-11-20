@@ -27,6 +27,26 @@ use super::super::run_session_store::resolved_axon_root;
 const INLINE_ROLLOVER_ABORTED_REASON: &str = "窗口轮转未通过门禁";
 /// 内联轮转的 replacement history 必然携带 checkpoint 交接投影，否则 publish 会被拒绝。
 const CHECKPOINT_INJECTED_INTO_NEW_WINDOW: bool = true;
+/// Thread 事件流 CAS 冲突的稳定文本片段。
+///
+/// 两条路径的文案不同，冲突都可恢复，因此两条都要认：
+/// - `replace_thread_with_checkpoint`（本文件装压缩投影走的路径）报
+///   `thread history version conflict: expected=… actual=…`；
+/// - `rewrite_thread_with_records`（跨分片窗口重写）报 `thread 事件重写冲突: …`。
+///
+/// 冲突以 `String` 上报、没有类型化错误码，判据因此收敛在这两个常量上：
+/// session 侧改文案时，本文件的冲突重试测试会直接变红。
+const THREAD_SEQUENCE_CONFLICT_MARKERS: [&str; 2] =
+    ["thread history version conflict", "thread 事件重写冲突"];
+
+#[cfg(test)]
+thread_local! {
+    /// 测试用故障注入：置位后本线程接下来指定次数「读到快照后别人又追加了一次」。
+    ///
+    /// 把第一次尝试的 expected_sequence 退一格，让 CAS 真的冲突，从而走真实重试路径。
+    pub(super) static FORCE_STALE_SEQUENCE: std::cell::Cell<u32> =
+        const { std::cell::Cell::new(0) };
+}
 
 #[cfg(test)]
 thread_local! {
@@ -414,7 +434,12 @@ impl InlineWindowRollover<'_, '_> {
             }
         };
         let projection = source_result.and_then(|()| {
-            install_compaction_projection(self.request, &root, expected_sequence, compaction)
+            install_compaction_projection_with_retry(
+                self.request,
+                &root,
+                expected_sequence,
+                compaction,
+            )
         });
         match projection {
             Ok(through_sequence) => Ok((through_sequence, rollover)),
@@ -440,6 +465,44 @@ impl InlineWindowRollover<'_, '_> {
     }
 }
 
+/// 安装活动窗口投影；序号冲突时重取快照再试一次。
+///
+/// CAS 冲突的含义是「读到快照之后又有写入把 thread 推前了」，不是换窗失败：本轮要装的
+/// 仍是同一份快照，重取序号即可落盘。只有非冲突错误才是真失败，也才该让调用方提高
+/// 自动重试门槛（`note_auto_rollover_failure`）；把一次并发追加当成换窗失败，会把本轮
+/// 历史钉在旧窗口，并且抬高后续所有自动换窗的门槛。
+fn install_compaction_projection_with_retry(
+    request: &RunRequest,
+    root: &std::path::Path,
+    expected_sequence: u64,
+    compaction: axon_session::ThreadCompaction,
+) -> Result<u64, String> {
+    match install_compaction_projection(request, root, expected_sequence, compaction.clone()) {
+        Err(error) if is_thread_sequence_conflict(&error) => {
+            let retry_sequence = super::super::run_thread_store::thread_event_sequence_snapshot(
+                root,
+                &request.run_session_id,
+            )
+            .map_err(|retry_error| {
+                format!("序号冲突后重取 Thread 事件序号失败：{retry_error}（首次冲突：{error}）")
+            })?;
+            axon_logger::warning(&format!(
+                "窗口轮转投影序号冲突，已重取事件序号重试一次：session={} thread={} expected={expected_sequence} retry={retry_sequence}",
+                request.session_id, request.run_session_id
+            ));
+            install_compaction_projection(request, root, retry_sequence, compaction)
+        }
+        result => result,
+    }
+}
+
+/// 判断错误是否为 Thread 事件流的序号冲突（可恢复竞争），而不是真实写入失败。
+fn is_thread_sequence_conflict(error: &str) -> bool {
+    THREAD_SEQUENCE_CONFLICT_MARKERS
+        .iter()
+        .any(|marker| error.contains(marker))
+}
+
 /// 安装活动窗口投影；测试构建下可被 `FORCE_PROJECTION_FAILURE` 强制失败。
 ///
 /// 抽成独立函数只为给补偿路径留一个可注入的失败点：生产路径一行不变，
@@ -456,6 +519,8 @@ fn install_compaction_projection(
             return Err("注入的活动窗口投影失败".to_owned());
         }
     }
+    #[cfg(test)]
+    let expected_sequence = stale_sequence_for_test(expected_sequence);
     super::super::run_thread_store::install_active_compaction_projection(
         root,
         &request.run_session_id,
@@ -463,6 +528,21 @@ fn install_compaction_projection(
         expected_sequence,
         compaction,
     )
+}
+
+/// 测试注入：按 `FORCE_STALE_SEQUENCE` 把序号退一格，制造真实的 CAS 冲突。
+#[cfg(test)]
+fn stale_sequence_for_test(expected_sequence: u64) -> u64 {
+    let remaining = FORCE_STALE_SEQUENCE.with(|counter| {
+        let remaining = counter.get();
+        counter.set(remaining.saturating_sub(1));
+        remaining
+    });
+    if remaining > 0 {
+        expected_sequence.saturating_sub(1)
+    } else {
+        expected_sequence
+    }
 }
 
 fn read_archive_snapshot(prepared: &PreparedInlineWindowRollover) -> AxonResult<Option<Vec<u8>>> {

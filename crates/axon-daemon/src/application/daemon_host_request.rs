@@ -410,7 +410,7 @@ fn protocol_error(request_id: String) -> DaemonResponse {
         request_id,
         protocol_version: DAEMON_PROTOCOL_VERSION,
         ok: false,
-        body: serde_json::json!({"error": "不支持的 Daemon 协议版本"}),
+        body: serde_json::json!({"code": "protocol_version", "error": "不支持的 Daemon 协议版本"}),
         cursor: None,
     }
 }
@@ -420,7 +420,8 @@ fn request_error(request_id: String, error: DaemonHostError) -> DaemonResponse {
         request_id,
         protocol_version: DAEMON_PROTOCOL_VERSION,
         ok: false,
-        body: serde_json::json!({"error": error.to_string()}),
+        // `error` 保持原样的中文文案；`code` 供客户端做机器判定，不替代文案。
+        body: serde_json::json!({"code": error.code(), "error": error.to_string()}),
         cursor: None,
     }
 }

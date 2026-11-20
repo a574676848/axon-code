@@ -119,6 +119,121 @@ fn context_rollovers(events: &[RunProgressWireEvent]) -> Vec<WireContextRollover
         .collect()
 }
 
+/// 读到快照后别人又追加了一次：这是可恢复的序号冲突，重取序号重试一次即成功。
+///
+/// 旧行为把冲突当普通失败：整次换窗回滚、事件流报错，调用方还会抬高自动换窗门槛。
+#[test]
+fn sequence_conflict_retries_projection_once_and_completes_rollover() {
+    let root = temp_workspace("inline-rollover-cas-retry");
+    let request = request_with_rollover(root.clone());
+    let session_dir = initialize_session(&request);
+    SessionNotesRuntime::write_note_file(&session_dir, "progress.md", "已验证事实", 1).unwrap();
+    let before = SessionNotes::load_from_session(&session_dir)
+        .unwrap()
+        .expect("会话便签必须已初始化");
+
+    // 第一次投影用过期序号，制造真实 CAS 冲突；重试会重取快照。
+    super::FORCE_STALE_SEQUENCE.with(|counter| counter.set(1));
+    run_rollover(&request).expect("序号冲突必须被重试吸收，不得判成换窗失败");
+
+    let notes = SessionNotes::load_from_session(&session_dir)
+        .unwrap()
+        .expect("换窗后便签仍在");
+    assert_eq!(
+        notes.window_number,
+        before.window_number + 1,
+        "重试成功后窗口号必须真的推进，而不是回滚"
+    );
+    let projected = axon_session::ThreadService::new(axon_session::JsonlThreadEventStore)
+        .read_thread(&root, &request.run_session_id)
+        .expect("thread 必须可读");
+    assert!(
+        projected.compacted_history.is_some(),
+        "重试必须把活动窗口投影真的装进 thread"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// 只重试一次：连续两次冲突仍是失败，且必须整体回滚，不能留下半提交窗口。
+#[test]
+fn repeated_sequence_conflicts_still_roll_back_the_rollover() {
+    let root = temp_workspace("inline-rollover-cas-retry-exhausted");
+    let request = request_with_rollover(root.clone());
+    let session_dir = initialize_session(&request);
+    SessionNotesRuntime::write_note_file(&session_dir, "progress.md", "已验证事实", 1).unwrap();
+    let before = SessionNotes::load_from_session(&session_dir)
+        .unwrap()
+        .expect("会话便签必须已初始化");
+
+    // 两次都注入陈旧序号：首次失败进入重试，重试再失败即判定本轮换窗失败。
+    super::FORCE_STALE_SEQUENCE.with(|counter| counter.set(2));
+    let error = commit_rollover_directly(&request).expect_err("连续冲突必须如实失败");
+
+    assert!(
+        is_thread_sequence_conflict(&error),
+        "失败原因必须仍指向序号冲突：{error}"
+    );
+    let after = SessionNotes::load_from_session(&session_dir)
+        .unwrap()
+        .expect("回滚后便签仍在");
+    assert_eq!(after.window_number, before.window_number, "窗口号必须回滚");
+    assert_eq!(
+        after.current_window_id, before.current_window_id,
+        "窗口身份必须回滚"
+    );
+    assert!(
+        WindowRolloverEngine::read_archive_shard(&session_dir, 1)
+            .map(|shard| shard.is_empty())
+            .unwrap_or(true),
+        "归档分片必须被回滚：{error}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// 非冲突错误不重试：注入的投影失败只该出现一次，仍然整体回滚。
+#[test]
+fn non_conflict_projection_failures_are_not_retried() {
+    let root = temp_workspace("inline-rollover-no-retry");
+    let request = request_with_rollover(root.clone());
+    let session_dir = initialize_session(&request);
+    SessionNotesRuntime::write_note_file(&session_dir, "progress.md", "已验证事实", 1).unwrap();
+    let before = SessionNotes::load_from_session(&session_dir)
+        .unwrap()
+        .expect("会话便签必须已初始化");
+
+    super::FORCE_PROJECTION_FAILURE.with(|flag| flag.set(true));
+    // 只注入一次：如果代码错误地在非冲突错误上重试，第二次会成功，这里就拿不到 Err。
+    let error = commit_rollover_directly(&request).expect_err("非冲突投影失败必须直接失败");
+    assert!(error.contains("活动窗口投影失败"), "{error}");
+    let after = SessionNotes::load_from_session(&session_dir)
+        .unwrap()
+        .expect("回滚后便签仍在");
+    assert_eq!(after.window_number, before.window_number);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// 直接走 prepare → commit，绕开 run 的模型请求断言，专门观察提交阶段的成败。
+fn commit_rollover_directly(request: &RunRequest) -> Result<(), String> {
+    let messages = &request.model_payload.messages;
+    let mut rollover = InlineWindowRollover::new(request, None);
+    let checkpoint = rollover.prepare(messages).expect("prepare 必须成功");
+    let policy_runtime = WindowRolloverPolicyRuntime::new(CompressionPolicy {
+        trigger_tokens: TEST_ROLLOVER_LIMIT,
+        context_window: TEST_CONTEXT_WINDOW,
+    });
+    let window = policy_runtime.provider_visible_window(messages);
+    let replacement = policy_runtime
+        .build_validated_replacement(
+            &window,
+            &checkpoint,
+            WindowRolloverValidationMode::Requested,
+        )
+        .expect("replacement 必须通过校验");
+    rollover
+        .commit(messages, &checkpoint, &replacement)
+        .map_err(|error| format!("{error:?}"))
+}
+
 fn request_with_rollover(root: PathBuf) -> RunRequest {
     let mut request = fixture_request(root);
     request.provider.name = "fixture".to_owned();

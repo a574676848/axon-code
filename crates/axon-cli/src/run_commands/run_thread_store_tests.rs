@@ -674,6 +674,10 @@ fn model_tool_result(message: &AgentModelMessage) -> Option<&AgentModelToolResul
 }
 
 #[cfg(test)]
+#[path = "run_thread_store_debris_tests.rs"]
+mod debris_tests;
+
+#[cfg(test)]
 #[path = "run_thread_store_partial_tests.rs"]
 mod partial_tests;
 

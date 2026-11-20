@@ -7,11 +7,13 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::model::{SessionDto, draft_id, is_draft_id, normalize};
-use super::mutation::{RemovalScope, prune_pending};
+use super::mutation::{
+    RemovalScope, execute_session_rename, prune_pending, rollback_gateway_title,
+};
 use super::projection::apply_session_facts;
 use crate::session_menu::SessionMenuEntry;
-use crate::session_source::SessionEntry;
 use crate::session_source::WorkspaceEntry as RegistryWorkspace;
+use crate::session_source::{SessionEntry, SessionSource};
 use crate::state::{DesktopState, PendingSession, RegisteredWorkspace, directory_label};
 
 /// 造一条运行态工作区记录。
@@ -323,4 +325,83 @@ fn draft_ids_never_collide_with_server_identities() {
     assert_ne!(first, draft_id(), "每一条草稿都必须是独立标识");
     // 服务端标识是 26 位 ULID：既不带前缀，也不会被判成本机草稿。
     assert!(!is_draft_id("01M7RQ6K658M5BCYXFKJN3FM91"));
+}
+
+/// 重命名只在这一条用例里需要数据源：空标题在建任何请求之前就被拒绝，
+/// 因此这里给一个「一调就失败」的桩，逼出「不该碰网关」这条断言。
+struct UnreachableSource;
+
+impl SessionSource for UnreachableSource {
+    fn workspaces(&self) -> Result<Vec<RegistryWorkspace>, String> {
+        Err("空标题不得走到网关".to_string())
+    }
+
+    fn sessions(&self) -> Result<Vec<SessionEntry>, String> {
+        Err("空标题不得走到网关".to_string())
+    }
+
+    fn create_session(&self, _workspace_id: &str, _cwd: Option<&str>) -> Result<String, String> {
+        Err("空标题不得走到网关".to_string())
+    }
+
+    fn ensure_workspace(&self, _root: &str) -> Result<RegistryWorkspace, String> {
+        Err("空标题不得走到网关".to_string())
+    }
+}
+
+#[test]
+fn renaming_to_a_blank_title_is_rejected_before_any_write() {
+    // 空标题会把车道退化成没有名字：本地镜像与网关都不该被碰。
+    let error = execute_session_rename(&UnreachableSource, "session-a", "   ")
+        .expect_err("空标题必须被拒绝");
+    assert_eq!(error, "车道标题不能为空");
+}
+
+#[test]
+fn local_mirror_failure_rolls_the_gateway_title_back() {
+    // 网关已经写入新标题、本地镜像却落盘失败：把网关写回旧值，两端回到同一份事实。
+    let mut patched = Vec::new();
+    let message = rollback_gateway_title(
+        Some("旧名字"),
+        "新名字",
+        "磁盘只读".to_string(),
+        |title| {
+            patched.push(title.to_string());
+            Ok(())
+        },
+    );
+
+    assert_eq!(
+        patched,
+        vec!["旧名字".to_string()],
+        "回滚写的是改名前的标题"
+    );
+    assert!(message.contains("磁盘只读"), "{message}");
+    assert!(message.contains("回滚为「旧名字」"), "{message}");
+}
+
+#[test]
+fn rollback_failure_is_reported_instead_of_pretending_success() {
+    let message = rollback_gateway_title(
+        Some("旧名字"),
+        "新名字",
+        "磁盘只读".to_string(),
+        |_| Err("网关不可达".to_string()),
+    );
+
+    assert!(message.contains("回滚失败"), "{message}");
+    assert!(message.contains("网关不可达"), "{message}");
+    assert!(message.contains("当前为「新名字」"), "{message}");
+}
+
+#[test]
+fn a_first_rename_reports_that_the_gateway_keeps_the_new_title() {
+    // 从未在本机改过名：网关标题来自首条入站消息，无法原样写回；
+    // 此时如实说明「以网关为准」，而不是伪造一次回滚。
+    let message = rollback_gateway_title(None, "新名字", "磁盘只读".to_string(), |_| {
+        panic!("没有旧标题时不得发起回滚请求");
+    });
+
+    assert!(message.contains("以网关为准"), "{message}");
+    assert!(message.contains("新名字"), "{message}");
 }

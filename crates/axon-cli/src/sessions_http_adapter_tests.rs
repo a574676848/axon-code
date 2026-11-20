@@ -420,6 +420,78 @@ fn patch_rejects_unknown_session_and_empty_body() {
 }
 
 #[test]
+fn patch_writes_the_title_into_the_control_plane() {
+    // 桌面重命名必须落到 `sessions.title`：只写本地镜像会让 TUI 与命令行继续看到旧名字。
+    let (directory, store) = fixture();
+    seed_session(&store, "session-live", 0, 0);
+    let adapter = SessionsHttpAdapter::new(directory.path().to_path_buf());
+
+    let response = adapter
+        .handle_request(
+            "PATCH",
+            "/api/v1/sessions/session-live",
+            None,
+            r#"{"title":"  我改的名字  "}"#.as_bytes(),
+        )
+        .expect("命中单会话路由");
+
+    assert_eq!(response.status, 200);
+    let listed = rows(&store);
+    assert_eq!(
+        listed[0]["title"], "我改的名字",
+        "标题写进控制面，且首尾空白被去掉"
+    );
+}
+
+#[test]
+fn patch_keeps_pinned_and_archived_when_only_the_title_changes() {
+    // 三个字段各写各的：改标题不得把置顶与归档一起写回旧值。
+    let (directory, store) = fixture();
+    seed_session(&store, "session-live", 1, 1);
+    let adapter = SessionsHttpAdapter::new(directory.path().to_path_buf());
+
+    let response = adapter
+        .handle_request(
+            "PATCH",
+            "/api/v1/sessions/session-live",
+            None,
+            r#"{"title":"新名字"}"#.as_bytes(),
+        )
+        .expect("命中单会话路由");
+
+    assert_eq!(response.status, 200);
+    let listed = rows(&store);
+    assert_eq!(listed[0]["pinned"], true, "置顶位保持原值");
+    assert_eq!(listed[0]["archived"], true, "归档位保持原值");
+    assert_eq!(listed[0]["title"], "新名字");
+}
+
+#[test]
+fn patch_rejects_a_blank_title_without_touching_the_row() {
+    // 空标题会把车道退化成没有名字：拒绝并且一个字节都不写。
+    let (directory, store) = fixture();
+    seed_session(&store, "session-live", 1, 0);
+    seed_inbox(&store, "session-live", "首条消息标题", 10);
+    let adapter = SessionsHttpAdapter::new(directory.path().to_path_buf());
+
+    let response = adapter
+        .handle_request(
+            "PATCH",
+            "/api/v1/sessions/session-live",
+            None,
+            br#"{"title":"   "}"#,
+        )
+        .expect("命中单会话路由");
+
+    assert_eq!(response.status, 400);
+    let body: Value = serde_json::from_slice(&response.body).expect("JSON");
+    assert_eq!(body["error"], "empty_title");
+    let listed = rows(&store);
+    assert_eq!(listed[0]["title"], "首条消息标题", "标题保持原值");
+    assert_eq!(listed[0]["pinned"], true, "置顶位不受影响");
+}
+
+#[test]
 fn create_rejects_malformed_body() {
     let (directory, _store) = fixture();
     let adapter = SessionsHttpAdapter::new(directory.path().to_path_buf());

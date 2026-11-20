@@ -6,9 +6,13 @@
 //! - `/reset`：保留 session id 与会话历史，只重置本地运行实例。
 //!
 //! 边界说明：`control.sqlite3` 的 `sessions.run_generation` 由 Daemon 会话控制面维护，
-//! TUI 进程不直连该数据库、也不存在可调用的服务端重置接口。因此 `/reset` 按客户端
-//! 等价语义实现：会话与会话历史不变，只把本地运行实例（轮台账、实时读数、活动 cell、
-//! 生成指标）复位，使下一轮在同一个会话上开一个新运行实例。
+//! 客户端**读取**路径则分两端：TUI 与命令行在本机直读运行态库与 thread 事件面（`/sessions`
+//! 的目录就来自本机那份控制面），桌面端一律经网关、不碰运行态库。`/reset` 两个客户端都没有
+//! 可调用的服务端重置接口，因此按客户端等价语义实现：会话与会话历史不变，只把本地运行实例
+//! （轮台账、实时读数、活动 cell、生成指标）复位，使下一轮在同一个会话上开一个新运行实例。
+//!
+//! `--continue` 的恢复指针同理：`/sessions` 选中会话之后，「下次接续谁」由宿主适配器写入，
+//! CLI 宿主复用 `axon sessions resume` 的同一条 `select_resume_session`；TUI 进程自己不写库。
 
 use crate::r#loop::agent_tui::{
     AgentTuiRunOutput, AgentTuiSessionSummary, AgentTuiTokenUsage, TUI_HINT_IDLE,

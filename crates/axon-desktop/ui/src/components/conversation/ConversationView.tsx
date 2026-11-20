@@ -5,7 +5,7 @@ import { targetOfSession, useConversation, type SessionSelection } from '../../c
 import { sessionGenerationMetrics } from '../../conversation/sessionGeneration';
 import { reflectionNoticeText } from '../../conversation/reflectionNotice';
 import { lastObservedUsage } from '../../conversation/sessionUsage';
-import { coverFace, type StageFrame } from '../../conversation/stage';
+import { coverFace, showsHero, type StageFrame } from '../../conversation/stage';
 import { useSessionAutoRead, useStopSpeechOnSessionChange } from '../../speech';
 import { ConversationHeader } from './ConversationHeader';
 import { SessionOriginBar } from './SessionOriginBar';
@@ -17,7 +17,7 @@ import { goalSessionSelection } from '../../sessionOpening';
 import { useAutoReadReply } from './useAutoReadReply';
 import { ConversationStream } from './ConversationStream';
 import { ConversationCover } from './ConversationCover';
-import { ErrorCard } from './ErrorCard';
+import { ConversationFailureCards } from './ConversationFailureCards';
 import { InputDock } from './InputDock';
 import { PlanDock } from './PlanDock';
 import { SidebarRight } from '../../sidebarRight/SidebarRight';
@@ -164,7 +164,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   );
   /**
    * 最近一次记忆反思提示：随首页历史带回，换目标即清空，翻页不回退。空白一律当没有。
-   * 文案里的「本轮」在渲染层改写成「上一轮」：提示总落后一轮到达。
+   * 文案原样透传：运行侧的自述才是唯一权威口径，客户端不改写「本轮/上一轮」。
    */
   const memoryReflection = reflectionNoticeText(conversation.sessionReflectionNotice);
   const gate = sessionWriteGate(selection, conversation.sessionFacts, conversation.sessionFactsLoaded);
@@ -230,12 +230,11 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
       .reverse()
       .find((turn) => turn.status === 'pending' || turn.status === 'streaming') ?? null;
   /*
-   * 工作状态行在整轮运行期间都在：耗时与中断提示是这一行的职责，
-   * 助手正文开始流式输出并不改变「这一轮还在跑」这个事实。
-   * 文案只认 provider 阶段事实，没有事实时由状态行写中性句，不猜供应商。
+   * 工作状态行在整轮运行期间都在：耗时与中断提示是这一行的职责。正文装载期间同样要它
+   * 在场：那一句「正在加载会话…」是这段时间唯一的可见进展。文案只认 provider 阶段事实。
    */
   const workingLine =
-    conversation.working && selection !== null
+    selection !== null && (conversation.working || conversation.loadingHistory)
       ? workingLineOf(runningTurn, conversation.queued, conversation.loadingHistory)
       : null;
 
@@ -358,14 +357,20 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     { subagents: conversation.state.subagents, jobs: conversation.jobs },
     settling,
   );
-  const dockWorking = useSettledValue(workingLine, settling);
+  const settledWorkingLine = useSettledValue(workingLine, settling);
+  /*
+   * 装载行不走交接冻结。
+   *
+   * 冻结是为了不让投影塌陷带着输入坞抖一下；但「正在加载会话…」说的正是正文还没到
+   * 这件事，而装载窗口与交接窗口几乎完全重合，冻住上一屏的值等于把这句话永远压掉。
+   */
+  const dockWorking = conversation.loadingHistory ? workingLine : settledWorkingLine;
   /*
    * 计划坞同样读交接后的值：它长期占位在输入坞上方，切换会话时若直接读实时投影，
    * 会在新一屏的投影落地前先闪出上一条会话的计划。
    */
   const dockPlan = useSettledValue(conversation.state.plan, settling);
 
-  const failure = conversation.state.failure;
   const dockError = conversation.submitError ?? createError;
   /*
    * 输入坞上方那一行是「刚才这一次操作为什么没成」的回执，不是常驻状态：
@@ -436,14 +441,20 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   );
 
   /**
-   * 首屏条件：还没有选中会话，或者选中的是一条刚建好、还没有任何内容的会话。
+   * 首屏条件：还没有选中会话，或者这一屏没有正文可看（判据见 `stage.ts` 的 `showsHero`）。
    *
-   * 新建会话不该把主区域变成一片空白：那里仍应是「标志 + 标语」的首屏，
-   * 而输入坞已经指向这条新会话，第一条消息发出去之后正文自然接管。判据与输入坞
-   * 的继承条件同源，见 `heroSession`。
+   * 新建会话与「读完了仍然没有正文」都必须回落首屏，否则主区域只剩一片空白；
+   * 输入坞已经指向当前会话，第一条消息发出去之后正文自然接管。
    */
-  const heroVisible = heroSession;
-  const cover = coverFace(settling, shown.turns.length > 0, slowOpening, heroVisible);
+  const heroVisible = showsHero({
+    noSelection: selection === null,
+    pending: selection?.pending === true,
+    turns: conversation.state.turns.length,
+    opening: conversation.opening,
+    loadingHistory: conversation.loadingHistory,
+    ready: conversation.sessionReadyId !== null,
+  });
+  const cover = coverFace(settling, slowOpening, heroVisible);
   /*
    * 过渡面淡出期间保持上一份内容。
    *
@@ -500,21 +511,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
           />
           {originBar !== null && <SessionOriginBar {...originBar} />}
 
-          {failure !== null && (
-            <div className="shrink-0 px-4 pt-1">
-              <ErrorCard
-                title="会话事件流中断"
-                reason={failure.message}
-                retryable={failure.retryable}
-                meta={['事件订阅已停止，界面不会继续刷新']}
-                action={
-                  failure.retryable
-                    ? { label: '重连', onClick: () => void conversation.retry() }
-                    : undefined
-                }
-              />
-            </div>
-          )}
+          <ConversationFailureCards conversation={conversation} sessionKey={sessionKey} />
 
           <div className="flex-1 min-h-0 flex flex-col relative">
             {openSubagent !== null ? (
@@ -610,6 +607,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                   ensureSession: ensureVoiceSession,
                 }}
                 enabled={gate.ready && !gate.readOnly && (workspace !== null || selection !== null)}
+                readOnly={gate.readOnly}
                 disabledPlaceholder={
                   gate.unregistered
                     ? UNREGISTERED_SESSION_PLACEHOLDER

@@ -168,7 +168,7 @@ const FailureBody: React.FC<FailureBodyProps> = ({ health, detail, repair, layou
       >
         {health.reason}
       </Text>
-      <span className="block max-w-lg break-all font-mono text-[11px] leading-4 text-text-tertiary">
+      <span className="block max-w-lg break-all font-mono text-micro text-text-tertiary">
         网关地址 {health.target.length > 0 ? health.target : '未配置'}
       </span>
 
@@ -187,14 +187,14 @@ const FailureBody: React.FC<FailureBodyProps> = ({ health, detail, repair, layou
         {actions}
       </div>
 
-      <span className="block text-[11px] leading-4 text-text-tertiary">
+      <span className="block text-micro text-text-tertiary">
         服务状态：{health.responding ? '网关有响应' : '网关无响应'} ·{' '}
         {health.listening ? '端口已监听' : '端口未监听'}
         {health.consecutive_failures > 1 ? ` · 连续 ${health.consecutive_failures} 轮` : ''}
       </span>
       {/* 拦截器带来的具体失败原因：探测结论说明「怎么了」，这一行说明「哪一次」。 */}
       {detail !== null && detail.trim().length > 0 && (
-        <span className="block max-w-lg break-all font-mono text-[11px] leading-4 text-text-tertiary">
+        <span className="block max-w-lg break-all font-mono text-micro text-text-tertiary">
           最近一次失败：{truncateDetail(detail)}
         </span>
       )}

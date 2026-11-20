@@ -8,7 +8,7 @@ use serde::Serialize;
 use axon_domain::{DaemonSessionId, RuntimeHostId};
 use axon_session::{
     JsonlThreadEventStore, RuntimeStore as _, SqliteRuntimeStore, ThreadEvent,
-    ThreadEventReadIssue, ThreadEventStore as _, ThreadListQuery, ThreadService,
+    ThreadEventReadIssue, ThreadListQuery, ThreadService,
 };
 
 use crate::{
@@ -19,12 +19,14 @@ use crate::{
 
 mod output;
 mod replay;
+mod session_delete;
 mod session_resolution;
 mod sessions_list;
 mod thread_cli;
 
 use output::{SessionOutputCommand, run_session_output};
 use replay::{SessionReplayCommand, run_session_replay};
+use session_delete::run_session_delete;
 pub(crate) use session_resolution::{TargetKind, open_control_store, resolve_session_target};
 use sessions_list::{SessionsListCommand, run_sessions_list};
 pub(crate) use thread_cli::session_summary_views_for_root;
@@ -62,7 +64,7 @@ pub enum SessionSubcommand {
     Fork(SessionForkCommand),
     /// 轮换运行实例：保留会话与历史，只换一段新的运行窗口。
     Reset(SessionResetCommand),
-    /// 删除旧 run 会话记录。
+    /// 删除运行窗口：控制面会话族与 thread 分片一起删，失败整体回滚。
     Delete(SessionDeleteCommand),
     /// 导出单个会话的 ref-only 摘要。
     Export(SessionExportCommand),
@@ -172,7 +174,7 @@ pub enum SessionsSubcommand {
     Fork(SessionForkCommand),
     /// 轮换运行实例：保留会话与历史，只换一段新的运行窗口。
     Reset(SessionResetCommand),
-    /// 删除会话记录。
+    /// 删除会话：控制面行、入站事实、指标与事件日志一起清，失败整体回滚。
     Delete(SessionDeleteCommand),
     /// 导出会话摘要。
     Export(SessionExportCommand),
@@ -225,16 +227,6 @@ pub(crate) fn run_sessions(
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SessionDeleteReport {
-    status: &'static str,
-    store_path: String,
-    session_id: String,
-    deleted_events: usize,
-    remaining_events: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct SessionDoctorReport {
     status: &'static str,
     store_path: String,
@@ -256,51 +248,6 @@ struct SessionDoctorCheckView {
     name: &'static str,
     status: &'static str,
     summary: String,
-}
-
-fn run_session_delete(
-    format: OutputFormat,
-    config_path: &Path,
-    command: &SessionDeleteCommand,
-    kind: TargetKind,
-) -> CliRunResult {
-    if command.session_id.trim().is_empty() {
-        return cli_error("session id 不能为空");
-    }
-    let root = match runtime_axon_root_path(config_path) {
-        Ok(path) => path,
-        Err(error) => return cli_error(error),
-    };
-    // 按入口的标识空间解析一次，再按解析出的 Thread 清理事件流。
-    let target = match resolve_session_target(config_path, kind, &command.session_id) {
-        Ok(target) => target,
-        Err(error) => return cli_error(error),
-    };
-    let store = JsonlThreadEventStore;
-    let records = match store.read_all(&root) {
-        Ok(records) => records,
-        Err(error) => return cli_error(error),
-    };
-    let deleted_events = records
-        .iter()
-        .filter(|record| record.thread_id == target.thread_id)
-        .count();
-    if deleted_events == 0 {
-        return cli_error(format!("未找到会话：{}", command.session_id));
-    }
-    // 只删目标 thread 自己的分片：重写入口只接受同一 thread 的记录，把其他 thread
-    // 的记录一并交进去会被如实拒绝，删除也会因此整体失败。
-    if let Err(error) = store.remove_thread(&root, &target.thread_id) {
-        return cli_error(error);
-    }
-    let report = SessionDeleteReport {
-        status: "session_deleted",
-        store_path: display_path(&JsonlThreadEventStore::path(&root)),
-        session_id: command.session_id.clone(),
-        deleted_events,
-        remaining_events: records.len().saturating_sub(deleted_events),
-    };
-    render_delete(format, &report)
 }
 
 fn run_session_reset(
@@ -490,20 +437,6 @@ fn render_reset(format: OutputFormat, report: &SessionResetReport) -> CliRunResu
             stdout: format!(
                 "已轮换运行实例: {}\n- current_run_id: {}\n- cwd: {}\n",
                 report.session_id, report.current_run_id, report.cwd
-            ),
-            stderr: String::new(),
-        },
-    }
-}
-
-fn render_delete(format: OutputFormat, report: &SessionDeleteReport) -> CliRunResult {
-    match format {
-        OutputFormat::Json => json_result(report),
-        OutputFormat::Text => CliRunResult {
-            exit_code: 0,
-            stdout: format!(
-                "已删除会话: {}\n- deleted_events: {}\n- remaining_events: {}\n",
-                report.session_id, report.deleted_events, report.remaining_events
             ),
             stderr: String::new(),
         },

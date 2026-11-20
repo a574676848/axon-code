@@ -201,6 +201,28 @@ impl CronRepository {
         self.settle_claim(claim, None, next_job)
     }
 
+    /// 该触发点是否已经执行并结算过。
+    ///
+    /// 租约失守后重领会拿到同一个 `next_run_at_ms`：没有这道检查时，同一次触发点会被
+    /// 执行两遍（脚本与 agent 副作用各来一次）。判据落在执行事实上：有该触发点之后开始、
+    /// 已经收口的 run 就算跑过。
+    pub(crate) fn has_run_for_trigger(
+        &self,
+        job_id: &str,
+        scheduled_at_ms: u64,
+    ) -> Result<bool, String> {
+        let connection = self.connection()?;
+        let exists: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM cron_runs
+                  WHERE job_id = ?1 AND started_at_ms >= ?2 AND finished_at_ms IS NOT NULL",
+                params![job_id, to_i64(scheduled_at_ms)?],
+                |row| row.get(0),
+            )
+            .map_err(db_error("查询 Cron 触发点执行事实"))?;
+        Ok(exists > 0)
+    }
+
     fn settle_claim(
         &self,
         claim: &CronClaim,
@@ -360,13 +382,18 @@ impl CronRepository {
         // incremental_vacuum` 是空操作，删除只把页放回 freelist，库文件永不回落（历史清理
         // 因此「删了行、文件不缩」）。该属性只能在 VACUUM 时改变，因此只在仍是 NONE 的库上
         // 做一次一次性迁移；之后每次连接都只是一次只读确认。
+        //
+        // 迁移失败（库被并发写者占用、busy_timeout 到期）不得让本次 cron 操作整体失败：
+        // 记一条警告，下次打开再试。
         let auto_vacuum: i64 = connection
             .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
             .map_err(db_error("读取 cron auto_vacuum"))?;
-        if auto_vacuum != AUTO_VACUUM_INCREMENTAL {
-            connection
-                .execute_batch("PRAGMA auto_vacuum=INCREMENTAL; VACUUM;")
-                .map_err(db_error("迁移 cron auto_vacuum"))?;
+        if auto_vacuum != AUTO_VACUUM_INCREMENTAL
+            && let Err(error) = connection.execute_batch("PRAGMA auto_vacuum=INCREMENTAL; VACUUM;")
+        {
+            axon_logger::warning(&format!(
+                "cron 库 auto_vacuum 迁移未完成（下次打开重试）：{error}"
+            ));
         }
         let schema_version = connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))

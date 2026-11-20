@@ -41,7 +41,7 @@ axon mcp login <server-id> --browser  # 拉起浏览器并等待本地回调，�
 axon mcp logout <server-id>           # 清除本地 token 与待完成会话
 ```
 
-- 授权元数据按 MCP `2026-07-28` 顺序解析：401/403 challenge → endpoint 子路径 PRM → 站点根 PRM。
+- 握手协商的 MCP 协议版本是 `2025-11-25`；授权元数据按 `401/403 challenge → endpoint 子路径 PRM → 站点根 PRM` 的顺序解析，实现参考 `2026-07-28` 草案的授权章节。
 - 需要授权时 CLI 与 TUI `/mcp` 会直接给出登录引导；TUI 内用 `/mcp login <server-id>`，不会自动弹浏览器。
 - 动态客户端注册结果按「授权服务器 + redirect URI」缓存在 `~/.axon/mcp-oauth/clients/`，同一授权服务器只注册一次。
 - 凭据保存在 `~/.axon/mcp-oauth/`，只读取状态，不显示 token 值。

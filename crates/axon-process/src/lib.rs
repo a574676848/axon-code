@@ -206,6 +206,61 @@ fn terminate_process_tree(pid: u32) -> io::Result<()> {
     }
 }
 
+/// 进程启动标识：判「同一个 PID 是否仍是同一个进程」的第二身份。
+///
+/// PID 会被系统复用，单凭 PID 判活会把无关进程当成宿主（租约因此永远不被回收，新宿主
+/// 也认领不到）。这里取平台原生的启动时刻做标识：Linux 读 `/proc/<pid>/stat` 的
+/// starttime，其余 Unix 用 `ps -o lstart=`，Windows 用 `Get-Process` 的启动时刻。
+///
+/// 取不到时返回 `None`，调用方必须退回「只看 PID 存活」的弱判定，不得据此认为进程已死。
+pub fn process_start_id(pid: u32) -> Option<String> {
+    if pid == 0 {
+        return None;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        // comm 字段可能含空格与括号：从最后一个 ')' 之后开始切分，字段偏移才对得上。
+        // ')' 之后第 1 个字段是 state（整体第 3 字段），starttime 是整体第 22 字段。
+        let tail = stat.rsplit_once(')')?.1;
+        let start_time = tail.split_whitespace().nth(19)?;
+        Some(format!("linux-starttime:{start_time}"))
+    }
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        let output = non_interactive_command("ps")
+            .args(["-o", "lstart=", "-p", &pid.to_string()])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        (!text.is_empty()).then(|| format!("ps-lstart:{text}"))
+    }
+    #[cfg(windows)]
+    {
+        let output = non_interactive_command("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &format!("(Get-Process -Id {pid}).StartTime.ToFileTimeUtc()"),
+            ])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        (!text.is_empty()).then(|| format!("win-starttime:{text}"))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        None
+    }
+}
+
 /// 配置与宿主控制台完全分离的后台子进程。
 pub fn configure_detached_process(command: &mut Command) {
     #[cfg(windows)]

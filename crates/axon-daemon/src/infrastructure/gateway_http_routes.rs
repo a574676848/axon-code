@@ -429,6 +429,7 @@ fn submit_event(state: &GatewayHttpState, route: &GatewayRoute, body: &[u8]) -> 
         Ok(receipt) => accepted(&receipt),
         Err(GatewayKernelError::Ingress(_)) => json_error(403, "event_rejected"),
         Err(GatewayKernelError::NotFound(_)) => json_error(404, "not_found"),
+        Err(GatewayKernelError::InvalidQuery(_)) => json_error(400, "invalid_pagination"),
         Err(GatewayKernelError::Preparation(_)) => json_error(503, "event_prepare_failed"),
         Err(GatewayKernelError::InvalidLifecycle(_)) => json_error(503, "gateway_unavailable"),
         Err(GatewayKernelError::ConnectionLimitReached(_)) => json_error(429, "gateway_busy"),

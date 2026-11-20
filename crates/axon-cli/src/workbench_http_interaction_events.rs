@@ -40,6 +40,9 @@ pub(super) fn interaction_events_payload(
         Err(GatewayKernelError::NotFound(message)) => {
             return GatewayHttpResponse::error(404, "interaction_not_found", &message, None);
         }
+        Err(GatewayKernelError::InvalidQuery(message)) => {
+            return GatewayHttpResponse::error(400, "invalid_pagination", &message, None);
+        }
         Err(error) => {
             return GatewayHttpResponse::error(
                 500,
@@ -73,6 +76,8 @@ pub(super) fn interaction_events_payload(
             // 因正文归档已回收而被跳过的帧数：界面据此说明「这一轮的部分过程已回收」，
             // 而不是把缺帧读成「这一轮本来就没有过程」。
             "skippedArchivedFrames": page.skipped_archived_frames,
+            // 回显实际生效的页大小：越界值被夹取时不回显，调用方无法判断自己是否被截断。
+            "limit": limit,
         }),
     )
 }

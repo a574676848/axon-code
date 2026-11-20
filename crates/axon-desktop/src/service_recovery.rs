@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -119,61 +119,27 @@ fn is_listening(target: &str) -> bool {
 
 /// 已安装的 Axon CLI 或稳定 launcher 可执行文件路径。
 ///
-/// 服务操作与后台健康快照共用这一处解析：桌面端调用的那个 `axon` 必须与
-/// 安装树里的稳定入口是同一份，不能各自拼路径。
+/// 服务操作与后台健康快照共用这一处解析：桌面端调用的那个 `axon` 必须与安装树里的
+/// 稳定入口是同一份。安装根只有一处解析（[`crate::connection::relaunch::install_root`]：
+/// 认 `AXON_INSTALL_ROOT`，否则用户主目录下的 `.axon/bin`），`daemon start/install/health`
+/// 全部从这里取，不再各自拼 `LOCALAPPDATA` 与 `~/.cargo/bin` 的第二套候选。
 pub(crate) fn installed_cli() -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    for variable in ["USERPROFILE", "HOME"] {
-        if let Ok(home) = std::env::var(variable) {
-            let root = PathBuf::from(home).join(".axon").join("bin");
-            candidates.push(root.join("launcher").join(if cfg!(windows) {
-                "axon-launcher.exe"
-            } else {
-                "axon-launcher"
-            }));
-            candidates.push(root.join(if cfg!(windows) { "axon.exe" } else { "axon" }));
-            candidates.push(root.join("axon.cmd"));
-        }
-    }
-    if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        let root = PathBuf::from(&local).join("Axon");
-        candidates.push(root.join("launcher").join(if cfg!(windows) {
-            "axon-launcher.exe"
-        } else {
-            "axon-launcher"
-        }));
-        candidates.push(
-            root.join("bin")
-                .join(if cfg!(windows) { "axon.exe" } else { "axon" }),
-        );
-        candidates.push(root.join("bin").join("axon.cmd"));
-    }
-    if let Ok(profile) = std::env::var("USERPROFILE") {
-        candidates.push(
-            PathBuf::from(&profile)
-                .join(".cargo")
-                .join("bin")
-                .join("axon.exe"),
-        );
-        candidates.push(
-            PathBuf::from(&profile)
-                .join(".cargo")
-                .join("bin")
-                .join("axon"),
-        );
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        candidates.push(PathBuf::from(&home).join(".cargo").join("bin").join("axon"));
-        candidates.push(
-            PathBuf::from(&home)
-                .join(".local")
-                .join("share")
-                .join("Axon")
-                .join("launcher")
-                .join("axon-launcher"),
-        );
-    }
-    candidates.into_iter().find(|path| path.is_file())
+    cli_candidates(&crate::connection::relaunch::install_root())
+        .into_iter()
+        .find(|path| path.is_file())
+}
+
+/// 安装根下的候选顺序：稳定 launcher 优先，其次同目录的稳定命令行入口。
+///
+/// launcher 是发行事实里唯一被保证存在的入口；`axon.exe` / `axon.cmd` 是它的同目录
+/// 稳定入口，兼容没有 launcher 的旧安装树。**不再回退 `~/.cargo/bin`**：那条路径上的
+/// `axon` 是源码编译产物、与安装树版本无关，选中它会让 `daemon restart` 拉起另一个版本。
+fn cli_candidates(install_root: &Path) -> Vec<PathBuf> {
+    vec![
+        install_root.join(crate::connection::relaunch::launcher_relative_path()),
+        install_root.join(if cfg!(windows) { "axon.exe" } else { "axon" }),
+        install_root.join("axon.cmd"),
+    ]
 }
 
 /// Tauri IPC 命令：探测网关是否可用。
@@ -501,6 +467,68 @@ mod tests {
         assert_eq!(base64_encode(b"fo"), "Zm8=");
         assert_eq!(base64_encode(b"foo"), "Zm9v");
         assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+    }
+}
+
+/// 安装根解析：`daemon start/install/health` 与切档重启必须指向同一棵安装树。
+///
+/// 这条线一旦回退成「cargo 目录也能当候选」，桌面端就会去拉起一个与安装树版本无关的
+/// 二进制，表现为 `daemon restart` 之后 CLI 与 daemon 版本不一致。
+#[cfg(test)]
+mod install_root_tests {
+    use std::path::{Path, PathBuf};
+
+    use super::cli_candidates;
+
+    #[test]
+    fn candidates_live_under_the_resolved_install_root_only() {
+        let root = Path::new("install-root");
+        let candidates = cli_candidates(root);
+        assert!(!candidates.is_empty());
+        for candidate in &candidates {
+            assert!(
+                candidate.starts_with(root),
+                "候选必须落在安装根之内：{}",
+                candidate.display()
+            );
+        }
+    }
+
+    #[test]
+    fn the_stable_launcher_comes_first_and_no_cargo_directory_is_used() {
+        let candidates = cli_candidates(Path::new("install-root"));
+        let first = candidates.first().expect("至少有一个候选");
+        assert_eq!(
+            first,
+            &PathBuf::from("install-root")
+                .join(crate::connection::relaunch::launcher_relative_path()),
+            "launcher 是发行事实里唯一被保证存在的入口，必须排在最前"
+        );
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| !candidate.to_string_lossy().contains("cargo")),
+            "不得回退到 cargo 的 bin 目录：那里的 axon 与安装树版本无关"
+        );
+    }
+
+    #[test]
+    fn stable_command_line_entries_follow_the_launcher() {
+        let candidates = cli_candidates(Path::new("install-root"));
+        let names = candidates
+            .iter()
+            .filter_map(|candidate| candidate.file_name())
+            .map(|name| name.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        if cfg!(windows) {
+            assert!(names.iter().any(|name| name == "axon.exe"), "{names:?}");
+        } else {
+            assert!(names.iter().any(|name| name == "axon"), "{names:?}");
+        }
+        assert!(
+            names.iter().any(|name| name == "axon.cmd"),
+            "稳定入口的 .cmd 包装也要保留：Windows 上它是最常被调用的那一个"
+        );
     }
 }
 

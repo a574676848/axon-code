@@ -217,7 +217,7 @@ struct StreamableHttpResponse {
 
 /// 把非 2xx 的 MCP HTTP 状态码投影为可识别错误。
 ///
-/// MCP 2026-07-28 要求客户端在 401 与 403 `insufficient_scope` 时进入 OAuth 授权闭环，
+/// MCP 授权草案（实现参考 2026-07-28，协商版本 2025-11-25）要求客户端在 401 与 403 `insufficient_scope` 时进入 OAuth 授权闭环，
 /// 因此这里必须保留“需要 OAuth 授权”语义，而不是把它降级为笼统的状态码异常。
 fn mcp_http_status_error(
     status: reqwest::StatusCode,

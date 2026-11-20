@@ -11,6 +11,7 @@ import {
   type GoalFilter,
 } from '../../goals/model';
 import { useGoalBoard, useGoalDetail } from '../../goals/useGoalBoard';
+import { rememberGoalFocus, takeGoalFocus } from '../../goals/goalFocusReturn';
 import { GOAL_LIST_LIMIT } from '../../goalIpc';
 import { Button, Input, SegmentedControl } from '../ui/controls';
 import { PageShell } from '../ui/shell';
@@ -82,6 +83,8 @@ export const GoalsPage: React.FC<GoalsPageProps> = ({ onOpenSession }) => {
       const sessionId = goal.latestExecution?.sessionId ?? null;
       if (workspaceId === null || sessionId === null) return;
       setDetailGoal(null);
+      // 记下来源卡：从执行会话退回看板时，焦点要落回这一张。
+      rememberGoalFocus(goal.goalId);
       onOpenSession?.({
         workspaceId,
         workspacePath: goal.workspacePath ?? '',
@@ -91,6 +94,24 @@ export const GoalsPage: React.FC<GoalsPageProps> = ({ onOpenSession }) => {
     },
     [onOpenSession],
   );
+
+  /**
+   * 退回看板时把焦点还给来源卡。
+   *
+   * 整页重新挂载过，不还原就落回 body。卡片要等这一拍的数据渲染出来才存在，因此
+   * 取不到时把标识放回去，下一次数据到达再试一次；取到即清空，只还原一次。
+   */
+  const restoreFocus = React.useCallback(() => {
+    const goalId = takeGoalFocus();
+    if (goalId === null) return;
+    const card = document.querySelector<HTMLElement>(`[data-goal-id="${goalId}"]`);
+    const target = card?.querySelector<HTMLElement>('button:not([disabled])') ?? card ?? null;
+    if (target === null) {
+      rememberGoalFocus(goalId);
+      return;
+    }
+    target.focus();
+  }, []);
 
   const openGoal = React.useCallback(
     (goal: GoalCardView) => {
@@ -104,6 +125,11 @@ export const GoalsPage: React.FC<GoalsPageProps> = ({ onOpenSession }) => {
     setQuery('');
     setFilter('all');
   }, []);
+
+  /* 数据到达后再按来源卡复一次焦点：卡片这时候才真的在文档里。 */
+  React.useEffect(() => {
+    restoreFocus();
+  }, [restoreFocus, visible]);
 
   const refreshAction = (
     <Button variant="ghost" size="sm" onClick={feed.refresh}>

@@ -156,7 +156,16 @@ pub(super) fn uninstall(runtime_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn start(_config_path: &Path, _runtime_dir: &Path) -> Result<(), String> {
+pub(super) fn start(config_path: &Path, runtime_dir: &Path) -> Result<(), String> {
+    start_service(config_path, runtime_dir)?;
+    // 「进程起来了」不等于「服务可用」：pid 文件只证明进程曾活到写出它，IPC bind、运行态库
+    // 打开、网关启动任一步失败都会立刻退出。这里必须再探活一次，失败时把原因带回调用方。
+    super::probe_health(super::DEFAULT_ENDPOINT)
+        .map(|_| ())
+        .map_err(|error| format!("Daemon 进程已启动但健康检查失败：{error}"))
+}
+
+fn start_service(_config_path: &Path, _runtime_dir: &Path) -> Result<(), String> {
     cleanup_stale_ipc_endpoint(_runtime_dir);
     // 陈旧的停止请求会让新进程立刻退出：启动前必须清掉。
     super::daemon_stop_request::clear(_runtime_dir);

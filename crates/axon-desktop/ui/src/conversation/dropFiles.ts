@@ -13,6 +13,36 @@ export interface DroppedItems {
   directories: string[];
 }
 
+/**
+ * 单个附件允许的体量上限。
+ *
+ * 与正文里图片读取的 8 MiB 同一口径：落盘要把整份文件读成 base64，超过这个体量的
+ * 文件既拖不动也读不完，界面该给的是一句结论而不是一段卡死的等待。
+ */
+export const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+
+/** 超限时的说法；未超限返回 null。 */
+export function attachmentSizeError(name: string, size: number): string | null {
+  if (size <= MAX_ATTACHMENT_BYTES) return null;
+  const limitMb = Math.round(MAX_ATTACHMENT_BYTES / (1024 * 1024));
+  return `超过 ${limitMb} MB 不支持：${name.length > 0 ? name : '未命名文件'}`;
+}
+
+/**
+ * 按体量把待落盘的文件分成两组。
+ *
+ * 判别与落盘分开：超限的文件要在读之前就被挑出来，既不占内存，也能单独给一句回执。
+ */
+export function partitionBySize(files: readonly File[]): { accepted: File[]; rejected: File[] } {
+  const accepted: File[] = [];
+  const rejected: File[] = [];
+  for (const file of files) {
+    if (attachmentSizeError(file.name, file.size) === null) accepted.push(file);
+    else rejected.push(file);
+  }
+  return { accepted, rejected };
+}
+
 /** 判定单个拖入项是不是目录；拿不到目录信息时按文件处理。 */
 function isDirectory(item: DataTransferItem): boolean {
   const entry = (

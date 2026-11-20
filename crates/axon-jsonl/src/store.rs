@@ -74,6 +74,15 @@ impl ShardedJsonlStore {
             .collect())
     }
 
+    /// 列出逻辑路径对应的分片序号，按序号稳定排序；读侧据此校验「序号从 0 起连续」。
+    pub fn shard_sequences(&self, logical_path: impl AsRef<Path>) -> io::Result<Vec<u64>> {
+        Ok(self
+            .shard_entries(logical_path)?
+            .into_iter()
+            .map(|(sequence, _)| sequence)
+            .collect())
+    }
+
     /// 计算逻辑 JSONL 的全部物理字节数。
     pub fn total_bytes(&self, logical_path: impl AsRef<Path>) -> io::Result<u64> {
         self.shard_paths(logical_path)?
@@ -260,8 +269,8 @@ impl ShardedJsonlStore {
 
     /// 这条逻辑文件是否遗留了未完成重写的临时文件（崩溃后的现场）。
     ///
-    /// 读路径用它把「一条事件都没有」区分为「从不存在」与「数据不完整」：后者必须报错，
-    /// 否则一次崩溃就会被当成新会话重建。
+    /// 读路径用它把「一条事件都没有」区分为「从不存在」与「数据不完整」：后者必须先自愈，
+    /// 清不掉才报错，否则一次崩溃就会被当成新会话重建。
     pub fn has_stale_rewrite_temporaries(
         &self,
         logical_path: impl AsRef<Path>,
@@ -269,9 +278,17 @@ impl ShardedJsonlStore {
         Ok(!self.rewrite_temporaries(logical_path.as_ref())?.is_empty())
     }
 
-    /// 清掉上一轮重写崩溃留下的临时文件。
+    /// 自愈一次未完成重写留下的现场：锁内清掉临时文件，由调用方重读。
     ///
-    /// 临时文件既不属于任何分片也无法回放；每次重写前清一次，避免目录随失败重试堆积。
+    /// 临时文件不属于任何分片、替换顺序也无法复原，因此只清理；清不掉（被占用、只读）时
+    /// 把错误上抛，由读侧报不完整，而不是把损坏的会话当成新会话重建。
+    pub fn recover_unfinished_rewrite(&self, logical_path: impl AsRef<Path>) -> io::Result<()> {
+        self.with_lock(logical_path, |store, logical_path| {
+            store.remove_stale_rewrite_temporaries(logical_path)
+        })
+    }
+
+    /// 清掉上一轮重写崩溃留下的临时文件（既不属于任何分片，也无法回放）。
     fn remove_stale_rewrite_temporaries(&self, logical_path: &Path) -> io::Result<()> {
         for path in self.rewrite_temporaries(logical_path)? {
             match fs::remove_file(&path) {
@@ -369,9 +386,11 @@ impl ShardedJsonlStore {
     }
 
     fn read_lines_unlocked(&self, logical_path: &Path) -> io::Result<Vec<Vec<u8>>> {
+        let shards = self.shard_entries(logical_path)?;
+        ensure_contiguous_shards(logical_path, &shards)?;
         let mut lines = Vec::new();
-        for path in self.shard_paths(logical_path)? {
-            for bytes in fs::read(path)?.split(|byte| *byte == b'\n') {
+        for (_, path) in shards {
+            for bytes in fs::read(&path)?.split(|byte| *byte == b'\n') {
                 let line = bytes.strip_suffix(b"\r").unwrap_or(bytes);
                 if !line.is_empty() {
                     lines.push(line.to_vec());
@@ -388,7 +407,7 @@ impl ShardedJsonlStore {
         // 替换步骤**不能**先删目标再改名：那一瞬崩溃会让这一块分片凭空消失，而 tmp 不
         // 属于任何分片（`shard_entries` 只认 `NNNNNN.jsonl`），读取侧只会把整条 thread
         // 看成缺块甚至不存在。`fs::rename` 在目标已存在时直接覆盖，因此直接改名即可；
-        // 仅在改名失败（占用、杀软扫描）时才退回删除后重试。
+        // 仅在改名失败（占用、杀软扫描）时才退回「先挪到 .bak」的替换。
         let chunks = self.chunk_rewrite_lines(&lines)?;
         self.remove_stale_rewrite_temporaries(logical_path)?;
         let mut temporaries = Vec::with_capacity(chunks.len());
@@ -403,16 +422,29 @@ impl ShardedJsonlStore {
         }
         for (index, temporary) in temporaries.iter().enumerate() {
             let target = shard_path(logical_path, index as u64)?;
-            if let Ok(()) = fs::rename(temporary, &target) {
+            let rename_to_target = |source: &Path| -> io::Result<()> {
+                if injected_rename_failure(&target) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "目标分片被占用，改名失败",
+                    ));
+                }
+                fs::rename(source, &target)
+            };
+            if rename_to_target(temporary).is_ok() {
                 continue;
             }
-            // 目标被占用时改名会失败：删掉目标再改名一次，失败则保留 tmp 并向上报。
-            match fs::remove_file(&target) {
-                Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error),
-            }
-            fs::rename(temporary, &target)?;
+            /*
+             * 目标被占用时改名会失败。此时也**不能**先删目标再改名：两次改名之间崩溃就
+             * 等于这一块分片凭空消失，读侧只会看到缺口。先把旧分片整体挪到 `.bak`
+             * （内容一份都不删），再把临时文件补位；补位再失败就保留 `.bak` 并把错误上抛，
+             * 由读侧按「分片序号不连续」判成不完整，绝不假装这一份历史是完整的。
+             */
+            let backup = target.with_extension("bak");
+            fs::rename(&target, &backup)?;
+            rename_to_target(temporary)?;
+            // 新分片已经补位，旧内容只是残留：删不掉不算失败，内容已经提交。
+            let _ = fs::remove_file(&backup);
         }
         for (sequence, path) in self.shard_entries(logical_path)? {
             if sequence as usize >= chunks.len() {
@@ -454,7 +486,9 @@ impl ShardedJsonlStore {
     }
 
     fn repair_tail(&self, logical_path: &Path) -> io::Result<()> {
-        let paths = self.shard_paths(logical_path)?;
+        let shards = self.shard_entries(logical_path)?;
+        ensure_contiguous_shards(logical_path, &shards)?;
+        let paths = shards.into_iter().map(|(_, path)| path).collect::<Vec<_>>();
         let Some((last_path, prior_paths)) = paths.split_last() else {
             return Ok(());
         };
@@ -539,6 +573,37 @@ fn normalize_line(line: &[u8]) -> io::Result<Vec<u8>> {
         ));
     }
     Ok(line.to_vec())
+}
+
+/// 分片序号必须从 0 起连续。
+///
+/// 缺口是重写替换到一半崩溃（或手工删块）的现场：按剩余分片继续拼接只会安静地少一段历史。
+fn ensure_contiguous_shards(logical_path: &Path, shards: &[(u64, PathBuf)]) -> io::Result<()> {
+    for (expected, (sequence, _)) in shards.iter().enumerate() {
+        let expected = u64::try_from(expected)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "JSONL 分片数量超出上限"))?;
+        if *sequence != expected {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "JSONL 分片序号不连续：{} 缺少序号 {expected}",
+                    logical_path.display()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// 测试注入的改名失败：真实环境无法稳定复现目标被占用，因此只在测试里按路径注入。
+#[cfg(not(test))]
+fn injected_rename_failure(_target: &Path) -> bool {
+    false
+}
+
+#[cfg(test)]
+fn injected_rename_failure(target: &Path) -> bool {
+    crate::tests::take_rename_failure(target)
 }
 
 fn retained_lines<F>(

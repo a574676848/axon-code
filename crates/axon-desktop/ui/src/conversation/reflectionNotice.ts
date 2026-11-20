@@ -1,26 +1,20 @@
 /*
  * 轮后提示的展示文案。
  *
- * 后端按「产出它的那一轮」写「本轮…」，而这一行落在时间线尾部：新一轮在下面跑时，
- * 同一个「本轮」会被读成正在跑的这轮。展示时统一改写成「上一轮」，一句话说清它说的是谁。
+ * 运行侧按真实治理结果给出文案，其中「本轮」指的是产出它的那一轮。这里**原样透传**：
+ * 客户端不改写任何字。改写成「上一轮」会让同一条提示在命令行、TUI 与桌面三处说法不同，
+ * 而提示里的自述才是唯一权威口径。
  *
- * 只认「记忆反思：本轮」这一个开头：别的文案、以及提示里其余的字都不动。
+ * 只做一件事：没有提示、空串与纯空白一律返回 `null`，渲染一行空白等于凭空造出一条提示。
  */
-
-const NOTICE_PREFIX = '记忆反思：';
-const NOTICE_CURRENT_TURN = '本轮';
-const NOTICE_PREVIOUS_TURN = '上一轮';
-const NOTICE_HEAD = `${NOTICE_PREFIX}${NOTICE_CURRENT_TURN}`;
 
 /**
  * 轮后提示的展示文案。
  *
- * 没有提示、空串与纯空白一律返回 `null`：网关偶尔给出空串，渲染一行空白等于凭空
- * 造出一条提示。
+ * @param raw 网关给出的原始文案；缺省、空串与纯空白都视为「没有提示」。
+ * @returns 原样透传的文案；没有提示时返回 `null`。
  */
 export function reflectionNoticeText(raw: string | null | undefined): string | null {
   const text = (raw ?? '').trim();
-  if (text.length === 0) return null;
-  if (!text.startsWith(NOTICE_HEAD)) return text;
-  return `${NOTICE_PREFIX}${NOTICE_PREVIOUS_TURN}${text.slice(NOTICE_HEAD.length)}`;
+  return text.length === 0 ? null : text;
 }

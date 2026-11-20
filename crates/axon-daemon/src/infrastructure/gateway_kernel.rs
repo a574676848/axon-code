@@ -72,6 +72,9 @@ pub enum GatewayKernelError {
     /// 查询目标不存在。
     #[error("{0}")]
     NotFound(String),
+    /// 查询参数不合法（例如分页参数互相矛盾）。
+    #[error("{0}")]
+    InvalidQuery(String),
     /// 事件进入 durable ingress 之前的预处理失败（正文归档等）。
     #[error("Gateway 事件预处理失败：{0}")]
     Preparation(String),

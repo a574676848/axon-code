@@ -9,6 +9,7 @@ import {
   type ComposerHistory,
 } from '../../conversation/composerHistory';
 import { isLargeText } from '../../conversation/textExport';
+import { composerTextFor, forgetComposerDraft, hasStoredComposerDraft, rememberComposerText } from '../../conversation/composerDrafts';
 import { setComposerHasDraft } from '../../composerDraft';
 import { editingMenu } from '../ui/editingCommands';
 import type { ContextMenuItem } from '../ui/ContextMenu';
@@ -46,6 +47,13 @@ export interface ComposerEditingOptions {
    * 返回空表示按原样插入；返回结果由本控制器一次写入，撤销粒度仍然是一次粘贴。
    */
   preparePaste?: (text: string, range: CaretRange) => { text: string; caret: number } | null;
+  /**
+   * 草稿所属的会话键。
+   *
+   * 正文是一份「还没发出去的内容」，它跟着会话走：换一条会话先把这一条的正文存下，
+   * 再把目标会话的接过来；提交之后整份作废。键为空表示首屏那一格草稿。
+   */
+  draftKey?: string | null;
 }
 
 export interface ComposerEditing {
@@ -70,15 +78,17 @@ export function useComposerEditing({
   onNotice,
   onCaretRequest,
   preparePaste,
+  draftKey = null,
 }: ComposerEditingOptions): ComposerEditing {
   const [text, setText] = React.useState('');
   /*
    * 草稿标记：切档会重启应用，输入坞里没发出去的内容会丢。
-   * 标记在这里维护，因为这里是正文的唯一事实源。
+   * 标记在这里维护，因为这里是正文的唯一事实源。判据要把暂存里的其他会话也算进来：
+   * 在 A 写了一半、切到 B 再切档，A 的草稿一样会丢。
    */
   React.useEffect(() => {
-    setComposerHasDraft(text.trim().length > 0);
-    return () => setComposerHasDraft(false);
+    setComposerHasDraft(text.trim().length > 0 || hasStoredComposerDraft());
+    return () => setComposerHasDraft(hasStoredComposerDraft());
   }, [text]);
   /**
    * 撤销与恢复历史。
@@ -97,6 +107,34 @@ export function useComposerEditing({
   const textRef = React.useRef('');
   /** 输入法组合开始时的正文；组合期间不记录，确认时按整个词组记一次。 */
   const compositionBase = React.useRef<string | null>(null);
+  /**
+   * 草稿键的即时值。
+   *
+   * 放进 ref 而不是进 reset 的依赖表：键每换一次会话都会变，而 reset 的引用一旦
+   * 跟着换，提交回调就会整份重建。
+   */
+  const draftKeyRef = React.useRef(draftKey);
+  draftKeyRef.current = draftKey;
+  /** 上一次同步过草稿的会话键；`undefined` 表示还没同步过（挂载那一帧）。 */
+  const syncedKey = React.useRef<string | null | undefined>(undefined);
+
+  /*
+   * 换会话：先把这一条的正文存下，再把目标会话的接过来。
+   *
+   * 撤销历史不跨会话：它是「这一条草稿是怎么写出来的」，接到另一条正文上只会让
+   * 撤销跳回上一条会话的文字，因此恢复时整份清空。
+   */
+  React.useEffect(() => {
+    if (syncedKey.current === draftKey) return;
+    const previous = syncedKey.current;
+    syncedKey.current = draftKey;
+    if (previous !== undefined) rememberComposerText(previous, textRef.current);
+    const restored = composerTextFor(draftKey);
+    textRef.current = restored;
+    editsRef.current = EMPTY_COMPOSER_HISTORY;
+    compositionBase.current = null;
+    setText(restored);
+  }, [draftKey]);
 
   const commit = React.useCallback((next: string) => {
     const before = textRef.current;
@@ -107,6 +145,8 @@ export function useComposerEditing({
   }, []);
 
   const reset = React.useCallback(() => {
+    // 提交之后这一条会话的草稿整份作废：正文、附件与链接占位一起清掉。
+    forgetComposerDraft(draftKeyRef.current);
     textRef.current = '';
     editsRef.current = EMPTY_COMPOSER_HISTORY;
     setText('');

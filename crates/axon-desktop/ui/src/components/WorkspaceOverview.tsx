@@ -79,7 +79,7 @@ export const WorkspaceOverview: React.FC = () => {
                   {workspace.active && <Chip>当前</Chip>}
                 </div>
                 {/* 路径是机器名：等宽、11/16，长路径从左端裁掉的是目录，文件名始终看得见。 */}
-                <span className="mt-0.5 block truncate font-mono text-[11px] leading-4 text-text-tertiary">
+                <span className="mt-0.5 block truncate font-mono text-micro text-text-tertiary">
                   {workspace.path}
                 </span>
               </div>

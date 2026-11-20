@@ -57,7 +57,7 @@ const ENTRY_ICON = 'shrink-0 w-6 h-6 flex items-center justify-center text-text-
 
 /** 快捷键提示：不画键帽，只把按键名按书写顺序用 `+` 连起来。 */
 const ShortcutHint: React.FC<{ keys: string[] }> = ({ keys }) => (
-  <span className="shrink-0 inline-flex items-center gap-[3px] text-[11px] leading-4 text-text-tertiary">
+  <span className="shrink-0 inline-flex items-center gap-[3px] text-micro text-text-tertiary">
     {keys.map((key, index) => (
       <React.Fragment key={`${key}-${index}`}>
         {index > 0 && <kbd className="font-sans">+</kbd>}

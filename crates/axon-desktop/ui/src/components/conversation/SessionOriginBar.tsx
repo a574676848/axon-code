@@ -23,21 +23,34 @@ export const SessionOriginBar: React.FC<SessionOriginBarProps> = ({
   backLabel,
   title,
   onBack,
-}) => (
-  <div className="shrink-0 h-9 px-4 flex items-center gap-2 hairline-b border-border-hairline">
-    <button
-      type="button"
-      onClick={onBack}
-      className="shrink-0 h-6 pl-1 pr-2 inline-flex items-center gap-0.5 rounded-xs text-meta text-text-secondary transition-colors duration-100 hover:bg-hover hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
-    >
-      <ChevronRightIcon size={12} className="rotate-180" />
-      {backLabel}
-    </button>
-    <Text tone="tertiary" size="meta" className="shrink-0">
-      ·
-    </Text>
-    <Text size="row" truncate className="min-w-0">
-      {title}
-    </Text>
-  </div>
-);
+}) => {
+  const backRef = React.useRef<HTMLButtonElement>(null);
+  /*
+   * 进入会话视图时焦点落在返回按钮上。
+   *
+   * 从看板点进来的人，下一步最可能是退回看板：键盘用户不该先 Tab 一整圈才找到出口。
+   * 只在挂载时接手这一次，之后不干预用户自己的焦点位置。
+   */
+  React.useEffect(() => {
+    backRef.current?.focus({ preventScroll: true });
+  }, []);
+  return (
+    <div className="shrink-0 h-9 px-4 flex items-center gap-2 hairline-b border-border-hairline">
+      <button
+        ref={backRef}
+        type="button"
+        onClick={onBack}
+        className="shrink-0 h-6 pl-1 pr-2 inline-flex items-center gap-0.5 rounded-xs text-meta text-text-secondary transition-colors duration-100 hover:bg-hover hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
+      >
+        <ChevronRightIcon size={12} className="rotate-180" />
+        {backLabel}
+      </button>
+      <Text tone="tertiary" size="meta" className="shrink-0">
+        ·
+      </Text>
+      <Text size="row" truncate className="min-w-0">
+        {title}
+      </Text>
+    </div>
+  );
+};

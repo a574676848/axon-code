@@ -52,22 +52,42 @@ function turnNavLabel(turn: TurnState): string {
   return '';
 }
 
+/**
+ * 可导航轮次的稳定签名。
+ *
+ * 导航条只关心「哪些轮次带用户那一句」，不关心正文长到哪儿了。签名因此只由这批
+ * 轮次的标识拼成：同一批轮次继续流式变长时签名不变，观察者就一直挂在原处；
+ * 只有真的有轮次进来或离开时才换一份。不这么做的话，投影每来一批 token 都会换一次
+ * 数组引用，观察者随之每帧重建，一屏几十个轮次的观察反复注册注销。
+ */
+export function navigableSignature(turns: readonly TurnState[]): string {
+  return turns
+    .map((turn) => (turnNavLabel(turn).length > 0 ? turn.id : ''))
+    .filter((id) => id.length > 0)
+    .join('|');
+}
+
 export const MessageRail: React.FC<MessageRailProps> = ({ turns, scrollRef, anchors, atBottom, onNavigate }) => {
   const [activeId, setActiveId] = React.useState<string | null>(null);
   const [hoveredId, setHoveredId] = React.useState<string | null>(null);
 
+  const signature = navigableSignature(turns);
   /**
    * 只有带「用户那一句」的轮次才值得导航。
    *
    * 索引轮同样有真实的用户气泡（它由索引的入站正文立起来），因此翻到第一百条时
    * 导航条上仍然有对应的那一句，不会因为「这一轮还没回放」就少一个点。
+   * 按签名记忆：签名不变就沿用上一份清单，每帧不重建。
    */
-  const navigable = React.useMemo(() => turns.filter((turn) => turnNavLabel(turn).length > 0), [turns]);
+  const navigable = React.useMemo(
+    () => turns.filter((turn) => turnNavLabel(turn).length > 0),
+    [signature],
+  );
 
   React.useEffect(() => {
     const root = scrollRef.current;
     const registry = anchors.current;
-    if (root === null || registry === null || navigable.length === 0) return undefined;
+    if (root === null || registry === null || signature.length === 0) return undefined;
 
     const rootRect = root.getBoundingClientRect();
     const top = rootRect.height * ACTIVE_BAND_TOP_RATIO;
@@ -82,12 +102,12 @@ export const MessageRail: React.FC<MessageRailProps> = ({ turns, scrollRef, anch
       },
       { root, rootMargin: `-${top}px 0px -${rootRect.height - top - height}px 0px`, threshold: 0 },
     );
-    for (const turn of navigable) {
-      const element = registry.get(turn.id);
+    for (const turnId of signature.split('|')) {
+      const element = registry.get(turnId);
       if (element !== undefined) observer.observe(element);
     }
     return () => observer.disconnect();
-  }, [anchors, navigable, scrollRef]);
+  }, [anchors, signature, scrollRef]);
 
   const jumpTo = React.useCallback(
     (turnId: string) => {

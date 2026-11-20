@@ -8,23 +8,23 @@
 
 /** 解读后的失败事实。 */
 export interface FailureReport {
-  /** 一行结论，取自 Provider 的脱敏说明。 */
+  /** 一行结论，取自供应商的脱敏说明。 */
   reason: string;
   /** 失败类别与错误码，用于给结论定性。 */
   category: string;
   code: string;
-  /** Provider 与模型；未知时为空串。 */
+  /** 供应商与模型；未知时为空串。 */
   provider: string;
   model: string;
-  /** Provider 返回的 HTTP 状态码；未知时为 null。 */
+  /** 供应商返回的 HTTP 状态码；未知时为 null。 */
   httpStatus: number | null;
   /** 是否可重试。 */
   retryable: boolean;
   /** 渠道尝试次数；未知时为 null。 */
   attemptCount: number | null;
-  /** 触发失败的 Provider 终态事件类型（如 `response.failed`）；未知时为空串。 */
+  /** 触发失败的供应商终态事件类型（如 `response.failed`）；未知时为空串。 */
   providerEventType: string;
-  /** Provider 或边缘网关返回的请求 ID；未知时为空串。 */
+  /** 供应商或边缘网关返回的请求 ID；未知时为空串。 */
   upstreamRequestId: string;
   /** 原始回执文本；没有结构可展示时为空串。 */
   raw: string;
@@ -34,34 +34,34 @@ export interface FailureReport {
 export function failureHeadline(report: FailureReport): string {
   const code = report.code.toLowerCase();
   // 协议与参数类：请求本身没被接受，改协议字段或参数才过得去。
-  if (code === 'unknown_field' || code === 'unrecognized_field') return '请求字段不被 Provider 接受';
-  if (code === 'invalid_parameter' || code === 'invalid_request_error') return '请求未被 Provider 接受';
-  if (code === 'unsupported_parameter') return '该 Provider 不支持请求里的参数';
+  if (code === 'unknown_field' || code === 'unrecognized_field') return '请求字段不被供应商接受';
+  if (code === 'invalid_parameter' || code === 'invalid_request_error') return '请求未被供应商接受';
+  if (code === 'unsupported_parameter') return '该供应商不支持请求里的参数';
   // 容量与配额类。
   if (code === 'context_overflow' || code === 'context_length_exceeded') return '上下文超出窗口';
   if (code === 'rate_limited' || code === 'rate_limit_exceeded' || code === 'too_many_requests') {
-    return 'Provider 限流';
+    return '供应商限流';
   }
-  if (code === 'insufficient_quota' || code === 'quota_exceeded') return 'Provider 额度不足';
+  if (code === 'insufficient_quota' || code === 'quota_exceeded') return '供应商额度不足';
   // 凭据与权限类。
   if (code === 'unauthorized' || code === 'invalid_api_key' || code === 'authentication_error') {
     return '凭据无效';
   }
   if (code === 'permission_denied' || code === 'forbidden') return '凭据权限不足';
   // 网络与上游类。
-  if (code === 'timeout' || code === 'request_timeout') return 'Provider 响应超时';
-  if (code === 'server_error' || code === 'internal_error') return 'Provider 内部错误';
-  if (code === 'invalid_image' || code === 'image_too_small') return '图片不符合 Provider 要求';
+  if (code === 'timeout' || code === 'request_timeout') return '供应商响应超时';
+  if (code === 'server_error' || code === 'internal_error') return '供应商内部错误';
+  if (code === 'invalid_image' || code === 'image_too_small') return '图片不符合供应商要求';
   if (code === 'model_not_found') return '模型不可用';
-  if (report.category.toLowerCase() === 'provider_transport') return 'Provider 请求失败';
+  if (report.category.toLowerCase() === 'provider_transport') return '供应商请求失败';
   return '本轮执行未完成';
 }
 
-/** Provider 直接回的 `{code, message, data, traceId}` 信封。 */
+/** 供应商直接回的 `{code, message, data, traceId}` 信封。 */
 const PROVIDER_ENVELOPE_KEYS = ['code', 'message'];
 
 /**
- * 从 Provider 错误信封解读失败；不是信封时返回 null。
+ * 从供应商错误信封解读失败；不是信封时返回 null。
  *
  * 这类回执没有 `failure` 包装层（真机样本：`{"code":"UNKNOWN_FIELD","message":
  * "未知请求字段：reasoning_summary","data":{"field":"reasoning_summary"},
@@ -192,7 +192,7 @@ function reportFromPayload(payload: Record<string, unknown>, raw: string): Failu
       ? (payload.failure as Record<string, unknown>)
       : null;
   if (failure === null) {
-    // 没有 `failure` 包装层时，可能是 Provider 直接回的 `{code, message}` 信封。
+    // 没有 `failure` 包装层时，可能是供应商直接回的 `{code, message}` 信封。
     return reportFromProviderEnvelope(payload, raw);
   }
   const reason = stringOf(failure.redactedMessage);

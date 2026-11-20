@@ -104,7 +104,8 @@ where
     /// 读取 thread；这条 thread 还不存在时给 `Ok(None)`。
     ///
     /// 「不存在」与「读不出来」必须分开：把后者当成前者会追加新的 `ThreadStarted`，投影
-    /// 随即整条重置、模型可见历史无声清零。
+    /// 随即整条重置、模型可见历史无声清零。存储层读不到时会在锁内自愈一次未完成重写的
+    /// 现场（清掉残留临时文件）再重读，因此这里只剩「清不掉」这一种情况要报错。
     pub fn read_thread_optional(
         &self,
         root: &Path,
@@ -112,11 +113,8 @@ where
     ) -> Result<Option<ThreadDetail>, String> {
         let events = self.store.read_thread(root, thread_id)?;
         if events.is_empty() {
-            // 一条事件都没有但目录里留着重写临时文件：这是崩溃现场，不是新会话。
             if self.store.has_unfinished_write(root, thread_id) {
-                return Err(format!(
-                    "thread {thread_id} 的事件文件不完整，拒绝当作新会话"
-                ));
+                return Err(format!("thread {thread_id} 存在无法清理的未完成重写"));
             }
             return Ok(None);
         }

@@ -6,6 +6,7 @@ import {
   tokenizePastedText,
   type LinkToken,
 } from '../../conversation/linkTokens';
+import { composerLinksFor, rememberComposerLinks } from '../../conversation/composerDrafts';
 import type { CaretRange } from './useComposerEditing';
 
 /*
@@ -45,12 +46,20 @@ export interface ComposerLinksOptions {
   commit: (next: string) => void;
   /** 程序化写入之后把光标落到某处。 */
   requestCaret: (position: number) => void;
+  /**
+   * 草稿所属的会话键。
+   *
+   * 占位符只是正文里的短标记，地址留在这一份清单里。清单若不跟着会话走，切回来
+   * 的正文里那几个占位符就成了孤儿，提交时会把 `[site]` 当成原文发出去。
+   */
+  draftKey?: string | null;
 }
 
 export function useComposerLinks({
   text,
   commit,
   requestCaret,
+  draftKey = null,
 }: ComposerLinksOptions): ComposerLinksController {
   const [tokens, setTokens] = React.useState<LinkToken[]>([]);
   /*
@@ -61,6 +70,22 @@ export function useComposerLinks({
   textRef.current = text;
   const tokensRef = React.useRef(tokens);
   tokensRef.current = tokens;
+  /** 上一次同步过链接占位的会话键；`undefined` 表示还没同步过（挂载那一帧）。 */
+  const syncedKey = React.useRef<string | null | undefined>(undefined);
+
+  /*
+   * 换会话：占位清单与正文一起交接。
+   *
+   * 占位符只是正文里的短标记，地址在这一份清单里；两者分开走会让占位符变成孤儿，
+   * 提交时被当成原文发出去。
+   */
+  React.useEffect(() => {
+    if (syncedKey.current === draftKey) return;
+    const previous = syncedKey.current;
+    syncedKey.current = draftKey;
+    if (previous !== undefined) rememberComposerLinks(previous, tokensRef.current);
+    setTokens(composerLinksFor(draftKey));
+  }, [draftKey]);
 
   /** 算一次粘贴的结果并登记新占位；没有地址时返回 null。 */
   const plan = React.useCallback((pasted: string, range: CaretRange): LinkPasteStep | null => {

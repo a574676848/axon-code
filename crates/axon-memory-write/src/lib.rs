@@ -213,7 +213,25 @@ fn merge_duplicate_record(
         .max(input.importance_basis_points);
     merged.ttl_expires_at_ms = merged.ttl_expires_at_ms.or(ttl_expires_at_ms);
     let supersession = persist_record(orchestrator, input, &merged)?;
-    let pipeline_status = supersession.pipeline_status();
+    // 合并路径与新建路径同一口径：权威记录更新完必须补齐派生投影，并按「文本 + 向量」
+    // 的真实结果算终态。只按 supersession 判成功会把缺投影的合并记录标成 succeeded，
+    // 修复线因此永远看不到它，检索也会一直缺这条更新过的事实。
+    let text_index_written = write_text_index(orchestrator, &merged.record);
+    // 向量投影与索引都挂在被合并记录自己的 id 上：`input.memory_id` 是这次候选的新 id，
+    // 与落盘的既有记录不是同一个。
+    let merged_memory_id = merged.record.id;
+    let vector_id = merged.vector_id;
+    let vector_projection_written =
+        write_vector_projection(orchestrator, merged_memory_id, input, vector_id);
+    let vector_index_written = write_vector_index(orchestrator, input.embedding.clone(), vector_id);
+    let pipeline_status = write_pipeline_status(
+        cfg!(feature = "memory-text-index"),
+        text_index_written,
+        vector_write_required(input),
+        vector_projection_written,
+        vector_index_written,
+        supersession.pipeline_ready(),
+    );
     let pipeline_state_written = mark_write_job(orchestrator, input, pipeline_status);
     Ok(MemoryWriteTriggerReport {
         admission,
@@ -226,9 +244,9 @@ fn merge_duplicate_record(
         supersession_vector_projection_pruned: supersession.vector_projection_pruned,
         supersession_vector_index_pruned: supersession.vector_index_pruned,
         sqlite_written: true,
-        text_index_written: false,
-        vector_index_written: false,
-        vector_projection_written: false,
+        text_index_written,
+        vector_index_written,
+        vector_projection_written,
         pipeline_state_written,
         pipeline_status,
         needs_repair: pipeline_status == MemoryPipelineJobStatus::NeedsRepair,
@@ -251,7 +269,8 @@ fn write_new_record(
     let sqlite_record = sqlite_record(input, &record, ttl_expires_at_ms, vector_id);
     let supersession = persist_record(orchestrator, input, &sqlite_record)?;
     let text_index_written = write_text_index(orchestrator, &record);
-    let vector_projection_written = write_vector_projection(orchestrator, input, vector_id);
+    let vector_projection_written =
+        write_vector_projection(orchestrator, input.memory_id, input, vector_id);
     let vector_index_written = write_vector_index(orchestrator, input.embedding.clone(), vector_id);
     let pipeline_status = write_pipeline_status(
         cfg!(feature = "memory-text-index"),
@@ -389,6 +408,7 @@ fn vector_flush_documents(
 
 fn write_vector_projection(
     orchestrator: &MemoryOrchestrator,
+    memory_id: MemoryId,
     input: &MemoryWriteTriggerInput,
     vector_id: Option<i64>,
 ) -> bool {
@@ -403,7 +423,7 @@ fn write_vector_projection(
         .vector_projection_store()
         .and_then(|store| {
             store.upsert_projection(&MemoryVectorProjection {
-                memory_id: input.memory_id,
+                memory_id,
                 vector_id,
                 model_ref: model_ref.to_owned(),
                 dimension: orchestrator.config().dimension,
@@ -454,14 +474,6 @@ impl SupersessionProjectionReport {
         self.text_index_pruned.unwrap_or(true)
             && self.vector_projection_pruned.unwrap_or(true)
             && self.vector_index_pruned.unwrap_or(true)
-    }
-
-    fn pipeline_status(&self) -> MemoryPipelineJobStatus {
-        if self.pipeline_ready() {
-            MemoryPipelineJobStatus::Succeeded
-        } else {
-            MemoryPipelineJobStatus::NeedsRepair
-        }
     }
 }
 

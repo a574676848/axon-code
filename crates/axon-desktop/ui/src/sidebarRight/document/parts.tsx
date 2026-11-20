@@ -119,7 +119,7 @@ export const BodyShell: React.FC<BodyShellProps> = ({
 }) => (
   <div className="flex-1 min-h-0 flex flex-col">
     <div className="shrink-0 h-9 pl-4 pr-2 flex items-center justify-between gap-3">
-      <span className="min-w-0 truncate font-mono text-[11px] leading-[18px] text-text-tertiary">
+      <span className="min-w-0 truncate font-mono text-micro leading-[18px] text-text-tertiary">
         {label}
       </span>
       {actions !== undefined && <span className="shrink-0 flex items-center gap-1">{actions}</span>}

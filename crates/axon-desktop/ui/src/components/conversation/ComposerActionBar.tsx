@@ -15,6 +15,8 @@ const ICON_SPRING = { type: 'spring' as const, stiffness: 520, damping: 32 };
 export interface ComposerActionBarProps {
   compact: boolean;
   enabled: boolean;
+  /** 只读会话：模型选择器整块不渲染。 */
+  readOnly: boolean;
   hintVisible: boolean;
   hintText: string;
   model: string;
@@ -22,7 +24,10 @@ export interface ComposerActionBarProps {
   effort: string;
   configBusy: boolean;
   configLocked: boolean;
+  /** 主按钮就是停止键（输入框空着、正在跑）。 */
   showStop: boolean;
+  /** 本轮可中断：停止入口至少要在某处出现。 */
+  stopAvailable: boolean;
   sendable: boolean;
   busy: boolean;
   commandRunning: boolean;
@@ -44,6 +49,7 @@ export interface ComposerActionBarProps {
 export const ComposerActionBar: React.FC<ComposerActionBarProps> = ({
   compact,
   enabled,
+  readOnly,
   hintVisible,
   hintText,
   model,
@@ -52,6 +58,7 @@ export const ComposerActionBar: React.FC<ComposerActionBarProps> = ({
   configBusy,
   configLocked,
   showStop,
+  stopAvailable,
   sendable,
   busy,
   commandRunning,
@@ -73,6 +80,13 @@ export const ComposerActionBar: React.FC<ComposerActionBarProps> = ({
     : busy || (commandRunning && !hasContent)
       ? 'busy'
       : 'send';
+  /*
+   * 停止入口常驻。
+   *
+   * 主按钮在输入框空着时就是停止键，此时不再多画一枚；一旦有内容（或提交在途），
+   * 主按钮回到发送，停止改由它左边这枚 28px 图标承担，因此边打字边停手仍然有点可点。
+   */
+  const stopIcon = stopAvailable && !showStop;
 
   return (
     <div className="flex items-center gap-1 px-2.5 pb-2">
@@ -117,18 +131,30 @@ export const ComposerActionBar: React.FC<ComposerActionBarProps> = ({
 
       {/*
         模型选择按「这一轮由谁跑」显示：只读会话（目标执行这类后台会话）不能换模型，
-        但正在跑的是哪个模型仍是要看的事实，因此照常占位并锁成只读，只隐藏发送类控件。
+        因此整块不渲染，除非存在别的锁（自动化会话由后端锁定）时才照常显示并置灰。
       */}
-      {!compact && (enabled || model !== '') && (
+      {!compact && !readOnly && (enabled || model !== '') && (
         <ComposerPicker
           model={model}
           models={models}
           effort={effort}
           configBusy={configBusy}
-          configLocked={configLocked || !enabled}
+          configLocked={configLocked}
           onModelChange={(value) => onModelChange?.(value)}
           onReasoningEffortChange={(value) => onReasoningEffortChange?.(value)}
         />
+      )}
+
+      {stopIcon && (
+        <button
+          type="button"
+          aria-label="停止生成"
+          title="停止生成（Esc）"
+          onClick={onInterrupt}
+          className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-text-secondary transition-colors duration-100 hover:bg-hover hover:text-text-primary active:scale-95 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
+        >
+          <StopIcon size={14} />
+        </button>
       )}
 
       <button

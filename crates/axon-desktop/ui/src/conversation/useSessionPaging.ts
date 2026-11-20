@@ -28,7 +28,7 @@ import {
   type HistoryFacts,
 } from './historyProjection';
 import { readInteractionFrames, readInteractionFramesTailFirst } from './interactionReplay';
-import { newestReceivedAtMs, newestExpandable, isAuditTurn, turnsNewerThanFloor } from './pagingBounds';
+import { newestReceivedAtMs, newestExpandable, isAuditTurn, sessionOpenFailure, turnsNewerThanFloor } from './pagingBounds';
 import { provisionalFrames, withOpeningInput, type HistoryEntry } from './pagingSkeleton';
 import {
   INITIAL_CONVERSATION,
@@ -427,16 +427,18 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
           });
       } catch (error: unknown) {
         /*
-         * 打开失败必须把投影清空：否则上一条会话的正文会以新会话的身份继续渲染，而唯一的
-         * 提示只是输入坞里一条到点自动退场的回执。这里只做复位与上报，重试入口由调用方给。
+         * 打开失败必须把投影清空，否则上一条会话的正文会以新会话的身份继续渲染。两件事
+         * 共用同一道代次守卫：旧目标迟到的失败既不能复位新投影，也不能把新会话的能力事实
+         * 标成「正在读取」。重试入口由调用方给。
          */
-        if (generation === generationRef.current) {
+        const failure = sessionOpenFailure(generation, generationRef.current);
+        if (failure.resetProjection) {
           factsRef.current = new Map();
           readingsRef.current = new Map();
           newestReceivedAtRef.current = null;
           dispatch({ type: 'reset' });
         }
-        onSessionFactsPending?.();
+        if (failure.markFactsPending) onSessionFactsPending?.();
         throw error;
       } finally {
         setPageLoading(false);
@@ -538,6 +540,11 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
       const takeOver = async (entry: HistoryEntry, expand: boolean): Promise<void> => {
         const reading = readInteractionFramesTailFirst(entry.interactionId, generation, {
           generation: () => generationRef.current,
+          /*
+           * 只有最新一条要整轮：其余在跑的新轮停在折叠形态，整轮回放等于为一段不渲染的
+           * 过程付几十次串行往返。它们仍各订一条实时尾，因此不会停在骨架的 streaming 态。
+           */
+          tailOnly: !expand,
           onTail: () => undefined,
         });
         const tail = await reading.tail;
@@ -689,11 +696,3 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
     ],
   );
 }
-
-/**
- * 只按帧投影一轮（展开用）。
- *
- * 不叠索引骨架：骨架里那条合成的用户消息与帧里的真实用户消息各成一格，正文里就会
- * 出现两个一样的气泡。附件与来源仍从索引贴进来，帧里没有这两样东西；分割线的读数
- * 以索引里的 `turn_metrics` 定稿，回放只负责把过程正文长回来。
- */

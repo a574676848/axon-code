@@ -28,11 +28,12 @@ import { useConversationActions, useUnfoldingInteractionId } from './actions';
 import { AssistantBlock } from './AssistantBlock';
 import { AttachmentTile } from './AttachmentTile';
 import { BUBBLE_RADIUS } from './chatChrome';
-import { DiffStat, DisclosureBody, DisclosureRow } from './DisclosureRow';
+import { DiffStat, DisclosureBody, DisclosureRow, DISCLOSURE_TITLE_COLUMN } from './DisclosureRow';
 import { FailureCard } from './FailureCard';
 import { ImageLightbox } from './ImageLightbox';
 import { turnChannelLabel } from '../../conversation/channelLabel';
 import { MessageActionButton, MessageFooter } from './MessageFooter';
+import { PlanCard } from './PlanCard';
 import { QuestionCellBlock } from './QuestionCellBlock';
 import { SummaryBlock } from './SummaryBlock';
 import { ToolContent } from './ToolContent';
@@ -474,7 +475,7 @@ const HistoryBlock: React.FC<{ cell: Extract<TranscriptCell, { role: 'history' }
  * 整段正文的左缘仍是一条竖线。
  */
 const NoticeBlock: React.FC<{ cell: Extract<TranscriptCell, { role: 'notice' }> }> = ({ cell }) => (
-  <div className="w-full flex items-start gap-1.5 py-1 pl-[102px]">
+  <div className={`w-full flex items-start gap-1.5 py-1 ${DISCLOSURE_TITLE_COLUMN}`}>
     <Text
       size="meta"
       strong
@@ -593,9 +594,12 @@ export const TranscriptCellView: React.FC<{
       return <HistoryBlock cell={cell} />;
     case 'plan':
       /*
-       * 计划已由输入坞上方的固定计划坞 (PlanDock) 承担，正文渲染区不再重复渲染。
+       * 时间线上的计划单元是「某一次 update_plan 的原子记录」，由该次事件本身立起：
+       * 默认收起成一行计数摘要，展开才看步骤明细。它与输入坞上方的固定计划坞读的
+       * 是同一份计划卡实现，只是默认展开态不同（那边也是收起）。
+       * 此前这里整块返回 null，于是过程里「更新过计划」这件事在正文中彻底不可见。
        */
-      return null;
+      return <PlanCard title={cell.title} steps={cell.steps} defaultOpen={false} />;
     case 'folded':
       return <FoldedBlock cell={cell} />;
     case 'question':

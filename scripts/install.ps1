@@ -90,8 +90,20 @@ function Install-BundledSkill {
     New-Item -ItemType Directory -Force $SkillsDir | Out-Null
     Remove-Item $SkillStaging -Recurse -Force -ErrorAction SilentlyContinue
     Copy-Item $SkillSource $SkillStaging -Recurse -Force
+    # 安装态 .revisions\ 是保留目录（加载与删除路径都禁止把它当成技能名），可能来自历史版本
+    # 或未来扩展：替换目录前先移出、替换后原样放回，既不回填也不删除。整目录删除会把它清掉。
+    $Revisions = Join-Path $SkillDest ".revisions"
+    $SavedRevisions = $null
+    if (Test-Path -LiteralPath $Revisions -PathType Container) {
+        $SavedRevisions = Join-Path $SkillsDir ".$SkillName.revisions.$PID"
+        Remove-Item -LiteralPath $SavedRevisions -Recurse -Force -ErrorAction SilentlyContinue
+        Move-Item -LiteralPath $Revisions -Destination $SavedRevisions -Force
+    }
     Remove-Item $SkillDest -Recurse -Force -ErrorAction SilentlyContinue
     Move-Item $SkillStaging $SkillDest -Force
+    if ($SavedRevisions) {
+        Move-Item -LiteralPath $SavedRevisions -Destination $Revisions -Force
+    }
     Write-Success "$SkillName Skill 已安装到 $SkillDest"
 }
 

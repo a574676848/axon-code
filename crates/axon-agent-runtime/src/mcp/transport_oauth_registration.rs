@@ -1,4 +1,4 @@
-//! MCP OAuth 客户端注册（对齐 MCP 2026-07-28 Client Registration 章节）。
+//! MCP OAuth 客户端注册（对齐 MCP 授权草案的 Client Registration 章节；实现参考 `2026-07-28` 草案，协商版本 `2025-11-25`）。
 //!
 //! 规范给出的优先级：
 //! 1. 预注册 client 信息（用户已持有注册结果时）；

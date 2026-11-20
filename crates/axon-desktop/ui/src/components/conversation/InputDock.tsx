@@ -88,6 +88,7 @@ export const InputDock: React.FC<InputDockProps> = ({
   working,
   onInterrupt,
   sessionKey = null,
+  readOnly = false,
   activeQuestion = null,
   onAnswerQuestion,
   reopenToken = 0,
@@ -139,7 +140,7 @@ export const InputDock: React.FC<InputDockProps> = ({
     clear,
     stageLargeText,
     dropHandlers,
-  } = useComposerAttachments();
+  } = useComposerAttachments(sessionKey);
   /*
    * 右键菜单的粘贴要先经过编辑控制器，而链接控制器又依赖编辑控制器的写入，
    * 因此用一个稳定的转发把两边接上：编辑控制器先拿到入口，链接控制器随后挂上。
@@ -154,6 +155,7 @@ export const InputDock: React.FC<InputDockProps> = ({
   );
   const editing = useComposerEditing({
     areaRef,
+    draftKey: sessionKey,
     onLargeText: stageLargeText,
     onNotice: (text) => notify(text, 'danger'),
     onCaretRequest: setPendingCaret,
@@ -179,6 +181,7 @@ export const InputDock: React.FC<InputDockProps> = ({
     text,
     commit: editing.commit,
     requestCaret: setPendingCaret,
+    draftKey: sessionKey,
   });
   pasteProjection.current = links.projectPaste;
   /** `@` 文件引用、`/` 指令与输入历史各一个控制器：取数与缓存都不属于渲染。 */
@@ -203,12 +206,21 @@ export const InputDock: React.FC<InputDockProps> = ({
   const hasContent = hasText || attachments.length > 0;
   const sendable = hasContent && enabled && !busy;
   /**
-   * 运行中且没有待发内容时，主按钮让位给中断。
+   * 本轮允许被打断。
+   *
+   * 正文装载期间不能（那段时间一个请求都还没发出），因此它同时是「停止键要不要在」
+   * 的总判据：只要在跑且可中断，停止入口就一直在，与输入框里有没有内容无关。
+   */
+  const interruptible = working !== null && working.interruptible;
+  /**
+   * 主按钮让位给中断。
    *
    * 与 TUI 的 Enter/Esc 分工一致：Enter 排队发送，Esc 中断。提交在途时（busy）
    * 必须保持发送按钮，否则「点一下发送」会在回执回来之前变成「点一下中断」。
+   * 输入框里有内容时主按钮是发送键，停止入口改由它旁边那枚常驻图标承担：
+   * 此前一并让位，边打字边想停手时停止键就消失了。
    */
-  const showStop = working !== null && working.interruptible && !hasContent && !busy;
+  const showStop = interruptible && !hasContent && !busy;
 
   /**
    * 输入法组合中。
@@ -507,6 +519,7 @@ export const InputDock: React.FC<InputDockProps> = ({
                 <ComposerActionBar
                   compact={compact}
                   enabled={enabled}
+                  readOnly={readOnly}
                   hintVisible={hintVisible}
                   hintText={hint ?? KEYBOARD_HINT}
                   model={model}
@@ -515,6 +528,7 @@ export const InputDock: React.FC<InputDockProps> = ({
                   configBusy={configBusy}
                   configLocked={configLocked}
                   showStop={showStop}
+                  stopAvailable={interruptible}
                   sendable={sendable}
                   busy={busy}
                   commandRunning={command.running !== null}

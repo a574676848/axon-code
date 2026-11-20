@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { newestReceivedAtMs, turnsNewerThanFloor } from '../src/conversation/pagingBounds.ts';
+import {
+    newestReceivedAtMs,
+    sessionOpenFailure,
+    turnsNewerThanFloor,
+} from '../src/conversation/pagingBounds.ts';
 
 /*
  * 增量接管的时间下界。
@@ -42,4 +46,23 @@ test('首屏没有下界时，除已认识的那几条外全收', () => {
 test('一页里最新的接收时刻取最大值；空页没有下界', () => {
     assert.equal(newestReceivedAtMs([]), null);
     assert.equal(newestReceivedAtMs([turn('a', 1_000), turn('b', 9_000), turn('c', 4_000)]), 9_000);
+});
+
+/*
+ * 打开失败的回执归属：两件事（清投影、把能力事实退回「正在读取」）必须共用同一道代次守卫。
+ * 曾经的缺陷是只守了清投影这一半，旧目标迟到的失败会把刚切过去的新会话标成「正在读取」，
+ * 可写性与中断入口因此一直停在未知态。
+ */
+test('同一代目标打开失败：既清投影，也把能力事实退回正在读取', () => {
+    assert.deepEqual(sessionOpenFailure(3, 3), {
+        resetProjection: true,
+        markFactsPending: true,
+    });
+});
+
+test('代次已变时旧目标的失败什么都不能做，包括不许标记新会话的能力事实', () => {
+    assert.deepEqual(sessionOpenFailure(3, 4), {
+        resetProjection: false,
+        markFactsPending: false,
+    });
 });

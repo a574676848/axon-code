@@ -180,11 +180,7 @@ pub(super) fn build_turn_trace(
     let signals = collect_explicit_signals(payload, session_record, now_ms, sequence);
     let mut trace = axon_agent_runtime::TurnTrace::from_outcome(
         &outcome,
-        format!(
-            "trace:{}:{}",
-            session_record.session_id,
-            sequence.unwrap_or(0)
-        ),
+        trace_id_for(session_record, sequence),
         now_ms,
         signals,
     );
@@ -194,6 +190,23 @@ pub(super) fn build_turn_trace(
         .with_digest(&outcome.assistant_outcome_summary);
     trace.apply_receipt_fingerprints(&collect_trace_fingerprints(response));
     trace
+}
+
+/// 本轮轨迹标识。
+///
+/// 轮序缺失时返回空串，表示「本轮轨迹不可寻址」：拿 `:0` 兜底会让同一会话所有轮都撞成
+/// `trace:<session>:0`，卡片 id、批次键与 `builtin.turn_trace` 的寻址一起失效。空 trace_id
+/// 会让反思入池侧直接跳过这一轮（见 `run_reflection_batch`），因此宁可少反思一次，也不写
+/// 一条查不到的轨迹。
+pub(super) fn trace_id_for(session_record: &RunSessionRecord, sequence: Option<u64>) -> String {
+    let Some(sequence) = sequence else {
+        axon_logger::warning(&format!(
+            "轮序缺失，本轮轨迹不可寻址（跳过反思入池）：session={} part={}",
+            session_record.session_id, session_record.assistant_part_id
+        ));
+        return String::new();
+    };
+    format!("trace:{}:{}", session_record.session_id, sequence)
 }
 
 /// 本轮在会话内的轮序；查不到时返回 `None` 并告警。
@@ -224,13 +237,13 @@ pub(super) fn sequence_option(
         Ok(Some(sequence)) => Some(sequence),
         Ok(None) => {
             axon_logger::warning(&format!(
-                "轮序缺失，本轮轨迹按序 0 落盘: session={} part={}",
+                "轮序缺失，本轮轨迹不可寻址: session={} part={}",
                 session_record.session_id, session_record.assistant_part_id
             ));
             None
         }
         Err(error) => {
-            axon_logger::warning(&format!("轮序读取失败，本轮轨迹按序 0 落盘: {error:?}"));
+            axon_logger::warning(&format!("轮序读取失败，本轮轨迹不可寻址: {error:?}"));
             None
         }
     }

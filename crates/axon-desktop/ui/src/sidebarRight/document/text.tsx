@@ -62,7 +62,7 @@ export const MarkdownBody: React.FC<ViewerProps> = ({ content }) => {
   if (content.kind !== 'text') return null;
   return (
     <BodyShell label="Markdown">
-      <div className="px-4 py-3 text-[13px] leading-[22px] [&>div]:text-[13px] [&>div]:leading-[22px]">
+      <div className="px-4 py-3 text-row leading-[22px] [&>div]:text-row [&>div]:leading-[22px]">
         {content.truncated && (
           <p className="mb-2 text-meta text-text-tertiary">内容超过 2 MiB，已截断显示。</p>
         )}

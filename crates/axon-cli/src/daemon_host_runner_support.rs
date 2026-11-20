@@ -89,7 +89,8 @@ impl axon_daemon::ProcessIdentity for CliProcessIdentity {
     }
 
     fn process_start_id(&self) -> Option<String> {
-        None
+        // PID 会复用：把进程启动时刻作为第二身份，回收与认领时做二次校验。
+        axon_process::process_start_id(self.pid())
     }
 }
 

@@ -8,7 +8,10 @@ use axon_domain::RuntimeHostId;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use uuid::Uuid;
 
-/// 回收仍标记为 running、但对应进程已经退出的 Host lease。
+/// 回收仍标记为活动、但对应进程已经退出的 Host lease。
+///
+/// 除 `running` 之外也必须扫 `upgrade_requested`：排空中的 Host 仍持有租约，进程退出后
+/// 没人再续租，只扫 running 会让它和它的 handoff 行一直留到 deadline 过期。
 pub(super) fn reap_dead_hosts(
     store: &SqliteRuntimeStore,
     now_ms: u64,
@@ -19,11 +22,18 @@ pub(super) fn reap_dead_hosts(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(storage)?;
     let mut statement = transaction
-        .prepare("SELECT host_id,pid FROM daemon_instances WHERE state=?1")
+        .prepare(
+            "SELECT host_id,pid,process_start_id FROM daemon_instances
+              WHERE state IN ('running','upgrade_requested')",
+        )
         .map_err(storage)?;
     let hosts = statement
-        .query_map(params![HOST_STATE_RUNNING], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
         })
         .map_err(storage)?
         .collect::<Result<Vec<_>, _>>()
@@ -31,29 +41,39 @@ pub(super) fn reap_dead_hosts(
     drop(statement);
 
     let mut reaped = 0_u32;
-    for (host_id, pid) in hosts {
+    for (host_id, pid, process_start_id) in hosts {
         let lease_active: bool = transaction
             .query_row(
                 "SELECT lease_expires_at_ms>?1 FROM daemon_instances
-                 WHERE host_id=?2 AND state=?3",
-                params![i64_value(now_ms)?, host_id, HOST_STATE_RUNNING],
+                 WHERE host_id=?2 AND state IN ('running','upgrade_requested')",
+                params![i64_value(now_ms)?, host_id],
                 |row| row.get(0),
             )
             .map_err(storage)?;
-        if lease_active && super::host_process::host_process_alive(pid) {
+        if lease_active
+            && super::host_process::host_process_matches(pid, process_start_id.as_deref())
+        {
             continue;
         }
-        reaped = reaped.saturating_add(
-            transaction
-                .execute(
-                    "UPDATE daemon_instances SET state='stopped',updated_at_ms=?1
-                     WHERE host_id=?2 AND state=?3",
-                    params![i64_value(now_ms)?, host_id, HOST_STATE_RUNNING],
-                )
-                .map_err(storage)?
-                .try_into()
-                .unwrap_or(u32::MAX),
-        );
+        let stopped = transaction
+            .execute(
+                "UPDATE daemon_instances SET state='stopped',updated_at_ms=?1
+                 WHERE host_id=?2 AND state IN ('running','upgrade_requested')",
+                params![i64_value(now_ms)?, host_id],
+            )
+            .map_err(storage)?;
+        if stopped == 0 {
+            continue;
+        }
+        // 宿主已经退出：它挂起的升级 handoff 不可能再被领取，直接作废，别留到 deadline。
+        transaction
+            .execute(
+                "UPDATE upgrade_handoffs SET state='cancelled',updated_at_ms=?1
+                 WHERE old_host_id=?2 AND state IN ('requested','ready')",
+                params![i64_value(now_ms)?, host_id],
+            )
+            .map_err(storage)?;
+        reaped = reaped.saturating_add(u32::try_from(stopped).unwrap_or(u32::MAX));
     }
     transaction.commit().map_err(storage)?;
     Ok(reaped)
@@ -151,14 +171,13 @@ pub(super) fn renew_host(
     let changed = connection
         .execute(
             "UPDATE daemon_instances SET lease_expires_at_ms=?1,updated_at_ms=?2 \
-             WHERE host_id=?3 AND generation=?4 AND state=?5 \
+             WHERE host_id=?3 AND generation=?4 AND state IN ('running','upgrade_requested') \
                AND lease_expires_at_ms > ?2",
             params![
                 i64_value(now_ms.saturating_add(lease_duration_ms))?,
                 i64_value(now_ms)?,
                 host.host_id.as_str(),
                 host.generation,
-                HOST_STATE_RUNNING
             ],
         )
         .map_err(storage)?;

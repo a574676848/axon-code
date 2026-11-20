@@ -351,28 +351,37 @@ pub(crate) fn patch_turn_artifacts(
         return Ok(());
     }
     /*
-     * 存在性先问侧车：本轮收口时已按 `(thread, 轮次)` 落过一行，点查与历史长度无关。
-     * 侧车缺行（控制面库不存在、写入失败）才退回尾窗定位，尾部找不到再整条读：宁可慢
-     * 一次也不把产物写到别的轮次上。
+     * 存在性只认 thread 尾窗：这一轮是不是还在，thread 自己说了算。
+     *
+     * 侧车行只是投影，窗口重写会把这些轮次移出 thread（同时清侧车行，但清理与治理回写
+     * 之间存在窗口）；只信侧车就会把产物补写到一条已经不存在的轮次上，落成一条无法
+     * 归属的增量。尾窗读不到时 `turn_sequence_at_tail` 会回退整条读，因此这里判「没有」
+     * 就是真的没有。
      */
-    let known_in_sidecar = crate::run_commands::run_thread_facts::turn_facts(
+    let Some(sequence) = super::super::run_thread_tail::turn_sequence_at_tail(
+        config_path,
+        session_id,
+        assistant_part_id,
+    )?
+    else {
+        axon_logger::warning(&format!(
+            "轮次已随窗口重写淘汰，跳过本轮产物补写: thread={session_id} part={assistant_part_id}"
+        ));
+        return Ok(());
+    };
+    // 轮序也要相符：侧车记的是收口那一刻的轮序，对不上同样说明这一轮已被重写替换。
+    if let Some(known) = crate::run_commands::run_thread_facts::turn_facts(
         config_path,
         session_id,
         assistant_part_id,
     )
-    .is_some();
-    if !known_in_sidecar
-        && tail_turn_by_part(&root, session_id, assistant_part_id).is_none()
-        && !ThreadService::new(JsonlThreadEventStore)
-            .read_thread(&root, session_id)?
-            .turns
-            .iter()
-            .any(|turn| {
-                turn_metadata(&turn.token_usage_json)
-                    .is_some_and(|metadata| metadata.assistant_part_id == assistant_part_id)
-            })
+    .and_then(|facts| facts.sequence)
+        && known != sequence
     {
-        return Err(format!("thread {session_id} 缺少轮次 {assistant_part_id}"));
+        axon_logger::warning(&format!(
+            "轮次轮序已变（{known} -> {sequence}），按窗口重写淘汰处理，跳过本轮产物补写: thread={session_id} part={assistant_part_id}"
+        ));
+        return Ok(());
     }
     let appended = ThreadService::new(JsonlThreadEventStore).append_turn_metadata_patch(
         &root,
@@ -382,7 +391,7 @@ pub(crate) fn patch_turn_artifacts(
         notice,
         affect_sequence,
     );
-    // 侧车同步补写提示：读侧一次主键查询即可拿到，不再读 thread。
+    // 侧车同步补写提示：只在增量真的落盘之后写，读侧一次主键查询即可拿到。
     if appended.is_ok()
         && let Some(notice) = notice
     {
@@ -394,22 +403,6 @@ pub(crate) fn patch_turn_artifacts(
         );
     }
     appended
-}
-
-/// 尾部窗口里按 `assistant_part_id` 找轮次；找不到时为空。
-fn tail_turn_by_part(root: &Path, thread_id: &str, assistant_part_id: &str) -> Option<Turn> {
-    let tail = JsonlThreadEventStore
-        .read_thread_tail(root, thread_id, THREAD_TAIL_BUDGET_BYTES)
-        .ok()?;
-    tail.records
-        .iter()
-        .rev()
-        .filter_map(thread_record_turn)
-        .find(|turn| {
-            turn_metadata(&turn.token_usage_json)
-                .is_some_and(|metadata| metadata.assistant_part_id == assistant_part_id)
-        })
-        .cloned()
 }
 
 /// 由 thread 轮次反向重建整条 run 记录。
@@ -517,5 +510,180 @@ fn turn_record_from_part(
         reflection_notice: metadata.reflection_notice.clone(),
         turn_trace: None,
         origin_channel: metadata.origin_channel.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axon_session::{
+        AppendTurnCommand, JsonlThreadEventStore, RuntimeStore as _, StartThreadCommand,
+        ThreadEventStore as _, ThreadService, ThreadSettings, ThreadSource, Turn, TurnStatus,
+    };
+
+    fn temp_root(label: &str) -> std::path::PathBuf {
+        axon_test_support::test_temp_root().join(format!(
+            "axon-thread-queries-{label}-{}-{}",
+            std::process::id(),
+            axon_time::unix_now_ms()
+        ))
+    }
+
+    /// 一条形态真实的轮次：轮次身份由 `assistantPartId` 决定，与收口写下的 metadata 同口径。
+    fn turn(thread_id: &str, assistant_part_id: &str, sequence: u64) -> Turn {
+        let metadata = serde_json::json!({
+            "usage": null,
+            "assistantPartId": assistant_part_id,
+            "latestFailure": null,
+            "suggestedNextStep": null,
+            "toolReceipts": [],
+            "reasoningMessageCount": 0,
+            "turnEventCount": 0,
+        });
+        Turn {
+            turn_id: format!("{thread_id}-turn-{assistant_part_id}"),
+            sequence,
+            status: TurnStatus::Completed,
+            history_items: Vec::new(),
+            token_usage_json: Some(metadata.to_string()),
+            started_at_ms: sequence,
+            completed_at_ms: Some(sequence),
+            interrupted_at_ms: None,
+            failure: None,
+        }
+    }
+
+    fn settings() -> ThreadSettings {
+        ThreadSettings {
+            cwd: "fixture".to_owned(),
+            provider: "local".to_owned(),
+            model: "model".to_owned(),
+            selected_skill_name: None,
+        }
+    }
+
+    fn seed_thread(root: &Path, thread_id: &str, parts: &[&str]) {
+        let service = ThreadService::new(JsonlThreadEventStore);
+        let (first, rest) = parts.split_first().expect("至少一轮");
+        service
+            .start_thread(
+                root,
+                StartThreadCommand {
+                    thread_id: thread_id.to_owned(),
+                    session_root_id: thread_id.to_owned(),
+                    parent_thread_id: None,
+                    forked_from_thread_id: None,
+                    source: ThreadSource::CliRun,
+                    ephemeral: false,
+                    settings: settings(),
+                    created_at_ms: 1,
+                    turn: turn(thread_id, first, 0),
+                },
+            )
+            .expect("首轮落盘");
+        for (index, part) in rest.iter().enumerate() {
+            let sequence = u64::try_from(index).unwrap_or(0) + 1;
+            service
+                .append_turn(
+                    root,
+                    AppendTurnCommand {
+                        thread_id: thread_id.to_owned(),
+                        recorded_at_ms: sequence,
+                        turn: turn(thread_id, part, sequence),
+                    },
+                )
+                .expect("追加轮次");
+        }
+    }
+
+    /// 侧车行：读侧的存在性快路径，可能在窗口重写淘汰轮次后仍然残留。
+    fn seed_sidecar(config_path: &Path, thread_id: &str, part: &str, sequence: Option<u64>) {
+        let store =
+            crate::run_commands::run_turn_metrics::shared_store(config_path).expect("控制面库");
+        // 侧车表随控制面库初始化建立；这里要直接造「淘汰轮次仍留行」的现场。
+        store.initialize().expect("控制面库建表");
+        store
+            .upsert_thread_turn_facts(
+                &axon_session::ThreadTurnFacts {
+                    thread_id: thread_id.to_owned(),
+                    assistant_part_id: part.to_owned(),
+                    recorded_at_ms: 1,
+                    sequence,
+                    model_name: None,
+                    reasoning_effort: None,
+                    reflection_notice: None,
+                },
+                axon_time::unix_now_ms(),
+            )
+            .expect("侧车写入");
+    }
+
+    fn next_sequence(root: &Path, thread_id: &str) -> u64 {
+        JsonlThreadEventStore
+            .read_thread_activation(root, thread_id)
+            .expect("激活快照")
+            .next_sequence
+    }
+
+    /// 侧车知道这一轮不算数：尾窗确认不到就必须跳过补写，绝不写进已不存在的轮次。
+    #[test]
+    fn evicted_turn_is_skipped_even_when_sidecar_still_knows_it() {
+        let root = temp_root("evicted");
+        let config_path = root.join("config.toml");
+        seed_thread(&root, "lane", &["part-keep"]);
+        seed_sidecar(&config_path, "lane", "part-evicted", Some(1));
+        let before = next_sequence(&root, "lane");
+
+        patch_turn_artifacts(&config_path, "lane", "part-evicted", Some("提示"), &[])
+            .expect("淘汰轮次按跳过处理，不是错误");
+
+        assert_eq!(
+            next_sequence(&root, "lane"),
+            before,
+            "尾窗确认不到轮次时不得追加增量事件"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 侧车记的轮序与 thread 当前轮序不符，同样按「已随窗口重写淘汰」处理。
+    #[test]
+    fn mismatched_sequence_skips_the_patch() {
+        let root = temp_root("sequence");
+        let config_path = root.join("config.toml");
+        seed_thread(&root, "lane", &["part-a"]);
+        seed_sidecar(&config_path, "lane", "part-a", Some(7));
+        let before = next_sequence(&root, "lane");
+
+        patch_turn_artifacts(&config_path, "lane", "part-a", Some("提示"), &[])
+            .expect("轮序不符按跳过处理");
+
+        assert_eq!(next_sequence(&root, "lane"), before, "轮序不符不得补写");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 在册轮次照常补写：增量落盘成功后才补侧车提示，尾窗读得回同一条提示。
+    #[test]
+    fn present_turn_is_patched_and_notice_reaches_the_tail() {
+        let root = temp_root("present");
+        let config_path = root.join("config.toml");
+        seed_thread(&root, "lane", &["part-a"]);
+        seed_sidecar(&config_path, "lane", "part-a", Some(0));
+        let before = next_sequence(&root, "lane");
+
+        patch_turn_artifacts(&config_path, "lane", "part-a", Some("记忆提示"), &[])
+            .expect("在册轮次必须补写");
+
+        assert_eq!(
+            next_sequence(&root, "lane"),
+            before + 1,
+            "在册轮次必须追加一条增量事件"
+        );
+        let facts =
+            crate::run_commands::run_thread_facts::turn_facts(&config_path, "lane", "part-a")
+                .expect("侧车行必须存在");
+        assert_eq!(facts.reflection_notice.as_deref(), Some("记忆提示"));
+        let tail = latest_turn_facts_at_root(&root, "lane").expect("尾窗必须读得到这一轮");
+        assert_eq!(tail.reflection_notice.as_deref(), Some("记忆提示"));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -76,3 +76,26 @@ export function turnsNewerThanFloor<T extends ReceivedAt>(
     (entry) => !known.has(idOf(entry)) && (floor === null || entry.receivedAtMs >= floor),
   );
 }
+
+/** 打开一条会话失败时，主投影要做的那两件事。 */
+export interface SessionOpenFailure {
+  /** 是否清空投影（不清会把上一条会话的正文当成新会话继续渲染）。 */
+  resetProjection: boolean;
+  /** 是否把能力事实退回「正在读取」。 */
+  markFactsPending: boolean;
+}
+
+/**
+ * 打开失败的回执归属：只有发起它的那一代目标才允许动手。
+ *
+ * 打开是跨多次 await 的异步流程，期间用户可能已经切走。旧目标迟到的失败既不能复位新目标
+ * 的投影，也不能把新会话标成「正在读取」（那会让可写性与中断入口一直停在未知态）。
+ * 两件事共用同一道判断，因此不会留下只守一半的路径。
+ */
+export function sessionOpenFailure(
+  generation: number,
+  currentGeneration: number,
+): SessionOpenFailure {
+  const stale = generation !== currentGeneration;
+  return { resetProjection: !stale, markFactsPending: !stale };
+}

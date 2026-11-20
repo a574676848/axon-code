@@ -9,7 +9,7 @@ use super::{
     execution::{CronExecutionAdapter, execute_cron_job},
     now_ms,
     repository::{CronClaim, CronRepository},
-    schedule::{next_run_after, parse_schedule},
+    schedule::{next_run_from, parse_schedule},
 };
 
 /// 到期触发点允许的迟到容忍窗口。
@@ -52,6 +52,13 @@ pub(super) fn execute_due_jobs(
             batch.skipped += 1;
             continue;
         }
+        // 同一触发点已经跑过（上一轮租约失守后重领）：只推进计划，不再执行一次。
+        // 没有这一步时，任务体超过租约（120s）就会让同一次触发点被执行两遍。
+        if repository.has_run_for_trigger(&claim.job.job_id, scheduled_at_ms)? {
+            reschedule_missed(&repository, &claim, now)?;
+            batch.skipped += 1;
+            continue;
+        }
         batch.jobs.push(claim.job.clone());
         batch
             .runs
@@ -62,12 +69,12 @@ pub(super) fn execute_due_jobs(
 
 /// 判断一个已到期的触发点现在是否仍然该执行。
 ///
-/// 触发点落在调度器本次在线期间时一定执行：它到点时调度器是活着的，只是被同批
-/// 任务排队或短暂卡住，迟到的责任不在计划本身。触发点早于本次上线时，只有仍在
-/// [`DUE_LATE_ALLOWANCE_MS`] 内才算「这次还没错过」，否则就是停机期间错过的触发点。
-fn should_fire(scheduled_at_ms: u64, scheduler_alive_since_ms: u64, now_ms: u64) -> bool {
-    if scheduled_at_ms >= scheduler_alive_since_ms {
-        return true;
+/// **绝对上限优先**：逾期超过 [`DUE_LATE_ALLOWANCE_MS`] 的触发点一律视为已经错过。
+/// 只按「是否晚于本次上线」判断会漏掉休眠与长时间卡顿：线程不重启，休眠期间的所有
+/// 触发点都「晚于上线」，于是 `@daily` 会在下午三点跑一次。
+fn should_fire(scheduled_at_ms: u64, _scheduler_alive_since_ms: u64, now_ms: u64) -> bool {
+    if scheduled_at_ms > now_ms {
+        return false;
     }
     now_ms.saturating_sub(scheduled_at_ms) <= DUE_LATE_ALLOWANCE_MS
 }
@@ -79,7 +86,8 @@ fn reschedule_missed(
     now_ms: u64,
 ) -> Result<(), String> {
     let schedule = parse_schedule(&claim.job.schedule)?;
-    let next_run_at_ms = next_run_after(&schedule, now_ms);
+    let scheduled_at_ms = claim.job.next_run_at_ms.unwrap_or(now_ms);
+    let next_run_at_ms = next_run_from(&schedule, scheduled_at_ms, now_ms);
     let next_job = claim.job.after_missed_run(now_ms, next_run_at_ms);
     // 顺延既可能是停机导致的正常结果，也可能暴露计划写错，必须留下可回溯的证据。
     // 默认日志级别是 warn，这里用 warning 才能让运维真的看见「这个任务今天没跑」。
@@ -106,9 +114,10 @@ pub(crate) fn execute_and_persist(
     let finished_at_ms = now_ms();
     let next_job = if scheduled {
         let schedule = parse_schedule(&claim.job.schedule)?;
+        let scheduled_at_ms = claim.job.next_run_at_ms.unwrap_or(finished_at_ms);
         claim.job.after_run(
             finished_at_ms,
-            next_run_after(&schedule, finished_at_ms),
+            next_run_from(&schedule, scheduled_at_ms, finished_at_ms),
             schedule.is_one_shot(),
         )
     } else {
@@ -223,21 +232,48 @@ mod tests {
         assert_eq!(reloaded.status, CronJobStatus::Active);
     }
 
+    /// 同一触发点已经跑过（租约失守后重领）时不得再执行一次：任务体超过租约就会让脚本
+    /// 与 agent 副作用各来一遍。判据落在执行事实上。
     #[test]
-    fn trigger_point_due_while_scheduler_alive_still_runs() {
+    fn already_settled_trigger_point_is_not_executed_twice() {
         let root = axon_test_support::test_temp_dir();
         let repository = CronRepository::open(root.path()).expect("cron 仓库应可打开");
         let now = now_ms();
-        // 到点在 40 分钟前，但调度器从 1 小时前就一直在线：只是被排队，必须执行。
+        let scheduled_at_ms = now - 30 * 1_000;
+        let job = test_job("interval:1h", scheduled_at_ms);
+        repository.save_job(&job).expect("任务应可保存");
+        let adapter = CountingAdapter::new(root.path());
+
+        let batch = execute_due_jobs(&adapter, 10, now).expect("到期扫描应成功");
+        assert_eq!(batch.runs.len(), 1);
+
+        assert!(
+            repository
+                .has_run_for_trigger(&job.job_id, scheduled_at_ms)
+                .expect("查询执行事实应成功"),
+            "同一触发点必须判成已执行，重领时只顺延"
+        );
+        assert!(
+            !repository
+                .has_run_for_trigger(&job.job_id, now + 60 * 60 * 1_000)
+                .expect("查询执行事实应成功"),
+            "未发生的触发点不得判成已执行"
+        );
+    }
+
+    #[test]
+    fn trigger_point_overdue_beyond_allowance_is_skipped_even_when_scheduler_looks_alive() {
+        let root = axon_test_support::test_temp_dir();
+        let repository = CronRepository::open(root.path()).expect("cron 仓库应可打开");
+        let now = now_ms();
         let job = test_job("interval:1h", now - 40 * 60 * 1_000);
         repository.save_job(&job).expect("任务应可保存");
         let adapter = CountingAdapter::new(root.path());
 
         let batch = execute_due_jobs(&adapter, 10, now - 60 * 60 * 1_000).expect("到期扫描应成功");
 
-        assert_eq!(batch.skipped, 0);
-        assert_eq!(batch.runs.len(), 1);
-        assert_eq!(adapter.executed(), 1);
+        assert_eq!(batch.skipped, 1, "逾期 40 分钟的触发点必须顺延");
+        assert_eq!(adapter.executed(), 0);
     }
 
     #[test]

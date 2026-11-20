@@ -301,18 +301,24 @@ pub(super) fn delete_session_families_by_ids(
     // `thread_turn_facts.thread_id` 存的是运行窗口（`sessions.current_run_id`），而候选里
     // 一半是会话 ULID、一半本来就是 thread id：两个键空间都要试。映射必须在删 `sessions`
     // 行之前用掉（同一事务内，行还在）。
+    //
+    // 末尾的 `NOT IN` 是护栏：若某个 thread id 恰好等于另一条**存活**会话的 ULID（手工指定
+    // id、将来改可读 id），删它就会连带删掉别的会话的侧车行。
     transaction
         .execute(
             &format!(
                 "DELETE FROM thread_turn_facts
-                  WHERE thread_id IN ({placeholders})
-                     OR thread_id IN (
-                         SELECT current_run_id FROM sessions
-                          WHERE session_id IN ({placeholders})
-                            AND current_run_id IS NOT NULL AND current_run_id <> ''
-                     )"
+                  WHERE (thread_id IN ({placeholders})
+                         OR thread_id IN (
+                             SELECT current_run_id FROM sessions
+                              WHERE session_id IN ({placeholders})
+                                AND current_run_id IS NOT NULL AND current_run_id <> ''
+                         ))
+                    AND thread_id NOT IN (
+                        SELECT session_id FROM sessions WHERE session_id NOT IN ({placeholders})
+                    )"
             ),
-            params_from_iter(ids.iter().chain(ids.iter())),
+            params_from_iter(ids.iter().chain(ids.iter()).chain(ids.iter())),
         )
         .map_err(|_| "Daemon runtime 轮次事实侧车清理失败".to_owned())?;
     // 恢复指针指向已删会话时一并清掉：指针只是「下次接续谁」的缓存，不构成事实。
@@ -551,11 +557,15 @@ pub(super) fn terminal_interactions_selection_sql() -> String {
 ///
 /// 派发轮（`source_channel = 'agent'`）没有工作项，`work_item_history` 上不可能有它的
 /// 终态行；因此这一族按 `inbox.terminal_kind` 选批，其余删除依赖与普通轮相同。
+///
+/// `source_channel` 必须显式限定：这一族绕过了工作项的终态判定，一旦别处给普通行写了
+/// `terminal_kind`（迁移、回填），仍在保护期的正常轮会被直接删掉。
 pub(super) fn terminal_dispatch_interactions_selection_sql() -> String {
     format!(
         "SELECT interaction_id FROM inbox
          INDEXED BY inbox_retention
          WHERE terminal_kind IN ({terminal})
+           AND source_channel = 'agent'
            AND received_at_ms < ?1
          ORDER BY received_at_ms ASC
          LIMIT ?2",

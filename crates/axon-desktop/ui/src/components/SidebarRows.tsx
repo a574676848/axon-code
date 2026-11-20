@@ -345,7 +345,7 @@ export const SessionRow: React.FC<SessionRowProps> = ({
                 menuOpen ? 'hidden' : 'group-hover:hidden group-focus-within:hidden'
               }`}
             >
-              <span className="text-[11px] leading-4 tabular-nums text-text-tertiary">
+              <span className="text-micro tabular-nums text-text-tertiary">
                 {formatRelativeTime(session.updated_at)}
               </span>
               {/* 置顶标记与时间同一格：图标本身不发声，名称由这一层给。 */}

@@ -262,11 +262,20 @@ fn render_completed_turn(
     provider_turn_elapsed_ms: u64,
 ) -> CliRunResult {
     let response = completed.response;
-    let diagnostics = run_outcome_diagnostics::collect(
+    let mut diagnostics = run_outcome_diagnostics::collect(
         &response,
         provider_turn_elapsed_ms,
         &request.persona_warnings,
     );
+    // 逐字稿投影失败等于这一轮在界面上消失：它必须出现在调用方能看见的告警里，
+    // 不能只留在记账层的日志中。
+    let projection_warning = completed
+        .projection_error
+        .as_deref()
+        .map(|error| format!("本轮逐字稿投影失败：{error}"));
+    if let Some(warning) = projection_warning.as_ref() {
+        diagnostics.warnings.push(warning.clone());
+    }
     match output {
         OutputFormat::Text => {
             let mut stdout = format!(
@@ -296,6 +305,9 @@ fn render_completed_turn(
                 total_elapsed_ms: provider_turn_elapsed_ms,
             });
             event.memory_reflection_notice = completed.memory_reflection_notice.clone();
+            if let Some(warning) = projection_warning.as_ref() {
+                event.warnings.push(warning.clone());
+            }
             let mut result = json_result(&event);
             if event.status == "failed" {
                 result.exit_code = 1;

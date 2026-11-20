@@ -130,8 +130,8 @@ AXON 目前同时维护两份会话正文：
 
 | 能力 | 位置 | 状态 |
 | --- | --- | --- |
-| 分片 JSONL 存储 | `crates/axon-jsonl/src/store.rs` | 已具备：shard 滚动（默认 8 MiB）、单条 64 MiB 上限、`fs4` 跨进程文件锁 + 进程内 Mutex、崩溃尾行修复 `repair_tail`、`sync_data` 持久化模式、保留期淘汰 `append_retained_line`、容量预算 `append_bounded_line`、原子重写 `rewrite_with` |
-| Thread 事件层 | `crates/axon-session/src/infrastructure/jsonl_store.rs` | 已具备：按 thread 分片、hex/摘要文件名规避 Windows 路径上限（`:70-80`）、反向扫描激活状态（`:52-54`）、容错扫描 |
+| 分片 JSONL 存储 | `crates/axon-jsonl/src/store.rs` | 已具备：shard 滚动（默认 8 MiB）、单条 64 MiB 上限、`fs4` 跨进程文件锁 + 进程内 Mutex、崩溃尾行修复 `repair_tail`、`sync_data` 持久化模式、保留期淘汰 `append_retained_line`、容量预算 `append_bounded_line`、原子重写 `rewrite_with`（替换不先删目标；回退路径先改名到 `*.bak` 再落位，失败保留现场；遗留 `*.rewriteN.tmp` 在下次重写前清理）、分片序号连续性校验（缺口即判不完整，不把半新半旧的缺口当完整历史） |
+| Thread 事件层 | `crates/axon-session/src/infrastructure/jsonl_store.rs` | 已具备：按 thread 分片、hex/摘要文件名规避 Windows 路径上限（`:70-80`）、反向扫描激活状态（`:52-54`）、容错扫描；「不存在」与「读不出来」分开（撕裂尾行受锁截断后重读，重写崩在替换中间留下的现场报错而不是以空历史重建） |
 | zstd 依赖 | workspace `Cargo.toml:171` | 已有 `zstd = "0.14"`，`axon-cli`、`axon-provider-transport` 已使用 |
 | 归档压缩 | `crates/axon-session/src/infrastructure/session_event_body_archive.rs` | 逐交互整文件 zstd（`axon_eventlog::encode_frame`，与事件日志同一档）；旧的按行 `.jsonl.zst` 分批归档已随事件面切换删除 |
 | 文件锁 | workspace `Cargo.toml:157` | 已有 `fs4` |

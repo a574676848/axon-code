@@ -27,8 +27,6 @@ import { SidebarFooter } from './SidebarFooter';
 
 /** 侧栏默认宽度，与既有工作台产品一致。 */
 const DEFAULT_WIDTH = 280;
-/** 会话列表静默刷新间隔。 */
-const SESSION_REFRESH_MS = 15000;
 /** 侧栏最小宽度，与既有工作台产品一致。 */
 const MIN_WIDTH = 264;
 /** 侧栏最大宽度，与既有工作台产品一致。 */
@@ -89,6 +87,20 @@ interface SidebarProps {
   expandedWorkspaceIds?: string[];
   /** 展开态变化回执：由外壳写回本地状态文件。 */
   onExpandedChange?: (ids: string[]) => void;
+  /**
+   * 工作区与会话清单。
+   *
+   * 由外壳持有：取数、15 秒静默轮询与失败结论都只有一份，侧栏只消费不重取。
+   */
+  workspaces?: WorkspaceItem[];
+  /** 清单是否已经成功读过一次：连上但还没读到数据时给骨架而不是空态。 */
+  workspacesLoaded?: boolean;
+  /** 用户主动重试后的失败原因；轮询失败不进这里。 */
+  workspacesError?: string | null;
+  /** 单次动作（新建、置顶、归档、加工作区）返回的新清单写回外壳。 */
+  onWorkspacesChange?: (list: WorkspaceItem[]) => void;
+  /** 重新读取清单；返回失败原因，成功为空。 */
+  onRefreshWorkspaces?: () => Promise<string | null>;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -108,13 +120,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
   preferredWorkspaceId = '',
   expandedWorkspaceIds,
   onExpandedChange,
+  workspaces = [],
+  workspacesLoaded = false,
+  workspacesError = null,
+  onWorkspacesChange,
+  onRefreshWorkspaces,
 }) => {
   const [width, setWidth] = useState(DEFAULT_WIDTH);
   const [resizing, setResizing] = useState(false);
 
-  const [workspaces, setWorkspaces] = useState<WorkspaceItem[]>([]);
-  /** 列表本身的读取失败：这一档会替换树形区，因为没有可展示的数据。 */
-  const [loadError, setLoadError] = useState<string | null>(null);
   /**
    * 单次动作（置顶、归档、新建、重命名、添加工作区）的失败原因。
    *
@@ -122,8 +136,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
    * 就把用户正在看的会话列表抽走。失败结论挂成树上方的一行回执，树保持原位。
    */
   const [actionError, setActionError] = useState<string | null>(null);
-  /** 首次读取是否已经落地：连上但还没读到数据时，骨架比「没有工作区」准确。 */
-  const [loadedOnce, setLoadedOnce] = useState(false);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState('');
   const [activeSessionId, setActiveSessionId] = useState('');
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -145,11 +157,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchToggleRef = useRef<HTMLDivElement>(null);
 
-  /** 统一吸收后端返回的最新工作区列表。 */
+  /**
+   * 清单变了就补一次本地派生。
+   *
+   * 清单本身归外壳所有，这里只算「这份数据在侧栏里怎么呈现」：全路径表、当前工作区
+   * 与展开态。轮询每 15 秒换一次数组引用，这几项各自做功能更新，用户手里的开合不被抢回。
+   */
   const ingest = useCallback((list: WorkspaceItem[]) => {
-    setWorkspaces(list);
-    setLoadedOnce(true);
-    setLoadError(null);
     setFullPaths((current) => {
       const next = { ...current };
       for (const workspace of list) next[workspace.id] = workspace.path;
@@ -177,40 +191,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
     });
   }, [expandedWorkspaceIds, preferredWorkspaceId]);
 
-  const refresh = useCallback(async () => {
-    if (health?.available !== true) return;
-    try {
-      ingest(await ipc.fetchWorkspaces());
-      setLoadError(null);
-    } catch (error) {
-      setLoadError(error instanceof Error ? error.message : '读取工作区失败');
-    }
-  }, [health?.available, ingest]);
-
-  useEffect(() => {
-    if (health?.available !== true) return;
-    void refresh();
-  }, [health?.available, refresh]);
-
-  /*
-   * 静默轮询：会话可能由其它渠道产生（例如 TUI 新开一条），侧栏必须能自己发现。
-   * 轮询只换数据、不动界面状态，失败也不弹错，连接问题由外壳的心跳统一呈现。
-   */
-  useEffect(() => {
-    if (health?.available !== true) return;
-    const timer = window.setInterval(() => {
-      void ipc
-        .fetchWorkspaces()
-        .then((list) => ingest(list))
-        .catch(() => undefined);
-    }, SESSION_REFRESH_MS);
-    return () => window.clearInterval(timer);
-  }, [health?.available, ingest]);
+  React.useEffect(() => {
+    ingest(workspaces);
+  }, [ingest, workspaces]);
 
   const mutate = useCallback(
     async (action: () => Promise<WorkspaceItem[]>, fallback: string): Promise<boolean> => {
       try {
-        ingest(await action());
+        onWorkspacesChange?.(await action());
         setActionError(null);
         return true;
       } catch (error) {
@@ -219,7 +207,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         return false;
       }
     },
-    [ingest],
+    [onWorkspacesChange],
   );
 
   const createSession = useCallback(
@@ -232,7 +220,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         const created = workspace?.sessions
           .filter((session) => session.draft)
           .sort((left, right) => right.created_at - left.created_at)[0];
-        ingest(list);
+        onWorkspacesChange?.(list);
         if (created !== undefined) {
           setActiveWorkspaceId(target);
           setActiveSessionId(created.id);
@@ -252,7 +240,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         setActionError(error instanceof Error ? error.message : '新建会话失败');
       }
     },
-    [activeWorkspaceId, ingest, onSelectSession, onSelectTab],
+    [activeWorkspaceId, onSelectSession, onSelectTab, onWorkspacesChange],
   );
 
   /** 添加工作区：一步直达系统原生目录选择器，选中后立即登记。 */
@@ -267,7 +255,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (picked === null || picked.length === 0) return;
     try {
       const list = await ipc.addWorkspace(picked);
-      ingest(list);
+      onWorkspacesChange?.(list);
       setActionError(null);
       const added = list.find((workspace) => workspace.path === picked);
       if (added !== undefined) {
@@ -277,7 +265,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     } catch (error) {
       setActionError(error instanceof Error ? error.message : '添加工作区失败');
     }
-  }, [ingest]);
+  }, [onWorkspacesChange]);
 
   /** 拖拽重排：落盘后切到手动排序，与用户看到的新顺序保持一致。 */
   const reorderSessions = useCallback(
@@ -588,15 +576,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
             />
           </div>
         )}
-        {loadError !== null && health?.available !== false ? (
+        {workspacesError !== null && health?.available !== false ? (
           <Banner
             tone="danger"
             icon={<AlertCircleIcon size={14} />}
-            title={loadError}
+            title={workspacesError}
             action={
               <button
                 type="button"
-                onClick={() => void refresh()}
+                onClick={() => void onRefreshWorkspaces?.()}
                 className="text-meta text-text-primary underline underline-offset-2"
               >
                 重试
@@ -610,7 +598,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             activeSessionId={selectedSessionId ?? activeSessionId}
             sessionMarks={sessionMarks}
             expanded={expanded}
-            loading={health === null || (health.available && !loadedOnce)}
+            loading={health === null || (health.available && !workspacesLoaded)}
             /* 实时轮次事实只覆盖当前会话：主区域已经在转圈时，这一行不该还挂在灰点上。 */
             liveRunningSessionId={
               runtime !== null && isRunning(runtime) ? runtime.sessionId : null

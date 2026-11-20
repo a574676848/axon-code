@@ -53,7 +53,7 @@ function planStepState(kind: PlanStepKind): StateDotState {
 }
 
 /** 计数摘要：只列非零项，用中点连接。 */
-function planSummary(steps: readonly { status: string }[]): string {
+export function planSummary(steps: readonly { status: string }[]): string {
   const tally: Record<PlanStepKind, number> = {
     completed: 0,
     running: 0,

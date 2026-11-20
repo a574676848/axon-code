@@ -217,7 +217,8 @@ export interface ReadFramesOptions {
    * 只读尾窗。
    *
    * 折叠行只要「这一轮最近发生过什么」：工具类别摘要与收口结论都在尾部，而整轮读会
-   * 为一条折叠行付出几十次往返。展开才读整轮（`tailOnly` 为假）。
+   * 为一条折叠行付出几十次往返。展开才读整轮（`tailOnly` 为假）。首屏读法同样认它：
+   * 非最新那几条在跑的新轮拿到尾窗就够，不必各自补一遍整轮。
    */
   tailOnly?: boolean;
   /** 只读第一页（含过程的头部）：折叠行只要工具类别，不把整轮拖回来。 */
@@ -292,6 +293,12 @@ export function readInteractionFramesTailFirst(
     };
     options.onTail(tailRead);
     settleTail(tailRead);
+
+    /*
+     * 只读尾窗的调用方到此为止：非最新那几条在跑的轮停在折叠形态，整轮回放等于为一段
+     * 根本不渲染的过程付几十次串行往返。展开时另有 `unfoldTurn` 走整轮读。
+     */
+    if (options.tailOnly === true) return tailRead;
 
     /*
      * 尾窗没被填满：这一轮的所有帧都已经在这里，不必再补前段。

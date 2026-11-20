@@ -22,6 +22,9 @@ use super::projection::build_workspaces;
 /// 状态文件里越积越多。
 const PENDING_TTL_MS: u64 = 24 * 60 * 60 * 1_000;
 
+/// 会话路由前缀（完整路径，`/api/v1` 已含）。
+const SESSIONS_PATH: &str = "/api/v1/sessions";
+
 /// 新建会话的落库结论：工作区快照与服务端刚给出的会话标识。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -363,6 +366,13 @@ pub fn execute_session_set_archived(
 }
 
 /// 在给定数据源上重命名车道。
+///
+/// 标题是 `sessions.title` 上的一份三端共用事实：先写网关，成功之后才更新本地镜像。
+/// 反过来（先本地、再网关）会在网关失败时留下「桌面改名了、TUI 与命令行还是旧名」的
+/// 分叉；本地镜像只负责在网关读不到时兜底展示用户的选择，它不是第二份事实。
+///
+/// 草稿例外：草稿只存在于本地状态里，服务端从未登记过它，发 PATCH 只会拿到 404，
+/// 因此草稿的重命名仍然只写本地镜像。
 pub fn execute_session_rename(
     source: &dyn SessionSource,
     session_id: &str,
@@ -372,12 +382,66 @@ pub fn execute_session_rename(
     if trimmed.is_empty() {
         return Err("车道标题不能为空".to_string());
     }
+    // 「读 → 网络 → 写」之间不能吞掉别人的本地变更，因此本地状态在网络往返之后才取。
+    let previous = load_state().session_title.get(session_id).cloned();
+    if !is_draft_id(session_id) {
+        patch_session_title(session_id, trimmed)?;
+    }
     let mut desktop = load_state();
     desktop
         .session_title
         .insert(session_id.to_string(), trimmed.to_string());
-    save_state(&desktop)?;
+    if let Err(error) = save_state(&desktop) {
+        return Err(rollback_gateway_title(
+            previous.as_deref(),
+            trimmed,
+            error,
+            |title| patch_session_title(session_id, title),
+        ));
+    }
     build_workspaces(source)
+}
+
+/// 把标题写进运行态 `sessions.title`。
+///
+/// 404 是「这条会话还不在运行态登记里」：它与路由缺失（后台版本过旧）修复动作不同，
+/// 必须分开说。400 只会是空标题：网关不接受没有名字的车道。
+fn patch_session_title(session_id: &str, title: &str) -> Result<(), String> {
+    let path = format!(
+        "{SESSIONS_PATH}/{}",
+        crate::workspace_files_gateway::percent_encode(session_id)
+    );
+    let (status, response) =
+        crate::gateway::patch_raw_at(&path, &serde_json::json!({ "title": title }))?;
+    match status {
+        200..=299 => Ok(()),
+        404 => Err("会话尚未在运行态登记，重命名要等这条会话产生首条消息后才能保存".to_string()),
+        400 => Err("网关拒绝了这次重命名请求：标题不能为空".to_string()),
+        _ => Err(crate::gateway::gateway_status_message(status, &response)),
+    }
+}
+
+/// 本地镜像落盘失败时的回滚：把网关标题写回改名前的值，并如实说明两端此刻的状态。
+///
+/// 从没在本机改过名（`previous` 为空）时无法原样写回：那一份标题来自首条入站消息。
+/// 此时伪造一次「回滚」只会让两端各说一套，如实报告「网关已是新标题」更诚实。
+pub(super) fn rollback_gateway_title(
+    previous: Option<&str>,
+    applied: &str,
+    error: String,
+    mut patch: impl FnMut(&str) -> Result<(), String>,
+) -> String {
+    let Some(previous) = previous else {
+        return format!(
+            "本地标题镜像写入失败：{error}（网关侧标题已是「{applied}」，重开界面以网关为准）"
+        );
+    };
+    match patch(previous) {
+        Ok(()) => format!("本地标题镜像写入失败：{error}；已把网关标题回滚为「{previous}」"),
+        Err(rollback) => format!(
+            "本地标题镜像写入失败：{error}；网关标题回滚失败：{rollback}（当前为「{applied}」）"
+        ),
+    }
 }
 
 /// 在给定数据源上保存某个工作区下车道的自定义顺序。

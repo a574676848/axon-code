@@ -23,7 +23,7 @@ test('完整载荷给出结论、类别与可重试', () => {
     assert.equal(report.model, 'LongCat-2.5-Preview');
     assert.equal(report.httpStatus, 400);
     assert.equal(report.retryable, true);
-    assert.equal(failureHeadline(report), '请求未被 Provider 接受');
+    assert.equal(failureHeadline(report), '请求未被供应商接受');
 });
 
 test('被截断的载荷仍然解出同样的事实，而不是把半截 JSON 甩给用户', () => {
@@ -72,14 +72,14 @@ test('认不出的错误码回落到通用标题', () => {
     }), '本轮执行未完成');
 });
 
-test('Provider 错误信封直接解出结论与错误码', () => {
+test('供应商错误信封直接解出结论与错误码', () => {
     const report = parseFailureReport(
         '本轮执行未完成：{"code":"UNKNOWN_FIELD","message":"未知请求字段：reasoning_summary","data":{"field":"reasoning_summary"},"traceId":"trace_6aa19ae6"}；reason=provider_streaming_runner:provider_error（runtime_failed）',
     );
     assert.ok(report !== null);
     assert.equal(report.reason, '未知请求字段：reasoning_summary');
     assert.equal(report.code, 'UNKNOWN_FIELD');
-    assert.equal(failureHeadline(report), '请求字段不被 Provider 接受');
+    assert.equal(failureHeadline(report), '请求字段不被供应商接受');
 });
 
 test('运行时失败事件映射成同一张卡的字段', () => {
@@ -94,7 +94,7 @@ test('运行时失败事件映射成同一张卡的字段', () => {
     assert.equal(report.reason, '上游返回 503');
     assert.equal(report.httpStatus, 503);
     assert.equal(report.retryable, true);
-    assert.equal(failureHeadline(report), 'Provider 请求失败');
+    assert.equal(failureHeadline(report), '供应商请求失败');
     assert.equal(failureReportFromRuntimeFailure({}), null);
 });
 
@@ -103,15 +103,15 @@ test('错误码到标题的映射覆盖各家族，认不出时回落到通用�
         failureHeadline({
             reason: 'x', category: '', code, provider: '', model: '', httpStatus: null, retryable: false, raw: '',
         });
-    assert.equal(headline('unknown_field'), '请求字段不被 Provider 接受');
+    assert.equal(headline('unknown_field'), '请求字段不被供应商接受');
     assert.equal(headline('context_length_exceeded'), '上下文超出窗口');
-    assert.equal(headline('rate_limit_exceeded'), 'Provider 限流');
-    assert.equal(headline('insufficient_quota'), 'Provider 额度不足');
+    assert.equal(headline('rate_limit_exceeded'), '供应商限流');
+    assert.equal(headline('insufficient_quota'), '供应商额度不足');
     assert.equal(headline('authentication_error'), '凭据无效');
     assert.equal(headline('permission_denied'), '凭据权限不足');
-    assert.equal(headline('request_timeout'), 'Provider 响应超时');
-    assert.equal(headline('internal_error'), 'Provider 内部错误');
-    assert.equal(headline('image_too_small'), '图片不符合 Provider 要求');
+    assert.equal(headline('request_timeout'), '供应商响应超时');
+    assert.equal(headline('internal_error'), '供应商内部错误');
+    assert.equal(headline('image_too_small'), '图片不符合供应商要求');
     assert.equal(headline('model_not_found'), '模型不可用');
     assert.equal(headline('weird_code'), '本轮执行未完成');
 });

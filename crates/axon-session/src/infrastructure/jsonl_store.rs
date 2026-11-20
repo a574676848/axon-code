@@ -191,12 +191,38 @@ impl JsonlThreadEventStore {
 
     /// 这条 thread 是否留下了未完成重写的临时文件。
     ///
-    /// 有临时文件却一条事件都读不到，说明重写崩在了替换分片的中间：读侧必须报错，
-    /// 不能把它当成「从不存在」的新会话重建，否则旧历史会被孤儿文件永久埋掉。
+    /// 有临时文件却一条事件都读不到，说明重写崩在了替换分片的中间：读侧必须先自愈一次，
+    /// 清不掉才报错，不能把它当成「从不存在」的新会话重建。
     pub fn thread_has_unfinished_write(root: &Path, thread_id: &str) -> bool {
         SHARD_STORE
             .has_stale_rewrite_temporaries(Self::thread_logical_path(root, thread_id))
             .unwrap_or(false)
+    }
+
+    /// 锁内自愈一次未完成重写的现场；清不掉时把错误交给读侧。
+    fn heal_unfinished_write(root: &Path, thread_id: &str) -> Result<(), String> {
+        SHARD_STORE
+            .recover_unfinished_rewrite(Self::thread_logical_path(root, thread_id))
+            .map_err(|_| format!("无法清理 thread {thread_id} 未完成重写的临时文件"))
+    }
+
+    /// 分片序号必须从 0 起连续。
+    ///
+    /// 缺口是重写替换到一半崩溃（或手工删块）的现场：按剩余分片继续投影只会安静地少一段
+    /// 历史，因此读侧如实报不完整，由调用方决定修复还是重建。
+    fn ensure_shards_contiguous(root: &Path, thread_id: &str) -> Result<(), String> {
+        let sequences = SHARD_STORE
+            .shard_sequences(Self::thread_logical_path(root, thread_id))
+            .map_err(|_| "无法读取 thread 事件 shard".to_owned())?;
+        for (expected, sequence) in sequences.iter().enumerate() {
+            let expected = u64::try_from(expected).unwrap_or(u64::MAX);
+            if *sequence != expected {
+                return Err(format!(
+                    "thread {thread_id} 的事件分片不完整：缺少序号 {expected}（下一步读到 {sequence}）"
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn read_file(path: &Path) -> Result<Vec<ThreadEventRecord>, String> {
@@ -296,6 +322,16 @@ impl ThreadEventStore for JsonlThreadEventStore {
     fn read_thread(&self, root: &Path, thread_id: &str) -> Result<Vec<ThreadEventRecord>, String> {
         // 只读本 thread 的分片：trait 默认实现会 read_all（整语料），恢复与会话命令
         // 一旦走到那条路径，单次读取就退化成 O(全部会话)。
+        //
+        // 读之前先做两件事：分片序号必须连续（缺口＝历史缺一段），以及「一条事件都没有
+        // 却留着重写临时文件」的崩溃现场要锁内自愈一次再重读。清不掉时把错误上抛。
+        Self::ensure_shards_contiguous(root, thread_id)?;
+        let records = Self::read_thread_full(root, thread_id)?;
+        if !records.is_empty() || !Self::thread_has_unfinished_write(root, thread_id) {
+            return Ok(records);
+        }
+        Self::heal_unfinished_write(root, thread_id)?;
+        Self::ensure_shards_contiguous(root, thread_id)?;
         Self::read_thread_full(root, thread_id)
     }
 
@@ -401,286 +437,7 @@ impl JsonlThreadEventStore {
     }
 }
 
+/// 单元测试独立成文：主文件贴 700 行硬限，测试不该占正文的行数。
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ThreadService;
-    use crate::domain::{
-        ThreadEvent, ThreadEventRecord, ThreadSettings, ThreadSource, Turn, TurnStatus,
-    };
-
-    fn record(thread_id: &str, sequence: u64) -> ThreadEventRecord {
-        ThreadEventRecord {
-            schema_version: crate::application::THREAD_EVENT_SCHEMA_VERSION,
-            thread_id: thread_id.to_owned(),
-            sequence,
-            recorded_at_ms: sequence,
-            event: ThreadEvent::ThreadNamed { name: None },
-        }
-    }
-
-    fn thread_started(thread_id: &str, sequence: u64) -> ThreadEventRecord {
-        ThreadEventRecord {
-            schema_version: crate::application::THREAD_EVENT_SCHEMA_VERSION,
-            thread_id: thread_id.to_owned(),
-            sequence,
-            recorded_at_ms: sequence,
-            event: ThreadEvent::ThreadStarted {
-                session_root_id: thread_id.to_owned(),
-                parent_thread_id: None,
-                forked_from_thread_id: None,
-                source: ThreadSource::CliRun,
-                ephemeral: false,
-                settings: ThreadSettings {
-                    cwd: "E:\\fixture".to_owned(),
-                    provider: "local".to_owned(),
-                    model: "model".to_owned(),
-                    selected_skill_name: None,
-                },
-            },
-        }
-    }
-
-    fn active_turn(thread_id: &str, sequence: u64) -> ThreadEventRecord {
-        ThreadEventRecord {
-            schema_version: crate::application::THREAD_EVENT_SCHEMA_VERSION,
-            thread_id: thread_id.to_owned(),
-            sequence,
-            recorded_at_ms: sequence,
-            event: ThreadEvent::TurnStarted {
-                turn: Turn {
-                    turn_id: format!("{thread_id}-active"),
-                    sequence: 0,
-                    status: TurnStatus::Active,
-                    history_items: Vec::new(),
-                    token_usage_json: None,
-                    started_at_ms: sequence,
-                    completed_at_ms: None,
-                    interrupted_at_ms: None,
-                    failure: None,
-                },
-            },
-        }
-    }
-
-    /// 只剩重写临时文件时不得当作「新会话」：这是崩溃现场，必须报错而不是重建。
-    #[test]
-    fn thread_with_only_rewrite_debris_is_not_treated_as_missing() {
-        let root = axon_test_support::test_temp_root().join(format!(
-            "axon-thread-debris-{}-{}",
-            std::process::id(),
-            axon_time::unix_now_ms()
-        ));
-        std::fs::create_dir_all(JsonlThreadEventStore::path(&root)).unwrap();
-        // 落盘文件名是编码后的 thread 前缀，这里从分片名反推同一前缀，保证临时文件命名口径一致。
-        let shard = JsonlThreadEventStore::shard_path(&root, "debris", 0);
-        let file_name = shard.file_name().unwrap().to_string_lossy().into_owned();
-        let prefix = file_name.split('.').next().unwrap().to_owned();
-        let temporary = shard.with_file_name(format!("{prefix}.rewrite0.tmp"));
-        std::fs::write(&temporary, b"{}").unwrap();
-        assert!(
-            JsonlThreadEventStore::thread_has_unfinished_write(&root, "debris"),
-            "临时文件必须被识别为未完成写入（{}）",
-            temporary.display()
-        );
-
-        let service = ThreadService::new(JsonlThreadEventStore);
-        let error = service
-            .read_thread_optional(&root, "debris")
-            .expect_err("有未完成写入痕迹时必须报错");
-        assert!(error.contains("不完整"), "{error}");
-    }
-
-    #[test]
-    fn activation_reads_latest_events_across_thread_shards() {
-        let root = axon_test_support::test_temp_root().join(format!(
-            "axon-thread-activation-{}-{}",
-            std::process::id(),
-            axon_time::unix_now_ms()
-        ));
-        let store = JsonlThreadEventStore;
-        std::fs::create_dir_all(JsonlThreadEventStore::path(&root)).unwrap();
-        std::fs::write(
-            JsonlThreadEventStore::shard_path(&root, "cross-shard", 0),
-            serde_json::to_string(&thread_started("cross-shard", 0)).unwrap() + "\n",
-        )
-        .unwrap();
-        std::fs::write(
-            JsonlThreadEventStore::shard_path(&root, "cross-shard", 1),
-            serde_json::to_string(&active_turn("cross-shard", 1)).unwrap() + "\n",
-        )
-        .unwrap();
-
-        let activation = store.read_thread_activation(&root, "cross-shard").unwrap();
-        let detail = ThreadService::new(store)
-            .read_thread(&root, "cross-shard")
-            .unwrap();
-
-        assert_eq!(activation.next_sequence, 2);
-        assert_eq!(
-            activation.active_turn_id.as_deref(),
-            Some("cross-shard-active")
-        );
-        assert_eq!(detail.turns.len(), 1);
-        assert_eq!(detail.turns[0].turn_id, "cross-shard-active");
-        assert_eq!(detail.turns[0].status, TurnStatus::Active);
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn append_rolls_thread_jsonl_when_shard_exceeds_limit() {
-        let root = axon_test_support::test_temp_root().join(format!(
-            "axon-thread-shard-{}-{}",
-            std::process::id(),
-            axon_time::unix_now_ms()
-        ));
-        let store = JsonlThreadEventStore;
-        let first_shard = JsonlThreadEventStore::shard_path(&root, "sharded-thread", 0);
-        std::fs::create_dir_all(first_shard.parent().unwrap()).unwrap();
-        let mut first_record = record("sharded-thread", 0);
-        first_record.event = ThreadEvent::ThreadNamed {
-            name: Some(String::new()),
-        };
-        let baseline_length = serde_json::to_string(&first_record).unwrap().len() as u64;
-        let name_length = usize::try_from(THREAD_SHARD_MAX_BYTES - baseline_length - 1).unwrap();
-        first_record.event = ThreadEvent::ThreadNamed {
-            name: Some("x".repeat(name_length)),
-        };
-        let first_line = serde_json::to_string(&first_record).unwrap();
-        std::fs::write(&first_shard, first_line + "\n").unwrap();
-        store.append(&root, &record("sharded-thread", 1)).unwrap();
-
-        let records = store.read_thread(&root, "sharded-thread").unwrap();
-        assert_eq!(
-            records.iter().map(|item| item.sequence).collect::<Vec<_>>(),
-            [0, 1]
-        );
-        assert!(JsonlThreadEventStore::shard_path(&root, "sharded-thread", 1).exists());
-
-        store
-            .replace_thread_with_checkpoint(&root, &record("sharded-thread", 1), 1)
-            .unwrap();
-        assert!(!JsonlThreadEventStore::shard_path(&root, "sharded-thread", 1).exists());
-        assert!(JsonlThreadEventStore::shard_path(&root, "sharded-thread", 0).exists());
-
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn oversize_event_occupies_its_own_shard() {
-        let root = axon_test_support::test_temp_root().join(format!(
-            "axon-thread-oversize-{}-{}",
-            std::process::id(),
-            axon_time::unix_now_ms()
-        ));
-        let store = JsonlThreadEventStore;
-        store.append(&root, &record("oversize-thread", 0)).unwrap();
-        assert!(JsonlThreadEventStore::shard_path(&root, "oversize-thread", 0).exists());
-
-        let mut oversize = record("oversize-thread", 1);
-        oversize.event = ThreadEvent::ThreadNamed {
-            name: Some("x".repeat(usize::try_from(THREAD_SHARD_MAX_BYTES).unwrap() + 1_024)),
-        };
-        store
-            .append(&root, &oversize)
-            .expect("超过分片预算的单条事件应独占新分片，而不是被拒绝");
-
-        assert!(
-            JsonlThreadEventStore::shard_path(&root, "oversize-thread", 1).exists(),
-            "超预算事件必须落进下一个分片"
-        );
-        assert_eq!(
-            store.read_thread(&root, "oversize-thread").unwrap().len(),
-            2,
-            "两条记录都必须保留"
-        );
-
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn rejects_single_event_beyond_hard_record_limit() {
-        let root = axon_test_support::test_temp_root().join(format!(
-            "axon-thread-hard-limit-{}-{}",
-            std::process::id(),
-            axon_time::unix_now_ms()
-        ));
-        let store = JsonlThreadEventStore;
-        let mut event = record("hard-limit-thread", 0);
-        event.event = ThreadEvent::ThreadNamed {
-            name: Some("x".repeat(usize::try_from(MAX_SINGLE_RECORD_BYTES).unwrap() + 1)),
-        };
-
-        assert!(
-            store.append(&root, &event).is_err(),
-            "超过单条记录硬上限必须拒绝写入"
-        );
-        assert!(!JsonlThreadEventStore::path(&root).exists());
-
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn rewrite_thread_with_records_replaces_and_clears_all_shards() {
-        let root = axon_test_support::test_temp_root().join(format!(
-            "axon-thread-rewrite-{}-{}",
-            std::process::id(),
-            axon_time::unix_now_ms()
-        ));
-        let store = JsonlThreadEventStore;
-        let first = record("rewrite-thread", 1);
-        let second = record("rewrite-thread", 2);
-        store.append(&root, &first).unwrap();
-        store.append(&root, &second).unwrap();
-        std::fs::create_dir_all(JsonlThreadEventStore::path(&root)).unwrap();
-        std::fs::write(
-            JsonlThreadEventStore::shard_path(&root, "rewrite-thread", 1),
-            format!("{}\n", serde_json::to_string(&second).unwrap()),
-        )
-        .unwrap();
-        assert!(JsonlThreadEventStore::shard_path(&root, "rewrite-thread", 1).exists());
-
-        store
-            .rewrite_thread_with_records(&root, "rewrite-thread", 2, std::slice::from_ref(&first))
-            .unwrap();
-        assert_eq!(
-            store.read_thread(&root, "rewrite-thread").unwrap(),
-            vec![first]
-        );
-        assert!(!JsonlThreadEventStore::shard_path(&root, "rewrite-thread", 1).exists());
-
-        store
-            .rewrite_thread_with_records(&root, "rewrite-thread", 1, &[])
-            .unwrap();
-        assert!(
-            store
-                .read_thread(&root, "rewrite-thread")
-                .unwrap()
-                .is_empty()
-        );
-        assert!(!JsonlThreadEventStore::shard_path(&root, "rewrite-thread", 0).exists());
-
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn long_thread_ids_use_bounded_stable_paths() {
-        let thread_id =
-            "task-session-task-1234567890--subagent--root_task-task-session-task-1234567890"
-                .repeat(8);
-        let first = JsonlThreadEventStore::thread_prefix(&thread_id);
-        let second = JsonlThreadEventStore::thread_prefix(&thread_id);
-
-        assert_eq!(first, second);
-        assert!(first.starts_with("thread-"));
-        assert!(first.len() <= 71);
-    }
-
-    #[test]
-    fn short_thread_ids_keep_legacy_paths() {
-        assert_eq!(
-            JsonlThreadEventStore::thread_prefix("short-thread"),
-            "73686f72742d746872656164"
-        );
-    }
-}
+#[path = "jsonl_store_tests.rs"]
+mod tests;

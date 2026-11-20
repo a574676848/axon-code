@@ -8,6 +8,10 @@
 # 多值可用逗号分隔（-Components backend,desktop），也可重复传参（-Components backend -Components desktop）。
 # 三种组合都会写入 launcher、current.json、axon.cmd 与用户 PATH，它们是桌面入口的硬前置。
 #
+# 随包 Skill 投放：装服务端组件时把仓库 docs\skills\operate-axon 覆盖到 $HOME\.axon\skills\operate-axon，
+# 与发行包安装脚本同一口径；覆盖时保留安装态 .revisions\（保留目录，不属于随包内容）。
+# 只装桌面端不投放 Skill：运行态读取的是服务端安装出来的那份。
+#
 # 迁移说明：-BinariesOnly 已移除，请改用 -Components backend。
 # 旧参数会跳过 UAC 与 daemon install 却仍执行 daemon start，语义自相矛盾；现在 UAC 与 Daemon 全部由组件集合决定。
 [CmdletBinding()]
@@ -125,6 +129,40 @@ function Start-AxonDesktop {
     } catch {
         Write-Host "[axon] 拉起桌面端失败：$($_.Exception.Message)。请手动运行 axon desktop。" -ForegroundColor Yellow
     }
+}
+
+<#
+ * 投放随包 Skill：仓库里的 docs\skills\operate-axon 就是安装态 $HOME\.axon\skills\operate-axon 的内容。
+ *
+ * 只改仓库副本运行时读不到：运行态读的是安装态那一份，因此源码安装必须自己投放。
+ * 覆盖走「暂存目录 + 目录替换」而不是直接往目标里拷：半拷贝崩溃会留下缺文件的 Skill。
+ * 安装态 `.revisions\` 是保留目录（加载与删除路径都禁止把它当成技能名），可能来自历史版本
+ * 或未来扩展；它不属于随包内容，替换前先移出、替换后原样放回，既不删除也不回填。
+#>
+function Install-BundledSkill([string]$RepoRoot) {
+    $skillName = "operate-axon"
+    $source = Join-Path $RepoRoot "docs\skills\$skillName"
+    if (-not (Test-Path (Join-Path $source "SKILL.md") -PathType Leaf)) {
+        Write-Host "[axon] 仓库缺少 docs\skills\$skillName，跳过随包 Skill 投放。" -ForegroundColor Yellow
+        return
+    }
+    $skillsDir = Join-Path $HOME ".axon\skills"
+    $target = Join-Path $skillsDir $skillName
+    $revisions = Join-Path $target ".revisions"
+    $savedRevisions = $null
+    New-Item -ItemType Directory -Force $skillsDir | Out-Null
+    if (Test-Path -LiteralPath $revisions -PathType Container) {
+        $savedRevisions = Join-Path $skillsDir ".$skillName.revisions.$PID"
+        Remove-Item -LiteralPath $savedRevisions -Recurse -Force -ErrorAction SilentlyContinue
+        Move-Item -LiteralPath $revisions -Destination $savedRevisions -Force
+    }
+    $staging = Join-Path $skillsDir ".$skillName.tmp.$PID"
+    Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+    Copy-Item -LiteralPath $source -Destination $staging -Recurse -Force
+    Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
+    Move-Item -LiteralPath $staging -Destination $target -Force
+    if ($savedRevisions) { Move-Item -LiteralPath $savedRevisions -Destination $revisions -Force }
+    Write-Host "[axon] 随包 Skill 已投放到 $target" -ForegroundColor Green
 }
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -440,6 +478,8 @@ try {
      * 不写 config.toml、不注册计划任务、不启动 Daemon。
     #>
     if ($plan.InstallBackend) {
+        # 先投放 Skill 再拉起 Daemon：运行态第一次读技能清单时就能看到随包手册。
+        Install-BundledSkill $root
         $configPath = Join-Path $HOME ".axon\config.toml"
         if (-not (Test-Path $configPath -PathType Leaf) -or (Get-Item $configPath).Length -eq 0) {
             & $launcherPath setup --provider-name openai --model gpt-4o --non-interactive --no-validate | Out-Null

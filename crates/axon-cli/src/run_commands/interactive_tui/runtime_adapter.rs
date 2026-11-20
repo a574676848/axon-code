@@ -164,6 +164,15 @@ impl AgentTuiRuntimeAdapter for CliAgentTuiRuntimeAdapter {
         _request: &AgentTuiLaunchRequest,
         session_id: &str,
     ) -> Option<AgentTuiRunOutput> {
+        // `/sessions` 选中会话就是「下次接着聊这一条」：这里与 `axon sessions resume` 走
+        // 同一个恢复指针写入入口，`--continue` 才会接续用户刚切过去的会话。
+        // 写指针失败不阻断历史回放（视图仍然要能打开），但必须留痕：静默失败会让
+        // `--continue` 继续指向切换前的那条会话。
+        if let Some(config_path) = self.config_path.as_deref()
+            && let Err(error) = crate::run_commands::select_resume_session(config_path, session_id)
+        {
+            axon_logger::warning(&format!("TUI 切换会话未写入恢复指针：{error}"));
+        }
         super::session_history::load_session_history(self.config_path.as_deref(), session_id)
     }
 

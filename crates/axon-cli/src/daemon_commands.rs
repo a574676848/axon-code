@@ -208,12 +208,19 @@ fn run_service_action(action: ServiceAction) -> crate::CliRunResult {
         ServiceAction::Start => daemon_service_manager::start(&config_path, &runtime_dir),
         ServiceAction::Stop => daemon_service_manager::stop(&runtime_dir),
         ServiceAction::Status => {
+            let running = daemon_service_manager::service_running(&runtime_dir);
+            // 进程在但 IPC 不通是不可用状态：必须非零退出，否则运维会照着 exit 0 判断健康。
+            let health = probe_health(DEFAULT_ENDPOINT);
+            let ipc_ok = health.is_ok();
             let report = serde_json::json!({
                 "installed": daemon_service_manager::installed(),
-                "running": daemon_service_manager::service_running(&runtime_dir),
+                "running": running,
+                "ipcOk": ipc_ok,
+                "runtimeSchemaVersion": runtime_schema_version(&runtime_dir),
+                "healthError": health.err(),
             });
             return crate::CliRunResult {
-                exit_code: 0,
+                exit_code: u8::from(running && !ipc_ok),
                 stdout: format!("{report}\n"),
                 stderr: String::new(),
             };
@@ -260,6 +267,47 @@ fn send_request(endpoint: &str, command: ProtocolCommand) -> crate::CliRunResult
             "无法连接 Axon Daemon（IPC 端点 {endpoint}）：{error}\n"
         )),
     }
+}
+
+/// 探活：向 Daemon 发一次 `GetHealth`，返回其正文。
+///
+/// 「进程活着」不等于「服务可用」：IPC 未绑定、运行态库版本不兼容、进程僵死时进程仍在，
+/// 但所有命令都不会成功。启动与状态判定都必须以这条探活为准。
+pub(crate) fn probe_health(endpoint: &str) -> Result<serde_json::Value, String> {
+    let request = DaemonRequest {
+        message_type: "command".to_owned(),
+        request_id: format!("cli-health-{}", now_ms()),
+        protocol_version: axon_protocol::DAEMON_PROTOCOL_VERSION,
+        client_id: "axon-cli".to_owned(),
+        session_id: None,
+        command: ProtocolCommand::GetHealth,
+    };
+    let endpoint = resolve_daemon_endpoint(endpoint, None)?;
+    let mut client = JsonlIpcClient::connect(&endpoint)
+        .map_err(|error| format!("连接 Daemon IPC 失败：{error}"))?;
+    let response = client
+        .send_with_timeout(&request, DAEMON_IPC_TIMEOUT)
+        .map_err(|error| format!("Daemon 健康查询超时或失败：{error}"))?;
+    if !response.ok {
+        return Err(format!("Daemon 拒绝健康查询：{}", response.body));
+    }
+    Ok(response.body)
+}
+
+/// 读取运行态库记录的 schema 版本；库不存在或读不出来时为空。
+///
+/// 只读打开：诊断路径不得触发建库或迁移，否则「看状态」会顺手改掉现场。
+pub(crate) fn runtime_schema_version(runtime_dir: &std::path::Path) -> Option<i64> {
+    let path = runtime_dir.join("control.sqlite3");
+    if !path.is_file() {
+        return None;
+    }
+    let connection =
+        rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .ok()?;
+    connection
+        .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+        .ok()
 }
 
 pub(crate) fn now_ms() -> u64 {

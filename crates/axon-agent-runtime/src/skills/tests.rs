@@ -122,4 +122,46 @@ fn renderer_lists_official_skill_contract() {
     let report = SkillsRenderer::render_available(&outcome, SkillRenderBudget::default());
     assert!(report.text.contains("digest:"));
     assert!(report.text.contains("skill://workspace/review"));
+    assert!(
+        !report.text.contains("load_errors="),
+        "没有加载失败时不得出现计数行：{}",
+        report.text
+    );
+}
+
+/// 技能加载失败必须在渲染文本里留痕：模型看不到日志，只能读这段清单。
+#[test]
+fn renderer_surfaces_skill_load_error_count() {
+    let temp = axon_test_support::test_temp_dir();
+    write_skill(temp.path(), "review", "Review code", "Review body");
+    // 缺 frontmatter 的目录会被加载器判为无效并记一条错误。
+    let broken = temp.path().join("broken");
+    fs::create_dir_all(&broken).unwrap();
+    fs::write(broken.join("SKILL.md"), "没有 frontmatter 的正文").unwrap();
+
+    let outcome = SkillLoader::load_roots(&[SkillRoot::new(temp.path(), SkillScope::Workspace, 1)]);
+    assert_eq!(outcome.errors.len(), 1, "{:?}", outcome.errors);
+
+    let report = SkillsRenderer::render_available(&outcome, SkillRenderBudget::default());
+    assert_eq!(report.errors, 1);
+    assert!(
+        report.text.trim_end().ends_with("load_errors=1"),
+        "计数行必须落在渲染文本尾部：{}",
+        report.text
+    );
+}
+
+/// 一张技能都没加载成功时同样要留下计数，不能渲染成空串。
+#[test]
+fn renderer_surfaces_skill_load_error_without_any_listed_skill() {
+    let temp = axon_test_support::test_temp_dir();
+    let broken = temp.path().join("broken");
+    fs::create_dir_all(&broken).unwrap();
+    fs::write(broken.join("SKILL.md"), "没有 frontmatter 的正文").unwrap();
+
+    let outcome = SkillLoader::load_roots(&[SkillRoot::new(temp.path(), SkillScope::Workspace, 1)]);
+    let report = SkillsRenderer::render_available(&outcome, SkillRenderBudget::default());
+
+    assert_eq!(report.listed, 0);
+    assert_eq!(report.text, "load_errors=1\n");
 }

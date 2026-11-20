@@ -1,6 +1,6 @@
 //! MCP OAuth 授权流程 HTTP 层：metadata 入口、授权 URL、本地 callback 与 token 端点交互。
 //!
-//! 该模块承载 MCP 2026-07-28 授权章节的强制校验：
+//! 该模块承载 MCP 授权草案（实现参考 2026-07-28，协商版本 2025-11-25）授权章节的强制校验：
 //! 授权服务器 metadata 必须来自真实的发现端点（禁止合成 `/authorize`、`/token` 回退），
 //! 授权响应在授权服务器声明支持时校验 RFC 9207 `iss` 参数。
 
@@ -96,7 +96,7 @@ pub(crate) struct OAuthCallbackOutcome {
 
 /// 发现授权服务器 metadata，供后续授权流程复用。
 ///
-/// MCP 2026-07-28 要求客户端在 OAuth Authorization Server Metadata 与 OpenID Connect
+/// MCP 授权草案（实现参考 2026-07-28，协商版本 2025-11-25）要求客户端在 OAuth Authorization Server Metadata 与 OpenID Connect
 /// Discovery 之间双发现，且接受任何通过 issuer 一致性校验的文档。全部候选不可用时
 /// 直接失败，不再合成授权端点。
 pub(crate) fn provider_metadata(

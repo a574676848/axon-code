@@ -431,7 +431,8 @@ MCP server 只从用户级与当前 Workspace 配置加载：
 
 `bearerTokenEnvVar` 只保存环境变量名，运行时读取变量值并生成 `Authorization: Bearer <token>`；配置、CLI JSON 输出和资源投影都不会输出 token 原文。
 
-端点返回 401，或返回 403 且声明 `error="insufficient_scope"` 时，Axon 按 MCP `2026-07-28` 授权规范进入 OAuth 闭环：CLI 与 TUI `/mcp` 会给出 `axon mcp login <server>` / `/mcp login <server>` 引导，凭据与动态注册结果保存在 `~/.axon/mcp-oauth/`。完整流程（元数据发现、客户端注册优先级、scope 选择、issuer 校验）见 [MCP 集成](./mcp.md)。
+端点返回 401，或返回 403 且声明 `error="insufficient_scope"` 时，Axon 按 MCP 授权流程（协商版本
+`2025-11-25`，实现参考 `2026-07-28` 草案）进入 OAuth 闭环：CLI 与 TUI `/mcp` 会给出 `axon mcp login <server>` / `/mcp login <server>` 引导，凭据与动态注册结果保存在 `~/.axon/mcp-oauth/`。完整流程（元数据发现、客户端注册优先级、scope 选择、issuer 校验）见 [MCP 集成](./mcp.md)。
 
 server 名会规范化为小写下划线形式的稳定 `server_id`。User 配置优先于 Workspace 配置；User 已提供同名或规范化后同 ID 的 server 时，不再加载 Workspace 项。详细说明见 [MCP 集成](./mcp.md)。
 

@@ -247,7 +247,7 @@ export const OnboardingFlow: React.FC<{ onDone: () => void }> = ({ onDone }) => 
         <Text tone="secondary" size="meta" className="block max-w-lg leading-5">
           {STAGE_DESCRIPTION[stage]}
         </Text>
-        <span className="block text-[11px] leading-4 text-text-tertiary">
+        <span className="block text-micro text-text-tertiary">
           第 {STAGE_STEP[stage]} 步，共 4 步 · {STAGE_TITLE[stage]}
         </span>
 
@@ -388,7 +388,7 @@ export const OnboardingFlow: React.FC<{ onDone: () => void }> = ({ onDone }) => 
           )}
         </div>
 
-        <span className="block max-w-lg text-[11px] leading-4 text-text-tertiary">
+        <span className="block max-w-lg text-micro text-text-tertiary">
           跳过后面板处于未连接状态，可随后在设置里的「连接」分区配置后端。
         </span>
         <Button

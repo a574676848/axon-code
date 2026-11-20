@@ -1,4 +1,7 @@
-//! MCP OAuth 2.1 授权服务器发现与协议校验（对齐 MCP 2026-07-28 授权章节）。
+//! MCP OAuth 2.1 授权服务器发现与协议校验。
+//!
+//! 握手协商的协议版本是 [`MCP_TRANSPORT_PROTOCOL_VERSION`]（`2025-11-25`）；授权章节按
+//! `2026-07-28` 草案实现，因此这里写的「草案要求」不是当前协商版本的要求，而是前瞻实现。
 //!
 //! 覆盖规范中的关键 MUST 项：
 //! - 授权服务器 metadata 多端点发现优先级（RFC 8414 path insertion、OpenID Connect path insertion 与 path appending）；
@@ -47,7 +50,8 @@ pub(crate) struct DiscoveredAuthorizationServerMetadata {
     pub scopes_supported: Vec<String>,
 }
 
-/// 按 MCP 2026-07-28 优先级构造授权服务器 metadata 端点候选。
+/// 按 MCP 授权草案（实现参考 `2026-07-28`，协商版本 `2025-11-25`）的优先级构造授权服务器
+/// metadata 端点候选。
 ///
 /// 带 path 的 issuer 依次尝试 OAuth Authorization Server Metadata path insertion、
 /// OpenID Connect Discovery path insertion 与 path appending；无 path 的 issuer

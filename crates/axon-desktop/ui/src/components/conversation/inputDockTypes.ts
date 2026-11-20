@@ -34,6 +34,13 @@ export interface InputDockProps {
   };
   /** 是否可提交。 */
   enabled: boolean;
+  /**
+   * 只读会话。
+   *
+   * 目标执行这类后台会话由后台驱动，模型选择器整块不渲染：留下一个点不动的下拉，
+   * 等于把「这里能换模型」写在屏幕上。只读判定由调用方读网关能力位后传下来。
+   */
+  readOnly?: boolean;
   /** 正在提交。 */
   busy: boolean;
   /**

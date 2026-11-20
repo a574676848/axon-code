@@ -44,7 +44,9 @@ pub(super) fn count_expired_rows(
             connection,
             &format!(
                 "SELECT COUNT(*) FROM inbox
-                 WHERE terminal_kind IN ({terminal}) AND received_at_ms < ?1",
+                 WHERE terminal_kind IN ({terminal})
+                   AND source_channel = 'agent'
+                   AND received_at_ms < ?1",
                 terminal = quoted_list(&INTERACTION_TERMINAL_KINDS),
             ),
             cutoff_ms,

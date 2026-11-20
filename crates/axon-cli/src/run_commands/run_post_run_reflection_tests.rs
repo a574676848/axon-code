@@ -7,9 +7,10 @@ use std::{
 };
 
 use axon_agent_runtime::{
-    AgentModelMessage, AgentModelPayload, AgentTurnEvent, AgentTurnEventKind, ProviderToolCall,
-    SEMANTIC_SALIENCE_SCHEMA_VERSION, SelfIterationRuntime, SemanticMemoryCandidateType,
-    SemanticSalienceAssessment, SemanticSalienceSignals, TurnOutcomeEnvelope,
+    AgentModelMessage, AgentModelPayload, AgentTurnEvent, AgentTurnEventKind, ExplicitSignals,
+    ProviderToolCall, ReflectionTier, SEMANTIC_SALIENCE_SCHEMA_VERSION, SelfIterationRuntime,
+    SemanticMemoryCandidateType, SemanticSalienceAssessment, SemanticSalienceSignals,
+    TurnOutcomeEnvelope, TurnTrace,
 };
 use axon_config::{AxonConfig, ChannelBalancerConfig, ModelConfig, ProviderConfig};
 use axon_domain::{SessionId, TurnId};
@@ -23,7 +24,10 @@ use super::{
     run_json_wire_events::CompletedRunWireEventsInput,
     run_post_run_governance_worker::run_governance_worker_with_request,
     run_progress::RunProgressSink,
-    run_self_iteration_subagent::self_iteration_input,
+    run_reflection_batch::{BatchAdmission, admit_reflection_batch, reflection_cards},
+    run_self_iteration_subagent::{
+        SelfIterationExecutionOptions, execute_self_iteration_subagent, self_iteration_input,
+    },
     run_subagent_executor::{
         RunSubagentExecutionInput, RunSubagentExecutionOutput, RunSubagentExecutionStatus,
         RunSubagentExecutor,
@@ -441,3 +445,251 @@ fn receipt(
 #[path = "run_post_run_reflection_fixtures.rs"]
 mod fixtures;
 use fixtures::*;
+
+// ── 反思准入与轨迹寻址 ────────────────────────────────────────────────────────
+
+/// 拿不到轮序时轨迹必须不可寻址：`trace:<session>:0` 会让同一会话所有轮撞号。
+#[test]
+fn missing_turn_sequence_leaves_the_trace_unaddressable() {
+    let root = test_root("trace-addressable");
+    let config_path = root.join("config.toml");
+    let request = request_fixture(root.clone(), config_path);
+    let record = crate::run_commands::run_session_store::RunSessionRecord::from_partial(
+        &request,
+        &crate::run_commands::run_session_store::RunSessionPartialInput {
+            provider: "fixture".to_owned(),
+            model: "fixture-chat".to_owned(),
+            tool_calls: Vec::new(),
+            tool_receipts: Vec::new(),
+            reasoning_messages: Vec::new(),
+            turn_events: Vec::new(),
+        },
+    );
+
+    assert_eq!(
+        super::run_post_run_artifacts::trace_id_for(&record, None),
+        "",
+        "轮序缺失必须留空串，不能用 :0 兜底"
+    );
+    assert_eq!(
+        super::run_post_run_artifacts::trace_id_for(&record, Some(3)),
+        format!("trace:{}:3", record.session_id)
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// 不可寻址的轮次不入池，但候选数要进入可见的 skipped 计数。
+#[test]
+fn unaddressable_trace_skips_the_pool_and_counts_candidates() {
+    let root = test_root("unaddressable-trace");
+    let config_path = root.join("config.toml");
+    let request = request_fixture(root.clone(), config_path);
+    let response = response_with_receipts(&[receipt(
+        "call-edit",
+        "builtin.edit",
+        "completed",
+        "patched files",
+        true,
+    )]);
+    let envelope = build_turn_outcome(&request, &response);
+    let assessment = assessment_for_outcome(&envelope);
+    let trace = TurnTrace::from_outcome(&envelope, "", 1_000, ExplicitSignals::default());
+    let cards = reflection_cards(&trace, Some(&assessment), &request.cwd);
+    assert!(!cards.is_empty(), "夹具必须产出至少一张卡");
+
+    let outcome = admit_reflection_batch(
+        &request,
+        &trace,
+        cards.clone(),
+        Some(&assessment),
+        &envelope,
+    );
+
+    assert!(matches!(outcome.admission, BatchAdmission::NotApplicable));
+    assert_eq!(outcome.skipped, u64::try_from(cards.len()).unwrap());
+    let pool_path = axon_agent_runtime::ReflectionPoolStoreRuntime::resolve_store_path(
+        super::run_session_store::resolved_axon_root(&request.config_path).unwrap(),
+    );
+    assert!(
+        axon_agent_runtime::ReflectionPoolStoreRuntime::load_entries(pool_path).is_empty(),
+        "不可寻址的轮次不得把卡片放进池里"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Skip 档里满足执行类三维底线的强卡仍要接纳：组织结论当场就该记住。
+#[test]
+fn skip_tier_strong_card_is_still_admitted() {
+    let root = test_root("skip-tier-strong");
+    let config_path = root.join("config.toml");
+    let request = request_fixture(root.clone(), config_path);
+    let response = response_with_receipts(&[
+        receipt(
+            "call-edit",
+            "builtin.edit",
+            "completed",
+            "patched files",
+            true,
+        ),
+        receipt(
+            "call-test",
+            "builtin.shell_command",
+            "completed",
+            "验证通过",
+            false,
+        ),
+    ]);
+    let envelope = build_turn_outcome(&request, &response);
+    let mut assessment = assessment_for_outcome(&envelope);
+    // 档位判 Skip，但三维仍在线：这正是「Skip 档强卡」的形态。
+    assessment.should_reflect = false;
+    assessment.candidate_types.clear();
+    assessment.evidence_refs.clear();
+    assert_eq!(assessment.reflection_tier(&envelope), ReflectionTier::Skip);
+
+    let trace = TurnTrace::from_outcome(
+        &envelope,
+        "trace:skip-strong:7",
+        1_000,
+        ExplicitSignals::default(),
+    );
+    let cards = reflection_cards(&trace, Some(&assessment), &request.cwd);
+    assert_eq!(cards.len(), 1);
+    let card_id = cards[0].card_id.clone();
+
+    let outcome = admit_reflection_batch(&request, &trace, cards, Some(&assessment), &envelope);
+
+    assert_eq!(outcome.skipped, 0, "强卡不得计入 skipped");
+    let pool_path = axon_agent_runtime::ReflectionPoolStoreRuntime::resolve_store_path(
+        super::run_session_store::resolved_axon_root(&request.config_path).unwrap(),
+    );
+    let admitted = match &outcome.admission {
+        BatchAdmission::Run(batch) => batch.iter().any(|card| card.card_id == card_id),
+        BatchAdmission::Deferred => {
+            axon_agent_runtime::ReflectionPoolStoreRuntime::load_entries(&pool_path)
+                .iter()
+                .any(|entry| entry.card.card_id == card_id)
+        }
+        BatchAdmission::NotApplicable => false,
+    };
+    assert!(
+        admitted,
+        "Skip 档的强卡必须被接纳（skipped={}）",
+        outcome.skipped
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// 达不到执行类底线的弱卡在 Skip 档里不入池，但要计入可见 skipped。
+#[test]
+fn skip_tier_weak_card_counts_as_skipped() {
+    let root = test_root("skip-tier-weak");
+    let config_path = root.join("config.toml");
+    let request = request_fixture(root.clone(), config_path);
+    let response = response_with_receipts(&[receipt(
+        "call-edit",
+        "builtin.edit",
+        "completed",
+        "patched files",
+        true,
+    )]);
+    let envelope = build_turn_outcome(&request, &response);
+    let mut assessment = assessment_for_outcome(&envelope);
+    assessment.should_reflect = false;
+    assessment.candidate_types.clear();
+    assessment.evidence_refs.clear();
+    // 三维全部为 0：既判 Skip，也不满足执行类底线。
+    assessment.signals = SemanticSalienceSignals::default();
+    assert_eq!(assessment.reflection_tier(&envelope), ReflectionTier::Skip);
+
+    let trace = TurnTrace::from_outcome(
+        &envelope,
+        "trace:skip-weak:8",
+        1_000,
+        ExplicitSignals::default(),
+    );
+    let cards = reflection_cards(&trace, Some(&assessment), &request.cwd);
+    assert_eq!(cards.len(), 1);
+    let card_id = cards[0].card_id.clone();
+
+    let outcome = admit_reflection_batch(&request, &trace, cards, Some(&assessment), &envelope);
+
+    assert_eq!(outcome.skipped, 1, "弱卡必须计入 skipped");
+    let pool_path = axon_agent_runtime::ReflectionPoolStoreRuntime::resolve_store_path(
+        super::run_session_store::resolved_axon_root(&request.config_path).unwrap(),
+    );
+    assert!(
+        !axon_agent_runtime::ReflectionPoolStoreRuntime::load_entries(&pool_path)
+            .iter()
+            .any(|entry| entry.card.card_id == card_id),
+        "弱卡不得入池"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// 同一 card_id 的跨轮卡片入池前必须被拒收，不能覆盖或重复排队。
+#[test]
+fn duplicate_card_id_is_rejected_before_pool_append() {
+    let root = test_root("duplicate-card-id");
+    let config_path = root.join("config.toml");
+    let request = request_fixture(root.clone(), config_path);
+    let response = response_with_receipts(&[receipt(
+        "call-edit",
+        "builtin.edit",
+        "completed",
+        "patched files",
+        true,
+    )]);
+    let envelope = build_turn_outcome(&request, &response);
+    let assessment = assessment_for_outcome(&envelope);
+    let trace =
+        TurnTrace::from_outcome(&envelope, "trace:dup:9", 1_000, ExplicitSignals::default());
+    let cards = reflection_cards(&trace, Some(&assessment), &request.cwd);
+    let card = cards[0].clone();
+
+    // 池里先放一条同 card_id、不同轮次的条目。
+    let pool_path = axon_agent_runtime::ReflectionPoolStoreRuntime::resolve_store_path(
+        super::run_session_store::resolved_axon_root(&request.config_path).unwrap(),
+    );
+    let seeded = axon_agent_runtime::ReflectionPoolEntry {
+        correction_bp: assessment.signals.correction_strength,
+        turn_id: "turn:someone-else".to_owned(),
+        trace_id: card.trace_id.clone(),
+        enqueued_at_ms: 1,
+        card: card.clone(),
+        bucket: axon_agent_runtime::pool_bucket_key(&request.cwd.to_string_lossy(), None),
+    };
+    axon_agent_runtime::ReflectionPoolStoreRuntime::append_entry(&pool_path, &seeded).unwrap();
+
+    let outcome = admit_reflection_batch(&request, &trace, cards, Some(&assessment), &envelope);
+
+    assert_eq!(outcome.skipped, 1, "重复 card_id 必须计入 skipped");
+    // 同 card_id 只能出现一次：要么留在池里，要么被这一批取走去执行，不能两处都有。
+    let in_pool = axon_agent_runtime::ReflectionPoolStoreRuntime::load_entries(&pool_path)
+        .into_iter()
+        .filter(|entry| entry.card.card_id == card.card_id)
+        .count();
+    let in_batch = match &outcome.admission {
+        BatchAdmission::Run(batch) => batch
+            .iter()
+            .filter(|candidate| candidate.card_id == card.card_id)
+            .count(),
+        BatchAdmission::Deferred | BatchAdmission::NotApplicable => 0,
+    };
+    assert_eq!(
+        in_pool + in_batch,
+        1,
+        "同 card_id 只能占一个位置（pool={in_pool} batch={in_batch}）"
+    );
+    let seeded_entry = axon_agent_runtime::ReflectionPoolStoreRuntime::load_entries(&pool_path)
+        .into_iter()
+        .find(|entry| entry.turn_id == "turn:someone-else");
+    if let Some(entry) = seeded_entry {
+        assert_eq!(entry.card.card_id, card.card_id, "原条目不得被覆盖");
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(test)]
+#[path = "run_post_run_reflection_report_tests.rs"]
+mod report_tests;

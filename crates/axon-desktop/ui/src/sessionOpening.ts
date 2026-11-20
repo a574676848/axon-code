@@ -11,10 +11,11 @@ import type { SessionFacts } from './conversation/sessionFacts';
 /**
  * 后台驱动会话的只读说明：输入坞禁用时显示在占位位置。
  *
- * 目标执行没有进程内取消令牌：取消只能由主会话调用目标工具发起，因此这里把
- * 出口直接写出来，避免用户在只读会话里找停止按钮。
+ * 文案与 `docs/dev/ui-constraints.md` §4.2 的目标看板那一条同源：先说明「这里谁来干」，
+ * 再说「这里为什么不能输入」。取消链路属于主会话的工具调用，不写进这个占位位：
+ * 那是一句操作说明，而这一行只回答「这个框为什么是灰的」。
  */
-export const READ_ONLY_PLACEHOLDER = '目标由后台执行，这里只读；需要取消请由主会话调用目标工具';
+export const READ_ONLY_PLACEHOLDER = '目标由后台执行，这里只读';
 
 /** 能力事实还没到达时的占位说明：此刻不能确认这条会话可写。 */
 export const CAPABILITY_PENDING_PLACEHOLDER = '正在读取会话…';

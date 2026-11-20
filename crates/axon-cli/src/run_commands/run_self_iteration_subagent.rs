@@ -33,6 +33,12 @@ const SELF_ITERATION_MEMORY_SUMMARY: &str = "自闭环记忆更新";
 const SELF_ITERATION_EXECUTOR_UNAVAILABLE: &str = "自我迭代子代理执行器不可用";
 const SELF_ITERATION_SESSION_SETUP_FAILED: &str = "自我迭代子代理会话初始化失败";
 const SEMANTIC_SALIENCE_SUMMARY: &str = "轻量语义显著性评估";
+/// 反思报告正文的暂存目录名（相对 `<axon-root>/data/runtime`）。
+///
+/// 反思结论一旦由子代理产出就已经付过 token，且候选去重靠「批次键 + 候选指纹」：
+/// 治理队列重试同一条 payload 时若重新调模型，措辞一变指纹就变，会绕过 written 台账
+/// 重复写记忆。这里把首次落盘的正文按「轮次 + 子任务」暂存，重试直接复用。
+const REFLECTION_REPORT_STASH_DIR: &str = "reflection_reports";
 
 #[derive(Debug, Default)]
 pub(super) struct PostRunSelfIterationReport {
@@ -74,6 +80,8 @@ pub(super) fn run_post_run_self_iteration_subagents(
     if let Some(path) = processed_path.as_deref()
         && ReflectionLedgerRuntime::is_done(path, &turn_key)
     {
+        // 这一轮已经收口：任何残留的报告暂存都该清掉，重试不会再走到反思。
+        clear_reflection_report_stash(request);
         return PostRunSelfIterationReport {
             already_processed: true,
             ..PostRunSelfIterationReport::default()
@@ -101,6 +109,8 @@ pub(super) fn run_post_run_self_iteration_subagents(
                 &trace.turn_id,
             );
         }
+        // 报告暂存同样只在收口后清理：失败重试还要复用它，不能提前删。
+        clear_reflection_report_stash(request);
     }
     report
 }
@@ -126,13 +136,16 @@ fn run_reflection_phase(
         ..PostRunSelfIterationReport::default()
     };
     // 卡片先入池并判定批处理：未触发就留到下次，触发才跑，避免每轮都起一个子代理。
-    let cards = match admit_reflection_batch(
+    let admission = admit_reflection_batch(
         request,
         trace,
         cards,
         semantic_outcome.assessment.as_ref(),
         &turn_outcome,
-    ) {
+    );
+    // 准入阶段被拒收的候选必须计入可见计数，否则「候选被悄悄扔掉」在审计里看不出来。
+    report.quality.reflection_skipped_candidates = admission.skipped;
+    let cards = match admission.admission {
         BatchAdmission::Run(cards) => {
             // 先记 1：后续 plan 失败等提前返回也要让本轮留下一条回执，
             // 否则「决定了要跑却没跑成」在审计里完全不可见。
@@ -235,15 +248,18 @@ pub(super) struct SelfIterationExecutionOptions {
     system_prompt_override: Option<String>,
     tools_enabled: bool,
     model_intent: RunSubagentModelIntent,
+    /// 是否为反思子代理：只有反思的报告正文需要按轮暂存、供重试复用。
+    stashes_report: bool,
 }
 
 impl SelfIterationExecutionOptions {
-    fn reflection() -> Self {
+    pub(super) fn reflection() -> Self {
         Self {
             structured_output: None,
             system_prompt_override: None,
             tools_enabled: true,
             model_intent: RunSubagentModelIntent::Inherit,
+            stashes_report: true,
         }
     }
 
@@ -259,6 +275,7 @@ impl SelfIterationExecutionOptions {
             system_prompt_override: Some(semantic_salience_system_prompt()),
             tools_enabled: false,
             model_intent: RunSubagentModelIntent::FastDelegate,
+            stashes_report: false,
         }
     }
 }
@@ -283,6 +300,18 @@ pub(super) fn execute_self_iteration_subagent(
     entry: &axon_agent_runtime::SubagentDelegationEntry,
     options: SelfIterationExecutionOptions,
 ) -> Option<RunSubagentExecutionOutput> {
+    // 重试复用首次落盘的报告正文：同一轮的反思结论已经产出过，重新调模型只会换来
+    // 措辞不同的候选，反而绕过去重台账重复写记忆。这一步必须排在派生 agent 路径之前：
+    // 首次尝试已经登记过同名子代理，重试再 spawn 会被判成重复路径直接失败。
+    if options.stashes_report
+        && let Some(output) = load_stashed_reflection_report(request, entry)
+    {
+        axon_logger::info(&format!(
+            "反思重试复用首次报告正文，不再调用模型：session={} task={}",
+            request.session_id, entry.label
+        ));
+        return Some(output);
+    }
     let spawn_request = self_iteration_spawn_request(request, entry);
     let planned_task_path = spawn_request
         .parent_path
@@ -330,6 +359,11 @@ pub(super) fn execute_self_iteration_subagent(
     }
 
     let output = request.subagent_executor.execute(input.clone());
+    if options.stashes_report
+        && let Some(output) = output.as_ref()
+    {
+        stash_reflection_report(request, entry, output);
+    }
     let completion_output = output
         .clone()
         .unwrap_or_else(|| RunSubagentExecutionOutput {
@@ -344,6 +378,122 @@ pub(super) fn execute_self_iteration_subagent(
         log_completion_failure(&input.task_path, &error);
     }
     output
+}
+
+/// 首份反思报告正文的暂存格式。
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StashedReflectionReport {
+    summary: String,
+    stashed_at_ms: u64,
+}
+
+/// 暂存路径：按「轮次 + 子任务标签」定名，跨治理重试稳定。
+///
+/// 键不能用 `session_id`：同一会话有多轮；也不能用 run 窗口：它跨轮不变。轮次的稳定
+/// 身份是持久化用的 assistant part id（由 invocation id 派生），同一轮重试时不变。
+fn reflection_report_stash_path(
+    request: &RunRequest,
+    entry: &axon_agent_runtime::SubagentDelegationEntry,
+) -> Option<std::path::PathBuf> {
+    let root = super::run_session_store::resolved_axon_root(&request.config_path).ok()?;
+    let part = super::run_session_store::run_persistence_assistant_part_id(request);
+    Some(
+        root.join("data")
+            .join("runtime")
+            .join(REFLECTION_REPORT_STASH_DIR)
+            .join(format!(
+                "{part}-{}.json",
+                sanitize_stash_label(&entry.label)
+            )),
+    )
+}
+
+fn sanitize_stash_label(label: &str) -> String {
+    label
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+fn load_stashed_reflection_report(
+    request: &RunRequest,
+    entry: &axon_agent_runtime::SubagentDelegationEntry,
+) -> Option<RunSubagentExecutionOutput> {
+    let path = reflection_report_stash_path(request, entry)?;
+    let body = std::fs::read_to_string(path).ok()?;
+    let stash = serde_json::from_str::<StashedReflectionReport>(&body).ok()?;
+    if stash.summary.trim().is_empty() {
+        return None;
+    }
+    Some(RunSubagentExecutionOutput {
+        status: RunSubagentExecutionStatus::Completed,
+        summary: stash.summary,
+        // 真正的写入由 `apply_reflection_report` 统一执行，子代理本身不落库。
+        memory_write_count: 0,
+        token_usage: None,
+        model: None,
+        budget_exhausted: false,
+    })
+}
+
+fn stash_reflection_report(
+    request: &RunRequest,
+    entry: &axon_agent_runtime::SubagentDelegationEntry,
+    output: &RunSubagentExecutionOutput,
+) {
+    if output.status != RunSubagentExecutionStatus::Completed || output.summary.trim().is_empty() {
+        return;
+    }
+    let Some(path) = reflection_report_stash_path(request, entry) else {
+        return;
+    };
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if let Err(error) = std::fs::create_dir_all(parent) {
+        axon_logger::warning(&format!("反思报告暂存目录创建失败: {error}"));
+        return;
+    }
+    let stash = StashedReflectionReport {
+        summary: output.summary.clone(),
+        stashed_at_ms: now_ms(),
+    };
+    let Ok(body) = serde_json::to_string(&stash) else {
+        return;
+    };
+    if let Err(error) = std::fs::write(&path, body) {
+        axon_logger::warning(&format!("反思报告暂存失败: {error}"));
+    }
+}
+
+/// 清掉本轮的全部报告暂存：反思阶段已经收口，重试不会再走到这里。
+fn clear_reflection_report_stash(request: &RunRequest) {
+    let Ok(root) = super::run_session_store::resolved_axon_root(&request.config_path) else {
+        return;
+    };
+    let directory = root
+        .join("data")
+        .join("runtime")
+        .join(REFLECTION_REPORT_STASH_DIR);
+    let Ok(entries) = std::fs::read_dir(&directory) else {
+        return;
+    };
+    let prefix = format!(
+        "{}-",
+        super::run_session_store::run_persistence_assistant_part_id(request)
+    );
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy().starts_with(&prefix) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 fn start_self_iteration_session(

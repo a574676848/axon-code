@@ -43,6 +43,7 @@ import { useConnectionProbe } from './useConnectionProbe';
 import { composerHasDraft } from './composerDraft';
 import { OnboardingWindow } from './components/onboarding/OnboardingWindow';
 import { notifyDesktopReady, useWindowDynamicSurfaces } from './windowSurfaces';
+import { useWorkspacesFeed } from './useWorkspacesFeed';
 
 /*
  * 应用外壳：左侧工作区与会话，右侧主区域，设置以浮层弹窗叠加。
@@ -52,10 +53,11 @@ import { notifyDesktopReady, useWindowDynamicSurfaces } from './windowSurfaces';
  */
 
 /**
- * 会话列表的静默刷新间隔。
+ * 工作区与会话清单的静默刷新间隔。
  *
- * 会话可能由其它渠道产生（例如 TUI 新开一条），侧栏必须能自己发现；
- * 刷新全程不显示加载态、失败也不打扰用户，由下一次连接探活统一报连接问题。
+ * 会话可能由其它渠道产生（例如 TUI 新开一条），界面必须能自己发现。整份清单只有
+ * 这一条定时器（侧栏不再自建一条），刷新全程不显示加载态、失败也不打扰用户，
+ * 由下一次连接探活统一报连接问题。
  */
 const SESSION_REFRESH_MS = 15000;
 /** 侧栏折叠组合键。 */
@@ -111,7 +113,16 @@ export const App: React.FC = () => {
   // 自动恢复上次的会话会把「打开应用」变成「接着上次干活」，与首屏语义冲突。
   const [selection, setSelection] = useState<SessionSelection | null>(null);
   const [configRevision, setConfigRevision] = useState(0);
-  const [workspaces, setWorkspaces] = useState<WorkspaceItem[]>([]);
+  /**
+   * 工作区与会话清单：外壳持有唯一一份（含唯一一条静默轮询），侧栏与命令面板
+   * 消费同一份，见 `useWorkspacesFeed`。
+   */
+  const workspaceFeed = useWorkspacesFeed({
+    connected: () => connectionRef.current === true,
+    refreshOn: `${selection?.sessionId ?? ''}:${health?.available ?? ''}`,
+    intervalMs: SESSION_REFRESH_MS,
+  });
+  const workspaces = workspaceFeed.workspaces;
   /** 当前会话的运行时事实；归档前需要知道它是不是还在跑。 */
   const [sessionRuntime, setSessionRuntime] = useState<SessionRuntimeFacts | null>(null);
   /**
@@ -328,25 +339,6 @@ export const App: React.FC = () => {
     return () => registerSwitchGuard(null);
   }, []);
 
-  /** 工作区列表供主区域取当前工作区；侧栏自身仍独立持有一份用于渲染。 */  const refreshWorkspaces = useCallback(async () => {
-    if (connectionRef.current !== true) return;
-    try {
-      setWorkspaces(await ipc.fetchWorkspaces());
-    } catch {
-      // 连接问题由统一弹窗呈现。
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshWorkspaces();
-  }, [refreshWorkspaces, selection?.sessionId, health?.available]);
-
-  // 静默轮询：只更新数据，不动界面状态，因此不会打断正在输入或翻历史的用户。
-  useEffect(() => {
-    const timer = window.setInterval(() => void refreshWorkspaces(), SESSION_REFRESH_MS);
-    return () => window.clearInterval(timer);
-  }, [refreshWorkspaces]);
-
   /** 主区域当前工作区：优先跟随选中的会话，否则取运行态标记的当前工作区。 */
   const activeWorkspace = useMemo(() => {
     if (selection !== null) {
@@ -553,6 +545,11 @@ export const App: React.FC = () => {
         preferredWorkspaceId={viewRestore.preferredWorkspaceId}
         expandedWorkspaceIds={viewRestore.expandedWorkspaceIds}
         onExpandedChange={viewRestore.rememberExpanded}
+        workspaces={workspaces}
+        workspacesLoaded={workspaceFeed.loaded}
+        workspacesError={workspaceFeed.error}
+        onWorkspacesChange={workspaceFeed.setWorkspaces}
+        onRefreshWorkspaces={workspaceFeed.retry}
       />
 
       {/*
@@ -587,7 +584,7 @@ export const App: React.FC = () => {
             detail={lastFailure}
             onRetry={async () => {
               await refreshConnection();
-              if (connectionRef.current === true) await refreshWorkspaces();
+              if (connectionRef.current === true) await workspaceFeed.retry();
             }}
             onOpenSettings={() => openSettingsAt('connection')}
           />
@@ -647,7 +644,7 @@ export const App: React.FC = () => {
            */
           onRetry={async () => {
             await refreshConnection();
-            if (connectionRef.current === true) await refreshWorkspaces();
+            if (connectionRef.current === true) await workspaceFeed.retry();
           }}
           onOpenSettings={() => {
             setConnectionDismissed(true);

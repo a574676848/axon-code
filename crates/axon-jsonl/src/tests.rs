@@ -1,6 +1,182 @@
 use super::*;
 use std::{fs, io, io::Write as _};
 
+thread_local! {
+    /// 下一次把临时文件改名到这些目标时各失败几次。
+    static FAILED_RENAMES: std::cell::RefCell<std::collections::HashMap<std::path::PathBuf, u32>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// 让下一次把临时文件改名到 `target` 时失败一次（模拟目标被占用、杀软扫描）。
+fn fail_next_rename_to(target: &std::path::Path) {
+    FAILED_RENAMES.with(|failed| {
+        *failed.borrow_mut().entry(target.to_path_buf()).or_insert(0) += 1;
+    });
+}
+
+/// 取走一次注入的改名失败；没有注入时返回 false。
+pub(crate) fn take_rename_failure(target: &std::path::Path) -> bool {
+    FAILED_RENAMES.with(|failed| {
+        let mut failed = failed.borrow_mut();
+        match failed.get_mut(target) {
+            Some(remaining) if *remaining > 0 => {
+                *remaining -= 1;
+                true
+            }
+            _ => false,
+        }
+    })
+}
+
+#[test]
+fn rename_failure_falls_back_to_backup_without_leaving_a_gap() {
+    let directory = axon_test_support::test_temp_dir();
+    let logical = directory.path().join("rename-fallback.jsonl");
+    let store = ShardedJsonlStore::with_max_shard_bytes(16);
+    store
+        .append_line(&logical, br#"{"key":"value"}"#)
+        .expect("append");
+    store.append_line(&logical, b"x").expect("append");
+    assert_eq!(store.shard_sequences(&logical).expect("sequences"), [0, 1]);
+
+    // 目标分片改名失败一次：替换必须退回「先挪到 .bak 再补位」，不得先删目标。
+    fail_next_rename_to(&ShardedJsonlStore::physical_shard_path(&logical, 0));
+    store
+        .rewrite_with(&logical, |_| {
+            Ok(((), vec![br#"{"id":1}"#.to_vec(), br#"{"id":2}"#.to_vec()]))
+        })
+        .expect("回退补位后重写必须成功");
+
+    assert_eq!(
+        store.shard_sequences(&logical).expect("sequences"),
+        [0, 1],
+        "回退路径不得让分片出现缺口"
+    );
+    assert_eq!(
+        store.read_lines(&logical).expect("lines"),
+        [br#"{"id":1}"#.to_vec(), br#"{"id":2}"#.to_vec()]
+    );
+    assert!(
+        !ShardedJsonlStore::physical_shard_path(&logical, 0)
+            .with_extension("bak")
+            .exists(),
+        "补位成功后旧分片的 .bak 必须清掉"
+    );
+}
+
+#[test]
+fn failed_backup_promotion_keeps_backup_and_reads_as_incomplete() {
+    let directory = axon_test_support::test_temp_dir();
+    let logical = directory.path().join("rename-broken.jsonl");
+    let store = ShardedJsonlStore::with_max_shard_bytes(16);
+    store
+        .append_line(&logical, br#"{"key":"value"}"#)
+        .expect("append");
+    store.append_line(&logical, b"x").expect("append");
+    let old_first_shard = fs::read(ShardedJsonlStore::physical_shard_path(&logical, 0)).unwrap();
+
+    // 两次改名都失败：回退也补不上位。旧内容必须留在 .bak，错误向上报。
+    fail_next_rename_to(&ShardedJsonlStore::physical_shard_path(&logical, 0));
+    fail_next_rename_to(&ShardedJsonlStore::physical_shard_path(&logical, 0));
+    let error = store
+        .rewrite_with(&logical, |_| {
+            Ok(((), vec![br#"{"id":1}"#.to_vec(), br#"{"id":2}"#.to_vec()]))
+        })
+        .expect_err("补位失败必须上抛");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+
+    let backup = ShardedJsonlStore::physical_shard_path(&logical, 0).with_extension("bak");
+    assert!(backup.exists(), "补位失败时旧分片必须保留在 .bak");
+    assert_eq!(
+        fs::read(&backup).unwrap(),
+        old_first_shard,
+        "旧内容不得丢失"
+    );
+
+    // 读侧据「分片序号不连续」判不完整：绝不把缺块的历史当成完整历史。
+    assert_eq!(store.shard_sequences(&logical).expect("sequences"), [1]);
+    let read_error = store.read_lines(&logical).expect_err("缺口必须读成错误");
+    assert_eq!(read_error.kind(), io::ErrorKind::InvalidData);
+    assert!(read_error.to_string().contains("不连续"), "{read_error}");
+}
+
+#[test]
+fn concurrent_readers_never_observe_a_torn_rewrite() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    let directory = axon_test_support::test_temp_dir();
+    let logical = directory.path().join("concurrent.jsonl");
+    let store = ShardedJsonlStore::with_max_shard_bytes(16);
+    let first = vec![br#"{"id":1}"#.to_vec(), br#"{"id":2}"#.to_vec()];
+    let second = vec![br#"{"id":3}"#.to_vec(), br#"{"id":4}"#.to_vec()];
+    // 先把库放在第一份完整内容上：此后读者只允许读到 first 或 second。
+    store
+        .rewrite_with(&logical, |_| Ok(((), first.clone())))
+        .expect("首次重写");
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let writer = {
+        let logical = logical.clone();
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            let store = ShardedJsonlStore::with_max_shard_bytes(16);
+            let mut toggle = false;
+            while !stop.load(Ordering::Relaxed) {
+                let target = if toggle { &first } else { &second };
+                store
+                    .rewrite_with(&logical, |_| Ok(((), target.clone())))
+                    .expect("并发重写必须成功");
+                toggle = !toggle;
+                std::thread::yield_now();
+            }
+        })
+    };
+
+    let reader = {
+        let logical = logical.clone();
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            let store = ShardedJsonlStore::with_max_shard_bytes(16);
+            let mut observed = 0_usize;
+            while !stop.load(Ordering::Relaxed) {
+                let lines = store.read_lines(&logical).expect("读者不得读到撕裂的重写");
+                assert!(
+                    lines == [br#"{"id":1}"#.to_vec(), br#"{"id":2}"#.to_vec()]
+                        || lines == [br#"{"id":3}"#.to_vec(), br#"{"id":4}"#.to_vec()],
+                    "读者必须读到完整的一段，实测 {lines:?}"
+                );
+                observed += 1;
+            }
+            observed
+        })
+    };
+
+    std::thread::sleep(std::time::Duration::from_millis(60));
+    stop.store(true, Ordering::Relaxed);
+    writer.join().expect("writer");
+    let observed = reader.join().expect("reader");
+    assert!(observed > 0, "读者必须真的跑过一轮读");
+}
+
+#[test]
+fn recover_unfinished_rewrite_clears_crash_debris_inside_the_lock() {
+    let directory = axon_test_support::test_temp_dir();
+    let logical = directory.path().join("recover.jsonl");
+    let store = ShardedJsonlStore::new();
+    let stale = logical.with_extension("rewrite0.tmp");
+    fs::write(&stale, b"{\"id\":9}").expect("写临时文件");
+
+    store
+        .recover_unfinished_rewrite(&logical)
+        .expect("自愈必须清掉残留临时文件");
+
+    assert!(!stale.exists(), "残留临时文件必须被清掉");
+    assert!(!store.has_stale_rewrite_temporaries(&logical).expect("探测"));
+}
+
 #[test]
 fn append_rolls_and_reads_shards_by_sequence() {
     let directory = axon_test_support::test_temp_dir();

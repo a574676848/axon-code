@@ -3,11 +3,14 @@
 //! 卡片只是索引：它带证据区间与显著度，不带正文。入池后由纯函数判定「现在跑不跑」，
 //! 未触发的卡片留在池里等下一次治理，不会每轮都起一个子代理。
 
+use std::collections::BTreeMap;
+
 use axon_agent_runtime::{
-    BatchBlock, ReflectionCard, ReflectionLedgerRuntime, ReflectionPool, ReflectionPoolEntry,
-    ReflectionPoolLock, ReflectionPoolStoreRuntime, ReflectionTier, SalienceVector,
-    SemanticSalienceAssessment, TurnOutcomeEnvelope, TurnTrace, WhereBlock, evaluate_batch_trigger,
-    pool_bucket_key, split_pool_by_bucket, take_cold_start,
+    BatchBlock, EXECUTION_SPECIFICITY_MIN_BP, EXPERIENCE_FUTURE_UTILITY_MIN_BASIS_POINTS,
+    EXPERIENCE_VERIFICATION_MIN_BASIS_POINTS, ReflectionCard, ReflectionLedgerRuntime,
+    ReflectionPool, ReflectionPoolEntry, ReflectionPoolLock, ReflectionPoolStoreRuntime,
+    ReflectionTier, SalienceVector, SemanticSalienceAssessment, TurnOutcomeEnvelope, TurnTrace,
+    WhereBlock, evaluate_batch_trigger, pool_bucket_key, split_pool_by_bucket, take_cold_start,
 };
 
 use super::{RunRequest, run_execution::now_ms};
@@ -24,6 +27,38 @@ pub(super) enum BatchAdmission {
     Deferred,
     /// 没有卡片、没有评估，或档位判定为 Skip。
     NotApplicable,
+}
+
+/// 准入结果 + 拒收计数。
+///
+/// `skipped` 是可见计数：Skip 档里达不到执行类底线的卡片、以及 card_id 重复被拒的卡片
+/// 都在这里。没有它就等于「候选被悄悄扔掉」，审计里看不出反思为什么零产出。
+pub(super) struct ReflectionAdmission {
+    pub(super) admission: BatchAdmission,
+    pub(super) skipped: u64,
+}
+
+impl ReflectionAdmission {
+    fn run(cards: Vec<ReflectionCard>, skipped: u64) -> Self {
+        Self {
+            admission: BatchAdmission::Run(cards),
+            skipped,
+        }
+    }
+
+    fn deferred(skipped: u64) -> Self {
+        Self {
+            admission: BatchAdmission::Deferred,
+            skipped,
+        }
+    }
+
+    fn not_applicable(skipped: u64) -> Self {
+        Self {
+            admission: BatchAdmission::NotApplicable,
+            skipped,
+        }
+    }
 }
 
 /// 把本轮轨迹与显著度投影成反思索引卡。
@@ -91,25 +126,48 @@ pub(super) fn admit_reflection_batch(
     cards: Vec<ReflectionCard>,
     assessment: Option<&SemanticSalienceAssessment>,
     envelope: &TurnOutcomeEnvelope,
-) -> BatchAdmission {
+) -> ReflectionAdmission {
     let Some(assessment) = assessment else {
-        return BatchAdmission::NotApplicable;
+        return ReflectionAdmission::not_applicable(0);
     };
+    // 轨迹不可寻址（拿不到轮序）时不能入池：卡片 id 由 trace_id 派生，空 trace_id 会让
+    // 所有这类轮次共用同一个卡片身份，`builtin.turn_trace` 也永远查不到它们。
+    if trace.trace_id.trim().is_empty() {
+        axon_logger::warning(&format!(
+            "本轮轨迹不可寻址，跳过反思入池：session={} turn={} candidates={}",
+            trace.session_id,
+            trace.turn_id,
+            cards.len()
+        ));
+        return ReflectionAdmission::not_applicable(u64::try_from(cards.len()).unwrap_or(u64::MAX));
+    }
     // 档位判 Skip 表示「本轮不值得为此起一次反思」，但这不等于「池里的旧卡片可以
     // 一直烂着」：补漏入口专门处理这种情况，所以 Skip 不能在这里提前 return。
     let tier_skip = assessment.reflection_tier(envelope) == ReflectionTier::Skip;
-    if cards.is_empty() && tier_skip {
-        return BatchAdmission::NotApplicable;
+    let had_cards = !cards.is_empty();
+    // Skip 档仍要接纳达到执行类三维底线的强卡：这类事实当场就该记住，直接丢弃等于把
+    // 一次已验证的执行经验永久丢掉；不达底线的弱卡才计数跳过。
+    let mut skipped = 0_u64;
+    let mut accepted = Vec::new();
+    for card in cards {
+        if tier_skip && !card_meets_execution_floor(&card.signals) {
+            skipped = skipped.saturating_add(1);
+            continue;
+        }
+        accepted.push(card);
+    }
+    if !had_cards && tier_skip {
+        return ReflectionAdmission::not_applicable(skipped);
     }
     let Ok(root) = super::run_session_store::resolved_axon_root(&request.config_path) else {
-        return BatchAdmission::Run(cards);
+        return ReflectionAdmission::run(accepted, skipped);
     };
     let path = ReflectionPoolStoreRuntime::resolve_store_path(&root);
     // 池文件跨进程互斥：每轮治理都派生独立 worker，共用同一个池文件，
     // 无锁的 load → append → rewrite 会让两个 worker 互相吞卡。
     let Some(_lock) = ReflectionPoolLock::acquire(&path) else {
         axon_logger::warning("反思池被另一个 worker 占用，本轮推迟");
-        return BatchAdmission::Deferred;
+        return ReflectionAdmission::deferred(skipped);
     };
     let now = now_ms();
     let is_cold_start = take_cold_start();
@@ -121,23 +179,63 @@ pub(super) fn admit_reflection_batch(
             axon_logger::warning(&format!("反思池恢复未完成批次失败: {error:?}"));
         }
     }
+    // 同一 card_id 只能占一个池位：池的幂等键是 `turn:trace:段号`，跨轮同 id 的卡片
+    // 在键上不重复，却会让批次键与 `builtin.turn_trace` 寻址串到一起。入池前按 id 去重，
+    // 真冲突的按拒收计数，绝不静默覆盖或重复排队。
+    //
+    // 同一轮同一张卡已经在池里属于重试路径的正常现象（inflight 刚被放回），既不入池、
+    // 也不计入拒收。
+    let mut known_cards: BTreeMap<String, (String, String, u16)> =
+        ReflectionPoolStoreRuntime::load_entries(&path)
+            .into_iter()
+            .map(|entry| {
+                (
+                    entry.card.card_id.clone(),
+                    (
+                        entry.turn_id.clone(),
+                        entry.trace_id.clone(),
+                        entry.card.segment_index,
+                    ),
+                )
+            })
+            .collect();
+    let mut unique = Vec::with_capacity(accepted.len());
+    for card in accepted {
+        let identity = (
+            trace.turn_id.clone(),
+            card.trace_id.clone(),
+            card.segment_index,
+        );
+        if let Some(existing) = known_cards.get(&card.card_id) {
+            if existing == &identity {
+                continue;
+            }
+            axon_logger::warning(&format!(
+                "反思卡片 id 重复，已拒收：card_id={} trace_id={} existing_turn={}",
+                card.card_id, card.trace_id, existing.0
+            ));
+            skipped = skipped.saturating_add(1);
+            continue;
+        }
+        known_cards.insert(card.card_id.clone(), identity);
+        unique.push(card);
+    }
+    let accepted = unique;
     // 池文件是全局一个，卡片必须带地点桶键：否则 A 项目的待跑线索会在 B 项目里
     // 被一起 drain 出来反思，写进 B 的 Memory 作用域，成就跨项目串味。
     let branch = current_git_branch(&request.cwd);
     let bucket = pool_bucket_key(&request.cwd.to_string_lossy(), branch.as_deref());
-    if !tier_skip {
-        for card in &cards {
-            let entry = ReflectionPoolEntry {
-                correction_bp: assessment.signals.correction_strength,
-                turn_id: trace.turn_id.clone(),
-                trace_id: card.trace_id.clone(),
-                enqueued_at_ms: now,
-                card: card.clone(),
-                bucket: bucket.clone(),
-            };
-            if let Err(error) = ReflectionPoolStoreRuntime::append_entry(&path, &entry) {
-                axon_logger::warning(&format!("反思卡片入池失败: {error:?}"));
-            }
+    for card in &accepted {
+        let entry = ReflectionPoolEntry {
+            correction_bp: assessment.signals.correction_strength,
+            turn_id: trace.turn_id.clone(),
+            trace_id: card.trace_id.clone(),
+            enqueued_at_ms: now,
+            card: card.clone(),
+            bucket: bucket.clone(),
+        };
+        if let Err(error) = ReflectionPoolStoreRuntime::append_entry(&path, &entry) {
+            axon_logger::warning(&format!("反思卡片入池失败: {error:?}"));
         }
     }
     // 只把本桶条目装进判定用的池；空桶键是旧版本写入的条目，按本桶兼容。
@@ -151,15 +249,15 @@ pub(super) fn admit_reflection_batch(
     // Skip 轮次本来不该跑：只要有一个入口命中（池龄、冷启动补漏、条数…）就兜底跑，
     // 一个都没命中才判「本轮不反思」。否则池里的卡片会在 Skip 轮次上永久搁浅。
     if tier_skip && trigger.is_none() {
-        return BatchAdmission::NotApplicable;
+        return ReflectionAdmission::not_applicable(skipped);
     }
     if trigger.is_none() {
-        return BatchAdmission::Deferred;
+        return ReflectionAdmission::deferred(skipped);
     }
     let before: Vec<ReflectionPoolEntry> = pool.entries().to_vec();
     let batch = pool.drain_batch(now);
     if batch.is_empty() {
-        return BatchAdmission::Deferred;
+        return ReflectionAdmission::deferred(skipped);
     }
     // 回写时把别的桶原样并回去，只替换本桶剩余队列。
     let remaining: Vec<ReflectionPoolEntry> = others
@@ -172,13 +270,23 @@ pub(super) fn admit_reflection_batch(
     let inflight_entries: Vec<ReflectionPoolEntry> = before.into_iter().take(drained).collect();
     if let Err(error) = ReflectionLedgerRuntime::write_inflight(&inflight_path, &inflight_entries) {
         axon_logger::warning(&format!("反思批次 inflight 写入失败，本轮放弃: {error}"));
-        return BatchAdmission::Deferred;
+        return ReflectionAdmission::deferred(skipped);
     }
     // 回写失败必须放弃本轮：盘上仍是旧队列，若照跑这批，下一轮会把同一批再取一次，
     // 等于重复反思与重复写入。宁可等到下一轮重试，也不重复产出记忆。
     if let Err(error) = ReflectionPoolStoreRuntime::rewrite_entries(&path, &remaining) {
         axon_logger::warning(&format!("反思池回写失败，本轮放弃执行以免重放: {error:?}"));
-        return BatchAdmission::Deferred;
+        return ReflectionAdmission::deferred(skipped);
     }
-    BatchAdmission::Run(batch)
+    ReflectionAdmission::run(batch, skipped)
+}
+
+/// 单卡是否同时达到执行类准入的三维底线。
+///
+/// 与 `axon_agent_runtime::reflection_pool::card_meets_execution_floor` 同一判据：
+/// 该函数未对外导出，这里按同一组导出的底线常量重算，避免为了一个判据改运行层导出面。
+fn card_meets_execution_floor(signals: &SalienceVector) -> bool {
+    signals.verification >= EXPERIENCE_VERIFICATION_MIN_BASIS_POINTS
+        && signals.utility >= EXPERIENCE_FUTURE_UTILITY_MIN_BASIS_POINTS
+        && signals.specificity >= EXECUTION_SPECIFICITY_MIN_BP
 }

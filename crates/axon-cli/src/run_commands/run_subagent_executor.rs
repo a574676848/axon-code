@@ -419,6 +419,14 @@ impl ProviderRunSubagentExecutor {
             Ok(response) => {
                 // 与主 turn 同一条终态记账：差异只在规格里的完成去向与收口口径。
                 let completed = complete_turn(&spec, child_request, response);
+                // 子会话没有对用户展示的表面，投影失败因此落到运行日志的 error 级：
+                // 「这一轮没有正文」必须可查，不能安静地少一轮。
+                if let Some(error) = completed.projection_error.as_deref() {
+                    axon_logger::error(&format!(
+                        "子代理本轮逐字稿投影失败: session_id={}, thread={}, error={error}",
+                        child_request.session_id, child_request.run_session_id
+                    ));
+                }
                 mark_child_session_idle(child_request);
                 let memory_write_count = persisted_memory_write_count(&completed.response);
                 RunSubagentExecutionOutput {

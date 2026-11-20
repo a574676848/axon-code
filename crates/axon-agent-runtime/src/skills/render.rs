@@ -68,13 +68,15 @@ impl SkillsRenderer {
         budget: SkillRenderBudget,
     ) -> SkillRenderReport {
         let visible = outcome.skills.iter().collect::<Vec<_>>();
-        render_skill_listing(
+        let mut report = render_skill_listing(
             outcome,
             "[Available Skills]\nUse builtin.invoke_skill({\"skill_name\":\"<name>\"}) to load the best matching skill instructions for each distinct stage. invoke_skill accepts no task arguments and does not execute the task. After loading, follow the returned instructions with the actual tools. Do not compose skills that execute the same workflow.\n",
             &visible,
             budget,
             render_available_skill,
-        )
+        );
+        append_load_error_line(&mut report);
+        report
     }
 
     /// 按当前请求排序并渲染最相关的可调用 Skill。
@@ -253,6 +255,20 @@ fn empty_report(errors: usize) -> SkillRenderReport {
         dropped: 0,
         errors,
     }
+}
+
+/// 在清单尾部补一行加载失败计数。
+///
+/// 失败明细已经逐条写进日志与 `/skills`，但模型看不到日志：只给一份「看起来很完整」的
+/// 技能清单，它会据此判定某能力不存在。这一行让「有技能没能加载」成为模型可读事实，
+/// 也让后续排查不必先怀疑提示词。
+fn append_load_error_line(report: &mut SkillRenderReport) {
+    if report.errors == 0 {
+        return;
+    }
+    report
+        .text
+        .push_str(&format!("load_errors={}\n", report.errors));
 }
 
 fn skill_relevance_score(skill: &Skill, query: &str, query_terms: &BTreeSet<String>) -> usize {

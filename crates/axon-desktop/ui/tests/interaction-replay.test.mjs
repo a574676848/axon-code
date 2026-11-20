@@ -222,6 +222,32 @@ test('尾窗不足一页说明整轮都在里面，不再补读', async () => {
     assert.equal(tail.frames.length, 2, '首屏拿到的就是完整的一轮');
 });
 
+/*
+ * 非最新那几条在跑的新轮只读尾窗：它们停在折叠形态，整轮回放等于为一段不渲染的过程付
+ * 几十次串行往返。`tailOnly` 是这条读法的开关，`full` 因此就是尾窗本身。
+ */
+test('tailOnly：多条在跑的新轮只发 tail 请求，不补前段', async () => {
+    const test$ = beginTailFirst(
+        [
+            // 尾窗满一页：若继续整轮补齐，下一张页一定会被取走。
+            page([frame('wire_event', cursor(90)), frame('wire_event', cursor(91))], 91, true, cursor(91)),
+            page([frame('wire_event', cursor(1)), frame('wire_event', cursor(2))], 2, false, cursor(2)),
+        ],
+        { limit: 2, tailOnly: true },
+    );
+    const tail = await test$.reading.tail;
+    const full = await test$.reading.full;
+
+    assert.equal(test$.calls.length, 1, '只允许一次尾窗往返');
+    assert.equal(test$.calls[0].tail, true, '那一次请求必须是尾窗');
+    assert.deepEqual(
+        full.frames.map((item) => item.cursor),
+        tail.frames.map((item) => item.cursor),
+        'full 就是尾窗，不再补前段',
+    );
+    assert.equal(full.settled, false, '仍在跑的一轮不被冒充成收口');
+});
+
 test('合成终态帧不计入尾窗容量：恰好 limit-1 条真实帧不会被误判为还有前段', async () => {
     const test$ = beginTailFirst(
         [

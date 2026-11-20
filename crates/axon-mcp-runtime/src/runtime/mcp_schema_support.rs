@@ -6,8 +6,8 @@ use std::{
 };
 
 use axon_agent_runtime::{
-    McpHttpAuthConfig, McpServerConfig, McpStartupProjection, McpStdioSessionRuntime,
-    McpToolSchema, McpTransportRuntime, ToolRegistry,
+    McpHttpAuthConfig, McpServerConfig, McpServerMetadataRequest, McpServerMetadataRuntime,
+    McpStartupProjection, McpStdioSessionRuntime, McpToolSchema, McpTransportRuntime, ToolRegistry,
 };
 
 use super::super::discovery::RuntimeMcpServer;
@@ -17,10 +17,18 @@ use super::super::mcp_health_cache::{
 };
 use super::super::mcp_runtime_oauth::config_with_runtime_oauth;
 use super::super::mcp_schema_cache::{
-    McpSchemaCacheDisposition, McpSchemaCacheLookup, lookup_mcp_schemas, mcp_config_fingerprint,
-    store_mcp_schemas,
+    McpSchemaCacheDisposition, McpSchemaCacheEntry, McpSchemaCacheLookup,
+    cached_metadata_fingerprint, lookup_mcp_schemas, lookup_mcp_schemas_ignoring_ttl,
+    mcp_config_fingerprint, mcp_initialize_fingerprint, store_mcp_schemas,
 };
 use super::{RuntimeMcpSchemaLoad, builtin_tool_registry, runtime_now_ms};
+
+/// 沿用缓存目录时写进工具描述的可见标记。
+///
+/// 发现期只熔断 30 秒，但模型看到的却是「这台 server 的工具凭空消失」，并会据此判定该能力
+/// 不可用。标记只带 server 标识、不带失败原文：同一状态下的两次构建必须生成同一段描述，
+/// 否则调用前的契约比对会把一次正常调用误判成 schema 漂移。
+const MCP_DEGRADED_TOOL_MARKER: &str = "[暂时不可用] 该 MCP server 的发现期探测失败，此处沿用上次成功的工具目录；本轮调用会被快速拒绝，稍后重试即可。";
 
 pub(super) fn load_runtime_mcp_tool_schemas(
     root: &Path,
@@ -48,9 +56,25 @@ pub(super) fn load_runtime_mcp_tool_schemas(
             };
         }
     };
+    let fingerprint = mcp_config_fingerprint(&config);
     if !refresh_mcp_health
         && let Some(failure) = cached_mcp_health_failure(root, &startup.config_ref, false)
     {
+        // 熔断窗口内不拉起 server，但也不让工具整批消失：有上次成功目录就照旧注册，
+        // 并把「暂时不可用」写进描述。工具调用期会命中同一条负缓存并返回可读的熔断原因。
+        if let Some(schemas) =
+            lookup_mcp_schemas_ignoring_ttl(root, server_id, &startup.config_ref, &fingerprint)
+        {
+            axon_logger::warning(&format!(
+                "MCP tools/list 使用健康负缓存并沿用上次目录：server_id={} config_ref={} phase=health_cache cached=true failure={}",
+                server_id, startup.config_ref, failure
+            ));
+            return RuntimeMcpSchemaLoad {
+                loaded: Some((config, mark_degraded_schemas(server_id, schemas))),
+                disposition: McpSchemaCacheDisposition::Degraded,
+                failure: Some(failure),
+            };
+        }
         axon_logger::warning(&format!(
             "MCP tools/list 使用健康负缓存：server_id={} config_ref={} phase=health_cache cached=true failure={}",
             server_id, startup.config_ref, failure
@@ -61,7 +85,6 @@ pub(super) fn load_runtime_mcp_tool_schemas(
             failure: Some(failure),
         };
     }
-    let fingerprint = mcp_config_fingerprint(&config);
     if !refresh_mcp_health {
         match lookup_mcp_schemas(
             root,
@@ -125,12 +148,20 @@ pub(super) fn load_runtime_mcp_tool_schemas(
             failure: Some(failure),
         };
     }
+    // initialize 结果与工具目录同一次落盘：server 自升级通常不动配置文件，只有版本号、
+    // instructions 与 listChanged 会变，把它们记进缓存行才能让「目录是哪个 server 版本产的」可查。
+    let (metadata_fingerprint, tools_list_changed) = read_runtime_mcp_metadata(&config, server_id);
+    report_metadata_drift(root, server_id, &metadata_fingerprint);
     let _ = store_mcp_schemas(
         root,
-        server_id,
-        &startup.config_ref,
-        &fingerprint,
-        runtime_now_ms(),
+        &McpSchemaCacheEntry {
+            server_id,
+            config_ref: &startup.config_ref,
+            config_fingerprint: &fingerprint,
+            metadata_fingerprint: &metadata_fingerprint,
+            tools_list_changed,
+            refreshed_at_ms: runtime_now_ms(),
+        },
         &tool_schemas,
     );
     RuntimeMcpSchemaLoad {
@@ -138,6 +169,64 @@ pub(super) fn load_runtime_mcp_tool_schemas(
         disposition: McpSchemaCacheDisposition::Refreshed,
         failure: None,
     }
+}
+
+/// 读一次 initialize 结果，取 server 版本、instructions 与 `tools.listChanged`。
+///
+/// 只有真正刷新目录时才调用：命中缓存不握手，因此这里多一次握手的代价只落在过期刷新
+/// 与首次装配上。读不到就返回空指纹（等价于「版本未知」），绝不因为元数据探测失败而
+/// 丢掉刚拿到的工具目录。
+fn read_runtime_mcp_metadata(config: &McpServerConfig, server_id: &str) -> (String, Option<bool>) {
+    match McpServerMetadataRuntime::read_metadata(McpServerMetadataRequest {
+        config: config.clone(),
+    }) {
+        Ok(metadata) => {
+            if matches!(metadata.capabilities.tools_list_changed, Some(true)) {
+                axon_logger::info(&format!(
+                    "MCP server 声明 tools.listChanged：目录缓存改用短 TTL。server_id={server_id} version={:?}",
+                    metadata.version
+                ));
+            }
+            let fingerprint = mcp_initialize_fingerprint(&metadata);
+            (fingerprint, metadata.capabilities.tools_list_changed)
+        }
+        Err(error) => {
+            axon_logger::warning(&format!(
+                "MCP initialize 元数据探测失败，目录缓存按未知版本记录：server_id={server_id} error={}",
+                mcp_failure_text(&error)
+            ));
+            (String::new(), None)
+        }
+    }
+}
+
+fn mark_degraded_schemas(server_id: &str, mut schemas: Vec<McpToolSchema>) -> Vec<McpToolSchema> {
+    let marker = format!("\n\n{MCP_DEGRADED_TOOL_MARKER}（server={server_id}）");
+    for schema in &mut schemas {
+        if !schema.description.contains(MCP_DEGRADED_TOOL_MARKER) {
+            schema.description.push_str(&marker);
+        }
+    }
+    schemas
+}
+
+/// 对比新旧 initialize 指纹，把「server 升级导致目录重建」留成可查事实。
+///
+/// 空指纹表示这次元数据探测没成功，既不能当成「没变」，也不能当成「变了」。
+fn report_metadata_drift(root: &Path, server_id: &str, metadata_fingerprint: &str) {
+    if metadata_fingerprint.is_empty() {
+        return;
+    }
+    let Some((previous, refreshed_at_ms)) = cached_metadata_fingerprint(root, server_id) else {
+        return;
+    };
+    if previous.is_empty() || previous == metadata_fingerprint {
+        return;
+    }
+    axon_logger::info(&format!(
+        "MCP server initialize 指纹变化，工具目录已重建：server_id={server_id} cached_age_ms={}",
+        runtime_now_ms().saturating_sub(refreshed_at_ms)
+    ));
 }
 
 fn normalize_runtime_mcp_schemas(schemas: &[McpToolSchema]) -> Vec<McpToolSchema> {
@@ -231,17 +320,25 @@ fn spawn_stale_schema_refresh(
                             &startup.config_ref,
                             "MCP tools/list 返回空工具列表",
                         );
-                    } else if store_mcp_schemas(
-                        &root,
-                        &server_id,
-                        &startup.config_ref,
-                        &fingerprint,
-                        runtime_now_ms(),
-                        &schemas,
-                    )
-                    .is_ok()
-                    {
-                        clear_mcp_health_failure(&root, &startup.config_ref);
+                    } else {
+                        let (metadata_fingerprint, tools_list_changed) =
+                            read_runtime_mcp_metadata(&config, &server_id);
+                        if store_mcp_schemas(
+                            &root,
+                            &McpSchemaCacheEntry {
+                                server_id: &server_id,
+                                config_ref: &startup.config_ref,
+                                config_fingerprint: &fingerprint,
+                                metadata_fingerprint: &metadata_fingerprint,
+                                tools_list_changed,
+                                refreshed_at_ms: runtime_now_ms(),
+                            },
+                            &schemas,
+                        )
+                        .is_ok()
+                        {
+                            clear_mcp_health_failure(&root, &startup.config_ref);
+                        }
                     }
                 }
                 Err(failure) => {
@@ -259,3 +356,7 @@ fn schema_refreshes() -> &'static Mutex<BTreeSet<String>> {
     static REFRESHES: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
     REFRESHES.get_or_init(|| Mutex::new(BTreeSet::new()))
 }
+
+#[cfg(test)]
+#[path = "mcp_schema_support_tests.rs"]
+mod tests;

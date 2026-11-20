@@ -81,8 +81,8 @@ CLI 通过 `serverId` 与 `source` 输出安全摘要，不输出启动命令、
 
 ### OAuth 登录（Streamable HTTP）
 
-Axon 的 Streamable HTTP 客户端按 MCP `2026-07-28` 授权规范实现，覆盖元数据发现、客户端注册、
-授权码换取 token 与凭据刷新全流程。
+Axon 的 Streamable HTTP 客户端协商的协议版本是 `2025-11-25`；授权流程参考 `2026-07-28`
+草案实现，覆盖元数据发现、客户端注册、授权码换取 token 与凭据刷新全流程。
 
 ```bash
 # 生成授权 URL（不启动本地回调，适合脚本或远程终端）

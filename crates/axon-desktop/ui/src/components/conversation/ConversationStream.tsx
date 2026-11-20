@@ -203,6 +203,9 @@ export const ConversationStream: React.FC<ConversationStreamProps> = ({
     [actions],
   );
 
+  /** 点导航条即解除贴底：用户明确离开了最新位置，自动跟随不该再把他拽回去。 */
+  const releaseFollow = React.useCallback(() => setAtBottom(false), []);
+
   const { hidden, lastTurn } = React.useMemo(() => {
     return {
       hidden: hiddenCells,
@@ -446,8 +449,9 @@ export const ConversationStream: React.FC<ConversationStreamProps> = ({
         </div>
       )}
 
+      {/* 导航条的两个回调都要引用稳定：正文每帧都在变，回调每帧换一次就会连带重渲染。 */}
       <MessageRail turns={turns} scrollRef={scrollRef} anchors={anchors} atBottom={atBottom}
-        onNavigate={() => setAtBottom(false)} />
+        onNavigate={releaseFollow} />
     </div>
   );
 };

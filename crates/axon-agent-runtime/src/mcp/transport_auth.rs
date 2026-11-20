@@ -282,7 +282,7 @@ impl McpAuthRuntime {
 
     /// 探测 MCP endpoint 的 `WWW-Authenticate` challenge。
     ///
-    /// MCP 2026-07-28 要求客户端优先采用 401/403 响应中的 challenge 作为
+    /// MCP 授权草案（实现参考 2026-07-28，协商版本 2025-11-25）要求客户端优先采用 401/403 响应中的 challenge 作为
     /// `resource_metadata` 与 `scope` 的权威来源。探测使用只读 `tools/list` 请求，
     /// 未授权时服务器只会返回 401，不产生副作用。
     ///
@@ -424,7 +424,7 @@ fn scopes_from_challenge(value: &str) -> Vec<String> {
         .collect()
 }
 
-/// 按 RFC 9728 与 MCP 2026-07-28 顺序探测 protected resource metadata。
+/// 按 RFC 9728 与 MCP 授权草案（实现参考 2026-07-28，协商版本 2025-11-25）顺序探测 protected resource metadata。
 ///
 /// `WWW-Authenticate` challenge 显式给出的 `resource_metadata` 是权威来源；缺失时先
 /// 探测 MCP 端点子路径形式，再回退站点根路径形式。

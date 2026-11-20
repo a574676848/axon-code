@@ -83,6 +83,9 @@ struct CreateSessionBody {
 }
 
 /// `PATCH /api/v1/sessions/<id>` 的报文体。
+///
+/// 三个字段都可缺省，缺省即「这一项不改」：标题与置顶归档是同一张表上的三列，
+/// 一次请求只写调用方真正改过的那几列。
 #[derive(Debug, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PatchSessionBody {
@@ -90,6 +93,9 @@ struct PatchSessionBody {
     pinned: Option<bool>,
     #[serde(default)]
     archived: Option<bool>,
+    /// 展示标题；桌面重命名写的就是这一列。
+    #[serde(default)]
+    title: Option<String>,
 }
 
 impl SessionsHttpAdapter {
@@ -159,13 +165,21 @@ impl SessionsHttpAdapter {
         )
     }
 
-    /// 更新会话的置顶与归档状态。
+    /// 更新会话的置顶、归档与标题。
+    ///
+    /// 三列都走 COALESCE：缺省保持原值，因此置顶、归档与重命名可以各自单独下发，
+    /// 不会因为并行改一项就把另一项写回旧值。
     fn patch(&self, session_id: &str, body: &[u8]) -> GatewayHttpResponse {
         let Ok(payload) = serde_json::from_slice::<PatchSessionBody>(body) else {
             return GatewayHttpResponse::json(400, &json!({"error": "invalid_body"}));
         };
-        if payload.pinned.is_none() && payload.archived.is_none() {
+        if payload.pinned.is_none() && payload.archived.is_none() && payload.title.is_none() {
             return GatewayHttpResponse::json(400, &json!({"error": "empty_patch"}));
+        }
+        let title = payload.title.as_deref().map(str::trim);
+        if title.is_some_and(str::is_empty) {
+            // 空标题会把车道退化成没有名字：拒绝比静默接受更诚实。
+            return GatewayHttpResponse::json(400, &json!({"error": "empty_title"}));
         }
         // 适配器持有的是运行态根，不是数据目录：这里必须走同一份根到库的解析，
         // 否则会把库开到根目录上、在一个空库里做写入，现象是「会话不存在」。
@@ -175,11 +189,14 @@ impl SessionsHttpAdapter {
         }
         let changed = store.with_read_connection(|connection| {
             connection.execute(
-                "UPDATE sessions SET pinned=COALESCE(?1, pinned), archived=COALESCE(?2, archived)
-                     WHERE session_id=?3",
+                "UPDATE sessions
+                    SET pinned=COALESCE(?1, pinned), archived=COALESCE(?2, archived),
+                        title=COALESCE(?3, title)
+                  WHERE session_id=?4",
                 rusqlite::params![
                     payload.pinned.map(|value| i64::from(u8::from(value))),
                     payload.archived.map(|value| i64::from(u8::from(value))),
+                    title,
                     session_id
                 ],
             )
@@ -192,6 +209,7 @@ impl SessionsHttpAdapter {
                     "sessionId": session_id,
                     "pinned": payload.pinned,
                     "archived": payload.archived,
+                    "title": title,
                 }),
             ),
             Err(_) => GatewayHttpResponse::json(500, &json!({"error": "update_failed"})),

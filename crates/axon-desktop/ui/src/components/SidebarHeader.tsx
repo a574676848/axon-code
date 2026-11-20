@@ -35,7 +35,7 @@ export const SidebarBrandBar: React.FC<SidebarBrandBarProps> = ({ onToggleSideba
       <span className={ROW_ICON_COLUMN}>
         <AxonLogo size={20} aria-hidden="true" className="rounded-xs" />
       </span>
-      <span className="text-[14px] leading-5 font-semibold tracking-[-0.015em] text-text-primary truncate">
+      <span className="text-body leading-5 font-semibold tracking-[-0.015em] text-text-primary truncate">
         Axon
       </span>
     </div>

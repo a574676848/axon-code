@@ -602,6 +602,10 @@ fn register_runtime_mcp_install(
         disposition: load.disposition.as_str(),
         failure: load.failure,
     });
+    // 降级（熔断期沿用缓存目录）不算健康探测成功：负缓存还没被真实探测推翻，
+    // 在这里清掉会让下一轮立刻重新拉起一台坏 server。工具调用期会命中同一条负缓存，
+    // 并把它换成可读的熔断原因返回给模型。
+    let degraded = load.disposition == McpSchemaCacheDisposition::Degraded;
     let Some((config, tool_schemas)) = load.loaded else {
         return Ok(RuntimeMcpInstallRegistration {
             registered_count: 0,
@@ -629,7 +633,9 @@ fn register_runtime_mcp_install(
             });
         }
     };
-    clear_mcp_health_failure(root, &identity.startup.config_ref);
+    if !degraded {
+        clear_mcp_health_failure(root, &identity.startup.config_ref);
+    }
     let route_context = RuntimeMcpServerRouteContext {
         definition: &install.definition,
         server_id: &identity.server_id,

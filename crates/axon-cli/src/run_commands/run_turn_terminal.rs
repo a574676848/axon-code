@@ -29,6 +29,11 @@ use super::{
 pub(crate) struct CompletedTurn {
     pub(crate) response: RunResponse,
     pub(crate) session_title: Option<String>,
+    /// 逐字稿投影失败的事实；为空表示这一轮已经完整落进 thread。
+    ///
+    /// 正文只存在于 thread 里，投影失败等于这一轮在界面上消失，因此调用端必须把它并入
+    /// 本轮结果（文本告警 / JSON `warnings` / 运行日志），不许只留在记账层。
+    pub(crate) projection_error: Option<String>,
     pub(crate) memory_usefulness: Option<RunMemoryUsefulnessEvent>,
     pub(crate) memory_autonomy: Option<axon_agent_runtime::MemoryAutonomyFeedbackReport>,
     pub(crate) post_run_governance: Option<PostRunGovernanceReceipt>,
@@ -68,8 +73,16 @@ pub(crate) fn complete_turn(
     );
     // 终态记账只走一处：指标、逐字稿投影与标题生成都在里面按 profile 决定。
     let profile = spec.profile;
-    let session_title =
-        super::run_turn_accounting::account_completed_turn(config_path, request, &record, profile);
+    // 投影失败不再只是一条告警：标题一起拿不到，错误随本轮结果回到调用端。
+    let (session_title, projection_error) = match super::run_turn_accounting::account_completed_turn(
+        config_path,
+        request,
+        &record,
+        profile,
+    ) {
+        Ok(title) => (Some(title), None),
+        Err(error) => (None, Some(error)),
+    };
 
     // 反思是轮后异步治理的产物：本轮治理尚未启动，能确定看到的只有上一次的结果。
     // 这条提示随 run 输出交给界面，用户在下一轮开头看到上一轮的记忆动作。
@@ -94,7 +107,8 @@ pub(crate) fn complete_turn(
     settle_dispatch_terminal(request, axon_session::DispatchTerminalKind::Understood);
     CompletedTurn {
         response,
-        session_title: Some(session_title),
+        session_title,
+        projection_error,
         memory_usefulness,
         memory_autonomy: None,
         post_run_governance,

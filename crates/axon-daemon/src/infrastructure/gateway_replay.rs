@@ -282,6 +282,17 @@ where
         .get_interaction(interaction_id)
         .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?
         .ok_or_else(|| GatewayKernelError::NotFound("历史目标 Interaction 不存在".to_owned()))?;
+    /*
+     * `tail` 与 `after` 是两种互斥的读取语义：前者要「这一轮的最后一窗」，后者要
+     * 「从某个序号往后」。同时给出时旧实现静默忽略 `after`，`nextAfter` 还可能小于
+     * 调用方给的序号，客户端按它续翻就是游标回退、重复帧与中间整段丢失。
+     * 明确拒绝，让调用方改参数，而不是给出自相矛盾的分页。
+     */
+    if tail && after_sequence > 0 {
+        return Err(GatewayKernelError::InvalidQuery(
+            "tail 与 after 不能同时给出：前者取尾窗，后者按序号续读".to_owned(),
+        ));
+    }
     let session_id = crate::application::primary_session_id_for_interaction(&interaction)
         .map_err(GatewayKernelError::Ingress)?;
     let ceiling = live_ceiling_cursor(store, &session_id, None)?;
