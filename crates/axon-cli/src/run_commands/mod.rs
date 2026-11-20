@@ -103,6 +103,7 @@ mod run_subagent_performance;
 mod run_subagent_progress;
 mod run_text_render;
 pub(crate) mod run_thread_children;
+mod run_thread_facts;
 mod run_thread_history;
 mod run_thread_partial;
 pub(crate) mod run_thread_replay;

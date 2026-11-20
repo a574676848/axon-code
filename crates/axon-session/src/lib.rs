@@ -39,7 +39,7 @@ pub use infrastructure::{
 };
 pub use infrastructure::{
     SESSION_EVENT_ARCHIVE_SUBDIR, SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES,
-    SESSION_EVENT_MISSING_ARCHIVE_TYPE, SqliteRuntimeStore, WalCheckpoint,
+    SESSION_EVENT_MISSING_ARCHIVE_TYPE, SqliteRuntimeStore, ThreadTurnFacts, WalCheckpoint,
 };
 pub use ports::ExecutionSettlement;
 pub use ports::ThreadActivationSnapshot;

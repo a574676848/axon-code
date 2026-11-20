@@ -88,7 +88,7 @@ pub(crate) struct ThreadTurnMetadata {
     pub(crate) provider_duration_ms: u64,
 }
 
-pub(super) fn thread_turn_metadata_from_record(record: &RunSessionRecord) -> ThreadTurnMetadata {
+pub(crate) fn thread_turn_metadata_from_record(record: &RunSessionRecord) -> ThreadTurnMetadata {
     let context = record.session_context.as_ref();
     ThreadTurnMetadata {
         usage: record.usage,
@@ -366,14 +366,26 @@ pub(crate) fn patch_turn_artifacts(
     {
         return Err(format!("thread {session_id} 缺少轮次 {assistant_part_id}"));
     }
-    ThreadService::new(JsonlThreadEventStore).append_turn_metadata_patch(
+    let appended = ThreadService::new(JsonlThreadEventStore).append_turn_metadata_patch(
         &root,
         session_id,
         crate::run_commands::run_execution::now_ms(),
         assistant_part_id,
         notice,
         affect_sequence,
-    )
+    );
+    // 侧车同步补写提示：读侧一次主键查询即可拿到，不再读 thread。
+    if appended.is_ok()
+        && let Some(notice) = notice
+    {
+        crate::run_commands::run_thread_facts::record_turn_notice(
+            config_path,
+            session_id,
+            assistant_part_id,
+            notice,
+        );
+    }
+    appended
 }
 
 /// 尾部窗口里按 `assistant_part_id` 找轮次；找不到时为空。

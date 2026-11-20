@@ -92,6 +92,8 @@ mod schema;
 mod session_control_repository;
 #[path = "sqlite_runtime_store/session_metrics_repository.rs"]
 pub(crate) mod session_metrics_repository;
+#[path = "sqlite_runtime_store/thread_turn_facts_repository.rs"]
+mod thread_turn_facts_repository;
 #[path = "sqlite_runtime_store/transaction.rs"]
 pub mod transaction;
 #[path = "sqlite_runtime_store/user_question_repository.rs"]
@@ -497,9 +499,53 @@ impl EventLogStore for SqliteRuntimeStore {
         event_log_repository::latest_turn_metrics(self, session_id, interaction_ids)
     }
 }
+
+/// 轮次事实侧车表的读写入口。
+///
+/// 侧车表是投影：写入失败不阻断主流程，读侧在缺行时回落尾窗读。
+pub use thread_turn_facts_repository::ThreadTurnFacts;
+
+impl SqliteRuntimeStore {
+    /// 写入或更新一轮的标量事实。
+    pub fn upsert_thread_turn_facts(
+        &self,
+        facts: &ThreadTurnFacts,
+        now_ms: u64,
+    ) -> Result<(), RuntimeStoreError> {
+        thread_turn_facts_repository::upsert_turn_facts(self, facts, now_ms)
+    }
+
+    /// 补写某一轮的反思提示；行不存在时不做任何事。
+    pub fn update_thread_turn_notice(
+        &self,
+        thread_id: &str,
+        assistant_part_id: &str,
+        notice: &str,
+        now_ms: u64,
+    ) -> Result<(), RuntimeStoreError> {
+        thread_turn_facts_repository::update_turn_notice(
+            self,
+            thread_id,
+            assistant_part_id,
+            notice,
+            now_ms,
+        )
+    }
+
+    /// 读一条 thread 最新一轮的标量事实；没有这一行时为空。
+    pub fn latest_thread_turn_facts(
+        &self,
+        thread_id: &str,
+    ) -> Result<Option<ThreadTurnFacts>, RuntimeStoreError> {
+        thread_turn_facts_repository::latest_turn_facts(self, thread_id)
+    }
+}
 #[cfg(test)]
 #[path = "sqlite_runtime_store_metrics_tests.rs"]
 mod metrics_tests;
 #[cfg(test)]
 #[path = "sqlite_runtime_store_perf_tests.rs"]
 mod perf_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_turn_facts_tests.rs"]
+mod turn_facts_tests;

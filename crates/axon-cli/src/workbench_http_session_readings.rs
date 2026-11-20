@@ -508,6 +508,19 @@ pub(super) fn latest_turn_facts(
     session_id: &str,
 ) -> Option<crate::run_commands::run_thread_store::LatestTurnFacts> {
     let run_session_id = session_run_session_id(axon_root, session_id)?;
+    /*
+     * 侧车表优先：一次主键查询就能拿到三个标量，与历史长度无关。
+     *
+     * 缺行（老数据、写侧失败、还没跑过一轮）才回落 4 MiB 尾窗读：那条路径虽然恒定
+     * 4 MiB，但比主键查询贵两个数量级，因此只作兜底。
+     */
+    if let Ok(Some(facts)) = runtime_store(axon_root).latest_thread_turn_facts(&run_session_id) {
+        return Some(crate::run_commands::run_thread_store::LatestTurnFacts {
+            model_name: facts.model_name,
+            reasoning_effort: facts.reasoning_effort,
+            reflection_notice: facts.reflection_notice,
+        });
+    }
     crate::run_commands::run_thread_store::latest_turn_facts_at_root(axon_root, &run_session_id)
 }
 

@@ -129,7 +129,8 @@ mod queries;
 pub(crate) use queries::{
     LatestTurnFacts, RecentTurnFact, ThreadTurnMetadata, latest_turn_facts_at_root,
     latest_turn_usage_tokens_at_root, patch_turn_artifacts, previous_reflection_notice,
-    recent_turn_facts, turn_record, turn_record_by_sequence, turn_sequence,
+    recent_turn_facts, thread_turn_metadata_from_record, turn_record, turn_record_by_sequence,
+    turn_sequence,
 };
 
 /// Thread mirror 中单个工具回执摘要的字符上限。
@@ -178,6 +179,10 @@ pub(super) fn mirror_session_to_thread(
     let started = Instant::now();
     let thread_id = record.thread_id.clone();
     let result = mirror_session_to_thread_inner(config_path, record);
+    // 侧车与 thread 记录同一次收口落地：读侧因此不必为了三个标量再读大记录。
+    if result.is_ok() {
+        super::run_thread_facts::record_turn_facts(config_path, record);
+    }
     if let Ok(root) = resolved_axon_root(config_path) {
         crate::runtime_thread_io_metrics::record(
             &root,
