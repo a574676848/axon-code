@@ -75,10 +75,16 @@ where
             recorder.record(TurnPerformanceStage::WorkerClaimed);
             Some(recorder)
         };
-        let (interaction, session_id, execution_request) = self.execution_request(request)?;
-        // 目标执行轮在账本上的那一行随本轮前进：入站即认领，收口即结算。
-        // 一轮只对应一条 Interaction，唯一性由入站主键保证，账本不再需要自己的租约。
-        let goal_execution = self.goal_execution_record(&interaction);
+        // 账本行先于执行请求解析：工作区缺失这类失败发生在请求构造阶段，那时也必须有
+        // 一处能结算目标，否则目标会永远停在「进行中」而没有任何人再跑它。
+        let goal_execution = self.goal_execution_record(&request.interaction);
+        let (interaction, session_id, execution_request) = match self.execution_request(request) {
+            Ok(value) => value,
+            Err(error) => {
+                self.retry_goal_execution(goal_execution.as_ref());
+                return Err(error);
+            }
+        };
         if let Some(execution) = goal_execution.as_ref() {
             let _ = self
                 .store
