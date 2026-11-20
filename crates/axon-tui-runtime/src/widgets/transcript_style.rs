@@ -133,6 +133,25 @@ pub(crate) fn strong_role_style(role: TranscriptColorRole) -> Style {
     strong(transcript_palette().color(role))
 }
 
+/// 候选弹窗选中行样式：命令、模型、思考强度、会话四个弹窗共用同一条高亮，
+/// 上下移动时读者看到的是同一种「当前项」。
+pub(crate) fn selectable_row_selected_style() -> Style {
+    role_style(TranscriptColorRole::Accent).add_modifier(Modifier::BOLD | Modifier::REVERSED)
+}
+
+/// 候选弹窗未选中行样式：显式摘掉反色，避免上一帧的选中样式被继承。
+pub(crate) fn selectable_row_style(role: TranscriptColorRole) -> Style {
+    role_style(role).remove_modifier(Modifier::REVERSED)
+}
+
+/// 候选弹窗的标记列样式（会话弹窗的箭头）：不参与反色。
+///
+/// 高亮只覆盖内容区，标记列始终是正常背景：上下移动时读者看到的是一条内容条在走，
+/// 而不是从行首开始整块染色。
+pub(crate) fn selectable_row_marker_style() -> Style {
+    role_style(TranscriptColorRole::Accent).add_modifier(Modifier::BOLD)
+}
+
 pub(crate) fn syntax_role_style(scopes: &[&str], fallback_role: TranscriptColorRole) -> Style {
     syntax_style_for_scopes(scopes, role_style(fallback_role))
 }

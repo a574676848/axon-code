@@ -1,189 +1,33 @@
 //! TUI `/sessions` 选中会话后的历史读取。
 //!
-//! 会话目录来自 thread 存储，历史也必须来自同一份数据：这里读取目标 thread 的
-//! turns，把用户轮与助手轮投影成 TUI 历史回放载荷，交给与冷启动同一条
-//! `restore_historical_turn` 路径渲染。工具回执与 reasoning 不属于可见转录，
-//! 因此不进入投影。
+//! 会话目录来自运行态会话表，历史也必须来自同一份数据：这里读取该会话的 durable
+//! wire 事件，按轮次投影成与实时回合完全相同的渲染行，再交给与冷启动同一条
+//! `restore_historical_turn` 路径渲染。这样切过去的会话看到的就是它当初的样子，
+//! 不存在「目录里有、历史读不到」的第二套事实源。
 
 use std::path::Path;
 
-use axon_session::{JsonlThreadEventStore, ThreadDetail, ThreadHistoryItem, ThreadService};
-use axon_tui_runtime::{
-    AgentTuiMessagePart, AgentTuiRunLine, AgentTuiRunOutput, AgentTuiRunSessionInfo,
-};
+use axon_tui_runtime::{AgentTuiRunLine, AgentTuiRunOutput, AgentTuiRunSessionInfo};
 
-/// 读取指定会话的历史回放载荷；会话不存在或没有可见对话时返回 None。
+use super::run_output_wire_sequence::wire_sequence_lines;
+
+/// 读取指定会话的历史回放载荷；会话没有可回放的轮次时返回 None。
 pub(super) fn load_session_history(
     config_path: Option<&Path>,
     session_id: &str,
 ) -> Option<AgentTuiRunOutput> {
-    let root = crate::run_commands::run_session_store::resolved_axon_root(config_path?).ok()?;
-    let detail = ThreadService::new(JsonlThreadEventStore)
-        .read_thread(&root, session_id)
-        .ok()?;
-    let output = session_history_output(&detail, session_id);
-    (!output.is_empty()).then_some(output)
-}
-
-/// 把 thread 历史投影成 TUI 历史回放载荷。
-///
-/// 身份行带的是**用户选中的会话标识**，不是 thread 标识：界面与后续提交都在会话标识
-/// 这一套里，历史回放若回填 thread id，切换后顶栏会显示另一种标识、下一轮也会落到
-/// thread id 上。旧数据的 thread id 与 session id 并不相等，因此不能用它顶替。
-fn session_history_output(detail: &ThreadDetail, session_id: &str) -> AgentTuiRunOutput {
-    let messages = detail
-        .turns
-        .iter()
-        .flat_map(|turn| turn.history_items.iter())
-        .filter_map(history_message)
-        .collect::<Vec<_>>();
-    if messages.is_empty() {
-        return AgentTuiRunOutput::empty();
-    }
+    let turns =
+        crate::run_commands::daemon_history_loader::load_session_turns(config_path, session_id)
+            .ok()?;
     let mut output = AgentTuiRunOutput::empty();
     output.push(AgentTuiRunLine::Session(AgentTuiRunSessionInfo::new(
         session_id.to_owned(),
         None,
     )));
-    for message in messages {
-        output.push(AgentTuiRunLine::Message(message));
-    }
-    output
-}
-
-fn history_message(item: &ThreadHistoryItem) -> Option<AgentTuiMessagePart> {
-    match item {
-        ThreadHistoryItem::UserMessage {
-            part_id, content, ..
-        } => Some(AgentTuiMessagePart::user(part_id.clone(), content.clone())),
-        ThreadHistoryItem::AssistantMessage {
-            part_id, content, ..
-        } => Some(AgentTuiMessagePart::assistant(
-            part_id.clone(),
-            content.clone(),
-        )),
-        ThreadHistoryItem::Reasoning { .. }
-        | ThreadHistoryItem::ToolCall { .. }
-        | ThreadHistoryItem::ToolResult { .. }
-        | ThreadHistoryItem::InjectedContext { .. } => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use axon_session::{
-        Thread, ThreadDetail, ThreadHistoryItem, ThreadSettings, ThreadSource, ThreadStatus, Turn,
-        TurnStatus,
-    };
-    use axon_tui_runtime::{AgentTuiMessagePartRole, AgentTuiRunLine};
-
-    #[test]
-    fn session_history_projects_only_visible_user_and_assistant_turns() {
-        let detail = ThreadDetail {
-            thread: thread_fixture(),
-            turns: vec![Turn {
-                turn_id: "turn-1".to_owned(),
-                sequence: 1,
-                status: TurnStatus::Completed,
-                history_items: vec![
-                    ThreadHistoryItem::UserMessage {
-                        sequence: 1,
-                        part_id: "part:user:1".to_owned(),
-                        content: "上一轮提问".to_owned(),
-                        local_images: Vec::new(),
-                        local_files: Vec::new(),
-                        provider_metadata: None,
-                    },
-                    ThreadHistoryItem::Reasoning {
-                        sequence: 2,
-                        provider_turn_id: 1,
-                        part_id: "part:reasoning:1".to_owned(),
-                        reasoning_id: "reasoning-1".to_owned(),
-                        content: "内部推理".to_owned(),
-                        provider_metadata: None,
-                    },
-                    ThreadHistoryItem::AssistantMessage {
-                        sequence: 3,
-                        part_id: "part:assistant:1".to_owned(),
-                        content: "上一轮回答".to_owned(),
-                        provider_metadata: None,
-                    },
-                ],
-                token_usage_json: None,
-                started_at_ms: 1,
-                completed_at_ms: Some(2),
-                interrupted_at_ms: None,
-                failure: None,
-            }],
-            compacted_history: None,
-        };
-
-        let output = super::session_history_output(&detail, "session-selected");
-        let messages = output
-            .lines()
-            .iter()
-            .filter_map(|line| match line {
-                AgentTuiRunLine::Message(message) => Some((message.role, message.text.clone())),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            messages,
-            vec![
-                (AgentTuiMessagePartRole::User, "上一轮提问".to_owned()),
-                (AgentTuiMessagePartRole::Assistant, "上一轮回答".to_owned()),
-            ]
-        );
-        assert_eq!(
-            output
-                .lines()
-                .first()
-                .map(|line| matches!(line, AgentTuiRunLine::Session(_))),
-            Some(true),
-            "历史回放必须先带会话身份行"
-        );
-        // 身份行必须是用户选中的会话标识，而不是 thread 标识（旧数据两者不同）。
-        assert_eq!(
-            output.lines().first().map(|line| match line {
-                AgentTuiRunLine::Session(info) => info.session_id.clone(),
-                _ => String::new(),
-            }),
-            Some("session-selected".to_owned())
-        );
-    }
-
-    #[test]
-    fn session_history_without_visible_messages_is_empty() {
-        let detail = ThreadDetail {
-            thread: thread_fixture(),
-            turns: Vec::new(),
-            compacted_history: None,
-        };
-
-        assert!(super::session_history_output(&detail, "session-selected").is_empty());
-    }
-
-    fn thread_fixture() -> Thread {
-        Thread {
-            thread_id: "session-1".to_owned(),
-            session_root_id: "session-1".to_owned(),
-            parent_thread_id: None,
-            forked_from_thread_id: None,
-            name: Some("历史会话".to_owned()),
-            status: ThreadStatus::Idle,
-            source: ThreadSource::Tui,
-            ephemeral: false,
-            settings: ThreadSettings {
-                cwd: ".".to_owned(),
-                provider: "openai".to_owned(),
-                model: "gpt-5.5".to_owned(),
-                selected_skill_name: None,
-            },
-            child_origin: None,
-            created_at_ms: 1,
-            updated_at_ms: 2,
-            archived_at_ms: None,
+    for turn in turns {
+        for line in wire_sequence_lines(&turn.wire_events, &[]) {
+            output.push(line);
         }
     }
+    (output.lines().len() > 1).then_some(output)
 }

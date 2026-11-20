@@ -123,6 +123,101 @@ fn historical_completed_turn_restores_reply_usage_divider_and_session_summary() 
     assert_eq!(state.header.hint, crate::r#loop::agent_tui::TUI_HINT_DONE);
 }
 
+/// 转录里的轮次分割线，按出现顺序。
+fn turn_summaries(
+    state: &super::AgentTuiState,
+) -> Vec<&crate::surface::cell_turn_summary_data::AgentRenderTurnSummaryCell> {
+    state
+        .cells
+        .transcript
+        .iter()
+        .filter_map(|line| match &line.data {
+            Some(RenderCellData::TurnSummary(summary)) => Some(summary),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn plain_conversation_turn_still_gets_its_own_divider_and_keeps_it() {
+    let mut state = test_state();
+    state.start_runtime_submit(&test_submission("hi"));
+    state.record_live_turn_usage(
+        crate::r#loop::agent_tui::run_output::AgentTuiTokenUsage::new(1_200, 800, 0, 300, 0),
+    );
+    let mut output = AgentTuiRunOutput::empty();
+    output.push(AgentTuiRunLine::Session(
+        crate::r#loop::agent_tui::run_output::AgentTuiRunSessionInfo::new("session-plain", None),
+    ));
+    output.push(AgentTuiRunLine::Message(AgentTuiMessagePart::assistant(
+        "assistant:hi",
+        "先生，我在。",
+    )));
+
+    state.finish_submit(Ok(output));
+
+    let first_turn = turn_summaries(&state);
+    assert_eq!(
+        first_turn.len(),
+        1,
+        "没有工具的对话回合同样要有自己的分割线"
+    );
+    assert_eq!(first_turn[0].total_tokens, Some(2_300));
+    assert!(first_turn[0].duration_ms.is_some());
+
+    // 第二轮收口后，第一轮那条分割线必须原样留在转录里。
+    state.start_runtime_submit(&test_submission("再问一句"));
+    state.record_live_turn_usage(
+        crate::r#loop::agent_tui::run_output::AgentTuiTokenUsage::new(100, 0, 0, 20, 0),
+    );
+    state.finish_submit(Ok(AgentTuiRunOutput::empty()));
+
+    let all_turns = turn_summaries(&state);
+    assert_eq!(all_turns.len(), 2);
+    assert_eq!(
+        all_turns[0].total_tokens,
+        Some(2_300),
+        "已经产生的轮次读数不许被后一轮清掉"
+    );
+    assert_eq!(all_turns[1].total_tokens, Some(120));
+}
+
+#[test]
+fn header_readings_survive_the_session_line_that_closes_the_turn() {
+    let mut state = test_state();
+    state.start_runtime_submit(&test_submission("hi"));
+    state.record_live_turn_usage(
+        crate::r#loop::agent_tui::run_output::AgentTuiTokenUsage::new(1_200, 800, 0, 300, 0),
+    );
+    // 收口回放的第一行就是身份行：它只说明这轮属于哪条会话，
+    // 不能把这一轮刚结算的累计读数一起清掉。
+    let mut output = AgentTuiRunOutput::empty();
+    output.push(AgentTuiRunLine::Session(
+        crate::r#loop::agent_tui::run_output::AgentTuiRunSessionInfo::new("session-first", None),
+    ));
+
+    state.finish_submit(Ok(output));
+
+    assert_eq!(state.header.session_usage.total_tokens(), 2_300);
+    assert_eq!(state.session_token_total(), 2_300);
+    assert!(state.session_cache_hit_basis_points().is_some());
+    assert_eq!(state.header.session_summary.turns, 1);
+    assert_eq!(state.header.last_turn_usage.total_tokens(), 2_300);
+}
+
+#[test]
+fn explicit_session_switch_still_clears_readings_of_the_previous_session() {
+    let mut state = test_state();
+    state.bind_session_identity("session-a");
+    state.header.session_usage =
+        crate::r#loop::agent_tui::run_output::AgentTuiTokenUsage::new(1_200, 0, 0, 300, 0);
+
+    state.bind_session_identity("session-b");
+
+    assert_eq!(state.header.session_usage.total_tokens(), 0);
+    assert_eq!(state.header.session_summary.turns, 0);
+}
+
 #[test]
 fn runtime_status_enum_tracks_ready_and_working_states() {
     let mut state = test_state();

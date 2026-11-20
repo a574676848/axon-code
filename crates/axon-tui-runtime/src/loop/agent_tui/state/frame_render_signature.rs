@@ -92,6 +92,12 @@ impl AgentTuiState {
         self.composer.draft.cursor().hash(hasher);
         self.composer.command_suggestions.len().hash(hasher);
         self.composer.selected_command_suggestion.hash(hasher);
+        // 候选内容也要进签名：只哈希条数时，换过滤词后行数相同会把旧行留在屏幕上。
+        for suggestion in &self.composer.command_suggestions {
+            suggestion.command.hash(hasher);
+            suggestion.description.hash(hasher);
+            suggestion.argument_hint.hash(hasher);
+        }
         self.hash_composer_popup_signature(hasher);
         self.composer.bottom_views.top_kind().hash(hasher);
         // 选中项是高亮与回车的共同依据：漏进签名时方向键只改内存，屏幕高亮不动。
@@ -308,6 +314,31 @@ mod tests {
         state.select_next_composer_popup_item();
 
         assert_ne!(state.frame_render_signature(), first);
+    }
+
+    #[test]
+    fn signature_changes_when_command_suggestion_content_changes_at_equal_length() {
+        use crate::r#loop::agent_tui::commands::AgentTuiCommandSuggestion;
+
+        let mut state = test_state();
+        state.composer.command_suggestions = vec![AgentTuiCommandSuggestion {
+            command: "/model gpt-5.5".to_owned(),
+            description: "openai".to_owned(),
+            argument_hint: "gpt-5.5".to_owned(),
+        }];
+        let first = state.frame_render_signature();
+
+        state.composer.command_suggestions = vec![AgentTuiCommandSuggestion {
+            command: "/model gpt-5.5-mini".to_owned(),
+            description: "openai".to_owned(),
+            argument_hint: "gpt-5.5-mini".to_owned(),
+        }];
+
+        assert_ne!(
+            state.frame_render_signature(),
+            first,
+            "候选内容变了必须重画，否则上下切换后旧行会留在屏幕上"
+        );
     }
 
     #[test]

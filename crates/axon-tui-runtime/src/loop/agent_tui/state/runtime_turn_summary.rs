@@ -27,7 +27,10 @@ impl AgentTuiState {
         elapsed: Duration,
         usage: AgentTuiTokenUsage,
     ) {
-        if !self.bridge.turn_work_activity {
+        // 分割线是**这一轮**的读数，不是「跑过工具」的奖励：纯对话回合同样有用时、
+        // Token、命中率与首字，缺了它这一轮的账就再也无处可看。只有既没有工具活动、
+        // 也没有任何用量观测的空回合才不占位。
+        if !self.bridge.turn_work_activity && !usage.has_tokens() {
             return;
         }
         self.bridge.turn_work_activity = false;

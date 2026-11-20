@@ -11,8 +11,8 @@ use crate::ui_workflow::action::{UiKeyCode, UiKeyEvent};
 const TITLE_ROWS: u16 = 1;
 /// 底部提示行占用的行数；没有溢出时留空，保证高度与容量一一对应。
 const HINT_ROWS: u16 = 1;
-/// 每个候选占用的行数：标题行 + 来源行。
-const ITEM_ROWS: u16 = 2;
+/// 每个候选占用的行数：标题与来源同一行，来源贴在行尾。
+const ITEM_ROWS: u16 = 1;
 /// 弹窗一次最多展示的候选数。
 ///
 /// 面板实际可用高度由 ComposerDock 决定，可能小于这里申请的容量；
@@ -275,17 +275,17 @@ mod tests {
             empty.handle_key(key(UiKeyCode::Esc)),
             BottomViewEvent::Close
         );
-        assert_eq!(empty.height(), 4);
+        assert_eq!(empty.height(), 3);
     }
 
     #[test]
     fn session_popup_capacity_follows_the_real_panel_height() {
         let view = view(true);
 
-        // 标题行之外每项占 2 行：高度 1 放不下任何候选，高度 3 只放得下一条。
+        // 标题行之外每项占 1 行：高度 1 放不下任何候选，高度 2 只放得下一条。
         assert_eq!(view.visible_capacity(1), 0);
-        assert_eq!(view.visible_capacity(3), 1);
-        assert_eq!(view.visible_capacity(14), 6);
+        assert_eq!(view.visible_capacity(2), 1);
+        assert_eq!(view.visible_capacity(3), 2);
     }
 
     #[test]

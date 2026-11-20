@@ -125,6 +125,54 @@ fn load_completed_turn_from_store(
     }))
 }
 
+/// 一条会话里按时间排好的一轮 durable wire 事件。
+pub(crate) struct SessionHistoryTurn {
+    pub(crate) wire_events: Vec<WireEventEnvelope>,
+}
+
+/// 读取一条会话的全部轮次（按轮次发生顺序）。
+///
+/// 与「最近完成回合」同源：只有 durable 会话事件是回放事实，正文、工具回执与用量
+/// 都在这些帧里，因此 `/sessions` 选中任意一条会话都能还原它当初的样子。
+pub(crate) fn load_session_turns(
+    config_path: Option<&Path>,
+    session_id: &str,
+) -> Result<Vec<SessionHistoryTurn>, String> {
+    let store = SqliteRuntimeStore::from_root(runtime_data_root(config_path)?);
+    let session = DaemonSessionId::new(session_id.to_owned()).map_err(|error| error.to_string())?;
+    let records = replay_all_events(&store, &session)?;
+    group_turns(records)
+}
+
+/// 把一条会话的 durable 事件按 Interaction 归并成轮次，保持事件里的先后顺序。
+fn group_turns(records: Vec<SessionEventRecord>) -> Result<Vec<SessionHistoryTurn>, String> {
+    let mut order = Vec::<String>::new();
+    let mut by_interaction = std::collections::HashMap::<String, Vec<WireEventEnvelope>>::new();
+    for record in records {
+        if record.event_type != WIRE_EVENT {
+            continue;
+        }
+        let Some(interaction_id) = payload_interaction_id(&record.payload_json) else {
+            continue;
+        };
+        let wire = serde_json::from_str::<WireEventEnvelope>(&record.payload_json)
+            .map_err(|error| format!("解析历史 wire event 失败：{error}"))?;
+        if !by_interaction.contains_key(&interaction_id) {
+            order.push(interaction_id.clone());
+        }
+        by_interaction.entry(interaction_id).or_default().push(wire);
+    }
+
+    Ok(order
+        .into_iter()
+        .filter_map(|interaction_id| by_interaction.remove(&interaction_id))
+        .map(|mut wire_events| {
+            wire_events.sort_by_key(|event| event.sequence);
+            SessionHistoryTurn { wire_events }
+        })
+        .collect())
+}
+
 fn runtime_data_root(config_path: Option<&Path>) -> Result<std::path::PathBuf, String> {
     match config_path {
         Some(path) => {
@@ -167,4 +215,69 @@ fn payload_interaction_id(payload_json: &str) -> Option<String> {
         .get("interactionId")
         .and_then(serde_json::Value::as_str)
         .map(ToOwned::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axon_domain::DaemonSessionId;
+
+    fn wire_record(sequence: u64, interaction_id: &str, content: &str) -> SessionEventRecord {
+        let wire = WireEventEnvelope {
+            schema_version: axon_protocol::wire::WireSchemaVersion::default(),
+            event_id: axon_protocol::wire::WireCorrelationId(format!("event:{sequence}")),
+            correlation_id: axon_protocol::wire::WireCorrelationId("turn".to_owned()),
+            session: axon_protocol::wire::WireSessionRef {
+                session_id: "session-1".to_owned(),
+                run_id: None,
+                parent_session_id: None,
+            },
+            sequence,
+            recorded_at_ms: i64::try_from(sequence).unwrap_or(0),
+            kind: WireEventKind::AssistantMessage(axon_protocol::wire::WireAssistantMessage {
+                part_id: format!("assistant:{sequence}"),
+                message_id: format!("message:{sequence}"),
+                content: content.to_owned(),
+                delta: false,
+            }),
+        };
+        let mut payload = serde_json::to_value(&wire).expect("序列化 wire");
+        payload["interactionId"] = serde_json::Value::String(interaction_id.to_owned());
+        SessionEventRecord {
+            session_id: DaemonSessionId::new("session-1").expect("会话 ID"),
+            sequence,
+            generation: "generation-1".to_owned(),
+            event_type: WIRE_EVENT.to_owned(),
+            payload_json: payload.to_string(),
+            emitted_at_ms: sequence,
+        }
+    }
+
+    #[test]
+    fn session_turns_group_events_by_interaction_in_arrival_order() {
+        // 交错的顺序（A1、B1、A2）也必须按轮次归并，且轮次内部按 sequence 排序。
+        let records = vec![
+            wire_record(3, "interaction-a", "第二轮补充"),
+            wire_record(1, "interaction-a", "第一轮正文"),
+            wire_record(2, "interaction-b", "第二轮正文"),
+        ];
+
+        let turns = group_turns(records).expect("分组不应失败");
+
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].wire_events.len(), 2);
+        assert_eq!(turns[0].wire_events[0].sequence, 1);
+        assert_eq!(turns[0].wire_events[1].sequence, 3);
+        assert_eq!(turns[1].wire_events[0].sequence, 2);
+    }
+
+    #[test]
+    fn session_turns_skip_records_without_an_interaction() {
+        let mut record = wire_record(1, "interaction-a", "正文");
+        record.payload_json = "{\"sequence\":1}".to_owned();
+
+        let turns = group_turns(vec![record]).expect("分组不应失败");
+
+        assert!(turns.is_empty(), "没有归属轮的帧不属于任何一轮");
+    }
 }

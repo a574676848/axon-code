@@ -304,14 +304,13 @@ impl AgentTuiCatalog {
             .collect();
     }
 
-    /// 已加载 MCP tool 数量。
+    /// 已加载 MCP server 台数：首屏与 `/mcp` 的读数都以台数表达，工具条数只是每台 server 的内部明细。
     #[must_use]
-    pub fn loaded_mcp_tool_count(&self) -> usize {
+    pub fn loaded_mcp_server_count(&self) -> usize {
         self.mcp_servers
             .iter()
-            .map(|server| server.tools.len())
-            .sum::<usize>()
-            .max(self.mcp_entries.len())
+            .filter(|server| server.status == AgentTuiCatalogLoadState::Loaded)
+            .count()
     }
 
     /// 加载失败的 MCP server 数量。
@@ -334,9 +333,9 @@ impl AgentTuiCatalog {
             AgentTuiCatalogLoadState::Loaded => {
                 let failed = self.failed_mcp_server_count();
                 if failed == 0 {
-                    self.loaded_mcp_tool_count().to_string()
+                    self.loaded_mcp_server_count().to_string()
                 } else {
-                    format!("{} · 失败 {failed}", self.loaded_mcp_tool_count())
+                    format!("{} · 失败 {failed}", self.loaded_mcp_server_count())
                 }
             }
         }

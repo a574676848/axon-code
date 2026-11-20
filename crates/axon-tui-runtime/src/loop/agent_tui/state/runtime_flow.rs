@@ -315,8 +315,10 @@ impl AgentTuiState {
     fn apply_run_line(&mut self, line: AgentTuiRunLine) {
         match line {
             AgentTuiRunLine::Session(info) => {
-                // 身份与读数绑在一起：换成另一条会话时，上一条会话的累计读数必须一起清掉。
-                self.bind_session_identity(&info.session_id);
+                // 身份行每轮都带一次：这里只认身份，不碰累计读数。
+                // 累计读数属于这条会话已经发生过的观测，结束一轮不清零；清账只发生在
+                // 用户显式切会话（`/sessions`、`/new`）的那一刻。
+                self.adopt_session_identity(&info.session_id);
                 self.clear_transient_runtime_state();
                 self.header.session_summary.record_session(
                     info.session_id,

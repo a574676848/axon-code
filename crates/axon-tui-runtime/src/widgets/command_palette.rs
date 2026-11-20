@@ -11,7 +11,13 @@ use ratatui::{
 use crate::app_shell::style_tokens::TranscriptColorRole;
 use crate::r#loop::agent_tui::commands::AgentTuiCommandSuggestion;
 use crate::surface::display_width::DisplayWidthText;
-use crate::widgets::{transcript_cells::display_width, transcript_style::role_style};
+use crate::widgets::{
+    transcript_cells::display_width,
+    transcript_style::{
+        role_style, selectable_row_selected_style as selected_style,
+        selectable_row_style as unselected_style,
+    },
+};
 
 const COMMAND_PANEL_MAX_HEIGHT: u16 = 9;
 const COMMAND_PANEL_FOOTER_HEIGHT: u16 = 1;
@@ -20,6 +26,8 @@ const COMMAND_COLUMN_MIN_WIDTH: usize = 8;
 const COMMAND_COLUMN_PADDING: usize = 2;
 const DESCRIPTION_COLUMN_MIN_WIDTH: usize = 18;
 const DESCRIPTION_GAP: &str = "  ";
+/// 面板底部提示：三个候选弹窗共用同一句话，按键含义一致。
+const COMMAND_PANEL_HINT: &str = " · ↑↓ 选择 · Enter 执行 · Esc 关闭";
 
 /// 命令建议面板 Widget。
 pub(crate) struct CommandPalette<'a> {
@@ -44,7 +52,14 @@ impl CommandPalette<'_> {
     fn build_command_lines(&self, width: u16) -> Vec<Line<'static>> {
         let command_width = command_column_width(self.commands, width);
         self.visible_commands()
-            .map(|(index, item)| command_line(item, index == self.selected, command_width))
+            .map(|(index, item)| {
+                command_line(
+                    item,
+                    index == self.selected,
+                    command_width,
+                    usize::from(width),
+                )
+            })
             .collect()
     }
 
@@ -102,10 +117,7 @@ impl Widget for CommandPalette<'_> {
                 self.title.to_owned(),
                 role_style(TranscriptColorRole::Muted),
             ),
-            Span::styled(
-                " · Enter 执行 · Esc 关闭",
-                role_style(TranscriptColorRole::Muted),
-            ),
+            Span::styled(COMMAND_PANEL_HINT, role_style(TranscriptColorRole::Muted)),
         ])
         .render(
             Rect {
@@ -132,6 +144,7 @@ fn command_line(
     item: &AgentTuiCommandSuggestion,
     selected: bool,
     command_width: usize,
+    row_width: usize,
 ) -> Line<'static> {
     let base_style = if selected {
         selected_style().add_modifier(Modifier::BOLD)
@@ -149,43 +162,69 @@ fn command_line(
         unselected_style(TranscriptColorRole::Assistant).add_modifier(Modifier::BOLD)
     };
     let label = truncate_display_text(&command_display_label(item), command_width);
-    let hint = visible_argument_hint(item);
+    let suffix = command_argument_suffix(item);
+    let description = item.description.trim();
 
-    Line::from(vec![
-        Span::styled(" ", command_style),
-        Span::styled(label.clone(), command_style),
+    // 标记列（首列空格）不参与反色：高亮整条只在内容区上移动。
+    let label_width = display_width(&label);
+    let suffix_width = display_width(&suffix);
+    let mut used_width = 1usize
+        .saturating_add(command_width)
+        .saturating_add(suffix_width);
+    let mut spans = vec![
+        Span::raw(" "),
+        Span::styled(label, command_style),
         Span::styled(
-            " ".repeat(command_width.saturating_sub(display_width(&label))),
+            " ".repeat(command_width.saturating_sub(label_width)),
             command_style,
         ),
-        Span::styled(hint, muted_style),
-        Span::styled(DESCRIPTION_GAP, muted_style),
-        Span::styled(item.description.clone(), base_style),
-    ])
+        Span::styled(suffix, muted_style),
+    ];
+    // 说明为空的行只留取值本身：不占位、也不留下悬挂的分隔空白。
+    if !description.is_empty() {
+        used_width = used_width
+            .saturating_add(DESCRIPTION_GAP.len())
+            .saturating_add(display_width(description));
+        spans.push(Span::styled(DESCRIPTION_GAP, muted_style));
+        spans.push(Span::styled(description.to_owned(), base_style));
+    }
+    // 选中行铺到行尾：上下切换时高亮整条移动，行尾不会留下半亮的残段。
+    if selected {
+        spans.push(Span::styled(
+            " ".repeat(row_width.saturating_sub(used_width)),
+            selected_style(),
+        ));
+    }
+
+    Line::from(spans)
 }
 
-fn selected_style() -> Style {
-    role_style(TranscriptColorRole::Accent).add_modifier(Modifier::REVERSED)
-}
-
-fn unselected_style(role: TranscriptColorRole) -> Style {
-    role_style(role).remove_modifier(Modifier::REVERSED)
-}
-
+/// 左列主文本。
+///
+/// 参数候选（`/model gemini-3.8-flash`、`/think max`、`/sessions --all`）只展示取值本身：
+/// 命令名用户刚打完，逐行重复一遍既挤掉右列的事实，也把同一句话读七遍。
+/// 顶层命令候选没有取值，仍然展示完整命令。
 fn command_display_label(item: &AgentTuiCommandSuggestion) -> String {
-    item.command.clone()
+    let hint = item.argument_hint.trim();
+    if !hint.is_empty() && item.command.trim_end().ends_with(hint) {
+        hint.to_owned()
+    } else {
+        item.command.clone()
+    }
+}
+
+/// 顶层命令候选后面的参数提示（`<model>`、`[--all]`）；参数候选已把取值放上主列，这里留空。
+fn command_argument_suffix(item: &AgentTuiCommandSuggestion) -> String {
+    let hint = item.argument_hint.trim();
+    if hint.is_empty() || item.command.trim_end().ends_with(hint) {
+        String::new()
+    } else {
+        format!(" {hint}")
+    }
 }
 
 fn truncate_display_text(value: &str, max_width: usize) -> String {
     DisplayWidthText::ellipsize(value, max_width)
-}
-
-fn visible_argument_hint(item: &AgentTuiCommandSuggestion) -> String {
-    if item.argument_hint.is_empty() || item.command.ends_with(&item.argument_hint) {
-        String::new()
-    } else {
-        format!(" {}", item.argument_hint)
-    }
 }
 
 fn command_column_width(commands: &[AgentTuiCommandSuggestion], area_width: u16) -> usize {
@@ -256,26 +295,24 @@ mod tests {
         let commands = [
             AgentTuiCommandSuggestion {
                 command: "/model claude-sonnet-4-6".to_owned(),
-                description: "切换模型：claude-sonnet-4-6".to_owned(),
+                description: "anthropic · 200K 窗口".to_owned(),
                 argument_hint: "claude-sonnet-4-6".to_owned(),
             },
             AgentTuiCommandSuggestion {
                 command: "/model gpt-5.5".to_owned(),
-                description: "切换模型：gpt-5.5".to_owned(),
+                description: "openai".to_owned(),
                 argument_hint: "gpt-5.5".to_owned(),
             },
         ];
         let command_width = command_column_width(&commands, 80);
-        let first = command_line(&commands[0], true, command_width);
-        let second = command_line(&commands[1], false, command_width);
+        let first = command_line(&commands[0], true, command_width, 80);
+        let second = command_line(&commands[1], false, command_width, 80);
 
-        assert_eq!(first.spans[1].content.as_ref(), "/model claude-sonnet-4-6");
-        assert_eq!(second.spans[1].content.as_ref(), "/model gpt-5.5");
-        assert_eq!(
-            first.spans[5].content.as_ref(),
-            "切换模型：claude-sonnet-4-6"
-        );
-        assert_eq!(second.spans[5].content.as_ref(), "切换模型：gpt-5.5");
+        // 左列只放取值：命令名用户刚打完，逐行重复一遍没有信息增量。
+        assert_eq!(first.spans[1].content.as_ref(), "claude-sonnet-4-6");
+        assert_eq!(second.spans[1].content.as_ref(), "gpt-5.5");
+        assert_eq!(first.spans[5].content.as_ref(), "anthropic · 200K 窗口");
+        assert_eq!(second.spans[5].content.as_ref(), "openai");
         assert_eq!(
             truncate_display_text("/model claude-sonnet-4-6", 12),
             "/model clau…"
@@ -303,6 +340,13 @@ mod tests {
                 .add_modifier
                 .contains(Modifier::REVERSED)
         );
+        // 标记列不着反色：高亮整条从内容区开始，不从行首整块染色。
+        assert!(
+            !first.spans[0]
+                .style
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
 
         let unselected_command_style = second.spans[1].style;
         assert_eq!(
@@ -324,6 +368,21 @@ mod tests {
                 .sub_modifier
                 .contains(Modifier::REVERSED)
         );
+    }
+
+    #[test]
+    fn command_palette_shows_top_level_commands_with_their_argument_hint() {
+        let commands = [AgentTuiCommandSuggestion {
+            command: "/model".to_owned(),
+            description: "切换下一轮使用的模型".to_owned(),
+            argument_hint: "<model>".to_owned(),
+        }];
+        let command_width = command_column_width(&commands, 80);
+        let line = command_line(&commands[0], false, command_width, 80);
+
+        assert_eq!(line.spans[1].content.as_ref(), "/model");
+        assert_eq!(line.spans[3].content.as_ref(), " <model>");
+        assert_eq!(line.spans[5].content.as_ref(), "切换下一轮使用的模型");
     }
 
     #[test]

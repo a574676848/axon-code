@@ -39,17 +39,28 @@ impl AgentTuiState {
         self.bridge.pending_session_switch = Some(session_id.to_owned());
     }
 
-    /// 把会话身份绑到目标会话，并清掉上一条会话的读数。
+    /// 只认会话身份，不动累计读数。
     ///
-    /// 顶栏的「累计 / 上一轮 / 摘要 / 运行模型」都是**会话级**读数：身份换了而读数没换，
-    /// 界面就会把别人的数当成本会话的数。同一会话重复绑定（每轮都会带一次身份行）不重置，
-    /// 否则累计读数会被逐轮清零。
-    pub(in crate::r#loop::agent_tui) fn bind_session_identity(&mut self, session_id: &str) {
+    /// 每轮收口回放的第一行都是身份行，它说明「这一轮属于哪条会话」，而不是「换了一条会话」。
+    /// 累计读数属于这条会话已经发生过的观测，换轮、结束一轮都必须原样留着；只有用户显式
+    /// 切走（`/sessions` 选中、`/new`）才由 [`Self::bind_session_identity`] 清掉。
+    pub(in crate::r#loop::agent_tui) fn adopt_session_identity(&mut self, session_id: &str) {
         if self.header.overrides.session.as_deref() == Some(session_id) {
             return;
         }
         self.header.overrides.session = Some(session_id.to_owned());
         self.header.overrides.continue_last = false;
+    }
+
+    /// 把会话身份绑到目标会话，并清掉上一条会话的读数。
+    ///
+    /// 顶栏的「累计 / 上一轮 / 摘要 / 运行模型」都是**会话级**读数：身份换了而读数没换，
+    /// 界面就会把别人的数当成本会话的数。同一会话重复绑定不重置，否则累计读数会被逐轮清零。
+    pub(in crate::r#loop::agent_tui) fn bind_session_identity(&mut self, session_id: &str) {
+        if self.header.overrides.session.as_deref() == Some(session_id) {
+            return;
+        }
+        self.adopt_session_identity(session_id);
         self.header.session_usage = AgentTuiTokenUsage::default();
         self.header.last_turn_usage = AgentTuiTokenUsage::default();
         self.header.session_summary = AgentTuiSessionSummary::default();

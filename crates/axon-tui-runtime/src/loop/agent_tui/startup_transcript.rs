@@ -67,3 +67,65 @@ fn startup_config_warning(
 fn config_status_ready(status: &str) -> bool {
     status == "已认证" || status.eq_ignore_ascii_case("ok") || status.eq_ignore_ascii_case("ready")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::r#loop::agent_tui::{AgentTuiCatalogLoadState, AgentTuiMcpServerCatalogItem};
+
+    fn catalog(
+        skills: &[&str],
+        servers: Vec<AgentTuiMcpServerCatalogItem>,
+        mcp_state: AgentTuiCatalogLoadState,
+    ) -> AgentTuiCatalog {
+        AgentTuiCatalog {
+            skills: skills.iter().map(|skill| (*skill).to_owned()).collect(),
+            mcp_servers: servers,
+            mcp_state,
+            ..AgentTuiCatalog::default()
+        }
+    }
+
+    fn ready_line(catalog: &AgentTuiCatalog) -> String {
+        startup_overview_for_catalog(catalog)
+            .lines()
+            .find(|line| line.starts_with("入口已就绪"))
+            .expect("首屏应包含入口就绪行")
+            .to_owned()
+    }
+
+    #[test]
+    fn startup_line_counts_mcp_servers_instead_of_tools() {
+        // 3 台 server 合计 33 个工具：MCP 读数必须是台数 3，工具条数不得顶上这个位置。
+        let servers = vec![
+            AgentTuiMcpServerCatalogItem::loaded("a", vec!["t".to_owned(); 11]),
+            AgentTuiMcpServerCatalogItem::loaded("b", vec!["t".to_owned(); 19]),
+            AgentTuiMcpServerCatalogItem::loaded("c", vec!["t".to_owned(); 3]),
+        ];
+        let catalog = catalog(&["s1", "s2"], servers, AgentTuiCatalogLoadState::Loaded);
+
+        assert_eq!(ready_line(&catalog), "入口已就绪 · MCP 3 · Skill 2");
+    }
+
+    #[test]
+    fn startup_line_keeps_failed_server_segment_after_loaded_count() {
+        let servers = vec![
+            AgentTuiMcpServerCatalogItem::loaded("a", vec!["t".to_owned()]),
+            AgentTuiMcpServerCatalogItem::loaded("b", vec!["t".to_owned()]),
+            AgentTuiMcpServerCatalogItem::failed("c", "启动失败"),
+        ];
+        let catalog = catalog(&["s1"], servers, AgentTuiCatalogLoadState::Loaded);
+
+        assert_eq!(
+            ready_line(&catalog),
+            "入口已就绪 · MCP 2 · 失败 1 · Skill 1"
+        );
+    }
+
+    #[test]
+    fn startup_line_reports_loading_catalog_without_counts() {
+        let catalog = catalog(&["s1"], Vec::new(), AgentTuiCatalogLoadState::Loading);
+
+        assert_eq!(ready_line(&catalog), "入口已就绪 · MCP 加载中 · Skill 1");
+    }
+}

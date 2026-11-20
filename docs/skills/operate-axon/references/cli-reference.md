@@ -80,12 +80,12 @@ axon upgrade [--manifest-url <url>] [--download] [--apply] [--rollback] [--outpu
 
 ## TUI 交互命令
 
-在 `axon` 交互界面内可直接执行（输入 `/` 会给出命令与参数提示）：
+在 `axon` 交互界面内可直接执行（输入 `/` 会给出命令与参数提示）。首屏收尾行 `入口已就绪 · MCP <台数> · Skill <条数>` 里，MCP 是已连上的 server 台数（有失败时追加 `失败 <数量>`），具体是哪几台、各带哪些工具看 `/mcp`。
 
 ```text
 /help                             查看 TUI 能力与常用命令
 /clear                            清空当前会话视图，保留顶部状态栏
-/sessions [--all]                 打开会话弹窗，↑↓ 选择、Enter 载入该会话历史；--all 含归档会话
+/sessions [--all]                 打开会话弹窗，↑↓ 选择、Enter 载入该会话历史；只列当前工作区的会话，--all 含归档会话
 /new                              开启新会话，下一轮使用新的会话标识
 /reset                            重置当前会话的运行实例，保留会话标识与历史
 /model <model>                    切换模型：只作用于本会话，随每次提交下发给运行侧，不写回配置
@@ -97,6 +97,7 @@ axon upgrade [--manifest-url <url>] [--download] [--apply] [--rollback] [--outpu
 ```
 
 - `/clear`、`/model`、`/think` 在任务运行中不可用；`/exit` 的别名是 `/quit`、`:q`、`exit`、`quit`。
+- 顶部读数是整条会话的累计事实（耗时、累计 Token、命中率、上下文、首字、速率），有值之后一直显示，不会因为某一轮结束或 `/clear` 消失；只有切到另一条会话（`/sessions` 选中别的会话、`/new`）才随会话归零。每轮结束在正文下方另有一条该轮自己的分割线。
 - MCP server 需要 OAuth 时，首屏加载完成后只提示一次并给出 `/mcp login <server>`；Axon 不会自动打开浏览器。
 - `/mcp login` 在后台线程执行，不阻塞渲染与输入；失败时回退提示使用 `axon mcp login <server>`。
 

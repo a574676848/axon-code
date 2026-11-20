@@ -6,19 +6,19 @@ use ratatui::{
     text::{Line, Span},
     widgets::Widget,
 };
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{
     app_shell::style_tokens::TranscriptColorRole,
-    r#loop::agent_tui::bottom_view::{
-        BottomView, QuestionView, SelectionView, SessionsView, SkillsToggleView,
-    },
+    r#loop::agent_tui::bottom_view::{BottomView, QuestionView, SelectionView, SkillsToggleView},
 };
 
 use super::{
     ShortcutHelpDockWidget, ToolOutputDockWidget,
     transcript_style::{role_style, strong_role_style},
 };
+
+#[path = "bottom_view/sessions_render.rs"]
+mod sessions_render;
 
 pub(crate) struct BottomPaneView<'a> {
     pub(crate) view: &'a BottomView,
@@ -47,7 +47,7 @@ impl Widget for BottomPaneView<'_> {
         match self.view {
             BottomView::Question(view) => render_question_view(view, area, buf),
             BottomView::Selection(view) => render_selection_view(view, area, buf),
-            BottomView::Sessions(view) => render_sessions_view(view, area, buf),
+            BottomView::Sessions(view) => sessions_render::render(view, area, buf),
             BottomView::SkillsToggle(view) => render_skills_toggle_view(view, area, buf),
             BottomView::ToolOutputViewer(view) => ToolOutputDockWidget {
                 title: view.title(),
@@ -239,104 +239,6 @@ fn render_question_custom_input(view: &QuestionView, area: Rect, buf: &mut Buffe
     }
 }
 
-fn render_sessions_view(view: &SessionsView, area: Rect, buf: &mut Buffer) {
-    if area.height == 0 {
-        return;
-    }
-    buf.set_line(
-        area.x,
-        area.y,
-        &Line::from(vec![
-            Span::styled(
-                view.title().to_owned(),
-                strong_role_style(TranscriptColorRole::Loading),
-            ),
-            Span::raw(" "),
-            Span::styled(
-                view.subtitle().to_owned(),
-                role_style(TranscriptColorRole::Muted),
-            ),
-        ]),
-        area.width,
-    );
-
-    // 面板高度由输入坞决定，可能小于弹窗申请的容量：按真实高度开窗，选中项才不会被裁掉。
-    let capacity = view.visible_capacity(area.height);
-    if capacity == 0 {
-        return;
-    }
-    let start = view.window_start(capacity);
-    let label_width =
-        usize::from(area.width).saturating_sub(UnicodeWidthStr::width(PREFIX_SELECTED));
-    let description_width =
-        usize::from(area.width).saturating_sub(UnicodeWidthStr::width(DESCRIPTION_PREFIX));
-    let mut row = area.y.saturating_add(1);
-    for (index, item) in view.items().iter().enumerate().skip(start).take(capacity) {
-        let selected = index == view.selected();
-        let prefix = if selected {
-            PREFIX_SELECTED
-        } else {
-            PREFIX_IDLE
-        };
-        let style = if selected {
-            strong_role_style(TranscriptColorRole::Accent)
-        } else if item.archived {
-            role_style(TranscriptColorRole::Muted)
-        } else {
-            role_style(TranscriptColorRole::Assistant)
-        };
-        buf.set_line(
-            area.x,
-            row,
-            &Line::from(vec![
-                Span::styled(prefix, role_style(TranscriptColorRole::Accent)),
-                Span::styled(clip_with_ellipsis(&item.label, label_width), style),
-            ]),
-            area.width,
-        );
-        row = row.saturating_add(1);
-        buf.set_line(
-            area.x,
-            row,
-            &Line::from(vec![
-                Span::raw(DESCRIPTION_PREFIX),
-                Span::styled(
-                    clip_with_ellipsis(&item.description, description_width),
-                    role_style(TranscriptColorRole::Muted),
-                ),
-            ]),
-            area.width,
-        );
-        row = row.saturating_add(1);
-    }
-}
-
-/// 按显示宽度裁剪并补省略号。
-///
-/// `buf.set_line` 只会硬截断：超宽标题被切成半截词，用户看不出后面还有内容。
-/// 中文与全角标点按 2 列计，因此必须按字符宽度累计，不能按字节或字符数切。
-fn clip_with_ellipsis(text: &str, max_width: usize) -> String {
-    if max_width == 0 {
-        return String::new();
-    }
-    if UnicodeWidthStr::width(text) <= max_width {
-        return text.to_owned();
-    }
-    let budget = max_width.saturating_sub(1);
-    let mut used = 0;
-    let mut clipped = String::new();
-    for character in text.chars() {
-        let width = UnicodeWidthChar::width(character).unwrap_or(0);
-        if used + width > budget {
-            break;
-        }
-        used += width;
-        clipped.push(character);
-    }
-    clipped.push('…');
-    clipped
-}
-
 fn render_skills_toggle_view(view: &SkillsToggleView, area: Rect, buf: &mut Buffer) {
     if area.height == 0 {
         return;
@@ -509,7 +411,7 @@ mod tests {
         );
         view.select_index_for_test(11);
         let view = BottomView::Sessions(view);
-        // 高度 7：标题 1 行 + 3 条候选（每条 2 行），选中第 12 条必须滚进可视区。
+        // 高度 7：标题 1 行 + 6 条候选（每条 1 行），选中第 12 条必须滚进可视区。
         let mut buffer = Buffer::empty(Rect::new(0, 0, 40, 7));
 
         BottomPaneView { view: &view }.render(buffer.area, &mut buffer);
@@ -548,6 +450,89 @@ mod tests {
     }
 
     #[test]
+    fn session_row_reads_title_and_origin_on_the_same_line() {
+        let sessions = [crate::r#loop::agent_tui::AgentTuiSessionCatalogItem::new(
+            "session-one",
+            Some("普通会话".to_owned()),
+            "openai",
+            "gpt-5.5",
+            1,
+        )];
+        let view = BottomView::Sessions(SessionsView::new(
+            sessions
+                .iter()
+                .map(SessionsViewItem::from_catalog_item)
+                .collect(),
+            false,
+        ));
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 40, 3));
+
+        BottomPaneView { view: &view }.render(buffer.area, &mut buffer);
+
+        let row = normalized_text(&row_text(&buffer, 1));
+        assert!(row.contains("普通会话"), "候选行必须有标题：{row}");
+        assert!(
+            row.contains("openai·gpt-5.5"),
+            "provider 与模型和标题同一行：{row}"
+        );
+        assert_eq!(
+            normalized_text(&row_text(&buffer, 2)),
+            "",
+            "每条候选只占一行，下一行不留给来源"
+        );
+    }
+
+    #[test]
+    fn session_selection_moves_without_leaving_a_highlight_behind() {
+        let sessions = (0..3)
+            .map(|index| {
+                crate::r#loop::agent_tui::AgentTuiSessionCatalogItem::new(
+                    format!("session-{index}"),
+                    Some(format!("会话 {index}")),
+                    "openai",
+                    "gpt-5.5",
+                    index,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut view = SessionsView::new(
+            sessions
+                .iter()
+                .map(SessionsViewItem::from_catalog_item)
+                .collect(),
+            false,
+        );
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 40, 5));
+        BottomPaneView {
+            view: &BottomView::Sessions(view.clone()),
+        }
+        .render(buffer.area, &mut buffer);
+
+        assert!(row_text(&buffer, 1).starts_with('›'), "首行默认为选中项");
+        assert!(!row_text(&buffer, 2).starts_with('›'));
+
+        view.select_index_for_test(1);
+        // 逐帧重画：新的一帧从空缓冲开始，旧选中行的高亮不会跟着留下来。
+        let mut next = Buffer::empty(Rect::new(0, 0, 40, 5));
+        BottomPaneView {
+            view: &BottomView::Sessions(view),
+        }
+        .render(next.area, &mut next);
+
+        assert!(
+            !row_text(&next, 1).starts_with('›'),
+            "旧选中行必须回到未选中态"
+        );
+        assert!(row_text(&next, 2).starts_with('›'), "高亮跟着选中项下移");
+        assert!(
+            row_text(&next, 2).trim_end().chars().count()
+                == row_text(&next, 1).trim_end().chars().count()
+                || row_text(&next, 2).ends_with(' '),
+            "选中行铺满整行，行尾不留半截高亮"
+        );
+    }
+
+    #[test]
     fn skills_toggle_view_renders_checkbox_items() {
         let view = BottomView::SkillsToggle(SkillsToggleView::new(
             &["review".to_owned()],
@@ -566,6 +551,16 @@ mod tests {
     fn buffer_text(buffer: &Buffer) -> String {
         buffer
             .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>()
+    }
+
+    /// 单行的屏幕字符：逐行断言「哪一行是什么」比整块文本可靠。
+    fn row_text(buffer: &Buffer, row: u16) -> String {
+        let width = usize::from(buffer.area.width);
+        let start = usize::from(row) * width;
+        buffer.content()[start..start + width]
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>()

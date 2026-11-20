@@ -538,7 +538,7 @@ where
     let request = state.catalog_reload_launch_request();
     match adapter.load_session_history(&request, &session_id) {
         Some(output) => state.apply_session_history(output),
-        None => state.fail_session_history("当前宿主不支持按会话读取历史"),
+        None => state.fail_session_history("该会话还没有可回放的历史，可以直接在它里面继续对话"),
     }
     true
 }

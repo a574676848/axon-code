@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use axon_config::{REASONING_EFFORT_ARGUMENT_HINT, REASONING_EFFORT_VALUES};
 
-use super::AgentTuiCatalog;
+use super::{AgentTuiCatalog, AgentTuiModelCatalogItem, AgentTuiTokenUsage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentTuiCommandSuggestion {
@@ -45,7 +45,12 @@ pub(super) const MCP_AUTH_LOGIN_ARG: &str = "login";
 pub(super) const MCP_AUTH_LOGOUT_ARG: &str = "logout";
 
 const MCP_AUTH_ACTIONS: [&str; 2] = [MCP_AUTH_LOGIN_ARG, MCP_AUTH_LOGOUT_ARG];
-const MCP_ACTIONS: [&str; 3] = [MCP_LIST_ARG, MCP_AUTH_LOGIN_ARG, MCP_AUTH_LOGOUT_ARG];
+/// `/mcp ` 之后每个动作的补充说明：动作名本身不含「做什么」，这里给出结论。
+const MCP_ACTION_HINTS: [(&str, &str); 3] = [
+    (MCP_LIST_ARG, "列出 server 与工具"),
+    (MCP_AUTH_LOGIN_ARG, "OAuth 登录"),
+    (MCP_AUTH_LOGOUT_ARG, "登出并清除 token"),
+];
 
 const COMMANDS: [AgentTuiCommandTemplate; 11] = [
     command(COMMAND_HELP, "查看 TUI 能力和常用命令", "", true),
@@ -245,21 +250,19 @@ fn argument_suggestions(
         COMMAND_MCP => mcp_suggestions(argument_filter, catalog),
         COMMAND_SESSIONS => static_value_suggestions(
             COMMAND_SESSIONS,
-            "会话弹窗",
             argument_filter,
-            &[SESSIONS_ALL_ARG],
+            &[(SESSIONS_ALL_ARG, "连归档会话一起列出")],
         ),
         COMMAND_SKILLS => static_value_suggestions(
             COMMAND_SKILLS,
-            "Skill 管理",
             argument_filter,
-            &["list", "toggle"],
+            &[("list", "列出已载入技能"), ("toggle", "开关指定技能")],
         ),
+        // 强度名本身就说清了动作：逐条重复同一句「设置思考强度」只是噪声。
         COMMAND_THINK => static_value_suggestions(
             COMMAND_THINK,
-            "设置思考强度",
             argument_filter,
-            REASONING_EFFORT_VALUES,
+            &bare_values(REASONING_EFFORT_VALUES),
         ),
         _ => Vec::new(),
     }
@@ -275,10 +278,26 @@ fn model_suggestions(filter: &str, catalog: &AgentTuiCatalog) -> Vec<AgentTuiCom
         .take(MAX_DYNAMIC_SUGGESTIONS)
         .map(|model| AgentTuiCommandSuggestion {
             command: format!("{COMMAND_MODEL} {}", model.label),
-            description: format!("切换模型：{}", model.label),
+            // 左列已经写着模型名：右列改成左列没有的事实，provider 与窗口大小。
+            description: model_facts(model),
             argument_hint: model.label.clone(),
         })
         .collect()
+}
+
+/// 模型弹窗右列的有效信息：provider 与上下文窗口；缺哪一项就只写另一项。
+fn model_facts(model: &AgentTuiModelCatalogItem) -> String {
+    let provider = model.provider.trim();
+    let window = model
+        .context_window
+        .filter(|window| *window > 0)
+        .map(|window| format!("{} 窗口", AgentTuiTokenUsage::render_token_count(window)));
+    match (provider.is_empty(), window) {
+        (false, Some(window)) => format!("{provider} · {window}"),
+        (false, None) => provider.to_owned(),
+        (true, Some(window)) => window,
+        (true, None) => String::new(),
+    }
 }
 
 fn mcp_suggestions(
@@ -286,7 +305,7 @@ fn mcp_suggestions(
     catalog: &AgentTuiCatalog,
 ) -> Vec<AgentTuiCommandSuggestion> {
     let Some((action, server_filter)) = split_command_input(argument_filter) else {
-        return static_value_suggestions(COMMAND_MCP, "MCP 操作", argument_filter, &MCP_ACTIONS);
+        return static_value_suggestions(COMMAND_MCP, argument_filter, &MCP_ACTION_HINTS);
     };
     if !MCP_AUTH_ACTIONS.contains(&action) {
         return Vec::new();
@@ -299,7 +318,8 @@ fn mcp_suggestions(
         .take(MAX_DYNAMIC_SUGGESTIONS)
         .map(|server| AgentTuiCommandSuggestion {
             command: format!("{COMMAND_MCP} {action} {}", server.name),
-            description: format!("MCP {}：{}", mcp_action_label(action), server.name),
+            // 左列已经带着 server 名，右列只留动作含义。
+            description: mcp_action_label(action).to_owned(),
             argument_hint: server.name.clone(),
         })
         .collect()
@@ -313,23 +333,28 @@ fn mcp_action_label(action: &str) -> &'static str {
     }
 }
 
+/// 把「取值 + 补充说明」投影成候选；说明为空时该行只留命令本身。
 fn static_value_suggestions(
     command_name: &str,
-    description: &str,
     filter: &str,
-    values: &[&str],
+    values: &[(&str, &str)],
 ) -> Vec<AgentTuiCommandSuggestion> {
     values
         .iter()
         .copied()
-        .filter(|value| value_matches(filter, value))
+        .filter(|(value, _)| value_matches(filter, value))
         .take(MAX_DYNAMIC_SUGGESTIONS)
-        .map(|value| AgentTuiCommandSuggestion {
+        .map(|(value, description)| AgentTuiCommandSuggestion {
             command: format!("{command_name} {value}"),
             description: description.to_owned(),
             argument_hint: value.to_owned(),
         })
         .collect()
+}
+
+/// 只有取值、没有补充说明的候选：取值本身就说清了动作。
+fn bare_values<'a>(values: &'a [&'a str]) -> Vec<(&'a str, &'a str)> {
+    values.iter().map(|value| (*value, "")).collect()
 }
 
 fn value_matches(filter: &str, candidate: &str) -> bool {
@@ -407,6 +432,49 @@ mod tests {
             suggestions
                 .iter()
                 .all(|suggestion| suggestion.command.starts_with("/model "))
+        );
+    }
+
+    #[test]
+    fn model_suggestions_describe_facts_the_left_column_does_not_show() {
+        let catalog = AgentTuiCatalog {
+            models: vec![
+                super::super::AgentTuiModelCatalogItem::new_with_context_window(
+                    "claude-sonnet-4-6",
+                    "upstream-a",
+                    "anthropic",
+                    Some(200_000),
+                ),
+                super::super::AgentTuiModelCatalogItem::new("gpt-5.5", "gpt-5.5", "openai"),
+            ],
+            ..AgentTuiCatalog::default()
+        };
+
+        let suggestions = command_suggestions("model ", &catalog, false);
+        let model = &suggestions[0];
+        let plain = &suggestions[1];
+
+        assert_eq!(model.description, "anthropic · 200K 窗口");
+        assert_eq!(plain.description, "openai");
+        for suggestion in suggestions {
+            assert!(
+                !suggestion.description.contains(&suggestion.argument_hint),
+                "右列不许复述左列已经写着的模型名：{}",
+                suggestion.description
+            );
+        }
+    }
+
+    #[test]
+    fn think_suggestions_do_not_repeat_one_identical_description() {
+        let suggestions = command_suggestions("think ", &AgentTuiCatalog::default(), false);
+
+        assert!(suggestions.len() > 1);
+        assert!(
+            suggestions
+                .iter()
+                .all(|suggestion| suggestion.description.is_empty()),
+            "强度名本身就说清了动作，逐条重复同一句说明只是噪声"
         );
     }
 

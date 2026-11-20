@@ -76,7 +76,7 @@
 
 | # | 检查 | 结果 | 证据 |
 | --- | --- | --- | --- |
-| T1 | 启动 | 通过 | 经安装根 `axon.cmd` 起 `cmd /c axon`，屏幕出现 `Axon Personal Agent v0.0.1`、`入口已就绪 · MCP 33 · Skill 32` 与输入坞 `› 描述要完成的任务，或输入 / 选择能力` |
+| T1 | 启动 | 通过 | 经安装根 `axon.cmd` 起 `cmd /c axon`，屏幕出现 `Axon Personal Agent v0.0.1`、`入口已就绪 · MCP 3 · Skill 32` 与输入坞 `› 描述要完成的任务，或输入 / 选择能力` |
 | T2 | 对话 | 通过 | 输入「记住数字 5，只回复两个字：收到」后流式渲染 `◌ 思考 / Thinking · 8.99s` 与回复 `• 收到` |
 | T3 | 工具 | 通过 | 输入「用 shell 跑 echo t3-ok 并只回复输出」后渲染工具行 `执行` / `$ echo t3-ok` / `│ t3-ok`，回复 `• t3-ok`；末行给出 `用时 10.79s · Token 53.5K · 首字 2.66s · 速率 149.6 tok/s` |
 | T4 | /sessions | 通过 | 输入 `/sessions` 后弹窗列出会话，每条含标题与 `provider · model` 行，可 `↑↓` 选中 |
@@ -86,6 +86,10 @@
 
 > 追加约定：T6 的「只换 run_generation」在服务端由 `axon sessions reset <id>` 触达（已实现并有单测）；
 > TUI 的 `/reset` 是同一会话上的本地运行实例复位，两者语义在台账 W4-5 行已注明。
+>
+> 口径更正：T1 的 MCP 读数在截图当时取的是工具条数（本机 3 台 server 共 33 个工具，屏幕显示 `MCP 33`），
+> 与桌面工作台和 `/mcp` 清单的「服务器台数」口径分叉；现改为台数，屏幕应为 `MCP 3`。
+> 该行由 `crates/axon-tui-runtime` 的 `startup_line_counts_mcp_servers_instead_of_tools` 守卫，本轮未重新抓屏。
 
 ## 回放投影一致性（已修复）
 

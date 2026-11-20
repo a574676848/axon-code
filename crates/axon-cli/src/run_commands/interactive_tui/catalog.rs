@@ -61,7 +61,7 @@ pub(super) fn resolve_agent_tui_catalog(cli: &AxonCli) -> AgentTuiCatalog {
         mcp_servers: Vec::new(),
         mcp_state: AgentTuiCatalogLoadState::Loading,
         mcp_entries: Vec::new(),
-        sessions: load_tui_session_items(&path),
+        sessions: load_tui_session_items(&path, cli.global.cwd.as_deref()),
     }
 }
 
@@ -73,6 +73,9 @@ pub(crate) fn load_tui_catalog_snapshot(
     let workspace_cwd = crate::runtime_tools::resolve_workspace_cwd(config_path, cwd)
         .ok()
         .flatten();
+    let session_cwd = cwd
+        .or(workspace_cwd.as_deref())
+        .map(std::path::Path::to_path_buf);
     let skill_config_path = config_path.to_path_buf();
     let skill_cwd = workspace_cwd.clone();
     let mcp_config_path = config_path.to_path_buf();
@@ -93,7 +96,7 @@ pub(crate) fn load_tui_catalog_snapshot(
         skill_errors,
         mcp_servers,
         mcp_state,
-        sessions: load_tui_session_items(config_path),
+        sessions: load_tui_session_items(config_path, session_cwd.as_deref()),
     }
 }
 
@@ -262,15 +265,28 @@ fn mcp_catalog_load_state(servers: &[AgentTuiMcpServerCatalogItem]) -> AgentTuiC
 ///
 /// 唯一事实源是 `sessions(kind='primary')`：thread 是所有轮次（自迭代、目标执行、
 /// 子代理）的镜像，按 thread 目录列会话会把内部线程混进用户列表，归档口径也与
-/// 会话表分叉。
-fn load_tui_session_items(config_path: &Path) -> Vec<AgentTuiSessionCatalogItem> {
+/// 会话表分叉。列表按工作区收敛：与桌面端一样只列当前工作区的会话，换一个目录启动
+/// 就看到那个目录自己的会话，而不是全机所有工作区的混排。
+fn load_tui_session_items(
+    config_path: &Path,
+    cwd: Option<&Path>,
+) -> Vec<AgentTuiSessionCatalogItem> {
     let Ok(store) = crate::run_commands::run_agent_store::shared_runtime_store(config_path) else {
         return Vec::new();
     };
     let Ok(rows) = crate::sessions_http_adapter::read_session_rows(&store) else {
         return Vec::new();
     };
-    session_catalog_items(rows)
+    session_catalog_items(rows, workspace_id_for_cwd(cwd))
+}
+
+/// 当前工作区标识；没有工作目录或解析失败时为空（此时不按工作区收敛）。
+fn workspace_id_for_cwd(cwd: Option<&Path>) -> Option<String> {
+    let cwd = cwd?;
+    axon_session::WorkspaceResolver
+        .resolve(cwd, axon_time::unix_now_ms())
+        .ok()
+        .map(|workspace| workspace.workspace_id)
 }
 
 /// 会话清单行到 TUI 目录的投影：默认只留一页在用会话，归档项另收一页。
@@ -278,10 +294,18 @@ fn load_tui_session_items(config_path: &Path) -> Vec<AgentTuiSessionCatalogItem>
 /// 与会话清单读同一批行，条数因此只有「一页」这一种口径，不再按两个不同上限拼凑。
 fn session_catalog_items(
     rows: Vec<crate::sessions_http_adapter::SessionListRow>,
+    workspace_id: Option<String>,
 ) -> Vec<AgentTuiSessionCatalogItem> {
+    let scoped_rows = match workspace_id.as_deref() {
+        Some(workspace_id) => rows
+            .into_iter()
+            .filter(|row| row.workspace_id.as_deref() == Some(workspace_id))
+            .collect::<Vec<_>>(),
+        None => rows,
+    };
     let mut active = Vec::new();
     let mut archived = Vec::new();
-    for row in rows {
+    for row in scoped_rows {
         let item = session_catalog_item(row);
         if item.archived {
             if archived.len() < TUI_ARCHIVED_CATALOG_LIMIT {
@@ -487,10 +511,13 @@ mod tests {
 
     #[test]
     fn session_catalog_items_use_session_rows_and_split_archived_bucket() {
-        let items = session_catalog_items(vec![
-            session_row("s-active", "openai", "gpt-5.5-id", Some("gpt-5.5"), false),
-            session_row("s-archived", "anthropic", "claude-4", None, true),
-        ]);
+        let items = session_catalog_items(
+            vec![
+                session_row("s-active", "openai", "gpt-5.5-id", Some("gpt-5.5"), false),
+                session_row("s-archived", "anthropic", "claude-4", None, true),
+            ],
+            None,
+        );
 
         assert_eq!(
             items
@@ -523,7 +550,7 @@ mod tests {
             )
         }));
 
-        let items = session_catalog_items(rows);
+        let items = session_catalog_items(rows, None);
 
         assert_eq!(items.len(), TUI_CATALOG_LIMIT + TUI_ARCHIVED_CATALOG_LIMIT);
         assert_eq!(
@@ -534,5 +561,34 @@ mod tests {
             items.iter().filter(|item| !item.archived).count(),
             TUI_CATALOG_LIMIT
         );
+    }
+
+    #[test]
+    fn session_catalog_items_keep_only_the_current_workspace() {
+        let mut mine = session_row("s-mine", "openai", "gpt-5.5", None, false);
+        mine.workspace_id = Some("workspace-current".to_owned());
+        let mut other = session_row("s-other", "openai", "gpt-5.5", None, false);
+        other.workspace_id = Some("workspace-elsewhere".to_owned());
+
+        let items = session_catalog_items(vec![mine, other], Some("workspace-current".to_owned()));
+
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.session_id.as_str())
+                .collect::<Vec<_>>(),
+            ["s-mine"],
+            "别的工作区的会话不许混进当前工作区的列表"
+        );
+    }
+
+    #[test]
+    fn session_catalog_items_without_a_resolved_workspace_keep_every_row() {
+        let items = session_catalog_items(
+            vec![session_row("s-a", "openai", "gpt-5.5", None, false)],
+            None,
+        );
+
+        assert_eq!(items.len(), 1, "工作区解析不出来时不按工作区收敛");
     }
 }
