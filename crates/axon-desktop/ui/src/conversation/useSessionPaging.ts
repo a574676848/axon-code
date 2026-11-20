@@ -344,9 +344,25 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
 
   /** 一条轮次的骨架形态（打开时光标还没落到任何历史帧上）。 */
   const withProvisional = useCallback(
-    (entries: readonly HistoryEntry[]) => entries.map((entry) => projectTurn(entry, null).turn),
+    (entries: readonly HistoryEntry[]) =>
+      entries.filter((entry) => !isAuditTurn(entry)).map((entry) => projectTurn(entry, null).turn),
     [projectTurn],
   );
+
+/**
+ * 审计轮：派发渠道写入、已收口、但没有模型正文。
+ *
+ * 目标工具每改一次目标就在目标会话里留一条记录（「目标已启动：…」）。它不是对话：
+ * 没有提问者，也没有回答，把它画成一条用户气泡再接一段空白，读起来就是「说了话没人
+ * 答」。这类记录只属于目标看板的活动时间线，正文转录不渲染它。
+ */
+function isAuditTurn(entry: HistoryEntry): boolean {
+  return (
+    entry.channel === 'agent' &&
+    entry.status === 'understood' &&
+    (entry.answerText ?? '').trim() === ''
+  );
+}
 
 /**
  * 打开会话时要展开的那一轮：优先最近一条「有正文或在跑」的轮次。
@@ -358,7 +374,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
 function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
-    if (entry === undefined) continue;
+    if (entry === undefined || isAuditTurn(entry)) continue;
     if ((entry.answerText ?? '').trim() !== '' || entry.status !== 'understood') {
       return entry;
     }

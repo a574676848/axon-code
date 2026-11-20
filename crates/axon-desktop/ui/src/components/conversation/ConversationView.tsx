@@ -505,7 +505,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
               />
             }
           />
-          {originBar !== null && <SessionOriginBar {...originBar} model={effectiveModel.label} />}
+          {originBar !== null && <SessionOriginBar {...originBar} />}
 
           {failure !== null && (
             <div className="shrink-0 px-4 pt-1">

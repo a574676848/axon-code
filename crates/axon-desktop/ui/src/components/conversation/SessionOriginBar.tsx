@@ -16,15 +16,12 @@ export interface SessionOriginBarProps {
   backLabel: string;
   /** 当前会话的标题。 */
   title: string;
-  /** 本会话实际使用的模型；为空时不占这一格。 */
-  model?: string | null;
   onBack: () => void;
 }
 
 export const SessionOriginBar: React.FC<SessionOriginBarProps> = ({
   backLabel,
   title,
-  model = null,
   onBack,
 }) => (
   <div className="shrink-0 h-9 px-4 flex items-center gap-2 hairline-b border-border-hairline">
@@ -42,15 +39,5 @@ export const SessionOriginBar: React.FC<SessionOriginBarProps> = ({
     <Text size="row" truncate className="min-w-0">
       {title}
     </Text>
-    {model !== null && model.length > 0 && (
-      <>
-        <Text tone="tertiary" size="meta" className="shrink-0">
-          ·
-        </Text>
-        <Text tone="tertiary" size="xs" mono truncate className="shrink-0">
-          {model}
-        </Text>
-      </>
-    )}
   </div>
 );
