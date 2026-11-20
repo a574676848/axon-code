@@ -63,6 +63,9 @@ mod session_readings;
 #[path = "workbench_http_session_interactions.rs"]
 mod session_interactions;
 
+#[path = "workbench_http_interactions_cache.rs"]
+mod interactions_cache;
+
 pub use session_interactions::session_interactions_payload;
 
 #[path = "workbench_http_interaction_events.rs"]

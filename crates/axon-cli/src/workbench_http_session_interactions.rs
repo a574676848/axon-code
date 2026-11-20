@@ -8,8 +8,9 @@ use std::path::Path;
 
 use axon_session::{InteractionCursor, InteractionQueryStore as _};
 
+use super::runtime_store;
 use super::session_readings;
-use super::{InteractionView, MAX_SESSION_INTERACTION_LIMIT, TurnMetricsView, runtime_store};
+use super::{InteractionView, MAX_SESSION_INTERACTION_LIMIT, TurnMetricsView, interactions_cache};
 
 /// 会话行事实：能力块与车道模型读数共用同一次读取。
 ///
@@ -121,6 +122,23 @@ pub fn session_interactions_payload(
     brief: bool,
 ) -> Result<serde_json::Value, String> {
     let limit = limit.clamp(1, MAX_SESSION_INTERACTION_LIMIT);
+    let Some(cursor) = before else {
+        // 首页走缓存：同一会话在同一数据水位上的同一页只组装一次，切回看过的会话直接命中。
+        return interactions_cache::cached_page(axon_root, session_id, limit, brief, || {
+            build_page(axon_root, session_id, limit, None, brief)
+        });
+    };
+    build_page(axon_root, session_id, limit, Some(cursor), brief)
+}
+
+/// 组装一页索引载荷；缓存层只负责决定要不要调用它。
+fn build_page(
+    axon_root: &Path,
+    session_id: &str,
+    limit: u32,
+    before: Option<&InteractionCursor>,
+    brief: bool,
+) -> Result<serde_json::Value, String> {
     let records = runtime_store(axon_root)
         .interactions_for_session(session_id, limit, before)
         .map_err(|error| format!("读取车道 Interaction 失败：{error:?}"))?;

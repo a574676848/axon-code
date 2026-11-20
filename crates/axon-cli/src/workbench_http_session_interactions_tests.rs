@@ -291,3 +291,68 @@ fn brief_page_leaves_the_plan_snapshot_out() {
         "翻页档不带计划快照：更早那一页的计划不能覆盖当前计划"
     );
 }
+
+/// 首页缓存：水位不动时整页复用，水位前进后立即换成新事实。
+///
+/// 断言的是缓存契约本身：不重复组装，且绝不发旧页；而不是某次缓存的实现细节。
+#[test]
+fn index_page_is_cached_until_the_event_watermark_advances() {
+    let fixture = Fixture::new("primary", "desktop", None);
+    fixture.seed_turn_answer("第一版结论");
+    assert_eq!(
+        fixture.payload()["interactions"][0]["answerText"],
+        "第一版结论"
+    );
+
+    // 越过事件面改写同一行的答案：水位不动，因此必须命中缓存、仍是第一版。
+    fixture.update_turn_answer("第二版结论");
+    assert_eq!(
+        fixture.payload()["interactions"][0]["answerText"],
+        "第一版结论",
+        "事件水位未变时必须命中缓存，不重新组装"
+    );
+
+    // 水位前进一格：缓存键变化，重新组装后读到的是新事实。
+    fixture.advance_event_watermark();
+    assert_eq!(
+        fixture.payload()["interactions"][0]["answerText"],
+        "第二版结论",
+        "水位前进后必须重建，不能继续发旧页"
+    );
+}
+
+impl Fixture {
+    /// 写入一条逐轮事实行：索引页的答案来自 `turn_activity` 投影。
+    fn seed_turn_answer(&self, answer: &str) {
+        self.store
+            .with_read_connection(|connection| {
+                connection.execute(
+                    "INSERT INTO turn_activity (
+                         session_id, interaction_id, received_at_ms, answer_text, tool_names_json,
+                         metrics_json, updated_at_ms
+                     ) VALUES (?1, ?2, 1, ?3, NULL, NULL, 1)
+                     ON CONFLICT(session_id, interaction_id) DO UPDATE SET answer_text=?3",
+                    rusqlite::params![self.session_id, self.interaction_id, answer],
+                )
+            })
+            .expect("写入逐轮事实");
+    }
+
+    /// 越过事件面改写答案：不推进水位，用来证明缓存确实被复用。
+    fn update_turn_answer(&self, answer: &str) {
+        self.seed_turn_answer(answer);
+    }
+
+    /// 推进事件水位一格：缓存键随之变化。
+    fn advance_event_watermark(&self) {
+        self.store
+            .with_read_connection(|connection| {
+                connection.execute(
+                    "UPDATE sessions SET last_event_sequence = last_event_sequence + 1 \
+                     WHERE session_id = ?1",
+                    [&self.session_id],
+                )
+            })
+            .expect("推进事件水位");
+    }
+}
