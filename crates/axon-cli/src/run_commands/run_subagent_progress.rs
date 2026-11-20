@@ -131,7 +131,19 @@ impl ChildTurnProjection {
             failures_settled_by_scheduler,
         } = self;
         let outcome = {
+            // 首字时刻属于本轮 performance：主 turn 在消费同一条进度流时记录，
+            // 子代理不记录就会在用量统计里永远显示「无观测」。
+            let performance = request.performance.clone();
             let mut emit = |event: RunProgressWireEvent| {
+                if let Some(performance) = performance.as_deref()
+                    && super::run_stream_provider_progress::first_visible_wire_event(
+                        &event.event.kind,
+                    )
+                {
+                    performance.record(
+                        axon_session_runtime::TurnPerformanceStage::ProviderFirstDeltaParsed,
+                    );
+                }
                 if let Some(sink) = &child_sink
                     && let Ok(runtime_event) =
                         axon_session_runtime::wire_event_to_runtime_event(&event.event)
