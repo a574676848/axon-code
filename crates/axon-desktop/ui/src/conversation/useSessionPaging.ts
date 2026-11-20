@@ -493,13 +493,19 @@ function newestExpandable(entries: readonly HistoryEntry[]): HistoryEntry | null
       if (generation !== generationRef.current) return;
       seedHistoryFacts(entries);
       const known = new Set(knownTurnIds());
-      const fresh = entries.filter((entry) => !known.has(entry.interactionId));
+      // 审计轮不进投影，也就不该触发读帧：它们只有一句系统说明，没有 durable 事件，
+      // 去读只会换来一条「交互记录不存在」的错误卡。
+      const fresh = entries.filter(
+        (entry) => !known.has(entry.interactionId) && !isAuditTurn(entry),
+      );
       if (fresh.length === 0) return;
       dispatch({ type: 'append-turns', turns: withProvisional(fresh) });
       const newest = fresh[fresh.length - 1];
+      // 这一轮的帧读不到（例如刚被清理）不该把整条会话变成错误：骨架已经立起来，
+      // 正文缺过程只是少了一段，下一次轮次头会再补。
       const read = await readInteractionFrames(newest.interactionId, generation, {
         generation: () => generationRef.current,
-      });
+      }).catch(() => null);
       if (read !== null && generation === generationRef.current) {
         const projected = projectTurn(newest, read.frames, read.truncated);
         dispatch({

@@ -81,8 +81,10 @@ where
             goal.goal_id.as_str(),
             execution.attempt
         );
+        let workspace_id = payload_workspace_id(&payload);
         self.append_goal_interaction(
             goal,
+            workspace_id.as_deref(),
             &execution.session_id,
             interaction_id,
             source_id,
@@ -131,8 +133,19 @@ where
             goal.goal_id.as_str(),
             goal.revision
         );
+        // 全局目标没有作用域工作区：沿用最近一次执行 payload 里记的工作区，
+        // 否则这一轮会因为「主 turn 必须绑定 Workspace」被直接拒绝。
+        let inherited_workspace = workspace_id.map(str::to_owned).or_else(|| {
+            self.store
+                .list_executions_for_goal(&goal.goal_id, 1)
+                .ok()
+                .and_then(|records| records.into_iter().next())
+                .and_then(|record| execution_payload(&record.payload_json).ok())
+                .and_then(|payload| payload_workspace_id(&payload))
+        });
         self.append_goal_interaction(
             goal,
+            inherited_workspace.as_deref(),
             &session_id,
             interaction_id,
             source_id,
@@ -168,8 +181,10 @@ where
             goal.goal_id.as_str(),
             execution.attempt
         );
+        let workspace_id = payload_workspace_id(&payload);
         self.append_goal_interaction(
             goal,
+            workspace_id.as_deref(),
             &session_id,
             interaction_id,
             source_id,
@@ -206,9 +221,13 @@ where
     }
 
     /// 写入一条目标 Interaction：目标轮唯一的入站事实。
+    ///
+    /// `workspace_id` 是这一轮真正的工作区：全局目标没有作用域工作区，而主 turn 必须
+    /// 有工作目录，因此这里按执行绑定的工作区建作用域，缺省才回落目标自身作用域。
     fn append_goal_interaction(
         &self,
         goal: &GoalRecord,
+        workspace_id: Option<&str>,
         session_id: &axon_domain::DaemonSessionId,
         interaction_id: InteractionId,
         source_id: String,
@@ -221,11 +240,16 @@ where
             .map_err(|error| DaemonHostError::Worker(error.to_string()))?;
         let route = ReplyRoute::new(AGENT_DISPATCH_SOURCE_CHANNEL, session_id.as_str())
             .map_err(|error| DaemonHostError::Worker(error.to_string()))?;
+        let scope = workspace_id
+            .map(|value| axon_domain::ScopeRef::workspace(value.to_owned()))
+            .transpose()
+            .map_err(|error| DaemonHostError::Worker(error.to_string()))?
+            .unwrap_or_else(|| goal.scope.clone());
         let interaction = InteractionRecord::new(
             session_id.clone(),
             interaction_id,
             source,
-            goal.scope.clone(),
+            scope,
             audience,
             route,
             prompt,
@@ -263,6 +287,17 @@ fn payload_audience(payload: &Value) -> AudienceContext {
         .and_then(|context| context.get("audience"))
         .and_then(|value| serde_json::from_value::<AudienceContext>(value.clone()).ok())
         .unwrap_or_else(|| audience_for(None))
+}
+
+/// 目标执行 payload 里携带的工作区标识；全局目标没有作用域工作区，但执行仍落在这里。
+fn payload_workspace_id(payload: &Value) -> Option<String> {
+    payload
+        .get("transportContext")
+        .and_then(|context| context.get("workspaceId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 /// 按披露策略给受众：群聊覆盖 Workspace，其余一律私聊私有。

@@ -156,6 +156,12 @@ pub(super) fn interaction_events_target(
     if interaction_id.is_empty() || interaction_id.contains('/') || action != "events" {
         return None;
     }
+    // 交互标识不是 ULID 自有字符集（目标工具轮形如 `goal-tool:<id>:<id>`），客户端
+    // 按 URL 规则把它编码成 `%3A` 送上来；不解码就永远查不到这条 Interaction。
+    let interaction_id = percent_decode(interaction_id)?;
+    if interaction_id.is_empty() {
+        return None;
+    }
     let after = query_param(query, "after")
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(0);
@@ -164,7 +170,7 @@ pub(super) fn interaction_events_target(
         .unwrap_or(DEFAULT_INTERACTION_EVENTS_LIMIT);
     let tail = query_param(query, "tail")
         .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
-    Some((interaction_id.to_owned(), after, limit, tail))
+    Some((interaction_id, after, limit, tail))
 }
 
 /// 归属判据：owner 是车道本身，或车道当前运行会话的 `run_session_id`。

@@ -334,15 +334,40 @@ where
             return;
         };
         let now_ms = self.clock.now_ms();
-        if let Err(error) = self.store.retry_execution(
+        match self.store.retry_execution(
             &execution.execution_id,
             now_ms.saturating_add(GOAL_EXECUTION_RETRY_BACKOFF_MS),
             GOAL_EXECUTION_MAX_ATTEMPTS,
             now_ms,
         ) {
-            axon_logger::warning(&format!(
+            Ok(true) => {}
+            Ok(false) => {
+                // 不再重试：目标也要如实收尾，否则看板会一直显示「进行中」而实际上没人会再跑。
+                self.mark_goal_failed(&execution.goal_id, now_ms);
+            }
+            Err(error) => axon_logger::warning(&format!(
                 "目标执行重试排期失败: execution={}, error={error}",
                 execution.execution_id.as_str()
+            )),
+        }
+    }
+
+    /// 目标执行最终失败：把目标推进到失败态。
+    fn mark_goal_failed(&self, goal_id: &axon_domain::GoalId, now_ms: u64) {
+        let Ok(Some(mut goal)) = self.store.get_goal(goal_id) else {
+            return;
+        };
+        if goal.status.is_terminal() {
+            return;
+        }
+        let expected_revision = goal.revision;
+        if goal.transition(GoalStatus::Failed, now_ms).is_err() {
+            return;
+        }
+        if let Err(error) = self.store.update_goal(&goal, expected_revision) {
+            axon_logger::warning(&format!(
+                "目标失败态写入失败: goal={}, error={error}",
+                goal.goal_id.as_str()
             ));
         }
     }
