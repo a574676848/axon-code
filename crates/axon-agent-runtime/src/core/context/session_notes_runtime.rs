@@ -8,7 +8,7 @@ use std::path::Path;
 
 use axon_domain::{AxonError, AxonResult};
 
-use crate::session_notes::SessionNotes;
+use crate::session_notes::{CheckpointSource, SessionNotes};
 use crate::session_notes_store::{
     NotesFileEntry, NotesFileOrder, NotesFileOrderBy, NotesFileReceipt, NotesReadReceipt,
     NotesSearchReceipt, NotesStore,
@@ -136,6 +136,26 @@ impl SessionNotesRuntime {
             let notes = SessionNotes::load_from_session(session_dir)?
                 .ok_or_else(|| AxonError::runtime_failure("会话便签尚未初始化"))?;
             ensure_notes_window_saved(&notes, notes.window_number)
+        })
+    }
+
+    /// 记录本次换窗摘要的来源与对应窗口号。
+    ///
+    /// 与便签的其它写入口共用同一把会话锁：归档推进窗口、来源落库与失败回滚
+    /// 之间只要与并发写交错，notes 就会停在「窗口已推进、来源未知」或
+    /// 「来源已写、窗口被覆盖」的半状态，后续窗口再也判断不出摘要由谁撰写。
+    pub fn record_checkpoint_source(
+        session_dir: &Path,
+        source: CheckpointSource,
+        window_number: u64,
+    ) -> AxonResult<()> {
+        with_session_notes_lock(session_dir, || {
+            let mut notes = SessionNotes::load_from_session(session_dir)?
+                .ok_or_else(|| AxonError::runtime_failure("会话便签在归档后丢失"))?;
+            notes.checkpoint_source = Some(source);
+            notes.checkpoint_window_number = Some(window_number);
+            notes.save_to_session(session_dir)?;
+            Ok(())
         })
     }
 }

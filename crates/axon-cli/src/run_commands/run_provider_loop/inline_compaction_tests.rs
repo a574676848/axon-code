@@ -454,3 +454,40 @@ fn checkpoint_note_is_recorded_as_model_source() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// 会话身份与 Thread 身份是两个空间：`session_id` 是会话 ULID，`run_session_id` 才是
+/// Thread 事件流的键。
+///
+/// 夹具默认把两者设成同一个值，换窗因此曾把会话 ULID 当成 Thread 键：真实会话上每次轮转
+/// 都在读 Thread 时失败并整轮回滚，事件流只报「未通过门禁」，24 次全部失败而原因不明。
+#[test]
+fn rollover_targets_the_run_window_as_thread_identity() {
+    let root = temp_workspace("inline-rollover-thread-identity");
+    let mut request = request_with_rollover(root.clone());
+    // 必须放在初始化之前：起跑登记与轮转投影读的都是这一刻的 thread 身份。
+    request.run_session_id = format!("{}-thread", request.session_id);
+    let session_dir = initialize_session(&request);
+    SessionNotesRuntime::write_note_file(&session_dir, "progress.md", "已验证事实", 1).unwrap();
+
+    run_rollover(&request).expect("两个身份不同时，换窗必须成功");
+
+    let notes = SessionNotes::load_from_session(&session_dir)
+        .unwrap()
+        .expect("换窗后便签必须仍在");
+    assert_eq!(notes.window_number, 2, "窗口号必须真的推进");
+
+    let projected = axon_session::ThreadService::new(axon_session::JsonlThreadEventStore)
+        .read_thread(&root, &request.run_session_id)
+        .expect("活动窗口投影必须写进 run_session_id 对应的 thread");
+    assert!(
+        projected.compacted_history.is_some(),
+        "换窗后 thread 必须携带活动窗口投影"
+    );
+    assert!(
+        axon_session::ThreadService::new(axon_session::JsonlThreadEventStore)
+            .read_thread(&root, &request.session_id)
+            .is_err(),
+        "会话 ULID 不是 Thread 键，轮转不得拿它去读 thread"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

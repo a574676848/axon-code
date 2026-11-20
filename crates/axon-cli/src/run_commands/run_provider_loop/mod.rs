@@ -601,13 +601,12 @@ pub(super) fn record_checkpoint_source(
     source: axon_agent_runtime::CheckpointSource,
     window_number: u64,
 ) -> Result<(), String> {
-    let mut notes = axon_agent_runtime::SessionNotes::load_from_session(session_dir)
-        .map_err(|error| format!("读取会话便签失败：{error:?}"))?
-        .ok_or_else(|| "会话便签在归档后丢失".to_owned())?;
-    notes.checkpoint_source = Some(source);
-    notes.checkpoint_window_number = Some(window_number);
-    notes
-        .save_to_session(session_dir)
-        .map(|_| ())
-        .map_err(|error| format!("写入摘要来源失败：{error:?}"))
+    // 走便签运行时的会话锁：来源落库与归档、回滚共用同一把锁。若这里另起一份
+    // 无锁的读改写，并发写会让 notes 停在「窗口已推进、来源未知」的半状态。
+    axon_agent_runtime::SessionNotesRuntime::record_checkpoint_source(
+        session_dir,
+        source,
+        window_number,
+    )
+    .map_err(|error| format!("写入摘要来源失败：{error:?}"))
 }

@@ -157,7 +157,21 @@ impl WindowRolloverTransaction for InlineWindowRollover<'_, '_> {
             ),
         );
         self.active_started_at_ms = Some(started_at_ms);
-        let (checkpoint, prepared) = self.build_prepared(messages, started_at_ms)?;
+        // prepare 阶段一进来就把上一次的失败原因清空，因此这里必须把本次真实错误重新录进去：
+        // 否则随后的 abort() 只能用默认文案「窗口轮转未通过门禁」，
+        // 事件流里就再也看不到是便签渲染、还是 checkpoint 落库出的问题。
+        let (checkpoint, prepared) = match self.build_prepared(messages, started_at_ms) {
+            Ok(value) => value,
+            Err(error) => {
+                self.active_failure_reason =
+                    Some(format!("生成窗口交接 checkpoint 失败：{error:?}"));
+                axon_logger::warning(&format!(
+                    "内联窗口轮转 prepare 失败：session={} thread={} error={error:?}",
+                    self.request.session_id, self.request.run_session_id
+                ));
+                return Err(error);
+            }
+        };
         self.prepared = Some(prepared);
         Ok(checkpoint)
     }
@@ -227,8 +241,22 @@ impl WindowRolloverTransaction for InlineWindowRollover<'_, '_> {
             recorded_at_ms: now_ms(),
         };
         let before_tokens = compaction.before_tokens;
+        // 提交阶段的失败同样要带上真实原因：归档写入、Thread 投影安装、便签来源落库
+        // 三处都可能单独失败，而它们回滚后留下的统一文案无法区分是哪一个。
         let (through_sequence, rollover) =
-            self.commit_projection(&prepared, messages, compaction)?;
+            match self.commit_projection(&prepared, messages, compaction) {
+                Ok(value) => value,
+                Err(error) => {
+                    self.active_failure_reason = Some(format!("提交窗口归档与投影失败：{error:?}"));
+                    axon_logger::warning(&format!(
+                        "内联窗口轮转 commit 失败：session={} thread={} window=#{} error={error:?}",
+                        self.request.session_id,
+                        self.request.run_session_id,
+                        prepared.current_window_number
+                    ));
+                    return Err(error);
+                }
+            };
         self.active_through_sequence = Some(through_sequence);
         self.active_before_tokens = before_tokens;
         self.active_checkpoint_text = checkpoint.as_str().to_owned();
@@ -286,16 +314,29 @@ impl WindowRolloverTransaction for InlineWindowRollover<'_, '_> {
         Ok(())
     }
 
+    fn note_failure_reason(&mut self, reason: &str) {
+        self.active_failure_reason = Some(reason.to_owned());
+    }
+
     fn abort(&mut self) {
         self.prepared = None;
         self.committed = None;
         let Some(started_at_ms) = self.active_started_at_ms.take() else {
             return;
         };
-        let reason = self
-            .active_failure_reason
-            .take()
-            .unwrap_or_else(|| INLINE_ROLLOVER_ABORTED_REASON.to_owned());
+        let reason = match self.active_failure_reason.take() {
+            Some(reason) => reason,
+            None => {
+                // 走到这里说明失败原因没有被任何阶段记录下来：事件流只会有默认文案。
+                // 换窗是会话自救的唯一动作，静默失败等于把会话钉死在满上下文，
+                // 因此这里必须留一条带身份的诊断日志。
+                axon_logger::warning(&format!(
+                    "内联窗口轮转失败但未记录具体原因：session={} thread={}，已回落到默认文案",
+                    self.request.session_id, self.request.run_session_id
+                ));
+                INLINE_ROLLOVER_ABORTED_REASON.to_owned()
+            }
+        };
         emit_compaction_lifecycle(
             self.progress,
             &CompactionLifecycleView::failed(
@@ -317,11 +358,20 @@ impl InlineWindowRollover<'_, '_> {
     ) -> AxonResult<(u64, WindowArchiveResult)> {
         let root =
             resolved_axon_root(&self.request.config_path).map_err(AxonError::runtime_failure)?;
+        // Thread 事件流的键是 `sessions.current_run_id`，不是会话 ULID。
+        // 这里曾经误用 `session_id`，导致每一次轮转都在读 Thread 时失败并整轮回滚；
+        // 失败又只报默认的「未通过门禁」，所以现象是「换窗永远不成功、原因不明」。
         let expected_sequence = super::super::run_thread_store::thread_event_sequence_snapshot(
             &root,
-            &self.request.session_id,
+            &self.request.run_session_id,
         )
-        .map_err(AxonError::runtime_failure)?;
+        .map_err(|error| {
+            axon_logger::warning(&format!(
+                "窗口轮转读取 Thread 事件序号失败：session={} thread={} error={error}",
+                self.request.session_id, self.request.run_session_id
+            ));
+            AxonError::runtime_failure(error)
+        })?;
         let previous_notes = SessionNotes::load_from_session(&prepared.session_dir)?;
         let previous_archive = read_archive_snapshot(prepared)?;
         let rollover = WindowRolloverEngine::archive_active_window(
@@ -388,7 +438,7 @@ fn install_compaction_projection(
     }
     super::super::run_thread_store::install_active_compaction_projection(
         root,
-        &request.session_id,
+        &request.run_session_id,
         &super::super::run_session_store::run_persistence_assistant_part_id(request),
         expected_sequence,
         compaction,

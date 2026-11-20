@@ -89,6 +89,8 @@ mod runtime_prompt_fragments;
 mod runtime_resource_metrics;
 #[path = "runtime/skill_context_fragments.rs"]
 mod runtime_skill_context_fragments;
+#[path = "runtime/thread_io_metrics.rs"]
+mod runtime_thread_io_metrics;
 mod runtime_tools;
 #[path = "runtime/user_agents.rs"]
 mod runtime_user_agents;

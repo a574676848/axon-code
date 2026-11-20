@@ -86,6 +86,13 @@ fn run_file_cleanup(
                 &data_root.join(crate::runtime_resource_metrics::RESOURCE_METRICS_DIR_NAME),
                 cutoff_ms,
                 dry_run,
+            )?)
+            // Thread 读写遥测与资源遥测同族：都是按日分片的运行态样本，
+            // 同样按保留期回收，否则每轮两条样本会一直堆在磁盘上。
+            .saturating_add(cleanup_expired_files_recursive(
+                &data_root.join(crate::runtime_thread_io_metrics::THREAD_IO_METRICS_DIR_NAME),
+                cutoff_ms,
+                dry_run,
             )?);
     Ok(FileCleanupCounts {
         log_files,

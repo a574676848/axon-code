@@ -82,6 +82,16 @@ pub(super) fn complete_compaction(
     ) {
         Ok(validated) => validated,
         Err(error) => {
+            // 先把可读原因记到事务上，再 abort：abort 的失败投影只读这一份原因，
+            // 否则事件流里只剩默认的「未通过门禁」，校验失败的具体事实被盖掉。
+            let (summary, _) = validation_failure_details(
+                context.runtime,
+                error.compacted(),
+                context.source_tokens,
+                context.provider_messages.len(),
+                &error,
+            );
+            transaction.note_failure_reason(&summary);
             transaction.abort();
             turn_events.push(validation_failed_event(
                 context.runtime,
@@ -101,6 +111,9 @@ pub(super) fn complete_compaction(
         context.checkpoint,
         &validated.compacted,
     ) {
+        // 提交失败同样要先记原因：归档、Thread 投影、便签来源落库三步都可能单独失败，
+        // 它们回滚后只留下一句默认文案就无法区分是哪一个。
+        transaction.note_failure_reason(&format!("窗口归档提交失败，当前历史保持不变：{error:?}"));
         transaction.abort();
         turn_events.push(commit_failed_event(
             context.turn_id,

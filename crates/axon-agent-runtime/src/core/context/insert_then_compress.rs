@@ -357,6 +357,13 @@ pub trait WindowRolloverTransaction {
         Ok(())
     }
 
+    /// 记录本次失败的**具体原因**，供随后的 [`Self::abort`] 投影使用。
+    ///
+    /// 默认实现忽略：只有真正持有诊断状态的事务才需要覆盖它。有了这条约定，
+    /// `abort` 就不必再用「未通过门禁」这类默认文案盖住真实错误——
+    /// 换窗是会话自救的唯一动作，失败原因不可辨等于把会话钉死在满上下文。
+    fn note_failure_reason(&mut self, _reason: &str) {}
+
     /// prepare、校验或 commit 失败后的状态清理通知。
     fn abort(&mut self) {}
 }
@@ -544,6 +551,10 @@ impl WindowRolloverRuntime<'_> {
                 self.rollover,
             ),
             Err(error) => {
+                // 事务实现自己也会记录原因；这里再写一次幂等覆盖，保证任何实现
+                // （含只返回 Err 的闭包适配器）都不会让 abort 落到默认文案上。
+                self.rollover
+                    .note_failure_reason(&format!("本地窗口轮转失败：{error:?}"));
                 self.rollover.abort();
                 turn_events.push(compression_failed_event(
                     turn_id,

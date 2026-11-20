@@ -1,6 +1,7 @@
 //! `axon run` 到统一 Thread 事件流的镜像。
 
 use std::path::Path;
+use std::time::Instant;
 
 #[cfg(test)]
 use axon_session::Thread;
@@ -69,15 +70,21 @@ pub(super) fn thread_event_sequence_snapshot(root: &Path, thread_id: &str) -> Re
 
 pub(super) fn install_active_compaction_projection(
     root: &Path,
-    session_id: &str,
+    thread_id: &str,
     assistant_part_id: &str,
     expected_sequence: u64,
     mut compaction: ThreadCompaction,
 ) -> Result<u64, String> {
     let service = ThreadService::new(JsonlThreadEventStore);
+    // 整个函数是一次换窗的 Thread I/O 总成本：定位当前轮（读整份 thread）加装投影
+    // （整份快照重写）。采样覆盖两段，才能看出长会话上换窗究竟慢在哪里。
+    let started = Instant::now();
     // `through_sequence` 取 thread 侧当前轮的序号：turn_id 由
-    // `{session_id}-turn-{assistant_part_id}` 组成，因此按后缀精确命中，找不到再退回活动轮。
-    let detail = service.read_thread(root, session_id)?;
+    // `{thread_id}-turn-{assistant_part_id}` 组成，因此按后缀精确命中，找不到再退回活动轮。
+    //
+    // 入参必须是 Thread 事件流的键（`sessions.current_run_id`），不是会话 ULID：
+    // 两者是不同的身份空间，拿会话 ULID 来读 Thread 只会得到「未找到 thread」。
+    let detail = service.read_thread(root, thread_id)?;
     let suffix = format!("-turn-{assistant_part_id}");
     let current = detail
         .turns
@@ -94,24 +101,35 @@ pub(super) fn install_active_compaction_projection(
         .ok_or_else(|| "活动窗口缺少当前运行轮次".to_owned())?;
     compaction.through_sequence = current.sequence;
     let through_sequence = compaction.through_sequence;
-    service.compact_thread(
+    // 复用刚读到的 detail 安装投影：`compact_thread` 会再读一遍整份 thread，
+    // 对 60 MiB 级的会话等于把同一份语料解析两次。
+    let result = service.compact_thread_from_detail(
         root,
         CompactThreadCommand {
-            thread_id: session_id.to_owned(),
+            thread_id: thread_id.to_owned(),
             recorded_at_ms: compaction.recorded_at_ms,
             expected_sequence,
             compaction,
         },
-    )?;
+        detail,
+    );
+    crate::runtime_thread_io_metrics::record(
+        root,
+        crate::runtime_thread_io_metrics::OPERATION_COMPACT_THREAD,
+        thread_id,
+        started,
+        result.is_ok(),
+    );
+    result?;
     Ok(through_sequence)
 }
 
 #[path = "run_thread_queries.rs"]
 mod queries;
 pub(crate) use queries::{
-    RecentTurnFact, ThreadTurnMetadata, latest_reflection_notice_at_root,
+    LatestTurnFacts, RecentTurnFact, ThreadTurnMetadata, latest_turn_facts_at_root,
     latest_turn_usage_tokens_at_root, patch_turn_artifacts, previous_reflection_notice,
-    recent_turn_facts, session_model_at_root, turn_record, turn_record_by_sequence, turn_sequence,
+    recent_turn_facts, turn_record, turn_record_by_sequence, turn_sequence,
 };
 
 /// Thread mirror 中单个工具回执摘要的字符上限。
@@ -150,7 +168,29 @@ pub(super) fn tool_receipt_mirror(
 }
 
 /// 将一次完成的 run 写入统一 Thread 事件流。
+///
+/// 采样覆盖整次收口（读整份 thread + 增量落盘）：这是每轮固定发生的 O(语料) 成本，
+/// 长会话是否越用越慢就看这条曲线。
 pub(super) fn mirror_session_to_thread(
+    config_path: &Path,
+    record: &RunSessionRecord,
+) -> Result<(), String> {
+    let started = Instant::now();
+    let thread_id = record.thread_id.clone();
+    let result = mirror_session_to_thread_inner(config_path, record);
+    if let Ok(root) = resolved_axon_root(config_path) {
+        crate::runtime_thread_io_metrics::record(
+            &root,
+            crate::runtime_thread_io_metrics::OPERATION_MIRROR_TERMINAL,
+            &thread_id,
+            started,
+            result.is_ok(),
+        );
+    }
+    result
+}
+
+fn mirror_session_to_thread_inner(
     config_path: &Path,
     record: &RunSessionRecord,
 ) -> Result<(), String> {
@@ -418,6 +458,25 @@ pub(super) fn mirror_existing_turn(
 /// 入参是本轮运行窗口（`sessions.current_run_id`）：窗口与会话的对应关系由标识解析给出，
 /// 这里只按窗口读 Thread 事件流。
 pub(super) fn prepare_run_session(
+    config_path: &Path,
+    identities: &super::RunIdentities,
+) -> Result<Option<PreparedRunSession>, String> {
+    let started = Instant::now();
+    let thread_id = identities.run_session_id.clone();
+    let result = prepare_run_session_inner(config_path, identities);
+    if let Ok(root) = resolved_axon_root(config_path) {
+        crate::runtime_thread_io_metrics::record(
+            &root,
+            crate::runtime_thread_io_metrics::OPERATION_PREPARE_RUN,
+            &thread_id,
+            started,
+            result.is_ok(),
+        );
+    }
+    result
+}
+
+fn prepare_run_session_inner(
     config_path: &Path,
     identities: &super::RunIdentities,
 ) -> Result<Option<PreparedRunSession>, String> {

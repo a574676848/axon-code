@@ -102,6 +102,7 @@
 | Memory 写入流水线锁 | `write_pipeline` | `crates/axon-memory-write/src/lib.rs:27` | `axon-memory-write` |
 | 渠道指标样本 | `<data>/tmp/channel-metrics/samples-*.jsonl`（清理侧） | `crates/axon-cli/src/cron_commands/session_cleanup_metrics.rs:9-11`；运行侧 `crates/axon-cli/src/run_commands/run_channel_affinity.rs:15` | `axon-cli` |
 | 进程资源遥测 | `*.jsonl`（`RESOURCE_METRICS_DIR_NAME` 下） | `crates/axon-cli/src/runtime/resource_metrics.rs:33`；清理 `crates/axon-cli/src/cron_commands/session_cleanup_files.rs:85-89` | `axon-cli` |
+| Thread 读写遥测 | `thread-io-metrics/samples-*.jsonl` | `crates/axon-cli/src/runtime/thread_io_metrics.rs:18`；清理 `crates/axon-cli/src/cron_commands/session_cleanup_files.rs:90-95` | `axon-cli` |
 | TUI agent pane turn 事件 | `terminal_agent_pane_turn_events.jsonl` | `crates/axon-tui-runtime/src/agent_pane/agent_pane_turn_event_store.rs:12` | `axon-tui-runtime` |
 | 桌面端草稿历史 | `draft_history.jsonl` | `crates/axon-desktop/src/input_history.rs:20` | `axon-desktop` |
 | Gateway Key 存储 | `<axon_root>/data/gateway/auth-keys.json` | `DEFAULT_KEY_STORE_RELATIVE_PATH` `crates/axon-daemon/src/infrastructure/gateway_keys.rs:33` | `axon-daemon` |
