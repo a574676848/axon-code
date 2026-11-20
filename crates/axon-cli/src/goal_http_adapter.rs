@@ -27,7 +27,9 @@ use crate::workbench_http_adapter::{WORKBENCH_PATH_PREFIX, runtime_store};
 #[path = "goal_http_views.rs"]
 mod goal_http_views;
 
-use goal_http_views::{DETAIL_EXECUTION_LIMIT, GoalCardView, goal_card_view, goal_detail_view};
+use goal_http_views::{
+    DETAIL_EXECUTION_LIMIT, GoalCardView, goal_card_view, goal_detail_view, transcript_session_of,
+};
 
 /// 目标路由在 `/api/v1` 下的子路径。
 const GOALS_SUBPATH: &str = "goals";
@@ -205,11 +207,9 @@ impl GoalHttpAdapter {
             // 留给详情。列表里全局目标的工作区三段字段因此为空，界面据此降级为
             // 「查看详情」，由详情给出解析结果与进入会话的入口。
             let workspace = scope_workspace(goal, workspaces);
-            let latest_session = latest_execution
-                .as_ref()
-                .and_then(|record| record.session_id.as_ref())
-                .and_then(|session| subagent_sessions.get(session.as_str()))
-                .map(String::as_str);
+            let latest_session = latest_execution.as_ref().and_then(|record| {
+                transcript_session_of(record, &subagent_sessions, &sessions_with_turns)
+            });
             cards.push(goal_card_view(
                 goal,
                 latest_execution.as_ref(),
@@ -286,11 +286,9 @@ impl GoalHttpAdapter {
             view.latest_execution.as_ref(),
             view.latest_result.as_ref(),
             workspace,
-            view.latest_execution
-                .as_ref()
-                .and_then(|record| record.session_id.as_ref())
-                .and_then(|session| subagent_sessions.get(session.as_str()))
-                .map(String::as_str),
+            view.latest_execution.as_ref().and_then(|record| {
+                transcript_session_of(record, &subagent_sessions, &sessions_with_turns)
+            }),
             &sessions_with_turns,
         );
         let detail = goal_detail_view(
@@ -341,17 +339,23 @@ fn transcript_sessions(
     roots: &[axon_domain::DaemonSessionId],
     subagent_sessions: &std::collections::HashMap<String, String>,
 ) -> Result<std::collections::HashSet<String>, String> {
-    let mut effective: Vec<axon_domain::DaemonSessionId> = Vec::with_capacity(roots.len());
+    let mut effective: Vec<axon_domain::DaemonSessionId> = Vec::with_capacity(roots.len() * 2);
     let mut seen = std::collections::HashSet::new();
     for root in roots {
-        let target = subagent_sessions
-            .get(root.as_str())
-            .map_or(root.as_str(), String::as_str);
-        let Ok(session) = axon_domain::DaemonSessionId::new(target.to_owned()) else {
-            continue;
-        };
-        if seen.insert(session.as_str().to_owned()) {
-            effective.push(session);
+        // 执行会话与它可能派生的子会话都要判定：目标执行与用户轮同一条管道后，逐字稿
+        // 落在执行自己的会话里；旧数据里它落在子会话。只认其中一边会让另一边的入口消失。
+        for target in [
+            root.as_str(),
+            subagent_sessions
+                .get(root.as_str())
+                .map_or("", String::as_str),
+        ] {
+            let Ok(session) = axon_domain::DaemonSessionId::new(target.to_owned()) else {
+                continue;
+            };
+            if seen.insert(session.as_str().to_owned()) {
+                effective.push(session);
+            }
         }
     }
     store

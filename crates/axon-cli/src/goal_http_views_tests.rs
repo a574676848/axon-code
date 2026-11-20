@@ -2,7 +2,8 @@
 
 use super::{
     DETAIL_EXECUTION_LIMIT, DETAIL_ITEM_CHARS, DETAIL_LIST_ITEMS, DETAIL_OBJECTIVE_CHARS,
-    PREVIEW_CHARS, goal_card_view, goal_detail_view, status_code, truncate_chars,
+    PREVIEW_CHARS, goal_card_view, goal_detail_view, status_code, transcript_session_of,
+    truncate_chars,
 };
 use axon_domain::{
     DaemonSessionId, ExecutionId, ExecutionRecord, ExecutionStatus, GoalId, GoalPlan, GoalRecord,
@@ -112,6 +113,30 @@ fn transcript_entry_requires_actual_session_content() {
     assert!(view.has_transcript);
     assert!(view.unavailable_reason.is_none());
 }
+#[test]
+fn transcript_session_prefers_the_execution_session_over_a_subagent() {
+    // 目标执行与用户轮同一条管道：逐字稿就落在执行自己的会话里，入口必须指向它，
+    // 不能被执行过程中派生的子代理会话顶掉（那会打开一条与这一轮无关的会话）。
+    let own = "session-goal";
+    let execution = execution_with_session("execution-goal", own, 300, 900);
+    let mut subagents = std::collections::HashMap::new();
+    subagents.insert(own.to_owned(), "session-subagent".to_owned());
+    let mut with_content = std::collections::HashSet::new();
+    with_content.insert(own.to_owned());
+
+    assert_eq!(
+        transcript_session_of(&execution, &subagents, &with_content),
+        Some(own)
+    );
+
+    // 旧数据：执行会话本身没有逐字稿时仍回落到子会话。
+    let empty = std::collections::HashSet::new();
+    assert_eq!(
+        transcript_session_of(&execution, &subagents, &empty),
+        Some("session-subagent")
+    );
+}
+
 #[test]
 fn card_view_uses_preview_and_reports_missing_workspace_as_empty() {
     let goal = goal_record(

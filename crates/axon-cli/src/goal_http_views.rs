@@ -274,6 +274,23 @@ pub(crate) fn goal_card_view(
     }
 }
 
+/// 一次执行的逐字稿会话：优先执行自己的会话，只有它没有逐字稿时才回落到子代理会话。
+///
+/// 目标执行与用户轮共用主 turn 管道，逐字稿就落在执行绑定的会话里；子代理会话是执行
+/// 过程中的派生视图，拿它当入口会打开一条与这一轮无关的会话（进去只有子代理的过程）。
+/// 旧数据里逐字稿确实落在子会话，因此回落这一支必须保留。
+pub(crate) fn transcript_session_of<'a>(
+    record: &'a ExecutionRecord,
+    subagent_sessions: &'a std::collections::HashMap<String, String>,
+    sessions_with_turns: &std::collections::HashSet<String>,
+) -> Option<&'a str> {
+    let own = record.session_id.as_ref().map(|session| session.as_str())?;
+    if sessions_with_turns.contains(own) {
+        return Some(own);
+    }
+    subagent_sessions.get(own).map(String::as_str)
+}
+
 /// 作用域类型在协议里的取值。
 const fn scope_kind(scope: &ScopeRef) -> &'static str {
     match scope {
@@ -335,11 +352,8 @@ pub(crate) fn goal_detail_view(
             .iter()
             .take(DETAIL_EXECUTION_LIMIT as usize)
             .map(|record| {
-                let session_id = record
-                    .session_id
-                    .as_ref()
-                    .and_then(|session| subagent_sessions.get(session.as_str()))
-                    .map(String::as_str);
+                let session_id =
+                    transcript_session_of(record, subagent_sessions, sessions_with_turns);
                 ExecutionView::from_record_with_session(record, session_id, sessions_with_turns)
             })
             .collect(),
