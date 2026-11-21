@@ -4,7 +4,7 @@ use crate::domain::runtime::{
     SessionRuntimeRecord,
 };
 use crate::ports::{
-    EventLogStore, RuntimeStoreError, ingress_cursor_store::SessionIngressCursorStore,
+    EventLogStore, RuntimeStore, RuntimeStoreError, ingress_cursor_store::SessionIngressCursorStore,
 };
 use axon_domain::{DaemonSessionId, InteractionId, SessionActionStatus};
 use rusqlite::Connection;
@@ -440,6 +440,8 @@ impl EventLogStore for SqliteRuntimeStore {
         now_ms: u64,
     ) -> Result<SessionEventRecord, RuntimeStoreError> {
         let batch = [(event_type.to_owned(), payload_json.to_owned())];
+        let session_kind = self.get_session(session_id)?.kind;
+        <Self as EventLogStore>::ensure_session_level_events(session_id, session_kind, &batch)?;
         let mut records =
             event_log_repository::append_events(self, session_id, host, &batch, now_ms, None)?;
         records
@@ -454,6 +456,8 @@ impl EventLogStore for SqliteRuntimeStore {
         events: &[(String, String)],
         now_ms: u64,
     ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
+        let session_kind = self.get_session(session_id)?.kind;
+        <Self as EventLogStore>::ensure_session_level_events(session_id, session_kind, events)?;
         event_log_repository::append_events(self, session_id, host, events, now_ms, None)
     }
 

@@ -549,6 +549,11 @@ fn tail_page_returns_the_durable_cursor_of_its_last_frame() {
     );
 }
 
+/// 老记录只把归属写在载荷里时，尾窗仍然要把它捡回来。
+///
+/// 归属的来源可以有两处：归属列，以及存储层索引按载荷 `interactionId` 补出的指纹。
+/// 网关自己那层「载荷子串扫描」已经删除（它会把别条轮次的帧挂到当前轮次上），因此这条
+/// 用例锁的是**仍然成立**的契约：老交互的帧不能展开成空白。
 #[test]
 fn tail_page_falls_back_to_a_full_scan_for_legacy_events() {
     let directory = axon_test_support::test_temp_dir();
@@ -564,7 +569,7 @@ fn tail_page_falls_back_to_a_full_scan_for_legacy_events() {
             interaction_id.as_str()
         );
         store
-            .append_event(&session_id, &host, "wire_event", &payload, 10 + index)
+            .append_event(&session_id, &host, "tool_call", &payload, 10 + index)
             .expect("追加老事件");
     }
     // 其后继续写入别的交互事件：尾窗起点会完全越过老交互的帧。
@@ -572,7 +577,7 @@ fn tail_page_falls_back_to_a_full_scan_for_legacy_events() {
         let payload =
             format!("{{\"interactionId\":\"other-interaction\",\"text\":\"other-{index}\"}}");
         store
-            .append_event(&session_id, &host, "wire_event", &payload, 100 + index)
+            .append_event(&session_id, &host, "tool_call", &payload, 100 + index)
             .expect("追加其他交互事件");
     }
 
@@ -583,14 +588,18 @@ fn tail_page_falls_back_to_a_full_scan_for_legacy_events() {
         .filter(|event| event.payload_json.contains("legacy-"))
         .map(|event| event.payload_json.as_str())
         .collect();
-    assert_eq!(legacy.len(), 3, "老交互的帧必须被保尾扫描捡回来");
+    assert_eq!(legacy.len(), 3, "老交互的帧不能展开成空白");
     assert!(
         page.events
             .iter()
             .all(|event| !event.payload_json.contains("other-interaction")),
         "尾窗不得混入其他交互的帧"
     );
-    assert!(!page.has_more, "保尾扫描已到 durable 尾");
+    assert!(
+        page.unattributed_reason.is_none(),
+        "能读到帧就不该报「没有归属」"
+    );
+    assert!(!page.has_more, "尾窗已到该交互的最后一帧");
 }
 
 /// 回放缺口必须随订阅一起可见：缺失外置正文的帧被跳过时，报告要如实计数。

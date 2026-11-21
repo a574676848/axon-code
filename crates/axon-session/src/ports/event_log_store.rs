@@ -5,13 +5,104 @@
 //! 事件流要走 append-only 文件，状态机要继续留在 SQLite，两者不能再共用一套事务。
 
 use axon_domain::{DaemonSessionId, InteractionId};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::runtime_store::RuntimeStoreError;
+use crate::domain::SessionKind;
 use crate::domain::runtime::{DaemonHostRecord, SessionEventRecord};
+
+/// 带轮次语义、落盘时必须带 Interaction 归属的事件类型（INV-4）。
+///
+/// `wire_event` 是逐轮正文：没有归属就意味着它在任何轮次视图里都读不到。会话级事件
+/// （会话与作业生命周期、会话累计指标、回合之外的迟到作答）不属于任何一轮，仍可走
+/// 无归属入口。
+const ATTRIBUTION_REQUIRED_EVENT_TYPES: &[&str] = &["wire_event"];
+
+/// 无归属入口的合法用途白名单：这些事实只属于会话，不属于某一轮。
+///
+/// 逐条对应真实调用方：作业生命周期由 CLI 直接写会话流，其余是会话级投影与收口事实。
+/// 新增类型时先在这里登记，再确认它确实无法归属到某一轮。
+const SESSION_LEVEL_EVENT_TYPES: &[&str] = &[
+    "job_started",
+    "job_completed",
+    "session_created",
+    "session_recovered",
+    "session_cancelled",
+    "session_status",
+    "turn_metrics",
+];
+
+/// 允许「会话级 `wire_event`」的会话类型：会话级 wire 写入只发生在这些车道上。
+///
+/// 目前唯一的写入方是回合之外的**迟到作答**（`DurableQuestionEventWriter`）：提问在上一轮
+/// 结束时没有结算，答案在回合之外才到，此时车道上没有任何活着的轮次可以承接这一帧，
+/// 信封里也没有 interactionId。它属于「这条会话的输入事实」，按会话级事件处理。
+///
+/// 子代理会话不在名单里：子代理的逐字稿**只**通过 Interaction 视图读取（子代理详情按
+/// Interaction 订阅正文），而且不存在回合之外的会话级 wire 写入方，因此它的逐轮正文
+/// 必须带归属，否则整段逐字稿不可见。
+const SESSION_LEVEL_WIRE_EVENT_KINDS: &[SessionKind] =
+    &[SessionKind::Primary, SessionKind::Cron, SessionKind::Goal];
+
+/// 放行的无归属 `wire_event` 累计次数。
+///
+/// 放行是为了不打断迟到作答，但必须可观测：这条路径一旦出问题（例如以后有人把它当成
+/// 默认写法），计数与日志是第一现场证据。
+static SESSION_LEVEL_WIRE_WRITES: AtomicU64 = AtomicU64::new(0);
 
 /// 会话事件日志的持久化端口。
 pub trait EventLogStore: Send + Sync {
+    /// 校验一批事件能否走「无归属」入口（INV-4 的运行期断言）。
+    ///
+    /// 拒绝口径：事件类型带轮次语义（[`ATTRIBUTION_REQUIRED_EVENT_TYPES`]），且写入的会话
+    /// 类型不在会话级 wire 白名单（[`SESSION_LEVEL_WIRE_EVENT_KINDS`]）里。子代理会话因此
+    /// 一条无归属的逐轮正文都写不进来；会话级 wire 写入（迟到作答）照常放行，但按会话与
+    /// 事件类型留结构化日志并计数，避免「被放行过」这件事无人知晓。
+    ///
+    /// 白名单之外的非逐轮事件仍放行，但留一条告警，避免日后新增的逐轮事件静默落成孤儿帧。
+    fn ensure_session_level_events(
+        session_id: &DaemonSessionId,
+        session_kind: SessionKind,
+        events: &[(String, String)],
+    ) -> Result<(), RuntimeStoreError> {
+        for (event_type, _) in events {
+            if !ATTRIBUTION_REQUIRED_EVENT_TYPES.contains(&event_type.as_str()) {
+                if !SESSION_LEVEL_EVENT_TYPES.contains(&event_type.as_str()) {
+                    axon_logger::warning(&format!(
+                        "会话级事件入口收到不在白名单内的事件类型 {event_type}：请确认它不属于任何一轮"
+                    ));
+                }
+                continue;
+            }
+            if !SESSION_LEVEL_WIRE_EVENT_KINDS.contains(&session_kind) {
+                return Err(RuntimeStoreError::Storage(format!(
+                    "会话 {} 的 {event_type} 必须写 Interaction 归属：无归属入口只接受会话级事件（{}）",
+                    session_id.as_str(),
+                    SESSION_LEVEL_EVENT_TYPES.join(" / ")
+                )));
+            }
+            let writes = SESSION_LEVEL_WIRE_WRITES.fetch_add(1, Ordering::AcqRel) + 1;
+            axon_logger::info(&format!(
+                "[event-log] session={} kind={} event_type={event_type} 无归属放行（累计 {writes} 次，属会话级 wire 写入）",
+                session_id.as_str(),
+                session_kind.as_str()
+            ));
+        }
+        Ok(())
+    }
+
+    /// 读取累计放行的无归属 `wire_event` 次数。
+    ///
+    /// 只为可观测与回归断言：任何增长都说明会话级 wire 写入仍在发生（迟到作答）。
+    fn session_level_wire_writes() -> u64 {
+        SESSION_LEVEL_WIRE_WRITES.load(Ordering::Acquire)
+    }
+
     /// 追加一条事件并校验 Host generation。
+    ///
+    /// **仅会话级事件**：逐轮正文必须走 [`Self::append_attributed_events`]，否则它不会
+    /// 出现在任何轮次视图里。运行期由 [`Self::ensure_session_level_events`] 拒绝子代理
+    /// 会话上的 `wire_event`。
     fn append_event(
         &self,
         session_id: &DaemonSessionId,
@@ -22,6 +113,8 @@ pub trait EventLogStore: Send + Sync {
     ) -> Result<SessionEventRecord, RuntimeStoreError>;
 
     /// 在同一批次中按输入顺序追加多条事件，并只校验一次 Host generation。
+    ///
+    /// **仅会话级事件**：语义与 [`Self::append_event`] 相同，见那里的归属要求。
     fn append_events(
         &self,
         session_id: &DaemonSessionId,

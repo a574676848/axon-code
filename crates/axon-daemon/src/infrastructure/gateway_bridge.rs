@@ -502,7 +502,8 @@ where
     }
 
     fn replay_report(&self) -> GatewayReplayReport {
-        self.replay_report
+        // 缺口结论含续读游标（非 Copy），按值交出前复制一份。
+        self.replay_report.clone()
     }
 }
 

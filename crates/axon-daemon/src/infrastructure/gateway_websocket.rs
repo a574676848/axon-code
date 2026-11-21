@@ -8,7 +8,9 @@
 //! `subscribeId` 标识，事件帧、订阅确认与订阅级错误一律回显该标识；每条订阅
 //! 独立持有游标与投影线程，任一放慢或断开都不影响同一连接上的其它订阅。
 
-use super::gateway_kernel::{GatewayAdapter, GatewayContext, GatewayEvent, GatewayEventStream};
+use super::gateway_kernel::{
+    GatewayAdapter, GatewayContext, GatewayEvent, GatewayEventStream, GatewayReplayReport,
+};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -95,6 +97,27 @@ impl GatewayAdapter for WebSocketGatewayAdapter {
             let _ = handle.join();
         }
     }
+}
+
+/// 订阅确认帧：把 durable 回放的缺口如实交给客户端。
+///
+/// 三个可选字段只在真发生时出现，正常确认帧不塞零值噪声：
+/// `skippedArchivedFrames` 是外置正文已被回收的帧数，`replayTruncated` 表示这次回放
+/// 没追到 durable 尾，`resumeCursor` 是这次回放**真正覆盖到**的位置。截断时没有续读
+/// 游标，客户端只能从头重来或当作完整回放渲染，因此两者必须同时出现。
+#[must_use]
+pub fn subscription_receipt(subscribe_id: &str, report: &GatewayReplayReport) -> serde_json::Value {
+    let mut receipt = serde_json::json!({ "type": "subscribed", "subscribeId": subscribe_id });
+    if report.skipped_archived_frames > 0 {
+        receipt["skippedArchivedFrames"] = serde_json::Value::from(report.skipped_archived_frames);
+    }
+    if report.replay_truncated {
+        receipt["replayTruncated"] = serde_json::Value::Bool(true);
+        if let Some(cursor) = report.resume_cursor.as_deref() {
+            receipt["resumeCursor"] = serde_json::Value::from(cursor);
+        }
+    }
+    receipt
 }
 
 fn run_server(listener: TcpListener, stop: Arc<AtomicBool>, context: GatewayContext) {
@@ -380,16 +403,7 @@ async fn handle_request(
                     shutdown,
                 },
             );
-            let mut receipt =
-                serde_json::json!({ "type": "subscribed", "subscribeId": subscribe_id });
-            // 缺帧与截断只在真的发生时出现：正常的确认帧不塞零值噪声。
-            if replay_report.skipped_archived_frames > 0 {
-                receipt["skippedArchivedFrames"] =
-                    serde_json::Value::from(replay_report.skipped_archived_frames);
-            }
-            if replay_report.replay_truncated {
-                receipt["replayTruncated"] = serde_json::Value::Bool(true);
-            }
+            let receipt = subscription_receipt(&subscribe_id, &replay_report);
             socket
                 .send(Message::Text(receipt.to_string().into()))
                 .await?;
