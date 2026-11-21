@@ -100,3 +100,16 @@
 ## 8 汇报口径
 
 每完成一个 WBS 项，汇报以下四项：改动文件、测试或命令回执、验收结论、遗留项。未取证项如实标注，不用测试代替真机结论。
+## 9 后续增补：换窗后的记忆连续性（P1 / P2 / P4）
+
+真机验收暴露的问题不是记录体量，而是「换窗后模型只记得一句结论」。三项增补如下：
+
+| 项 | 内容 | 验收 |
+| --- | --- | --- |
+| P1 | 预算预警与耗尽提示改为固定交接小节：目标 / 已完成步骤（文件路径、命令、关键 ID）/ 待办 / 已验证证据 / 下一步命令，并给一段正例 | `handoff_prompt_requires_the_checklist_and_names_the_history_tools`、`warn_note_also_asks_for_the_checklist` |
+| P2 | 换窗时由运行时从 `turn_events` 取最近 1–2 个已完成工具调用，生成有界 `rollover-digest` 运行时提示注入新窗口（单行 160 字符、总量 1.2 KiB；进行中的调用不写入） | `rollover_digest_keeps_the_last_two_completed_tools`、`rollover_digest_truncates_long_summaries`、`fresh_window_injects_the_rollover_digest_note` |
+| P4 | 不新增工具：提示语直接给出既有回读链路 `history_list_windows` / `history_search_contents` / `history_read_item`，并在 `rollover-digest` 里再写一次 | 上述提示测试断言三个工具名出现在提示中 |
+
+另外修复：模型主动请求换窗（`builtin.new_context`）原先可在一个 turn 内被无限兑现，实机两分钟换了 42 个窗口；现改为每 turn 最多兑现一次，后续请求只走自动策略。
+
+**真机验收（2026-11-21）**：安装态下让模型自行触发换窗——先 `builtin.read_file` 读 `Cargo.toml` 前 3 行，再只写一句「进行中」便签，然后 `builtin.new_context`。换窗后模型准确复述了三次工具调用、读取的文件与前三行内容，证明信息来自运行时回执而不是便签。落盘证据：checkpoint 的 `compactedHistory.historyJson` 依次为 `conversationCheckpoint`、`{runtimeNote: rolloverDigest}`、`injectedContext…`；`archived_history` 只有 `window_1`（每轮最多一次）。

@@ -191,7 +191,7 @@ pub(crate) fn warn_note(
         _ => "（步均样本不足，暂不折算步数）".to_owned(),
     };
     format!(
-        "{WARN_NOTE_PREFIX}{remaining_tokens} tokens{pace_clause}。判断：这个工作单元能在这些步内收口，就继续做完；不能就先落到可中断点——等正在进行的工具调用回执落地、检查跑完、结论确定——再用 builtin.notes_write_file 覆盖写入 checkpoint.md（上限 {max_tokens} tokens，超限会被拒绝），然后调用 builtin.new_context。不要在工具调用中途换窗：窗口结束后才落地的回执没有调用可以挂靠。若要读大文件或跑长测试，按更坏的估计，一步就可能吃掉这几步的预算。",
+        "{WARN_NOTE_PREFIX}{remaining_tokens} tokens{pace_clause}。判断：这个工作单元能在这些步内收口，就继续做完；不能就先落到可中断点——等正在进行的工具调用回执落地、检查跑完、结论确定——再用 builtin.notes_write_file 覆盖写入 checkpoint.md（上限 {max_tokens} tokens，超限会被拒绝），然后调用 builtin.new_context。便签按固定小节写：目标 / 已完成步骤（含文件路径、命令、关键 ID）/ 待办 / 已验证证据 / 下一步命令；旧窗口的原文与输出可用 history_list_windows、history_search_contents、history_read_item 回读。不要在工具调用中途换窗：窗口结束后才落地的回执没有调用可以挂靠。若要读大文件或跑长测试，按更坏的估计，一步就可能吃掉这几步的预算。",
         max_tokens = crate::session_notes::SESSION_NOTES_CHECKPOINT_MAX_TOKENS,
     )
 }
@@ -204,7 +204,19 @@ pub(crate) fn warn_note(
 #[must_use]
 pub(crate) fn fallback_note() -> String {
     format!(
-        "当前任务窗口已耗尽。不要在本窗口继续任务或给出最终答复，新窗口不会自动包含本次对话。现在只允许一次便签写入：调用 builtin.notes_write_file 覆盖写入 checkpoint.md，这是全会话唯一的便签，既记录工作状态也承担这次交接。内容自由组织，没有固定段落也不必套模板，但要把当前仍然有效的结论一并带过来，讲清「在做什么、做到哪一步、下一步动作、不能违反的约束、已验证事实」。上限 {max_tokens} tokens（按 UTF-8 字节数除以 4 估算，约 {max_token_kib} KiB 文本）：超限会被拒绝并要求重写；压不进预算的便签，换窗时只会带路径与行数，新窗口得回读才能恢复上下文。写完后立即调用 builtin.new_context，不要使用除便签与 new_context 之外的任何工具。",
+        "当前任务窗口已耗尽。不要在本窗口继续任务或给出最终答复，新窗口不会自动包含本次对话。现在只允许一次便签写入：调用 builtin.notes_write_file 覆盖写入 checkpoint.md，这是全会话唯一的便签，既记录工作状态也承担这次交接。必须按固定小节写，缺一节新窗口就会失去对应事实：
+1. 目标：这次任务要交付什么；
+2. 已完成步骤：按顺序写，每步带文件路径、执行的命令、关键 ID（会话/作业/请求标识）；
+3. 待办：还没做的，按优先级列出；
+4. 已验证证据：跑过的检查与结果、读过的关键文件；
+5. 下一步命令：新窗口第一步该执行什么。
+示例：
+- 目标：修复窗口轮转失败；
+- 已完成步骤：1) 改 crates/axon-session/src/.../jsonl_store.rs 增加正文外置，cargo test -p axon-session --lib 通过；2) 改 crates/axon-cli/src/.../session_prune.rs 的归属判定，未跑全量；
+- 待办：跑全量门禁；
+- 已验证证据：单测 9 条通过；
+- 下一步命令：cargo test --workspace。
+上限 {max_tokens} tokens（按 UTF-8 字节数除以 4 估算，约 {max_token_kib} KiB 文本）：超限会被拒绝并要求重写。写完后立即调用 builtin.new_context，不要使用除便签与 new_context 之外的任何工具。旧窗口逐字稿不在新上下文里：需要命令原文、工具输出或旧结论时，用 history_list_windows 找到窗口、history_search_contents 检索、history_read_item 读取，不要凭印象补全。",
         max_tokens = crate::session_notes::SESSION_NOTES_CHECKPOINT_MAX_TOKENS,
         max_token_kib = crate::session_notes::SESSION_NOTES_CHECKPOINT_MAX_TOKENS * 4 / 1024,
     )

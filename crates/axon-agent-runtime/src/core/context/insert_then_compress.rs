@@ -25,12 +25,16 @@ mod history;
 pub use history::CompactedHistory;
 #[path = "insert_then_compress_completion.rs"]
 mod completion;
+#[path = "insert_then_compress_digest.rs"]
+mod digest;
 #[path = "budget_notice.rs"]
 mod notice;
 use completion::{
     CompactionCompletionContext, CompactionFailureMetrics, complete_compaction,
     compression_failed_event,
 };
+#[cfg(test)]
+pub(crate) use digest::rebuild_with_digest_for_test;
 use history::{FreshWindowContext, build_fresh_window_history_from_normalized};
 
 const ROLLOVER_FAILURE_CONTEXT_OVERFLOW: &str = "context_overflow";
@@ -103,7 +107,7 @@ impl CompressionPolicy {
 }
 
 /// Token Budget 窗口轮转策略运行时。
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct WindowRolloverPolicyRuntime {
     /// 压缩策略。
     pub policy: CompressionPolicy,
@@ -125,6 +129,10 @@ pub struct WindowRolloverPolicyRuntime {
     auto_rollover_failure_streak: u32,
     /// 上一次自动换窗失败时的上下文读数，用于退避比较。
     last_auto_rollover_failure_tokens: Option<u64>,
+    /// 最近动作摘要的来源；由调用方在构造时注入（它才拿得到本轮的工具回执）。
+    digest_source: Option<std::rc::Rc<dyn Fn() -> Option<String>>>,
+    /// 下一次换窗要注入的最近动作摘要。
+    rollover_digest: Option<String>,
 }
 
 impl WindowRolloverPolicyRuntime {
@@ -145,7 +153,27 @@ impl WindowRolloverPolicyRuntime {
             steps_since_notes: 0,
             auto_rollover_failure_streak: 0,
             last_auto_rollover_failure_tokens: None,
+            digest_source: None,
+            rollover_digest: None,
         }
+    }
+
+    /// 注入「最近动作摘要」的来源。
+    ///
+    /// 摘要必须来自本轮真实的工具回执：`turn_events` 里只有「记录了几条回执」这类
+    /// 计数事件，拿不到工具名与状态。调用方持有回执，因此由它提供闭包，换窗时现取。
+    #[must_use]
+    pub fn with_digest_source(mut self, source: std::rc::Rc<dyn Fn() -> Option<String>>) -> Self {
+        self.digest_source = Some(source);
+        self
+    }
+
+    /// 取一次最近动作摘要；没有来源时返回 `None`。
+    fn take_digest(&self) -> Option<String> {
+        self.digest_source
+            .as_ref()
+            .and_then(|source| source())
+            .filter(|digest| !digest.trim().is_empty())
     }
     /// 绑定当前 turn 的 provider 可见投影配置。
     #[must_use]
@@ -321,6 +349,7 @@ impl WindowRolloverPolicyRuntime {
             provider_messages,
             checkpoint,
             self.fresh_window_context.as_ref(),
+            self.rollover_digest.as_deref(),
             self.provider_format,
             &self.model_tools,
             self.supports_vision,
@@ -574,6 +603,8 @@ impl WindowRolloverRuntime<'_> {
             .projection_history_fingerprint_from_normalized(provider_messages)
             .unwrap_or_else(|| (String::new(), provider_messages.len()));
         let mut result_tokens = None;
+        // 便签由模型自己写，常常只剩一句结论；最近两步工具动作由调用方的来源补进新窗口。
+        self.runtime.rollover_digest = self.runtime.take_digest();
         let outcome = match self.rollover.prepare(provider_messages) {
             Ok(checkpoint) => complete_compaction(
                 CompactionCompletionContext {

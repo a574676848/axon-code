@@ -5,8 +5,9 @@ use super::WINDOW_ROLLOVER_CHECKPOINT_PREFIX;
 use crate::agent_model_tool_history::normalize_provider_history;
 use crate::token_estimator::estimated_message_tokens_with_capabilities;
 use crate::{
-    AgentModelMessage, AgentModelMessageKind, CanonicalCheckpoint, ModelToolDefinition,
-    PromptCacheProviderWireFormat, agent_session_stable_context::is_cross_workspace_stable_message,
+    AgentModelMessage, AgentModelMessageKind, AgentRuntimeNoteKind, CanonicalCheckpoint,
+    ModelToolDefinition, PromptCacheProviderWireFormat,
+    agent_session_stable_context::is_cross_workspace_stable_message,
 };
 
 /// FreshWindow replacement history。
@@ -86,6 +87,7 @@ pub(super) fn build_fresh_window_history_from_normalized(
     provider_messages: &[AgentModelMessage],
     checkpoint: &CanonicalCheckpoint,
     captured_context: Option<&FreshWindowContext>,
+    rollover_digest: Option<&str>,
     provider_format: PromptCacheProviderWireFormat,
     model_tools: &[ModelToolDefinition],
     supports_vision: bool,
@@ -103,6 +105,21 @@ pub(super) fn build_fresh_window_history_from_normalized(
         "{WINDOW_ROLLOVER_CHECKPOINT_PREFIX}\n{}",
         checkpoint.as_str()
     )));
+    /*
+     * 便签由模型在预算耗尽时自己写，常常只剩一句结论；最近几步的工具动作因此由
+     * 运行时兜底补一条低权威 note。旧窗口的逐字稿不会进新窗口，但既有的历史工具
+     * （history_list_windows / history_search_contents / history_read_item）可以回读，
+     * 这里把这条出路一并写清楚，避免模型以为上下文已经彻底不可考。
+     */
+    if let Some(digest) = rollover_digest.filter(|value| !value.trim().is_empty()) {
+        messages.push(AgentModelMessage::runtime_note(
+            AgentRuntimeNoteKind::RolloverDigest,
+            format!(
+                "换窗前最近的动作（运行时回执，来自上一个窗口）：\n{}\\n\\n需要更早的细节时，用 history_list_windows 看窗口清单、history_search_contents 搜内容、history_read_item 读单条；不要凭印象补全。",
+                digest.trim()
+            ),
+        ));
+    }
     if let Some(context) = captured_context {
         messages.extend(context.active_turn_tail.clone());
     }

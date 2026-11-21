@@ -44,6 +44,8 @@ mod tests;
 #[path = "tool_lifecycle.rs"]
 mod tool_lifecycle;
 mod tool_output_archive;
+#[path = "tool_receipt_digest.rs"]
+mod tool_receipt_digest;
 
 #[path = "visible_output.rs"]
 mod visible_output;
@@ -188,12 +190,12 @@ pub(super) fn run_provider_single_channel(
         &transport_plan.endpoint,
         transport_plan.wire_transport,
     );
-    let tool_receipts_accumulator = RefCell::new(
+    let tool_receipts_accumulator = std::rc::Rc::new(RefCell::new(
         resume
             .as_ref()
             .map(|state| state.tool_receipts.clone())
             .unwrap_or_default(),
-    );
+    ));
     let tool_calls_accumulator = RefCell::new(
         resume
             .as_ref()
@@ -214,7 +216,7 @@ pub(super) fn run_provider_single_channel(
     );
     let visible_output_emitted = Cell::new(false);
     let partial_state = PartialToolCallState {
-        tool_receipts: &tool_receipts_accumulator,
+        tool_receipts: tool_receipts_accumulator.as_ref(),
         tool_calls: &tool_calls_accumulator,
         reasoning: &reasoning_accumulator,
         turn_events: &turn_events_accumulator,
@@ -235,8 +237,19 @@ pub(super) fn run_provider_single_channel(
     let rollover_limit_tokens =
         compression_policy.map_or(channel_model.context_window, |policy| policy.trigger_tokens);
     let mut rollover = InlineWindowRollover::new(request, progress);
+    /*
+     * 换窗摘要的来源：只有这一层同时持有「本轮工具回执」和压缩运行时。
+     * 运行时在真正换窗时现取最近两条回执，避免把摘要锁死在某次迭代的现场。
+     */
+    let digest_source: std::rc::Rc<dyn Fn() -> Option<String>> = {
+        let receipts = std::rc::Rc::clone(&tool_receipts_accumulator);
+        std::rc::Rc::new(move || tool_receipt_digest::digest_from_receipts(&receipts.borrow()))
+    };
     let compression = compression_policy.map(|policy| {
-        WindowRolloverRuntime::new(WindowRolloverPolicyRuntime::new(policy), &mut rollover)
+        WindowRolloverRuntime::new(
+            WindowRolloverPolicyRuntime::new(policy).with_digest_source(digest_source),
+            &mut rollover,
+        )
     });
     let steer_source = BackgroundJobGuardSteerSource::new(
         ProgressSteerSource::new(turn_inbox, progress),

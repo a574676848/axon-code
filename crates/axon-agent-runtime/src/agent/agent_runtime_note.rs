@@ -28,6 +28,8 @@ pub enum AgentRuntimeNoteKind {
     QuotedMessageContext,
     /// 模型主动请求在安全工具边界切换记忆窗口。
     ContextRolloverRequest,
+    /// 换窗前的最近工具动作摘要：由运行时生成，避免新窗口只剩一句交接结论。
+    RolloverDigest,
     /// 临时 Job 完成通知：唤醒主 turn 去读取结果（合同 §5.1.5）。
     ///
     /// 与 `DeferredDiagnostics` 刻意分开：两者触发条件、载荷与去重规则都不同，
@@ -67,6 +69,7 @@ impl AgentRuntimeNoteKind {
             Self::DeferredDiagnostics => "deferred-diagnostics",
             Self::QuotedMessageContext => "quoted-message-context",
             Self::ContextRolloverRequest => "context-rollover-request",
+            Self::RolloverDigest => "rollover-digest",
             Self::CompletionNotice => "completion-notice",
             Self::PreFinalGuard => "pre-final-guard",
             Self::ShellSessionReclaimed => "shell-session-reclaimed",

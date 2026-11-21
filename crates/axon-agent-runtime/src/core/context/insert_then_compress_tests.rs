@@ -9,8 +9,8 @@ use crate::insert_then_compress::{
 };
 use crate::{
     AgentModelHistorySnapshot, AgentModelLocalImageRef, AgentModelMessage, AgentModelMessageKind,
-    AgentModelToolCallMetadata, AnthropicThinkingBlockMetadata, CanonicalCheckpoint,
-    CompactedHistory, PromptCacheProviderWireFormat,
+    AgentModelToolCallMetadata, AgentRuntimeNoteKind, AnthropicThinkingBlockMetadata,
+    CanonicalCheckpoint, CompactedHistory, PromptCacheProviderWireFormat,
 };
 
 fn policy(trigger_tokens: u64) -> CompressionPolicy {
@@ -598,3 +598,31 @@ fn commit_failure_keeps_the_current_history_for_the_next_turn() {
 }
 
 mod insert_then_compress_projection_tests;
+
+#[test]
+fn fresh_window_injects_the_rollover_digest_note() {
+    let checkpoint = crate::CanonicalCheckpoint::parse(&checkpoint_summary("任务", "- none"), &[])
+        .expect("摘要应通过完整性门禁");
+    let digest = "- builtin.edit（completed）：改 crates/a.rs\n- builtin.shell_command（completed）：cargo test -p a";
+
+    let compacted =
+        crate::insert_then_compress::rebuild_with_digest_for_test(&[], &checkpoint, Some(digest));
+
+    let note = compacted
+        .messages
+        .iter()
+        .find(|message| {
+            message.kind == AgentModelMessageKind::RuntimeNote(AgentRuntimeNoteKind::RolloverDigest)
+        })
+        .expect("新窗口必须带一条换窗回执 note");
+    assert!(
+        note.content.contains("builtin.edit"),
+        "回执要带具体动作：{}",
+        note.content
+    );
+    assert!(
+        note.content.contains("history_list_windows"),
+        "回执要指出回读旧窗口的工具：{}",
+        note.content
+    );
+}

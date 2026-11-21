@@ -187,3 +187,34 @@ fn warn_takes_priority_when_both_tiers_are_due_in_one_turn() {
     assert!(runtime.midway_emitted, "收尾预警之后不再补发保值提示");
     assert!(!runtime.maybe_emit_budget_notice(&mut messages, Some(760_000)));
 }
+
+#[test]
+fn handoff_prompt_requires_the_checklist_and_names_the_history_tools() {
+    let note = super::notice::fallback_note();
+    for section in ["目标", "已完成步骤", "待办", "已验证证据", "下一步命令"] {
+        assert!(
+            note.contains(section),
+            "交接提示必须要求小节 {section}：{note}"
+        );
+    }
+    for tool in [
+        "history_list_windows",
+        "history_search_contents",
+        "history_read_item",
+    ] {
+        assert!(note.contains(tool), "提示要指出回读工具 {tool}：{note}");
+    }
+}
+
+#[test]
+fn warn_note_also_asks_for_the_checklist() {
+    let note = super::notice::warn_note(12_000, Some(4), Some(6), Some(3_000), 5);
+    assert!(
+        note.contains("已完成步骤"),
+        "预警阶段就要提示按小节写便签：{note}"
+    );
+    assert!(
+        note.contains("history_list_windows"),
+        "预警阶段给出回读入口：{note}"
+    );
+}
