@@ -26,7 +26,7 @@ import {
   type TurnChanges,
 } from './changes';
 import { failureReportFromRuntimeFailure } from '../failureReport';
-import { LOCAL_STEER_PREFIX } from './state';
+import { LOCAL_STEER_PREFIX, LOCAL_USER_PREFIX } from './state';
 import { visibleUserText } from '../references';
 import {
   booleanField,
@@ -35,10 +35,12 @@ import {
   previewCommand,
   stringField,
 } from './derive';
-import type { ConversationState, PlanProjection, TokenUsage, TurnState } from './state';
+import type { ConversationState, PlanProjection, TokenUsage, TranscriptCell, TurnState } from './state';
 import {
   activeTurnIndex,
+  detachCells,
   elapsedSince,
+  indexCells,
   patchCell,
   streamOnlyAssistant,
   upsertCell,
@@ -137,7 +139,91 @@ export function applyReasoningEnd(
   );
 }
 
-/** 用户消息：认领本地或历史索引补出的占位消息，保留附件并绑定事件标识。 */
+/** 用户消息单元，认领与合并只在这一族字段上动手。 */
+type UserCell = Extract<TranscriptCell, { role: 'user' }>;
+
+/** 一格待认领的本地占位：它在哪一轮、以及它自己。 */
+interface LocalClaim {
+  turnPosition: number;
+  cell: UserCell;
+}
+
+/** 本地占位格：索引骨架与运行中排队的乐观格共用同一组标识前缀。 */
+function isLocalPlaceholder(cell: TranscriptCell): cell is UserCell {
+  return (
+    cell.role === 'user' &&
+    (cell.id.startsWith(LOCAL_USER_PREFIX) || cell.id.startsWith(LOCAL_STEER_PREFIX))
+  );
+}
+
+/**
+ * 这一格是不是同一条消息的本地占位。
+ *
+ * 只比可见正文：索引骨架与 durable 帧可能只在首尾空白上不同，比原始串会认领不上。
+ */
+function isSameMessage(cell: TranscriptCell, visible: string): cell is UserCell {
+  return isLocalPlaceholder(cell) && cell.text.trim() === visible.trim();
+}
+
+/** 投影里全部同文本的本地占位，按轮次与单元顺序列出。 */
+function localClaims(state: ConversationState, visible: string): LocalClaim[] {
+  const claims: LocalClaim[] = [];
+  state.turns.forEach((turn, turnPosition) => {
+    for (const cell of turn.cells) {
+      if (isSameMessage(cell, visible)) claims.push({ turnPosition, cell });
+    }
+  });
+  return claims;
+}
+
+/**
+ * 认领之后的那一格：把几格本地占位的事实并成一份。
+ *
+ * 索引骨架带着服务端位置，运行中排队的乐观格带着到达顺序、结构化输入与附件，
+ * 两边各缺一半事实；合并后只留一格，字段取较全的那一份。
+ */
+function claimedUserCell(
+  owner: UserCell,
+  all: readonly UserCell[],
+  visible: string,
+  partId: string,
+  recordedAtMs: number,
+  pendingChannel: string | null,
+): UserCell {
+  const withAttachments = all.find((cell) => cell.attachments.length > 0);
+  const withStructured = all.find((cell) => cell.structuredInput !== undefined);
+  const withChannel = all.find((cell) => cell.channel !== undefined);
+  const sequences = all
+    .map((cell) => cell.steerSeq)
+    .filter((value): value is number => typeof value === 'number');
+  return {
+    id: partId,
+    role: 'user',
+    text: visible,
+    atMs: recordedAtMs,
+    attachments:
+      owner.attachments.length > 0 ? owner.attachments : (withAttachments?.attachments ?? []),
+    channel: owner.channel ?? withChannel?.channel ?? pendingChannel ?? undefined,
+    undelivered: all.some((cell) => cell.undelivered === true) ? true : undefined,
+    structuredInput: owner.structuredInput ?? withStructured?.structuredInput,
+    // 排队与到达顺序都跟着这一格走：同一条消息被几次预测时，只有最早那次是用户的动作。
+    steer: all.some((cell) => cell.steer === true) ? true : undefined,
+    steerSeq: sequences.length > 0 ? Math.min(...sequences) : undefined,
+    requeued: all.some((cell) => cell.requeued === true) ? true : undefined,
+  };
+}
+
+/**
+ * 用户消息：把同一条消息的全部本地占位合并成一格，并换成服务端标识。
+ *
+ * 运行中排队时本地乐观格用 `local-steer:` 立起，索引重载又会为同一交互立起
+ * `local-user:` 骨架；durable 用户帧到达时若只换第一格，另一格会原地留下，
+ * 正文里就出现两条一样的气泡（一条还挂着「等待注入」）。因此认领的范围是
+ * **全部同可见正文的本地格**：一格改成服务端标识，其余一并摘掉。
+ *
+ * 认领格优先取本轮里「运行中排队」的那一格：它带着到达位置与提交时的结构化输入，
+ * 认领之后仍要按 `transcript/order` 的规则留在原位或排到轮末。
+ */
 export function applyUserMessage(
   state: ConversationState,
   position: number,
@@ -145,47 +231,68 @@ export function applyUserMessage(
   content: string,
   recordedAtMs: number,
 ): ConversationState {
-  return withTurn(state, position, (turn) => {
-    if (turn.index[partId] !== undefined) return turn;
-    // 正文里可能带着提交时附上的结构化输入块；展示与认领都只认可见正文。
-    const visible = visibleUserText(content);
-    const optimistic = turn.cells.find(
-      (cell) =>
-        cell.role === 'user' &&
-        (cell.id.startsWith('local-user:') || cell.id.startsWith(LOCAL_STEER_PREFIX)) &&
-        // 索引骨架与 durable 帧可能只在首尾空白上不同：比较可见正文，不比较原始串。
-        cell.text.trim() === visible.trim(),
-    );
-    if (optimistic !== undefined) {
-      const cells = turn.cells.map((cell) => {
-        if (cell.id !== optimistic.id || cell.role !== 'user') return cell;
-        return {
-          ...cell,
-          id: partId,
-          atMs: recordedAtMs,
-          channel: cell.channel ?? turn.pendingChannel ?? undefined,
-        };
+  const turn = state.turns[position];
+  if (turn === undefined || turn.index[partId] !== undefined) return state;
+  // 正文里可能带着提交时附上的结构化输入块；展示与认领都只认可见正文。
+  const visible = visibleUserText(content);
+  const claims = localClaims(state, visible);
+  const inTurn = claims.filter((claim) => claim.turnPosition === position);
+  if (inTurn.length === 0) {
+    // 本轮没有可认领的本地格：这条消息先到，按服务端事实新落一格。
+    return withTurn(state, position, (current) => {
+      const attachments = current.pendingAttachments;
+      const withCell = upsertCell(current, {
+        id: partId,
+        role: 'user',
+        text: visible,
+        atMs: recordedAtMs,
+        attachments,
+        channel: current.pendingChannel ?? undefined,
       });
-      const index = { ...turn.index };
-      delete index[optimistic.id];
-      index[partId] = cells.findIndex((cell) => cell.id === partId);
-      return { ...turn, cells, index, pendingChannel: null };
-    }
-    const attachments = turn.pendingAttachments;
-    const withCell = upsertCell(turn, {
-      id: partId,
-      role: 'user',
-      text: visible,
-      atMs: recordedAtMs,
-      attachments,
-      channel: turn.pendingChannel ?? undefined,
+      return {
+        ...withCell,
+        pendingAttachments: [],
+        pendingChannel: null,
+      };
     });
-    return {
-      ...withCell,
-      pendingAttachments: [],
-      pendingChannel: null,
-    };
+  }
+  const owner = inTurn.find((claim) => claim.cell.steer === true) ?? inTurn[0];
+  const others = claims.filter((claim) => claim.cell !== owner.cell);
+  const claimed = claimedUserCell(
+    owner.cell,
+    [owner.cell, ...others.map((claim) => claim.cell)],
+    visible,
+    partId,
+    recordedAtMs,
+    turn.pendingChannel,
+  );
+  const dropping = new Map<number, string[]>();
+  for (const claim of others) {
+    /*
+     * 摘掉这一格会让整轮空掉时不摘。
+     *
+     * 只剩一格占位的轮次一旦被摘空，会以「运行中」永远留在时间线上（状态不再有任何
+     * 帧推进它），界面上就是一个不消失的转圈。宁可留一格气泡，也不制造这种空轮。
+     */
+    if (claim.turnPosition !== position && state.turns[claim.turnPosition].cells.length <= 1) {
+      continue;
+    }
+    const ids = dropping.get(claim.turnPosition) ?? [];
+    ids.push(claim.cell.id);
+    dropping.set(claim.turnPosition, ids);
+  }
+  const turns = state.turns.map((current, index) => {
+    if (index === position) {
+      const drop = dropping.get(index) ?? [];
+      const cells = current.cells
+        .map((cell) => (cell.id === owner.cell.id ? claimed : cell))
+        .filter((cell) => !drop.includes(cell.id));
+      return { ...current, cells, index: indexCells(cells), pendingChannel: null };
+    }
+    const drop = dropping.get(index);
+    return drop === undefined ? current : detachCells(current, drop);
   });
+  return { ...state, turns };
 }
 
 /** 工具调用：开一行，结果到达时原位补齐。 */

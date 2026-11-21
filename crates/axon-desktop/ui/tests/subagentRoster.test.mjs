@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeSubagentRoster, shouldPollSubagentRoster } from '../src/conversation/subagentRoster.ts';
+import {
+  mergeSubagentRoster,
+  reconciledSubagentStatus,
+  shouldPollSubagentRoster,
+} from '../src/conversation/subagentRoster.ts';
 
 /** 转录里的一行：合并只读标识与展示字段，其余按缺省给。 */
 const row = (agentId, overrides = {}) => ({
@@ -98,4 +102,40 @@ test('名册缺标题与模型时用代理标识兜底，不写空标题', () =>
 test('名册缺代理标识的行直接跳过，不伪造标识', () => {
   const merged = mergeSubagentRoster([], [{ sessionId: 'run--x', agentId: '', title: '无标识' }]);
   assert.equal(merged.length, 0);
+});
+
+test('roster_active_does_not_override_settled_transcript：转录收口后名册 active 不再压住状态', () => {
+  const running = row('subagent:/root/live-one', { status: 'running' });
+  const activeIdle = { status: 'active', lastTurnStatus: 'active' };
+  // 本视图还有在跑的轮次：名册说 active，沿用行内状态（它可能已经有更新的阶段）。
+  assert.equal(reconciledSubagentStatus(running, activeIdle, false), 'running');
+  // 转录已经收口：名册的 active 不得把行留在运行中，计数随之回落。
+  assert.equal(reconciledSubagentStatus(running, activeIdle, true), 'completed');
+  // 末轮给出终态时按终态收口，而不是一律算完成。
+  assert.equal(
+    reconciledSubagentStatus(running, { status: 'active', lastTurnStatus: 'failed' }, true),
+    'failed',
+  );
+  assert.equal(
+    reconciledSubagentStatus(running, { status: 'active', lastTurnStatus: 'interrupted' }, true),
+    'interrupted',
+  );
+  // 名册已判 idle 时的纠正路径保持不变。
+  assert.equal(
+    reconciledSubagentStatus(running, { status: 'idle', lastTurnStatus: 'active' }, false),
+    'completed',
+  );
+  // 行本身已是终态：没有任何需要纠正的东西。
+  const done = row('subagent:/root/live-one', { status: 'completed' });
+  assert.equal(reconciledSubagentStatus(done, activeIdle, false), 'completed');
+  // 没对过账时原样沿用行内状态：没有第二份事实可比时纠正就是猜测。
+  assert.equal(reconciledSubagentStatus(running, undefined, true), 'running');
+  /*
+   * 与 `RuntimeActions` 的运行中计数同源：入口上的 `N/M` 只数这三档，
+   * 状态回落之后计数必须跟着落到零，否则入口会一直显示有一个子代理在跑。
+   */
+  const countedRunning = [running, done].filter((item) =>
+    ['running', 'starting', 'waiting'].includes(reconciledSubagentStatus(item, activeIdle, true)),
+  );
+  assert.deepEqual(countedRunning, []);
 });

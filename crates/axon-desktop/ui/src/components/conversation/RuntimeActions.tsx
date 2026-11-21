@@ -7,7 +7,7 @@ import {
   formatDurationPadded,
 } from '../../conversation/format';
 import type { JobRow, SubagentRow } from '../../conversation/transcript';
-import { canonicalAgentId, mergeSubagentRoster, shouldPollSubagentRoster } from '../../conversation/subagentRoster';
+import { canonicalAgentId, mergeSubagentRoster, reconciledSubagentStatus, shouldPollSubagentRoster } from '../../conversation/subagentRoster';
 import type { SessionSubagentSummary } from '../../types';
 import { isActiveJob, JOB_ROSTER_REFRESH_MS } from '../../conversation/runtimeFacts';
 import { Dropdown } from '../ui/overlays';
@@ -373,22 +373,17 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
     return map;
   }, [roster]);
 
-  /** 后端对账后的真实状态；无法对账时沿用事件流里的状态。 */
+  /**
+   * 后端对账后的真实状态。
+   *
+   * 名册只提供 `active / idle` 线索，最终状态以运行态为准：本视图还有在跑的轮次时
+   * 才沿用行内状态，转录已经收口时名册的 `active` 不得把行留在运行中（否则计数与
+   * 状态点永远不会回落）。判定本身在 `conversation/subagentRoster` 里，便于单测。
+   */
   const statusOf = React.useCallback(
-    (row: SubagentRow): SubagentRow['status'] => {
-      const live = liveSubagents?.get(canonicalAgentId(row.agentId));
-      if (live === undefined || live === null) return row.status;
-      // 后端说这条会话仍在跑，就以事件流为准（它可能已经有更新的阶段）。
-      if (live.status === 'active') return row.status;
-      // 后端已判定收口：行里若还声称在跑，按末轮状态纠正。
-      const claimedRunning =
-        row.status === 'running' || row.status === 'starting' || row.status === 'waiting';
-      if (!claimedRunning) return row.status;
-      if (live.lastTurnStatus === 'failed') return 'failed';
-      if (live.lastTurnStatus === 'interrupted') return 'interrupted';
-      return 'completed';
-    },
-    [liveSubagents],
+    (row: SubagentRow): SubagentRow['status'] =>
+      reconciledSubagentStatus(row, liveSubagents?.get(canonicalAgentId(row.agentId)), !working),
+    [liveSubagents, working],
   );
 
   /*

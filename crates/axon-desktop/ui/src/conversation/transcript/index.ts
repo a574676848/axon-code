@@ -54,7 +54,15 @@ export { applyFrames } from './frames';
  * 折叠判据对外可见：控制器据此决定哪一轮折起来。折叠本身只在归约里发生，
  * 历史与实时共用同一条单元构造，因此这里不再提供「按索引立起一轮」的旁路。
  */
-export { outlineControl, shouldFold, summaryFromIndexFacts, summaryFromToolNames } from './fold';
+export {
+  FOLD_SILENCE_MS,
+  conclusionMarkerOf,
+  outlineControl,
+  shouldFold,
+  summaryFromIndexFacts,
+  summaryFromToolNames,
+  type TurnConclusionMarker,
+} from './fold';
 
 export {
   attachmentsFromPaths,

@@ -158,6 +158,14 @@ export interface AttachmentRef {
  */
 export const LOCAL_STEER_PREFIX = 'local-steer:';
 
+/**
+ * 索引骨架立起的用户消息标识前缀。
+ *
+ * 与上一项同为本地占位：durable 用户帧到达时按可见正文认领，两者都要一并收掉，
+ * 否则同一条消息会在时间线上留下两格气泡。
+ */
+export const LOCAL_USER_PREFIX = 'local-user:';
+
 /** 子代理活动行；字段口径与 TUI 的子代理活动区一致。 */
 export interface SubagentRow {
   agentId: string;
@@ -320,6 +328,13 @@ export interface TurnState {
   firstEventAtMs: number | null;
   /** 本轮最后一条 durable 事件的记录时间。 */
   lastEventAtMs: number | null;
+  /**
+   * 服务端收口这一轮的时刻（Unix 毫秒）；尚未收口时为 null。
+   *
+   * 它是「过程不会再变」的直接事实，也是整轮折叠的第一判据：状态字段只说明这一轮
+   * 停在哪个终态，收口事实缺失的轮次会一直写着运行中，光看状态永远折不起来。
+   */
+  settledAt: number | null;
   /** 本轮的文件改动事实，按 part_id 归并；卡片与改动对比都读这一份。 */
   changes: TurnChanges;
   /**
