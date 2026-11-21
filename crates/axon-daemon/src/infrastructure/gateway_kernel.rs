@@ -156,21 +156,27 @@ pub trait GatewayEventStream: Send {
 
     /// 建立这条流时 durable 回放留下的缺口。
     ///
-    /// 客户端必须能看见「回放不完整」这件事：跳过缺失外置正文的帧、或字节预算耗尽
-    /// 没追到 durable 尾时，界面要能说清楚自己看的是残缺历史，而不是把缺帧当成
-    /// 会话本来就长这样。默认没有缺口。
+    /// 客户端必须能看见「回放不完整」这件事：跳过缺失外置正文的帧、或没追到 durable 尾
+    /// 时，界面要能说清楚自己看的是残缺历史，而不是把缺帧当成会话本来就长这样；
+    /// 残缺时还必须拿到续读游标，否则下次续订会按「已到尾」跳过整段中间帧。
+    /// 默认没有缺口。
     fn replay_report(&self) -> GatewayReplayReport {
         GatewayReplayReport::default()
     }
 }
 
 /// 一次 durable 回放的缺口统计。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GatewayReplayReport {
     /// 因外置正文缺失而跳过的帧数。
     pub skipped_archived_frames: u64,
-    /// 字节预算耗尽、尚未追到 durable 尾。
+    /// 是否没追到 durable 尾（页数兜底触顶，或日志出现空洞）。
     pub replay_truncated: bool,
+    /// 续读游标：这次回放**真正覆盖到**的位置；截断时是最后一条真读到的帧。
+    ///
+    /// 未截断时它等于回放上界（durable 尾），因此正常路径上的行为与修前一致；
+    /// 截断时客户端必须从它续读，不能当成「已经读到尾」。
+    pub resume_cursor: Option<String>,
 }
 
 /// 由 Daemon durable event bridge 映射出的最小事件。
