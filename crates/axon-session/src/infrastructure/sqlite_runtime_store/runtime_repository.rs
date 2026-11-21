@@ -3,7 +3,7 @@ use super::HOST_STATE_RUNNING;
 use super::SqliteRuntimeStore;
 use super::helpers::{i64_value, parse_session_id, session_runtime_row, storage};
 use crate::domain::runtime::{DaemonHostRecord, SessionRuntimeRecord};
-use crate::ports::{RuntimeStore, RuntimeStoreError};
+use crate::ports::{RecoveringSettlement, RuntimeStore, RuntimeStoreError};
 use axon_domain::RuntimeHostId;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use uuid::Uuid;
@@ -501,6 +501,30 @@ fn plan_recovery(
         });
     }
     Ok(plan)
+}
+
+/// 收敛停在 `recovering` 的会话：这个状态必须有归宿（INV-7）。
+///
+/// 两条规则，一条都不允许长期停留：
+/// 1. **没有可执行的工作项**：会话下没有 `work_item`，或工作项已全部落定终态，
+///    就把会话送回 `idle`。这正是崩溃恢复之后最常见的形状：原 worker 的租约失效，
+///    收口路径已经把工作项结算掉，只剩会话还挂在 `recovering`。
+/// 2. **超过 TTL 仍未派发**：会话停在 `recovering` 超过 `ttl_ms`，工作项却还停在
+///    排队态，说明没有任何执行者会来领它。此时收口为 `interrupted` 并追加对应事件，
+///    会话随即回 `idle`。
+///
+/// 运行中且租约仍然有效的工作项不动：那说明还有执行者，压缩成一个「没有归宿」的
+/// 判断只会把别人的活抢掉。细节与实现见 `recovering_settlement_repository`。
+pub(super) fn settle_recovering_sessions(
+    store: &SqliteRuntimeStore,
+    host: &DaemonHostRecord,
+    now_ms: u64,
+    ttl_ms: u64,
+    limit: u32,
+) -> Result<RecoveringSettlement, RuntimeStoreError> {
+    super::recovering_settlement_repository::settle_recovering_sessions(
+        store, host, now_ms, ttl_ms, limit,
+    )
 }
 
 /// Runtime 聚合 repository 视图。

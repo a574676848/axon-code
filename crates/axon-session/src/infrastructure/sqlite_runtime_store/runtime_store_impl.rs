@@ -371,6 +371,16 @@ impl RuntimeStore for SqliteRuntimeStore {
         runtime_repository::list_runnable_execution_sessions(self, now_ms, limit)
     }
 
+    fn settle_recovering_sessions(
+        &self,
+        host: &DaemonHostRecord,
+        now_ms: u64,
+        ttl_ms: u64,
+        limit: u32,
+    ) -> Result<crate::ports::RecoveringSettlement, RuntimeStoreError> {
+        runtime_repository::settle_recovering_sessions(self, host, now_ms, ttl_ms, limit)
+    }
+
     fn update_action_status(
         &self,
         action_id: &SessionActionId,

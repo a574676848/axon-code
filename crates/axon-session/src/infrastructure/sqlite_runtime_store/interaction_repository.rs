@@ -23,6 +23,8 @@ use uuid::Uuid;
 
 /// 工作项的排队状态：已释放、等待重新领取。
 const WORK_QUEUED: &str = "queued";
+/// 工作项的失败终态：中断也落在这个状态上，由 `terminal_kind` 区分具体结局。
+const WORK_FAILED: &str = "failed";
 /// 终态：正常结束。
 const TERMINAL_UNDERSTOOD: &str = "understood";
 /// 终态：被拒绝。
@@ -455,6 +457,15 @@ fn release_work_item(
     Err(inbox_state_error(&connection, interaction_id)?)
 }
 
+/// 工作项终态写库的唯一实现：状态、终态类别、清租约与提交时间一次写完。
+///
+/// 守卫（`WHERE` 之后的条件）由调用方接上：持租约的结算要求令牌匹配，恢复收敛面对的
+/// 是从未派发、没有租约的排队行，守卫只有「仍停在排队态」。两处共用这一段 SQL，
+/// 避免终态写入逐渐分叉成两套。
+const SQL_SETTLE_WORK_ITEM: &str = "UPDATE work_items SET status=?1,terminal_kind=?2,\
+     lease_token=NULL,lease_expires_at_ms=NULL,claimed_by=NULL,claimed_generation=NULL,\
+     updated_at_ms=?3,committed_at_ms=?3 WHERE ";
+
 /// 结算工作项：写入终态与终态类别，令牌立即失效。
 fn settle_work_item(
     store: &SqliteRuntimeStore,
@@ -470,10 +481,10 @@ fn settle_work_item(
         ));
     }
     let connection = store.connection().map_err(runtime_error)?;
+    let sql = format!("{SQL_SETTLE_WORK_ITEM}inbox_id=?4 AND lease_token=?5 AND status=?6");
     let changed = connection
         .execute(
-            "UPDATE work_items SET status=?1,terminal_kind=?2,lease_token=NULL,lease_expires_at_ms=NULL,updated_at_ms=?3,committed_at_ms=?3 \
-             WHERE inbox_id=?4 AND lease_token=?5 AND status=?6",
+            &sql,
             params![
                 status,
                 terminal_kind,
@@ -495,6 +506,42 @@ fn settle_work_item(
         return Ok(());
     }
     Err(inbox_state_error(&connection, interaction_id)?)
+}
+
+/// 收口一条**从未派发**的工作项：收敛为中断终态并腾空在途表。
+///
+/// 恢复收敛面对的是排队行：它既没有租约，也没有执行者，因此守卫只能是「仍停在排队态」。
+/// 与 [`settle_work_item`] 共用同一段终态写库 SQL，差别只在守卫，不会碰到任何已被领取
+/// 或已在运行的行。返回是否真的收到了一条。
+pub(super) fn settle_undispatched_work_item(
+    connection: &rusqlite::Connection,
+    execution_id: &str,
+    now_ms: i64,
+) -> Result<bool, InteractionStoreError> {
+    let sql = format!("{SQL_SETTLE_WORK_ITEM}execution_id=?4 AND status=?5");
+    let changed = connection
+        .execute(
+            &sql,
+            params![
+                WORK_FAILED,
+                TERMINAL_INTERRUPTED,
+                now_ms,
+                execution_id,
+                WORK_QUEUED
+            ],
+        )
+        .map_err(storage_error)?;
+    if changed == 0 {
+        return Ok(false);
+    }
+    super::work_item_archive::archive_settled_work_item(
+        connection,
+        "execution_id=?1",
+        execution_id,
+        now_ms,
+    )
+    .map_err(storage_error)?;
+    Ok(true)
 }
 
 /// 结算失败时的错误归因：入站事实存在即为租约失效，否则是真不存在。

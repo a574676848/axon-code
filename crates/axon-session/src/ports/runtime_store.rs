@@ -154,6 +154,20 @@ pub struct CheckpointTelemetry {
     pub tool_receipt_sequence: Option<u64>,
 }
 
+/// 一次 `recovering` 收敛的结果。
+///
+/// `events` 是这次收敛产生的会话事件：控制面已经提交，事件面由调用方补齐并对外发布。
+/// 它与 `quarantine_interrupted_interactions` 的返回值同一个用法。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RecoveringSettlement {
+    /// 收敛回 `idle` 的会话数（含两种来源：本来就没有在途工作项，与本次收口后腾空）。
+    pub settled_to_idle: u32,
+    /// 过期未派发而被收口为 `interrupted` 的工作项数。
+    pub interrupted: u32,
+    /// 需要追加到事件面的会话事件。
+    pub events: Vec<SessionEventRecord>,
+}
+
 /// 持久 Runtime Store 端口。
 pub trait RuntimeStore:
     AgentMailboxStore
@@ -400,6 +414,21 @@ pub trait RuntimeStore:
         now_ms: u64,
         limit: u32,
     ) -> Result<Vec<SessionRuntimeRecord>, RuntimeStoreError>;
+    /// 收敛停在 `recovering` 的会话，保证这个状态一定有归宿（INV-7）。
+    ///
+    /// 两条收敛规则：
+    /// 1. 没有在途工作项（`queued`/`running`）或它们已全部落定终态 → 会话回到 `idle`；
+    /// 2. 停留在 `recovering` 超过 `ttl_ms`、工作项仍未派发 → 工作项收口为 `interrupted`
+    ///    并追加对应事件，随后同样回到 `idle`。
+    ///
+    /// 运行中且租约仍然有效的工作项不动：那说明还有执行者，不属于「没有归宿」。
+    fn settle_recovering_sessions(
+        &self,
+        host: &DaemonHostRecord,
+        now_ms: u64,
+        ttl_ms: u64,
+        limit: u32,
+    ) -> Result<RecoveringSettlement, RuntimeStoreError>;
     /// 更新 Session 状态并校验 fencing。
     fn set_session_status(
         &self,

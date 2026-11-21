@@ -66,6 +66,8 @@ mod interrupted_interaction_repository;
 mod ledger_commit_repository;
 #[path = "sqlite_runtime_store/ledger_event_repository.rs"]
 mod ledger_event_repository;
+#[path = "sqlite_runtime_store/recovering_settlement_repository.rs"]
+mod recovering_settlement_repository;
 #[path = "sqlite_runtime_store/session_query_repository.rs"]
 mod session_query_repository;
 #[path = "sqlite_runtime_store/session_resolution.rs"]
