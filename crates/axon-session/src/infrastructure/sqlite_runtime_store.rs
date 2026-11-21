@@ -108,6 +108,9 @@ mod user_question_repository;
 mod work_item_archive;
 #[path = "sqlite_runtime_store/work_item_claim.rs"]
 mod work_item_claim;
+#[path = "sqlite_runtime_store/work_item_settlement.rs"]
+mod work_item_settlement;
+pub use work_item_settlement::conclusive_work_items_without_terminal_kind_sql;
 
 /// 控制面库文件名：会话、队列、目标、调度、游标、账本。
 pub const CONTROL_DATABASE_FILE_NAME: &str = "control.sqlite3";

@@ -5,12 +5,14 @@
 //! 报 `interaction.created`，状态从在途变成终态的报 `interaction.settled`。
 //!
 //! 清单直接走 `interaction_turn_heads` 端口：终态判定与索引页同源（同一个状态表达式），
-//! 这里不再自己拼 SQL，否则两处口径迟早漂移。
+//! 这里不再自己拼 SQL；终态集合与状态取值又都取自 `axon_session` 的口径定义，因此
+//! 「库里是终态、帧里还在跑」不可能再由本文件产生。
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use axon_domain::DaemonSessionId;
+use axon_session::domain::interaction_status;
 
 use super::gateway_kernel::{GatewayEvent, GatewayEventStream, GatewayKernelError};
 
@@ -88,7 +90,7 @@ where
         self.baseline = rows.first().cloned();
         for head in &rows {
             let interaction_id = head.interaction_id.clone();
-            let terminal = is_terminal(status_name(head.status));
+            let terminal = interaction_status::is_terminal(head.status);
             self.known.insert(interaction_id.clone());
             if terminal {
                 self.settled.insert(interaction_id);
@@ -135,7 +137,7 @@ where
             .collect();
         for head in &rows {
             let interaction_id = head.interaction_id.clone();
-            let status = status_name(head.status);
+            let status = interaction_status::token(head.status);
             let first_seen = self.known.insert(interaction_id.clone());
             // 先报「多了一轮」再报「这一轮收口了」：轮询间隔内跑完的一轮也必须让订阅者
             // 先看到它的存在，否则界面会凭空收到一条没有行号的收口帧。
@@ -149,7 +151,9 @@ where
                     }),
                 ));
             }
-            if is_terminal(status) && self.settled.insert(interaction_id.clone()) {
+            if interaction_status::is_terminal(head.status)
+                && self.settled.insert(interaction_id.clone())
+            {
                 self.pending.push(self.event(
                     INTERACTION_SETTLED_EVENT,
                     serde_json::json!({
@@ -170,7 +174,7 @@ where
         // 在途轮次保持活跃节拍：收口那一刻的帧不该等退避结束才被看见。
         let busy = rows
             .iter()
-            .any(|head| !is_terminal(status_name(head.status)));
+            .any(|head| !interaction_status::is_terminal(head.status));
         self.tune_pace(changed || busy);
         Ok(())
     }
@@ -233,25 +237,9 @@ where
 fn baseline_payload(head: &InteractionTurnHead) -> serde_json::Value {
     serde_json::json!({
         "latestInteractionId": head.interaction_id,
-        "latestInteractionStatus": status_name(head.status),
+        "latestInteractionStatus": interaction_status::token(head.status),
         "latestInteractionReceivedAtMs": head.received_at_ms,
     })
-}
-
-/// 终态判定：与索引页的状态表达式同一套取值。
-fn is_terminal(status: &str) -> bool {
-    matches!(status, "understood" | "rejected" | "interrupted")
-}
-
-/// 状态取值与库里的派生列同名：协议帧直接用这一套词。
-fn status_name(status: axon_domain::InteractionStatus) -> &'static str {
-    match status {
-        axon_domain::InteractionStatus::Received => "received",
-        axon_domain::InteractionStatus::Processing => "processing",
-        axon_domain::InteractionStatus::Understood => "understood",
-        axon_domain::InteractionStatus::Rejected => "rejected",
-        axon_domain::InteractionStatus::Interrupted => "interrupted",
-    }
 }
 
 /// 订阅目标解析：`session-turns:` 前缀只认会话标识。

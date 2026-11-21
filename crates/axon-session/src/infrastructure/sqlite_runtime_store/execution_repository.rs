@@ -5,6 +5,7 @@ use super::{
     SqliteRuntimeStore,
     helpers::{i64_value, u64_value},
 };
+use crate::domain::interaction_status;
 use crate::ports::ExecutionTrigger;
 use crate::ports::{ExecutionStore, ExecutionStoreError, RuntimeStore};
 use axon_domain::{
@@ -124,26 +125,35 @@ impl ExecutionStore for SqliteRuntimeStore {
     }
 
     /// 结算执行终态；只前移未终结的执行。
+    ///
+    /// 走存储层的终态唯一出口：状态、终态类别与归档同时落定。缺了 `terminal_kind`
+    /// 这一步，行会既留在在途表里读不到结论，又违反 INV-2。
     fn finish_execution(
         &self,
         execution_id: &ExecutionId,
         status: ExecutionStatus,
         now_ms: u64,
     ) -> Result<(), ExecutionStoreError> {
+        let terminal_kind =
+            interaction_status::derived_from_conclusive(status).ok_or_else(|| {
+                ExecutionStoreError::Conflict("只能结算已形成结论的执行状态".to_owned())
+            })?;
         self.initialize().map_err(runtime_error)?;
-        let connection = self.connection().map_err(runtime_error)?;
-        connection
-            .execute(
-                "UPDATE work_items SET status=?2,retry_at_ms=NULL,updated_at_ms=?3 \
-                 WHERE execution_id=?1 AND status IN ('queued','running','waiting')",
-                params![
-                    execution_id.as_str(),
-                    status_code(status),
-                    i64_value(now_ms).map_err(runtime_error)?
-                ],
-            )
+        let mut connection = self.connection().map_err(runtime_error)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(storage_error)?;
-        Ok(())
+        super::work_item_settlement::settle_work_item(
+            &transaction,
+            super::work_item_settlement::WorkItemLocator::InFlightExecution(execution_id.as_str()),
+            &super::work_item_settlement::Settlement::concluded(
+                status,
+                interaction_status::token(terminal_kind),
+            ),
+            i64_value(now_ms).map_err(runtime_error)?,
+        )
+        .map_err(|error| ExecutionStoreError::Storage(error.to_string()))?;
+        transaction.commit().map_err(storage_error)
     }
 
     /// 读取退避已到期、等待重新投递的执行。
@@ -602,7 +612,8 @@ fn parse_status(value: &str) -> rusqlite::Result<ExecutionStatus> {
     }
 }
 
-fn status_code(status: ExecutionStatus) -> &'static str {
+/// 执行状态的落库取值：终态集合的 SQL 词表也由它生成，只此一处。
+pub(super) fn status_code(status: ExecutionStatus) -> &'static str {
     match status {
         ExecutionStatus::Queued => "queued",
         ExecutionStatus::Running => "running",

@@ -13,6 +13,8 @@ pub mod goal_store;
 /// Runtime 健康聚合端口。
 pub mod health_store;
 pub mod ingress_cursor_store;
+/// 在途轮次的判死读取与收口端口。
+pub mod interaction_settlement_store;
 /// 入站事实与处理状态端口。
 pub mod interaction_store;
 pub mod lease_store;
@@ -55,6 +57,7 @@ pub use goal_commit_store::{GoalCommitError, GoalCommitStore};
 pub use goal_store::{GoalMutationStore, GoalPage, GoalStore, GoalStoreError};
 pub use health_store::{HealthStore, RuntimeHealthCounters};
 pub use ingress_cursor_store::SessionIngressCursorStore;
+pub use interaction_settlement_store::{InFlightTurnFacts, InteractionSettlementStore};
 pub use interaction_store::{
     DispatchTerminalKind, InteractionAppendReceipt, InteractionCursor, InteractionProcessingLease,
     InteractionQueryStore, InteractionStore, InteractionStoreError, InteractionTurnHead,

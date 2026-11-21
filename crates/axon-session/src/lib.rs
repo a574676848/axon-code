@@ -43,7 +43,7 @@ pub use infrastructure::{
     SESSION_EVENT_ARCHIVE_SUBDIR, SESSION_EVENT_BODY_ARCHIVED_TYPE,
     SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES, SESSION_EVENT_MISSING_ARCHIVE_TYPE,
     SqliteRuntimeStore, ThreadTurnFacts, TurnActivity, WalCheckpoint, body_archive_path,
-    body_archive_ref, read_body_archive,
+    body_archive_ref, conclusive_work_items_without_terminal_kind_sql, read_body_archive,
 };
 pub use ports::ExecutionSettlement;
 pub use ports::ThreadActivationSnapshot;
@@ -58,14 +58,14 @@ pub use ports::{
     CompletionNotificationRecord, DecisionStore, DecisionStoreError, DispatchTerminalKind,
     EventLogStore, ExecutionStore, ExecutionStoreError, ExecutionTrigger, GoalCommitError,
     GoalCommitStore, GoalMutationStore, GoalPage, GoalSessionRequest, GoalStore, GoalStoreError,
-    HealthStore, InteractionAppendReceipt, InteractionCursor, InteractionProcessingLease,
-    InteractionQueryStore, InteractionStore, InteractionStoreError, InteractionTurnHead,
-    LedgerCommitError, LedgerCommitStore, LedgerEventStore, LedgerEventStoreError,
-    NewSessionRequest, NotificationDeliveryState, RESULT_ACK_SOURCE_EXPIRED,
-    RESULT_ACK_SOURCE_READ, ResultStore, ResultStoreError, RuntimeHealthCounters, RuntimeStore,
-    RuntimeStoreError, ScheduleSessionRequest, SessionQueryStore, SessionSummaryRow,
-    SubagentSessionRequest, UserQuestionStore, UserQuestionStoreError, WorkspaceStore,
-    WorkspaceStoreError,
+    HealthStore, InFlightTurnFacts, InteractionAppendReceipt, InteractionCursor,
+    InteractionProcessingLease, InteractionQueryStore, InteractionSettlementStore,
+    InteractionStore, InteractionStoreError, InteractionTurnHead, LedgerCommitError,
+    LedgerCommitStore, LedgerEventStore, LedgerEventStoreError, NewSessionRequest,
+    NotificationDeliveryState, RESULT_ACK_SOURCE_EXPIRED, RESULT_ACK_SOURCE_READ, ResultStore,
+    ResultStoreError, RuntimeHealthCounters, RuntimeStore, RuntimeStoreError,
+    ScheduleSessionRequest, SessionQueryStore, SessionSummaryRow, SubagentSessionRequest,
+    UserQuestionStore, UserQuestionStoreError, WorkspaceStore, WorkspaceStoreError,
 };
 pub use ports::{ResumePointerStore, ResumePointerStoreError};
 

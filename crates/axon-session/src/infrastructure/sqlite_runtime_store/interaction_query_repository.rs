@@ -3,30 +3,69 @@
 //! 写入与状态机在 `interaction_repository`；这里只负责把两者 JOIN 起来读。
 
 use super::SqliteRuntimeStore;
+use super::execution_repository::status_code;
 use super::interaction_repository_row::{parse_status, read_record, runtime_error, storage_error};
+use crate::domain::interaction_status;
 use crate::ports::{
     InteractionCursor, InteractionQueryStore, InteractionStoreError, InteractionTurnHead,
     RuntimeStore,
 };
-use axon_domain::{InteractionId, InteractionRecord};
+use axon_domain::{InteractionId, InteractionRecord, InteractionStatus};
 use rusqlite::{OptionalExtension, params};
 
 /// 派生的交互状态表达式：读取侧只有这一处口径。
 ///
-/// 终态列优先：派发轮没有 work_item，终态直接写在入站行上；正常入站轮仍按
-/// 「在跑优先、其次历史归档、再次工作项终态、最后已收到」的顺序派生。
-pub(super) const INBOX_STATE_EXPR: &str = "CASE WHEN i.terminal_kind IS NOT NULL THEN i.terminal_kind \
-     WHEN w.status='running' THEN 'processing' \
-     WHEN h.terminal_kind IS NOT NULL THEN h.terminal_kind \
-     WHEN w.terminal_kind IS NOT NULL THEN w.terminal_kind \
-     ELSE 'received' END";
+/// 终态列优先：派发轮没有 work_item，终态直接写在入站行上；正常入站轮按「在跑优先、
+/// 其次历史归档、再次工作项终态、最后已收到」派生。
+///
+/// 末尾的存量兜底分支不能省：旧的收口路径只改 `work_items.status` 而不写
+/// `terminal_kind`，`uncertain` 这类结论状态会一路落到 `ELSE 'received'`，于是库里
+/// 已经有结论、派生列却还停在「已收到」，订阅方永远等不到收口帧。结论状态词表与派生
+/// 目标都取自 [`interaction_status`]，本函数不写一个状态字面量。
+pub(super) fn inbox_state_expr() -> String {
+    format!(
+        "CASE WHEN i.terminal_kind IS NOT NULL THEN i.terminal_kind \
+         WHEN w.status='{running}' THEN '{processing}' \
+         WHEN h.terminal_kind IS NOT NULL THEN h.terminal_kind \
+         WHEN w.terminal_kind IS NOT NULL THEN w.terminal_kind {conclusive} \
+         ELSE '{received}' END",
+        running = WORK_RUNNING,
+        processing = interaction_status::token(InteractionStatus::Processing),
+        received = interaction_status::token(InteractionStatus::Received),
+        conclusive = conclusive_branch(),
+    )
+}
+
+/// 结论状态的存量兜底分支：按执行侧的结论词汇归一到 Interaction 口径。
+fn conclusive_branch() -> String {
+    let conclusive = &interaction_status::CONCLUSIVE_EXECUTION_STATUSES;
+    let statuses = conclusive
+        .iter()
+        .map(|status| format!("'{}'", status_code(*status)))
+        .collect::<Vec<_>>()
+        .join(",");
+    let derived = conclusive
+        .iter()
+        .filter_map(|status| {
+            interaction_status::derived_from_conclusive(*status).map(|derived| {
+                format!(
+                    " WHEN '{}' THEN '{}'",
+                    status_code(*status),
+                    interaction_status::token(derived)
+                )
+            })
+        })
+        .collect::<String>();
+    format!("WHEN w.status IN ({statuses}) THEN CASE w.status{derived} END")
+}
 
 /// 完整记录列：状态列复用同一份表达式，避免两处口径漂移。
 pub(super) fn inbox_columns() -> String {
     format!(
         "i.interaction_id,i.source_channel,i.source_message_id,i.scope_json,\
-i.audience_json,i.reply_route_json,i.content,{INBOX_STATE_EXPR},\
-i.received_at_ms,i.attachments_json,i.model,i.reasoning_effort,i.client,i.session_id"
+i.audience_json,i.reply_route_json,i.content,{},\
+i.received_at_ms,i.attachments_json,i.model,i.reasoning_effort,i.client,i.session_id",
+        inbox_state_expr()
     )
 }
 pub(super) const INBOX_STATE_JOIN: &str = "FROM inbox AS i \
@@ -57,8 +96,9 @@ impl InteractionQueryStore for SqliteRuntimeStore {
         self.initialize().map_err(runtime_error)?;
         let connection = self.connection().map_err(runtime_error)?;
         let sql = format!(
-            "SELECT i.interaction_id,{INBOX_STATE_EXPR},i.received_at_ms {INBOX_STATE_JOIN} \
-             WHERE i.session_id=?1 ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT ?2"
+            "SELECT i.interaction_id,{},i.received_at_ms {INBOX_STATE_JOIN} \
+             WHERE i.session_id=?1 ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT ?2",
+            inbox_state_expr()
         );
         let mut statement = connection.prepare(&sql).map_err(storage_error)?;
         let rows = statement

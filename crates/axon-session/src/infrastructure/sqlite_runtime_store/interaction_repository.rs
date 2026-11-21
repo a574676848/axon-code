@@ -13,11 +13,12 @@ use super::interaction_query_repository::{
 use super::interaction_repository_row::{
     read_record, runtime_error, serialize_error, storage_error,
 };
+use super::work_item_settlement::{Settlement, WorkItemLocator};
 use crate::ports::{
     DispatchTerminalKind, InteractionAppendReceipt, InteractionProcessingLease, InteractionStore,
     InteractionStoreError, RuntimeStore,
 };
-use axon_domain::{InteractionId, InteractionRecord, InteractionStatus};
+use axon_domain::{ExecutionStatus, InteractionId, InteractionRecord, InteractionStatus};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use uuid::Uuid;
 
@@ -132,7 +133,7 @@ impl InteractionStore for SqliteRuntimeStore {
             interaction_id,
             lease_token,
             now_ms,
-            "completed",
+            ExecutionStatus::Completed,
             TERMINAL_UNDERSTOOD,
         )
     }
@@ -228,7 +229,7 @@ impl InteractionStore for SqliteRuntimeStore {
             interaction_id,
             lease_token,
             now_ms,
-            "cancelled",
+            ExecutionStatus::Cancelled,
             TERMINAL_REJECTED,
         )
     }
@@ -244,7 +245,7 @@ impl InteractionStore for SqliteRuntimeStore {
             interaction_id,
             lease_token,
             now_ms,
-            "failed",
+            ExecutionStatus::Failed,
             TERMINAL_INTERRUPTED,
         )
     }
@@ -456,12 +457,15 @@ fn release_work_item(
 }
 
 /// 结算工作项：写入终态与终态类别，令牌立即失效。
+///
+/// 四件事（状态、终态类别、归档、流水账）统一走存储层的终态唯一出口；正常处理路径
+/// 带 fencing token，因此定位条件必须校验令牌，旧持有者不得改写别人的终态。
 fn settle_work_item(
     store: &SqliteRuntimeStore,
     interaction_id: &InteractionId,
     lease_token: &str,
     now_ms: u64,
-    status: &str,
+    status: ExecutionStatus,
     terminal_kind: &str,
 ) -> Result<(), InteractionStoreError> {
     if lease_token.is_empty() {
@@ -470,28 +474,19 @@ fn settle_work_item(
         ));
     }
     let connection = store.connection().map_err(runtime_error)?;
-    let changed = connection
-        .execute(
-            "UPDATE work_items SET status=?1,terminal_kind=?2,lease_token=NULL,lease_expires_at_ms=NULL,updated_at_ms=?3,committed_at_ms=?3 \
-             WHERE inbox_id=?4 AND lease_token=?5 AND status=?6",
-            params![
-                status,
-                terminal_kind,
-                i64_value(now_ms).map_err(runtime_error)?,
-                interaction_id.as_str(),
-                lease_token,
-                WORK_RUNNING
-            ],
-        )
-        .map_err(storage_error)?;
-    if changed == 1 {
-        // 终态行搬进历史表：在途表只留排队与运行中的行。
-        super::work_item_archive::archive_work_item_by_inbox(
-            &connection,
-            interaction_id.as_str(),
-            i64_value(now_ms).map_err(runtime_error)?,
-        )
-        .map_err(storage_error)?;
+    let now = i64_value(now_ms).map_err(runtime_error)?;
+    let settlement = Settlement::concluded(status, terminal_kind);
+    let settled = super::work_item_settlement::settle_work_item(
+        &connection,
+        WorkItemLocator::InboxLease {
+            inbox_id: interaction_id.as_str(),
+            lease_token,
+        },
+        &settlement,
+        now,
+    )
+    .map_err(|error| InteractionStoreError::Storage(error.to_string()))?;
+    if settled {
         return Ok(());
     }
     Err(inbox_state_error(&connection, interaction_id)?)

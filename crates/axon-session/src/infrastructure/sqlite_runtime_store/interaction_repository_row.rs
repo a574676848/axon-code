@@ -4,30 +4,14 @@
 //! 同一位置并在这里按同一位置读取，否则所有读取路径都会整体列错位。
 
 use super::decode::{decode_error, decode_json};
+use super::execution_repository::status_code;
 use super::helpers::u64_value;
+use crate::domain::interaction_status;
 use crate::ports::InteractionStoreError;
 use axon_domain::{
     DaemonSessionId, InteractionId, InteractionRecord, InteractionSource, InteractionStatus,
 };
 use rusqlite::Row;
-
-/// 已可靠接收，等待主 turn 领取。
-pub(super) const STATUS_RECEIVED: &str = "received";
-/// 已被主 turn 领取处理。
-pub(super) const STATUS_PROCESSING: &str = "processing";
-/// 已完成理解并产生语义结果。
-pub(super) const STATUS_UNDERSTOOD: &str = "understood";
-/// 因安全或校验原因拒绝。
-pub(super) const STATUS_REJECTED: &str = "rejected";
-/// 进程中断后无法继续。
-pub(super) const STATUS_INTERRUPTED: &str = "interrupted";
-
-/// 队列口径的正常收口：账本结算把工作项写成 `completed`。
-const STATUS_COMPLETED: &str = "completed";
-/// 队列口径的被取消：取消路径把工作项写成 `cancelled`。
-const STATUS_CANCELLED: &str = "cancelled";
-/// 队列口径的失败：执行失败路径把工作项写成 `failed`。
-const STATUS_FAILED: &str = "failed";
 
 /// 按 SELECT 的固定列序还原一条 Interaction。
 ///
@@ -73,19 +57,23 @@ pub(super) fn read_record(row: &Row<'_>) -> rusqlite::Result<InteractionRecord> 
     })
 }
 
+/// 解析派生列的状态取值。
+///
+/// 派生列同时承载两套词汇：结算写入的 Interaction 口径，与历史表由
+/// `COALESCE(terminal_kind,status)` 带出来的队列口径。两套词汇的映射都取自
+/// [`interaction_status`]，本函数不写状态字面量；队列口径漏认一个词，含该轮的
+/// 整条车道历史就整体读不出来，所以 `uncertain` 这类存量取值必须有归宿。
 pub(super) fn parse_status(value: &str) -> rusqlite::Result<InteractionStatus> {
-    match value {
-        STATUS_RECEIVED => Ok(InteractionStatus::Received),
-        STATUS_PROCESSING => Ok(InteractionStatus::Processing),
-        // 派生列同时承载两套词汇：结算写入的 Interaction 口径，与历史表由
-        // `COALESCE(terminal_kind,status)` 带出来的队列口径。后者漏认一个词，
-        // 含该轮的整条车道历史就整体读不出来。
-        STATUS_UNDERSTOOD | STATUS_COMPLETED => Ok(InteractionStatus::Understood),
-        STATUS_REJECTED => Ok(InteractionStatus::Rejected),
-        // 失败与取消在 Interaction 口径下都表示本轮没有正常收口。
-        STATUS_INTERRUPTED | STATUS_FAILED | STATUS_CANCELLED => Ok(InteractionStatus::Interrupted),
-        _ => Err(decode_error("inbox.status", value)),
+    if let Some(status) = interaction_status::from_token(value) {
+        return Ok(status);
     }
+    for status in interaction_status::CONCLUSIVE_EXECUTION_STATUSES {
+        if status_code(status) == value {
+            return interaction_status::derived_from_conclusive(status)
+                .ok_or_else(|| decode_error("inbox.status", value));
+        }
+    }
+    Err(decode_error("inbox.status", value))
 }
 
 pub(super) fn runtime_error(error: impl std::fmt::Display) -> InteractionStoreError {

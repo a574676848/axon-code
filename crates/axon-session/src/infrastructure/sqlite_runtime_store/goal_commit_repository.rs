@@ -66,7 +66,9 @@ impl GoalCommitStore for SqliteRuntimeStore {
             .map_err(storage_error)?;
         let updated = transaction
             .execute(
-                "UPDATE goals SET status='active',revision=?1,updated_at_ms=?2,waiting_reason=NULL WHERE goal_id=?3 AND revision=?4 AND status IN ('proposed','waiting','paused') AND NOT EXISTS (SELECT 1 FROM work_items WHERE goal_id=?3 AND status='uncertain')",
+                // 未决的 uncertain Execution 会拦住目标重新启动。结论行由终态唯一出口
+                // 搬进历史表，因此这里必须查覆盖两表的视图，只查在途表会漏判。
+                "UPDATE goals SET status='active',revision=?1,updated_at_ms=?2,waiting_reason=NULL WHERE goal_id=?3 AND revision=?4 AND status IN ('proposed','waiting','paused') AND NOT EXISTS (SELECT 1 FROM work_items_all WHERE goal_id=?3 AND status='uncertain')",
                 params![
                     i64_value(goal.revision).map_err(storage_error)?,
                     i64_value(goal.updated_at_ms).map_err(storage_error)?,

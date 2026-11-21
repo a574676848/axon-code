@@ -105,7 +105,7 @@ pub use sqlite_runtime_store::{
     CONTROL_DATABASE_FILE_NAME, EventBodyTieringPlan, EventBodyTieringReport,
     SESSION_EVENT_ARCHIVE_SUBDIR, SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES,
     SESSION_EVENT_MISSING_ARCHIVE_TYPE, SqliteRuntimeStore, ThreadTurnFacts, TurnActivity,
-    WalCheckpoint,
+    WalCheckpoint, conclusive_work_items_without_terminal_kind_sql,
 };
 pub use sqlite_runtime_store::{
     action_repository::ActionRepository, lease_repository::LeaseRepository,
