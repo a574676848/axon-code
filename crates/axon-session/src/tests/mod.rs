@@ -1,3 +1,4 @@
+use axon_domain::RuntimeFailure;
 use std::{
     path::PathBuf,
     sync::{
@@ -5,8 +6,6 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
 };
-
-use axon_domain::RuntimeFailure;
 
 use crate::{
     AXON_RUNTIME_DATA_DIR, AppendTurnItemsCommand, CompactThreadCommand, FailTurnCommand,
@@ -697,3 +696,5 @@ fn repair_open_turn_is_zero_write_when_history_is_balanced() {
         "Balanced 必须零写入，否则重复调用会不断追加终态事件"
     );
 }
+#[path = "thread_rollover_bound_tests.rs"]
+mod thread_rollover_bound_tests;

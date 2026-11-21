@@ -90,6 +90,9 @@ pub fn session_store_path(root: &Path) -> PathBuf {
     root.join(AXON_RUNTIME_DATA_DIR).join(SESSION_STORE_DIR)
 }
 
+mod thread_event_body;
+#[cfg(test)]
+pub(crate) use thread_event_body::THREAD_EVENT_INLINE_BODY_LIMIT_BYTES;
 mod thread_index;
 mod thread_tail;
 pub use jsonl_store::{

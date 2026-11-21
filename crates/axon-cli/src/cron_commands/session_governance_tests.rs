@@ -85,8 +85,9 @@ fn seed_long_thread(root: &Path) {
         )
         .expect("建 thread");
     for sequence in 0..25u64 {
+        // 高熵正文：重复字符会被 zstd 压到几百字节，体量口径就失去意义。
         let text = if sequence < 5 {
-            "x".repeat(BIG_TURN_TEXT)
+            noise(sequence, BIG_TURN_TEXT)
         } else {
             "小轮".to_owned()
         };
@@ -121,12 +122,15 @@ fn seed_long_thread(root: &Path) {
         .expect("写压缩快照");
 }
 
+/// 会话体量 = 分片 + 外置正文；治理预筛与「重写后变小」都按这个口径。
 fn thread_bytes(root: &Path) -> u64 {
-    JsonlThreadEventStore::thread_shard_paths(root, "thread-long")
+    let shards: u64 = JsonlThreadEventStore::thread_shard_paths(root, "thread-long")
         .expect("分片路径")
         .iter()
         .map(|path| std::fs::metadata(path).map_or(0, |meta| meta.len()))
-        .sum()
+        .sum();
+    let bodies = JsonlThreadEventStore::thread_body_bytes(root, "thread-long").expect("正文体量");
+    shards.saturating_add(bodies)
 }
 
 /// 把文件修改时间回拨到很久以前：治理有静默期守卫，夹具必须表现为「已经停写」。

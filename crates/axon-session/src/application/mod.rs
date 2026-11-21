@@ -13,8 +13,9 @@ mod workspace_resolver;
 /// thread 事件 schema 版本。
 ///
 /// 4：新增 `turnMetadataPatched`（治理回写只追加增量，不再复制整份轮次记录）。
-/// 旧日志一律拒绝读取，不做补列与回填。
-pub(crate) const THREAD_EVENT_SCHEMA_VERSION: u32 = 4;
+/// 5：单条记录体量有界，超过内联阈值的正文外置为 zstd 帧文件，日志行只留引用。
+/// 旧日志一律拒绝读取，不做补列与回填；升级靠清空会话数据取得干净基线。
+pub const THREAD_EVENT_SCHEMA_VERSION: u32 = 5;
 
 pub use activity_service::{
     ActivityQuery, ActivityService, ActivityServiceError, ActivitySnapshot,

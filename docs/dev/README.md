@@ -16,6 +16,7 @@
 | [存储架构重构方案](./storage-architecture.md) | 事件面、控制面与投影面的目标架构、影响面、已裁决事项与安装后验收矩阵 |
 | [存储层现状测绘](./storage-map.md) | 全量存储单元、表、写入路径与依赖方向的取证记录（重构附件） |
 | [存储重构 WBS](./reconstruction-wbs.md) | 阶段与任务拆解、依赖关系、里程碑与延后项 |
+| [窗口轮转记录有界化 WBS](./window-rollover-record-bound-wbs.md) | Thread 事件正文外置与检索 receipt 有界化的不变量、任务拆解、三端衔接验收与存量清理清单 |
 | [会话身份重构计划书](./session-identity-refactor-plan.md) | 会话标识唯一化方案、现状飘逸清单、会话数据删除与表结构重建步骤、WBS 与性能红线 |
 | [会话身份重构开工提示词](./session-identity-refactor-kickoff.md) | 实施会话的首条指令：任务、工具纪律、事实底座、执行顺序、门禁与验收口径 |
 | [单渲染路径后端改造提示词](./single-render-path-backend-prompt.md) | 让三条会话入口共用一条渲染路径所需的后端契约：能力位、派发轮终态、逐轮指标归属、轮次头订阅与入口事实 |

@@ -95,6 +95,16 @@ pub enum SearchToolExecutionStatus {
     Blocked,
 }
 
+/// 单行文本进入结果集时的截断上限。
+///
+/// 检索结果同时流进模型可见输出、工具回执与历史快照；一行动辄数 MB 的文件（例如
+/// JSONL 的整条记录）必须在这里收口，否则一轮检索就能把上下文与 Thread 记录一起撑爆。
+/// 完整内容不进结果集，需要时按行号用 `read` 回读源文件。
+pub const SEARCH_LINE_MAX_TEXT_BYTES: usize = 2048;
+
+/// 截断标记：与产品其他位置的省略号保持同一个字符。
+pub const SEARCH_LINE_TRUNCATED_MARKER: &str = "…";
+
 /// search 返回的匹配行或上下文行。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchToolLine {
@@ -102,10 +112,12 @@ pub struct SearchToolLine {
     pub line_number: usize,
     /// 是否为匹配行。
     pub is_match: bool,
-    /// 匹配行中的非重叠字节区间。
+    /// 匹配行中的非重叠字节区间；已按截断后的文本裁剪。
     pub match_spans: Vec<(usize, usize)>,
-    /// 完整 UTF-8 行文本。
+    /// 结果集持有行文本：不超过 [`SEARCH_LINE_MAX_TEXT_BYTES`]，超出时带截断标记。
     pub text: String,
+    /// 行文本是否被截断。
+    pub truncated: bool,
 }
 
 /// 一个有命中文件的分组结果。
@@ -467,6 +479,51 @@ mod tests {
         let second = SearchToolRuntime.execute(second_input).unwrap();
         assert_eq!(second.files[0].path, "b.rs");
         assert_eq!(second.next_file_offset, None);
+    }
+
+    #[test]
+    fn oversized_match_lines_are_truncated_and_marked() {
+        let root = axon_test_support::test_temp_dir();
+        // 单行远超上限：JSONL 的整条记录就是这种形状。
+        let long_line = format!("axon{}axon", "字".repeat(SEARCH_LINE_MAX_TEXT_BYTES));
+        fs::write(root.path().join("big.jsonl"), format!("{long_line}\\n")).unwrap();
+
+        let receipt = SearchToolRuntime
+            .execute(search_input(root.path(), "axon"))
+            .unwrap();
+
+        let line = &receipt.files[0].lines[0];
+        assert!(line.truncated, "超长命中行必须标记截断");
+        assert!(
+            line.text.len() <= SEARCH_LINE_MAX_TEXT_BYTES + SEARCH_LINE_TRUNCATED_MARKER.len(),
+            "行文本必须被裁到上限内，实际 {} 字节",
+            line.text.len()
+        );
+        assert!(
+            line.text.ends_with(SEARCH_LINE_TRUNCATED_MARKER),
+            "截断行必须带省略号标记"
+        );
+        assert!(
+            line.match_spans
+                .iter()
+                .all(|(_, end)| *end <= line.text.len()),
+            "匹配区间不得越过截断后的文本"
+        );
+    }
+
+    #[test]
+    fn short_match_lines_are_left_untouched() {
+        let root = axon_test_support::test_temp_dir();
+        fs::write(root.path().join("small.rs"), "axon here\n").unwrap();
+
+        let receipt = SearchToolRuntime
+            .execute(search_input(root.path(), "axon"))
+            .unwrap();
+
+        let line = &receipt.files[0].lines[0];
+        assert!(!line.truncated);
+        assert_eq!(line.text, "axon here");
+        assert_eq!(line.match_spans, vec![(0, 4)]);
     }
 
     #[test]

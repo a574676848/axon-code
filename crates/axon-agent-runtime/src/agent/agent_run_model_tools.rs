@@ -675,6 +675,7 @@ fn search_file_metadata(file: &crate::SearchToolFile) -> serde_json::Value {
             "isMatch": line.is_match,
             "matchSpans": line.match_spans,
             "text": line.text,
+            "textTruncated": line.truncated,
         })).collect::<Vec<_>>(),
     })
 }

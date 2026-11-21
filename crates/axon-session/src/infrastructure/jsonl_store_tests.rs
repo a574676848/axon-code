@@ -204,7 +204,7 @@ fn append_rolls_thread_jsonl_when_shard_exceeds_limit() {
 }
 
 #[test]
-fn oversize_event_occupies_its_own_shard() {
+fn oversize_event_is_externalized_instead_of_occupying_a_shard() {
     let root = temp_root("oversize");
     let store = JsonlThreadEventStore;
     store.append(&root, &record("oversize-thread", 0)).unwrap();
@@ -212,39 +212,47 @@ fn oversize_event_occupies_its_own_shard() {
 
     let mut oversize = record("oversize-thread", 1);
     oversize.event = ThreadEvent::ThreadNamed {
-        name: Some("x".repeat(usize::try_from(THREAD_SHARD_MAX_BYTES).unwrap() + 1_024)),
+        name: Some("x".repeat(INLINE_LIMIT * 4)),
     };
     store
         .append(&root, &oversize)
-        .expect("超过分片预算的单条事件应独占新分片，而不是被拒绝");
+        .expect("超阈值事件应外置正文并写进引用，而不是被拒绝");
 
-    assert!(
-        JsonlThreadEventStore::shard_path(&root, "oversize-thread", 1).exists(),
-        "超预算事件必须落进下一个分片"
-    );
     assert_eq!(
         store.read_thread(&root, "oversize-thread").unwrap().len(),
         2,
         "两条记录都必须保留"
+    );
+    let shard = std::fs::read_to_string(JsonlThreadEventStore::shard_path(
+        &root,
+        "oversize-thread",
+        0,
+    ))
+    .expect("读取分片");
+    assert!(
+        shard.lines().all(|line| line.len() < INLINE_LIMIT),
+        "任何一条记录都不得越过内联阈值"
     );
 
     let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
-fn rejects_single_event_beyond_hard_record_limit() {
+fn event_beyond_hard_record_limit_is_externalized_not_rejected() {
+    // 正文体量超过 64 MiB 硬上限不再意味着写不进去：日志行只承载引用，正文落独立文件。
     let root = temp_root("hard-limit");
     let store = JsonlThreadEventStore;
     let mut event = record("hard-limit-thread", 0);
     event.event = ThreadEvent::ThreadNamed {
-        name: Some("x".repeat(usize::try_from(MAX_SINGLE_RECORD_BYTES).unwrap() + 1)),
+        name: Some("x".repeat(usize::try_from(MAX_SINGLE_RECORD_BYTES).unwrap() / 2)),
     };
 
-    assert!(
-        store.append(&root, &event).is_err(),
-        "超过单条记录硬上限必须拒绝写入"
-    );
-    assert!(!JsonlThreadEventStore::path(&root).exists());
+    store
+        .append(&root, &event)
+        .expect("正文超硬上限时应外置而不是拒绝整笔写入");
+    let restored = store.read_thread(&root, "hard-limit-thread").unwrap();
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored[0].event, event.event, "外置后必须还原成同一事件");
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -306,4 +314,113 @@ fn short_thread_ids_keep_legacy_paths() {
         JsonlThreadEventStore::thread_prefix("short-thread"),
         "73686f72742d746872656164"
     );
+}
+
+const INLINE_LIMIT: usize = super::super::thread_event_body::THREAD_EVENT_INLINE_BODY_LIMIT_BYTES;
+
+/// 超阈值事件追加后，分片里的那一行必须是引用而不是正文。
+#[test]
+fn oversized_append_keeps_the_shard_line_bounded() {
+    let root = temp_root("oversized-append");
+    let store = JsonlThreadEventStore;
+    let thread_id = "thread-oversized-append";
+    let mut record = thread_started(thread_id, 0);
+    record.event = ThreadEvent::ThreadNamed {
+        name: Some("注".repeat(INLINE_LIMIT * 2)),
+    };
+
+    store.append(&root, &record).expect("超阈值事件应可写入");
+
+    let shard = std::fs::read_to_string(JsonlThreadEventStore::shard_path(&root, thread_id, 0))
+        .expect("读取分片");
+    let line = shard.lines().next().expect("分片应有一行");
+    assert!(
+        line.len() < INLINE_LIMIT,
+        "日志行必须小于内联阈值，实际 {} 字节",
+        line.len()
+    );
+    assert!(
+        line.contains(super::super::thread_event_body::THREAD_EVENT_BODY_ARCHIVED_TYPE),
+        "日志行必须是正文引用：{line}"
+    );
+    let body =
+        super::super::thread_event_body::body_root(&root).join(body_relative_path(thread_id, 0));
+    assert!(body.is_file(), "正文文件必须落盘：{}", body.display());
+}
+
+/// checkpoint 重写只留一条有界记录，旧正文随之回收。
+#[test]
+fn checkpoint_rewrite_keeps_one_bounded_line_and_prunes_old_bodies() {
+    let root = temp_root("checkpoint-prune");
+    let store = JsonlThreadEventStore;
+    let thread_id = "thread-checkpoint-prune";
+    let mut first = thread_started(thread_id, 0);
+    first.event = ThreadEvent::ThreadNamed {
+        name: Some("注".repeat(INLINE_LIMIT * 2)),
+    };
+    store.append(&root, &first).expect("首条事件应可写入");
+    let body_root = super::super::thread_event_body::body_root(&root);
+    let first_body = body_root.join(body_relative_path(thread_id, 0));
+    assert!(first_body.is_file(), "首条正文应已落盘");
+
+    let mut checkpoint = thread_started(thread_id, 1);
+    checkpoint.event = ThreadEvent::ThreadNamed {
+        name: Some("换".repeat(INLINE_LIMIT * 2)),
+    };
+    store
+        .replace_thread_with_checkpoint(&root, &checkpoint, 0)
+        .expect("checkpoint 重写应成功");
+
+    let shard = std::fs::read_to_string(JsonlThreadEventStore::shard_path(&root, thread_id, 0))
+        .expect("读取分片");
+    assert_eq!(shard.lines().count(), 1, "重写后只应有一条记录");
+    assert!(
+        shard.lines().next().map(str::len).unwrap_or(usize::MAX) < INLINE_LIMIT,
+        "重写后的记录必须有界"
+    );
+    assert!(!first_body.exists(), "被替换事件的正文必须回收");
+    assert!(
+        body_root.join(body_relative_path(thread_id, 1)).is_file(),
+        "checkpoint 自己的正文必须保留"
+    );
+}
+
+/// 管理型重写同样走外置，并只保留新记录集引用到的正文。
+#[test]
+fn management_rewrite_externalizes_and_keeps_referenced_bodies() {
+    let root = temp_root("management-rewrite");
+    let store = JsonlThreadEventStore;
+    let thread_id = "thread-management-rewrite";
+    let mut first = thread_started(thread_id, 0);
+    first.event = ThreadEvent::ThreadNamed {
+        name: Some("注".repeat(INLINE_LIMIT * 2)),
+    };
+    store.append(&root, &first).expect("首条事件应可写入");
+
+    let mut second = thread_started(thread_id, 1);
+    second.event = ThreadEvent::ThreadNamed {
+        name: Some("二".repeat(INLINE_LIMIT * 2)),
+    };
+    store
+        .rewrite_thread_with_records(&root, thread_id, 0, &[second])
+        .expect("管理型重写应成功");
+
+    let body_root = super::super::thread_event_body::body_root(&root);
+    assert!(
+        !body_root.join(body_relative_path(thread_id, 0)).exists(),
+        "不再被引用的正文必须回收"
+    );
+    assert!(
+        body_root.join(body_relative_path(thread_id, 1)).is_file(),
+        "仍被引用的正文必须保留"
+    );
+}
+
+/// 正文文件的相对路径与编码入口的命名保持一致。
+fn body_relative_path(thread_id: &str, sequence: u64) -> String {
+    format!(
+        "{}/{:020}.json.zst",
+        JsonlThreadEventStore::thread_prefix(thread_id),
+        sequence
+    )
 }

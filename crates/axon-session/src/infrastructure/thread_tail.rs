@@ -28,7 +28,7 @@ impl JsonlThreadEventStore {
     ) -> Result<Vec<ThreadEventRecord>, String> {
         let paths = Self::thread_shard_paths(root, thread_id)?;
         match paths.first() {
-            Some(path) => Self::read_file_public(path),
+            Some(path) => Self::read_file_public(root, path),
             None => Ok(Vec::new()),
         }
     }
@@ -86,7 +86,7 @@ impl JsonlThreadEventStore {
         }
         chunks.reverse();
         let joined = chunks.concat();
-        let records = Self::parse_lines_public(&joined)?;
+        let records = Self::parse_lines_public(root, &joined)?;
         Ok(ThreadTailRead { records, complete })
     }
 
@@ -106,19 +106,19 @@ impl JsonlThreadEventStore {
         Ok(bytes)
     }
 
-    fn read_file_public(path: &Path) -> Result<Vec<ThreadEventRecord>, String> {
+    fn read_file_public(root: &Path, path: &Path) -> Result<Vec<ThreadEventRecord>, String> {
         let bytes = std::fs::read(path).map_err(|_| "无法读取 thread 事件".to_owned())?;
-        Self::parse_lines_public(&bytes)
+        Self::parse_lines_public(root, &bytes)
     }
 
-    fn parse_lines_public(bytes: &[u8]) -> Result<Vec<ThreadEventRecord>, String> {
+    fn parse_lines_public(root: &Path, bytes: &[u8]) -> Result<Vec<ThreadEventRecord>, String> {
         let mut records = Vec::new();
         for raw_line in bytes.split(|byte| *byte == b'\n') {
             let raw_line = raw_line.strip_suffix(b"\r").unwrap_or(raw_line);
             if raw_line.is_empty() {
                 continue;
             }
-            let record = serde_json::from_slice::<ThreadEventRecord>(raw_line)
+            let record = Self::decode_record_line(root, raw_line)
                 .map_err(|error| format!("thread 事件行无效：{error}"))?;
             records.push(record);
         }
@@ -157,7 +157,7 @@ impl JsonlThreadEventStore {
     ) -> Result<Vec<crate::domain::ThreadEventRecord>, String> {
         let mut records = Vec::new();
         for path in Self::thread_shard_paths(root, thread_id)? {
-            records.extend(Self::read_file_public(&path)?);
+            records.extend(Self::read_file_public(root, &path)?);
         }
         // 重写与删除旧分片之间崩溃时，同一序号可能出现两次：按序号稳定去重，
         // 排在前面（新分片）的那条胜出，避免重复轮次进入模型历史。

@@ -188,6 +188,11 @@ impl AgentTurnRuntime {
         let mut tool_loop_guard = ToolLoopGuard::default();
         let mut history_window_id: Option<String> = None;
         let mut window_changed = false;
+        // 模型主动请求换窗（builtin.new_context）每个 turn 只兑现一次。
+        // 请求以运行时提示的形式留在历史里，换窗后新窗口仍会看到它；不设上限时，
+        // 模型每次迭代都会再次命中同一个请求，于是一轮 turn 内无限换窗（真机实测
+        // 两分钟换了 42 个窗口）。第一次兑现后该标记置位，后续只走自动策略。
+        let mut requested_rollover_honored = false;
         // 守卫的独立去重标记：与预算提醒的 `reminder_emitted` 无关，
         // 共享标记会让其中一方被另一方静默吞掉（设计 §6.3）。
         let mut pre_final_guard_emitted = false;
@@ -226,14 +231,15 @@ impl AgentTurnRuntime {
                     request_input.supports_vision,
                 );
                 active.runtime.refresh_rollover_markers(&messages);
-                let explicit_rollover = messages.iter().any(|message| {
-                    matches!(
-                        message.kind,
-                        AgentModelMessageKind::RuntimeNote(
-                            AgentRuntimeNoteKind::ContextRolloverRequest
+                let explicit_rollover = !requested_rollover_honored
+                    && messages.iter().any(|message| {
+                        matches!(
+                            message.kind,
+                            AgentModelMessageKind::RuntimeNote(
+                                AgentRuntimeNoteKind::ContextRolloverRequest
+                            )
                         )
-                    )
-                });
+                    });
                 let compression_outcome = if explicit_rollover {
                     active.maybe_compress_requested(
                         &mut messages,
@@ -254,6 +260,9 @@ impl AgentTurnRuntime {
                         request_input.server_conversation_state_ref = None;
                         window_changed = true;
                         window_replaced = true;
+                        if explicit_rollover {
+                            requested_rollover_honored = true;
+                        }
                         pending_projection_metrics = active.take_projection_metrics();
                     }
                     // fallback runtime note 已限制 agent 先写便签再调用 new_context；

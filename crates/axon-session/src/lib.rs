@@ -9,6 +9,7 @@ pub mod domain;
 pub mod infrastructure;
 pub mod ports;
 
+pub use application::THREAD_EVENT_SCHEMA_VERSION;
 pub use application::{
     ActivityQuery, ActivityService, ActivityServiceError, ActivitySnapshot,
     AnnotateChildOriginCommand, AppendTurnCommand, AppendTurnItemsCommand, CompactThreadCommand,

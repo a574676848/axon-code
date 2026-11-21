@@ -17,8 +17,9 @@ use grep_searcher::{
 
 use crate::{
     builtin_search_tool::{
-        RegexSearchMode, SEARCH_TOOL_EMPTY_REGEX_ERROR, SEARCH_TOOL_REGEX_ERROR,
-        SearchToolExecutionInput, SearchToolFile, SearchToolLine,
+        RegexSearchMode, SEARCH_LINE_MAX_TEXT_BYTES, SEARCH_LINE_TRUNCATED_MARKER,
+        SEARCH_TOOL_EMPTY_REGEX_ERROR, SEARCH_TOOL_REGEX_ERROR, SearchToolExecutionInput,
+        SearchToolFile, SearchToolLine,
     },
     hashline_snapshot_tag,
     search_index::{IndexQuery, SearchIndexManager},
@@ -32,6 +33,20 @@ const SEARCH_DEFAULT_MAX_FILES: usize = 20;
 const SEARCH_DEFAULT_MAX_MATCHES_PER_FILE: usize = 20;
 const SEARCH_SINGLE_FILE_DEFAULT_MAX_MATCHES: usize = 200;
 const SEARCH_BINARY_BYTE: u8 = 0;
+/// 把一行文本裁到结果集体量上限；超出时补省略号并标记截断。
+fn bounded_line_text(text: String) -> (String, bool) {
+    if text.len() <= SEARCH_LINE_MAX_TEXT_BYTES {
+        return (text, false);
+    }
+    let mut end = SEARCH_LINE_MAX_TEXT_BYTES;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut truncated = text;
+    truncated.truncate(end);
+    truncated.push_str(SEARCH_LINE_TRUNCATED_MARKER);
+    (truncated, true)
+}
 
 pub(crate) struct SearchExecutionSummary {
     pub(crate) files: Vec<SearchToolFile>,
@@ -292,11 +307,25 @@ impl<'a> SearchFileSink<'a> {
             self.invalid_utf8 = true;
             return None;
         }
+        let (text, truncated) = bounded_line_text(text);
+        let match_spans = if truncated {
+            match_spans
+                .into_iter()
+                .filter_map(|(start, end)| {
+                    let start = start.min(text.len());
+                    let end = end.min(text.len());
+                    (start < end).then_some((start, end))
+                })
+                .collect()
+        } else {
+            match_spans
+        };
         Some(SearchToolLine {
             line_number,
             is_match,
             match_spans,
             text,
+            truncated,
         })
     }
 

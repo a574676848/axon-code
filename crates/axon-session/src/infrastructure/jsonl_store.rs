@@ -50,6 +50,92 @@ pub struct JsonlThreadEventStore;
 const ACTIVATION_SCAN_BUDGET_BYTES: u64 = 64 * 1024 * 1024;
 
 impl JsonlThreadEventStore {
+    /// 单条记录的唯一编码入口。
+    ///
+    /// 超过内联阈值的记录把正文外置，日志行只留引用：这是「单条记录有界」从口号变成
+    /// 事实的地方。写入方（追加、序号校验追加、checkpoint 重写、管理型重写）都走这里，
+    /// 避免任何一条路径把整份正文重新塞回日志。
+    fn encode_record_line(root: &Path, record: &ThreadEventRecord) -> Result<Vec<u8>, String> {
+        let inline = serde_json::to_vec(record).map_err(|_| "thread 事件序列化失败".to_owned())?;
+        if !super::thread_event_body::exceeds_inline_limit(inline.len()) {
+            return Ok(inline);
+        }
+        let reference = super::thread_event_body::externalize(
+            root,
+            &record.thread_id,
+            record.sequence,
+            &record.event,
+        )?;
+        serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": record.schema_version,
+            "threadId": record.thread_id,
+            "sequence": record.sequence,
+            "recordedAtMs": record.recorded_at_ms,
+            "event": reference.to_json(),
+        }))
+        .map_err(|_| "thread 事件序列化失败".to_owned())
+    }
+
+    /// 单条记录的唯一解码入口：内联记录直接解析，引用记录还原正文后再还原事件。
+    ///
+    /// 先按完整记录解析：绝大多数记录是内联的，这条快路径不为兼容付出成本；只有
+    /// 解析失败且 `event.type` 是正文引用时，才按引用去读正文。正文缺失或摘要不符
+    /// 的错误必须原样上抛，不能被「行无效」掩盖。
+    pub(crate) fn decode_record_line(
+        root: &Path,
+        raw_line: &[u8],
+    ) -> Result<ThreadEventRecord, String> {
+        match serde_json::from_slice::<ThreadEventRecord>(raw_line) {
+            Ok(record) => Ok(record),
+            Err(error) => Self::decode_external_record(root, raw_line).map_err(|external| {
+                if external.is_empty() {
+                    format!("thread 事件行无效：{error}")
+                } else {
+                    external
+                }
+            }),
+        }
+    }
+
+    /// 引用记录的解码；不是引用形态时返回空错误让调用方保留原始解析错误。
+    fn decode_external_record(root: &Path, raw_line: &[u8]) -> Result<ThreadEventRecord, String> {
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(raw_line) else {
+            return Err(String::new());
+        };
+        let Some(reference) = value
+            .get("event")
+            .and_then(super::thread_event_body::ThreadEventBodyRef::from_json)
+        else {
+            return Err(String::new());
+        };
+        let schema_version = value
+            .get("schemaVersion")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| "thread 正文引用缺少 schema 版本".to_owned())?;
+        let thread_id = value
+            .get("threadId")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "thread 正文引用缺少 thread 标识".to_owned())?
+            .to_owned();
+        let sequence = value
+            .get("sequence")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| "thread 正文引用缺少事件序号".to_owned())?;
+        let recorded_at_ms = value
+            .get("recordedAtMs")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| "thread 正文引用缺少记录时间".to_owned())?;
+        let event = super::thread_event_body::resolve(root, &thread_id, sequence, &reference)?;
+        Ok(ThreadEventRecord {
+            schema_version,
+            thread_id,
+            sequence,
+            recorded_at_ms,
+            event,
+        })
+    }
+
     /// 解析 thread 事件存储目录。
     #[must_use]
     pub fn path(root: &Path) -> PathBuf {
@@ -61,6 +147,8 @@ impl JsonlThreadEventStore {
         let removed = SHARD_STORE
             .remove_all(Self::thread_logical_path(root, thread_id))
             .map_err(|_| "无法删除 thread 事件文件".to_owned())?;
+        // 正文与分片同生命周期：分片没了而正文还在，只会留下永远读不到的副本。
+        super::thread_event_body::remove_bodies(root, thread_id)?;
         if removed {
             // 同步删除索引条目，否则名册与保留判定会把已删会话当成幽灵继续返回。
             super::thread_index::append_thread_removed(root, thread_id);
@@ -68,7 +156,7 @@ impl JsonlThreadEventStore {
         Ok(removed)
     }
 
-    fn thread_prefix(thread_id: &str) -> String {
+    pub(crate) fn thread_prefix(thread_id: &str) -> String {
         let mut encoded = String::with_capacity(thread_id.len().saturating_mul(2));
         for byte in thread_id.as_bytes() {
             let _ = write!(encoded, "{byte:02x}");
@@ -113,12 +201,12 @@ impl JsonlThreadEventStore {
                 if record.thread_id != thread_id {
                     return Err("thread 事件重写包含其他 thread 的记录".to_owned());
                 }
-                serde_json::to_vec(record).map_err(|_| "thread 事件序列化失败".to_owned())
+                Self::encode_record_line(root, record)
             })
             .collect::<Result<Vec<_>, _>>()?;
         SHARD_STORE
             .rewrite_with(logical, |current_lines| {
-                let current = Self::parse_lines(&Self::join_lines(current_lines))
+                let current = Self::parse_lines(root, &Self::join_lines(current_lines))
                     .map_err(std::io::Error::other)?;
                 let actual_sequence = current.last().map_or(0, |record| record.sequence);
                 if actual_sequence != expected_sequence {
@@ -137,7 +225,13 @@ impl JsonlThreadEventStore {
                 } else {
                     "无法重写 thread 事件存储".to_owned()
                 }
-            })
+            })?;
+        // 重写之后旧事件的正文失去引用；只保留仍在新记录集里的正文。
+        let kept = records
+            .iter()
+            .map(|record| record.sequence)
+            .collect::<Vec<_>>();
+        super::thread_event_body::prune_bodies_to(root, thread_id, &kept)
     }
     fn thread_logical_path(root: &Path, thread_id: &str) -> PathBuf {
         Self::path(root).join(format!("{}.jsonl", Self::thread_prefix(thread_id)))
@@ -147,7 +241,7 @@ impl JsonlThreadEventStore {
     pub fn scan_all(&self, root: &Path) -> Result<ThreadEventScan, String> {
         let mut scan = ThreadEventScan::default();
         for entry in Self::event_files(root)? {
-            match Self::read_file(&entry.path()) {
+            match Self::read_file(root, &entry.path()) {
                 Ok(records) => scan.records.extend(records),
                 Err(error) => scan.issues.push(ThreadEventReadIssue {
                     shard: entry.file_name().to_string_lossy().into_owned(),
@@ -225,15 +319,15 @@ impl JsonlThreadEventStore {
         Ok(())
     }
 
-    fn read_file(path: &Path) -> Result<Vec<ThreadEventRecord>, String> {
+    fn read_file(root: &Path, path: &Path) -> Result<Vec<ThreadEventRecord>, String> {
         if !path.exists() {
             return Ok(Vec::new());
         }
         let bytes = fs::read(path).map_err(|_| "无法读取 thread 事件".to_owned())?;
-        Self::parse_lines(&bytes)
+        Self::parse_lines(root, &bytes)
     }
 
-    fn parse_lines(bytes: &[u8]) -> Result<Vec<ThreadEventRecord>, String> {
+    fn parse_lines(root: &Path, bytes: &[u8]) -> Result<Vec<ThreadEventRecord>, String> {
         let mut records = Vec::new();
         for (index, raw_line) in bytes.split(|byte| *byte == b'\n').enumerate() {
             let raw_line = raw_line.strip_suffix(b"\r").unwrap_or(raw_line);
@@ -243,7 +337,7 @@ impl JsonlThreadEventStore {
             let line = String::from_utf8(raw_line.to_vec())
                 .map_err(|_| format!("thread 事件第 {} 行 UTF-8 无效", index + 1))?;
             let trimmed = line.trim();
-            let record = serde_json::from_str::<ThreadEventRecord>(trimmed)
+            let record = Self::decode_record_line(root, trimmed.as_bytes())
                 .map_err(|error| format!("thread 事件第 {} 行无效: {error}", index + 1))?;
             if record.schema_version != THREAD_EVENT_SCHEMA_VERSION {
                 return Err(format!(
@@ -274,12 +368,9 @@ impl ThreadEventStore for JsonlThreadEventStore {
     }
 
     fn append(&self, root: &Path, record: &ThreadEventRecord) -> Result<(), String> {
-        let line = serde_json::to_string(record).map_err(|_| "thread 事件序列化失败".to_owned())?;
+        let line = Self::encode_record_line(root, record)?;
         SHARD_STORE
-            .append_line(
-                Self::thread_logical_path(root, &record.thread_id),
-                line.as_bytes(),
-            )
+            .append_line(Self::thread_logical_path(root, &record.thread_id), &line)
             .map_err(|error| {
                 if error.kind() == std::io::ErrorKind::InvalidData {
                     "单条 thread 事件超过 JSONL shard 大小上限".to_owned()
@@ -298,11 +389,10 @@ impl ThreadEventStore for JsonlThreadEventStore {
         expected_sequence: u64,
     ) -> Result<(), String> {
         let logical = Self::thread_logical_path(root, &record.thread_id);
-        let line = serde_json::to_vec(record).map_err(|_| "thread 事件序列化失败".to_owned())?;
         SHARD_STORE
             .append_with(logical, |lines| {
                 let current =
-                    Self::parse_lines(&Self::join_lines(lines)).map_err(std::io::Error::other)?;
+                    Self::parse_lines(root, &Self::join_lines(lines)).map_err(std::io::Error::other)?;
                 let actual = current.last().map_or(0, |event| event.sequence);
                 if actual != expected_sequence {
                     return Err(std::io::Error::new(
@@ -312,7 +402,8 @@ impl ThreadEventStore for JsonlThreadEventStore {
                         ),
                     ));
                 }
-                Ok(((), vec![line.clone()]))
+                let line = Self::encode_record_line(root, record).map_err(std::io::Error::other)?;
+                Ok(((), vec![line]))
             })
             .map_err(|error| error.to_string())?;
         super::thread_index::append_index_patch(root, record);
@@ -338,7 +429,7 @@ impl ThreadEventStore for JsonlThreadEventStore {
     fn read_all(&self, root: &Path) -> Result<Vec<ThreadEventRecord>, String> {
         let mut records = Vec::new();
         for entry in Self::event_files(root)? {
-            records.extend(Self::read_file(&entry.path())?);
+            records.extend(Self::read_file(root, &entry.path())?);
         }
         Ok(records)
     }
@@ -353,7 +444,7 @@ impl ThreadEventStore for JsonlThreadEventStore {
         SHARD_STORE
             .rewrite_with(logical, |lines| {
                 let bytes = Self::join_lines(lines);
-                let current = Self::parse_lines(&bytes)
+                let current = Self::parse_lines(root, &bytes)
                     .map_err(std::io::Error::other)?;
                 let current_sequence = current.last().map_or(0, |record| record.sequence);
                 if current_sequence != expected_sequence {
@@ -364,9 +455,7 @@ impl ThreadEventStore for JsonlThreadEventStore {
                         ),
                     ));
                 }
-                let line = serde_json::to_vec(checkpoint).map_err(|error| {
-                    std::io::Error::new(std::io::ErrorKind::InvalidData, error)
-                })?;
+                let line = Self::encode_record_line(root, checkpoint).map_err(std::io::Error::other)?;
                 Ok(((), vec![line]))
             })
             .map_err(|error| {
@@ -375,7 +464,13 @@ impl ThreadEventStore for JsonlThreadEventStore {
                 } else {
                     "无法写入 thread checkpoint".to_owned()
                 }
-            })
+            })?;
+        // checkpoint 替换整份历史：旧正文全部失去引用，只留这一条的正文。
+        super::thread_event_body::prune_bodies_except(
+            root,
+            &checkpoint.thread_id,
+            checkpoint.sequence,
+        )
     }
 
     fn read_thread_activation(
@@ -419,7 +514,7 @@ impl JsonlThreadEventStore {
                 break;
             }
             budget -= size;
-            let mut records = Self::read_file(path)?;
+            let mut records = Self::read_file(root, path)?;
             records.reverse();
             scanned.append(&mut records);
             if super::thread_tail::activation_settled(&scanned) {

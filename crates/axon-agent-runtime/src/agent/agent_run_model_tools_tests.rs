@@ -126,8 +126,7 @@ fn shell_tool_receipt_projection_uses_runtime_status_contract() {
     assert_eq!(metadata["output"]["stdout"]["truncated"], true);
     assert_eq!(metadata["output"]["tokens"]["savingsPct"], 60);
     assert_eq!(metadata["terminalInteraction"], serde_json::Value::Null);
-    assert!(!projection.remote_trigger_allowed);
-    assert!(!projection.filesystem_write_performed);
+    assert!(!projection.remote_trigger_allowed && !projection.filesystem_write_performed);
 
     let failed = agent_run_shell_tool_receipt(
         &tool_call,
@@ -227,8 +226,8 @@ fn search_tool_receipt_projection_uses_runtime_status_contract() {
     assert_eq!(metadata["kind"], "search");
     assert_eq!(metadata["files"][0]["hashlineTag"], "A1B2");
     assert_eq!(metadata["files"][0]["lines"][0]["isMatch"], true);
-    assert!(!projection.remote_trigger_allowed);
-    assert!(!projection.filesystem_write_performed);
+    assert_eq!(metadata["files"][0]["lines"][0]["textTruncated"], false);
+    assert!(!projection.remote_trigger_allowed && !projection.filesystem_write_performed);
 
     let blocked = agent_run_search_tool_receipt(
         &tool_call,
@@ -638,6 +637,7 @@ fn search_receipt(status: SearchToolExecutionStatus) -> SearchToolExecutionRecei
                 is_match: true,
                 match_spans: vec![(0, 4)],
                 text: "axon".to_owned(),
+                truncated: false,
             }],
             matched_line_count: 1,
             matches_truncated: true,

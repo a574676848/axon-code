@@ -247,7 +247,9 @@ fn thread_index_or_rebuild(root: &Path) -> Result<Option<ThreadIndexSnapshot>, S
 
 /// 一条 thread 的全部分片体量与最近写入时刻；没有分片时按 0 计。
 fn thread_shard_stats(root: &Path, thread_id: &str) -> Result<(u64, u64), String> {
-    let mut total = 0u64;
+    // 会话体量必须把外置正文算进来：正文搬进独立文件之后，只量分片会让「日志很小、
+    // 正文很大」的会话永远过不了预筛，治理因此永远不重写它。
+    let mut total = JsonlThreadEventStore::thread_body_bytes(root, thread_id)?;
     let mut newest = 0u64;
     for path in JsonlThreadEventStore::thread_shard_paths(root, thread_id)? {
         let Ok(metadata) = std::fs::metadata(&path) else {

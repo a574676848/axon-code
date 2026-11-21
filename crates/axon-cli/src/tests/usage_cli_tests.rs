@@ -236,7 +236,7 @@ fn seed_usage_turn(root: &Path, turn: &TestUsageTurn<'_>, completed: bool) {
     let existing = service.read_thread(root, thread_id).ok();
     if existing.is_none() {
         let started = json!({
-            "schemaVersion": 4,
+            "schemaVersion": axon_session::THREAD_EVENT_SCHEMA_VERSION,
             "threadId": thread_id,
             "sequence": 0,
             "recordedAtMs": axon_time::unix_now_ms(),
@@ -299,7 +299,7 @@ fn seed_usage_turn(root: &Path, turn: &TestUsageTurn<'_>, completed: bool) {
     });
     let event_type = if completed { "turnCompleted" } else { "turnStarted" };
     let event = json!({
-        "schemaVersion": 4,
+        "schemaVersion": axon_session::THREAD_EVENT_SCHEMA_VERSION,
         "threadId": thread_id,
         "sequence": next_thread_sequence(root, thread_id),
         "recordedAtMs": axon_time::unix_now_ms(),
