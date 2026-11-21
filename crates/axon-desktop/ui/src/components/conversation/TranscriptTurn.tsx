@@ -1,12 +1,12 @@
 import React from 'react';
-import { changedFilesOf } from '../../conversation/transcript';
+import { changedFilesOf, conclusionMarkerOf } from '../../conversation/transcript';
 import type { TranscriptCell, TurnState } from '../../conversation/transcript/state';
 import { orderTurnCells } from '../../conversation/transcript/order';
 import { retryPromptOf } from '../../conversation/transcript/retryPrompt';
 import { ChangedFilesCard } from './ChangedFilesCard';
 import { DisclosureRow } from './DisclosureRow';
 import { foldJobReads } from './jobFolding';
-import { TranscriptCellView } from './Transcript';
+import { NoticeBlock, TranscriptCellView } from './Transcript';
 import { LATEST_PROCESS_ROW_LIMIT, hiddenProcessRows } from './turnWindow';
 
 /*
@@ -191,6 +191,16 @@ export const TurnBlock = React.memo<TurnBlockProps>(
         />
       );
     const groups = groupCells(displayRows);
+    /*
+     * 异常结论轮次的视觉标记：中断、失败与被拒绝的轮次保持展开，末尾给一条结论标记。
+     * 正文里已经有结论单元时它是 null（一轮只留一条结论），因此这里不会重复。
+     *
+     * 最新一轮的失败与拒绝已经由流底部横幅说明（见 `ConversationStream`），这里让位；
+     * 中断没有横幅，因此最新一轮的中断仍由标记承担。
+     */
+    const bannerExplained =
+      live && (turn.status === 'failed' || turn.status === 'rejected');
+    const marker = turn.folded || bannerExplained ? null : conclusionMarkerOf(turn);
     const nodeRef = React.useRef<HTMLDivElement>(null);
 
     /*
@@ -258,6 +268,17 @@ export const TurnBlock = React.memo<TurnBlockProps>(
           </React.Fragment>
         ))}
         {card !== null && !endsWithSummary ? card : null}
+        {marker !== null && (
+          <NoticeBlock
+            cell={{
+              id: `turn-marker:${turn.id}`,
+              role: 'notice',
+              title: marker.title,
+              summary: marker.summary,
+              tone: marker.tone,
+            }}
+          />
+        )}
       </div>
     );
   },

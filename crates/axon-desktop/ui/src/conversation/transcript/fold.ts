@@ -5,14 +5,17 @@
  * 用户气泡与助手回复原位保留：控件插在开场输入之后，因此「叙述 A → 工具 → 叙述 B」
  * 折叠后读作「叙述 A → 叙述 B」，工具只由控件表达「存在」，不表达位置。
  *
- * 只折已经收口、且过程之后不再收到输入的轮次。运行中、中断、失败，以及过程行之后又
- * 出现用户消息的轮次一律保持展开：把输入压到过程之前会让这一轮读成另一种顺序。
+ * 只折「过程不会再变」的轮次：有收口事实，或最后一条 durable 事件已经静默足够久。
+ * 运行中的一轮不折；中断、失败与被拒绝的结论保持展开，另由 [`conclusionMarkerOf`]
+ * 补一条结论标记；过程行之后又出现用户消息的轮次同样保持展开，把输入压到过程之前
+ * 会让这一轮读成另一种顺序。
  *
  * 重新打开会话时更早的轮次只有索引（用户那一句、工具名串、最终交付正文），因此按索引
  * 立起同一形态：用户气泡 + 控件 + 最终答案。中间叙述要等点开回放才补齐，界面不声称它有。
  */
 
 import type { TranscriptCell, TurnState } from './state';
+import { indexCells } from './turns';
 
 /** 过程单元：折叠时整段撤下，正文随即失去引用。 */
 const PROCESS_ROLES: ReadonlySet<TranscriptCell['role']> = new Set([
@@ -237,15 +240,6 @@ export function processSummary(cells: readonly TranscriptCell[]): string {
   const ranked = [...counts.entries()].sort((left, right) => right[1] - left[1]);
   return phraseSummary(ranked.map(([category]) => CATEGORY_PHRASES[category] ?? '已调用工具'));
 }
-/** 按单元顺序重建下标表。 */
-function indexOf(cells: readonly TranscriptCell[]): Record<string, number> {
-  const index: Record<string, number> = {};
-  cells.forEach((cell, position) => {
-    index[cell.id] = position;
-  });
-  return index;
-}
-
 /** 过程控件的标识：一轮一根，标识稳定不随折叠次数变化。 */
 function controlId(turnId: string): string {
   return `${turnId}:control`;
@@ -311,17 +305,117 @@ export function outlineControl(
 const OUTLINE_CONTROL_LABEL = '过程';
 
 /**
+ * 静默阈值：最后一条 durable 事件过去这么久之后，把这一轮按已收口处理。
+ *
+ * 长会话里终态帧常常缺失，轮次会永远停在运行中。位置规则已经保证最新一轮不折，
+ * 因此这里的静默只作用于「后面还有轮次」的历史轮：服务端已经推进到下一轮，
+ * 这一轮再产出工作的可能性极低，过程可以收起了。
+ */
+export const FOLD_SILENCE_MS = 5 * 60_000;
+
+/**
+ * 保持展开的异常结论：折叠会把过程撤下，而这些结论正是读者要看清的东西。
+ *
+ * 产品裁决：中断、失败与被拒绝的轮次不折，改为在正文末尾给一条结论标记。
+ */
+const CONCLUSION_STATUSES: ReadonlySet<TurnState['status']> = new Set([
+  'interrupted',
+  'failed',
+  'rejected',
+]);
+
+/** 这一轮最后一条 durable 事件距今的静默时长；没有任何时间事实时为 0。 */
+function quietMs(turn: TurnState, nowMs: number): number {
+  const last = turn.lastEventAtMs ?? turn.startedAtMs;
+  return last === null ? 0 : Math.max(0, nowMs - last);
+}
+
+/**
  * 这一轮是否该折。
  *
- * 位置先决：最新一轮永远展开（它是正在读的那一段）。其余条件都是「折了会读错」的
- * 情形，因此宁可让它继续展开。
+ * 判据是「过程不会再变」，而不是「状态恰好等于已完成」：
+ *
+ * - 位置先决：最新一轮永远展开（它是正在读的那一段）；
+ * - 待接手（`pending`）的轮次不折：服务端还没接手，折起来等于替它宣布结论；
+ * - 中断、失败、被拒绝的结论保持展开，并由 [`conclusionMarkerOf`] 补一条标记；
+ * - 收口事实（`settledAt`）缺失时退回静默时长判定。`streaming` 不足以证明在跑：
+ *   终态帧丢失时投影会一直写着运行中，只认状态会让这些轮次永远折不起来。真正在跑的
+ *   那一轮永远是最后一轮，位置规则加静默阈值两道都挡在它前面。
+ *
+ * 其余条件都是「折了会读错」的情形，宁可让它继续展开。
  */
-export function shouldFold(turn: TurnState, position: number, total: number): boolean {
+export function shouldFold(
+  turn: TurnState,
+  position: number,
+  total: number,
+  nowMs: number = Date.now(),
+): boolean {
   if (position >= total - 1) return false;
   if (turn.folded || turn.keepExpanded) return false;
-  if (turn.status !== 'completed') return false;
+  if (turn.status === 'pending') return false;
+  if (CONCLUSION_STATUSES.has(turn.status)) return false;
   if (!hasProcess(turn)) return false;
-  return !inputAfterProcess(turn);
+  if (inputAfterProcess(turn)) return false;
+  return turn.settledAt !== null || quietMs(turn, nowMs) >= FOLD_SILENCE_MS;
+}
+
+/** 结论标记：保持展开的异常轮次在正文末尾给出的那一句话。 */
+export interface TurnConclusionMarker {
+  /** 行首标签。 */
+  title: string;
+  /** 标签之后的一句话结论。 */
+  summary: string;
+  /** 与既有提示行同档的语义色：中断是过程性结论，失败与拒绝是危险结论。 */
+  tone: 'info' | 'danger';
+}
+
+/** 服务端对中断给出的结论正文；它已经在气泡里时不再补标记。 */
+const INTERRUPT_STATED = '本轮已由用户中断。';
+
+/**
+ * 这一轮是否已经在正文里给出过结论。
+ *
+ * 只认真正的结论单元：失败卡、中断提示、失败提示与运行时错误行。用量预警、上下文轮转、
+ * 过程不完整这类提示不是结论，它们不能把结论标记顶掉。
+ */
+function conclusionStated(turn: TurnState): boolean {
+  return turn.cells.some(
+    (cell) =>
+      cell.role === 'failure' ||
+      (cell.role === 'notice' &&
+        (cell.id.startsWith('turn-interrupted:') ||
+          cell.id.startsWith('turn-failed:') ||
+          cell.id.startsWith('turn-failure:') ||
+          cell.id.startsWith('turn-uncertain:') ||
+          cell.id.endsWith(':error'))),
+  );
+}
+
+/**
+ * 异常结论轮次要不要补一条视觉标记。
+ *
+ * 只在这三类终态上成立，且正文里还没有结论单元时给出：失败卡与中断提示本身就是
+ * 标记，再补一条会让一轮出现两个结论（设计系统 §6.1.4 的「一轮只留一条结论」）。
+ * 标记沿用提示行形态，因此不新增状态形态。
+ */
+export function conclusionMarkerOf(turn: TurnState): TurnConclusionMarker | null {
+  if (!CONCLUSION_STATUSES.has(turn.status)) return null;
+  if (conclusionStated(turn)) return null;
+  if (turn.status === 'interrupted') {
+    /*
+     * 服务端有时把中断结论直接写成一条助手正文（现场就是「本轮已由用户中断。」）。
+     * 那句话已经在正文里，再补一行同义提示就是第二次宣布同一件事。
+     */
+    const stated = turn.cells.some(
+      (cell) => cell.role === 'assistant' && cell.text.includes(INTERRUPT_STATED),
+    );
+    if (stated) return null;
+    return { title: '已中断', summary: INTERRUPT_STATED, tone: 'info' };
+  }
+  if (turn.status === 'rejected') {
+    return { title: '已拒绝', summary: '服务端拒绝了这一轮，过程保持展开。', tone: 'danger' };
+  }
+  return { title: '轮次失败', summary: '这一轮没有留下失败回执，过程保持展开。', tone: 'danger' };
 }
 
 /**
@@ -352,7 +446,7 @@ export function foldTurn(turn: TurnState): TurnState {
     folded: true,
     summary: control.summary,
     cells,
-    index: indexOf(cells),
+    index: indexCells(cells),
   };
 }
 
@@ -378,7 +472,7 @@ export function replaceTurnCells(turn: TurnState, cells: TranscriptCell[]): Turn
       expanded: true,
       summary: '',
       cells,
-      index: indexOf(cells),
+      index: indexCells(cells),
     };
   }
   const summary = turn.summary.length > 0 ? turn.summary : processSummary(cells);
@@ -404,7 +498,7 @@ export function replaceTurnCells(turn: TurnState, cells: TranscriptCell[]): Turn
     expanded: true,
     summary: control.summary,
     cells: ordered,
-    index: indexOf(ordered),
+    index: indexCells(ordered),
   };
 }
 
@@ -439,6 +533,6 @@ export function collapseTurn(turn: TurnState): TurnState {
     expanded: false,
     summary,
     cells,
-    index: indexOf(cells),
+    index: indexCells(cells),
   };
 }

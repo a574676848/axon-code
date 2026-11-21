@@ -473,8 +473,11 @@ const HistoryBlock: React.FC<{ cell: Extract<TranscriptCell, { role: 'history' }
  *
  * 左缘留出与可展开行标题列同宽的空白：提示因此不会比过程行更靠左，
  * 整段正文的左缘仍是一条竖线。
+ *
+ * 对外可见：异常结论轮次（中断、失败、被拒绝）在正文末尾补的结论标记复用它，
+ * 因此标记与正文里的提示行是同一份实现，不另起一种状态形态。
  */
-const NoticeBlock: React.FC<{ cell: Extract<TranscriptCell, { role: 'notice' }> }> = ({ cell }) => (
+export const NoticeBlock: React.FC<{ cell: Extract<TranscriptCell, { role: 'notice' }> }> = ({ cell }) => (
   <div className={`w-full flex items-start gap-1.5 py-1 ${DISCLOSURE_TITLE_COLUMN}`}>
     <Text
       size="meta"

@@ -2,22 +2,42 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { emptyTurn } from '../src/conversation/transcript/turns.ts';
 import {
+    FOLD_SILENCE_MS,
+    conclusionMarkerOf,
     foldTurn,
+    outlineControl,
     processSummary,
     replaceTurnCells,
     shouldFold,
+    summaryFromIndexFacts,
 } from '../src/conversation/transcript/fold.ts';
+import { conversationReducer } from '../src/conversation/transcript/reducer.ts';
+import { INITIAL_CONVERSATION } from '../src/conversation/transcript/state.ts';
+import {
+    completedFrame,
+    insertControlAfterInput,
+    wireFrame,
+} from '../src/conversation/historyProjection.ts';
+import { provisionalFrames } from '../src/conversation/pagingSkeleton.ts';
 
 /*
  * 整轮折叠：过程整段撤下、控件插在开场输入之后、内容原位保留。
  *
- * 这里固定三件事，缺一件这次改造就退化成「把整轮压成一行」：
- * 判据（谁能折）、形态与顺序（折完还是原话顺序）、释放（过程正文真的不再被引用）。
+ * 这里固定四件事，缺一件这次改造就退化成「把整轮压成一行」：
+ * 判据（谁能折）、形态与顺序（折完还是原话顺序）、释放（过程正文真的不再被引用），
+ * 以及实时投影与索引重建投影折出来是同一个形态。
  */
 
-/** 造一轮：默认已收口。 */
+/** 造一轮：默认已收口。`settledAt` 是服务端收口事实，运行中的轮次没有它。 */
 function turnOf(cells, status = 'completed') {
-    return { ...emptyTurn('interaction-1', 0), interactionId: 'interaction-1', status, cells };
+    const settled = status !== 'pending' && status !== 'streaming';
+    return {
+        ...emptyTurn('interaction-1', 0),
+        interactionId: 'interaction-1',
+        status,
+        settledAt: settled ? 1_000 : null,
+        cells,
+    };
 }
 
 function userCell(text, id = 'u1') {
@@ -132,14 +152,155 @@ test('过程之后又收到输入的轮次不折：控件只能落在开场输�
     );
 });
 
-test('运行中、中断、失败、已折、用户展开过的一律不折', () => {
+test('刚刚还在产出的轮次不折，静默超阈值才按已收口处理', () => {
     const cells = [userCell('跑一遍'), toolCell('shell_command')];
-    assert.equal(shouldFold(turnOf(cells, 'streaming'), 0, 2), false);
-    assert.equal(shouldFold(turnOf(cells, 'pending'), 0, 2), false);
+    const recent = { ...turnOf(cells, 'streaming'), startedAtMs: 0, lastEventAtMs: 1_000 };
+    const nowMs = 60_000;
+    assert.equal(shouldFold(recent, 0, 2, nowMs), false, '还在产出的轮次不折');
+    assert.equal(
+        shouldFold(recent, 0, 2, 1_000 + FOLD_SILENCE_MS),
+        true,
+        '静默超阈值后按已收口处理，终态帧缺失的轮次不再永远展开',
+    );
+    assert.equal(shouldFold(turnOf(cells, 'pending'), 0, 2), false, '服务端还没接手的轮次不折');
     assert.equal(shouldFold(turnOf(cells, 'interrupted'), 0, 2), false, '中断的结论要保持可见');
     assert.equal(shouldFold(turnOf(cells, 'failed'), 0, 2), false, '失败卡要保持可见');
+    assert.equal(shouldFold(turnOf(cells, 'rejected'), 0, 2), false, '被拒绝的结论要保持可见');
     assert.equal(shouldFold({ ...turnOf(cells), folded: true }, 0, 2), false);
     assert.equal(shouldFold({ ...turnOf(cells), keepExpanded: true }, 0, 2), false);
+});
+
+test('判据不再只认状态字面值：没有收口事实且未静默的轮次仍然展开', () => {
+    const cells = [userCell('跑一遍'), toolCell('shell_command')];
+    const unrecorded = { ...turnOf(cells, 'completed'), settledAt: null, lastEventAtMs: 1_000 };
+    assert.equal(shouldFold(unrecorded, 0, 2, 60_000), false);
+    assert.equal(shouldFold(unrecorded, 0, 2, 1_000 + FOLD_SILENCE_MS), true);
+});
+
+test('fold_form_is_identical_for_realtime_and_index_projection：实时与索引重建折出同一形态', () => {
+    const INTERACTION = '01FOLDPARITYINTERACTION000000';
+    // 实时投影：用户消息、一条命令与收口帧。
+    let live = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn',
+        turnId: INTERACTION,
+        nowMs: 0,
+    });
+    live = conversationReducer(live, {
+        type: 'frames',
+        frames: [
+            wireFrame(INTERACTION, 1_000, 'userMessage', {
+                partId: 'user:opening',
+                messageId: 'user-message:opening',
+                content: '跑一遍测试',
+            }),
+            wireFrame(INTERACTION, 1_100, 'toolCall', {
+                partId: 'tool:1',
+                toolName: 'shell_command',
+                toolKind: 'builtin',
+                argumentsSummary: 'npm test',
+            }),
+            completedFrame(INTERACTION, '测试通过了。'),
+        ],
+        nowMs: 2_000,
+    });
+    // 索引重建投影：同一轮只有索引事实（首格正文、工具名与最终答案）。
+    let rebuilt = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn',
+        turnId: INTERACTION,
+        nowMs: 0,
+    });
+    rebuilt = conversationReducer(rebuilt, {
+        type: 'frames',
+        frames: provisionalFrames({
+            interactionId: INTERACTION,
+            receivedAtMs: 1_000,
+            status: 'completed',
+            content: '跑一遍测试',
+            answerText: '测试通过了。',
+            toolNames: ['shell_command'],
+        }),
+        nowMs: 2_000,
+    });
+    const indexTurn = insertControlAfterInput(
+        rebuilt.turns[0],
+        outlineControl(
+            rebuilt.turns[0].id,
+            INTERACTION,
+            1_000,
+            null,
+            summaryFromIndexFacts(['shell_command'], 0),
+        ),
+    );
+    assert.equal(shouldFold(live.turns[0], 0, 2), true, '实时投影的已收口轮次可折');
+    assert.equal(indexTurn.folded, true, '索引重建的同一轮按折叠形态立起');
+
+    const folded = foldTurn(live.turns[0]);
+    assert.deepEqual(
+        folded.cells.map((cell) => cell.role),
+        indexTurn.cells.map((cell) => cell.role),
+        '两种投影折出来的单元序列必须一致',
+    );
+    const foldedControl = folded.cells.find((cell) => cell.role === 'folded');
+    const indexControl = indexTurn.cells.find((cell) => cell.role === 'folded');
+    assert.equal(foldedControl.summary, indexControl.summary, '动作摘要是同一句话');
+    assert.equal(foldedControl.interactionId, indexControl.interactionId, '控件指向同一条交互');
+    assert.equal(
+        folded.cells
+            .filter((cell) => cell.role === 'assistant')
+            .map((cell) => cell.text)
+            .join('|'),
+        indexTurn.cells
+            .filter((cell) => cell.role === 'assistant')
+            .map((cell) => cell.text)
+            .join('|'),
+        '折叠不改变任何一句回复',
+    );
+});
+
+test('interrupted_turn_stays_expanded_with_marker：中断轮保持展开并带视觉标记', () => {
+    const cells = [userCell('跑一遍'), toolCell('shell_command')];
+    const interrupted = turnOf(cells, 'interrupted');
+    assert.equal(shouldFold(interrupted, 0, 2, Date.now()), false, '中断的结论要保持可见');
+    const marker = conclusionMarkerOf(interrupted);
+    assert.notEqual(marker, null);
+    assert.equal(marker.title, '已中断');
+    assert.equal(marker.tone, 'info');
+    // 正文里已经有结论单元时不再补标记：一轮只留一条结论。
+    const stated = {
+        ...interrupted,
+        cells: [
+            ...interrupted.cells,
+            {
+                id: 'turn-interrupted:interaction-1',
+                role: 'notice',
+                title: '已中断',
+                summary: '本轮已由用户中断。',
+                tone: 'info',
+            },
+        ],
+    };
+    assert.equal(conclusionMarkerOf(stated), null);
+    // 与结论无关的提示（用量预警、过程不完整）不能把结论标记顶掉。
+    const warned = {
+        ...interrupted,
+        cells: [
+            ...interrupted.cells,
+            { id: 'turn:budget', role: 'notice', title: 'Token 预算', summary: '剩余 1000 token', tone: 'info' },
+        ],
+    };
+    assert.notEqual(conclusionMarkerOf(warned), null);
+    // 服务端把中断结论写成助手正文时，正文里已经有这句话，不再补标记。
+    const written = { ...interrupted, cells: [...interrupted.cells, assistantCell('本轮已由用户中断。', 'a1')] };
+    assert.equal(conclusionMarkerOf(written), null);
+    // 失败卡本身就是标记。
+    const carded = {
+        ...turnOf(cells, 'failed'),
+        cells: [...cells, { id: 'turn-failed:interaction-1', role: 'failure', report: null, text: '执行失败' }],
+    };
+    assert.equal(conclusionMarkerOf(carded), null);
+    assert.equal(conclusionMarkerOf(turnOf(cells, 'failed')).title, '轮次失败');
+    assert.equal(conclusionMarkerOf(turnOf(cells, 'rejected')).tone, 'danger');
+    assert.equal(conclusionMarkerOf(turnOf(cells, 'completed')), null, '正常收口不加标记');
 });
 
 test('摘要按动作短语去重、最多三个，其余并成等', () => {

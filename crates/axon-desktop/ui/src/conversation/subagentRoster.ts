@@ -94,6 +94,42 @@ export function mergeSubagentRoster(
   return [...withSession, ...extra];
 }
 
+/** 名册对一行子代理给出的活线索。 */
+export interface RosterLiveStatus {
+  /** 线程状态：只有 `active` 与 `idle` 两个有效取值。 */
+  status: string;
+  /** 末轮状态：只有它能给出失败与中断这两种终态。 */
+  lastTurnStatus: string | null;
+}
+
+/** 行里仍在跑的三档：只有这三档需要被纠正。 */
+function claimsRunning(status: SubagentRow['status']): boolean {
+  return status === 'running' || status === 'starting' || status === 'waiting';
+}
+
+/**
+ * 名册与转录冲突时的最终状态。
+ *
+ * 名册只提供 `active / idle` 线索，它不是运行态本身：线程索引里那一轮没有终态时，
+ * 名册会一直说 `active`，而转录里的行也一直停在运行中，两处互相作证，计数永不回落。
+ * 因此名册的 `active` 只在本视图确实还有在跑的轮次时才算数；转录一旦收口，行的终态
+ * 由末轮状态给出（失败、中断），没有终态事实就按已完成收口。
+ *
+ * 没对过账（`live` 为空）时原样沿用行内状态：没有第二份事实可比时，纠正就是猜测。
+ */
+export function reconciledSubagentStatus(
+  row: SubagentRow,
+  live: RosterLiveStatus | undefined,
+  transcriptSettled: boolean,
+): SubagentRow['status'] {
+  if (live === undefined || live === null) return row.status;
+  if (live.status === 'active' && !transcriptSettled) return row.status;
+  if (!claimsRunning(row.status)) return row.status;
+  if (live.lastTurnStatus === 'failed') return 'failed';
+  if (live.lastTurnStatus === 'interrupted') return 'interrupted';
+  return 'completed';
+}
+
 /**
  * 名册还要不要继续轮询。
  *

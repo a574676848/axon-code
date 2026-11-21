@@ -6,7 +6,7 @@
  * 变更标记，也不会出现同一份事实被就地改写的第二份副本。
  */
 
-import { EMPTY_USAGE, LOCAL_STEER_PREFIX, totalTokens, type ConversationState, type TokenUsage, type TranscriptCell, type TurnState } from './state';
+import { EMPTY_USAGE, LOCAL_STEER_PREFIX, LOCAL_USER_PREFIX, totalTokens, type ConversationState, type TokenUsage, type TranscriptCell, type TurnState } from './state';
 import { EMPTY_TURN_CHANGES } from './changes';
 import { jobRowOf } from './derive';
 
@@ -31,6 +31,7 @@ export function emptyTurn(turnId: string, nowMs: number): TurnState {
     activity: null,
     firstEventAtMs: null,
     lastEventAtMs: null,
+    settledAt: null,
     changes: EMPTY_TURN_CHANGES,
     pendingAttachments: [],
     pendingChannel: null,
@@ -43,7 +44,16 @@ export function emptyTurn(turnId: string, nowMs: number): TurnState {
 
 /** 本地乐观插入的用户消息身份。 */
 export function localUserId(turnId: string): string {
-  return `local-user:${turnId}`;
+  return `${LOCAL_USER_PREFIX}${turnId}`;
+}
+
+/** 按单元顺序重建下标表；摘掉或换掉单元之后必须走一次。 */
+export function indexCells(cells: readonly TranscriptCell[]): Record<string, number> {
+  const index: Record<string, number> = {};
+  cells.forEach((cell, position) => {
+    index[cell.id] = position;
+  });
+  return index;
 }
 
 /** 开一条新轮次；已存在同标识轮次时原样返回。 */
@@ -180,7 +190,27 @@ export function settleTurn(
   elapsedMs: number | null,
 ): TurnState {
   const settled = closeRunningCells(markUnclaimedSteersUndelivered(turn), status);
-  return { ...settled, status, activity: null, elapsedMs };
+  return {
+    ...settled,
+    status,
+    activity: null,
+    elapsedMs,
+    // 收口事实只写一次：迟到帧不会把这一轮的收口时刻往后推。
+    settledAt: settled.settledAt ?? settleTimestamp(settled, elapsedMs),
+  };
+}
+
+/**
+ * 收口时刻取服务端记录时间，不取本地墙钟。
+ *
+ * 折叠只关心「有没有收口」，但这一项会落进投影里参与整轮比较：用 `Date.now()` 会让
+ * 同一轮在整批回放与逐条增量两条路径上差出几毫秒，状态比较因此永远不相等。优先用
+ * 最后一条 durable 事件的记录时间；没有事件时按起点加耗时；连耗时都没有就用起点。
+ */
+function settleTimestamp(turn: TurnState, elapsedMs: number | null): number | null {
+  if (turn.lastEventAtMs !== null) return turn.lastEventAtMs;
+  if (turn.startedAtMs === null) return null;
+  return elapsedMs === null ? turn.startedAtMs : turn.startedAtMs + Math.max(0, elapsedMs);
 }
 
 /** 把仍在等待注入的本地乐观用户消息标成未送达；没有时原样返回。 */
