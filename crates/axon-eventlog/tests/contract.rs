@@ -397,27 +397,34 @@ fn lazy_paged_read_stays_bounded_on_long_logs() {
 fn non_monotonic_frames_are_rejected_across_frame_boundaries() {
     let dir = tempfile::tempdir().expect("临时目录");
     let log = EventLog::open(dir.path(), "session-session-monotonic");
-    // 模拟「控制面水位倒退后继续写入」：第二帧的序号比第一帧小。
+    // 第一帧正常（序号 1）：写侧现在会拒绝与文件尾不对齐的写入。
     axon_eventlog::append_once(
         &log,
-        5,
+        1,
         1_700_000_000_000,
-        &[record(5, RuntimeEventKind::TurnStarted, json!({}))],
+        &[record(1, RuntimeEventKind::TurnStarted, json!({}))],
     )
     .expect("第一帧");
-    axon_eventlog::append_once(
-        &log,
-        0,
-        1_700_000_000_000,
-        &[record(0, RuntimeEventKind::TurnStarted, json!({}))],
-    )
-    .expect("第二帧（序号倒退）");
+    // 手工追加一帧序号倒退的帧：模拟旧版本留下的跨帧逆序日志，读者必须整体拒绝，
+    // 而不是把逆序当正常历史返回。
+    let mut plain = record(0, RuntimeEventKind::TurnStarted, json!({}))
+        .encode_line()
+        .expect("编码");
+    plain.push(b'\n');
+    let frame = axon_eventlog::encode_frame(&plain).expect("压缩倒数帧");
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(log.path())
+        .expect("打开日志");
+    file.write_all(&frame).expect("写入倒退帧");
+    drop(file);
+
     let error = log.reader().expect_err("跨帧序号倒退必须被拒绝");
     assert!(
         matches!(
             error,
             EventLogError::SequenceGap {
-                expected: 6,
+                expected: 2,
                 actual: 0
             }
         ),

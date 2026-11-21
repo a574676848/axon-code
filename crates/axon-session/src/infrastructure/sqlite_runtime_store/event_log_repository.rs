@@ -12,7 +12,11 @@ use crate::domain::runtime::{DaemonHostRecord, SessionEventRecord};
 use crate::ports::RuntimeStoreError;
 use axon_domain::{DaemonSessionId, InteractionId};
 
-fn log_error(error: axon_eventlog::EventLogError) -> RuntimeStoreError {
+/// 事件面写入失败的观测、水位补偿与有界重试。
+#[path = "event_log_write_failure.rs"]
+mod write_failure;
+
+pub(super) fn log_error(error: axon_eventlog::EventLogError) -> RuntimeStoreError {
     RuntimeStoreError::Storage(error.to_string())
 }
 
@@ -134,20 +138,15 @@ fn append_events_with(
         .or(interaction_lease.map(|(interaction_id, _)| interaction_id))
         .map(InteractionId::as_str);
     let origin_channel = interaction_channel(store, interaction_column)?;
-    let records = build_records(session_id, host, events, start, now_ms);
-    let runtime_records = records
+    let mut records = build_records(session_id, host, events, start, now_ms);
+    let mut runtime_records = records
         .iter()
         .map(|record| to_runtime_record(record, interaction_column, origin_channel.as_deref()))
         .collect::<Vec<_>>();
-    if let Err(error) = axon_eventlog::append_once(
-        &store.event_log(session_id),
-        start,
-        now_ms,
-        &runtime_records,
-    ) {
-        // 第二段失败：控制面已提交，把水位退回落盘尾再上报。
-        compensate_watermark_after_log_failure(store, session_id);
-        return Err(log_error(error));
+    write_failure::append_preallocated(store, session_id, now_ms, &mut runtime_records, end)?;
+    // 失败重试可能按文件尾重排了序号：返回给调用方的记录必须与落盘一致。
+    for (record, runtime) in records.iter_mut().zip(&runtime_records) {
+        record.sequence = runtime.sequence;
     }
     apply_projections(store, session_id, events, origin_channel.as_deref(), now_ms);
     Ok(records)
@@ -285,46 +284,6 @@ pub(super) fn durable_tail(
     Ok(tail.map(|record| (record.sequence, record.generation.clone())))
 }
 
-/// 事件面写入失败后的水位补偿：把控制面水位退回落盘尾。
-///
-/// 两段式的第二段失败时控制面已经提交，幂等重放会看到「水位有、帧没有」。
-/// 把水位退回落盘尾可以让下一次写入从真实尾部继续，避免序号空洞；
-/// 补偿本身失败只上报，最终由恢复路径的对账兜底。
-fn compensate_watermark_after_log_failure(
-    store: &SqliteRuntimeStore,
-    session_id: &DaemonSessionId,
-) {
-    let durable = match durable_tail(store, session_id) {
-        Ok(tail) => tail.map_or(0, |(sequence, _)| sequence),
-        Err(error) => {
-            eprintln!(
-                "事件面写入失败后读不到落盘尾，水位补偿放弃: session={} error={error}",
-                session_id.as_str()
-            );
-            return;
-        }
-    };
-    let result = store.connection().and_then(|connection| {
-        connection
-            .execute(
-                "UPDATE sessions SET last_event_sequence=?1 WHERE session_id=?2",
-                params![
-                    i64::try_from(durable)
-                        .map_err(|_| RuntimeStoreError::Storage("事件序号超出范围".to_owned()))?,
-                    session_id.as_str()
-                ],
-            )
-            .map(|_| ())
-            .map_err(storage)
-    });
-    if let Err(error) = result {
-        eprintln!(
-            "事件面写入失败后水位补偿失败: session={} durable={durable} error={error}",
-            session_id.as_str()
-        );
-    }
-}
-
 /// 会话事件日志的物理路径（供诊断与清理使用）。
 #[must_use]
 fn build_records(
@@ -421,7 +380,7 @@ pub(super) fn write_events_at(
     if events.is_empty() {
         return Ok(Vec::new());
     }
-    let records = events
+    let mut records = events
         .iter()
         .enumerate()
         .map(|(offset, (event_type, payload_json))| SessionEventRecord {
@@ -434,18 +393,16 @@ pub(super) fn write_events_at(
         })
         .collect::<Vec<_>>();
     let origin_channel = interaction_channel(store, interaction_id)?;
-    let runtime_records = records
+    let mut runtime_records = records
         .iter()
         .map(|record| to_runtime_record(record, interaction_id, origin_channel.as_deref()))
         .collect::<Vec<_>>();
-    if let Err(error) = axon_eventlog::append_once(
-        &store.event_log(session_id),
-        start,
-        now_ms,
-        &runtime_records,
-    ) {
-        compensate_watermark_after_log_failure(store, session_id);
-        return Err(log_error(error));
+    // 本次事务把水位推进到了这一批的末号；CAS 回退要以它为比对值。
+    let written = records.last().map_or(start, |record| record.sequence);
+    write_failure::append_preallocated(store, session_id, now_ms, &mut runtime_records, written)?;
+    // 失败重试可能按文件尾重排了序号：返回给调用方的记录必须与落盘一致。
+    for (record, runtime) in records.iter_mut().zip(&runtime_records) {
+        record.sequence = runtime.sequence;
     }
     apply_projections(store, session_id, events, origin_channel.as_deref(), now_ms);
     Ok(records)
@@ -454,6 +411,9 @@ pub(super) fn write_events_at(
 ///
 /// 供跨会话的隔离与恢复路径使用：这些路径一次产出少量事件，序号已在控制面事务里
 /// 分配好。同一会话的连续记录合并成一次追加，避免每条一次 fsync。
+///
+/// 序号与文件尾冲突时这里会补偿水位并按文件尾重排后重试（见写入失败模块）：
+/// 调用方手里的 `SessionEventRecord` 是重排前的那一份，日志才是序号权威。
 pub(super) fn write_records(
     store: &SqliteRuntimeStore,
     records: &[SessionEventRecord],
@@ -468,19 +428,20 @@ pub(super) fn write_records(
             end += 1;
         }
         let batch = &records[index..end];
-        let runtime_records = batch
+        let mut runtime_records = batch
             .iter()
             .map(|record| to_runtime_record(record, interaction_id, origin_channel.as_deref()))
             .collect::<Vec<_>>();
-        if let Err(error) = axon_eventlog::append_once(
-            &store.event_log(session_id),
-            batch[0].sequence,
+        let written = batch
+            .last()
+            .map_or(batch[0].sequence, |record| record.sequence);
+        write_failure::append_preallocated(
+            store,
+            session_id,
             batch[0].emitted_at_ms,
-            &runtime_records,
-        ) {
-            compensate_watermark_after_log_failure(store, session_id);
-            return Err(log_error(error));
-        }
+            &mut runtime_records,
+            written,
+        )?;
         index = end;
     }
     Ok(())
@@ -517,5 +478,209 @@ fn apply_projections(
                 session_id.as_str()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ports::RuntimeStore as _;
+    use axon_domain::RuntimeHostId;
+
+    fn fixture() -> (SqliteRuntimeStore, DaemonSessionId, DaemonHostRecord) {
+        let directory = axon_test_support::test_temp_path("event-log-repository");
+        let store = SqliteRuntimeStore::new(directory.join("runtime.sqlite3"));
+        store.initialize().expect("初始化");
+        let host_id = RuntimeHostId::new("host-1").expect("host id");
+        let host = store
+            .claim_host(&host_id, 1, None, 10, 60_000)
+            .expect("claim host");
+        let session_id = DaemonSessionId::new("session-session-repository").expect("session id");
+        store
+            .create_session(&session_id, ".", 10)
+            .expect("建立会话");
+        (store, session_id, host)
+    }
+
+    /// 控制面水位（`sessions.last_event_sequence`）。
+    fn watermark(store: &SqliteRuntimeStore, session_id: &DaemonSessionId) -> u64 {
+        let connection = store.connection().expect("取连接");
+        let value: i64 = connection
+            .query_row(
+                "SELECT last_event_sequence FROM sessions WHERE session_id=?1",
+                params![session_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("读控制面水位");
+        u64::try_from(value).expect("水位非负")
+    }
+
+    /// 控制面已经分配好的记录（`write_records` 的入参形状）。
+    fn allocated(
+        session_id: &DaemonSessionId,
+        host: &DaemonHostRecord,
+        sequence: u64,
+    ) -> SessionEventRecord {
+        SessionEventRecord {
+            session_id: session_id.clone(),
+            sequence,
+            generation: host.generation.clone(),
+            event_type: "checkpoint".to_owned(),
+            payload_json: "{}".to_owned(),
+            emitted_at_ms: 1_000 + sequence,
+        }
+    }
+
+    /// 模拟控制面事务推进水位：`write_records` / `write_events_at` 的调用方负责这一步。
+    fn advance_watermark(store: &SqliteRuntimeStore, session_id: &DaemonSessionId, sequence: u64) {
+        store
+            .connection()
+            .expect("取连接")
+            .execute(
+                "UPDATE sessions SET last_event_sequence=?1 WHERE session_id=?2",
+                params![i64_value(sequence).expect("水位"), session_id.as_str()],
+            )
+            .expect("推进水位");
+    }
+
+    /// 越过控制面直接落一条事件：模拟另一写者已经写入、控制面水位还没跟上。
+    fn append_bypassing_watermark(
+        store: &SqliteRuntimeStore,
+        session_id: &DaemonSessionId,
+        host: &DaemonHostRecord,
+        sequence: u64,
+    ) {
+        let record = to_runtime_record(&allocated(session_id, host, sequence), None, None);
+        axon_eventlog::append_once(&store.event_log(session_id), sequence, 1_000, &[record])
+            .expect("绕过控制面落盘");
+    }
+
+    fn metrics_events() -> [(String, String); 1] {
+        let metrics = axon_eventlog::TurnMetrics {
+            turn_id: "turn-1".to_owned(),
+            ..axon_eventlog::TurnMetrics::default()
+        };
+        [(
+            "turn_metrics".to_owned(),
+            serde_json::to_string(&metrics).expect("序列化指标"),
+        )]
+    }
+
+    #[test]
+    fn watermark_rollback_then_retry_succeeds() {
+        let (store, session_id, host) = fixture();
+        let events = metrics_events();
+        append_events(&store, &session_id, &host, &events, 20, None).expect("首批事件");
+        assert_eq!(watermark(&store, &session_id), 1);
+
+        // 另一写者已落盘第 2 条，控制面水位仍停在 1：下一次按水位领到 2。
+        // 存储层补偿水位并按文件尾重排后重试，事件不得丢。
+        append_bypassing_watermark(&store, &session_id, &host, 2);
+        let records = append_events(&store, &session_id, &host, &events, 30, None)
+            .expect("补偿后重试必须成功");
+        assert_eq!(records[0].sequence, 3, "重排后落盘的是文件尾之后的号");
+        assert_eq!(watermark(&store, &session_id), 3, "水位必须跟着重排后的号");
+
+        // `write_records` 走同一条补偿出口：调用方先推进水位，再落帧。
+        append_bypassing_watermark(&store, &session_id, &host, 4);
+        advance_watermark(&store, &session_id, 4);
+        write_records(&store, &[allocated(&session_id, &host, 4)], None)
+            .expect("写记录路径同样必须补偿后落盘");
+
+        let stored = replay_events(&store, &session_id, 0, 10).expect("回放");
+        assert_eq!(
+            stored
+                .iter()
+                .map(|record| record.sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5],
+            "补偿重试不得丢事件，序号必须严格递增且无洞"
+        );
+        assert_eq!(watermark(&store, &session_id), 5, "水位必须等于落盘末号");
+    }
+
+    #[test]
+    fn compensation_never_rolls_back_a_later_writers_watermark() {
+        let (store, session_id, host) = fixture();
+        append_events(&store, &session_id, &host, &metrics_events(), 20, None).expect("首批事件");
+
+        // 更晚的写者已经领走 9：水位停在 9，文件尾仍是 1。
+        advance_watermark(&store, &session_id, 9);
+        // 本次写入推进到的是 2，CAS 比对不上：不得把水位硬拉回文件尾。
+        write_failure::compensate_watermark(&store, &session_id, 2);
+        assert_eq!(
+            watermark(&store, &session_id),
+            9,
+            "不得抹掉更晚写者领走的号"
+        );
+
+        // 水位仍等于本次写入的值时才回退到落盘尾。
+        write_failure::compensate_watermark(&store, &session_id, 9);
+        assert_eq!(watermark(&store, &session_id), 1, "回退目标是落盘尾");
+    }
+
+    #[test]
+    fn compensation_then_realign_recovers_a_writer_left_behind() {
+        let (store, session_id, host) = fixture();
+        let log = store.event_log(&session_id);
+        // 先把日志尾做成 56。
+        let prefix = (1..=56u64)
+            .map(|sequence| to_runtime_record(&allocated(&session_id, &host, sequence), None, None))
+            .collect::<Vec<_>>();
+        axon_eventlog::append_once(&log, 1, 1_000, &prefix).expect("前置 1..=56");
+
+        // A 领到 57、B 领到 58，都还没落盘。
+        advance_watermark(&store, &session_id, 57);
+        advance_watermark(&store, &session_id, 58);
+        // B 先拿到文件锁：expected 58 对不上尾 56，补偿把水位写回 56（A 的 57 一起被抹掉）。
+        write_failure::compensate_watermark(&store, &session_id, 58);
+        assert_eq!(watermark(&store, &session_id), 56);
+
+        // A 随后以尾 56+1 落盘 57：此刻水位 56 落后于落盘尾 57。
+        let a_record = to_runtime_record(&allocated(&session_id, &host, 57), None, None);
+        axon_eventlog::append_once(&log, 57, 1_000, &[a_record]).expect("A 落盘 57");
+        assert_eq!(
+            watermark(&store, &session_id),
+            56,
+            "前提：水位必须落后于落盘尾"
+        );
+        assert_eq!(
+            durable_tail(&store, &session_id)
+                .expect("读落盘尾")
+                .map(|(sequence, _)| sequence),
+            Some(57),
+            "前提：落盘尾已经越过水位"
+        );
+
+        // B 的重排：水位落后于落盘尾是「可纠正的缓存」，必须允许前推到尾后一段。
+        // 旧实现要求水位恰好等于落盘尾，这里会 0 行失败，B 的事件只能丢。
+        let mut b_records = vec![to_runtime_record(
+            &allocated(&session_id, &host, 58),
+            None,
+            None,
+        )];
+        let claimed = write_failure::realign_sequences(&store, &session_id, &mut b_records)
+            .expect("水位落后于落盘尾时必须允许重排");
+        assert_eq!(claimed, 58, "重排后的水位必须等于本批末号");
+        assert_eq!(b_records[0].sequence, 58, "B 的事件必须落在文件尾之后");
+        assert_eq!(
+            watermark(&store, &session_id),
+            58,
+            "水位必须被前推到落盘末号"
+        );
+
+        // 重排之后落盘必须成功：并发失败方的事件不能被丢掉。
+        write_failure::append_preallocated(&store, &session_id, 1_000, &mut b_records, claimed)
+            .expect("重排后 B 的事件必须落盘");
+
+        let stored = replay_events(&store, &session_id, 0, 100).expect("回放");
+        assert_eq!(
+            stored
+                .iter()
+                .map(|record| record.sequence)
+                .collect::<Vec<_>>(),
+            (1..=58).collect::<Vec<_>>(),
+            "A 与 B 的事件都必须落盘，序号连续且无洞"
+        );
     }
 }
