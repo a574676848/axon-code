@@ -2,6 +2,8 @@
 
 mod event;
 mod history;
+/// Interaction 状态口径。
+pub mod interaction_status;
 pub mod runtime;
 pub mod session_action;
 pub mod session_event;

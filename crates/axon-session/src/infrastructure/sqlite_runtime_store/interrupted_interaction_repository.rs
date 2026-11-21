@@ -6,15 +6,17 @@
 use super::SqliteRuntimeStore;
 use super::decode::decode_error;
 use super::helpers::{i64_value, storage, u64_value};
+use super::work_item_settlement::{
+    LedgerTrace, Settlement, TERMINAL_INTERRUPTED, WorkItemLocator, settle_work_item,
+};
 use crate::domain::runtime::{DaemonHostRecord, SessionEventRecord};
 use crate::ports::{RuntimeStore, RuntimeStoreError};
-use axon_domain::{DaemonSessionId, InteractionId, LedgerEventId};
+use axon_domain::{DaemonSessionId, ExecutionStatus, InteractionId};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 
 const WORK_RUNNING: &str = "running";
-const WORK_FAILED: &str = "failed";
-const TERMINAL_INTERRUPTED: &str = "interrupted";
-const LEDGER_EVENT_TYPE: &str = "interaction.interrupted";
+/// 既有流水账事件名：升级期核对脚本依赖它，不得改名。
+pub(super) const LEDGER_EVENT_TYPE: &str = "interaction.interrupted";
 const SESSION_EVENT_TYPE: &str = "interaction_interrupted";
 pub(super) fn quarantine_interrupted_interactions(
     store: &SqliteRuntimeStore,
@@ -103,51 +105,20 @@ fn settle_interrupted(
     now: i64,
     interaction_id: &InteractionId,
 ) -> Result<bool, RuntimeStoreError> {
-    let changed = transaction
-        .execute(
-            "UPDATE work_items SET status=?1,terminal_kind=?2,lease_token=NULL,\
-             lease_expires_at_ms=NULL,updated_at_ms=?3,committed_at_ms=?3 \
-             WHERE inbox_id=?4 AND status=?5 AND lease_expires_at_ms<=?3",
-            params![
-                WORK_FAILED,
-                TERMINAL_INTERRUPTED,
-                now,
-                interaction_id.as_str(),
-                WORK_RUNNING
-            ],
-        )
-        .map_err(storage)?;
-    if changed == 0 {
-        return Ok(false);
-    }
-    // 隔离即终态：行搬进历史表后，处理链不会再把它当成可领取的入站事实。
-    super::work_item_archive::archive_settled_work_item(
+    // 隔离即终态：四件事（状态、终态类别、归档、流水账）由存储层的唯一出口一次做完。
+    let payload = interrupted_payload(interaction_id);
+    let settlement = Settlement::concluded(ExecutionStatus::Failed, TERMINAL_INTERRUPTED)
+        .with_ledger(LedgerTrace {
+            event_type: LEDGER_EVENT_TYPE,
+            subject_id: interaction_id.as_str(),
+            payload: &payload,
+        });
+    settle_work_item(
         transaction,
-        "inbox_id=?1",
-        interaction_id.as_str(),
+        WorkItemLocator::RunningInbox(interaction_id.as_str()),
+        &settlement,
         now,
     )
-    .map_err(storage)?;
-    let event_id = LedgerEventId::new(format!(
-        "event-{LEDGER_EVENT_TYPE}-{}",
-        interaction_id.as_str()
-    ))
-    .map_err(|error| RuntimeStoreError::InvalidId(error.to_string()))?;
-    transaction
-        .execute(
-            "INSERT INTO ledger_events(event_id,sequence,event_type,idempotency_key,\
-             cause_event_id,payload_json,occurred_at_ms) \
-             VALUES(?1,(SELECT COALESCE(MAX(sequence),0)+1 FROM ledger_events),?2,?3,NULL,?4,?5)",
-            params![
-                event_id.as_str(),
-                LEDGER_EVENT_TYPE,
-                format!("{LEDGER_EVENT_TYPE}:{}", interaction_id.as_str()),
-                interrupted_payload(interaction_id),
-                now
-            ],
-        )
-        .map_err(storage)?;
-    Ok(true)
 }
 
 /// 取该会话的下一个事件序号；会话不存在时返回 None。
@@ -195,7 +166,8 @@ fn update_session_tail(
     Ok(())
 }
 
-fn interrupted_payload(interaction_id: &InteractionId) -> String {
+/// 中断证据载荷：显式收口与被动隔离共用同一份事实形状。
+pub(super) fn interrupted_payload(interaction_id: &InteractionId) -> String {
     serde_json::json!({
         "interactionId": interaction_id.as_str(),
         "reason": "process_interrupted",

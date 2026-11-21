@@ -15,6 +15,8 @@ mod primary_turn_sessions;
 mod primary_turn_worker_pool;
 mod scheduler_service;
 mod session_registry;
+/// 静默轮次的判死与显式收口。
+pub mod silent_turn_settlement;
 
 /// 外部事件来源消息键的前缀：表达「这一轮来自外部事件」的来源出处，不参与会话身份。
 pub(crate) const EXTERNAL_EVENT_SOURCE_PREFIX: &str = "external:";

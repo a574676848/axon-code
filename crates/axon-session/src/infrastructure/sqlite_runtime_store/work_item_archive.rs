@@ -8,8 +8,10 @@ use rusqlite::Connection;
 
 /// 已落定终态：这些状态的行必须搬进历史表。
 ///
-/// `uncertain` 不在其中：它表示外部结果未知、仍待裁决，留在在途表才能继续拦住
-/// Goal 的重新激活。
+/// 只覆盖「先改状态、再无条件尝试归档」的既有调用方。`uncertain` 不在其中，但并不是
+/// 它不算结论：结论行一律由终态唯一出口搬运，那条路径先在同一个事务里写好
+/// `terminal_kind` 再归档，因此不依赖这里的谓词。判定口径见
+/// [`crate::domain::interaction_status`] 里的结论状态集合。
 const SETTLED_STATUSES: &str = "'completed','failed','cancelled','dead_letter'";
 
 /// 把一条已结束的工作项搬进历史表；不存在时什么都不做。

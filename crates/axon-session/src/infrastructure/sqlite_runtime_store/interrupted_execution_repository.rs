@@ -6,15 +6,14 @@
 
 use super::SqliteRuntimeStore;
 use super::helpers::{i64_value, storage, u64_value};
+use super::work_item_settlement::{LedgerTrace, Settlement, WorkItemLocator, settle_work_item};
 use crate::domain::runtime::{DaemonHostRecord, SessionEventRecord};
 use crate::ports::{RuntimeStore, RuntimeStoreError};
-use axon_domain::{DaemonSessionId, LedgerEventId};
+use axon_domain::{DaemonSessionId, ExecutionStatus};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 
-const UNCERTAIN_STATUS: &str = "uncertain";
 const UNCERTAIN_ERROR_KIND: &str = "uncertain";
 const WAITING_GOAL_STATUS: &str = "waiting";
-const RUNNING_STATUS: &str = "running";
 const LEDGER_EVENT_TYPE: &str = "execution.uncertain";
 const SESSION_EVENT_TYPE: &str = "turn_uncertain";
 const INTERRUPTED_SUMMARY: &str = "执行进程中断，外部副作用结果未知，禁止自动重试";
@@ -200,6 +199,9 @@ fn read_candidate_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InterruptedCa
 ///
 /// `goal_id` 为 `None` 表示这条执行没有所属目标（会话动作）：结果账本与目标状态都
 /// 没有可写入的归属，只留状态收敛与 ledger 事件这两处真实事实。
+///
+/// 状态、终态类别、归档与流水账由存储层的唯一出口一次做完：`terminal_kind` 必须与
+/// `status` 同时落定，否则这一轮既不在在途表里可领，又在派生列里读不出结论。
 fn settle_uncertain(
     transaction: &Transaction<'_>,
     now: i64,
@@ -207,15 +209,21 @@ fn settle_uncertain(
     goal_id: Option<&str>,
     payload: &str,
 ) -> Result<bool, RuntimeStoreError> {
-    let changed = transaction
-        .execute(
-            "UPDATE work_items SET status=?1,claimed_by=NULL,claimed_generation=NULL,\
-             lease_json=NULL,lease_expires_at_ms=NULL,retry_at_ms=NULL,updated_at_ms=?2 \
-             WHERE execution_id=?3 AND status=?4",
-            params![UNCERTAIN_STATUS, now, execution_id, RUNNING_STATUS],
-        )
-        .map_err(storage)?;
-    if changed == 0 {
+    let settlement = Settlement::concluded(
+        ExecutionStatus::Uncertain,
+        super::work_item_settlement::TERMINAL_INTERRUPTED,
+    )
+    .with_ledger(LedgerTrace {
+        event_type: LEDGER_EVENT_TYPE,
+        subject_id: execution_id,
+        payload,
+    });
+    if !settle_work_item(
+        transaction,
+        WorkItemLocator::RunningExecution(execution_id),
+        &settlement,
+        now,
+    )? {
         return Ok(false);
     }
     if let Some(goal_id) = goal_id {
@@ -243,22 +251,6 @@ fn settle_uncertain(
             )
             .map_err(storage)?;
     }
-    let event_id = LedgerEventId::new(format!("event-{LEDGER_EVENT_TYPE}-{execution_id}"))
-        .map_err(|error| RuntimeStoreError::InvalidId(error.to_string()))?;
-    transaction
-        .execute(
-            "INSERT INTO ledger_events(event_id,sequence,event_type,idempotency_key,\
-             cause_event_id,payload_json,occurred_at_ms) \
-             VALUES(?1,(SELECT COALESCE(MAX(sequence),0)+1 FROM ledger_events),?2,?3,NULL,?4,?5)",
-            params![
-                event_id.as_str(),
-                LEDGER_EVENT_TYPE,
-                format!("{LEDGER_EVENT_TYPE}:{execution_id}"),
-                payload,
-                now
-            ],
-        )
-        .map_err(storage)?;
     Ok(true)
 }
 
