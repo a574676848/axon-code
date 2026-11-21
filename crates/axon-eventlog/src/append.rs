@@ -10,6 +10,7 @@ use crate::error::EventLogError;
 use crate::format::{Header, encode_frame, scan_frames, tail_ends_on_frame_boundary};
 use crate::index::{self, FrameIndexEntry, record_interaction_tag};
 use crate::lock::ExclusiveLock;
+use crate::read::read_tail_record;
 use crate::record::RuntimeEventRecord;
 
 /// 索引维护走同目录的 `append_index.rs`：打开既有日志时靠它免掉全量解压。
@@ -258,14 +259,24 @@ fn batch_interaction_tag(events: &[RuntimeEventRecord]) -> u32 {
     tag.unwrap_or(0)
 }
 impl EventLogWriter {
-    /// 由调用方给定下一个序号打开写句柄，不按既有文件推断序号。
+    /// 由调用方给定下一个序号打开写句柄，并与文件尾对齐后才允许写入。
     ///
     /// 用于"控制面是序号权威"的场景：控制面已经保存 `last_event_sequence`，
-    /// 这里直接按它续写。序号是否连续由 [`Self::append_batch`] 校验；文件缺失时
-    /// 首次写入会自动补写 header 帧。
+    /// 这里按它续写。文件缺失时首次写入会自动补写 header 帧。
     ///
-    /// 打开时同样先修复撕裂尾：不修就会把新帧写在撕裂字节之后，读侧扫到 torn
-    /// 立即停止，之后写入的历史永久静默不可见。
+    /// 打开时做两件事：
+    /// - 先修复撕裂尾：不修就会把新帧写在撕裂字节之后，读侧扫到 torn 立即停止，
+    ///   之后写入的历史永久静默不可见；
+    /// - 再在**持锁之后**核对文件尾：调用方声明的序号必须正好接在已落盘的最后一条
+    ///   之后，否则返回 [`EventLogError::SequenceTailMismatch`] 且不写任何字节。
+    ///
+    /// 第二步不能省：锁只保证字节串行，不保证「序号与落点」对应。同一会话的两个写者
+    /// 各自从控制面领号后，谁先拿到文件锁谁先落盘，后落盘的持有更大的号却落在更大的
+    /// 偏移上，读者看到的序号就会逆序（现场 6231 条里有 28 处）。
+    ///
+    /// 空日志（没有任何记录，含「只有 header 帧」）没有尾号可比对，只能校验「声明的
+    /// 是日志开头」：0 是事件日志层的原点（[`EventLogWriter::open`] 从 0 起写），1 是
+    /// 控制面首次分配到的号（`last_event_sequence=0` 加一），两种起点都合规。
     pub fn open_at(
         log: &EventLog,
         expected_next: u64,
@@ -281,6 +292,17 @@ impl EventLogWriter {
         } else {
             (0, false)
         };
+        let durable_tail = durable_tail_sequence(&path)?;
+        let accepted = match durable_tail {
+            Some(tail) => expected_next == tail.saturating_add(1),
+            None => expected_next <= 1,
+        };
+        if !accepted {
+            return Err(EventLogError::SequenceTailMismatch {
+                expected: expected_next,
+                actual: durable_tail.unwrap_or(0),
+            });
+        }
         Ok(Self {
             path,
             file: None,
@@ -294,6 +316,15 @@ impl EventLogWriter {
             bytes_len,
         })
     }
+}
+
+/// 文件尾序号：已落盘的最后一条记录序号；`None` 表示日志还没有任何记录。
+///
+/// header 帧不是记录，只有 header 的日志按空日志处理。解码复用读侧的
+/// [`read_tail_record`]，不另写一套格式解析：有索引时只解压末帧，没有索引时扫一遍
+/// 帧结构。
+fn durable_tail_sequence(path: &Path) -> Result<Option<u64>, EventLogError> {
+    Ok(read_tail_record(path)?.map(|record| record.sequence))
 }
 
 /// 打开写句柄前修复撕裂尾，返回可以安全追加的字节长度。
@@ -334,6 +365,10 @@ fn read_range(path: &Path, start: u64, end: u64) -> Result<Vec<u8>, EventLogErro
 ///
 /// 适合"每次写入都从控制面取序号"的调用方；不保留跨批次的写句柄，
 /// 因此多进程共享同一会话日志时不会互相阻塞。
+///
+/// `next_sequence` 必须正好接在文件尾之后（空日志允许事件日志层原点 0 或控制面首次
+/// 分配的 1）。与文件尾不一致时返回 [`EventLogError::SequenceTailMismatch`] 且不写任何
+/// 字节：调用方据此回滚控制面水位、按文件尾重算后重试，而不是把序号逆序的帧静默落盘。
 pub fn append_once(
     log: &EventLog,
     next_sequence: u64,
