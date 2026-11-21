@@ -325,3 +325,77 @@ fn append_thread_event(root: &Path, _thread_id: &str, value: Value) {
     axon_session::ThreadEventStore::append(&axon_session::JsonlThreadEventStore, root, &record)
         .expect("thread 事件应可写入");
 }
+
+/// 回归：索引里仍挂着、分片却被外部删掉的 thread 不得把整桶用量统计打死。
+///
+/// 现场表现是 usage 定时任务每个周期都失败在「读取 thread 失败：未找到 thread」，
+/// 看板从此停在旧水位。聚合按轮次累加，少一条幽灵记录只是少一份历史用量。
+#[test]
+fn usage_rollup_skips_threads_whose_shard_is_gone() {
+    let root = test_root("usage-ghost-thread");
+    let config_path = root.join("config.toml");
+    fs::create_dir_all(&root).expect("测试根目录应可创建");
+    seed_usage_turn(
+        &root,
+        &TestUsageTurn {
+            session_id: "session-live",
+            sequence: 0,
+            assistant_part_id: "assistant-live",
+            parent_session_id: None,
+            provider: "provider-a",
+            model: "model-a",
+            input_tokens: 10,
+            output_tokens: 20,
+        },
+        true,
+    );
+    seed_usage_turn(
+        &root,
+        &TestUsageTurn {
+            session_id: "session-ghost",
+            sequence: 0,
+            assistant_part_id: "assistant-ghost",
+            parent_session_id: None,
+            provider: "provider-a",
+            model: "model-a",
+            input_tokens: 30,
+            output_tokens: 40,
+        },
+        true,
+    );
+    // 只删分片、保留索引条目：这就是「幽灵 thread」的真实形态。
+    remove_shard_files(&root, "session-ghost");
+
+    let report = crate::usage_statistics::run_usage_rollup_once(&config_path)
+        .expect("幽灵 thread 不得阻断 usage projection");
+    assert_eq!(
+        report.projected_records, 1,
+        "只投影仍有分片的那一条，幽灵记录被跳过"
+    );
+}
+
+/// 删除某个 thread 的分片文件；分片名是 thread 标识的十六进制编码，索引分片名不含它。
+fn remove_shard_files(root: &Path, thread_id: &str) {
+    let needle: String = thread_id
+        .bytes()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    fn walk(directory: &Path, needle: &str) {
+        let Ok(entries) = fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, needle);
+            } else if path
+                .file_name()
+                .map(|name| name.to_string_lossy().contains(needle))
+                .unwrap_or(false)
+            {
+                fs::remove_file(&path).expect("测试现场应可删除分片");
+            }
+        }
+    }
+    walk(root, &needle);
+}

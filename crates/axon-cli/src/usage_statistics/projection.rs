@@ -156,14 +156,29 @@ fn read_changed_threads(
         let tail = store
             .read_thread_tail(axon_root, thread_id, CHANGED_THREAD_TAIL_BUDGET_BYTES)
             .map_err(|error| format!("读取 thread 尾部失败：{error}"))?;
+        /*
+         * 索引里还挂着、分片却已经不在了：跳过这一条并留痕。
+         *
+         * 一条被外部删掉分片的 thread 不能把整桶用量统计永久打死：聚合是按轮次累加的，
+         * 少一条幽灵记录只是少一份历史用量，而 hard fail 会让看板从此停在旧水位不动。
+         * 头部与尾部都读不到任何记录，就说明这个 thread 已经没有任何可投影的事实。
+         */
+        if head.is_empty() && tail.records.is_empty() {
+            axon_logger::warning(&format!(
+                "[usage-rollup] 跳过索引中已无分片的 thread：{thread_id}"
+            ));
+            continue;
+        }
         let tail_start_ms = tail.records.first().map(|record| record.recorded_at_ms);
         let safe = tail.complete || tail_start_ms.is_some_and(|earliest| watermark_ms >= earliest);
         if !safe {
-            details.push(
-                ThreadService::new(JsonlThreadEventStore)
-                    .read_thread(axon_root, thread_id)
-                    .map_err(|error| format!("读取 thread 失败：{error}"))?,
-            );
+            match ThreadService::new(JsonlThreadEventStore).read_thread(axon_root, thread_id) {
+                Ok(detail) => details.push(detail),
+                // 同一类幽灵记录：预算外要整条重读时才发现分片不完整，同样跳过而不是整体失败。
+                Err(error) => axon_logger::warning(&format!(
+                    "[usage-rollup] 跳过不可读 thread {thread_id}（{error}），本次不投影该条"
+                )),
+            }
             continue;
         }
         let mut records = head;

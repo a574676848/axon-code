@@ -112,7 +112,7 @@ axon upgrade [--manifest-url <url>] [--download] [--apply] [--rollback] [--outpu
 - `axon run --session <id>` 只追加到**已存在**的会话：ID 不存在时直接报错并提示先 `axon sessions list`，不会隐式新建空会话。
 - `axon sessions resume <id>` 只设置 `--continue` 的默认目标，不改变会话内容，输出 `已恢复 Thread: <thread-id>` 与 `- session: <id>`。随后 `axon run --continue` 接续该 Thread 并带入历史；指针为空时接续最近一段有内容的主会话（没有归属 Thread 的零轮会话会被跳过）。未给 `--session` 与 `--continue` 的 `axon run` 新建一条主会话，不受该默认目标影响。带 `--session` 的 run 结束后该默认目标保持运行前的值。
 - `axon sessions reset <id>` 保留会话与历史，只轮换运行窗口，输出新的 `current_run_id`；之后的轮次在同一会话上从新窗口起算。
-- `axon debug session prune --orphans` 清理归属会话已经消失的非主会话（子代理、Cron、目标执行）：按 `root_session_id` 判定归属，归属仍在或仍在运行的一律跳过并在回执里给出原因；不写 `--orphans` 时命令拒绝执行。单个会话删除仍用 `axon sessions delete <id>`。
+- `axon debug session prune --orphans` 清理归属已经消失的非主会话：子代理与目标会话按 `root_session_id` 判定，Cron 会话按「是否仍有 Cron 任务引用它」判定；归属仍在、仍有任务引用或仍在运行的一律跳过并在回执里给出原因。不写 `--orphans` 时命令拒绝执行。单个会话删除仍用 `axon sessions delete <id>`。
 - 接续既有会话（`--continue`、`--session` 或同一会话的后续 turn）且未传 `--model` 时，本轮沿用该会话记录的模型；只有该模型在配置内已不存在（`[[models]]` 条目被移除或所属 Provider 停用）才回退 `agent.default_model`。TUI `/model` 的显式选择随该轮下传，优先于会话模型。
 - `axon debug channel-metrics` 查询已持久化的渠道性能、缓存与连接指标。`--since-hours` 默认读取最近 24 小时，设置为 `0` 取消时间过滤；可用 `--model`、`--provider` 过滤，`--limit` 控制最多输出的渠道数。只有启用 `channel_balancer.telemetry_persistence_enabled` 后，运行遥测才会写入 `~/.axon/data/channel-metrics`。
 - 修改配置、删除会话、执行 Cron、生成图片、升级或写入 Memory 前，先确认目标和副作用，并在完成后读取回执或 status。

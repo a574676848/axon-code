@@ -13,6 +13,8 @@ use crate::OutputFormat;
 /// 一次清理用例的隔离现场。
 struct Fixture {
     _directory: axon_test_support::TestTempDir,
+    /// 运行根；Cron 库落在它下面的 `cron` 子目录。
+    root: PathBuf,
     /// 配置路径：运行根取其所在目录，数据落在其 `data` 子目录。
     config_path: PathBuf,
     store: SqliteRuntimeStore,
@@ -20,12 +22,14 @@ struct Fixture {
 
 fn fixture() -> Fixture {
     let directory = axon_test_support::test_temp_dir();
+    let root = directory.path().to_path_buf();
     let config_path = directory.path().join("config.toml");
     let data_root = directory.path().join("data");
     let store = SqliteRuntimeStore::from_root(&data_root);
     store.initialize().expect("初始化运行态库");
     Fixture {
         _directory: directory,
+        root,
         config_path,
         store,
     }
@@ -146,5 +150,55 @@ fn prune_refuses_to_run_without_the_orphans_switch() {
         result.stderr.contains("--orphans"),
         "拒绝原因要指名缺的参数：{}",
         result.stderr
+    );
+}
+
+#[test]
+fn cron_session_without_a_live_job_is_removed() {
+    // 自动化会话自身就是根：任务被移除之后，它没有任何入口能收走。
+    let fixture = fixture();
+    seed_session(&fixture.store, "session-cron", "cron", None);
+
+    let report = prune(&fixture);
+
+    assert_eq!(report["deleted"][0]["sessionId"], "session-cron");
+    assert_eq!(report["deleted"][0]["kind"], "cron");
+    let cron = DaemonSessionId::new("session-cron".to_owned()).expect("合法会话 ID");
+    assert!(
+        fixture.store.get_session(&cron).is_err(),
+        "没有任务引用的自动化会话必须被收掉"
+    );
+}
+
+#[test]
+fn cron_session_referenced_by_a_job_is_left_alone() {
+    let fixture = fixture();
+    seed_session(&fixture.store, "session-cron-live", "cron", None);
+    // 建库并写入一条仍引用该会话的任务行：引用的判定只读 cron_jobs.session_id。
+    crate::cron_commands::repository::CronRepository::open(&fixture.root).expect("初始化 Cron 库");
+    let connection = rusqlite::Connection::open(fixture.root.join("cron").join("cron.sqlite3"))
+        .expect("打开 Cron 库");
+    connection
+        .execute(
+            "INSERT INTO cron_jobs(job_id,payload_json,status,next_run_at_ms,revision,updated_at_ms,session_id)
+             VALUES(?1,?2,'active',NULL,1,1,?3)",
+            params!["job-live", "{}", "session-cron-live"],
+        )
+        .expect("写入任务引用");
+
+    let report = prune(&fixture);
+
+    assert_eq!(report["deleted"].as_array().map(Vec::len), Some(0));
+    assert!(
+        report["skipped"][0]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("Cron 任务引用")),
+        "跳过原因要指出现役任务：{}",
+        report["skipped"][0]["reason"]
+    );
+    let cron = DaemonSessionId::new("session-cron-live".to_owned()).expect("合法会话 ID");
+    assert!(
+        fixture.store.get_session(&cron).is_ok(),
+        "被任务引用的会话不得删除"
     );
 }

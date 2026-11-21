@@ -54,6 +54,29 @@ impl CronRepository {
         &self.path
     }
 
+    /// 仍被 Cron 任务引用的会话标识；已移除的任务不算。
+    ///
+    /// 任务移除之后，它留下的运行会话就再也没有入口能收走：会话树只认父会话、
+    /// 保留策略只按时间水位扫，因此孤儿判定需要这份引用集合。
+    pub(crate) fn referenced_session_ids(
+        &self,
+    ) -> Result<std::collections::HashSet<String>, String> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT session_id FROM cron_jobs
+                  WHERE session_id IS NOT NULL AND status <> ?1",
+            )
+            .map_err(db_error("读取 Cron 任务引用"))?;
+        let rows = statement
+            .query_map(params![CronJobStatus::Removed.as_str()], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(db_error("读取 Cron 任务引用"))?;
+        rows.collect::<rusqlite::Result<std::collections::HashSet<_>>>()
+            .map_err(db_error("读取 Cron 任务引用"))
+    }
+
     pub(crate) fn save_job(&self, job: &CronJob) -> Result<(), String> {
         let connection = self.connection()?;
         let payload = encode(job, "cron job")?;

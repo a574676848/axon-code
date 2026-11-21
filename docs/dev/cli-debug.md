@@ -22,7 +22,7 @@ axon debug session doctor [--repair]
 
 `list` 读运行态会话清单，字段与 `axon sessions list` 同源，`--archived` 表示包含归档会话。
 
-`prune --orphans` 只清理归属会话已经消失的非主会话（子代理、Cron、目标执行）：它按 `root_session_id` 判定归属，归属仍在或仍在运行的一律跳过并在回执里给出原因；不写 `--orphans` 时命令拒绝执行。日常删除单个会话仍走 `axon sessions delete`。
+`prune --orphans` 只清理归属已经消失的非主会话（子代理、Cron、目标执行）：子代理与目标按 `root_session_id` 判定归属，Cron 会话按「是否仍有任务引用它」判定；归属仍在、仍有任务引用或仍在运行的一律跳过并在回执里给出原因；不写 `--orphans` 时命令拒绝执行。日常删除单个会话仍走 `axon sessions delete`。
 
 ## 2. 输出格式
 

@@ -108,6 +108,13 @@ pub(super) fn run_session_prune(
         Ok(store) => store,
         Err(error) => return cli_error(error),
     };
+    // Cron 任务引用集合：判断自动化会话还有没有主。已移除的任务不再计入。
+    let cron_sessions = match crate::cron_commands::repository::CronRepository::open(&root)
+        .and_then(|repository| repository.referenced_session_ids())
+    {
+        Ok(sessions) => sessions,
+        Err(error) => return cli_error(error),
+    };
     let candidates = match scan_non_primary_sessions(&store) {
         Ok(candidates) => candidates,
         Err(error) => return cli_error(error),
@@ -117,22 +124,39 @@ pub(super) fn run_session_prune(
     let mut warnings = Vec::new();
     let mut orphaned = 0_usize;
     for candidate in &candidates {
-        let Some(parent) = candidate.root_session_id.as_deref() else {
-            skipped.push(skip(candidate, "自身就是根会话，没有归属会话可判"));
-            continue;
+        let orphan = match candidate.root_session_id.as_deref() {
+            Some(parent) => {
+                let parent_exists = match session_exists(&store, parent) {
+                    Ok(exists) => exists,
+                    Err(error) => return cli_error(error),
+                };
+                if parent_exists {
+                    skipped.push(skip(
+                        candidate,
+                        &format!("归属会话 {parent} 仍然存在，交给会话树与保留策略"),
+                    ));
+                    continue;
+                }
+                true
+            }
+            // 自动化会话自身就是根：判据换成「还有没有 Cron 任务在驱动它」。
+            // 任务被移除之后，它留下的运行会话没有任何入口能收走。
+            None if candidate.kind == "cron" => {
+                if cron_sessions.contains(&candidate.session_id) {
+                    skipped.push(skip(
+                        candidate,
+                        "仍有 Cron 任务引用这条会话，交给任务生命周期维护",
+                    ));
+                    continue;
+                }
+                true
+            }
+            None => {
+                skipped.push(skip(candidate, "自身就是根会话，没有归属会话可判"));
+                continue;
+            }
         };
-        let parent_exists = match session_exists(&store, parent) {
-            Ok(exists) => exists,
-            Err(error) => return cli_error(error),
-        };
-        if parent_exists {
-            skipped.push(skip(
-                candidate,
-                &format!("归属会话 {parent} 仍然存在，交给会话树与保留策略"),
-            ));
-            continue;
-        }
-        if SESSION_ACTIVE_STATUSES.contains(&candidate.status.as_str()) {
+        if !orphan || SESSION_ACTIVE_STATUSES.contains(&candidate.status.as_str()) {
             skipped.push(skip(
                 candidate,
                 &format!(
