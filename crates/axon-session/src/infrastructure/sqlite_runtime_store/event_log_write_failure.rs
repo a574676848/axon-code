@@ -151,9 +151,19 @@ fn rollback_watermark(
 
 /// 按文件尾重新分配序号并推进控制面水位；返回本次写入推进到的水位值。
 ///
-/// 抢号同样走 CAS：只有水位正好停在文件尾时才认领「文件尾之后的那一段」，避免覆盖更晚
-/// 写者已经领走的号。抢不到说明水位已被别人推进，本次追加失败但水位未被破坏。
-fn realign_sequences(
+/// 抢号用「水位不超前于落盘尾」（`last_event_sequence <= durable`）做 CAS，三种水位关系
+/// 各有语义：
+/// - **落后**于落盘尾（`<`）：缓存已被别的写者补偿过，但文件尾才是位置权威。此时必须允许
+///   把水位前推到 `durable + count`，否则并发失败方的事件只能丢。典型时序：A 领 57、B 领 58，
+///   B 先抢到锁而失败并把水位退到 56，A 随后以尾 56 落盘 57，此时水位 56 落后于尾 57，
+///   B 的 58 只有前推水位才写得进去。
+/// - **等于**落盘尾：正常情形，直接认领。
+/// - **超前**于落盘尾（`>`）：更晚的写者已经领走文件尾之后的一段、尚未落盘。这一段号已被
+///   占用，抢过来会与它将来的落盘冲突，必须拒绝；本次追加失败但水位未被破坏。
+///
+/// 放行「落后」不会抢到别人的号：任何一次领号都会把水位推进到该批的末号，因此
+/// 「水位不超前于落盘尾」本身就证明文件尾之后没有活跃领号。
+pub(super) fn realign_sequences(
     store: &SqliteRuntimeStore,
     session_id: &DaemonSessionId,
     records: &mut [axon_eventlog::RuntimeEventRecord],
@@ -166,7 +176,7 @@ fn realign_sequences(
     let connection = store.connection()?;
     let claimed = connection
         .execute(
-            "UPDATE sessions SET last_event_sequence=?1 WHERE session_id=?2 AND last_event_sequence=?3",
+            "UPDATE sessions SET last_event_sequence=?1 WHERE session_id=?2 AND last_event_sequence<=?3",
             params![
                 i64_value(written)?,
                 session_id.as_str(),
@@ -176,7 +186,7 @@ fn realign_sequences(
         .map_err(storage)?;
     if claimed == 0 {
         return Err(RuntimeStoreError::Storage(format!(
-            "事件日志重排失败，水位已被其他写者推进: session={} durable={durable}",
+            "事件日志重排失败，水位已被更晚的写者推进: session={} durable={durable}",
             session_id.as_str()
         )));
     }

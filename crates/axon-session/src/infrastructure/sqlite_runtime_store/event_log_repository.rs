@@ -618,4 +618,69 @@ mod tests {
         write_failure::compensate_watermark(&store, &session_id, 9);
         assert_eq!(watermark(&store, &session_id), 1, "回退目标是落盘尾");
     }
+
+    #[test]
+    fn compensation_then_realign_recovers_a_writer_left_behind() {
+        let (store, session_id, host) = fixture();
+        let log = store.event_log(&session_id);
+        // 先把日志尾做成 56。
+        let prefix = (1..=56u64)
+            .map(|sequence| to_runtime_record(&allocated(&session_id, &host, sequence), None, None))
+            .collect::<Vec<_>>();
+        axon_eventlog::append_once(&log, 1, 1_000, &prefix).expect("前置 1..=56");
+
+        // A 领到 57、B 领到 58，都还没落盘。
+        advance_watermark(&store, &session_id, 57);
+        advance_watermark(&store, &session_id, 58);
+        // B 先拿到文件锁：expected 58 对不上尾 56，补偿把水位写回 56（A 的 57 一起被抹掉）。
+        write_failure::compensate_watermark(&store, &session_id, 58);
+        assert_eq!(watermark(&store, &session_id), 56);
+
+        // A 随后以尾 56+1 落盘 57：此刻水位 56 落后于落盘尾 57。
+        let a_record = to_runtime_record(&allocated(&session_id, &host, 57), None, None);
+        axon_eventlog::append_once(&log, 57, 1_000, &[a_record]).expect("A 落盘 57");
+        assert_eq!(
+            watermark(&store, &session_id),
+            56,
+            "前提：水位必须落后于落盘尾"
+        );
+        assert_eq!(
+            durable_tail(&store, &session_id)
+                .expect("读落盘尾")
+                .map(|(sequence, _)| sequence),
+            Some(57),
+            "前提：落盘尾已经越过水位"
+        );
+
+        // B 的重排：水位落后于落盘尾是「可纠正的缓存」，必须允许前推到尾后一段。
+        // 旧实现要求水位恰好等于落盘尾，这里会 0 行失败，B 的事件只能丢。
+        let mut b_records = vec![to_runtime_record(
+            &allocated(&session_id, &host, 58),
+            None,
+            None,
+        )];
+        let claimed = write_failure::realign_sequences(&store, &session_id, &mut b_records)
+            .expect("水位落后于落盘尾时必须允许重排");
+        assert_eq!(claimed, 58, "重排后的水位必须等于本批末号");
+        assert_eq!(b_records[0].sequence, 58, "B 的事件必须落在文件尾之后");
+        assert_eq!(
+            watermark(&store, &session_id),
+            58,
+            "水位必须被前推到落盘末号"
+        );
+
+        // 重排之后落盘必须成功：并发失败方的事件不能被丢掉。
+        write_failure::append_preallocated(&store, &session_id, 1_000, &mut b_records, claimed)
+            .expect("重排后 B 的事件必须落盘");
+
+        let stored = replay_events(&store, &session_id, 0, 100).expect("回放");
+        assert_eq!(
+            stored
+                .iter()
+                .map(|record| record.sequence)
+                .collect::<Vec<_>>(),
+            (1..=58).collect::<Vec<_>>(),
+            "A 与 B 的事件都必须落盘，序号连续且无洞"
+        );
+    }
 }
