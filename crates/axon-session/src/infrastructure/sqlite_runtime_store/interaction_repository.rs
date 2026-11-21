@@ -492,6 +492,26 @@ fn settle_work_item(
     Err(inbox_state_error(&connection, interaction_id)?)
 }
 
+/// 收口一条**从未派发**的工作项：收敛为中断终态并腾空在途表。
+///
+/// 恢复收敛面对的是排队行：它既没有租约，也没有执行者，因此守卫只能是「仍停在排队态」。
+/// 与 [`settle_work_item`] 共用同一段终态写库 SQL，差别只在守卫，不会碰到任何已被领取
+/// 或已在运行的行。返回是否真的收到了一条。
+pub(super) fn settle_undispatched_work_item(
+    connection: &rusqlite::Connection,
+    execution_id: &str,
+    now_ms: i64,
+) -> Result<bool, InteractionStoreError> {
+    let settlement = Settlement::concluded(ExecutionStatus::Failed, TERMINAL_INTERRUPTED);
+    super::work_item_settlement::settle_work_item(
+        connection,
+        WorkItemLocator::QueuedExecution(execution_id),
+        &settlement,
+        now_ms,
+    )
+    .map_err(|error| InteractionStoreError::Storage(error.to_string()))
+}
+
 /// 结算失败时的错误归因：入站事实存在即为租约失效，否则是真不存在。
 fn inbox_state_error(
     connection: &rusqlite::Connection,

@@ -94,6 +94,11 @@ pub(super) enum WorkItemLocator<'a> {
     RunningExecution(&'a str),
     /// 尚未形成结论的执行账本行（排队、等待或运行中）：按执行标识。
     InFlightExecution(&'a str),
+    /// 从未派发的排队行：恢复收敛专用。
+    ///
+    /// 守卫只有「仍停在排队态」：这类行既没有租约也没有执行者，而 `running` 行一定有人
+    /// 持有租约，收口它等于从活着的执行者手里抢走终态。
+    QueuedExecution(&'a str),
     /// 仍在跑的入站轮次行：按入站事实，不校验租约，供判死后收口。
     RunningInbox(&'a str),
     /// 仍在跑的入站轮次行并校验当前 fencing token：正常处理路径用它。
@@ -109,7 +114,9 @@ impl<'a> WorkItemLocator<'a> {
     /// 定位子句：定位键固定为 `?4`，校验令牌时追加 `?5`。
     fn predicate(self) -> &'static str {
         match self {
-            Self::RunningExecution(_) | Self::InFlightExecution(_) => "execution_id=?4",
+            Self::RunningExecution(_) | Self::InFlightExecution(_) | Self::QueuedExecution(_) => {
+                "execution_id=?4"
+            }
             Self::RunningInbox(_) => "inbox_id=?4",
             Self::InboxLease { .. } => "inbox_id=?4 AND lease_token=?5",
         }
@@ -122,6 +129,9 @@ impl<'a> WorkItemLocator<'a> {
                 "status IN ({})",
                 status_list(&interaction_status::IN_FLIGHT_EXECUTION_STATUSES)
             ),
+            Self::QueuedExecution(_) => {
+                format!("status IN ({})", status_list(&[ExecutionStatus::Queued]))
+            }
             Self::RunningExecution(_) | Self::RunningInbox(_) | Self::InboxLease { .. } => {
                 format!("status IN ({})", status_list(&[ExecutionStatus::Running]))
             }
@@ -131,7 +141,9 @@ impl<'a> WorkItemLocator<'a> {
     /// 定位键：归档只按它搬运，不重复判断状态。
     fn work_key(self) -> &'a str {
         match self {
-            Self::RunningExecution(key) | Self::InFlightExecution(key) => key,
+            Self::RunningExecution(key)
+            | Self::InFlightExecution(key)
+            | Self::QueuedExecution(key) => key,
             Self::RunningInbox(key) => key,
             Self::InboxLease { inbox_id, .. } => inbox_id,
         }
@@ -141,14 +153,17 @@ impl<'a> WorkItemLocator<'a> {
     fn lease_token(self) -> Option<&'a str> {
         match self {
             Self::InboxLease { lease_token, .. } => Some(lease_token),
-            Self::RunningExecution(_) | Self::InFlightExecution(_) | Self::RunningInbox(_) => None,
+            Self::RunningExecution(_)
+            | Self::InFlightExecution(_)
+            | Self::QueuedExecution(_)
+            | Self::RunningInbox(_) => None,
         }
     }
 
     /// 把行搬进历史表：在途表只留排队与运行中的行。
     fn archive(self, connection: &Connection, now: i64) -> rusqlite::Result<()> {
         match self {
-            Self::RunningExecution(_) | Self::InFlightExecution(_) => {
+            Self::RunningExecution(_) | Self::InFlightExecution(_) | Self::QueuedExecution(_) => {
                 work_item_archive::archive_work_item(connection, self.work_key(), now)
             }
             Self::RunningInbox(_) | Self::InboxLease { .. } => {

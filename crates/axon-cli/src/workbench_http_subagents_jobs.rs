@@ -8,7 +8,10 @@ use std::{
 
 use axon_agent_runtime::job_runtime::{JOB_REASON_USER_STOP, JobId, JobRuntime, JobStatus};
 use axon_domain::DaemonSessionId;
-use axon_session::{RuntimeStore, RuntimeStoreError};
+use axon_session::{
+    InteractionQueryStore, RosterLastTurnStatus, RosterTurnStatus, RuntimeStore, RuntimeStoreError,
+    SessionRuntimeRecord, SqliteRuntimeStore,
+};
 
 use super::runtime_store;
 use super::workbench_http_targets::session_owns_owner;
@@ -24,12 +27,43 @@ fn slug_of_agent_path(agent_path: &str) -> String {
 /// 一次车道子代理列举的上限。
 const MAX_SESSION_SUBAGENTS: usize = 200;
 
+/// 名册派生状态时回看的轮次头数量。
+///
+/// 名册只需要回答「最新一轮还在不在跑」，而 `interaction_turn_heads` 已按接收时间倒序，
+/// 取一条就够：每个子会话一次点查，不会随历史长度放大。
+const ROSTER_TURN_WINDOW: u32 = 1;
+
 /// 运行侧终态到名册状态的归一。
 ///
 /// 运行侧把失败写成 `errored`，而名册对外只给界面认得的取值（`failed` 才是失败）。
 /// 其余取值原样透传，未知与缺失都读作未知，不在这里猜成已完成。
+///
+/// 它现在只服务 `threadTurnStatus` 这一列对账旁证：名册状态本身由运行态轮次头派生，
+/// 这条从 JSONL 索引读到的末轮状态**不再**参与 `active`/`idle` 的判断。
 fn normalize_last_turn_status(status: Option<&str>) -> Option<&str> {
     status.map(|value| if value == "errored" { "failed" } else { value })
+}
+
+/// 子会话的运行态：由它自己的轮次头派生。
+///
+/// 事实源是运行态库里的 `interaction_turn_heads`，不是 JSONL 索引缓存的末轮状态：
+/// 索引里的 `active` 在子会话收口后仍然停留，据此判「一直在跑」永远退不出来。
+/// 读不到运行态（没有会话行、或轮次头解码失败）时按「没有在途轮次」处理：名册只用来
+/// 回答「还占不占着车道」，读不到就不阻止界面纠正，绝不因为索引写着 `active` 就保持
+/// 运行中。
+fn roster_turn_status(
+    store: &SqliteRuntimeStore,
+    runtime: Option<&SessionRuntimeRecord>,
+) -> RosterTurnStatus {
+    let Some(record) = runtime else {
+        return RosterTurnStatus::default();
+    };
+    store
+        .interaction_turn_heads(record.session_id.as_str(), ROSTER_TURN_WINDOW)
+        .map_or_else(
+            |_| RosterTurnStatus::default(),
+            |heads| RosterTurnStatus::from_turn_heads(&heads),
+        )
 }
 
 /// 车道的运行会话 ID；子代理会话挂在它下面。
@@ -111,14 +145,10 @@ pub(super) fn session_subagents_payload(
             .unwrap_or_default();
         let has_runtime = runtime.is_some();
         // 状态列存的是会话自己的终态：在跑、完成、中断、失败。界面用它回答
-        // 「这条子代理还在跑吗」，末轮状态直接取它，没有状态列的旧行读作未知。
-        // 运行侧把失败写成 errored，对外统一成 failed：名册只给界面认得的取值。
-        let last_turn_status = normalize_last_turn_status(row.status.as_deref());
-        let status = if last_turn_status == Some("active") {
-            "active"
-        } else {
-            "idle"
-        };
+        // 「这条子代理还在跑吗」，但它来自 JSONL 索引缓存，只作对账旁证：
+        // 名册的在跑判定改由运行态轮次头派生，收口后的会话不会再被索引拖着显示在跑。
+        let thread_turn_status = normalize_last_turn_status(row.status.as_deref());
+        let turn_status = roster_turn_status(&store, runtime);
         // 匹配键只给可直接使用的那两个：gentPath 是路径本身，gentId 是它带前缀的
         // 稳定标识；没有运行态会话行时 sessionId 如实为 null 并给出原因，调用方不必猜。
         let agent_path = runtime
@@ -146,8 +176,11 @@ pub(super) fn session_subagents_payload(
             "provider": row.provider,
             "updatedAtMs": row.updated_at_ms,
             "hasRuntime": has_runtime,
-            "status": status,
-            "lastTurnStatus": last_turn_status,
+            "status": turn_status.status.as_str(),
+            "lastTurnStatus": turn_status
+                .last_turn_status
+                .map(RosterLastTurnStatus::as_str),
+            "threadTurnStatus": thread_turn_status,
             "lastTurnAtMs": row.last_turn_at_ms,
         }));
     }
@@ -451,3 +484,187 @@ pub(super) fn session_job_output_payload(
 #[cfg(test)]
 #[path = "workbench_http_subagents_jobs_tests.rs"]
 mod workbench_http_subagents_jobs_tests;
+
+#[cfg(test)]
+mod roster_turn_heads_tests {
+    //! 名册状态必须来自运行态轮次头，而不是 JSONL 索引缓存的末轮状态。
+
+    use axon_domain::{InteractionId, InteractionRecord};
+    use axon_session::{
+        InteractionStore as _, JsonlThreadEventStore, NewSessionRequest, SessionKind,
+        SessionTrustScope, StartEmptyThreadCommand, StartTurnCommand, ThreadService,
+        ThreadSettings, ThreadSource, Turn, TurnStatus, new_interaction_id, new_session_id,
+    };
+
+    use super::*;
+
+    /// 建一条 thread 并留一轮 Active：这就是现场「永远停在 Active」的 JSONL 形状。
+    fn active_thread(root: &Path, thread_id: &str, parent_thread_id: Option<&str>) {
+        let service = ThreadService::new(JsonlThreadEventStore);
+        service
+            .start_empty_thread(
+                root,
+                StartEmptyThreadCommand {
+                    thread_id: thread_id.to_owned(),
+                    session_root_id: parent_thread_id.unwrap_or(thread_id).to_owned(),
+                    parent_thread_id: parent_thread_id.map(ToOwned::to_owned),
+                    forked_from_thread_id: None,
+                    source: ThreadSource::CliRun,
+                    ephemeral: false,
+                    settings: ThreadSettings {
+                        cwd: ".".to_owned(),
+                        provider: "fixture".to_owned(),
+                        model: "fixture-chat".to_owned(),
+                        selected_skill_name: None,
+                    },
+                    created_at_ms: 10,
+                },
+            )
+            .expect("建 thread");
+        service
+            .start_turn(
+                root,
+                StartTurnCommand {
+                    thread_id: thread_id.to_owned(),
+                    recorded_at_ms: 10,
+                    turn: Turn {
+                        turn_id: format!("{thread_id}-turn-1"),
+                        sequence: 0,
+                        status: TurnStatus::Active,
+                        history_items: Vec::new(),
+                        token_usage_json: None,
+                        started_at_ms: 10,
+                        completed_at_ms: None,
+                        interrupted_at_ms: None,
+                        failure: None,
+                    },
+                },
+            )
+            .expect("写 Active 轮次");
+    }
+
+    /// 给子会话落一条派发轮（子代理轮次的真实形状：来源是 `agent`，没有工作项）。
+    fn append_dispatch_interaction(
+        store: &SqliteRuntimeStore,
+        session_id: &DaemonSessionId,
+        sequence: u32,
+    ) -> InteractionId {
+        let interaction = InteractionRecord::new(
+            session_id.clone(),
+            new_interaction_id(),
+            axon_domain::InteractionSource::new(
+                axon_domain::AGENT_DISPATCH_SOURCE_CHANNEL,
+                format!(
+                    "{}{}:{}",
+                    axon_domain::AGENT_DISPATCH_SOURCE_PREFIX,
+                    session_id.as_str(),
+                    sequence
+                ),
+            )
+            .expect("来源"),
+            axon_domain::ScopeRef::workspace("workspace-roster".to_owned()).expect("作用域"),
+            axon_domain::AudienceContext::new(
+                axon_domain::AudienceKind::Private,
+                axon_domain::DisclosurePolicy::PrivateOnly,
+            ),
+            axon_domain::ReplyRoute::new("agent", session_id.as_str()).expect("路由"),
+            "整理这份材料",
+            10,
+        )
+        .expect("派发轮");
+        let interaction_id = interaction.interaction_id.clone();
+        store.append(&interaction).expect("落派发轮");
+        interaction_id
+    }
+
+    fn subagent_session(
+        store: &SqliteRuntimeStore,
+        parent: &DaemonSessionId,
+        agent_path: &str,
+    ) -> SessionRuntimeRecord {
+        store
+            .create_session_with(&NewSessionRequest {
+                session_id: new_session_id(),
+                kind: SessionKind::Subagent,
+                trust_scope: SessionTrustScope::Private,
+                workspace_id: None,
+                root_session_id: Some(parent.clone()),
+                agent_path: Some(agent_path.to_owned()),
+                goal_id: None,
+                execution_id: None,
+                cwd: ".".to_owned(),
+                now_ms: 10,
+            })
+            .expect("建子代理会话")
+    }
+
+    #[test]
+    fn subagent_roster_status_comes_from_turn_heads() {
+        let root = axon_test_support::test_temp_root().join(format!(
+            "axon-subagent-roster-{}-{}",
+            std::process::id(),
+            axon_time::unix_now_ms()
+        ));
+        let store = runtime_store(&root);
+        let parent = new_session_id();
+        let parent_record = store.create_session(&parent, ".", 10).expect("父会话");
+        active_thread(&root, &parent_record.current_run_id, None);
+
+        // 收口的子代理：JSONL 索引仍写着 Active，运行态的派发轮已经结算为 understood。
+        let settled = subagent_session(&store, &parent, "/root/settled");
+        active_thread(
+            &root,
+            &settled.current_run_id,
+            Some(&parent_record.current_run_id),
+        );
+        let settled_interaction = append_dispatch_interaction(&store, &settled.session_id, 0);
+        store
+            .settle_dispatch(
+                &settled_interaction,
+                axon_session::DispatchTerminalKind::Understood,
+                20,
+            )
+            .expect("结算派发轮");
+
+        // 仍在跑的子代理：派发轮没有任何终态。
+        let running = subagent_session(&store, &parent, "/root/running");
+        active_thread(
+            &root,
+            &running.current_run_id,
+            Some(&parent_record.current_run_id),
+        );
+        let _running_interaction = append_dispatch_interaction(&store, &running.session_id, 1);
+
+        let payload = session_subagents_payload(&root, parent.as_str()).expect("名册载荷");
+        let subagents = payload["subagents"].as_array().expect("子代理数组");
+        assert_eq!(subagents.len(), 2, "两条子代理都要出现在名册里");
+
+        let of = |session_id: &DaemonSessionId| {
+            subagents
+                .iter()
+                .find(|row| row["sessionId"].as_str() == Some(session_id.as_str()))
+                .unwrap_or_else(|| panic!("名册缺少子代理：{}", session_id.as_str()))
+        };
+
+        let settled_row = of(&settled.session_id);
+        assert_eq!(
+            settled_row["status"].as_str(),
+            Some("idle"),
+            "运行态已收口，名册不得跟着索引说在跑"
+        );
+        assert_eq!(settled_row["lastTurnStatus"].as_str(), Some("completed"));
+        assert_eq!(
+            settled_row["threadTurnStatus"].as_str(),
+            Some("active"),
+            "索引侧的末轮状态只作对账旁证，必须如实透出它仍写着 active"
+        );
+
+        let running_row = of(&running.session_id);
+        assert_eq!(
+            running_row["status"].as_str(),
+            Some("active"),
+            "派发轮没有终态就是在跑"
+        );
+        assert_eq!(running_row["lastTurnStatus"].as_str(), Some("active"));
+    }
+}

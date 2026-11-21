@@ -62,8 +62,9 @@ pub use ports::{
     InteractionProcessingLease, InteractionQueryStore, InteractionSettlementStore,
     InteractionStore, InteractionStoreError, InteractionTurnHead, LedgerCommitError,
     LedgerCommitStore, LedgerEventStore, LedgerEventStoreError, NewSessionRequest,
-    NotificationDeliveryState, RESULT_ACK_SOURCE_EXPIRED, RESULT_ACK_SOURCE_READ, ResultStore,
-    ResultStoreError, RuntimeHealthCounters, RuntimeStore, RuntimeStoreError,
+    NotificationDeliveryState, RESULT_ACK_SOURCE_EXPIRED, RESULT_ACK_SOURCE_READ,
+    RecoveringSettlement, ResultStore, ResultStoreError, RosterLastTurnStatus, RosterStatus,
+    RosterTurnStatus, RuntimeHealthCounters, RuntimeStore, RuntimeStoreError,
     ScheduleSessionRequest, SessionQueryStore, SessionSummaryRow, SubagentSessionRequest,
     UserQuestionStore, UserQuestionStoreError, WorkspaceStore, WorkspaceStoreError,
 };

@@ -89,6 +89,13 @@ pub use interaction_turn_runner::{PRIMARY_TURN_ACTION_KIND, primary_session_id_f
 const UPGRADE_GRACE_PERIOD_MS: u64 = 300_000;
 /// 启动与每轮 supervisor 的中断 Interaction 收敛上限，配合 claim 索引避免无界扫描。
 const INTERRUPTED_INTERACTION_BATCH_LIMIT: u32 = 64;
+/// 会话停留在 `recovering` 的容忍时长。
+///
+/// supervisor 每轮都会重新接管失控会话，正常运行下 `recovering` 只存在一个 tick；
+/// 两分钟仍未派发说明这一轮已经没有执行者，必须收口为中断而不是继续挂着。
+const RECOVERING_SETTLEMENT_TTL_MS: u64 = 120_000;
+/// 每轮 supervisor 收敛 `recovering` 会话的上限：与中断收敛同一批量级。
+const RECOVERING_SETTLEMENT_BATCH_LIMIT: u32 = 64;
 /// 尚未领取 lease 时的租约到期哨兵值。
 const NO_LEASE_MS: u64 = 0;
 pub(super) const DEFAULT_QUEUE_LIMIT: u32 = 100;
@@ -447,6 +454,28 @@ where
             &self.stream_bridge,
             &interrupted_interactions,
         );
+        // `recovering` 必须有归宿：租约失效的会话被接管之后，没有任何环节会把它送回
+        // `idle`，也没有人会重新派发。这里在中断收敛之后跑一次收敛，顺序不能颠倒：
+        // 先让租约过期的执行收敛成终态，收敛才能看见「已经腾空」的会话并把它放回 `idle`。
+        if accepting_work {
+            match self.store.settle_recovering_sessions(
+                &host,
+                now_ms,
+                RECOVERING_SETTLEMENT_TTL_MS,
+                RECOVERING_SETTLEMENT_BATCH_LIMIT,
+            ) {
+                Ok(settlement) => {
+                    daemon_host_interrupted_projection::project_interrupted_interactions(
+                        &self.publisher,
+                        &self.stream_bridge,
+                        &settlement.events,
+                    )
+                }
+                // 收敛失败不影响本轮其它维护：下一轮重试，会话仍然停在 `recovering`
+                // 由下一轮继续处理，不会静默丢失。
+                Err(error) => eprintln!("recovering 会话收敛失败，将在下一轮重试: {error}"),
+            }
+        }
         // 目标轮与用户轮共用主 turn 管道：这里只负责把退避到期的执行重新投递成
         // 一条 Interaction，由主 turn 领取执行，不再有后台专用执行入口。
         let pumped = if accepting_work {

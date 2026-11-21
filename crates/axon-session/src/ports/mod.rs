@@ -23,6 +23,8 @@ pub mod ledger_event_store;
 pub mod result_store;
 /// 恢复指针读写端口。
 pub mod resume_pointer_store;
+/// 名册状态的派生口径。
+pub mod roster_status;
 pub mod schedule_store;
 pub mod session_action_store;
 pub mod session_event_store;
@@ -69,9 +71,10 @@ pub use result_store::{
     RESULT_ACK_SOURCE_EXPIRED, RESULT_ACK_SOURCE_READ, ResultStore, ResultStoreError,
 };
 pub use resume_pointer_store::{ResumePointerStore, ResumePointerStoreError};
+pub use roster_status::{RosterLastTurnStatus, RosterStatus, RosterTurnStatus};
 pub use runtime_store::{
-    CheckpointTelemetry, GoalSessionRequest, NewSessionRequest, RuntimeStore, RuntimeStoreError,
-    ScheduleSessionRequest, SubagentSessionRequest,
+    CheckpointTelemetry, GoalSessionRequest, NewSessionRequest, RecoveringSettlement, RuntimeStore,
+    RuntimeStoreError, ScheduleSessionRequest, SubagentSessionRequest,
 };
 pub use session_query_store::{SessionQueryStore, SessionSummaryRow};
 pub use user_question_store::{UserQuestionStore, UserQuestionStoreError};
