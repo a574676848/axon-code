@@ -49,9 +49,6 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({
   const [locateError, setLocateError] = React.useState<string | null>(null);
   const [sending, setSending] = React.useState(false);
   const [sendError, setSendError] = React.useState<string | null>(null);
-  /** 子代理会话里要回放的那一轮 Interaction；会话标识不能直接当 Interaction 用。 */
-  const [turnId, setTurnId] = React.useState<string | null>(null);
-  const [turnLoading, setTurnLoading] = React.useState(false);
 
   // 会话定位：子代理会话挂在车道的运行会话之下，用 slug 与界面上的 agent 路径对齐。
   // 名册已经把会话标识补给行时直接用，不再为此重拉一次名册。
@@ -106,48 +103,23 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({
   }, [knownSessionId, sessionId, row.agentId, row.model]);
 
   /*
-   * 逐字稿的入口是这条子代理会话里的一轮 Interaction：
-   * 正文订阅按 Interaction 过滤，会话标识本身没有可订阅的正文流。
+   * 会话加载与主会话完全同一条路径：把子代理会话标识当作「这条会话」交给控制器，
+   * 由它走同一套历史索引与尾部订阅。三个入口（主、cron、子代理）唯一的差别是输入坞的
+   * 控制，正文取数不该有第二套实现——有第二套就会像修前那样，一轮 Interaction 都探
+   * 不出来时整块正文空白。
    */
-  React.useEffect(() => {
-    if (locatedSessionId === null) {
-      setTurnId(null);
-      setTurnLoading(false);
-      return undefined;
-    }
-    let cancelled = false;
-    setTurnLoading(true);
-    void ipc
-      .conversationHistory(locatedSessionId, 1)
-      .then((page) => {
-        if (cancelled) return;
-        setTurnId(page.interactions[0]?.interactionId ?? null);
-      })
-      .catch(() => {
-        if (!cancelled) setTurnId(null);
-      })
-      .finally(() => {
-        if (!cancelled) setTurnLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [locatedSessionId]);
-
   const target = React.useMemo(
     () =>
-      workspaceId === null || turnId === null
+      workspaceId === null || locatedSessionId === null
         ? null
         : ({
             kind: 'interaction',
             workspaceId,
-            interactionId: turnId,
-            // 历史索引按子代理自己的会话翻：交互标识不能兼任会话标识。
-            sessionId: locatedSessionId ?? undefined,
+            interactionId: locatedSessionId,
             // 子代理轮次不支持用户提交：投递走专用通道，因此这里不提供回复目标。
             destination: '',
           } as const),
-    [workspaceId, turnId, locatedSessionId],
+    [workspaceId, locatedSessionId],
   );
   const conversation = useConversation(target);
 
@@ -170,26 +142,17 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({
       .finally(() => setSending(false));
   };
 
-  const emptyTurnHint = turnLoading
-    ? '正在读取逐字稿…'
-    : workspaceId === null && turnId !== null
-      ? '缺少工作区信息，无法订阅这条子代理的正文'
-      : locatedSessionId !== null && turnId === null
-        ? '这次执行没有留下可回看的轮次'
-        : null;
   /*
-   * 静默空白是最差的一种结论：用户看不出是没订阅、订阅失败，还是这一轮真的没有帧。
-   * 定位与轮次都拿到、装载也结束后仍然一帧未渲染时，如实说明是服务端没有给出帧。
+   * 正文既不该静默空白，也不该把「还没定位到」说成「没有内容」：
+   * 目标建好、装载结束、一帧未渲染时才归因到「服务端没有给出帧」。
    */
   const blankAfterLoad =
-    !turnLoading &&
-    locateError === null &&
-    emptyTurnHint === null &&
+    target !== null &&
+    !conversation.loadingHistory &&
     conversation.state.turns.length === 0 &&
     conversation.state.failure === null;
   const failure =
     locateError ??
-    emptyTurnHint ??
     conversation.state.failure?.message ??
     (blankAfterLoad ? '这条子代理的正文没有读到：服务端没有返回任何帧' : null);
 
@@ -240,6 +203,7 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({
           workspaceRoot={null}
           enabled={locatedSessionId !== null}
           busy={sending}
+          configLocked
           model={modelLabel ?? model ?? ''}
           onSubmit={(text) => send(text)}
           error={sendError}
