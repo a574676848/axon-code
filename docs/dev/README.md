@@ -18,6 +18,7 @@
 | [存储重构 WBS](./reconstruction-wbs.md) | 阶段与任务拆解、依赖关系、里程碑与延后项 |
 | [窗口轮转记录有界化 WBS](./window-rollover-record-bound-wbs.md) | Thread 事件正文外置与检索 receipt 有界化的不变量、任务拆解、三端衔接验收与存量清理清单 |
 | [会话真相链路整改 WBS](./conversation-truth-wbs.md) | 一次真机卡死的六问取证结论、顺序与终态不变量、截断可见与归属回填的任务拆解与验收判据 |
+| [会话真相链路验收台账](./conversation-truth-acceptance.md) | 上述 WBS 每个条目的状态、判据与可复跑证据，含门禁回执与现场只读取证 |
 | [会话身份重构计划书](./session-identity-refactor-plan.md) | 会话标识唯一化方案、现状飘逸清单、会话数据删除与表结构重建步骤、WBS 与性能红线 |
 | [会话身份重构开工提示词](./session-identity-refactor-kickoff.md) | 实施会话的首条指令：任务、工具纪律、事实底座、执行顺序、门禁与验收口径 |
 | [单渲染路径后端改造提示词](./single-render-path-backend-prompt.md) | 让三条会话入口共用一条渲染路径所需的后端契约：能力位、派发轮终态、逐轮指标归属、轮次头订阅与入口事实 |

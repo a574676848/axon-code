@@ -44,7 +44,7 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
 | 帧 | 必填字段 | 可选字段 | 回执 |
 |---|---|---|---|
 | `ping` | 无 | 无 | `{"type":"pong"}` |
-| `subscribe` | `subscribeId`、`workspaceId`，正文订阅另需 `interactionId` | `resumeCursor` | `{"type":"subscribed","subscribeId":"..."}` |
+| `subscribe` | `subscribeId`、`workspaceId`，正文订阅另需 `interactionId` | `resumeCursor` | `{"type":"subscribed","subscribeId":"..."}`；durable 回放有缺口时追加 `skippedArchivedFrames`、`replayTruncated` 与 `resumeCursor` |
 | `unsubscribe` | `subscribeId` | 无 | `{"type":"unsubscribed","subscribeId":"..."}` |
 | `submit` | `sourceChannel`、`eventId`、`observedAtMs`、`expiresAtMs`、`content`、`replyChannel`、`replyDestination` | `workspaceId`、`sessionId`、`localFiles`、`model`、`reasoningEffort` | `{"type":"accepted","receipt":{"interactionId":"...","accepted":true,"deduplicated":false}}` |
 
@@ -55,6 +55,7 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
 - 子代理会话与目标执行会话的正文也走各自的 Interaction 订阅：`interactionId` 从 `GET /api/v1/sessions/<sessionId>/interactions` 取得。它们不在侧栏清单里，入口是子代理区域与目标看板；发现新轮用 `session-turns:` 订阅，不重放正文。
 - `subscribeId` 由客户端生成，必须在同一连接内唯一；建议直接由目标推导（`interaction:<id>` 或 `session-turns:<id>`）。`session-turns:<id>` 只推 `interaction.created` 与 `interaction.settled` 两类轻帧（`interactionId` 与 `status`），不推正文、不回放历史，用于发现不在侧栏清单里的独立会话新轮与收口。
 - `session-turns:` 的 `subscribed` 回执带 `baseline`：`latestInteractionId` / `latestInteractionStatus` / `latestInteractionReceivedAtMs`，表示订阅建立那一刻这条流已经知道的最新一轮。**正确顺序是「先订阅、收到 subscribed、再读索引」**；如果实现只能先读索引，则必须在收到 `subscribed` 后拿 `baseline.latestInteractionId` 与索引里的最新一轮比对，不一致就再读一次索引。否则两次动作之间新建的那一轮会被折进基线，`interaction.created` 永不播报。
+- 正文订阅的 `subscribed` 可能带 `replayTruncated` 与 `resumeCursor`：前者为真表示这次 durable 回放**是残缺的**，后者是**真正读到的位置**（不是会话尾游标）。两者必须一起读：当作完整历史渲染会永久漏掉中间段，续订时拿会话尾游标又会把缺口跳过。正确做法是按 `resumeCursor` 续订，并在界面上说明「历史仅显示到第 N 帧」。截断时实时帧可能与已重放的帧重叠，按序号去重即可，**重复可以接受，丢帧不行**。
 - `resumeCursor` 用于从既有游标续读；省略时从头回放。
 
 ## 服务端帧
