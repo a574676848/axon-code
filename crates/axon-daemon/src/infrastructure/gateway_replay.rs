@@ -193,6 +193,33 @@ where
 
 /// 返回 Session 当前 durable 尾游标，作为一次 replay 的封闭上界。
 ///
+/// 给帧载荷补齐归属标识：读边界统一一次，新旧帧与主/子会话的形状因此一致。
+///
+/// 归属的权威是事件的归属列；主会话的载荷里同时也写着 `interactionId`，而子代理的逐轮
+/// 正文只写列、不在载荷里重复一遍。客户端按同一种形状解析，边界不抹平就会把「只有列」
+/// 的帧当成没有归属整批丢掉——子代理详情空白的直接原因。
+pub(super) fn payload_with_interaction(payload_json: String, interaction_id: &str) -> String {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload_json) else {
+        return payload_json;
+    };
+    let Some(object) = value.as_object() else {
+        return payload_json;
+    };
+    let declared = object
+        .get("interactionId")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if !declared.is_empty() {
+        return payload_json;
+    }
+    let mut patched = object.clone();
+    patched.insert(
+        "interactionId".to_owned(),
+        serde_json::Value::from(interaction_id),
+    );
+    serde_json::Value::Object(patched).to_string()
+}
+
 /// Session 尚未建立时按序号 0 处理，行为与 IPC 事件订阅一致；generation 只作
 /// 游标标注，Host 尚未启动时留空，不参与上界的序号判定。
 pub(super) fn live_ceiling_cursor<S>(
@@ -277,7 +304,7 @@ where
             let cursor = serde_json::to_string(&event.cursor()).ok();
             pending.push_back(GatewayEvent {
                 event_type: event.event_type,
-                payload_json: event.payload_json,
+                payload_json: payload_with_interaction(event.payload_json, interaction_id.as_str()),
                 cursor,
                 replay: true,
             });

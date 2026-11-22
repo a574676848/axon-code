@@ -20,6 +20,7 @@ use std::collections::VecDeque;
 use super::{
     DEFAULT_GATEWAY_REPLAY_PAGE_SIZE, INTERACTION_STATUS_EVENT, MAX_LEGACY_SCAN_BYTES,
     MAX_LEGACY_SCAN_PAGES, append_replayed_terminal_status, live_ceiling_cursor,
+    payload_with_interaction,
 };
 
 /// 派发 join 的扫描上限：一条子会话的派发行不会很多，取一页足够判断归属是否唯一。
@@ -181,7 +182,7 @@ where
                 first_missing_sequence.get_or_insert(event.sequence);
                 continue;
             }
-            pending.push_back(history_event(event));
+            pending.push_back(history_event(event, interaction_id.as_str()));
         }
         if missing_archives > 0 {
             axon_logger::warning(&format!(
@@ -279,7 +280,7 @@ where
             first_missing_sequence.get_or_insert(event.sequence);
             continue;
         }
-        pending.push_back(history_event(event));
+        pending.push_back(history_event(event, interaction_id.as_str()));
     }
     if missing_archives > 0 {
         axon_logger::warning(&format!(
@@ -359,7 +360,7 @@ where
                 first_missing_seq.get_or_insert(event.sequence);
                 continue;
             }
-            pending.push_back(history_event(&event));
+            pending.push_back(history_event(&event, interaction_id.as_str()));
             if keep_tail {
                 // 保尾：从头读的路径只有丢掉最早的那些帧，才能留下可渲染的尾窗。
                 if pending.len() > limit {
@@ -507,10 +508,10 @@ where
 }
 
 /// 一条 durable 事件投影成历史页里的帧。
-fn history_event(event: &axon_session::SessionEventRecord) -> GatewayEvent {
+fn history_event(event: &axon_session::SessionEventRecord, interaction_id: &str) -> GatewayEvent {
     GatewayEvent {
         event_type: event.event_type.clone(),
-        payload_json: event.payload_json.clone(),
+        payload_json: payload_with_interaction(event.payload_json.clone(), interaction_id),
         cursor: serde_json::to_string(&event.cursor()).ok(),
         replay: true,
     }
