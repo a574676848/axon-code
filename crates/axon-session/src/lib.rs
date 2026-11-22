@@ -49,6 +49,7 @@ pub use infrastructure::{
 pub use ports::ExecutionSettlement;
 pub use ports::ThreadActivationSnapshot;
 pub use ports::ThreadEventStore;
+pub use ports::requires_attribution;
 pub use ports::{
     AgentContinuationAppendOutcome, AgentContinuationQuery, AgentContinuationRecord,
     AgentContinuationState, AgentContinuationStore, AgentContinuationStoreError,

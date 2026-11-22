@@ -18,6 +18,16 @@ use crate::domain::runtime::{DaemonHostRecord, SessionEventRecord};
 /// 无归属入口。
 const ATTRIBUTION_REQUIRED_EVENT_TYPES: &[&str] = &["wire_event"];
 
+/// 该事件类型是否必须带 Interaction 归属（INV-4）。
+///
+/// 存量修复工具按这一条判定「无归属帧」：会话级事件（会话生命周期、累计指标、
+/// 回合之外的迟到作答）本来就不属于任何一轮，把它们算成缺归属会给出假的缺口，
+/// 回填还会给它们写上一条与语义不符的归属。
+#[must_use]
+pub fn requires_attribution(event_type: &str) -> bool {
+    ATTRIBUTION_REQUIRED_EVENT_TYPES.contains(&event_type)
+}
+
 /// 无归属入口的合法用途白名单：这些事实只属于会话，不属于某一轮。
 ///
 /// 逐条对应真实调用方：作业生命周期由 CLI 直接写会话流，其余是会话级投影与收口事实。

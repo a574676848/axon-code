@@ -481,3 +481,32 @@ fn backup_paths(data_root: &Path, session_id: &str) -> Vec<PathBuf> {
         })
         .collect()
 }
+
+/// 会话级事件不属于任何一轮：既不该算进缺口，也不该被回填。
+#[test]
+fn attribute_skips_session_level_events() {
+    let fixture = fixture();
+    let root = root_session(&fixture.store, "01M7Z4BF1C8CR9N3Q9H3N9CCV7");
+    let child = subagent_session(&fixture.store, &root, "root/delegate-session-level");
+    dispatch_interaction(&fixture.store, &child, "01M7Z4BFYY8QX8DKF83S6DHBRE", 40);
+    let log = fixture
+        .store
+        .event_log(&DaemonSessionId::new(child.clone()).expect("合法会话标识"));
+    write_log(
+        &log,
+        &[vec![turn_metrics_event(0, 1_000), wire_event(1, 1_001)]],
+    );
+
+    let (result, body) = repair(&fixture, None, false, true, false);
+    assert_eq!(result.exit_code, 0, "{}", result.stderr);
+    assert_eq!(
+        body["backfillableFrames"], 1,
+        "只统计必须带归属的帧，会话级事件不计入"
+    );
+    let sessions = body["sessions"].as_array().expect("逐会话结论应为数组");
+    let entry = sessions
+        .iter()
+        .find(|item| item["sessionId"] == child.as_str())
+        .expect("子会话结论");
+    assert_eq!(entry["unattributedFrames"], 1, "只有 wire_event 算无归属");
+}

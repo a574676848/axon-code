@@ -55,7 +55,7 @@ pub use client_delivery_store::{
 };
 pub use context_snapshot_store::ContextSnapshotStore;
 pub use decision_store::{DecisionStore, DecisionStoreError};
-pub use event_log_store::EventLogStore;
+pub use event_log_store::{EventLogStore, requires_attribution};
 pub use event_store::{ThreadActivationSnapshot, ThreadEventStore};
 pub use execution_store::{ExecutionStore, ExecutionStoreError, ExecutionTrigger};
 pub use goal_commit_store::{GoalCommitError, GoalCommitStore};

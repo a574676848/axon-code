@@ -34,6 +34,7 @@ import {
 } from '../../conversation/runtimeFacts';
 import { SubagentRunView } from './SubagentRunView';
 import {
+  findModelEntry,
   resolveConfig,
   resolveEffectiveModel,
   type ResolvedConfig,
@@ -530,8 +531,15 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
             {openSubagent !== null ? (
               <SubagentRunView
                 row={openSubagent}
-                workspaceId={selection?.workspaceId ?? null}
+                /* 订阅正文要求工作区键：车道缺失时回落到工作区行本身，不能传空。 */
+                workspaceId={selection?.workspaceId ?? workspace?.id ?? null}
                 sessionId={selection?.sessionId ?? null}
+                /* 输入坞显示配置里的模型别名，不把 upstream ID 摊到界面上。 */
+                modelLabel={
+                  findModelEntry(config?.catalog ?? [], openSubagent.model ?? null)?.name ??
+                  openSubagent.model ??
+                  null
+                }
                 onBack={() => setOpenSubagentRow(null)}
               />
             ) : (

@@ -166,11 +166,15 @@ export function resolveEffectiveModel(
 ): EffectiveModel {
   const catalog = config?.catalog ?? [];
   const configModel = config?.model ?? '';
-  const label =
+  const raw =
     fixedModel ?? explicitModel ?? modelLabelFor(catalog, sessionModel) ?? configModel;
-  const matched = findModelEntry(catalog, label);
+  /*
+   * 展示名一律走配置里的别名：固定模型（cron 绑定）与运行侧记录给的可能是 upstream ID，
+   * 直接把 ID 显示在输入坞右下角会让同一条模型出现两种写法。只有目录里查不到时才退回原串。
+   */
+  const matched = findModelEntry(catalog, raw);
   return {
-    label,
+    label: matched?.name ?? raw,
     contextWindow: matched === null ? (config?.contextWindow ?? null) : matched.contextWindow,
   };
 }

@@ -180,8 +180,8 @@ export function useConversation(
   const rememberUnsubscribed = useCallback((subscribeId: string) => {
     subscribedIdsRef.current.delete(subscribeId);
   }, []);
-  /** 当前会话标识（历史索引键）；首屏为空。 */
-  const pagingSessionId = target?.interactionId ?? null;
+  /** 当前会话标识（历史索引键）；首屏为空。子代理详情另给会话键，不能拿交互标识兼任。 */
+  const pagingSessionId = target?.sessionId ?? target?.interactionId ?? null;
 
   /**
    * 主投影当前持有的轮次标识。

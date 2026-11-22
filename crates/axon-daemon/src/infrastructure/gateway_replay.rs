@@ -246,14 +246,22 @@ where
     let mut last_read: Option<ConsumerCursor> = None;
     let mut missing_archives = 0usize;
     let mut first_missing_seq = None;
+    // 该 Interaction 自己的帧是否已经读完：读完就不算截断，即使序号还没到会话尾。
+    let mut exhausted = false;
     for _ in 0..limits.max_pages {
         if after >= ceiling.sequence {
+            exhausted = true;
             break;
         }
+        // 按 Interaction 取帧，不按载荷过滤：归属的权威是事件帧的归属列，子代理的
+        // 逐轮正文从来不在载荷里重复写 `interactionId`。按载荷判定会让「只有归属列」
+        // 的帧一条都匹配不到，订阅方因此收到空正文（子代理详情空白的直接原因）。
         let page = store
-            .replay_events(session_id, after, limits.page_size)
+            .replay_interaction_events(session_id, interaction_id, after, limits.page_size)
             .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
         let Some(last) = page.last() else {
+            // 这条 Interaction 已经没有更晚的帧：剩下的少先序列属于别的轮次，不必再读。
+            exhausted = true;
             break;
         };
         after = last.sequence;
@@ -266,17 +274,16 @@ where
                 first_missing_seq.get_or_insert(event.sequence);
                 continue;
             }
-            if event_matches_interaction(&event, interaction_id.as_str()) {
-                let cursor = serde_json::to_string(&event.cursor()).ok();
-                pending.push_back(GatewayEvent {
-                    event_type: event.event_type,
-                    payload_json: event.payload_json,
-                    cursor,
-                    replay: true,
-                });
-            }
+            let cursor = serde_json::to_string(&event.cursor()).ok();
+            pending.push_back(GatewayEvent {
+                event_type: event.event_type,
+                payload_json: event.payload_json,
+                cursor,
+                replay: true,
+            });
         }
         if page_len < limits.page_size as usize {
+            exhausted = true;
             break;
         }
     }
@@ -289,7 +296,7 @@ where
             first_missing_seq.unwrap_or(0)
         ));
     }
-    let truncated = after < ceiling.sequence;
+    let truncated = !exhausted && after < ceiling.sequence;
     if truncated {
         axon_logger::warning(&format!(
             "[gateway-ws] session={} 重放触达页数硬上界，仍落后 durable 尾（已读 {after}，尾 {}）：回执将带真实已读游标",

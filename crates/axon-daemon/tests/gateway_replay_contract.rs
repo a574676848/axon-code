@@ -264,3 +264,69 @@ fn replay_resume_cursor_does_not_skip_frames() {
     drop(first_subscription);
     drop(second_subscription);
 }
+
+/// 归属只在归属列上、载荷里没有 `interactionId` 的帧，订阅回放也必须读得到。
+///
+/// 子代理的逐轮正文就是这种形状：sink 写归属列，载荷里不重复写一遍。旧实现按载荷
+/// 过滤，于是子代理详情一条帧都收不到（现场表现为空白）。
+#[test]
+fn replay_reads_frames_attributed_only_by_column() {
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    let host = store
+        .claim_host(
+            &RuntimeHostId::new("gateway-column-host").expect("Host ID"),
+            1,
+            None,
+            10,
+            10_000,
+        )
+        .expect("注册 Host");
+    let session_id = DaemonSessionId::new("gateway-column-session").expect("Session ID");
+    store
+        .create_session(&session_id, ".", 10)
+        .expect("创建 Session");
+    store
+        .set_session_status(&session_id, &host, SessionRuntimeStatus::Running, 11)
+        .expect("启动 Session");
+    let interaction_id = InteractionId::new("gateway-column-interaction").expect("Interaction ID");
+    for index in 0..3 {
+        store
+            .append_attributed_events(
+                &session_id,
+                &host,
+                &interaction_id,
+                &[(
+                    "wire_event".to_owned(),
+                    format!("{{\"text\":\"帧 {index}\"}}"),
+                )],
+                12,
+            )
+            .expect("追加 durable 事件");
+    }
+    let tail = ceiling(&store, &session_id, &host);
+    let bridge = EventStreamBridge::new();
+    let limits = ReplayReadLimits {
+        page_size: PAGE_SIZE,
+        max_pages: 1_000,
+        max_bytes: 64 * 1024 * 1024,
+    };
+    let (subscription, pending, _, report) = subscribe_and_replay_with_limits(
+        &store,
+        &bridge,
+        &session_id,
+        &interaction_id,
+        None,
+        limits,
+        tail,
+    )
+    .expect("重放不应失败");
+
+    assert_eq!(
+        frame_sequences(&pending),
+        (1..=3).collect::<Vec<_>>(),
+        "只有归属列的帧也必须回放出来"
+    );
+    assert!(!report.replay_truncated, "三帧不足一页预算，不该截断");
+    drop(subscription);
+}

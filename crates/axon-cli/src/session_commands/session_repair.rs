@@ -25,6 +25,7 @@ use axon_domain::{AGENT_DISPATCH_SOURCE_PREFIX, DaemonSessionId, InteractionId};
 use axon_eventlog::{EventLog, RuntimeEventRecord};
 use axon_session::{
     InteractionQueryStore as _, RuntimeStore as _, SessionKind, SqliteRuntimeStore,
+    requires_attribution,
 };
 use clap::Args;
 
@@ -422,9 +423,14 @@ fn attribute_report(
             }
         };
         report.event_count = records.len();
+        // 只认「必须带归属」的事件类型：会话级事件（会话生命周期、累计指标、
+        // 回合之外的迟到作答）本来就不属于任何一轮，算成缺口会给出假数字，回填还会
+        // 写下与语义不符的归属。
         let unattributed = records
             .iter()
-            .filter(|record| record.interaction_id.is_none())
+            .filter(|record| {
+                record.interaction_id.is_none() && requires_attribution(record.event_type.as_str())
+            })
             .count();
         report.unattributed_frames = unattributed;
         if unattributed == 0 {
@@ -549,7 +555,7 @@ fn rewrite_attributed_log(
     };
     let mut changed = 0usize;
     for record in records.iter_mut() {
-        if record.interaction_id.is_some() {
+        if record.interaction_id.is_some() || !requires_attribution(record.event_type.as_str()) {
             continue;
         }
         record.interaction_id = Some(interaction_id.as_str().to_owned());

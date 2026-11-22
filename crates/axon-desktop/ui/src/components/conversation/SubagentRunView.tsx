@@ -27,6 +27,8 @@ function unavailableText(reason: string | null | undefined): string {
 
 export interface SubagentRunViewProps {
   row: SubagentRow;
+  /** 模型展示名（配置里的别名）；缺省回落到运行侧记录的模型标识。 */
+  modelLabel?: string | null;
   /** 该子代理所属工作区与车道；定位会话与投递消息都要。 */
   workspaceId: string | null;
   sessionId: string | null;
@@ -34,7 +36,13 @@ export interface SubagentRunViewProps {
   onBack: () => void;
 }
 
-export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspaceId, sessionId, onBack }) => {
+export const SubagentRunView: React.FC<SubagentRunViewProps> = ({
+  row,
+  workspaceId,
+  sessionId,
+  modelLabel = null,
+  onBack,
+}) => {
   const [locatedSessionId, setLocatedSessionId] = React.useState<string | null>(null);
   const [title, setTitle] = React.useState<string | null>(null);
   const [model, setModel] = React.useState<string | null>(null);
@@ -134,10 +142,12 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
             kind: 'interaction',
             workspaceId,
             interactionId: turnId,
+            // 历史索引按子代理自己的会话翻：交互标识不能兼任会话标识。
+            sessionId: locatedSessionId ?? undefined,
             // 子代理轮次不支持用户提交：投递走专用通道，因此这里不提供回复目标。
             destination: '',
           } as const),
-    [workspaceId, turnId],
+    [workspaceId, turnId, locatedSessionId],
   );
   const conversation = useConversation(target);
 
@@ -162,10 +172,26 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
 
   const emptyTurnHint = turnLoading
     ? '正在读取逐字稿…'
-    : locatedSessionId !== null && turnId === null
-      ? '这次执行没有留下可回看的轮次'
-      : null;
-  const failure = locateError ?? emptyTurnHint ?? conversation.state.failure?.message ?? null;
+    : workspaceId === null && turnId !== null
+      ? '缺少工作区信息，无法订阅这条子代理的正文'
+      : locatedSessionId !== null && turnId === null
+        ? '这次执行没有留下可回看的轮次'
+        : null;
+  /*
+   * 静默空白是最差的一种结论：用户看不出是没订阅、订阅失败，还是这一轮真的没有帧。
+   * 定位与轮次都拿到、装载也结束后仍然一帧未渲染时，如实说明是服务端没有给出帧。
+   */
+  const blankAfterLoad =
+    !turnLoading &&
+    locateError === null &&
+    emptyTurnHint === null &&
+    conversation.state.turns.length === 0 &&
+    conversation.state.failure === null;
+  const failure =
+    locateError ??
+    emptyTurnHint ??
+    conversation.state.failure?.message ??
+    (blankAfterLoad ? '这条子代理的正文没有读到：服务端没有返回任何帧' : null);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
@@ -187,16 +213,6 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
             {title !== null && title.length > 0 ? title : row.label}
           </span>
         </span>
-        {model !== null && model.length > 0 && (
-          <>
-            <Text tone="tertiary" size="meta" className="shrink-0">
-              ·
-            </Text>
-            <Text tone="tertiary" size="xs" mono truncate className="shrink-0">
-              {model}
-            </Text>
-          </>
-        )}
       </div>
 
       {failure !== null ? (
@@ -219,18 +235,12 @@ export const SubagentRunView: React.FC<SubagentRunViewProps> = ({ row, workspace
       )}
 
       <div className="shrink-0 relative z-40 bg-canvas">
+        {/* 与主会话同一套输入坞：提示语、模型展示与键盘说明都读同一份实现。 */}
         <InputDock
-          compact
           workspaceRoot={null}
           enabled={locatedSessionId !== null}
           busy={sending}
-          model={model ?? ''}
-          placeholder={`把下一步交给 ${row.label}`}
-          hint={
-            conversation.working
-              ? 'Enter 发给这个子代理 · Shift + Enter 换行 · 它的模型与思考强度由委派时决定'
-              : 'Enter 发给这个子代理 · Shift + Enter 换行 · 界面显示它已收口，发送将由服务端裁决'
-          }
+          model={modelLabel ?? model ?? ''}
           onSubmit={(text) => send(text)}
           error={sendError}
           working={null}

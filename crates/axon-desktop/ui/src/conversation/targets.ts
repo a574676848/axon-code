@@ -38,6 +38,14 @@ export interface ConversationTarget {
   readonly kind: 'interaction';
   workspaceId: string;
   interactionId: string;
+  /**
+   * 历史索引与分页用的会话键；缺省时退回 `interactionId`。
+   *
+   * 主车道上两者同值（会话以自己的首轮标识寻址）；子代理详情不是——它的正文挂在
+   * 一条独立会话里，而订阅目标是那条会话里的一轮 Interaction。不带这个键去翻索引，
+   * 就会拿交互标识当会话标识查，历史一条都取不到，详情因此空白。
+   */
+  sessionId?: string;
   /** 消息投递目标；车道专属，提交时必填。 */
   destination: string;
   /** 本机草稿：还没有任何服务端事实，历史索引一次都不该去读。 */
