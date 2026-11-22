@@ -2,8 +2,13 @@
  * 会话上下文快照的视图模型。
  *
  * 头部占用、窗口分母与换窗读数都读同一份快照：它是运行侧带时间戳的唯一来源。
- * 快照为 null 表示这条会话还没有任何可用读数，此时整段不占位，绝不拿上一次的旧值
- * 或模型目录里的窗口去顶替；快照里缺的字段一律按未知处理，未知不是 0。
+ * 快照为 null 表示这条会话还没有任何可用读数，此时整段不占位，绝不拿上一次的旧值顶替；
+ * 快照里缺的字段一律按未知处理，未知不是 0。
+ *
+ * 分母有一处受控回退：用量帧本身通常不带窗口字段，而窗口是**当前生效模型的配置事实**
+ * （`viewConfig` 里由配置目录解析出的 `contextWindow`）。快照没带窗口时用这一份补，
+ * 两者都没有才是未知。回退值必须是「这一轮真正在跑的模型」的窗口，不能拿配置默认模型
+ * 的窗口冒充，否则会出现「模型是会话的、窗口却是默认模型的」读数。
  */
 
 import { formatDecimalCount } from './format';
@@ -36,7 +41,7 @@ export interface SessionContextSnapshot {
 export interface ContextSnapshotReading {
   /** 快照给出的当前占用；未知为空。 */
   usedTokens: number | null;
-  /** 快照给出的窗口；现实中常为空。 */
+  /** 生效窗口：快照带的优先，缺失时回落到当前生效模型的配置事实。 */
   windowTokens: number | null;
   /** 上下文构成估算；没有构成观测时为空。 */
   composition: ContextComposition | null;
@@ -56,17 +61,30 @@ const SECOND_MS = 1_000;
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
 
+/** 只有正数才算有效读数：0 与缺失同义，不是「观测到 0」。 */
+function positiveTokens(value: number | null | undefined): number | null {
+  return typeof value === 'number' && value > 0 ? value : null;
+}
+
+/**
+ * 生效窗口：快照里的窗口优先，缺失时回落到当前生效模型配置里的窗口。
+ *
+ * 快照的窗口来自运行时实测（帧里带了就是权威）；模型配置里的窗口是这一轮请求真正按它
+ * 算的预算，因此可以做分母。两者都没有时返回 null，界面显示未知。
+ */
+export function effectiveWindowTokens(
+  snapshot: ContextSnapshot | null,
+  configuredWindow: number | null | undefined,
+): number | null {
+  return positiveTokens(snapshot?.contextWindow) ?? positiveTokens(configuredWindow);
+}
+
 /** 已用读数文本：未知写「未知」。 */
 export function usedTokensText(usedTokens: number | null): string {
   return usedTokens === null ? UNKNOWN_TOKENS_LABEL : formatDecimalCount(usedTokens);
 }
 
-/**
- * 窗口读数文本：未知或非正数写「未知」。
- *
- * 用量帧通常不带窗口字段，此时分母就是未知。拿模型目录里的窗口值补上去会让
- * 「已用/窗口」看起来有分母，而那个分母并不是这一轮真的按它算的。
- */
+/** 窗口读数文本：未知或非正数写「未知」。 */
 export function windowTokensText(windowTokens: number | null): string {
   if (windowTokens === null || windowTokens <= 0) return UNKNOWN_TOKENS_LABEL;
   return formatDecimalCount(windowTokens);
@@ -111,17 +129,21 @@ export function rolloverTokensText(snapshot: ContextSnapshot | null): string | n
 /**
  * 把快照读成界面读数。
  *
- * 返回 null 表示这份快照还承载不了「上下文占用」这一段（占用与窗口都未知，也没有
- * 换窗读数）；此时头部整段不占位，而不是画一个 0。
+ * `configuredWindow` 是当前生效模型在配置目录里的窗口（见 `viewConfig` 的
+ * `resolveEffectiveModel`）：快照没带窗口时用它做分母。占用只认快照，不拿窗口顶替。
+ *
+ * 返回 null 表示这份快照还承载不了「上下文占用」这一段（占用未知，也没有换窗读数）；
+ * 此时头部整段不占位，而不是画一个 0。
  */
 export function contextSnapshotReading(
   snapshot: ContextSnapshot | null,
   nowMs: number,
+  configuredWindow: number | null = null,
 ): ContextSnapshotReading | null {
   if (snapshot === null) return null;
   const rolloverText = rolloverTokensText(snapshot);
   const usedTokens = snapshot.currentContextTokens;
-  const windowTokens = snapshot.contextWindow;
+  const windowTokens = effectiveWindowTokens(snapshot, configuredWindow);
   if (usedTokens === null && windowTokens === null && rolloverText === null) return null;
   const updatedText = formatUpdatedAgo(snapshot.updatedAtMs, nowMs);
   const pair = contextPairText(usedTokens, windowTokens);

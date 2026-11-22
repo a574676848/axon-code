@@ -34,11 +34,14 @@ interface SnapshotState {
  * 读当前会话的上下文快照，并换算成界面读数。
  *
  * `revision` 变化即重读一次：调用方传轮次数量，新的一轮开始或收口都会触发。
+ * `configuredWindow` 是当前生效模型在配置目录里的窗口，作为分母的回退值：用量帧通常
+ * 不带窗口字段，此时用它是「这一轮真正按它算的预算」，不是拿旧读数顶替。
  * 返回 null 表示还没有任何可用读数，此时头部上下文段整段不占位。
  */
 export function useContextSnapshot(
   sessionId: string | null,
   revision: number,
+  configuredWindow: number | null = null,
 ): ContextSnapshotReading | null {
   const [state, setState] = useState<SnapshotState | null>(null);
 
@@ -65,5 +68,8 @@ export function useContextSnapshot(
 
   const current = sessionId !== null && state?.sessionId === sessionId ? state.snapshot : null;
   const ageBucket = Math.floor(Date.now() / AGE_BUCKET_MS) * AGE_BUCKET_MS;
-  return useMemo(() => contextSnapshotReading(current, ageBucket), [current, ageBucket]);
+  return useMemo(
+    () => contextSnapshotReading(current, ageBucket, configuredWindow),
+    [current, ageBucket, configuredWindow],
+  );
 }

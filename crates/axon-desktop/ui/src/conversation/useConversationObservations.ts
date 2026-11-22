@@ -27,13 +27,15 @@ export interface ConversationObservations {
  *
  * `revision` 是轮次数量：新的一轮开始或收口都要重读一次快照。证据只在 `working`
  * 为真时核对，因此空闲会话不会因此多出请求。
+ * `configuredWindow` 是当前生效模型的窗口（配置事实），仅用于补快照缺失的分母。
  */
 export function useConversationObservations(
   sessionId: string | null,
   working: boolean,
   revision: number,
+  configuredWindow: number | null = null,
 ): ConversationObservations {
-  const contextSnapshot = useContextSnapshot(sessionId, revision);
+  const contextSnapshot = useContextSnapshot(sessionId, revision, configuredWindow);
   const liveReading = useSessionLive(sessionId, working);
   return { contextSnapshot, evidence: liveEvidence(working, liveReading, Date.now()) };
 }

@@ -157,3 +157,54 @@ schema 升级：v14 的 `control.sqlite3` 已改名保留为 `control.v14-before
 - 收尾：验证结束后已关闭 `--remote-debugging-port` 并重启桌面端（CDP 端口确认已关闭），守护进程保持运行。
 
 未在真机触发（如实登记，只有单测证据）：`WP-10` 的「运行证据已过期」卡（需要在跑轮次叠加守护进程停机才能构造）、`WP-03` 的截断续读（正常会话不可达）、`WP-04` 的 ESC 收口（当时没有在途轮次）、TUI 头部读数（未在交互式 TTY 取证）。
+
+## 6 现场整改执行记录（2026-11-22 下午）
+
+### 6.1 上下文分母改取当前配置模型
+
+- 裁决：分母不再一律显示未知。窗口优先取快照里的实测值，缺失时回落到**当前生效模型**在配置目录里的 `context_window`；两者都没有才是未知。TUI 原本就是这个口径（`AgentTuiContextSnapshot::effective_window`），本次把桌面端对齐。
+- 改动：`contextSnapshotReading` 增加 `configuredWindow` 参数与 `effectiveWindowTokens`；`useContextSnapshot` / `useConversationObservations` 透传；`ConversationView` 把 `resolveEffectiveModel(...).contextWindow` 传进去，并把读数 hook 移到生效模型解析之后（回退值必须是这一轮真正在跑的模型）。
+- 证据：新增用例 `header_context_window_falls_back_to_configured_model`（快照优先、配置回落、两者缺失才未知、0 不算分母）；前端 611/611 通过。
+- 真机回执：`OK:{"contextPair":"46.2K/1M","denominatorFromConfig":"1M"}`（当前模型 `deepseek-v4.1-flash` 配置窗口 1,000,000）。
+
+### 6.2 控制面库恢复与 v14→v15 升级
+
+早先把 v14 库改名让位给新库，导致现场 `inbox` 的派发行一起消失，回填因此无法进行（`01M7Z4BF…` 被判「没有派发行」）。处理方式：
+
+1. 把 v14 库恢复为 live 库（用户真实会话随之回来），把当时的临时库移到 `data/tmp/` 后删除。
+2. 只做两件手工升级：`CREATE TABLE context_snapshots`（与 `schema_context_snapshot.rs` 的 DDL 逐字一致）与 `PRAGMA user_version=15`。不改既有表、不回填、不动数据。
+3. 结果：19 张表、17 个会话、52 条入站、30 条派发行；守护进程正常启动，`doctor --check invariants` 三项 ok。
+
+### 6.3 存量修复执行
+
+| 动作 | 回执 |
+| --- | --- |
+| `debug session repair --reorder --apply` | 扫描 23 个会话、4 个脏、13 处逆序；4 个会话 `repaired: true`，各自先写 `.bak-<时间戳>` 备份再原子替换 |
+| `--reorder --dry-run`（复检） | `dirty_sessions: 0`、`inversion_count: 0` |
+| `debug session repair --attribute --apply` | 可回填 150 帧、无法确定 941 帧；逐会话写备份后回填 |
+| `--attribute --dry-run`（复检） | `backfillable_frames: 0`；现场子代理会话 `01M7Z4BF…` 144 条 `unattributed=0`、`verdict=clean` |
+
+941 条无法确定属设计内的「多义或没有派发行」，工具如实报原因，不做猜测。
+
+### 6.4 新发现：主会话日志缺少第 6230 条（原有数据丢失，非本次引入）
+
+- 探针（Python + `zstandard` 跨帧读）结果：`01M7YFWW…` 日志 `records=6230 low=1 high=6231`，**缺 6230 这一条**，无重复；重写前的 `.bak` 备份同样是这个形状，说明洞在重排之前就存在，是旧写入路径丢事件的直接证据。
+- 后果：读侧要求跨帧序号连续，因此这条会话的日志按现状整体拒读（重排只能修顺序，修不了洞）。工具在复检里如实报 `error: 事件日志读不出来，无法判定逆序`。
+- 处置：**未做重编号**。把 6231 改成 6230 能让日志恢复可读，但那会改变既有事件的序号身份（游标与外部引用都可能错位），属于需要单独裁决的数据动作。
+
+### 6.5 现场证据：WP-01 的并发写者确实存在
+
+守护进程 stderr 多次出现 INV-1 的失败观测与自愈：
+
+```
+事件日志序号与文件尾不一致，已回滚水位待重试: session_id=01M80PMDTJ80DBKWAQZT5P8MAQ expected_next=49 file_tail=47
+事件日志序号与文件尾不一致，已回滚水位待重试: session_id=01M80PJGPX92M9F8Z4X2DHGBYT expected_next=6 file_tail=4
+```
+
+即「控制面水位已推进、文件尾还没跟上」的并发窗口在真实运行中会出现，旧实现会静默逆序落盘，新实现退水位并按文件尾重排重试。这为 WBS §8 第 1 条（写者组合）补上了日志级现场证据。
+
+### 6.6 备份清理
+
+按指示删除：`control.v14-before-context-snapshot.sqlite3`、`backup-control-20261122-055907.sqlite3`、`versions/0.0.1/axon.exe.pre-ctxsnapshot`、`versions/0.0.1/axon-desktop.exe.pre-ctxsnapshot`、`data/tmp/control.fresh-v15-3sessions.sqlite3`。
+
+保留：本次重排与回填时工具自己写的逐会话 `.bak-<时间戳>`（它们是刚改动的回滚凭据），如需一并清理可执行 `Get-ChildItem $HOME\.axon\data\events -Recurse -Filter '*.bak-*' | Remove-Item`。

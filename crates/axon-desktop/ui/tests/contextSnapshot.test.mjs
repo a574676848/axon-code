@@ -11,11 +11,12 @@ import {
 import { headerClusters } from '../src/conversation/metrics.ts';
 
 /*
- * 头部上下文读数只认会话快照。
+ * 头部上下文读数只认会话快照，分母受控回落到当前生效模型的配置。
  *
  * 旧口径读的是「本视图最近一轮带用量观测的用量」，并在新帧不带占用时沿用上一份：
  * 换窗之后头部因此一直停在换窗前的数字上。现在头部占用、窗口分母与换窗读数都取同一份
- * 带时间戳的快照，未知就是未知。
+ * 带时间戳的快照；用量帧不带窗口时，分母回落到当前生效模型在配置目录里的窗口
+ * （这一轮真正按它算的预算），两者都没有才是未知。
  */
 
 const NOW = 1_760_000_000_000;
@@ -139,4 +140,50 @@ test('header_context_unknown_when_snapshot_missing', () => {
     // 更新时刻未知时说未知，不说「刚刚」。
     assert.equal(formatUpdatedAgo(null, NOW), '未知更新时刻');
     assert.equal(contextPairText(31_733, null), '31.7K/未知');
+});
+
+test('header_context_window_falls_back_to_configured_model', () => {
+    // 用量帧通常不带窗口：分母回落当前生效模型在配置目录里的窗口。
+    const configured = 1_000_000;
+    const reading = contextSnapshotReading(
+        rolloverSnapshot({ currentContextTokens: 46_200 }),
+        NOW,
+        configured,
+    );
+    assert.equal(reading.windowTokens, configured, '分母取当前生效模型的配置窗口');
+    assert.equal(reading.usedTokens, 46_200, '占用仍只认快照');
+    assert.equal(
+        contextSegment(baseInput({ contextSnapshot: reading })).text,
+        contextPairText(46_200, configured),
+        '头部显示已用与配置窗口',
+    );
+
+    // 快照自带窗口时以实测为准，不被配置覆盖。
+    const measured = contextSnapshotReading(
+        rolloverSnapshot({ currentContextTokens: 46_200, contextWindow: 200_000 }),
+        NOW,
+        configured,
+    );
+    assert.equal(measured.windowTokens, 200_000, '运行时实测窗口优先于配置');
+
+    // 快照与配置都没有窗口，才是未知。
+    const unknown = contextSnapshotReading(
+        rolloverSnapshot({ currentContextTokens: 46_200 }),
+        NOW,
+        null,
+    );
+    assert.equal(unknown.windowTokens, null);
+    assert.equal(
+        contextSegment(baseInput({ contextSnapshot: unknown })).text,
+        '46.2K/未知',
+        '两者都缺失时显示未知，不显示 0',
+    );
+
+    // 非正数的配置值不算分母：0 与缺失同义。
+    const zero = contextSnapshotReading(
+        rolloverSnapshot({ currentContextTokens: 46_200 }),
+        NOW,
+        0,
+    );
+    assert.equal(zero.windowTokens, null, '0 不是有效窗口');
 });
