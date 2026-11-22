@@ -165,13 +165,6 @@ export const ConversationHeader: React.FC<ConversationHeaderProps> = ({
                 >
                   {metricIcon(segment, contextPercent)}
                   <span className="truncate">{segment.text}</span>
-                  {/*
-                    段后的次级读数：上下文的「更新于 N 秒前」长在这一段里。
-                    它与读数同一份事实，因此跟着段一起出现、一起收起，不另立一段。
-                  */}
-                  {segment.meta !== undefined && (
-                    <span className="shrink-0 text-meta text-text-tertiary">{segment.meta}</span>
-                  )}
                 </span>
               );
               if (withContextCard) {

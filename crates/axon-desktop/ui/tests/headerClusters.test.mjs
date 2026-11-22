@@ -92,7 +92,11 @@ test('会话读数簇的顺序是 耗时 → 累计 → 命中率 → 上下文'
     // 命中率按整条会话累计：7500 / (2000 + 7500 + 0)
     assert.equal(session.segments[2].text, '命中率 78.94%');
     assert.equal(session.segments[3].text, '1K/10K', '上下文段取快照的已用与窗口');
-    assert.equal(session.segments[3].meta, '更新于 2 秒前', '段后给这份快照的更新时刻');
+    assert.equal(
+        session.segments[3].meta,
+        undefined,
+        '指标条只给已用/窗口，行尾不再挂「更新于」这类新鲜度后缀',
+    );
 });
 
 test('零耗时的时候不占位，其余三段照常', () => {

@@ -73,7 +73,7 @@ test('header_context_follows_rollover_snapshot', () => {
 
     const segment = contextSegment(baseInput({ contextSnapshot: reading }));
     assert.equal(segment.text, '31.7K/未知', '占用取快照，分母未知就写未知');
-    assert.equal(segment.meta, '更新于 4 秒前', '次级读数是这份快照的更新时刻');
+    assert.equal(segment.meta, undefined, '指标条只给已用/窗口，行尾不挂更新时刻后缀');
     assert.equal(
         reading.usedTokens,
         snapshot.rolloverAfterTokens,

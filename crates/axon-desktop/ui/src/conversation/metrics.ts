@@ -56,12 +56,6 @@ export interface HeaderSegment {
   icon?: string;
   /** 原生提示全文；缺省时渲染层用 `text`。 */
   title?: string;
-  /**
-   * 段后的次级读数（如上下文的「更新于 N 秒前」）。
-   *
-   * 它属于这一段的同一份事实，因此跟着段一起出现、一起收起，不另立一段。
-   */
-  meta?: string;
 }
 
 /** 指标条输入。 */
@@ -179,7 +173,8 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
      * 上下文：占用与窗口分母都取同一份快照。
      *
      * 还没有任何读数时整段不占位；有读数之后常驻，分母未知就写「未知」，绝不写 0
-     * 或拿模型目录的窗口值冒充。段后的次级读数是这份快照的更新时刻。
+     * 或拿模型目录的窗口值冒充。这一段只给已用/窗口：更新时刻收在展开的明细卡里，
+     * 行尾不再挂「更新于 N 秒前」的尾巴。
      */
     const snapshot = input.contextSnapshot;
     if (snapshot !== null && snapshot.usedTokens !== null && snapshot.usedTokens > 0) {
@@ -187,7 +182,6 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
         kind: 'context',
         text: contextPairText(snapshot.usedTokens, snapshot.windowTokens),
         tone: contextPressureTone(snapshot.usedTokens, snapshot.windowTokens),
-        meta: snapshot.updatedText,
         title: snapshot.title,
         icon: 'ring',
       });
