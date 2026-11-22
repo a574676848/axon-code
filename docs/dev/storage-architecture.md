@@ -244,13 +244,14 @@ SQLite 没有跨库事务，所以拆库不能按业务随意切，只能按**�
 
 ### 4.4 表设计
 
-#### 4.4.1 control.sqlite3（15 张）
+#### 4.4.1 control.sqlite3（16 张）
 
 | 新表 | 原表 | 主键 | 关键索引 | 说明 |
 | --- | --- | --- | --- | --- |
 | `daemon_instances` | `daemon_hosts` | `instance_id` | `(lease_expires_at_ms)` | 进程实例租约，fencing 的唯一锚点 |
 | `sessions` | `session_runtimes` | `session_id` | `(status, owner_instance_id, owner_generation)`、`(last_activity_at_ms, status)`、`(workspace_id, archived, sort_order)` | 稳定对话身份 + 当前运行实例。**不含 channel / destination**，见 §4.13 |
 | `session_metrics` | 新增（投影） | `session_id` | 主键即索引 | 会话累计：轮次、三类耗时、首字分布、token、作业计数。可由事件重放重建，见 §4.11 |
+| `context_snapshots` | 新增（投影） | `session_id` | 主键即索引 | 会话级上下文快照：当前占用、窗口、构成与换窗前后读数。写入点只有 `apply_projections`，见 §4.11 |
 | `inbox` | `jarvis_interactions` | `inbox_id` | `(channel, source_message_id)` 唯一、`(session_id, received_at_ms DESC, inbox_id DESC)` | 只读入站事实：来源、幂等键、内容、受众、回复路由。**不含状态机**，见 §4.14。派发轮（`source_channel='agent'`）例外地在这里落 `terminal_kind`：它没有 work_item、拿不到 lease，终态只能直接写在入站行上，读侧状态表达式优先取该列 |
 | `work_items` | `jarvis_executions`（在途） | `work_id` | `(status, kind, available_at_ms)`、`(session_id, priority DESC, created_at_ms)`、`(dedupe_key)` 部分唯一 | 统一队列：turn / goal / cron / subagent。**一套 claim 与 lease** |
 | `work_item_history` | `jarvis_executions`（终态） | `work_id` | `(goal_id, finished_at_ms DESC)`、`(session_id, finished_at_ms DESC)` | 终态与重试历史，append-only |
@@ -290,11 +291,12 @@ SQLite 没有跨库事务，所以拆库不能按业务随意切，只能按**�
 
 ### 4.5 旧表到新表的映射
 
-22 张旧表收敛为 21 张新表（control 15 + outbox 6），其中一张迁出为文件，两张为新增。
+22 张旧表收敛为 22 张新表（control 16 + outbox 6），其中一张迁出为文件，三张为新增。
 
 | 旧表 | 新归属 | 动作 |
 | --- | --- | --- |
 | （新增） | `control.session_metrics` | 会话累计投影，见 §4.11 |
+| （新增） | `control.context_snapshots` | 会话级上下文快照投影，见 §4.11 |
 | `jarvis_schema_identity` | 无 | 删除，改用每库 `PRAGMA user_version` |
 | `session_events` | `data/events/<session>/session.v1.jsonl.zstd` | 迁出为文件 |
 | `session_checkpoints` | 事件 `kind = checkpoint` | 合并删除（生产代码零 SELECT） |
@@ -392,7 +394,7 @@ struct RuntimeEventRecord {
 
 交互指纹是关键的那一列：一次追加批次就是一帧、且通常属于同一条 Interaction，因此「这条交互的帧」在索引里是连续一段，取一页只需解压这段帧，不必整条会话过一遍。指纹只是缩小解压范围的粗筛，命中后仍逐条确认 `interaction_id`，碰撞只多解压一帧、不会返回别条交互的记录；跨交互批次记 0，读侧保守扫过。实测同一份会话里取一条 587 条事件的交互：整会话分页加过滤 359 ms，按键取帧 28 ms。
 
-索引是派生数据：文件头记录「已覆盖日志长度」，与日志真实长度不一致、结构不自洽或文件缺失时一律忽略并按日志重建；写句柄打不开索引文件时退化为「没有索引」，绝不因此挡住事件落盘。老记录只把归属写在载荷里（没有归属列）时，按键取帧的归属判定回落到载荷里的 `interactionId`，重建索引时也按载荷补出指纹：老日志在第一次有写入、索引重建之后就自动走按键取帧，不需要为兼容单独留一条「每次请求整会话扫描」的常驻路径。历史页仍保留载荷匹配的整会话扫描作为无索引时的最后兜底。
+索引是派生数据：文件头记录「已覆盖日志长度」，与日志真实长度不一致、结构不自洽或文件缺失时一律忽略并按日志重建；写句柄打不开索引文件时退化为「没有索引」，绝不因此挡住事件落盘。老记录只把归属写在载荷里（没有归属列）时，按键取帧的归属判定回落到载荷里的 `interactionId`，重建索引时也按载荷补出指纹：老日志在第一次有写入、索引重建之后就自动走按键取帧，不需要为兼容单独留一条「每次请求整会话扫描」的常驻路径。历史页只走两级：先按归属列取帧，取不到再按「同一条派发 join」定位（`inbox.session_id` 等于子会话且来源键带 `agent-dispatch:` 前缀）；两级都取不到就如实给出「该轮次没有归属」的原因，不再回落到载荷子串扫描，也不用空正文冒充。
 
 会话列表不做投影也能收敛：会话清单由 `inbox` 的索引去重得到，每会话的「最近一条、总数、首条时间、运行中数」全部走 `inbox_session_recent` 索引区间，代价随会话数而不是历史总行数增长。实测 4.8 万行 `inbox`、8 条会话：窗口函数物化整表 182 ms，索引驱动 17 ms，两侧结果逐字段一致。
 
@@ -561,6 +563,15 @@ enum TurnOrigin { External, Cron, Goal, Subagent }
 3. `TurnMetrics` 每 turn 一条，与 `turn_completed` **同帧写入**，不额外占一次 fsync。
 4. 后台任务在 `JobStarted` 与 `JobCompleted` 各一条。`background_jobs_started` 让"这个会话跑了几个后台任务"一次读出，不必扫事件。
 5. 会话累计由 `control.session_metrics` 一对一表维护（详见下节）。
+
+**上下文快照：`control.context_snapshots`**
+
+界面上的「上下文占用」与换窗提示过去是两套来源：换窗进度行读运行时的 `TokenUsage::current_context_tokens()`，头部读自己投影出来的「最后一个带用量观测的轮次」，而流式帧常常只报增量、不带窗口占用，于是头部会粘连旧值。现在两者读同一份会话级快照：
+
+- **写入点只有一处**：`event_log_repository::apply_projections`（每次追加的唯一投影入口）。它从本批 `wire_event` 里取两类读数：`usageUpdate` 给出 `currentContextTokens`、`contextWindow` 与构成；`turnLifecycle` 的 `CompactionStarted` / `CompactionCompleted` / `CompactionFailed` 给出换窗前后读数。
+- **没有可用读数的帧不覆盖、不刷新时间戳**：流式帧只报增量时保持上一份真实读数与它的时间，界面不会把旧数字标成「刚刚更新」。
+- **未知就是未知**：换窗读数优先取帧里的结构化字段，只有展示文本时只认精确整数，被压缩成 `825K` 这类单位的一律留空，不反推近似值。
+- **投影失败不阻断落盘**（与 `session_metrics` 同款）：失败只记日志，下一份真实读数会覆盖修正。
 
 **会话累计：`control.session_metrics`**
 
