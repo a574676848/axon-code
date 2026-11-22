@@ -1,4 +1,5 @@
 use super::doctor_daemon_check::doctor_daemon_check;
+use super::doctor_invariants::{doctor_invariant_check, doctor_invariant_checks};
 use super::*;
 use crate::doctor_receipts::{
     DoctorCheck as ReceiptDoctorCheck, doctor_provider_recovery_check, render_template_report,
@@ -82,30 +83,42 @@ impl DoctorReport {
             Some(DOCTOR_CHECK_LSP) => vec![doctor_lsp_check()],
             Some(DOCTOR_CHECK_RUNTIME) => vec![doctor_runtime_check(fix)],
             Some(DOCTOR_CHECK_DAEMON) => vec![doctor_daemon_check()],
+            Some(DOCTOR_CHECK_INVARIANTS) => doctor_invariant_checks(),
+            Some(DOCTOR_CHECK_INV2) => vec![doctor_invariant_check(DOCTOR_CHECK_INV2)],
+            Some(DOCTOR_CHECK_INV7A) => vec![doctor_invariant_check(DOCTOR_CHECK_INV7A)],
+            Some(DOCTOR_CHECK_INV7B) => vec![doctor_invariant_check(DOCTOR_CHECK_INV7B)],
             Some(DOCTOR_CHECK_SMOKE) => vec![doctor_smoke_check()],
             Some(unknown) => vec![DoctorCheck::failed(
                 unknown,
                 format!("未知 doctor 检查项：{unknown}"),
             )],
-            None => vec![
-                doctor_config_check(verbose),
-                doctor_cli_check(),
-                doctor_preflight_check(verbose),
-                doctor_provider_check(),
-                doctor_tool_check(),
-                doctor_mcp_check(),
-                doctor_memory_check(),
-                doctor_persona_check(),
-                doctor_lsp_check(),
-                doctor_runtime_check(fix),
-                doctor_daemon_check(),
-                doctor_smoke_check(),
-            ],
+            None => {
+                let mut checks = vec![
+                    doctor_config_check(verbose),
+                    doctor_cli_check(),
+                    doctor_preflight_check(verbose),
+                    doctor_provider_check(),
+                    doctor_tool_check(),
+                    doctor_mcp_check(),
+                    doctor_memory_check(),
+                    doctor_persona_check(),
+                    doctor_lsp_check(),
+                    doctor_runtime_check(fix),
+                    doctor_daemon_check(),
+                    doctor_smoke_check(),
+                ];
+                // 存储不变式（INV-2 / INV-7a / INV-7b）：缺少 Daemon 时如实标「无法检查」。
+                checks.extend(doctor_invariant_checks());
+                checks
+            }
         };
-        let status = if checks.iter().all(|check| check.status == DoctorStatus::Ok) {
-            DoctorStatus::Ok
-        } else {
+        let status = if checks
+            .iter()
+            .any(|check| check.status == DoctorStatus::Failed)
+        {
             DoctorStatus::Failed
+        } else {
+            DoctorStatus::Ok
         };
 
         Self { status, checks }
@@ -152,6 +165,8 @@ pub enum DoctorStatus {
     Ok,
     /// 失败。
     Failed,
+    /// 无法检查：前提不成立（例如 Daemon 未运行），既不算通过也不算失败。
+    Unverifiable,
 }
 
 impl DoctorStatus {
@@ -159,6 +174,7 @@ impl DoctorStatus {
         match self {
             Self::Ok => "ok",
             Self::Failed => "failed",
+            Self::Unverifiable => "unverifiable",
         }
     }
 }
@@ -188,6 +204,15 @@ impl DoctorCheck {
         Self {
             name: name.into(),
             status: DoctorStatus::Failed,
+            message: message.into(),
+        }
+    }
+
+    /// 前提不成立、无法检查：既不判失败，也不冒充通过。
+    pub(crate) fn unverifiable(name: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            status: DoctorStatus::Unverifiable,
             message: message.into(),
         }
     }

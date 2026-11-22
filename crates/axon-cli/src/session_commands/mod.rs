@@ -21,6 +21,8 @@ mod output;
 mod replay;
 mod session_delete;
 mod session_prune;
+mod session_repair;
+mod session_repair_report;
 mod session_resolution;
 mod sessions_list;
 mod thread_cli;
@@ -29,6 +31,7 @@ use output::{SessionOutputCommand, run_session_output};
 use replay::{SessionReplayCommand, run_session_replay};
 use session_delete::run_session_delete;
 use session_prune::run_session_prune;
+use session_repair::{SessionRepairCommand, run_session_repair};
 pub(crate) use session_resolution::{TargetKind, open_control_store, resolve_session_target};
 use sessions_list::{SessionsListCommand, run_sessions_list};
 pub(crate) use thread_cli::session_summary_views_for_root;
@@ -76,6 +79,8 @@ pub enum SessionSubcommand {
     Replay(SessionReplayCommand),
     /// 读取 tool output 归档内容。
     Output(SessionOutputCommand),
+    /// 修复存量事件日志：序号重排与事件归属回填（默认 dry-run）。
+    Repair(SessionRepairCommand),
     /// 只读诊断 Thread 事件流与会话树。
     Doctor(SessionDoctorCommand),
 }
@@ -157,6 +162,7 @@ pub(crate) fn run_session(
             run_session_replay(format, &path, command, TargetKind::Thread)
         }
         SessionSubcommand::Output(command) => run_session_output(format, command),
+        SessionSubcommand::Repair(command) => run_session_repair(format, &path, command),
         SessionSubcommand::Doctor(command) => run_session_doctor(format, &path, command),
     }
 }
@@ -320,7 +326,9 @@ fn run_session_doctor(
     command: &SessionDoctorCommand,
 ) -> CliRunResult {
     if command.repair {
-        return cli_error("session doctor --repair 当前未启用；请先运行只读诊断并人工确认");
+        return cli_error(
+            "session doctor 保持只读；存量修复请用 `axon debug session repair --reorder|--attribute`（默认 dry-run，加 --apply 才写文件）",
+        );
     }
     let root = match runtime_axon_root_path(config_path) {
         Ok(path) => path,

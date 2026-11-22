@@ -78,6 +78,19 @@ pub(super) fn interaction_events_payload(
             "skippedArchivedFrames": page.skipped_archived_frames,
             // 回显实际生效的页大小：越界值被夹取时不回显，调用方无法判断自己是否被截断。
             "limit": limit,
+            // 读不到归属时的原因，原样透出：它与「这一轮确实没有过程」是两种事实，
+            // 客户端必须能分辨，不能用空正文冒充。
+            "unattributedReason": page.unattributed_reason,
+            // 同一事实的可读中文提示：没有任何归属帧时正文就是空的，只给空正文等于
+            // 让界面把「过程在库里但无法归位」渲染成「这一轮没有过程」。
+            "unattributedNotice": unattributed_notice(page.unattributed_reason.as_deref()),
         }),
     )
+}
+
+/// 无归属帧的中文提示；有归属时为空。
+///
+/// 原因本身已经是一句中文结论，这里只在它之上补足「空正文代表什么」，不另造一套措辞。
+fn unattributed_notice(reason: Option<&str>) -> Option<String> {
+    reason.map(|reason| format!("{reason}。该轮次的过程仍在事件库里，无法归位不等于这一轮没有过程"))
 }

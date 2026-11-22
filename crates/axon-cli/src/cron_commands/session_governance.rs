@@ -273,7 +273,10 @@ fn modified_ms(metadata: &std::fs::Metadata) -> u64 {
 }
 
 /// 会话事件目录下的日志文件清单。
-fn session_log_files(events_root: &Path) -> Result<Vec<std::path::PathBuf>, String> {
+///
+/// 存量修复工具（`axon debug session repair`）与治理任务共用这一份枚举口径：
+/// 目录布局只有一处定义，两边不会因为「哪个文件算日志」而产生分歧。
+pub(crate) fn session_log_files(events_root: &Path) -> Result<Vec<std::path::PathBuf>, String> {
     let entries =
         std::fs::read_dir(events_root).map_err(|error| format!("读取会话事件目录失败：{error}"))?;
     let mut logs = Vec::new();

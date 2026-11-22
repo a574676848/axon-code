@@ -81,6 +81,10 @@ use workbench_http_subagents_jobs::{
 #[path = "workbench_http_adapter_tests.rs"]
 mod workbench_http_adapter_tests;
 
+#[cfg(test)]
+#[path = "workbench_http_interaction_events_tests.rs"]
+mod interaction_events_tests;
+
 /// 车道内 Interaction 列表载荷的组装在 [`session_interactions`] 里：它与只读列表的
 /// 逐轮读数、最终正文共用同一条「不回放正文」的取数口径，独立成文后本文件只保留路由。
 ///

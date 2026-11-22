@@ -13,6 +13,8 @@ use self::session_cleanup_sqlite::vacuum_session_sqlite_files;
 use self::session_family_cleanup::{
     cleanup_session_family_data, count_session_family_data, stale_session_family_ids,
 };
+/// 会话事件日志清单的对外出口：存量修复工具按同一份口径枚举日志。
+pub(crate) use self::session_governance::session_log_files;
 use self::session_governance::{
     GovernanceBudget, govern_thread_windows, tier_event_bodies, truncate_wal,
 };
