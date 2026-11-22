@@ -10,7 +10,7 @@ use super::model::{SessionDto, draft_id, is_draft_id, normalize};
 use super::mutation::{
     RemovalScope, execute_session_rename, prune_pending, rollback_gateway_title,
 };
-use super::projection::apply_session_facts;
+use super::projection::{apply_session_facts, archived_of};
 use crate::session_menu::SessionMenuEntry;
 use crate::session_source::WorkspaceEntry as RegistryWorkspace;
 use crate::session_source::{SessionEntry, SessionSource};
@@ -245,6 +245,7 @@ fn session_entry(id: &str, interaction_count: u64) -> SessionEntry {
         channel: "desktop".to_string(),
         destination: "workbench-1".to_string(),
         audience: "私密".to_string(),
+        archived: false,
         title: String::new(),
         interaction_count,
         pending_question_count: 0,
@@ -252,6 +253,33 @@ fn session_entry(id: &str, interaction_count: u64) -> SessionEntry {
         created_at_ms: 1,
         updated_at_ms: 1,
     }
+}
+
+#[test]
+fn the_archived_flag_comes_from_the_runtime_list() {
+    // 归档可能发生在命令行、TUI 或另一个窗口：那一路的事实只落在会话表里，
+    // 桌面本地镜像没有它。清单读全（`include_archived=1`）并带着这一位，
+    // 「仅显示已归档」才看得到这些会话；只认本地镜像会读成一条都没有。
+    let mut archived_in_runtime = session_entry("01M80SRNDN945AXEJTHF7WWH6T", 2);
+    archived_in_runtime.archived = true;
+    assert!(
+        archived_of(&archived_in_runtime, &[]),
+        "运行态说已归档，就必须读成已归档"
+    );
+
+    let active = session_entry("01M80TF0ER99D8RJNGERGJHHS7", 2);
+    assert!(!archived_of(&active, &[]), "活跃会话不得被算成归档");
+
+    // 旧版本本地镜像仍然兜底，且只作用于它自己那一条。
+    let mirror = vec!["session-legacy".to_string()];
+    assert!(
+        archived_of(&session_entry("session-legacy", 0), &mirror),
+        "本地镜像里的归档记录仍然要生效"
+    );
+    assert!(
+        !archived_of(&active, &mirror),
+        "镜像里别的会话不得牵连这一条"
+    );
 }
 
 /// 造一条待激活记录。

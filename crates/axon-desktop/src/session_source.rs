@@ -18,6 +18,13 @@ use crate::gateway;
 /// 本应用产生的车道所属渠道。
 pub const DESKTOP_SESSION_CHANNEL: &str = "desktop";
 
+/// 会话清单的读取路径。
+///
+/// 归档是**展示层筛选**（侧栏的「隐藏已归档 / 全部对话 / 仅显示已归档」三档），
+/// 不是「这条会话不存在」：网关默认把归档会话从清单里隐去，只读默认清单会让
+/// 「仅显示已归档」永远是空列表。取数一次读全，筛哪一档交给展示层。
+const SESSIONS_LIST_PATH: &str = "/sessions?include_archived=1";
+
 /// 工作区条目，对应网关 `GET /api/v1/workspaces` 的载荷。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,6 +67,12 @@ pub struct SessionEntry {
     /// 受众边界标签。
     #[serde(default)]
     pub audience: String,
+    /// 是否已归档。
+    ///
+    /// 归档只决定它在侧栏的哪一档里出现，会话本身仍然成立：清单按
+    /// [`SESSIONS_LIST_PATH`] 读全，因此这一位随条目一起下发。
+    #[serde(default)]
+    pub archived: bool,
     /// 车道标题。
     pub title: String,
     /// Interaction 总数。
@@ -84,7 +97,10 @@ pub trait SessionSource: Send + Sync {
     /// 注册表中全部工作区。
     fn workspaces(&self) -> Result<Vec<WorkspaceEntry>, String>;
 
-    /// 全部真实车道。
+    /// 全部真实车道（含已归档）。
+    ///
+    /// 归档会话同样是真实车道：它只是不在默认那一档里展示。读全再筛，避免展示层
+    /// 需要为归档再发一次请求，也避免两次读取之间被另一端改写。
     fn sessions(&self) -> Result<Vec<SessionEntry>, String>;
 
     /// 新建一条会话并返回服务端生成的标识。
@@ -128,7 +144,7 @@ impl SessionSource for GatewaySessionSource {
     }
 
     fn sessions(&self) -> Result<Vec<SessionEntry>, String> {
-        let payload = gateway::get_json("/sessions")?;
+        let payload = gateway::get_json(SESSIONS_LIST_PATH)?;
         entries(&payload, "sessions")
     }
 

@@ -107,6 +107,15 @@ fn workspace_entries(source: &dyn SessionSource) -> Result<Vec<WorkspaceEntry>, 
     Ok(entries)
 }
 
+/// 车道是否已归档。
+///
+/// 运行态清单给的这一位是权威值：归档动作可能来自命令行、TUI 或另一个窗口，它们的
+/// 事实只落在会话表里。本地镜像只是旧版本后台不下发这一位时的兜底，不能让「桌面自己
+/// 存过一份状态」盖住三端共用的那一份。
+pub(super) fn archived_of(entry: &crate::session_source::SessionEntry, mirror: &[String]) -> bool {
+    entry.archived || mirror.iter().any(|id| id == &entry.session_id)
+}
+
 /// 按运行态会话清单校正车道的状态、标题与活动时刻。
 ///
 /// 三件事都以 `sessions` 表为准：置顶与归档取表里的值，标题取表里的会话标题
@@ -181,6 +190,8 @@ pub(super) fn build_workspaces(source: &dyn SessionSource) -> Result<Vec<Workspa
         } else {
             session.workspace_id.clone()
         };
+        // 归档位先取：标题、渠道与目标下面会逐个被搬走，之后再借整条会话是借不到的。
+        let archived = archived_of(&session, &state.session_archived);
         let title = state
             .session_title
             .get(&session.session_id)
@@ -213,10 +224,7 @@ pub(super) fn build_workspaces(source: &dyn SessionSource) -> Result<Vec<Workspa
                 .session_pinned
                 .iter()
                 .any(|id| id == &session.session_id),
-            archived: state
-                .session_archived
-                .iter()
-                .any(|id| id == &session.session_id),
+            archived,
             interaction_count: session.interaction_count,
             id: session.session_id,
             title,
