@@ -512,7 +512,13 @@ export function foldStreamUsage(turn: TurnState): TurnState {
   return { ...turn, usageFolded: turn.usage, usageStream: null };
 }
 
-/** 流内快照：累加量整组替换，构成与上下文占用沿用「新观测非零才覆盖」。 */
+/**
+ * 流内快照：累加量整组替换，上下文占用只认这一帧自己报的读数。
+ *
+ * 帧里不带 `currentContextTokens` 就是「这一帧没有报占用」，按未知处理（记 0），
+ * 绝不沿用上一帧的旧值：那条粘连正是「换窗之后头部还停在 825K」的来源。
+ * 构成估算仍在缺项时保留上一份，它是同一请求的分解，与占用不是同一个事实。
+ */
 function streamUsage(previous: TokenUsage | null, usage: WireUsageUpdate): TokenUsage {
   return {
     inputTokens: usage.inputTokens,
@@ -520,10 +526,7 @@ function streamUsage(previous: TokenUsage | null, usage: WireUsageUpdate): Token
     cacheWriteInputTokens: usage.cacheWriteInputTokens ?? 0,
     outputTokens: usage.outputTokens,
     reasoningOutputTokens: usage.reasoningOutputTokens ?? 0,
-    currentContextTokens:
-      (usage.currentContextTokens ?? 0) > 0
-        ? (usage.currentContextTokens ?? 0)
-        : (previous?.currentContextTokens ?? 0),
+    currentContextTokens: usage.currentContextTokens ?? 0,
     // 构成是「最近一次真实请求」的快照而不是累加量：只在新观测非零时整组替换。
     systemPromptTokens: compositionValue(usage.systemPromptTokens, previous?.systemPromptTokens ?? 0),
     toolDefinitionTokens: compositionValue(
@@ -534,7 +537,7 @@ function streamUsage(previous: TokenUsage | null, usage: WireUsageUpdate): Token
   };
 }
 
-/** 累计 + 在跑流快照：累加量相加，快照类读数以在跑流为准并在其缺观测时回落到累计。 */
+/** 累计 + 在跑流快照：累加量相加，快照类读数以在跑流为准（它没报就是未知，不回头取值）。 */
 function mergeUsage(folded: TokenUsage, stream: TokenUsage): TokenUsage {
   return {
     inputTokens: folded.inputTokens + stream.inputTokens,
@@ -542,7 +545,7 @@ function mergeUsage(folded: TokenUsage, stream: TokenUsage): TokenUsage {
     cacheWriteInputTokens: folded.cacheWriteInputTokens + stream.cacheWriteInputTokens,
     outputTokens: folded.outputTokens + stream.outputTokens,
     reasoningOutputTokens: folded.reasoningOutputTokens + stream.reasoningOutputTokens,
-    currentContextTokens: stream.currentContextTokens > 0 ? stream.currentContextTokens : folded.currentContextTokens,
+    currentContextTokens: stream.currentContextTokens,
     systemPromptTokens: compositionValue(stream.systemPromptTokens, folded.systemPromptTokens),
     toolDefinitionTokens: compositionValue(stream.toolDefinitionTokens, folded.toolDefinitionTokens),
     conversationTokens: compositionValue(stream.conversationTokens, folded.conversationTokens),

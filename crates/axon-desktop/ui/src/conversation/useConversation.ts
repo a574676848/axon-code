@@ -18,8 +18,8 @@ import {
   pendingSteerCount,
   type AttachmentRef,
 } from './transcript';
-import type { ConversationStreamEvent } from './wire';
 import { SESSION_TURNS_PREFIX } from './sessionTurns';
+import { useStreamFrames } from './useStreamFrames';
 import { useTurnHeadRefresh } from './useTurnHeadRefresh';
 import type { SessionEffectiveModel } from './viewConfig';
 import { normalizeTarget } from './targets';
@@ -37,8 +37,6 @@ import { useQuestionSync } from './useQuestionSync';
 import { useSessionCumulative } from './useSessionCumulative';
 import type { SessionFacts } from './sessionFacts';
 
-/** 一帧的合并窗口，与 TUI 的助手增量归并窗口同量级。 */
-const FRAME_FLUSH_MS = 16;
 /**
  * 过渡窗口的上限。
  *
@@ -151,8 +149,6 @@ export function useConversation(
    */
   const [capabilityTarget, setCapabilityTarget] = useState<string | null>(null);
 
-  const pendingRef = useRef<ConversationStreamEvent[]>([]);
-  const flushRef = useRef<number | null>(null);
   /**
    * 正文装载中的镜像：目标刚打开，或一页历史还没落地。
    *
@@ -259,55 +255,22 @@ export function useConversation(
     },
     dispatch,
   });
-  /** 帧到达：按本控制器持有的订阅标识过滤，入队并在下一帧窗口一次性派发。 */
-  const onStreamEvent = useCallback(
-    (event: ConversationStreamEvent) => {
-      // 一条连接承载多路订阅；只收属于自己的那几路，其余（别的视图的订阅）直接丢弃。
-      if (!subscribedIdsRef.current.has(event.subscribeId)) return;
-      /*
-       * 轮次头只表达「这条会话的轮次清单变了」：它不进正文投影，也不和正文帧混批。
-       * 收到就唤一次索引重读，由 `appendSession` 只接本视图还不认识的那几条。
-       */
-      if (handleTurnHeadFrame(event)) return;
-      pendingRef.current.push(event);
-      if (flushRef.current !== null) return;
-      const generation = generationRef.current;
-      flushRef.current = window.setTimeout(() => {
-        flushRef.current = null;
-        // 目标已切换：这一批帧属于上一次目标，丢弃即可（新目标会重置投影）。
-        if (generationRef.current !== generation) {
-          pendingRef.current = [];
-          return;
-        }
-        const batch = pendingRef.current;
-        pendingRef.current = [];
-        if (batch.length === 0) return;
-        // 实时增量与历史回放共用同一个归约入口：这里就是主投影唯一的帧落点。
-        dispatch({ type: 'frames', frames: batch, nowMs: Date.now() });
-        if (workspaceId === null) return;
-        // 收到终态帧：这一轮不会再产生事件，按**帧自带的订阅标识**还回那一路订阅。
-        // 不能按 `watchedRef` 退订：多轮并行时它只记得最后一条，退掉的会是另一条仍在跑的流。
-        const terminalIds = new Set<string>();
-        for (const frame of batch) {
-          if (
-            frame.kind === 'frame' &&
-            (frame.eventType === 'turn_completed' || frame.eventType === 'turn_failed')
-          ) {
-            const prefix = 'interaction:';
-            if (frame.subscribeId.startsWith(prefix)) {
-              terminalIds.add(frame.subscribeId.slice(prefix.length));
-            }
-          }
-        }
-        for (const interactionId of terminalIds) {
-          if (watchedRef.current === interactionId) watchedRef.current = null;
-          rememberUnsubscribed(`interaction:${interactionId}`);
-          void ipc.conversationUnsubscribe(`interaction:${interactionId}`).catch(() => undefined);
-        }
-      }, FRAME_FLUSH_MS);
-    },
-    [handleTurnHeadFrame, rememberUnsubscribed, workspaceId],
-  );
+  /**
+   * 帧到达：过滤、合批、按序号续读都在 `useStreamFrames` 里。
+   *
+   * 这一段整块搬出编排文件：它只处理订阅通道的三件事（属于谁、什么时候派发、
+   * 截断后从哪里续），与正文投影无关；留在流程中间既推长本文件，也让「续读从哪开始」
+   * 这条规则埋在别处。
+   */
+  const { onStreamEvent, resetFrames } = useStreamFrames({
+    workspaceId,
+    generationRef,
+    dispatch,
+    isSubscribed: (subscribeId) => subscribedIdsRef.current.has(subscribeId),
+    handleTurnHeadFrame,
+    forgetSubscription: rememberUnsubscribed,
+    watchedRef,
+  });
 
   useEffect(() => {
     let dispose: (() => void) | null = null;
@@ -355,7 +318,7 @@ export function useConversation(
     generationRef.current += 1;
     setReplaying(true);
     watchedRef.current = null;
-    pendingRef.current = [];
+    resetFrames();
     subscribedIdsRef.current = new Set();
     dispatch({ type: 'connecting' });
     setSubmitError(null);
@@ -560,7 +523,7 @@ export function useConversation(
     if (sessionId === null || workspace === null) return;
     // 重连第一步是放手旧订阅：订阅断掉后后端那一格仍占着该标识，不退订就重放，
     // 回放里那次重新订阅会被幂等挡下，界面拼完历史也收不到增量。
-    pendingRef.current = [];
+    resetFrames();
     watchedRef.current = null;
     setSessionReadyId(null);
     // 重连重开一轮：清掉上一次的定时器，并把重试预算复位。

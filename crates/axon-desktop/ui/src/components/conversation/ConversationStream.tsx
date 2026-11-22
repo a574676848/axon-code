@@ -5,6 +5,8 @@ import { Text } from '../ui/surfaces';
 import { MessageRail } from './MessageRail';
 import { TurnBlock } from './TranscriptTurn';
 import { DividerMetaRow } from './DividerMetaRow';
+import { ContextSnapshotProvider } from './ContextSnapshotProvider';
+import type { ContextSnapshotReading } from '../../conversation/contextSnapshot';
 import { turnWindow } from './turnWindow';
 import { useConversationActions } from './actions';
 import { failureBanner } from '../../conversation/failureBanner';
@@ -106,6 +108,13 @@ export interface ConversationStreamProps {
    * 传空即整行不渲染；停留多久、什么时候退场由上层决定。
    */
   reflectionNotice?: string | null;
+  /**
+   * 会话上下文快照读数。
+   *
+   * 正文里的换窗进度行与头部读同一份：这里按上下文注入给每一轮，因此两处不会各读一套。
+   * 空表示还没有可用读数，进度行退回运行侧自己的摘要。
+   */
+  contextSnapshot?: ContextSnapshotReading | null;
 }
 
 export const ConversationStream: React.FC<ConversationStreamProps> = ({
@@ -119,6 +128,7 @@ export const ConversationStream: React.FC<ConversationStreamProps> = ({
   onLoadOlder,
   prependToken = 0,
   reflectionNotice = null,
+  contextSnapshot = null,
 }) => {
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const sentinelRef = React.useRef<HTMLDivElement>(null);
@@ -333,6 +343,7 @@ export const ConversationStream: React.FC<ConversationStreamProps> = ({
   }, [prependToken]);
 
   return (
+    <ContextSnapshotProvider reading={contextSnapshot}>
     <div className="relative flex-1 min-h-0">
       {/*
         正文区是自己的一块滚动容器，与输入坞是同级兄弟而不是叠在一起：
@@ -453,5 +464,6 @@ export const ConversationStream: React.FC<ConversationStreamProps> = ({
       <MessageRail turns={turns} scrollRef={scrollRef} anchors={anchors} atBottom={atBottom}
         onNavigate={releaseFollow} />
     </div>
+    </ContextSnapshotProvider>
   );
 };

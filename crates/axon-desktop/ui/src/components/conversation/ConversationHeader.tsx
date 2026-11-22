@@ -1,12 +1,12 @@
 import React from 'react';
 import {
   headerClusters,
-  currentContextTokens,
   type HeaderClusterKind,
   type HeaderMetricsInput,
   type HeaderSegment,
   type HeaderSegmentTone,
 } from '../../conversation/metrics';
+import { contextUsedRatio, type ContextSnapshotReading } from '../../conversation/contextSnapshot';
 import { contextUsageModel } from '../../conversation/contextUsage';
 import {
   ChecklistIcon,
@@ -61,14 +61,10 @@ const CLUSTER_VISIBILITY: Record<HeaderClusterKind, string> = {
   aux: 'hidden @min-[760px]:flex',
 };
 
-/** 上下文占用百分比；无窗口定义时返回 null。 */
-function contextPercentValue(metrics: HeaderMetricsInput): number | null {
-  if (metrics.contextWindow === null || metrics.contextWindow <= 0 || metrics.usage === null) {
-    return null;
-  }
-  const used = currentContextTokens(metrics.usage);
-  if (used === 0) return null;
-  return Math.min(100, Math.floor((used * 100) / metrics.contextWindow));
+/** 上下文占用百分比；窗口未知时返回 null（环形图标因此不画进度）。 */
+function contextPercentValue(reading: ContextSnapshotReading | null): number | null {
+  const ratio = contextUsedRatio(reading);
+  return ratio === null ? null : Math.floor(ratio * 100);
 }
 /**
  * 指标图标：线性图形，14px。
@@ -114,9 +110,9 @@ export const ConversationHeader: React.FC<ConversationHeaderProps> = ({
 }) => {
   const clusters = headerClusters(metrics);
   /** 两段读数带弹窗：会话累计展开用量明细，上下文展开构成明细。其余段是纯读数。 */
-  const contextUsage = contextUsageModel(metrics.usage, metrics.contextWindow);
+  const contextUsage = contextUsageModel(metrics.contextSnapshot);
   const sessionCumulative = metrics.sessionCumulative ?? null;
-  const contextPercent = contextPercentValue(metrics);
+  const contextPercent = contextPercentValue(metrics.contextSnapshot);
   return (
     <header
       data-tauri-drag-region
@@ -169,6 +165,13 @@ export const ConversationHeader: React.FC<ConversationHeaderProps> = ({
                 >
                   {metricIcon(segment, contextPercent)}
                   <span className="truncate">{segment.text}</span>
+                  {/*
+                    段后的次级读数：上下文的「更新于 N 秒前」长在这一段里。
+                    它与读数同一份事实，因此跟着段一起出现、一起收起，不另立一段。
+                  */}
+                  {segment.meta !== undefined && (
+                    <span className="shrink-0 text-meta text-text-tertiary">{segment.meta}</span>
+                  )}
                 </span>
               );
               if (withContextCard) {

@@ -12,7 +12,8 @@ mod session_cache;
 mod session_routing;
 use super::gateway_kernel::{
     GatewayEgress, GatewayEvent, GatewayEventStream, GatewayIngress, GatewayKernelError,
-    GatewayReplayReport, GatewaySessionTurnsRequest, GatewaySubscriptionRequest,
+    GatewayReplayReport, GatewaySessionLive, GatewaySessionTurnsRequest,
+    GatewaySubscriptionRequest,
 };
 use super::gateway_replay::{
     DEFAULT_GATEWAY_REPLAY_PAGE_SIZE, interaction_status_event, live_ceiling_cursor,
@@ -270,6 +271,40 @@ where
         SilentTurnSettlementService::new(self.dependencies.store.clone())
             .settle_turn(&request, interaction_id)
             .map_err(|error| GatewayKernelError::Ingress(error.to_string()))
+    }
+
+    /// 读运行态证据：只在有带租约且租约未过期的在跑轮次时才报「在跑」。
+    ///
+    /// 判定与写侧共用宿主时钟：两处各取一次时间会让「租约刚好到期」随毫秒差抖动。
+    /// `idleForMs` 取会话行上的最后活动时刻（最后一条事件写入的投影），不另读事件日志。
+    fn session_live(
+        &self,
+        session_id: &DaemonSessionId,
+    ) -> Result<GatewaySessionLive, GatewayKernelError> {
+        self.ensure_session_exists(session_id)?;
+        let runtime = self
+            .dependencies
+            .store
+            .get_session(session_id)
+            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
+        let now_ms = self.dependencies.clock.now_ms();
+        let turns = self
+            .dependencies
+            .store
+            .in_flight_turns(session_id)
+            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
+        let lease_remaining_ms = turns
+            .iter()
+            .filter_map(|turn| turn.lease_expires_at_ms)
+            .filter(|expires_at_ms| *expires_at_ms > now_ms)
+            .map(|expires_at_ms| expires_at_ms - now_ms)
+            .max();
+        Ok(GatewaySessionLive {
+            running: lease_remaining_ms.is_some(),
+            lease_remaining_ms,
+            last_frame_sequence: runtime.last_event_sequence,
+            idle_for_ms: now_ms.saturating_sub(runtime.last_activity_at_ms),
+        })
     }
 }
 

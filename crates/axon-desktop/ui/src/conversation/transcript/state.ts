@@ -374,6 +374,13 @@ export interface ConversationState {
   turns: TurnState[];
   connection: ConnectionState;
   failure: { message: string; retryable: boolean } | null;
+  /**
+   * 残缺历史的提示文案（如「历史仅显示到第 6230 帧」）。
+   *
+   * 由订阅确认帧的截断事实得出：为空表示这次回放已经读到 durable 尾。
+   * 它是会话级事实，不是某一轮的单元，因此挂在投影上而不是某个轮次里。
+   */
+  replayNotice: string | null;
   /** 断点续订游标。 */
   cursor: string | null;
   /** 最近一帧运行指标。 */
@@ -433,6 +440,7 @@ export const INITIAL_CONVERSATION: ConversationState = {
   turns: [],
   connection: 'idle',
   failure: null,
+  replayNotice: null,
   cursor: null,
   observation: null,
   lastObservationAtMs: 0,

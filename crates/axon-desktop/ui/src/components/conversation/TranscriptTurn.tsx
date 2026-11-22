@@ -3,7 +3,9 @@ import { changedFilesOf, conclusionMarkerOf } from '../../conversation/transcrip
 import type { TranscriptCell, TurnState } from '../../conversation/transcript/state';
 import { orderTurnCells } from '../../conversation/transcript/order';
 import { retryPromptOf } from '../../conversation/transcript/retryPrompt';
+import { rolloverLineSummary } from '../../conversation/contextSnapshot';
 import { ChangedFilesCard } from './ChangedFilesCard';
+import { useContextSnapshotReading } from './ContextSnapshotProvider';
 import { DisclosureRow } from './DisclosureRow';
 import { foldJobReads } from './jobFolding';
 import { NoticeBlock, TranscriptCellView } from './Transcript';
@@ -109,6 +111,21 @@ function groupCells(rows: CellRow[]): CellGroup[] {
   return groups;
 }
 
+/**
+ * 换窗进度行的读数改读会话快照。
+ *
+ * 头部与换窗行必须显示同一份快照的换窗前后读数：运行侧自己的进度摘要只是「当时说了
+ * 什么」，两者各读一套就会在同一屏上给出两个数字。只有最新一轮的这一行算「当前换窗」，
+ * 更早轮次里的换窗行保留各自的历史记录，不改写成最新一次的结果。
+ */
+function withSnapshotRollover(
+  cell: TranscriptCell,
+  rolloverText: string | null,
+): TranscriptCell {
+  if (rolloverText === null || cell.role !== 'history') return cell;
+  return { ...cell, summary: rolloverLineSummary(cell.summary, rolloverText) };
+}
+
 export interface TurnBlockProps {
   turn: TurnState;
   /** 轮次序号，从 1 开始；只用于改动卡片的分组标题。 */
@@ -179,6 +196,8 @@ export const TurnBlock = React.memo<TurnBlockProps>(
     }, [allProcessVisible, live, rows]);
     const tail = cells[cells.length - 1];
     const endsWithSummary = tail !== undefined && tail.role === 'summary';
+    /** 会话级快照的换窗读数：最新一轮的换窗进度行与头部据此同源。 */
+    const rolloverText = useContextSnapshotReading()?.rolloverText ?? null;
     /*
      * 改动卡片插在收尾分割线之前：改动属于这一轮真的做过的工作，分割线负责收口这一轮，
      * 因此卡片不会被读成下一轮的开场白；没有收尾时卡片落在轮末。
@@ -245,7 +264,7 @@ export const TurnBlock = React.memo<TurnBlockProps>(
                 row.collapsedProcess === undefined ? (
                   <TranscriptCellView
                     key={row.key}
-                    cell={row.cell}
+                    cell={withSnapshotRollover(row.cell, live ? rolloverText : null)}
                     repeats={row.repeats}
                     repeatsMs={row.repeatsMs}
                     retryPrompt={row.cell.role === 'failure' ? retryPrompt : undefined}

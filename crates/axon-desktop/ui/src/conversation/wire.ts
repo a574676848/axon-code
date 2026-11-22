@@ -37,7 +37,20 @@ export const baselineNeedsRefresh = (
 };
 
 export type ConversationStreamEvent =
-  | { kind: 'subscribed'; subscribeId: string; baseline?: SessionTurnsBaseline | null }
+  | {
+      kind: 'subscribed';
+      subscribeId: string;
+      baseline?: SessionTurnsBaseline | null;
+      /**
+       * 这次 durable 回放是否没有追到尾巴。
+       *
+       * 真表示前端手上的历史是残缺的：界面必须如实标注，并按 `resumeCursor` 续读，
+       * 不得把它当完整历史渲染。旧网关缺省为假。
+       */
+      replayTruncated?: boolean;
+      /** 截断时的真实续读位置（durable 游标 JSON 文本）。 */
+      resumeCursor?: string | null;
+    }
   | {
       kind: 'frame';
       subscribeId: string;

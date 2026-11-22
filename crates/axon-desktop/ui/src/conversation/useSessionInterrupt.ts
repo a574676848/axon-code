@@ -14,6 +14,7 @@
 import { useCallback, useRef } from 'react';
 import * as ipc from '../ipc';
 import { interruptOutcome, readLatestTurnReading } from './interruptOutcome';
+import { conversationSettleSilentTurn } from './sessionEndpoints';
 
 export interface SessionInterruptOptions {
   /** 当前车道标识；会话目标下为空。 */
@@ -40,12 +41,20 @@ export function useSessionInterrupt(options: SessionInterruptOptions): () => Pro
     onBeforeInterrupt();
     try {
       const receipt = await ipc.conversationInterrupt(session);
-      const outcome = await interruptOutcome(receipt, () =>
-        readLatestTurnReading(async () => {
-          // 只取最新一条：结论只依赖这一轮现在在不在跑。
-          const page = await ipc.conversationHistory(session, 1);
-          return page.interactions;
-        }),
+      const outcome = await interruptOutcome(
+        receipt,
+        () =>
+          readLatestTurnReading(async () => {
+            // 只取最新一条：结论只依赖这一轮现在在不在跑，以及它是不是要在服务端收口。
+            const page = await ipc.conversationHistory(session, 1);
+            return page.interactions;
+          }),
+        /*
+         * 索引仍说在途时请服务端收口：界面不自己改状态，只转达服务端的判据。
+         * 旧后台没有这条路由时返回 null，界面如实说「没有可用的收口接口」。
+         */
+        (interactionId) =>
+          conversationSettleSilentTurn(session, interactionId).catch(() => null),
       );
       if (outcome.notice !== null) onNotice(outcome.notice);
     } catch (error) {

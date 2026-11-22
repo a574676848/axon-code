@@ -78,6 +78,7 @@ const ROUTE_LIMITS: &[RouteLimit] = &[
         "/api/v1/sessions/{session_id}/context-snapshot",
         NO_BODY_LIMIT,
     ),
+    route("GET", "/api/v1/sessions/{session_id}/live", NO_BODY_LIMIT),
     route(
         "POST",
         "/api/v1/sessions/{session_id}/settle-silent-turn",

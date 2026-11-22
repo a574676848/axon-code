@@ -103,10 +103,11 @@ use connection::commands::{
 use connection::keys::{connection_keys_create, connection_keys_list, connection_keys_revoke};
 use conversation::{
     attachment_pick, attachment_preview, attachment_stage, conversation_answer_question,
-    conversation_history, conversation_history_events, conversation_interrupt,
-    conversation_job_output, conversation_send_subagent_message, conversation_session_jobs,
-    conversation_session_questions, conversation_session_subagents,
-    conversation_set_active_session, conversation_stop_job, conversation_submit,
+    conversation_context_snapshot, conversation_history, conversation_history_events,
+    conversation_interrupt, conversation_job_output, conversation_send_subagent_message,
+    conversation_session_jobs, conversation_session_live, conversation_session_questions,
+    conversation_session_subagents, conversation_set_active_session,
+    conversation_settle_silent_turn, conversation_stop_job, conversation_submit,
     conversation_unsubscribe, conversation_watch, conversation_watch_turns,
 };
 use desktop_preferences::{
@@ -367,6 +368,9 @@ pub fn run() {
             conversation_watch_turns,
             conversation_unsubscribe,
             conversation_interrupt,
+            conversation_settle_silent_turn,
+            conversation_context_snapshot,
+            conversation_session_live,
             conversation_stop_job,
             conversation_send_subagent_message,
             conversation_session_jobs,

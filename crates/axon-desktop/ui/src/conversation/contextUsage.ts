@@ -1,14 +1,15 @@
 /*
  * 上下文使用弹窗的视图模型。
  *
- * 只做一件事：把「Provider 报出的上下文总量」与「本地估算的构成」摆到同一张卡上。
+ * 只做一件事：把「快照报出的上下文总量」与「快照里的构成估算」摆到同一张卡上。
  * 两者口径天然不同（Provider 用自己的分词器，本地按 Provider 可见字节数折算），
  * 因此这里不把估算硬凑成总量：总量用实测值，构成用估算值，差额单独成段讲清楚。
- * 缺观测就不画：宁可不出现，也不填 0 或占位值。
+ * 缺观测就不画：宁可不出现，也不填 0 或占位值。数据只来自一份带时间戳的快照，
+ * 与指标条上的上下文段同源。
  */
 
 import { formatDecimalCount } from './format';
-import { compositionTokens, currentContextTokens, type TokenUsage } from './transcript';
+import { windowTokensText, type ContextSnapshotReading } from './contextSnapshot';
 
 /** 构成分段类型。 */
 export type ContextUsageSegmentKind = 'systemPrompt' | 'toolDefinitions' | 'conversation' | 'other';
@@ -33,14 +34,16 @@ export interface ContextUsageSegment {
 
 /** 上下文使用弹窗模型。 */
 export interface ContextUsageModel {
-  /** Provider 报出的当前上下文 token。 */
+  /** 快照报出的当前上下文 token。 */
   usedTokens: number;
   /** 已用比例（0~1），给标题前的环形图形用。 */
   usedRatio: number;
   /** 标题里的强调值（如 `63%`）；无窗口时为空。 */
   percentText: string | null;
-  /** 总量文本：有窗口时 `122K / 1M`，否则只有已用。 */
+  /** 总量文本：有窗口时 `122K / 1M`，分母未知时写未知。 */
   totalText: string;
+  /** 这份读数的更新时刻（`更新于 N 秒前` / `未知更新时刻`）。 */
+  updatedText: string;
   /** 构成分段；没有构成观测时为空数组，卡片显式降级。 */
   segments: ContextUsageSegment[];
 }
@@ -60,40 +63,45 @@ function percentOf(tokens: number, base: number | null): number | null {
   return Math.min(100, Math.floor((tokens * 100) / base));
 }
 
+/** 构成项取值：缺省与零同义（没有这一项观测）。 */
+function compositionValue(value: number | null | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
 /**
  * 组装弹窗模型。
  *
- * 返回 null 表示这一轮根本没有上下文观测，此时连入口都不该出现。
+ * 返回 null 表示这份快照根本没有上下文观测，此时连入口都不该出现。
  */
-export function contextUsageModel(
-  usage: TokenUsage | null,
-  contextWindow: number | null,
-): ContextUsageModel | null {
-  if (usage === null) return null;
-  const usedTokens = currentContextTokens(usage);
-  if (usedTokens === 0) return null;
-  const windowTokens = contextWindow !== null && contextWindow > 0 ? contextWindow : null;
-  const estimatedTokens = compositionTokens(usage);
+export function contextUsageModel(reading: ContextSnapshotReading | null): ContextUsageModel | null {
+  if (reading === null || reading.usedTokens === null || reading.usedTokens <= 0) return null;
+  const usedTokens = reading.usedTokens;
+  const windowTokens =
+    reading.windowTokens !== null && reading.windowTokens > 0 ? reading.windowTokens : null;
+  const systemPromptTokens = compositionValue(reading.composition?.systemPromptTokens);
+  const toolDefinitionTokens = compositionValue(reading.composition?.toolDefinitionTokens);
+  const conversationTokens = compositionValue(reading.composition?.conversationTokens);
+  const estimatedTokens = systemPromptTokens + toolDefinitionTokens + conversationTokens;
   const segments: ContextUsageSegment[] = [];
   if (estimatedTokens > 0) {
     pushSegment(segments, {
       kind: 'systemPrompt',
       label: '系统提示词',
-      tokens: usage.systemPromptTokens,
+      tokens: systemPromptTokens,
       color: COLOR_SYSTEM,
       hint: '本地估算：Axon 注入的系统提示词、工作区约定与上下文片段',
     });
     pushSegment(segments, {
       kind: 'toolDefinitions',
       label: '工具定义',
-      tokens: usage.toolDefinitionTokens,
+      tokens: toolDefinitionTokens,
       color: COLOR_TOOLS,
       hint: '本地估算：本次请求携带的工具 schema',
     });
     pushSegment(segments, {
       kind: 'conversation',
       label: '对话消息',
-      tokens: usage.conversationTokens,
+      tokens: conversationTokens,
       color: COLOR_CONVERSATION,
       hint: '本地估算：用户、助手与工具回执消息',
     });
@@ -118,8 +126,9 @@ export function contextUsageModel(
     percentText: percent === null ? null : `${percent}%`,
     totalText:
       windowTokens === null
-        ? formatDecimalCount(usedTokens)
+        ? `${formatDecimalCount(usedTokens)} / ${windowTokensText(null)}`
         : `${formatDecimalCount(usedTokens)} / ${formatDecimalCount(windowTokens)}`,
+    updatedText: reading.updatedText,
     segments,
   };
 }
