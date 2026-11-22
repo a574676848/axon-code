@@ -8,6 +8,10 @@ mod doctor_commands;
 mod doctor_daemon_check;
 
 #[cfg(feature = "tui")]
+#[path = "doctor_invariants.rs"]
+mod doctor_invariants;
+
+#[cfg(feature = "tui")]
 pub use doctor_commands::{DoctorCheck, DoctorReport, DoctorStatus};
 
 #[cfg(feature = "tui")]

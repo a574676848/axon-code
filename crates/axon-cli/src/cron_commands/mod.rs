@@ -40,7 +40,10 @@ pub(crate) use wake::{CRON_WAKE_SOURCE_PREFIX, parse_wake};
 pub(crate) const MEMORY_CONSOLIDATION_CRON_JOB_ID: &str = "axon.system.memory-consolidation";
 pub(crate) const MEMORY_CONSOLIDATION_CRON_NAME: &str = "Memory consolidation";
 pub(crate) const MEMORY_CONSOLIDATION_CRON_SCRIPT: &str = "axon.internal.memory-consolidation";
-pub(crate) use session_cleanup::{run_session_cleanup, run_session_cleanup_once};
+/// 会话事件日志清单：治理任务与存量修复工具共用同一份枚举口径。
+pub(crate) use session_cleanup::{
+    run_session_cleanup, run_session_cleanup_once, session_log_files,
+};
 pub(crate) const SESSION_CLEANUP_CRON_SCRIPT: &str = session_cleanup::SESSION_CLEANUP_CRON_SCRIPT;
 pub(crate) const SESSION_CLEANUP_CRON_JOB_ID: &str = "axon.system.brain-cleanup";
 pub(crate) const SESSION_CLEANUP_CRON_NAME: &str = "Axon brain cleanup";

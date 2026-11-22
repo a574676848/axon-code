@@ -29,6 +29,14 @@ pub const DOCTOR_CHECK_RUNTIME: &str = "runtime";
 pub const DOCTOR_CHECK_DAEMON: &str = "daemon";
 /// doctor 跨平台最小 smoke 检查名称。
 pub const DOCTOR_CHECK_SMOKE: &str = "smoke";
+/// doctor 存储不变式检查组名：一次跑 INV-2、INV-7a、INV-7b。
+pub const DOCTOR_CHECK_INVARIANTS: &str = "invariants";
+/// INV-2：结论状态的工作项必须带 `terminal_kind`。
+pub const DOCTOR_CHECK_INV2: &str = "inv-2";
+/// INV-7a：`recovering` 会话必须有在途工作项，否则应收敛回 `idle`。
+pub const DOCTOR_CHECK_INV7A: &str = "inv-7a";
+/// INV-7b：`recovering` 会话不得超过过期缓冲仍未收口。
+pub const DOCTOR_CHECK_INV7B: &str = "inv-7b";
 /// provider 连通性测试超时。
 pub const PROVIDER_TEST_TIMEOUT_MS: u64 = 5_000;
 
