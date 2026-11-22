@@ -9,6 +9,8 @@ pub struct HostTickReport {
     pub quarantined: u32,
     /// 本轮因进程中断收敛为 interrupted 的 Interaction 数量。
     pub interrupted_interactions: u32,
+    /// 本轮因静默（租约失效或首字超时）收敛为 interrupted 的轮次数量。
+    pub silent_turns_settled: u32,
     /// 本轮实际提交的 Action 数量。
     pub pumped: u32,
 }

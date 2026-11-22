@@ -22,6 +22,7 @@ pub use application::{
     is_ulid, new_interaction_id, new_session_id, new_ulid, project_threads,
 };
 pub use domain::WorkspaceRecord;
+pub use domain::context_snapshot::ContextSnapshot;
 pub use domain::session_action::{default_action_priority, effective_action_priority};
 pub use domain::{
     DaemonHostRecord, RuntimeScheduleRecord, SessionActionRecord, SessionEventRecord, SessionKind,
@@ -55,10 +56,10 @@ pub use ports::{
     AgentMailboxMessageState, AgentMailboxQuery, AgentMailboxRetryPolicy, AgentMailboxStore,
     AgentMailboxStoreError, CheckpointTelemetry, ClientDeliveryStore, ClientDeliveryStoreError,
     ClientInboxEntry, ClientPresenceRecord, CompletionDeliveryRecord, CompletionDeliveryTarget,
-    CompletionNotificationRecord, DecisionStore, DecisionStoreError, DispatchTerminalKind,
-    EventLogStore, ExecutionStore, ExecutionStoreError, ExecutionTrigger, GoalCommitError,
-    GoalCommitStore, GoalMutationStore, GoalPage, GoalSessionRequest, GoalStore, GoalStoreError,
-    HealthStore, InFlightTurnFacts, InteractionAppendReceipt, InteractionCursor,
+    CompletionNotificationRecord, ContextSnapshotStore, DecisionStore, DecisionStoreError,
+    DispatchTerminalKind, EventLogStore, ExecutionStore, ExecutionStoreError, ExecutionTrigger,
+    GoalCommitError, GoalCommitStore, GoalMutationStore, GoalPage, GoalSessionRequest, GoalStore,
+    GoalStoreError, HealthStore, InFlightTurnFacts, InteractionAppendReceipt, InteractionCursor,
     InteractionProcessingLease, InteractionQueryStore, InteractionSettlementStore,
     InteractionStore, InteractionStoreError, InteractionTurnHead, LedgerCommitError,
     LedgerCommitStore, LedgerEventStore, LedgerEventStoreError, NewSessionRequest,

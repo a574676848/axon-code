@@ -259,6 +259,41 @@ fn status_list(statuses: &[ExecutionStatus]) -> String {
 }
 
 impl InteractionSettlementStore for SqliteRuntimeStore {
+    fn in_flight_turn_sessions(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<DaemonSessionId>, InteractionStoreError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        self.initialize().map_err(settlement_error)?;
+        let connection = self.connection().map_err(settlement_error)?;
+        let mut statement = connection
+            .prepare(
+                "SELECT i.session_id FROM work_items AS w \
+                 JOIN inbox AS i ON i.interaction_id=w.inbox_id \
+                 WHERE w.status='running' \
+                 GROUP BY i.session_id \
+                 ORDER BY MIN(i.received_at_ms) ASC, i.session_id ASC \
+                 LIMIT ?1",
+            )
+            .map_err(settlement_error)?;
+        let rows = statement
+            .query_map(params![i64::from(limit)], |row| row.get::<_, String>(0))
+            .map_err(settlement_error)?;
+        let mut sessions = Vec::new();
+        for row in rows {
+            let raw_session_id = row.map_err(settlement_error)?;
+            let session_id = DaemonSessionId::new(raw_session_id.clone()).map_err(|_| {
+                InteractionStoreError::Storage(format!(
+                    "inbox.session_id 无法识别：{raw_session_id}"
+                ))
+            })?;
+            sessions.push(session_id);
+        }
+        Ok(sessions)
+    }
+
     fn in_flight_turns(
         &self,
         session_id: &DaemonSessionId,

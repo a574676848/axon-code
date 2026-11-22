@@ -14,6 +14,21 @@ impl GatewayIngress for EmptyIngress {
     ) -> Result<SubmitInteractionReceipt, GatewayKernelError> {
         Err(GatewayKernelError::Ingress("测试 ingress".to_owned()))
     }
+
+    fn context_snapshot(
+        &self,
+        _session_id: &axon_domain::DaemonSessionId,
+    ) -> Result<Option<axon_session::ContextSnapshot>, GatewayKernelError> {
+        Ok(None)
+    }
+
+    fn settle_silent_turn(
+        &self,
+        _session_id: &axon_domain::DaemonSessionId,
+        _interaction_id: &axon_domain::InteractionId,
+    ) -> Result<crate::application::SilentTurnSettlementOutcome, GatewayKernelError> {
+        Ok(crate::application::SilentTurnSettlementOutcome::NotInFlight)
+    }
 }
 
 struct EmptyEgress;

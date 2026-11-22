@@ -24,6 +24,10 @@ use axum::routing::any;
 use std::sync::Arc;
 use std::time::Instant;
 
+/// 会话级固定接口：上下文快照与静默轮次收口。
+#[path = "gateway_session_endpoints.rs"]
+mod session_endpoints;
+
 /// 构造网关路由。
 pub(super) fn router(state: Arc<GatewayHttpState>, max_body_bytes: usize) -> Router {
     Router::new()
@@ -56,6 +60,14 @@ pub(super) fn router(state: Arc<GatewayHttpState>, max_body_bytes: usize) -> Rou
             any(super::gateway_voice_tts::voice_presets),
         )
         .route("/api/v1/{*rest}", any(custom))
+        .route(
+            "/api/v1/sessions/{session_id}/context-snapshot",
+            any(session_endpoints::context_snapshot),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/settle-silent-turn",
+            any(session_endpoints::settle_silent_turn),
+        )
         .fallback(unknown)
         .with_state(Arc::clone(&state))
         .layer(middleware::from_fn_with_state(state, access_log))

@@ -69,6 +69,21 @@ impl GatewayIngress for BlockingIngress {
             deduplicated: false,
         })
     }
+
+    fn context_snapshot(
+        &self,
+        _session_id: &axon_domain::DaemonSessionId,
+    ) -> Result<Option<axon_session::ContextSnapshot>, GatewayKernelError> {
+        Ok(None)
+    }
+
+    fn settle_silent_turn(
+        &self,
+        _session_id: &axon_domain::DaemonSessionId,
+        _interaction_id: &InteractionId,
+    ) -> Result<crate::application::SilentTurnSettlementOutcome, GatewayKernelError> {
+        Ok(crate::application::SilentTurnSettlementOutcome::NotInFlight)
+    }
 }
 
 /// 不使用 durable ingress 的场景：提交一律失败，不参与断言。
@@ -82,6 +97,21 @@ impl GatewayIngress for RejectingIngress {
         Err(GatewayKernelError::Ingress(
             "测试 ingress 拒绝提交".to_owned(),
         ))
+    }
+
+    fn context_snapshot(
+        &self,
+        _session_id: &axon_domain::DaemonSessionId,
+    ) -> Result<Option<axon_session::ContextSnapshot>, GatewayKernelError> {
+        Ok(None)
+    }
+
+    fn settle_silent_turn(
+        &self,
+        _session_id: &axon_domain::DaemonSessionId,
+        _interaction_id: &InteractionId,
+    ) -> Result<crate::application::SilentTurnSettlementOutcome, GatewayKernelError> {
+        Ok(crate::application::SilentTurnSettlementOutcome::NotInFlight)
     }
 }
 

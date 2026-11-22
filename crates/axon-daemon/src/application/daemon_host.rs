@@ -8,6 +8,7 @@ use super::interaction_ingress::{
 };
 use super::primary_turn_worker_pool::PrimaryTurnWorkerPoolSlot;
 use super::scheduler_service::{SchedulerService, SchedulerTickReport};
+use super::silent_turn_settlement::SilentTurnSettlementService;
 use crate::model::{DaemonHostStatus, UpgradeAdmission};
 use crate::ports::{DeliveryHealthStore, ProcessIdentity};
 use axon_domain::{DaemonSessionId, InteractionId, InteractionStatus, RuntimeHostId};
@@ -50,6 +51,9 @@ mod daemon_host_interaction_tests;
 #[cfg(test)]
 #[path = "daemon_host_schedule_tests.rs"]
 mod daemon_host_schedule_tests;
+#[cfg(test)]
+#[path = "daemon_host_silent_turn_tests.rs"]
+mod daemon_host_silent_turn_tests;
 #[cfg(test)]
 #[path = "daemon_host_soak_tests.rs"]
 mod daemon_host_soak_tests;
@@ -96,6 +100,8 @@ const INTERRUPTED_INTERACTION_BATCH_LIMIT: u32 = 64;
 const RECOVERING_SETTLEMENT_TTL_MS: u64 = 120_000;
 /// 每轮 supervisor 收敛 `recovering` 会话的上限：与中断收敛同一批量级。
 const RECOVERING_SETTLEMENT_BATCH_LIMIT: u32 = 64;
+/// 每轮 supervisor 静默轮次收口的会话上限：与中断收敛同一批量级。
+const SILENT_TURN_SETTLEMENT_BATCH_LIMIT: u32 = 64;
 /// 尚未领取 lease 时的租约到期哨兵值。
 const NO_LEASE_MS: u64 = 0;
 pub(super) const DEFAULT_QUEUE_LIMIT: u32 = 100;
@@ -476,6 +482,25 @@ where
                 Err(error) => eprintln!("recovering 会话收敛失败，将在下一轮重试: {error}"),
             }
         }
+        // 静默轮次必须有归宿：租约仍有效、但首字期限内一个事件帧都没写过的轮次，没有任何
+        // 执行者会再来写它的终态。这里排在两个收敛之后，顺序不能颠倒：
+        // 1. 先让租约过期的轮次走隔离路径，那条路径会连同 `interaction_interrupted` 证据帧
+        //    一起落盘；静默路径只写终态、不写证据帧，抢在前面会把证据一起吃掉。
+        // 2. 再让 `recovering` 会话按「在途工作项」判完归宿，避免轮次先被收口、会话提前腾空。
+        let silent_turns_settled = if accepting_work {
+            match SilentTurnSettlementService::new(self.store.clone())
+                .settle_pending(now_ms, SILENT_TURN_SETTLEMENT_BATCH_LIMIT)
+            {
+                Ok(report) => report.turns_settled,
+                // 失败不影响本轮其它维护：轮次仍在在途态，下一轮重试。
+                Err(error) => {
+                    eprintln!("静默轮次收口失败，将在下一轮重试: {error}");
+                    0
+                }
+            }
+        } else {
+            0
+        };
         // 目标轮与用户轮共用主 turn 管道：这里只负责把退避到期的执行重新投递成
         // 一条 Interaction，由主 turn 领取执行，不再有后台专用执行入口。
         let pumped = if accepting_work {
@@ -496,6 +521,7 @@ where
             recovered: recovered.len() as u32,
             quarantined: quarantined.len() as u32,
             interrupted_interactions: interrupted_interactions.len() as u32,
+            silent_turns_settled,
             pumped,
         })
     }
