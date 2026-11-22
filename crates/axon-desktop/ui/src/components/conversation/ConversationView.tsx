@@ -32,9 +32,7 @@ import {
   activeJobCount,
   type SessionRuntimeFacts,
 } from '../../conversation/runtimeFacts';
-import { SubagentRunView } from './SubagentRunView';
 import {
-  findModelEntry,
   resolveConfig,
   resolveEffectiveModel,
   type ResolvedConfig,
@@ -189,8 +187,6 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    * 名册补出来的行只存在于运行态名册里、不在转录投影里，只按标识回查会查不到，
    * 表现成「点了没反应」。同时保留标识，用于在转录投影刷新后取更新的那一行。
    */
-  const [openSubagentRow, setOpenSubagentRow] =
-    React.useState<import('../../conversation/transcript').SubagentRow | null>(null);
   /** 重新打开卡片的请求序号：时间线上的入口每点一次递增一次。 */
   const [questionReopenToken, setQuestionReopenToken] = React.useState(0);
   /** 正文舞台容器：供宽度拖拽手柄量测宽度并注入 CSS 变量。 */
@@ -394,17 +390,27 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   useExpiringNotice(conversation.submitError, conversation.clearSubmitError);
   useExpiringNotice(createError, clearCreateError);
 
-  const openSubagent = React.useMemo(() => {
-    if (openSubagentRow === null) return null;
-    const current =
-      conversation.state.subagents.find((row) => row.agentId === openSubagentRow.agentId) ?? null;
-    if (current === null) return openSubagentRow;
-    // 入口行来自名册合并，带着会话标识；转录行本身没有，合并时以入口行为准。
-    return openSubagentRow.sessionId
-      ? { ...current, sessionId: openSubagentRow.sessionId }
-      : current;
-  }, [conversation.state.subagents, openSubagentRow]);
-
+  /*
+   * 子代理与主会话同一条路径：直接把它当成一条会话选中，历史索引、分页、过程折叠与
+   * 输入坞都复用同一套实现。差别只在输入坞的控制（模型与思考强度只读），不再另立视图。
+   */
+  const openSubagentSession = React.useCallback(
+    (row: import('../../conversation/transcript').SubagentRow) => {
+      const sessionId = (row.sessionId ?? '').trim();
+      if (sessionId.length === 0 || selection === null) return;
+      onSelectSession({
+        ...selection,
+        sessionId,
+        destination: '',
+        title: row.label,
+        channel: 'agent',
+        backTo: selection,
+        fixedModel: null,
+        fixedReasoningEffort: null,
+      });
+    },
+    [onSelectSession, selection],
+  );
   /** 停止本轮：控制器经 ref 取，避免回调每轮换引用而让上报 effect 自激。 */
   const interruptRef = React.useRef(conversation.interrupt);
   interruptRef.current = conversation.interrupt;
@@ -503,7 +509,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 sessionId={selection?.sessionId ?? null}
                 working={conversation.working}
                 sessionKey={sessionKey}
-                onOpenSubagent={setOpenSubagentRow}
+                onOpenSubagent={openSubagentSession}
                 goals={sessionGoals}
                 onOpenGoal={(goal) => {
                   onSelectSession(
@@ -528,29 +534,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
           <ConversationFailureCards conversation={conversation} sessionKey={sessionKey} evidence={evidence} />
 
           <div className="flex-1 min-h-0 flex flex-col relative">
-            {openSubagent !== null ? (
-              <SubagentRunView
-                row={openSubagent}
-                /* 订阅正文要求工作区键：车道缺失时回落到工作区行本身，不能传空。 */
-                workspaceId={selection?.workspaceId ?? workspace?.id ?? null}
-                sessionId={selection?.sessionId ?? null}
-                /* 输入坞显示配置里的模型别名，不把 upstream ID 摊到界面上。 */
-                modelLabel={
-                  findModelEntry(config?.catalog ?? [], openSubagent.model ?? null)?.name ??
-                  openSubagent.model ??
-                  null
-                }
-                onBack={() => setOpenSubagentRow(null)}
-              />
-            ) : (
-              /*
-               * 正文舞台：正文层常驻，过渡面浮在整列之上。
-               *
-               * 投影在切换目标的那一帧就作废，正文又要等历史索引与逐条回放，直接按
-               * 投影渲染会先空一屏再一段段长出来。这里让正文层在回放期间继续显示上一屏
-               * 或首屏，回放落地后一次交出，中间态不出现在屏幕上。
-               */
-              <>
+                        <>
                 <div className="relative flex-1 min-h-0 flex flex-col" ref={contentStageRef}>
                   {/* 层内不重挂载：换会话只换内容，滚动容器与落点都留在原地。 */}
                   <div
@@ -595,7 +579,6 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 */}
                 <ConversationCover cover={cover} content={coverContent} />
               </>
-            )}
 
             {/*
               输入坞是浮在画布上的一张卡，不再用一条全宽发丝线把它和正文切开：
@@ -604,9 +587,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
               查看子代理轨迹时输入坞隐藏，避免让人以为能在这里继续对话。
             */}
             <div
-              className={`relative z-40 shrink-0 bg-canvas ${
-                openSubagent === null ? '' : 'hidden'
-              }`}
+              className={`relative z-40 shrink-0 bg-canvas`}
             >
               <div
                 aria-hidden="true"

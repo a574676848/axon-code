@@ -117,7 +117,22 @@ export function conversationReducer(
     }
     case 'replace-turn': {
       const position = state.turns.findIndex((turn) => turn.id === action.turn.id);
-      if (position < 0) return state;
+      if (position < 0) {
+        /*
+         * 这一轮不在时间线上，但帧已经证明它存在：补进来，不能静默丢弃。
+         *
+         * 索引骨架会过滤「审计轮」（agent 通道、已收口、没有正文），免得把派发记录当成
+         * 一轮对话摆进正文。可子代理会话唯一的一轮就是这种形状：骨架里没有它，随后按帧
+         * 投影出来的整轮又因为找不到位置被丢掉，于是正文永远空白。判据放在这里最稳：
+         * 有帧就是事实，按起始时刻插到正确位置；没有任何帧时仍然不会凭空长出一轮。
+         */
+        const inserted = [...state.turns, action.turn].sort(
+          (left, right) => (left.startedAtMs ?? 0) - (right.startedAtMs ?? 0),
+        );
+        const jobs = mergeJobs(state.jobs, action.jobs);
+        const withJobs = jobs === state.jobs ? state : { ...state, jobs };
+        return { ...withJobs, turns: inserted };
+      }
       const replaced = withTurn(state, position, () => {
         const incoming = { ...action.turn, folded: false, summary: action.turn.summary };
         if (action.mode === 'folded') {

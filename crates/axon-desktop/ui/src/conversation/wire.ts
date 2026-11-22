@@ -115,7 +115,13 @@ export interface WireEventEnvelope {
   correlationId: string;
   /** 这一帧所属的 Interaction；后台注入轮（cron、目标回调）靠它与索引轮对齐。 */
   interactionId?: string;
-  session: { sessionId: string; runId?: string; parentSessionId?: string };
+  /**
+   * 所属会话；旧载荷才有这一块。
+   *
+   * 帧归属以 `interactionId` 为准，这里是可选事实：子代理的逐轮正文只带归属列，
+   * 载荷里没有 `session`，任何把它当必填的读法都会把这类帧整批丢掉。
+   */
+  session?: { sessionId: string; runId?: string; parentSessionId?: string };
   sequence: number;
   recordedAtMs: number;
   kind: { type: string; payload?: unknown };

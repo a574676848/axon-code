@@ -219,7 +219,11 @@ function applyWireEvent(
   }
   if (state.turns.length === 0) {
     if (incomingUser === null && question === null) return state;
-    state = openTurn(state, envelope.session.sessionId, envelope.recordedAtMs);
+    // 轮次键取归属标识：`session` 只是旧载荷的附带事实，子代理的帧不带它，
+    // 直接解引用会抛错并丢掉整批帧（现场表现为详情空白）。
+    const turnKey = envelope.interactionId ?? envelope.session?.sessionId ?? '';
+    if (turnKey.length === 0) return state;
+    state = openTurn(state, turnKey, envelope.recordedAtMs);
   }
   const position = activeTurnIndex(state);
   if (position < 0) return state;

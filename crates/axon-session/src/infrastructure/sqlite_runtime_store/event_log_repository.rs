@@ -13,6 +13,9 @@ use crate::ports::RuntimeStoreError;
 use axon_domain::{DaemonSessionId, InteractionId};
 
 /// 事件面写入失败的观测、水位补偿与有界重试。
+#[path = "event_log_payload.rs"]
+mod payload;
+
 #[path = "event_log_write_failure.rs"]
 mod write_failure;
 
@@ -314,28 +317,7 @@ fn to_runtime_record(
 ) -> axon_eventlog::RuntimeEventRecord {
     let payload = serde_json::from_str::<serde_json::Value>(&record.payload_json)
         .unwrap_or_else(|_| serde_json::Value::String(record.payload_json.clone()));
-    /*
-     * 归属列是权威，但载荷里也要带同一个标识：主、cron、目标、子代理四种会话写出来的帧
-     * 形状因此完全一致，读侧不必按会话类型判断「这一帧属于哪一轮」。缺这一段时只有子代理
-     * 的帧是「列里有、载荷里没有」，任何按载荷解析的消费者都会把它整批丢掉。
-     */
-    let payload = match (interaction_id, payload) {
-        (Some(owner), serde_json::Value::Object(object))
-            if object
-                .get("interactionId")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .is_empty() =>
-        {
-            let mut patched = object;
-            patched.insert(
-                "interactionId".to_owned(),
-                serde_json::Value::from(owner.to_owned()),
-            );
-            serde_json::Value::Object(patched)
-        }
-        (_, payload) => payload,
-    };
+    let payload = payload::with_interaction(payload, interaction_id);
     axon_eventlog::RuntimeEventRecord {
         sequence: record.sequence,
         emitted_at_ms: record.emitted_at_ms,

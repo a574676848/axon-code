@@ -197,7 +197,7 @@ where
 ///
 /// 归属的权威是事件的归属列；主会话的载荷里同时也写着 `interactionId`，而子代理的逐轮
 /// 正文只写列、不在载荷里重复一遍。客户端按同一种形状解析，边界不抹平就会把「只有列」
-/// 的帧当成没有归属整批丢掉——子代理详情空白的直接原因。
+/// 的帧当成没有归属整批丢掉：子代理详情空白的直接原因。
 pub(super) fn payload_with_interaction(payload_json: String, interaction_id: &str) -> String {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload_json) else {
         return payload_json;
