@@ -16,9 +16,11 @@ pub mod answer_question;
 pub mod attachment;
 /// 订阅命令与流式推送的 IPC 边界。
 pub mod commands;
+/// 会话级上下文快照：头部占用与换窗读数的唯一来源。
+pub mod context_snapshot;
 /// 按车道枚举历史 Interaction。
 pub mod history;
-/// 中断正在运行的主 turn。
+/// 中断正在运行的主 turn，以及静默轮次的服务端收口。
 pub mod interrupt;
 /// 后台作业输出的尾随读取：按字节游标增量读归档。
 pub mod job_output;
@@ -28,6 +30,8 @@ pub mod job_stop;
 pub mod question_sync;
 /// 车道活作业名册：作业行的对账依据。
 pub mod session_jobs;
+/// 会话运行态证据：在跑必须能指回带租约且未过期的行。
+pub mod session_live;
 /// 会话级读取：子代理清单与任意会话的逐字稿。
 pub mod session_read;
 /// 车道事件订阅：一条连接并行服务多路订阅，逐帧推送给前端。
@@ -43,19 +47,22 @@ pub mod wire;
 
 pub use attachment::{StagedAttachment, attachment_pick, attachment_preview, attachment_stage};
 pub use commands::{
-    conversation_answer_question, conversation_history, conversation_history_events,
-    conversation_interrupt, conversation_job_output, conversation_send_subagent_message,
-    conversation_session_jobs, conversation_session_questions, conversation_session_subagents,
-    conversation_set_active_session, conversation_stop_job, conversation_submit,
-    conversation_unsubscribe, conversation_watch, conversation_watch_turns,
+    conversation_answer_question, conversation_context_snapshot, conversation_history,
+    conversation_history_events, conversation_interrupt, conversation_job_output,
+    conversation_send_subagent_message, conversation_session_jobs, conversation_session_live,
+    conversation_session_questions, conversation_session_subagents,
+    conversation_set_active_session, conversation_settle_silent_turn, conversation_stop_job,
+    conversation_submit, conversation_unsubscribe, conversation_watch, conversation_watch_turns,
 };
+pub use context_snapshot::{ContextComposition, ContextSnapshot, SessionContextSnapshot};
 pub use history::{
     InteractionSummary, SessionEffectiveModel, SessionInteractions, SessionUsageTotals,
 };
-pub use interrupt::InterruptReceipt;
+pub use interrupt::{InterruptReceipt, SettleSilentTurnReceipt};
 pub use job_stop::JobStopReceipt;
 pub use question_sync::QuestionSnapshot;
 pub use session_jobs::SessionJobsRoster;
+pub use session_live::SessionLive;
 pub use session_read::SessionSubagents;
 pub use stream::{ConversationStream, SubscribeTarget};
 pub use stream_batch::{StreamBatcher, StreamEventBatch};

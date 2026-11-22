@@ -7,12 +7,14 @@ use tauri::State;
 
 use crate::AppState;
 use crate::conversation::answer_question::{self, AnswerQuestionReceipt};
+use crate::conversation::context_snapshot::{self, SessionContextSnapshot};
 use crate::conversation::history::{self, SessionInteractions};
-use crate::conversation::interrupt::{self, InterruptReceipt};
+use crate::conversation::interrupt::{self, InterruptReceipt, SettleSilentTurnReceipt};
 use crate::conversation::job_output::{self, JobOutputStream};
 use crate::conversation::job_stop::{self, JobStopReceipt};
 use crate::conversation::question_sync::{self, QuestionSnapshot};
 use crate::conversation::session_jobs::{self, SessionJobsRoster};
+use crate::conversation::session_live::{self, SessionLive};
 use crate::conversation::session_read::{self, SessionSubagents};
 use crate::conversation::stream::SubscribeTarget;
 use crate::conversation::subagent_message::{self, SubagentMessageReceipt};
@@ -114,6 +116,36 @@ pub fn conversation_session_questions(
 #[tauri::command(async)]
 pub fn conversation_interrupt(session_id: String) -> Result<InterruptReceipt, String> {
     interrupt::interrupt_session(&session_id)
+}
+
+/// Tauri IPC 命令：请服务端显式收口一条静默轮次。
+///
+/// 索引仍说在途、服务端却已没有运行轮次时，这是唯一的收口路径：界面不得自己
+/// 改状态。回执里的 `verdict` 是服务端判据，文案由调用方按它给。
+#[tauri::command(async)]
+pub fn conversation_settle_silent_turn(
+    session_id: String,
+    interaction_id: String,
+) -> Result<SettleSilentTurnReceipt, String> {
+    interrupt::settle_silent_turn(&session_id, &interaction_id)
+}
+
+/// Tauri IPC 命令：读取一条会话的上下文快照。
+///
+/// 头部占用与换窗读数读这一份；`snapshot` 为空表示还没有任何可用读数，
+/// 与会话不存在（读取失败）严格区分。
+#[tauri::command(async)]
+pub fn conversation_context_snapshot(session_id: String) -> Result<SessionContextSnapshot, String> {
+    context_snapshot::read_context_snapshot(&session_id)
+}
+
+/// Tauri IPC 命令：读取一条会话的运行态证据。
+///
+/// `running` 只认带租约且未过期的在跑轮次；读不到时返回错误，界面据此降级，
+/// 不拿本地推算顶替。
+#[tauri::command(async)]
+pub fn conversation_session_live(session_id: String) -> Result<SessionLive, String> {
+    session_live::read_session_live(&session_id)
 }
 
 /// Tauri IPC 命令：用户手动停止一条车道上的后台作业。

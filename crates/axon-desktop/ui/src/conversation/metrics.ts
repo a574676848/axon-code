@@ -7,6 +7,9 @@
  * 出现条件按簇分工：预算簇（会话累计、上下文、命中率）从进入会话起常驻，
  * 新会话读作「累计 0」「0/窗口」与「命中率 0.00%」；性能簇与辅助簇缺数据即不渲染该段，
  * 绝不填占位值。
+ *
+ * 上下文段与换窗读数只读会话上下文快照（见 `contextSnapshot.ts`）：两者同一份带时间戳
+ * 的事实，未知就显示未知，不拿用量帧或模型目录的窗口值顶替。
  */
 
 import {
@@ -16,12 +19,10 @@ import {
   formatTokensPerSecondX10,
 } from './format';
 import {
-  EMPTY_USAGE,
-  currentContextTokens,
-  type TokenUsage,
-} from './transcript';
+  contextPairText,
+  type ContextSnapshotReading,
+} from './contextSnapshot';
 import { cumulativeCacheHitBasisPoints, type SessionCumulative } from './sessionUsage';
-export { currentContextTokens };
 
 /** 上下文压力告警阈值（整数百分比）。 */
 const CONTEXT_WARNING_PERCENT = 70;
@@ -55,6 +56,12 @@ export interface HeaderSegment {
   icon?: string;
   /** 原生提示全文；缺省时渲染层用 `text`。 */
   title?: string;
+  /**
+   * 段后的次级读数（如上下文的「更新于 N 秒前」）。
+   *
+   * 它属于这一段的同一份事实，因此跟着段一起出现、一起收起，不另立一段。
+   */
+  meta?: string;
 }
 
 /** 指标条输入。 */
@@ -70,8 +77,13 @@ export interface HeaderMetricsInput {
    * 一排 `0/1M`、`命中率 0.00%` 只会把「还没开始」说成「已经用光」。
    */
   inSession?: boolean;
-  /** 最近一轮的令牌用量；还没跑过任何一轮时为空，上下文段按零读数渲染。 */
-  usage: TokenUsage | null;
+  /**
+   * 会话上下文快照读数：占用、窗口与换窗数字都取这一份。
+   *
+   * 快照为空（还没有任何可用读数）时上下文段整段不占位；快照里缺的字段按未知显示，
+   * 既不沿用上一份读数，也不拿模型目录里的窗口值补分母。
+   */
+  contextSnapshot: ContextSnapshotReading | null;
   /**
    * 整条会话的累计读数（用量分桶与墙钟耗时）；基线还没取回时为空。
    *
@@ -80,8 +92,6 @@ export interface HeaderMetricsInput {
    * 不画这一段，绝不拿单轮读数顶替。
    */
   sessionCumulative?: SessionCumulative | null;
-  /** 当前模型的上下文窗口。 */
-  contextWindow: number | null;
   /** 最近一轮首字耗时。 */
   firstTokenAvgMs: number | null;
   /** 最近一轮生成速率，单位 0.1 tok/s。 */
@@ -97,39 +107,22 @@ function shortMetric(label: string, value: string): string {
   return `${label} ${value}`;
 }
 
-function contextPressureTone(used: number, window: number): HeaderSegmentTone {
-  const percent = window <= 0 ? 0 : Math.floor((used * 100) / window);
+/**
+ * 上下文段色调：按已用占窗口的比例分档。
+ *
+ * 分母未知时不给色调：没有窗口就谈不上「快满了」，涂成告警色只会制造焦虑。
+ */
+function contextPressureTone(used: number, window: number | null): HeaderSegmentTone {
+  if (window === null || window <= 0) return 'default';
+  const percent = Math.floor((used * 100) / window);
   if (percent >= CONTEXT_CRITICAL_PERCENT) return 'critical';
   if (percent >= CONTEXT_WARNING_PERCENT) return 'warning';
   return 'default';
 }
 
-/**
- * 上下文段文本：只给「已用/窗口」。
- *
- * 缓存读取与写入仍然收进 ContextUsagePopover；命中率是读者会直接看的预算指标，
- * 在下一段直接给出，不再藏进浮层。已用为零时同样给出读数（`0/窗口`），
- * 因为「这一轮还没花预算」本身就是要看的事实。
- */
-function contextText(usage: TokenUsage, contextWindow: number | null): string {
-  const used = currentContextTokens(usage);
-  if (contextWindow !== null && contextWindow > 0) {
-    return `${formatDecimalCount(used)}/${formatDecimalCount(contextWindow)}`;
-  }
-  return formatDecimalCount(used);
-}
-
 /** 组装指标条的各段。 */
 export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
   const segments: HeaderSegment[] = [];
-  /*
-   * 预算簇的读数基准：没有用量观测就是零用量。
-   *
-   * 新建会话、刚进入会话都还没有任何一轮的观测，此时预算不是「未知」而是「还没用」，
-   * 因此它照样参与渲染，不能靠隐藏这一段来表达未知。
-   */
-  const usage = input.usage ?? EMPTY_USAGE;
-
   // 1 LSP：仅大于 0 时出现。
   if (input.lspActiveCount > 0) {
     segments.push({
@@ -182,17 +175,21 @@ export function headerSegments(input: HeaderMetricsInput): HeaderSegment[] {
         tone: 'default',
             });
     }
-    // 上下文：只在真的观测到窗口占用时才出现。新建会话还没有任何一次请求，
-    // 摆一个 `0/窗口` 只是把「还没开始」说成「预算归零」；有观测之后这一段常驻。
-    if (currentContextTokens(usage) > 0) {
+    /*
+     * 上下文：占用与窗口分母都取同一份快照。
+     *
+     * 还没有任何读数时整段不占位；有读数之后常驻，分母未知就写「未知」，绝不写 0
+     * 或拿模型目录的窗口值冒充。段后的次级读数是这份快照的更新时刻。
+     */
+    const snapshot = input.contextSnapshot;
+    if (snapshot !== null && snapshot.usedTokens !== null && snapshot.usedTokens > 0) {
       segments.push({
         kind: 'context',
-        text: contextText(usage, input.contextWindow),
-        tone:
-          input.contextWindow !== null && input.contextWindow > 0
-            ? contextPressureTone(currentContextTokens(usage), input.contextWindow)
-            : 'default',
-              icon: 'ring',
+        text: contextPairText(snapshot.usedTokens, snapshot.windowTokens),
+        tone: contextPressureTone(snapshot.usedTokens, snapshot.windowTokens),
+        meta: snapshot.updatedText,
+        title: snapshot.title,
+        icon: 'ring',
       });
     }
   }

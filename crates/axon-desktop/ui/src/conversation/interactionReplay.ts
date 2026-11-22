@@ -20,6 +20,7 @@
  */
 
 import * as ipc from '../ipc';
+import { cursorSequence } from './durableCursor';
 import type { ConversationStreamEvent } from './wire';
 
 /**
@@ -71,20 +72,10 @@ export function replayPageBudget(framesBeforeTail: number, pageSize: number): nu
 /**
  * 从 durable 游标里取事件序号；老记录的游标缺失或不是 JSON 时为空。
  *
- * 游标是 `{generation, sequence}` 的 JSON 文本：补前段要用序号判「读到哪一段为止」，
- * 缺它就只能退回「从头读到尾」，那正是尾窗先行要省掉的那部分代价。
+ * 实现收在 `durableCursor`：纯投影层与续读判定也要用它，而本文件带着 IPC 依赖。
+ * 这里原样再导出，调用方与既有测试的引用不必改。
  */
-export function cursorSequence(cursor: string | null): number | null {
-  if (cursor === null) return null;
-  try {
-    const parsed: unknown = JSON.parse(cursor);
-    if (typeof parsed !== 'object' || parsed === null) return null;
-    const sequence = (parsed as { sequence?: unknown }).sequence;
-    return typeof sequence === 'number' && Number.isFinite(sequence) ? sequence : null;
-  } catch {
-    return null;
-  }
-}
+export { cursorSequence } from './durableCursor';
 
 /** 用量快照帧在 wire 契约里的类型名。 */
 const USAGE_WIRE_TYPE = 'usageUpdate';

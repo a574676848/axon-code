@@ -65,6 +65,10 @@ pub(super) fn router(state: Arc<GatewayHttpState>, max_body_bytes: usize) -> Rou
             any(session_endpoints::context_snapshot),
         )
         .route(
+            "/api/v1/sessions/{session_id}/live",
+            any(session_endpoints::live),
+        )
+        .route(
             "/api/v1/sessions/{session_id}/settle-silent-turn",
             any(session_endpoints::settle_silent_turn),
         )

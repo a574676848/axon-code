@@ -130,6 +130,15 @@ pub enum ServerFrame {
         /// 也不会丢掉两次动作之间新建的那一轮。
         #[serde(default)]
         baseline: Option<serde_json::Value>,
+        /// 这次 durable 回放是否没有追到尾巴；旧网关缺省为假。
+        ///
+        /// 真表示「客户端手上的历史是残缺的」：界面必须如实标注，并按下方的
+        /// 续读游标补读，不得把它当完整历史渲染。
+        #[serde(default, rename = "replayTruncated")]
+        replay_truncated: bool,
+        /// 截断时的真实续读位置；未截断或旧网关缺省。
+        #[serde(default, rename = "resumeCursor")]
+        resume_cursor: Option<String>,
     },
     /// 订阅流上的一条事件。
     #[serde(rename = "event")]
@@ -188,6 +197,12 @@ pub enum StreamEvent {
         /// 前端据此和索引比对一次，补齐订阅建立之前新建的那一轮。
         #[serde(skip_serializing_if = "Option::is_none")]
         baseline: Option<serde_json::Value>,
+        /// 这次 durable 回放是否没有追到尾巴：真表示前端手上的历史是残缺的。
+        #[serde(default, skip_serializing_if = "is_false")]
+        replay_truncated: bool,
+        /// 截断时的真实续读位置；未截断时为缺省。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        resume_cursor: Option<String>,
     },
     /// 订阅流上的一条事件。
     #[serde(rename_all = "camelCase")]
@@ -217,6 +232,11 @@ pub enum StreamEvent {
 
 const fn default_replay() -> bool {
     true
+}
+
+/// 布尔字段为假时不占位：缺省与显式假在线上同形。
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[cfg(test)]
@@ -358,6 +378,8 @@ mod tests {
             ServerFrame::Subscribed {
                 subscribe_id: Some("s1".to_owned()),
                 baseline: None,
+                replay_truncated: false,
+                resume_cursor: None,
             }
         );
         assert_eq!(
@@ -378,6 +400,52 @@ mod tests {
                 subscribe_id: None,
             }
         );
+    }
+
+    #[test]
+    fn subscription_receipt_carries_replay_truncation_and_resume_cursor() {
+        // 网关在回执里带 `replayTruncated` 与真实续读游标：桌面端必须原样读到，
+        // 否则「这次回放没追到尾」这条事实会在宿主层被吃掉，界面只能把残缺当完整。
+        let frame = serde_json::from_str::<ServerFrame>(
+            r#"{"type":"subscribed","subscribeId":"interaction:i1","replayTruncated":true,"resumeCursor":"{\"generation\":\"g\",\"sequence\":6230}"}"#,
+        )
+        .expect("带截断事实的确认帧应可解析");
+        let ServerFrame::Subscribed {
+            replay_truncated,
+            resume_cursor,
+            ..
+        } = frame
+        else {
+            panic!("应为订阅确认帧");
+        };
+        assert!(replay_truncated);
+        assert_eq!(
+            resume_cursor.as_deref(),
+            Some(r#"{"generation":"g","sequence":6230}"#)
+        );
+
+        // 透出给前端的事件保持驼峰命名；未截断时两个字段都不占位。
+        let event = serde_json::to_value(StreamEvent::Subscribed {
+            subscribe_id: "interaction:i1".to_owned(),
+            baseline: None,
+            replay_truncated: false,
+            resume_cursor: None,
+        })
+        .expect("事件应可序列化");
+        assert_eq!(event["kind"], "subscribed");
+        assert_eq!(event["subscribeId"], "interaction:i1");
+        assert!(event.get("replayTruncated").is_none());
+        assert!(event.get("resumeCursor").is_none());
+
+        let truncated = serde_json::to_value(StreamEvent::Subscribed {
+            subscribe_id: "interaction:i1".to_owned(),
+            baseline: None,
+            replay_truncated: true,
+            resume_cursor: Some("cursor-1".to_owned()),
+        })
+        .expect("事件应可序列化");
+        assert_eq!(truncated["replayTruncated"], true);
+        assert_eq!(truncated["resumeCursor"], "cursor-1");
     }
 
     #[test]

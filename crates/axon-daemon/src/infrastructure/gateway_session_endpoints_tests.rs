@@ -230,6 +230,86 @@ fn settle_silent_turn_route_is_idempotent() {
     assert_eq!(invalid_status, 400);
 }
 
+#[test]
+fn live_payload_marks_stale_lease_as_not_running() {
+    let fixture = Fixture::new();
+
+    // 一、会话存在但没有任何在跑轮次：running 必须为假，租约余量留空而不是补零。
+    let idle = fixture.session("session-live-idle");
+    let idle_activity = fixture
+        .store
+        .get_session(&idle)
+        .expect("会话行")
+        .last_activity_at_ms;
+    let (status, idle_payload) =
+        fixture.get_json(&format!("/api/v1/sessions/{}/live", idle.as_str()));
+    assert_eq!(status, 200, "已有会话必须 200：{idle_payload}");
+    assert_eq!(idle_payload["sessionId"], idle.as_str());
+    assert_eq!(idle_payload["running"], false, "没有在跑轮次时不能说在跑");
+    assert_eq!(
+        idle_payload["leaseRemainingMs"],
+        Value::Null,
+        "没有租约时留空，不写 0"
+    );
+    assert_eq!(
+        idle_payload["idleForMs"].as_u64(),
+        Some(NOW_MS - idle_activity),
+        "静默时长取最后活动时刻到判定时刻的距离"
+    );
+    assert_eq!(
+        idle_payload["lastFrameSequence"].as_u64(),
+        Some(0),
+        "从未写过事件的会话尾序号为 0"
+    );
+
+    // 二、有在跑轮次但租约已过期：没有执行者，证据不成立，running 仍必须是假。
+    let stale = fixture.session("session-live-stale");
+    let stale_turn = interaction_record(&stale, "interaction-live-stale");
+    fixture.store.append(&stale_turn).expect("写入入站事实");
+    fixture
+        .store
+        .claim_processing_by_id(&stale_turn.interaction_id, NOW_MS - 1_000, 100)
+        .expect("领取")
+        .expect("租约");
+    let (stale_status, stale_payload) =
+        fixture.get_json(&format!("/api/v1/sessions/{}/live", stale.as_str()));
+    assert_eq!(stale_status, 200, "{stale_payload}");
+    assert_eq!(
+        stale_payload["running"], false,
+        "租约过期即没有执行者，不得继续报在跑"
+    );
+    assert_eq!(stale_payload["leaseRemainingMs"], Value::Null);
+
+    // 三、租约未过期：这才是「在跑」，余量按判定时刻实算。
+    let fresh = fixture.session("session-live-fresh");
+    let fresh_turn = interaction_record(&fresh, "interaction-live-fresh");
+    fixture.store.append(&fresh_turn).expect("写入入站事实");
+    fixture
+        .store
+        .claim_processing_by_id(&fresh_turn.interaction_id, NOW_MS, ACTION_LEASE_DURATION_MS)
+        .expect("领取")
+        .expect("租约");
+    let (fresh_status, fresh_payload) =
+        fixture.get_json(&format!("/api/v1/sessions/{}/live", fresh.as_str()));
+    assert_eq!(fresh_status, 200, "{fresh_payload}");
+    assert_eq!(fresh_payload["running"], true, "带租约且未过期才是在跑");
+    assert_eq!(
+        fresh_payload["leaseRemainingMs"].as_u64(),
+        Some(ACTION_LEASE_DURATION_MS)
+    );
+
+    // 未知会话 404，未带凭据 401：与同一路由族的其余接口同口径。
+    let (missing_status, missing) =
+        fixture.get_json("/api/v1/sessions/session-not-registered/live");
+    assert_eq!(missing_status, 404, "{missing}");
+    assert_eq!(missing["error"]["code"], "SESSION_NOT_FOUND");
+    let (unauthorized_status, _) = fixture.request(&get(
+        &format!("/api/v1/sessions/{}/live", idle.as_str()),
+        None,
+    ));
+    assert_eq!(unauthorized_status, 401);
+}
+
 fn interaction_record(session_id: &DaemonSessionId, interaction_id: &str) -> InteractionRecord {
     InteractionRecord::new(
         session_id.clone(),

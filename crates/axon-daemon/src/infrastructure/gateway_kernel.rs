@@ -12,11 +12,18 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicU8, AtomicUsize, Ordering},
+    atomic::{AtomicU8, Ordering},
     mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError},
 };
 use std::time::Duration;
 use thiserror::Error;
+
+#[path = "gateway_kernel_connections.rs"]
+mod connections;
+#[path = "gateway_kernel_live.rs"]
+mod live;
+pub use connections::{GatewayConnectionLimiter, GatewayConnectionPermit};
+pub use live::GatewaySessionLive;
 
 const STATE_STOPPED: u8 = 0;
 const STATE_RUNNING: u8 = 1;
@@ -116,6 +123,21 @@ pub trait GatewayIngress: Send + Sync {
         session_id: &axon_domain::DaemonSessionId,
         interaction_id: &axon_domain::InteractionId,
     ) -> Result<SilentTurnSettlementOutcome, GatewayKernelError>;
+
+    /// 读一条会话的运行态证据：`running` 必须能指回带租约且未过期的行。
+    ///
+    /// 默认实现表示该 ingress 不提供证据：路由按 500 如实拒绝，读侧据此降级，
+    /// 绝不用「未知」冒充「在跑」。会话不存在时返回
+    /// [`GatewayKernelError::NotFound`]，由路由映射成 404。
+    fn session_live(
+        &self,
+        session_id: &axon_domain::DaemonSessionId,
+    ) -> Result<GatewaySessionLive, GatewayKernelError> {
+        let _ = session_id;
+        Err(GatewayKernelError::Ingress(
+            "该网关实现不提供运行态证据".to_owned(),
+        ))
+    }
 }
 
 /// Adapter 使用的事件出口桥。
@@ -313,6 +335,15 @@ impl GatewayContext {
         self.ingress.settle_silent_turn(session_id, interaction_id)
     }
 
+    /// 读会话运行态证据；排空或停止后拒绝读取。
+    pub fn session_live(
+        &self,
+        session_id: &axon_domain::DaemonSessionId,
+    ) -> Result<GatewaySessionLive, GatewayKernelError> {
+        self.ensure_running()?;
+        self.ingress.session_live(session_id)
+    }
+
     /// 尝试取得一个连接许可；许可释放后才会减少活动连接计数。
     pub fn try_acquire_connection(&self) -> Result<GatewayConnectionPermit, GatewayKernelError> {
         self.ensure_running()?;
@@ -399,59 +430,6 @@ pub trait GatewayAdapter: Send + Sync {
     fn drain(&self);
     /// 释放 Adapter 资源。
     fn stop(&self);
-}
-
-/// 有界 Gateway 连接准入器。
-#[derive(Debug)]
-pub struct GatewayConnectionLimiter {
-    limit: usize,
-    active: Arc<AtomicUsize>,
-}
-
-impl GatewayConnectionLimiter {
-    /// 创建连接准入器；零值使用默认 256 上限。
-    #[must_use]
-    pub fn new(limit: usize) -> Self {
-        Self {
-            limit: limit.max(1),
-            active: Arc::new(AtomicUsize::new(0)),
-        }
-    }
-
-    /// 使用 IPC 同级的默认连接上限。
-    #[must_use]
-    pub fn default_limit() -> Self {
-        Self::new(DEFAULT_CONNECTION_LIMIT)
-    }
-
-    /// 尝试取得连接许可，满载时立即失败，不阻塞调用线程。
-    pub fn try_acquire(&self) -> Result<GatewayConnectionPermit, GatewayKernelError> {
-        self.active
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                (current < self.limit).then_some(current.saturating_add(1))
-            })
-            .map(|_| GatewayConnectionPermit {
-                active: Arc::clone(&self.active),
-            })
-            .map_err(|_| GatewayKernelError::ConnectionLimitReached(self.limit))
-    }
-
-    /// 当前活动连接数。
-    #[must_use]
-    pub fn active(&self) -> usize {
-        self.active.load(Ordering::Acquire)
-    }
-}
-
-/// 一个活动连接许可。
-pub struct GatewayConnectionPermit {
-    active: Arc<AtomicUsize>,
-}
-
-impl Drop for GatewayConnectionPermit {
-    fn drop(&mut self) {
-        self.active.fetch_sub(1, Ordering::AcqRel);
-    }
 }
 
 /// 固定容量 mailbox；满载时拒绝写入，避免无限堆积。
@@ -673,12 +651,6 @@ impl GatewayKernel {
             .values()
             .cloned()
             .collect()
-    }
-}
-
-impl std::fmt::Debug for GatewayConnectionPermit {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.debug_struct("GatewayConnectionPermit").finish()
     }
 }
 

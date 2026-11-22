@@ -1,12 +1,13 @@
-//! 会话级固定接口：上下文快照读取与静默轮次收口。
+//! 会话级固定接口：上下文快照读取、运行态证据读取与静默轮次收口。
 //!
-//! 两者都是桌面端的工作台契约，数据源在网关自己的 ingress（`DaemonGatewayBridge`）上，
+//! 三者都是桌面端的工作台契约，数据源在网关自己的 ingress（`DaemonGatewayBridge`）上，
 //! 因此不经过注入的扩展路由处理器。准入、鉴权与错误模型复用路由族的既有实现：
 //! 未授权是统一错误模型的 401，会话不存在是统一错误模型的 404，业务结论一律 200。
 //!
 //! 路由表：
 //!
 //! - `GET /api/v1/sessions/{sessionId}/context-snapshot`
+//! - `GET /api/v1/sessions/{sessionId}/live`
 //! - `POST /api/v1/sessions/{sessionId}/settle-silent-turn`
 
 use std::sync::Arc;
@@ -58,6 +59,18 @@ pub(super) async fn settle_silent_turn(
 ) -> Response {
     serve(state, request, Method::POST, move |state, body| {
         settle_response(state, &session_id, body)
+    })
+    .await
+}
+
+/// `GET /api/v1/sessions/{sessionId}/live`。
+pub(super) async fn live(
+    State(state): State<Arc<GatewayHttpState>>,
+    Path(session_id): Path<String>,
+    request: Request,
+) -> Response {
+    serve(state, request, Method::GET, move |state, _body| {
+        live_response(state, &session_id)
     })
     .await
 }
@@ -144,6 +157,24 @@ fn snapshot_json(snapshot: &axon_session::ContextSnapshot) -> serde_json::Value 
         "updatedAtMs": snapshot.updated_at_ms,
         "source": snapshot.source,
     })
+}
+
+/// 运行态证据：`running` 只认带租约且未过期的在跑轮次，与界面自己的推算分开。
+fn live_response(state: &GatewayHttpState, session_id: &str) -> Response {
+    let Some(session_id) = parse_session_id(session_id) else {
+        return json_error(400, "invalid_session_id");
+    };
+    match state.context.session_live(&session_id) {
+        Ok(live) => json_ok(&serde_json::json!({
+            "sessionId": session_id.as_str(),
+            "running": live.running,
+            "leaseRemainingMs": live.lease_remaining_ms,
+            "lastFrameSequence": live.last_frame_sequence,
+            "idleForMs": live.idle_for_ms,
+        })),
+        Err(GatewayKernelError::NotFound(_)) => session_not_found(),
+        Err(_) => json_error(500, "gateway_error"),
+    }
 }
 
 /// 显式收口：只收口判据成立的轮次，找不到在途轮次如实回 `settled: false`。

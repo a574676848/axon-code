@@ -51,6 +51,7 @@ import {
   foldStreamUsage,
 } from './cells';
 import { failureReportFromPayload, parseFailureReport, type FailureReport } from '../failureReport';
+import { replayReceiptOf, replayTruncationNotice } from '../replayTruncation';
 import { applyTurnFailed, applyTurnUncertain, hasOpenTurn } from './terminal';
 import { pruneSettledQuestions } from '../questions';
 import { mergeSubagent, subagentRow } from './subagents';
@@ -100,7 +101,8 @@ function applyFrame(
   nowMs: number,
 ): ConversationState {
   if (frame.kind === 'subscribed') {
-    return { ...state, connection: 'subscribed', failure: null };
+    // 确认帧带回这次回放是否读到尾：残缺时把事实落到投影上，界面据此说明显示到第几帧。
+    return { ...state, connection: 'subscribed', failure: null, replayNotice: replayTruncationNotice(replayReceiptOf(frame)) };
   }
   if (frame.kind === 'failure') {
     return {

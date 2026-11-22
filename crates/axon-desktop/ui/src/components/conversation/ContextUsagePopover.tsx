@@ -34,12 +34,14 @@ export const ContextUsagePopover: React.FC<{
                 {model.percentText}
               </span>
             )}
+            {/* 更新时刻与指标条上的次级读数是同一份事实：快照带时间戳，读数才谈得上新旧。 */}
+            <span className="ml-1.5 text-meta text-text-tertiary">{model.updatedText}</span>
           </>
         }
         total={model.totalText}
         bar={barSegments(model)}
         rows={rows(model)}
-        fallback="本轮未观测到上下文构成"
+        fallback="这份快照没有上下文构成"
       />
     }
   >

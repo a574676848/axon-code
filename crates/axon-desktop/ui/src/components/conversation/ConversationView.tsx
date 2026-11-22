@@ -4,7 +4,7 @@ import type { CronJob, WorkspaceItem } from '../../types';
 import { targetOfSession, useConversation, type SessionSelection } from '../../conversation/useConversation';
 import { sessionGenerationMetrics } from '../../conversation/sessionGeneration';
 import { reflectionNoticeText } from '../../conversation/reflectionNotice';
-import { lastObservedUsage } from '../../conversation/sessionUsage';
+import { useConversationObservations } from '../../conversation/useConversationObservations';
 import { coverFace, showsHero, type StageFrame } from '../../conversation/stage';
 import { useSessionAutoRead, useStopSpeechOnSessionChange } from '../../speech';
 import { ConversationHeader } from './ConversationHeader';
@@ -117,6 +117,9 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     [snapshotSessionId, workspace],
   );
   const conversation = useConversation(target, sessionFacts);
+  /** 会话级读数：上下文快照与运行态证据都只经网关读，头部与换窗进度行读同一份快照。 */
+  const { contextSnapshot, evidence } = useConversationObservations(
+    selection?.sessionId ?? null, conversation.working, conversation.state.turns.length);
   // 右侧栏按会话持有停靠面：开关、tab 与分栏都在这一份状态里。
   const rail = useRailLayout(selection?.sessionId ?? null);
   /*
@@ -334,11 +337,10 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
     reasoningEffort: fixedReasoningEffort ?? config?.reasoningEffort ?? null,
     /* 首屏还没有会话：预算与会话读数一律不占位，只留运行态与辅助读数。 */
     inSession: selection !== null,
-    /* 上下文读数取会话里最近一次有观测的用量：新一轮刚提交时它还没有用量，用最后一条会清零。 */
-    usage: lastObservedUsage(conversation.state.turns),
+    /** 上下文读数取会话级快照：占用与窗口分母同源，未知就显示未知。 */
+    contextSnapshot,
     /* 累计用量与累计耗时是整条会话的事实，由网关基线加本地增量合成，不随翻页或换轮退回。 */
     sessionCumulative: conversation.sessionCumulative,
-    contextWindow: effectiveModel.contextWindow,
     firstTokenAvgMs: sessionGeneration.firstTokenAvgMs,
     generationTpsX10: sessionGeneration.generationTpsX10,
     plan: conversation.state.plan,
@@ -363,8 +365,11 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    *
    * 冻结是为了不让投影塌陷带着输入坞抖一下；但「正在加载会话…」说的正是正文还没到
    * 这件事，而装载窗口与交接窗口几乎完全重合，冻住上一屏的值等于把这句话永远压掉。
+   * 证据过期时一律不显示「在跑」：此刻没有能指回带租约行的证据。
    */
-  const dockWorking = conversation.loadingHistory ? workingLine : settledWorkingLine;
+  const dockWorking = evidence.showRunning
+    ? conversation.loadingHistory ? workingLine : settledWorkingLine
+    : null;
   /*
    * 计划坞同样读交接后的值：它长期占位在输入坞上方，切换会话时若直接读实时投影，
    * 会在新一屏的投影落地前先闪出上一条会话的计划。
@@ -511,7 +516,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
           />
           {originBar !== null && <SessionOriginBar {...originBar} />}
 
-          <ConversationFailureCards conversation={conversation} sessionKey={sessionKey} />
+          <ConversationFailureCards conversation={conversation} sessionKey={sessionKey} evidence={evidence} />
 
           <div className="flex-1 min-h-0 flex flex-col relative">
             {openSubagent !== null ? (
@@ -548,6 +553,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                         onLoadOlder={() => void conversation.loadOlder()}
                         prependToken={conversation.prependToken}
                         reflectionNotice={visibleReflection}
+                        contextSnapshot={contextSnapshot}
                         readOnly={gate.readOnly}
                       />
                     </UnfoldingProvider>
@@ -678,7 +684,6 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
             </div>
           </div>
         </main>
-
         {/*
           收起不卸载：面板自己贴右缘滑出去、宽度归零不占正文宽，
           因此这里不按展开态裁剪，文件树的展开态与预览的滚动位置才留得住。
