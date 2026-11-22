@@ -1,5 +1,6 @@
 //! HeaderBar 产品级状态聚合模型。
 
+use crate::app_shell::context_snapshot::AgentTuiContextSnapshot;
 use crate::r#loop::agent_tui::{
     AgentTuiConfigStatus, AgentTuiModelCatalogItem, AgentTuiPlanProgress, AgentTuiRunOverrides,
     AgentTuiTokenUsage, display_units,
@@ -25,7 +26,12 @@ pub(crate) enum HeaderBarStatus {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct HeaderBarMetrics {
+    /// 本轮最近一次请求的用量构成（缓存读写的唯一来源）。
+    ///
+    /// 上下文占用不从这里读：占用与换窗读数统一读 `context_snapshot`，两处因此不会各说一套。
     pub(crate) token_usage: AgentTuiTokenUsage,
+    /// 会话级上下文快照读数：头部占用段与换窗段的唯一来源。
+    pub(crate) context_snapshot: AgentTuiContextSnapshot,
     /// 整条会话的累计 token 消耗，排在上下文段之前。
     pub(crate) session_tokens: u64,
     /// 整条会话的累计墙钟耗时（毫秒），紧跟累计 token。
@@ -126,6 +132,13 @@ impl HeaderBarViewModel {
                     .with_tone(context.tone),
             );
         }
+        // 换窗读数与占用段同源：都取自同一份会话级快照，未知时不显示。
+        if let Some(rollover) = metrics.context_snapshot.rollover_text() {
+            primary.push(HeaderBarSegment::new(
+                HeaderBarSegmentKind::Rollover,
+                rollover,
+            ));
+        }
         if let Some(first_token_avg_ms) = metrics.first_token_avg_ms {
             primary.push(HeaderBarSegment::new(
                 HeaderBarSegmentKind::FirstToken,
@@ -209,6 +222,7 @@ pub(crate) enum HeaderBarSegmentKind {
     SessionTokens,
     CacheHit,
     Context,
+    Rollover,
     ReplaySnapshot,
     ReplayInput,
     Elapsed,
@@ -226,6 +240,7 @@ impl HeaderBarSegmentKind {
             Self::SessionTokens
             | Self::CacheHit
             | Self::Context
+            | Self::Rollover
             | Self::Elapsed
             | Self::FirstToken
             | Self::GenerationRate
@@ -309,45 +324,28 @@ fn reasoning_effort(
         .to_owned()
 }
 
+/// 头部上下文占用段。
+///
+/// 占用与窗口只从会话级快照读：读不到就整段不显示，既不显示 `0`，也不拿用量帧的
+/// 归一化总量或上一次读数顶替。缓存读写是本轮最近一次请求的构成，仍取用量帧。
 fn context_usage_value(
     metrics: &HeaderBarMetrics,
     current: Option<&AgentTuiModelCatalogItem>,
 ) -> Option<ContextUsageValue> {
+    let snapshot = &metrics.context_snapshot;
+    let model_window = current.and_then(|model| model.context_window);
     let usage = metrics.token_usage;
-    let used = usage.current_context_tokens();
-    if used == 0 {
-        return None;
-    }
-    let context_window = current
-        .and_then(|model| model.context_window)
-        .filter(|window| *window > 0);
-    let mut value = match context_window {
-        Some(window) => format!(
-            "上下文 {}/{}",
-            AgentTuiTokenUsage::render_token_count(used),
-            AgentTuiTokenUsage::render_token_count(window)
-        ),
-        None => short_metric("上下文", AgentTuiTokenUsage::render_token_count(used)),
-    };
-    if usage.cache_read_input_tokens > 0 {
-        value.push_str(" 缓存 ");
-        value.push_str(&AgentTuiTokenUsage::render_token_count(
-            usage.cache_read_input_tokens,
-        ));
-    }
-    // 命中率不在这里出现：它是整条会话累计读数的第三段（见 `SessionCacheHit`）。
-    if usage.cache_write_input_tokens > 0 {
-        value.push_str(" 写入 ");
-        value.push_str(&AgentTuiTokenUsage::render_token_count(
-            usage.cache_write_input_tokens,
-        ));
-    }
-    Some(ContextUsageValue {
-        text: value,
-        tone: context_window.map_or(HeaderBarSegmentTone::Default, |window| {
-            context_pressure_tone(used, window)
-        }),
-    })
+    let text = snapshot.context_text(
+        model_window,
+        usage.cache_read_input_tokens,
+        usage.cache_write_input_tokens,
+    )?;
+    let tone = snapshot
+        .context_pressure_percent(model_window)
+        .map_or(HeaderBarSegmentTone::Default, |percent| {
+            context_pressure_tone(percent)
+        });
+    Some(ContextUsageValue { text, tone })
 }
 
 struct ContextUsageValue {
@@ -355,8 +353,7 @@ struct ContextUsageValue {
     tone: HeaderBarSegmentTone,
 }
 
-fn context_pressure_tone(used: u64, window: u64) -> HeaderBarSegmentTone {
-    let percent = used.saturating_mul(100) / window.max(1);
+fn context_pressure_tone(percent: u64) -> HeaderBarSegmentTone {
     if percent >= CONTEXT_CRITICAL_PERCENT {
         HeaderBarSegmentTone::Critical
     } else if percent >= CONTEXT_WARNING_PERCENT {

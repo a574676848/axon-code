@@ -45,8 +45,8 @@ fn header_bar_view_model_orders_product_status_fields_by_priority() {
 fn header_bar_view_model_surfaces_session_totals_before_context() {
     let config = AgentTuiConfigStatus::new("openai", "gpt-5", "已认证");
     let metrics = HeaderBarMetrics {
-        token_usage: AgentTuiTokenUsage::new(1_000, 2_000, 300, 400, 0)
-            .with_current_context_tokens(2_300),
+        token_usage: AgentTuiTokenUsage::new(1_000, 2_000, 300, 400, 0),
+        context_snapshot: AgentTuiContextSnapshot::new(Some(2_300), None, None, None, None, None),
         session_tokens: 6_260_000,
         session_elapsed_ms: 11_520_000,
         session_cache_hit_basis_points: Some(6_060),
@@ -103,8 +103,8 @@ fn header_bar_view_model_omits_session_totals_until_any_usage() {
 fn header_bar_view_model_surfaces_context_cache_without_prompt_cache_side_effects() {
     let config = AgentTuiConfigStatus::new("openai", "gpt-5", "已认证");
     let metrics = HeaderBarMetrics {
-        token_usage: AgentTuiTokenUsage::new(1_000, 2_000, 300, 400, 0)
-            .with_current_context_tokens(2_300),
+        token_usage: AgentTuiTokenUsage::new(1_000, 2_000, 300, 400, 0),
+        context_snapshot: AgentTuiContextSnapshot::new(Some(2_300), None, None, None, None, None),
         ..HeaderBarMetrics::default()
     };
 
@@ -143,8 +143,8 @@ fn header_bar_view_model_follows_session_model_window() {
         ),
     ];
     let metrics = HeaderBarMetrics {
-        token_usage: AgentTuiTokenUsage::new(1_000, 2_000, 0, 0, 0)
-            .with_current_context_tokens(400_000),
+        token_usage: AgentTuiTokenUsage::new(1_000, 2_000, 0, 0, 0),
+        context_snapshot: AgentTuiContextSnapshot::new(Some(400_000), None, None, None, None, None),
         session_run_model: Some(SessionRunModel {
             provider: "codex-onetoken".to_owned(),
             model: "gpt-6-astra".to_owned(),
@@ -203,8 +203,8 @@ fn header_bar_view_model_keeps_explicit_model_pick_over_session_model() {
         ..AgentTuiRunOverrides::default()
     };
     let metrics = HeaderBarMetrics {
-        token_usage: AgentTuiTokenUsage::new(1_000, 2_000, 0, 0, 0)
-            .with_current_context_tokens(400_000),
+        token_usage: AgentTuiTokenUsage::new(1_000, 2_000, 0, 0, 0),
+        context_snapshot: AgentTuiContextSnapshot::new(Some(400_000), None, None, None, None, None),
         session_run_model: Some(SessionRunModel {
             provider: "codex-onetoken".to_owned(),
             model: "gpt-6-astra".to_owned(),
@@ -229,18 +229,95 @@ fn header_bar_view_model_keeps_explicit_model_pick_over_session_model() {
 
 #[test]
 fn context_pressure_uses_stable_warning_and_critical_thresholds() {
-    assert_eq!(
-        context_pressure_tone(699, 1_000),
-        HeaderBarSegmentTone::Default
+    assert_eq!(context_pressure_tone(69), HeaderBarSegmentTone::Default);
+    assert_eq!(context_pressure_tone(70), HeaderBarSegmentTone::Warning);
+    assert_eq!(context_pressure_tone(85), HeaderBarSegmentTone::Critical);
+}
+
+#[test]
+fn tui_header_and_rollover_read_the_same_snapshot() {
+    let config = AgentTuiConfigStatus::new("openai", "gpt-5", "已认证");
+    let models = vec![AgentTuiModelCatalogItem::new_with_context_window(
+        "gpt-5",
+        "gpt-5",
+        "openai",
+        Some(200_000),
+    )];
+    let mut metrics = HeaderBarMetrics {
+        context_snapshot: AgentTuiContextSnapshot::new(
+            Some(135_917),
+            Some(200_000),
+            Some(198_400),
+            Some(12_345),
+            Some(1_700_000_000_000),
+            Some("usage_frame+rollover_frame".to_owned()),
+        ),
+        ..HeaderBarMetrics::default()
+    };
+
+    let view = HeaderBarViewModel::from_sources(
+        &config,
+        &AgentTuiRunOverrides::default(),
+        &metrics,
+        &models,
     );
-    assert_eq!(
-        context_pressure_tone(700, 1_000),
-        HeaderBarSegmentTone::Warning
+    let context = view
+        .primary
+        .iter()
+        .find(|segment| segment.kind == HeaderBarSegmentKind::Context)
+        .expect("头部应显示上下文占用");
+    let rollover = view
+        .primary
+        .iter()
+        .find(|segment| segment.kind == HeaderBarSegmentKind::Rollover)
+        .expect("头部应显示换窗读数");
+    assert!(context.text.contains("136K/200K"), "{}", context.text);
+    assert_eq!(rollover.text, "换窗 198K→12.3K");
+
+    // 同一份快照的换窗两侧缺一不可：清掉 after 后换窗段必须消失，占用段不受影响。
+    metrics.context_snapshot.rollover_after_tokens = None;
+    let view = HeaderBarViewModel::from_sources(
+        &config,
+        &AgentTuiRunOverrides::default(),
+        &metrics,
+        &models,
     );
-    assert_eq!(
-        context_pressure_tone(850, 1_000),
-        HeaderBarSegmentTone::Critical
+    assert!(
+        !view
+            .primary
+            .iter()
+            .any(|segment| segment.kind == HeaderBarSegmentKind::Rollover),
+        "换窗读数不完整时不得只显示半个箭头"
     );
+    assert!(
+        view.primary
+            .iter()
+            .any(|segment| segment.kind == HeaderBarSegmentKind::Context),
+        "换窗段消失不影响同一份快照的占用段"
+    );
+
+    // 占用未知时两段读数都不拿旧值顶替：占用段消失，换窗段仍按快照成对显示。
+    metrics.context_snapshot.current_context_tokens = None;
+    metrics.context_snapshot.rollover_after_tokens = Some(12_345);
+    let view = HeaderBarViewModel::from_sources(
+        &config,
+        &AgentTuiRunOverrides::default(),
+        &metrics,
+        &models,
+    );
+    assert!(
+        !view
+            .primary
+            .iter()
+            .any(|segment| segment.kind == HeaderBarSegmentKind::Context),
+        "占用未知时不得显示 0 或上一次读数"
+    );
+    let rollover = view
+        .primary
+        .iter()
+        .find(|segment| segment.kind == HeaderBarSegmentKind::Rollover)
+        .expect("换窗读数成对成立时仍应显示");
+    assert_eq!(rollover.text, "换窗 198K→12.3K");
 }
 
 #[test]

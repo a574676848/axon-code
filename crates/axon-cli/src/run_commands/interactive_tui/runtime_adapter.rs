@@ -1,7 +1,7 @@
 //! CLI 到 Agent TUI runtime adapter 的桥接。
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use axon_tui_runtime::{
     AgentTuiActiveTurn, AgentTuiCancelToken, AgentTuiCatalogLoader, AgentTuiCompletionInbox,
@@ -12,6 +12,7 @@ use axon_tui_runtime::{
     RuntimeTransportTiming, TuiError, axon_cli_runtime_event,
 };
 
+use super::context_snapshot_reader::ContextSnapshotReader;
 use super::settings_persistence::persist_tui_settings_change_if_needed;
 use super::{
     run_output_error_message, run_output_renderer::format_tui_run_output, tui_control_commands,
@@ -43,6 +44,8 @@ pub(super) struct CliAgentTuiRuntimeAdapter {
     /// TUI 是长驻进程：未给 `--session` 时「新会话」指进程启动时新建的那一条，
     /// 不是每次提交都新建，否则同一段对话会被拆成多条会话历史。
     pub(super) session: Arc<Mutex<Option<axon_domain::DaemonSessionId>>>,
+    /// 上下文快照读取器：首读时打开运行态库，此后复用同一个连接池。
+    pub(super) context_snapshot_reader: Arc<OnceLock<ContextSnapshotReader>>,
 }
 
 impl AgentTuiRuntimeAdapter for CliAgentTuiRuntimeAdapter {
@@ -174,6 +177,18 @@ impl AgentTuiRuntimeAdapter for CliAgentTuiRuntimeAdapter {
             axon_logger::warning(&format!("TUI 切换会话未写入恢复指针：{error}"));
         }
         super::session_history::load_session_history(self.config_path.as_deref(), session_id)
+    }
+
+    /// 读会话级上下文快照：TUI 与桌面端读同一份服务端投影。
+    fn context_snapshot(
+        &self,
+        session_id: Option<&str>,
+    ) -> Option<axon_tui_runtime::AgentTuiContextSnapshot> {
+        let config_path = self.config_path.as_deref()?;
+        let session_id = session_id?;
+        self.context_snapshot_reader
+            .get_or_init(|| ContextSnapshotReader::new(config_path))
+            .read(Some(session_id))
     }
 
     fn load_active_turn(&self, request: &AgentTuiLaunchRequest) -> Option<AgentTuiActiveTurn> {

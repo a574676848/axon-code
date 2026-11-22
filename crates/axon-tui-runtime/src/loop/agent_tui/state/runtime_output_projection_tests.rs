@@ -310,7 +310,10 @@ fn runtime_usage_event_updates_header_bar_state_and_finish_does_not_double_count
                 .with_current_context_tokens(10_200),
         ),
     );
-    assert_eq!(state.last_turn_usage().current_context_tokens(), 10_200);
+    assert_eq!(
+        state.last_turn_usage().current_context_tokens(),
+        Some(10_200)
+    );
     assert_eq!(state.last_turn_usage().cache_read_input_tokens, 9_500);
 
     let mut output = AgentTuiRunOutput::empty();
@@ -325,7 +328,7 @@ fn runtime_usage_event_updates_header_bar_state_and_finish_does_not_double_count
 
     assert_eq!(cell_count(&state, RenderCellKind::USAGE), 0);
     assert_eq!(state.session_usage().total_tokens(), 10_400);
-    assert_eq!(state.session_usage().current_context_tokens(), 10_200);
+    assert_eq!(state.session_usage().current_context_tokens(), Some(10_200));
 }
 #[test]
 fn missing_usage_does_not_clear_last_header_bar_usage() {

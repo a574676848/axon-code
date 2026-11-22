@@ -58,14 +58,13 @@ impl AgentTuiTokenUsage {
         self
     }
 
-    /// 当前上下文 token。provider 未返回原始 total 时回退到归一化总量。
+    /// 当前上下文 token 读数；`0` 表示这一帧没有带来读数（未知）。
+    ///
+    /// 这里不做任何回退：用量帧没有携带上下文占用时就是未知，既不能拿归一化总量冒充，
+    /// 也不能沿用上一次的非零值。界面据此显示未知（INV-6）。
     #[must_use]
-    pub const fn current_context_tokens(self) -> u64 {
-        if self.current_context_tokens > 0 {
-            self.current_context_tokens
-        } else {
-            self.total_tokens()
-        }
+    pub fn current_context_tokens(self) -> Option<u64> {
+        (self.current_context_tokens > 0).then_some(self.current_context_tokens)
     }
 
     /// 计算总 token。
@@ -106,6 +105,9 @@ impl AgentTuiTokenUsage {
     }
 
     /// 累加另一个 usage 快照。
+    ///
+    /// 累加量相加；当前上下文占用是「最近一次请求」的读数，按最后一条帧覆盖，
+    /// 新帧没有读数时置为未知，而不是保留旧值。
     pub fn add_assign(&mut self, other: Self) {
         self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
         self.cache_read_input_tokens = self
@@ -118,21 +120,17 @@ impl AgentTuiTokenUsage {
         self.reasoning_output_tokens = self
             .reasoning_output_tokens
             .saturating_add(other.reasoning_output_tokens);
-        if other.current_context_tokens > 0 {
-            self.current_context_tokens = other.current_context_tokens;
-        }
+        self.current_context_tokens = other.current_context_tokens;
     }
 
     /// 本轮读数：已收口流的累计加上在跑流的快照。
     ///
-    /// 累加量相加；当前上下文占用这类「最近一次请求」的读数以在跑流为准。
+    /// 累加量相加；当前上下文占用这类「最近一次请求」的读数以在跑流为准，
+    /// 在跑流没有读数时就是未知。
     #[must_use]
     pub fn fold(self, stream: Self) -> Self {
         let mut merged = self;
         merged.add_assign(stream);
-        if stream.current_context_tokens > 0 {
-            merged.current_context_tokens = stream.current_context_tokens;
-        }
         merged
     }
 

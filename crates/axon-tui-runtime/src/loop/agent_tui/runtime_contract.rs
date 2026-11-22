@@ -7,6 +7,7 @@ use std::sync::{
 
 use axon_agent_runtime::RunCancelToken;
 
+use crate::app_shell::context_snapshot::AgentTuiContextSnapshot;
 use crate::surface::runtime_adapter::{RuntimeAdapterContract, RuntimeError, RuntimeEventEmitter};
 
 use super::{
@@ -205,6 +206,14 @@ pub trait AgentTuiRuntimeAdapter: Send + Clone + 'static {
         _emit: &mut RuntimeEventEmitter<'_, AgentTuiRuntimeEvent>,
     ) -> Result<AgentTuiSteerResult, RuntimeError> {
         Ok(AgentTuiSteerResult::Unsupported)
+    }
+
+    /// 读取会话级上下文快照。
+    ///
+    /// TUI 不自己按用量帧累加上下文占用：头部占用段与换窗段都只读这一份快照。宿主没有
+    /// 运行态读取能力时返回 `None`，界面据此显示未知，而不是拿 `0` 或旧值顶替。
+    fn context_snapshot(&self, _session_id: Option<&str>) -> Option<AgentTuiContextSnapshot> {
+        None
     }
 
     /// 在首个 TUI 帧完成后启动会话预热。

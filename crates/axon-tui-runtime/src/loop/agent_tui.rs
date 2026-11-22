@@ -32,6 +32,8 @@ pub(crate) mod commands;
 mod completion_inbox;
 #[path = "agent_tui/composer_popup.rs"]
 pub(crate) mod composer_popup;
+#[path = "agent_tui/context_snapshot_poll.rs"]
+mod context_snapshot_poll;
 #[path = "agent_tui/custom_terminal.rs"]
 mod custom_terminal;
 #[cfg(test)]
@@ -332,6 +334,7 @@ where
     // 收件箱在 TUI 启动即注册 presence：它与桌面端等其他可用渠道并行接收完成通知，
     // 线程内轮询，主循环只做展示与回执。
     let mut completion_inbox = adapter.start_completion_inbox(request);
+    let mut context_snapshot_poller = context_snapshot_poll::ContextSnapshotPoller::new();
     let mut next_title_refresh = Instant::now();
     let mut last_render_signature = None;
     let mut last_transcript_signature = None;
@@ -358,6 +361,10 @@ where
             frame_scheduler.request_frame(FrameRequestReason::RuntimeProgress, state);
         }
         if state.tick(now) {
+            frame_scheduler.request_frame(FrameRequestReason::StateTick, state);
+        }
+        // 上下文快照按节流节奏刷新：头部占用段与换窗段读同一份读数。
+        if context_snapshot_poller.poll(&adapter, state) {
             frame_scheduler.request_frame(FrameRequestReason::StateTick, state);
         }
         if poll_catalog_loader(&adapter, state, &mut catalog_loader) {

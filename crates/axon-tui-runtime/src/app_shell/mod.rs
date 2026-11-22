@@ -1,6 +1,7 @@
 //! TUI app shell 层公共原语。
 
 pub(crate) mod composer_dock;
+pub(crate) mod context_snapshot;
 pub(crate) mod frame_view_model;
 pub(crate) mod header_bar;
 pub(crate) mod header_state;

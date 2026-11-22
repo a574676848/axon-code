@@ -254,23 +254,20 @@ impl AgentTuiState {
     }
 
     fn status_context_window_summary(&self) -> String {
-        let usage = self.session_usage();
-        let used = usage.current_context_tokens();
-        let Some(window) = self
-            .current_model_catalog_item()
-            .and_then(|model| model.context_window)
-        else {
+        // 上下文读数只认会话级快照：没有读数就是未知，不拿用量累计顶替。
+        let snapshot = self.context_snapshot();
+        let Some(used) = snapshot.current_context_tokens else {
+            return "未知（尚未观测到上下文占用）".to_owned();
+        };
+        let Some(window) = snapshot.effective_window(
+            self.current_model_catalog_item()
+                .and_then(|model| model.context_window),
+        ) else {
             return format!(
                 "未知（已用 {}）",
                 AgentTuiTokenUsage::render_token_count(used)
             );
         };
-        if window == 0 {
-            return format!(
-                "未知（已用 {}）",
-                AgentTuiTokenUsage::render_token_count(used)
-            );
-        }
         let left = window.saturating_sub(used);
         let left_percent = left.saturating_mul(100) / window;
         format!(

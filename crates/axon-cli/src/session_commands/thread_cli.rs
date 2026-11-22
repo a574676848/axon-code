@@ -17,7 +17,7 @@ use crate::{
 };
 
 use super::{
-    TargetKind, bounded_session_limit, display_path, resolve_session_target,
+    TargetKind, bounded_session_limit, display_path, open_control_store, resolve_session_target,
     thread_event_issue_summaries,
 };
 use crate::runtime_paths::runtime_axon_root_path;
@@ -129,10 +129,18 @@ struct SessionShowReport {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SessionReadReport {
-    status: &'static str,
-    store_path: String,
-    thread: ThreadDetail,
+pub(super) struct SessionReadReport {
+    pub(super) status: &'static str,
+    pub(super) store_path: String,
+    pub(super) thread: ThreadDetail,
+    /// 追读结论：`uncertain` 轮次与无归属子代理帧的可读原因。
+    ///
+    /// 空数组表示没有需要说明的事；有值时正文若为空，原因就写在这里，不能只给空正文。
+    pub(super) notes: Vec<String>,
+    /// 结论未知的轮次数。
+    pub(super) uncertain_turn_count: usize,
+    /// 没有归属的帧数。
+    pub(super) unattributed_frame_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -256,12 +264,23 @@ pub(crate) fn run_session_read(
         Ok(thread) => thread,
         Err(error) => return cli_error(error),
     };
+    // 追读结论：正文可能为空，但「为什么空」必须能读出来。
+    let notes = super::read_notes::read_notes(
+        &match open_control_store(config_path) {
+            Ok(store) => store,
+            Err(error) => return cli_error(error),
+        },
+        target.session_id.as_deref(),
+    );
     render_read(
         format,
         &SessionReadReport {
             status: "session_read",
             store_path: display_path(&JsonlThreadEventStore::path(&root)),
             thread,
+            notes: notes.lines.clone(),
+            uncertain_turn_count: notes.uncertain_turns,
+            unattributed_frame_count: notes.unattributed_frames,
         },
     )
 }
@@ -473,7 +492,7 @@ fn render_read(format: OutputFormat, report: &SessionReadReport) -> CliRunResult
     }
 }
 
-fn render_read_text(report: &SessionReadReport) -> String {
+pub(super) fn render_read_text(report: &SessionReadReport) -> String {
     let thread = &report.thread.thread;
     let mut stdout = format!(
         "Thread: {}\n- name: {}\n- provider: {}\n- model: {}\n- cwd: {}\n- status: {:?}\n- source: {:?}\n- parent: {}\n- turns: {}\n- store: {}\n",
@@ -498,6 +517,16 @@ fn render_read_text(report: &SessionReadReport) -> String {
     for (index, turn) in report.thread.turns.iter().enumerate() {
         stdout.push('\n');
         stdout.push_str(&render_turn_text(index, turn));
+    }
+    if report.thread.turns.is_empty() {
+        stdout.push_str("\n- 正文: 没有可渲染的轮次正文");
+        if !report.notes.is_empty() {
+            stdout.push_str("（原因见下面的备注）");
+        }
+        stdout.push('\n');
+    }
+    for note in &report.notes {
+        let _ = writeln!(stdout, "{}{note}", super::read_notes::READ_NOTE_PREFIX);
     }
     stdout
 }

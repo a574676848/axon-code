@@ -64,7 +64,10 @@ fn format_tui_run_output_projects_json_content_and_usage() {
                 && message.text == "完成"
     ));
     assert_eq!(output.token_usage_total().total_tokens(), 16);
-    assert_eq!(output.token_usage_total().current_context_tokens(), 20);
+    assert_eq!(
+        output.token_usage_total().current_context_tokens(),
+        Some(20)
+    );
 }
 
 #[test]
@@ -182,7 +185,7 @@ fn format_tui_run_output_projects_snake_case_usage_context_and_cache() {
     assert_eq!(usage.cache_write_input_tokens, 200);
     assert_eq!(usage.output_tokens, 200);
     assert_eq!(usage.reasoning_output_tokens, 10);
-    assert_eq!(usage.current_context_tokens(), 10_410);
+    assert_eq!(usage.current_context_tokens(), Some(10_410));
 }
 
 #[test]

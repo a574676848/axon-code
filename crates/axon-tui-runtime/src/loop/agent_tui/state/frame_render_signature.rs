@@ -58,6 +58,8 @@ impl AgentTuiState {
         self.header.session_usage.total_tokens().hash(hasher);
         self.header.last_turn_usage.total_tokens().hash(hasher);
         self.header.live_turn_usage.total_tokens().hash(hasher);
+        // 上下文快照是头部占用段与换窗段的唯一来源：读数变化必须触发重绘。
+        self.header.context_snapshot.hash(hasher);
         self.header.lsp_active_count.hash(hasher);
         self.header.replay_snapshot.hash(hasher);
     }

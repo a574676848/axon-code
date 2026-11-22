@@ -656,5 +656,9 @@ mod queue_tests;
 mod resilience_tests;
 
 #[cfg(test)]
+#[path = "submission_stale_frame_tests.rs"]
+mod stale_frame_tests;
+
+#[cfg(test)]
 #[path = "completion_notice_resume_tests.rs"]
 mod completion_notice_resume_tests;

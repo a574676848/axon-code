@@ -46,6 +46,11 @@ mod runtime_assistant_content;
 #[cfg(test)]
 #[path = "state/runtime_assistant_stream_tests.rs"]
 mod runtime_assistant_stream_tests;
+#[path = "state/runtime_context_snapshot.rs"]
+mod runtime_context_snapshot;
+#[cfg(test)]
+#[path = "state/runtime_context_snapshot_tests.rs"]
+mod runtime_context_snapshot_tests;
 #[path = "state/runtime_diff_snapshot.rs"]
 mod runtime_diff_snapshot;
 #[cfg(test)]

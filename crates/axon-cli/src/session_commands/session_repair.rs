@@ -233,7 +233,7 @@ fn target_logs(
 ///
 /// 逆序日志会被 `EventLogReader` 以「序号必须连续」整体拒读，因此这里走
 /// `read_tail_records`：它按帧顺序解码、只校验帧内连续，能如实暴露跨帧的逆序。
-fn read_log_records(path: &Path) -> Result<Vec<RuntimeEventRecord>, String> {
+pub(super) fn read_log_records(path: &Path) -> Result<Vec<RuntimeEventRecord>, String> {
     axon_eventlog::read_tail_records(path, usize::MAX)
         .map_err(|error| format!("读取事件日志失败：{}：{error}", path.display()))
 }
@@ -472,7 +472,7 @@ fn attribute_report(
 ///
 /// 会话行读不出来时按「不在范围内」处理：归属回填只覆盖能证明归属的会话，读不到类型
 /// 就不该往里写。显式给出 `--session` 时不受这一层过滤，由派发 join 自己判定。
-fn is_subagent_session(store: &SqliteRuntimeStore, session_id: &str) -> bool {
+pub(super) fn is_subagent_session(store: &SqliteRuntimeStore, session_id: &str) -> bool {
     let Ok(id) = DaemonSessionId::new(session_id.to_owned()) else {
         return false;
     };
@@ -483,7 +483,7 @@ fn is_subagent_session(store: &SqliteRuntimeStore, session_id: &str) -> bool {
 }
 
 /// 派发 join 的结论。
-enum DispatchResolution {
+pub(super) enum DispatchResolution {
     /// 派发唯一：整段会话帧都属于这一轮。
     Unique(InteractionId),
     /// 无法唯一确定，附原因。
@@ -494,7 +494,7 @@ enum DispatchResolution {
 ///
 /// 判据与网关历史页的第二级读取同源：`inbox.session_id = 子会话` 且 `source_message_id`
 /// 以派发前缀开头。窗口满时宁可如实报「无法证明唯一」，也不把整段会话挂到一条轮次上。
-fn resolve_dispatch(
+pub(super) fn resolve_dispatch(
     store: &SqliteRuntimeStore,
     session_id: &str,
 ) -> Result<DispatchResolution, String> {
