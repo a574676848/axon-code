@@ -130,4 +130,30 @@
 | `pwsh -File tools/verify-docs.ps1` | 输出 `Documentation verification OK` |
 | 前端 `npm ci` / `npm run build` / `npm run lint` / `npm test` / `verify-ui-contract.ps1` | 604/604 通过，契约门禁 ALL GATES PASSED |
 
-真机证据（安装态二进制 + 真实窗口 + CDP `OK:` 回执）在安装链覆盖后单独登记，不与上表混记。
+真机证据（安装态二进制 + 真实窗口 + CDP `OK:` 回执）见下一节，不与上表混记。
+
+## 5 真机证据（安装态 + 真实窗口 + CDP）
+
+安装态：`$HOME/.axon/bin/versions/0.0.1/`。`axon.exe` 与 `axon-desktop.exe` 均以本次 `cargo build --release --locked` 产物覆盖，覆盖后与构建产物 **SHA-256 逐字节一致**；`current.json` 前后不变（`{"versionId":"0.0.1"}`）；旧产物留档为 `*.pre-ctxsnapshot`。
+
+安装方式说明：标准入口 `scripts/install-from-source.ps1` 的后端安装需要管理员权限注册计划任务，本会话无法代点 UAC；经长官授权改为**免提权覆盖安装**（直接覆盖版本目录内二进制）。因此「计划任务注册 / 服务化安装」本轮未验证，其余（版本树、入口解析、二进制一致性）已验证。恢复标准路径只需在交互式终端重跑该脚本。
+
+守护进程：`axon daemon run --root $HOME/.axon --config-path $HOME/.axon/config.toml`，`daemon health` 回 `host.status=running`、租约剩余约 28 秒。
+
+schema 升级：v14 的 `control.sqlite3` 已改名保留为 `control.v14-before-context-snapshot.sqlite3`（未删除），新库按 v15 自动建立。
+
+| 验证项 | 回执 |
+| --- | --- |
+| `axon --version` | `axon-cli 0.0.1` |
+| `axon doctor --check invariants` | `ok`：`inv-2` / `inv-7a` / `inv-7b` 全部 ok，违规 0 行（证明新 schema 与三条不变式检查在安装态生效） |
+| 真实会话 | `01M80PMDTJ80DBKWAQZT5P8MAQ`，三轮（其中一轮含一次 shell 工具调用） |
+| CDP 断言 | `OK:{"userBubbles":3,"foldedTurns":1,"headerFreshness":"更新于 20 秒前","contextReading":"66.7K/未知"}` |
+
+逐项结论：
+
+- **WP-13 一条消息一格**：三轮各一个用户气泡，没有「一条等待注入、一条无标记」的重复格。
+- **WP-07 折叠**：带工具调用的历史轮折成「过程 · 执行了命令」，最终正文与用量行照常保留；最新一轮保持展开（思考与执行行可见）。
+- **WP-08 上下文读数**：头部显示 `66.7K/未知` 与 `更新于 20 秒前`：占用取自会话快照，窗口分母缺失时如实显示未知而不是 `0`，并带更新时间。
+- 收尾：验证结束后已关闭 `--remote-debugging-port` 并重启桌面端（CDP 端口确认已关闭），守护进程保持运行。
+
+未在真机触发（如实登记，只有单测证据）：`WP-10` 的「运行证据已过期」卡（需要在跑轮次叠加守护进程停机才能构造）、`WP-03` 的截断续读（正常会话不可达）、`WP-04` 的 ESC 收口（当时没有在途轮次）、TUI 头部读数（未在交互式 TTY 取证）。
