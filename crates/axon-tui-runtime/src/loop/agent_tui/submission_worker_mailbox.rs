@@ -23,7 +23,9 @@ use super::super::runtime_bridge::wire_stream_key;
 use super::{
     AgentTuiRunOutput, AgentTuiRuntimeEvent, AgentTuiRuntimePayload, AgentTuiSubmitFailure,
     SubmissionWorkerMessage, assistant_delta_from_runtime_payload,
-    submission_wire_order::{OrderedWireEvent, WireAdmission, WireStreamGate},
+    submission_wire_order::{
+        OrderedWireEvent, WireAdmission, WireStreamGate, is_terminal_semantic_frame,
+    },
 };
 use crate::r#loop::agent_tui::state::AgentTuiState;
 #[cfg(test)]
@@ -112,6 +114,11 @@ impl WorkerMailbox {
             WireAdmission::Stale => {
                 self.telemetry.record_stale(MailboxSession::Worker);
                 drop(state);
+            }
+            WireAdmission::LateTerminal(ordered) => {
+                // 存量乱序日志里的终态事实：采纳并单独计数，丢帧数不会被它掩盖。
+                self.telemetry.record_late_terminal(MailboxSession::Worker);
+                self.enqueue_ordered(state, ordered);
             }
             WireAdmission::Deliver(ordered) => self.enqueue_ordered(state, ordered),
         }
@@ -221,6 +228,12 @@ impl WorkerMailbox {
     pub(super) fn telemetry_snapshot(&self) -> MailboxTelemetrySnapshot {
         self.telemetry.snapshot()
     }
+
+    /// 测试用：把同一条遥测链路交给状态，验证计数确实能到宿主出口。
+    #[cfg(test)]
+    pub(super) fn telemetry(&self) -> MailboxTelemetry {
+        self.telemetry.clone()
+    }
 }
 
 fn admit_event(
@@ -228,6 +241,7 @@ fn admit_event(
     event: AgentTuiRuntimeEvent,
     enqueued_at: Option<Instant>,
 ) -> WireAdmission {
+    let late_terminal = is_terminal_semantic_frame(&event);
     let Some(identity) = wire_event_identity(&event) else {
         return WireAdmission::Deliver(OrderedWireEvent { event, enqueued_at });
     };
@@ -236,6 +250,7 @@ fn admit_event(
         &identity.event_id,
         identity.sequence,
         OrderedWireEvent { event, enqueued_at },
+        late_terminal,
     )
 }
 

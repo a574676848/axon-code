@@ -279,6 +279,8 @@ fn header_bar_metrics(state: &AgentTuiState) -> HeaderBarMetrics {
     );
     HeaderBarMetrics {
         token_usage: state.last_turn_usage(),
+        // 上下文占用与换窗读数只有一个来源：会话级快照。
+        context_snapshot: state.context_snapshot().clone(),
         session_tokens: state.session_token_total(),
         session_elapsed_ms,
         session_cache_hit_basis_points: state.session_cache_hit_basis_points(),

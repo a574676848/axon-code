@@ -35,10 +35,13 @@ fn status_command_renders_codex_like_session_diagnostics() {
             "local",
             Some(258_000),
         ));
-    state.header.session_usage.add_assign(
-        AgentTuiTokenUsage::new(457_000, 12_000, 12_000, 24_200, 0)
-            .with_current_context_tokens(235_000),
-    );
+    state
+        .header
+        .session_usage
+        .add_assign(AgentTuiTokenUsage::new(457_000, 12_000, 12_000, 24_200, 0));
+    // 上下文占用只有一份来源：会话级快照。/status 与头部读的是同一个读数。
+    state.header.context_snapshot =
+        crate::AgentTuiContextSnapshot::new(Some(235_000), Some(258_000), None, None, None, None);
 
     assert!(matches!(
         state.handle_command("/status"),

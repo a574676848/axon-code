@@ -6,8 +6,11 @@ use axon_protocol::wire::{
     WireEventKind, WireLifecyclePhase, WireLifecycleStatus, WireTurnLifecycle,
 };
 
-use super::super::run_output::AgentTuiRuntimePayload;
-use super::runtime_flow_test_support::{cell_count, test_state};
+use super::super::run_output::{
+    AgentTuiLifecycleLine, AgentTuiLifecycleStatusView, AgentTuiLifecycleStatusViewInput,
+    AgentTuiRunLine, AgentTuiRunOutput, AgentTuiRuntimePayload,
+};
+use super::runtime_flow_test_support::{cell_count, test_state, test_submission};
 use crate::surface::cell::{RenderCellData, RenderCellKind};
 use crate::surface::subagent_activity::SubagentActivityStatus;
 
@@ -540,6 +543,71 @@ fn new_execution_reopens_after_previous_completion() {
     assert_eq!(restarted.status, SubagentActivityStatus::Starting);
     assert_eq!(restarted.usage, None);
     assert_eq!(restarted.label, "第二轮审查");
+}
+
+#[test]
+fn subagent_activity_rows_clear_after_restart() {
+    let mut before = test_state();
+    before.start_runtime_submit(&test_submission("第一轮"));
+    before.apply_runtime_event(subagent_lifecycle(
+        "part:/root/review",
+        "provider_generating",
+        WireLifecycleStatus::Running,
+        "/root/review 正在生成回复",
+        Some(1_700_000_000_000),
+        Some(1_000),
+        Some(1_200),
+    ));
+    assert_eq!(
+        before.subagent_activity_snapshot(Instant::now()).rows.len(),
+        1,
+        "进程内必须先有一行，重启断言才有意义"
+    );
+
+    // 进程重启：活动区是纯进程内事实，同一条启动请求重建状态后必须一行都没有。
+    let mut restarted = test_state();
+    let now = Instant::now();
+    assert!(
+        restarted.subagent_activity_snapshot(now).rows.is_empty(),
+        "重启后不得凭上一次进程的活动行重建界面"
+    );
+    assert!(!restarted.has_visible_subagent_activity(now));
+    assert_eq!(
+        restarted.subagent_activity_visible_height(now),
+        0,
+        "没有活动行时不得为活动区预留高度"
+    );
+
+    // 重启后回放上一轮持久化的终态输出：历史子代理生命周期只是历史正文里的一行事实，
+    // 不得把活动行复活成「还在跑」。
+    restarted.restore_historical_turn(historical_output_with_subagent_lifecycle());
+    assert!(
+        restarted.subagent_activity_snapshot(now).rows.is_empty(),
+        "历史回放不得复活子代理活动行"
+    );
+}
+
+fn historical_output_with_subagent_lifecycle() -> AgentTuiRunOutput {
+    let mut output = AgentTuiRunOutput::empty();
+    output.push(AgentTuiRunLine::GenerationStatus(
+        AgentTuiLifecycleLine::with_id(
+            "lifecycle:subagent_activity:root:review",
+            "子代理",
+            vec![AgentTuiLifecycleStatusView::with_id(
+                AgentTuiLifecycleStatusViewInput {
+                    id: "lifecycle:subagent_activity:root:review".to_owned(),
+                    title: "子代理".to_owned(),
+                    kind: "subagent_activity".to_owned(),
+                    summary: "/root/review 已启动：审查当前改动".to_owned(),
+                    phase: "provider_generating".to_owned(),
+                    tool_name: Some("gpt-test".to_owned()),
+                    duration_ms: Some(1_000),
+                    attempt_index: None,
+                },
+            )],
+        ),
+    ));
+    output
 }
 
 fn subagent_lifecycle(

@@ -32,7 +32,10 @@ fn provider_stream_usage_frames_fold_instead_of_double_counting() {
     );
     assert_eq!(state.last_turn_usage().output_tokens, 72);
     assert_eq!(state.last_turn_usage().reasoning_output_tokens, 1_689);
-    assert_eq!(state.last_turn_usage().current_context_tokens(), 64_049);
+    assert_eq!(
+        state.last_turn_usage().current_context_tokens(),
+        Some(64_049)
+    );
 }
 
 #[test]

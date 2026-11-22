@@ -176,6 +176,7 @@ fn segment_style(segment: &HeaderBarSegment) -> Style {
             HeaderBarSegmentKind::Cwd
             | HeaderBarSegmentKind::SessionTokens
             | HeaderBarSegmentKind::CacheHit
+            | HeaderBarSegmentKind::Rollover
             | HeaderBarSegmentKind::ReplaySnapshot
             | HeaderBarSegmentKind::ReplayInput
             | HeaderBarSegmentKind::Elapsed
@@ -214,8 +215,15 @@ mod tests {
                     cwd: "E:/work".to_owned(),
                     status: HeaderBarStatus::Working,
                     spinner: "⚡ Axon",
-                    token_usage: AgentTuiTokenUsage::new(1_000, 2_000, 0, 0, 0)
-                        .with_current_context_tokens(2_000),
+                    token_usage: AgentTuiTokenUsage::new(1_000, 2_000, 0, 0, 0),
+                    context_snapshot: crate::AgentTuiContextSnapshot::new(
+                        Some(2_000),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    ),
                     ..HeaderBarMetrics::default()
                 },
                 models: &[],
@@ -302,7 +310,14 @@ mod tests {
                 config_status: &config_status,
                 overrides: &overrides,
                 metrics: HeaderBarMetrics {
-                    token_usage: AgentTuiTokenUsage::default().with_current_context_tokens(850),
+                    context_snapshot: crate::AgentTuiContextSnapshot::new(
+                        Some(850),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    ),
                     ..HeaderBarMetrics::default()
                 },
                 models: &models,
@@ -333,8 +348,14 @@ mod tests {
                     cwd: "E:/very/long/workspace/path/axon-code".to_owned(),
                     status: HeaderBarStatus::Ready,
                     session_id: Some("019eead4-7469-7130-ad0b-47d4ec1a87a4".to_owned()),
-                    token_usage: AgentTuiTokenUsage::new(0, 0, 0, 0, 0)
-                        .with_current_context_tokens(9_999),
+                    context_snapshot: crate::AgentTuiContextSnapshot::new(
+                        Some(9_999),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    ),
                     ..HeaderBarMetrics::default()
                 },
                 models: &[],

@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use super::{
     AxonCli, CliRunResult, OutputFormat, json_result, run_session_store::resolved_axon_root,
@@ -15,6 +15,7 @@ use axon_tui_runtime::{
 
 mod catalog;
 mod config_status;
+mod context_snapshot_reader;
 mod question_answer_submission;
 mod run_output_assistant_renderer;
 mod run_output_generation_renderer;
@@ -92,6 +93,7 @@ pub(crate) fn run_agent_tui_entry(cli: &AxonCli, prompt: Option<&str>) -> CliRun
         reply_destination: new_tui_reply_destination(),
         explicit_turn: Arc::new(Mutex::new(runtime_adapter::ExplicitTurnSelection::default())),
         session: Arc::new(Mutex::new(None)),
+        context_snapshot_reader: Arc::new(OnceLock::new()),
     };
     let explicit_turn = Arc::clone(&adapter.explicit_turn);
     match axon_tui_runtime::run_agent_tui_cli_with_runtime_adapter_and_settings(
@@ -145,6 +147,14 @@ pub(crate) fn run_agent_tui_entry(cli: &AxonCli, prompt: Option<&str>) -> CliRun
 fn log_tui_mailbox_telemetry(report: &axon_tui_runtime::AgentTuiLaunchReport) {
     if !report.telemetry.mailbox.enabled {
         return;
+    }
+    // 乱序帧必须有一条可读告警：只写进 debug 快照时，丢帧等于静默。
+    let worker = &report.telemetry.mailbox.worker;
+    if worker.stale_count > 0 || worker.late_terminal_count > 0 {
+        axon_logger::warning(&format!(
+            "TUI 订阅遇到乱序帧：丢弃 {} 帧，采纳迟到终态 {} 帧。存量日志可用 `axon debug session repair --reorder` 修复",
+            worker.stale_count, worker.late_terminal_count
+        ));
     }
     match serde_json::to_string(&report.telemetry.mailbox) {
         Ok(snapshot) => {

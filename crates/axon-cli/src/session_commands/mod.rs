@@ -18,6 +18,7 @@ use crate::{
 };
 
 mod output;
+mod read_notes;
 mod replay;
 mod session_delete;
 mod session_prune;
@@ -377,7 +378,7 @@ fn run_session_doctor(
             _ => false,
         })
         .count();
-    let warnings = thread_event_issue_summaries(&scan.issues);
+    let mut warnings = thread_event_issue_summaries(&scan.issues);
     let event_store_ok = scan.issues.is_empty();
     let mut checks = vec![
         SessionDoctorCheckView {
@@ -404,6 +405,19 @@ fn run_session_doctor(
         },
         summary: format!("orphan_parent={orphan_parent_count} orphan_fork={orphan_fork_count}"),
     });
+    // 追读口径：结论未知与无归属是两种「正文看起来是空的」现场，必须点名并写清原因。
+    if let Ok(store) = open_control_store(config_path) {
+        match read_notes::scan_read_notes(&store) {
+            Ok(scan) => checks.push(SessionDoctorCheckView {
+                name: "read_conclusions",
+                status: if scan.is_clean() { "ok" } else { "failed" },
+                summary: scan.summary(),
+            }),
+            Err(message) => warnings.push(format!("追读口径检查无法执行：{message}")),
+        }
+    } else {
+        warnings.push("运行态库不可用：本轮未检查轮次结论与帧归属".to_owned());
+    }
     let failed = checks.iter().any(|check| check.status != "ok");
     let report = SessionDoctorReport {
         status: if failed {
@@ -474,6 +488,10 @@ fn render_doctor(format: OutputFormat, report: &SessionDoctorReport) -> CliRunRe
                     &mut stdout,
                     format_args!("- {}: {} {}\n", check.name, check.status, check.summary),
                 );
+            }
+            for warning in &report.warnings {
+                let _ =
+                    std::fmt::Write::write_fmt(&mut stdout, format_args!("- 告警: {warning}\n"));
             }
             CliRunResult {
                 exit_code: if report.status == "session_doctor_ok" {

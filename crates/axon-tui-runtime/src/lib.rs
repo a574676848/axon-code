@@ -100,6 +100,7 @@ pub use agent_tui::{
     launch_agent_tui_report, run_agent_tui_cli_with_runtime_adapter_and_settings,
     runtime_driver_event, tui_control_runtime_event, watcher_runtime_event,
 };
+pub use app_shell::context_snapshot::AgentTuiContextSnapshot;
 pub use r#loop::agent_tui::state::viewport_state::ViewportScrollState;
 pub use surface::cell_id::{CellId, CellIdAllocator};
 pub use surface::cell_payload::{

@@ -30,6 +30,12 @@ pub struct MailboxSessionTelemetrySnapshot {
     /// 因序号迟到（不高于已投影水位）被拒绝的 wire 帧数。
     #[serde(default)]
     pub stale_count: u64,
+    /// 序号迟到但属于终态语义事实、按「非单调也接受」放行的 wire 帧数。
+    ///
+    /// 与 `stale_count` 分开计数：前者是丢掉的帧，后者是被采纳的存量乱序终态。
+    /// 两者都为 0 才说明日志顺序是干净的。
+    #[serde(default)]
+    pub late_terminal_count: u64,
     /// 因背压淘汰的可重建展示增量帧数。
     pub shed_count: u64,
     /// 观测到的最大待处理元素数。
@@ -77,6 +83,7 @@ struct MailboxSessionTelemetry {
     drained_count: AtomicU64,
     coalesced_count: AtomicU64,
     stale_count: AtomicU64,
+    late_terminal_count: AtomicU64,
     shed_count: AtomicU64,
     backlog_high_water: AtomicU64,
     queue_wait_buckets: [AtomicU64; QUEUE_WAIT_BUCKET_COUNT],
@@ -135,6 +142,13 @@ impl MailboxTelemetry {
         }
     }
 
+    /// 记录一条按「非单调也接受」放行的迟到终态帧。
+    pub(crate) fn record_late_terminal(&self, session: MailboxSession) {
+        if let Some(metrics) = self.metrics(session) {
+            metrics.late_terminal_count.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     pub(crate) fn record_shed(&self, session: MailboxSession) {
         if let Some(metrics) = self.metrics(session) {
             metrics.shed_count.fetch_add(1, Ordering::Relaxed);
@@ -171,6 +185,7 @@ impl MailboxSessionTelemetry {
             drained_count: AtomicU64::new(0),
             coalesced_count: AtomicU64::new(0),
             stale_count: AtomicU64::new(0),
+            late_terminal_count: AtomicU64::new(0),
             shed_count: AtomicU64::new(0),
             backlog_high_water: AtomicU64::new(0),
             queue_wait_buckets: array::from_fn(|_| AtomicU64::new(0)),
@@ -187,6 +202,7 @@ impl MailboxSessionTelemetry {
             drained_count: self.drained_count.load(Ordering::Relaxed),
             coalesced_count: self.coalesced_count.load(Ordering::Relaxed),
             stale_count: self.stale_count.load(Ordering::Relaxed),
+            late_terminal_count: self.late_terminal_count.load(Ordering::Relaxed),
             shed_count: self.shed_count.load(Ordering::Relaxed),
             backlog_high_water: self.backlog_high_water.load(Ordering::Relaxed),
             queue_wait_p50_us: histogram_percentile(&buckets, P50),
@@ -265,6 +281,7 @@ mod tests {
         telemetry.record_drained(MailboxSession::Worker, telemetry.enqueued_at());
         telemetry.record_coalesced(MailboxSession::Worker);
         telemetry.record_stale(MailboxSession::Worker);
+        telemetry.record_late_terminal(MailboxSession::Worker);
         telemetry.record_shed(MailboxSession::Worker);
 
         let snapshot = telemetry.snapshot();
@@ -273,6 +290,7 @@ mod tests {
         assert_eq!(snapshot.worker.drained_count, 1);
         assert_eq!(snapshot.worker.coalesced_count, 1);
         assert_eq!(snapshot.worker.stale_count, 1);
+        assert_eq!(snapshot.worker.late_terminal_count, 1);
         assert_eq!(snapshot.worker.shed_count, 1);
         assert_eq!(snapshot.worker.backlog_high_water, 4);
         assert!(snapshot.worker.queue_wait_p99_us.is_some());

@@ -1,6 +1,7 @@
 //! Header 状态事实源。
 
 use crate::AgentTuiSessionSummary;
+use crate::app_shell::context_snapshot::AgentTuiContextSnapshot;
 use crate::r#loop::agent_tui::{
     AgentTuiCatalog, AgentTuiConfigStatus, AgentTuiRunOverrides, AgentTuiSettingsChange,
     AgentTuiTokenUsage, TUI_HINT_IDLE, runtime_identity::SessionRunModel,
@@ -23,6 +24,11 @@ pub(crate) struct HeaderState {
     /// 本轮已收口 provider 流的用量累计。
     pub(crate) live_turn_usage_folded: AgentTuiTokenUsage,
     pub(crate) session_summary: AgentTuiSessionSummary,
+    /// 会话级上下文快照读数：头部占用段与换窗段的唯一来源。
+    ///
+    /// 这不是「累计量」而是「最近一次读到的服务端事实」，因此换会话、换运行窗口时
+    /// 必须回到未知，不能让上一条会话的读数留在新会话的头部。
+    pub(crate) context_snapshot: AgentTuiContextSnapshot,
     pub(crate) replay_snapshot: Option<ReplaySnapshotHeaderState>,
     pub(crate) settings_changes: Vec<AgentTuiSettingsChange>,
     pub(crate) lsp_active_count: usize,
@@ -47,6 +53,7 @@ impl HeaderState {
             live_turn_usage: AgentTuiTokenUsage::default(),
             live_turn_usage_folded: AgentTuiTokenUsage::default(),
             session_summary: AgentTuiSessionSummary::default(),
+            context_snapshot: AgentTuiContextSnapshot::default(),
             replay_snapshot: None,
             settings_changes: Vec::new(),
             lsp_active_count: 0,
@@ -60,6 +67,8 @@ impl HeaderState {
         self.hint = TUI_HINT_IDLE;
         self.live_turn_usage = AgentTuiTokenUsage::default();
         self.live_turn_usage_folded = AgentTuiTokenUsage::default();
+        // 换会话/换运行窗口后上下文读数属于上一条会话，必须回到未知而不是留着当现值。
+        self.context_snapshot = AgentTuiContextSnapshot::default();
         self.replay_snapshot = None;
         self.settings_changes.clear();
         self.lsp_active_count = 0;
