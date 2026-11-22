@@ -12,16 +12,16 @@
 | --- | --- | --- | --- | --- |
 | WP-01 | P0 | 已完成 | Q6 / R1 | `sequence_alignment.rs` 三条 + 存储层三条（含反证） |
 | WP-02 | P0 | 已完成 | Q6 | `work_item_settlement_tests.rs` 五条 + 公开 INV-2 检查 SQL |
-| WP-03 | P0 | 已完成 | Q6 / R2 | `gateway_replay_contract.rs` 三条（服务端）；客户端见 WP-10 车道 |
+| WP-03 | P0 | 已完成 | Q6 / R2 | `gateway_replay_contract.rs` 三条 + 桌面 `replayTruncation.test.mjs` 两条 |
 | WP-04 | P0 | 已完成 | Q6 | tick 用例 + 路由幂等用例 + 客户端重读索引用例 |
 | WP-05 | P1 | 已完成 | Q2 | `sqlite_runtime_store_recovering_tests.rs` 四条 + 名册派生用例 |
 | WP-06 | P1 | 已完成 | Q3 | 归属契约四条 + 派发 join 两条 + 修复工具两条 |
 | WP-07 | P1 | 已完成 | Q5 | `turn-folding.test.mjs` 两条 |
-| WP-08 | P2 | 已完成 | Q4 | 投影两条 + 路由两条（服务端）；桌面端见 WP-10 车道 |
+| WP-08 | P2 | 已完成 | Q4 | 投影两条 + 路由两条 + 桌面 `contextSnapshot.test.mjs` 两条 |
 | WP-09 | P2 | 已完成 | Q5 | 与 WP-07 同一组形态一致用例 |
-| WP-10 | P3 | 进行中 | Q1 | `GET /api/v1/sessions/<id>/live` 与桌面降级表达 |
+| WP-10 | P3 | 已完成 | Q1 | `live_payload_marks_stale_lease_as_not_running` + `desktop_shows_evidence_expired_instead_of_running` |
 | WP-11 | P0 | 已完成 | 现场 | `field_manual_repair_is_reproduced_by_official_settlement` |
-| WP-12 | P1 | 进行中 | 三端一致 | 逆序夹具、上下文同源、活动行清空、追读口径 |
+| WP-12 | P1 | 已完成 | 三端一致 | TUI 与 CLI 七条用例（见分条） |
 | WP-13 | P1 | 已完成 | 双气泡 | `userBubbleMerge.test.mjs` 两条 |
 
 ## 2 分条证据
@@ -83,7 +83,9 @@
 
 ### WP-10 运行态证据链
 
-- 状态：进行中。判据为 `live_payload_marks_stale_lease_as_not_running` 与桌面「证据过期」降级表达；落地后在此登记。
+- 服务端：`GET /api/v1/sessions/<id>/live`，`running` 只认「`work_items.status` 为 `running` 且租约未过期」的行；`lastFrameSequence` 取会话 durable 水位，`idleForMs` 取最后活动时刻。
+- 桌面：租约到期、静默超阈值或连续读不到证据时不再显示「在跑」，改用既有错误卡说明「运行证据已过期」并给出重启入口；按 ESC 会请求服务端收口并按判据词表给结论。
+- 证据：`live_payload_marks_stale_lease_as_not_running`、`desktop_shows_evidence_expired_instead_of_running`、`interrupt_settles_via_server_route_when_index_is_stale`。
 
 ### WP-11 现场存量收口
 
@@ -92,7 +94,10 @@
 
 ### WP-12 三端回归门禁
 
-- 状态：进行中。逐项判据（逆序夹具 `staleCount` 可观测、上下文两端同源、活动行三种收口路径、CLI 追读口径）落地后在此登记。
+- TUI 与桌面同源：头部占用段与新增换窗段都读会话级快照，删除「新帧值为 0 时保留上一次非零值」的粘连。证据：`tui_header_and_rollover_read_the_same_snapshot`、`tui_context_reading_does_not_stick_to_previous_value`。
+- 逆序日志可见且不丢终态：普通迟到帧仍拒绝并计入 `staleCount`；终态语义帧（收口 `TurnLifecycle` 与非 delta 的 `AssistantMessage`）非单调也接受，水位取最大值，单独计入 `late_terminal_count`。证据：`stale_frames_are_counted_and_visible`、`terminal_body_survives_stale_frame_drops`。
+- 活动行三种收口：失败、中断与进程重启后活动行都清空，历史回放不复活。证据：`subagent_activity_rows_clear_after_restart`。
+- CLI 追读口径：`sessions read` / `debug session read` / `debug session doctor` 在 `uncertain` 轮次与无归属子会话上给出可读结论与原因，正文为空时补说明。证据：`sessions_read_explains_uncertain_turn`、`session_read_explains_unattributed_subagent_frames`。
 
 ### WP-13 同一条消息两条气泡
 

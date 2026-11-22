@@ -5,7 +5,8 @@ use axon_domain::{
 };
 use axon_session::TurnStatus;
 
-use super::{Turn, turn_status_label};
+use super::read_text::turn_status_label;
+use axon_session::Turn;
 
 fn turn(status: TurnStatus, failure: Option<RuntimeFailure>) -> Turn {
     Turn {
@@ -64,7 +65,7 @@ fn turn_headings_follow_position_not_event_sequence() {
     let completed = turn(TurnStatus::Completed, None);
     let headings: Vec<String> = (0..3)
         .map(|index| {
-            super::render_turn_text(index, &completed)
+            super::read_text::render_turn_text(index, &completed)
                 .lines()
                 .next()
                 .unwrap_or_default()
