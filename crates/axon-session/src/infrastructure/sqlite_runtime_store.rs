@@ -28,6 +28,10 @@ mod client_delivery_repository;
 mod commit_repository;
 #[path = "sqlite_runtime_store/connection_pool.rs"]
 mod connection_pool;
+#[path = "sqlite_runtime_store/context_snapshot_projection.rs"]
+mod context_snapshot_projection;
+#[path = "sqlite_runtime_store/context_snapshot_repository.rs"]
+mod context_snapshot_repository;
 #[path = "sqlite_runtime_store/decision_repository.rs"]
 mod decision_repository;
 /// 行解码错误的统一入口。
@@ -92,6 +96,10 @@ mod runtime_store_impl;
 pub mod schedule_repository;
 #[path = "sqlite_runtime_store/schema.rs"]
 mod schema;
+#[path = "sqlite_runtime_store/schema_context_snapshot.rs"]
+mod schema_context_snapshot;
+#[path = "sqlite_runtime_store/schema_outbox.rs"]
+mod schema_outbox;
 #[path = "sqlite_runtime_store/session_control_repository.rs"]
 mod session_control_repository;
 #[path = "sqlite_runtime_store/session_metrics_repository.rs"]
@@ -378,6 +386,17 @@ impl SqliteRuntimeStore {
         session_metrics_repository::rebuild_metrics(self, session_id, now_ms)
     }
 
+    /// 读取会话级上下文快照；没有记录时返回 `None`。
+    ///
+    /// 与 [`crate::ports::ContextSnapshotStore::context_snapshot`] 是同一份读：面板与网关
+    /// 共用这一处投影，界面上的占用读数不再各算一份。
+    pub fn context_snapshot(
+        &self,
+        session_id: &DaemonSessionId,
+    ) -> Result<Option<crate::domain::ContextSnapshot>, RuntimeStoreError> {
+        context_snapshot_repository::read_snapshot(self, session_id)
+    }
+
     /// 回收仍标记为 running、但对应进程已经退出的 Host lease。
     ///
     /// 服务被 launchd/systemd 强制停止时，进程可能来不及执行持久化清理；
@@ -622,6 +641,9 @@ impl SqliteRuntimeStore {
         turn_activity_repository::activities_for(self, session_id, interaction_ids)
     }
 }
+#[cfg(test)]
+#[path = "sqlite_runtime_store_context_snapshot_tests.rs"]
+mod context_snapshot_tests;
 #[cfg(test)]
 #[path = "sqlite_runtime_store_metrics_tests.rs"]
 mod metrics_tests;

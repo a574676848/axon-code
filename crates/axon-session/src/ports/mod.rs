@@ -6,6 +6,8 @@ pub mod agent_continuation_store;
 pub mod agent_mailbox_store;
 /// Interaction 收件箱的持久化端口。
 pub mod client_delivery_store;
+/// 会话级上下文快照的只读端口。
+pub mod context_snapshot_store;
 pub mod decision_store;
 pub mod execution_store;
 pub mod goal_commit_store;
@@ -51,6 +53,7 @@ pub use client_delivery_store::{
     CompletionDeliveryRecord, CompletionDeliveryTarget, CompletionNotificationRecord,
     NotificationDeliveryState,
 };
+pub use context_snapshot_store::ContextSnapshotStore;
 pub use decision_store::{DecisionStore, DecisionStoreError};
 pub use event_log_store::EventLogStore;
 pub use event_store::{ThreadActivationSnapshot, ThreadEventStore};

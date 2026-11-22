@@ -26,6 +26,15 @@ pub struct InFlightTurnFacts {
 
 /// 在途轮次的收口端口。
 pub trait InteractionSettlementStore: Send + Sync {
+    /// 有在途轮次的会话，按各自最早一条在途轮次的接收时间排序，至多 `limit` 条。
+    ///
+    /// 周期维护按会话逐条判死：判据是会话级的最后活动时间，因此必须先知道「哪些会话
+    /// 还有在途轮次」，否则只能全表扫会话或漏掉真在跑的轮次。只读，不改任何事实。
+    fn in_flight_turn_sessions(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<DaemonSessionId>, InteractionStoreError>;
+
     /// 读该会话当前仍在跑的轮次及其判死事实。
     ///
     /// 只读：判定「该不该收口」由应用层做，这里不改任何事实。

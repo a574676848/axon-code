@@ -45,3 +45,7 @@ pub use primary_turn_service::{
 };
 pub use scheduler_service::{SchedulerError, SchedulerService, SchedulerTickReport};
 pub use session_registry::SessionRegistry;
+pub use silent_turn_settlement::{
+    SettleSilentTurnReceipt, SettleSilentTurnRequest, SilentTurnBatchReport,
+    SilentTurnSettlementOutcome, SilentTurnSettlementService,
+};

@@ -72,6 +72,17 @@ const ROUTE_LIMITS: &[RouteLimit] = &[
     route("POST", "/api/v1/keys", KEY_BODY_LIMIT),
     route("GET", "/api/v1/keys", NO_BODY_LIMIT),
     route("DELETE", "/api/v1/keys/{id}", NO_BODY_LIMIT),
+    // 会话级固定接口：快照是纯读，收口只带一个交互标识。
+    route(
+        "GET",
+        "/api/v1/sessions/{session_id}/context-snapshot",
+        NO_BODY_LIMIT,
+    ),
+    route(
+        "POST",
+        "/api/v1/sessions/{session_id}/settle-silent-turn",
+        KEY_BODY_LIMIT,
+    ),
 ];
 
 /// 按 (方法, 路径) 取该路由的请求体上限；未登记时回落 [`FALLBACK_BODY_LIMIT`]。

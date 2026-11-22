@@ -102,10 +102,10 @@ pub struct ScheduleSessionRequest {
 }
 
 use super::{
-    AgentContinuationStore, AgentMailboxStore, ClientDeliveryStore, DecisionStore, EventLogStore,
-    ExecutionStore, GoalCommitStore, GoalMutationStore, GoalStore, HealthStore,
-    InteractionQueryStore, InteractionStore, LedgerCommitStore, LedgerEventStore, ResultStore,
-    WorkspaceStore,
+    AgentContinuationStore, AgentMailboxStore, ClientDeliveryStore, ContextSnapshotStore,
+    DecisionStore, EventLogStore, ExecutionStore, GoalCommitStore, GoalMutationStore, GoalStore,
+    HealthStore, InteractionQueryStore, InteractionSettlementStore, InteractionStore,
+    LedgerCommitStore, LedgerEventStore, ResultStore, WorkspaceStore,
 };
 
 /// Runtime store 错误。
@@ -169,9 +169,14 @@ pub struct RecoveringSettlement {
 }
 
 /// 持久 Runtime Store 端口。
+///
+/// 快照读取与在途轮次收口都是运行态事实的组成部分，因此作为超端口并入这里：
+/// 任何完整的运行态存储都必须能回答「这条会话的上下文快照是什么」以及「这一轮还能不能
+/// 收口」，而不是让调用方按具体实现再补一层类型参数。
 pub trait RuntimeStore:
     AgentMailboxStore
     + AgentContinuationStore
+    + ContextSnapshotStore
     + GoalStore
     + GoalMutationStore
     + GoalCommitStore
@@ -179,6 +184,7 @@ pub trait RuntimeStore:
     + ExecutionStore
     + InteractionStore
     + InteractionQueryStore
+    + InteractionSettlementStore
     + ClientDeliveryStore
     + ResultStore
     + LedgerEventStore

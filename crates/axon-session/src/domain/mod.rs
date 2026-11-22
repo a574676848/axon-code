@@ -1,5 +1,7 @@
 //! Session 领域模型。
 
+/// 会话级上下文快照。
+pub mod context_snapshot;
 mod event;
 mod history;
 /// Interaction 状态口径。
@@ -14,6 +16,7 @@ mod turn;
 pub mod turn_repair;
 pub mod workspace;
 
+pub use context_snapshot::ContextSnapshot;
 pub use event::{ThreadEvent, ThreadEventRecord};
 pub use history::{
     ThreadHistoryFileRef, ThreadHistoryImageRef, ThreadHistoryItem, ThreadHistoryReceipt,

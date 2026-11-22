@@ -446,10 +446,11 @@ pub(super) fn write_records(
     }
     Ok(())
 }
-/// 把本轮指标投射到 `session_metrics`。
+/// 把本批事件投射到派生表：逐轮事实、会话累计指标与上下文快照。
 ///
 /// 投影是可重建的派生数据，失败不阻断主流程；但失败必须上报，否则「累计耗时恒 null」
 /// 这类问题只能等界面报错才发现。需要兜底时用 `rebuild_session_metrics` 整体重放。
+/// 上下文快照不走第二条写路径：这一处是它唯一的写入点。
 fn apply_projections(
     store: &SqliteRuntimeStore,
     session_id: &DaemonSessionId,
@@ -459,6 +460,8 @@ fn apply_projections(
 ) {
     // 逐轮事实：收口批次里同时带着终态与它派生的指标，一次投影就够。
     super::turn_activity_projection::project_turn_activity(store, session_id, events, now_ms);
+    // 会话级上下文快照：界面占用读数与换窗读数现在读同一份。
+    super::context_snapshot_projection::project_context_snapshot(store, session_id, events, now_ms);
     for (event_type, payload_json) in events {
         if event_type != "turn_metrics" {
             continue;

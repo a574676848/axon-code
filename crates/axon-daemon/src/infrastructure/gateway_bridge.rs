@@ -22,7 +22,8 @@ use super::gateway_session_turns_stream::SessionTurnsStream;
 use crate::application::event_stream_bridge::STREAM_RESET_REASON_GENERATION_CHANGE;
 use crate::application::{
     EventStreamBridge, EventStreamSubscription, ExternalEventEnvelope, ExternalEventIngress,
-    GatewayHostDependencies, StreamEvent, StreamNotification,
+    GatewayHostDependencies, SettleSilentTurnRequest, SilentTurnSettlementOutcome,
+    SilentTurnSettlementService, StreamEvent, StreamNotification,
 };
 use axon_domain::{ConsumerCursor, DaemonSessionId, InteractionId};
 use axon_protocol::SubmitInteractionReceipt;
@@ -117,6 +118,23 @@ impl<S: RuntimeStore, C> DaemonGatewayBridge<S, C> {
     ) -> Option<SubmitInteractionReceipt> {
         let (debouncer, key) = (self.debouncer.as_ref()?, correlation_key?);
         debouncer.absorb(key, now_ms)
+    }
+
+    /// 会话存在性检查：网关固定契约里的 404 只表达「没有这条会话」。
+    ///
+    /// 不把「还没有快照」「没有在途轮次」折进 404：那两种是正常业务结论，必须让调用方
+    /// 看到 200 加具体判据，否则界面无法区分「会话被删了」与「这一轮已经收口」。
+    fn ensure_session_exists(
+        &self,
+        session_id: &DaemonSessionId,
+    ) -> Result<(), GatewayKernelError> {
+        match self.dependencies.store.get_session(session_id) {
+            Ok(_) => Ok(()),
+            Err(axon_session::RuntimeStoreError::NotFound(_)) => Err(GatewayKernelError::NotFound(
+                format!("会话不存在：{}", session_id.as_str()),
+            )),
+            Err(error) => Err(GatewayKernelError::Ingress(error.to_string())),
+        }
     }
 }
 
@@ -227,6 +245,31 @@ where
             content: interaction.content,
             response,
         }))
+    }
+
+    fn context_snapshot(
+        &self,
+        session_id: &DaemonSessionId,
+    ) -> Result<Option<axon_session::ContextSnapshot>, GatewayKernelError> {
+        self.ensure_session_exists(session_id)?;
+        self.dependencies
+            .store
+            .context_snapshot(session_id)
+            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))
+    }
+
+    fn settle_silent_turn(
+        &self,
+        session_id: &DaemonSessionId,
+        interaction_id: &InteractionId,
+    ) -> Result<SilentTurnSettlementOutcome, GatewayKernelError> {
+        self.ensure_session_exists(session_id)?;
+        // 判定与落库共用宿主时钟：两处各取一次时间会让「租约刚好到期」的判断漂移。
+        let request =
+            SettleSilentTurnRequest::new(session_id.clone(), self.dependencies.clock.now_ms());
+        SilentTurnSettlementService::new(self.dependencies.store.clone())
+            .settle_turn(&request, interaction_id)
+            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))
     }
 }
 

@@ -4,15 +4,19 @@
 //! 轮次：执行进程消失后租约还在，或者 provider 接上了却迟迟不吐首字。这类轮次既不会
 //! 自己终结，也没有任何人会再去写它的终态，于是订阅方永远等不到收口帧。
 //!
-//! 本用例负责两件事，且只做应用层编排：
+//! 本用例负责三件事，且只做应用层编排：
 //!
 //! 1. 判死：[`SilentTurnSettlementService::inspect`] 按会话读出在途轮次与它的租约、
 //!    活动事实，给出「收口 / 保持」的结论。只读，不改任何事实。
-//! 2. 收口：[`SilentTurnSettlementService::settle`] 把判死的轮次收敛为 `interrupted`，
+//! 2. 收口：[`SilentTurnSettlementService::settle`] 与
+//!    [`SilentTurnSettlementService::settle_turn`] 把判死的轮次收敛为 `interrupted`，
 //!    走存储层的终态唯一出口，因此与被动隔离产出同一种终态、同一条流水账事件。
+//! 3. 周期收口：[`SilentTurnSettlementService::settle_pending`] 供 supervisor tick
+//!    按会话批量执行第 2 步，保证「没有执行者却还在跑」的轮次不会被漏掉。
 //!
-//! 输入输出契约固定为 [`SettleSilentTurnRequest`] 与 [`SettleSilentTurnReceipt`]：
-//! HTTP 路由由网关侧接入，本模块不关心传输层，也不做纯前端状态改写。
+//! 输入输出契约固定为 [`SettleSilentTurnRequest`]、[`SettleSilentTurnReceipt`] 与
+//! [`SilentTurnSettlementOutcome`]：HTTP 路由由网关侧接入，本模块不关心传输层，
+//! 也不做纯前端状态改写。
 
 use axon_domain::{DaemonSessionId, InteractionId};
 use axon_session::{InFlightTurnFacts, InteractionSettlementStore, InteractionStoreError};
@@ -133,6 +137,52 @@ pub struct SettleSilentTurnReceipt {
     pub kept_running: Vec<InteractionId>,
 }
 
+/// 单条轮次的显式收口结论。
+///
+/// 判据取值同时是 HTTP 回执里的 `verdict`：界面据此区分「已收口」「还有人持有租约」
+/// 「这条轮次根本不在途」三种情况，而不是把它们统一成一个失败提示。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SilentTurnSettlementOutcome {
+    /// 本轮已收口为 `interrupted`，携带判死原因。
+    Settled(SilentTurnReason),
+    /// 已有其他收口路径先一步改到这行：本次什么都没写。
+    AlreadySettled,
+    /// 仍在途，但判据显示还有执行者：按约定不得收口。
+    StillRunning,
+    /// 该会话当前没有这条在途轮次（已收口，或从未领取）。
+    NotInFlight,
+}
+
+impl SilentTurnSettlementOutcome {
+    /// 回执里的稳定判据取值。
+    #[must_use]
+    pub const fn verdict(&self) -> &'static str {
+        match self {
+            Self::Settled(reason) => reason.as_str(),
+            Self::AlreadySettled => "already_settled",
+            Self::StillRunning => "still_running",
+            Self::NotInFlight => "no_in_flight_turn",
+        }
+    }
+
+    /// 本次是否真的写了终态。
+    #[must_use]
+    pub const fn is_settled(&self) -> bool {
+        matches!(self, Self::Settled(_))
+    }
+}
+
+/// 一轮维护周期批量收口的统计。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SilentTurnBatchReport {
+    /// 本轮检查过的会话数。
+    pub sessions_checked: u32,
+    /// 本轮真正收口为 `interrupted` 的轮次数。
+    pub turns_settled: u32,
+    /// 判定仍有执行者、按约定不动的轮次数。
+    pub turns_kept: u32,
+}
+
 /// 静默轮次判定与收口失败。
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SilentTurnSettlementError {
@@ -216,6 +266,73 @@ where
             settled,
             kept_running,
         })
+    }
+
+    /// 一轮维护周期的批量收口：按会话枚举在途轮次，逐条判死并收口。
+    ///
+    /// supervisor tick 调用它，因此必须是有界的：会话数由 `limit` 封顶，轮次数由各会话
+    /// 自己的在途轮次数封顶。判据与显式收口完全一致，两条路径因此产出同一种终态。
+    ///
+    /// 存储层失败整批放弃：同一轮里后续会话的判读建立在同一条连接池与同一份事务语义上，
+    /// 半批成功只会让「谁被收口了」变得不可复述；失败由下一轮重试。
+    pub fn settle_pending(
+        &self,
+        now_ms: u64,
+        limit: u32,
+    ) -> Result<SilentTurnBatchReport, SilentTurnSettlementError> {
+        let mut report = SilentTurnBatchReport::default();
+        for session_id in self.store.in_flight_turn_sessions(limit)? {
+            report.sessions_checked = report.sessions_checked.saturating_add(1);
+            let snapshot = self.inspect(&session_id, now_ms, None)?;
+            for verdict in snapshot.turns {
+                if !verdict.is_settleable() {
+                    report.turns_kept = report.turns_kept.saturating_add(1);
+                    continue;
+                }
+                // 收口走存储层的终态唯一出口；并发收口只有一个能改到行。
+                if self
+                    .store
+                    .settle_in_flight_turn(&verdict.interaction_id, now_ms)?
+                {
+                    report.turns_settled = report.turns_settled.saturating_add(1);
+                }
+            }
+        }
+        Ok(report)
+    }
+
+    /// 显式收口一条指定轮次：桌面端按下 ESC 之后的服务端出口。
+    ///
+    /// 只收口判据成立的轮次：仍有执行者的轮次原样保留并如实给出 `still_running`，
+    /// 不存在的轮次给出 `no_in_flight_turn`。重复调用是幂等的：第二次已经没有在途轮次。
+    pub fn settle_turn(
+        &self,
+        request: &SettleSilentTurnRequest,
+        interaction_id: &InteractionId,
+    ) -> Result<SilentTurnSettlementOutcome, SilentTurnSettlementError> {
+        let snapshot = self.inspect(
+            &request.session_id,
+            request.now_ms,
+            request.first_token_deadline_ms,
+        )?;
+        let Some(verdict) = snapshot
+            .turns
+            .iter()
+            .find(|turn| &turn.interaction_id == interaction_id)
+        else {
+            return Ok(SilentTurnSettlementOutcome::NotInFlight);
+        };
+        let Some(reason) = verdict.reason else {
+            return Ok(SilentTurnSettlementOutcome::StillRunning);
+        };
+        if self
+            .store
+            .settle_in_flight_turn(interaction_id, request.now_ms)?
+        {
+            Ok(SilentTurnSettlementOutcome::Settled(reason))
+        } else {
+            Ok(SilentTurnSettlementOutcome::AlreadySettled)
+        }
     }
 }
 

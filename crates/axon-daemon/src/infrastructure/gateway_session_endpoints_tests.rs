@@ -1,0 +1,270 @@
+//! 会话级固定接口的路由契约：快照读取与静默轮次显式收口。
+//!
+//! 走真实 socket 与真实 `DaemonGatewayBridge`：这里锁的是车道 G 消费的线上契约
+//! （状态码、字段名、可空性）与收口的幂等语义，而不是 handler 内部实现。
+
+use std::sync::Arc;
+
+use axon_domain::{
+    AudienceContext, AudienceKind, DaemonSessionId, DisclosurePolicy, InteractionId,
+    InteractionRecord, InteractionSource, InteractionStatus, ReplyRoute, RuntimeHostId, ScopeRef,
+};
+use axon_session::{
+    EventLogStore, InteractionQueryStore, InteractionStore, RuntimeStore, SqliteRuntimeStore,
+};
+use axon_session_runtime::RuntimeClock;
+use serde_json::{Value, json};
+
+use super::super::super::test_support::{BridgeServer, TEST_AUTH_TOKEN, get, post, send_raw};
+use crate::application::{EventStreamBridge, GatewayHostDependencies, NoActiveTurnSteerSink};
+use crate::infrastructure::gateway_bridge::DaemonGatewayBridge;
+use crate::infrastructure::gateway_kernel::GatewayIngress;
+
+/// 固定时钟：判定与租约都不依赖真实时间。
+const NOW_MS: u64 = 1_760_000_000_000;
+const ACTION_LEASE_DURATION_MS: u64 = 120_000;
+const SNAPSHOT_INTERACTION_ID: &str = "interaction-snapshot-route";
+
+#[derive(Clone)]
+struct FixedClock;
+
+impl RuntimeClock for FixedClock {
+    fn now_ms(&self) -> u64 {
+        NOW_MS
+    }
+}
+
+struct Fixture {
+    store: SqliteRuntimeStore,
+    server: BridgeServer,
+    // 字段顺序即析构顺序：临时目录最后析构，先释放服务线程与 SQLite 句柄。
+    _temp: axon_test_support::TestTempDir,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let temp = axon_test_support::test_temp_dir();
+        let store = SqliteRuntimeStore::from_root(temp.path().join("data"));
+        store.initialize().expect("初始化运行态");
+        let bridge = DaemonGatewayBridge::new(GatewayHostDependencies {
+            store: store.clone(),
+            active_turn_steer_sink: Arc::new(NoActiveTurnSteerSink),
+            clock: FixedClock,
+            action_lease_duration_ms: ACTION_LEASE_DURATION_MS,
+            stream_bridge: Arc::new(EventStreamBridge::new()),
+            host_generation: None,
+        });
+        let server = BridgeServer::start(Arc::new(bridge) as Arc<dyn GatewayIngress>);
+        Self {
+            store,
+            server,
+            _temp: temp,
+        }
+    }
+
+    fn session(&self, raw: &str) -> DaemonSessionId {
+        let session_id = DaemonSessionId::new(raw).expect("Session ID");
+        self.store
+            .create_session(&session_id, "/workspace", NOW_MS)
+            .expect("登记会话");
+        session_id
+    }
+
+    fn request(&self, raw: &str) -> (u16, String) {
+        send_raw(self.server.address, raw)
+    }
+
+    fn get_json(&self, target: &str) -> (u16, Value) {
+        let (status, body) = self.request(&get(target, Some(TEST_AUTH_TOKEN)));
+        let value = serde_json::from_str(&body).unwrap_or(Value::Null);
+        (status, value)
+    }
+
+    fn post_json(&self, target: &str, payload: &Value) -> (u16, Value) {
+        let body = payload.to_string();
+        let (status, response) = self.request(&post(
+            target,
+            Some(TEST_AUTH_TOKEN),
+            Some("application/json"),
+            &body,
+        ));
+        let value = serde_json::from_str(&response).unwrap_or(Value::Null);
+        (status, value)
+    }
+}
+
+#[test]
+fn context_snapshot_route_returns_null_snapshot_for_empty_session() {
+    let fixture = Fixture::new();
+    let session_id = fixture.session("session-context-route");
+    let target = format!("/api/v1/sessions/{}/context-snapshot", session_id.as_str());
+
+    let (status, payload) = fixture.get_json(&target);
+    assert_eq!(status, 200, "已有会话必须 200：{payload}");
+    assert_eq!(payload["sessionId"], session_id.as_str());
+    assert_eq!(
+        payload["snapshot"],
+        Value::Null,
+        "还没有任何读数时 snapshot 必须是 null，不能是全空对象"
+    );
+
+    // 未知会话：404 且错误体与既有扩展路由同形（error.code / message / details）。
+    let (missing_status, missing) =
+        fixture.get_json("/api/v1/sessions/session-not-registered/context-snapshot");
+    assert_eq!(missing_status, 404, "{missing}");
+    assert_eq!(missing["error"]["code"], "SESSION_NOT_FOUND");
+    assert_eq!(missing["error"]["details"], Value::Null);
+    assert!(
+        missing["error"]["message"]
+            .as_str()
+            .is_some_and(|message| !message.is_empty())
+    );
+
+    // 未带凭据：与既有路由同口径的 401，不泄露会话是否存在。
+    let (unauthorized_status, _) = fixture.request(&get(&target, None));
+    assert_eq!(unauthorized_status, 401);
+}
+
+#[test]
+fn context_snapshot_route_projects_reading_with_gateway_field_names() {
+    let fixture = Fixture::new();
+    let session_id = fixture.session("session-context-reading");
+    let host = fixture
+        .store
+        .claim_host(
+            &RuntimeHostId::new("route-contract-host").expect("Host ID"),
+            1,
+            None,
+            NOW_MS,
+            60_000,
+        )
+        .expect("领取 Host lease");
+    let interaction_id = InteractionId::new(SNAPSHOT_INTERACTION_ID).expect("Interaction ID");
+    let frame = (
+        "wire_event".to_owned(),
+        json!({
+            "recordedAtMs": NOW_MS,
+            "interactionId": SNAPSHOT_INTERACTION_ID,
+            "kind": {
+                "type": "usageUpdate",
+                "payload": {
+                    "currentContextTokens": 135_917,
+                    "contextWindow": 262_144,
+                    "conversationTokens": 80_821,
+                },
+            },
+        })
+        .to_string(),
+    );
+    fixture
+        .store
+        .append_attributed_events(&session_id, &host, &interaction_id, &[frame], NOW_MS + 1)
+        .expect("写入用量帧");
+
+    let (status, payload) = fixture.get_json(&format!(
+        "/api/v1/sessions/{}/context-snapshot",
+        session_id.as_str()
+    ));
+    assert_eq!(status, 200, "{payload}");
+    let snapshot = &payload["snapshot"];
+    assert_eq!(snapshot["currentContextTokens"], 135_917);
+    assert_eq!(snapshot["contextWindow"], 262_144);
+    assert_eq!(snapshot["composition"]["conversationTokens"], 80_821);
+    assert_eq!(snapshot["updatedAtMs"], NOW_MS);
+    assert_eq!(snapshot["source"], "usage_frame");
+    // 未知字段必须是 null，不是 0：读侧据此显示未知而不是「占用 0」。
+    assert_eq!(snapshot["rolloverBeforeTokens"], Value::Null);
+    assert_eq!(snapshot["rolloverAfterTokens"], Value::Null);
+}
+
+#[test]
+fn settle_silent_turn_route_is_idempotent() {
+    let fixture = Fixture::new();
+    let session_id = fixture.session("session-settle-route");
+    let interaction = interaction_record(&session_id, "interaction-settle-route");
+    fixture.store.append(&interaction).expect("写入入站事实");
+    // 领取时租约只有 100ms：到固定时钟这一刻早已过期，这一轮没有任何执行者。
+    fixture
+        .store
+        .claim_processing_by_id(&interaction.interaction_id, NOW_MS - 1_000, 100)
+        .expect("领取")
+        .expect("租约");
+    let target = format!(
+        "/api/v1/sessions/{}/settle-silent-turn",
+        session_id.as_str()
+    );
+    let body = json!({ "interactionId": interaction.interaction_id.as_str() });
+
+    let (status, receipt) = fixture.post_json(&target, &body);
+    assert_eq!(status, 200, "收口是业务结论，不是错误：{receipt}");
+    assert_eq!(receipt["settled"], true);
+    assert_eq!(receipt["verdict"], "lease_expired");
+    assert_eq!(
+        turn_status(
+            &fixture.store,
+            &session_id,
+            interaction.interaction_id.as_str()
+        ),
+        InteractionStatus::Interrupted,
+        "收口后索引必须读得出终态"
+    );
+    assert_eq!(
+        ledger_event_count(&fixture.store, "interaction.interrupted"),
+        1,
+        "收口必须留下既有事件名的流水账"
+    );
+
+    // 重复调用：没有在途轮次时如实回 settled=false 与判据，不报错、不重复写终态。
+    let (again_status, again) = fixture.post_json(&target, &body);
+    assert_eq!(again_status, 200, "{again}");
+    assert_eq!(again["settled"], false);
+    assert_eq!(again["verdict"], "no_in_flight_turn");
+    assert_eq!(
+        ledger_event_count(&fixture.store, "interaction.interrupted"),
+        1,
+        "幂等由存储层的状态守卫保证"
+    );
+
+    // 请求体缺字段：400，不把畸形请求当成「没有在途轮次」。
+    let (invalid_status, _) = fixture.post_json(&target, &json!({}));
+    assert_eq!(invalid_status, 400);
+}
+
+fn interaction_record(session_id: &DaemonSessionId, interaction_id: &str) -> InteractionRecord {
+    InteractionRecord::new(
+        session_id.clone(),
+        InteractionId::new(interaction_id).expect("Interaction ID"),
+        InteractionSource::new("tui", format!("message-{interaction_id}")).expect("来源"),
+        ScopeRef::workspace("workspace-test").expect("作用域"),
+        AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly),
+        ReplyRoute::new("tui", "terminal-test").expect("路由"),
+        "检查静默轮次",
+        NOW_MS - 2_000,
+    )
+    .expect("Interaction")
+}
+
+fn turn_status(
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+    interaction_id: &str,
+) -> InteractionStatus {
+    store
+        .interaction_turn_heads(session_id.as_str(), 10)
+        .expect("轮次头")
+        .into_iter()
+        .find(|head| head.interaction_id == interaction_id)
+        .map_or(InteractionStatus::Received, |head| head.status)
+}
+
+fn ledger_event_count(store: &SqliteRuntimeStore, event_type: &str) -> i64 {
+    store
+        .with_read_connection(|connection| {
+            connection.query_row(
+                "SELECT COUNT(*) FROM ledger_events WHERE event_type=?1",
+                [event_type],
+                |row| row.get(0),
+            )
+        })
+        .expect("流水账计数")
+}

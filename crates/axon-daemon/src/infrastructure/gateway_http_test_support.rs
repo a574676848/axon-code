@@ -125,6 +125,21 @@ impl GatewayIngress for RecordingIngress {
             deduplicated: false,
         })
     }
+
+    fn context_snapshot(
+        &self,
+        _session_id: &axon_domain::DaemonSessionId,
+    ) -> Result<Option<axon_session::ContextSnapshot>, GatewayKernelError> {
+        Ok(None)
+    }
+
+    fn settle_silent_turn(
+        &self,
+        _session_id: &axon_domain::DaemonSessionId,
+        _interaction_id: &InteractionId,
+    ) -> Result<crate::application::SilentTurnSettlementOutcome, GatewayKernelError> {
+        Ok(crate::application::SilentTurnSettlementOutcome::NotInFlight)
+    }
 }
 
 /// 订阅一律失败：HTTP 面不需要出站流。
@@ -328,6 +343,40 @@ impl TestServer {
 }
 
 impl Drop for TestServer {
+    fn drop(&mut self) {
+        self.adapter.stop();
+    }
+}
+
+/// 用真实 ingress 启动的服务：会话级固定接口的路由契约测试走这里。
+///
+/// 与 [`TestServer`] 的分工：那个夹具服务的是「事件提交」路径，它自带记录型 ingress；
+/// 这里的 ingress 由调用方给出（通常是真实 `DaemonGatewayBridge`），因此能读真实存储。
+pub(super) struct BridgeServer {
+    pub(super) adapter: HttpGatewayAdapter,
+    pub(super) address: SocketAddr,
+}
+
+impl BridgeServer {
+    pub(super) fn start(ingress: Arc<dyn GatewayIngress>) -> Self {
+        let kernel = GatewayKernel::new_with_auth(
+            ingress,
+            Arc::new(RejectingEgress),
+            TEST_CONNECTION_LIMIT,
+            Some(Arc::new(
+                GatewayAuth::from_token(TEST_AUTH_TOKEN).expect("测试 token"),
+            )),
+        );
+        kernel.start().expect("启动测试 Gateway Kernel");
+        let context = kernel.context().expect("运行中的 Gateway 上下文");
+        let adapter = HttpGatewayAdapter::new("127.0.0.1:0", test_providers());
+        adapter.start(context).expect("启动 HTTP 适配器");
+        let address = adapter.local_addr().expect("已绑定监听地址");
+        Self { adapter, address }
+    }
+}
+
+impl Drop for BridgeServer {
     fn drop(&mut self) {
         self.adapter.stop();
     }

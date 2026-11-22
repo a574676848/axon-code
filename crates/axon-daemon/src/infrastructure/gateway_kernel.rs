@@ -5,6 +5,7 @@
 //! durable ingress，再通过 [`GatewayEgress`] 订阅既有事件桥。
 
 use crate::application::ExternalEventEnvelope;
+use crate::application::SilentTurnSettlementOutcome;
 use crate::infrastructure::gateway_auth::{GatewayAuth, GatewayIdentity, GatewayKeyStore};
 use axon_protocol::SubmitInteractionReceipt;
 use serde::{Deserialize, Serialize};
@@ -95,6 +96,26 @@ pub trait GatewayIngress: Send + Sync {
     ) -> Result<Option<GatewayInteractionResponse>, GatewayKernelError> {
         Ok(None)
     }
+
+    /// 读一条会话的上下文快照。
+    ///
+    /// `Ok(None)` 表示会话存在但还没有任何可用读数；会话不存在时返回
+    /// [`GatewayKernelError::NotFound`]，由路由映射成 404，让读侧能区分
+    /// 「没有记录」与「没有这条会话」。
+    fn context_snapshot(
+        &self,
+        session_id: &axon_domain::DaemonSessionId,
+    ) -> Result<Option<axon_session::ContextSnapshot>, GatewayKernelError>;
+
+    /// 显式收口一条静默轮次：桌面端 ESC 之后的服务端出口。
+    ///
+    /// 会话不存在返回 [`GatewayKernelError::NotFound`]；会话存在但没有这条在途轮次时
+    /// 返回 [`SilentTurnSettlementOutcome::NotInFlight`]，由路由如实回给调用方。
+    fn settle_silent_turn(
+        &self,
+        session_id: &axon_domain::DaemonSessionId,
+        interaction_id: &axon_domain::InteractionId,
+    ) -> Result<SilentTurnSettlementOutcome, GatewayKernelError>;
 }
 
 /// Adapter 使用的事件出口桥。
@@ -271,6 +292,25 @@ impl GatewayContext {
     ) -> Result<Option<GatewayInteractionResponse>, GatewayKernelError> {
         self.ensure_running()?;
         self.ingress.get_interaction_response(interaction_id)
+    }
+
+    /// 读会话级上下文快照；排空或停止后拒绝读取。
+    pub fn context_snapshot(
+        &self,
+        session_id: &axon_domain::DaemonSessionId,
+    ) -> Result<Option<axon_session::ContextSnapshot>, GatewayKernelError> {
+        self.ensure_running()?;
+        self.ingress.context_snapshot(session_id)
+    }
+
+    /// 显式收口静默轮次；排空或停止后拒绝写入。
+    pub fn settle_silent_turn(
+        &self,
+        session_id: &axon_domain::DaemonSessionId,
+        interaction_id: &axon_domain::InteractionId,
+    ) -> Result<SilentTurnSettlementOutcome, GatewayKernelError> {
+        self.ensure_running()?;
+        self.ingress.settle_silent_turn(session_id, interaction_id)
     }
 
     /// 尝试取得一个连接许可；许可释放后才会减少活动连接计数。
