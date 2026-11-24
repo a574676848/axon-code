@@ -24,6 +24,8 @@ pub(crate) mod attachments;
 pub(crate) mod bottom_view;
 #[path = "agent_tui/catalog_loader.rs"]
 mod catalog_loader;
+#[path = "agent_tui/catalog_snapshot.rs"]
+mod catalog_snapshot;
 #[path = "agent_tui/clipboard.rs"]
 mod clipboard;
 #[path = "agent_tui/commands.rs"]
@@ -175,6 +177,7 @@ pub use ability_matrix::{
     AgentTuiAbilityCategorySnapshot, AgentTuiAbilityEntry, AgentTuiAbilityMatrixSnapshot,
 };
 pub use catalog_loader::AgentTuiCatalogLoader;
+pub use catalog_snapshot::*;
 pub use completion_inbox::{
     AgentTuiCompletionInbox, AgentTuiCompletionInboxClient, AgentTuiCompletionNotification,
 };
@@ -188,12 +191,11 @@ pub(crate) use input_contract::{
 };
 use input_contract::{TUI_HINT_COMMAND, TUI_HINT_DONE, TUI_HINT_WORKING};
 pub use launch::{
-    AgentTuiCatalog, AgentTuiCatalogLoadSnapshot, AgentTuiCatalogLoadState,
-    AgentTuiConfigDiagnostic, AgentTuiConfigDiagnosticStatus, AgentTuiConfigStatus,
-    AgentTuiLaunchReport, AgentTuiLaunchRequest, AgentTuiMcpServerCatalogItem,
-    AgentTuiModelCatalogItem, AgentTuiRunOverrides, AgentTuiSessionCatalogItem,
-    AgentTuiSettingsChange, AgentTuiSkillStateChange, AgentTuiWorkspaceStatus,
-    launch_agent_tui_report,
+    AgentTuiCatalog, AgentTuiCatalogLoadState, AgentTuiConfigDiagnostic,
+    AgentTuiConfigDiagnosticStatus, AgentTuiConfigStatus, AgentTuiLaunchReport,
+    AgentTuiLaunchRequest, AgentTuiMcpServerCatalogItem, AgentTuiRunOverrides,
+    AgentTuiSessionCatalogItem, AgentTuiSettingsChange, AgentTuiSkillStateChange,
+    AgentTuiWorkspaceStatus, launch_agent_tui_report,
 };
 pub use mcp_login_loader::{
     AgentTuiMcpAuthAction, AgentTuiMcpAuthLoader, AgentTuiMcpAuthOutcome, AgentTuiMcpAuthRequest,

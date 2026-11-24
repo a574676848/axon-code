@@ -67,6 +67,15 @@ export const ConfigFieldRow: React.FC<ConfigFieldRowProps> = ({
   // 向量模型只能从支持向量检索的模型里选，其余模型引用键列出全部已登记模型。
   const candidateModels = spec.key === EMBEDDING_MODEL_KEY ? embeddingModelNames : modelNames;
   const referenceOptions = Array.from(new Set(candidateModels));
+  /*
+   * 模型引用键的当前取值可能已经不在候选里：供应商被停用、模型被删除之后，
+   * 配置里还留着这条引用。触发器照旧显示真值（见 `Select` 的 `current?.label ?? value`），
+   * 这里补一句说明，免得它被读成下拉框坏了。
+   */
+  const staleModelReference =
+    MODEL_REFERENCE_KEYS.has(spec.key) &&
+    value.trim() !== '' &&
+    !referenceOptions.includes(value.trim());
 
   const label = configLabel(spec);
   const detail = configDetail(spec);
@@ -162,6 +171,11 @@ export const ConfigFieldRow: React.FC<ConfigFieldRowProps> = ({
           {detail.length > 0 && (
             <Text tone="secondary" size="xs" className="mt-0.5 block">
               {detail}
+            </Text>
+          )}
+          {staleModelReference && (
+            <Text tone="secondary" size="xs" className="mt-0.5 block">
+              当前值不在可用清单里（供应商已停用或模型已删除）
             </Text>
           )}
         </div>

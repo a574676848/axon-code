@@ -50,6 +50,12 @@ impl RuntimeWatcherEvent {
         Self::refresh(RuntimeWatcherSource::Skills)
     }
 
+    /// 创建配置主动刷新事件。
+    #[must_use]
+    pub fn config_refresh() -> Self {
+        Self::refresh(RuntimeWatcherSource::Config)
+    }
+
     fn refresh(source: RuntimeWatcherSource) -> Self {
         Self::new(
             source,
@@ -66,6 +72,8 @@ pub enum RuntimeWatcherSource {
     Mcp,
     /// Skills catalog 主动刷新。
     Skills,
+    /// 配置文件主动刷新：模型清单与默认思考强度都来自它。
+    Config,
 }
 
 impl RuntimeWatcherSource {
@@ -75,6 +83,7 @@ impl RuntimeWatcherSource {
         match self {
             Self::Mcp => "mcp",
             Self::Skills => "skills",
+            Self::Config => "config",
         }
     }
 }
@@ -112,6 +121,7 @@ pub struct RuntimeWatcherRegistry {
     next_catalog_refresh: Instant,
     last_mcp_fingerprint: Option<CatalogFingerprint>,
     last_skills_fingerprint: Option<CatalogFingerprint>,
+    last_config_fingerprint: Option<CatalogFingerprint>,
 }
 
 impl RuntimeWatcherRegistry {
@@ -122,6 +132,7 @@ impl RuntimeWatcherRegistry {
             next_catalog_refresh: now + CATALOG_REFRESH_WATCHER_INTERVAL,
             last_mcp_fingerprint: None,
             last_skills_fingerprint: None,
+            last_config_fingerprint: None,
         }
     }
 
@@ -148,6 +159,7 @@ impl RuntimeWatcherRegistry {
 
         let mcp_fingerprint = mcp_catalog_fingerprint(config_path, cwd);
         let skills_fingerprint = skills_catalog_fingerprint(cwd);
+        let config_fingerprint = config_catalog_fingerprint(config_path);
         let mcp_changed = self
             .last_mcp_fingerprint
             .replace(mcp_fingerprint)
@@ -156,6 +168,10 @@ impl RuntimeWatcherRegistry {
             .last_skills_fingerprint
             .replace(skills_fingerprint)
             .is_some_and(|previous| previous != skills_fingerprint);
+        let config_changed = self
+            .last_config_fingerprint
+            .replace(config_fingerprint)
+            .is_some_and(|previous| previous != config_fingerprint);
 
         let mut events = Vec::new();
         if mcp_changed {
@@ -163,6 +179,9 @@ impl RuntimeWatcherRegistry {
         }
         if skills_changed {
             events.push(RuntimeWatcherEvent::skills_refresh());
+        }
+        if config_changed {
+            events.push(RuntimeWatcherEvent::config_refresh());
         }
         events
     }
@@ -186,6 +205,17 @@ fn mcp_catalog_fingerprint(config_path: Option<&Path>, cwd: &Path) -> CatalogFin
     paths.sort();
     paths.dedup();
     fingerprint_files(&paths)
+}
+
+/// 配置文件的指纹：模型清单与默认思考强度都写在它里面。
+///
+/// 只观测权威配置文件本身：`.env` 里的凭据由运行时每次读取时加载，
+/// 变更它不会改变哪个模型可选。
+fn config_catalog_fingerprint(config_path: Option<&Path>) -> CatalogFingerprint {
+    let Some(path) = config_path else {
+        return CatalogFingerprint(0);
+    };
+    fingerprint_files(&[path.to_path_buf()])
 }
 
 fn skills_catalog_fingerprint(cwd: &Path) -> CatalogFingerprint {
@@ -306,7 +336,43 @@ description: demo
         );
         assert!(unchanged.iter().all(|event| !matches!(
             event.source,
-            RuntimeWatcherSource::Mcp | RuntimeWatcherSource::Skills
+            RuntimeWatcherSource::Mcp | RuntimeWatcherSource::Skills | RuntimeWatcherSource::Config
         )));
+    }
+
+    #[test]
+    fn rewriting_the_config_file_emits_a_config_refresh_event() {
+        let temp = axon_test_support::test_temp_dir();
+        let cwd = temp.path().join("workspace");
+        fs::create_dir_all(&cwd).expect("工作区目录应可创建");
+        let config_path = temp.path().join("config.toml");
+        fs::write(&config_path, "[agent]\ndefault_model = \"a\"\n").expect("配置应可写入");
+        let mut registry = RuntimeWatcherRegistry::new(Instant::now());
+        let now = Instant::now();
+
+        let baseline = registry.drain_due_events(
+            now + CATALOG_REFRESH_WATCHER_INTERVAL,
+            Some(&config_path),
+            &cwd,
+        );
+        assert!(
+            baseline.is_empty(),
+            "第一次观测只建立基线，不能因为配置文件存在就要求重载"
+        );
+
+        fs::write(&config_path, "[agent]\ndefault_model = \"b\"\n").expect("配置应可重写");
+        let changed = registry.drain_due_events(
+            now + CATALOG_REFRESH_WATCHER_INTERVAL.saturating_mul(2),
+            Some(&config_path),
+            &cwd,
+        );
+        assert_eq!(
+            changed
+                .iter()
+                .filter(|event| event.source == RuntimeWatcherSource::Config)
+                .count(),
+            1,
+            "配置改一次只发一条配置刷新事件"
+        );
     }
 }

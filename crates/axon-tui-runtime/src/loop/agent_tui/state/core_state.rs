@@ -5,9 +5,9 @@ use crate::r#loop::agent_tui::state::command_handlers::command_status_item;
 use crate::r#loop::agent_tui::state::toast::ToastState;
 use crate::r#loop::agent_tui::state::visible_text_selection::VisibleTextSelectionState;
 use crate::r#loop::agent_tui::{
-    AgentTuiCatalog, AgentTuiCatalogLoadSnapshot, AgentTuiCatalogLoadState, AgentTuiLaunchRequest,
-    AgentTuiMcpAuthAction, AgentTuiMcpAuthOutcome, AgentTuiMcpAuthRequest, AgentTuiPlanProgress,
-    history_store,
+    AgentTuiCatalog, AgentTuiCatalogLoadSnapshot, AgentTuiCatalogLoadState,
+    AgentTuiConfigProjection, AgentTuiLaunchRequest, AgentTuiMcpAuthAction, AgentTuiMcpAuthOutcome,
+    AgentTuiMcpAuthRequest, AgentTuiPlanProgress, AgentTuiSettingsChange, history_store,
     runtime_bridge::RuntimeBridge,
     startup_transcript::{startup_overview_for_catalog, startup_transcript},
 };
@@ -92,13 +92,66 @@ impl AgentTuiState {
         &mut self,
         snapshot: AgentTuiCatalogLoadSnapshot,
     ) {
+        let config = snapshot.config.clone();
         self.header.catalog.apply_load_snapshot(snapshot);
+        if let Some(config) = config {
+            self.apply_config_projection(&config);
+        }
         self.refresh_command_suggestions();
         self.refresh_startup_overview();
         if self.cells.transcript_surfaces.catalog_cell("mcp").is_some() {
             self.push_mcp_inventory();
         }
         self.push_mcp_auth_notice();
+    }
+
+    /// 配置投影落到头部：模型清单与两个默认值都跟着配置文件走。
+    ///
+    /// 本进程里显式选过的模型与强度优先：那是用户当下的决定，配置改写不该悄悄改掉它。
+    /// 唯一例外是显式选过的模型已经不在可用清单里（被删掉，或它的供应商被停用）：
+    /// 继续点名一个路由不到的名字只会让这一轮直接失败，因此退回配置默认值。
+    fn apply_config_projection(&mut self, config: &AgentTuiConfigProjection) {
+        let dropped_explicit_model =
+            self.header.model_explicit && !self.explicit_model_still_available();
+        if dropped_explicit_model {
+            self.header.model_explicit = false;
+        }
+        if !self.header.model_explicit
+            && let Some(model) = config.default_model.as_ref()
+        {
+            self.header.overrides.model = Some(model.clone());
+            self.header.config_status.model.clone_from(model);
+        }
+        if !self.header.effort_explicit
+            && let Some(effort) = config.default_reasoning_effort.as_ref()
+        {
+            self.header.overrides.reasoning_effort = Some(effort.clone());
+        }
+        if dropped_explicit_model {
+            /*
+             * 显式选择不只在界面里失效：宿主持有一份「随轮下发的显式模型」，
+             * 不一并清掉的话这一轮仍会点名那个已经删掉的名字。这里推一条清空变更，
+             * 让宿主回到「按会话记录与配置默认值选」；界面显示的默认模型由上面
+             * 那段回填写入，因此改完之后界面与下发仍然对齐。
+             * 这条变更只含模型清空，不会写回配置文件。
+             */
+            self.push_settings_change(AgentTuiSettingsChange::model_cleared());
+        }
+    }
+
+    /// 显式选过的模型是否仍在可切换清单里。
+    fn explicit_model_still_available(&self) -> bool {
+        self.header
+            .overrides
+            .model
+            .as_deref()
+            .is_some_and(|selected| {
+                self.header
+                    .catalog
+                    .models
+                    .iter()
+                    .any(|candidate| candidate.label == selected)
+            })
     }
 
     /// 登记一次 TUI 内的 MCP OAuth 授权动作，由主循环交给 runtime adapter 执行。
@@ -205,6 +258,15 @@ impl AgentTuiState {
         self.refresh_startup_overview();
     }
 
+    /// 配置文件变了：只要求复读，不把 MCP 读数先打成「加载中」。
+    ///
+    /// 配置改写与 MCP 健康无关，头部不该因为改了一个模型就闪一次加载态。
+    /// 复读本身走 `force_mcp_refresh = false`：命中 schema 缓存时只读缓存的工具目录、
+    /// 不拉起 server；缓存缺失或过期时按既有缓存策略探测，代价与其它 catalog 复读相同。
+    pub(in crate::r#loop::agent_tui) fn request_config_refresh(&mut self) {
+        self.bridge.catalog_reload_requested = true;
+    }
+
     pub(in crate::r#loop::agent_tui) fn take_catalog_reload_request(&mut self) -> Option<bool> {
         if !self.bridge.catalog_reload_requested {
             return None;
@@ -237,6 +299,7 @@ impl AgentTuiState {
             mcp_state: AgentTuiCatalogLoadState::Failed,
             mcp_servers: Vec::new(),
             sessions: self.header.catalog.sessions.clone(),
+            config: None,
         });
         self.push_local_error("MCP 重新加载失败", message.into(), None);
     }
@@ -257,9 +320,11 @@ impl AgentTuiState {
     pub(in crate::r#loop::agent_tui) fn apply_watcher_event(&mut self, event: RuntimeWatcherEvent) {
         self.bridge.record_watcher_event(&event);
         match event.payload {
-            RuntimeWatcherPayload::Refresh(snapshot) => {
-                self.request_catalog_reload(snapshot.source == RuntimeWatcherSource::Mcp);
-            }
+            RuntimeWatcherPayload::Refresh(snapshot) => match snapshot.source {
+                RuntimeWatcherSource::Mcp => self.request_catalog_reload(true),
+                RuntimeWatcherSource::Skills => self.request_catalog_reload(false),
+                RuntimeWatcherSource::Config => self.request_config_refresh(),
+            },
         }
     }
 

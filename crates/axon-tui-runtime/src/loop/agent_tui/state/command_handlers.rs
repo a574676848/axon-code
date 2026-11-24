@@ -156,11 +156,27 @@ impl AgentTuiState {
     }
 
     fn set_reasoning_effort(&mut self, value: &str) {
+        if value.is_empty() {
+            /*
+             * 空参数是一次读数，不是用法错误：强度可以由配置文件改写，界面上的
+             * 这一格因此必须每次都读当前值，不能只认本进程里 `/think` 设过的那一个。
+             */
+            self.push_status(
+                "思考强度",
+                vec![
+                    command_status_item("当前", self.reasoning_effort_status()),
+                    command_status_item("可选", REASONING_EFFORT_ARGUMENT_HINT),
+                ],
+            );
+            return;
+        }
         if !REASONING_EFFORT_VALUES.contains(&value) {
             self.push_usage_error(format!("/think {REASONING_EFFORT_ARGUMENT_HINT}"));
             return;
         }
         self.header.overrides.reasoning_effort = Some(value.to_owned());
+        /* 显式选择：此后配置文件改写不再覆盖它，直到这一次进程结束。 */
+        self.header.mark_effort_explicit();
         self.record_settings_change(false);
         self.push_status("设置", vec![command_status_item("Think", value)]);
     }

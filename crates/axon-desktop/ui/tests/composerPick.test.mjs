@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
     EMPTY_COMPOSER_PICK,
+    explicitModelInEffect,
     inheritedComposerPick,
 } from '../src/conversation/composerPick.ts';
 
@@ -63,4 +64,19 @@ test('空白缓存与手改出来的非法档位都不参与继承', () => {
         inheritedComposerPick(NAMES, { model: ' glm-5 ', reasoningEffort: ' high ' }),
         { model: 'glm-5', reasoningEffort: 'high' },
     );
+});
+
+test('本会话显式选过的模型只在它仍然可选时作数', () => {
+    assert.equal(explicitModelInEffect('glm-5', NAMES), 'glm-5');
+    assert.equal(
+        explicitModelInEffect('已下线的模型', NAMES),
+        null,
+        '停用供应商或删掉条目之后，显式选择必须退回配置默认值',
+    );
+    assert.equal(
+        explicitModelInEffect('glm-5', null),
+        'glm-5',
+        '配置还没读回来不等于这个模型已经被删了',
+    );
+    assert.equal(explicitModelInEffect(null, NAMES), null);
 });

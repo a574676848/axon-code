@@ -1,18 +1,16 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::Path,
-    thread,
-};
+use std::{collections::BTreeMap, path::Path, thread};
 
 use axon_agent_runtime::MCP_TOOL_NAMESPACE_PREFIX;
 use axon_config::ConfigLoader;
 use axon_tui_runtime::{
     AgentTuiCatalog, AgentTuiCatalogLoadSnapshot, AgentTuiCatalogLoadState,
-    AgentTuiMcpServerCatalogItem, AgentTuiModelCatalogItem, AgentTuiSessionCatalogItem,
+    AgentTuiMcpServerCatalogItem, AgentTuiSessionCatalogItem,
 };
 
 use crate::management_commands::resolved_config_path;
 use crate::run_commands::{AxonCli, run_session_store::resolved_axon_root};
+
+use super::catalog_projection::tui_config_projection;
 
 /// `/sessions` 默认列出的主会话条数；与会话清单默认页同源，两处条数因此一致。
 const TUI_CATALOG_LIMIT: usize = crate::session_commands::SESSION_CLI_DEFAULT_LIMIT;
@@ -26,33 +24,10 @@ pub(super) fn resolve_agent_tui_catalog(cli: &AxonCli) -> AgentTuiCatalog {
     let Ok(loaded) = ConfigLoader::load_from_path(&path) else {
         return AgentTuiCatalog::default();
     };
-    let mut seen_names = BTreeSet::new();
+    let projection = tui_config_projection(&loaded.config);
     AgentTuiCatalog {
-        models: loaded
-            .config
-            .models
-            .iter()
-            .filter(|model| loaded.config.model_is_enabled(model))
-            .filter(|model| !model.supports_embedding)
-            .filter(|model| seen_names.insert(model.name.clone()))
-            .map(|model| {
-                AgentTuiModelCatalogItem::new_with_runtime_defaults(
-                    model.name.clone(),
-                    model.id.clone(),
-                    model.provider.clone(),
-                    (model.context_window > 0).then_some(model.context_window),
-                    None,
-                )
-                .with_supports_vision(model.supports_vision)
-            })
-            .collect(),
-        providers: loaded
-            .config
-            .providers
-            .iter()
-            .filter(|provider| provider.enabled)
-            .map(|provider| provider.name.clone())
-            .collect(),
+        models: projection.models,
+        providers: projection.providers,
         skills: Vec::new(),
         skill_state: AgentTuiCatalogLoadState::Loading,
         skill_errors: Vec::new(),
@@ -97,6 +72,13 @@ pub(crate) fn load_tui_catalog_snapshot(
         mcp_servers,
         mcp_state,
         sessions: load_tui_session_items(config_path, session_cwd.as_deref()),
+        /*
+         * 配置投影跟着同一次复读一起算：`/model` 与头部的强度读数都读这一份，
+         * 因此改完 `config.toml` 不需要重启 TUI。读不到配置时留空，头部保留现状。
+         */
+        config: ConfigLoader::load_from_path(config_path)
+            .ok()
+            .map(|loaded| tui_config_projection(&loaded.config)),
     }
 }
 

@@ -46,3 +46,21 @@ export function inheritedComposerPick(
   if (!modelNames.includes(model)) return EMPTY_COMPOSER_PICK;
   return { model, reasoningEffort };
 }
+
+/**
+ * 本会话显式选过的模型此刻还作不作数。
+ *
+ * 与继承缓存同一条判据：名称必须仍在当前配置的可选清单里。停用供应商或删掉
+ * `[[models]]` 之后，继续把这一条随轮下发只会让运行侧路由不到，因此这一格
+ * 退回配置默认值。`selectableModels` 为 null 表示配置事实还没读回来，
+ * 此时保留显式选择，不拿「还没读到」当成「已经删了」。
+ */
+export function explicitModelInEffect(
+  selected: string | null,
+  selectableModels: readonly string[] | null,
+): string | null {
+  const model = clean(selected);
+  if (model === null) return null;
+  if (selectableModels === null) return model;
+  return selectableModels.includes(model) ? model : null;
+}

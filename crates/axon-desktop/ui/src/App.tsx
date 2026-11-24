@@ -668,6 +668,7 @@ export const App: React.FC = () => {
               setConfigRevision((value) => value + 1);
               void probeGateway();
             }}
+            onConfigChanged={() => setConfigRevision((value) => value + 1)}
             initialSection={settingsSection}
           />
         </>

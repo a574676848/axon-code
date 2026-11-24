@@ -471,12 +471,13 @@ impl AgentTuiState {
     }
 
     pub(super) fn record_settings_change(&mut self, model_explicit: bool) {
-        self.header
-            .settings_changes
-            .push(AgentTuiSettingsChange::from_overrides(
-                &self.header.overrides,
-                model_explicit,
-            ));
+        let change = AgentTuiSettingsChange::from_overrides(&self.header.overrides, model_explicit);
+        self.push_settings_change(change);
+    }
+
+    /// 登记一条现成的设置变更，交给宿主同步显式设置。
+    pub(super) fn push_settings_change(&mut self, change: AgentTuiSettingsChange) {
+        self.header.settings_changes.push(change);
     }
 
     pub(super) fn record_skill_settings_change(

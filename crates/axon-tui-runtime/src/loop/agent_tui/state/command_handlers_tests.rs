@@ -5,9 +5,9 @@ use crate::ui_workflow::action::{UiKeyCode, UiKeyEvent};
 use super::AgentTuiState;
 use super::command_handlers::AgentTuiCommandOutcome;
 use crate::r#loop::agent_tui::{
-    AgentTuiCatalog, AgentTuiConfigDiagnostic, AgentTuiConfigDiagnosticStatus,
-    AgentTuiConfigStatus, AgentTuiLaunchRequest, AgentTuiModelCatalogItem, AgentTuiRunOverrides,
-    AgentTuiTokenUsage,
+    AgentTuiCatalog, AgentTuiCatalogLoadSnapshot, AgentTuiConfigDiagnostic,
+    AgentTuiConfigDiagnosticStatus, AgentTuiConfigProjection, AgentTuiConfigStatus,
+    AgentTuiLaunchRequest, AgentTuiModelCatalogItem, AgentTuiRunOverrides, AgentTuiTokenUsage,
 };
 use crate::surface::cell::RenderCellData;
 
@@ -518,6 +518,171 @@ fn sessions_popup_enter_binds_selected_session() {
         state.take_pending_session_switch().as_deref(),
         Some("session-b")
     );
+}
+
+#[test]
+fn think_command_without_argument_reports_the_current_effort() {
+    let mut state = test_state();
+    state.header.overrides.reasoning_effort = Some("xhigh".to_owned());
+
+    assert!(matches!(
+        state.handle_command("/think"),
+        AgentTuiCommandOutcome::Handled
+    ));
+
+    let Some(RenderCellData::Command(cell)) = state
+        .cells
+        .transcript
+        .last()
+        .and_then(|line| line.data.as_ref())
+    else {
+        panic!("/think 不带参数应给出当前强度读数");
+    };
+    assert_eq!(status_summary(cell, "当前"), "xhigh");
+    assert!(
+        status_summary(cell, "可选").contains("none|minimal|low|medium|high|xhigh|max"),
+        "读数里要带上这一轮真正能用的候选值"
+    );
+    assert!(
+        !state.header.effort_explicit,
+        "只是读一次当前值，不能当成显式选择"
+    );
+}
+
+#[test]
+fn config_reload_refreshes_models_and_defaults_without_overriding_explicit_picks() {
+    let mut state = test_state();
+    state.apply_catalog_load_snapshot(config_reload(&["gpt-5.4"], "gpt-5.4", "medium"));
+
+    assert_eq!(state.header.catalog.models.len(), 1);
+    assert_eq!(state.header.overrides.model.as_deref(), Some("gpt-5.4"));
+    assert_eq!(
+        state.header.overrides.reasoning_effort.as_deref(),
+        Some("medium")
+    );
+
+    // 用户显式改了强度：配置复读不得把它改回去。
+    assert!(matches!(
+        state.handle_command("/think low"),
+        AgentTuiCommandOutcome::Handled
+    ));
+    state.apply_catalog_load_snapshot(config_reload(
+        &["claude-sonnet-4-6"],
+        "claude-sonnet-4-6",
+        "high",
+    ));
+
+    assert_eq!(
+        state.header.overrides.reasoning_effort.as_deref(),
+        Some("low"),
+        "显式选过的强度不该被配置默认值覆盖"
+    );
+    assert_eq!(
+        state.header.overrides.model.as_deref(),
+        Some("claude-sonnet-4-6"),
+        "没显式选过模型时，模型跟着配置走"
+    );
+
+    // 显式选过的模型从配置里消失（删除条目或停用供应商）：退回配置默认值。
+    assert!(matches!(
+        state.handle_command("/model claude-sonnet-4-6"),
+        AgentTuiCommandOutcome::Handled
+    ));
+    let _ = state.take_settings_changes();
+    state.apply_catalog_load_snapshot(config_reload(&["gpt-5.4"], "gpt-5.4", "high"));
+
+    assert_eq!(
+        state.header.overrides.model.as_deref(),
+        Some("gpt-5.4"),
+        "显式选过的模型已经不可用时必须退回配置默认值"
+    );
+    /*
+     * 放弃显式选择这件事必须同步给宿主：宿主手里还有一份「随轮下发的显式模型」，
+     * 只改界面不改它，这一轮仍会点名那个已经删掉的名字。同步的方式是「清空」，
+     * 不是「钉到新的默认值」：钉住之后配置默认值再变一次，界面与下发就会再次分叉。
+     */
+    let changes = state.take_settings_changes();
+    assert_eq!(changes.len(), 1, "只在放弃显式选择时补一条设置变更");
+    assert!(changes[0].model_explicit);
+    assert_eq!(
+        changes[0].model, None,
+        "宿主收到的是清空，不是把旧默认值钉成新的显式选择"
+    );
+
+    // 默认值此后改写：界面继续跟随，且不再产生设置变更（宿主已回到「无显式模型」）。
+    state.apply_catalog_load_snapshot(config_reload(&["gpt-5.4"], "gpt-5.4", "high"));
+    assert!(state.take_settings_changes().is_empty());
+    state.apply_catalog_load_snapshot(config_reload(&["glm-5", "gpt-5.4"], "glm-5", "high"));
+    assert_eq!(
+        state.header.overrides.model.as_deref(),
+        Some("glm-5"),
+        "清空之后默认值改写仍要跟上"
+    );
+    assert!(state.take_settings_changes().is_empty());
+}
+
+#[test]
+fn config_reload_without_any_usable_model_still_clears_the_explicit_pick() {
+    let mut state = test_state();
+    state.apply_catalog_load_snapshot(config_reload(&["gpt-5.4"], "gpt-5.4", "medium"));
+    assert!(matches!(
+        state.handle_command("/model gpt-5.4"),
+        AgentTuiCommandOutcome::Handled
+    ));
+    let _ = state.take_settings_changes();
+
+    // 配置里一个可用模型都不剩：没有默认值可以回填，但显式选择照样要作废。
+    state.apply_catalog_load_snapshot(AgentTuiCatalogLoadSnapshot {
+        config: Some(AgentTuiConfigProjection {
+            models: Vec::new(),
+            providers: Vec::new(),
+            default_model: None,
+            default_reasoning_effort: Some("medium".to_owned()),
+        }),
+        ..AgentTuiCatalogLoadSnapshot::default()
+    });
+
+    assert!(state.header.catalog.models.is_empty());
+    let changes = state.take_settings_changes();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(
+        changes[0].model, None,
+        "没有默认值可回填时同样推清空，而不是把已经失效的名字钉给宿主"
+    );
+}
+
+#[test]
+fn config_reload_without_projection_keeps_the_existing_models() {
+    let mut state = test_state();
+    state.apply_catalog_load_snapshot(config_reload(&["gpt-5.4"], "gpt-5.4", "medium"));
+
+    state.apply_catalog_load_snapshot(AgentTuiCatalogLoadSnapshot::default());
+
+    assert_eq!(
+        state.header.catalog.models.len(),
+        1,
+        "不含配置事实的快照（例如 MCP 复读失败）不能把模型清单清空"
+    );
+    assert_eq!(state.header.overrides.model.as_deref(), Some("gpt-5.4"));
+}
+
+fn config_reload(
+    models: &[&str],
+    default_model: &str,
+    default_reasoning_effort: &str,
+) -> AgentTuiCatalogLoadSnapshot {
+    AgentTuiCatalogLoadSnapshot {
+        config: Some(AgentTuiConfigProjection {
+            models: models
+                .iter()
+                .map(|name| AgentTuiModelCatalogItem::new(*name, *name, "provider"))
+                .collect(),
+            providers: vec!["provider".to_owned()],
+            default_model: Some(default_model.to_owned()),
+            default_reasoning_effort: Some(default_reasoning_effort.to_owned()),
+        }),
+        ..AgentTuiCatalogLoadSnapshot::default()
+    }
 }
 
 fn status_summary(cell: &crate::surface::cell::RenderCommandCell, kind: &str) -> String {

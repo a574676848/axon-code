@@ -7,7 +7,7 @@
  */
 
 import type { ConfigReadResult } from '../types';
-import { isEmbeddingModel } from '../modelCatalog';
+import { selectableChatModels } from '../modelCatalog';
 
 /** 后端配置里与指标条相关的键。 */
 export const KEY_DEFAULT_MODEL = 'agent.default_model';
@@ -45,9 +45,14 @@ export interface ResolvedConfig {
   model: string;
   reasoningEffort: string;
   contextWindow: number | null;
-  /** 可选模型清单：取配置目录里的模型名，去重后保持配置顺序。 */
+  /** 可选模型清单：只列所属供应商已启用的对话模型，去重后保持配置顺序。 */
   models: string[];
-  /** 配置目录全量条目（含 id 与 provider），供真实运行面反查展示名。 */
+  /**
+   * 配置目录全量条目（含 id 与 provider），供真实运行面反查展示名。
+   *
+   * 这里**不套启用过滤**：停用供应商的模型仍然解析得出自己当初的别名与窗口，
+   * 否则一条跑过的历史轮次会因为供应商被停用而显示成别的模型。
+   */
   catalog: ConfigModelEntry[];
 }
 
@@ -67,9 +72,10 @@ export function resolveConfig(
       candidate.name === leaf ||
       candidate.id === leaf,
   );
-  const models = Array.from(new Set(config.models
-    .filter((candidate) => !isEmbeddingModel(candidate))
-    .map((candidate) => candidate.name)));
+  const models = Array.from(new Set(selectableChatModels(
+    config.models,
+    config.providers ?? null,
+  ).map((candidate) => candidate.name)));
   /*
    * 不在这里推导「供应商/模型」路由：同名模型可能有多条（不同供应商），运行时按
    * 渠道池、亲和与健康去选，配置里的第一条并不是本轮真正被请求的那一家。

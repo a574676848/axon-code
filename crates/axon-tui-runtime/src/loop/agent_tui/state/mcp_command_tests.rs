@@ -269,6 +269,7 @@ fn catalog_snapshot(mcp_servers: Vec<AgentTuiMcpServerCatalogItem>) -> AgentTuiC
         mcp_servers,
         mcp_state,
         sessions: Vec::new(),
+        config: None,
     }
 }
 

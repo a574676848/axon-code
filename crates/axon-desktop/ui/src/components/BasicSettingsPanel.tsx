@@ -17,7 +17,7 @@ import {
   UserIcon,
 } from '../icons';
 import type { ConfigReadResult, SettingsSection } from '../types';
-import { isEmbeddingModel } from '../modelCatalog';
+import { selectableChatModels, selectableEmbeddingModels } from '../modelCatalog';
 import * as ipc from '../ipc';
 import { Modal } from './ui/overlays';
 import { Button, IconButton } from './ui/controls';
@@ -195,6 +195,14 @@ interface BasicSettingsPanelProps {
   onClose: () => void;
   /** 打开时定位到的分区。 */
   initialSection?: SettingsSection;
+  /**
+   * 有一次配置真的落盘。
+   *
+   * 输入坞的模型与思考强度读的是同一份配置，因此这里每写成功一次就要求外层复读，
+   * 而不是等到关闭设置面板才刷新：面板收起之前那次写入在会话视图里也算既成事实，
+   * 拖到关闭再刷新会让「停用供应商之后选择器还列着它」的窗口一直开着。
+   */
+  onConfigChanged?: () => void;
 }
 
 /** 设置分区目录（只含标识与文案）：命令面板直接读这一份，不再维护第二份分区名册。 */
@@ -205,6 +213,7 @@ export const BasicSettingsPanel: React.FC<BasicSettingsPanelProps> = ({
   open,
   onClose,
   initialSection = 'general',
+  onConfigChanged,
 }) => {
   const [config, setConfig] = useState<ConfigReadResult | null>(null);
   const [section, setSection] = useState<SettingsSection>('general');
@@ -254,15 +263,13 @@ export const BasicSettingsPanel: React.FC<BasicSettingsPanelProps> = ({
   /** 支持向量检索的模型；向量模型键只能从中选择。 */
   const embeddingModelNames = useMemo(
     () =>
-      (config?.models ?? [])
-        .filter(isEmbeddingModel)
+      selectableEmbeddingModels(config?.models ?? [], config?.providers ?? null)
         .map((model) => model.name),
     [config],
   );
   const modelNames = useMemo(
     () =>
-      (config?.models ?? [])
-        .filter((model) => !isEmbeddingModel(model))
+      selectableChatModels(config?.models ?? [], config?.providers ?? null)
         .map((model) => model.name),
     [config],
   );
@@ -273,6 +280,8 @@ export const BasicSettingsPanel: React.FC<BasicSettingsPanelProps> = ({
     setError(null);
     try {
       await ipc.applyConfigValues({ [key]: value });
+      /* 先告诉外层「配置变了」，再复读本面板：本面板这次复读失败不该拖住输入坞的刷新。 */
+      onConfigChanged?.();
       await load();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '写入配置失败');
@@ -432,7 +441,10 @@ export const BasicSettingsPanel: React.FC<BasicSettingsPanelProps> = ({
                         models={config.models}
                         protocols={config.provider_protocols}
                         wireTransports={config.provider_wire_transports}
-                        onChanged={() => void load()}
+                        onChanged={() => {
+                          void load();
+                          onConfigChanged?.();
+                        }}
                       />
                     )}
 

@@ -14,6 +14,7 @@ use axon_tui_runtime::{
 };
 
 mod catalog;
+mod catalog_projection;
 mod config_status;
 mod context_snapshot_reader;
 mod question_answer_submission;
@@ -55,7 +56,7 @@ pub(super) use catalog::load_tui_catalog_snapshot;
 use catalog::resolve_agent_tui_catalog;
 use config_status::resolve_agent_tui_config_status;
 use runtime_adapter::CliAgentTuiRuntimeAdapter;
-use settings_persistence::persist_tui_settings_change;
+use settings_persistence::persist_tui_settings_change_if_needed;
 pub(crate) use tui_submit_mapper::{TUI_CHANNEL, new_tui_reply_destination};
 
 pub(crate) fn run_agent_tui_entry(cli: &AxonCli, prompt: Option<&str>) -> CliRunResult {
@@ -106,10 +107,13 @@ pub(crate) fn run_agent_tui_entry(cli: &AxonCli, prompt: Option<&str>) -> CliRun
                 let mut selection = explicit_turn
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if change.model_explicit
-                    && let Some(model) = change.model.clone()
-                {
-                    selection.model = Some(model);
+                /*
+                 * `model` 为 `None` 时同样要赋值：那是「显式模型已不可用，清掉」的信号
+                 * （配置文件删掉了这个模型，或停用了它的供应商）。只处理 `Some` 会让
+                 * 宿主一直钉着一个路由不到的名字，界面与下发从此分叉。
+                 */
+                if change.model_explicit {
+                    selection.model.clone_from(&change.model);
                 }
                 if let Some(effort) = change
                     .reasoning_effort
@@ -121,7 +125,7 @@ pub(crate) fn run_agent_tui_entry(cli: &AxonCli, prompt: Option<&str>) -> CliRun
                 }
             }
             if let Some(path) = config_path.as_deref()
-                && let Err(error) = persist_tui_settings_change(path, &change)
+                && let Err(error) = persist_tui_settings_change_if_needed(path, &change)
             {
                 axon_logger::error(&format!("Agent TUI 设置写回失败：{error}"));
             }

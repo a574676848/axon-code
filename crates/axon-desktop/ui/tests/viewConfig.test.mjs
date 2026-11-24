@@ -155,3 +155,34 @@ test('渠道改名后，别名与 upstream id 同时对上仍然作数', () => {
         'provider 变了但别名与 id 都指向同一条，不能退回同 id 的第一条',
     );
 });
+
+const RETIRED = {
+    ...MODEL,
+    name: 'retired-model',
+    id: 'retired-model-id',
+    provider: 'retired-provider',
+};
+
+const PROVIDERS = [
+    { name: 'sm-wenwen-chat', enabled: true },
+    { name: 'retired-provider', enabled: false },
+];
+
+test('停用供应商的模型不进输入坞候选，但历史轮仍能解析出它的展示名', () => {
+    const resolved = resolveConfig({
+        flat_values: { [KEY_DEFAULT_MODEL]: 'deepseek-v4.1-flash' },
+        models: [MODEL, RETIRED],
+        providers: PROVIDERS,
+    });
+    assert.deepEqual(resolved.models, ['deepseek-v4.1-flash'], '停用供应商的模型不该再出现');
+    assert.equal(
+        modelLabelFor(resolved.catalog, { provider: 'retired-provider', model: 'retired-model-id' }),
+        'retired-model',
+        '目录不套启用过滤：这条模型真的跑过，展示名必须还原得出来',
+    );
+});
+
+test('载荷里没有供应商事实时只按用途过滤，不把候选整份清空', () => {
+    const resolved = resolveConfig(configOf('deepseek-v4.1-flash', [MODEL, RETIRED]));
+    assert.deepEqual(resolved.models, ['deepseek-v4.1-flash', 'retired-model']);
+});

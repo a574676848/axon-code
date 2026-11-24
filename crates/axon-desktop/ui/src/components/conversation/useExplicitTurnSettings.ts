@@ -1,5 +1,5 @@
 import React from 'react';
-import type { ComposerPick } from '../../conversation/composerPick';
+import { explicitModelInEffect, type ComposerPick } from '../../conversation/composerPick';
 
 /**
  * 输入坞的本轮显式设置：模型与推理强度都只跟随当前会话。
@@ -28,6 +28,13 @@ export interface ExplicitTurnSettings {
 export interface ExplicitTurnSettingsOptions {
   /** 新会话可继承的选择；历史会话与只读会话留空。 */
   inherited?: ComposerPick | null;
+  /**
+   * 当前配置里可选的模型清单。
+   *
+   * 显式选择只在它仍然可选时作数：停用供应商或删掉模型之后，这一格退回配置默认值。
+   * 传 null 表示配置事实还没读回来，此时保留显式选择。
+   */
+  selectableModels?: readonly string[] | null;
   /** 用户改选模型之后记下这一选择（跨会话缓存）。 */
   onRememberModel?: (value: string) => void;
   /** 用户改选推理强度之后记下这一选择（跨会话缓存）。 */
@@ -51,7 +58,12 @@ export function useExplicitTurnSettings(
   sessionKey: string | null,
   options: ExplicitTurnSettingsOptions = {},
 ): ExplicitTurnSettings {
-  const { inherited = null, onRememberModel, onRememberReasoningEffort } = options;
+  const {
+    inherited = null,
+    selectableModels = null,
+    onRememberModel,
+    onRememberReasoningEffort,
+  } = options;
   const [picked, setPicked] = React.useState<Picked | null>(null);
   const onModelChange = React.useCallback(
     (value: string) => {
@@ -97,7 +109,8 @@ export function useExplicitTurnSettings(
     });
   }
   return {
-    explicitModel: current?.model ?? inherited?.model ?? null,
+    explicitModel:
+      explicitModelInEffect(current?.model ?? null, selectableModels) ?? inherited?.model ?? null,
     explicitReasoningEffort: current?.reasoningEffort ?? inherited?.reasoningEffort ?? null,
     onModelChange,
     onReasoningEffortChange,

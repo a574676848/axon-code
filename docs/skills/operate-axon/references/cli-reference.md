@@ -88,8 +88,8 @@ axon upgrade [--manifest-url <url>] [--download] [--apply] [--rollback] [--outpu
 /sessions [--all]                 打开会话弹窗，↑↓ 选择、Enter 载入该会话历史；只列当前工作区的会话，--all 含归档会话
 /new                              开启新会话，下一轮使用新的会话标识
 /reset                            重置当前会话的运行实例，保留会话标识与历史
-/model <model>                    切换模型：只作用于本会话，随每次提交下发给运行侧，不写回配置
-/think                            调整本轮推理强度（只作用于本会话，不写配置）
+/model [<model>]                   不带参数列出当前可用模型；带参数切换模型：只作用于本会话，随每次提交下发给运行侧，不写回配置
+/think [<effort>]                  不带参数读出当前推理强度；带参数调整本轮推理强度（只作用于本会话，不写配置）
 /status                           查看当前 TUI 运行状态
 /mcp [list|login|logout <server>]  查看 MCP server 与工具清单、登录或登出
 /skills [list|toggle]             管理 skills
@@ -97,6 +97,7 @@ axon upgrade [--manifest-url <url>] [--download] [--apply] [--rollback] [--outpu
 ```
 
 - `/clear`、`/model`、`/think` 在任务运行中不可用；`/exit` 的别名是 `/quit`、`:q`、`exit`、`quit`。
+- `/model` 的候选与 `/think` 的当前值都读当前 `config.toml`：停用 Provider、增删 `[[models]]` 或改 `agent.reasoning_effort` 之后不必重启 TUI，两者会自己跟上。本进程里显式选过的模型与强度优先于配置默认值；显式选过的模型不可用时退回配置默认模型，配置里一个可用模型都没有时保留最后一次成功读到的清单。
 - 顶部读数是整条会话的累计事实（耗时、累计 Token、命中率、上下文、剩余、首字、速率），有值之后一直显示，不会因为某一轮结束或 `/clear` 消失；只有切到另一条会话（`/sessions` 选中别的会话、`/new`）才随会话归零。每轮结束在正文下方另有一条该轮自己的分割线。上下文段给「已用/窗口」，其后的剩余段给「窗口 − 已用」，两者都取 Provider 实测；剩余段在占用或窗口任一未知时不显示，上下文段在窗口未知时仍显示已用值。
 - MCP server 需要 OAuth 时，首屏加载完成后只提示一次并给出 `/mcp login <server>`；Axon 不会自动打开浏览器。
 - `/mcp login` 在后台线程执行，不阻塞渲染与输入；失败时回退提示使用 `axon mcp login <server>`。

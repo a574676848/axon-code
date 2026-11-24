@@ -5,6 +5,7 @@ use std::{collections::BTreeSet, path::PathBuf};
 use serde::Serialize;
 
 use super::ability_matrix::{AgentTuiAbilityMatrixSnapshot, agent_tui_ability_matrix_snapshot};
+use super::catalog_snapshot::{AgentTuiCatalogLoadSnapshot, AgentTuiModelCatalogItem};
 use super::smoke_contract::{AgentTuiSmokeContractSnapshot, agent_tui_smoke_contract_snapshot};
 use super::{
     AGENT_TUI_FOCUS_TARGET, AGENT_TUI_KIND, AGENT_TUI_PANEL_TITLE, AGENT_TUI_PROMPT_INDICATOR,
@@ -112,6 +113,21 @@ impl AgentTuiSettingsChange {
             skill_states,
         }
     }
+
+    /// 显式模型已不可用：要求宿主清空本轮的显式模型。
+    ///
+    /// 与 `from_overrides` 的唯一区别是 `model: None`。宿主据此把显式模型置空，
+    /// 回到「按会话记录与配置默认值选」，而不是继续钉住一个已经从配置里消失的名字；
+    /// 置空之后若配置默认值再次改写，界面与下发仍然同步。
+    #[must_use]
+    pub fn model_cleared() -> Self {
+        Self {
+            model: None,
+            model_explicit: true,
+            reasoning_effort: None,
+            skill_states: Vec::new(),
+        }
+    }
 }
 
 /// 单个 skill 的启用状态变更。
@@ -173,23 +189,6 @@ impl AgentTuiMcpServerCatalogItem {
             error: Some(error.into()),
         }
     }
-}
-
-/// Agent TUI 后台 catalog 加载结果。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AgentTuiCatalogLoadSnapshot {
-    /// skill 名称。
-    pub skills: Vec<String>,
-    /// skill 加载状态。
-    pub skill_state: AgentTuiCatalogLoadState,
-    /// skill 加载错误摘要。
-    pub skill_errors: Vec<String>,
-    /// MCP server 快照。
-    pub mcp_servers: Vec<AgentTuiMcpServerCatalogItem>,
-    /// MCP 加载状态。
-    pub mcp_state: AgentTuiCatalogLoadState,
-    /// 最近 session 元数据。
-    pub sessions: Vec<AgentTuiSessionCatalogItem>,
 }
 
 /// TUI 最近会话目录项。
@@ -285,6 +284,10 @@ pub struct AgentTuiCatalog {
 impl AgentTuiCatalog {
     /// 应用后台 catalog 加载快照。
     pub fn apply_load_snapshot(&mut self, snapshot: AgentTuiCatalogLoadSnapshot) {
+        if let Some(config) = snapshot.config {
+            self.models = config.models;
+            self.providers = config.providers;
+        }
         self.skills = snapshot.skills;
         self.skill_state = snapshot.skill_state;
         self.skill_errors = snapshot.skill_errors;
@@ -405,88 +408,6 @@ mod catalog_tests {
         assert_eq!(catalog.sessions.len(), 1);
         assert_eq!(catalog.sessions[0].session_id, "new-session");
         assert_eq!(catalog.sessions[0].label(), "新标题");
-    }
-}
-
-/// Agent TUI 可切换模型项。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentTuiModelCatalogItem {
-    /// 展示给用户的模型名称。
-    pub label: String,
-    /// 运行时模型名称，作为渠道负载均衡路由键。
-    pub selector: String,
-    /// provider 名称。
-    pub provider: String,
-    /// 模型 context window，上游配置未知时为空。
-    pub context_window: Option<u64>,
-    /// 模型默认 reasoning effort，上游配置未知或未启用时为空。
-    pub reasoning_effort: Option<String>,
-    /// 模型是否声明支持视觉输入；提交含图片附件的草稿前必须据此预检。
-    pub supports_vision: bool,
-}
-
-impl AgentTuiModelCatalogItem {
-    /// 创建模型目录项。
-    #[must_use]
-    pub fn new(
-        label: impl Into<String>,
-        selector: impl Into<String>,
-        provider: impl Into<String>,
-    ) -> Self {
-        Self {
-            label: label.into(),
-            selector: selector.into(),
-            provider: provider.into(),
-            context_window: None,
-            reasoning_effort: None,
-            supports_vision: true,
-        }
-    }
-
-    /// 创建带 context window 的模型目录项。
-    #[must_use]
-    pub fn new_with_context_window(
-        label: impl Into<String>,
-        selector: impl Into<String>,
-        provider: impl Into<String>,
-        context_window: Option<u64>,
-    ) -> Self {
-        Self::new_with_runtime_defaults(label, selector, provider, context_window, None)
-    }
-
-    /// 创建带运行默认值的模型目录项。
-    #[must_use]
-    pub fn new_with_runtime_defaults(
-        label: impl Into<String>,
-        selector: impl Into<String>,
-        provider: impl Into<String>,
-        context_window: Option<u64>,
-        reasoning_effort: Option<String>,
-    ) -> Self {
-        Self {
-            label: label.into(),
-            selector: selector.into(),
-            provider: provider.into(),
-            context_window,
-            reasoning_effort,
-            supports_vision: true,
-        }
-    }
-
-    /// 声明该模型的视觉输入能力，供提交前预检使用。
-    #[must_use]
-    pub fn with_supports_vision(mut self, supports_vision: bool) -> Self {
-        self.supports_vision = supports_vision;
-        self
-    }
-
-    /// 判断用户输入是否命中当前模型项。
-    #[must_use]
-    pub fn matches(&self, value: &str) -> bool {
-        self.label == value
-            || self.selector == value
-            || format!("{}/{}", self.provider, self.label) == value
-            || format!("{}/{}", self.provider, self.selector) == value
     }
 }
 

@@ -1,4 +1,4 @@
-import type { DiscoveredModel, ModelInput, ModelItem } from './types';
+import type { DiscoveredModel, ModelInput, ModelItem, ProviderItem } from './types';
 
 /*
  * 模型用途判定。
@@ -17,6 +17,52 @@ export function isEmbeddingModel(
     model.supports_embedding ||
     EMBEDDING_NAME.test(model.id) ||
     EMBEDDING_NAME.test(model.name)
+  );
+}
+
+/**
+ * 供应商的启用表。
+ *
+ * 停用供应商的模型仍在配置里，但运行侧一条路由都不会走：CLI 的 `axon models`、
+ * TUI 的 `/model` 与桌面端的选择器都必须把它们排除，否则停用一个供应商之后
+ * 界面上还能选到一组注定失败的模型。
+ *
+ * 配置里查不到该供应商的模型同样按停用处理：模型指向一个不存在的供应商是坏配置，
+ * 不该出现在可选项里。
+ */
+export function isProviderEnabled(
+  providers: readonly Pick<ProviderItem, 'name' | 'enabled'>[],
+  providerName: string,
+): boolean {
+  return providers.some((provider) => provider.name === providerName && provider.enabled);
+}
+
+/**
+ * 对话模型候选：向量模型之外的、所属供应商已启用的模型。
+ *
+ * `providers` 为 null 表示这份载荷里没有供应商事实（旧回执或读取失败），
+ * 此时只按用途过滤，不把整份候选清空：宁可多列一条，也不要让选择器空掉。
+ */
+export function selectableChatModels(
+  models: readonly ModelItem[],
+  providers: readonly Pick<ProviderItem, 'name' | 'enabled'>[] | null,
+): ModelItem[] {
+  return models.filter(
+    (model) =>
+      !isEmbeddingModel(model) &&
+      (providers === null || isProviderEnabled(providers, model.provider)),
+  );
+}
+
+/** 向量模型候选：与对话候选同一套供应商启用判定，只换用途。 */
+export function selectableEmbeddingModels(
+  models: readonly ModelItem[],
+  providers: readonly Pick<ProviderItem, 'name' | 'enabled'>[] | null,
+): ModelItem[] {
+  return models.filter(
+    (model) =>
+      isEmbeddingModel(model) &&
+      (providers === null || isProviderEnabled(providers, model.provider)),
   );
 }
 

@@ -37,6 +37,8 @@ pub(crate) struct HeaderState {
     pub(crate) session_run_model: Option<SessionRunModel>,
     /// 用户在本进程里显式选过模型（`/model`）：显式选择优先于会话事实。
     pub(crate) model_explicit: bool,
+    /// 用户在本进程里显式选过思考强度（`/think`）：配置复读不得改掉它。
+    pub(crate) effort_explicit: bool,
 }
 
 impl HeaderState {
@@ -60,6 +62,7 @@ impl HeaderState {
             gateway_active_turn_count: 0,
             session_run_model: None,
             model_explicit: false,
+            effort_explicit: false,
         }
     }
 
@@ -93,5 +96,10 @@ impl HeaderState {
     /// 用户显式选择了模型：此后头部显示这次选择，而不是会话事实。
     pub(crate) fn mark_model_explicit(&mut self) {
         self.model_explicit = true;
+    }
+
+    /// 用户显式选择了思考强度：配置复读不再改动这个值。
+    pub(crate) fn mark_effort_explicit(&mut self) {
+        self.effort_explicit = true;
     }
 }

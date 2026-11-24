@@ -147,6 +147,8 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   const { explicitModel, explicitReasoningEffort, onModelChange, onReasoningEffortChange } =
     useExplicitTurnSettings(sessionKey, {
       inherited: heroSession ? composerPick.inherited : null,
+      /* 显式选择跟着配置走：停用供应商或删掉模型之后这一格要退回配置默认值。 */
+      selectableModels: config?.models ?? null,
       onRememberModel: composerPick.rememberModel,
       onRememberReasoningEffort: composerPick.rememberReasoningEffort,
     });
