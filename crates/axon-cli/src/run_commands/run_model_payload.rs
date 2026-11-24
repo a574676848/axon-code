@@ -17,6 +17,10 @@ use axon_session::WorkspaceSnapshot;
 
 use super::run_environment_context::cli_environment_context;
 
+#[path = "run_model_payload_dedupe.rs"]
+pub(crate) mod dedupe;
+use dedupe::context_message_already_replayed;
+
 #[path = "run_model_payload_dynamic_text.rs"]
 mod dynamic_text;
 use dynamic_text::{anomaly_state_text, cli_pane_projection, cli_runtime_constraints};
@@ -136,8 +140,11 @@ pub(super) fn build_cli_run_model_payload(
         input.max_subagent_threads,
         input.max_subagent_active_turns,
     );
-    let prompt_fragments = cli_dynamic_prompt_fragments(&skill_selection, &relevant_skills);
     let history_messages = model_history_messages(input.model_history_json)?;
+    let prompt_fragments = dedupe::filter_replayed_fragments(
+        &history_messages,
+        cli_dynamic_prompt_fragments(&skill_selection, &relevant_skills),
+    );
     let git_state = workspace_git_state(input.workspace_snapshot);
     let stable_context_messages = assemble_cross_workspace_stable_context_messages(
         input.soul_context_message,
@@ -168,10 +175,13 @@ pub(super) fn build_cli_run_model_payload(
         .map(str::trim)
         .filter(|block| !block.is_empty())
     {
-        dynamic_context_messages.push(AgentModelMessage::injected_context(
+        let message = AgentModelMessage::injected_context(
             "developer",
             format!("<memory-thread-context>\n{block}\n</memory-thread-context>"),
-        ));
+        );
+        if !context_message_already_replayed(&history_messages, &message) {
+            dynamic_context_messages.push(message);
+        }
     }
     if axon_agent_runtime::anomaly::ANOMALY_ENABLED_DEFAULT
         && let Some(state) = anomaly_state_text(&prompt, &history_messages)

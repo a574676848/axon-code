@@ -219,7 +219,7 @@ fn provider_child_request_inherits_parent_runtime_context() {
             .any(|message| message.role == "system" && message.content.contains("父上下文"))
     );
     assert!(child_request.model_payload.messages.iter().any(|message| {
-        message.role == "system"
+        message.role == "developer"
             && message.content.contains(SUBAGENT_RESULT_MARKER_TEXT)
             && message
                 .content

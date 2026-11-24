@@ -214,6 +214,54 @@ pub(super) fn emit_transport_completion_status(
     }
 }
 
+/// 取本次尝试的 Provider 实测用量；错误尝试与无用量帧返回 `None`。
+pub(super) fn transport_outcome_token_usage(
+    outcome: &ProviderStreamingTransportOutcome,
+) -> Option<axon_agent_runtime::TokenUsageTelemetry> {
+    match outcome {
+        ProviderStreamingTransportOutcome::AggregatedStream { stream, .. } => stream.token_usage,
+        ProviderStreamingTransportOutcome::VisibleOutput(inner) => {
+            transport_outcome_token_usage(inner)
+        }
+        ProviderStreamingTransportOutcome::Error(_)
+        | ProviderStreamingTransportOutcome::StreamCompleted { .. } => None,
+    }
+}
+
+/// 本次尝试是否拿到可用响应：只有 `Error` 算失败，缺用量帧不等于失败。
+pub(super) fn transport_outcome_succeeded(outcome: &ProviderStreamingTransportOutcome) -> bool {
+    match outcome {
+        ProviderStreamingTransportOutcome::Error(_) => false,
+        ProviderStreamingTransportOutcome::VisibleOutput(inner) => {
+            transport_outcome_succeeded(inner)
+        }
+        ProviderStreamingTransportOutcome::AggregatedStream { .. }
+        | ProviderStreamingTransportOutcome::StreamCompleted { .. } => true,
+    }
+}
+
+/// 登记本次请求的 prompt cache 形状与实测命中。
+///
+/// 样本恒落盘，日志行由遥测模块按断裂严重度分流：正常追加走 DEBUG，真实断裂走 WARN。
+pub(super) fn record_prompt_cache_observation(
+    request: &RunRequest,
+    plan: &ProviderTransportPlan,
+    transport_request: &ProviderStreamingTransportRequest,
+    outcome: &ProviderStreamingTransportOutcome,
+) {
+    crate::runtime_prompt_cache_metrics::record(
+        &request.config_path,
+        &request.session_id,
+        &plan.provider_name,
+        &plan.model_id,
+        plan.stream_protocol,
+        transport_request.attempt_index,
+        &transport_request.cache_shape,
+        transport_outcome_succeeded(outcome),
+        transport_outcome_token_usage(outcome).as_ref(),
+    );
+}
+
 pub(super) fn log_transport_result(
     result: &axon_provider_transport::AgentRunProviderTransportResult,
 ) {

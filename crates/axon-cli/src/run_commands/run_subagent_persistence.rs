@@ -122,17 +122,17 @@ pub(crate) fn extract_result_path(summary: &str) -> Option<String> {
 ///
 /// 子代理与父代理的工作区相同，但父代理**不会**自动收到子代理的 transcript、
 /// 工具输出或推理过程：它能收到的只有这条子代理轮次的最终回复（经临时 Job 与
-/// continuation 回流）。`builtin.send_message` 是**子代理之间**的协作通道，
-/// root 不可寻址，因此不能把「结果回传」写成一次 send_message，否则子代理会
-/// 拿着一个必然被拒绝的目标去调用工具。
+/// continuation 回流）。协作发送类工具只在主代理面下发，子代理既看不到也调不动，
+/// 因此指引里不得出现「用某个工具回传」的写法，否则子代理会拿着一个必然失败的
+/// 通道去重试。
 pub(crate) fn subagent_result_instruction(parent_path: axon_agent_runtime::AgentPath) -> String {
     // 一级子代理的父路径就是 root，而 root 在协作工具里被稳定拒绝。
     let collaboration = if parent_path.is_root() {
-        "builtin.send_message 不能寻址 root（主代理自身会被稳定拒绝），因此不要用它回传结果；它只用于和其他子代理协作。"
+        "你的最终回复就是唯一的回传通道：子代理面没有协作发送工具，不要在过程里尝试回传。"
             .to_owned()
     } else {
         format!(
-            "需要提前告知父代理时可用 builtin.send_message 寻址 {parent_path}，发完继续把任务做完。"
+            "需要让父代理 {parent_path} 提前知道结论时，把关键发现写在最终回复的最前面；子代理面没有协作发送工具，不要在过程里尝试回传。"
         )
     };
     format!(

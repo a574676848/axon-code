@@ -84,7 +84,10 @@ fn seeded_thread_and_commitment_are_rendered() {
         .expect("应渲染既有线索与承诺");
 
     assert!(context.contains("## 当前线索"));
-    assert!(context.contains("命中 3 次"));
+    assert!(
+        !context.contains("（命中 "),
+        "命中次数不进提示词：它每轮都变，写进去等于每轮重写整段注入：{context}"
+    );
     assert!(context.contains("## 未完成承诺"));
     assert!(context.contains("明天提醒我交周报"));
     let _ = std::fs::remove_dir_all(root);

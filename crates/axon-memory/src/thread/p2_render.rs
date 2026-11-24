@@ -44,9 +44,10 @@ fn render_thread_section(thread: Option<&MemoryThread>) -> Option<String> {
     if label.is_empty() {
         return None;
     }
-    let hit_count = thread.hit_count.max(1);
+    // 只渲染线索本身：命中次数每轮都会变，写进提示词就等于每轮重写这一段，
+    // 让整段注入上下文失去逐字节一致性。频次仍留在库里，只供排查时读数。
     Some(truncate_bytes(
-        format!("## 当前线索\n{label}（命中 {hit_count} 次）"),
+        format!("## 当前线索\n{label}"),
         P2_THREAD_MAX_BYTES,
     ))
 }

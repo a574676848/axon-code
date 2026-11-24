@@ -432,6 +432,7 @@ fn send_provider_transport(
         transport_request,
         progress,
     );
+    record_prompt_cache_observation(request, plan, transport_request, &response);
     emit_streaming_completed(
         plan,
         progress,

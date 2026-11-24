@@ -1,5 +1,6 @@
 //! 普通 Coding `RunRequest` 的统一构建流程。
 
+use super::subagent_tool_scope::{restrict_subagent_execution_tools, subagent_tool_visible};
 use super::*;
 
 impl RunRequest {
@@ -87,7 +88,19 @@ impl RunRequest {
             // 只有主 turn 能创建子代理：选型事实随同一身份判定注入。
             include_delegation_catalog: agent_identity.is_primary(),
         };
-        let (model_input, execution_tools) = prepare_model_input_and_tools(&runtime_input)?;
+        let (mut model_input, execution_tools) = prepare_model_input_and_tools(&runtime_input)?;
+        // 非主 turn 身份（快速子代理）与 spawn_agent 子代理共用同一套工具收口：
+        // 主 turn 专属能力既不下发给模型，也不留在执行注册表里。两条子代理构建路径
+        // 必须用同一判据，否则同一类子代理会拿到不同的 tools 字段，前缀缓存随之作废。
+        let execution_tools = if agent_identity.is_primary() {
+            execution_tools
+        } else {
+            model_input
+                .model_payload
+                .model_tools
+                .retain(|tool| subagent_tool_visible(&tool.qualified_name, &AgentPath::root()));
+            restrict_subagent_execution_tools(execution_tools, &AgentPath::root())?
+        };
         let workspace_files = Arc::new(WorkspaceFileSession::default());
         let subagents = run_subagent_execution_wiring(RunSubagentExecutionWiringInput {
             config,

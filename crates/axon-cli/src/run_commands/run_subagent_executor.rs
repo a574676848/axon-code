@@ -132,18 +132,9 @@ pub(crate) struct ProviderRunSubagentEnvironment {
     pub(crate) subagent_cancel_tokens: Arc<Mutex<HashMap<AgentPath, RunCancelToken>>>,
 }
 
-/// 只属于主 turn 的工具：计划与结构化决定是主 turn 的决策权。
-///
-/// 子代理只执行被委托的工作，其 Provider payload 必须过滤这些工具，
-/// 与不装配 `<tool_orchestration_protocol>` 片段保持同一语义。
-const MAIN_TURN_ONLY_TOOL_QUALIFIED_NAMES: &[&str] = &[
-    axon_agent_runtime::UPDATE_PLAN_TOOL_QUALIFIED_NAME,
-    axon_agent_runtime::ASK_USER_QUESTION_TOOL_QUALIFIED_NAME,
-    // PAR-1 §8.2：委派与控制类工具只属于主代理面。
-    "builtin.send_message",
-    "builtin.list_agents",
-    "builtin.delegate_to_fast",
-];
+// 只属于主 turn 的工具：计划与结构化决定是主 turn 的决策权。判据与执行侧同源，
+// 定义与收口实现见 `super::subagent_tool_scope`。
+use super::subagent_tool_scope::{restrict_subagent_execution_tools, subagent_tool_visible};
 
 /// 默认 provider 子代理执行器。
 #[derive(Clone)]
@@ -251,22 +242,17 @@ impl ProviderRunSubagentExecutor {
             let model_input = build_run_model_payload(&runtime_input, &registry)?;
             (model_input, Arc::new(RwLock::new(registry)))
         };
-        // 计划、结构化决定与 Goal 账本都是主 turn 的决策权：子代理只执行被委托的工作，
-        // 绝不能提交 update_plan 或 builtin.goal_*。
-        model_input.model_payload.model_tools.retain(|tool| {
-            !MAIN_TURN_ONLY_TOOL_QUALIFIED_NAMES.contains(&tool.qualified_name.as_str())
-                && !axon_agent_runtime::GoalToolRuntime::is_goal_tool(&tool.qualified_name)
-        });
-        if !input.task_path.is_root() {
-            model_input.model_payload.model_tools.retain(|tool| {
-                tool.qualified_name
-                    != format!(
-                        "{}.{}",
-                        axon_agent_runtime::AGENT_TOOL_NAMESPACE,
-                        axon_agent_runtime::SPAWN_AGENT_TOOL_NAME
-                    )
-            });
-        }
+        // 主 turn 专属能力绝不出现在子代理可见的工具表里。裁剪点只有这一处，且
+        // 与子代理路径无关（再派发能力除外）：同类子代理必须拿到逐字节相同的
+        // tools 字段，否则它们之间连彼此的前缀缓存都共享不了（tools 位于请求最前，
+        // 改一个条目就整段作废）。
+        model_input
+            .model_payload
+            .model_tools
+            .retain(|tool| subagent_tool_visible(&tool.qualified_name, &input.task_path));
+        // 执行面同步收口：被收回的能力在注册表里也不存在，越权调用会得到明确的
+        // 未知工具错误，而不是静默改坏主 turn 的计划、目标或委派状态。
+        let execution_tools = restrict_subagent_execution_tools(execution_tools, &input.task_path)?;
         let result_instruction = input.structured_output.is_none().then(|| {
             // 子代理的父代理就是它路径的上一级；root 之下没有父路径时退回自身，
             // 保证指引里始终有一个可寻址的引用。
@@ -276,22 +262,33 @@ impl ProviderRunSubagentExecutor {
                 .unwrap_or_else(|| input.task_path.clone());
             subagent_result_instruction(parent)
         });
-        let system_message = model_input
-            .model_payload
-            .messages
-            .iter_mut()
-            .find(|message| message.role == "system")
-            .ok_or_else(|| "普通 coding payload 缺少 system prompt".to_owned())?;
+        // 系统提示词必须与主代理逐字节一致，否则子代理请求无法复用主前缀缓存；
+        // 结果回传要求因此改由注入块承载（首次紧邻用户请求，之后随历史回放），
+        // 只在显式覆盖系统提示词时才与覆盖内容合并。
         if let Some(system_prompt) = input.system_prompt_override.as_deref() {
             let content = result_instruction.as_deref().map_or_else(
                 || system_prompt.to_owned(),
                 |instruction| format!("{system_prompt}\n\n{instruction}"),
             );
+            let system_message = model_input
+                .model_payload
+                .messages
+                .iter_mut()
+                .find(|message| message.role == "system")
+                .ok_or_else(|| "普通 coding payload 缺少 system prompt".to_owned())?;
             *system_message = AgentModelMessage::text("system", content);
         } else if let Some(instruction) = result_instruction.as_deref() {
-            system_message
-                .content
-                .push_str(&format!("\n\n{instruction}"));
+            // 指令正文逐轮相同：历史里已有逐字节相同的一份就不再注入，否则每轮多一份。
+            let note = AgentModelMessage::injected_context("developer", instruction);
+            if !super::run_model_payload::dedupe::context_message_already_replayed(
+                &model_input.model_payload.messages,
+                &note,
+            ) {
+                axon_agent_runtime::insert_before_latest_user(
+                    &mut model_input.model_payload.messages,
+                    note,
+                );
+            }
         }
         // 协作消息消费点（合同 §5.3.5 / M3 设计 §7.5）：在构造 provider 请求之前，
         // 把该子代理 mailbox 里等待阅读的消息取走并注入为 runtime note。

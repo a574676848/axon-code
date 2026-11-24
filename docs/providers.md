@@ -76,6 +76,8 @@ axon models --provider openai --format json
 
 `axon run --model <MODEL>` 接受模型路由键或模型 ID。同一路由键下配置多个 Provider 时，运行时仍按 `priority`、`weight`、会话亲和与健康状态执行渠道选择和故障转移。
 
+`enabled = false` 的 Provider 一条路由都不参与：它的模型不出现在 `axon models`、TUI `/model` 候选与桌面端的选择器里，已有会话记录指向这些模型时回退 `agent.default_model`。配置改写后这些清单会自己跟上，`axon models` 每次读取即重算，TUI 在配置文件变化后自动复读，桌面端在设置页写成功时复读。
+
 同一 `session_id` 的渠道亲和在进程内跨线程共享，并在每次命中时按 `channel_balancer.affinity_ttl_ms` 滑动续期，因此长任务、自动压缩和子代理执行不会因线程切换或间隔较长而无故漂移到其他 Provider。只有亲和渠道过期、被健康熔断，或当前请求发生可转移的瞬时失败时，才会按候选链切换渠道；切换成功后会重新绑定该会话的亲和渠道。
 
 渠道故障转移以单个渠道的 3 次尝试为界：首次请求加 2 次重试仍失败后，重试预算交给渠道链的下一个渠道，不再继续在同渠道等待。切换后会在同一个 run 内重跑 Provider turn loop。每次渠道尝试都从上一尝试之后的 turn 序号接着编号，assistant/reasoning/lifecycle 的 part 身份因此在整轮内唯一：新尝试的正文不会拼进上一尝试的流式单元，失败诊断记录也按尝试分段而不是无分隔拼接。
@@ -89,6 +91,14 @@ axon debug channel-metrics [--since-hours <HOURS>] [--model <MODEL>] [--provider
 ```
 
 debug 查询会先按时间跳过不可能命中的日期分片，再按最新分片优先逐行应用模型和 Provider 条件，并最多接纳 `--limit` 个渠道进行聚合；结果在这个查询预算内按动态评分保留最优渠道（默认 50），避免把全部历史遥测合并到内存和输出。设置 `--since-hours 0` 可取消时间条件；无匹配时不会回退读取进程内存指标。
+
+## Prompt Cache 遥测
+
+每次 Provider 请求都会按 UTC 日期向 `~/.axon/data/prompt-cache-metrics/samples-YYYY-MM-DD.000000.jsonl` 追加一行缓存形状样本（单分片上限 4 MiB，超出滚到 `.000001` 依此类推）：Provider、模型、协议、尝试序号、缓存断裂原因（首轮、纯追加、system 或 tools 或请求选项变化、历史被改写等）、公共前缀条数与实测命中 token。命中率掉下来时，用它可以判断究竟是换了渠道、工具表变了，还是历史被改写，而不是只看得到「这一轮很贵」。
+
+登记按日志等级分流：`first_request`、`history_appended`、`exact_replay` 属于正常路径，只写 DEBUG；其余原因意味着上一轮已付费的前缀被作废，直接写 WARN，默认日志级别即可看见。会话中途从别的渠道切过来同样等于从零付前缀，样本会带 `channelSwitched: true` 并一并升到 WARN。
+
+样本体量有三道闸：哈希只留 16 位指纹；单进程每自然日封顶 4096 条，超出后只留日志不再落盘；进程内形状记忆按会话分区并限长 32 条，先进先出淘汰。写盘失败与环境无关时只留一条告警，不影响主流程。
 
 ## Memory Embedding
 

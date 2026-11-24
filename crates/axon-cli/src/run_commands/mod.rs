@@ -121,6 +121,8 @@ mod run_turn_spec;
 mod run_turn_start;
 mod run_turn_terminal;
 pub(crate) mod run_workspace_identity;
+#[path = "run_subagent_tool_scope.rs"]
+mod subagent_tool_scope;
 pub(crate) use run_tool_result_cache::workspace_revision;
 mod run_tool_result_wire;
 mod run_tool_write_coordination;

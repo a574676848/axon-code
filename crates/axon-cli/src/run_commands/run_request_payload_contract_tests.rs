@@ -6,6 +6,8 @@ const TEST_SESSION_ID: &str = "workspace-prewarm-contract";
 const ENVIRONMENT_CONTEXT_PREFIX: &str = "<environment-context>";
 const NORMALIZED_ENVIRONMENT_CONTEXT: &str =
     "<environment-context>normalized</environment-context>";
+const CLOCK_CONTEXT_PREFIX: &str = "<clock-context>";
+const NORMALIZED_CLOCK_CONTEXT: &str = "<clock-context>normalized</clock-context>";
 
 #[test]
 fn workspace_snapshot_prewarm_matches_sync_payload_and_consumes_once() {
@@ -62,6 +64,21 @@ fn workspace_snapshot_prewarm_matches_sync_payload_and_consumes_once() {
         false,
     );
 
+    // 时刻块必须是注入组最后一条：它每轮必变，位置直接决定失效范围。
+    let messages = &synchronous.model_payload.messages;
+    let user_index = messages.len() - 1;
+    assert!(
+        messages[user_index].content.contains(TEST_PROMPT),
+        "最后一条必须是用户请求"
+    );
+    assert!(
+        messages[user_index - 1]
+            .content
+            .starts_with(CLOCK_CONTEXT_PREFIX),
+        "用户请求前一条必须是时刻块，实际是：{}",
+        messages[user_index - 1].content
+    );
+
     assert_eq!(
         normalize_environment_context(prewarmed.model_payload),
         normalize_environment_context(synchronous.model_payload)
@@ -115,6 +132,10 @@ fn normalize_environment_messages(messages: &mut [AgentModelMessage]) {
     for message in messages {
         if message.content.starts_with(ENVIRONMENT_CONTEXT_PREFIX) {
             message.content = NORMALIZED_ENVIRONMENT_CONTEXT.to_owned();
+        }
+        // 时刻块每轮必变，预热路径与同步路径各取一次当前时间，比较前必须归一。
+        if message.content.starts_with(CLOCK_CONTEXT_PREFIX) {
+            message.content = NORMALIZED_CLOCK_CONTEXT.to_owned();
         }
     }
 }

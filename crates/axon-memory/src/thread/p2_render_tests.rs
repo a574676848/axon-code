@@ -41,14 +41,23 @@ fn empty_inputs_render_empty_string() {
 #[test]
 fn thread_only_renders_fixed_template() {
     let rendered = render_p2_context(Some(&thread("", "周报", 3)), &[], 480);
-    assert_eq!(rendered, "## 当前线索\n周报（命中 3 次）");
+    assert_eq!(rendered, "## 当前线索\n周报");
+}
+
+/// 命中次数不进提示词：它每轮都会变，写进去等于每轮重写整段注入上下文。
+#[test]
+fn hit_count_does_not_leak_into_rendered_text() {
+    let first = render_p2_context(Some(&thread("周报", "周报", 3)), &[], 480);
+    let second = render_p2_context(Some(&thread("周报", "周报", 9)), &[], 480);
+    assert_eq!(first, second, "命中次数递增不得改变渲染结果");
+    assert!(!first.contains("命中"), "提示词不得出现命中计数：{first}");
 }
 
 #[test]
 fn label_wins_over_topic() {
     let rendered = render_p2_context(Some(&thread("周报收尾", "周报", 1)), &[], 480);
-    assert!(rendered.contains("周报收尾（命中 1 次）"));
-    assert!(!rendered.contains("周报（命中"));
+    assert!(rendered.contains("周报收尾"));
+    assert!(!rendered.contains("周报\n"), "标签优先于话题：{rendered}");
 }
 
 #[test]

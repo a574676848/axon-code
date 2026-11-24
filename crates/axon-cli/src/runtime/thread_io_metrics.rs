@@ -7,6 +7,9 @@
 //! 这里按 `resource-metrics` 同一范式补上量化面：每个采样点追加一行 JSONL，按日期分片，
 //! 上限 4 MiB，写入失败只告警、绝不影响主流程。三个采样点覆盖每轮恢复、每轮收口与
 //! 换窗提交，正好回答「每轮成本是否随会话线性上升」。
+//!
+//! 落盘位置与 `resource-metrics` / `channel-metrics` 一致，位于 `<axon>/data` 之下：
+//! 保留期回收本就按 `data/<样本目录>` 扫描，样本放在运行态根目录之外会让回收扫不到。
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -92,8 +95,15 @@ fn thread_size(axon_root: &Path, thread_id: &str) -> (u32, u64) {
     (u32::try_from(paths.len()).unwrap_or(u32::MAX), bytes)
 }
 
+/// 返回 thread 读写遥测的分片目录，供写出与回收共用同一口径。
+pub(crate) fn metrics_directory(axon_root: &Path) -> PathBuf {
+    axon_root
+        .join(axon_config::AXON_RUNTIME_DATA_DIR)
+        .join(THREAD_IO_METRICS_DIR_NAME)
+}
+
 fn append_sample(axon_root: &Path, sample: &ThreadIoSample) -> Result<(), String> {
-    let directory = axon_root.join(THREAD_IO_METRICS_DIR_NAME);
+    let directory = metrics_directory(axon_root);
     std::fs::create_dir_all(&directory)
         .map_err(|error| format!("创建 thread 遥测目录失败：{error}"))?;
     let line = serde_json::to_string(sample).map_err(|error| format!("序列化采样失败：{error}"))?;
@@ -156,6 +166,17 @@ mod tests {
         assert_eq!(
             logical_path(&directory, "2026-11-20"),
             PathBuf::from("data").join("samples-2026-11-20.jsonl")
+        );
+    }
+
+    /// 样本目录必须落在运行态 `data` 之下，与保留期回收同口径。
+    #[test]
+    fn sample_directory_lives_under_runtime_data() {
+        let root = PathBuf::from("axon-root");
+        assert_eq!(
+            metrics_directory(&root),
+            root.join(axon_config::AXON_RUNTIME_DATA_DIR)
+                .join(THREAD_IO_METRICS_DIR_NAME)
         );
     }
 

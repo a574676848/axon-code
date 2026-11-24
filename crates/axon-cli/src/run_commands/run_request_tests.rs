@@ -186,6 +186,41 @@ fn background_fast_subagent_runs_fast_model_without_main_turn_reasoning() {
     assert!(context_text(&primary).contains("<tool_orchestration_protocol>"));
     assert!(!context_text(&execution).contains("<tool_orchestration_protocol>"));
 
+    // 快速子代理与 spawn_agent 子代理共用同一套工具收口：主 turn 专属能力既不下发给
+    // 模型，也不留在执行注册表里；主 turn 自己必须照常拿到全部能力。
+    for hidden in [
+        axon_agent_runtime::UPDATE_PLAN_TOOL_QUALIFIED_NAME,
+        axon_agent_runtime::ASK_USER_QUESTION_TOOL_QUALIFIED_NAME,
+        "builtin.send_message",
+        "builtin.list_agents",
+        "builtin.delegate_to_fast",
+    ] {
+        assert!(
+            primary
+                .model_payload
+                .model_tools
+                .iter()
+                .any(|tool| tool.qualified_name == hidden),
+            "主 turn 必须保留 {hidden}"
+        );
+        assert!(
+            !execution
+                .model_payload
+                .model_tools
+                .iter()
+                .any(|tool| tool.qualified_name == hidden),
+            "快速子代理不得看到 {hidden}"
+        );
+    }
+    assert!(
+        !execution
+            .model_payload
+            .model_tools
+            .iter()
+            .any(|tool| axon_agent_runtime::GoalToolRuntime::is_goal_tool(&tool.qualified_name)),
+        "Goal 账本只属于主 turn"
+    );
+
     let _ = std::fs::remove_dir_all(&workspace);
 }
 

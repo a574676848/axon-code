@@ -5,9 +5,13 @@
 //! 不截断字段内部内容。
 
 use crate::AgentModelMessage;
+use axon_context_fragments::{PromptFragment, PromptFragmentMetadata};
 
 const ENVIRONMENT_CONTEXT_HEADER: &str = "<environment-context>";
 const ENVIRONMENT_CONTEXT_FOOTER: &str = "</environment-context>";
+/// 每轮必变的时刻事实单独成块，块名与位置都在这里固定。
+const CLOCK_CONTEXT_HEADER: &str = "<clock-context>";
+const CLOCK_CONTEXT_FOOTER: &str = "</clock-context>";
 // 1024 bytes covers Windows extended executable paths, long terminal labels and a
 // realistic model catalog line; values beyond that are treated as untrusted
 // environment noise and omitted.
@@ -87,12 +91,13 @@ impl EnvironmentContext {
     }
 
     /// 渲染有界环境文本；超限字段按完整块省略，不截断字段内容。
+    ///
+    /// 这里只渲染**会话内稳定**的事实：平台、架构、会话车道标识、选型清单与 shell。
+    /// 每轮必变的时刻事实由 [`Self::render_clock`] 单独成块，必须排在注入上下文末尾，
+    /// 否则它一变，排在它后面的注入块就全部跟着失效。
     #[must_use]
     pub fn render(&self) -> String {
-        let mut lines = vec![
-            ENVIRONMENT_CONTEXT_HEADER.to_owned(),
-            format!("utc_now_ms: {}", self.utc_now_ms),
-        ];
+        let mut lines = vec![ENVIRONMENT_CONTEXT_HEADER.to_owned()];
         let footer = ENVIRONMENT_CONTEXT_FOOTER;
         append_complete_line(
             &mut lines,
@@ -152,6 +157,35 @@ impl EnvironmentContext {
         );
         append_complete_line(
             &mut lines,
+            format_line("shell", self.shell.as_deref()),
+            footer,
+        );
+        append_complete_line(
+            &mut lines,
+            format_line("terminal", self.terminal.as_deref()),
+            footer,
+        );
+        lines.push(footer.to_owned());
+
+        lines.join("\n")
+    }
+
+    /// 渲染每轮必变的时刻事实。
+    ///
+    /// 单独成块的理由只有一条：跨轮缓存。时刻写进 `<environment-context>` 时，
+    /// 该块每轮都会变，排在它后面的注入块随即全部作废；单独成块并放到末尾，
+    /// 变化的范围就收敛成一个几行的块。
+    #[must_use]
+    pub fn render_clock(&self) -> String {
+        let mut lines = vec![CLOCK_CONTEXT_HEADER.to_owned()];
+        let footer = CLOCK_CONTEXT_FOOTER;
+        append_complete_line(
+            &mut lines,
+            Some(format!("utc_now_ms: {}", self.utc_now_ms)),
+            footer,
+        );
+        append_complete_line(
+            &mut lines,
             format_line("local_time", self.local_time.as_deref()),
             footer,
         );
@@ -167,19 +201,72 @@ impl EnvironmentContext {
                 footer,
             );
         }
-        append_complete_line(
-            &mut lines,
-            format_line("shell", self.shell.as_deref()),
-            footer,
-        );
-        append_complete_line(
-            &mut lines,
-            format_line("terminal", self.terminal.as_deref()),
-            footer,
-        );
         lines.push(footer.to_owned());
-
         lines.join("\n")
+    }
+}
+
+/// 时刻补充 fragment：永远排在注入上下文的最后一条，紧邻用户消息。
+///
+/// 只存块内正文：块名由 [`PromptFragment::markers`] 提供，`body()` 再拼一次块名
+/// 会让每个请求都带上嵌套两层的畸形块。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvironmentClockFragment {
+    inner: String,
+}
+
+impl EnvironmentClockFragment {
+    /// 由环境事实生成时刻补充；所有时刻字段都缺失时返回 `None`。
+    #[must_use]
+    pub fn from_context(context: &EnvironmentContext) -> Option<Self> {
+        let has_clock = context.utc_now_ms > 0
+            || context.local_time.is_some()
+            || context.timezone_name.is_some();
+        if !has_clock {
+            return None;
+        }
+        Some(Self {
+            inner: clock_block_inner(&context.render_clock()),
+        })
+    }
+
+    /// 完整块（含块名），供审计与测试直接比对。
+    #[cfg(test)]
+    #[must_use]
+    pub fn rendered(&self) -> String {
+        format!(
+            "{CLOCK_CONTEXT_HEADER}\n{}\n{CLOCK_CONTEXT_FOOTER}",
+            self.inner
+        )
+    }
+}
+
+/// 去掉块名与块尾，只留正文行。
+fn clock_block_inner(rendered: &str) -> String {
+    rendered
+        .strip_prefix(CLOCK_CONTEXT_HEADER)
+        .and_then(|rest| rest.strip_suffix(CLOCK_CONTEXT_FOOTER))
+        .map_or_else(
+            || rendered.to_owned(),
+            |inner| inner.trim_matches('\n').to_owned(),
+        )
+}
+
+impl PromptFragment for EnvironmentClockFragment {
+    fn metadata(&self) -> PromptFragmentMetadata {
+        PromptFragmentMetadata::dynamic_unbudgeted_developer()
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        (CLOCK_CONTEXT_HEADER, CLOCK_CONTEXT_FOOTER)
+    }
+
+    fn body(&self) -> String {
+        format!("\n{}\n", self.inner)
     }
 }
 
@@ -254,7 +341,7 @@ fn sanitized_value(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::EnvironmentContext;
+    use super::{EnvironmentClockFragment, EnvironmentContext, PromptFragment};
 
     fn context() -> EnvironmentContext {
         EnvironmentContext {
@@ -327,9 +414,56 @@ mod tests {
         assert!(!rendered.contains("spawn_agent"));
         assert!(!rendered.contains("delegate_to_fast"));
         let models = rendered.find("delegatable_models:").unwrap();
-        let time = rendered.find("local_time:").unwrap();
         let shell = rendered.find("shell:").unwrap();
-        assert!(models < time && time < shell);
+        assert!(models < shell);
+    }
+
+    /// 时刻事实必须与稳定事实分开：它每轮都变，混在同一块里会让整块失效。
+    #[test]
+    fn clock_facts_are_rendered_in_a_separate_block() {
+        let value = context();
+        let environment = value.render();
+        assert!(!environment.contains("utc_now_ms:"));
+        assert!(!environment.contains("local_time:"));
+        assert!(!environment.contains("timezone_name:"));
+
+        let clock = value.render_clock();
+        assert!(clock.starts_with("<clock-context>"));
+        assert!(clock.ends_with("</clock-context>"));
+        assert!(clock.contains("utc_now_ms: 1757600000000"));
+        assert!(clock.contains("local_time: 2026-09-12 10:00:00"));
+        assert!(clock.contains("timezone_name: Asia/Shanghai"));
+        assert!(clock.contains("local_offset_minutes: 480"));
+    }
+
+    /// 时刻块以 fragment 形态挂在注入上下文末尾，渲染结果与直接渲染逐字节一致。
+    #[test]
+    fn clock_fragment_renders_the_clock_block_once() {
+        let value = context();
+        let fragment = EnvironmentClockFragment::from_context(&value).expect("有时刻事实");
+        assert_eq!(fragment.rendered(), value.render_clock());
+        // render() 会再用 markers 包一层：块名只能出现一次，否则就是嵌套畸形块。
+        let rendered = fragment.render();
+        assert_eq!(
+            rendered.matches("<clock-context>").count(),
+            1,
+            "块名不得重复：{rendered}"
+        );
+        assert_eq!(rendered.matches("</clock-context>").count(), 1);
+        assert_eq!(rendered, value.render_clock(), "渲染结果必须与直接渲染同形");
+        assert_eq!(
+            <EnvironmentClockFragment as PromptFragment>::type_markers(),
+            ("<clock-context>", "</clock-context>")
+        );
+
+        let mut no_clock = context();
+        no_clock.utc_now_ms = 0;
+        no_clock.local_time = None;
+        no_clock.timezone_name = None;
+        assert!(
+            EnvironmentClockFragment::from_context(&no_clock).is_none(),
+            "没有任何时刻事实时不得产出空块"
+        );
     }
 
     /// 清单超长时保留完整项并显式标注省略数量，绝不出现半个模型名。
@@ -402,8 +536,13 @@ mod tests {
         assert!(rendered.len() <= 4_096);
         assert!(rendered.contains("shell: C:\\"));
         assert!(rendered.contains("terminal: WindowsTerminal-"));
-        assert!(rendered.contains("timezone_name: Asia/Shanghai-"));
         assert!(rendered.ends_with("</environment-context>"));
+        // 时区属于时刻事实，随时刻块一起走，不再挤占环境块预算。
+        assert!(
+            value
+                .render_clock()
+                .contains("timezone_name: Asia/Shanghai-")
+        );
     }
 
     #[test]

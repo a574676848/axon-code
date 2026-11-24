@@ -665,10 +665,12 @@ fn remove_shards(logical_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// 追加一行：行内容与换行一次写出，避免多进程 `O_APPEND` 并发追加时插出半行。
 fn write_line(path: &Path, line: &[u8], sync_data: bool) -> io::Result<()> {
+    let mut buffer = line.to_vec();
+    buffer.push(b'\n');
     let mut file = open_append(path)?;
-    file.write_all(line)?;
-    file.write_all(b"\n")?;
+    file.write_all(&buffer)?;
     file.flush()?;
     if sync_data {
         file.sync_data()?;

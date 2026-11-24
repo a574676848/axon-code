@@ -84,6 +84,8 @@ mod runtime_paths;
 mod runtime_persona_context;
 #[path = "runtime/principal_context.rs"]
 mod runtime_principal_context;
+#[path = "runtime/prompt_cache_metrics.rs"]
+mod runtime_prompt_cache_metrics;
 #[path = "runtime/prompt_fragments.rs"]
 mod runtime_prompt_fragments;
 #[path = "runtime/resource_metrics.rs"]

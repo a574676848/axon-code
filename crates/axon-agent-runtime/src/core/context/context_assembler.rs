@@ -5,7 +5,7 @@ use crate::agent_model_payload::{
     AgentModelPayload, AgentModelPayloadInput, AgentModelPayloadRuntime, AgentModelStablePrefix,
 };
 use crate::agent_pane::AgentPaneProjection;
-use crate::environment_context::EnvironmentContext;
+use crate::environment_context::{EnvironmentClockFragment, EnvironmentContext};
 use crate::focus_resolver::{FocusResolutionInput, FocusResolverRuntime};
 use crate::{AgentPromptContext, RepoStructureQueryReport};
 use axon_context_fragments::PromptFragment;
@@ -124,6 +124,10 @@ impl ContextAssemblerRuntime {
         }
 
         let mut dynamic_context_messages = input.dynamic_context_messages;
+        let clock_fragment = input
+            .environment_context
+            .as_ref()
+            .and_then(EnvironmentClockFragment::from_context);
         if let Some(environment_context) = input.environment_context {
             dynamic_context_messages.push(environment_context.to_message());
         }
@@ -154,6 +158,11 @@ impl ContextAssemblerRuntime {
                 document_symbol_provider: None,
             });
         fragments.extend(input.additional_fragments);
+        // 时刻块永远排在注入上下文最后一条：它每轮必变，只有放到末尾，
+        // 变化的代价才收敛成一个块，而不是把它后面的全部注入块一起作废。
+        if let Some(clock_fragment) = clock_fragment {
+            fragments.push(Box::new(clock_fragment));
+        }
 
         let payload = AgentModelPayloadRuntime.build_with_fragments(&payload_input, fragments)?;
 

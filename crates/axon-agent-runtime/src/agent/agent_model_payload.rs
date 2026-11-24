@@ -213,12 +213,9 @@ impl AgentModelPayloadRuntime {
         }
 
         let prompt_runtime = AgentPromptEngineeringRuntime;
-        let include_goal_tools = input.stable_prefix.messages.iter().any(|message| {
-            message
-                .content
-                .contains(axon_prompts::AXON_TOOL_ORCHESTRATION_PROTOCOL_TAG)
-        });
-        let model_tools = builtin_model_tools(include_goal_tools)?;
+        // 这里下发的是完整内置工具表，不按身份裁剪：裁剪点只允许存在一处（子代理执行器），
+        // 否则同一身份在不同路径上会拿到不同的 tools 字段，前缀缓存随之作废。
+        let model_tools = builtin_model_tools()?;
         validate_session_stable_context_messages(&input.stable_context_messages)?;
 
         let mut fragments = prompt_control_fragments(
@@ -279,24 +276,15 @@ fn prompt_control_fragments(
     fragments
 }
 
-/// 子代理不可见的工具（PAR-1 第 8 节）：委派与控制类工具只在主代理面。
-const SUBAGENT_HIDDEN_TOOLS: [&str; 3] = [
-    "builtin.send_message",
-    "builtin.list_agents",
-    "builtin.update_plan",
-];
-
-fn builtin_model_tools(include_goal_tools: bool) -> AxonResult<Vec<ModelToolDefinition>> {
+/// 内置工具全表（未按身份裁剪）。
+///
+/// 主 turn 专属能力（计划、Goal、委派、提问）**不得**出现在子代理可见的工具表里，
+/// 但裁剪点必须是唯一的：子代理执行器按 `MAIN_TURN_ONLY_TOOL_QUALIFIED_NAMES`
+/// 一次性收敛，保证所有子代理拿到逐字节相同的 `tools` 字段，彼此之间可共享前缀缓存。
+fn builtin_model_tools() -> AxonResult<Vec<ModelToolDefinition>> {
     let mut registry = ToolRegistry::new();
     AgentToolRegistryRuntime::register_builtin_tools(&mut registry)?;
-    let mut tools = registry.model_tools();
-    if !include_goal_tools {
-        tools.retain(|tool| {
-            !tool.qualified_name.starts_with("builtin.goal_")
-                && !SUBAGENT_HIDDEN_TOOLS.contains(&tool.qualified_name.as_str())
-        });
-    }
-    Ok(tools)
+    Ok(registry.model_tools())
 }
 
 /// 将 Memory 命中投影为 provider 可见的模型约束。
@@ -673,26 +661,28 @@ mod tests {
             },
         }
     }
-    /// `T-4` 4.5：子代理不可见合同与委派控制类工具，主代理可见。
+    /// 内置工具全表不按身份裁剪：裁剪只发生在子代理执行器一处。
+    ///
+    /// 这里断言全表包含主 turn 专属能力，正是为了让「子代理看不到它们」成为单点
+    /// 事实：只要执行器的裁剪清单没变，子代理的工具面就不会意外放开。
     #[test]
-    fn subagent_model_tools_hide_contract_and_control_tools() {
-        let primary = builtin_model_tools(true).expect("主代理工具面");
-        let subagent = builtin_model_tools(false).expect("子代理工具面");
-        for name in SUBAGENT_HIDDEN_TOOLS {
+    fn builtin_tool_table_keeps_main_turn_capabilities_for_single_point_trimming() {
+        let tools = builtin_model_tools().expect("内置工具表");
+        for name in [
+            "builtin.update_plan",
+            "builtin.send_message",
+            "builtin.list_agents",
+        ] {
             assert!(
-                primary.iter().any(|tool| tool.qualified_name == name),
-                "{name} 应对主代理可见"
-            );
-            assert!(
-                !subagent.iter().any(|tool| tool.qualified_name == name),
-                "{name} 不应出现在子代理工具面"
+                tools.iter().any(|tool| tool.qualified_name == name),
+                "{name} 必须留在全表里，由子代理执行器统一裁剪"
             );
         }
         assert!(
-            subagent
+            tools
                 .iter()
                 .any(|tool| tool.qualified_name == "builtin.read_file"),
-            "普通只读工具仍应对子代理可见"
+            "普通只读工具必须在全表里"
         );
     }
 }

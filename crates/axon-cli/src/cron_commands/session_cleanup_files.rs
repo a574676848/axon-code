@@ -93,6 +93,19 @@ fn run_file_cleanup(
                 &data_root.join(crate::runtime_thread_io_metrics::THREAD_IO_METRICS_DIR_NAME),
                 cutoff_ms,
                 dry_run,
+            )?)
+            // Prompt cache 遥测是每次 provider 请求一条的按日分片样本，同样按保留期回收。
+            .saturating_add(cleanup_expired_files_recursive(
+                &data_root.join(crate::runtime_prompt_cache_metrics::PROMPT_CACHE_METRICS_DIR_NAME),
+                cutoff_ms,
+                dry_run,
+            )?)
+            // 存量安装把 thread 读写遥测写在运行根根目录下；那份目录同样按保留期回收，
+            // 否则样本搬走后旧目录会永久留在磁盘上。
+            .saturating_add(cleanup_expired_files_recursive(
+                &root.join(crate::runtime_thread_io_metrics::THREAD_IO_METRICS_DIR_NAME),
+                cutoff_ms,
+                dry_run,
             )?);
     Ok(FileCleanupCounts {
         log_files,
